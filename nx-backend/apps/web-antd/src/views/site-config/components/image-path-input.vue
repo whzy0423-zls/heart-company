@@ -1,0 +1,128 @@
+<script setup lang="ts">
+import type { UploadRequestOption } from 'ant-design-vue/es/vc-upload/interface';
+
+import { ref } from 'vue';
+
+import { Button, Image, Input, message, Upload } from 'ant-design-vue';
+
+import { uploadFileApi } from '#/api';
+
+const value = defineModel<string>('value', { default: '' });
+const uploading = ref(false);
+
+const props = withDefaults(
+  defineProps<{
+    dir?: string;
+    emptyText?: string;
+    placeholder?: string;
+    showPath?: boolean;
+    uploadText?: string;
+    variant?: 'image' | 'input';
+  }>(),
+  {
+    dir: 'site',
+    emptyText: '未设置图片',
+    placeholder: '图片路径或 URL',
+    showPath: false,
+    uploadText: '上传',
+    variant: 'image',
+  },
+);
+
+async function customRequest(options: UploadRequestOption) {
+  const file = options.file as File;
+  uploading.value = true;
+  try {
+    const result = await uploadFileApi(file, props.dir);
+    value.value = result.url;
+    options.onSuccess?.(result, file as any);
+    message.success('上传成功');
+  } catch (error) {
+    options.onError?.(error as Error);
+  } finally {
+    uploading.value = false;
+  }
+}
+</script>
+
+<template>
+  <div class="image-uploader" :class="{ 'image-uploader--compact': props.variant === 'input' }">
+    <div class="image-uploader__preview">
+      <Image
+        v-if="value"
+        :height="props.variant === 'input' ? 64 : 88"
+        :src="value"
+        :width="props.variant === 'input' ? 64 : 88"
+      />
+      <span v-else class="image-uploader__empty">{{ props.emptyText }}</span>
+    </div>
+    <div class="image-uploader__actions">
+      <Upload
+        accept="image/*"
+        :custom-request="customRequest"
+        :max-count="1"
+        :show-upload-list="false"
+      >
+        <Button :loading="uploading" type="primary">{{ props.uploadText }}</Button>
+      </Upload>
+      <Button :disabled="uploading || !value" @click="value = ''">清除</Button>
+      <Input
+        v-if="props.showPath"
+        v-model:value="value"
+        class="image-uploader__path"
+        :placeholder="placeholder"
+      />
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.image-uploader {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.image-uploader__preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 112px;
+  height: 112px;
+  overflow: hidden;
+  background: hsl(var(--accent) / 38%);
+  border: 1px dashed hsl(var(--border));
+  border-radius: 8px;
+}
+
+.image-uploader__preview :deep(.ant-image-img) {
+  object-fit: contain;
+}
+
+.image-uploader__empty {
+  font-size: 13px;
+  color: hsl(var(--muted-foreground));
+}
+
+.image-uploader__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.image-uploader--compact .image-uploader__preview {
+  width: 80px;
+  height: 80px;
+}
+
+.image-uploader__path {
+  width: min(100%, 420px);
+}
+
+@media (max-width: 640px) {
+  .image-uploader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+</style>

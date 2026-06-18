@@ -1,0 +1,90 @@
+# 三容器编排：Go server + 后台管理(web-antd) + 官网(website-react)
+# 在仓库根 nine-xing/ 下执行：docker compose up -d --build
+#
+# 端口（宿主机:容器）：
+#   后台管理 http://localhost:8080
+#   官网     http://localhost:8000
+#   Go server 仅集群内访问（不对外暴露，经各 nginx 反代 /api）
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nx}
+      POSTGRES_DB: ${POSTGRES_DB:-nx_admin}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nx} -d ${POSTGRES_DB:-nx_admin}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - nx
+
+  server:
+    build:
+      context: .
+      dockerfile: nx-backend/apps/server/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: "5320"
+      SITE_CONFIG_PATH: /data/site-config.json
+      ADMIN_CONFIG_PATH: /data/admin-config.json
+      DATABASE_URL: postgres://${POSTGRES_USER:-nx}:${POSTGRES_PASSWORD:-nx}@db:5432/${POSTGRES_DB:-nx_admin}?sslmode=disable
+      # 生产务必改成强随机串与你自己的账号密码（首次启动播种管理员）
+      JWT_SECRET: ${JWT_SECRET:-please-change-me-to-a-long-random-secret}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-123456}
+      OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:-}
+      OSS_ACCESS_KEY_SECRET: ${OSS_ACCESS_KEY_SECRET:-}
+      OSS_BUCKET: ${OSS_BUCKET:-}
+      OSS_ENDPOINT: ${OSS_ENDPOINT:-}
+      OSS_REGION: ${OSS_REGION:-}
+      OSS_PUBLIC_URL: ${OSS_PUBLIC_URL:-}
+      OSS_PREFIX: ${OSS_PREFIX:-uploads}
+      UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-20}
+      # 容器化下官网走运行时 fetch，不在容器内自动构建官网，故留空
+      BUILD_SCRIPT: ""
+    volumes:
+      # 站点配置持久化，后台保存后重启不丢
+      - site-config:/data
+    networks:
+      - nx
+
+  admin:
+    build:
+      context: .
+      dockerfile: nx-backend/apps/web-antd/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - server
+    ports:
+      - "8080:8080"
+    networks:
+      - nx
+
+  website:
+    build:
+      context: .
+      dockerfile: website-react/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - server
+    ports:
+      - "8000:80"
+    networks:
+      - nx
+
+volumes:
+  site-config:
+  pgdata:
+
+networks:
+  nx:
+    driver: bridge

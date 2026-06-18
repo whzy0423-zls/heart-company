@@ -1,0 +1,13 @@
+# 构建上下文为仓库根，排除所有大目录与本地产物，避免拷进镜像
+**/node_modules
+**/dist
+**/dist.zip
+**/.turbo
+**/.git
+**/.DS_Store
+nx-backend/node_modules
+nx-backend/**/node_modules
+website-react/node_modules
+website/
+.claude/
+**/*.log

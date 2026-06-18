@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 480" width="400" height="480">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2b2f36"/><stop offset="100%" stop-color="#14171c"/>
+    </linearGradient>
+  </defs>
+  <rect width="400" height="480" rx="14" fill="url(#bg)"/>
+  <circle cx="200" cy="180" r="78" fill="#3a4049"/>
+  <path d="M70 480 C70 360 130 300 200 300 C270 300 330 360 330 480 Z" fill="#3a4049"/>
+  <text x="200" y="455" text-anchor="middle" font-family="PingFang SC, sans-serif" font-size="18" font-weight="700" fill="#aeb4bb">韩常青 · 首席导师</text>
+</svg>

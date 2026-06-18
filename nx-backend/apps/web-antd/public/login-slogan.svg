@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 530" width="520" height="530" fill="none">
+  <defs>
+    <radialGradient id="dish" cx="50%" cy="38%" r="68%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="78%" stop-color="#f3f5f8"/>
+      <stop offset="100%" stop-color="#e4e9ef"/>
+    </radialGradient>
+    <linearGradient id="cGreen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#54c156"/><stop offset="100%" stop-color="#2f9a33"/>
+    </linearGradient>
+    <linearGradient id="cBlue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3389db"/><stop offset="100%" stop-color="#1a64b2"/>
+    </linearGradient>
+    <linearGradient id="cRed" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f24b40"/><stop offset="100%" stop-color="#d22f25"/>
+    </linearGradient>
+    <filter id="badgeShadow" x="-60%" y="-60%" width="220%" height="220%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+    <filter id="nodeShadow" x="-80%" y="-80%" width="260%" height="260%">
+      <feDropShadow dx="0" dy="4" stdDeviation="9" flood-color="#04060c" flood-opacity="0.55"/>
+    </filter>
+    <clipPath id="badgeClip"><circle cx="260" cy="260" r="92"/></clipPath>
+  </defs>
+
+  <!-- 装饰圆环 -->
+  <circle cx="260" cy="260" r="248" stroke="#ffffff" stroke-opacity="0.10" stroke-width="1.4" stroke-dasharray="2 9"/>
+  <circle cx="260" cy="260" r="150" stroke="#ffffff" stroke-opacity="0.07" stroke-width="1.4" stroke-dasharray="2 9"/>
+
+  <!-- 九型节点：白色圆卡 + 彩色数字 + 灰色型名 -->
+  <g font-family="'PingFang SC','Microsoft YaHei',sans-serif" text-anchor="middle">
+    <!-- 9 和平型 -->
+    <g filter="url(#nodeShadow)"><circle cx="260" cy="58" r="33" fill="#ffffff"/></g>
+    <text x="260" y="56" font-size="21" font-weight="800" fill="#1a64b2">9</text>
+    <text x="260" y="74" font-size="11.5" fill="#5d6b7e">和平型</text>
+    <!-- 1 完美型 -->
+    <g filter="url(#nodeShadow)"><circle cx="392" cy="106" r="33" fill="#ffffff"/></g>
+    <text x="392" y="104" font-size="21" font-weight="800" fill="#2f9a33">1</text>
+    <text x="392" y="122" font-size="11.5" fill="#5d6b7e">完美型</text>
+    <!-- 2 助人型 -->
+    <g filter="url(#nodeShadow)"><circle cx="460" cy="226" r="33" fill="#ffffff"/></g>
+    <text x="460" y="224" font-size="21" font-weight="800" fill="#1a64b2">2</text>
+    <text x="460" y="242" font-size="11.5" fill="#5d6b7e">助人型</text>
+    <!-- 3 成就型 -->
+    <g filter="url(#nodeShadow)"><circle cx="436" cy="360" r="33" fill="#ffffff"/></g>
+    <text x="436" y="358" font-size="21" font-weight="800" fill="#d22f25">3</text>
+    <text x="436" y="376" font-size="11.5" fill="#5d6b7e">成就型</text>
+    <!-- 4 自我型 -->
+    <g filter="url(#nodeShadow)"><circle cx="330" cy="446" r="33" fill="#ffffff"/></g>
+    <text x="330" y="444" font-size="21" font-weight="800" fill="#1a64b2">4</text>
+    <text x="330" y="462" font-size="11.5" fill="#5d6b7e">自我型</text>
+    <!-- 5 观察型 -->
+    <g filter="url(#nodeShadow)"><circle cx="190" cy="446" r="33" fill="#ffffff"/></g>
+    <text x="190" y="444" font-size="21" font-weight="800" fill="#2f9a33">5</text>
+    <text x="190" y="462" font-size="11.5" fill="#5d6b7e">观察型</text>
+    <!-- 6 忠诚型 -->
+    <g filter="url(#nodeShadow)"><circle cx="84" cy="360" r="33" fill="#ffffff"/></g>
+    <text x="84" y="358" font-size="21" font-weight="800" fill="#2f9a33">6</text>
+    <text x="84" y="376" font-size="11.5" fill="#5d6b7e">忠诚型</text>
+    <!-- 7 活跃型 -->
+    <g filter="url(#nodeShadow)"><circle cx="60" cy="226" r="33" fill="#ffffff"/></g>
+    <text x="60" y="224" font-size="21" font-weight="800" fill="#d22f25">7</text>
+    <text x="60" y="242" font-size="11.5" fill="#5d6b7e">活跃型</text>
+    <!-- 8 领袖型 -->
+    <g filter="url(#nodeShadow)"><circle cx="128" cy="106" r="33" fill="#ffffff"/></g>
+    <text x="128" y="104" font-size="21" font-weight="800" fill="#d22f25">8</text>
+    <text x="128" y="122" font-size="11.5" fill="#5d6b7e">领袖型</text>
+  </g>
+
+  <!-- 中央立体九宫格盘 -->
+  <g filter="url(#badgeShadow)">
+    <circle cx="260" cy="260" r="100" fill="url(#dish)"/>
+    <g clip-path="url(#badgeClip)">
+      <g font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="30" font-weight="800" fill="#ffffff" text-anchor="middle">
+        <!-- 行1：1 5 6 绿 -->
+        <rect x="181" y="181" width="50" height="50" rx="10" fill="url(#cGreen)"/><text x="206" y="215">1</text>
+        <rect x="235" y="181" width="50" height="50" rx="10" fill="url(#cGreen)"/><text x="260" y="215">5</text>
+        <rect x="289" y="181" width="50" height="50" rx="10" fill="url(#cGreen)"/><text x="314" y="215">6</text>
+        <!-- 行2：2 4 9 蓝 -->
+        <rect x="181" y="235" width="50" height="50" rx="10" fill="url(#cBlue)"/><text x="206" y="269">2</text>
+        <rect x="235" y="235" width="50" height="50" rx="10" fill="url(#cBlue)"/><text x="260" y="269">4</text>
+        <rect x="289" y="235" width="50" height="50" rx="10" fill="url(#cBlue)"/><text x="314" y="269">9</text>
+        <!-- 行3：3 7 8 红 -->
+        <rect x="181" y="289" width="50" height="50" rx="10" fill="url(#cRed)"/><text x="206" y="323">3</text>
+        <rect x="235" y="289" width="50" height="50" rx="10" fill="url(#cRed)"/><text x="260" y="323">7</text>
+        <rect x="289" y="289" width="50" height="50" rx="10" fill="url(#cRed)"/><text x="314" y="323">8</text>
+      </g>
+    </g>
+    <circle cx="260" cy="260" r="100" fill="none" stroke="#ffffff" stroke-width="2"/>
+    <circle cx="260" cy="260" r="100" fill="none" stroke="#000000" stroke-opacity="0.06" stroke-width="1" transform="translate(0 1)"/>
+  </g>
+</svg>
