@@ -26,6 +26,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/system"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
+	"nine-xing/nx-backend/apps/server/internal/voice"
 )
 
 type Server struct {
@@ -39,6 +40,7 @@ type Server struct {
 	signups    *signup.Store
 	uploads    *uploadasset.Store
 	uploader   storage.ObjectUploader
+	voices     *voice.Store
 
 	signupMu          sync.Mutex
 	signupSubscribers map[chan signup.Lead]struct{}
@@ -59,6 +61,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 
 		signupSubscribers: map[chan signup.Lead]struct{}{},
 	}
+	s.voices = voice.NewStore(database, s.uploads, env.MiniMax)
 	s.routes()
 	return s.withCORS(s.mux)
 }
@@ -93,6 +96,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/signups/detail", s.method(http.MethodGet, s.requireAuth(s.signupDetail)))
 	s.mux.HandleFunc("/api/signups/follow", s.method(http.MethodPut, s.requireAuth(s.signupFollow)))
 	s.mux.HandleFunc("/api/signups/events", s.method(http.MethodGet, s.requireAuth(s.signupEvents)))
+	s.mux.HandleFunc("/api/voice/profiles/list", s.method(http.MethodGet, s.requireAuth(s.voiceProfiles)))
+	s.mux.HandleFunc("/api/voice/profiles", s.method(http.MethodPost, s.requireAuth(s.createVoiceProfile)))
+	s.mux.HandleFunc("/api/voice/profiles/", s.requireAuth(s.voiceProfileByID))
+	s.mux.HandleFunc("/api/voice/generate", s.method(http.MethodPost, s.requireAuth(s.generateVoice)))
+	s.mux.HandleFunc("/api/voice/generations/list", s.method(http.MethodGet, s.requireAuth(s.voiceGenerations)))
 	s.mux.HandleFunc("/api/system/user/list", s.method(http.MethodGet, s.requireAuth(s.system.HandleUsers)))
 	s.mux.HandleFunc("/api/system/user", s.requireAuth(s.system.HandleUsers))
 	s.mux.HandleFunc("/api/system/user/", s.requireAuth(s.system.HandleUserByID))
@@ -566,6 +574,78 @@ func (s *Server) signupEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+func (s *Server) voiceProfiles(w http.ResponseWriter, r *http.Request) {
+	result, err := s.voices.ListProfiles(r.Context(), r.URL.Query())
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+func (s *Server) createVoiceProfile(w http.ResponseWriter, r *http.Request) {
+	var body voice.CreateProfileInput
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
+		return
+	}
+	result, err := s.voices.CreateProfile(r.Context(), body)
+	if err != nil {
+		httpx.Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+func (s *Server) voiceProfileByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/voice/profiles/"), "/")
+	if id == "" {
+		httpx.Fail(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	switch r.Method {
+	case http.MethodPost:
+		result, err := s.voices.CloneProfile(r.Context(), id)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		httpx.OK(w, result)
+	case http.MethodDelete:
+		if err := s.voices.DeleteProfile(r.Context(), id); err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		httpx.OK(w, true)
+	default:
+		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+	}
+}
+
+func (s *Server) generateVoice(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 32*1024)
+	var body voice.GenerateInput
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
+		return
+	}
+	result, err := s.voices.Generate(r.Context(), body)
+	if err != nil {
+		httpx.Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+func (s *Server) voiceGenerations(w http.ResponseWriter, r *http.Request) {
+	result, err := s.voices.ListGenerations(r.Context(), r.URL.Query())
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
 }
 
 func (s *Server) addSignupSubscriber(ch chan signup.Lead) {
