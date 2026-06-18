@@ -15,5 +15,6 @@ export interface UploadedFile {
 export function uploadFileApi(file: File, dir = 'site') {
   return requestClient.upload<UploadedFile>('/upload', { file }, {
     params: { dir },
+    timeout: 120_000,
   });
 }
