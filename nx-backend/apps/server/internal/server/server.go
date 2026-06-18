@@ -328,7 +328,7 @@ func (s *Server) objectUploader() (storage.ObjectUploader, error) {
 	if s.uploader != nil {
 		return s.uploader, nil
 	}
-	if s.env.OSS.AccessKeyID == "" && s.env.OSS.AccessKeySecret == "" && s.env.OSS.Bucket == "" {
+	if s.env.OSS.AccessKeyID == "" && s.env.OSS.AccessKeySecret == "" && s.env.OSS.Bucket == "" && s.env.OSS.Region == "" {
 		s.uploader = storage.NewLocalUploader(s.env.UploadDir, "/api/uploads")
 		return s.uploader, nil
 	}

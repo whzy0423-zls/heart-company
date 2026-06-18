@@ -109,13 +109,18 @@ async function uploadAudio({ file }: UploadChangeParam) {
     uploadedAudioName.value = result.name || rawFile.name;
     uploadedAudioUrl.value = result.url;
     message.success('音频样本已上传');
-  } catch (error) {
+  } catch (error: any) {
     form.sampleAssetId = '';
     form.sampleName = '';
     form.sampleUrl = '';
     uploadedAudioName.value = '';
     uploadedAudioUrl.value = '';
-    message.error('音频上传失败，请重新上传');
+    const errorMessage =
+      error?.response?.data?.error ||
+      error?.response?.data?.message ||
+      error?.message ||
+      '音频上传失败，请重新上传';
+    message.error(errorMessage);
   } finally {
     saving.value = false;
   }

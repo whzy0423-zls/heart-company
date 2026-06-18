@@ -49,11 +49,17 @@ services:
       OSS_PUBLIC_URL: ${OSS_PUBLIC_URL:-}
       OSS_PREFIX: ${OSS_PREFIX:-uploads}
       UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-20}
+      UPLOAD_DIR: /data/uploads
+      MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
+      MINIMAX_GROUP_ID: ${MINIMAX_GROUP_ID:-}
+      MINIMAX_API_BASE: ${MINIMAX_API_BASE:-https://api.minimaxi.com}
       # 容器化下官网走运行时 fetch，不在容器内自动构建官网，故留空
       BUILD_SCRIPT: ""
     volumes:
       # 站点配置持久化，后台保存后重启不丢
       - site-config:/data
+      # 未配置 OSS 时，上传文件保存到这里，重启不丢
+      - uploads:/data/uploads
     networks:
       - nx
 
@@ -84,6 +90,7 @@ services:
 volumes:
   site-config:
   pgdata:
+  uploads:
 
 networks:
   nx:
