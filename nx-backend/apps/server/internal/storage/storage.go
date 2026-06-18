@@ -74,8 +74,21 @@ func NewLocalUploader(root string, publicPrefix string) *LocalUploader {
 }
 
 func NewOSSUploader(config OSSConfig) (*OSSUploader, error) {
-	if config.AccessKeyID == "" || config.AccessKeySecret == "" || config.Bucket == "" || config.Region == "" {
-		return nil, fmt.Errorf("OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_BUCKET and OSS_REGION are required")
+	missing := []string{}
+	if config.AccessKeyID == "" {
+		missing = append(missing, "OSS_ACCESS_KEY_ID")
+	}
+	if config.AccessKeySecret == "" {
+		missing = append(missing, "OSS_ACCESS_KEY_SECRET")
+	}
+	if config.Bucket == "" {
+		missing = append(missing, "OSS_BUCKET")
+	}
+	if config.Region == "" {
+		missing = append(missing, "OSS_REGION")
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("OSS 配置不完整，缺少：%s；请补齐 OSS 配置，或清空所有 OSS_* 使用服务器本地上传", strings.Join(missing, ", "))
 	}
 
 	cfg := oss.LoadDefaultConfig().
