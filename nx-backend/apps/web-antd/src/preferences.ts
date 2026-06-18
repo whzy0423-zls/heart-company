@@ -19,7 +19,7 @@ export const overridesPreferences = defineOverridesPreferences({
   // overrides
   app: {
     accessMode: 'backend',
-    defaultHomePath: '/website/overview',
+    defaultHomePath: '/dashboard/analytics',
     name: import.meta.env.VITE_APP_TITLE,
   },
   copyright: {
@@ -34,6 +34,11 @@ export const overridesPreferences = defineOverridesPreferences({
   logo: {
     enable: true,
     source: '/logo.png',
+  },
+  transition: {
+    enable: false,
+    loading: false,
+    progress: false,
   },
   widget: {
     languageToggle: false,

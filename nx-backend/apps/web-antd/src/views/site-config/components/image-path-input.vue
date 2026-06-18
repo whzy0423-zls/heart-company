@@ -47,19 +47,36 @@ async function customRequest(options: UploadRequestOption) {
 
 <template>
   <div class="image-uploader" :class="{ 'image-uploader--compact': props.variant === 'input' }">
-    <div class="image-uploader__preview">
-      <Image
-        v-if="value"
-        :height="props.variant === 'input' ? 64 : 88"
-        :src="value"
-        :width="props.variant === 'input' ? 64 : 88"
-      />
-      <span v-else class="image-uploader__empty">{{ props.emptyText }}</span>
-    </div>
+    <Upload
+      accept="image/*"
+      :custom-request="customRequest"
+      :disabled="uploading"
+      :max-count="1"
+      :show-upload-list="false"
+    >
+      <div
+        class="image-uploader__preview"
+        :class="{ 'image-uploader__preview--uploading': uploading }"
+        role="button"
+        tabindex="0"
+      >
+        <Image
+          v-if="value"
+          :height="props.variant === 'input' ? 64 : 88"
+          :preview="false"
+          :src="value"
+          :width="props.variant === 'input' ? 64 : 88"
+        />
+        <span v-else class="image-uploader__empty">
+          {{ uploading ? '上传中...' : props.emptyText }}
+        </span>
+      </div>
+    </Upload>
     <div class="image-uploader__actions">
       <Upload
         accept="image/*"
         :custom-request="customRequest"
+        :disabled="uploading"
         :max-count="1"
         :show-upload-list="false"
       >
@@ -93,6 +110,21 @@ async function customRequest(options: UploadRequestOption) {
   background: hsl(var(--accent) / 38%);
   border: 1px dashed hsl(var(--border));
   border-radius: 8px;
+  cursor: pointer;
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease,
+    opacity 0.2s ease;
+}
+
+.image-uploader__preview:hover {
+  background: hsl(var(--accent) / 56%);
+  border-color: hsl(var(--primary) / 64%);
+}
+
+.image-uploader__preview--uploading {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .image-uploader__preview :deep(.ant-image-img) {

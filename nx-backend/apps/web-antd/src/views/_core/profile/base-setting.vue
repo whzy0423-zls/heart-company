@@ -138,16 +138,29 @@ onMounted(loadProfile);
 <template>
   <div class="profile-settings">
     <aside class="profile-card profile-card--summary">
-      <div class="profile-avatar-wrap">
-        <Avatar
-          class="profile-avatar"
-          :size="96"
-          :src="avatarSrc"
-          @error="avatarLoadFailed = true"
+      <Upload
+        accept="image/*"
+        :custom-request="customRequest"
+        :disabled="uploading"
+        :max-count="1"
+        :show-upload-list="false"
+      >
+        <div
+          class="profile-avatar-wrap"
+          :class="{ 'profile-avatar-wrap--uploading': uploading }"
+          role="button"
+          tabindex="0"
         >
-          {{ avatarText }}
-        </Avatar>
-      </div>
+          <Avatar
+            class="profile-avatar"
+            :size="96"
+            :src="avatarSrc"
+            @error="avatarLoadFailed = true"
+          >
+            {{ avatarText }}
+          </Avatar>
+        </div>
+      </Upload>
 
       <div class="profile-summary">
         <h2>{{ displayName }}</h2>
@@ -158,6 +171,7 @@ onMounted(loadProfile);
         <Upload
           accept="image/*"
           :custom-request="customRequest"
+          :disabled="uploading"
           :max-count="1"
           :show-upload-list="false"
         >
@@ -257,6 +271,13 @@ onMounted(loadProfile);
   display: flex;
   justify-content: center;
   padding: 8px 0 18px;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.profile-avatar-wrap--uploading {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .profile-avatar {

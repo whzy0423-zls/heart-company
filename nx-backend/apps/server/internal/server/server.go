@@ -12,11 +12,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/analytics"
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/branding"
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/engagement"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/signup"
 	"nine-xing/nx-backend/apps/server/internal/siteconfig"
@@ -26,26 +29,35 @@ import (
 )
 
 type Server struct {
-	env      config.Env
-	mux      *http.ServeMux
-	db       *sql.DB
-	system   *system.Store
-	builder  *siteconfig.Builder
-	signups  *signup.Store
-	uploads  *uploadasset.Store
-	uploader storage.ObjectUploader
+	env        config.Env
+	mux        *http.ServeMux
+	db         *sql.DB
+	system     *system.Store
+	analytics  *analytics.Store
+	builder    *siteconfig.Builder
+	engagement *engagement.Store
+	signups    *signup.Store
+	uploads    *uploadasset.Store
+	uploader   storage.ObjectUploader
+
+	signupMu          sync.Mutex
+	signupSubscribers map[chan signup.Lead]struct{}
 }
 
 func New(env config.Env, database *sql.DB) http.Handler {
 	s := &Server{
-		env:      env,
-		mux:      http.NewServeMux(),
-		db:       database,
-		system:   system.NewStore(database),
-		builder:  siteconfig.NewBuilder(env.BuildScript, "", time.Duration(env.BuildTimeout)*time.Second),
-		signups:  signup.NewStore(database),
-		uploads:  uploadasset.NewStore(database),
-		uploader: env.ObjectUploader,
+		env:        env,
+		mux:        http.NewServeMux(),
+		db:         database,
+		system:     system.NewStore(database),
+		analytics:  analytics.NewStore(database),
+		builder:    siteconfig.NewBuilder(env.BuildScript, "", time.Duration(env.BuildTimeout)*time.Second),
+		engagement: engagement.NewStore(database),
+		signups:    signup.NewStore(database),
+		uploads:    uploadasset.NewStore(database),
+		uploader:   env.ObjectUploader,
+
+		signupSubscribers: map[chan signup.Lead]struct{}{},
 	}
 	s.routes()
 	return s.withCORS(s.mux)
@@ -68,10 +80,19 @@ func (s *Server) routes() {
 	// 公开只读：给官网(website-react)运行时拉取，无需鉴权。
 	s.mux.HandleFunc("/api/public/site-config", s.method(http.MethodGet, s.publicSiteConfig))
 	s.mux.HandleFunc("/api/public/signups", s.method(http.MethodPost, s.publicSignup))
+	s.mux.HandleFunc("/api/public/game-results", s.method(http.MethodPost, s.publicGameResult))
+	s.mux.HandleFunc("/api/public/site-visits", s.method(http.MethodPost, s.publicSiteVisit))
 	// 后台品牌：公开只读（启动屏/登录页在登录前就要用），写入需鉴权。
 	s.mux.HandleFunc("/api/public/admin-branding", s.method(http.MethodGet, s.publicAdminBranding))
 	s.mux.HandleFunc("/api/admin-branding", s.adminBranding)
+	s.mux.HandleFunc("/api/analytics/overview", s.method(http.MethodGet, s.requireAuth(s.analyticsOverview)))
+	s.mux.HandleFunc("/api/game-results/overview", s.method(http.MethodGet, s.requireAuth(s.gameOverview)))
+	s.mux.HandleFunc("/api/messages/list", s.method(http.MethodGet, s.requireAuth(s.messagesList)))
+	s.mux.HandleFunc("/api/messages/read", s.method(http.MethodPut, s.requireAuth(s.markMessages)))
 	s.mux.HandleFunc("/api/signups/list", s.method(http.MethodGet, s.requireAuth(s.signupList)))
+	s.mux.HandleFunc("/api/signups/detail", s.method(http.MethodGet, s.requireAuth(s.signupDetail)))
+	s.mux.HandleFunc("/api/signups/follow", s.method(http.MethodPut, s.requireAuth(s.signupFollow)))
+	s.mux.HandleFunc("/api/signups/events", s.method(http.MethodGet, s.requireAuth(s.signupEvents)))
 	s.mux.HandleFunc("/api/system/user/list", s.method(http.MethodGet, s.requireAuth(s.system.HandleUsers)))
 	s.mux.HandleFunc("/api/system/user", s.requireAuth(s.system.HandleUsers))
 	s.mux.HandleFunc("/api/system/user/", s.requireAuth(s.system.HandleUserByID))
@@ -110,7 +131,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := auth.UserInfo{
-		HomePath: "/website/overview",
+		HomePath: "/dashboard/analytics",
 		ID:       id,
 		RealName: nickname,
 		Roles:    roleCodes,
@@ -377,7 +398,79 @@ func (s *Server) publicSignup(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.broadcastSignup(lead)
 	httpx.OK(w, lead)
+}
+
+func (s *Server) publicSiteVisit(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	var body analytics.VisitInput
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
+		return
+	}
+	if err := s.analytics.TrackVisit(r.Context(), body, r); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, true)
+}
+
+func (s *Server) publicGameResult(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+	var body engagement.GameResultInput
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
+		return
+	}
+	if err := s.engagement.TrackGameResult(r.Context(), body, r); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, true)
+}
+
+func (s *Server) analyticsOverview(w http.ResponseWriter, r *http.Request) {
+	result, err := s.analytics.Overview(r.Context(), r.URL.Query())
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+func (s *Server) gameOverview(w http.ResponseWriter, r *http.Request) {
+	result, err := s.engagement.GameOverview(r.Context())
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+func (s *Server) messagesList(w http.ResponseWriter, r *http.Request) {
+	result, err := s.engagement.Messages(r.Context(), r.URL.Query())
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+func (s *Server) markMessages(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDs  []string `json:"ids"`
+		Read bool     `json:"read"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
+		return
+	}
+	if err := s.engagement.MarkMessages(r.Context(), body.IDs, body.Read); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, true)
 }
 
 func (s *Server) signupList(w http.ResponseWriter, r *http.Request) {
@@ -387,6 +480,116 @@ func (s *Server) signupList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.OK(w, result)
+}
+
+func (s *Server) signupDetail(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		httpx.Fail(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	result, err := s.signups.Detail(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			httpx.Fail(w, http.StatusNotFound, "signup not found")
+			return
+		}
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+func (s *Server) signupFollow(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		httpx.Fail(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	var body signup.FollowInput
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
+		return
+	}
+	user := userFromRequest(r)
+	operator := strings.TrimSpace(user.RealName)
+	if operator == "" {
+		operator = strings.TrimSpace(user.Username)
+	}
+	lead, err := s.signups.Follow(r.Context(), id, body, operator)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			httpx.Fail(w, http.StatusNotFound, "signup not found")
+			return
+		}
+		httpx.Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	httpx.OK(w, lead)
+}
+
+func (s *Server) signupEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		httpx.Fail(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	ch := make(chan signup.Lead, 8)
+	s.addSignupSubscriber(ch)
+	defer s.removeSignupSubscriber(ch)
+
+	_, _ = io.WriteString(w, ": connected\n\n")
+	flusher.Flush()
+
+	heartbeat := time.NewTicker(25 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-heartbeat.C:
+			_, _ = io.WriteString(w, ": ping\n\n")
+			flusher.Flush()
+		case lead := <-ch:
+			payload, err := json.Marshal(lead)
+			if err != nil {
+				continue
+			}
+			_, _ = fmt.Fprintf(w, "event: signup\ndata: %s\n\n", payload)
+			flusher.Flush()
+		}
+	}
+}
+
+func (s *Server) addSignupSubscriber(ch chan signup.Lead) {
+	s.signupMu.Lock()
+	defer s.signupMu.Unlock()
+	s.signupSubscribers[ch] = struct{}{}
+}
+
+func (s *Server) removeSignupSubscriber(ch chan signup.Lead) {
+	s.signupMu.Lock()
+	defer s.signupMu.Unlock()
+	delete(s.signupSubscribers, ch)
+	close(ch)
+}
+
+func (s *Server) broadcastSignup(lead signup.Lead) {
+	s.signupMu.Lock()
+	defer s.signupMu.Unlock()
+	for ch := range s.signupSubscribers {
+		select {
+		case ch <- lead:
+		default:
+		}
+	}
 }
 
 // publicAdminBranding 后台品牌公开只读：启动屏与登录页在登录前即需要读取。
@@ -443,7 +646,13 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request) (auth.UserInfo, bool) {
-	user, err := auth.BearerUser(r.Header.Get("Authorization"), s.env.JWTSecret)
+	authorization := r.Header.Get("Authorization")
+	if authorization == "" {
+		if token := strings.TrimSpace(r.URL.Query().Get("token")); token != "" {
+			authorization = "Bearer " + token
+		}
+	}
+	user, err := auth.BearerUser(authorization, s.env.JWTSecret)
 	if err != nil {
 		httpx.Fail(w, http.StatusUnauthorized, "Unauthorized Exception")
 		return auth.UserInfo{}, false

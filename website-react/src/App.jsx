@@ -1,5 +1,6 @@
-import { lazy, Suspense } from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { lazy, Suspense, useEffect } from 'react'
+import { Routes, Route, useLocation } from 'react-router-dom'
+import { trackSiteVisit } from './api/analytics'
 import Layout from './components/Layout'
 import Home from './pages/Home'
 
@@ -14,6 +15,12 @@ const Course = lazy(() => import('./pages/Course'))
 const Game = lazy(() => import('./pages/Game'))
 
 export default function App() {
+  const location = useLocation()
+
+  useEffect(() => {
+    trackSiteVisit()
+  }, [location.pathname, location.search, location.hash])
+
   return (
     <Routes>
       <Route element={<Layout />}>

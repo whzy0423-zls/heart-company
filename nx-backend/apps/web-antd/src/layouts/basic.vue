@@ -22,11 +22,16 @@ import { $t } from '#/locales';
 import { useAuthStore } from '#/store';
 import LoginForm from '#/views/_core/authentication/login.vue';
 
-import { getSignupNotifications } from './signup-notice';
+import { toSignupNotification } from './signup-notice';
 
 const notifications = ref<NotificationItem[]>([]);
-const SIGNUP_NOTICE_LAST_ID_KEY = 'nx-signup-notice-last-id';
+const SIGNUP_NOTICE_LAST_ID_KEY_PREFIX = 'nx-signup-notice-last-id:v2';
 let signupNoticeTimer: ReturnType<typeof window.setInterval> | undefined;
+let signupEventSource: EventSource | undefined;
+let signupEventUnavailable = false;
+let signupEventRetryTimer: ReturnType<typeof window.setTimeout> | undefined;
+let signupNoticeBootstrapped = false;
+const seenSignupNoticeIds = new Set<string>();
 
 const router = useRouter();
 const userStore = useUserStore();
@@ -75,7 +80,9 @@ function handleMakeAll() {
   notifications.value.forEach((item) => (item.isRead = true));
 }
 
-const viewAll = () => {};
+const viewAll = () => {
+  router.push('/message/management');
+};
 
 const handleClick = (item: NotificationItem) => {
   // 如果通知项有链接，点击时跳转
@@ -141,12 +148,33 @@ watch(
   },
 );
 
+function signupNoticeStorageKey() {
+  const username = userStore.userInfo?.username || 'anonymous';
+  return `${SIGNUP_NOTICE_LAST_ID_KEY_PREFIX}:${window.location.origin}:${username}`;
+}
+
 function rememberSignupNoticeId(id: string) {
-  localStorage.setItem(SIGNUP_NOTICE_LAST_ID_KEY, id);
+  localStorage.setItem(signupNoticeStorageKey(), id);
 }
 
 function readLastSignupNoticeId() {
-  return Number(localStorage.getItem(SIGNUP_NOTICE_LAST_ID_KEY) || '0');
+  return Number(localStorage.getItem(signupNoticeStorageKey()) || '0');
+}
+
+function pushSignupNotice(notice: NotificationItem) {
+  const duplicated = notifications.value.some((item) => item.id === notice.id);
+  if (!duplicated) {
+    notifications.value.unshift(notice);
+  }
+  if (notice.id) {
+    seenSignupNoticeIds.add(String(notice.id));
+  }
+  notification.info({
+    description: notice.message,
+    message: notice.title,
+    onClick: () => navigateTo('/message/management', { type: 'signup' }),
+    placement: 'topRight',
+  });
 }
 
 async function pollSignupNotices() {
@@ -156,38 +184,97 @@ async function pollSignupNotices() {
     const items = result.items ?? [];
     if (items.length === 0) return;
 
-    const lastSeenId = readLastSignupNoticeId();
-    const { latestId, notices } = getSignupNotifications(items, lastSeenId);
+    const latestId = Math.max(...items.map((item) => Number(item.id) || 0));
+    if (!signupNoticeBootstrapped) {
+      items.forEach((item) => seenSignupNoticeIds.add(`signup-${item.id}`));
+      rememberSignupNoticeId(String(latestId));
+      signupNoticeBootstrapped = true;
+      return;
+    }
 
+    const notices = items
+      .filter((item) => !seenSignupNoticeIds.has(`signup-${item.id}`))
+      .sort((a, b) => Number(a.id) - Number(b.id))
+      .map((item) => toSignupNotification(item));
     if (notices.length === 0) return;
     for (const notice of notices) {
-      notifications.value.unshift(notice);
-      notification.info({
-        description: notice.message,
-        message: notice.title,
-        onClick: () => navigateTo('/customer/signups'),
-        placement: 'topRight',
-      });
+      pushSignupNotice(notice);
     }
     rememberSignupNoticeId(String(latestId));
-  } catch {
+  } catch (error: any) {
+    const status = error?.response?.status;
+    if (status === 401) {
+      notification.warning({
+        description: '当前登录状态和本地 Go 后端不一致，请重新登录后台后再测试报名推送。',
+        message: '报名通知连接已失效',
+        placement: 'topRight',
+      });
+      accessStore.setAccessToken(null);
+      await authStore.logout();
+      return;
+    }
     // 轮询通知失败不打断主界面。
   }
 }
 
-onMounted(() => {
+function connectSignupEvents() {
+  if (!accessStore.accessToken || signupEventSource || signupEventUnavailable) return;
+
+  const url = `/api/signups/events?token=${encodeURIComponent(accessStore.accessToken)}`;
+  signupEventSource = new EventSource(url);
+  signupEventSource.addEventListener('signup', (event) => {
+    try {
+      const lead = JSON.parse((event as MessageEvent).data);
+      const notice = toSignupNotification(lead);
+      pushSignupNotice(notice);
+      if (lead?.id) {
+        const latestId = Math.max(readLastSignupNoticeId(), Number(lead.id) || 0);
+        rememberSignupNoticeId(String(latestId));
+      }
+    } catch {
+      // 忽略单条通知格式异常，保持连接继续。
+    }
+  });
+  signupEventSource.onerror = () => {
+    signupEventSource?.close();
+    signupEventSource = undefined;
+    signupEventUnavailable = true;
+    if (signupEventRetryTimer) {
+      window.clearTimeout(signupEventRetryTimer);
+    }
+    signupEventRetryTimer = window.setTimeout(() => {
+      signupEventUnavailable = false;
+      signupEventRetryTimer = undefined;
+      connectSignupEvents();
+    }, 15_000);
+  };
+}
+
+function refreshSignupNotices() {
   pollSignupNotices();
+  connectSignupEvents();
+}
+
+onMounted(() => {
+  refreshSignupNotices();
   signupNoticeTimer = window.setInterval(() => {
     pollSignupNotices();
-  }, 5000);
-  window.addEventListener('focus', pollSignupNotices);
+  }, 2000);
+  window.addEventListener('focus', refreshSignupNotices);
+  document.addEventListener('visibilitychange', refreshSignupNotices);
 });
 
 onUnmounted(() => {
   if (signupNoticeTimer) {
     window.clearInterval(signupNoticeTimer);
   }
-  window.removeEventListener('focus', pollSignupNotices);
+  if (signupEventRetryTimer) {
+    window.clearTimeout(signupEventRetryTimer);
+  }
+  signupEventSource?.close();
+  signupEventSource = undefined;
+  window.removeEventListener('focus', refreshSignupNotices);
+  document.removeEventListener('visibilitychange', refreshSignupNotices);
 });
 </script>
 

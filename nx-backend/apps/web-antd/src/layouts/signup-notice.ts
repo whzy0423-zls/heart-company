@@ -14,8 +14,9 @@ export function toSignupNotification(item: SignupLead): NotificationItem {
     date: item.createTime,
     id: `signup-${item.id}`,
     isRead: false,
-    link: '/customer/signups',
+    link: '/message/management',
     message: `${item.name} / ${contactTypeLabel(item.contactType)}: ${item.contact}${item.interest ? ` / ${item.interest}` : ''}`,
+    query: { type: 'signup' },
     title: '新的报名信息',
   };
 }

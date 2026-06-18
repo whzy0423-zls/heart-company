@@ -1,8 +1,9 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import QRCode from 'qrcode'
 import Confetti from '../components/Confetti'
 import { QUESTIONS, RESULTS, TYPES_INFO, CENTERS, GENDER_WEIGHT } from '../data/enneagramGame'
+import { trackGameResult } from '../api/analytics'
 
 const TYPE_HEX = { green: '#38a83a', blue: '#1f73c4', red: '#e23a2f' }
 
@@ -197,11 +198,26 @@ export default function Game() {
   const [gender, setGender] = useState(null)
   const [step, setStep] = useState(0)
   const [answers, setAnswers] = useState([])
+  const reportedResultsRef = useRef(new Set())
 
   const result = useMemo(() => {
     if (stage !== 'result') return null
     return calcType(answers, gender)
   }, [stage, answers, gender])
+
+  useEffect(() => {
+    if (!result || !gender) return
+    const reportKey = `${gender}|${result.type}|${result.second || 0}|${JSON.stringify(result.score)}`
+    if (reportedResultsRef.current.has(reportKey)) return
+    reportedResultsRef.current.add(reportKey)
+    trackGameResult({
+      centers: result.centers,
+      gender,
+      resultType: result.type,
+      score: result.score,
+      secondType: result.second || 0,
+    })
+  }, [gender, result])
 
   const start = (g) => { setGender(g); setStage('quiz'); setStep(0); setAnswers([]) }
 

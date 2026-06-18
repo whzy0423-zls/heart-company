@@ -93,6 +93,8 @@ type seedMenu struct {
 
 // 默认菜单树：官网管理 + 系统管理。id 固定，便于角色绑定与幂等。
 var defaultMenus = []seedMenu{
+	{ID: 200, PID: 0, Name: "DashboardAnalytics", Path: "/dashboard/analytics", Component: "/dashboard/analytics", AuthCode: "Analytics:Overview", Type: "menu", Sort: 1, Icon: "lucide:chart-column", Title: "数据概览"},
+	{ID: 201, PID: 0, Name: "DashboardGameResults", Path: "/dashboard/game-results", Component: "/dashboard/game-results", AuthCode: "Analytics:GameResults", Type: "menu", Sort: 2, Icon: "lucide:gamepad-2", Title: "小游戏统计"},
 	{ID: 300, PID: 0, Name: "WebsiteManage", Path: "/website", Type: "catalog", Sort: 10, Icon: "lucide:globe-2", Title: "官网管理"},
 	{ID: 301, PID: 300, Name: "WebsiteOverview", Path: "/website/overview", Component: "/site-config/overview", AuthCode: "Website:Read", Type: "menu", Sort: 1, Icon: "lucide:layout-dashboard", Title: "管理概览"},
 	{ID: 302, PID: 300, Name: "WebsiteSiteSettings", Path: "/website/site", Component: "/site-config/site", AuthCode: "Website:Write", Type: "menu", Sort: 2, Icon: "lucide:settings-2", Title: "站点设置"},
@@ -107,6 +109,8 @@ var defaultMenus = []seedMenu{
 	{ID: 312, PID: 300, Name: "WebsiteJson", Path: "/website/json", Component: "/site-config/json", AuthCode: "Website:Write", Type: "menu", Sort: 12, Icon: "lucide:braces", Title: "JSON 高级"},
 	{ID: 500, PID: 0, Name: "CustomerManage", Path: "/customer", Type: "catalog", Sort: 15, Icon: "lucide:contact-round", Title: "客户管理"},
 	{ID: 501, PID: 500, Name: "CustomerSignupLeads", Path: "/customer/signups", Component: "/site-config/signup-leads", AuthCode: "Customer:Signup:List", Type: "menu", Sort: 1, Icon: "lucide:inbox", Title: "报名信息"},
+	{ID: 600, PID: 0, Name: "MessageCenter", Path: "/message", Type: "catalog", Sort: 18, Icon: "lucide:bell-ring", Title: "消息中心"},
+	{ID: 601, PID: 600, Name: "MessageManagement", Path: "/message/management", Component: "/message/management", AuthCode: "Message:Manage:List", Type: "menu", Sort: 1, Icon: "lucide:mail-check", Title: "消息管理"},
 	{ID: 400, PID: 0, Name: "SystemManage", Path: "/system", Type: "catalog", Sort: 20, Icon: "lucide:shield-check", Title: "系统管理"},
 	{ID: 401, PID: 400, Name: "SystemUser", Path: "/system/user", Component: "/system/user/list", AuthCode: "System:User:List", Type: "menu", Sort: 1, Icon: "lucide:users", Title: "用户管理"},
 	{ID: 402, PID: 400, Name: "SystemRole", Path: "/system/role", Component: "/system/role/list", AuthCode: "System:Role:List", Type: "menu", Sort: 2, Icon: "lucide:user-cog", Title: "角色管理"},

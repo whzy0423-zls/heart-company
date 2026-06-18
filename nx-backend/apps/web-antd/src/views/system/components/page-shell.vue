@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Page } from '@vben/common-ui';
 
-import { Button, Card } from 'ant-design-vue';
+import { Button, Card, Spin } from 'ant-design-vue';
 
 defineProps<{
   description?: string;
@@ -17,14 +17,16 @@ const emit = defineEmits<{
 
 <template>
   <Page :description="description" :title="title">
-    <Card :bordered="false" :loading="loading">
+    <Card :bordered="false" class="page-shell-card">
       <template #extra>
         <div class="actions">
-          <Button @click="emit('refresh')">刷新</Button>
+          <Button :loading="loading" @click="emit('refresh')">刷新</Button>
           <Button v-if="$slots.create !== null" type="primary" @click="emit('create')">新增</Button>
         </div>
       </template>
-      <slot />
+      <Spin :spinning="!!loading">
+        <slot />
+      </Spin>
     </Card>
   </Page>
 </template>
@@ -33,5 +35,14 @@ const emit = defineEmits<{
 .actions {
   display: flex;
   gap: 8px;
+}
+
+.page-shell-card {
+  min-height: 320px;
+}
+
+.page-shell-card :deep(.ant-spin-nested-loading),
+.page-shell-card :deep(.ant-spin-container) {
+  min-height: 240px;
 }
 </style>

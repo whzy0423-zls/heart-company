@@ -17,13 +17,24 @@ const emit = defineEmits<{
 
 <template>
   <Page :description="description" :title="title">
-    <Spin :spinning="loading">
-      <Card :bordered="false">
-        <template #extra>
-          <Button :loading="saving" type="primary" @click="emit('save')">保存配置</Button>
-        </template>
+    <Card :bordered="false" class="editor-shell-card">
+      <template #extra>
+        <Button :disabled="loading" :loading="saving" type="primary" @click="emit('save')">保存配置</Button>
+      </template>
+      <Spin :spinning="loading">
         <slot />
-      </Card>
-    </Spin>
+      </Spin>
+    </Card>
   </Page>
 </template>
+
+<style scoped>
+.editor-shell-card {
+  min-height: 360px;
+}
+
+.editor-shell-card :deep(.ant-spin-nested-loading),
+.editor-shell-card :deep(.ant-spin-container) {
+  min-height: 280px;
+}
+</style>
