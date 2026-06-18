@@ -9,3 +9,4 @@ export * from './signup';
 export * from './system';
 export * from './upload';
 export * from './user';
+export * from './voice';

@@ -29,6 +29,13 @@ type Env struct {
 	UploadDir       string
 	UploadMaxBytes  int64
 	UploadPublicURL string
+	MiniMax         MiniMaxConfig
+}
+
+type MiniMaxConfig struct {
+	APIBase string
+	APIKey  string
+	GroupID string
 }
 
 func Load() Env {
@@ -91,6 +98,11 @@ func Load() Env {
 		UploadDir:       uploadDir,
 		UploadMaxBytes:  int64(uploadMaxMB) * 1024 * 1024,
 		UploadPublicURL: ossPublicURL,
+		MiniMax: MiniMaxConfig{
+			APIBase: getenv("MINIMAX_API_BASE", "https://api.minimaxi.com"),
+			APIKey:  getenv("MINIMAX_API_KEY", ""),
+			GroupID: getenv("MINIMAX_GROUP_ID", ""),
+		},
 	}
 }
 

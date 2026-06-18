@@ -131,6 +131,35 @@ CREATE TABLE IF NOT EXISTS site_visits (
   create_time TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS voice_profiles (
+  id              BIGSERIAL PRIMARY KEY,
+  name            TEXT NOT NULL DEFAULT '',
+  provider        TEXT NOT NULL DEFAULT 'minimax',
+  voice_id        TEXT NOT NULL DEFAULT '',
+  sample_asset_id BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
+  sample_url      TEXT NOT NULL DEFAULT '',
+  sample_name     TEXT NOT NULL DEFAULT '',
+  status          TEXT NOT NULL DEFAULT 'draft',
+  remark          TEXT NOT NULL DEFAULT '',
+  last_error      TEXT NOT NULL DEFAULT '',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS voice_generations (
+  id              BIGSERIAL PRIMARY KEY,
+  profile_id      BIGINT REFERENCES voice_profiles(id) ON DELETE SET NULL,
+  provider        TEXT NOT NULL DEFAULT 'minimax',
+  voice_id        TEXT NOT NULL DEFAULT '',
+  text            TEXT NOT NULL DEFAULT '',
+  model           TEXT NOT NULL DEFAULT '',
+  audio_asset_id  BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
+  audio_url       TEXT NOT NULL DEFAULT '',
+  status          TEXT NOT NULL DEFAULT 'success',
+  error_message   TEXT NOT NULL DEFAULT '',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT NOT NULL DEFAULT '';
 ALTER TABLE signups ADD COLUMN IF NOT EXISTS contact_type TEXT NOT NULL DEFAULT 'phone';
 ALTER TABLE signups ADD COLUMN IF NOT EXISTS follow_status TEXT NOT NULL DEFAULT 'pending';
@@ -152,3 +181,5 @@ CREATE INDEX IF NOT EXISTS idx_game_results_type ON game_results(result_type);
 CREATE INDEX IF NOT EXISTS idx_upload_assets_create_time ON upload_assets(create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_site_visits_create_time ON site_visits(create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_site_visits_visitor_id ON site_visits(visitor_id);
+CREATE INDEX IF NOT EXISTS idx_voice_profiles_create_time ON voice_profiles(create_time DESC);
+CREATE INDEX IF NOT EXISTS idx_voice_generations_create_time ON voice_generations(create_time DESC);
