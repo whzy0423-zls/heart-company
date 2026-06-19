@@ -99,8 +99,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/voice/profiles/list", s.method(http.MethodGet, s.requireAuth(s.voiceProfiles)))
 	s.mux.HandleFunc("/api/voice/profiles", s.method(http.MethodPost, s.requireAuth(s.createVoiceProfile)))
 	s.mux.HandleFunc("/api/voice/profiles/", s.requireAuth(s.voiceProfileByID))
+	s.mux.HandleFunc("/api/voice/options", s.method(http.MethodGet, s.requireAuth(s.voiceOptions)))
 	s.mux.HandleFunc("/api/voice/generate", s.method(http.MethodPost, s.requireAuth(s.generateVoice)))
 	s.mux.HandleFunc("/api/voice/generations/list", s.method(http.MethodGet, s.requireAuth(s.voiceGenerations)))
+	s.mux.HandleFunc("/api/voice/content/generate", s.method(http.MethodPost, s.requireAuth(s.generateVoiceContent)))
+	s.mux.HandleFunc("/api/voice/content/list", s.method(http.MethodGet, s.requireAuth(s.voiceContentJobs)))
 	s.mux.HandleFunc("/api/system/user/list", s.method(http.MethodGet, s.requireAuth(s.system.HandleUsers)))
 	s.mux.HandleFunc("/api/system/user", s.requireAuth(s.system.HandleUsers))
 	s.mux.HandleFunc("/api/system/user/", s.requireAuth(s.system.HandleUserByID))
@@ -624,6 +627,15 @@ func (s *Server) voiceProfileByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) voiceOptions(w http.ResponseWriter, r *http.Request) {
+	result, err := s.voices.VoiceOptions(r.Context())
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
 func (s *Server) generateVoice(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 32*1024)
 	var body voice.GenerateInput
@@ -639,8 +651,32 @@ func (s *Server) generateVoice(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, result)
 }
 
+func (s *Server) generateVoiceContent(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 512*1024)
+	var body voice.ContentGenerateInput
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
+		return
+	}
+	result, err := s.voices.GenerateContent(r.Context(), body)
+	if err != nil {
+		httpx.Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
 func (s *Server) voiceGenerations(w http.ResponseWriter, r *http.Request) {
 	result, err := s.voices.ListGenerations(r.Context(), r.URL.Query())
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+func (s *Server) voiceContentJobs(w http.ResponseWriter, r *http.Request) {
+	result, err := s.voices.ListContentJobs(r.Context(), r.URL.Query())
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
