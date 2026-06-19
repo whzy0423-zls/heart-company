@@ -65,6 +65,15 @@ CREATE TABLE IF NOT EXISTS signups (
   owner       TEXT NOT NULL DEFAULT '',
   next_follow_time TIMESTAMPTZ,
   follow_note TEXT NOT NULL DEFAULT '',
+  visitor_id   TEXT NOT NULL DEFAULT '',
+  source_path  TEXT NOT NULL DEFAULT '',
+  landing_page TEXT NOT NULL DEFAULT '',
+  referrer     TEXT NOT NULL DEFAULT '',
+  utm_source   TEXT NOT NULL DEFAULT '',
+  utm_medium   TEXT NOT NULL DEFAULT '',
+  utm_campaign TEXT NOT NULL DEFAULT '',
+  utm_content  TEXT NOT NULL DEFAULT '',
+  utm_term     TEXT NOT NULL DEFAULT '',
   ip          TEXT NOT NULL DEFAULT '',
   user_agent  TEXT NOT NULL DEFAULT '',
   update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -187,6 +196,16 @@ ALTER TABLE signups ADD COLUMN IF NOT EXISTS owner TEXT NOT NULL DEFAULT '';
 ALTER TABLE signups ADD COLUMN IF NOT EXISTS next_follow_time TIMESTAMPTZ;
 ALTER TABLE signups ADD COLUMN IF NOT EXISTS follow_note TEXT NOT NULL DEFAULT '';
 ALTER TABLE signups ADD COLUMN IF NOT EXISTS update_time TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE signups ADD COLUMN IF NOT EXISTS visitor_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE signups ADD COLUMN IF NOT EXISTS source_path TEXT NOT NULL DEFAULT '';
+ALTER TABLE signups ADD COLUMN IF NOT EXISTS landing_page TEXT NOT NULL DEFAULT '';
+ALTER TABLE signups ADD COLUMN IF NOT EXISTS referrer TEXT NOT NULL DEFAULT '';
+ALTER TABLE signups ADD COLUMN IF NOT EXISTS utm_source TEXT NOT NULL DEFAULT '';
+ALTER TABLE signups ADD COLUMN IF NOT EXISTS utm_medium TEXT NOT NULL DEFAULT '';
+ALTER TABLE signups ADD COLUMN IF NOT EXISTS utm_campaign TEXT NOT NULL DEFAULT '';
+ALTER TABLE signups ADD COLUMN IF NOT EXISTS utm_content TEXT NOT NULL DEFAULT '';
+ALTER TABLE signups ADD COLUMN IF NOT EXISTS utm_term TEXT NOT NULL DEFAULT '';
+ALTER TABLE signups ADD COLUMN IF NOT EXISTS game_result_id BIGINT REFERENCES game_results(id) ON DELETE SET NULL;
 ALTER TABLE site_visits ADD COLUMN IF NOT EXISTS visitor_id TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id);
@@ -195,9 +214,12 @@ CREATE INDEX IF NOT EXISTS idx_menus_pid ON menus(pid);
 CREATE INDEX IF NOT EXISTS idx_signups_create_time ON signups(create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_signups_follow_status ON signups(follow_status);
 CREATE INDEX IF NOT EXISTS idx_signup_followups_signup ON signup_followups(signup_id, create_time DESC);
+CREATE INDEX IF NOT EXISTS idx_signups_visitor_id ON signups(visitor_id);
+CREATE INDEX IF NOT EXISTS idx_signups_next_follow ON signups(next_follow_time) WHERE next_follow_time IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_type_read ON messages(type, is_read, create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_game_results_create_time ON game_results(create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_game_results_type ON game_results(result_type);
+CREATE INDEX IF NOT EXISTS idx_game_results_visitor_time ON game_results(visitor_id, create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_upload_assets_create_time ON upload_assets(create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_site_visits_create_time ON site_visits(create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_site_visits_visitor_id ON site_visits(visitor_id);
