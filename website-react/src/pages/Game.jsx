@@ -454,7 +454,7 @@ export default function Game() {
           <Link className="btn btn--ghost" to="/course">查看完整课件</Link>
           <button className="btn btn--ghost" onClick={restart}>重新测试</button>
         </div>
-        <p className="result-disclaimer">本测试基于 The Enneagram Institute 九型人格体系简化设计，仅供趣味参考，不作专业诊断。真正的你，远比一个编号丰富。</p>
+        <p className="result-disclaimer">本测试基于 The Enneagram Institute 九型人格体系简化设计。真正的你，远比一个编号丰富。</p>
       </div>
 
       {card.open && (
