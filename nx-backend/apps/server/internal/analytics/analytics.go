@@ -22,19 +22,35 @@ type VisitInput struct {
 }
 
 type Overview struct {
-	RangeLeads  int           `json:"rangeLeads"`
-	RangeVisits int           `json:"rangeVisits"`
-	Series      []SeriesPoint `json:"series"`
-	TodayLeads  int           `json:"todayLeads"`
-	TodayVisits int           `json:"todayVisits"`
-	TotalLeads  int           `json:"totalLeads"`
-	TotalVisits int           `json:"totalVisits"`
+	DueFollowups     int            `json:"dueFollowups"`
+	FollowupItems    []FollowupItem `json:"followupItems"`
+	OverdueFollowups int            `json:"overdueFollowups"`
+	PendingLeads     int            `json:"pendingLeads"`
+	RangeLeads       int            `json:"rangeLeads"`
+	RangeVisits      int            `json:"rangeVisits"`
+	Series           []SeriesPoint  `json:"series"`
+	TodayFollowups   int            `json:"todayFollowups"`
+	TodayLeads       int            `json:"todayLeads"`
+	TodayVisits      int            `json:"todayVisits"`
+	TotalLeads       int            `json:"totalLeads"`
+	TotalVisits      int            `json:"totalVisits"`
 }
 
 type SeriesPoint struct {
 	Date   string `json:"date"`
 	Leads  int    `json:"leads"`
 	Visits int    `json:"visits"`
+}
+
+type FollowupItem struct {
+	Contact        string `json:"contact"`
+	ContactType    string `json:"contactType"`
+	FollowStatus   string `json:"followStatus"`
+	ID             string `json:"id"`
+	Interest       string `json:"interest"`
+	Name           string `json:"name"`
+	NextFollowTime string `json:"nextFollowTime"`
+	Owner          string `json:"owner"`
 }
 
 func NewStore(database *sql.DB) *Store {
@@ -95,7 +111,66 @@ func (s *Store) Overview(ctx context.Context, values url.Values) (Overview, erro
 	if err != nil {
 		return result, err
 	}
+	result.PendingLeads, result.DueFollowups, result.TodayFollowups, result.OverdueFollowups, err = s.followupStats(c)
+	if err != nil {
+		return result, err
+	}
+	result.FollowupItems, err = s.followupItems(c)
+	if err != nil {
+		return result, err
+	}
 	return result, nil
+}
+
+func (s *Store) followupStats(ctx context.Context) (int, int, int, int, error) {
+	var pending int
+	var due int
+	var today int
+	var overdue int
+	err := s.db.QueryRowContext(ctx, `
+		WITH boundary AS (
+			SELECT
+				(date_trunc('day', now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai') AS today_start,
+				((date_trunc('day', now() AT TIME ZONE 'Asia/Shanghai') + interval '1 day') AT TIME ZONE 'Asia/Shanghai') AS tomorrow_start
+		)
+		SELECT
+			count(*) FILTER (WHERE follow_status IN ('pending','contacted','interested')),
+			count(*) FILTER (WHERE follow_status <> 'deal' AND next_follow_time IS NOT NULL AND next_follow_time < boundary.tomorrow_start),
+			count(*) FILTER (WHERE follow_status <> 'deal' AND next_follow_time >= boundary.today_start AND next_follow_time < boundary.tomorrow_start),
+			count(*) FILTER (WHERE follow_status <> 'deal' AND next_follow_time < boundary.today_start)
+		FROM signups, boundary
+	`).Scan(&pending, &due, &today, &overdue)
+	return pending, due, today, overdue, err
+}
+
+func (s *Store) followupItems(ctx context.Context) ([]FollowupItem, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		WITH boundary AS (
+			SELECT ((date_trunc('day', now() AT TIME ZONE 'Asia/Shanghai') + interval '1 day') AT TIME ZONE 'Asia/Shanghai') AS tomorrow_start
+		)
+		SELECT id::text, name, contact_type, contact, interest, follow_status, owner, next_follow_time
+		FROM signups, boundary
+		WHERE follow_status <> 'deal'
+		  AND next_follow_time IS NOT NULL
+		  AND next_follow_time < boundary.tomorrow_start
+		ORDER BY next_follow_time ASC, id DESC
+		LIMIT 8
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FollowupItem{}
+	for rows.Next() {
+		var item FollowupItem
+		var next time.Time
+		if err := rows.Scan(&item.ID, &item.Name, &item.ContactType, &item.Contact, &item.Interest, &item.FollowStatus, &item.Owner, &next); err != nil {
+			return nil, err
+		}
+		item.NextFollowTime = next.Format("2006/01/02 15:04:05")
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (s *Store) rangeTotals(ctx context.Context, start time.Time, end time.Time) (int, int, error) {

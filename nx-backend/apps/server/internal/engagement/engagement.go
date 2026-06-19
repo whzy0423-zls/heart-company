@@ -42,6 +42,15 @@ type GameResultInput struct {
 	VisitorID  string         `json:"visitorId"`
 }
 
+type GameResult struct {
+	CreateTime string `json:"createTime"`
+	Gender     string `json:"gender"`
+	ID         string `json:"id"`
+	ResultType int    `json:"resultType"`
+	SecondType int    `json:"secondType"`
+	VisitorID  string `json:"visitorId"`
+}
+
 type GameOverview struct {
 	CenterItems     []NameValue      `json:"centerItems"`
 	GenderItems     []NameValue      `json:"genderItems"`
@@ -143,7 +152,7 @@ func (s *Store) MarkMessages(ctx context.Context, ids []string, read bool) error
 	return err
 }
 
-func (s *Store) TrackGameResult(ctx context.Context, input GameResultInput, r *http.Request) error {
+func (s *Store) TrackGameResult(ctx context.Context, input GameResultInput, r *http.Request) (GameResult, error) {
 	c, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	score, _ := json.Marshal(input.Score)
@@ -154,9 +163,12 @@ func (s *Store) TrackGameResult(ctx context.Context, input GameResultInput, r *h
 	if string(centers) == "null" {
 		centers = []byte("[]")
 	}
-	_, err := s.db.ExecContext(c,
+	var result GameResult
+	var createTime time.Time
+	err := s.db.QueryRowContext(c,
 		`INSERT INTO game_results (visitor_id, gender, result_type, second_type, score, centers, ip, user_agent)
-		 VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8)`,
+		 VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8)
+		 RETURNING id::text, visitor_id, gender, result_type, second_type, create_time`,
 		truncate(input.VisitorID, 128),
 		truncate(input.Gender, 32),
 		input.ResultType,
@@ -165,8 +177,9 @@ func (s *Store) TrackGameResult(ctx context.Context, input GameResultInput, r *h
 		string(centers),
 		clientIP(r),
 		truncate(r.UserAgent(), 512),
-	)
-	return err
+	).Scan(&result.ID, &result.VisitorID, &result.Gender, &result.ResultType, &result.SecondType, &createTime)
+	result.CreateTime = formatTime(createTime)
+	return result, err
 }
 
 func (s *Store) GameOverview(ctx context.Context) (GameOverview, error) {

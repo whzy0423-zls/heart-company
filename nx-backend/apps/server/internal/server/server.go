@@ -434,11 +434,12 @@ func (s *Server) publicGameResult(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
 		return
 	}
-	if err := s.engagement.TrackGameResult(r.Context(), body, r); err != nil {
+	result, err := s.engagement.TrackGameResult(r.Context(), body, r)
+	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	httpx.OK(w, true)
+	httpx.OK(w, result)
 }
 
 func (s *Server) analyticsOverview(w http.ResponseWriter, r *http.Request) {
