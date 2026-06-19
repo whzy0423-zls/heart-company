@@ -160,6 +160,26 @@ CREATE TABLE IF NOT EXISTS voice_generations (
   create_time     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS voice_content_jobs (
+  id              BIGSERIAL PRIMARY KEY,
+  title           TEXT NOT NULL DEFAULT '',
+  source_type     TEXT NOT NULL DEFAULT 'manual',
+  source_asset_id BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
+  source_name     TEXT NOT NULL DEFAULT '',
+  source_url      TEXT NOT NULL DEFAULT '',
+  voice_source    TEXT NOT NULL DEFAULT 'official',
+  profile_id      BIGINT REFERENCES voice_profiles(id) ON DELETE SET NULL,
+  voice_id        TEXT NOT NULL DEFAULT '',
+  voice_name      TEXT NOT NULL DEFAULT '',
+  model           TEXT NOT NULL DEFAULT '',
+  text            TEXT NOT NULL DEFAULT '',
+  audio_asset_id  BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
+  audio_url       TEXT NOT NULL DEFAULT '',
+  status          TEXT NOT NULL DEFAULT 'success',
+  error_message   TEXT NOT NULL DEFAULT '',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT NOT NULL DEFAULT '';
 ALTER TABLE signups ADD COLUMN IF NOT EXISTS contact_type TEXT NOT NULL DEFAULT 'phone';
 ALTER TABLE signups ADD COLUMN IF NOT EXISTS follow_status TEXT NOT NULL DEFAULT 'pending';
@@ -183,3 +203,4 @@ CREATE INDEX IF NOT EXISTS idx_site_visits_create_time ON site_visits(create_tim
 CREATE INDEX IF NOT EXISTS idx_site_visits_visitor_id ON site_visits(visitor_id);
 CREATE INDEX IF NOT EXISTS idx_voice_profiles_create_time ON voice_profiles(create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_voice_generations_create_time ON voice_generations(create_time DESC);
+CREATE INDEX IF NOT EXISTS idx_voice_content_jobs_create_time ON voice_content_jobs(create_time DESC);

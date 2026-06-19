@@ -114,6 +114,7 @@ var defaultMenus = []seedMenu{
 	{ID: 700, PID: 0, Name: "VoiceCenter", Path: "/voice", Type: "catalog", Sort: 19, Icon: "lucide:audio-lines", Title: "人声管理"},
 	{ID: 701, PID: 700, Name: "VoiceProfiles", Path: "/voice/profiles", Component: "/voice/profiles", AuthCode: "Voice:Profile:Manage", Type: "menu", Sort: 1, Icon: "lucide:mic-vocal", Title: "人声管理"},
 	{ID: 702, PID: 700, Name: "VoiceTest", Path: "/voice/test", Component: "/voice/test", AuthCode: "Voice:Test:Manage", Type: "menu", Sort: 2, Icon: "lucide:headphones", Title: "声音测试"},
+	{ID: 703, PID: 700, Name: "VoiceContent", Path: "/voice/content", Component: "/voice/content", AuthCode: "Voice:Content:Manage", Type: "menu", Sort: 3, Icon: "lucide:file-audio", Title: "内容转语音"},
 	{ID: 400, PID: 0, Name: "SystemManage", Path: "/system", Type: "catalog", Sort: 20, Icon: "lucide:shield-check", Title: "系统管理"},
 	{ID: 401, PID: 400, Name: "SystemUser", Path: "/system/user", Component: "/system/user/list", AuthCode: "System:User:List", Type: "menu", Sort: 1, Icon: "lucide:users", Title: "用户管理"},
 	{ID: 402, PID: 400, Name: "SystemRole", Path: "/system/role", Component: "/system/role/list", AuthCode: "System:Role:List", Type: "menu", Sort: 2, Icon: "lucide:user-cog", Title: "角色管理"},
