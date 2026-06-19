@@ -7,7 +7,8 @@ import type {
   SystemUser,
 } from '#/api';
 
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 
 import { IconifyIcon } from '@vben/icons';
 
@@ -46,10 +47,22 @@ const followStatusOptions = [
   { color: 'success', label: '已成交', value: 'deal' },
   { color: 'error', label: '无效线索', value: 'invalid' },
 ];
+const typeNames: Record<number, string> = {
+  1: '完美型',
+  2: '助人型',
+  3: '成就型',
+  4: '自我型',
+  5: '理智型',
+  6: '忠诚型',
+  7: '活跃型',
+  8: '领袖型',
+  9: '和平型',
+};
 
 const activeFollowStatusOptions = followStatusOptions.filter(
   (item) => item.value !== 'deal',
 );
+const route = useRoute();
 
 const loading = ref(false);
 const detailLoading = ref(false);
@@ -223,6 +236,26 @@ function contactTypeLabel(type?: string) {
   return type === 'wechat' ? '微信号' : '手机号';
 }
 
+function sourceLabel(lead?: SignupLead) {
+  if (!lead) return '-';
+  if (lead.utmSource) {
+    return `${lead.utmSource}${lead.utmCampaign ? ` / ${lead.utmCampaign}` : ''}`;
+  }
+  if (lead.referrer) return '外部来源';
+  return '自然访问';
+}
+
+function genderLabel(value?: string) {
+  if (value === 'male') return '男生';
+  if (value === 'female') return '女生';
+  return '未知';
+}
+
+function typeLabel(value?: number) {
+  if (!value) return '-';
+  return `${value}号 ${typeNames[value] || ''}`.trim();
+}
+
 function statusMeta(status?: string) {
   return (
     followStatusOptions.find((item) => item.value === status) ??
@@ -247,6 +280,10 @@ function search() {
 }
 
 onMounted(() => {
+  const status = String(route.query.status || '');
+  if (status) {
+    query.status = status;
+  }
   load();
   loadUsers();
   refreshTimer = window.setInterval(() => {
@@ -261,6 +298,17 @@ onUnmounted(() => {
   }
   window.removeEventListener('focus', refreshSilently);
 });
+
+watch(
+  () => route.query.status,
+  (value) => {
+    const status = String(value || '');
+    if (query.status === status) return;
+    query.status = status;
+    query.page = 1;
+    load();
+  },
+);
 </script>
 
 <template>
@@ -414,6 +462,12 @@ onUnmounted(() => {
           <Descriptions.Item label="联系方式">
             {{ current.contact }}
           </Descriptions.Item>
+          <Descriptions.Item label="客户来源">
+            {{ sourceLabel(current) }}
+          </Descriptions.Item>
+          <Descriptions.Item label="来源页面">
+            {{ current.sourcePath || '-' }}
+          </Descriptions.Item>
           <Descriptions.Item label="咨询需求" :span="2">
             <div class="message-text">{{ current.message || '-' }}</div>
           </Descriptions.Item>
@@ -421,6 +475,60 @@ onUnmounted(() => {
             <div class="message-text">{{ current.followNote || '-' }}</div>
           </Descriptions.Item>
         </Descriptions>
+
+        <div class="insight-grid">
+          <Card :bordered="false" class="insight-card">
+            <template #title>
+              <span class="card-title">
+                <IconifyIcon icon="lucide:radar" />
+                来源追踪
+              </span>
+            </template>
+            <Descriptions :column="1" size="small">
+              <Descriptions.Item label="访客 ID">
+                {{ current.visitorId || '-' }}
+              </Descriptions.Item>
+              <Descriptions.Item label="落地页">
+                <span class="break-text">{{ current.landingPage || '-' }}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="来源引用">
+                <span class="break-text">{{ current.referrer || '-' }}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="UTM">
+                <span class="break-text">
+                  {{ current.utmSource || '-' }}
+                  <template v-if="current.utmMedium"> / {{ current.utmMedium }}</template>
+                  <template v-if="current.utmCampaign"> / {{ current.utmCampaign }}</template>
+                </span>
+              </Descriptions.Item>
+            </Descriptions>
+          </Card>
+
+          <Card :bordered="false" class="insight-card">
+            <template #title>
+              <span class="card-title">
+                <IconifyIcon icon="lucide:gamepad-2" />
+                小游戏画像
+              </span>
+            </template>
+            <div v-if="detail?.gameResult" class="game-profile">
+              <div class="game-type">
+                <strong>{{ typeLabel(detail.gameResult.resultType) }}</strong>
+                <span>{{ genderLabel(detail.gameResult.gender) }}</span>
+              </div>
+              <div class="game-meta">
+                副型：{{ typeLabel(detail.gameResult.secondType) }}
+                <br />
+                测试时间：{{ detail.gameResult.createTime }}
+              </div>
+            </div>
+            <Empty
+              v-else
+              description="暂未绑定小游戏结果"
+              :image="Empty.PRESENTED_IMAGE_SIMPLE"
+            />
+          </Card>
+        </div>
 
         <div class="content-grid">
           <Card :bordered="false" class="follow-panel">
@@ -507,6 +615,35 @@ onUnmounted(() => {
             </Timeline>
           </Card>
         </div>
+
+        <Card :bordered="false" class="visit-panel">
+          <template #title>
+            <span class="card-title">
+              <IconifyIcon icon="lucide:route" />
+              访问轨迹
+            </span>
+          </template>
+          <Timeline v-if="detail?.visitTraces?.length">
+            <Timeline.Item
+              v-for="item in detail.visitTraces"
+              :key="`${item.path}-${item.createTime}`"
+            >
+              <div class="timeline-title">{{ item.path }}</div>
+              <div class="timeline-meta">
+                {{ item.createTime }}
+                <span v-if="item.title"> · {{ item.title }}</span>
+              </div>
+              <div v-if="item.referrer" class="timeline-content">
+                来源：{{ item.referrer }}
+              </div>
+            </Timeline.Item>
+          </Timeline>
+          <Empty
+            v-else
+            description="暂无访问轨迹"
+            :image="Empty.PRESENTED_IMAGE_SIMPLE"
+          />
+        </Card>
       </div>
     </Drawer>
   </PageShell>
@@ -680,8 +817,16 @@ onUnmounted(() => {
   align-items: start;
 }
 
+.insight-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+}
+
 .follow-panel,
-.timeline-panel {
+.insight-card,
+.timeline-panel,
+.visit-panel {
   border: 1px solid hsl(var(--border));
 }
 
@@ -701,9 +846,37 @@ onUnmounted(() => {
 }
 
 .message-text,
+.break-text,
 .timeline-content {
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.game-profile {
+  display: grid;
+  gap: 12px;
+}
+
+.game-type {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.game-type strong {
+  font-size: 20px;
+}
+
+.game-type span {
+  padding: 4px 8px;
+  color: hsl(var(--primary));
+  background: hsl(var(--primary) / 10%);
+  border-radius: 8px;
+}
+
+.game-meta {
+  color: hsl(var(--muted-foreground));
+  line-height: 1.7;
 }
 
 .timeline-title {
@@ -721,7 +894,8 @@ onUnmounted(() => {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .content-grid {
+  .content-grid,
+  .insight-grid {
     grid-template-columns: 1fr;
   }
 }

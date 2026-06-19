@@ -2,6 +2,7 @@
 import type { AnalyticsOverview, AnalyticsSeriesPoint } from '#/api';
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 
 import { Page } from '@vben/common-ui';
 import { IconifyIcon } from '@vben/icons';
@@ -42,13 +43,19 @@ type DateRange = [Dayjs, Dayjs];
 
 const chartRef = ref<HTMLDivElement>();
 let chart: echarts.ECharts | undefined;
+const router = useRouter();
 
 const loading = ref(false);
 const dateRange = ref<DateRange>([dayjs().subtract(6, 'day'), dayjs()]);
 const overview = ref<AnalyticsOverview>({
+  dueFollowups: 0,
+  followupItems: [],
+  overdueFollowups: 0,
+  pendingLeads: 0,
   rangeLeads: 0,
   rangeVisits: 0,
   series: [],
+  todayFollowups: 0,
   todayLeads: 0,
   todayVisits: 0,
   totalLeads: 0,
@@ -101,6 +108,27 @@ const rangeStats = computed(() => [
     label: '区间询盘转化率',
     suffix: '%',
     value: conversionRate(overview.value.rangeLeads, overview.value.rangeVisits),
+  },
+]);
+
+const followupStats = computed(() => [
+  {
+    color: '#dc2626',
+    icon: 'lucide:alarm-clock',
+    label: '逾期未跟进',
+    value: overview.value.overdueFollowups,
+  },
+  {
+    color: '#ea580c',
+    icon: 'lucide:calendar-clock',
+    label: '今日需跟进',
+    value: overview.value.todayFollowups,
+  },
+  {
+    color: '#2563eb',
+    icon: 'lucide:list-checks',
+    label: '待处理线索',
+    value: overview.value.pendingLeads,
   },
 ]);
 
@@ -194,6 +222,13 @@ function maxBy(items: AnalyticsSeriesPoint[], key: 'leads' | 'visits') {
   return items.reduce((best, item) => (item[key] > best[key] ? item : best), items[0]);
 }
 
+function goSignupLeads(status = '') {
+  router.push({
+    path: '/customer/signups',
+    query: status ? { status } : undefined,
+  });
+}
+
 watch(dateRange, () => {
   loadOverview();
 });
@@ -270,6 +305,53 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <p class="analysis-copy">{{ analysisText }}</p>
+        </Card>
+      </Col>
+    </Row>
+
+    <Row :gutter="[16, 16]" class="analytics-section">
+      <Col :lg="9" :xs="24">
+        <Card :bordered="false" title="待跟进工作台">
+          <div class="followup-stat-grid">
+            <button
+              v-for="item in followupStats"
+              :key="item.label"
+              class="followup-stat"
+              type="button"
+              @click="goSignupLeads()"
+            >
+              <span class="followup-stat-icon" :style="{ color: item.color }">
+                <IconifyIcon :icon="item.icon" />
+              </span>
+              <span>{{ item.label }}</span>
+              <strong>{{ item.value }}</strong>
+            </button>
+          </div>
+          <Button block class="followup-action" type="primary" @click="goSignupLeads('pending')">
+            进入客户跟进管理
+          </Button>
+        </Card>
+      </Col>
+      <Col :lg="15" :xs="24">
+        <Card :bordered="false" title="最近待跟进线索">
+          <div v-if="overview.followupItems.length > 0" class="followup-list">
+            <button
+              v-for="item in overview.followupItems"
+              :key="item.id"
+              class="followup-row"
+              type="button"
+              @click="goSignupLeads()"
+            >
+              <span class="followup-name">{{ item.name }}</span>
+              <span class="followup-meta">
+                {{ item.owner || '未分配' }} · {{ item.nextFollowTime }}
+              </span>
+              <span class="followup-interest">{{ item.interest || '未填写意向' }}</span>
+            </button>
+          </div>
+          <div v-else class="empty-followup">
+            当前没有今日或逾期待跟进线索。
+          </div>
         </Card>
       </Col>
     </Row>
@@ -389,6 +471,89 @@ onBeforeUnmount(() => {
   border-radius: 8px;
 }
 
+.followup-stat-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.followup-stat {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  text-align: left;
+  cursor: pointer;
+  background: hsl(var(--accent) / 28%);
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+}
+
+.followup-stat-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  background: hsl(var(--background));
+  border-radius: 8px;
+}
+
+.followup-stat span:not(.followup-stat-icon) {
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+}
+
+.followup-stat strong {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.followup-action {
+  margin-top: 16px;
+}
+
+.followup-list {
+  display: grid;
+  gap: 10px;
+}
+
+.followup-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 140px) 1fr minmax(110px, 160px);
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  padding: 12px 14px;
+  text-align: left;
+  cursor: pointer;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+}
+
+.followup-name {
+  font-weight: 600;
+}
+
+.followup-meta,
+.followup-interest,
+.empty-followup {
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+}
+
+.empty-followup {
+  display: flex;
+  min-height: 120px;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed hsl(var(--border));
+  border-radius: 8px;
+}
+
 @media (max-width: 640px) {
   .analytics-actions {
     justify-content: flex-start;
@@ -408,6 +573,11 @@ onBeforeUnmount(() => {
   }
 
   .range-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .followup-stat-grid,
+  .followup-row {
     grid-template-columns: 1fr;
   }
 }

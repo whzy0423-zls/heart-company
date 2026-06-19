@@ -6,14 +6,24 @@ export interface SignupLead {
   createTime: string;
   followNote: string;
   followStatus: SignupFollowStatus | string;
+  gameResultId: string;
   id: string;
   interest: string;
   ip: string;
+  landingPage: string;
   message: string;
   name: string;
   nextFollowTime: string;
   owner: string;
+  referrer: string;
+  sourcePath: string;
+  utmCampaign: string;
+  utmContent: string;
+  utmMedium: string;
+  utmSource: string;
+  utmTerm: string;
   userAgent: string;
+  visitorId: string;
 }
 
 export type SignupFollowStatus =
@@ -33,9 +43,28 @@ export interface SignupTimelineItem {
   type: 'created' | 'followup' | string;
 }
 
+export interface SignupVisitTrace {
+  createTime: string;
+  path: string;
+  referrer: string;
+  title: string;
+}
+
+export interface SignupGameResult {
+  centers: Array<Record<string, any>>;
+  createTime: string;
+  gender: string;
+  id: string;
+  resultType: number;
+  score: Record<string, any>;
+  secondType: number;
+}
+
 export interface SignupDetail {
+  gameResult?: null | SignupGameResult;
   lead: SignupLead;
   timeline: SignupTimelineItem[];
+  visitTraces: SignupVisitTrace[];
 }
 
 export interface SignupFollowInput {

@@ -39,3 +39,33 @@ func TestNormalizeContactValidatesPhoneOnlyForPhoneType(t *testing.T) {
 		t.Fatalf("expected phone validation error, got %v", err)
 	}
 }
+
+func TestNormalizeAttributionKeepsUsefulSourceFields(t *testing.T) {
+	input := AttributionInput{
+		VisitorID:   " visitor-1 ",
+		SourcePath:  "/game?from=share#signup",
+		LandingPage: "https://example.com/?utm_source=douyin",
+		Referrer:    "https://referrer.example.com/page",
+		UTMSource:   " douyin ",
+		UTMMedium:   " video ",
+		UTMCampaign: " summer ",
+		UTMContent:  " card ",
+		UTMTerm:     " enneagram ",
+	}
+
+	got := normalizeAttribution(input)
+
+	if got.VisitorID != "visitor-1" {
+		t.Fatalf("expected visitor id to be trimmed, got %q", got.VisitorID)
+	}
+	if got.SourcePath != "/game?from=share#signup" || got.UTMSource != "douyin" {
+		t.Fatalf("expected source fields to be preserved, got %+v", got)
+	}
+}
+
+func TestNormalizeAttributionDefaultsSourcePath(t *testing.T) {
+	got := normalizeAttribution(AttributionInput{VisitorID: "v1"})
+	if got.SourcePath != "/" {
+		t.Fatalf("expected empty source path to default to '/', got %q", got.SourcePath)
+	}
+}
