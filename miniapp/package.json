@@ -1,0 +1,22 @@
+{
+  "name": "nine-xing-miniapp",
+  "version": "1.0.0",
+  "description": "九型芯之力 微信小程序 (uni-app + Vue3)",
+  "scripts": {
+    "test:config": "node src/config.test.mjs && node src/utils/wechatProfile.test.mjs && node src/utils/chatState.test.mjs && node src/utils/navigation.test.mjs && node src/utils/listPreview.test.mjs && node src/utils/auth.test.mjs && node src/utils/chatErrors.test.mjs",
+    "dev:mp-weixin": "uni -p mp-weixin",
+    "build:mp-weixin": "uni build -p mp-weixin",
+    "dev:h5": "uni",
+    "build:h5": "uni build"
+  },
+  "dependencies": {
+    "@dcloudio/uni-app": "3.0.0-4030620241128001",
+    "@dcloudio/uni-components": "3.0.0-4030620241128001",
+    "@dcloudio/uni-mp-weixin": "3.0.0-4030620241128001",
+    "vue": "^3.4.21"
+  },
+  "devDependencies": {
+    "@dcloudio/vite-plugin-uni": "3.0.0-4030620241128001",
+    "vite": "^5.2.8"
+  }
+}

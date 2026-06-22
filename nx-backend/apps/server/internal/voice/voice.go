@@ -269,6 +269,46 @@ func (s *Store) DeleteProfile(ctx context.Context, id string) error {
 	return err
 }
 
+// TextToAudio exposes the MiniMax synthesis call so other packages (e.g. the
+// article 听书 pipeline) can reuse the configured client without importing it
+// directly.
+func (s *Store) TextToAudio(ctx context.Context, model string, voiceID string, text string) ([]byte, string, error) {
+	return s.client.TextToAudio(ctx, model, voiceID, text)
+}
+
+// ResolveVoice maps a composite voice key to the MiniMax voice id used for
+// synthesis. Keys: "official:<voiceId>" or "clone:<profileId>". A bare value is
+// treated as an official voice id for convenience.
+func (s *Store) ResolveVoice(ctx context.Context, voiceKey string) (string, error) {
+	key := strings.TrimSpace(voiceKey)
+	if key == "" {
+		return "", fmt.Errorf("音色未配置")
+	}
+	switch {
+	case strings.HasPrefix(key, "official:"):
+		voiceID := strings.TrimSpace(strings.TrimPrefix(key, "official:"))
+		if voiceID == "" {
+			return "", fmt.Errorf("官方音色无效")
+		}
+		return voiceID, nil
+	case strings.HasPrefix(key, "clone:"):
+		profileID := strings.TrimSpace(strings.TrimPrefix(key, "clone:"))
+		profile, err := s.Profile(ctx, profileID)
+		if err != nil {
+			return "", fmt.Errorf("克隆音色不存在")
+		}
+		if profile.Status != "ready" {
+			return "", fmt.Errorf("克隆音色尚未就绪")
+		}
+		if strings.TrimSpace(profile.VoiceID) == "" {
+			return "", fmt.Errorf("克隆音色缺少 voice id")
+		}
+		return profile.VoiceID, nil
+	default:
+		return key, nil
+	}
+}
+
 func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, error) {
 	text := strings.TrimSpace(input.Text)
 	if text == "" {

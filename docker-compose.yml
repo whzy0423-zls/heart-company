@@ -8,7 +8,9 @@
 
 services:
   db:
-    image: postgres:16-alpine
+    # pgvector 镜像 = postgres16 + vector 扩展，向量检索需要；
+    # 退回普通 postgres:16-alpine 也能跑（schema 会自动跳过向量部分）。
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-nx}
@@ -53,6 +55,10 @@ services:
       MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
       MINIMAX_GROUP_ID: ${MINIMAX_GROUP_ID:-}
       MINIMAX_API_BASE: ${MINIMAX_API_BASE:-https://api.minimaxi.com}
+      # 微信小程序：填了 AppID/Secret 走真实登录；留空则用本地 dev 登录回退
+      WECHAT_APPID: ${WECHAT_APPID:-}
+      WECHAT_SECRET: ${WECHAT_SECRET:-}
+      WECHAT_LOGIN_DEV: ${WECHAT_LOGIN_DEV:-}
       # 容器化下官网走运行时 fetch，不在容器内自动构建官网，故留空
       BUILD_SCRIPT: ""
     volumes:
