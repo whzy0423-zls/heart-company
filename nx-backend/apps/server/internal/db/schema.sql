@@ -371,3 +371,29 @@ BEGIN
     EXECUTE 'CREATE INDEX IF NOT EXISTS idx_rag_documents_embedding ON rag_documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)';
   END IF;
 END $$;
+
+-- ============ 成长心语（分组 + 心语）============
+CREATE TABLE IF NOT EXISTS mind_groups (
+  id          BIGSERIAL PRIMARY KEY,
+  name        TEXT NOT NULL DEFAULT '',
+  intro       TEXT NOT NULL DEFAULT '',
+  sort        INT  NOT NULL DEFAULT 0,
+  status      TEXT NOT NULL DEFAULT 'enabled',
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS mind_quotes (
+  id          BIGSERIAL PRIMARY KEY,
+  group_id    BIGINT REFERENCES mind_groups(id) ON DELETE SET NULL,
+  title       TEXT NOT NULL DEFAULT '',
+  content     TEXT NOT NULL DEFAULT '',
+  prompt      TEXT NOT NULL DEFAULT '',
+  sort        INT  NOT NULL DEFAULT 0,
+  status      TEXT NOT NULL DEFAULT 'enabled',
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_mind_groups_sort ON mind_groups(status, sort ASC, id ASC);
+CREATE INDEX IF NOT EXISTS idx_mind_quotes_group ON mind_quotes(group_id, sort ASC, id ASC);

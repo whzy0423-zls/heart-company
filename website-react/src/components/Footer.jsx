@@ -1,6 +1,8 @@
 import siteConfig from '../data/siteConfig'
 
 export default function Footer() {
+  const copyright = siteConfig.site.copyright.replace(/\s*·\s*仅作展示用途/g, '')
+
   return (
     <footer className="footer">
       <div className="wrap footer__inner">
@@ -11,7 +13,7 @@ export default function Footer() {
           </div>
           <p style={{ marginTop: 8 }}>{siteConfig.site.footerTagline}</p>
         </div>
-        <div>{siteConfig.site.copyright}</div>
+        <div>{copyright}</div>
       </div>
     </footer>
   )

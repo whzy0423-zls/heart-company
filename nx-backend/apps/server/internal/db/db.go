@@ -75,6 +75,9 @@ func seed(ctx context.Context, database *sql.DB, adminUser, adminPassword string
 	if err := seedRoles(ctx, database); err != nil {
 		return err
 	}
+	if err := seedMindQuotes(ctx, database); err != nil {
+		return err
+	}
 	return seedAdmin(ctx, database, adminUser, adminPassword)
 }
 
@@ -107,6 +110,7 @@ var defaultMenus = []seedMenu{
 	{ID: 310, PID: 300, Name: "WebsiteTypes", Path: "/website/types", Component: "/site-config/types", AuthCode: "Website:Write", Type: "menu", Sort: 10, Icon: "lucide:circle-dot", Title: "九型数据"},
 	{ID: 311, PID: 300, Name: "WebsiteSignup", Path: "/website/signup", Component: "/site-config/signup", AuthCode: "Website:Write", Type: "menu", Sort: 11, Icon: "lucide:clipboard-edit", Title: "报名表单"},
 	{ID: 312, PID: 300, Name: "WebsiteJson", Path: "/website/json", Component: "/site-config/json", AuthCode: "Website:Write", Type: "menu", Sort: 12, Icon: "lucide:braces", Title: "JSON 高级"},
+	{ID: 314, PID: 300, Name: "WebsiteMindQuotes", Path: "/website/mind-quotes", Component: "/site-config/mind-quotes", AuthCode: "Website:Write", Type: "menu", Sort: 13, Icon: "lucide:sparkles", Title: "心语管理"},
 	{ID: 500, PID: 0, Name: "CustomerManage", Path: "/customer", Type: "catalog", Sort: 15, Icon: "lucide:contact-round", Title: "客户管理"},
 	{ID: 501, PID: 500, Name: "CustomerSignupLeads", Path: "/customer/signups", Component: "/site-config/signup-leads", AuthCode: "Customer:Signup:List", Type: "menu", Sort: 1, Icon: "lucide:inbox", Title: "报名信息"},
 	{ID: 600, PID: 0, Name: "MessageCenter", Path: "/message", Type: "catalog", Sort: 18, Icon: "lucide:bell-ring", Title: "消息中心"},
@@ -205,6 +209,49 @@ func seedRoles(ctx context.Context, database *sql.DB) error {
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO role_menus (role_id, menu_id) SELECT $1, id FROM menus`, adminRoleID); err != nil {
 		return err
+	}
+	return tx.Commit()
+}
+
+// seedMindQuotes 仅当 mind_quotes 为空时，导入默认分组与 PDF 提炼的 27 条心语。
+// 心语默认不分组（group_id=NULL），由后台手动归入 脑/心/腹 等组。幂等。
+func seedMindQuotes(ctx context.Context, database *sql.DB) error {
+	var count int
+	if err := database.QueryRowContext(ctx, "SELECT count(*) FROM mind_quotes").Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// 默认分组（仅当 mind_groups 为空时建）
+	var groupCount int
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM mind_groups").Scan(&groupCount); err != nil {
+		return err
+	}
+	if groupCount == 0 {
+		for _, g := range defaultMindGroups {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO mind_groups (name, intro, sort, status) VALUES ($1,$2,$3,'enabled')`,
+				g.Name, g.Intro, g.Sort); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, q := range defaultMindQuotes {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO mind_quotes (group_id, title, content, prompt, sort, status)
+			 VALUES (NULL, $1, $2, $3, $4, 'enabled')`,
+			q.Title, q.Content, q.Prompt, q.Sort); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

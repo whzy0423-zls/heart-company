@@ -42,29 +42,36 @@ export default function Stages() {
           <h2 className="section-title">九型人格演变的三阶段</h2>
           <p className="lead" style={{ marginTop: 10 }}>从苏菲灵修工具，到西方心理学分类，再到芯之力视角下的性格能量体系。</p>
           <div className="grid grid-3" style={{ marginTop: 24 }}>
-            <Reveal className="card">
-              <p className="kicker" style={{ color: 'var(--red)', fontSize: 13 }}>第 01 阶段</p>
-              <h3 style={{ margin: '6px 0' }}>第一阶段：苏菲灵修期</h3>
-              <p style={{ color: 'var(--blue)', fontWeight: 700, fontSize: 13 }}>灵修起源，无能量概念</p>
-              <div className="figure" style={{ margin: '12px 0' }}><img src="/assets/stage1.svg" alt="" /></div>
-              <p style={{ color: 'var(--muted)', fontSize: 14 }}>公元 9 世纪苏菲教派把九型作为纯粹的灵修工具，口传心授，不分析性格、不讲能量。</p>
-              <Link to="/stage1" style={{ color: 'var(--blue)', fontWeight: 700, display: 'inline-block', marginTop: 12 }}>进入单独介绍 →</Link>
+            <Reveal className="card stage-card">
+              <p className="kicker stage-card__kicker">第 01 阶段</p>
+              <h3 className="stage-card__title">第一阶段：苏菲灵修期</h3>
+              <p className="stage-card__sub">灵修起源，无能量概念</p>
+              <div className="figure stage-card__media"><img src="/assets/stage1.svg" alt="" /></div>
+              <p className="stage-card__body">公元 9 世纪苏菲教派把九型作为纯粹的灵修工具，口传心授，不分析性格、不讲能量。</p>
+              <Link className="stage-card__link" to="/stage1">进入单独介绍 →</Link>
             </Reveal>
-            <Reveal className="card">
-              <p className="kicker" style={{ color: 'var(--red)', fontSize: 13 }}>第 02 阶段</p>
-              <h3 style={{ margin: '6px 0' }}>第二阶段：西方心理学期</h3>
-              <p style={{ color: 'var(--blue)', fontWeight: 700, fontSize: 13 }}>行为分析，标签化性格</p>
-              <div className="figure" style={{ margin: '12px 0' }}><img src="/assets/enneagram.svg" alt="" /></div>
-              <p style={{ color: 'var(--muted)', fontSize: 14 }}>上世纪六七十年代以后，九型被系统化用于心理学分析，从外在行为反推动机，形成测评与标签。</p>
-              <Link to="/stage2" style={{ color: 'var(--blue)', fontWeight: 700, display: 'inline-block', marginTop: 12 }}>进入单独介绍 →</Link>
+            <Reveal className="card stage-card">
+              <p className="kicker stage-card__kicker">第 02 阶段</p>
+              <h3 className="stage-card__title">第二阶段：西方心理学期</h3>
+              <p className="stage-card__sub">行为分析，标签化性格</p>
+              <div className="figure stage-card__media"><img src="/assets/types-map.svg" alt="" /></div>
+              <p className="stage-card__body">上世纪六七十年代以后，九型被系统化用于心理学分析，从外在行为反推动机，形成测评与标签。</p>
+              <Link className="stage-card__link" to="/stage2">进入单独介绍 →</Link>
             </Reveal>
-            <Reveal className="card">
-              <p className="kicker" style={{ color: 'var(--red)', fontSize: 13 }}>第 03 阶段</p>
-              <h3 style={{ margin: '6px 0' }}>第三阶段：芯之力能量体系</h3>
-              <p style={{ color: 'var(--blue)', fontWeight: 700, fontSize: 13 }}>性格 = 能量呈现</p>
-              <div className="figure" style={{ margin: '12px 0', padding: 16, background: 'radial-gradient(circle at 50% 42%, #ffffff, #eef1f6)', display: 'grid', placeItems: 'center' }}><img src="/assets/wheel.png" alt="九型芯之力能量体系" style={{ filter: 'drop-shadow(0 12px 24px rgba(28,40,70,.25))' }} /></div>
-              <p style={{ color: 'var(--muted)', fontSize: 14 }}>芯之力视角提出性格是能量的呈现，是天生自带的生命芯片，强调看见天性、提升情商与能力。</p>
-              <Link to="/stage3" style={{ color: 'var(--blue)', fontWeight: 700, display: 'inline-block', marginTop: 12 }}>进入单独介绍 →</Link>
+            <Reveal className="card stage-card">
+              <p className="kicker stage-card__kicker">第 03 阶段</p>
+              <h3 className="stage-card__title">第三阶段：芯之力能量体系</h3>
+              <p className="stage-card__sub">性格 = 能量呈现</p>
+              <div className="figure stage-card__media stage3-media">
+                <div className="stage3-media__logo">
+                  <img src="/assets/wheel.png" alt="九型芯之力能量体系" />
+                </div>
+                <div className="stage3-media__mentor">
+                  <img src="/assets/teacher-mentor.jpg" alt="韩常青与陈伟志博士合影" loading="lazy" />
+                </div>
+              </div>
+              <p className="stage-card__body">芯之力视角提出性格是能量的呈现，是天生自带的生命芯片，强调看见天性、提升情商与能力。</p>
+              <Link className="stage-card__link" to="/stage3">进入单独介绍 →</Link>
             </Reveal>
           </div>
         </Reveal>
