@@ -19,7 +19,7 @@ export default function Stage2() {
             </div>
           </div>
           <div style={{ display: 'grid', gap: 14, justifyItems: 'center' }}>
-            <div className="figure"><img src="/assets/enneagram.svg" alt="西方心理学期资料图" /></div>
+            <div className="figure"><img src="/assets/types-map.svg" alt="九型人格性格类型图" /></div>
             <p className="figcap">九型芯之力资料图</p>
           </div>
         </div>
@@ -29,7 +29,7 @@ export default function Stage2() {
         <Reveal className="panel">
           <p className="eyebrow">完整说明</p>
           <h2 className="section-title">这一阶段要看见什么</h2>
-          <div className="figure reveal" style={{ maxWidth: 380, margin: '22px 0' }}><img src="/assets/enneagram.svg" alt="" /></div>
+          <div className="figure reveal" style={{ maxWidth: 420, margin: '22px 0' }}><img src="/assets/types-map.svg" alt="" /></div>
           <ul className="bullets" style={{ marginTop: 6 }}>
             <li>上世纪六七十年代，九型被系统化、心理学化应用。</li>
             <li>核心方式是从外在行为反推性格动机。</li>

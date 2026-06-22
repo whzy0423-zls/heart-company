@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useRef, useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { COURSE } from '../data/course'
 
@@ -7,22 +7,34 @@ export default function Course() {
   const total = slides.length
   const [i, setI] = useState(0)
   const [tocOpen, setTocOpen] = useState(false)
+  const sliderRef = useRef(null)
 
-  const go = useCallback((n) => setI((p) => Math.min(total - 1, Math.max(0, n))), [total])
-  const next = useCallback(() => go(i + 1), [i, go])
-  const prev = useCallback(() => go(i - 1), [i, go])
+  const go = useCallback((n) => {
+    const nextIndex = Math.min(total - 1, Math.max(0, n))
+    const slider = sliderRef.current
+    if (slider) {
+      slider.scrollTo({ left: nextIndex * slider.clientWidth, behavior: 'smooth' })
+    }
+    setI(nextIndex)
+  }, [total])
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'ArrowRight') next()
-      else if (e.key === 'ArrowLeft') prev()
+      if (e.key === 'ArrowRight') go(i + 1)
+      else if (e.key === 'ArrowLeft') go(i - 1)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [next, prev])
+  }, [go, i])
 
-  const s = slides[i]
   const progress = ((i + 1) / total) * 100
+
+  const handleSlideScroll = useCallback((e) => {
+    const el = e.currentTarget
+    if (!el.clientWidth) return
+    const nextIndex = Math.round(el.scrollLeft / el.clientWidth)
+    setI(Math.min(total - 1, Math.max(0, nextIndex)))
+  }, [total])
 
   // 跳到某章节的分隔页
   const jumpToChapter = (ch) => {
@@ -47,56 +59,57 @@ export default function Course() {
       {/* 进度条 */}
       <div className="course__bar"><span style={{ width: `${progress}%` }} /></div>
 
-      {/* 翻页舞台 */}
-      <div className="course__stage">
-        <button className="course__nav course__nav--prev" onClick={prev} disabled={i === 0} aria-label="上一页">‹</button>
+      {/* 滑动观看舞台 */}
+      <div className="course__stage course__stage--swipe">
+        <div className="course__slider" ref={sliderRef} onScroll={handleSlideScroll} aria-label="滑动浏览课件">
+          {slides.map((s, index) => (
+            <article className={`slide slide--${s.kind}`} key={`${s.kind}-${index}`}>
+              {s.kind === 'cover' && (
+                <div className="slide__cover">
+                  <img className="slide__cover-logo" src="/assets/wheel.png" alt="" />
+                  <h2>{s.title}</h2>
+                  <p className="slide__cover-sub">{s.subtitle}</p>
+                  <p className="slide__cover-note">{s.note}</p>
+                </div>
+              )}
 
-        <article className={`slide slide--${s.kind}`} key={i}>
-          {s.kind === 'cover' && (
-            <div className="slide__cover">
-              <img className="slide__cover-logo" src="/assets/wheel.png" alt="" />
-              <h2>{s.title}</h2>
-              <p className="slide__cover-sub">{s.subtitle}</p>
-              <p className="slide__cover-note">{s.note}</p>
-            </div>
-          )}
+              {s.kind === 'divider' && (
+                <div className="slide__divider">
+                  <span className="slide__divider-no">{s.no}</span>
+                  <h2>{s.title}</h2>
+                  {s.sub && <p>{s.sub}</p>}
+                </div>
+              )}
 
-          {s.kind === 'divider' && (
-            <div className="slide__divider">
-              <span className="slide__divider-no">{s.no}</span>
-              <h2>{s.title}</h2>
-              {s.sub && <p>{s.sub}</p>}
-            </div>
-          )}
-
-          {s.kind === 'content' && (
-            <div className="slide__content">
-              <span className="slide__chapter">{COURSE.chapters[s.ch]}</span>
-              <h2 className="slide__title">{s.title}</h2>
-              <div className="slide__items">
-                {s.items.map((it, k) => (
-                  <div className="slide__item" key={k} style={{ '--d': `${k * 90}ms` }}>
-                    <span className="slide__item-no">{String(k + 1).padStart(2, '0')}</span>
-                    <div>
-                      <h3>{it.h}</h3>
-                      <p>{it.t}</p>
-                    </div>
+              {s.kind === 'content' && (
+                <div className="slide__content">
+                  <span className="slide__chapter">{COURSE.chapters[s.ch]}</span>
+                  <h2 className="slide__title">{s.title}</h2>
+                  <div className="slide__items">
+                    {s.items.map((it, k) => (
+                      <div className="slide__item" key={k} style={{ '--d': `${k * 90}ms` }}>
+                        <span className="slide__item-no">{String(k + 1).padStart(2, '0')}</span>
+                        <div>
+                          <h3>{it.h}</h3>
+                          <p>{it.t}</p>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
+                </div>
+              )}
 
-          {s.kind === 'end' && (
-            <div className="slide__cover slide__end">
-              <h2>{s.title}</h2>
-              <p className="slide__cover-note">{s.note}</p>
-              <Link className="btn btn--red" to="/#signup" style={{ marginTop: 18 }}>预约咨询课程</Link>
-            </div>
-          )}
-        </article>
-
-        <button className="course__nav course__nav--next" onClick={next} disabled={i === total - 1} aria-label="下一页">›</button>
+              {s.kind === 'end' && (
+                <div className="slide__cover slide__end">
+                  <h2>{s.title}</h2>
+                  <p className="slide__cover-note">{s.note}</p>
+                  <Link className="btn btn--red" to="/#signup" style={{ marginTop: 18 }}>预约咨询课程</Link>
+                </div>
+              )}
+            </article>
+          ))}
+        </div>
+        <p className="course__hint">左右滑动，自行观看课件</p>
       </div>
 
       {/* 底部页码 + 点导航 */}

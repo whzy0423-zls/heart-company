@@ -5,6 +5,7 @@ export * from './auth';
 export * from './game-results';
 export * from './message';
 export * from './menu';
+export * from './mind-quotes';
 export * from './rag';
 export * from './site-config';
 export * from './signup';

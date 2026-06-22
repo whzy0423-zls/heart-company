@@ -4,6 +4,7 @@ import type { Article, VoiceOption } from '#/api';
 import { computed, onMounted, reactive, ref } from 'vue';
 
 import { Page } from '@vben/common-ui';
+import { IconifyIcon } from '@vben/icons';
 
 import {
   Button,
@@ -342,26 +343,36 @@ onMounted(() => {
         </Space>
       </div>
 
-      <div class="voice-bar">
-        <span class="voice-bar-label">🎧 全局默认听书音色</span>
-        <Select
-          v-model:value="defaultVoiceKey"
-          :options="defaultVoiceSelectOptions"
-          class="voice-bar-select"
-          placeholder="选择默认音色（H5 听书使用）"
-          show-search
-          option-filter-prop="label"
-        />
-        <Button
-          :loading="savingDefaultVoice"
-          type="primary"
-          @click="saveDefaultVoice"
-        >
-          保存默认音色
-        </Button>
-        <span class="voice-bar-hint">
-          未单独指定音色的文章，听书时使用该默认音色。修改音色或正文后需重新生成音频。
-        </span>
+      <div class="voice-panel">
+        <div class="voice-panel-main">
+          <span class="voice-panel-icon">
+            <IconifyIcon icon="lucide:headphones" />
+          </span>
+          <div class="voice-panel-copy">
+            <div class="voice-panel-title">全局默认听书音色</div>
+            <div class="voice-panel-desc">
+              未单独指定音色的文章会使用该音色生成音频，修改音色或正文后需重新生成。
+            </div>
+          </div>
+        </div>
+        <div class="voice-panel-actions">
+          <Select
+            v-model:value="defaultVoiceKey"
+            :options="defaultVoiceSelectOptions"
+            class="voice-panel-select"
+            placeholder="选择默认音色"
+            show-search
+            option-filter-prop="label"
+          />
+          <Button
+            :loading="savingDefaultVoice"
+            type="primary"
+            @click="saveDefaultVoice"
+          >
+            <IconifyIcon class="mr-1" icon="lucide:save" />
+            保存默认音色
+          </Button>
+        </div>
       </div>
 
       <Table
@@ -536,31 +547,68 @@ onMounted(() => {
   width: 240px;
 }
 
-.voice-bar {
-  display: flex;
-  flex-wrap: wrap;
+.voice-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
+  padding: 14px 16px;
   margin-bottom: 16px;
-  background: #f6f8fc;
-  border: 1px solid #e7ecf5;
+  color: hsl(var(--foreground));
+  background: hsl(var(--card) / 86%);
+  border: 1px solid hsl(var(--border));
   border-radius: 8px;
 }
 
-.voice-bar-label {
+.voice-panel-main {
+  display: flex;
+  min-width: 0;
+  gap: 12px;
+  align-items: center;
+}
+
+.voice-panel-icon {
+  display: inline-flex;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  color: hsl(var(--primary));
+  background: hsl(var(--primary) / 10%);
+  border: 1px solid hsl(var(--primary) / 16%);
+  border-radius: 8px;
+}
+
+.voice-panel-copy {
+  min-width: 0;
+}
+
+.voice-panel-title {
+  font-size: 14px;
   font-weight: 600;
-  font-size: 13px;
+  line-height: 22px;
 }
 
-.voice-bar-select {
-  width: 260px;
-}
-
-.voice-bar-hint {
-  flex-basis: 100%;
-  color: #98a2b3;
+.voice-panel-desc {
+  margin-top: 2px;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
   font-size: 12px;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-panel-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.voice-panel-select {
+  width: 280px;
 }
 
 .voice-cell {
@@ -612,6 +660,26 @@ onMounted(() => {
   .keyword-input,
   .status-select {
     width: 100%;
+  }
+
+  .voice-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .voice-panel-actions {
+    flex-wrap: wrap;
+  }
+
+  .voice-panel-select {
+    width: 100%;
+  }
+
+  .voice-panel-actions :deep(.ant-btn) {
+    width: 100%;
+  }
+
+  .voice-panel-desc {
+    white-space: normal;
   }
 }
 </style>

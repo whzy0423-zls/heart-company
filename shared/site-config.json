@@ -192,8 +192,8 @@
       },
       {
         "label": "课程",
-        "to": "/#courses",
-        "type": "hash"
+        "to": "/courses",
+        "type": "route"
       },
       {
         "label": "小游戏",
@@ -207,18 +207,18 @@
       },
       {
         "label": "老韩语录",
-        "to": "/#quotes",
-        "type": "hash"
+        "to": "/quotes",
+        "type": "route"
       },
       {
         "label": "九种芯片模式",
-        "to": "/#types",
-        "type": "hash"
+        "to": "/types",
+        "type": "route"
       },
       {
         "label": "注册/互动",
-        "to": "/#signup",
-        "type": "hash"
+        "to": "/signup",
+        "type": "route"
       },
       {
         "label": "开始观看",
@@ -249,8 +249,8 @@
       },
       {
         "label": "课程",
-        "to": "/#courses",
-        "type": "hash"
+        "to": "/courses",
+        "type": "route"
       },
       {
         "label": "小游戏",
@@ -264,18 +264,23 @@
       },
       {
         "label": "老韩语录",
-        "to": "/#quotes",
-        "type": "hash"
+        "to": "/quotes",
+        "type": "route"
+      },
+      {
+        "label": "成长心语",
+        "to": "/mind-quotes",
+        "type": "route"
       },
       {
         "label": "九种芯片",
-        "to": "/#types",
-        "type": "hash"
+        "to": "/types",
+        "type": "route"
       },
       {
         "label": "注册/互动",
-        "to": "/#signup",
-        "type": "hash"
+        "to": "/signup",
+        "type": "route"
       }
     ],
     "tabs": [
@@ -309,10 +314,10 @@
       },
       {
         "label": "报名",
-        "to": "/#signup",
-        "type": "hash",
+        "to": "/signup",
+        "type": "route",
         "icon": "edit",
-        "match": "#signup"
+        "match": "/signup"
       }
     ]
   },

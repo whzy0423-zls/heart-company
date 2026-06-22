@@ -3,7 +3,7 @@ import { MAIN_LINKS, isActive } from './navData'
 import siteConfig from '../data/siteConfig'
 
 export default function Nav({ onOpenDrawer }) {
-  const { pathname } = useLocation()
+  const { pathname, hash } = useLocation()
   return (
     <header className="nav">
       <div className="wrap nav__inner">
@@ -13,7 +13,7 @@ export default function Nav({ onOpenDrawer }) {
         </Link>
         <nav className="menu">
           {MAIN_LINKS.map((it) => (
-            <Link key={it.label} to={it.to} className={isActive(it, pathname) ? 'active' : undefined}>
+            <Link key={it.label} to={it.to} className={isActive(it, pathname, hash) ? 'active' : undefined}>
               {it.label}
             </Link>
           ))}
