@@ -75,6 +75,22 @@ func (s *Store) Create(ctx context.Context, input CreateInput) (Asset, error) {
 	return asset, nil
 }
 
+// CreateAudio stores generated audio bytes and returns the new asset id. Thin
+// convenience used by the article 听书 pipeline.
+func (s *Store) CreateAudio(ctx context.Context, name string, contentType string, data []byte) (int64, error) {
+	asset, err := s.Create(ctx, CreateInput{
+		ContentType: contentType,
+		Data:        data,
+		Dir:         "article/audio",
+		Name:        name,
+		Size:        int64(len(data)),
+	})
+	if err != nil {
+		return 0, err
+	}
+	return asset.ID, nil
+}
+
 func (s *Store) Find(ctx context.Context, id int64) (Asset, error) {
 	if s == nil || s.db == nil {
 		return Asset{}, sql.ErrNoRows

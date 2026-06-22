@@ -1,0 +1,19 @@
+{
+  "name": "九型芯之力",
+  "appid": "",
+  "description": "九型芯之力 · 性格芯片测试",
+  "versionName": "1.0.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "mp-weixin": {
+    "appid": "wx0c6ca1d67bc8871d",
+    "setting": {
+      "urlCheck": false,
+      "es6": true,
+      "minified": true
+    },
+    "usingComponents": true,
+    "permission": {}
+  },
+  "vueVersion": "3"
+}
