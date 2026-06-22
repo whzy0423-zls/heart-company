@@ -209,9 +209,21 @@ func (s *Store) GameOverview(ctx context.Context) (GameOverview, error) {
 	}
 	result.TypeGenderItems = typeGenderItems
 	centerItems, err := queryNameValues(c, s.db, `
-		SELECT item->>'name', count(*)
-		FROM game_results, jsonb_array_elements(centers) item
-		GROUP BY item->>'name'
+		WITH center_items AS (
+			SELECT COALESCE(
+				NULLIF(item->>'name', ''),
+				CASE item->>'key'
+					WHEN 'gut' THEN '本能中心'
+					WHEN 'heart' THEN '情感中心'
+					WHEN 'head' THEN '思维中心'
+				END
+			) AS name
+			FROM game_results, jsonb_array_elements(centers) item
+		)
+		SELECT name, count(*)
+		FROM center_items
+		WHERE name IS NOT NULL
+		GROUP BY name
 		ORDER BY count(*) DESC`)
 	if err != nil {
 		return result, err

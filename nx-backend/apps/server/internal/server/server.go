@@ -16,31 +16,50 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/analytics"
+	"nine-xing/nx-backend/apps/server/internal/articlestore"
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/branding"
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/embedding"
 	"nine-xing/nx-backend/apps/server/internal/engagement"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/llm"
+	"nine-xing/nx-backend/apps/server/internal/miniapp"
+	"nine-xing/nx-backend/apps/server/internal/rag"
+	"nine-xing/nx-backend/apps/server/internal/ragstore"
 	"nine-xing/nx-backend/apps/server/internal/signup"
 	"nine-xing/nx-backend/apps/server/internal/siteconfig"
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/system"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 	"nine-xing/nx-backend/apps/server/internal/voice"
+	"nine-xing/nx-backend/apps/server/internal/wechat"
+	"nine-xing/nx-backend/apps/server/internal/wxpay"
 )
 
 type Server struct {
-	env        config.Env
-	mux        *http.ServeMux
-	db         *sql.DB
-	system     *system.Store
-	analytics  *analytics.Store
-	builder    *siteconfig.Builder
-	engagement *engagement.Store
-	signups    *signup.Store
-	uploads    *uploadasset.Store
-	uploader   storage.ObjectUploader
-	voices     *voice.Store
+	env         config.Env
+	mux         *http.ServeMux
+	db          *sql.DB
+	system      *system.Store
+	analytics   *analytics.Store
+	builder     *siteconfig.Builder
+	engagement  *engagement.Store
+	signups     *signup.Store
+	uploads     *uploadasset.Store
+	uploader    storage.ObjectUploader
+	voices      *voice.Store
+	miniapp     *miniapp.Store
+	wx          *wechat.Client
+	pay         *wxpay.Client
+	ragGen      rag.Generator
+	ragDocs     ragDocumentStore
+	ragVec      *ragstore.Store
+	embedder    *embedding.Client
+	ragCache    *miniappRAGCache
+	articles    *articlestore.Store
+	chatLimiter *fixedWindowRateLimiter
+	chatTimeout time.Duration
 
 	signupMu          sync.Mutex
 	signupSubscribers map[chan signup.Lead]struct{}
@@ -62,6 +81,28 @@ func New(env config.Env, database *sql.DB) http.Handler {
 		signupSubscribers: map[chan signup.Lead]struct{}{},
 	}
 	s.voices = voice.NewStore(database, s.uploads, env.MiniMax)
+	s.miniapp = miniapp.NewStore(database)
+	s.wx = wechat.NewClient(env.WeChat.AppID, env.WeChat.Secret, env.WeChat.LoginDev)
+	s.pay = mustWxPayClient(env)
+	s.ragGen = llm.NewMiniMaxGenerator(env.MiniMax)
+	s.ragDocs = ragstore.NewStore(database)
+	s.articles = articlestore.NewStore(database)
+	// 听书：复用 voice 的 MiniMax 客户端与 upload-assets 存储生成并缓存音频。
+	s.articles.AttachAudioDeps(s.voices, s.uploads, s.voices, "speech-02-hd")
+	s.ragVec = ragstore.NewStore(database)
+	s.embedder = embedding.NewClient(embedding.Config{
+		Provider:  env.Embedding.Provider,
+		APIBase:   env.Embedding.APIBase,
+		APIKey:    env.Embedding.APIKey,
+		Model:     env.Embedding.Model,
+		Dimension: env.Embedding.Dimension,
+	})
+	s.ragCache = newMiniappRAGCache(2 * time.Minute)
+	s.chatLimiter = newFixedWindowRateLimiter(env.MiniappChat.RateLimitPerMinute, time.Minute)
+	s.chatTimeout = time.Duration(env.MiniappChat.TimeoutSeconds) * time.Second
+	if s.chatTimeout <= 0 {
+		s.chatTimeout = 28 * time.Second
+	}
 	s.routes()
 	return s.withCORS(s.mux)
 }
@@ -85,9 +126,24 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/public/signups", s.method(http.MethodPost, s.publicSignup))
 	s.mux.HandleFunc("/api/public/game-results", s.method(http.MethodPost, s.publicGameResult))
 	s.mux.HandleFunc("/api/public/site-visits", s.method(http.MethodPost, s.publicSiteVisit))
+	// 阅读 H5：公开只读文章列表 / 详情 / 分类。
+	s.mux.HandleFunc("/api/public/articles", s.method(http.MethodGet, s.publicArticles))
+	s.mux.HandleFunc("/api/public/articles/", s.method(http.MethodGet, s.publicArticleDetail))
+	s.mux.HandleFunc("/api/public/article-categories", s.method(http.MethodGet, s.publicArticleCategories))
 	// 后台品牌：公开只读（启动屏/登录页在登录前就要用），写入需鉴权。
 	s.mux.HandleFunc("/api/public/admin-branding", s.method(http.MethodGet, s.publicAdminBranding))
 	s.mux.HandleFunc("/api/admin-branding", s.adminBranding)
+	// ===== 小程序（微信）=====
+	s.mux.HandleFunc("/api/wx/login", s.method(http.MethodPost, s.wxLogin))
+	s.mux.HandleFunc("/api/wx/userinfo", s.requireMiniapp(s.wxUserInfo))
+	s.mux.HandleFunc("/api/miniapp/test-records", s.requireMiniapp(s.miniappTestRecords))
+	s.mux.HandleFunc("/api/miniapp/bookings", s.requireMiniapp(s.miniappBookings))
+	s.mux.HandleFunc("/api/miniapp/chat", s.method(http.MethodPost, s.requireMiniapp(s.miniappChat)))
+	// 付费解锁：下单（鉴权）→ 微信回调（公开）→ 解锁状态/报告正文（鉴权）
+	s.mux.HandleFunc("/api/miniapp/report/order", s.method(http.MethodPost, s.requireMiniapp(s.createReportOrder)))
+	s.mux.HandleFunc("/api/miniapp/report/status", s.method(http.MethodGet, s.requireMiniapp(s.reportStatus)))
+	s.mux.HandleFunc("/api/miniapp/report/content", s.method(http.MethodGet, s.requireMiniapp(s.reportContent)))
+	s.mux.HandleFunc("/api/pay/notify", s.method(http.MethodPost, s.payNotify))
 	s.mux.HandleFunc("/api/analytics/overview", s.method(http.MethodGet, s.requireAuth(s.analyticsOverview)))
 	s.mux.HandleFunc("/api/game-results/overview", s.method(http.MethodGet, s.requireAuth(s.gameOverview)))
 	s.mux.HandleFunc("/api/messages/list", s.method(http.MethodGet, s.requireAuth(s.messagesList)))
@@ -104,6 +160,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/voice/generations/list", s.method(http.MethodGet, s.requireAuth(s.voiceGenerations)))
 	s.mux.HandleFunc("/api/voice/content/generate", s.method(http.MethodPost, s.requireAuth(s.generateVoiceContent)))
 	s.mux.HandleFunc("/api/voice/content/list", s.method(http.MethodGet, s.requireAuth(s.voiceContentJobs)))
+	s.mux.HandleFunc("/api/rag/documents", s.requireAuth(s.ragDocuments))
+	s.mux.HandleFunc("/api/rag/documents/", s.requireAuth(s.ragDocumentByID))
+	s.mux.HandleFunc("/api/articles", s.requireAuth(s.adminArticles))
+	s.mux.HandleFunc("/api/articles/", s.requireAuth(s.adminArticleByID))
+	s.mux.HandleFunc("/api/reading/settings", s.requireAuth(s.readingSettings))
+	s.mux.HandleFunc("/api/rag/reindex", s.method(http.MethodPost, s.requireAuth(s.ragReindex)))
 	s.mux.HandleFunc("/api/system/user/list", s.method(http.MethodGet, s.requireAuth(s.system.HandleUsers)))
 	s.mux.HandleFunc("/api/system/user", s.requireAuth(s.system.HandleUsers))
 	s.mux.HandleFunc("/api/system/user/", s.requireAuth(s.system.HandleUserByID))
@@ -683,6 +745,71 @@ func (s *Server) voiceContentJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.OK(w, result)
+}
+
+func (s *Server) ragDocuments(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		result, err := s.ragDocs.ListDocuments(r.Context(), queryMap(r))
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		httpx.OK(w, result)
+	case http.MethodPost:
+		r.Body = http.MaxBytesReader(w, r.Body, 128*1024)
+		var body ragstore.Document
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
+			return
+		}
+		result, err := s.ragDocs.SaveDocument(r.Context(), body)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.ragCache.Invalidate()
+		httpx.OK(w, result)
+	default:
+		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+	}
+}
+
+func (s *Server) ragDocumentByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/rag/documents/"), "/")
+	if id == "" {
+		httpx.Fail(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	switch r.Method {
+	case http.MethodPut:
+		r.Body = http.MaxBytesReader(w, r.Body, 128*1024)
+		var body ragstore.Document
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
+			return
+		}
+		body.ID = id
+		result, err := s.ragDocs.SaveDocument(r.Context(), body)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.ragCache.Invalidate()
+		httpx.OK(w, result)
+	case http.MethodDelete:
+		ok, err := s.ragDocs.DeleteDocument(r.Context(), id)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if ok {
+			s.ragCache.Invalidate()
+		}
+		httpx.OK(w, ok)
+	default:
+		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+	}
 }
 
 func (s *Server) addSignupSubscriber(ch chan signup.Lead) {
