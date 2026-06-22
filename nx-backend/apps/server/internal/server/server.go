@@ -25,6 +25,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/llm"
 	"nine-xing/nx-backend/apps/server/internal/miniapp"
+	"nine-xing/nx-backend/apps/server/internal/mindquote"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 	"nine-xing/nx-backend/apps/server/internal/ragstore"
 	"nine-xing/nx-backend/apps/server/internal/signup"
@@ -58,6 +59,7 @@ type Server struct {
 	embedder    *embedding.Client
 	ragCache    *miniappRAGCache
 	articles    *articlestore.Store
+	mindquotes  *mindquote.Store
 	chatLimiter *fixedWindowRateLimiter
 	chatTimeout time.Duration
 
@@ -87,6 +89,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.ragGen = llm.NewMiniMaxGenerator(env.MiniMax)
 	s.ragDocs = ragstore.NewStore(database)
 	s.articles = articlestore.NewStore(database)
+	s.mindquotes = mindquote.NewStore(database)
 	// 听书：复用 voice 的 MiniMax 客户端与 upload-assets 存储生成并缓存音频。
 	s.articles.AttachAudioDeps(s.voices, s.uploads, s.voices, "speech-02-hd")
 	s.ragVec = ragstore.NewStore(database)
@@ -130,6 +133,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/public/articles", s.method(http.MethodGet, s.publicArticles))
 	s.mux.HandleFunc("/api/public/articles/", s.method(http.MethodGet, s.publicArticleDetail))
 	s.mux.HandleFunc("/api/public/article-categories", s.method(http.MethodGet, s.publicArticleCategories))
+	// 成长心语：官网公开只读（分组聚合 + 单条详情）。
+	s.mux.HandleFunc("/api/public/mind-groups", s.method(http.MethodGet, s.publicMindGroups))
+	s.mux.HandleFunc("/api/public/mind-quotes/", s.method(http.MethodGet, s.publicMindQuoteDetail))
 	// 后台品牌：公开只读（启动屏/登录页在登录前就要用），写入需鉴权。
 	s.mux.HandleFunc("/api/public/admin-branding", s.method(http.MethodGet, s.publicAdminBranding))
 	s.mux.HandleFunc("/api/admin-branding", s.adminBranding)
@@ -164,6 +170,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/rag/documents/", s.requireAuth(s.ragDocumentByID))
 	s.mux.HandleFunc("/api/articles", s.requireAuth(s.adminArticles))
 	s.mux.HandleFunc("/api/articles/", s.requireAuth(s.adminArticleByID))
+	s.mux.HandleFunc("/api/mind-groups", s.requireAuth(s.adminMindGroups))
+	s.mux.HandleFunc("/api/mind-quotes", s.requireAuth(s.adminMindQuotes))
+	s.mux.HandleFunc("/api/mind-quotes/", s.requireAuth(s.adminMindQuoteByID))
 	s.mux.HandleFunc("/api/reading/settings", s.requireAuth(s.readingSettings))
 	s.mux.HandleFunc("/api/rag/reindex", s.method(http.MethodPost, s.requireAuth(s.ragReindex)))
 	s.mux.HandleFunc("/api/system/user/list", s.method(http.MethodGet, s.requireAuth(s.system.HandleUsers)))
