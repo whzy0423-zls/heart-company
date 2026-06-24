@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>芯之力 · 九型成长陪伴 App — 产品架构</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --brand:#3E7C7B; --brand-soft:#E3F0EE; --brand-deep:#2F5F5E;
+    --accent:#E0A458; --accent-soft:#FBEFDD;
+    --bg:#FAF7F2; --surface:#FFFFFF; --surface-2:#F3EEE7;
+    --ink:#2A2D33; --ink-2:#6B7077; --ink-3:#9AA0A7;
+    --line:rgba(42,45,51,.08);
+    --t1:#C7705E; --t2:#D98AA0; --t3:#E0B84A; --t4:#9B6BB0; --t5:#5B86C9;
+    --t6:#6E8FA6; --t7:#E0A458; --t8:#B5503F; --t9:#7FB59B;
+    --shadow:0 8px 24px -12px rgba(60,70,90,.18);
+    --shadow-float:0 16px 40px -16px rgba(60,70,90,.22);
+    --radius:24px; --radius-md:18px; --radius-sm:12px;
+    --serif:"Noto Serif SC","Songti SC",serif;
+    --sans:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:var(--sans);color:var(--ink);background:var(--bg);
+    line-height:1.7;-webkit-font-smoothing:antialiased;
+    background-image:
+      radial-gradient(1100px 520px at 88% -8%, rgba(62,124,123,.10), transparent 60%),
+      radial-gradient(900px 480px at 2% 108%, rgba(224,164,88,.10), transparent 60%);
+    background-attachment:fixed;
+  }
+  .page{
+    max-width:1180px;margin:0 auto;padding:56px 48px 40px;
+  }
+  .page + .page{border-top:1px dashed var(--line)}
+
+  /* ---------- Header ---------- */
+  .head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:8px}
+  .brandmark{display:flex;align-items:center;gap:14px}
+  .logo{
+    width:46px;height:46px;border-radius:14px;flex:none;
+    background:linear-gradient(135deg,var(--brand),#5AA09E 60%,var(--accent));
+    box-shadow:var(--shadow);position:relative;
+  }
+  .logo::after{content:"芯";position:absolute;inset:0;display:grid;place-items:center;
+    color:#fff;font-family:var(--serif);font-weight:600;font-size:22px}
+  .brand-name{font-family:var(--serif);font-weight:700;font-size:20px;letter-spacing:.5px}
+  .brand-sub{font-size:12.5px;color:var(--ink-2);margin-top:1px}
+  .doc-tag{
+    font-size:12px;color:var(--brand-deep);background:var(--brand-soft);
+    padding:6px 14px;border-radius:999px;font-weight:500;white-space:nowrap;
+  }
+  .title{font-family:var(--serif);font-weight:700;font-size:30px;margin:26px 0 4px;letter-spacing:.5px}
+  .title .bar{display:inline-block;width:40px;height:5px;border-radius:3px;
+    background:linear-gradient(90deg,var(--brand),var(--accent));vertical-align:middle;margin-right:14px}
+  .subtitle{color:var(--ink-2);font-size:14px;margin-bottom:30px;padding-left:54px}
+
+  /* ---------- Feature map ---------- */
+  .modules{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
+  .module{
+    background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);
+    overflow:hidden;display:flex;flex-direction:column;border:1px solid var(--line);
+  }
+  .m-head{padding:18px 18px 16px;color:#fff;position:relative}
+  .m-head .ic{font-size:20px;opacity:.95}
+  .m-head h3{font-family:var(--serif);font-size:18px;font-weight:600;margin-top:8px}
+  .m-head .en{font-size:11px;opacity:.82;letter-spacing:1px;text-transform:uppercase}
+  .m1 .m-head{background:linear-gradient(135deg,#7FB59B,#5E9C86)}
+  .m2 .m-head{background:linear-gradient(135deg,#5B86C9,#4A6FB0)}
+  .m3 .m-head{background:linear-gradient(135deg,#E0A458,#CC8E3E)}
+  .m4 .m-head{background:linear-gradient(135deg,#9B6BB0,#7E5494)}
+  .m-body{padding:14px 14px 16px;display:flex;flex-direction:column;gap:8px;flex:1}
+  .feat{
+    background:var(--surface-2);border-radius:var(--radius-sm);padding:9px 12px;
+    font-size:13px;color:var(--ink);display:flex;align-items:flex-start;gap:8px;line-height:1.5;
+  }
+  .feat::before{content:"";width:7px;height:7px;border-radius:50%;flex:none;margin-top:6px}
+  .m1 .feat::before{background:#5E9C86}
+  .m2 .feat::before{background:#4A6FB0}
+  .m3 .feat::before{background:#CC8E3E}
+  .m4 .feat::before{background:#7E5494}
+  .feat b{font-weight:500}
+  .feat .desc{display:block;color:var(--ink-3);font-size:11.5px;margin-top:1px}
+
+  /* ---------- Foundation bar ---------- */
+  .foundation{
+    margin-top:20px;background:var(--surface);border:1px solid var(--line);
+    border-radius:var(--radius);box-shadow:var(--shadow);padding:18px 22px;
+  }
+  .foundation .cap{font-family:var(--serif);font-size:14px;color:var(--brand-deep);
+    font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:10px}
+  .foundation .cap::before{content:"";width:18px;height:3px;border-radius:2px;background:var(--accent)}
+  .fgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
+  .fchip{
+    text-align:center;padding:12px 8px;border-radius:var(--radius-md);
+    background:linear-gradient(180deg,var(--brand-soft),#EEF6F4);border:1px solid rgba(62,124,123,.12);
+  }
+  .fchip .t{font-size:13px;font-weight:500;color:var(--brand-deep)}
+  .fchip .s{font-size:11px;color:var(--ink-2);margin-top:2px}
+
+  /* ---------- System architecture ---------- */
+  .arch{display:flex;flex-direction:column;gap:0;position:relative}
+  .layer{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow);padding:16px 20px;position:relative;z-index:1;
+  }
+  .layer + .layer{margin-top:30px}
+  .layer + .layer::before{
+    content:"";position:absolute;top:-26px;left:50%;width:2px;height:22px;
+    background:linear-gradient(var(--brand),rgba(62,124,123,.2));
+    transform:translateX(-50%);
+  }
+  .layer + .layer::after{
+    content:"";position:absolute;top:-12px;left:50%;width:9px;height:9px;border-radius:50%;
+    background:var(--brand);transform:translateX(-50%);box-shadow:0 0 0 4px var(--brand-soft);
+  }
+  .l-label{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .l-label .tag{font-size:11px;font-weight:600;color:#fff;background:var(--brand);
+    padding:3px 10px;border-radius:999px;letter-spacing:.5px}
+  .l-label h4{font-family:var(--serif);font-size:15px;font-weight:600}
+  .l-label .note{font-size:11.5px;color:var(--ink-3);margin-left:auto}
+  .nodes{display:grid;gap:10px}
+  .nodes.c4{grid-template-columns:repeat(4,1fr)}
+  .nodes.c3{grid-template-columns:repeat(3,1fr)}
+  .nodes.c2{grid-template-columns:repeat(2,1fr)}
+  .nodes.c5{grid-template-columns:repeat(5,1fr)}
+  .node{
+    background:var(--surface-2);border-radius:var(--radius-md);padding:11px 13px;
+    border:1px solid var(--line);
+  }
+  .node .nt{font-size:13px;font-weight:500;color:var(--ink)}
+  .node .ns{font-size:11px;color:var(--ink-2);margin-top:2px;line-height:1.45}
+  .node.brand{background:var(--brand-soft);border-color:rgba(62,124,123,.18)}
+  .node.brand .nt{color:var(--brand-deep)}
+  .node.accent{background:var(--accent-soft);border-color:rgba(224,164,88,.22)}
+  .node.accent .nt{color:#9a6a20}
+
+  .layer.client .l-label .tag{background:#5E9C86}
+  .layer.client::after{}
+  .layer.gateway .l-label .tag{background:#4A6FB0}
+  .layer.service .l-label .tag{background:var(--brand)}
+  .layer.capability .l-label .tag{background:#CC8E3E}
+  .layer.data .l-label .tag{background:#7E5494}
+
+  /* external sidecar */
+  .arch-wrap{display:grid;grid-template-columns:1fr 220px;gap:24px;align-items:start}
+  .external{
+    background:var(--surface);border:1px dashed rgba(42,45,51,.18);border-radius:var(--radius);
+    padding:16px 16px;position:sticky;top:20px;
+  }
+  .external h4{font-family:var(--serif);font-size:14px;color:var(--ink-2);margin-bottom:12px;
+    display:flex;align-items:center;gap:8px}
+  .external h4::before{content:"";width:8px;height:8px;border-radius:2px;background:var(--ink-3)}
+  .ext-item{background:var(--surface-2);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:9px}
+  .ext-item .et{font-size:12.5px;font-weight:500}
+  .ext-item .es{font-size:11px;color:var(--ink-2)}
+  .ext-note{font-size:11px;color:var(--ink-3);margin-top:6px;line-height:1.5}
+
+  /* admin band */
+  .admin{
+    margin-top:30px;position:relative;
+    background:linear-gradient(135deg,#2F5F5E,#3E7C7B);color:#fff;border-radius:var(--radius);
+    padding:16px 22px;box-shadow:var(--shadow-float);display:flex;align-items:center;gap:18px;flex-wrap:wrap;
+  }
+  .admin::before{content:"";position:absolute;top:-26px;left:50%;width:2px;height:22px;
+    background:linear-gradient(var(--brand),rgba(62,124,123,.2));transform:translateX(-50%)}
+  .admin h4{font-family:var(--serif);font-size:15px;font-weight:600;white-space:nowrap}
+  .admin .tag{font-size:11px;background:rgba(255,255,255,.18);padding:3px 10px;border-radius:999px}
+  .admin .items{display:flex;gap:10px;flex-wrap:wrap;margin-left:auto}
+  .admin .items span{font-size:12px;background:rgba(255,255,255,.14);padding:6px 12px;border-radius:999px}
+
+  /* ---------- Footer ---------- */
+  .footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);
+    display:flex;justify-content:space-between;align-items:center;font-size:11.5px;color:var(--ink-3)}
+  .footer .legend{display:flex;gap:16px;flex-wrap:wrap}
+  .footer .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+
+  @media print{
+    body{background:#fff;background-image:none}
+    .page{max-width:none;padding:24px 28px;page-break-after:always}
+    .page:last-child{page-break-after:auto}
+    .module,.layer,.foundation,.external{box-shadow:none}
+    @page{size:A4 landscape;margin:10mm}
+  }
+</style>
+</head>
+<body>
+
+<!-- ======================= PAGE 1 · 功能架构全景 ======================= -->
+<section class="page">
+  <div class="head">
+    <div class="brandmark">
+      <div class="logo"></div>
+      <div>
+        <div class="brand-name">芯之力 · 九型成长陪伴</div>
+        <div class="brand-sub">Enneagram Growth Companion · Android App</div>
+      </div>
+    </div>
+    <div class="doc-tag">产品功能架构全景 · v1.0</div>
+  </div>
+
+  <h1 class="title"><span class="bar"></span>功能架构全景</h1>
+  <p class="subtitle">以"人物卡"为核心，围绕认识自己、理解他人、长期成长，构建四大功能模块与五项平台底座能力。</p>
+
+  <div class="modules">
+    <!-- 卡片 -->
+    <div class="module m1">
+      <div class="m-head"><div class="ic">🪪</div><h3>卡片</h3><div class="en">Cards</div></div>
+      <div class="m-body">
+        <div class="feat"><span><b>九型测试与主卡</b><span class="desc">情境测试·算分·人物画像</span></span></div>
+        <div class="feat"><span><b>主副卡管理</b><span class="desc">为自己与身边人建卡</span></span></div>
+        <div class="feat"><span><b>状态摘要</b><span class="desc">卡片当前成长状态一览</span></span></div>
+        <div class="feat"><span><b>卡片切换</b><span class="desc">上下文随卡独立隔离</span></span></div>
+      </div>
+    </div>
+    <!-- 对话 -->
+    <div class="module m2">
+      <div class="m-head"><div class="ic">💬</div><h3>对话</h3><div class="en">Chat</div></div>
+      <div class="m-body">
+        <div class="feat"><span><b>专属问答窗口</b><span class="desc">每张卡独立对话与历史</span></span></div>
+        <div class="feat"><span><b>知识陪伴问答</b><span class="desc">结合九型资料与你的档案</span></span></div>
+        <div class="feat"><span><b>专属记忆</b><span class="desc">记住要点·可查可删可停用</span></span></div>
+        <div class="feat"><span><b>追问建议与反馈</b><span class="desc">引导深入·评价回答</span></span></div>
+        <div class="feat"><span><b>收藏与历史搜索</b><span class="desc">珍藏并快速找回</span></span></div>
+      </div>
+    </div>
+    <!-- 成长 -->
+    <div class="module m3">
+      <div class="m-head"><div class="ic">🌱</div><h3>成长</h3><div class="en">Growth</div></div>
+      <div class="m-body">
+        <div class="feat"><span><b>成长状态画像</b><span class="desc">压力点·关系模式·觉察</span></span></div>
+        <div class="feat"><span><b>每日练习与打卡</b><span class="desc">今日练习·心语·适合问</span></span></div>
+        <div class="feat"><span><b>7 天成长任务</b><span class="desc">引导上手·完成奖励</span></span></div>
+        <div class="feat"><span><b>成长周报</b><span class="desc">周期性价值回顾</span></span></div>
+        <div class="feat"><span><b>状态趋势图</b><span class="desc">长期变化·7/30 天</span></span></div>
+        <div class="feat"><span><b>关系合盘</b><span class="desc">两型关系动力解读</span></span></div>
+      </div>
+    </div>
+    <!-- 我的 -->
+    <div class="module m4">
+      <div class="m-head"><div class="ic">👤</div><h3>我的</h3><div class="en">Profile</div></div>
+      <div class="m-body">
+        <div class="feat"><span><b>手机号登录</b><span class="desc">验证码·账号状态</span></span></div>
+        <div class="feat"><span><b>会员与权益</b><span class="desc">免费·月季年卡·次数包</span></span></div>
+        <div class="feat"><span><b>芯之力专属模型</b><span class="desc">基础问答·深度分析·专业陪伴</span></span></div>
+        <div class="feat"><span><b>海报分享</b><span class="desc">九型画像海报·邀请</span></span></div>
+        <div class="feat"><span><b>数据与隐私</b><span class="desc">导出·清空·删除账号</span></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foundation">
+    <div class="cap">平台底座能力</div>
+    <div class="fgrid">
+      <div class="fchip"><div class="t">账号体系</div><div class="s">登录·令牌·设备</div></div>
+      <div class="fchip"><div class="t">计费与权益</div><div class="s">订单·支付·额度</div></div>
+      <div class="fchip"><div class="t">内容安全</div><div class="s">输入输出审核</div></div>
+      <div class="fchip"><div class="t">推送触达</div><div class="s">练习·任务·周报</div></div>
+      <div class="fchip"><div class="t">数据可观测</div><div class="s">埋点·监控·看板</div></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div class="legend">
+      <span><i style="background:#5E9C86"></i>卡片</span>
+      <span><i style="background:#4A6FB0"></i>对话</span>
+      <span><i style="background:#CC8E3E"></i>成长</span>
+      <span><i style="background:#7E5494"></i>我的</span>
+      <span><i style="background:#3E7C7B"></i>底座</span>
+    </div>
+    <div>芯之力 · 九型成长陪伴 App ｜ 第 1 页 / 共 2 页</div>
+  </div>
+</section>
+
+<!-- ======================= PAGE 2 · 系统架构图 ======================= -->
+<section class="page">
+  <div class="head">
+    <div class="brandmark">
+      <div class="logo"></div>
+      <div>
+        <div class="brand-name">芯之力 · 九型成长陪伴</div>
+        <div class="brand-sub">Enneagram Growth Companion · System Architecture</div>
+      </div>
+    </div>
+    <div class="doc-tag">系统架构总览 · v1.0</div>
+  </div>
+
+  <h1 class="title"><span class="bar"></span>系统架构图</h1>
+  <p class="subtitle">独立 Flutter App 通过 App API 接入复用的 Go 后端与数据能力；运营后台与外部服务协同支撑。</p>
+
+  <div class="arch-wrap">
+    <div class="arch">
+      <!-- 客户端层 -->
+      <div class="layer client">
+        <div class="l-label"><span class="tag">客户端</span><h4>Flutter Android App</h4><span class="note">独立项目 · 独立发布</span></div>
+        <div class="nodes c4">
+          <div class="node"><div class="nt">卡片</div><div class="ns">主副卡·画像</div></div>
+          <div class="node"><div class="nt">对话</div><div class="ns">问答·记忆</div></div>
+          <div class="node"><div class="nt">成长</div><div class="ns">练习·周报·趋势</div></div>
+          <div class="node"><div class="nt">我的</div><div class="ns">会员·隐私</div></div>
+        </div>
+      </div>
+
+      <!-- 接口层 -->
+      <div class="layer gateway">
+        <div class="l-label"><span class="tag">接口层</span><h4>App API 网关 · /api/app/**</h4><span class="note">JWT 鉴权 · 与小程序接口隔离</span></div>
+        <div class="nodes c3">
+          <div class="node brand"><div class="nt">身份鉴权</div><div class="ns">令牌签发·刷新·吊销</div></div>
+          <div class="node brand"><div class="nt">权限与隔离</div><div class="ns">按用户·按卡片隔离</div></div>
+          <div class="node brand"><div class="nt">内容安全网关</div><div class="ns">输入/输出审核</div></div>
+        </div>
+      </div>
+
+      <!-- 服务层 -->
+      <div class="layer service">
+        <div class="l-label"><span class="tag">服务层</span><h4>Go 后端业务服务</h4><span class="note">复用现有服务 · 新增 App 能力</span></div>
+        <div class="nodes c4">
+          <div class="node"><div class="nt">用户 / 卡片</div></div>
+          <div class="node"><div class="nt">会话 / 消息</div></div>
+          <div class="node"><div class="nt">成长 / 任务 / 周报</div></div>
+          <div class="node"><div class="nt">关系合盘</div></div>
+          <div class="node"><div class="nt">计费 / 权益 / 订单</div></div>
+          <div class="node"><div class="nt">分享 / 归因</div></div>
+          <div class="node"><div class="nt">推送 / 触达</div></div>
+          <div class="node"><div class="nt">隐私 / 审计</div></div>
+        </div>
+      </div>
+
+      <!-- 能力层 -->
+      <div class="layer capability">
+        <div class="l-label"><span class="tag">能力层</span><h4>智能与知识能力</h4><span class="note">对外统一呈现为「芯之力专属模型」</span></div>
+        <div class="nodes c3">
+          <div class="node accent"><div class="nt">芯之力专属模型</div><div class="ns">基础问答·深度分析·专业陪伴</div></div>
+          <div class="node accent"><div class="nt">公共知识库</div><div class="ns">九型资料检索</div></div>
+          <div class="node accent"><div class="nt">私库记忆</div><div class="ns">按卡片隔离·优先命中</div></div>
+        </div>
+      </div>
+
+      <!-- 数据层 -->
+      <div class="layer data">
+        <div class="l-label"><span class="tag">数据层</span><h4>存储与持久化</h4></div>
+        <div class="nodes c3">
+          <div class="node"><div class="nt">PostgreSQL + pgvector</div><div class="ns">业务数据·向量检索</div></div>
+          <div class="node"><div class="nt">对象存储</div><div class="ns">海报·头像·素材</div></div>
+          <div class="node"><div class="nt">缓存</div><div class="ns">验证码·会话态</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 外部依赖 -->
+    <aside class="external">
+      <h4>外部服务</h4>
+      <div class="ext-item"><div class="et">支付渠道</div><div class="es">微信 / 支付宝 App 支付</div></div>
+      <div class="ext-item"><div class="et">云短信</div><div class="es">验证码下发</div></div>
+      <div class="ext-item"><div class="et">推送服务</div><div class="es">消息触达通道</div></div>
+      <div class="ext-item"><div class="et">监控平台</div><div class="es">崩溃 / 性能上报</div></div>
+      <p class="ext-note">外部服务通过服务层对接，App 不直接访问。</p>
+    </aside>
+  </div>
+
+  <!-- 运营后台 -->
+  <div class="admin">
+    <h4>运营后台</h4><span class="tag">Vben Admin</span>
+    <div class="items">
+      <span>App 用户</span><span>主副卡</span><span>问答日志</span><span>知识库</span>
+      <span>私库记忆</span><span>计费 / 订单</span><span>分享数据</span><span>运营看板</span>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div class="legend">
+      <span><i style="background:#5E9C86"></i>客户端</span>
+      <span><i style="background:#4A6FB0"></i>接口层</span>
+      <span><i style="background:#3E7C7B"></i>服务层</span>
+      <span><i style="background:#CC8E3E"></i>能力层</span>
+      <span><i style="background:#7E5494"></i>数据层</span>
+    </div>
+    <div>芯之力 · 九型成长陪伴 App ｜ 第 2 页 / 共 2 页</div>
+  </div>
+</section>
+
+</body>
+</html>
