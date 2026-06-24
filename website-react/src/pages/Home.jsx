@@ -3,6 +3,7 @@ import Reveal from '../components/Reveal'
 import Wheel from '../components/Wheel'
 import { QUESTIONS } from '../data/enneagramGame'
 import siteConfig from '../data/siteConfig'
+import { FEATURED_VIDEOS } from '../data/videos'
 import { QuotesSection, SignupSection, TypesSection } from './homeSections'
 
 export default function Home() {
@@ -74,23 +75,35 @@ export default function Home() {
         </div>
       </section>
 
-      {/* 小游戏 */}
+      {/* 视频精选 */}
       <section className="wrap block" id="game">
-        <Reveal className="panel split" style={{ overflow: 'visible' }}>
-          <div>
-            <p className="eyebrow">{home.game.eyebrow}</p>
-            <h2 className="section-title">{home.game.title}</h2>
-            <p className="lead" style={{ margin: '14px 0 22px' }}>{home.game.lead}</p>
-            <Link className="btn btn--red" to="/game">进入小游戏体验 →</Link>
-          </div>
-          <Link to="/game" className="figure game-entry" style={{ background: 'linear-gradient(150deg,#10243f,#0b1220)', aspectRatio: '16/10', display: 'grid', placeItems: 'center', position: 'relative', overflow: 'hidden', textDecoration: 'none' }}>
-            <div style={{ position: 'absolute', width: 200, height: 200, borderRadius: '50%', background: 'radial-gradient(circle,rgba(43,127,255,.5),transparent 65%)', filter: 'blur(20px)' }}></div>
-            <div style={{ position: 'relative', textAlign: 'center', color: '#cfe0ff' }}>
-              <div style={{ width: 78, height: 78, borderRadius: '50%', background: 'var(--grad-blue)', display: 'grid', placeItems: 'center', margin: '0 auto 14px', boxShadow: 'var(--glow-blue)', fontSize: 30, color: '#fff' }}>▶</div>
-              <div style={{ fontWeight: 700 }}>测一测你的性格芯片</div>
-              <div style={{ fontSize: 13, opacity: .7, marginTop: 4 }}>约 2 分钟 · {QUESTIONS.length} 题</div>
+        <Reveal className="panel home-video" style={{ overflow: 'visible' }}>
+          <div className="home-video__head">
+            <div>
+              <p className="eyebrow">{home.game.eyebrow}</p>
+              <h2 className="section-title">先看精选视频</h2>
+              <p className="lead" style={{ margin: '14px 0 22px' }}>{home.game.lead}</p>
             </div>
-          </Link>
+            <Link className="home-video__more" to="/watch">更多视频</Link>
+          </div>
+          <div className="home-video__grid">
+            {FEATURED_VIDEOS.map((video) => (
+              <Link className="home-video-card" key={video.id} to="/watch">
+                <span className="home-video-card__media">
+                  <img src={video.poster} alt={video.title} loading="lazy" />
+                  <i aria-hidden="true">▶</i>
+                </span>
+                <div className="home-video-card__body">
+                  <span>{video.tag} · {video.duration}</span>
+                  <h3>{video.title}</h3>
+                </div>
+              </Link>
+            ))}
+          </div>
+          <div className="home-video__actions">
+            <Link className="btn btn--red" to="/game">进入小游戏体验 →</Link>
+            <span>约 2 分钟 · {QUESTIONS.length} 题</span>
+          </div>
         </Reveal>
       </section>
 

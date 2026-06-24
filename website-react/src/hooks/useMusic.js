@@ -23,14 +23,19 @@ export function useMusic() {
   function toggle() {
     const audio = getAudio()
     if (playing) {
-      audio.pause()
-      setPlaying(false)
+      pause()
       return
     }
 
     audio.play()
       .then(() => setPlaying(true))
       .catch(() => setPlaying(false))
+  }
+
+  function pause() {
+    if (!audioRef.current) return
+    audioRef.current.pause()
+    setPlaying(false)
   }
 
   useEffect(() => {
@@ -44,6 +49,11 @@ export function useMusic() {
     audioRef.current.pause()
     audioRef.current.src = ''
     audioRef.current = null
+  }, [])
+
+  useEffect(() => {
+    window.addEventListener('site:pause-music', pause)
+    return () => window.removeEventListener('site:pause-music', pause)
   }, [])
 
   return { playing, toggle, volume, setVolume }

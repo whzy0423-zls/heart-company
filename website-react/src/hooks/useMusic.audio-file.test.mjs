@@ -19,6 +19,16 @@ assert.match(
   /new Audio\(MUSIC_SRC\)/,
   'useMusic 需要使用真实音频文件播放',
 )
+assert.match(
+  hookSource,
+  /addEventListener\(['"]site:pause-music['"]/,
+  '播放视频时需要能通过全局事件关闭背景音乐',
+)
+assert.match(
+  hookSource,
+  /removeEventListener\(['"]site:pause-music['"]/,
+  '背景音乐暂停事件监听需要在卸载时清理',
+)
 assert.doesNotMatch(
   hookSource,
   /AudioContext|createOscillator|createConvolver|createBiquadFilter/,
