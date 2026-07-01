@@ -222,7 +222,7 @@ func (s *Store) CurrentUserProfile(ctx context.Context, id int64, homePath strin
 
 	var profile CurrentUserProfile
 	err := s.db.QueryRowContext(c,
-		`SELECT id, username, avatar, nickname, email, phone, remark FROM users WHERE id=$1`,
+		`SELECT id, username, avatar, nickname, email, phone, remark FROM users WHERE id=$1 AND status=1`,
 		id,
 	).Scan(&profile.ID, &profile.Username, &profile.Avatar, &profile.RealName, &profile.Email, &profile.Phone, &profile.Remark)
 	if err != nil {
@@ -235,12 +235,8 @@ func (s *Store) CurrentUserProfile(ctx context.Context, id int64, homePath strin
 	}
 
 	rows, err := s.db.QueryContext(c,
-		`SELECT r.code FROM roles r
-		 INNER JOIN user_roles ur ON ur.role_id = r.id
-		 WHERE ur.user_id=$1
-		 ORDER BY r.id ASC`,
-		id,
-	)
+		`SELECT r.code FROM roles r JOIN user_roles ur ON ur.role_id=r.id WHERE ur.user_id=$1 AND r.status=1 ORDER BY r.id ASC`,
+		id)
 	if err != nil {
 		return CurrentUserProfile{}, err
 	}

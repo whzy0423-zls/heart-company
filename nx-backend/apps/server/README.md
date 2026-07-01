@@ -12,8 +12,8 @@
 - `GET /api/menu/all`
 - `POST /api/upload` — 认证后上传 `multipart/form-data` 文件字段 `file`，可选 query `dir`
 - `GET /api/site-config`
-- `PUT /api/site-config`  — 保存配置；成功后自动触发官网重新构建（若已配置 `BUILD_SCRIPT`）
-- `GET /api/site-config/build-status`  — 轮询官网构建状态（`idle/pending/building/success/failed/disabled`）
+- `PUT /api/site-config` — 保存配置；成功后自动触发官网重新构建（若已配置 `BUILD_SCRIPT`）
+- `GET /api/site-config/build-status` — 轮询官网构建状态（`idle/pending/building/success/failed/disabled`）
 
 响应结构与 Vben 默认请求拦截器一致：
 

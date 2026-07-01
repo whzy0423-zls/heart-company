@@ -51,8 +51,8 @@ miniapp/
 ## 后端联调
 - API 地址不再手改 `src/config.js`：
   - 开发默认读取 `.env.development`：`VITE_API_BASE=http://localhost:8080/api`
-  - 生产默认读取 `.env.production`：`VITE_API_BASE=https://api.example.com/api`
-  - 临时覆盖可用：`VITE_API_BASE=https://api.example.com/api npm run build:mp-weixin`
+  - 生产必须读取 `.env.production` 或 CI 注入的真实 HTTPS：`VITE_API_BASE=https://api.yourdomain.com/api`
+  - 临时覆盖可用：`VITE_API_BASE=https://api.yourdomain.com/api npm run build:mp-weixin`
 - 后端**未配置微信 AppID/Secret 时自动启用 dev 登录回退**：`wx.login` 的 code 会被后端换成稳定的 `dev_xxx` openid，无需真实微信凭证即可跑通登录、存档、预约全流程。
 
 ## 上线前

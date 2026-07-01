@@ -1,30 +1,56 @@
+import type { SignupLead } from '#/api';
+
 import { describe, expect, it } from 'vitest';
 
 import { getSignupNotifications } from './signup-notice';
 
+function lead(
+  input: Partial<SignupLead> &
+    Pick<SignupLead, 'contact' | 'contactType' | 'createTime' | 'id' | 'name'>,
+): SignupLead {
+  return {
+    contact: input.contact,
+    contactType: input.contactType,
+    createTime: input.createTime,
+    followNote: '',
+    followStatus: 'pending',
+    gameResultId: '',
+    id: input.id,
+    interest: input.interest ?? '',
+    ip: '',
+    landingPage: '',
+    message: '',
+    name: input.name,
+    nextFollowTime: '',
+    owner: '',
+    referrer: '',
+    sourcePath: '',
+    userAgent: '',
+    utmCampaign: '',
+    utmContent: '',
+    utmMedium: '',
+    utmSource: '',
+    utmTerm: '',
+    visitorId: '',
+  };
+}
+
 const leads = [
-  {
+  lead({
     contact: 'wx_new',
     contactType: 'wechat',
     createTime: '2026/06/17 18:40:00',
     id: '12',
     interest: '通知测试',
-    ip: '',
-    message: '',
     name: '新报名',
-    userAgent: '',
-  },
-  {
+  }),
+  lead({
     contact: '13800000000',
     contactType: 'phone',
     createTime: '2026/06/17 18:39:00',
     id: '11',
-    interest: '',
-    ip: '',
-    message: '',
     name: '旧报名',
-    userAgent: '',
-  },
+  }),
 ];
 
 describe('signup notice', () => {

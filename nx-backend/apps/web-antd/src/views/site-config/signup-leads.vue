@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { Dayjs } from 'dayjs';
+
 import type {
   SignupDetail,
   SignupFollowInput,
@@ -22,14 +24,14 @@ import {
   Empty,
   Form,
   Input,
+  message,
   Select,
   Space,
   Table,
   Tag,
   Timeline,
-  message,
 } from 'ant-design-vue';
-import dayjs, { type Dayjs } from 'dayjs';
+import dayjs from 'dayjs';
 
 import {
   getSignupDetailApi,
@@ -189,7 +191,9 @@ function hydrateFollowForm(lead: SignupLead) {
   followForm.status =
     lead.followStatus === 'deal' ? 'contacted' : lead.followStatus || 'pending';
   followForm.nextFollowTime = lead.nextFollowTime || '';
-  nextFollowDate.value = lead.nextFollowTime ? dayjs(lead.nextFollowTime) : undefined;
+  nextFollowDate.value = lead.nextFollowTime
+    ? dayjs(lead.nextFollowTime)
+    : undefined;
 }
 
 async function saveFollow() {
@@ -258,9 +262,16 @@ function typeLabel(value?: number) {
 
 function statusMeta(status?: string) {
   return (
-    followStatusOptions.find((item) => item.value === status) ??
-    followStatusOptions[0]
+    followStatusOptions.find((item) => item.value === status) ?? {
+      color: 'default',
+      label: '-',
+      value: '',
+    }
   );
+}
+
+function leadRecord(record: Record<string, any>): SignupLead {
+  return record as SignupLead;
 }
 
 function timelineTitle(item: SignupTimelineItem) {
@@ -268,7 +279,10 @@ function timelineTitle(item: SignupTimelineItem) {
   return `跟进记录：${statusMeta(item.status).label}`;
 }
 
-function handleTableChange(pagination: { current?: number; pageSize?: number }) {
+function handleTableChange(pagination: {
+  current?: number;
+  pageSize?: number;
+}) {
   query.page = pagination.current ?? 1;
   query.pageSize = pagination.pageSize ?? 20;
   load();
@@ -326,7 +340,10 @@ watch(
           class="summary-item"
           :class="{ active: query.status === item.value }"
           type="button"
-          @click="query.status = query.status === item.value ? '' : item.value; search()"
+          @click="
+            query.status = query.status === item.value ? '' : item.value;
+            search();
+          "
         >
           <span class="summary-label">{{ item.label }}</span>
           <strong>{{ item.count }}</strong>
@@ -376,7 +393,9 @@ watch(
           <template #bodyCell="{ column, record }">
             <template v-if="column.dataIndex === 'name'">
               <div class="customer-cell">
-                <div class="customer-avatar">{{ record.name?.slice(0, 1) || '客' }}</div>
+                <div class="customer-avatar">
+                  {{ record.name?.slice(0, 1) || '客' }}
+                </div>
                 <div class="customer-main">
                   <div class="customer-name">{{ record.name }}</div>
                   <div class="customer-sub">{{ record.createTime }}</div>
@@ -385,7 +404,9 @@ watch(
             </template>
             <template v-if="column.dataIndex === 'contact'">
               <div class="contact-cell">
-                <Tag :color="record.contactType === 'wechat' ? 'green' : 'blue'">
+                <Tag
+                  :color="record.contactType === 'wechat' ? 'green' : 'blue'"
+                >
                   {{ contactTypeLabel(record.contactType) }}
                 </Tag>
                 <span>{{ record.contact }}</span>
@@ -396,8 +417,8 @@ watch(
               <span v-else>-</span>
             </template>
             <template v-if="column.dataIndex === 'followStatus'">
-              <Tag :color="statusMeta(record.followStatus).color">
-                {{ statusMeta(record.followStatus).label }}
+              <Tag :color="statusMeta(leadRecord(record).followStatus).color">
+                {{ statusMeta(leadRecord(record).followStatus).label }}
               </Tag>
             </template>
             <template v-if="column.dataIndex === 'owner'">
@@ -410,7 +431,11 @@ watch(
               <span>{{ record.message || '-' }}</span>
             </template>
             <template v-if="column.key === 'action'">
-              <Button size="small" type="link" @click="openDetail(record)">
+              <Button
+                size="small"
+                type="link"
+                @click="openDetail(leadRecord(record))"
+              >
                 查看详情
               </Button>
             </template>
@@ -427,7 +452,9 @@ watch(
     >
       <div v-if="current" class="detail-layout">
         <div class="lead-profile">
-          <div class="profile-avatar">{{ current.name?.slice(0, 1) || '客' }}</div>
+          <div class="profile-avatar">
+            {{ current.name?.slice(0, 1) || '客' }}
+          </div>
           <div class="profile-main">
             <div class="profile-title-row">
               <h3>{{ current.name }}</h3>
@@ -497,8 +524,12 @@ watch(
               <Descriptions.Item label="UTM">
                 <span class="break-text">
                   {{ current.utmSource || '-' }}
-                  <template v-if="current.utmMedium"> / {{ current.utmMedium }}</template>
-                  <template v-if="current.utmCampaign"> / {{ current.utmCampaign }}</template>
+                  <template v-if="current.utmMedium">
+                    / {{ current.utmMedium }}</template
+                  >
+                  <template v-if="current.utmCampaign">
+                    / {{ current.utmCampaign }}</template
+                  >
                 </span>
               </Descriptions.Item>
             </Descriptions>
@@ -539,7 +570,10 @@ watch(
               </span>
             </template>
             <div v-if="isDeal" class="closed-panel">
-              <Empty description="已成交线索暂不继续跟进" :image="Empty.PRESENTED_IMAGE_SIMPLE" />
+              <Empty
+                description="已成交线索暂不继续跟进"
+                :image="Empty.PRESENTED_IMAGE_SIMPLE"
+              />
               <Button :loading="reopening" type="primary" @click="reopenLead">
                 重新打开线索
               </Button>
@@ -556,7 +590,12 @@ watch(
                   v-model:value="followForm.owner"
                   allow-clear
                   show-search
-                  :filter-option="(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())"
+                  :filter-option="
+                    (input, option) =>
+                      String(option?.label ?? '')
+                        .toLowerCase()
+                        .includes(input.toLowerCase())
+                  "
                   :options="ownerOptions"
                   placeholder="选择负责人"
                 />
@@ -583,7 +622,12 @@ watch(
                   placeholder="长期备注，会展示在列表详情里"
                 />
               </Form.Item>
-              <Button :loading="saving" type="primary" block @click="saveFollow">
+              <Button
+                :loading="saving"
+                type="primary"
+                block
+                @click="saveFollow"
+              >
                 保存跟进
               </Button>
             </Form>
@@ -658,16 +702,16 @@ watch(
 
 .summary-grid {
   display: grid;
-  gap: 12px;
   grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .summary-item {
   display: flex;
-  min-width: 0;
   flex-direction: column;
-  align-items: flex-start;
   gap: 8px;
+  align-items: flex-start;
+  min-width: 0;
   padding: 14px 16px;
   text-align: left;
   cursor: pointer;
@@ -704,8 +748,8 @@ watch(
 
 .filter-bar {
   display: grid;
-  gap: 10px;
   grid-template-columns: minmax(260px, 420px) 180px auto;
+  gap: 10px;
   justify-content: start;
 }
 
@@ -733,8 +777,8 @@ watch(
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  color: hsl(var(--primary));
   font-weight: 700;
+  color: hsl(var(--primary));
   background: hsl(var(--primary) / 12%);
   border: 1px solid hsl(var(--primary) / 20%);
   border-radius: 8px;
@@ -751,17 +795,17 @@ watch(
 
 .customer-name {
   overflow: hidden;
-  font-weight: 600;
   text-overflow: ellipsis;
+  font-weight: 600;
   white-space: nowrap;
 }
 
 .customer-sub {
   margin-top: 2px;
   overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 12px;
   color: hsl(var(--muted-foreground));
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -795,8 +839,8 @@ watch(
 }
 
 .profile-title-row {
-  gap: 8px;
   flex-wrap: wrap;
+  gap: 8px;
 }
 
 .profile-title-row h3 {
@@ -812,15 +856,15 @@ watch(
 
 .content-grid {
   display: grid;
-  gap: 16px;
   grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+  gap: 16px;
   align-items: start;
 }
 
 .insight-grid {
   display: grid;
-  gap: 16px;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+  gap: 16px;
 }
 
 .follow-panel,
@@ -848,8 +892,8 @@ watch(
 .message-text,
 .break-text,
 .timeline-content {
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
-  word-break: break-word;
 }
 
 .game-profile {
@@ -875,8 +919,8 @@ watch(
 }
 
 .game-meta {
-  color: hsl(var(--muted-foreground));
   line-height: 1.7;
+  color: hsl(var(--muted-foreground));
 }
 
 .timeline-title {

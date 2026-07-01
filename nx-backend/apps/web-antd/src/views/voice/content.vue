@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { UploadRequestOption } from 'ant-design-vue/es/vc-upload/interface';
+
 import type { VoiceContentJob, VoiceOption } from '#/api';
 
 import { computed, onMounted, reactive, ref } from 'vue';
@@ -12,6 +14,7 @@ import {
   Col,
   Form,
   Input,
+  message,
   Radio,
   Row,
   Select,
@@ -19,7 +22,6 @@ import {
   Table,
   Tag,
   Upload,
-  message,
 } from 'ant-design-vue';
 
 import {
@@ -115,8 +117,8 @@ async function loadJobs() {
   }
 }
 
-async function uploadContent(options: { file: File; onSuccess?: () => void }) {
-  const rawFile = options.file;
+async function uploadContent(options: UploadRequestOption) {
+  const rawFile = options.file instanceof File ? options.file : undefined;
   if (!rawFile) {
     message.warning('没有读取到文件，请重新选择');
     return;
@@ -136,9 +138,11 @@ async function uploadContent(options: { file: File; onSuccess?: () => void }) {
     } else {
       message.success('文件已上传，请在下方粘贴或整理要朗读的正文');
     }
-    options.onSuccess?.();
+    options.onSuccess?.({});
   } catch (error: any) {
-    message.error(error?.response?.data?.error || error?.message || '文件上传失败');
+    message.error(
+      error?.response?.data?.error || error?.message || '文件上传失败',
+    );
   } finally {
     uploading.value = false;
   }
@@ -192,7 +196,10 @@ function resetForm() {
   form.title = '';
 }
 
-function handleTableChange(pagination: { current?: number; pageSize?: number }) {
+function handleTableChange(pagination: {
+  current?: number;
+  pageSize?: number;
+}) {
   query.page = pagination.current ?? 1;
   query.pageSize = pagination.pageSize ?? 10;
   loadJobs();
@@ -200,8 +207,7 @@ function handleTableChange(pagination: { current?: number; pageSize?: number }) 
 
 function isTextFile(file: File) {
   return (
-    file.type.startsWith('text/') ||
-    /\.(md|markdown|txt)$/i.test(file.name)
+    file.type.startsWith('text/') || /\.(md|markdown|txt)$/i.test(file.name)
   );
 }
 
@@ -231,7 +237,10 @@ onMounted(async () => {
           <div class="card-title">内容生成</div>
           <Form layout="vertical">
             <Form.Item label="内容类型">
-              <Radio.Group v-model:value="form.sourceType" :options="sourceTypeOptions" />
+              <Radio.Group
+                v-model:value="form.sourceType"
+                :options="sourceTypeOptions"
+              />
             </Form.Item>
             <Form.Item label="上传课件 / 读书内容">
               <Upload
@@ -250,7 +259,10 @@ onMounted(async () => {
               </div>
             </Form.Item>
             <Form.Item label="标题">
-              <Input v-model:value="form.title" placeholder="例如：第一章导读" />
+              <Input
+                v-model:value="form.title"
+                placeholder="例如：第一章导读"
+              />
             </Form.Item>
             <Form.Item label="选择音色" required>
               <Select
@@ -295,7 +307,7 @@ onMounted(async () => {
             <div class="latest-meta">
               {{ latest.voiceName }} · {{ sourceTypeLabel(latest.sourceType) }}
             </div>
-            <audio :src="latest.audioUrl" controls />
+            <audio :src="latest.audioUrl" controls></audio>
           </div>
           <div v-else class="empty-result">生成后会在这里播放最新音频。</div>
         </Card>
@@ -333,7 +345,12 @@ onMounted(async () => {
                 </Tag>
               </template>
               <template v-else-if="column.dataIndex === 'audioUrl'">
-                <audio v-if="record.audioUrl" :src="record.audioUrl" class="row-audio" controls />
+                <audio
+                  v-if="record.audioUrl"
+                  :src="record.audioUrl"
+                  class="row-audio"
+                  controls
+                ></audio>
                 <span v-else>-</span>
               </template>
               <template v-else-if="column.dataIndex === 'status'">
@@ -364,8 +381,8 @@ onMounted(async () => {
 .form-hint,
 .latest-meta,
 .source-file {
-  color: #667085;
   font-size: 13px;
+  color: #667085;
 }
 
 .form-hint {
@@ -402,9 +419,9 @@ onMounted(async () => {
 
 .empty-result {
   display: flex;
-  min-height: 120px;
   align-items: center;
   justify-content: center;
+  min-height: 120px;
   color: #98a2b3;
   background: #f8fafc;
   border: 1px dashed #d0d5dd;

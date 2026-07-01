@@ -93,6 +93,10 @@ const quoteColumns = [
   { key: 'action', title: '操作', width: 140 },
 ];
 
+function quoteRecord(record: Record<string, any>): MindQuote {
+  return record as MindQuote;
+}
+
 function groupName(id: string) {
   if (!id) return '未分组';
   return groups.value.find((g) => g.id === id)?.name ?? '未分组';
@@ -219,13 +223,18 @@ async function removeQuote(q: MindQuote) {
 </script>
 
 <template>
-  <Page title="心语管理" description="维护「成长心语」的分组与心语。分组对应脑/心/腹等中心，可新增；每条心语含官网展示的简短文案与详情页的完整原文。">
+  <Page
+    title="心语管理"
+    description="维护「成长心语」的分组与心语。分组对应脑/心/腹等中心，可新增；每条心语含官网展示的简短文案与详情页的完整原文。"
+  >
     <Row :gutter="16">
       <!-- 左：分组 -->
       <Col :md="8" :xs="24">
         <Card title="分组" :bordered="false" :loading="loadingGroups">
           <template #extra>
-            <Button size="small" type="primary" @click="openCreateGroup">新增分组</Button>
+            <Button size="small" type="primary" @click="openCreateGroup">
+              新增分组
+            </Button>
           </template>
           <div
             class="group-item"
@@ -256,7 +265,10 @@ async function removeQuote(q: MindQuote) {
             <div class="group-item__ops" @click.stop>
               <Tag color="blue">{{ g.quoteCount ?? 0 }}</Tag>
               <a @click="openEditGroup(g)">编辑</a>
-              <Popconfirm title="删除该分组？其下心语将转为未分组" @confirm="removeGroup(g)">
+              <Popconfirm
+                title="删除该分组？其下心语将转为未分组"
+                @confirm="removeGroup(g)"
+              >
                 <a class="danger">删除</a>
               </Popconfirm>
             </div>
@@ -267,11 +279,16 @@ async function removeQuote(q: MindQuote) {
 
       <!-- 右：心语 -->
       <Col :md="16" :xs="24">
-        <Card :title="`心语列表 · ${groupName(activeGroup === '0' ? '' : activeGroup)}`" :bordered="false">
+        <Card
+          :title="`心语列表 · ${groupName(activeGroup === '0' ? '' : activeGroup)}`"
+          :bordered="false"
+        >
           <template #extra>
             <Space>
               <Button size="small" @click="loadQuotes">刷新</Button>
-              <Button size="small" type="primary" @click="openCreateQuote">新增心语</Button>
+              <Button size="small" type="primary" @click="openCreateQuote">
+                新增心语
+              </Button>
             </Space>
           </template>
           <Table
@@ -293,8 +310,11 @@ async function removeQuote(q: MindQuote) {
               </template>
               <template v-else-if="column.key === 'action'">
                 <Space>
-                  <a @click="openEditQuote(record)">编辑</a>
-                  <Popconfirm title="确认删除这条心语？" @confirm="removeQuote(record)">
+                  <a @click="openEditQuote(quoteRecord(record))">编辑</a>
+                  <Popconfirm
+                    title="确认删除这条心语？"
+                    @confirm="removeQuote(quoteRecord(record))"
+                  >
                     <a class="danger">删除</a>
                   </Popconfirm>
                 </Space>
@@ -314,10 +334,17 @@ async function removeQuote(q: MindQuote) {
     >
       <Form layout="vertical">
         <Form.Item label="分组名称" required>
-          <Input v-model:value="groupForm.name" placeholder="如 脑组（1·5·6）" />
+          <Input
+            v-model:value="groupForm.name"
+            placeholder="如 脑组（1·5·6）"
+          />
         </Form.Item>
         <Form.Item label="分组简介">
-          <Input.TextArea v-model:value="groupForm.intro" :rows="3" placeholder="一句话说明这个分组" />
+          <Input.TextArea
+            v-model:value="groupForm.intro"
+            :rows="3"
+            placeholder="一句话说明这个分组"
+          />
         </Form.Item>
         <Form.Item label="排序">
           <InputNumber v-model:value="groupForm.sort" :min="0" />
@@ -351,15 +378,26 @@ async function removeQuote(q: MindQuote) {
           />
         </Form.Item>
         <Form.Item label="完整原文（详情页展示）">
-          <Input.TextArea v-model:value="quoteForm.content" :rows="8" placeholder="老韩语录原文" />
+          <Input.TextArea
+            v-model:value="quoteForm.content"
+            :rows="8"
+            placeholder="老韩语录原文"
+          />
         </Form.Item>
         <Form.Item label="回应提示">
-          <Input v-model:value="quoteForm.prompt" placeholder="引导用户思考的一句话" />
+          <Input
+            v-model:value="quoteForm.prompt"
+            placeholder="引导用户思考的一句话"
+          />
         </Form.Item>
         <Row :gutter="16">
           <Col :span="12">
             <Form.Item label="排序">
-              <InputNumber v-model:value="quoteForm.sort" :min="0" style="width: 100%" />
+              <InputNumber
+                v-model:value="quoteForm.sort"
+                :min="0"
+                style="width: 100%"
+              />
             </Form.Item>
           </Col>
           <Col :span="12">
@@ -388,29 +426,35 @@ async function removeQuote(q: MindQuote) {
   border-radius: 8px;
   transition: all 0.2s;
 }
+
 .group-item:hover {
   border-color: hsl(var(--primary));
 }
+
 .group-item.on {
   background: hsl(var(--primary) / 8%);
   border-color: hsl(var(--primary));
 }
+
 .group-item__main {
   display: flex;
   flex-direction: column;
   gap: 2px;
   overflow: hidden;
 }
+
 .group-item__name {
   font-weight: 600;
 }
+
 .group-item__intro {
-  font-size: 12px;
-  color: hsl(var(--muted-foreground));
   overflow: hidden;
   text-overflow: ellipsis;
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
   white-space: nowrap;
 }
+
 .group-item__ops {
   display: flex;
   flex-shrink: 0;
@@ -418,6 +462,7 @@ async function removeQuote(q: MindQuote) {
   align-items: center;
   font-size: 12px;
 }
+
 .danger {
   color: hsl(var(--destructive, 0 84% 60%));
 }

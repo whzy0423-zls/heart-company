@@ -20,6 +20,10 @@ type ObjectUploader interface {
 	Upload(ctx context.Context, input UploadInput) (UploadResult, error)
 }
 
+type ObjectSigner interface {
+	PresignGetURL(ctx context.Context, objectKey string, expires time.Duration) (string, error)
+}
+
 type UploadInput struct {
 	ContentType string
 	Dir         string
@@ -135,6 +139,24 @@ func (u *OSSUploader) Upload(ctx context.Context, input UploadInput) (UploadResu
 		Size:        input.Size,
 		URL:         u.publicObjectURL(key),
 	}, nil
+}
+
+func (u *OSSUploader) PresignGetURL(ctx context.Context, objectKey string, expires time.Duration) (string, error) {
+	objectKey = strings.TrimLeft(strings.TrimSpace(objectKey), "/")
+	if objectKey == "" {
+		return "", fmt.Errorf("object key is required")
+	}
+	if expires <= 0 {
+		expires = 30 * time.Minute
+	}
+	result, err := u.client.Presign(ctx, &oss.GetObjectRequest{
+		Bucket: oss.Ptr(u.bucket),
+		Key:    oss.Ptr(objectKey),
+	}, oss.PresignExpires(expires))
+	if err != nil {
+		return "", err
+	}
+	return result.URL, nil
 }
 
 func (u *OSSUploader) objectKey(dir string, filename string) string {

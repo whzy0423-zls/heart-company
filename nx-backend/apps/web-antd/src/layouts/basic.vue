@@ -26,10 +26,10 @@ import { toSignupNotification } from './signup-notice';
 
 const notifications = ref<NotificationItem[]>([]);
 const SIGNUP_NOTICE_LAST_ID_KEY_PREFIX = 'nx-signup-notice-last-id:v2';
-let signupNoticeTimer: ReturnType<typeof window.setInterval> | undefined;
+let signupNoticeTimer: number | undefined;
 let signupEventSource: EventSource | undefined;
 let signupEventUnavailable = false;
-let signupEventRetryTimer: ReturnType<typeof window.setTimeout> | undefined;
+let signupEventRetryTimer: number | undefined;
 let signupNoticeBootstrapped = false;
 const seenSignupNoticeIds = new Set<string>();
 
@@ -194,7 +194,7 @@ async function pollSignupNotices() {
 
     const notices = items
       .filter((item) => !seenSignupNoticeIds.has(`signup-${item.id}`))
-      .sort((a, b) => Number(a.id) - Number(b.id))
+      .toSorted((a, b) => Number(a.id) - Number(b.id))
       .map((item) => toSignupNotification(item));
     if (notices.length === 0) return;
     for (const notice of notices) {
@@ -205,20 +205,21 @@ async function pollSignupNotices() {
     const status = error?.response?.status;
     if (status === 401) {
       notification.warning({
-        description: '当前登录状态和本地 Go 后端不一致，请重新登录后台后再测试报名推送。',
+        description:
+          '当前登录状态和本地 Go 后端不一致，请重新登录后台后再测试报名推送。',
         message: '报名通知连接已失效',
         placement: 'topRight',
       });
       accessStore.setAccessToken(null);
       await authStore.logout();
-      return;
     }
     // 轮询通知失败不打断主界面。
   }
 }
 
 function connectSignupEvents() {
-  if (!accessStore.accessToken || signupEventSource || signupEventUnavailable) return;
+  if (!accessStore.accessToken || signupEventSource || signupEventUnavailable)
+    return;
 
   const url = `/api/signups/events?token=${encodeURIComponent(accessStore.accessToken)}`;
   signupEventSource = new EventSource(url);
@@ -228,14 +229,17 @@ function connectSignupEvents() {
       const notice = toSignupNotification(lead);
       pushSignupNotice(notice);
       if (lead?.id) {
-        const latestId = Math.max(readLastSignupNoticeId(), Number(lead.id) || 0);
+        const latestId = Math.max(
+          readLastSignupNoticeId(),
+          Number(lead.id) || 0,
+        );
         rememberSignupNoticeId(String(latestId));
       }
     } catch {
       // 忽略单条通知格式异常，保持连接继续。
     }
   });
-  signupEventSource.onerror = () => {
+  signupEventSource.addEventListener('error', () => {
     signupEventSource?.close();
     signupEventSource = undefined;
     signupEventUnavailable = true;
@@ -247,7 +251,7 @@ function connectSignupEvents() {
       signupEventRetryTimer = undefined;
       connectSignupEvents();
     }, 15_000);
-  };
+  });
 }
 
 function refreshSignupNotices() {

@@ -29,32 +29,32 @@ type Store struct {
 }
 
 type Profile struct {
-	CreateTime    time.Time `json:"createTime"`
-	ID            string    `json:"id"`
-	LastError     string    `json:"lastError"`
-	Name          string    `json:"name"`
-	Provider      string    `json:"provider"`
-	Remark        string    `json:"remark"`
-	SampleAssetID string    `json:"sampleAssetId"`
-	SampleName    string    `json:"sampleName"`
-	SampleURL     string    `json:"sampleUrl"`
-	Status        string    `json:"status"`
-	UpdateTime    time.Time `json:"updateTime"`
-	VoiceID       string    `json:"voiceId"`
+	CreateTime    string `json:"createTime"`
+	ID            string `json:"id"`
+	LastError     string `json:"lastError"`
+	Name          string `json:"name"`
+	Provider      string `json:"provider"`
+	Remark        string `json:"remark"`
+	SampleAssetID string `json:"sampleAssetId"`
+	SampleName    string `json:"sampleName"`
+	SampleURL     string `json:"sampleUrl"`
+	Status        string `json:"status"`
+	UpdateTime    string `json:"updateTime"`
+	VoiceID       string `json:"voiceId"`
 }
 
 type Generation struct {
-	AudioAssetID string    `json:"audioAssetId"`
-	AudioURL     string    `json:"audioUrl"`
-	CreateTime   time.Time `json:"createTime"`
-	ErrorMessage string    `json:"errorMessage"`
-	ID           string    `json:"id"`
-	Model        string    `json:"model"`
-	ProfileID    string    `json:"profileId"`
-	Provider     string    `json:"provider"`
-	Status       string    `json:"status"`
-	Text         string    `json:"text"`
-	VoiceID      string    `json:"voiceId"`
+	AudioAssetID string `json:"audioAssetId"`
+	AudioURL     string `json:"audioUrl"`
+	CreateTime   string `json:"createTime"`
+	ErrorMessage string `json:"errorMessage"`
+	ID           string `json:"id"`
+	Model        string `json:"model"`
+	ProfileID    string `json:"profileId"`
+	Provider     string `json:"provider"`
+	Status       string `json:"status"`
+	Text         string `json:"text"`
+	VoiceID      string `json:"voiceId"`
 }
 
 type VoiceOption struct {
@@ -66,23 +66,23 @@ type VoiceOption struct {
 }
 
 type ContentJob struct {
-	AudioAssetID  string    `json:"audioAssetId"`
-	AudioURL      string    `json:"audioUrl"`
-	CreateTime    time.Time `json:"createTime"`
-	ErrorMessage  string    `json:"errorMessage"`
-	ID            string    `json:"id"`
-	Model         string    `json:"model"`
-	ProfileID     string    `json:"profileId"`
-	SourceAssetID string    `json:"sourceAssetId"`
-	SourceName    string    `json:"sourceName"`
-	SourceType    string    `json:"sourceType"`
-	SourceURL     string    `json:"sourceUrl"`
-	Status        string    `json:"status"`
-	Text          string    `json:"text"`
-	Title         string    `json:"title"`
-	VoiceID       string    `json:"voiceId"`
-	VoiceName     string    `json:"voiceName"`
-	VoiceSource   string    `json:"voiceSource"`
+	AudioAssetID  string `json:"audioAssetId"`
+	AudioURL      string `json:"audioUrl"`
+	CreateTime    string `json:"createTime"`
+	ErrorMessage  string `json:"errorMessage"`
+	ID            string `json:"id"`
+	Model         string `json:"model"`
+	ProfileID     string `json:"profileId"`
+	SourceAssetID string `json:"sourceAssetId"`
+	SourceName    string `json:"sourceName"`
+	SourceType    string `json:"sourceType"`
+	SourceURL     string `json:"sourceUrl"`
+	Status        string `json:"status"`
+	Text          string `json:"text"`
+	Title         string `json:"title"`
+	VoiceID       string `json:"voiceId"`
+	VoiceName     string `json:"voiceName"`
+	VoiceSource   string `json:"voiceSource"`
 }
 
 type PageResult[T any] struct {
@@ -129,6 +129,13 @@ func NewStore(database *sql.DB, uploads *uploadasset.Store, cfg config.MiniMaxCo
 	}
 }
 
+func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format("2006/01/02 15:04:05")
+}
+
 func (s *Store) ListProfiles(ctx context.Context, query url.Values) (PageResult[Profile], error) {
 	page, pageSize := pagination(query)
 	where := []string{"1=1"}
@@ -165,9 +172,12 @@ func (s *Store) ListProfiles(ctx context.Context, query url.Values) (PageResult[
 	items := []Profile{}
 	for rows.Next() {
 		var item Profile
-		if err := rows.Scan(&item.ID, &item.Name, &item.Provider, &item.VoiceID, &item.SampleAssetID, &item.SampleURL, &item.SampleName, &item.Status, &item.Remark, &item.LastError, &item.CreateTime, &item.UpdateTime); err != nil {
+		var createTime, updateTime time.Time
+		if err := rows.Scan(&item.ID, &item.Name, &item.Provider, &item.VoiceID, &item.SampleAssetID, &item.SampleURL, &item.SampleName, &item.Status, &item.Remark, &item.LastError, &createTime, &updateTime); err != nil {
 			return PageResult[Profile]{}, err
 		}
+		item.CreateTime = formatTime(createTime)
+		item.UpdateTime = formatTime(updateTime)
 		items = append(items, item)
 	}
 	return PageResult[Profile]{Items: items, Total: total}, rows.Err()
@@ -254,14 +264,20 @@ func (s *Store) CloneProfile(ctx context.Context, id string) (Profile, error) {
 
 func (s *Store) Profile(ctx context.Context, id string) (Profile, error) {
 	var item Profile
+	var createTime, updateTime time.Time
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id::text, name, provider, voice_id, COALESCE(sample_asset_id::text,''), sample_url, sample_name,
 		        status, remark, last_error, create_time, update_time
 		   FROM voice_profiles
 		  WHERE id=$1`,
 		id,
-	).Scan(&item.ID, &item.Name, &item.Provider, &item.VoiceID, &item.SampleAssetID, &item.SampleURL, &item.SampleName, &item.Status, &item.Remark, &item.LastError, &item.CreateTime, &item.UpdateTime)
-	return item, err
+	).Scan(&item.ID, &item.Name, &item.Provider, &item.VoiceID, &item.SampleAssetID, &item.SampleURL, &item.SampleName, &item.Status, &item.Remark, &item.LastError, &createTime, &updateTime)
+	if err != nil {
+		return Profile{}, err
+	}
+	item.CreateTime = formatTime(createTime)
+	item.UpdateTime = formatTime(updateTime)
+	return item, nil
 }
 
 func (s *Store) DeleteProfile(ctx context.Context, id string) error {
@@ -492,9 +508,11 @@ func (s *Store) ListContentJobs(ctx context.Context, query url.Values) (PageResu
 	items := []ContentJob{}
 	for rows.Next() {
 		var item ContentJob
-		if err := rows.Scan(&item.ID, &item.Title, &item.SourceType, &item.SourceAssetID, &item.SourceName, &item.SourceURL, &item.VoiceSource, &item.ProfileID, &item.VoiceID, &item.VoiceName, &item.Model, &item.Text, &item.AudioAssetID, &item.AudioURL, &item.Status, &item.ErrorMessage, &item.CreateTime); err != nil {
+		var createTime time.Time
+		if err := rows.Scan(&item.ID, &item.Title, &item.SourceType, &item.SourceAssetID, &item.SourceName, &item.SourceURL, &item.VoiceSource, &item.ProfileID, &item.VoiceID, &item.VoiceName, &item.Model, &item.Text, &item.AudioAssetID, &item.AudioURL, &item.Status, &item.ErrorMessage, &createTime); err != nil {
 			return PageResult[ContentJob]{}, err
 		}
+		item.CreateTime = formatTime(createTime)
 		items = append(items, item)
 	}
 	return PageResult[ContentJob]{Items: items, Total: total}, rows.Err()
@@ -530,9 +548,11 @@ func (s *Store) ListGenerations(ctx context.Context, query url.Values) (PageResu
 	items := []Generation{}
 	for rows.Next() {
 		var item Generation
-		if err := rows.Scan(&item.ID, &item.ProfileID, &item.Provider, &item.VoiceID, &item.Text, &item.Model, &item.AudioAssetID, &item.AudioURL, &item.Status, &item.ErrorMessage, &item.CreateTime); err != nil {
+		var createTime time.Time
+		if err := rows.Scan(&item.ID, &item.ProfileID, &item.Provider, &item.VoiceID, &item.Text, &item.Model, &item.AudioAssetID, &item.AudioURL, &item.Status, &item.ErrorMessage, &createTime); err != nil {
 			return PageResult[Generation]{}, err
 		}
+		item.CreateTime = formatTime(createTime)
 		items = append(items, item)
 	}
 	return PageResult[Generation]{Items: items, Total: total}, rows.Err()
@@ -540,6 +560,7 @@ func (s *Store) ListGenerations(ctx context.Context, query url.Values) (PageResu
 
 func (s *Store) ContentJob(ctx context.Context, id string) (ContentJob, error) {
 	var item ContentJob
+	var createTime time.Time
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id::text, title, source_type, COALESCE(source_asset_id::text,''), source_name, source_url,
 		        voice_source, COALESCE(profile_id::text,''), voice_id, voice_name, model, text,
@@ -547,20 +568,29 @@ func (s *Store) ContentJob(ctx context.Context, id string) (ContentJob, error) {
 		   FROM voice_content_jobs
 		  WHERE id=$1`,
 		id,
-	).Scan(&item.ID, &item.Title, &item.SourceType, &item.SourceAssetID, &item.SourceName, &item.SourceURL, &item.VoiceSource, &item.ProfileID, &item.VoiceID, &item.VoiceName, &item.Model, &item.Text, &item.AudioAssetID, &item.AudioURL, &item.Status, &item.ErrorMessage, &item.CreateTime)
-	return item, err
+	).Scan(&item.ID, &item.Title, &item.SourceType, &item.SourceAssetID, &item.SourceName, &item.SourceURL, &item.VoiceSource, &item.ProfileID, &item.VoiceID, &item.VoiceName, &item.Model, &item.Text, &item.AudioAssetID, &item.AudioURL, &item.Status, &item.ErrorMessage, &createTime)
+	if err != nil {
+		return ContentJob{}, err
+	}
+	item.CreateTime = formatTime(createTime)
+	return item, nil
 }
 
 func (s *Store) Generation(ctx context.Context, id string) (Generation, error) {
 	var item Generation
+	var createTime time.Time
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id::text, COALESCE(profile_id::text,''), provider, voice_id, text, model, COALESCE(audio_asset_id::text,''),
 		        audio_url, status, error_message, create_time
 		   FROM voice_generations
 		  WHERE id=$1`,
 		id,
-	).Scan(&item.ID, &item.ProfileID, &item.Provider, &item.VoiceID, &item.Text, &item.Model, &item.AudioAssetID, &item.AudioURL, &item.Status, &item.ErrorMessage, &item.CreateTime)
-	return item, err
+	).Scan(&item.ID, &item.ProfileID, &item.Provider, &item.VoiceID, &item.Text, &item.Model, &item.AudioAssetID, &item.AudioURL, &item.Status, &item.ErrorMessage, &createTime)
+	if err != nil {
+		return Generation{}, err
+	}
+	item.CreateTime = formatTime(createTime)
+	return item, nil
 }
 
 func (s *Store) setProfileStatus(ctx context.Context, id string, status string, lastError string) error {

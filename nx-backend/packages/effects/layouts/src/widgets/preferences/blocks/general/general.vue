@@ -11,7 +11,7 @@ defineOptions({
   name: 'PreferenceGeneralConfig',
 });
 
-const appLocale = defineModel<string>('appLocale');
+defineModel<string>('appLocale');
 const appTimezone = defineModel<string>('appTimezone');
 const appDynamicTitle = defineModel<boolean>('appDynamicTitle');
 const appWatermark = defineModel<boolean>('appWatermark');

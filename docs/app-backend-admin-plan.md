@@ -12,15 +12,15 @@
 
 ## Current Status
 
-当前阶段：Phase 1 - App API 基础与健康检查
-当前任务：未开始；等待实现 `GET /api/app/health` 和 App API 路由分组。
-验收状态：未验收。
+当前阶段：Phase 2 - 手机号登录与 App 用户体系
+当前任务：未开始；等待实现 App 用户表与手机号验证码登录。
+验收状态：Phase 1 已验收。
 阻塞问题：无。
 最后更新时间：2026-06-25
 
 ## Phase Progress
 
-- [ ] Phase 1: App API 基础与健康检查
+- [x] Phase 1: App API 基础与健康检查
 - [ ] Phase 2: 手机号登录与 App 用户体系
 - [ ] Phase 3: 主卡生成与九型画像
 - [ ] Phase 4: 会话与消息落库
@@ -37,6 +37,7 @@
 
 ## Change Log
 
+- 2026-06-25: Phase 1 完成——实现 `GET /api/app/health`、App API 路由分组（`/api/app/**`）、后端集成测试覆盖健康检查与路由前缀隔离。
 - 2026-06-25: 拆分后端/后台与 Flutter App 计划，明确当前 `nine-xing` 项目只承载后端 API、RAG、计费和后台运营能力。
 - 2026-06-25: 增加固定控制区，用于跨会话追踪当前阶段、验收状态、阻塞问题和阶段进度。
 - 2026-06-25: 审查补全缺口——Phase 2 增加 token 刷新与验证码防刷；Phase 3 明确九型题库/算分由后端提供；Phase 4 增加内容安全审核；Phase 7 增加追问建议生成；Phase 8 补全周报与趋势的表和接口；Phase 9 补 App 安装延迟深链归因；Phase 10 补支付下单与回调链路；新增 Phase 12 推送通知、Phase 13 可观测性；Release Gate 增加内容安全与合规验证。

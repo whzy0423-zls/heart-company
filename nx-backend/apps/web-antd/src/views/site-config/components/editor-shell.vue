@@ -19,10 +19,17 @@ const emit = defineEmits<{
   <Page :description="description" :title="title">
     <Card :bordered="false" class="editor-shell-card">
       <template #extra>
-        <Button :disabled="loading" :loading="saving" type="primary" @click="emit('save')">保存配置</Button>
+        <Button
+          :disabled="loading"
+          :loading="saving"
+          type="primary"
+          @click="emit('save')"
+        >
+          保存配置
+        </Button>
       </template>
       <Spin :spinning="loading">
-        <slot />
+        <slot></slot>
       </Spin>
     </Card>
   </Page>

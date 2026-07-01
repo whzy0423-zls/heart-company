@@ -7,14 +7,7 @@ import { computed, onMounted, reactive, shallowRef } from 'vue';
 
 import { useUserStore } from '@vben/stores';
 
-import {
-  Avatar,
-  Button,
-  Form,
-  Input,
-  message,
-  Upload,
-} from 'ant-design-vue';
+import { Avatar, Button, Form, Input, message, Upload } from 'ant-design-vue';
 
 import { getUserInfoApi, updateUserProfileApi, uploadFileApi } from '#/api';
 
@@ -66,9 +59,7 @@ function toProfilePayload(
   };
 }
 
-async function saveProfile(
-  overrides: Partial<UpdateUserProfileParams> = {},
-) {
+async function saveProfile(overrides: Partial<UpdateUserProfileParams> = {}) {
   const data = await updateUserProfileApi(toProfilePayload(overrides));
   fillForm(data);
   userStore.setUserInfo(data);
@@ -91,7 +82,9 @@ async function customRequest(options: UploadRequestOption) {
   }
 }
 
-const displayName = computed(() => form.realName || form.username || '九型用户');
+const displayName = computed(
+  () => form.realName || form.username || '九型用户',
+);
 const avatarText = computed(
   () => form.realName?.slice(0, 1) || form.username?.slice(0, 1) || '九',
 );
@@ -164,7 +157,9 @@ onMounted(loadProfile);
 
       <div class="profile-summary">
         <h2>{{ displayName }}</h2>
-        <p>{{ form.remark || '完善资料后，团队成员能更清楚地识别当前账号。' }}</p>
+        <p>
+          {{ form.remark || '完善资料后，团队成员能更清楚地识别当前账号。' }}
+        </p>
       </div>
 
       <div class="profile-upload">
@@ -175,9 +170,7 @@ onMounted(loadProfile);
           :max-count="1"
           :show-upload-list="false"
         >
-          <Button block :loading="uploading" type="primary">
-            上传头像
-          </Button>
+          <Button block :loading="uploading" type="primary"> 上传头像 </Button>
         </Upload>
       </div>
 
@@ -197,11 +190,7 @@ onMounted(loadProfile);
         </div>
       </div>
 
-      <Form
-        layout="vertical"
-        :model="form"
-        @finish="handleSubmit"
-      >
+      <Form layout="vertical" :model="form" @finish="handleSubmit">
         <div class="profile-form-grid">
           <Form.Item
             label="用户名"
@@ -336,9 +325,9 @@ onMounted(loadProfile);
 .profile-meta dd {
   margin: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 14px;
   color: hsl(var(--foreground));
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

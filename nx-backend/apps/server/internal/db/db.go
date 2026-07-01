@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -78,6 +79,9 @@ func seed(ctx context.Context, database *sql.DB, adminUser, adminPassword string
 	if err := seedMindQuotes(ctx, database); err != nil {
 		return err
 	}
+	if err := seedQuizQuestions(ctx, database); err != nil {
+		return err
+	}
 	return seedAdmin(ctx, database, adminUser, adminPassword)
 }
 
@@ -113,6 +117,7 @@ var defaultMenus = []seedMenu{
 	{ID: 314, PID: 300, Name: "WebsiteMindQuotes", Path: "/website/mind-quotes", Component: "/site-config/mind-quotes", AuthCode: "Website:Write", Type: "menu", Sort: 13, Icon: "lucide:sparkles", Title: "心语管理"},
 	{ID: 500, PID: 0, Name: "CustomerManage", Path: "/customer", Type: "catalog", Sort: 15, Icon: "lucide:contact-round", Title: "客户管理"},
 	{ID: 501, PID: 500, Name: "CustomerSignupLeads", Path: "/customer/signups", Component: "/site-config/signup-leads", AuthCode: "Customer:Signup:List", Type: "menu", Sort: 1, Icon: "lucide:inbox", Title: "报名信息"},
+	{ID: 502, PID: 500, Name: "CustomerAppUsers", Path: "/customer/app-users", Component: "/customer/app-users", AuthCode: "Customer:App:List", Type: "menu", Sort: 2, Icon: "lucide:smartphone", Title: "App 客户"},
 	{ID: 600, PID: 0, Name: "MessageCenter", Path: "/message", Type: "catalog", Sort: 18, Icon: "lucide:bell-ring", Title: "消息中心"},
 	{ID: 601, PID: 600, Name: "MessageManagement", Path: "/message/management", Component: "/message/management", AuthCode: "Message:Manage:List", Type: "menu", Sort: 1, Icon: "lucide:mail-check", Title: "消息管理"},
 	{ID: 700, PID: 0, Name: "VoiceCenter", Path: "/voice", Type: "catalog", Sort: 19, Icon: "lucide:audio-lines", Title: "人声管理"},
@@ -123,6 +128,13 @@ var defaultMenus = []seedMenu{
 	{ID: 801, PID: 800, Name: "RAGKnowledge", Path: "/rag/knowledge", Component: "/rag/knowledge", AuthCode: "RAG:Knowledge:Manage", Type: "menu", Sort: 1, Icon: "lucide:library-big", Title: "知识库管理"},
 	{ID: 900, PID: 0, Name: "ReadingCenter", Path: "/reading", Type: "catalog", Sort: 19, Icon: "lucide:book-open-text", Title: "阅读管理"},
 	{ID: 901, PID: 900, Name: "ReadingArticles", Path: "/reading/articles", Component: "/reading/articles", AuthCode: "Reading:Article:Manage", Type: "menu", Sort: 1, Icon: "lucide:newspaper", Title: "文章管理"},
+	{ID: 1000, PID: 0, Name: "VideoCenter", Path: "/video", Type: "catalog", Sort: 19, Icon: "lucide:clapperboard", Title: "视频生成"},
+	{ID: 1001, PID: 1000, Name: "VideoGenerate", Path: "/video/generate", Component: "/video/generate", AuthCode: "Video:Generate:Manage", Type: "menu", Sort: 1, Icon: "lucide:film", Title: "视频生成"},
+	{ID: 1002, PID: 1000, Name: "VideoAssets", Path: "/video/assets", Component: "/video/assets", AuthCode: "Video:Asset:Manage", Type: "menu", Sort: 2, Icon: "lucide:boxes", Title: "资产库"},
+	{ID: 1003, PID: 1000, Name: "VideoAnalysis", Path: "/video/analysis", Component: "/video/analysis", AuthCode: "Video:Analysis:Manage", Type: "menu", Sort: 3, Icon: "lucide:scan-search", Title: "视频分析"},
+	{ID: 1004, PID: 1000, Name: "VideoStoryboard", Path: "/video/storyboard", Component: "/video/storyboard", AuthCode: "Video:Storyboard:Manage", Type: "menu", Sort: 4, Icon: "lucide:panels-top-left", Title: "分镜设计"},
+	{ID: 1100, PID: 0, Name: "ModelSettings", Path: "/settings", Type: "catalog", Sort: 21, Icon: "lucide:cpu", Title: "模型配置"},
+	{ID: 1101, PID: 1100, Name: "ModelPairing", Path: "/settings/model", Component: "/settings/model", AuthCode: "System:Model:Config", Type: "menu", Sort: 1, Icon: "lucide:plug-zap", Title: "模型配对"},
 	{ID: 400, PID: 0, Name: "SystemManage", Path: "/system", Type: "catalog", Sort: 20, Icon: "lucide:shield-check", Title: "系统管理"},
 	{ID: 401, PID: 400, Name: "SystemUser", Path: "/system/user", Component: "/system/user/list", AuthCode: "System:User:List", Type: "menu", Sort: 1, Icon: "lucide:users", Title: "用户管理"},
 	{ID: 402, PID: 400, Name: "SystemRole", Path: "/system/role", Component: "/system/role/list", AuthCode: "System:Role:List", Type: "menu", Sort: 2, Icon: "lucide:user-cog", Title: "角色管理"},
@@ -179,20 +191,6 @@ func removeDeprecatedMenus(ctx context.Context, database *sql.DB) error {
 }
 
 func seedRoles(ctx context.Context, database *sql.DB) error {
-	var count int
-	if err := database.QueryRowContext(ctx, "SELECT count(*) FROM roles").Scan(&count); err != nil {
-		return err
-	}
-	if count > 0 {
-		_, err := database.ExecContext(ctx,
-			`INSERT INTO role_menus (role_id, menu_id)
-			 SELECT r.id, m.id FROM roles r CROSS JOIN menus m
-			 WHERE r.code='admin'
-			 ON CONFLICT DO NOTHING`,
-		)
-		return err
-	}
-
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -202,12 +200,20 @@ func seedRoles(ctx context.Context, database *sql.DB) error {
 	// 超级管理员：拥有全部菜单。
 	var adminRoleID int64
 	if err := tx.QueryRowContext(ctx,
-		`INSERT INTO roles (code, name, remark, status) VALUES ('admin','超级管理员','拥有全部后台权限',1) RETURNING id`,
+		`INSERT INTO roles (code, name, remark, status)
+		 VALUES ('admin','超级管理员','拥有全部后台权限',1)
+		 ON CONFLICT (code) DO UPDATE
+		   SET name=EXCLUDED.name,
+		       remark=EXCLUDED.remark,
+		       status=1
+		 RETURNING id`,
 	).Scan(&adminRoleID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO role_menus (role_id, menu_id) SELECT $1, id FROM menus`, adminRoleID); err != nil {
+		`INSERT INTO role_menus (role_id, menu_id)
+		 SELECT $1, id FROM menus
+		 ON CONFLICT (role_id, menu_id) DO NOTHING`, adminRoleID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -245,11 +251,47 @@ func seedMindQuotes(ctx context.Context, database *sql.DB) error {
 		}
 	}
 
-	for _, q := range defaultMindQuotes {
+	return tx.Commit()
+}
+
+// quizSeedOption 播种用选项：id 锚定 a/b/c/d，weights 为 typeID->分值。
+type quizSeedOption struct {
+	ID      string      `json:"id"`
+	Text    string      `json:"text"`
+	Weights map[int]int `json:"weights"`
+}
+
+type quizSeedQuestion struct {
+	Body    string
+	Options []quizSeedOption
+}
+
+// seedQuizQuestions 播种九型测评题库（12 道情境题，来源：miniapp enneagramGame.js）。
+// 幂等：仅当 app_quiz_questions 为空时写入。
+func seedQuizQuestions(ctx context.Context, database *sql.DB) error {
+	var count int
+	if err := database.QueryRowContext(ctx, "SELECT count(*) FROM app_quiz_questions").Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for i, q := range defaultQuizQuestions {
+		optsJSON, err := json.Marshal(q.Options)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO mind_quotes (group_id, title, content, prompt, sort, status)
-			 VALUES (NULL, $1, $2, $3, $4, 'enabled')`,
-			q.Title, q.Content, q.Prompt, q.Sort); err != nil {
+			`INSERT INTO app_quiz_questions (sort, body, options, dimension, status)
+			 VALUES ($1, $2, $3, '', 'enabled')`,
+			(i+1)*10, q.Body, optsJSON); err != nil {
 			return err
 		}
 	}
@@ -264,18 +306,12 @@ func seedAdmin(ctx context.Context, database *sql.DB, adminUser, adminPassword s
 		adminPassword = "123456"
 	}
 
-	var exists bool
+	var userID int64
 	if err := database.QueryRowContext(ctx,
-		"SELECT EXISTS(SELECT 1 FROM users WHERE username=$1)", adminUser).Scan(&exists); err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-
-	hash, err := bcrypt.GenerateFromPassword([]byte(adminPassword), bcrypt.DefaultCost)
-	if err != nil {
-		return err
+		"SELECT id FROM users WHERE username=$1", adminUser).Scan(&userID); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
 	}
 
 	tx, err := database.BeginTx(ctx, nil)
@@ -284,12 +320,17 @@ func seedAdmin(ctx context.Context, database *sql.DB, adminUser, adminPassword s
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var userID int64
-	if err := tx.QueryRowContext(ctx,
-		`INSERT INTO users (username, password_hash, nickname, status) VALUES ($1,$2,'超级管理员',1) RETURNING id`,
-		adminUser, string(hash),
-	).Scan(&userID); err != nil {
-		return err
+	if userID == 0 {
+		hash, err := bcrypt.GenerateFromPassword([]byte(adminPassword), bcrypt.DefaultCost)
+		if err != nil {
+			return err
+		}
+		if err := tx.QueryRowContext(ctx,
+			`INSERT INTO users (username, password_hash, nickname, status) VALUES ($1,$2,'超级管理员',1) RETURNING id`,
+			adminUser, string(hash),
+		).Scan(&userID); err != nil {
+			return err
+		}
 	}
 
 	var adminRoleID int64
@@ -299,7 +340,7 @@ func seedAdmin(ctx context.Context, database *sql.DB, adminUser, adminPassword s
 	}
 	if adminRoleID != 0 {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO user_roles (user_id, role_id) VALUES ($1,$2)`, userID, adminRoleID); err != nil {
+			`INSERT INTO user_roles (user_id, role_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, userID, adminRoleID); err != nil {
 			return err
 		}
 	}

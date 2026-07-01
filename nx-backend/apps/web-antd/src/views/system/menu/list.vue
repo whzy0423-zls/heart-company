@@ -63,6 +63,10 @@ const columns = [
   { key: 'action', title: '操作', width: 160 },
 ];
 
+function menuRecord(record: Record<string, any>): SystemMenu {
+  return record as SystemMenu;
+}
+
 // 父级可选项：目录/菜单都可作父级，扁平化展开。
 const parentOptions = computed(() => {
   const options: { label: string; value: number }[] = [
@@ -189,10 +193,17 @@ onMounted(load);
         </template>
         <template v-if="column.key === 'action'">
           <Space>
-            <Button size="small" type="link" @click="openEdit(record)">
+            <Button
+              size="small"
+              type="link"
+              @click="openEdit(menuRecord(record))"
+            >
               编辑
             </Button>
-            <Popconfirm title="确认删除该菜单及其子菜单？" @confirm="remove(record)">
+            <Popconfirm
+              title="确认删除该菜单及其子菜单？"
+              @confirm="remove(menuRecord(record))"
+            >
               <Button danger size="small" type="link">删除</Button>
             </Popconfirm>
           </Space>

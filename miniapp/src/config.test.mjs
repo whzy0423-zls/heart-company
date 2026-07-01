@@ -13,9 +13,19 @@ assert.equal(
   'http://localhost:8080/api',
 )
 
-assert.equal(
-  resolveApiBase({ env: { DEV: false, VITE_API_BASE: '' } }),
-  'https://api.example.com/api',
+assert.throws(
+  () => resolveApiBase({ env: { DEV: false, VITE_API_BASE: '' } }),
+  /Production VITE_API_BASE is required/,
+)
+
+assert.throws(
+  () => resolveApiBase({ env: { DEV: false, VITE_API_BASE: 'https://api.example.com/api' } }),
+  /real HTTPS API URL/,
+)
+
+assert.throws(
+  () => resolveApiBase({ env: { DEV: false, VITE_API_BASE: 'http://api.nine-xing.com/api' } }),
+  /real HTTPS API URL/,
 )
 
 assert.equal(

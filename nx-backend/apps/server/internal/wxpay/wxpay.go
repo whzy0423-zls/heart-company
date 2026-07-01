@@ -1,6 +1,5 @@
 // Package wxpay 封装微信支付 v3（JSAPI）服务端能力：下单、生成小程序拉起参数、回调验签解密。
-// 未配齐商户参数（商户号/证书/APIv3 密钥）或显式 WXPAY_DEV=true 时启用 dev 回退：
-// 下单返回伪 prepay_id，可由「模拟回调」接口直接置为支付成功，便于无真实商户号时本地联调全闭环。
+// 只有显式 WXPAY_DEV=true 时才启用 dev 回退；生产配置不完整必须失败。
 package wxpay
 
 import (
@@ -54,7 +53,7 @@ type CallbackResult struct {
 }
 
 func NewClient(cfg Config) (*Client, error) {
-	devMode := cfg.Dev || cfg.MchID == "" || cfg.APIv3Key == "" || cfg.PrivateKeyPath == "" || cfg.SerialNo == ""
+	devMode := cfg.Dev
 	c := &Client{
 		cfg:     cfg,
 		http:    &http.Client{Timeout: 12 * time.Second},
@@ -62,6 +61,9 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	if devMode {
 		return c, nil
+	}
+	if cfg.MchID == "" || cfg.AppID == "" || cfg.APIv3Key == "" || cfg.PrivateKeyPath == "" || cfg.SerialNo == "" || cfg.NotifyURL == "" {
+		return nil, errors.New("wxpay production config is incomplete")
 	}
 	key, err := loadPrivateKey(cfg.PrivateKeyPath)
 	if err != nil {

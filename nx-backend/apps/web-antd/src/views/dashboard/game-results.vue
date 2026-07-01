@@ -6,6 +6,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Page } from '@vben/common-ui';
 import { IconifyIcon } from '@vben/icons';
 
+import { Button, Card, Col, message, Row, Table, Tag } from 'ant-design-vue';
 import { BarChart, PieChart } from 'echarts/charts';
 import {
   GridComponent,
@@ -14,8 +15,6 @@ import {
 } from 'echarts/components';
 import * as echarts from 'echarts/core';
 import { CanvasRenderer } from 'echarts/renderers';
-
-import { Button, Card, Col, Row, Table, Tag, message } from 'ant-design-vue';
 
 import { getGameOverviewApi } from '#/api';
 
@@ -56,7 +55,9 @@ const topType = computed(() => maxItem(overview.value.typeItems));
 const topCenter = computed(() => maxItem(overview.value.centerItems));
 const maleCount = computed(() => genderValue('male'));
 const femaleCount = computed(() => genderValue('female'));
-const typeRows = computed(() => normalizeTypeGenderItems(overview.value.typeGenderItems));
+const typeRows = computed(() =>
+  normalizeTypeGenderItems(overview.value.typeGenderItems),
+);
 
 const statCards = computed(() => [
   {
@@ -104,7 +105,7 @@ async function loadOverview() {
   loading.value = true;
   try {
     overview.value = await getGameOverviewApi();
-  } catch (error) {
+  } catch {
     message.error('小游戏统计加载失败，请稍后重试');
   } finally {
     loading.value = false;
@@ -223,12 +224,19 @@ function genderLabel(value?: string) {
 }
 
 function genderValue(value: string) {
-  return overview.value.genderItems.find((item) => item.name === value)?.value ?? 0;
+  return (
+    overview.value.genderItems.find((item) => item.name === value)?.value ?? 0
+  );
 }
 
 function maxItem(items: GameNameValue[]) {
-  if (items.length === 0) return undefined;
-  return items.reduce((best, item) => (item.value > best.value ? item : best), items[0]);
+  let best: GameNameValue = { name: '', value: 0 };
+  for (const item of items) {
+    if (item.value > best.value) {
+      best = item;
+    }
+  }
+  return best;
 }
 
 function handleResize() {
@@ -259,7 +267,9 @@ onBeforeUnmount(() => {
     title="小游戏统计"
   >
     <div class="game-actions">
-      <Button :loading="loading" type="primary" @click="loadOverview">刷新</Button>
+      <Button :loading="loading" type="primary" @click="loadOverview">
+        刷新
+      </Button>
     </div>
 
     <div class="metrics-grid">
@@ -338,15 +348,15 @@ onBeforeUnmount(() => {
 
 .metrics-grid {
   display: grid;
-  gap: 16px;
   grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 16px;
 }
 
 .metric-card {
   display: flex;
-  min-height: 76px;
   gap: 16px;
   align-items: center;
+  min-height: 76px;
 }
 
 .metric-panel :deep(.ant-card-body) {
@@ -372,19 +382,19 @@ onBeforeUnmount(() => {
 .metric-label {
   margin-bottom: 6px;
   overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 13px;
   color: hsl(var(--muted-foreground));
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .metric-value {
   overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 24px;
   font-weight: 600;
   line-height: 1.1;
   color: hsl(var(--foreground));
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

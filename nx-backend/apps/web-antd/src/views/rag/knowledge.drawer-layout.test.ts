@@ -8,7 +8,7 @@ const source = readFileSync(
   'utf8',
 );
 
-describe('RAG knowledge drawer layout', () => {
+describe('rag knowledge drawer layout', () => {
   it('keeps submit actions in the drawer footer', () => {
     expect(source).toContain('<template #footer>');
     expect(source).toContain('class="drawer-footer"');

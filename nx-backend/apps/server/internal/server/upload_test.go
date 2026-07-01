@@ -35,7 +35,7 @@ func TestUploadRequiresAuth(t *testing.T) {
 	}
 }
 
-func TestUploadStoresMultipartFile(t *testing.T) {
+func TestUploadRejectsTokenWhenUserCannotBeRevalidated(t *testing.T) {
 	uploader := &recordingUploader{
 		result: storage.UploadResult{
 			Key:         "uploads/site/logo.png",
@@ -65,31 +65,11 @@ func TestUploadStoresMultipartFile(t *testing.T) {
 
 	handler.ServeHTTP(response, request)
 
-	if response.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", response.Code, response.Body.String())
 	}
-	if uploader.dir != "site" {
-		t.Fatalf("expected dir site, got %q", uploader.dir)
-	}
-	if uploader.name != "logo.png" || uploader.contentType != "image/png" || string(uploader.content) != "image" {
-		t.Fatalf("unexpected uploaded file: name=%q contentType=%q content=%q", uploader.name, uploader.contentType, uploader.content)
-	}
-
-	var payload struct {
-		Code int `json:"code"`
-		Data struct {
-			ContentType string `json:"contentType"`
-			Key         string `json:"key"`
-			Name        string `json:"name"`
-			Size        int64  `json:"size"`
-			URL         string `json:"url"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.Code != 0 || payload.Data.URL != uploader.result.URL || payload.Data.Key != uploader.result.Key {
-		t.Fatalf("unexpected response: %+v", payload)
+	if uploader.name != "" {
+		t.Fatalf("upload should not run when token user cannot be revalidated, got %q", uploader.name)
 	}
 }
 
@@ -156,6 +136,15 @@ func TestUploadStoresFileInDatabaseWhenDBAvailable(t *testing.T) {
 	assetResponse := httptest.NewRecorder()
 	handler.ServeHTTP(assetResponse, assetRequest)
 
+	if assetResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthenticated asset request to be rejected, got %d body=%s", assetResponse.Code, assetResponse.Body.String())
+	}
+
+	assetRequest = httptest.NewRequest(http.MethodGet, "/api/"+payload.Data.AssetKey, nil)
+	assetRequest.Header.Set("Authorization", "Bearer "+token)
+	assetResponse = httptest.NewRecorder()
+	handler.ServeHTTP(assetResponse, assetRequest)
+
 	if assetResponse.Code != http.StatusOK {
 		t.Fatalf("expected asset 200, got %d body=%s", assetResponse.Code, assetResponse.Body.String())
 	}
@@ -165,6 +154,21 @@ func TestUploadStoresFileInDatabaseWhenDBAvailable(t *testing.T) {
 	if assetResponse.Body.String() != "image" {
 		t.Fatalf("expected image bytes, got %q", assetResponse.Body.String())
 	}
+
+	assetRequest = httptest.NewRequest(http.MethodGet, "/api/"+payload.Data.AssetKey+"?token="+token, nil)
+	assetResponse = httptest.NewRecorder()
+	handler.ServeHTTP(assetResponse, assetRequest)
+
+	if assetResponse.Code != http.StatusOK {
+		t.Fatalf("expected query-token asset 200, got %d body=%s", assetResponse.Code, assetResponse.Body.String())
+	}
+
+	queryTokenRequest := httptest.NewRequest(http.MethodGet, "/api/user/info?token="+token, nil)
+	queryTokenResponse := httptest.NewRecorder()
+	handler.ServeHTTP(queryTokenResponse, queryTokenRequest)
+	if queryTokenResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("expected query token to be rejected outside upload asset preview, got %d body=%s", queryTokenResponse.Code, queryTokenResponse.Body.String())
+	}
 }
 
 func TestUploadRejectsOversizedFiles(t *testing.T) {
@@ -173,19 +177,17 @@ func TestUploadRejectsOversizedFiles(t *testing.T) {
 		ObjectUploader: &recordingUploader{},
 		UploadMaxBytes: 4,
 	}
-	handler := New(env, nil)
-	token, err := auth.Sign(auth.UserInfo{ID: 1, Username: "admin"}, env.JWTSecret)
-	if err != nil {
-		t.Fatal(err)
+	s := &Server{
+		env:      env,
+		uploader: env.ObjectUploader,
 	}
 
 	body, contentType := multipartBody(t, "file", "logo.png", "image/png", "image")
 	request := httptest.NewRequest(http.MethodPost, "/api/upload", body)
-	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Content-Type", contentType)
 	response := httptest.NewRecorder()
 
-	handler.ServeHTTP(response, request)
+	s.upload(response, request)
 
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413, got %d body=%s", response.Code, response.Body.String())

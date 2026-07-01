@@ -12,12 +12,12 @@ import {
   Form,
   Input,
   InputNumber,
+  message,
   Modal,
   Select,
   Space,
   Table,
   Tag,
-  message,
 } from 'ant-design-vue';
 
 import {
@@ -189,7 +189,10 @@ function search() {
   load();
 }
 
-function handleTableChange(pagination: { current?: number; pageSize?: number }) {
+function handleTableChange(pagination: {
+  current?: number;
+  pageSize?: number;
+}) {
   query.page = pagination.current ?? 1;
   query.pageSize = pagination.pageSize ?? 20;
   load();
@@ -264,13 +267,26 @@ onMounted(load);
           </template>
           <template v-else-if="column.key === 'action'">
             <Space :size="4">
-              <Button size="small" type="link" @click="openEdit(asRAGDocument(record))">
+              <Button
+                size="small"
+                type="link"
+                @click="openEdit(asRAGDocument(record))"
+              >
                 编辑
               </Button>
-              <Button size="small" type="link" @click="toggleStatus(asRAGDocument(record))">
+              <Button
+                size="small"
+                type="link"
+                @click="toggleStatus(asRAGDocument(record))"
+              >
                 {{ record.status === 'enabled' ? '停用' : '启用' }}
               </Button>
-              <Button danger size="small" type="link" @click="removeDocument(asRAGDocument(record))">
+              <Button
+                danger
+                size="small"
+                type="link"
+                @click="removeDocument(asRAGDocument(record))"
+              >
                 删除
               </Button>
             </Space>
@@ -287,7 +303,10 @@ onMounted(load);
     >
       <Form layout="vertical">
         <Form.Item label="标题" required>
-          <Input v-model:value="form.title" placeholder="例如：企业沟通课适用场景" />
+          <Input
+            v-model:value="form.title"
+            placeholder="例如：企业沟通课适用场景"
+          />
         </Form.Item>
         <Form.Item label="知识内容" required>
           <Input.TextArea
@@ -312,7 +331,11 @@ onMounted(load);
             />
           </Form.Item>
           <Form.Item label="排序">
-            <InputNumber v-model:value="form.sort" :min="0" class="sort-input" />
+            <InputNumber
+              v-model:value="form.sort"
+              :min="0"
+              class="sort-input"
+            />
           </Form.Item>
         </Space>
       </Form>
@@ -346,8 +369,8 @@ onMounted(load);
 
 .card-desc {
   margin-top: 4px;
-  color: #667085;
   font-size: 13px;
+  color: #667085;
 }
 
 .keyword-input {
@@ -366,10 +389,10 @@ onMounted(load);
 .content-preview {
   display: -webkit-box;
   overflow: hidden;
-  color: #344054;
-  -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  color: #344054;
   white-space: normal;
+  -webkit-box-orient: vertical;
 }
 
 .knowledge-drawer :deep(.ant-drawer-footer) {

@@ -22,22 +22,16 @@ const miniappRole = "miniapp"
 // requireMiniapp 校验小程序 JWT（角色含 miniapp），并把 wx_user_id 放入上下文。
 func (s *Server) requireMiniapp(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		user, ok := s.authorize(w, r)
-		if !ok {
+		tokenUser, err := auth.BearerUserWithKind(r.Header.Get("Authorization"), s.env.JWTSecret, auth.TokenKindMiniapp)
+		if err != nil {
+			httpx.Fail(w, http.StatusUnauthorized, "Unauthorized Exception")
 			return
 		}
-		isMini := false
-		for _, role := range user.Roles {
-			if role == miniappRole {
-				isMini = true
-				break
-			}
-		}
-		if !isMini || user.ID <= 0 {
+		if tokenUser.ID <= 0 {
 			httpx.Fail(w, http.StatusForbidden, "Forbidden")
 			return
 		}
-		next(w, r.WithContext(withUser(r.Context(), user)))
+		next(w, r.WithContext(withUser(r.Context(), tokenUser)))
 	}
 }
 
@@ -69,13 +63,14 @@ func (s *Server) wxLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token, err := auth.Sign(auth.UserInfo{
-		ID:       uid,
-		UserID:   strconv.FormatInt(uid, 10),
-		Username: sess.OpenID,
-		RealName: user.Nickname,
-		Avatar:   user.Avatar,
-		Roles:    []string{miniappRole},
-		HomePath: "/pages/index/index",
+		ID:        uid,
+		UserID:    strconv.FormatInt(uid, 10),
+		Username:  sess.OpenID,
+		RealName:  user.Nickname,
+		Avatar:    user.Avatar,
+		Roles:     []string{miniappRole},
+		TokenKind: auth.TokenKindMiniapp,
+		HomePath:  "/pages/index/index",
 	}, s.env.JWTSecret)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
@@ -217,7 +212,7 @@ func (s *Server) miniappChat(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	service := rag.NewService(docs, rag.WithGenerator(s.ragGen))
+	service := rag.NewService(docs, rag.WithGenerator(s.generator()))
 	answer, err := service.Ask(ctx, rag.AskInput{
 		History:  body.History,
 		Question: body.Question,

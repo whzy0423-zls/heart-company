@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { UploadChangeParam } from 'ant-design-vue';
+
 import type { VoiceProfile } from '#/api';
 
 import { computed, onMounted, reactive, ref } from 'vue';
@@ -13,6 +14,7 @@ import {
   Col,
   Form,
   Input,
+  message,
   Modal,
   Row,
   Select,
@@ -20,7 +22,6 @@ import {
   Table,
   Tag,
   Upload,
-  message,
 } from 'ant-design-vue';
 
 import {
@@ -171,6 +172,10 @@ async function retryClone(record: VoiceProfile) {
   }
 }
 
+function profileRecord(record: Record<string, any>): VoiceProfile {
+  return record as VoiceProfile;
+}
+
 function removeProfile(record: VoiceProfile) {
   Modal.confirm({
     content: `确认删除「${record.name}」吗？`,
@@ -199,7 +204,10 @@ function search() {
   load();
 }
 
-function handleTableChange(pagination: { current?: number; pageSize?: number }) {
+function handleTableChange(pagination: {
+  current?: number;
+  pageSize?: number;
+}) {
   query.page = pagination.current ?? 1;
   query.pageSize = pagination.pageSize ?? 20;
   load();
@@ -234,7 +242,10 @@ onMounted(load);
           <div class="card-title">新增人声</div>
           <Form layout="vertical">
             <Form.Item label="人声名称" required>
-              <Input v-model:value="form.name" placeholder="例如：课程老师女声" />
+              <Input
+                v-model:value="form.name"
+                placeholder="例如：课程老师女声"
+              />
             </Form.Item>
             <Form.Item label="Voice ID">
               <Input
@@ -256,7 +267,7 @@ onMounted(load);
               </Upload>
               <div v-if="uploadedAudioUrl" class="audio-preview">
                 <div class="audio-name">{{ uploadedAudioName }}</div>
-                <audio :src="uploadedAudioUrl" controls />
+                <audio :src="uploadedAudioUrl" controls></audio>
               </div>
             </Form.Item>
             <Form.Item label="备注">
@@ -267,11 +278,7 @@ onMounted(load);
               />
             </Form.Item>
             <Space>
-              <Button
-                :loading="saving"
-                type="primary"
-                @click="submit"
-              >
+              <Button :loading="saving" type="primary" @click="submit">
                 保存并克隆
               </Button>
               <Button @click="resetForm">重置</Button>
@@ -285,7 +292,9 @@ onMounted(load);
           <div class="table-head">
             <div>
               <div class="card-title">人声列表</div>
-              <div class="card-desc">共 {{ total }} 个音色，状态为可使用后可去声音测试。</div>
+              <div class="card-desc">
+                共 {{ total }} 个音色，状态为可使用后可去声音测试。
+              </div>
             </div>
             <Space wrap>
               <Select
@@ -334,7 +343,7 @@ onMounted(load);
                   :src="record.sampleUrl"
                   class="row-audio"
                   controls
-                />
+                ></audio>
                 <span v-else>-</span>
               </template>
               <template v-else-if="column.key === 'action'">
@@ -343,11 +352,16 @@ onMounted(load);
                     :loading="saving"
                     size="small"
                     type="link"
-                    @click="retryClone(record)"
+                    @click="retryClone(profileRecord(record))"
                   >
                     重新克隆
                   </Button>
-                  <Button danger size="small" type="link" @click="removeProfile(record)">
+                  <Button
+                    danger
+                    size="small"
+                    type="link"
+                    @click="removeProfile(profileRecord(record))"
+                  >
                     删除
                   </Button>
                 </Space>
@@ -372,8 +386,8 @@ onMounted(load);
 
 .card-desc {
   margin-top: 4px;
-  color: #667085;
   font-size: 13px;
+  color: #667085;
 }
 
 .table-head {
@@ -402,8 +416,8 @@ onMounted(load);
 
 .audio-name {
   margin-bottom: 8px;
-  color: #344054;
   font-size: 13px;
+  color: #344054;
 }
 
 .audio-preview audio,
@@ -416,8 +430,8 @@ onMounted(load);
 .error-text {
   max-width: 260px;
   margin-top: 6px;
-  color: #cf1322;
   font-size: 12px;
+  color: #cf1322;
   white-space: normal;
 }
 

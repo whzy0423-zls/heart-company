@@ -48,7 +48,9 @@ export interface SystemMenu {
 }
 
 export function getSystemUserListApi(params?: Record<string, any>) {
-  return requestClient.get<SystemPageResult<SystemUser>>('/system/user/list', { params });
+  return requestClient.get<SystemPageResult<SystemUser>>('/system/user/list', {
+    params,
+  });
 }
 
 export function saveSystemUserApi(data: SystemUser) {
@@ -60,7 +62,9 @@ export function deleteSystemUserApi(id: string) {
 }
 
 export function getSystemRoleListApi(params?: Record<string, any>) {
-  return requestClient.get<SystemPageResult<SystemRole>>('/system/role/list', { params });
+  return requestClient.get<SystemPageResult<SystemRole>>('/system/role/list', {
+    params,
+  });
 }
 
 export function saveSystemRoleApi(data: SystemRole) {

@@ -7,9 +7,6 @@ import { Button, Image, Input, message, Upload } from 'ant-design-vue';
 
 import { uploadFileApi } from '#/api';
 
-const value = defineModel<string>('value', { default: '' });
-const uploading = ref(false);
-
 const props = withDefaults(
   defineProps<{
     dir?: string;
@@ -28,6 +25,8 @@ const props = withDefaults(
     variant: 'image',
   },
 );
+const value = defineModel<string>('value', { default: '' });
+const uploading = ref(false);
 
 async function customRequest(options: UploadRequestOption) {
   const file = options.file as File;
@@ -46,7 +45,10 @@ async function customRequest(options: UploadRequestOption) {
 </script>
 
 <template>
-  <div class="image-uploader" :class="{ 'image-uploader--compact': props.variant === 'input' }">
+  <div
+    class="image-uploader"
+    :class="{ 'image-uploader--compact': props.variant === 'input' }"
+  >
     <Upload
       accept="image/*"
       :custom-request="customRequest"
@@ -80,7 +82,9 @@ async function customRequest(options: UploadRequestOption) {
         :max-count="1"
         :show-upload-list="false"
       >
-        <Button :loading="uploading" type="primary">{{ props.uploadText }}</Button>
+        <Button :loading="uploading" type="primary">
+          {{ props.uploadText }}
+        </Button>
       </Upload>
       <Button :disabled="uploading || !value" @click="value = ''">清除</Button>
       <Input
@@ -107,10 +111,10 @@ async function customRequest(options: UploadRequestOption) {
   width: 112px;
   height: 112px;
   overflow: hidden;
+  cursor: pointer;
   background: hsl(var(--accent) / 38%);
   border: 1px dashed hsl(var(--border));
   border-radius: 8px;
-  cursor: pointer;
   transition:
     border-color 0.2s ease,
     background-color 0.2s ease,
@@ -153,8 +157,8 @@ async function customRequest(options: UploadRequestOption) {
 
 @media (max-width: 640px) {
   .image-uploader {
-    align-items: flex-start;
     flex-direction: column;
+    align-items: flex-start;
   }
 }
 </style>

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -138,6 +139,37 @@ func TestVbenCompatibleAPI(t *testing.T) {
 		}
 	})
 
+	t.Run("forbids backend api without matching permission", func(t *testing.T) {
+		token := lowPermissionToken(t, handler)
+		response := perform(handler, http.MethodGet, "/api/system/user/list", token, nil)
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 for missing System:User:List permission, got %d body=%s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("forbids site config read without website permission", func(t *testing.T) {
+		token := lowPermissionToken(t, handler)
+		response := perform(handler, http.MethodGet, "/api/site-config", token, nil)
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 for missing Website:Read permission, got %d body=%s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("forbids site config update without website write permission", func(t *testing.T) {
+		token := lowPermissionToken(t, handler)
+		var config map[string]any
+		raw, _ := os.ReadFile(configPath)
+		if err := json.Unmarshal(raw, &config); err != nil {
+			t.Fatal(err)
+		}
+		config["site"].(map[string]any)["brandName"] = "低权限写入"
+
+		response := perform(handler, http.MethodPut, "/api/site-config", token, config)
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 for missing Website:Write permission, got %d body=%s", response.Code, response.Body.String())
+		}
+	})
+
 	t.Run("stores public signup submissions and lists them in admin", func(t *testing.T) {
 		create := perform(handler, http.MethodPost, "/api/public/signups", "", map[string]any{
 			"contact":  "13800000000",
@@ -161,6 +193,78 @@ func TestVbenCompatibleAPI(t *testing.T) {
 			t.Fatalf("expected at least one signup, got %+v", data)
 		}
 	})
+
+	t.Run("model config includes video analysis model", func(t *testing.T) {
+		token := loginToken(t, handler)
+		response := perform(handler, http.MethodGet, "/api/model-config", token, nil)
+		body := decodeBody(t, response)
+		if response.Code != http.StatusOK || body.Code != 0 {
+			t.Fatalf("expected model config success, got status=%d body=%+v", response.Code, body)
+		}
+		data := body.Data.(map[string]any)
+		if _, ok := data["analysis"].(map[string]any); !ok {
+			t.Fatalf("expected analysis model config in response, got %+v", data)
+		}
+	})
+}
+
+func lowPermissionToken(t *testing.T, handler http.Handler) string {
+	t.Helper()
+	adminToken := loginToken(t, handler)
+	suffix := time.Now().UnixNano()
+	roleCode := "low_permission"
+	username := "lowperm"
+
+	createRole := perform(handler, http.MethodPost, "/api/system/role", adminToken, map[string]any{
+		"code":    roleCode,
+		"menuIds": []int{200},
+		"name":    "低权限角色",
+		"remark":  "测试",
+		"status":  1,
+	})
+	if createRole.Code != http.StatusOK {
+		t.Fatalf("create low permission role failed: %d %s", createRole.Code, createRole.Body.String())
+	}
+	roleBody := decodeBody(t, createRole)
+	roleData, _ := roleBody.Data.(map[string]any)
+	roleID := roleData["id"]
+	if roleID == nil {
+		t.Fatalf("missing role id in response: %+v", roleBody.Data)
+	}
+
+	password := "123456"
+	createUser := perform(handler, http.MethodPost, "/api/system/user", adminToken, map[string]any{
+		"email":    "lowperm@example.com",
+		"nickname": "低权限用户",
+		"password": password,
+		"roleIds":  []any{roleID},
+		"status":   1,
+		"username": fmt.Sprintf("%s_%d", username, suffix),
+	})
+	if createUser.Code != http.StatusOK {
+		t.Fatalf("create low permission user failed: %d %s", createUser.Code, createUser.Body.String())
+	}
+	userBody := decodeBody(t, createUser)
+	userData, _ := userBody.Data.(map[string]any)
+	createdUsername, _ := userData["username"].(string)
+	if createdUsername == "" {
+		t.Fatalf("missing username in response: %+v", userBody.Data)
+	}
+
+	response := perform(handler, http.MethodPost, "/api/auth/login", "", map[string]string{
+		"password": password,
+		"username": createdUsername,
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("low permission login failed: %d %s", response.Code, response.Body.String())
+	}
+	body := decodeBody(t, response)
+	data := body.Data.(map[string]any)
+	token, _ := data["accessToken"].(string)
+	if token == "" {
+		t.Fatal("missing low permission token")
+	}
+	return token
 }
 
 type vbenBody struct {
@@ -196,6 +300,8 @@ func newTestServer(t *testing.T) (http.Handler, string) {
 	env := config.Env{
 		AdminPassword: "123456",
 		AdminUsername: "admin",
+		AppEnv:        "test",
+		AppVersion:    "0.0.1-test",
 		JWTSecret:     "test-secret",
 		Port:          5320,
 		SiteConfig:    configPath,

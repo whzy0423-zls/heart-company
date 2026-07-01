@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
@@ -15,8 +16,9 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/wxpay"
 )
 
-// mustWxPayClient 用 env 构造支付客户端；配置不全时自动 dev 回退，构造不报错。
+// mustWxPayClient 用 env 构造支付客户端；生产配置不全时启动失败，避免误入模拟支付。
 func mustWxPayClient(env config.Env) *wxpay.Client {
+	wxpayDev := env.WxPay.Dev || (env.AppEnv != "production" && !wxPayConfigComplete(env.WxPay))
 	client, err := wxpay.NewClient(wxpay.Config{
 		MchID:          env.WxPay.MchID,
 		AppID:          env.WxPay.AppID,
@@ -24,14 +26,21 @@ func mustWxPayClient(env config.Env) *wxpay.Client {
 		SerialNo:       env.WxPay.SerialNo,
 		PrivateKeyPath: env.WxPay.PrivateKeyPath,
 		NotifyURL:      env.WxPay.NotifyURL,
-		Dev:            env.WxPay.Dev,
+		Dev:            wxpayDev,
 	})
 	if err != nil {
-		// 证书加载失败也不阻断启动，退化为 dev 模拟支付。
-		fallback, _ := wxpay.NewClient(wxpay.Config{Dev: true})
-		return fallback
+		panic("wxpay init: " + err.Error())
 	}
 	return client
+}
+
+func wxPayConfigComplete(cfg config.WxPayConfig) bool {
+	return strings.TrimSpace(cfg.MchID) != "" &&
+		strings.TrimSpace(cfg.AppID) != "" &&
+		strings.TrimSpace(cfg.APIv3Key) != "" &&
+		strings.TrimSpace(cfg.SerialNo) != "" &&
+		strings.TrimSpace(cfg.PrivateKeyPath) != "" &&
+		strings.TrimSpace(cfg.NotifyURL) != ""
 }
 
 // reportOrderRequest 下单请求：解锁某条测试记录的深度报告。
@@ -182,7 +191,7 @@ func (s *Server) reportContent(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	service := rag.NewService(docs, rag.WithGenerator(s.ragGen))
+	service := rag.NewService(docs, rag.WithGenerator(s.generator()))
 	answer, err := service.Ask(ctx, rag.AskInput{
 		Question: question,
 		UserProfile: rag.UserProfile{

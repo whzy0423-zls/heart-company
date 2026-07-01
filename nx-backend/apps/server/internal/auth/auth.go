@@ -11,17 +11,24 @@ import (
 )
 
 type UserInfo struct {
-	Avatar   string   `json:"avatar"`
-	Email    string   `json:"email,omitempty"`
-	HomePath string   `json:"homePath"`
-	ID       int64    `json:"id"`
-	Phone    string   `json:"phone,omitempty"`
-	RealName string   `json:"realName"`
-	Remark   string   `json:"remark,omitempty"`
-	Roles    []string `json:"roles"`
-	UserID   string   `json:"userId"`
-	Username string   `json:"username"`
+	Avatar    string   `json:"avatar"`
+	Email     string   `json:"email,omitempty"`
+	HomePath  string   `json:"homePath"`
+	ID        int64    `json:"id"`
+	Phone     string   `json:"phone,omitempty"`
+	RealName  string   `json:"realName"`
+	Remark    string   `json:"remark,omitempty"`
+	Roles     []string `json:"roles"`
+	TokenKind string   `json:"tokenKind,omitempty"`
+	UserID    string   `json:"userId"`
+	Username  string   `json:"username"`
 }
+
+const (
+	TokenKindBackend = "backend"
+	TokenKindApp     = "app"
+	TokenKindMiniapp = "miniapp"
+)
 
 type tokenPayload struct {
 	UserInfo
@@ -77,6 +84,45 @@ func BearerUser(authorization string, secret string) (UserInfo, error) {
 		return UserInfo{}, errors.New("invalid bearer token")
 	}
 	return user, nil
+}
+
+func BearerUserWithKind(authorization string, secret string, allowed ...string) (UserInfo, error) {
+	user, err := BearerUser(authorization, secret)
+	if err != nil {
+		return UserInfo{}, err
+	}
+	if len(allowed) == 0 {
+		return user, nil
+	}
+	for _, kind := range allowed {
+		if user.TokenKind == kind {
+			return user, nil
+		}
+		// Tokens issued before tokenKind existed were backend-admin tokens.
+		if user.TokenKind == "" && kind == TokenKindBackend {
+			for _, role := range user.Roles {
+				if role == TokenKindMiniapp || role == TokenKindApp {
+					return UserInfo{}, errors.New("invalid token kind")
+				}
+			}
+			return user, nil
+		}
+	}
+	return UserInfo{}, errors.New("invalid token kind")
+}
+
+func SignWithExpiry(user UserInfo, secret string, dur time.Duration) (string, error) {
+	payload := tokenPayload{
+		UserInfo:  user,
+		ExpiresAt: time.Now().Add(dur).Unix(),
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	bodyEncoded := base64.RawURLEncoding.EncodeToString(body)
+	signature := sign(bodyEncoded, secret)
+	return bodyEncoded + "." + signature, nil
 }
 
 func sign(body string, secret string) string {

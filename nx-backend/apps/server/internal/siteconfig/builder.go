@@ -13,7 +13,7 @@ type BuildState string
 
 const (
 	BuildIdle     BuildState = "idle"
-	BuildPending  BuildState = "pending"  // 已排队，等待空闲槽位
+	BuildPending  BuildState = "pending" // 已排队，等待空闲槽位
 	BuildRunning  BuildState = "building"
 	BuildSuccess  BuildState = "success"
 	BuildFailed   BuildState = "failed"
@@ -63,6 +63,13 @@ func NewBuilder(script, workDir string, timeout time.Duration) *Builder {
 		timeout: timeout,
 		status:  BuildStatus{State: state, Message: msg},
 	}
+}
+
+func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format("2006/01/02 15:04:05")
 }
 
 // Status 返回当前构建状态快照。
@@ -116,7 +123,7 @@ func (b *Builder) runOnce() {
 	b.mu.Lock()
 	b.status = BuildStatus{
 		State:     BuildRunning,
-		StartedAt: start.Format(time.RFC3339),
+		StartedAt: formatTime(start),
 		Message:   "正在构建官网…",
 	}
 	b.mu.Unlock()
@@ -138,8 +145,8 @@ func (b *Builder) runOnce() {
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.status.StartedAt = start.Format(time.RFC3339)
-	b.status.FinishedAt = finish.Format(time.RFC3339)
+	b.status.StartedAt = formatTime(start)
+	b.status.FinishedAt = formatTime(finish)
 	b.status.DurationMS = finish.Sub(start).Milliseconds()
 	b.status.Log = logText
 	if err != nil {

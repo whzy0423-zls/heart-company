@@ -12,11 +12,11 @@ import {
   Descriptions,
   Drawer,
   Input,
+  message,
   Select,
   Space,
   Table,
   Tag,
-  message,
 } from 'ant-design-vue';
 
 import { getMessageListApi, markMessagesApi } from '#/api';
@@ -84,6 +84,10 @@ function businessLabel(type?: string) {
   return type || '-';
 }
 
+function messageRecord(record: Record<string, any>): SystemMessage {
+  return record as SystemMessage;
+}
+
 async function setRead(record: SystemMessage, read: boolean) {
   await markMessagesApi({ ids: [record.id], read });
   message.success(read ? '已标记为已读' : '已标记为未读');
@@ -110,7 +114,10 @@ async function goTarget(record: SystemMessage) {
   }
 }
 
-function handleTableChange(pagination: { current?: number; pageSize?: number }) {
+function handleTableChange(pagination: {
+  current?: number;
+  pageSize?: number;
+}) {
   query.page = pagination.current ?? 1;
   query.pageSize = pagination.pageSize ?? 20;
   load();
@@ -202,17 +209,25 @@ onMounted(() => {
             </template>
             <template v-if="column.key === 'action'">
               <Space :size="4">
-                <Button size="small" type="link" @click="openDetail(record)">
+                <Button
+                  size="small"
+                  type="link"
+                  @click="openDetail(messageRecord(record))"
+                >
                   详情
                 </Button>
                 <Button
                   size="small"
                   type="link"
-                  @click="setRead(record, !record.isRead)"
+                  @click="setRead(messageRecord(record), !record.isRead)"
                 >
                   {{ record.isRead ? '未读' : '已读' }}
                 </Button>
-                <Button size="small" type="link" @click="goTarget(record)">
+                <Button
+                  size="small"
+                  type="link"
+                  @click="goTarget(messageRecord(record))"
+                >
                   查看业务
                 </Button>
               </Space>
@@ -258,9 +273,9 @@ onMounted(() => {
 }
 
 .card-header {
-  align-items: flex-start;
   display: flex;
   gap: 16px;
+  align-items: flex-start;
   justify-content: space-between;
   margin-bottom: 16px;
 }
@@ -272,16 +287,16 @@ onMounted(() => {
 }
 
 .card-desc {
-  color: hsl(var(--muted-foreground));
+  margin-top: 4px;
   font-size: 13px;
   line-height: 20px;
-  margin-top: 4px;
+  color: hsl(var(--muted-foreground));
 }
 
 .toolbar {
   display: grid;
-  gap: 8px;
   grid-template-columns: 150px 130px minmax(220px, 420px) auto;
+  gap: 8px;
   justify-content: start;
   margin-bottom: 16px;
 }
@@ -294,16 +309,16 @@ onMounted(() => {
 
 .message-title,
 .message-content {
-  line-height: 20px;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 20px;
 }
 
 .message-title {
   display: -webkit-box;
+  -webkit-line-clamp: 2;
   font-weight: 600;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
 }
 
 .message-content {
@@ -311,14 +326,14 @@ onMounted(() => {
 }
 
 .detail-text {
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
-  word-break: break-word;
 }
 
 @media (max-width: 768px) {
   .card-header {
-    align-items: stretch;
     flex-direction: column;
+    align-items: stretch;
   }
 
   .toolbar {

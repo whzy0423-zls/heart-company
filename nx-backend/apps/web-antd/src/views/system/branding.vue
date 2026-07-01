@@ -75,7 +75,13 @@ async function save() {
             />
           </Form.Item>
           <Form.Item label="Logo">
-            <ImagePathInput v-model:value="form.logo" dir="branding" empty-text="未设置 Logo" upload-text="上传 Logo" variant="image" />
+            <ImagePathInput
+              v-model:value="form.logo"
+              dir="branding"
+              empty-text="未设置 Logo"
+              upload-text="上传 Logo"
+              variant="image"
+            />
           </Form.Item>
           <Form.Item label="启动加载屏文案">
             <Input
@@ -97,5 +103,4 @@ async function save() {
   </EditorShell>
 </template>
 
-<style scoped>
-</style>
+<style scoped></style>

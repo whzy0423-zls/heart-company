@@ -13,12 +13,12 @@ import {
   Form,
   Input,
   InputNumber,
+  message,
   Modal,
   Select,
   Space,
   Table,
   Tag,
-  message,
 } from 'ant-design-vue';
 
 import {
@@ -31,7 +31,6 @@ import {
   updateArticleApi,
   updateReadingSettingsApi,
 } from '#/api';
-
 import ImagePathInput from '#/views/site-config/components/image-path-input.vue';
 
 const loading = ref(false);
@@ -116,7 +115,9 @@ const audioStatusMeta: Record<string, { color: string; text: string }> = {
 };
 
 function audioMeta(status?: string) {
-  return audioStatusMeta[status || 'none'] ?? { color: 'default', text: '未生成' };
+  return (
+    audioStatusMeta[status || 'none'] ?? { color: 'default', text: '未生成' }
+  );
 }
 
 async function load() {
@@ -299,7 +300,10 @@ function search() {
   load();
 }
 
-function handleTableChange(pagination: { current?: number; pageSize?: number }) {
+function handleTableChange(pagination: {
+  current?: number;
+  pageSize?: number;
+}) {
   query.page = pagination.current ?? 1;
   query.pageSize = pagination.pageSize ?? 20;
   load();
@@ -404,7 +408,9 @@ onMounted(() => {
               <Tag :color="audioMeta(record.audioStatus).color">
                 {{ audioMeta(record.audioStatus).text }}
               </Tag>
-              <span class="voice-cell">音色：{{ voiceLabel(record.voiceKey) }}</span>
+              <span class="voice-cell"
+                >音色：{{ voiceLabel(record.voiceKey) }}</span
+              >
             </Space>
           </template>
           <template v-else-if="column.dataIndex === 'tags'">
@@ -417,7 +423,11 @@ onMounted(() => {
           </template>
           <template v-else-if="column.key === 'action'">
             <Space :size="4">
-              <Button size="small" type="link" @click="openEdit(asArticle(record))">
+              <Button
+                size="small"
+                type="link"
+                @click="openEdit(asArticle(record))"
+              >
                 编辑
               </Button>
               <Button
@@ -426,12 +436,23 @@ onMounted(() => {
                 type="link"
                 @click="generateAudio(asArticle(record))"
               >
-                {{ record.audioStatus === 'ready' ? '重新生成听书' : '生成听书' }}
+                {{
+                  record.audioStatus === 'ready' ? '重新生成听书' : '生成听书'
+                }}
               </Button>
-              <Button size="small" type="link" @click="toggleStatus(asArticle(record))">
+              <Button
+                size="small"
+                type="link"
+                @click="toggleStatus(asArticle(record))"
+              >
                 {{ record.status === 'published' ? '转草稿' : '发布' }}
               </Button>
-              <Button danger size="small" type="link" @click="removeArticle(asArticle(record))">
+              <Button
+                danger
+                size="small"
+                type="link"
+                @click="removeArticle(asArticle(record))"
+              >
                 删除
               </Button>
             </Space>
@@ -447,11 +468,17 @@ onMounted(() => {
     >
       <Form layout="vertical">
         <Form.Item label="标题" required>
-          <Input v-model:value="form.title" placeholder="例如：九型人格与亲密关系" />
+          <Input
+            v-model:value="form.title"
+            placeholder="例如：九型人格与亲密关系"
+          />
         </Form.Item>
         <Space align="start" class="form-row">
           <Form.Item label="分类">
-            <Input v-model:value="form.category" placeholder="如：成长 / 关系 / 职场" />
+            <Input
+              v-model:value="form.category"
+              placeholder="如：成长 / 关系 / 职场"
+            />
           </Form.Item>
           <Form.Item label="作者">
             <Input v-model:value="form.author" placeholder="作者署名" />
@@ -495,7 +522,11 @@ onMounted(() => {
             />
           </Form.Item>
           <Form.Item label="排序">
-            <InputNumber v-model:value="form.sort" :min="0" class="sort-input" />
+            <InputNumber
+              v-model:value="form.sort"
+              :min="0"
+              class="sort-input"
+            />
           </Form.Item>
         </Space>
         <Form.Item label="听书音色">
@@ -539,8 +570,8 @@ onMounted(() => {
 
 .card-desc {
   margin-top: 4px;
-  color: #667085;
   font-size: 13px;
+  color: #667085;
 }
 
 .keyword-input {
@@ -562,18 +593,18 @@ onMounted(() => {
 
 .voice-panel-main {
   display: flex;
-  min-width: 0;
   gap: 12px;
   align-items: center;
+  min-width: 0;
 }
 
 .voice-panel-icon {
   display: inline-flex;
   flex: 0 0 34px;
-  width: 34px;
-  height: 34px;
   align-items: center;
   justify-content: center;
+  width: 34px;
+  height: 34px;
   color: hsl(var(--primary));
   background: hsl(var(--primary) / 10%);
   border: 1px solid hsl(var(--primary) / 16%);
@@ -593,10 +624,10 @@ onMounted(() => {
 .voice-panel-desc {
   margin-top: 2px;
   overflow: hidden;
-  color: hsl(var(--muted-foreground));
+  text-overflow: ellipsis;
   font-size: 12px;
   line-height: 20px;
-  text-overflow: ellipsis;
+  color: hsl(var(--muted-foreground));
   white-space: nowrap;
 }
 
@@ -612,14 +643,14 @@ onMounted(() => {
 }
 
 .voice-cell {
-  color: #98a2b3;
   font-size: 12px;
+  color: #98a2b3;
 }
 
 .voice-form-hint {
   margin-top: 6px;
-  color: #98a2b3;
   font-size: 12px;
+  color: #98a2b3;
 }
 
 .status-select,
@@ -637,13 +668,13 @@ onMounted(() => {
 
 .char-count {
   margin-left: 8px;
-  color: #98a2b3;
   font-size: 12px;
   font-weight: 400;
+  color: #98a2b3;
 }
 
 .markdown-area {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
   font-size: 13px;
 }
 

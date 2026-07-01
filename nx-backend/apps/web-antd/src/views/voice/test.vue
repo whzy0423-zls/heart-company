@@ -12,12 +12,11 @@ import {
   Col,
   Form,
   Input,
+  message,
   Row,
   Select,
-  Space,
   Table,
   Tag,
-  message,
 } from 'ant-design-vue';
 
 import {
@@ -73,7 +72,11 @@ const columns = [
 ];
 
 async function loadProfiles() {
-  const result = await getVoiceProfilesApi({ page: 1, pageSize: 100, status: 'ready' });
+  const result = await getVoiceProfilesApi({
+    page: 1,
+    pageSize: 100,
+    status: 'ready',
+  });
   profiles.value = result.items;
   if (!form.profileId && result.items.length > 0) {
     form.profileId = result.items[0]?.id ?? '';
@@ -119,7 +122,10 @@ async function generate() {
   }
 }
 
-function handleTableChange(pagination: { current?: number; pageSize?: number }) {
+function handleTableChange(pagination: {
+  current?: number;
+  pageSize?: number;
+}) {
   query.page = pagination.current ?? 1;
   query.pageSize = pagination.pageSize ?? 10;
   loadGenerations();
@@ -178,18 +184,18 @@ onMounted(async () => {
           <div v-if="latest?.audioUrl" class="latest-result">
             <div class="latest-title">最新生成</div>
             <div class="latest-text">{{ latest.text }}</div>
-            <audio :src="latest.audioUrl" controls />
+            <audio :src="latest.audioUrl" controls></audio>
           </div>
-          <div v-else class="empty-result">
-            生成后会在这里播放最新音频。
-          </div>
+          <div v-else class="empty-result">生成后会在这里播放最新音频。</div>
         </Card>
 
         <Card :bordered="false" class="voice-card history-card">
           <div class="history-head">
             <div>
               <div class="card-title">生成记录</div>
-              <div class="card-desc">共 {{ total }} 条测试记录，音频已保存可回放。</div>
+              <div class="card-desc">
+                共 {{ total }} 条测试记录，音频已保存可回放。
+              </div>
             </div>
             <Button :loading="loading" @click="loadGenerations">刷新</Button>
           </div>
@@ -209,7 +215,12 @@ onMounted(async () => {
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.dataIndex === 'audioUrl'">
-                <audio v-if="record.audioUrl" :src="record.audioUrl" class="row-audio" controls />
+                <audio
+                  v-if="record.audioUrl"
+                  :src="record.audioUrl"
+                  class="row-audio"
+                  controls
+                ></audio>
                 <span v-else>-</span>
               </template>
               <template v-else-if="column.dataIndex === 'status'">
@@ -238,8 +249,8 @@ onMounted(async () => {
 
 .card-desc {
   margin-top: 4px;
-  color: #667085;
   font-size: 13px;
+  color: #667085;
 }
 
 .voice-meta {
@@ -247,8 +258,8 @@ onMounted(async () => {
   gap: 8px;
   align-items: center;
   margin-top: 8px;
-  color: #667085;
   font-size: 12px;
+  color: #667085;
 }
 
 .result-card {
@@ -264,21 +275,21 @@ onMounted(async () => {
 
 .latest-title {
   margin-bottom: 8px;
-  color: #344054;
   font-weight: 600;
+  color: #344054;
 }
 
 .latest-text {
   margin-bottom: 12px;
-  color: #475467;
   line-height: 1.7;
+  color: #475467;
 }
 
 .empty-result {
   display: flex;
-  min-height: 128px;
   align-items: center;
   justify-content: center;
+  min-height: 128px;
   color: #98a2b3;
   background: #f8fafc;
   border: 1px dashed #d0d5dd;

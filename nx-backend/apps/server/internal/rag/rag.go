@@ -39,8 +39,9 @@ type AskInput struct {
 }
 
 type Answer struct {
-	Answer  string   `json:"answer"`
-	Sources []Source `json:"sources"`
+	Answer      string   `json:"answer"`
+	Sources     []Source `json:"sources"`
+	Suggestions []string `json:"suggestions"`
 }
 
 type Service struct {
@@ -97,9 +98,27 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 
 	matches := s.search(question, input.UserProfile.MainType, 4)
 	if len(matches) == 0 {
+		// 检索未命中：仍尝试让 AI 结合九型常识作答（Sources 为空）；
+		// 只有 AI 不可用或返回空时，才回退到固定兜底文案。
+		if s.generator != nil {
+			generated, err := s.generator.Generate(ctx, GenerateInput{
+				History:     cleanHistory(input.History, 6),
+				Question:    question,
+				Sources:     nil,
+				UserProfile: input.UserProfile,
+			})
+			if err == nil && strings.TrimSpace(generated) != "" {
+				return Answer{
+					Answer:      strings.TrimSpace(generated),
+					Sources:     []Source{},
+					Suggestions: buildSuggestions(nil),
+				}, nil
+			}
+		}
 		return Answer{
-			Answer:  buildFallbackAnswer(input.UserProfile),
-			Sources: []Source{},
+			Answer:      buildFallbackAnswer(input.UserProfile),
+			Sources:     []Source{},
+			Suggestions: buildSuggestions(nil),
 		}, nil
 	}
 
@@ -114,6 +133,8 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 		})
 		parts = append(parts, "【"+match.doc.Title+"】"+snippet)
 	}
+
+	suggestions := buildSuggestions(matches)
 
 	name := strings.TrimSpace(input.UserProfile.Nickname)
 	if name == "" {
@@ -133,11 +154,11 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 			UserProfile: input.UserProfile,
 		})
 		if err == nil && strings.TrimSpace(generated) != "" {
-			return Answer{Answer: strings.TrimSpace(generated), Sources: sources}, nil
+			return Answer{Answer: strings.TrimSpace(generated), Sources: sources, Suggestions: suggestions}, nil
 		}
 	}
 
-	return Answer{Answer: answer, Sources: sources}, nil
+	return Answer{Answer: answer, Sources: sources, Suggestions: suggestions}, nil
 }
 
 type scoredDoc struct {
@@ -263,6 +284,41 @@ func buildFallbackAnswer(profile UserProfile) string {
 		name = "你"
 	}
 	return name + "，我暂时没有检索到特别匹配的资料。可以换个更具体的问题，比如“我的主型在亲密关系里怎么沟通”或“适合我的成长练习是什么”。"
+}
+
+// buildSuggestions 用确定性规则生成 3 条追问建议：优先围绕命中的资料标题，
+// 不足时用固定方向（关系 / 职场 / 亲密关系 / 成长练习）补齐。不触发任何模型调用。
+func buildSuggestions(matches []scoredDoc) []string {
+	const want = 3
+	directions := []string{
+		"在关系里我该怎么调整？",
+		"在职场中我可以怎么发挥？",
+		"亲密关系里怎么沟通更顺？",
+		"适合我的成长练习是什么？",
+	}
+
+	suggestions := make([]string, 0, want)
+	seen := map[string]bool{}
+	add := func(text string) {
+		text = strings.TrimSpace(text)
+		if text == "" || seen[text] || len(suggestions) >= want {
+			return
+		}
+		seen[text] = true
+		suggestions = append(suggestions, text)
+	}
+
+	for _, match := range matches {
+		title := strings.TrimSpace(match.doc.Title)
+		if title == "" {
+			continue
+		}
+		add("想多了解“" + title + "”，能再展开讲讲吗？")
+	}
+	for _, dir := range directions {
+		add(dir)
+	}
+	return suggestions
 }
 
 func cleanHistory(history []Message, limit int) []Message {

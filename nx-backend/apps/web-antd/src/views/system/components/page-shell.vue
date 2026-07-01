@@ -21,11 +21,17 @@ const emit = defineEmits<{
       <template #extra>
         <div class="actions">
           <Button :loading="loading" @click="emit('refresh')">刷新</Button>
-          <Button v-if="$slots.create !== null" type="primary" @click="emit('create')">新增</Button>
+          <Button
+            v-if="$slots.create !== null"
+            type="primary"
+            @click="emit('create')"
+          >
+            新增
+          </Button>
         </div>
       </template>
       <Spin :spinning="!!loading">
-        <slot />
+        <slot></slot>
       </Spin>
     </Card>
   </Page>

@@ -110,3 +110,24 @@ func (s *Store) Find(ctx context.Context, id int64) (Asset, error) {
 	}
 	return asset, nil
 }
+
+func (s *Store) UpdateObjectMetadata(ctx context.Context, id int64, objectKey string, objectURL string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("upload asset database is not configured")
+	}
+	c, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	result, err := s.db.ExecContext(c,
+		`UPDATE upload_assets SET object_key=$1, object_url=$2 WHERE id=$3`,
+		strings.TrimSpace(objectKey),
+		strings.TrimSpace(objectURL),
+		id,
+	)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}

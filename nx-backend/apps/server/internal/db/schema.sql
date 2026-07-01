@@ -189,6 +189,90 @@ CREATE TABLE IF NOT EXISTS voice_content_jobs (
   create_time     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 视频生成（异步）。创建任务后写入 'queued' 行并记录网关 task_id，
+-- 轮询完成后下载视频字节经 upload_assets 落库并回填资产/元数据。
+CREATE TABLE IF NOT EXISTS video_generations (
+  id              BIGSERIAL PRIMARY KEY,
+  provider        TEXT NOT NULL DEFAULT 'newapi',
+  model           TEXT NOT NULL DEFAULT '',
+  prompt          TEXT NOT NULL DEFAULT '',
+  image_url       TEXT NOT NULL DEFAULT '',
+  task_id         TEXT NOT NULL DEFAULT '',
+  seconds         INT NOT NULL DEFAULT 15,
+  aspect_ratio    TEXT NOT NULL DEFAULT '16:9',
+  video_asset_id  BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
+  video_url       TEXT NOT NULL DEFAULT '',
+  duration        DOUBLE PRECISION NOT NULL DEFAULT 0,
+  fps             DOUBLE PRECISION NOT NULL DEFAULT 0,
+  width           INT NOT NULL DEFAULT 0,
+  height          INT NOT NULL DEFAULT 0,
+  status          TEXT NOT NULL DEFAULT 'queued',
+  error_message   TEXT NOT NULL DEFAULT '',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS seconds INT NOT NULL DEFAULT 15;
+ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS aspect_ratio TEXT NOT NULL DEFAULT '16:9';
+
+-- 资产库:按类型保存可复用的视频生成素材(场景/人物/物品/服装/风格/音频/视频)
+CREATE TABLE IF NOT EXISTS video_assets (
+  id              BIGSERIAL PRIMARY KEY,
+  type            TEXT NOT NULL DEFAULT 'scene',   -- scene/character/prop/outfit/style/audio/video
+  name            TEXT NOT NULL DEFAULT '',
+  asset_id        BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
+  url             TEXT NOT NULL DEFAULT '',
+  cover_url       TEXT NOT NULL DEFAULT '',
+  remark          TEXT NOT NULL DEFAULT '',
+  status          TEXT NOT NULL DEFAULT 'active',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 视频分析:上传参考视频后异步调用多模态/对话模型，提取场景、人物、资产并生成 seedance2.0 参考提示词。
+CREATE TABLE IF NOT EXISTS video_analysis_jobs (
+  id              BIGSERIAL PRIMARY KEY,
+  video_asset_id  BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
+  video_url       TEXT NOT NULL DEFAULT '',
+  video_name      TEXT NOT NULL DEFAULT '',
+  status          TEXT NOT NULL DEFAULT 'queued',
+  scenes          JSONB NOT NULL DEFAULT '[]'::jsonb,
+  characters      JSONB NOT NULL DEFAULT '[]'::jsonb,
+  assets          JSONB NOT NULL DEFAULT '[]'::jsonb,
+  has_speech      BOOLEAN NOT NULL DEFAULT false,
+  audio_summary   TEXT NOT NULL DEFAULT '',
+  speech_topics   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  speech_keywords JSONB NOT NULL DEFAULT '[]'::jsonb,
+  speech_outline  JSONB NOT NULL DEFAULT '[]'::jsonb,
+  seedance_prompt TEXT NOT NULL DEFAULT '',
+  raw_result      TEXT NOT NULL DEFAULT '',
+  error_message   TEXT NOT NULL DEFAULT '',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE video_analysis_jobs ADD COLUMN IF NOT EXISTS has_speech BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE video_analysis_jobs ADD COLUMN IF NOT EXISTS audio_summary TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_analysis_jobs ADD COLUMN IF NOT EXISTS speech_topics JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE video_analysis_jobs ADD COLUMN IF NOT EXISTS speech_keywords JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE video_analysis_jobs ADD COLUMN IF NOT EXISTS speech_outline JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+-- 分镜设计:基于已完成的视频分析和给定主题，异步生成可编辑的 Seedance 2.0 分镜方案。
+CREATE TABLE IF NOT EXISTS video_storyboards (
+  id              BIGSERIAL PRIMARY KEY,
+  analysis_job_id BIGINT REFERENCES video_analysis_jobs(id) ON DELETE SET NULL,
+  title           TEXT NOT NULL DEFAULT '',
+  theme           TEXT NOT NULL DEFAULT '',
+  status          TEXT NOT NULL DEFAULT 'queued',
+  style_guide     JSONB NOT NULL DEFAULT '[]'::jsonb,
+  global_prompt   TEXT NOT NULL DEFAULT '',
+  shots           JSONB NOT NULL DEFAULT '[]'::jsonb,
+  raw_result      TEXT NOT NULL DEFAULT '',
+  error_message   TEXT NOT NULL DEFAULT '',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS rag_documents (
   id          BIGSERIAL PRIMARY KEY,
   title       TEXT NOT NULL DEFAULT '',
@@ -251,7 +335,6 @@ ALTER TABLE signups ADD COLUMN IF NOT EXISTS utm_content TEXT NOT NULL DEFAULT '
 ALTER TABLE signups ADD COLUMN IF NOT EXISTS utm_term TEXT NOT NULL DEFAULT '';
 ALTER TABLE signups ADD COLUMN IF NOT EXISTS game_result_id BIGINT REFERENCES game_results(id) ON DELETE SET NULL;
 ALTER TABLE site_visits ADD COLUMN IF NOT EXISTS visitor_id TEXT NOT NULL DEFAULT '';
-
 CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id);
 CREATE INDEX IF NOT EXISTS idx_role_menus_role ON role_menus(role_id);
 CREATE INDEX IF NOT EXISTS idx_menus_pid ON menus(pid);
@@ -270,6 +353,12 @@ CREATE INDEX IF NOT EXISTS idx_site_visits_visitor_id ON site_visits(visitor_id)
 CREATE INDEX IF NOT EXISTS idx_voice_profiles_create_time ON voice_profiles(create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_voice_generations_create_time ON voice_generations(create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_voice_content_jobs_create_time ON voice_content_jobs(create_time DESC);
+CREATE INDEX IF NOT EXISTS idx_video_assets_create_time ON video_assets(create_time DESC);
+CREATE INDEX IF NOT EXISTS idx_video_assets_type ON video_assets(type);
+CREATE INDEX IF NOT EXISTS idx_video_analysis_jobs_create_time ON video_analysis_jobs(create_time DESC);
+CREATE INDEX IF NOT EXISTS idx_video_analysis_jobs_status ON video_analysis_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_video_storyboards_create_time ON video_storyboards(create_time DESC);
+CREATE INDEX IF NOT EXISTS idx_video_storyboards_status ON video_storyboards(status);
 CREATE INDEX IF NOT EXISTS idx_rag_documents_status_sort ON rag_documents(status, sort ASC, update_time DESC);
 CREATE INDEX IF NOT EXISTS idx_rag_documents_update_time ON rag_documents(update_time DESC);
 
@@ -397,3 +486,171 @@ CREATE TABLE IF NOT EXISTS mind_quotes (
 
 CREATE INDEX IF NOT EXISTS idx_mind_groups_sort ON mind_groups(status, sort ASC, id ASC);
 CREATE INDEX IF NOT EXISTS idx_mind_quotes_group ON mind_quotes(group_id, sort ASC, id ASC);
+
+-- ===== App 用户体系 =====
+
+CREATE TABLE IF NOT EXISTS app_users (
+  id              BIGSERIAL PRIMARY KEY,
+  phone           TEXT NOT NULL UNIQUE,
+  nickname        TEXT NOT NULL DEFAULT '',
+  avatar          TEXT NOT NULL DEFAULT '',
+  status          TEXT NOT NULL DEFAULT 'active',
+  member_level    TEXT NOT NULL DEFAULT 'free',
+  register_source TEXT NOT NULL DEFAULT 'sms',
+  last_login_at   TIMESTAMPTZ,
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS app_sms_codes (
+  id          BIGSERIAL PRIMARY KEY,
+  phone       TEXT NOT NULL,
+  code_hash   TEXT NOT NULL,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  used        BOOLEAN NOT NULL DEFAULT false,
+  send_ip     TEXT NOT NULL DEFAULT '',
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_sms_codes_phone ON app_sms_codes(phone, used, expires_at DESC);
+
+CREATE TABLE IF NOT EXISTS app_refresh_tokens (
+  id          BIGSERIAL PRIMARY KEY,
+  app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  token_hash  TEXT NOT NULL UNIQUE,
+  device_info TEXT NOT NULL DEFAULT '',
+  expires_at  TIMESTAMPTZ NOT NULL,
+  revoked     BOOLEAN NOT NULL DEFAULT false,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_refresh_tokens_user ON app_refresh_tokens(app_user_id, revoked);
+
+-- ===== 九型测试与卡片 =====
+
+CREATE TABLE IF NOT EXISTS app_quiz_questions (
+  id          BIGSERIAL PRIMARY KEY,
+  sort        INT  NOT NULL DEFAULT 0,
+  body        TEXT NOT NULL,
+  options     JSONB NOT NULL DEFAULT '[]'::jsonb,
+  dimension   TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'enabled',
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS app_quiz_submissions (
+  id           BIGSERIAL PRIMARY KEY,
+  app_user_id  BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  answers      JSONB NOT NULL DEFAULT '[]'::jsonb,
+  result       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  primary_type INT NOT NULL DEFAULT 0,
+  wing_type    INT NOT NULL DEFAULT 0,
+  create_time  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_quiz_submissions_user ON app_quiz_submissions(app_user_id, create_time DESC);
+
+CREATE TABLE IF NOT EXISTS app_user_cards (
+  id           BIGSERIAL PRIMARY KEY,
+  app_user_id  BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  card_type    TEXT NOT NULL DEFAULT 'primary',
+  name         TEXT NOT NULL DEFAULT '',
+  relation     TEXT NOT NULL DEFAULT '',
+  enneagram    INT NOT NULL DEFAULT 0,
+  wing         INT NOT NULL DEFAULT 0,
+  profile      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status       TEXT NOT NULL DEFAULT 'active',
+  create_time  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_user_cards_user ON app_user_cards(app_user_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_cards_primary ON app_user_cards(app_user_id) WHERE card_type = 'primary' AND status = 'active';
+
+-- ----- 九型测试与卡片：增量迁移（幂等，老库补列）-----
+ALTER TABLE app_quiz_questions   ADD COLUMN IF NOT EXISTS quiz_version  TEXT        NOT NULL DEFAULT 'v1';
+ALTER TABLE app_quiz_questions   ADD COLUMN IF NOT EXISTS update_time   TIMESTAMPTZ NOT NULL DEFAULT now();
+
+ALTER TABLE app_quiz_submissions ADD COLUMN IF NOT EXISTS quiz_version   TEXT  NOT NULL DEFAULT 'v1';
+ALTER TABLE app_quiz_submissions ADD COLUMN IF NOT EXISTS gender         TEXT  NOT NULL DEFAULT '';
+ALTER TABLE app_quiz_submissions ADD COLUMN IF NOT EXISTS score          JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_quiz_submissions ADD COLUMN IF NOT EXISTS adjusted_score JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_quiz_submissions ADD COLUMN IF NOT EXISTS centers        JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE app_quiz_submissions ADD COLUMN IF NOT EXISTS wing_type      INT   NOT NULL DEFAULT 0;
+ALTER TABLE app_quiz_submissions ADD COLUMN IF NOT EXISTS second_type    INT   NOT NULL DEFAULT 0;
+
+ALTER TABLE app_user_cards       ADD COLUMN IF NOT EXISTS submission_id BIGINT REFERENCES app_quiz_submissions(id) ON DELETE SET NULL;
+
+-- ----- App 问答会话：存储每张卡的对话历史 -----
+CREATE TABLE IF NOT EXISTS app_chat_sessions (
+  id          BIGSERIAL PRIMARY KEY,
+  app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  card_id     BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
+  title       TEXT NOT NULL DEFAULT '',
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_user ON app_chat_sessions(app_user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_card ON app_chat_sessions(card_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS app_chat_messages (
+  id         BIGSERIAL PRIMARY KEY,
+  session_id BIGINT NOT NULL REFERENCES app_chat_sessions(id) ON DELETE CASCADE,
+  role       TEXT NOT NULL,           -- 'user' | 'assistant'
+  content    TEXT NOT NULL DEFAULT '',
+  sources    JSONB NOT NULL DEFAULT '[]'::jsonb,
+  favorite   BOOLEAN NOT NULL DEFAULT false,  -- 是否被用户收藏
+  feedback   TEXT NOT NULL DEFAULT '',        -- 'helpful' | 'inaccurate' | 'continue' | ''
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS favorite BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS feedback TEXT NOT NULL DEFAULT '';
+
+CREATE INDEX IF NOT EXISTS idx_app_chat_messages_session ON app_chat_messages(session_id, create_time);
+CREATE INDEX IF NOT EXISTS idx_app_chat_messages_favorite ON app_chat_messages(favorite) WHERE favorite = true;
+
+-- ----- App 专属记忆：用户可见、可删除/停用的卡片记忆 -----
+CREATE TABLE IF NOT EXISTS app_memories (
+  id          BIGSERIAL PRIMARY KEY,
+  app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  card_id     BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
+  content     TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'active',
+  source_time TIMESTAMPTZ,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_memories_card ON app_memories(app_user_id, card_id, status, update_time DESC);
+
+-- ----- App 权益订单：App 用户独立订单，真实支付回调接入后发放权益 -----
+CREATE TABLE IF NOT EXISTS app_orders (
+  id              BIGSERIAL PRIMARY KEY,
+  out_trade_no    TEXT NOT NULL UNIQUE,
+  app_user_id     BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  product_id      TEXT NOT NULL DEFAULT '',
+  title           TEXT NOT NULL DEFAULT '',
+  amount          INT NOT NULL DEFAULT 0,
+  status          TEXT NOT NULL DEFAULT 'pending',
+  transaction_id  TEXT NOT NULL DEFAULT '',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  paid_at         TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_orders_user ON app_orders(app_user_id, create_time DESC);
+CREATE INDEX IF NOT EXISTS idx_app_orders_status ON app_orders(status, create_time DESC);
+
+-- ----- App 每日成长打卡：记录用户每天完成的成长练习 -----
+CREATE TABLE IF NOT EXISTS app_daily_checkins (
+  id           BIGSERIAL PRIMARY KEY,
+  app_user_id  BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  checkin_date DATE NOT NULL,           -- 打卡日期（Asia/Shanghai）
+  main_type    INT NOT NULL DEFAULT 0,  -- 打卡时的主型，用于回顾
+  create_time  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_daily_checkins_user_date
+  ON app_daily_checkins(app_user_id, checkin_date);

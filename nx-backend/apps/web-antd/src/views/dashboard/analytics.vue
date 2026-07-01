@@ -1,12 +1,32 @@
 <script setup lang="ts">
+import type { Dayjs } from 'dayjs';
+
 import type { AnalyticsOverview, AnalyticsSeriesPoint } from '#/api';
 
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from 'vue';
 import { useRouter } from 'vue-router';
 
 import { Page } from '@vben/common-ui';
 import { IconifyIcon } from '@vben/icons';
 
+import {
+  Button,
+  Card,
+  Col,
+  DatePicker,
+  message,
+  Row,
+  Space,
+  Statistic,
+} from 'ant-design-vue';
+import dayjs from 'dayjs';
 import { BarChart, LineChart } from 'echarts/charts';
 import {
   GridComponent,
@@ -15,18 +35,6 @@ import {
 } from 'echarts/components';
 import * as echarts from 'echarts/core';
 import { CanvasRenderer } from 'echarts/renderers';
-
-import {
-  Button,
-  Card,
-  Col,
-  DatePicker,
-  Row,
-  Space,
-  Statistic,
-  message,
-} from 'ant-design-vue';
-import dayjs, { type Dayjs } from 'dayjs';
 
 import { getAnalyticsOverviewApi } from '#/api';
 
@@ -107,7 +115,10 @@ const rangeStats = computed(() => [
     icon: 'lucide:trending-up',
     label: '区间询盘转化率',
     suffix: '%',
-    value: conversionRate(overview.value.rangeLeads, overview.value.rangeVisits),
+    value: conversionRate(
+      overview.value.rangeLeads,
+      overview.value.rangeVisits,
+    ),
   },
 ]);
 
@@ -139,7 +150,10 @@ const analysisText = computed(() => {
   }
   const topVisit = maxBy(series, 'visits');
   const topLead = maxBy(series, 'leads');
-  const rate = conversionRate(overview.value.rangeLeads, overview.value.rangeVisits);
+  const rate = conversionRate(
+    overview.value.rangeLeads,
+    overview.value.rangeVisits,
+  );
   return `当前区间共 ${overview.value.rangeVisits} 位访客，产生 ${overview.value.rangeLeads} 条询盘，区间转化率 ${rate}%。访问峰值出现在 ${topVisit.date}（${topVisit.visits} 位访客），询盘峰值出现在 ${topLead.date}（${topLead.leads} 条询盘）。`;
 });
 
@@ -151,7 +165,7 @@ async function loadOverview() {
       endDate: end.format('YYYY-MM-DD'),
       startDate: start.format('YYYY-MM-DD'),
     });
-  } catch (error) {
+  } catch {
     message.error('数据概览加载失败，请稍后重试');
   } finally {
     loading.value = false;
@@ -219,7 +233,13 @@ function conversionRate(leads: number, visits: number) {
 }
 
 function maxBy(items: AnalyticsSeriesPoint[], key: 'leads' | 'visits') {
-  return items.reduce((best, item) => (item[key] > best[key] ? item : best), items[0]);
+  let best: AnalyticsSeriesPoint = { date: '', leads: 0, visits: 0 };
+  for (const item of items) {
+    if (item[key] > best[key]) {
+      best = item;
+    }
+  }
+  return best;
 }
 
 function goSignupLeads(status = '') {
@@ -257,7 +277,9 @@ onBeforeUnmount(() => {
           <DatePicker.RangePicker
             v-model:value="dateRange"
             :allow-clear="false"
-            :disabled-date="(current) => current && current > dayjs().endOf('day')"
+            :disabled-date="
+              (current) => current && current > dayjs().endOf('day')
+            "
           />
         </div>
         <Button :loading="loading" @click="loadOverview">刷新</Button>
@@ -327,7 +349,12 @@ onBeforeUnmount(() => {
               <strong>{{ item.value }}</strong>
             </button>
           </div>
-          <Button block class="followup-action" type="primary" @click="goSignupLeads('pending')">
+          <Button
+            block
+            class="followup-action"
+            type="primary"
+            @click="goSignupLeads('pending')"
+          >
             进入客户跟进管理
           </Button>
         </Card>
@@ -346,7 +373,9 @@ onBeforeUnmount(() => {
               <span class="followup-meta">
                 {{ item.owner || '未分配' }} · {{ item.nextFollowTime }}
               </span>
-              <span class="followup-interest">{{ item.interest || '未填写意向' }}</span>
+              <span class="followup-interest">{{
+                item.interest || '未填写意向'
+              }}</span>
             </button>
           </div>
           <div v-else class="empty-followup">
@@ -406,9 +435,9 @@ onBeforeUnmount(() => {
 
 .metric-card {
   display: flex;
-  min-height: 76px;
   gap: 16px;
   align-items: center;
+  min-height: 76px;
 }
 
 .metric-panel :deep(.ant-card-body) {
@@ -473,16 +502,16 @@ onBeforeUnmount(() => {
 
 .followup-stat-grid {
   display: grid;
-  gap: 12px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .followup-stat {
   display: flex;
-  min-width: 0;
   flex-direction: column;
-  align-items: flex-start;
   gap: 8px;
+  align-items: flex-start;
+  min-width: 0;
   padding: 12px;
   text-align: left;
   cursor: pointer;
@@ -541,15 +570,15 @@ onBeforeUnmount(() => {
 .followup-meta,
 .followup-interest,
 .empty-followup {
-  color: hsl(var(--muted-foreground));
   font-size: 13px;
+  color: hsl(var(--muted-foreground));
 }
 
 .empty-followup {
   display: flex;
-  min-height: 120px;
   align-items: center;
   justify-content: center;
+  min-height: 120px;
   border: 1px dashed hsl(var(--border));
   border-radius: 8px;
 }
