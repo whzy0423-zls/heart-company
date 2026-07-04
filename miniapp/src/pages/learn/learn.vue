@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { TYPES_INFO } from '../../data/enneagramGame'
-import { getCachedSiteConfig } from '../../utils/siteConfig'
+import { getStoredSiteConfig, hasSiteConfigLearningContent, refreshSiteConfig } from '../../utils/siteConfig'
 import { userErrorMessage } from '../../utils/userMessage'
 
 const courses = ref([])
@@ -11,27 +11,48 @@ const loading = ref(true)
 const loadError = ref('')
 let loadTicket = 0
 
-async function loadContent() {
-  const ticket = ++loadTicket
-  loading.value = true
+function applyContent(cfg) {
+  courses.value = cfg?.home?.courses?.items || []
+  quotes.value = cfg?.home?.quotes?.items || []
+}
+
+function showStoredContent() {
+  const cached = getStoredSiteConfig()
+  if (!cached) return false
+  applyContent(cached)
+  loading.value = false
   loadError.value = ''
+  return true
+}
+
+async function loadContent(options = {}) {
+  const silent = !!options.silent
+  const ticket = ++loadTicket
+  if (!silent) {
+    loading.value = true
+    loadError.value = ''
+  }
   try {
-    const cfg = await getCachedSiteConfig()
+    const cfg = await refreshSiteConfig()
     if (ticket !== loadTicket) return
-    courses.value = cfg?.home?.courses?.items || []
-    quotes.value = cfg?.home?.quotes?.items || []
+    if (silent && !hasSiteConfigLearningContent(cfg)) return
+    applyContent(cfg)
+    loadError.value = ''
   } catch (e) {
     if (ticket !== loadTicket) return
-    courses.value = []
-    quotes.value = []
-    loadError.value = userErrorMessage(e, '内容加载失败，请稍后重试')
+    if (!silent) {
+      courses.value = []
+      quotes.value = []
+      loadError.value = userErrorMessage(e, '内容加载失败，请稍后重试')
+    }
   } finally {
     if (ticket === loadTicket) loading.value = false
   }
 }
 
 onMounted(() => {
-  loadContent()
+  const hasCachedContent = showStoredContent()
+  loadContent({ silent: hasCachedContent })
 })
 
 function goTest() {

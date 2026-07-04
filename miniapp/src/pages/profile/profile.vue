@@ -7,6 +7,7 @@ import { clearChatMessages } from '../../utils/chatStorage'
 import { hiddenCount, previewItems } from '../../utils/listPreview'
 import { openChatPage } from '../../utils/navigation'
 import { normalizeWechatProfile, hasProfilePayload, getWechatProfilePayload } from '../../utils/wechatProfile'
+import { userErrorMessage } from '../../utils/userMessage'
 import { getUserInfoApi, updateUserInfoApi, listTestRecordsApi, listBookingsApi } from '../../api'
 
 const logged = ref(false)
@@ -25,8 +26,8 @@ const hiddenBookingCount = computed(() => hiddenCount(bookings.value))
 const wechatLoginReady = computed(() => ({
   codeLogin: true,
   profile: true,
-  phone: false,
-  note: '微信 code 登录已接入；头像昵称已按微信新规范预留；手机号授权入口预留，后端开通后可接 getPhoneNumber。',
+  phone: true,
+  note: '微信 code 登录已接入；头像昵称已按微信新规范预留；手机号授权已完成前端占位，后端开通后可接 getPhoneNumber code。',
 }))
 let loadTicket = 0
 
@@ -43,8 +44,8 @@ async function login() {
     logged.value = true
     await loadAll()
     uni.showToast({ title: '登录成功', icon: 'success' })
-  } catch {
-    uni.showToast({ title: '登录失败', icon: 'none' })
+  } catch (e) {
+    uni.showToast({ title: userErrorMessage(e, '登录失败'), icon: 'none' })
   } finally {
     logging.value = false
   }
@@ -112,6 +113,20 @@ function onChooseAvatar(e) {
 
 function onNicknameInput(e) {
   nicknameDraft.value = e.detail && e.detail.value ? e.detail.value : ''
+}
+
+function onGetPhoneNumber(e) {
+  const detail = (e && e.detail) || {}
+  const errMsg = detail.errMsg || ''
+  if (errMsg && !errMsg.includes(':ok')) {
+    uni.showToast({ title: '未授权手机号', icon: 'none' })
+    return
+  }
+  if (detail.code) {
+    uni.showToast({ title: '手机号后端暂未开通', icon: 'none' })
+    return
+  }
+  uni.showToast({ title: '手机号授权暂不可用', icon: 'none' })
 }
 
 async function syncWechatProfile() {
@@ -188,7 +203,7 @@ async function saveProfile() {
         <view class="wechat-slot">
           <text class="wechat-slot__title">微信登录站位</text>
           <text class="wechat-slot__desc">{{ wechatLoginReady.note }}</text>
-          <button class="btn-soft wechat-slot__phone" disabled>手机号授权（预留）</button>
+          <button class="btn-soft wechat-slot__phone" open-type="getPhoneNumber" @getphonenumber="onGetPhoneNumber">手机号授权</button>
         </view>
         <view class="profile-form__row">
           <button class="avatar-picker" open-type="chooseAvatar" @chooseavatar="onChooseAvatar">
@@ -314,7 +329,7 @@ async function saveProfile() {
 }
 .user__chat {
   min-width: 112rpx;
-  min-height: 64rpx;
+  min-height: 88rpx;
   padding: 0 18rpx;
   border-radius: 999rpx;
   background: rgba(5,150,105,.12);
@@ -340,7 +355,7 @@ async function saveProfile() {
 }
 .mini-link {
   min-width: 146rpx;
-  min-height: 58rpx;
+  min-height: 88rpx;
   padding: 0 20rpx;
   border-radius: 999rpx;
   background: rgba(37,99,235,.10);
@@ -361,7 +376,7 @@ async function saveProfile() {
 }
 .wechat-slot__title { display: block; color: #1e40af; font-size: 25rpx; font-weight: 900; margin-bottom: 8rpx; }
 .wechat-slot__desc { display: block; color: #475569; font-size: 24rpx; line-height: 1.6; }
-.wechat-slot__phone { margin-top: 16rpx; min-height: 72rpx; font-size: 25rpx; }
+.wechat-slot__phone { margin-top: 16rpx; min-height: 88rpx; font-size: 25rpx; }
 .profile-form__row {
   display: flex;
   align-items: center;

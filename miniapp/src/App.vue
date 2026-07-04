@@ -23,6 +23,7 @@ page {
   width: 100%;
   max-width: 900rpx;
   margin: 0 auto;
+  padding: calc(28rpx + constant(safe-area-inset-top)) 28rpx calc(72rpx + constant(safe-area-inset-bottom));
   padding: calc(28rpx + env(safe-area-inset-top)) 28rpx calc(72rpx + env(safe-area-inset-bottom));
   box-sizing: border-box;
 }
@@ -30,7 +31,8 @@ page {
   display: flex;
   flex-direction: column;
   gap: 24rpx;
-  padding-bottom: calc(24rpx + env(safe-area-inset-bottom));
+  padding-bottom: calc(24rpx + constant(safe-area-inset-bottom) + var(--window-bottom, 0px));
+  padding-bottom: calc(24rpx + env(safe-area-inset-bottom) + var(--window-bottom, 0px));
 }
 .btn-primary,
 .btn-ghost,

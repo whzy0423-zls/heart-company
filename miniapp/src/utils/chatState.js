@@ -16,7 +16,7 @@ function trimText(value, limit) {
 
 export function buildRecentHistory(messages, limit = DEFAULT_HISTORY_LIMIT) {
   return (messages || [])
-    .filter((msg) => !msg.localOnly && (msg.role === 'user' || msg.role === 'assistant'))
+    .filter((msg) => !msg.localOnly && !msg.error && (msg.role === 'user' || msg.role === 'assistant'))
     .slice(-limit)
     .map((msg) => ({
       role: msg.role,
@@ -42,10 +42,47 @@ export function normalizeSources(sources, limit = DEFAULT_SOURCE_LIMIT) {
     .slice(0, limit)
 }
 
+
+function normalizeRetryQuestion(value) {
+  return trimText(value, 1200)
+}
+
+function withRetryFields(source, target) {
+  if (!source.error) return target
+  const retryQuestion = normalizeRetryQuestion(source.retryQuestion || source.question || source.retryPayload?.question)
+  if (!retryQuestion) return target
+  return {
+    ...target,
+    error: true,
+    retryQuestion,
+  }
+}
+
+export function buildRetryHistory(messages, retryQuestion, failedMessageId) {
+  const list = Array.isArray(messages) ? messages : []
+  const failedIndex = failedMessageId ? list.findIndex((msg) => msg && msg.id === failedMessageId) : -1
+  const beforeFailure = failedIndex >= 0 ? list.slice(0, failedIndex) : list
+  const question = clean(retryQuestion)
+  let historySource = beforeFailure
+
+  if (question) {
+    for (let i = beforeFailure.length - 1; i >= 0; i -= 1) {
+      const msg = beforeFailure[i]
+      if (!msg || msg.localOnly || msg.error || (msg.role !== 'user' && msg.role !== 'assistant')) continue
+      if (msg.role === 'user' && clean(msg.content) === question) {
+        historySource = beforeFailure.slice(0, i)
+      }
+      break
+    }
+  }
+
+  return buildRecentHistory(historySource)
+}
+
 export function serializeMessages(messages) {
   return limitMessages(messages)
     .filter((msg) => !msg.localOnly && (msg.role === 'user' || msg.role === 'assistant'))
-    .map((msg) => ({
+    .map((msg) => withRetryFields(msg, {
       id: clean(msg.id),
       role: msg.role,
       content: trimText(msg.content, 1200),
@@ -57,7 +94,7 @@ export function serializeMessages(messages) {
 export function restoreMessages(messages) {
   return limitMessages(messages)
     .filter((msg) => msg && (msg.role === 'user' || msg.role === 'assistant'))
-    .map((msg) => ({
+    .map((msg) => withRetryFields(msg, {
       id: clean(msg.id),
       role: msg.role,
       content: trimText(msg.content, 1200),

@@ -1,8 +1,9 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { ensureLogin } from '../../utils/auth'
 import { createBookingApi } from '../../api'
 import { userErrorMessage } from '../../utils/userMessage'
+import { clearBookingDraft, loadBookingDraft, saveBookingDraft } from '../../utils/bookingDraft'
 
 const kinds = [
   { value: 'consult', label: '1v1 咨询' },
@@ -10,8 +11,24 @@ const kinds = [
   { value: 'enterprise', label: '企业课程' },
 ]
 const kindIndex = ref(0)
-const form = ref({ contactName: '', phone: '', intent: '', preferredTime: '', message: '' })
+const emptyForm = () => ({ contactName: '', phone: '', intent: '', preferredTime: '', message: '' })
+const form = ref(emptyForm())
 const submitting = ref(false)
+const draft = loadBookingDraft()
+if (draft) {
+  const restoredKindIndex = kinds.findIndex((item) => item.value === draft.kind)
+  if (restoredKindIndex >= 0) kindIndex.value = restoredKindIndex
+  form.value = { ...emptyForm(), ...draft }
+  delete form.value.kind
+}
+
+watch(
+  [kindIndex, form],
+  () => {
+    saveBookingDraft({ kind: kinds[kindIndex.value].value, ...form.value })
+  },
+  { deep: true },
+)
 
 function onKindChange(e) {
   kindIndex.value = Number(e.detail.value)
@@ -26,7 +43,9 @@ async function submit() {
     await ensureLogin()
     await createBookingApi({ kind: kinds[kindIndex.value].value, ...form.value })
     uni.showToast({ title: '预约已提交', icon: 'success' })
-    form.value = { contactName: '', phone: '', intent: '', preferredTime: '', message: '' }
+    clearBookingDraft()
+    kindIndex.value = 0
+    form.value = emptyForm()
   } catch (e) {
     uni.showToast({ title: userErrorMessage(e, '提交失败，请重试'), icon: 'none' })
   } finally {

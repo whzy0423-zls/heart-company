@@ -3,7 +3,7 @@ import { ref, onMounted, computed, getCurrentInstance } from 'vue'
 import { onShareAppMessage, onShareTimeline } from '@dcloudio/uni-app'
 import { TYPES_INFO, CENTERS, RESULTS } from '../../data/enneagramGame'
 import { isWing } from '../../utils/enneagram'
-import { getLastResult } from '../../utils/session'
+import { getLastResult, normalizeLastResult } from '../../utils/session'
 import { ensureLogin } from '../../utils/auth'
 import { saveTestRecordApi, reportStatusApi, reportContentApi } from '../../api'
 import { payForReport } from '../../utils/payment'
@@ -36,19 +36,21 @@ const instance = getCurrentInstance()
 
 onMounted(() => {
   const last = getLastResult()
-  if (!last.result) {
+  const cachedResult = normalizeLastResult(last.result)
+  if (!cachedResult) {
+    uni.showToast({ title: '测试结果已失效，请重新测试', icon: 'none' })
     uni.redirectTo({ url: '/pages/test/test' })
     return
   }
-  result.value = last.result
+  result.value = cachedResult
   gender.value = last.gender
-  const t = last.result.type
+  const t = cachedResult.type
   r.value = RESULTS[t]
   info.value = TYPES_INFO[t]
   center.value = CENTERS[TYPES_INFO[t].center]
   persona.value = last.gender === 'male' ? RESULTS[t].male : RESULTS[t].female
-  secondInfo.value = last.result.second ? TYPES_INFO[last.result.second] : null
-  wing.value = isWing(t, last.result.second)
+  secondInfo.value = cachedResult.second ? TYPES_INFO[cachedResult.second] : null
+  wing.value = isWing(t, cachedResult.second)
   growthInfo.value = TYPES_INFO[TYPES_INFO[t].growth]
   stressInfo.value = TYPES_INFO[TYPES_INFO[t].stress]
 })

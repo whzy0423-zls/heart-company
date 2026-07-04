@@ -4,9 +4,11 @@ import { onLoad } from '@dcloudio/uni-app'
 import { ensureLogin } from '../../utils/auth'
 import { chatApi } from '../../api'
 import { chatErrorMessage } from '../../utils/chatErrors'
+import { copyText } from '../../utils/clipboard'
 import { CHAT_STORAGE_KEY, clearChatMessages } from '../../utils/chatStorage'
 import {
   buildRecentHistory,
+  buildRetryHistory,
   chatStatusText,
   limitMessages,
   normalizeSources,
@@ -87,6 +89,7 @@ function onInput(e) {
 }
 
 function useSuggestion(text) {
+  if (sending.value) return
   input.value = text
 }
 
@@ -117,13 +120,13 @@ async function requestAnswer(question, history, retried = false) {
   }
 }
 
-async function send() {
-  const question = input.value.trim()
+async function askQuestion(question, { history = recentHistory(), appendUser = true } = {}) {
   if (!question || sending.value) return
 
-  const history = recentHistory()
-  pushMessage({ id: nextID('user'), role: 'user', content: question, sources: [] })
-  input.value = ''
+  if (appendUser) {
+    pushMessage({ id: nextID('user'), role: 'user', content: question, sources: [] })
+    input.value = ''
+  }
   sending.value = true
   await scrollToBottom()
 
@@ -144,11 +147,32 @@ async function send() {
       content: chatErrorMessage(e),
       sources: [],
       error: true,
+      retryQuestion: question,
     })
   } finally {
     sending.value = false
     await scrollToBottom()
   }
+}
+
+async function send() {
+  const question = input.value.trim()
+  await askQuestion(question)
+}
+
+async function retryMessage(msg) {
+  const question = (msg.retryQuestion || '').trim()
+  if (!question || sending.value) return
+
+  const history = buildRetryHistory(messages.value, question, msg.id)
+  messages.value = messages.value.filter((item) => item.id !== msg.id)
+  saveMessages()
+  await askQuestion(question, { history, appendUser: false })
+}
+
+function copyAnswer(msg) {
+  if (sending.value || !msg.content) return
+  copyText(msg.content)
 }
 
 onLoad(() => {
@@ -187,6 +211,24 @@ onLoad(() => {
           </view>
         </view>
         <text v-else-if="msg.noSources" class="msg__hint">本次未命中明确资料，可换个更具体的问题继续问。</text>
+        <view v-if="msg.error || (!msg.localOnly && msg.role === 'assistant')" class="msg__actions">
+          <button
+            v-if="msg.error && msg.retryQuestion"
+            class="msg__action msg__action--retry"
+            :disabled="sending"
+            @click="retryMessage(msg)"
+          >
+            重新发送
+          </button>
+          <button
+            v-else-if="!msg.error && msg.role === 'assistant'"
+            class="msg__action"
+            :disabled="sending"
+            @click="copyAnswer(msg)"
+          >
+            复制答案
+          </button>
+        </view>
       </view>
       <view v-if="sending" class="msg msg--assistant">
         <text class="msg__text">正在检索资料并组织回答...</text>
@@ -223,6 +265,9 @@ onLoad(() => {
 .chat {
   min-height: calc(100vh - var(--window-bottom, 0px));
   height: calc(100vh - var(--window-bottom, 0px));
+  min-height: calc(100dvh - var(--window-bottom, 0px));
+  height: calc(100dvh - var(--window-bottom, 0px));
+  padding: calc(20rpx + constant(safe-area-inset-top)) 24rpx calc(18rpx + constant(safe-area-inset-bottom));
   padding: calc(20rpx + env(safe-area-inset-top)) 24rpx calc(18rpx + env(safe-area-inset-bottom));
   box-sizing: border-box;
   display: flex;
@@ -248,7 +293,7 @@ onLoad(() => {
 }
 .chat__clear {
   min-width: 96rpx;
-  min-height: 56rpx;
+  min-height: 88rpx;
   padding: 0 18rpx;
   border-radius: 999rpx;
   background: rgba(255,255,255,.84);
@@ -335,6 +380,31 @@ onLoad(() => {
   font-size: 23rpx;
   line-height: 1.5;
 }
+.msg__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14rpx;
+}
+.msg__action {
+  min-width: 140rpx;
+  min-height: 88rpx;
+  margin: 0;
+  padding: 0 18rpx;
+  border-radius: 999rpx;
+  background: rgba(37,99,235,.09);
+  color: #2563eb;
+  font-size: 22rpx;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.msg__action--retry {
+  background: rgba(225,29,72,.10);
+  color: #e11d48;
+}
+.msg__action::after { border: none; }
+.msg__action[disabled] { opacity: .45; }
 .sources {
   margin-top: 16rpx;
   display: flex;
@@ -377,7 +447,7 @@ onLoad(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 60rpx;
+  min-height: 88rpx;
   padding: 0 20rpx;
   border-radius: 999rpx;
   background: rgba(255,255,255,.86);
@@ -399,7 +469,7 @@ onLoad(() => {
 .composer__input {
   flex: 1;
   min-width: 0;
-  min-height: 76rpx;
+  min-height: 88rpx;
   border-radius: 24rpx;
   background: transparent;
   padding: 0 18rpx;
@@ -409,7 +479,7 @@ onLoad(() => {
 }
 .composer__send {
   width: 124rpx;
-  min-height: 76rpx;
+  min-height: 88rpx;
   padding: 0;
   border-radius: 22rpx;
   background: linear-gradient(135deg,#2563eb,#60a5fa);

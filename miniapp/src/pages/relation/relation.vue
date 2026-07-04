@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { TYPES_INFO, CENTERS } from '../../data/enneagramGame'
+import { isValidTypeId, normalizeTypeId } from '../../utils/session'
 
 const myType = ref(0)
 const taType = ref(0)
@@ -12,8 +13,13 @@ const analysis = ref(null)
 const allTypes = Object.keys(TYPES_INFO).map((id) => ({ id: Number(id), ...TYPES_INFO[id] }))
 
 onLoad((q) => {
-  if (q && q.type) {
-    myType.value = Number(q.type)
+  if (q && Object.prototype.hasOwnProperty.call(q, 'type')) {
+    const type = normalizeTypeId(q.type)
+    if (!type) {
+      rejectInvalidType()
+      return
+    }
+    myType.value = type
   }
 })
 
@@ -25,12 +31,27 @@ function analyze() {
     uni.showToast({ title: '请选择两个型号', icon: 'none' })
     return
   }
-  const a = TYPES_INFO[myType.value]
-  const b = TYPES_INFO[taType.value]
-  myInfo.value = { id: myType.value, ...a }
-  taInfo.value = { id: taType.value, ...b }
-  analysis.value = buildAnalysis(myType.value, taType.value, a, b)
+  if (!isValidTypeId(myType.value) || !isValidTypeId(taType.value)) {
+    uni.showToast({ title: '型号参数无效，请重新选择', icon: 'none' })
+    return
+  }
+  const mine = normalizeTypeId(myType.value)
+  const ta = normalizeTypeId(taType.value)
+  const a = TYPES_INFO[mine]
+  const b = TYPES_INFO[ta]
+  myType.value = mine
+  taType.value = ta
+  myInfo.value = { id: mine, ...a }
+  taInfo.value = { id: ta, ...b }
+  analysis.value = buildAnalysis(mine, ta, a, b)
   stage.value = 'result'
+}
+
+function rejectInvalidType() {
+  uni.showToast({ title: '型号参数无效，请重新测试', icon: 'none' })
+  setTimeout(() => {
+    uni.redirectTo({ url: '/pages/test/test' })
+  }, 600)
 }
 
 // 基于「中心异同 + 编号关系」生成关系解读
@@ -160,7 +181,19 @@ function reset() {
 .intro__d { color: #5d6b7e; font-size: 26rpx; line-height: 1.6; display: block; margin-top: 10rpx; }
 .pick__label { font-size: 28rpx; font-weight: 700; display: block; margin-bottom: 16rpx; }
 .grid { display: flex; flex-wrap: wrap; gap: 14rpx; }
-.chip { padding: 14rpx 22rpx; border-radius: 999rpx; background: #f4f7f9; font-size: 24rpx; color: #42505e; border: 2rpx solid transparent; }
+.chip {
+  min-height: 88rpx;
+  padding: 0 24rpx;
+  border-radius: 999rpx;
+  background: #f4f7f9;
+  font-size: 24rpx;
+  color: #42505e;
+  border: 2rpx solid transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
 .chip.on { background: #2b7fff14; color: #1f73c4; border-color: #2b7fff66; font-weight: 700; }
 
 .pair { display: flex; align-items: center; justify-content: space-between; }
