@@ -47,7 +47,7 @@ export default function TypeDetail() {
         <div className="type-orbit" aria-hidden="true">
           <span className="type-orbit__ring type-orbit__ring--outer"></span>
           <span className="type-orbit__ring type-orbit__ring--inner"></span>
-          <img src={`/assets/avatars/${detail.id}.png`} alt="" />
+          <img src={`/assets/avatars/${detail.id}.webp`} alt="" />
           <b>{detail.id}</b>
         </div>
       </Reveal>

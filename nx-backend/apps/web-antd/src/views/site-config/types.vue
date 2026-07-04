@@ -10,7 +10,7 @@ const { config, loading, saveConfig, saving } = useSiteConfigEditor();
 function addType() {
   const next = String((config.value?.types.length ?? 0) + 1);
   config.value?.types.push({
-    avatar: `/assets/avatars/${next}.png`,
+    avatar: `/assets/avatars/${next}.webp`,
     description: '',
     id: next,
     keywords: '',

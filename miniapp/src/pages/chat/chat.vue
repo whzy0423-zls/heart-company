@@ -221,8 +221,8 @@ onLoad(() => {
 
 <style scoped>
 .chat {
-  min-height: 100vh;
-  height: 100vh;
+  min-height: calc(100vh - var(--window-bottom, 0px));
+  height: calc(100vh - var(--window-bottom, 0px));
   padding: calc(20rpx + env(safe-area-inset-top)) 24rpx calc(18rpx + env(safe-area-inset-bottom));
   box-sizing: border-box;
   display: flex;

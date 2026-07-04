@@ -401,6 +401,6 @@ const sampleConfig = `{
   },
   "home": {},
   "types": [
-    { "id": "1", "name": "完美型", "keywords": "原则", "description": "描述", "avatar": "/assets/avatars/1.png" }
+    { "id": "1", "name": "完美型", "keywords": "原则", "description": "描述", "avatar": "/assets/avatars/1.webp" }
   ]
 }`

@@ -39,7 +39,7 @@ export function TypesSection() {
           <Reveal as={Link} to={`/type/${t[0]}`} key={t[0]} className="card type-card type-card--link">
             <div className="type-card__head">
               <span className="type-card__avatar-wrap">
-                <img className="type-card__avatar" src={`/assets/avatars/${t[0]}.png`} alt={t[1]} loading="lazy"
+                <img className="type-card__avatar" src={`/assets/avatars/${t[0]}.webp`} alt={t[1]} loading="lazy"
                      onError={(e) => { e.currentTarget.style.display = 'none' }} />
                 <span className="type-card__num">{t[0]}</span>
               </span>

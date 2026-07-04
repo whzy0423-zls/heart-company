@@ -82,7 +82,7 @@ const recentInsightColumns = [
   { dataIndex: 'nickname', title: '昵称', width: 130 },
   { dataIndex: 'primaryType', title: '主型', width: 90 },
   { dataIndex: 'memoryCount', title: '记忆', width: 90 },
-  { dataIndex: 'latestMemory', title: '最新沉淀' },
+  { dataIndex: 'lastMemoryAt', title: '最近沉淀时间', width: 170 },
   { key: 'action', title: '操作', width: 90 },
 ];
 
@@ -243,8 +243,8 @@ onMounted(loadOverview);
             <template v-if="column.dataIndex === 'memoryCount'">
               {{ record.memoryCount ?? 0 }} 条
             </template>
-            <template v-if="column.dataIndex === 'latestMemory'">
-              {{ record.latestMemory || '-' }}
+            <template v-if="column.dataIndex === 'lastMemoryAt'">
+              {{ record.lastMemoryAt || record.latestMemory || '-' }}
             </template>
             <template v-if="column.key === 'action'">
               <Button size="small" type="link" @click="goInsights(record.phone)">360</Button>

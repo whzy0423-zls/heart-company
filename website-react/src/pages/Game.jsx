@@ -69,7 +69,7 @@ async function buildShareCard(result, r, info) {
   ctx.fillStyle = `${accent}22`
   ctx.fill()
   try {
-    const avatar = await loadImage(`/assets/avatars/${result.type}.png`)
+    const avatar = await loadImage(`/assets/avatars/${result.type}.webp`)
     ctx.save()
     ctx.beginPath()
     ctx.arc(cx, cy, rad, 0, Math.PI * 2)
@@ -339,7 +339,7 @@ export default function Game() {
           <span className="result-gif__glow" />
           <div className="result-gif__frame">
             <img
-              src={`/assets/avatars/${result.type}.png`}
+              src={`/assets/avatars/${result.type}.webp`}
               alt={r.title}
               onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.nextElementSibling.style.display = 'grid' }}
             />
