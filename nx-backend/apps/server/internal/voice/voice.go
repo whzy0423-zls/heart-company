@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/netguard"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 )
 
@@ -708,7 +709,10 @@ func NewMiniMaxClient(cfg config.MiniMaxConfig) *MiniMaxClient {
 	return &MiniMaxClient{
 		apiBase: apiBase,
 		apiKey:  strings.TrimSpace(cfg.APIKey),
-		client:  &http.Client{Timeout: 120 * time.Second},
+		client: &http.Client{
+			Timeout:   120 * time.Second,
+			Transport: netguard.NewGuardedTransport(),
+		},
 		groupID: strings.TrimSpace(cfg.GroupID),
 	}
 }
@@ -886,6 +890,9 @@ func (c *MiniMaxClient) doJSON(req *http.Request) (map[string]any, error) {
 }
 
 func (c *MiniMaxClient) download(ctx context.Context, audioURL string) ([]byte, string, error) {
+	if !netguard.IsPublicHTTPURL(audioURL) {
+		return nil, "", fmt.Errorf("MiniMax 返回了不安全的音频地址")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, audioURL, nil)
 	if err != nil {
 		return nil, "", err

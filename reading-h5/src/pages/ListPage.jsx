@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { fetchArticles, fetchCategories } from '../api/articles.js'
+import { fetchArticles, fetchCategories, resolveMediaUrl } from '../api/articles.js'
 
 const PAGE_SIZE = 10
 
@@ -15,8 +15,9 @@ function SearchIcon() {
 }
 
 function Cover({ article }) {
-  if (article.cover) {
-    return <img className="card-cover" src={article.cover} alt={article.title} loading="lazy" />
+  const coverUrl = article.cover ? resolveMediaUrl(article.cover) : ''
+  if (coverUrl) {
+    return <img className="card-cover" src={coverUrl} alt={article.title} loading="lazy" />
   }
   const ch = (article.title || '读').trim().charAt(0)
   return <div className="card-cover placeholder">{ch}</div>

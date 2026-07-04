@@ -1,10 +1,8 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { marked } from 'marked'
 import { fetchArticle, resolveMediaUrl } from '../api/articles.js'
 import AudioPlayer from '../components/AudioPlayer.jsx'
-
-marked.setOptions({ breaks: true, gfm: true })
+import { renderMarkdown } from '../utils/markdown.js'
 
 function BackIcon() {
   return (
@@ -36,7 +34,7 @@ export default function ReaderPage() {
 
   const html = useMemo(() => {
     if (!article?.content) return ''
-    return marked.parse(article.content)
+    return renderMarkdown(article.content)
   }, [article])
 
   const audioUrl = useMemo(() => {
@@ -44,6 +42,10 @@ export default function ReaderPage() {
       return resolveMediaUrl(article.audioUrl)
     }
     return ''
+  }, [article])
+
+  const coverUrl = useMemo(() => {
+    return article?.cover ? resolveMediaUrl(article.cover) : ''
   }, [article])
 
   const goBack = () => {
@@ -84,8 +86,8 @@ export default function ReaderPage() {
 
           {audioUrl && <AudioPlayer src={audioUrl} title={article.title} />}
 
-          {article.cover && (
-            <img className="article-hero" src={article.cover} alt={article.title} />
+          {coverUrl && (
+            <img className="article-hero" src={coverUrl} alt={article.title} />
           )}
 
           <div className="prose" dangerouslySetInnerHTML={{ __html: html }} />

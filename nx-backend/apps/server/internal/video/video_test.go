@@ -20,6 +20,20 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 )
 
+func allowLocalTestClient(client *Client) *Client {
+	client.urlAllowed = func(string) bool { return true }
+	client.client.Transport = &http.Transport{
+		DisableKeepAlives: true,
+		Proxy:             http.ProxyFromEnvironment,
+	}
+	return client
+}
+
+func allowLocalTestStore(store *Store) *Store {
+	store.client = allowLocalTestClient(store.client)
+	return store
+}
+
 func TestQueryTaskIncludesSeconds(t *testing.T) {
 	var gotSeconds string
 	var gotPath string
@@ -35,10 +49,10 @@ func TestQueryTaskIncludesSeconds(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(config.VideoConfig{
+	client := allowLocalTestClient(NewClient(config.VideoConfig{
 		APIBase: server.URL,
 		APIKey:  "test-key",
-	})
+	}))
 	if _, err := client.QueryTask(context.Background(), "task-1", 15); err != nil {
 		t.Fatal(err)
 	}
@@ -69,10 +83,10 @@ func TestCreateTaskIncludesSecondsInQuery(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(config.VideoConfig{
+	client := allowLocalTestClient(NewClient(config.VideoConfig{
 		APIBase: server.URL,
 		APIKey:  "test-key",
-	})
+	}))
 	if _, err := client.CreateTask(context.Background(), "video-ds-2.0-fast", "test", nil, nil, nil, 15, "9:16"); err != nil {
 		t.Fatal(err)
 	}
@@ -102,10 +116,10 @@ func TestCreateTaskIncludesAspectRatio(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(config.VideoConfig{
+	client := allowLocalTestClient(NewClient(config.VideoConfig{
 		APIBase: server.URL,
 		APIKey:  "test-key",
-	})
+	}))
 	if _, err := client.CreateTask(context.Background(), "video-ds-2.0-fast", "test", nil, nil, nil, 15, "9:16"); err != nil {
 		t.Fatal(err)
 	}
@@ -129,10 +143,10 @@ func TestCreateTaskDefaultsAspectRatioTo16By9(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(config.VideoConfig{
+	client := allowLocalTestClient(NewClient(config.VideoConfig{
 		APIBase: server.URL,
 		APIKey:  "test-key",
-	})
+	}))
 	if _, err := client.CreateTask(context.Background(), "video-ds-2.0-fast", "test", nil, nil, nil, 15, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -156,10 +170,10 @@ func TestGenerateRejectsUnsupportedAspectRatio(t *testing.T) {
 	db := openVideoTestDB(t, &videoDBState{})
 	defer db.Close()
 
-	store := NewStore(db, nil, config.VideoConfig{
+	store := allowLocalTestStore(NewStore(db, nil, config.VideoConfig{
 		APIBase: server.URL,
 		APIKey:  "test-key",
-	})
+	}))
 	if _, err := store.Generate(context.Background(), GenerateInput{Prompt: "test", AspectRatio: "4:3"}); err == nil {
 		t.Fatal("expected unsupported aspect ratio to be rejected")
 	}
@@ -180,11 +194,11 @@ func TestGenerateRejectsSuccessfulCreateWithoutTaskID(t *testing.T) {
 	db := openVideoTestDB(t, &videoDBState{})
 	defer db.Close()
 
-	store := NewStore(db, nil, config.VideoConfig{
+	store := allowLocalTestStore(NewStore(db, nil, config.VideoConfig{
 		APIBase: server.URL,
 		APIKey:  "test-key",
 		Model:   "video-ds-2.0-fast",
-	})
+	}))
 	_, err := store.Generate(context.Background(), GenerateInput{Prompt: "test"})
 	if err == nil {
 		t.Fatal("expected missing task_id error")
@@ -225,10 +239,10 @@ func TestRefreshClearsOldErrorWhenFailedTaskBecomesQueued(t *testing.T) {
 	}))
 	defer server.Close()
 
-	store := NewStore(db, nil, config.VideoConfig{
+	store := allowLocalTestStore(NewStore(db, nil, config.VideoConfig{
 		APIBase: server.URL,
 		APIKey:  "test-key",
-	})
+	}))
 	result, err := store.Refresh(context.Background(), "42")
 	if err != nil {
 		t.Fatal(err)
@@ -281,10 +295,10 @@ func TestRefreshMarksCompletedTaskFailedWhenContentUnavailable(t *testing.T) {
 	serverURL = server.URL
 	defer server.Close()
 
-	store := NewStore(db, nil, config.VideoConfig{
+	store := allowLocalTestStore(NewStore(db, nil, config.VideoConfig{
 		APIBase: server.URL,
 		APIKey:  "test-key",
-	})
+	}))
 	result, err := store.Refresh(context.Background(), "42")
 	if err != nil {
 		t.Fatal(err)
@@ -318,7 +332,7 @@ func TestGenerateStoresTaskWithoutCreatingAssetBeforeCompletion(t *testing.T) {
 	}))
 	defer server.Close()
 	uploader := &recordingVideoUploader{url: "https://cdn.example.com/video/generated/result.mp4", objectKey: "video/generated/result.mp4"}
-	store := NewStore(db, nil, config.VideoConfig{APIBase: server.URL, APIKey: "test-key"}, uploader)
+	store := allowLocalTestStore(NewStore(db, nil, config.VideoConfig{APIBase: server.URL, APIKey: "test-key"}, uploader))
 	result, err := store.Generate(context.Background(), GenerateInput{Prompt: "test", Model: "video-ds-2.0-fast"})
 	if err != nil {
 		t.Fatal(err)
@@ -374,7 +388,7 @@ func TestRefreshUsesPublicObjectURLWhenFallbackDownloadSucceeds(t *testing.T) {
 	defer server.Close()
 
 	uploader := &recordingVideoUploader{url: "https://cdn.example.com/video/generated/result.mp4", objectKey: "video/generated/result.mp4"}
-	store := NewStore(db, uploadasset.NewStore(db), config.VideoConfig{APIBase: server.URL, APIKey: "test-key"}, uploader)
+	store := allowLocalTestStore(NewStore(db, uploadasset.NewStore(db), config.VideoConfig{APIBase: server.URL, APIKey: "test-key"}, uploader))
 	result, err := store.Refresh(context.Background(), "42")
 	if err != nil {
 		t.Fatal(err)
@@ -426,7 +440,7 @@ func TestRefreshMarksCompletedTaskFailedWhenUploadHasNoPublicObjectURL(t *testin
 	}))
 	defer server.Close()
 
-	store := NewStore(db, uploadasset.NewStore(db), config.VideoConfig{APIBase: server.URL, APIKey: "test-key"})
+	store := allowLocalTestStore(NewStore(db, uploadasset.NewStore(db), config.VideoConfig{APIBase: server.URL, APIKey: "test-key"}))
 	result, err := store.Refresh(context.Background(), "42")
 	if err != nil {
 		t.Fatal(err)
@@ -457,10 +471,10 @@ func TestCreateTaskIncludesReferenceAudios(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(config.VideoConfig{
+	client := allowLocalTestClient(NewClient(config.VideoConfig{
 		APIBase: server.URL,
 		APIKey:  "test-key",
-	})
+	}))
 	if _, err := client.CreateTask(context.Background(), "video-ds-2.0-fast", "test", nil, nil, []string{"https://example.com/input.mp3"}, 15, "9:16"); err != nil {
 		t.Fatal(err)
 	}
@@ -495,10 +509,10 @@ func TestCreateTaskRetriesEOFOnce(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(config.VideoConfig{
+	client := allowLocalTestClient(NewClient(config.VideoConfig{
 		APIBase: server.URL,
 		APIKey:  "test-key",
-	})
+	}))
 	result, err := client.CreateTask(context.Background(), "video-ds-2.0-fast", "test", nil, nil, nil, 15, "9:16")
 	if err != nil {
 		t.Fatal(err)
@@ -508,6 +522,46 @@ func TestCreateTaskRetriesEOFOnce(t *testing.T) {
 	}
 	if attempts != 2 {
 		t.Fatalf("expected one retry after EOF, got %d attempts", attempts)
+	}
+}
+
+func TestCreateTaskFormatsImageURLForbiddenError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{
+				"message": "invalid image_url: image url returned 403",
+				"type":    "invalid_request_error",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := allowLocalTestClient(NewClient(config.VideoConfig{
+		APIBase: server.URL,
+		APIKey:  "test-key",
+	}))
+	_, err := client.CreateTask(context.Background(), "video-ds-2.0-fast", "test", []string{"https://example.com/private.png"}, nil, nil, 15, "16:9")
+	if err == nil {
+		t.Fatal("expected gateway error")
+	}
+	got := err.Error()
+	if !strings.Contains(got, "参考图片地址无法被视频网关访问") {
+		t.Fatalf("expected friendly image url error, got %q", got)
+	}
+	if strings.Contains(got, `{"error"`) {
+		t.Fatalf("expected raw json to be hidden, got %q", got)
+	}
+}
+
+func TestDownloadRejectsPrivateOrLocalURL(t *testing.T) {
+	client := NewClient(config.VideoConfig{APIBase: "https://video.example.com", APIKey: "test-key"})
+	_, _, err := client.Download(context.Background(), "http://127.0.0.1:8080/private.mp4")
+	if err == nil {
+		t.Fatal("expected local download URL to be rejected")
+	}
+	if !strings.Contains(err.Error(), "公网") {
+		t.Fatalf("expected actionable public URL error, got %v", err)
 	}
 }
 
@@ -528,10 +582,10 @@ func TestDownloadTaskContentUsesContentEndpoint(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(config.VideoConfig{
+	client := allowLocalTestClient(NewClient(config.VideoConfig{
 		APIBase: server.URL,
 		APIKey:  "test-key",
-	})
+	}))
 	data, contentType, err := client.DownloadTaskContent(context.Background(), "task-1")
 	if err != nil {
 		t.Fatal(err)
@@ -603,6 +657,8 @@ func TestShouldSkipRefreshStopsRecordWithoutTask(t *testing.T) {
 func TestIsPublicHTTPURLRejectsPrivateAndLocalHosts(t *testing.T) {
 	for _, raw := range []string{
 		"http://localhost/a.mp4",
+		"http://localhost./a.mp4",
+		"http://foo.localhost/a.mp4",
 		"http://127.0.0.1/a.mp4",
 		"http://10.0.0.2/a.mp4",
 		"http://172.16.0.2/a.mp4",

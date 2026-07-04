@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/netguard"
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 )
@@ -316,22 +317,7 @@ func shouldSkipRefresh(item Generation) bool {
 }
 
 func isPublicHTTPURL(raw string) bool {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return false
-	}
-	host := strings.ToLower(u.Hostname())
-	if host == "localhost" {
-		return false
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return !isPrivateOrLocalIP(ip)
-	}
-	return true
-}
-
-func isPrivateOrLocalIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+	return netguard.IsPublicHTTPURL(raw)
 }
 
 func (s *Store) ListGenerations(ctx context.Context, query url.Values) (PageResult[Generation], error) {
@@ -449,9 +435,10 @@ func pagination(query url.Values) (int, int) {
 
 // Client 是 New API / OpenAI 兼容视频网关的最小 HTTP 客户端。
 type Client struct {
-	apiBase string
-	apiKey  string
-	client  *http.Client
+	apiBase    string
+	apiKey     string
+	client     *http.Client
+	urlAllowed func(string) bool
 }
 
 // TaskResult 归一化网关创建/查询任务返回的字段。
@@ -471,17 +458,31 @@ func NewClient(cfg config.VideoConfig) *Client {
 	if timeout <= 0 {
 		timeout = 120 * time.Second
 	}
-	return &Client{
+	client := &Client{
 		apiBase: strings.TrimRight(strings.TrimSpace(cfg.APIBase), "/"),
 		apiKey:  strings.TrimSpace(cfg.APIKey),
-		client: &http.Client{
-			Timeout: timeout,
-			Transport: &http.Transport{
-				DisableKeepAlives: true,
-				Proxy:             http.ProxyFromEnvironment,
-			},
+		urlAllowed: func(raw string) bool {
+			return isPublicHTTPURL(raw)
 		},
 	}
+	client.client = &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			if !client.isURLAllowed(req.URL.String()) {
+				return fmt.Errorf("视频下载重定向地址必须是公网 http(s) 地址")
+			}
+			return nil
+		},
+		Transport: netguard.NewGuardedTransport(),
+	}
+	return client
+}
+
+func (c *Client) isURLAllowed(raw string) bool {
+	if c != nil && c.urlAllowed != nil {
+		return c.urlAllowed(raw)
+	}
+	return isPublicHTTPURL(raw)
 }
 
 func (c *Client) ensureReady() error {
@@ -587,6 +588,9 @@ func (c *Client) DownloadTaskContent(ctx context.Context, taskID string) ([]byte
 
 // Download 拉取最终视频字节，限制 200MB 防止内存失控。
 func (c *Client) Download(ctx context.Context, fileURL string) ([]byte, string, error) {
+	if !c.isURLAllowed(fileURL) {
+		return nil, "", fmt.Errorf("视频下载地址必须是公网 http(s) 地址")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
 	if err != nil {
 		return nil, "", err
@@ -641,7 +645,7 @@ func (c *Client) doJSONOnce(req *http.Request) (map[string]any, error) {
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("视频网关返回 HTTP %d: %s", resp.StatusCode, compactBody(raw))
+		return nil, fmt.Errorf("视频网关返回 HTTP %d: %s", resp.StatusCode, gatewayErrorMessage(raw))
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
@@ -763,4 +767,54 @@ func compactBody(raw []byte) string {
 		return s[:500] + "..."
 	}
 	return s
+}
+
+func gatewayErrorMessage(raw []byte) string {
+	message := unwrapGatewayMessage(strings.TrimSpace(string(raw)), 0)
+	if message == "" {
+		message = compactBody(raw)
+	}
+	lower := strings.ToLower(message)
+	if strings.Contains(lower, "invalid image_url") && strings.Contains(lower, "returned 403") {
+		return "参考图片地址无法被视频网关访问（image_url 返回 403），请确认文件桶文件为公网可读、未开启防盗链/鉴权，或重新上传后使用 objectUrl"
+	}
+	if strings.Contains(lower, "invalid video_url") && strings.Contains(lower, "returned 403") {
+		return "参考视频地址无法被视频网关访问（video_url 返回 403），请确认文件桶文件为公网可读、未开启防盗链/鉴权，或重新上传后使用 objectUrl"
+	}
+	if strings.Contains(lower, "invalid audio_url") && strings.Contains(lower, "returned 403") {
+		return "参考音频地址无法被视频网关访问（audio_url 返回 403），请确认文件桶文件为公网可读、未开启防盗链/鉴权，或重新上传后使用 objectUrl"
+	}
+	return message
+}
+
+func unwrapGatewayMessage(raw string, depth int) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if depth >= 4 {
+		return raw
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return raw
+	}
+	for _, path := range []string{
+		"error.message",
+		"error",
+		"message",
+		"data.error.message",
+		"data.error",
+		"data.message",
+	} {
+		value := findString(payload, path)
+		if value == "" {
+			continue
+		}
+		unwrapped := unwrapGatewayMessage(value, depth+1)
+		if strings.TrimSpace(unwrapped) != "" {
+			return unwrapped
+		}
+	}
+	return compactBody([]byte(raw))
 }

@@ -2,6 +2,7 @@ package appuser
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -31,7 +32,17 @@ func (s *Store) HandleAppUsers(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, result)
 }
 
-// HandleAppUserByID 处理 GET /api/app-users/{id} —— 单个 App 客户详情。
+// HandleAppUserInsights 处理 GET /api/app-users/insights —— 后台用户提炼数据聚合列表。
+func (s *Store) HandleAppUserInsights(w http.ResponseWriter, r *http.Request) {
+	result, err := s.ListInsights(r.Context(), queryMap(r))
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+// HandleAppUserByID 处理 /api/app-users/{id} —— 单个 App 客户详情与后台字段更新。
 func (s *Store) HandleAppUserByID(w http.ResponseWriter, r *http.Request) {
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/app-users/")
 	idStr = strings.TrimSpace(idStr)
@@ -44,10 +55,44 @@ func (s *Store) HandleAppUserByID(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "invalid id")
 		return
 	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleAppUserDetail(w, r, id)
+	case http.MethodPut, http.MethodPatch:
+		s.handleAppUserUpdate(w, r, id)
+	default:
+		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+	}
+}
+
+func (s *Store) handleAppUserDetail(w http.ResponseWriter, r *http.Request, id int64) {
 	user, err := s.FindByID(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			httpx.Fail(w, http.StatusNotFound, "app user not found")
+			return
+		}
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, user)
+}
+
+func (s *Store) handleAppUserUpdate(w http.ResponseWriter, r *http.Request, id int64) {
+	var input UpdateAdminFieldsInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	user, err := s.UpdateAdminFields(r.Context(), id, input)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			httpx.Fail(w, http.StatusNotFound, "app user not found")
+			return
+		}
+		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())

@@ -3,6 +3,8 @@ import type { SystemMenu } from '#/api';
 
 import { computed, onMounted, ref } from 'vue';
 
+import { useAccessStore } from '@vben/stores';
+
 import {
   Button,
   Form,
@@ -25,6 +27,8 @@ import {
 } from '#/api';
 
 import PageShell from '../components/page-shell.vue';
+
+const accessStore = useAccessStore();
 
 interface MenuForm {
   authCode?: string;
@@ -51,6 +55,15 @@ const typeOptions = [
   { label: '菜单', value: 'menu' },
   { label: '按钮', value: 'button' },
 ];
+const canCreate = computed(() =>
+  accessStore.accessCodes.includes('System:Menu:Create'),
+);
+const canUpdate = computed(() =>
+  accessStore.accessCodes.includes('System:Menu:Update'),
+);
+const canDelete = computed(() =>
+  accessStore.accessCodes.includes('System:Menu:Delete'),
+);
 
 const columns = [
   { dataIndex: ['meta', 'title'], title: '菜单名称' },
@@ -172,6 +185,7 @@ onMounted(load);
   <PageShell
     description="维护后台侧边栏菜单、目录与按钮权限码。修改后对应角色刷新即生效。"
     :loading="loading"
+    :show-create="canCreate"
     title="菜单权限"
     @create="openCreate"
     @refresh="load"
@@ -194,6 +208,7 @@ onMounted(load);
         <template v-if="column.key === 'action'">
           <Space>
             <Button
+              v-if="canUpdate"
               size="small"
               type="link"
               @click="openEdit(menuRecord(record))"
@@ -201,6 +216,7 @@ onMounted(load);
               编辑
             </Button>
             <Popconfirm
+              v-if="canDelete"
               title="确认删除该菜单及其子菜单？"
               @confirm="remove(menuRecord(record))"
             >
@@ -215,7 +231,7 @@ onMounted(load);
       v-model:open="modalOpen"
       :confirm-loading="saving"
       title="菜单信息"
-      width="640px"
+      width="min(640px, calc(100vw - 32px))"
       @ok="save"
     >
       <Form layout="vertical">

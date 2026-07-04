@@ -1,0 +1,225 @@
+package server
+
+import (
+	"database/sql"
+	"encoding/json"
+	"net/http"
+	"time"
+
+	"nine-xing/nx-backend/apps/server/internal/appuser"
+	"nine-xing/nx-backend/apps/server/internal/httpx"
+)
+
+type appPrivacyPolicyResponse struct {
+	Title       string `json:"title"`
+	Version     string `json:"version"`
+	EffectiveAt string `json:"effectiveAt"`
+	Content     string `json:"content"`
+}
+
+type appPrivacyExportResponse struct {
+	GeneratedAt  string           `json:"generatedAt"`
+	User         appuser.User     `json:"user"`
+	Cards        []appPrivacyCard `json:"cards"`
+	Memories     []appMemoryItem  `json:"memories"`
+	SessionCount int              `json:"sessionCount"`
+	MessageCount int              `json:"messageCount"`
+}
+
+type appPrivacyCard struct {
+	ID         int64           `json:"id"`
+	AppUserID  int64           `json:"appUserId"`
+	CardType   string          `json:"cardType"`
+	Name       string          `json:"name"`
+	Relation   string          `json:"relation"`
+	MainType   int             `json:"mainType"`
+	WingType   int             `json:"wingType"`
+	Profile    json.RawMessage `json:"profile"`
+	Status     string          `json:"status"`
+	CreateTime string          `json:"createTime"`
+	UpdateTime string          `json:"updateTime"`
+}
+
+func (s *Server) appPrivacyPolicy(w http.ResponseWriter, _ *http.Request) {
+	httpx.OK(w, appPrivacyPolicyResponse{
+		Title:       "九型芯之力 App 隐私政策",
+		Version:     "2026-07-03",
+		EffectiveAt: "2026-07-03",
+		Content:     "我们仅为账号登录、九型测评、成长卡片、对话记忆、消息推送和服务改进处理必要信息。你可以在 App 内导出个人数据、清空记忆或注销账号。注销后账号将被禁用，登录凭证失效，App 侧个人数据会按当前能力清理或匿名化。后续如引入后台可配置版本，将以最新发布文本为准。",
+	})
+}
+
+func (s *Server) appPrivacyExport(w http.ResponseWriter, r *http.Request) {
+	userInfo, ok := appUserFromContext(r)
+	if !ok {
+		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	user, err := s.appUsers.FindByID(r.Context(), userInfo.ID)
+	if err != nil {
+		httpx.Fail(w, http.StatusNotFound, "user not found")
+		return
+	}
+	cards, err := s.appPrivacyCards(r, userInfo.ID)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	memories, err := s.appPrivacyMemories(r, userInfo.ID)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	sessionCount, messageCount, err := s.appPrivacyChatCounts(r, userInfo.ID)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+
+	httpx.OK(w, appPrivacyExportResponse{
+		GeneratedAt:  appMemoryTime(time.Now()),
+		User:         user,
+		Cards:        cards,
+		Memories:     memories,
+		SessionCount: sessionCount,
+		MessageCount: messageCount,
+	})
+}
+
+func (s *Server) appPrivacyDeleteMemories(w http.ResponseWriter, r *http.Request) {
+	userInfo, ok := appUserFromContext(r)
+	if !ok {
+		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	res, err := s.db.ExecContext(r.Context(), `DELETE FROM app_memories WHERE app_user_id = $1`, userInfo.ID)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	deleted, _ := res.RowsAffected()
+	httpx.OK(w, map[string]int64{"deleted": deleted})
+}
+
+func (s *Server) appPrivacyDeleteAccount(w http.ResponseWriter, r *http.Request) {
+	userInfo, ok := appUserFromContext(r)
+	if !ok {
+		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	defer tx.Rollback()
+
+	steps := []string{
+		`DELETE FROM app_memories WHERE app_user_id = $1`,
+		`DELETE FROM app_chat_sessions WHERE app_user_id = $1`,
+		`DELETE FROM app_compatibility_reports WHERE app_user_id = $1`,
+		`DELETE FROM app_daily_checkins WHERE app_user_id = $1`,
+		`DELETE FROM app_device_tokens WHERE app_user_id = $1`,
+		`UPDATE app_user_cards SET status = 'deleted', update_time = now() WHERE app_user_id = $1 AND status <> 'deleted'`,
+		`UPDATE app_analytics_events SET app_user_id = NULL WHERE app_user_id = $1`,
+		`UPDATE app_refresh_tokens SET revoked = true WHERE app_user_id = $1 AND revoked = false`,
+	}
+	for _, query := range steps {
+		if _, err := tx.ExecContext(r.Context(), query, userInfo.ID); err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "server error")
+			return
+		}
+	}
+	res, err := tx.ExecContext(r.Context(),
+		`UPDATE app_users
+		    SET phone = 'deleted-' || id::text || '-' || floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint::text,
+		        nickname = '',
+		        avatar = '',
+		        status = 'disabled',
+		        member_level = 'free',
+		        update_time = now()
+		  WHERE id = $1 AND status = 'active'`,
+		userInfo.ID)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		httpx.Fail(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	httpx.OK(w, map[string]bool{"deleted": true})
+}
+
+func (s *Server) appPrivacyCards(r *http.Request, appUserID int64) ([]appPrivacyCard, error) {
+	rows, err := s.db.QueryContext(r.Context(),
+		`SELECT id, app_user_id, card_type, name, relation, enneagram, wing, profile, status, create_time, update_time
+		   FROM app_user_cards
+		  WHERE app_user_id = $1
+		  ORDER BY CASE WHEN card_type = 'primary' THEN 0 ELSE 1 END, create_time, id`,
+		appUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cards := []appPrivacyCard{}
+	for rows.Next() {
+		var card appPrivacyCard
+		var createTime, updateTime time.Time
+		if err := rows.Scan(&card.ID, &card.AppUserID, &card.CardType, &card.Name, &card.Relation, &card.MainType, &card.WingType, &card.Profile, &card.Status, &createTime, &updateTime); err != nil {
+			return nil, err
+		}
+		card.CreateTime = appMemoryTime(createTime)
+		card.UpdateTime = appMemoryTime(updateTime)
+		cards = append(cards, card)
+	}
+	return cards, rows.Err()
+}
+
+func (s *Server) appPrivacyMemories(r *http.Request, appUserID int64) ([]appMemoryItem, error) {
+	rows, err := s.db.QueryContext(r.Context(),
+		`SELECT id, card_id, content, status, source_time, create_time, update_time
+		   FROM app_memories
+		  WHERE app_user_id = $1
+		  ORDER BY update_time DESC, id DESC`,
+		appUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	memories := []appMemoryItem{}
+	for rows.Next() {
+		var item appMemoryItem
+		var source sql.NullTime
+		var createTime, updateTime time.Time
+		if err := rows.Scan(&item.ID, &item.CardID, &item.Content, &item.Status, &source, &createTime, &updateTime); err != nil {
+			return nil, err
+		}
+		if source.Valid {
+			item.SourceTime = appMemoryTime(source.Time)
+		}
+		item.CreateTime = appMemoryTime(createTime)
+		item.UpdateTime = appMemoryTime(updateTime)
+		memories = append(memories, item)
+	}
+	return memories, rows.Err()
+}
+
+func (s *Server) appPrivacyChatCounts(r *http.Request, appUserID int64) (int, int, error) {
+	var sessionCount int
+	var messageCount int
+	err := s.db.QueryRowContext(r.Context(),
+		`SELECT
+		    count(DISTINCT s.id),
+		    count(m.id)
+		   FROM app_chat_sessions s
+		   LEFT JOIN app_chat_messages m ON m.session_id = s.id
+		  WHERE s.app_user_id = $1`,
+		appUserID).Scan(&sessionCount, &messageCount)
+	return sessionCount, messageCount, err
+}

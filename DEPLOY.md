@@ -6,8 +6,8 @@
 |------|------|-----------|------|
 | `db` | PostgreSQL 16 | 不对外 | 用户/角色/菜单持久化，数据存卷 `pgdata` |
 | `server` | Go 后台服务 | 不对外 | 仅集群内 `:5320`，经各 nginx 反代 `/api` |
-| `admin` | 后台管理(web-antd) | `8080` | 静态页 + 反代 `/api` 到 server |
-| `website` | 官网(website-react) | `8000` | 静态页 + 反代 `/api/public/*` 到 server |
+| `admin` | 后台管理(web-antd) | `127.0.0.1:8080` | 静态页 + 反代 `/api` 到 server |
+| `website` | 官网(website-react) | `127.0.0.1:8000` | 静态页 + 反代 `/api/public/*` 到 server |
 
 数据流：
 ```
@@ -33,18 +33,22 @@
 在仓库根 `nine-xing/` 下：
 
 ```bash
-# 1) 设置生产密钥（强烈建议，不设则用不安全的默认值）
+# 1) 设置生产密钥（必填；未设置时 docker compose 会拒绝启动）
 export JWT_SECRET="$(openssl rand -hex 32)"
 export ADMIN_USERNAME="admin"
 export ADMIN_PASSWORD="你的强密码"
+export POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 
-# 2) 如果要使用人声管理/声音测试，必须配置 MiniMax 中文站 API Key
+# 2) 如果后台/官网/API 不同源，配置浏览器允许访问 API 的生产域名
+# export CORS_ALLOWED_ORIGINS="https://admin.example.com,https://www.example.com"
+
+# 3) 如果要使用人声管理/声音测试，必须配置 MiniMax 中文站 API Key
 export MINIMAX_API_KEY="你的 MiniMax API Key"
 export MINIMAX_API_BASE="https://api.minimaxi.com"
 # 如控制台要求 GroupId，再设置：
 # export MINIMAX_GROUP_ID="你的 GroupId"
 
-# 3) 如使用 OSS 上传，请补齐全部 OSS 配置；不使用 OSS 就保持所有 OSS_* 为空
+# 4) 如使用 OSS 上传，请补齐全部 OSS 配置；不使用 OSS 就保持所有 OSS_* 为空
 # export OSS_ACCESS_KEY_ID="..."
 # export OSS_ACCESS_KEY_SECRET="..."
 # export OSS_BUCKET="..."
@@ -52,17 +56,30 @@ export MINIMAX_API_BASE="https://api.minimaxi.com"
 # export OSS_ENDPOINT="https://oss-cn-beijing.aliyuncs.com"
 # export OSS_PUBLIC_URL="https://your-bucket.oss-cn-beijing.aliyuncs.com"
 
-# 4) 构建并启动
+# 5) 如启用微信支付/推送，请补齐对应生产配置
+# export WXPAY_MCH_ID="..."
+# export WXPAY_APPID="..."
+# export WXPAY_API_V3_KEY="..."
+# export WXPAY_SERIAL_NO="..."
+# export WXPAY_PRIVATE_KEY_PATH="/data/certs/wxpay_private_key.pem"
+# export WXPAY_PLATFORM_CERT_PATH="/data/certs/wxpay_platform_cert.pem"
+# export WXPAY_NOTIFY_URL="https://api.example.com/api/pay/notify"
+# export JPUSH_APP_KEY="..."
+# export JPUSH_MASTER_SECRET="..."
+
+# 6) 构建并启动
 docker compose up -d --build
 
-# 5) 查看状态/日志
+# 7) 查看状态/日志
 docker compose ps
 docker compose logs -f server
 ```
 
 启动后：
-- 后台管理：http://服务器IP:8080 （账号见上面的 ADMIN_*）
-- 官网：http://服务器IP:8000
+- 后台管理：服务器本机 `http://127.0.0.1:8080`（账号见上面的 `ADMIN_*`）
+- 官网：服务器本机 `http://127.0.0.1:8000`
+
+`docker-compose.yml` 默认只绑定本机回环地址，公网访问请走下一节的宿主机 Nginx / Caddy / Traefik 反代，或临时用 SSH 隧道调试。
 
 > 也可把上面的环境变量写进仓库根的 `.env` 文件（compose 会自动读取），避免每次 export。
 
@@ -80,7 +97,7 @@ docker compose up -d --build
 
 ## 三、域名 + HTTPS（生产建议）
 
-容器只监听 HTTP。生产建议在最外层再加一个反向代理（宿主机 nginx 或 Traefik / Caddy）做域名分发与证书：
+容器只在宿主机 `127.0.0.1` 监听 HTTP。生产建议在最外层再加一个反向代理（宿主机 nginx 或 Traefik / Caddy）做域名分发与证书：
 
 ```
 admin.example.com  → 127.0.0.1:8080

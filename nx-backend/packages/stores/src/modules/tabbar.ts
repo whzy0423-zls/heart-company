@@ -587,7 +587,7 @@ export const useTabbarStore = defineStore('core-tabbar', {
     affixTabs(): TabDefinition[] {
       const affixTabs = this.tabs.filter((tab) => isAffixTab(tab));
 
-      return affixTabs.toSorted((a, b) => {
+      return affixTabs.slice().sort((a, b) => {
         const orderA = (a.meta?.affixTabOrder ?? 0) as number;
         const orderB = (b.meta?.affixTabOrder ?? 0) as number;
         return orderA - orderB;

@@ -2,7 +2,9 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"nine-xing/nx-backend/apps/server/internal/articlestore"
@@ -107,6 +109,9 @@ func (s *Server) publicArticles(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	for i := range result.Items {
+		result.Items[i].Cover = publicArticleAssetURL(result.Items[i].Cover)
+	}
 	httpx.OK(w, result)
 }
 
@@ -126,7 +131,36 @@ func (s *Server) publicArticleDetail(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusNotFound, "文章不存在或已下架")
 		return
 	}
+	doc.Cover = publicArticleAssetURL(doc.Cover)
+	doc.AudioURL = publicArticleAssetURL(doc.AudioURL)
 	httpx.OK(w, doc)
+}
+
+func (s *Server) publicArticleAsset(w http.ResponseWriter, r *http.Request) {
+	idText := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/public/article-assets/"), "/")
+	id, err := strconv.ParseInt(idText, 10, 64)
+	if err != nil || id <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	referenced, err := s.articles.PublicAssetReferenced(r.Context(), id)
+	if err != nil || !referenced {
+		http.NotFound(w, r)
+		return
+	}
+	asset, err := s.uploads.Find(r.Context(), id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	writeUploadAsset(w, asset)
+}
+
+func publicArticleAssetURL(raw string) string {
+	if id, ok := uploadAssetIDFromURL(raw); ok {
+		return fmt.Sprintf("/api/public/article-assets/%d", id)
+	}
+	return strings.TrimSpace(raw)
 }
 
 // publicArticleCategories lists distinct categories for the H5 filter bar.

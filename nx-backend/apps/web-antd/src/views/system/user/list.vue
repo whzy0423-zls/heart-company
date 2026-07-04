@@ -3,6 +3,8 @@ import type { SystemRole, SystemUser } from '#/api';
 
 import { computed, onMounted, ref } from 'vue';
 
+import { useAccessStore } from '@vben/stores';
+
 import {
   Button,
   Form,
@@ -25,6 +27,7 @@ import {
 import ImagePathInput from '../../site-config/components/image-path-input.vue';
 import PageShell from '../components/page-shell.vue';
 
+const accessStore = useAccessStore();
 const loading = ref(false);
 const saving = ref(false);
 const modalOpen = ref(false);
@@ -42,6 +45,15 @@ const form = ref<SystemUser>({
 
 const roleOptions = computed(() =>
   roles.value.map((item) => ({ label: item.name, value: item.id })),
+);
+const canCreate = computed(() =>
+  accessStore.accessCodes.includes('System:User:Create'),
+);
+const canUpdate = computed(() =>
+  accessStore.accessCodes.includes('System:User:Update'),
+);
+const canDelete = computed(() =>
+  accessStore.accessCodes.includes('System:User:Delete'),
 );
 
 const columns = [
@@ -116,6 +128,7 @@ onMounted(load);
   <PageShell
     description="维护后台登录账号、状态和角色归属。"
     :loading="loading"
+    :show-create="canCreate"
     title="用户管理"
     @create="openCreate"
     @refresh="load"
@@ -141,6 +154,7 @@ onMounted(load);
         <template v-if="column.key === 'action'">
           <Space>
             <Button
+              v-if="canUpdate"
               size="small"
               type="link"
               @click="openEdit(userRecord(record))"
@@ -148,6 +162,7 @@ onMounted(load);
               编辑
             </Button>
             <Button
+              v-if="canDelete"
               danger
               size="small"
               type="link"
@@ -164,6 +179,7 @@ onMounted(load);
       v-model:open="modalOpen"
       :confirm-loading="saving"
       title="用户信息"
+      width="min(720px, calc(100vw - 32px))"
       @ok="save"
     >
       <Form layout="vertical">
@@ -181,6 +197,7 @@ onMounted(load);
             v-model:value="form.avatar"
             dir="user-avatars"
             empty-text="未设置头像"
+            :store-object-url="false"
             upload-text="上传头像"
           />
         </Form.Item>

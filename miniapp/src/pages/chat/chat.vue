@@ -4,6 +4,7 @@ import { onLoad } from '@dcloudio/uni-app'
 import { ensureLogin } from '../../utils/auth'
 import { chatApi } from '../../api'
 import { chatErrorMessage } from '../../utils/chatErrors'
+import { CHAT_STORAGE_KEY, clearChatMessages } from '../../utils/chatStorage'
 import {
   buildRecentHistory,
   chatStatusText,
@@ -17,7 +18,6 @@ const input = ref('')
 const sending = ref(false)
 const bottomAnchor = 'chat-bottom'
 const scrollIntoView = ref('')
-const CHAT_STORAGE_KEY = 'nx_chat_messages'
 let messageSeq = 0
 
 function nextID(prefix) {
@@ -93,9 +93,7 @@ function useSuggestion(text) {
 async function clearChat() {
   if (sending.value) return
   messages.value = [messages.value[0]]
-  try {
-    uni.removeStorageSync(CHAT_STORAGE_KEY)
-  } catch {}
+  clearChatMessages()
   await scrollToBottom()
 }
 

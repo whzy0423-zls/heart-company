@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/netguard"
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 )
@@ -164,12 +165,7 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Result, erro
 }
 
 func isPublicHTTPURL(raw string) bool {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return false
-	}
-	host := strings.ToLower(u.Hostname())
-	return host != "localhost" && host != "127.0.0.1" && host != "::1"
+	return netguard.IsPublicHTTPURL(raw)
 }
 
 // Client 是 OpenAI 兼容文生图网关的最小 HTTP 客户端。
@@ -188,11 +184,8 @@ func NewClient(cfg config.ImageConfig) *Client {
 		apiBase: strings.TrimRight(strings.TrimSpace(cfg.APIBase), "/"),
 		apiKey:  strings.TrimSpace(cfg.APIKey),
 		client: &http.Client{
-			Timeout: timeout,
-			Transport: &http.Transport{
-				DisableKeepAlives: true,
-				Proxy:             http.ProxyFromEnvironment,
-			},
+			Timeout:   timeout,
+			Transport: netguard.NewGuardedTransport(),
 		},
 	}
 }

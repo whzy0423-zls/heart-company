@@ -237,7 +237,11 @@ onMounted(() => {
       </Card>
     </div>
 
-    <Drawer v-model:open="detailOpen" title="消息详情" width="560px">
+    <Drawer
+      v-model:open="detailOpen"
+      title="消息详情"
+      width="min(560px, calc(100vw - 32px))"
+    >
       <Descriptions v-if="current" :column="1" bordered size="small">
         <Descriptions.Item label="消息类型">
           {{ typeLabel(current.type) }}

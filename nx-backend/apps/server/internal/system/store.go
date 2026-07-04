@@ -494,6 +494,17 @@ func buildTree(flat []MenuItem, pid int64) []MenuItem {
 	return nodes
 }
 
+func routeMenusOnly(items []MenuItem) []MenuItem {
+	filtered := make([]MenuItem, 0, len(items))
+	for _, item := range items {
+		if item.Type == "button" || strings.TrimSpace(item.Path) == "" {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
 func (s *Store) SaveMenu(ctx context.Context, input MenuItem) (MenuItem, error) {
 	c, cancel := s.ctx(ctx)
 	defer cancel()
@@ -629,17 +640,18 @@ func (s *Store) MenusForUser(ctx context.Context, userID int64, roleCodes []stri
 			enabled = append(enabled, m)
 		}
 	}
+	enabledRoutes := routeMenusOnly(enabled)
 
 	if hasAdmin(roleCodes) {
-		return buildTree(enabled, 0), nil
+		return buildTree(enabledRoutes, 0), nil
 	}
 
 	allowed, err := s.allowedMenuIDs(c, userID)
 	if err != nil {
 		return nil, err
 	}
-	filtered := make([]MenuItem, 0, len(enabled))
-	for _, m := range enabled {
+	filtered := make([]MenuItem, 0, len(enabledRoutes))
+	for _, m := range enabledRoutes {
 		if allowed[m.ID] {
 			filtered = append(filtered, m)
 		}

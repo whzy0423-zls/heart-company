@@ -5,7 +5,7 @@
     "minified": true,
     "uglifyFileName": false,
     "enhance": true,
-    "urlCheck": false,
+    "urlCheck": true,
     "packNpmRelationList": [],
     "babelSetting": {
       "ignore": [],

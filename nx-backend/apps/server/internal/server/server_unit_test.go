@@ -3,13 +3,18 @@ package server
 import (
 	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/modelconfig"
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 	"nine-xing/nx-backend/apps/server/internal/videoanalysis"
+	"nine-xing/nx-backend/apps/server/internal/wxpay"
 )
 
 func TestNewPanicsForUnknownSMSProvider(t *testing.T) {
@@ -22,23 +27,224 @@ func TestNewPanicsForUnknownSMSProvider(t *testing.T) {
 	mustSMSSender(config.SMSConfig{Provider: "unknown"})
 }
 
-func TestNewPanicsForProductionWxPayWithoutCompleteConfig(t *testing.T) {
+func TestProductionWxPayIncompleteConfigDisablesPaymentWithoutPanic(t *testing.T) {
 	defer func() {
-		if recover() == nil {
-			t.Fatal("expected wxpay config to panic when production config is incomplete")
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("expected incomplete production wxpay config to disable payment without panic, got panic %v", recovered)
 		}
 	}()
 
-	mustWxPayClient(config.Env{
+	client := mustWxPayClient(config.Env{
 		AppEnv: "production",
 		WxPay:  config.WxPayConfig{Dev: false},
 	})
+	if client != nil {
+		t.Fatal("expected incomplete production wxpay config to return nil client")
+	}
 }
 
 func TestNewAllowsExplicitDevWxPay(t *testing.T) {
 	client := mustWxPayClient(config.Env{WxPay: config.WxPayConfig{Dev: true}})
 	if !client.DevMode() {
 		t.Fatal("expected explicit dev wxpay to stay in dev mode")
+	}
+}
+
+func TestWeChatMissingCredentialsOnlyFallbackOutsideProduction(t *testing.T) {
+	productionClient := newWeChatClient(config.Env{AppEnv: "production"})
+	if productionClient.DevMode() {
+		t.Fatal("expected production wechat client to fail closed without dev fallback")
+	}
+
+	devClient := newWeChatClient(config.Env{AppEnv: "dev"})
+	if !devClient.DevMode() {
+		t.Fatal("expected non-production missing credentials to use dev fallback")
+	}
+}
+
+func TestCreateReportOrderReturnsUnavailableWhenPaymentDisabled(t *testing.T) {
+	s := &Server{}
+	response := performRawUnit(http.HandlerFunc(s.createReportOrder), http.MethodPost, "/api/miniapp/report/order", `{"testRecordId":"1"}`)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected disabled payment to return 503, got %d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestPayNotifyReturnsUnavailableWhenPaymentDisabled(t *testing.T) {
+	s := &Server{}
+	response := performRawUnit(http.HandlerFunc(s.payNotify), http.MethodPost, "/api/pay/notify", `{}`)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected disabled payment callback to return 503, got %d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestValidateWxPayCallbackRejectsMismatchedOrderData(t *testing.T) {
+	env := config.Env{WxPay: config.WxPayConfig{MchID: "mch-1", AppID: "wx-app-1"}}
+	order := paymentOrderSnapshot{Product: "report", Amount: 990}
+
+	for _, tc := range []struct {
+		name   string
+		result wxpay.CallbackResult
+		want   string
+	}{
+		{
+			name: "amount",
+			result: wxpay.CallbackResult{
+				AppID:       "wx-app-1",
+				MchID:       "mch-1",
+				AmountTotal: 1,
+				OutTradeNo:  "rpt1",
+				Success:     true,
+			},
+			want: "amount",
+		},
+		{
+			name: "mchid",
+			result: wxpay.CallbackResult{
+				AppID:       "wx-app-1",
+				MchID:       "wrong",
+				AmountTotal: 990,
+				OutTradeNo:  "rpt1",
+				Success:     true,
+			},
+			want: "merchant",
+		},
+		{
+			name: "appid",
+			result: wxpay.CallbackResult{
+				AppID:       "wrong",
+				MchID:       "mch-1",
+				AmountTotal: 990,
+				OutTradeNo:  "rpt1",
+				Success:     true,
+			},
+			want: "appid",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateWxPayCallbackAgainstOrder(env, tc.result, order)
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), tc.want) {
+				t.Fatalf("expected %s validation error, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestGenerateReportOutTradeNoIsUniqueUnderBurst(t *testing.T) {
+	seen := map[string]struct{}{}
+	for range 1000 {
+		value, err := generateReportOutTradeNo(7, 42)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(value, "rpt7-42-") {
+			t.Fatalf("unexpected out trade no prefix: %s", value)
+		}
+		if _, ok := seen[value]; ok {
+			t.Fatalf("duplicate out trade no: %s", value)
+		}
+		seen[value] = struct{}{}
+	}
+}
+
+func TestCORSAllowsAnyOriginOutsideProductionWhenNoAllowlist(t *testing.T) {
+	s := &Server{env: config.Env{AppEnv: "dev"}}
+	if !s.corsOriginAllowed("https://admin.localhost") {
+		t.Fatal("expected dev CORS to allow arbitrary origin")
+	}
+}
+
+func TestCORSRequiresAllowlistInProduction(t *testing.T) {
+	s := &Server{env: config.Env{
+		AppEnv: "production",
+		CORSAllowedOrigins: []string{
+			"https://admin.example.com",
+		},
+	}}
+	if !s.corsOriginAllowed("https://admin.example.com/") {
+		t.Fatal("expected configured production origin to be allowed")
+	}
+	if s.corsOriginAllowed("https://evil.example.com") {
+		t.Fatal("expected unconfigured production origin to be rejected")
+	}
+}
+
+func TestPublicWriteEndpointsRateLimitByIP(t *testing.T) {
+	s := &Server{
+		publicAnalyticsIPLimiter: newStrRateLimiter(1, time.Minute),
+	}
+
+	first := performRawUnit(http.HandlerFunc(s.publicSiteVisit), http.MethodPost, "/api/public/site-visits", "{")
+	if first.Code != http.StatusBadRequest {
+		t.Fatalf("expected first malformed request to reach handler validation, got %d body=%s", first.Code, first.Body.String())
+	}
+
+	second := performRawUnit(http.HandlerFunc(s.publicSiteVisit), http.MethodPost, "/api/public/site-visits", "{")
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected repeated public write from same IP to be rate limited, got %d body=%s", second.Code, second.Body.String())
+	}
+}
+
+func TestBackendLoginRateLimitTracksIPAndUsername(t *testing.T) {
+	s := &Server{
+		loginLimiter: newStrRateLimiter(2, time.Minute),
+	}
+	now := time.Unix(100, 0)
+
+	if !s.allowLoginAttempt("Admin", "203.0.113.9", now) {
+		t.Fatal("expected first login attempt to be allowed")
+	}
+	if !s.allowLoginAttempt(" admin ", "203.0.113.9", now.Add(time.Second)) {
+		t.Fatal("expected second login attempt with normalized username to be allowed")
+	}
+	if s.allowLoginAttempt("admin", "203.0.113.9", now.Add(2*time.Second)) {
+		t.Fatal("expected third login attempt for same IP and username to be limited")
+	}
+	if !s.allowLoginAttempt("other", "203.0.113.9", now.Add(3*time.Second)) {
+		t.Fatal("expected different username to have a separate login window")
+	}
+}
+
+func TestPublicArticleAssetURLRewritesPrivatePreviewURL(t *testing.T) {
+	if got := publicArticleAssetURL("/api/upload-assets/42"); got != "/api/public/article-assets/42" {
+		t.Fatalf("expected public article asset URL, got %q", got)
+	}
+	if got := publicArticleAssetURL("https://cdn.example.com/cover.png"); got != "https://cdn.example.com/cover.png" {
+		t.Fatalf("expected public CDN URL to stay unchanged, got %q", got)
+	}
+}
+
+func performRawUnit(handler http.Handler, method, path, payload string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, path, strings.NewReader(payload))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func TestValidateModelConfigBasesRejectsLocalAddresses(t *testing.T) {
+	for _, apiBase := range []string{
+		"http://127.0.0.1:8080",
+		"http://localhost.:8080",
+		"http://foo.localhost:8080",
+	} {
+		err := validateModelConfigBases(modelconfig.Config{
+			Chat: modelconfig.ChatConfig{APIBase: apiBase},
+		})
+		if err == nil {
+			t.Fatalf("expected local model api base %q to be rejected", apiBase)
+		}
+	}
+}
+
+func TestValidateModelConfigBasesAllowsPublicHTTPS(t *testing.T) {
+	err := validateModelConfigBases(modelconfig.Config{
+		Chat:  modelconfig.ChatConfig{APIBase: "https://api.minimaxi.com"},
+		Image: modelconfig.ImageConfig{APIBase: "https://image-gateway.example.com/v1"},
+		Video: modelconfig.VideoConfig{APIBase: "https://video-gateway.example.com/v1"},
+	})
+	if err != nil {
+		t.Fatalf("expected public model api bases to pass, got %v", err)
 	}
 }
 

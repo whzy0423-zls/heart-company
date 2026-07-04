@@ -1,6 +1,6 @@
 // 微信支付封装：下单拿到 payParams 后拉起 uni.requestPayment。
 // dev 模式（payParams.devMode=true，后端未配真实商户号）下无法真正拉起，
-// 改为直接通知后端「模拟支付成功」，便于无商户号时联调全闭环。
+// 改走 app 鉴权的本地模拟接口，避免复用公开微信回调地址。
 import { request } from '../api/request'
 import { createReportOrderApi } from '../api'
 
@@ -10,10 +10,11 @@ export async function payForReport(testRecordId) {
   const pay = order.payParams || {}
 
   if (pay.devMode) {
-    // 本地联调：后端 dev 回退，直接模拟回调置为已支付。
+    // 本地联调：后端 dev 回退，使用鉴权接口模拟当前用户订单支付。
     await request({
-      url: '/pay/notify',
+      url: '/miniapp/report/dev-pay',
       method: 'POST',
+      auth: true,
       data: { out_trade_no: order.outTradeNo, trade_state: 'SUCCESS' },
     })
     return { ok: true, dev: true }

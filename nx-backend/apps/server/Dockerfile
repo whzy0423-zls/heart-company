@@ -7,11 +7,10 @@ WORKDIR /src
 
 WORKDIR /src/apps/server
 
-# 拷源码后在构建环境内补全依赖校验和并编译。
-# （go.sum 由 go mod tidy 联网生成，构建阶段有网络。）
+# 拷源码后只下载锁定依赖；go.mod/go.sum 漂移应在 CI/本地显式修复。
 COPY nx-backend/apps/server/ ./
-RUN go mod tidy
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
+RUN go mod download
+RUN CGO_ENABLED=0 GOOS=linux go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
 
 # ---- runtime stage ----
 FROM alpine:3.20 AS production

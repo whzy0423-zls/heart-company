@@ -5,6 +5,7 @@
   "allowCompoundWords": true,
   "words": [
     "acmr",
+    "aliyuncs",
     "antd",
     "antdv",
     "archiver",
@@ -20,6 +21,7 @@
     "dotenv",
     "echart",
     "echarts",
+    "enneagram",
     "ependencies",
     "esbuild",
     "esno",
@@ -27,6 +29,7 @@
     "execa",
     "iconify",
     "iconoir",
+    "indexeddb",
     "intlify",
     "isequal",
     "jspm",
@@ -36,6 +39,7 @@
     "minw",
     "mkdist",
     "mockjs",
+    "myapp",
     "naiveui",
     "napi",
     "nocheck",
@@ -56,6 +60,7 @@
     "shadcn",
     "sonner",
     "sortablejs",
+    "svip",
     "styl",
     "tabler",
     "taze",
@@ -75,6 +80,7 @@
     "vitest",
     "vnode",
     "vueuse",
+    "wohenzaiyi",
     "yxxx"
   ],
   "ignorePaths": [

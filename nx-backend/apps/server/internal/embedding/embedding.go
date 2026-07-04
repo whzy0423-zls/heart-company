@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"nine-xing/nx-backend/apps/server/internal/netguard"
 )
 
 type Config struct {
@@ -33,7 +35,7 @@ func NewClient(cfg Config) *Client {
 	enabled := strings.TrimSpace(cfg.Provider) != "" && cfg.APIKey != "" && cfg.APIBase != "" && cfg.Model != ""
 	return &Client{
 		cfg:     cfg,
-		http:    &http.Client{Timeout: 15 * time.Second},
+		http:    &http.Client{Timeout: 15 * time.Second, Transport: netguard.NewGuardedTransport()},
 		enabled: enabled,
 	}
 }

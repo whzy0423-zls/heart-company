@@ -7,6 +7,7 @@ import { computed, onMounted, reactive, ref } from 'vue';
 
 import { Page } from '@vben/common-ui';
 import { IconifyIcon } from '@vben/icons';
+import { useAccessStore } from '@vben/stores';
 
 import {
   Button,
@@ -30,7 +31,12 @@ import {
   getVoiceOptionsApi,
   uploadFileApi,
 } from '#/api';
+import { useUploadAssetPreviewResolver } from '#/utils/upload-asset-preview';
 
+const accessStore = useAccessStore();
+const audioPreview = useUploadAssetPreviewResolver(
+  () => accessStore.accessToken,
+);
 const loading = ref(false);
 const generating = ref(false);
 const uploading = ref(false);
@@ -221,6 +227,10 @@ function sourceTypeLabel(value: string) {
   return '手动';
 }
 
+function previewAudioUrl(source?: string) {
+  return audioPreview.resolve(source);
+}
+
 onMounted(async () => {
   await Promise.all([loadVoices(), loadJobs()]);
 });
@@ -307,7 +317,7 @@ onMounted(async () => {
             <div class="latest-meta">
               {{ latest.voiceName }} · {{ sourceTypeLabel(latest.sourceType) }}
             </div>
-            <audio :src="latest.audioUrl" controls></audio>
+            <audio :src="previewAudioUrl(latest.audioUrl)" controls></audio>
           </div>
           <div v-else class="empty-result">生成后会在这里播放最新音频。</div>
         </Card>
@@ -347,7 +357,7 @@ onMounted(async () => {
               <template v-else-if="column.dataIndex === 'audioUrl'">
                 <audio
                   v-if="record.audioUrl"
-                  :src="record.audioUrl"
+                  :src="previewAudioUrl(record.audioUrl)"
                   class="row-audio"
                   controls
                 ></audio>

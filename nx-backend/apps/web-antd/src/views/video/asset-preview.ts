@@ -1,5 +1,7 @@
 import type { VideoAssetType } from '#/api';
 
+import { normalizeUploadAssetSource } from '#/utils/upload-asset-preview';
+
 export type AssetPreviewKind = 'audio' | 'empty' | 'image' | 'video';
 
 const imageAssetTypes = new Set<VideoAssetType>([
@@ -32,16 +34,8 @@ export function getAssetPreviewSource(asset: {
 }
 
 export function withPreviewToken(source: string, token?: null | string) {
-  const cleanSource = source.trim();
-  if (
-    !cleanSource ||
-    !token ||
-    !cleanSource.startsWith('/api/upload-assets/')
-  ) {
-    return cleanSource;
-  }
-  const separator = cleanSource.includes('?') ? '&' : '?';
-  return `${cleanSource}${separator}token=${encodeURIComponent(token)}`;
+  void token;
+  return normalizeUploadAssetSource(source);
 }
 
 export function isImageAssetType(type: VideoAssetType) {

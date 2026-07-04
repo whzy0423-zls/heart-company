@@ -67,19 +67,19 @@ import {
   Empty,
   Image,
   Input,
+  message,
   Modal,
   Segmented,
   Spin,
   Tag,
-  message,
 } from 'ant-design-vue';
 
 import { listAssetsApi } from '#/api';
+import { useUploadAssetPreviewResolver } from '#/utils/upload-asset-preview';
 
 import {
   getAssetPreviewKind,
   getAssetPreviewSource,
-  withPreviewToken,
 } from '../asset-preview';
 
 const props = defineProps<{
@@ -109,6 +109,9 @@ const typeTabs = computed(() => [
 const loading = ref(false);
 const assets = ref<VideoAsset[]>([]);
 const accessStore = useAccessStore();
+const assetPreview = useUploadAssetPreviewResolver(
+  () => accessStore.accessToken,
+);
 const state = reactive({
   keyword: '',
   type: '' as '' | VideoAssetType,
@@ -152,10 +155,7 @@ function previewKind(asset: VideoAsset) {
 }
 
 function previewSource(asset: VideoAsset) {
-  return withPreviewToken(
-    getAssetPreviewSource(asset),
-    accessStore.accessToken,
-  );
+  return assetPreview.resolve(getAssetPreviewSource(asset));
 }
 
 function choose(asset: VideoAsset) {
@@ -198,7 +198,12 @@ watch(
 </script>
 
 <template>
-  <Modal v-model:open="visible" :footer="null" :width="760" title="资产库">
+  <Modal
+    v-model:open="visible"
+    :footer="null"
+    title="资产库"
+    width="min(760px, calc(100vw - 32px))"
+  >
     <div class="picker-head">
       <Segmented v-model:value="state.type" :options="typeTabs" />
       <Input
@@ -212,7 +217,7 @@ watch(
     </div>
 
     <Spin :spinning="loading">
-      <div v-if="assets.length" class="picker-grid">
+      <div v-if="assets.length > 0" class="picker-grid">
         <Card
           v-for="asset in assets"
           :key="asset.id"
@@ -232,13 +237,13 @@ watch(
               :src="previewSource(asset)"
               muted
               preload="metadata"
-            />
+            ></video>
             <audio
               v-else-if="previewKind(asset) === 'audio'"
               :src="previewSource(asset)"
               controls
               @click.stop
-            />
+            ></audio>
             <div v-else class="empty-tile">暂无预览</div>
           </div>
           <div class="picker-meta">
@@ -259,13 +264,15 @@ watch(
 <style scoped>
 .picker-head {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   align-items: center;
   margin-bottom: 16px;
 }
 
 .picker-search {
-  flex: 1;
+  flex: 1 1 220px;
+  min-width: 0;
 }
 
 .picker-grid {
@@ -277,6 +284,7 @@ watch(
 }
 
 .picker-card {
+  min-width: 0;
   cursor: pointer;
   border-radius: 8px;
 }
@@ -285,6 +293,7 @@ watch(
   display: flex;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   height: 110px;
   overflow: hidden;
   background: #f1f5f9;
@@ -295,6 +304,8 @@ watch(
 .picker-media :deep(.ant-image-img),
 .picker-media audio,
 .picker-media video {
+  box-sizing: border-box;
+  min-width: 0;
   width: 100%;
 }
 
@@ -306,6 +317,7 @@ watch(
 }
 
 .picker-media audio {
+  width: calc(100% - 16px);
   margin: 0 8px;
 }
 
@@ -322,10 +334,27 @@ watch(
 }
 
 .picker-name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 13px;
   color: #344054;
   white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .picker-head :deep(.ant-segmented) {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .picker-search {
+    flex-basis: 100%;
+  }
+
+  .picker-head :deep(.ant-btn) {
+    width: 100%;
+  }
 }
 </style>

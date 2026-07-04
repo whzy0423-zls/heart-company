@@ -38,12 +38,15 @@ import {
   refreshVideoGenerationApi,
   uploadFileApi,
 } from '#/api';
+import {
+  useUploadAssetPreviewResolver,
+  useUploadAssetPreviewUrl,
+} from '#/utils/upload-asset-preview';
 
 import {
   getAssetPreviewKind,
   getAssetPreviewSource,
   isImageAssetType,
-  withPreviewToken,
 } from './asset-preview';
 
 const TabPane = Tabs.TabPane;
@@ -73,8 +76,12 @@ const assets = ref<VideoAsset[]>([]);
 const total = ref(0);
 const uploadedUrl = ref('');
 const uploadedName = ref('');
-const uploadedPreviewUrl = computed(() =>
-  withPreviewToken(uploadedUrl.value, accessStore.accessToken),
+const uploadedPreviewUrl = useUploadAssetPreviewUrl(
+  () => uploadedUrl.value,
+  () => accessStore.accessToken,
+);
+const assetPreview = useUploadAssetPreviewResolver(
+  () => accessStore.accessToken,
 );
 const videoPreview = reactive({
   name: '',
@@ -448,14 +455,15 @@ function previewKind(record: VideoAsset) {
 }
 
 function previewSource(record: VideoAsset) {
-  return withPreviewToken(
-    getAssetPreviewSource(record),
-    accessStore.accessToken,
-  );
+  return assetPreview.resolve(getAssetPreviewSource(record));
 }
 
+const largeVideoPreviewUrl = computed(() =>
+  assetPreview.resolve(videoPreview.url),
+);
+
 function openVideoPreview(record: VideoAsset) {
-  const source = previewSource(record);
+  const source = getAssetPreviewSource(record);
   if (!source) return;
   videoPreview.name = record.name || '视频预览';
   videoPreview.url = source;
@@ -768,12 +776,12 @@ onMounted(() => {
       v-model:open="videoPreview.open"
       :footer="null"
       :title="videoPreview.name"
-      :width="760"
+      width="min(760px, calc(100vw - 32px))"
       destroy-on-close
     >
       <video
-        v-if="videoPreview.url"
-        :src="videoPreview.url"
+        v-if="largeVideoPreviewUrl"
+        :src="largeVideoPreviewUrl"
         class="large-video-preview"
         controls
       ></video>

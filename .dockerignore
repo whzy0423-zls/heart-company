@@ -1,4 +1,12 @@
 # 构建上下文为仓库根，排除所有大目录与本地产物，避免拷进镜像
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+!nx-backend/apps/web-antd/.env.production
+!website-react/.env.production
 **/node_modules
 **/dist
 **/dist.zip

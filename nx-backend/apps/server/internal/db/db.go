@@ -118,8 +118,11 @@ var defaultMenus = []seedMenu{
 	{ID: 500, PID: 0, Name: "CustomerManage", Path: "/customer", Type: "catalog", Sort: 15, Icon: "lucide:contact-round", Title: "客户管理"},
 	{ID: 501, PID: 500, Name: "CustomerSignupLeads", Path: "/customer/signups", Component: "/site-config/signup-leads", AuthCode: "Customer:Signup:List", Type: "menu", Sort: 1, Icon: "lucide:inbox", Title: "报名信息"},
 	{ID: 502, PID: 500, Name: "CustomerAppUsers", Path: "/customer/app-users", Component: "/customer/app-users", AuthCode: "Customer:App:List", Type: "menu", Sort: 2, Icon: "lucide:smartphone", Title: "App 客户"},
+	{ID: 503, PID: 502, Name: "CustomerAppUsersEdit", AuthCode: "Customer:App:Write", Type: "button", Sort: 1, Icon: "lucide:pencil", Title: "编辑 App 客户"},
+	{ID: 504, PID: 500, Name: "CustomerUserInsights", Path: "/customer/user-insights", Component: "/customer/user-insights", AuthCode: "Customer:UserInsights:List", Type: "menu", Sort: 3, Icon: "lucide:user-search", Title: "用户提炼数据"},
 	{ID: 600, PID: 0, Name: "MessageCenter", Path: "/message", Type: "catalog", Sort: 18, Icon: "lucide:bell-ring", Title: "消息中心"},
 	{ID: 601, PID: 600, Name: "MessageManagement", Path: "/message/management", Component: "/message/management", AuthCode: "Message:Manage:List", Type: "menu", Sort: 1, Icon: "lucide:mail-check", Title: "消息管理"},
+	{ID: 602, PID: 600, Name: "PushManagement", Path: "/message/push", Component: "/message/push", AuthCode: "Push:Manage", Type: "menu", Sort: 2, Icon: "lucide:send", Title: "推送管理"},
 	{ID: 700, PID: 0, Name: "VoiceCenter", Path: "/voice", Type: "catalog", Sort: 19, Icon: "lucide:audio-lines", Title: "人声管理"},
 	{ID: 701, PID: 700, Name: "VoiceProfiles", Path: "/voice/profiles", Component: "/voice/profiles", AuthCode: "Voice:Profile:Manage", Type: "menu", Sort: 1, Icon: "lucide:mic-vocal", Title: "人声管理"},
 	{ID: 702, PID: 700, Name: "VoiceTest", Path: "/voice/test", Component: "/voice/test", AuthCode: "Voice:Test:Manage", Type: "menu", Sort: 2, Icon: "lucide:headphones", Title: "声音测试"},
@@ -140,6 +143,15 @@ var defaultMenus = []seedMenu{
 	{ID: 402, PID: 400, Name: "SystemRole", Path: "/system/role", Component: "/system/role/list", AuthCode: "System:Role:List", Type: "menu", Sort: 2, Icon: "lucide:user-cog", Title: "角色管理"},
 	{ID: 403, PID: 400, Name: "SystemMenu", Path: "/system/menu", Component: "/system/menu/list", AuthCode: "System:Menu:List", Type: "menu", Sort: 3, Icon: "lucide:panel-left", Title: "菜单权限"},
 	{ID: 404, PID: 400, Name: "SystemBranding", Path: "/system/branding", Component: "/system/branding", AuthCode: "System:Branding", Type: "menu", Sort: 4, Icon: "lucide:palette", Title: "后台品牌"},
+	{ID: 405, PID: 401, Name: "SystemUserCreate", AuthCode: "System:User:Create", Type: "button", Sort: 1, Icon: "lucide:user-plus", Title: "新增用户"},
+	{ID: 406, PID: 401, Name: "SystemUserUpdate", AuthCode: "System:User:Update", Type: "button", Sort: 2, Icon: "lucide:user-pen", Title: "编辑用户"},
+	{ID: 407, PID: 401, Name: "SystemUserDelete", AuthCode: "System:User:Delete", Type: "button", Sort: 3, Icon: "lucide:user-x", Title: "删除用户"},
+	{ID: 408, PID: 402, Name: "SystemRoleCreate", AuthCode: "System:Role:Create", Type: "button", Sort: 1, Icon: "lucide:plus", Title: "新增角色"},
+	{ID: 409, PID: 402, Name: "SystemRoleUpdate", AuthCode: "System:Role:Update", Type: "button", Sort: 2, Icon: "lucide:pencil", Title: "编辑角色"},
+	{ID: 410, PID: 402, Name: "SystemRoleDelete", AuthCode: "System:Role:Delete", Type: "button", Sort: 3, Icon: "lucide:trash-2", Title: "删除角色"},
+	{ID: 411, PID: 403, Name: "SystemMenuCreate", AuthCode: "System:Menu:Create", Type: "button", Sort: 1, Icon: "lucide:plus", Title: "新增菜单"},
+	{ID: 412, PID: 403, Name: "SystemMenuUpdate", AuthCode: "System:Menu:Update", Type: "button", Sort: 2, Icon: "lucide:pencil", Title: "编辑菜单"},
+	{ID: 413, PID: 403, Name: "SystemMenuDelete", AuthCode: "System:Menu:Delete", Type: "button", Sort: 3, Icon: "lucide:trash-2", Title: "删除菜单"},
 }
 
 func seedMenus(ctx context.Context, database *sql.DB) error {

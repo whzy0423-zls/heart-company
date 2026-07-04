@@ -1,3 +1,5 @@
+import { resolveApiMediaUrl } from '../utils/mediaUrl.js'
+
 // 阅读 H5 的公开接口封装。后端响应结构为 { code, data, error, message }。
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api'
 
@@ -45,14 +47,5 @@ export function fetchCategories() {
 // 把后端返回的 /api/... 资源路径解析为可直接访问的地址。
 // 当 API_BASE 是绝对地址时，用其源站拼接；否则保持同源相对路径。
 export function resolveMediaUrl(path) {
-  if (!path) return ''
-  if (/^https?:\/\//i.test(path)) return path
-  if (/^https?:\/\//i.test(API_BASE)) {
-    try {
-      return new URL(path, API_BASE).toString()
-    } catch {
-      return path
-    }
-  }
-  return path
+  return resolveApiMediaUrl(path, API_BASE)
 }

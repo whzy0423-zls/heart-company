@@ -448,7 +448,7 @@ watch(
       v-model:open="detailOpen"
       :loading="detailLoading"
       title="线索详情"
-      width="760px"
+      width="min(760px, calc(100vw - 32px))"
     >
       <div v-if="current" class="detail-layout">
         <div class="lead-profile">

@@ -299,7 +299,7 @@ onMounted(load);
       v-model:open="drawerOpen"
       :title="form.id ? '编辑知识' : '新增知识'"
       class="knowledge-drawer"
-      width="720px"
+      width="min(720px, calc(100vw - 32px))"
     >
       <Form layout="vertical">
         <Form.Item label="标题" required>

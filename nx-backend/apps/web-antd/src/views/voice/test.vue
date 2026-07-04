@@ -5,6 +5,7 @@ import { computed, onMounted, reactive, ref } from 'vue';
 
 import { Page } from '@vben/common-ui';
 import { IconifyIcon } from '@vben/icons';
+import { useAccessStore } from '@vben/stores';
 
 import {
   Button,
@@ -24,7 +25,12 @@ import {
   getVoiceGenerationsApi,
   getVoiceProfilesApi,
 } from '#/api';
+import { useUploadAssetPreviewResolver } from '#/utils/upload-asset-preview';
 
+const accessStore = useAccessStore();
+const audioPreview = useUploadAssetPreviewResolver(
+  () => accessStore.accessToken,
+);
 const loading = ref(false);
 const generating = ref(false);
 const profiles = ref<VoiceProfile[]>([]);
@@ -131,6 +137,10 @@ function handleTableChange(pagination: {
   loadGenerations();
 }
 
+function previewAudioUrl(source?: string) {
+  return audioPreview.resolve(source);
+}
+
 onMounted(async () => {
   await loadProfiles();
   await loadGenerations();
@@ -184,7 +194,7 @@ onMounted(async () => {
           <div v-if="latest?.audioUrl" class="latest-result">
             <div class="latest-title">最新生成</div>
             <div class="latest-text">{{ latest.text }}</div>
-            <audio :src="latest.audioUrl" controls></audio>
+            <audio :src="previewAudioUrl(latest.audioUrl)" controls></audio>
           </div>
           <div v-else class="empty-result">生成后会在这里播放最新音频。</div>
         </Card>
@@ -217,7 +227,7 @@ onMounted(async () => {
               <template v-if="column.dataIndex === 'audioUrl'">
                 <audio
                   v-if="record.audioUrl"
-                  :src="record.audioUrl"
+                  :src="previewAudioUrl(record.audioUrl)"
                   class="row-audio"
                   controls
                 ></audio>

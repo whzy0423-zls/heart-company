@@ -58,3 +58,78 @@ func TestLoadReadsDotEnvFromParentDirectory(t *testing.T) {
 		t.Fatalf("expected OSS config from parent .env, got %+v", env.OSS)
 	}
 }
+
+func TestValidateProductionRejectsDevFallbacks(t *testing.T) {
+	err := ValidateProduction(Env{
+		AdminPassword: "123456",
+		AppEnv:        "production",
+		DatabaseURL:   "postgres://nx:nx@db:5432/nx_admin?sslmode=disable",
+		JWTSecret:     "nine-xing-dev-secret",
+	})
+	if err == nil {
+		t.Fatal("expected production validation to reject weak defaults")
+	}
+}
+
+func TestValidateProductionAllowsMissingOptionalIntegrations(t *testing.T) {
+	err := ValidateProduction(Env{
+		AdminPassword: "a-strong-admin-password",
+		AppEnv:        "production",
+		DatabaseURL:   "postgres://nx_app:strong@db:5432/nx_admin?sslmode=disable",
+		JWTSecret:     "12345678901234567890123456789012",
+	})
+	if err != nil {
+		t.Fatalf("expected production core config to pass without optional integrations, got %v", err)
+	}
+}
+
+func TestValidateProductionRejectsExplicitDevIntegrations(t *testing.T) {
+	base := Env{
+		AdminPassword: "a-strong-admin-password",
+		AppEnv:        "production",
+		DatabaseURL:   "postgres://nx_app:strong@db:5432/nx_admin?sslmode=disable",
+		JWTSecret:     "12345678901234567890123456789012",
+	}
+
+	withWeChatDev := base
+	withWeChatDev.WeChat.LoginDev = true
+	if err := ValidateProduction(withWeChatDev); err == nil {
+		t.Fatal("expected production validation to reject WECHAT_LOGIN_DEV")
+	}
+
+	withWxPayDev := base
+	withWxPayDev.WxPay.Dev = true
+	if err := ValidateProduction(withWxPayDev); err == nil {
+		t.Fatal("expected production validation to reject WXPAY_DEV")
+	}
+}
+
+func TestValidateProductionAcceptsCompleteOptionalConfig(t *testing.T) {
+	err := ValidateProduction(Env{
+		AdminPassword: "a-strong-admin-password",
+		AppEnv:        "production",
+		DatabaseURL:   "postgres://nx_app:strong@db:5432/nx_admin?sslmode=disable",
+		JWTSecret:     "12345678901234567890123456789012",
+		SMS: SMSConfig{
+			Provider:  "aliyun",
+			APIKey:    "ak",
+			APISecret: "sk",
+		},
+		WeChat: WeChatConfig{
+			AppID:  "wx-appid",
+			Secret: "wx-secret",
+		},
+		WxPay: WxPayConfig{
+			MchID:            "mch",
+			AppID:            "wx-appid",
+			APIv3Key:         "12345678901234567890123456789012",
+			SerialNo:         "serial",
+			PrivateKeyPath:   "/run/secrets/apiclient_key.pem",
+			PlatformCertPath: "/run/secrets/wechatpay_platform.pem",
+			NotifyURL:        "https://api.example.com/api/pay/notify",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected complete production config to pass, got %v", err)
+	}
+}

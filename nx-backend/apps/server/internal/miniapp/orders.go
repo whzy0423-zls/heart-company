@@ -22,6 +22,13 @@ type Order struct {
 	CreateTime    string `json:"createTime"`
 }
 
+type PaymentOrderSnapshot struct {
+	Amount     int
+	OutTradeNo string
+	Product    string
+	Status     string
+}
+
 // CreateOrder 新建一个待支付订单。out_trade_no 由调用方生成（保证唯一）。
 func (s *Store) CreateOrder(ctx context.Context, userID int64, outTradeNo, product string, refID int64, title string, amountCents int) (Order, error) {
 	c, cancel := s.ctx(ctx)
@@ -58,6 +65,16 @@ func (s *Store) OrderByOutTradeNo(ctx context.Context, outTradeNo string) (order
 		`SELECT id, wx_user_id, ref_id, product, status FROM orders WHERE out_trade_no=$1`, outTradeNo,
 	).Scan(&orderID, &wxUserID, &refID, &product, &status)
 	return
+}
+
+func (s *Store) PaymentOrderSnapshot(ctx context.Context, outTradeNo string) (PaymentOrderSnapshot, error) {
+	c, cancel := s.ctx(ctx)
+	defer cancel()
+	var order PaymentOrderSnapshot
+	err := s.db.QueryRowContext(c,
+		`SELECT out_trade_no, product, amount, status FROM orders WHERE out_trade_no=$1`, outTradeNo,
+	).Scan(&order.OutTradeNo, &order.Product, &order.Amount, &order.Status)
+	return order, err
 }
 
 // MarkOrderPaid 支付成功落账：幂等地把订单置为 paid，并按产品类型发放权益。

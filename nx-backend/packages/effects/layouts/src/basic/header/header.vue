@@ -108,7 +108,7 @@ const rightSlots = computed(() => {
   const userDropdownIndex = Math.min(1000, nextIndex(list));
   list.push({ index: userDropdownIndex, name: 'user-dropdown' });
   // 按照索引排序，保证插槽顺序
-  return list.toSorted((a, b) => a.index - b.index);
+  return list.slice().sort((a, b) => a.index - b.index);
 });
 
 const leftSlots = computed(() => {
@@ -131,7 +131,7 @@ const leftSlots = computed(() => {
     }
   });
   // 按照索引排序，保证插槽顺序
-  return list.toSorted((a, b) => a.index - b.index);
+  return list.slice().sort((a, b) => a.index - b.index);
 });
 
 /**

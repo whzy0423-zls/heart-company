@@ -9,6 +9,8 @@ import { useTabbarStore } from '@vben/stores';
 
 import { VbenSpinner } from '@vben-core/shadcn-ui';
 
+import { safeIframeSrc } from './iframe-src';
+
 defineOptions({ name: 'IFrameRouterView' });
 
 const spinningList = ref<boolean[]>([]);
@@ -76,8 +78,10 @@ function showSpinning(index: number) {
       >
         <VbenSpinner :spinning="showSpinning(index)" />
         <iframe
-          :src="item.meta.iframeSrc as string"
+          :src="safeIframeSrc(item.meta.iframeSrc)"
           class="size-full"
+          referrerpolicy="same-origin"
+          sandbox="allow-forms allow-popups allow-same-origin allow-scripts"
           @load="hideLoading(index)"
         ></iframe>
       </div>

@@ -55,7 +55,7 @@ func (s *Server) appQuizSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sub, err := s.quiz.LatestSubmission(r.Context(), userInfo.ID)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, quiz.ErrNotFound) {
 		httpx.OK(w, nil)
 		return
 	}
@@ -93,6 +93,10 @@ func (s *Server) appCards(w http.ResponseWriter, r *http.Request) {
 		}
 		created, err := s.quiz.CreateCard(r.Context(), userInfo.ID, user.MemberLevel, input)
 		if err != nil {
+			if errors.Is(err, quiz.ErrCardLimit) {
+				httpx.Fail(w, http.StatusBadRequest, err.Error())
+				return
+			}
 			httpx.Fail(w, http.StatusInternalServerError, "create failed")
 			return
 		}
@@ -109,7 +113,7 @@ func (s *Server) appCardPrimary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	card, err := s.quiz.PrimaryCard(r.Context(), userInfo.ID)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, quiz.ErrNotFound) {
 		httpx.OK(w, nil)
 		return
 	}
@@ -136,6 +140,10 @@ func (s *Server) appCardByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if rest, ok := strings.CutSuffix(idText, "/memories"); ok {
 		s.appCardMemories(w, r, userInfo.ID, strings.Trim(rest, "/"))
+		return
+	}
+	if rest, ok := strings.CutSuffix(idText, "/trend"); ok {
+		s.appCardTrend(w, r, userInfo.ID, strings.Trim(rest, "/"))
 		return
 	}
 	id, err := strconv.ParseInt(idText, 10, 64)

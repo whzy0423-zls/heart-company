@@ -14,7 +14,7 @@ import { $t, setupI18n } from '#/locales';
 import { initComponentAdapter } from './adapter/component';
 import { initSetupVbenForm } from './adapter/form';
 import App from './app.vue';
-import { applyAdminBranding } from './branding';
+import { startAdminBrandingSync } from './branding-startup';
 import { router } from './router';
 
 async function bootstrap(namespace: string) {
@@ -47,8 +47,8 @@ async function bootstrap(namespace: string) {
   // 配置 pinia-tore
   await initStores(app, { namespace });
 
-  // 拉取后台品牌配置并应用（logo / 名称 / 启动屏缓存），失败不阻塞启动
-  await applyAdminBranding();
+  // 拉取后台品牌配置并应用（logo / 名称 / 启动屏缓存），失败或超时不阻塞启动
+  startAdminBrandingSync();
 
   // 安装权限指令
   registerAccessDirective(app);

@@ -28,14 +28,16 @@ import {
   retryVideoAnalysisApi,
   uploadFileApi,
 } from '#/api';
-
-import { withPreviewToken } from './asset-preview';
+import { useUploadAssetPreviewResolver } from '#/utils/upload-asset-preview';
 
 const loading = ref(false);
 const uploading = ref(false);
 const creating = ref(false);
 const retryingId = ref('');
 const accessStore = useAccessStore();
+const videoPreview = useUploadAssetPreviewResolver(
+  () => accessStore.accessToken,
+);
 const jobs = ref<VideoAnalysisJob[]>([]);
 const total = ref(0);
 
@@ -124,8 +126,7 @@ function pickPublicUrl(res: { objectUrl?: string; url: string }) {
   return isPublicHttpUrl(res.url) ? res.url : '';
 }
 
-const previewVideoUrl = (url?: string) =>
-  url ? withPreviewToken(url, accessStore.accessToken) : '';
+const previewVideoUrl = (url?: string) => videoPreview.resolve(url);
 
 async function handleVideoUpload(file: File) {
   uploading.value = true;

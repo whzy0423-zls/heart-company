@@ -1,5 +1,5 @@
 // Package wechat 封装微信小程序服务端能力（登录态换取）。
-// 未配置 APPID/SECRET 或开启 LoginDev 时，使用本地回退：
+// 开启 LoginDev 或通过 NewClientWithMissingCredentialFallback 时，使用本地回退：
 // 由 code 派生稳定的伪 openid，便于无微信凭证时本地联调。
 package wechat
 
@@ -37,9 +37,13 @@ func NewClient(appID, secret string, devMode bool) *Client {
 		apiBase: "https://api.weixin.qq.com",
 		appID:   appID,
 		secret:  secret,
-		devMode: devMode || appID == "" || secret == "",
+		devMode: devMode,
 		http:    &http.Client{Timeout: 8 * time.Second},
 	}
+}
+
+func NewClientWithMissingCredentialFallback(appID, secret string, devMode bool) *Client {
+	return NewClient(appID, secret, devMode || appID == "" || secret == "")
 }
 
 // DevMode 返回是否处于本地回退模式（无真实微信凭证）。

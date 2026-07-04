@@ -139,6 +139,25 @@ func TestVbenCompatibleAPI(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects query token for signup event stream", func(t *testing.T) {
+		token := loginToken(t, handler)
+		response := perform(handler, http.MethodGet, "/api/signups/events?token="+token, "", nil)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("expected query token to be rejected for signup event stream, got %d body=%s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("accepts authorization header for signup event stream", func(t *testing.T) {
+		token := loginToken(t, handler)
+		response := perform(handler, http.MethodGet, "/api/signups/events", token, nil)
+		if response.Code == http.StatusUnauthorized {
+			t.Fatalf("expected authorization header to authorize signup event stream, got %d body=%s", response.Code, response.Body.String())
+		}
+		if response.Code != http.StatusInternalServerError {
+			t.Fatalf("expected stream handler to run until recorder rejects streaming, got %d body=%s", response.Code, response.Body.String())
+		}
+	})
+
 	t.Run("forbids backend api without matching permission", func(t *testing.T) {
 		token := lowPermissionToken(t, handler)
 		response := perform(handler, http.MethodGet, "/api/system/user/list", token, nil)
@@ -204,6 +223,25 @@ func TestVbenCompatibleAPI(t *testing.T) {
 		data := body.Data.(map[string]any)
 		if _, ok := data["analysis"].(map[string]any); !ok {
 			t.Fatalf("expected analysis model config in response, got %+v", data)
+		}
+	})
+
+	t.Run("lists app user insights for admins only", func(t *testing.T) {
+		token := loginToken(t, handler)
+		response := perform(handler, http.MethodGet, "/api/app-users/insights", token, nil)
+		body := decodeBody(t, response)
+		if response.Code != http.StatusOK || body.Code != 0 {
+			t.Fatalf("expected app user insights success, got status=%d body=%+v", response.Code, body)
+		}
+		data := body.Data.(map[string]any)
+		if _, ok := data["items"].([]any); !ok {
+			t.Fatalf("expected insights items array, got %+v", data)
+		}
+
+		lowToken := lowPermissionToken(t, handler)
+		forbidden := perform(handler, http.MethodGet, "/api/app-users/insights", lowToken, nil)
+		if forbidden.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 for missing Customer:UserInsights:List permission, got %d body=%s", forbidden.Code, forbidden.Body.String())
 		}
 	})
 }

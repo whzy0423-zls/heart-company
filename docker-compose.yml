@@ -14,7 +14,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-nx}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-nx_admin}
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -36,13 +36,15 @@ services:
         condition: service_healthy
     environment:
       PORT: "5320"
+      APP_ENV: ${APP_ENV:-production}
       SITE_CONFIG_PATH: /data/site-config.json
       ADMIN_CONFIG_PATH: /data/admin-config.json
       DATABASE_URL: postgres://${POSTGRES_USER:-nx}:${POSTGRES_PASSWORD:-nx}@db:5432/${POSTGRES_DB:-nx_admin}?sslmode=disable
       # 生产务必改成强随机串与你自己的账号密码（首次启动播种管理员）
-      JWT_SECRET: ${JWT_SECRET:-please-change-me-to-a-long-random-secret}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-123456}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:-}
       OSS_ACCESS_KEY_SECRET: ${OSS_ACCESS_KEY_SECRET:-}
       OSS_BUCKET: ${OSS_BUCKET:-}
@@ -52,6 +54,7 @@ services:
       OSS_PREFIX: ${OSS_PREFIX:-uploads}
       UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-20}
       UPLOAD_DIR: /data/uploads
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
       MINIMAX_GROUP_ID: ${MINIMAX_GROUP_ID:-}
       MINIMAX_API_BASE: ${MINIMAX_API_BASE:-https://api.minimaxi.com}
@@ -59,6 +62,36 @@ services:
       WECHAT_APPID: ${WECHAT_APPID:-}
       WECHAT_SECRET: ${WECHAT_SECRET:-}
       WECHAT_LOGIN_DEV: ${WECHAT_LOGIN_DEV:-}
+      SMS_PROVIDER: ${SMS_PROVIDER:-}
+      SMS_API_KEY: ${SMS_API_KEY:-}
+      SMS_API_SECRET: ${SMS_API_SECRET:-}
+      SMS_SIGN_NAME: ${SMS_SIGN_NAME:-}
+      SMS_TEMPLATE_ID: ${SMS_TEMPLATE_ID:-}
+      WXPAY_MCH_ID: ${WXPAY_MCH_ID:-}
+      WXPAY_APPID: ${WXPAY_APPID:-}
+      WXPAY_API_V3_KEY: ${WXPAY_API_V3_KEY:-}
+      WXPAY_SERIAL_NO: ${WXPAY_SERIAL_NO:-}
+      WXPAY_PRIVATE_KEY_PATH: ${WXPAY_PRIVATE_KEY_PATH:-}
+      WXPAY_PLATFORM_CERT_PATH: ${WXPAY_PLATFORM_CERT_PATH:-}
+      WXPAY_NOTIFY_URL: ${WXPAY_NOTIFY_URL:-}
+      WXPAY_REPORT_PRICE_CENTS: ${WXPAY_REPORT_PRICE_CENTS:-990}
+      WXPAY_DEV: ${WXPAY_DEV:-}
+      VIDEO_API_BASE: ${VIDEO_API_BASE:-}
+      VIDEO_API_KEY: ${VIDEO_API_KEY:-}
+      VIDEO_MODEL: ${VIDEO_MODEL:-}
+      IMAGE_API_BASE: ${IMAGE_API_BASE:-}
+      IMAGE_API_KEY: ${IMAGE_API_KEY:-}
+      IMAGE_MODEL: ${IMAGE_MODEL:-}
+      ASR_API_BASE: ${ASR_API_BASE:-}
+      ASR_API_KEY: ${ASR_API_KEY:-}
+      ASR_MODEL: ${ASR_MODEL:-}
+      JPUSH_APP_KEY: ${JPUSH_APP_KEY:-}
+      JPUSH_MASTER_SECRET: ${JPUSH_MASTER_SECRET:-}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-}
+      EMBEDDING_API_BASE: ${EMBEDDING_API_BASE:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1536}
       # 容器化下官网走运行时 fetch，不在容器内自动构建官网，故留空
       BUILD_SCRIPT: ""
     volumes:
@@ -77,7 +110,7 @@ services:
     depends_on:
       - server
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     networks:
       - nx
 
@@ -89,7 +122,7 @@ services:
     depends_on:
       - server
     ports:
-      - "8000:80"
+      - "127.0.0.1:8000:80"
     networks:
       - nx
 

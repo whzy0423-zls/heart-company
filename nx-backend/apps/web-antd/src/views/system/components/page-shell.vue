@@ -3,11 +3,14 @@ import { Page } from '@vben/common-ui';
 
 import { Button, Card, Spin } from 'ant-design-vue';
 
-defineProps<{
+withDefaults(defineProps<{
   description?: string;
   loading?: boolean;
+  showCreate?: boolean;
   title: string;
-}>();
+}>(), {
+  showCreate: false,
+});
 
 const emit = defineEmits<{
   create: [];
@@ -22,7 +25,7 @@ const emit = defineEmits<{
         <div class="actions">
           <Button :loading="loading" @click="emit('refresh')">刷新</Button>
           <Button
-            v-if="$slots.create !== null"
+            v-if="showCreate"
             type="primary"
             @click="emit('create')"
           >

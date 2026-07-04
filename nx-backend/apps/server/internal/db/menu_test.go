@@ -58,3 +58,50 @@ func TestDefaultMenusIncludeVideoStoryboard(t *testing.T) {
 		t.Fatal("expected default menu VideoStoryboard")
 	}
 }
+
+func TestDefaultMenusIncludeCustomerAppWritePermission(t *testing.T) {
+	var foundList bool
+	var foundWrite bool
+	for _, menu := range defaultMenus {
+		switch menu.Name {
+		case "CustomerAppUsers":
+			foundList = true
+			if menu.AuthCode != "Customer:App:List" {
+				t.Fatalf("unexpected App customer list permission: %+v", menu)
+			}
+		case "CustomerAppUsersEdit":
+			foundWrite = true
+			if menu.PID != 502 || menu.Type != "button" {
+				t.Fatalf("expected App customer write permission to be a child button of App customers, got %+v", menu)
+			}
+			if menu.AuthCode != "Customer:App:Write" || menu.Title != "编辑 App 客户" {
+				t.Fatalf("unexpected App customer write metadata: %+v", menu)
+			}
+		}
+	}
+	if !foundList {
+		t.Fatal("expected default menu CustomerAppUsers")
+	}
+	if !foundWrite {
+		t.Fatal("expected default menu CustomerAppUsersEdit")
+	}
+}
+
+func TestDefaultMenusIncludeCustomerUserInsights(t *testing.T) {
+	var found bool
+	for _, menu := range defaultMenus {
+		if menu.Name != "CustomerUserInsights" {
+			continue
+		}
+		found = true
+		if menu.PID != 500 || menu.Path != "/customer/user-insights" || menu.Component != "/customer/user-insights" {
+			t.Fatalf("unexpected user insights route: %+v", menu)
+		}
+		if menu.AuthCode != "Customer:UserInsights:List" || menu.Title != "用户提炼数据" {
+			t.Fatalf("unexpected user insights metadata: %+v", menu)
+		}
+	}
+	if !found {
+		t.Fatal("expected default menu CustomerUserInsights")
+	}
+}

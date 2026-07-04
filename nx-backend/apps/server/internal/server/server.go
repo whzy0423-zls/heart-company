@@ -10,9 +10,9 @@ import (
 	"io"
 	"log"
 	"mime"
-	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -34,6 +34,8 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/mindquote"
 	"nine-xing/nx-backend/apps/server/internal/miniapp"
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
+	"nine-xing/nx-backend/apps/server/internal/netguard"
+	"nine-xing/nx-backend/apps/server/internal/push"
 	"nine-xing/nx-backend/apps/server/internal/quiz"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 	"nine-xing/nx-backend/apps/server/internal/ragstore"
@@ -84,17 +86,39 @@ type Server struct {
 	chatLimiter   *fixedWindowRateLimiter
 	chatTimeout   time.Duration
 
-	appUsers        *appuser.Store
-	appChat         *chat.Store
-	smsSender       sms.Sender
-	smsPhoneLimiter *strRateLimiter
-	smsIPLimiter    *strRateLimiter
+	appUsers                 *appuser.Store
+	appChat                  *chat.Store
+	pushStore                *push.Store
+	smsSender                sms.Sender
+	loginLimiter             *strRateLimiter
+	smsPhoneLimiter          *strRateLimiter
+	smsIPLimiter             *strRateLimiter
+	smsVerifyPhoneLimiter    *strRateLimiter
+	smsVerifyIPLimiter       *strRateLimiter
+	publicSignupIPLimiter    *strRateLimiter
+	publicAnalyticsIPLimiter *strRateLimiter
+	publicGameIPLimiter      *strRateLimiter
+	videoAnalysisSlots       chan struct{}
+	videoStoryboardSlots     chan struct{}
 
 	signupMu          sync.Mutex
 	signupSubscribers map[chan signup.Lead]struct{}
 
 	// modelMu 保护可在运行时被"模型配置"页面重建的 ragGen / analysisGen / videos。
 	modelMu sync.RWMutex
+}
+
+var uploadPermissionCodes = []string{
+	"RAG:Knowledge:Manage",
+	"Reading:Article:Manage",
+	"System:Branding",
+	"Video:Analysis:Manage",
+	"Video:Asset:Manage",
+	"Video:Generate:Manage",
+	"Video:Storyboard:Manage",
+	"Voice:Content:Manage",
+	"Voice:Profile:Manage",
+	"Website:Write",
 }
 
 func New(env config.Env, database *sql.DB) http.Handler {
@@ -122,7 +146,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.storyboards = videostoryboard.NewStore(database)
 	s.images = image.NewStore(s.uploads, env.Image, s.uploader)
 	s.miniapp = miniapp.NewStore(database)
-	s.wx = wechat.NewClient(env.WeChat.AppID, env.WeChat.Secret, env.WeChat.LoginDev)
+	s.wx = newWeChatClient(env)
 	s.pay = mustWxPayClient(env)
 	s.ragGen = llm.NewMiniMaxGenerator(env.MiniMax)
 	s.analysisGen = llm.NewMiniMaxGenerator(modelconfig.Config{}.ApplyAnalysis(env.MiniMax))
@@ -148,9 +172,18 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.appUsers = appuser.NewStore(database)
 	s.quiz = quiz.NewStore(database)
 	s.appChat = chat.NewStore(database)
+	s.loginLimiter = newStrRateLimiter(10, time.Minute)
 	s.smsPhoneLimiter = newStrRateLimiter(1, time.Minute)
 	s.smsIPLimiter = newStrRateLimiter(10, time.Minute)
+	s.smsVerifyPhoneLimiter = newStrRateLimiter(5, time.Minute)
+	s.smsVerifyIPLimiter = newStrRateLimiter(20, time.Minute)
+	s.publicSignupIPLimiter = newStrRateLimiter(5, time.Minute)
+	s.publicAnalyticsIPLimiter = newStrRateLimiter(120, time.Minute)
+	s.publicGameIPLimiter = newStrRateLimiter(30, time.Minute)
+	s.videoAnalysisSlots = make(chan struct{}, 3)
+	s.videoStoryboardSlots = make(chan struct{}, 3)
 	s.smsSender = mustSMSSender(env.SMS)
+	s.pushStore = push.NewStore(database, push.NewPusher(env.AppEnv, env.JPush.AppKey, env.JPush.MasterSecret))
 	// 启动时应用 DB 中保存的模型配置覆盖（若存在），重建对话/视频客户端。
 	s.applyStoredModelConfig()
 	s.routes()
@@ -160,11 +193,22 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	return s.withCORS(s.mux)
 }
 
+func newWeChatClient(env config.Env) *wechat.Client {
+	if env.AppEnv == "production" {
+		return wechat.NewClient(env.WeChat.AppID, env.WeChat.Secret, false)
+	}
+	return wechat.NewClientWithMissingCredentialFallback(env.WeChat.AppID, env.WeChat.Secret, env.WeChat.LoginDev)
+}
+
 // applyStoredModelConfig 读取 DB 中持久化的模型配置覆盖（若有），
 // 用覆盖后的凭据重建对话/视频客户端。无配置或 DB 不可用时静默回退到 env 基线。
 func (s *Server) applyStoredModelConfig() {
 	cfg, ok, err := modelconfig.ReadStore(context.Background(), s.db)
 	if err != nil || !ok {
+		return
+	}
+	if err := validateModelConfigBases(cfg); err != nil {
+		log.Printf("ignore unsafe stored model config: %v", err)
 		return
 	}
 	// AI 辅助关闭时不挂生成器：聊天仅走资料检索/固定兜底（rag.Service 对 nil 生成器安全）。
@@ -214,9 +258,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/user/profile", s.method(http.MethodPut, s.requireAuth(s.updateUserProfile)))
 	s.mux.HandleFunc("/api/auth/codes", s.method(http.MethodGet, s.requireAuth(s.codes)))
 	s.mux.HandleFunc("/api/menu/all", s.method(http.MethodGet, s.requireAuth(s.menus)))
-	s.mux.HandleFunc("/api/upload", s.method(http.MethodPost, s.requireAnyPermission(nil, s.upload)))
+	s.mux.HandleFunc("/api/upload", s.method(http.MethodPost, s.requireUploadPermission(s.upload)))
 	s.mux.HandleFunc("/api/upload-assets/", s.method(http.MethodGet, s.requireUploadAssetAuth(s.uploadAsset)))
-	s.mux.Handle("/api/uploads/", http.StripPrefix("/api/uploads/", http.FileServer(http.Dir(s.env.UploadDir))))
+	s.mux.HandleFunc("/api/uploads/", s.getOrHead(s.requireAuth(s.uploadedFile)))
 	s.mux.HandleFunc("/api/site-config", s.siteConfig)
 	s.mux.HandleFunc("/api/site-config/build-status", s.method(http.MethodGet, s.requirePermission("Website:Write", s.siteBuildStatus)))
 	// 公开只读：给官网(website-react)运行时拉取，无需鉴权。
@@ -227,6 +271,7 @@ func (s *Server) routes() {
 	// 阅读 H5：公开只读文章列表 / 详情 / 分类。
 	s.mux.HandleFunc("/api/public/articles", s.method(http.MethodGet, s.publicArticles))
 	s.mux.HandleFunc("/api/public/articles/", s.method(http.MethodGet, s.publicArticleDetail))
+	s.mux.HandleFunc("/api/public/article-assets/", s.method(http.MethodGet, s.publicArticleAsset))
 	s.mux.HandleFunc("/api/public/article-categories", s.method(http.MethodGet, s.publicArticleCategories))
 	// 成长心语：官网公开只读（分组聚合 + 单条详情）。
 	s.mux.HandleFunc("/api/public/mind-groups", s.method(http.MethodGet, s.publicMindGroups))
@@ -241,10 +286,13 @@ func (s *Server) routes() {
 	// ===== App API =====
 	s.mux.HandleFunc("/api/app/health", s.method(http.MethodGet, s.appHealth))
 	s.mux.HandleFunc("/api/app/auth/send-sms", s.method(http.MethodPost, s.appSendSMS))
+	s.mux.HandleFunc("/api/app/auth/sms/send", s.method(http.MethodPost, s.appSendSMS))
 	s.mux.HandleFunc("/api/app/auth/verify-sms", s.method(http.MethodPost, s.appVerifySMS))
+	s.mux.HandleFunc("/api/app/auth/sms/login", s.method(http.MethodPost, s.appVerifySMS))
 	s.mux.HandleFunc("/api/app/auth/refresh", s.method(http.MethodPost, s.appRefreshToken))
 	s.mux.HandleFunc("/api/app/auth/logout", s.method(http.MethodPost, s.appLogout))
 	s.mux.HandleFunc("/api/app/user/info", s.method(http.MethodGet, s.requireAppAuth(s.appUserInfo)))
+	s.mux.HandleFunc("/api/app/me", s.method(http.MethodGet, s.requireAppAuth(s.appUserInfo)))
 	// 测评问卷 + 命运卡片
 	s.mux.HandleFunc("/api/app/quiz/questions", s.method(http.MethodGet, s.appQuizQuestions))
 	s.mux.HandleFunc("/api/app/quiz/submit", s.method(http.MethodPost, s.requireAppAuth(s.appQuizSubmit)))
@@ -252,6 +300,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/cards", s.requireAppAuth(s.appCards))
 	s.mux.HandleFunc("/api/app/cards/primary", s.method(http.MethodGet, s.requireAppAuth(s.appCardPrimary)))
 	s.mux.HandleFunc("/api/app/cards/", s.requireAppAuth(s.appCardByID))
+	s.mux.HandleFunc("/api/app/compatibility", s.requireAppAuth(s.appCompatibilityRouter))
+	s.mux.HandleFunc("/api/app/compatibility/", s.requireAppAuth(s.appCompatibilityRouter))
 	s.mux.HandleFunc("/api/app/chat/sessions", s.requireAppAuth(s.appChatRouter))
 	s.mux.HandleFunc("/api/app/chat/sessions/", s.requireAppAuth(s.appChatRouter))
 	s.mux.HandleFunc("/api/app/chat/messages/", s.requireAppAuth(s.appChatMessageRouter))
@@ -262,9 +312,22 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/billing/orders", s.method(http.MethodPost, s.requireAppAuth(s.appBillingCreateOrder)))
 	s.mux.HandleFunc("/api/app/billing/orders/status", s.method(http.MethodGet, s.requireAppAuth(s.appBillingOrderStatus)))
 	s.mux.HandleFunc("/api/app/memories/", s.requireAppAuth(s.appMemoryRouter))
+	s.mux.HandleFunc("/api/app/privacy/export", s.method(http.MethodPost, s.requireAppAuth(s.appPrivacyExport)))
+	s.mux.HandleFunc("/api/app/privacy/memories", s.method(http.MethodDelete, s.requireAppAuth(s.appPrivacyDeleteMemories)))
+	s.mux.HandleFunc("/api/app/privacy/account", s.method(http.MethodDelete, s.requireAppAuth(s.appPrivacyDeleteAccount)))
+	s.mux.HandleFunc("/api/app/privacy/policy", s.method(http.MethodGet, s.appPrivacyPolicy))
+	s.mux.HandleFunc("/api/app/analytics/event", s.method(http.MethodPost, s.requireAppAuth(s.appAnalyticsEvent)))
 	// 每日成长练习 + 打卡
 	s.mux.HandleFunc("/api/app/daily/practice", s.method(http.MethodGet, s.requireAppAuth(s.appDailyPractice)))
 	s.mux.HandleFunc("/api/app/daily/checkin", s.method(http.MethodPost, s.requireAppAuth(s.appDailyCheckin)))
+	// 成长周报
+	s.mux.HandleFunc("/api/app/reports", s.method(http.MethodGet, s.requireAppAuth(s.appReportList)))
+	s.mux.HandleFunc("/api/app/reports/", s.requireAppAuth(s.appReportRouter))
+	// 推送设备令牌注册/注销
+	s.mux.HandleFunc("/api/app/push/register", s.method(http.MethodPost, s.requireAppAuth(s.appPushRegister)))
+	s.mux.HandleFunc("/api/app/push/unregister", s.method(http.MethodPost, s.requireAppAuth(s.appPushUnregister)))
+	// 语音识别
+	s.mux.HandleFunc("/api/app/voice/recognize", s.method(http.MethodPost, s.requireAppAuth(s.appVoiceRecognize)))
 
 	// ===== 小程序（微信）=====
 	s.mux.HandleFunc("/api/wx/login", s.method(http.MethodPost, s.wxLogin))
@@ -274,6 +337,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/miniapp/chat", s.method(http.MethodPost, s.requireMiniapp(s.miniappChat)))
 	// 付费解锁：下单（鉴权）→ 微信回调（公开）→ 解锁状态/报告正文（鉴权）
 	s.mux.HandleFunc("/api/miniapp/report/order", s.method(http.MethodPost, s.requireMiniapp(s.createReportOrder)))
+	s.mux.HandleFunc("/api/miniapp/report/dev-pay", s.method(http.MethodPost, s.requireMiniapp(s.devPayReportOrder)))
 	s.mux.HandleFunc("/api/miniapp/report/status", s.method(http.MethodGet, s.requireMiniapp(s.reportStatus)))
 	s.mux.HandleFunc("/api/miniapp/report/content", s.method(http.MethodGet, s.requireMiniapp(s.reportContent)))
 	s.mux.HandleFunc("/api/pay/notify", s.method(http.MethodPost, s.payNotify))
@@ -281,6 +345,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/game-results/overview", s.method(http.MethodGet, s.requirePermission("Analytics:GameResults", s.gameOverview)))
 	s.mux.HandleFunc("/api/messages/list", s.method(http.MethodGet, s.requirePermission("Message:Manage:List", s.messagesList)))
 	s.mux.HandleFunc("/api/messages/read", s.method(http.MethodPut, s.requirePermission("Message:Manage:List", s.markMessages)))
+	// 推送管理（admin）
+	s.mux.HandleFunc("/api/push/list", s.method(http.MethodGet, s.requirePermission("Push:Manage", s.adminPushList)))
+	s.mux.HandleFunc("/api/push/send", s.method(http.MethodPost, s.requirePermission("Push:Manage", s.adminPushSend)))
 	s.mux.HandleFunc("/api/signups/list", s.method(http.MethodGet, s.requirePermission("Customer:Signup:List", s.signupList)))
 	s.mux.HandleFunc("/api/signups/detail", s.method(http.MethodGet, s.requirePermission("Customer:Signup:List", s.signupDetail)))
 	s.mux.HandleFunc("/api/signups/follow", s.method(http.MethodPut, s.requirePermission("Customer:Signup:List", s.signupFollow)))
@@ -321,18 +388,40 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/reading/settings", s.requirePermission("Reading:Article:Manage", s.readingSettings))
 	s.mux.HandleFunc("/api/rag/reindex", s.method(http.MethodPost, s.requirePermission("RAG:Knowledge:Manage", s.ragReindex)))
 	s.mux.HandleFunc("/api/system/user/list", s.method(http.MethodGet, s.requirePermission("System:User:List", s.system.HandleUsers)))
-	s.mux.HandleFunc("/api/system/user", s.requirePermission("System:User:List", s.system.HandleUsers))
-	s.mux.HandleFunc("/api/system/user/", s.requirePermission("System:User:List", s.system.HandleUserByID))
+	s.mux.HandleFunc("/api/system/user", s.requireMethodPermission(map[string]string{
+		http.MethodDelete: "System:User:Delete",
+		http.MethodGet:    "System:User:List",
+		http.MethodPost:   "System:User:Create",
+	}, s.system.HandleUsers))
+	s.mux.HandleFunc("/api/system/user/", s.requireMethodPermission(map[string]string{
+		http.MethodDelete: "System:User:Delete",
+		http.MethodPut:    "System:User:Update",
+	}, s.system.HandleUserByID))
 	s.mux.HandleFunc("/api/app-users/list", s.method(http.MethodGet, s.requirePermission("Customer:App:List", s.appUsers.HandleAppUsers)))
-	s.mux.HandleFunc("/api/app-users/", s.method(http.MethodGet, s.requirePermission("Customer:App:List", s.appUsers.HandleAppUserByID)))
+	s.mux.HandleFunc("/api/app-users/insights", s.method(http.MethodGet, s.requirePermission("Customer:UserInsights:List", s.appUsers.HandleAppUserInsights)))
+	s.mux.HandleFunc("/api/app-users/", s.adminAppUserByID)
 	s.mux.HandleFunc("/api/system/role/list", s.method(http.MethodGet, s.requirePermission("System:Role:List", s.system.HandleRoles)))
-	s.mux.HandleFunc("/api/system/role", s.requirePermission("System:Role:List", s.system.HandleRoles))
-	s.mux.HandleFunc("/api/system/role/", s.requirePermission("System:Role:List", s.system.HandleRoleByID))
+	s.mux.HandleFunc("/api/system/role", s.requireMethodPermission(map[string]string{
+		http.MethodDelete: "System:Role:Delete",
+		http.MethodGet:    "System:Role:List",
+		http.MethodPost:   "System:Role:Create",
+	}, s.system.HandleRoles))
+	s.mux.HandleFunc("/api/system/role/", s.requireMethodPermission(map[string]string{
+		http.MethodDelete: "System:Role:Delete",
+		http.MethodPut:    "System:Role:Update",
+	}, s.system.HandleRoleByID))
 	s.mux.HandleFunc("/api/system/menu/list", s.method(http.MethodGet, s.requirePermission("System:Menu:List", s.system.HandleMenus)))
 	s.mux.HandleFunc("/api/system/menu/name-exists", s.method(http.MethodGet, s.requirePermission("System:Menu:List", s.system.HandleMenuNameExists)))
 	s.mux.HandleFunc("/api/system/menu/path-exists", s.method(http.MethodGet, s.requirePermission("System:Menu:List", s.system.HandleMenuPathExists)))
-	s.mux.HandleFunc("/api/system/menu", s.requirePermission("System:Menu:List", s.system.HandleMenus))
-	s.mux.HandleFunc("/api/system/menu/", s.requirePermission("System:Menu:List", s.system.HandleMenuByID))
+	s.mux.HandleFunc("/api/system/menu", s.requireMethodPermission(map[string]string{
+		http.MethodDelete: "System:Menu:Delete",
+		http.MethodGet:    "System:Menu:List",
+		http.MethodPost:   "System:Menu:Create",
+	}, s.system.HandleMenus))
+	s.mux.HandleFunc("/api/system/menu/", s.requireMethodPermission(map[string]string{
+		http.MethodDelete: "System:Menu:Delete",
+		http.MethodPut:    "System:Menu:Update",
+	}, s.system.HandleMenuByID))
 }
 
 func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
@@ -340,12 +429,17 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
 	var body struct {
 		Password string `json:"password"`
 		Username string `json:"username"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "BadRequestException")
+		return
+	}
+	if !s.allowLoginAttempt(body.Username, clientIP(r), time.Now()) {
+		httpx.Fail(w, http.StatusTooManyRequests, "TooManyRequestsException")
 		return
 	}
 
@@ -384,6 +478,14 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		"username":    user.Username,
 	}
 	httpx.OK(w, payload)
+}
+
+func (s *Server) allowLoginAttempt(username, ip string, now time.Time) bool {
+	if s == nil || s.loginLimiter == nil {
+		return true
+	}
+	key := strings.ToLower(strings.TrimSpace(username)) + "|" + strings.TrimSpace(ip)
+	return s.loginLimiter.Allow(key, now)
 }
 
 func (s *Server) logout(w http.ResponseWriter, _ *http.Request) {
@@ -490,6 +592,10 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("file exceeds %d bytes", maxBytes))
 		return
 	}
+	if uploadDirAllowsSelfService(r.URL.Query().Get("dir")) && !isImageUpload(contentType, content) {
+		httpx.Fail(w, http.StatusBadRequest, "user avatar upload must be an image")
+		return
+	}
 
 	result, err := uploader.Upload(r.Context(), storage.UploadInput{
 		ContentType: contentType,
@@ -540,8 +646,19 @@ func (s *Server) uploadAsset(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	writeUploadAsset(w, asset)
+}
+
+func (s *Server) uploadedFile(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.StripPrefix("/api/uploads/", http.FileServer(noDirListingFileSystem{fs: http.Dir(s.env.UploadDir)})).ServeHTTP(w, r)
+}
+
+func writeUploadAsset(w http.ResponseWriter, asset uploadasset.Asset) {
 	w.Header().Set("Content-Type", asset.ContentType)
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(asset.Data)))
 	_, _ = w.Write(asset.Data)
 }
@@ -560,6 +677,27 @@ func (s *Server) objectUploader() (storage.ObjectUploader, error) {
 	}
 	s.uploader = uploader
 	return s.uploader, nil
+}
+
+type noDirListingFileSystem struct {
+	fs http.FileSystem
+}
+
+func (f noDirListingFileSystem) Open(name string) (http.File, error) {
+	file, err := f.fs.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	stat, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if stat.IsDir() {
+		_ = file.Close()
+		return nil, os.ErrNotExist
+	}
+	return file, nil
 }
 
 func isTooLarge(err error) bool {
@@ -636,6 +774,10 @@ func (s *Server) publicSiteConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) publicSignup(w http.ResponseWriter, r *http.Request) {
+	if !s.allowPublicWrite(w, r, s.publicSignupIPLimiter) {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
 	var body signup.LeadInput
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
@@ -651,6 +793,9 @@ func (s *Server) publicSignup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) publicSiteVisit(w http.ResponseWriter, r *http.Request) {
+	if !s.allowPublicWrite(w, r, s.publicAnalyticsIPLimiter) {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var body analytics.VisitInput
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -665,6 +810,9 @@ func (s *Server) publicSiteVisit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) publicGameResult(w http.ResponseWriter, r *http.Request) {
+	if !s.allowPublicWrite(w, r, s.publicGameIPLimiter) {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 	var body engagement.GameResultInput
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -677,6 +825,17 @@ func (s *Server) publicGameResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.OK(w, result)
+}
+
+func (s *Server) allowPublicWrite(w http.ResponseWriter, r *http.Request, limiter *strRateLimiter) bool {
+	if limiter == nil {
+		return true
+	}
+	if limiter.Allow(clientIP(r), time.Now()) {
+		return true
+	}
+	httpx.Fail(w, http.StatusTooManyRequests, "TooManyRequestsException")
+	return false
 }
 
 func (s *Server) analyticsOverview(w http.ResponseWriter, r *http.Request) {
@@ -1242,6 +1401,18 @@ func uploadAssetIDFromURL(raw string) (int64, bool) {
 	return id, true
 }
 
+func uploadDirAllowsSelfService(dir string) bool {
+	return strings.Trim(strings.TrimSpace(dir), "/") == "user-avatars"
+}
+
+func isImageUpload(contentType string, content []byte) bool {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "image/") {
+		return true
+	}
+	detected := http.DetectContentType(content)
+	return strings.HasPrefix(strings.ToLower(detected), "image/")
+}
+
 func (s *Server) videoGenerations(w http.ResponseWriter, r *http.Request) {
 	result, err := s.videoStore().ListGenerations(r.Context(), r.URL.Query())
 	if err != nil {
@@ -1299,7 +1470,7 @@ func (s *Server) createVideoAnalysis(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	go s.runVideoAnalysis(job.ID)
+	s.startVideoAnalysisTask(job.ID)
 	httpx.OK(w, job)
 }
 
@@ -1368,22 +1539,7 @@ func (s *Server) analysisVideoURL(ctx context.Context, asset uploadasset.Asset) 
 }
 
 func isPublicHTTPURL(raw string) bool {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return false
-	}
-	host := strings.ToLower(u.Hostname())
-	if host == "localhost" {
-		return false
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return !isPrivateOrLocalIP(ip)
-	}
-	return true
-}
-
-func isPrivateOrLocalIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+	return netguard.IsPublicHTTPURL(raw)
 }
 
 func (s *Server) videoAnalysisByID(w http.ResponseWriter, r *http.Request) {
@@ -1418,8 +1574,41 @@ func (s *Server) videoAnalysisByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	go s.runVideoAnalysis(job.ID)
+	s.startVideoAnalysisTask(job.ID)
 	httpx.OK(w, job)
+}
+
+func tryAcquireVideoAsyncSlot(slots chan struct{}) bool {
+	if slots == nil {
+		return true
+	}
+	select {
+	case slots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func releaseVideoAsyncSlot(slots chan struct{}) {
+	if slots == nil {
+		return
+	}
+	select {
+	case <-slots:
+	default:
+	}
+}
+
+func (s *Server) startVideoAnalysisTask(id string) {
+	if !tryAcquireVideoAsyncSlot(s.videoAnalysisSlots) {
+		s.failVideoAnalysisTask(id, "视频分析任务繁忙，请稍后重试")
+		return
+	}
+	go func() {
+		defer releaseVideoAsyncSlot(s.videoAnalysisSlots)
+		s.runVideoAnalysis(id)
+	}()
 }
 
 func (s *Server) runVideoAnalysis(id string) {
@@ -1521,7 +1710,7 @@ func (s *Server) videoStoryboards(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		go s.runVideoStoryboard(job.ID)
+		s.startVideoStoryboardTask(job.ID)
 		httpx.OK(w, job)
 	default:
 		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
@@ -1555,7 +1744,7 @@ func (s *Server) videoStoryboardByID(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		go s.runVideoStoryboard(job.ID)
+		s.startVideoStoryboardTask(job.ID)
 		httpx.OK(w, job)
 		return
 	}
@@ -1589,6 +1778,17 @@ func (s *Server) videoStoryboardByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
 	}
+}
+
+func (s *Server) startVideoStoryboardTask(id string) {
+	if !tryAcquireVideoAsyncSlot(s.videoStoryboardSlots) {
+		s.failVideoStoryboardTask(id, "分镜任务繁忙，请稍后重试")
+		return
+	}
+	go func() {
+		defer releaseVideoAsyncSlot(s.videoStoryboardSlots)
+		s.runVideoStoryboard(id)
+	}()
 }
 
 func (s *Server) runVideoStoryboard(id string) {
@@ -1679,7 +1879,7 @@ func (s *Server) recoverVideoAsyncTasks() {
 		log.Printf("video analysis queued recovery failed: %v", err)
 	} else {
 		for _, id := range analysisIDs {
-			go s.runVideoAnalysis(id)
+			s.startVideoAnalysisTask(id)
 		}
 	}
 
@@ -1694,7 +1894,7 @@ func (s *Server) recoverVideoAsyncTasks() {
 		return
 	}
 	for _, id := range storyboardIDs {
-		go s.runVideoStoryboard(id)
+		s.startVideoStoryboardTask(id)
 	}
 }
 
@@ -1835,7 +2035,17 @@ func (s *Server) adminBranding(w http.ResponseWriter, r *http.Request) {
 		}
 		httpx.OK(w, b)
 	case http.MethodPut:
-		if _, ok := s.authorize(w, r); !ok {
+		user, ok := s.authorize(w, r)
+		if !ok {
+			return
+		}
+		allowed, err := s.hasAnyPermission(r.Context(), user, "System:Branding")
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !allowed {
+			httpx.Fail(w, http.StatusForbidden, "Forbidden")
 			return
 		}
 		var b branding.Branding
@@ -1907,6 +2117,34 @@ func buildModelConfigView(chat config.MiniMaxConfig, vid config.VideoConfig, img
 	return view
 }
 
+func validateModelConfigBases(cfg modelconfig.Config) error {
+	for label, apiBase := range map[string]string{
+		"chat.apiBase":  cfg.Chat.APIBase,
+		"image.apiBase": cfg.Image.APIBase,
+		"video.apiBase": cfg.Video.APIBase,
+	} {
+		if err := validateExternalAPIBase(label, apiBase); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateExternalAPIBase(label string, raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("%s must be an http(s) URL", label)
+	}
+	if !netguard.IsPublicHTTPURL(raw) {
+		return fmt.Errorf("%s must not point to a private or local address", label)
+	}
+	return nil
+}
+
 // modelConfig 读取/保存对话(MiniMax)与视频模型配置；GET/PUT 均需登录（已由 requireAuth 包裹）。
 // GET 返回 env+DB 覆盖后的"生效"配置，但密钥一律脱敏为布尔位；
 // PUT 仅持久化覆盖值，密钥留空表示"不修改"，保存后在写锁下重建运行时客户端。
@@ -1939,6 +2177,10 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		// 合并：密钥留空表示沿用已存值，避免脱敏后前端回传空串清空密钥。
 		merged := stored.MergeIncoming(incoming)
+		if err := validateModelConfigBases(merged); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if err := modelconfig.UpsertStore(r.Context(), s.db, merged); err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, err.Error())
 			return
@@ -1986,6 +2228,10 @@ func (s *Server) testChatModel(w http.ResponseWriter, r *http.Request) {
 	}
 	// 合并：密钥留空沿用已存值；地址/模型名以前端填写为准（含回退到 env）。
 	merged := stored.MergeIncoming(incoming)
+	if err := validateModelConfigBases(merged); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	chat := merged.ApplyChat(s.env.MiniMax)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -2017,6 +2263,40 @@ func (s *Server) requireUploadAssetAuth(next http.HandlerFunc) http.HandlerFunc 
 
 func (s *Server) requirePermission(code string, next http.HandlerFunc) http.HandlerFunc {
 	return s.requireAnyPermission([]string{code}, next)
+}
+
+func (s *Server) requireUploadPermission(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := s.authorize(w, r)
+		if !ok {
+			return
+		}
+		if uploadDirAllowsSelfService(r.URL.Query().Get("dir")) {
+			next(w, r.WithContext(withUser(r.Context(), user)))
+			return
+		}
+		allowed, err := s.hasAnyPermission(r.Context(), user, uploadPermissionCodes...)
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !allowed {
+			httpx.Fail(w, http.StatusForbidden, "Forbidden")
+			return
+		}
+		next(w, r.WithContext(withUser(r.Context(), user)))
+	}
+}
+
+func (s *Server) requireMethodPermission(codes map[string]string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		code, ok := codes[r.Method]
+		if !ok {
+			httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+			return
+		}
+		s.requirePermission(code, next)(w, r)
+	}
 }
 
 func (s *Server) requireAnyPermission(codes []string, next http.HandlerFunc) http.HandlerFunc {
@@ -2076,13 +2356,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) (auth.UserInf
 }
 
 func (s *Server) authorizeUploadAsset(w http.ResponseWriter, r *http.Request) (auth.UserInfo, bool) {
-	authorization := r.Header.Get("Authorization")
-	if authorization == "" {
-		if token := strings.TrimSpace(r.URL.Query().Get("token")); token != "" {
-			authorization = "Bearer " + token
-		}
-	}
-	return s.authorizeAuthorization(w, r, authorization)
+	return s.authorize(w, r)
 }
 
 func (s *Server) authorizeAuthorization(w http.ResponseWriter, r *http.Request, authorization string) (auth.UserInfo, bool) {
@@ -2139,6 +2413,16 @@ func (s *Server) method(method string, handler http.HandlerFunc) http.HandlerFun
 	}
 }
 
+func (s *Server) getOrHead(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+			return
+		}
+		handler(w, r)
+	}
+}
+
 func queryMap(r *http.Request) map[string]string {
 	result := map[string]string{}
 	for key, value := range r.URL.Query() {
@@ -2152,11 +2436,11 @@ func queryMap(r *http.Request) map[string]string {
 func (s *Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin == "" {
-			origin = "*"
+		if s.corsOriginAllowed(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Add("Vary", "Origin")
 		}
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept-Language")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 
@@ -2166,4 +2450,20 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) corsOriginAllowed(origin string) bool {
+	origin = strings.TrimRight(strings.TrimSpace(origin), "/")
+	if origin == "" {
+		return false
+	}
+	if len(s.env.CORSAllowedOrigins) == 0 {
+		return s.env.AppEnv != "production"
+	}
+	for _, allowed := range s.env.CORSAllowedOrigins {
+		if strings.EqualFold(origin, strings.TrimRight(strings.TrimSpace(allowed), "/")) {
+			return true
+		}
+	}
+	return false
 }

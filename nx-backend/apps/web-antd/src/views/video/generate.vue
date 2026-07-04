@@ -29,9 +29,10 @@ import {
   refreshVideoGenerationApi,
   uploadFileApi,
 } from '#/api';
+import { useUploadAssetPreviewResolver } from '#/utils/upload-asset-preview';
 
-import { withPreviewToken } from './asset-preview';
 import AssetPicker from './components/AssetPicker.vue';
+import { formatGenerationError } from './generation-error';
 
 // @ 资产的内联彩色标签样式：不同类型不同配色，与资产库 Tag 颜色保持一致。
 const CHIP_STYLE: Record<VideoAssetType, { bg: string; fg: string }> = {
@@ -49,6 +50,9 @@ const generating = ref(false);
 const polishing = ref(false);
 const refreshingId = ref('');
 const accessStore = useAccessStore();
+const videoPreview = useUploadAssetPreviewResolver(
+  () => accessStore.accessToken,
+);
 const generations = ref<VideoGeneration[]>([]);
 const total = ref(0);
 const latest = ref<VideoGeneration>();
@@ -198,7 +202,7 @@ function readEditor(): {
 
   const walk = (node: Node) => {
     if (node.nodeType === Node.TEXT_NODE) {
-      text += (node.textContent ?? '').replaceAll(' ', ' ');
+      text += (node.textContent ?? '').replace(/\u00A0/g, ' ');
       return;
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return;
@@ -388,8 +392,7 @@ const isSuccessStatus = (status: string) =>
 const generationParams = (record: VideoGeneration) =>
   `${record.seconds || '-'} 秒 · ${record.aspectRatio || '-'}`;
 
-const previewVideoUrl = (url?: string) =>
-  url ? withPreviewToken(url, accessStore.accessToken) : '';
+const previewVideoUrl = (url?: string) => videoPreview.resolve(url);
 
 const columns = [
   { dataIndex: 'prompt', ellipsis: true, title: '提示词' },
@@ -683,7 +686,7 @@ onMounted(() => {
               v-if="latest.status === 'failed' && latest.errorMessage"
               class="latest-error"
             >
-              {{ latest.errorMessage }}
+              {{ formatGenerationError(latest.errorMessage) }}
             </div>
             <div
               v-else-if="!isSuccessStatus(latest.status)"
@@ -703,9 +706,9 @@ onMounted(() => {
                 共 {{ total }} 条记录，完成后可在线预览。
               </div>
             </div>
-            <Button :loading="loading" @click="loadGenerations"
-              >刷新列表</Button
-            >
+            <Button :loading="loading" @click="loadGenerations">
+              刷新列表
+            </Button>
           </div>
           <Table
             :columns="columns"
@@ -749,9 +752,11 @@ onMounted(() => {
               <template v-else-if="column.dataIndex === 'errorMessage'">
                 <Tooltip
                   v-if="record.status === 'failed' && record.errorMessage"
-                  :title="record.errorMessage"
+                  :title="formatGenerationError(record.errorMessage)"
                 >
-                  <span class="error-text">{{ record.errorMessage }}</span>
+                  <span class="error-text">
+                    {{ formatGenerationError(record.errorMessage) }}
+                  </span>
                 </Tooltip>
                 <span v-else>-</span>
               </template>

@@ -5,11 +5,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net"
 	"net/url"
 	"strings"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/netguard"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 )
 
@@ -222,20 +222,5 @@ func nullInt64(value int64) any {
 }
 
 func isPublicHTTPURL(raw string) bool {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return false
-	}
-	host := strings.ToLower(u.Hostname())
-	if host == "localhost" {
-		return false
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return !isPrivateOrLocalIP(ip)
-	}
-	return true
-}
-
-func isPrivateOrLocalIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+	return netguard.IsPublicHTTPURL(raw)
 }

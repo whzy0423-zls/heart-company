@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/netguard"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
@@ -90,9 +91,12 @@ func NewMiniMaxGenerator(cfg config.MiniMaxConfig) *MiniMaxGenerator {
 		model = "abab6.5s-chat"
 	}
 	return &MiniMaxGenerator{
-		apiBase:      apiBase,
-		apiKey:       strings.TrimSpace(cfg.APIKey),
-		client:       &http.Client{Timeout: timeout},
+		apiBase: apiBase,
+		apiKey:  strings.TrimSpace(cfg.APIKey),
+		client: &http.Client{
+			Timeout:   timeout,
+			Transport: netguard.NewGuardedTransport(),
+		},
 		groupID:      strings.TrimSpace(cfg.GroupID),
 		model:        model,
 		systemPrompt: strings.TrimSpace(cfg.SystemPrompt),
@@ -1093,6 +1097,19 @@ func buildUserPrompt(input rag.GenerateInput) string {
 		}
 		b.WriteString("\n")
 	}
+	if len(input.UserProfile.Memories) > 0 {
+		b.WriteString("近期记忆：\n")
+		for i, memory := range input.UserProfile.Memories {
+			memory = strings.TrimSpace(memory)
+			if memory == "" {
+				continue
+			}
+			if i >= 6 {
+				break
+			}
+			b.WriteString(fmt.Sprintf("%d. %s\n", i+1, trimRunes(memory, 160)))
+		}
+	}
 	if len(input.History) > 0 {
 		b.WriteString("最近对话：\n")
 		for _, item := range input.History {
@@ -1110,6 +1127,17 @@ func buildUserPrompt(input rag.GenerateInput) string {
 	}
 	b.WriteString("请结合检索资料给出 2-4 段回答，最后给一个可执行的小建议。")
 	return b.String()
+}
+
+func trimRunes(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit])
 }
 
 func baseRespError(payload map[string]any) error {

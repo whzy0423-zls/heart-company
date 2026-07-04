@@ -3,6 +3,8 @@ import type { SystemMenu, SystemRole } from '#/api';
 
 import { computed, onMounted, ref } from 'vue';
 
+import { useAccessStore } from '@vben/stores';
+
 import {
   Button,
   Form,
@@ -25,6 +27,7 @@ import {
 import PageShell from '../components/page-shell.vue';
 import { toMenuTreeNodes } from './menu-tree';
 
+const accessStore = useAccessStore();
 const loading = ref(false);
 const saving = ref(false);
 const modalOpen = ref(false);
@@ -40,6 +43,15 @@ const form = ref<SystemRole>({
   status: 1,
 });
 const menuTreeNodes = computed(() => toMenuTreeNodes(menus.value));
+const canCreate = computed(() =>
+  accessStore.accessCodes.includes('System:Role:Create'),
+);
+const canUpdate = computed(() =>
+  accessStore.accessCodes.includes('System:Role:Update'),
+);
+const canDelete = computed(() =>
+  accessStore.accessCodes.includes('System:Role:Delete'),
+);
 
 const columns = [
   { dataIndex: 'name', title: '角色名称' },
@@ -104,6 +116,7 @@ onMounted(load);
   <PageShell
     description="维护角色以及可访问菜单权限。"
     :loading="loading"
+    :show-create="canCreate"
     title="角色管理"
     @create="openCreate"
     @refresh="load"
@@ -129,6 +142,7 @@ onMounted(load);
         <template v-if="column.key === 'action'">
           <Space>
             <Button
+              v-if="canUpdate"
               size="small"
               type="link"
               @click="openEdit(roleRecord(record))"
@@ -136,6 +150,7 @@ onMounted(load);
               编辑
             </Button>
             <Button
+              v-if="canDelete"
               danger
               size="small"
               type="link"
@@ -152,6 +167,7 @@ onMounted(load);
       v-model:open="modalOpen"
       :confirm-loading="saving"
       title="角色信息"
+      width="min(640px, calc(100vw - 32px))"
       @ok="save"
     >
       <Form layout="vertical">

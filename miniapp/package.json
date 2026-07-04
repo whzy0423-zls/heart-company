@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "九型芯之力 微信小程序 (uni-app + Vue3)",
   "scripts": {
-    "test:config": "node src/config.test.mjs && node src/utils/wechatProfile.test.mjs && node src/utils/chatState.test.mjs && node src/utils/navigation.test.mjs && node src/utils/listPreview.test.mjs && node src/utils/auth.test.mjs && node src/utils/chatErrors.test.mjs && node src/pages/learn.quote-card.test.mjs",
+    "test:config": "node src/config.test.mjs && node scripts/project-config.test.mjs && node src/utils/wechatProfile.test.mjs && node src/utils/chatState.test.mjs && node src/utils/chatStorage.test.mjs && node src/utils/navigation.test.mjs && node src/utils/listPreview.test.mjs && node src/utils/auth.test.mjs && node src/utils/chatErrors.test.mjs && node src/utils/payment.test.mjs && node src/pages/learn.quote-card.test.mjs",
     "prebuild:mp-weixin": "node scripts/verify-production-api-base.mjs",
     "dev:mp-weixin": "uni -p mp-weixin",
     "build:mp-weixin": "uni build -p mp-weixin",
@@ -19,5 +19,14 @@
   "devDependencies": {
     "@dcloudio/vite-plugin-uni": "3.0.0-4030620241128001",
     "vite": "^5.2.8"
+  },
+  "overrides": {
+    "@intlify/core-base": "9.14.5",
+    "@intlify/message-compiler": "9.14.5",
+    "@intlify/shared": "9.14.5",
+    "@intlify/vue-devtools": "9.14.5",
+    "esbuild": "0.25.12",
+    "jpeg-js": "0.4.4",
+    "phin": "3.7.1"
   }
 }

@@ -464,7 +464,7 @@ onMounted(() => {
     <Drawer
       v-model:open="drawerOpen"
       :title="form.id ? '编辑文章' : '新增文章'"
-      width="820px"
+      width="min(820px, calc(100vw - 32px))"
     >
       <Form layout="vertical">
         <Form.Item label="标题" required>

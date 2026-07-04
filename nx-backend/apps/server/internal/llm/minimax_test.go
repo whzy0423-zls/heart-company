@@ -12,6 +12,13 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
+func newLocalMiniMaxGenerator(upstream *httptest.Server, cfg config.MiniMaxConfig) *MiniMaxGenerator {
+	cfg.APIBase = upstream.URL
+	generator := NewMiniMaxGenerator(cfg)
+	generator.client = upstream.Client()
+	return generator
+}
+
 func TestMiniMaxGeneratorSendsRAGContext(t *testing.T) {
 	var requestBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -34,8 +41,7 @@ func TestMiniMaxGeneratorSendsRAGContext(t *testing.T) {
 	}))
 	defer server.Close()
 
-	generator := NewMiniMaxGenerator(config.MiniMaxConfig{
-		APIBase: server.URL,
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{
 		APIKey:  "test-key",
 		GroupID: "test-group",
 	})
@@ -63,10 +69,76 @@ func TestMiniMaxGeneratorSendsRAGContext(t *testing.T) {
 	}
 }
 
+func TestMiniMaxGeneratorSendsUserMemories(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{
+				map[string]any{
+					"message": map[string]any{"content": "结合记忆的回答"},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{
+		APIKey: "test-key",
+	})
+	if _, err := generator.Generate(context.Background(), rag.GenerateInput{
+		Question: "我最近压力大怎么办？",
+		UserProfile: rag.UserProfile{
+			Memories: []string{"用户曾问：如何处理职场压力？"},
+		},
+	}); err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	body, _ := json.Marshal(requestBody)
+	if !strings.Contains(string(body), "近期记忆") ||
+		!strings.Contains(string(body), "如何处理职场压力") {
+		t.Fatalf("request did not include user memories: %s", string(body))
+	}
+}
+
 func TestMiniMaxGeneratorRequiresAPIKey(t *testing.T) {
 	_, err := NewMiniMaxGenerator(config.MiniMaxConfig{}).Generate(context.Background(), rag.GenerateInput{Question: "hi"})
 	if err == nil {
 		t.Fatal("expected missing api key error")
+	}
+}
+
+func TestMiniMaxGeneratorRejectsLocalAPIBaseBeforeDial(t *testing.T) {
+	sawRequest := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		sawRequest = true
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{
+				map[string]any{
+					"message": map[string]any{"content": "local response"},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	generator := NewMiniMaxGenerator(config.MiniMaxConfig{
+		APIBase: server.URL,
+		APIKey:  "test-key",
+	})
+
+	_, err := generator.Generate(context.Background(), rag.GenerateInput{Question: "hi"})
+	if err == nil {
+		t.Fatal("expected local API base to be rejected")
+	}
+	if !strings.Contains(err.Error(), "private or local") {
+		t.Fatalf("expected private/local address error, got %v", err)
+	}
+	if sawRequest {
+		t.Fatal("local API base must be rejected before sending the request")
 	}
 }
 
@@ -100,10 +172,9 @@ func TestAnalyzeVideoUsesOpenAICompatibleEndpointForProxyBase(t *testing.T) {
 	}))
 	defer server.Close()
 
-	generator := NewMiniMaxGenerator(config.MiniMaxConfig{
-		APIBase: server.URL,
-		APIKey:  "test-key",
-		Model:   "gpt-5.5",
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{
+		APIKey: "test-key",
+		Model:  "gpt-5.5",
 	})
 	result, err := generator.AnalyzeVideo(context.Background(), "https://example.com/video.mp4", "demo.mp4")
 	if err != nil {
@@ -138,8 +209,7 @@ func TestAnalyzeVideoSendsVideoURLContentForMiniMaxM3(t *testing.T) {
 	}))
 	defer server.Close()
 
-	generator := NewMiniMaxGenerator(config.MiniMaxConfig{
-		APIBase: server.URL,
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{
 		APIKey:  "test-key",
 		GroupID: "voice-group",
 		Model:   "MiniMax-M3",
@@ -208,10 +278,9 @@ func TestAnalyzeVideoReturnsHelpfulErrorForNonJSONModelAnswer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	generator := NewMiniMaxGenerator(config.MiniMaxConfig{
-		APIBase: server.URL,
-		APIKey:  "test-key",
-		Model:   "MiniMax-M3",
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{
+		APIKey: "test-key",
+		Model:  "MiniMax-M3",
 	})
 	_, err := generator.AnalyzeVideo(context.Background(), "https://example.com/video.mp4", "demo.mp4")
 	if err == nil {
@@ -416,10 +485,9 @@ func TestGenerateVideoStoryboardUsesOpenAICompatibleJSONRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	generator := NewMiniMaxGenerator(config.MiniMaxConfig{
-		APIBase: server.URL,
-		APIKey:  "test-key",
-		Model:   "MiniMax-M3",
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{
+		APIKey: "test-key",
+		Model:  "MiniMax-M3",
 	})
 	result, err := generator.GenerateVideoStoryboard(context.Background(), VideoStoryboardInput{
 		Assets:         []string{"窗光"},

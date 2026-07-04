@@ -1,6 +1,6 @@
-import { requestClient } from '#/api/request';
-
 import type { PageResult } from './signup';
+
+import { requestClient } from '#/api/request';
 
 export interface SystemMessage {
   businessId: string;

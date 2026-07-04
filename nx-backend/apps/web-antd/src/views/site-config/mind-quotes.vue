@@ -363,7 +363,7 @@ async function removeQuote(q: MindQuote) {
       v-model:open="quoteModal"
       :title="quoteForm.id ? '编辑心语' : '新增心语'"
       :confirm-loading="quoteSaving"
-      width="640px"
+      width="min(640px, calc(100vw - 32px))"
       @ok="saveQuote"
     >
       <Form layout="vertical">

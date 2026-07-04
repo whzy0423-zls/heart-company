@@ -34,12 +34,12 @@ describe('asset preview helpers', () => {
     ).toBe('');
   });
 
-  it('adds token only to protected local upload assets', () => {
+  it('does not expose backend token in preview urls', () => {
     expect(withPreviewToken('/api/upload-assets/1', 'abc 123')).toBe(
-      '/api/upload-assets/1?token=abc%20123',
+      '/api/upload-assets/1',
     );
     expect(withPreviewToken('/api/upload-assets/1?x=1', 'abc')).toBe(
-      '/api/upload-assets/1?x=1&token=abc',
+      '/api/upload-assets/1?x=1',
     );
     expect(withPreviewToken('https://cdn.example.com/a.mp4', 'abc')).toBe(
       'https://cdn.example.com/a.mp4',

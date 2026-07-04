@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,6 +21,8 @@ type Env struct {
 	AppEnv string
 	// AppVersion 应用版本号，编译时注入或环境变量指定。
 	AppVersion string
+	// CORSAllowedOrigins 允许跨域访问 API 的 Origin 白名单；为空时 dev/test 允许任意 Origin，production 不回写 CORS。
+	CORSAllowedOrigins []string
 	// AdminConfig 后台品牌配置（名称/Logo/加载文案）JSON 文件路径。
 	AdminConfig string
 	// BuildScript 指向构建+发布官网的脚本绝对路径；为空则关闭自动构建。
@@ -47,9 +50,11 @@ type Env struct {
 	SMS           SMSConfig
 	Video         VideoConfig
 	Image         ImageConfig
+	ASR           ASRConfig
+	JPush         JPushConfig
 }
 
-// SMSConfig 短信发送配置。Provider 为空时为 dev 模式（不实际发送，验证码写日志/返回响应）。
+// SMSConfig 短信发送配置。Provider 为空时非生产环境为 dev 模式；生产环境会 fail closed。
 type SMSConfig struct {
 	Provider   string // aliyun | "" (dev)
 	APIKey     string
@@ -76,9 +81,10 @@ type WxPayConfig struct {
 	APIv3Key         string // APIv3 密钥（回调解密用）
 	SerialNo         string // 商户证书序列号
 	PrivateKeyPath   string // 商户私钥 apiclient_key.pem 路径
+	PlatformCertPath string // 微信支付平台证书 PEM 路径（回调验签用）
 	NotifyURL        string // 支付回调地址（公网 HTTPS）
 	ReportPriceCents int    // 深度报告单价（分）
-	Dev              bool   // true 或配置不全时走模拟支付
+	Dev              bool   // true 时走模拟支付；生产环境禁止开启
 }
 
 // EmbeddingConfig 向量化配置（用于 RAG 语义检索）。Provider 为空则关闭向量化。
@@ -116,6 +122,21 @@ type ImageConfig struct {
 	APIKey         string
 	Model          string
 	TimeoutSeconds int
+}
+
+// ASRConfig 语音转文字配置（OpenAI 兼容 / 中转代理）。
+// 通过 POST /v1/audio/transcriptions 上传 multipart 音频并返回文本。
+type ASRConfig struct {
+	APIBase        string
+	APIKey         string
+	Model          string
+	TimeoutSeconds int
+}
+
+// JPushConfig 极光推送配置。AppKey 为空时推送功能关闭（dev 模式仅写日志）。
+type JPushConfig struct {
+	AppKey       string
+	MasterSecret string
 }
 
 func Load() Env {
@@ -180,10 +201,11 @@ func Load() Env {
 		APIv3Key:         getenv("WXPAY_API_V3_KEY", ""),
 		SerialNo:         getenv("WXPAY_SERIAL_NO", ""),
 		PrivateKeyPath:   getenv("WXPAY_PRIVATE_KEY_PATH", ""),
+		PlatformCertPath: getenv("WXPAY_PLATFORM_CERT_PATH", ""),
 		NotifyURL:        getenv("WXPAY_NOTIFY_URL", ""),
 		ReportPriceCents: reportPrice,
 	}
-	// 只有显式开启时启用 dev 模拟支付；非生产缺配置时 server 会自动 dev，生产缺配置会启动失败。
+	// 只有显式开启时启用 dev 模拟支付；非生产缺配置时 server 会自动 dev，生产缺配置会禁用支付功能。
 	wxpay.Dev = getenv("WXPAY_DEV", "") == "true"
 
 	embDim, err := strconv.Atoi(getenv("EMBEDDING_DIMENSION", "1536"))
@@ -207,19 +229,24 @@ func Load() Env {
 	if err != nil || imageTimeout <= 0 {
 		imageTimeout = 120
 	}
+	asrTimeout, err := strconv.Atoi(getenv("ASR_TIMEOUT_SECONDS", "60"))
+	if err != nil || asrTimeout <= 0 {
+		asrTimeout = 60
+	}
 
 	return Env{
-		AdminPassword: getenv("ADMIN_PASSWORD", "123456"),
-		AdminUsername: getenv("ADMIN_USERNAME", "admin"),
-		AppEnv:        getenv("APP_ENV", "dev"),
-		AppVersion:    getenv("APP_VERSION", "0.0.1"),
-		JWTSecret:     getenv("JWT_SECRET", "nine-xing-dev-secret"),
-		Port:          port,
-		SiteConfig:    siteConfig,
-		AdminConfig:   adminConfig,
-		BuildScript:   buildScript,
-		BuildTimeout:  buildTimeout,
-		DatabaseURL:   getenv("DATABASE_URL", "postgres://nx:nx@localhost:5432/nx_admin?sslmode=disable"),
+		AdminPassword:      getenv("ADMIN_PASSWORD", "123456"),
+		AdminUsername:      getenv("ADMIN_USERNAME", "admin"),
+		AppEnv:             getenv("APP_ENV", "dev"),
+		AppVersion:         getenv("APP_VERSION", "0.0.1"),
+		CORSAllowedOrigins: parseCSV(getenv("CORS_ALLOWED_ORIGINS", "")),
+		JWTSecret:          getenv("JWT_SECRET", "nine-xing-dev-secret"),
+		Port:               port,
+		SiteConfig:         siteConfig,
+		AdminConfig:        adminConfig,
+		BuildScript:        buildScript,
+		BuildTimeout:       buildTimeout,
+		DatabaseURL:        getenv("DATABASE_URL", "postgres://nx:nx@localhost:5432/nx_admin?sslmode=disable"),
 		OSS: storage.OSSConfig{
 			AccessKeyID:     getenv("OSS_ACCESS_KEY_ID", ""),
 			AccessKeySecret: getenv("OSS_ACCESS_KEY_SECRET", ""),
@@ -271,7 +298,66 @@ func Load() Env {
 			Model:          getenv("IMAGE_MODEL", "gpt-image-2"),
 			TimeoutSeconds: imageTimeout,
 		},
+		ASR: ASRConfig{
+			APIBase:        getenv("ASR_API_BASE", ""),
+			APIKey:         getenv("ASR_API_KEY", ""),
+			Model:          getenv("ASR_MODEL", "whisper-1"),
+			TimeoutSeconds: asrTimeout,
+		},
+		JPush: JPushConfig{
+			AppKey:       getenv("JPUSH_APP_KEY", ""),
+			MasterSecret: getenv("JPUSH_MASTER_SECRET", ""),
+		},
 	}
+}
+
+func ValidateProduction(env Env) error {
+	if strings.TrimSpace(env.AppEnv) != "production" {
+		return nil
+	}
+	if weakSecret(env.JWTSecret) {
+		return fmt.Errorf("production JWT_SECRET must be a strong random secret")
+	}
+	if weakPassword(env.AdminPassword) {
+		return fmt.Errorf("production ADMIN_PASSWORD must be changed to a strong password")
+	}
+	if strings.Contains(env.DatabaseURL, "://nx:nx@") {
+		return fmt.Errorf("production DATABASE_URL must not use the default nx/nx credentials")
+	}
+	if env.WeChat.LoginDev {
+		return fmt.Errorf("production WECHAT_LOGIN_DEV must be false")
+	}
+	if env.WxPay.Dev {
+		return fmt.Errorf("production WXPAY_DEV must be false")
+	}
+	return nil
+}
+
+func parseCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimRight(strings.TrimSpace(part), "/")
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func weakSecret(secret string) bool {
+	secret = strings.TrimSpace(secret)
+	return len(secret) < 32 ||
+		secret == "nine-xing-dev-secret" ||
+		strings.Contains(secret, "please-change")
+}
+
+func weakPassword(password string) bool {
+	password = strings.TrimSpace(password)
+	return len(password) < 12 ||
+		password == "123456" ||
+		strings.EqualFold(password, "password") ||
+		strings.Contains(strings.ToLower(password), "please-change")
 }
 
 func loadDotEnv() {

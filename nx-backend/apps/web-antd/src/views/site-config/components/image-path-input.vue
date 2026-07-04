@@ -3,9 +3,12 @@ import type { UploadRequestOption } from 'ant-design-vue/es/vc-upload/interface'
 
 import { ref } from 'vue';
 
+import { useAccessStore } from '@vben/stores';
+
 import { Button, Image, Input, message, Upload } from 'ant-design-vue';
 
 import { uploadFileApi } from '#/api';
+import { useUploadAssetPreviewUrl } from '#/utils/upload-asset-preview';
 
 const props = withDefaults(
   defineProps<{
@@ -13,6 +16,7 @@ const props = withDefaults(
     emptyText?: string;
     placeholder?: string;
     showPath?: boolean;
+    storeObjectUrl?: boolean;
     uploadText?: string;
     variant?: 'image' | 'input';
   }>(),
@@ -21,19 +25,27 @@ const props = withDefaults(
     emptyText: '未设置图片',
     placeholder: '图片路径或 URL',
     showPath: false,
+    storeObjectUrl: true,
     uploadText: '上传',
     variant: 'image',
   },
 );
 const value = defineModel<string>('value', { default: '' });
+const accessStore = useAccessStore();
 const uploading = ref(false);
+const previewSrc = useUploadAssetPreviewUrl(
+  () => value.value,
+  () => accessStore.accessToken,
+);
 
 async function customRequest(options: UploadRequestOption) {
   const file = options.file as File;
   uploading.value = true;
   try {
     const result = await uploadFileApi(file, props.dir);
-    value.value = result.url;
+    value.value = props.storeObjectUrl
+      ? result.objectUrl || result.url
+      : result.url;
     options.onSuccess?.(result, file as any);
     message.success('上传成功');
   } catch (error) {
@@ -66,7 +78,7 @@ async function customRequest(options: UploadRequestOption) {
           v-if="value"
           :height="props.variant === 'input' ? 64 : 88"
           :preview="false"
-          :src="value"
+          :src="previewSrc"
           :width="props.variant === 'input' ? 64 : 88"
         />
         <span v-else class="image-uploader__empty">

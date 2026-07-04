@@ -126,6 +126,9 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	if card, err := s.quiz.PrimaryCard(ctx, userInfo.ID); err == nil {
 		profile.MainType = card.MainType
 	}
+	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
+		profile.Memories = memories
+	}
 
 	ans, err := rag.NewService(docs, rag.WithGenerator(s.generator())).Ask(ctx, rag.AskInput{
 		History:     body.History,
@@ -169,6 +172,43 @@ func (s *Server) rememberChatAnswer(ctx context.Context, appUserID, cardID int64
 		   WHERE app_user_id = $1 AND card_id = $2 AND content = $3
 		 )`,
 		appUserID, cardID, content)
+}
+
+func (s *Server) appChatMemoriesForPrompt(ctx context.Context, appUserID, cardID int64, limit int) ([]string, error) {
+	if appUserID <= 0 || cardID <= 0 || limit <= 0 {
+		return nil, nil
+	}
+	if limit > 6 {
+		limit = 6
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT content
+		 FROM app_memories
+		 WHERE app_user_id = $1 AND card_id = $2 AND status = 'active'
+		 ORDER BY update_time DESC, id DESC
+		 LIMIT $3`,
+		appUserID, cardID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	memories := make([]string, 0, limit)
+	for rows.Next() {
+		var content string
+		if err := rows.Scan(&content); err != nil {
+			return nil, err
+		}
+		content = strings.TrimSpace(content)
+		if content == "" {
+			continue
+		}
+		if len([]rune(content)) > 160 {
+			content = string([]rune(content)[:160])
+		}
+		memories = append(memories, content)
+	}
+	return memories, rows.Err()
 }
 
 // askResponse 在 rag.Answer 基础上附带刚落库的 AI 消息 id，供前端定位反馈 / 收藏。

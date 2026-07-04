@@ -64,9 +64,11 @@ import {
 import { useSortable } from '@vben/hooks';
 import { IconifyIcon } from '@vben/icons';
 import { $t } from '@vben/locales';
-import { isEmpty } from '@vben/utils';
+import { isEmpty, openWindow } from '@vben/utils';
 
 import { message, Modal, notification } from 'ant-design-vue';
+
+import { isSafePreviewURL } from '#/utils/safe-preview-url';
 
 type AdapterUploadProps = UploadProps & {
   aspectRatio?: string;
@@ -241,8 +243,8 @@ async function previewImage(
   // 非图片文件直接打开链接
   if (!isImageFile(file)) {
     const url = file.url || file.preview;
-    if (url) {
-      window.open(url, '_blank');
+    if (isSafePreviewURL(url)) {
+      openWindow(url as string, { target: '_blank' });
     } else {
       message.error($t('ui.formRules.previewWarning'));
     }
@@ -359,7 +361,7 @@ function cropImage(file: File, aspectRatio: string | undefined) {
                 ),
               ]),
               centered: true,
-              width: 548,
+              width: 'min(548px, calc(100vw - 32px))',
               keyboard: false,
               maskClosable: false,
               closable: false,

@@ -5,13 +5,15 @@ import type { UpdateUserProfileParams } from '#/api';
 
 import { computed, onMounted, reactive, shallowRef } from 'vue';
 
-import { useUserStore } from '@vben/stores';
+import { useAccessStore, useUserStore } from '@vben/stores';
 
 import { Avatar, Button, Form, Input, message, Upload } from 'ant-design-vue';
 
 import { getUserInfoApi, updateUserProfileApi, uploadFileApi } from '#/api';
+import { useUploadAssetPreviewUrl } from '#/utils/upload-asset-preview';
 
 const userStore = useUserStore();
+const accessStore = useAccessStore();
 const loading = shallowRef(false);
 const uploading = shallowRef(false);
 const avatarLoadFailed = shallowRef(false);
@@ -88,8 +90,12 @@ const displayName = computed(
 const avatarText = computed(
   () => form.realName?.slice(0, 1) || form.username?.slice(0, 1) || '九',
 );
+const avatarPreviewUrl = useUploadAssetPreviewUrl(
+  () => form.avatar,
+  () => accessStore.accessToken,
+);
 const avatarSrc = computed(() =>
-  form.avatar && !avatarLoadFailed.value ? form.avatar : undefined,
+  form.avatar && !avatarLoadFailed.value ? avatarPreviewUrl.value : undefined,
 );
 const contactItems = computed(() => [
   {

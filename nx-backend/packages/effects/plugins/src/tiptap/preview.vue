@@ -5,6 +5,8 @@ import { computed } from 'vue';
 
 import { cn } from '@vben-core/shared/utils';
 
+import { sanitizeTipTapHTML } from './sanitize-html';
+
 import './style.css';
 const props = withDefaults(defineProps<TipTapPreviewProps>(), {
   content: '',
@@ -22,6 +24,7 @@ const previewClass = computed(() =>
     props.class,
   ),
 );
+const sanitizedContent = computed(() => sanitizeTipTapHTML(props.content));
 </script>
 
 <template>
@@ -29,6 +32,6 @@ const previewClass = computed(() =>
   <div
     :class="previewClass"
     :style="{ minHeight: contentMinHeight }"
-    v-html="content"
+    v-html="sanitizedContent"
   ></div>
 </template>

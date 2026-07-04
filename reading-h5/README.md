@@ -5,8 +5,8 @@
 ## 技术栈
 
 - React 18 + React Router 6
-- Vite 5
-- `marked` 渲染 Markdown 正文
+- Vite 7
+- `marked` 渲染 Markdown 正文，`isomorphic-dompurify` 净化 HTML
 
 ## 开发
 
@@ -32,4 +32,4 @@ npm run preview
 
 ## 安全说明
 
-阅读页正文经 `marked` 渲染后用 `dangerouslySetInnerHTML` 注入。文章内容由**后台登录用户**撰写，属可信来源。若未来开放给不可信用户投稿，请引入 `DOMPurify` 等对渲染结果做净化，防止 XSS。
+阅读页正文先经 `marked` 渲染，再用 DOMPurify 净化后注入页面。当前会过滤危险 HTML、脚本协议、协议相对资源和不安全媒体地址。

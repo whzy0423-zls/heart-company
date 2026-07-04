@@ -1,28 +1,48 @@
 <script setup lang="ts">
 import type { AppCustomer } from '#/api';
 
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
+
+import { useAccessStore } from '@vben/stores';
 
 import {
   Button,
   Card,
   Descriptions,
   Drawer,
+  Form,
   Input,
+  message,
+  Modal,
   Select,
   Space,
   Table,
   Tag,
 } from 'ant-design-vue';
 
-import { getAppCustomerDetailApi, getAppCustomerListApi } from '#/api';
+import {
+  getAppCustomerDetailApi,
+  getAppCustomerListApi,
+  updateAppCustomerApi,
+} from '#/api';
 
 import PageShell from '../system/components/page-shell.vue';
+import {
+  buildAppCustomerUpdatePayload,
+  canEditAppCustomer,
+  createAppCustomerEditForm,
+} from './app-user-edit';
 
 const statusOptions = [
   { color: 'success', label: '正常', value: 'active' },
   { color: 'error', label: '禁用', value: 'disabled' },
 ] satisfies StatusMeta[];
+
+const memberLevelOptions = [
+  { label: '普通用户', value: 'free' },
+  { label: 'VIP 会员', value: 'vip' },
+  { label: '超级会员', value: 'svip' },
+];
 
 const defaultStatusMeta: StatusMeta = {
   color: 'default',
@@ -43,11 +63,17 @@ const memberLevelLabels: Record<string, string> = {
 };
 
 const loading = ref(false);
+const accessStore = useAccessStore();
 const detailLoading = ref(false);
 const customers = ref<AppCustomer[]>([]);
 const total = ref(0);
 const detailOpen = ref(false);
 const detail = ref<AppCustomer>();
+const editOpen = ref(false);
+const editSaving = ref(false);
+const editingCustomer = ref<AppCustomer>();
+const editForm = reactive(createAppCustomerEditForm());
+const canEdit = computed(() => canEditAppCustomer(accessStore.accessCodes));
 const query = reactive({
   keyword: '',
   memberLevel: '',
@@ -65,7 +91,7 @@ const columns = [
   { dataIndex: 'registerSource', title: '注册来源', width: 130 },
   { dataIndex: 'lastLoginAt', title: '最后登录', width: 180 },
   { dataIndex: 'createTime', title: '注册时间', width: 180 },
-  { fixed: 'right' as const, key: 'action', title: '操作', width: 100 },
+  { fixed: 'right' as const, key: 'action', title: '操作', width: 160 },
 ];
 
 function statusMeta(status?: string): StatusMeta {
@@ -116,6 +142,44 @@ async function openDetail(record: AppCustomer) {
   }
 }
 
+function mergeCustomer(updated: AppCustomer) {
+  const index = customers.value.findIndex((item) => item.id === updated.id);
+  if (index >= 0) {
+    customers.value.splice(index, 1, updated);
+  }
+  if (detail.value?.id === updated.id) {
+    detail.value = updated;
+  }
+}
+
+function openEdit(record: AppCustomer) {
+  editingCustomer.value = record;
+  Object.assign(editForm, createAppCustomerEditForm(record));
+  editOpen.value = true;
+}
+
+async function saveEdit() {
+  if (!editingCustomer.value) return;
+  editSaving.value = true;
+  try {
+    const updated = await updateAppCustomerApi(
+      editingCustomer.value.id,
+      buildAppCustomerUpdatePayload(editForm),
+    );
+    mergeCustomer(updated);
+    editOpen.value = false;
+    message.success('客户信息已更新');
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '客户信息更新失败');
+    return;
+  } finally {
+    editSaving.value = false;
+  }
+  load().catch(() => {
+    message.warning('客户信息已更新，列表刷新失败');
+  });
+}
+
 function customerRecord(record: Record<string, any>): AppCustomer {
   return record as AppCustomer;
 }
@@ -160,11 +224,7 @@ onMounted(() => {
             v-model:value="query.memberLevel"
             allow-clear
             class="filter-select"
-            :options="[
-              { label: '普通用户', value: 'free' },
-              { label: 'VIP 会员', value: 'vip' },
-              { label: '超级会员', value: 'svip' },
-            ]"
+            :options="memberLevelOptions"
             placeholder="会员等级"
           />
           <Select
@@ -174,7 +234,7 @@ onMounted(() => {
             :options="statusOptions"
             placeholder="状态"
           />
-          <Space>
+          <Space class="filter-actions">
             <Button type="primary" @click="search">查询</Button>
           </Space>
         </div>
@@ -215,13 +275,23 @@ onMounted(() => {
               {{ record.lastLoginAt || '-' }}
             </template>
             <template v-if="column.key === 'action'">
-              <Button
-                size="small"
-                type="link"
-                @click="openDetail(customerRecord(record))"
-              >
-                查看详情
-              </Button>
+              <Space>
+                <Button
+                  size="small"
+                  type="link"
+                  @click="openDetail(customerRecord(record))"
+                >
+                  查看详情
+                </Button>
+                <Button
+                  v-if="canEdit"
+                  size="small"
+                  type="link"
+                  @click="openEdit(customerRecord(record))"
+                >
+                  编辑
+                </Button>
+              </Space>
             </template>
           </template>
         </Table>
@@ -232,7 +302,7 @@ onMounted(() => {
       v-model:open="detailOpen"
       :loading="detailLoading"
       title="客户详情"
-      width="520px"
+      width="min(520px, calc(100vw - 32px))"
     >
       <div v-if="detail" class="detail-layout">
         <div class="user-profile">
@@ -281,6 +351,30 @@ onMounted(() => {
         </Descriptions>
       </div>
     </Drawer>
+
+    <Modal
+      v-model:open="editOpen"
+      :confirm-loading="editSaving"
+      ok-text="保存"
+      title="编辑客户"
+      width="min(520px, calc(100vw - 32px))"
+      @ok="saveEdit"
+    >
+      <Form :model="editForm" layout="vertical">
+        <Form.Item label="手机号">
+          <Input :value="editingCustomer?.phone || '-'" disabled />
+        </Form.Item>
+        <Form.Item label="会员等级" name="memberLevel" required>
+          <Select
+            v-model:value="editForm.memberLevel"
+            :options="memberLevelOptions"
+          />
+        </Form.Item>
+        <Form.Item label="状态" name="status" required>
+          <Select v-model:value="editForm.status" :options="statusOptions" />
+        </Form.Item>
+      </Form>
+    </Modal>
   </PageShell>
 </template>
 
@@ -306,6 +400,18 @@ onMounted(() => {
 .keyword-input,
 .filter-select {
   width: 100%;
+}
+
+@media (max-width: 640px) {
+  .filter-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-actions,
+  .filter-actions :deep(.ant-space-item),
+  .filter-actions :deep(.ant-btn) {
+    width: 100%;
+  }
 }
 
 .detail-layout {

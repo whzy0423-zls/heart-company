@@ -14,7 +14,7 @@ npm run preview  # 预览生产构建
 ## 首屏加速措施
 
 - **路由懒加载**：首页直载，其余页面（老师/三阶段/各阶段/观看）按需加载，首页 JS gzip 仅 ~61KB。
-- **字体异步加载**：`index.html` 用 `preconnect` + `preload onload` 加载 Google 字体，不阻塞首屏渲染。
+- **系统字体栈**：使用本机中文字体回退，避免首屏依赖外部字体服务。
 - **图片压缩**：海报 2.5MB→~280KB（JPEG），师承合影 4.3MB→~120KB；大图带 `loading="lazy"`。
 
 ## 结构
@@ -22,7 +22,7 @@ npm run preview  # 预览生产构建
 ```
 public/assets/   图片与 SVG（含师承合影 teacher-mentor.jpg）
 src/
-  index.css      = 原 style.css（去掉 @import，字体改 index.html 加载）
+  index.css      = 原 style.css（去掉 @import，使用系统字体栈）
   App.jsx        路由表
   data/types.js  九型数据
   hooks/         滚动揭示 / 进度条+视差 / 卡片光斑 / 数字滚动 / 治愈系音乐

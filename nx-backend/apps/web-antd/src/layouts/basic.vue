@@ -14,6 +14,7 @@ import {
 } from '@vben/layouts';
 import { preferences, usePreferences } from '@vben/preferences';
 import { useAccessStore, useUserStore } from '@vben/stores';
+import { openWindow } from '@vben/utils';
 
 import { notification } from 'ant-design-vue';
 
@@ -22,12 +23,19 @@ import { $t } from '#/locales';
 import { useAuthStore } from '#/store';
 import LoginForm from '#/views/_core/authentication/login.vue';
 
+import {
+  extractSignupStreamEvents,
+  shouldLogoutForSignupEventStatus,
+  shouldPollSignupNoticeFallback,
+} from './signup-events';
 import { toSignupNotification } from './signup-notice';
 
 const notifications = ref<NotificationItem[]>([]);
 const SIGNUP_NOTICE_LAST_ID_KEY_PREFIX = 'nx-signup-notice-last-id:v2';
+const SIGNUP_NOTICE_FALLBACK_POLL_INTERVAL = 60_000;
 let signupNoticeTimer: number | undefined;
-let signupEventSource: EventSource | undefined;
+let signupEventController: AbortController | undefined;
+let signupEventConnecting = false;
 let signupEventUnavailable = false;
 let signupEventRetryTimer: number | undefined;
 let signupNoticeBootstrapped = false;
@@ -41,6 +49,9 @@ const { destroyWatermark, updateWatermark } = useWatermark();
 const { isDark } = usePreferences();
 const showDot = computed(() =>
   notifications.value.some((item) => !item.isRead),
+);
+const canReadSignupLeads = computed(() =>
+  accessStore.accessCodes.includes('Customer:Signup:List'),
 );
 
 const menus = computed(() => [
@@ -98,7 +109,7 @@ function navigateTo(
 ) {
   if (link.startsWith('http://') || link.startsWith('https://')) {
     // 外部链接，在新标签页打开
-    window.open(link, '_blank');
+    openWindow(link, { target: '_blank' });
   } else {
     // 内部路由链接，支持 query 参数和 state
     router.push({
@@ -178,7 +189,7 @@ function pushSignupNotice(notice: NotificationItem) {
 }
 
 async function pollSignupNotices() {
-  if (!accessStore.accessToken) return;
+  if (!accessStore.accessToken || !canReadSignupLeads.value) return;
   try {
     const result = await getSignupLeadListApi({ page: 1, pageSize: 5 });
     const items = result.items ?? [];
@@ -194,7 +205,8 @@ async function pollSignupNotices() {
 
     const notices = items
       .filter((item) => !seenSignupNoticeIds.has(`signup-${item.id}`))
-      .toSorted((a, b) => Number(a.id) - Number(b.id))
+      .slice()
+      .sort((a, b) => Number(a.id) - Number(b.id))
       .map((item) => toSignupNotification(item));
     if (notices.length === 0) return;
     for (const notice of notices) {
@@ -217,53 +229,151 @@ async function pollSignupNotices() {
   }
 }
 
+async function expireSignupNoticeAuth() {
+  notification.warning({
+    description:
+      '当前登录状态和本地 Go 后端不一致，请重新登录后台后再测试报名推送。',
+    message: '报名通知连接已失效',
+    placement: 'topRight',
+  });
+  accessStore.setAccessToken(null);
+  await authStore.logout();
+}
+
+function handleSignupEventData(data: string) {
+  try {
+    const lead = JSON.parse(data);
+    const notice = toSignupNotification(lead);
+    pushSignupNotice(notice);
+    if (lead?.id) {
+      const latestId = Math.max(
+        readLastSignupNoticeId(),
+        Number(lead.id) || 0,
+      );
+      rememberSignupNoticeId(String(latestId));
+    }
+  } catch {
+    // 忽略单条通知格式异常，保持连接继续。
+  }
+}
+
+function disconnectSignupEvents() {
+  signupEventController?.abort();
+  signupEventController = undefined;
+  signupEventConnecting = false;
+}
+
+function scheduleSignupEventRetry() {
+  signupEventUnavailable = true;
+  if (signupEventRetryTimer) {
+    window.clearTimeout(signupEventRetryTimer);
+  }
+  signupEventRetryTimer = window.setTimeout(() => {
+    signupEventUnavailable = false;
+    signupEventRetryTimer = undefined;
+    connectSignupEvents();
+  }, 15_000);
+}
+
+async function readSignupEventStream(
+  controller: AbortController,
+  token: string,
+) {
+  let shouldRetry = false;
+  try {
+    const response = await fetch('/api/signups/events', {
+      headers: {
+        Accept: 'text/event-stream',
+        Authorization: `Bearer ${token}`,
+      },
+      signal: controller.signal,
+    });
+    if (shouldLogoutForSignupEventStatus(response.status)) {
+      shouldRetry = false;
+      await expireSignupNoticeAuth();
+      return;
+    }
+    if (!response.ok || !response.body) {
+      shouldRetry = true;
+      return;
+    }
+
+    signupEventConnecting = false;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const result = extractSignupStreamEvents(buffer);
+      buffer = result.remaining;
+      for (const event of result.events) {
+        if (event.event === 'signup') {
+          handleSignupEventData(event.data);
+        }
+      }
+    }
+
+    shouldRetry = !controller.signal.aborted;
+  } catch {
+    shouldRetry = !controller.signal.aborted;
+  } finally {
+    if (signupEventController === controller) {
+      signupEventController = undefined;
+    }
+    signupEventConnecting = false;
+    if (shouldRetry) {
+      scheduleSignupEventRetry();
+    }
+  }
+}
+
 function connectSignupEvents() {
-  if (!accessStore.accessToken || signupEventSource || signupEventUnavailable)
+  if (
+    !accessStore.accessToken ||
+    !canReadSignupLeads.value ||
+    signupEventController ||
+    signupEventConnecting ||
+    signupEventUnavailable
+  )
     return;
 
-  const url = `/api/signups/events?token=${encodeURIComponent(accessStore.accessToken)}`;
-  signupEventSource = new EventSource(url);
-  signupEventSource.addEventListener('signup', (event) => {
-    try {
-      const lead = JSON.parse((event as MessageEvent).data);
-      const notice = toSignupNotification(lead);
-      pushSignupNotice(notice);
-      if (lead?.id) {
-        const latestId = Math.max(
-          readLastSignupNoticeId(),
-          Number(lead.id) || 0,
-        );
-        rememberSignupNoticeId(String(latestId));
-      }
-    } catch {
-      // 忽略单条通知格式异常，保持连接继续。
-    }
-  });
-  signupEventSource.addEventListener('error', () => {
-    signupEventSource?.close();
-    signupEventSource = undefined;
-    signupEventUnavailable = true;
-    if (signupEventRetryTimer) {
-      window.clearTimeout(signupEventRetryTimer);
-    }
-    signupEventRetryTimer = window.setTimeout(() => {
-      signupEventUnavailable = false;
-      signupEventRetryTimer = undefined;
-      connectSignupEvents();
-    }, 15_000);
-  });
+  const controller = new AbortController();
+  signupEventController = controller;
+  signupEventConnecting = true;
+  void readSignupEventStream(controller, accessStore.accessToken);
 }
 
 function refreshSignupNotices() {
+  if (!canReadSignupLeads.value) {
+    disconnectSignupEvents();
+    return;
+  }
   pollSignupNotices();
   connectSignupEvents();
+}
+
+function pollSignupNoticesWhenStreamNeedsFallback() {
+  if (!canReadSignupLeads.value) return;
+  if (
+    shouldPollSignupNoticeFallback({
+      connecting: signupEventConnecting,
+      controllerActive: Boolean(signupEventController),
+      unavailable: signupEventUnavailable,
+    })
+  ) {
+    pollSignupNotices();
+  }
 }
 
 onMounted(() => {
   refreshSignupNotices();
   signupNoticeTimer = window.setInterval(() => {
-    pollSignupNotices();
-  }, 2000);
+    pollSignupNoticesWhenStreamNeedsFallback();
+  }, SIGNUP_NOTICE_FALLBACK_POLL_INTERVAL);
   window.addEventListener('focus', refreshSignupNotices);
   document.addEventListener('visibilitychange', refreshSignupNotices);
 });
@@ -275,8 +385,7 @@ onUnmounted(() => {
   if (signupEventRetryTimer) {
     window.clearTimeout(signupEventRetryTimer);
   }
-  signupEventSource?.close();
-  signupEventSource = undefined;
+  disconnectSignupEvents();
   window.removeEventListener('focus', refreshSignupNotices);
   document.removeEventListener('visibilitychange', refreshSignupNotices);
 });

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/db"
 	"nine-xing/nx-backend/apps/server/internal/storage"
+	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 )
 
 func TestUploadRequiresAuth(t *testing.T) {
@@ -32,6 +34,26 @@ func TestUploadRequiresAuth(t *testing.T) {
 
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", response.Code)
+	}
+}
+
+func TestUploadedFilesRequireAuth(t *testing.T) {
+	uploadDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(uploadDir, "site"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(uploadDir, "site", "logo.png"), []byte("image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := New(config.Env{JWTSecret: "test-secret", UploadDir: uploadDir}, nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/uploads/site/logo.png", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -154,13 +176,16 @@ func TestUploadStoresFileInDatabaseWhenDBAvailable(t *testing.T) {
 	if assetResponse.Body.String() != "image" {
 		t.Fatalf("expected image bytes, got %q", assetResponse.Body.String())
 	}
+	if assetResponse.Header().Get("Cache-Control") != "private, no-store" {
+		t.Fatalf("expected private no-store cache policy, got %q", assetResponse.Header().Get("Cache-Control"))
+	}
 
 	assetRequest = httptest.NewRequest(http.MethodGet, "/api/"+payload.Data.AssetKey+"?token="+token, nil)
 	assetResponse = httptest.NewRecorder()
 	handler.ServeHTTP(assetResponse, assetRequest)
 
-	if assetResponse.Code != http.StatusOK {
-		t.Fatalf("expected query-token asset 200, got %d body=%s", assetResponse.Code, assetResponse.Body.String())
+	if assetResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("expected query-token asset request to be rejected, got %d body=%s", assetResponse.Code, assetResponse.Body.String())
 	}
 
 	queryTokenRequest := httptest.NewRequest(http.MethodGet, "/api/user/info?token="+token, nil)
@@ -168,6 +193,19 @@ func TestUploadStoresFileInDatabaseWhenDBAvailable(t *testing.T) {
 	handler.ServeHTTP(queryTokenResponse, queryTokenRequest)
 	if queryTokenResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("expected query token to be rejected outside upload asset preview, got %d body=%s", queryTokenResponse.Code, queryTokenResponse.Body.String())
+	}
+}
+
+func TestWriteUploadAssetUsesPrivateNoStoreCachePolicy(t *testing.T) {
+	response := httptest.NewRecorder()
+
+	writeUploadAsset(response, uploadasset.Asset{
+		ContentType: "image/png",
+		Data:        []byte("image"),
+	})
+
+	if response.Header().Get("Cache-Control") != "private, no-store" {
+		t.Fatalf("expected private no-store cache policy, got %q", response.Header().Get("Cache-Control"))
 	}
 }
 

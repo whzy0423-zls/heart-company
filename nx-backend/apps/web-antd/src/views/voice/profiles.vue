@@ -7,6 +7,7 @@ import { computed, onMounted, reactive, ref } from 'vue';
 
 import { Page } from '@vben/common-ui';
 import { IconifyIcon } from '@vben/icons';
+import { useAccessStore } from '@vben/stores';
 
 import {
   Button,
@@ -31,13 +32,25 @@ import {
   getVoiceProfilesApi,
   uploadFileApi,
 } from '#/api';
+import {
+  useUploadAssetPreviewResolver,
+  useUploadAssetPreviewUrl,
+} from '#/utils/upload-asset-preview';
 
+const accessStore = useAccessStore();
+const audioPreview = useUploadAssetPreviewResolver(
+  () => accessStore.accessToken,
+);
 const loading = ref(false);
 const saving = ref(false);
 const profiles = ref<VoiceProfile[]>([]);
 const total = ref(0);
 const uploadedAudioUrl = ref('');
 const uploadedAudioName = ref('');
+const uploadedAudioPreviewUrl = useUploadAssetPreviewUrl(
+  () => uploadedAudioUrl.value,
+  () => accessStore.accessToken,
+);
 
 const query = reactive({
   keyword: '',
@@ -136,6 +149,10 @@ function isAudioFile(file: File) {
     return true;
   }
   return /\.(aac|flac|m4a|mp3|ogg|wav|webm)$/i.test(file.name);
+}
+
+function previewAudioUrl(source?: string) {
+  return audioPreview.resolve(source);
 }
 
 async function submit() {
@@ -267,7 +284,7 @@ onMounted(load);
               </Upload>
               <div v-if="uploadedAudioUrl" class="audio-preview">
                 <div class="audio-name">{{ uploadedAudioName }}</div>
-                <audio :src="uploadedAudioUrl" controls></audio>
+                <audio :src="uploadedAudioPreviewUrl" controls></audio>
               </div>
             </Form.Item>
             <Form.Item label="备注">
@@ -340,7 +357,7 @@ onMounted(load);
               <template v-else-if="column.dataIndex === 'sampleUrl'">
                 <audio
                   v-if="record.sampleUrl"
-                  :src="record.sampleUrl"
+                  :src="previewAudioUrl(record.sampleUrl)"
                   class="row-audio"
                   controls
                 ></audio>

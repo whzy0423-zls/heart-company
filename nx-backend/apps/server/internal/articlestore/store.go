@@ -326,6 +326,27 @@ func (s *Store) PublicDetail(ctx context.Context, id string) (Article, bool, err
 	return doc, true, nil
 }
 
+func (s *Store) PublicAssetReferenced(ctx context.Context, assetID int64) (bool, error) {
+	if s == nil || s.db == nil || assetID <= 0 {
+		return false, nil
+	}
+	c, cancel := s.ctx(ctx)
+	defer cancel()
+
+	privateURL := fmt.Sprintf("/api/upload-assets/%d", assetID)
+	publicURL := fmt.Sprintf("/api/public/article-assets/%d", assetID)
+	var exists bool
+	err := s.db.QueryRowContext(c,
+		`SELECT EXISTS (
+		    SELECT 1 FROM articles
+		     WHERE status=$1
+		       AND (cover=$2 OR audio_url=$2 OR cover=$3 OR audio_url=$3)
+		  )`,
+		StatusPublished, privateURL, publicURL,
+	).Scan(&exists)
+	return exists, err
+}
+
 // Categories lists distinct non-empty categories among published articles.
 func (s *Store) Categories(ctx context.Context) ([]string, error) {
 	if s == nil || s.db == nil {

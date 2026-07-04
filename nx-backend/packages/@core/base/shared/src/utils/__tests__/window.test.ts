@@ -30,4 +30,14 @@ describe('openWindow', () => {
       'noopener=yes,noreferrer=yes',
     );
   });
+
+  it('should reject executable and ambiguous urls', () => {
+    window.open = vi.fn();
+
+    openWindow('javascript:alert(1)');
+    openWindow('data:text/html,<script>alert(1)</script>');
+    openWindow('//evil.example/path');
+
+    expect(window.open).not.toHaveBeenCalled();
+  });
 });

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var mainlandMobileRE = regexp.MustCompile(`^1[3-9]\d{9}$`)
@@ -124,7 +125,7 @@ func NewStore(database *sql.DB) *Store {
 }
 
 func (s *Store) Create(ctx context.Context, input LeadInput, r *http.Request) (Lead, error) {
-	name := strings.TrimSpace(input.Name)
+	name := truncate(strings.TrimSpace(input.Name), 80)
 	contact := strings.TrimSpace(input.Contact)
 	if name == "" {
 		return Lead{}, errors.New("name is required")
@@ -133,6 +134,8 @@ func (s *Store) Create(ctx context.Context, input LeadInput, r *http.Request) (L
 	if err != nil {
 		return Lead{}, err
 	}
+	interest := truncate(strings.TrimSpace(input.Interest), 120)
+	message := truncate(strings.TrimSpace(input.Message), 1000)
 	attribution := normalizeAttribution(input.AttributionInput)
 
 	c, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -159,8 +162,8 @@ func (s *Store) Create(ctx context.Context, input LeadInput, r *http.Request) (L
 		name,
 		contactType,
 		normalizedContact,
-		strings.TrimSpace(input.Interest),
-		strings.TrimSpace(input.Message),
+		interest,
+		message,
 		attribution.VisitorID,
 		attribution.SourcePath,
 		attribution.LandingPage,
@@ -185,10 +188,10 @@ func (s *Store) Create(ctx context.Context, input LeadInput, r *http.Request) (L
 		FollowStatus: "pending",
 		GameResultID: formatOptionalID(gameResultID),
 		ID:           strconv.FormatInt(id, 10),
-		Interest:     strings.TrimSpace(input.Interest),
+		Interest:     interest,
 		IP:           clientIP(r),
 		LandingPage:  attribution.LandingPage,
-		Message:      strings.TrimSpace(input.Message),
+		Message:      message,
 		Name:         name,
 		Referrer:     attribution.Referrer,
 		SourcePath:   attribution.SourcePath,
@@ -233,10 +236,22 @@ func normalizeContact(contactType string, contact string) (string, string, error
 		}
 		return ContactTypePhone, phone, nil
 	case ContactTypeWechat:
+		if utf8.RuneCountInString(contact) > 80 || hasControlRune(contact) {
+			return "", "", errors.New("请输入正确的微信号")
+		}
 		return ContactTypeWechat, contact, nil
 	default:
 		return "", "", errors.New("请选择联系方式类型")
 	}
+}
+
+func hasControlRune(value string) bool {
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeAttribution(input AttributionInput) AttributionInput {

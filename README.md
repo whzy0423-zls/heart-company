@@ -4,8 +4,8 @@
 
 `heart-company` 是一个官网 + 后台管理 + Go 服务端的整合项目。
 
-- `website-react/`：React 官网，默认运行在 `http://localhost:8000`。
-- `nx-backend/apps/web-antd/`：Vben Admin 后台管理，默认运行在 `http://localhost:8080`。
+- `website-react/`：React 官网，Docker/生产入口默认是 `http://localhost:8000`。
+- `nx-backend/apps/web-antd/`：Vben Admin 后台管理，Docker/生产入口默认是 `http://localhost:8080`，本地 Vite 开发入口默认是 `http://localhost:5666`。
 - `nx-backend/apps/server/`：Go API 服务，容器内端口 `5320`，由官网和后台通过 `/api` 反向代理访问。
 - `shared/site-config.json`：官网默认配置数据。
 
@@ -19,7 +19,7 @@
 cp .env.example .env
 ```
 
-然后按需修改 `.env` 中的管理员密码、数据库密码、JWT 密钥和 OSS 配置。
+然后修改 `.env` 中的 `JWT_SECRET`、`ADMIN_PASSWORD`、`POSTGRES_PASSWORD` 等生产必填项；OSS、微信支付、JPush、模型与短信配置按实际功能开启。
 
 启动全部服务：
 
@@ -27,10 +27,17 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-访问地址：
+Docker Compose 访问地址：
 
 - 官网：`http://localhost:8000`
 - 后台管理：`http://localhost:8080`
+
+Docker Compose 默认把官网/后台端口绑定到宿主机 `127.0.0.1`，生产公网访问请使用宿主机 Nginx/Caddy/Traefik 反代到上述本机端口。
+
+如果是本地开发方式启动后台（`cd nx-backend && pnpm dev:antd`），请访问：
+
+- 后台管理开发地址：`http://localhost:5666`
+- 后端 API：`http://localhost:5320/api/status`
 
 查看服务状态：
 
@@ -107,4 +114,3 @@ https://github.com/whzy0423-zls/heart-company.git
 - `dist/`
 - `.DS_Store`
 - 本地工具配置目录，如 `.claude/`、`.codex/`
-

@@ -1,9 +1,12 @@
 package server_test
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"sync"
 	"testing"
 
 	"nine-xing/nx-backend/apps/server/internal/appuser"
@@ -156,13 +159,62 @@ func TestAppAuthRefreshToken(t *testing.T) {
 	_ = accessToken
 }
 
-func TestAppAuthLogout(t *testing.T) {
+func TestAppAuthRefreshTokenConcurrentRotationAllowsOnlyOneSuccess(t *testing.T) {
 	handler, _ := newTestServer(t)
 
-	_, refreshToken := appLogin(t, handler, "13800000004")
+	_, refreshToken := appLogin(t, handler, "13800000013")
+
+	const attempts = 8
+	var wg sync.WaitGroup
+	statuses := make(chan int, attempts)
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := perform(handler, http.MethodPost, "/api/app/auth/refresh", "", map[string]string{
+				"refreshToken": refreshToken,
+			})
+			statuses <- r.Code
+		}()
+	}
+	wg.Wait()
+	close(statuses)
+
+	successes := 0
+	for status := range statuses {
+		if status == http.StatusOK {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("expected exactly one successful refresh rotation, got %d", successes)
+	}
+}
+
+func TestAppAuthLogout(t *testing.T) {
+	handler, _ := newTestServer(t)
+	clearAppDeviceTokens(t)
+
+	accessToken, refreshToken := appLogin(t, handler, "13800000004")
+
+	register1 := perform(handler, http.MethodPost, "/api/app/push/register", accessToken, map[string]string{
+		"registrationId": "logout-current-device",
+		"platform":       "ios",
+	})
+	if register1.Code != http.StatusOK {
+		t.Fatalf("register current device failed: %d %s", register1.Code, register1.Body.String())
+	}
+	register2 := perform(handler, http.MethodPost, "/api/app/push/register", accessToken, map[string]string{
+		"registrationId": "logout-other-device",
+		"platform":       "android",
+	})
+	if register2.Code != http.StatusOK {
+		t.Fatalf("register other device failed: %d %s", register2.Code, register2.Body.String())
+	}
 
 	r := perform(handler, http.MethodPost, "/api/app/auth/logout", "", map[string]string{
-		"refreshToken": refreshToken,
+		"refreshToken":   refreshToken,
+		"registrationId": "logout-current-device",
 	})
 	if r.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", r.Code)
@@ -174,6 +226,92 @@ func TestAppAuthLogout(t *testing.T) {
 	})
 	if r2.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 after logout, got %d", r2.Code)
+	}
+
+	adminToken := loginToken(t, handler)
+	pushResp := perform(handler, http.MethodPost, "/api/push/send", adminToken, map[string]string{
+		"title":   "logout test",
+		"content": "logout test",
+	})
+	if pushResp.Code != http.StatusOK {
+		t.Fatalf("push send failed: %d %s", pushResp.Code, pushResp.Body.String())
+	}
+	var pushBody struct {
+		Data struct {
+			Sent int `json:"sent"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(pushResp.Body.Bytes(), &pushBody); err != nil {
+		t.Fatal(err)
+	}
+	if pushBody.Data.Sent != 1 {
+		t.Fatalf("expected logout with registrationId to keep only other device, sent=%d", pushBody.Data.Sent)
+	}
+}
+
+func TestAppAuthLogoutWithoutRegistrationIDKeepsDeviceTokens(t *testing.T) {
+	handler, _ := newTestServer(t)
+	clearAppDeviceTokens(t)
+
+	accessToken, refreshToken := appLogin(t, handler, "13800000014")
+	for _, registrationID := range []string{"logout-all-device-1", "logout-all-device-2"} {
+		resp := perform(handler, http.MethodPost, "/api/app/push/register", accessToken, map[string]string{
+			"registrationId": registrationID,
+			"platform":       "ios",
+		})
+		if resp.Code != http.StatusOK {
+			t.Fatalf("register %s failed: %d %s", registrationID, resp.Code, resp.Body.String())
+		}
+	}
+
+	resp := perform(handler, http.MethodPost, "/api/app/auth/logout", "", map[string]string{
+		"refreshToken": refreshToken,
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.Code)
+	}
+
+	refreshResp := perform(handler, http.MethodPost, "/api/app/auth/refresh", "", map[string]string{
+		"refreshToken": refreshToken,
+	})
+	if refreshResp.Code != http.StatusUnauthorized {
+		t.Fatalf("expected refresh token to be revoked after logout, got %d body=%s", refreshResp.Code, refreshResp.Body.String())
+	}
+
+	adminToken := loginToken(t, handler)
+	pushResp := perform(handler, http.MethodPost, "/api/push/send", adminToken, map[string]string{
+		"title":   "logout all test",
+		"content": "logout all test",
+	})
+	if pushResp.Code != http.StatusOK {
+		t.Fatalf("push send failed: %d %s", pushResp.Code, pushResp.Body.String())
+	}
+	var pushBody struct {
+		Data struct {
+			Sent int `json:"sent"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(pushResp.Body.Bytes(), &pushBody); err != nil {
+		t.Fatal(err)
+	}
+	if pushBody.Data.Sent != 2 {
+		t.Fatalf("expected logout without registrationId to keep device tokens, sent=%d", pushBody.Data.Sent)
+	}
+}
+
+func clearAppDeviceTokens(t *testing.T) {
+	t.Helper()
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set TEST_DATABASE_URL to run server integration tests")
+	}
+	database, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+	if _, err := database.Exec("DELETE FROM app_device_tokens"); err != nil {
+		t.Fatalf("clear app_device_tokens: %v", err)
 	}
 }
 

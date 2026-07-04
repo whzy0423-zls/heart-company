@@ -14,6 +14,9 @@ import (
 
 func main() {
 	env := config.Load()
+	if err := config.ValidateProduction(env); err != nil {
+		log.Fatalf("invalid production config: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	database, err := db.Open(ctx, env.DatabaseURL, env.AdminUsername, env.AdminPassword)
@@ -25,7 +28,15 @@ func main() {
 
 	address := fmt.Sprintf(":%d", env.Port)
 	log.Printf("Nine Xing Go server listening on http://localhost%s", address)
-	if err := http.ListenAndServe(address, server.New(env, database)); err != nil {
+	httpServer := &http.Server{
+		Addr:              address,
+		Handler:           server.New(env, database),
+		IdleTimeout:       60 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       20 * time.Second,
+		WriteTimeout:      120 * time.Second,
+	}
+	if err := httpServer.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }

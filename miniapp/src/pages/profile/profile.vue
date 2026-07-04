@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { TYPES_INFO } from '../../data/enneagramGame'
 import { ensureLogin, getToken, clearToken } from '../../utils/auth'
+import { clearChatMessages } from '../../utils/chatStorage'
 import { hiddenCount, previewItems } from '../../utils/listPreview'
 import { openChatPage } from '../../utils/navigation'
 import { normalizeWechatProfile, hasProfilePayload, getWechatProfilePayload } from '../../utils/wechatProfile'
@@ -71,6 +72,7 @@ function syncDraftFromUser() {
 
 function resetLogin() {
   clearToken()
+  clearChatMessages()
   logged.value = false
   user.value = null
   records.value = []

@@ -513,6 +513,10 @@ CREATE TABLE IF NOT EXISTS app_sms_codes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_app_sms_codes_phone ON app_sms_codes(phone, used, expires_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_users_insights_order
+  ON app_users(create_time DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_app_users_status_member_order
+  ON app_users(status, member_level, create_time DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS app_refresh_tokens (
   id          BIGSERIAL PRIMARY KEY,
@@ -581,6 +585,43 @@ ALTER TABLE app_quiz_submissions ADD COLUMN IF NOT EXISTS second_type    INT   N
 
 ALTER TABLE app_user_cards       ADD COLUMN IF NOT EXISTS submission_id BIGINT REFERENCES app_quiz_submissions(id) ON DELETE SET NULL;
 
+-- ----- App 关系合盘：缓存两张用户卡片的本地确定性合盘结果 -----
+CREATE TABLE IF NOT EXISTS app_compatibility_reports (
+  id              BIGSERIAL PRIMARY KEY,
+  app_user_id     BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  card_a_id       BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
+  card_b_id       BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
+  card_a_name     TEXT NOT NULL DEFAULT '',
+  card_b_name     TEXT NOT NULL DEFAULT '',
+  card_a_type     INT NOT NULL DEFAULT 0,
+  card_b_type     INT NOT NULL DEFAULT 0,
+  summary         TEXT NOT NULL DEFAULT '',
+  highlights      JSONB NOT NULL DEFAULT '[]'::jsonb,
+  conflict_points JSONB NOT NULL DEFAULT '[]'::jsonb,
+  suggestions     JSONB NOT NULL DEFAULT '[]'::jsonb,
+  is_full         BOOLEAN NOT NULL DEFAULT true,
+  algorithm_version TEXT NOT NULL DEFAULT 'v1',
+  relation_level    TEXT NOT NULL DEFAULT '',
+  scores            JSONB NOT NULL DEFAULT '{}'::jsonb,
+  explain_tags      JSONB NOT NULL DEFAULT '[]'::jsonb,
+  evidence          JSONB NOT NULL DEFAULT '[]'::jsonb,
+  generated_detail  TEXT NOT NULL DEFAULT '',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE app_compatibility_reports ADD COLUMN IF NOT EXISTS algorithm_version TEXT  NOT NULL DEFAULT 'v1';
+ALTER TABLE app_compatibility_reports ADD COLUMN IF NOT EXISTS relation_level    TEXT  NOT NULL DEFAULT '';
+ALTER TABLE app_compatibility_reports ADD COLUMN IF NOT EXISTS scores            JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_compatibility_reports ADD COLUMN IF NOT EXISTS explain_tags      JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE app_compatibility_reports ADD COLUMN IF NOT EXISTS evidence          JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE app_compatibility_reports ADD COLUMN IF NOT EXISTS generated_detail  TEXT  NOT NULL DEFAULT '';
+
+CREATE INDEX IF NOT EXISTS idx_app_compatibility_reports_user
+  ON app_compatibility_reports(app_user_id, create_time DESC);
+CREATE INDEX IF NOT EXISTS idx_app_compatibility_reports_cards
+  ON app_compatibility_reports(app_user_id, card_a_id, card_b_id);
+
 -- ----- App 问答会话：存储每张卡的对话历史 -----
 CREATE TABLE IF NOT EXISTS app_chat_sessions (
   id          BIGSERIAL PRIMARY KEY,
@@ -624,6 +665,25 @@ CREATE TABLE IF NOT EXISTS app_memories (
 );
 
 CREATE INDEX IF NOT EXISTS idx_app_memories_card ON app_memories(app_user_id, card_id, status, update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_app_memories_user_status_update
+  ON app_memories(app_user_id, status, update_time DESC, id DESC);
+
+-- ----- App 埋点事件：Flutter App 鉴权后上报的最小事件流 -----
+CREATE TABLE IF NOT EXISTS app_analytics_events (
+  id          BIGSERIAL PRIMARY KEY,
+  app_user_id BIGINT REFERENCES app_users(id) ON DELETE SET NULL,
+  event       TEXT NOT NULL DEFAULT '',
+  params      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  client_ts   TIMESTAMPTZ,
+  ip          TEXT NOT NULL DEFAULT '',
+  user_agent  TEXT NOT NULL DEFAULT '',
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_analytics_events_user_time
+  ON app_analytics_events(app_user_id, create_time DESC);
+CREATE INDEX IF NOT EXISTS idx_app_analytics_events_event_time
+  ON app_analytics_events(event, create_time DESC);
 
 -- ----- App 权益订单：App 用户独立订单，真实支付回调接入后发放权益 -----
 CREATE TABLE IF NOT EXISTS app_orders (
@@ -654,3 +714,41 @@ CREATE TABLE IF NOT EXISTS app_daily_checkins (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_daily_checkins_user_date
   ON app_daily_checkins(app_user_id, checkin_date);
+
+-- ----- App 推送设备令牌：存储用户的 JPush Registration ID -----
+CREATE TABLE IF NOT EXISTS app_device_tokens (
+  id              BIGSERIAL PRIMARY KEY,
+  app_user_id     BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  registration_id TEXT NOT NULL,
+  platform        TEXT NOT NULL DEFAULT 'android',
+  device_info     TEXT NOT NULL DEFAULT '',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DELETE FROM app_device_tokens a
+USING app_device_tokens b
+WHERE a.registration_id = b.registration_id
+  AND (a.update_time, a.id) < (b.update_time, b.id);
+DROP INDEX IF EXISTS idx_app_device_tokens_user_regid;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_device_tokens_registration_id
+  ON app_device_tokens(registration_id);
+CREATE INDEX IF NOT EXISTS idx_app_device_tokens_user
+  ON app_device_tokens(app_user_id);
+
+-- ----- 推送通知记录：后台发送的推送历史 -----
+CREATE TABLE IF NOT EXISTS push_notifications (
+  id            BIGSERIAL PRIMARY KEY,
+  title         TEXT NOT NULL DEFAULT '',
+  content       TEXT NOT NULL DEFAULT '',
+  target_type   TEXT NOT NULL DEFAULT 'all',
+  target_value  TEXT NOT NULL DEFAULT '',
+  deep_link     TEXT NOT NULL DEFAULT '',
+  sent_count    INT  NOT NULL DEFAULT 0,
+  status        TEXT NOT NULL DEFAULT 'pending',
+  error_message TEXT NOT NULL DEFAULT '',
+  operator      TEXT NOT NULL DEFAULT '',
+  create_time   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_push_notifications_time ON push_notifications(create_time DESC);

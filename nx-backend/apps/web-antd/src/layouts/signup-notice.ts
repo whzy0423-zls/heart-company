@@ -39,7 +39,8 @@ export function getSignupNotifications(
   return {
     latestId,
     notices: freshItems
-      .toSorted((a, b) => Number(a.id) - Number(b.id))
+      .slice()
+      .sort((a, b) => Number(a.id) - Number(b.id))
       .map((item) => toSignupNotification(item)),
   };
 }

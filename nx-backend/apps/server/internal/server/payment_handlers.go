@@ -2,9 +2,13 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,17 +20,22 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/wxpay"
 )
 
-// mustWxPayClient 用 env 构造支付客户端；生产配置不全时启动失败，避免误入模拟支付。
+// mustWxPayClient 用 env 构造支付客户端；生产配置不全时禁用支付功能，避免阻断后台整体启动。
 func mustWxPayClient(env config.Env) *wxpay.Client {
 	wxpayDev := env.WxPay.Dev || (env.AppEnv != "production" && !wxPayConfigComplete(env.WxPay))
+	if env.AppEnv == "production" && !env.WxPay.Dev && !wxPayConfigComplete(env.WxPay) {
+		log.Print("[WXPAY] payment disabled: production wxpay config is incomplete")
+		return nil
+	}
 	client, err := wxpay.NewClient(wxpay.Config{
-		MchID:          env.WxPay.MchID,
-		AppID:          env.WxPay.AppID,
-		APIv3Key:       env.WxPay.APIv3Key,
-		SerialNo:       env.WxPay.SerialNo,
-		PrivateKeyPath: env.WxPay.PrivateKeyPath,
-		NotifyURL:      env.WxPay.NotifyURL,
-		Dev:            wxpayDev,
+		MchID:            env.WxPay.MchID,
+		AppID:            env.WxPay.AppID,
+		APIv3Key:         env.WxPay.APIv3Key,
+		SerialNo:         env.WxPay.SerialNo,
+		PrivateKeyPath:   env.WxPay.PrivateKeyPath,
+		PlatformCertPath: env.WxPay.PlatformCertPath,
+		NotifyURL:        env.WxPay.NotifyURL,
+		Dev:              wxpayDev,
 	})
 	if err != nil {
 		panic("wxpay init: " + err.Error())
@@ -40,7 +49,40 @@ func wxPayConfigComplete(cfg config.WxPayConfig) bool {
 		strings.TrimSpace(cfg.APIv3Key) != "" &&
 		strings.TrimSpace(cfg.SerialNo) != "" &&
 		strings.TrimSpace(cfg.PrivateKeyPath) != "" &&
+		strings.TrimSpace(cfg.PlatformCertPath) != "" &&
 		strings.TrimSpace(cfg.NotifyURL) != ""
+}
+
+type paymentOrderSnapshot struct {
+	Amount  int
+	Product string
+}
+
+func generateReportOutTradeNo(uid, recordID int64) (string, error) {
+	var suffix [4]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("rpt%d-%d-%d-%s", uid, recordID, time.Now().UnixNano(), hex.EncodeToString(suffix[:])), nil
+}
+
+func validateWxPayCallbackAgainstOrder(env config.Env, result wxpay.CallbackResult, order paymentOrderSnapshot) error {
+	if strings.TrimSpace(result.OutTradeNo) == "" {
+		return errors.New("wxpay callback missing out_trade_no")
+	}
+	if strings.TrimSpace(result.MchID) != strings.TrimSpace(env.WxPay.MchID) {
+		return errors.New("wxpay merchant mismatch")
+	}
+	if strings.TrimSpace(result.AppID) != strings.TrimSpace(env.WxPay.AppID) {
+		return errors.New("wxpay appid mismatch")
+	}
+	if result.AmountTotal <= 0 || result.AmountTotal != order.Amount {
+		return fmt.Errorf("wxpay amount mismatch: callback=%d order=%d", result.AmountTotal, order.Amount)
+	}
+	if order.Product != "report" {
+		return fmt.Errorf("unsupported payment product: %s", order.Product)
+	}
+	return nil
 }
 
 // reportOrderRequest 下单请求：解锁某条测试记录的深度报告。
@@ -50,6 +92,10 @@ type reportOrderRequest struct {
 
 // createReportOrder 为深度报告下单，返回小程序拉起支付所需参数。
 func (s *Server) createReportOrder(w http.ResponseWriter, r *http.Request) {
+	if s.pay == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "payment service is not configured")
+		return
+	}
 	uid := userFromRequest(r).ID
 	var body reportOrderRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -91,7 +137,11 @@ func (s *Server) createReportOrder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	price := s.env.WxPay.ReportPriceCents
-	outTradeNo := fmt.Sprintf("rpt%d-%d-%d", uid, recordID, time.Now().Unix())
+	outTradeNo, err := generateReportOutTradeNo(uid, recordID)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "create order failed")
+		return
+	}
 	if _, err := s.miniapp.CreateOrder(ctx, uid, outTradeNo, "report", recordID, "九型深度报告", price); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -109,15 +159,68 @@ func (s *Server) createReportOrder(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// payNotify 接收微信支付回调（或 dev 模拟回调），落账并发放权益。
-// dev 模式下可直接 POST {"out_trade_no":"..."} 模拟支付成功。
+// devPayReportOrder 仅用于本地/测试环境模拟小程序报告支付成功。
+// 真实微信回调仍走 /api/pay/notify，且不会接受未签名明文。
+func (s *Server) devPayReportOrder(w http.ResponseWriter, r *http.Request) {
+	if s.env.AppEnv == "production" || s.pay == nil || !s.pay.DevMode() {
+		httpx.Fail(w, http.StatusNotFound, "Not Found")
+		return
+	}
+	user := userFromRequest(r)
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4*1024))
+	if err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "read body failed")
+		return
+	}
+	result, err := s.pay.ParseDevCallback(raw)
+	if err != nil {
+		httpx.Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !result.Success {
+		httpx.OK(w, map[string]any{"paid": false})
+		return
+	}
+	_, ownerID, _, product, status, err := s.miniapp.OrderByOutTradeNo(r.Context(), result.OutTradeNo)
+	if err != nil {
+		httpx.Fail(w, http.StatusNotFound, "order not found")
+		return
+	}
+	if product != "report" {
+		httpx.Fail(w, http.StatusBadRequest, "unsupported dev payment product")
+		return
+	}
+	if ownerID != user.ID {
+		httpx.Fail(w, http.StatusForbidden, "Forbidden")
+		return
+	}
+	if status == "paid" {
+		httpx.OK(w, map[string]any{"paid": true})
+		return
+	}
+	transactionID := strings.TrimSpace(result.TransactionID)
+	if transactionID == "" {
+		transactionID = "dev-" + result.OutTradeNo
+	}
+	if _, err := s.miniapp.MarkOrderPaid(r.Context(), result.OutTradeNo, transactionID); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, map[string]any{"paid": true})
+}
+
+// payNotify 接收真实微信支付回调，落账并发放权益。
 func (s *Server) payNotify(w http.ResponseWriter, r *http.Request) {
+	if s.pay == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "payment service is not configured")
+		return
+	}
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64*1024))
 	if err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "read body failed")
 		return
 	}
-	result, err := s.pay.ParseCallback(raw)
+	result, err := s.pay.ParseCallbackWithHeaders(r.Header, raw)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"code": "FAIL", "message": err.Error()})
@@ -127,6 +230,20 @@ func (s *Server) payNotify(w http.ResponseWriter, r *http.Request) {
 		// 非成功状态：回执 200 表示已接收，不发放权益。
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]string{"code": "SUCCESS", "message": "OK"})
+		return
+	}
+	order, err := s.miniapp.PaymentOrderSnapshot(r.Context(), result.OutTradeNo)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"code": "FAIL", "message": err.Error()})
+		return
+	}
+	if err := validateWxPayCallbackAgainstOrder(s.env, result, paymentOrderSnapshot{
+		Amount:  order.Amount,
+		Product: order.Product,
+	}); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"code": "FAIL", "message": err.Error()})
 		return
 	}
 	if _, err := s.miniapp.MarkOrderPaid(r.Context(), result.OutTradeNo, result.TransactionID); err != nil {

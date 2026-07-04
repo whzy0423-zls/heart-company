@@ -45,11 +45,9 @@ withDefaults(defineProps<Props>(), {
               <p class="text-sm/6 font-semibold text-foreground">
                 {{ item.title }}
               </p>
-              <!-- eslint-disable vue/no-v-html -->
-              <p
-                class="mt-1 truncate text-xs/5 text-foreground/80 *:text-primary"
-                v-html="item.content"
-              ></p>
+              <p class="mt-1 truncate text-xs/5 text-foreground/80">
+                {{ item.content }}
+              </p>
             </div>
           </div>
           <div class="hidden h-full shrink-0 sm:flex sm:flex-col sm:items-end">

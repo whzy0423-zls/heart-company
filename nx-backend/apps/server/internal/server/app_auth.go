@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/big"
 	"net"
@@ -24,6 +25,7 @@ const (
 )
 
 func (s *Server) appSendSMS(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
 	var body struct {
 		Phone string `json:"phone"`
 	}
@@ -32,7 +34,7 @@ func (s *Server) appSendSMS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	phone := strings.TrimSpace(body.Phone)
-	if len(phone) != 11 {
+	if !isMainlandPhone(phone) {
 		httpx.Fail(w, http.StatusBadRequest, "invalid phone number")
 		return
 	}
@@ -48,8 +50,16 @@ func (s *Server) appSendSMS(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusTooManyRequests, "发送过于频繁，请稍后再试")
 		return
 	}
+	if s.env.AppEnv == "production" && strings.TrimSpace(s.env.SMS.Provider) == "" {
+		httpx.Fail(w, http.StatusServiceUnavailable, "SMS provider is not configured")
+		return
+	}
 
-	code := generateSMSCode()
+	code, err := generateSMSCode()
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "failed to generate code")
+		return
+	}
 	codeHash := appuser.HashToken(code)
 
 	if err := s.appUsers.StoreSMSCode(r.Context(), phone, codeHash, ip, now.Add(smsCodeExpiry)); err != nil {
@@ -73,6 +83,7 @@ func (s *Server) appSendSMS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) appVerifySMS(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 8*1024)
 	var body struct {
 		Phone      string `json:"phone"`
 		Code       string `json:"code"`
@@ -84,8 +95,12 @@ func (s *Server) appVerifySMS(w http.ResponseWriter, r *http.Request) {
 	}
 	phone := strings.TrimSpace(body.Phone)
 	code := strings.TrimSpace(body.Code)
-	if len(phone) != 11 || len(code) != 6 {
+	if !isMainlandPhone(phone) || len(code) != 6 {
 		httpx.Fail(w, http.StatusBadRequest, "invalid phone or code")
+		return
+	}
+	if !s.allowSMSVerifyAttempt(phone, clientIP(r), time.Now()) {
+		httpx.Fail(w, http.StatusTooManyRequests, "验证码验证过于频繁，请稍后再试")
 		return
 	}
 
@@ -135,6 +150,7 @@ func (s *Server) appVerifySMS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) appRefreshToken(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
 	var body struct {
 		RefreshToken string `json:"refreshToken"`
 	}
@@ -147,18 +163,18 @@ func (s *Server) appRefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	newRefreshRaw, err := generateRefreshToken()
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "token error")
+		return
+	}
 	tokenHash := appuser.HashToken(body.RefreshToken)
-	rt, err := s.appUsers.FindRefreshToken(r.Context(), tokenHash)
+	newRefreshHash := appuser.HashToken(newRefreshRaw)
+	rt, err := s.appUsers.RotateRefreshToken(r.Context(), tokenHash, newRefreshHash, time.Now().Add(appRefreshTokenDuration))
 	if err != nil {
 		httpx.Fail(w, http.StatusUnauthorized, "invalid refresh token")
 		return
 	}
-	if rt.Revoked || rt.IsExpired(time.Now()) {
-		httpx.Fail(w, http.StatusUnauthorized, "refresh token expired")
-		return
-	}
-
-	_ = s.appUsers.RevokeRefreshToken(r.Context(), tokenHash)
 
 	user, err := s.appUsers.FindByID(r.Context(), rt.AppUserID)
 	if err != nil {
@@ -176,17 +192,6 @@ func (s *Server) appRefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newRefreshRaw, err := generateRefreshToken()
-	if err != nil {
-		httpx.Fail(w, http.StatusInternalServerError, "token error")
-		return
-	}
-	newRefreshHash := appuser.HashToken(newRefreshRaw)
-	if err := s.appUsers.CreateRefreshToken(r.Context(), user.ID, newRefreshHash, rt.DeviceInfo, time.Now().Add(appRefreshTokenDuration)); err != nil {
-		httpx.Fail(w, http.StatusInternalServerError, "token error")
-		return
-	}
-
 	httpx.OK(w, map[string]any{
 		"accessToken":  accessToken,
 		"refreshToken": newRefreshRaw,
@@ -194,15 +199,23 @@ func (s *Server) appRefreshToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) appLogout(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
 	var body struct {
-		RefreshToken string `json:"refreshToken"`
+		RefreshToken   string `json:"refreshToken"`
+		RegistrationID string `json:"registrationId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpx.OK(w, nil)
 		return
 	}
+	body.RefreshToken = strings.TrimSpace(body.RefreshToken)
+	body.RegistrationID = strings.TrimSpace(body.RegistrationID)
 	if body.RefreshToken != "" {
 		tokenHash := appuser.HashToken(body.RefreshToken)
+		rt, err := s.appUsers.FindRefreshToken(r.Context(), tokenHash)
+		if err == nil && s.pushStore != nil && body.RegistrationID != "" {
+			_ = s.pushStore.UnregisterDevice(r.Context(), rt.AppUserID, body.RegistrationID)
+		}
 		_ = s.appUsers.RevokeRefreshToken(r.Context(), tokenHash)
 	}
 	httpx.OK(w, nil)
@@ -235,12 +248,16 @@ func (s *Server) issueAppAccessToken(user appuser.User) (string, error) {
 	return auth.SignWithExpiry(info, s.env.JWTSecret, appAccessTokenDuration)
 }
 
-func generateSMSCode() string {
-	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+func generateSMSCode() (string, error) {
+	return generateSMSCodeFromReader(rand.Reader)
+}
+
+func generateSMSCodeFromReader(reader io.Reader) (string, error) {
+	n, err := rand.Int(reader, big.NewInt(1000000))
 	if err != nil {
-		return "123456"
+		return "", err
 	}
-	return fmt.Sprintf("%06d", n.Int64())
+	return fmt.Sprintf("%06d", n.Int64()), nil
 }
 
 func generateRefreshToken() (string, error) {
@@ -251,21 +268,50 @@ func generateRefreshToken() (string, error) {
 	return fmt.Sprintf("%x", b), nil
 }
 
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i > 0 {
-			return strings.TrimSpace(xff[:i])
+func isMainlandPhone(phone string) bool {
+	if len(phone) != 11 || phone[0] != '1' || phone[1] < '3' || phone[1] > '9' {
+		return false
+	}
+	for i := 2; i < len(phone); i++ {
+		if phone[i] < '0' || phone[i] > '9' {
+			return false
 		}
-		return strings.TrimSpace(xff)
 	}
-	if xri := r.Header.Get("X-Real-Ip"); xri != "" {
-		return xri
-	}
+	return true
+}
+
+func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if isTrustedProxyIP(host) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if i := strings.IndexByte(xff, ','); i > 0 {
+				return strings.TrimSpace(xff[:i])
+			}
+			return strings.TrimSpace(xff)
+		}
+		if xri := r.Header.Get("X-Real-Ip"); xri != "" {
+			return strings.TrimSpace(xri)
+		}
 	}
 	return host
+}
+
+func isTrustedProxyIP(value string) bool {
+	ip := net.ParseIP(strings.TrimSpace(value))
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast())
+}
+
+func (s *Server) allowSMSVerifyAttempt(phone, ip string, now time.Time) bool {
+	if s.smsVerifyPhoneLimiter != nil && !s.smsVerifyPhoneLimiter.Allow(phone, now) {
+		return false
+	}
+	if s.smsVerifyIPLimiter != nil && !s.smsVerifyIPLimiter.Allow(ip, now) {
+		return false
+	}
+	return true
 }
 
 type appContextKey struct{}

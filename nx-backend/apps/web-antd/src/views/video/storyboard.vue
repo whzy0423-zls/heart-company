@@ -17,6 +17,7 @@ import {
   Form,
   Input,
   InputNumber,
+  message,
   Modal,
   Popconfirm,
   Row,
@@ -24,7 +25,6 @@ import {
   Space,
   Table,
   Tag,
-  message,
 } from 'ant-design-vue';
 
 import {
@@ -506,7 +506,7 @@ onMounted(async () => {
                     编辑
                   </Button>
                   <Button
-                    v-if="storyboardRecord(record).shots.length"
+                    v-if="storyboardRecord(record).shots.length > 0"
                     size="small"
                     type="link"
                     @click="copyAllShots(storyboardRecord(record))"
@@ -539,7 +539,7 @@ onMounted(async () => {
     <Modal
       v-model:open="editorOpen"
       :confirm-loading="saving"
-      :width="1180"
+      width="min(1180px, calc(100vw - 32px))"
       destroy-on-close
       title="编辑分镜方案"
       @ok="saveStoryboard"

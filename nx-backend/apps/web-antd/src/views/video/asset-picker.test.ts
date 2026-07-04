@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
-
 import type { VideoAsset, VideoAssetType } from '#/api';
+
+import { describe, expect, it } from 'vitest';
 
 import {
   ASSET_PICKER_TYPES,

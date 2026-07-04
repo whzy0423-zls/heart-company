@@ -23,8 +23,9 @@ type Source struct {
 }
 
 type UserProfile struct {
-	Nickname string `json:"nickname"`
-	MainType int    `json:"mainType"`
+	Nickname string   `json:"nickname"`
+	MainType int      `json:"mainType"`
+	Memories []string `json:"memories,omitempty"`
 }
 
 type Message struct {
