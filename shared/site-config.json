@@ -329,63 +329,63 @@
   },
   "types": [
     {
-      "avatar": "/assets/avatars/1.png",
+      "avatar": "/assets/avatars/1.webp",
       "description": "希望把事情做对，对自己和世界有内在标准。",
       "id": "1",
       "keywords": "原则、自律、追求正确",
       "name": "完美型"
     },
     {
-      "avatar": "/assets/avatars/2.png",
+      "avatar": "/assets/avatars/2.webp",
       "description": "通过给予与关怀建立连接，渴望被需要。",
       "id": "2",
       "keywords": "热情、付出、看见他人需要",
       "name": "助人型"
     },
     {
-      "avatar": "/assets/avatars/3.png",
+      "avatar": "/assets/avatars/3.webp",
       "description": "追求成功与认可，擅长达成目标。",
       "id": "3",
       "keywords": "目标、效率、形象",
       "name": "成就型"
     },
     {
-      "avatar": "/assets/avatars/4.png",
+      "avatar": "/assets/avatars/4.webp",
       "description": "重视内在体验与真实，渴望与众不同。",
       "id": "4",
       "keywords": "感受、独特、深度",
       "name": "自我型"
     },
     {
-      "avatar": "/assets/avatars/5.png",
+      "avatar": "/assets/avatars/5.webp",
       "description": "以知识与思考理解世界，珍惜独处空间。",
       "id": "5",
       "keywords": "理性、求知、边界",
       "name": "观察型"
     },
     {
-      "avatar": "/assets/avatars/6.png",
+      "avatar": "/assets/avatars/6.webp",
       "description": "重视信任与稳定，提前预判风险。",
       "id": "6",
       "keywords": "谨慎、责任、安全感",
       "name": "忠诚型"
     },
     {
-      "avatar": "/assets/avatars/7.png",
+      "avatar": "/assets/avatars/7.webp",
       "description": "追求自由与快乐，热爱新鲜与可能。",
       "id": "7",
       "keywords": "乐观、可能性、体验",
       "name": "活跃型"
     },
     {
-      "avatar": "/assets/avatars/8.png",
+      "avatar": "/assets/avatars/8.webp",
       "description": "直接而有力量，保护在意的人与事。",
       "id": "8",
       "keywords": "力量、掌控、保护",
       "name": "领袖型"
     },
     {
-      "avatar": "/assets/avatars/9.png",
+      "avatar": "/assets/avatars/9.webp",
       "description": "追求内外和谐，善于看见各方立场。",
       "id": "9",
       "keywords": "包容、稳定、调和",

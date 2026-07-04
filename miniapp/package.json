@@ -3,16 +3,17 @@
   "version": "1.0.0",
   "description": "九型芯之力 微信小程序 (uni-app + Vue3)",
   "scripts": {
-    "test:config": "node src/config.test.mjs && node scripts/project-config.test.mjs && node src/utils/wechatProfile.test.mjs && node src/utils/chatState.test.mjs && node src/utils/chatStorage.test.mjs && node src/utils/navigation.test.mjs && node src/utils/listPreview.test.mjs && node src/utils/auth.test.mjs && node src/utils/chatErrors.test.mjs && node src/utils/payment.test.mjs && node src/pages/learn.quote-card.test.mjs",
+    "test:config": "node src/config.test.mjs && node scripts/project-config.test.mjs && node scripts/ui-compat.test.mjs && node src/utils/wechatProfile.test.mjs && node src/utils/chatState.test.mjs && node src/utils/chatStorage.test.mjs && node src/utils/navigation.test.mjs && node src/utils/listPreview.test.mjs && node src/utils/auth.test.mjs && node src/utils/chatErrors.test.mjs && node src/utils/payment.test.mjs && node src/pages/learn.quote-card.test.mjs",
     "prebuild:mp-weixin": "node scripts/verify-production-api-base.mjs",
     "dev:mp-weixin": "uni -p mp-weixin",
     "build:mp-weixin": "uni build -p mp-weixin",
-    "dev:h5": "uni",
-    "build:h5": "uni build"
+    "dev:h5": "uni -p h5",
+    "build:h5": "uni build -p h5"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-4030620241128001",
     "@dcloudio/uni-components": "3.0.0-4030620241128001",
+    "@dcloudio/uni-h5": "3.0.0-4030620241128001",
     "@dcloudio/uni-mp-weixin": "3.0.0-4030620241128001",
     "vue": "^3.4.21"
   },

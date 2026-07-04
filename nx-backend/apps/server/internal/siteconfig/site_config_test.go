@@ -99,7 +99,7 @@ func validConfig() SiteConfig {
 		Keywords    string `json:"keywords"`
 		Name        string `json:"name"`
 	}{
-		{ID: "1", Name: "完美型", Avatar: "/assets/avatars/1.png"},
+		{ID: "1", Name: "完美型", Avatar: "/assets/avatars/1.webp"},
 	}
 	return config
 }

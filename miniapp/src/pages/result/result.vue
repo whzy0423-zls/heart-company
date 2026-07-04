@@ -343,15 +343,20 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
       </template>
       <template v-else>
         <text class="report__intro">由 AI 结合九型知识库，为你生成专属的性格画像、成长盲点、人际与职业建议。</text>
-        <button class="btn-primary" :loading="paying" @click="unlockReport">￥{{ reportPriceYuan }} 解锁深度报告</button>
+        <button class="btn-primary" :loading="paying" :disabled="paying" @click="unlockReport">￥{{ reportPriceYuan }} 解锁深度报告</button>
       </template>
     </view>
 
     <view class="actions">
-      <button class="btn-primary" :loading="saving" @click="saveRecord">{{ saved ? '已存档' : '存入我的档案' }}</button>
+      <button class="btn-primary" :loading="saving" :disabled="saving || saved" @click="saveRecord">{{ saved ? '已存档' : '存入我的档案' }}</button>
       <view class="actions__row">
         <button class="btn-ghost" open-type="share">分享好友</button>
+        <!-- #ifdef MP-WEIXIN -->
         <button class="btn-ghost" @click="makePoster">生成海报</button>
+        <!-- #endif -->
+        <!-- #ifdef H5 -->
+        <button class="btn-ghost" disabled>小程序内生成海报</button>
+        <!-- #endif -->
       </view>
       <button class="btn-soft" @click="goRelation">和 TA 合盘 · 看关系 →</button>
       <button class="btn-ghost" @click="goBooking">预约深入解读 →</button>

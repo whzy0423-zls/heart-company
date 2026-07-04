@@ -14,6 +14,7 @@ export interface AppAnalyticsRecentUser {
   createTime?: string;
   id: number | string;
   lastLoginAt?: string;
+  lastMemoryAt?: string;
   latestMemory?: string;
   memoryCount?: number;
   memberLevel?: string;

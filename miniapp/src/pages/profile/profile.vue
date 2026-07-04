@@ -166,7 +166,7 @@ async function saveProfile() {
       <view class="card profile-form">
         <view class="profile-form__head">
           <text class="sec-title">微信资料</text>
-          <button class="mini-link" :loading="profileSaving" @click="syncWechatProfile">一键同步</button>
+          <button class="mini-link" :loading="profileSaving" :disabled="profileSaving" @click="syncWechatProfile">一键同步</button>
         </view>
         <view class="profile-form__row">
           <button class="avatar-picker" open-type="chooseAvatar" @chooseavatar="onChooseAvatar">

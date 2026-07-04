@@ -71,7 +71,7 @@ async function submit() {
         <textarea class="textarea field-control" v-model="form.message" placeholder="想了解的问题（选填）" />
       </view>
 
-      <button class="btn-primary" :loading="submitting" @click="submit">提交预约</button>
+      <button class="btn-primary" :loading="submitting" :disabled="submitting" @click="submit">提交预约</button>
     </view>
   </view>
 </template>

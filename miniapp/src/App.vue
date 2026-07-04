@@ -30,6 +30,7 @@ page {
   display: flex;
   flex-direction: column;
   gap: 24rpx;
+  padding-bottom: calc(24rpx + env(safe-area-inset-bottom));
 }
 .btn-primary,
 .btn-ghost,
