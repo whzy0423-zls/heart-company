@@ -22,20 +22,30 @@ const api = async () => {
   return { home: { courses: { items: [`course-${calls}`] }, quotes: { items: [`quote-${calls}`] } } }
 }
 
-const { getCachedSiteConfig, clearSiteConfigCache } = await import(`file://${modulePath}`)
+const { getCachedSiteConfig, refreshSiteConfig, getStoredSiteConfig, clearSiteConfigCache, hasSiteConfigLearningContent } = await import(`file://${modulePath}`)
+assert.equal(getStoredSiteConfig(), null, 'empty storage should not expose cached config')
 const first = await getCachedSiteConfig({ api, now: () => now, ttlMs: 60000 })
 const second = await getCachedSiteConfig({ api, now: () => now + 1000, ttlMs: 60000 })
 assert.equal(calls, 1, 'fresh cache should avoid a second site config request')
 assert.deepEqual(second, first)
+assert.deepEqual(getStoredSiteConfig(), first, 'stored config should be readable without awaiting network')
 
-now += 61000
+const refreshed = await refreshSiteConfig({ api, now: () => now + 2000 })
+assert.equal(calls, 2, 'explicit refresh should bypass fresh cache')
+assert.notDeepEqual(refreshed, first)
+assert.deepEqual(getStoredSiteConfig(), refreshed, 'explicit refresh should update stored cache')
+assert.equal(hasSiteConfigLearningContent(refreshed), true, 'site config with courses/quotes should count as learning content')
+assert.equal(hasSiteConfigLearningContent({ home: {} }), false, 'empty site config should not replace cached learning content')
+assert.equal(hasSiteConfigLearningContent({ home: { courses: { items: [] }, quotes: { items: [] } } }), false, 'empty learning arrays should not replace cached learning content')
+
+now += 63000
 const third = await getCachedSiteConfig({ api, now: () => now, ttlMs: 60000 })
-assert.equal(calls, 2, 'expired cache should refetch')
+assert.equal(calls, 3, 'expired cache should refetch')
 assert.notDeepEqual(third, first)
 
 clearSiteConfigCache()
 await getCachedSiteConfig({ api, now: () => now, ttlMs: 60000 })
-assert.equal(calls, 3, 'manual cache clear should refetch')
+assert.equal(calls, 4, 'manual cache clear should refetch')
 
 console.log('site config cache tests passed')
 await rm(dir, { force: true, recursive: true })

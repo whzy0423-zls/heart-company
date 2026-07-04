@@ -8,6 +8,7 @@ const modulePath = join(dir, 'chatState.mjs')
 await copyFile(new URL('./chatState.js', import.meta.url), modulePath)
 const {
   buildRecentHistory,
+  buildRetryHistory,
   chatStatusText,
   limitMessages,
   normalizeSources,
@@ -20,6 +21,7 @@ assert.deepEqual(
     { role: 'assistant', content: '欢迎语', localOnly: true },
     { role: 'user', content: '  第一个问题  ' },
     { role: 'assistant', content: 'a'.repeat(260) },
+    { role: 'assistant', content: '接口失败，请重试', error: true, retryQuestion: '失败问题' },
     { role: 'system', content: 'skip' },
   ]),
   [
@@ -52,6 +54,44 @@ assert.deepEqual(
   [
     { id: 'u1', role: 'user', content: '问题', sources: [] },
     { id: 'a1', role: 'assistant', content: '回答', sources: [{ id: 's1', title: '资料', snippet: '摘要' }] },
+  ],
+)
+
+
+assert.deepEqual(
+  serializeMessages([
+    { id: 'u-retry', role: 'user', content: '失败问题', sources: [] },
+    { id: 'e-retry', role: 'assistant', content: '网络异常', sources: [], error: true, retryQuestion: '  失败问题  ' },
+  ]),
+  [
+    { id: 'u-retry', role: 'user', content: '失败问题', sources: [] },
+    { id: 'e-retry', role: 'assistant', content: '网络异常', sources: [], error: true, retryQuestion: '失败问题' },
+  ],
+)
+
+assert.deepEqual(
+  restoreMessages([
+    { id: 'u-retry', role: 'user', content: '失败问题' },
+    { id: 'e-retry', role: 'assistant', content: '网络异常', error: true, retryQuestion: '失败问题' },
+  ]),
+  [
+    { id: 'u-retry', role: 'user', content: '失败问题', sources: [] },
+    { id: 'e-retry', role: 'assistant', content: '网络异常', sources: [], error: true, retryQuestion: '失败问题' },
+  ],
+)
+
+assert.deepEqual(
+  buildRetryHistory([
+    { id: 'welcome', role: 'assistant', content: '欢迎语', localOnly: true },
+    { id: 'u0', role: 'user', content: '上一个问题' },
+    { id: 'a0', role: 'assistant', content: '上一个回答' },
+    { id: 'u1', role: 'user', content: '失败问题' },
+    { id: 'e1', role: 'assistant', content: '网络异常', error: true, retryQuestion: '失败问题' },
+    { id: 'u2', role: 'user', content: '后续问题' },
+  ], '失败问题', 'e1'),
+  [
+    { role: 'user', content: '上一个问题' },
+    { role: 'assistant', content: '上一个回答' },
   ],
 )
 

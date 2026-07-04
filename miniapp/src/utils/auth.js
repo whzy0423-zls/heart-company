@@ -4,6 +4,53 @@ import { getToken, setToken, clearToken } from '../api/request'
 export { getToken, clearToken }
 
 let loginPromise = null
+const WECHAT_LOGIN_UNSUPPORTED_MESSAGE = '当前环境不支持微信登录，请在微信小程序内使用'
+
+function providerListIncludesWechat(provider) {
+  return Array.isArray(provider) && provider.includes('weixin')
+}
+
+function checkWechatProvider(deps) {
+  if (typeof deps.getProvider !== 'function') return Promise.resolve(true)
+  return new Promise((resolve) => {
+    try {
+      deps.getProvider({
+        service: 'oauth',
+        success: (res = {}) => {
+          const providers = res.provider || res.providers
+          resolve(Array.isArray(providers) ? providerListIncludesWechat(providers) : true)
+        },
+        fail: () => {
+          resolve(false)
+        },
+      })
+    } catch {
+      resolve(false)
+    }
+  })
+}
+
+function requestWechatLoginCode(deps) {
+  return new Promise((resolve, reject) => {
+    try {
+      deps.login({
+        provider: 'weixin',
+        success: ({ code } = {}) => {
+          if (!code) {
+            reject(new Error('微信登录未返回 code，请稍后重试'))
+            return
+          }
+          resolve(code)
+        },
+        fail: (err) => {
+          reject(err)
+        },
+      })
+    } catch (e) {
+      reject(e)
+    }
+  })
+}
 
 export function createLoginEnsurer(deps) {
   let currentLoginPromise = null
@@ -12,30 +59,17 @@ export function createLoginEnsurer(deps) {
     if (token) return Promise.resolve(token)
     if (currentLoginPromise) return currentLoginPromise
 
-    currentLoginPromise = new Promise((resolve, reject) => {
-      deps.login({
-        provider: 'weixin',
-        success: async ({ code }) => {
-          if (!code) {
-            currentLoginPromise = null
-            reject(new Error('微信登录未返回 code，请稍后重试'))
-            return
-          }
-          try {
-            const res = await deps.wxLoginApi(code)
-            deps.setToken(res.accessToken)
-            resolve(res.accessToken)
-          } catch (e) {
-            reject(e)
-          } finally {
-            currentLoginPromise = null
-          }
-        },
-        fail: (err) => {
-          currentLoginPromise = null
-          reject(err)
-        },
-      })
+    currentLoginPromise = (async () => {
+      const hasWechatProvider = await checkWechatProvider(deps)
+      if (!hasWechatProvider) {
+        throw new Error(WECHAT_LOGIN_UNSUPPORTED_MESSAGE)
+      }
+      const code = await requestWechatLoginCode(deps)
+      const res = await deps.wxLoginApi(code)
+      deps.setToken(res.accessToken)
+      return res.accessToken
+    })().finally(() => {
+      currentLoginPromise = null
     })
     return currentLoginPromise
   }
@@ -47,6 +81,7 @@ export function createLoginEnsurer(deps) {
  */
 const defaultEnsureLogin = createLoginEnsurer({
   getToken,
+  getProvider: (options) => uni.getProvider(options),
   login: (options) => uni.login(options),
   setToken,
   wxLoginApi,

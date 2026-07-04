@@ -63,5 +63,46 @@ const emptyCodeLogin = createLoginEnsurer({
 
 await assert.rejects(emptyCodeLogin(), /微信登录未返回 code/)
 
+let unsupportedLoginCalled = false
+const unsupportedWechatLogin = createLoginEnsurer({
+  getToken: () => '',
+  getProvider: ({ service, success }) => {
+    assert.equal(service, 'oauth')
+    success({ provider: [] })
+  },
+  login: () => {
+    unsupportedLoginCalled = true
+    throw new Error('uni.login should not be called when weixin provider is unavailable')
+  },
+  setToken: () => {
+    throw new Error('setToken should not be called')
+  },
+  wxLoginApi: async () => {
+    throw new Error('wxLoginApi should not be called')
+  },
+})
+
+await assert.rejects(unsupportedWechatLogin(), /当前环境不支持微信登录/)
+assert.equal(unsupportedLoginCalled, false)
+
+let providerFailLoginCalled = false
+const h5ProviderFailLogin = createLoginEnsurer({
+  getToken: () => '',
+  getProvider: ({ fail }) => fail(new Error('getProvider unsupported')),
+  login: () => {
+    providerFailLoginCalled = true
+    throw new Error('uni.login should not be called after getProvider reports unsupported')
+  },
+  setToken: () => {
+    throw new Error('setToken should not be called')
+  },
+  wxLoginApi: async () => {
+    throw new Error('wxLoginApi should not be called')
+  },
+})
+
+await assert.rejects(h5ProviderFailLogin(), /当前环境不支持微信登录/)
+assert.equal(providerFailLoginCalled, false)
+
 console.log('auth tests passed')
 await rm(dir, { force: true, recursive: true })
