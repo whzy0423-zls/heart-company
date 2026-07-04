@@ -121,7 +121,6 @@ func (s *Server) appReportList(w http.ResponseWriter, r *http.Request) {
 				EndDate:   weekEnd.Format("2006-01-02"),
 			})
 		}
-		weekID++
 	}
 
 	// 倒序返回（最新的在前）

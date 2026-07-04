@@ -92,7 +92,16 @@ async function load() {
 async function save() {
   saving.value = true;
   try {
-    const saved = await updateModelConfigApi(form.value);
+    const payload: ModelConfigPayload = {
+      ...form.value,
+      analysis: {
+        apiBase: '',
+        apiKey: '',
+        groupId: '',
+        model: form.value.analysis.model,
+      },
+    };
+    const saved = await updateModelConfigApi(payload);
     // 保存后清空密钥输入，刷新「已配置」状态
     form.value.chat.apiKey = '';
     form.value.video.apiKey = '';

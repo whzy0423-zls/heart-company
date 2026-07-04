@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS users (
   create_time   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INT NOT NULL DEFAULT 1;
+
 CREATE TABLE IF NOT EXISTS roles (
   id          BIGSERIAL PRIMARY KEY,
   code        TEXT NOT NULL UNIQUE,
@@ -752,3 +754,39 @@ CREATE TABLE IF NOT EXISTS push_notifications (
 );
 
 CREATE INDEX IF NOT EXISTS idx_push_notifications_time ON push_notifications(create_time DESC);
+
+
+-- ----- 后台高风险操作审计：记录关键管理动作，便于追溯 -----
+CREATE TABLE IF NOT EXISTS admin_operation_logs (
+  id            BIGSERIAL PRIMARY KEY,
+  operator_id   BIGINT,
+  operator_name TEXT NOT NULL DEFAULT '',
+  action        TEXT NOT NULL DEFAULT '',
+  target_type   TEXT NOT NULL DEFAULT '',
+  target_id     TEXT NOT NULL DEFAULT '',
+  ip            TEXT NOT NULL DEFAULT '',
+  user_agent    TEXT NOT NULL DEFAULT '',
+  before_data   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  after_data    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  summary       TEXT NOT NULL DEFAULT '',
+  create_time   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_operation_logs_time
+  ON admin_operation_logs(create_time DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_operation_logs_target
+  ON admin_operation_logs(target_type, target_id, create_time DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_operation_logs_operator
+  ON admin_operation_logs(operator_id, create_time DESC);
+
+
+-- ----- 分布式固定窗口限流：跨实例共享登录/短信/公开写入限流状态 -----
+CREATE TABLE IF NOT EXISTS request_rate_limits (
+  scope      TEXT NOT NULL,
+  key        TEXT NOT NULL,
+  count      INT  NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ NOT NULL,
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (scope, key)
+);
+CREATE INDEX IF NOT EXISTS idx_request_rate_limits_expires ON request_rate_limits(expires_at);

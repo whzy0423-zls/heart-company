@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import type { PushNotification } from '#/api/core/push';
+import type { SelectValue } from 'ant-design-vue/es/select';
 
-import { onMounted, reactive, ref } from 'vue';
+import type {
+  PushAudienceCountResult,
+  PushNotification,
+} from '#/api/core/push';
+
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import { Page } from '@vben/common-ui';
 
@@ -19,13 +24,21 @@ import {
   Textarea,
 } from 'ant-design-vue';
 
-import { getPushListApi, sendPushApi } from '#/api/core/push';
+import {
+  getPushAudienceCountApi,
+  getPushListApi,
+  sendPushApi,
+} from '#/api/core/push';
 
 import {
+  audienceCountDetailLabel,
+  buildPushAudienceCountParams,
   formatPushRecordError,
   formatPushSendError,
   isValidPushMemberLevel,
   pushMemberLevelOptions,
+  pushTemplates,
+  refreshPushRecordsAfterSendAttempt,
 } from './push-target';
 
 const loading = ref(false);
@@ -34,6 +47,9 @@ const total = ref(0);
 const query = reactive({ page: 1, pageSize: 20 });
 const sendModalOpen = ref(false);
 const sending = ref(false);
+const audienceLoading = ref(false);
+const audienceCount = ref<PushAudienceCountResult>();
+const templateKey = ref<string>();
 const form = reactive({
   content: '',
   deepLink: '',
@@ -46,6 +62,19 @@ const targetTypeOptions = [
   { label: '全部用户', value: 'all' },
   { label: '按会员等级', value: 'level' },
 ];
+
+const templateOptions = pushTemplates.map((item) => ({
+  label: item.title,
+  value: item.key,
+}));
+
+const selectedTemplate = computed(() =>
+  pushTemplates.find((item) => item.key === templateKey.value),
+);
+
+const audienceLabel = computed(() =>
+  audienceCountDetailLabel(audienceCount.value),
+);
 
 const deepLinkOptions = [
   { label: '无跳转', value: '' },
@@ -93,12 +122,51 @@ function onPageChange(page: number, pageSize: number) {
   load();
 }
 
+function clearAudienceCount() {
+  audienceCount.value = undefined;
+}
+
+function applyTemplate(key?: SelectValue) {
+  const normalizedKey = typeof key === 'string' ? key : '';
+  const template = pushTemplates.find((item) => item.key === normalizedKey);
+  if (!template) return;
+  form.title = template.title;
+  form.content = template.content;
+  form.deepLink = template.deepLink || '';
+  form.targetType = template.targetType || 'all';
+  form.targetValue = template.targetValue || '';
+  clearAudienceCount();
+}
+
+async function estimateAudience() {
+  const params = buildPushAudienceCountParams(form);
+  if (params.targetType === 'level' && !params.targetValue) {
+    message.warning('请选择有效会员等级后再预估');
+    return;
+  }
+  audienceLoading.value = true;
+  try {
+    const res = await getPushAudienceCountApi(params);
+    audienceCount.value = {
+      deviceCount: Number(res?.deviceCount ?? 0),
+      userCount: Number(res?.userCount ?? 0),
+    };
+  } catch {
+    audienceCount.value = undefined;
+    message.error('受众预估失败，请稍后重试');
+  } finally {
+    audienceLoading.value = false;
+  }
+}
+
 function openSendModal() {
   form.title = '';
   form.content = '';
   form.targetType = 'all';
   form.targetValue = '';
   form.deepLink = '';
+  templateKey.value = undefined;
+  clearAudienceCount();
   sendModalOpen.value = true;
 }
 
@@ -131,13 +199,21 @@ async function handleSend() {
     });
     message.success(`推送成功，已发送 ${res?.sent ?? 0} 条`);
     sendModalOpen.value = false;
-    load();
+    void refreshPushRecordsAfterSendAttempt(load, message.warning);
   } catch (error) {
     message.error(formatPushSendError(error));
+    void refreshPushRecordsAfterSendAttempt(load, message.warning);
   } finally {
     sending.value = false;
   }
 }
+
+watch(
+  () => [form.targetType, form.targetValue],
+  () => {
+    clearAudienceCount();
+  },
+);
 
 onMounted(load);
 </script>
@@ -198,6 +274,18 @@ onMounted(load);
       @ok="handleSend"
     >
       <Form layout="vertical" style="margin-top: 16px">
+        <Form.Item label="内置模板">
+          <Select
+            v-model:value="templateKey"
+            allow-clear
+            :options="templateOptions"
+            placeholder="选择后自动填充标题、正文和跳转"
+            @change="applyTemplate"
+          />
+          <div v-if="selectedTemplate" class="template-hint">
+            {{ selectedTemplate.content }}
+          </div>
+        </Form.Item>
         <Form.Item label="标题" required>
           <Input
             v-model:value="form.title"
@@ -227,6 +315,18 @@ onMounted(load);
             />
           </Space>
         </Form.Item>
+        <Form.Item label="受众预估">
+          <Space class="audience-row">
+            <Tag color="processing">{{ audienceLabel }}</Tag>
+            <Button
+              size="small"
+              :loading="audienceLoading"
+              @click="estimateAudience"
+            >
+              {{ audienceCount === undefined ? '预估受众' : '刷新预估' }}
+            </Button>
+          </Space>
+        </Form.Item>
         <Form.Item label="点击跳转">
           <Select
             v-model:value="form.deepLink"
@@ -251,6 +351,19 @@ onMounted(load);
 .target-controls :deep(.ant-select),
 .deep-link-select {
   width: min(220px, 100%);
+}
+
+.audience-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.template-hint {
+  margin-top: 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .push-error-text {

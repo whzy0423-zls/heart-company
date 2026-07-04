@@ -5,7 +5,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
 import { AuthenticationLoginExpiredModal } from '@vben/common-ui';
-import { useWatermark } from '@vben/hooks';
+import { useAppConfig, useWatermark } from '@vben/hooks';
 import {
   BasicLayout,
   LockScreen,
@@ -24,9 +24,11 @@ import { useAuthStore } from '#/store';
 import LoginForm from '#/views/_core/authentication/login.vue';
 
 import {
+  buildSignupEventsURL,
   extractSignupStreamEvents,
   shouldLogoutForSignupEventStatus,
   shouldPollSignupNoticeFallback,
+  signupNoticeIdentity,
 } from './signup-events';
 import { toSignupNotification } from './signup-notice';
 
@@ -39,12 +41,14 @@ let signupEventConnecting = false;
 let signupEventUnavailable = false;
 let signupEventRetryTimer: number | undefined;
 let signupNoticeBootstrapped = false;
+let currentSignupNoticeIdentity = '';
 const seenSignupNoticeIds = new Set<string>();
 
 const router = useRouter();
 const userStore = useUserStore();
 const authStore = useAuthStore();
 const accessStore = useAccessStore();
+const { apiURL } = useAppConfig(import.meta.env, import.meta.env.PROD);
 const { destroyWatermark, updateWatermark } = useWatermark();
 const { isDark } = usePreferences();
 const showDot = computed(() =>
@@ -263,6 +267,26 @@ function disconnectSignupEvents() {
   signupEventConnecting = false;
 }
 
+function resetSignupNoticeSessionState() {
+  seenSignupNoticeIds.clear();
+  signupNoticeBootstrapped = false;
+  notifications.value = [];
+  signupEventUnavailable = false;
+  if (signupEventRetryTimer) {
+    window.clearTimeout(signupEventRetryTimer);
+    signupEventRetryTimer = undefined;
+  }
+  disconnectSignupEvents();
+}
+
+function currentSignupIdentity() {
+  return signupNoticeIdentity({
+    accessToken: accessStore.accessToken,
+    userId: userStore.userInfo?.id || userStore.userInfo?.userId,
+    username: userStore.userInfo?.username,
+  });
+}
+
 function scheduleSignupEventRetry() {
   signupEventUnavailable = true;
   if (signupEventRetryTimer) {
@@ -281,7 +305,7 @@ async function readSignupEventStream(
 ) {
   let shouldRetry = false;
   try {
-    const response = await fetch('/api/signups/events', {
+    const response = await fetch(buildSignupEventsURL(apiURL), {
       headers: {
         Accept: 'text/event-stream',
         Authorization: `Bearer ${token}`,
@@ -348,6 +372,11 @@ function connectSignupEvents() {
 }
 
 function refreshSignupNotices() {
+  const nextIdentity = currentSignupIdentity();
+  if (nextIdentity !== currentSignupNoticeIdentity) {
+    currentSignupNoticeIdentity = nextIdentity;
+    resetSignupNoticeSessionState();
+  }
   if (!canReadSignupLeads.value) {
     disconnectSignupEvents();
     return;

@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"math/big"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/realip"
 )
 
 const (
@@ -40,7 +40,7 @@ func (s *Server) appSendSMS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
-	ip := clientIP(r)
+	ip := s.clientIP(r)
 
 	if !s.smsPhoneLimiter.Allow(phone, now) {
 		httpx.Fail(w, http.StatusTooManyRequests, "发送过于频繁，请稍后再试")
@@ -99,7 +99,7 @@ func (s *Server) appVerifySMS(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "invalid phone or code")
 		return
 	}
-	if !s.allowSMSVerifyAttempt(phone, clientIP(r), time.Now()) {
+	if !s.allowSMSVerifyAttempt(phone, s.clientIP(r), time.Now()) {
 		httpx.Fail(w, http.StatusTooManyRequests, "验证码验证过于频繁，请稍后再试")
 		return
 	}
@@ -280,28 +280,11 @@ func isMainlandPhone(phone string) bool {
 	return true
 }
 
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
+func (s *Server) clientIP(r *http.Request) string {
+	if s == nil {
+		return realip.RemoteAddr(r)
 	}
-	if isTrustedProxyIP(host) {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			if i := strings.IndexByte(xff, ','); i > 0 {
-				return strings.TrimSpace(xff[:i])
-			}
-			return strings.TrimSpace(xff)
-		}
-		if xri := r.Header.Get("X-Real-Ip"); xri != "" {
-			return strings.TrimSpace(xri)
-		}
-	}
-	return host
-}
-
-func isTrustedProxyIP(value string) bool {
-	ip := net.ParseIP(strings.TrimSpace(value))
-	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast())
+	return realip.FromRequest(r, s.trustedProxyCIDRs)
 }
 
 func (s *Server) allowSMSVerifyAttempt(phone, ip string, now time.Time) bool {

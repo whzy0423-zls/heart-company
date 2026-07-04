@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"nine-xing/nx-backend/apps/server/internal/auditlog"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/push"
 )
@@ -49,25 +50,17 @@ func (s *Server) adminPushSend(w http.ResponseWriter, r *http.Request) {
 	body.TargetType = strings.TrimSpace(body.TargetType)
 	body.TargetValue = strings.TrimSpace(body.TargetValue)
 	body.DeepLink = strings.TrimSpace(body.DeepLink)
-	if body.TargetType == "" {
-		body.TargetType = "all"
-	}
 	if body.Title == "" || body.Content == "" {
 		httpx.Fail(w, http.StatusBadRequest, "标题和内容不能为空")
 		return
 	}
-	if body.TargetType != "all" && body.TargetType != "level" {
-		httpx.Fail(w, http.StatusBadRequest, "不支持的推送目标")
+	targetType, targetValue, msg := normalizePushTarget(body.TargetType, body.TargetValue)
+	if msg != "" {
+		httpx.Fail(w, http.StatusBadRequest, msg)
 		return
 	}
-	if body.TargetType == "level" && body.TargetValue == "" {
-		httpx.Fail(w, http.StatusBadRequest, "会员等级不能为空")
-		return
-	}
-	if body.TargetType == "level" && !validPushMemberLevel(body.TargetValue) {
-		httpx.Fail(w, http.StatusBadRequest, "不支持的会员等级")
-		return
-	}
+	body.TargetType = targetType
+	body.TargetValue = targetValue
 
 	user := userFromRequest(r)
 	operator := strings.TrimSpace(user.RealName)
@@ -104,21 +97,80 @@ func (s *Server) adminPushSend(w http.ResponseWriter, r *http.Request) {
 
 	if pushErr != nil {
 		_ = s.pushStore.UpdatePushStatus(r.Context(), recordID, "failed", sent, pushErr.Error())
+		s.recordAdminAudit(r, auditlog.Entry{
+			Action:     "push.send",
+			TargetType: "push_notification",
+			TargetID:   strconv.FormatInt(recordID, 10),
+			After:      pushAuditSnapshot(body.Title, body.Content, body.TargetType, body.TargetValue, body.DeepLink, sent, "failed", pushErr.Error()),
+			Summary:    "发送 App 推送失败",
+		})
 		httpx.Fail(w, http.StatusInternalServerError, "推送发送失败: "+pushErr.Error())
 		return
 	}
 
 	if sent == 0 {
 		_ = s.pushStore.UpdatePushStatus(r.Context(), recordID, "success", 0, "无推送目标")
+		s.recordAdminAudit(r, auditlog.Entry{
+			Action:     "push.send",
+			TargetType: "push_notification",
+			TargetID:   strconv.FormatInt(recordID, 10),
+			After:      pushAuditSnapshot(body.Title, body.Content, body.TargetType, body.TargetValue, body.DeepLink, 0, "success", "无推送目标"),
+			Summary:    "发送 App 推送：无推送目标",
+		})
 		httpx.OK(w, map[string]interface{}{"sent": 0, "message": "无推送目标"})
 		return
 	}
 
 	_ = s.pushStore.UpdatePushStatus(r.Context(), recordID, "success", sent, "")
+	s.recordAdminAudit(r, auditlog.Entry{
+		Action:     "push.send",
+		TargetType: "push_notification",
+		TargetID:   strconv.FormatInt(recordID, 10),
+		After:      pushAuditSnapshot(body.Title, body.Content, body.TargetType, body.TargetValue, body.DeepLink, sent, "success", ""),
+		Summary:    "发送 App 推送成功",
+	})
 	httpx.OK(w, map[string]interface{}{
 		"sent":  sent,
 		"msgId": strings.Join(msgIDs, ","),
 	})
+}
+
+func (s *Server) adminPushAudienceCount(w http.ResponseWriter, r *http.Request) {
+	targetType, targetValue, msg := normalizePushTarget(r.URL.Query().Get("targetType"), r.URL.Query().Get("targetValue"))
+	if msg != "" {
+		httpx.Fail(w, http.StatusBadRequest, msg)
+		return
+	}
+	deviceCount, userCount, err := s.pushStore.CountAudience(r.Context(), targetType, targetValue)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	httpx.OK(w, map[string]int64{
+		"deviceCount": deviceCount,
+		"userCount":   userCount,
+	})
+}
+
+func normalizePushTarget(targetType, targetValue string) (string, string, string) {
+	targetType = strings.TrimSpace(targetType)
+	targetValue = strings.TrimSpace(targetValue)
+	if targetType == "" {
+		targetType = "all"
+	}
+	if targetType != "all" && targetType != "level" {
+		return targetType, targetValue, "不支持的推送目标"
+	}
+	if targetType == "level" && targetValue == "" {
+		return targetType, targetValue, "会员等级不能为空"
+	}
+	if targetType == "level" && !validPushMemberLevel(targetValue) {
+		return targetType, targetValue, "不支持的会员等级"
+	}
+	if targetType == "all" {
+		targetValue = ""
+	}
+	return targetType, targetValue, ""
 }
 
 func validPushMemberLevel(value string) bool {
@@ -127,5 +179,18 @@ func validPushMemberLevel(value string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func pushAuditSnapshot(title, content, targetType, targetValue, deepLink string, sent int, status string, errMsg string) map[string]any {
+	return map[string]any{
+		"title":       title,
+		"content":     content,
+		"targetType":  targetType,
+		"targetValue": targetValue,
+		"deepLink":    deepLink,
+		"sent":        sent,
+		"status":      status,
+		"error":       errMsg,
 	}
 }

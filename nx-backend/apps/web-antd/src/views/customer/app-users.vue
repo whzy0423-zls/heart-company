@@ -2,6 +2,7 @@
 import type { AppCustomer } from '#/api';
 
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
 
 import { useAccessStore } from '@vben/stores';
 
@@ -62,6 +63,7 @@ const memberLevelLabels: Record<string, string> = {
   svip: '超级会员',
 };
 
+const router = useRouter();
 const loading = ref(false);
 const accessStore = useAccessStore();
 const detailLoading = ref(false);
@@ -91,7 +93,7 @@ const columns = [
   { dataIndex: 'registerSource', title: '注册来源', width: 130 },
   { dataIndex: 'lastLoginAt', title: '最后登录', width: 180 },
   { dataIndex: 'createTime', title: '注册时间', width: 180 },
-  { fixed: 'right' as const, key: 'action', title: '操作', width: 160 },
+  { fixed: 'right' as const, key: 'action', title: '操作', width: 220 },
 ];
 
 function statusMeta(status?: string): StatusMeta {
@@ -133,10 +135,14 @@ async function load() {
 }
 
 async function openDetail(record: AppCustomer) {
+  detail.value = undefined;
   detailOpen.value = true;
   detailLoading.value = true;
   try {
     detail.value = await getAppCustomerDetailApi(record.id);
+  } catch {
+    detailOpen.value = false;
+    message.error('客户详情加载失败，请稍后重试');
   } finally {
     detailLoading.value = false;
   }
@@ -150,6 +156,14 @@ function mergeCustomer(updated: AppCustomer) {
   if (detail.value?.id === updated.id) {
     detail.value = updated;
   }
+}
+
+
+function goUser360(record: AppCustomer) {
+  router.push({
+    path: '/customer/user-insights',
+    query: record.phone ? { keyword: record.phone } : undefined,
+  });
 }
 
 function openEdit(record: AppCustomer) {
@@ -276,6 +290,13 @@ onMounted(() => {
             </template>
             <template v-if="column.key === 'action'">
               <Space>
+                <Button
+                  size="small"
+                  type="link"
+                  @click="goUser360(customerRecord(record))"
+                >
+                  360
+                </Button>
                 <Button
                   size="small"
                   type="link"

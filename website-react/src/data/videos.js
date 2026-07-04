@@ -1,3 +1,5 @@
+import { assetUrl } from '../utils/assets.js'
+
 const VIDEO_ITEMS = [
   ['laohan-01', '老韩短讲 01', '基础介绍', '00:28'],
   ['laohan-02', '老韩短讲 02', '九型观察', '00:50'],
@@ -26,8 +28,8 @@ export const VIDEOS = VIDEO_ITEMS.map(([id, title, tag, duration]) => ({
   tag,
   duration,
   description: '老韩老师围绕九型人格、性格能量与关系成长的短视频片段。',
-  poster: `/assets/videos/posters/${id}.jpg`,
-  src: `/assets/videos/${id}.mp4`,
+  poster: assetUrl(`/assets/videos/posters/${id}.jpg`),
+  src: assetUrl(`/assets/videos/${id}.mp4`),
 }))
 
 const FEATURED_IDS = new Set(['laohan-01', 'laohan-13', 'laohan-20'])

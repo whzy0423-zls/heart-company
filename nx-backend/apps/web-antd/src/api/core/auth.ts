@@ -12,10 +12,26 @@ export namespace AuthApi {
     accessToken: string;
   }
 
-  export interface RefreshTokenResult {
+  export interface RefreshTokenEnvelope {
+    code: number;
     data: string;
-    status: number;
+    message?: string;
   }
+
+  export interface RefreshTokenHTTPResponse {
+    data: RefreshTokenEnvelope | string;
+  }
+}
+
+export function extractRefreshToken(response: unknown) {
+  const candidate =
+    typeof response === 'string'
+      ? response
+      : (response as any)?.data?.data || (response as any)?.data;
+  if (typeof candidate !== 'string' || candidate.trim() === '') {
+    throw new Error('Invalid refresh token response');
+  }
+  return candidate;
 }
 
 /**
@@ -29,16 +45,21 @@ export async function loginApi(data: AuthApi.LoginParams) {
  * 刷新accessToken
  */
 export async function refreshTokenApi() {
-  return baseRequestClient.post<AuthApi.RefreshTokenResult>('/auth/refresh', {
-    withCredentials: true,
-  });
+  const response = await baseRequestClient.post<AuthApi.RefreshTokenHTTPResponse>(
+    '/auth/refresh',
+    undefined,
+    {
+      withCredentials: true,
+    },
+  );
+  return extractRefreshToken(response);
 }
 
 /**
  * 退出登录
  */
 export async function logoutApi() {
-  return baseRequestClient.post('/auth/logout', {
+  return baseRequestClient.post('/auth/logout', undefined, {
     withCredentials: true,
   });
 }

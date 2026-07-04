@@ -19,3 +19,9 @@ website-react/node_modules
 website/
 .claude/
 **/*.log
+website-react/public/assets/uploads/
+website-react/dist/assets/uploads/
+website-react/public/assets/videos/
+website-react/public/assets/audio/
+website-react/dist/assets/videos/
+website-react/dist/assets/audio/

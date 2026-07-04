@@ -5,13 +5,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"nine-xing/nx-backend/apps/server/internal/realip"
 )
 
 var mainlandMobileRE = regexp.MustCompile(`^1[3-9]\d{9}$`)
@@ -652,19 +653,5 @@ func truncate(value string, max int) string {
 }
 
 func clientIP(r *http.Request) string {
-	for _, header := range []string{"X-Forwarded-For", "X-Real-IP"} {
-		value := strings.TrimSpace(r.Header.Get(header))
-		if value == "" {
-			continue
-		}
-		parts := strings.Split(value, ",")
-		if ip := strings.TrimSpace(parts[0]); ip != "" {
-			return ip
-		}
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
-		return host
-	}
-	return r.RemoteAddr
+	return realip.RemoteAddr(r)
 }

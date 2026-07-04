@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { assetUrl } from '../utils/assets.js'
 
-const MUSIC_SRC = '/assets/audio/b8083359_audio.m4a'
+const MUSIC_SRC = assetUrl('/assets/audio/b8083359_audio.m4a')
 const DEFAULT_VOLUME = 50
 const MAX_VOLUME = 0.9
 

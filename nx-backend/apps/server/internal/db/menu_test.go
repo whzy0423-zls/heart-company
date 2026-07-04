@@ -105,3 +105,22 @@ func TestDefaultMenusIncludeCustomerUserInsights(t *testing.T) {
 		t.Fatal("expected default menu CustomerUserInsights")
 	}
 }
+
+func TestDefaultMenusIncludeAppAnalyticsDashboard(t *testing.T) {
+	var found bool
+	for _, menu := range defaultMenus {
+		if menu.Name != "DashboardAppAnalytics" {
+			continue
+		}
+		found = true
+		if menu.PID != 0 || menu.Path != "/dashboard/app" || menu.Component != "/dashboard/app" {
+			t.Fatalf("unexpected App analytics dashboard route: %+v", menu)
+		}
+		if menu.AuthCode != "Analytics:App:Overview" || menu.Title != "App 数据看板" {
+			t.Fatalf("unexpected App analytics dashboard metadata: %+v", menu)
+		}
+	}
+	if !found {
+		t.Fatal("expected default menu DashboardAppAnalytics")
+	}
+}

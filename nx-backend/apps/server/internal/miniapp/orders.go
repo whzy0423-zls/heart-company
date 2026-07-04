@@ -57,6 +57,106 @@ func (s *Store) CreateOrder(ctx context.Context, userID int64, outTradeNo, produ
 	}, nil
 }
 
+// CreateOrReusePendingOrder 幂等创建待支付订单。
+// 同一用户/产品/关联对象已有金额和标题一致的 pending 订单时复用原 out_trade_no，避免重复点击产生多笔待支付订单。
+// 如果价格或标题已变化，关闭旧 pending 单并创建新单，避免预支付金额和订单快照不一致导致回调验单失败。
+func (s *Store) CreateOrReusePendingOrder(ctx context.Context, userID int64, outTradeNo, product string, refID int64, title string, amountCents int) (Order, error) {
+	c, cancel := s.ctx(ctx)
+	defer cancel()
+
+	tx, err := s.db.BeginTx(c, nil)
+	if err != nil {
+		return Order{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	lockKey := fmt.Sprintf("order:%d:%s:%d", userID, product, refID)
+	if _, err := tx.ExecContext(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
+		return Order{}, err
+	}
+
+	order, err := queryPendingOrder(c, tx, userID, product, refID)
+	if err == nil {
+		if order.Amount == amountCents && order.Title == title {
+			if err := tx.Commit(); err != nil {
+				return Order{}, err
+			}
+			return order, nil
+		}
+		if err := closePendingOrder(c, tx, order.ID); err != nil {
+			return Order{}, err
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return Order{}, err
+	}
+
+	var id int64
+	var ct time.Time
+	err = tx.QueryRowContext(c,
+		`INSERT INTO orders (out_trade_no, wx_user_id, product, ref_id, title, amount, status)
+		 VALUES ($1,$2,$3,$4,$5,$6,'pending')
+		 RETURNING id, create_time`,
+		outTradeNo, userID, product, refID, title, amountCents,
+	).Scan(&id, &ct)
+	if err != nil {
+		return Order{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Order{}, err
+	}
+	return Order{
+		ID:         strconv.FormatInt(id, 10),
+		OutTradeNo: outTradeNo,
+		Product:    product,
+		RefID:      strconv.FormatInt(refID, 10),
+		Title:      title,
+		Amount:     amountCents,
+		Status:     "pending",
+		CreateTime: fmtTime(ct),
+	}, nil
+}
+
+type pendingOrderQuerier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type pendingOrderExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func queryPendingOrder(ctx context.Context, q pendingOrderQuerier, userID int64, product string, refID int64) (Order, error) {
+	var order Order
+	var id int64
+	var createTime time.Time
+	err := q.QueryRowContext(ctx,
+		`SELECT id, out_trade_no, product, ref_id::text, title, amount, status, transaction_id, create_time
+		   FROM orders
+		  WHERE wx_user_id=$1 AND product=$2 AND ref_id=$3 AND status='pending'
+		  ORDER BY create_time DESC, id DESC
+		  LIMIT 1
+		  FOR UPDATE`,
+		userID, product, refID,
+	).Scan(&id, &order.OutTradeNo, &order.Product, &order.RefID, &order.Title, &order.Amount, &order.Status, &order.TransactionID, &createTime)
+	if err != nil {
+		return Order{}, err
+	}
+	order.ID = strconv.FormatInt(id, 10)
+	order.CreateTime = fmtTime(createTime)
+	return order, nil
+}
+
+func closePendingOrder(ctx context.Context, q pendingOrderExecer, orderID string) error {
+	id, err := strconv.ParseInt(orderID, 10, 64)
+	if err != nil {
+		return err
+	}
+	_, err = q.ExecContext(ctx,
+		`UPDATE orders SET status='closed', update_time=now() WHERE id=$1 AND status='pending'`,
+		id,
+	)
+	return err
+}
+
 // OrderByOutTradeNo 查订单（回调用）。
 func (s *Store) OrderByOutTradeNo(ctx context.Context, outTradeNo string) (orderID, wxUserID, refID int64, product, status string, err error) {
 	c, cancel := s.ctx(ctx)
