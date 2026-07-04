@@ -53,7 +53,7 @@ export function reportGameResultApi(data) {
 
 // 深度报告：查询解锁状态
 export function reportStatusApi(testRecordId) {
-  return request({ url: `/miniapp/report/status?testRecordId=${testRecordId}`, method: 'GET', auth: true })
+  return request({ url: '/miniapp/report/status', method: 'GET', query: { testRecordId }, auth: true })
 }
 
 // 深度报告：下单（返回小程序拉起支付参数）
@@ -63,5 +63,5 @@ export function createReportOrderApi(testRecordId) {
 
 // 深度报告：解锁后获取正文（LLM 生成，耗时较长）
 export function reportContentApi(testRecordId) {
-  return request({ url: `/miniapp/report/content?testRecordId=${testRecordId}`, method: 'GET', auth: true, timeout: 30000 })
+  return request({ url: '/miniapp/report/content', method: 'GET', query: { testRecordId }, auth: true, timeout: 30000 })
 }

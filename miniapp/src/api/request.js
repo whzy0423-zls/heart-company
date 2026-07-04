@@ -11,27 +11,72 @@ export function getToken() {
 }
 
 export function setToken(token) {
-  uni.setStorageSync(TOKEN_KEY, token || '')
+  try {
+    uni.setStorageSync(TOKEN_KEY, token || '')
+  } catch {
+    // 存储异常不阻塞主流程，后续鉴权请求会重新登录。
+  }
 }
 
 export function clearToken() {
-  uni.removeStorageSync(TOKEN_KEY)
+  try {
+    uni.removeStorageSync(TOKEN_KEY)
+  } catch {
+    // ignore
+  }
+}
+
+function createRequestError(message, extra = {}) {
+  const error = new Error(message || '请求失败，请稍后重试')
+  Object.assign(error, extra)
+  return error
+}
+
+function appendQuery(url, query) {
+  if (!query || typeof query !== 'object') return url
+  const pairs = Object.entries(query)
+    .filter(([, value]) => value !== undefined && value !== null)
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+  if (!pairs.length) return url
+  return `${url}${url.includes('?') ? '&' : '?'}${pairs.join('&')}`
+}
+
+function joinUrl(base, path) {
+  const cleanBase = String(base || '').replace(/\/+$/, '')
+  const cleanPath = String(path || '').replace(/^\/+/, '')
+  return `${cleanBase}/${cleanPath}`
+}
+
+function normalizeFailError(err) {
+  const raw = err && err.errMsg ? String(err.errMsg) : ''
+  const timeout = raw.toLowerCase().includes('timeout')
+  return createRequestError(timeout ? '请求超时，请稍后重试' : '网络连接异常，请稍后重试', {
+    cause: err,
+    retryable: true,
+    statusCode: 0,
+    timeout,
+  })
 }
 
 /**
  * 统一请求：自动带 token，解包后端 { code, data } 结构。
- * options: { url, method, data, auth, timeout }
+ * options: { url, method, data, query, auth, timeout }
  */
 export function request(options) {
-  const { url, method = 'GET', data, auth = false, timeout = 15000 } = options
+  const { url, method = 'GET', data, query, auth = false, timeout = 15000 } = options
   return new Promise((resolve, reject) => {
     const header = { 'Content-Type': 'application/json' }
     if (auth) {
       const token = getToken()
-      if (token) header.Authorization = `Bearer ${token}`
+      if (!token) {
+        reject(createRequestError('请先登录后再继续', { statusCode: 401, authRequired: true }))
+        return
+      }
+      header.Authorization = `Bearer ${token}`
     }
+    const requestUrl = joinUrl(API_BASE, appendQuery(url, query))
     uni.request({
-      url: `${API_BASE}${url}`,
+      url: requestUrl,
       method,
       data,
       header,
@@ -44,12 +89,16 @@ export function request(options) {
           if (res.statusCode === 401 || res.statusCode === 403) {
             clearToken()
           }
-          const error = new Error(body.error || body.message || `请求失败(${res.statusCode})`)
-          error.statusCode = res.statusCode
+          const error = createRequestError(body.error || body.message || `请求失败(${res.statusCode})`, {
+            code: body.code,
+            statusCode: res.statusCode,
+            authExpired: res.statusCode === 401 || res.statusCode === 403,
+            retryable: res.statusCode >= 500 || res.statusCode === 429,
+          })
           reject(error)
         }
       },
-      fail: (err) => reject(err),
+      fail: (err) => reject(normalizeFailError(err)),
     })
   })
 }

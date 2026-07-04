@@ -56,7 +56,7 @@ function goTest() {
       <text class="sec-title">九种性格图鉴</text>
       <view class="types">
         <view v-for="t in types" :key="t.id" class="type" :class="'type--' + t.color">
-          <image class="type__avatar" :src="`/static/avatars/${t.id}.png`" mode="aspectFill" />
+          <image class="type__avatar" :src="`/static/avatars/${t.id}.png`" mode="aspectFill" lazy-load />
           <text class="type__num">{{ t.id }}</text>
           <text class="type__name">{{ t.name }}</text>
           <text class="type__kw">{{ t.keywords }}</text>

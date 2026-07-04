@@ -39,7 +39,7 @@ function goRelation() {
       </view>
       <view class="hero__visual">
         <view class="hero__halo"></view>
-        <image class="hero__wheel" src="/static/wheel.png" mode="aspectFit" />
+        <image class="hero__wheel" src="/static/wheel.png" mode="aspectFit" lazy-load />
       </view>
     </view>
 

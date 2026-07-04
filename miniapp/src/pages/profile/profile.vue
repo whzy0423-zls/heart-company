@@ -14,6 +14,7 @@ const user = ref(null)
 const records = ref([])
 const bookings = ref([])
 const logging = ref(false)
+const profileLoading = ref(false)
 const profileSaving = ref(false)
 const nicknameDraft = ref('')
 const avatarDraft = ref('')
@@ -21,6 +22,7 @@ const visibleRecords = computed(() => previewItems(records.value))
 const visibleBookings = computed(() => previewItems(bookings.value))
 const hiddenRecordCount = computed(() => hiddenCount(records.value))
 const hiddenBookingCount = computed(() => hiddenCount(bookings.value))
+let loadTicket = 0
 
 onShow(() => {
   logged.value = !!getToken()
@@ -43,12 +45,17 @@ async function login() {
 }
 
 async function loadAll() {
+  const ticket = ++loadTicket
+  profileLoading.value = true
   try {
     user.value = await getUserInfoApi()
     syncDraftFromUser()
   } catch (e) {
-    resetLogin()
-    uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' })
+    if (ticket === loadTicket) {
+      resetLogin()
+      uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' })
+      profileLoading.value = false
+    }
     return
   }
 
@@ -57,8 +64,10 @@ async function loadAll() {
     listBookingsApi().catch(() => ({ items: [] })),
   ])
 
+  if (ticket !== loadTicket) return
   records.value = rec.items || []
   bookings.value = bk.items || []
+  profileLoading.value = false
 }
 
 function typeName(id) {
@@ -71,6 +80,7 @@ function syncDraftFromUser() {
 }
 
 function resetLogin() {
+  loadTicket += 1
   clearToken()
   clearChatMessages()
   logged.value = false
@@ -79,6 +89,7 @@ function resetLogin() {
   bookings.value = []
   nicknameDraft.value = ''
   avatarDraft.value = ''
+  profileLoading.value = false
 }
 
 function logout() {
@@ -153,7 +164,7 @@ async function saveProfile() {
     <!-- 已登录 -->
     <template v-else>
       <view class="card user">
-        <image v-if="user && user.avatar" class="user__avatar" :src="user.avatar" />
+        <image v-if="user && user.avatar" class="user__avatar" :src="user.avatar" lazy-load />
         <view v-else class="user__avatar user__avatar--ph">{{ (user && user.mainType) || '九' }}</view>
         <view class="user__info">
           <text class="user__name">{{ (user && user.nickname) || '九型用户' }}</text>
@@ -170,7 +181,7 @@ async function saveProfile() {
         </view>
         <view class="profile-form__row">
           <button class="avatar-picker" open-type="chooseAvatar" @chooseavatar="onChooseAvatar">
-            <image v-if="avatarDraft" class="avatar-picker__img" :src="avatarDraft" mode="aspectFill" />
+            <image v-if="avatarDraft" class="avatar-picker__img" :src="avatarDraft" mode="aspectFill" lazy-load />
             <text v-else class="avatar-picker__ph">头像</text>
           </button>
           <view class="nickname-field">
@@ -190,7 +201,8 @@ async function saveProfile() {
 
       <view class="card section-card">
         <text class="sec-title">我的测试历史</text>
-        <view v-if="records.length === 0" class="empty">还没有记录，去测一测吧</view>
+        <view v-if="profileLoading" class="empty">正在同步测试历史…</view>
+        <view v-else-if="records.length === 0" class="empty">还没有记录，去测一测吧</view>
         <view v-for="rec in visibleRecords" :key="rec.id" class="row">
           <text class="row__main">{{ typeName(rec.resultType) }}</text>
           <text class="row__time">{{ rec.createTime }}</text>
@@ -200,7 +212,8 @@ async function saveProfile() {
 
       <view class="card section-card">
         <text class="sec-title">我的预约</text>
-        <view v-if="bookings.length === 0" class="empty">暂无预约</view>
+        <view v-if="profileLoading" class="empty">正在同步预约记录…</view>
+        <view v-else-if="bookings.length === 0" class="empty">暂无预约</view>
         <view v-for="b in visibleBookings" :key="b.id" class="row">
           <text class="row__main">{{ b.intent || b.kind }}</text>
           <text class="row__time">{{ b.status }} · {{ b.createTime }}</text>
