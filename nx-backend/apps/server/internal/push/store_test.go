@@ -75,6 +75,28 @@ func TestForEachRegistrationIDBatchUsesKeysetPagination(t *testing.T) {
 	}
 }
 
+func TestCountAudienceUsesDistinctDevicesAndUsers(t *testing.T) {
+	execRecorder.reset()
+	database, err := sql.Open("push_store_test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	store := NewStore(database, NoopPusher{})
+	if _, _, err := store.CountAudience(context.Background(), "level", "vip"); err != nil {
+		t.Fatalf("count audience: %v", err)
+	}
+
+	query := execRecorder.query()
+	if !strings.Contains(query, "COUNT(DISTINCT dt.registration_id)") ||
+		!strings.Contains(query, "COUNT(DISTINCT u.id)") ||
+		!strings.Contains(query, "u.status = 'active'") ||
+		!strings.Contains(query, "u.member_level = $1") {
+		t.Fatalf("expected audience count query to count distinct active vip devices/users, query:\n%s", query)
+	}
+}
+
 var execRecorder = &recordingExec{}
 
 func init() {
@@ -131,6 +153,9 @@ func (recordingConn) ExecContext(_ context.Context, query string, _ []driver.Nam
 
 func (recordingConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
 	execRecorder.set(query)
+	if strings.Contains(query, "COUNT(DISTINCT dt.registration_id)") {
+		return &oneRow{columns: []string{"device_count", "user_count"}, values: []driver.Value{int64(0), int64(0)}}, nil
+	}
 	return emptyRows{}, nil
 }
 
@@ -146,4 +171,23 @@ func (emptyRows) Close() error {
 
 func (emptyRows) Next([]driver.Value) error {
 	return io.EOF
+}
+
+type oneRow struct {
+	columns []string
+	values  []driver.Value
+	done    bool
+}
+
+func (r oneRow) Columns() []string { return r.columns }
+
+func (r oneRow) Close() error { return nil }
+
+func (r *oneRow) Next(dest []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+	copy(dest, r.values)
+	r.done = true
+	return nil
 }

@@ -225,6 +225,37 @@ func (s *Store) ForEachRegistrationIDBatch(ctx context.Context, targetType, targ
 	}
 }
 
+// CountAudience counts active users and distinct device tokens matching a push target.
+func (s *Store) CountAudience(ctx context.Context, targetType, targetValue string) (int64, int64, error) {
+	var (
+		deviceCount int64
+		userCount   int64
+		err         error
+	)
+	switch targetType {
+	case "", "all":
+		err = s.db.QueryRowContext(ctx, `
+			SELECT COUNT(DISTINCT dt.registration_id), COUNT(DISTINCT u.id)
+			FROM app_device_tokens dt
+			JOIN app_users u ON u.id = dt.app_user_id
+			WHERE u.status = 'active'
+		`).Scan(&deviceCount, &userCount)
+	case "level":
+		err = s.db.QueryRowContext(ctx, `
+			SELECT COUNT(DISTINCT dt.registration_id), COUNT(DISTINCT u.id)
+			FROM app_device_tokens dt
+			JOIN app_users u ON u.id = dt.app_user_id
+			WHERE u.status = 'active' AND u.member_level = $1
+		`, targetValue).Scan(&deviceCount, &userCount)
+	default:
+		err = fmt.Errorf("unsupported push target type: %s", targetType)
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	return deviceCount, userCount, nil
+}
+
 // CreatePushRecord 创建推送记录。
 func (s *Store) CreatePushRecord(ctx context.Context, title, content, targetType, targetValue, deepLink, operator string) (int64, error) {
 	var id int64

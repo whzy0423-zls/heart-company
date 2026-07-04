@@ -41,8 +41,8 @@ assert.equal(VIDEOS.length, 19, '观看页需要去掉重复内容后展示 19 �
 assert.equal(FEATURED_VIDEOS.length, 3, '首页只展示 3 个精选视频，避免首屏过重')
 assert.equal(new Set(VIDEOS.map((video) => video.src)).size, VIDEOS.length, '视频播放源不能重复')
 for (const video of VIDEOS) {
-  assert.match(video.src, /^\/assets\/videos\/laohan-\d{2}\.mp4$/, `${video.id} 需要指向 public/assets/videos 下的 mp4`)
-  assert.match(video.poster, /^\/assets\/videos\/posters\/laohan-\d{2}\.jpg$/, `${video.id} 需要使用对应视频抽帧封面`)
+  assert.match(video.src, /^(https?:\/\/[^/]+)?\/assets\/videos\/laohan-\d{2}\.mp4$/, `${video.id} 需要指向 CDN/OSS 或本地 /assets/videos 下的 mp4`)
+  assert.match(video.poster, /^(https?:\/\/[^/]+)?\/assets\/videos\/posters\/laohan-\d{2}\.jpg$/, `${video.id} 需要使用 CDN/OSS 或本地对应视频抽帧封面`)
   assert.notEqual(video.poster, '/assets/teacher-poster.jpg', `${video.id} 不应再使用老师海报做视频封面`)
   assert.ok(video.duration, `${video.id} 需要展示视频时长`)
 }

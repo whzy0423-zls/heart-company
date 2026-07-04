@@ -9,6 +9,22 @@ interface SignupNoticeFallbackState {
   unavailable: boolean;
 }
 
+export function buildSignupEventsURL(apiURL: string) {
+  const base = (apiURL || '/api').replace(/\/+$/, '');
+  return `${base}/signups/events`;
+}
+
+export function signupNoticeIdentity(input: {
+  accessToken?: null | string;
+  userId?: null | number | string;
+  username?: null | string;
+}) {
+  if (!input.accessToken) {
+    return 'anonymous';
+  }
+  return String(input.username || input.userId || 'authenticated');
+}
+
 export function shouldLogoutForSignupEventStatus(status: number) {
   return status === 401 || status === 403;
 }

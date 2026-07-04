@@ -100,6 +100,67 @@ func TestAppAnalyticsIntegrationStoresEvent(t *testing.T) {
 	}
 }
 
+func TestAppAnalyticsOverviewReturnsEmptySafePayload(t *testing.T) {
+	database := newAppAnalyticsUnitDB(t, "overview_empty")
+	s := &Server{db: database}
+	req := httptest.NewRequest(http.MethodGet, "/api/app-analytics/overview", nil)
+	res := httptest.NewRecorder()
+
+	s.appAnalyticsOverview(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Data struct {
+			TotalUsers         int64            `json:"totalUsers"`
+			NewUsersToday      int64            `json:"newUsersToday"`
+			ActiveUsers        int64            `json:"activeUsers"`
+			MemberUsers        int64            `json:"memberUsers"`
+			DisabledUsers      int64            `json:"disabledUsers"`
+			ExtractedUsers     int64            `json:"extractedUsers"`
+			QuizSubmissions    int64            `json:"quizSubmissions"`
+			Cards              int64            `json:"cards"`
+			Memories           int64            `json:"memories"`
+			ChatSessions       int64            `json:"chatSessions"`
+			ChatMessages       int64            `json:"chatMessages"`
+			Compatibility      int64            `json:"compatibilityReports"`
+			RecentUsers        []map[string]any `json:"recentUsers"`
+			RecentMemoryUsers  []map[string]any `json:"recentMemoryUsers"`
+			MemberDistribution map[string]int64 `json:"memberDistribution"`
+			StatusDistribution map[string]int64 `json:"statusDistribution"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Data.TotalUsers != 0 || body.Data.NewUsersToday != 0 || body.Data.ActiveUsers != 0 ||
+		body.Data.MemberUsers != 0 || body.Data.DisabledUsers != 0 || body.Data.ExtractedUsers != 0 {
+		t.Fatalf("expected empty user counts, got %+v", body.Data)
+	}
+	if body.Data.QuizSubmissions != 0 || body.Data.Cards != 0 || body.Data.Memories != 0 ||
+		body.Data.ChatSessions != 0 || body.Data.ChatMessages != 0 || body.Data.Compatibility != 0 {
+		t.Fatalf("expected empty activity counts, got %+v", body.Data)
+	}
+	if body.Data.RecentUsers == nil || body.Data.RecentMemoryUsers == nil ||
+		body.Data.MemberDistribution == nil || body.Data.StatusDistribution == nil {
+		t.Fatalf("expected empty arrays/maps instead of nil: %+v", body.Data)
+	}
+}
+
+func TestAppAnalyticsOverviewSQLErrorReturns500(t *testing.T) {
+	database := newAppAnalyticsUnitDB(t, "overview_error")
+	s := &Server{db: database}
+	req := httptest.NewRequest(http.MethodGet, "/api/app-analytics/overview", nil)
+	res := httptest.NewRecorder()
+
+	s.appAnalyticsOverview(res, req)
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
 func newAppAnalyticsUnitDB(t *testing.T, mode string) *sql.DB {
 	t.Helper()
 	registerAppAnalyticsTestDriver()
@@ -151,6 +212,41 @@ func (c *appAnalyticsTestConn) ExecContext(ctx context.Context, query string, ar
 }
 
 func (c *appAnalyticsTestConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if c.mode == "overview_error" {
+		return nil, errors.New("query failed")
+	}
+	if strings.Contains(query, "FROM app_users") && strings.Contains(query, "COUNT(*) FILTER") {
+		return &appAnalyticsRows{
+			columns: []string{"total_users", "new_users_today", "active_users", "member_users", "disabled_users"},
+			values:  [][]driver.Value{{int64(0), int64(0), int64(0), int64(0), int64(0)}},
+		}, nil
+	}
+	if strings.Contains(query, "WITH extracted AS") {
+		return &appAnalyticsRows{columns: []string{"count"}, values: [][]driver.Value{{int64(0)}}}, nil
+	}
+	if strings.Contains(query, "MAX(m.update_time)") {
+		return &appAnalyticsRows{
+			columns: []string{"id", "phone", "nickname", "avatar", "status", "member_level", "last_memory_at", "memory_count"},
+			values:  nil,
+		}, nil
+	}
+	for _, table := range []string{"app_quiz_submissions", "app_user_cards", "app_memories", "app_chat_sessions", "app_chat_messages", "app_compatibility_reports"} {
+		if strings.Contains(query, table) && strings.Contains(query, "COUNT(*)") {
+			return &appAnalyticsRows{columns: []string{"count"}, values: [][]driver.Value{{int64(0)}}}, nil
+		}
+	}
+	if strings.Contains(query, "GROUP BY member_level") {
+		return &appAnalyticsRows{columns: []string{"member_level", "count"}, values: nil}, nil
+	}
+	if strings.Contains(query, "GROUP BY status") {
+		return &appAnalyticsRows{columns: []string{"status", "count"}, values: nil}, nil
+	}
+	if strings.Contains(query, "ORDER BY create_time DESC") {
+		return &appAnalyticsRows{
+			columns: []string{"id", "phone", "nickname", "avatar", "status", "member_level", "create_time"},
+			values:  nil,
+		}, nil
+	}
 	if strings.Contains(query, "FROM app_users") {
 		now := time.Now()
 		return &appAnalyticsRows{

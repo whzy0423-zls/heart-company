@@ -11,17 +11,18 @@ import (
 )
 
 type UserInfo struct {
-	Avatar    string   `json:"avatar"`
-	Email     string   `json:"email,omitempty"`
-	HomePath  string   `json:"homePath"`
-	ID        int64    `json:"id"`
-	Phone     string   `json:"phone,omitempty"`
-	RealName  string   `json:"realName"`
-	Remark    string   `json:"remark,omitempty"`
-	Roles     []string `json:"roles"`
-	TokenKind string   `json:"tokenKind,omitempty"`
-	UserID    string   `json:"userId"`
-	Username  string   `json:"username"`
+	Avatar       string   `json:"avatar"`
+	Email        string   `json:"email,omitempty"`
+	HomePath     string   `json:"homePath"`
+	ID           int64    `json:"id"`
+	Phone        string   `json:"phone,omitempty"`
+	RealName     string   `json:"realName"`
+	Remark       string   `json:"remark,omitempty"`
+	Roles        []string `json:"roles"`
+	TokenKind    string   `json:"tokenKind,omitempty"`
+	TokenVersion int      `json:"tokenVersion,omitempty"`
+	UserID       string   `json:"userId"`
+	Username     string   `json:"username"`
 }
 
 const (

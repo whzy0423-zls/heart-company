@@ -11,8 +11,8 @@ assert.ok(existsSync(audioPath), '官网音乐文件需要放在 public/assets/a
 assert.ok(statSync(audioPath).size > 1024 * 1024, '官网音乐文件大小异常，请确认已复制完整 m4a 文件')
 assert.match(
   hookSource,
-  /const\s+MUSIC_SRC\s*=\s*['"]\/assets\/audio\/b8083359_audio\.m4a['"]/,
-  'useMusic 需要引用项目内 m4a 音乐文件',
+  /const\s+MUSIC_SRC\s*=\s*assetUrl\(['"]\/assets\/audio\/b8083359_audio\.m4a['"]\)/,
+  'useMusic 需要通过 assetUrl 引用 m4a 音乐文件，生产可迁移到 CDN/OSS',
 )
 assert.match(
   hookSource,

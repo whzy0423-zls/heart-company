@@ -2,10 +2,14 @@ package server
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -185,6 +189,29 @@ func TestPublicWriteEndpointsRateLimitByIP(t *testing.T) {
 	}
 }
 
+func TestPublicBaseURLDoesNotUseRequestHostHeaders(t *testing.T) {
+	s := &Server{}
+	request := httptest.NewRequest(http.MethodPost, "/api/video/analysis", nil)
+	request.Host = "evil.example.com"
+	request.Header.Set("X-Forwarded-Host", "attacker.example.com")
+	request.Header.Set("X-Forwarded-Proto", "https")
+
+	if got := s.publicBaseURL(request); got != "" {
+		t.Fatalf("expected empty public base URL without explicit config, got %q", got)
+	}
+}
+
+func TestPublicBaseURLUsesExplicitConfig(t *testing.T) {
+	s := &Server{env: config.Env{PublicBaseURL: "https://api.example.com/"}}
+	request := httptest.NewRequest(http.MethodPost, "/api/video/analysis", nil)
+	request.Host = "evil.example.com"
+	request.Header.Set("X-Forwarded-Host", "attacker.example.com")
+
+	if got := s.publicBaseURL(request); got != "https://api.example.com" {
+		t.Fatalf("expected configured public base URL, got %q", got)
+	}
+}
+
 func TestBackendLoginRateLimitTracksIPAndUsername(t *testing.T) {
 	s := &Server{
 		loginLimiter: newStrRateLimiter(2, time.Minute),
@@ -202,6 +229,52 @@ func TestBackendLoginRateLimitTracksIPAndUsername(t *testing.T) {
 	}
 	if !s.allowLoginAttempt("other", "203.0.113.9", now.Add(3*time.Second)) {
 		t.Fatal("expected different username to have a separate login window")
+	}
+}
+
+// failingQueryDriver always returns a query error so DB limiter fallback can be tested.
+var failingQueryDriverRegisterOnce sync.Once
+
+type failingQueryDriver struct{}
+
+type failingQueryConn struct{}
+
+func (failingQueryDriver) Open(string) (driver.Conn, error) { return failingQueryConn{}, nil }
+func (failingQueryConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare unavailable")
+}
+func (failingQueryConn) Close() error              { return nil }
+func (failingQueryConn) Begin() (driver.Tx, error) { return nil, errors.New("tx unavailable") }
+func (failingQueryConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+	return nil, errors.New("db limiter unavailable")
+}
+
+func TestBackendLoginRateLimitFallsBackToMemoryWhenDBLimiterFails(t *testing.T) {
+	driverName := "nine_xing_failing_limiter"
+	failingQueryDriverRegisterOnce.Do(func() {
+		sql.Register(driverName, failingQueryDriver{})
+	})
+	db, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	s := &Server{
+		db:             db,
+		loginLimiter:   newStrRateLimiter(2, time.Minute),
+		loginDBLimiter: newDBRateLimiter(db, "admin_login", 2, time.Minute),
+	}
+	now := time.Unix(200, 0)
+
+	if !s.allowLoginAttempt("admin", "203.0.113.10", now) {
+		t.Fatal("expected first attempt to fall back to memory limiter and be allowed")
+	}
+	if !s.allowLoginAttempt("admin", "203.0.113.10", now.Add(time.Second)) {
+		t.Fatal("expected second attempt to fall back to memory limiter and be allowed")
+	}
+	if s.allowLoginAttempt("admin", "203.0.113.10", now.Add(2*time.Second)) {
+		t.Fatal("expected fallback memory limiter to block the third attempt")
 	}
 }
 
@@ -229,7 +302,8 @@ func TestValidateModelConfigBasesRejectsLocalAddresses(t *testing.T) {
 		"http://foo.localhost:8080",
 	} {
 		err := validateModelConfigBases(modelconfig.Config{
-			Chat: modelconfig.ChatConfig{APIBase: apiBase},
+			Chat:     modelconfig.ChatConfig{APIBase: apiBase},
+			Analysis: modelconfig.AnalysisConfig{APIBase: apiBase},
 		})
 		if err == nil {
 			t.Fatalf("expected local model api base %q to be rejected", apiBase)
@@ -237,11 +311,21 @@ func TestValidateModelConfigBasesRejectsLocalAddresses(t *testing.T) {
 	}
 }
 
+func TestValidateModelConfigBasesRejectsLocalAnalysisAddress(t *testing.T) {
+	err := validateModelConfigBases(modelconfig.Config{
+		Analysis: modelconfig.AnalysisConfig{APIBase: "http://127.0.0.1:8080"},
+	})
+	if err == nil {
+		t.Fatal("expected local analysis api base to be rejected")
+	}
+}
+
 func TestValidateModelConfigBasesAllowsPublicHTTPS(t *testing.T) {
 	err := validateModelConfigBases(modelconfig.Config{
-		Chat:  modelconfig.ChatConfig{APIBase: "https://api.minimaxi.com"},
-		Image: modelconfig.ImageConfig{APIBase: "https://image-gateway.example.com/v1"},
-		Video: modelconfig.VideoConfig{APIBase: "https://video-gateway.example.com/v1"},
+		Chat:     modelconfig.ChatConfig{APIBase: "https://api.minimaxi.com"},
+		Image:    modelconfig.ImageConfig{APIBase: "https://image-gateway.example.com/v1"},
+		Video:    modelconfig.VideoConfig{APIBase: "https://video-gateway.example.com/v1"},
+		Analysis: modelconfig.AnalysisConfig{APIBase: "https://api.minimaxi.com"},
 	})
 	if err != nil {
 		t.Fatalf("expected public model api bases to pass, got %v", err)

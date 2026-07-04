@@ -21,144 +21,264 @@ function goRelation() {
 
 <template>
   <view class="wrap home page-stack">
+    <view class="home__header">
+      <text class="eyebrow">九型芯之力</text>
+      <text class="home__headline">更像 iPhone 里的性格仪表盘</text>
+      <text class="home__sub">先快速识别主型，再用 AI、课程与关系合盘把结果变成可行动的成长建议。</text>
+    </view>
+
     <view class="hero card">
       <view class="hero__copy">
-        <text class="eyebrow">趣味体验</text>
-        <text class="hero__title gradient-title">你的人设出厂设置</text>
-        <text class="hero__lead">用 {{ total }} 道情境题，测出你天生自带的「性格芯片」。</text>
+        <text class="hero__kicker">{{ total }} 题 · 约 2 分钟 · 凭直觉选择</text>
+        <text class="hero__title gradient-title">测出你的「性格芯片」</text>
+        <text class="hero__lead">从九型人格的动机、恐惧、欲望与三中心切入，生成更贴近当下状态的个人画像。</text>
         <view class="hero__actions">
           <button class="btn-primary hero__btn" @click="startTest">开始测试</button>
           <button class="btn-ghost hero__ghost" @click="goLearn">先学一学</button>
         </view>
-        <view class="hero__meta">
-          <text>约 2 分钟</text>
-          <text>共 {{ total }} 题</text>
-          <text>凭直觉选择</text>
-        </view>
       </view>
       <view class="hero__visual">
+        <view class="hero__halo"></view>
         <image class="hero__wheel" src="/static/wheel.png" mode="aspectFit" />
       </view>
     </view>
 
+    <view class="insight card">
+      <view class="insight__item">
+        <text class="insight__num">9</text>
+        <text class="insight__label">人格类型</text>
+      </view>
+      <view class="insight__line"></view>
+      <view class="insight__item">
+        <text class="insight__num">3</text>
+        <text class="insight__label">三中心分布</text>
+      </view>
+      <view class="insight__line"></view>
+      <view class="insight__item">
+        <text class="insight__num">AI</text>
+        <text class="insight__label">专属解读</text>
+      </view>
+    </view>
+
+    <view class="section-head">
+      <text class="section-title">接下来想做什么？</text>
+      <text class="section-lead">把测试、学习、对话和关系理解放在一条自然路径里。</text>
+    </view>
+
     <view class="grid">
-      <view class="grid__item card" @click="startTest">
-        <text class="chip">01</text>
+      <view class="grid__item card grid__item--wide" role="button" @click="startTest">
+        <view class="grid__top"><text class="chip">01</text><text class="grid__pill">推荐</text></view>
         <text class="grid__t">九型测试</text>
-        <text class="grid__d">测出你的主型与副型</text>
+        <text class="grid__d">测出主型、副型、三中心与成长方向</text>
       </view>
-      <view class="grid__item card" @click="goLearn">
-        <text class="chip chip--red">02</text>
-        <text class="grid__t">九型学习</text>
-        <text class="grid__d">三阶段 · 课程 · 语录</text>
-      </view>
-      <view class="grid__item card" @click="goChat">
-        <text class="chip chip--green">03</text>
+      <view class="grid__item card" role="button" @click="goChat">
+        <text class="chip chip--green">02</text>
         <text class="grid__t">AI 对话</text>
-        <text class="grid__d">基于资料检索回答</text>
+        <text class="grid__d">针对你的疑问检索九型资料</text>
       </view>
-      <view class="grid__item card" @click="goRelation">
-        <text class="chip chip--red">04</text>
+      <view class="grid__item card" role="button" @click="goLearn">
+        <text class="chip chip--orange">03</text>
+        <text class="grid__t">九型学习</text>
+        <text class="grid__d">课程、语录与阶段化练习</text>
+      </view>
+      <view class="grid__item card grid__item--wide grid__item--relation" role="button" @click="goRelation">
+        <view class="grid__top"><text class="chip chip--red">04</text><text class="grid__pill grid__pill--soft">关系模式</text></view>
         <text class="grid__t">关系合盘</text>
-        <text class="grid__d">看你和 TA 的相处底色</text>
+        <text class="grid__d">看你和 TA 的沟通节奏、冲突触发点与相处底色</text>
       </view>
     </view>
   </view>
 </template>
 
 <style scoped>
+.home {
+  gap: 26rpx;
+}
+.home__header {
+  display: flex;
+  flex-direction: column;
+  gap: 14rpx;
+  padding: 8rpx 4rpx 0;
+}
+.home__headline {
+  max-width: 650rpx;
+  color: #0f172a;
+  font-size: 48rpx;
+  font-weight: 900;
+  line-height: 1.16;
+  letter-spacing: -.6rpx;
+}
+.home__sub {
+  color: #475569;
+  font-size: 27rpx;
+  line-height: 1.68;
+}
 .hero {
-  min-height: 660rpx;
+  min-height: 650rpx;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: 34rpx;
-  padding: 44rpx 34rpx 36rpx;
+  gap: 28rpx;
+  padding: 42rpx 34rpx 30rpx;
+  background:
+    linear-gradient(145deg, rgba(255,255,255,.92), rgba(255,255,255,.66)),
+    radial-gradient(circle at 80% 20%, rgba(90,160,255,.26), transparent 42%);
 }
 .hero__copy {
   position: relative;
   z-index: 2;
   display: flex;
   flex-direction: column;
-  gap: 18rpx;
+  gap: 17rpx;
+}
+.hero__kicker {
+  color: #2563eb;
+  font-size: 24rpx;
+  font-weight: 900;
 }
 .hero__title {
-  max-width: 520rpx;
+  max-width: 590rpx;
   font-size: 60rpx;
 }
 .hero__lead {
-  max-width: 560rpx;
-  color: #3c424d;
+  max-width: 600rpx;
+  color: #334155;
   font-size: 29rpx;
   line-height: 1.68;
 }
 .hero__actions {
   display: flex;
   gap: 18rpx;
-  margin-top: 10rpx;
+  margin-top: 12rpx;
 }
 .hero__btn,
 .hero__ghost {
   flex: 1;
 }
-.hero__meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12rpx;
-  margin-top: 2rpx;
-}
-.hero__meta text {
-  padding: 8rpx 16rpx;
-  border-radius: 999rpx;
-  background: rgba(255,255,255,.66);
-  color: #767d89;
-  font-size: 22rpx;
-  font-weight: 700;
-}
 .hero__visual {
   position: relative;
   align-self: center;
-  width: 510rpx;
-  height: 330rpx;
+  width: 520rpx;
+  height: 300rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.hero__halo {
+  position: absolute;
+  width: 450rpx;
+  height: 220rpx;
+  border-radius: 999rpx;
+  background: linear-gradient(120deg, rgba(37,99,235,.18), rgba(249,115,22,.14));
+  filter: blur(18rpx);
 }
 .hero__wheel {
   position: relative;
   z-index: 1;
   width: 100%;
   height: 100%;
-  filter: drop-shadow(0 28rpx 36rpx rgba(28,40,70,.18));
+  filter: drop-shadow(0 28rpx 38rpx rgba(15,23,42,.18));
+}
+.insight {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 26rpx 24rpx;
+}
+.insight__item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4rpx;
+}
+.insight__num {
+  color: #0f172a;
+  font-size: 36rpx;
+  font-weight: 900;
+  line-height: 1;
+}
+.insight__label {
+  color: #64748b;
+  font-size: 22rpx;
+  font-weight: 800;
+}
+.insight__line {
+  width: 2rpx;
+  height: 54rpx;
+  background: rgba(15,23,42,.08);
+}
+.section-head {
+  display: flex;
+  flex-direction: column;
+  gap: 8rpx;
+  padding: 2rpx 4rpx;
 }
 .grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 20rpx;
+  gap: 18rpx;
 }
 .grid__item {
-  width: calc((100% - 20rpx) / 2);
-  min-height: 230rpx;
+  width: calc((100% - 18rpx) / 2);
+  min-height: 236rpx;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10rpx;
+  gap: 12rpx;
   padding: 28rpx;
 }
+.grid__item--wide {
+  width: 100%;
+  min-height: 210rpx;
+}
+.grid__item--relation {
+  background: linear-gradient(145deg, rgba(255,255,255,.90), rgba(255,247,237,.70));
+}
+.grid__top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12rpx;
+}
+.grid__pill {
+  min-height: 44rpx;
+  padding: 0 18rpx;
+  border-radius: 999rpx;
+  background: rgba(249,115,22,.12);
+  color: #ea580c;
+  font-size: 22rpx;
+  font-weight: 900;
+  display: inline-flex;
+  align-items: center;
+}
+.grid__pill--soft {
+  background: rgba(226,58,71,.10);
+  color: #e23a47;
+}
 .chip--red {
-  background: linear-gradient(135deg, #ff5a6a, #e23a47);
-  box-shadow: 0 14rpx 34rpx -18rpx rgba(226,58,71,.72);
+  background: linear-gradient(135deg, #fb7185, #e11d48);
+  box-shadow: 0 14rpx 34rpx -18rpx rgba(225,29,72,.72);
 }
 .chip--green {
-  background: linear-gradient(135deg, #25b365, #16a06a);
-  box-shadow: 0 14rpx 34rpx -18rpx rgba(37,179,101,.72);
+  background: linear-gradient(135deg, #34d399, #059669);
+  box-shadow: 0 14rpx 34rpx -18rpx rgba(5,150,105,.72);
+}
+.chip--orange {
+  background: linear-gradient(135deg, #fb923c, #f97316);
+  box-shadow: 0 14rpx 34rpx -18rpx rgba(249,115,22,.72);
 }
 .grid__t {
-  color: #12151b;
+  color: #0f172a;
   font-weight: 900;
-  font-size: 31rpx;
+  font-size: 32rpx;
+  line-height: 1.25;
 }
 .grid__d {
-  color: #767d89;
-  font-size: 23rpx;
-  line-height: 1.45;
+  color: #64748b;
+  font-size: 24rpx;
+  line-height: 1.5;
 }
 </style>

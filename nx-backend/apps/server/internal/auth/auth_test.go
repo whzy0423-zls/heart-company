@@ -21,6 +21,26 @@ func TestTokenKindRoundTrips(t *testing.T) {
 	}
 }
 
+func TestTokenVersionRoundTrips(t *testing.T) {
+	token, err := Sign(UserInfo{
+		ID:           1,
+		TokenKind:    TokenKindBackend,
+		TokenVersion: 7,
+		Username:     "admin",
+	}, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	user, ok := Verify(token, "secret")
+	if !ok {
+		t.Fatal("expected token to verify")
+	}
+	if user.TokenVersion != 7 {
+		t.Fatalf("expected token version 7, got %d", user.TokenVersion)
+	}
+}
+
 func TestBearerUserWithKindRejectsWrongKind(t *testing.T) {
 	token, err := Sign(UserInfo{
 		ID:        1,

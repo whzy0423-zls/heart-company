@@ -3,11 +3,14 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"nine-xing/nx-backend/apps/server/internal/netguard"
 	"nine-xing/nx-backend/apps/server/internal/storage"
 )
 
@@ -40,18 +43,20 @@ type Env struct {
 	UploadPublicURL string
 	// PublicBaseURL 后端 server 对外可达的根地址（形如 https://api.example.com）。
 	// 用于把本地存储产生的相对地址（/api/uploads、/api/upload-assets）补全为
-	// 外部视频网关可拉取的绝对地址；为空时回退到当前请求推断的 scheme://host。
+	// 外部视频网关可拉取的绝对地址；外部网关链路不会从请求 Host/X-Forwarded-Host 推断。
 	PublicBaseURL string
-	MiniMax       MiniMaxConfig
-	MiniappChat   MiniappChatConfig
-	WeChat        WeChatConfig
-	WxPay         WxPayConfig
-	Embedding     EmbeddingConfig
-	SMS           SMSConfig
-	Video         VideoConfig
-	Image         ImageConfig
-	ASR           ASRConfig
-	JPush         JPushConfig
+	// TrustedProxyCIDRs 显式可信反向代理网段；只有命中这些网段时才信任 X-Forwarded-For/X-Real-IP。
+	TrustedProxyCIDRs []string
+	MiniMax           MiniMaxConfig
+	MiniappChat       MiniappChatConfig
+	WeChat            WeChatConfig
+	WxPay             WxPayConfig
+	Embedding         EmbeddingConfig
+	SMS               SMSConfig
+	Video             VideoConfig
+	Image             ImageConfig
+	ASR               ASRConfig
+	JPush             JPushConfig
 }
 
 // SMSConfig 短信发送配置。Provider 为空时非生产环境为 dev 模式；生产环境会 fail closed。
@@ -256,10 +261,11 @@ func Load() Env {
 			Region:          getenv("OSS_REGION", ""),
 			Prefix:          getenv("OSS_PREFIX", "uploads"),
 		},
-		UploadDir:       uploadDir,
-		UploadMaxBytes:  int64(uploadMaxMB) * 1024 * 1024,
-		UploadPublicURL: ossPublicURL,
-		PublicBaseURL:   strings.TrimRight(strings.TrimSpace(getenv("PUBLIC_BASE_URL", "")), "/"),
+		UploadDir:         uploadDir,
+		UploadMaxBytes:    int64(uploadMaxMB) * 1024 * 1024,
+		UploadPublicURL:   ossPublicURL,
+		PublicBaseURL:     strings.TrimRight(strings.TrimSpace(getenv("PUBLIC_BASE_URL", "")), "/"),
+		TrustedProxyCIDRs: parseCSV(getenv("TRUSTED_PROXY_CIDRS", "")),
 		MiniMax: MiniMaxConfig{
 			APIBase:        getenv("MINIMAX_API_BASE", "https://api.minimaxi.com"),
 			APIKey:         getenv("MINIMAX_API_KEY", ""),
@@ -321,14 +327,58 @@ func ValidateProduction(env Env) error {
 	if weakPassword(env.AdminPassword) {
 		return fmt.Errorf("production ADMIN_PASSWORD must be changed to a strong password")
 	}
-	if strings.Contains(env.DatabaseURL, "://nx:nx@") {
-		return fmt.Errorf("production DATABASE_URL must not use the default nx/nx credentials")
+	if strings.Contains(env.DatabaseURL, "://nx:nx@") || databasePasswordWeak(env.DatabaseURL) {
+		return fmt.Errorf("production DATABASE_URL/POSTGRES_PASSWORD must use strong non-placeholder credentials")
 	}
 	if env.WeChat.LoginDev {
 		return fmt.Errorf("production WECHAT_LOGIN_DEV must be false")
 	}
 	if env.WxPay.Dev {
 		return fmt.Errorf("production WXPAY_DEV must be false")
+	}
+	if strings.TrimSpace(env.Video.APIKey) != "" && strings.TrimSpace(env.PublicBaseURL) == "" {
+		return fmt.Errorf("production PUBLIC_BASE_URL must be set when video gateway is enabled")
+	}
+	if err := validateTrustedProxyCIDRs(env.TrustedProxyCIDRs); err != nil {
+		return err
+	}
+	if err := validateProductionExternalAPIBases(env); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateProductionExternalAPIBases(env Env) error {
+	for label, apiBase := range map[string]string{
+		"ASR_API_BASE":       env.ASR.APIBase,
+		"EMBEDDING_API_BASE": env.Embedding.APIBase,
+		"IMAGE_API_BASE":     env.Image.APIBase,
+		"MINIMAX_API_BASE":   env.MiniMax.APIBase,
+		"VIDEO_API_BASE":     env.Video.APIBase,
+	} {
+		apiBase = strings.TrimSpace(apiBase)
+		if apiBase == "" {
+			continue
+		}
+		if !netguard.IsPublicHTTPURL(apiBase) {
+			return fmt.Errorf("production %s must be a public http(s) URL", label)
+		}
+	}
+	return nil
+}
+
+func validateTrustedProxyCIDRs(values []string) error {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, err := netip.ParsePrefix(value); err == nil {
+			continue
+		}
+		if _, err := netip.ParseAddr(value); err != nil {
+			return fmt.Errorf("TRUSTED_PROXY_CIDRS contains invalid CIDR/IP %q", value)
+		}
 	}
 	return nil
 }
@@ -354,10 +404,28 @@ func weakSecret(secret string) bool {
 
 func weakPassword(password string) bool {
 	password = strings.TrimSpace(password)
+	lower := strings.ToLower(password)
 	return len(password) < 12 ||
 		password == "123456" ||
-		strings.EqualFold(password, "password") ||
-		strings.Contains(strings.ToLower(password), "please-change")
+		lower == "password" ||
+		strings.Contains(lower, "please-change") ||
+		strings.Contains(lower, "change-me") ||
+		strings.Contains(lower, "changeme")
+}
+
+func databasePasswordWeak(databaseURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(databaseURL))
+	if err != nil {
+		return true
+	}
+	if u.Scheme == "" || u.Host == "" || u.User == nil {
+		return true
+	}
+	password, ok := u.User.Password()
+	if !ok {
+		return true
+	}
+	return weakPassword(password)
 }
 
 func loadDotEnv() {

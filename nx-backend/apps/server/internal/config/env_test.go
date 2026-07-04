@@ -75,7 +75,7 @@ func TestValidateProductionAllowsMissingOptionalIntegrations(t *testing.T) {
 	err := ValidateProduction(Env{
 		AdminPassword: "a-strong-admin-password",
 		AppEnv:        "production",
-		DatabaseURL:   "postgres://nx_app:strong@db:5432/nx_admin?sslmode=disable",
+		DatabaseURL:   "postgres://nx_app:a-strong-database-password@db:5432/nx_admin?sslmode=disable",
 		JWTSecret:     "12345678901234567890123456789012",
 	})
 	if err != nil {
@@ -87,7 +87,7 @@ func TestValidateProductionRejectsExplicitDevIntegrations(t *testing.T) {
 	base := Env{
 		AdminPassword: "a-strong-admin-password",
 		AppEnv:        "production",
-		DatabaseURL:   "postgres://nx_app:strong@db:5432/nx_admin?sslmode=disable",
+		DatabaseURL:   "postgres://nx_app:a-strong-database-password@db:5432/nx_admin?sslmode=disable",
 		JWTSecret:     "12345678901234567890123456789012",
 	}
 
@@ -104,11 +104,88 @@ func TestValidateProductionRejectsExplicitDevIntegrations(t *testing.T) {
 	}
 }
 
+func TestValidateProductionRejectsVideoGatewayWithoutPublicBaseURL(t *testing.T) {
+	err := ValidateProduction(Env{
+		AdminPassword: "a-strong-admin-password",
+		AppEnv:        "production",
+		DatabaseURL:   "postgres://nx_app:a-strong-database-password@db:5432/nx_admin?sslmode=disable",
+		JWTSecret:     "12345678901234567890123456789012",
+		Video: VideoConfig{
+			APIBase: "https://video.example.com",
+			APIKey:  "video-key",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected production validation to require PUBLIC_BASE_URL when video gateway is enabled")
+	}
+}
+
+func TestValidateProductionRejectsInvalidTrustedProxyCIDRs(t *testing.T) {
+	err := ValidateProduction(Env{
+		AdminPassword:     "a-strong-admin-password",
+		AppEnv:            "production",
+		DatabaseURL:       "postgres://nx_app:a-strong-database-password@db:5432/nx_admin?sslmode=disable",
+		JWTSecret:         "12345678901234567890123456789012",
+		TrustedProxyCIDRs: []string{"not-a-cidr"},
+	})
+	if err == nil {
+		t.Fatal("expected production validation to reject invalid TRUSTED_PROXY_CIDRS")
+	}
+}
+
+func TestValidateProductionRejectsPlaceholderAdminAndDatabasePasswords(t *testing.T) {
+	base := Env{
+		AdminPassword: "a-strong-admin-password",
+		AppEnv:        "production",
+		DatabaseURL:   "postgres://nx_app:a-strong-database-password@db:5432/nx_admin?sslmode=disable",
+		JWTSecret:     "12345678901234567890123456789012",
+	}
+
+	withPlaceholderAdmin := base
+	withPlaceholderAdmin.AdminPassword = "change-me-to-a-strong-password"
+	if err := ValidateProduction(withPlaceholderAdmin); err == nil {
+		t.Fatal("expected production validation to reject placeholder ADMIN_PASSWORD")
+	}
+
+	withPlaceholderDB := base
+	withPlaceholderDB.DatabaseURL = "postgres://nx_app:change-me-too@db:5432/nx_admin?sslmode=disable"
+	if err := ValidateProduction(withPlaceholderDB); err == nil {
+		t.Fatal("expected production validation to reject placeholder POSTGRES_PASSWORD in DATABASE_URL")
+	}
+}
+
+func TestValidateProductionRejectsPrivateExternalAPIBases(t *testing.T) {
+	base := Env{
+		AdminPassword: "a-strong-admin-password",
+		AppEnv:        "production",
+		DatabaseURL:   "postgres://nx_app:a-strong-database-password@db:5432/nx_admin?sslmode=disable",
+		JWTSecret:     "12345678901234567890123456789012",
+	}
+
+	for name, mutate := range map[string]func(*Env){
+		"MINIMAX_API_BASE": func(env *Env) { env.MiniMax.APIBase = "http://127.0.0.1:8000" },
+		"VIDEO_API_BASE":   func(env *Env) { env.Video.APIBase = "http://10.0.0.2:8000" },
+		"IMAGE_API_BASE":   func(env *Env) { env.Image.APIBase = "http://localhost:8000" },
+		"ASR_API_BASE":     func(env *Env) { env.ASR.APIBase = "http://192.168.1.2:8000" },
+		"EMBEDDING_API_BASE": func(env *Env) {
+			env.Embedding.APIBase = "http://169.254.169.254/latest"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := base
+			mutate(&env)
+			if err := ValidateProduction(env); err == nil {
+				t.Fatalf("expected production validation to reject private %s", name)
+			}
+		})
+	}
+}
+
 func TestValidateProductionAcceptsCompleteOptionalConfig(t *testing.T) {
 	err := ValidateProduction(Env{
 		AdminPassword: "a-strong-admin-password",
 		AppEnv:        "production",
-		DatabaseURL:   "postgres://nx_app:strong@db:5432/nx_admin?sslmode=disable",
+		DatabaseURL:   "postgres://nx_app:a-strong-database-password@db:5432/nx_admin?sslmode=disable",
 		JWTSecret:     "12345678901234567890123456789012",
 		SMS: SMSConfig{
 			Provider:  "aliyun",
@@ -127,6 +204,12 @@ func TestValidateProductionAcceptsCompleteOptionalConfig(t *testing.T) {
 			PrivateKeyPath:   "/run/secrets/apiclient_key.pem",
 			PlatformCertPath: "/run/secrets/wechatpay_platform.pem",
 			NotifyURL:        "https://api.example.com/api/pay/notify",
+		},
+		PublicBaseURL:     "https://api.example.com",
+		TrustedProxyCIDRs: []string{"127.0.0.1", "10.0.0.0/24"},
+		Video: VideoConfig{
+			APIBase: "https://video.example.com",
+			APIKey:  "video-key",
 		},
 	})
 	if err != nil {

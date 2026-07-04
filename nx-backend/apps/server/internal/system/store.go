@@ -166,7 +166,7 @@ func (s *Store) SaveUser(ctx context.Context, input User) (User, error) {
 			return User{}, errors.New("invalid user id")
 		}
 		if _, err := tx.ExecContext(c,
-			`UPDATE users SET username=$1, avatar=$2, nickname=$3, email=$4, phone=$5, remark=$6, status=$7 WHERE id=$8`,
+			`UPDATE users SET username=$1, avatar=$2, nickname=$3, email=$4, phone=$5, remark=$6, status=$7, token_version=token_version+1 WHERE id=$8`,
 			input.Username, input.Avatar, input.Nickname, input.Email, input.Phone, input.Remark, status, userID,
 		); err != nil {
 			return User{}, err
@@ -177,7 +177,7 @@ func (s *Store) SaveUser(ctx context.Context, input User) (User, error) {
 			if herr != nil {
 				return User{}, herr
 			}
-			if _, err := tx.ExecContext(c, `UPDATE users SET password_hash=$1 WHERE id=$2`, string(hash), userID); err != nil {
+			if _, err := tx.ExecContext(c, `UPDATE users SET password_hash=$1, token_version=token_version+1 WHERE id=$2`, string(hash), userID); err != nil {
 				return User{}, err
 			}
 		}
@@ -586,8 +586,9 @@ func (s *Store) AuthUser(ctx context.Context, username, password string) (id int
 
 	var hash string
 	var status int
-	row := s.db.QueryRowContext(c, `SELECT id, password_hash, nickname, status FROM users WHERE username=$1`, username)
-	if err = row.Scan(&id, &hash, &nickname, &status); err != nil {
+	var tokenVersion int
+	row := s.db.QueryRowContext(c, `SELECT id, password_hash, nickname, status, token_version FROM users WHERE username=$1`, username)
+	if err = row.Scan(&id, &hash, &nickname, &status, &tokenVersion); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, "", nil, false, nil
 		}
@@ -604,6 +605,14 @@ func (s *Store) AuthUser(ctx context.Context, username, password string) (id int
 		return 0, "", nil, false, err
 	}
 	return id, nickname, roleCodes, true, nil
+}
+
+func (s *Store) TokenVersion(ctx context.Context, userID int64) (int, error) {
+	c, cancel := s.ctx(ctx)
+	defer cancel()
+	var version int
+	err := s.db.QueryRowContext(c, `SELECT token_version FROM users WHERE id=$1 AND status=1`, userID).Scan(&version)
+	return version, err
 }
 
 func (s *Store) roleCodesForUser(ctx context.Context, userID int64) ([]string, error) {

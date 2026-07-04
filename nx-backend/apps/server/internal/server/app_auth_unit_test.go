@@ -15,6 +15,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/realip"
 )
 
 type failingRandReader struct{}
@@ -111,22 +112,39 @@ func TestAppSendSMSDoesNotUseDevCodeInProduction(t *testing.T) {
 }
 
 func TestClientIPIgnoresForwardedHeadersFromUntrustedRemote(t *testing.T) {
+	s := &Server{}
 	req := httptest.NewRequest(http.MethodPost, "/api/app/auth/send-sms", nil)
 	req.RemoteAddr = "203.0.113.8:12345"
 	req.Header.Set("X-Forwarded-For", "198.51.100.9")
 	req.Header.Set("X-Real-Ip", "198.51.100.10")
 
-	if got := clientIP(req); got != "203.0.113.8" {
+	if got := s.clientIP(req); got != "203.0.113.8" {
 		t.Fatalf("expected untrusted direct remote IP, got %q", got)
 	}
 }
 
-func TestClientIPTrustsForwardedHeadersFromPrivateProxy(t *testing.T) {
+func TestClientIPIgnoresForwardedHeadersFromPrivateProxyByDefault(t *testing.T) {
+	s := &Server{}
 	req := httptest.NewRequest(http.MethodPost, "/api/app/auth/send-sms", nil)
 	req.RemoteAddr = "10.0.0.12:12345"
 	req.Header.Set("X-Forwarded-For", "198.51.100.9, 10.0.0.12")
 
-	if got := clientIP(req); got != "198.51.100.9" {
+	if got := s.clientIP(req); got != "10.0.0.12" {
+		t.Fatalf("expected private proxy headers to be ignored unless explicitly trusted, got %q", got)
+	}
+}
+
+func TestClientIPTrustsForwardedHeadersFromConfiguredProxy(t *testing.T) {
+	trustedProxyCIDRs, err := realip.ParseTrustedProxyCIDRs([]string{"10.0.0.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{trustedProxyCIDRs: trustedProxyCIDRs}
+	req := httptest.NewRequest(http.MethodPost, "/api/app/auth/send-sms", nil)
+	req.RemoteAddr = "10.0.0.12:12345"
+	req.Header.Set("X-Forwarded-For", "198.51.100.9, 10.0.0.12")
+
+	if got := s.clientIP(req); got != "198.51.100.9" {
 		t.Fatalf("expected forwarded client IP from trusted proxy, got %q", got)
 	}
 }

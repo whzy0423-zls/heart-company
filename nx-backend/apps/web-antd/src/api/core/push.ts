@@ -19,6 +19,11 @@ export interface PushListResult {
   total: number;
 }
 
+export interface PushAudienceCountResult {
+  deviceCount: number;
+  userCount: number;
+}
+
 export interface PushSendParams {
   content: string;
   deepLink?: string;
@@ -29,6 +34,15 @@ export interface PushSendParams {
 
 export function getPushListApi(params?: { page?: number; pageSize?: number }) {
   return requestClient.get<PushListResult>('/push/list', { params });
+}
+
+export function getPushAudienceCountApi(params?: {
+  targetType?: string;
+  targetValue?: string;
+}) {
+  return requestClient.get<PushAudienceCountResult>('/push/audience-count', {
+    params,
+  });
 }
 
 export function sendPushApi(data: PushSendParams) {

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/config"
 )
 
@@ -22,6 +23,24 @@ func TestRecognizeSpeechRequiresASRConfig(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ASR_API_BASE") || !strings.Contains(err.Error(), "ASR_API_KEY") {
 		t.Fatalf("expected actionable config error, got %v", err)
+	}
+}
+
+func TestAppVoiceRecognizeRejectsNonAudioUpload(t *testing.T) {
+	body, contentType := multipartBody(t, "audio", "notes.txt", "text/plain", "not audio")
+	s := &Server{}
+	req := httptest.NewRequest(http.MethodPost, "/api/app/voice/recognize", body)
+	req.Header.Set("Content-Type", contentType)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 42}))
+	res := httptest.NewRecorder()
+
+	s.appVoiceRecognize(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected non-audio upload to return 400, got %d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "音频") {
+		t.Fatalf("expected actionable audio validation error, got %s", res.Body.String())
 	}
 }
 

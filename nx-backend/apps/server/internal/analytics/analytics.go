@@ -3,11 +3,12 @@ package analytics
 import (
 	"context"
 	"database/sql"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"nine-xing/nx-backend/apps/server/internal/realip"
 )
 
 type Store struct {
@@ -271,19 +272,5 @@ func truncate(value string, max int) string {
 }
 
 func clientIP(r *http.Request) string {
-	for _, header := range []string{"X-Forwarded-For", "X-Real-IP"} {
-		value := strings.TrimSpace(r.Header.Get(header))
-		if value == "" {
-			continue
-		}
-		parts := strings.Split(value, ",")
-		if ip := strings.TrimSpace(parts[0]); ip != "" {
-			return ip
-		}
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
-		return host
-	}
-	return r.RemoteAddr
+	return realip.RemoteAddr(r)
 }

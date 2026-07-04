@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { AppUserInsight } from '#/api';
 
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import {
+  Alert,
   Button,
   Card,
   Descriptions,
@@ -15,6 +16,7 @@ import {
   Table,
   Tag,
 } from 'ant-design-vue';
+import { useRoute } from 'vue-router';
 
 import { getAppUserInsightsApi } from '#/api';
 
@@ -61,7 +63,9 @@ const insightStatusColors: Record<string, string> = {
   待沉淀: 'default',
 };
 
+const route = useRoute();
 const loading = ref(false);
+const loadError = ref('');
 const insights = ref<AppUserInsight[]>([]);
 const total = ref(0);
 const detailOpen = ref(false);
@@ -97,6 +101,20 @@ const selectedScoreTags = computed(() =>
   detail.value ? getScoreTags(detail.value.score) : [],
 );
 
+
+function routeKeyword() {
+  const value = route.query.keyword;
+  return Array.isArray(value) ? value[0] || '' : value || '';
+}
+
+function applyRouteKeyword() {
+  const keyword = routeKeyword().trim();
+  if (!keyword || query.keyword === keyword) return false;
+  query.keyword = keyword;
+  query.page = 1;
+  return true;
+}
+
 function memberLevelLabel(value?: string) {
   return value ? memberLevelLabels[value] || value : '-';
 }
@@ -113,6 +131,7 @@ async function load() {
   const currentRequestId = ++requestId;
   loading.value = true;
   try {
+    loadError.value = '';
     const result = await getAppUserInsightsApi({
       keyword: query.keyword || undefined,
       memberLevel: query.memberLevel || undefined,
@@ -123,6 +142,12 @@ async function load() {
     if (currentRequestId !== requestId) return;
     insights.value = result.items;
     total.value = result.total;
+  } catch {
+    if (currentRequestId === requestId) {
+      insights.value = [];
+      total.value = 0;
+      loadError.value = '用户提炼数据加载失败，请稍后重试';
+    }
   } finally {
     if (currentRequestId === requestId) {
       loading.value = false;
@@ -153,7 +178,17 @@ function insightRecord(record: Record<string, any>): AppUserInsight {
   return record as AppUserInsight;
 }
 
+watch(
+  () => route.query.keyword,
+  () => {
+    if (applyRouteKeyword()) {
+      load();
+    }
+  },
+);
+
 onMounted(() => {
+  applyRouteKeyword();
   load();
 });
 </script>
@@ -196,6 +231,13 @@ onMounted(() => {
       </Card>
 
       <Card :bordered="false" class="table-card">
+        <Alert
+          v-if="loadError"
+          class="load-error"
+          :message="loadError"
+          show-icon
+          type="error"
+        />
         <Table
           :columns="columns"
           :data-source="insights"
@@ -378,6 +420,10 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.load-error {
+  margin-bottom: 12px;
 }
 
 .detail-layout {

@@ -11,6 +11,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/analytics"
 	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/articlestore"
+	"nine-xing/nx-backend/apps/server/internal/auditlog"
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/branding"
 	"nine-xing/nx-backend/apps/server/internal/chat"
@@ -39,6 +41,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/quiz"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 	"nine-xing/nx-backend/apps/server/internal/ragstore"
+	"nine-xing/nx-backend/apps/server/internal/realip"
 	"nine-xing/nx-backend/apps/server/internal/signup"
 	"nine-xing/nx-backend/apps/server/internal/siteconfig"
 	"nine-xing/nx-backend/apps/server/internal/sms"
@@ -60,6 +63,7 @@ type Server struct {
 	db            *sql.DB
 	system        *system.Store
 	analytics     *analytics.Store
+	auditLogs     *auditlog.Store
 	builder       *siteconfig.Builder
 	engagement    *engagement.Store
 	signups       *signup.Store
@@ -91,6 +95,7 @@ type Server struct {
 	pushStore                *push.Store
 	smsSender                sms.Sender
 	loginLimiter             *strRateLimiter
+	loginDBLimiter           *dbRateLimiter
 	smsPhoneLimiter          *strRateLimiter
 	smsIPLimiter             *strRateLimiter
 	smsVerifyPhoneLimiter    *strRateLimiter
@@ -100,6 +105,7 @@ type Server struct {
 	publicGameIPLimiter      *strRateLimiter
 	videoAnalysisSlots       chan struct{}
 	videoStoryboardSlots     chan struct{}
+	trustedProxyCIDRs        []netip.Prefix
 
 	signupMu          sync.Mutex
 	signupSubscribers map[chan signup.Lead]struct{}
@@ -122,17 +128,23 @@ var uploadPermissionCodes = []string{
 }
 
 func New(env config.Env, database *sql.DB) http.Handler {
+	trustedProxyCIDRs, err := realip.ParseTrustedProxyCIDRs(env.TrustedProxyCIDRs)
+	if err != nil {
+		panic("trusted proxy cidrs: " + err.Error())
+	}
 	s := &Server{
-		env:        env,
-		mux:        http.NewServeMux(),
-		db:         database,
-		system:     system.NewStore(database),
-		analytics:  analytics.NewStore(database),
-		builder:    siteconfig.NewBuilder(env.BuildScript, "", time.Duration(env.BuildTimeout)*time.Second),
-		engagement: engagement.NewStore(database),
-		signups:    signup.NewStore(database),
-		uploads:    uploadasset.NewStore(database),
-		uploader:   env.ObjectUploader,
+		env:               env,
+		mux:               http.NewServeMux(),
+		db:                database,
+		system:            system.NewStore(database),
+		analytics:         analytics.NewStore(database),
+		auditLogs:         auditlog.NewStore(database),
+		builder:           siteconfig.NewBuilder(env.BuildScript, "", time.Duration(env.BuildTimeout)*time.Second),
+		engagement:        engagement.NewStore(database),
+		signups:           signup.NewStore(database),
+		uploads:           uploadasset.NewStore(database),
+		uploader:          env.ObjectUploader,
+		trustedProxyCIDRs: trustedProxyCIDRs,
 
 		signupSubscribers: map[chan signup.Lead]struct{}{},
 	}
@@ -173,6 +185,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.quiz = quiz.NewStore(database)
 	s.appChat = chat.NewStore(database)
 	s.loginLimiter = newStrRateLimiter(10, time.Minute)
+	s.loginDBLimiter = newDBRateLimiter(database, "admin_login", 10, time.Minute)
 	s.smsPhoneLimiter = newStrRateLimiter(1, time.Minute)
 	s.smsIPLimiter = newStrRateLimiter(10, time.Minute)
 	s.smsVerifyPhoneLimiter = newStrRateLimiter(5, time.Minute)
@@ -342,12 +355,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/miniapp/report/content", s.method(http.MethodGet, s.requireMiniapp(s.reportContent)))
 	s.mux.HandleFunc("/api/pay/notify", s.method(http.MethodPost, s.payNotify))
 	s.mux.HandleFunc("/api/analytics/overview", s.method(http.MethodGet, s.requirePermission("Analytics:Overview", s.analyticsOverview)))
+	s.mux.HandleFunc("/api/app-analytics/overview", s.method(http.MethodGet, s.requirePermission("Analytics:App:Overview", s.appAnalyticsOverview)))
 	s.mux.HandleFunc("/api/game-results/overview", s.method(http.MethodGet, s.requirePermission("Analytics:GameResults", s.gameOverview)))
 	s.mux.HandleFunc("/api/messages/list", s.method(http.MethodGet, s.requirePermission("Message:Manage:List", s.messagesList)))
 	s.mux.HandleFunc("/api/messages/read", s.method(http.MethodPut, s.requirePermission("Message:Manage:List", s.markMessages)))
 	// 推送管理（admin）
 	s.mux.HandleFunc("/api/push/list", s.method(http.MethodGet, s.requirePermission("Push:Manage", s.adminPushList)))
 	s.mux.HandleFunc("/api/push/send", s.method(http.MethodPost, s.requirePermission("Push:Manage", s.adminPushSend)))
+	s.mux.HandleFunc("/api/push/audience-count", s.method(http.MethodGet, s.requirePermission("Push:Manage", s.adminPushAudienceCount)))
 	s.mux.HandleFunc("/api/signups/list", s.method(http.MethodGet, s.requirePermission("Customer:Signup:List", s.signupList)))
 	s.mux.HandleFunc("/api/signups/detail", s.method(http.MethodGet, s.requirePermission("Customer:Signup:List", s.signupDetail)))
 	s.mux.HandleFunc("/api/signups/follow", s.method(http.MethodPut, s.requirePermission("Customer:Signup:List", s.signupFollow)))
@@ -387,6 +402,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/mind-quotes/", s.requirePermission("Website:Write", s.adminMindQuoteByID))
 	s.mux.HandleFunc("/api/reading/settings", s.requirePermission("Reading:Article:Manage", s.readingSettings))
 	s.mux.HandleFunc("/api/rag/reindex", s.method(http.MethodPost, s.requirePermission("RAG:Knowledge:Manage", s.ragReindex)))
+	s.mux.HandleFunc("/api/audit-logs/list", s.method(http.MethodGet, s.requirePermission("System:Audit:List", s.adminAuditLogs)))
 	s.mux.HandleFunc("/api/system/user/list", s.method(http.MethodGet, s.requirePermission("System:User:List", s.system.HandleUsers)))
 	s.mux.HandleFunc("/api/system/user", s.requireMethodPermission(map[string]string{
 		http.MethodDelete: "System:User:Delete",
@@ -398,6 +414,11 @@ func (s *Server) routes() {
 		http.MethodPut:    "System:User:Update",
 	}, s.system.HandleUserByID))
 	s.mux.HandleFunc("/api/app-users/list", s.method(http.MethodGet, s.requirePermission("Customer:App:List", s.appUsers.HandleAppUsers)))
+	s.mux.HandleFunc("/api/app-orders/list", s.method(http.MethodGet, s.requirePermission("Customer:AppOrders:List", s.adminAppOrders)))
+	s.mux.HandleFunc("/api/app-orders/", s.method(http.MethodPost, s.requirePermission("Customer:AppOrders:Write", s.adminAppOrderGrant)))
+	s.mux.HandleFunc("/api/app-chat/messages/list", s.method(http.MethodGet, s.requirePermission("Customer:AppChat:List", s.adminAppChatMessages)))
+	s.mux.HandleFunc("/api/app-memories/list", s.method(http.MethodGet, s.requirePermission("Customer:AppMemory:List", s.adminAppMemories)))
+	s.mux.HandleFunc("/api/app-memories/", s.method(http.MethodPut, s.requirePermission("Customer:AppMemory:Write", s.adminAppMemoryStatus)))
 	s.mux.HandleFunc("/api/app-users/insights", s.method(http.MethodGet, s.requirePermission("Customer:UserInsights:List", s.appUsers.HandleAppUserInsights)))
 	s.mux.HandleFunc("/api/app-users/", s.adminAppUserByID)
 	s.mux.HandleFunc("/api/system/role/list", s.method(http.MethodGet, s.requirePermission("System:Role:List", s.system.HandleRoles)))
@@ -438,7 +459,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "BadRequestException")
 		return
 	}
-	if !s.allowLoginAttempt(body.Username, clientIP(r), time.Now()) {
+	if !s.allowLoginAttempt(body.Username, s.clientIP(r), time.Now()) {
 		httpx.Fail(w, http.StatusTooManyRequests, "TooManyRequestsException")
 		return
 	}
@@ -461,6 +482,9 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		TokenKind: auth.TokenKindBackend,
 		UserID:    fmt.Sprintf("%d", id),
 		Username:  body.Username,
+	}
+	if version, verr := s.system.TokenVersion(r.Context(), id); verr == nil {
+		user.TokenVersion = version
 	}
 	token, err := auth.Sign(user, s.env.JWTSecret)
 	if err != nil {
@@ -485,6 +509,11 @@ func (s *Server) allowLoginAttempt(username, ip string, now time.Time) bool {
 		return true
 	}
 	key := strings.ToLower(strings.TrimSpace(username)) + "|" + strings.TrimSpace(ip)
+	if s.loginDBLimiter != nil && s.db != nil {
+		if allowed, err := s.loginDBLimiter.allow(context.Background(), key, now); err == nil {
+			return allowed
+		}
+	}
 	return s.loginLimiter.Allow(key, now)
 }
 
@@ -831,7 +860,7 @@ func (s *Server) allowPublicWrite(w http.ResponseWriter, r *http.Request, limite
 	if limiter == nil {
 		return true
 	}
-	if limiter.Allow(clientIP(r), time.Now()) {
+	if limiter.Allow(s.clientIP(r), time.Now()) {
 		return true
 	}
 	httpx.Fail(w, http.StatusTooManyRequests, "TooManyRequestsException")
@@ -1215,27 +1244,13 @@ func (s *Server) generateVideo(w http.ResponseWriter, r *http.Request) {
 }
 
 // publicBaseURL 返回后端对外可达的根地址（无尾斜杠）。
-// 优先用显式配置的 PUBLIC_BASE_URL；为空时回退到当前请求推断的 scheme://host。
-func (s *Server) publicBaseURL(r *http.Request) string {
+// 外部视频网关只允许使用显式 PUBLIC_BASE_URL，避免请求 Host/X-Forwarded-Host
+// 影响模型网关拉取目标；为空时返回空字符串并让后续公网 URL 校验 fail-closed。
+func (s *Server) publicBaseURL(_ *http.Request) string {
 	if base := strings.TrimRight(strings.TrimSpace(s.env.PublicBaseURL), "/"); base != "" {
 		return base
 	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	// 反向代理场景下优先采用转发头还原真实对外地址。
-	if proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); proto != "" {
-		scheme = proto
-	}
-	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
-	if host == "" {
-		host = r.Host
-	}
-	if host == "" {
-		return ""
-	}
-	return scheme + "://" + host
+	return ""
 }
 
 // absoluteURL 把以 / 开头的相对地址补全为 base 下的绝对地址；
@@ -2094,6 +2109,34 @@ type modelConfigView struct {
 	} `json:"assist"`
 }
 
+func modelConfigAuditSnapshot(cfg modelconfig.Config) map[string]any {
+	return map[string]any{
+		"assistEnabled": cfg.AssistEnabled(),
+		"chat": map[string]any{
+			"apiBase":   cfg.Chat.APIBase,
+			"apiKeySet": cfg.Chat.APIKey != "",
+			"groupId":   cfg.Chat.GroupID,
+			"model":     cfg.Chat.Model,
+		},
+		"video": map[string]any{
+			"apiBase":   cfg.Video.APIBase,
+			"apiKeySet": cfg.Video.APIKey != "",
+			"model":     cfg.Video.Model,
+		},
+		"image": map[string]any{
+			"apiBase":   cfg.Image.APIBase,
+			"apiKeySet": cfg.Image.APIKey != "",
+			"model":     cfg.Image.Model,
+		},
+		"analysis": map[string]any{
+			"apiBase":   cfg.Analysis.APIBase,
+			"apiKeySet": cfg.Analysis.APIKey != "",
+			"groupId":   cfg.Analysis.GroupID,
+			"model":     cfg.Analysis.Model,
+		},
+	}
+}
+
 // buildModelConfigView 根据 env+DB 覆盖后的生效配置构造脱敏视图。
 // stored 用于回显 AI 辅助开关与系统提示词（提示词非密钥，明文回显）。
 func buildModelConfigView(chat config.MiniMaxConfig, vid config.VideoConfig, img config.ImageConfig, analysis config.MiniMaxConfig, stored modelconfig.Config) modelConfigView {
@@ -2119,9 +2162,10 @@ func buildModelConfigView(chat config.MiniMaxConfig, vid config.VideoConfig, img
 
 func validateModelConfigBases(cfg modelconfig.Config) error {
 	for label, apiBase := range map[string]string{
-		"chat.apiBase":  cfg.Chat.APIBase,
-		"image.apiBase": cfg.Image.APIBase,
-		"video.apiBase": cfg.Video.APIBase,
+		"analysis.apiBase": cfg.Analysis.APIBase,
+		"chat.apiBase":     cfg.Chat.APIBase,
+		"image.apiBase":    cfg.Image.APIBase,
+		"video.apiBase":    cfg.Video.APIBase,
 	} {
 		if err := validateExternalAPIBase(label, apiBase); err != nil {
 			return err
@@ -2185,6 +2229,14 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		s.recordAdminAudit(r, auditlog.Entry{
+			Action:     "model_config.update",
+			TargetType: "model_config",
+			TargetID:   "global",
+			Before:     modelConfigAuditSnapshot(stored),
+			After:      modelConfigAuditSnapshot(merged),
+			Summary:    "更新模型配置",
+		})
 
 		chat := merged.ApplyChat(s.env.MiniMax)
 		vid := merged.ApplyVideo(s.env.Video)
@@ -2239,6 +2291,25 @@ func (s *Server) testChatModel(w http.ResponseWriter, r *http.Request) {
 	result := llm.NewMiniMaxGenerator(chat).Ping(ctx)
 
 	httpx.OK(w, result)
+}
+
+func (s *Server) recordAdminAudit(r *http.Request, entry auditlog.Entry) {
+	if s == nil || s.auditLogs == nil || r == nil {
+		return
+	}
+	user := userFromRequest(r)
+	if user.ID > 0 || user.Username != "" || user.UserID != "" {
+		entry.OperatorID = user.ID
+		entry.OperatorName = firstNonEmpty(strings.TrimSpace(user.RealName), strings.TrimSpace(user.Username), strings.TrimSpace(user.UserID))
+	}
+	if entry.OperatorName == "" {
+		entry.OperatorName = "unknown"
+	}
+	entry.IP = s.clientIP(r)
+	entry.UserAgent = r.UserAgent()
+	if err := s.auditLogs.Record(r.Context(), entry); err != nil {
+		log.Printf("admin audit log failed action=%s target=%s/%s: %v", entry.Action, entry.TargetType, entry.TargetID, err)
+	}
 }
 
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -2366,6 +2437,11 @@ func (s *Server) authorizeAuthorization(w http.ResponseWriter, r *http.Request, 
 		return auth.UserInfo{}, false
 	}
 	if s.db == nil {
+		httpx.Fail(w, http.StatusUnauthorized, "Unauthorized Exception")
+		return auth.UserInfo{}, false
+	}
+	currentVersion, verr := s.system.TokenVersion(r.Context(), tokenUser.ID)
+	if verr != nil || tokenUser.TokenVersion == 0 || tokenUser.TokenVersion != currentVersion {
 		httpx.Fail(w, http.StatusUnauthorized, "Unauthorized Exception")
 		return auth.UserInfo{}, false
 	}

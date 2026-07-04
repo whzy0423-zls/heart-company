@@ -49,6 +49,10 @@ func (s *Server) appVoiceRecognize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+	if !isAllowedASRAudioUpload(header) {
+		httpx.Fail(w, http.StatusBadRequest, "仅支持上传音频文件")
+		return
+	}
 
 	// 读取文件内容
 	fileBytes, err := io.ReadAll(file)
@@ -151,6 +155,33 @@ func safeASRFilename(filename string) string {
 		return "audio.wav"
 	}
 	return filename
+}
+
+func isAllowedASRAudioUpload(header *multipart.FileHeader) bool {
+	if header == nil {
+		return false
+	}
+	contentType := strings.ToLower(strings.TrimSpace(header.Header.Get("Content-Type")))
+	if strings.HasPrefix(contentType, "audio/") {
+		return true
+	}
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if !allowedASRAudioExtension(ext) {
+		return false
+	}
+	return contentType == "" ||
+		contentType == "application/octet-stream" ||
+		contentType == "binary/octet-stream" ||
+		(contentType == "video/mp4" && (ext == ".m4a" || ext == ".mp4"))
+}
+
+func allowedASRAudioExtension(ext string) bool {
+	switch ext {
+	case ".aac", ".amr", ".flac", ".m4a", ".mp3", ".mp4", ".oga", ".ogg", ".opus", ".wav", ".webm":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildASREndpoint(apiBase string) (string, error) {

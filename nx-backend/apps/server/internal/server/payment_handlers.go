@@ -142,10 +142,12 @@ func (s *Server) createReportOrder(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "create order failed")
 		return
 	}
-	if _, err := s.miniapp.CreateOrder(ctx, uid, outTradeNo, "report", recordID, "九型深度报告", price); err != nil {
+	order, err := s.miniapp.CreateOrReusePendingOrder(ctx, uid, outTradeNo, "report", recordID, "九型深度报告", price)
+	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	outTradeNo = order.OutTradeNo
 
 	prepay, err := s.pay.Prepay(ctx, outTradeNo, openID, "九型芯之力·深度报告", price)
 	if err != nil {

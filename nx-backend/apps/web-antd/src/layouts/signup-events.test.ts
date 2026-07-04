@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  buildSignupEventsURL,
   extractSignupStreamEvents,
+  signupNoticeIdentity,
   shouldLogoutForSignupEventStatus,
   shouldPollSignupNoticeFallback,
 } from './signup-events';
@@ -67,6 +69,37 @@ describe('signup event stream parser', () => {
       },
     ]);
     expect(result.remaining).toBe('');
+  });
+});
+
+describe('signup event stream url', () => {
+  it('builds signup event url from configured api base', () => {
+    expect(buildSignupEventsURL('/api')).toBe('/api/signups/events');
+    expect(buildSignupEventsURL('/api/')).toBe('/api/signups/events');
+    expect(buildSignupEventsURL('https://example.com/app-api')).toBe(
+      'https://example.com/app-api/signups/events',
+    );
+  });
+
+  it('falls back to same-origin api prefix when api base is empty', () => {
+    expect(buildSignupEventsURL('')).toBe('/api/signups/events');
+  });
+});
+
+describe('signup notice identity', () => {
+  it('separates anonymous, authenticated, and named users', () => {
+    expect(signupNoticeIdentity({ accessToken: null, username: 'admin' })).toBe(
+      'anonymous',
+    );
+    expect(signupNoticeIdentity({ accessToken: 'token' })).toBe(
+      'authenticated',
+    );
+    expect(
+      signupNoticeIdentity({ accessToken: 'token', userId: 7 }),
+    ).toBe('7');
+    expect(
+      signupNoticeIdentity({ accessToken: 'token', username: 'admin' }),
+    ).toBe('admin');
   });
 });
 
