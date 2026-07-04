@@ -42,6 +42,22 @@ for (const file of collectVueFiles('src/pages')) {
   }
 }
 
+
+for (const file of collectVueFiles('src/pages')) {
+  const source = readFileSync(file, 'utf8')
+  const images = source.match(/<image\b[\s\S]*?>/g) || []
+  for (const image of images) {
+    if (image.includes('poster-img')) continue
+    assert.match(image, /\slazy-load(?:=|\s|>|$)/, `${file} has image without lazy-load: ${image}`)
+  }
+}
+
+
+const profilePage = readFileSync('src/pages/profile/profile.vue', 'utf8')
+assert.match(profilePage, /profileLoading/, 'profile page should expose a loading state for non-blocking history fetch')
+assert.match(profilePage, /v-if="profileLoading"/, 'profile page should render loading placeholder before empty states')
+assert.match(profilePage, /loadTicket/, 'profile page should ignore stale concurrent loads')
+
 const resultPage = readFileSync('src/pages/result/result.vue', 'utf8')
 assert.match(
   resultPage,

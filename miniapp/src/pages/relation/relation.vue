@@ -117,7 +117,7 @@ function reset() {
     <template v-else>
       <view class="card pair">
         <view class="pair__side">
-          <image class="pair__avatar" :src="`/static/avatars/${myInfo.id}.png`" mode="aspectFill" />
+          <image class="pair__avatar" :src="`/static/avatars/${myInfo.id}.png`" mode="aspectFill" lazy-load />
           <text class="pair__name">我 · {{ myInfo.id }}号</text>
         </view>
         <view class="pair__score">
@@ -125,7 +125,7 @@ function reset() {
           <text class="pair__lbl">契合指数</text>
         </view>
         <view class="pair__side">
-          <image class="pair__avatar" :src="`/static/avatars/${taInfo.id}.png`" mode="aspectFill" />
+          <image class="pair__avatar" :src="`/static/avatars/${taInfo.id}.png`" mode="aspectFill" lazy-load />
           <text class="pair__name">TA · {{ taInfo.id }}号</text>
         </view>
       </view>

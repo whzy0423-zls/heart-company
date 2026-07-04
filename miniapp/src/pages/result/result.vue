@@ -278,7 +278,7 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
   <view class="wrap page-stack result-page" v-if="result">
     <view class="card head">
       <view class="avatar-wrap">
-        <image class="avatar" :src="`/static/avatars/${result.type}.png`" mode="aspectFill" />
+        <image class="avatar" :src="`/static/avatars/${result.type}.png`" mode="aspectFill" lazy-load />
         <view class="badge">{{ result.type }}</view>
       </view>
       <text class="title">{{ r.title }}</text>
