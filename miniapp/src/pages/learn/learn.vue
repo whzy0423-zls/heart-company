@@ -2,23 +2,36 @@
 import { ref, onMounted } from 'vue'
 import { TYPES_INFO } from '../../data/enneagramGame'
 import { getSiteConfigApi } from '../../api'
+import { userErrorMessage } from '../../utils/userMessage'
 
 const courses = ref([])
 const quotes = ref([])
 const types = ref(Object.keys(TYPES_INFO).map((id) => ({ id: Number(id), ...TYPES_INFO[id] })))
 const loading = ref(true)
+const loadError = ref('')
+let loadTicket = 0
 
-onMounted(async () => {
+async function loadContent() {
+  const ticket = ++loadTicket
+  loading.value = true
+  loadError.value = ''
   try {
     const cfg = await getSiteConfigApi()
+    if (ticket !== loadTicket) return
     courses.value = cfg?.home?.courses?.items || []
     quotes.value = cfg?.home?.quotes?.items || []
-  } catch {
+  } catch (e) {
+    if (ticket !== loadTicket) return
     courses.value = []
     quotes.value = []
+    loadError.value = userErrorMessage(e, '内容加载失败，请稍后重试')
   } finally {
-    loading.value = false
+    if (ticket === loadTicket) loading.value = false
   }
+}
+
+onMounted(() => {
+  loadContent()
 })
 
 function goTest() {
@@ -31,7 +44,12 @@ function goTest() {
     <view class="card section">
       <text class="eyebrow">课程体系</text>
       <text class="sec-title">线上课程</text>
-      <view v-if="!loading && courses.length === 0" class="empty">课程内容即将上线</view>
+      <view v-if="loading" class="empty">课程内容加载中…</view>
+      <view v-else-if="loadError" class="empty empty--error">
+        <text>{{ loadError }}</text>
+        <text class="retry" @click="loadContent">重新加载</text>
+      </view>
+      <view v-else-if="courses.length === 0" class="empty">课程内容即将上线</view>
       <view v-for="(c, i) in courses" :key="i" class="course">
         <text class="chip course__badge">{{ c.badge || (i + 1) }}</text>
         <view class="course__body">
@@ -44,7 +62,8 @@ function goTest() {
     <view class="card section">
       <text class="eyebrow">老韩语录</text>
       <text class="sec-title">语录互动区</text>
-      <view v-if="!loading && quotes.length === 0" class="empty">语录内容即将上线</view>
+      <view v-if="loading" class="empty">语录内容加载中…</view>
+      <view v-else-if="!loadError && quotes.length === 0" class="empty">语录内容即将上线</view>
       <view v-for="quote in quotes" :key="quote" class="quote-card">
         <text class="quote-card__text">“{{ quote }}”</text>
         <text class="quote-card__mark">”</text>
@@ -72,6 +91,8 @@ function goTest() {
 .sec-title { font-size: 34rpx; font-weight: 900; display: block; margin: 16rpx 0 20rpx; }
 .section { display: flex; flex-direction: column; }
 .empty { color: #767d89; font-size: 26rpx; padding: 20rpx 0; }
+.empty--error { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; }
+.retry { flex-shrink: 0; color: #2b7fff; font-weight: 900; }
 .course { display: flex; gap: 18rpx; padding: 22rpx 0; border-bottom: 2rpx solid rgba(20,24,32,.07); }
 .course:last-child { border-bottom: none; }
 .course__badge { flex-shrink: 0; }
