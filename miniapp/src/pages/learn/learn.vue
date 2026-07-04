@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { TYPES_INFO } from '../../data/enneagramGame'
-import { getSiteConfigApi } from '../../api'
+import { getCachedSiteConfig } from '../../utils/siteConfig'
 import { userErrorMessage } from '../../utils/userMessage'
 
 const courses = ref([])
@@ -16,7 +16,7 @@ async function loadContent() {
   loading.value = true
   loadError.value = ''
   try {
-    const cfg = await getSiteConfigApi()
+    const cfg = await getCachedSiteConfig()
     if (ticket !== loadTicket) return
     courses.value = cfg?.home?.courses?.items || []
     quotes.value = cfg?.home?.quotes?.items || []

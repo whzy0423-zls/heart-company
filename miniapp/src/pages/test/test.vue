@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed } from 'vue'
+import { onUnload } from '@dcloudio/uni-app'
 import { QUESTIONS } from '../../data/enneagramGame'
 import { calcType } from '../../utils/enneagram'
 import { setLastResult } from '../../utils/session'
@@ -9,27 +10,46 @@ const stage = ref('gender') // gender | quiz
 const gender = ref(null)
 const step = ref(0)
 const answers = ref([])
+const answerLocked = ref(false)
+let advanceTimer = null
 
 const q = computed(() => QUESTIONS[step.value])
 const progress = computed(() => ((step.value + (answers.value[step.value] ? 1 : 0)) / QUESTIONS.length) * 100)
 
 function start(g) {
+  clearAdvanceTimer()
   gender.value = g
   stage.value = 'quiz'
   step.value = 0
   answers.value = []
+  answerLocked.value = false
+}
+
+function clearAdvanceTimer() {
+  if (!advanceTimer) return
+  clearTimeout(advanceTimer)
+  advanceTimer = null
 }
 
 function choose(opt) {
+  if (answerLocked.value) return
+  answerLocked.value = true
   answers.value[step.value] = opt
   if (step.value < QUESTIONS.length - 1) {
-    setTimeout(() => { step.value += 1 }, 160)
+    clearAdvanceTimer()
+    advanceTimer = setTimeout(() => {
+      step.value += 1
+      answerLocked.value = false
+      advanceTimer = null
+    }, 160)
   } else {
     finish()
   }
 }
 
 function back() {
+  clearAdvanceTimer()
+  answerLocked.value = false
   if (step.value > 0) step.value -= 1
 }
 
@@ -38,6 +58,7 @@ function letter(k) {
 }
 
 function finish() {
+  clearAdvanceTimer()
   const result = calcType(answers.value, gender.value)
   setLastResult(result, gender.value)
   // 匿名统计上报（不阻塞）
@@ -50,6 +71,10 @@ function finish() {
   }).catch(() => {})
   uni.redirectTo({ url: '/pages/result/result' })
 }
+
+onUnload(() => {
+  clearAdvanceTimer()
+})
 </script>
 
 <template>
@@ -86,7 +111,7 @@ function finish() {
           v-for="(opt, k) in q.options"
           :key="k"
           class="quiz__opt"
-          :class="{ on: answers[step] === opt }"
+          :class="{ on: answers[step] === opt, disabled: answerLocked }"
           @click="choose(opt)"
         >
           <text class="quiz__idx">{{ letter(k) }}</text>
@@ -218,6 +243,7 @@ function finish() {
   padding: 28rpx 24rpx;
   box-shadow: 0 10rpx 30rpx -28rpx rgba(28,40,70,.45);
 }
+.quiz__opt.disabled { pointer-events: none; opacity: .72; }
 .quiz__opt.on {
   border-color: rgba(43,127,255,.46);
   background: linear-gradient(120deg, rgba(43,127,255,.12), rgba(37,179,101,.08));
