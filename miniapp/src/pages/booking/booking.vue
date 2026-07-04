@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { ensureLogin } from '../../utils/auth'
 import { createBookingApi } from '../../api'
+import { userErrorMessage } from '../../utils/userMessage'
 
 const kinds = [
   { value: 'consult', label: '1v1 咨询' },
@@ -27,7 +28,7 @@ async function submit() {
     uni.showToast({ title: '预约已提交', icon: 'success' })
     form.value = { contactName: '', phone: '', intent: '', preferredTime: '', message: '' }
   } catch (e) {
-    uni.showToast({ title: '提交失败，请重试', icon: 'none' })
+    uni.showToast({ title: userErrorMessage(e, '提交失败，请重试'), icon: 'none' })
   } finally {
     submitting.value = false
   }

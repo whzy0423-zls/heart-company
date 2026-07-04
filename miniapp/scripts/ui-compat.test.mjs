@@ -53,12 +53,26 @@ for (const file of collectVueFiles('src/pages')) {
 }
 
 
+
+const bookingPage = readFileSync('src/pages/booking/booking.vue', 'utf8')
+assert.match(bookingPage, /userErrorMessage/, 'booking page should surface normalized request errors')
+assert.match(bookingPage, /title:\s*userErrorMessage\(e,\s*'提交失败，请重试'\)/, 'booking submit should keep a fallback while showing specific API errors')
+
+const learnPage = readFileSync('src/pages/learn/learn.vue', 'utf8')
+assert.match(learnPage, /loadError/, 'learn page should expose a non-blocking failure state')
+assert.match(learnPage, /v-if="loading"/, 'learn page should render loading placeholders instead of a blank area')
+assert.match(learnPage, /@click="loadContent"/, 'learn page should provide retry when site config fails')
+
 const profilePage = readFileSync('src/pages/profile/profile.vue', 'utf8')
 assert.match(profilePage, /profileLoading/, 'profile page should expose a loading state for non-blocking history fetch')
 assert.match(profilePage, /v-if="profileLoading"/, 'profile page should render loading placeholder before empty states')
 assert.match(profilePage, /loadTicket/, 'profile page should ignore stale concurrent loads')
 
 const resultPage = readFileSync('src/pages/result/result.vue', 'utf8')
+assert.match(resultPage, /v-else-if="reportError"/, 'result page should render report failure state before falling back to manual fetch')
+assert.match(resultPage, /report__retry[\s\S]*@click="loadReportContent"/, 'result page should allow retrying report content fetch from the error state')
+assert.match(resultPage, /userErrorMessage/, 'result page should surface normalized request errors')
+
 assert.match(
   resultPage,
   /<!--\s*#ifdef MP-WEIXIN\s*-->[\s\S]*@click="makePoster"[\s\S]*<!--\s*#endif\s*-->/,

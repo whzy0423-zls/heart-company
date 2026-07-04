@@ -7,6 +7,7 @@ import { getLastResult } from '../../utils/session'
 import { ensureLogin } from '../../utils/auth'
 import { saveTestRecordApi, reportStatusApi, reportContentApi } from '../../api'
 import { payForReport } from '../../utils/payment'
+import { userErrorMessage } from '../../utils/userMessage'
 
 const result = ref(null)
 const gender = ref(null)
@@ -26,6 +27,7 @@ const reportUnlocked = ref(false)
 const reportPriceCents = ref(990)
 const reportContent = ref('')
 const reportLoading = ref(false)
+const reportError = ref('')
 const paying = ref(false)
 const posterUrl = ref('')
 const posterShow = ref(false)
@@ -70,7 +72,7 @@ async function saveRecord() {
     saved.value = true
     uni.showToast({ title: '已存入我的档案', icon: 'success' })
   } catch (e) {
-    uni.showToast({ title: '存档失败，请重试', icon: 'none' })
+    uni.showToast({ title: userErrorMessage(e, '存档失败，请重试'), icon: 'none' })
   } finally {
     saving.value = false
   }
@@ -91,11 +93,13 @@ async function refreshReportStatus() {
 async function loadReportContent() {
   if (reportLoading.value || reportContent.value) return
   reportLoading.value = true
+  reportError.value = ''
   try {
     const ans = await reportContentApi(recordId.value)
     reportContent.value = (ans && ans.answer) || ''
   } catch (e) {
-    uni.showToast({ title: '报告生成中，请稍后重试', icon: 'none' })
+    reportError.value = userErrorMessage(e, '报告生成中，请稍后重试')
+    uni.showToast({ title: reportError.value, icon: 'none' })
   } finally {
     reportLoading.value = false
   }
@@ -118,8 +122,7 @@ async function unlockReport() {
     reportUnlocked.value = true
     loadReportContent()
   } catch (e) {
-    const msg = e && e.errMsg && e.errMsg.includes('cancel') ? '已取消支付' : '支付失败，请重试'
-    uni.showToast({ title: msg, icon: 'none' })
+    uni.showToast({ title: userErrorMessage(e, '支付失败，请重试'), icon: 'none' })
   } finally {
     paying.value = false
   }
@@ -338,6 +341,10 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
       </view>
       <template v-if="reportUnlocked">
         <view v-if="reportLoading" class="report__loading">报告生成中，请稍候…</view>
+        <view v-else-if="reportError" class="report__loading report__error">
+          <text>{{ reportError }}</text>
+          <button class="btn-ghost report__retry" :disabled="reportLoading" @click="loadReportContent">重试</button>
+        </view>
         <text v-else-if="reportContent" class="report__content">{{ reportContent }}</text>
         <button v-else class="btn-ghost" @click="loadReportContent">查看报告</button>
       </template>
@@ -591,6 +598,8 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
   white-space: pre-wrap;
   display: block;
 }
+.report__retry { margin-top: 18rpx; }
+.report__error { color: #b45309; }
 .report__loading {
   color: #64748b;
   font-size: 26rpx;
