@@ -68,6 +68,19 @@ assert.match(profilePage, /profileLoading/, 'profile page should expose a loadin
 assert.match(profilePage, /v-if="profileLoading"/, 'profile page should render loading placeholder before empty states')
 assert.match(profilePage, /loadTicket/, 'profile page should ignore stale concurrent loads')
 
+const testPage = readFileSync('src/pages/test/test.vue', 'utf8')
+assert.match(testPage, /answerLocked/, 'test page should guard rapid repeated option taps')
+assert.match(testPage, /clearAdvanceTimer/, 'test page should clear pending navigation timers')
+assert.match(testPage, /onUnload/, 'test page should cleanup timers on unload')
+
+assert.match(learnPage, /getCachedSiteConfig/, 'learn page should use cached site config for faster repeat visits')
+
+assert.match(profilePage, /wechatLoginReady/, 'profile page should expose a WeChat login integration slot')
+assert.match(profilePage, /open-type="chooseAvatar"/, 'profile page should keep WeChat avatar slot')
+assert.match(profilePage, /type="nickname"/, 'profile page should keep WeChat nickname slot')
+assert.match(profilePage, /手机号授权/, 'profile page should reserve a future phone authorization slot')
+
+
 const resultPage = readFileSync('src/pages/result/result.vue', 'utf8')
 assert.match(resultPage, /v-else-if="reportError"/, 'result page should render report failure state before falling back to manual fetch')
 assert.match(resultPage, /report__retry[\s\S]*@click="loadReportContent"/, 'result page should allow retrying report content fetch from the error state')

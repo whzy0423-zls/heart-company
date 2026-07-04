@@ -22,6 +22,12 @@ const visibleRecords = computed(() => previewItems(records.value))
 const visibleBookings = computed(() => previewItems(bookings.value))
 const hiddenRecordCount = computed(() => hiddenCount(records.value))
 const hiddenBookingCount = computed(() => hiddenCount(bookings.value))
+const wechatLoginReady = computed(() => ({
+  codeLogin: true,
+  profile: true,
+  phone: false,
+  note: '微信 code 登录已接入；头像昵称已按微信新规范预留；手机号授权入口预留，后端开通后可接 getPhoneNumber。',
+}))
 let loadTicket = 0
 
 onShow(() => {
@@ -178,6 +184,11 @@ async function saveProfile() {
         <view class="profile-form__head">
           <text class="sec-title">微信资料</text>
           <button class="mini-link" :loading="profileSaving" :disabled="profileSaving" @click="syncWechatProfile">一键同步</button>
+        </view>
+        <view class="wechat-slot">
+          <text class="wechat-slot__title">微信登录站位</text>
+          <text class="wechat-slot__desc">{{ wechatLoginReady.note }}</text>
+          <button class="btn-soft wechat-slot__phone" disabled>手机号授权（预留）</button>
         </view>
         <view class="profile-form__row">
           <button class="avatar-picker" open-type="chooseAvatar" @chooseavatar="onChooseAvatar">
@@ -341,6 +352,16 @@ async function saveProfile() {
   justify-content: center;
 }
 .mini-link::after { border: none; }
+.wechat-slot {
+  margin: 18rpx 0 24rpx;
+  padding: 22rpx;
+  border-radius: 24rpx;
+  background: rgba(37,99,235,.08);
+  border: 2rpx solid rgba(37,99,235,.10);
+}
+.wechat-slot__title { display: block; color: #1e40af; font-size: 25rpx; font-weight: 900; margin-bottom: 8rpx; }
+.wechat-slot__desc { display: block; color: #475569; font-size: 24rpx; line-height: 1.6; }
+.wechat-slot__phone { margin-top: 16rpx; min-height: 72rpx; font-size: 25rpx; }
 .profile-form__row {
   display: flex;
   align-items: center;
