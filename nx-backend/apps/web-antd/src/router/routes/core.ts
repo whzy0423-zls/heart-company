@@ -103,6 +103,17 @@ const coreRoutes: RouteRecordRaw[] = [
       },
     ],
   },
+  {
+    component: () => import('#/views/_core/fallback/offline.vue'),
+    meta: {
+      hideInBreadcrumb: true,
+      hideInMenu: true,
+      hideInTab: true,
+      title: 'Offline',
+    },
+    name: 'Offline',
+    path: '/offline',
+  },
 ];
 
 export { coreRoutes, fallbackNotFoundRoute };

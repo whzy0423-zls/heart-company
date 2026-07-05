@@ -6,6 +6,7 @@ import { Button, Card, Spin } from 'ant-design-vue';
 defineProps<{
   description?: string;
   loading: boolean;
+  saveDisabled?: boolean;
   saving: boolean;
   title: string;
 }>();
@@ -20,7 +21,7 @@ const emit = defineEmits<{
     <Card :bordered="false" class="editor-shell-card">
       <template #extra>
         <Button
-          :disabled="loading"
+          :disabled="loading || saveDisabled"
           :loading="saving"
           type="primary"
           @click="emit('save')"

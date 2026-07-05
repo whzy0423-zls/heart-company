@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { AppOrder } from '#/api';
 
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 
 import { Page } from '@vben/common-ui';
+import { useAccessStore } from '@vben/stores';
 
 import {
   Button,
@@ -21,6 +22,12 @@ import {
 
 import { getAppOrderListApi, grantAppOrderApi } from '#/api';
 
+const APP_ORDER_WRITE_PERMISSION = 'Customer:AppOrders:Write';
+
+const accessStore = useAccessStore();
+const canGrantOrder = computed(() =>
+  accessStore.accessCodes.includes(APP_ORDER_WRITE_PERMISSION),
+);
 const loading = ref(false);
 const orders = ref<AppOrder[]>([]);
 const total = ref(0);
@@ -199,7 +206,7 @@ onMounted(() => {
                 详情
               </Button>
               <Button
-                v-if="record.status !== 'paid'"
+                v-if="record.status !== 'paid' && canGrantOrder"
                 size="small"
                 type="link"
                 @click="grantOrder(orderRecord(record))"

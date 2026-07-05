@@ -6,6 +6,7 @@ import { getAppAnalyticsOverviewApi } from '#/api/core/app-analytics';
 import {
   appAnalyticsStatCards,
   distributionRows,
+  formatRecentMemoryTime,
   formatAppAnalyticsPercent,
   normalizeRecentRows,
 } from './app-analytics';
@@ -44,6 +45,41 @@ describe('app analytics display helpers', () => {
     ]);
   });
 
+  it('shows backend active users and enabled status users as separate cards', () => {
+    expect(
+      appAnalyticsStatCards({
+        activeUsers: 12,
+        enabledUsers: 40,
+        extractedUsers: 7,
+        newUsersToday: 3,
+        totalUsers: 99,
+      } as any).map((item) => [item.label, item.value]),
+    ).toEqual([
+      ['累计用户', 99],
+      ['今日新增', 3],
+      ['活跃用户', 12],
+      ['正常状态用户', 40],
+      ['已提炼用户', 7],
+    ]);
+  });
+
+  it('labels legacy activeUsers status counts as normal status users when status distribution confirms it', () => {
+    expect(
+      appAnalyticsStatCards({
+        activeUsers: 12,
+        extractedUsers: 7,
+        newUsersToday: 3,
+        statusDistribution: { active: 12, disabled: 1 },
+        totalUsers: 13,
+      }).map((item) => [item.label, item.value]),
+    ).toEqual([
+      ['累计用户', 13],
+      ['今日新增', 3],
+      ['正常状态用户', 12],
+      ['已提炼用户', 7],
+    ]);
+  });
+
   it('formats member and status distribution rows with percentages', () => {
     expect(
       distributionRows([
@@ -72,5 +108,22 @@ describe('app analytics display helpers', () => {
       { id: 1, nickname: '', phone: '13800000000', title: '13800000000' },
       { id: 2, nickname: '小九', phone: '', title: '小九' },
     ]);
+  });
+
+  it('formats recent sediment time from lastExtractedAt before legacy lastMemoryAt', () => {
+    expect(
+      formatRecentMemoryTime({
+        lastExtractedAt: '2026/07/04 11:00:00',
+        lastMemoryAt: '2026/07/04 10:00:00',
+      } as any),
+    ).toBe('2026/07/04 11:00:00');
+    expect(
+      formatRecentMemoryTime({
+        lastMemoryAt: '2026/07/04 10:00:00',
+      }),
+    ).toBe('2026/07/04 10:00:00');
+    expect(formatRecentMemoryTime({ id: 2, latestMemory: 'legacy' } as any)).toBe(
+      '-',
+    );
   });
 });

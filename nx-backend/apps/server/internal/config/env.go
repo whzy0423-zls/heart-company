@@ -239,10 +239,12 @@ func Load() Env {
 		asrTimeout = 60
 	}
 
+	appEnv := NormalizeAppEnv(getenv("APP_ENV", ""))
+
 	return Env{
 		AdminPassword:      getenv("ADMIN_PASSWORD", "123456"),
 		AdminUsername:      getenv("ADMIN_USERNAME", "admin"),
-		AppEnv:             getenv("APP_ENV", "dev"),
+		AppEnv:             appEnv,
 		AppVersion:         getenv("APP_VERSION", "0.0.1"),
 		CORSAllowedOrigins: parseCSV(getenv("CORS_ALLOWED_ORIGINS", "")),
 		JWTSecret:          getenv("JWT_SECRET", "nine-xing-dev-secret"),
@@ -293,13 +295,13 @@ func Load() Env {
 			TemplateID: getenv("SMS_TEMPLATE_ID", ""),
 		},
 		Video: VideoConfig{
-			APIBase:        getenv("VIDEO_API_BASE", "https://zz1cc.cc.cd"),
+			APIBase:        getenv("VIDEO_API_BASE", ""),
 			APIKey:         getenv("VIDEO_API_KEY", ""),
 			Model:          getenv("VIDEO_MODEL", "video-ds-2.0-fast"),
 			TimeoutSeconds: videoTimeout,
 		},
 		Image: ImageConfig{
-			APIBase:        getenv("IMAGE_API_BASE", "https://zz1cc.cc.cd"),
+			APIBase:        getenv("IMAGE_API_BASE", ""),
 			APIKey:         getenv("IMAGE_API_KEY", ""),
 			Model:          getenv("IMAGE_MODEL", "gpt-image-2"),
 			TimeoutSeconds: imageTimeout,
@@ -318,7 +320,11 @@ func Load() Env {
 }
 
 func ValidateProduction(env Env) error {
-	if strings.TrimSpace(env.AppEnv) != "production" {
+	appEnv := NormalizeAppEnv(env.AppEnv)
+	if err := validateAppEnv(appEnv); err != nil {
+		return err
+	}
+	if appEnv != "production" {
 		return nil
 	}
 	if weakSecret(env.JWTSecret) {
@@ -336,8 +342,14 @@ func ValidateProduction(env Env) error {
 	if env.WxPay.Dev {
 		return fmt.Errorf("production WXPAY_DEV must be false")
 	}
-	if strings.TrimSpace(env.Video.APIKey) != "" && strings.TrimSpace(env.PublicBaseURL) == "" {
-		return fmt.Errorf("production PUBLIC_BASE_URL must be set when video gateway is enabled")
+	if strings.TrimSpace(env.Video.APIKey) != "" {
+		publicBaseURL := strings.TrimSpace(env.PublicBaseURL)
+		if publicBaseURL == "" {
+			return fmt.Errorf("production PUBLIC_BASE_URL must be set when video gateway is enabled")
+		}
+		if !netguard.IsPublicHTTPURL(publicBaseURL) {
+			return fmt.Errorf("production PUBLIC_BASE_URL must be a public http(s) URL when video gateway is enabled")
+		}
 	}
 	if err := validateTrustedProxyCIDRs(env.TrustedProxyCIDRs); err != nil {
 		return err
@@ -348,7 +360,40 @@ func ValidateProduction(env Env) error {
 	return nil
 }
 
+func NormalizeAppEnv(raw string) string {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	switch value {
+	case "":
+		return ""
+	case "local", "development":
+		return "dev"
+	case "prod":
+		return "production"
+	default:
+		return value
+	}
+}
+
+func IsProduction(raw string) bool {
+	return NormalizeAppEnv(raw) == "production"
+}
+
+func validateAppEnv(value string) error {
+	switch NormalizeAppEnv(value) {
+	case "dev", "test", "staging", "production":
+		return nil
+	default:
+		return fmt.Errorf("APP_ENV must be explicitly set to one of dev, test, staging, production")
+	}
+}
+
 func validateProductionExternalAPIBases(env Env) error {
+	if strings.TrimSpace(env.Video.APIKey) != "" && strings.TrimSpace(env.Video.APIBase) == "" {
+		return fmt.Errorf("production VIDEO_API_BASE must be set when VIDEO_API_KEY is configured")
+	}
+	if strings.TrimSpace(env.Image.APIKey) != "" && strings.TrimSpace(env.Image.APIBase) == "" {
+		return fmt.Errorf("production IMAGE_API_BASE must be set when IMAGE_API_KEY is configured")
+	}
 	for label, apiBase := range map[string]string{
 		"ASR_API_BASE":       env.ASR.APIBase,
 		"EMBEDDING_API_BASE": env.Embedding.APIBase,

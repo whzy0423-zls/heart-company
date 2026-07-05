@@ -30,6 +30,7 @@ RUN chmod +x /app/docker-entrypoint.sh && \
 USER app
 
 ENV PORT=5320 \
+    APP_ENV=production \
     SITE_CONFIG_PATH=/data/site-config.json \
     BUILD_SCRIPT=
 

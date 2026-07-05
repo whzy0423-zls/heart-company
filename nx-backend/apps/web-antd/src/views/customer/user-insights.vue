@@ -78,6 +78,8 @@ const query = reactive({
   status: '',
 });
 let requestId = 0;
+let autoOpenedRouteKey = '';
+let loadedRouteUserId = '';
 
 const columns = [
   { dataIndex: 'phone', fixed: 'left' as const, title: '手机号', width: 150 },
@@ -107,6 +109,16 @@ function routeKeyword() {
   return Array.isArray(value) ? value[0] || '' : value || '';
 }
 
+function routeUserId() {
+  const value = route.query.userId;
+  return Array.isArray(value) ? value[0] || '' : value || '';
+}
+
+function routeOpenToken() {
+  const value = route.query.open;
+  return Array.isArray(value) ? value[0] || '' : value || '';
+}
+
 function applyRouteKeyword() {
   const keyword = routeKeyword().trim();
   if (!keyword || query.keyword === keyword) return false;
@@ -129,6 +141,7 @@ function insightStatus(record: AppUserInsight) {
 
 async function load() {
   const currentRequestId = ++requestId;
+  const currentRouteUserId = routeUserId().trim();
   loading.value = true;
   try {
     loadError.value = '';
@@ -138,10 +151,13 @@ async function load() {
       page: query.page,
       pageSize: query.pageSize,
       status: query.status || undefined,
+      userId: currentRouteUserId || undefined,
     });
     if (currentRequestId !== requestId) return;
     insights.value = result.items;
     total.value = result.total;
+    loadedRouteUserId = currentRouteUserId;
+    autoOpenRouteDetail();
   } catch {
     if (currentRequestId === requestId) {
       insights.value = [];
@@ -153,6 +169,10 @@ async function load() {
       loading.value = false;
     }
   }
+}
+
+function retryLoad() {
+  void load();
 }
 
 function search() {
@@ -174,16 +194,41 @@ function openDetail(record: AppUserInsight) {
   detailOpen.value = true;
 }
 
+function autoOpenRouteDetail() {
+  const userId = routeUserId().trim();
+  const keyword = routeKeyword().trim();
+  const openToken = routeOpenToken().trim();
+  const routeKey = `${userId}:${keyword}:${openToken}:${query.page}:${query.pageSize}`;
+  if (!userId && !keyword) return;
+  if (autoOpenedRouteKey === routeKey) return;
+
+  const byUserId = userId
+    ? insights.value.find((item) => String(item.id) === userId)
+    : undefined;
+  const uniqueKeywordMatch =
+    !byUserId && keyword && total.value === 1 && insights.value.length === 1
+      ? insights.value[0]
+      : undefined;
+  const target = byUserId || uniqueKeywordMatch;
+  if (!target) return;
+
+  autoOpenedRouteKey = routeKey;
+  openDetail(target);
+}
+
 function insightRecord(record: Record<string, any>): AppUserInsight {
   return record as AppUserInsight;
 }
 
 watch(
-  () => route.query.keyword,
+  () => [route.query.keyword, route.query.userId, route.query.open],
   () => {
-    if (applyRouteKeyword()) {
+    const routeUserIdValue = routeUserId().trim();
+    if (applyRouteKeyword() || routeUserIdValue !== loadedRouteUserId) {
       load();
+      return;
     }
+    autoOpenRouteDetail();
   },
 );
 
@@ -237,7 +282,11 @@ onMounted(() => {
           :message="loadError"
           show-icon
           type="error"
-        />
+        >
+          <template #action>
+            <Button size="small" type="link" @click="retryLoad">重试</Button>
+          </template>
+        </Alert>
         <Table
           :columns="columns"
           :data-source="insights"

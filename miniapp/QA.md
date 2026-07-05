@@ -6,8 +6,8 @@
 
 ```bash
 npm run test:config
-npm run build:h5
-VITE_API_BASE=https://api.nine-xing.local/api npm run build:mp-weixin
+VITE_API_BASE=https://api.nine-xing.com/api npm run build:h5
+VITE_API_BASE=https://api.nine-xing.com/api npm run build:mp-weixin
 ```
 
 ## mp-weixin 真机检查
@@ -18,7 +18,7 @@ VITE_API_BASE=https://api.nine-xing.local/api npm run build:mp-weixin
 2. 微信资料能力
    - 点击头像按钮，确认 `chooseAvatar` 能调起微信头像选择。
    - 昵称输入框 `type="nickname"` 能触发微信昵称建议。
-   - 点击手机号授权预留入口 `getPhoneNumber`，后端未开通时应给出降级提示，不影响登录和资料保存。
+   - 当前不展示手机号授权预留入口；确认页面没有 `getPhoneNumber` 授权按钮，资料保存不依赖手机号。
 3. 测试与结果
    - 快速连续点击答题选项，不应跳题或错乱。
    - 完成测试后进入结果页；重启小程序后结果页仍能读取最近一次测试结果。

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -275,6 +276,23 @@ func (s *Store) UpdatePushStatus(ctx context.Context, id int64, status string, s
 	return err
 }
 
+// ClaimPendingPushTask atomically moves a pending task into sending state.
+// It returns false when another worker already claimed or finished the task.
+func (s *Store) ClaimPendingPushTask(ctx context.Context, id int64) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE push_notifications SET status = $2, sent_count = $3, error_message = $4
+		WHERE id = $1 AND status = 'pending'
+	`, id, "sending", 0, "")
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
 // ListPushHistory 分页查询推送历史。
 func (s *Store) ListPushHistory(ctx context.Context, page, pageSize int) ([]PushNotification, int, error) {
 	if page < 1 {
@@ -311,6 +329,65 @@ func (s *Store) ListPushHistory(ctx context.Context, page, pageSize int) ([]Push
 		items = append(items, n)
 	}
 	return items, total, rows.Err()
+}
+
+// ListRecoverablePushTasks returns pending push tasks after process restart.
+func (s *Store) ListRecoverablePushTasks(ctx context.Context, limit int) ([]PushNotification, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, title, content, target_type, target_value, deep_link, sent_count, status, error_message, operator, create_time
+		FROM push_notifications
+		WHERE status = 'pending'
+		ORDER BY create_time ASC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []PushNotification
+	for rows.Next() {
+		var n PushNotification
+		var ct time.Time
+		if err := rows.Scan(&n.ID, &n.Title, &n.Content, &n.TargetType, &n.TargetValue,
+			&n.DeepLink, &n.SentCount, &n.Status, &n.ErrorMessage, &n.Operator, &ct); err != nil {
+			return nil, err
+		}
+		n.CreateTime = ct.Format("2006/01/02 15:04:05")
+		items = append(items, n)
+	}
+	return items, rows.Err()
+}
+
+// MarkInterruptedPushTasks marks tasks that were in-flight during a prior process as failed.
+func (s *Store) MarkInterruptedPushTasks(ctx context.Context, reason string) error {
+	return s.MarkInterruptedPushTasksBefore(ctx, reason, time.Time{})
+}
+
+// MarkInterruptedPushTasksBefore marks in-flight tasks older than cutoff as failed.
+// A zero cutoff preserves the legacy behavior and marks all sending tasks.
+func (s *Store) MarkInterruptedPushTasksBefore(ctx context.Context, reason string, cutoff time.Time) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "推送发送已中断，请重新发送"
+	}
+	if cutoff.IsZero() {
+		_, err := s.db.ExecContext(ctx, `
+			UPDATE push_notifications
+			SET status = 'failed', error_message = $1
+			WHERE status = 'sending'
+		`, reason)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE push_notifications
+		SET status = 'failed', error_message = $1
+		WHERE status = 'sending' AND create_time < $2
+	`, reason, cutoff)
+	return err
 }
 
 // int64SliceToArray 将 int64 切片转为 PostgreSQL array 兼容类型。

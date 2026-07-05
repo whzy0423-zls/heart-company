@@ -49,14 +49,17 @@ test('sanitizeRenderedHtml removes event handlers and unsafe attributes', () => 
   const html = markdownUtils.sanitizeRenderedHtml(`
     <p onclick="alert(1)">hello</p>
     <img src="x" onerror="alert(1)">
+    <img src="//evil.example/pixel.png">
     <a href="javascript:alert(1)">bad</a>
     <a href="http://example.com/guide">http</a>
+    <a href="//evil.example/guide">protocol relative</a>
     <a href="https://example.com/guide">safe</a>
   `)
 
   assert.match(html, /hello/)
   assert.match(html, /href="https:\/\/example\.com\/guide"/)
   assert.doesNotMatch(html, /href="http:\/\/example\.com\/guide"/i)
+  assert.doesNotMatch(html, /\/\/evil\.example/i)
   assert.doesNotMatch(html, /onclick/i)
   assert.doesNotMatch(html, /onerror/i)
   assert.doesNotMatch(html, /javascript:/i)

@@ -30,13 +30,47 @@ function fail(message) {
 }
 
 if (!apiBase) {
-  fail('VITE_API_BASE is required for mp-weixin production builds.');
+  fail('VITE_API_BASE is required for production builds.');
 }
 
 if (!apiBase.startsWith('https://')) {
-  fail('VITE_API_BASE must be a HTTPS URL for mp-weixin production builds.');
+  fail('VITE_API_BASE must be a HTTPS URL for production builds.');
 }
 
-if (apiBase.includes('api.example.com') || apiBase.includes('localhost') || apiBase.includes('127.0.0.1')) {
+let parsed;
+try {
+  parsed = new URL(apiBase);
+} catch {
+  fail('VITE_API_BASE must be a valid HTTPS URL for production builds.');
+}
+
+const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+
+function isPrivateIPv4(value) {
+  const parts = value.split('.').map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  return (
+    parts[0] === 10 ||
+    parts[0] === 127 ||
+    (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+    (parts[0] === 192 && parts[1] === 168) ||
+    (parts[0] === 169 && parts[1] === 254) ||
+    parts[0] === 0
+  );
+}
+
+if (
+  host === 'localhost' ||
+  host.endsWith('.localhost') ||
+  host.endsWith('.local') ||
+  host === '::1' ||
+  isPrivateIPv4(host) ||
+  host === 'api.example.com' ||
+  host.endsWith('.example.com') ||
+  host === 'api.yourdomain.com' ||
+  host.endsWith('.yourdomain.com')
+) {
   fail('VITE_API_BASE must not use placeholder or local development hosts.');
 }

@@ -1,4 +1,4 @@
-# 部署说明（Docker Compose 三容器）
+# 部署说明（Docker Compose 四服务）
 
 整套包含四个服务，由仓库根的 `docker-compose.yml` 编排：
 
@@ -41,9 +41,9 @@ export POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 
 # 2) 如果后台/官网/API 不同源，配置浏览器允许访问 API 的生产域名
 # export CORS_ALLOWED_ORIGINS="https://admin.example.com,https://www.example.com"
-# 如后端前面有反向代理且需要按真实客户端 IP 限流，显式配置可信代理来源；
-# 未配置时会忽略 X-Forwarded-For/X-Real-IP，避免头部伪造绕过限流。
-# export TRUSTED_PROXY_CIDRS="127.0.0.1,10.0.0.0/24"
+# 如后端前面有反向代理且需要按真实客户端 IP 限流，显式配置可信代理来源。
+# docker-compose 默认固定 nx 网络为 172.28.0.0/24；如你改了 compose 网络或外层代理链，请同步调整。
+export TRUSTED_PROXY_CIDRS="${TRUSTED_PROXY_CIDRS:-172.28.0.0/24}"
 
 # 3) 如果要使用人声管理/声音测试，必须配置 MiniMax 中文站 API Key
 export MINIMAX_API_KEY="你的 MiniMax API Key"
@@ -59,8 +59,11 @@ export MINIMAX_API_BASE="https://api.minimaxi.com"
 # export OSS_ENDPOINT="https://oss-cn-beijing.aliyuncs.com"
 # export OSS_PUBLIC_URL="https://your-bucket.oss-cn-beijing.aliyuncs.com"
 
-# 5) 如启用视频生成/视频分析网关（VIDEO_API_KEY 非空），必须配置后端公网根地址；
+# 5) 如启用视频/图片生成网关，必须显式配置对应 API_BASE；
+# 如启用视频生成/视频分析网关（VIDEO_API_KEY 非空），还必须配置后端公网根地址；
 # 外部视频网关只会使用 PUBLIC_BASE_URL 补全本地相对资源，不会从 Host/X-Forwarded-Host 推断。
+# export VIDEO_API_BASE="https://video-api.example.com"
+# export IMAGE_API_BASE="https://image-api.example.com"
 # export PUBLIC_BASE_URL="https://api.example.com"
 
 # 6) 如启用微信支付/推送，请补齐对应生产配置
@@ -68,8 +71,9 @@ export MINIMAX_API_BASE="https://api.minimaxi.com"
 # export WXPAY_APPID="..."
 # export WXPAY_API_V3_KEY="..."
 # export WXPAY_SERIAL_NO="..."
-# export WXPAY_PRIVATE_KEY_PATH="/data/certs/wxpay_private_key.pem"
-# export WXPAY_PLATFORM_CERT_PATH="/data/certs/wxpay_platform_cert.pem"
+# 将证书放到宿主机 ./certs/wxpay/，compose 会只读挂载到 /run/secrets/wxpay/
+# export WXPAY_PRIVATE_KEY_PATH="/run/secrets/wxpay/apiclient_key.pem"
+# export WXPAY_PLATFORM_CERT_PATH="/run/secrets/wxpay/wechatpay_platform.pem"
 # export WXPAY_NOTIFY_URL="https://api.example.com/api/pay/notify"
 # export JPUSH_APP_KEY="..."
 # export JPUSH_MASTER_SECRET="..."
@@ -77,7 +81,7 @@ export MINIMAX_API_BASE="https://api.minimaxi.com"
 # 7) 构建并启动
 docker compose up -d --build
 
-# 7) 查看状态/日志
+# 8) 查看状态/日志
 docker compose ps
 docker compose logs -f server
 ```
@@ -174,7 +178,7 @@ docker compose logs -f server
 ```bash
 # 后端（连本地或容器里的 db）
 cd nx-backend/apps/server
-DATABASE_URL='postgres://nx:nx@localhost:5432/nx_admin?sslmode=disable' go run ./cmd/server
+APP_ENV=dev DATABASE_URL='postgres://nx:nx@localhost:5432/nx_admin?sslmode=disable' go run ./cmd/server
 # 后台（另开终端）
 cd nx-backend && pnpm dev:antd
 # 官网（另开终端）

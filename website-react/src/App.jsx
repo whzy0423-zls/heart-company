@@ -21,6 +21,12 @@ const MindQuoteDetail = lazy(() => import('./pages/MindQuoteDetail'))
 const Types = lazy(() => import('./pages/Types'))
 const Signup = lazy(() => import('./pages/Signup'))
 
+const routeFallback = <div className="route-loading" role="status" aria-live="polite">加载中…</div>
+
+function lazyRoute(element) {
+  return <Suspense fallback={routeFallback}>{element}</Suspense>
+}
+
 export default function App() {
   const location = useLocation()
 
@@ -32,21 +38,21 @@ export default function App() {
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<Home />} />
-        <Route path="teacher" element={<Suspense fallback={null}><Teacher /></Suspense>} />
-        <Route path="stages" element={<Suspense fallback={null}><Stages /></Suspense>} />
-        <Route path="stage1" element={<Suspense fallback={null}><Stage1 /></Suspense>} />
-        <Route path="stage2" element={<Suspense fallback={null}><Stage2 /></Suspense>} />
-        <Route path="stage3" element={<Suspense fallback={null}><Stage3 /></Suspense>} />
-        <Route path="watch" element={<Suspense fallback={null}><Watch /></Suspense>} />
-        <Route path="course" element={<Suspense fallback={null}><Course /></Suspense>} />
-        <Route path="courses" element={<Suspense fallback={null}><Courses /></Suspense>} />
-        <Route path="game" element={<Suspense fallback={null}><Game /></Suspense>} />
-        <Route path="type/:id" element={<Suspense fallback={null}><TypeDetail /></Suspense>} />
-        <Route path="quotes" element={<Suspense fallback={null}><Quotes /></Suspense>} />
-        <Route path="mind-quotes" element={<Suspense fallback={null}><MindQuotes /></Suspense>} />
-        <Route path="mind-quotes/:id" element={<Suspense fallback={null}><MindQuoteDetail /></Suspense>} />
-        <Route path="types" element={<Suspense fallback={null}><Types /></Suspense>} />
-        <Route path="signup" element={<Suspense fallback={null}><Signup /></Suspense>} />
+        <Route path="teacher" element={lazyRoute(<Teacher />)} />
+        <Route path="stages" element={lazyRoute(<Stages />)} />
+        <Route path="stage1" element={lazyRoute(<Stage1 />)} />
+        <Route path="stage2" element={lazyRoute(<Stage2 />)} />
+        <Route path="stage3" element={lazyRoute(<Stage3 />)} />
+        <Route path="watch" element={lazyRoute(<Watch />)} />
+        <Route path="course" element={lazyRoute(<Course />)} />
+        <Route path="courses" element={lazyRoute(<Courses />)} />
+        <Route path="game" element={lazyRoute(<Game />)} />
+        <Route path="type/:id" element={lazyRoute(<TypeDetail />)} />
+        <Route path="quotes" element={lazyRoute(<Quotes />)} />
+        <Route path="mind-quotes" element={lazyRoute(<MindQuotes />)} />
+        <Route path="mind-quotes/:id" element={lazyRoute(<MindQuoteDetail />)} />
+        <Route path="types" element={lazyRoute(<Types />)} />
+        <Route path="signup" element={lazyRoute(<Signup />)} />
         <Route path="*" element={<Home />} />
       </Route>
     </Routes>

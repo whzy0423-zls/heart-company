@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestRegisterDeviceUpsertsByRegistrationID(t *testing.T) {
@@ -94,6 +95,90 @@ func TestCountAudienceUsesDistinctDevicesAndUsers(t *testing.T) {
 		!strings.Contains(query, "u.status = 'active'") ||
 		!strings.Contains(query, "u.member_level = $1") {
 		t.Fatalf("expected audience count query to count distinct active vip devices/users, query:\n%s", query)
+	}
+}
+
+func TestListRecoverablePushTasksSelectsPendingOnlyOldestFirst(t *testing.T) {
+	execRecorder.reset()
+	database, err := sql.Open("push_store_test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	store := NewStore(database, NoopPusher{})
+	if _, err := store.ListRecoverablePushTasks(context.Background(), 50); err != nil {
+		t.Fatalf("list recoverable push tasks: %v", err)
+	}
+
+	query := execRecorder.query()
+	if !strings.Contains(query, "status = 'pending'") ||
+		!strings.Contains(query, "ORDER BY create_time ASC") ||
+		!strings.Contains(query, "LIMIT $1") {
+		t.Fatalf("expected recoverable push query to select pending tasks oldest first, query:\n%s", query)
+	}
+}
+
+func TestClaimPendingPushTaskUsesConditionalStatusUpdate(t *testing.T) {
+	execRecorder.reset()
+	database, err := sql.Open("push_store_test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	store := NewStore(database, NoopPusher{})
+	claimed, err := store.ClaimPendingPushTask(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("claim pending push task: %v", err)
+	}
+	if !claimed {
+		t.Fatal("recording driver reports one affected row, expected claimed=true")
+	}
+
+	query := execRecorder.query()
+	if !strings.Contains(query, "WHERE id = $1 AND status = 'pending'") ||
+		!strings.Contains(query, "SET status = $2") {
+		t.Fatalf("expected claim to conditionally move pending task to sending, query:\n%s", query)
+	}
+}
+
+func TestMarkInterruptedPushTasksFailsSendingTasks(t *testing.T) {
+	execRecorder.reset()
+	database, err := sql.Open("push_store_test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	store := NewStore(database, NoopPusher{})
+	if err := store.MarkInterruptedPushTasks(context.Background(), "服务重启，发送状态中断，请重新发送"); err != nil {
+		t.Fatalf("mark interrupted push tasks: %v", err)
+	}
+
+	query := execRecorder.query()
+	if !strings.Contains(query, "WHERE status = 'sending'") ||
+		!strings.Contains(query, "SET status = 'failed'") {
+		t.Fatalf("expected interrupted sending tasks to be marked failed, query:\n%s", query)
+	}
+}
+
+func TestMarkInterruptedPushTasksBeforeUsesStaleCutoff(t *testing.T) {
+	execRecorder.reset()
+	database, err := sql.Open("push_store_test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	store := NewStore(database, NoopPusher{})
+	if err := store.MarkInterruptedPushTasksBefore(context.Background(), "stale", time.Unix(100, 0)); err != nil {
+		t.Fatalf("mark stale interrupted push tasks: %v", err)
+	}
+
+	query := execRecorder.query()
+	if !strings.Contains(query, "WHERE status = 'sending' AND create_time < $2") {
+		t.Fatalf("expected stale interrupted query to avoid fresh sending tasks, query:\n%s", query)
 	}
 }
 

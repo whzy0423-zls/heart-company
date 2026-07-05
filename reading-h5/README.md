@@ -35,6 +35,7 @@ npm run preview
 - 如果 H5 与 API 同源部署，必须确保网关或 Nginx 已把同源 `/api` 正确反代到后端服务。
 - 如果 H5 走 CDN 或与 API 不同域，必须显式设置 `VITE_API_BASE_URL` 为包含后端路由前缀的真实 HTTPS 地址，通常是 `https://api.example.com/api`，不能只写 `https://api.example.com`。
 - 文章 JSON 接口、封面图、音频等媒体资源都会基于同一个 `VITE_API_BASE_URL` 解析；跨域部署时同步配置后端 `CORS_ALLOWED_ORIGINS`。
+- 阅读页使用 hash 路由以适配微信/H5 内嵌和静态 CDN：文章深链格式为 `/#/article/:id`，不依赖部署层配置 history fallback。旧版 `/article/:id` 链接在静态入口页已加载时会自动迁移为 hash 链接；如果 CDN/网关直接访问旧路径仍返回 404，过渡期需保留静态入口 fallback。
 
 ## 安全说明
 

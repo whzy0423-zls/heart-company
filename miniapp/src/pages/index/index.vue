@@ -20,21 +20,21 @@ function goRelation() {
 </script>
 
 <template>
-  <view class="wrap home page-stack">
+  <view class="wrap home page-stack ios-page ios-safe-bottom">
     <view class="home__header">
       <text class="eyebrow">九型芯之力</text>
       <text class="home__headline">更像 iPhone 里的性格仪表盘</text>
       <text class="home__sub">先快速识别主型，再用 AI、课程与关系合盘把结果变成可行动的成长建议。</text>
     </view>
 
-    <view class="hero card">
+    <view class="hero card ios-card">
       <view class="hero__copy">
         <text class="hero__kicker">{{ total }} 题 · 约 2 分钟 · 凭直觉选择</text>
         <text class="hero__title gradient-title">测出你的「性格芯片」</text>
         <text class="hero__lead">从九型人格的动机、恐惧、欲望与三中心切入，生成更贴近当下状态的个人画像。</text>
         <view class="hero__actions">
-          <button class="btn-primary hero__btn" @click="startTest">开始测试</button>
-          <button class="btn-ghost hero__ghost" @click="goLearn">先学一学</button>
+          <button class="btn-primary ios-button hero__btn" @click="startTest">开始测试</button>
+          <button class="btn-ghost ios-button hero__ghost" @click="goLearn">先学一学</button>
         </view>
       </view>
       <view class="hero__visual">
@@ -43,7 +43,7 @@ function goRelation() {
       </view>
     </view>
 
-    <view class="insight card">
+    <view class="insight card ios-card">
       <view class="insight__item">
         <text class="insight__num">9</text>
         <text class="insight__label">人格类型</text>
@@ -60,28 +60,56 @@ function goRelation() {
       </view>
     </view>
 
-    <view class="section-head">
+    <view class="section-head ios-section">
       <text class="section-title">接下来想做什么？</text>
       <text class="section-lead">把测试、学习、对话和关系理解放在一条自然路径里。</text>
     </view>
 
     <view class="grid">
-      <view class="grid__item card grid__item--wide" role="button" @click="startTest">
+      <view
+        class="grid__item card ios-card grid__item--wide"
+        role="button"
+        aria-label="开始九型测试"
+        aria-pressed="false"
+        hover-class="grid__item--hover"
+        @click="startTest"
+      >
         <view class="grid__top"><text class="chip">01</text><text class="grid__pill">推荐</text></view>
         <text class="grid__t">九型测试</text>
         <text class="grid__d">测出主型、副型、三中心与成长方向</text>
       </view>
-      <view class="grid__item card" role="button" @click="goChat">
+      <view
+        class="grid__item card ios-card"
+        role="button"
+        aria-label="打开 AI 对话"
+        aria-pressed="false"
+        hover-class="grid__item--hover"
+        @click="goChat"
+      >
         <text class="chip chip--green">02</text>
         <text class="grid__t">AI 对话</text>
         <text class="grid__d">针对你的疑问检索九型资料</text>
       </view>
-      <view class="grid__item card" role="button" @click="goLearn">
+      <view
+        class="grid__item card ios-card"
+        role="button"
+        aria-label="打开九型学习"
+        aria-pressed="false"
+        hover-class="grid__item--hover"
+        @click="goLearn"
+      >
         <text class="chip chip--orange">03</text>
         <text class="grid__t">九型学习</text>
         <text class="grid__d">课程、语录与阶段化练习</text>
       </view>
-      <view class="grid__item card grid__item--wide grid__item--relation" role="button" @click="goRelation">
+      <view
+        class="grid__item card ios-card grid__item--wide grid__item--relation"
+        role="button"
+        aria-label="打开关系合盘"
+        aria-pressed="false"
+        hover-class="grid__item--hover"
+        @click="goRelation"
+      >
         <view class="grid__top"><text class="chip chip--red">04</text><text class="grid__pill grid__pill--soft">关系模式</text></view>
         <text class="grid__t">关系合盘</text>
         <text class="grid__d">看你和 TA 的沟通节奏、冲突触发点与相处底色</text>
@@ -228,6 +256,11 @@ function goRelation() {
   justify-content: space-between;
   gap: 12rpx;
   padding: 28rpx;
+  transition: opacity .18s ease, transform .18s ease;
+}
+.grid__item--hover {
+  opacity: .86;
+  transform: scale(.985);
 }
 .grid__item--wide {
   width: 100%;

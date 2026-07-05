@@ -107,6 +107,7 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 44px;
   padding: 11px 16px;
   background: var(--card);
   border: 1px solid var(--line);
@@ -119,7 +120,7 @@ button {
   border: none;
   outline: none;
   background: transparent;
-  font-size: 15px;
+  font-size: 16px;
   color: var(--ink);
 }
 
@@ -149,6 +150,7 @@ button {
 
 .chip {
   flex-shrink: 0;
+  min-height: 44px;
   padding: 7px 16px;
   border-radius: 999px;
   border: 1px solid var(--line);
@@ -177,11 +179,14 @@ button {
 .card {
   display: flex;
   gap: 14px;
+  width: 100%;
   padding: 16px;
+  text-align: left;
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
+  color: inherit;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -274,6 +279,21 @@ button {
   margin-bottom: 12px;
 }
 
+.state-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  margin-top: 16px;
+  padding: 10px 22px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--brand);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .spinner {
   width: 28px;
   height: 28px;
@@ -293,6 +313,7 @@ button {
 .load-more {
   margin: 22px auto 0;
   display: block;
+  min-height: 44px;
   padding: 11px 30px;
   border-radius: 999px;
   border: 1px solid var(--line);
@@ -325,6 +346,8 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
   width: 36px;
   height: 36px;
   border-radius: 50%;
@@ -613,6 +636,7 @@ button {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
+  min-height: 44px;
   height: 5px;
   border-radius: 999px;
   background: linear-gradient(
@@ -656,6 +680,7 @@ button {
 .audio-speed {
   flex-shrink: 0;
   min-width: 48px;
+  min-height: 44px;
   padding: 7px 10px;
   border-radius: 999px;
   border: 1px solid var(--line);

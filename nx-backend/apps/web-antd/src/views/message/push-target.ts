@@ -38,6 +38,19 @@ export function formatPushRecordError(record: {
   return record.status === 'failed' && detail ? `失败原因：${detail}` : '';
 }
 
+export function formatPushSendAcceptedMessage(result?: {
+  message?: string;
+  recordId?: number;
+  status?: string;
+}) {
+  const message = stringValue(result?.message) || '推送任务已创建，后台发送中';
+  const recordId =
+    typeof result?.recordId === 'number' && Number.isFinite(result.recordId)
+      ? result.recordId
+      : 0;
+  return recordId > 0 ? `${message}（记录 #${recordId}）` : message;
+}
+
 export async function refreshPushRecordsAfterSendAttempt(
   load: () => Promise<unknown>,
   onRefreshFailed?: (message: string) => void,
@@ -112,10 +125,29 @@ export function audienceCountLabel(count?: number) {
 
 export function audienceCountDetailLabel(result?: {
   deviceCount?: number;
+  targetType?: string;
+  targetValue?: string;
   userCount?: number;
 }) {
   if (!result) return '尚未预估';
   const users = Number(result.userCount ?? 0);
   const devices = Number(result.deviceCount ?? 0);
-  return `预计 ${Number.isFinite(users) ? users : 0} 人 / ${Number.isFinite(devices) ? devices : 0} 台设备`;
+  const target = audienceTargetLabel(result.targetType, result.targetValue);
+  const suffix = target ? `（${target}）` : '';
+  return `预计 ${Number.isFinite(users) ? users : 0} 人 / ${Number.isFinite(devices) ? devices : 0} 台设备${suffix}`;
+}
+
+function audienceTargetLabel(targetType?: string, targetValue?: string) {
+  const type = stringValue(targetType);
+  const value = stringValue(targetValue);
+  if (!type) return '';
+  if (type === 'all') return '全部用户';
+  if (type === 'level') {
+    const label =
+      pushMemberLevelOptions.find((item) => item.value === value)?.label ||
+      value ||
+      '未指定等级';
+    return `会员等级：${label}`;
+  }
+  return value ? `${type}：${value}` : type;
 }

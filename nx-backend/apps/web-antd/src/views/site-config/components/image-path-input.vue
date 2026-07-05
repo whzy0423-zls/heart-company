@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { UploadRequestOption } from 'ant-design-vue/es/vc-upload/interface';
 
-import { ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 
 import { useAccessStore } from '@vben/stores';
 
@@ -9,6 +9,11 @@ import { Button, Image, Input, message, Upload } from 'ant-design-vue';
 
 import { uploadFileApi } from '#/api';
 import { useUploadAssetPreviewUrl } from '#/utils/upload-asset-preview';
+
+import {
+  getImagePreviewState,
+  selectStoredImagePath,
+} from './image-path-input';
 
 const props = withDefaults(
   defineProps<{
@@ -25,7 +30,7 @@ const props = withDefaults(
     emptyText: '未设置图片',
     placeholder: '图片路径或 URL',
     showPath: false,
-    storeObjectUrl: true,
+    storeObjectUrl: false,
     uploadText: '上传',
     variant: 'image',
   },
@@ -33,19 +38,38 @@ const props = withDefaults(
 const value = defineModel<string>('value', { default: '' });
 const accessStore = useAccessStore();
 const uploading = ref(false);
+const imageLoadError = ref(false);
 const previewSrc = useUploadAssetPreviewUrl(
   () => value.value,
   () => accessStore.accessToken,
 );
+const previewState = computed(() =>
+  getImagePreviewState({
+    emptyText: props.emptyText,
+    imageError: imageLoadError.value,
+    previewSrc: previewSrc.value,
+    uploading: uploading.value,
+    value: value.value,
+  }),
+);
+
+watch(
+  () => [value.value, previewSrc.value],
+  () => {
+    imageLoadError.value = false;
+  },
+);
+
+function markImageLoadError() {
+  imageLoadError.value = true;
+}
 
 async function customRequest(options: UploadRequestOption) {
   const file = options.file as File;
   uploading.value = true;
   try {
     const result = await uploadFileApi(file, props.dir);
-    value.value = props.storeObjectUrl
-      ? result.objectUrl || result.url
-      : result.url;
+    value.value = selectStoredImagePath(result, props.storeObjectUrl);
     options.onSuccess?.(result, file as any);
     message.success('上传成功');
   } catch (error) {
@@ -75,14 +99,15 @@ async function customRequest(options: UploadRequestOption) {
         tabindex="0"
       >
         <Image
-          v-if="value"
+          v-if="previewState.showImage"
           :height="props.variant === 'input' ? 64 : 88"
           :preview="false"
           :src="previewSrc"
           :width="props.variant === 'input' ? 64 : 88"
+          @error="markImageLoadError"
         />
         <span v-else class="image-uploader__empty">
-          {{ uploading ? '上传中...' : props.emptyText }}
+          {{ previewState.text }}
         </span>
       </div>
     </Upload>

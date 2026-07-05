@@ -31,6 +31,20 @@ func TestFromRequestUsesForwardedHeaderFromConfiguredProxy(t *testing.T) {
 	}
 }
 
+func TestFromRequestIgnoresSpoofedForwardedPrefixFromConfiguredProxy(t *testing.T) {
+	prefixes, err := ParseTrustedProxyCIDRs([]string{"10.0.0.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.12:12345"
+	req.Header.Set("X-Forwarded-For", "198.51.100.200, 203.0.113.9")
+
+	if got := FromRequest(req, prefixes); got != "203.0.113.9" {
+		t.Fatalf("expected nearest non-trusted forwarded IP, got %q", got)
+	}
+}
+
 func TestParseTrustedProxyCIDRsAcceptsSingleIP(t *testing.T) {
 	prefixes, err := ParseTrustedProxyCIDRs([]string{"127.0.0.1"})
 	if err != nil {

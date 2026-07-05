@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
 const source = readFileSync(
-  resolve(process.cwd(), 'apps/web-antd/src/views/rag/knowledge.vue'),
+  resolve(dirname(fileURLToPath(import.meta.url)), 'knowledge.vue'),
   'utf8',
 );
 

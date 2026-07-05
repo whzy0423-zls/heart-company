@@ -121,8 +121,119 @@ func TestListInsightsReturnsAggregatedUserData(t *testing.T) {
 		!strings.Contains(seenQueries[1], "app_compatibility_reports") {
 		t.Fatalf("expected insights query to aggregate extracted app data, got %s", seenQueries[1])
 	}
+	if strings.Contains(seenQueries[1], "array_agg") {
+		t.Fatalf("latest memory/compatibility summaries should use ORDER BY ... LIMIT 1 instead of array_agg over all rows, got %s", seenQueries[1])
+	}
 	if len(seenArgs[0]) != 3 || seenArgs[0][0].Value != "%测试%" || seenArgs[0][1].Value != "active" || seenArgs[0][2].Value != "vip" {
 		t.Fatalf("unexpected filter args: %+v", seenArgs[0])
+	}
+}
+
+func TestListInsightsFiltersByUserIDForDirect360Open(t *testing.T) {
+	var seenQueries []string
+	var seenArgs [][]driver.NamedValue
+	database := openAppUserInsightsTestDB(t, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		seenQueries = append(seenQueries, query)
+		seenArgs = append(seenArgs, args)
+		if strings.Contains(query, "SELECT count(*) FROM app_users") {
+			return &appUserInsightsRows{
+				columns: []string{"count"},
+				values:  [][]driver.Value{{int64(1)}},
+			}, nil
+		}
+		return &appUserInsightsRows{
+			columns: []string{
+				"id",
+				"phone",
+				"nickname",
+				"avatar",
+				"status",
+				"member_level",
+				"register_source",
+				"last_login_at",
+				"create_time",
+				"update_time",
+				"primary_type",
+				"second_type",
+				"wing_type",
+				"gender",
+				"latest_quiz_time",
+				"profile",
+				"score",
+				"centers",
+				"card_count",
+				"memory_count",
+				"latest_memory",
+				"session_count",
+				"message_count",
+				"latest_chat_time",
+				"compatibility_count",
+				"latest_compatibility_summary",
+			},
+			values: [][]driver.Value{{
+				int64(42),
+				"13800000042",
+				"直达客户",
+				"",
+				"active",
+				"vip",
+				"app_sms",
+				nil,
+				time.Unix(200, 0),
+				time.Unix(300, 0),
+				int64(5),
+				int64(6),
+				int64(4),
+				"female",
+				nil,
+				[]byte(`{}`),
+				[]byte(`{}`),
+				[]byte(`[]`),
+				int64(0),
+				int64(0),
+				"",
+				int64(0),
+				int64(0),
+				nil,
+				int64(0),
+				"",
+			}},
+		}, nil
+	})
+
+	result, err := NewStore(database).ListInsights(context.Background(), map[string]string{
+		"page":     "1",
+		"pageSize": "20",
+		"userId":   "42",
+	})
+	if err != nil {
+		t.Fatalf("list insights by user id: %v", err)
+	}
+	if result.Total != 1 || len(result.Items) != 1 || result.Items[0].ID != 42 {
+		t.Fatalf("unexpected direct user result: %+v", result)
+	}
+	if len(seenQueries) != 2 {
+		t.Fatalf("expected count and list queries, got %d", len(seenQueries))
+	}
+	if !strings.Contains(seenQueries[0], "u.id = $1") || !strings.Contains(seenQueries[1], "u.id = $1") {
+		t.Fatalf("expected count/list insights to filter by exact user id, got count=%s list=%s", seenQueries[0], seenQueries[1])
+	}
+	if len(seenArgs[0]) != 1 || seenArgs[0][0].Value != int64(42) {
+		t.Fatalf("unexpected user id filter args: %+v", seenArgs[0])
+	}
+}
+
+func TestListInsightsRejectsInvalidUserID(t *testing.T) {
+	database := openAppUserInsightsTestDB(t, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		t.Fatalf("invalid userId should be rejected before querying, query=%s args=%+v", query, args)
+		return nil, nil
+	})
+
+	_, err := NewStore(database).ListInsights(context.Background(), map[string]string{
+		"userId": "abc",
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid userId") {
+		t.Fatalf("expected invalid userId error, got %v", err)
 	}
 }
 

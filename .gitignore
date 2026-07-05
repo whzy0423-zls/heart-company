@@ -20,6 +20,10 @@ website-react/public/assets/uploads/
 .codex
 .agent
 .agents
+certs/
+**/certs/
+*.pem
+*.key
 
 # 站点配置备份
 site-config.backup.json

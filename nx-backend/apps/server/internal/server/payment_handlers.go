@@ -22,8 +22,9 @@ import (
 
 // mustWxPayClient 用 env 构造支付客户端；生产配置不全时禁用支付功能，避免阻断后台整体启动。
 func mustWxPayClient(env config.Env) *wxpay.Client {
-	wxpayDev := env.WxPay.Dev || (env.AppEnv != "production" && !wxPayConfigComplete(env.WxPay))
-	if env.AppEnv == "production" && !env.WxPay.Dev && !wxPayConfigComplete(env.WxPay) {
+	isProduction := config.IsProduction(env.AppEnv)
+	wxpayDev := env.WxPay.Dev || (!isProduction && !wxPayConfigComplete(env.WxPay))
+	if isProduction && !env.WxPay.Dev && !wxPayConfigComplete(env.WxPay) {
 		log.Print("[WXPAY] payment disabled: production wxpay config is incomplete")
 		return nil
 	}
@@ -164,7 +165,7 @@ func (s *Server) createReportOrder(w http.ResponseWriter, r *http.Request) {
 // devPayReportOrder 仅用于本地/测试环境模拟小程序报告支付成功。
 // 真实微信回调仍走 /api/pay/notify，且不会接受未签名明文。
 func (s *Server) devPayReportOrder(w http.ResponseWriter, r *http.Request) {
-	if s.env.AppEnv == "production" || s.pay == nil || !s.pay.DevMode() {
+	if config.IsProduction(s.env.AppEnv) || s.pay == nil || !s.pay.DevMode() {
 		httpx.Fail(w, http.StatusNotFound, "Not Found")
 		return
 	}

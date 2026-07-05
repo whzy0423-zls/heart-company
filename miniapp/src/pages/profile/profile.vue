@@ -14,6 +14,8 @@ const logged = ref(false)
 const user = ref(null)
 const records = ref([])
 const bookings = ref([])
+const recordsError = ref('')
+const bookingsError = ref('')
 const logging = ref(false)
 const profileLoading = ref(false)
 const profileSaving = ref(false)
@@ -26,8 +28,8 @@ const hiddenBookingCount = computed(() => hiddenCount(bookings.value))
 const wechatLoginReady = computed(() => ({
   codeLogin: true,
   profile: true,
-  phone: true,
-  note: '微信 code 登录已接入；头像昵称已按微信新规范预留；手机号授权已完成前端占位，后端开通后可接 getPhoneNumber code。',
+  phone: false,
+  note: '微信 code 登录已接入；头像昵称已按微信新规范支持。',
 }))
 let loadTicket = 0
 
@@ -54,6 +56,8 @@ async function login() {
 async function loadAll() {
   const ticket = ++loadTicket
   profileLoading.value = true
+  recordsError.value = ''
+  bookingsError.value = ''
   try {
     user.value = await getUserInfoApi()
     syncDraftFromUser()
@@ -66,14 +70,22 @@ async function loadAll() {
     return
   }
 
-  const [rec, bk] = await Promise.all([
-    listTestRecordsApi().catch(() => ({ items: [] })),
-    listBookingsApi().catch(() => ({ items: [] })),
+  const [rec, bk] = await Promise.allSettled([
+    listTestRecordsApi(),
+    listBookingsApi(),
   ])
 
   if (ticket !== loadTicket) return
-  records.value = rec.items || []
-  bookings.value = bk.items || []
+  if (rec.status === 'fulfilled') {
+    records.value = rec.value.items || []
+  } else {
+    recordsError.value = userErrorMessage(rec.reason, '同步失败，重试')
+  }
+  if (bk.status === 'fulfilled') {
+    bookings.value = bk.value.items || []
+  } else {
+    bookingsError.value = userErrorMessage(bk.reason, '同步失败，重试')
+  }
   profileLoading.value = false
 }
 
@@ -94,6 +106,8 @@ function resetLogin() {
   user.value = null
   records.value = []
   bookings.value = []
+  recordsError.value = ''
+  bookingsError.value = ''
   nicknameDraft.value = ''
   avatarDraft.value = ''
   profileLoading.value = false
@@ -115,19 +129,6 @@ function onNicknameInput(e) {
   nicknameDraft.value = e.detail && e.detail.value ? e.detail.value : ''
 }
 
-function onGetPhoneNumber(e) {
-  const detail = (e && e.detail) || {}
-  const errMsg = detail.errMsg || ''
-  if (errMsg && !errMsg.includes(':ok')) {
-    uni.showToast({ title: '未授权手机号', icon: 'none' })
-    return
-  }
-  if (detail.code) {
-    uni.showToast({ title: '手机号后端暂未开通', icon: 'none' })
-    return
-  }
-  uni.showToast({ title: '手机号授权暂不可用', icon: 'none' })
-}
 
 async function syncWechatProfile() {
   if (profileSaving.value) return
@@ -173,18 +174,24 @@ async function saveProfile() {
 </script>
 
 <template>
-  <view class="wrap profile page-stack">
+  <view class="wrap profile page-stack ios-page ios-safe-bottom">
     <!-- 未登录 -->
-    <view v-if="!logged" class="card login">
+    <view v-if="!logged" class="card ios-card login">
       <view class="login__mark">九</view>
       <text class="eyebrow">个人档案</text>
       <text class="login__t">登录后可保存你的九型档案、测试历史和预约记录。</text>
-      <button class="btn-primary" :loading="logging" :disabled="logging" @click="login">微信一键登录</button>
+      <!-- #ifdef H5 -->
+      <button class="btn-primary ios-button" disabled>请在微信小程序内登录</button>
+      <text class="login__hint">H5 可浏览公开内容；保存档案、AI 对话和预约记录请打开微信小程序。</text>
+      <!-- #endif -->
+      <!-- #ifndef H5 -->
+      <button class="btn-primary ios-button" :loading="logging" :disabled="logging" @click="login">微信一键登录</button>
+      <!-- #endif -->
     </view>
 
     <!-- 已登录 -->
     <template v-else>
-      <view class="card user">
+      <view class="card ios-card user">
         <image v-if="user && user.avatar" class="user__avatar" :src="user.avatar" lazy-load />
         <view v-else class="user__avatar user__avatar--ph">{{ (user && user.mainType) || '九' }}</view>
         <view class="user__info">
@@ -195,15 +202,14 @@ async function saveProfile() {
         <button class="user__chat" @click="goChat">问 AI</button>
       </view>
 
-      <view class="card profile-form">
+      <view class="card ios-card profile-form">
         <view class="profile-form__head">
           <text class="sec-title">微信资料</text>
           <button class="mini-link" :loading="profileSaving" :disabled="profileSaving" @click="syncWechatProfile">一键同步</button>
         </view>
         <view class="wechat-slot">
-          <text class="wechat-slot__title">微信登录站位</text>
+          <text class="wechat-slot__title">微信登录能力</text>
           <text class="wechat-slot__desc">{{ wechatLoginReady.note }}</text>
-          <button class="btn-soft wechat-slot__phone" open-type="getPhoneNumber" @getphonenumber="onGetPhoneNumber">手机号授权</button>
         </view>
         <view class="profile-form__row">
           <button class="avatar-picker" open-type="chooseAvatar" @chooseavatar="onChooseAvatar">
@@ -225,9 +231,13 @@ async function saveProfile() {
         <button class="btn-primary profile-form__save" :loading="profileSaving" :disabled="profileSaving" @click="saveProfile">保存资料</button>
       </view>
 
-      <view class="card section-card">
+      <view class="card ios-card section-card">
         <text class="sec-title">我的测试历史</text>
         <view v-if="profileLoading" class="empty">正在同步测试历史…</view>
+        <view v-else-if="recordsError" class="empty empty--error">
+          <text>{{ recordsError }}</text>
+          <button class="sync-retry" @click="loadAll">重试</button>
+        </view>
         <view v-else-if="records.length === 0" class="empty">还没有记录，去测一测吧</view>
         <view v-for="rec in visibleRecords" :key="rec.id" class="row">
           <text class="row__main">{{ typeName(rec.resultType) }}</text>
@@ -236,9 +246,13 @@ async function saveProfile() {
         <text v-if="hiddenRecordCount" class="more-tip">还有 {{ hiddenRecordCount }} 条记录已收起</text>
       </view>
 
-      <view class="card section-card">
+      <view class="card ios-card section-card">
         <text class="sec-title">我的预约</text>
         <view v-if="profileLoading" class="empty">正在同步预约记录…</view>
+        <view v-else-if="bookingsError" class="empty empty--error">
+          <text>{{ bookingsError }}</text>
+          <button class="sync-retry" @click="loadAll">重试</button>
+        </view>
         <view v-else-if="bookings.length === 0" class="empty">暂无预约</view>
         <view v-for="b in visibleBookings" :key="b.id" class="row">
           <text class="row__main">{{ b.intent || b.kind }}</text>
@@ -247,7 +261,7 @@ async function saveProfile() {
         <text v-if="hiddenBookingCount" class="more-tip">还有 {{ hiddenBookingCount }} 条预约已收起</text>
       </view>
 
-      <button class="btn-ghost" @click="logout">退出登录</button>
+      <button class="btn-ghost ios-button" @click="logout">退出登录</button>
     </template>
   </view>
 </template>
@@ -279,6 +293,11 @@ async function saveProfile() {
   align-items: center;
   justify-content: center;
   box-shadow: 0 20rpx 44rpx -24rpx rgba(37,99,235,.72);
+}
+.login__hint {
+  color: #64748b;
+  font-size: 24rpx;
+  line-height: 1.55;
 }
 .login .eyebrow { align-self: center; }
 .login__t {
@@ -434,6 +453,29 @@ async function saveProfile() {
   border-radius: 22rpx;
   background: rgba(15,23,42,.035);
 }
+.empty--error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  padding: 18rpx 20rpx;
+  text-align: left;
+}
+.sync-retry {
+  flex-shrink: 0;
+  min-width: 112rpx;
+  min-height: 88rpx;
+  padding: 0 20rpx;
+  border-radius: 999rpx;
+  background: rgba(37,99,235,.10);
+  color: #2563eb;
+  font-size: 24rpx;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sync-retry::after { border: none; }
 .row {
   display: flex;
   justify-content: space-between;

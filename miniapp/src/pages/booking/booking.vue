@@ -13,6 +13,7 @@ const kinds = [
 const kindIndex = ref(0)
 const emptyForm = () => ({ contactName: '', phone: '', intent: '', preferredTime: '', message: '' })
 const form = ref(emptyForm())
+const fieldErrors = ref({ contactName: '', phone: '' })
 const submitting = ref(false)
 const draft = loadBookingDraft()
 if (draft) {
@@ -34,9 +35,23 @@ function onKindChange(e) {
   kindIndex.value = Number(e.detail.value)
 }
 
+function clearFieldError(field) {
+  if (!fieldErrors.value[field]) return
+  fieldErrors.value = { ...fieldErrors.value, [field]: '' }
+}
+
+function validateForm() {
+  const nextErrors = { contactName: '', phone: '' }
+  if (!form.value.contactName.trim()) nextErrors.contactName = '请填写称呼'
+  if (!/^1\d{10}$/.test(form.value.phone.trim())) nextErrors.phone = '请填写正确手机号'
+  fieldErrors.value = nextErrors
+  return !nextErrors.contactName && !nextErrors.phone
+}
+
 async function submit() {
-  if (!form.value.contactName.trim()) return uni.showToast({ title: '请填写称呼', icon: 'none' })
-  if (!/^1\d{10}$/.test(form.value.phone.trim())) return uni.showToast({ title: '请填写正确手机号', icon: 'none' })
+  if (!validateForm()) {
+    return uni.showToast({ title: fieldErrors.value.contactName || fieldErrors.value.phone, icon: 'none' })
+  }
   if (submitting.value) return
   submitting.value = true
   try {
@@ -46,6 +61,7 @@ async function submit() {
     clearBookingDraft()
     kindIndex.value = 0
     form.value = emptyForm()
+    fieldErrors.value = { contactName: '', phone: '' }
   } catch (e) {
     uni.showToast({ title: userErrorMessage(e, '提交失败，请重试'), icon: 'none' })
   } finally {
@@ -55,8 +71,8 @@ async function submit() {
 </script>
 
 <template>
-  <view class="wrap booking page-stack">
-    <view class="card">
+  <view class="wrap booking page-stack ios-page ios-safe-bottom">
+    <view class="card ios-card">
       <text class="eyebrow">预约咨询</text>
       <text class="title gradient-title">预约咨询 / 报名</text>
       <text class="sub">填写后老师会尽快与你联系，帮你匹配更适合的学习方式。</text>
@@ -72,11 +88,27 @@ async function submit() {
       </view>
       <view class="field">
         <text class="label">称呼</text>
-        <input class="input field-control" v-model="form.contactName" placeholder="怎么称呼你" />
+        <input
+          class="input field-control"
+          v-model="form.contactName"
+          placeholder="怎么称呼你"
+          :aria-invalid="!!fieldErrors.contactName"
+          @input="clearFieldError('contactName')"
+        />
+        <text v-if="fieldErrors.contactName" class="field-error">{{ fieldErrors.contactName }}</text>
       </view>
       <view class="field">
         <text class="label">手机号</text>
-        <input class="input field-control" v-model="form.phone" type="number" maxlength="11" placeholder="方便老师联系" />
+        <input
+          class="input field-control"
+          v-model="form.phone"
+          type="number"
+          maxlength="11"
+          placeholder="方便老师联系"
+          :aria-invalid="!!fieldErrors.phone"
+          @input="clearFieldError('phone')"
+        />
+        <text v-if="fieldErrors.phone" class="field-error">{{ fieldErrors.phone }}</text>
       </view>
       <view class="field">
         <text class="label">意向方向</text>
@@ -91,7 +123,7 @@ async function submit() {
         <textarea class="textarea field-control" v-model="form.message" placeholder="想了解的问题（选填）" />
       </view>
 
-      <button class="btn-primary" :loading="submitting" :disabled="submitting" @click="submit">提交预约</button>
+      <button class="btn-primary ios-button" :loading="submitting" :disabled="submitting" @click="submit">提交预约</button>
     </view>
   </view>
 </template>
@@ -102,6 +134,13 @@ async function submit() {
 .field { margin-bottom: 24rpx; }
 .label { font-size: 25rpx; font-weight: 800; color: #3c424d; display: block; margin-bottom: 12rpx; }
 .input { display: block; }
+.field-error {
+  display: block;
+  margin-top: 10rpx;
+  color: #d92d20;
+  font-size: 23rpx;
+  font-weight: 700;
+}
 .textarea {
   display: block;
   height: 176rpx;

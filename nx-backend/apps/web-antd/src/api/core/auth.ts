@@ -1,3 +1,5 @@
+import { useAccessStore } from '@vben/stores';
+
 import { baseRequestClient, requestClient } from '#/api/request';
 
 export namespace AuthApi {
@@ -45,10 +47,17 @@ export async function loginApi(data: AuthApi.LoginParams) {
  * 刷新accessToken
  */
 export async function refreshTokenApi() {
+  const accessStore = useAccessStore();
+  const headers: Record<string, string> = {};
+  if (accessStore.accessToken) {
+    headers.Authorization = `Bearer ${accessStore.accessToken}`;
+  }
+
   const response = await baseRequestClient.post<AuthApi.RefreshTokenHTTPResponse>(
     '/auth/refresh',
     undefined,
     {
+      headers,
       withCredentials: true,
     },
   );

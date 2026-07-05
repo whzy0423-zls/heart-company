@@ -22,7 +22,14 @@ const api = async () => {
   return { home: { courses: { items: [`course-${calls}`] }, quotes: { items: [`quote-${calls}`] } } }
 }
 
-const { getCachedSiteConfig, refreshSiteConfig, getStoredSiteConfig, clearSiteConfigCache, hasSiteConfigLearningContent } = await import(`file://${modulePath}`)
+const {
+  clearSiteConfigCache,
+  getCachedSiteConfig,
+  getStoredSiteConfig,
+  hasSiteConfigLearningContent,
+  hasSiteConfigLearningSection,
+  refreshSiteConfig,
+} = await import(`file://${modulePath}`)
 assert.equal(getStoredSiteConfig(), null, 'empty storage should not expose cached config')
 const first = await getCachedSiteConfig({ api, now: () => now, ttlMs: 60000 })
 const second = await getCachedSiteConfig({ api, now: () => now + 1000, ttlMs: 60000 })
@@ -36,7 +43,32 @@ assert.notDeepEqual(refreshed, first)
 assert.deepEqual(getStoredSiteConfig(), refreshed, 'explicit refresh should update stored cache')
 assert.equal(hasSiteConfigLearningContent(refreshed), true, 'site config with courses/quotes should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ home: {} }), false, 'empty site config should not replace cached learning content')
-assert.equal(hasSiteConfigLearningContent({ home: { courses: { items: [] }, quotes: { items: [] } } }), false, 'empty learning arrays should not replace cached learning content')
+assert.equal(hasSiteConfigLearningContent({ home: { courses: { items: [] }, quotes: { items: [] } } }), false, 'empty learning arrays should not count as visible learning content')
+assert.equal(hasSiteConfigLearningSection({ home: {} }), false, 'missing learning section should be treated as incomplete')
+assert.equal(hasSiteConfigLearningSection({ home: { courses: { items: [] }, quotes: { items: [] } } }), true, 'explicit empty learning arrays should be treated as intentional content')
+
+const storedBeforeEmptyRefresh = getStoredSiteConfig()
+const emptyRefreshResult = await refreshSiteConfig({
+  api: async () => ({ home: { courses: { items: [] }, quotes: { items: [] } } }),
+  now: () => now + 2500,
+})
+assert.equal(hasSiteConfigLearningContent(emptyRefreshResult), false, 'empty refresh payload should still be returned to the caller')
+assert.deepEqual(
+  getStoredSiteConfig(),
+  emptyRefreshResult,
+  'explicit empty learning arrays should overwrite cached learning content so admin clearing takes effect',
+)
+
+const storedBeforeMissingLearningRefresh = getStoredSiteConfig()
+await refreshSiteConfig({
+  api: async () => ({ home: {} }),
+  now: () => now + 2600,
+})
+assert.deepEqual(
+  getStoredSiteConfig(),
+  storedBeforeMissingLearningRefresh,
+  'missing learning sections should not overwrite the last complete learning cache',
+)
 
 now += 63000
 const third = await getCachedSiteConfig({ api, now: () => now, ttlMs: 60000 })

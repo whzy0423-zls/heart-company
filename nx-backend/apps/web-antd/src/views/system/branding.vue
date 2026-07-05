@@ -5,7 +5,7 @@ import { onMounted, ref } from 'vue';
 
 import { updatePreferences } from '@vben/preferences';
 
-import { Alert, Col, Form, Input, message, Row } from 'ant-design-vue';
+import { Alert, Button, Col, Form, Input, message, Row } from 'ant-design-vue';
 
 import { getAdminBrandingApi, updateAdminBrandingApi } from '#/api';
 import { BRANDING_CACHE_KEY } from '#/branding';
@@ -14,6 +14,7 @@ import EditorShell from '../site-config/components/editor-shell.vue';
 import ImagePathInput from '../site-config/components/image-path-input.vue';
 
 const loading = ref(true);
+const loadError = ref('');
 const saving = ref(false);
 const form = ref<AdminBranding>({ loadingText: '', logo: '', name: '' });
 
@@ -21,6 +22,7 @@ onMounted(load);
 
 async function load() {
   loading.value = true;
+  loadError.value = '';
   try {
     const data = await getAdminBrandingApi();
     if (data) {
@@ -30,12 +32,18 @@ async function load() {
         name: data.name ?? '',
       };
     }
+  } catch {
+    loadError.value = '后台品牌配置加载失败，请稍后重试';
   } finally {
     loading.value = false;
   }
 }
 
 async function save() {
+  if (loadError.value) {
+    message.warning('请先重新加载后台品牌配置');
+    return;
+  }
   if (!form.value.name?.trim()) {
     message.warning('请填写后台名称');
     return;
@@ -61,10 +69,22 @@ async function save() {
   <EditorShell
     description="配置后台的 Logo、名称与启动加载屏。保存后侧边栏 / 登录页 / 标题即时生效，启动屏在下次刷新后更新。"
     :loading="loading"
+    :save-disabled="!!loadError"
     :saving="saving"
     title="后台品牌"
     @save="save"
   >
+    <Alert
+      v-if="loadError"
+      :message="loadError"
+      show-icon
+      type="error"
+      style="margin-bottom: 16px"
+    >
+      <template #action>
+        <Button size="small" type="link" @click="load">重试</Button>
+      </template>
+    </Alert>
     <Form v-if="form" layout="vertical">
       <Row :gutter="24">
         <Col :md="12" :xs="24">

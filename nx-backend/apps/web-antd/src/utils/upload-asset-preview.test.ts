@@ -82,6 +82,20 @@ describe('upload asset preview urls', () => {
     ).toBe(false);
   });
 
+  it('recognizes legacy same-origin uploads urls as protected', () => {
+    expect(isProtectedUploadAssetSource('/api/uploads/site/logo.png')).toBe(
+      true,
+    );
+    expect(
+      isProtectedUploadAssetSource(
+        `${window.location.origin}/api/uploads/site/logo.png`,
+      ),
+    ).toBe(true);
+    expect(
+      isProtectedUploadAssetSource('https://cdn.example.com/api/uploads/logo.png'),
+    ).toBe(false);
+  });
+
   it('revokes the oldest cached blob preview when the resolver cache is full', async () => {
     const fetchMock = vi.fn().mockImplementation(() =>
       Promise.resolve({

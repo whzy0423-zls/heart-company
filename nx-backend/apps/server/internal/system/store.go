@@ -23,6 +23,21 @@ func NewStore(database *sql.DB) *Store {
 
 const queryTimeout = 10 * time.Second
 
+type currentUserIDContextKey struct{}
+
+type sqlQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func WithCurrentUserID(ctx context.Context, id int64) context.Context {
+	return context.WithValue(ctx, currentUserIDContextKey{}, id)
+}
+
+func currentUserID(ctx context.Context) (int64, bool) {
+	id, ok := ctx.Value(currentUserIDContextKey{}).(int64)
+	return id, ok
+}
+
 func (s *Store) ctx(parent context.Context) (context.Context, context.CancelFunc) {
 	if parent == nil {
 		parent = context.Background()
@@ -35,6 +50,102 @@ func fmtTime(t time.Time) string {
 		return ""
 	}
 	return t.Format("2006/01/02 15:04:05")
+}
+
+func parseID(id string, label string) (int64, error) {
+	value, err := strconv.ParseInt(id, 10, 64)
+	if err != nil || value <= 0 {
+		return 0, errors.New("invalid " + label + " id")
+	}
+	return value, nil
+}
+
+func hasRoleID(roleIDs []string, roleID int64) bool {
+	want := strconv.FormatInt(roleID, 10)
+	for _, id := range roleIDs {
+		if strings.TrimSpace(id) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) adminRoleID(ctx context.Context, q sqlQueryer) (int64, bool, error) {
+	var id int64
+	err := q.QueryRowContext(ctx, `SELECT id FROM roles WHERE code='admin' AND status=1 ORDER BY id ASC LIMIT 1`).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return id, true, nil
+}
+
+func (s *Store) activeAdminUserCount(ctx context.Context, q sqlQueryer) (int, error) {
+	var count int
+	err := q.QueryRowContext(ctx, `SELECT count(DISTINCT u.id)
+		FROM users u
+		JOIN user_roles ur ON ur.user_id=u.id
+		JOIN roles r ON r.id=ur.role_id
+		WHERE u.status=1 AND r.status=1 AND r.code='admin'`).Scan(&count)
+	return count, err
+}
+
+func (s *Store) activeAdminUserCountByRole(ctx context.Context, q sqlQueryer, roleID int64) (int, error) {
+	var count int
+	err := q.QueryRowContext(ctx, `SELECT count(DISTINCT u.id)
+		FROM users u
+		JOIN user_roles ur ON ur.user_id=u.id
+		JOIN roles r ON r.id=ur.role_id
+		WHERE u.status=1 AND r.status=1 AND r.code='admin' AND r.id=$1`, roleID).Scan(&count)
+	return count, err
+}
+
+func (s *Store) isActiveAdminUser(ctx context.Context, q sqlQueryer, userID int64) (bool, error) {
+	var count int
+	err := q.QueryRowContext(ctx, `SELECT count(1)
+		FROM users u
+		JOIN user_roles ur ON ur.user_id=u.id
+		JOIN roles r ON r.id=ur.role_id
+		WHERE u.id=$1 AND u.status=1 AND r.status=1 AND r.code='admin'`, userID).Scan(&count)
+	return count > 0, err
+}
+
+func (s *Store) ensureUserAdminNotLast(ctx context.Context, q sqlQueryer, userID int64, willRemainActiveAdmin bool) error {
+	if willRemainActiveAdmin {
+		return nil
+	}
+	isAdmin, err := s.isActiveAdminUser(ctx, q, userID)
+	if err != nil || !isAdmin {
+		return err
+	}
+	count, err := s.activeAdminUserCount(ctx, q)
+	if err != nil {
+		return err
+	}
+	if count <= 1 {
+		return errors.New("cannot remove last enabled admin user")
+	}
+	return nil
+}
+
+func (s *Store) ensureRoleAdminNotLast(ctx context.Context, q sqlQueryer, roleID int64, willRemainEnabledAdmin bool) error {
+	if willRemainEnabledAdmin {
+		return nil
+	}
+	roleAdminCount, err := s.activeAdminUserCountByRole(ctx, q, roleID)
+	if err != nil || roleAdminCount == 0 {
+		return err
+	}
+	totalAdminCount, err := s.activeAdminUserCount(ctx, q)
+	if err != nil {
+		return err
+	}
+	if totalAdminCount <= roleAdminCount {
+		return errors.New("cannot remove last enabled admin user")
+	}
+	return nil
 }
 
 // ---------------- Users ----------------
@@ -161,9 +272,20 @@ func (s *Store) SaveUser(ctx context.Context, input User) (User, error) {
 			return User{}, err
 		}
 	} else {
-		userID, err = strconv.ParseInt(input.ID, 10, 64)
+		userID, err = parseID(input.ID, "user")
 		if err != nil {
-			return User{}, errors.New("invalid user id")
+			return User{}, err
+		}
+		if currentID, ok := currentUserID(ctx); ok && currentID == userID && status != 1 {
+			return User{}, errors.New("cannot disable current user")
+		}
+		adminRoleID, hasAdminRole, err := s.adminRoleID(c, tx)
+		if err != nil {
+			return User{}, err
+		}
+		willRemainActiveAdmin := status == 1 && hasAdminRole && hasRoleID(input.RoleIds, adminRoleID)
+		if err := s.ensureUserAdminNotLast(c, tx, userID, willRemainActiveAdmin); err != nil {
+			return User{}, err
 		}
 		if _, err := tx.ExecContext(c,
 			`UPDATE users SET username=$1, avatar=$2, nickname=$3, email=$4, phone=$5, remark=$6, status=$7, token_version=token_version+1 WHERE id=$8`,
@@ -208,7 +330,17 @@ func (s *Store) SaveUser(ctx context.Context, input User) (User, error) {
 func (s *Store) DeleteUser(ctx context.Context, id string) (bool, error) {
 	c, cancel := s.ctx(ctx)
 	defer cancel()
-	res, err := s.db.ExecContext(c, `DELETE FROM users WHERE id=$1`, id)
+	userID, err := parseID(id, "user")
+	if err != nil {
+		return false, err
+	}
+	if currentID, ok := currentUserID(ctx); ok && currentID == userID {
+		return false, errors.New("cannot delete current user")
+	}
+	if err := s.ensureUserAdminNotLast(c, s.db, userID, false); err != nil {
+		return false, err
+	}
+	res, err := s.db.ExecContext(c, `DELETE FROM users WHERE id=$1`, userID)
 	if err != nil {
 		return false, err
 	}
@@ -403,9 +535,13 @@ func (s *Store) SaveRole(ctx context.Context, input Role) (Role, error) {
 			return Role{}, err
 		}
 	} else {
-		roleID, err = strconv.ParseInt(input.ID, 10, 64)
+		roleID, err = parseID(input.ID, "role")
 		if err != nil {
-			return Role{}, errors.New("invalid role id")
+			return Role{}, err
+		}
+		willRemainEnabledAdmin := strings.TrimSpace(input.Code) == "admin" && status == 1
+		if err := s.ensureRoleAdminNotLast(c, tx, roleID, willRemainEnabledAdmin); err != nil {
+			return Role{}, err
 		}
 		if _, err := tx.ExecContext(c,
 			`UPDATE roles SET code=$1, name=$2, remark=$3, status=$4 WHERE id=$5`,
@@ -434,7 +570,14 @@ func (s *Store) SaveRole(ctx context.Context, input Role) (Role, error) {
 func (s *Store) DeleteRole(ctx context.Context, id string) (bool, error) {
 	c, cancel := s.ctx(ctx)
 	defer cancel()
-	res, err := s.db.ExecContext(c, `DELETE FROM roles WHERE id=$1`, id)
+	roleID, err := parseID(id, "role")
+	if err != nil {
+		return false, err
+	}
+	if err := s.ensureRoleAdminNotLast(c, s.db, roleID, false); err != nil {
+		return false, err
+	}
+	res, err := s.db.ExecContext(c, `DELETE FROM roles WHERE id=$1`, roleID)
 	if err != nil {
 		return false, err
 	}
@@ -467,6 +610,47 @@ func (s *Store) listMenusFlat(ctx context.Context) ([]MenuItem, error) {
 		items = append(items, m)
 	}
 	return items, rows.Err()
+}
+
+func firstMenuPath(items []MenuItem) string {
+	for _, item := range items {
+		if item.Status == 1 && item.Type != "button" && strings.TrimSpace(item.Path) != "" {
+			return item.Path
+		}
+	}
+	return ""
+}
+
+func (s *Store) DefaultHomePathForUser(ctx context.Context, userID int64, roleCodes []string) (string, error) {
+	c, cancel := s.ctx(ctx)
+	defer cancel()
+
+	flat, err := s.listMenusFlat(c)
+	if err != nil {
+		return "", err
+	}
+	enabledRoutes := routeMenusOnly(flat)
+	if hasAdmin(roleCodes) {
+		if path := firstMenuPath(enabledRoutes); path != "" {
+			return path, nil
+		}
+		return "/website/overview", nil
+	}
+
+	allowed, err := s.allowedMenuIDs(c, userID)
+	if err != nil {
+		return "", err
+	}
+	filtered := make([]MenuItem, 0, len(enabledRoutes))
+	for _, item := range enabledRoutes {
+		if allowed[item.ID] {
+			filtered = append(filtered, item)
+		}
+	}
+	if path := firstMenuPath(filtered); path != "" {
+		return path, nil
+	}
+	return "/website/overview", nil
 }
 
 // ListMenus 返回树形菜单（用于前端菜单页与角色权限树）。
@@ -681,8 +865,9 @@ func (s *Store) AuthCodesForUser(ctx context.Context, userID int64, roleCodes []
 		rows, err = s.db.QueryContext(c,
 			`SELECT DISTINCT m.auth_code FROM menus m
 			 JOIN role_menus rm ON rm.menu_id=m.id
+			 JOIN roles r ON r.id=rm.role_id
 			 JOIN user_roles ur ON ur.role_id=rm.role_id
-			 WHERE ur.user_id=$1 AND m.auth_code <> '' AND m.status=1`, userID)
+			 WHERE ur.user_id=$1 AND m.auth_code <> '' AND m.status=1 AND r.status=1`, userID)
 	}
 	if err != nil {
 		return nil, err
@@ -702,8 +887,9 @@ func (s *Store) AuthCodesForUser(ctx context.Context, userID int64, roleCodes []
 func (s *Store) allowedMenuIDs(ctx context.Context, userID int64) (map[int64]bool, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT DISTINCT rm.menu_id FROM role_menus rm
+		 JOIN roles r ON r.id=rm.role_id
 		 JOIN user_roles ur ON ur.role_id=rm.role_id
-		 WHERE ur.user_id=$1`, userID)
+		 WHERE ur.user_id=$1 AND r.status=1`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -774,6 +960,9 @@ func pageParams(query map[string]string) (int, int) {
 	}
 	if pageSize <= 0 {
 		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
 	}
 	return page, pageSize
 }

@@ -78,45 +78,58 @@ onUnload(() => {
 </script>
 
 <template>
-  <view class="wrap page-stack">
+  <view class="wrap test page-stack ios-page ios-safe-bottom">
     <!-- 选性别 -->
-    <view v-if="stage === 'gender'" class="gender card">
+    <view v-if="stage === 'gender'" class="gender card ios-card">
       <text class="eyebrow">开始之前</text>
       <text class="gender__title gradient-title">先选择你的性别</text>
       <text class="gender__tip">用于微调同分情况下的决胜权重，让画像更贴近你。</text>
       <view class="gender__row">
-        <view class="gender__card gender__card--m" @click="start('male')">
+        <button
+          class="gender__card gender__card--m"
+          aria-label="选择男生"
+          hover-class="gender__card--hover"
+          @click="start('male')"
+        >
           <text class="gender__mark">M</text>
           <text class="gender__b">男生</text>
           <text class="gender__d">更偏行动、边界与掌控感</text>
-        </view>
-        <view class="gender__card gender__card--f" @click="start('female')">
+        </button>
+        <button
+          class="gender__card gender__card--f"
+          aria-label="选择女生"
+          hover-class="gender__card--hover"
+          @click="start('female')"
+        >
           <text class="gender__mark">F</text>
           <text class="gender__b">女生</text>
           <text class="gender__d">更偏关系、细腻与安全感</text>
-        </view>
+        </button>
       </view>
     </view>
 
     <!-- 答题 -->
-    <view v-else class="quiz card">
+    <view v-else class="quiz card ios-card">
       <view class="quiz__bar"><view class="quiz__bar-fill" :style="{ width: progress + '%' }" /></view>
       <view class="quiz__head">
         <text>第 {{ step + 1 }} / {{ QUESTIONS.length }} 题</text>
-        <text v-if="step > 0" class="quiz__back" @click="back">上一题</text>
+        <button v-if="step > 0" class="quiz__back" hover-class="quiz__back--hover" @click="back">上一题</button>
       </view>
       <text class="quiz__q">{{ q.q }}</text>
       <view class="quiz__options">
-        <view
+        <button
           v-for="(opt, k) in q.options"
           :key="k"
           class="quiz__opt"
           :class="{ on: answers[step] === opt, disabled: answerLocked }"
+          :disabled="answerLocked"
+          :aria-label="'选择答案 ' + letter(k) + '：' + opt.t"
+          hover-class="quiz__opt--hover"
           @click="choose(opt)"
         >
           <text class="quiz__idx">{{ letter(k) }}</text>
           <text class="quiz__t">{{ opt.t }}</text>
-        </view>
+        </button>
       </view>
     </view>
   </view>
@@ -146,6 +159,7 @@ onUnload(() => {
 .gender__card {
   flex: 1;
   min-height: 300rpx;
+  margin: 0;
   border-radius: 28rpx;
   background: rgba(255,255,255,.68);
   border: 2rpx solid rgba(255,255,255,.92);
@@ -157,7 +171,12 @@ onUnload(() => {
   padding: 28rpx;
   box-shadow: 0 18rpx 42rpx -30rpx rgba(28,40,70,.46);
   box-sizing: border-box;
+  line-height: 1.2;
+  text-align: left;
+  touch-action: manipulation;
 }
+.gender__card::after { border: none; }
+.gender__card--hover { opacity: .86; transform: scale(.985); }
 .gender__card--m {
   background: linear-gradient(145deg, rgba(90,160,255,.22), rgba(255,255,255,.72));
 }
@@ -216,11 +235,24 @@ onUnload(() => {
   margin: 28rpx 0 22rpx;
 }
 .quiz__back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 88rpx;
+  min-height: 88rpx;
+  margin: 0;
   color: #2b7fff;
-  padding: 8rpx 16rpx;
+  padding: 0 18rpx;
   border-radius: 999rpx;
   background: rgba(43,127,255,.1);
+  border: none;
+  font-size: 24rpx;
+  font-weight: 800;
+  line-height: 1.2;
+  touch-action: manipulation;
 }
+.quiz__back::after { border: none; }
+.quiz__back--hover { opacity: .82; transform: scale(.985); }
 .quiz__q {
   color: #12151b;
   font-size: 39rpx;
@@ -237,13 +269,22 @@ onUnload(() => {
   display: flex;
   align-items: center;
   gap: 18rpx;
+  width: 100%;
+  margin: 0;
   background: rgba(255,255,255,.72);
   border: 2rpx solid rgba(20,24,32,.08);
   border-radius: 24rpx;
   padding: 28rpx 24rpx;
   box-shadow: 0 10rpx 30rpx -28rpx rgba(28,40,70,.45);
+  box-sizing: border-box;
+  text-align: left;
+  line-height: 1.2;
+  touch-action: manipulation;
 }
-.quiz__opt.disabled { pointer-events: none; opacity: .72; }
+.quiz__opt::after { border: none; }
+.quiz__opt.disabled,
+.quiz__opt[disabled] { pointer-events: none; opacity: .72; }
+.quiz__opt--hover { opacity: .86; transform: scale(.992); }
 .quiz__opt.on {
   border-color: rgba(43,127,255,.46);
   background: linear-gradient(120deg, rgba(43,127,255,.12), rgba(37,179,101,.08));

@@ -1,6 +1,7 @@
 package articlestore
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -25,7 +26,7 @@ func TestStripMarkdownRemovesSyntax(t *testing.T) {
 func TestSplitForTTSRespectsLimit(t *testing.T) {
 	// 构造超过单片上限的文本。
 	para := strings.Repeat("这是一段用于测试的中文文本。", 50) // 远小于 limit 的一段
-	text := strings.Repeat(para+"\n", 40)               // 整体远超 limit
+	text := strings.Repeat(para+"\n", 40)        // 整体远超 limit
 	chunks := splitForTTS(text, 1000)
 	if len(chunks) < 2 {
 		t.Fatalf("expected multiple chunks, got %d", len(chunks))
@@ -51,5 +52,19 @@ func TestSplitForTTSHardCutsLongSentence(t *testing.T) {
 		if n := utf8.RuneCountInString(c); n > 500 {
 			t.Fatalf("chunk %d exceeds limit: %d runes", i, n)
 		}
+	}
+}
+
+func TestGenerateAudioClaimsArticleBeforeLongRunningTTS(t *testing.T) {
+	source, err := os.ReadFile("audio.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	if !strings.Contains(text, "claimAudioGeneration") {
+		t.Fatal("GenerateAudio should claim audio generation before invoking long-running TTS")
+	}
+	if !strings.Contains(text, "audio_status <> 'generating'") {
+		t.Fatal("audio generation claim should reject rows already marked generating")
 	}
 }

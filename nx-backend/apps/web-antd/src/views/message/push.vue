@@ -11,6 +11,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { Page } from '@vben/common-ui';
 
 import {
+  Alert,
   Button,
   Card,
   Form,
@@ -34,6 +35,7 @@ import {
   audienceCountDetailLabel,
   buildPushAudienceCountParams,
   formatPushRecordError,
+  formatPushSendAcceptedMessage,
   formatPushSendError,
   isValidPushMemberLevel,
   pushMemberLevelOptions,
@@ -42,6 +44,7 @@ import {
 } from './push-target';
 
 const loading = ref(false);
+const loadError = ref('');
 const items = ref<PushNotification[]>([]);
 const total = ref(0);
 const query = reactive({ page: 1, pageSize: 20 });
@@ -50,6 +53,8 @@ const sending = ref(false);
 const audienceLoading = ref(false);
 const audienceCount = ref<PushAudienceCountResult>();
 const templateKey = ref<string>();
+let requestId = 0;
+let audienceRequestId = 0;
 const form = reactive({
   content: '',
   deepLink: '',
@@ -105,24 +110,40 @@ function pushStatus(status: string) {
   return statusMeta[status] || { color: 'default', text: status || '未知' };
 }
 
-async function load() {
+async function load(options: { rethrow?: boolean } = {}) {
+  const currentRequestId = ++requestId;
   loading.value = true;
+  loadError.value = '';
   try {
     const res = await getPushListApi(query);
+    if (currentRequestId !== requestId) return;
     items.value = res?.items || [];
     total.value = res?.total || 0;
+  } catch (error) {
+    if (currentRequestId === requestId) {
+      loadError.value = '推送记录加载失败，请稍后重试';
+    }
+    if (options.rethrow) throw error;
   } finally {
-    loading.value = false;
+    if (currentRequestId === requestId) {
+      loading.value = false;
+    }
   }
+}
+
+function retryLoad() {
+  void load();
 }
 
 function onPageChange(page: number, pageSize: number) {
   query.page = page;
   query.pageSize = pageSize;
-  load();
+  retryLoad();
 }
 
 function clearAudienceCount() {
+  audienceRequestId++;
+  audienceLoading.value = false;
   audienceCount.value = undefined;
 }
 
@@ -144,18 +165,26 @@ async function estimateAudience() {
     message.warning('请选择有效会员等级后再预估');
     return;
   }
+  const currentAudienceRequestId = ++audienceRequestId;
   audienceLoading.value = true;
   try {
     const res = await getPushAudienceCountApi(params);
+    if (currentAudienceRequestId !== audienceRequestId) return;
     audienceCount.value = {
       deviceCount: Number(res?.deviceCount ?? 0),
+      targetType: res?.targetType,
+      targetValue: res?.targetValue,
       userCount: Number(res?.userCount ?? 0),
     };
   } catch {
-    audienceCount.value = undefined;
-    message.error('受众预估失败，请稍后重试');
+    if (currentAudienceRequestId === audienceRequestId) {
+      audienceCount.value = undefined;
+      message.error('受众预估失败，请稍后重试');
+    }
   } finally {
-    audienceLoading.value = false;
+    if (currentAudienceRequestId === audienceRequestId) {
+      audienceLoading.value = false;
+    }
   }
 }
 
@@ -197,12 +226,18 @@ async function handleSend() {
       targetValue: targetValue || undefined,
       title,
     });
-    message.success(`推送成功，已发送 ${res?.sent ?? 0} 条`);
+    message.success(formatPushSendAcceptedMessage(res));
     sendModalOpen.value = false;
-    void refreshPushRecordsAfterSendAttempt(load, message.warning);
+    void refreshPushRecordsAfterSendAttempt(
+      () => load({ rethrow: true }),
+      message.warning,
+    );
   } catch (error) {
     message.error(formatPushSendError(error));
-    void refreshPushRecordsAfterSendAttempt(load, message.warning);
+    void refreshPushRecordsAfterSendAttempt(
+      () => load({ rethrow: true }),
+      message.warning,
+    );
   } finally {
     sending.value = false;
   }
@@ -215,15 +250,29 @@ watch(
   },
 );
 
-onMounted(load);
+onMounted(retryLoad);
 </script>
 
 <template>
   <Page title="推送管理" description="管理和发送 App 推送通知">
     <Card>
       <template #extra>
-        <Button type="primary" @click="openSendModal">发送推送</Button>
+        <Space>
+          <Button :loading="loading" @click="retryLoad">刷新</Button>
+          <Button type="primary" @click="openSendModal">发送推送</Button>
+        </Space>
       </template>
+
+      <Alert
+        v-if="loadError"
+        :message="loadError"
+        show-icon
+        type="error"
+      >
+        <template #action>
+          <Button size="small" type="link" @click="retryLoad">重试</Button>
+        </template>
+      </Alert>
 
       <Table
         :columns="columns"

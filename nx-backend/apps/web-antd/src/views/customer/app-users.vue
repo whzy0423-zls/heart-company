@@ -7,6 +7,7 @@ import { useRouter } from 'vue-router';
 import { useAccessStore } from '@vben/stores';
 
 import {
+  Alert,
   Button,
   Card,
   Descriptions,
@@ -27,6 +28,7 @@ import {
   updateAppCustomerApi,
 } from '#/api';
 
+import { canViewUserInsights } from './app-user-access';
 import PageShell from '../system/components/page-shell.vue';
 import {
   buildAppCustomerUpdatePayload,
@@ -65,6 +67,7 @@ const memberLevelLabels: Record<string, string> = {
 
 const router = useRouter();
 const loading = ref(false);
+const loadError = ref('');
 const accessStore = useAccessStore();
 const detailLoading = ref(false);
 const customers = ref<AppCustomer[]>([]);
@@ -76,6 +79,9 @@ const editSaving = ref(false);
 const editingCustomer = ref<AppCustomer>();
 const editForm = reactive(createAppCustomerEditForm());
 const canEdit = computed(() => canEditAppCustomer(accessStore.accessCodes));
+const canOpenUserInsights = computed(() =>
+  canViewUserInsights(accessStore.accessCodes),
+);
 const query = reactive({
   keyword: '',
   memberLevel: '',
@@ -84,6 +90,7 @@ const query = reactive({
   status: '',
 });
 let requestId = 0;
+let detailRequestId = 0;
 
 const columns = [
   { dataIndex: 'phone', fixed: 'left' as const, title: '手机号', width: 160 },
@@ -113,9 +120,10 @@ function sourceLabel(value?: string) {
   return value;
 }
 
-async function load() {
+async function load(options: { rethrow?: boolean } = {}) {
   const currentRequestId = ++requestId;
   loading.value = true;
+  loadError.value = '';
   try {
     const result = await getAppCustomerListApi({
       keyword: query.keyword || undefined,
@@ -127,6 +135,11 @@ async function load() {
     if (currentRequestId !== requestId) return;
     customers.value = result.items;
     total.value = result.total;
+  } catch (error) {
+    if (currentRequestId === requestId) {
+      loadError.value = 'App 客户列表加载失败，请稍后重试';
+    }
+    if (options.rethrow) throw error;
   } finally {
     if (currentRequestId === requestId) {
       loading.value = false;
@@ -134,17 +147,28 @@ async function load() {
   }
 }
 
+function retryLoad() {
+  void load();
+}
+
 async function openDetail(record: AppCustomer) {
+  const currentDetailRequestId = ++detailRequestId;
   detail.value = undefined;
   detailOpen.value = true;
   detailLoading.value = true;
   try {
-    detail.value = await getAppCustomerDetailApi(record.id);
+    const result = await getAppCustomerDetailApi(record.id);
+    if (currentDetailRequestId !== detailRequestId) return;
+    detail.value = result;
   } catch {
-    detailOpen.value = false;
-    message.error('客户详情加载失败，请稍后重试');
+    if (currentDetailRequestId === detailRequestId) {
+      detailOpen.value = false;
+      message.error('客户详情加载失败，请稍后重试');
+    }
   } finally {
-    detailLoading.value = false;
+    if (currentDetailRequestId === detailRequestId) {
+      detailLoading.value = false;
+    }
   }
 }
 
@@ -158,11 +182,15 @@ function mergeCustomer(updated: AppCustomer) {
   }
 }
 
-
 function goUser360(record: AppCustomer) {
+  const query: Record<string, string> = { open: '1' };
+  const userId = String(record.id ?? '').trim();
+  const keyword = record.phone?.trim();
+  if (userId) query.userId = userId;
+  if (keyword) query.keyword = keyword;
   router.push({
     path: '/customer/user-insights',
-    query: record.phone ? { keyword: record.phone } : undefined,
+    query,
   });
 }
 
@@ -189,7 +217,7 @@ async function saveEdit() {
   } finally {
     editSaving.value = false;
   }
-  load().catch(() => {
+  load({ rethrow: true }).catch(() => {
     message.warning('客户信息已更新，列表刷新失败');
   });
 }
@@ -213,7 +241,7 @@ function search() {
 }
 
 onMounted(() => {
-  load();
+  retryLoad();
 });
 </script>
 
@@ -222,9 +250,20 @@ onMounted(() => {
     description="查看通过手机号登录 App 的客户，维护其会员等级与基础资料。"
     :loading="loading"
     title="App 客户"
-    @refresh="load"
+    @refresh="retryLoad"
   >
     <div class="app-user-page">
+      <Alert
+        v-if="loadError"
+        :message="loadError"
+        show-icon
+        type="error"
+      >
+        <template #action>
+          <Button size="small" type="link" @click="retryLoad">重试</Button>
+        </template>
+      </Alert>
+
       <Card :bordered="false" class="filter-card">
         <div class="filter-bar">
           <Input
@@ -291,6 +330,7 @@ onMounted(() => {
             <template v-if="column.key === 'action'">
               <Space>
                 <Button
+                  v-if="canOpenUserInsights"
                   size="small"
                   type="link"
                   @click="goUser360(customerRecord(record))"

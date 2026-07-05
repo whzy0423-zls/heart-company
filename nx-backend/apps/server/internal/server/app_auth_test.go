@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/appuser"
 )
@@ -236,16 +238,9 @@ func TestAppAuthLogout(t *testing.T) {
 	if pushResp.Code != http.StatusOK {
 		t.Fatalf("push send failed: %d %s", pushResp.Code, pushResp.Body.String())
 	}
-	var pushBody struct {
-		Data struct {
-			Sent int `json:"sent"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(pushResp.Body.Bytes(), &pushBody); err != nil {
-		t.Fatal(err)
-	}
-	if pushBody.Data.Sent != 1 {
-		t.Fatalf("expected logout with registrationId to keep only other device, sent=%d", pushBody.Data.Sent)
+	sent := waitForPushSendSentCount(t, handler, adminToken, pushResp)
+	if sent != 1 {
+		t.Fatalf("expected logout with registrationId to keep only other device, sent=%d", sent)
 	}
 }
 
@@ -286,17 +281,61 @@ func TestAppAuthLogoutWithoutRegistrationIDKeepsDeviceTokens(t *testing.T) {
 	if pushResp.Code != http.StatusOK {
 		t.Fatalf("push send failed: %d %s", pushResp.Code, pushResp.Body.String())
 	}
-	var pushBody struct {
+	sent := waitForPushSendSentCount(t, handler, adminToken, pushResp)
+	if sent != 2 {
+		t.Fatalf("expected logout without registrationId to keep device tokens, sent=%d", sent)
+	}
+}
+
+func waitForPushSendSentCount(t *testing.T, handler http.Handler, adminToken string, pushResp *httptest.ResponseRecorder) int {
+	t.Helper()
+	var sendBody struct {
 		Data struct {
-			Sent int `json:"sent"`
+			RecordID int64  `json:"recordId"`
+			Status   string `json:"status"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(pushResp.Body.Bytes(), &pushBody); err != nil {
+	if err := json.Unmarshal(pushResp.Body.Bytes(), &sendBody); err != nil {
 		t.Fatal(err)
 	}
-	if pushBody.Data.Sent != 2 {
-		t.Fatalf("expected logout without registrationId to keep device tokens, sent=%d", pushBody.Data.Sent)
+	if sendBody.Data.RecordID == 0 {
+		t.Fatalf("expected async push response recordId, body=%s", pushResp.Body.String())
 	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		listResp := perform(handler, http.MethodGet, "/api/push/list?page=1&pageSize=20", adminToken, nil)
+		if listResp.Code != http.StatusOK {
+			t.Fatalf("push list failed: %d %s", listResp.Code, listResp.Body.String())
+		}
+		var listBody struct {
+			Data struct {
+				Items []struct {
+					ID           int64  `json:"id"`
+					SentCount    int    `json:"sentCount"`
+					Status       string `json:"status"`
+					ErrorMessage string `json:"errorMessage"`
+				} `json:"items"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(listResp.Body.Bytes(), &listBody); err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range listBody.Data.Items {
+			if item.ID != sendBody.Data.RecordID {
+				continue
+			}
+			switch item.Status {
+			case "success":
+				return item.SentCount
+			case "failed":
+				t.Fatalf("push send failed asynchronously: %s", item.ErrorMessage)
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for push record %d to finish", sendBody.Data.RecordID)
+	return 0
 }
 
 func clearAppDeviceTokens(t *testing.T) {

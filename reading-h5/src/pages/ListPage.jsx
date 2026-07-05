@@ -34,23 +34,28 @@ export default function ListPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const debounceRef = useRef(null)
+  const requestIdRef = useRef(0)
 
   useEffect(() => {
     fetchCategories().then((list) => setCategories(Array.isArray(list) ? list : [])).catch(() => {})
   }, [])
 
   const load = useCallback(async (nextPage, replace) => {
+    const currentRequestId = ++requestIdRef.current
     setLoading(true)
     setError('')
     try {
       const res = await fetchArticles({ keyword, category, page: nextPage, pageSize: PAGE_SIZE })
+      if (currentRequestId !== requestIdRef.current) return
       const list = res?.items || []
       setTotal(res?.total || 0)
       setItems((prev) => (replace ? list : [...prev, ...list]))
       setPage(nextPage)
     } catch (err) {
+      if (currentRequestId !== requestIdRef.current) return
       setError(err.message || '加载失败')
     } finally {
+      if (currentRequestId !== requestIdRef.current) return
       setLoading(false)
     }
   }, [keyword, category])
@@ -107,9 +112,10 @@ export default function ListPage() {
           正在翻开书页…
         </div>
       ) : error ? (
-        <div className="state">
+        <div className="state" role="alert" aria-live="assertive">
           <div className="state-emoji">😕</div>
-          {error}
+          <div>{error}</div>
+          <button className="state-retry" type="button" onClick={() => load(1, true)}>重新加载</button>
         </div>
       ) : items.length === 0 ? (
         <div className="state">
@@ -120,8 +126,9 @@ export default function ListPage() {
         <>
           <div className="list">
             {items.map((article) => (
-              <article
+              <button
                 key={article.id}
+                type="button"
                 className="card"
                 onClick={() => navigate(`/article/${article.id}`)}
               >
@@ -139,7 +146,7 @@ export default function ListPage() {
                     {article.hasAudio && <span className="card-audio">🎧 听书</span>}
                   </div>
                 </div>
-              </article>
+              </button>
             ))}
           </div>
 

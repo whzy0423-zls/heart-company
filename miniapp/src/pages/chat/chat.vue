@@ -182,13 +182,13 @@ onLoad(() => {
 </script>
 
 <template>
-  <view class="chat">
-    <view class="chat__head">
+  <view class="chat ios-page ios-safe-bottom">
+    <view class="chat__head ios-card">
       <view class="chat__topline">
         <text class="eyebrow">RAG 检索问答</text>
         <button class="chat__clear" :disabled="sending" @click="clearChat">清空</button>
       </view>
-      <view class="chat__intro">
+      <view class="chat__intro ios-card">
         <text class="chat__title">九型 AI 对话</text>
         <text class="chat__status">{{ statusText }}</text>
       </view>
@@ -239,11 +239,21 @@ onLoad(() => {
     <view class="chat__bottom">
       <scroll-view class="suggestions" scroll-x :show-scrollbar="false">
         <view class="suggestions__inner">
-          <text v-for="item in suggestions" :key="item" class="suggestion" @click="useSuggestion(item)">{{ item }}</text>
+          <button
+            v-for="item in suggestions"
+            :key="item"
+            class="suggestion"
+            :disabled="sending"
+            :aria-label="'使用快捷问题：' + item"
+            hover-class="suggestion--hover"
+            @click="useSuggestion(item)"
+          >
+            {{ item }}
+          </button>
         </view>
       </scroll-view>
 
-      <view class="composer">
+      <view class="composer ios-card">
         <input
           class="composer__input"
           :value="input"
@@ -263,10 +273,8 @@ onLoad(() => {
 
 <style scoped>
 .chat {
-  min-height: calc(100vh - var(--window-bottom, 0px));
-  height: calc(100vh - var(--window-bottom, 0px));
-  min-height: calc(100dvh - var(--window-bottom, 0px));
-  height: calc(100dvh - var(--window-bottom, 0px));
+  min-height: 100%;
+  height: 100%;
   padding: calc(20rpx + constant(safe-area-inset-top)) 24rpx calc(18rpx + constant(safe-area-inset-bottom));
   padding: calc(20rpx + env(safe-area-inset-top)) 24rpx calc(18rpx + env(safe-area-inset-bottom));
   box-sizing: border-box;
@@ -282,14 +290,20 @@ onLoad(() => {
   flex-direction: column;
   gap: 8rpx;
   flex-shrink: 0;
-  padding: 2rpx 2rpx 8rpx;
+  padding: 20rpx 22rpx;
 }
-.chat__topline,
+.chat__topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+}
 .chat__intro {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16rpx;
+  padding: 20rpx 22rpx;
 }
 .chat__clear {
   min-width: 96rpx;
@@ -448,6 +462,7 @@ onLoad(() => {
   align-items: center;
   justify-content: center;
   min-height: 88rpx;
+  margin: 0;
   padding: 0 20rpx;
   border-radius: 999rpx;
   background: rgba(255,255,255,.86);
@@ -455,6 +470,15 @@ onLoad(() => {
   color: #334155;
   font-size: 23rpx;
   font-weight: 900;
+  line-height: 1.2;
+  box-sizing: border-box;
+  touch-action: manipulation;
+}
+.suggestion::after { border: none; }
+.suggestion[disabled] { opacity: .48; }
+.suggestion--hover {
+  opacity: .82;
+  transform: scale(.985);
 }
 .composer {
   display: flex;

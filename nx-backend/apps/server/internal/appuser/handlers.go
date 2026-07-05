@@ -26,6 +26,10 @@ func queryMap(r *http.Request) map[string]string {
 func (s *Store) HandleAppUsers(w http.ResponseWriter, r *http.Request) {
 	result, err := s.List(r.Context(), queryMap(r))
 	if err != nil {
+		if strings.Contains(err.Error(), "invalid userId") {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -36,6 +40,10 @@ func (s *Store) HandleAppUsers(w http.ResponseWriter, r *http.Request) {
 func (s *Store) HandleAppUserInsights(w http.ResponseWriter, r *http.Request) {
 	result, err := s.ListInsights(r.Context(), queryMap(r))
 	if err != nil {
+		if strings.Contains(err.Error(), "invalid userId") {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}

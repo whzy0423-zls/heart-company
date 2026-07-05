@@ -4,12 +4,81 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/articlestore"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 )
+
+const (
+	publicArticleReferenceCacheMaxEntries = 1024
+	publicArticleReferenceCacheTTL        = 30 * time.Second
+)
+
+var publicArticleReferenceCache = newPublicArticleReferenceCacheStore()
+
+type publicArticleReferenceCacheEntry struct {
+	expiresAt time.Time
+	value     bool
+}
+
+type publicArticleReferenceCacheStore struct {
+	mu    sync.Mutex
+	items map[string]publicArticleReferenceCacheEntry
+}
+
+func newPublicArticleReferenceCacheStore() *publicArticleReferenceCacheStore {
+	return &publicArticleReferenceCacheStore{
+		items: make(map[string]publicArticleReferenceCacheEntry),
+	}
+}
+
+func (c *publicArticleReferenceCacheStore) Load(key string) (publicArticleReferenceCacheEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.items[key]
+	return entry, ok
+}
+
+func (c *publicArticleReferenceCacheStore) Store(key string, entry publicArticleReferenceCacheEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	for itemKey, item := range c.items {
+		if now.After(item.expiresAt) {
+			delete(c.items, itemKey)
+		}
+	}
+	for len(c.items) >= publicArticleReferenceCacheMaxEntries {
+		for itemKey := range c.items {
+			delete(c.items, itemKey)
+			break
+		}
+	}
+	c.items[key] = entry
+}
+
+func (c *publicArticleReferenceCacheStore) Delete(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.items, key)
+}
+
+func (c *publicArticleReferenceCacheStore) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items = make(map[string]publicArticleReferenceCacheEntry)
+}
+
+func (c *publicArticleReferenceCacheStore) Len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.items)
+}
 
 // adminArticles handles list (GET) and create (POST) for the reading admin.
 func (s *Server) adminArticles(w http.ResponseWriter, r *http.Request) {
@@ -33,6 +102,7 @@ func (s *Server) adminArticles(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		clearPublicArticleReferenceCache()
 		httpx.OK(w, result)
 	default:
 		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
@@ -89,12 +159,16 @@ func (s *Server) adminArticleByID(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		clearPublicArticleReferenceCache()
 		httpx.OK(w, result)
 	case http.MethodDelete:
 		ok, err := s.articles.DeleteArticle(r.Context(), id)
 		if err != nil {
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
+		}
+		if ok {
+			clearPublicArticleReferenceCache()
 		}
 		httpx.OK(w, ok)
 	default:
@@ -133,6 +207,7 @@ func (s *Server) publicArticleDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	doc.Cover = publicArticleAssetURL(doc.Cover)
 	doc.AudioURL = publicArticleAssetURL(doc.AudioURL)
+	doc.Content = publicArticleContentAssetURLs(doc.Content)
 	httpx.OK(w, doc)
 }
 
@@ -143,7 +218,9 @@ func (s *Server) publicArticleAsset(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	referenced, err := s.articles.PublicAssetReferenced(r.Context(), id)
+	referenced, err := cachedPublicArticleReference(fmt.Sprintf("asset:%d", id), func() (bool, error) {
+		return s.articles.PublicAssetReferenced(r.Context(), id)
+	})
 	if err != nil || !referenced {
 		http.NotFound(w, r)
 		return
@@ -153,14 +230,85 @@ func (s *Server) publicArticleAsset(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	writeUploadAsset(w, asset)
+	writePublicUploadAsset(w, asset)
+}
+
+func (s *Server) publicArticleUpload(w http.ResponseWriter, r *http.Request) {
+	rel := publicUploadRelativePath(r.URL.Path, "/api/public/article-uploads/")
+	if rel == "" {
+		http.NotFound(w, r)
+		return
+	}
+	privateURL := "/api/uploads/" + rel
+	referenced, err := cachedPublicArticleReference("upload:"+privateURL, func() (bool, error) {
+		return s.articles.PublicLocalUploadReferenced(r.Context(), privateURL)
+	})
+	if err != nil || !referenced {
+		http.NotFound(w, r)
+		return
+	}
+	s.servePublicLocalUpload(w, r, rel)
+}
+
+func cachedPublicArticleReference(key string, load func() (bool, error)) (bool, error) {
+	now := time.Now()
+	if entry, ok := publicArticleReferenceCache.Load(key); ok {
+		if now.Before(entry.expiresAt) {
+			return entry.value, nil
+		}
+		publicArticleReferenceCache.Delete(key)
+	}
+	value, err := load()
+	if err != nil {
+		return false, err
+	}
+	ttl := publicArticleReferenceCacheTTL
+	if !value {
+		ttl = 5 * time.Second
+	}
+	publicArticleReferenceCache.Store(key, publicArticleReferenceCacheEntry{
+		expiresAt: now.Add(ttl),
+		value:     value,
+	})
+	return value, nil
+}
+
+func clearPublicArticleReferenceCache() {
+	publicArticleReferenceCache.Clear()
 }
 
 func publicArticleAssetURL(raw string) string {
 	if id, ok := uploadAssetIDFromURL(raw); ok {
 		return fmt.Sprintf("/api/public/article-assets/%d", id)
 	}
+	if rel, ok := localUploadRelativePath(raw); ok {
+		return "/api/public/article-uploads/" + rel
+	}
 	return strings.TrimSpace(raw)
+}
+
+var (
+	privateArticleAssetURLInContent  = regexp.MustCompile(`(^|[\s"'(=])(/api/upload-assets/[1-9][0-9]*)($|[\s"')>\]])`)
+	privateArticleUploadURLInContent = regexp.MustCompile(`(^|[\s"'(=])(/api/uploads/[^\s"'<>\])]+)($|[\s"')>\]])`)
+)
+
+func publicArticleContentAssetURLs(content string) string {
+	if strings.TrimSpace(content) == "" {
+		return content
+	}
+	content = rewriteArticleContentPrivateURLs(content, privateArticleAssetURLInContent)
+	content = rewriteArticleContentPrivateURLs(content, privateArticleUploadURLInContent)
+	return content
+}
+
+func rewriteArticleContentPrivateURLs(content string, pattern *regexp.Regexp) string {
+	return pattern.ReplaceAllStringFunc(content, func(match string) string {
+		parts := pattern.FindStringSubmatch(match)
+		if len(parts) != 4 {
+			return match
+		}
+		return parts[1] + publicArticleAssetURL(parts[2]) + parts[3]
+	})
 }
 
 // publicArticleCategories lists distinct categories for the H5 filter bar.

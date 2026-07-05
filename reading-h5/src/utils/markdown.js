@@ -68,7 +68,7 @@ export function sanitizeRenderedHtml(html = '') {
   if (!html) return ''
   return DOMPurify.sanitize(html, {
     ALLOWED_URI_REGEXP:
-      /^(?:(?:https|mailto|tel):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
+      /^(?!\/\/)(?:(?:https|mailto|tel):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
     FORBID_ATTR: ['style'],
   })
 }
