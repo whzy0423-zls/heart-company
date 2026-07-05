@@ -3,9 +3,7 @@ import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { TYPES_INFO } from '../../data/enneagramGame'
 import { ensureLogin, getToken, clearToken } from '../../utils/auth'
-import { clearChatMessages } from '../../utils/chatStorage'
 import { hiddenCount, previewItems } from '../../utils/listPreview'
-import { openChatPage } from '../../utils/navigation'
 import { normalizeWechatProfile, hasProfilePayload, getWechatProfilePayload } from '../../utils/wechatProfile'
 import { userErrorMessage } from '../../utils/userMessage'
 import { getUserInfoApi, updateUserInfoApi, listTestRecordsApi, listBookingsApi } from '../../api'
@@ -101,7 +99,6 @@ function syncDraftFromUser() {
 function resetLogin() {
   loadTicket += 1
   clearToken()
-  clearChatMessages()
   logged.value = false
   user.value = null
   records.value = []
@@ -115,10 +112,6 @@ function resetLogin() {
 
 function logout() {
   resetLogin()
-}
-
-function goChat() {
-  openChatPage()
 }
 
 function onChooseAvatar(e) {
@@ -182,7 +175,7 @@ async function saveProfile() {
       <text class="login__t">登录后可保存你的九型档案、测试历史和预约记录。</text>
       <!-- #ifdef H5 -->
       <button class="btn-primary ios-button" disabled>请在微信小程序内登录</button>
-      <text class="login__hint">H5 可浏览公开内容；保存档案、AI 对话和预约记录请打开微信小程序。</text>
+      <text class="login__hint">H5 可浏览公开内容；保存档案和预约记录请打开微信小程序。</text>
       <!-- #endif -->
       <!-- #ifndef H5 -->
       <button class="btn-primary ios-button" :loading="logging" :disabled="logging" @click="login">微信一键登录</button>
@@ -199,7 +192,6 @@ async function saveProfile() {
           <text class="user__type" v-if="user && user.mainType">主型：{{ typeName(user.mainType) }}</text>
           <text class="user__type" v-else>已通过微信登录</text>
         </view>
-        <button class="user__chat" @click="goChat">问 AI</button>
       </view>
 
       <view class="card ios-card profile-form">
@@ -346,21 +338,6 @@ async function saveProfile() {
   display: block;
   margin-top: 7rpx;
 }
-.user__chat {
-  min-width: 112rpx;
-  min-height: 88rpx;
-  padding: 0 18rpx;
-  border-radius: 999rpx;
-  background: rgba(5,150,105,.12);
-  color: #059669;
-  font-size: 24rpx;
-  font-weight: 900;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.user__chat::after { border: none; }
 .profile-form {
   display: flex;
   flex-direction: column;

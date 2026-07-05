@@ -17,11 +17,10 @@ miniapp/
     ├── utils/            # auth(微信登录) / enneagram(算分) / session
     ├── api/              # request 封装 + 接口
     └── pages/
-        ├── index/        测一测（首页，含测试/学习/AI/合盘入口）
+        ├── index/        测一测（首页，含测试/学习/合盘入口）
         ├── test/         答题
         ├── result/       结果（解析 + 存档 + 分享好友 + 海报 + 合盘 + 预约）
         ├── relation/     关系合盘（两型相处底色/摩擦/建议）
-        ├── chat/         九型 AI 对话
         ├── learn/        学一学（课程/图鉴）
         ├── booking/      约课程（预约表单）
         └── profile/      我的（登录/档案/历史）

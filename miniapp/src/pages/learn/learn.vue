@@ -3,8 +3,10 @@ import { ref, onMounted } from 'vue'
 import { TYPES_INFO } from '../../data/enneagramGame'
 import { getStoredSiteConfig, hasSiteConfigLearningSection, refreshSiteConfig } from '../../utils/siteConfig'
 import { userErrorMessage } from '../../utils/userMessage'
+import { normalizeCoursewareItems, normalizeTeachers } from '../../utils/teacherCourseware'
 
-const courses = ref([])
+const teachers = ref([])
+const coursewareItems = ref([])
 const quotes = ref([])
 const types = ref(Object.keys(TYPES_INFO).map((id) => ({ id: Number(id), ...TYPES_INFO[id] })))
 const loading = ref(true)
@@ -12,7 +14,8 @@ const loadError = ref('')
 let loadTicket = 0
 
 function applyContent(cfg) {
-  courses.value = cfg?.home?.courses?.items || []
+  teachers.value = normalizeTeachers(cfg)
+  coursewareItems.value = normalizeCoursewareItems(cfg)
   quotes.value = cfg?.home?.quotes?.items || []
 }
 
@@ -41,7 +44,8 @@ async function loadContent(options = {}) {
   } catch (e) {
     if (ticket !== loadTicket) return
     if (!silent) {
-      courses.value = []
+      teachers.value = normalizeTeachers()
+      coursewareItems.value = normalizeCoursewareItems()
       quotes.value = []
       loadError.value = userErrorMessage(e, '内容加载失败，请稍后重试')
     }
@@ -62,22 +66,44 @@ function goTest() {
 
 <template>
   <view class="wrap learn page-stack ios-page ios-safe-bottom">
-    <view class="card ios-card section">
-      <text class="eyebrow">课程体系</text>
-      <text class="sec-title">线上课程</text>
-      <view v-if="loading" class="empty">课程内容加载中…</view>
+    <view class="card ios-card section teacher-section">
+      <text class="eyebrow">老师资料</text>
+      <text class="sec-title">跟着老师系统学习</text>
+      <view v-if="loading" class="empty">老师资料加载中…</view>
       <view v-else-if="loadError" class="empty empty--error">
         <text>{{ loadError }}</text>
         <button class="retry" hover-class="retry--hover" @click="loadContent">重新加载</button>
       </view>
-      <view v-else-if="courses.length === 0" class="empty">课程内容即将上线</view>
-      <view v-for="(c, i) in courses" :key="i" class="course">
-        <text class="chip course__badge">{{ c.badge || (i + 1) }}</text>
-        <view class="course__body">
-          <text class="course__title">{{ c.title }}</text>
-          <text class="course__desc">{{ c.description }}</text>
+      <view v-for="teacher in teachers" :key="teacher.name" class="teacher-card">
+        <image class="teacher-card__avatar" :src="teacher.avatar" mode="aspectFill" lazy-load />
+        <view class="teacher-card__body">
+          <text class="teacher-card__name">{{ teacher.name }}</text>
+          <text class="teacher-card__title">{{ teacher.title }}</text>
+          <text class="teacher-card__bio">{{ teacher.bio }}</text>
+          <view v-if="teacher.tags.length" class="teacher-card__tags">
+            <text v-for="tag in teacher.tags" :key="tag" class="teacher-card__tag">{{ tag }}</text>
+          </view>
         </view>
       </view>
+    </view>
+
+    <view class="card ios-card section courseware-section">
+      <text class="eyebrow">课程资料</text>
+      <text class="sec-title">课件 / 课程展示</text>
+      <view v-if="loading" class="empty">课件内容加载中…</view>
+      <block v-else>
+        <view v-for="(c, i) in coursewareItems" :key="c.title + i" class="courseware-card">
+          <image class="courseware-card__cover" :src="c.cover" mode="aspectFill" lazy-load />
+          <view class="courseware-card__body">
+            <view class="courseware-card__meta">
+              <text class="chip courseware-card__badge">{{ c.badge || (i + 1) }}</text>
+              <text v-if="c.duration" class="courseware-card__duration">{{ c.duration }}</text>
+            </view>
+            <text class="courseware-card__title">{{ c.title }}</text>
+            <text class="courseware-card__desc">{{ c.description }}</text>
+          </view>
+        </view>
+      </block>
     </view>
 
     <view class="card ios-card section">
@@ -104,7 +130,7 @@ function goTest() {
       </view>
     </view>
 
-    <button class="btn-primary ios-button" @click="goTest">去测测我是哪一型 →</button>
+    <button class="btn-primary ios-button" @click="goTest">先测类型，再跟课学习 →</button>
   </view>
 </template>
 
@@ -130,11 +156,23 @@ function goTest() {
 }
 .retry::after { border: none; }
 .retry--hover { opacity: .82; transform: scale(.985); }
-.course { display: flex; gap: 18rpx; padding: 22rpx 0; border-bottom: 2rpx solid rgba(20,24,32,.07); }
-.course:last-child { border-bottom: none; }
-.course__badge { flex-shrink: 0; }
-.course__title { color: #12151b; font-size: 30rpx; font-weight: 900; display: block; }
-.course__desc { color: #3c424d; font-size: 25rpx; line-height: 1.65; display: block; margin-top: 6rpx; }
+.teacher-card { display: flex; gap: 22rpx; padding: 24rpx; border-radius: 28rpx; background: rgba(255,255,255,.72); border: 2rpx solid rgba(255,255,255,.88); box-shadow: 0 16rpx 38rpx -28rpx rgba(28,40,70,.42); }
+.teacher-card__avatar { flex-shrink: 0; width: 132rpx; height: 132rpx; border-radius: 28rpx; border: 4rpx solid rgba(255,255,255,.94); background: #f8fafc; }
+.teacher-card__body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 8rpx; }
+.teacher-card__name { color: #12151b; font-size: 32rpx; font-weight: 900; line-height: 1.25; }
+.teacher-card__title { color: #2563eb; font-size: 24rpx; font-weight: 900; }
+.teacher-card__bio { color: #3c424d; font-size: 25rpx; line-height: 1.62; }
+.teacher-card__tags { display: flex; flex-wrap: wrap; gap: 10rpx; margin-top: 4rpx; }
+.teacher-card__tag { min-height: 44rpx; padding: 0 16rpx; border-radius: 999rpx; background: rgba(37,99,235,.09); color: #2563eb; font-size: 21rpx; font-weight: 900; display: inline-flex; align-items: center; }
+.courseware-card { display: flex; gap: 18rpx; padding: 22rpx 0; border-bottom: 2rpx solid rgba(20,24,32,.07); }
+.courseware-card:last-child { border-bottom: none; }
+.courseware-card__cover { flex-shrink: 0; width: 152rpx; height: 112rpx; border-radius: 22rpx; background: #e2e8f0; }
+.courseware-card__body { min-width: 0; flex: 1; }
+.courseware-card__meta { display: flex; align-items: center; gap: 12rpx; margin-bottom: 8rpx; }
+.courseware-card__badge { flex-shrink: 0; }
+.courseware-card__duration { color: #64748b; font-size: 22rpx; font-weight: 800; }
+.courseware-card__title { color: #12151b; font-size: 30rpx; font-weight: 900; display: block; }
+.courseware-card__desc { color: #3c424d; font-size: 25rpx; line-height: 1.65; display: block; margin-top: 6rpx; }
 .quote-card {
   position: relative;
   min-height: 116rpx;
