@@ -56,16 +56,41 @@ export function clearSiteConfigCache() {
   }
 }
 
+function hasItems(value) {
+  if (Array.isArray(value)) return value.length > 0
+  if (Array.isArray(value?.items)) return value.items.length > 0
+  if (Array.isArray(value?.list)) return value.list.length > 0
+  return !!(value && typeof value === 'object' && Object.keys(value).length > 0)
+}
+
+function hasSection(value) {
+  return Array.isArray(value) || Array.isArray(value?.items) || Array.isArray(value?.list) || !!(value && typeof value === 'object')
+}
+
+function learningSources(config) {
+  return [
+    config?.teacher,
+    config?.teachers,
+    config?.courseware,
+    config?.materials,
+    config?.lessons,
+    config?.courses,
+    config?.home?.teacher,
+    config?.home?.teachers,
+    config?.home?.courseware,
+    config?.home?.materials,
+    config?.home?.lessons,
+    config?.home?.courses,
+    config?.home?.quotes,
+  ]
+}
+
 export function hasSiteConfigLearningContent(config) {
-  const courses = config?.home?.courses?.items
-  const quotes = config?.home?.quotes?.items
-  return (Array.isArray(courses) && courses.length > 0) || (Array.isArray(quotes) && quotes.length > 0)
+  return learningSources(config).some(hasItems)
 }
 
 export function hasSiteConfigLearningSection(config) {
-  const courses = config?.home?.courses?.items
-  const quotes = config?.home?.quotes?.items
-  return Array.isArray(courses) || Array.isArray(quotes)
+  return learningSources(config).some(hasSection)
 }
 
 export async function getCachedSiteConfig(options = {}) {

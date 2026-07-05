@@ -36,11 +36,6 @@ export function listBookingsApi() {
   return request({ url: '/miniapp/bookings', method: 'GET', auth: true })
 }
 
-// 九型 AI 对话（RAG 检索）
-export function chatApi(data) {
-  return request({ url: '/miniapp/chat', method: 'POST', data, auth: true, timeout: 30000 })
-}
-
 // 站点内容（公开）
 export function getSiteConfigApi() {
   return request({ url: '/public/site-config', method: 'GET' })

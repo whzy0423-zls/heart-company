@@ -11,28 +11,10 @@ assert.equal(
   packageJson.dependencies['@dcloudio/uni-app'],
 )
 
-const chatPage = readFileSync('src/pages/chat/chat.vue', 'utf8')
-assert.match(chatPage, /\.chat\s*\{[\s\S]*height:\s*100%;/, 'chat page should fill the uni page wrapper height')
-assert.match(chatPage, /\.chat\s*\{[\s\S]*min-height:\s*100%;/, 'chat page should use parent height instead of recalculating viewport height')
-assert.doesNotMatch(
-  chatPage,
-  /height:\s*calc\(100dvh\s*-\s*var\(--window-bottom/,
-  'chat page must not subtract --window-bottom from 100dvh inside an already-sized uni wrapper',
-)
-assert.match(chatPage, /\.chat__clear\s*\{[\s\S]*min-height:\s*88rpx/, 'chat clear button should keep an 88rpx touch target')
-assert.match(chatPage, /\.suggestion\s*\{[\s\S]*min-height:\s*88rpx/, 'chat suggestion chips should keep an 88rpx touch target')
-assert.match(chatPage, /\.composer__send\s*\{[\s\S]*min-height:\s*88rpx/, 'chat send button should keep an 88rpx touch target')
-assert.match(chatPage, /<button\b[\s\S]*v-for=["']item in suggestions["'][\s\S]*class=["']suggestion["'][\s\S]*:aria-label=/, 'chat suggestion chips should use button semantics with an accessibility label')
-assert.match(chatPage, /hover-class=["']suggestion--hover["']/, 'chat suggestion chips should expose a hover/press state')
-assert.match(chatPage, /\.suggestion--hover\s*\{[\s\S]*(?:opacity|transform)/, 'chat suggestion hover state should have visible feedback')
-assert.match(chatPage, /\.chat__head\s*\{[\s\S]*padding:\s*2[0-4]rpx\s+2[0-4]rpx/, 'chat header card should use 20-24rpx padding')
-assert.match(chatPage, /\.chat__intro\s*\{[\s\S]*padding:\s*2[0-4]rpx\s+2[0-4]rpx/, 'chat intro card should use 20-24rpx padding')
-
-assert.match(chatPage, /retryMessage\(msg\)/, 'chat page should retry failed AI messages with their original question')
-assert.match(chatPage, /copyAnswer\(msg\)/, 'chat page should expose answer copy action')
-assert.match(chatPage, /copyText\(msg\.content\)/, 'chat answer copy should use tested clipboard helper')
-assert.match(chatPage, /msg__action[\s\S]*:disabled="sending/, 'chat message actions should be disabled while sending')
-assert.match(chatPage, /\.msg__action\s*\{[\s\S]*min-height:\s*88rpx/, 'chat message action buttons should keep an 88rpx touch target')
+const pagesConfig = readFileSync('src/pages.json', 'utf8')
+assert.doesNotMatch(pagesConfig, /pages\/chat\/chat/, 'pages.json must not register the removed chat page')
+assert.doesNotMatch(pagesConfig, /问 AI|AI 对话/, 'tabBar must not expose an AI chat entry')
+assert.equal(statSync('src/pages/chat', { throwIfNoEntry: false }), undefined, 'removed chat page directory should stay deleted')
 
 const h5Index = readFileSync('index.html', 'utf8')
 assert.match(h5Index, /viewport-fit=cover/, 'H5 viewport meta should enable iOS safe-area env variables')
@@ -59,7 +41,7 @@ function assertRootViewClasses(source, file, classNames) {
   }
 }
 
-for (const file of ['src/pages/index/index.vue', 'src/pages/result/result.vue', 'src/pages/chat/chat.vue', 'src/pages/profile/profile.vue']) {
+for (const file of ['src/pages/index/index.vue', 'src/pages/result/result.vue', 'src/pages/profile/profile.vue']) {
   const source = readFileSync(file, 'utf8')
   assert.match(source, /ios-page/, `${file} should opt into shared Apple/iOS page styling`)
   assert.match(source, /ios-card/, `${file} should opt into shared Apple/iOS card styling`)
@@ -72,13 +54,14 @@ for (const file of ['src/pages/relation/relation.vue', 'src/pages/test/test.vue'
 
 const indexPage = readFileSync('src/pages/index/index.vue', 'utf8')
 const homeFeatureCards = indexPage.match(/<view\b[^>]*role=["']button["'][^>]*>/g) || []
-assert.ok(homeFeatureCards.length >= 4, 'home page should keep feature cards exposed as button-like controls')
+assert.ok(homeFeatureCards.length >= 3, 'home page should keep non-chat feature cards exposed as button-like controls')
 for (const card of homeFeatureCards) {
   assert.match(card, /aria-label=["'][^"']+["']/, `home feature card should expose an accessibility label: ${card}`)
   assert.match(card, /aria-pressed=["']false["']/, `home feature card should expose explicit non-toggle pressed state: ${card}`)
   assert.match(card, /hover-class=["']grid__item--hover["']/, `home feature card should expose a hover/press visual state: ${card}`)
 }
 assert.match(indexPage, /\.grid__item--hover\s*\{[\s\S]*(?:opacity|transform)/, 'home feature card hover state should have visible feedback')
+assert.doesNotMatch(indexPage, /openChatPage|goChat|问 AI|AI 对话|打开 AI 对话/, 'home page must not expose AI chat entry copy or handlers')
 
 
 assert.match(appleMobileStyle, /\.page-stack\s*\{[\s\S]*safe-area-inset-bottom/, 'page-stack should reserve bottom safe area globally')
@@ -132,6 +115,20 @@ assert.match(bookingPage, /:aria-invalid=["']!!fieldErrors\.contactName["']/, 'b
 assert.match(bookingPage, /:aria-invalid=["']!!fieldErrors\.phone["']/, 'booking phone input should expose aria-invalid when invalid')
 
 const learnPage = readFileSync('src/pages/learn/learn.vue', 'utf8')
+
+assert.match(learnPage, /normalizeTeachers/, 'learn page should normalize teacher profile data from site config')
+assert.match(learnPage, /normalizeCoursewareItems/, 'learn page should normalize courseware and course data from site config')
+assert.match(learnPage, /老师资料/, 'learn page should expose a teacher profile section')
+assert.match(learnPage, /课件|课程资料/, 'learn page should expose a courseware/materials section')
+assert.match(learnPage, /teacher-card/, 'learn page should render teacher cards')
+assert.match(learnPage, /courseware-card/, 'learn page should render courseware cards')
+assert.match(learnPage, /<image\b[^>]*class=["'][^"']*teacher-card__avatar[^"']*["'][^>]*lazy-load/, 'teacher avatars should lazy-load')
+assert.match(learnPage, /<image\b[^>]*class=["'][^"']*courseware-card__cover[^"']*["'][^>]*lazy-load/, 'courseware covers should lazy-load')
+
+assert.match(indexPage, /老师|导师/, 'home page should emphasize teacher guidance')
+assert.match(indexPage, /课件|课程/, 'home page should emphasize courseware and courses')
+assert.doesNotMatch(indexPage, /AI 对话/, 'home page primary feature cards should avoid AI-heavy copy')
+
 assert.match(learnPage, /loadError/, 'learn page should expose a non-blocking failure state')
 assert.match(learnPage, /v-if="loading"/, 'learn page should render loading placeholders instead of a blank area')
 assert.match(learnPage, /@click="loadContent"/, 'learn page should provide retry when site config fails')
@@ -178,6 +175,7 @@ assert.doesNotMatch(profilePage, /open-type="getPhoneNumber"/, '未接通后端�
 assert.doesNotMatch(profilePage, /@getphonenumber="onGetPhoneNumber"/, '未接通后端前，不应绑定可见手机号授权占位事件')
 assert.match(profilePage, /#ifdef H5[\s\S]*请在微信小程序内登录[\s\S]*#endif/, 'H5 profile login entry should be a disabled miniapp guidance instead of a failing WeChat login CTA')
 assert.doesNotMatch(profilePage, /后端暂未开通|前端占位|占位/, '用户侧文案不能暴露手机号授权后端占位状态')
+assert.doesNotMatch(profilePage, /openChatPage|goChat|clearChatMessages|问 AI|AI 对话/, 'profile page must not expose or reset removed AI chat state')
 
 
 const resultPage = readFileSync('src/pages/result/result.vue', 'utf8')
