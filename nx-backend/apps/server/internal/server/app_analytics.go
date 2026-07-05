@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ type appAnalyticsOverviewResponse struct {
 	TotalUsers           int64                        `json:"totalUsers"`
 	NewUsersToday        int64                        `json:"newUsersToday"`
 	ActiveUsers          int64                        `json:"activeUsers"`
+	EnabledUsers         int64                        `json:"enabledUsers"`
 	MemberUsers          int64                        `json:"memberUsers"`
 	DisabledUsers        int64                        `json:"disabledUsers"`
 	ExtractedUsers       int64                        `json:"extractedUsers"`
@@ -32,6 +34,7 @@ type appAnalyticsOverviewResponse struct {
 	ChatMessages         int64                        `json:"chatMessages"`
 	CompatibilityReports int64                        `json:"compatibilityReports"`
 	RecentUsers          []appAnalyticsUserItem       `json:"recentUsers"`
+	RecentExtractedUsers []appAnalyticsMemoryUserItem `json:"recentExtractedUsers"`
 	RecentMemoryUsers    []appAnalyticsMemoryUserItem `json:"recentMemoryUsers"`
 	MemberDistribution   map[string]int64             `json:"memberDistribution"`
 	StatusDistribution   map[string]int64             `json:"statusDistribution"`
@@ -49,27 +52,68 @@ type appAnalyticsUserItem struct {
 
 type appAnalyticsMemoryUserItem struct {
 	appAnalyticsUserItem
-	LastMemoryAt string `json:"lastMemoryAt"`
-	MemoryCount  int64  `json:"memoryCount"`
+	PrimaryType     int    `json:"primaryType"`
+	LastExtractedAt string `json:"lastExtractedAt,omitempty"`
+	LastMemoryAt    string `json:"lastMemoryAt"`
+	MemoryCount     int64  `json:"memoryCount"`
 }
 
+type appAnalyticsOverviewQuery struct {
+	Days  int
+	Limit int
+}
+
+const (
+	defaultAppAnalyticsOverviewDays  = 7
+	maxAppAnalyticsOverviewDays      = 30
+	defaultAppAnalyticsOverviewLimit = 10
+	maxAppAnalyticsOverviewLimit     = 50
+)
+
 func (s *Server) appAnalyticsOverview(w http.ResponseWriter, r *http.Request) {
+	if s == nil || s.db == nil {
+		httpx.Fail(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	query := normalizeAppAnalyticsOverviewQuery(r)
 	overview := appAnalyticsOverviewResponse{
-		RecentUsers:        []appAnalyticsUserItem{},
-		RecentMemoryUsers:  []appAnalyticsMemoryUserItem{},
-		MemberDistribution: map[string]int64{},
-		StatusDistribution: map[string]int64{},
+		RecentUsers:          []appAnalyticsUserItem{},
+		RecentExtractedUsers: []appAnalyticsMemoryUserItem{},
+		RecentMemoryUsers:    []appAnalyticsMemoryUserItem{},
+		MemberDistribution:   map[string]int64{},
+		StatusDistribution:   map[string]int64{},
 	}
 
 	if err := s.db.QueryRowContext(r.Context(), `
 		SELECT
 			COUNT(*) AS total_users,
-			COUNT(*) FILTER (WHERE create_time >= date_trunc('day', now())) AS new_users_today,
-			COUNT(*) FILTER (WHERE status = 'active') AS active_users,
+			COUNT(*) FILTER (
+				WHERE create_time >= (date_trunc('day', now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai')
+			) AS new_users_today,
+			COUNT(*) FILTER (WHERE status = 'active') AS enabled_users,
 			COUNT(*) FILTER (WHERE member_level <> 'free') AS member_users,
 			COUNT(*) FILTER (WHERE status <> 'active') AS disabled_users
 		FROM app_users
-	`).Scan(&overview.TotalUsers, &overview.NewUsersToday, &overview.ActiveUsers, &overview.MemberUsers, &overview.DisabledUsers); err != nil {
+	`).Scan(&overview.TotalUsers, &overview.NewUsersToday, &overview.EnabledUsers, &overview.MemberUsers, &overview.DisabledUsers); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+
+	if err := s.db.QueryRowContext(r.Context(), `
+		WITH active_users AS (
+			SELECT app_user_id
+			FROM app_analytics_events
+			WHERE app_user_id IS NOT NULL
+			  AND create_time >= now() - ($1::int * interval '1 day')
+			UNION
+			SELECT id AS app_user_id
+			FROM app_users
+			WHERE last_login_at IS NOT NULL
+			  AND last_login_at >= now() - ($1::int * interval '1 day')
+		)
+		SELECT COUNT(DISTINCT app_user_id)
+		FROM active_users
+	`, int64(query.Days)).Scan(&overview.ActiveUsers); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "查询失败")
 		return
 	}
@@ -81,6 +125,8 @@ func (s *Server) appAnalyticsOverview(w http.ResponseWriter, r *http.Request) {
 			SELECT app_user_id FROM app_memories WHERE status = 'active'
 			UNION
 			SELECT app_user_id FROM app_quiz_submissions
+			UNION
+			SELECT app_user_id FROM app_compatibility_reports
 		)
 		SELECT COUNT(DISTINCT app_user_id) FROM extracted
 	`).Scan(&overview.ExtractedUsers); err != nil {
@@ -119,16 +165,43 @@ func (s *Server) appAnalyticsOverview(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "查询失败")
 		return
 	}
-	if overview.RecentUsers, err = queryRecentAppAnalyticsUsers(r.Context(), s.db); err != nil {
+	if overview.RecentUsers, err = queryRecentAppAnalyticsUsers(r.Context(), s.db, query.Limit); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "查询失败")
 		return
 	}
-	if overview.RecentMemoryUsers, err = queryRecentAppAnalyticsMemoryUsers(r.Context(), s.db); err != nil {
+	if overview.RecentExtractedUsers, err = queryRecentAppAnalyticsExtractedUsers(r.Context(), s.db, query.Limit); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	if overview.RecentMemoryUsers, err = queryRecentAppAnalyticsMemoryUsers(r.Context(), s.db, query.Limit); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "查询失败")
 		return
 	}
 
 	httpx.OK(w, overview)
+}
+
+func normalizeAppAnalyticsOverviewQuery(r *http.Request) appAnalyticsOverviewQuery {
+	out := appAnalyticsOverviewQuery{
+		Days:  defaultAppAnalyticsOverviewDays,
+		Limit: defaultAppAnalyticsOverviewLimit,
+	}
+	if r == nil {
+		return out
+	}
+	if value, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("days"))); err == nil && value > 0 {
+		out.Days = value
+	}
+	if out.Days > maxAppAnalyticsOverviewDays {
+		out.Days = maxAppAnalyticsOverviewDays
+	}
+	if value, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("limit"))); err == nil && value > 0 {
+		out.Limit = value
+	}
+	if out.Limit > maxAppAnalyticsOverviewLimit {
+		out.Limit = maxAppAnalyticsOverviewLimit
+	}
+	return out
 }
 
 func (s *Server) appAnalyticsEvent(w http.ResponseWriter, r *http.Request) {
@@ -196,13 +269,13 @@ func queryAppAnalyticsDistribution(ctx context.Context, db *sql.DB, query string
 	return out, rows.Err()
 }
 
-func queryRecentAppAnalyticsUsers(ctx context.Context, db *sql.DB) ([]appAnalyticsUserItem, error) {
+func queryRecentAppAnalyticsUsers(ctx context.Context, db *sql.DB, limit int) ([]appAnalyticsUserItem, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, phone, nickname, avatar, status, member_level, create_time
 		FROM app_users
 		ORDER BY create_time DESC, id DESC
-		LIMIT 10
-	`)
+		LIMIT $1
+	`, int64(limit))
 	if err != nil {
 		return nil, err
 	}
@@ -220,18 +293,93 @@ func queryRecentAppAnalyticsUsers(ctx context.Context, db *sql.DB) ([]appAnalyti
 	return items, rows.Err()
 }
 
-func queryRecentAppAnalyticsMemoryUsers(ctx context.Context, db *sql.DB) ([]appAnalyticsMemoryUserItem, error) {
+func queryRecentAppAnalyticsExtractedUsers(ctx context.Context, db *sql.DB, limit int) ([]appAnalyticsMemoryUserItem, error) {
+	rows, err := db.QueryContext(ctx, `
+		WITH extracted AS (
+		  SELECT app_user_id, MAX(update_time) AS extracted_at
+		  FROM app_user_cards
+		  WHERE status = 'active'
+		  GROUP BY app_user_id
+		  UNION ALL
+		  SELECT app_user_id, MAX(update_time) AS extracted_at
+		  FROM app_memories
+		  WHERE status = 'active'
+		  GROUP BY app_user_id
+		  UNION ALL
+		  SELECT app_user_id, MAX(create_time) AS extracted_at
+		  FROM app_quiz_submissions
+		  GROUP BY app_user_id
+		  UNION ALL
+		  SELECT app_user_id, MAX(update_time) AS extracted_at
+		  FROM app_compatibility_reports
+		  GROUP BY app_user_id
+		),
+		rollup AS (
+		  SELECT app_user_id, MAX(extracted_at) AS last_extracted_at
+		  FROM extracted
+		  GROUP BY app_user_id
+		),
+		memory_counts AS (
+		  SELECT app_user_id, COUNT(*) AS memory_count
+		  FROM app_memories
+		  WHERE status = 'active'
+		  GROUP BY app_user_id
+		)
+		SELECT u.id, u.phone, u.nickname, u.avatar, u.status, u.member_level,
+		       COALESCE(q.primary_type, 0) AS primary_type,
+		       r.last_extracted_at AS last_memory_at,
+		       COALESCE(mc.memory_count, 0) AS memory_count
+		FROM rollup r
+		JOIN app_users u ON u.id = r.app_user_id
+		LEFT JOIN memory_counts mc ON mc.app_user_id = u.id
+		LEFT JOIN LATERAL (
+		  SELECT primary_type
+		  FROM app_quiz_submissions
+		  WHERE app_user_id = u.id
+		  ORDER BY create_time DESC, id DESC
+		  LIMIT 1
+		) q ON true
+		ORDER BY r.last_extracted_at DESC, u.id DESC
+		LIMIT $1
+	`, int64(limit))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []appAnalyticsMemoryUserItem{}
+	for rows.Next() {
+		var item appAnalyticsMemoryUserItem
+		var lastExtractedAt time.Time
+		if err := rows.Scan(&item.ID, &item.Phone, &item.Nickname, &item.Avatar, &item.Status, &item.MemberLevel, &item.PrimaryType, &lastExtractedAt, &item.MemoryCount); err != nil {
+			return nil, err
+		}
+		item.LastExtractedAt = formatAppAnalyticsTime(lastExtractedAt)
+		item.LastMemoryAt = item.LastExtractedAt
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func queryRecentAppAnalyticsMemoryUsers(ctx context.Context, db *sql.DB, limit int) ([]appAnalyticsMemoryUserItem, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT u.id, u.phone, u.nickname, u.avatar, u.status, u.member_level,
+		       COALESCE(q.primary_type, 0) AS primary_type,
 		       MAX(m.update_time) AS last_memory_at,
 		       COUNT(*) AS memory_count
 		FROM app_memories m
 		JOIN app_users u ON u.id = m.app_user_id
+		LEFT JOIN LATERAL (
+		  SELECT primary_type
+		  FROM app_quiz_submissions
+		  WHERE app_user_id = u.id
+		  ORDER BY create_time DESC, id DESC
+		  LIMIT 1
+		) q ON true
 		WHERE m.status = 'active'
-		GROUP BY u.id, u.phone, u.nickname, u.avatar, u.status, u.member_level
+		GROUP BY u.id, u.phone, u.nickname, u.avatar, u.status, u.member_level, q.primary_type
 		ORDER BY last_memory_at DESC, u.id DESC
-		LIMIT 10
-	`)
+		LIMIT $1
+	`, int64(limit))
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +388,7 @@ func queryRecentAppAnalyticsMemoryUsers(ctx context.Context, db *sql.DB) ([]appA
 	for rows.Next() {
 		var item appAnalyticsMemoryUserItem
 		var lastMemoryAt time.Time
-		if err := rows.Scan(&item.ID, &item.Phone, &item.Nickname, &item.Avatar, &item.Status, &item.MemberLevel, &lastMemoryAt, &item.MemoryCount); err != nil {
+		if err := rows.Scan(&item.ID, &item.Phone, &item.Nickname, &item.Avatar, &item.Status, &item.MemberLevel, &item.PrimaryType, &lastMemoryAt, &item.MemoryCount); err != nil {
 			return nil, err
 		}
 		item.LastMemoryAt = formatAppAnalyticsTime(lastMemoryAt)
@@ -253,7 +401,7 @@ func formatAppAnalyticsTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.Format("2006/01/02 15:04:05")
+	return t.In(shanghaiLoc).Format("2006/01/02 15:04:05")
 }
 
 func parseAppAnalyticsTS(raw json.RawMessage) (sql.NullTime, error) {

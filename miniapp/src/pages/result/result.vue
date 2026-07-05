@@ -3,6 +3,7 @@ import { ref, onMounted, computed, getCurrentInstance } from 'vue'
 import { onShareAppMessage, onShareTimeline } from '@dcloudio/uni-app'
 import { TYPES_INFO, CENTERS, RESULTS } from '../../data/enneagramGame'
 import { isWing } from '../../utils/enneagram'
+import { resultPersonaText } from '../../utils/resultPersona'
 import { getLastResult, normalizeLastResult } from '../../utils/session'
 import { ensureLogin } from '../../utils/auth'
 import { saveTestRecordApi, reportStatusApi, reportContentApi } from '../../api'
@@ -48,7 +49,7 @@ onMounted(() => {
   r.value = RESULTS[t]
   info.value = TYPES_INFO[t]
   center.value = CENTERS[TYPES_INFO[t].center]
-  persona.value = last.gender === 'male' ? RESULTS[t].male : RESULTS[t].female
+  persona.value = resultPersonaText(RESULTS[t], last.gender)
   secondInfo.value = cachedResult.second ? TYPES_INFO[cachedResult.second] : null
   wing.value = isWing(t, cachedResult.second)
   growthInfo.value = TYPES_INFO[TYPES_INFO[t].growth]
@@ -280,8 +281,8 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
 </script>
 
 <template>
-  <view class="wrap page-stack result-page" v-if="result">
-    <view class="card head">
+  <view class="wrap page-stack ios-page ios-safe-bottom result-page" v-if="result">
+    <view class="card ios-card head">
       <view class="avatar-wrap">
         <image class="avatar" :src="`/static/avatars/${result.type}.png`" mode="aspectFill" lazy-load />
         <view class="badge">{{ result.type }}</view>
@@ -303,7 +304,7 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
       </view>
     </view>
 
-    <view class="card">
+    <view class="card ios-card">
       <text class="sec-title">你的三中心分布</text>
       <view v-for="c in result.centers" :key="c.key" class="bar">
         <text class="bar__name">{{ c.name }}</text>
@@ -312,7 +313,7 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
       </view>
     </view>
 
-    <view v-if="secondInfo" class="card">
+    <view v-if="secondInfo" class="card ios-card">
       <text class="sec-title">{{ wing ? '你的侧翼倾向' : '你的副型倾向' }}</text>
       <text class="sec-txt">主型 {{ result.type }} 号 {{ info.name }}，副型 {{ result.second }} 号 {{ secondInfo.name }} 特质也很突出，让你更立体。</text>
       <text class="sec-kw">{{ secondInfo.keywords }}</text>
@@ -329,13 +330,13 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
       </view>
     </view>
 
-    <view class="card grow">
+    <view class="card ios-card grow">
       <text class="sec-title">成长建议</text>
       <text class="sec-txt">{{ r.growth }}</text>
     </view>
 
     <!-- 深度报告（付费解锁） -->
-    <view class="card report">
+    <view class="card ios-card report">
       <view class="report__head">
         <text class="sec-title">AI 深度性格报告</text>
         <text v-if="reportUnlocked" class="report__badge report__badge--ok">已解锁</text>
@@ -345,31 +346,31 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
         <view v-if="reportLoading" class="report__loading">报告生成中，请稍候…</view>
         <view v-else-if="reportError" class="report__loading report__error">
           <text>{{ reportError }}</text>
-          <button class="btn-ghost report__retry" :disabled="reportLoading" @click="loadReportContent">重试</button>
+          <button class="btn-ghost ios-button report__retry" :disabled="reportLoading" @click="loadReportContent">重试</button>
         </view>
         <text v-else-if="reportContent" class="report__content">{{ reportContent }}</text>
-        <button v-else class="btn-ghost" @click="loadReportContent">查看报告</button>
+        <button v-else class="btn-ghost ios-button" @click="loadReportContent">查看报告</button>
       </template>
       <template v-else>
         <text class="report__intro">由 AI 结合九型知识库，为你生成专属的性格画像、成长盲点、人际与职业建议。</text>
-        <button class="btn-primary" :loading="paying" :disabled="paying" @click="unlockReport">￥{{ reportPriceYuan }} 解锁深度报告</button>
+        <button class="btn-primary ios-button" :loading="paying" :disabled="paying" @click="unlockReport">￥{{ reportPriceYuan }} 解锁深度报告</button>
       </template>
     </view>
 
     <view class="actions">
-      <button class="btn-primary" :loading="saving" :disabled="saving || saved" @click="saveRecord">{{ saved ? '已存档' : '存入我的档案' }}</button>
+      <button class="btn-primary ios-button" :loading="saving" :disabled="saving || saved" @click="saveRecord">{{ saved ? '已存档' : '存入我的档案' }}</button>
       <view class="actions__row">
-        <button class="btn-ghost" open-type="share">分享好友</button>
+        <button class="btn-ghost ios-button" open-type="share">分享好友</button>
         <!-- #ifdef MP-WEIXIN -->
-        <button class="btn-ghost" @click="makePoster">生成海报</button>
+        <button class="btn-ghost ios-button" @click="makePoster">生成海报</button>
         <!-- #endif -->
         <!-- #ifdef H5 -->
-        <button class="btn-ghost" disabled>小程序内生成海报</button>
+        <button class="btn-ghost ios-button" disabled>小程序内生成海报</button>
         <!-- #endif -->
       </view>
-      <button class="btn-soft" @click="goRelation">和 TA 合盘 · 看关系 →</button>
-      <button class="btn-ghost" @click="goBooking">预约深入解读 →</button>
-      <button class="btn-ghost" @click="restart">重新测试</button>
+      <button class="btn-soft ios-button" @click="goRelation">和 TA 合盘 · 看关系 →</button>
+      <button class="btn-ghost ios-button" @click="goBooking">预约深入解读 →</button>
+      <button class="btn-ghost ios-button" @click="restart">重新测试</button>
     </view>
     <text class="disclaimer">本测试基于九型人格体系简化设计，仅供趣味参考，不作专业诊断。</text>
 
@@ -382,8 +383,8 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
         <view v-if="posterLoading" class="poster-loading">海报生成中…</view>
         <image v-else-if="posterUrl" class="poster-img" :src="posterUrl" mode="widthFix" show-menu-by-longpress />
         <view class="poster-ops">
-          <button class="btn-primary" @click="savePoster">保存到相册</button>
-          <button class="btn-ghost" @click="posterShow = false">关闭</button>
+          <button class="btn-primary ios-button" @click="savePoster">保存到相册</button>
+          <button class="btn-ghost ios-button" @click="posterShow = false">关闭</button>
         </view>
         <text class="poster-tip">也可长按图片转发给好友</text>
       </view>

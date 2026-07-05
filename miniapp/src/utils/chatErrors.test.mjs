@@ -13,6 +13,12 @@ assert.equal(
   '微信登录没有拿到授权 code，请稍后重试，或重新打开小程序。',
 )
 
+
+assert.equal(
+  chatErrorMessage(new Error('当前环境不支持微信登录，请在微信小程序内使用')),
+  '当前 H5 环境不能直接使用微信小程序登录，请在微信小程序内打开后继续对话。',
+)
+
 assert.equal(
   chatErrorMessage(Object.assign(new Error('Forbidden'), { statusCode: 403 })),
   '登录状态已失效，请重新进入页面后再试。',

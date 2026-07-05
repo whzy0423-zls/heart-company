@@ -14,6 +14,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/auth"
+	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/realip"
 )
@@ -50,7 +51,7 @@ func (s *Server) appSendSMS(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusTooManyRequests, "发送过于频繁，请稍后再试")
 		return
 	}
-	if s.env.AppEnv == "production" && strings.TrimSpace(s.env.SMS.Provider) == "" {
+	if config.IsProduction(s.env.AppEnv) && strings.TrimSpace(s.env.SMS.Provider) == "" {
 		httpx.Fail(w, http.StatusServiceUnavailable, "SMS provider is not configured")
 		return
 	}

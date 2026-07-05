@@ -21,6 +21,8 @@ export interface PushListResult {
 
 export interface PushAudienceCountResult {
   deviceCount: number;
+  targetType?: string;
+  targetValue?: string;
   userCount: number;
 }
 
@@ -30,6 +32,12 @@ export interface PushSendParams {
   targetType?: string;
   targetValue?: string;
   title: string;
+}
+
+export interface PushSendResult {
+  message?: string;
+  recordId: number;
+  status: string;
 }
 
 export function getPushListApi(params?: { page?: number; pageSize?: number }) {
@@ -46,8 +54,5 @@ export function getPushAudienceCountApi(params?: {
 }
 
 export function sendPushApi(data: PushSendParams) {
-  return requestClient.post<{ msgId: string; sent: number }>(
-    '/push/send',
-    data,
-  );
+  return requestClient.post<PushSendResult>('/push/send', data);
 }

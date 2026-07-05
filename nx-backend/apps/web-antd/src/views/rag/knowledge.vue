@@ -166,7 +166,7 @@ async function toggleStatus(record: RAGDocument) {
 
 function removeDocument(record: RAGDocument) {
   Modal.confirm({
-    content: `确认删除「${record.title}」吗？删除后小程序 RAG 不会再检索这条资料。`,
+    content: `确认删除「${record.title}」吗？删除后 App AI 对话不会再检索这条资料。`,
     onOk: async () => {
       await deleteRAGDocumentApi(record.id);
       message.success('已删除');
@@ -203,7 +203,7 @@ onMounted(load);
 
 <template>
   <Page
-    description="维护小程序 AI 对话会检索的补充知识。启用后的文档会进入 RAG 检索。"
+    description="维护 App AI 对话会检索的补充知识。启用后的文档会进入 RAG 检索。"
     title="知识库管理"
   >
     <Card :bordered="false" class="knowledge-card">
@@ -211,7 +211,7 @@ onMounted(load);
         <div>
           <div class="card-title">RAG 知识文档</div>
           <div class="card-desc">
-            共 {{ total }} 条资料。建议每条聚焦一个主题，方便小程序问答命中。
+            共 {{ total }} 条资料。建议每条聚焦一个主题，方便 App 问答命中。
           </div>
         </div>
         <Space wrap>
@@ -312,7 +312,7 @@ onMounted(load);
           <Input.TextArea
             v-model:value="form.content"
             :rows="10"
-            placeholder="输入会被小程序 RAG 检索的知识正文"
+            placeholder="输入会被 App AI 对话检索的知识正文"
           />
         </Form.Item>
         <Form.Item label="标签">

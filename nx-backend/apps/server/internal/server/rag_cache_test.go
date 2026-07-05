@@ -107,7 +107,8 @@ func TestRAGDocumentCreateInvalidatesMiniappCache(t *testing.T) {
 }
 
 type fakeRAGDocumentStore struct {
-	saved ragstore.Document
+	enabledDocs []rag.Document
+	saved       ragstore.Document
 }
 
 func (s *fakeRAGDocumentStore) DeleteDocument(context.Context, string) (bool, error) {
@@ -115,7 +116,7 @@ func (s *fakeRAGDocumentStore) DeleteDocument(context.Context, string) (bool, er
 }
 
 func (s *fakeRAGDocumentStore) EnabledDocuments(context.Context) ([]rag.Document, error) {
-	return nil, nil
+	return cloneRAGDocuments(s.enabledDocs), nil
 }
 
 func (s *fakeRAGDocumentStore) ListDocuments(context.Context, map[string]string) (ragstore.PageResult[ragstore.Document], error) {

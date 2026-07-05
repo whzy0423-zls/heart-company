@@ -212,29 +212,46 @@ func pageParams(query map[string]string) (int, int) {
 	return page, pageSize
 }
 
-func appUserWhere(query map[string]string) (string, []any) {
+func appUserWhere(query map[string]string, alias string) (string, []any, error) {
 	where := []string{"1=1"}
 	args := []any{}
+	col := func(name string) string {
+		if alias == "" {
+			return name
+		}
+		return alias + name
+	}
 
+	if rawUserID := strings.TrimSpace(query["userId"]); rawUserID != "" {
+		id, err := strconv.ParseInt(rawUserID, 10, 64)
+		if err != nil || id <= 0 {
+			return "", nil, fmt.Errorf("invalid userId")
+		}
+		args = append(args, id)
+		where = append(where, col("id")+" = $"+strconv.Itoa(len(args)))
+	}
 	if kw := strings.TrimSpace(query["keyword"]); kw != "" {
 		args = append(args, "%"+kw+"%")
 		p := "$" + strconv.Itoa(len(args))
-		where = append(where, "(lower(phone) LIKE lower("+p+") OR lower(nickname) LIKE lower("+p+"))")
+		where = append(where, "(lower("+col("phone")+") LIKE lower("+p+") OR lower("+col("nickname")+") LIKE lower("+p+"))")
 	}
 	if st := strings.TrimSpace(query["status"]); st != "" {
 		args = append(args, st)
-		where = append(where, "status = $"+strconv.Itoa(len(args)))
+		where = append(where, col("status")+" = $"+strconv.Itoa(len(args)))
 	}
 	if ml := strings.TrimSpace(query["memberLevel"]); ml != "" {
 		args = append(args, ml)
-		where = append(where, "member_level = $"+strconv.Itoa(len(args)))
+		where = append(where, col("member_level")+" = $"+strconv.Itoa(len(args)))
 	}
-	return strings.Join(where, " AND "), args
+	return strings.Join(where, " AND "), args, nil
 }
 
 // List 分页查询 App 客户，支持按手机号/昵称模糊搜索及状态、会员等级过滤。
 func (s *Store) List(ctx context.Context, query map[string]string) (PageResult[User], error) {
-	cond, args := appUserWhere(query)
+	cond, args, err := appUserWhere(query, "")
+	if err != nil {
+		return PageResult[User]{}, err
+	}
 
 	var total int
 	if err := s.db.QueryRowContext(ctx,
@@ -278,11 +295,14 @@ func (s *Store) List(ctx context.Context, query map[string]string) (PageResult[U
 
 // ListInsights 分页返回管理员视角的用户提炼数据。
 func (s *Store) ListInsights(ctx context.Context, query map[string]string) (PageResult[UserInsight], error) {
-	cond, args := appUserWhere(query)
+	cond, args, err := appUserWhere(query, "u.")
+	if err != nil {
+		return PageResult[UserInsight]{}, err
+	}
 
 	var total int
 	if err := s.db.QueryRowContext(ctx,
-		"SELECT count(*) FROM app_users WHERE "+cond, args...).Scan(&total); err != nil {
+		"SELECT count(*) FROM app_users u WHERE "+cond, args...).Scan(&total); err != nil {
 		return PageResult[UserInsight]{}, fmt.Errorf("appuser insights count: %w", err)
 	}
 
@@ -299,9 +319,9 @@ func (s *Store) ListInsights(ctx context.Context, query map[string]string) (Page
 		  COALESCE(sub.score, '{}'::jsonb),
 		  COALESCE(sub.centers, '[]'::jsonb),
 		  COALESCE(cards.card_count, 0),
-		  COALESCE(mem.memory_count, 0), COALESCE(mem.latest_memory, ''),
+		  COALESCE(mem.memory_count, 0), COALESCE(mem_latest.latest_memory, ''),
 		  COALESCE(chat.session_count, 0), COALESCE(chat.message_count, 0), chat.latest_chat_time,
-		  COALESCE(comp.compatibility_count, 0), COALESCE(comp.latest_compatibility_summary, '')
+		  COALESCE(comp.compatibility_count, 0), COALESCE(comp_latest.latest_compatibility_summary, '')
 		FROM app_users u
 		LEFT JOIN LATERAL (
 		  SELECT id, primary_type, second_type, wing_type, gender, result, score, centers, create_time
@@ -323,11 +343,17 @@ func (s *Store) ListInsights(ctx context.Context, query map[string]string) (Page
 		  WHERE app_user_id = u.id AND status = 'active'
 		) cards ON true
 		LEFT JOIN LATERAL (
-		  SELECT count(*) AS memory_count,
-		         (array_agg(content ORDER BY update_time DESC, id DESC))[1] AS latest_memory
+		  SELECT count(*) AS memory_count
 		  FROM app_memories
 		  WHERE app_user_id = u.id AND status = 'active'
 		) mem ON true
+		LEFT JOIN LATERAL (
+		  SELECT content AS latest_memory
+		  FROM app_memories
+		  WHERE app_user_id = u.id AND status = 'active'
+		  ORDER BY update_time DESC, id DESC
+		  LIMIT 1
+		) mem_latest ON true
 		LEFT JOIN LATERAL (
 		  SELECT count(DISTINCT sess.id) AS session_count,
 		         count(msg.id) AS message_count,
@@ -337,11 +363,17 @@ func (s *Store) ListInsights(ctx context.Context, query map[string]string) (Page
 		  WHERE sess.app_user_id = u.id
 		) chat ON true
 		LEFT JOIN LATERAL (
-		  SELECT count(*) AS compatibility_count,
-		         (array_agg(summary ORDER BY create_time DESC, id DESC))[1] AS latest_compatibility_summary
+		  SELECT count(*) AS compatibility_count
 		  FROM app_compatibility_reports
 		  WHERE app_user_id = u.id
 		) comp ON true
+		LEFT JOIN LATERAL (
+		  SELECT summary AS latest_compatibility_summary
+		  FROM app_compatibility_reports
+		  WHERE app_user_id = u.id
+		  ORDER BY create_time DESC, id DESC
+		  LIMIT 1
+		) comp_latest ON true
 		WHERE `+cond+`
 		ORDER BY u.create_time DESC, u.id DESC
 		LIMIT $`+strconv.Itoa(len(args)-1)+` OFFSET $`+strconv.Itoa(len(args)),

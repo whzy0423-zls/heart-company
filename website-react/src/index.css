@@ -141,6 +141,7 @@ h1.display {
 @keyframes hue { 0%,100% { background-position: 0% 50% } 50% { background-position: 100% 50% } }
 h2.section-title { font-family: var(--font-display); font-size: clamp(29px, 3.7vw, 45px); font-weight: 700; letter-spacing: 0; line-height: 1.25; }
 .lead { color: var(--ink-2); font-size: clamp(15.5px, 1.6vw, 18.5px); max-width: 58ch; }
+.route-loading { width: min(360px, 86vw); margin: 80px auto; padding: 18px 22px; border-radius: 18px; text-align: center; font-weight: 800; color: var(--blue); background: var(--glass-strong); border: 1px solid var(--glass-brd); box-shadow: var(--shadow-sm); }
 .kicker { color: var(--blue); font-weight: 800; font-size: 15px; }
 
 /* 按钮 */
@@ -539,8 +540,10 @@ section.block { padding: clamp(46px, 6.5vw, 92px) 0; }
 .type-detail__nav a {
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
   border-radius: 13px;
   background: var(--glass-strong);
   border: 1px solid var(--glass-brd);
@@ -785,10 +788,11 @@ img[data-zoom] { cursor: zoom-in; }
 /* 底部页码 + 点导航 */
 .course__foot { display: flex; align-items: center; justify-content: center; gap: 18px; margin-top: 22px; }
 .course__page { color: var(--muted); font-weight: 700; font-size: 14px; }
-.course__dots { display: flex; gap: 6px; flex-wrap: wrap; max-width: 60%; justify-content: center; }
-.course__dots button { width: 8px; height: 8px; border-radius: 50%; background: rgba(20,24,32,.18); border: none; cursor: pointer; padding: 0; transition: .2s; }
-.course__dots button:hover { background: var(--blue-2); }
-.course__dots button.on { width: 22px; border-radius: 5px; background: var(--blue); }
+.course__dots { display: flex; gap: 0; flex-wrap: wrap; max-width: 60%; justify-content: center; }
+.course__dots button { width: 44px; height: 44px; border-radius: 14px; background: transparent; border: none; cursor: pointer; padding: 0; transition: .2s; position: relative; }
+.course__dots button::after { content: ""; position: absolute; inset: 50% auto auto 50%; width: 8px; height: 8px; border-radius: 50%; background: rgba(20,24,32,.18); transform: translate(-50%, -50%); transition: .2s; }
+.course__dots button:hover::after { background: var(--blue-2); }
+.course__dots button.on::after { width: 22px; border-radius: 5px; background: var(--blue); }
 
 /* 目录抽屉 */
 .course__toc { position: fixed; inset: 0; z-index: 60; background: rgba(15,20,30,.45); backdrop-filter: blur(3px); opacity: 0; visibility: hidden; transition: .25s; }
@@ -1372,7 +1376,7 @@ img[data-zoom] { cursor: zoom-in; }
   .stat { min-width: 90px; padding: 14px 16px; }
   .stat b { font-size: 27px; }
   .btn-row .btn { flex: 1; justify-content: center; padding: 13px 18px; font-size: 14.5px; }
-  .music { right: 14px; bottom: 86px; padding: 9px 13px; max-width: calc(100vw - 28px); }
+  .music { right: 14px; bottom: calc(96px + env(safe-area-inset-bottom)); padding: 9px 13px; max-width: calc(100vw - 28px); }
   .music label, .music input { display: none; }
 
   /* ===== 移动端底部 Tabbar：悬浮胶囊 + 图标 ===== */

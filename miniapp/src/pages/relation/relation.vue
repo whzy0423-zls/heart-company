@@ -6,7 +6,7 @@ import { isValidTypeId, normalizeTypeId } from '../../utils/session'
 
 const myType = ref(0)
 const taType = ref(0)
-const stage = ref('pick') // pick | result
+const stage = ref('pick') // pick | result | redirecting
 const myInfo = ref(null)
 const taInfo = ref(null)
 const analysis = ref(null)
@@ -48,6 +48,7 @@ function analyze() {
 }
 
 function rejectInvalidType() {
+  stage.value = 'redirecting'
   uni.showToast({ title: '型号参数无效，请重新测试', icon: 'none' })
   setTimeout(() => {
     uni.redirectTo({ url: '/pages/test/test' })
@@ -101,42 +102,48 @@ function reset() {
 </script>
 
 <template>
-  <view class="wrap relation">
+  <view class="wrap relation page-stack ios-page ios-safe-bottom">
     <!-- 选型 -->
     <template v-if="stage === 'pick'">
-      <view class="card intro">
+      <view class="card ios-card intro">
         <text class="intro__t">九型关系合盘</text>
         <text class="intro__d">选择你和 TA 的型号，看你们的相处底色、潜在摩擦与相处建议。</text>
       </view>
 
-      <view class="card">
+      <view class="card ios-card">
         <text class="pick__label">我的型号</text>
         <view class="grid">
-          <view
+          <button
             v-for="t in allTypes" :key="'m' + t.id"
             class="chip" :class="{ on: myType === t.id }"
+            :aria-label="`选择我的型号 ${t.id} ${t.name}`"
+            :aria-pressed="myType === t.id"
+            hover-class="chip--hover"
             @click="pickMy(t.id)"
-          >{{ t.id }} {{ t.name }}</view>
+          >{{ t.id }} {{ t.name }}</button>
         </view>
       </view>
 
-      <view class="card">
+      <view class="card ios-card">
         <text class="pick__label">TA 的型号</text>
         <view class="grid">
-          <view
+          <button
             v-for="t in allTypes" :key="'t' + t.id"
             class="chip" :class="{ on: taType === t.id }"
+            :aria-label="`选择 TA 的型号 ${t.id} ${t.name}`"
+            :aria-pressed="taType === t.id"
+            hover-class="chip--hover"
             @click="pickTa(t.id)"
-          >{{ t.id }} {{ t.name }}</view>
+          >{{ t.id }} {{ t.name }}</button>
         </view>
       </view>
 
-      <button class="btn-primary" @click="analyze">生成合盘解读</button>
+      <button class="btn-primary ios-button" @click="analyze">生成合盘解读</button>
     </template>
 
     <!-- 结果 -->
-    <template v-else>
-      <view class="card pair">
+    <template v-else-if="stage === 'result'">
+      <view class="card ios-card pair">
         <view class="pair__side">
           <image class="pair__avatar" :src="`/static/avatars/${myInfo.id}.png`" mode="aspectFill" lazy-load />
           <text class="pair__name">我 · {{ myInfo.id }}号</text>
@@ -151,36 +158,41 @@ function reset() {
         </view>
       </view>
 
-      <view class="card">
+      <view class="card ios-card">
         <text class="sec-title">相处底色</text>
         <text class="sec-txt">{{ analysis.bond }}</text>
       </view>
-      <view class="card">
+      <view class="card ios-card">
         <text class="sec-title">潜在摩擦</text>
         <text class="sec-txt">{{ analysis.friction }}</text>
       </view>
-      <view class="card grow">
+      <view class="card ios-card grow">
         <text class="sec-title">相处建议</text>
         <text class="sec-txt">{{ analysis.tip }}</text>
       </view>
-      <view class="card">
+      <view class="card ios-card">
         <text class="sec-title">各自的核心驱动</text>
         <text class="sec-txt">· {{ analysis.myDrive }}</text>
         <text class="sec-txt">· {{ analysis.taDrive }}</text>
       </view>
 
-      <button class="btn-ghost" @click="reset">换一对再看</button>
+      <button class="btn-ghost ios-button" @click="reset">换一对再看</button>
       <text class="disclaimer">合盘基于九型中心与型号关系生成，供关系沟通参考，非专业咨询结论。</text>
     </template>
+
+    <view v-else class="card ios-card redirecting">
+      <text class="sec-title">型号参数无效</text>
+      <text class="sec-txt">正在返回测试页，请重新完成测试。</text>
+    </view>
   </view>
 </template>
 
 <style scoped>
-.relation { display: flex; flex-direction: column; gap: 20rpx; padding-bottom: 60rpx; }
+.relation { display: flex; flex-direction: column; gap: 20rpx; }
 .intro__t { font-size: 36rpx; font-weight: 800; display: block; }
 .intro__d { color: #5d6b7e; font-size: 26rpx; line-height: 1.6; display: block; margin-top: 10rpx; }
 .pick__label { font-size: 28rpx; font-weight: 700; display: block; margin-bottom: 16rpx; }
-.grid { display: flex; flex-wrap: wrap; gap: 14rpx; }
+.grid { display: flex; flex-wrap: wrap; gap: 16rpx; }
 .chip {
   min-height: 88rpx;
   padding: 0 24rpx;
@@ -193,8 +205,11 @@ function reset() {
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
+  line-height: 1;
 }
 .chip.on { background: #2b7fff14; color: #1f73c4; border-color: #2b7fff66; font-weight: 700; }
+.chip::after { border: none; }
+.chip--hover { opacity: .82; transform: scale(.985); }
 
 .pair { display: flex; align-items: center; justify-content: space-between; }
 .pair__side { display: flex; flex-direction: column; align-items: center; gap: 10rpx; }
@@ -207,6 +222,7 @@ function reset() {
 .sec-title { font-size: 30rpx; font-weight: 700; display: block; margin-bottom: 14rpx; }
 .sec-txt { color: #42505e; font-size: 27rpx; line-height: 1.7; display: block; margin-bottom: 6rpx; }
 .grow { background: linear-gradient(120deg, #38a83a0f, #1f73c40a); }
+.redirecting { text-align: center; }
 .btn-primary, .btn-ghost { border-radius: 999rpx; font-size: 30rpx; }
 .btn-ghost { background: #fff; color: #1a2430; border: 2rpx solid #e3e8ee; }
 .btn-ghost::after { border: none; }

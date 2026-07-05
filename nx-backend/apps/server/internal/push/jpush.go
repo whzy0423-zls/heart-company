@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"nine-xing/nx-backend/apps/server/internal/config"
 )
 
 const jpushAPIURL = "https://api.jpush.cn/v3/push"
@@ -152,7 +154,7 @@ func (DisabledPusher) Push(context.Context, []string, Message) (PushResult, erro
 // NewPusher 根据配置返回真实或 noop 推送客户端。
 func NewPusher(appEnv, appKey, masterSecret string) Pusher {
 	if appKey == "" || masterSecret == "" {
-		if strings.TrimSpace(appEnv) == "production" {
+		if config.IsProduction(appEnv) {
 			log.Println("[push] JPush AppKey 未配置，生产环境推送将失败关闭")
 			return DisabledPusher{}
 		}

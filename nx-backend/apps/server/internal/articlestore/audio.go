@@ -232,13 +232,17 @@ func (s *Store) GenerateAudio(ctx context.Context, id string) (Article, error) {
 	gctx, cancel := context.WithTimeout(context.Background(), audioGenTimeout)
 	defer cancel()
 
+	if claimed, err := s.claimAudioGeneration(gctx, id, voiceKey); err != nil {
+		return Article{}, err
+	} else if !claimed {
+		return Article{}, errors.New("听书音频正在生成中，请稍后刷新")
+	}
+
 	voiceID, err := s.voices.ResolveVoice(gctx, voiceKey)
 	if err != nil {
 		s.markAudioFailed(gctx, id, err.Error())
 		return Article{}, err
 	}
-
-	s.markAudioStatus(gctx, id, "generating", voiceKey)
 
 	chunks := splitForTTS(text, ttsChunkRunes)
 	var combined []byte
@@ -283,6 +287,21 @@ func (s *Store) GenerateAudio(ctx context.Context, id string) (Article, error) {
 
 	updated, _, err := s.GetArticle(ctx, id)
 	return updated, err
+}
+
+func (s *Store) claimAudioGeneration(ctx context.Context, id, voiceKey string) (bool, error) {
+	c, cancel := s.ctx(ctx)
+	defer cancel()
+	res, err := s.db.ExecContext(c,
+		`UPDATE articles
+		    SET audio_status='generating', audio_error='', audio_voice_key=$1
+		  WHERE id=$2 AND audio_status <> 'generating'`,
+		voiceKey, id)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 func (s *Store) markAudioStatus(ctx context.Context, id, status, voiceKey string) {

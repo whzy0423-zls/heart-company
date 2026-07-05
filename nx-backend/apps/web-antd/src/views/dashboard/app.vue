@@ -5,6 +5,7 @@ import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
 import { Page } from '@vben/common-ui';
+import { useAccessStore } from '@vben/stores';
 
 import {
   Alert,
@@ -21,16 +22,23 @@ import {
 import { getAppAnalyticsOverviewApi } from '#/api';
 
 import {
+  canViewAppCustomers,
+  canViewUserInsights,
+} from '../customer/app-user-access';
+import {
   appAnalyticsStatCards,
   distributionRows,
   emptyAppAnalyticsOverview,
+  formatRecentMemoryTime,
   normalizeRecentRows,
 } from './app-analytics';
 
 const router = useRouter();
+const accessStore = useAccessStore();
 const loading = ref(false);
 const loadError = ref('');
 const overview = ref<AppAnalyticsOverview>(emptyAppAnalyticsOverview());
+let requestId = 0;
 
 const memberLabels: Record<string, string> = {
   free: '普通用户',
@@ -44,6 +52,12 @@ const statusLabels: Record<string, string> = {
 };
 
 const statCards = computed(() => appAnalyticsStatCards(overview.value));
+const canOpenAppCustomers = computed(() =>
+  canViewAppCustomers(accessStore.accessCodes),
+);
+const canOpenUserInsights = computed(() =>
+  canViewUserInsights(accessStore.accessCodes),
+);
 const memberRows = computed(() =>
   distributionRows(
     overview.value.memberLevelDistribution ??
@@ -98,25 +112,37 @@ function enneagramLabel(value?: number) {
   return value && value > 0 ? `${value}号` : '-';
 }
 
-function goInsights(phone?: string) {
+function goInsights(record: Record<string, any>) {
+  const query: Record<string, string> = { open: '1' };
+  const userId = String(record.id ?? '').trim();
+  const keyword = record.phone?.trim();
+  if (userId) query.userId = userId;
+  if (keyword) query.keyword = keyword;
   router.push({
     path: '/customer/user-insights',
-    query: phone ? { keyword: phone } : undefined,
+    query,
   });
 }
 
 async function loadOverview() {
+  const currentRequestId = ++requestId;
   loading.value = true;
   loadError.value = '';
   try {
+    const result = await getAppAnalyticsOverviewApi();
+    if (currentRequestId !== requestId) return;
     overview.value = {
       ...emptyAppAnalyticsOverview(),
-      ...(await getAppAnalyticsOverviewApi()),
+      ...result,
     };
   } catch {
-    loadError.value = 'App 数据概览加载失败，请稍后重试';
+    if (currentRequestId === requestId) {
+      loadError.value = 'App 数据概览加载失败，请稍后重试';
+    }
   } finally {
-    loading.value = false;
+    if (currentRequestId === requestId) {
+      loading.value = false;
+    }
   }
 }
 
@@ -143,7 +169,12 @@ onMounted(loadOverview);
       <div class="toolbar">
         <Space>
           <Button :loading="loading" type="primary" @click="loadOverview">刷新</Button>
-          <Button @click="router.push('/customer/app-users')">查看 App 客户</Button>
+          <Button
+            v-if="canOpenAppCustomers"
+            @click="router.push('/customer/app-users')"
+          >
+            查看 App 客户
+          </Button>
         </Space>
       </div>
 
@@ -212,7 +243,14 @@ onMounted(loadOverview);
               {{ record.createTime || '-' }}
             </template>
             <template v-if="column.key === 'action'">
-              <Button size="small" type="link" @click="goInsights(record.phone)">360</Button>
+              <Button
+                v-if="canOpenUserInsights"
+                size="small"
+                type="link"
+                @click="goInsights(record)"
+              >
+                360
+              </Button>
             </template>
           </template>
         </Table>
@@ -244,10 +282,17 @@ onMounted(loadOverview);
               {{ record.memoryCount ?? 0 }} 条
             </template>
             <template v-if="column.dataIndex === 'lastMemoryAt'">
-              {{ record.lastMemoryAt || record.latestMemory || '-' }}
+              {{ formatRecentMemoryTime(record) }}
             </template>
             <template v-if="column.key === 'action'">
-              <Button size="small" type="link" @click="goInsights(record.phone)">360</Button>
+              <Button
+                v-if="canOpenUserInsights"
+                size="small"
+                type="link"
+                @click="goInsights(record)"
+              >
+                360
+              </Button>
             </template>
           </template>
         </Table>

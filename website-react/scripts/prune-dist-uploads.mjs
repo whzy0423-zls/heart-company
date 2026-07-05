@@ -5,8 +5,6 @@ import path from 'node:path';
 const projectRoot = process.cwd();
 const targets = [
   ['dist/assets/uploads', 'uploaded runtime assets'],
-  ['dist/assets/videos', 'course video assets'],
-  ['dist/assets/audio', 'background audio assets'],
 ];
 
 for (const [relative, label] of targets) {

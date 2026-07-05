@@ -42,7 +42,7 @@ func FromRequest(r *http.Request, trustedProxies []netip.Prefix) string {
 	if err != nil || !isTrusted(remoteAddr, trustedProxies) {
 		return remote
 	}
-	if ip := firstForwardedIP(r.Header.Get("X-Forwarded-For")); ip != "" {
+	if ip := forwardedClientIP(r.Header.Get("X-Forwarded-For"), trustedProxies); ip != "" {
 		return ip
 	}
 	if ip := parseHeaderIP(r.Header.Get("X-Real-IP")); ip != "" {
@@ -73,11 +73,18 @@ func isTrusted(addr netip.Addr, trustedProxies []netip.Prefix) bool {
 	return false
 }
 
-func firstForwardedIP(value string) string {
-	for _, part := range strings.Split(value, ",") {
-		if ip := parseHeaderIP(part); ip != "" {
-			return ip
+func forwardedClientIP(value string, trustedProxies []netip.Prefix) string {
+	parts := strings.Split(value, ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		raw := strings.TrimSpace(parts[i])
+		addr, err := netip.ParseAddr(raw)
+		if err != nil {
+			continue
 		}
+		if isTrusted(addr, trustedProxies) {
+			continue
+		}
+		return addr.String()
 	}
 	return ""
 }

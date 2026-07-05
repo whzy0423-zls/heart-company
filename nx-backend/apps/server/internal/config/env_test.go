@@ -34,6 +34,51 @@ func TestLoadMiniappChatOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadNormalizesAppEnv(t *testing.T) {
+	t.Setenv("APP_ENV", " Production ")
+
+	env := Load()
+
+	if env.AppEnv != "production" {
+		t.Fatalf("expected normalized production APP_ENV, got %q", env.AppEnv)
+	}
+}
+
+func TestValidateProductionTreatsProdAliasAsProduction(t *testing.T) {
+	err := ValidateProduction(Env{
+		AdminPassword: "123456",
+		AppEnv:        "prod",
+		DatabaseURL:   "postgres://nx:nx@db:5432/nx_admin?sslmode=disable",
+		JWTSecret:     "nine-xing-dev-secret",
+	})
+	if err == nil {
+		t.Fatal("expected prod APP_ENV alias to run production validation")
+	}
+}
+
+func TestValidateProductionRejectsUnknownAppEnv(t *testing.T) {
+	err := ValidateProduction(Env{
+		AdminPassword: "a-strong-admin-password",
+		AppEnv:        "prd",
+		DatabaseURL:   "postgres://nx_app:a-strong-database-password@db:5432/nx_admin?sslmode=disable",
+		JWTSecret:     "12345678901234567890123456789012",
+	})
+	if err == nil {
+		t.Fatal("expected unknown APP_ENV to be rejected")
+	}
+}
+
+func TestValidateProductionRejectsMissingAppEnv(t *testing.T) {
+	err := ValidateProduction(Env{
+		AdminPassword: "a-strong-admin-password",
+		DatabaseURL:   "postgres://nx_app:a-strong-database-password@db:5432/nx_admin?sslmode=disable",
+		JWTSecret:     "12345678901234567890123456789012",
+	})
+	if err == nil {
+		t.Fatal("expected missing APP_ENV to be rejected")
+	}
+}
+
 func TestLoadReadsDotEnvFromParentDirectory(t *testing.T) {
 	for _, key := range []string{"ENV_FILE", "OSS_BUCKET", "OSS_PUBLIC_URL", "OSS_REGION", "OSS_ACCESS_KEY_ID", "OSS_ACCESS_KEY_SECRET"} {
 		t.Setenv(key, "")
@@ -117,6 +162,45 @@ func TestValidateProductionRejectsVideoGatewayWithoutPublicBaseURL(t *testing.T)
 	})
 	if err == nil {
 		t.Fatal("expected production validation to require PUBLIC_BASE_URL when video gateway is enabled")
+	}
+}
+
+func TestValidateProductionRequiresExplicitMediaAPIBaseWhenKeyConfigured(t *testing.T) {
+	base := Env{
+		AdminPassword: "a-strong-admin-password",
+		AppEnv:        "production",
+		DatabaseURL:   "postgres://nx_app:a-strong-database-password@db:5432/nx_admin?sslmode=disable",
+		JWTSecret:     "12345678901234567890123456789012",
+		PublicBaseURL: "https://api.example.com",
+	}
+
+	withVideoKey := base
+	withVideoKey.Video.APIKey = "video-key"
+	if err := ValidateProduction(withVideoKey); err == nil {
+		t.Fatal("expected production validation to require VIDEO_API_BASE when VIDEO_API_KEY is set")
+	}
+
+	withImageKey := base
+	withImageKey.Image.APIKey = "image-key"
+	if err := ValidateProduction(withImageKey); err == nil {
+		t.Fatal("expected production validation to require IMAGE_API_BASE when IMAGE_API_KEY is set")
+	}
+}
+
+func TestValidateProductionRejectsPrivatePublicBaseURLWhenVideoGatewayEnabled(t *testing.T) {
+	err := ValidateProduction(Env{
+		AdminPassword: "a-strong-admin-password",
+		AppEnv:        "production",
+		DatabaseURL:   "postgres://nx_app:a-strong-database-password@db:5432/nx_admin?sslmode=disable",
+		JWTSecret:     "12345678901234567890123456789012",
+		PublicBaseURL: "http://127.0.0.1:8080",
+		Video: VideoConfig{
+			APIBase: "https://video.example.com",
+			APIKey:  "video-key",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected production validation to reject private PUBLIC_BASE_URL when video gateway is enabled")
 	}
 }
 

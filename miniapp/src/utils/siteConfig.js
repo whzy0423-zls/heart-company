@@ -30,6 +30,18 @@ function writeCache(data, now) {
   }
 }
 
+function writeCachePreservingLearningContent(data, now) {
+  const cached = readStoredCache()
+  if (
+    cached &&
+    hasSiteConfigLearningSection(cached.data) &&
+    !hasSiteConfigLearningSection(data)
+  ) {
+    return
+  }
+  writeCache(data, now)
+}
+
 export function getStoredSiteConfig() {
   const cached = readStoredCache()
   return cached ? cached.data : null
@@ -50,6 +62,12 @@ export function hasSiteConfigLearningContent(config) {
   return (Array.isArray(courses) && courses.length > 0) || (Array.isArray(quotes) && quotes.length > 0)
 }
 
+export function hasSiteConfigLearningSection(config) {
+  const courses = config?.home?.courses?.items
+  const quotes = config?.home?.quotes?.items
+  return Array.isArray(courses) || Array.isArray(quotes)
+}
+
 export async function getCachedSiteConfig(options = {}) {
   const nowFn = options.now || (() => Date.now())
   const ttlMs = typeof options.ttlMs === 'number' ? options.ttlMs : DEFAULT_TTL_MS
@@ -61,7 +79,7 @@ export async function getCachedSiteConfig(options = {}) {
 
   inflight = api()
     .then((data) => {
-      writeCache(data, nowFn())
+      writeCachePreservingLearningContent(data, nowFn())
       return data
     })
     .finally(() => {
@@ -77,7 +95,7 @@ export async function refreshSiteConfig(options = {}) {
 
   inflight = api()
     .then((data) => {
-      writeCache(data, nowFn())
+      writeCachePreservingLearningContent(data, nowFn())
       return data
     })
     .finally(() => {

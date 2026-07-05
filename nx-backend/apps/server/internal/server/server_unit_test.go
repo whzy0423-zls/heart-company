@@ -8,6 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -173,6 +176,25 @@ func TestCORSRequiresAllowlistInProduction(t *testing.T) {
 	}
 }
 
+func TestCORSPreflightAllowsPatch(t *testing.T) {
+	s := &Server{env: config.Env{AppEnv: "dev"}}
+	handler := s.withCORS(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	request := httptest.NewRequest(http.MethodOptions, "/api/app-users/1", nil)
+	request.Header.Set("Origin", "https://admin.localhost")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 preflight, got %d", response.Code)
+	}
+	if methods := response.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(methods, "PATCH") {
+		t.Fatalf("expected PATCH in CORS methods, got %q", methods)
+	}
+}
+
 func TestPublicWriteEndpointsRateLimitByIP(t *testing.T) {
 	s := &Server{
 		publicAnalyticsIPLimiter: newStrRateLimiter(1, time.Minute),
@@ -282,8 +304,260 @@ func TestPublicArticleAssetURLRewritesPrivatePreviewURL(t *testing.T) {
 	if got := publicArticleAssetURL("/api/upload-assets/42"); got != "/api/public/article-assets/42" {
 		t.Fatalf("expected public article asset URL, got %q", got)
 	}
+	if got := publicArticleAssetURL("/api/uploads/article/cover.png"); got != "/api/public/article-uploads/article/cover.png" {
+		t.Fatalf("expected public article upload URL, got %q", got)
+	}
+	if got := publicArticleAssetURL("https://cdn.example.com/api/upload-assets/42"); got != "https://cdn.example.com/api/upload-assets/42" {
+		t.Fatalf("expected external absolute upload-like URL to stay unchanged, got %q", got)
+	}
+	if got := publicArticleAssetURL("https://cdn.example.com/api/uploads/article/cover.png"); got != "https://cdn.example.com/api/uploads/article/cover.png" {
+		t.Fatalf("expected external absolute local-upload-like URL to stay unchanged, got %q", got)
+	}
 	if got := publicArticleAssetURL("https://cdn.example.com/cover.png"); got != "https://cdn.example.com/cover.png" {
 		t.Fatalf("expected public CDN URL to stay unchanged, got %q", got)
+	}
+}
+
+func TestPublicArticleContentAssetURLsRewriteEmbeddedPrivateUploadURLs(t *testing.T) {
+	content := strings.Join([]string{
+		"![asset](/api/upload-assets/42)",
+		"![local](/api/uploads/article/body.png)",
+		"<img src=\"/api/upload-assets/43\">",
+		"![external](https://cdn.example.com/api/upload-assets/44)",
+		"![already](/api/public/article-assets/45)",
+	}, "\n")
+
+	got := publicArticleContentAssetURLs(content)
+
+	for _, expected := range []string{
+		"![asset](/api/public/article-assets/42)",
+		"![local](/api/public/article-uploads/article/body.png)",
+		"<img src=\"/api/public/article-assets/43\">",
+		"![external](https://cdn.example.com/api/upload-assets/44)",
+		"![already](/api/public/article-assets/45)",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("expected rewritten article content to contain %q, got:\n%s", expected, got)
+		}
+	}
+	if strings.Contains(got, "(/api/upload-assets/42)") || strings.Contains(got, "(/api/uploads/article/body.png)") || strings.Contains(got, `"/api/upload-assets/43"`) {
+		t.Fatalf("expected private upload URLs to be rewritten, got:\n%s", got)
+	}
+}
+
+func TestPublicArticleReferenceCacheIsBounded(t *testing.T) {
+	previousCache := publicArticleReferenceCache
+	t.Cleanup(func() {
+		publicArticleReferenceCache = previousCache
+	})
+	publicArticleReferenceCache = newPublicArticleReferenceCacheStore()
+	for i := 0; i < publicArticleReferenceCacheMaxEntries+50; i++ {
+		key := "miss-random-key-" + strconv.Itoa(i)
+		if _, err := cachedPublicArticleReference(key, func() (bool, error) {
+			return false, nil
+		}); err != nil {
+			t.Fatalf("cache reference %s: %v", key, err)
+		}
+	}
+	if got := publicArticleReferenceCache.Len(); got > publicArticleReferenceCacheMaxEntries {
+		t.Fatalf("public article reference cache grew beyond limit: got %d want <= %d", got, publicArticleReferenceCacheMaxEntries)
+	}
+}
+
+func TestClearPublicArticleReferenceCacheRemovesStaleEntries(t *testing.T) {
+	previousCache := publicArticleReferenceCache
+	t.Cleanup(func() {
+		publicArticleReferenceCache = previousCache
+	})
+	publicArticleReferenceCache = newPublicArticleReferenceCacheStore()
+	if _, err := cachedPublicArticleReference("asset:123", func() (bool, error) {
+		return true, nil
+	}); err != nil {
+		t.Fatalf("cache reference: %v", err)
+	}
+	if got := publicArticleReferenceCache.Len(); got != 1 {
+		t.Fatalf("expected one cached entry before clear, got %d", got)
+	}
+
+	clearPublicArticleReferenceCache()
+
+	if got := publicArticleReferenceCache.Len(); got != 0 {
+		t.Fatalf("expected article reference cache to be cleared after content mutation, got %d", got)
+	}
+}
+
+func TestWritePublicUploadAssetForcesDownloadForUnsafeInlineMIME(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writePublicUploadAsset(recorder, uploadasset.Asset{
+		ContentType: "text/html; charset=utf-8",
+		Data:        []byte("<script>alert(1)</script>"),
+	})
+
+	if got := recorder.Header().Get("Content-Type"); got != "application/octet-stream" {
+		t.Fatalf("unsafe inline content type should be normalized, got %q", got)
+	}
+	if got := recorder.Header().Get("Content-Disposition"); !strings.Contains(got, "attachment") {
+		t.Fatalf("unsafe inline content should be served as attachment, got %q", got)
+	}
+}
+
+func TestWritePublicUploadAssetAllowsSafeImageMIMEInline(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writePublicUploadAsset(recorder, uploadasset.Asset{
+		ContentType: "image/png",
+		Data:        []byte("png"),
+	})
+
+	if got := recorder.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("safe image content type should be preserved, got %q", got)
+	}
+	if got := recorder.Header().Get("Content-Disposition"); got != "" {
+		t.Fatalf("safe image should not force attachment, got %q", got)
+	}
+}
+
+func TestServePublicLocalUploadForcesDownloadForUnsafeMIME(t *testing.T) {
+	uploadDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(uploadDir, "logo.svg"), []byte(`<svg><script>alert(1)</script></svg>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{env: config.Env{UploadDir: uploadDir}}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/public/site-uploads/logo.svg", nil)
+
+	s.servePublicLocalUpload(recorder, request, "logo.svg")
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected unsafe referenced local upload to be served as download, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "application/octet-stream" {
+		t.Fatalf("unsafe local upload content type should be normalized, got %q", got)
+	}
+	if got := recorder.Header().Get("Content-Disposition"); !strings.Contains(got, "attachment") {
+		t.Fatalf("unsafe local upload should be served as attachment, got %q", got)
+	}
+}
+
+func TestPublicSiteAssetURLRewritesPrivateUploadURLs(t *testing.T) {
+	if got := publicSiteAssetURL("/api/upload-assets/42"); got != "/api/public/site-assets/42" {
+		t.Fatalf("expected public site asset URL, got %q", got)
+	}
+	if got := publicSiteAssetURL("/api/uploads/site/logo.png"); got != "/api/public/site-uploads/site/logo.png" {
+		t.Fatalf("expected public site upload URL, got %q", got)
+	}
+	if got := publicSiteAssetURL("https://cdn.example.com/api/upload-assets/42"); got != "https://cdn.example.com/api/upload-assets/42" {
+		t.Fatalf("expected external absolute upload-like URL to stay unchanged, got %q", got)
+	}
+	if got := publicSiteAssetURL("https://cdn.example.com/api/uploads/site/logo.png"); got != "https://cdn.example.com/api/uploads/site/logo.png" {
+		t.Fatalf("expected external absolute local-upload-like URL to stay unchanged, got %q", got)
+	}
+	if got := publicSiteAssetURL("https://cdn.example.com/logo.png"); got != "https://cdn.example.com/logo.png" {
+		t.Fatalf("expected public CDN URL to stay unchanged, got %q", got)
+	}
+}
+
+func TestPublicAdminBrandingAssetURLRewritesPrivateUploadURLs(t *testing.T) {
+	if got := publicAdminBrandingAssetURL("/api/upload-assets/7"); got != "/api/public/admin-branding-assets/7" {
+		t.Fatalf("expected public branding asset URL, got %q", got)
+	}
+	if got := publicAdminBrandingAssetURL("/api/uploads/branding/logo.png"); got != "/api/public/admin-branding-uploads/branding/logo.png" {
+		t.Fatalf("expected public branding upload URL, got %q", got)
+	}
+}
+
+func TestPublicAssetReferenceChecksAcceptAlreadyPublicURLs(t *testing.T) {
+	if !valueReferencesUploadAsset("/api/public/site-assets/42", 42) {
+		t.Fatal("expected already-public site asset URL to count as an asset reference")
+	}
+	if !valueReferencesUploadAsset("/api/public/admin-branding-assets/42", 42) {
+		t.Fatal("expected already-public branding asset URL to count as an asset reference")
+	}
+	if !valueReferencesLocalUpload("/api/public/site-uploads/site/logo.png", "/api/uploads/site/logo.png") {
+		t.Fatal("expected already-public site upload URL to count as a local upload reference")
+	}
+	if !valueReferencesLocalUpload("/api/public/admin-branding-uploads/branding/logo.png", "/api/uploads/branding/logo.png") {
+		t.Fatal("expected already-public branding upload URL to count as a local upload reference")
+	}
+}
+
+func TestPublicSiteConfigRewritesAndServesReferencedLocalUpload(t *testing.T) {
+	root := t.TempDir()
+	uploadDir := filepath.Join(root, "uploads")
+	if err := os.MkdirAll(filepath.Join(uploadDir, "site"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(uploadDir, "site", "logo.png"), []byte("logo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(uploadDir, "site", "other.png"), []byte("other"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sitePath := filepath.Join(root, "site-config.json")
+	if err := os.WriteFile(sitePath, []byte(`{
+  "home": {"teacherTeaser": {"image": "/api/uploads/site/logo.png"}},
+  "navigation": {
+    "main": [{"label": "首页", "to": "/", "type": "route"}],
+    "drawer": [{"label": "首页", "to": "/", "type": "route"}],
+    "tabs": [{"label": "首页", "to": "/", "type": "route", "icon": "home", "match": "/"}]
+  },
+  "site": {"brandName": "九型芯之力", "copyright": "", "footerTagline": "", "logo": "/api/uploads/site/logo.png"},
+  "types": [{"id": "1", "name": "完美型", "description": "", "keywords": "", "avatar": "/assets/avatars/1.webp"}]
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(config.Env{JWTSecret: "test-secret", SiteConfig: sitePath, UploadDir: uploadDir}, nil)
+
+	configResp := performRawUnit(handler, http.MethodGet, "/api/public/site-config", "")
+	if configResp.Code != http.StatusOK {
+		t.Fatalf("expected site config 200, got %d body=%s", configResp.Code, configResp.Body.String())
+	}
+	if body := configResp.Body.String(); !strings.Contains(body, "/api/public/site-uploads/site/logo.png") || strings.Contains(body, "/api/uploads/site/logo.png") {
+		t.Fatalf("expected public site config to rewrite local upload URL, body=%s", body)
+	}
+
+	assetResp := performRawUnit(handler, http.MethodGet, "/api/public/site-uploads/site/logo.png", "")
+	if assetResp.Code != http.StatusOK || assetResp.Body.String() != "logo" {
+		t.Fatalf("expected referenced public upload 200, got %d body=%s", assetResp.Code, assetResp.Body.String())
+	}
+	unreferencedResp := performRawUnit(handler, http.MethodGet, "/api/public/site-uploads/site/other.png", "")
+	if unreferencedResp.Code != http.StatusNotFound {
+		t.Fatalf("expected unreferenced public upload 404, got %d", unreferencedResp.Code)
+	}
+}
+
+func TestPublicAdminBrandingRewritesAndServesReferencedLocalUpload(t *testing.T) {
+	root := t.TempDir()
+	uploadDir := filepath.Join(root, "uploads")
+	if err := os.MkdirAll(filepath.Join(uploadDir, "branding"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(uploadDir, "branding", "logo.png"), []byte("brand"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(uploadDir, "branding", "other.png"), []byte("other"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	brandingPath := filepath.Join(root, "admin-branding.json")
+	if err := os.WriteFile(brandingPath, []byte(`{"name":"后台","logo":"/api/uploads/branding/logo.png","loadingText":""}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(config.Env{JWTSecret: "test-secret", AdminConfig: brandingPath, UploadDir: uploadDir}, nil)
+
+	brandingResp := performRawUnit(handler, http.MethodGet, "/api/public/admin-branding", "")
+	if brandingResp.Code != http.StatusOK {
+		t.Fatalf("expected admin branding 200, got %d body=%s", brandingResp.Code, brandingResp.Body.String())
+	}
+	if body := brandingResp.Body.String(); !strings.Contains(body, "/api/public/admin-branding-uploads/branding/logo.png") || strings.Contains(body, "/api/uploads/branding/logo.png") {
+		t.Fatalf("expected public branding to rewrite local upload URL, body=%s", body)
+	}
+
+	assetResp := performRawUnit(handler, http.MethodGet, "/api/public/admin-branding-uploads/branding/logo.png", "")
+	if assetResp.Code != http.StatusOK || assetResp.Body.String() != "brand" {
+		t.Fatalf("expected referenced branding upload 200, got %d body=%s", assetResp.Code, assetResp.Body.String())
+	}
+	unreferencedResp := performRawUnit(handler, http.MethodGet, "/api/public/admin-branding-uploads/branding/other.png", "")
+	if unreferencedResp.Code != http.StatusNotFound {
+		t.Fatalf("expected unreferenced branding upload 404, got %d", unreferencedResp.Code)
 	}
 }
 
@@ -460,4 +734,47 @@ func (s *fakeUploadAssetObjectUpdater) UpdateObjectMetadata(_ context.Context, i
 	s.updatedKey = objectKey
 	s.updatedURL = objectURL
 	return nil
+}
+
+func TestAuthorizePreservesTokenVersionForRefresh(t *testing.T) {
+	source, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	start := strings.Index(text, "func (s *Server) authorizeAuthorization")
+	if start < 0 {
+		t.Fatal("authorizeAuthorization not found")
+	}
+	end := strings.Index(text[start:], "func mustSMSSender")
+	if end < 0 {
+		t.Fatal("authorizeAuthorization end not found")
+	}
+	body := text[start : start+end]
+	if !strings.Contains(body, "TokenKind:    auth.TokenKindBackend") || !strings.Contains(body, "TokenVersion: currentVersion") {
+		t.Fatalf("authorizeAuthorization must preserve TokenKind and TokenVersion in request context so refresh signs usable tokens; body=%s", body)
+	}
+}
+
+func TestAdminBrandingPrivateEndpointRequiresPermission(t *testing.T) {
+	source, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(source), `s.mux.HandleFunc("/api/admin-branding", s.requirePermission("System:Branding", s.adminBranding))`) {
+		t.Fatal("/api/admin-branding private endpoint must require System:Branding; login screen should use /api/public/admin-branding")
+	}
+}
+
+func TestLoginUsesAccessibleDefaultHomePath(t *testing.T) {
+	source, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(source), `HomePath:  "/dashboard/analytics"`) {
+		t.Fatal("login must not hard-code /dashboard/analytics for every role")
+	}
+	if !strings.Contains(string(source), "DefaultHomePathForUser") {
+		t.Fatal("login should use system.DefaultHomePathForUser")
+	}
 }

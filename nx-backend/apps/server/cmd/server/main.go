@@ -15,7 +15,7 @@ import (
 func main() {
 	env := config.Load()
 	if err := config.ValidateProduction(env); err != nil {
-		log.Fatalf("invalid production config: %v", err)
+		log.Fatalf("invalid config: %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

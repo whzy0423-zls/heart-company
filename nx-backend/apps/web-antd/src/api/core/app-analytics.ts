@@ -12,10 +12,10 @@ export type AppAnalyticsDistribution =
 
 export interface AppAnalyticsRecentUser {
   createTime?: string;
+  lastExtractedAt?: string;
   id: number | string;
   lastLoginAt?: string;
   lastMemoryAt?: string;
-  latestMemory?: string;
   memoryCount?: number;
   memberLevel?: string;
   nickname?: string;
@@ -32,6 +32,7 @@ export interface AppAnalyticsOverview {
   chatSessions?: number;
   compatibilityReports?: number;
   disabledUsers?: number;
+  enabledUsers?: number;
   extractedUsers?: number;
   memberDistribution?: AppAnalyticsDistribution;
   memberLevelDistribution?: AppAnalyticsDistribution;

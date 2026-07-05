@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { fetchArticle, resolveMediaUrl } from '../api/articles.js'
 import AudioPlayer from '../components/AudioPlayer.jsx'
@@ -19,18 +19,34 @@ export default function ReaderPage() {
   const [article, setArticle] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const requestRef = useRef(0)
 
-  useEffect(() => {
-    let alive = true
+  const loadArticle = useCallback(() => {
+    const requestId = requestRef.current + 1
+    requestRef.current = requestId
     setLoading(true)
     setError('')
+    setArticle(null)
     window.scrollTo(0, 0)
+
     fetchArticle(id)
-      .then((data) => { if (alive) setArticle(data) })
-      .catch((err) => { if (alive) setError(err.message || '加载失败') })
-      .finally(() => { if (alive) setLoading(false) })
-    return () => { alive = false }
+      .then((data) => {
+        if (requestRef.current === requestId) setArticle(data)
+      })
+      .catch((err) => {
+        if (requestRef.current === requestId) setError(err.message || '加载失败')
+      })
+      .finally(() => {
+        if (requestRef.current === requestId) setLoading(false)
+      })
   }, [id])
+
+  useEffect(() => {
+    loadArticle()
+    return () => {
+      requestRef.current += 1
+    }
+  }, [loadArticle])
 
   const html = useMemo(() => {
     if (!article?.content) return ''
@@ -68,9 +84,10 @@ export default function ReaderPage() {
           正在加载文章…
         </div>
       ) : error ? (
-        <div className="state">
+        <div className="state" role="alert" aria-live="assertive">
           <div className="state-emoji">😕</div>
-          {error}
+          <div>{error}</div>
+          <button className="state-retry" type="button" onClick={loadArticle}>重新加载</button>
         </div>
       ) : article ? (
         <article className="article">

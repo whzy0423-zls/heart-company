@@ -11,6 +11,7 @@ import {
   Input,
   message,
   Modal,
+  Popconfirm,
   Space,
   Switch,
   Table,
@@ -34,7 +35,7 @@ const modalOpen = ref(false);
 const roles = ref<SystemRole[]>([]);
 const menus = ref<SystemMenu[]>([]);
 const total = ref(0);
-const query = ref({ name: '' });
+const query = ref({ name: '', page: 1, pageSize: 20 });
 const form = ref<SystemRole>({
   code: '',
   menuIds: [],
@@ -69,7 +70,11 @@ async function load() {
   loading.value = true;
   try {
     const [rolePage, menuTree] = await Promise.all([
-      getSystemRoleListApi(query.value),
+      getSystemRoleListApi({
+        name: query.value.name || undefined,
+        page: query.value.page,
+        pageSize: query.value.pageSize,
+      }),
       getSystemMenuListApi(),
     ]);
     roles.value = rolePage.items;
@@ -80,6 +85,20 @@ async function load() {
   }
 }
 
+function search() {
+  query.value.page = 1;
+  load();
+}
+
+function handleTableChange(pagination: {
+  current?: number;
+  pageSize?: number;
+}) {
+  query.value.page = pagination.current ?? 1;
+  query.value.pageSize = pagination.pageSize ?? 20;
+  load();
+}
+
 function openCreate() {
   form.value = { code: '', menuIds: [], name: '', remark: '', status: 1 };
   modalOpen.value = true;
@@ -88,6 +107,23 @@ function openCreate() {
 function openEdit(record: SystemRole) {
   form.value = { ...record, menuIds: [...record.menuIds] };
   modalOpen.value = true;
+}
+
+function handleStatusChange(checked: boolean | number | string) {
+  if (checked === true || checked === 1) {
+    form.value.status = 1;
+    return;
+  }
+  Modal.confirm({
+    cancelText: '取消',
+    content: '停用后拥有该角色的后台用户将失去对应菜单和按钮权限，请确认。',
+    okText: '确认停用',
+    okType: 'danger',
+    onOk: () => {
+      form.value.status = 0;
+    },
+    title: '确认停用角色',
+  });
 }
 
 async function save() {
@@ -127,13 +163,19 @@ onMounted(load);
         allow-clear
         placeholder="搜索角色名称/编码"
       />
-      <Button type="primary" @click="load">查询</Button>
+      <Button type="primary" @click="search">查询</Button>
     </Space>
     <Table
       :columns="columns"
       :data-source="roles"
-      :pagination="{ total }"
+      :pagination="{
+        current: query.page,
+        pageSize: query.pageSize,
+        showSizeChanger: true,
+        total,
+      }"
       row-key="id"
+      @change="handleTableChange"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.dataIndex === 'status'">
@@ -149,15 +191,16 @@ onMounted(load);
             >
               编辑
             </Button>
-            <Button
+            <Popconfirm
               v-if="canDelete"
-              danger
-              size="small"
-              type="link"
-              @click="remove(roleRecord(record))"
+              cancel-text="取消"
+              ok-text="确认删除"
+              placement="topRight"
+              :title="`确认删除角色「${record.name || record.code || record.id}」吗？此操作不可恢复。`"
+              @confirm="remove(roleRecord(record))"
             >
-              删除
-            </Button>
+              <Button danger size="small" type="link"> 删除 </Button>
+            </Popconfirm>
           </Space>
         </template>
       </template>
@@ -179,9 +222,8 @@ onMounted(load);
         </Form.Item>
         <Form.Item label="启用">
           <Switch
-            v-model:checked="form.status"
-            :checked-value="1"
-            :un-checked-value="0"
+            :checked="form.status === 1"
+            @change="handleStatusChange"
           />
         </Form.Item>
         <Form.Item label="菜单权限">

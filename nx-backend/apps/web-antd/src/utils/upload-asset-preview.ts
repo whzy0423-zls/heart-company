@@ -14,18 +14,25 @@ export function normalizeUploadAssetSource(source?: string) {
 export function isProtectedUploadAssetSource(source?: string) {
   const cleanSource = normalizeUploadAssetSource(source);
   if (!cleanSource) return false;
-  if (cleanSource.startsWith('/api/upload-assets/')) return true;
+  if (isProtectedUploadAssetPath(cleanSource)) return true;
   if (typeof window === 'undefined') return false;
 
   try {
     const url = new URL(cleanSource, window.location.origin);
     return (
       url.origin === window.location.origin &&
-      url.pathname.includes('/api/upload-assets/')
+      isProtectedUploadAssetPath(url.pathname)
     );
   } catch {
     return false;
   }
+}
+
+function isProtectedUploadAssetPath(pathname: string) {
+  return (
+    pathname.startsWith('/api/upload-assets/') ||
+    pathname.startsWith('/api/uploads/')
+  );
 }
 
 export function withUploadAssetPreviewToken(

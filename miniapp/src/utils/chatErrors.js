@@ -3,6 +3,9 @@ export function chatErrorMessage(error) {
   if (message.includes('微信登录未返回 code')) {
     return '微信登录没有拿到授权 code，请稍后重试，或重新打开小程序。'
   }
+  if (message.includes('当前环境不支持微信登录')) {
+    return '当前 H5 环境不能直接使用微信小程序登录，请在微信小程序内打开后继续对话。'
+  }
   if (error && (error.statusCode === 401 || error.statusCode === 403)) {
     return '登录状态已失效，请重新进入页面后再试。'
   }

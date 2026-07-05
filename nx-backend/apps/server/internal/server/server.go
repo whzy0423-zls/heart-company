@@ -93,6 +93,9 @@ type Server struct {
 	appUsers                 *appuser.Store
 	appChat                  *chat.Store
 	pushStore                *push.Store
+	pushSendTimeout          time.Duration
+	pushRecoveryInterval     time.Duration
+	pushSendSlots            chan struct{}
 	smsSender                sms.Sender
 	loginLimiter             *strRateLimiter
 	loginDBLimiter           *dbRateLimiter
@@ -197,17 +200,19 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.videoStoryboardSlots = make(chan struct{}, 3)
 	s.smsSender = mustSMSSender(env.SMS)
 	s.pushStore = push.NewStore(database, push.NewPusher(env.AppEnv, env.JPush.AppKey, env.JPush.MasterSecret))
+	s.pushSendSlots = make(chan struct{}, 2)
 	// 启动时应用 DB 中保存的模型配置覆盖（若存在），重建对话/视频客户端。
 	s.applyStoredModelConfig()
 	s.routes()
 	if database != nil {
 		go s.recoverVideoAsyncTasks()
+		go s.runPushAsyncRecoveryLoop(context.Background())
 	}
 	return s.withCORS(s.mux)
 }
 
 func newWeChatClient(env config.Env) *wechat.Client {
-	if env.AppEnv == "production" {
+	if config.IsProduction(env.AppEnv) {
 		return wechat.NewClient(env.WeChat.AppID, env.WeChat.Secret, false)
 	}
 	return wechat.NewClientWithMissingCredentialFallback(env.WeChat.AppID, env.WeChat.Secret, env.WeChat.LoginDev)
@@ -281,17 +286,22 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/public/signups", s.method(http.MethodPost, s.publicSignup))
 	s.mux.HandleFunc("/api/public/game-results", s.method(http.MethodPost, s.publicGameResult))
 	s.mux.HandleFunc("/api/public/site-visits", s.method(http.MethodPost, s.publicSiteVisit))
+	s.mux.HandleFunc("/api/public/site-assets/", s.method(http.MethodGet, s.publicSiteAsset))
+	s.mux.HandleFunc("/api/public/site-uploads/", s.method(http.MethodGet, s.publicSiteUpload))
 	// 阅读 H5：公开只读文章列表 / 详情 / 分类。
 	s.mux.HandleFunc("/api/public/articles", s.method(http.MethodGet, s.publicArticles))
 	s.mux.HandleFunc("/api/public/articles/", s.method(http.MethodGet, s.publicArticleDetail))
 	s.mux.HandleFunc("/api/public/article-assets/", s.method(http.MethodGet, s.publicArticleAsset))
+	s.mux.HandleFunc("/api/public/article-uploads/", s.method(http.MethodGet, s.publicArticleUpload))
 	s.mux.HandleFunc("/api/public/article-categories", s.method(http.MethodGet, s.publicArticleCategories))
 	// 成长心语：官网公开只读（分组聚合 + 单条详情）。
 	s.mux.HandleFunc("/api/public/mind-groups", s.method(http.MethodGet, s.publicMindGroups))
 	s.mux.HandleFunc("/api/public/mind-quotes/", s.method(http.MethodGet, s.publicMindQuoteDetail))
 	// 后台品牌：公开只读（启动屏/登录页在登录前就要用），写入需鉴权。
 	s.mux.HandleFunc("/api/public/admin-branding", s.method(http.MethodGet, s.publicAdminBranding))
-	s.mux.HandleFunc("/api/admin-branding", s.adminBranding)
+	s.mux.HandleFunc("/api/public/admin-branding-assets/", s.method(http.MethodGet, s.publicAdminBrandingAsset))
+	s.mux.HandleFunc("/api/public/admin-branding-uploads/", s.method(http.MethodGet, s.publicAdminBrandingUpload))
+	s.mux.HandleFunc("/api/admin-branding", s.requirePermission("System:Branding", s.adminBranding))
 	// 模型配置：读取/保存对话(MiniMax)与视频模型的地址/密钥/模型名，均需登录。
 	s.mux.HandleFunc("/api/model-config", s.requirePermission("System:Model:Config", s.modelConfig))
 	// 对话模型连通性测试：对 MiniMax 网关做一次轻量探活，需登录。
@@ -474,8 +484,14 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	homePath, herr := s.system.DefaultHomePathForUser(r.Context(), id, roleCodes)
+	if herr != nil {
+		httpx.Fail(w, http.StatusInternalServerError, herr.Error())
+		return
+	}
+
 	user := auth.UserInfo{
-		HomePath:  "/dashboard/analytics",
+		HomePath:  homePath,
 		ID:        id,
 		RealName:  nickname,
 		Roles:     roleCodes,
@@ -799,6 +815,7 @@ func (s *Server) publicSiteConfig(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	rewritePublicSiteConfigAssets(&config)
 	httpx.OK(w, config)
 }
 
@@ -1396,8 +1413,12 @@ func backfillUploadAssetObjectURL(ctx context.Context, updater uploadAssetObject
 }
 
 func uploadAssetIDFromURL(raw string) (int64, bool) {
-	u, err := url.Parse(strings.TrimSpace(raw))
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
 	if err != nil {
+		return 0, false
+	}
+	if u.IsAbs() || u.Host != "" {
 		return 0, false
 	}
 	path := u.Path
@@ -2031,6 +2052,7 @@ func (s *Server) publicAdminBranding(w http.ResponseWriter, _ *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	b.Logo = publicAdminBrandingAssetURL(b.Logo)
 	httpx.OK(w, b)
 }
 
@@ -2050,19 +2072,6 @@ func (s *Server) adminBranding(w http.ResponseWriter, r *http.Request) {
 		}
 		httpx.OK(w, b)
 	case http.MethodPut:
-		user, ok := s.authorize(w, r)
-		if !ok {
-			return
-		}
-		allowed, err := s.hasAnyPermission(r.Context(), user, "System:Branding")
-		if err != nil {
-			httpx.Fail(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if !allowed {
-			httpx.Fail(w, http.StatusForbidden, "Forbidden")
-			return
-		}
 		var b branding.Branding
 		if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
@@ -2451,16 +2460,18 @@ func (s *Server) authorizeAuthorization(w http.ResponseWriter, r *http.Request, 
 		return auth.UserInfo{}, false
 	}
 	return auth.UserInfo{
-		Avatar:   profile.Avatar,
-		Email:    profile.Email,
-		HomePath: profile.HomePath,
-		ID:       profile.ID,
-		Phone:    profile.Phone,
-		RealName: profile.RealName,
-		Remark:   profile.Remark,
-		Roles:    profile.Roles,
-		UserID:   profile.UserID,
-		Username: profile.Username,
+		Avatar:       profile.Avatar,
+		Email:        profile.Email,
+		HomePath:     profile.HomePath,
+		ID:           profile.ID,
+		Phone:        profile.Phone,
+		RealName:     profile.RealName,
+		Remark:       profile.Remark,
+		Roles:        profile.Roles,
+		TokenKind:    auth.TokenKindBackend,
+		TokenVersion: currentVersion,
+		UserID:       profile.UserID,
+		Username:     profile.Username,
 	}, true
 }
 
@@ -2518,7 +2529,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			w.Header().Add("Vary", "Origin")
 		}
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept-Language")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -2534,7 +2545,7 @@ func (s *Server) corsOriginAllowed(origin string) bool {
 		return false
 	}
 	if len(s.env.CORSAllowedOrigins) == 0 {
-		return s.env.AppEnv != "production"
+		return !config.IsProduction(s.env.AppEnv)
 	}
 	for _, allowed := range s.env.CORSAllowedOrigins {
 		if strings.EqualFold(origin, strings.TrimRight(strings.TrimSpace(allowed), "/")) {

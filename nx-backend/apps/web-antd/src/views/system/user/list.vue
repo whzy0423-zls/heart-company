@@ -11,6 +11,7 @@ import {
   Input,
   message,
   Modal,
+  Popconfirm,
   Select,
   Space,
   Switch,
@@ -34,7 +35,7 @@ const modalOpen = ref(false);
 const users = ref<SystemUser[]>([]);
 const roles = ref<SystemRole[]>([]);
 const total = ref(0);
-const query = ref({ username: '' });
+const query = ref({ page: 1, pageSize: 20, username: '' });
 const form = ref<SystemUser>({
   avatar: '',
   nickname: '',
@@ -73,7 +74,11 @@ async function load() {
   loading.value = true;
   try {
     const [userPage, rolePage] = await Promise.all([
-      getSystemUserListApi(query.value),
+      getSystemUserListApi({
+        page: query.value.page,
+        pageSize: query.value.pageSize,
+        username: query.value.username || undefined,
+      }),
       getSystemRoleListApi({ pageSize: 100 }),
     ]);
     users.value = userPage.items;
@@ -82,6 +87,20 @@ async function load() {
   } finally {
     loading.value = false;
   }
+}
+
+function search() {
+  query.value.page = 1;
+  load();
+}
+
+function handleTableChange(pagination: {
+  current?: number;
+  pageSize?: number;
+}) {
+  query.value.page = pagination.current ?? 1;
+  query.value.pageSize = pagination.pageSize ?? 20;
+  load();
 }
 
 function openCreate() {
@@ -100,6 +119,23 @@ function openCreate() {
 function openEdit(record: SystemUser) {
   form.value = { ...record, roleIds: [...record.roleIds] };
   modalOpen.value = true;
+}
+
+function handleStatusChange(checked: boolean | number | string) {
+  if (checked === true || checked === 1) {
+    form.value.status = 1;
+    return;
+  }
+  Modal.confirm({
+    cancelText: '取消',
+    content: '停用后该后台用户将无法继续使用已分配的后台权限，请确认。',
+    okText: '确认停用',
+    okType: 'danger',
+    onOk: () => {
+      form.value.status = 0;
+    },
+    title: '确认停用用户',
+  });
 }
 
 async function save() {
@@ -139,13 +175,19 @@ onMounted(load);
         allow-clear
         placeholder="搜索账号/昵称"
       />
-      <Button type="primary" @click="load">查询</Button>
+      <Button type="primary" @click="search">查询</Button>
     </Space>
     <Table
       :columns="columns"
       :data-source="users"
-      :pagination="{ total }"
+      :pagination="{
+        current: query.page,
+        pageSize: query.pageSize,
+        showSizeChanger: true,
+        total,
+      }"
       row-key="id"
+      @change="handleTableChange"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.dataIndex === 'status'">
@@ -161,15 +203,16 @@ onMounted(load);
             >
               编辑
             </Button>
-            <Button
+            <Popconfirm
               v-if="canDelete"
-              danger
-              size="small"
-              type="link"
-              @click="remove(userRecord(record))"
+              cancel-text="取消"
+              ok-text="确认删除"
+              placement="topRight"
+              :title="`确认删除用户「${record.username || record.nickname || record.id}」吗？此操作不可恢复。`"
+              @confirm="remove(userRecord(record))"
             >
-              删除
-            </Button>
+              <Button danger size="small" type="link"> 删除 </Button>
+            </Popconfirm>
           </Space>
         </template>
       </template>
@@ -214,9 +257,8 @@ onMounted(load);
         </Form.Item>
         <Form.Item label="启用">
           <Switch
-            v-model:checked="form.status"
-            :checked-value="1"
-            :un-checked-value="0"
+            :checked="form.status === 1"
+            @change="handleStatusChange"
           />
         </Form.Item>
         <Form.Item label="备注">

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { TYPES_INFO } from '../../data/enneagramGame'
-import { getStoredSiteConfig, hasSiteConfigLearningContent, refreshSiteConfig } from '../../utils/siteConfig'
+import { getStoredSiteConfig, hasSiteConfigLearningSection, refreshSiteConfig } from '../../utils/siteConfig'
 import { userErrorMessage } from '../../utils/userMessage'
 
 const courses = ref([])
@@ -35,7 +35,7 @@ async function loadContent(options = {}) {
   try {
     const cfg = await refreshSiteConfig()
     if (ticket !== loadTicket) return
-    if (silent && !hasSiteConfigLearningContent(cfg)) return
+    if (silent && !hasSiteConfigLearningSection(cfg)) return
     applyContent(cfg)
     loadError.value = ''
   } catch (e) {
@@ -61,14 +61,14 @@ function goTest() {
 </script>
 
 <template>
-  <view class="wrap learn page-stack">
-    <view class="card section">
+  <view class="wrap learn page-stack ios-page ios-safe-bottom">
+    <view class="card ios-card section">
       <text class="eyebrow">课程体系</text>
       <text class="sec-title">线上课程</text>
       <view v-if="loading" class="empty">课程内容加载中…</view>
       <view v-else-if="loadError" class="empty empty--error">
         <text>{{ loadError }}</text>
-        <text class="retry" @click="loadContent">重新加载</text>
+        <button class="retry" hover-class="retry--hover" @click="loadContent">重新加载</button>
       </view>
       <view v-else-if="courses.length === 0" class="empty">课程内容即将上线</view>
       <view v-for="(c, i) in courses" :key="i" class="course">
@@ -80,7 +80,7 @@ function goTest() {
       </view>
     </view>
 
-    <view class="card section">
+    <view class="card ios-card section">
       <text class="eyebrow">老韩语录</text>
       <text class="sec-title">语录互动区</text>
       <view v-if="loading" class="empty">语录内容加载中…</view>
@@ -91,7 +91,7 @@ function goTest() {
       </view>
     </view>
 
-    <view class="card section">
+    <view class="card ios-card section">
       <text class="eyebrow">九型图鉴</text>
       <text class="sec-title">九种性格图鉴</text>
       <view class="types">
@@ -104,7 +104,7 @@ function goTest() {
       </view>
     </view>
 
-    <button class="btn-primary" @click="goTest">去测测我是哪一型 →</button>
+    <button class="btn-primary ios-button" @click="goTest">去测测我是哪一型 →</button>
   </view>
 </template>
 
@@ -113,7 +113,23 @@ function goTest() {
 .section { display: flex; flex-direction: column; }
 .empty { color: #767d89; font-size: 26rpx; padding: 20rpx 0; }
 .empty--error { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; }
-.retry { flex-shrink: 0; color: #2b7fff; font-weight: 900; }
+.retry {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 88rpx;
+  min-height: 88rpx;
+  padding: 0 18rpx;
+  color: #2b7fff;
+  font-weight: 900;
+  touch-action: manipulation;
+  background: transparent;
+  border: none;
+  line-height: 1;
+}
+.retry::after { border: none; }
+.retry--hover { opacity: .82; transform: scale(.985); }
 .course { display: flex; gap: 18rpx; padding: 22rpx 0; border-bottom: 2rpx solid rgba(20,24,32,.07); }
 .course:last-child { border-bottom: none; }
 .course__badge { flex-shrink: 0; }

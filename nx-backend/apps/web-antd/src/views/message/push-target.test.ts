@@ -5,6 +5,7 @@ import {
   audienceCountLabel,
   buildPushAudienceCountParams,
   formatPushRecordError,
+  formatPushSendAcceptedMessage,
   formatPushSendError,
   isValidPushMemberLevel,
   pushMemberLevelOptions,
@@ -60,6 +61,14 @@ describe('push target helpers', () => {
     expect(audienceCountDetailLabel({ deviceCount: 14, userCount: 12 })).toBe(
       '预计 12 人 / 14 台设备',
     );
+    expect(
+      audienceCountDetailLabel({
+        deviceCount: 14,
+        targetType: 'level',
+        targetValue: 'vip',
+        userCount: 12,
+      } as any),
+    ).toBe('预计 12 人 / 14 台设备（会员等级：VIP 会员）');
   });
 
   it('uses backend error details for failed push send messages', () => {
@@ -76,6 +85,20 @@ describe('push target helpers', () => {
     expect(formatPushSendError(new Error('network down'))).toBe(
       '推送发送失败：network down',
     );
+  });
+
+  it('formats async push send accepted messages', () => {
+    expect(
+      formatPushSendAcceptedMessage({
+        message: '推送任务已创建，后台发送中',
+        recordId: 101,
+        status: 'pending',
+      }),
+    ).toBe('推送任务已创建，后台发送中（记录 #101）');
+    expect(formatPushSendAcceptedMessage({ recordId: 102 })).toBe(
+      '推送任务已创建，后台发送中（记录 #102）',
+    );
+    expect(formatPushSendAcceptedMessage()).toBe('推送任务已创建，后台发送中');
   });
 
   it('formats failed push history error messages', () => {

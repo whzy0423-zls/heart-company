@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -335,7 +336,7 @@ func (s *Store) PublicAssetReferenced(ctx context.Context, assetID int64) (bool,
 
 	privateURL := fmt.Sprintf("/api/upload-assets/%d", assetID)
 	publicURL := fmt.Sprintf("/api/public/article-assets/%d", assetID)
-	var exists bool
+	var directExists bool
 	err := s.db.QueryRowContext(c,
 		`SELECT EXISTS (
 		    SELECT 1 FROM articles
@@ -343,8 +344,116 @@ func (s *Store) PublicAssetReferenced(ctx context.Context, assetID int64) (bool,
 		       AND (cover=$2 OR audio_url=$2 OR cover=$3 OR audio_url=$3)
 		  )`,
 		StatusPublished, privateURL, publicURL,
-	).Scan(&exists)
-	return exists, err
+	).Scan(&directExists)
+	if err != nil || directExists {
+		return directExists, err
+	}
+	rows, err := s.db.QueryContext(c,
+		`SELECT content FROM articles
+		  WHERE status=$1
+		    AND (content LIKE '%/api/upload-assets/%' OR content LIKE '%/api/public/article-assets/%')`,
+		StatusPublished,
+	)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var content string
+		if err := rows.Scan(&content); err != nil {
+			return false, err
+		}
+		if articleContentReferencesUploadAsset(content, assetID) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func (s *Store) PublicLocalUploadReferenced(ctx context.Context, privateURL string) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, nil
+	}
+	privateURL = strings.TrimSpace(privateURL)
+	if !strings.HasPrefix(privateURL, "/api/uploads/") {
+		return false, nil
+	}
+	publicURL := strings.Replace(privateURL, "/api/uploads/", "/api/public/article-uploads/", 1)
+	c, cancel := s.ctx(ctx)
+	defer cancel()
+
+	var directExists bool
+	err := s.db.QueryRowContext(c,
+		`SELECT EXISTS (
+		    SELECT 1 FROM articles
+		     WHERE status=$1
+		       AND (cover=$2 OR audio_url=$2 OR cover=$3 OR audio_url=$3)
+		  )`,
+		StatusPublished, privateURL, publicURL,
+	).Scan(&directExists)
+	if err != nil || directExists {
+		return directExists, err
+	}
+	rows, err := s.db.QueryContext(c,
+		`SELECT content FROM articles
+		  WHERE status=$1
+		    AND (content LIKE '%/api/uploads/%' OR content LIKE '%/api/public/article-uploads/%')`,
+		StatusPublished,
+	)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var content string
+		if err := rows.Scan(&content); err != nil {
+			return false, err
+		}
+		if articleContentReferencesLocalUpload(content, privateURL) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+var (
+	articleAssetURLPattern       = regexp.MustCompile(`(^|[\s"'(=])(/api/(?:upload-assets|public/article-assets)/[1-9][0-9]*)($|[\s"')>\]])`)
+	articleLocalUploadURLPattern = regexp.MustCompile(`(^|[\s"'(=])(/api/(?:uploads|public/article-uploads)/[^\s"'<>\])]+)($|[\s"')>\]])`)
+)
+
+func articleContentReferencesUploadAsset(content string, assetID int64) bool {
+	if assetID <= 0 || strings.TrimSpace(content) == "" {
+		return false
+	}
+	for _, match := range articleAssetURLPattern.FindAllStringSubmatch(content, -1) {
+		if len(match) != 4 {
+			continue
+		}
+		raw := match[2]
+		for _, prefix := range []string{"/api/upload-assets/", "/api/public/article-assets/"} {
+			if strings.HasPrefix(raw, prefix) {
+				id, err := strconv.ParseInt(strings.Trim(strings.TrimPrefix(raw, prefix), "/"), 10, 64)
+				if err == nil && id == assetID {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func articleContentReferencesLocalUpload(content string, privateURL string) bool {
+	privateURL = strings.TrimSpace(privateURL)
+	if !strings.HasPrefix(privateURL, "/api/uploads/") || strings.TrimSpace(content) == "" {
+		return false
+	}
+	publicURL := strings.Replace(privateURL, "/api/uploads/", "/api/public/article-uploads/", 1)
+	for _, match := range articleLocalUploadURLPattern.FindAllStringSubmatch(content, -1) {
+		if len(match) == 4 && (match[2] == privateURL || match[2] == publicURL) {
+			return true
+		}
+	}
+	return false
 }
 
 // Categories lists distinct non-empty categories among published articles.
