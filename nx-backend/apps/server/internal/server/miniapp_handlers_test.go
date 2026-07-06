@@ -11,8 +11,8 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
-func TestMergeMiniappRAGDocumentsIncludesKnowledgeStore(t *testing.T) {
-	docs := mergeMiniappRAGDocuments(
+func TestMergeAppRAGDocumentsIncludesKnowledgeStore(t *testing.T) {
+	docs := mergeAppRAGDocuments(
 		[]rag.Document{{ID: "type-1", Title: "1号", Content: "原则"}},
 		[]rag.Document{{ID: "kb-8", Title: "课程答疑", Content: "课程安排"}},
 	)
@@ -24,7 +24,7 @@ func TestMergeMiniappRAGDocumentsIncludesKnowledgeStore(t *testing.T) {
 	}
 }
 
-func TestMiniappRAGDocumentsLoadsSiteAndKnowledgeStore(t *testing.T) {
+func TestMiniappSiteRAGDocumentsExcludeKnowledgeStore(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "site-config.json")
 	if err := os.WriteFile(configPath, []byte(miniappRAGTestConfig), 0o644); err != nil {
@@ -53,8 +53,8 @@ func TestMiniappRAGDocumentsLoadsSiteAndKnowledgeStore(t *testing.T) {
 			foundKnowledge = true
 		}
 	}
-	if !foundSite || !foundKnowledge {
-		t.Fatalf("expected site and public knowledge documents, foundSite=%v foundKnowledge=%v docs=%+v", foundSite, foundKnowledge, docs)
+	if !foundSite || foundKnowledge {
+		t.Fatalf("expected site document and no public knowledge documents, foundSite=%v foundKnowledge=%v docs=%+v", foundSite, foundKnowledge, docs)
 	}
 }
 
@@ -78,8 +78,8 @@ const miniappRAGTestConfig = `{
   ]
 }`
 
-func TestMiniappKnowledgeDocumentsAreSearchable(t *testing.T) {
-	service := rag.NewService(mergeMiniappRAGDocuments(
+func TestAppKnowledgeDocumentsAreSearchable(t *testing.T) {
+	service := rag.NewService(mergeAppRAGDocuments(
 		[]rag.Document{{ID: "type-1", Title: "1号 完美型", Content: "完美型重视原则。", Tags: []string{"完美型"}}},
 		[]rag.Document{{ID: "kb-8", Title: "企业沟通课", Content: "企业沟通课适合团队冲突复盘和管理者沟通训练。", Tags: []string{"企业", "沟通"}}},
 	))

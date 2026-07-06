@@ -244,6 +244,96 @@ func TestVbenCompatibleAPI(t *testing.T) {
 			t.Fatalf("expected 403 for missing Customer:UserInsights:List permission, got %d body=%s", forbidden.Code, forbidden.Body.String())
 		}
 	})
+
+	t.Run("allows page scoped helper APIs with minimum page permissions", func(t *testing.T) {
+		cases := []struct {
+			menuIDs []int
+			name    string
+			paths   []string
+		}{
+			{
+				menuIDs: []int{901},
+				name:    "reading",
+				paths:   []string{"/api/reading/settings", "/api/voice/options"},
+			},
+			{
+				menuIDs: []int{702},
+				name:    "voice_test",
+				paths:   []string{"/api/voice/generations/list?page=1&pageSize=1", "/api/voice/profiles/list?page=1&pageSize=1"},
+			},
+			{
+				menuIDs: []int{1004},
+				name:    "storyboard",
+				paths:   []string{"/api/video/storyboards/list?page=1&pageSize=1", "/api/video/analysis/list?page=1&pageSize=1"},
+			},
+			{
+				menuIDs: []int{1001},
+				name:    "video_generate",
+				paths:   []string{"/api/video/generations/list?page=1&pageSize=1", "/api/video/assets/polish-prompt"},
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				token := tokenWithMenus(t, handler, tc.name, tc.menuIDs)
+				for _, path := range tc.paths {
+					method := http.MethodGet
+					var payload any
+					if path == "/api/video/assets/polish-prompt" {
+						method = http.MethodPost
+						payload = map[string]any{"kind": "video", "prompt": "测试提示词"}
+					}
+					response := perform(handler, method, path, token, payload)
+					if response.Code == http.StatusForbidden || response.Code == http.StatusUnauthorized {
+						t.Fatalf("%s should be authorized for %s, got %d body=%s", tc.name, path, response.Code, response.Body.String())
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("system update permission can edit without create permission", func(t *testing.T) {
+		adminToken := loginToken(t, handler)
+		targetUsername := fmt.Sprintf("target_%d", time.Now().UnixNano())
+		createTarget := perform(handler, http.MethodPost, "/api/system/user", adminToken, map[string]any{
+			"nickname": "待编辑用户",
+			"password": "123456",
+			"roleIds":  []any{},
+			"status":   1,
+			"username": targetUsername,
+		})
+		if createTarget.Code != http.StatusOK {
+			t.Fatalf("create target user failed: %d %s", createTarget.Code, createTarget.Body.String())
+		}
+		targetBody := decodeBody(t, createTarget)
+		targetData := targetBody.Data.(map[string]any)
+		targetID, _ := targetData["id"].(string)
+		if targetID == "" {
+			t.Fatalf("missing target id: %+v", targetBody.Data)
+		}
+
+		token := tokenWithMenus(t, handler, "system_update_only", []int{401, 406})
+		createForbidden := perform(handler, http.MethodPost, "/api/system/user", token, map[string]any{
+			"nickname": "不应创建",
+			"password": "123456",
+			"roleIds":  []any{},
+			"status":   1,
+			"username": fmt.Sprintf("forbidden_%d", time.Now().UnixNano()),
+		})
+		if createForbidden.Code != http.StatusForbidden {
+			t.Fatalf("expected create to be forbidden without System:User:Create, got %d body=%s", createForbidden.Code, createForbidden.Body.String())
+		}
+
+		update := perform(handler, http.MethodPut, "/api/system/user/"+targetID, token, map[string]any{
+			"id":       targetID,
+			"nickname": "已编辑用户",
+			"roleIds":  []any{},
+			"status":   1,
+			"username": targetUsername,
+		})
+		if update.Code != http.StatusOK {
+			t.Fatalf("expected update to pass with System:User:Update, got %d body=%s", update.Code, update.Body.String())
+		}
+	})
 }
 
 func lowPermissionToken(t *testing.T, handler http.Handler) string {
@@ -301,6 +391,58 @@ func lowPermissionToken(t *testing.T, handler http.Handler) string {
 	token, _ := data["accessToken"].(string)
 	if token == "" {
 		t.Fatal("missing low permission token")
+	}
+	return token
+}
+
+func tokenWithMenus(t *testing.T, handler http.Handler, name string, menuIDs []int) string {
+	t.Helper()
+	adminToken := loginToken(t, handler)
+	suffix := time.Now().UnixNano()
+	roleCode := fmt.Sprintf("probe_%s_%d", name, suffix)
+	username := fmt.Sprintf("probe_%s_%d", name, suffix)
+
+	createRole := perform(handler, http.MethodPost, "/api/system/role", adminToken, map[string]any{
+		"code":    roleCode,
+		"menuIds": menuIDs,
+		"name":    roleCode,
+		"remark":  "最小权限流程测试",
+		"status":  1,
+	})
+	if createRole.Code != http.StatusOK {
+		t.Fatalf("create role %s failed: %d %s", roleCode, createRole.Code, createRole.Body.String())
+	}
+	roleBody := decodeBody(t, createRole)
+	roleData, _ := roleBody.Data.(map[string]any)
+	roleID := roleData["id"]
+	if roleID == nil {
+		t.Fatalf("missing role id in response: %+v", roleBody.Data)
+	}
+
+	password := "123456"
+	createUser := perform(handler, http.MethodPost, "/api/system/user", adminToken, map[string]any{
+		"nickname": username,
+		"password": password,
+		"roleIds":  []any{roleID},
+		"status":   1,
+		"username": username,
+	})
+	if createUser.Code != http.StatusOK {
+		t.Fatalf("create user %s failed: %d %s", username, createUser.Code, createUser.Body.String())
+	}
+
+	response := perform(handler, http.MethodPost, "/api/auth/login", "", map[string]string{
+		"password": password,
+		"username": username,
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("login %s failed: %d %s", username, response.Code, response.Body.String())
+	}
+	body := decodeBody(t, response)
+	data := body.Data.(map[string]any)
+	token, _ := data["accessToken"].(string)
+	if token == "" {
+		t.Fatalf("missing token for %s", username)
 	}
 	return token
 }

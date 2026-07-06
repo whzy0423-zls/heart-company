@@ -69,17 +69,18 @@ function roleRecord(record: Record<string, any>): SystemRole {
 async function load() {
   loading.value = true;
   try {
-    const [rolePage, menuTree] = await Promise.all([
-      getSystemRoleListApi({
-        name: query.value.name || undefined,
-        page: query.value.page,
-        pageSize: query.value.pageSize,
-      }),
-      getSystemMenuListApi(),
-    ]);
+    const rolePage = await getSystemRoleListApi({
+      name: query.value.name || undefined,
+      page: query.value.page,
+      pageSize: query.value.pageSize,
+    });
     roles.value = rolePage.items;
     total.value = rolePage.total;
-    menus.value = menuTree;
+    try {
+      menus.value = await getSystemMenuListApi();
+    } catch {
+      menus.value = [];
+    }
   } finally {
     loading.value = false;
   }

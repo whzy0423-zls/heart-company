@@ -147,3 +147,13 @@ func (c affectedRowsConn) ExecContext(context.Context, string, []driver.NamedVal
 func (affectedRowsConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
 	return nil, io.EOF
 }
+
+func TestFailWithRawResultUpdatesFailedJob(t *testing.T) {
+	db, cleanup := newAffectedRowsDB(t, 1)
+	defer cleanup()
+
+	err := NewStore(db).FailWithRawResult(context.Background(), "123", "模型失败", `{"shots":[]}`)
+	if err != nil {
+		t.Fatalf("FailWithRawResult returned error: %v", err)
+	}
+}

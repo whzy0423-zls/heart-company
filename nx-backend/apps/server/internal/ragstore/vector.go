@@ -42,7 +42,7 @@ func (s *Store) DocsNeedingEmbedding(ctx context.Context, model string, limit in
 		`SELECT id::text, title, content
 		   FROM rag_documents
 		  WHERE status=$1
-		    AND (embedding IS NULL OR embedding_model <> $2)
+		    AND (embedding IS NULL OR embedding_model <> $2 OR embedded_at IS NULL OR embedded_at < update_time)
 		  ORDER BY update_time DESC
 		  LIMIT $3`,
 		StatusEnabled, model, limit,

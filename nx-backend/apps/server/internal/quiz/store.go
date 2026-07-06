@@ -509,42 +509,85 @@ func (s *Store) DeleteCard(ctx context.Context, appUserID, cardID int64) error {
 	return nil
 }
 
+func NormalizeQuestionInput(in QuestionInput) (QuestionInput, error) {
+	out := in
+	out.Body = strings.TrimSpace(out.Body)
+	out.Dimension = strings.TrimSpace(out.Dimension)
+	out.Status = strings.TrimSpace(out.Status)
+	if out.Status == "" {
+		out.Status = "enabled"
+	}
+	if out.Body == "" {
+		return QuestionInput{}, errors.New("请输入题目内容")
+	}
+	if out.Status != "enabled" && out.Status != "disabled" {
+		return QuestionInput{}, errors.New("题目状态只能是 enabled 或 disabled")
+	}
+	if len(out.Options) < 2 {
+		return QuestionInput{}, errors.New("请至少配置两个题目选项")
+	}
+	seen := map[string]bool{}
+	for i := range out.Options {
+		out.Options[i].ID = strings.TrimSpace(out.Options[i].ID)
+		out.Options[i].Text = strings.TrimSpace(out.Options[i].Text)
+		if out.Options[i].ID == "" || out.Options[i].Text == "" {
+			return QuestionInput{}, errors.New("每个选项都必须包含 id 和 text")
+		}
+		if seen[out.Options[i].ID] {
+			return QuestionInput{}, errors.New("选项 id 不能重复")
+		}
+		seen[out.Options[i].ID] = true
+		normalizedWeights := map[int]int{}
+		for typeID, score := range out.Options[i].Weights {
+			if typeID < 1 || typeID > 9 {
+				return QuestionInput{}, errors.New("选项 weights 只能包含 1-9 型")
+			}
+			normalizedWeights[typeID] = score
+		}
+		out.Options[i].Weights = normalizedWeights
+		if out.Status == "enabled" && len(out.Options[i].Weights) == 0 {
+			return QuestionInput{}, errors.New("启用题目的每个选项都必须配置有效 weights")
+		}
+	}
+	return out, nil
+}
+
 // CreateQuestion 后台新建题目。
 func (s *Store) CreateQuestion(ctx context.Context, in QuestionInput) (Question, error) {
 	var q Question
-	optsJSON, err := json.Marshal(in.Options)
+	in, err := NormalizeQuestionInput(in)
 	if err != nil {
 		return q, err
 	}
-	status := in.Status
-	if status == "" {
-		status = "enabled"
+	optsJSON, err := json.Marshal(in.Options)
+	if err != nil {
+		return q, err
 	}
 	q, err = scanQuestionRow(s.db.QueryRowContext(ctx,
 		`INSERT INTO app_quiz_questions (sort, body, options, dimension, status, quiz_version)
 		 VALUES ($1,$2,$3,$4,$5,$6)
 		 RETURNING `+questionCols,
-		in.Sort, in.Body, optsJSON, in.Dimension, status, quizVersion))
+		in.Sort, in.Body, optsJSON, in.Dimension, in.Status, quizVersion))
 	return q, err
 }
 
 // UpdateQuestion 后台更新题目。
 func (s *Store) UpdateQuestion(ctx context.Context, id int64, in QuestionInput) (Question, error) {
 	var q Question
-	optsJSON, err := json.Marshal(in.Options)
+	in, err := NormalizeQuestionInput(in)
 	if err != nil {
 		return q, err
 	}
-	status := in.Status
-	if status == "" {
-		status = "enabled"
+	optsJSON, err := json.Marshal(in.Options)
+	if err != nil {
+		return q, err
 	}
 	q, err = scanQuestionRow(s.db.QueryRowContext(ctx,
 		`UPDATE app_quiz_questions
 		 SET sort=$1, body=$2, options=$3, dimension=$4, status=$5, update_time=now()
 		 WHERE id=$6
 		 RETURNING `+questionCols,
-		in.Sort, in.Body, optsJSON, in.Dimension, status, id))
+		in.Sort, in.Body, optsJSON, in.Dimension, in.Status, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return q, ErrNotFound
 	}

@@ -9,14 +9,15 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
-// retrieveDocsForQuery 选取用于回答某问题的知识文档。
+// retrieveAppDocsForQuery 选取用于 App 端回答某问题的知识文档。
+// App 端会使用后台知识库（rag_documents）；小程序端不走这里，避免读取后台知识库。
 // 当 embedding 已配置且数据库启用 pgvector 时，用查询向量做语义近邻检索（更准）；
 // 否则回退到「全部启用文档 + 内存关键词打分」（rag.Service 内部完成）。
 //
 // 返回的文档会交给 rag.NewService 再做一轮打分/截断，因此向量检索这里
 // 取稍宽的候选集（topK 命中），既享受语义召回，又保留原有兜底逻辑。
-func (s *Server) retrieveDocsForQuery(ctx context.Context, question string, topK int) ([]rag.Document, error) {
-	base, err := s.miniappRAGDocuments(ctx)
+func (s *Server) retrieveAppDocsForQuery(ctx context.Context, question string, topK int) ([]rag.Document, error) {
+	base, err := s.appRAGDocuments(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +41,7 @@ func (s *Server) retrieveDocsForQuery(ctx context.Context, question string, topK
 	return append(hits, siteDocs...), nil
 }
 
-// siteOnlyDocs 返回 base 中不属于知识库命中的文档（按 Title 粗去重），
+// siteOnlyDocs 返回 base 中不属于后台知识库的站点文档（按 Title 粗去重），
 // 避免站点配置类文档（课程、报名等）被向量检索漏掉。
 func siteOnlyDocs(base, hits []rag.Document) []rag.Document {
 	seen := make(map[string]bool, len(hits))
@@ -49,6 +50,9 @@ func siteOnlyDocs(base, hits []rag.Document) []rag.Document {
 	}
 	out := make([]rag.Document, 0, len(base))
 	for _, d := range base {
+		if len(d.ID) >= 3 && d.ID[:3] == "kb-" {
+			continue
+		}
 		if !seen[d.Title] {
 			out = append(out, d)
 		}

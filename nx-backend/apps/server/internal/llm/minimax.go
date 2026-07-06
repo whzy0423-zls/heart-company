@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,6 +38,27 @@ type VideoAnalysisResult struct {
 	SpeechKeywords []string `json:"speechKeywords"`
 	SpeechOutline  []string `json:"speechOutline"`
 	SpeechTopics   []string `json:"speechTopics"`
+}
+
+type StoryboardRawResultError struct {
+	Message   string
+	RawResult string
+}
+
+func (e *StoryboardRawResultError) Error() string {
+	return e.Message
+}
+
+func NewStoryboardRawResultError(message string, rawResult string) error {
+	return &StoryboardRawResultError{Message: message, RawResult: rawResult}
+}
+
+func StoryboardRawResultFromError(err error) string {
+	var rawErr *StoryboardRawResultError
+	if errors.As(err, &rawErr) {
+		return strings.TrimSpace(rawErr.RawResult)
+	}
+	return ""
 }
 
 type VideoStoryboardInput struct {
@@ -350,14 +372,17 @@ func (g *MiniMaxGenerator) GenerateVideoStoryboard(ctx context.Context, input Vi
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return VideoStoryboardResult{}, fmt.Errorf("分镜设计模型请求失败(%d): %s", resp.StatusCode, compact(raw))
+		return VideoStoryboardResult{}, NewStoryboardRawResultError(
+			fmt.Sprintf("分镜设计模型请求失败(%d): %s", resp.StatusCode, compact(raw)),
+			string(raw),
+		)
 	}
 	var result map[string]any
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return VideoStoryboardResult{}, err
+		return VideoStoryboardResult{}, NewStoryboardRawResultError(err.Error(), string(raw))
 	}
 	if err := baseRespError(result); err != nil {
-		return VideoStoryboardResult{}, err
+		return VideoStoryboardResult{}, NewStoryboardRawResultError(err.Error(), string(raw))
 	}
 	answer := findString(result,
 		"choices.0.message.content",
@@ -368,15 +393,18 @@ func (g *MiniMaxGenerator) GenerateVideoStoryboard(ctx context.Context, input Vi
 	)
 	answer = strings.TrimSpace(answer)
 	if answer == "" {
-		return VideoStoryboardResult{}, fmt.Errorf("分镜设计模型未返回结果")
+		return VideoStoryboardResult{}, NewStoryboardRawResultError("分镜设计模型未返回结果", string(raw))
 	}
 	parsed, err := parseVideoStoryboardDesign(answer)
 	if err != nil {
-		return VideoStoryboardResult{}, err
+		return VideoStoryboardResult{}, NewStoryboardRawResultError(err.Error(), answer)
 	}
 	parsed.RawResult = answer
 	if len(parsed.Shots) == 0 {
-		return VideoStoryboardResult{}, fmt.Errorf("分镜设计模型未返回分镜明细")
+		return VideoStoryboardResult{}, NewStoryboardRawResultError(
+			fmt.Sprintf("分镜设计模型未返回分镜明细，返回片段：%s", previewText(answer)),
+			answer,
+		)
 	}
 	return parsed, nil
 }

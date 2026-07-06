@@ -182,7 +182,8 @@ func (s *Server) miniappBookings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// miniappChat 基于站点内容、九型资料和用户档案做轻量 RAG 问答。
+// miniappChat 基于站点内容和用户档案做轻量 RAG 问答。
+// 后台知识库（rag_documents）仅供 App 端使用，避免小程序端被后台知识库内容影响。
 func (s *Server) miniappChat(w http.ResponseWriter, r *http.Request) {
 	uid := userFromRequest(r).ID
 	if !s.chatLimiter.Allow(uid, time.Now()) {
@@ -207,7 +208,7 @@ func (s *Server) miniappChat(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	docs, err := s.retrieveDocsForQuery(ctx, body.Question, 6)
+	docs, err := s.miniappRAGDocuments(ctx)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -234,15 +235,29 @@ func (s *Server) miniappRAGDocuments(ctx context.Context) ([]rag.Document, error
 		if err != nil {
 			return nil, err
 		}
-		knowledgeDocs, err := s.ragDocs.EnabledDocuments(loadCtx)
-		if err != nil {
-			return nil, err
-		}
-		return mergeMiniappRAGDocuments(miniappRAGDocuments(config), knowledgeDocs), nil
+		return mergeMiniappRAGDocuments(miniappRAGDocuments(config)), nil
 	})
 }
 
-func mergeMiniappRAGDocuments(siteDocs []rag.Document, knowledgeDocs []rag.Document) []rag.Document {
+func mergeMiniappRAGDocuments(siteDocs []rag.Document) []rag.Document {
+	docs := make([]rag.Document, 0, len(siteDocs))
+	docs = append(docs, siteDocs...)
+	return docs
+}
+
+func (s *Server) appRAGDocuments(ctx context.Context) ([]rag.Document, error) {
+	config, err := siteconfig.ReadStore(ctx, s.db, s.env.SiteConfig)
+	if err != nil {
+		return nil, err
+	}
+	knowledgeDocs, err := s.ragDocs.EnabledDocuments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return mergeAppRAGDocuments(miniappRAGDocuments(config), knowledgeDocs), nil
+}
+
+func mergeAppRAGDocuments(siteDocs []rag.Document, knowledgeDocs []rag.Document) []rag.Document {
 	docs := make([]rag.Document, 0, len(siteDocs)+len(knowledgeDocs))
 	docs = append(docs, siteDocs...)
 	docs = append(docs, knowledgeDocs...)

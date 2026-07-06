@@ -59,5 +59,12 @@ describe('system user/role list pagination and dangerous actions', () => {
       expect(text).toContain('@change="handleStatusChange"');
       expect(text).not.toContain('v-model:checked="form.status"');
     });
+
+    it(`${page.name} does not let optional permission helper requests fail the main list`, () => {
+      const text = source(page.file);
+
+      expect(text).not.toContain('Promise.all([');
+      expect(text).toContain('catch');
+    });
   }
 });

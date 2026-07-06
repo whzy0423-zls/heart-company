@@ -1,4 +1,4 @@
-// Package ragstore manages manually curated knowledge used by miniapp RAG chat.
+// Package ragstore manages manually curated knowledge used by App RAG chat.
 package ragstore
 
 import (
@@ -20,6 +20,12 @@ const (
 	StatusDisabled = "disabled"
 	SourceManual   = "manual"
 	queryTimeout   = 10 * time.Second
+	// enabledDocumentsLimit needs to cover seeded App knowledge packs.
+	// The seed-xinzhili packages already contain 800+ enabled documents and
+	// are still being expanded from the source folder, so
+	// keeping the old 200-row cap would silently exclude later curated entries
+	// from App RAG retrieval.
+	enabledDocumentsLimit = 5000
 )
 
 type Store struct {
@@ -109,8 +115,9 @@ func (s *Store) EnabledDocuments(ctx context.Context) ([]rag.Document, error) {
 		   FROM rag_documents
 		  WHERE status=$1
 		  ORDER BY sort ASC, update_time DESC, id DESC
-		  LIMIT 200`,
+		  LIMIT $2`,
 		StatusEnabled,
+		enabledDocumentsLimit,
 	)
 	if err != nil {
 		return nil, err
@@ -198,12 +205,20 @@ func (s *Store) SaveDocument(ctx context.Context, input Document) (Document, err
 		return Document{}, errors.New("invalid knowledge id")
 	}
 	return scanDocument(s.db.QueryRowContext(c,
-		`UPDATE rag_documents
-		    SET title=$1, content=$2, tags=$3::jsonb, status=$4, source=$5, sort=$6, update_time=now()
-		  WHERE id=$7
-		  RETURNING id::text, title, content, tags, status, source, sort, create_time, update_time`,
+		updateDocumentSQL(s.VectorAvailable(c)),
 		doc.Title, doc.Content, string(tagsJSON), doc.Status, doc.Source, doc.Sort, doc.ID,
 	))
+}
+
+func updateDocumentSQL(vectorAvailable bool) string {
+	setEmbedding := ""
+	if vectorAvailable {
+		setEmbedding = " embedding=NULL, embedding_model='', embedded_at=NULL,"
+	}
+	return `UPDATE rag_documents
+		    SET title=$1, content=$2, tags=$3::jsonb, status=$4, source=$5, sort=$6,` + setEmbedding + ` update_time=now()
+		  WHERE id=$7
+		  RETURNING id::text, title, content, tags, status, source, sort, create_time, update_time`
 }
 
 func (s *Store) DeleteDocument(ctx context.Context, id string) (bool, error) {

@@ -24,6 +24,7 @@ import {
   createRAGDocumentApi,
   deleteRAGDocumentApi,
   getRAGDocumentsApi,
+  reindexRAGDocumentsApi,
   updateRAGDocumentApi,
 } from '#/api';
 import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
@@ -31,6 +32,7 @@ import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 
 const loading = ref(false);
 const saving = ref(false);
+const reindexing = ref(false);
 const drawerOpen = ref(false);
 const documents = ref<RAGDocument[]>([]);
 const total = ref(0);
@@ -178,6 +180,21 @@ function removeDocument(record: RAGDocument) {
   });
 }
 
+
+async function handleReindex() {
+  reindexing.value = true;
+  try {
+    const result = await reindexRAGDocumentsApi();
+    message.success(
+      `索引重建完成：本次扫描 ${result.pending}，成功 ${result.done}，失败 ${result.failed}`,
+    );
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '索引重建失败');
+  } finally {
+    reindexing.value = false;
+  }
+}
+
 function statusColor(status: string) {
   return status === 'enabled' ? 'success' : 'default';
 }
@@ -231,6 +248,7 @@ onMounted(load);
           />
           <Button type="primary" @click="search">查询</Button>
           <Button :loading="loading" @click="load">刷新</Button>
+          <Button :loading="reindexing" @click="handleReindex">重建索引</Button>
           <Button type="primary" @click="openCreate">新增知识</Button>
         </Space>
       </div>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AppUserInsight } from '#/api';
+import type { AppUserInsight, QuizCard } from '#/api';
 
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 
@@ -11,6 +11,7 @@ import {
   Drawer,
   Empty,
   Input,
+  message,
   Select,
   Space,
   Table,
@@ -18,7 +19,7 @@ import {
 } from 'ant-design-vue';
 import { useRoute } from 'vue-router';
 
-import { getAppUserInsightsApi } from '#/api';
+import { getAppUserInsightsApi, getQuizCardsApi } from '#/api';
 import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
 
 import PageShell from '../system/components/page-shell.vue';
@@ -71,6 +72,9 @@ const insights = ref<AppUserInsight[]>([]);
 const total = ref(0);
 const detailOpen = ref(false);
 const detail = ref<AppUserInsight>();
+const cardsOpen = ref(false);
+const cardsLoading = ref(false);
+const cards = ref<QuizCard[]>([]);
 const query = reactive({
   keyword: '',
   memberLevel: '',
@@ -91,7 +95,7 @@ const columns = [
   { dataIndex: 'memoryCount', title: '沉淀', width: 110 },
   { dataIndex: 'messageCount', title: '对话', width: 110 },
   { dataIndex: 'latestQuizTime', title: '最近测评', width: 170 },
-  { fixed: 'right' as const, key: 'action', title: '操作', width: 100 },
+  { fixed: 'right' as const, key: 'action', title: '操作', width: 150 },
 ];
 
 const selectedStrengths = computed(() =>
@@ -104,6 +108,33 @@ const selectedScoreTags = computed(() =>
   detail.value ? getScoreTags(detail.value.score) : [],
 );
 
+function cardProfileSummary(card: QuizCard) {
+  const profile = card.profile || {};
+  return (
+    profile.summary ||
+    profile.title ||
+    profile.motive ||
+    `主型 ${card.mainType || '-'} / 侧翼 ${card.wingType || '-'}`
+  );
+}
+
+function cardTypeLabel(value: string) {
+  return value === 'primary' ? '主卡' : value === 'secondary' ? '副卡' : value || '-';
+}
+
+async function openCards(record: AppUserInsight) {
+  detail.value = record;
+  cards.value = [];
+  cardsOpen.value = true;
+  cardsLoading.value = true;
+  try {
+    cards.value = await getQuizCardsApi(record.id);
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '命运卡片加载失败');
+  } finally {
+    cardsLoading.value = false;
+  }
+}
 
 function routeKeyword() {
   const value = route.query.keyword;
@@ -333,9 +364,14 @@ onMounted(() => {
               {{ record.latestQuizTime || '-' }}
             </template>
             <template v-if="column.key === 'action'">
-              <Button size="small" type="link" @click="openDetail(insightRecord(record))">
-                详情
-              </Button>
+              <Space :size="4">
+                <Button size="small" type="link" @click="openDetail(insightRecord(record))">
+                  详情
+                </Button>
+                <Button size="small" type="link" @click="openCards(insightRecord(record))">
+                  命运卡片
+                </Button>
+              </Space>
             </template>
           </template>
         </Table>
@@ -429,6 +465,46 @@ onMounted(() => {
           </div>
           <Empty v-else :image="Empty.PRESENTED_IMAGE_SIMPLE" />
         </div>
+      </div>
+    </Drawer>
+
+    <Drawer
+      v-model:open="cardsOpen"
+      title="命运卡片"
+      width="min(680px, calc(100vw - 32px))"
+    >
+      <div class="card-viewer" :aria-busy="cardsLoading">
+        <Empty v-if="!cardsLoading && cards.length === 0" :image="Empty.PRESENTED_IMAGE_SIMPLE" />
+        <Card
+          v-for="card in cards"
+          :key="card.id"
+          class="fortune-card"
+          size="small"
+        >
+          <div class="fortune-card-head">
+            <div>
+              <strong>{{ card.name || cardTypeLabel(card.cardType) }}</strong>
+              <p>{{ card.relation || '-' }}</p>
+            </div>
+            <Space>
+              <Tag color="processing">{{ cardTypeLabel(card.cardType) }}</Tag>
+              <Tag :color="card.status === 'active' ? 'success' : 'default'">
+                {{ card.status || '-' }}
+              </Tag>
+            </Space>
+          </div>
+          <Descriptions :column="1" bordered size="small">
+            <Descriptions.Item label="主型 / 侧翼">
+              {{ enneagramLabel(card.mainType) }} / {{ enneagramLabel(card.wingType) }}
+            </Descriptions.Item>
+            <Descriptions.Item label="画像摘要">
+              {{ cardProfileSummary(card) }}
+            </Descriptions.Item>
+            <Descriptions.Item label="创建 / 更新">
+              {{ card.createTime || '-' }} / {{ card.updateTime || '-' }}
+            </Descriptions.Item>
+          </Descriptions>
+        </Card>
       </div>
     </Drawer>
   </PageShell>
@@ -545,6 +621,35 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+
+.card-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fortune-card {
+  border-radius: 8px;
+}
+
+.fortune-card-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.fortune-card-head strong,
+.fortune-card-head p {
+  display: block;
+}
+
+.fortune-card-head p {
+  margin: 4px 0 0;
+  color: hsl(var(--muted-foreground));
 }
 
 @media (max-width: 640px) {

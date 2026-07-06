@@ -467,6 +467,34 @@ func TestParseVideoStoryboardDesignCoercesCommonLLMTypeDrift(t *testing.T) {
 	}
 }
 
+func TestGenerateVideoStoryboardEmptyShotsErrorIncludesModelPreview(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{
+				map[string]any{
+					"message": map[string]any{"content": `{"title":"空分镜","styleGuide":["柔和光"],"globalPrompt":"测试短片","shots":[]}`},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{
+		APIKey: "test-key",
+		Model:  "MiniMax-M3",
+	})
+	_, err := generator.GenerateVideoStoryboard(context.Background(), VideoStoryboardInput{
+		Theme: "测试主题",
+	})
+	if err == nil {
+		t.Fatal("expected empty shots to return an error")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "分镜设计模型未返回分镜明细") || !strings.Contains(message, "返回片段") || !strings.Contains(message, "空分镜") {
+		t.Fatalf("expected error to include model preview for diagnosis, got %q", message)
+	}
+}
+
 func TestGenerateVideoStoryboardUsesOpenAICompatibleJSONRequest(t *testing.T) {
 	var gotPath string
 	var requestBody map[string]any
@@ -512,5 +540,61 @@ func TestGenerateVideoStoryboardUsesOpenAICompatibleJSONRequest(t *testing.T) {
 	}
 	if result.Title == "" || len(result.Shots) != 1 {
 		t.Fatalf("expected parsed storyboard result, got %+v", result)
+	}
+}
+
+func TestGenerateVideoStoryboardEmptyShotsErrorExposesRawResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{
+				map[string]any{
+					"message": map[string]any{"content": `{"title":"空分镜","styleGuide":["柔和光"],"globalPrompt":"测试短片","shots":[]}`},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key", Model: "MiniMax-M3"})
+	_, err := generator.GenerateVideoStoryboard(context.Background(), VideoStoryboardInput{Theme: "测试主题"})
+	if err == nil {
+		t.Fatal("expected empty shots to return an error")
+	}
+	raw := StoryboardRawResultFromError(err)
+	if !strings.Contains(raw, `"title":"空分镜"`) || !strings.Contains(raw, `"shots":[]`) {
+		t.Fatalf("expected raw model answer from error, got %q", raw)
+	}
+}
+
+func TestGenerateVideoStoryboardHTTPErrorExposesRawResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error":"upstream overloaded","request_id":"story-500"}`))
+	}))
+	defer server.Close()
+
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key", Model: "MiniMax-M3"})
+	_, err := generator.GenerateVideoStoryboard(context.Background(), VideoStoryboardInput{Theme: "测试主题"})
+	if err == nil {
+		t.Fatal("expected HTTP error")
+	}
+	if raw := StoryboardRawResultFromError(err); !strings.Contains(raw, "story-500") {
+		t.Fatalf("expected raw HTTP response from error, got %q", raw)
+	}
+}
+
+func TestGenerateVideoStoryboardInvalidJSONExposesRawResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`not-json-response`))
+	}))
+	defer server.Close()
+
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key", Model: "MiniMax-M3"})
+	_, err := generator.GenerateVideoStoryboard(context.Background(), VideoStoryboardInput{Theme: "测试主题"})
+	if err == nil {
+		t.Fatal("expected JSON parse error")
+	}
+	if raw := StoryboardRawResultFromError(err); raw != "not-json-response" {
+		t.Fatalf("expected raw invalid JSON response from error, got %q", raw)
 	}
 }
