@@ -20,6 +20,8 @@ import {
   Tag,
 } from 'ant-design-vue';
 
+import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
+
 import {
   deleteSystemMenuApi,
   getSystemMenuListApi,
@@ -66,18 +68,23 @@ const canDelete = computed(() =>
 );
 
 const columns = [
-  { dataIndex: ['meta', 'title'], title: '菜单名称' },
-  { dataIndex: 'name', title: '菜单标识' },
-  { dataIndex: 'path', title: '路由路径' },
-  { dataIndex: 'component', title: '组件' },
+  { dataIndex: ['meta', 'title'], key: 'menuTitle', title: '菜单名称', width: 180 },
+  { dataIndex: 'name', title: '菜单标识', width: 180 },
+  { dataIndex: 'path', title: '路由路径', width: 220 },
+  { dataIndex: 'component', title: '组件', width: 220 },
   { dataIndex: 'type', title: '类型' },
-  { dataIndex: 'authCode', title: '权限码' },
+  { dataIndex: 'authCode', title: '权限码', width: 220 },
   { dataIndex: 'status', title: '状态' },
   { key: 'action', title: '操作', width: 160 },
 ];
 
 function menuRecord(record: Record<string, any>): SystemMenu {
   return record as SystemMenu;
+}
+
+function menuCellText(record: Record<string, any>, dataIndex: unknown) {
+  const key = typeof dataIndex === 'string' ? dataIndex : '';
+  return key ? record[key] : '';
 }
 
 // 父级可选项：目录/菜单都可作父级，扁平化展开。
@@ -197,6 +204,12 @@ onMounted(load);
       row-key="id"
     >
       <template #bodyCell="{ column, record }">
+        <template v-if="column.key === 'menuTitle'">
+          <EllipsisTooltip :text="record.meta?.title || record.name" />
+        </template>
+        <template v-else-if="['name', 'path', 'component', 'authCode'].includes(String(column.dataIndex))">
+          <EllipsisTooltip :text="menuCellText(record, column.dataIndex)" />
+        </template>
         <template v-if="column.dataIndex === 'type'">
           <Tag>{{ record.type }}</Tag>
         </template>

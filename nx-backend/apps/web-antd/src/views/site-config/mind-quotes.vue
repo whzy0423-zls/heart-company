@@ -33,6 +33,8 @@ import {
   saveMindGroupApi,
   updateMindQuoteApi,
 } from '#/api';
+import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 
 const groups = ref<MindGroup[]>([]);
 const quotes = ref<MindQuote[]>([]);
@@ -87,7 +89,7 @@ const groupOptions = computed(() => [
 
 const quoteColumns = [
   { dataIndex: 'sort', title: '排序', width: 70 },
-  { dataIndex: 'title', title: '简短文案' },
+  ellipsisColumn('title', '简短文案', { lines: 2 }),
   { dataIndex: 'groupId', title: '所属分组', width: 130 },
   { dataIndex: 'status', title: '状态', width: 80 },
   { key: 'action', title: '操作', width: 140 },
@@ -260,7 +262,7 @@ async function removeQuote(q: MindQuote) {
           >
             <div class="group-item__main">
               <span class="group-item__name">{{ g.name }}</span>
-              <span class="group-item__intro">{{ g.intro }}</span>
+              <EllipsisTooltip class="group-item__intro" :text="g.intro" />
             </div>
             <div class="group-item__ops" @click.stop>
               <Tag color="blue">{{ g.quoteCount ?? 0 }}</Tag>
@@ -279,10 +281,13 @@ async function removeQuote(q: MindQuote) {
 
       <!-- 右：心语 -->
       <Col :md="16" :xs="24">
-        <Card
-          :title="`心语列表 · ${groupName(activeGroup === '0' ? '' : activeGroup)}`"
-          :bordered="false"
-        >
+        <Card :bordered="false">
+          <template #title>
+            <EllipsisTooltip
+              class="quote-card-title"
+              :text="`心语列表 · ${groupName(activeGroup === '0' ? '' : activeGroup)}`"
+            />
+          </template>
           <template #extra>
             <Space>
               <Button size="small" @click="loadQuotes">刷新</Button>

@@ -21,6 +21,7 @@ import {
 } from 'ant-design-vue';
 
 import { getAppOrderListApi, grantAppOrderApi } from '#/api';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 
 const APP_ORDER_WRITE_PERMISSION = 'Customer:AppOrders:Write';
 
@@ -59,9 +60,9 @@ const productOptions = [
 ];
 
 const columns = [
-  { dataIndex: 'outTradeNo', fixed: 'left' as const, title: '订单号', width: 230 },
+  ellipsisColumn('outTradeNo', '订单号', { fixed: 'left', width: 230 }),
   { dataIndex: 'phone', title: '手机号', width: 150 },
-  { dataIndex: 'title', title: '商品', width: 140 },
+  ellipsisColumn('title', '商品', { width: 140 }),
   { dataIndex: 'amount', title: '金额', width: 100 },
   { dataIndex: 'status', title: '状态', width: 120 },
   { dataIndex: 'memberLevel', title: '会员', width: 100 },

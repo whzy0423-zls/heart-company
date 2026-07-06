@@ -38,6 +38,7 @@ import {
   refreshVideoGenerationApi,
   uploadFileApi,
 } from '#/api';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 import {
   useUploadAssetPreviewResolver,
   useUploadAssetPreviewUrl,
@@ -166,7 +167,7 @@ const columns = [
   { dataIndex: 'type', title: '类型', width: 90 },
   { dataIndex: 'name', title: '资产名称', width: 180 },
   { dataIndex: 'url', title: '预览', width: 220 },
-  { dataIndex: 'remark', ellipsis: true, title: '备注' },
+  ellipsisColumn('remark', '备注', { lines: 2 }),
   { dataIndex: 'createTime', title: '创建时间', width: 180 },
   { fixed: 'right' as const, key: 'action', title: '操作', width: 110 },
 ];

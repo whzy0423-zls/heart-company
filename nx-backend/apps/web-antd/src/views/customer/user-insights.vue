@@ -19,6 +19,7 @@ import {
 import { useRoute } from 'vue-router';
 
 import { getAppUserInsightsApi } from '#/api';
+import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
 
 import PageShell from '../system/components/page-shell.vue';
 import {
@@ -316,7 +317,7 @@ onMounted(() => {
             </template>
             <template v-if="column.dataIndex === 'profile'">
               <div class="summary-cell">
-                <span>{{ getProfileSummary(record.profile) }}</span>
+                <EllipsisTooltip :text="getProfileSummary(record.profile)" />
                 <Tag :color="insightStatusColors[insightStatus(insightRecord(record))]">
                   {{ insightStatus(insightRecord(record)) }}
                 </Tag>

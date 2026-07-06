@@ -18,6 +18,7 @@ import {
 } from 'ant-design-vue';
 
 import { getAdminAuditLogsApi } from '#/api';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 
 const loading = ref(false);
 const logs = ref<AdminAuditLog[]>([]);
@@ -53,7 +54,7 @@ const columns = [
   { dataIndex: 'action', title: '动作', width: 170 },
   { dataIndex: 'targetType', title: '对象类型', width: 140 },
   { dataIndex: 'targetId', title: '对象 ID', width: 120 },
-  { dataIndex: 'summary', ellipsis: true, title: '摘要' },
+  ellipsisColumn('summary', '摘要', { lines: 2 }),
   { dataIndex: 'ip', title: 'IP', width: 150 },
   { fixed: 'right' as const, key: 'action', title: '操作', width: 100 },
 ];

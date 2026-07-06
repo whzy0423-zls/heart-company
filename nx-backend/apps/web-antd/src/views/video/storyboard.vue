@@ -35,6 +35,7 @@ import {
   retryVideoStoryboardApi,
   updateVideoStoryboardApi,
 } from '#/api';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 
 const loading = ref(false);
 const creating = ref(false);
@@ -84,8 +85,8 @@ const statusMeta: Record<string, { color: string; text: string }> = {
 type StoryboardEditorShot = VideoStoryboardShot & { _key: string };
 
 const columns = [
-  { dataIndex: 'title', ellipsis: true, title: '分镜方案', width: 220 },
-  { dataIndex: 'theme', ellipsis: true, title: '主题', width: 240 },
+  ellipsisColumn('title', '分镜方案', { width: 220 }),
+  ellipsisColumn('theme', '主题', { width: 240 }),
   { dataIndex: 'status', title: '状态', width: 110 },
   { dataIndex: 'shots', title: '分镜', width: 140 },
   { dataIndex: 'globalPrompt', title: '全局提示词', width: 420 },

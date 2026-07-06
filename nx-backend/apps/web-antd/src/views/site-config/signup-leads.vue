@@ -39,6 +39,8 @@ import {
   getSystemUserListApi,
   saveSignupFollowApi,
 } from '#/api';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
+import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
 
 import PageShell from '../system/components/page-shell.vue';
 
@@ -126,7 +128,7 @@ const columns = [
   { dataIndex: 'owner', title: '负责人', width: 140 },
   { dataIndex: 'nextFollowTime', title: '下次跟进', width: 170 },
   { dataIndex: 'interest', title: '兴趣方向', width: 150 },
-  { dataIndex: 'message', ellipsis: true, title: '咨询需求' },
+  ellipsisColumn('message', '咨询需求', { lines: 2 }),
   { dataIndex: 'createTime', title: '提交时间', width: 180 },
   { fixed: 'right' as const, key: 'action', title: '操作', width: 112 },
 ];
@@ -397,8 +399,8 @@ watch(
                   {{ record.name?.slice(0, 1) || '客' }}
                 </div>
                 <div class="customer-main">
-                  <div class="customer-name">{{ record.name }}</div>
-                  <div class="customer-sub">{{ record.createTime }}</div>
+                  <EllipsisTooltip class="customer-name" :text="record.name" />
+                  <EllipsisTooltip class="customer-sub" :text="record.createTime" />
                 </div>
               </div>
             </template>
@@ -428,7 +430,7 @@ watch(
               {{ record.nextFollowTime || '-' }}
             </template>
             <template v-if="column.dataIndex === 'message'">
-              <span>{{ record.message || '-' }}</span>
+              <EllipsisTooltip :lines="2" :text="record.message" />
             </template>
             <template v-if="column.key === 'action'">
               <Button

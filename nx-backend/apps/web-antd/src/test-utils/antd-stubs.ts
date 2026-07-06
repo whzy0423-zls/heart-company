@@ -93,6 +93,30 @@ export const Table = defineComponent({
       );
   },
 });
+
+export const Tooltip = defineComponent({
+  inheritAttrs: false,
+  name: 'Tooltip',
+  props: {
+    overlayStyle: { default: () => ({}), type: Object },
+    placement: { default: 'topLeft', type: String },
+    title: { default: '', type: [Number, String] },
+  },
+  setup(props, { attrs, slots }) {
+    return () =>
+      h(
+        'span',
+        {
+          ...attrs,
+          class: ['tooltip-stub', attrs.class],
+          'data-placement': props.placement,
+          'data-title': String(props.title ?? ''),
+        },
+        slots.default?.(),
+      );
+  },
+});
+
 export const Tag = passthrough('Tag', 'span');
 export const Textarea = passthrough('Textarea', 'textarea');
 

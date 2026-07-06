@@ -29,6 +29,8 @@ import {
   refreshVideoGenerationApi,
   uploadFileApi,
 } from '#/api';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
+import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
 import { useUploadAssetPreviewResolver } from '#/utils/upload-asset-preview';
 
 import AssetPicker from './components/AssetPicker.vue';
@@ -395,13 +397,13 @@ const generationParams = (record: VideoGeneration) =>
 const previewVideoUrl = (url?: string) => videoPreview.resolve(url);
 
 const columns = [
-  { dataIndex: 'prompt', ellipsis: true, title: '提示词' },
-  { dataIndex: 'taskId', ellipsis: true, title: '任务 ID', width: 260 },
+  ellipsisColumn('prompt', '提示词', { lines: 2 }),
+  ellipsisColumn('taskId', '任务 ID', { width: 260 }),
   { dataIndex: 'model', title: '模型', width: 150 },
   { dataIndex: 'params', title: '参数', width: 130 },
   { dataIndex: 'videoUrl', title: '视频', width: 260 },
   { dataIndex: 'status', title: '状态', width: 110 },
-  { dataIndex: 'errorMessage', ellipsis: true, title: '失败原因', width: 180 },
+  { dataIndex: 'errorMessage', title: '失败原因', width: 180 },
   { dataIndex: 'createTime', title: '生成时间', width: 180 },
   { dataIndex: 'action', title: '操作', width: 100 },
 ];
@@ -539,7 +541,7 @@ onMounted(() => {
                   :key="item"
                   class="upload-item"
                 >
-                  <span class="upload-name" :title="item">{{ item }}</span>
+                  <EllipsisTooltip class="upload-name" :text="item" />
                   <Button
                     danger
                     size="small"
@@ -574,7 +576,7 @@ onMounted(() => {
                   :key="item"
                   class="upload-item"
                 >
-                  <span class="upload-name" :title="item">{{ item }}</span>
+                  <EllipsisTooltip class="upload-name" :text="item" />
                   <Button
                     danger
                     size="small"
@@ -609,7 +611,7 @@ onMounted(() => {
                   :key="item"
                   class="upload-item"
                 >
-                  <span class="upload-name" :title="item">{{ item }}</span>
+                  <EllipsisTooltip class="upload-name" :text="item" />
                   <Button
                     danger
                     size="small"
@@ -726,9 +728,7 @@ onMounted(() => {
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.dataIndex === 'taskId'">
-                <span class="task-id" :title="record.taskId">
-                  {{ record.taskId || '-' }}
-                </span>
+                <EllipsisTooltip class="task-id" :text="record.taskId" />
               </template>
               <template v-else-if="column.dataIndex === 'params'">
                 <span class="generation-params">

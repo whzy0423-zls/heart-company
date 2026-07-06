@@ -32,6 +32,7 @@ import {
   getVoiceProfilesApi,
   uploadFileApi,
 } from '#/api';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 import {
   useUploadAssetPreviewResolver,
   useUploadAssetPreviewUrl,
@@ -81,7 +82,7 @@ const columns = [
   { dataIndex: 'voiceId', title: 'Voice ID', width: 240 },
   { dataIndex: 'status', title: '状态', width: 110 },
   { dataIndex: 'sampleUrl', title: '样本预览', width: 260 },
-  { dataIndex: 'remark', ellipsis: true, title: '备注' },
+  ellipsisColumn('remark', '备注', { lines: 2 }),
   { dataIndex: 'createTime', title: '创建时间', width: 180 },
   { fixed: 'right' as const, key: 'action', title: '操作', width: 190 },
 ];

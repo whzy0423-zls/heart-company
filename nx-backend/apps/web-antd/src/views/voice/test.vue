@@ -25,6 +25,7 @@ import {
   getVoiceGenerationsApi,
   getVoiceProfilesApi,
 } from '#/api';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 import { useUploadAssetPreviewResolver } from '#/utils/upload-asset-preview';
 
 const accessStore = useAccessStore();
@@ -70,7 +71,7 @@ const currentProfile = computed(() =>
 );
 
 const columns = [
-  { dataIndex: 'text', ellipsis: true, title: '测试文本' },
+  ellipsisColumn('text', '测试文本', { lines: 2 }),
   { dataIndex: 'voiceId', title: 'Voice ID', width: 220 },
   { dataIndex: 'audioUrl', title: '音频', width: 280 },
   { dataIndex: 'status', title: '状态', width: 100 },
