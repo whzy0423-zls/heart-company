@@ -126,6 +126,7 @@ var defaultMenus = []seedMenu{
 	{ID: 507, PID: 500, Name: "CustomerAppChat", Path: "/customer/app-chat", Component: "/customer/app-chat", AuthCode: "Customer:AppChat:List", Type: "menu", Sort: 5, Icon: "lucide:messages-square", Title: "聊天质检"},
 	{ID: 508, PID: 500, Name: "CustomerAppMemory", Path: "/customer/app-memories", Component: "/customer/app-memories", AuthCode: "Customer:AppMemory:List", Type: "menu", Sort: 6, Icon: "lucide:database-zap", Title: "私库记忆"},
 	{ID: 509, PID: 508, Name: "CustomerAppMemoryWrite", AuthCode: "Customer:AppMemory:Write", Type: "button", Sort: 1, Icon: "lucide:pencil", Title: "管理私库记忆"},
+	{ID: 510, PID: 500, Name: "CustomerQuizQuestions", Path: "/customer/quiz-questions", Component: "/quiz/questions", AuthCode: "Website:Write", Type: "menu", Sort: 7, Icon: "lucide:list-checks", Title: "测评题库"},
 	{ID: 600, PID: 0, Name: "MessageCenter", Path: "/message", Type: "catalog", Sort: 18, Icon: "lucide:bell-ring", Title: "消息中心"},
 	{ID: 601, PID: 600, Name: "MessageManagement", Path: "/message/management", Component: "/message/management", AuthCode: "Message:Manage:List", Type: "menu", Sort: 1, Icon: "lucide:mail-check", Title: "消息管理"},
 	{ID: 602, PID: 600, Name: "PushManagement", Path: "/message/push", Component: "/message/push", AuthCode: "Push:Manage", Type: "menu", Sort: 2, Icon: "lucide:send", Title: "推送管理"},

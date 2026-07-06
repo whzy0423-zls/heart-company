@@ -73,17 +73,19 @@ function userRecord(record: Record<string, any>): SystemUser {
 async function load() {
   loading.value = true;
   try {
-    const [userPage, rolePage] = await Promise.all([
-      getSystemUserListApi({
-        page: query.value.page,
-        pageSize: query.value.pageSize,
-        username: query.value.username || undefined,
-      }),
-      getSystemRoleListApi({ pageSize: 100 }),
-    ]);
+    const userPage = await getSystemUserListApi({
+      page: query.value.page,
+      pageSize: query.value.pageSize,
+      username: query.value.username || undefined,
+    });
     users.value = userPage.items;
     total.value = userPage.total;
-    roles.value = rolePage.items;
+    try {
+      const rolePage = await getSystemRoleListApi({ pageSize: 100 });
+      roles.value = rolePage.items;
+    } catch {
+      roles.value = [];
+    }
   } finally {
     loading.value = false;
   }

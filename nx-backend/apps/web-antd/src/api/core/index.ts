@@ -14,6 +14,7 @@ export * from './message';
 export * from './mind-quotes';
 export * from './model-config';
 export * from './push';
+export * from './quiz';
 export * from './rag';
 export * from './signup';
 export * from './site-config';

@@ -37,3 +37,18 @@ export function getSiteConfigApi() {
 export function updateSiteConfigApi(data: SiteConfig) {
   return requestClient.put<SiteConfig>('/site-config', data);
 }
+
+
+export interface SiteBuildStatus {
+  durationMs: number;
+  finishedAt: string;
+  log: string;
+  message: string;
+  queuedNext: boolean;
+  startedAt: string;
+  state: string;
+}
+
+export function getSiteBuildStatusApi() {
+  return requestClient.get<SiteBuildStatus>('/site-config/build-status');
+}

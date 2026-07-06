@@ -46,3 +46,14 @@ export function updateRAGDocumentApi(id: string, data: RAGDocumentInput) {
 export function deleteRAGDocumentApi(id: string) {
   return requestClient.delete<boolean>(`/rag/documents/${id}`);
 }
+
+
+export interface RAGReindexResult {
+  done: number;
+  failed: number;
+  pending: number;
+}
+
+export function reindexRAGDocumentsApi() {
+  return requestClient.post<RAGReindexResult>('/rag/reindex', {});
+}

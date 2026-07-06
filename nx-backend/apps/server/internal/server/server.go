@@ -377,10 +377,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/signups/detail", s.method(http.MethodGet, s.requirePermission("Customer:Signup:List", s.signupDetail)))
 	s.mux.HandleFunc("/api/signups/follow", s.method(http.MethodPut, s.requirePermission("Customer:Signup:List", s.signupFollow)))
 	s.mux.HandleFunc("/api/signups/events", s.method(http.MethodGet, s.requirePermission("Customer:Signup:List", s.signupEvents)))
-	s.mux.HandleFunc("/api/voice/profiles/list", s.method(http.MethodGet, s.requirePermission("Voice:Profile:Manage", s.voiceProfiles)))
+	s.mux.HandleFunc("/api/voice/profiles/list", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage"}, s.voiceProfiles)))
 	s.mux.HandleFunc("/api/voice/profiles", s.method(http.MethodPost, s.requirePermission("Voice:Profile:Manage", s.createVoiceProfile)))
 	s.mux.HandleFunc("/api/voice/profiles/", s.requirePermission("Voice:Profile:Manage", s.voiceProfileByID))
-	s.mux.HandleFunc("/api/voice/options", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage", "Voice:Content:Manage"}, s.voiceOptions)))
+	s.mux.HandleFunc("/api/voice/options", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage", "Voice:Content:Manage", "Reading:Article:Manage"}, s.voiceOptions)))
 	s.mux.HandleFunc("/api/voice/generate", s.method(http.MethodPost, s.requirePermission("Voice:Test:Manage", s.generateVoice)))
 	s.mux.HandleFunc("/api/voice/generations/list", s.method(http.MethodGet, s.requirePermission("Voice:Test:Manage", s.voiceGenerations)))
 	s.mux.HandleFunc("/api/voice/content/generate", s.method(http.MethodPost, s.requirePermission("Voice:Content:Manage", s.generateVoiceContent)))
@@ -389,14 +389,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/video/generations/list", s.method(http.MethodGet, s.requirePermission("Video:Generate:Manage", s.videoGenerations)))
 	s.mux.HandleFunc("/api/video/generations/", s.requirePermission("Video:Generate:Manage", s.videoGenerationByID))
 	s.mux.HandleFunc("/api/video/analysis", s.method(http.MethodPost, s.requirePermission("Video:Analysis:Manage", s.createVideoAnalysis)))
-	s.mux.HandleFunc("/api/video/analysis/list", s.method(http.MethodGet, s.requirePermission("Video:Analysis:Manage", s.videoAnalysisList)))
+	s.mux.HandleFunc("/api/video/analysis/list", s.method(http.MethodGet, s.requireAnyPermission([]string{"Video:Analysis:Manage", "Video:Storyboard:Manage"}, s.videoAnalysisList)))
 	s.mux.HandleFunc("/api/video/analysis/", s.requirePermission("Video:Analysis:Manage", s.videoAnalysisByID))
 	s.mux.HandleFunc("/api/video/storyboards", s.requirePermission("Video:Storyboard:Manage", s.videoStoryboards))
 	s.mux.HandleFunc("/api/video/storyboards/list", s.method(http.MethodGet, s.requirePermission("Video:Storyboard:Manage", s.videoStoryboardList)))
 	s.mux.HandleFunc("/api/video/storyboards/", s.requirePermission("Video:Storyboard:Manage", s.videoStoryboardByID))
 	s.mux.HandleFunc("/api/video/assets/list", s.method(http.MethodGet, s.requirePermission("Video:Asset:Manage", s.videoAssetList)))
 	s.mux.HandleFunc("/api/video/assets/generate-image", s.method(http.MethodPost, s.requirePermission("Video:Asset:Manage", s.generateImageAsset)))
-	s.mux.HandleFunc("/api/video/assets/polish-prompt", s.method(http.MethodPost, s.requirePermission("Video:Asset:Manage", s.polishPrompt)))
+	s.mux.HandleFunc("/api/video/assets/polish-prompt", s.method(http.MethodPost, s.requireAnyPermission([]string{"Video:Asset:Manage", "Video:Generate:Manage"}, s.polishPrompt)))
 	s.mux.HandleFunc("/api/video/assets", s.method(http.MethodPost, s.requirePermission("Video:Asset:Manage", s.createVideoAsset)))
 	s.mux.HandleFunc("/api/video/assets/", s.requirePermission("Video:Asset:Manage", s.videoAssetByID))
 	s.mux.HandleFunc("/api/rag/documents", s.requirePermission("RAG:Knowledge:Manage", s.ragDocuments))
@@ -406,7 +406,7 @@ func (s *Server) routes() {
 	// 测评题库管理 + 命运卡片查看（后台）
 	s.mux.HandleFunc("/api/quiz/questions", s.requirePermission("Website:Write", s.adminQuizQuestions))
 	s.mux.HandleFunc("/api/quiz/questions/", s.requirePermission("Website:Write", s.adminQuizQuestionByID))
-	s.mux.HandleFunc("/api/quiz/cards", s.method(http.MethodGet, s.requirePermission("Website:Read", s.adminQuizCards)))
+	s.mux.HandleFunc("/api/quiz/cards", s.method(http.MethodGet, s.requireAnyPermission([]string{"Website:Read", "Customer:UserInsights:List"}, s.adminQuizCards)))
 	s.mux.HandleFunc("/api/mind-groups", s.requirePermission("Website:Write", s.adminMindGroups))
 	s.mux.HandleFunc("/api/mind-quotes", s.requirePermission("Website:Write", s.adminMindQuotes))
 	s.mux.HandleFunc("/api/mind-quotes/", s.requirePermission("Website:Write", s.adminMindQuoteByID))
@@ -1859,7 +1859,7 @@ func (s *Server) runVideoStoryboard(id string) {
 		s.failVideoStoryboardTask(id, "AI 分镜设计未启用，请先在模型配置中配置对话模型")
 		return
 	}
-	result, err := gen.GenerateVideoStoryboard(ctx, llm.VideoStoryboardInput{
+	input := llm.VideoStoryboardInput{
 		AnalysisID:     analysis.ID,
 		Assets:         analysis.Assets,
 		AudioSummary:   analysis.AudioSummary,
@@ -1871,9 +1871,12 @@ func (s *Server) runVideoStoryboard(id string) {
 		SpeechTopics:   analysis.SpeechTopics,
 		Theme:          job.Theme,
 		VideoName:      analysis.VideoName,
+	}
+	result, err := generateVideoStoryboardWithRetry(ctx, func(attemptCtx context.Context) (llm.VideoStoryboardResult, error) {
+		return gen.GenerateVideoStoryboard(attemptCtx, input)
 	})
 	if err != nil {
-		s.failVideoStoryboardTask(id, err.Error())
+		s.failVideoStoryboardTaskWithRawResult(id, err.Error(), llm.StoryboardRawResultFromError(err))
 		return
 	}
 	completeCtx, completeCancel := taskPersistContext()
@@ -1889,10 +1892,34 @@ func (s *Server) runVideoStoryboard(id string) {
 	}
 }
 
+func generateVideoStoryboardWithRetry(ctx context.Context, generate func(context.Context) (llm.VideoStoryboardResult, error)) (llm.VideoStoryboardResult, error) {
+	var failures []string
+	var lastRawResult string
+	for attempt := 1; attempt <= 2; attempt++ {
+		result, err := generate(ctx)
+		if err == nil {
+			return result, nil
+		}
+		if raw := llm.StoryboardRawResultFromError(err); raw != "" {
+			lastRawResult = raw
+		}
+		failures = append(failures, fmt.Sprintf("第 %d 次失败：%v", attempt, err))
+	}
+	message := fmt.Sprintf("分镜设计自动重试后仍失败：%s", strings.Join(failures, "；"))
+	if lastRawResult != "" {
+		return llm.VideoStoryboardResult{}, llm.NewStoryboardRawResultError(message, lastRawResult)
+	}
+	return llm.VideoStoryboardResult{}, fmt.Errorf("%s", message)
+}
+
 func (s *Server) failVideoStoryboardTask(id string, message string) {
+	s.failVideoStoryboardTaskWithRawResult(id, message, "")
+}
+
+func (s *Server) failVideoStoryboardTaskWithRawResult(id string, message string, rawResult string) {
 	ctx, cancel := taskPersistContext()
 	defer cancel()
-	if err := s.storyboards.Fail(ctx, id, message); err != nil {
+	if err := s.storyboards.FailWithRawResult(ctx, id, message, rawResult); err != nil {
 		log.Printf("video storyboard fail update failed id=%s: %v", id, err)
 	}
 }

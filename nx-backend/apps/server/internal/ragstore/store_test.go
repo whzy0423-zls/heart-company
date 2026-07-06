@@ -1,6 +1,10 @@
 package ragstore
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
 func TestNormalizeDocumentPreparesManualKnowledge(t *testing.T) {
 	doc, err := NormalizeDocument(Document{
@@ -42,5 +46,60 @@ func TestToRAGDocumentsOnlyReturnsEnabledDocuments(t *testing.T) {
 	}
 	if docs[0].ID != "kb-1" || docs[0].Title != "可用知识" || docs[0].Tags[0] != "成长" {
 		t.Fatalf("unexpected RAG document: %+v", docs[0])
+	}
+}
+
+func TestEnabledDocumentsLimitCoversSeededKnowledgePack(t *testing.T) {
+	if enabledDocumentsLimit < 5000 {
+		t.Fatalf("enabledDocumentsLimit=%d is too small for the expanding seeded App knowledge pack", enabledDocumentsLimit)
+	}
+	source := readSourceFile(t, "store.go")
+	if strings.Contains(source, "LIMIT 200") {
+		t.Fatal("EnabledDocuments must not keep the old 200-row cap; it would hide later seed entries from App RAG")
+	}
+	if !strings.Contains(source, "LIMIT $2") {
+		t.Fatal("EnabledDocuments should use the configured enabledDocumentsLimit instead of a hard-coded small LIMIT")
+	}
+}
+
+func TestSaveDocumentUpdateInvalidatesExistingEmbedding(t *testing.T) {
+	source := readSourceFile(t, "store.go")
+	if !strings.Contains(source, "embedding=NULL") || !strings.Contains(source, "embedding_model=''") || !strings.Contains(source, "embedded_at=NULL") {
+		t.Fatal("updating a RAG document should invalidate stale embedding fields")
+	}
+}
+
+func TestDocsNeedingEmbeddingIncludesStaleUpdatedDocuments(t *testing.T) {
+	source := readSourceFile(t, "vector.go")
+	if !strings.Contains(source, "embedded_at IS NULL") || !strings.Contains(source, "embedded_at < update_time") {
+		t.Fatal("DocsNeedingEmbedding should include documents updated after embedding")
+	}
+}
+
+func readSourceFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func TestUpdateDocumentSQLSkipsEmbeddingColumnsWhenVectorUnavailable(t *testing.T) {
+	query := updateDocumentSQL(false)
+	if strings.Contains(query, "embedding") || strings.Contains(query, "embedded_at") {
+		t.Fatalf("non-vector update SQL must not reference optional embedding columns: %s", query)
+	}
+	if !strings.Contains(query, "update_time=now()") {
+		t.Fatalf("expected update_time refresh in update SQL: %s", query)
+	}
+}
+
+func TestUpdateDocumentSQLInvalidatesEmbeddingWhenVectorAvailable(t *testing.T) {
+	query := updateDocumentSQL(true)
+	for _, want := range []string{"embedding=NULL", "embedding_model=''", "embedded_at=NULL"} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("vector update SQL should contain %s: %s", want, query)
+		}
 	}
 }

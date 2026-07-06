@@ -279,13 +279,17 @@ func (s *Store) Complete(ctx context.Context, id string, result Result) error {
 }
 
 func (s *Store) Fail(ctx context.Context, id string, message string) error {
+	return s.FailWithRawResult(ctx, id, message, "")
+}
+
+func (s *Store) FailWithRawResult(ctx context.Context, id string, message string, rawResult string) error {
 	if strings.TrimSpace(message) == "" {
 		message = "分镜设计失败"
 	}
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE video_storyboards
-		    SET status='failed', error_message=$1, update_time=now()
-		  WHERE id=$2`, message, id)
+		    SET status='failed', error_message=$1, raw_result=$2, update_time=now()
+		  WHERE id=$3`, message, strings.TrimSpace(rawResult), id)
 	return err
 }
 

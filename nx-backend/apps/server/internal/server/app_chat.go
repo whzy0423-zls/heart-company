@@ -117,7 +117,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), s.chatTimeout)
 	defer cancel()
 
-	docs, _ := s.retrieveDocsForQuery(ctx, body.Question, 6)
+	docs, _ := s.retrieveAppDocsForQuery(ctx, body.Question, 6)
 	profile := rag.UserProfile{}
 	if appUser, err := s.appUsers.FindByID(ctx, userInfo.ID); err == nil {
 		profile.Nickname = appUser.Nickname

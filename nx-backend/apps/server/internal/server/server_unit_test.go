@@ -766,6 +766,44 @@ func TestAdminBrandingPrivateEndpointRequiresPermission(t *testing.T) {
 	}
 }
 
+func TestCrossModuleHelperEndpointsAllowOwningPagePermissions(t *testing.T) {
+	source, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	expectRoutes := []string{
+		`s.mux.HandleFunc("/api/voice/profiles/list", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage"}, s.voiceProfiles)))`,
+		`s.mux.HandleFunc("/api/voice/options", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage", "Voice:Content:Manage", "Reading:Article:Manage"}, s.voiceOptions)))`,
+		`s.mux.HandleFunc("/api/video/analysis/list", s.method(http.MethodGet, s.requireAnyPermission([]string{"Video:Analysis:Manage", "Video:Storyboard:Manage"}, s.videoAnalysisList)))`,
+		`s.mux.HandleFunc("/api/video/assets/polish-prompt", s.method(http.MethodPost, s.requireAnyPermission([]string{"Video:Asset:Manage", "Video:Generate:Manage"}, s.polishPrompt)))`,
+	}
+	for _, route := range expectRoutes {
+		if !strings.Contains(text, route) {
+			t.Fatalf("expected helper route permission to include owning page permission: %s", route)
+		}
+	}
+}
+
+func TestNewAdminHelperEndpointsAllowOwningPagePermissions(t *testing.T) {
+	source, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	if !strings.Contains(text, `s.mux.HandleFunc("/api/site-config/build-status", s.method(http.MethodGet, s.requirePermission("Website:Write", s.siteBuildStatus)))`) {
+		t.Fatal("build status exposes build logs and must require Website:Write")
+	}
+	expectRoutes := []string{
+		`s.mux.HandleFunc("/api/quiz/cards", s.method(http.MethodGet, s.requireAnyPermission([]string{"Website:Read", "Customer:UserInsights:List"}, s.adminQuizCards)))`,
+	}
+	for _, route := range expectRoutes {
+		if !strings.Contains(text, route) {
+			t.Fatalf("expected page helper route permission: %s", route)
+		}
+	}
+}
+
 func TestLoginUsesAccessibleDefaultHomePath(t *testing.T) {
 	source, err := os.ReadFile("server.go")
 	if err != nil {

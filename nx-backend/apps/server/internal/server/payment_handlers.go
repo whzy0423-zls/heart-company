@@ -306,7 +306,7 @@ func (s *Server) reportContent(w http.ResponseWriter, r *http.Request) {
 		"请基于九型人格知识，为主型 %d 号的用户生成一份结构化的深度性格报告，包含：性格画像、核心动机与恐惧、优势、成长盲点、人际关系建议、职业发展建议。语气专业而温暖。",
 		user.MainType,
 	)
-	docs, err := s.retrieveDocsForQuery(ctx, question, 8)
+	docs, err := s.miniappRAGDocuments(ctx)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return

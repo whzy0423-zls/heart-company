@@ -54,6 +54,9 @@ export function getSystemUserListApi(params?: Record<string, any>) {
 }
 
 export function saveSystemUserApi(data: SystemUser) {
+  if (data.id) {
+    return requestClient.put<SystemUser>(`/system/user/${data.id}`, data);
+  }
   return requestClient.post<SystemUser>('/system/user', data);
 }
 
@@ -68,6 +71,9 @@ export function getSystemRoleListApi(params?: Record<string, any>) {
 }
 
 export function saveSystemRoleApi(data: SystemRole) {
+  if (data.id) {
+    return requestClient.put<SystemRole>(`/system/role/${data.id}`, data);
+  }
   return requestClient.post<SystemRole>('/system/role', data);
 }
 
@@ -80,6 +86,9 @@ export function getSystemMenuListApi() {
 }
 
 export function saveSystemMenuApi(data: SystemMenu) {
+  if (data.id) {
+    return requestClient.put<SystemMenu>(`/system/menu/${data.id}`, data);
+  }
   return requestClient.post<SystemMenu>('/system/menu', data);
 }
 
