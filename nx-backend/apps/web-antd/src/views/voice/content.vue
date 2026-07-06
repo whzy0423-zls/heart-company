@@ -31,6 +31,7 @@ import {
   getVoiceOptionsApi,
   uploadFileApi,
 } from '#/api';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 import { useUploadAssetPreviewResolver } from '#/utils/upload-asset-preview';
 
 const accessStore = useAccessStore();
@@ -94,7 +95,7 @@ const selectedVoice = computed(() =>
 );
 
 const columns = [
-  { dataIndex: 'title', ellipsis: true, title: '标题', width: 180 },
+  ellipsisColumn('title', '标题', { width: 180 }),
   { dataIndex: 'sourceType', title: '类型', width: 110 },
   { dataIndex: 'voiceName', title: '音色', width: 180 },
   { dataIndex: 'audioUrl', title: '音频', width: 280 },

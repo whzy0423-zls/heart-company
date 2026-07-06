@@ -26,6 +26,8 @@ import {
   getRAGDocumentsApi,
   updateRAGDocumentApi,
 } from '#/api';
+import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 
 const loading = ref(false);
 const saving = ref(false);
@@ -61,10 +63,10 @@ const editStatusOptions = [
 ];
 
 const columns = [
-  { dataIndex: 'title', title: '标题', width: 220 },
+  ellipsisColumn('title', '标题', { width: 220 }),
   { dataIndex: 'status', title: '状态', width: 100 },
   { dataIndex: 'tags', title: '标签', width: 260 },
-  { dataIndex: 'content', ellipsis: true, title: '内容摘要' },
+  { dataIndex: 'content', title: '内容摘要' },
   { dataIndex: 'sort', title: '排序', width: 90 },
   { dataIndex: 'updateTime', title: '更新时间', width: 180 },
   { fixed: 'right' as const, key: 'action', title: '操作', width: 220 },
@@ -257,13 +259,13 @@ onMounted(load);
           <template v-else-if="column.dataIndex === 'tags'">
             <Space :size="4" wrap>
               <Tag v-for="tag in record.tags" :key="tag" color="blue">
-                {{ tag }}
+                <EllipsisTooltip class="tag-tooltip" :text="tag" />
               </Tag>
               <span v-if="!record.tags?.length">-</span>
             </Space>
           </template>
           <template v-else-if="column.dataIndex === 'content'">
-            <div class="content-preview">{{ record.content || '-' }}</div>
+            <EllipsisTooltip :lines="2" :text="record.content" />
           </template>
           <template v-else-if="column.key === 'action'">
             <Space :size="4">
@@ -384,15 +386,6 @@ onMounted(load);
 
 .sort-input {
   width: 120px;
-}
-
-.content-preview {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-line-clamp: 2;
-  color: #344054;
-  white-space: normal;
-  -webkit-box-orient: vertical;
 }
 
 .knowledge-drawer :deep(.ant-drawer-footer) {

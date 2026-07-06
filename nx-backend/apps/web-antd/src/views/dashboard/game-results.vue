@@ -17,6 +17,7 @@ import * as echarts from 'echarts/core';
 import { CanvasRenderer } from 'echarts/renderers';
 
 import { getGameOverviewApi } from '#/api';
+import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
 
 echarts.use([
   BarChart,
@@ -280,8 +281,8 @@ onBeforeUnmount(() => {
               <IconifyIcon :icon="item.icon" />
             </span>
             <div class="metric-content">
-              <div class="metric-label">{{ item.label }}</div>
-              <div class="metric-value">{{ item.value }}</div>
+              <EllipsisTooltip class="metric-label" :text="item.label" />
+              <EllipsisTooltip class="metric-value" :text="item.value" />
             </div>
           </div>
         </Card>

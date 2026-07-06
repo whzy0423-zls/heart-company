@@ -21,6 +21,7 @@ import {
 } from 'ant-design-vue';
 
 import { getAppMemoriesAdminApi, updateAppMemoryStatusApi } from '#/api';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 
 const APP_MEMORY_WRITE_PERMISSION = 'Customer:AppMemory:Write';
 
@@ -46,7 +47,7 @@ const columns = [
   { dataIndex: 'updateTime', title: '更新时间', width: 180 },
   { dataIndex: 'phone', title: '手机号', width: 150 },
   { dataIndex: 'cardName', title: '卡片', width: 140 },
-  { dataIndex: 'content', ellipsis: true, title: '记忆内容' },
+  ellipsisColumn('content', '记忆内容', { lines: 2 }),
   { dataIndex: 'status', title: '状态', width: 100 },
   { fixed: 'right' as const, key: 'action', title: '操作', width: 170 },
 ];

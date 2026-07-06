@@ -30,6 +30,8 @@ import {
   getPushListApi,
   sendPushApi,
 } from '#/api/core/push';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
+import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
 
 import {
   audienceCountDetailLabel,
@@ -90,12 +92,12 @@ const deepLinkOptions = [
 ];
 
 const columns = [
-  { dataIndex: 'title', title: '标题', width: 180 },
-  { dataIndex: 'content', ellipsis: true, title: '内容' },
+  ellipsisColumn('title', '标题', { width: 180 }),
+  ellipsisColumn('content', '内容', { lines: 2 }),
   { dataIndex: 'targetType', title: '目标', width: 100 },
   { dataIndex: 'sentCount', title: '发送数', width: 80 },
   { dataIndex: 'status', title: '状态', width: 80 },
-  { dataIndex: 'operator', title: '操作者', width: 100 },
+  ellipsisColumn('operator', '操作者', { width: 100 }),
   { dataIndex: 'createTime', title: '发送时间', width: 170 },
 ];
 
@@ -294,13 +296,11 @@ onMounted(retryLoad);
             <Tag :color="pushStatus(record.status).color">
               {{ pushStatus(record.status).text }}
             </Tag>
-            <div
+            <EllipsisTooltip
               v-if="formatPushRecordError(record)"
               class="push-error-text"
-              :title="formatPushRecordError(record)"
-            >
-              {{ formatPushRecordError(record) }}
-            </div>
+              :text="formatPushRecordError(record)"
+            />
           </template>
           <template v-if="column.dataIndex === 'targetType'">
             {{

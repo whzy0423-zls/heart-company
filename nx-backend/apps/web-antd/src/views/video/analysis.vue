@@ -28,6 +28,8 @@ import {
   retryVideoAnalysisApi,
   uploadFileApi,
 } from '#/api';
+import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 import { useUploadAssetPreviewResolver } from '#/utils/upload-asset-preview';
 
 const loading = ref(false);
@@ -63,14 +65,14 @@ const statusMeta: Record<string, { color: string; text: string }> = {
 };
 
 const columns = [
-  { dataIndex: 'videoName', ellipsis: true, title: '视频', width: 220 },
+  ellipsisColumn('videoName', '视频', { width: 220 }),
   { dataIndex: 'status', title: '状态', width: 110 },
   { dataIndex: 'scenes', title: '场景', width: 260 },
   { dataIndex: 'characters', title: '人物', width: 260 },
   { dataIndex: 'assets', title: '资产', width: 280 },
   { dataIndex: 'speechTopics', title: '语音主题', width: 300 },
-  { dataIndex: 'audioSummary', title: '语音摘要', width: 360 },
-  { dataIndex: 'seedancePrompt', title: 'Seedance 提示词', width: 420 },
+  ellipsisColumn('audioSummary', '语音摘要', { lines: 3, width: 360 }),
+  ellipsisColumn('seedancePrompt', 'Seedance 提示词', { lines: 3, width: 420 }),
   { dataIndex: 'createTime', title: '创建时间', width: 180 },
 ];
 
@@ -440,10 +442,9 @@ onMounted(loadJobs);
                     <Tag
                       v-for="item in analysisList(record, column.dataIndex)"
                       :key="item"
-                      :title="item"
                       class="analysis-tag"
                     >
-                      {{ item }}
+                      <EllipsisTooltip class="analysis-tag__text" :text="item" />
                     </Tag>
                   </div>
                   <Button
@@ -463,9 +464,11 @@ onMounted(loadJobs);
                   <Tag :color="record.hasSpeech ? 'processing' : 'default'">
                     {{ record.hasSpeech ? '有人声' : '未识别语音' }}
                   </Tag>
-                  <div class="audio-summary">
-                    {{ record.audioSummary || '-' }}
-                  </div>
+                  <EllipsisTooltip
+                    class="audio-summary"
+                    :lines="3"
+                    :text="record.audioSummary"
+                  />
                   <Space v-if="jobRecord(record).speechKeywords?.length" wrap>
                     <Tag
                       v-for="item in jobRecord(record).speechKeywords"
@@ -490,9 +493,11 @@ onMounted(loadJobs);
               </template>
               <template v-else-if="column.dataIndex === 'seedancePrompt'">
                 <div class="prompt-cell">
-                  <div class="prompt-text">
-                    {{ record.seedancePrompt || '-' }}
-                  </div>
+                  <EllipsisTooltip
+                    class="prompt-text"
+                    :lines="3"
+                    :text="record.seedancePrompt"
+                  />
                   <Button
                     v-if="record.seedancePrompt"
                     size="small"

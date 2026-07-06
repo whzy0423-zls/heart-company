@@ -10,6 +10,7 @@ import { useAccessStore, useUserStore } from '@vben/stores';
 import { Avatar, Button, Form, Input, message, Upload } from 'ant-design-vue';
 
 import { getUserInfoApi, updateUserProfileApi, uploadFileApi } from '#/api';
+import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
 import { useUploadAssetPreviewUrl } from '#/utils/upload-asset-preview';
 
 const userStore = useUserStore();
@@ -183,7 +184,7 @@ onMounted(loadProfile);
       <dl class="profile-meta">
         <div v-for="item in contactItems" :key="item.label">
           <dt>{{ item.label }}</dt>
-          <dd>{{ item.value }}</dd>
+          <dd><EllipsisTooltip :text="item.value" /></dd>
         </div>
       </dl>
     </aside>

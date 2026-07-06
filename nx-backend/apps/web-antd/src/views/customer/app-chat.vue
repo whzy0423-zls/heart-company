@@ -19,6 +19,7 @@ import {
 } from 'ant-design-vue';
 
 import { getAppChatAuditMessagesApi } from '#/api';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 
 const loading = ref(false);
 const loadError = ref('');
@@ -32,7 +33,7 @@ const feedbackOptions = [{ label: '全部反馈', value: '' }, { label: '有帮�
 const columns = [
   { dataIndex: 'createTime', title: '时间', width: 180 }, { dataIndex: 'phone', title: '手机号', width: 150 },
   { dataIndex: 'cardName', title: '卡片', width: 140 }, { dataIndex: 'role', title: '角色', width: 100 },
-  { dataIndex: 'content', ellipsis: true, title: '内容' }, { dataIndex: 'feedback', title: '反馈', width: 110 },
+  ellipsisColumn('content', '内容', { lines: 2 }), { dataIndex: 'feedback', title: '反馈', width: 110 },
   { dataIndex: 'favorite', title: '收藏', width: 90 }, { fixed: 'right' as const, key: 'action', title: '操作', width: 90 },
 ];
 let requestId = 0;

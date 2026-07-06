@@ -31,6 +31,8 @@ import {
   updateArticleApi,
   updateReadingSettingsApi,
 } from '#/api';
+import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 import ImagePathInput from '#/views/site-config/components/image-path-input.vue';
 
 const loading = ref(false);
@@ -94,7 +96,7 @@ function voiceLabel(key?: string) {
 }
 
 const columns = [
-  { dataIndex: 'title', title: '标题', width: 220 },
+  ellipsisColumn('title', '标题', { width: 220 }),
   { dataIndex: 'category', title: '分类', width: 100 },
   { dataIndex: 'status', title: '状态', width: 80 },
   { dataIndex: 'audioStatus', title: '听书', width: 150 },
@@ -354,9 +356,10 @@ onMounted(() => {
           </span>
           <div class="voice-panel-copy">
             <div class="voice-panel-title">全局默认听书音色</div>
-            <div class="voice-panel-desc">
-              未单独指定音色的文章会使用该音色生成音频，修改音色或正文后需重新生成。
-            </div>
+            <EllipsisTooltip
+              class="voice-panel-desc"
+              text="未单独指定音色的文章会使用该音色生成音频，修改音色或正文后需重新生成。"
+            />
           </div>
         </div>
         <div class="voice-panel-actions">
@@ -416,7 +419,7 @@ onMounted(() => {
           <template v-else-if="column.dataIndex === 'tags'">
             <Space :size="4" wrap>
               <Tag v-for="tag in record.tags" :key="tag" color="blue">
-                {{ tag }}
+                <EllipsisTooltip class="article-tag-tooltip" :text="tag" />
               </Tag>
               <span v-if="!record.tags?.length">-</span>
             </Space>

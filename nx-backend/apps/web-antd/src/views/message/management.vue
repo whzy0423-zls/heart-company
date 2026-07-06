@@ -20,6 +20,8 @@ import {
 } from 'ant-design-vue';
 
 import { getMessageListApi, markMessagesApi } from '#/api';
+import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
+import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 
 const router = useRouter();
 
@@ -50,7 +52,7 @@ const readOptions = [
 const columns = [
   { dataIndex: 'type', title: '消息类型', width: 120 },
   { dataIndex: 'title', title: '消息标题', width: 240 },
-  { dataIndex: 'content', ellipsis: true, title: '消息内容' },
+  ellipsisColumn('content', '消息内容', { lines: 2 }),
   { dataIndex: 'isRead', title: '状态', width: 100 },
   { dataIndex: 'businessType', title: '关联业务', width: 130 },
   { dataIndex: 'createTime', title: '创建时间', width: 180 },
@@ -194,10 +196,10 @@ onMounted(() => {
               <Tag color="blue">{{ typeLabel(record.type) }}</Tag>
             </template>
             <template v-if="column.dataIndex === 'title'">
-              <div class="message-title">{{ record.title || '-' }}</div>
+              <EllipsisTooltip class="message-title" :text="record.title" />
             </template>
             <template v-if="column.dataIndex === 'content'">
-              <div class="message-content">{{ record.content || '-' }}</div>
+              <EllipsisTooltip class="message-content" :lines="2" :text="record.content" />
             </template>
             <template v-if="column.dataIndex === 'isRead'">
               <Tag :color="record.isRead ? 'default' : 'red'">

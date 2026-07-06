@@ -75,6 +75,7 @@ import {
 } from 'ant-design-vue';
 
 import { listAssetsApi } from '#/api';
+import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
 import { useUploadAssetPreviewResolver } from '#/utils/upload-asset-preview';
 
 import {
@@ -250,9 +251,7 @@ watch(
             <Tag :color="typeColor(asset.type)">
               {{ typeLabel(asset.type) }}
             </Tag>
-            <span class="picker-name" :title="asset.name">{{
-              asset.name
-            }}</span>
+            <EllipsisTooltip class="picker-name" :text="asset.name" />
           </div>
         </Card>
       </div>
