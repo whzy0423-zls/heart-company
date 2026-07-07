@@ -1,31 +1,32 @@
 package sms
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
 
 type SpugOptions struct {
-	APIBase      string
-	TemplateCode string
-	TemplateName string
-	Timeout      time.Duration
-	HTTPClient   *http.Client
+	APIBase        string
+	TemplateCode   string
+	TemplateName   string
+	CodeTTLMinutes int
+	Timeout        time.Duration
+	HTTPClient     *http.Client
 }
 
 type SpugSender struct {
-	apiBase      string
-	templateCode string
-	templateName string
-	timeout      time.Duration
-	httpClient   *http.Client
+	apiBase        string
+	templateCode   string
+	templateName   string
+	codeTTLMinutes int
+	timeout        time.Duration
+	httpClient     *http.Client
 }
 
 func NewSpugSender(opts SpugOptions) (*SpugSender, error) {
@@ -47,6 +48,10 @@ func NewSpugSender(opts SpugOptions) (*SpugSender, error) {
 		templateName = "芯之力"
 	}
 
+	codeTTLMinutes := opts.CodeTTLMinutes
+	if codeTTLMinutes <= 0 {
+		codeTTLMinutes = 10
+	}
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
@@ -57,11 +62,12 @@ func NewSpugSender(opts SpugOptions) (*SpugSender, error) {
 	}
 
 	return &SpugSender{
-		apiBase:      apiBase,
-		templateCode: templateCode,
-		templateName: templateName,
-		timeout:      timeout,
-		httpClient:   httpClient,
+		apiBase:        apiBase,
+		templateCode:   templateCode,
+		templateName:   templateName,
+		codeTTLMinutes: codeTTLMinutes,
+		timeout:        timeout,
+		httpClient:     httpClient,
 	}, nil
 }
 
@@ -72,21 +78,20 @@ func (s *SpugSender) Send(ctx context.Context, phone, code string) error {
 		defer cancel()
 	}
 
-	body, err := json.Marshal(map[string]string{
-		"name":    s.templateName,
-		"code":    code,
-		"targets": phone,
-	})
+	endpoint, err := url.Parse(s.apiBase + "/sms/" + url.PathEscape(s.templateCode))
 	if err != nil {
-		return fmt.Errorf("sms: encode spug request: %w", err)
+		return fmt.Errorf("sms: create spug url: %w", err)
 	}
+	query := endpoint.Query()
+	query.Set("to", phone)
+	query.Set("code", code)
+	query.Set("number", strconv.Itoa(s.codeTTLMinutes))
+	endpoint.RawQuery = query.Encode()
 
-	endpoint := s.apiBase + "/send/" + url.PathEscape(s.templateCode)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return fmt.Errorf("sms: create spug request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := s.httpClient.Do(req)
