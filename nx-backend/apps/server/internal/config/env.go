@@ -61,11 +61,15 @@ type Env struct {
 
 // SMSConfig 短信发送配置。Provider 为空时非生产环境为 dev 模式；生产环境会 fail closed。
 type SMSConfig struct {
-	Provider   string // aliyun | "" (dev)
-	APIKey     string
-	APISecret  string
-	SignName   string
-	TemplateID string
+	Provider           string // aliyun | spug | "" (dev)
+	APIKey             string
+	APISecret          string
+	SignName           string
+	TemplateID         string
+	SpugAPIBase        string
+	SpugTemplateCode   string
+	SpugTemplateName   string
+	SpugTimeoutSeconds int
 }
 
 type MiniappChatConfig struct {
@@ -238,6 +242,10 @@ func Load() Env {
 	if err != nil || asrTimeout <= 0 {
 		asrTimeout = 60
 	}
+	spugTimeout, err := strconv.Atoi(getenv("SPUG_PUSH_TIMEOUT_SECONDS", "10"))
+	if err != nil || spugTimeout <= 0 {
+		spugTimeout = 10
+	}
 
 	appEnv := NormalizeAppEnv(getenv("APP_ENV", ""))
 
@@ -288,11 +296,15 @@ func Load() Env {
 		WxPay:     wxpay,
 		Embedding: embedding,
 		SMS: SMSConfig{
-			Provider:   getenv("SMS_PROVIDER", ""),
-			APIKey:     getenv("SMS_API_KEY", ""),
-			APISecret:  getenv("SMS_API_SECRET", ""),
-			SignName:   getenv("SMS_SIGN_NAME", ""),
-			TemplateID: getenv("SMS_TEMPLATE_ID", ""),
+			Provider:           getenv("SMS_PROVIDER", ""),
+			APIKey:             getenv("SMS_API_KEY", ""),
+			APISecret:          getenv("SMS_API_SECRET", ""),
+			SignName:           getenv("SMS_SIGN_NAME", ""),
+			TemplateID:         getenv("SMS_TEMPLATE_ID", ""),
+			SpugAPIBase:        getenv("SPUG_PUSH_API_BASE", "https://push.spug.cc"),
+			SpugTemplateCode:   getenv("SPUG_PUSH_TEMPLATE_CODE", ""),
+			SpugTemplateName:   getenv("SPUG_PUSH_TEMPLATE_NAME", "芯之力"),
+			SpugTimeoutSeconds: spugTimeout,
 		},
 		Video: VideoConfig{
 			APIBase:        getenv("VIDEO_API_BASE", ""),

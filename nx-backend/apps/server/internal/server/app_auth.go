@@ -22,7 +22,7 @@ import (
 const (
 	appAccessTokenDuration  = 15 * time.Minute
 	appRefreshTokenDuration = 30 * 24 * time.Hour
-	smsCodeExpiry           = 5 * time.Minute
+	smsCodeExpiry           = 10 * time.Minute
 )
 
 func (s *Server) appSendSMS(w http.ResponseWriter, r *http.Request) {
