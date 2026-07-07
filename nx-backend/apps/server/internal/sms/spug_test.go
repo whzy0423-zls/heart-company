@@ -2,7 +2,6 @@ package sms
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,29 +9,32 @@ import (
 	"time"
 )
 
-func TestSpugSenderPostsTemplateParams(t *testing.T) {
+func TestSpugSenderSendsSMSCodeQuery(t *testing.T) {
+	var gotMethod string
 	var gotPath string
-	var gotContentType string
-	var gotBody map[string]any
+	var gotTo string
+	var gotCode string
+	var gotNumber string
 	requests := 0
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
+		gotMethod = r.Method
 		gotPath = r.URL.Path
-		gotContentType = r.Header.Get("Content-Type")
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Fatalf("decode request body: %v", err)
-		}
+		gotTo = r.URL.Query().Get("to")
+		gotCode = r.URL.Query().Get("code")
+		gotNumber = r.URL.Query().Get("number")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"code":0,"message":"ok"}`))
 	}))
 	defer server.Close()
 
 	sender, err := NewSpugSender(SpugOptions{
-		APIBase:      server.URL + "/",
-		TemplateCode: "tmpl123",
-		TemplateName: "芯之力",
-		Timeout:      time.Second,
+		APIBase:        server.URL + "/",
+		TemplateCode:   "tmpl123",
+		TemplateName:   "芯之力",
+		CodeTTLMinutes: 10,
+		Timeout:        time.Second,
 	})
 	if err != nil {
 		t.Fatalf("new sender: %v", err)
@@ -45,14 +47,14 @@ func TestSpugSenderPostsTemplateParams(t *testing.T) {
 	if requests != 1 {
 		t.Fatalf("expected one request, got %d", requests)
 	}
-	if gotPath != "/send/tmpl123" {
-		t.Fatalf("expected /send/tmpl123, got %q", gotPath)
+	if gotMethod != http.MethodGet {
+		t.Fatalf("expected GET, got %q", gotMethod)
 	}
-	if !strings.HasPrefix(gotContentType, "application/json") {
-		t.Fatalf("expected json content type, got %q", gotContentType)
+	if gotPath != "/sms/tmpl123" {
+		t.Fatalf("expected /sms/tmpl123, got %q", gotPath)
 	}
-	if gotBody["name"] != "芯之力" || gotBody["code"] != "123456" || gotBody["targets"] != "13800000000" {
-		t.Fatalf("unexpected body: %#v", gotBody)
+	if gotTo != "13800000000" || gotCode != "123456" || gotNumber != "10" {
+		t.Fatalf("unexpected query: to=%q code=%q number=%q", gotTo, gotCode, gotNumber)
 	}
 }
 
