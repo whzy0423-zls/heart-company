@@ -14,6 +14,8 @@ const logoHelp = computed(() => {
     ? '图片上传成功后，保存配置会把 Logo 地址写入数据库。'
     : '请上传站点 Logo。';
 });
+
+const customerServiceQrHelp = '点击官网右下角「联系客服」后弹窗展示，标题固定为：芯之力 小助手。';
 </script>
 
 <template>
@@ -38,6 +40,19 @@ const logoHelp = computed(() => {
               dir="site-logo"
               empty-text="未设置 Logo"
               upload-text="上传 Logo"
+              variant="image"
+            />
+          </Form.Item>
+        </Col>
+        <Col :md="12" :xs="24">
+          <Form.Item label="客服二维码" :help="customerServiceQrHelp">
+            <ImagePathInput
+              v-model:value="config.site.customerServiceQr"
+              dir="site/customer-service"
+              empty-text="未设置客服二维码"
+              placeholder="二维码图片路径或 URL"
+              show-path
+              upload-text="上传客服二维码"
               variant="image"
             />
           </Form.Item>

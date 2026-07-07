@@ -2,7 +2,9 @@ package server
 
 import (
 	"fmt"
+	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/branding"
 	"nine-xing/nx-backend/apps/server/internal/siteconfig"
@@ -40,6 +43,7 @@ func publicConfigAssetURL(raw string, assetPrefix string, uploadPrefix string) s
 
 func rewritePublicSiteConfigAssets(config *siteconfig.SiteConfig) {
 	config.Site.Logo = publicSiteAssetURL(config.Site.Logo)
+	config.Site.CustomerServiceQr = publicSiteAssetURL(config.Site.CustomerServiceQr)
 	for i := range config.Types {
 		config.Types[i].Avatar = publicSiteAssetURL(config.Types[i].Avatar)
 	}
@@ -65,6 +69,100 @@ func rewritePublicAssetValue(value any, rewrite func(string) string) any {
 	default:
 		return value
 	}
+}
+
+func (s *Server) publicCustomerServiceQR(w http.ResponseWriter, r *http.Request) {
+	config, err := siteconfig.ReadStore(r.Context(), s.db, s.env.SiteConfig)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	raw := strings.TrimSpace(config.Site.CustomerServiceQr)
+	if raw == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if id, ok := referencedUploadAssetID(raw); ok {
+		asset, err := s.uploads.Find(r.Context(), id)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		writePublicUploadAsset(w, asset)
+		return
+	}
+	if rel, ok := referencedLocalUploadRelativePath(raw); ok {
+		s.servePublicLocalUpload(w, r, rel)
+		return
+	}
+	s.serveRemoteCustomerServiceQR(w, r, raw)
+}
+
+func (s *Server) serveRemoteCustomerServiceQR(w http.ResponseWriter, r *http.Request, raw string) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || !publicRemoteHostAllowed(r, u.Hostname()) {
+		http.NotFound(w, r)
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, raw, nil)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		http.NotFound(w, r)
+		return
+	}
+	limited := io.LimitReader(resp.Body, 8*1024*1024)
+	body, err := io.ReadAll(limited)
+	if err != nil || len(body) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	contentType := safePublicUploadAssetContentType(resp.Header.Get("Content-Type"))
+	if contentType == "application/octet-stream" {
+		contentType = safePublicUploadAssetContentType(http.DetectContentType(body))
+	}
+	if contentType == "application/octet-stream" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+	_, _ = w.Write(body)
+}
+
+func publicRemoteHostAllowed(r *http.Request, hostname string) bool {
+	hostname = strings.TrimSpace(strings.ToLower(hostname))
+	if hostname == "" || hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") || strings.HasSuffix(hostname, ".local") {
+		return false
+	}
+	if ip := net.ParseIP(hostname); ip != nil {
+		return publicRemoteIPAllowed(ip)
+	}
+	ctx := r.Context()
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, hostname)
+	if err != nil || len(ips) == 0 {
+		return false
+	}
+	for _, item := range ips {
+		if !publicRemoteIPAllowed(item.IP) {
+			return false
+		}
+	}
+	return true
+}
+
+func publicRemoteIPAllowed(ip net.IP) bool {
+	return ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsUnspecified() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast()
 }
 
 func (s *Server) publicSiteAsset(w http.ResponseWriter, r *http.Request) {
@@ -148,6 +246,9 @@ func siteConfigReferencesUploadAsset(config siteconfig.SiteConfig, id int64) boo
 	if valueReferencesUploadAsset(config.Site.Logo, id) {
 		return true
 	}
+	if valueReferencesUploadAsset(config.Site.CustomerServiceQr, id) {
+		return true
+	}
 	for _, item := range config.Types {
 		if valueReferencesUploadAsset(item.Avatar, id) {
 			return true
@@ -158,6 +259,9 @@ func siteConfigReferencesUploadAsset(config siteconfig.SiteConfig, id int64) boo
 
 func siteConfigReferencesLocalUpload(config siteconfig.SiteConfig, privateURL string) bool {
 	if valueReferencesLocalUpload(config.Site.Logo, privateURL) {
+		return true
+	}
+	if valueReferencesLocalUpload(config.Site.CustomerServiceQr, privateURL) {
 		return true
 	}
 	for _, item := range config.Types {
