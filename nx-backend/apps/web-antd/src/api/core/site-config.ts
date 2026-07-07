@@ -12,6 +12,7 @@ export interface SiteConfig {
     copyright: string;
     footerTagline: string;
     logo: string;
+    customerServiceQr: string;
   };
   types: EnneagramType[];
 }

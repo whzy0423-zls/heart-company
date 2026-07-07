@@ -32,10 +32,11 @@ type SiteConfig struct {
 		Tabs   []TabItem `json:"tabs"`
 	} `json:"navigation"`
 	Site struct {
-		BrandName     string `json:"brandName"`
-		Copyright     string `json:"copyright"`
-		FooterTagline string `json:"footerTagline"`
-		Logo          string `json:"logo"`
+		BrandName         string `json:"brandName"`
+		Copyright         string `json:"copyright"`
+		FooterTagline     string `json:"footerTagline"`
+		Logo              string `json:"logo"`
+		CustomerServiceQr string `json:"customerServiceQr"`
 	} `json:"site"`
 	Types []struct {
 		Avatar      string `json:"avatar"`
@@ -78,6 +79,11 @@ func ReadStore(ctx context.Context, db *sql.DB, path string) (SiteConfig, error)
 		var config SiteConfig
 		if err := json.Unmarshal(raw, &config); err != nil {
 			return SiteConfig{}, err
+		}
+		if siteFieldMissing(raw, "customerServiceQr") {
+			if defaults, err := Read(path); err == nil {
+				config.Site.CustomerServiceQr = defaults.Site.CustomerServiceQr
+			}
 		}
 		if err := Validate(config); err != nil {
 			return SiteConfig{}, err
@@ -155,6 +161,19 @@ func ctxOrBackground(ctx context.Context) context.Context {
 	return ctx
 }
 
+func siteFieldMissing(raw []byte, field string) bool {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return false
+	}
+	var site map[string]json.RawMessage
+	if err := json.Unmarshal(payload["site"], &site); err != nil {
+		return false
+	}
+	_, ok := site[field]
+	return !ok
+}
+
 func Validate(config SiteConfig) error {
 	if config.Site.BrandName == "" {
 		return errors.New("site.brandName is required")
@@ -163,6 +182,9 @@ func Validate(config SiteConfig) error {
 		return errors.New("site.logo is required")
 	}
 	if err := validateURLField("site.logo", config.Site.Logo, urlKindMedia); err != nil {
+		return err
+	}
+	if err := validateURLField("site.customerServiceQr", config.Site.CustomerServiceQr, urlKindMedia); err != nil {
 		return err
 	}
 	if len(config.Navigation.Main) == 0 {

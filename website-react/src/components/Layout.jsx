@@ -8,6 +8,7 @@ import Tabbar from './Tabbar'
 import Music from './Music'
 import Footer from './Footer'
 import Lightbox from './Lightbox'
+import CustomerService from './CustomerService'
 import { useScrollEffects, useCardSpotlight } from '../hooks/useScrollEffects'
 import { useReveal } from '../hooks/useReveal'
 import { useCounters } from '../hooks/useCounters'
@@ -50,6 +51,7 @@ export default function Layout() {
       </main>
       <Footer />
       <Music />
+      <CustomerService />
       <Tabbar />
       <Lightbox />
     </>

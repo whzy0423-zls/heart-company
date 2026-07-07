@@ -54,7 +54,6 @@ export default function TypeDetail() {
 
       <div className="type-detail__grid">
         <Reveal className="card type-story">
-          <p className="kicker">AI 生成介绍</p>
           <h2>{detail.scene}</h2>
           <p>{detail.intro}</p>
           <p>{detail.growth}</p>

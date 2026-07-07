@@ -26,6 +26,12 @@ func TestValidateRejectsUnsafeURLFields(t *testing.T) {
 			},
 		},
 		{
+			name: "customer service qr data url",
+			mutate: func(config *SiteConfig) {
+				config.Site.CustomerServiceQr = "data:image/svg+xml,<svg onload=alert(1)>"
+			},
+		},
+		{
 			name: "nested home action javascript link",
 			mutate: func(config *SiteConfig) {
 				config.Home["hero"] = map[string]any{
@@ -68,6 +74,7 @@ func TestValidateAllowsSafeURLFields(t *testing.T) {
 		"image":    "/assets/teacher.jpg",
 		"buttonTo": "/teacher",
 	}
+	config.Site.CustomerServiceQr = "https://cdn.example.com/customer-service.png"
 
 	if err := Validate(config); err != nil {
 		t.Fatalf("expected safe URL fields to pass, got %v", err)
@@ -102,4 +109,13 @@ func validConfig() SiteConfig {
 		{ID: "1", Name: "完美型", Avatar: "/assets/avatars/1.webp"},
 	}
 	return config
+}
+
+func TestSiteFieldMissingDistinguishesMissingAndEmpty(t *testing.T) {
+	if !siteFieldMissing([]byte(`{"site":{"logo":"/logo.svg"}}`), "customerServiceQr") {
+		t.Fatal("expected missing customerServiceQr to be detected")
+	}
+	if siteFieldMissing([]byte(`{"site":{"customerServiceQr":""}}`), "customerServiceQr") {
+		t.Fatal("explicit empty customerServiceQr should not be treated as missing")
+	}
 }

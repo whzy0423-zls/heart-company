@@ -283,6 +283,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/site-config/build-status", s.method(http.MethodGet, s.requirePermission("Website:Write", s.siteBuildStatus)))
 	// 公开只读：给官网(website-react)运行时拉取，无需鉴权。
 	s.mux.HandleFunc("/api/public/site-config", s.method(http.MethodGet, s.publicSiteConfig))
+	s.mux.HandleFunc("/api/public/customer-service-qr", s.method(http.MethodGet, s.publicCustomerServiceQR))
 	s.mux.HandleFunc("/api/public/signups", s.method(http.MethodPost, s.publicSignup))
 	s.mux.HandleFunc("/api/public/game-results", s.method(http.MethodPost, s.publicGameResult))
 	s.mux.HandleFunc("/api/public/site-visits", s.method(http.MethodPost, s.publicSiteVisit))

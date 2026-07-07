@@ -492,6 +492,9 @@ func TestPublicSiteConfigRewritesAndServesReferencedLocalUpload(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(uploadDir, "site", "other.png"), []byte("other"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(uploadDir, "site", "customer-qr.png"), []byte("qr"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	sitePath := filepath.Join(root, "site-config.json")
 	if err := os.WriteFile(sitePath, []byte(`{
   "home": {"teacherTeaser": {"image": "/api/uploads/site/logo.png"}},
@@ -500,7 +503,7 @@ func TestPublicSiteConfigRewritesAndServesReferencedLocalUpload(t *testing.T) {
     "drawer": [{"label": "首页", "to": "/", "type": "route"}],
     "tabs": [{"label": "首页", "to": "/", "type": "route", "icon": "home", "match": "/"}]
   },
-  "site": {"brandName": "九型芯之力", "copyright": "", "footerTagline": "", "logo": "/api/uploads/site/logo.png"},
+  "site": {"brandName": "九型芯之力", "copyright": "", "footerTagline": "", "logo": "/api/uploads/site/logo.png", "customerServiceQr": "/api/uploads/site/customer-qr.png"},
   "types": [{"id": "1", "name": "完美型", "description": "", "keywords": "", "avatar": "/assets/avatars/1.webp"}]
 }`), 0o644); err != nil {
 		t.Fatal(err)
@@ -511,13 +514,21 @@ func TestPublicSiteConfigRewritesAndServesReferencedLocalUpload(t *testing.T) {
 	if configResp.Code != http.StatusOK {
 		t.Fatalf("expected site config 200, got %d body=%s", configResp.Code, configResp.Body.String())
 	}
-	if body := configResp.Body.String(); !strings.Contains(body, "/api/public/site-uploads/site/logo.png") || strings.Contains(body, "/api/uploads/site/logo.png") {
-		t.Fatalf("expected public site config to rewrite local upload URL, body=%s", body)
+	if body := configResp.Body.String(); !strings.Contains(body, "/api/public/site-uploads/site/logo.png") || !strings.Contains(body, "/api/public/site-uploads/site/customer-qr.png") || strings.Contains(body, "/api/uploads/site/") {
+		t.Fatalf("expected public site config to rewrite local upload URLs, body=%s", body)
 	}
 
 	assetResp := performRawUnit(handler, http.MethodGet, "/api/public/site-uploads/site/logo.png", "")
 	if assetResp.Code != http.StatusOK || assetResp.Body.String() != "logo" {
 		t.Fatalf("expected referenced public upload 200, got %d body=%s", assetResp.Code, assetResp.Body.String())
+	}
+	qrResp := performRawUnit(handler, http.MethodGet, "/api/public/site-uploads/site/customer-qr.png", "")
+	if qrResp.Code != http.StatusOK || qrResp.Body.String() != "qr" {
+		t.Fatalf("expected referenced customer QR public upload 200, got %d body=%s", qrResp.Code, qrResp.Body.String())
+	}
+	proxyResp := performRawUnit(handler, http.MethodGet, "/api/public/customer-service-qr", "")
+	if proxyResp.Code != http.StatusOK || proxyResp.Body.String() != "qr" {
+		t.Fatalf("expected customer QR proxy 200, got %d body=%s", proxyResp.Code, proxyResp.Body.String())
 	}
 	unreferencedResp := performRawUnit(handler, http.MethodGet, "/api/public/site-uploads/site/other.png", "")
 	if unreferencedResp.Code != http.StatusNotFound {
