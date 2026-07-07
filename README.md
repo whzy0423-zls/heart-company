@@ -68,6 +68,8 @@ docker compose down
 - `VIDEO_API_BASE` / `IMAGE_API_BASE`：生产下只要对应 API Key 非空，就必须显式配置公网 API 地址。
 - `PUBLIC_BASE_URL`：启用视频网关时必须配置公网 HTTPS API 根地址，用于外部服务回调/拉取本地相对资源。
 - `JPUSH_APP_KEY` / `JPUSH_MASTER_SECRET`：启用 JPush 推送时配置。
+- `SMS_PROVIDER`：App 短信验证码通道，留空时仅非生产返回调试验证码；生产可选 `aliyun` 或 `spug`。
+- `SPUG_PUSH_TEMPLATE_CODE`：`SMS_PROVIDER=spug` 时配置 Spug 推送助手模板编号，后端用它调用 `https://push.spug.cc/send/{模板编号}`，不要放进 App。
 
 注意：`.env` 包含真实密钥，已经在 `.gitignore` 中忽略，不能提交到仓库。
 

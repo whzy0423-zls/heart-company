@@ -2513,6 +2513,17 @@ func mustSMSSender(cfg config.SMSConfig) sms.Sender {
 			panic("sms init: " + err.Error())
 		}
 		return sender
+	case "spug":
+		sender, err := sms.NewSpugSender(sms.SpugOptions{
+			APIBase:      cfg.SpugAPIBase,
+			TemplateCode: cfg.SpugTemplateCode,
+			TemplateName: cfg.SpugTemplateName,
+			Timeout:      time.Duration(cfg.SpugTimeoutSeconds) * time.Second,
+		})
+		if err != nil {
+			panic("sms init: " + err.Error())
+		}
+		return sender
 	default:
 		panic("sms init: unsupported provider " + cfg.Provider)
 	}

@@ -34,6 +34,12 @@ func TestGenerateSMSCodeReturnsErrorWhenRandomReaderFails(t *testing.T) {
 	}
 }
 
+func TestSMSCodeExpiryIsTenMinutes(t *testing.T) {
+	if smsCodeExpiry != 10*time.Minute {
+		t.Fatalf("expected sms code expiry 10 minutes, got %s", smsCodeExpiry)
+	}
+}
+
 func TestSMSVerifyAttemptLimiterBlocksRepeatedAttempts(t *testing.T) {
 	s := &Server{
 		smsVerifyPhoneLimiter: newStrRateLimiter(5, time.Minute),

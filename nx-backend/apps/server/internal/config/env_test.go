@@ -34,6 +34,32 @@ func TestLoadMiniappChatOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadReadsSpugSMSConfig(t *testing.T) {
+	t.Setenv("SMS_PROVIDER", "spug")
+	t.Setenv("SPUG_PUSH_API_BASE", "https://push.spug.cc")
+	t.Setenv("SPUG_PUSH_TEMPLATE_CODE", "tmpl123")
+	t.Setenv("SPUG_PUSH_TEMPLATE_NAME", "芯之力")
+	t.Setenv("SPUG_PUSH_TIMEOUT_SECONDS", "7")
+
+	env := Load()
+
+	if env.SMS.Provider != "spug" {
+		t.Fatalf("expected spug provider, got %q", env.SMS.Provider)
+	}
+	if env.SMS.SpugAPIBase != "https://push.spug.cc" {
+		t.Fatalf("expected spug api base, got %q", env.SMS.SpugAPIBase)
+	}
+	if env.SMS.SpugTemplateCode != "tmpl123" {
+		t.Fatalf("expected spug template code, got %q", env.SMS.SpugTemplateCode)
+	}
+	if env.SMS.SpugTemplateName != "芯之力" {
+		t.Fatalf("expected spug template name, got %q", env.SMS.SpugTemplateName)
+	}
+	if env.SMS.SpugTimeoutSeconds != 7 {
+		t.Fatalf("expected spug timeout 7, got %d", env.SMS.SpugTimeoutSeconds)
+	}
+}
+
 func TestLoadNormalizesAppEnv(t *testing.T) {
 	t.Setenv("APP_ENV", " Production ")
 

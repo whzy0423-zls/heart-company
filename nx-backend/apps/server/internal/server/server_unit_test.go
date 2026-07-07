@@ -34,6 +34,19 @@ func TestNewPanicsForUnknownSMSProvider(t *testing.T) {
 	mustSMSSender(config.SMSConfig{Provider: "unknown"})
 }
 
+func TestMustSMSSenderSupportsSpugProvider(t *testing.T) {
+	sender := mustSMSSender(config.SMSConfig{
+		Provider:           "spug",
+		SpugAPIBase:        "https://push.spug.cc",
+		SpugTemplateCode:   "tmpl123",
+		SpugTemplateName:   "芯之力",
+		SpugTimeoutSeconds: 5,
+	})
+	if sender == nil {
+		t.Fatal("expected spug sender")
+	}
+}
+
 func TestProductionWxPayIncompleteConfigDisablesPaymentWithoutPanic(t *testing.T) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
