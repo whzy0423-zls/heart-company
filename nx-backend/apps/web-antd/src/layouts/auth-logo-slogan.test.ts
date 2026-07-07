@@ -10,8 +10,9 @@ describe('auth login slogan logo', () => {
       'utf8',
     );
 
-    expect(svg).toContain('href="/logo.png"');
+    expect(svg).toContain('href="data:image/png;base64,');
     expect(svg).toContain('中央品牌 logo');
+    expect(svg).not.toContain('href="/logo.png"');
     expect(svg).not.toContain('中央立体九宫格盘');
     expect(svg).not.toContain('行1：1 5 6 绿');
     expect(svg).not.toContain('rect x="181"');
