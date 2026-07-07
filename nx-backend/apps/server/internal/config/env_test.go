@@ -60,6 +60,25 @@ func TestLoadReadsSpugSMSConfig(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsASRToSiliconFlowFreeModel(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("ASR_API_BASE", "")
+	t.Setenv("ASR_MODEL", "")
+	t.Setenv("ASR_TIMEOUT_SECONDS", "")
+
+	env := Load()
+
+	if env.ASR.APIBase != "https://api.siliconflow.cn" {
+		t.Fatalf("expected default SiliconFlow ASR base, got %q", env.ASR.APIBase)
+	}
+	if env.ASR.Model != "FunAudioLLM/SenseVoiceSmall" {
+		t.Fatalf("expected default free SiliconFlow ASR model, got %q", env.ASR.Model)
+	}
+	if env.ASR.TimeoutSeconds != 60 {
+		t.Fatalf("expected default ASR timeout 60, got %d", env.ASR.TimeoutSeconds)
+	}
+}
+
 func TestLoadNormalizesAppEnv(t *testing.T) {
 	t.Setenv("APP_ENV", " Production ")
 

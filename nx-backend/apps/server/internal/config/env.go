@@ -319,9 +319,9 @@ func Load() Env {
 			TimeoutSeconds: imageTimeout,
 		},
 		ASR: ASRConfig{
-			APIBase:        getenv("ASR_API_BASE", ""),
+			APIBase:        getenv("ASR_API_BASE", "https://api.siliconflow.cn"),
 			APIKey:         getenv("ASR_API_KEY", ""),
-			Model:          getenv("ASR_MODEL", "whisper-1"),
+			Model:          getenv("ASR_MODEL", "FunAudioLLM/SenseVoiceSmall"),
 			TimeoutSeconds: asrTimeout,
 		},
 		JPush: JPushConfig{
