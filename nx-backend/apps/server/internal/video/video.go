@@ -394,6 +394,97 @@ func (s *Store) Generation(ctx context.Context, id string) (Generation, error) {
 	return item, nil
 }
 
+// StatusCounts 各状态的任务数。
+type StatusCounts struct {
+	Completed  int64 `json:"completed"`
+	Failed     int64 `json:"failed"`
+	InProgress int64 `json:"inProgress"`
+	Queued     int64 `json:"queued"`
+}
+
+// OverviewResult 是 GET /api/video/generations/overview 的响应体。
+type OverviewResult struct {
+	Recent       []Generation `json:"recent"`
+	StatusCounts StatusCounts `json:"statusCounts"`
+	Total        int64        `json:"total"`
+}
+
+// Overview 返回视频生成任务的聚合统计与最近 10 条记录。
+func (s *Store) Overview(ctx context.Context) (OverviewResult, error) {
+	var total int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM video_generations`).Scan(&total); err != nil {
+		return OverviewResult{}, err
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT status, count(*) FROM video_generations GROUP BY status`)
+	if err != nil {
+		return OverviewResult{}, err
+	}
+	var counts StatusCounts
+	for rows.Next() {
+		var status string
+		var n int64
+		if err := rows.Scan(&status, &n); err != nil {
+			rows.Close()
+			return OverviewResult{}, err
+		}
+		switch status {
+		case "queued":
+			counts.Queued = n
+		case "in_progress":
+			counts.InProgress = n
+		case "completed", "succeeded":
+			counts.Completed += n
+		case "failed":
+			counts.Failed = n
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return OverviewResult{}, err
+	}
+
+	recent, err := s.recentGenerations(ctx, 10)
+	if err != nil {
+		return OverviewResult{}, err
+	}
+	return OverviewResult{Total: total, StatusCounts: counts, Recent: recent}, nil
+}
+
+func (s *Store) recentGenerations(ctx context.Context, limit int) ([]Generation, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id::text, provider, model, prompt, image_url, task_id, seconds, aspect_ratio,
+		        COALESCE(video_asset_id::text,''), video_url, duration, fps, width, height,
+		        status, error_message, create_time, update_time
+		   FROM video_generations
+		  ORDER BY create_time DESC
+		  LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Generation{}
+	for rows.Next() {
+		var item Generation
+		var createTime, updateTime time.Time
+		if err := rows.Scan(
+			&item.ID, &item.Provider, &item.Model, &item.Prompt, &item.ImageURL,
+			&item.TaskID, &item.Seconds, &item.AspectRatio,
+			&item.VideoAssetID, &item.VideoURL, &item.Duration, &item.FPS,
+			&item.Width, &item.Height,
+			&item.Status, &item.ErrorMessage, &createTime, &updateTime,
+		); err != nil {
+			return nil, err
+		}
+		item.CreateTime = formatTime(createTime)
+		item.UpdateTime = formatTime(updateTime)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func normalizeStatus(raw string) string {
 	status := strings.ToLower(strings.TrimSpace(raw))
 	switch status {

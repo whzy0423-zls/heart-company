@@ -388,6 +388,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/voice/content/list", s.method(http.MethodGet, s.requirePermission("Voice:Content:Manage", s.voiceContentJobs)))
 	s.mux.HandleFunc("/api/video/generate", s.method(http.MethodPost, s.requirePermission("Video:Generate:Manage", s.generateVideo)))
 	s.mux.HandleFunc("/api/video/generations/list", s.method(http.MethodGet, s.requirePermission("Video:Generate:Manage", s.videoGenerations)))
+	s.mux.HandleFunc("/api/video/generations/overview", s.method(http.MethodGet, s.requirePermission("Video:Generation:Overview", s.videoGenerationsOverview)))
 	s.mux.HandleFunc("/api/video/generations/", s.requirePermission("Video:Generate:Manage", s.videoGenerationByID))
 	s.mux.HandleFunc("/api/video/analysis", s.method(http.MethodPost, s.requirePermission("Video:Analysis:Manage", s.createVideoAnalysis)))
 	s.mux.HandleFunc("/api/video/analysis/list", s.method(http.MethodGet, s.requireAnyPermission([]string{"Video:Analysis:Manage", "Video:Storyboard:Manage"}, s.videoAnalysisList)))
@@ -1454,6 +1455,16 @@ func (s *Server) videoGenerations(w http.ResponseWriter, r *http.Request) {
 	result, err := s.videoStore().ListGenerations(r.Context(), r.URL.Query())
 	if err != nil {
 		log.Printf("video generations list failed: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+func (s *Server) videoGenerationsOverview(w http.ResponseWriter, r *http.Request) {
+	result, err := s.videoStore().Overview(r.Context())
+	if err != nil {
+		log.Printf("video generations overview failed: %v", err)
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
