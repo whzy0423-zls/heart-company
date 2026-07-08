@@ -86,16 +86,18 @@ func seed(ctx context.Context, database *sql.DB, adminUser, adminPassword string
 }
 
 type seedMenu struct {
-	ID        int64
-	PID       int64
-	Name      string
-	Path      string
-	Component string
-	AuthCode  string
-	Type      string
-	Sort      int
-	Icon      string
-	Title     string
+	ID         int64
+	PID        int64
+	Name       string
+	Path       string
+	Component  string
+	AuthCode   string
+	Type       string
+	Sort       int
+	Icon       string
+	Title      string
+	HideInMenu bool
+	ActiveMenu string
 }
 
 // 默认菜单树：官网管理 + 系统管理。id 固定，便于角色绑定与幂等。
@@ -144,6 +146,8 @@ var defaultMenus = []seedMenu{
 	{ID: 1003, PID: 1000, Name: "VideoAnalysis", Path: "/video/analysis", Component: "/video/analysis", AuthCode: "Video:Analysis:Manage", Type: "menu", Sort: 3, Icon: "lucide:scan-search", Title: "视频分析"},
 	{ID: 1004, PID: 1000, Name: "VideoStoryboard", Path: "/video/storyboard", Component: "/video/storyboard", AuthCode: "Video:Storyboard:Manage", Type: "menu", Sort: 4, Icon: "lucide:panels-top-left", Title: "分镜设计"},
 	{ID: 1005, PID: 1000, Name: "VideoOverview", Path: "/video/overview", Component: "/video/overview", AuthCode: "Video:Generation:Overview", Type: "menu", Sort: 5, Icon: "lucide:bar-chart-2", Title: "生成概览"},
+	{ID: 1006, PID: 1000, Name: "VideoProjects", Path: "/video/projects", Component: "/video/projects", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 6, Icon: "lucide:folder-kanban", Title: "项目工作台"},
+	{ID: 1007, PID: 1000, Name: "VideoProjectWorkbench", Path: "/video/projects/:id/workbench", Component: "/video/projects/workbench", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 7, Icon: "lucide:panel-top", Title: "项目工作台详情", HideInMenu: true, ActiveMenu: "/video/projects"},
 	{ID: 1100, PID: 0, Name: "ModelSettings", Path: "/settings", Type: "catalog", Sort: 21, Icon: "lucide:cpu", Title: "模型配置"},
 	{ID: 1101, PID: 1100, Name: "ModelPairing", Path: "/settings/model", Component: "/settings/model", AuthCode: "System:Model:Config", Type: "menu", Sort: 1, Icon: "lucide:plug-zap", Title: "模型配对"},
 	{ID: 400, PID: 0, Name: "SystemManage", Path: "/system", Type: "catalog", Sort: 20, Icon: "lucide:shield-check", Title: "系统管理"},
@@ -171,7 +175,14 @@ func seedMenus(ctx context.Context, database *sql.DB) error {
 	defer func() { _ = tx.Rollback() }()
 
 	for _, m := range defaultMenus {
-		meta := fmt.Sprintf(`{"icon":%q,"title":%q}`, m.Icon, m.Title)
+		metaMap := map[string]any{"icon": m.Icon, "title": m.Title}
+		if m.HideInMenu {
+			metaMap["hideInMenu"] = true
+		}
+		if m.ActiveMenu != "" {
+			metaMap["activeMenu"] = m.ActiveMenu
+		}
+		metaRaw, _ := json.Marshal(metaMap)
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO menus (id, pid, name, path, component, auth_code, type, status, sort, meta)
 			 VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8,$9::jsonb)
@@ -184,7 +195,7 @@ func seedMenus(ctx context.Context, database *sql.DB) error {
 			     type=EXCLUDED.type,
 			     sort=EXCLUDED.sort,
 			     meta=EXCLUDED.meta`,
-			m.ID, m.PID, m.Name, m.Path, m.Component, m.AuthCode, m.Type, m.Sort, meta,
+			m.ID, m.PID, m.Name, m.Path, m.Component, m.AuthCode, m.Type, m.Sort, string(metaRaw),
 		); err != nil {
 			return err
 		}

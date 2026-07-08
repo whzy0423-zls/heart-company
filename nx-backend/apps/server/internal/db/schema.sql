@@ -275,6 +275,99 @@ CREATE TABLE IF NOT EXISTS video_storyboards (
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ============ 视频项目工作台（降低抽卡率的项目制工作流） ============
+
+-- 视频项目：一个项目 = 一部成片，包含角色/场景/分镜与全局风格。
+CREATE TABLE IF NOT EXISTS video_projects (
+  id              BIGSERIAL PRIMARY KEY,
+  name            TEXT NOT NULL DEFAULT '',
+  description     TEXT NOT NULL DEFAULT '',
+  theme           TEXT NOT NULL DEFAULT '',          -- 创作主题（AI 剧本生成的输入）
+  style_guide     TEXT NOT NULL DEFAULT '',          -- 全局风格英文描述，注入每个分镜提示词
+  status          TEXT NOT NULL DEFAULT 'active',    -- active/archived
+  compose_status  TEXT NOT NULL DEFAULT 'pending',   -- pending/composing/completed/failed
+  final_video_asset_id BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
+  final_video_url TEXT NOT NULL DEFAULT '',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 项目角色：引用全局资产库（video_assets），可被项目级配置覆盖。
+-- description 为详细英文外貌描述（提示词素材），reference_image_url 为角色标准照（一致性关键）。
+CREATE TABLE IF NOT EXISTS video_project_characters (
+  id                  BIGSERIAL PRIMARY KEY,
+  project_id          BIGINT NOT NULL REFERENCES video_projects(id) ON DELETE CASCADE,
+  asset_id            BIGINT REFERENCES video_assets(id) ON DELETE SET NULL,
+  name                TEXT NOT NULL DEFAULT '',
+  description         TEXT NOT NULL DEFAULT '',
+  reference_image_url TEXT NOT NULL DEFAULT '',
+  is_main             BOOLEAN NOT NULL DEFAULT false,
+  create_time         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 项目场景：引用全局资产库，reference_video_url 为运镜参考视频（可选）。
+CREATE TABLE IF NOT EXISTS video_project_scenes (
+  id                  BIGSERIAL PRIMARY KEY,
+  project_id          BIGINT NOT NULL REFERENCES video_projects(id) ON DELETE CASCADE,
+  asset_id            BIGINT REFERENCES video_assets(id) ON DELETE SET NULL,
+  name                TEXT NOT NULL DEFAULT '',
+  description         TEXT NOT NULL DEFAULT '',
+  reference_image_url TEXT NOT NULL DEFAULT '',
+  reference_video_url TEXT NOT NULL DEFAULT '',
+  create_time         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 分镜：核心表。生成时由 PromptBuilder 自动组装提示词与参考素材，
+-- image_reference_modes/video_reference_mode 控制参考素材策略（降低抽卡率），
+-- end_frame_url 在生成完成后自动提取，供下一分镜作首帧继承。
+CREATE TABLE IF NOT EXISTS video_shots (
+  id                    BIGSERIAL PRIMARY KEY,
+  project_id            BIGINT NOT NULL REFERENCES video_projects(id) ON DELETE CASCADE,
+  order_num             INT NOT NULL DEFAULT 1,
+  name                  TEXT NOT NULL DEFAULT '',
+  action_description    TEXT NOT NULL DEFAULT '',    -- 动作描述（中文即可）
+  duration              INT NOT NULL DEFAULT 15,
+  aspect_ratio          TEXT NOT NULL DEFAULT '16:9',
+  character_ids         JSONB NOT NULL DEFAULT '[]'::jsonb, -- 出场角色 id 数组
+  scene_id              BIGINT REFERENCES video_project_scenes(id) ON DELETE SET NULL,
+  image_reference_modes JSONB NOT NULL DEFAULT '["prev_frame","character_ref"]'::jsonb, -- prev_frame/character_ref/scene_ref
+  video_reference_mode  TEXT NOT NULL DEFAULT 'none', -- none/prev_video/scene_demo
+  camera_movement       TEXT NOT NULL DEFAULT '',
+  generation_id         BIGINT REFERENCES video_generations(id) ON DELETE SET NULL,
+  generated_prompt      TEXT NOT NULL DEFAULT '',
+  used_images           JSONB NOT NULL DEFAULT '[]'::jsonb,
+  used_videos           JSONB NOT NULL DEFAULT '[]'::jsonb,
+  end_frame_url         TEXT NOT NULL DEFAULT '',
+  status                TEXT NOT NULL DEFAULT 'draft', -- draft/generating/completed/failed
+  error_message         TEXT NOT NULL DEFAULT '',
+  create_time           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 关联生成记录到项目/分镜，便于统计资产成功率。
+ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES video_projects(id) ON DELETE SET NULL;
+ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS shot_id BIGINT REFERENCES video_shots(id) ON DELETE SET NULL;
+
+-- 资产质量追踪：跨项目统计使用次数与成功率，用于推荐高质量资产。
+ALTER TABLE video_assets ADD COLUMN IF NOT EXISTS usage_count INT NOT NULL DEFAULT 0;
+ALTER TABLE video_assets ADD COLUMN IF NOT EXISTS success_count INT NOT NULL DEFAULT 0;
+
+-- 成片合成任务：FFmpeg 拼接项目内全部已完成分镜。
+CREATE TABLE IF NOT EXISTS video_compose_jobs (
+  id              BIGSERIAL PRIMARY KEY,
+  project_id      BIGINT NOT NULL REFERENCES video_projects(id) ON DELETE CASCADE,
+  status          TEXT NOT NULL DEFAULT 'queued', -- queued/processing/completed/failed
+  transition_type TEXT NOT NULL DEFAULT 'none',   -- none/fade
+  music_url       TEXT NOT NULL DEFAULT '',
+  final_video_asset_id BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
+  final_video_url TEXT NOT NULL DEFAULT '',
+  error_message   TEXT NOT NULL DEFAULT '',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS rag_documents (
   id          BIGSERIAL PRIMARY KEY,
   title       TEXT NOT NULL DEFAULT '',
@@ -361,6 +454,12 @@ CREATE INDEX IF NOT EXISTS idx_video_analysis_jobs_create_time ON video_analysis
 CREATE INDEX IF NOT EXISTS idx_video_analysis_jobs_status ON video_analysis_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_video_storyboards_create_time ON video_storyboards(create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_video_storyboards_status ON video_storyboards(status);
+CREATE INDEX IF NOT EXISTS idx_video_projects_create_time ON video_projects(create_time DESC);
+CREATE INDEX IF NOT EXISTS idx_video_project_characters_project ON video_project_characters(project_id);
+CREATE INDEX IF NOT EXISTS idx_video_project_scenes_project ON video_project_scenes(project_id);
+CREATE INDEX IF NOT EXISTS idx_video_shots_project_order ON video_shots(project_id, order_num);
+CREATE INDEX IF NOT EXISTS idx_video_shots_status ON video_shots(status);
+CREATE INDEX IF NOT EXISTS idx_video_compose_jobs_project ON video_compose_jobs(project_id, create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_rag_documents_status_sort ON rag_documents(status, sort ASC, update_time DESC);
 CREATE INDEX IF NOT EXISTS idx_rag_documents_update_time ON rag_documents(update_time DESC);
 
