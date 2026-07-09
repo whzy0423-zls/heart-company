@@ -275,6 +275,99 @@ CREATE TABLE IF NOT EXISTS video_storyboards (
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ============ 视频项目工作台（降低抽卡率的项目制工作流） ============
+
+-- 视频项目：一个项目 = 一部成片，包含角色/场景/分镜与全局风格。
+CREATE TABLE IF NOT EXISTS video_projects (
+  id              BIGSERIAL PRIMARY KEY,
+  name            TEXT NOT NULL DEFAULT '',
+  description     TEXT NOT NULL DEFAULT '',
+  theme           TEXT NOT NULL DEFAULT '',          -- 创作主题（AI 剧本生成的输入）
+  style_guide     TEXT NOT NULL DEFAULT '',          -- 全局风格英文描述，注入每个分镜提示词
+  status          TEXT NOT NULL DEFAULT 'active',    -- active/archived
+  compose_status  TEXT NOT NULL DEFAULT 'pending',   -- pending/composing/completed/failed
+  final_video_asset_id BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
+  final_video_url TEXT NOT NULL DEFAULT '',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 项目角色：引用全局资产库（video_assets），可被项目级配置覆盖。
+-- description 为详细英文外貌描述（提示词素材），reference_image_url 为角色标准照（一致性关键）。
+CREATE TABLE IF NOT EXISTS video_project_characters (
+  id                  BIGSERIAL PRIMARY KEY,
+  project_id          BIGINT NOT NULL REFERENCES video_projects(id) ON DELETE CASCADE,
+  asset_id            BIGINT REFERENCES video_assets(id) ON DELETE SET NULL,
+  name                TEXT NOT NULL DEFAULT '',
+  description         TEXT NOT NULL DEFAULT '',
+  reference_image_url TEXT NOT NULL DEFAULT '',
+  is_main             BOOLEAN NOT NULL DEFAULT false,
+  create_time         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 项目场景：引用全局资产库，reference_video_url 为运镜参考视频（可选）。
+CREATE TABLE IF NOT EXISTS video_project_scenes (
+  id                  BIGSERIAL PRIMARY KEY,
+  project_id          BIGINT NOT NULL REFERENCES video_projects(id) ON DELETE CASCADE,
+  asset_id            BIGINT REFERENCES video_assets(id) ON DELETE SET NULL,
+  name                TEXT NOT NULL DEFAULT '',
+  description         TEXT NOT NULL DEFAULT '',
+  reference_image_url TEXT NOT NULL DEFAULT '',
+  reference_video_url TEXT NOT NULL DEFAULT '',
+  create_time         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 分镜：核心表。生成时由 PromptBuilder 自动组装提示词与参考素材，
+-- image_reference_modes/video_reference_mode 控制参考素材策略（降低抽卡率），
+-- end_frame_url 在生成完成后自动提取，供下一分镜作首帧继承。
+CREATE TABLE IF NOT EXISTS video_shots (
+  id                    BIGSERIAL PRIMARY KEY,
+  project_id            BIGINT NOT NULL REFERENCES video_projects(id) ON DELETE CASCADE,
+  order_num             INT NOT NULL DEFAULT 1,
+  name                  TEXT NOT NULL DEFAULT '',
+  action_description    TEXT NOT NULL DEFAULT '',    -- 动作描述（中文即可）
+  duration              INT NOT NULL DEFAULT 15,
+  aspect_ratio          TEXT NOT NULL DEFAULT '16:9',
+  character_ids         JSONB NOT NULL DEFAULT '[]'::jsonb, -- 出场角色 id 数组
+  scene_id              BIGINT REFERENCES video_project_scenes(id) ON DELETE SET NULL,
+  image_reference_modes JSONB NOT NULL DEFAULT '["prev_frame","character_ref"]'::jsonb, -- prev_frame/character_ref/scene_ref
+  video_reference_mode  TEXT NOT NULL DEFAULT 'none', -- none/prev_video/scene_demo
+  camera_movement       TEXT NOT NULL DEFAULT '',
+  generation_id         BIGINT REFERENCES video_generations(id) ON DELETE SET NULL,
+  generated_prompt      TEXT NOT NULL DEFAULT '',
+  used_images           JSONB NOT NULL DEFAULT '[]'::jsonb,
+  used_videos           JSONB NOT NULL DEFAULT '[]'::jsonb,
+  end_frame_url         TEXT NOT NULL DEFAULT '',
+  status                TEXT NOT NULL DEFAULT 'draft', -- draft/generating/completed/failed
+  error_message         TEXT NOT NULL DEFAULT '',
+  create_time           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 关联生成记录到项目/分镜，便于统计资产成功率。
+ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES video_projects(id) ON DELETE SET NULL;
+ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS shot_id BIGINT REFERENCES video_shots(id) ON DELETE SET NULL;
+
+-- 资产质量追踪：跨项目统计使用次数与成功率，用于推荐高质量资产。
+ALTER TABLE video_assets ADD COLUMN IF NOT EXISTS usage_count INT NOT NULL DEFAULT 0;
+ALTER TABLE video_assets ADD COLUMN IF NOT EXISTS success_count INT NOT NULL DEFAULT 0;
+
+-- 成片合成任务：FFmpeg 拼接项目内全部已完成分镜。
+CREATE TABLE IF NOT EXISTS video_compose_jobs (
+  id              BIGSERIAL PRIMARY KEY,
+  project_id      BIGINT NOT NULL REFERENCES video_projects(id) ON DELETE CASCADE,
+  status          TEXT NOT NULL DEFAULT 'queued', -- queued/processing/completed/failed
+  transition_type TEXT NOT NULL DEFAULT 'none',   -- none/fade
+  music_url       TEXT NOT NULL DEFAULT '',
+  final_video_asset_id BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
+  final_video_url TEXT NOT NULL DEFAULT '',
+  error_message   TEXT NOT NULL DEFAULT '',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS rag_documents (
   id          BIGSERIAL PRIMARY KEY,
   title       TEXT NOT NULL DEFAULT '',
@@ -361,6 +454,12 @@ CREATE INDEX IF NOT EXISTS idx_video_analysis_jobs_create_time ON video_analysis
 CREATE INDEX IF NOT EXISTS idx_video_analysis_jobs_status ON video_analysis_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_video_storyboards_create_time ON video_storyboards(create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_video_storyboards_status ON video_storyboards(status);
+CREATE INDEX IF NOT EXISTS idx_video_projects_create_time ON video_projects(create_time DESC);
+CREATE INDEX IF NOT EXISTS idx_video_project_characters_project ON video_project_characters(project_id);
+CREATE INDEX IF NOT EXISTS idx_video_project_scenes_project ON video_project_scenes(project_id);
+CREATE INDEX IF NOT EXISTS idx_video_shots_project_order ON video_shots(project_id, order_num);
+CREATE INDEX IF NOT EXISTS idx_video_shots_status ON video_shots(status);
+CREATE INDEX IF NOT EXISTS idx_video_compose_jobs_project ON video_compose_jobs(project_id, create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_rag_documents_status_sort ON rag_documents(status, sort ASC, update_time DESC);
 CREATE INDEX IF NOT EXISTS idx_rag_documents_update_time ON rag_documents(update_time DESC);
 
@@ -716,6 +815,182 @@ CREATE TABLE IF NOT EXISTS app_daily_checkins (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_daily_checkins_user_date
   ON app_daily_checkins(app_user_id, checkin_date);
+
+-- ----- App 每日画像校准：每天 5 道题，累计 100 题触发复评 -----
+CREATE TABLE IF NOT EXISTS app_daily_quiz_questions (
+  id           BIGSERIAL PRIMARY KEY,
+  sort         INT NOT NULL DEFAULT 0,
+  body         TEXT NOT NULL DEFAULT '',
+  options      JSONB NOT NULL DEFAULT '[]'::jsonb,
+  dimension    TEXT NOT NULL DEFAULT '',
+  type_weights JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status       TEXT NOT NULL DEFAULT 'active',
+  create_time  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_daily_quiz_questions_active_sort
+  ON app_daily_quiz_questions(status, sort, id);
+
+CREATE TABLE IF NOT EXISTS app_daily_quiz_sets (
+  id             BIGSERIAL PRIMARY KEY,
+  quiz_date      DATE NOT NULL UNIQUE,
+  status         TEXT NOT NULL DEFAULT 'pending',
+  source         TEXT NOT NULL DEFAULT '',
+  model_provider TEXT NOT NULL DEFAULT '',
+  model_name     TEXT NOT NULL DEFAULT '',
+  prompt         TEXT NOT NULL DEFAULT '',
+  raw_response   TEXT NOT NULL DEFAULT '',
+  question_ids   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  error_message  TEXT NOT NULL DEFAULT '',
+  generated_at   TIMESTAMPTZ,
+  published_at   TIMESTAMPTZ,
+  pushed_at      TIMESTAMPTZ,
+  create_time    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_daily_quiz_sets_date
+  ON app_daily_quiz_sets(quiz_date);
+
+CREATE TABLE IF NOT EXISTS app_daily_quiz_question_versions (
+  id             BIGSERIAL PRIMARY KEY,
+  set_id         BIGINT NOT NULL REFERENCES app_daily_quiz_sets(id) ON DELETE CASCADE,
+  question_id    BIGINT NOT NULL REFERENCES app_daily_quiz_questions(id) ON DELETE RESTRICT,
+  slot_no        INT NOT NULL DEFAULT 1,
+  version_no     INT NOT NULL DEFAULT 1,
+  is_active      BOOLEAN NOT NULL DEFAULT true,
+  body           TEXT NOT NULL DEFAULT '',
+  options        JSONB NOT NULL DEFAULT '[]'::jsonb,
+  dimension      TEXT NOT NULL DEFAULT '',
+  type_weights   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  source         TEXT NOT NULL DEFAULT '',
+  model_provider TEXT NOT NULL DEFAULT '',
+  model_name     TEXT NOT NULL DEFAULT '',
+  prompt         TEXT NOT NULL DEFAULT '',
+  raw_response   TEXT NOT NULL DEFAULT '',
+  operator       TEXT NOT NULL DEFAULT '',
+  replace_reason TEXT NOT NULL DEFAULT '',
+  create_time    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_daily_quiz_question_versions_slot_version
+  ON app_daily_quiz_question_versions(set_id, slot_no, version_no);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_daily_quiz_question_versions_active
+  ON app_daily_quiz_question_versions(set_id, slot_no)
+  WHERE is_active = true;
+
+CREATE TABLE IF NOT EXISTS app_daily_quiz_batches (
+  id             BIGSERIAL PRIMARY KEY,
+  app_user_id    BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  card_id        BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
+  quiz_date      DATE NOT NULL,
+  round_no       INT NOT NULL DEFAULT 1,
+  question_ids   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  answered_count INT NOT NULL DEFAULT 0,
+  completed      BOOLEAN NOT NULL DEFAULT false,
+  completed_at   TIMESTAMPTZ,
+  push_claimed_at TIMESTAMPTZ,
+  push_sent_at   TIMESTAMPTZ,
+  create_time    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_daily_quiz_batches_card_date_round
+  ON app_daily_quiz_batches(card_id, quiz_date, round_no);
+CREATE INDEX IF NOT EXISTS idx_app_daily_quiz_batches_user_date
+  ON app_daily_quiz_batches(app_user_id, quiz_date DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS app_daily_quiz_answers (
+  id          BIGSERIAL PRIMARY KEY,
+  batch_id    BIGINT NOT NULL REFERENCES app_daily_quiz_batches(id) ON DELETE CASCADE,
+  app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  card_id     BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
+  round_no    INT NOT NULL DEFAULT 1,
+  question_id BIGINT NOT NULL,
+  option_id   TEXT NOT NULL DEFAULT '',
+  type_delta  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  answered_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_daily_quiz_answers_batch_question
+  ON app_daily_quiz_answers(batch_id, question_id);
+CREATE INDEX IF NOT EXISTS idx_app_daily_quiz_answers_card_round
+  ON app_daily_quiz_answers(card_id, round_no, answered_at, id);
+
+CREATE TABLE IF NOT EXISTS app_profile_evidence (
+  id              BIGSERIAL PRIMARY KEY,
+  app_user_id     BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  card_id         BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
+  round_no        INT NOT NULL DEFAULT 1,
+  source_type     TEXT NOT NULL DEFAULT '',
+  source_id       BIGINT,
+  evidence_text   TEXT NOT NULL DEFAULT '',
+  trait_scores    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  type_scores     JSONB NOT NULL DEFAULT '{}'::jsonb,
+  emotion_scores  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  behavior_scores JSONB NOT NULL DEFAULT '{}'::jsonb,
+  confidence      NUMERIC NOT NULL DEFAULT 0,
+  status          TEXT NOT NULL DEFAULT 'active',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_profile_evidence_card_round
+  ON app_profile_evidence(card_id, round_no, status, create_time DESC);
+
+CREATE TABLE IF NOT EXISTS app_reassessment_jobs (
+  id                   BIGSERIAL PRIMARY KEY,
+  app_user_id          BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  card_id              BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
+  round_no             INT NOT NULL DEFAULT 1,
+  trigger_reason       TEXT NOT NULL DEFAULT '',
+  evidence_window_start TIMESTAMPTZ,
+  evidence_window_end   TIMESTAMPTZ,
+  daily_answer_count   INT NOT NULL DEFAULT 0,
+  chat_evidence_count  INT NOT NULL DEFAULT 0,
+  voice_evidence_count INT NOT NULL DEFAULT 0,
+  behavior_evidence_count INT NOT NULL DEFAULT 0,
+  old_main_type        INT NOT NULL DEFAULT 0,
+  suggested_main_type  INT NOT NULL DEFAULT 0,
+  confidence           NUMERIC NOT NULL DEFAULT 0,
+  status               TEXT NOT NULL DEFAULT 'pending',
+  report_json          JSONB NOT NULL DEFAULT '{}'::jsonb,
+  push_claimed_at      TIMESTAMPTZ,
+  push_sent_at         TIMESTAMPTZ,
+  create_time          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE app_daily_quiz_batches ADD COLUMN IF NOT EXISTS push_claimed_at TIMESTAMPTZ;
+ALTER TABLE app_daily_quiz_batches ADD COLUMN IF NOT EXISTS push_sent_at TIMESTAMPTZ;
+ALTER TABLE app_reassessment_jobs ADD COLUMN IF NOT EXISTS push_claimed_at TIMESTAMPTZ;
+ALTER TABLE app_reassessment_jobs ADD COLUMN IF NOT EXISTS push_sent_at TIMESTAMPTZ;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_reassessment_jobs_open
+  ON app_reassessment_jobs(card_id, round_no)
+  WHERE status IN ('pending','generating','generated');
+CREATE INDEX IF NOT EXISTS idx_app_reassessment_jobs_card_time
+  ON app_reassessment_jobs(card_id, create_time DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS app_profile_versions (
+  id          BIGSERIAL PRIMARY KEY,
+  app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  card_id     BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
+  version     INT NOT NULL DEFAULT 1,
+  main_type   INT NOT NULL DEFAULT 0,
+  wing_type   INT NOT NULL DEFAULT 0,
+  profile_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  source      TEXT NOT NULL DEFAULT 'initial_quiz',
+  confidence  NUMERIC NOT NULL DEFAULT 0,
+  is_active   BOOLEAN NOT NULL DEFAULT true,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_profile_versions_active
+  ON app_profile_versions(card_id)
+  WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_app_profile_versions_card_version
+  ON app_profile_versions(card_id, version DESC);
 
 -- ----- App 推送设备令牌：存储用户的 JPush Registration ID -----
 CREATE TABLE IF NOT EXISTS app_device_tokens (

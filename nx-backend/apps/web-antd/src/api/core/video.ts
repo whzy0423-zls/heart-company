@@ -177,3 +177,24 @@ export function retryVideoStoryboardApi(id: string) {
 export function deleteVideoStoryboardApi(id: string) {
   return requestClient.delete<boolean>(`/video/storyboards/${id}`);
 }
+
+// --- Video Generations Overview ---
+
+export interface VideoGenerationsStatusCounts {
+  completed: number;
+  failed: number;
+  inProgress: number;
+  queued: number;
+}
+
+export interface VideoGenerationsOverview {
+  recent: VideoGeneration[];
+  statusCounts: VideoGenerationsStatusCounts;
+  total: number;
+}
+
+export function getVideoGenerationsOverviewApi() {
+  return requestClient.get<VideoGenerationsOverview>(
+    '/video/generations/overview',
+  );
+}

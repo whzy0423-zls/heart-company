@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,8 +33,6 @@ func (s *Server) appVoiceRecognize(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-
-	_ = userInfo.ID // 用户 ID，可用于日志记录或配额控制
 
 	// 解析 multipart form，并硬限制请求体大小，避免大文件落盘。
 	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
@@ -61,6 +60,8 @@ func (s *Server) appVoiceRecognize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cardID, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue("cardId")), 10, 64)
+
 	text, err := s.recognizeSpeech(r.Context(), fileBytes, header.Filename)
 	if err != nil {
 		if errors.Is(err, errASRNotConfigured) {
@@ -69,6 +70,10 @@ func (s *Server) appVoiceRecognize(w http.ResponseWriter, r *http.Request) {
 		}
 		httpx.Fail(w, http.StatusInternalServerError, fmt.Sprintf("识别失败: %v", err))
 		return
+	}
+
+	if cardID > 0 {
+		s.recordAppProfileEvidenceAsync(userInfo.ID, cardID, "voice_text", 0, text)
 	}
 
 	httpx.OK(w, map[string]interface{}{

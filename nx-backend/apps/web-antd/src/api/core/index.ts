@@ -8,6 +8,7 @@ export * from './app-ops';
 export * from './article';
 export * from './asset';
 export * from './auth';
+export * from './daily-quiz';
 export * from './game-results';
 export * from './menu';
 export * from './message';

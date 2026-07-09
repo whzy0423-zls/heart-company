@@ -620,13 +620,49 @@ func TestValidateModelConfigBasesRejectsLocalAnalysisAddress(t *testing.T) {
 
 func TestValidateModelConfigBasesAllowsPublicHTTPS(t *testing.T) {
 	err := validateModelConfigBases(modelconfig.Config{
-		Chat:     modelconfig.ChatConfig{APIBase: "https://api.minimaxi.com"},
-		Image:    modelconfig.ImageConfig{APIBase: "https://image-gateway.example.com/v1"},
-		Video:    modelconfig.VideoConfig{APIBase: "https://video-gateway.example.com/v1"},
-		Analysis: modelconfig.AnalysisConfig{APIBase: "https://api.minimaxi.com"},
+		Chat:      modelconfig.ChatConfig{APIBase: "https://api.minimaxi.com"},
+		Image:     modelconfig.ImageConfig{APIBase: "https://image-gateway.example.com/v1"},
+		Video:     modelconfig.VideoConfig{APIBase: "https://video-gateway.example.com/v1"},
+		Analysis:  modelconfig.AnalysisConfig{APIBase: "https://api.minimaxi.com"},
+		DailyQuiz: modelconfig.CompatibleModelConfig{APIBase: "https://quiz-gateway.example.com/v1"},
 	})
 	if err != nil {
 		t.Fatalf("expected public model api bases to pass, got %v", err)
+	}
+}
+
+func TestValidateModelConfigBasesRejectsLocalDailyQuizAddress(t *testing.T) {
+	err := validateModelConfigBases(modelconfig.Config{
+		DailyQuiz: modelconfig.CompatibleModelConfig{APIBase: "http://127.0.0.1:8080"},
+	})
+	if err == nil {
+		t.Fatal("expected local daily quiz api base to be rejected")
+	}
+}
+
+func TestBuildModelConfigViewIncludesDailyQuizConfig(t *testing.T) {
+	admin := modelconfig.AdminModelConfig{
+		Provider:       modelconfig.ProviderOpenAICompatible,
+		APIBase:        "https://admin.example.com/v1",
+		APIKey:         "admin-secret",
+		Model:          "gpt-admin",
+		TimeoutSeconds: 31,
+	}
+	dailyQuiz := modelconfig.CompatibleModelConfig{
+		Provider:       modelconfig.ProviderAnthropicCompatible,
+		APIBase:        "https://quiz.example.com/v1",
+		APIKey:         "quiz-secret",
+		Model:          "claude-quiz",
+		TimeoutSeconds: 52,
+	}
+
+	view := buildModelConfigView(config.MiniMaxConfig{}, config.VideoConfig{}, config.ImageConfig{}, config.MiniMaxConfig{}, admin, dailyQuiz, modelconfig.Config{})
+
+	if view.DailyQuiz.Provider != modelconfig.ProviderAnthropicCompatible || view.DailyQuiz.APIBase != "https://quiz.example.com/v1" || view.DailyQuiz.Model != "claude-quiz" || view.DailyQuiz.TimeoutSeconds != 52 {
+		t.Fatalf("expected daily quiz model config in view, got %+v", view.DailyQuiz)
+	}
+	if !view.DailyQuiz.APIKeySet {
+		t.Fatal("expected daily quiz apiKeySet to reflect configured secret")
 	}
 }
 

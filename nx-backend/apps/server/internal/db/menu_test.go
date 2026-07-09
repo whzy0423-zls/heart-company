@@ -21,6 +21,72 @@ func TestDefaultMenusIncludeRAGKnowledgeManagement(t *testing.T) {
 	}
 }
 
+func TestDefaultMenusIncludeDailyQuizPushRecords(t *testing.T) {
+	var found bool
+	for _, menu := range defaultMenus {
+		if menu.Name != "DailyQuizPushRecords" {
+			continue
+		}
+		found = true
+		if menu.PID != 1200 || menu.Path != "/profile-calibration/daily-quiz-push" || menu.Component != "/message/daily-quiz-push" {
+			t.Fatalf("unexpected daily quiz push records route: %+v", menu)
+		}
+		if menu.AuthCode != "ProfileCalibration:DailyQuiz:Manage" || menu.Type != "menu" || menu.Title != "每日题推送记录" {
+			t.Fatalf("unexpected daily quiz push records metadata: %+v", menu)
+		}
+	}
+	if !found {
+		t.Fatal("expected default menu DailyQuizPushRecords")
+	}
+}
+
+func TestDefaultMenusIncludeDailyQuizBankManagement(t *testing.T) {
+	var foundCatalog bool
+	var foundBank bool
+	for _, menu := range defaultMenus {
+		switch menu.Name {
+		case "ProfileCalibration":
+			foundCatalog = true
+			if menu.PID != 0 || menu.Path != "/profile-calibration" || menu.Type != "catalog" || menu.Title != "画像校准" {
+				t.Fatalf("unexpected profile calibration catalog: %+v", menu)
+			}
+		case "DailyQuizBank":
+			foundBank = true
+			if menu.PID != 1200 || menu.Path != "/profile-calibration/daily-quiz-bank" || menu.Component != "/profile-calibration/daily-quiz-bank" {
+				t.Fatalf("unexpected daily quiz bank route: %+v", menu)
+			}
+			if menu.AuthCode != "ProfileCalibration:DailyQuiz:Manage" || menu.Type != "menu" || menu.Title != "每日题库管理" {
+				t.Fatalf("unexpected daily quiz bank metadata: %+v", menu)
+			}
+		}
+	}
+	if !foundCatalog {
+		t.Fatal("expected default menu ProfileCalibration")
+	}
+	if !foundBank {
+		t.Fatal("expected default menu DailyQuizBank")
+	}
+}
+
+func TestDefaultMenusIncludeAdminModelConfig(t *testing.T) {
+	var found bool
+	for _, menu := range defaultMenus {
+		if menu.Name != "AdminModelConfig" {
+			continue
+		}
+		found = true
+		if menu.PID != 1100 || menu.Path != "/settings/admin-model" || menu.Component != "/settings/model" {
+			t.Fatalf("unexpected admin model config route: %+v", menu)
+		}
+		if menu.AuthCode != "System:Model:Config" || menu.Title != "管理端大模型配置" {
+			t.Fatalf("unexpected admin model config metadata: %+v", menu)
+		}
+	}
+	if !found {
+		t.Fatal("expected default menu AdminModelConfig")
+	}
+}
+
 func TestDefaultMenusIncludeVideoAnalysis(t *testing.T) {
 	var found bool
 	for _, menu := range defaultMenus {

@@ -12,6 +12,22 @@ func DailyPracticeReminder() Message {
 	}
 }
 
+func DailyQuizReminder() Message {
+	return Message{
+		Title:    "今日画像校准题已准备好",
+		Content:  "今天 5 道题等你完成，花 1 分钟让系统更懂你",
+		DeepLink: "/daily-quiz",
+	}
+}
+
+func ReassessmentReady(reportID int64) Message {
+	return Message{
+		Title:    "你的画像校准报告已生成",
+		Content:  "系统已根据最近的校准题和互动信号生成新的画像建议",
+		DeepLink: fmt.Sprintf("/reassessment/%d", reportID),
+	}
+}
+
 func WeeklyReportReady() Message {
 	return Message{
 		Title:    "你的成长周报已生成",

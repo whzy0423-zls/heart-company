@@ -33,6 +33,13 @@ describe('push target helpers', () => {
   it('provides built-in push templates for common App scenarios', () => {
     expect(pushTemplates.length).toBeGreaterThanOrEqual(3);
     expect(pushTemplates.map((item) => item.key)).toContain('daily_practice');
+    expect(pushTemplates).toContainEqual(
+      expect.objectContaining({
+        deepLink: '/daily-quiz',
+        key: 'daily_quiz',
+        title: expect.stringContaining('画像校准'),
+      }),
+    );
     expect(pushTemplates[0]).toEqual(
       expect.objectContaining({
         content: expect.any(String),
