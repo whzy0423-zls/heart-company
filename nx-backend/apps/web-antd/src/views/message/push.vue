@@ -85,6 +85,7 @@ const audienceLabel = computed(() =>
 
 const deepLinkOptions = [
   { label: '无跳转', value: '' },
+  { label: '每日画像校准题', value: '/daily-quiz' },
   { label: '每日练习', value: '/daily' },
   { label: '成长任务', value: '/tasks' },
   { label: '成长周报', value: '/reports' },

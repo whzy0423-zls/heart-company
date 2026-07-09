@@ -78,6 +78,12 @@ export interface PushAudienceCountParams {
 
 export const pushTemplates: PushTemplate[] = [
   {
+    content: '今天 5 道题等你完成，花 1 分钟让系统更懂你。',
+    deepLink: '/daily-quiz',
+    key: 'daily_quiz',
+    title: '今日画像校准题已准备好',
+  },
+  {
     content: '今日练习已更新，花 3 分钟记录一次真实的自己。',
     deepLink: '/daily',
     key: 'daily_practice',

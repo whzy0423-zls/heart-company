@@ -12,7 +12,12 @@
       <div class="header-actions">
         <a-button @click="showProjectSettings">项目设置</a-button>
         <a-space>
-          <a-button type="primary" @click="composeVideo" :loading="composing" :disabled="generating">
+          <a-button
+            type="primary"
+            @click="composeVideo"
+            :loading="composing"
+            :disabled="shotMutationBusy || hasOpenShotInlineForm"
+          >
             合成视频
           </a-button>
           <span v-if="composing && composeProgress > 0" class="progress-text">
@@ -21,6 +26,54 @@
         </a-space>
       </div>
     </div>
+
+    <!-- 项目制五步生产流：参考旧项目 episode.vue 的轻量 step-bar，不再挤压下方工作台 -->
+    <section class="production-flow-panel compact-production-flow">
+      <div class="flow-title">
+        <a-tag color="blue">项目制生产流</a-tag>
+        <div class="flow-title-copy">
+          <h2>制片工作台流程</h2>
+          <p>{{ activeProductionStepMeta?.description }}</p>
+        </div>
+      </div>
+
+      <div class="step-bar" aria-label="项目制生产流程">
+        <button
+          v-for="(step, index) in productionSteps"
+          :key="step.key"
+          type="button"
+          :class="[
+            'step-item',
+            step.key === activeProductionStep ? 'is-active' : '',
+            index < currentProductionStepIndex ? 'is-done' : '',
+          ]"
+          @click="setProductionStep(index)"
+        >
+          <span class="step-index">{{ index + 1 }}</span>
+          <span class="step-label">{{ step.title }}</span>
+        </button>
+      </div>
+
+      <div class="flow-actions">
+        <span class="flow-stat">
+          角色 {{ characters.length }} · 场景 {{ scenes.length }} · 分镜 {{ shots.length }} · 已完成
+          {{ completedShotCount }}
+        </span>
+        <span class="bucket-pill">资产统一上传到阿里云 OSS 文件桶</span>
+        <a-button size="small" :disabled="productionSecondaryDisabled" @click="handleProductionSecondaryAction">
+          {{ productionSecondaryActionLabel }}
+        </a-button>
+        <a-button
+          size="small"
+          type="primary"
+          :loading="productionPrimaryLoading"
+          :disabled="productionPrimaryDisabled"
+          @click="handleProductionPrimaryAction"
+        >
+          {{ productionPrimaryActionLabel }}
+        </a-button>
+      </div>
+    </section>
 
     <!-- 主工作区 -->
     <a-layout class="workbench-layout">
@@ -99,11 +152,16 @@
         <div class="shots-header">
           <h3>分镜列表</h3>
           <a-space>
-            <a-button @click="showAddShot">
+            <a-button :disabled="shotMutationBusy" @click="showAddShot">
               <PlusOutlined /> 添加分镜
             </a-button>
             <a-space>
-              <a-button type="primary" @click="generateAllShots" :loading="generating" :disabled="composing">
+              <a-button
+                type="primary"
+                @click="generateAllShots"
+                :loading="generating"
+                :disabled="shotMutationBusy || hasOpenShotInlineForm"
+              >
                 批量生成
               </a-button>
               <span v-if="generating && batchProgress.total > 0" class="progress-text">
@@ -121,62 +179,207 @@
             v-for="(shot, index) in shots"
             :key="shot.id"
             class="shot-card"
-            :class="{ active: selectedShot?.id === shot.id }"
-            @click="selectShot(shot)"
+            :class="{ active: selectedShot?.id === shot.id, editing: editingShotId === shot.id }"
+            @click="editingShotId === shot.id ? undefined : selectShot(shot)"
             @dragover.prevent
             @drop.stop="onDropToShot($event, shot)"
           >
-            <div class="shot-order">{{ index + 1 }}</div>
+            <template v-if="editingShotId === shot.id">
+              <div class="shot-order">{{ index + 1 }}</div>
 
-            <div class="shot-preview">
-              <video v-if="shot.videoUrl" :src="shot.videoUrl" muted playsinline />
-              <div v-else class="shot-placeholder">
-                <VideoCameraOutlined />
-                <div class="shot-status">{{ getStatusText(shot.status) }}</div>
-              </div>
-            </div>
-
-            <div class="shot-info">
-              <div class="shot-name">{{ shot.name || `分镜 ${index + 1}` }}</div>
-              <div class="shot-action">{{ shot.actionDescription }}</div>
-
-              <div class="shot-meta">
-                <a-tag v-if="shot.duration" size="small">{{ shot.duration }}s</a-tag>
-                <a-tag v-if="shot.aspectRatio" size="small">{{ shot.aspectRatio }}</a-tag>
-              </div>
-
-              <div class="shot-progress" v-if="shot.status === 'generating'">
-                <a-progress :percent="50" size="small" status="active" />
-              </div>
-            </div>
-
-            <div class="shot-actions">
-              <a-dropdown>
-                <a-button type="text" size="small">
-                  <MoreOutlined />
-                </a-button>
-                <template #overlay>
-                  <a-menu>
-                    <a-menu-item @click="previewShot(shot)">
-                      <EyeOutlined /> 预览提示词
-                    </a-menu-item>
-                    <a-menu-item @click="generateShot(shot)">
-                      <PlayCircleOutlined /> 生成视频
-                    </a-menu-item>
-                    <a-menu-item @click="editShot(shot)">
-                      <EditOutlined /> 编辑
-                    </a-menu-item>
-                    <a-menu-divider />
-                    <a-menu-item danger @click="deleteShot(shot.id)">
-                      <DeleteOutlined /> 删除
-                    </a-menu-item>
-                  </a-menu>
+              <div class="shot-preview shot-preview-edit">
+                <video v-if="shot.videoUrl" :src="shot.videoUrl" muted playsinline />
+                <template v-else>
+                  <VideoCameraOutlined />
+                  <div class="shot-status">编辑中</div>
                 </template>
-              </a-dropdown>
+              </div>
+
+              <div class="shot-inline-form">
+                <div class="inline-form-head">
+                  <strong>编辑分镜 {{ index + 1 }}</strong>
+                  <span>参考旧项目方式，直接在当前分镜框内维护标题、动作、角色和场景。</span>
+                </div>
+                <a-input v-model:value="shotForm.name" placeholder="分镜名称（可选）" />
+                <a-textarea
+                  v-model:value="shotForm.actionDescription"
+                  placeholder="动作描述：描述角色动作、场景变化、镜头内容"
+                  :rows="3"
+                />
+                <div class="shot-inline-grid">
+                  <a-select v-model:value="shotForm.duration" placeholder="时长">
+                    <a-select-option :value="5">5 秒</a-select-option>
+                    <a-select-option :value="10">10 秒</a-select-option>
+                    <a-select-option :value="15">15 秒</a-select-option>
+                  </a-select>
+                  <a-select v-model:value="shotForm.aspectRatio" placeholder="画面比例">
+                    <a-select-option value="16:9">16:9</a-select-option>
+                    <a-select-option value="9:16">9:16</a-select-option>
+                    <a-select-option value="1:1">1:1</a-select-option>
+                  </a-select>
+                  <a-select
+                    v-model:value="shotForm.characterIds"
+                    mode="multiple"
+                    placeholder="选择角色"
+                  >
+                    <a-select-option v-for="char in characters" :key="char.id" :value="char.id">
+                      {{ char.name }}
+                    </a-select-option>
+                  </a-select>
+                  <a-select v-model:value="shotForm.sceneId" placeholder="选择场景">
+                    <a-select-option v-for="scene in scenes" :key="scene.id" :value="scene.id">
+                      {{ scene.name }}
+                    </a-select-option>
+                  </a-select>
+                  <a-select v-model:value="shotForm.cameraMovement" placeholder="镜头运动">
+                    <a-select-option value="">无镜头运动</a-select-option>
+                    <a-select-option value="push">推镜</a-select-option>
+                    <a-select-option value="pull">拉镜</a-select-option>
+                    <a-select-option value="pan">横摇</a-select-option>
+                    <a-select-option value="tilt">竖摇</a-select-option>
+                  </a-select>
+                </div>
+                <div class="inline-form-actions">
+                  <a-button :disabled="shotLoading" @click="cancelShotInlineEdit">取消</a-button>
+                  <a-button type="primary" :loading="shotLoading" @click="handleAddShot">
+                    保存修改
+                  </a-button>
+                </div>
+              </div>
+            </template>
+
+            <template v-else>
+              <div class="shot-order">{{ index + 1 }}</div>
+
+              <div class="shot-preview">
+                <video v-if="shot.videoUrl" :src="shot.videoUrl" muted playsinline />
+                <div v-else class="shot-placeholder">
+                  <VideoCameraOutlined />
+                  <div class="shot-status">{{ getStatusText(shot.status) }}</div>
+                </div>
+              </div>
+
+              <div class="shot-info">
+                <div class="shot-name">{{ shot.name || `分镜 ${index + 1}` }}</div>
+                <div class="shot-action">{{ shot.actionDescription }}</div>
+
+                <div class="shot-meta">
+                  <a-tag v-if="shot.duration" size="small">{{ shot.duration }}s</a-tag>
+                  <a-tag v-if="shot.aspectRatio" size="small">{{ shot.aspectRatio }}</a-tag>
+                </div>
+
+                <div class="shot-progress" v-if="shot.status === 'generating'">
+                  <a-progress :percent="50" size="small" status="active" />
+                </div>
+              </div>
+
+              <div class="shot-actions">
+                <a-dropdown>
+                  <a-button type="text" size="small">
+                    <MoreOutlined />
+                  </a-button>
+                  <template #overlay>
+                    <a-menu>
+                      <a-menu-item @click="previewShot(shot)">
+                        <EyeOutlined /> 预览提示词
+                      </a-menu-item>
+                      <a-menu-item
+                        :disabled="shotMutationBusy || hasOpenShotInlineForm || isShotActionBusy(shot.id)"
+                        @click="generateShot(shot)"
+                      >
+                        <PlayCircleOutlined /> 生成视频
+                      </a-menu-item>
+                      <a-menu-item
+                        :disabled="shotMutationBusy || hasOpenShotInlineForm"
+                        @click="editShot(shot)"
+                      >
+                        <EditOutlined /> 编辑
+                      </a-menu-item>
+                      <a-menu-divider />
+                      <a-menu-item
+                        danger
+                        :disabled="shotMutationBusy || hasOpenShotInlineForm || isShotActionBusy(shot.id)"
+                        @click="deleteShot(shot.id)"
+                      >
+                        <DeleteOutlined /> 删除
+                      </a-menu-item>
+                    </a-menu>
+                  </template>
+                </a-dropdown>
+              </div>
+            </template>
+          </div>
+
+          <div
+            v-if="inlineShotFormVisible && !editingShotId"
+            ref="shotEditCardRef"
+            class="shot-card shot-edit-card"
+            @click.stop
+          >
+            <div class="shot-order">{{ getNextShotOrderNum() }}</div>
+
+            <div class="shot-preview shot-preview-edit">
+              <VideoCameraOutlined />
+              <div class="shot-status">待创建</div>
+            </div>
+
+            <div class="shot-inline-form">
+              <div class="inline-form-head">
+                <strong>新增分镜</strong>
+                <span>直接在分镜框里填写信息，保存后进入列表继续绑定资产和生成视频。</span>
+              </div>
+              <a-input v-model:value="shotForm.name" placeholder="分镜名称（可选）" />
+              <a-textarea
+                v-model:value="shotForm.actionDescription"
+                placeholder="动作描述：描述角色动作、场景变化、镜头内容"
+                :rows="3"
+              />
+              <div class="shot-inline-grid">
+                <a-select v-model:value="shotForm.duration" placeholder="时长">
+                  <a-select-option :value="5">5 秒</a-select-option>
+                  <a-select-option :value="10">10 秒</a-select-option>
+                  <a-select-option :value="15">15 秒</a-select-option>
+                </a-select>
+                <a-select v-model:value="shotForm.aspectRatio" placeholder="画面比例">
+                  <a-select-option value="16:9">16:9</a-select-option>
+                  <a-select-option value="9:16">9:16</a-select-option>
+                  <a-select-option value="1:1">1:1</a-select-option>
+                </a-select>
+                <a-select
+                  v-model:value="shotForm.characterIds"
+                  mode="multiple"
+                  placeholder="选择角色"
+                >
+                  <a-select-option v-for="char in characters" :key="char.id" :value="char.id">
+                    {{ char.name }}
+                  </a-select-option>
+                </a-select>
+                <a-select v-model:value="shotForm.sceneId" placeholder="选择场景">
+                  <a-select-option v-for="scene in scenes" :key="scene.id" :value="scene.id">
+                    {{ scene.name }}
+                  </a-select-option>
+                </a-select>
+                <a-select v-model:value="shotForm.cameraMovement" placeholder="镜头运动">
+                  <a-select-option value="">无镜头运动</a-select-option>
+                  <a-select-option value="push">推镜</a-select-option>
+                  <a-select-option value="pull">拉镜</a-select-option>
+                  <a-select-option value="pan">横摇</a-select-option>
+                  <a-select-option value="tilt">竖摇</a-select-option>
+                </a-select>
+              </div>
+              <div class="inline-form-actions">
+                <a-button :disabled="shotLoading" @click="cancelShotInlineEdit">取消</a-button>
+                <a-button type="primary" :loading="shotLoading" @click="handleAddShot">
+                  保存分镜
+                </a-button>
+              </div>
             </div>
           </div>
 
-          <a-empty v-if="shots.length === 0" description="暂无分镜，点击添加分镜开始创作" />
+          <a-empty
+            v-if="shots.length === 0 && !inlineShotFormVisible"
+            description="暂无分镜，点击添加分镜开始创作"
+          />
         </div>
       </a-layout-content>
 
@@ -357,75 +560,6 @@
       </a-form>
     </a-modal>
 
-    <!-- 添加分镜对话框 -->
-    <a-modal
-      v-model:open="shotModalVisible"
-      :title="editingShotId ? '编辑分镜' : '添加分镜'"
-      @ok="handleAddShot"
-      :confirmLoading="shotLoading"
-      width="600px"
-    >
-      <a-form :model="shotForm" layout="vertical">
-        <a-form-item label="分镜名称">
-          <a-input v-model:value="shotForm.name" placeholder="可选" />
-        </a-form-item>
-        <a-form-item label="动作描述" required>
-          <a-textarea
-            v-model:value="shotForm.actionDescription"
-            placeholder="描述角色动作和场景变化"
-            :rows="3"
-          />
-        </a-form-item>
-        <a-row :gutter="16">
-          <a-col :span="12">
-            <a-form-item label="时长（秒）">
-              <a-select v-model:value="shotForm.duration" style="width: 100%">
-                <a-select-option :value="5">5 秒</a-select-option>
-                <a-select-option :value="10">10 秒</a-select-option>
-                <a-select-option :value="15">15 秒</a-select-option>
-              </a-select>
-            </a-form-item>
-          </a-col>
-          <a-col :span="12">
-            <a-form-item label="画面比例">
-              <a-select v-model:value="shotForm.aspectRatio">
-                <a-select-option value="16:9">16:9</a-select-option>
-                <a-select-option value="9:16">9:16</a-select-option>
-                <a-select-option value="1:1">1:1</a-select-option>
-              </a-select>
-            </a-form-item>
-          </a-col>
-        </a-row>
-        <a-form-item label="选择角色">
-          <a-select
-            v-model:value="shotForm.characterIds"
-            mode="multiple"
-            placeholder="选择出现的角色"
-          >
-            <a-select-option v-for="char in characters" :key="char.id" :value="char.id">
-              {{ char.name }}
-            </a-select-option>
-          </a-select>
-        </a-form-item>
-        <a-form-item label="选择场景">
-          <a-select v-model:value="shotForm.sceneId" placeholder="选择场景">
-            <a-select-option v-for="scene in scenes" :key="scene.id" :value="scene.id">
-              {{ scene.name }}
-            </a-select-option>
-          </a-select>
-        </a-form-item>
-        <a-form-item label="镜头运动">
-          <a-select v-model:value="shotForm.cameraMovement">
-            <a-select-option value="">无</a-select-option>
-            <a-select-option value="push">推镜</a-select-option>
-            <a-select-option value="pull">拉镜</a-select-option>
-            <a-select-option value="pan">横摇</a-select-option>
-            <a-select-option value="tilt">竖摇</a-select-option>
-          </a-select>
-        </a-form-item>
-      </a-form>
-    </a-modal>
-
     <!-- 预览提示词对话框 -->
     <a-modal
       v-model:open="previewModalVisible"
@@ -484,9 +618,42 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { Empty, Modal, message } from 'ant-design-vue'
+import {
+  Alert as AAlert,
+  Breadcrumb as ABreadcrumb,
+  BreadcrumbItem as ABreadcrumbItem,
+  Button as AButton,
+  Checkbox as ACheckbox,
+  Descriptions as ADescriptions,
+  DescriptionsItem as ADescriptionsItem,
+  Dropdown as ADropdown,
+  Empty,
+  Empty as AEmpty,
+  Form as AForm,
+  FormItem as AFormItem,
+  Input as AInput,
+  Layout as ALayout,
+  LayoutContent as ALayoutContent,
+  LayoutSider as ALayoutSider,
+  Menu as AMenu,
+  MenuDivider as AMenuDivider,
+  MenuItem as AMenuItem,
+  Modal,
+  Modal as AModal,
+  Progress as AProgress,
+  Select as ASelect,
+  SelectOption as ASelectOption,
+  Space as ASpace,
+  Spin as ASpin,
+  Statistic as AStatistic,
+  TabPane as ATabPane,
+  Tabs as ATabs,
+  Tag as ATag,
+  Textarea as ATextarea,
+  message,
+} from 'ant-design-vue'
 import {
   PlusOutlined,
   EditOutlined,
@@ -539,6 +706,107 @@ const shotPreview = ref<ShotPreview | null>(null)
 const leftTab = ref('characters')
 const rightTab = ref('detail')
 
+
+const activeProductionStep = ref('script')
+
+const productionSteps = [
+  { key: 'script', title: '剧本录入', description: '录入项目剧本，准备拆解资产和分镜' },
+  { key: 'analysis', title: '资产分析', description: '分析人物、场景、物品和镜头需求' },
+  { key: 'assets', title: '创建资产', description: '生成或上传人物、场景、物品、音频、视频资产' },
+  { key: 'storyboard', title: '分镜设计', description: '设计分镜并绑定参考资产' },
+  { key: 'compose', title: '剪辑合成', description: '批量生成镜头并合成为成片' },
+]
+
+const currentProductionStepIndex = computed(() =>
+  productionSteps.findIndex((step) => step.key === activeProductionStep.value),
+)
+
+const activeProductionStepMeta = computed(() =>
+  productionSteps.find((step) => step.key === activeProductionStep.value),
+)
+
+const completedShotCount = computed(
+  () => shots.value.filter((shot) => shot.status === 'completed' && shot.videoUrl).length,
+)
+
+const productionPrimaryActionLabel = computed(() => {
+  const actionMap: Record<string, string> = {
+    script: '编辑项目信息',
+    analysis: '查看资产',
+    assets: '添加人物',
+    storyboard: '添加分镜',
+    compose: '剪辑合成',
+  }
+  return actionMap[activeProductionStep.value] || '继续制作'
+})
+
+const productionSecondaryActionLabel = computed(() => {
+  const actionMap: Record<string, string> = {
+    script: '进入分镜',
+    analysis: '查看场景',
+    assets: leftTab.value === 'characters' ? '切到场景' : '切到角色',
+    storyboard: '批量生成',
+    compose: '返回分镜',
+  }
+  return actionMap[activeProductionStep.value] || '查看工作区'
+})
+
+function setProductionStep(index: number) {
+  if (shotLoading.value) return
+  activeProductionStep.value = productionSteps[index]?.key || 'script'
+}
+
+function handleProductionPrimaryAction() {
+  switch (activeProductionStep.value) {
+    case 'script': {
+      showProjectSettings()
+      break
+    }
+    case 'analysis': {
+      leftTab.value = 'characters'
+      break
+    }
+    case 'assets': {
+      leftTab.value = 'characters'
+      showAddCharacter()
+      break
+    }
+    case 'storyboard': {
+      showAddShot()
+      break
+    }
+    case 'compose': {
+      void composeVideo()
+      break
+    }
+  }
+}
+
+function handleProductionSecondaryAction() {
+  switch (activeProductionStep.value) {
+    case 'script': {
+      activeProductionStep.value = 'storyboard'
+      break
+    }
+    case 'analysis': {
+      leftTab.value = 'scenes'
+      break
+    }
+    case 'assets': {
+      leftTab.value = leftTab.value === 'characters' ? 'scenes' : 'characters'
+      break
+    }
+    case 'storyboard': {
+      void generateAllShots()
+      break
+    }
+    case 'compose': {
+      activeProductionStep.value = 'storyboard'
+      break
+    }
+  }
+}
+
 // 加载状态
 const composing = ref(false)
 const generating = ref(false)
@@ -552,9 +820,9 @@ const composeProgress = ref(0)
 // 对话框状态
 const characterModalVisible = ref(false)
 const sceneModalVisible = ref(false)
-const shotModalVisible = ref(false)
 const previewModalVisible = ref(false)
 const projectModalVisible = ref(false)
+const inlineShotFormVisible = ref(false)
 
 const editingCharacterId = ref('')
 const editingSceneId = ref('')
@@ -563,6 +831,45 @@ const editingShotId = ref('')
 const characterLoading = ref(false)
 const sceneLoading = ref(false)
 const shotLoading = ref(false)
+const shotEditCardRef = ref<HTMLElement | null>(null)
+const shotActionBusyIds = ref(new Set<string>())
+const bindingShotIds = ref(new Set<string>())
+
+const hasOpenShotInlineForm = computed(() => inlineShotFormVisible.value || !!editingShotId.value)
+const hasShotActionBusy = computed(
+  () => shotActionBusyIds.value.size > 0 || bindingShotIds.value.size > 0,
+)
+const shotMutationBusy = computed(
+  () => shotLoading.value || generating.value || composing.value || hasShotActionBusy.value,
+)
+
+function isShotActionBusy(shotId: string) {
+  return shotActionBusyIds.value.has(shotId) || bindingShotIds.value.has(shotId)
+}
+
+const productionPrimaryLoading = computed(() => {
+  if (activeProductionStep.value === 'compose') return composing.value
+  if (activeProductionStep.value === 'storyboard') return shotLoading.value
+  return generating.value
+})
+
+const productionPrimaryDisabled = computed(() => {
+  if (shotLoading.value) return true
+  if (activeProductionStep.value === 'compose') {
+    return generating.value || composing.value || hasOpenShotInlineForm.value || hasShotActionBusy.value
+  }
+  if (activeProductionStep.value === 'storyboard') {
+    return shotMutationBusy.value || hasOpenShotInlineForm.value
+  }
+  return composing.value
+})
+
+const productionSecondaryDisabled = computed(() => {
+  if (activeProductionStep.value === 'storyboard') {
+    return shotMutationBusy.value || hasOpenShotInlineForm.value
+  }
+  return shotLoading.value
+})
 
 // 表单数据
 const projectForm = ref({
@@ -586,15 +893,34 @@ const sceneForm = ref({
   referenceVideoUrl: '',
 })
 
-const shotForm = ref({
-  name: '',
-  actionDescription: '',
-  duration: 15,
-  aspectRatio: '16:9',
-  characterIds: [] as string[],
-  sceneId: '',
-  cameraMovement: '',
-})
+function createEmptyShotForm() {
+  return {
+    name: '',
+    actionDescription: '',
+    duration: 15,
+    aspectRatio: '16:9',
+    characterIds: [] as string[],
+    sceneId: '',
+    cameraMovement: '',
+  }
+}
+
+const shotForm = ref(createEmptyShotForm())
+
+function getNextShotOrderNum() {
+  return Math.max(0, ...shots.value.map((shot) => shot.orderNum || 0)) + 1
+}
+
+async function scrollShotInlineFormIntoView() {
+  await nextTick()
+  const target =
+    shotEditCardRef.value || document.querySelector<HTMLElement>('.shot-card.editing')
+
+  target?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  target
+    ?.querySelector<HTMLInputElement | HTMLTextAreaElement>('textarea, input')
+    ?.focus()
+}
 
 // 获取项目ID
 const projectId = computed(() => route.params.id as string)
@@ -627,6 +953,9 @@ async function loadScenes() {
 async function loadShots() {
   try {
     shots.value = await listShotsApi(projectId.value)
+    if (selectedShot.value) {
+      selectedShot.value = shots.value.find((shot) => shot.id === selectedShot.value?.id) || null
+    }
   } catch (error) {
     message.error('加载分镜失败')
   }
@@ -762,48 +1091,66 @@ async function deleteScene(sceneId: string) {
 
 // 分镜管理
 function showAddShot() {
-  editingShotId.value = ''
-  shotForm.value = {
-    name: '',
-    actionDescription: '',
-    duration: 15,
-    aspectRatio: '16:9',
-    characterIds: [],
-    sceneId: '',
-    cameraMovement: '',
+  if (shotMutationBusy.value) return
+  if (hasOpenShotInlineForm.value) {
+    message.warning('请先保存或取消当前分镜编辑')
+    return
   }
-  shotModalVisible.value = true
+  editingShotId.value = ''
+  shotForm.value = createEmptyShotForm()
+  inlineShotFormVisible.value = true
+  activeProductionStep.value = 'storyboard'
+  void scrollShotInlineFormIntoView()
 }
 
 async function handleAddShot() {
-  if (!shotForm.value.actionDescription) {
+  if (shotLoading.value) return
+  const actionDescription = shotForm.value.actionDescription.trim()
+  if (!actionDescription) {
     message.warning('请填写动作描述')
     return
   }
 
   try {
     shotLoading.value = true
+    const payload = {
+      ...shotForm.value,
+      actionDescription,
+    }
+    let savedShot: null | Shot = null
     if (editingShotId.value) {
-      await updateShotApi(editingShotId.value, shotForm.value)
+      const originalShot = shots.value.find((shot) => shot.id === editingShotId.value)
+      savedShot = await updateShotApi(editingShotId.value, {
+        ...(originalShot ? shotToPayload(originalShot) : {}),
+        ...payload,
+      })
       message.success('更新成功')
     } else {
-      await createShotApi(projectId.value, {
-        ...shotForm.value,
-        orderNum: shots.value.length + 1,
+      savedShot = await createShotApi(projectId.value, {
+        ...payload,
+        orderNum: getNextShotOrderNum(),
       })
       message.success('添加成功')
     }
     editingShotId.value = ''
-    shotModalVisible.value = false
+    inlineShotFormVisible.value = false
     await loadShots()
+    if (savedShot?.id) {
+      selectedShot.value = shots.value.find((shot) => shot.id === savedShot?.id) || savedShot
+    }
   } catch (error) {
-    message.error('添加失败')
+    message.error('保存分镜失败')
   } finally {
     shotLoading.value = false
   }
 }
 
 function editShot(shot: Shot) {
+  if (shotMutationBusy.value) return
+  if (hasOpenShotInlineForm.value && editingShotId.value !== shot.id) {
+    message.warning('请先保存或取消当前分镜编辑')
+    return
+  }
   editingShotId.value = shot.id
   shotForm.value = {
     name: shot.name,
@@ -814,20 +1161,49 @@ function editShot(shot: Shot) {
     sceneId: shot.sceneId || '',
     cameraMovement: shot.cameraMovement || '',
   }
-  shotModalVisible.value = true
+  inlineShotFormVisible.value = true
+  activeProductionStep.value = 'storyboard'
+  void scrollShotInlineFormIntoView()
+}
+
+function cancelShotInlineEdit() {
+  if (shotLoading.value) return
+  editingShotId.value = ''
+  inlineShotFormVisible.value = false
+  shotForm.value = createEmptyShotForm()
 }
 
 async function deleteShot(shotId: string) {
+  if (shotMutationBusy.value) return
+  if (hasOpenShotInlineForm.value) {
+    message.warning('请先保存或取消当前分镜编辑')
+    return
+  }
   Modal.confirm({
     title: '确认删除',
     content: '确定要删除这个分镜吗？',
     onOk: async () => {
+      if (shotMutationBusy.value || hasOpenShotInlineForm.value) {
+        message.warning('请先保存或取消当前分镜编辑')
+        return
+      }
+      shotActionBusyIds.value.add(shotId)
+      shotActionBusyIds.value = new Set(shotActionBusyIds.value)
       try {
         await deleteShotApi(shotId)
+        if (editingShotId.value === shotId) {
+          cancelShotInlineEdit()
+        }
+        if (selectedShot.value?.id === shotId) {
+          selectedShot.value = null
+        }
         message.success('删除成功')
         await loadShots()
       } catch (error) {
         message.error('删除失败')
+      } finally {
+        shotActionBusyIds.value.delete(shotId)
+        shotActionBusyIds.value = new Set(shotActionBusyIds.value)
       }
     },
   })
@@ -853,17 +1229,33 @@ async function previewShot(shot: Shot) {
 }
 
 async function generateShot(shot: Shot) {
+  if (hasOpenShotInlineForm.value) {
+    message.warning('请先保存或取消当前分镜编辑')
+    return
+  }
+  if (shotMutationBusy.value) return
+  shotActionBusyIds.value.add(shot.id)
+  shotActionBusyIds.value = new Set(shotActionBusyIds.value)
   try {
     await generateShotApi(shot.id)
     message.success('开始生成视频')
     await loadShots()
   } catch (error) {
     message.error('生成失败')
+  } finally {
+    shotActionBusyIds.value.delete(shot.id)
+    shotActionBusyIds.value = new Set(shotActionBusyIds.value)
   }
 }
 
 async function generateAllShots() {
+  if (hasOpenShotInlineForm.value) {
+    message.warning('请先保存或取消当前分镜编辑')
+    return
+  }
+  if (shotMutationBusy.value) return
   generating.value = true
+  batchProgress.value = { completed: 0, total: shots.value.length, failed: 0 }
   try {
     const result = await batchGenerateShotsApi(projectId.value)
     const skipped = result.shotResults.filter((item) => item.status === 'skipped').length
@@ -964,6 +1356,11 @@ const composeOptions = ref({
 })
 
 async function composeVideo() {
+  if (hasOpenShotInlineForm.value) {
+    message.warning('请先保存或取消当前分镜编辑')
+    return
+  }
+  if (shotMutationBusy.value) return
   // 检查是否有已完成的分镜
   const completedShots = shots.value.filter((s) => s.status === 'completed' && s.videoUrl)
   if (completedShots.length === 0) {
@@ -997,6 +1394,10 @@ async function composeVideo() {
 }
 
 function onDragStart(event: DragEvent, type: string, data: any) {
+  if (shotMutationBusy.value || hasOpenShotInlineForm.value) {
+    event.preventDefault()
+    return
+  }
   event.dataTransfer?.setData('type', type)
   event.dataTransfer?.setData('data', JSON.stringify(data))
 }
@@ -1017,13 +1418,21 @@ function shotToPayload(shot: Shot) {
 }
 
 async function onDropToShot(event: DragEvent, shot: Shot) {
+  if (shotMutationBusy.value || hasOpenShotInlineForm.value) {
+    message.warning('请先保存或取消当前分镜编辑')
+    return
+  }
+  if (bindingShotIds.value.has(shot.id)) return
   const type = event.dataTransfer?.getData('type')
   const raw = event.dataTransfer?.getData('data')
   if (!type || !raw) return
 
+  bindingShotIds.value.add(shot.id)
+  bindingShotIds.value = new Set(bindingShotIds.value)
   try {
     const resource = JSON.parse(raw) as Character | Scene
-    const payload = shotToPayload(shot)
+    const latestShot = shots.value.find((item) => item.id === shot.id) || shot
+    const payload = shotToPayload(latestShot)
 
     if (type === 'character') {
       const characterId = resource.id
@@ -1042,6 +1451,9 @@ async function onDropToShot(event: DragEvent, shot: Shot) {
     selectedShot.value = shots.value.find((item) => item.id === updated.id) || updated
   } catch (error) {
     message.error('绑定素材失败')
+  } finally {
+    bindingShotIds.value.delete(shot.id)
+    bindingShotIds.value = new Set(bindingShotIds.value)
   }
 }
 
@@ -1065,28 +1477,223 @@ onMounted(() => {
 .workbench-header {
   padding: 16px 24px;
   background: #fff;
+  color: #0f172a;
   display: flex;
   justify-content: space-between;
   align-items: center;
   border-bottom: 1px solid #f0f0f0;
+
+  :deep(.ant-breadcrumb),
+  :deep(.ant-breadcrumb-link),
+  :deep(.ant-breadcrumb-separator) {
+    color: #475569 !important;
+  }
 }
+
 
 .header-actions {
   display: flex;
   gap: 8px;
 }
 
-.workbench-layout {
-  flex: 1;
+
+.production-flow-panel {
+  flex: 0 0 auto;
+  margin: 12px 24px 10px;
+  padding: 10px 14px;
+  color: #e9f2ff;
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(560px, 1fr) minmax(320px, auto);
+  align-items: center;
+  gap: 14px;
+  border: 1px solid rgba(77, 227, 255, 0.18);
+  border-radius: 14px;
+  background:
+    radial-gradient(360px circle at 8% 0%, rgba(77, 227, 255, 0.18), transparent 62%),
+    linear-gradient(135deg, rgba(10, 16, 26, 0.98), rgba(12, 18, 28, 0.94));
+  box-shadow: 0 14px 32px rgba(6, 10, 16, 0.22);
+
+  :deep(.ant-tag) {
+    margin-inline-end: 0;
+    color: #7cffc4;
+    background: rgba(77, 227, 255, 0.08);
+    border-color: rgba(124, 255, 196, 0.36);
+  }
+
+  :deep(.ant-btn-default) {
+    color: rgba(233, 242, 255, 0.88);
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(233, 242, 255, 0.18);
+  }
+
+  :deep(.ant-btn-default:hover) {
+    color: #7cffc4;
+    border-color: rgba(124, 255, 196, 0.58);
+  }
+}
+
+.flow-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
+}
+
+.flow-title-copy {
+  min-width: 0;
+
+  h2 {
+    margin: 0 0 2px;
+    color: #f8fbff;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    line-height: 1.25;
+  }
+
+  p {
+    margin: 0;
+    color: rgba(233, 242, 255, 0.62);
+    font-size: 12px;
+    line-height: 1.35;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.step-bar {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(92px, 1fr));
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.step-item {
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px 10px;
+  color: rgba(233, 242, 255, 0.7);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid rgba(77, 227, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(12, 18, 28, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.step-item:hover {
+  color: #ffffff;
+  border-color: rgba(77, 227, 255, 0.5);
+}
+
+.step-item.is-done {
+  color: rgba(124, 255, 196, 0.95);
+  border-color: rgba(124, 255, 196, 0.55);
+  background: rgba(12, 20, 28, 0.9);
+}
+
+.step-item.is-active {
+  color: #071018;
+  font-weight: 700;
+  border-color: transparent;
+  background: linear-gradient(135deg, rgba(77, 227, 255, 0.95), rgba(124, 255, 196, 0.95));
+  box-shadow: 0 10px 18px rgba(77, 227, 255, 0.24);
+}
+
+.step-index {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(233, 242, 255, 0.1);
+}
+
+.step-item.is-active .step-index {
+  color: #071018;
+  background: rgba(255, 255, 255, 0.44);
+}
+
+.step-label {
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.flow-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.flow-stat,
+.bucket-pill {
+  min-height: 24px;
+  padding: 3px 9px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  color: rgba(233, 242, 255, 0.74);
+  font-size: 12px;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(233, 242, 255, 0.1);
+}
+
+.bucket-pill {
+  color: rgba(124, 255, 196, 0.95);
+  border-color: rgba(124, 255, 196, 0.24);
+  background: rgba(124, 255, 196, 0.08);
+}
+
+.workbench-layout {
+  margin: 0 24px 24px;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
 }
 
 .workbench-sider,
 .workbench-sider-right {
+  min-height: 0;
   background: #fff;
+  color: #0f172a;
   border-right: 1px solid #f0f0f0;
   overflow-y: auto;
+
+  :deep(.ant-tabs-tab-btn),
+  :deep(.ant-empty-description),
+  :deep(.ant-form-item-label > label) {
+    color: #334155 !important;
+  }
+
+  :deep(.ant-tabs-tab-active .ant-tabs-tab-btn) {
+    color: #1677ff !important;
+  }
+
+  :deep(.ant-btn-default) {
+    background: #fff;
+    color: #0f172a;
+    border-color: #cbd5e1;
+  }
 }
+
 
 .workbench-sider-right {
   border-right: none;
@@ -1095,6 +1702,7 @@ onMounted(() => {
 
 .resource-panel {
   padding: 16px;
+  color: #0f172a;
 }
 
 .resource-list {
@@ -1110,6 +1718,8 @@ onMounted(() => {
   gap: 12px;
   padding: 12px;
   background: #fafafa;
+  color: #0f172a;
+  border: 1px solid #e2e8f0;
   border-radius: 8px;
   cursor: move;
   transition: all 0.2s;
@@ -1181,9 +1791,23 @@ onMounted(() => {
 }
 
 .workbench-content {
+  min-height: 0;
   padding: 16px;
   overflow-y: auto;
+  background: #f8fafc;
+  color: #0f172a;
+
+  :deep(.ant-empty-description) {
+    color: #64748b !important;
+  }
+
+  :deep(.ant-btn-default) {
+    background: #fff;
+    color: #0f172a;
+    border-color: #cbd5e1;
+  }
 }
+
 
 .shots-header {
   display: flex;
@@ -1207,6 +1831,7 @@ onMounted(() => {
   gap: 16px;
   padding: 16px;
   background: #fff;
+  color: #0f172a;
   border-radius: 8px;
   border: 2px solid transparent;
   cursor: pointer;
@@ -1219,6 +1844,14 @@ onMounted(() => {
   &.active {
     border-color: #1890ff;
     box-shadow: 0 2px 8px rgba(24, 144, 255, 0.2);
+  }
+
+  &.editing,
+  &.shot-edit-card {
+    align-items: flex-start;
+    border-color: rgba(24, 144, 255, 0.35);
+    background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+    cursor: default;
   }
 }
 
@@ -1243,11 +1876,69 @@ onMounted(() => {
   overflow: hidden;
   flex-shrink: 0;
 
-  img {
+  img,
+  video {
     width: 100%;
     height: 100%;
     object-fit: cover;
   }
+}
+
+.shot-preview-edit {
+  border: 1px dashed #cbd5e1;
+  background: #f8fafc;
+  color: #64748b;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+
+  svg {
+    font-size: 28px;
+  }
+}
+
+.shot-inline-form {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+
+  :deep(.ant-input),
+  :deep(.ant-select-selector) {
+    background: #fff;
+    border-color: #dbe3ef !important;
+  }
+}
+
+.inline-form-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  color: #0f172a;
+
+  strong {
+    flex-shrink: 0;
+  }
+
+  span {
+    color: #64748b;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+}
+
+.shot-inline-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
+}
+
+.inline-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .shot-placeholder {
@@ -1294,7 +1985,15 @@ onMounted(() => {
 
 .shot-detail-panel {
   padding: 16px;
+  color: #0f172a;
+
+  :deep(.ant-empty-description),
+  :deep(.ant-descriptions-item-label),
+  :deep(.ant-descriptions-item-content) {
+    color: #334155 !important;
+  }
 }
+
 
 .detail-section {
   h4 {
@@ -1356,4 +2055,148 @@ onMounted(() => {
   font-weight: 500;
   white-space: nowrap;
 }
+
+@media (max-width: 1200px) and (min-width: 901px) {
+  .production-flow-panel {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .flow-title-copy p {
+    white-space: normal;
+  }
+
+  .step-bar {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .flow-actions {
+    justify-content: flex-start;
+  }
+
+  .workbench-layout {
+    display: grid;
+    grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    overflow: hidden;
+  }
+
+  .workbench-sider {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .workbench-content {
+    width: 100% !important;
+    max-width: 100%;
+    min-width: 0;
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .workbench-sider-right {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    max-height: 220px;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    border-top: 1px solid #f0f0f0;
+    border-left: none;
+    overflow-y: auto;
+  }
+
+  .shot-card {
+    gap: 10px;
+    padding: 12px;
+    min-width: 0;
+  }
+
+  .shots-list,
+  .shot-inline-form {
+    min-width: 0;
+  }
+
+  .shot-preview {
+    width: 96px;
+    height: 64px;
+  }
+
+  .shot-inline-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(120px, 100%), 1fr));
+  }
+
+  .shot-inline-grid :deep(.ant-select),
+  .shot-inline-grid :deep(.ant-input),
+  .shot-inline-grid :deep(.ant-select-selector) {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .shot-name,
+  .shot-action,
+  .detail-section p {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+}
+
+@media (max-width: 900px) {
+  .workbench-container {
+    height: auto;
+    min-height: 100%;
+  }
+
+  .workbench-header,
+  .shots-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .header-actions {
+    flex-wrap: wrap;
+  }
+
+  .production-flow-panel {
+    margin: 12px;
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .flow-title {
+    align-items: flex-start;
+  }
+
+  .flow-title-copy p {
+    white-space: normal;
+  }
+
+  .step-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .flow-actions {
+    justify-content: flex-start;
+  }
+
+  .workbench-layout {
+    margin: 0 12px 16px;
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  .workbench-sider,
+  .workbench-sider-right {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    flex: none !important;
+    border-right: none;
+    border-left: none;
+  }
+}
+
 </style>

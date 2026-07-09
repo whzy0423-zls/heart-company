@@ -146,6 +146,9 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		_ = saveErr
 	}
 	s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, body.Question, ans.Answer)
+	if messageID > 0 {
+		s.recordAppProfileEvidenceAsync(userInfo.ID, sess.CardID, "chat", messageID, body.Question)
+	}
 
 	httpx.OK(w, askResponse{Answer: ans, MessageID: messageID})
 }

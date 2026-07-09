@@ -28,6 +28,11 @@ const DefaultAnalysisModel = "MiniMax-M3"
 // DefaultAnalysisTimeoutSeconds 给视频理解预留更长响应时间。
 const DefaultAnalysisTimeoutSeconds = 180
 
+const (
+	ProviderOpenAICompatible    = "openai-compatible"
+	ProviderAnthropicCompatible = "anthropic-compatible"
+)
+
 // ChatConfig 对话模型（MiniMax 兼容）可配置项。
 type ChatConfig struct {
 	APIBase string `json:"apiBase"`
@@ -58,6 +63,21 @@ type AnalysisConfig struct {
 	Model   string `json:"model"`
 }
 
+// AdminModelConfig 管理端大模型配置，用于后台自动生成内容（如每日 5 道画像校准题）。
+// Provider 支持 openai-compatible / anthropic-compatible / minimax；
+// 兼容历史值 openai / anthropic / newapi。空值默认沿用对话模型基线。
+type AdminModelConfig struct {
+	Provider       string `json:"provider"`
+	APIBase        string `json:"apiBase"`
+	APIKey         string `json:"apiKey"`
+	GroupID        string `json:"groupId"`
+	Model          string `json:"model"`
+	TimeoutSeconds int    `json:"timeoutSeconds"`
+}
+
+// CompatibleModelConfig 是管理端/每日题等后台任务复用的兼容模型配置。
+type CompatibleModelConfig = AdminModelConfig
+
 // AssistConfig 控制"芯之力专属模型"在聊天里的智能辅助行为：
 //   - Enabled：是否启用 AI 辅助作答（关闭后聊天仅走资料检索/固定兜底）。
 //     用 *bool 区分"未设置(默认启用)"与"显式关闭(false)"，避免 DB 旧记录被反序列化成 false 而误关。
@@ -69,11 +89,13 @@ type AssistConfig struct {
 
 // Config 模型配置覆盖值集合，整体作为一条 JSON 落库。
 type Config struct {
-	Chat     ChatConfig     `json:"chat"`
-	Video    VideoConfig    `json:"video"`
-	Image    ImageConfig    `json:"image"`
-	Analysis AnalysisConfig `json:"analysis"`
-	Assist   AssistConfig   `json:"assist"`
+	Chat      ChatConfig       `json:"chat"`
+	Video     VideoConfig      `json:"video"`
+	Image     ImageConfig      `json:"image"`
+	Analysis  AnalysisConfig   `json:"analysis"`
+	Admin     AdminModelConfig `json:"admin"`
+	DailyQuiz AdminModelConfig `json:"dailyQuiz"`
+	Assist    AssistConfig     `json:"assist"`
 }
 
 // AssistEnabled 解析 AI 辅助开关：未设置时默认启用。
@@ -195,6 +217,66 @@ func (c Config) ApplyAnalysis(base config.MiniMaxConfig) config.MiniMaxConfig {
 	return out
 }
 
+// ApplyAdmin 把管理端大模型覆盖值叠加到对话模型环境基线之上。
+func (c Config) ApplyAdmin(base config.MiniMaxConfig) AdminModelConfig {
+	out := AdminModelConfig{
+		Provider:       "minimax",
+		APIBase:        base.APIBase,
+		APIKey:         base.APIKey,
+		GroupID:        base.GroupID,
+		Model:          base.Model,
+		TimeoutSeconds: base.TimeoutSeconds,
+	}
+	if out.TimeoutSeconds <= 0 {
+		out.TimeoutSeconds = 30
+	}
+	if v := strings.TrimSpace(c.Admin.Provider); v != "" {
+		out.Provider = normalizeProvider(v)
+	}
+	if v := strings.TrimSpace(c.Admin.APIBase); v != "" {
+		out.APIBase = v
+	}
+	if v := strings.TrimSpace(c.Admin.APIKey); v != "" {
+		out.APIKey = v
+	}
+	if v := strings.TrimSpace(c.Admin.GroupID); v != "" {
+		out.GroupID = v
+	}
+	if v := strings.TrimSpace(c.Admin.Model); v != "" {
+		out.Model = v
+	}
+	if c.Admin.TimeoutSeconds > 0 {
+		out.TimeoutSeconds = c.Admin.TimeoutSeconds
+	}
+	return out
+}
+
+// ApplyDailyQuiz 解析每日题生成模型配置：默认继承 Admin 段，
+// DailyQuiz 段只覆盖显式填写的字段。
+func (c Config) ApplyDailyQuiz() CompatibleModelConfig {
+	out := c.Admin.normalized()
+	daily := c.DailyQuiz.normalized()
+	if daily.Provider != "" {
+		out.Provider = daily.Provider
+	}
+	if daily.APIBase != "" {
+		out.APIBase = daily.APIBase
+	}
+	if daily.APIKey != "" {
+		out.APIKey = daily.APIKey
+	}
+	if daily.GroupID != "" {
+		out.GroupID = daily.GroupID
+	}
+	if daily.Model != "" {
+		out.Model = daily.Model
+	}
+	if daily.TimeoutSeconds > 0 {
+		out.TimeoutSeconds = daily.TimeoutSeconds
+	}
+	return out
+}
+
 func isMiniMaxAnalysisModel(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "minimax")
 }
@@ -214,6 +296,12 @@ func (c Config) MergeIncoming(in Config) Config {
 	}
 	if out.Analysis.APIKey == "" {
 		out.Analysis.APIKey = c.Analysis.APIKey
+	}
+	if out.Admin.APIKey == "" {
+		out.Admin.APIKey = c.Admin.APIKey
+	}
+	if out.DailyQuiz.APIKey == "" {
+		out.DailyQuiz.APIKey = c.DailyQuiz.APIKey
 	}
 	// AI 辅助开关：提交未带 enabled 字段时沿用已存值。
 	if out.Assist.Enabled == nil {
@@ -246,10 +334,41 @@ func (c Config) trimmed() Config {
 			GroupID: strings.TrimSpace(c.Analysis.GroupID),
 			Model:   strings.TrimSpace(c.Analysis.Model),
 		},
+		Admin: AdminModelConfig{
+			Provider:       normalizeProvider(c.Admin.Provider),
+			APIBase:        strings.TrimSpace(c.Admin.APIBase),
+			APIKey:         strings.TrimSpace(c.Admin.APIKey),
+			GroupID:        strings.TrimSpace(c.Admin.GroupID),
+			Model:          strings.TrimSpace(c.Admin.Model),
+			TimeoutSeconds: c.Admin.TimeoutSeconds,
+		},
+		DailyQuiz: c.DailyQuiz.normalized(),
 		Assist: AssistConfig{
 			Enabled:      c.Assist.Enabled,
 			SystemPrompt: strings.TrimSpace(c.Assist.SystemPrompt),
 		},
+	}
+}
+
+func (c CompatibleModelConfig) normalized() CompatibleModelConfig {
+	return CompatibleModelConfig{
+		Provider:       normalizeProvider(c.Provider),
+		APIBase:        strings.TrimSpace(c.APIBase),
+		APIKey:         strings.TrimSpace(c.APIKey),
+		GroupID:        strings.TrimSpace(c.GroupID),
+		Model:          strings.TrimSpace(c.Model),
+		TimeoutSeconds: c.TimeoutSeconds,
+	}
+}
+
+func normalizeProvider(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai":
+		return ProviderOpenAICompatible
+	case "anthropic":
+		return ProviderAnthropicCompatible
+	default:
+		return strings.ToLower(strings.TrimSpace(provider))
 	}
 }
 

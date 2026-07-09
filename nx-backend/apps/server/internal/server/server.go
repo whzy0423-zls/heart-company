@@ -37,6 +37,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/miniapp"
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
 	"nine-xing/nx-backend/apps/server/internal/netguard"
+	"nine-xing/nx-backend/apps/server/internal/profilecalibration"
 	"nine-xing/nx-backend/apps/server/internal/push"
 	"nine-xing/nx-backend/apps/server/internal/quiz"
 	"nine-xing/nx-backend/apps/server/internal/rag"
@@ -58,37 +59,42 @@ import (
 )
 
 type Server struct {
-	env           config.Env
-	mux           *http.ServeMux
-	db            *sql.DB
-	system        *system.Store
-	analytics     *analytics.Store
-	auditLogs     *auditlog.Store
-	builder       *siteconfig.Builder
-	engagement    *engagement.Store
-	signups       *signup.Store
-	uploads       *uploadasset.Store
-	uploader      storage.ObjectUploader
-	voices        *voice.Store
-	videos        *video.Store
-	videoAnalysis *videoanalysis.Store
-	videoAssets   *videoasset.Store
-	storyboards   *videostoryboard.Store
-	images        *image.Store
-	miniapp       *miniapp.Store
-	wx            *wechat.Client
-	pay           *wxpay.Client
-	ragGen        rag.Generator
-	analysisGen   *llm.MiniMaxGenerator
-	ragDocs       ragDocumentStore
-	ragVec        *ragstore.Store
-	embedder      *embedding.Client
-	ragCache      *miniappRAGCache
-	articles      *articlestore.Store
-	mindquotes    *mindquote.Store
-	quiz          *quiz.Store
-	chatLimiter   *fixedWindowRateLimiter
-	chatTimeout   time.Duration
+	env                   config.Env
+	mux                   *http.ServeMux
+	db                    *sql.DB
+	system                *system.Store
+	analytics             *analytics.Store
+	auditLogs             *auditlog.Store
+	builder               *siteconfig.Builder
+	engagement            *engagement.Store
+	signups               *signup.Store
+	uploads               *uploadasset.Store
+	uploader              storage.ObjectUploader
+	voices                *voice.Store
+	videos                *video.Store
+	videoAnalysis         *videoanalysis.Store
+	videoAssets           *videoasset.Store
+	storyboards           *videostoryboard.Store
+	images                *image.Store
+	miniapp               *miniapp.Store
+	wx                    *wechat.Client
+	pay                   *wxpay.Client
+	ragGen                rag.Generator
+	analysisGen           *llm.MiniMaxGenerator
+	ragDocs               ragDocumentStore
+	ragVec                *ragstore.Store
+	embedder              *embedding.Client
+	ragCache              *miniappRAGCache
+	articles              *articlestore.Store
+	mindquotes            *mindquote.Store
+	quiz                  *quiz.Store
+	appDailyQuiz          appDailyQuizService
+	appReassessment       appReassessmentService
+	appDailyQuizReminders appDailyQuizReminderService
+	appDailyQuizPushAdmin appDailyQuizPushAdminService
+	appDailyQuizBankAdmin appDailyQuizBankAdminService
+	chatLimiter           *fixedWindowRateLimiter
+	chatTimeout           time.Duration
 
 	appUsers                 *appuser.Store
 	appChat                  *chat.Store
@@ -186,6 +192,15 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	}
 	s.appUsers = appuser.NewStore(database)
 	s.quiz = quiz.NewStore(database)
+	if database != nil {
+		profileStore := profilecalibration.NewStore(database)
+		profileStore.SetDailyQuizQuestionGenerator(serverDailyQuizQuestionGenerator{server: s})
+		s.appDailyQuiz = profileStore
+		s.appReassessment = profileStore
+		s.appDailyQuizReminders = profileStore
+		s.appDailyQuizPushAdmin = profileStore
+		s.appDailyQuizBankAdmin = profileStore
+	}
 	s.appChat = chat.NewStore(database)
 	s.loginLimiter = newStrRateLimiter(10, time.Minute)
 	s.loginDBLimiter = newDBRateLimiter(database, "admin_login", 10, time.Minute)
@@ -207,6 +222,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	if database != nil {
 		go s.recoverVideoAsyncTasks()
 		go s.runPushAsyncRecoveryLoop(context.Background())
+		go s.runProfileCalibrationPushLoop(context.Background())
 	}
 	return s.withCORS(s.mux)
 }
@@ -326,6 +342,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/cards/", s.requireAppAuth(s.appCardByID))
 	s.mux.HandleFunc("/api/app/compatibility", s.requireAppAuth(s.appCompatibilityRouter))
 	s.mux.HandleFunc("/api/app/compatibility/", s.requireAppAuth(s.appCompatibilityRouter))
+	s.mux.HandleFunc("/api/app/daily-quiz/today", s.method(http.MethodGet, s.requireAppAuth(s.appDailyQuizToday)))
+	s.mux.HandleFunc("/api/app/daily-quiz/progress", s.method(http.MethodGet, s.requireAppAuth(s.appDailyQuizProgress)))
+	s.mux.HandleFunc("/api/app/daily-quiz/answer", s.method(http.MethodPost, s.requireAppAuth(s.appDailyQuizAnswer)))
+	s.mux.HandleFunc("/api/app/daily-quiz/complete", s.method(http.MethodPost, s.requireAppAuth(s.appDailyQuizComplete)))
+	s.mux.HandleFunc("/api/app/reassessment/latest", s.method(http.MethodGet, s.requireAppAuth(s.appReassessmentLatest)))
+	s.mux.HandleFunc("/api/app/reassessment/", s.requireAppAuth(s.appReassessmentRouter))
 	s.mux.HandleFunc("/api/app/chat/sessions", s.requireAppAuth(s.appChatRouter))
 	s.mux.HandleFunc("/api/app/chat/sessions/", s.requireAppAuth(s.appChatRouter))
 	s.mux.HandleFunc("/api/app/chat/messages/", s.requireAppAuth(s.appChatMessageRouter))
@@ -374,6 +396,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/push/list", s.method(http.MethodGet, s.requirePermission("Push:Manage", s.adminPushList)))
 	s.mux.HandleFunc("/api/push/send", s.method(http.MethodPost, s.requirePermission("Push:Manage", s.adminPushSend)))
 	s.mux.HandleFunc("/api/push/audience-count", s.method(http.MethodGet, s.requirePermission("Push:Manage", s.adminPushAudienceCount)))
+	s.mux.HandleFunc("/api/push/daily-quiz/stats", s.method(http.MethodGet, s.requirePermission("ProfileCalibration:DailyQuiz:Manage", s.adminDailyQuizPushStats)))
+	s.mux.HandleFunc("/api/push/daily-quiz/records", s.method(http.MethodGet, s.requirePermission("ProfileCalibration:DailyQuiz:Manage", s.adminDailyQuizPushRecords)))
+	s.mux.HandleFunc("/api/daily-quiz/admin/sets/today", s.method(http.MethodGet, s.requirePermission("ProfileCalibration:DailyQuiz:Manage", s.adminDailyQuizSetToday)))
+	s.mux.HandleFunc("/api/daily-quiz/admin/sets", s.method(http.MethodGet, s.requirePermission("ProfileCalibration:DailyQuiz:Manage", s.adminDailyQuizSet)))
+	s.mux.HandleFunc("/api/daily-quiz/admin/sets/generate", s.method(http.MethodPost, s.requirePermission("ProfileCalibration:DailyQuiz:Manage", s.adminDailyQuizSetGenerate)))
+	s.mux.HandleFunc("/api/daily-quiz/admin/sets/", s.requirePermission("ProfileCalibration:DailyQuiz:Manage", s.adminDailyQuizSetRouter))
 	s.mux.HandleFunc("/api/signups/list", s.method(http.MethodGet, s.requirePermission("Customer:Signup:List", s.signupList)))
 	s.mux.HandleFunc("/api/signups/detail", s.method(http.MethodGet, s.requirePermission("Customer:Signup:List", s.signupDetail)))
 	s.mux.HandleFunc("/api/signups/follow", s.method(http.MethodPut, s.requirePermission("Customer:Signup:List", s.signupFollow)))
@@ -2166,6 +2194,22 @@ type modelConfigView struct {
 		Model     string `json:"model"`
 		APIKeySet bool   `json:"apiKeySet"`
 	} `json:"analysis"`
+	Admin struct {
+		Provider       string `json:"provider"`
+		APIBase        string `json:"apiBase"`
+		GroupID        string `json:"groupId,omitempty"`
+		Model          string `json:"model"`
+		TimeoutSeconds int    `json:"timeoutSeconds"`
+		APIKeySet      bool   `json:"apiKeySet"`
+	} `json:"admin"`
+	DailyQuiz struct {
+		Provider       string `json:"provider"`
+		APIBase        string `json:"apiBase"`
+		GroupID        string `json:"groupId,omitempty"`
+		Model          string `json:"model"`
+		TimeoutSeconds int    `json:"timeoutSeconds"`
+		APIKeySet      bool   `json:"apiKeySet"`
+	} `json:"dailyQuiz"`
 	// Assist 为 AI 辅助开关与系统提示词；提示词非密钥，可明文回显。
 	Assist struct {
 		Enabled      bool   `json:"enabled"`
@@ -2198,12 +2242,29 @@ func modelConfigAuditSnapshot(cfg modelconfig.Config) map[string]any {
 			"groupId":   cfg.Analysis.GroupID,
 			"model":     cfg.Analysis.Model,
 		},
+		"admin": map[string]any{
+			"provider":       cfg.Admin.Provider,
+			"apiBase":        cfg.Admin.APIBase,
+			"apiKeySet":      cfg.Admin.APIKey != "",
+			"groupId":        cfg.Admin.GroupID,
+			"model":          cfg.Admin.Model,
+			"timeoutSeconds": cfg.Admin.TimeoutSeconds,
+		},
+		"dailyQuiz": map[string]any{
+			"provider":       cfg.DailyQuiz.Provider,
+			"apiBase":        cfg.DailyQuiz.APIBase,
+			"apiKeySet":      cfg.DailyQuiz.APIKey != "",
+			"groupId":        cfg.DailyQuiz.GroupID,
+			"model":          cfg.DailyQuiz.Model,
+			"timeoutSeconds": cfg.DailyQuiz.TimeoutSeconds,
+		},
 	}
 }
 
 // buildModelConfigView 根据 env+DB 覆盖后的生效配置构造脱敏视图。
+// dailyQuiz 返回的是每日题的单独覆盖值；留空字段在实际生成时继承 admin。
 // stored 用于回显 AI 辅助开关与系统提示词（提示词非密钥，明文回显）。
-func buildModelConfigView(chat config.MiniMaxConfig, vid config.VideoConfig, img config.ImageConfig, analysis config.MiniMaxConfig, stored modelconfig.Config) modelConfigView {
+func buildModelConfigView(chat config.MiniMaxConfig, vid config.VideoConfig, img config.ImageConfig, analysis config.MiniMaxConfig, admin modelconfig.AdminModelConfig, dailyQuiz modelconfig.CompatibleModelConfig, stored modelconfig.Config) modelConfigView {
 	var view modelConfigView
 	view.Chat.APIBase = chat.APIBase
 	view.Chat.GroupID = chat.GroupID
@@ -2219,6 +2280,18 @@ func buildModelConfigView(chat config.MiniMaxConfig, vid config.VideoConfig, img
 	view.Analysis.GroupID = analysis.GroupID
 	view.Analysis.Model = analysis.Model
 	view.Analysis.APIKeySet = strings.TrimSpace(analysis.APIKey) != ""
+	view.Admin.Provider = admin.Provider
+	view.Admin.APIBase = admin.APIBase
+	view.Admin.GroupID = admin.GroupID
+	view.Admin.Model = admin.Model
+	view.Admin.TimeoutSeconds = admin.TimeoutSeconds
+	view.Admin.APIKeySet = strings.TrimSpace(admin.APIKey) != ""
+	view.DailyQuiz.Provider = dailyQuiz.Provider
+	view.DailyQuiz.APIBase = dailyQuiz.APIBase
+	view.DailyQuiz.GroupID = dailyQuiz.GroupID
+	view.DailyQuiz.Model = dailyQuiz.Model
+	view.DailyQuiz.TimeoutSeconds = dailyQuiz.TimeoutSeconds
+	view.DailyQuiz.APIKeySet = strings.TrimSpace(dailyQuiz.APIKey) != ""
 	view.Assist.Enabled = stored.AssistEnabled()
 	view.Assist.SystemPrompt = stored.Assist.SystemPrompt
 	return view
@@ -2226,10 +2299,12 @@ func buildModelConfigView(chat config.MiniMaxConfig, vid config.VideoConfig, img
 
 func validateModelConfigBases(cfg modelconfig.Config) error {
 	for label, apiBase := range map[string]string{
-		"analysis.apiBase": cfg.Analysis.APIBase,
-		"chat.apiBase":     cfg.Chat.APIBase,
-		"image.apiBase":    cfg.Image.APIBase,
-		"video.apiBase":    cfg.Video.APIBase,
+		"analysis.apiBase":  cfg.Analysis.APIBase,
+		"admin.apiBase":     cfg.Admin.APIBase,
+		"chat.apiBase":      cfg.Chat.APIBase,
+		"dailyQuiz.apiBase": cfg.DailyQuiz.APIBase,
+		"image.apiBase":     cfg.Image.APIBase,
+		"video.apiBase":     cfg.Video.APIBase,
 	} {
 		if err := validateExternalAPIBase(label, apiBase); err != nil {
 			return err
@@ -2270,7 +2345,8 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		chat := stored.ApplyChat(s.env.MiniMax)
-		httpx.OK(w, buildModelConfigView(chat, stored.ApplyVideo(s.env.Video), stored.ApplyImage(s.env.Image), stored.ApplyAnalysis(s.env.MiniMax), stored))
+		admin := stored.ApplyAdmin(s.env.MiniMax)
+		httpx.OK(w, buildModelConfigView(chat, stored.ApplyVideo(s.env.Video), stored.ApplyImage(s.env.Image), stored.ApplyAnalysis(s.env.MiniMax), admin, stored.DailyQuiz, stored))
 
 	case http.MethodPut:
 		var incoming modelconfig.Config
@@ -2306,6 +2382,7 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 		vid := merged.ApplyVideo(s.env.Video)
 		img := merged.ApplyImage(s.env.Image)
 		analysis := merged.ApplyAnalysis(s.env.MiniMax)
+		admin := merged.ApplyAdmin(s.env.MiniMax)
 		// 写锁下重建运行时客户端，使新配置立即生效。
 		// AI 辅助关闭时不挂生成器：聊天仅走资料检索/固定兜底（rag.Service 对 nil 生成器安全）。
 		s.modelMu.Lock()
@@ -2319,7 +2396,7 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 		s.images = image.NewStore(s.uploads, img, s.uploader)
 		s.modelMu.Unlock()
 
-		httpx.OK(w, buildModelConfigView(chat, vid, img, analysis, merged))
+		httpx.OK(w, buildModelConfigView(chat, vid, img, analysis, admin, merged.DailyQuiz, merged))
 	}
 }
 

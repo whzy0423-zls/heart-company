@@ -53,7 +53,25 @@ FormRoot.Item = passthrough('FormItem');
 export const Form = FormRoot;
 
 export const Input = passthrough('Input', 'input');
-export const Modal = passthrough('Modal');
+export const Modal = defineComponent({
+  emits: ['cancel', 'ok', 'update:open'],
+  inheritAttrs: false,
+  name: 'Modal',
+  setup(_, { attrs, emit, slots }) {
+    return () =>
+      h('div', attrs, [
+        slots.default?.(),
+        slots.footer?.() ??
+          h(
+            'button',
+            {
+              onClick: () => emit('ok'),
+            },
+            'OK',
+          ),
+      ]);
+  },
+});
 export const Row = passthrough('Row');
 export const Select = passthrough('Select');
 export const Space = passthrough('Space');

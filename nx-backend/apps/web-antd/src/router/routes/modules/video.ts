@@ -14,6 +14,25 @@ const routes: RouteRecordRaw[] = [
     path: '/video',
     children: [
       {
+        name: 'VideoProduction',
+        path: 'production',
+        component: () => import('#/views/video/production/index.vue'),
+        meta: {
+          icon: 'lucide:clapperboard',
+          title: '制片工作台',
+        },
+      },
+      {
+        name: 'VideoProductionShort',
+        path: 'production/short',
+        component: () => import('#/views/video/production/short.vue'),
+        meta: {
+          hideInMenu: true,
+          title: '短片制工作台',
+          activePath: '/video/production',
+        },
+      },
+      {
         name: 'VideoProjectsList',
         path: 'projects',
         component: () => import('#/views/video/projects/index.vue'),
@@ -29,7 +48,7 @@ const routes: RouteRecordRaw[] = [
         meta: {
           hideInMenu: true,
           title: '项目工作台',
-          activeMenu: '/video/projects',
+          activePath: '/video/projects',
         },
       },
       {
@@ -39,7 +58,7 @@ const routes: RouteRecordRaw[] = [
         meta: {
           hideInMenu: true,
           title: '项目工作台',
-          activeMenu: '/video/projects',
+          activePath: '/video/projects',
         },
       },
     ],

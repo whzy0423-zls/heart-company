@@ -26,6 +26,24 @@ export interface ModelConfigView {
     groupId: string;
     model: string;
   };
+  /** 管理端大模型：用于后台自动生成每日题等运营内容。 */
+  admin: {
+    apiBase: string;
+    apiKeySet: boolean;
+    groupId?: string;
+    model: string;
+    provider: string;
+    timeoutSeconds: number;
+  };
+  /** 每日题生成模型：默认继承管理端大模型，可单独覆盖。 */
+  dailyQuiz: {
+    apiBase: string;
+    apiKeySet: boolean;
+    groupId?: string;
+    model: string;
+    provider: string;
+    timeoutSeconds: number;
+  };
   /** AI 辅助：开关 + 系统提示词（提示词非密钥，明文回显）。 */
   assist: {
     enabled: boolean;
@@ -58,6 +76,24 @@ export interface ModelConfigPayload {
     apiKey: string;
     groupId: string;
     model: string;
+  };
+  /** 管理端大模型：apiKey 留空表示不修改既有密钥。 */
+  admin: {
+    apiBase: string;
+    apiKey: string;
+    groupId?: string;
+    model: string;
+    provider: string;
+    timeoutSeconds: number;
+  };
+  /** 每日题生成模型：apiKey 留空表示不修改既有密钥。 */
+  dailyQuiz: {
+    apiBase: string;
+    apiKey: string;
+    groupId?: string;
+    model: string;
+    provider: string;
+    timeoutSeconds: number;
   };
   /** AI 辅助：开关 + 系统提示词。enabled 始终回传当前值。 */
   assist: {

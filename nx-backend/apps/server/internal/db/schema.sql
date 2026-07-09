@@ -816,6 +816,182 @@ CREATE TABLE IF NOT EXISTS app_daily_checkins (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_daily_checkins_user_date
   ON app_daily_checkins(app_user_id, checkin_date);
 
+-- ----- App 每日画像校准：每天 5 道题，累计 100 题触发复评 -----
+CREATE TABLE IF NOT EXISTS app_daily_quiz_questions (
+  id           BIGSERIAL PRIMARY KEY,
+  sort         INT NOT NULL DEFAULT 0,
+  body         TEXT NOT NULL DEFAULT '',
+  options      JSONB NOT NULL DEFAULT '[]'::jsonb,
+  dimension    TEXT NOT NULL DEFAULT '',
+  type_weights JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status       TEXT NOT NULL DEFAULT 'active',
+  create_time  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_daily_quiz_questions_active_sort
+  ON app_daily_quiz_questions(status, sort, id);
+
+CREATE TABLE IF NOT EXISTS app_daily_quiz_sets (
+  id             BIGSERIAL PRIMARY KEY,
+  quiz_date      DATE NOT NULL UNIQUE,
+  status         TEXT NOT NULL DEFAULT 'pending',
+  source         TEXT NOT NULL DEFAULT '',
+  model_provider TEXT NOT NULL DEFAULT '',
+  model_name     TEXT NOT NULL DEFAULT '',
+  prompt         TEXT NOT NULL DEFAULT '',
+  raw_response   TEXT NOT NULL DEFAULT '',
+  question_ids   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  error_message  TEXT NOT NULL DEFAULT '',
+  generated_at   TIMESTAMPTZ,
+  published_at   TIMESTAMPTZ,
+  pushed_at      TIMESTAMPTZ,
+  create_time    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_daily_quiz_sets_date
+  ON app_daily_quiz_sets(quiz_date);
+
+CREATE TABLE IF NOT EXISTS app_daily_quiz_question_versions (
+  id             BIGSERIAL PRIMARY KEY,
+  set_id         BIGINT NOT NULL REFERENCES app_daily_quiz_sets(id) ON DELETE CASCADE,
+  question_id    BIGINT NOT NULL REFERENCES app_daily_quiz_questions(id) ON DELETE RESTRICT,
+  slot_no        INT NOT NULL DEFAULT 1,
+  version_no     INT NOT NULL DEFAULT 1,
+  is_active      BOOLEAN NOT NULL DEFAULT true,
+  body           TEXT NOT NULL DEFAULT '',
+  options        JSONB NOT NULL DEFAULT '[]'::jsonb,
+  dimension      TEXT NOT NULL DEFAULT '',
+  type_weights   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  source         TEXT NOT NULL DEFAULT '',
+  model_provider TEXT NOT NULL DEFAULT '',
+  model_name     TEXT NOT NULL DEFAULT '',
+  prompt         TEXT NOT NULL DEFAULT '',
+  raw_response   TEXT NOT NULL DEFAULT '',
+  operator       TEXT NOT NULL DEFAULT '',
+  replace_reason TEXT NOT NULL DEFAULT '',
+  create_time    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_daily_quiz_question_versions_slot_version
+  ON app_daily_quiz_question_versions(set_id, slot_no, version_no);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_daily_quiz_question_versions_active
+  ON app_daily_quiz_question_versions(set_id, slot_no)
+  WHERE is_active = true;
+
+CREATE TABLE IF NOT EXISTS app_daily_quiz_batches (
+  id             BIGSERIAL PRIMARY KEY,
+  app_user_id    BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  card_id        BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
+  quiz_date      DATE NOT NULL,
+  round_no       INT NOT NULL DEFAULT 1,
+  question_ids   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  answered_count INT NOT NULL DEFAULT 0,
+  completed      BOOLEAN NOT NULL DEFAULT false,
+  completed_at   TIMESTAMPTZ,
+  push_claimed_at TIMESTAMPTZ,
+  push_sent_at   TIMESTAMPTZ,
+  create_time    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_daily_quiz_batches_card_date_round
+  ON app_daily_quiz_batches(card_id, quiz_date, round_no);
+CREATE INDEX IF NOT EXISTS idx_app_daily_quiz_batches_user_date
+  ON app_daily_quiz_batches(app_user_id, quiz_date DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS app_daily_quiz_answers (
+  id          BIGSERIAL PRIMARY KEY,
+  batch_id    BIGINT NOT NULL REFERENCES app_daily_quiz_batches(id) ON DELETE CASCADE,
+  app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  card_id     BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
+  round_no    INT NOT NULL DEFAULT 1,
+  question_id BIGINT NOT NULL,
+  option_id   TEXT NOT NULL DEFAULT '',
+  type_delta  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  answered_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_daily_quiz_answers_batch_question
+  ON app_daily_quiz_answers(batch_id, question_id);
+CREATE INDEX IF NOT EXISTS idx_app_daily_quiz_answers_card_round
+  ON app_daily_quiz_answers(card_id, round_no, answered_at, id);
+
+CREATE TABLE IF NOT EXISTS app_profile_evidence (
+  id              BIGSERIAL PRIMARY KEY,
+  app_user_id     BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  card_id         BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
+  round_no        INT NOT NULL DEFAULT 1,
+  source_type     TEXT NOT NULL DEFAULT '',
+  source_id       BIGINT,
+  evidence_text   TEXT NOT NULL DEFAULT '',
+  trait_scores    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  type_scores     JSONB NOT NULL DEFAULT '{}'::jsonb,
+  emotion_scores  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  behavior_scores JSONB NOT NULL DEFAULT '{}'::jsonb,
+  confidence      NUMERIC NOT NULL DEFAULT 0,
+  status          TEXT NOT NULL DEFAULT 'active',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_profile_evidence_card_round
+  ON app_profile_evidence(card_id, round_no, status, create_time DESC);
+
+CREATE TABLE IF NOT EXISTS app_reassessment_jobs (
+  id                   BIGSERIAL PRIMARY KEY,
+  app_user_id          BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  card_id              BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
+  round_no             INT NOT NULL DEFAULT 1,
+  trigger_reason       TEXT NOT NULL DEFAULT '',
+  evidence_window_start TIMESTAMPTZ,
+  evidence_window_end   TIMESTAMPTZ,
+  daily_answer_count   INT NOT NULL DEFAULT 0,
+  chat_evidence_count  INT NOT NULL DEFAULT 0,
+  voice_evidence_count INT NOT NULL DEFAULT 0,
+  behavior_evidence_count INT NOT NULL DEFAULT 0,
+  old_main_type        INT NOT NULL DEFAULT 0,
+  suggested_main_type  INT NOT NULL DEFAULT 0,
+  confidence           NUMERIC NOT NULL DEFAULT 0,
+  status               TEXT NOT NULL DEFAULT 'pending',
+  report_json          JSONB NOT NULL DEFAULT '{}'::jsonb,
+  push_claimed_at      TIMESTAMPTZ,
+  push_sent_at         TIMESTAMPTZ,
+  create_time          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE app_daily_quiz_batches ADD COLUMN IF NOT EXISTS push_claimed_at TIMESTAMPTZ;
+ALTER TABLE app_daily_quiz_batches ADD COLUMN IF NOT EXISTS push_sent_at TIMESTAMPTZ;
+ALTER TABLE app_reassessment_jobs ADD COLUMN IF NOT EXISTS push_claimed_at TIMESTAMPTZ;
+ALTER TABLE app_reassessment_jobs ADD COLUMN IF NOT EXISTS push_sent_at TIMESTAMPTZ;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_reassessment_jobs_open
+  ON app_reassessment_jobs(card_id, round_no)
+  WHERE status IN ('pending','generating','generated');
+CREATE INDEX IF NOT EXISTS idx_app_reassessment_jobs_card_time
+  ON app_reassessment_jobs(card_id, create_time DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS app_profile_versions (
+  id          BIGSERIAL PRIMARY KEY,
+  app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  card_id     BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
+  version     INT NOT NULL DEFAULT 1,
+  main_type   INT NOT NULL DEFAULT 0,
+  wing_type   INT NOT NULL DEFAULT 0,
+  profile_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  source      TEXT NOT NULL DEFAULT 'initial_quiz',
+  confidence  NUMERIC NOT NULL DEFAULT 0,
+  is_active   BOOLEAN NOT NULL DEFAULT true,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_profile_versions_active
+  ON app_profile_versions(card_id)
+  WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_app_profile_versions_card_version
+  ON app_profile_versions(card_id, version DESC);
+
 -- ----- App 推送设备令牌：存储用户的 JPush Registration ID -----
 CREATE TABLE IF NOT EXISTS app_device_tokens (
   id              BIGSERIAL PRIMARY KEY,

@@ -84,3 +84,48 @@ func TestApplyAnalysisIgnoresStaleNonMiniMaxModel(t *testing.T) {
 		t.Fatalf("expected stale non-MiniMax model to fall back to %q, got %q", DefaultAnalysisModel, got.Model)
 	}
 }
+
+func TestApplyDailyQuizInheritsAdminCompatibleModelConfig(t *testing.T) {
+	cfg := Config{
+		Admin: CompatibleModelConfig{
+			Provider:       " openai-compatible ",
+			APIBase:        " https://gateway.example.com/v1 ",
+			APIKey:         " admin-key ",
+			Model:          " gpt-5.5 ",
+			TimeoutSeconds: 31,
+		},
+		DailyQuiz: CompatibleModelConfig{
+			Model:          " gpt-5.5-mini ",
+			TimeoutSeconds: 47,
+		},
+	}
+
+	got := cfg.ApplyDailyQuiz()
+
+	if got.Provider != "openai-compatible" || got.APIBase != "https://gateway.example.com/v1" || got.APIKey != "admin-key" {
+		t.Fatalf("expected daily quiz to inherit admin provider/base/key, got %+v", got)
+	}
+	if got.Model != "gpt-5.5-mini" || got.TimeoutSeconds != 47 {
+		t.Fatalf("expected daily quiz model/timeout override, got %+v", got)
+	}
+}
+
+func TestMergeIncomingPreservesAdminAndDailyQuizAPIKeys(t *testing.T) {
+	current := Config{
+		Admin:     CompatibleModelConfig{APIKey: "admin-secret", Model: "gpt-old"},
+		DailyQuiz: CompatibleModelConfig{APIKey: "quiz-secret", Model: "gpt-quiz-old"},
+	}
+	incoming := Config{
+		Admin:     CompatibleModelConfig{Provider: "openai-compatible", APIBase: "https://admin.example.com/v1", Model: "gpt-new", TimeoutSeconds: 41},
+		DailyQuiz: CompatibleModelConfig{Provider: "anthropic-compatible", APIBase: "https://quiz.example.com/v1", Model: "claude-new", TimeoutSeconds: 52},
+	}
+
+	got := current.MergeIncoming(incoming)
+
+	if got.Admin.APIKey != "admin-secret" || got.DailyQuiz.APIKey != "quiz-secret" {
+		t.Fatalf("expected empty incoming keys to preserve stored secrets, got admin=%q daily=%q", got.Admin.APIKey, got.DailyQuiz.APIKey)
+	}
+	if got.Admin.Model != "gpt-new" || got.DailyQuiz.Model != "claude-new" {
+		t.Fatalf("expected non-secret fields to update, got %+v", got)
+	}
+}

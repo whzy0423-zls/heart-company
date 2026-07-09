@@ -98,6 +98,7 @@ type seedMenu struct {
 	Title      string
 	HideInMenu bool
 	ActiveMenu string
+	ActivePath string
 }
 
 // 默认菜单树：官网管理 + 系统管理。id 固定，便于角色绑定与幂等。
@@ -129,6 +130,9 @@ var defaultMenus = []seedMenu{
 	{ID: 508, PID: 500, Name: "CustomerAppMemory", Path: "/customer/app-memories", Component: "/customer/app-memories", AuthCode: "Customer:AppMemory:List", Type: "menu", Sort: 6, Icon: "lucide:database-zap", Title: "私库记忆"},
 	{ID: 509, PID: 508, Name: "CustomerAppMemoryWrite", AuthCode: "Customer:AppMemory:Write", Type: "button", Sort: 1, Icon: "lucide:pencil", Title: "管理私库记忆"},
 	{ID: 510, PID: 500, Name: "CustomerQuizQuestions", Path: "/customer/quiz-questions", Component: "/quiz/questions", AuthCode: "Website:Write", Type: "menu", Sort: 7, Icon: "lucide:list-checks", Title: "测评题库"},
+	{ID: 1200, PID: 0, Name: "ProfileCalibration", Path: "/profile-calibration", Type: "catalog", Sort: 17, Icon: "lucide:badge-check", Title: "画像校准"},
+	{ID: 1201, PID: 1200, Name: "DailyQuizBank", Path: "/profile-calibration/daily-quiz-bank", Component: "/profile-calibration/daily-quiz-bank", AuthCode: "ProfileCalibration:DailyQuiz:Manage", Type: "menu", Sort: 1, Icon: "lucide:list-checks", Title: "每日题库管理"},
+	{ID: 603, PID: 1200, Name: "DailyQuizPushRecords", Path: "/profile-calibration/daily-quiz-push", Component: "/message/daily-quiz-push", AuthCode: "ProfileCalibration:DailyQuiz:Manage", Type: "menu", Sort: 2, Icon: "lucide:send", Title: "每日题推送记录"},
 	{ID: 600, PID: 0, Name: "MessageCenter", Path: "/message", Type: "catalog", Sort: 18, Icon: "lucide:bell-ring", Title: "消息中心"},
 	{ID: 601, PID: 600, Name: "MessageManagement", Path: "/message/management", Component: "/message/management", AuthCode: "Message:Manage:List", Type: "menu", Sort: 1, Icon: "lucide:mail-check", Title: "消息管理"},
 	{ID: 602, PID: 600, Name: "PushManagement", Path: "/message/push", Component: "/message/push", AuthCode: "Push:Manage", Type: "menu", Sort: 2, Icon: "lucide:send", Title: "推送管理"},
@@ -146,10 +150,13 @@ var defaultMenus = []seedMenu{
 	{ID: 1003, PID: 1000, Name: "VideoAnalysis", Path: "/video/analysis", Component: "/video/analysis", AuthCode: "Video:Analysis:Manage", Type: "menu", Sort: 3, Icon: "lucide:scan-search", Title: "视频分析"},
 	{ID: 1004, PID: 1000, Name: "VideoStoryboard", Path: "/video/storyboard", Component: "/video/storyboard", AuthCode: "Video:Storyboard:Manage", Type: "menu", Sort: 4, Icon: "lucide:panels-top-left", Title: "分镜设计"},
 	{ID: 1005, PID: 1000, Name: "VideoOverview", Path: "/video/overview", Component: "/video/overview", AuthCode: "Video:Generation:Overview", Type: "menu", Sort: 5, Icon: "lucide:bar-chart-2", Title: "生成概览"},
-	{ID: 1006, PID: 1000, Name: "VideoProjects", Path: "/video/projects", Component: "/video/projects", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 6, Icon: "lucide:folder-kanban", Title: "项目工作台"},
-	{ID: 1007, PID: 1000, Name: "VideoProjectWorkbench", Path: "/video/projects/:id/workbench", Component: "/video/projects/workbench", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 7, Icon: "lucide:panel-top", Title: "项目工作台详情", HideInMenu: true, ActiveMenu: "/video/projects"},
+	{ID: 1008, PID: 1000, Name: "VideoProduction", Path: "/video/production", Component: "/video/production/index", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 6, Icon: "lucide:clapperboard", Title: "制片工作台"},
+	{ID: 1006, PID: 1000, Name: "VideoProjects", Path: "/video/projects", Component: "/video/projects", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 7, Icon: "lucide:folder-kanban", Title: "项目列表"},
+	{ID: 1009, PID: 1000, Name: "VideoProductionShort", Path: "/video/production/short", Component: "/video/production/short", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 8, Icon: "lucide:badge-play", Title: "短片制工作台", HideInMenu: true, ActivePath: "/video/production"},
+	{ID: 1007, PID: 1000, Name: "VideoProjectWorkbench", Path: "/video/projects/:id/workbench", Component: "/video/projects/workbench", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 9, Icon: "lucide:panel-top", Title: "项目工作台详情", HideInMenu: true, ActivePath: "/video/projects"},
 	{ID: 1100, PID: 0, Name: "ModelSettings", Path: "/settings", Type: "catalog", Sort: 21, Icon: "lucide:cpu", Title: "模型配置"},
 	{ID: 1101, PID: 1100, Name: "ModelPairing", Path: "/settings/model", Component: "/settings/model", AuthCode: "System:Model:Config", Type: "menu", Sort: 1, Icon: "lucide:plug-zap", Title: "模型配对"},
+	{ID: 1102, PID: 1100, Name: "AdminModelConfig", Path: "/settings/admin-model", Component: "/settings/model", AuthCode: "System:Model:Config", Type: "menu", Sort: 2, Icon: "lucide:bot", Title: "管理端大模型配置"},
 	{ID: 400, PID: 0, Name: "SystemManage", Path: "/system", Type: "catalog", Sort: 20, Icon: "lucide:shield-check", Title: "系统管理"},
 	{ID: 401, PID: 400, Name: "SystemUser", Path: "/system/user", Component: "/system/user/list", AuthCode: "System:User:List", Type: "menu", Sort: 1, Icon: "lucide:users", Title: "用户管理"},
 	{ID: 402, PID: 400, Name: "SystemRole", Path: "/system/role", Component: "/system/role/list", AuthCode: "System:Role:List", Type: "menu", Sort: 2, Icon: "lucide:user-cog", Title: "角色管理"},
@@ -179,8 +186,14 @@ func seedMenus(ctx context.Context, database *sql.DB) error {
 		if m.HideInMenu {
 			metaMap["hideInMenu"] = true
 		}
+		// activePath is consumed by the Vben menu; activeMenu is kept for legacy seeded menu compatibility.
 		if m.ActiveMenu != "" {
 			metaMap["activeMenu"] = m.ActiveMenu
+			metaMap["activePath"] = m.ActiveMenu
+		}
+		if m.ActivePath != "" {
+			metaMap["activeMenu"] = m.ActivePath
+			metaMap["activePath"] = m.ActivePath
 		}
 		metaRaw, _ := json.Marshal(metaMap)
 		if _, err := tx.ExecContext(ctx,
