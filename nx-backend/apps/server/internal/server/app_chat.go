@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -87,9 +88,8 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	idText := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/app/chat/sessions/"), "/ask")
-	sessionID, err := strconv.ParseInt(idText, 10, 64)
-	if err != nil || sessionID == 0 {
+	sessionID, ok := appChatSessionIDFromPath(r.URL.Path, "/ask")
+	if !ok {
 		httpx.Fail(w, http.StatusBadRequest, "invalid session id")
 		return
 	}
@@ -151,6 +151,119 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpx.OK(w, askResponse{Answer: ans, MessageID: messageID})
+}
+
+// appChatAskStream POST /api/app/chat/sessions/{id}/ask/stream — send question, stream AI answer, persist pair.
+func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
+	userInfo, ok := appUserFromContext(r)
+	if !ok {
+		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	sessionID, ok := appChatSessionIDFromPath(r.URL.Path, "/ask/stream")
+	if !ok {
+		httpx.Fail(w, http.StatusBadRequest, "invalid session id")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		httpx.Fail(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+
+	if s.chatLimiter != nil && !s.chatLimiter.Allow(userInfo.ID, time.Now()) {
+		httpx.Fail(w, http.StatusTooManyRequests, "请求过于频繁，请稍后再试")
+		return
+	}
+
+	sess, err := s.appChat.GetSession(r.Context(), userInfo.ID, sessionID)
+	if err != nil {
+		httpx.Fail(w, http.StatusNotFound, "session not found")
+		return
+	}
+
+	var body struct {
+		Question string        `json:"question"`
+		History  []rag.Message `json:"history"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 32<<10)).Decode(&body); err != nil || strings.TrimSpace(body.Question) == "" {
+		httpx.Fail(w, http.StatusBadRequest, "question required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), s.chatTimeout)
+	defer cancel()
+
+	docs, _ := s.retrieveAppDocsForQuery(ctx, body.Question, 6)
+	profile := rag.UserProfile{}
+	if s.appUsers != nil {
+		if appUser, err := s.appUsers.FindByID(ctx, userInfo.ID); err == nil {
+			profile.Nickname = appUser.Nickname
+		}
+	}
+	if s.quiz != nil {
+		if card, err := s.quiz.PrimaryCard(ctx, userInfo.ID); err == nil {
+			profile.MainType = card.MainType
+		}
+	}
+	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
+		profile.Memories = memories
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	ans, err := rag.NewService(docs, rag.WithGenerator(s.generator())).AskStream(ctx, rag.AskInput{
+		History:     body.History,
+		Question:    body.Question,
+		UserProfile: profile,
+	}, func(delta string) error {
+		return writeAppChatSSE(w, flusher, "delta", map[string]string{"content": delta})
+	})
+	if err != nil {
+		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成失败，请重试"})
+		return
+	}
+
+	sourcesJSON, _ := json.Marshal(ans.Sources)
+	messageID, saveErr := s.appChat.SavePair(ctx, sessionID, body.Question, ans.Answer, sourcesJSON)
+	if saveErr != nil {
+		_ = saveErr
+	}
+	s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, body.Question, ans.Answer)
+	if messageID > 0 {
+		s.recordAppProfileEvidenceAsync(userInfo.ID, sess.CardID, "chat", messageID, body.Question)
+	}
+
+	_ = writeAppChatSSE(w, flusher, "done", askResponse{Answer: ans, MessageID: messageID})
+}
+
+func writeAppChatSSE(w io.Writer, flusher http.Flusher, event string, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+		return err
+	}
+	flusher.Flush()
+	return nil
+}
+
+func appChatSessionIDFromPath(path, suffix string) (int64, bool) {
+	const prefix = "/api/app/chat/sessions/"
+	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
+		return 0, false
+	}
+	rest := strings.TrimPrefix(path, prefix)
+	rest = strings.TrimSuffix(rest, suffix)
+	id, err := strconv.ParseInt(strings.Trim(rest, "/"), 10, 64)
+	if err != nil || id == 0 {
+		return 0, false
+	}
+	return id, true
 }
 
 func (s *Server) rememberChatAnswer(ctx context.Context, appUserID, cardID int64, question, answer string) {
@@ -336,6 +449,8 @@ func (s *Server) appChatRouter(w http.ResponseWriter, r *http.Request) {
 		s.appChatGetOrCreate(w, r)
 	case strings.HasSuffix(path, "/messages") && r.Method == http.MethodGet:
 		s.appChatMessages(w, r)
+	case strings.HasSuffix(path, "/ask/stream") && r.Method == http.MethodPost:
+		s.appChatAskStream(w, r)
 	case strings.HasSuffix(path, "/ask") && r.Method == http.MethodPost:
 		s.appChatAsk(w, r)
 	default:

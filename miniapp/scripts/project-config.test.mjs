@@ -39,7 +39,7 @@ assert.equal(
   '.env.production.example should document the required real HTTPS VITE_API_BASE for CI/release builds',
 )
 const productionExample = readFileSync(productionExamplePath, 'utf8')
-assert.match(productionExample, /VITE_API_BASE=https:\/\/api\.yourdomain\.com\/api/)
+assert.match(productionExample, /VITE_API_BASE=https:\/\/xn--9iq9az5uo8fz16d\.com\/api/)
 assert.match(productionExample, /CI|release|上线|生产/)
 
 const productionCheck = readFileSync(resolve('scripts/verify-production-api-base.mjs'), 'utf8')

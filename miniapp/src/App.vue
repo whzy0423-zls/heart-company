@@ -1,7 +1,11 @@
 <script>
+import { initAppPush } from './utils/push'
+
 export default {
   onLaunch() {
-    // 应用启动
+    // #ifdef APP-PLUS
+    initAppPush()
+    // #endif
   },
 }
 </script>

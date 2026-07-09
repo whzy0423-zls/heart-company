@@ -10,12 +10,12 @@ const { resolveApiBase } = await import(`file://${modulePath}`)
 
 assert.equal(
   resolveApiBase({ env: { DEV: true, VITE_API_BASE: '' } }),
-  'http://localhost:8080/api',
+  'https://xn--9iq9az5uo8fz16d.com/api',
 )
 
-assert.throws(
-  () => resolveApiBase({ env: { DEV: false, VITE_API_BASE: '' } }),
-  /Production VITE_API_BASE is required/,
+assert.equal(
+  resolveApiBase({ env: { DEV: false, VITE_API_BASE: '' } }),
+  'https://xn--9iq9az5uo8fz16d.com/api',
 )
 
 assert.throws(
@@ -29,8 +29,8 @@ assert.throws(
 )
 
 assert.equal(
-  resolveApiBase({ env: { DEV: false, VITE_API_BASE: 'https://api.nine-xing.com/api' } }),
-  'https://api.nine-xing.com/api',
+  resolveApiBase({ env: { DEV: false, VITE_API_BASE: 'https://xn--9iq9az5uo8fz16d.com/api/' } }),
+  'https://xn--9iq9az5uo8fz16d.com/api',
 )
 
 console.log('config tests passed')

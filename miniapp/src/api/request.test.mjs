@@ -41,6 +41,18 @@ assert.equal(data.ok, true)
 assert.equal(requestCalls[0].url, 'https://api.test/api/miniapp/report/status?testRecordId=id%201&empty=')
 assert.equal(requestCalls[0].header.Authorization, 'Bearer abc')
 
+requestCalls = []
+await request({
+  url: '/app/auth/sms',
+  method: 'POST',
+  data: { phone: '13800000000' },
+})
+assert.equal(
+  requestCalls[0].url,
+  'https://api.test/api/app/auth/sms',
+  'BaseURL already includes /api; /app/xxx must not be joined into /api/api/app/xxx',
+)
+
 clearToken()
 requestCalls = []
 await assert.rejects(

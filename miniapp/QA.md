@@ -6,8 +6,8 @@
 
 ```bash
 npm run test:config
-VITE_API_BASE=https://api.nine-xing.com/api npm run build:h5
-VITE_API_BASE=https://api.nine-xing.com/api npm run build:mp-weixin
+VITE_API_BASE=https://xn--9iq9az5uo8fz16d.com/api npm run build:h5
+VITE_API_BASE=https://xn--9iq9az5uo8fz16d.com/api npm run build:mp-weixin
 ```
 
 ## mp-weixin 真机检查
