@@ -95,7 +95,11 @@
                   @dragstart="onDragStart($event, 'character', char)"
                 >
                   <div class="resource-preview">
-                    <img v-if="char.referenceImageUrl" :src="char.referenceImageUrl" />
+                    <img
+                      v-if="previewReferenceAsset(char.referenceImageUrl)"
+                      :src="previewReferenceAsset(char.referenceImageUrl)"
+                      alt="角色参考图"
+                    />
                     <UserOutlined v-else />
                   </div>
                   <div class="resource-info">
@@ -129,7 +133,11 @@
                   @dragstart="onDragStart($event, 'scene', scene)"
                 >
                   <div class="resource-preview">
-                    <img v-if="scene.referenceImageUrl" :src="scene.referenceImageUrl" />
+                    <img
+                      v-if="previewReferenceAsset(scene.referenceImageUrl)"
+                      :src="previewReferenceAsset(scene.referenceImageUrl)"
+                      alt="场景参考图"
+                    />
                     <EnvironmentOutlined v-else />
                   </div>
                   <div class="resource-info">
@@ -417,7 +425,8 @@
                     :key="charId"
                     class="reference-item"
                   >
-                    <img :src="getCharacterImage(charId)" />
+                    <img v-if="getCharacterImage(charId)" :src="getCharacterImage(charId)" alt="角色参考图" />
+                    <UserOutlined v-else />
                     <span>{{ getCharacterName(charId) }}</span>
                   </div>
                   <a-empty v-if="!selectedShot.characterIds?.length" :image="simpleImage" />
@@ -430,9 +439,24 @@
                     :key="img"
                     class="reference-item"
                   >
-                    <img :src="img" />
+                    <img :src="previewReferenceAsset(img)" alt="参考图片" />
                   </div>
-                  <a-empty v-if="!selectedShot.usedImages?.length" :image="simpleImage" />
+                  <div
+                    v-for="video in selectedShot.usedVideos"
+                    :key="video"
+                    class="reference-item reference-video-item"
+                  >
+                    <video
+                      :src="previewReferenceAsset(video)"
+                      controls
+                      muted
+                      playsinline
+                    />
+                  </div>
+                  <a-empty
+                    v-if="!selectedShot.usedImages?.length && !selectedShot.usedVideos?.length"
+                    :image="simpleImage"
+                  />
                 </div>
               </div>
             </a-tab-pane>
@@ -525,7 +549,34 @@
           />
         </a-form-item>
         <a-form-item label="参考图片">
-          <a-input v-model:value="characterForm.referenceImageUrl" placeholder="图片 URL" />
+          <div class="reference-upload-field">
+            <a-upload
+              accept="image/*"
+              :before-upload="uploadCharacterReferenceImage"
+              :show-upload-list="false"
+            >
+              <a-button :loading="characterImageUploading">
+                上传角色参考图
+              </a-button>
+            </a-upload>
+            <div v-if="characterImagePreviewUrl" class="reference-upload-preview">
+              <img :src="characterImagePreviewUrl" alt="角色参考图预览" />
+              <div class="reference-upload-actions">
+                <span class="reference-upload-url">{{ characterForm.referenceImageUrl }}</span>
+                <a-button
+                  danger
+                  size="small"
+                  type="text"
+                  @click="clearCharacterReferenceImage"
+                >
+                  清除
+                </a-button>
+              </div>
+            </div>
+            <div v-else class="reference-upload-empty">
+              请选择图片，上传后会保存到阿里云 OSS 文件桶并在这里回显。
+            </div>
+          </div>
         </a-form-item>
         <a-form-item>
           <a-checkbox v-model:checked="characterForm.isMain">设为主角</a-checkbox>
@@ -552,10 +603,68 @@
           />
         </a-form-item>
         <a-form-item label="参考图片">
-          <a-input v-model:value="sceneForm.referenceImageUrl" placeholder="图片 URL" />
+          <div class="reference-upload-field">
+            <a-upload
+              accept="image/*"
+              :before-upload="uploadSceneReferenceImage"
+              :show-upload-list="false"
+            >
+              <a-button :loading="sceneImageUploading">
+                上传场景参考图
+              </a-button>
+            </a-upload>
+            <div v-if="sceneImagePreviewUrl" class="reference-upload-preview">
+              <img :src="sceneImagePreviewUrl" alt="场景参考图预览" />
+              <div class="reference-upload-actions">
+                <span class="reference-upload-url">{{ sceneForm.referenceImageUrl }}</span>
+                <a-button
+                  danger
+                  size="small"
+                  type="text"
+                  @click="clearSceneReferenceImage"
+                >
+                  清除
+                </a-button>
+              </div>
+            </div>
+            <div v-else class="reference-upload-empty">
+              请选择图片，上传后会保存到阿里云 OSS 文件桶并在这里回显。
+            </div>
+          </div>
         </a-form-item>
         <a-form-item label="参考视频">
-          <a-input v-model:value="sceneForm.referenceVideoUrl" placeholder="视频 URL" />
+          <div class="reference-upload-field">
+            <a-upload
+              accept="video/*"
+              :before-upload="uploadSceneReferenceVideo"
+              :show-upload-list="false"
+            >
+              <a-button :loading="sceneVideoUploading">
+                上传场景参考视频
+              </a-button>
+            </a-upload>
+            <div v-if="sceneVideoPreviewUrl" class="reference-upload-preview reference-upload-video">
+              <video
+                :src="sceneVideoPreviewUrl"
+                controls
+                playsinline
+              />
+              <div class="reference-upload-actions">
+                <span class="reference-upload-url">{{ sceneForm.referenceVideoUrl }}</span>
+                <a-button
+                  danger
+                  size="small"
+                  type="text"
+                  @click="clearSceneReferenceVideo"
+                >
+                  清除
+                </a-button>
+              </div>
+            </div>
+            <div v-else class="reference-upload-empty">
+              请选择视频，上传后会保存到阿里云 OSS 文件桶并在这里回显。
+            </div>
+          </div>
         </a-form-item>
       </a-form>
     </a-modal>
@@ -607,8 +716,17 @@
             <img
               v-for="(img, idx) in shotPreview.images"
               :key="idx"
-              :src="img"
+              :src="previewReferenceAsset(img)"
+              alt="提示词参考图片"
               style="width: 100px; height: 100px; object-fit: cover; margin: 4px"
+            />
+            <video
+              v-for="(video, idx) in shotPreview.videos"
+              :key="`video-${idx}`"
+              :src="previewReferenceAsset(video)"
+              controls
+              playsinline
+              style="width: 160px; height: 100px; object-fit: cover; margin: 4px"
             />
           </div>
         </div>
@@ -618,8 +736,13 @@
 </template>
 
 <script setup lang="ts">
+import type { Ref } from 'vue'
+
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
+
+import { useAccessStore } from '@vben/stores'
+
 import {
   Alert as AAlert,
   Breadcrumb as ABreadcrumb,
@@ -652,6 +775,7 @@ import {
   Tabs as ATabs,
   Tag as ATag,
   Textarea as ATextarea,
+  Upload as AUpload,
   message,
 } from 'ant-design-vue'
 import {
@@ -691,8 +815,14 @@ import {
   type Shot,
   type ShotPreview,
 } from '#/api/core/videoproject'
+import { uploadFileApi } from '#/api/core/upload'
+import {
+  useUploadAssetPreviewResolver,
+  useUploadAssetPreviewUrl,
+} from '#/utils/upload-asset-preview'
 
 const route = useRoute()
+const accessStore = useAccessStore()
 const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE
 
 // 状态
@@ -830,6 +960,9 @@ const editingShotId = ref('')
 
 const characterLoading = ref(false)
 const sceneLoading = ref(false)
+const characterImageUploading = ref(false)
+const sceneImageUploading = ref(false)
+const sceneVideoUploading = ref(false)
 const shotLoading = ref(false)
 const shotEditCardRef = ref<HTMLElement | null>(null)
 const shotActionBusyIds = ref(new Set<string>())
@@ -892,6 +1025,103 @@ const sceneForm = ref({
   referenceImageUrl: '',
   referenceVideoUrl: '',
 })
+
+const characterImagePreviewUrl = useUploadAssetPreviewUrl(
+  () => characterForm.value.referenceImageUrl,
+  () => accessStore.accessToken,
+)
+const sceneImagePreviewUrl = useUploadAssetPreviewUrl(
+  () => sceneForm.value.referenceImageUrl,
+  () => accessStore.accessToken,
+)
+const sceneVideoPreviewUrl = useUploadAssetPreviewUrl(
+  () => sceneForm.value.referenceVideoUrl,
+  () => accessStore.accessToken,
+)
+const assetRefPreview = useUploadAssetPreviewResolver(
+  () => accessStore.accessToken,
+)
+
+function getUploadErrorMessage(error: any, fallback: string) {
+  return (
+    error?.response?.data?.error ||
+    error?.response?.data?.message ||
+    error?.message ||
+    fallback
+  )
+}
+
+async function uploadWorkbenchReference(
+  file: File,
+  dir: string,
+  label: string,
+  assign: (url: string) => void,
+  uploading: Ref<boolean>,
+) {
+  uploading.value = true
+  try {
+    const result = await uploadFileApi(file, dir)
+    assign(result.objectUrl || result.url)
+    message.success(`${label}已上传到文件桶`)
+  } catch (error: any) {
+    message.error(getUploadErrorMessage(error, `${label}上传失败`))
+  } finally {
+    uploading.value = false
+  }
+  return false
+}
+
+function uploadCharacterReferenceImage(file: File) {
+  return uploadWorkbenchReference(
+    file,
+    'video/character',
+    '角色参考图',
+    (url) => {
+      characterForm.value.referenceImageUrl = url
+    },
+    characterImageUploading,
+  )
+}
+
+function uploadSceneReferenceImage(file: File) {
+  return uploadWorkbenchReference(
+    file,
+    'video/scene',
+    '场景参考图',
+    (url) => {
+      sceneForm.value.referenceImageUrl = url
+    },
+    sceneImageUploading,
+  )
+}
+
+function uploadSceneReferenceVideo(file: File) {
+  return uploadWorkbenchReference(
+    file,
+    'video/scene-video',
+    '场景参考视频',
+    (url) => {
+      sceneForm.value.referenceVideoUrl = url
+    },
+    sceneVideoUploading,
+  )
+}
+
+function clearCharacterReferenceImage() {
+  characterForm.value.referenceImageUrl = ''
+}
+
+function clearSceneReferenceImage() {
+  sceneForm.value.referenceImageUrl = ''
+}
+
+function clearSceneReferenceVideo() {
+  sceneForm.value.referenceVideoUrl = ''
+}
+
+function previewReferenceAsset(source?: string) {
+  return assetRefPreview.resolve(source)
+}
 
 function createEmptyShotForm() {
   return {
@@ -1305,7 +1535,7 @@ function getStatusColor(status: string): string {
 
 function getCharacterImage(charId: string): string {
   const char = characters.value.find((c) => c.id === charId)
-  return char?.referenceImageUrl || ''
+  return previewReferenceAsset(char?.referenceImageUrl)
 }
 
 function getCharacterName(charId: string): string {
@@ -2037,6 +2267,86 @@ onMounted(() => {
     padding: 2px 4px;
     text-align: center;
   }
+}
+
+.reference-video-item {
+  width: 128px;
+
+  video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    background: #000;
+  }
+}
+
+.reference-upload-field {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.reference-upload-preview {
+  display: grid;
+  grid-template-columns: 144px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+
+  img,
+  video {
+    width: 144px;
+    height: 96px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #fff;
+    object-fit: cover;
+  }
+
+  video {
+    background: #000;
+  }
+}
+
+.reference-upload-video {
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+
+  video {
+    width: 100%;
+    height: 124px;
+  }
+}
+
+.reference-upload-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reference-upload-url {
+  flex: 1;
+  min-width: 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reference-upload-empty {
+  padding: 12px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.6;
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  background: #f8fafc;
 }
 
 .prompt-section {

@@ -13,6 +13,10 @@ await writeFile(
     .replace(
       "import { getToken, setToken, clearToken } from '../api/request'",
       "import { getToken, setToken, clearToken } from './request-stub.mjs'",
+    )
+    .replace(
+      "import { registerCurrentPushDevice } from './push'",
+      "import { registerCurrentPushDevice } from './push-stub.mjs'",
     ),
 )
 await writeFile(
@@ -31,12 +35,20 @@ await writeFile(
     'export function clearToken() { token = "" }',
   ].join('\n'),
 )
+await writeFile(
+  join(dir, 'push-stub.mjs'),
+  'export async function registerCurrentPushDevice() { return { registered: true } }',
+)
 
 const { createLoginEnsurer } = await import(`file://${modulePath}`)
 
 let loginCalls = 0
+let afterLoginToken = ''
 const ensureLogin = createLoginEnsurer({
   getToken: () => '',
+  afterLogin: async (token) => {
+    afterLoginToken = token
+  },
   login: ({ success }) => {
     loginCalls++
     success({ code: 'abc' })
@@ -49,6 +61,7 @@ const ensureLogin = createLoginEnsurer({
 
 assert.equal(await ensureLogin(), 'token-abc')
 assert.equal(loginCalls, 1)
+assert.equal(afterLoginToken, 'token-abc')
 
 const emptyCodeLogin = createLoginEnsurer({
   getToken: () => '',

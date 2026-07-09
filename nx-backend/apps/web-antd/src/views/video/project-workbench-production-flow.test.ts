@@ -224,4 +224,44 @@ describe('project workbench production flow migration', () => {
     expect(dropToShot).toContain('bindingShotIds.value.delete(shot.id)');
     expect(dropToShot).toContain('const latestShot = shots.value.find');
   });
+
+  it('uploads character and scene references to the OSS bucket and previews them instead of asking for urls', () => {
+    const source = workbench();
+    const characterModal = sectionBetween(
+      source,
+      '<!-- 添加角色对话框 -->',
+      '<!-- 添加场景对话框 -->',
+    );
+    const sceneModal = sectionBetween(
+      source,
+      '<!-- 添加场景对话框 -->',
+      '<!-- 预览提示词对话框 -->',
+    );
+
+    expect(source).toContain('uploadFileApi');
+    expect(source).toContain('useUploadAssetPreviewUrl');
+    expect(source).toContain('useUploadAssetPreviewResolver');
+    expect(source).toContain('uploadWorkbenchReference');
+    expect(source).toContain('assetRefPreview');
+    expect(source).toContain('characterImagePreviewUrl');
+    expect(source).toContain('sceneImagePreviewUrl');
+    expect(source).toContain('sceneVideoPreviewUrl');
+
+    expect(characterModal).toContain('上传角色参考图');
+    expect(characterModal).toContain('accept="image/*"');
+    expect(characterModal).toContain('@click="clearCharacterReferenceImage"');
+    expect(characterModal).toContain('characterImagePreviewUrl');
+    expect(characterModal).not.toContain('placeholder="图片 URL"');
+
+    expect(sceneModal).toContain('上传场景参考图');
+    expect(sceneModal).toContain('上传场景参考视频');
+    expect(sceneModal).toContain('accept="image/*"');
+    expect(sceneModal).toContain('accept="video/*"');
+    expect(sceneModal).toContain('@click="clearSceneReferenceImage"');
+    expect(sceneModal).toContain('@click="clearSceneReferenceVideo"');
+    expect(sceneModal).toContain('sceneImagePreviewUrl');
+    expect(sceneModal).toContain('sceneVideoPreviewUrl');
+    expect(sceneModal).not.toContain('placeholder="图片 URL"');
+    expect(sceneModal).not.toContain('placeholder="视频 URL"');
+  });
 });

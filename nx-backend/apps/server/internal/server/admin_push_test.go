@@ -144,7 +144,7 @@ func TestAdminPushSendWorkerMarksFailedWhenPusherErrors(t *testing.T) {
 	}
 }
 
-func TestAdminPushSendWorkerMarksSuccessWhenNoAudienceWithoutCallingPusher(t *testing.T) {
+func TestAdminPushSendWorkerMarksFailedWhenNoAudienceWithoutCallingPusher(t *testing.T) {
 	fixture := newAdminPushAsyncFixture(nil)
 	database := openAdminPushAsyncDB(t, fixture)
 	pusher := newFailOnCallPusher()
@@ -165,10 +165,10 @@ func TestAdminPushSendWorkerMarksSuccessWhenNoAudienceWithoutCallingPusher(t *te
 		t.Fatalf("expected recordId %d, got %d", fixture.recordID, body.Data.RecordID)
 	}
 
-	updates := fixture.waitForStatuses(t, "sending", "success")
-	success := updates[len(updates)-1]
-	if success.sentCount != 0 || success.errorMessage != "无推送目标" {
-		t.Fatalf("expected no-audience success update, got %+v", success)
+	updates := fixture.waitForStatuses(t, "sending", "failed")
+	failed := updates[len(updates)-1]
+	if failed.sentCount != 0 || failed.errorMessage != "无推送目标" {
+		t.Fatalf("expected no-audience failed update, got %+v", failed)
 	}
 	select {
 	case <-pusher.called:

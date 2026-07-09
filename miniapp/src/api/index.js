@@ -1,6 +1,41 @@
 import { request } from './request'
 import { APP_CHANNEL } from '../config'
 
+// App 手机号验证码：BaseURL 已包含 /api，接口路径只写 /app/xxx。
+export function sendAppSmsApi(phone) {
+  return request({
+    url: '/app/auth/sms/send',
+    method: 'POST',
+    data: { phone },
+  })
+}
+
+export function loginByAppSmsApi(phone, code, deviceInfo = '') {
+  return request({
+    url: '/app/auth/sms/login',
+    method: 'POST',
+    data: { phone, code, deviceInfo },
+  })
+}
+
+export function registerAppPushApi(data) {
+  return request({
+    url: '/app/push/register',
+    method: 'POST',
+    data,
+    auth: true,
+  })
+}
+
+export function unregisterAppPushApi(registrationId) {
+  return request({
+    url: '/app/push/unregister',
+    method: 'POST',
+    data: { registrationId },
+    auth: true,
+  })
+}
+
 // 微信登录：用 wx.login 的 code 换取后端 token
 export function wxLoginApi(code, scene = '') {
   return request({

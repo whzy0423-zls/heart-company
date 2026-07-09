@@ -1,5 +1,6 @@
 import { wxLoginApi } from '../api'
 import { getToken, setToken, clearToken } from '../api/request'
+import { registerCurrentPushDevice } from './push'
 
 export { getToken, clearToken }
 
@@ -67,6 +68,11 @@ export function createLoginEnsurer(deps) {
       const code = await requestWechatLoginCode(deps)
       const res = await deps.wxLoginApi(code)
       deps.setToken(res.accessToken)
+      try {
+        await deps.afterLogin?.(res.accessToken)
+      } catch {
+        // 推送注册失败不阻断登录，后台推送页会用“0 设备”提示继续暴露问题。
+      }
       return res.accessToken
     })().finally(() => {
       currentLoginPromise = null
@@ -85,6 +91,7 @@ const defaultEnsureLogin = createLoginEnsurer({
   login: (options) => uni.login(options),
   setToken,
   wxLoginApi,
+  afterLogin: () => registerCurrentPushDevice(),
 })
 
 export function ensureLogin() {

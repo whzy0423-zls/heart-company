@@ -244,6 +244,13 @@ func TestAppAuthCompatibilityAliasRoutes(t *testing.T) {
 			want:   http.StatusBadRequest,
 		},
 		{
+			name:   "legacy sms endpoint reaches send sms handler",
+			method: http.MethodPost,
+			path:   "/api/app/auth/sms",
+			body:   `{"phone":"1380000"}`,
+			want:   http.StatusBadRequest,
+		},
+		{
 			name:   "sms login alias reaches verify sms handler",
 			method: http.MethodPost,
 			path:   "/api/app/auth/sms/login",

@@ -39,6 +39,7 @@ import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 import {
   audienceCountDetailLabel,
   buildPushAudienceCountParams,
+  formatNoPushAudienceMessage,
   formatPushSendAcceptedMessage,
   formatPushSendError,
   isValidPushMemberLevel,
@@ -190,33 +191,43 @@ function openTestPushModal() {
   testModalOpen.value = true;
 }
 
-async function estimateAudience() {
+function normalizeAudienceResult(res?: PushAudienceCountResult) {
+  return {
+    deviceCount: Number(res?.deviceCount ?? 0),
+    targetType: res?.targetType,
+    targetValue: res?.targetValue,
+    userCount: Number(res?.userCount ?? 0),
+  };
+}
+
+async function refreshAudienceCountForCurrentTarget() {
   const params = buildPushAudienceCountParams(testPushForm);
   if (params.targetType === 'level' && !params.targetValue) {
     message.warning('请选择有效会员等级后再预估');
-    return;
+    return undefined;
   }
   const currentAudienceRequestId = ++audienceRequestId;
   audienceLoading.value = true;
   try {
     const res = await getPushAudienceCountApi(params);
-    if (currentAudienceRequestId !== audienceRequestId) return;
-    audienceCount.value = {
-      deviceCount: Number(res?.deviceCount ?? 0),
-      targetType: res?.targetType,
-      targetValue: res?.targetValue,
-      userCount: Number(res?.userCount ?? 0),
-    };
+    if (currentAudienceRequestId !== audienceRequestId) return undefined;
+    audienceCount.value = normalizeAudienceResult(res);
+    return audienceCount.value;
   } catch {
     if (currentAudienceRequestId === audienceRequestId) {
       audienceCount.value = undefined;
       message.error('受众预估失败，请稍后重试');
     }
+    return undefined;
   } finally {
     if (currentAudienceRequestId === audienceRequestId) {
       audienceLoading.value = false;
     }
   }
+}
+
+async function estimateAudience() {
+  await refreshAudienceCountForCurrentTarget();
 }
 
 async function sendTestPush() {
@@ -239,6 +250,15 @@ async function sendTestPush() {
     message.warning('请选择有效会员等级');
     return;
   }
+
+  const latestAudience = await refreshAudienceCountForCurrentTarget();
+  const noAudienceMessage = formatNoPushAudienceMessage(latestAudience);
+  if (noAudienceMessage) {
+    message.warning(noAudienceMessage);
+    return;
+  }
+  if (!latestAudience) return;
+
   sending.value = true;
   try {
     const res = await sendPushApi({

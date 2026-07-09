@@ -140,3 +140,29 @@ func (f *fakeGenerator) Generate(_ context.Context, input GenerateInput) (string
 	}
 	return f.answer, nil
 }
+
+func TestAskStreamEmitsGeneratedChunksAndReturnsMetadata(t *testing.T) {
+	generator := &fakeGenerator{answer: "第一段，第二段。"}
+	service := NewService([]Document{{ID: "type-1", Title: "1号", Content: "1号重视原则和秩序。"}}, WithGenerator(generator))
+
+	var chunks []string
+	answer, err := service.AskStream(context.Background(), AskInput{Question: "1号孩子怎么办？"}, func(delta string) error {
+		chunks = append(chunks, delta)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("AskStream returned error: %v", err)
+	}
+	if answer.Answer != "第一段，第二段。" {
+		t.Fatalf("unexpected answer: %q", answer.Answer)
+	}
+	if len(answer.Sources) == 0 {
+		t.Fatal("expected sources metadata to be returned")
+	}
+	if strings.Join(chunks, "") != "第一段，第二段。" {
+		t.Fatalf("unexpected streamed chunks: %#v", chunks)
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("expected generated answer to be split into multiple stream chunks, got %#v", chunks)
+	}
+}

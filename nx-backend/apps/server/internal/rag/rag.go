@@ -54,6 +54,12 @@ type Generator interface {
 	Generate(ctx context.Context, input GenerateInput) (string, error)
 }
 
+type StreamEmitter func(delta string) error
+
+type StreamingGenerator interface {
+	GenerateStream(ctx context.Context, input GenerateInput, emit StreamEmitter) (string, error)
+}
+
 type GenerateInput struct {
 	History     []Message   `json:"history"`
 	Question    string      `json:"question"`
@@ -160,6 +166,143 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 	}
 
 	return Answer{Answer: answer, Sources: sources, Suggestions: suggestions}, nil
+}
+
+func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmitter) (Answer, error) {
+	question := strings.TrimSpace(input.Question)
+	if question == "" {
+		return Answer{}, errors.New("请输入想咨询的问题")
+	}
+	if utf8.RuneCountInString(question) > 300 {
+		return Answer{}, errors.New("问题太长，请控制在 300 字以内")
+	}
+
+	matches := s.search(question, input.UserProfile.MainType, 4)
+	if len(matches) == 0 {
+		if s.generator != nil {
+			generated, err := s.generateStreaming(ctx, GenerateInput{
+				History:     cleanHistory(input.History, 6),
+				Question:    question,
+				Sources:     nil,
+				UserProfile: input.UserProfile,
+			}, emit)
+			if err == nil && strings.TrimSpace(generated) != "" {
+				return Answer{
+					Answer:      strings.TrimSpace(generated),
+					Sources:     []Source{},
+					Suggestions: buildSuggestions(nil),
+				}, nil
+			}
+		}
+		answer := buildFallbackAnswer(input.UserProfile)
+		if err := emitTextChunks(answer, emit); err != nil {
+			return Answer{}, err
+		}
+		return Answer{
+			Answer:      answer,
+			Sources:     []Source{},
+			Suggestions: buildSuggestions(nil),
+		}, nil
+	}
+
+	sources := make([]Source, 0, len(matches))
+	parts := make([]string, 0, len(matches))
+	for _, match := range matches {
+		snippet := trimRunes(match.doc.Content, 92)
+		sources = append(sources, Source{
+			ID:      match.doc.ID,
+			Title:   match.doc.Title,
+			Snippet: snippet,
+		})
+		parts = append(parts, "【"+match.doc.Title+"】"+snippet)
+	}
+	suggestions := buildSuggestions(matches)
+
+	name := strings.TrimSpace(input.UserProfile.Nickname)
+	if name == "" {
+		name = "你"
+	}
+	answer := name + "，我先按你问到的重点检索了九型资料："
+	if input.UserProfile.MainType > 0 {
+		answer += "结合你最近的主型结果，"
+	}
+	answer += strings.Join(parts, "；") + "。你可以继续追问具体关系、职场、亲密关系或成长练习，我会沿着这些资料继续细化。"
+
+	if s.generator != nil {
+		generated, err := s.generateStreaming(ctx, GenerateInput{
+			History:     cleanHistory(input.History, 6),
+			Question:    question,
+			Sources:     sources,
+			UserProfile: input.UserProfile,
+		}, emit)
+		if err == nil && strings.TrimSpace(generated) != "" {
+			return Answer{Answer: strings.TrimSpace(generated), Sources: sources, Suggestions: suggestions}, nil
+		}
+	}
+
+	if err := emitTextChunks(answer, emit); err != nil {
+		return Answer{}, err
+	}
+	return Answer{Answer: answer, Sources: sources, Suggestions: suggestions}, nil
+}
+
+func (s *Service) generateStreaming(ctx context.Context, input GenerateInput, emit StreamEmitter) (string, error) {
+	if streamer, ok := s.generator.(StreamingGenerator); ok {
+		return streamer.GenerateStream(ctx, input, emit)
+	}
+	generated, err := s.generator.Generate(ctx, input)
+	if err != nil {
+		return "", err
+	}
+	generated = strings.TrimSpace(generated)
+	if generated == "" {
+		return "", nil
+	}
+	if err := emitTextChunks(generated, emit); err != nil {
+		return "", err
+	}
+	return generated, nil
+}
+
+func emitTextChunks(text string, emit StreamEmitter) error {
+	if emit == nil {
+		return nil
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	var builder strings.Builder
+	runeCount := 0
+	for _, r := range text {
+		builder.WriteRune(r)
+		runeCount++
+		if shouldFlushStreamChunk(r, runeCount) {
+			if err := emit(builder.String()); err != nil {
+				return err
+			}
+			builder.Reset()
+			runeCount = 0
+		}
+	}
+	if builder.Len() > 0 {
+		if err := emit(builder.String()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func shouldFlushStreamChunk(r rune, runeCount int) bool {
+	if runeCount >= 12 {
+		return true
+	}
+	switch r {
+	case '。', '！', '？', '；', '，', '.', '!', '?', ';', ',':
+		return true
+	default:
+		return false
+	}
 }
 
 type scoredDoc struct {

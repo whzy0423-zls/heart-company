@@ -326,6 +326,7 @@ func (s *Server) routes() {
 	// ===== App API =====
 	s.mux.HandleFunc("/api/app/health", s.method(http.MethodGet, s.appHealth))
 	s.mux.HandleFunc("/api/app/auth/send-sms", s.method(http.MethodPost, s.appSendSMS))
+	s.mux.HandleFunc("/api/app/auth/sms", s.method(http.MethodPost, s.appSendSMS))
 	s.mux.HandleFunc("/api/app/auth/sms/send", s.method(http.MethodPost, s.appSendSMS))
 	s.mux.HandleFunc("/api/app/auth/verify-sms", s.method(http.MethodPost, s.appVerifySMS))
 	s.mux.HandleFunc("/api/app/auth/sms/login", s.method(http.MethodPost, s.appVerifySMS))

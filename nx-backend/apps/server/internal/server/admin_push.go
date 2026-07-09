@@ -184,7 +184,7 @@ func (s *Server) runAdminPushSendTask(task adminPushSendTask) {
 		errMsg = pushErr.Error()
 		summary = "发送 App 推送失败"
 	} else if sent == 0 {
-		status = "success"
+		status = "failed"
 		errMsg = "无推送目标"
 		summary = "发送 App 推送：无推送目标"
 	}

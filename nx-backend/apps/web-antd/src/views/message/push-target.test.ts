@@ -4,6 +4,7 @@ import {
   audienceCountDetailLabel,
   audienceCountLabel,
   buildPushAudienceCountParams,
+  formatNoPushAudienceMessage,
   formatPushRecordError,
   formatPushSendAcceptedMessage,
   formatPushSendError,
@@ -76,6 +77,16 @@ describe('push target helpers', () => {
         userCount: 12,
       } as any),
     ).toBe('预计 12 人 / 14 台设备（会员等级：VIP 会员）');
+  });
+
+  it('explains why a push cannot be sent when no device is registered', () => {
+    expect(formatNoPushAudienceMessage({ deviceCount: 0, userCount: 2 })).toBe(
+      '当前没有可推送设备，请先在 App 端登录并完成推送设备注册后再测试',
+    );
+    expect(formatNoPushAudienceMessage({ deviceCount: 1, userCount: 1 })).toBe(
+      '',
+    );
+    expect(formatNoPushAudienceMessage()).toBe('');
   });
 
   it('uses backend error details for failed push send messages', () => {

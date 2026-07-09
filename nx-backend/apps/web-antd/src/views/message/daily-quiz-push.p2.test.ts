@@ -24,6 +24,7 @@ import {
   getPushAudienceCountApi,
   sendPushApi,
 } from '#/api/core/push';
+import { message } from 'ant-design-vue';
 
 import DailyQuizPushRecords from './daily-quiz-push.vue';
 
@@ -118,6 +119,32 @@ describe('Daily quiz push records page', () => {
         targetType: 'all',
         title: '今日画像校准题已准备好',
       }),
+    );
+    wrapper.unmount();
+  });
+
+  it('blocks test push and shows a clear popup when no App device is registered', async () => {
+    const warning = vi
+      .spyOn(message, 'warning')
+      .mockImplementation(() => undefined as any);
+    vi.mocked(getPushAudienceCountApi).mockResolvedValue({
+      deviceCount: 0,
+      targetType: 'all',
+      userCount: 3,
+    });
+
+    const wrapper = mountVueComponent(DailyQuizPushRecords);
+    await flushVuePromises();
+
+    wrapper.button('测试推送')?.click();
+    await flushVuePromises();
+
+    wrapper.button('OK')?.click();
+    await flushVuePromises();
+
+    expect(sendPushApi).not.toHaveBeenCalled();
+    expect(warning).toHaveBeenCalledWith(
+      '当前没有可推送设备，请先在 App 端登录并完成推送设备注册后再测试',
     );
     wrapper.unmount();
   });
