@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -38,6 +39,29 @@ type ShotGenerationResult struct {
 	Status       string `json:"status"` // success, failed, skipped
 	GenerationID string `json:"generationId"`
 	ErrorMessage string `json:"errorMessage"`
+}
+
+func filterShotsByIDs(shots []Shot, selectedShotIDs []string) []Shot {
+	if len(selectedShotIDs) == 0 {
+		return shots
+	}
+	wanted := make(map[string]bool, len(selectedShotIDs))
+	for _, shotID := range selectedShotIDs {
+		shotID = strings.TrimSpace(shotID)
+		if shotID != "" {
+			wanted[shotID] = true
+		}
+	}
+	if len(wanted) == 0 {
+		return shots
+	}
+	filtered := make([]Shot, 0, len(selectedShotIDs))
+	for _, shot := range shots {
+		if wanted[shot.ID] {
+			filtered = append(filtered, shot)
+		}
+	}
+	return filtered
 }
 
 // GenerateAllShots 批量生成项目的所有分镜（按顺序，等待上一个完成后再生成下一个）
@@ -90,6 +114,115 @@ func (bg *BatchGenerator) GenerateAllShots(ctx context.Context, projectID string
 		result.ShotResults = append(result.ShotResults, shotResult)
 
 		// 等待生成完成后再继续下一个（确保首尾帧继承）
+		if shotResult.Status == "success" {
+			bg.waitForCompletion(ctx, shot.ID, generation.ID)
+		}
+	}
+
+	return result, nil
+}
+
+func (bg *BatchGenerator) GenerateSelectedShots(ctx context.Context, projectID string, selectedShotIDs []string, parallel bool) (BatchGenerateResult, error) {
+	shots, err := bg.store.ListShots(ctx, projectID)
+	if err != nil {
+		return BatchGenerateResult{}, fmt.Errorf("获取分镜列表失败: %v", err)
+	}
+	shots = filterShotsByIDs(shots, selectedShotIDs)
+	if len(shots) == 0 {
+		return BatchGenerateResult{}, fmt.Errorf("没有符合条件的分镜")
+	}
+
+	if parallel {
+		result := BatchGenerateResult{
+			ProjectID:   projectID,
+			TotalShots:  len(shots),
+			ShotResults: make([]ShotGenerationResult, len(shots)),
+		}
+
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+
+		for i, shot := range shots {
+			if shot.Status == "completed" {
+				result.ShotResults[i] = ShotGenerationResult{
+					ShotID:       shot.ID,
+					ShotName:     shot.Name,
+					OrderNum:     shot.OrderNum,
+					Status:       "skipped",
+					GenerationID: shot.GenerationID,
+				}
+				continue
+			}
+
+			wg.Add(1)
+			go func(idx int, s Shot) {
+				defer wg.Done()
+
+				shotResult := ShotGenerationResult{
+					ShotID:   s.ID,
+					ShotName: s.Name,
+					OrderNum: s.OrderNum,
+				}
+
+				generation, err := bg.generator.GenerateShot(ctx, s.ID)
+				if err != nil {
+					shotResult.Status = "failed"
+					shotResult.ErrorMessage = err.Error()
+					mu.Lock()
+					result.FailedCount++
+					mu.Unlock()
+				} else {
+					shotResult.Status = "success"
+					shotResult.GenerationID = generation.ID
+					mu.Lock()
+					result.SuccessCount++
+					mu.Unlock()
+				}
+
+				mu.Lock()
+				result.ShotResults[idx] = shotResult
+				mu.Unlock()
+			}(i, shot)
+		}
+
+		wg.Wait()
+		return result, nil
+	}
+
+	result := BatchGenerateResult{
+		ProjectID:   projectID,
+		TotalShots:  len(shots),
+		ShotResults: make([]ShotGenerationResult, 0, len(shots)),
+	}
+
+	for _, shot := range shots {
+		shotResult := ShotGenerationResult{
+			ShotID:   shot.ID,
+			ShotName: shot.Name,
+			OrderNum: shot.OrderNum,
+		}
+
+		if shot.Status == "completed" {
+			shotResult.Status = "skipped"
+			shotResult.GenerationID = shot.GenerationID
+			result.ShotResults = append(result.ShotResults, shotResult)
+			continue
+		}
+
+		generation, err := bg.generator.GenerateShot(ctx, shot.ID)
+		if err != nil {
+			shotResult.Status = "failed"
+			shotResult.ErrorMessage = err.Error()
+			result.FailedCount++
+			log.Printf("生成分镜 %s 失败: %v", shot.ID, err)
+		} else {
+			shotResult.Status = "success"
+			shotResult.GenerationID = generation.ID
+			result.SuccessCount++
+		}
+
+		result.ShotResults = append(result.ShotResults, shotResult)
+
 		if shotResult.Status == "success" {
 			bg.waitForCompletion(ctx, shot.ID, generation.ID)
 		}

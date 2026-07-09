@@ -51,25 +51,80 @@ export interface Shot {
   characterIds: string[];
   createTime: string;
   duration: 5 | 10 | 15 | number;
+  dynamicDescription: string;
   endFrameUrl: string;
   errorMessage: string;
   generatedPrompt: string;
   generationId: string;
+  gridStoryboardPrompt: string;
   id: string;
   imageReferenceModes: string[];
   name: string;
   orderNum: number;
   projectId: string;
+  scriptOriginalContent: string;
   sceneId: string;
+  shotAssets: ShotAsset[];
+  soundAndPictureTogether: string;
   status: 'draft' | 'generating' | 'completed' | 'failed' | string;
+  storyboardUrl: string;
   updateTime: string;
+  usedAudios: string[];
   usedImages: string[];
   usedVideos: string[];
+  videoModel: string;
   videoReferenceMode: string;
+  videoResolution: string;
   videoUrl: string;
 }
 
+export interface ShotAsset {
+  assetType: 'audio' | 'image' | 'video' | string;
+  createTime: string;
+  id: string;
+  mimeType: string;
+  name: string;
+  objectUrl: string;
+  shotId: string;
+  sizeBytes: number;
+  updateTime: string;
+}
+
+export interface ShotVideoVersion {
+  aspectRatio: string;
+  backupFlag: boolean;
+  createTime: string;
+  errorMessage: string;
+  id: string;
+  isCurrent: boolean;
+  model: string;
+  prompt: string;
+  seconds: number;
+  shotId: string;
+  status: string;
+  subtitleRemove: string;
+  updateTime: string;
+  upscaledFlag: boolean;
+  upscaledResolution: string;
+  videoAssetId: string;
+  videoUrl: string;
+  viewedFlag: boolean;
+}
+
+export interface ShotVideoVersionDetailReference {
+  label: string;
+  type: 'audio' | 'image' | 'video' | string;
+  url: string;
+}
+
+export interface ShotVideoVersionDetail {
+  references: ShotVideoVersionDetailReference[];
+  shot: Shot;
+  version: ShotVideoVersion;
+}
+
 export interface ShotPreview {
+  audios: string[];
   estimatedSuccessRate: number;
   images: string[];
   prompt: string;
@@ -224,6 +279,114 @@ export function deleteShotApi(id: string | number) {
   return requestClient.delete(`/video/shots/${id}`);
 }
 
+export function listShotAssetsApi(shotId: string | number) {
+  return requestClient.get<ShotAsset[]>(`/video/shots-assets/list/${shotId}`);
+}
+
+export function createShotAssetApi(
+  shotId: string | number,
+  data: Partial<ShotAsset>,
+) {
+  return requestClient.post<ShotAsset>(`/video/shots-assets/${shotId}`, data);
+}
+
+export function deleteShotAssetApi(id: string | number) {
+  return requestClient.delete(`/video/shots-assets/${id}`);
+}
+
+export function listShotVideoVersionsApi(shotId: string | number) {
+  return requestClient.get<ShotVideoVersion[]>(
+    `/video/shots-video-versions/list/${shotId}`,
+  );
+}
+
+export function getShotVideoVersionDetailApi(
+  shotId: string | number,
+  generationId: string | number,
+) {
+  return requestClient.get<ShotVideoVersionDetail>(
+    `/video/shots-video-versions/detail/${shotId}/${generationId}`,
+  );
+}
+
+export function setShotVideoVersionApi(
+  shotId: string | number,
+  generationId: string | number,
+) {
+  return requestClient.post<Shot>(
+    `/video/shots-video-versions/set/${shotId}/${generationId}`,
+  );
+}
+
+export function setShotVideoVersionBackupApi(
+  shotId: string | number,
+  generationId: string | number,
+  backupFlag: boolean,
+) {
+  return requestClient.post<ShotVideoVersion>(
+    `/video/shots-video-versions/backup/${shotId}/${generationId}`,
+    { backupFlag },
+  );
+}
+
+export function removeShotVideoVersionSubtitleApi(
+  shotId: string | number,
+  generationId: string | number,
+) {
+  return requestClient.post<ShotVideoVersion>(
+    `/video/shots-video-versions/remove-subtitle/${shotId}/${generationId}`,
+  );
+}
+
+export function upscaleShotVideoVersionApi(
+  shotId: string | number,
+  generationId: string | number,
+  data: { resolution: string },
+) {
+  return requestClient.post<ShotVideoVersion>(
+    `/video/shots-video-versions/upscale/${shotId}/${generationId}`,
+    data,
+  );
+}
+
+export function refreshShotVideoVersionsApi(shotId: string | number) {
+  return requestClient.post<ShotVideoVersion[]>(
+    `/video/shots-video-versions/refresh/${shotId}`,
+  );
+}
+
+export function copyShotVideoVersionApi(
+  sourceShotId: string | number,
+  generationId: string | number,
+  targetShotId: string | number,
+) {
+  return requestClient.post<Shot>(
+    `/video/shots-video-versions/copy/${sourceShotId}/${generationId}/${targetShotId}`,
+  );
+}
+
+export function extractShotVideoFrameApi(
+  shotId: string | number,
+  generationId: string | number,
+) {
+  return requestClient.post<ShotAsset>(
+    `/video/shots-video-versions/extract-frame/${shotId}/${generationId}`,
+  );
+}
+
+export function deleteShotVideoVersionApi(
+  shotId: string | number,
+  generationId: string | number,
+) {
+  return requestClient.delete(
+    `/video/shots-video-versions/${shotId}/${generationId}`,
+  );
+}
+
+export function markShotVideoVersionViewedApi(generationId: string | number) {
+  return requestClient.post(`/video/shots-video-versions/viewed/${generationId}`);
+}
+
 export function generateShotApi(shotId: string | number) {
   return requestClient.post<VideoGeneration>(`/video/shots-generate/${shotId}`, {});
 }
@@ -234,10 +397,10 @@ export function previewShotPromptApi(shotId: string | number) {
 
 // ============ 批量生成和视频合成 API ============
 
-export function batchGenerateShotsApi(projectId: string | number) {
+export function batchGenerateShotsApi(projectId: string | number, input: { shotIds?: string[] } = {}) {
   return requestClient.post<BatchGenerateResponse>(
     `/video/projects-batch-generate/${projectId}`,
-    {},
+    input,
     { timeout: 180_000 },
   );
 }

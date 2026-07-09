@@ -195,6 +195,24 @@ function getRawFile(file: UploadChangeParam['file']) {
   return (file.originFileObj || file) as File | undefined;
 }
 
+function isPublicHttpUrl(url?: string) {
+  const value = String(url || '').trim();
+  return value.startsWith('http://') || value.startsWith('https://');
+}
+
+function requireUploadedPublicObjectUrl(
+  result: { objectUrl?: string },
+  label: string,
+) {
+  const value = String(result.objectUrl || '').trim();
+  if (isPublicHttpUrl(value)) {
+    return value;
+  }
+  throw new Error(
+    `${label}需要阿里云 OSS 文件桶公网 objectUrl，请配置 OSS_PUBLIC_URL 后重新上传`,
+  );
+}
+
 async function uploadAsset({ file }: UploadChangeParam) {
   const rawFile = getRawFile(file);
   if (!rawFile) {
@@ -205,13 +223,13 @@ async function uploadAsset({ file }: UploadChangeParam) {
   try {
     const result = await uploadFileApi(rawFile, `video/${form.type}`);
     form.assetId = String(result.assetId || '');
-    form.url = result.objectUrl || result.url;
+    form.url = requireUploadedPublicObjectUrl(result, '资产文件');
     if (!form.name.trim()) {
       form.name = result.name || rawFile.name;
     }
     uploadedName.value = result.name || rawFile.name;
     uploadedUrl.value = form.url;
-    message.success('资产文件已上传');
+    message.success('资产文件已上传到阿里云 OSS 文件桶');
   } catch (error: any) {
     form.assetId = '';
     form.url = '';

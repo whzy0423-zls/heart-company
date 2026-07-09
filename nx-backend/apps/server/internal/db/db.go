@@ -221,17 +221,20 @@ func seedMenus(ctx context.Context, database *sql.DB) error {
 	return tx.Commit()
 }
 
+const deprecatedMenusSQL = `DELETE FROM menus
+ WHERE id = 303
+    OR id = 313
+    OR name = 'WebsiteNavigation'
+    OR name = 'WebsiteSignupLeads'
+    OR name = 'CustomerAppPrivateRule'
+    OR path = '/website/navigation'
+    OR path = '/website/signup-leads'
+    OR path = '/customer/app-private-rules'
+    OR component = '/site-config/navigation'
+    OR component = '/customer/app-private-rules'`
+
 func removeDeprecatedMenus(ctx context.Context, database *sql.DB) error {
-	_, err := database.ExecContext(ctx,
-		`DELETE FROM menus
-		 WHERE id = 303
-		    OR id = 313
-		    OR name = 'WebsiteNavigation'
-		    OR name = 'WebsiteSignupLeads'
-		    OR path = '/website/navigation'
-		    OR path = '/website/signup-leads'
-		    OR component = '/site-config/navigation'`,
-	)
+	_, err := database.ExecContext(ctx, deprecatedMenusSQL)
 	return err
 }
 

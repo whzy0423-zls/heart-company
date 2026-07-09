@@ -1,6 +1,9 @@
 package db
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDefaultMenusIncludeRAGKnowledgeManagement(t *testing.T) {
 	var found bool
@@ -188,5 +191,17 @@ func TestDefaultMenusIncludeAppAnalyticsDashboard(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected default menu DashboardAppAnalytics")
+	}
+}
+
+func TestDeprecatedMenusRemoveStaleCustomerPrivateRuleRoute(t *testing.T) {
+	for _, token := range []string{
+		"name = 'CustomerAppPrivateRule'",
+		"path = '/customer/app-private-rules'",
+		"component = '/customer/app-private-rules'",
+	} {
+		if !strings.Contains(deprecatedMenusSQL, token) {
+			t.Fatalf("expected deprecated menu cleanup SQL to include %q", token)
+		}
 	}
 }

@@ -21,6 +21,7 @@ func NewPromptBuilder(store *Store) *PromptBuilder {
 
 // ShotPreview 是生成前的完整预览：提示词、参考素材、校验结果与预估成功率。
 type ShotPreview struct {
+	Audios               []string `json:"audios"`
 	EstimatedSuccessRate int      `json:"estimatedSuccessRate"`
 	Images               []string `json:"images"`
 	Prompt               string   `json:"prompt"`
@@ -94,6 +95,7 @@ func (b *PromptBuilder) BuildPreview(ctx context.Context, shotID string) (ShotPr
 	preview.Prompt = b.buildPrompt(shot, characters, scene, project.StyleGuide)
 	preview.Images = b.buildReferenceImages(shot, characters, scene, prevShot)
 	preview.Videos = b.buildReferenceVideos(shot, scene, prevShot)
+	preview.Audios = b.buildReferenceAudios(shot)
 
 	errors, warnings := b.validatePrompt(preview.Prompt, characters)
 	preview.Validation.Errors = errors
@@ -127,6 +129,10 @@ func (b *PromptBuilder) resolveCharacters(ctx context.Context, shot Shot) ([]Cha
 
 // buildPrompt 按「主体+动作+环境+风格+光照+镜头+质量词」结构组装提示词。
 func (b *PromptBuilder) buildPrompt(shot Shot, characters []Character, scene *Scene, styleGuide string) string {
+	if dynamicDescription := strings.TrimSpace(shot.DynamicDescription); dynamicDescription != "" {
+		return sanitizePrompt(dynamicDescription)
+	}
+
 	parts := []string{}
 
 	// 1. 主体：角色详细描述（人物一致性的文本保障）。
@@ -175,8 +181,10 @@ func (b *PromptBuilder) buildPrompt(shot Shot, characters []Character, scene *Sc
 	// 7. 质量词。
 	parts = append(parts, "high quality, detailed, smooth animation")
 
-	prompt := strings.Join(parts, ", ")
+	return sanitizePrompt(strings.Join(parts, ", "))
+}
 
+func sanitizePrompt(prompt string) string {
 	// 剔除禁用词，避免与动画风格冲突或触发内容审核。
 	lower := strings.ToLower(prompt)
 	for _, word := range promptBlacklist {
@@ -228,7 +236,7 @@ func (b *PromptBuilder) selectLighting(scene *Scene) string {
 }
 
 // buildReferenceImages 按优先级组装参考图片（最多 4 张）：
-// 上一镜头尾帧（连贯性） > 角色标准照（人物一致性） > 场景参考图（环境约束）。
+// 分镜显式参考图（用户上传/资产库选择） > 上一镜头尾帧（连贯性） > 角色标准照（人物一致性） > 场景参考图（环境约束）。
 func (b *PromptBuilder) buildReferenceImages(shot Shot, characters []Character, scene *Scene, prevShot *Shot) []string {
 	modes := make(map[string]bool, len(shot.ImageReferenceModes))
 	for _, m := range shot.ImageReferenceModes {
@@ -244,6 +252,14 @@ func (b *PromptBuilder) buildReferenceImages(shot Shot, characters []Character, 
 		}
 		seen[url] = true
 		images = append(images, url)
+	}
+
+	// 优先级0：分镜级图片素材。用户显式上传/选择的分镜参考图必须参与生成，
+	// 避免被自动角色/场景参考图挤出 4 张上限。
+	for _, asset := range shot.ShotAssets {
+		if asset.AssetType == "image" {
+			add(asset.ObjectURL)
+		}
 	}
 
 	// 优先级1：上一镜头尾帧。
@@ -273,20 +289,54 @@ func (b *PromptBuilder) buildReferenceImages(shot Shot, characters []Character, 
 	return images
 }
 
-// buildReferenceVideos 组装参考视频（最多 2 个）。
+// buildReferenceVideos 组装参考视频（最多 2 个）：
+// 分镜显式参考视频（用户上传/资产库选择） > 上一镜头视频/场景示例视频。
 func (b *PromptBuilder) buildReferenceVideos(shot Shot, scene *Scene, prevShot *Shot) []string {
 	videos := []string{}
+	seen := map[string]bool{}
+	add := func(url string) {
+		url = strings.TrimSpace(url)
+		if url == "" || seen[url] || len(videos) >= 2 {
+			return
+		}
+		seen[url] = true
+		videos = append(videos, url)
+	}
+
+	for _, asset := range shot.ShotAssets {
+		if asset.AssetType == "video" {
+			add(asset.ObjectURL)
+		}
+	}
+
 	switch shot.VideoReferenceMode {
 	case "prev_video":
-		if prevShot != nil && strings.TrimSpace(prevShot.VideoURL) != "" {
-			videos = append(videos, prevShot.VideoURL)
+		if prevShot != nil {
+			add(prevShot.VideoURL)
 		}
 	case "scene_demo":
-		if scene != nil && strings.TrimSpace(scene.ReferenceVideoURL) != "" {
-			videos = append(videos, scene.ReferenceVideoURL)
+		if scene != nil {
+			add(scene.ReferenceVideoURL)
 		}
 	}
 	return videos
+}
+
+func (b *PromptBuilder) buildReferenceAudios(shot Shot) []string {
+	audios := []string{}
+	seen := map[string]bool{}
+	for _, asset := range shot.ShotAssets {
+		if asset.AssetType != "audio" {
+			continue
+		}
+		url := strings.TrimSpace(asset.ObjectURL)
+		if url == "" || seen[url] {
+			continue
+		}
+		seen[url] = true
+		audios = append(audios, url)
+	}
+	return audios
 }
 
 // validatePrompt 生成前校验：错误阻断提交，警告仅提示。

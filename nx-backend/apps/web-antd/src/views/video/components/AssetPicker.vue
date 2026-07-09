@@ -26,7 +26,7 @@ export function getAllowedAssetTypes(allowTypes?: PickerVideoAssetType[]) {
 }
 
 export function getInitialPickerType(allowTypes?: PickerVideoAssetType[]) {
-  return allowTypes && allowTypes.length > 0 ? allowTypes[0] || '' : '';
+  return allowTypes && allowTypes.length === 1 ? allowTypes[0] || '' : '';
 }
 
 export function normalizePickerQueryType(

@@ -124,6 +124,59 @@ func TestCreateAllowsDirectPublicURLWithoutUploadAsset(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsDirectUploadProxyURLWithoutUploadAsset(t *testing.T) {
+	state := &videoAssetTestState{}
+	db := openVideoAssetTestDB(t, state)
+	defer db.Close()
+
+	store := NewStore(db, uploadasset.NewStore(db))
+	_, err := store.Create(context.Background(), CreateInput{
+		Name: "proxy",
+		Type: "video",
+		URL:  "/api/upload-assets/7",
+	})
+	if err == nil {
+		t.Fatal("expected direct upload proxy url to be rejected")
+	}
+	if !strings.Contains(err.Error(), "文件桶公网") {
+		t.Fatalf("expected bucket public url error, got %q", err.Error())
+	}
+	if len(state.inserted) != 0 {
+		t.Fatalf("expected no video asset insert, got %d", len(state.inserted))
+	}
+}
+
+func TestCreateRejectsDirectPrivateURLWithoutUploadAsset(t *testing.T) {
+	for _, rawURL := range []string{
+		"http://localhost/a.mp4",
+		"http://127.0.0.1/a.mp4",
+		"http://10.0.0.2/a.mp4",
+		"http://192.168.1.2/a.mp4",
+	} {
+		t.Run(rawURL, func(t *testing.T) {
+			state := &videoAssetTestState{}
+			db := openVideoAssetTestDB(t, state)
+			defer db.Close()
+
+			store := NewStore(db, uploadasset.NewStore(db))
+			_, err := store.Create(context.Background(), CreateInput{
+				Name: "private",
+				Type: "video",
+				URL:  rawURL,
+			})
+			if err == nil {
+				t.Fatal("expected direct private url to be rejected")
+			}
+			if !strings.Contains(err.Error(), "文件桶公网") {
+				t.Fatalf("expected bucket public url error, got %q", err.Error())
+			}
+			if len(state.inserted) != 0 {
+				t.Fatalf("expected no video asset insert, got %d", len(state.inserted))
+			}
+		})
+	}
+}
+
 func TestIsPublicHTTPURLRejectsPrivateAndLocalHosts(t *testing.T) {
 	for _, raw := range []string{
 		"http://localhost/a.mp4",

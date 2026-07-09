@@ -65,29 +65,91 @@ type Scene struct {
 }
 
 type Shot struct {
-	ActionDescription   string   `json:"actionDescription"`
-	AspectRatio         string   `json:"aspectRatio"`
-	CameraMovement      string   `json:"cameraMovement"`
-	CharacterIDs        []string `json:"characterIds"`
-	CreateTime          string   `json:"createTime"`
-	Duration            int      `json:"duration"`
-	EndFrameURL         string   `json:"endFrameUrl"`
-	ErrorMessage        string   `json:"errorMessage"`
-	GeneratedPrompt     string   `json:"generatedPrompt"`
-	GenerationID        string   `json:"generationId"`
-	ID                  string   `json:"id"`
-	ImageReferenceModes []string `json:"imageReferenceModes"`
-	Name                string   `json:"name"`
-	OrderNum            int      `json:"orderNum"`
-	ProjectID           string   `json:"projectId"`
-	SceneID             string   `json:"sceneId"`
-	Status              string   `json:"status"`
-	UpdateTime          string   `json:"updateTime"`
-	UsedImages          []string `json:"usedImages"`
-	UsedVideos          []string `json:"usedVideos"`
-	VideoReferenceMode  string   `json:"videoReferenceMode"`
+	ActionDescription       string      `json:"actionDescription"`
+	AspectRatio             string      `json:"aspectRatio"`
+	CameraMovement          string      `json:"cameraMovement"`
+	CharacterIDs            []string    `json:"characterIds"`
+	CreateTime              string      `json:"createTime"`
+	Duration                int         `json:"duration"`
+	DynamicDescription      string      `json:"dynamicDescription"`
+	EndFrameURL             string      `json:"endFrameUrl"`
+	ErrorMessage            string      `json:"errorMessage"`
+	GeneratedPrompt         string      `json:"generatedPrompt"`
+	GenerationID            string      `json:"generationId"`
+	GridStoryboardPrompt    string      `json:"gridStoryboardPrompt"`
+	ID                      string      `json:"id"`
+	ImageReferenceModes     []string    `json:"imageReferenceModes"`
+	Name                    string      `json:"name"`
+	OrderNum                int         `json:"orderNum"`
+	ProjectID               string      `json:"projectId"`
+	SceneID                 string      `json:"sceneId"`
+	ScriptOriginalContent   string      `json:"scriptOriginalContent"`
+	ShotAssets              []ShotAsset `json:"shotAssets"`
+	SoundAndPictureTogether string      `json:"soundAndPictureTogether"`
+	Status                  string      `json:"status"`
+	StoryboardURL           string      `json:"storyboardUrl"`
+	UpdateTime              string      `json:"updateTime"`
+	UsedAudios              []string    `json:"usedAudios"`
+	UsedImages              []string    `json:"usedImages"`
+	UsedVideos              []string    `json:"usedVideos"`
+	VideoModel              string      `json:"videoModel"`
+	VideoResolution         string      `json:"videoResolution"`
+	VideoReferenceMode      string      `json:"videoReferenceMode"`
 	// 联查生成记录的视频地址（前端预览）
 	VideoURL string `json:"videoUrl"`
+}
+
+type ShotAsset struct {
+	AssetType  string `json:"assetType"`
+	CreateTime string `json:"createTime"`
+	ID         string `json:"id"`
+	MimeType   string `json:"mimeType"`
+	Name       string `json:"name"`
+	ObjectURL  string `json:"objectUrl"`
+	ShotID     string `json:"shotId"`
+	SizeBytes  int64  `json:"sizeBytes"`
+	UpdateTime string `json:"updateTime"`
+}
+
+type ShotAssetInput struct {
+	AssetType string `json:"assetType"`
+	MimeType  string `json:"mimeType"`
+	Name      string `json:"name"`
+	ObjectURL string `json:"objectUrl"`
+	SizeBytes int64  `json:"sizeBytes"`
+}
+
+type ShotVideoVersion struct {
+	AspectRatio        string `json:"aspectRatio"`
+	BackupFlag         bool   `json:"backupFlag"`
+	CreateTime         string `json:"createTime"`
+	ErrorMessage       string `json:"errorMessage"`
+	ID                 string `json:"id"`
+	IsCurrent          bool   `json:"isCurrent"`
+	Model              string `json:"model"`
+	Prompt             string `json:"prompt"`
+	Seconds            int    `json:"seconds"`
+	ShotID             string `json:"shotId"`
+	Status             string `json:"status"`
+	SubtitleRemove     string `json:"subtitleRemove"`
+	UpdateTime         string `json:"updateTime"`
+	UpscaledFlag       bool   `json:"upscaledFlag"`
+	UpscaledResolution string `json:"upscaledResolution"`
+	VideoAssetID       string `json:"videoAssetId"`
+	VideoURL           string `json:"videoUrl"`
+	ViewedFlag         bool   `json:"viewedFlag"`
+}
+
+type ShotVideoVersionDetailReference struct {
+	Label string `json:"label"`
+	Type  string `json:"type"`
+	URL   string `json:"url"`
+}
+
+type ShotVideoVersionDetail struct {
+	References []ShotVideoVersionDetailReference `json:"references"`
+	Shot       Shot                              `json:"shot"`
+	Version    ShotVideoVersion                  `json:"version"`
 }
 
 type PageResult[T any] struct {
@@ -122,6 +184,13 @@ func fromJSONArray(raw []byte) []string {
 	items := []string{}
 	_ = json.Unmarshal(raw, &items)
 	return items
+}
+
+func jsonbArrayLiteral(raw []byte) string {
+	if strings.TrimSpace(string(raw)) == "" {
+		return "[]"
+	}
+	return string(raw)
 }
 
 // ---------- 项目 CRUD ----------
@@ -508,16 +577,23 @@ func (s *Store) ListScenes(ctx context.Context, projectID string) ([]Scene, erro
 // ---------- 分镜 CRUD ----------
 
 type ShotInput struct {
-	ActionDescription   string   `json:"actionDescription"`
-	AspectRatio         string   `json:"aspectRatio"`
-	CameraMovement      string   `json:"cameraMovement"`
-	CharacterIDs        []string `json:"characterIds"`
-	Duration            int      `json:"duration"`
-	ImageReferenceModes []string `json:"imageReferenceModes"`
-	Name                string   `json:"name"`
-	OrderNum            int      `json:"orderNum"`
-	SceneID             string   `json:"sceneId"`
-	VideoReferenceMode  string   `json:"videoReferenceMode"`
+	ActionDescription       string   `json:"actionDescription"`
+	AspectRatio             string   `json:"aspectRatio"`
+	CameraMovement          string   `json:"cameraMovement"`
+	CharacterIDs            []string `json:"characterIds"`
+	Duration                int      `json:"duration"`
+	DynamicDescription      string   `json:"dynamicDescription"`
+	GridStoryboardPrompt    string   `json:"gridStoryboardPrompt"`
+	ImageReferenceModes     []string `json:"imageReferenceModes"`
+	Name                    string   `json:"name"`
+	OrderNum                int      `json:"orderNum"`
+	SceneID                 string   `json:"sceneId"`
+	ScriptOriginalContent   string   `json:"scriptOriginalContent"`
+	SoundAndPictureTogether string   `json:"soundAndPictureTogether"`
+	StoryboardURL           string   `json:"storyboardUrl"`
+	VideoModel              string   `json:"videoModel"`
+	VideoResolution         string   `json:"videoResolution"`
+	VideoReferenceMode      string   `json:"videoReferenceMode"`
 }
 
 var allowedImageRefModes = map[string]bool{"prev_frame": true, "character_ref": true, "scene_ref": true}
@@ -591,10 +667,16 @@ func (s *Store) CreateShot(ctx context.Context, projectID string, input ShotInpu
 	}
 	var id string
 	if err := s.db.QueryRowContext(ctx,
-		`INSERT INTO video_shots (project_id, order_num, name, action_description, duration, aspect_ratio,
-		                          character_ids, scene_id, image_reference_modes, video_reference_mode, camera_movement)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10,$11) RETURNING id::text`,
-		pid, input.OrderNum, strings.TrimSpace(input.Name), input.ActionDescription,
+		`INSERT INTO video_shots (project_id, order_num, name, script_original_content,
+		                          action_description, dynamic_description, grid_storyboard_prompt, storyboard_url,
+		                          video_model, video_resolution, sound_and_picture_together,
+		                          duration, aspect_ratio, character_ids, scene_id, image_reference_modes,
+		                          video_reference_mode, camera_movement)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16::jsonb,$17,$18) RETURNING id::text`,
+		pid, input.OrderNum, strings.TrimSpace(input.Name), strings.TrimSpace(input.ScriptOriginalContent),
+		input.ActionDescription, strings.TrimSpace(input.DynamicDescription), strings.TrimSpace(input.GridStoryboardPrompt),
+		strings.TrimSpace(input.StoryboardURL), strings.TrimSpace(input.VideoModel),
+		strings.TrimSpace(input.VideoResolution), strings.TrimSpace(input.SoundAndPictureTogether),
 		input.Duration, input.AspectRatio, toJSONArray(input.CharacterIDs), sceneID,
 		toJSONArray(input.ImageReferenceModes), input.VideoReferenceMode, strings.TrimSpace(input.CameraMovement),
 	).Scan(&id); err != nil {
@@ -621,13 +703,19 @@ func (s *Store) UpdateShot(ctx context.Context, id string, input ShotInput) (Sho
 	}
 	if _, err := s.db.ExecContext(ctx,
 		`UPDATE video_shots
-		    SET name=$1, action_description=$2, duration=$3, aspect_ratio=$4,
-		        character_ids=$5::jsonb, scene_id=$6, image_reference_modes=$7::jsonb,
-		        video_reference_mode=$8, camera_movement=$9,
-		        order_num=CASE WHEN $10 > 0 THEN $10 ELSE order_num END,
+		    SET name=$1, script_original_content=$2, action_description=$3,
+		        dynamic_description=$4, grid_storyboard_prompt=$5, storyboard_url=$6,
+		        video_model=$7, video_resolution=$8, sound_and_picture_together=$9,
+		        duration=$10, aspect_ratio=$11,
+		        character_ids=$12::jsonb, scene_id=$13, image_reference_modes=$14::jsonb,
+		        video_reference_mode=$15, camera_movement=$16,
+		        order_num=CASE WHEN $17 > 0 THEN $17 ELSE order_num END,
 		        update_time=now()
-		  WHERE id=$11`,
-		strings.TrimSpace(input.Name), input.ActionDescription, input.Duration, input.AspectRatio,
+		  WHERE id=$18`,
+		strings.TrimSpace(input.Name), strings.TrimSpace(input.ScriptOriginalContent), input.ActionDescription,
+		strings.TrimSpace(input.DynamicDescription), strings.TrimSpace(input.GridStoryboardPrompt), strings.TrimSpace(input.StoryboardURL),
+		strings.TrimSpace(input.VideoModel), strings.TrimSpace(input.VideoResolution), strings.TrimSpace(input.SoundAndPictureTogether),
+		input.Duration, input.AspectRatio,
 		toJSONArray(input.CharacterIDs), sceneID, toJSONArray(input.ImageReferenceModes),
 		input.VideoReferenceMode, strings.TrimSpace(input.CameraMovement), input.OrderNum, shotID,
 	); err != nil {
@@ -645,22 +733,28 @@ func (s *Store) DeleteShot(ctx context.Context, id string) error {
 	return err
 }
 
-const shotSelectColumns = `s.id::text, s.project_id::text, s.order_num, s.name, s.action_description,
+const shotSelectColumns = `s.id::text, s.project_id::text, s.order_num, s.name,
+	        s.script_original_content, s.action_description, s.dynamic_description,
+	        s.grid_storyboard_prompt, s.storyboard_url,
+	        s.video_model, s.video_resolution, s.sound_and_picture_together,
 	        s.duration, s.aspect_ratio, s.character_ids, COALESCE(s.scene_id::text,''),
 	        s.image_reference_modes, s.video_reference_mode, s.camera_movement,
-	        COALESCE(s.generation_id::text,''), s.generated_prompt, s.used_images, s.used_videos,
+	        COALESCE(s.generation_id::text,''), s.generated_prompt, s.used_images, s.used_videos, s.used_audios,
 	        s.end_frame_url, s.status, s.error_message, s.create_time, s.update_time,
 	        COALESCE(g.video_url,'')`
 
 func scanShot(scanner interface{ Scan(...any) error }) (Shot, error) {
 	var sh Shot
-	var characterIDs, imageModes, usedImages, usedVideos []byte
+	var characterIDs, imageModes, usedImages, usedVideos, usedAudios []byte
 	var createTime, updateTime time.Time
-	if err := scanner.Scan(&sh.ID, &sh.ProjectID, &sh.OrderNum, &sh.Name, &sh.ActionDescription,
+	if err := scanner.Scan(&sh.ID, &sh.ProjectID, &sh.OrderNum, &sh.Name,
+		&sh.ScriptOriginalContent, &sh.ActionDescription, &sh.DynamicDescription,
+		&sh.GridStoryboardPrompt, &sh.StoryboardURL,
+		&sh.VideoModel, &sh.VideoResolution, &sh.SoundAndPictureTogether,
 		&sh.Duration, &sh.AspectRatio, &characterIDs, &sh.SceneID,
 		&imageModes, &sh.VideoReferenceMode, &sh.CameraMovement,
 		&sh.GenerationID, &sh.GeneratedPrompt, &usedImages, &usedVideos,
-		&sh.EndFrameURL, &sh.Status, &sh.ErrorMessage, &createTime, &updateTime,
+		&usedAudios, &sh.EndFrameURL, &sh.Status, &sh.ErrorMessage, &createTime, &updateTime,
 		&sh.VideoURL,
 	); err != nil {
 		return Shot{}, err
@@ -669,6 +763,7 @@ func scanShot(scanner interface{ Scan(...any) error }) (Shot, error) {
 	sh.ImageReferenceModes = fromJSONArray(imageModes)
 	sh.UsedImages = fromJSONArray(usedImages)
 	sh.UsedVideos = fromJSONArray(usedVideos)
+	sh.UsedAudios = fromJSONArray(usedAudios)
 	sh.CreateTime = formatTime(createTime)
 	sh.UpdateTime = formatTime(updateTime)
 	return sh, nil
@@ -692,6 +787,11 @@ func (s *Store) GetShot(ctx context.Context, id string) (Shot, error) {
 		}
 		return Shot{}, err
 	}
+	assets, err := s.ListShotAssets(ctx, id)
+	if err != nil {
+		return Shot{}, err
+	}
+	sh.ShotAssets = assets
 	return sh, nil
 }
 
@@ -717,9 +817,802 @@ func (s *Store) ListShots(ctx context.Context, projectID string) ([]Shot, error)
 		if err != nil {
 			return nil, err
 		}
+		assets, err := s.ListShotAssets(ctx, sh.ID)
+		if err != nil {
+			return nil, err
+		}
+		sh.ShotAssets = assets
 		items = append(items, sh)
 	}
 	return items, rows.Err()
+}
+
+var allowedShotAssetTypes = map[string]bool{"image": true, "video": true, "audio": true}
+
+func normalizeShotAssetInput(input *ShotAssetInput) error {
+	input.AssetType = strings.TrimSpace(input.AssetType)
+	if input.AssetType == "" {
+		input.AssetType = "image"
+	}
+	if !allowedShotAssetTypes[input.AssetType] {
+		return fmt.Errorf("无效的分镜素材类型")
+	}
+	input.ObjectURL = strings.TrimSpace(input.ObjectURL)
+	if input.ObjectURL == "" {
+		return fmt.Errorf("请上传分镜素材")
+	}
+	if _, err := requirePublicAssetObjectURL("分镜参考素材", input.ObjectURL); err != nil {
+		return err
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	input.MimeType = strings.TrimSpace(input.MimeType)
+	if input.SizeBytes < 0 {
+		input.SizeBytes = 0
+	}
+	return nil
+}
+
+func scanShotAsset(scanner interface{ Scan(...any) error }) (ShotAsset, error) {
+	var asset ShotAsset
+	var createTime, updateTime time.Time
+	if err := scanner.Scan(
+		&asset.ID,
+		&asset.ShotID,
+		&asset.AssetType,
+		&asset.ObjectURL,
+		&asset.Name,
+		&asset.MimeType,
+		&asset.SizeBytes,
+		&createTime,
+		&updateTime,
+	); err != nil {
+		return ShotAsset{}, err
+	}
+	asset.CreateTime = formatTime(createTime)
+	asset.UpdateTime = formatTime(updateTime)
+	return asset, nil
+}
+
+func (s *Store) ListShotAssets(ctx context.Context, shotID string) ([]ShotAsset, error) {
+	sid, err := parseID(shotID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id::text, shot_id::text, asset_type, object_url, name, mime_type, size_bytes, create_time, update_time
+		   FROM video_shot_assets
+		  WHERE shot_id=$1
+		  ORDER BY create_time ASC, id ASC`, sid,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ShotAsset{}
+	for rows.Next() {
+		asset, err := scanShotAsset(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, asset)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) CreateShotAsset(ctx context.Context, shotID string, input ShotAssetInput) (ShotAsset, error) {
+	sid, err := parseID(shotID)
+	if err != nil {
+		return ShotAsset{}, err
+	}
+	if err := normalizeShotAssetInput(&input); err != nil {
+		return ShotAsset{}, err
+	}
+	var id string
+	if err := s.db.QueryRowContext(ctx,
+		`INSERT INTO video_shot_assets (shot_id, asset_type, object_url, name, mime_type, size_bytes)
+		 VALUES ($1,$2,$3,$4,$5,$6)
+		 RETURNING id::text`,
+		sid, input.AssetType, input.ObjectURL, input.Name, input.MimeType, input.SizeBytes,
+	).Scan(&id); err != nil {
+		return ShotAsset{}, err
+	}
+	return s.GetShotAsset(ctx, id)
+}
+
+func (s *Store) GetShotAsset(ctx context.Context, id string) (ShotAsset, error) {
+	assetID, err := parseID(id)
+	if err != nil {
+		return ShotAsset{}, err
+	}
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id::text, shot_id::text, asset_type, object_url, name, mime_type, size_bytes, create_time, update_time
+		   FROM video_shot_assets
+		  WHERE id=$1`, assetID,
+	)
+	asset, err := scanShotAsset(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return ShotAsset{}, fmt.Errorf("分镜素材不存在")
+		}
+		return ShotAsset{}, err
+	}
+	return asset, nil
+}
+
+func (s *Store) DeleteShotAsset(ctx context.Context, id string) error {
+	assetID, err := parseID(id)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM video_shot_assets WHERE id=$1`, assetID)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return fmt.Errorf("分镜素材不存在")
+	}
+	return nil
+}
+
+func scanShotVideoVersion(scanner interface{ Scan(...any) error }) (ShotVideoVersion, error) {
+	var version ShotVideoVersion
+	var createTime, updateTime time.Time
+	if err := scanner.Scan(
+		&version.ID,
+		&version.ShotID,
+		&version.Model,
+		&version.Prompt,
+		&version.Status,
+		&version.ErrorMessage,
+		&version.VideoURL,
+		&version.VideoAssetID,
+		&version.Seconds,
+		&version.AspectRatio,
+		&version.IsCurrent,
+		&version.ViewedFlag,
+		&version.BackupFlag,
+		&version.SubtitleRemove,
+		&version.UpscaledFlag,
+		&version.UpscaledResolution,
+		&createTime,
+		&updateTime,
+	); err != nil {
+		return ShotVideoVersion{}, err
+	}
+	version.CreateTime = formatTime(createTime)
+	version.UpdateTime = formatTime(updateTime)
+	return version, nil
+}
+
+func shotStatusFromGenerationStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed", "succeeded", "success":
+		return "completed"
+	case "failed", "error":
+		return "failed"
+	case "queued", "pending", "submitted", "in_progress", "processing", "running":
+		return "generating"
+	default:
+		return "draft"
+	}
+}
+
+func (s *Store) ListShotVideoVersions(ctx context.Context, shotID string) ([]ShotVideoVersion, error) {
+	sid, err := parseID(shotID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT g.id::text,
+		        s.id::text,
+		        g.model,
+		        g.prompt,
+		        g.status,
+		        g.error_message,
+		        g.video_url,
+		        COALESCE(g.video_asset_id::text,''),
+		        g.seconds,
+		        g.aspect_ratio,
+		        COALESCE(s.generation_id = g.id, false) AS is_current,
+		        COALESCE(g.viewed_flag, false),
+		        COALESCE(g.backup_flag, false),
+		        COALESCE(g.subtitle_remove, ''),
+		        COALESCE(g.upscaled_flag, false),
+		        COALESCE(g.upscaled_resolution, ''),
+		        g.create_time,
+		        g.update_time
+		   FROM video_shots s
+		   JOIN video_generations g ON g.shot_id = s.id OR g.id = s.generation_id
+		  WHERE s.id=$1
+		  ORDER BY COALESCE(s.generation_id = g.id, false) DESC, COALESCE(g.backup_flag, false) DESC, g.create_time DESC, g.id DESC`,
+		sid,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ShotVideoVersion{}
+	for rows.Next() {
+		version, err := scanShotVideoVersion(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, version)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) GetShotVideoVersion(ctx context.Context, shotID, generationID string) (ShotVideoVersion, error) {
+	sid, err := parseID(shotID)
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+	gid, err := parseID(generationID)
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+	row := s.db.QueryRowContext(ctx,
+		`SELECT g.id::text,
+		        s.id::text,
+		        g.model,
+		        g.prompt,
+		        g.status,
+		        g.error_message,
+		        g.video_url,
+		        COALESCE(g.video_asset_id::text,''),
+		        g.seconds,
+		        g.aspect_ratio,
+		        COALESCE(s.generation_id = g.id, false) AS is_current,
+		        COALESCE(g.viewed_flag, false),
+		        COALESCE(g.backup_flag, false),
+		        COALESCE(g.subtitle_remove, ''),
+		        COALESCE(g.upscaled_flag, false),
+		        COALESCE(g.upscaled_resolution, ''),
+		        g.create_time,
+		        g.update_time
+		   FROM video_shots s
+		   JOIN video_generations g ON g.id=$2
+		  WHERE s.id=$1 AND (g.shot_id = s.id OR g.id = s.generation_id)`,
+		sid, gid,
+	)
+	version, err := scanShotVideoVersion(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return ShotVideoVersion{}, fmt.Errorf("视频版本不存在或不属于当前分镜")
+		}
+		return ShotVideoVersion{}, err
+	}
+	return version, nil
+}
+
+func (s *Store) GetShotVideoVersionDetail(ctx context.Context, shotID, generationID string) (ShotVideoVersionDetail, error) {
+	shot, err := s.GetShot(ctx, shotID)
+	if err != nil {
+		return ShotVideoVersionDetail{}, err
+	}
+	version, err := s.GetShotVideoVersion(ctx, shotID, generationID)
+	if err != nil {
+		return ShotVideoVersionDetail{}, err
+	}
+	getShotVideoVersionUsedReferences := func() ([]string, []string, []string, error) {
+		sid, err := parseID(shotID)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		gid, err := parseID(generationID)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		var generationUsedImages, generationUsedVideos, generationUsedAudios []byte
+		err = s.db.QueryRowContext(ctx,
+			`SELECT g.used_images, g.used_videos, g.used_audios
+			   FROM video_shots s
+			   JOIN video_generations g ON g.id=$2
+			  WHERE s.id=$1 AND (g.shot_id = s.id OR g.id = s.generation_id)`,
+			sid, gid,
+		).Scan(&generationUsedImages, &generationUsedVideos, &generationUsedAudios)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return nil, nil, nil, fmt.Errorf("视频版本不存在或不属于当前分镜")
+			}
+			return nil, nil, nil, err
+		}
+		return fromJSONArray(generationUsedImages), fromJSONArray(generationUsedVideos), fromJSONArray(generationUsedAudios), nil
+	}
+	generationUsedImages, generationUsedVideos, generationUsedAudios, err := getShotVideoVersionUsedReferences()
+	if err != nil {
+		return ShotVideoVersionDetail{}, err
+	}
+
+	references := []ShotVideoVersionDetailReference{}
+	seen := map[string]bool{}
+	pushReference := func(assetType, url, label string) {
+		assetType = strings.TrimSpace(assetType)
+		url = strings.TrimSpace(url)
+		if assetType == "" || url == "" {
+			return
+		}
+		key := assetType + ":" + url
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		if strings.TrimSpace(label) == "" {
+			switch assetType {
+			case "image":
+				label = "参考图片"
+			case "video":
+				label = "参考视频"
+			case "audio":
+				label = "参考音频"
+			default:
+				label = "参考素材"
+			}
+		}
+		references = append(references, ShotVideoVersionDetailReference{
+			Label: label,
+			Type:  assetType,
+			URL:   url,
+		})
+	}
+
+	fallbackToCurrentShotUsedReferences := version.IsCurrent &&
+		len(generationUsedImages) == 0 &&
+		len(generationUsedVideos) == 0 &&
+		len(generationUsedAudios) == 0
+	if fallbackToCurrentShotUsedReferences {
+		for _, asset := range shot.ShotAssets {
+			if asset.AssetType == "image" || asset.AssetType == "video" || asset.AssetType == "audio" {
+				pushReference(asset.AssetType, asset.ObjectURL, asset.Name)
+			}
+		}
+		generationUsedImages = shot.UsedImages
+		generationUsedVideos = shot.UsedVideos
+		generationUsedAudios = shot.UsedAudios
+	}
+	for _, image := range generationUsedImages {
+		pushReference("image", image, "生成使用图片")
+	}
+	for _, videoURL := range generationUsedVideos {
+		pushReference("video", videoURL, "生成使用视频")
+	}
+	for _, audio := range generationUsedAudios {
+		pushReference("audio", audio, "生成使用音频")
+	}
+
+	return ShotVideoVersionDetail{
+		References: references,
+		Shot:       shot,
+		Version:    version,
+	}, nil
+}
+
+func (s *Store) SetShotVideoVersionBackup(ctx context.Context, shotID, generationID string, backupFlag bool) (ShotVideoVersion, error) {
+	sid, err := parseID(shotID)
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+	gid, err := parseID(generationID)
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE video_generations g
+		    SET backup_flag=$3, update_time=now()
+		   FROM video_shots s
+		  WHERE s.id=$1
+		    AND g.id=$2
+		    AND (g.shot_id = s.id OR g.id = s.generation_id)`,
+		sid, gid, backupFlag,
+	)
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return ShotVideoVersion{}, fmt.Errorf("视频版本不存在或不属于当前分镜")
+	}
+	return s.GetShotVideoVersion(ctx, shotID, generationID)
+}
+
+func (s *Store) CreateSubtitleRemovedShotVideoVersion(ctx context.Context, shotID, generationID string, assetID int64, videoURL string) (ShotVideoVersion, error) {
+	sid, err := parseID(shotID)
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+	gid, err := parseID(generationID)
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+	videoURL = strings.TrimSpace(videoURL)
+	if assetID <= 0 || videoURL == "" {
+		return ShotVideoVersion{}, fmt.Errorf("无字幕视频资产无效")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+	defer tx.Rollback()
+
+	var projectID int64
+	if err := tx.QueryRowContext(ctx, `SELECT project_id FROM video_shots WHERE id=$1`, sid).Scan(&projectID); err != nil {
+		if err == sql.ErrNoRows {
+			return ShotVideoVersion{}, fmt.Errorf("分镜不存在")
+		}
+		return ShotVideoVersion{}, err
+	}
+
+	var newID int64
+	err = tx.QueryRowContext(ctx,
+		`INSERT INTO video_generations (
+		     provider, model, prompt, image_url, task_id, seconds, aspect_ratio,
+		     video_asset_id, video_url, duration, fps, width, height,
+		     status, error_message, viewed_flag, backup_flag, subtitle_remove,
+		     used_images, used_videos, used_audios, project_id, shot_id
+		   )
+		   SELECT 'local-subtitle-removal', g.model, g.prompt, g.image_url, '', g.seconds, g.aspect_ratio,
+		          $3, $4, g.duration, g.fps, g.width, g.height,
+		          'completed', '', false, false, 'REMOVED',
+		          CASE WHEN jsonb_array_length(g.used_images) = 0 AND s.generation_id = g.id THEN s.used_images ELSE g.used_images END,
+		          CASE WHEN jsonb_array_length(g.used_videos) = 0 AND s.generation_id = g.id THEN s.used_videos ELSE g.used_videos END,
+		          CASE WHEN jsonb_array_length(g.used_audios) = 0 AND s.generation_id = g.id THEN s.used_audios ELSE g.used_audios END,
+		          $5, $1
+		     FROM video_generations g
+		     JOIN video_shots s ON s.id=$1
+		    WHERE g.id=$2 AND (g.shot_id = s.id OR g.id = s.generation_id)
+		   RETURNING id`,
+		sid, gid, assetID, videoURL, projectID,
+	).Scan(&newID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return ShotVideoVersion{}, fmt.Errorf("视频版本不存在或不属于当前分镜")
+		}
+		return ShotVideoVersion{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return ShotVideoVersion{}, err
+	}
+	return s.GetShotVideoVersion(ctx, shotID, fmt.Sprint(newID))
+}
+
+func (s *Store) CreateUpscaledShotVideoVersion(ctx context.Context, shotID, generationID string, assetID int64, videoURL, resolution string, width, height int) (ShotVideoVersion, error) {
+	sid, err := parseID(shotID)
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+	gid, err := parseID(generationID)
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+	videoURL = strings.TrimSpace(videoURL)
+	resolution = strings.TrimSpace(resolution)
+	if assetID <= 0 || videoURL == "" || resolution == "" {
+		return ShotVideoVersion{}, fmt.Errorf("超分视频资产无效")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+	defer tx.Rollback()
+
+	var projectID int64
+	if err := tx.QueryRowContext(ctx, `SELECT project_id FROM video_shots WHERE id=$1`, sid).Scan(&projectID); err != nil {
+		if err == sql.ErrNoRows {
+			return ShotVideoVersion{}, fmt.Errorf("分镜不存在")
+		}
+		return ShotVideoVersion{}, err
+	}
+
+	var newID int64
+	err = tx.QueryRowContext(ctx,
+		`INSERT INTO video_generations (
+		     provider, model, prompt, image_url, task_id, seconds, aspect_ratio,
+		     video_asset_id, video_url, duration, fps, width, height,
+		     status, error_message, viewed_flag, backup_flag, subtitle_remove,
+		     upscaled_flag, upscaled_resolution, used_images, used_videos, used_audios, project_id, shot_id
+		   )
+		   SELECT 'local-upscale', g.model, g.prompt, g.image_url, '', g.seconds, g.aspect_ratio,
+		          $3, $4, g.duration, g.fps, $6, $7,
+		          'completed', '', false, false, g.subtitle_remove,
+		          true, $5,
+		          CASE WHEN jsonb_array_length(g.used_images) = 0 AND s.generation_id = g.id THEN s.used_images ELSE g.used_images END,
+		          CASE WHEN jsonb_array_length(g.used_videos) = 0 AND s.generation_id = g.id THEN s.used_videos ELSE g.used_videos END,
+		          CASE WHEN jsonb_array_length(g.used_audios) = 0 AND s.generation_id = g.id THEN s.used_audios ELSE g.used_audios END,
+		          $8, $1
+		     FROM video_generations g
+		     JOIN video_shots s ON s.id=$1
+		    WHERE g.id=$2 AND (g.shot_id = s.id OR g.id = s.generation_id)
+		   RETURNING id`,
+		sid, gid, assetID, videoURL, resolution, width, height, projectID,
+	).Scan(&newID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return ShotVideoVersion{}, fmt.Errorf("视频版本不存在或不属于当前分镜")
+		}
+		return ShotVideoVersion{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return ShotVideoVersion{}, err
+	}
+	return s.GetShotVideoVersion(ctx, shotID, fmt.Sprint(newID))
+}
+
+func (s *Store) SetShotVideoVersion(ctx context.Context, shotID, generationID string) (Shot, error) {
+	sid, err := parseID(shotID)
+	if err != nil {
+		return Shot{}, err
+	}
+	gid, err := parseID(generationID)
+	if err != nil {
+		return Shot{}, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Shot{}, err
+	}
+	defer tx.Rollback()
+
+	var projectID int64
+	var genStatus, genPrompt, genError string
+	var genUsedImages, genUsedVideos, genUsedAudios []byte
+	err = tx.QueryRowContext(ctx,
+		`SELECT s.project_id, g.status, g.prompt, g.error_message,
+		        CASE WHEN jsonb_array_length(g.used_images) = 0 AND s.generation_id = g.id THEN s.used_images ELSE g.used_images END,
+		        CASE WHEN jsonb_array_length(g.used_videos) = 0 AND s.generation_id = g.id THEN s.used_videos ELSE g.used_videos END,
+		        CASE WHEN jsonb_array_length(g.used_audios) = 0 AND s.generation_id = g.id THEN s.used_audios ELSE g.used_audios END
+		   FROM video_shots s
+		   JOIN video_generations g ON g.id=$2
+		  WHERE s.id=$1 AND (g.shot_id = s.id OR g.id = s.generation_id)`,
+		sid, gid,
+	).Scan(&projectID, &genStatus, &genPrompt, &genError, &genUsedImages, &genUsedVideos, &genUsedAudios)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return Shot{}, fmt.Errorf("视频版本不存在或不属于当前分镜")
+		}
+		return Shot{}, err
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE video_generations
+		    SET project_id=$1, shot_id=$2, update_time=now()
+		  WHERE id=$3`,
+		projectID, sid, gid,
+	); err != nil {
+		return Shot{}, err
+	}
+
+	shotStatus := shotStatusFromGenerationStatus(genStatus)
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE video_shots
+		    SET generation_id=$1,
+		        generated_prompt=$2,
+		        status=$3,
+		        error_message=CASE WHEN $3='failed' THEN $4 ELSE '' END,
+		        used_images=$5::jsonb,
+		        used_videos=$6::jsonb,
+		        used_audios=$7::jsonb,
+		        update_time=now()
+		  WHERE id=$8`,
+		gid, genPrompt, shotStatus, genError,
+		jsonbArrayLiteral(genUsedImages), jsonbArrayLiteral(genUsedVideos), jsonbArrayLiteral(genUsedAudios), sid,
+	); err != nil {
+		return Shot{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return Shot{}, err
+	}
+	return s.GetShot(ctx, shotID)
+}
+
+func (s *Store) MarkShotVideoVersionViewed(ctx context.Context, generationID string) error {
+	gid, err := parseID(generationID)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE video_generations
+		    SET viewed_flag=true, update_time=now()
+		  WHERE id=$1`,
+		gid,
+	)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return fmt.Errorf("视频版本不存在")
+	}
+	return nil
+}
+
+func (s *Store) CopyShotVideoVersion(ctx context.Context, sourceShotID, generationID, targetShotID string) (Shot, error) {
+	sourceSID, err := parseID(sourceShotID)
+	if err != nil {
+		return Shot{}, err
+	}
+	gid, err := parseID(generationID)
+	if err != nil {
+		return Shot{}, err
+	}
+	targetSID, err := parseID(targetShotID)
+	if err != nil {
+		return Shot{}, err
+	}
+	if sourceSID == targetSID {
+		return Shot{}, fmt.Errorf("不能复制到当前分镜")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Shot{}, err
+	}
+	defer tx.Rollback()
+
+	var sourceProjectID int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT project_id FROM video_shots WHERE id=$1`,
+		sourceSID,
+	).Scan(&sourceProjectID); err != nil {
+		if err == sql.ErrNoRows {
+			return Shot{}, fmt.Errorf("源分镜不存在")
+		}
+		return Shot{}, err
+	}
+
+	var targetExists bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT true FROM video_shots WHERE project_id=$1 AND id=$2`,
+		sourceProjectID, targetSID,
+	).Scan(&targetExists); err != nil {
+		if err == sql.ErrNoRows {
+			return Shot{}, fmt.Errorf("目标分镜不存在或不属于当前项目")
+		}
+		return Shot{}, err
+	}
+
+	var copiedID int64
+	var copiedStatus, copiedPrompt, copiedError string
+	var copiedUsedImages, copiedUsedVideos, copiedUsedAudios []byte
+	if err := tx.QueryRowContext(ctx,
+		`INSERT INTO video_generations (
+		     provider, model, prompt, image_url, task_id, seconds, aspect_ratio,
+		     video_asset_id, video_url, duration, fps, width, height,
+		     status, error_message, subtitle_remove, upscaled_flag, upscaled_resolution,
+		     used_images, used_videos, used_audios, project_id, shot_id
+		   )
+		   SELECT g.provider, g.model, g.prompt, g.image_url, g.task_id, g.seconds, g.aspect_ratio,
+		          g.video_asset_id, g.video_url, g.duration, g.fps, g.width, g.height,
+		          g.status, g.error_message, g.subtitle_remove, g.upscaled_flag, g.upscaled_resolution,
+		          CASE WHEN jsonb_array_length(g.used_images) = 0 AND s.generation_id = g.id THEN s.used_images ELSE g.used_images END,
+		          CASE WHEN jsonb_array_length(g.used_videos) = 0 AND s.generation_id = g.id THEN s.used_videos ELSE g.used_videos END,
+		          CASE WHEN jsonb_array_length(g.used_audios) = 0 AND s.generation_id = g.id THEN s.used_audios ELSE g.used_audios END,
+		          $3, $4
+		     FROM video_generations g
+		     JOIN video_shots s ON s.id=$1
+		    WHERE g.id=$2 AND (g.shot_id = s.id OR g.id = s.generation_id)
+		   RETURNING id, status, prompt, error_message, used_images, used_videos, used_audios`,
+		sourceSID, gid, sourceProjectID, targetSID,
+	).Scan(&copiedID, &copiedStatus, &copiedPrompt, &copiedError, &copiedUsedImages, &copiedUsedVideos, &copiedUsedAudios); err != nil {
+		if err == sql.ErrNoRows {
+			return Shot{}, fmt.Errorf("视频版本不存在或不属于源分镜")
+		}
+		return Shot{}, err
+	}
+
+	shotStatus := shotStatusFromGenerationStatus(copiedStatus)
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE video_shots
+		    SET generation_id=$1,
+		        generated_prompt=$2,
+		        status=$3,
+		        error_message=CASE WHEN $3='failed' THEN $4 ELSE '' END,
+		        used_images=$5::jsonb,
+		        used_videos=$6::jsonb,
+		        used_audios=$7::jsonb,
+		        update_time=now()
+		  WHERE id=$8`,
+		copiedID, copiedPrompt, shotStatus, copiedError,
+		jsonbArrayLiteral(copiedUsedImages), jsonbArrayLiteral(copiedUsedVideos), jsonbArrayLiteral(copiedUsedAudios), targetSID,
+	); err != nil {
+		return Shot{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return Shot{}, err
+	}
+	return s.GetShot(ctx, targetShotID)
+}
+
+func (s *Store) DeleteShotVideoVersion(ctx context.Context, shotID, generationID string) error {
+	sid, err := parseID(shotID)
+	if err != nil {
+		return err
+	}
+	gid, err := parseID(generationID)
+	if err != nil {
+		return err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var isCurrent bool
+	err = tx.QueryRowContext(ctx,
+		`SELECT COALESCE(s.generation_id = g.id, false) AS is_current
+		   FROM video_shots s
+		   JOIN video_generations g ON g.id=$2
+		  WHERE s.id=$1 AND (g.shot_id = s.id OR g.id = s.generation_id)`,
+		sid, gid,
+	).Scan(&isCurrent)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("视频版本不存在或不属于当前分镜")
+		}
+		return err
+	}
+
+	result, err := tx.ExecContext(ctx, `DELETE FROM video_generations WHERE id=$1`, gid)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return fmt.Errorf("视频版本不存在")
+	}
+
+	if isCurrent {
+		var nextID int64
+		var nextStatus, nextPrompt, nextError string
+		var nextUsedImages, nextUsedVideos, nextUsedAudios []byte
+		err := tx.QueryRowContext(ctx,
+			`SELECT id, status, prompt, error_message, used_images, used_videos, used_audios
+			   FROM video_generations
+			  WHERE shot_id=$1
+			  ORDER BY create_time DESC, id DESC
+			  LIMIT 1`,
+			sid,
+		).Scan(&nextID, &nextStatus, &nextPrompt, &nextError, &nextUsedImages, &nextUsedVideos, &nextUsedAudios)
+		switch {
+		case err == sql.ErrNoRows:
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE video_shots
+				    SET generation_id=NULL, generated_prompt='', used_images='[]'::jsonb, used_videos='[]'::jsonb, used_audios='[]'::jsonb,
+				        end_frame_url='', status='draft', error_message='', update_time=now()
+				  WHERE id=$1`,
+				sid,
+			); err != nil {
+				return err
+			}
+		case err != nil:
+			return err
+		default:
+			shotStatus := shotStatusFromGenerationStatus(nextStatus)
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE video_shots
+				    SET generation_id=$1,
+				        generated_prompt=$2,
+				        status=$3,
+				        error_message=CASE WHEN $3='failed' THEN $4 ELSE '' END,
+				        used_images=$5::jsonb,
+				        used_videos=$6::jsonb,
+				        used_audios=$7::jsonb,
+				        update_time=now()
+				  WHERE id=$8`,
+				nextID, nextPrompt, shotStatus, nextError,
+				jsonbArrayLiteral(nextUsedImages), jsonbArrayLiteral(nextUsedVideos), jsonbArrayLiteral(nextUsedAudios), sid,
+			); err != nil {
+				return err
+			}
+		}
+	}
+
+	return tx.Commit()
 }
 
 // PreviousShot 返回同项目中 order_num 小于当前分镜的最近一个分镜（用于首帧继承）。
@@ -747,7 +1640,7 @@ func (s *Store) PreviousShot(ctx context.Context, projectID string, orderNum int
 }
 
 // MarkShotGenerating 记录生成任务提交后的分镜状态。
-func (s *Store) MarkShotGenerating(ctx context.Context, shotID, generationID, prompt string, images, videos []string) error {
+func (s *Store) MarkShotGenerating(ctx context.Context, shotID, generationID, prompt string, images, videos, audios []string) error {
 	sid, err := parseID(shotID)
 	if err != nil {
 		return err
@@ -756,14 +1649,46 @@ func (s *Store) MarkShotGenerating(ctx context.Context, shotID, generationID, pr
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx,
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var projectID int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT project_id FROM video_shots WHERE id=$1`,
+		sid,
+	).Scan(&projectID); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE video_generations
+		    SET project_id=$1,
+		        shot_id=$2,
+		        used_images=$3::jsonb,
+		        used_videos=$4::jsonb,
+		        used_audios=$5::jsonb,
+		        update_time=now()
+		  WHERE id=$6`,
+		projectID, sid, toJSONArray(images), toJSONArray(videos), toJSONArray(audios), gid,
+	); err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx,
 		`UPDATE video_shots
-		    SET generation_id=$1, generated_prompt=$2, used_images=$3::jsonb, used_videos=$4::jsonb,
+		    SET generation_id=$1, generated_prompt=$2, used_images=$3::jsonb, used_videos=$4::jsonb, used_audios=$5::jsonb,
 		        status='generating', error_message='', update_time=now()
-		  WHERE id=$5`,
-		gid, prompt, toJSONArray(images), toJSONArray(videos), sid,
+		  WHERE id=$6`,
+		gid, prompt, toJSONArray(images), toJSONArray(videos), toJSONArray(audios), sid,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // MarkShotCompleted 生成完成后回填尾帧。

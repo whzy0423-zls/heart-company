@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +51,9 @@ func (g *Generator) GenerateShot(ctx context.Context, shotID string) (video.Gene
 	if !preview.Validation.IsValid {
 		return video.Generation{}, fmt.Errorf("提示词验证失败：%s", strings.Join(preview.Validation.Errors, "; "))
 	}
+	if err := validateGatewayReferenceURLs(preview.Images, preview.Videos, preview.Audios); err != nil {
+		return video.Generation{}, err
+	}
 
 	// 3. 获取 Shot 信息
 	shot, err := g.store.GetShot(ctx, shotID)
@@ -60,8 +64,9 @@ func (g *Generator) GenerateShot(ctx context.Context, shotID string) (video.Gene
 	// 4. 调用现有的视频生成 API（复用现有逻辑，不改动）
 	input := video.GenerateInput{
 		AspectRatio: shot.AspectRatio,
+		Audios:      preview.Audios,
 		Images:      preview.Images,
-		Model:       "video-ds-2.0-fast",
+		Model:       shot.VideoModel,
 		Prompt:      preview.Prompt,
 		Seconds:     shot.Duration,
 		Videos:      preview.Videos,
@@ -73,7 +78,7 @@ func (g *Generator) GenerateShot(ctx context.Context, shotID string) (video.Gene
 	}
 
 	// 5. 记录到 Shot
-	if err := g.store.MarkShotGenerating(ctx, shotID, generation.ID, preview.Prompt, preview.Images, preview.Videos); err != nil {
+	if err := g.store.MarkShotGenerating(ctx, shotID, generation.ID, preview.Prompt, preview.Images, preview.Videos, preview.Audios); err != nil {
 		return video.Generation{}, err
 	}
 
@@ -81,6 +86,344 @@ func (g *Generator) GenerateShot(ctx context.Context, shotID string) (video.Gene
 	go g.monitorGeneration(shotID, generation.ID)
 
 	return generation, nil
+}
+
+func validateGatewayReferenceURLs(images, videos, audios []string) error {
+	for _, item := range []struct {
+		label string
+		urls  []string
+	}{
+		{label: "参考图片", urls: images},
+		{label: "参考视频", urls: videos},
+		{label: "参考音频", urls: audios},
+	} {
+		for _, raw := range item.urls {
+			url := strings.TrimSpace(raw)
+			if url == "" {
+				continue
+			}
+			if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+				continue
+			}
+			return fmt.Errorf("%s需要阿里云 OSS 文件桶公网 http(s) 地址，请重新上传到文件桶后再生成: %s", item.label, url)
+		}
+	}
+	return nil
+}
+
+func requirePublicAssetObjectURL(label, raw string) (string, error) {
+	url := strings.TrimSpace(raw)
+	if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+		return url, nil
+	}
+	return "", fmt.Errorf("%s需要阿里云 OSS 文件桶公网 objectUrl，请配置 OSS_PUBLIC_URL/文件桶公网访问后重新上传", label)
+}
+
+// ExtractShotVideoFrame 从指定视频版本抽取一帧，上传到文件桶后创建 image 类型分镜素材。
+func (g *Generator) ExtractShotVideoFrame(ctx context.Context, shotID, generationID string) (ShotAsset, error) {
+	version, err := g.store.GetShotVideoVersion(ctx, shotID, generationID)
+	if err != nil {
+		return ShotAsset{}, err
+	}
+	videoURL := strings.TrimSpace(version.VideoURL)
+	if videoURL == "" && g.videoStore != nil {
+		if generation, err := g.videoStore.Refresh(ctx, generationID); err == nil {
+			videoURL = strings.TrimSpace(generation.VideoURL)
+		}
+	}
+	if videoURL == "" {
+		return ShotAsset{}, fmt.Errorf("视频版本还没有可抽帧的视频地址")
+	}
+
+	localVideo := fmt.Sprintf("/tmp/video_extract_%d.mp4", time.Now().UnixNano())
+	if err := g.downloadFile(videoURL, localVideo); err != nil {
+		return ShotAsset{}, fmt.Errorf("下载视频失败: %w", err)
+	}
+	defer os.Remove(localVideo)
+
+	framePath, err := g.frameExtractor.ExtractFrameAtTime(ctx, localVideo, 0.1)
+	if err != nil {
+		return ShotAsset{}, err
+	}
+	defer os.Remove(framePath)
+
+	data, err := os.ReadFile(framePath)
+	if err != nil {
+		return ShotAsset{}, err
+	}
+
+	filename := fmt.Sprintf("shot-%s-generation-%s-frame.jpg", shotID, generationID)
+	objectURL, err := g.uploadFrame(ctx, data, filename)
+	if err != nil {
+		return ShotAsset{}, err
+	}
+
+	return g.store.CreateShotAsset(ctx, shotID, ShotAssetInput{
+		AssetType: "image",
+		MimeType:  "image/jpeg",
+		Name:      "视频抽帧",
+		ObjectURL: objectURL,
+		SizeBytes: int64(len(data)),
+	})
+}
+
+// RemoveShotVideoVersionSubtitle 处理指定视频版本，移除独立字幕轨并创建“无字幕”派生版本。
+func (g *Generator) RemoveShotVideoVersionSubtitle(ctx context.Context, shotID, generationID string) (ShotVideoVersion, error) {
+	version, err := g.store.GetShotVideoVersion(ctx, shotID, generationID)
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+	videoURL := strings.TrimSpace(version.VideoURL)
+	if videoURL == "" && g.videoStore != nil {
+		if generation, err := g.videoStore.Refresh(ctx, generationID); err == nil {
+			videoURL = strings.TrimSpace(generation.VideoURL)
+		}
+	}
+	if videoURL == "" {
+		return ShotVideoVersion{}, fmt.Errorf("视频版本还没有可擦字幕的视频地址")
+	}
+	if strings.EqualFold(strings.TrimSpace(version.SubtitleRemove), "REMOVED") {
+		return ShotVideoVersion{}, fmt.Errorf("当前视频版本已经是无字幕版本")
+	}
+
+	localVideo := fmt.Sprintf("/tmp/video_subtitle_source_%d.mp4", time.Now().UnixNano())
+	if err := g.downloadFile(videoURL, localVideo); err != nil {
+		return ShotVideoVersion{}, fmt.Errorf("下载视频失败: %w", err)
+	}
+	defer os.Remove(localVideo)
+
+	outputVideo := fmt.Sprintf("/tmp/video_subtitle_removed_%d.mp4", time.Now().UnixNano())
+	if err := g.stripSubtitleTracks(ctx, localVideo, outputVideo); err != nil {
+		return ShotVideoVersion{}, err
+	}
+	defer os.Remove(outputVideo)
+
+	data, err := os.ReadFile(outputVideo)
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+	filename := fmt.Sprintf("shot-%s-generation-%s-no-subtitle.mp4", shotID, generationID)
+	asset, publicURL, err := g.uploadProcessedVideo(ctx, data, filename, "video/subtitle-removed")
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+
+	return g.store.CreateSubtitleRemovedShotVideoVersion(ctx, shotID, generationID, asset.ID, publicURL)
+}
+
+// UpscaleShotVideoVersion 将指定视频版本转码到目标分辨率，并创建“已超分”派生版本。
+func (g *Generator) UpscaleShotVideoVersion(ctx context.Context, shotID, generationID, resolution string) (ShotVideoVersion, error) {
+	version, err := g.store.GetShotVideoVersion(ctx, shotID, generationID)
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+	label, width, height, err := parseUpscaleResolution(resolution, version.AspectRatio)
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+	if version.UpscaledFlag && strings.EqualFold(strings.TrimSpace(version.UpscaledResolution), label) {
+		return ShotVideoVersion{}, fmt.Errorf("当前视频版本已经是 %s 超分版本", label)
+	}
+
+	videoURL := strings.TrimSpace(version.VideoURL)
+	if videoURL == "" && g.videoStore != nil {
+		if generation, err := g.videoStore.Refresh(ctx, generationID); err == nil {
+			videoURL = strings.TrimSpace(generation.VideoURL)
+		}
+	}
+	if videoURL == "" {
+		return ShotVideoVersion{}, fmt.Errorf("视频版本还没有可超分的视频地址")
+	}
+
+	localVideo := fmt.Sprintf("/tmp/video_upscale_source_%d.mp4", time.Now().UnixNano())
+	if err := g.downloadFile(videoURL, localVideo); err != nil {
+		return ShotVideoVersion{}, fmt.Errorf("下载视频失败: %w", err)
+	}
+	defer os.Remove(localVideo)
+
+	outputVideo := fmt.Sprintf("/tmp/video_upscaled_%d.mp4", time.Now().UnixNano())
+	if err := g.upscaleVideoFile(ctx, localVideo, outputVideo, width, height); err != nil {
+		return ShotVideoVersion{}, err
+	}
+	defer os.Remove(outputVideo)
+
+	data, err := os.ReadFile(outputVideo)
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+	filename := fmt.Sprintf("shot-%s-generation-%s-upscaled-%s.mp4", shotID, generationID, strings.ToLower(label))
+	asset, publicURL, err := g.uploadProcessedVideo(ctx, data, filename, "video/upscaled")
+	if err != nil {
+		return ShotVideoVersion{}, err
+	}
+
+	return g.store.CreateUpscaledShotVideoVersion(ctx, shotID, generationID, asset.ID, publicURL, label, width, height)
+}
+
+func parseUpscaleResolution(resolution string, aspectRatio string) (string, int, int, error) {
+	normalized := strings.TrimSpace(strings.ToLower(resolution))
+	if normalized == "" {
+		normalized = "1080p"
+	}
+	target := 0
+	switch normalized {
+	case "2k":
+		target = 1440
+	case "4k":
+		target = 2160
+	default:
+		normalized = strings.TrimSuffix(normalized, "p")
+		value, err := strconv.Atoi(normalized)
+		if err != nil || value <= 0 {
+			return "", 0, 0, fmt.Errorf("不支持的超分辨率：%s", resolution)
+		}
+		target = value
+	}
+	switch target {
+	case 720, 1080, 1440, 2160:
+	default:
+		return "", 0, 0, fmt.Errorf("超分辨率仅支持 720P、1080P、1440P 或 2160P")
+	}
+
+	label := fmt.Sprintf("%dP", target)
+	aspect := strings.TrimSpace(aspectRatio)
+	switch aspect {
+	case "9:16":
+		return label, even(target), even(target * 16 / 9), nil
+	case "1:1":
+		return label, even(target), even(target), nil
+	default:
+		return label, even(target * 16 / 9), even(target), nil
+	}
+}
+
+func even(value int) int {
+	if value%2 == 0 {
+		return value
+	}
+	return value + 1
+}
+
+func (g *Generator) upscaleVideoFile(ctx context.Context, inputPath, outputPath string, width, height int) error {
+	if _, err := os.Stat(inputPath); err != nil {
+		return fmt.Errorf("视频文件不存在: %v", err)
+	}
+	cmd := exec.CommandContext(ctx, "ffmpeg",
+		"-i", inputPath,
+		"-map", "0:v:0",
+		"-map", "0:a?",
+		"-vf", fmt.Sprintf("scale=%d:%d:flags=lanczos", width, height),
+		"-c:v", "libx264",
+		"-preset", "veryfast",
+		"-crf", "18",
+		"-c:a", "aac",
+		"-movflags", "+faststart",
+		"-y",
+		outputPath,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("超分辨率处理失败: %v, 输出: %s", err, string(output))
+	}
+	if _, err := os.Stat(outputPath); err != nil {
+		return fmt.Errorf("超分视频未生成: %v", err)
+	}
+	return nil
+}
+
+func (g *Generator) stripSubtitleTracks(ctx context.Context, inputPath, outputPath string) error {
+	if _, err := os.Stat(inputPath); err != nil {
+		return fmt.Errorf("视频文件不存在: %v", err)
+	}
+	cmd := exec.CommandContext(ctx, "ffmpeg",
+		"-i", inputPath,
+		"-map", "0",
+		"-sn",
+		"-c", "copy",
+		"-movflags", "+faststart",
+		"-y",
+		outputPath,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("擦除字幕失败: %v, 输出: %s", err, string(output))
+	}
+	if _, err := os.Stat(outputPath); err != nil {
+		return fmt.Errorf("无字幕视频未生成: %v", err)
+	}
+	return nil
+}
+
+func (g *Generator) uploadProcessedVideo(ctx context.Context, data []byte, filename string, dir string) (uploadasset.Asset, string, error) {
+	const contentType = "video/mp4"
+	var objectKey string
+	var objectURL string
+	if g.uploader != nil {
+		result, err := g.uploader.Upload(ctx, storage.UploadInput{
+			ContentType: contentType,
+			Dir:         dir,
+			Filename:    filename,
+			Reader:      bytes.NewReader(data),
+			Size:        int64(len(data)),
+		})
+		if err != nil {
+			return uploadasset.Asset{}, "", err
+		}
+		objectKey = result.Key
+		objectURL = result.URL
+		if strings.TrimSpace(result.Name) != "" {
+			filename = result.Name
+		}
+	}
+	asset, err := g.uploads.Create(ctx, uploadasset.CreateInput{
+		ContentType: contentType,
+		Data:        data,
+		Dir:         dir,
+		Name:        filename,
+		ObjectKey:   objectKey,
+		ObjectURL:   objectURL,
+		Size:        int64(len(data)),
+	})
+	if err != nil {
+		return uploadasset.Asset{}, "", err
+	}
+	if strings.TrimSpace(asset.ObjectURL) != "" {
+		publicURL, err := requirePublicAssetObjectURL("处理后视频", asset.ObjectURL)
+		return asset, publicURL, err
+	}
+	publicURL, err := requirePublicAssetObjectURL("处理后视频", objectURL)
+	return asset, publicURL, err
+}
+
+func (g *Generator) uploadFrame(ctx context.Context, data []byte, filename string) (string, error) {
+	if g.uploader != nil {
+		result, err := g.uploader.Upload(ctx, storage.UploadInput{
+			ContentType: "image/jpeg",
+			Dir:         "video/frames",
+			Filename:    filename,
+			Reader:      bytes.NewReader(data),
+			Size:        int64(len(data)),
+		})
+		if err != nil {
+			return "", err
+		}
+		return requirePublicAssetObjectURL("视频抽帧", result.URL)
+	}
+
+	asset, err := g.uploads.Create(ctx, uploadasset.CreateInput{
+		ContentType: "image/jpeg",
+		Data:        data,
+		Dir:         "video/frames",
+		Name:        filename,
+		Size:        int64(len(data)),
+	})
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(asset.ObjectURL) != "" {
+		return requirePublicAssetObjectURL("视频抽帧", asset.ObjectURL)
+	}
+	return requirePublicAssetObjectURL("视频抽帧", "")
 }
 
 // monitorGeneration 后台轮询生成状态，完成后提取尾帧。

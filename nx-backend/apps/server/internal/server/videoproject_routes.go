@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -342,6 +343,299 @@ func (s *Server) videoShotByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// 分镜素材列表
+func (s *Server) videoShotAssetsList(w http.ResponseWriter, r *http.Request) {
+	shotID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/shots-assets/list/"), "/")
+	if shotID == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少分镜 ID")
+		return
+	}
+	result, err := s.videoProjectStore().ListShotAssets(r.Context(), shotID)
+	if err != nil {
+		log.Printf("list shot assets failed: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+// 分镜素材创建 / 删除
+func (s *Server) videoShotAssets(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/video/shots-assets/")
+	id := strings.Trim(path, "/")
+	if id == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少 ID")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		var input videoproject.ShotAssetInput
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "参数错误")
+			return
+		}
+		result, err := s.videoProjectStore().CreateShotAsset(r.Context(), id, input)
+		if err != nil {
+			log.Printf("create shot asset failed: %v", err)
+			httpx.Fail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		httpx.OK(w, result)
+
+	case http.MethodDelete:
+		if err := s.videoProjectStore().DeleteShotAsset(r.Context(), id); err != nil {
+			log.Printf("delete shot asset failed: %v", err)
+			httpx.Fail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		httpx.OK(w, map[string]bool{"success": true})
+
+	default:
+		httpx.Fail(w, http.StatusMethodNotAllowed, "方法不允许")
+	}
+}
+
+// 分镜视频版本列表
+func (s *Server) videoShotVideoVersionsList(w http.ResponseWriter, r *http.Request) {
+	shotID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/shots-video-versions/list/"), "/")
+	if shotID == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少分镜 ID")
+		return
+	}
+	result, err := s.videoProjectStore().ListShotVideoVersions(r.Context(), shotID)
+	if err != nil {
+		log.Printf("list shot video versions failed: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+// 视频版本详情：为 liuguang 风格详情弹窗返回分镜、版本和生成参考内容。
+func (s *Server) videoShotVideoVersionDetail(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/video/shots-video-versions/detail/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少分镜 ID 或视频版本 ID")
+		return
+	}
+	result, err := s.videoProjectStore().GetShotVideoVersionDetail(r.Context(), parts[0], parts[1])
+	if err != nil {
+		log.Printf("get shot video version detail failed: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+// 设置当前分镜视频版本
+func (s *Server) setShotVideoVersion(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/video/shots-video-versions/set/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少分镜 ID 或视频版本 ID")
+		return
+	}
+	result, err := s.videoProjectStore().SetShotVideoVersion(r.Context(), parts[0], parts[1])
+	if err != nil {
+		log.Printf("set shot video version failed: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+// 标记视频版本已查看，关闭 liuguang 风格未查看标记。
+func (s *Server) markShotVideoVersionViewed(w http.ResponseWriter, r *http.Request) {
+	generationID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/shots-video-versions/viewed/"), "/")
+	if generationID == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少视频版本 ID")
+		return
+	}
+	if err := s.videoProjectStore().MarkShotVideoVersionViewed(r.Context(), generationID); err != nil {
+		log.Printf("mark shot video version viewed failed: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, map[string]bool{"success": true})
+}
+
+type setShotVideoVersionBackupInput struct {
+	BackupFlag bool `json:"backupFlag"`
+}
+
+// 设置/取消备选视频版本，补齐 liuguang 的“备选视频”标记能力。
+func (s *Server) setShotVideoVersionBackup(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/video/shots-video-versions/backup/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少分镜 ID 或视频版本 ID")
+		return
+	}
+
+	var input setShotVideoVersionBackupInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		httpx.Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+
+	result, err := s.videoProjectStore().SetShotVideoVersionBackup(r.Context(), parts[0], parts[1], input.BackupFlag)
+	if err != nil {
+		log.Printf("set shot video version backup failed: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+// 擦除字幕：创建一个 liuguang 风格“无字幕”派生视频版本。
+func (s *Server) removeShotVideoVersionSubtitle(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/video/shots-video-versions/remove-subtitle/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少分镜 ID 或视频版本 ID")
+		return
+	}
+	result, err := s.videoProjectGenerator().RemoveShotVideoVersionSubtitle(r.Context(), parts[0], parts[1])
+	if err != nil {
+		log.Printf("remove shot video version subtitle failed: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+type upscaleShotVideoVersionInput struct {
+	Resolution string `json:"resolution"`
+}
+
+// 超分辨率：创建一个 liuguang 风格“已超分”派生视频版本。
+func (s *Server) upscaleShotVideoVersion(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/video/shots-video-versions/upscale/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少分镜 ID 或视频版本 ID")
+		return
+	}
+
+	input := upscaleShotVideoVersionInput{Resolution: "1080p"}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		httpx.Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+
+	result, err := s.videoProjectGenerator().UpscaleShotVideoVersion(r.Context(), parts[0], parts[1], input.Resolution)
+	if err != nil {
+		log.Printf("upscale shot video version failed: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+// 刷新分镜视频版本：轮询关联 generation 状态，并把当前版本状态同步回分镜。
+func (s *Server) refreshShotVideoVersions(w http.ResponseWriter, r *http.Request) {
+	shotID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/shots-video-versions/refresh/"), "/")
+	if shotID == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少分镜 ID")
+		return
+	}
+
+	store := s.videoProjectStore()
+	versions, err := store.ListShotVideoVersions(r.Context(), shotID)
+	if err != nil {
+		log.Printf("list shot video versions before refresh failed: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	refreshErrors := []string{}
+	for _, version := range versions {
+		if strings.TrimSpace(version.ID) == "" {
+			continue
+		}
+		generation, err := s.videoStore().Refresh(r.Context(), version.ID)
+		if err != nil {
+			log.Printf("refresh shot video generation failed shot=%s generation=%s: %v", shotID, version.ID, err)
+			refreshErrors = append(refreshErrors, version.ID+": "+err.Error())
+			continue
+		}
+		if version.IsCurrent {
+			if _, err := store.SetShotVideoVersion(r.Context(), shotID, generation.ID); err != nil {
+				log.Printf("sync current shot video version failed shot=%s generation=%s: %v", shotID, generation.ID, err)
+				httpx.Fail(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+	}
+
+	result, err := store.ListShotVideoVersions(r.Context(), shotID)
+	if err != nil {
+		log.Printf("list shot video versions after refresh failed: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if len(refreshErrors) > 0 {
+		log.Printf("refresh shot video versions partial errors shot=%s: %s", shotID, strings.Join(refreshErrors, "; "))
+	}
+	httpx.OK(w, result)
+}
+
+// 复制某个分镜视频版本到另一个分镜，并设为目标分镜当前版本。
+func (s *Server) copyShotVideoVersion(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/video/shots-video-versions/copy/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少源分镜 ID、视频版本 ID 或目标分镜 ID")
+		return
+	}
+	result, err := s.videoProjectStore().CopyShotVideoVersion(r.Context(), parts[0], parts[1], parts[2])
+	if err != nil {
+		log.Printf("copy shot video version failed: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+// 视频抽帧：从某个视频版本抽首帧，作为图片参考素材写回当前分镜。
+func (s *Server) extractShotVideoFrame(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/video/shots-video-versions/extract-frame/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少分镜 ID 或视频版本 ID")
+		return
+	}
+	result, err := s.videoProjectGenerator().ExtractShotVideoFrame(r.Context(), parts[0], parts[1])
+	if err != nil {
+		log.Printf("extract shot video frame failed: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+// 删除分镜视频版本
+func (s *Server) videoShotVideoVersions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		httpx.Fail(w, http.StatusMethodNotAllowed, "仅支持 DELETE")
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/api/video/shots-video-versions/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少分镜 ID 或视频版本 ID")
+		return
+	}
+	if err := s.videoProjectStore().DeleteShotVideoVersion(r.Context(), parts[0], parts[1]); err != nil {
+		log.Printf("delete shot video version failed: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, map[string]bool{"success": true})
+}
+
 // 分镜预览（生成前查看提示词和参考素材）
 func (s *Server) videoShotPreview(w http.ResponseWriter, r *http.Request) {
 	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/shots-preview/"), "/")
@@ -375,11 +669,21 @@ func (s *Server) generateVideoShot(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, generation)
 }
 
+type batchGenerateInput struct {
+	ShotIDs []string `json:"shotIds"`
+}
+
 // 批量生成项目所有分镜（顺序生成）
 func (s *Server) batchGenerateShots(w http.ResponseWriter, r *http.Request) {
 	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/projects-batch-generate/"), "/")
 	if id == "" {
 		httpx.Fail(w, http.StatusBadRequest, "缺少项目 ID")
+		return
+	}
+
+	var input batchGenerateInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		httpx.Fail(w, http.StatusBadRequest, "请求参数错误")
 		return
 	}
 
@@ -392,7 +696,9 @@ func (s *Server) batchGenerateShots(w http.ResponseWriter, r *http.Request) {
 	var result interface{}
 	var err error
 
-	if mode == "parallel" {
+	if len(input.ShotIDs) > 0 {
+		result, err = s.videoProjectBatchGenerator().GenerateSelectedShots(r.Context(), id, input.ShotIDs, mode == "parallel")
+	} else if mode == "parallel" {
 		result, err = s.videoProjectBatchGenerator().GenerateAllShotsParallel(r.Context(), id)
 	} else {
 		result, err = s.videoProjectBatchGenerator().GenerateAllShots(r.Context(), id)

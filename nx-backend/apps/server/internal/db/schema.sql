@@ -199,6 +199,9 @@ CREATE TABLE IF NOT EXISTS video_generations (
   model           TEXT NOT NULL DEFAULT '',
   prompt          TEXT NOT NULL DEFAULT '',
   image_url       TEXT NOT NULL DEFAULT '',
+  used_images     JSONB NOT NULL DEFAULT '[]'::jsonb,
+  used_videos     JSONB NOT NULL DEFAULT '[]'::jsonb,
+  used_audios     JSONB NOT NULL DEFAULT '[]'::jsonb,
   task_id         TEXT NOT NULL DEFAULT '',
   seconds         INT NOT NULL DEFAULT 15,
   aspect_ratio    TEXT NOT NULL DEFAULT '16:9',
@@ -210,12 +213,25 @@ CREATE TABLE IF NOT EXISTS video_generations (
   height          INT NOT NULL DEFAULT 0,
   status          TEXT NOT NULL DEFAULT 'queued',
   error_message   TEXT NOT NULL DEFAULT '',
+  viewed_flag     BOOLEAN NOT NULL DEFAULT false,
+  backup_flag     BOOLEAN NOT NULL DEFAULT false,
+  subtitle_remove TEXT NOT NULL DEFAULT '',
+  upscaled_flag   BOOLEAN NOT NULL DEFAULT false,
+  upscaled_resolution TEXT NOT NULL DEFAULT '',
   create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS seconds INT NOT NULL DEFAULT 15;
 ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS aspect_ratio TEXT NOT NULL DEFAULT '16:9';
+ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS used_images JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS used_videos JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS used_audios JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS viewed_flag BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS backup_flag BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS subtitle_remove TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS upscaled_flag BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS upscaled_resolution TEXT NOT NULL DEFAULT '';
 
 -- 资产库:按类型保存可复用的视频生成素材(场景/人物/物品/服装/风格/音频/视频)
 CREATE TABLE IF NOT EXISTS video_assets (
@@ -327,7 +343,14 @@ CREATE TABLE IF NOT EXISTS video_shots (
   project_id            BIGINT NOT NULL REFERENCES video_projects(id) ON DELETE CASCADE,
   order_num             INT NOT NULL DEFAULT 1,
   name                  TEXT NOT NULL DEFAULT '',
+  script_original_content TEXT NOT NULL DEFAULT '', -- 分镜剧本原文（liuguang 工作台兼容）
   action_description    TEXT NOT NULL DEFAULT '',    -- 动作描述（中文即可）
+  dynamic_description   TEXT NOT NULL DEFAULT '',    -- 视频生成动态描述/提示词草稿
+  grid_storyboard_prompt TEXT NOT NULL DEFAULT '',   -- 多格分镜图提示词占位
+  storyboard_url        TEXT NOT NULL DEFAULT '',    -- 多格分镜图地址占位
+  video_model           TEXT NOT NULL DEFAULT '',    -- 分镜生视频模型
+  video_resolution      TEXT NOT NULL DEFAULT '',    -- 分镜生视频分辨率
+  sound_and_picture_together TEXT NOT NULL DEFAULT '', -- 音画同出开关/模式
   duration              INT NOT NULL DEFAULT 15,
   aspect_ratio          TEXT NOT NULL DEFAULT '16:9',
   character_ids         JSONB NOT NULL DEFAULT '[]'::jsonb, -- 出场角色 id 数组
@@ -339,12 +362,55 @@ CREATE TABLE IF NOT EXISTS video_shots (
   generated_prompt      TEXT NOT NULL DEFAULT '',
   used_images           JSONB NOT NULL DEFAULT '[]'::jsonb,
   used_videos           JSONB NOT NULL DEFAULT '[]'::jsonb,
+  used_audios           JSONB NOT NULL DEFAULT '[]'::jsonb,
   end_frame_url         TEXT NOT NULL DEFAULT '',
   status                TEXT NOT NULL DEFAULT 'draft', -- draft/generating/completed/failed
   error_message         TEXT NOT NULL DEFAULT '',
   create_time           TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS script_original_content TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS dynamic_description TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS grid_storyboard_prompt TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS storyboard_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS video_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS video_resolution TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS sound_and_picture_together TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS used_audios JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+-- 分镜级参考素材：图片/视频/音频统一上传到 OSS 后关联到具体分镜。
+CREATE TABLE IF NOT EXISTS video_shot_assets (
+  id            BIGSERIAL PRIMARY KEY,
+  shot_id       BIGINT NOT NULL REFERENCES video_shots(id) ON DELETE CASCADE,
+  asset_type    TEXT NOT NULL DEFAULT 'image', -- image/video/audio
+  object_url    TEXT NOT NULL DEFAULT '',
+  name          TEXT NOT NULL DEFAULT '',
+  mime_type     TEXT NOT NULL DEFAULT '',
+  size_bytes    BIGINT NOT NULL DEFAULT 0,
+  create_time   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS asset_type TEXT NOT NULL DEFAULT 'image';
+ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS object_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS mime_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS size_bytes BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS create_time TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS update_time TIMESTAMPTZ NOT NULL DEFAULT now();
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+      FROM information_schema.columns
+     WHERE table_name = 'video_shot_assets'
+       AND column_name = 'project_asset_id'
+       AND is_nullable = 'NO'
+  ) THEN
+    ALTER TABLE video_shot_assets ALTER COLUMN project_asset_id DROP NOT NULL;
+  END IF;
+END $$;
 
 -- 关联生成记录到项目/分镜，便于统计资产成功率。
 ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES video_projects(id) ON DELETE SET NULL;
@@ -459,6 +525,8 @@ CREATE INDEX IF NOT EXISTS idx_video_project_characters_project ON video_project
 CREATE INDEX IF NOT EXISTS idx_video_project_scenes_project ON video_project_scenes(project_id);
 CREATE INDEX IF NOT EXISTS idx_video_shots_project_order ON video_shots(project_id, order_num);
 CREATE INDEX IF NOT EXISTS idx_video_shots_status ON video_shots(status);
+CREATE INDEX IF NOT EXISTS idx_video_shot_assets_shot ON video_shot_assets(shot_id, asset_type);
+CREATE INDEX IF NOT EXISTS idx_video_generations_shot ON video_generations(shot_id, create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_video_compose_jobs_project ON video_compose_jobs(project_id, create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_rag_documents_status_sort ON rag_documents(status, sort ASC, update_time DESC);
 CREATE INDEX IF NOT EXISTS idx_rag_documents_update_time ON rag_documents(update_time DESC);

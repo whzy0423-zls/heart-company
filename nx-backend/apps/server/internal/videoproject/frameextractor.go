@@ -104,6 +104,26 @@ func (e *FrameExtractor) ExtractEndFrame(ctx context.Context, videoPath string) 
 	return outputPath, nil
 }
 
+// ExtractFrameAtTime 提取指定秒数的一帧，供视频版本“视频抽帧”写回分镜参考素材。
+func (e *FrameExtractor) ExtractFrameAtTime(ctx context.Context, videoPath string, second float64) (string, error) {
+	if _, err := os.Stat(videoPath); err != nil {
+		return "", fmt.Errorf("视频文件不存在: %v", err)
+	}
+	if second < 0 {
+		second = 0.1
+	}
+	if second == 0 {
+		second = 0.1
+	}
+
+	timestamp := time.Now().UnixNano()
+	outputPath := filepath.Join(e.tempDir, fmt.Sprintf("frame_extract_%d.jpg", timestamp))
+	if err := e.extractFrame(ctx, videoPath, second, outputPath); err != nil {
+		return "", fmt.Errorf("提取视频帧失败: %v", err)
+	}
+	return outputPath, nil
+}
+
 // extractFrame 使用 FFmpeg 提取指定时间点的帧
 func (e *FrameExtractor) extractFrame(ctx context.Context, videoPath string, timestamp float64, outputPath string) error {
 	// ffmpeg -ss {timestamp} -i {video} -frames:v 1 -q:v 2 {output}

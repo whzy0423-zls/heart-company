@@ -152,6 +152,9 @@ func (s *Store) Create(ctx context.Context, input CreateInput) (Asset, error) {
 	if rawURL == "" {
 		return Asset{}, fmt.Errorf("请先上传资产文件")
 	}
+	if !isPublicHTTPURL(rawURL) {
+		return Asset{}, fmt.Errorf("资产文件需要文件桶公网 http(s) 地址，请使用上传返回的 objectUrl")
+	}
 
 	var id string
 	err = s.db.QueryRowContext(ctx,

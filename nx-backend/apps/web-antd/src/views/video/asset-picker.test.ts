@@ -32,8 +32,8 @@ describe('asset picker allowed type guards', () => {
     expect(getAllowedAssetTypes([])).toEqual(ASSET_PICKER_TYPES);
   });
 
-  it('resets the selected type to the first allowed type or all when opening', () => {
-    expect(getInitialPickerType(['audio', 'video'])).toBe('audio');
+  it('resets the selected type to all when multiple types are allowed', () => {
+    expect(getInitialPickerType(['audio', 'video'])).toBe('');
     expect(getInitialPickerType(['scene'])).toBe('scene');
     expect(getInitialPickerType()).toBe('');
   });
@@ -41,7 +41,7 @@ describe('asset picker allowed type guards', () => {
   it('normalizes stale query types while still allowing the all tab', () => {
     const allowTypes: VideoAssetType[] = ['audio', 'video'];
 
-    expect(normalizePickerQueryType('scene', allowTypes)).toBe('audio');
+    expect(normalizePickerQueryType('scene', allowTypes)).toBe('');
     expect(normalizePickerQueryType('', allowTypes)).toBe('');
     expect(normalizePickerQueryType('video', allowTypes)).toBe('video');
   });
