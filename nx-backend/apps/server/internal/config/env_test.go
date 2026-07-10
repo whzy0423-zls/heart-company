@@ -410,6 +410,46 @@ func TestValidateGatewayContractAcceptsSharedFieldEncodingSemantics(t *testing.T
 	}
 }
 
+func TestValidateGatewayContractRejectsDuplicateTaskModeEncodings(t *testing.T) {
+	tests := []struct {
+		name  string
+		field FieldEncoding
+	}{
+		{
+			name: "string",
+			field: FieldEncoding{
+				Name:      "task_mode",
+				ValueType: "string",
+				ValueMap:  map[string]string{"reference": "same", "edit": "same", "extend": "append"},
+			},
+		},
+		{
+			name: "int",
+			field: FieldEncoding{
+				Name:      "task_mode",
+				ValueType: "int",
+				ValueMap:  map[string]string{"reference": "1", "edit": "1", "extend": "2"},
+			},
+		},
+		{
+			name: "bool",
+			field: FieldEncoding{
+				Name:      "task_mode",
+				ValueType: "bool",
+				ValueMap:  map[string]string{"reference": "true", "edit": "1", "extend": "false"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contract := validContentItemsGatewayContractForTest()
+			contract.TaskMode = tt.field
+			assertGatewayContractValidationError(t, ValidateGatewayContract(contract), "duplicate_task_mode_encoding", "taskMode")
+		})
+	}
+}
+
 func validContentItemsGatewayContractForTest() GatewayContractConfig {
 	return GatewayContractConfig{
 		Name:          "seedance2_configured_v1",
@@ -487,6 +527,45 @@ func TestLoadVideoGatewayContractFailsClosedForIncompleteIdentity(t *testing.T) 
 				t.Fatalf("expected incomplete explicit contract to fail closed, got %#v", env.Video.GatewayContract)
 			}
 		})
+	}
+}
+
+func TestLoadExplicitLegacyGatewayJSONNeverFallsBackToBuiltIn(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "malformed JSON", raw: "{"},
+		{name: "invalid parsed JSON", raw: `{"references":{"mode":"future_items"}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+			t.Setenv("VIDEO_GATEWAY_CONTRACT", "legacy_flat_v1")
+			t.Setenv("VIDEO_GATEWAY_CONTRACT_VERSION", "1")
+			t.Setenv("VIDEO_GATEWAY_CONTRACT_JSON", tt.raw)
+
+			got := Load().Video.GatewayContract
+			if reflect.DeepEqual(got, LegacyVideoGatewayContract()) {
+				t.Fatal("explicit invalid JSON silently fell back to the built-in legacy contract")
+			}
+			if !reflect.DeepEqual(got, GatewayContractConfig{}) && ValidateGatewayContract(got) == nil {
+				t.Fatalf("explicit invalid JSON produced a usable contract: %#v", got)
+			}
+		})
+	}
+}
+
+func TestLoadExplicitLegacyIdentityWithoutJSONUsesBuiltIn(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("VIDEO_GATEWAY_CONTRACT", "legacy_flat_v1")
+	t.Setenv("VIDEO_GATEWAY_CONTRACT_VERSION", "1")
+	t.Setenv("VIDEO_GATEWAY_CONTRACT_JSON", "")
+
+	got := Load().Video.GatewayContract
+	if !reflect.DeepEqual(got, LegacyVideoGatewayContract()) {
+		t.Fatalf("legacy identity without JSON = %#v", got)
 	}
 }
 

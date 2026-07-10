@@ -378,6 +378,9 @@ func isKnownReferenceEncodingMode(mode string) bool {
 }
 
 func intersectTaskModes(official []string, contract config.GatewayContractConfig, roles []string) []string {
+	if contract.TaskMode.Name != "" && !config.GatewayFieldEncodingsAreDistinct(contract.TaskMode, contract.DeclaredModes) {
+		return nil
+	}
 	result := make([]string, 0, len(official))
 	for _, mode := range official {
 		if !containsString(contract.DeclaredModes, mode) {

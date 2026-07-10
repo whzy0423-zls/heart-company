@@ -662,31 +662,42 @@ func TestCreateTaskRequiresValidRequestKeyForDeclaredIdempotencyHeader(t *testin
 }
 
 func TestCreateTaskFailsClosedForExplicitInvalidGatewayContract(t *testing.T) {
-	var attempts atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts.Add(1)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": map[string]any{"status": "queued", "task_id": "task-1"},
+	for _, tt := range []struct {
+		name      string
+		raw       string
+		wantField string
+	}{
+		{name: "malformed legacy JSON", raw: "{", wantField: "gatewayContract"},
+		{name: "invalid parsed legacy JSON", raw: `{"references":{"mode":"future_items"}}`, wantField: "gatewayContract.references.mode"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{"status": "queued", "task_id": "task-1"},
+				})
+			}))
+			defer server.Close()
+
+			t.Setenv("VIDEO_API_BASE", server.URL)
+			t.Setenv("VIDEO_API_KEY", "test-key")
+			t.Setenv("VIDEO_GATEWAY_CONTRACT", "legacy_flat_v1")
+			t.Setenv("VIDEO_GATEWAY_CONTRACT_VERSION", "1")
+			t.Setenv("VIDEO_GATEWAY_CONTRACT_JSON", tt.raw)
+			client := NewClient(config.Load().Video)
+			client.urlAllowed = func(string) bool { return true }
+			client.client.Transport = &http.Transport{DisableKeepAlives: true}
+
+			_, err := client.CreateTask(context.Background(), "video-ds-2.0-fast", "test", nil, nil, nil, 15, "9:16")
+			validationErr := assertValidationCode(t, err, "gateway_contract_invalid")
+			if validationErr.Field != tt.wantField {
+				t.Fatalf("validation field = %q, want %q", validationErr.Field, tt.wantField)
+			}
+			if got := attempts.Load(); got != 0 {
+				t.Fatalf("explicit invalid gateway contract reached paid POST %d times, want 0", got)
+			}
 		})
-	}))
-	defer server.Close()
-
-	t.Setenv("VIDEO_API_BASE", server.URL)
-	t.Setenv("VIDEO_API_KEY", "test-key")
-	t.Setenv("VIDEO_GATEWAY_CONTRACT", "")
-	t.Setenv("VIDEO_GATEWAY_CONTRACT_VERSION", "")
-	t.Setenv("VIDEO_GATEWAY_CONTRACT_JSON", "{")
-	client := NewClient(config.Load().Video)
-	client.urlAllowed = func(string) bool { return true }
-	client.client.Transport = &http.Transport{DisableKeepAlives: true}
-
-	_, err := client.CreateTask(context.Background(), "video-ds-2.0-fast", "test", nil, nil, nil, 15, "9:16")
-	validationErr := assertValidationCode(t, err, "gateway_contract_invalid")
-	if validationErr.Field != "gatewayContract" {
-		t.Fatalf("validation field = %q, want gatewayContract", validationErr.Field)
-	}
-	if got := attempts.Load(); got != 0 {
-		t.Fatalf("explicit invalid gateway contract reached paid POST %d times, want 0", got)
 	}
 }
 
@@ -901,6 +912,20 @@ func TestCreateTaskValidatesOriginalGatewayContractBeforePost(t *testing.T) {
 			references: []Reference{{ID: "1", Kind: "image", Role: "reference_image", URL: "i1"}},
 			wantCode:   "gateway_contract_invalid",
 			wantField:  "gatewayContract.references.roleFields",
+		},
+		{
+			name: "duplicate task mode encoding",
+			contract: func() config.GatewayContractConfig {
+				contract := configuredMapperContract()
+				contract.TaskMode = config.FieldEncoding{
+					Name:      "task_mode",
+					ValueType: "int",
+					ValueMap:  map[string]string{"reference": "1", "edit": "1", "extend": "2"},
+				}
+				return contract
+			},
+			wantCode:  "gateway_contract_invalid",
+			wantField: "gatewayContract.taskMode",
 		},
 		{
 			name: "unknown reference mode",
@@ -1475,6 +1500,113 @@ func TestCreateTaskClassifiesPreWriteFailuresAsNotSubmitted(t *testing.T) {
 	})
 }
 
+func TestCreateTaskRejectsUnsafeAPIBaseBeforePost(t *testing.T) {
+	tests := []struct {
+		name    string
+		apiBase string
+		secrets []string
+	}{
+		{
+			name:    "parse failure",
+			apiBase: "https://gateway.example.com/%zz/private-token",
+			secrets: []string{"%zz", "private-token"},
+		},
+		{
+			name:    "credentials",
+			apiBase: "https://private-user:super-secret@gateway.example.com/base",
+			secrets: []string{"private-user", "super-secret"},
+		},
+		{
+			name:    "path traversal",
+			apiBase: "https://gateway.example.com/safe/../private-path",
+			secrets: []string{"private-path"},
+		},
+		{
+			name:    "encoded path traversal",
+			apiBase: "https://gateway.example.com/safe/%2e%2e/private-path",
+			secrets: []string{"private-path"},
+		},
+		{
+			name:    "query",
+			apiBase: "https://gateway.example.com/base?token=private-query",
+			secrets: []string{"private-query"},
+		},
+		{
+			name:    "fragment",
+			apiBase: "https://gateway.example.com/base#private-fragment",
+			secrets: []string{"private-fragment"},
+		},
+		{
+			name:    "non HTTP scheme",
+			apiBase: "ftp://gateway.example.com/private-path",
+			secrets: []string{"private-path"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			client := NewClient(config.VideoConfig{
+				APIBase:         tt.apiBase,
+				APIKey:          "api-secret",
+				GatewayContract: LegacyFlatContract(),
+			})
+			client.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+				attempts.Add(1)
+				return nil, errors.New("unexpected transport call")
+			})
+
+			err := createTestTaskError(client, context.Background())
+			definite := assertRequestNotSubmitted(t, err)
+			if _, exposesCause := any(definite).(interface{ Unwrap() error }); exposesCause {
+				t.Fatal("request-not-submitted error must not publicly unwrap its raw cause")
+			}
+			for _, secret := range append([]string{tt.apiBase}, tt.secrets...) {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("unsafe API base error exposed %q: %q", secret, err.Error())
+				}
+			}
+			if got := attempts.Load(); got != 0 {
+				t.Fatalf("unsafe API base reached RoundTrip %d times, want 0", got)
+			}
+		})
+	}
+}
+
+func TestGeneratePersistsOnlySafeAPIBaseFailureMessage(t *testing.T) {
+	state := &videoDBState{}
+	db := openVideoTestDB(t, state)
+	defer db.Close()
+	const apiBase = "https://private-user:super-secret@gateway.example.com/private-path"
+	store := NewStore(db, nil, config.VideoConfig{
+		APIBase:         apiBase,
+		APIKey:          "api-secret",
+		GatewayContract: LegacyFlatContract(),
+	})
+	var attempts atomic.Int32
+	store.client.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		attempts.Add(1)
+		return nil, errors.New("unexpected transport call")
+	})
+
+	_, err := store.Generate(context.Background(), GenerateInput{Prompt: "test"})
+	definite := assertRequestNotSubmitted(t, err)
+	if got := attempts.Load(); got != 0 {
+		t.Fatalf("unsafe API base reached RoundTrip %d times, want 0", got)
+	}
+	if state.insertCalls != 1 || state.generation.Status != "failed" {
+		t.Fatalf("failed generation record = calls %d generation %+v", state.insertCalls, state.generation)
+	}
+	if state.generation.ErrorMessage != definite.Message {
+		t.Fatalf("stored error message = %q, want safe message %q", state.generation.ErrorMessage, definite.Message)
+	}
+	for _, secret := range []string{apiBase, "private-user", "super-secret", "private-path", "api-secret"} {
+		if strings.Contains(state.generation.ErrorMessage, secret) {
+			t.Fatalf("stored error message exposed %q: %q", secret, state.generation.ErrorMessage)
+		}
+	}
+}
+
 func TestCreateTaskTreatsResponseWaitTimeoutAsAmbiguous(t *testing.T) {
 	var attempts atomic.Int32
 	bodyRead := make(chan struct{})
@@ -1949,6 +2081,20 @@ func (c *videoTestConn) QueryContext(_ context.Context, query string, args []dri
 		return singleRow([]string{"id", "key", "name", "content_type", "size", "data", "object_key", "object_url"}, []driver.Value{c.state.uploadAsset["id"], c.state.uploadAsset["key"], c.state.uploadAsset["name"], c.state.uploadAsset["content_type"], c.state.uploadAsset["size"], c.state.uploadAsset["data"], c.state.uploadAsset["object_key"], c.state.uploadAsset["object_url"]}), nil
 	case strings.Contains(q, "INSERT INTO video_generations"):
 		c.state.insertCalls++
+		if strings.Contains(q, "'failed'") {
+			c.state.generation = Generation{
+				ID:           "42",
+				Provider:     "newapi",
+				Model:        namedString(args, 1),
+				Prompt:       namedString(args, 2),
+				ImageURL:     namedString(args, 3),
+				Seconds:      int(namedInt64(args, 4)),
+				AspectRatio:  namedString(args, 5),
+				Status:       "failed",
+				ErrorMessage: namedString(args, 6),
+			}
+			return singleRow([]string{"id"}, []driver.Value{"42"}), nil
+		}
 		c.state.generation = Generation{
 			ID:          "42",
 			Provider:    "newapi",

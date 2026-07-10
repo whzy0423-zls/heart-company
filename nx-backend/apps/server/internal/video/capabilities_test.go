@@ -247,6 +247,20 @@ func TestResolveCapabilitiesUsesSharedFieldEncodingSemantics(t *testing.T) {
 	}
 }
 
+func TestResolveCapabilitiesHidesDuplicateTaskModeEncodings(t *testing.T) {
+	contract := configuredSeedanceContract()
+	contract.TaskMode = config.FieldEncoding{
+		Name:      "task_mode",
+		ValueType: "string",
+		ValueMap:  map[string]string{"reference": "same", "edit": "same", "extend": "append"},
+	}
+
+	got := ResolveCapabilities(CapabilityConfig{Model: "video-ds-2.0", GatewayContract: contract})
+	if len(got.TaskModes) != 0 || got.SupportsEdit || got.SupportsExtend {
+		t.Fatalf("duplicate task-mode encodings were exposed: modes=%#v edit=%v extend=%v", got.TaskModes, got.SupportsEdit, got.SupportsExtend)
+	}
+}
+
 func TestResolveCapabilitiesClassifiesReferenceEncodingDegradations(t *testing.T) {
 	tests := []struct {
 		name           string

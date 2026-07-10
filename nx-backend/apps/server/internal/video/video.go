@@ -621,9 +621,9 @@ func (c *Client) CreateNormalizedTask(ctx context.Context, request GenerateReque
 	if err != nil {
 		return TaskResult{}, err
 	}
-	reqURL, err := url.Parse(c.endpoint("/v1/videos"))
+	reqURL, err := createTaskEndpoint(c.apiBase)
 	if err != nil {
-		return TaskResult{}, err
+		return TaskResult{}, requestNotSubmittedError(err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL.String(), bytes.NewReader(raw))
 	if err != nil {
@@ -663,6 +663,61 @@ func (c *Client) CreateNormalizedTask(ctx context.Context, request GenerateReque
 		return TaskResult{}, ambiguousCreateTaskError(request.RequestKey, statusCode, errors.New("upstream 2xx response did not confirm a task id"))
 	}
 	return task, nil
+}
+
+var errInvalidCreateAPIBase = errors.New("invalid video gateway API base")
+
+func createTaskEndpoint(apiBase string) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(apiBase))
+	if err != nil || parsed.Host == "" || parsed.Hostname() == "" {
+		return nil, errInvalidCreateAPIBase
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+	default:
+		return nil, errInvalidCreateAPIBase
+	}
+	if parsed.User != nil || parsed.Opaque != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return nil, errInvalidCreateAPIBase
+	}
+	if !isSafeCreateAPIBasePath(parsed.EscapedPath()) {
+		return nil, errInvalidCreateAPIBase
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/v1/videos"
+	parsed.RawPath = ""
+	return parsed, nil
+}
+
+func isSafeCreateAPIBasePath(escapedPath string) bool {
+	if strings.HasPrefix(escapedPath, "//") || strings.Contains(escapedPath, "\\") {
+		return false
+	}
+	for _, segment := range strings.Split(escapedPath, "/") {
+		decoded := segment
+		for range 3 {
+			next, err := url.PathUnescape(decoded)
+			if err != nil {
+				return false
+			}
+			if next == decoded {
+				break
+			}
+			decoded = next
+		}
+		if decoded == "." || decoded == ".." || strings.ContainsAny(decoded, "/\\") || containsURLControlCharacter(decoded) {
+			return false
+		}
+	}
+	return true
+}
+
+func containsURLControlCharacter(value string) bool {
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func validateCreateRequestKey(header, requestKey string) error {

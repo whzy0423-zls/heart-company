@@ -517,6 +517,33 @@ func CanEncodeGatewayFieldValue(field FieldEncoding, source string) bool {
 	return err == nil
 }
 
+func GatewayFieldEncodingsAreDistinct(field FieldEncoding, sources []string) bool {
+	seen := make(map[string]struct{}, len(sources))
+	for _, source := range sources {
+		key, err := gatewayFieldEncodingKey(field, source)
+		if err != nil {
+			return false
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return false
+		}
+		seen[key] = struct{}{}
+	}
+	return true
+}
+
+func gatewayFieldEncodingKey(field FieldEncoding, source string) (string, error) {
+	value, err := EncodeGatewayFieldValue(field, source)
+	if err != nil {
+		return "", err
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return "", gatewayContractError("field_value_not_encodable", "value")
+	}
+	return fmt.Sprintf("%T:%s", value, canonical), nil
+}
+
 func encodeGatewayRawValue(encoded, valueType string) (any, error) {
 	if strings.TrimSpace(encoded) == "" {
 		return nil, gatewayContractError("field_value_not_encodable", "value")
@@ -609,10 +636,16 @@ func validateTaskModeEncoding(field FieldEncoding, modes []string) error {
 	if field.Name == "" {
 		return nil
 	}
+	seen := make(map[string]struct{}, len(modes))
 	for _, mode := range modes {
-		if !CanEncodeGatewayFieldValue(field, mode) {
+		key, err := gatewayFieldEncodingKey(field, mode)
+		if err != nil {
 			return gatewayContractError("declared_mode_not_encodable", "taskMode")
 		}
+		if _, duplicate := seen[key]; duplicate {
+			return gatewayContractError("duplicate_task_mode_encoding", "taskMode")
+		}
+		seen[key] = struct{}{}
 	}
 	return nil
 }
@@ -857,7 +890,7 @@ func loadVideoGatewayContract() GatewayContractConfig {
 		return normalized
 	}
 	fallback := GatewayContractConfig{Name: normalized.Name, Version: normalized.Version}
-	if normalized.Name == "legacy_flat_v1" && normalized.Version == "1" {
+	if raw == "" && normalized.Name == "legacy_flat_v1" && normalized.Version == "1" {
 		fallback = LegacyVideoGatewayContract()
 	}
 	return TrimGatewayContract(fallback)
