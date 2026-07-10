@@ -22,6 +22,9 @@ func TestLoadDefaultsVideoGatewayContract(t *testing.T) {
 	if env.Video.GatewayContract.Version != "1" {
 		t.Fatal("expected contract version 1")
 	}
+	if env.Video.GatewayContract.Limits.MaxVideos != 3 {
+		t.Fatalf("documented intermediary limit is 3 videos, got %+v", env.Video.GatewayContract.Limits)
+	}
 }
 
 func TestLoadVideoGatewayContractFailsClosedForIncompleteIdentity(t *testing.T) {

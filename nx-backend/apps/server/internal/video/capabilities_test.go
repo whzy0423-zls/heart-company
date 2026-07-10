@@ -60,6 +60,34 @@ func TestResolveCapabilitiesUnknownModelUsesGenericProfile(t *testing.T) {
 	}
 }
 
+func TestLegacyFlatContractMatchesIntermediaryDocumentedLimits(t *testing.T) {
+	got := LegacyFlatContract()
+	want := config.MediaLimits{
+		MaxImages:            4,
+		MaxVideos:            3,
+		MaxAudios:            1,
+		MaxVideoSecondsTotal: 15,
+		MaxAudioSecondsTotal: 15,
+	}
+	if !reflect.DeepEqual(got.Limits, want) {
+		t.Fatalf("legacy intermediary limits = %+v, want %+v", got.Limits, want)
+	}
+}
+
+func TestResolveCapabilitiesExactASFastAliasStaysFailClosed(t *testing.T) {
+	got := ResolveCapabilities(CapabilityConfig{
+		Model:           "as-sd2.0-fast",
+		GatewayContract: configuredSeedanceContract(),
+	})
+	if got.ModelProfile != "fast" || got.Source.Selection != "exact_model" {
+		t.Fatalf("exact intermediary alias resolved incorrectly: profile=%q source=%+v", got.ModelProfile, got.Source)
+	}
+	if got.SupportsResolution || len(got.Resolutions) != 0 {
+		t.Fatalf("fast alias must keep resolution fail-closed: supported=%v values=%#v", got.SupportsResolution, got.Resolutions)
+	}
+	assertDegradation(t, got, "resolution", "official_profile_unverified")
+}
+
 func TestResolveCapabilitiesExactModelProfileConflictFailsClosed(t *testing.T) {
 	got := ResolveCapabilities(CapabilityConfig{
 		Model:           "video-ds-2.0-fast",
@@ -322,7 +350,7 @@ func TestResolveCapabilitiesExplainsEveryLegacyDegradation(t *testing.T) {
 	if !reflect.DeepEqual(got.TaskModes, []string{"reference"}) {
 		t.Fatalf("legacy task modes = %#v", got.TaskModes)
 	}
-	wantLimits := config.MediaLimits{MaxImages: 4, MaxVideos: 2, MaxAudios: 1, MaxVideoSecondsTotal: 15, MaxAudioSecondsTotal: 15}
+	wantLimits := config.MediaLimits{MaxImages: 4, MaxVideos: 3, MaxAudios: 1, MaxVideoSecondsTotal: 15, MaxAudioSecondsTotal: 15}
 	if !reflect.DeepEqual(got.Limits, wantLimits) {
 		t.Fatalf("legacy limits = %+v, want %+v", got.Limits, wantLimits)
 	}
@@ -351,7 +379,6 @@ func TestResolveCapabilitiesExplainsEveryLegacyDegradation(t *testing.T) {
 		"reference_role.edit_target":   "gateway_contract_role_not_declared",
 		"reference_role.extend_target": "gateway_contract_role_not_declared",
 		"limits.max_images":            "gateway_contract_limit",
-		"limits.max_videos":            "gateway_contract_limit",
 		"limits.max_audios":            "gateway_contract_limit",
 	}
 	assertExactDegradations(t, got, wantDegradations)
@@ -362,24 +389,28 @@ func TestResolveCapabilitiesLegacyKeepsProvenValueSets(t *testing.T) {
 		name               string
 		input              CapabilityConfig
 		wantProfile        string
+		wantMaxVideos      int
 		wantOfficialHiding bool
 	}{
 		{
 			name:               "standard",
 			input:              CapabilityConfig{Model: "video-ds-2.0", GatewayContract: LegacyFlatContract()},
 			wantProfile:        "standard",
+			wantMaxVideos:      3,
 			wantOfficialHiding: true,
 		},
 		{
 			name:               "fast",
 			input:              CapabilityConfig{Model: "video-ds-2.0-fast", GatewayContract: LegacyFlatContract()},
 			wantProfile:        "fast",
+			wantMaxVideos:      3,
 			wantOfficialHiding: true,
 		},
 		{
-			name:        "unknown",
-			input:       CapabilityConfig{Model: "custom-video", GatewayContract: LegacyFlatContract()},
-			wantProfile: "generic_unknown",
+			name:          "unknown",
+			input:         CapabilityConfig{Model: "custom-video", GatewayContract: LegacyFlatContract()},
+			wantProfile:   "generic_unknown",
+			wantMaxVideos: 2,
 		},
 	}
 
@@ -401,7 +432,7 @@ func TestResolveCapabilitiesLegacyKeepsProvenValueSets(t *testing.T) {
 			if got.MinDurationSeconds != 5 || got.MaxDurationSeconds != 15 || got.SupportsSmartDuration {
 				t.Fatalf("legacy duration bounds/smart = %d/%d/%v", got.MinDurationSeconds, got.MaxDurationSeconds, got.SupportsSmartDuration)
 			}
-			wantLimits := config.MediaLimits{MaxImages: 4, MaxVideos: 2, MaxAudios: 1, MaxVideoSecondsTotal: 15, MaxAudioSecondsTotal: 15}
+			wantLimits := config.MediaLimits{MaxImages: 4, MaxVideos: tt.wantMaxVideos, MaxAudios: 1, MaxVideoSecondsTotal: 15, MaxAudioSecondsTotal: 15}
 			if !reflect.DeepEqual(got.Limits, wantLimits) {
 				t.Fatalf("legacy limits = %+v, want %+v", got.Limits, wantLimits)
 			}

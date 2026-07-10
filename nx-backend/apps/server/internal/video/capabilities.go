@@ -95,7 +95,7 @@ func LegacyFlatContract() config.GatewayContractConfig {
 		},
 		Limits: config.MediaLimits{
 			MaxImages:            4,
-			MaxVideos:            2,
+			MaxVideos:            3,
 			MaxAudios:            1,
 			MaxVideoSecondsTotal: 15,
 			MaxAudioSecondsTotal: 15,
@@ -171,7 +171,7 @@ func exactModelProfile(model string) (string, bool) {
 	switch model {
 	case "video-ds-2.0":
 		return "standard", true
-	case "video-ds-2.0-fast":
+	case "video-ds-2.0-fast", "as-sd2.0-fast":
 		return "fast", true
 	default:
 		return "", false

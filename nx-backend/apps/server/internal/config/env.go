@@ -406,7 +406,7 @@ func legacyVideoGatewayContract() GatewayContractConfig {
 		},
 		Limits: MediaLimits{
 			MaxImages:            4,
-			MaxVideos:            2,
+			MaxVideos:            3,
 			MaxAudios:            1,
 			MaxVideoSecondsTotal: 15,
 			MaxAudioSecondsTotal: 15,
