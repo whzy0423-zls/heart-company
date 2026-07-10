@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -94,20 +95,15 @@ func formatTime(t time.Time) string {
 	return t.Format("2006/01/02 15:04:05")
 }
 
-// cleanURLs 去除空白、丢弃空串并按出现顺序去重，
-// 用于整理上传到文件桶后回传的参考图片/视频地址。
+// cleanURLs 去除空白并丢弃空串。重复项必须保留到统一引用规范化
+// 阶段，由 CanonicalizeReferences 返回明确错误，不能静默合并。
 func cleanURLs(urls []string) []string {
-	seen := make(map[string]struct{}, len(urls))
 	out := make([]string, 0, len(urls))
 	for _, u := range urls {
 		u = strings.TrimSpace(u)
 		if u == "" {
 			continue
 		}
-		if _, ok := seen[u]; ok {
-			continue
-		}
-		seen[u] = struct{}{}
 		out = append(out, u)
 	}
 	return out
@@ -136,7 +132,8 @@ func NewStore(database *sql.DB, uploads *uploadasset.Store, cfg config.VideoConf
 func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, error) {
 	prompt := strings.TrimSpace(input.Prompt)
 
-	// 收集参考图片：兼容旧的单字段 ImageURL，并入 images 数组后去重去空。
+	// 收集参考图片：兼容旧的单字段 ImageURL，并入 images 数组后去空；
+	// 重复项留给统一引用规范化返回明确错误。
 	images := cleanURLs(append([]string{input.ImageURL}, input.Images...))
 	videos := cleanURLs(input.Videos)
 	audios := cleanURLs(input.Audios)
@@ -526,10 +523,11 @@ func pagination(query url.Values) (int, int) {
 
 // Client 是 New API / OpenAI 兼容视频网关的最小 HTTP 客户端。
 type Client struct {
-	apiBase    string
-	apiKey     string
-	client     *http.Client
-	urlAllowed func(string) bool
+	apiBase         string
+	apiKey          string
+	gatewayContract config.GatewayContractConfig
+	client          *http.Client
+	urlAllowed      func(string) bool
 }
 
 // TaskResult 归一化网关创建/查询任务返回的字段。
@@ -544,14 +542,34 @@ type TaskResult struct {
 	ErrorMessage string
 }
 
+// AmbiguousTransportError means the paid create request may have reached the
+// intermediary, but the client could not observe a definitive response. The
+// caller must reconcile the original request key instead of auto-retrying.
+type AmbiguousTransportError struct {
+	cause error
+}
+
+func (e *AmbiguousTransportError) Error() string {
+	return "视频创建请求结果不确定，请勿自动重试。"
+}
+
+func (e *AmbiguousTransportError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
 func NewClient(cfg config.VideoConfig) *Client {
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 120 * time.Second
 	}
+	contract := config.TrimGatewayContract(cfg.GatewayContract)
 	client := &Client{
-		apiBase: strings.TrimRight(strings.TrimSpace(cfg.APIBase), "/"),
-		apiKey:  strings.TrimSpace(cfg.APIKey),
+		apiBase:         strings.TrimRight(strings.TrimSpace(cfg.APIBase), "/"),
+		apiKey:          strings.TrimSpace(cfg.APIKey),
+		gatewayContract: contract,
 		urlAllowed: func(raw string) bool {
 			return isPublicHTTPURL(raw)
 		},
@@ -567,6 +585,60 @@ func NewClient(cfg config.VideoConfig) *Client {
 		Transport: netguard.NewGuardedTransport(),
 	}
 	return client
+}
+
+// CreateNormalizedTask submits one already-normalized request using the same
+// canonical references that were used to compile prompt ordinals.
+func (c *Client) CreateNormalizedTask(ctx context.Context, request GenerateRequest, references CanonicalReferences) (TaskResult, error) {
+	if err := c.ensureReady(); err != nil {
+		return TaskResult{}, err
+	}
+	body, err := MapGatewayPayload(request, references, c.gatewayContract)
+	if err != nil {
+		return TaskResult{}, err
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return TaskResult{}, err
+	}
+	reqURL, err := url.Parse(c.endpoint("/v1/videos"))
+	if err != nil {
+		return TaskResult{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL.String(), bytes.NewReader(raw))
+	if err != nil {
+		return TaskResult{}, err
+	}
+	// A declared idempotency header makes net/http consider POST replayable.
+	// Removing GetBody prevents the transport from silently resending a paid
+	// request; reconciliation owns any later retry decision.
+	req.GetBody = nil
+	req.Header.Set("Content-Type", "application/json")
+	if header := c.gatewayContract.Idempotency.Header; header != "" && request.RequestKey != "" {
+		req.Header.Set(header, request.RequestKey)
+	}
+	c.auth(req)
+
+	payload, err := c.doJSONOnce(req)
+	if err != nil {
+		if isAmbiguousCreateTransportError(err) {
+			return TaskResult{}, &AmbiguousTransportError{cause: err}
+		}
+		return TaskResult{}, err
+	}
+	return parseTask(payload), nil
+}
+
+func isAmbiguousCreateTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr)
 }
 
 func (c *Client) isURLAllowed(raw string) bool {
@@ -597,9 +669,6 @@ func (c *Client) auth(req *http.Request) {
 // CreateTask 调用 POST /v1/videos 创建任务。
 // images/videos 为已上传到文件桶、可公网访问的参考素材地址。
 func (c *Client) CreateTask(ctx context.Context, model, prompt string, images, videos, audios []string, seconds int, aspectRatio string) (TaskResult, error) {
-	if err := c.ensureReady(); err != nil {
-		return TaskResult{}, err
-	}
 	if seconds <= 0 {
 		seconds = defaultSeconds
 	}
@@ -607,33 +676,37 @@ func (c *Client) CreateTask(ctx context.Context, model, prompt string, images, v
 	if aspectRatio == "" {
 		aspectRatio = defaultAspectRatio
 	}
-	body := map[string]any{"model": model, "prompt": prompt, "seconds": fmt.Sprint(seconds), "aspect_ratio": aspectRatio}
-	if len(images) > 0 {
-		body["images"] = images
-	}
-	if len(videos) > 0 {
-		body["videos"] = videos
-	}
-	if len(audios) > 0 {
-		body["audios"] = audios
-	}
-	raw, _ := json.Marshal(body)
-	reqURL, err := url.Parse(c.endpoint("/v1/videos"))
+	canonical, err := CanonicalizeReferences(legacyGatewayReferences(images, videos, audios))
 	if err != nil {
 		return TaskResult{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL.String(), bytes.NewReader(raw))
-	if err != nil {
-		return TaskResult{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	c.auth(req)
+	return c.CreateNormalizedTask(ctx, GenerateRequest{
+		Model:       model,
+		Prompt:      prompt,
+		Duration:    seconds,
+		AspectRatio: aspectRatio,
+		TaskMode:    "reference",
+	}, canonical)
+}
 
-	payload, err := c.doJSON(req)
-	if err != nil {
-		return TaskResult{}, err
+func legacyGatewayReferences(images, videos, audios []string) []Reference {
+	references := make([]Reference, 0, len(images)+len(videos)+len(audios))
+	add := func(kind, role string, urls []string) {
+		for _, rawURL := range urls {
+			index := len(references)
+			references = append(references, Reference{
+				ID:        strconv.Itoa(index + 1),
+				Kind:      kind,
+				Role:      role,
+				URL:       rawURL,
+				SortOrder: index,
+			})
+		}
 	}
-	return parseTask(payload), nil
+	add("image", "reference_image", images)
+	add("video", "reference_video", videos)
+	add("audio", "reference_audio", audios)
+	return references
 }
 
 // QueryTask 调用 GET /v1/videos/{task_id} 轮询任务。
