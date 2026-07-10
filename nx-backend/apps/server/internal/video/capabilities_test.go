@@ -182,14 +182,24 @@ func TestResolveCapabilitiesRejectsBlankEnumMappings(t *testing.T) {
 	}
 
 	got := ResolveCapabilities(CapabilityConfig{Model: "video-ds-2.0", GatewayContract: contract})
-	if !got.SupportsResolution || !reflect.DeepEqual(got.Resolutions, []string{"480P", "720P", "4K"}) {
+	if got.SupportsResolution || len(got.Resolutions) != 0 {
 		t.Fatalf("blank resolution mapping was exposed: supported=%v values=%#v", got.SupportsResolution, got.Resolutions)
 	}
-	if !reflect.DeepEqual(got.AspectRatios, []string{"adaptive", "21:9", "4:3", "1:1", "3:4", "9:16"}) {
+	if !reflect.DeepEqual(got.AspectRatios, []string{"9:16"}) {
 		t.Fatalf("blank aspect mapping was exposed: %#v", got.AspectRatios)
 	}
-	assertDegradation(t, got, "resolution.1080P", "gateway_contract_value_not_encodable")
-	assertDegradation(t, got, "aspect_ratio.16:9", "gateway_contract_value_not_encodable")
+	assertExactDegradations(t, got, map[string]string{
+		"aspect_ratio.adaptive": "gateway_contract_value_not_declared",
+		"aspect_ratio.21:9":     "gateway_contract_value_not_declared",
+		"aspect_ratio.16:9":     "gateway_contract_value_not_encodable",
+		"aspect_ratio.4:3":      "gateway_contract_value_not_declared",
+		"aspect_ratio.1:1":      "gateway_contract_value_not_declared",
+		"aspect_ratio.3:4":      "gateway_contract_value_not_declared",
+		"resolution.480P":       "gateway_contract_value_not_declared",
+		"resolution.720P":       "gateway_contract_value_not_declared",
+		"resolution.1080P":      "gateway_contract_value_not_encodable",
+		"resolution.4K":         "gateway_contract_value_not_declared",
+	})
 }
 
 func TestResolveCapabilitiesUsesSharedFieldEncodingSemantics(t *testing.T) {
@@ -245,6 +255,36 @@ func TestResolveCapabilitiesUsesSharedFieldEncodingSemantics(t *testing.T) {
 	if !reflect.DeepEqual(got.TaskModes, []string{"reference", "edit", "extend"}) {
 		t.Fatalf("task modes = %#v", got.TaskModes)
 	}
+	assertExactDegradations(t, got, map[string]string{})
+}
+
+func TestResolveCapabilitiesUsesDirectAspectValuesWhenMapIsEmpty(t *testing.T) {
+	contract := configuredSeedanceContract()
+	contract.AspectRatio.ValueMap = nil
+	got := ResolveCapabilities(CapabilityConfig{Model: "video-ds-2.0", GatewayContract: contract})
+	want := []string{"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}
+	if !reflect.DeepEqual(got.AspectRatios, want) {
+		t.Fatalf("aspect ratios = %#v, want %#v", got.AspectRatios, want)
+	}
+	for _, degradation := range got.Degradations {
+		if strings.HasPrefix(degradation.Feature, "aspect_ratio") {
+			t.Fatalf("direct aspect encoding reported degradation: %+v", degradation)
+		}
+	}
+}
+
+func TestResolveCapabilitiesHidesDuplicateFinalResolutionEncoding(t *testing.T) {
+	contract := configuredSeedanceContract()
+	contract.Resolution.ValueMap = map[string]string{"720P": "hd", "1080P": "hd"}
+	got := ResolveCapabilities(CapabilityConfig{Model: "video-ds-2.0", GatewayContract: contract})
+	if !reflect.DeepEqual(got.Resolutions, []string{"720P"}) {
+		t.Fatalf("duplicate resolution encodings exposed: %#v", got.Resolutions)
+	}
+	assertExactDegradations(t, got, map[string]string{
+		"resolution.480P":  "gateway_contract_value_not_declared",
+		"resolution.1080P": "gateway_contract_duplicate_encoding",
+		"resolution.4K":    "gateway_contract_value_not_declared",
+	})
 }
 
 func TestResolveCapabilitiesHidesDuplicateTaskModeEncodings(t *testing.T) {
@@ -258,6 +298,9 @@ func TestResolveCapabilitiesHidesDuplicateTaskModeEncodings(t *testing.T) {
 	got := ResolveCapabilities(CapabilityConfig{Model: "video-ds-2.0", GatewayContract: contract})
 	if len(got.TaskModes) != 0 || got.SupportsEdit || got.SupportsExtend {
 		t.Fatalf("duplicate task-mode encodings were exposed: modes=%#v edit=%v extend=%v", got.TaskModes, got.SupportsEdit, got.SupportsExtend)
+	}
+	for _, mode := range []string{"reference", "edit", "extend"} {
+		assertDegradation(t, got, "task_mode."+mode, "gateway_contract_duplicate_encoding")
 	}
 }
 
@@ -515,10 +558,10 @@ func TestResolveCapabilitiesIntersectsValuesRolesAndLimits(t *testing.T) {
 	if !reflect.DeepEqual(got.SupportedDurations, seedanceDurationValues) || got.SupportsSmartDuration {
 		t.Fatalf("unexpected duration intersection: values=%#v smart=%v", got.SupportedDurations, got.SupportsSmartDuration)
 	}
-	if !reflect.DeepEqual(got.AspectRatios, []string{"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}) {
+	if !reflect.DeepEqual(got.AspectRatios, []string{"16:9", "9:16"}) {
 		t.Fatalf("aspects = %#v", got.AspectRatios)
 	}
-	if !reflect.DeepEqual(got.Resolutions, []string{"480P", "720P", "1080P", "4K"}) || !got.SupportsResolution {
+	if !reflect.DeepEqual(got.Resolutions, []string{"1080P"}) || !got.SupportsResolution {
 		t.Fatalf("resolution intersection = %#v (supported=%v)", got.Resolutions, got.SupportsResolution)
 	}
 	if !reflect.DeepEqual(got.TaskModes, []string{"reference", "edit"}) || !got.SupportsEdit || got.SupportsExtend {
@@ -537,6 +580,14 @@ func TestResolveCapabilitiesIntersectsValuesRolesAndLimits(t *testing.T) {
 
 	wantDegradations := map[string]string{
 		"smart_duration":                 "gateway_contract_missing_smart_mapping",
+		"aspect_ratio.adaptive":          "gateway_contract_value_not_declared",
+		"aspect_ratio.21:9":              "gateway_contract_value_not_declared",
+		"aspect_ratio.4:3":               "gateway_contract_value_not_declared",
+		"aspect_ratio.1:1":               "gateway_contract_value_not_declared",
+		"aspect_ratio.3:4":               "gateway_contract_value_not_declared",
+		"resolution.480P":                "gateway_contract_value_not_declared",
+		"resolution.720P":                "gateway_contract_value_not_declared",
+		"resolution.4K":                  "gateway_contract_value_not_declared",
 		"generate_audio":                 "gateway_contract_missing_field",
 		"task_mode.extend":               "gateway_contract_mode_not_declared",
 		"reference_role.first_frame":     "gateway_contract_role_not_declared",

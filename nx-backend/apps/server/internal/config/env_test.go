@@ -249,42 +249,49 @@ func TestValidateGatewayContractEnforcesFlatArraysSchema(t *testing.T) {
 func TestEncodeGatewayFieldValueUsesSharedStringIntBoolSemantics(t *testing.T) {
 	tests := []struct {
 		name   string
+		kind   GatewayFieldKind
 		field  FieldEncoding
 		source string
 		want   any
 	}{
 		{
 			name:   "direct string",
+			kind:   GatewayFieldAspectRatio,
 			field:  FieldEncoding{Name: "value", ValueType: "string"},
 			source: "portrait",
 			want:   "portrait",
 		},
 		{
 			name:   "mapped smart string",
+			kind:   GatewayFieldDuration,
 			field:  FieldEncoding{Name: "value", ValueType: "string", ValueMap: map[string]string{"smart": "auto"}},
 			source: "smart",
 			want:   "auto",
 		},
 		{
 			name:   "direct integer",
+			kind:   GatewayFieldDuration,
 			field:  FieldEncoding{Name: "value", ValueType: "int"},
 			source: "12",
 			want:   12,
 		},
 		{
 			name:   "mapped integer",
+			kind:   GatewayFieldResolution,
 			field:  FieldEncoding{Name: "value", ValueType: "int", ValueMap: map[string]string{"1080P": "1080"}},
 			source: "1080P",
 			want:   1080,
 		},
 		{
 			name:   "direct bool",
+			kind:   GatewayFieldGenerateAudio,
 			field:  FieldEncoding{Name: "value", ValueType: "bool"},
 			source: "true",
 			want:   true,
 		},
 		{
 			name:   "mapped bool",
+			kind:   GatewayFieldGenerateAudio,
 			field:  FieldEncoding{Name: "value", ValueType: "bool", ValueMap: map[string]string{"false": "1"}},
 			source: "false",
 			want:   true,
@@ -293,7 +300,7 @@ func TestEncodeGatewayFieldValueUsesSharedStringIntBoolSemantics(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := EncodeGatewayFieldValue(tt.field, tt.source)
+			got, err := EncodeGatewayFieldValue(tt.kind, tt.field, tt.source)
 			if err != nil {
 				t.Fatalf("EncodeGatewayFieldValue() error = %v", err)
 			}
@@ -310,7 +317,7 @@ func TestEncodeGatewayFieldValueReturnsSafeTypedErrors(t *testing.T) {
 		ValueType: "int",
 		ValueMap:  map[string]string{"private-source": "https://secret.example/token"},
 	}
-	_, err := EncodeGatewayFieldValue(field, "private-source")
+	_, err := EncodeGatewayFieldValue(GatewayFieldResolution, field, "private-source")
 	var validationErr *GatewayContractValidationError
 	if !errors.As(err, &validationErr) {
 		t.Fatalf("expected typed encoding error, got %T: %v", err, err)
@@ -321,6 +328,131 @@ func TestEncodeGatewayFieldValueReturnsSafeTypedErrors(t *testing.T) {
 	if strings.Contains(err.Error(), "private-source") || strings.Contains(err.Error(), "secret.example") {
 		t.Fatalf("encoding error leaked configured values: %v", err)
 	}
+}
+
+func TestEncodeGatewayFieldValueAppliesFieldPolicies(t *testing.T) {
+	tests := []struct {
+		name     string
+		kind     GatewayFieldKind
+		field    FieldEncoding
+		source   string
+		want     any
+		wantCode string
+	}{
+		{
+			name:   "duration number falls back to direct encoding",
+			kind:   GatewayFieldDuration,
+			field:  FieldEncoding{Name: "duration", ValueType: "int", ValueMap: map[string]string{"smart": "0"}},
+			source: "12",
+			want:   12,
+		},
+		{
+			name:   "smart duration requires and uses mapping",
+			kind:   GatewayFieldDuration,
+			field:  FieldEncoding{Name: "duration", ValueType: "string", ValueMap: map[string]string{"smart": "auto"}},
+			source: "smart",
+			want:   "auto",
+		},
+		{
+			name:     "smart duration without mapping",
+			kind:     GatewayFieldDuration,
+			field:    FieldEncoding{Name: "duration", ValueType: "string"},
+			source:   "smart",
+			wantCode: "field_mapping_missing",
+		},
+		{
+			name:   "resolution requires matching map key",
+			kind:   GatewayFieldResolution,
+			field:  FieldEncoding{Name: "resolution", ValueType: "int", ValueMap: map[string]string{"1080P": "1080"}},
+			source: "1080P",
+			want:   1080,
+		},
+		{
+			name:     "resolution empty map",
+			kind:     GatewayFieldResolution,
+			field:    FieldEncoding{Name: "resolution", ValueType: "string"},
+			source:   "1080P",
+			wantCode: "field_mapping_missing",
+		},
+		{
+			name:     "resolution missing key",
+			kind:     GatewayFieldResolution,
+			field:    FieldEncoding{Name: "resolution", ValueType: "string", ValueMap: map[string]string{"1080P": "1080p"}},
+			source:   "720P",
+			wantCode: "field_mapping_missing",
+		},
+		{
+			name:   "aspect empty map uses direct encoding",
+			kind:   GatewayFieldAspectRatio,
+			field:  FieldEncoding{Name: "aspect", ValueType: "string"},
+			source: "21:9",
+			want:   "21:9",
+		},
+		{
+			name:     "aspect nonempty map requires key",
+			kind:     GatewayFieldAspectRatio,
+			field:    FieldEncoding{Name: "aspect", ValueType: "string", ValueMap: map[string]string{"16:9": "wide"}},
+			source:   "9:16",
+			wantCode: "field_mapping_missing",
+		},
+		{
+			name:   "bool audio without map uses direct encoding",
+			kind:   GatewayFieldGenerateAudio,
+			field:  FieldEncoding{Name: "audio", ValueType: "bool"},
+			source: "true",
+			want:   true,
+		},
+		{
+			name:   "string audio uses explicit mapping",
+			kind:   GatewayFieldGenerateAudio,
+			field:  FieldEncoding{Name: "audio", ValueType: "string", ValueMap: map[string]string{"true": "on", "false": "off"}},
+			source: "false",
+			want:   "off",
+		},
+		{
+			name:     "mapped audio missing key",
+			kind:     GatewayFieldGenerateAudio,
+			field:    FieldEncoding{Name: "audio", ValueType: "bool", ValueMap: map[string]string{"true": "true"}},
+			source:   "false",
+			wantCode: "field_mapping_missing",
+		},
+		{
+			name:   "integer task mode uses explicit mapping",
+			kind:   GatewayFieldTaskMode,
+			field:  FieldEncoding{Name: "mode", ValueType: "int", ValueMap: map[string]string{"reference": "1"}},
+			source: "reference",
+			want:   1,
+		},
+		{
+			name:     "task mode nonempty map requires key",
+			kind:     GatewayFieldTaskMode,
+			field:    FieldEncoding{Name: "mode", ValueType: "string", ValueMap: map[string]string{"reference": "create"}},
+			source:   "edit",
+			wantCode: "field_mapping_missing",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := EncodeGatewayFieldValue(tt.kind, tt.field, tt.source)
+			if tt.wantCode != "" {
+				assertGatewayContractValidationError(t, err, tt.wantCode, "valueMap")
+				return
+			}
+			if err != nil {
+				t.Fatalf("EncodeGatewayFieldValue() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("EncodeGatewayFieldValue() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateGatewayContractRejectsDuplicateFieldEncodings(t *testing.T) {
+	contract := validContentItemsGatewayContractForTest()
+	contract.Resolution.ValueMap = map[string]string{"720P": "hd", "1080P": "hd"}
+	assertGatewayContractValidationError(t, ValidateGatewayContract(contract), "duplicate_field_encoding", "resolution.valueMap")
 }
 
 func TestValidateGatewayContractEnforcesFieldEncodingSemantics(t *testing.T) {
@@ -367,7 +499,7 @@ func TestValidateGatewayContractEnforcesFieldEncodingSemantics(t *testing.T) {
 			mutate: func(contract *GatewayContractConfig) {
 				contract.GenerateAudio.ValueMap = map[string]string{"true": "true", "false": "1"}
 			},
-			wantCode:  "indistinguishable_boolean_mapping",
+			wantCode:  "duplicate_field_encoding",
 			wantField: "generateAudio.valueMap",
 		},
 		{

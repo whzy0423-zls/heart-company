@@ -185,10 +185,10 @@ func TestMapGatewayPayloadUsesSharedBoolParsing(t *testing.T) {
 	}
 }
 
-func TestMapGatewayPayloadUsesDirectStringValueWhenNoOverrideExists(t *testing.T) {
+func TestMapGatewayPayloadRejectsResolutionWithoutExplicitMapping(t *testing.T) {
 	contract := configuredMapperContract()
 	contract.Resolution.ValueMap = nil
-	payload, err := MapGatewayPayload(GenerateRequest{
+	err := mapGatewayPayloadError(GenerateRequest{
 		Model:       "video-ds-2.0",
 		Prompt:      "测试",
 		Duration:    12,
@@ -196,11 +196,68 @@ func TestMapGatewayPayloadUsesDirectStringValueWhenNoOverrideExists(t *testing.T
 		Resolution:  "1080P",
 		TaskMode:    "reference",
 	}, CanonicalReferences{}, contract)
-	if err != nil {
-		t.Fatalf("MapGatewayPayload() error = %v", err)
+	validationErr := assertValidationCode(t, err, "gateway_value_not_declared")
+	if validationErr.Field != "resolution" {
+		t.Fatalf("validation field = %q, want resolution", validationErr.Field)
 	}
-	if got := payload[contract.Resolution.Name]; got != "1080P" {
-		t.Fatalf("direct resolution = %#v, want 1080P", got)
+}
+
+func TestMapGatewayPayloadRejectsUnmappedConfiguredResolutions(t *testing.T) {
+	for _, resolution := range []string{"480P", "720P", "4K"} {
+		t.Run(resolution, func(t *testing.T) {
+			contract := configuredMapperContract()
+			err := mapGatewayPayloadError(GenerateRequest{
+				Model:       "video-ds-2.0",
+				Prompt:      "测试",
+				Duration:    12,
+				AspectRatio: "9:16",
+				Resolution:  resolution,
+				TaskMode:    "reference",
+			}, CanonicalReferences{}, contract)
+			validationErr := assertValidationCode(t, err, "gateway_value_not_declared")
+			if validationErr.Field != "resolution" {
+				t.Fatalf("validation field = %q, want resolution", validationErr.Field)
+			}
+		})
+	}
+}
+
+func TestMapGatewayPayloadAppliesAspectRatioMappingPolicy(t *testing.T) {
+	contract := configuredMapperContract()
+	contract.AspectRatio.ValueMap = map[string]string{"16:9": "wide", "9:16": "portrait"}
+	for source, want := range map[string]string{"16:9": "wide", "9:16": "portrait"} {
+		request := GenerateRequest{Model: "video-ds-2.0", Prompt: "测试", Duration: 12, AspectRatio: source, TaskMode: "reference"}
+		payload, err := MapGatewayPayload(request, CanonicalReferences{}, contract)
+		if err != nil {
+			t.Fatalf("aspect %s error = %v", source, err)
+		}
+		if got := payload[contract.AspectRatio.Name]; got != want {
+			t.Fatalf("aspect %s encoded as %#v, want %q", source, got, want)
+		}
+	}
+
+	err := mapGatewayPayloadError(GenerateRequest{
+		Model:       "video-ds-2.0",
+		Prompt:      "测试",
+		Duration:    12,
+		AspectRatio: "1:1",
+		TaskMode:    "reference",
+	}, CanonicalReferences{}, contract)
+	assertValidationCode(t, err, "gateway_value_not_declared")
+
+	contract.AspectRatio.ValueMap = nil
+	payload, err := MapGatewayPayload(GenerateRequest{
+		Model:       "video-ds-2.0",
+		Prompt:      "测试",
+		Duration:    12,
+		AspectRatio: "21:9",
+		TaskMode:    "reference",
+	}, CanonicalReferences{}, contract)
+	if err != nil {
+		t.Fatalf("direct aspect error = %v", err)
+	}
+	if got := payload[contract.AspectRatio.Name]; got != "21:9" {
+		t.Fatalf("direct aspect = %#v, want 21:9", got)
 	}
 }
 

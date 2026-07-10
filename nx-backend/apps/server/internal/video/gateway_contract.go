@@ -1,6 +1,7 @@
 package video
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -38,35 +39,24 @@ func MapGatewayPayload(request GenerateRequest, references CanonicalReferences, 
 		"model":  request.Model,
 		"prompt": request.Prompt,
 	}
-	if request.Duration == -1 {
-		if _, explicitlyMapped := contract.Duration.ValueMap["smart"]; !explicitlyMapped {
-			return nil, validationError(
-				"gateway_value_not_declared",
-				"duration",
-				"中转站契约未声明智能时长的编码。",
-				"为 duration.valueMap.smart 声明明确映射后重试。",
-				nil,
-			)
-		}
-	}
-	if err := addEncodedGatewayField(payload, "duration", contract.Duration, durationGatewayValue(request.Duration)); err != nil {
+	if err := addEncodedGatewayField(payload, "duration", config.GatewayFieldDuration, contract.Duration, durationGatewayValue(request.Duration)); err != nil {
 		return nil, err
 	}
-	if err := addEncodedGatewayField(payload, "aspectRatio", contract.AspectRatio, request.AspectRatio); err != nil {
+	if err := addEncodedGatewayField(payload, "aspectRatio", config.GatewayFieldAspectRatio, contract.AspectRatio, request.AspectRatio); err != nil {
 		return nil, err
 	}
 	if request.Resolution != "" {
-		if err := addEncodedGatewayField(payload, "resolution", contract.Resolution, request.Resolution); err != nil {
+		if err := addEncodedGatewayField(payload, "resolution", config.GatewayFieldResolution, contract.Resolution, request.Resolution); err != nil {
 			return nil, err
 		}
 	}
 	if request.GenerateAudio != nil {
-		if err := addEncodedGatewayField(payload, "generateAudio", contract.GenerateAudio, strconv.FormatBool(*request.GenerateAudio)); err != nil {
+		if err := addEncodedGatewayField(payload, "generateAudio", config.GatewayFieldGenerateAudio, contract.GenerateAudio, strconv.FormatBool(*request.GenerateAudio)); err != nil {
 			return nil, err
 		}
 	}
 	if request.TaskMode != "" {
-		if err := addEncodedGatewayField(payload, "taskMode", contract.TaskMode, request.TaskMode); err != nil {
+		if err := addEncodedGatewayField(payload, "taskMode", config.GatewayFieldTaskMode, contract.TaskMode, request.TaskMode); err != nil {
 			return nil, err
 		}
 	}
@@ -188,13 +178,13 @@ func durationGatewayValue(duration int) string {
 	return strconv.Itoa(duration)
 }
 
-func addEncodedGatewayField(payload map[string]any, logicalField string, encoding config.FieldEncoding, source string) error {
+func addEncodedGatewayField(payload map[string]any, logicalField string, kind config.GatewayFieldKind, encoding config.FieldEncoding, source string) error {
 	if encoding.Name == "" {
 		return nil
 	}
-	value, err := config.EncodeGatewayFieldValue(encoding, source)
+	value, err := config.EncodeGatewayFieldValue(kind, encoding, source)
 	if err != nil {
-		return gatewayValueError(logicalField)
+		return gatewayFieldPolicyError(logicalField, err)
 	}
 	if _, exists := payload[encoding.Name]; exists {
 		return validationError(
@@ -207,6 +197,20 @@ func addEncodedGatewayField(payload map[string]any, logicalField string, encodin
 	}
 	payload[encoding.Name] = value
 	return nil
+}
+
+func gatewayFieldPolicyError(field string, err error) *ValidationError {
+	var policyErr *config.GatewayContractValidationError
+	if errors.As(err, &policyErr) && policyErr.Code == "field_mapping_missing" {
+		return validationError(
+			"gateway_value_not_declared",
+			field,
+			fmt.Sprintf("中转站契约未声明 %s 当前值的编码。", field),
+			"更新中转站契约映射，或选择契约已声明的值。",
+			nil,
+		)
+	}
+	return gatewayValueError(field)
 }
 
 func gatewayValueError(field string) *ValidationError {

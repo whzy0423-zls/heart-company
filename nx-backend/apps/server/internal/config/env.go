@@ -136,6 +136,16 @@ type FieldEncoding struct {
 	ValueMap  map[string]string `json:"valueMap,omitempty"`
 }
 
+type GatewayFieldKind string
+
+const (
+	GatewayFieldDuration      GatewayFieldKind = "duration"
+	GatewayFieldAspectRatio   GatewayFieldKind = "aspectRatio"
+	GatewayFieldResolution    GatewayFieldKind = "resolution"
+	GatewayFieldGenerateAudio GatewayFieldKind = "generateAudio"
+	GatewayFieldTaskMode      GatewayFieldKind = "taskMode"
+)
+
 type ReferenceEncoding struct {
 	Mode                string            `json:"mode"`
 	ImageField          string            `json:"imageField"`
@@ -494,15 +504,35 @@ func gatewayContractError(code, field string) error {
 	return &GatewayContractValidationError{Code: code, Field: field}
 }
 
-// EncodeGatewayFieldValue applies the single declared scalar encoding used by
-// both gateway payload mapping and capability discovery. Value maps are
-// partial overrides: an absent key falls back to the direct internal value.
-func EncodeGatewayFieldValue(field FieldEncoding, source string) (any, error) {
+// EncodeGatewayFieldValue applies the field-specific scalar policy shared by
+// gateway payload mapping, capability discovery, and degradation reporting.
+func EncodeGatewayFieldValue(kind GatewayFieldKind, field FieldEncoding, source string) (any, error) {
 	if field.Name == "" {
 		return nil, gatewayContractError("field_name_missing", "name")
 	}
 	encoded := source
-	if mapped, exists := field.ValueMap[source]; exists {
+	mapped, exists := field.ValueMap[source]
+	switch kind {
+	case GatewayFieldDuration:
+		if source == "smart" && !exists {
+			return nil, gatewayContractError("field_mapping_missing", "valueMap")
+		}
+	case GatewayFieldResolution:
+		if len(field.ValueMap) == 0 || !exists {
+			return nil, gatewayContractError("field_mapping_missing", "valueMap")
+		}
+	case GatewayFieldAspectRatio, GatewayFieldTaskMode:
+		if len(field.ValueMap) > 0 && !exists {
+			return nil, gatewayContractError("field_mapping_missing", "valueMap")
+		}
+	case GatewayFieldGenerateAudio:
+		if (field.ValueType != "bool" || len(field.ValueMap) > 0) && !exists {
+			return nil, gatewayContractError("field_mapping_missing", "valueMap")
+		}
+	default:
+		return nil, gatewayContractError("invalid_field_kind", "kind")
+	}
+	if exists {
 		encoded = mapped
 	}
 	value, err := encodeGatewayRawValue(encoded, field.ValueType)
@@ -512,15 +542,15 @@ func EncodeGatewayFieldValue(field FieldEncoding, source string) (any, error) {
 	return value, nil
 }
 
-func CanEncodeGatewayFieldValue(field FieldEncoding, source string) bool {
-	_, err := EncodeGatewayFieldValue(field, source)
+func CanEncodeGatewayFieldValue(kind GatewayFieldKind, field FieldEncoding, source string) bool {
+	_, err := EncodeGatewayFieldValue(kind, field, source)
 	return err == nil
 }
 
-func GatewayFieldEncodingsAreDistinct(field FieldEncoding, sources []string) bool {
+func GatewayFieldEncodingsAreDistinct(kind GatewayFieldKind, field FieldEncoding, sources []string) bool {
 	seen := make(map[string]struct{}, len(sources))
 	for _, source := range sources {
-		key, err := gatewayFieldEncodingKey(field, source)
+		key, err := gatewayFieldEncodingKey(kind, field, source)
 		if err != nil {
 			return false
 		}
@@ -532,11 +562,19 @@ func GatewayFieldEncodingsAreDistinct(field FieldEncoding, sources []string) boo
 	return true
 }
 
-func gatewayFieldEncodingKey(field FieldEncoding, source string) (string, error) {
-	value, err := EncodeGatewayFieldValue(field, source)
+func GatewayFieldEncodingKey(kind GatewayFieldKind, field FieldEncoding, source string) (string, error) {
+	return gatewayFieldEncodingKey(kind, field, source)
+}
+
+func gatewayFieldEncodingKey(kind GatewayFieldKind, field FieldEncoding, source string) (string, error) {
+	value, err := EncodeGatewayFieldValue(kind, field, source)
 	if err != nil {
 		return "", err
 	}
+	return canonicalGatewayFieldValueKey(value)
+}
+
+func canonicalGatewayFieldValueKey(value any) (string, error) {
 	canonical, err := json.Marshal(value)
 	if err != nil {
 		return "", gatewayContractError("field_value_not_encodable", "value")
@@ -585,6 +623,7 @@ func validateGatewayFieldEncoding(name string, field FieldEncoding) error {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	seenEncodings := make(map[string]struct{}, len(keys))
 	for _, key := range keys {
 		if key == "" {
 			return gatewayContractError("empty_value_map_key", name+".valueMap")
@@ -593,14 +632,18 @@ func validateGatewayFieldEncoding(name string, field FieldEncoding) error {
 		if mapped == "" {
 			return gatewayContractError("empty_value_map_value", name+".valueMap")
 		}
-		if _, err := encodeGatewayRawValue(mapped, field.ValueType); err != nil {
+		value, err := encodeGatewayRawValue(mapped, field.ValueType)
+		if err != nil {
 			return gatewayContractError("invalid_mapped_value", name+".valueMap")
 		}
-	}
-	if field.ValueType == "bool" {
-		if err := validateDistinctBooleanValues(field, name+".valueMap"); err != nil {
-			return err
+		encodingKey, err := canonicalGatewayFieldValueKey(value)
+		if err != nil {
+			return gatewayContractError("invalid_mapped_value", name+".valueMap")
 		}
+		if _, duplicate := seenEncodings[encodingKey]; duplicate && name != "taskMode" {
+			return gatewayContractError("duplicate_field_encoding", name+".valueMap")
+		}
+		seenEncodings[encodingKey] = struct{}{}
 	}
 	return nil
 }
@@ -609,7 +652,7 @@ func validateGenerateAudioEncoding(field FieldEncoding) error {
 	if field.Name == "" {
 		return nil
 	}
-	if field.ValueType == "string" || field.ValueType == "int" {
+	if field.ValueType != "bool" || len(field.ValueMap) > 0 {
 		if _, trueMapped := field.ValueMap["true"]; !trueMapped {
 			return gatewayContractError("missing_boolean_mapping", "generateAudio.valueMap")
 		}
@@ -621,8 +664,8 @@ func validateGenerateAudioEncoding(field FieldEncoding) error {
 }
 
 func validateDistinctBooleanValues(field FieldEncoding, errorField string) error {
-	trueValue, trueErr := EncodeGatewayFieldValue(field, "true")
-	falseValue, falseErr := EncodeGatewayFieldValue(field, "false")
+	trueValue, trueErr := EncodeGatewayFieldValue(GatewayFieldGenerateAudio, field, "true")
+	falseValue, falseErr := EncodeGatewayFieldValue(GatewayFieldGenerateAudio, field, "false")
 	if trueErr != nil || falseErr != nil {
 		return gatewayContractError("invalid_boolean_mapping", errorField)
 	}
@@ -638,7 +681,7 @@ func validateTaskModeEncoding(field FieldEncoding, modes []string) error {
 	}
 	seen := make(map[string]struct{}, len(modes))
 	for _, mode := range modes {
-		key, err := gatewayFieldEncodingKey(field, mode)
+		key, err := gatewayFieldEncodingKey(GatewayFieldTaskMode, field, mode)
 		if err != nil {
 			return gatewayContractError("declared_mode_not_encodable", "taskMode")
 		}

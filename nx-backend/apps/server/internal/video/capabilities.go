@@ -4,7 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"reflect"
+	"errors"
 	"strconv"
 	"strings"
 
@@ -105,7 +105,7 @@ func ResolveCapabilities(input CapabilityConfig) Capabilities {
 	}
 	capabilities.SupportsSmartDuration = profile.smartDuration && supportsSmartDuration(contract.Duration)
 	capabilities.AspectRatios = intersectAspectRatios(profile.aspectRatios, contract)
-	capabilities.Resolutions = intersectEncodableValues(profile.resolutions, contract.Resolution)
+	capabilities.Resolutions = evaluateGatewayFieldValues(profile.resolutions, config.GatewayFieldResolution, contract.Resolution).Values
 	capabilities.SupportsResolution = len(capabilities.Resolutions) > 0
 	capabilities.SupportsGenerateAudio = profile.generateAudio && supportsBooleanField(contract.GenerateAudio)
 
@@ -237,11 +237,15 @@ func intersectDurationValues(profile officialCapabilityProfile, contract config.
 	if isLegacyFlatContract(contract) {
 		candidates = intersectInts(profile.durations, []int{5, 10, 15})
 	}
-	result := make([]int, 0, len(candidates))
+	sources := make([]string, 0, len(candidates))
 	for _, value := range candidates {
-		if config.CanEncodeGatewayFieldValue(contract.Duration, strconv.Itoa(value)) {
-			result = append(result, value)
-		}
+		sources = append(sources, strconv.Itoa(value))
+	}
+	evaluation := evaluateGatewayFieldValues(sources, config.GatewayFieldDuration, contract.Duration)
+	result := make([]int, 0, len(evaluation.Values))
+	for _, value := range evaluation.Values {
+		parsed, _ := strconv.Atoi(value)
+		result = append(result, parsed)
 	}
 	return result
 }
@@ -254,54 +258,70 @@ func supportsSmartDuration(field config.FieldEncoding) bool {
 	if !supportsDurationField(field) {
 		return false
 	}
-	if _, explicitlyMapped := field.ValueMap["smart"]; !explicitlyMapped {
-		return false
-	}
-	return config.CanEncodeGatewayFieldValue(field, "smart")
+	return config.CanEncodeGatewayFieldValue(config.GatewayFieldDuration, field, "smart")
 }
 
 func supportsBooleanField(field config.FieldEncoding) bool {
-	if field.Name == "" {
-		return false
-	}
-	if field.ValueType == "string" || field.ValueType == "int" {
-		if _, exists := field.ValueMap["true"]; !exists {
-			return false
-		}
-		if _, exists := field.ValueMap["false"]; !exists {
-			return false
-		}
-	}
-	trueValue, trueErr := config.EncodeGatewayFieldValue(field, "true")
-	falseValue, falseErr := config.EncodeGatewayFieldValue(field, "false")
-	return trueErr == nil && falseErr == nil && !reflect.DeepEqual(trueValue, falseValue)
+	return config.GatewayFieldEncodingsAreDistinct(config.GatewayFieldGenerateAudio, field, []string{"true", "false"})
 }
 
 func intersectAspectRatios(official []string, contract config.GatewayContractConfig) []string {
 	if isLegacyFlatContract(contract) {
-		return intersectEncodableValues(intersectStrings([]string{"16:9", "9:16", "1:1"}, official), contract.AspectRatio)
+		return evaluateGatewayFieldValues(intersectStrings([]string{"16:9", "9:16", "1:1"}, official), config.GatewayFieldAspectRatio, contract.AspectRatio).Values
 	}
-	return intersectEncodableValues(official, contract.AspectRatio)
+	return evaluateGatewayFieldValues(official, config.GatewayFieldAspectRatio, contract.AspectRatio).Values
 }
 
-func intersectEncodableValues(official []string, field config.FieldEncoding) []string {
-	if len(official) == 0 || field.Name == "" {
-		return nil
+type gatewayFieldValueEvaluation struct {
+	Values  []string
+	Reasons map[string]string
+}
+
+func evaluateGatewayFieldValues(candidates []string, kind config.GatewayFieldKind, field config.FieldEncoding) gatewayFieldValueEvaluation {
+	evaluation := gatewayFieldValueEvaluation{
+		Reasons: make(map[string]string),
 	}
-	result := make([]string, 0, len(official))
-	for _, value := range official {
-		if config.CanEncodeGatewayFieldValue(field, value) {
-			result = append(result, value)
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		key, err := config.GatewayFieldEncodingKey(kind, field, candidate)
+		if err != nil {
+			evaluation.Reasons[candidate] = gatewayFieldPolicyDegradation(err)
+			continue
+		}
+		if _, duplicate := seen[key]; duplicate {
+			evaluation.Reasons[candidate] = "gateway_contract_duplicate_encoding"
+			continue
+		}
+		seen[key] = struct{}{}
+		evaluation.Values = append(evaluation.Values, candidate)
+	}
+	return evaluation
+}
+
+func gatewayFieldPolicyDegradation(err error) string {
+	var policyErr *config.GatewayContractValidationError
+	if errors.As(err, &policyErr) {
+		switch policyErr.Code {
+		case "field_name_missing":
+			return "gateway_contract_missing_field"
+		case "field_mapping_missing":
+			return "gateway_contract_value_not_declared"
 		}
 	}
-	return result
+	return "gateway_contract_value_not_encodable"
 }
 
-func missingMappedValueReason(field config.FieldEncoding, value string) string {
-	if _, mapped := field.ValueMap[value]; mapped {
-		return "gateway_contract_value_not_encodable"
+func taskModePolicyFailureReason(contract config.GatewayContractConfig) (string, bool) {
+	if contract.TaskMode.Name == "" {
+		return "", false
 	}
-	return "gateway_contract_value_not_declared"
+	evaluation := evaluateGatewayFieldValues(contract.DeclaredModes, config.GatewayFieldTaskMode, contract.TaskMode)
+	for _, mode := range contract.DeclaredModes {
+		if reason, exists := evaluation.Reasons[mode]; exists {
+			return reason, true
+		}
+	}
+	return "", false
 }
 
 func isLegacyFlatContract(contract config.GatewayContractConfig) bool {
@@ -378,7 +398,7 @@ func isKnownReferenceEncodingMode(mode string) bool {
 }
 
 func intersectTaskModes(official []string, contract config.GatewayContractConfig, roles []string) []string {
-	if contract.TaskMode.Name != "" && !config.GatewayFieldEncodingsAreDistinct(contract.TaskMode, contract.DeclaredModes) {
+	if contract.TaskMode.Name != "" && !config.GatewayFieldEncodingsAreDistinct(config.GatewayFieldTaskMode, contract.TaskMode, contract.DeclaredModes) {
 		return nil
 	}
 	result := make([]string, 0, len(official))
@@ -386,7 +406,7 @@ func intersectTaskModes(official []string, contract config.GatewayContractConfig
 		if !containsString(contract.DeclaredModes, mode) {
 			continue
 		}
-		if contract.TaskMode.Name != "" && !config.CanEncodeGatewayFieldValue(contract.TaskMode, mode) {
+		if contract.TaskMode.Name != "" && !config.CanEncodeGatewayFieldValue(config.GatewayFieldTaskMode, contract.TaskMode, mode) {
 			continue
 		}
 		switch mode {
@@ -410,7 +430,7 @@ func modeCanBeEncoded(contract config.GatewayContractConfig, mode, targetRole st
 		return false
 	}
 	if contract.TaskMode.Name != "" {
-		return config.CanEncodeGatewayFieldValue(contract.TaskMode, mode)
+		return config.CanEncodeGatewayFieldValue(config.GatewayFieldTaskMode, contract.TaskMode, mode)
 	}
 	return contract.References.Mode == "content_items" && contract.References.RoleFields[targetRole] != ""
 }
@@ -509,7 +529,7 @@ func explainDegradations(profile officialCapabilityProfile, selection string, co
 		add("model_profile", reason)
 	}
 
-	if len(profile.durations) > 0 && len(got.SupportedDurations) == 0 {
+	if len(profile.durations) > 0 && contract.Duration.Name == "" {
 		add("duration", "gateway_contract_missing_field")
 	}
 	if isLegacyFlatContract(contract) {
@@ -518,11 +538,25 @@ func explainDegradations(profile officialCapabilityProfile, selection string, co
 				add("duration."+strconv.Itoa(value), "legacy_contract_value_not_proven")
 			}
 		}
+	} else if contract.Duration.Name != "" {
+		sources := make([]string, 0, len(profile.durations))
+		for _, value := range profile.durations {
+			sources = append(sources, strconv.Itoa(value))
+		}
+		evaluation := evaluateGatewayFieldValues(sources, config.GatewayFieldDuration, contract.Duration)
+		for _, value := range sources {
+			if reason, exists := evaluation.Reasons[value]; exists {
+				add("duration."+value, reason)
+			}
+		}
 	}
 	if profile.smartDuration && !got.SupportsSmartDuration {
 		reason := "gateway_contract_missing_smart_mapping"
-		if !supportsDurationField(contract.Duration) {
-			reason = "gateway_contract_missing_field"
+		if _, err := config.GatewayFieldEncodingKey(config.GatewayFieldDuration, contract.Duration, "smart"); err != nil {
+			policyReason := gatewayFieldPolicyDegradation(err)
+			if policyReason != "gateway_contract_value_not_declared" {
+				reason = policyReason
+			}
 		}
 		add("smart_duration", reason)
 	}
@@ -534,12 +568,13 @@ func explainDegradations(profile officialCapabilityProfile, selection string, co
 			}
 		}
 	} else if len(profile.aspectRatios) > 0 {
-		if contract.AspectRatio.Name == "" || contract.AspectRatio.ValueType != "string" {
+		if contract.AspectRatio.Name == "" {
 			add("aspect_ratio", "gateway_contract_missing_field")
-		} else if len(contract.AspectRatio.ValueMap) > 0 {
+		} else {
+			evaluation := evaluateGatewayFieldValues(profile.aspectRatios, config.GatewayFieldAspectRatio, contract.AspectRatio)
 			for _, value := range profile.aspectRatios {
-				if !containsString(got.AspectRatios, value) {
-					add("aspect_ratio."+value, missingMappedValueReason(contract.AspectRatio, value))
+				if reason, exists := evaluation.Reasons[value]; exists {
+					add("aspect_ratio."+value, reason)
 				}
 			}
 		}
@@ -548,31 +583,42 @@ func explainDegradations(profile officialCapabilityProfile, selection string, co
 	if profile.resolutionUnverified {
 		add("resolution", "official_profile_unverified")
 	} else if len(profile.resolutions) > 0 {
-		switch {
-		case contract.Resolution.Name == "" || contract.Resolution.ValueType != "string":
+		if contract.Resolution.Name == "" {
 			add("resolution", "gateway_contract_missing_field")
-		case len(contract.Resolution.ValueMap) == 0:
-			add("resolution", "gateway_contract_missing_enum")
-		default:
+		} else {
+			evaluation := evaluateGatewayFieldValues(profile.resolutions, config.GatewayFieldResolution, contract.Resolution)
 			for _, value := range profile.resolutions {
-				if !containsString(got.Resolutions, value) {
-					add("resolution."+value, missingMappedValueReason(contract.Resolution, value))
+				if reason, exists := evaluation.Reasons[value]; exists {
+					add("resolution."+value, reason)
 				}
 			}
 		}
 	}
 
 	if profile.generateAudio && !got.SupportsGenerateAudio {
-		add("generate_audio", "gateway_contract_missing_field")
+		reason := "gateway_contract_missing_field"
+		if contract.GenerateAudio.Name != "" {
+			evaluation := evaluateGatewayFieldValues([]string{"true", "false"}, config.GatewayFieldGenerateAudio, contract.GenerateAudio)
+			for _, source := range []string{"true", "false"} {
+				if candidateReason, exists := evaluation.Reasons[source]; exists {
+					reason = candidateReason
+					break
+				}
+			}
+		}
+		add("generate_audio", reason)
 	}
 
+	taskModePolicyReason, taskModePolicyInvalid := taskModePolicyFailureReason(contract)
 	for _, mode := range profile.taskModes {
 		if containsString(got.TaskModes, mode) {
 			continue
 		}
 		reason := "gateway_contract_mode_not_declared"
 		if containsString(contract.DeclaredModes, mode) {
-			if !isKnownReferenceEncodingMode(contract.References.Mode) {
+			if taskModePolicyInvalid {
+				reason = taskModePolicyReason
+			} else if !isKnownReferenceEncodingMode(contract.References.Mode) {
 				reason = "unknown_reference_encoding_mode"
 			} else {
 				reason = "gateway_contract_cannot_encode_target"
