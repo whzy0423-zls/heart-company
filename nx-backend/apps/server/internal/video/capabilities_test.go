@@ -182,14 +182,69 @@ func TestResolveCapabilitiesRejectsBlankEnumMappings(t *testing.T) {
 	}
 
 	got := ResolveCapabilities(CapabilityConfig{Model: "video-ds-2.0", GatewayContract: contract})
-	if got.SupportsResolution || len(got.Resolutions) != 0 {
+	if !got.SupportsResolution || !reflect.DeepEqual(got.Resolutions, []string{"480P", "720P", "4K"}) {
 		t.Fatalf("blank resolution mapping was exposed: supported=%v values=%#v", got.SupportsResolution, got.Resolutions)
 	}
-	if !reflect.DeepEqual(got.AspectRatios, []string{"9:16"}) {
+	if !reflect.DeepEqual(got.AspectRatios, []string{"adaptive", "21:9", "4:3", "1:1", "3:4", "9:16"}) {
 		t.Fatalf("blank aspect mapping was exposed: %#v", got.AspectRatios)
 	}
 	assertDegradation(t, got, "resolution.1080P", "gateway_contract_value_not_encodable")
 	assertDegradation(t, got, "aspect_ratio.16:9", "gateway_contract_value_not_encodable")
+}
+
+func TestResolveCapabilitiesUsesSharedFieldEncodingSemantics(t *testing.T) {
+	contract := configuredSeedanceContract()
+	contract.Duration = config.FieldEncoding{Name: "duration", ValueType: "string", ValueMap: map[string]string{"smart": "auto"}}
+	contract.AspectRatio = config.FieldEncoding{
+		Name:      "aspect_ratio",
+		ValueType: "int",
+		ValueMap: map[string]string{
+			"adaptive": "0",
+			"21:9":     "1",
+			"16:9":     "2",
+			"4:3":      "3",
+			"1:1":      "4",
+			"3:4":      "5",
+			"9:16":     "6",
+		},
+	}
+	contract.Resolution = config.FieldEncoding{
+		Name:      "resolution",
+		ValueType: "int",
+		ValueMap: map[string]string{
+			"480P":  "480",
+			"720P":  "720",
+			"1080P": "1080",
+			"4K":    "4000",
+		},
+	}
+	contract.GenerateAudio = config.FieldEncoding{
+		Name:      "generate_audio",
+		ValueType: "string",
+		ValueMap:  map[string]string{"true": "on", "false": "off"},
+	}
+	contract.TaskMode = config.FieldEncoding{
+		Name:      "task_mode",
+		ValueType: "int",
+		ValueMap:  map[string]string{"reference": "1", "edit": "2", "extend": "3"},
+	}
+
+	got := ResolveCapabilities(CapabilityConfig{Model: "video-ds-2.0", GatewayContract: contract})
+	if !reflect.DeepEqual(got.SupportedDurations, seedanceDurationValues) || !got.SupportsSmartDuration {
+		t.Fatalf("duration capabilities = %#v smart=%v", got.SupportedDurations, got.SupportsSmartDuration)
+	}
+	if !reflect.DeepEqual(got.AspectRatios, []string{"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}) {
+		t.Fatalf("aspect capabilities = %#v", got.AspectRatios)
+	}
+	if !reflect.DeepEqual(got.Resolutions, []string{"480P", "720P", "1080P", "4K"}) || !got.SupportsResolution {
+		t.Fatalf("resolution capabilities = %#v supported=%v", got.Resolutions, got.SupportsResolution)
+	}
+	if !got.SupportsGenerateAudio {
+		t.Fatal("shared string boolean encoding was hidden")
+	}
+	if !reflect.DeepEqual(got.TaskModes, []string{"reference", "edit", "extend"}) {
+		t.Fatalf("task modes = %#v", got.TaskModes)
+	}
 }
 
 func TestResolveCapabilitiesClassifiesReferenceEncodingDegradations(t *testing.T) {
@@ -446,10 +501,10 @@ func TestResolveCapabilitiesIntersectsValuesRolesAndLimits(t *testing.T) {
 	if !reflect.DeepEqual(got.SupportedDurations, seedanceDurationValues) || got.SupportsSmartDuration {
 		t.Fatalf("unexpected duration intersection: values=%#v smart=%v", got.SupportedDurations, got.SupportsSmartDuration)
 	}
-	if !reflect.DeepEqual(got.AspectRatios, []string{"16:9", "9:16"}) {
+	if !reflect.DeepEqual(got.AspectRatios, []string{"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}) {
 		t.Fatalf("aspects = %#v", got.AspectRatios)
 	}
-	if !reflect.DeepEqual(got.Resolutions, []string{"1080P"}) || !got.SupportsResolution {
+	if !reflect.DeepEqual(got.Resolutions, []string{"480P", "720P", "1080P", "4K"}) || !got.SupportsResolution {
 		t.Fatalf("resolution intersection = %#v (supported=%v)", got.Resolutions, got.SupportsResolution)
 	}
 	if !reflect.DeepEqual(got.TaskModes, []string{"reference", "edit"}) || !got.SupportsEdit || got.SupportsExtend {
@@ -468,14 +523,6 @@ func TestResolveCapabilitiesIntersectsValuesRolesAndLimits(t *testing.T) {
 
 	wantDegradations := map[string]string{
 		"smart_duration":                 "gateway_contract_missing_smart_mapping",
-		"aspect_ratio.adaptive":          "gateway_contract_value_not_declared",
-		"aspect_ratio.21:9":              "gateway_contract_value_not_declared",
-		"aspect_ratio.4:3":               "gateway_contract_value_not_declared",
-		"aspect_ratio.1:1":               "gateway_contract_value_not_declared",
-		"aspect_ratio.3:4":               "gateway_contract_value_not_declared",
-		"resolution.480P":                "gateway_contract_value_not_declared",
-		"resolution.720P":                "gateway_contract_value_not_declared",
-		"resolution.4K":                  "gateway_contract_value_not_declared",
 		"generate_audio":                 "gateway_contract_missing_field",
 		"task_mode.extend":               "gateway_contract_mode_not_declared",
 		"reference_role.first_frame":     "gateway_contract_role_not_declared",

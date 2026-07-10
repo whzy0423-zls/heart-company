@@ -2,6 +2,7 @@ package video
 
 import (
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -12,6 +13,24 @@ import (
 // contract. Reference ordering is supplied by the caller so prompt compilation
 // and gateway encoding can share one canonical value.
 func MapGatewayPayload(request GenerateRequest, references CanonicalReferences, contract config.GatewayContractConfig) (map[string]any, error) {
+	if reflect.DeepEqual(contract, config.GatewayContractConfig{}) {
+		return nil, validationError(
+			"gateway_contract_invalid",
+			"gatewayContract",
+			"视频中转站契约无效，已阻止创建请求。",
+			"修正中转站契约配置并重新加载后再试。",
+			nil,
+		)
+	}
+	canonical, err := validateCanonicalReferences(request.References, references)
+	if err != nil {
+		return nil, err
+	}
+	references = canonical
+	request.References = canonicalReferenceSnapshots(references)
+	if err := validateGatewayReferencePredicates(request); err != nil {
+		return nil, err
+	}
 	if err := validateGatewayTaskMode(request.TaskMode, references, contract); err != nil {
 		return nil, err
 	}
@@ -19,33 +38,35 @@ func MapGatewayPayload(request GenerateRequest, references CanonicalReferences, 
 		"model":  request.Model,
 		"prompt": request.Prompt,
 	}
-	if err := addEncodedGatewayField(payload, "duration", contract.Duration, durationGatewayValue(request.Duration), true); err != nil {
-		return nil, err
-	}
-	if err := addEncodedGatewayField(payload, "aspectRatio", contract.AspectRatio, request.AspectRatio, false); err != nil {
-		return nil, err
-	}
-	if request.Resolution != "" {
-		if contract.Resolution.Name != "" && len(contract.Resolution.ValueMap) == 0 {
+	if request.Duration == -1 {
+		if _, explicitlyMapped := contract.Duration.ValueMap["smart"]; !explicitlyMapped {
 			return nil, validationError(
 				"gateway_value_not_declared",
-				"resolution",
-				"中转站契约未声明分辨率枚举映射。",
-				"为 resolution.valueMap 声明当前分辨率的明确映射后重试。",
+				"duration",
+				"中转站契约未声明智能时长的编码。",
+				"为 duration.valueMap.smart 声明明确映射后重试。",
 				nil,
 			)
 		}
-		if err := addEncodedGatewayField(payload, "resolution", contract.Resolution, request.Resolution, false); err != nil {
+	}
+	if err := addEncodedGatewayField(payload, "duration", contract.Duration, durationGatewayValue(request.Duration)); err != nil {
+		return nil, err
+	}
+	if err := addEncodedGatewayField(payload, "aspectRatio", contract.AspectRatio, request.AspectRatio); err != nil {
+		return nil, err
+	}
+	if request.Resolution != "" {
+		if err := addEncodedGatewayField(payload, "resolution", contract.Resolution, request.Resolution); err != nil {
 			return nil, err
 		}
 	}
 	if request.GenerateAudio != nil {
-		if err := addEncodedGatewayField(payload, "generateAudio", contract.GenerateAudio, strconv.FormatBool(*request.GenerateAudio), false); err != nil {
+		if err := addEncodedGatewayField(payload, "generateAudio", contract.GenerateAudio, strconv.FormatBool(*request.GenerateAudio)); err != nil {
 			return nil, err
 		}
 	}
 	if request.TaskMode != "" {
-		if err := addEncodedGatewayField(payload, "taskMode", contract.TaskMode, request.TaskMode, false); err != nil {
+		if err := addEncodedGatewayField(payload, "taskMode", contract.TaskMode, request.TaskMode); err != nil {
 			return nil, err
 		}
 	}
@@ -54,6 +75,56 @@ func MapGatewayPayload(request GenerateRequest, references CanonicalReferences, 
 		return nil, err
 	}
 	return payload, nil
+}
+
+func validateCanonicalReferences(requestReferences []Reference, references CanonicalReferences) (CanonicalReferences, error) {
+	source := make([]Reference, len(references.References))
+	for index := range references.References {
+		source[index] = references.References[index].Reference
+	}
+	recomputed, err := CanonicalizeReferences(source)
+	provided := references
+	if len(provided.References) == 0 {
+		provided.References = []CanonicalReference{}
+	}
+	stale := err != nil || !reflect.DeepEqual(recomputed, provided)
+	if !stale && len(requestReferences) > 0 {
+		requestCanonical, requestErr := CanonicalizeReferences(requestReferences)
+		stale = requestErr != nil || !reflect.DeepEqual(requestCanonical, recomputed)
+	}
+	if stale {
+		return CanonicalReferences{}, validationError(
+			"canonical_references_stale",
+			"references",
+			"规范引用与素材快照不一致。",
+			"重新校验素材并编译提示词后再提交。",
+			nil,
+		)
+	}
+	return recomputed, nil
+}
+
+func canonicalReferenceSnapshots(references CanonicalReferences) []Reference {
+	snapshots := make([]Reference, len(references.References))
+	for index := range references.References {
+		snapshots[index] = references.References[index].Reference
+	}
+	return snapshots
+}
+
+func validateGatewayReferencePredicates(request GenerateRequest) error {
+	for index, reference := range request.References {
+		if !roleMatchesKind(reference.Role, reference.Kind) {
+			return validationError(
+				"reference_kind_role_mismatch",
+				fmt.Sprintf("references[%d]", index),
+				"引用素材类型与用途不匹配。",
+				"让图片、视频或音频使用与其类型匹配的引用角色。",
+				nil,
+			)
+		}
+	}
+	return validateTargetPredicates(request)
 }
 
 func validateGatewayTaskMode(mode string, references CanonicalReferences, contract config.GatewayContractConfig) error {
@@ -117,48 +188,13 @@ func durationGatewayValue(duration int) string {
 	return strconv.Itoa(duration)
 }
 
-func addEncodedGatewayField(payload map[string]any, logicalField string, encoding config.FieldEncoding, source string, allowPartialMap bool) error {
+func addEncodedGatewayField(payload map[string]any, logicalField string, encoding config.FieldEncoding, source string) error {
 	if encoding.Name == "" {
 		return nil
 	}
-
-	encoded := source
-	if allowPartialMap && source == "smart" {
-		mapped, declared := encoding.ValueMap[source]
-		if !declared {
-			return validationError(
-				"gateway_value_not_declared",
-				logicalField,
-				"中转站契约未声明智能时长的编码。",
-				"为 duration.valueMap.smart 声明明确映射后重试。",
-				nil,
-			)
-		}
-		if strings.TrimSpace(mapped) == "" {
-			return gatewayValueError(logicalField, "中转站契约为该值声明了空映射。")
-		}
-		encoded = mapped
-	} else if len(encoding.ValueMap) > 0 {
-		mapped, declared := encoding.ValueMap[source]
-		if declared {
-			if strings.TrimSpace(mapped) == "" {
-				return gatewayValueError(logicalField, "中转站契约为该值声明了空映射。")
-			}
-			encoded = mapped
-		} else if !allowPartialMap {
-			return validationError(
-				"gateway_value_not_declared",
-				logicalField,
-				fmt.Sprintf("中转站契约未声明 %s 值 %q 的编码。", logicalField, source),
-				"更新中转站契约映射，或选择契约已声明的值。",
-				nil,
-			)
-		}
-	}
-
-	value, err := gatewayJSONValue(encoded, encoding.ValueType)
+	value, err := config.EncodeGatewayFieldValue(encoding, source)
 	if err != nil {
-		return gatewayValueError(logicalField, err.Error())
+		return gatewayValueError(logicalField)
 	}
 	if _, exists := payload[encoding.Name]; exists {
 		return validationError(
@@ -173,34 +209,11 @@ func addEncodedGatewayField(payload map[string]any, logicalField string, encodin
 	return nil
 }
 
-func gatewayJSONValue(encoded, valueType string) (any, error) {
-	switch valueType {
-	case "string":
-		return encoded, nil
-	case "int":
-		value, err := strconv.Atoi(encoded)
-		if err != nil {
-			return nil, fmt.Errorf("声明的 int 编码 %q 不是整数", encoded)
-		}
-		return value, nil
-	case "bool":
-		if encoded == "true" {
-			return true, nil
-		}
-		if encoded == "false" {
-			return false, nil
-		}
-		return nil, fmt.Errorf("声明的 bool 编码 %q 必须是 true 或 false", encoded)
-	default:
-		return nil, fmt.Errorf("不支持声明的值类型 %q", valueType)
-	}
-}
-
-func gatewayValueError(field, detail string) *ValidationError {
+func gatewayValueError(field string) *ValidationError {
 	return validationError(
 		"gateway_value_not_encodable",
 		field,
-		fmt.Sprintf("%s 无法按中转站契约编码：%s。", field, strings.TrimSuffix(detail, "。")),
+		fmt.Sprintf("%s 无法按中转站契约编码。", field),
 		"检查该字段的 valueType 和 valueMap 后重试。",
 		nil,
 	)

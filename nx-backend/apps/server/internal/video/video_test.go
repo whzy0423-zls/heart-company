@@ -681,9 +681,9 @@ func TestCreateTaskFailsClosedForExplicitInvalidGatewayContract(t *testing.T) {
 	client.client.Transport = &http.Transport{DisableKeepAlives: true}
 
 	_, err := client.CreateTask(context.Background(), "video-ds-2.0-fast", "test", nil, nil, nil, 15, "9:16")
-	validationErr := assertValidationCode(t, err, "gateway_task_mode_not_declared")
-	if validationErr.Field != "taskMode" {
-		t.Fatalf("validation field = %q, want taskMode", validationErr.Field)
+	validationErr := assertValidationCode(t, err, "gateway_contract_invalid")
+	if validationErr.Field != "gatewayContract" {
+		t.Fatalf("validation field = %q, want gatewayContract", validationErr.Field)
 	}
 	if got := attempts.Load(); got != 0 {
 		t.Fatalf("explicit invalid gateway contract reached paid POST %d times, want 0", got)
@@ -910,7 +910,7 @@ func TestCreateTaskValidatesOriginalGatewayContractBeforePost(t *testing.T) {
 				contract.TaskMode = config.FieldEncoding{Name: "task_mode", ValueType: "string"}
 				return contract
 			},
-			wantCode:  "gateway_reference_encoding_unsupported",
+			wantCode:  "gateway_contract_invalid",
 			wantField: "gatewayContract.references.mode",
 		},
 		{
@@ -921,16 +921,16 @@ func TestCreateTaskValidatesOriginalGatewayContractBeforePost(t *testing.T) {
 				return contract
 			},
 			references: []Reference{{ID: "1", Kind: "video", Role: "reference_video", URL: "v1"}},
-			wantCode:   "gateway_reference_field_missing",
-			wantField:  "references[0].kind",
+			wantCode:   "gateway_contract_invalid",
+			wantField:  "gatewayContract.references.videoField",
 		},
 		{
 			name: "zero contract",
 			contract: func() config.GatewayContractConfig {
 				return config.GatewayContractConfig{}
 			},
-			wantCode:  "gateway_task_mode_not_declared",
-			wantField: "taskMode",
+			wantCode:  "gateway_contract_invalid",
+			wantField: "gatewayContract",
 		},
 	}
 

@@ -48,12 +48,13 @@ func TestMapLegacyGatewayPayload(t *testing.T) {
 
 func TestMapConfiguredGatewayPayloadUsesDeclaredFieldsAndCanonicalReferences(t *testing.T) {
 	generateAudio := true
-	canonical, err := CanonicalizeReferences([]Reference{
+	rawReferences := []Reference{
 		{ID: "10", Kind: "video", Role: "reference_video", URL: "shared", SortOrder: 0},
 		{ID: "20", Kind: "image", Role: "first_frame", URL: "i1", SortOrder: 1},
 		{ID: "30", Kind: "video", Role: "edit_target", URL: "shared", SortOrder: 2},
 		{ID: "40", Kind: "audio", Role: "reference_audio", URL: "a1", SortOrder: 3},
-	})
+	}
+	canonical, err := CanonicalizeReferences(rawReferences)
 	if err != nil {
 		t.Fatalf("CanonicalizeReferences() error = %v", err)
 	}
@@ -65,16 +66,14 @@ func TestMapConfiguredGatewayPayloadUsesDeclaredFieldsAndCanonicalReferences(t *
 	contract.References.RequiresTargetFirst = false
 	prompt := "参考视频1的运镜，严格编辑视频2，参考图片1的首帧和音频1的声音"
 	payload, err := MapGatewayPayload(GenerateRequest{
-		Model:         "video-ds-2.0",
-		Prompt:        prompt,
-		Duration:      12,
-		AspectRatio:   "9:16",
-		Resolution:    "1080P",
-		GenerateAudio: &generateAudio,
-		TaskMode:      "edit",
-		References: []Reference{
-			{ID: "wrong", Kind: "video", Role: "edit_target", URL: "must-not-be-used", SortOrder: -1},
-		},
+		Model:             "video-ds-2.0",
+		Prompt:            prompt,
+		Duration:          12,
+		AspectRatio:       "9:16",
+		Resolution:        "1080P",
+		GenerateAudio:     &generateAudio,
+		TaskMode:          "edit",
+		References:        rawReferences,
 		RequestKey:        "must-not-enter-body",
 		CapabilityVersion: "must-not-enter-body",
 	}, canonical, contract)
@@ -102,7 +101,7 @@ func TestMapConfiguredGatewayPayloadKeepsDeclaredFieldNameLiteral(t *testing.T) 
 		AspectRatio: "9:16",
 		Resolution:  "1080P",
 		TaskMode:    "reference",
-	}, CanonicalReferences{}, contract)
+	}, mustCanonicalReferences(t, nil), contract)
 	if err != nil {
 		t.Fatalf("MapGatewayPayload() error = %v", err)
 	}
@@ -111,6 +110,97 @@ func TestMapConfiguredGatewayPayloadKeepsDeclaredFieldNameLiteral(t *testing.T) 
 	}
 	if _, nested := payload["options"]; nested {
 		t.Fatalf("mapper constructed an undeclared nested object: %#v", payload["options"])
+	}
+}
+
+func TestMapGatewayPayloadAcceptsZeroCanonicalReferencesAsEmpty(t *testing.T) {
+	_, err := MapGatewayPayload(GenerateRequest{
+		Model:       "video-ds-2.0",
+		Prompt:      "测试",
+		Duration:    12,
+		AspectRatio: "9:16",
+		TaskMode:    "reference",
+	}, CanonicalReferences{}, configuredMapperContract())
+	if err != nil {
+		t.Fatalf("zero canonical references should represent an empty set: %v", err)
+	}
+}
+
+func TestMapGatewayPayloadUsesSharedFieldEncodingSemantics(t *testing.T) {
+	generateAudio := true
+	contract := configuredMapperContract()
+	contract.Duration = config.FieldEncoding{Name: "duration", ValueType: "string", ValueMap: map[string]string{"smart": "auto"}}
+	contract.AspectRatio = config.FieldEncoding{Name: "aspect", ValueType: "int", ValueMap: map[string]string{"9:16": "916"}}
+	contract.Resolution = config.FieldEncoding{Name: "resolution", ValueType: "int", ValueMap: map[string]string{"1080P": "1080"}}
+	contract.GenerateAudio = config.FieldEncoding{Name: "audio", ValueType: "string", ValueMap: map[string]string{"true": "on", "false": "off"}}
+	contract.TaskMode = config.FieldEncoding{Name: "mode", ValueType: "int", ValueMap: map[string]string{"reference": "1", "edit": "2", "extend": "3"}}
+
+	payload, err := MapGatewayPayload(GenerateRequest{
+		Model:         "video-ds-2.0",
+		Prompt:        "测试",
+		Duration:      -1,
+		AspectRatio:   "9:16",
+		Resolution:    "1080P",
+		GenerateAudio: &generateAudio,
+		TaskMode:      "reference",
+	}, mustCanonicalReferences(t, nil), contract)
+	if err != nil {
+		t.Fatalf("MapGatewayPayload() error = %v", err)
+	}
+	for field, want := range map[string]any{
+		"duration":   "auto",
+		"aspect":     916,
+		"resolution": 1080,
+		"audio":      "on",
+		"mode":       1,
+	} {
+		if got := payload[field]; !reflect.DeepEqual(got, want) {
+			t.Fatalf("payload[%q] = %#v, want %#v", field, got, want)
+		}
+	}
+}
+
+func TestMapGatewayPayloadUsesSharedBoolParsing(t *testing.T) {
+	generateAudio := true
+	contract := configuredMapperContract()
+	contract.GenerateAudio = config.FieldEncoding{
+		Name:      "audio",
+		ValueType: "bool",
+		ValueMap:  map[string]string{"true": "1", "false": "0"},
+	}
+
+	payload, err := MapGatewayPayload(GenerateRequest{
+		Model:         "video-ds-2.0",
+		Prompt:        "测试",
+		Duration:      12,
+		AspectRatio:   "9:16",
+		GenerateAudio: &generateAudio,
+		TaskMode:      "reference",
+	}, mustCanonicalReferences(t, nil), contract)
+	if err != nil {
+		t.Fatalf("MapGatewayPayload() error = %v", err)
+	}
+	if got := payload["audio"]; got != true {
+		t.Fatalf("payload audio = %#v, want true", got)
+	}
+}
+
+func TestMapGatewayPayloadUsesDirectStringValueWhenNoOverrideExists(t *testing.T) {
+	contract := configuredMapperContract()
+	contract.Resolution.ValueMap = nil
+	payload, err := MapGatewayPayload(GenerateRequest{
+		Model:       "video-ds-2.0",
+		Prompt:      "测试",
+		Duration:    12,
+		AspectRatio: "9:16",
+		Resolution:  "1080P",
+		TaskMode:    "reference",
+	}, CanonicalReferences{}, contract)
+	if err != nil {
+		t.Fatalf("MapGatewayPayload() error = %v", err)
+	}
+	if got := payload[contract.Resolution.Name]; got != "1080P" {
+		t.Fatalf("direct resolution = %#v, want 1080P", got)
 	}
 }
 
@@ -156,6 +246,160 @@ func TestTargetFirstContractRejectsEditTargetAtVideo2(t *testing.T) {
 	}
 }
 
+func TestMapGatewayPayloadRejectsStaleCanonicalReferences(t *testing.T) {
+	duration := 6.5
+	rawReferences := []Reference{
+		{ID: "1", Kind: "video", Role: "reference_video", URL: "v1", SortOrder: 1, DurationSeconds: &duration},
+		{ID: "2", Kind: "video", Role: "edit_target", URL: "v2", SortOrder: 2},
+	}
+	base := mustCanonicalReferences(t, rawReferences)
+
+	tests := []struct {
+		name   string
+		mutate func(*CanonicalReferences)
+	}{
+		{
+			name: "forged target ordinal",
+			mutate: func(references *CanonicalReferences) {
+				references.References[1].Ordinal = 1
+			},
+		},
+		{
+			name: "swapped items",
+			mutate: func(references *CanonicalReferences) {
+				references.References[0], references.References[1] = references.References[1], references.References[0]
+			},
+		},
+		{
+			name: "modified label",
+			mutate: func(references *CanonicalReferences) {
+				references.References[0].Label = "视频9"
+			},
+		},
+		{
+			name: "modified duration value",
+			mutate: func(references *CanonicalReferences) {
+				forged := 9.5
+				references.References[0].DurationSeconds = &forged
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			forged := cloneCanonicalReferencesForTest(base)
+			tt.mutate(&forged)
+			contract := configuredMapperContract()
+			contract.References.RequiresTargetFirst = true
+
+			err := mapGatewayPayloadError(GenerateRequest{
+				Model:       "video-ds-2.0",
+				Prompt:      "严格编辑视频2",
+				Duration:    12,
+				AspectRatio: "9:16",
+				TaskMode:    "edit",
+				References:  rawReferences,
+			}, forged, contract)
+			validationErr := assertValidationCode(t, err, "canonical_references_stale")
+			if validationErr.Field != "references" {
+				t.Fatalf("validation field = %q, want references", validationErr.Field)
+			}
+		})
+	}
+}
+
+func TestMapGatewayPayloadEnforcesTargetPredicatesAtMapperBoundary(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      string
+		refs      []Reference
+		wantCode  string
+		wantField string
+	}{
+		{
+			name:      "reference rejects edit target",
+			mode:      "reference",
+			refs:      []Reference{{ID: "1", Kind: "video", Role: "edit_target", URL: "v1"}},
+			wantCode:  "target_role_not_allowed",
+			wantField: "references",
+		},
+		{
+			name:      "reference rejects extend target",
+			mode:      "reference",
+			refs:      []Reference{{ID: "1", Kind: "video", Role: "extend_target", URL: "v1"}},
+			wantCode:  "target_role_not_allowed",
+			wantField: "references",
+		},
+		{
+			name:      "edit requires target",
+			mode:      "edit",
+			wantCode:  "edit_target_required",
+			wantField: "references",
+		},
+		{
+			name: "edit rejects duplicate targets",
+			mode: "edit",
+			refs: []Reference{
+				{ID: "1", Kind: "video", Role: "edit_target", URL: "v1"},
+				{ID: "2", Kind: "video", Role: "edit_target", URL: "v2"},
+			},
+			wantCode:  "multiple_edit_targets",
+			wantField: "references",
+		},
+		{
+			name: "mixed targets are rejected",
+			mode: "edit",
+			refs: []Reference{
+				{ID: "1", Kind: "video", Role: "edit_target", URL: "v1"},
+				{ID: "2", Kind: "video", Role: "extend_target", URL: "v2"},
+			},
+			wantCode:  "mixed_target_roles",
+			wantField: "references",
+		},
+		{
+			name:      "extend requires target",
+			mode:      "extend",
+			wantCode:  "extend_target_required",
+			wantField: "references",
+		},
+		{
+			name: "extend rejects duplicate targets",
+			mode: "extend",
+			refs: []Reference{
+				{ID: "1", Kind: "video", Role: "extend_target", URL: "v1"},
+				{ID: "2", Kind: "video", Role: "extend_target", URL: "v2"},
+			},
+			wantCode:  "multiple_extend_targets",
+			wantField: "references",
+		},
+		{
+			name:      "role kind mismatch",
+			mode:      "edit",
+			refs:      []Reference{{ID: "1", Kind: "image", Role: "edit_target", URL: "i1"}},
+			wantCode:  "reference_kind_role_mismatch",
+			wantField: "references[0]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			canonical := mustCanonicalReferences(t, tt.refs)
+			err := mapGatewayPayloadError(GenerateRequest{
+				Model:       "video-ds-2.0",
+				Prompt:      "测试",
+				Duration:    12,
+				AspectRatio: "9:16",
+				TaskMode:    tt.mode,
+				References:  tt.refs,
+			}, canonical, configuredMapperContract())
+			validationErr := assertValidationCode(t, err, tt.wantCode)
+			if validationErr.Field != tt.wantField {
+				t.Fatalf("validation field = %q, want %q", validationErr.Field, tt.wantField)
+			}
+		})
+	}
+}
+
 func TestMapConfiguredGatewayPayloadFailsClosed(t *testing.T) {
 	baseRequest := GenerateRequest{
 		Model:       "video-ds-2.0",
@@ -170,6 +414,7 @@ func TestMapConfiguredGatewayPayloadFailsClosed(t *testing.T) {
 		name      string
 		mutate    func(*config.GatewayContractConfig)
 		refs      []Reference
+		mode      string
 		wantCode  string
 		wantField string
 	}{
@@ -187,14 +432,6 @@ func TestMapConfiguredGatewayPayloadFailsClosed(t *testing.T) {
 				contract.Resolution.ValueMap["1080P"] = " \t "
 			},
 			wantCode:  "gateway_value_not_encodable",
-			wantField: "resolution",
-		},
-		{
-			name: "resolution requires explicit mapping",
-			mutate: func(contract *config.GatewayContractConfig) {
-				contract.Resolution.ValueMap = nil
-			},
-			wantCode:  "gateway_value_not_declared",
 			wantField: "resolution",
 		},
 		{
@@ -222,6 +459,7 @@ func TestMapConfiguredGatewayPayloadFailsClosed(t *testing.T) {
 				contract.References.VideoField = "videos"
 			},
 			refs:      []Reference{{ID: "1", Kind: "video", Role: "edit_target", URL: "v1"}},
+			mode:      "edit",
 			wantCode:  "gateway_reference_role_unsupported",
 			wantField: "references[0].role",
 		},
@@ -257,7 +495,7 @@ func TestMapConfiguredGatewayPayloadFailsClosed(t *testing.T) {
 			mutate: func(contract *config.GatewayContractConfig) {
 			},
 			refs:      []Reference{{ID: "1", Kind: "image", Role: "edit_target", URL: "i1"}},
-			wantCode:  "gateway_reference_kind_role_mismatch",
+			wantCode:  "reference_kind_role_mismatch",
 			wantField: "references[0]",
 		},
 	}
@@ -267,6 +505,9 @@ func TestMapConfiguredGatewayPayloadFailsClosed(t *testing.T) {
 			contract := configuredMapperContract()
 			tt.mutate(&contract)
 			request := baseRequest
+			if tt.mode != "" {
+				request.TaskMode = tt.mode
+			}
 			generateAudio := true
 			request.GenerateAudio = &generateAudio
 			canonical := mustCanonicalReferences(t, tt.refs)
@@ -336,6 +577,19 @@ func mustCanonicalReferences(t *testing.T, refs []Reference) CanonicalReferences
 		t.Fatalf("CanonicalizeReferences() error = %v", err)
 	}
 	return canonical
+}
+
+func cloneCanonicalReferencesForTest(in CanonicalReferences) CanonicalReferences {
+	out := CanonicalReferences{References: make([]CanonicalReference, len(in.References))}
+	copy(out.References, in.References)
+	for index := range out.References {
+		if out.References[index].DurationSeconds == nil {
+			continue
+		}
+		duration := *out.References[index].DurationSeconds
+		out.References[index].DurationSeconds = &duration
+	}
+	return out
 }
 
 func mapGatewayPayloadError(request GenerateRequest, references CanonicalReferences, contract config.GatewayContractConfig) error {

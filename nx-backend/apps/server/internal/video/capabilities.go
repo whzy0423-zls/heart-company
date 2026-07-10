@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -104,7 +105,7 @@ func ResolveCapabilities(input CapabilityConfig) Capabilities {
 	}
 	capabilities.SupportsSmartDuration = profile.smartDuration && supportsSmartDuration(contract.Duration)
 	capabilities.AspectRatios = intersectAspectRatios(profile.aspectRatios, contract)
-	capabilities.Resolutions = intersectMappedValues(profile.resolutions, contract.Resolution, true)
+	capabilities.Resolutions = intersectEncodableValues(profile.resolutions, contract.Resolution)
 	capabilities.SupportsResolution = len(capabilities.Resolutions) > 0
 	capabilities.SupportsGenerateAudio = profile.generateAudio && supportsBooleanField(contract.GenerateAudio)
 
@@ -232,64 +233,72 @@ func intersectDurationValues(profile officialCapabilityProfile, contract config.
 	if !supportsDurationField(contract.Duration) {
 		return nil
 	}
+	candidates := profile.durations
 	if isLegacyFlatContract(contract) {
-		return intersectInts(profile.durations, []int{5, 10, 15})
+		candidates = intersectInts(profile.durations, []int{5, 10, 15})
 	}
-	return append([]int(nil), profile.durations...)
-}
-
-func supportsDurationField(field config.FieldEncoding) bool {
-	return field.Name != "" && (field.ValueType == "int" || field.ValueType == "string")
-}
-
-func supportsSmartDuration(field config.FieldEncoding) bool {
-	if !supportsDurationField(field) {
-		return false
-	}
-	return field.ValueMap["smart"] == "-1"
-}
-
-func supportsBooleanField(field config.FieldEncoding) bool {
-	return field.Name != "" && field.ValueType == "bool"
-}
-
-func intersectAspectRatios(official []string, contract config.GatewayContractConfig) []string {
-	if isLegacyFlatContract(contract) {
-		if contract.AspectRatio.Name == "" || contract.AspectRatio.ValueType != "string" {
-			return nil
-		}
-		return intersectStrings([]string{"16:9", "9:16", "1:1"}, official)
-	}
-	return intersectMappedValues(official, contract.AspectRatio, false)
-}
-
-func intersectMappedValues(official []string, field config.FieldEncoding, requireExplicitMap bool) []string {
-	if len(official) == 0 || field.Name == "" || field.ValueType != "string" {
-		return nil
-	}
-	if len(field.ValueMap) == 0 {
-		if requireExplicitMap {
-			return nil
-		}
-		return append([]string(nil), official...)
-	}
-
-	result := make([]string, 0, len(official))
-	for _, value := range official {
-		if hasEncodableMappedValue(field.ValueMap, value) {
+	result := make([]int, 0, len(candidates))
+	for _, value := range candidates {
+		if config.CanEncodeGatewayFieldValue(contract.Duration, strconv.Itoa(value)) {
 			result = append(result, value)
 		}
 	}
 	return result
 }
 
-func hasEncodableMappedValue(valueMap map[string]string, value string) bool {
-	mapped, ok := valueMap[value]
-	return ok && strings.TrimSpace(mapped) != ""
+func supportsDurationField(field config.FieldEncoding) bool {
+	return field.Name != ""
 }
 
-func missingMappedValueReason(valueMap map[string]string, value string) string {
-	if mapped, ok := valueMap[value]; ok && strings.TrimSpace(mapped) == "" {
+func supportsSmartDuration(field config.FieldEncoding) bool {
+	if !supportsDurationField(field) {
+		return false
+	}
+	if _, explicitlyMapped := field.ValueMap["smart"]; !explicitlyMapped {
+		return false
+	}
+	return config.CanEncodeGatewayFieldValue(field, "smart")
+}
+
+func supportsBooleanField(field config.FieldEncoding) bool {
+	if field.Name == "" {
+		return false
+	}
+	if field.ValueType == "string" || field.ValueType == "int" {
+		if _, exists := field.ValueMap["true"]; !exists {
+			return false
+		}
+		if _, exists := field.ValueMap["false"]; !exists {
+			return false
+		}
+	}
+	trueValue, trueErr := config.EncodeGatewayFieldValue(field, "true")
+	falseValue, falseErr := config.EncodeGatewayFieldValue(field, "false")
+	return trueErr == nil && falseErr == nil && !reflect.DeepEqual(trueValue, falseValue)
+}
+
+func intersectAspectRatios(official []string, contract config.GatewayContractConfig) []string {
+	if isLegacyFlatContract(contract) {
+		return intersectEncodableValues(intersectStrings([]string{"16:9", "9:16", "1:1"}, official), contract.AspectRatio)
+	}
+	return intersectEncodableValues(official, contract.AspectRatio)
+}
+
+func intersectEncodableValues(official []string, field config.FieldEncoding) []string {
+	if len(official) == 0 || field.Name == "" {
+		return nil
+	}
+	result := make([]string, 0, len(official))
+	for _, value := range official {
+		if config.CanEncodeGatewayFieldValue(field, value) {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func missingMappedValueReason(field config.FieldEncoding, value string) string {
+	if _, mapped := field.ValueMap[value]; mapped {
 		return "gateway_contract_value_not_encodable"
 	}
 	return "gateway_contract_value_not_declared"
@@ -374,15 +383,18 @@ func intersectTaskModes(official []string, contract config.GatewayContractConfig
 		if !containsString(contract.DeclaredModes, mode) {
 			continue
 		}
+		if contract.TaskMode.Name != "" && !config.CanEncodeGatewayFieldValue(contract.TaskMode, mode) {
+			continue
+		}
 		switch mode {
 		case "reference":
 			result = append(result, mode)
 		case "edit":
-			if containsString(roles, "edit_target") && modeCanBeEncoded(contract, "edit_target") {
+			if containsString(roles, "edit_target") && modeCanBeEncoded(contract, mode, "edit_target") {
 				result = append(result, mode)
 			}
 		case "extend":
-			if containsString(roles, "extend_target") && modeCanBeEncoded(contract, "extend_target") {
+			if containsString(roles, "extend_target") && modeCanBeEncoded(contract, mode, "extend_target") {
 				result = append(result, mode)
 			}
 		}
@@ -390,12 +402,12 @@ func intersectTaskModes(official []string, contract config.GatewayContractConfig
 	return result
 }
 
-func modeCanBeEncoded(contract config.GatewayContractConfig, targetRole string) bool {
+func modeCanBeEncoded(contract config.GatewayContractConfig, mode, targetRole string) bool {
 	if !isKnownReferenceEncodingMode(contract.References.Mode) {
 		return false
 	}
-	if contract.TaskMode.Name != "" && contract.TaskMode.ValueType == "string" {
-		return true
+	if contract.TaskMode.Name != "" {
+		return config.CanEncodeGatewayFieldValue(contract.TaskMode, mode)
 	}
 	return contract.References.Mode == "content_items" && contract.References.RoleFields[targetRole] != ""
 }
@@ -524,7 +536,7 @@ func explainDegradations(profile officialCapabilityProfile, selection string, co
 		} else if len(contract.AspectRatio.ValueMap) > 0 {
 			for _, value := range profile.aspectRatios {
 				if !containsString(got.AspectRatios, value) {
-					add("aspect_ratio."+value, missingMappedValueReason(contract.AspectRatio.ValueMap, value))
+					add("aspect_ratio."+value, missingMappedValueReason(contract.AspectRatio, value))
 				}
 			}
 		}
@@ -541,7 +553,7 @@ func explainDegradations(profile officialCapabilityProfile, selection string, co
 		default:
 			for _, value := range profile.resolutions {
 				if !containsString(got.Resolutions, value) {
-					add("resolution."+value, missingMappedValueReason(contract.Resolution.ValueMap, value))
+					add("resolution."+value, missingMappedValueReason(contract.Resolution, value))
 				}
 			}
 		}

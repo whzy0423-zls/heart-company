@@ -1,9 +1,11 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -42,6 +44,409 @@ func TestLegacyVideoGatewayContractReturnsIndependentCopies(t *testing.T) {
 	}
 	if third.DeclaredModes[0] != "reference" || third.References.SupportsRoles[0] != "reference_image" {
 		t.Fatalf("legacy constructor returned mutated values: %#v", third)
+	}
+}
+
+func TestValidateGatewayContractRejectsInvalidModesAndNamespaces(t *testing.T) {
+	tests := []struct {
+		name      string
+		contract  func() GatewayContractConfig
+		mutate    func(*GatewayContractConfig)
+		wantCode  string
+		wantField string
+	}{
+		{
+			name:     "unknown declared mode",
+			contract: validContentItemsGatewayContractForTest,
+			mutate: func(contract *GatewayContractConfig) {
+				contract.DeclaredModes = []string{"reference", "future"}
+			},
+			wantCode:  "invalid_declared_mode",
+			wantField: "declaredModes[1]",
+		},
+		{
+			name:     "duplicate declared mode",
+			contract: validContentItemsGatewayContractForTest,
+			mutate: func(contract *GatewayContractConfig) {
+				contract.DeclaredModes = []string{"reference", "edit", "edit"}
+			},
+			wantCode:  "duplicate_declared_mode",
+			wantField: "declaredModes[2]",
+		},
+		{
+			name:     "unknown reference mode",
+			contract: validContentItemsGatewayContractForTest,
+			mutate: func(contract *GatewayContractConfig) {
+				contract.References.Mode = "future_items"
+			},
+			wantCode:  "invalid_reference_mode",
+			wantField: "references.mode",
+		},
+		{
+			name:     "duplicate supported role",
+			contract: validContentItemsGatewayContractForTest,
+			mutate: func(contract *GatewayContractConfig) {
+				contract.References.SupportsRoles = append(contract.References.SupportsRoles, "reference_image")
+			},
+			wantCode:  "duplicate_reference_role",
+			wantField: "references.supportsRoles[7]",
+		},
+		{
+			name:     "scalar collides with fixed model",
+			contract: validContentItemsGatewayContractForTest,
+			mutate: func(contract *GatewayContractConfig) {
+				contract.Duration.Name = "model"
+			},
+			wantCode:  "duplicate_gateway_field",
+			wantField: "duration.name",
+		},
+		{
+			name:     "scalar fields collide",
+			contract: validContentItemsGatewayContractForTest,
+			mutate: func(contract *GatewayContractConfig) {
+				contract.AspectRatio.Name = contract.Duration.Name
+			},
+			wantCode:  "duplicate_gateway_field",
+			wantField: "aspectRatio.name",
+		},
+		{
+			name:     "scalar collides with fixed content items",
+			contract: validContentItemsGatewayContractForTest,
+			mutate: func(contract *GatewayContractConfig) {
+				contract.TaskMode.Name = "content_items"
+			},
+			wantCode:  "duplicate_gateway_field",
+			wantField: "taskMode.name",
+		},
+		{
+			name:     "flat media collides with prompt",
+			contract: LegacyVideoGatewayContract,
+			mutate: func(contract *GatewayContractConfig) {
+				contract.References.ImageField = "prompt"
+			},
+			wantCode:  "duplicate_gateway_field",
+			wantField: "references.imageField",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contract := tt.contract()
+			tt.mutate(&contract)
+			assertGatewayContractValidationError(t, ValidateGatewayContract(contract), tt.wantCode, tt.wantField)
+		})
+	}
+}
+
+func TestValidateGatewayContractEnforcesContentItemsSchema(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(*GatewayContractConfig)
+		wantCode  string
+		wantField string
+	}{
+		{
+			name: "missing role field",
+			mutate: func(contract *GatewayContractConfig) {
+				delete(contract.References.RoleFields, "first_frame")
+			},
+			wantCode:  "reference_role_fields_mismatch",
+			wantField: "references.roleFields",
+		},
+		{
+			name: "extra role field",
+			mutate: func(contract *GatewayContractConfig) {
+				contract.References.SupportsRoles = contract.References.SupportsRoles[:6]
+			},
+			wantCode:  "reference_role_fields_mismatch",
+			wantField: "references.roleFields",
+		},
+		{
+			name: "duplicate role field values",
+			mutate: func(contract *GatewayContractConfig) {
+				contract.References.RoleFields["first_frame"] = contract.References.RoleFields["reference_image"]
+			},
+			wantCode:  "duplicate_reference_role_field",
+			wantField: "references.roleFields.first_frame",
+		},
+		{
+			name: "missing media field for role",
+			mutate: func(contract *GatewayContractConfig) {
+				contract.References.AudioField = ""
+			},
+			wantCode:  "missing_reference_media_field",
+			wantField: "references.audioField",
+		},
+		{
+			name: "media field conflicts with role field",
+			mutate: func(contract *GatewayContractConfig) {
+				contract.References.RoleFields["reference_video"] = contract.References.VideoField
+			},
+			wantCode:  "reference_field_conflict",
+			wantField: "references.roleFields.reference_video",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contract := validContentItemsGatewayContractForTest()
+			tt.mutate(&contract)
+			assertGatewayContractValidationError(t, ValidateGatewayContract(contract), tt.wantCode, tt.wantField)
+		})
+	}
+}
+
+func TestValidateGatewayContractEnforcesFlatArraysSchema(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(*GatewayContractConfig)
+		wantCode  string
+		wantField string
+	}{
+		{
+			name: "role fields are forbidden",
+			mutate: func(contract *GatewayContractConfig) {
+				contract.References.RoleFields = map[string]string{"reference_image": "role"}
+			},
+			wantCode:  "flat_role_fields_not_allowed",
+			wantField: "references.roleFields",
+		},
+		{
+			name: "frame role is forbidden",
+			mutate: func(contract *GatewayContractConfig) {
+				contract.References.SupportsRoles = append(contract.References.SupportsRoles, "first_frame")
+			},
+			wantCode:  "flat_reference_role_not_supported",
+			wantField: "references.supportsRoles[3]",
+		},
+		{
+			name: "declared role requires media field",
+			mutate: func(contract *GatewayContractConfig) {
+				contract.References.VideoField = ""
+			},
+			wantCode:  "missing_reference_media_field",
+			wantField: "references.videoField",
+		},
+		{
+			name: "media fields must be distinct",
+			mutate: func(contract *GatewayContractConfig) {
+				contract.References.AudioField = contract.References.VideoField
+			},
+			wantCode:  "duplicate_reference_media_field",
+			wantField: "references.audioField",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contract := LegacyVideoGatewayContract()
+			tt.mutate(&contract)
+			assertGatewayContractValidationError(t, ValidateGatewayContract(contract), tt.wantCode, tt.wantField)
+		})
+	}
+}
+
+func TestEncodeGatewayFieldValueUsesSharedStringIntBoolSemantics(t *testing.T) {
+	tests := []struct {
+		name   string
+		field  FieldEncoding
+		source string
+		want   any
+	}{
+		{
+			name:   "direct string",
+			field:  FieldEncoding{Name: "value", ValueType: "string"},
+			source: "portrait",
+			want:   "portrait",
+		},
+		{
+			name:   "mapped smart string",
+			field:  FieldEncoding{Name: "value", ValueType: "string", ValueMap: map[string]string{"smart": "auto"}},
+			source: "smart",
+			want:   "auto",
+		},
+		{
+			name:   "direct integer",
+			field:  FieldEncoding{Name: "value", ValueType: "int"},
+			source: "12",
+			want:   12,
+		},
+		{
+			name:   "mapped integer",
+			field:  FieldEncoding{Name: "value", ValueType: "int", ValueMap: map[string]string{"1080P": "1080"}},
+			source: "1080P",
+			want:   1080,
+		},
+		{
+			name:   "direct bool",
+			field:  FieldEncoding{Name: "value", ValueType: "bool"},
+			source: "true",
+			want:   true,
+		},
+		{
+			name:   "mapped bool",
+			field:  FieldEncoding{Name: "value", ValueType: "bool", ValueMap: map[string]string{"false": "1"}},
+			source: "false",
+			want:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := EncodeGatewayFieldValue(tt.field, tt.source)
+			if err != nil {
+				t.Fatalf("EncodeGatewayFieldValue() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("EncodeGatewayFieldValue() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEncodeGatewayFieldValueReturnsSafeTypedErrors(t *testing.T) {
+	field := FieldEncoding{
+		Name:      "value",
+		ValueType: "int",
+		ValueMap:  map[string]string{"private-source": "https://secret.example/token"},
+	}
+	_, err := EncodeGatewayFieldValue(field, "private-source")
+	var validationErr *GatewayContractValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("expected typed encoding error, got %T: %v", err, err)
+	}
+	if validationErr.Code != "field_value_not_encodable" || validationErr.Field != "value" {
+		t.Fatalf("encoding error = code %q field %q", validationErr.Code, validationErr.Field)
+	}
+	if strings.Contains(err.Error(), "private-source") || strings.Contains(err.Error(), "secret.example") {
+		t.Fatalf("encoding error leaked configured values: %v", err)
+	}
+}
+
+func TestValidateGatewayContractEnforcesFieldEncodingSemantics(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(*GatewayContractConfig)
+		wantCode  string
+		wantField string
+	}{
+		{
+			name: "empty value map key",
+			mutate: func(contract *GatewayContractConfig) {
+				contract.Duration.ValueMap = map[string]string{" ": "0"}
+			},
+			wantCode:  "empty_value_map_key",
+			wantField: "duration.valueMap",
+		},
+		{
+			name: "empty value map value",
+			mutate: func(contract *GatewayContractConfig) {
+				contract.Resolution.ValueMap = map[string]string{"1080P": " "}
+			},
+			wantCode:  "empty_value_map_value",
+			wantField: "resolution.valueMap",
+		},
+		{
+			name: "mapped integer must parse",
+			mutate: func(contract *GatewayContractConfig) {
+				contract.Duration.ValueMap = map[string]string{"smart": "auto"}
+			},
+			wantCode:  "invalid_mapped_value",
+			wantField: "duration.valueMap",
+		},
+		{
+			name: "mapped bool must parse",
+			mutate: func(contract *GatewayContractConfig) {
+				contract.GenerateAudio.ValueMap = map[string]string{"true": "enabled"}
+			},
+			wantCode:  "invalid_mapped_value",
+			wantField: "generateAudio.valueMap",
+		},
+		{
+			name: "bool results must differ",
+			mutate: func(contract *GatewayContractConfig) {
+				contract.GenerateAudio.ValueMap = map[string]string{"true": "true", "false": "1"}
+			},
+			wantCode:  "indistinguishable_boolean_mapping",
+			wantField: "generateAudio.valueMap",
+		},
+		{
+			name: "integer task mode must encode every declared mode",
+			mutate: func(contract *GatewayContractConfig) {
+				contract.TaskMode = FieldEncoding{Name: "task_mode", ValueType: "int", ValueMap: map[string]string{"reference": "1", "edit": "2"}}
+			},
+			wantCode:  "declared_mode_not_encodable",
+			wantField: "taskMode",
+		},
+		{
+			name: "string audio requires explicit boolean mappings",
+			mutate: func(contract *GatewayContractConfig) {
+				contract.GenerateAudio = FieldEncoding{Name: "generate_audio", ValueType: "string"}
+			},
+			wantCode:  "missing_boolean_mapping",
+			wantField: "generateAudio.valueMap",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contract := validContentItemsGatewayContractForTest()
+			tt.mutate(&contract)
+			assertGatewayContractValidationError(t, ValidateGatewayContract(contract), tt.wantCode, tt.wantField)
+		})
+	}
+}
+
+func TestValidateGatewayContractAcceptsSharedFieldEncodingSemantics(t *testing.T) {
+	contract := validContentItemsGatewayContractForTest()
+	contract.Duration = FieldEncoding{Name: "duration", ValueType: "string", ValueMap: map[string]string{"smart": "auto"}}
+	contract.AspectRatio = FieldEncoding{Name: "aspect_ratio", ValueType: "int", ValueMap: map[string]string{"9:16": "916"}}
+	contract.Resolution = FieldEncoding{Name: "resolution", ValueType: "int", ValueMap: map[string]string{"1080P": "1080"}}
+	contract.GenerateAudio = FieldEncoding{Name: "generate_audio", ValueType: "string", ValueMap: map[string]string{"true": "on", "false": "off"}}
+	contract.TaskMode = FieldEncoding{Name: "task_mode", ValueType: "int", ValueMap: map[string]string{"reference": "1", "edit": "2", "extend": "3"}}
+
+	if err := ValidateGatewayContract(contract); err != nil {
+		t.Fatalf("expected shared encoding contract to pass, got %v", err)
+	}
+}
+
+func validContentItemsGatewayContractForTest() GatewayContractConfig {
+	return GatewayContractConfig{
+		Name:          "seedance2_configured_v1",
+		Version:       "1",
+		DeclaredModes: []string{"reference", "edit", "extend"},
+		Duration:      FieldEncoding{Name: "duration", ValueType: "int", ValueMap: map[string]string{"smart": "-1"}},
+		AspectRatio:   FieldEncoding{Name: "aspect_ratio", ValueType: "string"},
+		Resolution:    FieldEncoding{Name: "resolution", ValueType: "string", ValueMap: map[string]string{"1080P": "1080p"}},
+		GenerateAudio: FieldEncoding{Name: "generate_audio", ValueType: "bool"},
+		TaskMode:      FieldEncoding{Name: "task_mode", ValueType: "string"},
+		References: ReferenceEncoding{
+			Mode:       "content_items",
+			ImageField: "image_url",
+			VideoField: "video_url",
+			AudioField: "audio_url",
+			RoleFields: map[string]string{
+				"reference_image": "reference_image",
+				"first_frame":     "first_frame",
+				"last_frame":      "last_frame",
+				"reference_video": "reference_video",
+				"reference_audio": "reference_audio",
+				"edit_target":     "edit_target",
+				"extend_target":   "extend_target",
+			},
+			SupportsRoles: []string{"reference_image", "first_frame", "last_frame", "reference_video", "reference_audio", "edit_target", "extend_target"},
+		},
+	}
+}
+
+func assertGatewayContractValidationError(t *testing.T, err error, wantCode, wantField string) {
+	t.Helper()
+	var validationErr *GatewayContractValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("expected GatewayContractValidationError, got %T: %v", err, err)
+	}
+	if validationErr.Code != wantCode || validationErr.Field != wantField {
+		t.Fatalf("validation error = code %q field %q, want code %q field %q", validationErr.Code, validationErr.Field, wantCode, wantField)
 	}
 }
 

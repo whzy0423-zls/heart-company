@@ -253,6 +253,18 @@ func ValidateGatewayContract(contract GatewayContractConfig) error {
 			return err
 		}
 	}
+	if err := validateGatewayDeclaredModes(contract.DeclaredModes); err != nil {
+		return err
+	}
+	if err := validateGenerateAudioEncoding(contract.GenerateAudio); err != nil {
+		return err
+	}
+	if err := validateTaskModeEncoding(contract.TaskMode, contract.DeclaredModes); err != nil {
+		return err
+	}
+	if contract.References.Mode != "flat_arrays" && contract.References.Mode != "content_items" {
+		return gatewayContractError("invalid_reference_mode", "references.mode")
+	}
 
 	referenceFields := []struct {
 		name  string
@@ -267,7 +279,13 @@ func ValidateGatewayContract(contract GatewayContractConfig) error {
 			return gatewayContractError("invalid_field_name", field.name)
 		}
 	}
-	for role, field := range contract.References.RoleFields {
+	roleFieldKeys := make([]string, 0, len(contract.References.RoleFields))
+	for role := range contract.References.RoleFields {
+		roleFieldKeys = append(roleFieldKeys, role)
+	}
+	sort.Strings(roleFieldKeys)
+	for _, role := range roleFieldKeys {
+		field := contract.References.RoleFields[role]
 		if _, ok := gatewayReferenceRoles[role]; !ok {
 			return gatewayContractError("invalid_reference_role", "references.roleFields")
 		}
@@ -275,10 +293,21 @@ func ValidateGatewayContract(contract GatewayContractConfig) error {
 			return gatewayContractError("invalid_field_name", "references.roleFields")
 		}
 	}
-	for _, role := range contract.References.SupportsRoles {
+	seenRoles := make(map[string]struct{}, len(contract.References.SupportsRoles))
+	for index, role := range contract.References.SupportsRoles {
 		if _, ok := gatewayReferenceRoles[role]; !ok {
 			return gatewayContractError("invalid_reference_role", "references.supportsRoles")
 		}
+		if _, exists := seenRoles[role]; exists {
+			return gatewayContractError("duplicate_reference_role", fmt.Sprintf("references.supportsRoles[%d]", index))
+		}
+		seenRoles[role] = struct{}{}
+	}
+	if err := validateGatewayReferenceSchema(contract.References); err != nil {
+		return err
+	}
+	if err := validateGatewayTopLevelNamespace(contract); err != nil {
+		return err
 	}
 
 	header := contract.Idempotency.Header
@@ -308,12 +337,212 @@ func ValidateGatewayContract(contract GatewayContractConfig) error {
 	return nil
 }
 
+func validateGatewayDeclaredModes(modes []string) error {
+	seen := make(map[string]struct{}, len(modes))
+	for index, mode := range modes {
+		switch mode {
+		case "reference", "edit", "extend":
+		default:
+			return gatewayContractError("invalid_declared_mode", fmt.Sprintf("declaredModes[%d]", index))
+		}
+		if _, exists := seen[mode]; exists {
+			return gatewayContractError("duplicate_declared_mode", fmt.Sprintf("declaredModes[%d]", index))
+		}
+		seen[mode] = struct{}{}
+	}
+	return nil
+}
+
+func validateGatewayReferenceSchema(references ReferenceEncoding) error {
+	switch references.Mode {
+	case "content_items":
+		return validateContentItemsReferenceSchema(references)
+	case "flat_arrays":
+		return validateFlatArraysReferenceSchema(references)
+	default:
+		return gatewayContractError("invalid_reference_mode", "references.mode")
+	}
+}
+
+func validateContentItemsReferenceSchema(references ReferenceEncoding) error {
+	if len(references.RoleFields) != len(references.SupportsRoles) {
+		return gatewayContractError("reference_role_fields_mismatch", "references.roleFields")
+	}
+	mediaFields := []string{references.ImageField, references.VideoField, references.AudioField}
+	seenRoleFields := make(map[string]struct{}, len(references.RoleFields))
+	for _, role := range references.SupportsRoles {
+		roleField, exists := references.RoleFields[role]
+		if !exists {
+			return gatewayContractError("reference_role_fields_mismatch", "references.roleFields")
+		}
+		roleFieldPath := "references.roleFields." + role
+		if _, duplicate := seenRoleFields[roleField]; duplicate {
+			return gatewayContractError("duplicate_reference_role_field", roleFieldPath)
+		}
+		seenRoleFields[roleField] = struct{}{}
+
+		mediaField, mediaFieldPath := gatewayReferenceMediaFieldForRole(references, role)
+		if mediaField == "" {
+			return gatewayContractError("missing_reference_media_field", mediaFieldPath)
+		}
+		for _, candidate := range mediaFields {
+			if candidate != "" && roleField == candidate {
+				return gatewayContractError("reference_field_conflict", roleFieldPath)
+			}
+		}
+	}
+	return nil
+}
+
+func validateFlatArraysReferenceSchema(references ReferenceEncoding) error {
+	if len(references.RoleFields) != 0 {
+		return gatewayContractError("flat_role_fields_not_allowed", "references.roleFields")
+	}
+	for index, role := range references.SupportsRoles {
+		switch role {
+		case "reference_image", "reference_video", "reference_audio":
+		default:
+			return gatewayContractError("flat_reference_role_not_supported", fmt.Sprintf("references.supportsRoles[%d]", index))
+		}
+		mediaField, mediaFieldPath := gatewayReferenceMediaFieldForRole(references, role)
+		if mediaField == "" {
+			return gatewayContractError("missing_reference_media_field", mediaFieldPath)
+		}
+	}
+
+	seenMediaFields := make(map[string]struct{}, 3)
+	for _, field := range []struct {
+		path  string
+		value string
+	}{
+		{"references.imageField", references.ImageField},
+		{"references.videoField", references.VideoField},
+		{"references.audioField", references.AudioField},
+	} {
+		if field.value == "" {
+			continue
+		}
+		if _, duplicate := seenMediaFields[field.value]; duplicate {
+			return gatewayContractError("duplicate_reference_media_field", field.path)
+		}
+		seenMediaFields[field.value] = struct{}{}
+	}
+	return nil
+}
+
+func gatewayReferenceMediaFieldForRole(references ReferenceEncoding, role string) (string, string) {
+	switch role {
+	case "reference_image", "first_frame", "last_frame":
+		return references.ImageField, "references.imageField"
+	case "reference_video", "edit_target", "extend_target":
+		return references.VideoField, "references.videoField"
+	case "reference_audio":
+		return references.AudioField, "references.audioField"
+	default:
+		return "", "references.supportsRoles"
+	}
+}
+
+func validateGatewayTopLevelNamespace(contract GatewayContractConfig) error {
+	used := map[string]struct{}{
+		"model":         {},
+		"prompt":        {},
+		"content_items": {},
+	}
+	add := func(path, field string) error {
+		if field == "" {
+			return nil
+		}
+		if _, exists := used[field]; exists {
+			return gatewayContractError("duplicate_gateway_field", path)
+		}
+		used[field] = struct{}{}
+		return nil
+	}
+	for _, field := range []struct {
+		path  string
+		value string
+	}{
+		{"duration.name", contract.Duration.Name},
+		{"aspectRatio.name", contract.AspectRatio.Name},
+		{"resolution.name", contract.Resolution.Name},
+		{"generateAudio.name", contract.GenerateAudio.Name},
+		{"taskMode.name", contract.TaskMode.Name},
+	} {
+		if err := add(field.path, field.value); err != nil {
+			return err
+		}
+	}
+	if contract.References.Mode == "flat_arrays" {
+		for _, field := range []struct {
+			path  string
+			value string
+		}{
+			{"references.imageField", contract.References.ImageField},
+			{"references.videoField", contract.References.VideoField},
+			{"references.audioField", contract.References.AudioField},
+		} {
+			if err := add(field.path, field.value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func gatewayContractError(code, field string) error {
 	return &GatewayContractValidationError{Code: code, Field: field}
 }
 
+// EncodeGatewayFieldValue applies the single declared scalar encoding used by
+// both gateway payload mapping and capability discovery. Value maps are
+// partial overrides: an absent key falls back to the direct internal value.
+func EncodeGatewayFieldValue(field FieldEncoding, source string) (any, error) {
+	if field.Name == "" {
+		return nil, gatewayContractError("field_name_missing", "name")
+	}
+	encoded := source
+	if mapped, exists := field.ValueMap[source]; exists {
+		encoded = mapped
+	}
+	value, err := encodeGatewayRawValue(encoded, field.ValueType)
+	if err != nil {
+		return nil, gatewayContractError("field_value_not_encodable", "value")
+	}
+	return value, nil
+}
+
+func CanEncodeGatewayFieldValue(field FieldEncoding, source string) bool {
+	_, err := EncodeGatewayFieldValue(field, source)
+	return err == nil
+}
+
+func encodeGatewayRawValue(encoded, valueType string) (any, error) {
+	if strings.TrimSpace(encoded) == "" {
+		return nil, gatewayContractError("field_value_not_encodable", "value")
+	}
+	switch valueType {
+	case "string":
+		return encoded, nil
+	case "int":
+		value, err := strconv.Atoi(encoded)
+		if err != nil {
+			return nil, gatewayContractError("field_value_not_encodable", "value")
+		}
+		return value, nil
+	case "bool":
+		value, err := strconv.ParseBool(encoded)
+		if err != nil {
+			return nil, gatewayContractError("field_value_not_encodable", "value")
+		}
+		return value, nil
+	default:
+		return nil, gatewayContractError("invalid_value_type", "valueType")
+	}
+}
+
 func validateGatewayFieldEncoding(name string, field FieldEncoding) error {
-	if field.Name == "" && field.ValueType == "" {
+	if field.Name == "" && field.ValueType == "" && len(field.ValueMap) == 0 {
 		return nil
 	}
 	if !gatewayFieldNamePattern.MatchString(field.Name) {
@@ -321,10 +550,71 @@ func validateGatewayFieldEncoding(name string, field FieldEncoding) error {
 	}
 	switch field.ValueType {
 	case "string", "int", "bool":
-		return nil
 	default:
 		return gatewayContractError("invalid_value_type", name+".valueType")
 	}
+	keys := make([]string, 0, len(field.ValueMap))
+	for key := range field.ValueMap {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if key == "" {
+			return gatewayContractError("empty_value_map_key", name+".valueMap")
+		}
+		mapped := field.ValueMap[key]
+		if mapped == "" {
+			return gatewayContractError("empty_value_map_value", name+".valueMap")
+		}
+		if _, err := encodeGatewayRawValue(mapped, field.ValueType); err != nil {
+			return gatewayContractError("invalid_mapped_value", name+".valueMap")
+		}
+	}
+	if field.ValueType == "bool" {
+		if err := validateDistinctBooleanValues(field, name+".valueMap"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateGenerateAudioEncoding(field FieldEncoding) error {
+	if field.Name == "" {
+		return nil
+	}
+	if field.ValueType == "string" || field.ValueType == "int" {
+		if _, trueMapped := field.ValueMap["true"]; !trueMapped {
+			return gatewayContractError("missing_boolean_mapping", "generateAudio.valueMap")
+		}
+		if _, falseMapped := field.ValueMap["false"]; !falseMapped {
+			return gatewayContractError("missing_boolean_mapping", "generateAudio.valueMap")
+		}
+	}
+	return validateDistinctBooleanValues(field, "generateAudio.valueMap")
+}
+
+func validateDistinctBooleanValues(field FieldEncoding, errorField string) error {
+	trueValue, trueErr := EncodeGatewayFieldValue(field, "true")
+	falseValue, falseErr := EncodeGatewayFieldValue(field, "false")
+	if trueErr != nil || falseErr != nil {
+		return gatewayContractError("invalid_boolean_mapping", errorField)
+	}
+	if reflect.DeepEqual(trueValue, falseValue) {
+		return gatewayContractError("indistinguishable_boolean_mapping", errorField)
+	}
+	return nil
+}
+
+func validateTaskModeEncoding(field FieldEncoding, modes []string) error {
+	if field.Name == "" {
+		return nil
+	}
+	for _, mode := range modes {
+		if !CanEncodeGatewayFieldValue(field, mode) {
+			return gatewayContractError("declared_mode_not_encodable", "taskMode")
+		}
+	}
+	return nil
 }
 
 func isRFCHeaderToken(value string) bool {
