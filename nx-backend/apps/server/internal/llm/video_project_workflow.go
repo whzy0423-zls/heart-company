@@ -46,6 +46,59 @@ type ProjectBreakdownResult struct {
 	StoryBeats []ProjectStoryBeat `json:"storyBeats"`
 }
 
+type ProjectAssetSummary struct {
+	Key               string `json:"key"`
+	Type              string `json:"type"`
+	Name              string `json:"name"`
+	Description       string `json:"description"`
+	VisualPrompt      string `json:"visualPrompt"`
+	ReferenceImageURL string `json:"referenceImageUrl"`
+	Required          bool   `json:"required"`
+}
+
+type ProjectStoryboardInput struct {
+	Script            string                `json:"script"`
+	ScriptRevision    int                   `json:"sourceScriptRevision"`
+	BreakdownID       string                `json:"sourceBreakdownId"`
+	AssetRevision     int                   `json:"sourceAssetRevision"`
+	CapabilityVersion string                `json:"sourceCapabilityVersion"`
+	Model             string                `json:"model"`
+	AspectRatio       string                `json:"aspectRatio"`
+	AllowedDurations  []int                 `json:"allowedDurations"`
+	TaskModes         []string              `json:"taskModes"`
+	ReferenceRoles    []string              `json:"referenceRoles"`
+	Assets            []ProjectAssetSummary `json:"confirmedAssets"`
+}
+
+type ProjectStoryboardReference struct {
+	AssetKey  string `json:"assetKey"`
+	Role      string `json:"role"`
+	SortOrder int    `json:"sortOrder"`
+	UsageNote string `json:"usageNote"`
+}
+
+type ProjectStoryboardShot struct {
+	SourceKey     string                       `json:"sourceKey"`
+	Name          string                       `json:"name"`
+	Enabled       bool                         `json:"enabled"`
+	Duration      int                          `json:"duration"`
+	SceneKey      string                       `json:"sceneKey"`
+	CharacterKeys []string                     `json:"characterKeys"`
+	AssetKeys     []string                     `json:"assetKeys"`
+	Action        string                       `json:"action"`
+	Camera        string                       `json:"camera"`
+	Composition   string                       `json:"composition"`
+	Lighting      string                       `json:"lighting"`
+	Audio         string                       `json:"audio"`
+	Dialogue      string                       `json:"dialogue"`
+	TaskMode      string                       `json:"taskMode"`
+	References    []ProjectStoryboardReference `json:"references"`
+}
+
+type ProjectStoryboardResult struct {
+	Shots []ProjectStoryboardShot `json:"shots"`
+}
+
 func (g *MiniMaxGenerator) PolishVideoProjectScript(ctx context.Context, draft string) (ScriptResult, error) {
 	draft = strings.TrimSpace(draft)
 	if draft == "" {
@@ -166,6 +219,73 @@ func (g *MiniMaxGenerator) BreakdownVideoProjectScript(ctx context.Context, scri
 	return result, answer, nil
 }
 
+func (g *MiniMaxGenerator) DesignVideoProjectStoryboard(ctx context.Context, input ProjectStoryboardInput) (ProjectStoryboardResult, string, error) {
+	input.Script = strings.TrimSpace(input.Script)
+	if input.Script == "" {
+		return ProjectStoryboardResult{}, "", fmt.Errorf("请先填写并确认剧本内容")
+	}
+	if strings.TrimSpace(input.BreakdownID) == "" {
+		return ProjectStoryboardResult{}, "", fmt.Errorf("请先确认剧本拆解结果")
+	}
+	if strings.TrimSpace(input.CapabilityVersion) == "" {
+		return ProjectStoryboardResult{}, "", fmt.Errorf("缺少当前 Seedance 2.0 能力版本，请刷新后重试")
+	}
+	if g.apiKey == "" {
+		return ProjectStoryboardResult{}, "", fmt.Errorf("请先配置 MINIMAX_API_KEY")
+	}
+
+	input.Assets = normalizeProjectAssetSummaries(input.Assets)
+	userPayload, _ := json.Marshal(input)
+	body := map[string]any{
+		"model":              g.model,
+		"temperature":        0.3,
+		"tokens_to_generate": 4200,
+		"messages": []map[string]string{
+			{"role": "system", "content": videoProjectStoryboardSystemPrompt()},
+			{"role": "user", "content": "请根据以下已确认剧本、资产和当前能力设计可编辑分镜。只返回约定的 JSON。\n" + string(userPayload)},
+		},
+	}
+	payload, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.endpoint("/v1/text/chatcompletion_v2"), bytes.NewReader(payload))
+	if err != nil {
+		return ProjectStoryboardResult{}, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+g.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return ProjectStoryboardResult{}, "", err
+	}
+	defer resp.Body.Close()
+	rawResponse, _ := io.ReadAll(io.LimitReader(resp.Body, 6*1024*1024))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return ProjectStoryboardResult{}, string(rawResponse), fmt.Errorf("AI 分镜模型请求失败(%d): %s", resp.StatusCode, compact(rawResponse))
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rawResponse, &response); err != nil {
+		return ProjectStoryboardResult{}, string(rawResponse), fmt.Errorf("AI 分镜模型响应解析失败: %w", err)
+	}
+	if err := baseRespError(response); err != nil {
+		return ProjectStoryboardResult{}, string(rawResponse), err
+	}
+	answer := strings.TrimSpace(findString(response,
+		"choices.0.message.content",
+		"choices.0.text",
+		"reply",
+		"data.reply",
+		"data.choices.0.message.content",
+	))
+	if answer == "" {
+		return ProjectStoryboardResult{}, string(rawResponse), fmt.Errorf("AI 分镜模型未返回内容")
+	}
+	result, err := parseProjectStoryboard(answer)
+	if err != nil {
+		return ProjectStoryboardResult{}, answer, err
+	}
+	return result, answer, nil
+}
+
 func parseVideoProjectScript(answer string) ScriptResult {
 	cleaned := strings.TrimSpace(stripThinkBlocks(answer))
 	if jsonText, ok := firstJSONObject(cleaned); ok {
@@ -232,6 +352,207 @@ func parseProjectBreakdown(answer string) (ProjectBreakdownResult, error) {
 		return ProjectBreakdownResult{}, fmt.Errorf("剧本拆解模型没有识别出人物、场景、物品、服饰或风格，请重新生成")
 	}
 	return result, nil
+}
+
+func parseProjectStoryboard(answer string) (ProjectStoryboardResult, error) {
+	cleaned := strings.TrimSpace(stripThinkBlocks(answer))
+	jsonText, ok := firstJSONObject(cleaned)
+	if !ok {
+		return ProjectStoryboardResult{}, fmt.Errorf("AI 分镜模型未返回有效 JSON，请重新生成。返回片段：%s", previewText(cleaned))
+	}
+	fields, err := looseJSONObject(jsonText)
+	if err != nil {
+		return ProjectStoryboardResult{}, fmt.Errorf("AI 分镜模型未返回有效 JSON，请重新生成。返回片段：%s", previewText(cleaned))
+	}
+	shots, err := looseProjectStoryboardShotsField(fields, "shots")
+	if err != nil {
+		return ProjectStoryboardResult{}, fmt.Errorf("AI 分镜模型字段 shots 格式不正确：%w", err)
+	}
+	shots = normalizeProjectStoryboardShots(shots)
+	if len(shots) == 0 {
+		return ProjectStoryboardResult{}, fmt.Errorf("AI 分镜模型没有返回可编辑镜头，请重新生成")
+	}
+	return ProjectStoryboardResult{Shots: shots}, nil
+}
+
+func looseProjectStoryboardShotsField(fields map[string]json.RawMessage, name string) ([]ProjectStoryboardShot, error) {
+	raw, ok := fields[name]
+	if !ok || isJSONNull(raw) {
+		return []ProjectStoryboardShot{}, nil
+	}
+	shotsRaw, err := looseRawArray(raw)
+	if err != nil {
+		return nil, err
+	}
+	shots := make([]ProjectStoryboardShot, 0, len(shotsRaw))
+	for index, rawShot := range shotsRaw {
+		shotFields, err := looseJSONObject(string(rawShot))
+		if err != nil {
+			return nil, fmt.Errorf("第 %d 个镜头不是 JSON 对象", index+1)
+		}
+		shot, err := looseProjectStoryboardShot(shotFields)
+		if err != nil {
+			return nil, fmt.Errorf("第 %d 个镜头：%w", index+1, err)
+		}
+		shots = append(shots, shot)
+	}
+	return shots, nil
+}
+
+func looseProjectStoryboardShot(fields map[string]json.RawMessage) (ProjectStoryboardShot, error) {
+	var shot ProjectStoryboardShot
+	var err error
+	if shot.SourceKey, err = looseStringField(fields, "sourceKey"); err != nil {
+		return ProjectStoryboardShot{}, fmt.Errorf("sourceKey 格式不正确：%w", err)
+	}
+	if shot.Name, err = looseStringField(fields, "name"); err != nil {
+		return ProjectStoryboardShot{}, fmt.Errorf("name 格式不正确：%w", err)
+	}
+	shot.Enabled, err = looseBoolFieldDefault(fields, "enabled", true)
+	if err != nil {
+		return ProjectStoryboardShot{}, fmt.Errorf("enabled 格式不正确：%w", err)
+	}
+	if shot.Duration, err = looseIntField(fields, "duration"); err != nil {
+		return ProjectStoryboardShot{}, fmt.Errorf("duration 格式不正确：%w", err)
+	}
+	if shot.SceneKey, err = looseStringField(fields, "sceneKey"); err != nil {
+		return ProjectStoryboardShot{}, fmt.Errorf("sceneKey 格式不正确：%w", err)
+	}
+	if shot.CharacterKeys, err = looseStringListField(fields, "characterKeys"); err != nil {
+		return ProjectStoryboardShot{}, fmt.Errorf("characterKeys 格式不正确：%w", err)
+	}
+	if shot.AssetKeys, err = looseStringListField(fields, "assetKeys"); err != nil {
+		return ProjectStoryboardShot{}, fmt.Errorf("assetKeys 格式不正确：%w", err)
+	}
+	for fieldName, target := range map[string]*string{
+		"action": &shot.Action, "camera": &shot.Camera, "composition": &shot.Composition,
+		"lighting": &shot.Lighting, "audio": &shot.Audio, "dialogue": &shot.Dialogue,
+		"taskMode": &shot.TaskMode,
+	} {
+		if *target, err = looseStringField(fields, fieldName); err != nil {
+			return ProjectStoryboardShot{}, fmt.Errorf("%s 格式不正确：%w", fieldName, err)
+		}
+	}
+	if shot.References, err = looseProjectStoryboardReferencesField(fields, "references"); err != nil {
+		return ProjectStoryboardShot{}, fmt.Errorf("references 格式不正确：%w", err)
+	}
+	return shot, nil
+}
+
+func looseBoolFieldDefault(fields map[string]json.RawMessage, name string, defaultValue bool) (bool, error) {
+	raw, ok := fields[name]
+	if !ok || isJSONNull(raw) {
+		return defaultValue, nil
+	}
+	return looseBoolField(fields, name)
+}
+
+func looseProjectStoryboardReferencesField(fields map[string]json.RawMessage, name string) ([]ProjectStoryboardReference, error) {
+	raw, ok := fields[name]
+	if !ok || isJSONNull(raw) {
+		return []ProjectStoryboardReference{}, nil
+	}
+	referencesRaw, err := looseRawArray(raw)
+	if err != nil {
+		return nil, err
+	}
+	references := make([]ProjectStoryboardReference, 0, len(referencesRaw))
+	for index, rawReference := range referencesRaw {
+		referenceFields, err := looseJSONObject(string(rawReference))
+		if err != nil {
+			return nil, fmt.Errorf("第 %d 项不是 JSON 对象", index+1)
+		}
+		var reference ProjectStoryboardReference
+		if reference.AssetKey, err = looseStringField(referenceFields, "assetKey"); err != nil {
+			return nil, fmt.Errorf("第 %d 项 assetKey 格式不正确：%w", index+1, err)
+		}
+		if reference.Role, err = looseStringField(referenceFields, "role"); err != nil {
+			return nil, fmt.Errorf("第 %d 项 role 格式不正确：%w", index+1, err)
+		}
+		if reference.SortOrder, err = looseIntField(referenceFields, "sortOrder"); err != nil {
+			return nil, fmt.Errorf("第 %d 项 sortOrder 格式不正确：%w", index+1, err)
+		}
+		if reference.UsageNote, err = looseStringField(referenceFields, "usageNote"); err != nil {
+			return nil, fmt.Errorf("第 %d 项 usageNote 格式不正确：%w", index+1, err)
+		}
+		references = append(references, reference)
+	}
+	return references, nil
+}
+
+func normalizeProjectStoryboardShots(shots []ProjectStoryboardShot) []ProjectStoryboardShot {
+	result := make([]ProjectStoryboardShot, 0, len(shots))
+	usedKeys := map[string]bool{}
+	for index, shot := range shots {
+		shot.SourceKey = strings.TrimSpace(shot.SourceKey)
+		shot.Name = strings.TrimSpace(shot.Name)
+		shot.SceneKey = strings.TrimSpace(shot.SceneKey)
+		shot.CharacterKeys = cleanStringList(shot.CharacterKeys)
+		shot.AssetKeys = cleanStringList(shot.AssetKeys)
+		shot.Action = strings.TrimSpace(shot.Action)
+		shot.Camera = strings.TrimSpace(shot.Camera)
+		shot.Composition = strings.TrimSpace(shot.Composition)
+		shot.Lighting = strings.TrimSpace(shot.Lighting)
+		shot.Audio = strings.TrimSpace(shot.Audio)
+		shot.Dialogue = strings.TrimSpace(shot.Dialogue)
+		shot.TaskMode = strings.ToLower(strings.TrimSpace(shot.TaskMode))
+		if shot.TaskMode == "" {
+			shot.TaskMode = "reference"
+		}
+		if shot.Name == "" {
+			shot.Name = fmt.Sprintf("镜头 %d", index+1)
+		}
+		if shot.Duration < 0 {
+			shot.Duration = 0
+		}
+		if !validWorkflowKey(shot.SourceKey) || usedKeys[shot.SourceKey] {
+			shot.SourceKey = stableWorkflowKey("shot", index, shot.Name, shot.SceneKey, strings.Join(shot.CharacterKeys, ","), strings.Join(shot.AssetKeys, ","), shot.Action, shot.Camera)
+		}
+		for usedKeys[shot.SourceKey] {
+			shot.SourceKey += "x"
+		}
+		usedKeys[shot.SourceKey] = true
+		shot.References = normalizeProjectStoryboardReferences(shot.References)
+		result = append(result, shot)
+	}
+	return result
+}
+
+func normalizeProjectStoryboardReferences(references []ProjectStoryboardReference) []ProjectStoryboardReference {
+	result := make([]ProjectStoryboardReference, 0, len(references))
+	for index, reference := range references {
+		reference.AssetKey = strings.TrimSpace(reference.AssetKey)
+		reference.Role = strings.ToLower(strings.TrimSpace(reference.Role))
+		reference.UsageNote = strings.TrimSpace(reference.UsageNote)
+		if reference.AssetKey == "" {
+			continue
+		}
+		if reference.Role == "" {
+			reference.Role = "reference_image"
+		}
+		if reference.SortOrder <= 0 {
+			reference.SortOrder = index + 1
+		}
+		result = append(result, reference)
+	}
+	return result
+}
+
+func normalizeProjectAssetSummaries(assets []ProjectAssetSummary) []ProjectAssetSummary {
+	result := make([]ProjectAssetSummary, 0, len(assets))
+	for _, asset := range assets {
+		asset.Key = strings.TrimSpace(asset.Key)
+		asset.Type = strings.TrimSpace(asset.Type)
+		asset.Name = strings.TrimSpace(asset.Name)
+		asset.Description = strings.TrimSpace(asset.Description)
+		asset.VisualPrompt = strings.TrimSpace(asset.VisualPrompt)
+		asset.ReferenceImageURL = strings.TrimSpace(asset.ReferenceImageURL)
+		if asset.Key == "" || asset.Name == "" {
+			continue
+		}
+		result = append(result, asset)
+	}
+	return result
 }
 
 func looseBreakdownItemsField(fields map[string]json.RawMessage, name string) ([]BreakdownItem, error) {
@@ -456,4 +777,17 @@ func videoProjectBreakdownSystemPrompt() string {
   "styles":[{"key":"style-a","name":"名称","description":"设定","visualPrompt":"参考图提示词","usageNote":"使用说明","required":true,"decision":"pending"}],
   "storyBeats":[{"key":"beat-a","title":"故事节点","description":"发生的事件","sceneKeys":["scene-a"],"assetKeys":["character-a","prop-a"]}]
 }`
+}
+
+func videoProjectStoryboardSystemPrompt() string {
+	return `你是一名 Seedance 2.0 分镜导演，任务是把已确认剧本和资产设计成新手可以逐镜修改、直接进入提示词编译的结构化分镜。
+要求：
+1. 每个镜头只安排模型在给定 allowedDurations 内能完整表现的动作；duration 必须选择 allowedDurations 中的值，画面比例、模型和能力以输入为准。
+2. sceneKey、characterKeys、assetKeys 和 references.assetKey 只能引用 confirmedAssets 里的稳定 key，不使用资产名称代替 key，不虚构不存在的参考素材。
+3. action 写主体可见动作；camera 只写一种主要运镜；composition、lighting、audio、dialogue 分开填写。台词写“人物：台词”，没有则为空字符串。
+4. taskMode 只能从 taskModes 选择；reference 的 role 只能从 referenceRoles 选择。普通人物、场景、物品和服饰参考图使用 reference_image，素材顺序按重要性从 1 开始。
+5. sourceKey 必须唯一稳定；enabled 默认 true。内容要直白、可拍摄，不写“图片1/视频1/音频1”，素材编号由后续编译器统一生成。
+6. 不承诺当前能力未声明的分辨率、编辑、延长、首尾帧或音画能力。
+只返回 JSON，不要 Markdown，不要解释：
+{"shots":[{"sourceKey":"shot-01","name":"镜头名称","enabled":true,"duration":5,"sceneKey":"scene-a","characterKeys":["character-a"],"assetKeys":["prop-a"],"action":"可见动作","camera":"景别和运镜","composition":"构图","lighting":"光线和色彩","audio":"环境声/音乐/音效","dialogue":"人物：台词","taskMode":"reference","references":[{"assetKey":"character-a","role":"reference_image","sortOrder":1,"usageNote":"保持人物一致"}]}]}`
 }

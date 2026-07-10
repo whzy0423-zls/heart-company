@@ -172,3 +172,138 @@ func TestProjectBreakdownReturnsRawOutputWhenParsingFails(t *testing.T) {
 		t.Fatalf("expected failed model output to be recoverable, got %q", raw)
 	}
 }
+
+func TestProjectStoryboardParsesDependenciesAndNormalizesStableShots(t *testing.T) {
+	var requestBody map[string]any
+	answer := `<think>按 10 秒一镜拆成两个镜头。</think>
+` + "```json" + `
+{
+  "shots": [
+    {
+      "sourceKey": "opening",
+      "name": "发现相机",
+      "enabled": "true",
+      "duration": "10秒",
+      "sceneKey": "scene-station",
+      "characterKeys": "character-aning",
+      "assetKeys": "prop-camera、outfit-coat",
+      "action": "阿宁弯腰捡起旧相机",
+      "camera": "中景缓慢推进",
+      "composition": "阿宁位于画面右侧",
+      "lighting": "雨夜蓝色霓虹",
+      "audio": "雨声，远处列车声",
+      "dialogue": "阿宁：这是谁的相机？",
+      "taskMode": "reference",
+      "references": "[{\"assetKey\":\"character-aning\",\"role\":\"reference_image\",\"sortOrder\":1,\"usageNote\":\"保持人物一致\"},{\"assetKey\":\"scene-station\",\"role\":\"reference_image\",\"sortOrder\":2}]"
+    },
+    {
+      "sourceKey": "opening",
+      "name": "相机亮起",
+      "duration": 5,
+      "sceneKey": "scene-station",
+      "characterKeys": ["character-aning"],
+      "assetKeys": ["prop-camera"],
+      "action": "相机屏幕突然亮起",
+      "camera": "手部特写固定镜头",
+      "composition": "相机居中",
+      "lighting": "屏幕暖光照亮手指",
+      "audio": "电子启动声",
+      "dialogue": "",
+      "references": [{"assetKey":"prop-camera","role":"reference_image"}]
+    }
+  ]
+}
+` + "```"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{
+				"message": map[string]any{"content": answer},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	input := ProjectStoryboardInput{
+		Script:            "第一场：阿宁在雨夜车站捡到旧相机。",
+		ScriptRevision:    4,
+		BreakdownID:       "22",
+		AssetRevision:     7,
+		CapabilityVersion: "seedance-contract-v3",
+		Model:             "video-ds-2.0",
+		AspectRatio:       "9:16",
+		AllowedDurations:  []int{5, 10, 15},
+		TaskModes:         []string{"reference"},
+		ReferenceRoles:    []string{"reference_image", "reference_video", "reference_audio"},
+		Assets: []ProjectAssetSummary{
+			{Key: "character-aning", Type: "character", Name: "阿宁", Description: "短发女性"},
+			{Key: "scene-station", Type: "scene", Name: "雨夜车站", Description: "蓝色霓虹站台"},
+			{Key: "prop-camera", Type: "prop", Name: "旧相机", Description: "银黑色胶片相机"},
+		},
+	}
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key"})
+	first, raw, err := generator.DesignVideoProjectStoryboard(context.Background(), input)
+	if err != nil {
+		t.Fatalf("DesignVideoProjectStoryboard returned error: %v", err)
+	}
+	second, _, err := generator.DesignVideoProjectStoryboard(context.Background(), input)
+	if err != nil {
+		t.Fatalf("second DesignVideoProjectStoryboard returned error: %v", err)
+	}
+	if raw != answer {
+		t.Fatalf("expected raw storyboard output to be preserved, got %q", raw)
+	}
+	if len(first.Shots) != 2 || first.Shots[0].Duration != 10 || first.Shots[1].Duration != 5 {
+		t.Fatalf("expected two normalized shots, got %+v", first.Shots)
+	}
+	if first.Shots[0].SourceKey == first.Shots[1].SourceKey || first.Shots[0].SourceKey == "" || first.Shots[1].SourceKey == "" {
+		t.Fatalf("duplicate source keys must normalize to distinct keys, got %+v", first.Shots)
+	}
+	if first.Shots[0].SourceKey != second.Shots[0].SourceKey || first.Shots[1].SourceKey != second.Shots[1].SourceKey {
+		t.Fatalf("repeated parsing must produce stable source keys, first=%+v second=%+v", first.Shots, second.Shots)
+	}
+	shot := first.Shots[0]
+	if !shot.Enabled || shot.SceneKey != "scene-station" || len(shot.CharacterKeys) != 1 || len(shot.AssetKeys) != 2 {
+		t.Fatalf("expected scene/character/asset mappings, got %+v", shot)
+	}
+	if shot.Action == "" || shot.Camera == "" || shot.Composition == "" || shot.Lighting == "" || shot.Audio == "" || shot.Dialogue == "" {
+		t.Fatalf("expected all production fields, got %+v", shot)
+	}
+	if shot.TaskMode != "reference" || len(shot.References) != 2 || shot.References[0].AssetKey != "character-aning" || shot.References[1].SortOrder != 2 {
+		t.Fatalf("expected normalized task mode and reference intentions, got %+v", shot)
+	}
+	requestJSON, _ := json.Marshal(requestBody)
+	for _, required := range []string{"seedance-contract-v3", "character-aning", "sourceBreakdownId", "allowedDurations", "Seedance 2.0"} {
+		if !strings.Contains(string(requestJSON), required) {
+			t.Fatalf("expected storyboard request to contain %q: %s", required, string(requestJSON))
+		}
+	}
+}
+
+func TestProjectStoryboardReturnsRawOutputWhenParsingFails(t *testing.T) {
+	answer := "以下是三个分镜，但本次没有按 JSON 返回。"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{
+				"message": map[string]any{"content": answer},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key"})
+	_, raw, err := generator.DesignVideoProjectStoryboard(context.Background(), ProjectStoryboardInput{
+		Script:            "阿宁走进车站。",
+		ScriptRevision:    1,
+		BreakdownID:       "2",
+		CapabilityVersion: "capability-v1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "有效 JSON") {
+		t.Fatalf("expected helpful storyboard parse error, got %v", err)
+	}
+	if raw != answer {
+		t.Fatalf("expected failed storyboard output to be recoverable, got %q", raw)
+	}
+}
