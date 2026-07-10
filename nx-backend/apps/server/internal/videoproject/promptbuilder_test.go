@@ -68,7 +68,7 @@ func TestBuildPreviewUsesCanonicalReferenceOrder(t *testing.T) {
 	}
 }
 
-func TestBuildPreviewKeepsAutomaticReferencesAlongsideExplicitAssets(t *testing.T) {
+func TestBuildPreviewExplicitReferencesSuppressLegacyAutomaticReferences(t *testing.T) {
 	capabilities := fullPromptCapabilities()
 	shot := Shot{
 		ID:                  "9",
@@ -102,23 +102,20 @@ func TestBuildPreviewKeepsAutomaticReferencesAlongsideExplicitAssets(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(preview.Images, []string{
-		"https://cdn.example.com/explicit.png",
-		"https://cdn.example.com/previous-frame.png",
-		"https://cdn.example.com/character.png",
-		"https://cdn.example.com/scene.png",
-	}) {
+	if !reflect.DeepEqual(preview.Images, []string{"https://cdn.example.com/explicit.png"}) {
 		t.Fatalf("preview images = %#v", preview.Images)
 	}
-	if !reflect.DeepEqual(preview.Videos, []string{
-		"https://cdn.example.com/explicit.mp4",
-		"https://cdn.example.com/scene.mp4",
-	}) {
+	if !reflect.DeepEqual(preview.Videos, []string{"https://cdn.example.com/explicit.mp4"}) {
 		t.Fatalf("preview videos = %#v", preview.Videos)
 	}
-	for _, want := range []string{"图片1", "图片2", "图片3", "图片4", "视频1", "视频2"} {
+	for _, want := range []string{"图片1", "视频1"} {
 		if !strings.Contains(preview.Prompt, want) {
 			t.Fatalf("prompt missing %q: %q", want, preview.Prompt)
+		}
+	}
+	for _, unwanted := range []string{"图片2", "视频2", "上一镜头", "雨夜车站环境"} {
+		if strings.Contains(preview.Prompt, unwanted) {
+			t.Fatalf("explicit references must suppress legacy expansion %q: %q", unwanted, preview.Prompt)
 		}
 	}
 }

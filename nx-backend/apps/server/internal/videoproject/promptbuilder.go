@@ -368,6 +368,9 @@ func (b *PromptBuilder) buildCanonicalReferences(shot Shot, characters []Charact
 			maxSortOrder = asset.SortOrder
 		}
 	}
+	if len(shot.ShotAssets) > 0 {
+		return video.CanonicalizeReferences(references)
+	}
 
 	nextSortOrder := maxSortOrder + 1
 	addAutomatic := func(kind, role, rawURL, sourceType, sourceID, usageNote string) {

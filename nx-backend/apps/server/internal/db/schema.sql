@@ -681,6 +681,118 @@ CREATE TABLE IF NOT EXISTS video_compose_jobs (
 
 ALTER TABLE video_compose_jobs ADD COLUMN IF NOT EXISTS compose_input_hash TEXT NOT NULL DEFAULT '';
 
+-- 老项目无损迁移：只补空字段，不覆盖用户已经选择的资产或视频版本。
+CREATE OR REPLACE FUNCTION migrate_legacy_video_project_workflows()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  UPDATE video_project_characters c
+     SET breakdown_item_key = 'legacy:character:' || c.id::text,
+         visual_prompt = CASE WHEN c.visual_prompt = '' THEN c.description ELSE c.visual_prompt END,
+         source = 'legacy',
+         status = CASE WHEN c.reference_image_url <> '' AND c.status = 'draft' THEN 'ready' ELSE c.status END,
+         required = c.required OR EXISTS (
+           SELECT 1
+             FROM video_shots s
+            WHERE s.project_id = c.project_id
+              AND s.archived_at IS NULL
+              AND s.character_ids ? c.id::text
+         )
+   WHERE c.breakdown_item_key = '';
+
+  UPDATE video_project_scenes sc
+     SET breakdown_item_key = 'legacy:scene:' || sc.id::text,
+         visual_prompt = CASE WHEN sc.visual_prompt = '' THEN sc.description ELSE sc.visual_prompt END,
+         source = 'legacy',
+         status = CASE WHEN sc.reference_image_url <> '' AND sc.status = 'draft' THEN 'ready' ELSE sc.status END,
+         required = sc.required OR EXISTS (
+           SELECT 1
+             FROM video_shots s
+            WHERE s.project_id = sc.project_id
+              AND s.archived_at IS NULL
+              AND s.scene_id = sc.id
+         )
+   WHERE sc.breakdown_item_key = '';
+
+  INSERT INTO video_project_asset_candidates (
+    project_id, target_type, target_id, prompt, image_asset_id, image_url,
+    source, status, selected
+  )
+  SELECT c.project_id, 'character', c.id,
+         COALESCE(NULLIF(c.visual_prompt,''), c.description),
+         va.asset_id, c.reference_image_url, 'legacy', 'ready', true
+    FROM video_project_characters c
+    LEFT JOIN video_assets va ON va.id = c.asset_id
+   WHERE c.reference_image_url <> ''
+     AND NOT EXISTS (
+       SELECT 1
+         FROM video_project_asset_candidates candidate
+        WHERE candidate.target_type = 'character'
+          AND candidate.target_id = c.id
+          AND candidate.source = 'legacy'
+     )
+  ON CONFLICT (target_type, target_id) WHERE selected=true DO NOTHING;
+
+  INSERT INTO video_project_asset_candidates (
+    project_id, target_type, target_id, prompt, image_asset_id, image_url,
+    source, status, selected
+  )
+  SELECT sc.project_id, 'scene', sc.id,
+         COALESCE(NULLIF(sc.visual_prompt,''), sc.description),
+         va.asset_id, sc.reference_image_url, 'legacy', 'ready', true
+    FROM video_project_scenes sc
+    LEFT JOIN video_assets va ON va.id = sc.asset_id
+   WHERE sc.reference_image_url <> ''
+     AND NOT EXISTS (
+       SELECT 1
+         FROM video_project_asset_candidates candidate
+        WHERE candidate.target_type = 'scene'
+          AND candidate.target_id = sc.id
+          AND candidate.source = 'legacy'
+     )
+  ON CONFLICT (target_type, target_id) WHERE selected=true DO NOTHING;
+
+  WITH ranked AS (
+    SELECT id,
+           row_number() OVER (PARTITION BY shot_id ORDER BY create_time, id) AS ordinal
+      FROM video_shot_assets
+     WHERE reference_role = '' OR source_type = '' OR source_id = ''
+  )
+  UPDATE video_shot_assets asset
+     SET reference_role = CASE
+           WHEN asset.reference_role <> '' THEN asset.reference_role
+           WHEN asset.asset_type = 'video' THEN 'reference_video'
+           WHEN asset.asset_type = 'audio' THEN 'reference_audio'
+           ELSE 'reference_image'
+         END,
+         sort_order = ranked.ordinal,
+         source_type = CASE WHEN asset.source_type = '' THEN 'legacy_shot_asset' ELSE asset.source_type END,
+         source_id = CASE WHEN asset.source_id = '' THEN ranked.id::text ELSE asset.source_id END
+    FROM ranked
+   WHERE asset.id = ranked.id;
+
+  UPDATE video_shots s
+     SET selected_generation_id = s.generation_id
+    FROM video_generations g
+   WHERE s.selected_generation_id IS NULL
+     AND s.generation_id = g.id
+     AND g.status IN ('completed','succeeded');
+END;
+$$;
+
+SELECT migrate_legacy_video_project_workflows();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_video_shot_assets_exact_reference
+  ON video_shot_assets(
+    shot_id,
+    asset_type,
+    reference_role,
+    COALESCE(source_type,''),
+    COALESCE(source_id,''),
+    object_url
+  );
+
 CREATE TABLE IF NOT EXISTS rag_documents (
   id          BIGSERIAL PRIMARY KEY,
   title       TEXT NOT NULL DEFAULT '',
