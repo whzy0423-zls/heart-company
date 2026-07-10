@@ -5,6 +5,7 @@ import (
 	"math"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestValidateGenerateRequestRejectsStaleCapabilityVersion(t *testing.T) {
@@ -436,6 +437,61 @@ func TestValidateGenerateRequestAcceptsAnyFinitePositiveMediaDuration(t *testing
 
 	if err := ValidateGenerateRequest(req, caps); err != nil {
 		t.Fatalf("finite positive duration must be accepted even below nanosecond precision: %v", err)
+	}
+}
+
+func TestDurationNanosecondsRejectsFloatBoundaryOverflow(t *testing.T) {
+	const maxInt64 = int64(^uint64(0) >> 1)
+	boundary := float64(maxInt64) / float64(time.Second)
+	below := math.Nextafter(boundary, 0)
+	above := math.Nextafter(boundary, math.Inf(1))
+
+	nanoseconds, ok := durationNanoseconds(below)
+	if !ok || nanoseconds <= 0 {
+		t.Fatalf("next float below boundary must remain representable: seconds=%v nanos=%d ok=%v", below, nanoseconds, ok)
+	}
+
+	for _, tt := range []struct {
+		name    string
+		seconds float64
+	}{
+		{name: "rounded max int64 boundary", seconds: boundary},
+		{name: "next float above boundary", seconds: above},
+		{name: "largest finite float", seconds: math.MaxFloat64},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			nanoseconds, ok := durationNanoseconds(tt.seconds)
+			if ok || nanoseconds != 0 {
+				t.Fatalf("unrepresentable seconds must be rejected before int64 conversion: seconds=%v nanos=%d ok=%v", tt.seconds, nanoseconds, ok)
+			}
+		})
+	}
+}
+
+func TestValidateGenerateRequestRejectsUnrepresentableMediaDuration(t *testing.T) {
+	const maxInt64 = int64(^uint64(0) >> 1)
+	boundary := float64(maxInt64) / float64(time.Second)
+	values := []float64{
+		boundary,
+		math.Nextafter(boundary, math.Inf(1)),
+		math.MaxFloat64,
+	}
+	caps := ResolveCapabilities(CapabilityConfig{Model: "video-ds-2.0", GatewayContract: LegacyFlatContract()})
+
+	for _, duration := range values {
+		req := validLegacyGenerateRequest(caps)
+		req.References = []Reference{{
+			ID:              "video-1",
+			Kind:            "video",
+			Role:            "reference_video",
+			URL:             "https://cdn.example.com/1.mp4",
+			DurationSeconds: &duration,
+		}}
+
+		validationErr := assertValidationCode(t, ValidateGenerateRequest(req, caps), "media_duration_invalid")
+		if validationErr.Field != "references[0].durationSeconds" {
+			t.Fatalf("field = %q", validationErr.Field)
+		}
 	}
 }
 

@@ -159,7 +159,7 @@ func ValidateGenerateRequestWithWarnings(req GenerateRequest, caps Capabilities)
 				return report, validationError(
 					"media_duration_invalid",
 					fmt.Sprintf("references[%d].durationSeconds", index),
-					"素材时长必须是大于 0 的有限秒数。",
+					"素材时长必须是大于 0 且可安全表示的有限秒数。",
 					"重新读取素材元数据并填写有效 durationSeconds。",
 					nil,
 				)
@@ -337,17 +337,23 @@ const nanosecondsPerSecond = 1_000_000_000
 
 func durationNanoseconds(seconds float64) (int64, bool) {
 	const maxInt64 = int64(^uint64(0) >> 1)
-	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > float64(maxInt64)/nanosecondsPerSecond {
+	maxNanosecondsFloat := math.Nextafter(float64(maxInt64), 0)
+	maxSeconds := maxNanosecondsFloat / nanosecondsPerSecond
+	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > maxSeconds {
 		return 0, false
 	}
 	nanoseconds := math.Round(seconds * nanosecondsPerSecond)
-	if nanoseconds > float64(maxInt64) {
+	if nanoseconds > maxNanosecondsFloat {
 		return 0, false
 	}
 	if nanoseconds < 1 {
 		nanoseconds = 1
 	}
-	return int64(nanoseconds), true
+	result := int64(nanoseconds)
+	if result <= 0 {
+		return 0, false
+	}
+	return result, true
 }
 
 func limitNanoseconds(seconds float64) int64 {
