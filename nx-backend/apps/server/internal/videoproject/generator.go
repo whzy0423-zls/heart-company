@@ -19,16 +19,31 @@ import (
 // Generator 分镜视频生成器：调用 PromptBuilder 组装参数，复用现有 video.Generate，
 // 生成完成后自动提取尾帧供下一镜头继承。
 type Generator struct {
-	promptBuilder  *PromptBuilder
-	store          *Store
-	uploader       storage.ObjectUploader
-	uploads        *uploadasset.Store
-	videoStore     *video.Store
-	frameExtractor *FrameExtractor
+	promptBuilder      *PromptBuilder
+	store              *Store
+	uploader           storage.ObjectUploader
+	uploads            *uploadasset.Store
+	videoStore         normalizedVideoStore
+	frameExtractor     *FrameExtractor
+	buildPreview       func(context.Context, string) (ShotPreview, error)
+	loadShot           func(context.Context, string) (Shot, error)
+	markShotGenerating func(context.Context, string, string, string, []string, []string, []string) error
+	startMonitor       func(string, string)
 }
 
-func NewGenerator(store *Store, videoStore *video.Store, uploads *uploadasset.Store, uploader storage.ObjectUploader) *Generator {
-	return &Generator{
+type normalizedVideoStore interface {
+	Capabilities(model string) video.Capabilities
+	GenerateNormalized(ctx context.Context, request video.GenerateRequest, scope video.GenerationContext) (video.Generation, error)
+	Refresh(ctx context.Context, id string) (video.Generation, error)
+}
+
+type GenerateShotInput struct {
+	RequestKey        string `json:"requestKey"`
+	CapabilityVersion string `json:"capabilityVersion"`
+}
+
+func NewGenerator(store *Store, videoStore normalizedVideoStore, uploads *uploadasset.Store, uploader storage.ObjectUploader) *Generator {
+	generator := &Generator{
 		promptBuilder:  NewPromptBuilder(store),
 		store:          store,
 		uploader:       uploader,
@@ -36,13 +51,24 @@ func NewGenerator(store *Store, videoStore *video.Store, uploads *uploadasset.St
 		videoStore:     videoStore,
 		frameExtractor: NewFrameExtractor("/tmp"),
 	}
+	generator.buildPreview = generator.promptBuilder.BuildPreview
+	generator.loadShot = store.GetShot
+	generator.markShotGenerating = store.MarkShotGenerating
+	generator.startMonitor = func(shotID, generationID string) {
+		go generator.monitorGeneration(shotID, generationID)
+	}
+	return generator
 }
 
 // GenerateShot 提交分镜视频生成任务，立即返回 video.Generation（异步生成）。
 // 后台监控完成后自动提取尾帧。
 func (g *Generator) GenerateShot(ctx context.Context, shotID string) (video.Generation, error) {
+	return g.GenerateShotWithInput(ctx, shotID, GenerateShotInput{})
+}
+
+func (g *Generator) GenerateShotWithInput(ctx context.Context, shotID string, input GenerateShotInput) (video.Generation, error) {
 	// 1. 构建预览（提示词+参考素材）
-	preview, err := g.promptBuilder.BuildPreview(ctx, shotID)
+	preview, err := g.buildPreview(ctx, shotID)
 	if err != nil {
 		return video.Generation{}, err
 	}
@@ -51,41 +77,156 @@ func (g *Generator) GenerateShot(ctx context.Context, shotID string) (video.Gene
 	if !preview.Validation.IsValid {
 		return video.Generation{}, fmt.Errorf("提示词验证失败：%s", strings.Join(preview.Validation.Errors, "; "))
 	}
-	if err := validateGatewayReferenceURLs(preview.Images, preview.Videos, preview.Audios); err != nil {
-		return video.Generation{}, err
-	}
-
 	// 3. 获取 Shot 信息
-	shot, err := g.store.GetShot(ctx, shotID)
+	shot, err := g.loadShot(ctx, shotID)
 	if err != nil {
 		return video.Generation{}, err
 	}
 
-	// 4. 调用现有的视频生成 API（复用现有逻辑，不改动）
-	input := video.GenerateInput{
-		AspectRatio: shot.AspectRatio,
-		Audios:      preview.Audios,
-		Images:      preview.Images,
-		Model:       shot.VideoModel,
-		Prompt:      preview.Prompt,
-		Seconds:     shot.Duration,
-		Videos:      preview.Videos,
+	capabilities := g.videoStore.Capabilities(shot.VideoModel)
+	if strings.TrimSpace(input.RequestKey) == "" {
+		input.RequestKey, err = video.NewRequestKey()
+		if err != nil {
+			return video.Generation{}, err
+		}
+	}
+	if strings.TrimSpace(input.CapabilityVersion) == "" {
+		input.CapabilityVersion = capabilities.CapabilityVersion
+	}
+	request, images, videos, audios, err := buildShotGenerateRequest(shot, preview, capabilities, input)
+	if err != nil {
+		return video.Generation{}, err
+	}
+	if err := validateGatewayReferenceURLs(images, videos, audios); err != nil {
+		return video.Generation{}, err
 	}
 
-	generation, err := g.videoStore.Generate(ctx, input)
+	// 4. 所有项目生成统一走 video.Store 的规范化校验与提交状态机。
+	generation, err := g.videoStore.GenerateNormalized(ctx, request, video.GenerationContext{
+		ProjectID: shot.ProjectID,
+		ShotID:    shot.ID,
+	})
 	if err != nil {
 		return video.Generation{}, err
 	}
 
 	// 5. 记录到 Shot
-	if err := g.store.MarkShotGenerating(ctx, shotID, generation.ID, preview.Prompt, preview.Images, preview.Videos, preview.Audios); err != nil {
+	if err := g.markShotGenerating(ctx, shotID, generation.ID, preview.Prompt, images, videos, audios); err != nil {
 		return video.Generation{}, err
 	}
 
 	// 6. 异步监控生成状态
-	go g.monitorGeneration(shotID, generation.ID)
+	if g.startMonitor != nil {
+		g.startMonitor(shotID, generation.ID)
+	}
 
 	return generation, nil
+}
+
+func buildShotGenerateRequest(shot Shot, preview ShotPreview, capabilities video.Capabilities, input GenerateShotInput) (video.GenerateRequest, []string, []string, []string, error) {
+	references := cloneVideoReferences(preview.References)
+	if len(references) == 0 {
+		references = previewReferences(shot.ID, preview.Images, preview.Videos, preview.Audios)
+	}
+	canonical, err := video.CanonicalizeReferences(references)
+	if err != nil {
+		return video.GenerateRequest{}, nil, nil, nil, err
+	}
+	images, videos, audios := canonicalPreviewURLs(canonical)
+	generateAudio, err := parseGenerateAudioMode(shot.SoundAndPictureTogether)
+	if err != nil {
+		return video.GenerateRequest{}, nil, nil, nil, err
+	}
+	resolution := normalizeVideoResolution(shot.VideoResolution)
+	if !capabilities.SupportsResolution {
+		resolution = ""
+	}
+	if !capabilities.SupportsGenerateAudio {
+		generateAudio = nil
+	}
+	request := video.GenerateRequest{
+		Model:             strings.TrimSpace(capabilities.Model),
+		Prompt:            strings.TrimSpace(preview.Prompt),
+		Duration:          shot.Duration,
+		AspectRatio:       strings.TrimSpace(shot.AspectRatio),
+		Resolution:        resolution,
+		GenerateAudio:     generateAudio,
+		TaskMode:          "reference",
+		References:        make([]video.Reference, 0, len(canonical.References)),
+		RequestKey:        strings.TrimSpace(input.RequestKey),
+		CapabilityVersion: strings.TrimSpace(input.CapabilityVersion),
+	}
+	for _, reference := range canonical.References {
+		request.References = append(request.References, reference.Reference)
+	}
+	return request, images, videos, audios, nil
+}
+
+func previewReferences(shotID string, images, videos, audios []string) []video.Reference {
+	references := make([]video.Reference, 0, len(images)+len(videos)+len(audios))
+	add := func(kind, role string, urls []string) {
+		for index, rawURL := range urls {
+			references = append(references, video.Reference{
+				ID:         fmt.Sprintf("%s-%d", kind, index+1),
+				Kind:       kind,
+				Role:       role,
+				URL:        strings.TrimSpace(rawURL),
+				SortOrder:  len(references),
+				SourceType: "project_preview",
+				SourceID:   shotID,
+			})
+		}
+	}
+	add("image", "reference_image", images)
+	add("video", "reference_video", videos)
+	add("audio", "reference_audio", audios)
+	return references
+}
+
+func cloneVideoReferences(references []video.Reference) []video.Reference {
+	cloned := make([]video.Reference, 0, len(references))
+	for _, reference := range references {
+		copyReference := reference
+		if reference.DurationSeconds != nil {
+			duration := *reference.DurationSeconds
+			copyReference.DurationSeconds = &duration
+		}
+		cloned = append(cloned, copyReference)
+	}
+	return cloned
+}
+
+func canonicalPreviewURLs(references video.CanonicalReferences) (images, videos, audios []string) {
+	for _, reference := range references.References {
+		switch reference.Kind {
+		case "image":
+			images = append(images, reference.URL)
+		case "video":
+			videos = append(videos, reference.URL)
+		case "audio":
+			audios = append(audios, reference.URL)
+		}
+	}
+	return images, videos, audios
+}
+
+func parseGenerateAudioMode(raw string) (*bool, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return nil, nil
+	case "enabled":
+		value := true
+		return &value, nil
+	case "disabled":
+		value := false
+		return &value, nil
+	default:
+		return nil, fmt.Errorf("无效的音画同出模式")
+	}
+}
+
+func normalizeVideoResolution(raw string) string {
+	return strings.ToUpper(strings.TrimSpace(raw))
 }
 
 func validateGatewayReferenceURLs(images, videos, audios []string) error {

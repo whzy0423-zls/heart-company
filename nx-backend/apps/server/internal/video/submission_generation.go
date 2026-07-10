@@ -19,6 +19,9 @@ type generationSubmissionSnapshot struct {
 	Prompt            string               `json:"prompt"`
 	Seconds           int                  `json:"seconds"`
 	AspectRatio       string               `json:"aspectRatio"`
+	Resolution        string               `json:"resolution"`
+	GenerateAudio     *bool                `json:"generateAudio"`
+	TaskMode          string               `json:"taskMode"`
 	Images            []string             `json:"images"`
 	Videos            []string             `json:"videos"`
 	Audios            []string             `json:"audios"`
@@ -48,6 +51,11 @@ type ReconciliationResult struct {
 	Generation Generation `json:"generation"`
 }
 
+type GenerationContext struct {
+	ProjectID string `json:"projectId"`
+	ShotID    string `json:"shotId"`
+}
+
 type generationRecordInput struct {
 	Model       string
 	Prompt      string
@@ -73,6 +81,22 @@ func submissionPersistenceContext(ctx context.Context) (context.Context, context
 	return context.WithTimeout(base, submissionPersistenceTimeout)
 }
 
+func (s *Store) Capabilities(model string) Capabilities {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = s.defaultModel
+	}
+	return ResolveCapabilities(CapabilityConfig{
+		Model:           model,
+		ModelProfile:    s.modelProfile,
+		GatewayContract: s.gatewayContract,
+	})
+}
+
+func NewRequestKey() (string, error) {
+	return newVideoRequestKey()
+}
+
 func (s *Store) prepareGenerationSubmission(input GenerateInput, model, prompt string, seconds int, aspectRatio string, images, videos, audios []string) (preparedGenerationSubmission, error) {
 	requestKey := strings.TrimSpace(input.RequestKey)
 	if requestKey == "" {
@@ -86,36 +110,47 @@ func (s *Store) prepareGenerationSubmission(input GenerateInput, model, prompt s
 		return preparedGenerationSubmission{}, err
 	}
 
-	references, err := CanonicalizeReferences(legacyGatewayReferences(images, videos, audios))
+	rawReferences := input.References
+	if len(rawReferences) == 0 {
+		rawReferences = legacyGatewayReferences(images, videos, audios)
+	}
+	references, err := CanonicalizeReferences(rawReferences)
 	if err != nil {
 		return preparedGenerationSubmission{}, err
 	}
-	capabilities := ResolveCapabilities(CapabilityConfig{
-		Model:           model,
-		ModelProfile:    s.modelProfile,
-		GatewayContract: s.gatewayContract,
-	})
+	capabilities := s.Capabilities(model)
 	capabilityVersion := strings.TrimSpace(input.CapabilityVersion)
 	if capabilityVersion == "" {
 		capabilityVersion = capabilities.CapabilityVersion
-	} else if capabilityVersion != capabilities.CapabilityVersion {
-		return preparedGenerationSubmission{}, validationError(
-			"capability_version_stale",
-			"capabilityVersion",
-			"视频模型能力已经变化，请重新确认生成参数。",
-			"刷新模型能力后重新提交。",
-			&capabilities,
-		)
+	}
+	taskMode := strings.TrimSpace(input.TaskMode)
+	if taskMode == "" {
+		taskMode = "reference"
 	}
 	request := GenerateRequest{
 		Model:             model,
 		Prompt:            prompt,
 		Duration:          seconds,
 		AspectRatio:       aspectRatio,
-		TaskMode:          "reference",
+		Resolution:        strings.TrimSpace(input.Resolution),
+		GenerateAudio:     cloneBool(input.GenerateAudio),
+		TaskMode:          taskMode,
 		References:        canonicalReferenceSnapshots(references),
 		RequestKey:        requestKey,
 		CapabilityVersion: capabilityVersion,
+		Seed:              input.Seed,
+		CameraFixed:       input.CameraFixed,
+	}
+	return s.prepareNormalizedGenerationSubmission(request, GenerationContext{
+		ProjectID: input.ProjectID,
+		ShotID:    input.ShotID,
+	}, references)
+}
+
+func (s *Store) prepareNormalizedGenerationSubmission(request GenerateRequest, scope GenerationContext, references CanonicalReferences) (preparedGenerationSubmission, error) {
+	capabilities := s.Capabilities(request.Model)
+	if err := ValidateGenerateRequest(request, capabilities); err != nil {
+		return preparedGenerationSubmission{}, err
 	}
 	contract, err := validatedGatewayContract(s.gatewayContract)
 	if err != nil {
@@ -125,16 +160,20 @@ func (s *Store) prepareGenerationSubmission(input GenerateInput, model, prompt s
 	if err != nil {
 		return preparedGenerationSubmission{}, err
 	}
+	images, videos, audios := canonicalReferenceURLs(references)
 	snapshot, err := json.Marshal(generationSubmissionSnapshot{
-		Model:             model,
-		Prompt:            prompt,
-		Seconds:           seconds,
-		AspectRatio:       aspectRatio,
+		Model:             request.Model,
+		Prompt:            request.Prompt,
+		Seconds:           request.Duration,
+		AspectRatio:       request.AspectRatio,
+		Resolution:        request.Resolution,
+		GenerateAudio:     cloneBool(request.GenerateAudio),
+		TaskMode:          request.TaskMode,
 		Images:            append([]string(nil), images...),
 		Videos:            append([]string(nil), videos...),
 		Audios:            append([]string(nil), audios...),
 		References:        append([]CanonicalReference(nil), references.References...),
-		CapabilityVersion: capabilityVersion,
+		CapabilityVersion: request.CapabilityVersion,
 		GatewayContract:   contract.Name,
 		GatewayVersion:    contract.Version,
 		GatewayPayload:    payload,
@@ -151,14 +190,250 @@ func (s *Store) prepareGenerationSubmission(input GenerateInput, model, prompt s
 		references:  references,
 		snapshot:    snapshot,
 		requestHash: hashGenerationValue(snapshot),
-		promptHash:  hashGenerationValue([]byte(prompt)),
+		promptHash:  hashGenerationValue([]byte(request.Prompt)),
 		imageURL:    imageURL,
 		images:      append([]string(nil), images...),
 		videos:      append([]string(nil), videos...),
 		audios:      append([]string(nil), audios...),
-		projectID:   strings.TrimSpace(input.ProjectID),
-		shotID:      strings.TrimSpace(input.ShotID),
+		projectID:   strings.TrimSpace(scope.ProjectID),
+		shotID:      strings.TrimSpace(scope.ShotID),
 	}, nil
+}
+
+func (s *Store) GenerateNormalized(ctx context.Context, request GenerateRequest, scope GenerationContext) (Generation, error) {
+	request.Model = strings.TrimSpace(request.Model)
+	if request.Model == "" {
+		request.Model = s.defaultModel
+	}
+	request.Prompt = strings.TrimSpace(request.Prompt)
+	request.AspectRatio = strings.TrimSpace(request.AspectRatio)
+	request.Resolution = strings.TrimSpace(request.Resolution)
+	request.TaskMode = strings.TrimSpace(request.TaskMode)
+	if _, err := normalizeSubmissionRequestKey(request.RequestKey); err != nil {
+		return Generation{}, err
+	}
+	references, err := CanonicalizeReferences(request.References)
+	if err != nil {
+		return Generation{}, err
+	}
+	request.References = canonicalReferenceSnapshots(references)
+	existing, found, err := s.existingNormalizedIntent(ctx, request, scope, references)
+	if err != nil {
+		return Generation{}, err
+	}
+	if found && existing.Status != SubmissionPrepared {
+		return s.existingSubmissionGeneration(ctx, existing)
+	}
+	prepared, err := s.prepareNormalizedGenerationSubmission(request, scope, references)
+	if err != nil {
+		return Generation{}, err
+	}
+	return s.submitPreparedGeneration(ctx, prepared)
+}
+
+func (s *Store) existingNormalizedIntent(ctx context.Context, request GenerateRequest, scope GenerationContext, references CanonicalReferences) (Submission, bool, error) {
+	submission, err := s.submissions.GetByRequestKey(ctx, request.RequestKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Submission{}, false, nil
+	}
+	if err != nil {
+		return Submission{}, false, err
+	}
+	var snapshot generationSubmissionSnapshot
+	if err := json.Unmarshal(submission.RequestSnapshot, &snapshot); err != nil {
+		return Submission{}, false, submissionValidationError("request_snapshot_invalid", "requestSnapshot", "已保存的视频生成请求快照无效。")
+	}
+	_, projectID, err := normalizeSubmissionID("projectId", scope.ProjectID, true)
+	if err != nil {
+		return Submission{}, false, err
+	}
+	_, shotID, err := normalizeSubmissionID("shotId", scope.ShotID, true)
+	if err != nil {
+		return Submission{}, false, err
+	}
+	if snapshot.Model != request.Model ||
+		snapshot.Prompt != request.Prompt ||
+		snapshot.Seconds != request.Duration ||
+		snapshot.AspectRatio != request.AspectRatio ||
+		snapshot.Resolution != request.Resolution ||
+		!equalOptionalBool(snapshot.GenerateAudio, request.GenerateAudio) ||
+		snapshot.TaskMode != request.TaskMode ||
+		!equalCanonicalReferences(snapshot.References, references.References) ||
+		submission.ProjectID != projectID ||
+		submission.ShotID != shotID {
+		return Submission{}, false, &RequestKeyConflictError{
+			Code:       "request_key_payload_conflict",
+			RequestKey: submission.RequestKey,
+			Existing:   submission,
+		}
+	}
+	if submission.Status == SubmissionPrepared {
+		capabilities := s.Capabilities(request.Model)
+		if snapshot.CapabilityVersion != capabilities.CapabilityVersion {
+			return Submission{}, false, validationError(
+				"capability_version_stale",
+				"capabilityVersion",
+				"视频模型能力已经变化，请重新确认生成参数。",
+				"取消旧的待提交记录并创建新的生成版本。",
+				&capabilities,
+			)
+		}
+	}
+	return submission, true, nil
+}
+
+func canonicalReferenceURLs(references CanonicalReferences) (images, videos, audios []string) {
+	images = []string{}
+	videos = []string{}
+	audios = []string{}
+	for _, reference := range references.References {
+		switch reference.Kind {
+		case "image":
+			images = append(images, reference.URL)
+		case "video":
+			videos = append(videos, reference.URL)
+		case "audio":
+			audios = append(audios, reference.URL)
+		}
+	}
+	return images, videos, audios
+}
+
+func cloneBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copyValue := *value
+	return &copyValue
+}
+
+func equalOptionalBool(left, right *bool) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func equalCanonicalReferences(left, right []CanonicalReference) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].ID != right[index].ID ||
+			left[index].Kind != right[index].Kind ||
+			left[index].Role != right[index].Role ||
+			left[index].URL != right[index].URL ||
+			left[index].SortOrder != right[index].SortOrder ||
+			left[index].SourceType != right[index].SourceType ||
+			left[index].SourceID != right[index].SourceID ||
+			left[index].Ordinal != right[index].Ordinal ||
+			left[index].Label != right[index].Label ||
+			!equalOptionalFloat(left[index].DurationSeconds, right[index].DurationSeconds) {
+			return false
+		}
+	}
+	return true
+}
+
+func equalOptionalFloat(left, right *float64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func (s *Store) submitPreparedGeneration(ctx context.Context, prepared preparedGenerationSubmission) (Generation, error) {
+	submission, _, err := s.submissions.Prepare(ctx, PrepareSubmissionInput{
+		RequestKey:        prepared.request.RequestKey,
+		ProjectID:         prepared.projectID,
+		ShotID:            prepared.shotID,
+		RequestHash:       prepared.requestHash,
+		PromptHash:        prepared.promptHash,
+		CapabilityVersion: prepared.request.CapabilityVersion,
+		RequestSnapshot:   prepared.snapshot,
+	})
+	if err != nil {
+		return Generation{}, err
+	}
+	submission, claimed, err := s.submissions.ClaimSubmitting(ctx, submission.RequestKey)
+	if err != nil {
+		return Generation{}, err
+	}
+	if !claimed {
+		return s.existingSubmissionGeneration(ctx, submission)
+	}
+
+	task, err := s.client.CreateNormalizedTask(ctx, prepared.request, prepared.references)
+	persistenceCtx, cancelPersistence := submissionPersistenceContext(ctx)
+	defer cancelPersistence()
+	if err != nil {
+		var ambiguous *AmbiguousTransportError
+		if errors.As(err, &ambiguous) {
+			unknown, transitionErr := s.submissions.Transition(persistenceCtx, submission.RequestKey, SubmissionSubmitting, SubmissionUnknownOutcome, SubmissionTransition{})
+			if transitionErr != nil {
+				return Generation{}, &UnknownOutcomeError{
+					RequestKey:   submission.RequestKey,
+					SubmissionID: submission.ID,
+					Persisted:    false,
+				}
+			}
+			return Generation{}, &UnknownOutcomeError{RequestKey: unknown.RequestKey, SubmissionID: unknown.ID, Persisted: true}
+		}
+		terminalStatus := SubmissionCancelled
+		outcomeCode := "request_not_submitted"
+		var createErr *CreateTaskError
+		if errors.As(err, &createErr) {
+			outcomeCode = createErr.Code
+			if createErr.Code == "gateway_request_rejected" {
+				terminalStatus = SubmissionFailed
+			}
+		}
+		if _, transitionErr := s.submissions.Transition(persistenceCtx, submission.RequestKey, SubmissionSubmitting, terminalStatus, SubmissionTransition{ErrorMessage: err.Error()}); transitionErr != nil {
+			return Generation{}, &SubmissionPersistenceError{
+				RequestKey:     submission.RequestKey,
+				SubmissionID:   submission.ID,
+				IntendedStatus: terminalStatus,
+				OutcomeCode:    outcomeCode,
+			}
+		}
+		return Generation{}, err
+	}
+	recordedSubmission, err := s.submissions.RecordUpstreamTask(persistenceCtx, submission.RequestKey, task.TaskID)
+	if err != nil {
+		return Generation{}, &LocalLinkageError{RequestKey: submission.RequestKey, SubmissionID: submission.ID, TaskID: task.TaskID}
+	}
+	submission = recordedSubmission
+	status := normalizeStatus(task.Status)
+	id, err := insertGenerationRecord(persistenceCtx, s.db, generationRecordInput{
+		Model:       prepared.request.Model,
+		Prompt:      prepared.request.Prompt,
+		ImageURL:    prepared.imageURL,
+		Images:      prepared.images,
+		Videos:      prepared.videos,
+		Audios:      prepared.audios,
+		TaskID:      task.TaskID,
+		Seconds:     prepared.request.Duration,
+		AspectRatio: prepared.request.AspectRatio,
+		Status:      status,
+		ProjectID:   prepared.projectID,
+		ShotID:      prepared.shotID,
+	})
+	if err != nil {
+		return Generation{}, &LocalLinkageError{RequestKey: submission.RequestKey, SubmissionID: submission.ID, TaskID: task.TaskID}
+	}
+	acceptedSubmission, err := s.submissions.Transition(persistenceCtx, submission.RequestKey, SubmissionSubmitting, SubmissionAccepted, SubmissionTransition{
+		UpstreamTaskID: task.TaskID,
+		GenerationID:   id,
+	})
+	if err != nil {
+		return Generation{}, &LocalLinkageError{RequestKey: submission.RequestKey, SubmissionID: submission.ID, TaskID: task.TaskID}
+	}
+	submission = acceptedSubmission
+	generation, err := s.Generation(persistenceCtx, id)
+	if err != nil {
+		return Generation{}, &LocalLinkageError{RequestKey: submission.RequestKey, SubmissionID: submission.ID, TaskID: task.TaskID}
+	}
+	return attachSubmission(generation, submission), nil
 }
 
 func (s *Store) existingGenerateIntent(
@@ -194,16 +469,48 @@ func (s *Store) existingGenerateIntent(
 	if err != nil {
 		return Submission{}, false, err
 	}
+	rawReferences := input.References
+	if len(rawReferences) == 0 {
+		rawReferences = legacyGatewayReferences(images, videos, audios)
+	}
+	canonicalReferences, err := CanonicalizeReferences(rawReferences)
+	if err != nil {
+		return Submission{}, false, err
+	}
+	canonicalImages, canonicalVideos, canonicalAudios := canonicalReferenceURLs(canonicalReferences)
 	modelChanged := strings.TrimSpace(input.Model) != "" && snapshot.Model != model
 	secondsChanged := input.Seconds != 0 && snapshot.Seconds != seconds
 	aspectRatioChanged := strings.TrimSpace(input.AspectRatio) != "" && snapshot.AspectRatio != aspectRatio
+	resolution := strings.TrimSpace(input.Resolution)
+	resolutionChanged := snapshot.Resolution != resolution
+	generateAudioChanged := !equalOptionalBool(snapshot.GenerateAudio, input.GenerateAudio)
+	taskMode := strings.TrimSpace(input.TaskMode)
+	if taskMode == "" {
+		taskMode = "reference"
+	}
+	snapshotTaskMode := snapshot.TaskMode
+	if snapshotTaskMode == "" {
+		// Historical snapshots were always reference-generation requests but did
+		// not persist the explicit mode.
+		snapshotTaskMode = "reference"
+	}
+	taskModeChanged := snapshotTaskMode != taskMode
+	referencesChanged := false
+	if len(snapshot.References) > 0 {
+		referencesChanged = !equalCanonicalReferences(snapshot.References, canonicalReferences.References)
+	} else {
+		referencesChanged = !slices.Equal(snapshot.Images, canonicalImages) ||
+			!slices.Equal(snapshot.Videos, canonicalVideos) ||
+			!slices.Equal(snapshot.Audios, canonicalAudios)
+	}
 	if modelChanged ||
 		snapshot.Prompt != prompt ||
 		secondsChanged ||
 		aspectRatioChanged ||
-		!slices.Equal(snapshot.Images, images) ||
-		!slices.Equal(snapshot.Videos, videos) ||
-		!slices.Equal(snapshot.Audios, audios) ||
+		resolutionChanged ||
+		generateAudioChanged ||
+		taskModeChanged ||
+		referencesChanged ||
 		submission.ProjectID != projectID ||
 		submission.ShotID != shotID {
 		return Submission{}, false, &RequestKeyConflictError{

@@ -143,7 +143,8 @@ func TestVideoProjectBatchGenerateRouteCanLimitToSelectedShots(t *testing.T) {
 
 	for _, want := range []string{
 		"batchGenerateInput",
-		"ShotIDs []string",
+		"ShotIDs",
+		`json:"shotIds"`,
 		"json.NewDecoder(r.Body).Decode",
 		"GenerateSelectedShots",
 	} {

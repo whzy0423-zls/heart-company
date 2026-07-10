@@ -654,13 +654,30 @@ func (s *Server) videoShotPreview(w http.ResponseWriter, r *http.Request) {
 }
 
 // 分镜生成（核心：智能提示词+参考素材+自动提取尾帧）
+type generateVideoShotInput struct {
+	RequestKey        string `json:"requestKey"`
+	CapabilityVersion string `json:"capabilityVersion"`
+}
+
+func (input generateVideoShotInput) projectInput() videoproject.GenerateShotInput {
+	return videoproject.GenerateShotInput{
+		RequestKey:        strings.TrimSpace(input.RequestKey),
+		CapabilityVersion: strings.TrimSpace(input.CapabilityVersion),
+	}
+}
+
 func (s *Server) generateVideoShot(w http.ResponseWriter, r *http.Request) {
 	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/shots-generate/"), "/")
 	if id == "" {
 		httpx.Fail(w, http.StatusBadRequest, "缺少分镜 ID")
 		return
 	}
-	generation, err := s.videoProjectGenerator().GenerateShot(r.Context(), id)
+	var input generateVideoShotInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		httpx.Fail(w, http.StatusBadRequest, "请求参数错误")
+		return
+	}
+	generation, err := s.videoProjectGenerator().GenerateShotWithInput(r.Context(), id, input.projectInput())
 	if err != nil {
 		log.Printf("generate shot failed: %v", err)
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
@@ -670,7 +687,16 @@ func (s *Server) generateVideoShot(w http.ResponseWriter, r *http.Request) {
 }
 
 type batchGenerateInput struct {
-	ShotIDs []string `json:"shotIds"`
+	ShotIDs            []string          `json:"shotIds"`
+	RequestKeys        map[string]string `json:"requestKeys"`
+	CapabilityVersions map[string]string `json:"capabilityVersions"`
+}
+
+func (input batchGenerateInput) options() videoproject.BatchGenerateOptions {
+	return videoproject.BatchGenerateOptions{
+		RequestKeys:        input.RequestKeys,
+		CapabilityVersions: input.CapabilityVersions,
+	}
 }
 
 // 批量生成项目所有分镜（顺序生成）
@@ -697,11 +723,11 @@ func (s *Server) batchGenerateShots(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if len(input.ShotIDs) > 0 {
-		result, err = s.videoProjectBatchGenerator().GenerateSelectedShots(r.Context(), id, input.ShotIDs, mode == "parallel")
+		result, err = s.videoProjectBatchGenerator().GenerateSelectedShotsWithOptions(r.Context(), id, input.ShotIDs, mode == "parallel", input.options())
 	} else if mode == "parallel" {
-		result, err = s.videoProjectBatchGenerator().GenerateAllShotsParallel(r.Context(), id)
+		result, err = s.videoProjectBatchGenerator().GenerateAllShotsParallelWithOptions(r.Context(), id, input.options())
 	} else {
-		result, err = s.videoProjectBatchGenerator().GenerateAllShots(r.Context(), id)
+		result, err = s.videoProjectBatchGenerator().GenerateAllShotsWithOptions(r.Context(), id, input.options())
 	}
 
 	if err != nil {

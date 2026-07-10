@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"nine-xing/nx-backend/apps/server/internal/video"
 )
 
 // PromptBuilder 智能提示词引擎：按即梦最佳实践把角色/场景/动作/风格组装为
@@ -21,10 +23,11 @@ func NewPromptBuilder(store *Store) *PromptBuilder {
 
 // ShotPreview 是生成前的完整预览：提示词、参考素材、校验结果与预估成功率。
 type ShotPreview struct {
-	Audios               []string `json:"audios"`
-	EstimatedSuccessRate int      `json:"estimatedSuccessRate"`
-	Images               []string `json:"images"`
-	Prompt               string   `json:"prompt"`
+	Audios               []string          `json:"audios"`
+	EstimatedSuccessRate int               `json:"estimatedSuccessRate"`
+	Images               []string          `json:"images"`
+	Prompt               string            `json:"prompt"`
+	References           []video.Reference `json:"references"`
 	Validation           struct {
 		Errors   []string `json:"errors"`
 		IsValid  bool     `json:"isValid"`

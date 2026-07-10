@@ -22,8 +22,35 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 	"nine-xing/nx-backend/apps/server/internal/videoanalysis"
+	"nine-xing/nx-backend/apps/server/internal/videoproject"
 	"nine-xing/nx-backend/apps/server/internal/wxpay"
 )
+
+func TestVideoShotGenerateInputPreservesRequestIdentity(t *testing.T) {
+	input := generateVideoShotInput{
+		RequestKey:        "11111111-1111-4111-8111-111111111111",
+		CapabilityVersion: "capability-v1",
+	}
+	got := input.projectInput()
+	if got.RequestKey != input.RequestKey || got.CapabilityVersion != input.CapabilityVersion {
+		t.Fatalf("project input = %+v", got)
+	}
+}
+
+func TestBatchGenerateInputPreservesPerShotRequestIdentity(t *testing.T) {
+	input := batchGenerateInput{
+		RequestKeys:        map[string]string{"9": "11111111-1111-4111-8111-111111111111"},
+		CapabilityVersions: map[string]string{"9": "capability-v1"},
+	}
+	got := input.options()
+	want := videoproject.BatchGenerateOptions{
+		RequestKeys:        input.RequestKeys,
+		CapabilityVersions: input.CapabilityVersions,
+	}
+	if got.RequestKeys["9"] != want.RequestKeys["9"] || got.CapabilityVersions["9"] != want.CapabilityVersions["9"] {
+		t.Fatalf("batch options = %+v", got)
+	}
+}
 
 func TestNewPanicsForUnknownSMSProvider(t *testing.T) {
 	defer func() {

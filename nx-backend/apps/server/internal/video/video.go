@@ -78,18 +78,24 @@ type PageResult[T any] struct {
 }
 
 type GenerateInput struct {
-	AspectRatio       string   `json:"aspectRatio"`
-	Audios            []string `json:"audios"`   // 参考音频 URL
-	ImageURL          string   `json:"imageUrl"` // 兼容旧字段：单张参考图地址
-	Images            []string `json:"images"`   // 参考图片地址（上传到文件桶后的可公网访问 URL）
-	Videos            []string `json:"videos"`   // 参考视频地址（上传到文件桶后的可公网访问 URL）
-	Model             string   `json:"model"`
-	Prompt            string   `json:"prompt"`
-	Seconds           int      `json:"seconds"`
-	RequestKey        string   `json:"requestKey"`
-	ProjectID         string   `json:"projectId"`
-	ShotID            string   `json:"shotId"`
-	CapabilityVersion string   `json:"capabilityVersion"`
+	AspectRatio       string      `json:"aspectRatio"`
+	Audios            []string    `json:"audios"` // 参考音频 URL
+	CameraFixed       *bool       `json:"cameraFixed,omitempty"`
+	GenerateAudio     *bool       `json:"generateAudio"`
+	ImageURL          string      `json:"imageUrl"` // 兼容旧字段：单张参考图地址
+	Images            []string    `json:"images"`   // 参考图片地址（上传到文件桶后的可公网访问 URL）
+	Videos            []string    `json:"videos"`   // 参考视频地址（上传到文件桶后的可公网访问 URL）
+	Model             string      `json:"model"`
+	Prompt            string      `json:"prompt"`
+	References        []Reference `json:"references"`
+	Resolution        string      `json:"resolution"`
+	Seed              *int        `json:"seed,omitempty"`
+	Seconds           int         `json:"seconds"`
+	TaskMode          string      `json:"taskMode"`
+	RequestKey        string      `json:"requestKey"`
+	ProjectID         string      `json:"projectId"`
+	ShotID            string      `json:"shotId"`
+	CapabilityVersion string      `json:"capabilityVersion"`
 }
 
 // 网关支持的视频时长（秒），默认 15s。
@@ -195,97 +201,7 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 	if err != nil {
 		return Generation{}, err
 	}
-	submission, _, err := s.submissions.Prepare(ctx, PrepareSubmissionInput{
-		RequestKey:        prepared.request.RequestKey,
-		ProjectID:         prepared.projectID,
-		ShotID:            prepared.shotID,
-		RequestHash:       prepared.requestHash,
-		PromptHash:        prepared.promptHash,
-		CapabilityVersion: prepared.request.CapabilityVersion,
-		RequestSnapshot:   prepared.snapshot,
-	})
-	if err != nil {
-		return Generation{}, err
-	}
-	submission, claimed, err := s.submissions.ClaimSubmitting(ctx, submission.RequestKey)
-	if err != nil {
-		return Generation{}, err
-	}
-	if !claimed {
-		return s.existingSubmissionGeneration(ctx, submission)
-	}
-
-	task, err := s.client.CreateNormalizedTask(ctx, prepared.request, prepared.references)
-	persistenceCtx, cancelPersistence := submissionPersistenceContext(ctx)
-	defer cancelPersistence()
-	if err != nil {
-		var ambiguous *AmbiguousTransportError
-		if errors.As(err, &ambiguous) {
-			unknown, transitionErr := s.submissions.Transition(persistenceCtx, submission.RequestKey, SubmissionSubmitting, SubmissionUnknownOutcome, SubmissionTransition{})
-			if transitionErr != nil {
-				return Generation{}, &UnknownOutcomeError{
-					RequestKey:   submission.RequestKey,
-					SubmissionID: submission.ID,
-					Persisted:    false,
-				}
-			}
-			return Generation{}, &UnknownOutcomeError{RequestKey: unknown.RequestKey, SubmissionID: unknown.ID, Persisted: true}
-		}
-		terminalStatus := SubmissionCancelled
-		outcomeCode := "request_not_submitted"
-		var createErr *CreateTaskError
-		if errors.As(err, &createErr) {
-			outcomeCode = createErr.Code
-			if createErr.Code == "gateway_request_rejected" {
-				terminalStatus = SubmissionFailed
-			}
-		}
-		if _, transitionErr := s.submissions.Transition(persistenceCtx, submission.RequestKey, SubmissionSubmitting, terminalStatus, SubmissionTransition{ErrorMessage: err.Error()}); transitionErr != nil {
-			return Generation{}, &SubmissionPersistenceError{
-				RequestKey:     submission.RequestKey,
-				SubmissionID:   submission.ID,
-				IntendedStatus: terminalStatus,
-				OutcomeCode:    outcomeCode,
-			}
-		}
-		return Generation{}, err
-	}
-	recordedSubmission, err := s.submissions.RecordUpstreamTask(persistenceCtx, submission.RequestKey, task.TaskID)
-	if err != nil {
-		return Generation{}, &LocalLinkageError{RequestKey: submission.RequestKey, SubmissionID: submission.ID, TaskID: task.TaskID}
-	}
-	submission = recordedSubmission
-	status := normalizeStatus(task.Status)
-	id, err := insertGenerationRecord(persistenceCtx, s.db, generationRecordInput{
-		Model:       model,
-		Prompt:      prompt,
-		ImageURL:    prepared.imageURL,
-		Images:      prepared.images,
-		Videos:      prepared.videos,
-		Audios:      prepared.audios,
-		TaskID:      task.TaskID,
-		Seconds:     seconds,
-		AspectRatio: aspectRatio,
-		Status:      status,
-		ProjectID:   prepared.projectID,
-		ShotID:      prepared.shotID,
-	})
-	if err != nil {
-		return Generation{}, &LocalLinkageError{RequestKey: submission.RequestKey, SubmissionID: submission.ID, TaskID: task.TaskID}
-	}
-	acceptedSubmission, err := s.submissions.Transition(persistenceCtx, submission.RequestKey, SubmissionSubmitting, SubmissionAccepted, SubmissionTransition{
-		UpstreamTaskID: task.TaskID,
-		GenerationID:   id,
-	})
-	if err != nil {
-		return Generation{}, &LocalLinkageError{RequestKey: submission.RequestKey, SubmissionID: submission.ID, TaskID: task.TaskID}
-	}
-	submission = acceptedSubmission
-	generation, err := s.Generation(persistenceCtx, id)
-	if err != nil {
-		return Generation{}, &LocalLinkageError{RequestKey: submission.RequestKey, SubmissionID: submission.ID, TaskID: task.TaskID}
-	}
-	return attachSubmission(generation, submission), nil
+	return s.submitPreparedGeneration(ctx, prepared)
 }
 
 // Refresh 轮询单条记录的网关状态。终态直接返回；进行中则查询网关，
