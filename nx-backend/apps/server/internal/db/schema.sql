@@ -308,6 +308,56 @@ CREATE TABLE IF NOT EXISTS video_projects (
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS script_content TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS script_summary TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS script_revision INT NOT NULL DEFAULT 0;
+ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS confirmed_script_revision INT NOT NULL DEFAULT 0;
+ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS workflow_step TEXT NOT NULL DEFAULT 'script';
+ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS workflow_mode TEXT NOT NULL DEFAULT 'guided' CHECK (workflow_mode IN ('guided','autopilot'));
+ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS workflow_settings JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS workflow_settings_revision INT NOT NULL DEFAULT 0;
+ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS asset_revision INT NOT NULL DEFAULT 0;
+ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS script_confirmed_at TIMESTAMPTZ;
+ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS breakdown_confirmed_at TIMESTAMPTZ;
+ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS storyboard_confirmed_at TIMESTAMPTZ;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'video_projects_workflow_mode_check'
+  ) THEN
+    ALTER TABLE video_projects
+      ADD CONSTRAINT video_projects_workflow_mode_check
+      CHECK (workflow_mode IN ('guided','autopilot'));
+  END IF;
+END $$;
+
+-- 剧本拆解版本：AI 结果先保存为可编辑草稿，确认后再物化项目资产。
+CREATE TABLE IF NOT EXISTS video_project_breakdowns (
+  id                     BIGSERIAL PRIMARY KEY,
+  project_id             BIGINT NOT NULL REFERENCES video_projects(id) ON DELETE CASCADE,
+  version                INT NOT NULL CHECK (version > 0),
+  revision               INT NOT NULL DEFAULT 1 CHECK (revision > 0),
+  status                 TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','superseded','failed')),
+  source_script_revision INT NOT NULL DEFAULT 0,
+  script_snapshot        TEXT NOT NULL DEFAULT '',
+  characters             JSONB NOT NULL DEFAULT '[]'::jsonb,
+  scenes                 JSONB NOT NULL DEFAULT '[]'::jsonb,
+  props                  JSONB NOT NULL DEFAULT '[]'::jsonb,
+  outfits                JSONB NOT NULL DEFAULT '[]'::jsonb,
+  styles                 JSONB NOT NULL DEFAULT '[]'::jsonb,
+  story_beats            JSONB NOT NULL DEFAULT '[]'::jsonb,
+  raw_result             TEXT NOT NULL DEFAULT '',
+  error_message          TEXT NOT NULL DEFAULT '',
+  create_time            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_video_project_breakdowns_version
+  ON video_project_breakdowns(project_id, version);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_video_project_breakdowns_confirmed
+  ON video_project_breakdowns(project_id) WHERE status='confirmed';
+
 -- 项目角色：引用全局资产库（video_assets），可被项目级配置覆盖。
 -- description 为详细英文外貌描述（提示词素材），reference_image_url 为角色标准照（一致性关键）。
 CREATE TABLE IF NOT EXISTS video_project_characters (
@@ -322,6 +372,34 @@ CREATE TABLE IF NOT EXISTS video_project_characters (
   update_time         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE video_project_characters ADD COLUMN IF NOT EXISTS visual_prompt TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_project_characters ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'legacy' CHECK (source IN ('ai','manual','library','legacy'));
+ALTER TABLE video_project_characters ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','generating','ready','failed','detached'));
+ALTER TABLE video_project_characters ADD COLUMN IF NOT EXISTS required BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE video_project_characters ADD COLUMN IF NOT EXISTS breakdown_item_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_project_characters ADD COLUMN IF NOT EXISTS source_breakdown_id BIGINT REFERENCES video_project_breakdowns(id) ON DELETE SET NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'video_project_characters_source_check'
+  ) THEN
+    ALTER TABLE video_project_characters
+      ADD CONSTRAINT video_project_characters_source_check
+      CHECK (source IN ('ai','manual','library','legacy'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'video_project_characters_status_check'
+  ) THEN
+    ALTER TABLE video_project_characters
+      ADD CONSTRAINT video_project_characters_status_check
+      CHECK (status IN ('draft','confirmed','generating','ready','failed','detached'));
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_video_project_characters_breakdown_key
+  ON video_project_characters(project_id, breakdown_item_key) WHERE breakdown_item_key<>'';
+
 -- 项目场景：引用全局资产库，reference_video_url 为运镜参考视频（可选）。
 CREATE TABLE IF NOT EXISTS video_project_scenes (
   id                  BIGSERIAL PRIMARY KEY,
@@ -334,6 +412,105 @@ CREATE TABLE IF NOT EXISTS video_project_scenes (
   create_time         TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE video_project_scenes ADD COLUMN IF NOT EXISTS visual_prompt TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_project_scenes ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'legacy' CHECK (source IN ('ai','manual','library','legacy'));
+ALTER TABLE video_project_scenes ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','generating','ready','failed','detached'));
+ALTER TABLE video_project_scenes ADD COLUMN IF NOT EXISTS required BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE video_project_scenes ADD COLUMN IF NOT EXISTS breakdown_item_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_project_scenes ADD COLUMN IF NOT EXISTS source_breakdown_id BIGINT REFERENCES video_project_breakdowns(id) ON DELETE SET NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'video_project_scenes_source_check'
+  ) THEN
+    ALTER TABLE video_project_scenes
+      ADD CONSTRAINT video_project_scenes_source_check
+      CHECK (source IN ('ai','manual','library','legacy'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'video_project_scenes_status_check'
+  ) THEN
+    ALTER TABLE video_project_scenes
+      ADD CONSTRAINT video_project_scenes_status_check
+      CHECK (status IN ('draft','confirmed','generating','ready','failed','detached'));
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_video_project_scenes_breakdown_key
+  ON video_project_scenes(project_id, breakdown_item_key) WHERE breakdown_item_key<>'';
+
+-- 物品、服饰和风格资产；人物与场景继续使用原表保持兼容。
+CREATE TABLE IF NOT EXISTS video_project_assets (
+  id                  BIGSERIAL PRIMARY KEY,
+  project_id          BIGINT NOT NULL REFERENCES video_projects(id) ON DELETE CASCADE,
+  type                TEXT NOT NULL CHECK (type IN ('prop','outfit','style')),
+  breakdown_item_key  TEXT NOT NULL DEFAULT '',
+  source_breakdown_id BIGINT REFERENCES video_project_breakdowns(id) ON DELETE SET NULL,
+  name                TEXT NOT NULL DEFAULT '',
+  description         TEXT NOT NULL DEFAULT '',
+  visual_prompt       TEXT NOT NULL DEFAULT '',
+  usage_note          TEXT NOT NULL DEFAULT '',
+  required            BOOLEAN NOT NULL DEFAULT false,
+  global_asset_id     BIGINT REFERENCES video_assets(id) ON DELETE SET NULL,
+  reference_image_url TEXT NOT NULL DEFAULT '',
+  source              TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('ai','manual','library','legacy')),
+  status              TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','generating','ready','failed','detached')),
+  metadata            JSONB NOT NULL DEFAULT '{}'::jsonb,
+  create_time         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_video_project_assets_breakdown_key
+  ON video_project_assets(project_id, breakdown_item_key) WHERE breakdown_item_key<>'';
+
+-- 五类项目资产共用候选图记录；target_type + target_id 定位具体资产表。
+CREATE TABLE IF NOT EXISTS video_project_asset_candidates (
+  id                    BIGSERIAL PRIMARY KEY,
+  project_id            BIGINT NOT NULL REFERENCES video_projects(id) ON DELETE CASCADE,
+  target_type           TEXT NOT NULL CHECK (target_type IN ('character','scene','prop','outfit','style')),
+  target_id             BIGINT NOT NULL,
+  prompt                TEXT NOT NULL DEFAULT '',
+  image_asset_id        BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
+  image_url             TEXT NOT NULL DEFAULT '',
+  source                TEXT NOT NULL DEFAULT 'generated' CHECK (source IN ('generated','upload','library','legacy')),
+  generation_request_id TEXT NOT NULL DEFAULT '',
+  status                TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','generating','ready','failed')),
+  error_message         TEXT NOT NULL DEFAULT '',
+  selected              BOOLEAN NOT NULL DEFAULT false,
+  create_time           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_video_project_asset_candidates_selected
+  ON video_project_asset_candidates(target_type, target_id) WHERE selected=true;
+CREATE INDEX IF NOT EXISTS idx_video_project_asset_candidates_project
+  ON video_project_asset_candidates(project_id, target_type, target_id, create_time DESC);
+
+-- AI 分镜草稿版本；确认时按稳定 source_key 物化到 video_shots。
+CREATE TABLE IF NOT EXISTS video_project_storyboard_versions (
+  id                        BIGSERIAL PRIMARY KEY,
+  project_id                BIGINT NOT NULL REFERENCES video_projects(id) ON DELETE CASCADE,
+  version                   INT NOT NULL CHECK (version > 0),
+  revision                  INT NOT NULL DEFAULT 1 CHECK (revision > 0),
+  status                    TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','superseded','failed')),
+  source_script_revision    INT NOT NULL DEFAULT 0,
+  source_breakdown_id       BIGINT REFERENCES video_project_breakdowns(id) ON DELETE SET NULL,
+  source_asset_revision     INT NOT NULL DEFAULT 0,
+  source_capability_version TEXT NOT NULL DEFAULT '',
+  baseline_storyboard_id    BIGINT REFERENCES video_project_storyboard_versions(id) ON DELETE SET NULL,
+  shots                     JSONB NOT NULL DEFAULT '[]'::jsonb,
+  raw_result                TEXT NOT NULL DEFAULT '',
+  error_message             TEXT NOT NULL DEFAULT '',
+  create_time               TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time               TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_video_project_storyboard_versions_version
+  ON video_project_storyboard_versions(project_id, version);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_video_project_storyboard_versions_confirmed
+  ON video_project_storyboard_versions(project_id) WHERE status='confirmed';
 
 -- 分镜：核心表。生成时由 PromptBuilder 自动组装提示词与参考素材，
 -- image_reference_modes/video_reference_mode 控制参考素材策略（降低抽卡率），
@@ -378,6 +555,29 @@ ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS video_model TEXT NOT NULL DEFAU
 ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS video_resolution TEXT NOT NULL DEFAULT '';
 ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS sound_and_picture_together TEXT NOT NULL DEFAULT '';
 ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS used_audios JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS generation_mode TEXT NOT NULL DEFAULT 'reference' CHECK (generation_mode IN ('reference','edit','extend'));
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS prompt_override TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS prompt_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS audio_mode TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS prompt_diagnostics JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS source_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS selected_generation_id BIGINT REFERENCES video_generations(id) ON DELETE SET NULL;
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS selected_generation_ack_hash TEXT NOT NULL DEFAULT '';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'video_shots_generation_mode_check'
+  ) THEN
+    ALTER TABLE video_shots
+      ADD CONSTRAINT video_shots_generation_mode_check
+      CHECK (generation_mode IN ('reference','edit','extend'));
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_video_shots_source_key
+  ON video_shots(project_id, source_key) WHERE source_key<>'' AND archived_at IS NULL;
 
 -- 分镜级参考素材：图片/视频/音频统一上传到 OSS 后关联到具体分镜。
 CREATE TABLE IF NOT EXISTS video_shot_assets (
@@ -478,6 +678,8 @@ CREATE TABLE IF NOT EXISTS video_compose_jobs (
   create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE video_compose_jobs ADD COLUMN IF NOT EXISTS compose_input_hash TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS rag_documents (
   id          BIGSERIAL PRIMARY KEY,
