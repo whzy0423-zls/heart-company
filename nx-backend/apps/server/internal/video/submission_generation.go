@@ -326,6 +326,7 @@ func equalCanonicalReferences(left, right []CanonicalReference) bool {
 			left[index].SortOrder != right[index].SortOrder ||
 			left[index].SourceType != right[index].SourceType ||
 			left[index].SourceID != right[index].SourceID ||
+			left[index].UsageNote != right[index].UsageNote ||
 			left[index].Ordinal != right[index].Ordinal ||
 			left[index].Label != right[index].Label ||
 			!equalOptionalFloat(left[index].DurationSeconds, right[index].DurationSeconds) {

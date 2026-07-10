@@ -85,9 +85,22 @@ export interface ShotAsset {
   mimeType: string;
   name: string;
   objectUrl: string;
+  referenceRole:
+    | 'edit_target'
+    | 'extend_target'
+    | 'first_frame'
+    | 'last_frame'
+    | 'reference_audio'
+    | 'reference_image'
+    | 'reference_video'
+    | string;
   shotId: string;
   sizeBytes: number;
+  sortOrder: number;
+  sourceId: string;
+  sourceType: string;
   updateTime: string;
+  usageNote: string;
 }
 
 export interface ShotVideoVersion {
@@ -125,9 +138,29 @@ export interface ShotVideoVersionDetail {
 
 export interface ShotPreview {
   audios: string[];
+  diagnostics: Array<{
+    code: string;
+    fix: string;
+    level: 'error' | 'warning' | string;
+    message: string;
+  }>;
+  diagnosticsHash: string;
   estimatedSuccessRate: number;
   images: string[];
   prompt: string;
+  promptVersion: string;
+  references: Array<{
+    durationSeconds?: number;
+    id: string;
+    kind: 'audio' | 'image' | 'video' | string;
+    role: string;
+    sortOrder: number;
+    sourceId: string;
+    sourceType: string;
+    url: string;
+    usageNote: string;
+  }>;
+  requestHash: string;
   validation: {
     errors: string[];
     isValid: boolean;

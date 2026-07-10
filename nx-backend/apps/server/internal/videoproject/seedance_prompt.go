@@ -173,9 +173,9 @@ func compileReferenceGuidance(input PromptInput) string {
 			if input.Camera != "" {
 				guidance = fmt.Sprintf("参考%s的%s运镜", reference.Label, input.Camera)
 			}
-			groups["video"] = append(groups["video"], guidance)
+			groups["video"] = append(groups["video"], withReferenceUsage(guidance, reference.UsageNote))
 		case "reference_audio":
-			groups["audio"] = append(groups["audio"], fmt.Sprintf("参考%s的音色", reference.Label))
+			groups["audio"] = append(groups["audio"], withReferenceUsage(fmt.Sprintf("参考%s的音色", reference.Label), reference.UsageNote))
 		}
 	}
 	parts := make([]string, 0, len(input.References.References))
@@ -188,32 +188,47 @@ func compileReferenceGuidance(input PromptInput) string {
 func imageReferenceGuidance(reference video.CanonicalReference) string {
 	sourceType := strings.ToLower(strings.TrimSpace(reference.SourceType))
 	sourceID := strings.TrimSpace(reference.SourceID)
+	usageNote := strings.TrimSpace(reference.UsageNote)
+	base := ""
 	switch sourceType {
 	case "character", "person", "role":
-		if sourceID != "" {
-			return fmt.Sprintf("参考%s中的角色“%s”外观", reference.Label, sourceID)
+		if sourceID != "" && usageNote == "" {
+			base = fmt.Sprintf("参考%s中的角色“%s”外观", reference.Label, sourceID)
+		} else {
+			base = fmt.Sprintf("参考%s中的角色外观", reference.Label)
 		}
-		return fmt.Sprintf("参考%s中的角色外观", reference.Label)
 	case "scene", "location":
-		if sourceID != "" {
-			return fmt.Sprintf("参考%s中的%s", reference.Label, sourceID)
+		if sourceID != "" && usageNote == "" {
+			base = fmt.Sprintf("参考%s中的%s", reference.Label, sourceID)
+		} else {
+			base = fmt.Sprintf("参考%s中的场景", reference.Label)
 		}
-		return fmt.Sprintf("参考%s中的场景", reference.Label)
 	case "outfit", "costume":
-		if sourceID != "" {
-			return fmt.Sprintf("参考%s中的%s服饰", reference.Label, sourceID)
+		if sourceID != "" && usageNote == "" {
+			base = fmt.Sprintf("参考%s中的%s服饰", reference.Label, sourceID)
+		} else {
+			base = fmt.Sprintf("参考%s中的服饰", reference.Label)
 		}
-		return fmt.Sprintf("参考%s中的服饰", reference.Label)
 	case "prop", "item":
-		if sourceID != "" {
-			return fmt.Sprintf("参考%s中的道具“%s”", reference.Label, sourceID)
+		if sourceID != "" && usageNote == "" {
+			base = fmt.Sprintf("参考%s中的道具“%s”", reference.Label, sourceID)
+		} else {
+			base = fmt.Sprintf("参考%s中的道具", reference.Label)
 		}
-		return fmt.Sprintf("参考%s中的道具", reference.Label)
 	case "style":
-		return fmt.Sprintf("参考%s的视觉风格", reference.Label)
+		base = fmt.Sprintf("参考%s的视觉风格", reference.Label)
 	default:
-		return fmt.Sprintf("参考%s的主体与画面", reference.Label)
+		base = fmt.Sprintf("参考%s的主体与画面", reference.Label)
 	}
+	return withReferenceUsage(base, usageNote)
+}
+
+func withReferenceUsage(guidance, usageNote string) string {
+	usageNote = trimSentenceEnd(usageNote)
+	if usageNote == "" {
+		return guidance
+	}
+	return guidance + "（用途：" + usageNote + "）"
 }
 
 func compileReferenceBody(input PromptInput) string {

@@ -1,5 +1,5 @@
-// Package videoproject 视频项目工作台：项目制管理角色/场景/分镜，
-// 通过结构化提示词组装与参考素材策略降低即梦视频生成的抽卡率。
+// Package videoproject 视频项目工作台：项目制管理剧本、资产、分镜、
+// Seedance 2.0 提示词、视频版本与成片合成。
 package videoproject
 
 import (
@@ -100,23 +100,33 @@ type Shot struct {
 }
 
 type ShotAsset struct {
-	AssetType  string `json:"assetType"`
-	CreateTime string `json:"createTime"`
-	ID         string `json:"id"`
-	MimeType   string `json:"mimeType"`
-	Name       string `json:"name"`
-	ObjectURL  string `json:"objectUrl"`
-	ShotID     string `json:"shotId"`
-	SizeBytes  int64  `json:"sizeBytes"`
-	UpdateTime string `json:"updateTime"`
+	AssetType     string `json:"assetType"`
+	CreateTime    string `json:"createTime"`
+	ID            string `json:"id"`
+	MimeType      string `json:"mimeType"`
+	Name          string `json:"name"`
+	ObjectURL     string `json:"objectUrl"`
+	ReferenceRole string `json:"referenceRole"`
+	ShotID        string `json:"shotId"`
+	SizeBytes     int64  `json:"sizeBytes"`
+	SortOrder     int    `json:"sortOrder"`
+	SourceID      string `json:"sourceId"`
+	SourceType    string `json:"sourceType"`
+	UpdateTime    string `json:"updateTime"`
+	UsageNote     string `json:"usageNote"`
 }
 
 type ShotAssetInput struct {
-	AssetType string `json:"assetType"`
-	MimeType  string `json:"mimeType"`
-	Name      string `json:"name"`
-	ObjectURL string `json:"objectUrl"`
-	SizeBytes int64  `json:"sizeBytes"`
+	AssetType     string `json:"assetType"`
+	MimeType      string `json:"mimeType"`
+	Name          string `json:"name"`
+	ObjectURL     string `json:"objectUrl"`
+	ReferenceRole string `json:"referenceRole"`
+	SizeBytes     int64  `json:"sizeBytes"`
+	SortOrder     int    `json:"sortOrder"`
+	SourceID      string `json:"sourceId"`
+	SourceType    string `json:"sourceType"`
+	UsageNote     string `json:"usageNote"`
 }
 
 type ShotVideoVersion struct {
@@ -828,6 +838,15 @@ func (s *Store) ListShots(ctx context.Context, projectID string) ([]Shot, error)
 }
 
 var allowedShotAssetTypes = map[string]bool{"image": true, "video": true, "audio": true}
+var allowedShotReferenceRoles = map[string]string{
+	"reference_image": "image",
+	"first_frame":     "image",
+	"last_frame":      "image",
+	"reference_video": "video",
+	"reference_audio": "audio",
+	"edit_target":     "video",
+	"extend_target":   "video",
+}
 
 func normalizeShotAssetInput(input *ShotAssetInput) error {
 	input.AssetType = strings.TrimSpace(input.AssetType)
@@ -846,10 +865,34 @@ func normalizeShotAssetInput(input *ShotAssetInput) error {
 	}
 	input.Name = strings.TrimSpace(input.Name)
 	input.MimeType = strings.TrimSpace(input.MimeType)
+	input.ReferenceRole = strings.TrimSpace(input.ReferenceRole)
+	if input.ReferenceRole == "" {
+		input.ReferenceRole = defaultShotReferenceRole(input.AssetType)
+	}
+	if requiredType, exists := allowedShotReferenceRoles[input.ReferenceRole]; !exists || requiredType != input.AssetType {
+		return fmt.Errorf("分镜素材类型与用途不匹配")
+	}
+	if input.SortOrder < 0 {
+		return fmt.Errorf("分镜素材排序不能小于 0")
+	}
+	input.SourceType = strings.TrimSpace(input.SourceType)
+	input.SourceID = strings.TrimSpace(input.SourceID)
+	input.UsageNote = strings.TrimSpace(input.UsageNote)
 	if input.SizeBytes < 0 {
 		input.SizeBytes = 0
 	}
 	return nil
+}
+
+func defaultShotReferenceRole(assetType string) string {
+	switch assetType {
+	case "video":
+		return "reference_video"
+	case "audio":
+		return "reference_audio"
+	default:
+		return "reference_image"
+	}
 }
 
 func scanShotAsset(scanner interface{ Scan(...any) error }) (ShotAsset, error) {
@@ -863,6 +906,11 @@ func scanShotAsset(scanner interface{ Scan(...any) error }) (ShotAsset, error) {
 		&asset.Name,
 		&asset.MimeType,
 		&asset.SizeBytes,
+		&asset.ReferenceRole,
+		&asset.SortOrder,
+		&asset.SourceType,
+		&asset.SourceID,
+		&asset.UsageNote,
 		&createTime,
 		&updateTime,
 	); err != nil {
@@ -879,10 +927,11 @@ func (s *Store) ListShotAssets(ctx context.Context, shotID string) ([]ShotAsset,
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id::text, shot_id::text, asset_type, object_url, name, mime_type, size_bytes, create_time, update_time
+		`SELECT id::text, shot_id::text, asset_type, object_url, name, mime_type, size_bytes,
+		        reference_role, sort_order, source_type, source_id, usage_note, create_time, update_time
 		   FROM video_shot_assets
 		  WHERE shot_id=$1
-		  ORDER BY create_time ASC, id ASC`, sid,
+		  ORDER BY sort_order ASC, id ASC`, sid,
 	)
 	if err != nil {
 		return nil, err
@@ -909,10 +958,13 @@ func (s *Store) CreateShotAsset(ctx context.Context, shotID string, input ShotAs
 	}
 	var id string
 	if err := s.db.QueryRowContext(ctx,
-		`INSERT INTO video_shot_assets (shot_id, asset_type, object_url, name, mime_type, size_bytes)
-		 VALUES ($1,$2,$3,$4,$5,$6)
+		`INSERT INTO video_shot_assets (
+			shot_id, asset_type, object_url, name, mime_type, size_bytes,
+			reference_role, sort_order, source_type, source_id, usage_note
+		 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		 RETURNING id::text`,
 		sid, input.AssetType, input.ObjectURL, input.Name, input.MimeType, input.SizeBytes,
+		input.ReferenceRole, input.SortOrder, input.SourceType, input.SourceID, input.UsageNote,
 	).Scan(&id); err != nil {
 		return ShotAsset{}, err
 	}
@@ -925,7 +977,8 @@ func (s *Store) GetShotAsset(ctx context.Context, id string) (ShotAsset, error) 
 		return ShotAsset{}, err
 	}
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id::text, shot_id::text, asset_type, object_url, name, mime_type, size_bytes, create_time, update_time
+		`SELECT id::text, shot_id::text, asset_type, object_url, name, mime_type, size_bytes,
+		        reference_role, sort_order, source_type, source_id, usage_note, create_time, update_time
 		   FROM video_shot_assets
 		  WHERE id=$1`, assetID,
 	)

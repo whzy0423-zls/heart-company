@@ -643,7 +643,7 @@ func (s *Server) videoShotPreview(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "缺少分镜 ID")
 		return
 	}
-	builder := videoproject.NewPromptBuilder(s.videoProjectStore())
+	builder := videoproject.NewPromptBuilder(s.videoProjectStore(), s.videoStore().Capabilities)
 	preview, err := builder.BuildPreview(r.Context(), id)
 	if err != nil {
 		log.Printf("build shot preview failed: %v", err)

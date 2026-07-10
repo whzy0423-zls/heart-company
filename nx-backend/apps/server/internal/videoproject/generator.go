@@ -44,7 +44,7 @@ type GenerateShotInput struct {
 
 func NewGenerator(store *Store, videoStore normalizedVideoStore, uploads *uploadasset.Store, uploader storage.ObjectUploader) *Generator {
 	generator := &Generator{
-		promptBuilder:  NewPromptBuilder(store),
+		promptBuilder:  NewPromptBuilder(store, videoStore.Capabilities),
 		store:          store,
 		uploader:       uploader,
 		uploads:        uploads,
@@ -151,7 +151,7 @@ func buildShotGenerateRequest(shot Shot, preview ShotPreview, capabilities video
 		AspectRatio:       strings.TrimSpace(shot.AspectRatio),
 		Resolution:        resolution,
 		GenerateAudio:     generateAudio,
-		TaskMode:          "reference",
+		TaskMode:          promptModeFromReferences(canonical),
 		References:        make([]video.Reference, 0, len(canonical.References)),
 		RequestKey:        strings.TrimSpace(input.RequestKey),
 		CapabilityVersion: strings.TrimSpace(input.CapabilityVersion),

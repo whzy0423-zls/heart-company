@@ -3,31 +3,57 @@ package videoproject
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"nine-xing/nx-backend/apps/server/internal/video"
 )
 
-// PromptBuilder 智能提示词引擎：按即梦最佳实践把角色/场景/动作/风格组装为
-// 结构化提示词，并按优先级挑选参考图片与参考视频，是降低抽卡率的核心。
+// PromptBuilder 按 Seedance 2.0 规则把结构化分镜和规范素材编译为提示词，
+// 同时保持素材编号、网关载荷顺序和新手诊断一致。
 //
 // 提示词结构公式：主体 + 动作 + 环境 + 风格 + 光照 + 镜头 + 质量词
 // 参考素材优先级：上一镜头尾帧 > 角色标准照 > 场景参考图（图片最多 4 张，视频最多 2 个）
 type PromptBuilder struct {
-	store *Store
+	loadShot       func(context.Context, string) (Shot, error)
+	loadProject    func(context.Context, string) (Project, error)
+	listCharacters func(context.Context, string) ([]Character, error)
+	loadScene      func(context.Context, string) (Scene, error)
+	previousShot   func(context.Context, string, int) (Shot, bool, error)
+	capabilities   func(string) video.Capabilities
 }
 
-func NewPromptBuilder(store *Store) *PromptBuilder {
-	return &PromptBuilder{store: store}
+func NewPromptBuilder(store *Store, capabilityProviders ...func(string) video.Capabilities) *PromptBuilder {
+	builder := &PromptBuilder{
+		loadShot:       store.GetShot,
+		loadProject:    store.GetProject,
+		listCharacters: store.ListCharacters,
+		loadScene:      store.getScene,
+		previousShot:   store.PreviousShot,
+		capabilities: func(model string) video.Capabilities {
+			return video.ResolveCapabilities(video.CapabilityConfig{
+				Model:           strings.TrimSpace(model),
+				GatewayContract: video.LegacyFlatContract(),
+			})
+		},
+	}
+	if len(capabilityProviders) > 0 && capabilityProviders[0] != nil {
+		builder.capabilities = capabilityProviders[0]
+	}
+	return builder
 }
 
 // ShotPreview 是生成前的完整预览：提示词、参考素材、校验结果与预估成功率。
 type ShotPreview struct {
-	Audios               []string          `json:"audios"`
-	EstimatedSuccessRate int               `json:"estimatedSuccessRate"`
-	Images               []string          `json:"images"`
-	Prompt               string            `json:"prompt"`
-	References           []video.Reference `json:"references"`
+	Audios               []string           `json:"audios"`
+	EstimatedSuccessRate int                `json:"estimatedSuccessRate"`
+	Images               []string           `json:"images"`
+	Prompt               string             `json:"prompt"`
+	PromptVersion        string             `json:"promptVersion"`
+	RequestHash          string             `json:"requestHash"`
+	DiagnosticsHash      string             `json:"diagnosticsHash"`
+	Diagnostics          []PromptDiagnostic `json:"diagnostics"`
+	References           []video.Reference  `json:"references"`
 	Validation           struct {
 		Errors   []string `json:"errors"`
 		IsValid  bool     `json:"isValid"`
@@ -36,42 +62,14 @@ type ShotPreview struct {
 	Videos []string `json:"videos"`
 }
 
-// 即梦容易失败或与动画风格冲突的词，组装后统一剔除。
-var promptBlacklist = []string{"nsfw", "gore", "violence", "photorealistic"}
-
-// 中文动作 → 英文动作短语的基础词典。匹配不到时原样保留（即梦支持中文提示词，
-// 但英文动作短语在动画风格下表现更稳定）。
-var actionDictionary = map[string]string{
-	"走进":   "walking into",
-	"走":    "walking slowly and gracefully",
-	"跑":    "running swiftly",
-	"奔跑":   "running swiftly with determination",
-	"看":    "looking",
-	"四处张望": "looking around curiously",
-	"东张西望": "looking around curiously",
-	"笑":    "smiling warmly",
-	"微笑":   "smiling gently",
-	"转身":   "turning around smoothly",
-	"挥手":   "waving hand gently",
-	"坐":    "sitting",
-	"站":    "standing",
-	"加快脚步": "walking faster with excitement",
-	"停下":   "stopping and pausing",
-	"抬头":   "looking up",
-	"低头":   "looking down",
-	"推开":   "pushing open",
-	"拿起":   "picking up",
-	"蹲下":   "crouching down",
-}
-
 // BuildPreview 组装分镜的完整生成参数（不实际提交生成）。
 func (b *PromptBuilder) BuildPreview(ctx context.Context, shotID string) (ShotPreview, error) {
-	shot, err := b.store.GetShot(ctx, shotID)
+	shot, err := b.loadShot(ctx, shotID)
 	if err != nil {
 		return ShotPreview{}, err
 	}
 
-	project, err := b.store.GetProject(ctx, shot.ProjectID)
+	project, err := b.loadProject(ctx, shot.ProjectID)
 	if err != nil {
 		return ShotPreview{}, err
 	}
@@ -83,37 +81,240 @@ func (b *PromptBuilder) BuildPreview(ctx context.Context, shotID string) (ShotPr
 
 	var scene *Scene
 	if shot.SceneID != "" {
-		sc, err := b.store.getScene(ctx, shot.SceneID)
+		sc, err := b.loadScene(ctx, shot.SceneID)
 		if err == nil {
 			scene = &sc
 		}
 	}
 
 	var prevShot *Shot
-	if prev, ok, err := b.store.PreviousShot(ctx, shot.ProjectID, shot.OrderNum); err == nil && ok {
+	if prev, ok, err := b.previousShot(ctx, shot.ProjectID, shot.OrderNum); err == nil && ok {
 		prevShot = &prev
 	}
 
-	preview := ShotPreview{}
-	preview.Prompt = b.buildPrompt(shot, characters, scene, project.StyleGuide)
-	preview.Images = b.buildReferenceImages(shot, characters, scene, prevShot)
-	preview.Videos = b.buildReferenceVideos(shot, scene, prevShot)
-	preview.Audios = b.buildReferenceAudios(shot)
-
-	errors, warnings := b.validatePrompt(preview.Prompt, characters)
-	preview.Validation.Errors = errors
-	preview.Validation.Warnings = warnings
-	preview.Validation.IsValid = len(errors) == 0
+	capabilities := b.capabilities(shot.VideoModel)
+	canonical, err := b.buildCanonicalReferences(shot, characters, scene, prevShot, capabilities)
+	if err != nil {
+		return ShotPreview{}, err
+	}
+	compiled := CompileSeedancePrompt(promptInputFromShot(shot, characters, scene, project.StyleGuide, canonical), capabilities)
+	preview := ShotPreview{
+		Audios:          []string{},
+		Diagnostics:     []PromptDiagnostic{},
+		Images:          []string{},
+		Prompt:          compiled.Prompt,
+		PromptVersion:   compiled.PromptVersion,
+		RequestHash:     compiled.RequestHash,
+		DiagnosticsHash: compiled.DiagnosticsHash,
+		References:      []video.Reference{},
+		Videos:          []string{},
+	}
+	preview.Diagnostics = append(preview.Diagnostics, compiled.Diagnostics...)
+	preview.References = append(preview.References, compiled.OrderedReferences...)
+	preview.Validation.Errors = []string{}
+	preview.Validation.Warnings = []string{}
+	preview.Images, preview.Videos, preview.Audios = promptPreviewURLs(canonical)
+	for _, diagnostic := range compiled.Diagnostics {
+		switch diagnostic.Level {
+		case "error":
+			preview.Validation.Errors = append(preview.Validation.Errors, diagnostic.Message)
+		case "warning":
+			preview.Validation.Warnings = append(preview.Validation.Warnings, diagnostic.Message)
+		}
+	}
+	request, _, _, _, requestErr := buildShotGenerateRequest(shot, preview, capabilities, GenerateShotInput{
+		CapabilityVersion: capabilities.CapabilityVersion,
+	})
+	if requestErr != nil {
+		appendPromptDiagnostic(&preview, PromptDiagnostic{
+			Level:   "error",
+			Code:    "shot_generation_parameters_invalid",
+			Message: requestErr.Error(),
+			Fix:     "返回分镜设置，按提示修改视频生成参数。",
+		})
+	} else {
+		for _, diagnostic := range validatePreviewGenerateRequest(request, capabilities) {
+			appendPromptDiagnostic(&preview, diagnostic)
+		}
+	}
+	preview.DiagnosticsHash = hashPromptValue(struct {
+		RequestHash string             `json:"requestHash"`
+		Diagnostics []PromptDiagnostic `json:"diagnostics"`
+	}{RequestHash: preview.RequestHash, Diagnostics: preview.Diagnostics})
+	preview.Validation.IsValid = len(preview.Validation.Errors) == 0
 
 	preview.EstimatedSuccessRate = b.estimateSuccessRate(shot, characters, preview)
 	return preview, nil
+}
+
+func appendPromptDiagnostic(preview *ShotPreview, diagnostic PromptDiagnostic) {
+	for _, existing := range preview.Diagnostics {
+		if existing.Code == diagnostic.Code {
+			return
+		}
+	}
+	preview.Diagnostics = append(preview.Diagnostics, diagnostic)
+	switch diagnostic.Level {
+	case "error":
+		preview.Validation.Errors = append(preview.Validation.Errors, diagnostic.Message)
+	case "warning":
+		preview.Validation.Warnings = append(preview.Validation.Warnings, diagnostic.Message)
+	}
+}
+
+func validatePreviewGenerateRequest(request video.GenerateRequest, capabilities video.Capabilities) []PromptDiagnostic {
+	working := request
+	diagnostics := make([]PromptDiagnostic, 0)
+	for attempts := 0; attempts < len(request.References)+16; attempts++ {
+		report, err := video.ValidateGenerateRequestWithWarnings(working, capabilities)
+		for _, warning := range report.Warnings {
+			diagnostics = appendUniquePromptDiagnostic(diagnostics, PromptDiagnostic{
+				Level: "warning", Code: warning.Code, Message: warning.Message, Fix: warning.Fix,
+			})
+		}
+		if err == nil {
+			break
+		}
+		validationError, ok := err.(*video.ValidationError)
+		if !ok {
+			diagnostics = appendUniquePromptDiagnostic(diagnostics, PromptDiagnostic{
+				Level: "error", Code: "generation_request_invalid", Message: err.Error(), Fix: "返回分镜设置检查生成参数。",
+			})
+			break
+		}
+		code := promptCodeForValidationError(validationError.Code)
+		diagnostics = appendUniquePromptDiagnostic(diagnostics, PromptDiagnostic{
+			Level: "error", Code: code, Message: validationError.Message, Fix: validationError.Fix,
+		})
+		if !repairPreviewValidationRequest(&working, capabilities, validationError) {
+			break
+		}
+	}
+	return diagnostics
+}
+
+func appendUniquePromptDiagnostic(diagnostics []PromptDiagnostic, diagnostic PromptDiagnostic) []PromptDiagnostic {
+	for _, existing := range diagnostics {
+		if existing.Code == diagnostic.Code {
+			return diagnostics
+		}
+	}
+	return append(diagnostics, diagnostic)
+}
+
+func promptCodeForValidationError(code string) string {
+	switch code {
+	case "task_mode_unsupported":
+		return "unsupported_task_mode"
+	case "edit_target_required":
+		return "missing_edit_target"
+	case "extend_target_required":
+		return "missing_extend_target"
+	default:
+		return code
+	}
+}
+
+func repairPreviewValidationRequest(request *video.GenerateRequest, capabilities video.Capabilities, validationError *video.ValidationError) bool {
+	switch validationError.Code {
+	case "capability_version_stale":
+		request.CapabilityVersion = capabilities.CapabilityVersion
+	case "model_mismatch":
+		request.Model = capabilities.Model
+	case "prompt_required":
+		request.Prompt = "待完善的视频内容"
+	case "seed_unsupported":
+		request.Seed = nil
+	case "camera_fixed_unsupported":
+		request.CameraFixed = nil
+	case "resolution_unsupported":
+		request.Resolution = ""
+	case "generate_audio_unsupported":
+		request.GenerateAudio = nil
+	case "duration_unsupported":
+		if len(capabilities.SupportedDurations) == 0 {
+			return false
+		}
+		request.Duration = capabilities.SupportedDurations[0]
+	case "aspect_ratio_unsupported":
+		if len(capabilities.AspectRatios) == 0 {
+			return false
+		}
+		request.AspectRatio = capabilities.AspectRatios[0]
+	case "task_mode_unsupported":
+		if len(capabilities.TaskModes) == 0 {
+			return false
+		}
+		request.TaskMode = capabilities.TaskModes[0]
+	case "edit_target_required", "extend_target_required":
+		request.TaskMode = "reference"
+	case "mixed_target_roles":
+		request.References = removePromptReferencesByRole(request.References, "extend_target")
+	case "multiple_edit_targets":
+		request.References = keepFirstPromptReferenceRole(request.References, "edit_target")
+	case "multiple_extend_targets":
+		request.References = keepFirstPromptReferenceRole(request.References, "extend_target")
+	case "target_role_not_allowed":
+		request.References = removePromptReferencesByRole(request.References, "edit_target", "extend_target")
+	default:
+		index, ok := promptReferenceIndex(validationError.Field)
+		if !ok || index < 0 || index >= len(request.References) {
+			return false
+		}
+		request.References = append(request.References[:index:index], request.References[index+1:]...)
+	}
+	return true
+}
+
+func promptReferenceIndex(field string) (int, bool) {
+	start := strings.Index(field, "references[")
+	if start == -1 {
+		return 0, false
+	}
+	start += len("references[")
+	end := strings.Index(field[start:], "]")
+	if end == -1 {
+		return 0, false
+	}
+	index, err := strconv.Atoi(field[start : start+end])
+	return index, err == nil
+}
+
+func removePromptReferencesByRole(references []video.Reference, roles ...string) []video.Reference {
+	blocked := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		blocked[role] = struct{}{}
+	}
+	result := make([]video.Reference, 0, len(references))
+	for _, reference := range references {
+		if _, exists := blocked[reference.Role]; !exists {
+			result = append(result, reference)
+		}
+	}
+	return result
+}
+
+func keepFirstPromptReferenceRole(references []video.Reference, role string) []video.Reference {
+	kept := false
+	result := make([]video.Reference, 0, len(references))
+	for _, reference := range references {
+		if reference.Role != role {
+			result = append(result, reference)
+			continue
+		}
+		if !kept {
+			result = append(result, reference)
+			kept = true
+		}
+	}
+	return result
 }
 
 func (b *PromptBuilder) resolveCharacters(ctx context.Context, shot Shot) ([]Character, error) {
 	if len(shot.CharacterIDs) == 0 {
 		return nil, nil
 	}
-	all, err := b.store.ListCharacters(ctx, shot.ProjectID)
+	all, err := b.listCharacters(ctx, shot.ProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -130,112 +331,199 @@ func (b *PromptBuilder) resolveCharacters(ctx context.Context, shot Shot) ([]Cha
 	return selected, nil
 }
 
-// buildPrompt 按「主体+动作+环境+风格+光照+镜头+质量词」结构组装提示词。
-func (b *PromptBuilder) buildPrompt(shot Shot, characters []Character, scene *Scene, styleGuide string) string {
-	if dynamicDescription := strings.TrimSpace(shot.DynamicDescription); dynamicDescription != "" {
-		return sanitizePrompt(dynamicDescription)
-	}
-
-	parts := []string{}
-
-	// 1. 主体：角色详细描述（人物一致性的文本保障）。
-	for _, char := range characters {
-		desc := strings.TrimSpace(char.Description)
-		if desc == "" {
-			desc = char.Name
+func (b *PromptBuilder) buildCanonicalReferences(shot Shot, characters []Character, scene *Scene, prevShot *Shot, capabilities video.Capabilities) (video.CanonicalReferences, error) {
+	references := make([]video.Reference, 0, len(shot.ShotAssets)+len(characters)+3)
+	maxSortOrder := -1
+	counts := map[string]int{"image": 0, "video": 0, "audio": 0}
+	for index, asset := range shot.ShotAssets {
+		role := strings.TrimSpace(asset.ReferenceRole)
+		if role == "" {
+			role = defaultShotReferenceRole(asset.AssetType)
 		}
-		parts = append(parts, desc)
-	}
-
-	// 2. 动作：中文描述翻译增强。
-	if action := b.enhanceAction(shot.ActionDescription); action != "" {
-		parts = append(parts, action)
-	}
-
-	// 3. 环境：场景详细描述。
-	if scene != nil {
-		desc := strings.TrimSpace(scene.Description)
-		if desc == "" {
-			desc = scene.Name
+		id := strings.TrimSpace(asset.ID)
+		if id == "" {
+			id = fmt.Sprintf("shot-asset-%06d", index+1)
 		}
-		if desc != "" {
-			parts = append(parts, desc)
+		sourceType := strings.TrimSpace(asset.SourceType)
+		if sourceType == "" {
+			sourceType = "shot_asset"
+		}
+		sourceID := strings.TrimSpace(asset.SourceID)
+		if sourceID == "" {
+			sourceID = id
+		}
+		kind := strings.TrimSpace(asset.AssetType)
+		references = append(references, video.Reference{
+			ID:         id,
+			Kind:       kind,
+			Role:       role,
+			URL:        strings.TrimSpace(asset.ObjectURL),
+			SortOrder:  asset.SortOrder,
+			SourceType: sourceType,
+			SourceID:   sourceID,
+			UsageNote:  strings.TrimSpace(asset.UsageNote),
+		})
+		counts[kind]++
+		if asset.SortOrder > maxSortOrder {
+			maxSortOrder = asset.SortOrder
 		}
 	}
 
-	// 4. 风格：全局风格锁定（跨分镜一致性）。
-	style := strings.TrimSpace(styleGuide)
-	if style == "" {
-		style = "high quality animation style"
+	nextSortOrder := maxSortOrder + 1
+	addAutomatic := func(kind, role, rawURL, sourceType, sourceID, usageNote string) {
+		url := strings.TrimSpace(rawURL)
+		if url == "" || counts[kind] >= promptReferenceKindLimit(capabilities, kind) {
+			return
+		}
+		references = append(references, video.Reference{
+			ID:         fmt.Sprintf("auto-%s-%s", sourceType, sourceID),
+			Kind:       kind,
+			Role:       role,
+			URL:        url,
+			SortOrder:  nextSortOrder,
+			SourceType: sourceType,
+			SourceID:   sourceID,
+			UsageNote:  usageNote,
+		})
+		nextSortOrder++
+		counts[kind]++
 	}
-	parts = append(parts, style)
 
-	// 5. 光照：按场景类型自动选择。
-	parts = append(parts, b.selectLighting(scene))
-
-	// 6. 镜头：中景最稳定；运镜默认静态，减少画面崩坏。
-	parts = append(parts, "medium shot")
-	movement := strings.TrimSpace(shot.CameraMovement)
-	if movement == "" {
-		movement = "static camera"
+	modes := make(map[string]bool, len(shot.ImageReferenceModes))
+	for _, mode := range shot.ImageReferenceModes {
+		modes[mode] = true
 	}
-	parts = append(parts, movement)
-
-	// 7. 质量词。
-	parts = append(parts, "high quality, detailed, smooth animation")
-
-	return sanitizePrompt(strings.Join(parts, ", "))
+	if modes["prev_frame"] && prevShot != nil {
+		role := "reference_image"
+		if stringInPromptList(capabilities.ReferenceRoles, "first_frame") {
+			role = "first_frame"
+		}
+		addAutomatic("image", role, prevShot.EndFrameURL, "previous_shot", stablePromptSourceID(prevShot.ID, "previous"), "承接上一镜头画面")
+	}
+	if modes["character_ref"] {
+		for _, character := range orderedPromptCharacters(characters) {
+			addAutomatic("image", "reference_image", character.ReferenceImageURL, "character", stablePromptSourceID(character.ID, character.Name), fmt.Sprintf("角色“%s”外观", character.Name))
+		}
+	}
+	if modes["scene_ref"] && scene != nil {
+		addAutomatic("image", "reference_image", scene.ReferenceImageURL, "scene", stablePromptSourceID(scene.ID, scene.Name), fmt.Sprintf("场景“%s”环境", scene.Name))
+	}
+	switch shot.VideoReferenceMode {
+	case "prev_video":
+		if prevShot != nil {
+			addAutomatic("video", "reference_video", prevShot.VideoURL, "previous_shot", stablePromptSourceID(prevShot.ID, "previous"), "承接上一镜头动作与运镜")
+		}
+	case "scene_demo":
+		if scene != nil {
+			addAutomatic("video", "reference_video", scene.ReferenceVideoURL, "scene", stablePromptSourceID(scene.ID, scene.Name), fmt.Sprintf("场景“%s”动作与运镜", scene.Name))
+		}
+	}
+	return video.CanonicalizeReferences(references)
 }
 
-func sanitizePrompt(prompt string) string {
-	// 剔除禁用词，避免与动画风格冲突或触发内容审核。
-	lower := strings.ToLower(prompt)
-	for _, word := range promptBlacklist {
-		if idx := strings.Index(lower, word); idx >= 0 {
-			prompt = prompt[:idx] + prompt[idx+len(word):]
-			lower = strings.ToLower(prompt)
-		}
-	}
-	return strings.TrimSpace(prompt)
-}
-
-// enhanceAction 把中文动作描述转换为英文动作短语；未命中词典时保留原文。
-func (b *PromptBuilder) enhanceAction(action string) string {
-	action = strings.TrimSpace(action)
-	if action == "" {
-		return ""
-	}
-	// 长词优先匹配，避免「走进」被「走」提前替换。
-	best := ""
-	for cn := range actionDictionary {
-		if strings.Contains(action, cn) && len(cn) > len(best) {
-			best = cn
-		}
-	}
-	if best != "" {
-		return strings.ReplaceAll(action, best, actionDictionary[best])
-	}
-	return action
-}
-
-// selectLighting 按场景名称/描述关键词自动匹配光照方案。
-func (b *PromptBuilder) selectLighting(scene *Scene) string {
-	if scene == nil {
-		return "soft natural lighting"
-	}
-	text := strings.ToLower(scene.Name + " " + scene.Description)
-	switch {
-	case strings.Contains(text, "night") || strings.Contains(text, "夜"):
-		return "moonlight, atmospheric lighting"
-	case strings.Contains(text, "forest") || strings.Contains(text, "森林") || strings.Contains(text, "树林"):
-		return "dappled sunlight through trees, soft natural lighting"
-	case strings.Contains(text, "indoor") || strings.Contains(text, "室内") || strings.Contains(text, "屋"):
-		return "warm indoor lighting"
-	case strings.Contains(text, "sunset") || strings.Contains(text, "日落") || strings.Contains(text, "黄昏"):
-		return "golden hour lighting, warm tones"
+func promptReferenceKindLimit(capabilities video.Capabilities, kind string) int {
+	switch kind {
+	case "image":
+		return capabilities.Limits.MaxImages
+	case "video":
+		return capabilities.Limits.MaxVideos
+	case "audio":
+		return capabilities.Limits.MaxAudios
 	default:
-		return "soft natural lighting"
+		return 0
 	}
+}
+
+func stablePromptSourceID(id, fallback string) string {
+	if id = strings.TrimSpace(id); id != "" {
+		return id
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func orderedPromptCharacters(characters []Character) []Character {
+	ordered := make([]Character, 0, len(characters))
+	for _, character := range characters {
+		if character.IsMain {
+			ordered = append(ordered, character)
+		}
+	}
+	for _, character := range characters {
+		if !character.IsMain {
+			ordered = append(ordered, character)
+		}
+	}
+	return ordered
+}
+
+func promptInputFromShot(shot Shot, characters []Character, scene *Scene, styleGuide string, references video.CanonicalReferences) PromptInput {
+	mode := promptModeFromReferences(references)
+	action := strings.TrimSpace(shot.DynamicDescription)
+	if action == "" {
+		action = strings.TrimSpace(shot.ActionDescription)
+	}
+	subjects := make([]string, 0, len(characters))
+	for _, character := range characters {
+		if name := strings.TrimSpace(character.Name); name != "" {
+			subjects = append(subjects, name)
+		}
+	}
+	sceneDescription := ""
+	if scene != nil {
+		sceneDescription = strings.TrimSpace(scene.Description)
+		if sceneDescription == "" {
+			sceneDescription = strings.TrimSpace(scene.Name)
+		}
+	}
+	input := PromptInput{
+		Mode:        mode,
+		Subject:     strings.Join(subjects, "和"),
+		Action:      action,
+		Scene:       sceneDescription,
+		Camera:      strings.TrimSpace(shot.CameraMovement),
+		VisualStyle: strings.TrimSpace(styleGuide),
+		References:  references,
+	}
+	switch mode {
+	case "edit":
+		input.Action = ""
+		input.EditInstruction = action
+	case "extend":
+		input.Action = ""
+		input.ExtendInstruction = action
+	}
+	return input
+}
+
+func promptModeFromReferences(references video.CanonicalReferences) string {
+	for _, reference := range references.References {
+		if reference.Role == "edit_target" {
+			return "edit"
+		}
+	}
+	for _, reference := range references.References {
+		if reference.Role == "extend_target" {
+			return "extend"
+		}
+	}
+	return "reference"
+}
+
+func promptPreviewURLs(references video.CanonicalReferences) (images, videos, audios []string) {
+	images = []string{}
+	videos = []string{}
+	audios = []string{}
+	for _, reference := range references.References {
+		switch reference.Kind {
+		case "image":
+			images = append(images, reference.URL)
+		case "video":
+			videos = append(videos, reference.URL)
+		case "audio":
+			audios = append(audios, reference.URL)
+		}
+	}
+	return images, videos, audios
 }
 
 // buildReferenceImages 按优先级组装参考图片（最多 4 张）：
@@ -340,29 +628,6 @@ func (b *PromptBuilder) buildReferenceAudios(shot Shot) []string {
 		audios = append(audios, url)
 	}
 	return audios
-}
-
-// validatePrompt 生成前校验：错误阻断提交，警告仅提示。
-func (b *PromptBuilder) validatePrompt(prompt string, characters []Character) (errors, warnings []string) {
-	errors = []string{}
-	warnings = []string{}
-
-	if len(prompt) > 800 {
-		warnings = append(warnings, "提示词过长（超过 800 字符），建议精简角色或场景描述")
-	}
-	lower := strings.ToLower(prompt)
-	if strings.Contains(lower, "realistic") && strings.Contains(lower, "animation") {
-		errors = append(errors, "风格冲突：不能同时要求 realistic 和 animation")
-	}
-	for _, char := range characters {
-		if strings.TrimSpace(char.Description) == "" {
-			warnings = append(warnings, fmt.Sprintf("角色「%s」缺少详细描述，人物一致性会下降", char.Name))
-		}
-		if strings.TrimSpace(char.ReferenceImageURL) == "" {
-			warnings = append(warnings, fmt.Sprintf("角色「%s」缺少标准照，建议上传参考图以保持人物一致", char.Name))
-		}
-	}
-	return errors, warnings
 }
 
 // estimateSuccessRate 预估成功率：基础 50%，参考素材逐项加成，封顶 95%。

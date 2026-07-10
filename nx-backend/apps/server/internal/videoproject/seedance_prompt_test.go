@@ -6,6 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/video"
 )
 
@@ -209,6 +210,16 @@ func TestSeedancePromptDoesNotInjectLegacyDefaults(t *testing.T) {
 	}
 }
 
+func TestSeedancePromptUsesReferenceUsageNote(t *testing.T) {
+	canonical := canonicalPromptReferences(t, []video.Reference{{
+		ID: "1", Kind: "image", Role: "reference_image", URL: "https://cdn.example.com/outfit.png", UsageNote: "保持红色风衣一致",
+	}})
+	got := CompileSeedancePrompt(PromptInput{Mode: "reference", Subject: "小夏", Action: "向前走", References: canonical}, fullPromptCapabilities())
+	if !strings.Contains(got.Prompt, "用途：保持红色风衣一致") {
+		t.Fatalf("prompt omitted usage note: %q", got.Prompt)
+	}
+}
+
 func TestSeedancePromptHashesAreDeterministicAndContentBound(t *testing.T) {
 	in := PromptInput{Mode: "reference", Subject: "小夏", Action: "走入车站"}
 	first := CompileSeedancePrompt(in, fullPromptCapabilities())
@@ -248,11 +259,20 @@ func canonicalPromptReferences(t *testing.T, references []video.Reference) video
 
 func fullPromptCapabilities() video.Capabilities {
 	return video.Capabilities{
-		Model:             "video-ds-2.0",
-		CapabilityVersion: "prompt-capability-v1",
-		TaskModes:         []string{"reference", "edit", "extend"},
+		Model:              "video-ds-2.0",
+		CapabilityVersion:  "prompt-capability-v1",
+		SupportedDurations: []int{4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
+		AspectRatios:       []string{"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"},
+		TaskModes:          []string{"reference", "edit", "extend"},
 		ReferenceRoles: []string{
 			"reference_image", "first_frame", "last_frame", "reference_video", "reference_audio", "edit_target", "extend_target",
+		},
+		Limits: config.MediaLimits{
+			MaxImages:            9,
+			MaxVideos:            3,
+			MaxAudios:            3,
+			MaxVideoSecondsTotal: 15,
+			MaxAudioSecondsTotal: 15,
 		},
 	}
 }

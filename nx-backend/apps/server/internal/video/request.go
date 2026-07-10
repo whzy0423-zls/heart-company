@@ -8,6 +8,7 @@ type Reference struct {
 	SortOrder       int      `json:"sortOrder"`
 	SourceType      string   `json:"sourceType"`
 	SourceID        string   `json:"sourceId"`
+	UsageNote       string   `json:"usageNote"`
 	DurationSeconds *float64 `json:"durationSeconds,omitempty"`
 }
 

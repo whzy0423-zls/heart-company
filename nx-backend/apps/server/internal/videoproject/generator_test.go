@@ -285,3 +285,36 @@ func TestNormalizeShotAssetInputAcceptsPublicObjectURL(t *testing.T) {
 		t.Fatalf("expected public objectUrl to be accepted: %v", err)
 	}
 }
+
+func TestNormalizeShotAssetInputDefaultsLegacyRoleAndPreservesCanonicalMetadata(t *testing.T) {
+	input := ShotAssetInput{
+		AssetType:  "video",
+		ObjectURL:  "https://oss.example.com/shot.mp4",
+		SortOrder:  3,
+		SourceType: " upload ",
+		SourceID:   " asset-7 ",
+		UsageNote:  " 参考运镜 ",
+	}
+
+	if err := normalizeShotAssetInput(&input); err != nil {
+		t.Fatal(err)
+	}
+	if input.ReferenceRole != "reference_video" || input.SortOrder != 3 {
+		t.Fatalf("normalized role/order = %+v", input)
+	}
+	if input.SourceType != "upload" || input.SourceID != "asset-7" || input.UsageNote != "参考运镜" {
+		t.Fatalf("normalized metadata = %+v", input)
+	}
+}
+
+func TestNormalizeShotAssetInputRejectsRoleKindMismatch(t *testing.T) {
+	input := ShotAssetInput{
+		AssetType:     "image",
+		ObjectURL:     "https://oss.example.com/shot.png",
+		ReferenceRole: "edit_target",
+	}
+
+	if err := normalizeShotAssetInput(&input); err == nil || err.Error() != "分镜素材类型与用途不匹配" {
+		t.Fatalf("error = %v, want role-kind mismatch", err)
+	}
+}

@@ -388,6 +388,11 @@ CREATE TABLE IF NOT EXISTS video_shot_assets (
   name          TEXT NOT NULL DEFAULT '',
   mime_type     TEXT NOT NULL DEFAULT '',
   size_bytes    BIGINT NOT NULL DEFAULT 0,
+  reference_role TEXT NOT NULL DEFAULT '',
+  sort_order    INT NOT NULL DEFAULT 0,
+  source_type   TEXT NOT NULL DEFAULT '',
+  source_id     TEXT NOT NULL DEFAULT '',
+  usage_note    TEXT NOT NULL DEFAULT '',
   create_time   TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -397,6 +402,11 @@ ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS object_url TEXT NOT NULL 
 ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
 ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS mime_type TEXT NOT NULL DEFAULT '';
 ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS size_bytes BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS reference_role TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS sort_order INT NOT NULL DEFAULT 0;
+ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS source_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS usage_note TEXT NOT NULL DEFAULT '';
 ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS create_time TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS update_time TIMESTAMPTZ NOT NULL DEFAULT now();
 DO $$
@@ -561,6 +571,7 @@ CREATE INDEX IF NOT EXISTS idx_video_project_scenes_project ON video_project_sce
 CREATE INDEX IF NOT EXISTS idx_video_shots_project_order ON video_shots(project_id, order_num);
 CREATE INDEX IF NOT EXISTS idx_video_shots_status ON video_shots(status);
 CREATE INDEX IF NOT EXISTS idx_video_shot_assets_shot ON video_shot_assets(shot_id, asset_type);
+CREATE INDEX IF NOT EXISTS idx_video_shot_assets_order ON video_shot_assets(shot_id, sort_order, id);
 CREATE INDEX IF NOT EXISTS idx_video_generations_shot ON video_generations(shot_id, create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_video_compose_jobs_project ON video_compose_jobs(project_id, create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_rag_documents_status_sort ON rag_documents(status, sort ASC, update_time DESC);

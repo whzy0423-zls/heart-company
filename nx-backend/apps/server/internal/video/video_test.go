@@ -696,6 +696,49 @@ func TestGenerateRejectsRequestKeyReuseWhenReferenceRoleChangesAcrossInputShapes
 	}
 }
 
+func TestGenerateNormalizedRejectsRequestKeyReuseWhenUsageNoteChanges(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"status": "queued", "task_id": "task-usage-note"},
+		})
+	}))
+	defer server.Close()
+	database := openVideoTestDB(t, &videoDBState{})
+	defer database.Close()
+	store := allowLocalTestStore(NewStore(database, nil, config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		GatewayContract: LegacyFlatContract(),
+	}))
+	capabilities := store.Capabilities("video-ds-2.0")
+	request := GenerateRequest{
+		Model:             capabilities.Model,
+		Prompt:            "usage note intent",
+		Duration:          10,
+		AspectRatio:       "16:9",
+		TaskMode:          "reference",
+		RequestKey:        submissionKeyOne,
+		CapabilityVersion: capabilities.CapabilityVersion,
+		References: []Reference{{
+			ID: "image-1", Kind: "image", Role: "reference_image", URL: "https://cdn.example.com/character.png", UsageNote: "人物外观",
+		}},
+	}
+	if _, err := store.GenerateNormalized(context.Background(), request, GenerationContext{}); err != nil {
+		t.Fatal(err)
+	}
+	request.References[0].UsageNote = "人物服饰"
+	_, err := store.GenerateNormalized(context.Background(), request, GenerationContext{})
+	var conflict *RequestKeyConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("error = %T %v, want *RequestKeyConflictError", err, err)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("create POST attempts = %d, want 1", attempts.Load())
+	}
+}
+
 func TestGenerateReusesAcceptedRequestAfterGatewayCapabilityChange(t *testing.T) {
 	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
