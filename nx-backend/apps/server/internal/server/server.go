@@ -2380,6 +2380,20 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := modelconfig.UpsertStore(r.Context(), s.db, merged); err != nil {
+			var contractErr *modelconfig.GatewayContractValidationError
+			if errors.As(err, &contractErr) {
+				httpx.JSON(w, http.StatusBadRequest, httpx.Response{
+					Code: -1,
+					Data: nil,
+					Error: map[string]string{
+						"code":    contractErr.Code,
+						"field":   contractErr.Field,
+						"message": contractErr.Error(),
+					},
+					Message: contractErr.Error(),
+				})
+				return
+			}
 			httpx.Fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}

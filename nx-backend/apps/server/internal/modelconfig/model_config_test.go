@@ -244,6 +244,134 @@ func TestValidateVideoGatewayContractAcceptsContentItems(t *testing.T) {
 	}
 }
 
+func TestValidateVideoGatewayContractRejectsDuplicateNormalizedMapKeys(t *testing.T) {
+	cases := []struct {
+		name   string
+		field  string
+		mutate func(*config.GatewayContractConfig)
+	}{
+		{
+			name:  "role fields",
+			field: "references.roleFields",
+			mutate: func(contract *config.GatewayContractConfig) {
+				contract.References.RoleFields = map[string]string{
+					" edit_target": "target_video",
+					"edit_target ": "other_target_video",
+				}
+			},
+		},
+		{
+			name:  "duration value map",
+			field: "duration.valueMap",
+			mutate: func(contract *config.GatewayContractConfig) {
+				contract.Duration.ValueMap = map[string]string{
+					" smart": "-1",
+					"smart ": "auto",
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for range 20 {
+				contract := testContentItemsGatewayContract()
+				tc.mutate(&contract)
+
+				err := ValidateVideoGatewayContract(contract)
+				var validationErr *GatewayContractValidationError
+				if !errors.As(err, &validationErr) {
+					t.Fatalf("expected typed duplicate-key error, got %T: %v", err, err)
+				}
+				if validationErr.Code != "duplicate_normalized_key" || validationErr.Field != tc.field {
+					t.Fatalf("expected duplicate_normalized_key at %q, got code=%q field=%q", tc.field, validationErr.Code, validationErr.Field)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateVideoGatewayContractRequiresCompleteIdentity(t *testing.T) {
+	cases := []struct {
+		name     string
+		contract config.GatewayContractConfig
+		code     string
+		field    string
+	}{
+		{
+			name: "body without name",
+			contract: config.GatewayContractConfig{
+				Duration: config.FieldEncoding{Name: "seconds", ValueType: "int"},
+			},
+			code:  "missing_contract_name",
+			field: "name",
+		},
+		{
+			name:     "name without version",
+			contract: config.GatewayContractConfig{Name: "configured_contract"},
+			code:     "missing_contract_version",
+			field:    "version",
+		},
+		{
+			name:     "version without name",
+			contract: config.GatewayContractConfig{Version: "2"},
+			code:     "missing_contract_name",
+			field:    "name",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateVideoGatewayContract(tc.contract)
+			var validationErr *GatewayContractValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("expected typed identity error, got %T: %v", err, err)
+			}
+			if validationErr.Code != tc.code || validationErr.Field != tc.field {
+				t.Fatalf("expected code=%q field=%q, got code=%q field=%q", tc.code, tc.field, validationErr.Code, validationErr.Field)
+			}
+		})
+	}
+
+	if err := ValidateVideoGatewayContract(config.GatewayContractConfig{}); err != nil {
+		t.Fatalf("expected the complete zero value to mean no override, got %v", err)
+	}
+}
+
+func TestValidateVideoGatewayContractRejectsReservedIdempotencyHeaders(t *testing.T) {
+	headers := []string{
+		"Authorization",
+		"Cookie",
+		"Proxy-Authorization",
+		"Proxy-Authenticate",
+		"Content-Type",
+		"Content-Length",
+		"Content-Encoding",
+		"Transfer-Encoding",
+		"Expect",
+		"Host",
+		"Connection",
+		"Upgrade",
+		"X-HTTP-Method-Override",
+	}
+
+	for _, header := range headers {
+		t.Run(header, func(t *testing.T) {
+			contract := testContentItemsGatewayContract()
+			contract.Idempotency.Header = header
+
+			err := ValidateVideoGatewayContract(contract)
+			var validationErr *GatewayContractValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("expected typed reserved-header error, got %T: %v", err, err)
+			}
+			if validationErr.Code != "reserved_header" || validationErr.Field != "idempotency.header" {
+				t.Fatalf("expected reserved_header at idempotency.header, got code=%q field=%q", validationErr.Code, validationErr.Field)
+			}
+		})
+	}
+}
+
 func TestUpsertStoreRejectsUnsafeVideoGatewayContractBeforeDatabase(t *testing.T) {
 	contract := testContentItemsGatewayContract()
 	contract.Duration.Name = "content[0]"
@@ -267,6 +395,33 @@ func TestApplyVideoIgnoresUnsafeStoredContract(t *testing.T) {
 
 	if !reflect.DeepEqual(got.GatewayContract, baseContract) {
 		t.Fatalf("expected unsafe stored contract to fail closed to the environment baseline:\n got: %#v\nwant: %#v", got.GatewayContract, baseContract)
+	}
+}
+
+func TestApplyVideoDeepCopiesBaseGatewayContractWithoutOverride(t *testing.T) {
+	base := config.VideoConfig{GatewayContract: testContentItemsGatewayContract()}
+
+	got := (Config{}).ApplyVideo(base)
+	got.GatewayContract.DeclaredModes[0] = "mutated_mode"
+	got.GatewayContract.Duration.ValueMap["smart"] = "mutated_value"
+	got.GatewayContract.References.RoleFields["edit_target"] = "mutated_field"
+	got.GatewayContract.References.SupportsRoles[0] = "mutated_role"
+	got.GatewayContract.Reconciliation.TaskIDPaths[0] = "mutated.path"
+
+	if base.GatewayContract.DeclaredModes[0] != "reference" {
+		t.Fatalf("base declared modes were aliased: %#v", base.GatewayContract.DeclaredModes)
+	}
+	if base.GatewayContract.Duration.ValueMap["smart"] != "-1" {
+		t.Fatalf("base value map was aliased: %#v", base.GatewayContract.Duration.ValueMap)
+	}
+	if base.GatewayContract.References.RoleFields["edit_target"] != "edit_target" {
+		t.Fatalf("base role fields were aliased: %#v", base.GatewayContract.References.RoleFields)
+	}
+	if base.GatewayContract.References.SupportsRoles[0] != "reference_image" {
+		t.Fatalf("base supported roles were aliased: %#v", base.GatewayContract.References.SupportsRoles)
+	}
+	if base.GatewayContract.Reconciliation.TaskIDPaths[0] != "data.task_id" {
+		t.Fatalf("base task ID paths were aliased: %#v", base.GatewayContract.Reconciliation.TaskIDPaths)
 	}
 }
 

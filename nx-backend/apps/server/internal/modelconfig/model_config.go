@@ -190,6 +190,7 @@ func (c Config) ApplyChat(base config.MiniMaxConfig) config.MiniMaxConfig {
 // ApplyVideo 把覆盖值叠加到环境变量基线上，空字段回退到 base。
 func (c Config) ApplyVideo(base config.VideoConfig) config.VideoConfig {
 	out := base
+	out.GatewayContract = config.TrimGatewayContract(base.GatewayContract)
 	if v := strings.TrimSpace(c.Video.APIBase); v != "" {
 		out.APIBase = v
 	}

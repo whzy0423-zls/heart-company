@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -637,6 +638,42 @@ func TestValidateModelConfigBasesRejectsLocalDailyQuizAddress(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected local daily quiz api base to be rejected")
+	}
+}
+
+func TestModelConfigPUTReturnsStructuredGatewayContractValidationError(t *testing.T) {
+	s := &Server{}
+	response := performRawUnit(http.HandlerFunc(s.modelConfig), http.MethodPut, "/api/model-config", `{
+		"video": {
+			"apiKey": "must-not-leak",
+			"gatewayContract": {
+				"name": "configured_contract",
+				"version": "2",
+				"duration": {"name": "content[0]", "valueType": "int"}
+			}
+		}
+	}`)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("expected HTTP 400, got %d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Code  int `json:"code"`
+		Error struct {
+			Code    string `json:"code"`
+			Field   string `json:"field"`
+			Message string `json:"message"`
+		} `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Code != -1 || body.Error.Code != "invalid_field_name" || body.Error.Field != "duration.name" || body.Error.Message == "" || body.Message == "" {
+		t.Fatalf("unexpected structured validation response: %+v", body)
+	}
+	if strings.Contains(response.Body.String(), "must-not-leak") {
+		t.Fatalf("response leaked submitted API key: %s", response.Body.String())
 	}
 }
 

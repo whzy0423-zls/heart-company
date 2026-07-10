@@ -8,7 +8,11 @@ import (
 )
 
 func TestLoadDefaultsVideoGatewayContract(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("VIDEO_MODEL_PROFILE", "")
 	t.Setenv("VIDEO_GATEWAY_CONTRACT", "")
+	t.Setenv("VIDEO_GATEWAY_CONTRACT_VERSION", "")
+	t.Setenv("VIDEO_GATEWAY_CONTRACT_JSON", "")
 
 	env := Load()
 
@@ -17,6 +21,46 @@ func TestLoadDefaultsVideoGatewayContract(t *testing.T) {
 	}
 	if env.Video.GatewayContract.Version != "1" {
 		t.Fatal("expected contract version 1")
+	}
+}
+
+func TestLoadVideoGatewayContractFailsClosedForIncompleteIdentity(t *testing.T) {
+	cases := []struct {
+		name     string
+		contract string
+		version  string
+		body     string
+	}{
+		{
+			name: "body without name",
+			body: `{"duration":{"name":"seconds","valueType":"int"}}`,
+		},
+		{
+			name:     "name without version",
+			contract: "configured_contract",
+			body:     `{"duration":{"name":"seconds","valueType":"int"}}`,
+		},
+		{
+			name:    "version without name",
+			version: "2",
+			body:    `{"duration":{"name":"seconds","valueType":"int"}}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+			t.Setenv("VIDEO_MODEL_PROFILE", "")
+			t.Setenv("VIDEO_GATEWAY_CONTRACT", tc.contract)
+			t.Setenv("VIDEO_GATEWAY_CONTRACT_VERSION", tc.version)
+			t.Setenv("VIDEO_GATEWAY_CONTRACT_JSON", tc.body)
+
+			env := Load()
+
+			if !reflect.DeepEqual(env.Video.GatewayContract, GatewayContractConfig{}) {
+				t.Fatalf("expected incomplete explicit contract to fail closed, got %#v", env.Video.GatewayContract)
+			}
+		})
 	}
 }
 

@@ -8,7 +8,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -207,23 +209,35 @@ var gatewayReferenceRoles = map[string]struct{}{
 }
 
 var reservedIdempotencyHeaders = map[string]struct{}{
-	"authorization":       {},
-	"proxy-authorization": {},
-	"cookie":              {},
-	"set-cookie":          {},
-	"host":                {},
-	"content-length":      {},
-	"transfer-encoding":   {},
-	"connection":          {},
-	"keep-alive":          {},
-	"proxy-connection":    {},
-	"te":                  {},
-	"trailer":             {},
-	"upgrade":             {},
+	"authorization":          {},
+	"proxy-authorization":    {},
+	"proxy-authenticate":     {},
+	"cookie":                 {},
+	"set-cookie":             {},
+	"host":                   {},
+	"content-type":           {},
+	"content-length":         {},
+	"content-encoding":       {},
+	"transfer-encoding":      {},
+	"expect":                 {},
+	"connection":             {},
+	"keep-alive":             {},
+	"proxy-connection":       {},
+	"te":                     {},
+	"trailer":                {},
+	"upgrade":                {},
+	"x-http-method-override": {},
 }
 
 func ValidateGatewayContract(contract GatewayContractConfig) error {
-	contract = TrimGatewayContract(contract)
+	if reflect.DeepEqual(contract, GatewayContractConfig{}) {
+		return nil
+	}
+	var err error
+	contract, err = normalizeGatewayContract(contract)
+	if err != nil {
+		return err
+	}
 	fields := []struct {
 		name  string
 		value FieldEncoding
@@ -401,33 +415,64 @@ func legacyVideoGatewayContract() GatewayContractConfig {
 }
 
 func TrimGatewayContract(contract GatewayContractConfig) GatewayContractConfig {
+	normalized, err := normalizeGatewayContract(contract)
+	if err != nil {
+		return cloneGatewayContract(contract)
+	}
+	return normalized
+}
+
+func normalizeGatewayContract(contract GatewayContractConfig) (GatewayContractConfig, error) {
+	if reflect.DeepEqual(contract, GatewayContractConfig{}) {
+		return GatewayContractConfig{}, nil
+	}
 	contract.Name = strings.TrimSpace(contract.Name)
 	contract.Version = strings.TrimSpace(contract.Version)
+	if contract.Name == "" {
+		return GatewayContractConfig{}, gatewayContractError("missing_contract_name", "name")
+	}
+	if contract.Version == "" {
+		return GatewayContractConfig{}, gatewayContractError("missing_contract_version", "version")
+	}
 	contract.DeclaredModes = trimContractStrings(contract.DeclaredModes)
-	contract.Duration = trimFieldEncoding(contract.Duration)
-	contract.AspectRatio = trimFieldEncoding(contract.AspectRatio)
-	contract.Resolution = trimFieldEncoding(contract.Resolution)
-	contract.GenerateAudio = trimFieldEncoding(contract.GenerateAudio)
-	contract.TaskMode = trimFieldEncoding(contract.TaskMode)
+	var err error
+	if contract.Duration, err = trimFieldEncoding(contract.Duration, "duration"); err != nil {
+		return GatewayContractConfig{}, err
+	}
+	if contract.AspectRatio, err = trimFieldEncoding(contract.AspectRatio, "aspectRatio"); err != nil {
+		return GatewayContractConfig{}, err
+	}
+	if contract.Resolution, err = trimFieldEncoding(contract.Resolution, "resolution"); err != nil {
+		return GatewayContractConfig{}, err
+	}
+	if contract.GenerateAudio, err = trimFieldEncoding(contract.GenerateAudio, "generateAudio"); err != nil {
+		return GatewayContractConfig{}, err
+	}
+	if contract.TaskMode, err = trimFieldEncoding(contract.TaskMode, "taskMode"); err != nil {
+		return GatewayContractConfig{}, err
+	}
 	contract.References.Mode = strings.TrimSpace(contract.References.Mode)
 	contract.References.ImageField = strings.TrimSpace(contract.References.ImageField)
 	contract.References.VideoField = strings.TrimSpace(contract.References.VideoField)
 	contract.References.AudioField = strings.TrimSpace(contract.References.AudioField)
-	contract.References.RoleFields = trimContractStringMap(contract.References.RoleFields)
+	if contract.References.RoleFields, err = trimContractStringMap(contract.References.RoleFields, "references.roleFields"); err != nil {
+		return GatewayContractConfig{}, err
+	}
 	contract.References.SupportsRoles = trimContractStrings(contract.References.SupportsRoles)
 	contract.Idempotency.Header = strings.TrimSpace(contract.Idempotency.Header)
 	contract.Reconciliation.Method = strings.TrimSpace(contract.Reconciliation.Method)
 	contract.Reconciliation.PathTemplate = strings.TrimSpace(contract.Reconciliation.PathTemplate)
 	contract.Reconciliation.TaskIDPaths = trimContractStrings(contract.Reconciliation.TaskIDPaths)
 	contract.Reconciliation.StatusPaths = trimContractStrings(contract.Reconciliation.StatusPaths)
-	return contract
+	return contract, nil
 }
 
-func trimFieldEncoding(field FieldEncoding) FieldEncoding {
+func trimFieldEncoding(field FieldEncoding, name string) (FieldEncoding, error) {
 	field.Name = strings.TrimSpace(field.Name)
 	field.ValueType = strings.TrimSpace(field.ValueType)
-	field.ValueMap = trimContractStringMap(field.ValueMap)
-	return field
+	var err error
+	field.ValueMap, err = trimContractStringMap(field.ValueMap, name+".valueMap")
+	return field, err
 }
 
 func trimContractStrings(values []string) []string {
@@ -441,47 +486,89 @@ func trimContractStrings(values []string) []string {
 	return out
 }
 
-func trimContractStringMap(values map[string]string) map[string]string {
+func trimContractStringMap(values map[string]string, field string) (map[string]string, error) {
+	if values == nil {
+		return nil, nil
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make(map[string]string, len(values))
+	seen := make(map[string]string, len(values))
+	for _, key := range keys {
+		normalizedKey := strings.TrimSpace(key)
+		if previous, ok := seen[normalizedKey]; ok && normalizedKey != "" && previous != key {
+			return nil, gatewayContractError("duplicate_normalized_key", field)
+		}
+		seen[normalizedKey] = key
+		out[normalizedKey] = strings.TrimSpace(values[key])
+	}
+	return out, nil
+}
+
+func cloneGatewayContract(contract GatewayContractConfig) GatewayContractConfig {
+	clone := contract
+	clone.DeclaredModes = append([]string(nil), contract.DeclaredModes...)
+	clone.Duration.ValueMap = cloneContractStringMap(contract.Duration.ValueMap)
+	clone.AspectRatio.ValueMap = cloneContractStringMap(contract.AspectRatio.ValueMap)
+	clone.Resolution.ValueMap = cloneContractStringMap(contract.Resolution.ValueMap)
+	clone.GenerateAudio.ValueMap = cloneContractStringMap(contract.GenerateAudio.ValueMap)
+	clone.TaskMode.ValueMap = cloneContractStringMap(contract.TaskMode.ValueMap)
+	clone.References.RoleFields = cloneContractStringMap(contract.References.RoleFields)
+	clone.References.SupportsRoles = append([]string(nil), contract.References.SupportsRoles...)
+	clone.Reconciliation.TaskIDPaths = append([]string(nil), contract.Reconciliation.TaskIDPaths...)
+	clone.Reconciliation.StatusPaths = append([]string(nil), contract.Reconciliation.StatusPaths...)
+	return clone
+}
+
+func cloneContractStringMap(values map[string]string) map[string]string {
 	if values == nil {
 		return nil
 	}
-	out := make(map[string]string, len(values))
+	clone := make(map[string]string, len(values))
 	for key, value := range values {
-		out[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		clone[key] = value
 	}
-	return out
+	return clone
 }
 
 func loadVideoGatewayContract() GatewayContractConfig {
-	name := strings.TrimSpace(getenv("VIDEO_GATEWAY_CONTRACT", "legacy_flat_v1"))
-	if name == "" {
-		name = "legacy_flat_v1"
-	}
-	version := strings.TrimSpace(getenv("VIDEO_GATEWAY_CONTRACT_VERSION", "1"))
-	if version == "" {
-		version = "1"
+	name := strings.TrimSpace(os.Getenv("VIDEO_GATEWAY_CONTRACT"))
+	version := strings.TrimSpace(os.Getenv("VIDEO_GATEWAY_CONTRACT_VERSION"))
+	raw := strings.TrimSpace(os.Getenv("VIDEO_GATEWAY_CONTRACT_JSON"))
+	if name == "" && version == "" && raw == "" {
+		return TrimGatewayContract(legacyVideoGatewayContract())
 	}
 
-	base := GatewayContractConfig{}
-	if name == "legacy_flat_v1" {
-		base = legacyVideoGatewayContract()
-	}
-	base.Name = name
-	base.Version = version
-	contract := base
-	if raw := strings.TrimSpace(getenv("VIDEO_GATEWAY_CONTRACT_JSON", "")); raw != "" {
-		var configured GatewayContractConfig
-		if json.Unmarshal([]byte(raw), &configured) == nil {
-			contract = configured
+	contract := GatewayContractConfig{}
+	if raw != "" {
+		if json.Unmarshal([]byte(raw), &contract) != nil {
+			return GatewayContractConfig{}
 		}
+	} else if name == "legacy_flat_v1" && version == "1" {
+		contract = legacyVideoGatewayContract()
 	}
-	contract.Name = name
-	contract.Version = version
-	contract = TrimGatewayContract(contract)
-	if ValidateGatewayContract(contract) != nil {
-		return TrimGatewayContract(base)
+	if name != "" {
+		contract.Name = name
 	}
-	return contract
+	if version != "" {
+		contract.Version = version
+	}
+
+	normalized, err := normalizeGatewayContract(contract)
+	if err != nil {
+		return GatewayContractConfig{}
+	}
+	if ValidateGatewayContract(normalized) == nil {
+		return normalized
+	}
+	fallback := GatewayContractConfig{Name: normalized.Name, Version: normalized.Version}
+	if normalized.Name == "legacy_flat_v1" && normalized.Version == "1" {
+		fallback = legacyVideoGatewayContract()
+	}
+	return TrimGatewayContract(fallback)
 }
 
 // ImageConfig 文生图网关配置（gpt-image-2，OpenAI 兼容 / 中转代理）。
