@@ -3,8 +3,143 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
+
+func TestLoadDefaultsVideoGatewayContract(t *testing.T) {
+	t.Setenv("VIDEO_GATEWAY_CONTRACT", "")
+
+	env := Load()
+
+	if env.Video.GatewayContract.Name != "legacy_flat_v1" {
+		t.Fatalf("got %#v", env.Video.GatewayContract)
+	}
+	if env.Video.GatewayContract.Version != "1" {
+		t.Fatal("expected contract version 1")
+	}
+}
+
+func TestLoadParsesVideoGatewayContract(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("VIDEO_MODEL_PROFILE", " standard ")
+	t.Setenv("VIDEO_GATEWAY_CONTRACT", " seedance2_configured_v1 ")
+	t.Setenv("VIDEO_GATEWAY_CONTRACT_VERSION", " 7 ")
+	t.Setenv("VIDEO_GATEWAY_CONTRACT_JSON", `{
+		"name":"ignored-json-name",
+		"version":"ignored-json-version",
+		"declaredModes":["reference","edit","extend"],
+		"duration":{"name":"content.duration","valueType":"int","valueMap":{"smart":"-1"}},
+		"aspectRatio":{"name":"content.aspect_ratio","valueType":"string"},
+		"resolution":{"name":"content.resolution","valueType":"string","valueMap":{"1080P":"1080p"}},
+		"generateAudio":{"name":"content.generate_audio","valueType":"bool"},
+		"taskMode":{"name":"content.task_mode","valueType":"string"},
+		"references":{
+			"mode":"content_items",
+			"imageField":"image_url",
+			"videoField":"video_url",
+			"audioField":"audio_url",
+			"roleFields":{
+				"reference_image":"reference_image",
+				"first_frame":"first_frame",
+				"last_frame":"last_frame",
+				"reference_video":"reference_video",
+				"reference_audio":"reference_audio",
+				"edit_target":"edit_target",
+				"extend_target":"extend_target"
+			},
+			"supportsRoles":["reference_image","first_frame","last_frame","reference_video","reference_audio","edit_target","extend_target"],
+			"requiresTargetFirst":true
+		},
+		"limits":{"maxImages":9,"maxVideos":3,"maxAudios":3,"maxVideoSecondsTotal":15,"maxAudioSecondsTotal":15},
+		"idempotency":{"header":"X-Request-Key"},
+		"reconciliation":{
+			"lookupByRequestKey":true,
+			"method":"GET",
+			"pathTemplate":"/v1/videos/by-request/{requestKey}",
+			"taskIdPaths":["data.task_id","task_id"],
+			"statusPaths":["data.status","status"]
+		}
+	}`)
+
+	env := Load()
+
+	want := GatewayContractConfig{
+		Name:          "seedance2_configured_v1",
+		Version:       "7",
+		DeclaredModes: []string{"reference", "edit", "extend"},
+		Duration: FieldEncoding{
+			Name:      "content.duration",
+			ValueType: "int",
+			ValueMap:  map[string]string{"smart": "-1"},
+		},
+		AspectRatio: FieldEncoding{Name: "content.aspect_ratio", ValueType: "string"},
+		Resolution: FieldEncoding{
+			Name:      "content.resolution",
+			ValueType: "string",
+			ValueMap:  map[string]string{"1080P": "1080p"},
+		},
+		GenerateAudio: FieldEncoding{Name: "content.generate_audio", ValueType: "bool"},
+		TaskMode:      FieldEncoding{Name: "content.task_mode", ValueType: "string"},
+		References: ReferenceEncoding{
+			Mode:       "content_items",
+			ImageField: "image_url",
+			VideoField: "video_url",
+			AudioField: "audio_url",
+			RoleFields: map[string]string{
+				"reference_image": "reference_image",
+				"first_frame":     "first_frame",
+				"last_frame":      "last_frame",
+				"reference_video": "reference_video",
+				"reference_audio": "reference_audio",
+				"edit_target":     "edit_target",
+				"extend_target":   "extend_target",
+			},
+			SupportsRoles:       []string{"reference_image", "first_frame", "last_frame", "reference_video", "reference_audio", "edit_target", "extend_target"},
+			RequiresTargetFirst: true,
+		},
+		Limits: MediaLimits{
+			MaxImages:            9,
+			MaxVideos:            3,
+			MaxAudios:            3,
+			MaxVideoSecondsTotal: 15,
+			MaxAudioSecondsTotal: 15,
+		},
+		Idempotency: IdempotencyContract{Header: "X-Request-Key"},
+		Reconciliation: ReconciliationContract{
+			LookupByRequestKey: true,
+			Method:             "GET",
+			PathTemplate:       "/v1/videos/by-request/{requestKey}",
+			TaskIDPaths:        []string{"data.task_id", "task_id"},
+			StatusPaths:        []string{"data.status", "status"},
+		},
+	}
+	if env.Video.ModelProfile != "standard" {
+		t.Fatalf("expected trimmed model profile, got %q", env.Video.ModelProfile)
+	}
+	if !reflect.DeepEqual(env.Video.GatewayContract, want) {
+		t.Fatalf("unexpected gateway contract:\n got: %#v\nwant: %#v", env.Video.GatewayContract, want)
+	}
+}
+
+func TestLoadFailsClosedForUnsafeVideoGatewayContractJSON(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("VIDEO_GATEWAY_CONTRACT", "custom_contract")
+	t.Setenv("VIDEO_GATEWAY_CONTRACT_VERSION", "2")
+	t.Setenv("VIDEO_GATEWAY_CONTRACT_JSON", `{
+		"duration":{"name":"content[0]","valueType":"int"},
+		"resolution":{"name":"resolution","valueType":"string"}
+	}`)
+
+	env := Load()
+
+	if env.Video.GatewayContract.Name != "custom_contract" || env.Video.GatewayContract.Version != "2" {
+		t.Fatalf("expected selected contract identity to remain visible, got %#v", env.Video.GatewayContract)
+	}
+	if env.Video.GatewayContract.Duration.Name != "" || env.Video.GatewayContract.Resolution.Name != "" {
+		t.Fatalf("expected unsafe configured fields to fail closed, got %#v", env.Video.GatewayContract)
+	}
+}
 
 func TestLoadMiniappChatDefaults(t *testing.T) {
 	t.Setenv("MINIAPP_CHAT_RATE_LIMIT_PER_MINUTE", "")

@@ -2,11 +2,13 @@ package config
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -118,10 +120,368 @@ type MiniMaxConfig struct {
 // VideoConfig 视频生成网关配置（New API / OpenAI 兼容网关）。
 // 视频生成为异步：创建任务返回 task_id，需轮询获取结果地址。
 type VideoConfig struct {
-	APIBase        string
-	APIKey         string
-	Model          string
-	TimeoutSeconds int
+	APIBase         string
+	APIKey          string
+	Model           string
+	ModelProfile    string
+	GatewayContract GatewayContractConfig
+	TimeoutSeconds  int
+}
+
+type FieldEncoding struct {
+	Name      string            `json:"name"`
+	ValueType string            `json:"valueType"`
+	ValueMap  map[string]string `json:"valueMap,omitempty"`
+}
+
+type ReferenceEncoding struct {
+	Mode                string            `json:"mode"`
+	ImageField          string            `json:"imageField"`
+	VideoField          string            `json:"videoField"`
+	AudioField          string            `json:"audioField"`
+	RoleFields          map[string]string `json:"roleFields,omitempty"`
+	SupportsRoles       []string          `json:"supportsRoles"`
+	RequiresTargetFirst bool              `json:"requiresTargetFirst"`
+}
+
+type MediaLimits struct {
+	MaxImages            int     `json:"maxImages"`
+	MaxVideos            int     `json:"maxVideos"`
+	MaxAudios            int     `json:"maxAudios"`
+	MaxVideoSecondsTotal float64 `json:"maxVideoSecondsTotal"`
+	MaxAudioSecondsTotal float64 `json:"maxAudioSecondsTotal"`
+}
+
+type IdempotencyContract struct {
+	Header string `json:"header"`
+}
+
+type ReconciliationContract struct {
+	LookupByRequestKey bool     `json:"lookupByRequestKey"`
+	Method             string   `json:"method"`
+	PathTemplate       string   `json:"pathTemplate"`
+	TaskIDPaths        []string `json:"taskIdPaths"`
+	StatusPaths        []string `json:"statusPaths"`
+}
+
+type GatewayContractConfig struct {
+	Name           string                 `json:"name"`
+	Version        string                 `json:"version"`
+	DeclaredModes  []string               `json:"declaredModes"`
+	Duration       FieldEncoding          `json:"duration"`
+	AspectRatio    FieldEncoding          `json:"aspectRatio"`
+	Resolution     FieldEncoding          `json:"resolution"`
+	GenerateAudio  FieldEncoding          `json:"generateAudio"`
+	TaskMode       FieldEncoding          `json:"taskMode"`
+	References     ReferenceEncoding      `json:"references"`
+	Limits         MediaLimits            `json:"limits"`
+	Idempotency    IdempotencyContract    `json:"idempotency"`
+	Reconciliation ReconciliationContract `json:"reconciliation"`
+}
+
+type GatewayContractValidationError struct {
+	Code  string
+	Field string
+}
+
+func (e *GatewayContractValidationError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Field == "" {
+		return e.Code
+	}
+	return fmt.Sprintf("%s: %s", e.Code, e.Field)
+}
+
+var gatewayFieldNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+var gatewayReferenceRoles = map[string]struct{}{
+	"reference_image": {},
+	"first_frame":     {},
+	"last_frame":      {},
+	"reference_video": {},
+	"reference_audio": {},
+	"edit_target":     {},
+	"extend_target":   {},
+}
+
+var reservedIdempotencyHeaders = map[string]struct{}{
+	"authorization":       {},
+	"proxy-authorization": {},
+	"cookie":              {},
+	"set-cookie":          {},
+	"host":                {},
+	"content-length":      {},
+	"transfer-encoding":   {},
+	"connection":          {},
+	"keep-alive":          {},
+	"proxy-connection":    {},
+	"te":                  {},
+	"trailer":             {},
+	"upgrade":             {},
+}
+
+func ValidateGatewayContract(contract GatewayContractConfig) error {
+	contract = TrimGatewayContract(contract)
+	fields := []struct {
+		name  string
+		value FieldEncoding
+	}{
+		{"duration", contract.Duration},
+		{"aspectRatio", contract.AspectRatio},
+		{"resolution", contract.Resolution},
+		{"generateAudio", contract.GenerateAudio},
+		{"taskMode", contract.TaskMode},
+	}
+	for _, field := range fields {
+		if err := validateGatewayFieldEncoding(field.name, field.value); err != nil {
+			return err
+		}
+	}
+
+	referenceFields := []struct {
+		name  string
+		value string
+	}{
+		{"references.imageField", contract.References.ImageField},
+		{"references.videoField", contract.References.VideoField},
+		{"references.audioField", contract.References.AudioField},
+	}
+	for _, field := range referenceFields {
+		if field.value != "" && !gatewayFieldNamePattern.MatchString(field.value) {
+			return gatewayContractError("invalid_field_name", field.name)
+		}
+	}
+	for role, field := range contract.References.RoleFields {
+		if _, ok := gatewayReferenceRoles[role]; !ok {
+			return gatewayContractError("invalid_reference_role", "references.roleFields")
+		}
+		if !gatewayFieldNamePattern.MatchString(field) {
+			return gatewayContractError("invalid_field_name", "references.roleFields")
+		}
+	}
+	for _, role := range contract.References.SupportsRoles {
+		if _, ok := gatewayReferenceRoles[role]; !ok {
+			return gatewayContractError("invalid_reference_role", "references.supportsRoles")
+		}
+	}
+
+	header := contract.Idempotency.Header
+	if header != "" {
+		if !isRFCHeaderToken(header) {
+			return gatewayContractError("invalid_header_name", "idempotency.header")
+		}
+		if _, reserved := reservedIdempotencyHeaders[strings.ToLower(header)]; reserved {
+			return gatewayContractError("reserved_header", "idempotency.header")
+		}
+	}
+
+	method := contract.Reconciliation.Method
+	if method != "" && !strings.EqualFold(method, "GET") {
+		return gatewayContractError("invalid_reconciliation_method", "reconciliation.method")
+	}
+	if contract.Reconciliation.LookupByRequestKey && !strings.EqualFold(method, "GET") {
+		return gatewayContractError("invalid_reconciliation_method", "reconciliation.method")
+	}
+	pathTemplate := contract.Reconciliation.PathTemplate
+	if pathTemplate != "" && !isSafeRelativeReconciliationPath(pathTemplate) {
+		return gatewayContractError("invalid_reconciliation_path", "reconciliation.pathTemplate")
+	}
+	if contract.Reconciliation.LookupByRequestKey && pathTemplate == "" {
+		return gatewayContractError("invalid_reconciliation_path", "reconciliation.pathTemplate")
+	}
+	return nil
+}
+
+func gatewayContractError(code, field string) error {
+	return &GatewayContractValidationError{Code: code, Field: field}
+}
+
+func validateGatewayFieldEncoding(name string, field FieldEncoding) error {
+	if field.Name == "" && field.ValueType == "" {
+		return nil
+	}
+	if !gatewayFieldNamePattern.MatchString(field.Name) {
+		return gatewayContractError("invalid_field_name", name+".name")
+	}
+	switch field.ValueType {
+	case "string", "int", "bool":
+		return nil
+	default:
+		return gatewayContractError("invalid_value_type", name+".valueType")
+	}
+}
+
+func isRFCHeaderToken(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		char := value[i]
+		if (char >= 'a' && char <= 'z') ||
+			(char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') {
+			continue
+		}
+		switch char {
+		case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func isSafeRelativeReconciliationPath(raw string) bool {
+	if raw == "" || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.Contains(raw, "\\") || containsControlCharacter(raw) {
+		return false
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.IsAbs() || parsed.Host != "" || parsed.User != nil || parsed.Opaque != "" || parsed.Fragment != "" {
+		return false
+	}
+	for _, segment := range strings.Split(parsed.EscapedPath(), "/") {
+		decoded := segment
+		for i := 0; i < 3; i++ {
+			next, err := url.PathUnescape(decoded)
+			if err != nil {
+				return false
+			}
+			if next == decoded {
+				break
+			}
+			decoded = next
+		}
+		if decoded == "." || decoded == ".." || strings.ContainsAny(decoded, "/\\") || containsControlCharacter(decoded) {
+			return false
+		}
+	}
+	return true
+}
+
+func containsControlCharacter(value string) bool {
+	for _, char := range value {
+		if char < 0x20 || char == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+func legacyVideoGatewayContract() GatewayContractConfig {
+	return GatewayContractConfig{
+		Name:          "legacy_flat_v1",
+		Version:       "1",
+		DeclaredModes: []string{"reference"},
+		Duration: FieldEncoding{
+			Name:      "seconds",
+			ValueType: "string",
+		},
+		AspectRatio: FieldEncoding{
+			Name:      "aspect_ratio",
+			ValueType: "string",
+		},
+		References: ReferenceEncoding{
+			Mode:          "flat_arrays",
+			ImageField:    "images",
+			VideoField:    "videos",
+			AudioField:    "audios",
+			SupportsRoles: []string{"reference_image", "reference_video", "reference_audio"},
+		},
+		Limits: MediaLimits{
+			MaxImages:            4,
+			MaxVideos:            2,
+			MaxAudios:            1,
+			MaxVideoSecondsTotal: 15,
+			MaxAudioSecondsTotal: 15,
+		},
+	}
+}
+
+func TrimGatewayContract(contract GatewayContractConfig) GatewayContractConfig {
+	contract.Name = strings.TrimSpace(contract.Name)
+	contract.Version = strings.TrimSpace(contract.Version)
+	contract.DeclaredModes = trimContractStrings(contract.DeclaredModes)
+	contract.Duration = trimFieldEncoding(contract.Duration)
+	contract.AspectRatio = trimFieldEncoding(contract.AspectRatio)
+	contract.Resolution = trimFieldEncoding(contract.Resolution)
+	contract.GenerateAudio = trimFieldEncoding(contract.GenerateAudio)
+	contract.TaskMode = trimFieldEncoding(contract.TaskMode)
+	contract.References.Mode = strings.TrimSpace(contract.References.Mode)
+	contract.References.ImageField = strings.TrimSpace(contract.References.ImageField)
+	contract.References.VideoField = strings.TrimSpace(contract.References.VideoField)
+	contract.References.AudioField = strings.TrimSpace(contract.References.AudioField)
+	contract.References.RoleFields = trimContractStringMap(contract.References.RoleFields)
+	contract.References.SupportsRoles = trimContractStrings(contract.References.SupportsRoles)
+	contract.Idempotency.Header = strings.TrimSpace(contract.Idempotency.Header)
+	contract.Reconciliation.Method = strings.TrimSpace(contract.Reconciliation.Method)
+	contract.Reconciliation.PathTemplate = strings.TrimSpace(contract.Reconciliation.PathTemplate)
+	contract.Reconciliation.TaskIDPaths = trimContractStrings(contract.Reconciliation.TaskIDPaths)
+	contract.Reconciliation.StatusPaths = trimContractStrings(contract.Reconciliation.StatusPaths)
+	return contract
+}
+
+func trimFieldEncoding(field FieldEncoding) FieldEncoding {
+	field.Name = strings.TrimSpace(field.Name)
+	field.ValueType = strings.TrimSpace(field.ValueType)
+	field.ValueMap = trimContractStringMap(field.ValueMap)
+	return field
+}
+
+func trimContractStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	out := make([]string, len(values))
+	for i, value := range values {
+		out[i] = strings.TrimSpace(value)
+	}
+	return out
+}
+
+func trimContractStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	return out
+}
+
+func loadVideoGatewayContract() GatewayContractConfig {
+	name := strings.TrimSpace(getenv("VIDEO_GATEWAY_CONTRACT", "legacy_flat_v1"))
+	if name == "" {
+		name = "legacy_flat_v1"
+	}
+	version := strings.TrimSpace(getenv("VIDEO_GATEWAY_CONTRACT_VERSION", "1"))
+	if version == "" {
+		version = "1"
+	}
+
+	base := GatewayContractConfig{}
+	if name == "legacy_flat_v1" {
+		base = legacyVideoGatewayContract()
+	}
+	base.Name = name
+	base.Version = version
+	contract := base
+	if raw := strings.TrimSpace(getenv("VIDEO_GATEWAY_CONTRACT_JSON", "")); raw != "" {
+		var configured GatewayContractConfig
+		if json.Unmarshal([]byte(raw), &configured) == nil {
+			contract = configured
+		}
+	}
+	contract.Name = name
+	contract.Version = version
+	contract = TrimGatewayContract(contract)
+	if ValidateGatewayContract(contract) != nil {
+		return TrimGatewayContract(base)
+	}
+	return contract
 }
 
 // ImageConfig 文生图网关配置（gpt-image-2，OpenAI 兼容 / 中转代理）。
@@ -307,10 +667,12 @@ func Load() Env {
 			SpugTimeoutSeconds: spugTimeout,
 		},
 		Video: VideoConfig{
-			APIBase:        getenv("VIDEO_API_BASE", ""),
-			APIKey:         getenv("VIDEO_API_KEY", ""),
-			Model:          getenv("VIDEO_MODEL", "video-ds-2.0-fast"),
-			TimeoutSeconds: videoTimeout,
+			APIBase:         getenv("VIDEO_API_BASE", ""),
+			APIKey:          getenv("VIDEO_API_KEY", ""),
+			Model:           getenv("VIDEO_MODEL", "video-ds-2.0-fast"),
+			ModelProfile:    strings.TrimSpace(getenv("VIDEO_MODEL_PROFILE", "")),
+			GatewayContract: loadVideoGatewayContract(),
+			TimeoutSeconds:  videoTimeout,
 		},
 		Image: ImageConfig{
 			APIBase:        getenv("IMAGE_API_BASE", ""),
