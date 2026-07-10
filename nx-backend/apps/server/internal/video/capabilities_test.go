@@ -273,6 +273,51 @@ func TestResolveCapabilitiesUsesDirectAspectValuesWhenMapIsEmpty(t *testing.T) {
 	}
 }
 
+func TestResolveCapabilitiesDetectsSmartAndFixedDurationEncodingCollision(t *testing.T) {
+	for _, field := range []config.FieldEncoding{
+		{Name: "duration", ValueType: "string", ValueMap: map[string]string{"smart": "15"}},
+		{Name: "duration", ValueType: "int", ValueMap: map[string]string{"smart": "15"}},
+	} {
+		contract := configuredSeedanceContract()
+		contract.Duration = field
+		got := ResolveCapabilities(CapabilityConfig{Model: "video-ds-2.0", GatewayContract: contract})
+		if !containsInt(got.SupportedDurations, 15) || got.SupportsSmartDuration {
+			t.Fatalf("duration collision advertised both fixed and smart: values=%#v smart=%v", got.SupportedDurations, got.SupportsSmartDuration)
+		}
+		assertExactDegradations(t, got, map[string]string{
+			"smart_duration": "gateway_contract_duplicate_encoding",
+		})
+	}
+}
+
+func TestResolveCapabilitiesUsesFinalDurationEncodingDomain(t *testing.T) {
+	t.Run("mapped four hides colliding direct five", func(t *testing.T) {
+		contract := configuredSeedanceContract()
+		contract.Duration = config.FieldEncoding{Name: "duration", ValueType: "int", ValueMap: map[string]string{"4": "5", "smart": "-1"}}
+		got := ResolveCapabilities(CapabilityConfig{Model: "video-ds-2.0", GatewayContract: contract})
+		if !containsInt(got.SupportedDurations, 4) || containsInt(got.SupportedDurations, 5) || !got.SupportsSmartDuration {
+			t.Fatalf("duration collision result = %#v smart=%v", got.SupportedDurations, got.SupportsSmartDuration)
+		}
+		assertExactDegradations(t, got, map[string]string{
+			"duration.5": "gateway_contract_duplicate_encoding",
+		})
+	})
+
+	t.Run("explicit remaps keep final values distinct", func(t *testing.T) {
+		contract := configuredSeedanceContract()
+		contract.Duration = config.FieldEncoding{
+			Name:      "duration",
+			ValueType: "int",
+			ValueMap:  map[string]string{"4": "5", "5": "50", "smart": "15", "15": "150"},
+		}
+		got := ResolveCapabilities(CapabilityConfig{Model: "video-ds-2.0", GatewayContract: contract})
+		if !reflect.DeepEqual(got.SupportedDurations, seedanceDurationValues) || !got.SupportsSmartDuration {
+			t.Fatalf("distinct duration encodings were hidden: values=%#v smart=%v", got.SupportedDurations, got.SupportsSmartDuration)
+		}
+		assertExactDegradations(t, got, map[string]string{})
+	})
+}
+
 func TestResolveCapabilitiesHidesDuplicateFinalResolutionEncoding(t *testing.T) {
 	contract := configuredSeedanceContract()
 	contract.Resolution.ValueMap = map[string]string{"720P": "hd", "1080P": "hd"}

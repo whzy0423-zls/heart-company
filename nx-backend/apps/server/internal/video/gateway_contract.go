@@ -23,6 +23,11 @@ func MapGatewayPayload(request GenerateRequest, references CanonicalReferences, 
 			nil,
 		)
 	}
+	validatedContract, err := validatedGatewayContract(contract)
+	if err != nil {
+		return nil, err
+	}
+	contract = validatedContract
 	canonical, err := validateCanonicalReferences(request.References, references)
 	if err != nil {
 		return nil, err

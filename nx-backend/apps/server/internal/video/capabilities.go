@@ -98,12 +98,13 @@ func ResolveCapabilities(input CapabilityConfig) Capabilities {
 		},
 	}
 
-	capabilities.SupportedDurations = intersectDurationValues(profile, contract)
+	durationEvaluation := evaluateDurationCapabilities(profile, contract)
+	capabilities.SupportedDurations = durationEvaluation.Durations
 	if len(capabilities.SupportedDurations) > 0 {
 		capabilities.MinDurationSeconds = capabilities.SupportedDurations[0]
 		capabilities.MaxDurationSeconds = capabilities.SupportedDurations[len(capabilities.SupportedDurations)-1]
 	}
-	capabilities.SupportsSmartDuration = profile.smartDuration && supportsSmartDuration(contract.Duration)
+	capabilities.SupportsSmartDuration = durationEvaluation.Smart
 	capabilities.AspectRatios = intersectAspectRatios(profile.aspectRatios, contract)
 	capabilities.Resolutions = evaluateGatewayFieldValues(profile.resolutions, config.GatewayFieldResolution, contract.Resolution).Values
 	capabilities.SupportsResolution = len(capabilities.Resolutions) > 0
@@ -229,36 +230,34 @@ func officialProfile(name string) officialCapabilityProfile {
 	}
 }
 
-func intersectDurationValues(profile officialCapabilityProfile, contract config.GatewayContractConfig) []int {
-	if !supportsDurationField(contract.Duration) {
-		return nil
+type durationCapabilityEvaluation struct {
+	Durations []int
+	Smart     bool
+	Reasons   map[string]string
+}
+
+func evaluateDurationCapabilities(profile officialCapabilityProfile, contract config.GatewayContractConfig) durationCapabilityEvaluation {
+	candidates := make([]string, 0, len(profile.durations)+1)
+	for _, value := range profile.durations {
+		candidates = append(candidates, strconv.Itoa(value))
 	}
-	candidates := profile.durations
-	if isLegacyFlatContract(contract) {
-		candidates = intersectInts(profile.durations, []int{5, 10, 15})
+	if profile.smartDuration {
+		candidates = append(candidates, "smart")
 	}
-	sources := make([]string, 0, len(candidates))
-	for _, value := range candidates {
-		sources = append(sources, strconv.Itoa(value))
-	}
-	evaluation := evaluateGatewayFieldValues(sources, config.GatewayFieldDuration, contract.Duration)
-	result := make([]int, 0, len(evaluation.Values))
-	for _, value := range evaluation.Values {
+	fieldEvaluation := evaluateGatewayFieldValues(candidates, config.GatewayFieldDuration, contract.Duration)
+	result := durationCapabilityEvaluation{Reasons: fieldEvaluation.Reasons}
+	for _, value := range fieldEvaluation.Values {
+		if value == "smart" {
+			result.Smart = true
+			continue
+		}
 		parsed, _ := strconv.Atoi(value)
-		result = append(result, parsed)
+		if isLegacyFlatContract(contract) && !containsInt([]int{5, 10, 15}, parsed) {
+			continue
+		}
+		result.Durations = append(result.Durations, parsed)
 	}
 	return result
-}
-
-func supportsDurationField(field config.FieldEncoding) bool {
-	return field.Name != ""
-}
-
-func supportsSmartDuration(field config.FieldEncoding) bool {
-	if !supportsDurationField(field) {
-		return false
-	}
-	return config.CanEncodeGatewayFieldValue(config.GatewayFieldDuration, field, "smart")
 }
 
 func supportsBooleanField(field config.FieldEncoding) bool {
@@ -529,34 +528,33 @@ func explainDegradations(profile officialCapabilityProfile, selection string, co
 		add("model_profile", reason)
 	}
 
+	durationEvaluation := evaluateDurationCapabilities(profile, contract)
 	if len(profile.durations) > 0 && contract.Duration.Name == "" {
 		add("duration", "gateway_contract_missing_field")
 	}
 	if isLegacyFlatContract(contract) {
 		for _, value := range profile.durations {
 			if !containsInt(got.SupportedDurations, value) {
-				add("duration."+strconv.Itoa(value), "legacy_contract_value_not_proven")
+				source := strconv.Itoa(value)
+				reason := "legacy_contract_value_not_proven"
+				if policyReason, exists := durationEvaluation.Reasons[source]; exists {
+					reason = policyReason
+				}
+				add("duration."+source, reason)
 			}
 		}
 	} else if contract.Duration.Name != "" {
-		sources := make([]string, 0, len(profile.durations))
 		for _, value := range profile.durations {
-			sources = append(sources, strconv.Itoa(value))
-		}
-		evaluation := evaluateGatewayFieldValues(sources, config.GatewayFieldDuration, contract.Duration)
-		for _, value := range sources {
-			if reason, exists := evaluation.Reasons[value]; exists {
-				add("duration."+value, reason)
+			source := strconv.Itoa(value)
+			if reason, exists := durationEvaluation.Reasons[source]; exists {
+				add("duration."+source, reason)
 			}
 		}
 	}
 	if profile.smartDuration && !got.SupportsSmartDuration {
 		reason := "gateway_contract_missing_smart_mapping"
-		if _, err := config.GatewayFieldEncodingKey(config.GatewayFieldDuration, contract.Duration, "smart"); err != nil {
-			policyReason := gatewayFieldPolicyDegradation(err)
-			if policyReason != "gateway_contract_value_not_declared" {
-				reason = policyReason
-			}
+		if policyReason, exists := durationEvaluation.Reasons["smart"]; exists && policyReason != "gateway_contract_value_not_declared" {
+			reason = policyReason
 		}
 		add("smart_duration", reason)
 	}

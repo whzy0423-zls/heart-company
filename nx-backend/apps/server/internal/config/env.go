@@ -266,6 +266,9 @@ func ValidateGatewayContract(contract GatewayContractConfig) error {
 	if err := validateGatewayDeclaredModes(contract.DeclaredModes); err != nil {
 		return err
 	}
+	if err := validateDurationCandidateEncodings(contract.Duration); err != nil {
+		return err
+	}
 	if err := validateGenerateAudioEncoding(contract.GenerateAudio); err != nil {
 		return err
 	}
@@ -661,6 +664,31 @@ func validateGenerateAudioEncoding(field FieldEncoding) error {
 		}
 	}
 	return validateDistinctBooleanValues(field, "generateAudio.valueMap")
+}
+
+func validateDurationCandidateEncodings(field FieldEncoding) error {
+	if field.Name == "" {
+		return nil
+	}
+	candidates := make([]string, 0, 13)
+	for value := 4; value <= 15; value++ {
+		candidates = append(candidates, strconv.Itoa(value))
+	}
+	if _, hasSmart := field.ValueMap["smart"]; hasSmart {
+		candidates = append(candidates, "smart")
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		key, err := gatewayFieldEncodingKey(GatewayFieldDuration, field, candidate)
+		if err != nil {
+			continue
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return gatewayContractError("duplicate_field_encoding", "duration.valueMap")
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
 }
 
 func validateDistinctBooleanValues(field FieldEncoding, errorField string) error {

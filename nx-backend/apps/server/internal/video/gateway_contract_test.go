@@ -202,6 +202,30 @@ func TestMapGatewayPayloadRejectsResolutionWithoutExplicitMapping(t *testing.T) 
 	}
 }
 
+func TestMapGatewayPayloadRejectsInvalidDurationContract(t *testing.T) {
+	for _, field := range []config.FieldEncoding{
+		{Name: "duration", ValueType: "string", ValueMap: map[string]string{"smart": "15"}},
+		{Name: "duration", ValueType: "int", ValueMap: map[string]string{"4": "5"}},
+	} {
+		contract := configuredMapperContract()
+		contract.Duration = field
+		payload, err := MapGatewayPayload(GenerateRequest{
+			Model:       "video-ds-2.0",
+			Prompt:      "测试",
+			Duration:    15,
+			AspectRatio: "9:16",
+			TaskMode:    "reference",
+		}, CanonicalReferences{}, contract)
+		if payload != nil {
+			t.Fatalf("invalid duration contract produced payload: %#v", payload)
+		}
+		validationErr := assertValidationCode(t, err, "gateway_contract_invalid")
+		if validationErr.Field != "gatewayContract.duration.valueMap" {
+			t.Fatalf("validation field = %q, want gatewayContract.duration.valueMap", validationErr.Field)
+		}
+	}
+}
+
 func TestMapGatewayPayloadRejectsUnmappedConfiguredResolutions(t *testing.T) {
 	for _, resolution := range []string{"480P", "720P", "4K"} {
 		t.Run(resolution, func(t *testing.T) {
@@ -264,6 +288,7 @@ func TestMapGatewayPayloadAppliesAspectRatioMappingPolicy(t *testing.T) {
 func TestMapConfiguredGatewayPayloadRejectsUndeclaredRole(t *testing.T) {
 	contract := configuredMapperContract()
 	delete(contract.References.RoleFields, "first_frame")
+	contract.References.SupportsRoles = []string{"reference_image", "last_frame", "reference_video", "reference_audio", "edit_target", "extend_target"}
 	canonical := mustCanonicalReferences(t, []Reference{
 		{ID: "1", Kind: "image", Role: "first_frame", URL: "i1"},
 	})
@@ -480,7 +505,7 @@ func TestMapConfiguredGatewayPayloadFailsClosed(t *testing.T) {
 			mutate: func(contract *config.GatewayContractConfig) {
 				contract.References.Mode = "future_items"
 			},
-			wantCode:  "gateway_reference_encoding_unsupported",
+			wantCode:  "gateway_contract_invalid",
 			wantField: "gatewayContract.references.mode",
 		},
 		{
@@ -488,8 +513,8 @@ func TestMapConfiguredGatewayPayloadFailsClosed(t *testing.T) {
 			mutate: func(contract *config.GatewayContractConfig) {
 				contract.Resolution.ValueMap["1080P"] = " \t "
 			},
-			wantCode:  "gateway_value_not_encodable",
-			wantField: "resolution",
+			wantCode:  "gateway_contract_invalid",
+			wantField: "gatewayContract.resolution.valueMap",
 		},
 		{
 			name: "blank role field",
@@ -497,8 +522,8 @@ func TestMapConfiguredGatewayPayloadFailsClosed(t *testing.T) {
 				contract.References.RoleFields["reference_video"] = " \t "
 			},
 			refs:      []Reference{{ID: "1", Kind: "video", Role: "reference_video", URL: "v1"}},
-			wantCode:  "gateway_reference_role_unsupported",
-			wantField: "references[0].role",
+			wantCode:  "gateway_contract_invalid",
+			wantField: "gatewayContract.references.roleFields",
 		},
 		{
 			name: "role field conflicts with media field",
@@ -506,14 +531,16 @@ func TestMapConfiguredGatewayPayloadFailsClosed(t *testing.T) {
 				contract.References.RoleFields["reference_video"] = contract.References.VideoField
 			},
 			refs:      []Reference{{ID: "1", Kind: "video", Role: "reference_video", URL: "v1"}},
-			wantCode:  "gateway_reference_field_conflict",
-			wantField: "references[0]",
+			wantCode:  "gateway_contract_invalid",
+			wantField: "gatewayContract.references.roleFields.reference_video",
 		},
 		{
 			name: "flat arrays cannot carry target role",
 			mutate: func(contract *config.GatewayContractConfig) {
 				contract.References.Mode = "flat_arrays"
+				contract.References.RoleFields = nil
 				contract.References.VideoField = "videos"
+				contract.References.SupportsRoles = []string{"reference_image", "reference_video", "reference_audio"}
 			},
 			refs:      []Reference{{ID: "1", Kind: "video", Role: "edit_target", URL: "v1"}},
 			mode:      "edit",
@@ -524,6 +551,7 @@ func TestMapConfiguredGatewayPayloadFailsClosed(t *testing.T) {
 			name: "flat arrays require role declaration",
 			mutate: func(contract *config.GatewayContractConfig) {
 				contract.References.Mode = "flat_arrays"
+				contract.References.RoleFields = nil
 				contract.References.VideoField = "videos"
 				contract.References.SupportsRoles = []string{"reference_image", "reference_audio"}
 			},
@@ -536,16 +564,16 @@ func TestMapConfiguredGatewayPayloadFailsClosed(t *testing.T) {
 			mutate: func(contract *config.GatewayContractConfig) {
 				contract.GenerateAudio.ValueMap["true"] = "yes"
 			},
-			wantCode:  "gateway_value_not_encodable",
-			wantField: "generateAudio",
+			wantCode:  "gateway_contract_invalid",
+			wantField: "gatewayContract.generateAudio.valueMap",
 		},
 		{
 			name: "declared field collides with fixed model field",
 			mutate: func(contract *config.GatewayContractConfig) {
 				contract.Duration.Name = "model"
 			},
-			wantCode:  "gateway_field_conflict",
-			wantField: "duration",
+			wantCode:  "gateway_contract_invalid",
+			wantField: "gatewayContract.duration.name",
 		},
 		{
 			name: "role does not match media kind",

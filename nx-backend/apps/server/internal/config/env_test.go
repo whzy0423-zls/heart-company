@@ -455,6 +455,51 @@ func TestValidateGatewayContractRejectsDuplicateFieldEncodings(t *testing.T) {
 	assertGatewayContractValidationError(t, ValidateGatewayContract(contract), "duplicate_field_encoding", "resolution.valueMap")
 }
 
+func TestValidateGatewayContractRejectsDurationCandidateEncodingCollisions(t *testing.T) {
+	tests := []struct {
+		name  string
+		field FieldEncoding
+	}{
+		{
+			name:  "smart string collides with direct fifteen",
+			field: FieldEncoding{Name: "duration", ValueType: "string", ValueMap: map[string]string{"smart": "15"}},
+		},
+		{
+			name:  "smart int collides with direct fifteen",
+			field: FieldEncoding{Name: "duration", ValueType: "int", ValueMap: map[string]string{"smart": "15"}},
+		},
+		{
+			name:  "mapped four collides with direct five",
+			field: FieldEncoding{Name: "duration", ValueType: "int", ValueMap: map[string]string{"4": "5"}},
+		},
+		{
+			name:  "bool synonyms collide",
+			field: FieldEncoding{Name: "duration", ValueType: "bool", ValueMap: map[string]string{"4": "true", "smart": "1"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contract := validContentItemsGatewayContractForTest()
+			contract.Duration = tt.field
+			assertGatewayContractValidationError(t, ValidateGatewayContract(contract), "duplicate_field_encoding", "duration.valueMap")
+		})
+	}
+}
+
+func TestValidateGatewayContractUsesFinalDurationEncodings(t *testing.T) {
+	for _, field := range []FieldEncoding{
+		{Name: "duration", ValueType: "int", ValueMap: map[string]string{"4": "5", "5": "50", "smart": "15", "15": "150"}},
+		{Name: "duration", ValueType: "string", ValueMap: map[string]string{"4": "5", "5": "fixed-five", "smart": "15", "15": "fixed-fifteen"}},
+	} {
+		contract := validContentItemsGatewayContractForTest()
+		contract.Duration = field
+		if err := ValidateGatewayContract(contract); err != nil {
+			t.Fatalf("distinct final duration encodings were rejected: %v", err)
+		}
+	}
+}
+
 func TestValidateGatewayContractEnforcesFieldEncodingSemantics(t *testing.T) {
 	tests := []struct {
 		name      string
