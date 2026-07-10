@@ -499,7 +499,7 @@ func trimContractStringMap(values map[string]string, field string) (map[string]s
 	seen := make(map[string]string, len(values))
 	for _, key := range keys {
 		normalizedKey := strings.TrimSpace(key)
-		if previous, ok := seen[normalizedKey]; ok && normalizedKey != "" && previous != key {
+		if previous, ok := seen[normalizedKey]; ok && previous != key {
 			return nil, gatewayContractError("duplicate_normalized_key", field)
 		}
 		seen[normalizedKey] = key

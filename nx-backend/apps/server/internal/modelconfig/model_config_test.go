@@ -270,6 +270,26 @@ func TestValidateVideoGatewayContractRejectsDuplicateNormalizedMapKeys(t *testin
 				}
 			},
 		},
+		{
+			name:  "blank role fields",
+			field: "references.roleFields",
+			mutate: func(contract *config.GatewayContractConfig) {
+				contract.References.RoleFields = map[string]string{
+					" ":  "target_video",
+					"\t": "other_target_video",
+				}
+			},
+		},
+		{
+			name:  "blank duration value map",
+			field: "duration.valueMap",
+			mutate: func(contract *config.GatewayContractConfig) {
+				contract.Duration.ValueMap = map[string]string{
+					" ":  "-1",
+					"\t": "auto",
+				}
+			},
+		},
 	}
 
 	for _, tc := range cases {
