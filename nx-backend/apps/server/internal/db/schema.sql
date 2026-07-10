@@ -441,9 +441,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_video_generation_submissions_request_key
 CREATE UNIQUE INDEX IF NOT EXISTS uq_video_generation_submissions_active_shot
   ON video_generation_submissions(shot_id)
   WHERE shot_id IS NOT NULL AND status IN ('prepared','submitting','accepted','unknown_outcome');
+CREATE UNIQUE INDEX IF NOT EXISTS uq_video_generation_submissions_upstream_task
+  ON video_generation_submissions(upstream_task_id)
+  WHERE upstream_task_id <> '';
 CREATE INDEX IF NOT EXISTS idx_video_generation_submissions_generation
   ON video_generation_submissions(generation_id)
   WHERE generation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_video_generations_task_id
+  ON video_generations(task_id)
+  WHERE task_id <> '';
 
 -- 资产质量追踪：跨项目统计使用次数与成功率，用于推荐高质量资产。
 ALTER TABLE video_assets ADD COLUMN IF NOT EXISTS usage_count INT NOT NULL DEFAULT 0;

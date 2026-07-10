@@ -31,7 +31,10 @@ func TestSubmissionAllowsDeclaredTransitions(t *testing.T) {
 		{SubmissionAccepted, SubmissionFailed},
 		{SubmissionSubmitting, SubmissionUnknownOutcome},
 		{SubmissionUnknownOutcome, SubmissionReconciled},
+		{SubmissionUnknownOutcome, SubmissionCancelled},
 		{SubmissionPrepared, SubmissionCancelled},
+		{SubmissionSubmitting, SubmissionFailed},
+		{SubmissionSubmitting, SubmissionCancelled},
 	}
 
 	for _, tc := range cases {
@@ -190,6 +193,52 @@ func TestSubmissionTransitionUsesCompareAndSwap(t *testing.T) {
 	}
 }
 
+func TestSubmissionClaimSubmittingHasOneWinner(t *testing.T) {
+	database := openSubmissionTestDB(t)
+	store := NewSubmissionStore(database)
+	ctx := context.Background()
+
+	if _, _, err := store.Prepare(ctx, testPrepareSubmissionInput(submissionKeyOne, "9")); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	type claimResult struct {
+		claimed bool
+		err     error
+	}
+	results := make(chan claimResult, 2)
+	for range 2 {
+		go func() {
+			<-start
+			_, claimed, err := store.ClaimSubmitting(ctx, submissionKeyOne)
+			results <- claimResult{claimed: claimed, err: err}
+		}()
+	}
+	close(start)
+
+	winners := 0
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if result.claimed {
+			winners++
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("claim winners = %d, want 1", winners)
+	}
+	current, err := store.GetByRequestKey(ctx, submissionKeyOne)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != SubmissionSubmitting {
+		t.Fatalf("status = %q, want submitting", current.Status)
+	}
+}
+
 func TestSubmissionReconcileIsIdempotentAndRejectsDifferentTask(t *testing.T) {
 	database := openSubmissionTestDB(t)
 	store := NewSubmissionStore(database)
@@ -244,9 +293,13 @@ func init() {
 }
 
 type submissionTestState struct {
-	mu     sync.Mutex
-	nextID int64
-	byKey  map[string]Submission
+	mu                        sync.Mutex
+	nextID                    int64
+	byKey                     map[string]Submission
+	recordTaskFailures        int
+	acceptTransitionFailures  int
+	unknownTransitionFailures int
+	cancelTransitionFailures  int
 }
 
 type submissionTestDriver struct{}
@@ -330,7 +383,10 @@ func (c *submissionTestConn) Begin() (driver.Tx, error) {
 	return nil, errors.New("transactions are not supported")
 }
 
-func (c *submissionTestConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+func (c *submissionTestConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	q := strings.Join(strings.Fields(query), " ")
 	c.state.mu.Lock()
 	defer c.state.mu.Unlock()
@@ -370,6 +426,14 @@ func (c *submissionTestConn) QueryContext(_ context.Context, query string, args 
 			return nil, sql.ErrNoRows
 		}
 		return submissionRow(item), nil
+	case strings.Contains(q, "FROM video_generation_submissions WHERE generation_id=$1"):
+		generationID := submissionNamedString(args, 1)
+		for _, item := range c.state.byKey {
+			if item.GenerationID == generationID {
+				return submissionRow(item), nil
+			}
+		}
+		return nil, sql.ErrNoRows
 	case strings.Contains(q, "FROM video_generation_submissions WHERE shot_id=$1"):
 		shotID := submissionNamedString(args, 1)
 		for _, item := range c.state.byKey {
@@ -379,6 +443,18 @@ func (c *submissionTestConn) QueryContext(_ context.Context, query string, args 
 		}
 		return nil, sql.ErrNoRows
 	case strings.HasPrefix(q, "UPDATE video_generation_submissions SET status=$3"):
+		if submissionNamedString(args, 3) == string(SubmissionAccepted) && c.state.acceptTransitionFailures > 0 {
+			c.state.acceptTransitionFailures--
+			return nil, errors.New("injected accepted linkage failure")
+		}
+		if submissionNamedString(args, 3) == string(SubmissionUnknownOutcome) && c.state.unknownTransitionFailures > 0 {
+			c.state.unknownTransitionFailures--
+			return nil, errors.New("injected unknown outcome persistence failure")
+		}
+		if submissionNamedString(args, 3) == string(SubmissionCancelled) && c.state.cancelTransitionFailures > 0 {
+			c.state.cancelTransitionFailures--
+			return nil, errors.New("injected cancelled state persistence failure")
+		}
 		requestKey := submissionNamedString(args, 1)
 		item, ok := c.state.byKey[requestKey]
 		if !ok || item.Status != SubmissionStatus(submissionNamedString(args, 2)) {
@@ -392,6 +468,20 @@ func (c *submissionTestConn) QueryContext(_ context.Context, query string, args 
 			item.GenerationID = generationID
 		}
 		item.ErrorMessage = submissionNamedString(args, 6)
+		c.state.byKey[requestKey] = item
+		return submissionRow(item), nil
+	case strings.HasPrefix(q, "UPDATE video_generation_submissions SET upstream_task_id=$2"):
+		if c.state.recordTaskFailures > 0 {
+			c.state.recordTaskFailures--
+			return nil, errors.New("injected upstream task linkage failure")
+		}
+		requestKey := submissionNamedString(args, 1)
+		item, ok := c.state.byKey[requestKey]
+		taskID := submissionNamedString(args, 2)
+		if !ok || item.Status != SubmissionSubmitting || (item.UpstreamTaskID != "" && item.UpstreamTaskID != taskID) {
+			return nil, sql.ErrNoRows
+		}
+		item.UpstreamTaskID = taskID
 		c.state.byKey[requestKey] = item
 		return submissionRow(item), nil
 	default:

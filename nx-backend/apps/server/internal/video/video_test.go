@@ -209,18 +209,28 @@ func TestGenerateTreatsSuccessfulCreateWithoutTaskIDAsAmbiguous(t *testing.T) {
 		APIKey:  "test-key",
 		Model:   "video-ds-2.0-fast",
 	}))
-	_, err := store.Generate(context.Background(), GenerateInput{Prompt: "test"})
-	var ambiguous *AmbiguousTransportError
-	if !errors.As(err, &ambiguous) {
-		t.Fatalf("missing task id error type = %T, want *AmbiguousTransportError: %v", err, err)
+	_, err := store.Generate(context.Background(), GenerateInput{Prompt: "test", RequestKey: submissionKeyOne})
+	var unknown *UnknownOutcomeError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("missing task id error type = %T, want *UnknownOutcomeError: %v", err, err)
 	}
-	if ambiguous.Operation != "create_video_task" {
-		t.Fatalf("ambiguous operation = %q, want create_video_task", ambiguous.Operation)
+	if unknown.RequestKey != submissionKeyOne || unknown.SubmissionID == "" {
+		t.Fatalf("unknown outcome identity = %+v", unknown)
+	}
+	if !unknown.Persisted {
+		t.Fatal("missing-task outcome should report persisted recovery state")
 	}
 
 	state := videoTestState(t, db)
 	if state.insertCalls != 0 {
 		t.Fatalf("expected no generation row to be inserted without task_id, got %d inserts", state.insertCalls)
+	}
+	submission, getErr := store.submissions.GetByRequestKey(context.Background(), submissionKeyOne)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if submission.Status != SubmissionUnknownOutcome || submission.UpstreamTaskID != "" {
+		t.Fatalf("missing-task submission = %+v", submission)
 	}
 }
 
@@ -356,6 +366,214 @@ func TestGenerateStoresTaskWithoutCreatingAssetBeforeCompletion(t *testing.T) {
 	}
 }
 
+func TestGenerateReusesRequestKey(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"status":  "queued",
+				"task_id": "task-reused",
+			},
+		})
+	}))
+	defer server.Close()
+
+	database := openVideoTestDB(t, &videoDBState{})
+	defer database.Close()
+	store := allowLocalTestStore(NewStore(database, nil, config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		GatewayContract: LegacyFlatContract(),
+	}))
+	input := GenerateInput{
+		Prompt:     "same intent",
+		RequestKey: submissionKeyOne,
+	}
+
+	first, err := store.Generate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Generate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("create POST attempts = %d, want 1", attempts.Load())
+	}
+	if first.ID == "" || first.ID != second.ID {
+		t.Fatalf("generation ids = %q/%q", first.ID, second.ID)
+	}
+	if first.RequestKey != submissionKeyOne || second.RequestKey != submissionKeyOne {
+		t.Fatalf("request keys = %q/%q", first.RequestKey, second.RequestKey)
+	}
+	if first.SubmissionID == "" || first.SubmissionID != second.SubmissionID {
+		t.Fatalf("submission ids = %q/%q", first.SubmissionID, second.SubmissionID)
+	}
+	if first.SubmissionStatus != SubmissionAccepted || second.SubmissionStatus != SubmissionAccepted {
+		t.Fatalf("submission statuses = %q/%q", first.SubmissionStatus, second.SubmissionStatus)
+	}
+}
+
+func TestGenerateReusesAcceptedRequestAfterGatewayCapabilityChange(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"status": "queued", "task_id": "task-historical"},
+		})
+	}))
+	defer server.Close()
+
+	database := openVideoTestDB(t, &videoDBState{})
+	defer database.Close()
+	contractV1 := LegacyFlatContract()
+	storeV1 := allowLocalTestStore(NewStore(database, nil, config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		GatewayContract: contractV1,
+	}))
+	input := GenerateInput{Prompt: "historical intent", RequestKey: submissionKeyOne}
+	first, err := storeV1.Generate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	contractV2 := LegacyFlatContract()
+	contractV2.Version = "2"
+	storeV2 := allowLocalTestStore(NewStore(database, nil, config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		Model:           "as-sd2.0-fast",
+		GatewayContract: contractV2,
+	}))
+	second, err := storeV2.Generate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID || second.TaskID != "task-historical" {
+		t.Fatalf("historical generation = first %+v second %+v", first, second)
+	}
+	if second.SubmissionStatus != SubmissionAccepted {
+		t.Fatalf("historical submission status = %q", second.SubmissionStatus)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("create POST attempts = %d, want 1", attempts.Load())
+	}
+}
+
+func TestGenerateConcurrentRequestKeyPostsOnce(t *testing.T) {
+	var attempts atomic.Int32
+	received := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			close(received)
+		}
+		<-release
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"status":  "queued",
+				"task_id": "task-concurrent",
+			},
+		})
+	}))
+	defer server.Close()
+
+	database := openVideoTestDB(t, &videoDBState{})
+	defer database.Close()
+	store := allowLocalTestStore(NewStore(database, nil, config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		GatewayContract: LegacyFlatContract(),
+	}))
+	input := GenerateInput{Prompt: "same intent", RequestKey: submissionKeyOne}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := store.Generate(context.Background(), input)
+		firstDone <- err
+	}()
+	select {
+	case <-received:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first request did not reach fake gateway")
+	}
+
+	_, err := store.Generate(context.Background(), input)
+	var inProgress *SubmissionInProgressError
+	if !errors.As(err, &inProgress) {
+		t.Fatalf("second error = %T, want *SubmissionInProgressError: %v", err, err)
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("create POST attempts = %d, want 1", attempts.Load())
+	}
+}
+
+func TestGenerateRejectsDifferentKeyWhileShotSubmissionIsActive(t *testing.T) {
+	var attempts atomic.Int32
+	received := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			close(received)
+		}
+		<-release
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"status": "queued", "task_id": "task-shot-lock"},
+		})
+	}))
+	defer server.Close()
+
+	database := openVideoTestDB(t, &videoDBState{})
+	defer database.Close()
+	store := allowLocalTestStore(NewStore(database, nil, config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		GatewayContract: LegacyFlatContract(),
+	}))
+	firstInput := GenerateInput{
+		Prompt:     "shot intent",
+		ProjectID:  "3",
+		ShotID:     "9",
+		RequestKey: submissionKeyOne,
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := store.Generate(context.Background(), firstInput)
+		firstDone <- err
+	}()
+	select {
+	case <-received:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first shot request did not reach fake gateway")
+	}
+
+	secondInput := firstInput
+	secondInput.RequestKey = submissionKeyTwo
+	_, err := store.Generate(context.Background(), secondInput)
+	var active *ActiveSubmissionError
+	if !errors.As(err, &active) {
+		t.Fatalf("second error = %T, want *ActiveSubmissionError: %v", err, err)
+	}
+	if active.Existing.RequestKey != submissionKeyOne || active.ShotID != "9" {
+		t.Fatalf("active submission error = %+v", active)
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("create POST attempts = %d, want 1", attempts.Load())
+	}
+}
+
 func TestRefreshUsesPublicObjectURLWhenFallbackDownloadSucceeds(t *testing.T) {
 	state := &videoDBState{
 		generation: Generation{
@@ -415,6 +633,165 @@ func TestRefreshUsesPublicObjectURLWhenFallbackDownloadSucceeds(t *testing.T) {
 	}
 	if got := state.uploadAsset["object_url"]; got != "https://cdn.example.com/video/generated/result.mp4" {
 		t.Fatalf("expected public object url to be stored, got %#v", got)
+	}
+}
+
+func TestRefreshMirrorsSubmissionCompleted(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/videos":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{"status": "queued", "task_id": "task-complete"},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/videos/task-complete":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"status":   "completed",
+					"task_id":  "task-complete",
+					"duration": float64(15),
+					"fps":      float64(30),
+					"width":    float64(1280),
+					"height":   float64(720),
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/videos/task-complete/content":
+			w.Header().Set("Content-Type", "video/mp4")
+			_, _ = w.Write([]byte("video-bytes"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	state := &videoDBState{}
+	database := openVideoTestDB(t, state)
+	defer database.Close()
+	uploader := &recordingVideoUploader{url: "https://cdn.example.com/video/generated/result.mp4", objectKey: "video/generated/result.mp4"}
+	store := allowLocalTestStore(NewStore(database, uploadasset.NewStore(database), config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		GatewayContract: LegacyFlatContract(),
+	}, uploader))
+
+	created, err := store.Generate(context.Background(), GenerateInput{Prompt: "test", RequestKey: submissionKeyOne})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, err := store.Refresh(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.Status != "completed" {
+		t.Fatalf("generation status = %q", completed.Status)
+	}
+	submission, err := store.submissions.GetByRequestKey(context.Background(), submissionKeyOne)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if submission.Status != SubmissionCompleted {
+		t.Fatalf("submission status = %q, want completed", submission.Status)
+	}
+}
+
+func TestRefreshMirrorsSubmissionFailed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{"status": "queued", "task_id": "task-failed"},
+			})
+		case http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"status":        "failed",
+					"task_id":       "task-failed",
+					"error_message": "upstream rejected render",
+				},
+			})
+		}
+	}))
+	defer server.Close()
+
+	state := &videoDBState{}
+	database := openVideoTestDB(t, state)
+	defer database.Close()
+	store := allowLocalTestStore(NewStore(database, nil, config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		GatewayContract: LegacyFlatContract(),
+	}))
+
+	created, err := store.Generate(context.Background(), GenerateInput{Prompt: "test", RequestKey: submissionKeyOne})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.Refresh(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != "failed" {
+		t.Fatalf("generation status = %q", failed.Status)
+	}
+	submission, err := store.submissions.GetByRequestKey(context.Background(), submissionKeyOne)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if submission.Status != SubmissionFailed {
+		t.Fatalf("submission status = %q, want failed", submission.Status)
+	}
+}
+
+func TestRefreshKeepsReconciledSubmissionAsAuditOutcome(t *testing.T) {
+	var createAttempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			createAttempts.Add(1)
+			http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"status":        "failed",
+				"task_id":       "task-reconciled",
+				"error_message": "render failed",
+			},
+		})
+	}))
+	defer server.Close()
+
+	state := &videoDBState{}
+	database := openVideoTestDB(t, state)
+	defer database.Close()
+	store := allowLocalTestStore(NewStore(database, nil, config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		GatewayContract: LegacyFlatContract(),
+	}))
+	_, err := store.Generate(context.Background(), GenerateInput{Prompt: "test", RequestKey: submissionKeyOne})
+	var unknown *UnknownOutcomeError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("setup error = %T, want *UnknownOutcomeError: %v", err, err)
+	}
+	reconciled, err := store.ReconcileSubmission(context.Background(), submissionKeyOne, "task-reconciled")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.Refresh(context.Background(), reconciled.Generation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != "failed" || failed.SubmissionStatus != SubmissionReconciled {
+		t.Fatalf("refreshed generation = %+v", failed)
+	}
+	submission, err := store.submissions.GetByRequestKey(context.Background(), submissionKeyOne)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if submission.Status != SubmissionReconciled {
+		t.Fatalf("submission status = %q, want reconciled audit outcome", submission.Status)
+	}
+	if createAttempts.Load() != 1 {
+		t.Fatalf("create POST attempts = %d, want 1", createAttempts.Load())
 	}
 }
 
@@ -521,7 +898,7 @@ func TestCreateTaskLegacyArraysUseCanonicalReferences(t *testing.T) {
 	)
 	assertValidationCode(t, err, "duplicate_reference")
 	if attempts != 0 {
-		t.Fatalf("duplicate legacy references reached paid POST %d times, want 0", attempts)
+		t.Fatalf("duplicate legacy references reached create POST %d times, want 0", attempts)
 	}
 }
 
@@ -547,7 +924,7 @@ func TestGenerateLegacyArraysUseCanonicalDuplicateRules(t *testing.T) {
 	})
 	assertValidationCode(t, err, "duplicate_reference")
 	if got := attempts.Load(); got != 0 {
-		t.Fatalf("duplicate GenerateInput references reached paid POST %d times, want 0", got)
+		t.Fatalf("duplicate GenerateInput references reached create POST %d times, want 0", got)
 	}
 }
 
@@ -655,7 +1032,7 @@ func TestCreateTaskRequiresValidRequestKeyForDeclaredIdempotencyHeader(t *testin
 				t.Fatalf("validation field = %q, want requestKey", validationErr.Field)
 			}
 			if attempts.Load() != 0 {
-				t.Fatalf("invalid request key reached paid POST %d times", attempts.Load())
+				t.Fatalf("invalid request key reached create POST %d times", attempts.Load())
 			}
 		})
 	}
@@ -695,7 +1072,7 @@ func TestCreateTaskFailsClosedForExplicitInvalidGatewayContract(t *testing.T) {
 				t.Fatalf("validation field = %q, want %q", validationErr.Field, tt.wantField)
 			}
 			if got := attempts.Load(); got != 0 {
-				t.Fatalf("explicit invalid gateway contract reached paid POST %d times, want 0", got)
+				t.Fatalf("explicit invalid gateway contract reached create POST %d times, want 0", got)
 			}
 		})
 	}
@@ -731,7 +1108,7 @@ func TestCreateTaskRejectsUndeclaredSmartDurationBeforePost(t *testing.T) {
 		t.Fatalf("validation field = %q, want duration", validationErr.Field)
 	}
 	if got := attempts.Load(); got != 0 {
-		t.Fatalf("undeclared smart duration reached paid POST %d times, want 0", got)
+		t.Fatalf("undeclared smart duration reached create POST %d times, want 0", got)
 	}
 }
 
@@ -763,7 +1140,7 @@ func TestCreateTaskValidatesTaskModeBeforePost(t *testing.T) {
 			t.Fatalf("validation field = %q, want taskMode", validationErr.Field)
 		}
 		if got := attempts.Load(); got != 0 {
-			t.Fatalf("unknown task mode reached paid POST %d times, want 0", got)
+			t.Fatalf("unknown task mode reached create POST %d times, want 0", got)
 		}
 	})
 
@@ -799,7 +1176,7 @@ func TestCreateTaskValidatesTaskModeBeforePost(t *testing.T) {
 			t.Fatalf("validation field = %q, want taskMode", validationErr.Field)
 		}
 		if got := attempts.Load(); got != 0 {
-			t.Fatalf("undeclared task mode reached paid POST %d times, want 0", got)
+			t.Fatalf("undeclared task mode reached create POST %d times, want 0", got)
 		}
 	})
 
@@ -991,7 +1368,7 @@ func TestCreateTaskValidatesOriginalGatewayContractBeforePost(t *testing.T) {
 				t.Fatalf("validation field = %q, want %q", validationErr.Field, tt.wantField)
 			}
 			if got := attempts.Load(); got != 0 {
-				t.Fatalf("invalid contract reached paid POST %d times, want 0", got)
+				t.Fatalf("invalid contract reached create POST %d times, want 0", got)
 			}
 		})
 	}
@@ -1041,7 +1418,7 @@ func TestCreateTaskDoesNotRetryPost(t *testing.T) {
 		t.Fatalf("ambiguous error exposed gateway URL: %q", err.Error())
 	}
 	if got := attempts.Load(); got != 1 {
-		t.Fatalf("paid POST attempts = %d, want exactly 1", got)
+		t.Fatalf("create POST attempts = %d, want exactly 1", got)
 	}
 }
 
@@ -1113,7 +1490,7 @@ func TestCreateTaskClassifiesUnconfirmed2xxOutcomes(t *testing.T) {
 				}
 			}
 			if got := attempts.Load(); got != 1 {
-				t.Fatalf("paid POST attempts = %d, want exactly 1", got)
+				t.Fatalf("create POST attempts = %d, want exactly 1", got)
 			}
 		})
 	}
@@ -1314,13 +1691,13 @@ func TestCreateTaskHTTPStatusMatrix(t *testing.T) {
 				}
 			}
 			if got := attempts.Load(); got != 1 {
-				t.Fatalf("HTTP %d paid POST attempts = %d, want 1", tt.status, got)
+				t.Fatalf("HTTP %d create POST attempts = %d, want 1", tt.status, got)
 			}
 		})
 	}
 }
 
-func TestGenerateDoesNotPersistAmbiguousHTTPStatus(t *testing.T) {
+func TestGenerateStoresUnknownOutcome(t *testing.T) {
 	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts.Add(1)
@@ -1336,17 +1713,383 @@ func TestGenerateDoesNotPersistAmbiguousHTTPStatus(t *testing.T) {
 		APIKey:          "test-key",
 		GatewayContract: LegacyFlatContract(),
 	}))
-	_, err := store.Generate(context.Background(), GenerateInput{Prompt: "test"})
-	var ambiguous *AmbiguousTransportError
-	if !errors.As(err, &ambiguous) {
-		t.Fatalf("Generate() error type = %T, want *AmbiguousTransportError: %v", err, err)
+	input := GenerateInput{Prompt: "test", RequestKey: submissionKeyOne}
+	_, err := store.Generate(context.Background(), input)
+	var unknown *UnknownOutcomeError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("Generate() error type = %T, want *UnknownOutcomeError: %v", err, err)
+	}
+	if unknown.RequestKey != submissionKeyOne || unknown.SubmissionID == "" {
+		t.Fatalf("unknown outcome identity = %+v", unknown)
+	}
+	if !unknown.Persisted {
+		t.Fatal("unknown outcome should report persisted recovery state")
 	}
 	if got := attempts.Load(); got != 1 {
-		t.Fatalf("paid POST attempts = %d, want 1", got)
+		t.Fatalf("create POST attempts = %d, want 1", got)
 	}
 	if state.insertCalls != 0 {
 		t.Fatalf("ambiguous HTTP outcome wrote %d failed generations, want 0", state.insertCalls)
 	}
+	submission, err := store.submissions.GetByRequestKey(context.Background(), submissionKeyOne)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if submission.Status != SubmissionUnknownOutcome || submission.GenerationID != "" {
+		t.Fatalf("unknown outcome submission = %+v", submission)
+	}
+
+	_, err = store.Generate(context.Background(), input)
+	if !errors.As(err, &unknown) {
+		t.Fatalf("replay error type = %T, want *UnknownOutcomeError: %v", err, err)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("replay create POST attempts = %d, want 1", got)
+	}
+}
+
+func TestGenerateKeepsUnknownClassificationWhenStateUpdateFails(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	state := &videoDBState{}
+	database := openVideoTestDB(t, state)
+	defer database.Close()
+	state.submissions.unknownTransitionFailures = 1
+	store := allowLocalTestStore(NewStore(database, nil, config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		GatewayContract: LegacyFlatContract(),
+	}))
+	input := GenerateInput{Prompt: "test", RequestKey: submissionKeyOne}
+
+	_, err := store.Generate(context.Background(), input)
+	var unknown *UnknownOutcomeError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("error = %T, want *UnknownOutcomeError: %v", err, err)
+	}
+	if unknown.RequestKey != submissionKeyOne || unknown.SubmissionID == "" || unknown.Persisted {
+		t.Fatalf("unknown outcome identity = %+v", unknown)
+	}
+	submission, getErr := store.submissions.GetByRequestKey(context.Background(), submissionKeyOne)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if submission.Status != SubmissionSubmitting {
+		t.Fatalf("submission status = %q, want submitting after injected persistence failure", submission.Status)
+	}
+
+	_, err = store.Generate(context.Background(), input)
+	var inProgress *SubmissionInProgressError
+	if !errors.As(err, &inProgress) {
+		t.Fatalf("replay error = %T, want *SubmissionInProgressError: %v", err, err)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("create POST attempts = %d, want 1", attempts.Load())
+	}
+}
+
+func TestGeneratePersistsUnknownAfterRequestContextCancellation(t *testing.T) {
+	var attempts atomic.Int32
+	received := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			close(received)
+		}
+		<-release
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"status": "queued", "task_id": "too-late"},
+		})
+	}))
+	defer server.Close()
+	defer close(release)
+
+	state := &videoDBState{}
+	database := openVideoTestDB(t, state)
+	defer database.Close()
+	store := allowLocalTestStore(NewStore(database, nil, config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		GatewayContract: LegacyFlatContract(),
+		TimeoutSeconds:  5,
+	}))
+	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
+	defer cancel()
+
+	_, err := store.Generate(ctx, GenerateInput{Prompt: "test", RequestKey: submissionKeyOne})
+	var unknown *UnknownOutcomeError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("error = %T, want *UnknownOutcomeError: %v", err, err)
+	}
+	if !unknown.Persisted {
+		t.Fatal("request cancellation must not cancel unknown-outcome persistence")
+	}
+	select {
+	case <-received:
+	default:
+		t.Fatal("request context expired before the create request reached the gateway")
+	}
+	submission, getErr := store.submissions.GetByRequestKey(context.Background(), submissionKeyOne)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if submission.Status != SubmissionUnknownOutcome {
+		t.Fatalf("submission status = %q, want unknown_outcome", submission.Status)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("create POST attempts = %d, want 1", attempts.Load())
+	}
+}
+
+func TestGenerateReturnsTaskIDWhenLocalLinkFails(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"status":  "queued",
+				"task_id": "task-42",
+			},
+		})
+	}))
+	defer server.Close()
+
+	state := &videoDBState{}
+	database := openVideoTestDB(t, state)
+	defer database.Close()
+	state.submissions.recordTaskFailures = 1
+	store := allowLocalTestStore(NewStore(database, nil, config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "private-api-key",
+		GatewayContract: LegacyFlatContract(),
+	}))
+	input := GenerateInput{
+		Prompt:     "private prompt",
+		Images:     []string{"https://asset.example/private-image"},
+		RequestKey: submissionKeyOne,
+	}
+
+	_, err := store.Generate(context.Background(), input)
+	var linkage *LocalLinkageError
+	if !errors.As(err, &linkage) {
+		t.Fatalf("error = %T, want *LocalLinkageError: %v", err, err)
+	}
+	if linkage.RequestKey != submissionKeyOne || linkage.SubmissionID == "" || linkage.TaskID != "task-42" {
+		t.Fatalf("local linkage identity = %+v", linkage)
+	}
+	for _, secret := range []string{"private-api-key", "private prompt", "private-image"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("local linkage error exposed %q: %q", secret, err.Error())
+		}
+	}
+	if attempts.Load() != 1 || state.insertCalls != 0 {
+		t.Fatalf("attempts=%d generation inserts=%d, want 1/0", attempts.Load(), state.insertCalls)
+	}
+	submission, getErr := store.submissions.GetByRequestKey(context.Background(), submissionKeyOne)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if submission.Status != SubmissionSubmitting || submission.GenerationID != "" {
+		t.Fatalf("reconcilable submission = %+v", submission)
+	}
+
+	_, err = store.Generate(context.Background(), input)
+	var inProgress *SubmissionInProgressError
+	if !errors.As(err, &inProgress) {
+		t.Fatalf("replay error = %T, want *SubmissionInProgressError: %v", err, err)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("replay create POST attempts = %d, want 1", attempts.Load())
+	}
+}
+
+func TestGenerateRecoversWhenAcceptedGenerationReloadFails(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"status": "queued", "task_id": "task-reload"},
+		})
+	}))
+	defer server.Close()
+
+	state := &videoDBState{generationQueryFailures: 1}
+	database := openVideoTestDB(t, state)
+	defer database.Close()
+	store := allowLocalTestStore(NewStore(database, nil, config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		GatewayContract: LegacyFlatContract(),
+	}))
+	input := GenerateInput{Prompt: "test", RequestKey: submissionKeyOne}
+
+	_, err := store.Generate(context.Background(), input)
+	var linkage *LocalLinkageError
+	if !errors.As(err, &linkage) {
+		t.Fatalf("error = %T, want *LocalLinkageError: %v", err, err)
+	}
+	if linkage.RequestKey != submissionKeyOne || linkage.SubmissionID == "" || linkage.TaskID != "task-reload" {
+		t.Fatalf("local linkage identity = %+v", linkage)
+	}
+	submission, getErr := store.submissions.GetByRequestKey(context.Background(), submissionKeyOne)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if submission.Status != SubmissionAccepted || submission.GenerationID == "" {
+		t.Fatalf("accepted submission = %+v", submission)
+	}
+
+	recovered, err := store.Generate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.ID != submission.GenerationID || recovered.TaskID != "task-reload" {
+		t.Fatalf("recovered generation = %+v", recovered)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("create POST attempts = %d, want 1", attempts.Load())
+	}
+}
+
+func TestReconcileSubmissionSameTaskIsIdempotent(t *testing.T) {
+	store, state, attempts := newUnknownOutcomeStore(t)
+	ctx := context.Background()
+
+	first, err := store.ReconcileSubmission(ctx, submissionKeyOne, "task-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.ReconcileSubmission(ctx, submissionKeyOne, "task-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Submission.Status != SubmissionReconciled || second.Submission.Status != SubmissionReconciled {
+		t.Fatalf("reconciled statuses = %q/%q", first.Submission.Status, second.Submission.Status)
+	}
+	if first.Submission.ID != second.Submission.ID || first.Generation.ID == "" || first.Generation.ID != second.Generation.ID {
+		t.Fatalf("reconcile identities = first %+v second %+v", first, second)
+	}
+	if first.Generation.TaskID != "task-42" || first.Generation.SubmissionStatus != SubmissionReconciled {
+		t.Fatalf("reconciled generation = %+v", first.Generation)
+	}
+	if state.insertCalls != 1 {
+		t.Fatalf("generation inserts = %d, want 1", state.insertCalls)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("create POST attempts after reconciliation = %d, want 1", attempts.Load())
+	}
+}
+
+func TestReconcileSubmissionRejectsDifferentTask(t *testing.T) {
+	store, state, attempts := newUnknownOutcomeStore(t)
+	ctx := context.Background()
+
+	if _, err := store.ReconcileSubmission(ctx, submissionKeyOne, "task-42"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.ReconcileSubmission(ctx, submissionKeyOne, "task-other")
+	var conflict *ReconciliationTaskConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("error = %T, want *ReconciliationTaskConflictError: %v", err, err)
+	}
+	if conflict.Code != "reconciliation_task_conflict" {
+		t.Fatalf("code = %q", conflict.Code)
+	}
+	if state.insertCalls != 1 || attempts.Load() != 1 {
+		t.Fatalf("generation inserts=%d create POST attempts=%d, want 1/1", state.insertCalls, attempts.Load())
+	}
+}
+
+func TestReconcileSubmissionFromSubmitting(t *testing.T) {
+	store, state, attempts := newLocalLinkFailureStore(t, 1, 0)
+
+	result, err := store.ReconcileSubmission(context.Background(), submissionKeyOne, "task-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Submission.Status != SubmissionReconciled || result.Submission.UpstreamTaskID != "task-42" {
+		t.Fatalf("submission = %+v", result.Submission)
+	}
+	if result.Generation.ID == "" || result.Generation.TaskID != "task-42" {
+		t.Fatalf("generation = %+v", result.Generation)
+	}
+	if state.insertCalls != 1 || attempts.Load() != 1 {
+		t.Fatalf("generation inserts=%d create POST attempts=%d, want 1/1", state.insertCalls, attempts.Load())
+	}
+}
+
+func TestReconcileSubmissionReusesExistingGeneration(t *testing.T) {
+	store, state, attempts := newLocalLinkFailureStore(t, 0, 1)
+	if state.insertCalls != 1 {
+		t.Fatalf("precondition generation inserts = %d, want 1", state.insertCalls)
+	}
+	existingID := state.generation.ID
+
+	result, err := store.ReconcileSubmission(context.Background(), submissionKeyOne, "task-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Generation.ID != existingID {
+		t.Fatalf("generation id = %q, want existing %q", result.Generation.ID, existingID)
+	}
+	if state.insertCalls != 1 || attempts.Load() != 1 {
+		t.Fatalf("generation inserts=%d create POST attempts=%d, want 1/1", state.insertCalls, attempts.Load())
+	}
+}
+
+func newUnknownOutcomeStore(t *testing.T) (*Store, *videoDBState, *atomic.Int32) {
+	t.Helper()
+	attempts := &atomic.Int32{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(server.Close)
+	state := &videoDBState{}
+	database := openVideoTestDB(t, state)
+	store := allowLocalTestStore(NewStore(database, nil, config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		GatewayContract: LegacyFlatContract(),
+	}))
+	_, err := store.Generate(context.Background(), GenerateInput{Prompt: "test", RequestKey: submissionKeyOne})
+	var unknown *UnknownOutcomeError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("setup error = %T, want *UnknownOutcomeError: %v", err, err)
+	}
+	return store, state, attempts
+}
+
+func newLocalLinkFailureStore(t *testing.T, recordTaskFailures, acceptTransitionFailures int) (*Store, *videoDBState, *atomic.Int32) {
+	t.Helper()
+	attempts := &atomic.Int32{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"status": "queued", "task_id": "task-42"},
+		})
+	}))
+	t.Cleanup(server.Close)
+	state := &videoDBState{}
+	database := openVideoTestDB(t, state)
+	state.submissions.recordTaskFailures = recordTaskFailures
+	state.submissions.acceptTransitionFailures = acceptTransitionFailures
+	store := allowLocalTestStore(NewStore(database, nil, config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		GatewayContract: LegacyFlatContract(),
+	}))
+	_, err := store.Generate(context.Background(), GenerateInput{Prompt: "test", RequestKey: submissionKeyOne})
+	var linkage *LocalLinkageError
+	if !errors.As(err, &linkage) {
+		t.Fatalf("setup error = %T, want *LocalLinkageError: %v", err, err)
+	}
+	return store, state, attempts
 }
 
 func TestCreateTaskDoesNotFollowRedirect(t *testing.T) {
@@ -1589,21 +2332,78 @@ func TestGeneratePersistsOnlySafeAPIBaseFailureMessage(t *testing.T) {
 		return nil, errors.New("unexpected transport call")
 	})
 
-	_, err := store.Generate(context.Background(), GenerateInput{Prompt: "test"})
+	_, err := store.Generate(context.Background(), GenerateInput{Prompt: "test", RequestKey: submissionKeyOne})
 	definite := assertRequestNotSubmitted(t, err)
 	if got := attempts.Load(); got != 0 {
 		t.Fatalf("unsafe API base reached RoundTrip %d times, want 0", got)
 	}
-	if state.insertCalls != 1 || state.generation.Status != "failed" {
-		t.Fatalf("failed generation record = calls %d generation %+v", state.insertCalls, state.generation)
+	if state.insertCalls != 0 {
+		t.Fatalf("pre-submit failure wrote %d generation rows, want 0", state.insertCalls)
 	}
-	if state.generation.ErrorMessage != definite.Message {
-		t.Fatalf("stored error message = %q, want safe message %q", state.generation.ErrorMessage, definite.Message)
+	submission, getErr := store.submissions.GetByRequestKey(context.Background(), submissionKeyOne)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if submission.Status != SubmissionCancelled {
+		t.Fatalf("submission status = %q, want cancelled", submission.Status)
+	}
+	if submission.ErrorMessage != definite.Message {
+		t.Fatalf("stored error message = %q, want safe message %q", submission.ErrorMessage, definite.Message)
 	}
 	for _, secret := range []string{apiBase, "private-user", "super-secret", "private-path", "api-secret"} {
-		if strings.Contains(state.generation.ErrorMessage, secret) {
-			t.Fatalf("stored error message exposed %q: %q", secret, state.generation.ErrorMessage)
+		if strings.Contains(submission.ErrorMessage, secret) {
+			t.Fatalf("stored error message exposed %q: %q", secret, submission.ErrorMessage)
 		}
+	}
+}
+
+func TestGenerateReportsTerminalStatePersistenceFailure(t *testing.T) {
+	state := &videoDBState{}
+	database := openVideoTestDB(t, state)
+	defer database.Close()
+	state.submissions.cancelTransitionFailures = 1
+	store := NewStore(database, nil, config.VideoConfig{
+		APIBase:         "https://private-user:super-secret@gateway.example/private-path",
+		APIKey:          "private-api-key",
+		GatewayContract: LegacyFlatContract(),
+	})
+	var attempts atomic.Int32
+	store.client.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		attempts.Add(1)
+		return nil, errors.New("unexpected transport call")
+	})
+	input := GenerateInput{Prompt: "private prompt", RequestKey: submissionKeyOne}
+
+	_, err := store.Generate(context.Background(), input)
+	var persistence *SubmissionPersistenceError
+	if !errors.As(err, &persistence) {
+		t.Fatalf("error = %T, want *SubmissionPersistenceError: %v", err, err)
+	}
+	if persistence.RequestKey != submissionKeyOne || persistence.SubmissionID == "" || persistence.IntendedStatus != SubmissionCancelled {
+		t.Fatalf("persistence error identity = %+v", persistence)
+	}
+	if persistence.OutcomeCode != "request_not_submitted" {
+		t.Fatalf("outcome code = %q", persistence.OutcomeCode)
+	}
+	for _, secret := range []string{"private-user", "super-secret", "private-path", "private-api-key", "private prompt"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("persistence error exposed %q: %q", secret, err.Error())
+		}
+	}
+	submission, getErr := store.submissions.GetByRequestKey(context.Background(), submissionKeyOne)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if submission.Status != SubmissionSubmitting {
+		t.Fatalf("submission status = %q, want submitting after injected terminal persistence failure", submission.Status)
+	}
+	_, err = store.Generate(context.Background(), input)
+	var inProgress *SubmissionInProgressError
+	if !errors.As(err, &inProgress) {
+		t.Fatalf("replay error = %T, want *SubmissionInProgressError: %v", err, err)
+	}
+	if attempts.Load() != 0 {
+		t.Fatalf("transport attempts = %d, want 0", attempts.Load())
 	}
 }
 
@@ -1630,14 +2430,14 @@ func TestCreateTaskTreatsResponseWaitTimeoutAsAmbiguous(t *testing.T) {
 	select {
 	case <-bodyRead:
 	default:
-		t.Fatal("server did not read paid request body before timeout")
+		t.Fatal("server did not read create request body before timeout")
 	}
 	var ambiguous *AmbiguousTransportError
 	if !errors.As(err, &ambiguous) {
 		t.Fatalf("response wait timeout type = %T, want *AmbiguousTransportError: %v", err, err)
 	}
 	if attempts.Load() != 1 {
-		t.Fatalf("paid POST attempts = %d, want 1", attempts.Load())
+		t.Fatalf("create POST attempts = %d, want 1", attempts.Load())
 	}
 }
 
@@ -1687,7 +2487,7 @@ func TestCreateTaskDisablesTransportBodyReplay(t *testing.T) {
 		APIKey:          "test-key",
 		GatewayContract: contract,
 	})
-	probe := &paidPostReplayProbe{}
+	probe := &createPostReplayProbe{}
 	client.client.Transport = probe
 
 	_, err := client.CreateNormalizedTask(context.Background(), GenerateRequest{
@@ -1706,7 +2506,7 @@ func TestCreateTaskDisablesTransportBodyReplay(t *testing.T) {
 		t.Fatalf("transport attempts = %d, want 1", probe.attempts)
 	}
 	if probe.getBodyPresent {
-		t.Fatal("paid POST exposed GetBody, allowing net/http transport replay")
+		t.Fatal("create POST exposed GetBody, allowing net/http transport replay")
 	}
 	if probe.idempotencyKey != "123e4567-e89b-12d3-a456-426614174000" {
 		t.Fatalf("Idempotency-Key = %q, want UUID request key", probe.idempotencyKey)
@@ -1748,13 +2548,13 @@ func TestQueryTaskStillRetriesSafeGet(t *testing.T) {
 	}
 }
 
-type paidPostReplayProbe struct {
+type createPostReplayProbe struct {
 	attempts       int
 	getBodyPresent bool
 	idempotencyKey string
 }
 
-func (p *paidPostReplayProbe) RoundTrip(request *http.Request) (*http.Response, error) {
+func (p *createPostReplayProbe) RoundTrip(request *http.Request) (*http.Response, error) {
 	p.attempts++
 	p.getBodyPresent = request.GetBody != nil
 	p.idempotencyKey = request.Header.Get("Idempotency-Key")
@@ -1930,12 +2730,14 @@ func init() {
 }
 
 type videoDBState struct {
-	generation        Generation
-	uploadAsset       map[string]driver.Value
-	uploadAssetID     int64
-	uploadCreateCalls int
-	insertCalls       int
-	statusUpdateCalls int
+	generation              Generation
+	submissions             *submissionTestState
+	generationQueryFailures int
+	uploadAsset             map[string]driver.Value
+	uploadAssetID           int64
+	uploadCreateCalls       int
+	insertCalls             int
+	statusUpdateCalls       int
 }
 
 type recordingVideoUploader struct {
@@ -1971,6 +2773,8 @@ type videoTestRows struct {
 
 type videoTestResult int64
 
+type videoTestTx struct{}
+
 var (
 	videoTestMu     sync.Mutex
 	videoTestStates = map[string]*videoDBState{}
@@ -1979,6 +2783,9 @@ var (
 func openVideoTestDB(t *testing.T, state *videoDBState) *sql.DB {
 	t.Helper()
 	name := strings.ReplaceAll(t.Name(), "/", "_")
+	if state.submissions == nil {
+		state.submissions = &submissionTestState{byKey: map[string]Submission{}}
+	}
 	videoTestMu.Lock()
 	videoTestStates[name] = state
 	videoTestMu.Unlock()
@@ -2053,11 +2860,21 @@ func (c *videoTestConn) Close() error {
 }
 
 func (c *videoTestConn) Begin() (driver.Tx, error) {
-	return nil, errors.New("transactions are not supported")
+	return videoTestTx{}, nil
 }
+
+func (c *videoTestConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return videoTestTx{}, nil
+}
+
+func (videoTestTx) Commit() error   { return nil }
+func (videoTestTx) Rollback() error { return nil }
 
 func (c *videoTestConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	q := strings.TrimSpace(query)
+	if strings.Contains(q, "video_generation_submissions") {
+		return (&submissionTestConn{state: c.state.submissions}).QueryContext(context.Background(), query, args)
+	}
 	switch {
 	case strings.Contains(q, "SELECT nextval(pg_get_serial_sequence('upload_assets','id'))"):
 		return singleRow([]string{"nextval"}, []driver.Value{int64(7)}), nil
@@ -2081,6 +2898,20 @@ func (c *videoTestConn) QueryContext(_ context.Context, query string, args []dri
 		return singleRow([]string{"id", "key", "name", "content_type", "size", "data", "object_key", "object_url"}, []driver.Value{c.state.uploadAsset["id"], c.state.uploadAsset["key"], c.state.uploadAsset["name"], c.state.uploadAsset["content_type"], c.state.uploadAsset["size"], c.state.uploadAsset["data"], c.state.uploadAsset["object_key"], c.state.uploadAsset["object_url"]}), nil
 	case strings.Contains(q, "INSERT INTO video_generations"):
 		c.state.insertCalls++
+		if strings.Contains(q, "used_images") {
+			c.state.generation = Generation{
+				ID:          "42",
+				Provider:    "newapi",
+				Model:       namedString(args, 1),
+				Prompt:      namedString(args, 2),
+				ImageURL:    namedString(args, 3),
+				TaskID:      namedString(args, 7),
+				Seconds:     int(namedInt64(args, 8)),
+				AspectRatio: namedString(args, 9),
+				Status:      namedString(args, 10),
+			}
+			return singleRow([]string{"id"}, []driver.Value{"42"}), nil
+		}
 		if strings.Contains(q, "'failed'") {
 			c.state.generation = Generation{
 				ID:           "42",
@@ -2108,6 +2939,13 @@ func (c *videoTestConn) QueryContext(_ context.Context, query string, args []dri
 		}
 		return singleRow([]string{"id"}, []driver.Value{"42"}), nil
 	case strings.Contains(q, "FROM video_generations"):
+		if c.state.generationQueryFailures > 0 {
+			c.state.generationQueryFailures--
+			return nil, errors.New("injected generation reload failure")
+		}
+		if c.state.generation.ID == "" {
+			return nil, sql.ErrNoRows
+		}
 		return generationRow(c.state.generation), nil
 	default:
 		return nil, fmtError("unexpected query: " + q)

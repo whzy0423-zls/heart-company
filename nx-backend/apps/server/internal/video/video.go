@@ -38,32 +38,38 @@ var terminalStatuses = map[string]bool{
 }
 
 type Store struct {
-	client       *Client
-	db           *sql.DB
-	uploads      *uploadasset.Store
-	uploader     storage.ObjectUploader
-	defaultModel string
+	client          *Client
+	db              *sql.DB
+	uploads         *uploadasset.Store
+	uploader        storage.ObjectUploader
+	submissions     *SubmissionStore
+	defaultModel    string
+	modelProfile    string
+	gatewayContract config.GatewayContractConfig
 }
 
 type Generation struct {
-	AspectRatio  string  `json:"aspectRatio"`
-	CreateTime   string  `json:"createTime"`
-	Duration     float64 `json:"duration"`
-	ErrorMessage string  `json:"errorMessage"`
-	FPS          float64 `json:"fps"`
-	Height       int     `json:"height"`
-	ID           string  `json:"id"`
-	ImageURL     string  `json:"imageUrl"`
-	Model        string  `json:"model"`
-	Prompt       string  `json:"prompt"`
-	Provider     string  `json:"provider"`
-	Seconds      int     `json:"seconds"`
-	Status       string  `json:"status"`
-	TaskID       string  `json:"taskId"`
-	UpdateTime   string  `json:"updateTime"`
-	VideoAssetID string  `json:"videoAssetId"`
-	VideoURL     string  `json:"videoUrl"`
-	Width        int     `json:"width"`
+	AspectRatio      string           `json:"aspectRatio"`
+	CreateTime       string           `json:"createTime"`
+	Duration         float64          `json:"duration"`
+	ErrorMessage     string           `json:"errorMessage"`
+	FPS              float64          `json:"fps"`
+	Height           int              `json:"height"`
+	ID               string           `json:"id"`
+	ImageURL         string           `json:"imageUrl"`
+	Model            string           `json:"model"`
+	Prompt           string           `json:"prompt"`
+	Provider         string           `json:"provider"`
+	Seconds          int              `json:"seconds"`
+	Status           string           `json:"status"`
+	TaskID           string           `json:"taskId"`
+	UpdateTime       string           `json:"updateTime"`
+	VideoAssetID     string           `json:"videoAssetId"`
+	VideoURL         string           `json:"videoUrl"`
+	Width            int              `json:"width"`
+	RequestKey       string           `json:"requestKey,omitempty"`
+	SubmissionID     string           `json:"submissionId,omitempty"`
+	SubmissionStatus SubmissionStatus `json:"submissionStatus,omitempty"`
 }
 
 type PageResult[T any] struct {
@@ -72,14 +78,18 @@ type PageResult[T any] struct {
 }
 
 type GenerateInput struct {
-	AspectRatio string   `json:"aspectRatio"`
-	Audios      []string `json:"audios"`   // 参考音频 URL
-	ImageURL    string   `json:"imageUrl"` // 兼容旧字段：单张参考图地址
-	Images      []string `json:"images"`   // 参考图片地址（上传到文件桶后的可公网访问 URL）
-	Videos      []string `json:"videos"`   // 参考视频地址（上传到文件桶后的可公网访问 URL）
-	Model       string   `json:"model"`
-	Prompt      string   `json:"prompt"`
-	Seconds     int      `json:"seconds"`
+	AspectRatio       string   `json:"aspectRatio"`
+	Audios            []string `json:"audios"`   // 参考音频 URL
+	ImageURL          string   `json:"imageUrl"` // 兼容旧字段：单张参考图地址
+	Images            []string `json:"images"`   // 参考图片地址（上传到文件桶后的可公网访问 URL）
+	Videos            []string `json:"videos"`   // 参考视频地址（上传到文件桶后的可公网访问 URL）
+	Model             string   `json:"model"`
+	Prompt            string   `json:"prompt"`
+	Seconds           int      `json:"seconds"`
+	RequestKey        string   `json:"requestKey"`
+	ProjectID         string   `json:"projectId"`
+	ShotID            string   `json:"shotId"`
+	CapabilityVersion string   `json:"capabilityVersion"`
 }
 
 // 网关支持的视频时长（秒），默认 15s。
@@ -120,12 +130,20 @@ func NewStore(database *sql.DB, uploads *uploadasset.Store, cfg config.VideoConf
 	if len(uploaders) > 0 {
 		uploader = uploaders[0]
 	}
+	contract := cfg.GatewayContract
+	if contract.Name == "" && contract.Version == "" && contract.References.Mode == "" {
+		contract = LegacyFlatContract()
+		cfg.GatewayContract = contract
+	}
 	return &Store{
-		client:       NewClient(cfg),
-		db:           database,
-		uploads:      uploads,
-		uploader:     uploader,
-		defaultModel: model,
+		client:          NewClient(cfg),
+		db:              database,
+		uploads:         uploads,
+		uploader:        uploader,
+		submissions:     NewSubmissionStore(database),
+		defaultModel:    model,
+		modelProfile:    strings.TrimSpace(cfg.ModelProfile),
+		gatewayContract: contract,
 	}
 }
 
@@ -165,39 +183,109 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 	if !allowedAspectRatios[aspectRatio] {
 		return Generation{}, fmt.Errorf("视频画幅仅支持 16:9、9:16 或 1:1")
 	}
-
-	// image_url 列仅用于后台列表展示首帧，取第一张参考图。
-	var imageURL string
-	if len(images) > 0 {
-		imageURL = images[0]
+	existing, found, err := s.existingGenerateIntent(ctx, input, model, prompt, seconds, aspectRatio, images, videos, audios)
+	if err != nil {
+		return Generation{}, err
+	}
+	if found && existing.Status != SubmissionPrepared {
+		return s.existingSubmissionGeneration(ctx, existing)
 	}
 
-	task, err := s.client.CreateTask(ctx, model, prompt, images, videos, audios, seconds, aspectRatio)
+	prepared, err := s.prepareGenerationSubmission(input, model, prompt, seconds, aspectRatio, images, videos, audios)
+	if err != nil {
+		return Generation{}, err
+	}
+	submission, _, err := s.submissions.Prepare(ctx, PrepareSubmissionInput{
+		RequestKey:        prepared.request.RequestKey,
+		ProjectID:         prepared.projectID,
+		ShotID:            prepared.shotID,
+		RequestHash:       prepared.requestHash,
+		PromptHash:        prepared.promptHash,
+		CapabilityVersion: prepared.request.CapabilityVersion,
+		RequestSnapshot:   prepared.snapshot,
+	})
+	if err != nil {
+		return Generation{}, err
+	}
+	submission, claimed, err := s.submissions.ClaimSubmitting(ctx, submission.RequestKey)
+	if err != nil {
+		return Generation{}, err
+	}
+	if !claimed {
+		return s.existingSubmissionGeneration(ctx, submission)
+	}
+
+	task, err := s.client.CreateNormalizedTask(ctx, prepared.request, prepared.references)
+	persistenceCtx, cancelPersistence := submissionPersistenceContext(ctx)
+	defer cancelPersistence()
 	if err != nil {
 		var ambiguous *AmbiguousTransportError
 		if errors.As(err, &ambiguous) {
-			return Generation{}, err
+			unknown, transitionErr := s.submissions.Transition(persistenceCtx, submission.RequestKey, SubmissionSubmitting, SubmissionUnknownOutcome, SubmissionTransition{})
+			if transitionErr != nil {
+				return Generation{}, &UnknownOutcomeError{
+					RequestKey:   submission.RequestKey,
+					SubmissionID: submission.ID,
+					Persisted:    false,
+				}
+			}
+			return Generation{}, &UnknownOutcomeError{RequestKey: unknown.RequestKey, SubmissionID: unknown.ID, Persisted: true}
 		}
-		var id string
-		_ = s.db.QueryRowContext(ctx,
-			`INSERT INTO video_generations (provider, model, prompt, image_url, seconds, aspect_ratio, status, error_message)
-				 VALUES ('newapi',$1,$2,$3,$4,$5,'failed',$6)
-				 RETURNING id::text`,
-			model, prompt, imageURL, seconds, aspectRatio, err.Error(),
-		).Scan(&id)
+		terminalStatus := SubmissionCancelled
+		outcomeCode := "request_not_submitted"
+		var createErr *CreateTaskError
+		if errors.As(err, &createErr) {
+			outcomeCode = createErr.Code
+			if createErr.Code == "gateway_request_rejected" {
+				terminalStatus = SubmissionFailed
+			}
+		}
+		if _, transitionErr := s.submissions.Transition(persistenceCtx, submission.RequestKey, SubmissionSubmitting, terminalStatus, SubmissionTransition{ErrorMessage: err.Error()}); transitionErr != nil {
+			return Generation{}, &SubmissionPersistenceError{
+				RequestKey:     submission.RequestKey,
+				SubmissionID:   submission.ID,
+				IntendedStatus: terminalStatus,
+				OutcomeCode:    outcomeCode,
+			}
+		}
 		return Generation{}, err
 	}
+	recordedSubmission, err := s.submissions.RecordUpstreamTask(persistenceCtx, submission.RequestKey, task.TaskID)
+	if err != nil {
+		return Generation{}, &LocalLinkageError{RequestKey: submission.RequestKey, SubmissionID: submission.ID, TaskID: task.TaskID}
+	}
+	submission = recordedSubmission
 	status := normalizeStatus(task.Status)
-	var id string
-	if err := s.db.QueryRowContext(ctx,
-		`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status)
-			 VALUES ('newapi',$1,$2,$3,$4,$5,$6,$7)
-			 RETURNING id::text`,
-		model, prompt, imageURL, task.TaskID, seconds, aspectRatio, status,
-	).Scan(&id); err != nil {
-		return Generation{}, err
+	id, err := insertGenerationRecord(persistenceCtx, s.db, generationRecordInput{
+		Model:       model,
+		Prompt:      prompt,
+		ImageURL:    prepared.imageURL,
+		Images:      prepared.images,
+		Videos:      prepared.videos,
+		Audios:      prepared.audios,
+		TaskID:      task.TaskID,
+		Seconds:     seconds,
+		AspectRatio: aspectRatio,
+		Status:      status,
+		ProjectID:   prepared.projectID,
+		ShotID:      prepared.shotID,
+	})
+	if err != nil {
+		return Generation{}, &LocalLinkageError{RequestKey: submission.RequestKey, SubmissionID: submission.ID, TaskID: task.TaskID}
 	}
-	return s.Generation(ctx, id)
+	acceptedSubmission, err := s.submissions.Transition(persistenceCtx, submission.RequestKey, SubmissionSubmitting, SubmissionAccepted, SubmissionTransition{
+		UpstreamTaskID: task.TaskID,
+		GenerationID:   id,
+	})
+	if err != nil {
+		return Generation{}, &LocalLinkageError{RequestKey: submission.RequestKey, SubmissionID: submission.ID, TaskID: task.TaskID}
+	}
+	submission = acceptedSubmission
+	generation, err := s.Generation(persistenceCtx, id)
+	if err != nil {
+		return Generation{}, &LocalLinkageError{RequestKey: submission.RequestKey, SubmissionID: submission.ID, TaskID: task.TaskID}
+	}
+	return attachSubmission(generation, submission), nil
 }
 
 // Refresh 轮询单条记录的网关状态。终态直接返回；进行中则查询网关，
@@ -208,7 +296,7 @@ func (s *Store) Refresh(ctx context.Context, id string) (Generation, error) {
 		return Generation{}, err
 	}
 	if shouldSkipRefresh(item) {
-		return item, nil
+		return s.hydrateGenerationSubmission(ctx, item)
 	}
 
 	task, err := s.client.QueryTask(ctx, item.TaskID, item.Seconds)
@@ -227,7 +315,11 @@ func (s *Store) Refresh(ctx context.Context, id string) (Generation, error) {
 			data, contentType, err = s.client.Download(ctx, task.URL)
 			if err != nil {
 				_ = s.markFailed(ctx, id, "视频已生成但下载失败，请稍后重试")
-				return s.Generation(ctx, id)
+				item, loadErr := s.Generation(ctx, id)
+				if loadErr != nil {
+					return Generation{}, loadErr
+				}
+				return s.hydrateGenerationSubmission(ctx, item)
 			}
 		}
 		asset, err := s.createUploadAsset(ctx, data, contentType, "video/generated", fmt.Sprintf("video-%s.mp4", time.Now().Format("20060102150405")))
@@ -236,7 +328,11 @@ func (s *Store) Refresh(ctx context.Context, id string) (Generation, error) {
 		}
 		if !isPublicHTTPURL(asset.ObjectURL) {
 			_ = s.markFailed(ctx, id, "视频已生成，但没有文件桶公网地址，请配置 OSS_PUBLIC_URL/文件桶公网访问后重试")
-			return s.Generation(ctx, id)
+			item, loadErr := s.Generation(ctx, id)
+			if loadErr != nil {
+				return Generation{}, loadErr
+			}
+			return s.hydrateGenerationSubmission(ctx, item)
 		}
 		if _, err := s.db.ExecContext(ctx,
 			`UPDATE video_generations
@@ -257,7 +353,11 @@ func (s *Store) Refresh(ctx context.Context, id string) (Generation, error) {
 			)
 		}
 	}
-	return s.Generation(ctx, id)
+	item, err = s.Generation(ctx, id)
+	if err != nil {
+		return Generation{}, err
+	}
+	return s.hydrateGenerationSubmission(ctx, item)
 }
 
 func (s *Store) createUploadAsset(ctx context.Context, data []byte, contentType string, dir string, name string) (uploadasset.Asset, error) {
@@ -373,24 +473,7 @@ func generationListCondition(query url.Values) (string, []any) {
 }
 
 func (s *Store) Generation(ctx context.Context, id string) (Generation, error) {
-	var item Generation
-	var createTime, updateTime time.Time
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id::text, provider, model, prompt, image_url, task_id, seconds, aspect_ratio,
-			        COALESCE(video_asset_id::text,''), video_url, duration, fps, width, height,
-		        status, error_message, create_time, update_time
-		   FROM video_generations
-		  WHERE id=$1`,
-		id,
-	).Scan(&item.ID, &item.Provider, &item.Model, &item.Prompt, &item.ImageURL, &item.TaskID, &item.Seconds, &item.AspectRatio,
-		&item.VideoAssetID, &item.VideoURL, &item.Duration, &item.FPS, &item.Width, &item.Height,
-		&item.Status, &item.ErrorMessage, &createTime, &updateTime)
-	if err != nil {
-		return Generation{}, err
-	}
-	item.CreateTime = formatTime(createTime)
-	item.UpdateTime = formatTime(updateTime)
-	return item, nil
+	return generationByID(ctx, s.db, id)
 }
 
 // StatusCounts 各状态的任务数。
@@ -544,7 +627,7 @@ type TaskResult struct {
 	ErrorMessage string
 }
 
-// AmbiguousTransportError means the paid create request may have reached the
+// AmbiguousTransportError means the create request may have reached the
 // intermediary, but the client could not confirm a task ID. The caller must
 // reconcile RequestKey instead of auto-retrying.
 type AmbiguousTransportError struct {
@@ -637,7 +720,7 @@ func (c *Client) CreateNormalizedTask(ctx context.Context, request GenerateReque
 		},
 	}))
 	// A declared idempotency header makes net/http consider POST replayable.
-	// Removing GetBody prevents the transport from silently resending a paid
+	// Removing GetBody prevents the transport from silently resending a create
 	// request; reconciliation owns any later retry decision.
 	req.GetBody = nil
 	req.Header.Set("Content-Type", "application/json")

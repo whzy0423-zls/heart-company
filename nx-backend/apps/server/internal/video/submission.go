@@ -25,8 +25,9 @@ const (
 	SubmissionCancelled      SubmissionStatus = "cancelled"
 	SubmissionReconciled     SubmissionStatus = "reconciled"
 
-	requestKeySubmissionConstraint = "uq_video_generation_submissions_request_key"
-	activeShotSubmissionConstraint = "uq_video_generation_submissions_active_shot"
+	requestKeySubmissionConstraint   = "uq_video_generation_submissions_request_key"
+	activeShotSubmissionConstraint   = "uq_video_generation_submissions_active_shot"
+	upstreamTaskSubmissionConstraint = "uq_video_generation_submissions_upstream_task"
 )
 
 var submissionTransitions = map[SubmissionStatus]map[SubmissionStatus]bool{
@@ -38,6 +39,8 @@ var submissionTransitions = map[SubmissionStatus]map[SubmissionStatus]bool{
 		SubmissionAccepted:       true,
 		SubmissionUnknownOutcome: true,
 		SubmissionReconciled:     true,
+		SubmissionFailed:         true,
+		SubmissionCancelled:      true,
 	},
 	SubmissionAccepted: {
 		SubmissionCompleted: true,
@@ -45,6 +48,7 @@ var submissionTransitions = map[SubmissionStatus]map[SubmissionStatus]bool{
 	},
 	SubmissionUnknownOutcome: {
 		SubmissionReconciled: true,
+		SubmissionCancelled:  true,
 	},
 }
 
@@ -141,6 +145,57 @@ type ReconciliationTaskConflictError struct {
 
 func (e *ReconciliationTaskConflictError) Error() string {
 	return "对账任务与已保存的视频生成任务不一致。"
+}
+
+type SubmissionInProgressError struct {
+	RequestKey   string
+	SubmissionID string
+	Status       SubmissionStatus
+}
+
+func (e *SubmissionInProgressError) Error() string {
+	return "视频生成任务正在提交，请查看现有任务状态。"
+}
+
+type UnknownOutcomeError struct {
+	RequestKey   string
+	SubmissionID string
+	Persisted    bool
+}
+
+func (e *UnknownOutcomeError) Error() string {
+	return "视频生成请求结果不确定，请先对账，不能直接重新生成。"
+}
+
+type LocalLinkageError struct {
+	RequestKey   string
+	SubmissionID string
+	TaskID       string
+}
+
+func (e *LocalLinkageError) Error() string {
+	return "中转站已返回任务，但本地关联尚未完成，请使用原请求键对账。"
+}
+
+type SubmissionTerminalError struct {
+	RequestKey   string
+	SubmissionID string
+	Status       SubmissionStatus
+}
+
+func (e *SubmissionTerminalError) Error() string {
+	return "本次视频生成提交已经结束，请查看记录或创建新的生成版本。"
+}
+
+type SubmissionPersistenceError struct {
+	RequestKey     string
+	SubmissionID   string
+	IntendedStatus SubmissionStatus
+	OutcomeCode    string
+}
+
+func (e *SubmissionPersistenceError) Error() string {
+	return "视频生成结果已确认，但本地提交状态尚未保存，请使用原请求键恢复。"
 }
 
 func NewSubmissionStore(database *sql.DB) *SubmissionStore {
@@ -251,6 +306,103 @@ func (s *SubmissionStore) FindActiveByShot(ctx context.Context, shotID string) (
 		   AND status IN ('prepared','submitting','accepted','unknown_outcome')
 		 ORDER BY create_time DESC, id DESC
 		 LIMIT 1`, parsedShotID))
+}
+
+func (s *SubmissionStore) GetByGenerationID(ctx context.Context, generationID string) (Submission, error) {
+	if s == nil || s.db == nil {
+		return Submission{}, errors.New("video submission store is not configured")
+	}
+	parsedGenerationID, _, err := normalizeSubmissionID("generationId", generationID, false)
+	if err != nil {
+		return Submission{}, err
+	}
+	return scanSubmission(s.db.QueryRowContext(ctx, `
+		SELECT `+submissionSelectColumns+`
+		  FROM video_generation_submissions
+		 WHERE generation_id=$1
+		 ORDER BY id
+		 LIMIT 1`, parsedGenerationID))
+}
+
+// ClaimSubmitting atomically grants one caller permission to execute the
+// create-task POST. A false result means another caller already claimed or
+// advanced the same persisted submission.
+func (s *SubmissionStore) ClaimSubmitting(ctx context.Context, requestKey string) (Submission, bool, error) {
+	if s == nil || s.db == nil {
+		return Submission{}, false, errors.New("video submission store is not configured")
+	}
+	requestKey, err := normalizeSubmissionRequestKey(requestKey)
+	if err != nil {
+		return Submission{}, false, err
+	}
+	item, err := scanSubmission(s.db.QueryRowContext(ctx, `
+		UPDATE video_generation_submissions
+		   SET status=$3,
+		       upstream_task_id=CASE WHEN $4='' THEN upstream_task_id ELSE $4 END,
+		       generation_id=COALESCE($5,generation_id),
+		       error_message=$6,
+		       update_time=now()
+		 WHERE request_key=$1
+		   AND status=$2
+		RETURNING `+submissionSelectColumns,
+		requestKey,
+		string(SubmissionPrepared),
+		string(SubmissionSubmitting),
+		"",
+		nil,
+		"",
+	))
+	if err == nil {
+		return item, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return Submission{}, false, err
+	}
+	current, lookupErr := s.GetByRequestKey(ctx, requestKey)
+	if lookupErr != nil {
+		return Submission{}, false, lookupErr
+	}
+	return current, false, nil
+}
+
+func (s *SubmissionStore) RecordUpstreamTask(ctx context.Context, requestKey, taskID string) (Submission, error) {
+	if s == nil || s.db == nil {
+		return Submission{}, errors.New("video submission store is not configured")
+	}
+	requestKey, err := normalizeSubmissionRequestKey(requestKey)
+	if err != nil {
+		return Submission{}, err
+	}
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return Submission{}, submissionValidationError("upstream_task_id_required", "upstreamTaskId", "中转站任务 ID 不能为空。")
+	}
+	item, err := scanSubmission(s.db.QueryRowContext(ctx, `
+		UPDATE video_generation_submissions
+		   SET upstream_task_id=$2,
+		       update_time=now()
+		 WHERE request_key=$1
+		   AND status='submitting'
+		   AND (upstream_task_id='' OR upstream_task_id=$2)
+		RETURNING `+submissionSelectColumns, requestKey, taskID))
+	if err == nil {
+		return item, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return Submission{}, err
+	}
+	current, lookupErr := s.GetByRequestKey(ctx, requestKey)
+	if lookupErr != nil {
+		return Submission{}, lookupErr
+	}
+	if current.UpstreamTaskID != "" && current.UpstreamTaskID != taskID {
+		return Submission{}, &ReconciliationTaskConflictError{
+			Code:       "reconciliation_task_conflict",
+			RequestKey: requestKey,
+			TaskID:     taskID,
+		}
+	}
+	return current, nil
 }
 
 func (s *SubmissionStore) Transition(

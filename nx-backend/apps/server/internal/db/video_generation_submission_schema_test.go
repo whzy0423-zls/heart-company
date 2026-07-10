@@ -20,6 +20,8 @@ func TestVideoGenerationSubmissionSchema(t *testing.T) {
 		"generation_id BIGINT REFERENCES video_generations(id) ON DELETE SET NULL",
 		"CREATE UNIQUE INDEX IF NOT EXISTS uq_video_generation_submissions_request_key ON video_generation_submissions(request_key)",
 		"CREATE UNIQUE INDEX IF NOT EXISTS uq_video_generation_submissions_active_shot ON video_generation_submissions(shot_id) WHERE shot_id IS NOT NULL AND status IN ('prepared','submitting','accepted','unknown_outcome')",
+		"CREATE UNIQUE INDEX IF NOT EXISTS uq_video_generation_submissions_upstream_task ON video_generation_submissions(upstream_task_id) WHERE upstream_task_id <> ''",
+		"CREATE INDEX IF NOT EXISTS idx_video_generations_task_id ON video_generations(task_id) WHERE task_id <> ''",
 	}
 	for _, statement := range required {
 		if !strings.Contains(schema, statement) {
