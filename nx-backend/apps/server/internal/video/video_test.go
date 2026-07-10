@@ -7,12 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -553,7 +557,7 @@ func TestCreateTaskUsesDeclaredIdempotencyHeader(t *testing.T) {
 		header        string
 		wantRequestID string
 	}{
-		{name: "declared header uses exact request key", header: "Idempotency-Key", wantRequestID: "req-123"},
+		{name: "declared header uses exact request key", header: "Idempotency-Key", wantRequestID: "123e4567-e89b-12d3-a456-426614174000"},
 		{name: "blank header sends no idempotency key", header: "", wantRequestID: ""},
 	}
 
@@ -585,7 +589,7 @@ func TestCreateTaskUsesDeclaredIdempotencyHeader(t *testing.T) {
 				Duration:    15,
 				AspectRatio: "9:16",
 				TaskMode:    "reference",
-				RequestKey:  "req-123",
+				RequestKey:  "123e4567-e89b-12d3-a456-426614174000",
 			}, CanonicalReferences{})
 			if err != nil {
 				t.Fatal(err)
@@ -602,6 +606,56 @@ func TestCreateTaskUsesDeclaredIdempotencyHeader(t *testing.T) {
 			}
 			if _, exists := gotBody["requestKey"]; exists {
 				t.Fatalf("requestKey leaked into undeclared JSON body: %#v", gotBody)
+			}
+		})
+	}
+}
+
+func TestCreateTaskRequiresValidRequestKeyForDeclaredIdempotencyHeader(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		code string
+	}{
+		{name: "empty", key: "", code: "request_key_required"},
+		{name: "blank", key: " \t ", code: "request_key_required"},
+		{name: "not uuid", key: "req-123", code: "request_key_invalid"},
+		{name: "control character", key: "123e4567-e89b-12d3-a456-426614174000\n", code: "request_key_invalid"},
+		{name: "zero uuid", key: "00000000-0000-0000-0000-000000000000", code: "request_key_invalid"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{"status": "queued", "task_id": "task-1"},
+				})
+			}))
+			defer server.Close()
+
+			contract := LegacyFlatContract()
+			contract.Idempotency.Header = "Idempotency-Key"
+			client := allowLocalTestClient(NewClient(config.VideoConfig{
+				APIBase:         server.URL,
+				APIKey:          "test-key",
+				GatewayContract: contract,
+			}))
+			_, err := client.CreateNormalizedTask(context.Background(), GenerateRequest{
+				Model:       "video-ds-2.0-fast",
+				Prompt:      "test",
+				Duration:    15,
+				AspectRatio: "9:16",
+				TaskMode:    "reference",
+				RequestKey:  tt.key,
+			}, CanonicalReferences{})
+			validationErr := assertValidationCode(t, err, tt.code)
+			if validationErr.Field != "requestKey" {
+				t.Fatalf("validation field = %q, want requestKey", validationErr.Field)
+			}
+			if attempts.Load() != 0 {
+				t.Fatalf("invalid request key reached paid POST %d times", attempts.Load())
 			}
 		})
 	}
@@ -955,8 +1009,8 @@ func TestCreateTaskDoesNotRetryPost(t *testing.T) {
 	if !errors.As(err, &ambiguous) {
 		t.Fatalf("CreateTask() error type = %T, want *AmbiguousTransportError: %v", err, err)
 	}
-	if ambiguous.Unwrap() == nil {
-		t.Fatal("ambiguous transport error must preserve the network cause")
+	if _, exposesCause := any(ambiguous).(interface{ Unwrap() error }); exposesCause {
+		t.Fatal("ambiguous transport error must not publicly unwrap its network cause")
 	}
 	if strings.Contains(err.Error(), server.URL) {
 		t.Fatalf("ambiguous error exposed gateway URL: %q", err.Error())
@@ -998,7 +1052,7 @@ func TestCreateTaskClassifiesUnconfirmed2xxOutcomes(t *testing.T) {
 				APIKey:          "api-secret",
 				GatewayContract: contract,
 			}))
-			const requestKey = "req-secret-123"
+			const requestKey = "123e4567-e89b-12d3-a456-426614174000"
 			const prompt = "TOP SECRET PROMPT"
 			result, err := client.CreateNormalizedTask(context.Background(), GenerateRequest{
 				Model:       "video-ds-2.0-fast",
@@ -1017,8 +1071,8 @@ func TestCreateTaskClassifiesUnconfirmed2xxOutcomes(t *testing.T) {
 				if ambiguous.RequestKey != requestKey || ambiguous.Operation != "create_video_task" {
 					t.Fatalf("ambiguous context = requestKey %q operation %q", ambiguous.RequestKey, ambiguous.Operation)
 				}
-				if ambiguous.Unwrap() == nil {
-					t.Fatal("ambiguous outcome must preserve a safe cause")
+				if _, exposesCause := any(ambiguous).(interface{ Unwrap() error }); exposesCause {
+					t.Fatal("ambiguous outcome must not publicly unwrap its raw cause")
 				}
 				for _, secret := range []string{requestKey, prompt, "api-secret", server.URL} {
 					if strings.Contains(err.Error(), secret) {
@@ -1040,6 +1094,459 @@ func TestCreateTaskClassifiesUnconfirmed2xxOutcomes(t *testing.T) {
 	}
 }
 
+func TestCreateTaskTreatsOversized2xxBodyAsAmbiguous(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"task_id":"task-1"}`)
+		_, _ = io.WriteString(w, strings.Repeat(" ", 4*1024*1024))
+	}))
+	defer server.Close()
+
+	client := allowLocalTestClient(NewClient(config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		GatewayContract: LegacyFlatContract(),
+	}))
+	_, err := client.CreateNormalizedTask(context.Background(), GenerateRequest{
+		Model:       "video-ds-2.0-fast",
+		Prompt:      "test",
+		Duration:    15,
+		AspectRatio: "9:16",
+		TaskMode:    "reference",
+	}, CanonicalReferences{})
+	var ambiguous *AmbiguousTransportError
+	if !errors.As(err, &ambiguous) {
+		t.Fatalf("oversized 2xx error type = %T, want *AmbiguousTransportError: %v", err, err)
+	}
+	if ambiguous.StatusCode != http.StatusOK || attempts.Load() != 1 {
+		t.Fatalf("ambiguous status=%d attempts=%d", ambiguous.StatusCode, attempts.Load())
+	}
+}
+
+func TestCreateTaskTreats2xxBodyReadFailureAsAmbiguous(t *testing.T) {
+	client := NewClient(config.VideoConfig{
+		APIBase:         "https://gateway.example.com",
+		APIKey:          "test-key",
+		GatewayContract: LegacyFlatContract(),
+	})
+	client.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if trace := httptrace.ContextClientTrace(request.Context()); trace != nil && trace.WroteHeaders != nil {
+			trace.WroteHeaders()
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       &failingCreateResponseBody{},
+			Request:    request,
+		}, nil
+	})
+
+	_, err := client.CreateNormalizedTask(context.Background(), GenerateRequest{
+		Model:       "video-ds-2.0-fast",
+		Prompt:      "test",
+		Duration:    15,
+		AspectRatio: "9:16",
+		TaskMode:    "reference",
+	}, CanonicalReferences{})
+	var ambiguous *AmbiguousTransportError
+	if !errors.As(err, &ambiguous) {
+		t.Fatalf("2xx read failure type = %T, want *AmbiguousTransportError: %v", err, err)
+	}
+	if ambiguous.StatusCode != http.StatusOK {
+		t.Fatalf("ambiguous status = %d, want 200", ambiguous.StatusCode)
+	}
+}
+
+type failingCreateResponseBody struct {
+	sent bool
+}
+
+func (b *failingCreateResponseBody) Read(buffer []byte) (int, error) {
+	if !b.sent {
+		b.sent = true
+		return copy(buffer, []byte(`{"data":`)), nil
+	}
+	return 0, io.ErrUnexpectedEOF
+}
+
+func (b *failingCreateResponseBody) Close() error {
+	return nil
+}
+
+func TestCreateTaskHTTPStatusMatrix(t *testing.T) {
+	definiteStatuses := []int{
+		http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusForbidden,
+		http.StatusNotFound,
+		http.StatusMethodNotAllowed,
+		http.StatusNotAcceptable,
+		http.StatusGone,
+		http.StatusLengthRequired,
+		http.StatusPreconditionFailed,
+		http.StatusRequestEntityTooLarge,
+		http.StatusRequestURITooLong,
+		http.StatusUnsupportedMediaType,
+		http.StatusRequestedRangeNotSatisfiable,
+		http.StatusExpectationFailed,
+		http.StatusUnprocessableEntity,
+	}
+	ambiguousStatuses := []int{
+		http.StatusMovedPermanently,
+		http.StatusFound,
+		http.StatusSeeOther,
+		http.StatusTemporaryRedirect,
+		http.StatusPermanentRedirect,
+		http.StatusRequestTimeout,
+		http.StatusConflict,
+		http.StatusLocked,
+		http.StatusFailedDependency,
+		http.StatusTooEarly,
+		http.StatusPreconditionRequired,
+		http.StatusTooManyRequests,
+		http.StatusRequestHeaderFieldsTooLarge,
+		http.StatusUnavailableForLegalReasons,
+		499,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout,
+		418,
+	}
+
+	tests := make([]struct {
+		status    int
+		ambiguous bool
+	}, 0, len(definiteStatuses)+len(ambiguousStatuses))
+	for _, status := range definiteStatuses {
+		tests = append(tests, struct {
+			status    int
+			ambiguous bool
+		}{status: status})
+	}
+	for _, status := range ambiguousStatuses {
+		tests = append(tests, struct {
+			status    int
+			ambiguous bool
+		}{status: status, ambiguous: true})
+	}
+
+	for _, tt := range tests {
+		t.Run(http.StatusText(tt.status)+"_"+strconv.Itoa(tt.status), func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				w.WriteHeader(tt.status)
+				_, _ = io.WriteString(w, `SECRET UPSTREAM BODY: api-secret TOP SECRET PROMPT https://asset.example/private req-123`)
+			}))
+			defer server.Close()
+
+			contract := LegacyFlatContract()
+			contract.Idempotency.Header = "Idempotency-Key"
+			client := allowLocalTestClient(NewClient(config.VideoConfig{
+				APIBase:         server.URL,
+				APIKey:          "api-secret",
+				GatewayContract: contract,
+			}))
+			const requestKey = "123e4567-e89b-12d3-a456-426614174000"
+			_, err := client.CreateNormalizedTask(context.Background(), GenerateRequest{
+				Model:       "video-ds-2.0-fast",
+				Prompt:      "TOP SECRET PROMPT",
+				Duration:    15,
+				AspectRatio: "9:16",
+				TaskMode:    "reference",
+				RequestKey:  requestKey,
+			}, CanonicalReferences{})
+
+			if tt.ambiguous {
+				var ambiguous *AmbiguousTransportError
+				if !errors.As(err, &ambiguous) {
+					t.Fatalf("HTTP %d error type = %T, want *AmbiguousTransportError: %v", tt.status, err, err)
+				}
+				if ambiguous.StatusCode != tt.status || ambiguous.RequestKey != requestKey {
+					t.Fatalf("ambiguous context = status %d requestKey %q", ambiguous.StatusCode, ambiguous.RequestKey)
+				}
+				if _, exposesCause := any(ambiguous).(interface{ Unwrap() error }); exposesCause {
+					t.Fatal("AmbiguousTransportError must not publicly unwrap its raw cause")
+				}
+			} else {
+				var rejected *CreateTaskError
+				if !errors.As(err, &rejected) {
+					t.Fatalf("HTTP %d error type = %T, want *CreateTaskError: %v", tt.status, err, err)
+				}
+				if rejected.Code != "gateway_request_rejected" || rejected.StatusCode != tt.status || rejected.Message == "" {
+					t.Fatalf("definite rejection = %+v", rejected)
+				}
+				if _, exposesCause := any(rejected).(interface{ Unwrap() error }); exposesCause {
+					t.Fatal("CreateTaskError must not publicly unwrap its raw cause")
+				}
+			}
+			for _, secret := range []string{"SECRET UPSTREAM BODY", "api-secret", "TOP SECRET PROMPT", "https://asset.example/private", requestKey, server.URL} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("HTTP %d error exposed %q: %q", tt.status, secret, err.Error())
+				}
+			}
+			if got := attempts.Load(); got != 1 {
+				t.Fatalf("HTTP %d paid POST attempts = %d, want 1", tt.status, got)
+			}
+		})
+	}
+}
+
+func TestGenerateDoesNotPersistAmbiguousHTTPStatus(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	state := &videoDBState{}
+	db := openVideoTestDB(t, state)
+	defer db.Close()
+
+	store := allowLocalTestStore(NewStore(db, nil, config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		GatewayContract: LegacyFlatContract(),
+	}))
+	_, err := store.Generate(context.Background(), GenerateInput{Prompt: "test"})
+	var ambiguous *AmbiguousTransportError
+	if !errors.As(err, &ambiguous) {
+		t.Fatalf("Generate() error type = %T, want *AmbiguousTransportError: %v", err, err)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("paid POST attempts = %d, want 1", got)
+	}
+	if state.insertCalls != 0 {
+		t.Fatalf("ambiguous HTTP outcome wrote %d failed generations, want 0", state.insertCalls)
+	}
+}
+
+func TestCreateTaskDoesNotFollowRedirect(t *testing.T) {
+	for _, status := range []int{
+		http.StatusMovedPermanently,
+		http.StatusFound,
+		http.StatusSeeOther,
+		http.StatusTemporaryRedirect,
+		http.StatusPermanentRedirect,
+	} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			var sourceAttempts atomic.Int32
+			var targetAttempts atomic.Int32
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				targetAttempts.Add(1)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{"status": "queued", "task_id": "redirected-task"},
+				})
+			}))
+			defer target.Close()
+
+			source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				sourceAttempts.Add(1)
+				if r.Header.Get("Authorization") != "Bearer api-secret" || r.Header.Get("Idempotency-Key") != "123e4567-e89b-12d3-a456-426614174000" {
+					t.Errorf("source headers = %#v", r.Header)
+				}
+				http.Redirect(w, r, target.URL+"/capture", status)
+			}))
+			defer source.Close()
+
+			contract := LegacyFlatContract()
+			contract.Idempotency.Header = "Idempotency-Key"
+			client := allowLocalTestClient(NewClient(config.VideoConfig{
+				APIBase:         source.URL,
+				APIKey:          "api-secret",
+				GatewayContract: contract,
+			}))
+			_, err := client.CreateNormalizedTask(context.Background(), GenerateRequest{
+				Model:       "video-ds-2.0-fast",
+				Prompt:      "test",
+				Duration:    15,
+				AspectRatio: "9:16",
+				TaskMode:    "reference",
+				RequestKey:  "123e4567-e89b-12d3-a456-426614174000",
+			}, CanonicalReferences{})
+			var ambiguous *AmbiguousTransportError
+			if !errors.As(err, &ambiguous) {
+				t.Fatalf("redirect error type = %T, want *AmbiguousTransportError: %v", err, err)
+			}
+			if ambiguous.StatusCode != status {
+				t.Fatalf("ambiguous status = %d, want %d", ambiguous.StatusCode, status)
+			}
+			if sourceAttempts.Load() != 1 || targetAttempts.Load() != 0 {
+				t.Fatalf("source attempts=%d target attempts=%d, want 1/0", sourceAttempts.Load(), targetAttempts.Load())
+			}
+		})
+	}
+}
+
+func TestQueryTaskStillFollowsAllowedRedirect(t *testing.T) {
+	var targetAttempts atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetAttempts.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"status": "queued", "task_id": "task-1"},
+		})
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/task", http.StatusFound)
+	}))
+	defer source.Close()
+
+	client := allowLocalTestClient(NewClient(config.VideoConfig{
+		APIBase: source.URL,
+		APIKey:  "test-key",
+	}))
+	result, err := client.QueryTask(context.Background(), "task-1", 15)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskID != "task-1" || targetAttempts.Load() != 1 {
+		t.Fatalf("result=%+v target attempts=%d", result, targetAttempts.Load())
+	}
+}
+
+func TestCreateTaskClassifiesPreWriteFailuresAsNotSubmitted(t *testing.T) {
+	t.Run("pre-canceled context", func(t *testing.T) {
+		var attempts atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts.Add(1)
+		}))
+		defer server.Close()
+		client := allowLocalTestClient(NewClient(config.VideoConfig{
+			APIBase:         server.URL,
+			APIKey:          "api-secret",
+			GatewayContract: LegacyFlatContract(),
+		}))
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := createTestTaskError(client, ctx)
+		assertRequestNotSubmitted(t, err)
+		if attempts.Load() != 0 {
+			t.Fatalf("pre-canceled request reached server %d times", attempts.Load())
+		}
+	})
+
+	t.Run("dns failure", func(t *testing.T) {
+		client := NewClient(config.VideoConfig{
+			APIBase:         "https://secret.gateway.invalid",
+			APIKey:          "api-secret",
+			GatewayContract: LegacyFlatContract(),
+		})
+		client.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, &net.DNSError{Err: "no such host", Name: "secret.gateway.invalid"}
+		})
+		assertRequestNotSubmitted(t, createTestTaskError(client, context.Background()))
+	})
+
+	t.Run("connection refused", func(t *testing.T) {
+		client := NewClient(config.VideoConfig{
+			APIBase:         "http://127.0.0.1:1",
+			APIKey:          "api-secret",
+			GatewayContract: LegacyFlatContract(),
+		})
+		client.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+		})
+		assertRequestNotSubmitted(t, createTestTaskError(client, context.Background()))
+	})
+
+	t.Run("tls handshake failure", func(t *testing.T) {
+		var attempts atomic.Int32
+		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts.Add(1)
+		}))
+		server.Config.ErrorLog = log.New(io.Discard, "", 0)
+		server.StartTLS()
+		defer server.Close()
+
+		client := NewClient(config.VideoConfig{
+			APIBase:         server.URL,
+			APIKey:          "api-secret",
+			GatewayContract: LegacyFlatContract(),
+		})
+		client.client.Transport = &http.Transport{DisableKeepAlives: true}
+		assertRequestNotSubmitted(t, createTestTaskError(client, context.Background()))
+		if attempts.Load() != 0 {
+			t.Fatalf("TLS handshake failure reached handler %d times", attempts.Load())
+		}
+	})
+}
+
+func TestCreateTaskTreatsResponseWaitTimeoutAsAmbiguous(t *testing.T) {
+	var attempts atomic.Int32
+	bodyRead := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		_, _ = io.Copy(io.Discard, r.Body)
+		close(bodyRead)
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+
+	client := allowLocalTestClient(NewClient(config.VideoConfig{
+		APIBase:         server.URL,
+		APIKey:          "test-key",
+		GatewayContract: LegacyFlatContract(),
+	}))
+	client.client.Timeout = 100 * time.Millisecond
+	err := createTestTaskError(client, context.Background())
+	select {
+	case <-bodyRead:
+	default:
+		t.Fatal("server did not read paid request body before timeout")
+	}
+	var ambiguous *AmbiguousTransportError
+	if !errors.As(err, &ambiguous) {
+		t.Fatalf("response wait timeout type = %T, want *AmbiguousTransportError: %v", err, err)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("paid POST attempts = %d, want 1", attempts.Load())
+	}
+}
+
+func createTestTaskError(client *Client, ctx context.Context) error {
+	_, err := client.CreateNormalizedTask(ctx, GenerateRequest{
+		Model:       "video-ds-2.0-fast",
+		Prompt:      "TOP SECRET PROMPT",
+		Duration:    15,
+		AspectRatio: "9:16",
+		TaskMode:    "reference",
+	}, CanonicalReferences{})
+	return err
+}
+
+func assertRequestNotSubmitted(t *testing.T, err error) *CreateTaskError {
+	t.Helper()
+	var definite *CreateTaskError
+	if !errors.As(err, &definite) {
+		t.Fatalf("error type = %T, want *CreateTaskError: %v", err, err)
+	}
+	if definite.Code != "request_not_submitted" || definite.StatusCode != 0 || definite.Message == "" {
+		t.Fatalf("request-not-submitted error = %+v", definite)
+	}
+	var ambiguous *AmbiguousTransportError
+	if errors.As(err, &ambiguous) {
+		t.Fatalf("pre-write failure was ambiguous: %+v", ambiguous)
+	}
+	for _, secret := range []string{"secret.gateway.invalid", "127.0.0.1:1", "api-secret", "TOP SECRET PROMPT"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("request-not-submitted error exposed %q: %q", secret, err.Error())
+		}
+	}
+	return definite
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
 func TestCreateTaskDisablesTransportBodyReplay(t *testing.T) {
 	contract := LegacyFlatContract()
 	contract.Idempotency.Header = "Idempotency-Key"
@@ -1057,7 +1564,7 @@ func TestCreateTaskDisablesTransportBodyReplay(t *testing.T) {
 		Duration:    15,
 		AspectRatio: "9:16",
 		TaskMode:    "reference",
-		RequestKey:  "req-123",
+		RequestKey:  "123e4567-e89b-12d3-a456-426614174000",
 	}, CanonicalReferences{})
 	var ambiguous *AmbiguousTransportError
 	if !errors.As(err, &ambiguous) {
@@ -1069,8 +1576,8 @@ func TestCreateTaskDisablesTransportBodyReplay(t *testing.T) {
 	if probe.getBodyPresent {
 		t.Fatal("paid POST exposed GetBody, allowing net/http transport replay")
 	}
-	if probe.idempotencyKey != "req-123" {
-		t.Fatalf("Idempotency-Key = %q, want req-123", probe.idempotencyKey)
+	if probe.idempotencyKey != "123e4567-e89b-12d3-a456-426614174000" {
+		t.Fatalf("Idempotency-Key = %q, want UUID request key", probe.idempotencyKey)
 	}
 }
 
@@ -1119,10 +1626,13 @@ func (p *paidPostReplayProbe) RoundTrip(request *http.Request) (*http.Response, 
 	p.attempts++
 	p.getBodyPresent = request.GetBody != nil
 	p.idempotencyKey = request.Header.Get("Idempotency-Key")
+	if trace := httptrace.ContextClientTrace(request.Context()); trace != nil && trace.WroteHeaders != nil {
+		trace.WroteHeaders()
+	}
 	return nil, &net.OpError{Op: "write", Net: "tcp", Err: io.EOF}
 }
 
-func TestCreateTaskFormatsImageURLForbiddenError(t *testing.T) {
+func TestCreateTaskDoesNotExposeRejectedResponseBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -1139,15 +1649,17 @@ func TestCreateTaskFormatsImageURLForbiddenError(t *testing.T) {
 		APIKey:  "test-key",
 	}))
 	_, err := client.CreateTask(context.Background(), "video-ds-2.0-fast", "test", []string{"https://example.com/private.png"}, nil, nil, 15, "16:9")
-	if err == nil {
-		t.Fatal("expected gateway error")
+	var rejected *CreateTaskError
+	if !errors.As(err, &rejected) {
+		t.Fatalf("gateway error type = %T, want *CreateTaskError: %v", err, err)
 	}
-	got := err.Error()
-	if !strings.Contains(got, "参考图片地址无法被视频网关访问") {
-		t.Fatalf("expected friendly image url error, got %q", got)
+	if rejected.Code != "gateway_request_rejected" || rejected.StatusCode != http.StatusBadRequest {
+		t.Fatalf("rejected error = %+v", rejected)
 	}
-	if strings.Contains(got, `{"error"`) {
-		t.Fatalf("expected raw json to be hidden, got %q", got)
+	for _, secret := range []string{"invalid image_url", "https://example.com/private.png", "test-key", `{"error"`} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("rejected error exposed %q: %q", secret, err.Error())
+		}
 	}
 }
 

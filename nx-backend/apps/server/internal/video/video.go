@@ -16,9 +16,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -185,10 +187,6 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 		).Scan(&id)
 		return Generation{}, err
 	}
-	if strings.TrimSpace(task.TaskID) == "" {
-		return Generation{}, fmt.Errorf("视频网关创建成功但未返回 task_id，请检查上游响应")
-	}
-
 	status := normalizeStatus(task.Status)
 	var id string
 	if err := s.db.QueryRowContext(ctx,
@@ -552,6 +550,7 @@ type TaskResult struct {
 type AmbiguousTransportError struct {
 	RequestKey string
 	Operation  string
+	StatusCode int
 	cause      error
 }
 
@@ -559,11 +558,20 @@ func (e *AmbiguousTransportError) Error() string {
 	return "视频创建请求结果不确定，请勿自动重试。"
 }
 
-func (e *AmbiguousTransportError) Unwrap() error {
+type CreateTaskError struct {
+	Code       string
+	StatusCode int
+	Message    string
+	cause      error
+}
+
+const maxCreateResponseBytes = 4 * 1024 * 1024
+
+func (e *CreateTaskError) Error() string {
 	if e == nil {
-		return nil
+		return ""
 	}
-	return e.cause
+	return e.Message
 }
 
 func NewClient(cfg config.VideoConfig) *Client {
@@ -602,6 +610,9 @@ func (c *Client) CreateNormalizedTask(ctx context.Context, request GenerateReque
 	if err != nil {
 		return TaskResult{}, err
 	}
+	if err := validateCreateRequestKey(contract.Idempotency.Header, request.RequestKey); err != nil {
+		return TaskResult{}, err
+	}
 	body, err := MapGatewayPayload(request, references, contract)
 	if err != nil {
 		return TaskResult{}, err
@@ -616,8 +627,15 @@ func (c *Client) CreateNormalizedTask(ctx context.Context, request GenerateReque
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL.String(), bytes.NewReader(raw))
 	if err != nil {
-		return TaskResult{}, err
+		return TaskResult{}, requestNotSubmittedError(err)
 	}
+	writeTracker := &createRequestWriteTracker{}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteHeaders: writeTracker.mark,
+		WroteRequest: func(httptrace.WroteRequestInfo) {
+			writeTracker.mark()
+		},
+	}))
 	// A declared idempotency header makes net/http consider POST replayable.
 	// Removing GetBody prevents the transport from silently resending a paid
 	// request; reconciliation owns any later retry decision.
@@ -628,26 +646,162 @@ func (c *Client) CreateNormalizedTask(ctx context.Context, request GenerateReque
 	}
 	c.auth(req)
 
-	payload, err := c.doJSONOnce(req)
+	payload, statusCode, err := c.doCreateJSONOnce(req, request.RequestKey)
 	if err != nil {
-		var decodeErr *gatewayResponseDecodeError
-		if isAmbiguousCreateTransportError(err) || errors.As(err, &decodeErr) {
-			return TaskResult{}, ambiguousCreateTaskError(request.RequestKey, err)
+		var ambiguous *AmbiguousTransportError
+		var rejected *CreateTaskError
+		if errors.As(err, &ambiguous) || errors.As(err, &rejected) {
+			return TaskResult{}, err
 		}
-		return TaskResult{}, err
+		if writeTracker.wrote() {
+			return TaskResult{}, ambiguousCreateTaskError(request.RequestKey, 0, err)
+		}
+		return TaskResult{}, requestNotSubmittedError(err)
 	}
 	task := parseTask(payload)
 	if strings.TrimSpace(task.TaskID) == "" {
-		return TaskResult{}, ambiguousCreateTaskError(request.RequestKey, errors.New("upstream 2xx response did not confirm a task id"))
+		return TaskResult{}, ambiguousCreateTaskError(request.RequestKey, statusCode, errors.New("upstream 2xx response did not confirm a task id"))
 	}
 	return task, nil
 }
 
-func ambiguousCreateTaskError(requestKey string, cause error) *AmbiguousTransportError {
+func validateCreateRequestKey(header, requestKey string) error {
+	if header == "" {
+		return nil
+	}
+	if strings.TrimSpace(requestKey) == "" {
+		return validationError(
+			"request_key_required",
+			"requestKey",
+			"当前中转站幂等契约要求 requestKey。",
+			"为本次明确生成意图创建新的 UUID requestKey 后重试。",
+			nil,
+		)
+	}
+	if requestKey != strings.TrimSpace(requestKey) || !isNonZeroUUID(requestKey) {
+		return validationError(
+			"request_key_invalid",
+			"requestKey",
+			"requestKey 必须是非零 UUID。",
+			"重新创建 UUID requestKey，不要复用或手工拼接。",
+			nil,
+		)
+	}
+	return nil
+}
+
+func isNonZeroUUID(value string) bool {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+		return false
+	}
+	nonZero := false
+	for index := 0; index < len(value); index++ {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			continue
+		}
+		character := value[index]
+		if !((character >= '0' && character <= '9') ||
+			(character >= 'a' && character <= 'f') ||
+			(character >= 'A' && character <= 'F')) {
+			return false
+		}
+		if character != '0' {
+			nonZero = true
+		}
+	}
+	return nonZero
+}
+
+type createRequestWriteTracker struct {
+	started atomic.Bool
+}
+
+func (t *createRequestWriteTracker) mark() {
+	if t != nil {
+		t.started.Store(true)
+	}
+}
+
+func (t *createRequestWriteTracker) wrote() bool {
+	return t != nil && t.started.Load()
+}
+
+func requestNotSubmittedError(cause error) *CreateTaskError {
+	return &CreateTaskError{
+		Code:    "request_not_submitted",
+		Message: "视频创建请求尚未提交到中转站，请检查网络配置后重试。",
+		cause:   cause,
+	}
+}
+
+func ambiguousCreateTaskError(requestKey string, statusCode int, cause error) *AmbiguousTransportError {
 	return &AmbiguousTransportError{
 		RequestKey: requestKey,
 		Operation:  "create_video_task",
+		StatusCode: statusCode,
 		cause:      cause,
+	}
+}
+
+func (c *Client) doCreateJSONOnce(req *http.Request, requestKey string) (map[string]any, int, error) {
+	createClient := *c.client
+	createClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	resp, err := createClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	statusCode := resp.StatusCode
+	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
+		if isDefiniteCreateRejectionStatus(statusCode) {
+			return nil, statusCode, &CreateTaskError{
+				Code:       "gateway_request_rejected",
+				StatusCode: statusCode,
+				Message:    fmt.Sprintf("视频网关明确拒绝创建请求（HTTP %d），请检查参数或权限后重试。", statusCode),
+			}
+		}
+		return nil, statusCode, ambiguousCreateTaskError(
+			requestKey,
+			statusCode,
+			fmt.Errorf("upstream returned unconfirmed HTTP status %d", statusCode),
+		)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxCreateResponseBytes+1))
+	if err != nil {
+		return nil, statusCode, ambiguousCreateTaskError(requestKey, statusCode, err)
+	}
+	if len(raw) > maxCreateResponseBytes {
+		return nil, statusCode, ambiguousCreateTaskError(requestKey, statusCode, errors.New("upstream 2xx response exceeded safe read limit"))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, statusCode, ambiguousCreateTaskError(requestKey, statusCode, err)
+	}
+	return payload, statusCode, nil
+}
+
+func isDefiniteCreateRejectionStatus(statusCode int) bool {
+	switch statusCode {
+	case http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusForbidden,
+		http.StatusNotFound,
+		http.StatusMethodNotAllowed,
+		http.StatusNotAcceptable,
+		http.StatusGone,
+		http.StatusLengthRequired,
+		http.StatusPreconditionFailed,
+		http.StatusRequestEntityTooLarge,
+		http.StatusRequestURITooLong,
+		http.StatusUnsupportedMediaType,
+		http.StatusRequestedRangeNotSatisfiable,
+		http.StatusExpectationFailed,
+		http.StatusUnprocessableEntity:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -667,18 +821,6 @@ func validatedGatewayContract(raw config.GatewayContractConfig) (config.GatewayC
 		)
 	}
 	return config.TrimGatewayContract(raw), nil
-}
-
-func isAmbiguousCreateTransportError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
-		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
-		return true
-	}
-	var netErr net.Error
-	return errors.As(err, &netErr)
 }
 
 func (c *Client) isURLAllowed(raw string) bool {
