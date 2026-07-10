@@ -416,6 +416,35 @@ END $$;
 ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES video_projects(id) ON DELETE SET NULL;
 ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS shot_id BIGINT REFERENCES video_shots(id) ON DELETE SET NULL;
 
+-- 视频生成提交：在创建中转站任务前保存一次明确生成意图。
+-- request_key 防止浏览器重发；活动分镜索引防止同一镜头并发创建多个任务。
+CREATE TABLE IF NOT EXISTS video_generation_submissions (
+  id                 BIGSERIAL PRIMARY KEY,
+  request_key        UUID NOT NULL,
+  project_id         BIGINT REFERENCES video_projects(id) ON DELETE SET NULL,
+  shot_id            BIGINT REFERENCES video_shots(id) ON DELETE SET NULL,
+  request_hash       TEXT NOT NULL DEFAULT '',
+  prompt_hash        TEXT NOT NULL DEFAULT '',
+  capability_version TEXT NOT NULL DEFAULT '',
+  request_snapshot   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status             TEXT NOT NULL DEFAULT 'prepared'
+                     CHECK (status IN ('prepared','submitting','accepted','unknown_outcome','completed','failed','cancelled','reconciled')),
+  upstream_task_id   TEXT NOT NULL DEFAULT '',
+  generation_id      BIGINT REFERENCES video_generations(id) ON DELETE SET NULL,
+  error_message      TEXT NOT NULL DEFAULT '',
+  create_time        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_video_generation_submissions_request_key
+  ON video_generation_submissions(request_key);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_video_generation_submissions_active_shot
+  ON video_generation_submissions(shot_id)
+  WHERE shot_id IS NOT NULL AND status IN ('prepared','submitting','accepted','unknown_outcome');
+CREATE INDEX IF NOT EXISTS idx_video_generation_submissions_generation
+  ON video_generation_submissions(generation_id)
+  WHERE generation_id IS NOT NULL;
+
 -- 资产质量追踪：跨项目统计使用次数与成功率，用于推荐高质量资产。
 ALTER TABLE video_assets ADD COLUMN IF NOT EXISTS usage_count INT NOT NULL DEFAULT 0;
 ALTER TABLE video_assets ADD COLUMN IF NOT EXISTS success_count INT NOT NULL DEFAULT 0;
