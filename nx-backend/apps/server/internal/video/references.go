@@ -71,8 +71,13 @@ func CanonicalizeReferences(input []Reference) (CanonicalReferences, error) {
 		}
 		seen[identity] = index
 
+		canonicalReference := reference
+		if reference.DurationSeconds != nil {
+			duration := *reference.DurationSeconds
+			canonicalReference.DurationSeconds = &duration
+		}
 		indexed = append(indexed, indexedReference{
-			reference: CanonicalReference{Reference: reference, Label: prefix},
+			reference: CanonicalReference{Reference: canonicalReference, Label: prefix},
 			identity:  identity,
 			index:     index,
 		})

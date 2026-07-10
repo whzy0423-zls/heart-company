@@ -36,6 +36,31 @@ func TestCanonicalizeReferencesOrdersAndNumbersPerKind(t *testing.T) {
 	}
 }
 
+func TestCanonicalizeReferencesDeepCopiesDuration(t *testing.T) {
+	duration := 3.5
+	refs := []Reference{
+		{ID: "1", Kind: "video", Role: "reference_video", URL: "v1", DurationSeconds: &duration},
+	}
+
+	got, err := CanonicalizeReferences(refs)
+	if err != nil {
+		t.Fatalf("CanonicalizeReferences() error = %v", err)
+	}
+	if got.References[0].DurationSeconds == nil {
+		t.Fatal("canonical duration is nil, want copied duration")
+	}
+
+	*got.References[0].DurationSeconds = 7.25
+	if value := *refs[0].DurationSeconds; value != 3.5 {
+		t.Fatalf("modifying canonical duration changed input duration to %v, want 3.5", value)
+	}
+
+	*refs[0].DurationSeconds = 9.75
+	if value := *got.References[0].DurationSeconds; value != 7.25 {
+		t.Fatalf("modifying input duration changed canonical duration to %v, want 7.25", value)
+	}
+}
+
 func TestCanonicalizeReferencesPreservesSameURLForDifferentRoleOrSource(t *testing.T) {
 	refs := []Reference{
 		{ID: "3", Kind: "image", Role: "reference_image", SourceType: "asset", SourceID: "scene-2", URL: "same"},
