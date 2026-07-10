@@ -84,6 +84,194 @@ func TestCreateBreakdownDraftPersistsFailedVersionAndRawResult(t *testing.T) {
 	}
 }
 
+func TestPreviewBreakdownDiffRequiresExplicitMappingsAndKeepsDuplicateNames(t *testing.T) {
+	draft := NewBreakdownVersion()
+	draft.ID = "20"
+	draft.ProjectID = "7"
+	draft.Revision = 3
+	draft.Status = "draft"
+	draft.SourceScriptRevision = 5
+	draft.Characters = []BreakdownItem{
+		{Key: "character-adult", Name: "阿宁", Decision: "pending"},
+		{Key: "character-child", Name: "阿宁", Decision: "pending"},
+	}
+	draft.Scenes = []BreakdownItem{{Key: "scene-station", Name: "雨夜车站", Decision: "pending"}}
+	context := BreakdownDiffContext{
+		CurrentScriptRevision: 5,
+		BaselineBreakdownID:   "12",
+		ExistingAssets: []ExistingBreakdownAsset{{
+			ID: "77", ProjectID: "7", Kind: "character", ItemKey: "legacy:character:77", Name: "旧版阿宁",
+		}},
+	}
+	mappings := []BreakdownMapping{
+		{ItemKey: "character-adult", Decision: "confirmed"},
+		{ItemKey: "character-child", Decision: "confirmed", ExistingKind: "character", ExistingID: "77"},
+		{ItemKey: "scene-station", Decision: "ignored"},
+	}
+
+	diff, err := previewBreakdownDiff(draft, context, mappings)
+	if err != nil {
+		t.Fatalf("previewBreakdownDiff returned error: %v", err)
+	}
+	if diff.BreakdownID != "20" || diff.Revision != 3 || diff.BaselineBreakdownID != "12" || diff.DiffToken == "" {
+		t.Fatalf("unexpected diff metadata: %+v", diff)
+	}
+	if len(diff.Items) != 3 {
+		t.Fatalf("expected one operation per item, got %+v", diff.Items)
+	}
+	if diff.Items[0].ItemKey == diff.Items[1].ItemKey || diff.Items[0].Name != "阿宁" || diff.Items[1].Name != "阿宁" {
+		t.Fatalf("duplicate names must remain distinct by stable key, got %+v", diff.Items)
+	}
+	if diff.Items[0].Operation != "create" || diff.Items[1].Operation != "link" || diff.Items[1].ExistingID != "77" || diff.Items[2].Operation != "ignore" {
+		t.Fatalf("unexpected explicit mapping operations: %+v", diff.Items)
+	}
+
+	changedMappings := append([]BreakdownMapping{}, mappings...)
+	changedMappings[1].ExistingID = ""
+	changedMappings[1].ExistingKind = ""
+	changed, err := previewBreakdownDiff(draft, context, changedMappings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.DiffToken == diff.DiffToken {
+		t.Fatal("diff token must change when an explicit mapping changes")
+	}
+}
+
+func TestPreviewBreakdownDiffRejectsMissingAndInvalidMappings(t *testing.T) {
+	draft := NewBreakdownVersion()
+	draft.ID = "20"
+	draft.ProjectID = "7"
+	draft.Revision = 1
+	draft.Status = "draft"
+	draft.SourceScriptRevision = 2
+	draft.Characters = []BreakdownItem{{Key: "character-a", Name: "阿宁"}}
+	draft.Scenes = []BreakdownItem{{Key: "scene-a", Name: "车站"}}
+	baseContext := BreakdownDiffContext{
+		CurrentScriptRevision: 2,
+		ExistingAssets:        []ExistingBreakdownAsset{{ID: "8", ProjectID: "7", Kind: "scene", Name: "旧场景"}},
+	}
+
+	cases := []struct {
+		name     string
+		mappings []BreakdownMapping
+		code     string
+	}{
+		{
+			name:     "missing item mapping",
+			mappings: []BreakdownMapping{{ItemKey: "character-a", Decision: "confirmed"}},
+			code:     "breakdown_mapping_required",
+		},
+		{
+			name: "wrong existing kind",
+			mappings: []BreakdownMapping{
+				{ItemKey: "character-a", Decision: "confirmed", ExistingKind: "scene", ExistingID: "8"},
+				{ItemKey: "scene-a", Decision: "ignored"},
+			},
+			code: "breakdown_mapping_kind_mismatch",
+		},
+		{
+			name: "ignored item links existing asset",
+			mappings: []BreakdownMapping{
+				{ItemKey: "character-a", Decision: "ignored", ExistingKind: "character", ExistingID: "8"},
+				{ItemKey: "scene-a", Decision: "ignored"},
+			},
+			code: "breakdown_mapping_invalid",
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := previewBreakdownDiff(draft, baseContext, test.mappings)
+			var validation *WorkflowValidationError
+			if !errors.As(err, &validation) || validation.Code != test.code {
+				t.Fatalf("error = %T %v, want %s", err, err, test.code)
+			}
+		})
+	}
+}
+
+func TestConfirmBreakdownPlanDoesNotMergeByNameAndDetachesUnmappedBaseline(t *testing.T) {
+	draft := NewBreakdownVersion()
+	draft.ID = "20"
+	draft.ProjectID = "7"
+	draft.Revision = 2
+	draft.Status = "draft"
+	draft.SourceScriptRevision = 5
+	draft.Characters = []BreakdownItem{
+		{Key: "character-adult", Name: "阿宁", Decision: "pending"},
+		{Key: "character-child", Name: "阿宁", Decision: "pending"},
+	}
+	draft.Props = []BreakdownItem{{Key: "prop-camera", Name: "旧相机", Decision: "pending"}}
+	context := BreakdownDiffContext{
+		CurrentScriptRevision: 5,
+		BaselineBreakdownID:   "12",
+		ExistingAssets: []ExistingBreakdownAsset{
+			{ID: "41", ProjectID: "7", Kind: "character", ItemKey: "old-adult", Name: "阿宁", SourceBreakdownID: "12"},
+			{ID: "42", ProjectID: "7", Kind: "character", ItemKey: "old-unused", Name: "路人", SourceBreakdownID: "12"},
+			{ID: "55", ProjectID: "7", Kind: "prop", ItemKey: "old-camera", Name: "旧相机", SourceBreakdownID: "12"},
+		},
+	}
+	mappings := []BreakdownMapping{
+		{ItemKey: "character-adult", Decision: "confirmed", ExistingKind: "character", ExistingID: "41"},
+		{ItemKey: "character-child", Decision: "confirmed"},
+		{ItemKey: "prop-camera", Decision: "confirmed"},
+	}
+	diff, err := previewBreakdownDiff(draft, context, mappings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := buildBreakdownMaterializationPlan(draft, context, mappings, diff.DiffToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Upserts) != 3 || plan.Upserts[0].ExistingID != "41" || plan.Upserts[1].ExistingID != "" || plan.Upserts[2].ExistingID != "" {
+		t.Fatalf("expected explicit link plus two distinct creates, got %+v", plan.Upserts)
+	}
+	if plan.Upserts[0].Item.Name != "阿宁" || plan.Upserts[1].Item.Name != "阿宁" || plan.Upserts[0].Item.Key == plan.Upserts[1].Item.Key {
+		t.Fatalf("same-name characters must not merge, got %+v", plan.Upserts)
+	}
+	if len(plan.Detach) != 2 || plan.Detach[0].ID == "41" || plan.Detach[1].ID == "41" {
+		t.Fatalf("linked baseline asset must stay active while unmapped assets detach, got %+v", plan.Detach)
+	}
+}
+
+func TestConfirmBreakdownRejectsStaleRevisionTokenAndScriptDependency(t *testing.T) {
+	draft := NewBreakdownVersion()
+	draft.ID = "20"
+	draft.ProjectID = "7"
+	draft.Revision = 2
+	draft.Status = "draft"
+	draft.SourceScriptRevision = 5
+	draft.Characters = []BreakdownItem{{Key: "character-a", Name: "阿宁"}}
+	context := BreakdownDiffContext{CurrentScriptRevision: 5, BaselineBreakdownID: "12"}
+	mappings := []BreakdownMapping{{ItemKey: "character-a", Decision: "confirmed"}}
+	diff, err := previewBreakdownDiff(draft, context, mappings)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = buildBreakdownMaterializationPlan(draft, context, mappings, "wrong-token")
+	assertWorkflowConflictCode(t, err, "workflow_diff_conflict")
+
+	staleScript := context
+	staleScript.CurrentScriptRevision = 6
+	_, err = buildBreakdownMaterializationPlan(draft, staleScript, mappings, diff.DiffToken)
+	assertWorkflowConflictCode(t, err, "workflow_dependency_conflict")
+
+	staleDraft := draft
+	staleDraft.Revision = 3
+	_, err = buildBreakdownMaterializationPlan(staleDraft, context, mappings, diff.DiffToken)
+	assertWorkflowConflictCode(t, err, "workflow_diff_conflict")
+}
+
+func assertWorkflowConflictCode(t *testing.T, err error, code string) {
+	t.Helper()
+	var conflict *WorkflowConflictError
+	if !errors.As(err, &conflict) || conflict.Code != code {
+		t.Fatalf("error = %T %v, want conflict %s", err, err, code)
+	}
+}
+
 type recordingProjectBreakdownGenerator struct {
 	result  llm.ProjectBreakdownResult
 	raw     string
