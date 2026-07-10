@@ -1,6 +1,15 @@
 package video
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+	"net"
+	"net/url"
+	"path"
+	"strings"
+
+	"nine-xing/nx-backend/apps/server/internal/netguard"
+)
 
 type ValidationError struct {
 	Code               string        `json:"code"`
@@ -58,6 +67,15 @@ func ValidateGenerateRequestWithWarnings(req GenerateRequest, caps Capabilities)
 			nil,
 		)
 	}
+	if strings.TrimSpace(req.Prompt) == "" {
+		return report, validationError(
+			"prompt_required",
+			"prompt",
+			"视频提示词不能为空。",
+			"填写希望生成的视频内容后重试。",
+			nil,
+		)
+	}
 	if req.Seed != nil && !caps.SupportsSeed {
 		return report, unsupportedFieldError("seed_unsupported", "seed", "随机种子")
 	}
@@ -97,32 +115,30 @@ func ValidateGenerateRequestWithWarnings(req GenerateRequest, caps Capabilities)
 			nil,
 		)
 	}
-
-	if err := validateTargetPredicates(req); err != nil {
-		return report, err
+	if len(req.References) > 5 {
+		report.Warnings = append(report.Warnings, ValidationWarning{
+			Code:    "reference_count_above_recommended",
+			Field:   "references",
+			Message: fmt.Sprintf("当前选择了 %d 个引用素材，超过建议数量 5。", len(req.References)),
+			Fix:     "优先保留最关键的 5 个素材，减少引用冲突。",
+		})
 	}
-
-	imageCount := 0
-	videoCount := 0
-	audioCount := 0
-	videoSeconds := 0.0
-	audioSeconds := 0.0
 	for index, reference := range req.References {
-		if !containsString(caps.ReferenceRoles, reference.Role) {
-			return report, validationError(
-				"reference_role_unsupported",
-				fmt.Sprintf("references[%d].role", index),
-				fmt.Sprintf("当前模型不支持引用角色 %q。", reference.Role),
-				"删除该引用，或改用最新能力 referenceRoles 中允许的角色。",
-				nil,
-			)
-		}
 		if !knownReferenceKind(reference.Kind) {
 			return report, validationError(
 				"reference_kind_unsupported",
 				fmt.Sprintf("references[%d].kind", index),
 				fmt.Sprintf("不支持引用素材类型 %q。", reference.Kind),
 				"引用素材类型只能是 image、video 或 audio。",
+				nil,
+			)
+		}
+		if !containsString(caps.ReferenceRoles, reference.Role) {
+			return report, validationError(
+				"reference_role_unsupported",
+				fmt.Sprintf("references[%d].role", index),
+				fmt.Sprintf("当前模型不支持引用角色 %q。", reference.Role),
+				"删除该引用，或改用最新能力 referenceRoles 中允许的角色。",
 				nil,
 			)
 		}
@@ -135,7 +151,32 @@ func ValidateGenerateRequestWithWarnings(req GenerateRequest, caps Capabilities)
 				nil,
 			)
 		}
+		if err := validateReferenceURL(index, reference.URL); err != nil {
+			return report, err
+		}
+		if reference.DurationSeconds != nil {
+			if _, ok := durationNanoseconds(*reference.DurationSeconds); !ok {
+				return report, validationError(
+					"media_duration_invalid",
+					fmt.Sprintf("references[%d].durationSeconds", index),
+					"素材时长必须是大于 0 的有限秒数。",
+					"重新读取素材元数据并填写有效 durationSeconds。",
+					nil,
+				)
+			}
+		}
+	}
 
+	if err := validateTargetPredicates(req); err != nil {
+		return report, err
+	}
+
+	imageCount := 0
+	videoCount := 0
+	audioCount := 0
+	videoNanoseconds := int64(0)
+	audioNanoseconds := int64(0)
+	for index, reference := range req.References {
 		switch reference.Kind {
 		case "image":
 			imageCount++
@@ -144,14 +185,16 @@ func ValidateGenerateRequestWithWarnings(req GenerateRequest, caps Capabilities)
 			if reference.DurationSeconds == nil {
 				report.Warnings = append(report.Warnings, missingDurationWarning(index, reference.Kind))
 			} else {
-				videoSeconds += *reference.DurationSeconds
+				nanoseconds, _ := durationNanoseconds(*reference.DurationSeconds)
+				videoNanoseconds = saturatingAddNanoseconds(videoNanoseconds, nanoseconds)
 			}
 		case "audio":
 			audioCount++
 			if reference.DurationSeconds == nil {
 				report.Warnings = append(report.Warnings, missingDurationWarning(index, reference.Kind))
 			} else {
-				audioSeconds += *reference.DurationSeconds
+				nanoseconds, _ := durationNanoseconds(*reference.DurationSeconds)
+				audioNanoseconds = saturatingAddNanoseconds(audioNanoseconds, nanoseconds)
 			}
 		}
 	}
@@ -165,11 +208,11 @@ func ValidateGenerateRequestWithWarnings(req GenerateRequest, caps Capabilities)
 	if audioCount > caps.Limits.MaxAudios {
 		return report, limitError("max_audios_exceeded", fmt.Sprintf("音频引用数量为 %d，超过上限 %d。", audioCount, caps.Limits.MaxAudios), "减少音频引用数量。")
 	}
-	if videoSeconds > caps.Limits.MaxVideoSecondsTotal {
-		return report, limitError("max_video_seconds_total_exceeded", fmt.Sprintf("已知视频总时长为 %.2f 秒，超过上限 %.2f 秒。", videoSeconds, caps.Limits.MaxVideoSecondsTotal), "缩短或删除视频引用。")
+	if videoNanoseconds > limitNanoseconds(caps.Limits.MaxVideoSecondsTotal) {
+		return report, limitError("max_video_seconds_total_exceeded", fmt.Sprintf("已知视频总时长为 %.9f 秒，超过上限 %.2f 秒。", float64(videoNanoseconds)/nanosecondsPerSecond, caps.Limits.MaxVideoSecondsTotal), "缩短或删除视频引用。")
 	}
-	if audioSeconds > caps.Limits.MaxAudioSecondsTotal {
-		return report, limitError("max_audio_seconds_total_exceeded", fmt.Sprintf("已知音频总时长为 %.2f 秒，超过上限 %.2f 秒。", audioSeconds, caps.Limits.MaxAudioSecondsTotal), "缩短或删除音频引用。")
+	if audioNanoseconds > limitNanoseconds(caps.Limits.MaxAudioSecondsTotal) {
+		return report, limitError("max_audio_seconds_total_exceeded", fmt.Sprintf("已知音频总时长为 %.9f 秒，超过上限 %.2f 秒。", float64(audioNanoseconds)/nanosecondsPerSecond, caps.Limits.MaxAudioSecondsTotal), "缩短或删除音频引用。")
 	}
 
 	return report, nil
@@ -290,6 +333,39 @@ func durationSupported(duration int, caps Capabilities) bool {
 	return containsInt(caps.SupportedDurations, duration)
 }
 
+const nanosecondsPerSecond = 1_000_000_000
+
+func durationNanoseconds(seconds float64) (int64, bool) {
+	const maxInt64 = int64(^uint64(0) >> 1)
+	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > float64(maxInt64)/nanosecondsPerSecond {
+		return 0, false
+	}
+	nanoseconds := math.Round(seconds * nanosecondsPerSecond)
+	if nanoseconds > float64(maxInt64) {
+		return 0, false
+	}
+	if nanoseconds < 1 {
+		nanoseconds = 1
+	}
+	return int64(nanoseconds), true
+}
+
+func limitNanoseconds(seconds float64) int64 {
+	nanoseconds, ok := durationNanoseconds(seconds)
+	if !ok {
+		return 0
+	}
+	return nanoseconds
+}
+
+func saturatingAddNanoseconds(total, value int64) int64 {
+	const maxInt64 = int64(^uint64(0) >> 1)
+	if value > maxInt64-total {
+		return maxInt64
+	}
+	return total + value
+}
+
 func knownTaskMode(mode string) bool {
 	return mode == "reference" || mode == "edit" || mode == "extend"
 }
@@ -309,4 +385,88 @@ func roleMatchesKind(role, kind string) bool {
 	default:
 		return false
 	}
+}
+
+func validateReferenceURL(index int, raw string) error {
+	raw = strings.TrimSpace(raw)
+	field := fmt.Sprintf("references[%d].url", index)
+	if raw == "" {
+		return validationError(
+			"reference_url_required",
+			field,
+			"引用素材地址不能为空。",
+			"重新上传或选择素材，并补充可访问地址。",
+			nil,
+		)
+	}
+	if isDocumentedTemporaryAssetPath(raw) || isSafePublicReferenceURL(raw) {
+		return nil
+	}
+	return validationError(
+		"reference_url_invalid",
+		field,
+		"引用素材地址必须是安全的公网 http(s) 地址，或站内 /pg/assets/ 临时素材路径。",
+		"移除本地、私网、带凭据或路径穿越地址，并重新选择素材。",
+		nil,
+	)
+}
+
+func isDocumentedTemporaryAssetPath(raw string) bool {
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil || parsed.IsAbs() || parsed.Host != "" || parsed.User != nil || parsed.Fragment != "" {
+		return false
+	}
+	if !strings.HasPrefix(parsed.Path, "/pg/assets/") || strings.Contains(parsed.Path, `\`) {
+		return false
+	}
+	if path.Clean(parsed.Path) != parsed.Path {
+		return false
+	}
+	return strings.TrimPrefix(parsed.Path, "/pg/assets/") != ""
+}
+
+func isSafePublicReferenceURL(raw string) bool {
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil || parsed.User != nil || parsed.Fragment != "" || !netguard.IsPublicHTTPURL(raw) {
+		return false
+	}
+	if path.Clean(parsed.Path) != parsed.Path || strings.Contains(parsed.Path, `\`) {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(parsed.Hostname())), ".")
+	if host == "" || strings.HasSuffix(host, ".local") {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return netguard.IsPublicIP(ip)
+	}
+	return isValidPublicHostname(host)
+}
+
+func isValidPublicHostname(host string) bool {
+	if len(host) > 253 || !strings.Contains(host, ".") {
+		return false
+	}
+	labels := strings.Split(host, ".")
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, char := range label {
+			if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '-' {
+				return false
+			}
+		}
+	}
+	topLevelHasLetter := false
+	for _, char := range labels[len(labels)-1] {
+		if char >= 'a' && char <= 'z' {
+			topLevelHasLetter = true
+			break
+		}
+	}
+	if !topLevelHasLetter {
+		return false
+	}
+	return true
 }

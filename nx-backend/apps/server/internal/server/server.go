@@ -122,6 +122,9 @@ type Server struct {
 
 	// modelMu 保护可在运行时被"模型配置"页面重建的 ragGen / analysisGen / videos。
 	modelMu sync.RWMutex
+	// modelConfigUpdateMu 串行化单进程内完整的模型配置 PUT，避免 DB 与 runtime 采用不同更新顺序。
+	// site_configs 当前没有 revision；多实例 CAS 需要后续数据库迁移，不能由本地锁替代。
+	modelConfigUpdateMu sync.Mutex
 }
 
 var uploadPermissionCodes = []string{
@@ -2393,6 +2396,9 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 		httpx.OK(w, buildModelConfigView(chat, stored.ApplyVideo(s.env.Video), stored.ApplyImage(s.env.Image), stored.ApplyAnalysis(s.env.MiniMax), admin, stored.DailyQuiz, stored))
 
 	case http.MethodPut:
+		s.modelConfigUpdateMu.Lock()
+		defer s.modelConfigUpdateMu.Unlock()
+
 		var incoming modelconfig.Config
 		if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
