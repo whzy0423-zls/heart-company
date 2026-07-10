@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
@@ -128,7 +129,7 @@ func ResolveCapabilities(input CapabilityConfig) Capabilities {
 		capabilities.MaxDurationSeconds = capabilities.SupportedDurations[len(capabilities.SupportedDurations)-1]
 	}
 	capabilities.SupportsSmartDuration = profile.smartDuration && supportsSmartDuration(contract.Duration)
-	capabilities.AspectRatios = intersectMappedValues(profile.aspectRatios, contract.AspectRatio, false)
+	capabilities.AspectRatios = intersectAspectRatios(profile.aspectRatios, contract)
 	capabilities.Resolutions = intersectMappedValues(profile.resolutions, contract.Resolution, true)
 	capabilities.SupportsResolution = len(capabilities.Resolutions) > 0
 	capabilities.SupportsGenerateAudio = profile.generateAudio && supportsBooleanField(contract.GenerateAudio)
@@ -147,22 +148,42 @@ func ResolveCapabilities(input CapabilityConfig) Capabilities {
 }
 
 func selectOfficialProfile(model, explicitProfile string) (officialCapabilityProfile, string) {
-	if explicitProfile != "" {
-		switch explicitProfile {
-		case "standard", "fast", "mini":
-			return officialProfile(explicitProfile), "explicit_profile"
-		default:
-			return officialProfile("generic_unknown"), "invalid_explicit_profile"
+	if exactProfile, ok := exactModelProfile(model); ok {
+		if explicitProfile == "" || explicitProfile == exactProfile {
+			return officialProfile(exactProfile), "exact_model"
 		}
+		if isAllowedExplicitProfile(explicitProfile) {
+			return officialProfile("generic_unknown"), "profile_conflict"
+		}
+		return officialProfile("generic_unknown"), "invalid_explicit_profile"
 	}
 
+	if explicitProfile != "" {
+		if isAllowedExplicitProfile(explicitProfile) {
+			return officialProfile(explicitProfile), "explicit_profile"
+		}
+		return officialProfile("generic_unknown"), "invalid_explicit_profile"
+	}
+	return officialProfile("generic_unknown"), "generic_fallback"
+}
+
+func exactModelProfile(model string) (string, bool) {
 	switch model {
 	case "video-ds-2.0":
-		return officialProfile("standard"), "exact_model"
+		return "standard", true
 	case "video-ds-2.0-fast":
-		return officialProfile("fast"), "exact_model"
+		return "fast", true
 	default:
-		return officialProfile("generic_unknown"), "generic_fallback"
+		return "", false
+	}
+}
+
+func isAllowedExplicitProfile(profile string) bool {
+	switch profile {
+	case "standard", "fast", "mini":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -237,6 +258,9 @@ func intersectDurationValues(profile officialCapabilityProfile, contract config.
 	if !supportsDurationField(contract.Duration) {
 		return nil
 	}
+	if isLegacyFlatContract(contract) {
+		return intersectInts(profile.durations, []int{5, 10, 15})
+	}
 	return append([]int(nil), profile.durations...)
 }
 
@@ -255,6 +279,16 @@ func supportsBooleanField(field config.FieldEncoding) bool {
 	return field.Name != "" && field.ValueType == "bool"
 }
 
+func intersectAspectRatios(official []string, contract config.GatewayContractConfig) []string {
+	if isLegacyFlatContract(contract) {
+		if contract.AspectRatio.Name == "" || contract.AspectRatio.ValueType != "string" {
+			return nil
+		}
+		return intersectStrings([]string{"16:9", "9:16", "1:1"}, official)
+	}
+	return intersectMappedValues(official, contract.AspectRatio, false)
+}
+
 func intersectMappedValues(official []string, field config.FieldEncoding, requireExplicitMap bool) []string {
 	if len(official) == 0 || field.Name == "" || field.ValueType != "string" {
 		return nil
@@ -269,6 +303,33 @@ func intersectMappedValues(official []string, field config.FieldEncoding, requir
 	result := make([]string, 0, len(official))
 	for _, value := range official {
 		if _, ok := field.ValueMap[value]; ok {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func isLegacyFlatContract(contract config.GatewayContractConfig) bool {
+	return contract.Name == "legacy_flat_v1" && contract.Version == "1"
+}
+
+func intersectInts(left, right []int) []int {
+	result := make([]int, 0, len(left))
+	for _, value := range left {
+		for _, candidate := range right {
+			if value == candidate {
+				result = append(result, value)
+				break
+			}
+		}
+	}
+	return result
+}
+
+func intersectStrings(left, right []string) []string {
+	result := make([]string, 0, len(left))
+	for _, value := range left {
+		if containsString(right, value) {
 			result = append(result, value)
 		}
 	}
@@ -433,14 +494,24 @@ func explainDegradations(profile officialCapabilityProfile, selection string, co
 
 	if profile.name == "generic_unknown" {
 		reason := "unknown_model"
-		if selection == "invalid_explicit_profile" {
+		switch selection {
+		case "invalid_explicit_profile":
 			reason = "invalid_explicit_profile"
+		case "profile_conflict":
+			reason = "profile_conflict"
 		}
 		add("model_profile", reason)
 	}
 
 	if len(profile.durations) > 0 && len(got.SupportedDurations) == 0 {
 		add("duration", "gateway_contract_missing_field")
+	}
+	if isLegacyFlatContract(contract) {
+		for _, value := range profile.durations {
+			if !containsInt(got.SupportedDurations, value) {
+				add("duration."+strconv.Itoa(value), "legacy_contract_value_not_proven")
+			}
+		}
 	}
 	if profile.smartDuration && !got.SupportsSmartDuration {
 		reason := "gateway_contract_missing_smart_mapping"
@@ -450,7 +521,13 @@ func explainDegradations(profile officialCapabilityProfile, selection string, co
 		add("smart_duration", reason)
 	}
 
-	if len(profile.aspectRatios) > 0 {
+	if isLegacyFlatContract(contract) {
+		for _, value := range profile.aspectRatios {
+			if !containsString(got.AspectRatios, value) {
+				add("aspect_ratio."+value, "legacy_contract_value_not_proven")
+			}
+		}
+	} else if len(profile.aspectRatios) > 0 {
 		if contract.AspectRatio.Name == "" || contract.AspectRatio.ValueType != "string" {
 			add("aspect_ratio", "gateway_contract_missing_field")
 		} else if len(contract.AspectRatio.ValueMap) > 0 {
@@ -561,6 +638,15 @@ func integerRange(first, last int) []int {
 }
 
 func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsInt(values []int, want int) bool {
 	for _, value := range values {
 		if value == want {
 			return true

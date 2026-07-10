@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
@@ -56,6 +58,39 @@ func TestResolveCapabilitiesUnknownModelUsesGenericProfile(t *testing.T) {
 	if got.SupportsSmartDuration {
 		t.Fatal("unknown capability must fail closed")
 	}
+}
+
+func TestResolveCapabilitiesExactModelProfileConflictFailsClosed(t *testing.T) {
+	got := ResolveCapabilities(CapabilityConfig{
+		Model:           "video-ds-2.0-fast",
+		ModelProfile:    "standard",
+		GatewayContract: configuredSeedanceContract(),
+	})
+	if got.ModelProfile != "generic_unknown" {
+		t.Fatalf("conflicting exact model profile = %q, want generic_unknown", got.ModelProfile)
+	}
+	if got.Source.Selection != "profile_conflict" || got.Source.OfficialProfile != "generic_unknown" {
+		t.Fatalf("conflict source = %+v", got.Source)
+	}
+	if got.SupportsResolution || len(got.Resolutions) != 0 {
+		t.Fatalf("conflicting fast model must not gain standard resolution: supported=%v values=%#v", got.SupportsResolution, got.Resolutions)
+	}
+	assertDegradation(t, got, "model_profile", "profile_conflict")
+}
+
+func TestResolveCapabilitiesExactModelAcceptsMatchingProfile(t *testing.T) {
+	got := ResolveCapabilities(CapabilityConfig{
+		Model:           "video-ds-2.0-fast",
+		ModelProfile:    "fast",
+		GatewayContract: configuredSeedanceContract(),
+	})
+	if got.ModelProfile != "fast" || got.Source.Selection != "exact_model" {
+		t.Fatalf("matching exact profile resolved incorrectly: profile=%q source=%+v", got.ModelProfile, got.Source)
+	}
+	if got.SupportsResolution || len(got.Resolutions) != 0 {
+		t.Fatalf("fast profile must remain resolution fail-closed: supported=%v values=%#v", got.SupportsResolution, got.Resolutions)
+	}
+	assertDegradation(t, got, "resolution", "official_profile_unverified")
 }
 
 func TestResolveCapabilitiesSelectsOnlyExactOrExplicitProfiles(t *testing.T) {
@@ -293,7 +328,20 @@ func TestResolveCapabilitiesExplainsEveryLegacyDegradation(t *testing.T) {
 	}
 
 	wantDegradations := map[string]string{
+		"duration.4":                   "legacy_contract_value_not_proven",
+		"duration.6":                   "legacy_contract_value_not_proven",
+		"duration.7":                   "legacy_contract_value_not_proven",
+		"duration.8":                   "legacy_contract_value_not_proven",
+		"duration.9":                   "legacy_contract_value_not_proven",
+		"duration.11":                  "legacy_contract_value_not_proven",
+		"duration.12":                  "legacy_contract_value_not_proven",
+		"duration.13":                  "legacy_contract_value_not_proven",
+		"duration.14":                  "legacy_contract_value_not_proven",
 		"smart_duration":               "gateway_contract_missing_smart_mapping",
+		"aspect_ratio.adaptive":        "legacy_contract_value_not_proven",
+		"aspect_ratio.21:9":            "legacy_contract_value_not_proven",
+		"aspect_ratio.4:3":             "legacy_contract_value_not_proven",
+		"aspect_ratio.3:4":             "legacy_contract_value_not_proven",
 		"resolution":                   "gateway_contract_missing_field",
 		"generate_audio":               "gateway_contract_missing_field",
 		"task_mode.edit":               "gateway_contract_mode_not_declared",
@@ -307,6 +355,71 @@ func TestResolveCapabilitiesExplainsEveryLegacyDegradation(t *testing.T) {
 		"limits.max_audios":            "gateway_contract_limit",
 	}
 	assertExactDegradations(t, got, wantDegradations)
+}
+
+func TestResolveCapabilitiesLegacyKeepsProvenValueSets(t *testing.T) {
+	tests := []struct {
+		name               string
+		input              CapabilityConfig
+		wantProfile        string
+		wantOfficialHiding bool
+	}{
+		{
+			name:               "standard",
+			input:              CapabilityConfig{Model: "video-ds-2.0", GatewayContract: LegacyFlatContract()},
+			wantProfile:        "standard",
+			wantOfficialHiding: true,
+		},
+		{
+			name:               "fast",
+			input:              CapabilityConfig{Model: "video-ds-2.0-fast", GatewayContract: LegacyFlatContract()},
+			wantProfile:        "fast",
+			wantOfficialHiding: true,
+		},
+		{
+			name:        "unknown",
+			input:       CapabilityConfig{Model: "custom-video", GatewayContract: LegacyFlatContract()},
+			wantProfile: "generic_unknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ResolveCapabilities(tt.input)
+			if got.ModelProfile != tt.wantProfile {
+				t.Fatalf("profile = %q, want %q", got.ModelProfile, tt.wantProfile)
+			}
+			if got.Source.GatewayContract != "legacy_flat_v1" || got.Source.GatewayContractVersion != "1" {
+				t.Fatalf("legacy source = %+v", got.Source)
+			}
+			if !reflect.DeepEqual(got.SupportedDurations, []int{5, 10, 15}) {
+				t.Fatalf("legacy durations = %#v, want only 5/10/15", got.SupportedDurations)
+			}
+			if !reflect.DeepEqual(got.AspectRatios, []string{"16:9", "9:16", "1:1"}) {
+				t.Fatalf("legacy aspect ratios = %#v, want only proven set", got.AspectRatios)
+			}
+			if got.MinDurationSeconds != 5 || got.MaxDurationSeconds != 15 || got.SupportsSmartDuration {
+				t.Fatalf("legacy duration bounds/smart = %d/%d/%v", got.MinDurationSeconds, got.MaxDurationSeconds, got.SupportsSmartDuration)
+			}
+			wantLimits := config.MediaLimits{MaxImages: 4, MaxVideos: 2, MaxAudios: 1, MaxVideoSecondsTotal: 15, MaxAudioSecondsTotal: 15}
+			if !reflect.DeepEqual(got.Limits, wantLimits) {
+				t.Fatalf("legacy limits = %+v, want %+v", got.Limits, wantLimits)
+			}
+
+			if tt.wantOfficialHiding {
+				for _, duration := range []int{4, 6, 7, 8, 9, 11, 12, 13, 14} {
+					assertDegradation(t, got, "duration."+strconv.Itoa(duration), "legacy_contract_value_not_proven")
+				}
+				for _, aspect := range []string{"adaptive", "21:9", "4:3", "3:4"} {
+					assertDegradation(t, got, "aspect_ratio."+aspect, "legacy_contract_value_not_proven")
+				}
+				assertDegradation(t, got, "smart_duration", "gateway_contract_missing_smart_mapping")
+			} else {
+				assertNoDegradationPrefix(t, got, "duration.")
+				assertNoDegradationPrefix(t, got, "aspect_ratio.")
+			}
+		})
+	}
 }
 
 func TestResolveCapabilitiesVersionIsDeterministicAndCoversEveryInput(t *testing.T) {
@@ -562,5 +675,14 @@ func assertExactDegradations(t *testing.T, got Capabilities, want map[string]str
 	}
 	if !reflect.DeepEqual(seen, want) {
 		t.Fatalf("degradations mismatch:\n got: %#v\nwant: %#v", seen, want)
+	}
+}
+
+func assertNoDegradationPrefix(t *testing.T, got Capabilities, prefix string) {
+	t.Helper()
+	for _, degradation := range got.Degradations {
+		if strings.HasPrefix(degradation.Feature, prefix) {
+			t.Fatalf("unexpected degradation with prefix %q: %+v", prefix, degradation)
+		}
 	}
 }
