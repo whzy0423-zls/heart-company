@@ -72,6 +72,7 @@ type Server struct {
 	uploader              storage.ObjectUploader
 	voices                *voice.Store
 	videos                *video.Store
+	videoConfig           config.VideoConfig
 	videoAnalysis         *videoanalysis.Store
 	videoAssets           *videoasset.Store
 	storyboards           *videostoryboard.Store
@@ -161,7 +162,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 		s.uploader = uploader
 	}
 	s.voices = voice.NewStore(database, s.uploads, env.MiniMax)
-	s.videos = video.NewStore(database, s.uploads, env.Video, s.uploader)
+	s.replaceVideoRuntime(env.Video)
 	s.videoAnalysis = videoanalysis.NewStore(database)
 	s.videoAssets = videoasset.NewStore(database, s.uploads)
 	s.storyboards = videostoryboard.NewStore(database)
@@ -252,7 +253,7 @@ func (s *Server) applyStoredModelConfig() {
 		s.ragGen = nil
 	}
 	s.analysisGen = llm.NewMiniMaxGenerator(cfg.ApplyAnalysis(s.env.MiniMax))
-	s.videos = video.NewStore(s.db, s.uploads, cfg.ApplyVideo(s.env.Video), s.uploader)
+	s.replaceVideoRuntime(cfg.ApplyVideo(s.env.Video))
 	s.images = image.NewStore(s.uploads, cfg.ApplyImage(s.env.Image), s.uploader)
 }
 
@@ -274,6 +275,34 @@ func (s *Server) videoStore() *video.Store {
 	s.modelMu.RLock()
 	defer s.modelMu.RUnlock()
 	return s.videos
+}
+
+func (s *Server) replaceVideoRuntime(cfg config.VideoConfig) {
+	cfg = cloneVideoConfig(cfg)
+	nextStore := video.NewStore(s.db, s.uploads, cfg, s.uploader)
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
+	s.replaceVideoRuntimeLocked(nextStore, cfg)
+}
+
+func (s *Server) replaceVideoRuntimeLocked(store *video.Store, cfg config.VideoConfig) {
+	s.videos = store
+	s.videoConfig = cloneVideoConfig(cfg)
+}
+
+func (s *Server) effectiveVideoConfig() config.VideoConfig {
+	s.modelMu.RLock()
+	defer s.modelMu.RUnlock()
+	effective := s.videoConfig
+	if effective.Model == "" && effective.ModelProfile == "" && effective.GatewayContract.Name == "" {
+		effective = s.env.Video
+	}
+	return cloneVideoConfig(effective)
+}
+
+func cloneVideoConfig(cfg config.VideoConfig) config.VideoConfig {
+	cfg.GatewayContract = config.TrimGatewayContract(cfg.GatewayContract)
+	return cfg
 }
 
 // imageStore 返回当前生效的文生图存储；持读锁以兼容运行时重建。
@@ -416,6 +445,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/voice/content/generate", s.method(http.MethodPost, s.requirePermission("Voice:Content:Manage", s.generateVoiceContent)))
 	s.mux.HandleFunc("/api/voice/content/list", s.method(http.MethodGet, s.requirePermission("Voice:Content:Manage", s.voiceContentJobs)))
 	s.mux.HandleFunc("/api/video/generate", s.method(http.MethodPost, s.requirePermission("Video:Generate:Manage", s.generateVideo)))
+	s.mux.HandleFunc("/api/video/capabilities", s.method(http.MethodGet, s.requirePermission("Video:Generate:Manage", s.videoCapabilities)))
 	s.mux.HandleFunc("/api/video/generations/list", s.method(http.MethodGet, s.requirePermission("Video:Generate:Manage", s.videoGenerations)))
 	s.mux.HandleFunc("/api/video/generations/overview", s.method(http.MethodGet, s.requirePermission("Video:Generation:Overview", s.videoGenerationsOverview)))
 	s.mux.HandleFunc("/api/video/generations/", s.requirePermission("Video:Generate:Manage", s.videoGenerationByID))
@@ -2411,6 +2441,8 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 		img := merged.ApplyImage(s.env.Image)
 		analysis := merged.ApplyAnalysis(s.env.MiniMax)
 		admin := merged.ApplyAdmin(s.env.MiniMax)
+		vid = cloneVideoConfig(vid)
+		nextVideoStore := video.NewStore(s.db, s.uploads, vid, s.uploader)
 		// 写锁下重建运行时客户端，使新配置立即生效。
 		// AI 辅助关闭时不挂生成器：聊天仅走资料检索/固定兜底（rag.Service 对 nil 生成器安全）。
 		s.modelMu.Lock()
@@ -2420,7 +2452,7 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 			s.ragGen = nil
 		}
 		s.analysisGen = llm.NewMiniMaxGenerator(analysis)
-		s.videos = video.NewStore(s.db, s.uploads, vid, s.uploader)
+		s.replaceVideoRuntimeLocked(nextVideoStore, vid)
 		s.images = image.NewStore(s.uploads, img, s.uploader)
 		s.modelMu.Unlock()
 
