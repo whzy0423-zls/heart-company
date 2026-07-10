@@ -12,6 +12,9 @@ import (
 // contract. Reference ordering is supplied by the caller so prompt compilation
 // and gateway encoding can share one canonical value.
 func MapGatewayPayload(request GenerateRequest, references CanonicalReferences, contract config.GatewayContractConfig) (map[string]any, error) {
+	if err := validateGatewayTaskMode(request.TaskMode, references, contract); err != nil {
+		return nil, err
+	}
 	payload := map[string]any{
 		"model":  request.Model,
 		"prompt": request.Prompt,
@@ -51,6 +54,60 @@ func MapGatewayPayload(request GenerateRequest, references CanonicalReferences, 
 		return nil, err
 	}
 	return payload, nil
+}
+
+func validateGatewayTaskMode(mode string, references CanonicalReferences, contract config.GatewayContractConfig) error {
+	if !knownTaskMode(mode) {
+		return validationError(
+			"task_mode_unsupported",
+			"taskMode",
+			fmt.Sprintf("不支持任务模式 %q。", mode),
+			"任务模式只能是 reference、edit 或 extend。",
+			nil,
+		)
+	}
+	if !containsString(contract.DeclaredModes, mode) {
+		return validationError(
+			"gateway_task_mode_not_declared",
+			"taskMode",
+			fmt.Sprintf("中转站契约未声明任务模式 %q。", mode),
+			"切换到契约已声明的任务模式，或更新中转站契约。",
+			nil,
+		)
+	}
+	if contract.TaskMode.Name != "" {
+		return nil
+	}
+	if mode == "reference" && isKnownReferenceEncodingMode(contract.References.Mode) {
+		return nil
+	}
+
+	targetRole := "edit_target"
+	if mode == "extend" {
+		targetRole = "extend_target"
+	}
+	if contract.References.Mode == "content_items" &&
+		containsString(contract.References.SupportsRoles, targetRole) &&
+		strings.TrimSpace(contract.References.RoleFields[targetRole]) != "" &&
+		canonicalReferencesContainRole(references, targetRole) {
+		return nil
+	}
+	return validationError(
+		"gateway_task_mode_not_encodable",
+		"taskMode",
+		fmt.Sprintf("中转站契约无法无损表达任务模式 %q。", mode),
+		"配置 taskMode 字段，或使用能明确编码目标角色的 content_items 契约。",
+		nil,
+	)
+}
+
+func canonicalReferencesContainRole(references CanonicalReferences, role string) bool {
+	for _, reference := range references.References {
+		if reference.Role == role {
+			return true
+		}
+	}
+	return false
 }
 
 func durationGatewayValue(duration int) string {

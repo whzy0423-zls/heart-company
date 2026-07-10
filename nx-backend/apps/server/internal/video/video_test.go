@@ -188,7 +188,7 @@ func TestGenerateRejectsUnsupportedAspectRatio(t *testing.T) {
 	}
 }
 
-func TestGenerateRejectsSuccessfulCreateWithoutTaskID(t *testing.T) {
+func TestGenerateTreatsSuccessfulCreateWithoutTaskIDAsAmbiguous(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
@@ -206,11 +206,12 @@ func TestGenerateRejectsSuccessfulCreateWithoutTaskID(t *testing.T) {
 		Model:   "video-ds-2.0-fast",
 	}))
 	_, err := store.Generate(context.Background(), GenerateInput{Prompt: "test"})
-	if err == nil {
-		t.Fatal("expected missing task_id error")
+	var ambiguous *AmbiguousTransportError
+	if !errors.As(err, &ambiguous) {
+		t.Fatalf("missing task id error type = %T, want *AmbiguousTransportError: %v", err, err)
 	}
-	if !strings.Contains(err.Error(), "task_id") {
-		t.Fatalf("expected error to mention task_id, got %q", err.Error())
+	if ambiguous.Operation != "create_video_task" {
+		t.Fatalf("ambiguous operation = %q, want create_video_task", ambiguous.Operation)
 	}
 
 	state := videoTestState(t, db)
@@ -626,7 +627,10 @@ func TestCreateTaskFailsClosedForExplicitInvalidGatewayContract(t *testing.T) {
 	client.client.Transport = &http.Transport{DisableKeepAlives: true}
 
 	_, err := client.CreateTask(context.Background(), "video-ds-2.0-fast", "test", nil, nil, nil, 15, "9:16")
-	assertValidationCode(t, err, "gateway_reference_encoding_unsupported")
+	validationErr := assertValidationCode(t, err, "gateway_task_mode_not_declared")
+	if validationErr.Field != "taskMode" {
+		t.Fatalf("validation field = %q, want taskMode", validationErr.Field)
+	}
 	if got := attempts.Load(); got != 0 {
 		t.Fatalf("explicit invalid gateway contract reached paid POST %d times, want 0", got)
 	}
@@ -663,6 +667,254 @@ func TestCreateTaskRejectsUndeclaredSmartDurationBeforePost(t *testing.T) {
 	}
 	if got := attempts.Load(); got != 0 {
 		t.Fatalf("undeclared smart duration reached paid POST %d times, want 0", got)
+	}
+}
+
+func TestCreateTaskValidatesTaskModeBeforePost(t *testing.T) {
+	t.Run("unknown mode", func(t *testing.T) {
+		var attempts atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{"status": "queued", "task_id": "task-1"},
+			})
+		}))
+		defer server.Close()
+
+		client := allowLocalTestClient(NewClient(config.VideoConfig{
+			APIBase:         server.URL,
+			APIKey:          "test-key",
+			GatewayContract: configuredMapperContract(),
+		}))
+		_, err := client.CreateNormalizedTask(context.Background(), GenerateRequest{
+			Model:       "video-ds-2.0",
+			Prompt:      "test",
+			Duration:    12,
+			AspectRatio: "9:16",
+			TaskMode:    "future-mode",
+		}, CanonicalReferences{})
+		validationErr := assertValidationCode(t, err, "task_mode_unsupported")
+		if validationErr.Field != "taskMode" {
+			t.Fatalf("validation field = %q, want taskMode", validationErr.Field)
+		}
+		if got := attempts.Load(); got != 0 {
+			t.Fatalf("unknown task mode reached paid POST %d times, want 0", got)
+		}
+	})
+
+	t.Run("known but undeclared mode", func(t *testing.T) {
+		var attempts atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{"status": "queued", "task_id": "task-1"},
+			})
+		}))
+		defer server.Close()
+
+		contract := configuredMapperContract()
+		contract.DeclaredModes = []string{"reference"}
+		client := allowLocalTestClient(NewClient(config.VideoConfig{
+			APIBase:         server.URL,
+			APIKey:          "test-key",
+			GatewayContract: contract,
+		}))
+		canonical := mustCanonicalReferences(t, []Reference{
+			{ID: "1", Kind: "video", Role: "edit_target", URL: "v1"},
+		})
+		_, err := client.CreateNormalizedTask(context.Background(), GenerateRequest{
+			Model:       "video-ds-2.0",
+			Prompt:      "test",
+			Duration:    12,
+			AspectRatio: "9:16",
+			TaskMode:    "edit",
+		}, canonical)
+		validationErr := assertValidationCode(t, err, "gateway_task_mode_not_declared")
+		if validationErr.Field != "taskMode" {
+			t.Fatalf("validation field = %q, want taskMode", validationErr.Field)
+		}
+		if got := attempts.Load(); got != 0 {
+			t.Fatalf("undeclared task mode reached paid POST %d times, want 0", got)
+		}
+	})
+
+	t.Run("declared mode can be expressed by content role without field", func(t *testing.T) {
+		var attempts atomic.Int32
+		var gotBody map[string]any
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts.Add(1)
+			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+				t.Fatal(err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{"status": "queued", "task_id": "task-1"},
+			})
+		}))
+		defer server.Close()
+
+		contract := configuredMapperContract()
+		contract.TaskMode = config.FieldEncoding{}
+		client := allowLocalTestClient(NewClient(config.VideoConfig{
+			APIBase:         server.URL,
+			APIKey:          "test-key",
+			GatewayContract: contract,
+		}))
+		canonical := mustCanonicalReferences(t, []Reference{
+			{ID: "1", Kind: "video", Role: "edit_target", URL: "v1"},
+		})
+		result, err := client.CreateNormalizedTask(context.Background(), GenerateRequest{
+			Model:       "video-ds-2.0",
+			Prompt:      "test",
+			Duration:    12,
+			AspectRatio: "9:16",
+			TaskMode:    "edit",
+		}, canonical)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.TaskID != "task-1" || attempts.Load() != 1 {
+			t.Fatalf("result=%+v attempts=%d, want one accepted POST", result, attempts.Load())
+		}
+		if _, exists := gotBody["operation"]; exists {
+			t.Fatalf("undeclared task mode field leaked into body: %#v", gotBody)
+		}
+		items, ok := gotBody["content_items"].([]any)
+		if !ok || len(items) != 1 {
+			t.Fatalf("content_items = %#v, want one role-encoded item", gotBody["content_items"])
+		}
+		item, ok := items[0].(map[string]any)
+		if !ok || item["edit_target"] != true || item["video_url"] != "v1" {
+			t.Fatalf("role-encoded item = %#v", items[0])
+		}
+	})
+}
+
+func TestCreateTaskValidatesOriginalGatewayContractBeforePost(t *testing.T) {
+	tests := []struct {
+		name       string
+		contract   func() config.GatewayContractConfig
+		references []Reference
+		wantCode   string
+		wantField  string
+	}{
+		{
+			name: "missing name",
+			contract: func() config.GatewayContractConfig {
+				contract := LegacyFlatContract()
+				contract.Name = ""
+				return contract
+			},
+			wantCode:  "gateway_contract_invalid",
+			wantField: "gatewayContract.name",
+		},
+		{
+			name: "missing version",
+			contract: func() config.GatewayContractConfig {
+				contract := LegacyFlatContract()
+				contract.Version = ""
+				return contract
+			},
+			wantCode:  "gateway_contract_invalid",
+			wantField: "gatewayContract.version",
+		},
+		{
+			name: "invalid field name",
+			contract: func() config.GatewayContractConfig {
+				contract := LegacyFlatContract()
+				contract.Duration.Name = "payload[seconds]"
+				return contract
+			},
+			wantCode:  "gateway_contract_invalid",
+			wantField: "gatewayContract.duration.name",
+		},
+		{
+			name: "reserved idempotency header",
+			contract: func() config.GatewayContractConfig {
+				contract := LegacyFlatContract()
+				contract.Idempotency.Header = "Authorization"
+				return contract
+			},
+			wantCode:  "gateway_contract_invalid",
+			wantField: "gatewayContract.idempotency.header",
+		},
+		{
+			name: "invalid reference role field",
+			contract: func() config.GatewayContractConfig {
+				contract := configuredMapperContract()
+				contract.References.RoleFields["reference_image"] = "role[reference]"
+				return contract
+			},
+			references: []Reference{{ID: "1", Kind: "image", Role: "reference_image", URL: "i1"}},
+			wantCode:   "gateway_contract_invalid",
+			wantField:  "gatewayContract.references.roleFields",
+		},
+		{
+			name: "unknown reference mode",
+			contract: func() config.GatewayContractConfig {
+				contract := LegacyFlatContract()
+				contract.References.Mode = "future_items"
+				contract.TaskMode = config.FieldEncoding{Name: "task_mode", ValueType: "string"}
+				return contract
+			},
+			wantCode:  "gateway_reference_encoding_unsupported",
+			wantField: "gatewayContract.references.mode",
+		},
+		{
+			name: "missing reference media field",
+			contract: func() config.GatewayContractConfig {
+				contract := configuredMapperContract()
+				contract.References.VideoField = ""
+				return contract
+			},
+			references: []Reference{{ID: "1", Kind: "video", Role: "reference_video", URL: "v1"}},
+			wantCode:   "gateway_reference_field_missing",
+			wantField:  "references[0].kind",
+		},
+		{
+			name: "zero contract",
+			contract: func() config.GatewayContractConfig {
+				return config.GatewayContractConfig{}
+			},
+			wantCode:  "gateway_task_mode_not_declared",
+			wantField: "taskMode",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{"status": "queued", "task_id": "task-1"},
+				})
+			}))
+			defer server.Close()
+
+			client := NewClient(config.VideoConfig{
+				APIBase:         server.URL,
+				APIKey:          "test-key",
+				GatewayContract: tt.contract(),
+			})
+			client.urlAllowed = func(string) bool { return true }
+			client.client.Transport = &http.Transport{DisableKeepAlives: true}
+			canonical := mustCanonicalReferences(t, tt.references)
+			_, err := client.CreateNormalizedTask(context.Background(), GenerateRequest{
+				Model:       "video-ds-2.0-fast",
+				Prompt:      "test",
+				Duration:    15,
+				AspectRatio: "9:16",
+				TaskMode:    "reference",
+				RequestKey:  "req-123",
+			}, canonical)
+			validationErr := assertValidationCode(t, err, tt.wantCode)
+			if validationErr.Field != tt.wantField {
+				t.Fatalf("validation field = %q, want %q", validationErr.Field, tt.wantField)
+			}
+			if got := attempts.Load(); got != 0 {
+				t.Fatalf("invalid contract reached paid POST %d times, want 0", got)
+			}
+		})
 	}
 }
 
@@ -711,6 +963,80 @@ func TestCreateTaskDoesNotRetryPost(t *testing.T) {
 	}
 	if got := attempts.Load(); got != 1 {
 		t.Fatalf("paid POST attempts = %d, want exactly 1", got)
+	}
+}
+
+func TestCreateTaskClassifiesUnconfirmed2xxOutcomes(t *testing.T) {
+	tests := []struct {
+		name      string
+		response  string
+		ambiguous bool
+		wantTask  string
+	}{
+		{name: "truncated json", response: `{"data":`, ambiguous: true},
+		{name: "missing task id", response: `{"data":{"status":"queued"}}`, ambiguous: true},
+		{name: "confirmed task id", response: `{"data":{"status":"queued","task_id":"task-1"}}`, wantTask: "task-1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				if _, err := io.Copy(io.Discard, r.Body); err != nil {
+					t.Fatal(err)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tt.response)
+			}))
+			defer server.Close()
+
+			contract := LegacyFlatContract()
+			contract.Idempotency.Header = "Idempotency-Key"
+			client := allowLocalTestClient(NewClient(config.VideoConfig{
+				APIBase:         server.URL,
+				APIKey:          "api-secret",
+				GatewayContract: contract,
+			}))
+			const requestKey = "req-secret-123"
+			const prompt = "TOP SECRET PROMPT"
+			result, err := client.CreateNormalizedTask(context.Background(), GenerateRequest{
+				Model:       "video-ds-2.0-fast",
+				Prompt:      prompt,
+				Duration:    15,
+				AspectRatio: "9:16",
+				TaskMode:    "reference",
+				RequestKey:  requestKey,
+			}, CanonicalReferences{})
+
+			if tt.ambiguous {
+				var ambiguous *AmbiguousTransportError
+				if !errors.As(err, &ambiguous) {
+					t.Fatalf("CreateNormalizedTask() error type = %T, want *AmbiguousTransportError: %v", err, err)
+				}
+				if ambiguous.RequestKey != requestKey || ambiguous.Operation != "create_video_task" {
+					t.Fatalf("ambiguous context = requestKey %q operation %q", ambiguous.RequestKey, ambiguous.Operation)
+				}
+				if ambiguous.Unwrap() == nil {
+					t.Fatal("ambiguous outcome must preserve a safe cause")
+				}
+				for _, secret := range []string{requestKey, prompt, "api-secret", server.URL} {
+					if strings.Contains(err.Error(), secret) {
+						t.Fatalf("ambiguous error exposed secret/context %q: %q", secret, err.Error())
+					}
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if result.TaskID != tt.wantTask {
+					t.Fatalf("task id = %q, want %q", result.TaskID, tt.wantTask)
+				}
+			}
+			if got := attempts.Load(); got != 1 {
+				t.Fatalf("paid POST attempts = %d, want exactly 1", got)
+			}
+		})
 	}
 }
 

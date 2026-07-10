@@ -172,6 +172,10 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 
 	task, err := s.client.CreateTask(ctx, model, prompt, images, videos, audios, seconds, aspectRatio)
 	if err != nil {
+		var ambiguous *AmbiguousTransportError
+		if errors.As(err, &ambiguous) {
+			return Generation{}, err
+		}
 		var id string
 		_ = s.db.QueryRowContext(ctx,
 			`INSERT INTO video_generations (provider, model, prompt, image_url, seconds, aspect_ratio, status, error_message)
@@ -543,10 +547,12 @@ type TaskResult struct {
 }
 
 // AmbiguousTransportError means the paid create request may have reached the
-// intermediary, but the client could not observe a definitive response. The
-// caller must reconcile the original request key instead of auto-retrying.
+// intermediary, but the client could not confirm a task ID. The caller must
+// reconcile RequestKey instead of auto-retrying.
 type AmbiguousTransportError struct {
-	cause error
+	RequestKey string
+	Operation  string
+	cause      error
 }
 
 func (e *AmbiguousTransportError) Error() string {
@@ -565,11 +571,10 @@ func NewClient(cfg config.VideoConfig) *Client {
 	if timeout <= 0 {
 		timeout = 120 * time.Second
 	}
-	contract := config.TrimGatewayContract(cfg.GatewayContract)
 	client := &Client{
 		apiBase:         strings.TrimRight(strings.TrimSpace(cfg.APIBase), "/"),
 		apiKey:          strings.TrimSpace(cfg.APIKey),
-		gatewayContract: contract,
+		gatewayContract: cfg.GatewayContract,
 		urlAllowed: func(raw string) bool {
 			return isPublicHTTPURL(raw)
 		},
@@ -593,7 +598,11 @@ func (c *Client) CreateNormalizedTask(ctx context.Context, request GenerateReque
 	if err := c.ensureReady(); err != nil {
 		return TaskResult{}, err
 	}
-	body, err := MapGatewayPayload(request, references, c.gatewayContract)
+	contract, err := validatedGatewayContract(c.gatewayContract)
+	if err != nil {
+		return TaskResult{}, err
+	}
+	body, err := MapGatewayPayload(request, references, contract)
 	if err != nil {
 		return TaskResult{}, err
 	}
@@ -614,19 +623,50 @@ func (c *Client) CreateNormalizedTask(ctx context.Context, request GenerateReque
 	// request; reconciliation owns any later retry decision.
 	req.GetBody = nil
 	req.Header.Set("Content-Type", "application/json")
-	if header := c.gatewayContract.Idempotency.Header; header != "" && request.RequestKey != "" {
+	if header := contract.Idempotency.Header; header != "" && request.RequestKey != "" {
 		req.Header.Set(header, request.RequestKey)
 	}
 	c.auth(req)
 
 	payload, err := c.doJSONOnce(req)
 	if err != nil {
-		if isAmbiguousCreateTransportError(err) {
-			return TaskResult{}, &AmbiguousTransportError{cause: err}
+		var decodeErr *gatewayResponseDecodeError
+		if isAmbiguousCreateTransportError(err) || errors.As(err, &decodeErr) {
+			return TaskResult{}, ambiguousCreateTaskError(request.RequestKey, err)
 		}
 		return TaskResult{}, err
 	}
-	return parseTask(payload), nil
+	task := parseTask(payload)
+	if strings.TrimSpace(task.TaskID) == "" {
+		return TaskResult{}, ambiguousCreateTaskError(request.RequestKey, errors.New("upstream 2xx response did not confirm a task id"))
+	}
+	return task, nil
+}
+
+func ambiguousCreateTaskError(requestKey string, cause error) *AmbiguousTransportError {
+	return &AmbiguousTransportError{
+		RequestKey: requestKey,
+		Operation:  "create_video_task",
+		cause:      cause,
+	}
+}
+
+func validatedGatewayContract(raw config.GatewayContractConfig) (config.GatewayContractConfig, error) {
+	if err := config.ValidateGatewayContract(raw); err != nil {
+		field := "gatewayContract"
+		var contractErr *config.GatewayContractValidationError
+		if errors.As(err, &contractErr) && contractErr.Field != "" {
+			field += "." + contractErr.Field
+		}
+		return config.GatewayContractConfig{}, validationError(
+			"gateway_contract_invalid",
+			field,
+			"视频中转站契约无效，已阻止创建请求。",
+			"修正中转站契约配置并重新加载后再试。",
+			nil,
+		)
+	}
+	return config.TrimGatewayContract(raw), nil
 }
 
 func isAmbiguousCreateTransportError(err error) bool {
@@ -813,9 +853,27 @@ func (c *Client) doJSONOnce(req *http.Request) (map[string]any, error) {
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, fmt.Errorf("解析网关响应失败: %w", err)
+		return nil, &gatewayResponseDecodeError{cause: err}
 	}
 	return payload, nil
+}
+
+type gatewayResponseDecodeError struct {
+	cause error
+}
+
+func (e *gatewayResponseDecodeError) Error() string {
+	if e == nil || e.cause == nil {
+		return "解析网关响应失败"
+	}
+	return fmt.Sprintf("解析网关响应失败: %v", e.cause)
+}
+
+func (e *gatewayResponseDecodeError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
 }
 
 func isRetryableNetworkError(err error) bool {
