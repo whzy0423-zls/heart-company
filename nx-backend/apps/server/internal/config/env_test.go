@@ -27,6 +27,24 @@ func TestLoadDefaultsVideoGatewayContract(t *testing.T) {
 	}
 }
 
+func TestLegacyVideoGatewayContractReturnsIndependentCopies(t *testing.T) {
+	first := LegacyVideoGatewayContract()
+	second := LegacyVideoGatewayContract()
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("legacy constructors differ:\nfirst: %#v\nsecond: %#v", first, second)
+	}
+
+	first.DeclaredModes[0] = "edit"
+	first.References.SupportsRoles[0] = "first_frame"
+	third := LegacyVideoGatewayContract()
+	if !reflect.DeepEqual(second, third) {
+		t.Fatalf("mutating one legacy contract polluted future copies:\nsecond: %#v\nthird: %#v", second, third)
+	}
+	if third.DeclaredModes[0] != "reference" || third.References.SupportsRoles[0] != "reference_image" {
+		t.Fatalf("legacy constructor returned mutated values: %#v", third)
+	}
+}
+
 func TestLoadVideoGatewayContractFailsClosedForIncompleteIdentity(t *testing.T) {
 	cases := []struct {
 		name     string

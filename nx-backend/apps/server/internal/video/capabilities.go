@@ -71,36 +71,10 @@ type officialCapabilityProfile struct {
 	limits               config.MediaLimits
 }
 
-// LegacyFlatContract returns the built-in, currently proven flat-array contract.
-// It lives in video until config exposes its internal default constructor.
+// LegacyFlatContract preserves the video package API while delegating to the
+// single built-in, currently proven contract in config.
 func LegacyFlatContract() config.GatewayContractConfig {
-	return config.GatewayContractConfig{
-		Name:          "legacy_flat_v1",
-		Version:       "1",
-		DeclaredModes: []string{"reference"},
-		Duration: config.FieldEncoding{
-			Name:      "seconds",
-			ValueType: "string",
-		},
-		AspectRatio: config.FieldEncoding{
-			Name:      "aspect_ratio",
-			ValueType: "string",
-		},
-		References: config.ReferenceEncoding{
-			Mode:          "flat_arrays",
-			ImageField:    "images",
-			VideoField:    "videos",
-			AudioField:    "audios",
-			SupportsRoles: []string{"reference_image", "reference_video", "reference_audio"},
-		},
-		Limits: config.MediaLimits{
-			MaxImages:            4,
-			MaxVideos:            3,
-			MaxAudios:            1,
-			MaxVideoSecondsTotal: 15,
-			MaxAudioSecondsTotal: 15,
-		},
-	}
+	return config.LegacyVideoGatewayContract()
 }
 
 func ResolveCapabilities(input CapabilityConfig) Capabilities {
@@ -302,11 +276,23 @@ func intersectMappedValues(official []string, field config.FieldEncoding, requir
 
 	result := make([]string, 0, len(official))
 	for _, value := range official {
-		if _, ok := field.ValueMap[value]; ok {
+		if hasEncodableMappedValue(field.ValueMap, value) {
 			result = append(result, value)
 		}
 	}
 	return result
+}
+
+func hasEncodableMappedValue(valueMap map[string]string, value string) bool {
+	mapped, ok := valueMap[value]
+	return ok && strings.TrimSpace(mapped) != ""
+}
+
+func missingMappedValueReason(valueMap map[string]string, value string) string {
+	if mapped, ok := valueMap[value]; ok && strings.TrimSpace(mapped) == "" {
+		return "gateway_contract_value_not_encodable"
+	}
+	return "gateway_contract_value_not_declared"
 }
 
 func isLegacyFlatContract(contract config.GatewayContractConfig) bool {
@@ -348,6 +334,10 @@ func intersectReferenceRoles(official []string, contract config.ReferenceEncodin
 }
 
 func canEncodeReferenceRole(contract config.ReferenceEncoding, role string) bool {
+	if !isKnownReferenceEncodingMode(contract.Mode) {
+		return false
+	}
+
 	var mediaField string
 	switch role {
 	case "reference_image", "first_frame", "last_frame":
@@ -370,8 +360,12 @@ func canEncodeReferenceRole(contract config.ReferenceEncoding, role string) bool
 		}
 		return contract.RoleFields[role] != ""
 	default:
-		return contract.Mode != "flat_arrays" && contract.RoleFields[role] != ""
+		return contract.Mode == "content_items" && contract.RoleFields[role] != ""
 	}
+}
+
+func isKnownReferenceEncodingMode(mode string) bool {
+	return mode == "flat_arrays" || mode == "content_items"
 }
 
 func intersectTaskModes(official []string, contract config.GatewayContractConfig, roles []string) []string {
@@ -382,9 +376,7 @@ func intersectTaskModes(official []string, contract config.GatewayContractConfig
 		}
 		switch mode {
 		case "reference":
-			if hasGeneralReferenceRole(roles) {
-				result = append(result, mode)
-			}
+			result = append(result, mode)
 		case "edit":
 			if containsString(roles, "edit_target") && modeCanBeEncoded(contract, "edit_target") {
 				result = append(result, mode)
@@ -399,10 +391,13 @@ func intersectTaskModes(official []string, contract config.GatewayContractConfig
 }
 
 func modeCanBeEncoded(contract config.GatewayContractConfig, targetRole string) bool {
+	if !isKnownReferenceEncodingMode(contract.References.Mode) {
+		return false
+	}
 	if contract.TaskMode.Name != "" && contract.TaskMode.ValueType == "string" {
 		return true
 	}
-	return contract.References.Mode != "flat_arrays" && contract.References.RoleFields[targetRole] != ""
+	return contract.References.Mode == "content_items" && contract.References.RoleFields[targetRole] != ""
 }
 
 func filterRolesForModes(roles, modes []string) []string {
@@ -417,10 +412,6 @@ func filterRolesForModes(roles, modes []string) []string {
 		result = append(result, role)
 	}
 	return result
-}
-
-func hasGeneralReferenceRole(roles []string) bool {
-	return containsString(roles, "reference_image") || containsString(roles, "reference_video") || containsString(roles, "reference_audio")
 }
 
 func intersectMediaLimits(official, gateway config.MediaLimits, roles []string) config.MediaLimits {
@@ -533,7 +524,7 @@ func explainDegradations(profile officialCapabilityProfile, selection string, co
 		} else if len(contract.AspectRatio.ValueMap) > 0 {
 			for _, value := range profile.aspectRatios {
 				if !containsString(got.AspectRatios, value) {
-					add("aspect_ratio."+value, "gateway_contract_value_not_declared")
+					add("aspect_ratio."+value, missingMappedValueReason(contract.AspectRatio.ValueMap, value))
 				}
 			}
 		}
@@ -550,7 +541,7 @@ func explainDegradations(profile officialCapabilityProfile, selection string, co
 		default:
 			for _, value := range profile.resolutions {
 				if !containsString(got.Resolutions, value) {
-					add("resolution."+value, "gateway_contract_value_not_declared")
+					add("resolution."+value, missingMappedValueReason(contract.Resolution.ValueMap, value))
 				}
 			}
 		}
@@ -566,7 +557,11 @@ func explainDegradations(profile officialCapabilityProfile, selection string, co
 		}
 		reason := "gateway_contract_mode_not_declared"
 		if containsString(contract.DeclaredModes, mode) {
-			reason = "gateway_contract_cannot_encode_target"
+			if !isKnownReferenceEncodingMode(contract.References.Mode) {
+				reason = "unknown_reference_encoding_mode"
+			} else {
+				reason = "gateway_contract_cannot_encode_target"
+			}
 		}
 		add("task_mode."+mode, reason)
 	}
@@ -577,9 +572,14 @@ func explainDegradations(profile officialCapabilityProfile, selection string, co
 		}
 		reason := "gateway_contract_role_not_declared"
 		if containsString(contract.References.SupportsRoles, role) {
-			reason = "gateway_contract_cannot_encode_role"
-			if role == "edit_target" && !containsString(got.TaskModes, "edit") || role == "extend_target" && !containsString(got.TaskModes, "extend") {
-				reason = "gateway_contract_mode_not_declared"
+			if !isKnownReferenceEncodingMode(contract.References.Mode) {
+				reason = "unknown_reference_encoding_mode"
+			} else {
+				reason = "gateway_contract_cannot_encode_role"
+				if role == "edit_target" && !containsString(contract.DeclaredModes, "edit") ||
+					role == "extend_target" && !containsString(contract.DeclaredModes, "extend") {
+					reason = "gateway_contract_mode_not_declared"
+				}
 			}
 		}
 		add("reference_role."+role, reason)

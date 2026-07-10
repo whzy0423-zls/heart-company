@@ -74,6 +74,20 @@ func TestLegacyFlatContractMatchesIntermediaryDocumentedLimits(t *testing.T) {
 	}
 }
 
+func TestLegacyFlatContractUsesConfigSourceOfTruth(t *testing.T) {
+	want := config.LegacyVideoGatewayContract()
+	got := LegacyFlatContract()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("video legacy wrapper diverged from config source:\n got: %#v\nwant: %#v", got, want)
+	}
+
+	got.DeclaredModes[0] = "edit"
+	got.References.SupportsRoles[0] = "edit_target"
+	if fresh := LegacyFlatContract(); !reflect.DeepEqual(fresh, want) {
+		t.Fatalf("mutating wrapper result polluted source: %#v", fresh)
+	}
+}
+
 func TestResolveCapabilitiesExactASFastAliasStaysFailClosed(t *testing.T) {
 	got := ResolveCapabilities(CapabilityConfig{
 		Model:           "as-sd2.0-fast",
@@ -86,6 +100,140 @@ func TestResolveCapabilitiesExactASFastAliasStaysFailClosed(t *testing.T) {
 		t.Fatalf("fast alias must keep resolution fail-closed: supported=%v values=%#v", got.SupportsResolution, got.Resolutions)
 	}
 	assertDegradation(t, got, "resolution", "official_profile_unverified")
+}
+
+func TestResolveCapabilitiesUnknownReferenceEncodingModeFailsClosed(t *testing.T) {
+	for _, mode := range []string{"", "content_item", "future_items"} {
+		name := mode
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			contract := configuredSeedanceContract()
+			contract.References.Mode = mode
+
+			got := ResolveCapabilities(CapabilityConfig{Model: "video-ds-2.0", GatewayContract: contract})
+			if len(got.ReferenceRoles) != 0 {
+				t.Fatalf("unknown encoding mode %q exposed roles: %#v", mode, got.ReferenceRoles)
+			}
+			if got.SupportsEdit || got.SupportsExtend {
+				t.Fatalf("unknown encoding mode %q exposed edit/extend: %v/%v", mode, got.SupportsEdit, got.SupportsExtend)
+			}
+			assertDegradation(t, got, "task_mode.edit", "unknown_reference_encoding_mode")
+			assertDegradation(t, got, "task_mode.extend", "unknown_reference_encoding_mode")
+			assertDegradation(t, got, "reference_role.first_frame", "unknown_reference_encoding_mode")
+			assertDegradation(t, got, "reference_role.edit_target", "unknown_reference_encoding_mode")
+		})
+	}
+}
+
+func TestResolveCapabilitiesReferenceModeDoesNotRequireReferenceRoles(t *testing.T) {
+	tests := []struct {
+		name       string
+		references config.ReferenceEncoding
+		wantRoles  []string
+	}{
+		{
+			name:      "no reference encoding",
+			wantRoles: []string{},
+		},
+		{
+			name: "first and last frames only",
+			references: config.ReferenceEncoding{
+				Mode:       "content_items",
+				ImageField: "image_url",
+				RoleFields: map[string]string{
+					"first_frame": "first_frame",
+					"last_frame":  "last_frame",
+				},
+				SupportsRoles: []string{"first_frame", "last_frame"},
+			},
+			wantRoles: []string{"first_frame", "last_frame"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contract := configuredSeedanceContract()
+			contract.DeclaredModes = []string{"reference"}
+			contract.References = tt.references
+
+			got := ResolveCapabilities(CapabilityConfig{Model: "video-ds-2.0", GatewayContract: contract})
+			if !reflect.DeepEqual(got.TaskModes, []string{"reference"}) {
+				t.Fatalf("basic text-to-video reference mode was hidden: %#v", got.TaskModes)
+			}
+			if !reflect.DeepEqual(got.ReferenceRoles, tt.wantRoles) {
+				t.Fatalf("reference roles = %#v, want %#v", got.ReferenceRoles, tt.wantRoles)
+			}
+			if got.SupportsEdit || got.SupportsExtend {
+				t.Fatalf("undeclared advanced modes were exposed: edit=%v extend=%v", got.SupportsEdit, got.SupportsExtend)
+			}
+			assertNoDegradation(t, got, "task_mode.reference")
+		})
+	}
+}
+
+func TestResolveCapabilitiesRejectsBlankEnumMappings(t *testing.T) {
+	contract := configuredSeedanceContract()
+	contract.Resolution.ValueMap = map[string]string{"1080P": "   "}
+	contract.AspectRatio.ValueMap = map[string]string{
+		"16:9": " ",
+		"9:16": "portrait",
+	}
+
+	got := ResolveCapabilities(CapabilityConfig{Model: "video-ds-2.0", GatewayContract: contract})
+	if got.SupportsResolution || len(got.Resolutions) != 0 {
+		t.Fatalf("blank resolution mapping was exposed: supported=%v values=%#v", got.SupportsResolution, got.Resolutions)
+	}
+	if !reflect.DeepEqual(got.AspectRatios, []string{"9:16"}) {
+		t.Fatalf("blank aspect mapping was exposed: %#v", got.AspectRatios)
+	}
+	assertDegradation(t, got, "resolution.1080P", "gateway_contract_value_not_encodable")
+	assertDegradation(t, got, "aspect_ratio.16:9", "gateway_contract_value_not_encodable")
+}
+
+func TestResolveCapabilitiesClassifiesReferenceEncodingDegradations(t *testing.T) {
+	tests := []struct {
+		name           string
+		mutate         func(*config.GatewayContractConfig)
+		wantTaskReason string
+		wantRoleReason string
+	}{
+		{
+			name: "mode not declared",
+			mutate: func(contract *config.GatewayContractConfig) {
+				contract.DeclaredModes = []string{"reference"}
+			},
+			wantTaskReason: "gateway_contract_mode_not_declared",
+			wantRoleReason: "gateway_contract_mode_not_declared",
+		},
+		{
+			name: "flat arrays cannot encode target",
+			mutate: func(contract *config.GatewayContractConfig) {
+				contract.References.Mode = "flat_arrays"
+			},
+			wantTaskReason: "gateway_contract_cannot_encode_target",
+			wantRoleReason: "gateway_contract_cannot_encode_role",
+		},
+		{
+			name: "content items target field missing",
+			mutate: func(contract *config.GatewayContractConfig) {
+				contract.References.RoleFields["edit_target"] = " "
+			},
+			wantTaskReason: "gateway_contract_cannot_encode_target",
+			wantRoleReason: "gateway_contract_cannot_encode_role",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contract := configuredSeedanceContract()
+			tt.mutate(&contract)
+			got := ResolveCapabilities(CapabilityConfig{Model: "video-ds-2.0", GatewayContract: contract})
+			assertDegradation(t, got, "task_mode.edit", tt.wantTaskReason)
+			assertDegradation(t, got, "reference_role.edit_target", tt.wantRoleReason)
+		})
+	}
 }
 
 func TestResolveCapabilitiesExactModelProfileConflictFailsClosed(t *testing.T) {
@@ -714,6 +862,15 @@ func assertNoDegradationPrefix(t *testing.T, got Capabilities, prefix string) {
 	for _, degradation := range got.Degradations {
 		if strings.HasPrefix(degradation.Feature, prefix) {
 			t.Fatalf("unexpected degradation with prefix %q: %+v", prefix, degradation)
+		}
+	}
+}
+
+func assertNoDegradation(t *testing.T, got Capabilities, feature string) {
+	t.Helper()
+	for _, degradation := range got.Degradations {
+		if degradation.Feature == feature {
+			t.Fatalf("unexpected degradation for %q: %+v", feature, degradation)
 		}
 	}
 }

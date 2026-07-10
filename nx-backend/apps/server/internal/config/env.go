@@ -384,34 +384,36 @@ func containsControlCharacter(value string) bool {
 	return false
 }
 
-func legacyVideoGatewayContract() GatewayContractConfig {
-	return GatewayContractConfig{
-		Name:          "legacy_flat_v1",
-		Version:       "1",
-		DeclaredModes: []string{"reference"},
-		Duration: FieldEncoding{
-			Name:      "seconds",
-			ValueType: "string",
-		},
-		AspectRatio: FieldEncoding{
-			Name:      "aspect_ratio",
-			ValueType: "string",
-		},
-		References: ReferenceEncoding{
-			Mode:          "flat_arrays",
-			ImageField:    "images",
-			VideoField:    "videos",
-			AudioField:    "audios",
-			SupportsRoles: []string{"reference_image", "reference_video", "reference_audio"},
-		},
-		Limits: MediaLimits{
-			MaxImages:            4,
-			MaxVideos:            3,
-			MaxAudios:            1,
-			MaxVideoSecondsTotal: 15,
-			MaxAudioSecondsTotal: 15,
-		},
-	}
+var legacyVideoGatewayContractTemplate = GatewayContractConfig{
+	Name:          "legacy_flat_v1",
+	Version:       "1",
+	DeclaredModes: []string{"reference"},
+	Duration: FieldEncoding{
+		Name:      "seconds",
+		ValueType: "string",
+	},
+	AspectRatio: FieldEncoding{
+		Name:      "aspect_ratio",
+		ValueType: "string",
+	},
+	References: ReferenceEncoding{
+		Mode:          "flat_arrays",
+		ImageField:    "images",
+		VideoField:    "videos",
+		AudioField:    "audios",
+		SupportsRoles: []string{"reference_image", "reference_video", "reference_audio"},
+	},
+	Limits: MediaLimits{
+		MaxImages:            4,
+		MaxVideos:            3,
+		MaxAudios:            1,
+		MaxVideoSecondsTotal: 15,
+		MaxAudioSecondsTotal: 15,
+	},
+}
+
+func LegacyVideoGatewayContract() GatewayContractConfig {
+	return cloneGatewayContract(legacyVideoGatewayContractTemplate)
 }
 
 func TrimGatewayContract(contract GatewayContractConfig) GatewayContractConfig {
@@ -539,7 +541,7 @@ func loadVideoGatewayContract() GatewayContractConfig {
 	version := strings.TrimSpace(os.Getenv("VIDEO_GATEWAY_CONTRACT_VERSION"))
 	raw := strings.TrimSpace(os.Getenv("VIDEO_GATEWAY_CONTRACT_JSON"))
 	if name == "" && version == "" && raw == "" {
-		return TrimGatewayContract(legacyVideoGatewayContract())
+		return TrimGatewayContract(LegacyVideoGatewayContract())
 	}
 
 	contract := GatewayContractConfig{}
@@ -548,7 +550,7 @@ func loadVideoGatewayContract() GatewayContractConfig {
 			return GatewayContractConfig{}
 		}
 	} else if name == "legacy_flat_v1" && version == "1" {
-		contract = legacyVideoGatewayContract()
+		contract = LegacyVideoGatewayContract()
 	}
 	if name != "" {
 		contract.Name = name
@@ -566,7 +568,7 @@ func loadVideoGatewayContract() GatewayContractConfig {
 	}
 	fallback := GatewayContractConfig{Name: normalized.Name, Version: normalized.Version}
 	if normalized.Name == "legacy_flat_v1" && normalized.Version == "1" {
-		fallback = legacyVideoGatewayContract()
+		fallback = LegacyVideoGatewayContract()
 	}
 	return TrimGatewayContract(fallback)
 }
