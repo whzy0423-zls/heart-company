@@ -10,6 +10,8 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"nine-xing/nx-backend/apps/server/internal/testutil"
 )
 
 func TestAppDailyQuizAPICreatesFiveQuestionBatchAndProgress(t *testing.T) {
@@ -310,20 +312,30 @@ func seedDailyQuizCompletedAnswers(t *testing.T, cardID int64, count int, roundN
 	if err := db.QueryRow(`SELECT app_user_id FROM app_user_cards WHERE id=$1`, cardID).Scan(&userID); err != nil {
 		t.Fatalf("query card user: %v", err)
 	}
-	for i := 0; i < count; i++ {
-		date := time.Now().AddDate(0, 0, -30+i/5).Format("2006-01-02")
+	for batchStart := 0; batchStart < count; batchStart += 5 {
+		batchSize := min(5, count-batchStart)
+		date := time.Now().AddDate(0, 0, -30+batchStart/5).Format("2006-01-02")
+		questionIDs := make([]int64, batchSize)
+		for offset := range batchSize {
+			questionIDs[offset] = int64(100000 + batchStart + offset)
+		}
+		questionIDsJSON, err := json.Marshal(questionIDs)
+		if err != nil {
+			t.Fatalf("marshal seed question IDs: %v", err)
+		}
 		var batchID int64
-		questionIDs := fmt.Sprintf("[%d]", 100000+i)
 		if err := db.QueryRow(`
 			INSERT INTO app_daily_quiz_batches (app_user_id, card_id, quiz_date, round_no, question_ids, answered_count, completed, completed_at)
-			VALUES ($1,$2,$3,$4,$5::jsonb,1,true,now())
-			RETURNING id`, userID, cardID, date, roundNo, questionIDs).Scan(&batchID); err != nil {
+			VALUES ($1,$2,$3,$4,$5::jsonb,$6,true,now())
+			RETURNING id`, userID, cardID, date, roundNo, questionIDsJSON, batchSize).Scan(&batchID); err != nil {
 			t.Fatalf("insert seed batch: %v", err)
 		}
-		if _, err := db.Exec(`
-			INSERT INTO app_daily_quiz_answers (batch_id, app_user_id, card_id, round_no, question_id, option_id, type_delta)
-			VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`, batchID, userID, cardID, roundNo, int64(100000+i), "a", `{"6":1}`); err != nil {
-			t.Fatalf("insert seed answer: %v", err)
+		for _, questionID := range questionIDs {
+			if _, err := db.Exec(`
+				INSERT INTO app_daily_quiz_answers (batch_id, app_user_id, card_id, round_no, question_id, option_id, type_delta)
+				VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`, batchID, userID, cardID, roundNo, questionID, "a", `{"6":1}`); err != nil {
+				t.Fatalf("insert seed answer: %v", err)
+			}
 		}
 	}
 }
@@ -358,6 +370,9 @@ func openCalibrationTestDB(t *testing.T) *sql.DB {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set TEST_DATABASE_URL to run server integration tests")
+	}
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		t.Fatal(err)
 	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {

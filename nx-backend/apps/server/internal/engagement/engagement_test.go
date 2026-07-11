@@ -8,12 +8,17 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"nine-xing/nx-backend/apps/server/internal/testutil"
 )
 
 func TestGameOverviewFallsBackToCenterNameFromKey(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set TEST_DATABASE_URL to run engagement database integration tests")
+	}
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		t.Fatal(err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

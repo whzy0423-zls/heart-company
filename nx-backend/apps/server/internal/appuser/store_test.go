@@ -7,12 +7,16 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/db"
+	"nine-xing/nx-backend/apps/server/internal/testutil"
 )
 
 func TestRotateRefreshTokenRevokesOldTokenAtomically(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set TEST_DATABASE_URL to run appuser store integration tests")
+	}
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		t.Fatal(err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -19,6 +19,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/db"
 	"nine-xing/nx-backend/apps/server/internal/storage"
+	"nine-xing/nx-backend/apps/server/internal/testutil"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 )
 
@@ -103,7 +104,17 @@ func TestUploadStoresFileInDatabaseWhenDBAvailable(t *testing.T) {
 		UploadMaxBytes: 1024,
 	}
 	handler := New(env, database)
-	token, err := auth.Sign(auth.UserInfo{ID: 1, Username: "admin"}, env.JWTSecret)
+	var adminID int64
+	var tokenVersion int
+	if err := database.QueryRow(`SELECT id, token_version FROM users WHERE username='admin'`).Scan(&adminID, &tokenVersion); err != nil {
+		t.Fatalf("find seeded admin: %v", err)
+	}
+	token, err := auth.Sign(auth.UserInfo{
+		ID:           adminID,
+		TokenKind:    auth.TokenKindBackend,
+		TokenVersion: tokenVersion,
+		Username:     "admin",
+	}, env.JWTSecret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,6 +298,9 @@ func openUploadTestDB(t *testing.T) *sql.DB {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set TEST_DATABASE_URL to run upload database integration test")
+	}
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

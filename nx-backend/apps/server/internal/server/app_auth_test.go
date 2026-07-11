@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/appuser"
+	"nine-xing/nx-backend/apps/server/internal/testutil"
 )
 
 func TestAppAuthSendSMS(t *testing.T) {
@@ -343,6 +344,9 @@ func clearAppDeviceTokens(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set TEST_DATABASE_URL to run server integration tests")
+	}
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		t.Fatal(err)
 	}
 	database, err := sql.Open("pgx", dsn)
 	if err != nil {

@@ -15,10 +15,18 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/db"
 	"nine-xing/nx-backend/apps/server/internal/server"
+	"nine-xing/nx-backend/apps/server/internal/testutil"
 )
 
 func TestVbenCompatibleAPI(t *testing.T) {
+	for run := 1; run <= 2; run++ {
+		t.Run(fmt.Sprintf("run_%d", run), testVbenCompatibleAPI)
+	}
+}
+
+func testVbenCompatibleAPI(t *testing.T) {
 	handler, configPath := newTestServer(t)
+	var adminToken string
 
 	t.Run("rejects protected resources without token", func(t *testing.T) {
 		response := perform(handler, http.MethodGet, "/api/user/info", "", nil)
@@ -40,12 +48,12 @@ func TestVbenCompatibleAPI(t *testing.T) {
 		if data["accessToken"] == "" {
 			t.Fatal("expected accessToken")
 		}
+		adminToken, _ = data["accessToken"].(string)
 	})
 
 	t.Run("returns user, codes, menus, and site config with token", func(t *testing.T) {
-		token := loginToken(t, handler)
 		for _, path := range []string{"/api/user/info", "/api/auth/codes", "/api/menu/all", "/api/site-config"} {
-			response := perform(handler, http.MethodGet, path, token, nil)
+			response := perform(handler, http.MethodGet, path, adminToken, nil)
 			body := decodeBody(t, response)
 			if response.Code != http.StatusOK || body.Code != 0 {
 				t.Fatalf("%s expected success, got status=%d body=%+v", path, response.Code, body)
@@ -54,7 +62,13 @@ func TestVbenCompatibleAPI(t *testing.T) {
 	})
 
 	t.Run("updates current user profile", func(t *testing.T) {
-		token := loginToken(t, handler)
+		originalResponse := perform(handler, http.MethodGet, "/api/user/info", adminToken, nil)
+		originalBody := decodeBody(t, originalResponse)
+		original, ok := originalBody.Data.(map[string]any)
+		if originalResponse.Code != http.StatusOK || originalBody.Code != 0 || !ok {
+			t.Fatalf("read original admin profile failed: status=%d body=%s", originalResponse.Code, originalResponse.Body.String())
+		}
+
 		payload := map[string]any{
 			"avatar":   "https://cdn.example.com/avatar.png",
 			"email":    "admin@example.com",
@@ -64,7 +78,25 @@ func TestVbenCompatibleAPI(t *testing.T) {
 			"username": "admin-new",
 		}
 
-		response := perform(handler, http.MethodPut, "/api/user/profile", token, payload)
+		defer func() {
+			restore := make(map[string]any, 6)
+			for _, field := range []string{"avatar", "email", "phone", "realName", "remark", "username"} {
+				restore[field] = original[field]
+			}
+			response := perform(handler, http.MethodPut, "/api/user/profile", adminToken, restore)
+			if response.Code != http.StatusOK {
+				t.Errorf("restore admin profile failed: status=%d body=%s", response.Code, response.Body.String())
+				return
+			}
+			restored := decodeBody(t, response).Data.(map[string]any)
+			for _, field := range []string{"avatar", "email", "phone", "realName", "remark", "username"} {
+				if restored[field] != original[field] {
+					t.Errorf("admin profile field %s was not restored: got=%v want=%v", field, restored[field], original[field])
+				}
+			}
+		}()
+
+		response := perform(handler, http.MethodPut, "/api/user/profile", adminToken, payload)
 		body := decodeBody(t, response)
 		if response.Code != http.StatusOK || body.Code != 0 {
 			t.Fatalf("expected profile update success, got status=%d body=%+v", response.Code, body)
@@ -74,7 +106,7 @@ func TestVbenCompatibleAPI(t *testing.T) {
 			t.Fatalf("unexpected profile payload: %+v", data)
 		}
 
-		infoResponse := perform(handler, http.MethodGet, "/api/user/info", token, nil)
+		infoResponse := perform(handler, http.MethodGet, "/api/user/info", adminToken, nil)
 		infoBody := decodeBody(t, infoResponse)
 		info := infoBody.Data.(map[string]any)
 		if info["username"] != "admin-new" || info["realName"] != "新的管理员" || info["avatar"] != "https://cdn.example.com/avatar.png" {
@@ -83,7 +115,6 @@ func TestVbenCompatibleAPI(t *testing.T) {
 	})
 
 	t.Run("updates site config", func(t *testing.T) {
-		token := loginToken(t, handler)
 		var config map[string]any
 		raw, _ := os.ReadFile(configPath)
 		if err := json.Unmarshal(raw, &config); err != nil {
@@ -91,7 +122,7 @@ func TestVbenCompatibleAPI(t *testing.T) {
 		}
 		config["site"].(map[string]any)["brandName"] = "九型芯之力"
 
-		response := perform(handler, http.MethodPut, "/api/site-config", token, config)
+		response := perform(handler, http.MethodPut, "/api/site-config", adminToken, config)
 		body := decodeBody(t, response)
 		if response.Code != http.StatusOK || body.Code != 0 {
 			t.Fatalf("expected save success, got status=%d body=%+v", response.Code, body)
@@ -104,31 +135,33 @@ func TestVbenCompatibleAPI(t *testing.T) {
 	})
 
 	t.Run("provides system management apis", func(t *testing.T) {
-		token := loginToken(t, handler)
-
+		suffix := time.Now().UnixNano()
+		username := fmt.Sprintf("tester_%d", suffix)
+		roleCode := fmt.Sprintf("tester_%d", suffix)
 		for _, path := range []string{"/api/system/user/list", "/api/system/role/list", "/api/system/menu/list"} {
-			response := perform(handler, http.MethodGet, path, token, nil)
+			response := perform(handler, http.MethodGet, path, adminToken, nil)
 			body := decodeBody(t, response)
 			if response.Code != http.StatusOK || body.Code != 0 {
 				t.Fatalf("%s expected success, got status=%d body=%+v", path, response.Code, body)
 			}
 		}
 
-		createUser := perform(handler, http.MethodPost, "/api/system/user", token, map[string]any{
-			"email":    "test@example.com",
+		createUser := perform(handler, http.MethodPost, "/api/system/user", adminToken, map[string]any{
+			"email":    fmt.Sprintf("tester_%d@example.com", suffix),
 			"nickname": "测试用户",
-			"roleIds":  []string{"2"},
+			"password": "123456",
+			"roleIds":  []string{},
 			"status":   1,
-			"username": "tester",
+			"username": username,
 		})
 		userBody := decodeBody(t, createUser)
 		if createUser.Code != http.StatusOK || userBody.Code != 0 {
 			t.Fatalf("expected create user success, got status=%d body=%+v", createUser.Code, userBody)
 		}
 
-		createRole := perform(handler, http.MethodPost, "/api/system/role", token, map[string]any{
-			"code":    "tester",
-			"menuIds": []int{1, 201},
+		createRole := perform(handler, http.MethodPost, "/api/system/role", adminToken, map[string]any{
+			"code":    roleCode,
+			"menuIds": []int{201},
 			"name":    "测试角色",
 			"remark":  "测试",
 			"status":  1,
@@ -140,26 +173,25 @@ func TestVbenCompatibleAPI(t *testing.T) {
 	})
 
 	t.Run("rejects query token for signup event stream", func(t *testing.T) {
-		token := loginToken(t, handler)
-		response := perform(handler, http.MethodGet, "/api/signups/events?token="+token, "", nil)
+		response := perform(handler, http.MethodGet, "/api/signups/events?token="+adminToken, "", nil)
 		if response.Code != http.StatusUnauthorized {
 			t.Fatalf("expected query token to be rejected for signup event stream, got %d body=%s", response.Code, response.Body.String())
 		}
 	})
 
 	t.Run("accepts authorization header for signup event stream", func(t *testing.T) {
-		token := loginToken(t, handler)
-		response := perform(handler, http.MethodGet, "/api/signups/events", token, nil)
-		if response.Code == http.StatusUnauthorized {
-			t.Fatalf("expected authorization header to authorize signup event stream, got %d body=%s", response.Code, response.Body.String())
-		}
-		if response.Code != http.StatusInternalServerError {
-			t.Fatalf("expected stream handler to run until recorder rejects streaming, got %d body=%s", response.Code, response.Body.String())
+		ctx, cancel := context.WithCancel(context.Background())
+		request := httptest.NewRequest(http.MethodGet, "/api/signups/events", nil).WithContext(ctx)
+		request.Header.Set("Authorization", "Bearer "+adminToken)
+		response := &cancelOnFlushRecorder{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !response.Flushed {
+			t.Fatalf("expected authorized event stream to flush, got %d body=%s", response.Code, response.Body.String())
 		}
 	})
 
 	t.Run("forbids backend api without matching permission", func(t *testing.T) {
-		token := lowPermissionToken(t, handler)
+		token := lowPermissionToken(t, handler, adminToken)
 		response := perform(handler, http.MethodGet, "/api/system/user/list", token, nil)
 		if response.Code != http.StatusForbidden {
 			t.Fatalf("expected 403 for missing System:User:List permission, got %d body=%s", response.Code, response.Body.String())
@@ -167,7 +199,7 @@ func TestVbenCompatibleAPI(t *testing.T) {
 	})
 
 	t.Run("forbids site config read without website permission", func(t *testing.T) {
-		token := lowPermissionToken(t, handler)
+		token := lowPermissionToken(t, handler, adminToken)
 		response := perform(handler, http.MethodGet, "/api/site-config", token, nil)
 		if response.Code != http.StatusForbidden {
 			t.Fatalf("expected 403 for missing Website:Read permission, got %d body=%s", response.Code, response.Body.String())
@@ -175,7 +207,7 @@ func TestVbenCompatibleAPI(t *testing.T) {
 	})
 
 	t.Run("forbids site config update without website write permission", func(t *testing.T) {
-		token := lowPermissionToken(t, handler)
+		token := lowPermissionToken(t, handler, adminToken)
 		var config map[string]any
 		raw, _ := os.ReadFile(configPath)
 		if err := json.Unmarshal(raw, &config); err != nil {
@@ -201,8 +233,7 @@ func TestVbenCompatibleAPI(t *testing.T) {
 			t.Fatalf("expected signup create success, got status=%d body=%+v", create.Code, createBody)
 		}
 
-		token := loginToken(t, handler)
-		list := perform(handler, http.MethodGet, "/api/signups/list?keyword=王同学", token, nil)
+		list := perform(handler, http.MethodGet, "/api/signups/list?keyword=王同学", adminToken, nil)
 		listBody := decodeBody(t, list)
 		if list.Code != http.StatusOK || listBody.Code != 0 {
 			t.Fatalf("expected signup list success, got status=%d body=%+v", list.Code, listBody)
@@ -214,8 +245,7 @@ func TestVbenCompatibleAPI(t *testing.T) {
 	})
 
 	t.Run("model config includes video analysis model", func(t *testing.T) {
-		token := loginToken(t, handler)
-		response := perform(handler, http.MethodGet, "/api/model-config", token, nil)
+		response := perform(handler, http.MethodGet, "/api/model-config", adminToken, nil)
 		body := decodeBody(t, response)
 		if response.Code != http.StatusOK || body.Code != 0 {
 			t.Fatalf("expected model config success, got status=%d body=%+v", response.Code, body)
@@ -227,8 +257,7 @@ func TestVbenCompatibleAPI(t *testing.T) {
 	})
 
 	t.Run("lists app user insights for admins only", func(t *testing.T) {
-		token := loginToken(t, handler)
-		response := perform(handler, http.MethodGet, "/api/app-users/insights", token, nil)
+		response := perform(handler, http.MethodGet, "/api/app-users/insights", adminToken, nil)
 		body := decodeBody(t, response)
 		if response.Code != http.StatusOK || body.Code != 0 {
 			t.Fatalf("expected app user insights success, got status=%d body=%+v", response.Code, body)
@@ -238,7 +267,7 @@ func TestVbenCompatibleAPI(t *testing.T) {
 			t.Fatalf("expected insights items array, got %+v", data)
 		}
 
-		lowToken := lowPermissionToken(t, handler)
+		lowToken := lowPermissionToken(t, handler, adminToken)
 		forbidden := perform(handler, http.MethodGet, "/api/app-users/insights", lowToken, nil)
 		if forbidden.Code != http.StatusForbidden {
 			t.Fatalf("expected 403 for missing Customer:UserInsights:List permission, got %d body=%s", forbidden.Code, forbidden.Body.String())
@@ -274,7 +303,7 @@ func TestVbenCompatibleAPI(t *testing.T) {
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
-				token := tokenWithMenus(t, handler, tc.name, tc.menuIDs)
+				token := tokenWithMenus(t, handler, adminToken, tc.name, tc.menuIDs)
 				for _, path := range tc.paths {
 					method := http.MethodGet
 					var payload any
@@ -292,7 +321,6 @@ func TestVbenCompatibleAPI(t *testing.T) {
 	})
 
 	t.Run("system update permission can edit without create permission", func(t *testing.T) {
-		adminToken := loginToken(t, handler)
 		targetUsername := fmt.Sprintf("target_%d", time.Now().UnixNano())
 		createTarget := perform(handler, http.MethodPost, "/api/system/user", adminToken, map[string]any{
 			"nickname": "待编辑用户",
@@ -311,7 +339,7 @@ func TestVbenCompatibleAPI(t *testing.T) {
 			t.Fatalf("missing target id: %+v", targetBody.Data)
 		}
 
-		token := tokenWithMenus(t, handler, "system_update_only", []int{401, 406})
+		token := tokenWithMenus(t, handler, adminToken, "system_update_only", []int{401, 406})
 		createForbidden := perform(handler, http.MethodPost, "/api/system/user", token, map[string]any{
 			"nickname": "不应创建",
 			"password": "123456",
@@ -336,11 +364,10 @@ func TestVbenCompatibleAPI(t *testing.T) {
 	})
 }
 
-func lowPermissionToken(t *testing.T, handler http.Handler) string {
+func lowPermissionToken(t *testing.T, handler http.Handler, adminToken string) string {
 	t.Helper()
-	adminToken := loginToken(t, handler)
 	suffix := time.Now().UnixNano()
-	roleCode := "low_permission"
+	roleCode := fmt.Sprintf("low_permission_%d", suffix)
 	username := "lowperm"
 
 	createRole := perform(handler, http.MethodPost, "/api/system/role", adminToken, map[string]any{
@@ -362,7 +389,7 @@ func lowPermissionToken(t *testing.T, handler http.Handler) string {
 
 	password := "123456"
 	createUser := perform(handler, http.MethodPost, "/api/system/user", adminToken, map[string]any{
-		"email":    "lowperm@example.com",
+		"email":    fmt.Sprintf("lowperm_%d@example.com", suffix),
 		"nickname": "低权限用户",
 		"password": password,
 		"roleIds":  []any{roleID},
@@ -395,9 +422,8 @@ func lowPermissionToken(t *testing.T, handler http.Handler) string {
 	return token
 }
 
-func tokenWithMenus(t *testing.T, handler http.Handler, name string, menuIDs []int) string {
+func tokenWithMenus(t *testing.T, handler http.Handler, adminToken string, name string, menuIDs []int) string {
 	t.Helper()
-	adminToken := loginToken(t, handler)
 	suffix := time.Now().UnixNano()
 	roleCode := fmt.Sprintf("probe_%s_%d", name, suffix)
 	username := fmt.Sprintf("probe_%s_%d", name, suffix)
@@ -452,6 +478,16 @@ type vbenBody struct {
 	Data any `json:"data"`
 }
 
+type cancelOnFlushRecorder struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+}
+
+func (r *cancelOnFlushRecorder) Flush() {
+	r.ResponseRecorder.Flush()
+	r.cancel()
+}
+
 func newTestServer(t *testing.T) (http.Handler, string) {
 	t.Helper()
 
@@ -461,6 +497,9 @@ func newTestServer(t *testing.T) (http.Handler, string) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set TEST_DATABASE_URL to run server integration tests")
+	}
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		t.Fatal(err)
 	}
 
 	dir := t.TempDir()
@@ -476,6 +515,9 @@ func newTestServer(t *testing.T) (http.Handler, string) {
 		t.Fatalf("db open: %v", err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
+	if _, err := database.ExecContext(ctx, `DELETE FROM request_rate_limits WHERE scope='admin_login'`); err != nil {
+		t.Fatalf("reset admin login rate limits: %v", err)
+	}
 
 	env := config.Env{
 		AdminPassword: "123456",
@@ -491,16 +533,23 @@ func newTestServer(t *testing.T) (http.Handler, string) {
 }
 
 func loginToken(t *testing.T, handler http.Handler) string {
+	return loginTokenForUsername(t, handler, "admin")
+}
+
+func loginTokenForUsername(t *testing.T, handler http.Handler, username string) string {
 	t.Helper()
 	response := perform(handler, http.MethodPost, "/api/auth/login", "", map[string]string{
 		"password": "123456",
-		"username": "admin",
+		"username": username,
 	})
 	body := decodeBody(t, response)
-	data := body.Data.(map[string]any)
+	data, ok := body.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("login %s failed: status=%d body=%s", username, response.Code, response.Body.String())
+	}
 	token, _ := data["accessToken"].(string)
 	if token == "" {
-		t.Fatal("missing token")
+		t.Fatalf("missing token for %s", username)
 	}
 	return token
 }

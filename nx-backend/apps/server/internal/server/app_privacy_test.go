@@ -13,6 +13,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/db"
+	"nine-xing/nx-backend/apps/server/internal/testutil"
 )
 
 func TestAppPrivacyPolicyReturnsFixedText(t *testing.T) {
@@ -148,6 +149,9 @@ func newAppAPITestServer(t *testing.T) (http.Handler, *sql.DB) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set TEST_DATABASE_URL to run server integration tests")
+	}
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

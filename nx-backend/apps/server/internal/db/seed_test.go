@@ -6,12 +6,17 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"nine-xing/nx-backend/apps/server/internal/testutil"
 )
 
 func TestSeedSelfHealsAdminRoleAndBinding(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set TEST_DATABASE_URL to run database seed integration test")
+	}
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
