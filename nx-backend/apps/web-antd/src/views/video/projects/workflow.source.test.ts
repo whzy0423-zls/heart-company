@@ -73,4 +73,10 @@ describe('guided workflow source contracts', () => {
     expect(polling).toContain('clearTimeout');
     expect(polling).toContain('maxAttempts');
   });
+
+  it('provides exact export participation, async jobs and stale result recovery', () => {
+    const exportStep = read('workflow/ExportStep.vue');
+    for (const text of ['includedShotIds', 'excludedShotIds', 'partialAcknowledged', 'composeProjectSafeApi', 'getComposeJobApi', 'jobId', 'progress', '重试合成', '内容已变化，需要重新合成', '复制链接', '下载成片']) expect(exportStep).toContain(text);
+    expect(exportStep).toContain('clearTimeout');
+  });
 });
