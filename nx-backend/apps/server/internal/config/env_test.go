@@ -20,6 +20,33 @@ func TestLoadMiniappChatDefaults(t *testing.T) {
 	}
 }
 
+func TestVideoGenerationModeFailsClosed(t *testing.T) {
+	cases := []struct {
+		name string
+		mode string
+		ack  string
+		want string
+	}{
+		{name: "default", want: "demo"},
+		{name: "paid without acknowledgement", mode: "paid", want: "demo"},
+		{name: "acknowledgement without paid mode", ack: "ALLOW_PAID_VIDEO_GENERATION", want: "demo"},
+		{name: "misspelled acknowledgement", mode: "paid", ack: "allow", want: "demo"},
+		{name: "unknown mode", mode: "production", ack: "ALLOW_PAID_VIDEO_GENERATION", want: "demo"},
+		{name: "explicit paid", mode: "paid", ack: "ALLOW_PAID_VIDEO_GENERATION", want: "paid"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+			t.Setenv("VIDEO_GENERATION_MODE", tc.mode)
+			t.Setenv("VIDEO_PAID_GENERATION_ACK", tc.ack)
+
+			if got := Load().Video.Mode; got != tc.want {
+				t.Fatalf("video generation mode=%q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadMiniappChatOverrides(t *testing.T) {
 	t.Setenv("MINIAPP_CHAT_RATE_LIMIT_PER_MINUTE", "5")
 	t.Setenv("MINIAPP_CHAT_TIMEOUT_SECONDS", "18")

@@ -3,9 +3,11 @@ package videoproject
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,23 +17,28 @@ import (
 
 // Composer 视频合成器
 type Composer struct {
-	tempDir string
+	tempDir    string
+	uploadRoot string
 }
 
 // NewComposer 创建合成器
-func NewComposer(tempDir string) *Composer {
+func NewComposer(tempDir string, uploadRoots ...string) *Composer {
 	if tempDir == "" {
 		tempDir = os.TempDir()
 	}
-	return &Composer{tempDir: tempDir}
+	uploadRoot := tempDir
+	if len(uploadRoots) > 0 && strings.TrimSpace(uploadRoots[0]) != "" {
+		uploadRoot = uploadRoots[0]
+	}
+	return &Composer{tempDir: tempDir, uploadRoot: uploadRoot}
 }
 
 // ComposeOptions 合成选项
 type ComposeOptions struct {
-	Transition       string // 转场效果: none, fade, wipeleft, circleopen
-	MusicURL         string // 背景音乐 URL
-	EnableSubtitles  bool   // 是否添加字幕
-	TransitionDur    float64 // 转场时长（秒），默认1.0
+	Transition      string  // 转场效果: none, fade, wipeleft, circleopen
+	MusicURL        string  // 背景音乐 URL
+	EnableSubtitles bool    // 是否添加字幕
+	TransitionDur   float64 // 转场时长（秒），默认1.0
 }
 
 // ComposeResult 合成结果
@@ -225,11 +232,11 @@ func (c *Composer) addBackgroundMusic(ctx context.Context, videoPath, musicURL s
 		"-i", musicPath,
 		"-t", fmt.Sprintf("%.2f", videoDuration), // 裁剪音乐到视频时长
 		"-c:v", "copy", // 视频流直接复制
-		"-c:a", "aac",  // 音频重新编码
+		"-c:a", "aac", // 音频重新编码
 		"-b:a", "128k",
 		"-map", "0:v:0", // 视频流
 		"-map", "1:a:0", // 音频流
-		"-shortest",     // 以最短的流为准
+		"-shortest", // 以最短的流为准
 		"-y",
 		outputPath,
 	)
@@ -262,6 +269,9 @@ func (c *Composer) downloadVideos(ctx context.Context, urls []string) ([]string,
 
 // downloadFile 下载单个文件
 func (c *Composer) downloadFile(ctx context.Context, url, prefix string) (string, error) {
+	if strings.HasPrefix(url, "/api/uploads/") {
+		return c.copyLocalUpload(url, prefix)
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return "", err
@@ -297,6 +307,83 @@ func (c *Composer) downloadFile(ctx context.Context, url, prefix string) (string
 		return "", err
 	}
 
+	return outputPath, nil
+}
+
+func (c *Composer) copyLocalUpload(rawURL, prefix string) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme != "" || parsed.Host != "" {
+		return "", fmt.Errorf("invalid local upload URL")
+	}
+	const publicPrefix = "/api/uploads/"
+	escapedPath := parsed.EscapedPath()
+	if !strings.HasPrefix(escapedPath, publicPrefix) {
+		return "", fmt.Errorf("invalid local upload URL")
+	}
+	relativePath, err := url.PathUnescape(strings.TrimPrefix(escapedPath, publicPrefix))
+	if err != nil || relativePath == "" || strings.Contains(relativePath, "\\") {
+		return "", fmt.Errorf("local upload path escapes upload root")
+	}
+	cleaned := filepath.Clean(filepath.FromSlash(relativePath))
+	if filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("local upload path escapes upload root")
+	}
+
+	root, err := filepath.Abs(c.uploadRoot)
+	if err != nil {
+		return "", err
+	}
+	source := filepath.Join(root, cleaned)
+	withinRoot, err := filepath.Rel(root, source)
+	if err != nil || withinRoot == ".." || strings.HasPrefix(withinRoot, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("local upload path escapes upload root")
+	}
+	info, err := os.Stat(source)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("local upload does not exist: %s", relativePath)
+	}
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("local upload is not a regular file")
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
+	realSource, err := filepath.EvalSymlinks(source)
+	if err != nil {
+		return "", err
+	}
+	withinRealRoot, err := filepath.Rel(realRoot, realSource)
+	if err != nil || withinRealRoot == ".." || strings.HasPrefix(withinRealRoot, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("local upload path escapes upload root")
+	}
+
+	input, err := os.Open(source)
+	if err != nil {
+		return "", err
+	}
+	defer input.Close()
+	ext := filepath.Ext(cleaned)
+	if ext == "" {
+		ext = ".mp4"
+	}
+	output, err := os.CreateTemp(c.tempDir, prefix+"-*"+ext)
+	if err != nil {
+		return "", err
+	}
+	outputPath := output.Name()
+	if _, err := io.Copy(output, input); err != nil {
+		_ = output.Close()
+		_ = os.Remove(outputPath)
+		return "", err
+	}
+	if err := output.Close(); err != nil {
+		_ = os.Remove(outputPath)
+		return "", err
+	}
 	return outputPath, nil
 }
 

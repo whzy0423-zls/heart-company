@@ -7,12 +7,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"nine-xing/nx-backend/apps/server/internal/video"
 )
 
 // BatchGenerator 批量生成器：按顺序生成项目的所有分镜
 type BatchGenerator struct {
-	generator *Generator
+	generator shotGenerator
 	store     *Store
+}
+
+type shotGenerator interface {
+	GenerateShot(context.Context, string, ...string) (video.Generation, error)
 }
 
 func NewBatchGenerator(generator *Generator, store *Store) *BatchGenerator {
@@ -39,6 +45,98 @@ type ShotGenerationResult struct {
 	Status       string `json:"status"` // success, failed, skipped
 	GenerationID string `json:"generationId"`
 	ErrorMessage string `json:"errorMessage"`
+}
+
+type SafeBatchGenerateItem struct {
+	RequestKey string `json:"requestKey"`
+	ShotID     string `json:"shotId"`
+}
+
+func (bg *BatchGenerator) GenerateSafe(
+	ctx context.Context,
+	projectID string,
+	items []SafeBatchGenerateItem,
+	parallel bool,
+) (BatchGenerateResult, error) {
+	workflow, err := bg.store.GetWorkflowStatus(ctx, projectID)
+	if err != nil {
+		return BatchGenerateResult{}, err
+	}
+	shots := make(map[string]Shot, len(workflow.Shots))
+	readiness := make(map[string]ShotReadiness, len(workflow.Shots))
+	for _, item := range workflow.Shots {
+		shots[item.Shot.ID] = item.Shot
+		readiness[item.Shot.ID] = item.Readiness
+	}
+	return executeSafeBatch(ctx, bg.generator, projectID, shots, readiness, items, parallel), nil
+}
+
+func executeSafeBatch(
+	ctx context.Context,
+	generator shotGenerator,
+	projectID string,
+	shots map[string]Shot,
+	readiness map[string]ShotReadiness,
+	items []SafeBatchGenerateItem,
+	parallel bool,
+) BatchGenerateResult {
+	requested := make([]string, 0, len(items))
+	keys := make(map[string]string, len(items))
+	for _, item := range items {
+		shotID := strings.TrimSpace(item.ShotID)
+		if _, exists := keys[shotID]; exists {
+			continue
+		}
+		requested = append(requested, shotID)
+		keys[shotID] = strings.TrimSpace(item.RequestKey)
+	}
+	eligibleIDs := FilterGeneratableShotIDs(readiness, requested)
+	result := BatchGenerateResult{
+		ProjectID:   projectID,
+		TotalShots:  len(eligibleIDs),
+		ShotResults: make([]ShotGenerationResult, len(eligibleIDs)),
+	}
+	generate := func(index int, shotID string) {
+		shot := shots[shotID]
+		item := ShotGenerationResult{ShotID: shot.ID, ShotName: shot.Name, OrderNum: shot.OrderNum}
+		if keys[shotID] == "" {
+			item.Status = "failed"
+			item.ErrorMessage = "缺少生成请求键"
+		} else {
+			generation, err := generator.GenerateShot(ctx, shotID, keys[shotID])
+			if err != nil {
+				item.Status = "failed"
+				item.ErrorMessage = err.Error()
+			} else {
+				item.Status = "success"
+				item.GenerationID = generation.ID
+			}
+		}
+		result.ShotResults[index] = item
+	}
+	if parallel {
+		var wg sync.WaitGroup
+		for index, shotID := range eligibleIDs {
+			wg.Add(1)
+			go func(index int, shotID string) {
+				defer wg.Done()
+				generate(index, shotID)
+			}(index, shotID)
+		}
+		wg.Wait()
+	} else {
+		for index, shotID := range eligibleIDs {
+			generate(index, shotID)
+		}
+	}
+	for _, item := range result.ShotResults {
+		if item.Status == "success" {
+			result.SuccessCount++
+		} else {
+			result.FailedCount++
+		}
+	}
+	return result
 }
 
 func filterShotsByIDs(shots []Shot, selectedShotIDs []string) []Shot {

@@ -10,47 +10,33 @@ const readWeb = (path: string) => readFileSync(resolve(webRoot, path), 'utf8');
 const readRepo = (path: string) => readFileSync(resolve(repoRoot, path), 'utf8');
 
 describe('production workbench mode entry', () => {
-  it('registers production mode and short mode routes under /video', () => {
+  it('registers production mode without an unavailable short route', () => {
     const routes = readWeb('src/router/routes/modules/video.ts');
 
     expect(routes).toContain("path: 'production'");
     expect(routes).toContain("name: 'VideoProduction'");
     expect(routes).toContain("#/views/video/production/index.vue");
-    expect(routes).toContain("path: 'production/short'");
-    expect(routes).toContain("name: 'VideoProductionShort'");
-    expect(routes).toContain("#/views/video/production/short.vue");
-    expect(routes).toContain("activePath: '/video/production'");
+    expect(routes).not.toContain("path: 'production/short'");
+    expect(routes).not.toContain("name: 'VideoProductionShort'");
   });
 
-  it('offers project mode and short mode choices with stable target paths', () => {
+  it('offers a real project creation center', () => {
     const page = readWeb('src/views/video/production/index.vue');
 
     expect(page).toContain('制片工作台');
-    expect(page).toContain('项目制');
-    expect(page).toContain('短片制');
-    expect(page).toContain('/video/projects');
-    expect(page).toContain('/video/production/short');
+    expect(page).toContain('listProjectsApi');
+    expect(page).toContain('createProjectApi');
+    expect(page).toContain('新建项目');
+    expect(page).toContain('查看全部项目');
+    expect(page).not.toContain('短片制');
   });
 
 
 
-  it('imports Ant Design components used by a-prefixed mode cards', () => {
+  it('does not use marketing mode cards', () => {
     const page = readWeb('src/views/video/production/index.vue');
-    const short = readWeb('src/views/video/production/short.vue');
-
-    for (const alias of ['Button as AButton', 'Card as ACard', 'Tag as ATag']) {
-      expect(page).toContain(alias);
-    }
-    for (const alias of [
-      'Button as AButton',
-      'Card as ACard',
-      'Result as AResult',
-      'Space as ASpace',
-      'Step as AStep',
-      'Steps as ASteps',
-    ]) {
-      expect(short).toContain(alias);
-    }
+    expect(page).not.toContain('ACard');
+    expect(page).not.toContain('production-hero');
   });
 
   it('seeds backend-access menus for production mode', () => {
@@ -59,9 +45,8 @@ describe('production workbench mode entry', () => {
     expect(db).toContain('VideoProduction');
     expect(db).toContain('/video/production');
     expect(db).toContain('/video/production/index');
-    expect(db).toContain('VideoProductionShort');
-    expect(db).toContain('/video/production/short');
-    expect(db).toContain('ActivePath: "/video/production"');
+    expect(db).not.toContain('VideoProductionShort');
+    expect(db).not.toContain('/video/production/short');
     expect(db).toContain('metaMap["activePath"]');
   });
 
@@ -75,17 +60,6 @@ describe('production workbench mode entry', () => {
     expect(projectMenuLine).toContain('Title: "项目列表"');
     expect(projectMenuLine).not.toContain('HideInMenu: true');
     expect(projectMenuLine).not.toContain('ActivePath: "/video/production"');
-  });
-
-  it('keeps short mode as a clear placeholder with project-mode escape route', () => {
-    const page = readWeb('src/views/video/production/short.vue');
-
-    expect(page).toContain('短片制工作台');
-    expect(page).toContain('功能规划中');
-    expect(page).toContain('脚本输入');
-    expect(page).toContain('快速分镜');
-    expect(page).toContain('/video/production');
-    expect(page).toContain('/video/projects');
   });
 
   it('documents activePath and activeMenu compatibility in backend menu metadata', () => {

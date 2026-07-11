@@ -3,10 +3,18 @@ package videoproject
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
@@ -20,10 +28,10 @@ type ProjectComposer struct {
 	uploads  *uploadasset.Store
 }
 
-func NewProjectComposer(store *Store, uploader storage.ObjectUploader, uploads *uploadasset.Store) *ProjectComposer {
+func NewProjectComposer(store *Store, uploader storage.ObjectUploader, uploads *uploadasset.Store, uploadRoot string) *ProjectComposer {
 	return &ProjectComposer{
 		store:    store,
-		composer: NewComposer("/tmp"),
+		composer: NewComposer("/tmp", uploadRoot),
 		uploader: uploader,
 		uploads:  uploads,
 	}
@@ -31,9 +39,111 @@ func NewProjectComposer(store *Store, uploader storage.ObjectUploader, uploads *
 
 // ComposeProjectInput 合成输入参数
 type ComposeProjectInput struct {
-	Transition      string `json:"transition"`      // 转场效果
-	MusicURL        string `json:"musicUrl"`        // 背景音乐
-	EnableSubtitles bool   `json:"enableSubtitles"` // 是否添加字幕
+	Transition          string   `json:"transition"`      // 转场效果
+	MusicURL            string   `json:"musicUrl"`        // 背景音乐
+	EnableSubtitles     bool     `json:"enableSubtitles"` // 是否添加字幕
+	ExcludedShotIDs     []string `json:"excludedShotIds"`
+	PartialAcknowledged bool     `json:"partialAcknowledged"`
+}
+
+type ComposeShotFacts struct {
+	GenerationRevision   int
+	LatestGenerationID   string
+	LegacyVideoURL       string
+	OrderNum             int
+	SelectedGenerationID string
+	SelectedRevision     int
+	SelectedStatus       string
+	SelectedVideoURL     string
+	ShotID               string
+}
+
+type ComposeParticipant struct {
+	GenerationID string `json:"generationId"`
+	OrderNum     int    `json:"orderNum"`
+	ShotID       string `json:"shotId"`
+	ShotRevision int    `json:"shotRevision"`
+}
+
+type ComposeInputSnapshot struct {
+	EnableSubtitles     bool                 `json:"enableSubtitles"`
+	ExcludedShotIDs     []string             `json:"excludedShotIds"`
+	Included            []ComposeParticipant `json:"included"`
+	InputHash           string               `json:"inputHash"`
+	MusicURL            string               `json:"musicUrl"`
+	PartialAcknowledged bool                 `json:"partialAcknowledged"`
+	Transition          string               `json:"transition"`
+}
+
+func BuildComposeInputSnapshot(shots []ComposeShotFacts, input ComposeProjectInput) (ComposeInputSnapshot, error) {
+	known := make(map[string]ComposeShotFacts, len(shots))
+	for _, shot := range shots {
+		known[strings.TrimSpace(shot.ShotID)] = shot
+	}
+	excluded := normalizedStringSet(input.ExcludedShotIDs)
+	if len(excluded) > 0 && !input.PartialAcknowledged {
+		return ComposeInputSnapshot{}, fmt.Errorf("partial compose requires per-request acknowledgement")
+	}
+	excludedSet := make(map[string]struct{}, len(excluded))
+	for _, shotID := range excluded {
+		if _, exists := known[shotID]; !exists {
+			return ComposeInputSnapshot{}, fmt.Errorf("unknown excluded shot %s", shotID)
+		}
+		excludedSet[shotID] = struct{}{}
+	}
+	sortedShots := append([]ComposeShotFacts(nil), shots...)
+	sort.Slice(sortedShots, func(i, j int) bool {
+		if sortedShots[i].OrderNum == sortedShots[j].OrderNum {
+			return sortedShots[i].ShotID < sortedShots[j].ShotID
+		}
+		return sortedShots[i].OrderNum < sortedShots[j].OrderNum
+	})
+	included := make([]ComposeParticipant, 0, len(sortedShots))
+	for _, shot := range sortedShots {
+		if _, skip := excludedSet[shot.ShotID]; skip {
+			continue
+		}
+		if strings.TrimSpace(shot.SelectedGenerationID) == "" {
+			return ComposeInputSnapshot{}, fmt.Errorf("shot %s has no explicit selected generation", shot.ShotID)
+		}
+		if !canSelectGeneration(shot.ShotID, shot.ShotID, shot.SelectedStatus, shot.SelectedVideoURL) {
+			return ComposeInputSnapshot{}, fmt.Errorf("shot %s selected generation is not successful", shot.ShotID)
+		}
+		if shot.SelectedRevision != shot.GenerationRevision {
+			return ComposeInputSnapshot{}, fmt.Errorf("shot %s selected generation is stale", shot.ShotID)
+		}
+		included = append(included, ComposeParticipant{
+			GenerationID: shot.SelectedGenerationID,
+			OrderNum:     shot.OrderNum,
+			ShotID:       shot.ShotID,
+			ShotRevision: shot.SelectedRevision,
+		})
+	}
+	if len(included) == 0 {
+		return ComposeInputSnapshot{}, fmt.Errorf("compose requires at least one included shot")
+	}
+	snapshot := ComposeInputSnapshot{
+		EnableSubtitles:     input.EnableSubtitles,
+		ExcludedShotIDs:     excluded,
+		Included:            included,
+		MusicURL:            strings.TrimSpace(input.MusicURL),
+		PartialAcknowledged: input.PartialAcknowledged,
+		Transition:          strings.TrimSpace(input.Transition),
+	}
+	hashPayload := struct {
+		EnableSubtitles bool                 `json:"enableSubtitles"`
+		ExcludedShotIDs []string             `json:"excludedShotIds"`
+		Included        []ComposeParticipant `json:"included"`
+		MusicURL        string               `json:"musicUrl"`
+		Transition      string               `json:"transition"`
+	}{snapshot.EnableSubtitles, snapshot.ExcludedShotIDs, snapshot.Included, snapshot.MusicURL, snapshot.Transition}
+	raw, _ := json.Marshal(hashPayload)
+	snapshot.InputHash = fmt.Sprintf("%x", sha256.Sum256(raw))
+	return snapshot, nil
+}
+
+func ComposeResultIsCurrent(storedInputHash, currentInputHash string) bool {
+	return strings.TrimSpace(storedInputHash) != "" && storedInputHash == currentInputHash
 }
 
 // ComposeProjectResult 合成结果
@@ -45,6 +155,237 @@ type ComposeProjectResult struct {
 	ShotCount    int     `json:"shotCount"`
 	Status       string  `json:"status"`
 	ErrorMessage string  `json:"errorMessage"`
+}
+
+type ComposeJob struct {
+	ErrorMessage  string               `json:"error"`
+	ID            string               `json:"jobId"`
+	InputHash     string               `json:"inputHash"`
+	InputSnapshot ComposeInputSnapshot `json:"inputSnapshot"`
+	IsCurrent     bool                 `json:"isCurrent"`
+	Progress      int                  `json:"progress"`
+	ProjectID     string               `json:"projectId"`
+	Status        string               `json:"status"`
+	VideoURL      string               `json:"videoUrl"`
+}
+
+type ComposeActiveJobError struct {
+	ProjectID string
+}
+
+func (e *ComposeActiveJobError) Error() string {
+	return fmt.Sprintf("project %s already has an active compose job", e.ProjectID)
+}
+
+// RecoverInterruptedComposeJobs releases compose jobs whose in-memory workers
+// were lost with the previous server process.
+func (s *Store) RecoverInterruptedComposeJobs(ctx context.Context, reason string) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("视频项目存储不可用")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "服务重启导致合成中断，请重试"
+	}
+	var recovered int64
+	err := s.db.QueryRowContext(ctx, `
+		WITH interrupted AS (
+			UPDATE video_compose_jobs
+			SET status='failed', error_message=$1, update_time=now()
+			WHERE status IN ('queued','processing')
+			RETURNING project_id
+		), updated_projects AS (
+			UPDATE video_projects
+			SET compose_status='failed', update_time=now()
+			WHERE id IN (SELECT DISTINCT project_id FROM interrupted)
+			RETURNING id
+		)
+		SELECT count(*) FROM interrupted`, reason,
+	).Scan(&recovered)
+	return recovered, err
+}
+
+func (pc *ProjectComposer) composeShotFacts(ctx context.Context, projectID string) ([]ComposeShotFacts, error) {
+	shots, err := pc.store.ListShots(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	facts := make([]ComposeShotFacts, 0, len(shots))
+	for _, shot := range shots {
+		facts = append(facts, ComposeShotFacts{
+			GenerationRevision:   shot.GenerationRevision,
+			LatestGenerationID:   shot.GenerationID,
+			LegacyVideoURL:       shot.VideoURL,
+			OrderNum:             shot.OrderNum,
+			SelectedGenerationID: shot.SelectedGenerationID,
+			SelectedRevision:     shot.SelectedGenerationRevision,
+			SelectedStatus:       shot.SelectedGenerationStatus,
+			SelectedVideoURL:     shot.VideoURL,
+			ShotID:               shot.ID,
+		})
+	}
+	return facts, nil
+}
+
+func (pc *ProjectComposer) StartCompose(ctx context.Context, projectID string, input ComposeProjectInput) (ComposeJob, error) {
+	pid, err := parseID(projectID)
+	if err != nil {
+		return ComposeJob{}, err
+	}
+	shots, err := pc.composeShotFacts(ctx, projectID)
+	if err != nil {
+		return ComposeJob{}, err
+	}
+	snapshot, err := BuildComposeInputSnapshot(shots, input)
+	if err != nil {
+		return ComposeJob{}, err
+	}
+	rawSnapshot, err := json.Marshal(snapshot)
+	if err != nil {
+		return ComposeJob{}, err
+	}
+	var jobID string
+	err = pc.store.db.QueryRowContext(ctx, `
+		INSERT INTO video_compose_jobs (
+		  project_id, status, transition_type, music_url,
+		  compose_input_hash, compose_input_snapshot, progress
+		) VALUES ($1,'queued',$2,$3,$4,$5::jsonb,0)
+		RETURNING id::text`,
+		pid, snapshot.Transition, snapshot.MusicURL, snapshot.InputHash, rawSnapshot,
+	).Scan(&jobID)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.ConstraintName == "idx_video_compose_jobs_active_project" {
+			return ComposeJob{}, &ComposeActiveJobError{ProjectID: projectID}
+		}
+		return ComposeJob{}, err
+	}
+	job := ComposeJob{ID: jobID, ProjectID: projectID, Status: "queued", Progress: 0, InputHash: snapshot.InputHash, InputSnapshot: snapshot}
+	go pc.runComposeJob(projectID, jobID, snapshot)
+	return job, nil
+}
+
+func (pc *ProjectComposer) runComposeJob(projectID, jobID string, snapshot ComposeInputSnapshot) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	fail := func(err error) {
+		message := "合成任务失败"
+		if err != nil {
+			message = err.Error()
+		}
+		_, _ = pc.store.db.ExecContext(ctx, `
+			UPDATE video_compose_jobs
+			SET status='failed', error_message=$1, update_time=now()
+			WHERE id=$2`, message, jobID)
+		_, _ = pc.store.db.ExecContext(ctx, `
+			UPDATE video_projects SET compose_status='failed', update_time=now() WHERE id=$1`, projectID)
+	}
+	if _, err := pc.store.db.ExecContext(ctx, `
+		UPDATE video_compose_jobs SET status='processing', progress=10, update_time=now() WHERE id=$1`, jobID); err != nil {
+		return
+	}
+	videoURLs := make([]string, 0, len(snapshot.Included))
+	for _, participant := range snapshot.Included {
+		var videoURL string
+		if err := pc.store.db.QueryRowContext(ctx, `
+			SELECT video_url FROM video_generations
+			WHERE id=$1::bigint AND shot_id=$2::bigint
+			  AND status IN ('completed','succeeded') AND video_url<>''`,
+			participant.GenerationID, participant.ShotID,
+		).Scan(&videoURL); err != nil {
+			fail(fmt.Errorf("读取分镜 %s 的选中版本失败: %w", participant.ShotID, err))
+			return
+		}
+		videoURLs = append(videoURLs, videoURL)
+	}
+	_, _ = pc.store.db.ExecContext(ctx, `UPDATE video_compose_jobs SET progress=30, update_time=now() WHERE id=$1`, jobID)
+	result, err := pc.composer.ComposeVideos(ctx, videoURLs, ComposeOptions{
+		Transition: snapshot.Transition, MusicURL: snapshot.MusicURL,
+		EnableSubtitles: snapshot.EnableSubtitles, TransitionDur: 1,
+	})
+	if err != nil {
+		fail(err)
+		return
+	}
+	defer os.Remove(result.OutputPath)
+	_, _ = pc.store.db.ExecContext(ctx, `UPDATE video_compose_jobs SET progress=70, update_time=now() WHERE id=$1`, jobID)
+	project, err := pc.store.GetProject(ctx, projectID)
+	if err != nil {
+		fail(err)
+		return
+	}
+	videoURL, err := pc.uploadComposedVideo(ctx, result.OutputPath, project.Name)
+	if err != nil {
+		fail(err)
+		return
+	}
+	_, _ = pc.store.db.ExecContext(ctx, `UPDATE video_compose_jobs SET progress=90, update_time=now() WHERE id=$1`, jobID)
+	tx, err := pc.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		fail(err)
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE video_compose_jobs
+		SET status='completed', progress=100, final_video_url=$1, error_message='', update_time=now()
+		WHERE id=$2`, videoURL, jobID); err != nil {
+		fail(err)
+		return
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE video_projects
+		SET final_video_url=$1, final_video_input_hash=$2, compose_status='completed', update_time=now()
+		WHERE id=$3`, videoURL, snapshot.InputHash, projectID); err != nil {
+		fail(err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		fail(err)
+	}
+}
+
+func (pc *ProjectComposer) GetComposeJob(ctx context.Context, projectID, jobID string) (ComposeJob, error) {
+	pid, err := parseID(projectID)
+	if err != nil {
+		return ComposeJob{}, err
+	}
+	jid, err := parseID(jobID)
+	if err != nil {
+		return ComposeJob{}, err
+	}
+	_, _ = pc.store.db.ExecContext(ctx, `
+		UPDATE video_compose_jobs
+		SET status='failed', error_message='服务重启导致合成中断，请重试', update_time=now()
+		WHERE project_id=$1 AND status IN ('queued','processing')
+		  AND update_time < now() - interval '15 minutes'`, pid)
+	var job ComposeJob
+	var rawSnapshot []byte
+	err = pc.store.db.QueryRowContext(ctx, `
+		SELECT id::text, project_id::text, status, progress, error_message,
+		       compose_input_hash, compose_input_snapshot, final_video_url
+		FROM video_compose_jobs WHERE id=$1 AND project_id=$2`, jid, pid,
+	).Scan(&job.ID, &job.ProjectID, &job.Status, &job.Progress, &job.ErrorMessage,
+		&job.InputHash, &rawSnapshot, &job.VideoURL)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return ComposeJob{}, fmt.Errorf("合成任务不存在")
+		}
+		return ComposeJob{}, err
+	}
+	if err := json.Unmarshal(rawSnapshot, &job.InputSnapshot); err != nil {
+		return ComposeJob{}, err
+	}
+	shots, err := pc.composeShotFacts(ctx, projectID)
+	if err == nil {
+		current, buildErr := BuildComposeInputSnapshot(shots, ComposeProjectInput{
+			Transition: job.InputSnapshot.Transition, MusicURL: job.InputSnapshot.MusicURL,
+			EnableSubtitles: job.InputSnapshot.EnableSubtitles,
+			ExcludedShotIDs: job.InputSnapshot.ExcludedShotIDs, PartialAcknowledged: job.InputSnapshot.PartialAcknowledged,
+		})
+		job.IsCurrent = buildErr == nil && job.Status == "completed" && ComposeResultIsCurrent(job.InputHash, current.InputHash)
+	}
+	return job, nil
 }
 
 // ComposeProject 合成项目视频
