@@ -59,8 +59,9 @@ func TestAskUsesGeneratorWithRetrievedContext(t *testing.T) {
 	}, WithGenerator(generator))
 
 	result, err := service.Ask(context.Background(), AskInput{
-		Question:    "观察型怎么沟通？",
-		UserProfile: UserProfile{Nickname: "阿九", MainType: 5},
+		Question:            "观察型怎么沟通？",
+		ConversationSummary: "用户正在讨论与观察型同事的沟通问题。",
+		UserProfile:         UserProfile{Nickname: "阿九", MainType: 5},
 		History: []Message{
 			{Role: "user", Content: "我刚测完"},
 			{Role: "assistant", Content: "你可以问具体场景"},
@@ -78,6 +79,9 @@ func TestAskUsesGeneratorWithRetrievedContext(t *testing.T) {
 	if len(generator.input.History) != 2 {
 		t.Fatalf("expected history to be passed, got %+v", generator.input.History)
 	}
+	if generator.input.ConversationSummary != "用户正在讨论与观察型同事的沟通问题。" {
+		t.Fatalf("expected conversation summary to be passed, got %+v", generator.input)
+	}
 }
 
 func TestAskLimitsGeneratorHistory(t *testing.T) {
@@ -90,10 +94,25 @@ func TestAskLimitsGeneratorHistory(t *testing.T) {
 		{Role: "system", Content: "不应该传给模型"},
 		{Role: "user", Content: "旧问题"},
 		{Role: "assistant", Content: "旧回答"},
+		{Role: "user", Content: "问题1"},
+		{Role: "assistant", Content: "回答1"},
 		{Role: "user", Content: "问题2"},
 		{Role: "assistant", Content: "回答2"},
 		{Role: "user", Content: "问题3"},
 		{Role: "assistant", Content: "回答3"},
+		{Role: "user", Content: "问题4"},
+		{Role: "assistant", Content: "回答4"},
+		{Role: "user", Content: "问题5"},
+		{Role: "assistant", Content: "回答5"},
+		{Role: "user", Content: "问题6"},
+		{Role: "user", Content: "问题7"},
+		{Role: "assistant", Content: "回答7"},
+		{Role: "user", Content: "问题8"},
+		{Role: "assistant", Content: "回答8"},
+		{Role: "user", Content: "问题9"},
+		{Role: "assistant", Content: "回答9"},
+		{Role: "user", Content: "问题10"},
+		{Role: "assistant", Content: "回答10"},
 		{Role: "user", Content: strings.Repeat("很长", 160)},
 	}
 
@@ -101,8 +120,11 @@ func TestAskLimitsGeneratorHistory(t *testing.T) {
 		t.Fatalf("Ask returned error: %v", err)
 	}
 
-	if len(generator.input.History) != 6 {
-		t.Fatalf("expected 6 recent history messages, got %+v", generator.input.History)
+	if len(generator.input.History) != 20 {
+		t.Fatalf("expected 20 recent history messages, got %+v", generator.input.History)
+	}
+	if generator.input.History[0].Content != "问题1" {
+		t.Fatalf("expected oldest excess messages to be removed, got %+v", generator.input.History)
 	}
 	last := generator.input.History[len(generator.input.History)-1]
 	if len([]rune(last.Content)) != 223 || !strings.HasSuffix(last.Content, "...") {
@@ -146,7 +168,10 @@ func TestAskStreamEmitsGeneratedChunksAndReturnsMetadata(t *testing.T) {
 	service := NewService([]Document{{ID: "type-1", Title: "1号", Content: "1号重视原则和秩序。"}}, WithGenerator(generator))
 
 	var chunks []string
-	answer, err := service.AskStream(context.Background(), AskInput{Question: "1号孩子怎么办？"}, func(delta string) error {
+	answer, err := service.AskStream(context.Background(), AskInput{
+		Question:            "1号孩子怎么办？",
+		ConversationSummary: "用户之前提到孩子害怕犯错。",
+	}, func(delta string) error {
 		chunks = append(chunks, delta)
 		return nil
 	})
@@ -164,5 +189,8 @@ func TestAskStreamEmitsGeneratedChunksAndReturnsMetadata(t *testing.T) {
 	}
 	if len(chunks) < 2 {
 		t.Fatalf("expected generated answer to be split into multiple stream chunks, got %#v", chunks)
+	}
+	if generator.input.ConversationSummary != "用户之前提到孩子害怕犯错。" {
+		t.Fatalf("streaming generator did not receive conversation summary: %+v", generator.input)
 	}
 }

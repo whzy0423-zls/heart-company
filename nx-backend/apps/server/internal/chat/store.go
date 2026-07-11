@@ -30,6 +30,11 @@ type Message struct {
 	CreateTime string          `json:"createTime"`
 }
 
+type ConversationState struct {
+	Summary                 string
+	SummaryThroughMessageID int64
+}
+
 type Store struct{ db *sql.DB }
 
 func NewStore(db *sql.DB) *Store { return &Store{db: db} }
@@ -126,6 +131,95 @@ func (s *Store) ListMessages(ctx context.Context, sessionID int64) ([]Message, e
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// ListRecentMessages 返回会话最近的有限条消息，并恢复为时间正序。
+func (s *Store) ListRecentMessages(ctx context.Context, sessionID int64, limit int) ([]Message, error) {
+	if sessionID <= 0 || limit <= 0 {
+		return nil, nil
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, session_id, role, content, sources, favorite, feedback, create_time
+		 FROM app_chat_messages
+		 WHERE session_id = $1
+		   AND role IN ('user', 'assistant')
+		   AND btrim(content) <> ''
+		 ORDER BY create_time DESC, id DESC
+		 LIMIT $2`,
+		sessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]Message, 0, limit)
+	for rows.Next() {
+		var m Message
+		var createTime time.Time
+		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Content, &m.Sources, &m.Favorite, &m.Feedback, &createTime); err != nil {
+			return nil, err
+		}
+		m.CreateTime = formatTime(createTime)
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for left, right := 0, len(out)-1; left < right; left, right = left+1, right-1 {
+		out[left], out[right] = out[right], out[left]
+	}
+	return out, nil
+}
+
+func (s *Store) GetConversationState(ctx context.Context, sessionID int64) (ConversationState, error) {
+	var state ConversationState
+	err := s.db.QueryRowContext(ctx,
+		`SELECT context_summary, context_summary_through_message_id
+		 FROM app_chat_sessions WHERE id = $1`,
+		sessionID,
+	).Scan(&state.Summary, &state.SummaryThroughMessageID)
+	return state, err
+}
+
+func (s *Store) ListMessagesAfter(ctx context.Context, sessionID, afterMessageID int64) ([]Message, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, session_id, role, content, sources, favorite, feedback, create_time
+		 FROM app_chat_messages
+		 WHERE session_id = $1 AND id > $2
+		 ORDER BY id`,
+		sessionID, afterMessageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Message
+	for rows.Next() {
+		var message Message
+		var createTime time.Time
+		if err := rows.Scan(&message.ID, &message.SessionID, &message.Role, &message.Content, &message.Sources, &message.Favorite, &message.Feedback, &createTime); err != nil {
+			return nil, err
+		}
+		message.CreateTime = formatTime(createTime)
+		out = append(out, message)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UpdateConversationSummary(ctx context.Context, sessionID, expectedThroughMessageID int64, summary string, throughMessageID int64) (bool, error) {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE app_chat_sessions
+		 SET context_summary = $2, context_summary_through_message_id = $3
+		 WHERE id = $1 AND context_summary_through_message_id = $4`,
+		sessionID, summary, throughMessageID, expectedThroughMessageID)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
 }
 
 // SavePair 在事务中保存用户消息 + AI回答，并刷新 session.updated_at。

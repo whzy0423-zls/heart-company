@@ -9,6 +9,8 @@ import (
 	"unicode/utf8"
 )
 
+const recentHistoryLimit = 20
+
 type Document struct {
 	ID      string   `json:"id"`
 	Title   string   `json:"title"`
@@ -34,9 +36,10 @@ type Message struct {
 }
 
 type AskInput struct {
-	History     []Message   `json:"history"`
-	Question    string      `json:"question"`
-	UserProfile UserProfile `json:"userProfile"`
+	History             []Message   `json:"history"`
+	ConversationSummary string      `json:"conversationSummary,omitempty"`
+	Question            string      `json:"question"`
+	UserProfile         UserProfile `json:"userProfile"`
 }
 
 type Answer struct {
@@ -60,11 +63,16 @@ type StreamingGenerator interface {
 	GenerateStream(ctx context.Context, input GenerateInput, emit StreamEmitter) (string, error)
 }
 
+type ConversationSummarizer interface {
+	SummarizeConversation(ctx context.Context, previousSummary string, messages []Message) (string, error)
+}
+
 type GenerateInput struct {
-	History     []Message   `json:"history"`
-	Question    string      `json:"question"`
-	Sources     []Source    `json:"sources"`
-	UserProfile UserProfile `json:"userProfile"`
+	History             []Message   `json:"history"`
+	ConversationSummary string      `json:"conversationSummary,omitempty"`
+	Question            string      `json:"question"`
+	Sources             []Source    `json:"sources"`
+	UserProfile         UserProfile `json:"userProfile"`
 }
 
 type Option func(*Service)
@@ -109,10 +117,11 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 		// 只有 AI 不可用或返回空时，才回退到固定兜底文案。
 		if s.generator != nil {
 			generated, err := s.generator.Generate(ctx, GenerateInput{
-				History:     cleanHistory(input.History, 6),
-				Question:    question,
-				Sources:     nil,
-				UserProfile: input.UserProfile,
+				History:             cleanHistory(input.History, recentHistoryLimit),
+				ConversationSummary: input.ConversationSummary,
+				Question:            question,
+				Sources:             nil,
+				UserProfile:         input.UserProfile,
 			})
 			if err == nil && strings.TrimSpace(generated) != "" {
 				return Answer{
@@ -155,10 +164,11 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 
 	if s.generator != nil {
 		generated, err := s.generator.Generate(ctx, GenerateInput{
-			History:     cleanHistory(input.History, 6),
-			Question:    question,
-			Sources:     sources,
-			UserProfile: input.UserProfile,
+			History:             cleanHistory(input.History, recentHistoryLimit),
+			ConversationSummary: input.ConversationSummary,
+			Question:            question,
+			Sources:             sources,
+			UserProfile:         input.UserProfile,
 		})
 		if err == nil && strings.TrimSpace(generated) != "" {
 			return Answer{Answer: strings.TrimSpace(generated), Sources: sources, Suggestions: suggestions}, nil
@@ -181,10 +191,11 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 	if len(matches) == 0 {
 		if s.generator != nil {
 			generated, err := s.generateStreaming(ctx, GenerateInput{
-				History:     cleanHistory(input.History, 6),
-				Question:    question,
-				Sources:     nil,
-				UserProfile: input.UserProfile,
+				History:             cleanHistory(input.History, recentHistoryLimit),
+				ConversationSummary: input.ConversationSummary,
+				Question:            question,
+				Sources:             nil,
+				UserProfile:         input.UserProfile,
 			}, emit)
 			if err == nil && strings.TrimSpace(generated) != "" {
 				return Answer{
@@ -230,10 +241,11 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 
 	if s.generator != nil {
 		generated, err := s.generateStreaming(ctx, GenerateInput{
-			History:     cleanHistory(input.History, 6),
-			Question:    question,
-			Sources:     sources,
-			UserProfile: input.UserProfile,
+			History:             cleanHistory(input.History, recentHistoryLimit),
+			ConversationSummary: input.ConversationSummary,
+			Question:            question,
+			Sources:             sources,
+			UserProfile:         input.UserProfile,
 		}, emit)
 		if err == nil && strings.TrimSpace(generated) != "" {
 			return Answer{Answer: strings.TrimSpace(generated), Sources: sources, Suggestions: suggestions}, nil

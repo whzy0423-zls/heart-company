@@ -10,9 +10,89 @@ import (
 	"strings"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
+
+const appChatHistoryLimit = 12
+
+const appChatFallbackHistoryLimit = 20
+
+type appChatPromptContext struct {
+	Summary                     string
+	History                     []rag.Message
+	SummaryThroughMessageID     int64
+	ShouldPersistUpdatedSummary bool
+}
+
+type appChatContextStore interface {
+	GetConversationState(ctx context.Context, sessionID int64) (chat.ConversationState, error)
+	ListMessagesAfter(ctx context.Context, sessionID, afterMessageID int64) ([]chat.Message, error)
+	ListRecentMessages(ctx context.Context, sessionID int64, limit int) ([]chat.Message, error)
+	UpdateConversationSummary(ctx context.Context, sessionID, expectedThroughMessageID int64, summary string, throughMessageID int64) (bool, error)
+}
+
+func compactAppChatContext(ctx context.Context, previousSummary string, messages []chat.Message, summarizer rag.ConversationSummarizer) appChatPromptContext {
+	validChatMessages := validAppChatMessages(messages)
+	validMessages := appChatHistoryFromMessages(validChatMessages)
+	if len(validMessages) <= appChatFallbackHistoryLimit {
+		return appChatPromptContext{Summary: strings.TrimSpace(previousSummary), History: validMessages}
+	}
+	if summarizer == nil {
+		return appChatPromptContext{
+			Summary: strings.TrimSpace(previousSummary),
+			History: validMessages[len(validMessages)-appChatFallbackHistoryLimit:],
+		}
+	}
+
+	oldCount := len(validMessages) - appChatHistoryLimit
+	updatedSummary, err := summarizer.SummarizeConversation(ctx, strings.TrimSpace(previousSummary), validMessages[:oldCount])
+	updatedSummary = strings.TrimSpace(updatedSummary)
+	if err != nil || updatedSummary == "" {
+		return appChatPromptContext{
+			Summary: strings.TrimSpace(previousSummary),
+			History: validMessages[len(validMessages)-appChatFallbackHistoryLimit:],
+		}
+	}
+	throughID := validChatMessages[oldCount-1].ID
+	return appChatPromptContext{
+		Summary:                     updatedSummary,
+		History:                     validMessages[oldCount:],
+		SummaryThroughMessageID:     throughID,
+		ShouldPersistUpdatedSummary: true,
+	}
+}
+
+func buildAppChatPromptContext(ctx context.Context, sessionID int64, store appChatContextStore, summarizer rag.ConversationSummarizer) appChatPromptContext {
+	state, err := store.GetConversationState(ctx, sessionID)
+	if err != nil {
+		return fallbackAppChatPromptContext(ctx, sessionID, store, "")
+	}
+	messages, err := store.ListMessagesAfter(ctx, sessionID, state.SummaryThroughMessageID)
+	if err != nil {
+		return fallbackAppChatPromptContext(ctx, sessionID, store, state.Summary)
+	}
+	promptContext := compactAppChatContext(ctx, state.Summary, messages, summarizer)
+	if promptContext.ShouldPersistUpdatedSummary {
+		_, _ = store.UpdateConversationSummary(
+			ctx,
+			sessionID,
+			state.SummaryThroughMessageID,
+			promptContext.Summary,
+			promptContext.SummaryThroughMessageID,
+		)
+	}
+	return promptContext
+}
+
+func fallbackAppChatPromptContext(ctx context.Context, sessionID int64, store appChatContextStore, summary string) appChatPromptContext {
+	messages, err := store.ListRecentMessages(ctx, sessionID, appChatFallbackHistoryLimit)
+	if err != nil {
+		return appChatPromptContext{Summary: strings.TrimSpace(summary)}
+	}
+	return appChatPromptContext{Summary: strings.TrimSpace(summary), History: appChatHistoryFromMessages(messages)}
+}
 
 // appChatSessions GET /api/app/chat/sessions — list user's sessions.
 func (s *Server) appChatSessions(w http.ResponseWriter, r *http.Request) {
@@ -129,11 +209,14 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
 		profile.Memories = memories
 	}
+	generator := s.generator()
+	promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
 
-	ans, err := rag.NewService(docs, rag.WithGenerator(s.generator())).Ask(ctx, rag.AskInput{
-		History:     body.History,
-		Question:    body.Question,
-		UserProfile: profile,
+	ans, err := rag.NewService(docs, rag.WithGenerator(generator)).Ask(ctx, rag.AskInput{
+		History:             promptContext.History,
+		ConversationSummary: promptContext.Summary,
+		Question:            body.Question,
+		UserProfile:         profile,
 	})
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
@@ -209,16 +292,19 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
 		profile.Memories = memories
 	}
+	generator := s.generator()
+	promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
 
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	ans, err := rag.NewService(docs, rag.WithGenerator(s.generator())).AskStream(ctx, rag.AskInput{
-		History:     body.History,
-		Question:    body.Question,
-		UserProfile: profile,
+	ans, err := rag.NewService(docs, rag.WithGenerator(generator)).AskStream(ctx, rag.AskInput{
+		History:             promptContext.History,
+		ConversationSummary: promptContext.Summary,
+		Question:            body.Question,
+		UserProfile:         profile,
 	}, func(delta string) error {
 		return writeAppChatSSE(w, flusher, "delta", map[string]string{"content": delta})
 	})
@@ -267,15 +353,11 @@ func appChatSessionIDFromPath(path, suffix string) (int64, bool) {
 }
 
 func (s *Server) rememberChatAnswer(ctx context.Context, appUserID, cardID int64, question, answer string) {
-	question = strings.TrimSpace(question)
 	answer = strings.TrimSpace(answer)
-	if cardID <= 0 || question == "" || answer == "" {
+	content := chatMemoryContent(question)
+	if cardID <= 0 || content == "" || answer == "" {
 		return
 	}
-	if len([]rune(question)) < 8 {
-		return
-	}
-	content := "用户曾问：" + question
 	if len([]rune(content)) > 160 {
 		runes := []rune(content)
 		content = string(runes[:160])
@@ -288,6 +370,71 @@ func (s *Server) rememberChatAnswer(ctx context.Context, appUserID, cardID int64
 		   WHERE app_user_id = $1 AND card_id = $2 AND content = $3
 		 )`,
 		appUserID, cardID, content)
+}
+
+func (s *Server) appChatContextForPrompt(ctx context.Context, sessionID int64, generator rag.Generator) appChatPromptContext {
+	if s.appChat == nil {
+		return appChatPromptContext{}
+	}
+	var summarizer rag.ConversationSummarizer
+	if typed, ok := generator.(rag.ConversationSummarizer); ok {
+		summarizer = typed
+	}
+	return buildAppChatPromptContext(ctx, sessionID, s.appChat, summarizer)
+}
+
+func appChatHistoryFromMessages(messages []chat.Message) []rag.Message {
+	history := make([]rag.Message, 0, len(messages))
+	for _, message := range messages {
+		role := strings.TrimSpace(message.Role)
+		content := strings.TrimSpace(message.Content)
+		if (role != "user" && role != "assistant") || content == "" {
+			continue
+		}
+		history = append(history, rag.Message{Role: role, Content: content})
+	}
+	return history
+}
+
+func validAppChatMessages(messages []chat.Message) []chat.Message {
+	valid := make([]chat.Message, 0, len(messages))
+	for _, message := range messages {
+		role := strings.TrimSpace(message.Role)
+		content := strings.TrimSpace(message.Content)
+		if (role != "user" && role != "assistant") || content == "" {
+			continue
+		}
+		message.Role = role
+		message.Content = content
+		valid = append(valid, message)
+	}
+	return valid
+}
+
+func chatMemoryContent(question string) string {
+	question = strings.TrimSpace(question)
+	if question == "" || strings.ContainsAny(question, "?？") {
+		return ""
+	}
+	for _, marker := range []string{"不要记", "别记", "不用记", "不必记", "忘掉", "忘记", "删除记忆", "删掉记忆"} {
+		if strings.Contains(question, marker) {
+			return ""
+		}
+	}
+	for _, marker := range []string{"记住", "请记得", "以后要记得"} {
+		if strings.Contains(question, marker) {
+			return question
+		}
+	}
+	for _, prefix := range []string{
+		"我是", "我叫", "我的孩子", "我的女儿", "我的儿子", "我的丈夫", "我的妻子", "我的妈妈", "我的爸爸",
+		"我孩子", "我女儿", "我儿子", "我丈夫", "我妻子", "我妈妈", "我爸爸",
+	} {
+		if strings.HasPrefix(question, prefix) {
+			return question
+		}
+	}
+	return ""
 }
 
 func (s *Server) appChatMemoriesForPrompt(ctx context.Context, appUserID, cardID int64, limit int) ([]string, error) {

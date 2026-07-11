@@ -176,6 +176,81 @@ func (g *MiniMaxGenerator) Generate(ctx context.Context, input rag.GenerateInput
 	return strings.TrimSpace(answer), nil
 }
 
+func (g *MiniMaxGenerator) SummarizeConversation(ctx context.Context, previousSummary string, messages []rag.Message) (string, error) {
+	if g.apiKey == "" {
+		return "", fmt.Errorf("请先配置 MINIMAX_API_KEY")
+	}
+	if len(messages) == 0 {
+		return strings.TrimSpace(previousSummary), nil
+	}
+
+	var prompt strings.Builder
+	prompt.WriteString("已有会话摘要：\n")
+	if previousSummary = strings.TrimSpace(previousSummary); previousSummary == "" {
+		prompt.WriteString("暂无。\n")
+	} else {
+		prompt.WriteString(trimRunes(previousSummary, 1200) + "\n")
+	}
+	prompt.WriteString("新增对话：\n")
+	for _, message := range messages {
+		role := strings.TrimSpace(message.Role)
+		if role != "user" && role != "assistant" {
+			continue
+		}
+		content := strings.TrimSpace(message.Content)
+		if content == "" {
+			continue
+		}
+		prompt.WriteString(role + ": " + trimRunes(content, 220) + "\n")
+	}
+	prompt.WriteString("请输出合并后的会话摘要，只输出摘要正文。")
+
+	body := map[string]any{
+		"model":              g.model,
+		"temperature":        0.2,
+		"tokens_to_generate": 700,
+		"messages": []map[string]string{
+			{"role": "system", "content": "你负责压缩会话摘要。必须保留参与人物及关系、已确认事实和事件、用户诉求与边界、关键建议与反馈、尚未解决的问题；删除寒暄、重复表达和无关细节。摘要应准确、简洁，不得添加对话中不存在的信息。"},
+			{"role": "user", "content": prompt.String()},
+		},
+	}
+	payload, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.endpoint("/v1/text/chatcompletion_v2"), bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+g.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("会话摘要生成失败(%d): %s", resp.StatusCode, compact(raw))
+	}
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return "", err
+	}
+	if err := baseRespError(result); err != nil {
+		return "", err
+	}
+	summary := strings.TrimSpace(findString(result,
+		"choices.0.message.content",
+		"choices.0.text",
+		"reply",
+		"data.reply",
+		"data.choices.0.message.content",
+	))
+	if summary == "" {
+		return "", fmt.Errorf("会话摘要未返回内容")
+	}
+	return trimRunes(summary, 1200), nil
+}
+
 // PolishPrompt 把用户给出的方向或草稿润色成一段高质量的文生图/文生视频提示词。
 // kind 取值："image"（文生图）或 "video"（文生视频），用于切换润色侧重点。
 // 复用对话模型（MiniMax），但使用独立的系统提示词，与成长教练人设解耦。
@@ -1137,6 +1212,10 @@ func buildUserPrompt(input rag.GenerateInput) string {
 			}
 			b.WriteString(fmt.Sprintf("%d. %s\n", i+1, trimRunes(memory, 160)))
 		}
+	}
+	if summary := strings.TrimSpace(input.ConversationSummary); summary != "" {
+		b.WriteString("会话前情：\n")
+		b.WriteString(trimRunes(summary, 1200) + "\n")
 	}
 	if len(input.History) > 0 {
 		b.WriteString("最近对话：\n")

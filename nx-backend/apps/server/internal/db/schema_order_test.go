@@ -43,3 +43,19 @@ func TestSchemaMigratesExistingQuizSubmissionWingType(t *testing.T) {
 		t.Fatalf("schema is missing old-database migration %q", statement)
 	}
 }
+
+func TestSchemaMigratesChatSessionContextSummary(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(raw)
+	for _, statement := range []string{
+		"ALTER TABLE app_chat_sessions ADD COLUMN IF NOT EXISTS context_summary",
+		"ALTER TABLE app_chat_sessions ADD COLUMN IF NOT EXISTS context_summary_through_message_id",
+	} {
+		if !strings.Contains(sql, statement) {
+			t.Fatalf("schema is missing old-database migration %q", statement)
+		}
+	}
+}

@@ -104,6 +104,65 @@ func TestMiniMaxGeneratorSendsUserMemories(t *testing.T) {
 	}
 }
 
+func TestMiniMaxGeneratorSendsConversationSummary(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": "继续回答"}}},
+		})
+	}))
+	defer server.Close()
+
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key"})
+	if _, err := generator.Generate(context.Background(), rag.GenerateInput{
+		Question:            "那我接下来怎么说？",
+		ConversationSummary: "用户和女儿因为作业发生争执，之前建议先暂停十分钟。",
+	}); err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	body, _ := json.Marshal(requestBody)
+	if !strings.Contains(string(body), "会话前情") || !strings.Contains(string(body), "先暂停十分钟") {
+		t.Fatalf("request did not include conversation summary: %s", string(body))
+	}
+}
+
+func TestMiniMaxGeneratorSummarizesConversationWithPreviousContext(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": "用户与女儿讨论作业冲突，仍需确认沟通方式。"}}},
+		})
+	}))
+	defer server.Close()
+
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key"})
+	summary, err := generator.SummarizeConversation(context.Background(), "用户女儿八岁。", []rag.Message{
+		{Role: "user", Content: "她今天因为作业哭了"},
+		{Role: "assistant", Content: "先接住情绪，再讨论作业"},
+	})
+	if err != nil {
+		t.Fatalf("SummarizeConversation returned error: %v", err)
+	}
+	if summary != "用户与女儿讨论作业冲突，仍需确认沟通方式。" {
+		t.Fatalf("unexpected summary: %q", summary)
+	}
+
+	body, _ := json.Marshal(requestBody)
+	text := string(body)
+	for _, want := range []string{"会话摘要", "用户女儿八岁", "她今天因为作业哭了", "尚未解决"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("summary request missing %q: %s", want, text)
+		}
+	}
+}
+
 func TestMiniMaxGeneratorRequiresAPIKey(t *testing.T) {
 	_, err := NewMiniMaxGenerator(config.MiniMaxConfig{}).Generate(context.Background(), rag.GenerateInput{Question: "hi"})
 	if err == nil {

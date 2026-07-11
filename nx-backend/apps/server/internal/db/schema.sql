@@ -797,9 +797,14 @@ CREATE TABLE IF NOT EXISTS app_chat_sessions (
   app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
   card_id     BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
   title       TEXT NOT NULL DEFAULT '',
+  context_summary TEXT NOT NULL DEFAULT '',
+  context_summary_through_message_id BIGINT NOT NULL DEFAULT 0,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   create_time TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE app_chat_sessions ADD COLUMN IF NOT EXISTS context_summary TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_chat_sessions ADD COLUMN IF NOT EXISTS context_summary_through_message_id BIGINT NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_user ON app_chat_sessions(app_user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_card ON app_chat_sessions(card_id, updated_at DESC);
