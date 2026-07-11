@@ -42,4 +42,21 @@ describe('guided workflow source contracts', () => {
     expect(shell).toContain('env(safe-area-inset-bottom)');
     expect(shell).toContain('@media (prefers-reduced-motion: reduce)');
   });
+
+  it('provides complete brief, assets and storyboard step controls', () => {
+    const brief = read('workflow/BriefStep.vue');
+    const assets = read('workflow/AssetsStep.vue');
+    const storyboard = read('workflow/StoryboardStep.vue');
+
+    for (const text of ['项目名称', '主题', '完整剧本', '视觉风格', 'scriptCharacterCount', 'estimatedParagraphCount', 'role="alert"']) {
+      expect(brief).toContain(text);
+    }
+    for (const text of ['角色', '场景', '缺少参考图', '添加角色', '添加场景', '打开资产库', '重试']) {
+      expect(assets).toContain(text);
+    }
+    for (const text of ['从剧本创建分镜', '手动添加', 'created', 'existing', 'failed', 'retryFailed', 'mobile-shot-selector', '动作描述', '角色', '场景', '时长', '画幅']) {
+      expect(storyboard).toContain(text);
+    }
+    expect(`${brief}${assets}${storyboard}`).toContain('min-height: 44px');
+  });
 });

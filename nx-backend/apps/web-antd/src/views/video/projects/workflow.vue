@@ -11,6 +11,9 @@ import {
 } from '#/api/core/videoproject';
 
 import WorkflowStepper from './workflow/WorkflowStepper.vue';
+import AssetsStep from './workflow/AssetsStep.vue';
+import BriefStep from './workflow/BriefStep.vue';
+import StoryboardStep from './workflow/StoryboardStep.vue';
 import { normalizeWorkflowStep, workflowSteps } from './workflow/workflow';
 import { createWorkflowNavigationController } from './workflow/useWorkflowNavigation';
 
@@ -22,6 +25,9 @@ const fatalError = ref('');
 const primaryBusy = ref(false);
 const dirtyDialogVisible = ref(false);
 const navigation = createWorkflowNavigationController();
+const briefStepRef = ref<InstanceType<typeof BriefStep>>();
+const assetsStepRef = ref<InstanceType<typeof AssetsStep>>();
+const storyboardStepRef = ref<InstanceType<typeof StoryboardStep>>();
 
 const projectId = computed(() => String(route.params.id || ''));
 const activeStep = ref<WorkflowStepKey>('brief');
@@ -71,11 +77,24 @@ async function runPrimaryAction() {
       message.info(currentState.value === 'blocked' ? '请先处理页面中标出的缺项' : primaryLabel.value);
       return;
     }
+    await saveCurrentStep();
+    await loadWorkflow();
     const next = workflowSteps[Math.min(stepIndex.value + 1, workflowSteps.length - 1)] ?? activeStep.value;
     await performStepChange(next);
   } finally {
     primaryBusy.value = false;
   }
+}
+
+function setDirty(value: boolean) {
+  navigation.setDirty(value);
+}
+
+async function saveCurrentStep() {
+  if (activeStep.value === 'brief') await briefStepRef.value?.save();
+  if (activeStep.value === 'assets') await assetsStepRef.value?.save();
+  if (activeStep.value === 'storyboard') await storyboardStepRef.value?.save();
+  navigation.setDirty(false);
 }
 
 function beforeUnload(event: BeforeUnloadEvent) {
@@ -85,7 +104,7 @@ function beforeUnload(event: BeforeUnloadEvent) {
 }
 
 async function saveAndContinue() {
-  await navigation.saveAndContinue(async () => undefined);
+  await navigation.saveAndContinue(saveCurrentStep);
   dirtyDialogVisible.value = false;
 }
 
@@ -142,13 +161,11 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
         <p aria-live="polite" class="step-status">
           {{ currentState === 'blocked' ? '当前步骤还有内容需要处理，你仍可查看并返回修改。' : '当前步骤可以继续。' }}
         </p>
-        <div class="step-placeholder">
-          <span v-if="activeStep === 'brief'">项目设置与剧本将在这里编辑。</span>
-          <span v-else-if="activeStep === 'assets'">角色和场景将在这里管理。</span>
-          <span v-else-if="activeStep === 'storyboard'">分镜导航与编辑器将在这里显示。</span>
-          <span v-else-if="activeStep === 'generate'">生成检查、状态筛选与版本将在这里显示。</span>
-          <span v-else>合成设置、进度和成片将在这里显示。</span>
-        </div>
+        <BriefStep v-if="activeStep === 'brief'" ref="briefStepRef" :project="workflow.project" @dirty="setDirty" @saved="loadWorkflow" />
+        <AssetsStep v-else-if="activeStep === 'assets'" ref="assetsStepRef" :project-id="projectId" @dirty="setDirty" @changed="loadWorkflow" />
+        <StoryboardStep v-else-if="activeStep === 'storyboard'" ref="storyboardStepRef" :project="workflow.project" :shots="workflow.shots" @dirty="setDirty" @changed="loadWorkflow" />
+        <div v-else-if="activeStep === 'generate'" class="step-placeholder">生成检查、状态筛选与版本将在这里显示。</div>
+        <div v-else class="step-placeholder">合成设置、进度和成片将在这里显示。</div>
       </section>
     </main>
 
