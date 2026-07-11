@@ -92,14 +92,15 @@ type GenerateInput struct {
 }
 
 type generationRequestSnapshot struct {
-	AspectRatio  string   `json:"aspectRatio"`
-	Audios       []string `json:"audios"`
-	Images       []string `json:"images"`
-	Model        string   `json:"model"`
-	Prompt       string   `json:"prompt"`
-	Seconds      int      `json:"seconds"`
-	ShotRevision int      `json:"shotRevision"`
-	Videos       []string `json:"videos"`
+	AspectRatio    string   `json:"aspectRatio"`
+	Audios         []string `json:"audios"`
+	GenerationMode string   `json:"generationMode"`
+	Images         []string `json:"images"`
+	Model          string   `json:"model"`
+	Prompt         string   `json:"prompt"`
+	Seconds        int      `json:"seconds"`
+	ShotRevision   int      `json:"shotRevision"`
+	Videos         []string `json:"videos"`
 }
 
 // 网关支持的视频时长（秒），默认 15s。
@@ -168,6 +169,15 @@ func (s *Store) GenerationMode() string {
 	return config.VideoGenerationModePaid
 }
 
+// RecoverInterruptedSubmissions makes locally interrupted demos retryable and
+// moves ambiguous provider requests into manual recovery without another POST.
+func (s *Store) RecoverInterruptedSubmissions(ctx context.Context, unknownReason, demoReason string) (int64, error) {
+	if s == nil || s.submissions == nil {
+		return 0, nil
+	}
+	return s.submissions.RecoverInterrupted(ctx, unknownReason, demoReason)
+}
+
 // Generate 创建一个视频生成任务：调用网关拿到 task_id 后落库 'queued' 行。
 // 不在此阻塞等待结果——前端按返回的 id 调 Refresh 轮询。
 func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, error) {
@@ -218,14 +228,15 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 			return Generation{}, ErrInvalidSubmissionRequest
 		}
 		snapshot, err := json.Marshal(generationRequestSnapshot{
-			AspectRatio:  aspectRatio,
-			Audios:       audios,
-			Images:       images,
-			Model:        model,
-			Prompt:       prompt,
-			Seconds:      seconds,
-			ShotRevision: input.ShotRevision,
-			Videos:       videos,
+			AspectRatio:    aspectRatio,
+			Audios:         audios,
+			GenerationMode: s.GenerationMode(),
+			Images:         images,
+			Model:          model,
+			Prompt:         prompt,
+			Seconds:        seconds,
+			ShotRevision:   input.ShotRevision,
+			Videos:         videos,
 		})
 		if err != nil {
 			return Generation{}, err

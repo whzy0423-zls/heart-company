@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"nine-xing/nx-backend/apps/server/internal/config"
 )
 
 type SubmissionStatus string
@@ -229,6 +231,35 @@ func (s *SubmissionStore) GetByID(ctx context.Context, id string) (Submission, e
 
 func (s *SubmissionStore) FindActiveByShot(ctx context.Context, shotID string) (Submission, error) {
 	return s.repo.FindActiveByShot(ctx, strings.TrimSpace(shotID))
+}
+
+func (s *SubmissionStore) RecoverInterrupted(ctx context.Context, unknownReason, demoReason string) (int64, error) {
+	repo, ok := s.repo.(*sqlSubmissionRepository)
+	if !ok {
+		return 0, nil
+	}
+	// Missing modes predate explicit mode snapshots and remain ambiguous, so the
+	// ELSE branch conservatively requires manual reconciliation.
+	result, err := repo.db.ExecContext(ctx, `
+		UPDATE video_generation_submissions
+		SET status=CASE
+		        WHEN request_snapshot->>'generationMode'=$3 THEN 'cancelled'
+		        ELSE 'unknown_outcome'
+		    END,
+		    error_message=CASE
+		        WHEN request_snapshot->>'generationMode'=$3 THEN $2
+		        ELSE $1
+		    END,
+		    update_time=now()
+		WHERE status='submitting'`,
+		strings.TrimSpace(unknownReason),
+		strings.TrimSpace(demoReason),
+		config.VideoGenerationModeDemo,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func (s *SubmissionStore) SynchronizeTerminal(

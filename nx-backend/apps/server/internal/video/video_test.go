@@ -204,7 +204,8 @@ func TestGenerateDemoCompletesLocallyWithoutGatewayCall(t *testing.T) {
 		APIKey:  "must-not-be-used",
 		Mode:    config.VideoGenerationModeDemo,
 	}, uploader)
-	store.submissions = newSubmissionStore(newMemorySubmissionRepository())
+	repo := newMemorySubmissionRepository()
+	store.submissions = newSubmissionStore(repo)
 
 	result, err := store.Generate(context.Background(), GenerateInput{
 		AspectRatio:  "9:16",
@@ -231,6 +232,17 @@ func TestGenerateDemoCompletesLocallyWithoutGatewayCall(t *testing.T) {
 	}
 	if len(uploader.data) == 0 {
 		t.Fatal("demo renderer did not upload MP4 bytes")
+	}
+	submission, err := repo.GetByRequestKey(context.Background(), "11111111-1111-4111-8111-111111111111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot generationRequestSnapshot
+	if err := json.Unmarshal(submission.RequestSnapshot, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.GenerationMode != config.VideoGenerationModeDemo {
+		t.Fatalf("demo submission snapshot generation mode = %q", snapshot.GenerationMode)
 	}
 }
 
@@ -761,6 +773,13 @@ func assertPaidGenerateUnknownOutcome(
 	}
 	if row.Status != SubmissionUnknownOutcome || !row.Status.Active() {
 		t.Fatalf("ambiguous result must retain active lock, got %+v", row)
+	}
+	var snapshot generationRequestSnapshot
+	if err := json.Unmarshal(row.RequestSnapshot, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.GenerationMode != config.VideoGenerationModePaid {
+		t.Fatalf("paid submission snapshot generation mode = %q", snapshot.GenerationMode)
 	}
 	if dbState.insertCalls != 0 {
 		t.Fatalf("ambiguous result persisted %d fake failed generations", dbState.insertCalls)

@@ -102,3 +102,29 @@ func TestServerStartupRecoversInterruptedComposeJobs(t *testing.T) {
 		}
 	}
 }
+
+func TestServerStartupRecoversInterruptedSubmissionsBeforeRoutes(t *testing.T) {
+	raw, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	recovery := strings.Index(source, "RecoverInterruptedSubmissions")
+	routes := strings.Index(source, "s.routes()")
+	if recovery < 0 {
+		t.Fatal("server startup submission recovery is missing")
+	}
+	if routes < 0 || recovery > routes {
+		t.Fatal("submission recovery must finish before routes are exposed")
+	}
+	for _, fragment := range []string{
+		"context.WithTimeout(context.Background(), 15*time.Second)",
+		"上游请求结果不确定",
+		"禁止重复提交",
+		"本地演练视频生成中断",
+	} {
+		if !strings.Contains(source, fragment) {
+			t.Errorf("server startup submission recovery missing %q", fragment)
+		}
+	}
+}

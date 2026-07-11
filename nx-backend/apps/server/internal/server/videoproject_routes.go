@@ -70,10 +70,22 @@ func validRequestKey(raw string) bool {
 	return len(raw) == 36 && raw[8] == '-' && raw[13] == '-' && raw[18] == '-' && raw[23] == '-'
 }
 
+func (s *Server) videoSubmissionRecoveryAvailable(w http.ResponseWriter, r *http.Request) bool {
+	if err := s.ensureVideoSubmissionRecovery(r.Context()); err != nil {
+		log.Printf("video submission recovery retry failed: %v", err)
+		httpx.Fail(w, http.StatusServiceUnavailable, "视频任务恢复中，请稍后重试")
+		return false
+	}
+	return true
+}
+
 func (s *Server) videoWorkflowGet(w http.ResponseWriter, r *http.Request) {
 	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/projects-workflow/"), "/")
 	if id == "" {
 		httpx.Fail(w, http.StatusBadRequest, "缺少项目 ID")
+		return
+	}
+	if !s.videoSubmissionRecoveryAvailable(w, r) {
 		return
 	}
 	result, err := s.videoProjectStore().GetWorkflowStatus(r.Context(), id)
@@ -116,6 +128,9 @@ type safeGenerateInput struct {
 func (s *Server) runWorkflowGenerate(w http.ResponseWriter, r *http.Request, id string, input safeGenerateInput) {
 	if !validRequestKey(input.RequestKey) {
 		httpx.Fail(w, http.StatusBadRequest, "缺少生成请求键或请求键格式错误")
+		return
+	}
+	if !s.videoSubmissionRecoveryAvailable(w, r) {
 		return
 	}
 	_, lookupErr := s.videoStore().SubmissionByRequestKey(r.Context(), input.RequestKey)
@@ -176,6 +191,9 @@ func (s *Server) videoWorkflowBatchGenerate(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
+	if !s.videoSubmissionRecoveryAvailable(w, r) {
+		return
+	}
 	result, err := s.videoProjectBatchGenerator().GenerateSafe(r.Context(), id, input.Items, r.URL.Query().Get("mode") == "parallel")
 	if err != nil {
 		workflowError(w, err)
@@ -188,6 +206,9 @@ func (s *Server) videoWorkflowSubmissionStatus(w http.ResponseWriter, r *http.Re
 	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/generation-submissions/"), "/")
 	if id == "" {
 		httpx.Fail(w, http.StatusBadRequest, "缺少提交 ID")
+		return
+	}
+	if !s.videoSubmissionRecoveryAvailable(w, r) {
 		return
 	}
 	result, err := s.videoStore().SubmissionByID(r.Context(), id)
@@ -211,6 +232,9 @@ func (s *Server) videoWorkflowReconcile(w http.ResponseWriter, r *http.Request) 
 	var input reconcileSubmissionInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || strings.TrimSpace(input.TaskID) == "" {
 		httpx.Fail(w, http.StatusBadRequest, "缺少 taskId")
+		return
+	}
+	if !s.videoSubmissionRecoveryAvailable(w, r) {
 		return
 	}
 	result, err := s.videoStore().ReconcileSubmission(r.Context(), requestKey, input.TaskID)
@@ -916,6 +940,9 @@ func (s *Server) batchGenerateShots(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusBadRequest, "缺少生成请求键")
 			return
 		}
+	}
+	if !s.videoSubmissionRecoveryAvailable(w, r) {
+		return
 	}
 	result, err := s.videoProjectBatchGenerator().GenerateSafe(r.Context(), id, input.Items, mode == "parallel")
 	if err != nil {
