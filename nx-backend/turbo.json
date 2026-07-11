@@ -30,7 +30,9 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**"]
     },
-    "test:e2e": {},
+    "test:e2e": {
+      "cache": false
+    },
     "dev": {
       "dependsOn": [],
       "outputs": [],

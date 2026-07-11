@@ -20,6 +20,7 @@
     "build:analyze": "pnpm vite build --mode analyze",
     "dev": "pnpm vite --mode development",
     "preview": "vite preview",
+    "test:e2e": "playwright test --config=playwright.guided.config.ts",
     "typecheck": "vue-tsc --noEmit --skipLibCheck"
   },
   "imports": {
@@ -48,5 +49,8 @@
     "pinia": "catalog:",
     "vue": "catalog:",
     "vue-router": "catalog:"
+  },
+  "devDependencies": {
+    "playwright": "catalog:"
   }
 }

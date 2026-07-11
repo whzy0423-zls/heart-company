@@ -21,14 +21,22 @@ describe('guided workflow source contracts', () => {
     for (const label of ['项目与剧本', '角色与场景', '分镜', '生成', '导出']) {
       expect(stepper).toContain(label);
     }
-    for (const step of ['brief', 'assets', 'storyboard', 'generate', 'export']) {
+    for (const step of [
+      'brief',
+      'assets',
+      'storyboard',
+      'generate',
+      'export',
+    ]) {
       expect(stepper).toContain(`'${step}'`);
     }
     expect(stepper).toContain('aria-current');
     expect(shell).toContain('aria-live="polite"');
     expect(shell).toContain('data-primary-action');
     expect(shell.match(/data-primary-action/g)).toHaveLength(1);
-    expect(shell).toContain("router.replace({ query: { ...route.query, step } })");
+    expect(shell).toContain(
+      'router.replace({ query: { ...route.query, step } })',
+    );
     expect(shell).toContain('/workbench/advanced');
     expect(shell).not.toContain('workbenchMode');
   });
@@ -50,25 +58,67 @@ describe('guided workflow source contracts', () => {
     const assets = read('workflow/AssetsStep.vue');
     const storyboard = read('workflow/StoryboardStep.vue');
 
-    for (const text of ['项目名称', '主题', '完整剧本', '视觉风格', 'scriptCharacterCount', 'estimatedParagraphCount', 'role="alert"']) {
+    for (const text of [
+      '项目名称',
+      '主题',
+      '完整剧本',
+      '视觉风格',
+      'scriptCharacterCount',
+      'estimatedParagraphCount',
+      'role="alert"',
+    ]) {
       expect(brief).toContain(text);
     }
-    for (const text of ['角色', '场景', '缺少参考图', '添加角色', '添加场景', '打开资产库', '重试']) {
+    for (const text of [
+      '角色',
+      '场景',
+      '缺少参考图',
+      '添加角色',
+      '添加场景',
+      '打开资产库',
+      '重试',
+    ]) {
       expect(assets).toContain(text);
     }
-    for (const text of ['从剧本创建分镜', '手动添加', 'created', 'existing', 'failed', 'retryFailed', 'mobile-shot-selector', '动作描述', '角色', '场景', '时长', '画幅']) {
+    for (const text of [
+      '从剧本创建分镜',
+      '手动添加',
+      'created',
+      'existing',
+      'failed',
+      'retryFailed',
+      'mobile-shot-selector',
+      '动作描述',
+      '角色',
+      '场景',
+      '时长',
+      '画幅',
+    ]) {
       expect(storyboard).toContain(text);
     }
     expect(`${brief}${assets}${storyboard}`).toContain('min-height: 44px');
   });
 
   it('provides safe generation filters, recovery and explicit version selection', () => {
-		const shell = read('workflow.vue');
+    const shell = read('workflow.vue');
     const generation = read('workflow/GenerationStep.vue');
     const drawer = read('workflow/VersionDrawer.vue');
     const polling = read('workflow/useWorkflowPolling.ts');
-    for (const label of ['可生成', '待完善', '生成中', '已完成']) expect(generation).toContain(label);
-    for (const text of ['ready', 'stale', 'failed', 'recovery', 'requestKeys', 'crypto.randomUUID', 'batchGenerateShotsSafeApi', 'generateShotSafeApi', '检查结果', '对账']) expect(generation).toContain(text);
+    for (const label of ['可生成', '待完善', '生成中', '已完成'])
+      expect(generation).toContain(label);
+    for (const text of [
+      'ready',
+      'stale',
+      'failed',
+      'recovery',
+      'requestKeys',
+      'crypto.randomUUID',
+      'batchGenerateShotsSafeApi',
+      'generateShotSafeApi',
+      '检查结果',
+      '对账',
+    ])
+      expect(generation).toContain(text);
     expect(generation).toContain('再生成一个版本');
     expect(drawer).toContain('设为当前');
     expect(drawer).toContain('setShotVideoVersionApi');
@@ -76,40 +126,76 @@ describe('guided workflow source contracts', () => {
     expect(polling).toContain('clearTimeout');
     expect(polling).toContain('maxAttempts');
     expect(generation).toContain('item.activeSubmission.requestKey');
-    expect(generation).toContain("item.activeSubmission.status === 'unknown_outcome'");
+    expect(generation).toContain(
+      "item.activeSubmission.status === 'unknown_outcome'",
+    );
     expect(generation).toContain('startPolling(item.shot.id)');
-		expect(shell).toContain(':generation-mode="workflow.generationMode"');
-		expect(generation).toContain("generationMode: 'demo' | 'paid'");
-		expect(generation).toContain('免费演练模式：使用本地占位视频，不会调用收费接口。');
-		expect(generation).toContain('付费生成模式：生成操作会调用收费接口。');
-		expect(generation).not.toContain('generation-mode-toggle');
+    expect(shell).toContain(':generation-mode="workflow.generationMode"');
+    expect(generation).toContain("generationMode: 'demo' | 'paid'");
+    expect(generation).toContain(
+      '免费演练模式：使用本地占位视频，不会调用收费接口。',
+    );
+    expect(generation).toContain('付费生成模式：生成操作会调用收费接口。');
+    expect(generation).not.toContain('generation-mode-toggle');
   });
 
   it('provides exact export participation, async jobs and stale result recovery', () => {
     const exportStep = read('workflow/ExportStep.vue');
-    for (const text of ['includedShotIds', 'excludedShotIds', 'partialAcknowledged', 'composeProjectSafeApi', 'getComposeJobApi', 'jobId', 'progress', '重试合成', '内容已变化，需要重新合成', '复制链接', '下载成片']) expect(exportStep).toContain(text);
+    for (const text of [
+      'includedShotIds',
+      'excludedShotIds',
+      'partialAcknowledged',
+      'composeProjectSafeApi',
+      'getComposeJobApi',
+      'jobId',
+      'progress',
+      '重试合成',
+      '内容已变化，需要重新合成',
+      '复制链接',
+      '下载成片',
+    ])
+      expect(exportStep).toContain(text);
     expect(exportStep).toContain('clearTimeout');
   });
 
   it('registers every Ant Design component used by the guided pages', () => {
     const pages = [
       ['../production/index.vue', ['Button', 'Progress', 'Skeleton']],
-      ['workflow.vue', ['Breadcrumb', 'BreadcrumbItem', 'Button', 'Modal', 'Skeleton']],
+      [
+        'workflow.vue',
+        ['Breadcrumb', 'BreadcrumbItem', 'Button', 'Modal', 'Skeleton'],
+      ],
       ['workflow/AssetsStep.vue', ['Button', 'Input', 'Modal', 'Textarea']],
       ['workflow/BriefStep.vue', ['Input', 'Textarea']],
-      ['workflow/StoryboardStep.vue', ['Button', 'Input', 'Select', 'Textarea']],
+      [
+        'workflow/StoryboardStep.vue',
+        ['Button', 'Input', 'Select', 'Textarea'],
+      ],
       ['workflow/GenerationStep.vue', ['Button', 'Input']],
       ['workflow/VersionDrawer.vue', ['Button', 'Drawer', 'Empty', 'Spin']],
-      ['workflow/ExportStep.vue', ['Button', 'Checkbox', 'Input', 'Progress', 'Select', 'Switch']],
+      [
+        'workflow/ExportStep.vue',
+        ['Button', 'Checkbox', 'Input', 'Progress', 'Select', 'Switch'],
+      ],
     ] as const;
 
     for (const [file, components] of pages) {
       const source = read(file);
       for (const component of components) {
         expect(source, `${file} must import ${component}`).toMatch(
-          new RegExp(String.raw`import \{[\s\S]*?\b${component}\b[\s\S]*?\} from 'ant-design-vue'`),
+          new RegExp(
+            String.raw`import \{[\s\S]*?\b${component}\b[\s\S]*?\} from 'ant-design-vue'`,
+          ),
         );
       }
     }
+  });
+
+  it('keeps guided browser artifacts portable across checkouts', () => {
+    const spec = read('../../../../e2e/guided-video-workflow.spec.ts');
+
+    expect(spec).not.toContain('/Users/');
+    expect(spec).not.toContain('/Desktop/nine-xing');
+    expect(spec).toContain('testInfo.outputPath');
   });
 });
