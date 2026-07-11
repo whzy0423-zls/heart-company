@@ -69,40 +69,42 @@ type Scene struct {
 }
 
 type Shot struct {
-	ActionDescription       string      `json:"actionDescription"`
-	AspectRatio             string      `json:"aspectRatio"`
-	CameraMovement          string      `json:"cameraMovement"`
-	CharacterIDs            []string    `json:"characterIds"`
-	CreateTime              string      `json:"createTime"`
-	Duration                int         `json:"duration"`
-	DynamicDescription      string      `json:"dynamicDescription"`
-	EndFrameURL             string      `json:"endFrameUrl"`
-	ErrorMessage            string      `json:"errorMessage"`
-	GeneratedPrompt         string      `json:"generatedPrompt"`
-	GenerationID            string      `json:"generationId"`
-	GenerationRevision      int         `json:"generationRevision"`
-	GridStoryboardPrompt    string      `json:"gridStoryboardPrompt"`
-	ID                      string      `json:"id"`
-	ImageReferenceModes     []string    `json:"imageReferenceModes"`
-	Name                    string      `json:"name"`
-	OrderNum                int         `json:"orderNum"`
-	ProjectID               string      `json:"projectId"`
-	SceneID                 string      `json:"sceneId"`
-	SelectedGenerationID    string      `json:"selectedGenerationId"`
-	ScriptOriginalContent   string      `json:"scriptOriginalContent"`
-	ShotAssets              []ShotAsset `json:"shotAssets"`
-	SoundAndPictureTogether string      `json:"soundAndPictureTogether"`
-	SourceKey               string      `json:"sourceKey"`
-	SourceScriptRevision    int         `json:"sourceScriptRevision"`
-	Status                  string      `json:"status"`
-	StoryboardURL           string      `json:"storyboardUrl"`
-	UpdateTime              string      `json:"updateTime"`
-	UsedAudios              []string    `json:"usedAudios"`
-	UsedImages              []string    `json:"usedImages"`
-	UsedVideos              []string    `json:"usedVideos"`
-	VideoModel              string      `json:"videoModel"`
-	VideoResolution         string      `json:"videoResolution"`
-	VideoReferenceMode      string      `json:"videoReferenceMode"`
+	ActionDescription          string      `json:"actionDescription"`
+	AspectRatio                string      `json:"aspectRatio"`
+	CameraMovement             string      `json:"cameraMovement"`
+	CharacterIDs               []string    `json:"characterIds"`
+	CreateTime                 string      `json:"createTime"`
+	Duration                   int         `json:"duration"`
+	DynamicDescription         string      `json:"dynamicDescription"`
+	EndFrameURL                string      `json:"endFrameUrl"`
+	ErrorMessage               string      `json:"errorMessage"`
+	GeneratedPrompt            string      `json:"generatedPrompt"`
+	GenerationID               string      `json:"generationId"`
+	GenerationRevision         int         `json:"generationRevision"`
+	GridStoryboardPrompt       string      `json:"gridStoryboardPrompt"`
+	ID                         string      `json:"id"`
+	ImageReferenceModes        []string    `json:"imageReferenceModes"`
+	Name                       string      `json:"name"`
+	OrderNum                   int         `json:"orderNum"`
+	ProjectID                  string      `json:"projectId"`
+	SceneID                    string      `json:"sceneId"`
+	SelectedGenerationID       string      `json:"selectedGenerationId"`
+	SelectedGenerationRevision int         `json:"selectedGenerationRevision"`
+	SelectedGenerationStatus   string      `json:"selectedGenerationStatus"`
+	ScriptOriginalContent      string      `json:"scriptOriginalContent"`
+	ShotAssets                 []ShotAsset `json:"shotAssets"`
+	SoundAndPictureTogether    string      `json:"soundAndPictureTogether"`
+	SourceKey                  string      `json:"sourceKey"`
+	SourceScriptRevision       int         `json:"sourceScriptRevision"`
+	Status                     string      `json:"status"`
+	StoryboardURL              string      `json:"storyboardUrl"`
+	UpdateTime                 string      `json:"updateTime"`
+	UsedAudios                 []string    `json:"usedAudios"`
+	UsedImages                 []string    `json:"usedImages"`
+	UsedVideos                 []string    `json:"usedVideos"`
+	VideoModel                 string      `json:"videoModel"`
+	VideoResolution            string      `json:"videoResolution"`
+	VideoReferenceMode         string      `json:"videoReferenceMode"`
 	// 联查生成记录的视频地址（前端预览）
 	VideoURL string `json:"videoUrl"`
 }
@@ -967,7 +969,7 @@ const shotSelectColumns = `s.id::text, s.project_id::text, s.order_num, s.name,
 	        s.generation_revision, s.source_key, s.source_script_revision,
 	        s.generated_prompt, s.used_images, s.used_videos, s.used_audios,
 	        s.end_frame_url, s.status, s.error_message, s.create_time, s.update_time,
-	        COALESCE(g.video_url,'')`
+	        COALESCE(g.video_url,''), COALESCE(g.status,''), COALESCE(g.shot_revision,0)`
 
 func scanShot(scanner interface{ Scan(...any) error }) (Shot, error) {
 	var sh Shot
@@ -982,7 +984,7 @@ func scanShot(scanner interface{ Scan(...any) error }) (Shot, error) {
 		&sh.GenerationID, &sh.SelectedGenerationID, &sh.GenerationRevision, &sh.SourceKey, &sh.SourceScriptRevision,
 		&sh.GeneratedPrompt, &usedImages, &usedVideos,
 		&usedAudios, &sh.EndFrameURL, &sh.Status, &sh.ErrorMessage, &createTime, &updateTime,
-		&sh.VideoURL,
+		&sh.VideoURL, &sh.SelectedGenerationStatus, &sh.SelectedGenerationRevision,
 	); err != nil {
 		return Shot{}, err
 	}
