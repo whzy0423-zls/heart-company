@@ -15,11 +15,15 @@ import {
   type WorkflowShotStatus,
 } from '#/api/core/videoproject';
 
-import { groupGeneratableShots, readinessFilter, type ReadinessFilter } from './workflow';
 import { createWorkflowPollingController } from './useWorkflowPolling';
 import VersionDrawer from './VersionDrawer.vue';
+import { groupGeneratableShots, readinessFilter, type ReadinessFilter } from './workflow';
 
-const props = defineProps<{ projectId: string; shots: WorkflowShotStatus[] }>();
+const props = defineProps<{
+  generationMode: 'demo' | 'paid';
+  projectId: string;
+  shots: WorkflowShotStatus[];
+}>();
 const emit = defineEmits<{ changed: [] }>();
 const filters: Array<{ key: ReadinessFilter; label: string }> = [
   { key: 'generatable', label: '可生成' }, { key: 'incomplete', label: '待完善' },
@@ -158,6 +162,13 @@ onBeforeUnmount(() => polling.stopAll());
 
 <template>
   <div class="generation-step">
+		<div
+			class="mode-banner"
+			:class="generationMode === 'demo' ? 'mode-banner-demo' : 'mode-banner-paid'"
+			role="status"
+		>
+			{{ generationMode === 'demo' ? '免费演练模式：使用本地占位视频，不会调用收费接口。' : '付费生成模式：生成操作会调用收费接口。' }}
+		</div>
     <div class="filter-bar" role="tablist" aria-label="分镜生成状态">
       <button v-for="filter in filters" :key="filter.key" type="button" :class="{ active: activeFilter === filter.key }" @click="activeFilter = filter.key">{{ filter.label }} <strong>{{ counts[filter.key] }}</strong></button>
     </div>
@@ -167,15 +178,15 @@ onBeforeUnmount(() => polling.stopAll());
       <article v-for="item in visibleShots" :key="item.shot.id" :data-shot-id="item.shot.id">
         <div><strong>{{ item.shot.name || `分镜 ${item.shot.orderNum}` }}</strong><span>{{ item.readiness }}</span></div>
         <p>{{ item.shot.actionDescription || '缺少动作描述，请返回分镜修改' }}</p>
-        <p v-if="timeoutShots.has(item.shot.id)" class="notice">仍在处理中，可<a-button type="link" @click="manualRefresh(item.shot.id)">手动刷新</a-button></p>
+        <p v-if="timeoutShots.has(item.shot.id)" class="notice">仍在处理中，可<AButton type="link" @click="manualRefresh(item.shot.id)">手动刷新</AButton></p>
         <div v-if="item.readiness === 'recovery'" class="recovery-actions">
-          <a-input v-model:value="recoveryTaskIds[item.shot.id]" placeholder="上游 task ID" />
-          <a-button @click="inspectRecovery">检查结果</a-button><a-button @click="reconcile(item)">对账</a-button>
+          <AInput v-model:value="recoveryTaskIds[item.shot.id]" placeholder="上游 task ID" />
+          <AButton @click="inspectRecovery">检查结果</AButton><AButton @click="reconcile(item)">对账</AButton>
         </div>
         <div v-else class="shot-actions">
-          <a-button v-if="item.canGenerate" :loading="busyShots.has(item.shot.id)" @click="generateOne(item)">生成</a-button>
-          <a-button v-if="item.readiness === 'completed'" @click="generateOne(item, true)">再生成一个版本</a-button>
-          <a-button data-version-trigger @click="openVersions(item)">查看版本</a-button>
+          <AButton v-if="item.canGenerate" :loading="busyShots.has(item.shot.id)" @click="generateOne(item)">生成</AButton>
+          <AButton v-if="item.readiness === 'completed'" @click="generateOne(item, true)">再生成一个版本</AButton>
+          <AButton data-version-trigger @click="openVersions(item)">查看版本</AButton>
         </div>
       </article>
     </div>
@@ -184,6 +195,6 @@ onBeforeUnmount(() => polling.stopAll());
 </template>
 
 <style scoped>
-.generation-step { display:grid; gap:16px; }.filter-bar { display:grid; grid-template-columns:repeat(4,minmax(110px,1fr)); overflow-x:auto; border-bottom:1px solid #dbe3ee; }.filter-bar button { min-height:48px; color:#475569; cursor:pointer; border:0; border-bottom:3px solid transparent; background:#fff; }.filter-bar button.active { color:#1d4ed8; border-bottom-color:#2563eb; background:#eff6ff; }.generation-summary,.notice { color:#64748b; }.generation-list { display:grid; gap:10px; }.generation-list article { padding:16px; display:grid; grid-template-columns:minmax(180px,.7fr) minmax(220px,1.4fr) auto; gap:12px; align-items:center; border:1px solid #dbe3ee; border-radius:8px; background:#fff; }.generation-list article>div:first-child { display:grid; }.generation-list span { color:#64748b; }.shot-actions,.recovery-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:8px; }.recovery-actions :deep(.ant-input){width:180px}:deep(.ant-btn),:deep(.ant-input),summary { min-height:44px; }
+.generation-step { display:grid; gap:16px; }.mode-banner { padding:12px 14px; font-weight:600; border:1px solid; border-radius:6px; }.mode-banner-demo { color:#166534; border-color:#86efac; background:#f0fdf4; }.mode-banner-paid { color:#991b1b; border-color:#fca5a5; background:#fef2f2; }.filter-bar { display:grid; grid-template-columns:repeat(4,minmax(110px,1fr)); overflow-x:auto; border-bottom:1px solid #dbe3ee; }.filter-bar button { min-height:48px; color:#475569; cursor:pointer; border:0; border-bottom:3px solid transparent; background:#fff; }.filter-bar button.active { color:#1d4ed8; border-bottom-color:#2563eb; background:#eff6ff; }.generation-summary,.notice { color:#64748b; }.generation-list { display:grid; gap:10px; }.generation-list article { padding:16px; display:grid; grid-template-columns:minmax(180px,.7fr) minmax(220px,1.4fr) auto; gap:12px; align-items:center; border:1px solid #dbe3ee; border-radius:8px; background:#fff; }.generation-list article>div:first-child { display:grid; }.generation-list span { color:#64748b; }.shot-actions,.recovery-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:8px; }.recovery-actions :deep(.ant-input){width:180px}:deep(.ant-btn),:deep(.ant-input),summary { min-height:44px; }
 @media(max-width:760px){.generation-list article{grid-template-columns:1fr}.shot-actions,.recovery-actions{justify-content:flex-start}.filter-bar{grid-template-columns:repeat(4,120px)}}
 </style>

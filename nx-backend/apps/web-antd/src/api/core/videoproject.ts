@@ -7,7 +7,7 @@ import { requestClient } from '#/api/request';
 export interface Project {
   characterCount: number;
   completedShots: number;
-  composeStatus: 'pending' | 'composing' | 'completed' | 'failed' | string;
+  composeStatus: 'completed' | 'composing' | 'failed' | 'pending' | string;
   createTime: string;
   description: string;
   finalVideoAssetId: string;
@@ -49,7 +49,7 @@ export interface Scene {
 
 export interface Shot {
   actionDescription: string;
-  aspectRatio: '16:9' | '9:16' | '1:1' | string;
+  aspectRatio: '1:1' | '9:16' | '16:9' | string;
   cameraMovement: string;
   characterIds: string[];
   createTime: string;
@@ -75,7 +75,7 @@ export interface Shot {
   soundAndPictureTogether: string;
   sourceKey: string;
   sourceScriptRevision: number;
-  status: 'draft' | 'generating' | 'completed' | 'failed' | string;
+  status: 'completed' | 'draft' | 'failed' | 'generating' | string;
   storyboardUrl: string;
   updateTime: string;
   usedAudios: string[];
@@ -161,7 +161,7 @@ export interface BatchGenerateResponse {
     orderNum: number;
     shotId: string;
     shotName: string;
-    status: 'success' | 'failed' | 'skipped' | string;
+    status: 'failed' | 'skipped' | 'success' | string;
   }>;
   successCount: number;
   totalShots: number;
@@ -192,14 +192,14 @@ export interface ComposeVideoResponse {
   jobId: string;
   progress: number;
   projectId: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed' | string;
+  status: 'completed' | 'failed' | 'processing' | 'queued' | string;
   videoUrl: string;
 }
 
 export interface ComposeStatusResponse {
   canCompose: boolean;
   completedShots: number;
-  composeStatus: 'pending' | 'composing' | 'completed' | 'failed' | string;
+  composeStatus: 'completed' | 'composing' | 'failed' | 'pending' | string;
   finalVideoUrl: string;
   projectId: string;
   totalShots: number;
@@ -224,6 +224,7 @@ export interface WorkflowActiveSubmission {
 }
 
 export interface ProjectWorkflow {
+	generationMode: 'demo' | 'paid';
   project: Project;
   recommendedStep: WorkflowStepKey;
   shots: WorkflowShotStatus[];
@@ -272,22 +273,22 @@ export function listProjectsApi(params?: Record<string, any>) {
   });
 }
 
-export function getProjectApi(id: string | number) {
+export function getProjectApi(id: number | string) {
   return requestClient.get<Project>(`/video/projects/${id}`);
 }
 
-export function updateProjectApi(id: string | number, data: Partial<Project>) {
+export function updateProjectApi(id: number | string, data: Partial<Project>) {
   return requestClient.put<Project>(`/video/projects/${id}`, data);
 }
 
-export function deleteProjectApi(id: string | number) {
+export function deleteProjectApi(id: number | string) {
   return requestClient.delete(`/video/projects/${id}`);
 }
 
 // ============ 角色 API ============
 
 export function createCharacterApi(
-  projectId: string | number,
+  projectId: number | string,
   data: Partial<Character>,
 ) {
   return requestClient.post<Character>(
@@ -296,82 +297,82 @@ export function createCharacterApi(
   );
 }
 
-export function listCharactersApi(projectId: string | number) {
+export function listCharactersApi(projectId: number | string) {
   return requestClient.get<Character[]>(`/video/projects-characters/${projectId}`);
 }
 
-export function updateCharacterApi(id: string | number, data: Partial<Character>) {
+export function updateCharacterApi(id: number | string, data: Partial<Character>) {
   return requestClient.put<Character>(`/video/projects-characters/_/${id}`, data);
 }
 
-export function deleteCharacterApi(id: string | number) {
+export function deleteCharacterApi(id: number | string) {
   return requestClient.delete(`/video/projects-characters/_/${id}`);
 }
 
 // ============ 场景 API ============
 
-export function createSceneApi(projectId: string | number, data: Partial<Scene>) {
+export function createSceneApi(projectId: number | string, data: Partial<Scene>) {
   return requestClient.post<Scene>(`/video/projects-scenes/${projectId}`, data);
 }
 
-export function listScenesApi(projectId: string | number) {
+export function listScenesApi(projectId: number | string) {
   return requestClient.get<Scene[]>(`/video/projects-scenes/${projectId}`);
 }
 
-export function updateSceneApi(id: string | number, data: Partial<Scene>) {
+export function updateSceneApi(id: number | string, data: Partial<Scene>) {
   return requestClient.put<Scene>(`/video/projects-scenes/_/${id}`, data);
 }
 
-export function deleteSceneApi(id: string | number) {
+export function deleteSceneApi(id: number | string) {
   return requestClient.delete(`/video/projects-scenes/_/${id}`);
 }
 
 // ============ 分镜 API ============
 
-export function createShotApi(projectId: string | number, data: Partial<Shot>) {
+export function createShotApi(projectId: number | string, data: Partial<Shot>) {
   return requestClient.post<Shot>(`/video/projects-shots/${projectId}`, data);
 }
 
-export function listShotsApi(projectId: string | number) {
+export function listShotsApi(projectId: number | string) {
   return requestClient.get<Shot[]>(`/video/projects-shots/list/${projectId}`);
 }
 
-export function getShotApi(id: string | number) {
+export function getShotApi(id: number | string) {
   return requestClient.get<Shot>(`/video/shots/${id}`);
 }
 
-export function updateShotApi(id: string | number, data: Partial<Shot>) {
+export function updateShotApi(id: number | string, data: Partial<Shot>) {
   return requestClient.put<Shot>(`/video/shots/${id}`, data);
 }
 
-export function deleteShotApi(id: string | number) {
+export function deleteShotApi(id: number | string) {
   return requestClient.delete(`/video/shots/${id}`);
 }
 
-export function listShotAssetsApi(shotId: string | number) {
+export function listShotAssetsApi(shotId: number | string) {
   return requestClient.get<ShotAsset[]>(`/video/shots-assets/list/${shotId}`);
 }
 
 export function createShotAssetApi(
-  shotId: string | number,
+  shotId: number | string,
   data: Partial<ShotAsset>,
 ) {
   return requestClient.post<ShotAsset>(`/video/shots-assets/${shotId}`, data);
 }
 
-export function deleteShotAssetApi(id: string | number) {
+export function deleteShotAssetApi(id: number | string) {
   return requestClient.delete(`/video/shots-assets/${id}`);
 }
 
-export function listShotVideoVersionsApi(shotId: string | number) {
+export function listShotVideoVersionsApi(shotId: number | string) {
   return requestClient.get<ShotVideoVersion[]>(
     `/video/shots-video-versions/list/${shotId}`,
   );
 }
 
 export function getShotVideoVersionDetailApi(
-  shotId: string | number,
-  generationId: string | number,
+  shotId: number | string,
+  generationId: number | string,
 ) {
   return requestClient.get<ShotVideoVersionDetail>(
     `/video/shots-video-versions/detail/${shotId}/${generationId}`,
@@ -379,8 +380,8 @@ export function getShotVideoVersionDetailApi(
 }
 
 export function setShotVideoVersionApi(
-  shotId: string | number,
-  generationId: string | number,
+  shotId: number | string,
+  generationId: number | string,
 ) {
   return requestClient.post<Shot>(
     `/video/shots-video-versions/set/${shotId}/${generationId}`,
@@ -388,8 +389,8 @@ export function setShotVideoVersionApi(
 }
 
 export function setShotVideoVersionBackupApi(
-  shotId: string | number,
-  generationId: string | number,
+  shotId: number | string,
+  generationId: number | string,
   backupFlag: boolean,
 ) {
   return requestClient.post<ShotVideoVersion>(
@@ -399,8 +400,8 @@ export function setShotVideoVersionBackupApi(
 }
 
 export function removeShotVideoVersionSubtitleApi(
-  shotId: string | number,
-  generationId: string | number,
+  shotId: number | string,
+  generationId: number | string,
 ) {
   return requestClient.post<ShotVideoVersion>(
     `/video/shots-video-versions/remove-subtitle/${shotId}/${generationId}`,
@@ -408,8 +409,8 @@ export function removeShotVideoVersionSubtitleApi(
 }
 
 export function upscaleShotVideoVersionApi(
-  shotId: string | number,
-  generationId: string | number,
+  shotId: number | string,
+  generationId: number | string,
   data: { resolution: string },
 ) {
   return requestClient.post<ShotVideoVersion>(
@@ -418,16 +419,16 @@ export function upscaleShotVideoVersionApi(
   );
 }
 
-export function refreshShotVideoVersionsApi(shotId: string | number) {
+export function refreshShotVideoVersionsApi(shotId: number | string) {
   return requestClient.post<ShotVideoVersion[]>(
     `/video/shots-video-versions/refresh/${shotId}`,
   );
 }
 
 export function copyShotVideoVersionApi(
-  sourceShotId: string | number,
-  generationId: string | number,
-  targetShotId: string | number,
+  sourceShotId: number | string,
+  generationId: number | string,
+  targetShotId: number | string,
 ) {
   return requestClient.post<Shot>(
     `/video/shots-video-versions/copy/${sourceShotId}/${generationId}/${targetShotId}`,
@@ -435,8 +436,8 @@ export function copyShotVideoVersionApi(
 }
 
 export function extractShotVideoFrameApi(
-  shotId: string | number,
-  generationId: string | number,
+  shotId: number | string,
+  generationId: number | string,
 ) {
   return requestClient.post<ShotAsset>(
     `/video/shots-video-versions/extract-frame/${shotId}/${generationId}`,
@@ -444,33 +445,33 @@ export function extractShotVideoFrameApi(
 }
 
 export function deleteShotVideoVersionApi(
-  shotId: string | number,
-  generationId: string | number,
+  shotId: number | string,
+  generationId: number | string,
 ) {
   return requestClient.delete(
     `/video/shots-video-versions/${shotId}/${generationId}`,
   );
 }
 
-export function markShotVideoVersionViewedApi(generationId: string | number) {
+export function markShotVideoVersionViewedApi(generationId: number | string) {
   return requestClient.post(`/video/shots-video-versions/viewed/${generationId}`);
 }
 
 export function generateShotApi(
-  shotId: string | number,
+  shotId: number | string,
   input: { requestKey: string },
 ) {
   return requestClient.post<VideoGeneration>(`/video/shots-generate/${shotId}`, input);
 }
 
-export function previewShotPromptApi(shotId: string | number) {
+export function previewShotPromptApi(shotId: number | string) {
   return requestClient.get<ShotPreview>(`/video/shots-preview/${shotId}`);
 }
 
 // ============ 批量生成和视频合成 API ============
 
 export function batchGenerateShotsApi(
-  projectId: string | number,
+  projectId: number | string,
   input: { items: Array<{ requestKey: string; shotId: string }> },
 ) {
   return requestClient.post<BatchGenerateResponse>(
@@ -480,14 +481,14 @@ export function batchGenerateShotsApi(
   );
 }
 
-export function getBatchProgressApi(projectId: string | number) {
+export function getBatchProgressApi(projectId: number | string) {
   return requestClient.get<BatchProgressResponse>(
     `/video/projects-batch-progress/${projectId}`,
   );
 }
 
 export function composeProjectVideoApi(
-  projectId: string | number,
+  projectId: number | string,
   data: ComposeProjectInput = {},
 ) {
   return requestClient.post<ComposeVideoResponse>(
@@ -497,30 +498,30 @@ export function composeProjectVideoApi(
   );
 }
 
-export function getComposeStatusApi(projectId: string | number) {
+export function getComposeStatusApi(projectId: number | string) {
   return requestClient.get<ComposeStatusResponse>(
     `/video/projects-compose-status/${projectId}`,
   );
 }
 
-export function getComposeJobApi(projectId: string | number, jobId: string | number) {
+export function getComposeJobApi(projectId: number | string, jobId: number | string) {
   return requestClient.get<ComposeVideoResponse>(
     `/video/projects-compose-safe-status/${projectId}/${jobId}`,
   );
 }
 
-export function getProjectWorkflowApi(projectId: string | number) {
+export function getProjectWorkflowApi(projectId: number | string) {
   return requestClient.get<ProjectWorkflow>(`/video/projects-workflow/${projectId}`);
 }
 
-export function getGenerationSubmissionApi(submissionId: string | number) {
+export function getGenerationSubmissionApi(submissionId: number | string) {
   return requestClient.get<GenerationSubmission>(
     `/video/generation-submissions/${submissionId}`,
   );
 }
 
 export function createShotsFromScriptApi(
-  projectId: string | number,
+  projectId: number | string,
   input: { items: ScriptParagraph[]; scriptRevision: number },
 ) {
   return requestClient.post<ScriptImportResult>(
@@ -530,7 +531,7 @@ export function createShotsFromScriptApi(
 }
 
 export function generateShotSafeApi(
-  shotId: string | number,
+  shotId: number | string,
   input: { requestKey: string },
 ) {
   return requestClient.post<VideoGeneration>(
@@ -540,7 +541,7 @@ export function generateShotSafeApi(
 }
 
 export function batchGenerateShotsSafeApi(
-  projectId: string | number,
+  projectId: number | string,
   input: { items: Array<{ requestKey: string; shotId: string }> },
 ) {
   return requestClient.post<BatchGenerateResponse>(
@@ -561,7 +562,7 @@ export function reconcileGenerationSubmissionApi(
 }
 
 export function composeProjectSafeApi(
-  projectId: string | number,
+  projectId: number | string,
   input: ComposeProjectInput,
 ) {
   return requestClient.post<ComposeVideoResponse>(

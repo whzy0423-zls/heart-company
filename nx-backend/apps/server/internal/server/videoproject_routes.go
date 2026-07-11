@@ -81,6 +81,7 @@ func (s *Server) videoWorkflowGet(w http.ResponseWriter, r *http.Request) {
 		workflowError(w, err)
 		return
 	}
+	result.GenerationMode = s.videoStore().GenerationMode()
 	httpx.OK(w, result)
 }
 

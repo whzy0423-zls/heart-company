@@ -15,8 +15,13 @@ func TestVideoWorkflowRouteContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	workflowRaw, err := os.ReadFile("../videoproject/workflow.go")
+	if err != nil {
+		t.Fatal(err)
+	}
 	serverSource := string(serverRaw)
 	routeSource := string(routesRaw)
+	workflowSource := string(workflowRaw)
 	for _, path := range []string{
 		"/api/video/projects-workflow/",
 		"/api/video/generation-submissions/",
@@ -55,6 +60,12 @@ func TestVideoWorkflowRouteContracts(t *testing.T) {
 		if !strings.Contains(routeSource, status) {
 			t.Errorf("workflow error mapping missing %s", status)
 		}
+	}
+	if !strings.Contains(routeSource, "result.GenerationMode = s.videoStore().GenerationMode()") {
+		t.Error("workflow response does not assign the effective generation mode")
+	}
+	if !strings.Contains(workflowSource, "`json:\"generationMode\"`") {
+		t.Error("workflow response type does not expose generationMode")
 	}
 }
 

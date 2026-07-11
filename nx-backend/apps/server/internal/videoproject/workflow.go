@@ -356,6 +356,7 @@ type WorkflowActiveSubmission struct {
 }
 
 type WorkflowStatus struct {
+	GenerationMode  string                             `json:"generationMode"`
 	Project         Project                            `json:"project"`
 	RecommendedStep WorkflowStep                       `json:"recommendedStep"`
 	Shots           []WorkflowShotStatus               `json:"shots"`

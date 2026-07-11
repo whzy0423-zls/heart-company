@@ -21,6 +21,7 @@ describe('guided video workflow api', () => {
     expect(source).toContain('submissionId: number');
     expect(source).toContain('requestKey: string');
     expect(source).not.toContain('requestSnapshot:');
+		expect(source).toContain("generationMode: 'demo' | 'paid';");
   });
 
   it('uses exact workflow endpoint contracts', async () => {

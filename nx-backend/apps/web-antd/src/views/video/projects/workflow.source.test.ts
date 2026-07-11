@@ -63,6 +63,7 @@ describe('guided workflow source contracts', () => {
   });
 
   it('provides safe generation filters, recovery and explicit version selection', () => {
+		const shell = read('workflow.vue');
     const generation = read('workflow/GenerationStep.vue');
     const drawer = read('workflow/VersionDrawer.vue');
     const polling = read('workflow/useWorkflowPolling.ts');
@@ -77,6 +78,11 @@ describe('guided workflow source contracts', () => {
     expect(generation).toContain('item.activeSubmission.requestKey');
     expect(generation).toContain("item.activeSubmission.status === 'unknown_outcome'");
     expect(generation).toContain('startPolling(item.shot.id)');
+		expect(shell).toContain(':generation-mode="workflow.generationMode"');
+		expect(generation).toContain("generationMode: 'demo' | 'paid'");
+		expect(generation).toContain('免费演练模式：使用本地占位视频，不会调用收费接口。');
+		expect(generation).toContain('付费生成模式：生成操作会调用收费接口。');
+		expect(generation).not.toContain('generation-mode-toggle');
   });
 
   it('provides exact export participation, async jobs and stale result recovery', () => {
@@ -101,7 +107,7 @@ describe('guided workflow source contracts', () => {
       const source = read(file);
       for (const component of components) {
         expect(source, `${file} must import ${component}`).toMatch(
-          new RegExp(`import \\{[\\s\\S]*?\\b${component}\\b[\\s\\S]*?\\} from 'ant-design-vue'`),
+          new RegExp(String.raw`import \{[\s\S]*?\b${component}\b[\s\S]*?\} from 'ant-design-vue'`),
         );
       }
     }

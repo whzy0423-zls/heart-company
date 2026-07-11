@@ -16,14 +16,14 @@ import {
   type WorkflowStepKey,
 } from '#/api/core/videoproject';
 
-import WorkflowStepper from './workflow/WorkflowStepper.vue';
 import AssetsStep from './workflow/AssetsStep.vue';
 import BriefStep from './workflow/BriefStep.vue';
-import GenerationStep from './workflow/GenerationStep.vue';
 import ExportStep from './workflow/ExportStep.vue';
+import GenerationStep from './workflow/GenerationStep.vue';
 import StoryboardStep from './workflow/StoryboardStep.vue';
-import { normalizeWorkflowStep, workflowSteps } from './workflow/workflow';
 import { createWorkflowNavigationController } from './workflow/useWorkflowNavigation';
+import { normalizeWorkflowStep, workflowSteps } from './workflow/workflow';
+import WorkflowStepper from './workflow/WorkflowStepper.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -150,10 +150,10 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
   <div class="workflow-page">
     <header class="workflow-header">
       <div>
-        <a-breadcrumb>
-          <a-breadcrumb-item><router-link to="/video/production">视频制作</router-link></a-breadcrumb-item>
-          <a-breadcrumb-item>{{ workflow?.project.name || '项目工作台' }}</a-breadcrumb-item>
-        </a-breadcrumb>
+        <ABreadcrumb>
+          <ABreadcrumbItem><router-link to="/video/production">视频制作</router-link></ABreadcrumbItem>
+          <ABreadcrumbItem>{{ workflow?.project.name || '项目工作台' }}</ABreadcrumbItem>
+        </ABreadcrumb>
         <h1>{{ workflow?.project.name || '项目工作台' }}</h1>
       </div>
       <router-link class="advanced-link" :to="advancedPath">高级工作台</router-link>
@@ -168,12 +168,12 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
 
     <main class="workflow-main">
       <div v-if="loading" class="workflow-loading" aria-live="polite">
-        <a-skeleton active :paragraph="{ rows: 7 }" />
+        <ASkeleton active :paragraph="{ rows: 7 }" />
       </div>
       <div v-else-if="fatalError" class="workflow-fatal" role="alert">
         <h2>暂时无法打开工作台</h2>
         <p>{{ fatalError }}</p>
-        <a-button type="primary" @click="retryLoad">重试</a-button>
+        <AButton type="primary" @click="retryLoad">重试</AButton>
       </div>
       <section v-else-if="workflow" class="workflow-panel" :data-step="activeStep">
         <p class="step-eyebrow">步骤 {{ stepIndex + 1 }} / 5</p>
@@ -184,14 +184,14 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
         <BriefStep v-if="activeStep === 'brief'" ref="briefStepRef" :project="workflow.project" @dirty="setDirty" @saved="loadWorkflow" />
         <AssetsStep v-else-if="activeStep === 'assets'" ref="assetsStepRef" :project-id="projectId" @dirty="setDirty" @changed="loadWorkflow" />
         <StoryboardStep v-else-if="activeStep === 'storyboard'" ref="storyboardStepRef" :project="workflow.project" :shots="workflow.shots" @dirty="setDirty" @changed="loadWorkflow" />
-        <GenerationStep v-else-if="activeStep === 'generate'" ref="generationStepRef" :project-id="projectId" :shots="workflow.shots" @changed="loadWorkflow" />
+        <GenerationStep v-else-if="activeStep === 'generate'" ref="generationStepRef" :generation-mode="workflow.generationMode" :project-id="projectId" :shots="workflow.shots" @changed="loadWorkflow" />
         <ExportStep v-else ref="exportStepRef" :current="workflow.steps.export === 'complete'" :project="workflow.project" :shots="workflow.shots" @changed="loadWorkflow" />
       </section>
     </main>
 
     <footer class="workflow-footer">
       <span>{{ workflow?.project.updateTime ? `最近更新 ${workflow.project.updateTime}` : '' }}</span>
-      <a-button
+      <AButton
         data-primary-action
         type="primary"
         :loading="primaryBusy"
@@ -199,17 +199,17 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
         @click="runPrimaryAction"
       >
         {{ primaryLabel }}
-      </a-button>
+      </AButton>
     </footer>
 
-    <a-modal :open="dirtyDialogVisible" title="保存当前修改？" :footer="null" @after-open-change="focusDirtyDialog" @cancel="cancelNavigation">
+    <AModal :open="dirtyDialogVisible" title="保存当前修改？" :footer="null" @after-open-change="focusDirtyDialog" @cancel="cancelNavigation">
       <p>当前内容尚未保存。保存后继续，或放弃本次修改。</p>
       <div class="dirty-actions">
-        <a-button autofocus @click="cancelNavigation">取消</a-button>
-        <a-button @click="discardAndContinue">放弃修改</a-button>
-        <a-button type="primary" @click="saveAndContinue">保存并继续</a-button>
+        <AButton autofocus @click="cancelNavigation">取消</AButton>
+        <AButton @click="discardAndContinue">放弃修改</AButton>
+        <AButton type="primary" @click="saveAndContinue">保存并继续</AButton>
       </div>
-    </a-modal>
+    </AModal>
   </div>
 </template>
 
