@@ -87,6 +87,17 @@ type GenerateInput struct {
 	ShotRevision int      `json:"shotRevision"`
 }
 
+type generationRequestSnapshot struct {
+	AspectRatio  string   `json:"aspectRatio"`
+	Audios       []string `json:"audios"`
+	Images       []string `json:"images"`
+	Model        string   `json:"model"`
+	Prompt       string   `json:"prompt"`
+	Seconds      int      `json:"seconds"`
+	ShotRevision int      `json:"shotRevision"`
+	Videos       []string `json:"videos"`
+}
+
 // 网关支持的视频时长（秒），默认 15s。
 var allowedSeconds = map[int]bool{5: true, 10: true, 15: true}
 
@@ -189,16 +200,7 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 		if strings.TrimSpace(input.RequestKey) == "" || strings.TrimSpace(input.ShotID) == "" {
 			return Generation{}, ErrInvalidSubmissionRequest
 		}
-		snapshot, err := json.Marshal(struct {
-			AspectRatio  string   `json:"aspectRatio"`
-			Audios       []string `json:"audios"`
-			Images       []string `json:"images"`
-			Model        string   `json:"model"`
-			Prompt       string   `json:"prompt"`
-			Seconds      int      `json:"seconds"`
-			ShotRevision int      `json:"shotRevision"`
-			Videos       []string `json:"videos"`
-		}{
+		snapshot, err := json.Marshal(generationRequestSnapshot{
 			AspectRatio:  aspectRatio,
 			Audios:       audios,
 			Images:       images,
@@ -282,12 +284,34 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 	var id string
 	var insertErr error
 	if paidProjectCall {
-		insertErr = s.db.QueryRowContext(ctx,
-			`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status, shot_id, shot_revision)
-			 VALUES ('newapi',$1,$2,$3,$4,$5,$6,$7,$8::bigint,$9)
-			 RETURNING id::text`,
-			model, prompt, imageURL, task.TaskID, seconds, aspectRatio, status, input.ShotID, input.ShotRevision,
-		).Scan(&id)
+		if _, ok := s.submissions.repo.(*sqlSubmissionRepository); ok {
+			id, submission, insertErr = s.persistAcceptedGenerationSQL(
+				ctx,
+				submission,
+				task.TaskID,
+				generationRequestSnapshot{
+					AspectRatio:  aspectRatio,
+					Audios:       audios,
+					Images:       images,
+					Model:        model,
+					Prompt:       prompt,
+					Seconds:      seconds,
+					ShotRevision: input.ShotRevision,
+					Videos:       videos,
+				},
+				status,
+			)
+		} else {
+			insertErr = s.db.QueryRowContext(ctx,
+				`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status, shot_id, shot_revision)
+				 VALUES ('newapi',$1,$2,$3,$4,$5,$6,$7,$8::bigint,$9)
+				 RETURNING id::text`,
+				model, prompt, imageURL, task.TaskID, seconds, aspectRatio, status, input.ShotID, input.ShotRevision,
+			).Scan(&id)
+			if insertErr == nil {
+				submission, insertErr = s.submissions.AttachAccepted(ctx, submission.RequestKey, task.TaskID, id)
+			}
+		}
 	} else {
 		insertErr = s.db.QueryRowContext(ctx,
 			`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status)
@@ -297,13 +321,18 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 		).Scan(&id)
 	}
 	if insertErr != nil {
-		return Generation{}, insertErr
-	}
-	if paidProjectCall {
-		submission, err = s.submissions.AttachAccepted(ctx, submission.RequestKey, task.TaskID, id)
-		if err != nil {
-			return Generation{}, err
+		if paidProjectCall {
+			_, markErr := s.submissions.MarkUnknownOutcome(ctx, submission.RequestKey, task.TaskID)
+			if markErr != nil {
+				return Generation{}, markErr
+			}
+			return Generation{}, &UnknownOutcomeError{
+				RequestKey: submission.RequestKey,
+				TaskID:     task.TaskID,
+				Cause:      insertErr,
+			}
 		}
+		return Generation{}, insertErr
 	}
 	item, err := s.Generation(ctx, id)
 	if err != nil {
@@ -313,6 +342,207 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 		item = attachSubmission(item, submission, input.ShotRevision)
 	}
 	return item, nil
+}
+
+func (s *Store) persistAcceptedGenerationSQL(
+	ctx context.Context,
+	submission Submission,
+	taskID string,
+	snapshot generationRequestSnapshot,
+	status string,
+) (generationID string, updated Submission, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", Submission{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	imageURL := ""
+	if len(snapshot.Images) > 0 {
+		imageURL = snapshot.Images[0]
+	}
+	if err := tx.QueryRowContext(ctx,
+		`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status, shot_id, shot_revision)
+		 VALUES ('newapi',$1,$2,$3,$4,$5,$6,$7,$8::bigint,$9)
+		 RETURNING id::text`,
+		snapshot.Model,
+		snapshot.Prompt,
+		imageURL,
+		taskID,
+		snapshot.Seconds,
+		snapshot.AspectRatio,
+		status,
+		submission.ShotID,
+		snapshot.ShotRevision,
+	).Scan(&generationID); err != nil {
+		return "", Submission{}, err
+	}
+	updated, err = scanSubmission(tx.QueryRowContext(ctx, `
+		UPDATE video_generation_submissions
+		SET status='accepted', task_id=$2, generation_id=$3::bigint,
+		    error_message='', update_time=now()
+		WHERE request_key=$1::uuid AND status='submitting'
+		RETURNING `+submissionColumns,
+		submission.RequestKey,
+		taskID,
+		generationID,
+	))
+	if err != nil {
+		return "", Submission{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", Submission{}, err
+	}
+	return generationID, updated, nil
+}
+
+// ReconcileSubmission links an ambiguous paid request to a known upstream task.
+// It never calls the create-task endpoint.
+func (s *Store) ReconcileSubmission(ctx context.Context, requestKey, taskID string) (Generation, error) {
+	requestKey = strings.TrimSpace(requestKey)
+	taskID = strings.TrimSpace(taskID)
+	if requestKey == "" || taskID == "" {
+		return Generation{}, ErrInvalidSubmissionRequest
+	}
+	if _, ok := s.submissions.repo.(*sqlSubmissionRepository); ok {
+		return s.reconcileSubmissionSQL(ctx, requestKey, taskID)
+	}
+	submission, err := s.submissions.GetByRequestKey(ctx, requestKey)
+	if err != nil {
+		return Generation{}, err
+	}
+	if submission.TaskID != "" && submission.TaskID != taskID {
+		return Generation{}, &ReconciliationTaskConflictError{
+			RequestKey: requestKey,
+			Existing:   submission.TaskID,
+			Received:   taskID,
+		}
+	}
+	var snapshot generationRequestSnapshot
+	if err := json.Unmarshal(submission.RequestSnapshot, &snapshot); err != nil {
+		return Generation{}, fmt.Errorf("decode generation submission snapshot: %w", err)
+	}
+	if submission.GenerationID != "" {
+		item, err := s.Generation(ctx, submission.GenerationID)
+		if err != nil {
+			return Generation{}, err
+		}
+		return attachSubmission(item, submission, snapshot.ShotRevision), nil
+	}
+	if submission.Status != SubmissionUnknownOutcome {
+		return Generation{}, &InvalidSubmissionTransitionError{
+			RequestKey: requestKey,
+			From:       submission.Status,
+			To:         SubmissionReconciled,
+		}
+	}
+
+	imageURL := ""
+	if len(snapshot.Images) > 0 {
+		imageURL = snapshot.Images[0]
+	}
+	var generationID string
+	if err := s.db.QueryRowContext(ctx,
+		`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status, shot_id, shot_revision)
+		 VALUES ('newapi',$1,$2,$3,$4,$5,$6,'queued',$7::bigint,$8)
+		 RETURNING id::text`,
+		snapshot.Model,
+		snapshot.Prompt,
+		imageURL,
+		taskID,
+		snapshot.Seconds,
+		snapshot.AspectRatio,
+		submission.ShotID,
+		snapshot.ShotRevision,
+	).Scan(&generationID); err != nil {
+		return Generation{}, err
+	}
+	submission, err = s.submissions.Reconcile(ctx, requestKey, taskID, generationID)
+	if err != nil {
+		return Generation{}, err
+	}
+	item, err := s.Generation(ctx, generationID)
+	if err != nil {
+		return Generation{}, err
+	}
+	return attachSubmission(item, submission, snapshot.ShotRevision), nil
+}
+
+func (s *Store) reconcileSubmissionSQL(ctx context.Context, requestKey, taskID string) (Generation, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Generation{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	submission, err := scanSubmission(tx.QueryRowContext(ctx, `
+		SELECT `+submissionColumns+`
+		FROM video_generation_submissions
+		WHERE request_key=$1::uuid
+		FOR UPDATE`, requestKey))
+	if err != nil {
+		return Generation{}, err
+	}
+	if submission.TaskID != "" && submission.TaskID != taskID {
+		return Generation{}, &ReconciliationTaskConflictError{
+			RequestKey: requestKey,
+			Existing:   submission.TaskID,
+			Received:   taskID,
+		}
+	}
+	var snapshot generationRequestSnapshot
+	if err := json.Unmarshal(submission.RequestSnapshot, &snapshot); err != nil {
+		return Generation{}, fmt.Errorf("decode generation submission snapshot: %w", err)
+	}
+	generationID := submission.GenerationID
+	if generationID == "" {
+		if submission.Status != SubmissionUnknownOutcome {
+			return Generation{}, &InvalidSubmissionTransitionError{
+				RequestKey: requestKey,
+				From:       submission.Status,
+				To:         SubmissionReconciled,
+			}
+		}
+		imageURL := ""
+		if len(snapshot.Images) > 0 {
+			imageURL = snapshot.Images[0]
+		}
+		if err := tx.QueryRowContext(ctx,
+			`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status, shot_id, shot_revision)
+			 VALUES ('newapi',$1,$2,$3,$4,$5,$6,'queued',$7::bigint,$8)
+			 RETURNING id::text`,
+			snapshot.Model,
+			snapshot.Prompt,
+			imageURL,
+			taskID,
+			snapshot.Seconds,
+			snapshot.AspectRatio,
+			submission.ShotID,
+			snapshot.ShotRevision,
+		).Scan(&generationID); err != nil {
+			return Generation{}, err
+		}
+		submission, err = scanSubmission(tx.QueryRowContext(ctx, `
+			UPDATE video_generation_submissions
+			SET status='reconciled', task_id=$2, generation_id=$3::bigint,
+			    error_message='', update_time=now()
+			WHERE request_key=$1::uuid AND status='unknown_outcome'
+			RETURNING `+submissionColumns,
+			requestKey,
+			taskID,
+			generationID,
+		))
+		if err != nil {
+			return Generation{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Generation{}, err
+	}
+	item, err := s.Generation(ctx, generationID)
+	if err != nil {
+		return Generation{}, err
+	}
+	return attachSubmission(item, submission, snapshot.ShotRevision), nil
 }
 
 func attachSubmission(item Generation, submission Submission, shotRevision int) Generation {

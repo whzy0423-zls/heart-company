@@ -326,6 +326,131 @@ func TestGenerateUnparseableSuccessIsUnknownOutcome(t *testing.T) {
 	assertPaidGenerateUnknownOutcome(t, store, repo, dbState, &postCount)
 }
 
+func TestGenerateReturnsTaskIDWhenLocalLinkFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"status": "queued", "task_id": "task-7"},
+		})
+	}))
+	defer server.Close()
+
+	dbState := &videoDBState{insertErr: errors.New("local generation link failed")}
+	db := openVideoTestDB(t, dbState)
+	defer db.Close()
+	repo := newMemorySubmissionRepository()
+	store := allowLocalTestStore(NewStore(db, nil, config.VideoConfig{APIBase: server.URL, APIKey: "test-key"}))
+	store.submissions = newSubmissionStore(repo)
+	requestKey := "11111111-1111-4111-8111-111111111111"
+
+	_, err := store.Generate(context.Background(), GenerateInput{
+		Prompt:       "test",
+		RequestKey:   requestKey,
+		ShotID:       "42",
+		ShotRevision: 3,
+	})
+	var unknown *UnknownOutcomeError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("expected unknown outcome after local link failure, got %v", err)
+	}
+	if unknown.TaskID != "task-7" {
+		t.Fatalf("recovery error lost upstream task id: %+v", unknown)
+	}
+	row, getErr := repo.GetByRequestKey(context.Background(), requestKey)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if row.Status != SubmissionUnknownOutcome || row.TaskID != "task-7" || row.GenerationID != "" {
+		t.Fatalf("local link failure was not persisted for recovery: %+v", row)
+	}
+}
+
+func TestReconcileSubmission(t *testing.T) {
+	store, repo, state, requestKey := setupUnknownSubmissionForReconcile(t)
+
+	first, err := store.ReconcileSubmission(context.Background(), requestKey, "task-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.ReconcileSubmission(context.Background(), requestKey, "task-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID || first.ID == "" {
+		t.Fatalf("same-task reconcile did not reuse generation: first=%+v second=%+v", first, second)
+	}
+	row, err := repo.GetByRequestKey(context.Background(), requestKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != SubmissionReconciled || row.TaskID != "task-7" || row.GenerationID != first.ID {
+		t.Fatalf("unexpected reconciled state: %+v", row)
+	}
+	if state.insertCalls != 1 {
+		t.Fatalf("same-task reconciliation inserted %d generations, want 1", state.insertCalls)
+	}
+
+	_, err = store.ReconcileSubmission(context.Background(), requestKey, "task-other")
+	var conflict *ReconciliationTaskConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("expected reconciliation task conflict, got %v", err)
+	}
+}
+
+func TestReconcileAfterStoreRestart(t *testing.T) {
+	store, repo, state, requestKey := setupUnknownSubmissionForReconcile(t)
+	restarted := allowLocalTestStore(NewStore(store.db, nil, config.VideoConfig{
+		APIBase: store.client.apiBase,
+		APIKey:  "test-key",
+	}))
+	restarted.submissions = newSubmissionStore(repo)
+
+	first, err := restarted.ReconcileSubmission(context.Background(), requestKey, "task-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRestart := allowLocalTestStore(NewStore(store.db, nil, config.VideoConfig{
+		APIBase: store.client.apiBase,
+		APIKey:  "test-key",
+	}))
+	secondRestart.submissions = newSubmissionStore(repo)
+	second, err := secondRestart.ReconcileSubmission(context.Background(), requestKey, "task-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID || state.insertCalls != 1 {
+		t.Fatalf("restart reconciliation duplicated generation: first=%+v second=%+v inserts=%d", first, second, state.insertCalls)
+	}
+}
+
+func setupUnknownSubmissionForReconcile(t *testing.T) (*Store, *memorySubmissionRepository, *videoDBState, string) {
+	t.Helper()
+	state := &videoDBState{}
+	db := openVideoTestDB(t, state)
+	t.Cleanup(func() { _ = db.Close() })
+	repo := newMemorySubmissionRepository()
+	store := allowLocalTestStore(NewStore(db, nil, config.VideoConfig{
+		APIBase: "http://video.example.test",
+		APIKey:  "test-key",
+	}))
+	store.submissions = newSubmissionStore(repo)
+	requestKey := "11111111-1111-4111-8111-111111111111"
+	snapshot := json.RawMessage(`{"aspectRatio":"16:9","audios":[],"images":[],"model":"video-ds-2.0-fast","prompt":"test","seconds":15,"shotRevision":3,"videos":[]}`)
+	if _, err := store.submissions.Prepare(context.Background(), PrepareSubmissionInput{
+		RequestKey:      requestKey,
+		ShotID:          "42",
+		RequestSnapshot: snapshot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.submissions.Transition(context.Background(), requestKey, SubmissionPrepared, SubmissionSubmitting); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.submissions.MarkUnknownOutcome(context.Background(), requestKey, "task-7"); err != nil {
+		t.Fatal(err)
+	}
+	return store, repo, state, requestKey
+}
+
 func assertPaidGenerateUnknownOutcome(
 	t *testing.T,
 	store *Store,
@@ -891,6 +1016,7 @@ func init() {
 
 type videoDBState struct {
 	generation        Generation
+	insertErr         error
 	uploadAsset       map[string]driver.Value
 	uploadAssetID     int64
 	uploadCreateCalls int
@@ -1041,6 +1167,9 @@ func (c *videoTestConn) QueryContext(_ context.Context, query string, args []dri
 		return singleRow([]string{"id", "key", "name", "content_type", "size", "data", "object_key", "object_url"}, []driver.Value{c.state.uploadAsset["id"], c.state.uploadAsset["key"], c.state.uploadAsset["name"], c.state.uploadAsset["content_type"], c.state.uploadAsset["size"], c.state.uploadAsset["data"], c.state.uploadAsset["object_key"], c.state.uploadAsset["object_url"]}), nil
 	case strings.Contains(q, "INSERT INTO video_generations"):
 		c.state.insertCalls++
+		if c.state.insertErr != nil {
+			return nil, c.state.insertErr
+		}
 		c.state.generation = Generation{
 			ID:          "42",
 			Provider:    "newapi",
