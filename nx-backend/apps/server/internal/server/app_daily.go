@@ -20,14 +20,14 @@ var shanghaiLoc = func() *time.Location {
 
 // dailyPracticeResp 今日成长练习的响应体。
 type dailyPracticeResp struct {
-	HasCard      bool   `json:"hasCard"`             // 是否已有主卡（决定是否展示空状态引导）
-	MainType     int    `json:"mainType,omitempty"`  // 主型 id
-	Practice     string `json:"practice,omitempty"`  // 今日练习
-	MindWord     string `json:"mindWord,omitempty"`  // 今日心语
-	Question     string `json:"question,omitempty"`  // 今日适合问的问题
-	Date         string `json:"date"`                // 今日日期 YYYY-MM-DD
-	CheckedIn    bool   `json:"checkedIn"`           // 今日是否已打卡
-	CheckinCount int    `json:"checkinCount"`        // 累计打卡天数
+	HasCard      bool   `json:"hasCard"`            // 是否已有主卡（决定是否展示空状态引导）
+	MainType     int    `json:"mainType,omitempty"` // 主型 id
+	Practice     string `json:"practice,omitempty"` // 今日练习
+	MindWord     string `json:"mindWord,omitempty"` // 今日心语
+	Question     string `json:"question,omitempty"` // 今日适合问的问题
+	Date         string `json:"date"`               // 今日日期 YYYY-MM-DD
+	CheckedIn    bool   `json:"checkedIn"`          // 今日是否已打卡
+	CheckinCount int    `json:"checkinCount"`       // 累计打卡天数
 }
 
 // appDailyPractice 返回当前用户今日的成长练习内容与打卡状态。
