@@ -39,6 +39,7 @@ type Store struct {
 	db           *sql.DB
 	uploads      *uploadasset.Store
 	uploader     storage.ObjectUploader
+	submissions  *SubmissionStore
 	defaultModel string
 }
 
@@ -54,8 +55,12 @@ type Generation struct {
 	Model        string  `json:"model"`
 	Prompt       string  `json:"prompt"`
 	Provider     string  `json:"provider"`
+	RequestKey   string  `json:"requestKey,omitempty"`
 	Seconds      int     `json:"seconds"`
+	ShotID       string  `json:"shotId,omitempty"`
+	ShotRevision int     `json:"shotRevision,omitempty"`
 	Status       string  `json:"status"`
+	SubmissionID int64   `json:"submissionId,omitempty"`
 	TaskID       string  `json:"taskId"`
 	UpdateTime   string  `json:"updateTime"`
 	VideoAssetID string  `json:"videoAssetId"`
@@ -69,14 +74,17 @@ type PageResult[T any] struct {
 }
 
 type GenerateInput struct {
-	AspectRatio string   `json:"aspectRatio"`
-	Audios      []string `json:"audios"`   // 参考音频 URL
-	ImageURL    string   `json:"imageUrl"` // 兼容旧字段：单张参考图地址
-	Images      []string `json:"images"`   // 参考图片地址（上传到文件桶后的可公网访问 URL）
-	Videos      []string `json:"videos"`   // 参考视频地址（上传到文件桶后的可公网访问 URL）
-	Model       string   `json:"model"`
-	Prompt      string   `json:"prompt"`
-	Seconds     int      `json:"seconds"`
+	AspectRatio  string   `json:"aspectRatio"`
+	Audios       []string `json:"audios"`   // 参考音频 URL
+	ImageURL     string   `json:"imageUrl"` // 兼容旧字段：单张参考图地址
+	Images       []string `json:"images"`   // 参考图片地址（上传到文件桶后的可公网访问 URL）
+	Videos       []string `json:"videos"`   // 参考视频地址（上传到文件桶后的可公网访问 URL）
+	Model        string   `json:"model"`
+	Prompt       string   `json:"prompt"`
+	RequestKey   string   `json:"requestKey"`
+	Seconds      int      `json:"seconds"`
+	ShotID       string   `json:"shotId"`
+	ShotRevision int      `json:"shotRevision"`
 }
 
 // 网关支持的视频时长（秒），默认 15s。
@@ -127,6 +135,7 @@ func NewStore(database *sql.DB, uploads *uploadasset.Store, cfg config.VideoConf
 		db:           database,
 		uploads:      uploads,
 		uploader:     uploader,
+		submissions:  NewSubmissionStore(database),
 		defaultModel: model,
 	}
 }
@@ -173,6 +182,67 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 		imageURL = images[0]
 	}
 
+	var submission Submission
+	paidProjectCall := strings.TrimSpace(input.RequestKey) != "" || strings.TrimSpace(input.ShotID) != ""
+	if paidProjectCall {
+		if strings.TrimSpace(input.RequestKey) == "" || strings.TrimSpace(input.ShotID) == "" {
+			return Generation{}, ErrInvalidSubmissionRequest
+		}
+		snapshot, err := json.Marshal(struct {
+			AspectRatio  string   `json:"aspectRatio"`
+			Audios       []string `json:"audios"`
+			Images       []string `json:"images"`
+			Model        string   `json:"model"`
+			Prompt       string   `json:"prompt"`
+			Seconds      int      `json:"seconds"`
+			ShotRevision int      `json:"shotRevision"`
+			Videos       []string `json:"videos"`
+		}{
+			AspectRatio:  aspectRatio,
+			Audios:       audios,
+			Images:       images,
+			Model:        model,
+			Prompt:       prompt,
+			Seconds:      seconds,
+			ShotRevision: input.ShotRevision,
+			Videos:       videos,
+		})
+		if err != nil {
+			return Generation{}, err
+		}
+		submission, err = s.submissions.Prepare(ctx, PrepareSubmissionInput{
+			RequestKey:      input.RequestKey,
+			ShotID:          input.ShotID,
+			RequestSnapshot: snapshot,
+		})
+		if err != nil {
+			return Generation{}, err
+		}
+		if submission.GenerationID != "" {
+			item, err := s.Generation(ctx, submission.GenerationID)
+			if err != nil {
+				return Generation{}, err
+			}
+			return attachSubmission(item, submission, input.ShotRevision), nil
+		}
+		if submission.Status != SubmissionPrepared {
+			return attachSubmission(Generation{Status: string(submission.Status)}, submission, input.ShotRevision), nil
+		}
+		submission, err = s.submissions.Transition(
+			ctx,
+			submission.RequestKey,
+			SubmissionPrepared,
+			SubmissionSubmitting,
+		)
+		if err != nil {
+			current, getErr := s.submissions.GetByRequestKey(ctx, input.RequestKey)
+			if getErr == nil {
+				return attachSubmission(Generation{Status: string(current.Status)}, current, input.ShotRevision), nil
+			}
+			return Generation{}, err
+		}
+	}
+
 	task, err := s.client.CreateTask(ctx, model, prompt, images, videos, audios, seconds, aspectRatio)
 	if err != nil {
 		var id string
@@ -190,15 +260,47 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 
 	status := normalizeStatus(task.Status)
 	var id string
-	if err := s.db.QueryRowContext(ctx,
-		`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status)
+	var insertErr error
+	if paidProjectCall {
+		insertErr = s.db.QueryRowContext(ctx,
+			`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status, shot_id, shot_revision)
+			 VALUES ('newapi',$1,$2,$3,$4,$5,$6,$7,$8::bigint,$9)
+			 RETURNING id::text`,
+			model, prompt, imageURL, task.TaskID, seconds, aspectRatio, status, input.ShotID, input.ShotRevision,
+		).Scan(&id)
+	} else {
+		insertErr = s.db.QueryRowContext(ctx,
+			`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status)
 			 VALUES ('newapi',$1,$2,$3,$4,$5,$6,$7)
 			 RETURNING id::text`,
-		model, prompt, imageURL, task.TaskID, seconds, aspectRatio, status,
-	).Scan(&id); err != nil {
+			model, prompt, imageURL, task.TaskID, seconds, aspectRatio, status,
+		).Scan(&id)
+	}
+	if insertErr != nil {
+		return Generation{}, insertErr
+	}
+	if paidProjectCall {
+		submission, err = s.submissions.AttachAccepted(ctx, submission.RequestKey, task.TaskID, id)
+		if err != nil {
+			return Generation{}, err
+		}
+	}
+	item, err := s.Generation(ctx, id)
+	if err != nil {
 		return Generation{}, err
 	}
-	return s.Generation(ctx, id)
+	if paidProjectCall {
+		item = attachSubmission(item, submission, input.ShotRevision)
+	}
+	return item, nil
+}
+
+func attachSubmission(item Generation, submission Submission, shotRevision int) Generation {
+	item.SubmissionID = submission.ID
+	item.RequestKey = submission.RequestKey
+	item.ShotID = submission.ShotID
+	item.ShotRevision = shotRevision
+	return item
 }
 
 // Refresh 轮询单条记录的网关状态。终态直接返回；进行中则查询网关，

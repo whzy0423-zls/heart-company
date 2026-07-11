@@ -182,6 +182,91 @@ func TestGenerateRejectsUnsupportedAspectRatio(t *testing.T) {
 	}
 }
 
+func TestGenerateReusesRequestKey(t *testing.T) {
+	var postCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		postCount++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"status":  "queued",
+				"task_id": "task-1",
+			},
+		})
+	}))
+	defer server.Close()
+
+	db := openVideoTestDB(t, &videoDBState{})
+	defer db.Close()
+	store := allowLocalTestStore(NewStore(db, nil, config.VideoConfig{
+		APIBase: server.URL,
+		APIKey:  "test-key",
+	}))
+	store.submissions = newSubmissionStore(newMemorySubmissionRepository())
+	input := GenerateInput{
+		Prompt:       "test",
+		RequestKey:   "11111111-1111-4111-8111-111111111111",
+		ShotID:       "42",
+		ShotRevision: 3,
+	}
+
+	first, err := store.Generate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Generate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID || first.SubmissionID == 0 || first.SubmissionID != second.SubmissionID {
+		t.Fatalf("same request key must reuse one identity: first=%+v second=%+v", first, second)
+	}
+	if postCount != 1 {
+		t.Fatalf("same request key issued %d upstream POSTs, want 1", postCount)
+	}
+}
+
+func TestGenerateRejectsNewKeyWhileActive(t *testing.T) {
+	var postCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		postCount++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"status":  "queued",
+				"task_id": "task-1",
+			},
+		})
+	}))
+	defer server.Close()
+
+	db := openVideoTestDB(t, &videoDBState{})
+	defer db.Close()
+	store := allowLocalTestStore(NewStore(db, nil, config.VideoConfig{
+		APIBase: server.URL,
+		APIKey:  "test-key",
+	}))
+	store.submissions = newSubmissionStore(newMemorySubmissionRepository())
+	first := GenerateInput{
+		Prompt:       "test",
+		RequestKey:   "11111111-1111-4111-8111-111111111111",
+		ShotID:       "42",
+		ShotRevision: 3,
+	}
+	if _, err := store.Generate(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+
+	second := first
+	second.RequestKey = "22222222-2222-4222-8222-222222222222"
+	_, err := store.Generate(context.Background(), second)
+	var active *ActiveSubmissionError
+	if !errors.As(err, &active) {
+		t.Fatalf("expected active submission conflict, got %v", err)
+	}
+	if postCount != 1 {
+		t.Fatalf("active conflict issued %d upstream POSTs, want 1", postCount)
+	}
+}
+
 func TestGenerateRejectsSuccessfulCreateWithoutTaskID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
