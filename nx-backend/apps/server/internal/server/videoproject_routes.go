@@ -2,12 +2,14 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
 	"strings"
 
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/video"
 	"nine-xing/nx-backend/apps/server/internal/videoproject"
 )
 
@@ -39,6 +41,216 @@ func (s *Server) videoProjectComposer() *videoproject.ProjectComposer {
 		s.uploader,
 		s.uploads,
 	)
+}
+
+func workflowData(w http.ResponseWriter, status int, data any) {
+	httpx.JSON(w, status, httpx.Response{Code: 0, Data: data, Message: "ok"})
+}
+
+func workflowError(w http.ResponseWriter, err error) {
+	var active *video.ActiveSubmissionError
+	var reconcile *video.ReconciliationTaskConflictError
+	var composeActive *videoproject.ComposeActiveJobError
+	var transition *video.InvalidSubmissionTransitionError
+	switch {
+	case errors.As(err, &active), errors.As(err, &reconcile), errors.As(err, &composeActive), errors.As(err, &transition):
+		httpx.Fail(w, http.StatusConflict, err.Error())
+	case errors.Is(err, video.ErrInvalidSubmissionRequest):
+		httpx.Fail(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, video.ErrSubmissionNotFound):
+		httpx.Fail(w, http.StatusNotFound, err.Error())
+	default:
+		httpx.Fail(w, http.StatusUnprocessableEntity, err.Error())
+	}
+}
+
+func validRequestKey(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	return len(raw) == 36 && raw[8] == '-' && raw[13] == '-' && raw[18] == '-' && raw[23] == '-'
+}
+
+func (s *Server) videoWorkflowGet(w http.ResponseWriter, r *http.Request) {
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/projects-workflow/"), "/")
+	if id == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少项目 ID")
+		return
+	}
+	result, err := s.videoProjectStore().GetWorkflowStatus(r.Context(), id)
+	if err != nil {
+		workflowError(w, err)
+		return
+	}
+	httpx.OK(w, result)
+}
+
+type workflowImportInput struct {
+	Items          []videoproject.ScriptParagraph `json:"items"`
+	ScriptRevision int                            `json:"scriptRevision"`
+}
+
+func (s *Server) videoWorkflowImport(w http.ResponseWriter, r *http.Request) {
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/projects-shots/from-script/"), "/")
+	if id == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少项目 ID")
+		return
+	}
+	var input workflowImportInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "请求参数错误")
+		return
+	}
+	result, err := s.videoProjectStore().CreateShotsFromScript(r.Context(), id, input.ScriptRevision, input.Items)
+	if err != nil {
+		workflowError(w, err)
+		return
+	}
+	httpx.OK(w, result)
+}
+
+type safeGenerateInput struct {
+	RequestKey string `json:"requestKey"`
+}
+
+func (s *Server) runWorkflowGenerate(w http.ResponseWriter, r *http.Request, id string, input safeGenerateInput) {
+	if !validRequestKey(input.RequestKey) {
+		httpx.Fail(w, http.StatusBadRequest, "缺少生成请求键或请求键格式错误")
+		return
+	}
+	_, lookupErr := s.videoStore().SubmissionByRequestKey(r.Context(), input.RequestKey)
+	reused := lookupErr == nil
+	generation, err := s.videoProjectGenerator().GenerateShot(r.Context(), id, input.RequestKey)
+	if err != nil {
+		var unknown *video.UnknownOutcomeError
+		if errors.As(err, &unknown) {
+			workflowData(w, http.StatusAccepted, map[string]any{
+				"requestKey": unknown.RequestKey,
+				"taskId":     unknown.TaskID,
+				"status":     video.SubmissionUnknownOutcome,
+			})
+			return
+		}
+		workflowError(w, err)
+		return
+	}
+	status := http.StatusAccepted
+	if reused {
+		status = http.StatusOK
+	}
+	workflowData(w, status, generation)
+}
+
+func (s *Server) videoWorkflowGenerate(w http.ResponseWriter, r *http.Request) {
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/shots-generate-safe/"), "/")
+	if id == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少分镜 ID")
+		return
+	}
+	var input safeGenerateInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "请求参数错误")
+		return
+	}
+	s.runWorkflowGenerate(w, r, id, input)
+}
+
+type safeBatchGenerateInput struct {
+	Items []videoproject.SafeBatchGenerateItem `json:"items"`
+}
+
+func (s *Server) videoWorkflowBatchGenerate(w http.ResponseWriter, r *http.Request) {
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/projects-batch-generate-safe/"), "/")
+	if id == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少项目 ID")
+		return
+	}
+	var input safeBatchGenerateInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || len(input.Items) == 0 {
+		httpx.Fail(w, http.StatusBadRequest, "请求参数错误")
+		return
+	}
+	for _, item := range input.Items {
+		if !validRequestKey(item.RequestKey) {
+			httpx.Fail(w, http.StatusBadRequest, "缺少生成请求键或请求键格式错误")
+			return
+		}
+	}
+	result, err := s.videoProjectBatchGenerator().GenerateSafe(r.Context(), id, input.Items, r.URL.Query().Get("mode") == "parallel")
+	if err != nil {
+		workflowError(w, err)
+		return
+	}
+	workflowData(w, http.StatusAccepted, result)
+}
+
+func (s *Server) videoWorkflowSubmissionStatus(w http.ResponseWriter, r *http.Request) {
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/generation-submissions/"), "/")
+	if id == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少提交 ID")
+		return
+	}
+	result, err := s.videoStore().SubmissionByID(r.Context(), id)
+	if err != nil {
+		workflowError(w, err)
+		return
+	}
+	httpx.OK(w, result)
+}
+
+type reconcileSubmissionInput struct {
+	TaskID string `json:"taskId"`
+}
+
+func (s *Server) videoWorkflowReconcile(w http.ResponseWriter, r *http.Request) {
+	requestKey := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/generation-submissions/reconcile/"), "/")
+	if !validRequestKey(requestKey) {
+		httpx.Fail(w, http.StatusBadRequest, "请求键格式错误")
+		return
+	}
+	var input reconcileSubmissionInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || strings.TrimSpace(input.TaskID) == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少 taskId")
+		return
+	}
+	result, err := s.videoStore().ReconcileSubmission(r.Context(), requestKey, input.TaskID)
+	if err != nil {
+		workflowError(w, err)
+		return
+	}
+	httpx.OK(w, result)
+}
+
+func (s *Server) videoWorkflowCompose(w http.ResponseWriter, r *http.Request) {
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/projects-compose-safe/"), "/")
+	if id == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少项目 ID")
+		return
+	}
+	var input videoproject.ComposeProjectInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "请求参数错误")
+		return
+	}
+	result, err := s.videoProjectComposer().StartCompose(r.Context(), id, input)
+	if err != nil {
+		workflowError(w, err)
+		return
+	}
+	workflowData(w, http.StatusAccepted, result)
+}
+
+func (s *Server) videoWorkflowComposeStatus(w http.ResponseWriter, r *http.Request) {
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/video/projects-compose-safe-status/"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		httpx.Fail(w, http.StatusBadRequest, "缺少项目 ID 或合成任务 ID")
+		return
+	}
+	result, err := s.videoProjectComposer().GetComposeJob(r.Context(), parts[0], parts[1])
+	if err != nil {
+		workflowError(w, err)
+		return
+	}
+	httpx.OK(w, result)
 }
 
 // 项目列表
@@ -660,17 +872,17 @@ func (s *Server) generateVideoShot(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "缺少分镜 ID")
 		return
 	}
-	generation, err := s.videoProjectGenerator().GenerateShot(r.Context(), id)
-	if err != nil {
-		log.Printf("generate shot failed: %v", err)
-		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+	var input safeGenerateInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || !validRequestKey(input.RequestKey) {
+		httpx.Fail(w, http.StatusBadRequest, "缺少生成请求键")
 		return
 	}
-	httpx.OK(w, generation)
+	// Legacy callers delegate to the same paid-generation safety contract.
+	s.runWorkflowGenerate(w, r, id, input)
 }
 
 type batchGenerateInput struct {
-	ShotIDs []string `json:"shotIds"`
+	Items []videoproject.SafeBatchGenerateItem `json:"items"`
 }
 
 // 批量生成项目所有分镜（顺序生成）
@@ -693,17 +905,17 @@ func (s *Server) batchGenerateShots(w http.ResponseWriter, r *http.Request) {
 		mode = "sequential" // 默认顺序生成
 	}
 
-	var result interface{}
-	var err error
-
-	if len(input.ShotIDs) > 0 {
-		result, err = s.videoProjectBatchGenerator().GenerateSelectedShots(r.Context(), id, input.ShotIDs, mode == "parallel")
-	} else if mode == "parallel" {
-		result, err = s.videoProjectBatchGenerator().GenerateAllShotsParallel(r.Context(), id)
-	} else {
-		result, err = s.videoProjectBatchGenerator().GenerateAllShots(r.Context(), id)
+	if len(input.Items) == 0 {
+		httpx.Fail(w, http.StatusBadRequest, "缺少生成请求键")
+		return
 	}
-
+	for _, item := range input.Items {
+		if !validRequestKey(item.RequestKey) {
+			httpx.Fail(w, http.StatusBadRequest, "缺少生成请求键")
+			return
+		}
+	}
+	result, err := s.videoProjectBatchGenerator().GenerateSafe(r.Context(), id, input.Items, mode == "parallel")
 	if err != nil {
 		log.Printf("batch generate shots failed: %v", err)
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
@@ -743,13 +955,13 @@ func (s *Server) composeProjectVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.videoProjectComposer().ComposeProject(r.Context(), id, input)
+	result, err := s.videoProjectComposer().StartCompose(r.Context(), id, input)
 	if err != nil {
 		log.Printf("compose project video failed: %v", err)
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	httpx.OK(w, result)
+	workflowData(w, http.StatusAccepted, result)
 }
 
 // 获取合成状态

@@ -168,17 +168,20 @@ export interface BatchProgressResponse {
 
 export interface ComposeProjectInput {
   enableSubtitles?: boolean;
+  excludedShotIds?: string[];
   musicUrl?: string;
+  partialAcknowledged?: boolean;
   transition?: string;
 }
 
 export interface ComposeVideoResponse {
-  duration: number;
-  errorMessage?: string;
-  fileSize: number;
+  error?: string;
+  inputHash: string;
+  isCurrent: boolean;
+  jobId: string;
+  progress: number;
   projectId: string;
-  shotCount: number;
-  status: 'completed' | 'failed' | string;
+  status: 'queued' | 'processing' | 'completed' | 'failed' | string;
   videoUrl: string;
 }
 
@@ -387,8 +390,11 @@ export function markShotVideoVersionViewedApi(generationId: string | number) {
   return requestClient.post(`/video/shots-video-versions/viewed/${generationId}`);
 }
 
-export function generateShotApi(shotId: string | number) {
-  return requestClient.post<VideoGeneration>(`/video/shots-generate/${shotId}`, {});
+export function generateShotApi(
+  shotId: string | number,
+  input: { requestKey: string },
+) {
+  return requestClient.post<VideoGeneration>(`/video/shots-generate/${shotId}`, input);
 }
 
 export function previewShotPromptApi(shotId: string | number) {
@@ -397,7 +403,10 @@ export function previewShotPromptApi(shotId: string | number) {
 
 // ============ 批量生成和视频合成 API ============
 
-export function batchGenerateShotsApi(projectId: string | number, input: { shotIds?: string[] } = {}) {
+export function batchGenerateShotsApi(
+  projectId: string | number,
+  input: { items: Array<{ requestKey: string; shotId: string }> },
+) {
   return requestClient.post<BatchGenerateResponse>(
     `/video/projects-batch-generate/${projectId}`,
     input,
@@ -425,6 +434,12 @@ export function composeProjectVideoApi(
 export function getComposeStatusApi(projectId: string | number) {
   return requestClient.get<ComposeStatusResponse>(
     `/video/projects-compose-status/${projectId}`,
+  );
+}
+
+export function getComposeJobApi(projectId: string | number, jobId: string | number) {
+  return requestClient.get<ComposeVideoResponse>(
+    `/video/projects-compose-safe-status/${projectId}/${jobId}`,
   );
 }
 

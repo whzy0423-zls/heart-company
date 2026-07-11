@@ -132,6 +132,7 @@ func (e *UnknownOutcomeError) Unwrap() error { return e.Cause }
 
 type submissionRepository interface {
 	Insert(context.Context, PrepareSubmissionInput) (Submission, error)
+	GetByID(context.Context, string) (Submission, error)
 	GetByRequestKey(context.Context, string) (Submission, error)
 	GetByGenerationID(context.Context, string) (Submission, error)
 	FindActiveByShot(context.Context, string) (Submission, error)
@@ -220,6 +221,10 @@ func (s *SubmissionStore) transition(
 
 func (s *SubmissionStore) GetByRequestKey(ctx context.Context, requestKey string) (Submission, error) {
 	return s.repo.GetByRequestKey(ctx, strings.TrimSpace(requestKey))
+}
+
+func (s *SubmissionStore) GetByID(ctx context.Context, id string) (Submission, error) {
+	return s.repo.GetByID(ctx, strings.TrimSpace(id))
 }
 
 func (s *SubmissionStore) FindActiveByShot(ctx context.Context, shotID string) (Submission, error) {
@@ -398,6 +403,13 @@ func (r *sqlSubmissionRepository) GetByRequestKey(ctx context.Context, requestKe
 		SELECT `+submissionColumns+`
 		FROM video_generation_submissions
 		WHERE request_key=$1::uuid`, requestKey))
+}
+
+func (r *sqlSubmissionRepository) GetByID(ctx context.Context, id string) (Submission, error) {
+	return scanSubmission(r.db.QueryRowContext(ctx, `
+		SELECT `+submissionColumns+`
+		FROM video_generation_submissions
+		WHERE id=$1::bigint`, id))
 }
 
 func (r *sqlSubmissionRepository) GetByGenerationID(ctx context.Context, generationID string) (Submission, error) {

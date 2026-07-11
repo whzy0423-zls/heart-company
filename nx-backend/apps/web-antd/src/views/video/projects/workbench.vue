@@ -1585,6 +1585,7 @@ import {
   generateShotApi,
   batchGenerateShotsApi,
   composeProjectVideoApi,
+  getComposeJobApi,
   type Project,
   type Character,
   type Scene,
@@ -1816,6 +1817,31 @@ const sceneVideoUploading = ref(false)
 const shotLoading = ref(false)
 const shotEditCardRef = ref<HTMLElement | null>(null)
 const shotActionBusyIds = ref(new Set<string>())
+const generationRequestKeys = ref(new Map<string, string>())
+const composeJobId = ref('')
+
+function createGenerationRequestKey() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+    const value = Math.floor(Math.random() * 16)
+    return (char === 'x' ? value : (value & 0x3) | 0x8).toString(16)
+  })
+}
+
+function getGenerationRequestKey(shotId: string, forceNew = false) {
+  if (forceNew || !generationRequestKeys.value.has(shotId)) {
+    generationRequestKeys.value.set(shotId, createGenerationRequestKey())
+    generationRequestKeys.value = new Map(generationRequestKeys.value)
+  }
+  return generationRequestKeys.value.get(shotId)!
+}
+
+function clearGenerationRequestKey(shotId: string) {
+  generationRequestKeys.value.delete(shotId)
+  generationRequestKeys.value = new Map(generationRequestKeys.value)
+}
 const bindingShotIds = ref(new Set<string>())
 const shotAssetUploadingKeys = ref(new Set<string>())
 const shotImageAssetLibraryTypes: VideoAssetType[] = ['scene', 'character', 'prop', 'outfit', 'style']
@@ -2365,6 +2391,9 @@ function startShotGenerationPolling(shotId: string, attempts = 12, delay = 5000)
       latest?.status === 'failed' ||
       count >= attempts
     ) {
+	  if (latest?.status === 'completed' || latest?.status === 'failed') {
+	    clearGenerationRequestKey(shotId)
+	  }
       stopShotGenerationPolling(shotId)
       return
     }
@@ -2686,7 +2715,8 @@ async function handleRegenerateShotVideoVersion(shot: Shot, version: ShotVideoVe
   if (!validateShotVideoGenerationParams(shot)) return
   setShotVideoVersionBusy(shot.id, version.id, true)
   try {
-    await generateShotApi(shot.id)
+    const requestKey = getGenerationRequestKey(shot.id, true)
+    await generateShotApi(shot.id, { requestKey })
     message.success('已提交重新生成任务，请稍后查看结果')
     await loadShots()
     const latestShot = shots.value.find((item) => item.id === shot.id) || shot
@@ -3492,7 +3522,8 @@ async function generateShot(shot: Shot) {
   shotActionBusyIds.value.add(shot.id)
   shotActionBusyIds.value = new Set(shotActionBusyIds.value)
   try {
-    await generateShotApi(shot.id)
+    const requestKey = getGenerationRequestKey(shot.id)
+    await generateShotApi(shot.id, { requestKey })
     message.success('开始生成视频')
     await loadShots()
     const latestShot = shots.value.find((item) => item.id === shot.id) || shot
@@ -3528,7 +3559,10 @@ async function generateAllShots() {
   batchProgress.value = { completed: 0, total: validShots.length, failed: 0 }
   try {
     const result = await batchGenerateShotsApi(projectId.value, {
-      shotIds: validShots.map((shot) => shot.id),
+      items: validShots.map((shot) => ({
+        shotId: shot.id,
+        requestKey: getGenerationRequestKey(shot.id),
+      })),
     })
     const skipped = result.shotResults.filter((item) => item.status === 'skipped').length
     batchProgress.value = {
@@ -3643,6 +3677,17 @@ const composeOptions = ref({
   enableSubtitles: false,
 })
 
+async function waitForComposeJob() {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const job = await getComposeJobApi(projectId.value, composeJobId.value)
+    composeProgress.value = job.progress
+    if (job.status === 'completed') return job
+    if (job.status === 'failed') throw new Error(job.error || '视频合成失败')
+    await new Promise((resolve) => window.setTimeout(resolve, 2000))
+  }
+  throw new Error('合成仍在处理中，请稍后刷新')
+}
+
 async function composeVideo() {
   if (hasOpenShotInlineForm.value) {
     message.warning('请先保存或取消当前分镜编辑')
@@ -3659,7 +3704,10 @@ async function composeVideo() {
   composing.value = true
   composeProgress.value = 50
   try {
-    const result = await composeProjectVideoApi(projectId.value, composeOptions.value)
+	const started = await composeProjectVideoApi(projectId.value, composeOptions.value)
+	composeJobId.value = started.jobId
+	composeProgress.value = started.progress
+	const result = await waitForComposeJob()
     message.success('视频合成完成')
 
     Modal.success({

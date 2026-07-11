@@ -553,6 +553,14 @@ func attachSubmission(item Generation, submission Submission, shotRevision int) 
 	return item
 }
 
+func (s *Store) SubmissionByID(ctx context.Context, id string) (Submission, error) {
+	return s.submissions.GetByID(ctx, id)
+}
+
+func (s *Store) SubmissionByRequestKey(ctx context.Context, requestKey string) (Submission, error) {
+	return s.submissions.GetByRequestKey(ctx, requestKey)
+}
+
 // Refresh 轮询单条记录的网关状态。终态直接返回；进行中则查询网关，
 // 完成后下载视频落库并回填资产与元数据。
 func (s *Store) Refresh(ctx context.Context, id string) (Generation, error) {

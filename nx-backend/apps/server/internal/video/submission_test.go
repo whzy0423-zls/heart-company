@@ -3,6 +3,7 @@ package video
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 )
@@ -221,6 +222,17 @@ func (r *memorySubmissionRepository) GetByRequestKey(_ context.Context, requestK
 		return Submission{}, ErrSubmissionNotFound
 	}
 	return row, nil
+}
+
+func (r *memorySubmissionRepository) GetByID(_ context.Context, id string) (Submission, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, row := range r.rows {
+		if fmt.Sprint(row.ID) == id {
+			return row, nil
+		}
+	}
+	return Submission{}, ErrSubmissionNotFound
 }
 
 func (r *memorySubmissionRepository) GetByGenerationID(_ context.Context, generationID string) (Submission, error) {
