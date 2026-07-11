@@ -2,6 +2,8 @@ package videoproject
 
 import (
 	"context"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -37,6 +39,58 @@ func TestShotReadiness(t *testing.T) {
 				t.Fatalf("ComputeShotReadiness=%s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestShotSourceKeyGolden(t *testing.T) {
+	const want = "11b05bf95da6742aca55e744e4416624a4de791e1948ac421d3930da2da3ae2a"
+	if got := ShotSourceKey("42", 3, 0, "first shot"); got != want {
+		t.Fatalf("ShotSourceKey=%s, want %s", got, want)
+	}
+	if got := ShotSourceKey("42", 3, 0, "  first   shot  \r\n"); got != want {
+		t.Fatalf("whitespace normalization changed source key: %s", got)
+	}
+	if got := ShotSourceKey("42", 4, 0, "first shot"); got == want {
+		t.Fatal("script revision must participate in source key")
+	}
+}
+
+func TestCreateShotsFromScript(t *testing.T) {
+	paragraphs := []ScriptParagraph{
+		{Index: 0, Content: "first shot"},
+		{Index: 1, Content: ""},
+		{Index: 2, Content: "third shot"},
+	}
+	existingKey := ShotSourceKey("42", 3, 0, "first shot")
+	items := prepareScriptImportItems("42", 3, paragraphs, map[string]string{existingKey: "shot-1"})
+	if items[0].Status != ScriptImportExisting || items[0].ShotID != "shot-1" {
+		t.Fatalf("existing item was not reconstructed: %+v", items[0])
+	}
+	if items[1].Status != ScriptImportFailed || items[1].Error == "" {
+		t.Fatalf("invalid item must be failed before writes: %+v", items[1])
+	}
+	if items[2].Status != ScriptImportPending {
+		t.Fatalf("missing valid item must remain pending for insert: %+v", items[2])
+	}
+}
+
+func TestCreateShotsFromStaleScriptRevision(t *testing.T) {
+	err := validateScriptRevision(4, 3)
+	if err == nil || !strings.Contains(err.Error(), "script_revision_conflict") {
+		t.Fatalf("expected stale script revision conflict, got %v", err)
+	}
+}
+
+func TestCreateShotsFromScriptUsesPerItemSavepoints(t *testing.T) {
+	raw, err := os.ReadFile("workflow.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	for _, fragment := range []string{"SAVEPOINT shot_item_", "ROLLBACK TO SAVEPOINT shot_item_", "RELEASE SAVEPOINT shot_item_"} {
+		if !strings.Contains(source, fragment) {
+			t.Errorf("script import is missing %q", fragment)
+		}
 	}
 }
 

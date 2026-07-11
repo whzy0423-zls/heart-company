@@ -2,7 +2,9 @@ package videoproject
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"fmt"
 	"strings"
 )
 
@@ -180,6 +182,162 @@ func FilterGeneratableShotIDs(readiness map[string]ShotReadiness, requested []st
 		result = append(result, shotID)
 	}
 	return result
+}
+
+type ScriptParagraph struct {
+	Content string `json:"content"`
+	Index   int    `json:"index"`
+}
+
+type ScriptImportStatus string
+
+const (
+	ScriptImportPending  ScriptImportStatus = "pending"
+	ScriptImportCreated  ScriptImportStatus = "created"
+	ScriptImportExisting ScriptImportStatus = "existing"
+	ScriptImportFailed   ScriptImportStatus = "failed"
+)
+
+type ScriptImportItem struct {
+	Error     string             `json:"error,omitempty"`
+	Index     int                `json:"index"`
+	ShotID    string             `json:"shotId,omitempty"`
+	SourceKey string             `json:"sourceKey"`
+	Status    ScriptImportStatus `json:"status"`
+}
+
+type CreateShotsFromScriptResult struct {
+	Created  []ScriptImportItem `json:"created"`
+	Existing []ScriptImportItem `json:"existing"`
+	Failed   []ScriptImportItem `json:"failed"`
+	Items    []ScriptImportItem `json:"items"`
+}
+
+func ShotSourceKey(projectID string, revision, index int, paragraph string) string {
+	payload := fmt.Sprintf("%s\n%d\n%d\n%s", strings.TrimSpace(projectID), revision, index, normalizeRevisionText(paragraph))
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(payload)))
+}
+
+func validateScriptRevision(current, requested int) error {
+	if current != requested {
+		return fmt.Errorf("script_revision_conflict: current=%d requested=%d", current, requested)
+	}
+	return nil
+}
+
+func prepareScriptImportItems(
+	projectID string,
+	revision int,
+	paragraphs []ScriptParagraph,
+	existing map[string]string,
+) []ScriptImportItem {
+	items := make([]ScriptImportItem, 0, len(paragraphs))
+	for _, paragraph := range paragraphs {
+		content := normalizeRevisionText(paragraph.Content)
+		key := ShotSourceKey(projectID, revision, paragraph.Index, content)
+		item := ScriptImportItem{Index: paragraph.Index, SourceKey: key, Status: ScriptImportPending}
+		if content == "" {
+			item.Status = ScriptImportFailed
+			item.Error = "分镜段落不能为空"
+		} else if shotID := existing[key]; shotID != "" {
+			item.Status = ScriptImportExisting
+			item.ShotID = shotID
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func groupScriptImportItems(items []ScriptImportItem) CreateShotsFromScriptResult {
+	result := CreateShotsFromScriptResult{Items: items}
+	for _, item := range items {
+		switch item.Status {
+		case ScriptImportCreated:
+			result.Created = append(result.Created, item)
+		case ScriptImportExisting:
+			result.Existing = append(result.Existing, item)
+		case ScriptImportFailed:
+			result.Failed = append(result.Failed, item)
+		}
+	}
+	return result
+}
+
+func (s *Store) CreateShotsFromScript(
+	ctx context.Context,
+	projectID string,
+	scriptRevision int,
+	paragraphs []ScriptParagraph,
+) (CreateShotsFromScriptResult, error) {
+	pid, err := parseID(projectID)
+	if err != nil {
+		return CreateShotsFromScriptResult{}, err
+	}
+	var currentRevision int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT script_revision FROM video_projects WHERE id=$1`, pid,
+	).Scan(&currentRevision); err != nil {
+		return CreateShotsFromScriptResult{}, err
+	}
+	if err := validateScriptRevision(currentRevision, scriptRevision); err != nil {
+		return CreateShotsFromScriptResult{}, err
+	}
+	items := prepareScriptImportItems(projectID, scriptRevision, paragraphs, nil)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return CreateShotsFromScriptResult{}, err
+	}
+	defer tx.Rollback()
+	for position := range items {
+		item := &items[position]
+		if item.Status == ScriptImportFailed {
+			continue
+		}
+		var existingID string
+		err := tx.QueryRowContext(ctx,
+			`SELECT id::text FROM video_shots WHERE project_id=$1 AND source_key=$2`, pid, item.SourceKey,
+		).Scan(&existingID)
+		if err == nil {
+			item.Status = ScriptImportExisting
+			item.ShotID = existingID
+			continue
+		}
+		if err != sql.ErrNoRows {
+			item.Status = ScriptImportFailed
+			item.Error = err.Error()
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf("SAVEPOINT shot_item_%d", position)); err != nil {
+			return CreateShotsFromScriptResult{}, err
+		}
+		paragraph := paragraphs[position]
+		content := normalizeRevisionText(paragraph.Content)
+		var shotID string
+		err = tx.QueryRowContext(ctx,
+			`INSERT INTO video_shots (
+			   project_id, order_num, name, script_original_content, action_description,
+			   source_key, source_script_revision
+			 ) VALUES ($1,$2,$3,$4,$4,$5,$6)
+			 RETURNING id::text`,
+			pid, paragraph.Index+1, fmt.Sprintf("分镜 %d", paragraph.Index+1), content, item.SourceKey, scriptRevision,
+		).Scan(&shotID)
+		if err != nil {
+			_, _ = tx.ExecContext(ctx, fmt.Sprintf("ROLLBACK TO SAVEPOINT shot_item_%d", position))
+			_, _ = tx.ExecContext(ctx, fmt.Sprintf("RELEASE SAVEPOINT shot_item_%d", position))
+			item.Status = ScriptImportFailed
+			item.Error = err.Error()
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf("RELEASE SAVEPOINT shot_item_%d", position)); err != nil {
+			return CreateShotsFromScriptResult{}, err
+		}
+		item.Status = ScriptImportCreated
+		item.ShotID = shotID
+	}
+	if err := tx.Commit(); err != nil {
+		return CreateShotsFromScriptResult{}, err
+	}
+	return groupScriptImportItems(items), nil
 }
 
 type WorkflowShotStatus struct {
