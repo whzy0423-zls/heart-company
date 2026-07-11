@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 	"nine-xing/nx-backend/apps/server/internal/video"
@@ -55,8 +56,10 @@ func (g *Generator) GenerateShot(ctx context.Context, shotID string, requestKeys
 	if !preview.Validation.IsValid {
 		return video.Generation{}, fmt.Errorf("提示词验证失败：%s", strings.Join(preview.Validation.Errors, "; "))
 	}
-	if err := validateGatewayReferenceURLs(preview.Images, preview.Videos, preview.Audios); err != nil {
-		return video.Generation{}, err
+	if g.videoStore.GenerationMode() == config.VideoGenerationModePaid {
+		if err := validateGatewayReferenceURLs(preview.Images, preview.Videos, preview.Audios); err != nil {
+			return video.Generation{}, err
+		}
 	}
 
 	// 3. 获取 Shot 信息

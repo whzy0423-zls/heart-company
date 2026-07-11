@@ -17,6 +17,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -35,12 +37,14 @@ var terminalStatuses = map[string]bool{
 }
 
 type Store struct {
-	client       *Client
-	db           *sql.DB
-	uploads      *uploadasset.Store
-	uploader     storage.ObjectUploader
-	submissions  *SubmissionStore
-	defaultModel string
+	client         *Client
+	db             *sql.DB
+	uploads        *uploadasset.Store
+	uploader       storage.ObjectUploader
+	submissions    *SubmissionStore
+	defaultModel   string
+	demoRenderer   DemoRenderer
+	generationMode string
 }
 
 type Generation struct {
@@ -141,14 +145,27 @@ func NewStore(database *sql.DB, uploads *uploadasset.Store, cfg config.VideoConf
 	if len(uploaders) > 0 {
 		uploader = uploaders[0]
 	}
-	return &Store{
-		client:       NewClient(cfg),
-		db:           database,
-		uploads:      uploads,
-		uploader:     uploader,
-		submissions:  NewSubmissionStore(database),
-		defaultModel: model,
+	mode := config.VideoGenerationModeDemo
+	if strings.TrimSpace(cfg.Mode) == config.VideoGenerationModePaid {
+		mode = config.VideoGenerationModePaid
 	}
+	return &Store{
+		client:         NewClient(cfg),
+		db:             database,
+		uploads:        uploads,
+		uploader:       uploader,
+		submissions:    NewSubmissionStore(database),
+		defaultModel:   model,
+		demoRenderer:   NewFFmpegDemoRenderer(""),
+		generationMode: mode,
+	}
+}
+
+func (s *Store) GenerationMode() string {
+	if s == nil || s.generationMode != config.VideoGenerationModePaid {
+		return config.VideoGenerationModeDemo
+	}
+	return config.VideoGenerationModePaid
 }
 
 // Generate 创建一个视频生成任务：调用网关拿到 task_id 后落库 'queued' 行。
@@ -245,6 +262,9 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 			return Generation{}, err
 		}
 	}
+	if s.GenerationMode() == config.VideoGenerationModeDemo {
+		return s.generateDemo(ctx, input, submission, model, prompt, imageURL, seconds, aspectRatio, paidProjectCall)
+	}
 
 	var task TaskResult
 	if paidProjectCall {
@@ -339,6 +359,97 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 		return Generation{}, err
 	}
 	if paidProjectCall {
+		item = attachSubmission(item, submission, input.ShotRevision)
+	}
+	return item, nil
+}
+
+func (s *Store) generateDemo(
+	ctx context.Context,
+	input GenerateInput,
+	submission Submission,
+	model string,
+	prompt string,
+	imageURL string,
+	seconds int,
+	aspectRatio string,
+	projectCall bool,
+) (Generation, error) {
+	fail := func(err error) (Generation, error) {
+		if projectCall {
+			if _, cancelErr := s.submissions.CancelDemoFailure(ctx, submission.RequestKey, err); cancelErr != nil {
+				return Generation{}, cancelErr
+			}
+		}
+		return Generation{}, err
+	}
+	if s.demoRenderer == nil {
+		return fail(fmt.Errorf("demo video renderer is not configured"))
+	}
+	if s.uploader == nil {
+		return fail(fmt.Errorf("demo video uploader is not configured"))
+	}
+
+	rendered, err := s.demoRenderer.Render(ctx, DemoRenderInput{AspectRatio: aspectRatio, Seconds: seconds})
+	if err != nil {
+		return fail(err)
+	}
+	defer os.Remove(rendered.Path)
+	data, err := os.ReadFile(rendered.Path)
+	if err != nil {
+		return fail(err)
+	}
+	uploaded, err := s.uploader.Upload(ctx, storage.UploadInput{
+		ContentType: "video/mp4",
+		Dir:         "video/generated",
+		Filename:    filepath.Base(rendered.Path),
+		Reader:      bytes.NewReader(data),
+		Size:        int64(len(data)),
+	})
+	if err != nil {
+		return fail(err)
+	}
+	videoURL := strings.TrimSpace(uploaded.URL)
+	if videoURL == "" {
+		videoURL = strings.TrimSpace(uploaded.ObjectURL)
+	}
+	if videoURL == "" {
+		return fail(fmt.Errorf("demo video upload did not return a URL"))
+	}
+	taskID := "demo-" + strings.TrimSpace(input.RequestKey)
+	if taskID == "demo-" {
+		taskID = fmt.Sprintf("demo-%d", time.Now().UnixNano())
+	}
+
+	var id string
+	err = s.db.QueryRowContext(ctx,
+		`INSERT INTO video_generations
+		    (provider, model, prompt, image_url, task_id, seconds, aspect_ratio,
+		     video_url, duration, fps, width, height, status, shot_id, shot_revision)
+		 VALUES ('demo',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'completed',NULLIF($12,'')::bigint,$13)
+		 RETURNING id::text`,
+		model, prompt, imageURL, taskID, seconds, aspectRatio, videoURL,
+		rendered.Duration, rendered.FPS, rendered.Width, rendered.Height,
+		strings.TrimSpace(input.ShotID), input.ShotRevision,
+	).Scan(&id)
+	if err != nil {
+		return fail(err)
+	}
+	if projectCall {
+		submission, err = s.submissions.AttachAccepted(ctx, submission.RequestKey, taskID, id)
+		if err != nil {
+			return fail(err)
+		}
+		submission, err = s.submissions.SynchronizeTerminal(ctx, id, "completed")
+		if err != nil {
+			return Generation{}, err
+		}
+	}
+	item, err := s.Generation(ctx, id)
+	if err != nil {
+		return Generation{}, err
+	}
+	if projectCall {
 		item = attachSubmission(item, submission, input.ShotRevision)
 	}
 	return item, nil

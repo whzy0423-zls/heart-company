@@ -31,6 +31,7 @@ func allowLocalTestClient(client *Client) *Client {
 }
 
 func allowLocalTestStore(store *Store) *Store {
+	store.generationMode = config.VideoGenerationModePaid
 	store.client = allowLocalTestClient(store.client)
 	return store
 }
@@ -183,6 +184,125 @@ func TestGenerateRejectsUnsupportedAspectRatio(t *testing.T) {
 	}
 }
 
+func TestGenerateDemoCompletesLocallyWithoutGatewayCall(t *testing.T) {
+	var postCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		postCount++
+		w.WriteHeader(http.StatusTeapot)
+	}))
+	defer server.Close()
+
+	state := &videoDBState{}
+	db := openVideoTestDB(t, state)
+	defer db.Close()
+	uploader := &recordingVideoUploader{
+		url:       "/api/uploads/video/generated/demo.mp4",
+		objectKey: "video/generated/demo.mp4",
+	}
+	store := NewStore(db, nil, config.VideoConfig{
+		APIBase: server.URL,
+		APIKey:  "must-not-be-used",
+		Mode:    config.VideoGenerationModeDemo,
+	}, uploader)
+	store.submissions = newSubmissionStore(newMemorySubmissionRepository())
+
+	result, err := store.Generate(context.Background(), GenerateInput{
+		AspectRatio:  "9:16",
+		Prompt:       "local demo",
+		RequestKey:   "11111111-1111-4111-8111-111111111111",
+		Seconds:      5,
+		ShotID:       "42",
+		ShotRevision: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if postCount != 0 {
+		t.Fatalf("demo generation issued %d provider POSTs, want 0", postCount)
+	}
+	if result.Provider != "demo" || result.Status != "completed" {
+		t.Fatalf("unexpected demo result: %+v", result)
+	}
+	if result.VideoURL != "/api/uploads/video/generated/demo.mp4" {
+		t.Fatalf("unexpected demo video URL %q", result.VideoURL)
+	}
+	if result.Width != 360 || result.Height != 640 || result.Duration <= 0 || result.FPS <= 0 {
+		t.Fatalf("demo metadata was not persisted: %+v", result)
+	}
+	if len(uploader.data) == 0 {
+		t.Fatal("demo renderer did not upload MP4 bytes")
+	}
+}
+
+func TestGenerateDemoReusesRequestKey(t *testing.T) {
+	var postCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		postCount++
+		w.WriteHeader(http.StatusTeapot)
+	}))
+	defer server.Close()
+
+	db := openVideoTestDB(t, &videoDBState{})
+	defer db.Close()
+	uploader := &recordingVideoUploader{url: "/api/uploads/video/generated/demo.mp4"}
+	store := NewStore(db, nil, config.VideoConfig{APIBase: server.URL, Mode: config.VideoGenerationModeDemo}, uploader)
+	store.submissions = newSubmissionStore(newMemorySubmissionRepository())
+	input := GenerateInput{
+		Prompt:       "local demo",
+		RequestKey:   "11111111-1111-4111-8111-111111111111",
+		Seconds:      5,
+		ShotID:       "42",
+		ShotRevision: 3,
+	}
+
+	first, err := store.Generate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Generate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == "" || first.ID != second.ID || first.SubmissionID != second.SubmissionID {
+		t.Fatalf("same demo request key must reuse one identity: first=%+v second=%+v", first, second)
+	}
+	if postCount != 0 || uploader.uploadCalls != 1 {
+		t.Fatalf("demo reuse made provider=%d upload=%d calls, want 0 and 1", postCount, uploader.uploadCalls)
+	}
+}
+
+func TestGenerateDemoUploadFailureReleasesActiveSubmission(t *testing.T) {
+	db := openVideoTestDB(t, &videoDBState{})
+	defer db.Close()
+	repo := newMemorySubmissionRepository()
+	uploader := &recordingVideoUploader{err: errors.New("local upload failed")}
+	store := NewStore(db, nil, config.VideoConfig{Mode: config.VideoGenerationModeDemo}, uploader)
+	store.submissions = newSubmissionStore(repo)
+	input := GenerateInput{
+		Prompt:       "local demo",
+		RequestKey:   "11111111-1111-4111-8111-111111111111",
+		Seconds:      5,
+		ShotID:       "42",
+		ShotRevision: 3,
+	}
+
+	if _, err := store.Generate(context.Background(), input); !errors.Is(err, uploader.err) {
+		t.Fatalf("expected local upload failure, got %v", err)
+	}
+	failed, err := repo.GetByRequestKey(context.Background(), input.RequestKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != SubmissionCancelled {
+		t.Fatalf("failed local submission remained active: %+v", failed)
+	}
+
+	input.RequestKey = "22222222-2222-4222-8222-222222222222"
+	if _, err := store.Generate(context.Background(), input); !errors.Is(err, uploader.err) {
+		t.Fatalf("new request should reach the local uploader after lock release, got %v", err)
+	}
+}
+
 func TestGenerateReusesRequestKey(t *testing.T) {
 	var postCount int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -276,6 +396,7 @@ func TestGenerateStoresUnknownOutcome(t *testing.T) {
 	store := NewStore(db, nil, config.VideoConfig{
 		APIBase: "https://video.example.com",
 		APIKey:  "test-key",
+		Mode:    config.VideoGenerationModePaid,
 	})
 	var postCount int
 	store.client.urlAllowed = func(string) bool { return true }
@@ -1183,11 +1304,23 @@ type videoDBState struct {
 }
 
 type recordingVideoUploader struct {
-	url       string
-	objectKey string
+	data        []byte
+	err         error
+	url         string
+	objectKey   string
+	uploadCalls int
 }
 
 func (u *recordingVideoUploader) Upload(ctx context.Context, input storage.UploadInput) (storage.UploadResult, error) {
+	u.uploadCalls++
+	if u.err != nil {
+		return storage.UploadResult{}, u.err
+	}
+	data, err := io.ReadAll(input.Reader)
+	if err != nil {
+		return storage.UploadResult{}, err
+	}
+	u.data = append([]byte(nil), data...)
 	return storage.UploadResult{
 		Key:       u.objectKey,
 		URL:       u.url,
@@ -1329,16 +1462,35 @@ func (c *videoTestConn) QueryContext(_ context.Context, query string, args []dri
 			return nil, c.state.insertErr
 		}
 		generationID := fmt.Sprint(41 + c.state.insertCalls)
-		c.state.generation = Generation{
-			ID:          generationID,
-			Provider:    "newapi",
-			Model:       namedString(args, 1),
-			Prompt:      namedString(args, 2),
-			ImageURL:    namedString(args, 3),
-			TaskID:      namedString(args, 4),
-			Seconds:     int(namedInt64(args, 5)),
-			AspectRatio: namedString(args, 6),
-			Status:      namedString(args, 7),
+		if strings.Contains(q, "VALUES ('demo'") {
+			c.state.generation = Generation{
+				ID:          generationID,
+				Provider:    "demo",
+				Model:       namedString(args, 1),
+				Prompt:      namedString(args, 2),
+				ImageURL:    namedString(args, 3),
+				TaskID:      namedString(args, 4),
+				Seconds:     int(namedInt64(args, 5)),
+				AspectRatio: namedString(args, 6),
+				VideoURL:    namedString(args, 7),
+				Duration:    namedFloat64(args, 8),
+				FPS:         namedFloat64(args, 9),
+				Width:       int(namedInt64(args, 10)),
+				Height:      int(namedInt64(args, 11)),
+				Status:      "completed",
+			}
+		} else {
+			c.state.generation = Generation{
+				ID:          generationID,
+				Provider:    "newapi",
+				Model:       namedString(args, 1),
+				Prompt:      namedString(args, 2),
+				ImageURL:    namedString(args, 3),
+				TaskID:      namedString(args, 4),
+				Seconds:     int(namedInt64(args, 5)),
+				AspectRatio: namedString(args, 6),
+				Status:      namedString(args, 7),
+			}
 		}
 		return singleRow([]string{"id"}, []driver.Value{generationID}), nil
 	case strings.Contains(q, "FROM video_generations"):
@@ -1445,6 +1597,20 @@ func namedInt64(args []driver.NamedValue, ordinal int) int64 {
 				return v
 			case int:
 				return int64(v)
+			}
+		}
+	}
+	return 0
+}
+
+func namedFloat64(args []driver.NamedValue, ordinal int) float64 {
+	for _, arg := range args {
+		if arg.Ordinal == ordinal {
+			switch v := arg.Value.(type) {
+			case float64:
+				return v
+			case int64:
+				return float64(v)
 			}
 		}
 	}

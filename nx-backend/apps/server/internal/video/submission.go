@@ -299,6 +299,38 @@ func (s *SubmissionStore) MarkUnknownOutcome(
 	)
 }
 
+// CancelDemoFailure releases a submission only when demo generation failed
+// locally and no provider request could have been issued.
+func (s *SubmissionStore) CancelDemoFailure(
+	ctx context.Context,
+	requestKey string,
+	cause error,
+) (Submission, error) {
+	message := "local demo generation failed"
+	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
+		message = cause.Error()
+	}
+	updated, err := s.repo.CompareAndSwap(
+		ctx,
+		strings.TrimSpace(requestKey),
+		SubmissionSubmitting,
+		SubmissionCancelled,
+		SubmissionPatch{ErrorMessage: &message},
+	)
+	if errors.Is(err, errSubmissionCompareAndSwap) {
+		current, getErr := s.repo.GetByRequestKey(ctx, strings.TrimSpace(requestKey))
+		if getErr != nil {
+			return Submission{}, getErr
+		}
+		return Submission{}, &InvalidSubmissionTransitionError{
+			RequestKey: current.RequestKey,
+			From:       current.Status,
+			To:         SubmissionCancelled,
+		}
+	}
+	return updated, err
+}
+
 func (s *SubmissionStore) Reconcile(
 	ctx context.Context,
 	requestKey string,
