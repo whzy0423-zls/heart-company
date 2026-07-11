@@ -49,7 +49,7 @@ function makeEntry(id: string, readiness: string) {
 async function installFixture(page: Page, scenario?: Scenario) {
   const state: any = {
     batchShotIds: [] as string[], characters: [] as any[], composeAttempts: 0, composePolls: 0, generationPosts: 0,
-    mockedPaidPosts: 0, project: project(), reconcilePosts: 0, scenes: [] as any[], shots: [] as any[], versions: {} as Record<string, any[]>, workflowGets: 0,
+    project: project(), providerRequests: 0, reconcilePosts: 0, scenes: [] as any[], shots: [] as any[], versions: {} as Record<string, any[]>, workflowGets: 0,
   };
   if (scenario) {
     state.project.scriptContent = '已有剧本';
@@ -84,6 +84,11 @@ async function installFixture(page: Page, scenario?: Scenario) {
   page.on('console', (entry) => { if (entry.type() === 'error') errors.push(entry.text()); });
   page.on('requestfailed', (request) => failedRequests.push(request.url()));
 
+  await page.route(/\/v1\/videos(?:[/?]|$)/, async (route) => {
+    state.providerRequests += 1;
+    await route.abort('blockedbyclient');
+  });
+
   await page.route('https://example.test/**', (route) => route.fulfill({ body: '', contentType: 'video/mp4', status: 200 }));
 
   await page.route('http://127.0.0.1:4317/api/**', async (route) => {
@@ -115,7 +120,7 @@ async function installFixture(page: Page, scenario?: Scenario) {
       state.project.completedShots = state.shots.filter((item: any) => item.readiness === 'completed').length;
       const recommendedStep = scenario === 'legacy' ? 'storyboard' : state.shots.length ? 'storyboard' : state.project.scriptContent ? 'assets' : 'brief';
       data = {
-        project: state.project, recommendedStep,
+        generationMode: 'demo', project: state.project, recommendedStep,
         shots: state.shots.map((item: any) => ({ ...item, canGenerate: ['ready', 'stale', 'failed'].includes(item.readiness) })),
         steps: { brief: state.project.scriptContent ? 'complete' : state.shots.length ? 'skipped_existing' : 'blocked', assets: state.characters.length || state.scenes.length ? 'complete' : state.shots.length ? 'skipped_existing' : 'optional', storyboard: state.shots.length ? 'complete' : 'blocked', generate: state.shots.every((item: any) => item.readiness === 'completed') && state.shots.length ? 'complete' : state.shots.some((item: any) => item.readiness === 'stale') ? 'stale' : 'blocked', export: state.project.finalVideoUrl ? scenario === 'stale-final' ? 'stale' : 'complete' : 'blocked' },
       };
@@ -136,7 +141,7 @@ async function installFixture(page: Page, scenario?: Scenario) {
     else if (path === '/api/video/projects-scenes/1' && request.method() === 'GET') data = state.scenes;
     else if (path === '/api/video/projects-scenes/1' && request.method() === 'POST') { const item = { ...body, id: 's1' }; state.scenes.push(item); data = item; }
     else if (path === '/api/video/projects-batch-generate-safe/1') {
-      state.generationPosts += 1; state.mockedPaidPosts += 1; state.batchShotIds = body.items.map((item: any) => item.shotId);
+      state.generationPosts += 1; state.batchShotIds = body.items.map((item: any) => item.shotId);
       for (const item of state.shots.filter((entry: any) => state.batchShotIds.includes(entry.shot.id))) {
         item.readiness = 'ready'; item.shot.generationId = `9${item.shot.id}`; item.shot.status = 'completed';
         state.versions[item.shot.id] = [version(`9${item.shot.id}`)];
@@ -218,6 +223,7 @@ test('complete five-step workflow selects versions explicitly and never reaches 
   await expect(page.getByText(/created 2/)).toBeVisible();
   await page.getByLabel('动作描述').fill('修改后的动作');
   await page.getByRole('button', { name: '保存并继续' }).click();
+  await expect(page.getByText('免费演练模式：使用本地占位视频，不会调用收费接口。')).toBeVisible();
   await page.getByRole('button', { name: '生成可用分镜' }).click();
   await expect.poll(() => state.generationPosts).toBe(1);
   expect(state.batchShotIds).toEqual(['1', '2']);
@@ -226,7 +232,7 @@ test('complete five-step workflow selects versions explicitly and never reaches 
   await page.getByRole('navigation', { name: '视频制作步骤' }).getByRole('button', { name: /导出/ }).click();
   await page.getByRole('button', { name: '开始合成' }).click();
   await expect(page.getByText('当前成片')).toBeVisible({ timeout: 15_000 });
-  expect(errors).toEqual([]); expect(failedRequests).toEqual([]); expect(state.mockedPaidPosts).toBe(1);
+  expect(errors).toEqual([]); expect(failedRequests).toEqual([]); expect(state.providerRequests).toBe(0);
 });
 
 test('legacy project recommendation and partial import remain resumable', async ({ page }) => {
