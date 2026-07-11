@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -413,9 +414,39 @@ func (s *Store) GetWorkflowStatus(ctx context.Context, projectID string) (Workfl
 		readiness = append(readiness, state)
 		statuses = append(statuses, WorkflowShotStatus{Shot: shot, Readiness: state, CanGenerate: state.CanGenerate()})
 	}
+	finalCurrent := false
+	if project.FinalVideoURL != "" && project.FinalVideoInputHash != "" {
+		var rawSnapshot []byte
+		if err := s.db.QueryRowContext(ctx, `
+			SELECT compose_input_snapshot
+			FROM video_compose_jobs
+			WHERE project_id=$1 AND status='completed' AND compose_input_hash=$2
+			ORDER BY id DESC LIMIT 1`, pid, project.FinalVideoInputHash,
+		).Scan(&rawSnapshot); err == nil {
+			var snapshot ComposeInputSnapshot
+			if json.Unmarshal(rawSnapshot, &snapshot) == nil {
+				composeFacts := make([]ComposeShotFacts, 0, len(shots))
+				for _, shot := range shots {
+					composeFacts = append(composeFacts, ComposeShotFacts{
+						GenerationRevision: shot.GenerationRevision, OrderNum: shot.OrderNum,
+						SelectedGenerationID: shot.SelectedGenerationID,
+						SelectedRevision:     shot.SelectedGenerationRevision,
+						SelectedStatus:       shot.SelectedGenerationStatus,
+						SelectedVideoURL:     shot.VideoURL, ShotID: shot.ID,
+					})
+				}
+				current, err := BuildComposeInputSnapshot(composeFacts, ComposeProjectInput{
+					Transition: snapshot.Transition, MusicURL: snapshot.MusicURL,
+					EnableSubtitles: snapshot.EnableSubtitles,
+					ExcludedShotIDs: snapshot.ExcludedShotIDs, PartialAcknowledged: snapshot.PartialAcknowledged,
+				})
+				finalCurrent = err == nil && ComposeResultIsCurrent(project.FinalVideoInputHash, current.InputHash)
+			}
+		}
+	}
 	facts := WorkflowFacts{
 		AssetCount:        assetCount,
-		FinalVideoCurrent: project.FinalVideoURL != "" && project.FinalVideoInputHash != "",
+		FinalVideoCurrent: finalCurrent,
 		FinalVideoURL:     project.FinalVideoURL,
 		ScriptContent:     project.ScriptContent,
 		ShotReadiness:     readiness,
