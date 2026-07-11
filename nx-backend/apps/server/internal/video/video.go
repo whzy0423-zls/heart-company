@@ -561,6 +561,11 @@ func (s *Store) Refresh(ctx context.Context, id string) (Generation, error) {
 		return Generation{}, err
 	}
 	if shouldSkipRefresh(item) {
+		if terminalStatuses[item.Status] {
+			if err := s.syncSubmissionTerminal(ctx, id, item.Status); err != nil {
+				return Generation{}, err
+			}
+		}
 		return item, nil
 	}
 
@@ -598,6 +603,9 @@ func (s *Store) Refresh(ctx context.Context, id string) (Generation, error) {
 			  WHERE id=$7`,
 			asset.ID, asset.ObjectURL, task.Duration, task.FPS, task.Width, task.Height, id,
 		); err != nil {
+			return Generation{}, err
+		}
+		if err := s.syncSubmissionTerminal(ctx, id, "completed"); err != nil {
 			return Generation{}, err
 		}
 	case "failed":
@@ -655,6 +663,17 @@ func (s *Store) markFailed(ctx context.Context, id string, message string) error
 		`UPDATE video_generations SET status='failed', error_message=$1, update_time=now() WHERE id=$2`,
 		message, id,
 	)
+	if err != nil {
+		return err
+	}
+	return s.syncSubmissionTerminal(ctx, id, "failed")
+}
+
+func (s *Store) syncSubmissionTerminal(ctx context.Context, generationID, status string) error {
+	_, err := s.submissions.SynchronizeTerminal(ctx, generationID, status)
+	if errors.Is(err, ErrSubmissionNotFound) {
+		return nil
+	}
 	return err
 }
 

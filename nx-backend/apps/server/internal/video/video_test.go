@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -419,6 +420,163 @@ func TestReconcileAfterStoreRestart(t *testing.T) {
 	}
 	if first.ID != second.ID || state.insertCalls != 1 {
 		t.Fatalf("restart reconciliation duplicated generation: first=%+v second=%+v inserts=%d", first, second, state.insertCalls)
+	}
+}
+
+func TestSubmissionRefreshTerminal(t *testing.T) {
+	t.Run("completed", func(t *testing.T) {
+		state := &videoDBState{generation: Generation{
+			ID:       "42",
+			Status:   "completed",
+			TaskID:   "task-7",
+			VideoURL: "https://cdn.example.com/video.mp4",
+		}}
+		db := openVideoTestDB(t, state)
+		defer db.Close()
+		repo := newMemorySubmissionRepository()
+		store := NewStore(db, nil, config.VideoConfig{})
+		store.submissions = newSubmissionStore(repo)
+		prepareAcceptedSubmission(t, store.submissions, "42")
+
+		if _, err := store.Refresh(context.Background(), "42"); err != nil {
+			t.Fatal(err)
+		}
+		assertSubmissionTerminalAndReleased(t, store.submissions, repo, SubmissionCompleted)
+	})
+
+	t.Run("failed", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"status":        "failed",
+					"task_id":       "task-7",
+					"error_message": "provider failed",
+				},
+			})
+		}))
+		defer server.Close()
+		state := &videoDBState{generation: Generation{
+			ID:      "42",
+			Status:  "queued",
+			TaskID:  "task-7",
+			Seconds: 15,
+		}}
+		db := openVideoTestDB(t, state)
+		defer db.Close()
+		repo := newMemorySubmissionRepository()
+		store := allowLocalTestStore(NewStore(db, nil, config.VideoConfig{APIBase: server.URL, APIKey: "test-key"}))
+		store.submissions = newSubmissionStore(repo)
+		prepareAcceptedSubmission(t, store.submissions, "42")
+
+		if _, err := store.Refresh(context.Background(), "42"); err != nil {
+			t.Fatal(err)
+		}
+		assertSubmissionTerminalAndReleased(t, store.submissions, repo, SubmissionFailed)
+	})
+}
+
+func TestSubmissionPollingAfterRestart(t *testing.T) {
+	state := &videoDBState{generation: Generation{
+		ID:       "42",
+		Status:   "completed",
+		TaskID:   "task-7",
+		VideoURL: "https://cdn.example.com/video.mp4",
+	}}
+	db := openVideoTestDB(t, state)
+	defer db.Close()
+	repo := newMemorySubmissionRepository()
+	first := NewStore(db, nil, config.VideoConfig{})
+	first.submissions = newSubmissionStore(repo)
+	prepareAcceptedSubmission(t, first.submissions, "42")
+
+	restarted := NewStore(db, nil, config.VideoConfig{})
+	restarted.submissions = newSubmissionStore(repo)
+	if _, err := restarted.Refresh(context.Background(), "42"); err != nil {
+		t.Fatal(err)
+	}
+	row, err := repo.GetByRequestKey(context.Background(), "11111111-1111-4111-8111-111111111111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != SubmissionCompleted {
+		t.Fatalf("restarted polling did not synchronize terminal state: %+v", row)
+	}
+}
+
+func TestGenerateExplicitNewVersionAfterTerminal(t *testing.T) {
+	var postCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		postCount++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"status":  "queued",
+				"task_id": "task-" + fmt.Sprint(postCount),
+			},
+		})
+	}))
+	defer server.Close()
+	state := &videoDBState{}
+	db := openVideoTestDB(t, state)
+	defer db.Close()
+	repo := newMemorySubmissionRepository()
+	store := allowLocalTestStore(NewStore(db, nil, config.VideoConfig{APIBase: server.URL, APIKey: "test-key"}))
+	store.submissions = newSubmissionStore(repo)
+	firstKey := "11111111-1111-4111-8111-111111111111"
+	input := GenerateInput{Prompt: "test", RequestKey: firstKey, ShotID: "42", ShotRevision: 3}
+
+	first, err := store.Generate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.submissions.Transition(context.Background(), firstKey, SubmissionAccepted, SubmissionCompleted); err != nil {
+		t.Fatal(err)
+	}
+	input.RequestKey = "22222222-2222-4222-8222-222222222222"
+	second, err := store.Generate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if postCount != 2 {
+		t.Fatalf("explicit new-version actions issued %d POSTs, want 2", postCount)
+	}
+	if first.ID == second.ID {
+		t.Fatalf("explicit new-version action reused generation %s", first.ID)
+	}
+}
+
+func prepareAcceptedSubmission(t *testing.T, store *SubmissionStore, generationID string) {
+	t.Helper()
+	requestKey := "11111111-1111-4111-8111-111111111111"
+	if _, err := store.Prepare(context.Background(), PrepareSubmissionInput{RequestKey: requestKey, ShotID: "42"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Transition(context.Background(), requestKey, SubmissionPrepared, SubmissionSubmitting); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AttachAccepted(context.Background(), requestKey, "task-7", generationID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertSubmissionTerminalAndReleased(
+	t *testing.T,
+	store *SubmissionStore,
+	repo *memorySubmissionRepository,
+	want SubmissionStatus,
+) {
+	t.Helper()
+	row, err := repo.GetByRequestKey(context.Background(), "11111111-1111-4111-8111-111111111111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != want {
+		t.Fatalf("submission status=%s, want %s", row.Status, want)
+	}
+	if _, err := store.Prepare(context.Background(), PrepareSubmissionInput{
+		RequestKey: "22222222-2222-4222-8222-222222222222",
+		ShotID:     "42",
+	}); err != nil {
+		t.Fatalf("terminal status did not release shot lock: %v", err)
 	}
 }
 
@@ -1170,8 +1328,9 @@ func (c *videoTestConn) QueryContext(_ context.Context, query string, args []dri
 		if c.state.insertErr != nil {
 			return nil, c.state.insertErr
 		}
+		generationID := fmt.Sprint(41 + c.state.insertCalls)
 		c.state.generation = Generation{
-			ID:          "42",
+			ID:          generationID,
 			Provider:    "newapi",
 			Model:       namedString(args, 1),
 			Prompt:      namedString(args, 2),
@@ -1181,9 +1340,11 @@ func (c *videoTestConn) QueryContext(_ context.Context, query string, args []dri
 			AspectRatio: namedString(args, 6),
 			Status:      namedString(args, 7),
 		}
-		return singleRow([]string{"id"}, []driver.Value{"42"}), nil
+		return singleRow([]string{"id"}, []driver.Value{generationID}), nil
 	case strings.Contains(q, "FROM video_generations"):
 		return generationRow(c.state.generation), nil
+	case strings.Contains(q, "FROM video_generation_submissions"):
+		return nil, sql.ErrNoRows
 	default:
 		return nil, fmtError("unexpected query: " + q)
 	}

@@ -223,6 +223,17 @@ func (r *memorySubmissionRepository) GetByRequestKey(_ context.Context, requestK
 	return row, nil
 }
 
+func (r *memorySubmissionRepository) GetByGenerationID(_ context.Context, generationID string) (Submission, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, row := range r.rows {
+		if row.GenerationID == generationID {
+			return row, nil
+		}
+	}
+	return Submission{}, ErrSubmissionNotFound
+}
+
 func (r *memorySubmissionRepository) FindActiveByShot(_ context.Context, shotID string) (Submission, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

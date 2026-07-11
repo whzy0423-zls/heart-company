@@ -133,6 +133,7 @@ func (e *UnknownOutcomeError) Unwrap() error { return e.Cause }
 type submissionRepository interface {
 	Insert(context.Context, PrepareSubmissionInput) (Submission, error)
 	GetByRequestKey(context.Context, string) (Submission, error)
+	GetByGenerationID(context.Context, string) (Submission, error)
 	FindActiveByShot(context.Context, string) (Submission, error)
 	CompareAndSwap(context.Context, string, SubmissionStatus, SubmissionStatus, SubmissionPatch) (Submission, error)
 }
@@ -223,6 +224,37 @@ func (s *SubmissionStore) GetByRequestKey(ctx context.Context, requestKey string
 
 func (s *SubmissionStore) FindActiveByShot(ctx context.Context, shotID string) (Submission, error) {
 	return s.repo.FindActiveByShot(ctx, strings.TrimSpace(shotID))
+}
+
+func (s *SubmissionStore) SynchronizeTerminal(
+	ctx context.Context,
+	generationID string,
+	generationStatus string,
+) (Submission, error) {
+	current, err := s.repo.GetByGenerationID(ctx, strings.TrimSpace(generationID))
+	if err != nil {
+		return Submission{}, err
+	}
+	var terminal SubmissionStatus
+	switch strings.TrimSpace(generationStatus) {
+	case "completed", "succeeded":
+		terminal = SubmissionCompleted
+	case "failed":
+		terminal = SubmissionFailed
+	default:
+		return current, nil
+	}
+	if current.Status == terminal {
+		return current, nil
+	}
+	if current.Status != SubmissionAccepted && current.Status != SubmissionReconciled {
+		return Submission{}, &InvalidSubmissionTransitionError{
+			RequestKey: current.RequestKey,
+			From:       current.Status,
+			To:         terminal,
+		}
+	}
+	return s.transition(ctx, current.RequestKey, current.Status, terminal, SubmissionPatch{})
 }
 
 func (s *SubmissionStore) AttachAccepted(
@@ -366,6 +398,13 @@ func (r *sqlSubmissionRepository) GetByRequestKey(ctx context.Context, requestKe
 		SELECT `+submissionColumns+`
 		FROM video_generation_submissions
 		WHERE request_key=$1::uuid`, requestKey))
+}
+
+func (r *sqlSubmissionRepository) GetByGenerationID(ctx context.Context, generationID string) (Submission, error) {
+	return scanSubmission(r.db.QueryRowContext(ctx, `
+		SELECT `+submissionColumns+`
+		FROM video_generation_submissions
+		WHERE generation_id=$1::bigint`, generationID))
 }
 
 func (r *sqlSubmissionRepository) FindActiveByShot(ctx context.Context, shotID string) (Submission, error) {
