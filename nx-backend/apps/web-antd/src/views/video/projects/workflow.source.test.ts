@@ -40,7 +40,9 @@ describe('guided workflow source contracts', () => {
     expect(shell).toContain('retryLoad');
     expect(shell).toContain('min-height: 44px');
     expect(shell).toContain('env(safe-area-inset-bottom)');
+    expect(shell).toContain('position: sticky');
     expect(shell).toContain('@media (prefers-reduced-motion: reduce)');
+    expect(shell).toContain('loading.value = !workflow.value');
   });
 
   it('provides complete brief, assets and storyboard step controls', () => {
@@ -72,11 +74,36 @@ describe('guided workflow source contracts', () => {
     expect(drawer).not.toContain('autoSelect');
     expect(polling).toContain('clearTimeout');
     expect(polling).toContain('maxAttempts');
+    expect(generation).toContain('item.activeSubmission.requestKey');
+    expect(generation).toContain("item.activeSubmission.status === 'unknown_outcome'");
+    expect(generation).toContain('startPolling(item.shot.id)');
   });
 
   it('provides exact export participation, async jobs and stale result recovery', () => {
     const exportStep = read('workflow/ExportStep.vue');
     for (const text of ['includedShotIds', 'excludedShotIds', 'partialAcknowledged', 'composeProjectSafeApi', 'getComposeJobApi', 'jobId', 'progress', '重试合成', '内容已变化，需要重新合成', '复制链接', '下载成片']) expect(exportStep).toContain(text);
     expect(exportStep).toContain('clearTimeout');
+  });
+
+  it('registers every Ant Design component used by the guided pages', () => {
+    const pages = [
+      ['../production/index.vue', ['Button', 'Progress', 'Skeleton']],
+      ['workflow.vue', ['Breadcrumb', 'BreadcrumbItem', 'Button', 'Modal', 'Skeleton']],
+      ['workflow/AssetsStep.vue', ['Button', 'Input', 'Modal', 'Textarea']],
+      ['workflow/BriefStep.vue', ['Input', 'Textarea']],
+      ['workflow/StoryboardStep.vue', ['Button', 'Input', 'Select', 'Textarea']],
+      ['workflow/GenerationStep.vue', ['Button', 'Input']],
+      ['workflow/VersionDrawer.vue', ['Button', 'Drawer', 'Empty', 'Spin']],
+      ['workflow/ExportStep.vue', ['Button', 'Checkbox', 'Input', 'Progress', 'Select', 'Switch']],
+    ] as const;
+
+    for (const [file, components] of pages) {
+      const source = read(file);
+      for (const component of components) {
+        expect(source, `${file} must import ${component}`).toMatch(
+          new RegExp(`import \\{[\\s\\S]*?\\b${component}\\b[\\s\\S]*?\\} from 'ant-design-vue'`),
+        );
+      }
+    }
   });
 });

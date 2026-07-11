@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 
-import { message } from 'ant-design-vue';
+import {
+  Button as AButton,
+  Input as AInput,
+  message,
+} from 'ant-design-vue';
 
 import {
   batchGenerateShotsSafeApi,
@@ -28,7 +32,9 @@ const requestKeys = ref(new Map<string, string>());
 const recoveryTaskIds = reactive<Record<string, string>>({});
 const drawerOpen = ref(false);
 const drawerShotId = ref('');
+let drawerTriggerShotId = '';
 const timeoutShots = ref(new Set<string>());
+const resumedPolling = new Set<string>();
 const polling = createWorkflowPollingController({ delay: 4000, maxAttempts: 30 });
 
 const visibleShots = computed(() => props.shots.filter((item) => readinessFilter(item.readiness) === activeFilter.value));
@@ -51,6 +57,7 @@ function clearTerminalKey(shotId: string, status: string) {
 }
 
 function startPolling(shotId: string) {
+  resumedPolling.add(shotId);
   polling.start(
     shotId,
     async () => {
@@ -63,13 +70,34 @@ function startPolling(shotId: string) {
       if (item.readiness === 'recovery') return 'unknown_outcome';
       return 'accepted';
     },
-    (status) => clearTerminalKey(shotId, status),
+    (status) => {
+      resumedPolling.delete(shotId);
+      clearTerminalKey(shotId, status);
+    },
     () => {
+      resumedPolling.delete(shotId);
       timeoutShots.value.add(shotId);
       timeoutShots.value = new Set(timeoutShots.value);
     },
   );
 }
+
+watch(
+  () => props.shots,
+  (shots) => {
+    for (const item of shots) {
+      if (!item.activeSubmission) continue;
+      requestKeys.value.set(item.shot.id, item.activeSubmission.requestKey);
+      if (item.activeSubmission.taskId) recoveryTaskIds[item.shot.id] = item.activeSubmission.taskId;
+      if (item.activeSubmission.status === 'unknown_outcome') continue;
+      if (item.readiness === 'generating' && !resumedPolling.has(item.shot.id)) startPolling(item.shot.id);
+    }
+    requestKeys.value = new Map(requestKeys.value);
+    if (!drawerOpen.value && drawerTriggerShotId) void restoreDrawerFocus();
+  },
+  { immediate: true },
+);
+watch(drawerOpen, (open) => { if (!open && drawerTriggerShotId) setTimeout(restoreDrawerFocus, 0); });
 
 async function generateOne(item: WorkflowShotStatus, forceNew = false) {
   if (busyShots.value.has(item.shot.id) || !item.canGenerate) return;
@@ -106,7 +134,24 @@ async function reconcile(item: WorkflowShotStatus) {
 }
 
 function inspectRecovery() { emit('changed'); message.info('已刷新提交状态'); }
-function openVersions(item: WorkflowShotStatus) { drawerShotId.value = item.shot.id; drawerOpen.value = true; }
+function manualRefresh(shotId: string) {
+  timeoutShots.value.delete(shotId);
+  timeoutShots.value = new Set(timeoutShots.value);
+  startPolling(shotId);
+}
+function openVersions(item: WorkflowShotStatus) { drawerTriggerShotId = item.shot.id; drawerShotId.value = item.shot.id; drawerOpen.value = true; }
+function handleVersionSelected() { activeFilter.value = 'completed'; emit('changed'); }
+async function restoreDrawerFocus() {
+  await nextTick();
+  let attempts = 0;
+  const focus = () => {
+    const trigger = document.querySelector<HTMLElement>(`[data-shot-id="${drawerTriggerShotId}"] [data-version-trigger]`);
+    trigger?.focus();
+    attempts += 1;
+    if (document.activeElement !== trigger && attempts < 5) requestAnimationFrame(focus);
+  };
+  requestAnimationFrame(focus);
+}
 defineExpose({ generateAll });
 onBeforeUnmount(() => polling.stopAll());
 </script>
@@ -119,10 +164,10 @@ onBeforeUnmount(() => polling.stopAll());
     <div class="generation-summary">可生成 {{ groups.total }}：新分镜 {{ groups.ready }}、内容变化 {{ groups.stale }}、上次失败 {{ groups.failed }}</div>
     <details><summary>高级设置</summary><p>模型、分辨率和参考模式在分镜步骤中按镜头保存。</p></details>
     <div class="generation-list">
-      <article v-for="item in visibleShots" :key="item.shot.id">
+      <article v-for="item in visibleShots" :key="item.shot.id" :data-shot-id="item.shot.id">
         <div><strong>{{ item.shot.name || `分镜 ${item.shot.orderNum}` }}</strong><span>{{ item.readiness }}</span></div>
         <p>{{ item.shot.actionDescription || '缺少动作描述，请返回分镜修改' }}</p>
-        <p v-if="timeoutShots.has(item.shot.id)" class="notice">仍在处理中，可手动刷新</p>
+        <p v-if="timeoutShots.has(item.shot.id)" class="notice">仍在处理中，可<a-button type="link" @click="manualRefresh(item.shot.id)">手动刷新</a-button></p>
         <div v-if="item.readiness === 'recovery'" class="recovery-actions">
           <a-input v-model:value="recoveryTaskIds[item.shot.id]" placeholder="上游 task ID" />
           <a-button @click="inspectRecovery">检查结果</a-button><a-button @click="reconcile(item)">对账</a-button>
@@ -130,11 +175,11 @@ onBeforeUnmount(() => polling.stopAll());
         <div v-else class="shot-actions">
           <a-button v-if="item.canGenerate" :loading="busyShots.has(item.shot.id)" @click="generateOne(item)">生成</a-button>
           <a-button v-if="item.readiness === 'completed'" @click="generateOne(item, true)">再生成一个版本</a-button>
-          <a-button @click="openVersions(item)">查看版本</a-button>
+          <a-button data-version-trigger @click="openVersions(item)">查看版本</a-button>
         </div>
       </article>
     </div>
-    <VersionDrawer v-model:open="drawerOpen" :shot="drawerShot" @selected="emit('changed')" />
+    <VersionDrawer v-model:open="drawerOpen" :shot="drawerShot" @closed="restoreDrawerFocus" @selected="handleVersionSelected" />
   </div>
 </template>
 

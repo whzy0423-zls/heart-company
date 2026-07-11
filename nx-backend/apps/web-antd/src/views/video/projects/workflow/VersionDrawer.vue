@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
 
-import { message } from 'ant-design-vue';
+import {
+  Button as AButton,
+  Drawer as ADrawer,
+  Empty as AEmpty,
+  Spin as ASpin,
+  message,
+} from 'ant-design-vue';
 
 import {
   listShotVideoVersionsApi,
@@ -11,7 +17,7 @@ import {
 } from '#/api/core/videoproject';
 
 const props = defineProps<{ open: boolean; shot?: Shot }>();
-const emit = defineEmits<{ selected: []; 'update:open': [value: boolean] }>();
+const emit = defineEmits<{ closed: []; selected: []; 'update:open': [value: boolean] }>();
 const versions = ref<ShotVideoVersion[]>([]);
 const loading = ref(false);
 const selecting = ref('');
@@ -35,10 +41,11 @@ async function selectVersion(version: ShotVideoVersion) {
 }
 
 watch(() => [props.open, props.shot?.id], load, { immediate: true });
+function afterOpenChange(open: boolean) { if (!open) emit('closed'); }
 </script>
 
 <template>
-  <a-drawer :open="open" width="480" title="视频版本" @close="emit('update:open', false)">
+  <a-drawer :open="open" width="480" title="视频版本" @after-open-change="afterOpenChange" @close="emit('update:open', false)">
     <a-spin :spinning="loading">
       <div class="version-list">
         <article v-for="version in versions" :key="version.id" :class="{ current: version.isCurrent }">

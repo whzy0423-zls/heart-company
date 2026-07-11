@@ -342,9 +342,17 @@ func (s *Store) CreateShotsFromScript(
 }
 
 type WorkflowShotStatus struct {
-	CanGenerate bool          `json:"canGenerate"`
-	Readiness   ShotReadiness `json:"readiness"`
-	Shot        Shot          `json:"shot"`
+	ActiveSubmission *WorkflowActiveSubmission `json:"activeSubmission,omitempty"`
+	CanGenerate      bool                      `json:"canGenerate"`
+	Readiness        ShotReadiness             `json:"readiness"`
+	Shot             Shot                      `json:"shot"`
+}
+
+type WorkflowActiveSubmission struct {
+	SubmissionID int64  `json:"submissionId"`
+	RequestKey   string `json:"requestKey"`
+	Status       string `json:"status"`
+	TaskID       string `json:"taskId,omitempty"`
 }
 
 type WorkflowStatus struct {
@@ -363,13 +371,13 @@ func (s *Store) GetWorkflowStatus(ctx context.Context, projectID string) (Workfl
 	if err != nil {
 		return WorkflowStatus{}, err
 	}
-	active := map[string]string{}
+	active := map[string]WorkflowActiveSubmission{}
 	pid, err := parseID(projectID)
 	if err != nil {
 		return WorkflowStatus{}, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT shot_id::text, status
+		SELECT shot_id::text, id, request_key::text, status, task_id
 		FROM video_generation_submissions
 		WHERE shot_id IN (SELECT id FROM video_shots WHERE project_id=$1)
 		  AND status IN ('prepared','submitting','accepted','unknown_outcome','reconciled')`, pid)
@@ -379,11 +387,12 @@ func (s *Store) GetWorkflowStatus(ctx context.Context, projectID string) (Workfl
 	if rows != nil {
 		defer rows.Close()
 		for rows.Next() {
-			var shotID, status string
-			if err := rows.Scan(&shotID, &status); err != nil {
+			var shotID string
+			var submission WorkflowActiveSubmission
+			if err := rows.Scan(&shotID, &submission.SubmissionID, &submission.RequestKey, &submission.Status, &submission.TaskID); err != nil {
 				return WorkflowStatus{}, err
 			}
-			active[shotID] = status
+			active[shotID] = submission
 		}
 		if err := rows.Err(); err != nil {
 			return WorkflowStatus{}, err
@@ -403,16 +412,21 @@ func (s *Store) GetWorkflowStatus(ctx context.Context, projectID string) (Workfl
 				ShotRevision: shot.SelectedGenerationRevision,
 			}
 		}
+		activeSubmission, hasActiveSubmission := active[shot.ID]
+		var activeSubmissionPointer *WorkflowActiveSubmission
+		if hasActiveSubmission {
+			activeSubmissionPointer = &activeSubmission
+		}
 		state := ComputeShotReadiness(ShotWorkflowFacts{
 			ActionDescription:  shot.ActionDescription,
 			GenerationRevision: shot.GenerationRevision,
 			LatestStatus:       shot.Status,
 			LinkedTaskActive:   shot.Status == "generating",
 			Selected:           selected,
-			SubmissionStatus:   active[shot.ID],
+			SubmissionStatus:   activeSubmission.Status,
 		})
 		readiness = append(readiness, state)
-		statuses = append(statuses, WorkflowShotStatus{Shot: shot, Readiness: state, CanGenerate: state.CanGenerate()})
+		statuses = append(statuses, WorkflowShotStatus{ActiveSubmission: activeSubmissionPointer, Shot: shot, Readiness: state, CanGenerate: state.CanGenerate()})
 	}
 	finalCurrent := false
 	if project.FinalVideoURL != "" && project.FinalVideoInputHash != "" {

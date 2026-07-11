@@ -1,8 +1,14 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
-import { message } from 'ant-design-vue';
+import {
+  Breadcrumb as ABreadcrumb,
+  BreadcrumbItem as ABreadcrumbItem,
+  Button as AButton,
+  Modal as AModal,
+  Skeleton as ASkeleton,
+} from 'ant-design-vue';
 
 import {
   getProjectWorkflowApi,
@@ -45,7 +51,7 @@ const primaryLabel = computed(() => {
 });
 
 async function loadWorkflow() {
-  loading.value = true;
+  loading.value = !workflow.value;
   fatalError.value = '';
   try {
     workflow.value = await getProjectWorkflowApi(projectId.value);
@@ -126,6 +132,12 @@ function cancelNavigation() {
   dirtyDialogVisible.value = false;
 }
 
+async function focusDirtyDialog(open: boolean) {
+  if (!open) return;
+  await nextTick();
+  document.querySelector<HTMLElement>('.dirty-actions button')?.focus();
+}
+
 watch(projectId, loadWorkflow);
 onMounted(() => {
   window.addEventListener('beforeunload', beforeUnload);
@@ -190,10 +202,10 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
       </a-button>
     </footer>
 
-    <a-modal :open="dirtyDialogVisible" title="保存当前修改？" :footer="null" @cancel="cancelNavigation">
+    <a-modal :open="dirtyDialogVisible" title="保存当前修改？" :footer="null" @after-open-change="focusDirtyDialog" @cancel="cancelNavigation">
       <p>当前内容尚未保存。保存后继续，或放弃本次修改。</p>
       <div class="dirty-actions">
-        <a-button @click="cancelNavigation">取消</a-button>
+        <a-button autofocus @click="cancelNavigation">取消</a-button>
         <a-button @click="discardAndContinue">放弃修改</a-button>
         <a-button type="primary" @click="saveAndContinue">保存并继续</a-button>
       </div>
@@ -206,14 +218,14 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
 .workflow-header { min-height: 88px; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid #dbe3ee; background: #fff; }
 .workflow-header h1 { margin: 8px 0 0; font-size: 24px; letter-spacing: 0; }
 .advanced-link { min-height: 44px; padding: 0 12px; display: inline-flex; align-items: center; color: #1d4ed8; }
-.workflow-main { width: min(1180px, 100%); min-height: calc(100dvh - 236px); margin: 0 auto; padding: 24px 24px 112px; }
+.workflow-main { width: min(1180px, 100%); min-height: calc(100dvh - 236px); margin: 0 auto; padding: 24px 24px 128px; }
 .workflow-loading, .workflow-fatal, .workflow-panel { min-height: 420px; }
 .workflow-fatal { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; }
 .workflow-panel h2 { margin: 4px 0 8px; font-size: 22px; letter-spacing: 0; }
 .step-eyebrow { margin: 0; color: #2563eb; font-weight: 600; }
 .step-status { color: #64748b; }
 .step-placeholder { min-height: 300px; padding: 32px 0; color: #475569; border-top: 1px solid #e2e8f0; }
-.workflow-footer { position: fixed; right: 0; bottom: 0; left: 0; z-index: 20; min-height: calc(72px + env(safe-area-inset-bottom)); padding: 12px 24px calc(12px + env(safe-area-inset-bottom)); display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid #cbd5e1; background: rgba(255, 255, 255, 0.97); }
+.workflow-footer { position: sticky; right: 0; bottom: 0; left: 0; z-index: 20; min-height: calc(72px + env(safe-area-inset-bottom)); padding: 12px 24px calc(12px + env(safe-area-inset-bottom)); display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid #cbd5e1; background: rgba(255, 255, 255, 0.97); }
 .workflow-footer :deep(.ant-btn) { min-width: 160px; min-height: 44px; border-radius: 6px; }
 .dirty-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
 @media (max-width: 640px) { .workflow-header { padding: 12px 16px; align-items: flex-start; } .workflow-header h1 { font-size: 20px; } .workflow-main { padding: 20px 16px 128px; } .workflow-footer { align-items: stretch; flex-direction: column; padding-inline: 16px; } .workflow-footer :deep(.ant-btn) { width: 100%; } }

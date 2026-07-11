@@ -2,7 +2,12 @@
 import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
-import { message } from 'ant-design-vue';
+import {
+  Button as AButton,
+  Progress as AProgress,
+  Skeleton as ASkeleton,
+  message,
+} from 'ant-design-vue';
 
 import { createProjectApi, listProjectsApi, type Project } from '#/api/core/videoproject';
 

@@ -3,6 +3,7 @@ package videoproject
 import (
 	"context"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -39,6 +40,23 @@ func TestShotReadiness(t *testing.T) {
 				t.Fatalf("ComputeShotReadiness=%s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestWorkflowShotStatusExposesOnlySafeActiveSubmissionMetadata(t *testing.T) {
+	statusType := reflect.TypeOf(WorkflowShotStatus{})
+	field, ok := statusType.FieldByName("ActiveSubmission")
+	if !ok || field.Tag.Get("json") != "activeSubmission,omitempty" {
+		t.Fatal("WorkflowShotStatus.ActiveSubmission must be optional JSON metadata")
+	}
+	submissionType := field.Type.Elem()
+	for _, name := range []string{"SubmissionID", "RequestKey", "Status", "TaskID"} {
+		if _, ok := submissionType.FieldByName(name); !ok {
+			t.Fatalf("active submission missing %s", name)
+		}
+	}
+	if _, ok := submissionType.FieldByName("RequestSnapshot"); ok {
+		t.Fatal("workflow response must not expose request snapshots")
 	}
 }
 

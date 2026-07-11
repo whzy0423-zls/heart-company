@@ -210,9 +210,17 @@ export type WorkflowStepState = 'blocked' | 'complete' | 'optional' | 'skipped_e
 export type ShotReadiness = 'completed' | 'failed' | 'generating' | 'incomplete' | 'ready' | 'recovery' | 'stale';
 
 export interface WorkflowShotStatus {
+  activeSubmission?: WorkflowActiveSubmission;
   canGenerate: boolean;
   readiness: ShotReadiness;
   shot: Shot;
+}
+
+export interface WorkflowActiveSubmission {
+  requestKey: string;
+  status: string;
+  submissionId: number;
+  taskId?: string;
 }
 
 export interface ProjectWorkflow {

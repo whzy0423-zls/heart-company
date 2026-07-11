@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
 
-import { message } from 'ant-design-vue';
+import {
+  Button as AButton,
+  Input as AInput,
+  Select as ASelect,
+  Textarea as ATextarea,
+  message,
+} from 'ant-design-vue';
 
 import {
   createShotApi,

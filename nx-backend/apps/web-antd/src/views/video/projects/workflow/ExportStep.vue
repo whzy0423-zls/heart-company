@@ -1,7 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref } from 'vue';
 
-import { message } from 'ant-design-vue';
+import {
+  Button as AButton,
+  Checkbox as ACheckbox,
+  Input as AInput,
+  Progress as AProgress,
+  Select as ASelect,
+  Switch as ASwitch,
+  message,
+} from 'ant-design-vue';
 
 import {
   composeProjectSafeApi,

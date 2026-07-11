@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue';
 
-import { message } from 'ant-design-vue';
+import {
+  Input as AInput,
+  Textarea as ATextarea,
+  message,
+} from 'ant-design-vue';
 
 import { updateProjectApi, type Project } from '#/api/core/videoproject';
 

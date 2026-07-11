@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 
-import { message, Modal } from 'ant-design-vue';
+import {
+  Button as AButton,
+  Input as AInput,
+  Modal,
+  Modal as AModal,
+  Textarea as ATextarea,
+  message,
+} from 'ant-design-vue';
 
 import {
   createCharacterApi,

@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
@@ -10,6 +13,14 @@ describe('guided video workflow api', () => {
   beforeEach(() => {
     mocks.get.mockReset();
     mocks.post.mockReset();
+  });
+
+  it('types safe active submission recovery metadata', () => {
+    const source = readFileSync(resolve(import.meta.dirname, 'videoproject.ts'), 'utf8');
+    expect(source).toContain('activeSubmission?: WorkflowActiveSubmission');
+    expect(source).toContain('submissionId: number');
+    expect(source).toContain('requestKey: string');
+    expect(source).not.toContain('requestSnapshot:');
   });
 
   it('uses exact workflow endpoint contracts', async () => {
