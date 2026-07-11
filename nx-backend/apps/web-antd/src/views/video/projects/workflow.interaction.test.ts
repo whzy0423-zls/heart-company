@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createWorkflowNavigationController } from './workflow/useWorkflowNavigation';
+import { createWorkflowPollingController } from './workflow/useWorkflowPolling';
 
 describe('workflow dirty navigation controller', () => {
   it('runs clean navigation immediately', async () => {
@@ -48,5 +49,32 @@ describe('workflow dirty navigation controller', () => {
     await controller.discardAndContinue(reload);
     expect(reload).toHaveBeenCalledOnce();
     expect(navigate).toHaveBeenCalledOnce();
+  });
+});
+
+describe('workflow polling controller', () => {
+  it('stops on terminal result and clears timers', async () => {
+    vi.useFakeTimers();
+    const poll = vi.fn().mockResolvedValueOnce('accepted').mockResolvedValueOnce('completed');
+    const terminal = vi.fn();
+    const controller = createWorkflowPollingController({ delay: 10, maxAttempts: 5 });
+    controller.start('shot-1', poll, terminal);
+    await vi.runAllTimersAsync();
+    expect(poll).toHaveBeenCalledTimes(2);
+    expect(terminal).toHaveBeenCalledWith('completed');
+    controller.stopAll();
+    vi.useRealTimers();
+  });
+
+  it('times out without marking the task failed', async () => {
+    vi.useFakeTimers();
+    const poll = vi.fn().mockResolvedValue('accepted');
+    const timeout = vi.fn();
+    const controller = createWorkflowPollingController({ delay: 10, maxAttempts: 2 });
+    controller.start('shot-1', poll, vi.fn(), timeout);
+    await vi.runAllTimersAsync();
+    expect(timeout).toHaveBeenCalledOnce();
+    controller.stopAll();
+    vi.useRealTimers();
   });
 });

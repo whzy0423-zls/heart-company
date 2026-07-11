@@ -59,4 +59,18 @@ describe('guided workflow source contracts', () => {
     }
     expect(`${brief}${assets}${storyboard}`).toContain('min-height: 44px');
   });
+
+  it('provides safe generation filters, recovery and explicit version selection', () => {
+    const generation = read('workflow/GenerationStep.vue');
+    const drawer = read('workflow/VersionDrawer.vue');
+    const polling = read('workflow/useWorkflowPolling.ts');
+    for (const label of ['可生成', '待完善', '生成中', '已完成']) expect(generation).toContain(label);
+    for (const text of ['ready', 'stale', 'failed', 'recovery', 'requestKeys', 'crypto.randomUUID', 'batchGenerateShotsSafeApi', 'generateShotSafeApi', '检查结果', '对账']) expect(generation).toContain(text);
+    expect(generation).toContain('再生成一个版本');
+    expect(drawer).toContain('设为当前');
+    expect(drawer).toContain('setShotVideoVersionApi');
+    expect(drawer).not.toContain('autoSelect');
+    expect(polling).toContain('clearTimeout');
+    expect(polling).toContain('maxAttempts');
+  });
 });

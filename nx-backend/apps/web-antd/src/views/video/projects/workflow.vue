@@ -13,6 +13,7 @@ import {
 import WorkflowStepper from './workflow/WorkflowStepper.vue';
 import AssetsStep from './workflow/AssetsStep.vue';
 import BriefStep from './workflow/BriefStep.vue';
+import GenerationStep from './workflow/GenerationStep.vue';
 import StoryboardStep from './workflow/StoryboardStep.vue';
 import { normalizeWorkflowStep, workflowSteps } from './workflow/workflow';
 import { createWorkflowNavigationController } from './workflow/useWorkflowNavigation';
@@ -28,6 +29,7 @@ const navigation = createWorkflowNavigationController();
 const briefStepRef = ref<InstanceType<typeof BriefStep>>();
 const assetsStepRef = ref<InstanceType<typeof AssetsStep>>();
 const storyboardStepRef = ref<InstanceType<typeof StoryboardStep>>();
+const generationStepRef = ref<InstanceType<typeof GenerationStep>>();
 
 const projectId = computed(() => String(route.params.id || ''));
 const activeStep = ref<WorkflowStepKey>('brief');
@@ -73,7 +75,11 @@ async function runPrimaryAction() {
   if (primaryBusy.value) return;
   primaryBusy.value = true;
   try {
-    if (activeStep.value === 'generate' || activeStep.value === 'export') {
+    if (activeStep.value === 'generate') {
+      await generationStepRef.value?.generateAll();
+      return;
+    }
+    if (activeStep.value === 'export') {
       message.info(currentState.value === 'blocked' ? '请先处理页面中标出的缺项' : primaryLabel.value);
       return;
     }
@@ -164,7 +170,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
         <BriefStep v-if="activeStep === 'brief'" ref="briefStepRef" :project="workflow.project" @dirty="setDirty" @saved="loadWorkflow" />
         <AssetsStep v-else-if="activeStep === 'assets'" ref="assetsStepRef" :project-id="projectId" @dirty="setDirty" @changed="loadWorkflow" />
         <StoryboardStep v-else-if="activeStep === 'storyboard'" ref="storyboardStepRef" :project="workflow.project" :shots="workflow.shots" @dirty="setDirty" @changed="loadWorkflow" />
-        <div v-else-if="activeStep === 'generate'" class="step-placeholder">生成检查、状态筛选与版本将在这里显示。</div>
+        <GenerationStep v-else-if="activeStep === 'generate'" ref="generationStepRef" :project-id="projectId" :shots="workflow.shots" @changed="loadWorkflow" />
         <div v-else class="step-placeholder">合成设置、进度和成片将在这里显示。</div>
       </section>
     </main>
