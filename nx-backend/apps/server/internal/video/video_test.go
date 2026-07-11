@@ -267,6 +267,122 @@ func TestGenerateRejectsNewKeyWhileActive(t *testing.T) {
 	}
 }
 
+func TestGenerateStoresUnknownOutcome(t *testing.T) {
+	dbState := &videoDBState{}
+	db := openVideoTestDB(t, dbState)
+	defer db.Close()
+	repo := newMemorySubmissionRepository()
+	store := NewStore(db, nil, config.VideoConfig{
+		APIBase: "https://video.example.com",
+		APIKey:  "test-key",
+	})
+	var postCount int
+	store.client.urlAllowed = func(string) bool { return true }
+	store.client.client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		postCount++
+		return nil, io.ErrUnexpectedEOF
+	})
+	store.submissions = newSubmissionStore(repo)
+
+	assertPaidGenerateUnknownOutcome(t, store, repo, dbState, &postCount)
+}
+
+func TestGenerateMissingTaskIDIsUnknownOutcome(t *testing.T) {
+	var postCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		postCount++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"status": "queued"},
+		})
+	}))
+	defer server.Close()
+
+	dbState := &videoDBState{}
+	db := openVideoTestDB(t, dbState)
+	defer db.Close()
+	repo := newMemorySubmissionRepository()
+	store := allowLocalTestStore(NewStore(db, nil, config.VideoConfig{APIBase: server.URL, APIKey: "test-key"}))
+	store.submissions = newSubmissionStore(repo)
+
+	assertPaidGenerateUnknownOutcome(t, store, repo, dbState, &postCount)
+}
+
+func TestGenerateUnparseableSuccessIsUnknownOutcome(t *testing.T) {
+	var postCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		postCount++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":`))
+	}))
+	defer server.Close()
+
+	dbState := &videoDBState{}
+	db := openVideoTestDB(t, dbState)
+	defer db.Close()
+	repo := newMemorySubmissionRepository()
+	store := allowLocalTestStore(NewStore(db, nil, config.VideoConfig{APIBase: server.URL, APIKey: "test-key"}))
+	store.submissions = newSubmissionStore(repo)
+
+	assertPaidGenerateUnknownOutcome(t, store, repo, dbState, &postCount)
+}
+
+func assertPaidGenerateUnknownOutcome(
+	t *testing.T,
+	store *Store,
+	repo *memorySubmissionRepository,
+	dbState *videoDBState,
+	postCount *int,
+) {
+	t.Helper()
+	requestKey := "11111111-1111-4111-8111-111111111111"
+	_, err := store.Generate(context.Background(), GenerateInput{
+		Prompt:       "test",
+		RequestKey:   requestKey,
+		ShotID:       "42",
+		ShotRevision: 3,
+	})
+	var unknown *UnknownOutcomeError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("expected UnknownOutcomeError, got %v", err)
+	}
+	if unknown.RequestKey != requestKey {
+		t.Fatalf("unknown outcome lost request key: %+v", unknown)
+	}
+	if *postCount != 1 {
+		t.Fatalf("ambiguous request issued %d upstream POSTs, want 1", *postCount)
+	}
+	row, getErr := repo.GetByRequestKey(context.Background(), requestKey)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if row.Status != SubmissionUnknownOutcome || !row.Status.Active() {
+		t.Fatalf("ambiguous result must retain active lock, got %+v", row)
+	}
+	if dbState.insertCalls != 0 {
+		t.Fatalf("ambiguous result persisted %d fake failed generations", dbState.insertCalls)
+	}
+
+	_, err = store.Generate(context.Background(), GenerateInput{
+		Prompt:       "test",
+		RequestKey:   "22222222-2222-4222-8222-222222222222",
+		ShotID:       "42",
+		ShotRevision: 3,
+	})
+	var active *ActiveSubmissionError
+	if !errors.As(err, &active) {
+		t.Fatalf("unknown outcome must reject a new paid key, got %v", err)
+	}
+	if *postCount != 1 {
+		t.Fatalf("new key after unknown outcome issued another POST: %d", *postCount)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func TestGenerateRejectsSuccessfulCreateWithoutTaskID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{

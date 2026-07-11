@@ -144,6 +144,7 @@ func NewStore(database *sql.DB, uploads *uploadasset.Store, cfg config.VideoConf
 // 不在此阻塞等待结果——前端按返回的 id 调 Refresh 轮询。
 func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, error) {
 	prompt := strings.TrimSpace(input.Prompt)
+	var err error
 
 	// 收集参考图片：兼容旧的单字段 ImageURL，并入 images 数组后去重去空。
 	images := cleanURLs(append([]string{input.ImageURL}, input.Images...))
@@ -243,8 +244,20 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 		}
 	}
 
-	task, err := s.client.CreateTask(ctx, model, prompt, images, videos, audios, seconds, aspectRatio)
+	var task TaskResult
+	if paidProjectCall {
+		task, err = s.client.CreateTaskOnce(ctx, model, prompt, images, videos, audios, seconds, aspectRatio)
+	} else {
+		task, err = s.client.CreateTask(ctx, model, prompt, images, videos, audios, seconds, aspectRatio)
+	}
 	if err != nil {
+		if paidProjectCall {
+			_, markErr := s.submissions.MarkUnknownOutcome(ctx, submission.RequestKey, "")
+			if markErr != nil {
+				return Generation{}, markErr
+			}
+			return Generation{}, &UnknownOutcomeError{RequestKey: submission.RequestKey, Cause: err}
+		}
 		var id string
 		_ = s.db.QueryRowContext(ctx,
 			`INSERT INTO video_generations (provider, model, prompt, image_url, seconds, aspect_ratio, status, error_message)
@@ -255,6 +268,13 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 		return Generation{}, err
 	}
 	if strings.TrimSpace(task.TaskID) == "" {
+		if paidProjectCall {
+			_, markErr := s.submissions.MarkUnknownOutcome(ctx, submission.RequestKey, "")
+			if markErr != nil {
+				return Generation{}, markErr
+			}
+			return Generation{}, &UnknownOutcomeError{RequestKey: submission.RequestKey}
+		}
 		return Generation{}, fmt.Errorf("视频网关创建成功但未返回 task_id，请检查上游响应")
 	}
 
@@ -699,6 +719,16 @@ func (c *Client) auth(req *http.Request) {
 // CreateTask 调用 POST /v1/videos 创建任务。
 // images/videos 为已上传到文件桶、可公网访问的参考素材地址。
 func (c *Client) CreateTask(ctx context.Context, model, prompt string, images, videos, audios []string, seconds int, aspectRatio string) (TaskResult, error) {
+	return c.createTask(ctx, model, prompt, images, videos, audios, seconds, aspectRatio, true)
+}
+
+// CreateTaskOnce is used for paid project submissions. Ambiguous responses must
+// be reconciled with the same request key instead of issuing another POST.
+func (c *Client) CreateTaskOnce(ctx context.Context, model, prompt string, images, videos, audios []string, seconds int, aspectRatio string) (TaskResult, error) {
+	return c.createTask(ctx, model, prompt, images, videos, audios, seconds, aspectRatio, false)
+}
+
+func (c *Client) createTask(ctx context.Context, model, prompt string, images, videos, audios []string, seconds int, aspectRatio string, retry bool) (TaskResult, error) {
 	if err := c.ensureReady(); err != nil {
 		return TaskResult{}, err
 	}
@@ -731,7 +761,12 @@ func (c *Client) CreateTask(ctx context.Context, model, prompt string, images, v
 	req.Header.Set("Content-Type", "application/json")
 	c.auth(req)
 
-	payload, err := c.doJSON(req)
+	var payload map[string]any
+	if retry {
+		payload, err = c.doJSON(req)
+	} else {
+		payload, err = c.doJSONOnce(req)
+	}
 	if err != nil {
 		return TaskResult{}, err
 	}

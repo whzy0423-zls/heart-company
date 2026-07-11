@@ -242,6 +242,26 @@ func (s *SubmissionStore) AttachAccepted(
 	})
 }
 
+func (s *SubmissionStore) MarkUnknownOutcome(
+	ctx context.Context,
+	requestKey string,
+	taskID string,
+) (Submission, error) {
+	taskID = strings.TrimSpace(taskID)
+	message := "generation gateway outcome unknown"
+	patch := SubmissionPatch{ErrorMessage: &message}
+	if taskID != "" {
+		patch.TaskID = &taskID
+	}
+	return s.transition(
+		ctx,
+		requestKey,
+		SubmissionSubmitting,
+		SubmissionUnknownOutcome,
+		patch,
+	)
+}
+
 func (s *SubmissionStore) Reconcile(
 	ctx context.Context,
 	requestKey string,
