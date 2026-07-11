@@ -23,16 +23,6 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
-        name: 'VideoProductionShort',
-        path: 'production/short',
-        component: () => import('#/views/video/production/short.vue'),
-        meta: {
-          hideInMenu: true,
-          title: '短片制工作台',
-          activePath: '/video/production',
-        },
-      },
-      {
         name: 'VideoProjectsList',
         path: 'projects',
         component: () => import('#/views/video/projects/index.vue'),
@@ -54,10 +44,20 @@ const routes: RouteRecordRaw[] = [
       {
         name: 'VideoProjectWorkbench',
         path: 'projects/:id/workbench',
-        component: () => import('#/views/video/projects/workbench.vue'),
+        component: () => import('#/views/video/projects/workflow.vue'),
         meta: {
           hideInMenu: true,
           title: '项目工作台',
+          activePath: '/video/projects',
+        },
+      },
+      {
+        name: 'VideoProjectAdvancedWorkbench',
+        path: 'projects/:id/workbench/advanced',
+        component: () => import('#/views/video/projects/workbench.vue'),
+        meta: {
+          hideInMenu: true,
+          title: '高级项目工作台',
           activePath: '/video/projects',
         },
       },
