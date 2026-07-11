@@ -40,6 +40,7 @@ func (s *Server) videoProjectComposer() *videoproject.ProjectComposer {
 		s.videoProjectStore(),
 		s.uploader,
 		s.uploads,
+		s.env.UploadDir,
 	)
 }
 

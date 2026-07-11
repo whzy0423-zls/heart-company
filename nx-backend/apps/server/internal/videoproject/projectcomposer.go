@@ -28,10 +28,10 @@ type ProjectComposer struct {
 	uploads  *uploadasset.Store
 }
 
-func NewProjectComposer(store *Store, uploader storage.ObjectUploader, uploads *uploadasset.Store) *ProjectComposer {
+func NewProjectComposer(store *Store, uploader storage.ObjectUploader, uploads *uploadasset.Store, uploadRoot string) *ProjectComposer {
 	return &ProjectComposer{
 		store:    store,
-		composer: NewComposer("/tmp"),
+		composer: NewComposer("/tmp", uploadRoot),
 		uploader: uploader,
 		uploads:  uploads,
 	}
