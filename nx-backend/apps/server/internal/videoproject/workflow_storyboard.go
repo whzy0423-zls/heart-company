@@ -2,9 +2,13 @@ package videoproject
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -39,6 +43,84 @@ type StoryboardDraftWrite struct {
 	Shots                   []StoryboardShot
 	RawResult               string
 	ErrorMessage            string
+}
+
+type UpdateStoryboardDraftInput struct {
+	ExpectedRevision int              `json:"expectedRevision"`
+	Shots            []StoryboardShot `json:"shots"`
+}
+
+type ConfirmStoryboardInput struct {
+	ExpectedRevision int    `json:"expectedRevision"`
+	DiffToken        string `json:"diffToken"`
+}
+
+type MaterializedStoryboardShot struct {
+	ID                        string
+	Shot                      StoryboardShot
+	SelectedGenerationID      string
+	SelectedGenerationAckHash string
+	GenerationCount           int
+}
+
+type StoryboardResolvedAsset struct {
+	Key       string
+	Kind      string
+	ID        string
+	ImageURL  string
+	ObjectURL string
+}
+
+type StoryboardProjectDefaults struct {
+	VideoModel      string
+	AspectRatio     string
+	VideoResolution string
+	AudioMode       string
+}
+
+type MaterializedStoryboardReference struct {
+	AssetKey  string
+	AssetType string
+	ObjectURL string
+	Role      string
+	SortOrder int
+	UsageNote string
+	SourceID  string
+	SourceType string
+}
+
+type StoryboardShotMaterialization struct {
+	ID                        string
+	StoryboardShot
+	SceneID                   string
+	CharacterIDs              []string
+	References                []MaterializedStoryboardReference
+	VideoModel                string
+	AspectRatio               string
+	VideoResolution           string
+	AudioMode                 string
+	SelectedGenerationID      string
+	SelectedGenerationAckHash string
+	GenerationCount           int
+}
+
+type StoryboardMaterializationPlan struct {
+	Creates   []StoryboardShotMaterialization
+	Updates   []StoryboardShotMaterialization
+	Unchanged []StoryboardShotMaterialization
+	Archives  []StoryboardShotMaterialization
+}
+
+type StoryboardDiffContext struct {
+	CurrentScriptRevision        int
+	CurrentBreakdownID           string
+	CurrentAssetRevision         int
+	CurrentCapabilityVersion     string
+	CurrentConfirmedStoryboardID string
+	LiveShots                    []MaterializedStoryboardShot
+	Assets                       []StoryboardResolvedAsset
+	Defaults                     StoryboardProjectDefaults
+	Capabilities                 video.Capabilities
 }
 
 type projectStoryboardGenerator interface {
@@ -137,6 +219,227 @@ func storyboardShotsFromWorkflowLLM(shots []llm.ProjectStoryboardShot) []Storybo
 			References:    references,
 		})
 	}
+	return result
+}
+
+func applyStoryboardDraftUpdate(draft StoryboardVersion, input UpdateStoryboardDraftInput) (StoryboardVersion, bool, error) {
+	if input.ExpectedRevision != draft.Revision {
+		return StoryboardVersion{}, false, revisionConflict(draft.Revision, "分镜草稿已在其他页面更新，请刷新后重试")
+	}
+	if draft.Status != "draft" {
+		return StoryboardVersion{}, false, &WorkflowValidationError{
+			Code: "storyboard_not_editable", Field: "status", Message: "只有分镜草稿可以编辑",
+			Fix: "请重新生成一份分镜草稿。", Details: map[string]any{"status": draft.Status},
+		}
+	}
+	shots, err := normalizeStoryboardDraftShots(input.Shots)
+	if err != nil {
+		return StoryboardVersion{}, false, err
+	}
+	if reflect.DeepEqual(draft.Shots, shots) {
+		return draft, false, nil
+	}
+	next := draft
+	next.Shots = shots
+	next.Revision++
+	return next, true, nil
+}
+
+func normalizeStoryboardDraftShots(shots []StoryboardShot) ([]StoryboardShot, error) {
+	result := make([]StoryboardShot, len(shots))
+	seen := map[string]bool{}
+	for index, shot := range shots {
+		shot.SourceKey = strings.TrimSpace(shot.SourceKey)
+		if shot.SourceKey == "" || seen[shot.SourceKey] {
+			return nil, &WorkflowValidationError{
+				Code: "storyboard_source_key_invalid", Field: fmt.Sprintf("shots[%d].sourceKey", index),
+				Message: "每个分镜必须有唯一的稳定标识", Fix: "请重新生成分镜，或为重复镜头设置不同的 sourceKey。",
+				Details: map[string]any{"sourceKey": shot.SourceKey},
+			}
+		}
+		seen[shot.SourceKey] = true
+		shot.Name = strings.TrimSpace(shot.Name)
+		shot.SceneKey = strings.TrimSpace(shot.SceneKey)
+		shot.CharacterKeys = cleanStoryboardStringList(shot.CharacterKeys)
+		shot.AssetKeys = cleanStoryboardStringList(shot.AssetKeys)
+		shot.Action = strings.TrimSpace(shot.Action)
+		shot.Camera = strings.TrimSpace(shot.Camera)
+		shot.Composition = strings.TrimSpace(shot.Composition)
+		shot.Lighting = strings.TrimSpace(shot.Lighting)
+		shot.Audio = strings.TrimSpace(shot.Audio)
+		shot.Dialogue = strings.TrimSpace(shot.Dialogue)
+		shot.TaskMode = strings.ToLower(strings.TrimSpace(shot.TaskMode))
+		if shot.TaskMode == "" {
+			shot.TaskMode = "reference"
+		}
+		shot.References = normalizeStoryboardReferenceIntents(shot.References)
+		result[index] = shot
+	}
+	return result, nil
+}
+
+func previewStoryboardDiff(draft StoryboardVersion, diffContext StoryboardDiffContext) (StoryboardDiff, error) {
+	if draft.Status != "draft" {
+		return StoryboardDiff{}, &WorkflowValidationError{
+			Code: "storyboard_not_editable", Field: "status", Message: "只有分镜草稿可以确认",
+			Fix: "请重新生成一份分镜草稿。", Details: map[string]any{"status": draft.Status},
+		}
+	}
+	shots, err := normalizeStoryboardDraftShots(draft.Shots)
+	if err != nil {
+		return StoryboardDiff{}, err
+	}
+	draft.Shots = shots
+	if err := validateStoryboardDiffDependencies(draft, diffContext); err != nil {
+		return StoryboardDiff{}, err
+	}
+	liveByKey := map[string]MaterializedStoryboardShot{}
+	for _, live := range diffContext.LiveShots {
+		key := strings.TrimSpace(live.Shot.SourceKey)
+		if key == "" || liveByKey[key].ID != "" {
+			return StoryboardDiff{}, &WorkflowValidationError{
+				Code: "storyboard_source_key_invalid", Field: "liveShots", Message: "现有分镜包含空白或重复的稳定标识",
+				Fix: "请先修复项目分镜的 sourceKey。", Details: map[string]any{"sourceKey": key},
+			}
+		}
+		live.Shot, err = normalizeSingleStoryboardShot(live.Shot)
+		if err != nil {
+			return StoryboardDiff{}, err
+		}
+		liveByKey[key] = live
+	}
+	diff := NewStoryboardDiff()
+	diff.StoryboardID = draft.ID
+	diff.Revision = draft.Revision
+	seen := map[string]bool{}
+	for _, shot := range draft.Shots {
+		seen[shot.SourceKey] = true
+		live, exists := liveByKey[shot.SourceKey]
+		operation := "create"
+		shotID := ""
+		before := map[string]any{}
+		if exists {
+			shotID = live.ID
+			before = storyboardShotMap(live.Shot)
+			operation = "update"
+			if reflect.DeepEqual(live.Shot, shot) {
+				operation = "unchanged"
+			}
+		}
+		diff.Items = append(diff.Items, StoryboardDiffItem{
+			Operation: operation, SourceKey: shot.SourceKey, ShotID: shotID,
+			Before: before, After: storyboardShotMap(shot),
+		})
+	}
+	for _, live := range diffContext.LiveShots {
+		if seen[live.Shot.SourceKey] {
+			continue
+		}
+		diff.Items = append(diff.Items, StoryboardDiffItem{
+			Operation: "archive", SourceKey: live.Shot.SourceKey, ShotID: live.ID,
+			Before: storyboardShotMap(live.Shot), After: map[string]any{},
+		})
+	}
+	diff.DiffToken = storyboardDiffToken(draft, diffContext, diff.Items)
+	return diff, nil
+}
+
+func validateStoryboardDiffDependencies(draft StoryboardVersion, diffContext StoryboardDiffContext) error {
+	if draft.SourceScriptRevision != diffContext.CurrentScriptRevision ||
+		draft.SourceBreakdownID != diffContext.CurrentBreakdownID ||
+		draft.SourceAssetRevision != diffContext.CurrentAssetRevision ||
+		draft.SourceCapabilityVersion != diffContext.CurrentCapabilityVersion ||
+		draft.BaselineStoryboardID != diffContext.CurrentConfirmedStoryboardID {
+		return &WorkflowConflictError{
+			Code: "workflow_dependency_conflict", Message: "剧本、资产、模型能力或当前分镜已经变化，请重新设计或预览",
+			CurrentRevision: draft.Revision,
+			Details: map[string]any{
+				"sourceScriptRevision": draft.SourceScriptRevision, "currentScriptRevision": diffContext.CurrentScriptRevision,
+				"sourceBreakdownId": draft.SourceBreakdownID, "currentBreakdownId": diffContext.CurrentBreakdownID,
+				"sourceAssetRevision": draft.SourceAssetRevision, "currentAssetRevision": diffContext.CurrentAssetRevision,
+				"sourceCapabilityVersion": draft.SourceCapabilityVersion, "currentCapabilityVersion": diffContext.CurrentCapabilityVersion,
+				"baselineStoryboardId": draft.BaselineStoryboardID, "currentStoryboardId": diffContext.CurrentConfirmedStoryboardID,
+			},
+		}
+	}
+	return nil
+}
+
+func storyboardDiffToken(draft StoryboardVersion, diffContext StoryboardDiffContext, items []StoryboardDiffItem) string {
+	canonicalItems := append([]StoryboardDiffItem{}, items...)
+	sort.SliceStable(canonicalItems, func(left, right int) bool {
+		if canonicalItems[left].SourceKey != canonicalItems[right].SourceKey {
+			return canonicalItems[left].SourceKey < canonicalItems[right].SourceKey
+		}
+		return canonicalItems[left].Operation < canonicalItems[right].Operation
+	})
+	payload, _ := json.Marshal(struct {
+		StoryboardID                 string               `json:"storyboardId"`
+		Revision                     int                  `json:"revision"`
+		BaselineStoryboardID         string               `json:"baselineStoryboardId"`
+		CurrentConfirmedStoryboardID string               `json:"currentConfirmedStoryboardId"`
+		SourceScriptRevision         int                  `json:"sourceScriptRevision"`
+		SourceBreakdownID            string               `json:"sourceBreakdownId"`
+		SourceAssetRevision          int                  `json:"sourceAssetRevision"`
+		SourceCapabilityVersion      string               `json:"sourceCapabilityVersion"`
+		Items                        []StoryboardDiffItem `json:"items"`
+	}{
+		StoryboardID: draft.ID, Revision: draft.Revision,
+		BaselineStoryboardID: draft.BaselineStoryboardID, CurrentConfirmedStoryboardID: diffContext.CurrentConfirmedStoryboardID,
+		SourceScriptRevision: draft.SourceScriptRevision, SourceBreakdownID: draft.SourceBreakdownID,
+		SourceAssetRevision: draft.SourceAssetRevision, SourceCapabilityVersion: draft.SourceCapabilityVersion,
+		Items: canonicalItems,
+	})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+func normalizeSingleStoryboardShot(shot StoryboardShot) (StoryboardShot, error) {
+	shots, err := normalizeStoryboardDraftShots([]StoryboardShot{shot})
+	if err != nil {
+		return StoryboardShot{}, err
+	}
+	return shots[0], nil
+}
+
+func normalizeStoryboardReferenceIntents(references []StoryboardReferenceIntent) []StoryboardReferenceIntent {
+	result := make([]StoryboardReferenceIntent, 0, len(references))
+	for index, reference := range references {
+		reference.AssetKey = strings.TrimSpace(reference.AssetKey)
+		reference.Role = strings.ToLower(strings.TrimSpace(reference.Role))
+		reference.UsageNote = strings.TrimSpace(reference.UsageNote)
+		if reference.AssetKey == "" {
+			continue
+		}
+		if reference.Role == "" {
+			reference.Role = "reference_image"
+		}
+		if reference.SortOrder <= 0 {
+			reference.SortOrder = index + 1
+		}
+		result = append(result, reference)
+	}
+	return result
+}
+
+func cleanStoryboardStringList(values []string) []string {
+	result := []string{}
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+func storyboardShotMap(shot StoryboardShot) map[string]any {
+	payload, _ := json.Marshal(shot)
+	result := map[string]any{}
+	_ = json.Unmarshal(payload, &result)
 	return result
 }
 
