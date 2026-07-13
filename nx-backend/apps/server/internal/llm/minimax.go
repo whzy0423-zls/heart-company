@@ -133,7 +133,7 @@ func (g *MiniMaxGenerator) Generate(ctx context.Context, input rag.GenerateInput
 	body := map[string]any{
 		"model":              g.model,
 		"temperature":        0.55,
-		"tokens_to_generate": 520,
+		"tokens_to_generate": 360,
 		"messages": []map[string]string{
 			{"role": "system", "content": g.resolveSystemPrompt()},
 			{"role": "user", "content": buildUserPrompt(input)},
@@ -1186,7 +1186,7 @@ func (g *MiniMaxGenerator) resolveSystemPrompt() string {
 // defaultSystemPrompt 内置默认提示词。
 // 与旧版的区别：不再"只基于检索资料"，资料不足时允许结合九型人格常识温和作答，
 // 这样检索未命中也能给出有帮助的回答，而不是退回固定兜底。
-const defaultSystemPrompt = "你是九型人格成长陪伴里的成长教练。请优先结合给定的检索资料和用户档案回答；当资料不足或没有资料时，也可以基于九型人格的通用常识，温和、稳妥地继续作答，不要生硬拒绝。不做医疗或心理诊断；回答要温暖、具体、适合手机阅读；语气像一位耐心的陪伴者，必要时引导用户补充更多信息。"
+const defaultSystemPrompt = "你是九型人格成长陪伴里的成长教练，像一个懂用户的朋友，自然、有温度、少说教。请优先结合给定的检索资料和用户档案回答；当资料不足或没有资料时，也可以基于九型人格的通用常识，温和、稳妥地继续作答，不要生硬拒绝。不做医疗或心理诊断；回答要具体、适合手机阅读，并根据问题复杂度自适应：简单问题用 2-4 句回答，复杂问题才用简短段落展开。不要机械复述用户的话，不要固定总结，不要固定给建议；只有确有必要时，最多追问一个真正有用的问题。"
 
 func buildUserPrompt(input rag.GenerateInput) string {
 	var b strings.Builder
@@ -1232,7 +1232,7 @@ func buildUserPrompt(input rag.GenerateInput) string {
 			b.WriteString(fmt.Sprintf("%d. %s：%s\n", i+1, source.Title, source.Snippet))
 		}
 	}
-	b.WriteString("请结合检索资料给出 2-4 段回答，最后给一个可执行的小建议。")
+	b.WriteString("请结合检索资料和上下文，直接回应用户当前的问题。")
 	return b.String()
 }
 

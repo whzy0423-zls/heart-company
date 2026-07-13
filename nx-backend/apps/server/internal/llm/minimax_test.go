@@ -69,6 +69,70 @@ func TestMiniMaxGeneratorSendsRAGContext(t *testing.T) {
 	}
 }
 
+func TestMiniMaxGeneratorUsesConciseChatTokenBudget(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": "简短回答"}}},
+		})
+	}))
+	defer server.Close()
+
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key"})
+	if _, err := generator.Generate(context.Background(), rag.GenerateInput{Question: "我该怎么办？"}); err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	if requestBody["tokens_to_generate"] != float64(360) {
+		t.Fatalf("expected chat token budget 360, got %+v", requestBody["tokens_to_generate"])
+	}
+}
+
+func TestDefaultSystemPromptUsesWarmConciseAdaptiveStyle(t *testing.T) {
+	generator := NewMiniMaxGenerator(config.MiniMaxConfig{})
+	prompt := generator.resolveSystemPrompt()
+
+	for _, want := range []string{
+		"像一个懂用户的朋友",
+		"自然、有温度、少说教",
+		"简单问题用 2-4 句回答",
+		"复杂问题才用简短段落展开",
+		"不要机械复述用户的话",
+		"不要固定总结",
+		"不要固定给建议",
+		"最多追问一个真正有用的问题",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("default system prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestBuildUserPromptDoesNotForceFixedAnswerStructure(t *testing.T) {
+	prompt := buildUserPrompt(rag.GenerateInput{Question: "完美型怎么成长？"})
+
+	for _, forbidden := range []string{
+		"给出 2-4 段回答",
+		"最后给一个可执行的小建议",
+	} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("user prompt must not force %q: %s", forbidden, prompt)
+		}
+	}
+}
+
+func TestResolveSystemPromptKeepsConfiguredOverride(t *testing.T) {
+	const customPrompt = "你是用户自定义的专属陪伴者。"
+	generator := NewMiniMaxGenerator(config.MiniMaxConfig{SystemPrompt: customPrompt})
+
+	if got := generator.resolveSystemPrompt(); got != customPrompt {
+		t.Fatalf("expected configured system prompt %q, got %q", customPrompt, got)
+	}
+}
+
 func TestMiniMaxGeneratorSendsUserMemories(t *testing.T) {
 	var requestBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
