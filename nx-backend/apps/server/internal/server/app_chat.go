@@ -33,6 +33,19 @@ type appChatContextStore interface {
 	UpdateConversationSummary(ctx context.Context, sessionID, expectedThroughMessageID int64, summary string, throughMessageID int64) (bool, error)
 }
 
+type appChatStore interface {
+	appChatContextStore
+	ListSessions(ctx context.Context, appUserID int64) ([]chat.Session, error)
+	GetOrCreateSession(ctx context.Context, appUserID, cardID int64) (chat.Session, error)
+	GetSession(ctx context.Context, appUserID, sessionID int64) (chat.Session, error)
+	ListMessages(ctx context.Context, sessionID int64) ([]chat.Message, error)
+	SavePair(ctx context.Context, sessionID int64, question, answer string, sources json.RawMessage) (int64, error)
+	SetFeedback(ctx context.Context, appUserID, messageID int64, feedback string) error
+	ToggleFavorite(ctx context.Context, appUserID, messageID int64) (bool, error)
+	ListFavorites(ctx context.Context, appUserID, cardID int64) ([]chat.FavoriteItem, error)
+	SearchMessages(ctx context.Context, appUserID, cardID int64, keyword string) ([]chat.SearchResult, error)
+}
+
 func compactAppChatContext(ctx context.Context, previousSummary string, messages []chat.Message, summarizer rag.ConversationSummarizer) appChatPromptContext {
 	validChatMessages := validAppChatMessages(messages)
 	validMessages := appChatHistoryFromMessages(validChatMessages)
@@ -316,7 +329,8 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	sourcesJSON, _ := json.Marshal(ans.Sources)
 	messageID, saveErr := s.appChat.SavePair(ctx, sessionID, body.Question, ans.Answer, sourcesJSON)
 	if saveErr != nil {
-		_ = saveErr
+		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答保存失败，请重试"})
+		return
 	}
 	s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, body.Question, ans.Answer)
 	if messageID > 0 {

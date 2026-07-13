@@ -97,7 +97,7 @@ type Server struct {
 	chatTimeout           time.Duration
 
 	appUsers                 *appuser.Store
-	appChat                  *chat.Store
+	appChat                  appChatStore
 	pushStore                *push.Store
 	pushSendTimeout          time.Duration
 	pushRecoveryInterval     time.Duration
