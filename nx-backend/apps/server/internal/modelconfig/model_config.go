@@ -134,6 +134,66 @@ type Config struct {
 	Admin     AdminModelConfig `json:"admin"`
 	DailyQuiz AdminModelConfig `json:"dailyQuiz"`
 	Assist    AssistConfig     `json:"assist"`
+	presence  map[string]bool
+}
+
+func (c *Config) UnmarshalJSON(data []byte) error {
+	type plainConfig Config
+	var decoded plainConfig
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*c = Config(decoded)
+	var sections map[string]json.RawMessage
+	if err := json.Unmarshal(data, &sections); err != nil {
+		return err
+	}
+	c.presence = make(map[string]bool)
+	for section, raw := range sections {
+		c.presence[section] = true
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			continue
+		}
+		for field := range fields {
+			c.presence[section+"."+field] = true
+		}
+	}
+	return nil
+}
+
+// SectionPresent reports whether an incoming JSON payload explicitly included
+// a configuration section. Programmatically constructed configs infer
+// presence from non-zero fields for backwards-compatible unit use.
+func (c Config) SectionPresent(section string) bool {
+	if c.presence != nil {
+		return c.presence[section]
+	}
+	switch section {
+	case "chat":
+		return c.Chat != (ChatConfig{})
+	case "video":
+		return c.Video != (VideoConfig{})
+	case "image":
+		return c.Image != (ImageConfig{})
+	case "analysis":
+		return c.Analysis != (AnalysisConfig{})
+	case "admin":
+		return c.Admin != (AdminModelConfig{})
+	case "dailyQuiz":
+		return c.DailyQuiz != (AdminModelConfig{})
+	case "assist":
+		return c.Assist.Enabled != nil || strings.TrimSpace(c.Assist.SystemPrompt) != ""
+	default:
+		return false
+	}
+}
+
+func (c Config) fieldPresent(path string, inferred bool) bool {
+	if c.presence != nil {
+		return c.presence[path]
+	}
+	return inferred
 }
 
 // AssistEnabled 解析 AI 辅助开关：未设置时默认启用。
@@ -310,36 +370,57 @@ func isMiniMaxAnalysisModel(model string) bool {
 func (c Config) MergeIncoming(in Config) Config {
 	out := in.trimmed()
 	stored := c.trimmed()
-	providerChanged := out.Chat.Provider != "" && out.Chat.Provider != stored.Chat.Provider
-	out.Chat.Provider = keepStoredString(out.Chat.Provider, stored.Chat.Provider)
-	out.Chat.APIBase = keepStoredString(out.Chat.APIBase, stored.Chat.APIBase)
+	providerPresent := in.fieldPresent("chat.provider", out.Chat.Provider != "")
+	providerChanged := providerPresent && out.Chat.Provider != stored.Chat.Provider
+	if !providerPresent {
+		out.Chat.Provider = stored.Chat.Provider
+	}
+	if !in.fieldPresent("chat.apiBase", out.Chat.APIBase != "") {
+		out.Chat.APIBase = stored.Chat.APIBase
+	}
 	if out.Chat.APIKey == "" && !providerChanged {
 		out.Chat.APIKey = stored.Chat.APIKey
 	}
-	out.Chat.Model = keepStoredString(out.Chat.Model, stored.Chat.Model)
-	if out.Chat.TimeoutSeconds == 0 {
+	if !in.fieldPresent("chat.model", out.Chat.Model != "") {
+		out.Chat.Model = stored.Chat.Model
+	}
+	if !in.fieldPresent("chat.timeoutSeconds", out.Chat.TimeoutSeconds != 0) {
 		out.Chat.TimeoutSeconds = stored.Chat.TimeoutSeconds
 	}
 
-	out.Video.APIBase = keepStoredString(out.Video.APIBase, stored.Video.APIBase)
-	out.Video.APIKey = keepStoredString(out.Video.APIKey, stored.Video.APIKey)
-	out.Video.Model = keepStoredString(out.Video.Model, stored.Video.Model)
-	out.Image.APIBase = keepStoredString(out.Image.APIBase, stored.Image.APIBase)
-	out.Image.APIKey = keepStoredString(out.Image.APIKey, stored.Image.APIKey)
-	out.Image.Model = keepStoredString(out.Image.Model, stored.Image.Model)
-	out.Analysis.APIBase = keepStoredString(out.Analysis.APIBase, stored.Analysis.APIBase)
-	out.Analysis.APIKey = keepStoredString(out.Analysis.APIKey, stored.Analysis.APIKey)
-	out.Analysis.GroupID = keepStoredString(out.Analysis.GroupID, stored.Analysis.GroupID)
-	out.Analysis.Model = keepStoredString(out.Analysis.Model, stored.Analysis.Model)
-	out.Admin = mergeCompatibleModelConfig(stored.Admin, out.Admin)
-	out.DailyQuiz = mergeCompatibleModelConfig(stored.DailyQuiz, out.DailyQuiz)
-	// 整个 assist 段未提交时视为局部页面保存，完整沿用已存值；
-	// 提交了 systemPrompt 但未带 enabled 时只沿用开关。
-	if in.Assist.Enabled == nil && strings.TrimSpace(in.Assist.SystemPrompt) == "" {
-		out.Assist = c.Assist
-	} else if out.Assist.Enabled == nil {
-		out.Assist.Enabled = c.Assist.Enabled
+	if !in.fieldPresent("video.apiBase", out.Video.APIBase != "") {
+		out.Video.APIBase = stored.Video.APIBase
 	}
+	out.Video.APIKey = keepStoredString(out.Video.APIKey, stored.Video.APIKey)
+	if !in.fieldPresent("video.model", out.Video.Model != "") {
+		out.Video.Model = stored.Video.Model
+	}
+	if !in.fieldPresent("image.apiBase", out.Image.APIBase != "") {
+		out.Image.APIBase = stored.Image.APIBase
+	}
+	out.Image.APIKey = keepStoredString(out.Image.APIKey, stored.Image.APIKey)
+	if !in.fieldPresent("image.model", out.Image.Model != "") {
+		out.Image.Model = stored.Image.Model
+	}
+	if !in.fieldPresent("analysis.apiBase", out.Analysis.APIBase != "") {
+		out.Analysis.APIBase = stored.Analysis.APIBase
+	}
+	out.Analysis.APIKey = keepStoredString(out.Analysis.APIKey, stored.Analysis.APIKey)
+	if !in.fieldPresent("analysis.groupId", out.Analysis.GroupID != "") {
+		out.Analysis.GroupID = stored.Analysis.GroupID
+	}
+	if !in.fieldPresent("analysis.model", out.Analysis.Model != "") {
+		out.Analysis.Model = stored.Analysis.Model
+	}
+	out.Admin = mergeCompatibleModelConfig(in, "admin", stored.Admin, out.Admin)
+	out.DailyQuiz = mergeCompatibleModelConfig(in, "dailyQuiz", stored.DailyQuiz, out.DailyQuiz)
+	if !in.fieldPresent("assist.enabled", out.Assist.Enabled != nil) {
+		out.Assist.Enabled = stored.Assist.Enabled
+	}
+	if !in.fieldPresent("assist.systemPrompt", out.Assist.SystemPrompt != "") {
+		out.Assist.SystemPrompt = stored.Assist.SystemPrompt
+	}
+	out.presence = in.presence
 	return out
 }
 
@@ -350,20 +431,28 @@ func keepStoredString(incoming, stored string) string {
 	return incoming
 }
 
-func mergeCompatibleModelConfig(stored, incoming CompatibleModelConfig) CompatibleModelConfig {
-	incoming.Provider = keepStoredString(incoming.Provider, stored.Provider)
-	incoming.APIBase = keepStoredString(incoming.APIBase, stored.APIBase)
+func mergeCompatibleModelConfig(source Config, section string, stored, incoming CompatibleModelConfig) CompatibleModelConfig {
+	if !source.fieldPresent(section+".provider", incoming.Provider != "") {
+		incoming.Provider = stored.Provider
+	}
+	if !source.fieldPresent(section+".apiBase", incoming.APIBase != "") {
+		incoming.APIBase = stored.APIBase
+	}
 	incoming.APIKey = keepStoredString(incoming.APIKey, stored.APIKey)
-	incoming.GroupID = keepStoredString(incoming.GroupID, stored.GroupID)
-	incoming.Model = keepStoredString(incoming.Model, stored.Model)
-	if incoming.TimeoutSeconds == 0 {
+	if !source.fieldPresent(section+".groupId", incoming.GroupID != "") {
+		incoming.GroupID = stored.GroupID
+	}
+	if !source.fieldPresent(section+".model", incoming.Model != "") {
+		incoming.Model = stored.Model
+	}
+	if !source.fieldPresent(section+".timeoutSeconds", incoming.TimeoutSeconds != 0) {
 		incoming.TimeoutSeconds = stored.TimeoutSeconds
 	}
 	return incoming
 }
 
 func (c Config) trimmed() Config {
-	return Config{
+	out := Config{
 		Chat: c.Chat.Normalized(),
 		Video: VideoConfig{
 			APIBase: strings.TrimSpace(c.Video.APIBase),
@@ -395,6 +484,8 @@ func (c Config) trimmed() Config {
 			SystemPrompt: strings.TrimSpace(c.Assist.SystemPrompt),
 		},
 	}
+	out.presence = c.presence
+	return out
 }
 
 func (c CompatibleModelConfig) normalized() CompatibleModelConfig {

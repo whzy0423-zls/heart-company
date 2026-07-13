@@ -98,6 +98,7 @@ func TestNewChatGeneratorProductionClientRejectsLocalAPIBase(t *testing.T) {
 		APIKey:   "secret",
 		Model:    "model",
 		Timeout:  time.Second,
+		client:   &http.Client{},
 	})
 	if err == nil || generator != nil {
 		t.Fatalf("expected local API base rejection, got generator=%T err=%v", generator, err)

@@ -2428,6 +2428,29 @@ func validateNonChatModelConfigBases(cfg modelconfig.Config) error {
 	return nil
 }
 
+func validateIncomingNonChatModelConfigBases(incoming, merged modelconfig.Config) error {
+	sections := []struct {
+		name    string
+		label   string
+		apiBase string
+	}{
+		{name: "analysis", label: "analysis.apiBase", apiBase: merged.Analysis.APIBase},
+		{name: "admin", label: "admin.apiBase", apiBase: merged.Admin.APIBase},
+		{name: "dailyQuiz", label: "dailyQuiz.apiBase", apiBase: merged.DailyQuiz.APIBase},
+		{name: "image", label: "image.apiBase", apiBase: merged.Image.APIBase},
+		{name: "video", label: "video.apiBase", apiBase: merged.Video.APIBase},
+	}
+	for _, section := range sections {
+		if !incoming.SectionPresent(section.name) {
+			continue
+		}
+		if err := validateExternalAPIBase(section.label, section.apiBase); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateExternalAPIBase(label string, raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -2488,9 +2511,12 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 		assistWasEnabled := stored.AssistEnabled()
 		assistEnabled := merged.AssistEnabled()
 		assistChanged := assistWasEnabled != assistEnabled
+		videoChanged := stored.Video != merged.Video
+		imageChanged := stored.Image != merged.Image
+		analysisChanged := stored.Analysis != merged.Analysis
 		needBuild := chatFieldsChanged || (!assistWasEnabled && assistEnabled) || (promptChanged && assistEnabled)
 		needProbe := chatFieldsChanged || (!assistWasEnabled && assistEnabled)
-		if err := validateNonChatModelConfigBases(merged); err != nil {
+		if err := validateIncomingNonChatModelConfigBases(incoming, merged); err != nil {
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -2535,9 +2561,15 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 				s.chatTimeout = time.Duration(mergedChat.TimeoutSeconds) * time.Second
 			}
 		}
-		s.analysisGen = llm.NewMiniMaxGenerator(analysis)
-		s.videos = video.NewStore(s.db, s.uploads, vid, s.uploader)
-		s.images = image.NewStore(s.uploads, img, s.uploader)
+		if analysisChanged {
+			s.analysisGen = llm.NewMiniMaxGenerator(analysis)
+		}
+		if videoChanged {
+			s.videos = video.NewStore(s.db, s.uploads, vid, s.uploader)
+		}
+		if imageChanged {
+			s.images = image.NewStore(s.uploads, img, s.uploader)
+		}
 		s.modelMu.Unlock()
 
 		s.recordAdminAudit(r, auditlog.Entry{

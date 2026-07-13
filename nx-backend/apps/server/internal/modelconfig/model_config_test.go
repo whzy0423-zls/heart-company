@@ -236,6 +236,94 @@ func TestMergeIncomingPreservesEveryOmittedSectionField(t *testing.T) {
 	}
 }
 
+func TestMergeIncomingAssistTogglePreservesStoredSystemPrompt(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	disabled := false
+	stored := Config{Assist: AssistConfig{Enabled: &enabled, SystemPrompt: "保持简洁自然"}}
+
+	got := stored.MergeIncoming(Config{Assist: AssistConfig{Enabled: &disabled}})
+
+	if got.Assist.Enabled == nil || *got.Assist.Enabled {
+		t.Fatalf("expected assist to be disabled, got %+v", got.Assist)
+	}
+	if got.Assist.SystemPrompt != "保持简洁自然" {
+		t.Fatalf("toggle-only update cleared stored prompt: %+v", got.Assist)
+	}
+}
+
+func TestMergeIncomingJSONPatchPreservesOmittedFields(t *testing.T) {
+	t.Parallel()
+
+	stored := Config{
+		Video: VideoConfig{APIBase: "https://video.example/v1", APIKey: "video-key", Model: "video-old"},
+		Admin: CompatibleModelConfig{Provider: ProviderOpenAICompatible, APIBase: "https://admin.example/v1", APIKey: "admin-key", GroupID: "admin-group", Model: "admin-old", TimeoutSeconds: 41},
+	}
+	var incoming Config
+	if err := json.Unmarshal([]byte(`{"video":{"model":"video-new"}}`), &incoming); err != nil {
+		t.Fatal(err)
+	}
+
+	got := stored.MergeIncoming(incoming)
+
+	if got.Video.APIBase != stored.Video.APIBase || got.Video.APIKey != stored.Video.APIKey || got.Video.Model != "video-new" {
+		t.Fatalf("JSON patch lost omitted video fields: %+v", got.Video)
+	}
+	if got.Admin != stored.Admin.normalized() {
+		t.Fatalf("JSON patch changed omitted admin section: %+v", got.Admin)
+	}
+}
+
+func TestMergeIncomingExplicitBlankClearsOverridesButPreservesKeys(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	stored := Config{
+		Video:     VideoConfig{APIBase: "https://video.example/v1", APIKey: "video-key", Model: "video-old"},
+		Image:     ImageConfig{APIBase: "https://image.example/v1", APIKey: "image-key", Model: "image-old"},
+		Analysis:  AnalysisConfig{APIBase: "https://analysis.example/v1", APIKey: "analysis-key", GroupID: "analysis-group", Model: "MiniMax-M3"},
+		Admin:     CompatibleModelConfig{Provider: ProviderOpenAICompatible, APIBase: "https://admin.example/v1", APIKey: "admin-key", GroupID: "admin-group", Model: "admin-old", TimeoutSeconds: 41},
+		DailyQuiz: CompatibleModelConfig{Provider: ProviderAnthropicCompatible, APIBase: "https://quiz.example/v1", APIKey: "quiz-key", GroupID: "quiz-group", Model: "quiz-old", TimeoutSeconds: 51},
+		Assist:    AssistConfig{Enabled: &enabled, SystemPrompt: "old prompt"},
+	}
+	var incoming Config
+	raw := `{
+		"video":{"apiBase":"","apiKey":"","model":""},
+		"image":{"apiBase":"","apiKey":"","model":""},
+		"analysis":{"apiBase":"","apiKey":"","groupId":"","model":""},
+		"admin":{"provider":"","apiBase":"","apiKey":"","groupId":"","model":"","timeoutSeconds":0},
+		"dailyQuiz":{"provider":"","apiBase":"","apiKey":"","groupId":"","model":"","timeoutSeconds":0},
+		"assist":{"systemPrompt":""}
+	}`
+	if err := json.Unmarshal([]byte(raw), &incoming); err != nil {
+		t.Fatal(err)
+	}
+
+	got := stored.MergeIncoming(incoming)
+
+	if got.Video.APIBase != "" || got.Video.Model != "" || got.Video.APIKey != "video-key" {
+		t.Fatalf("unexpected explicit video clear: %+v", got.Video)
+	}
+	if got.Image.APIBase != "" || got.Image.Model != "" || got.Image.APIKey != "image-key" {
+		t.Fatalf("unexpected explicit image clear: %+v", got.Image)
+	}
+	if got.Analysis.APIBase != "" || got.Analysis.GroupID != "" || got.Analysis.Model != "" || got.Analysis.APIKey != "analysis-key" {
+		t.Fatalf("unexpected explicit analysis clear: %+v", got.Analysis)
+	}
+	for name, gotCfg := range map[string]CompatibleModelConfig{"admin": got.Admin, "dailyQuiz": got.DailyQuiz} {
+		if gotCfg.Provider != "" || gotCfg.APIBase != "" || gotCfg.GroupID != "" || gotCfg.Model != "" || gotCfg.TimeoutSeconds != 0 {
+			t.Fatalf("%s explicit clear was not preserved: %+v", name, gotCfg)
+		}
+	}
+	if got.Admin.APIKey != "admin-key" || got.DailyQuiz.APIKey != "quiz-key" {
+		t.Fatalf("explicit blank keys must retain stored secrets: admin=%q daily=%q", got.Admin.APIKey, got.DailyQuiz.APIKey)
+	}
+	if got.Assist.Enabled == nil || !*got.Assist.Enabled || got.Assist.SystemPrompt != "" {
+		t.Fatalf("explicit prompt clear or omitted enabled was not respected: %+v", got.Assist)
+	}
+}
+
 func TestApplyAnalysisUsesVoiceMiniMaxCredentialsAndDefaultM3(t *testing.T) {
 	voiceBase := config.MiniMaxConfig{
 		APIBase:        "https://api.minimaxi.com",

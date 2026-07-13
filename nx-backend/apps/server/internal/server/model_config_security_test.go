@@ -626,6 +626,44 @@ func TestModelConfigUnrelatedSaveIgnoresUnsafeUnconfiguredChatSection(t *testing
 	}
 }
 
+func TestModelConfigChatOnlySaveIgnoresAndDoesNotRebuildOmittedUnsafeNonChatSections(t *testing.T) {
+	stored := modelconfig.Config{
+		Chat:      modelconfig.ChatConfig{Provider: modelconfig.ProviderOpenAICompatible, APIBase: "https://api.openai.com/v1", APIKey: "secret", Model: "old-model", TimeoutSeconds: 20},
+		Video:     modelconfig.VideoConfig{APIBase: "http://127.0.0.1:8080/v1", APIKey: "legacy-video", Model: "legacy-video"},
+		Image:     modelconfig.ImageConfig{APIBase: "http://127.0.0.1:8081/v1", APIKey: "legacy-image", Model: "legacy-image"},
+		Analysis:  modelconfig.AnalysisConfig{APIBase: "http://127.0.0.1:8082/v1", Model: "MiniMax-M3"},
+		Admin:     modelconfig.CompatibleModelConfig{APIBase: "http://127.0.0.1:8083/v1"},
+		DailyQuiz: modelconfig.CompatibleModelConfig{APIBase: "http://127.0.0.1:8084/v1"},
+	}
+	db, _ := openAtomicModelConfigTestDB(t, stored, nil)
+	candidate := &runtimeChatGenerator{ping: llm.PingResult{OK: true}}
+	s := &Server{db: db, newChatGenerator: func(llm.ChatGeneratorConfig) (llm.ChatGenerator, error) { return candidate, nil }}
+
+	response := performRawUnit(http.HandlerFunc(s.modelConfig), http.MethodPut, "/api/model-config", `{"chat":{"model":"new-model"}}`)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("chat-only save was blocked by omitted unsafe non-chat config: %d %s", response.Code, response.Body.String())
+	}
+	if s.generator() != candidate {
+		t.Fatalf("chat runtime was not swapped: %T", s.generator())
+	}
+	if s.videoStore() != nil || s.imageStore() != nil || s.analysisGenerator() != nil {
+		t.Fatal("omitted non-chat runtime sections were rebuilt")
+	}
+}
+
+func TestModelConfigPresentUnsafeNonChatSectionIsStillValidated(t *testing.T) {
+	stored := modelconfig.Config{Video: modelconfig.VideoConfig{APIBase: "http://127.0.0.1:8080/v1", APIKey: "legacy-video", Model: "legacy-video"}}
+	db, _ := openAtomicModelConfigTestDB(t, stored, nil)
+	s := &Server{db: db}
+
+	response := performRawUnit(http.HandlerFunc(s.modelConfig), http.MethodPut, "/api/model-config", `{"video":{"apiBase":"http://127.0.0.1:8080/v1","model":"legacy-video"}}`)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("present unsafe video section was not validated: %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestModelConfigReenablingAssistBuildsAndProbesChat(t *testing.T) {
 	disabled := false
 	stored := modelconfig.Config{
