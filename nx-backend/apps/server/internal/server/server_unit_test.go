@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -663,6 +664,35 @@ func TestBuildModelConfigViewIncludesDailyQuizConfig(t *testing.T) {
 	}
 	if !view.DailyQuiz.APIKeySet {
 		t.Fatal("expected daily quiz apiKeySet to reflect configured secret")
+	}
+}
+
+func TestModelConfigLegacyChatRemainsUnconfigured(t *testing.T) {
+	raw := `{"chat":{"apiBase":"https://api.minimax.chat/v1","apiKey":"old","groupId":"legacy","model":"MiniMax-M2.7"}}`
+
+	var stored modelconfig.Config
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		t.Fatal(err)
+	}
+
+	chat := stored.EffectiveChat()
+	if chat.Provider != "" {
+		t.Fatalf("expected legacy chat config to remain unconfigured, got provider %q", chat.Provider)
+	}
+	if err := chat.Validate(); err == nil {
+		t.Fatal("expected legacy chat config without provider to fail validation")
+	}
+
+	body, err := json.Marshal(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]map[string]any
+	if err := json.Unmarshal(body, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := saved["chat"]["groupId"]; ok {
+		t.Fatalf("expected legacy groupId not to be re-emitted, got %s", body)
 	}
 }
 

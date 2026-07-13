@@ -33,12 +33,52 @@ const (
 	ProviderAnthropicCompatible = "anthropic-compatible"
 )
 
-// ChatConfig 对话模型（MiniMax 兼容）可配置项。
+// ChatConfig 对话模型兼容协议可配置项。
 type ChatConfig struct {
-	APIBase string `json:"apiBase"`
-	APIKey  string `json:"apiKey"`
-	GroupID string `json:"groupId"`
-	Model   string `json:"model"`
+	Provider       string `json:"provider"`
+	APIBase        string `json:"apiBase"`
+	APIKey         string `json:"apiKey"`
+	Model          string `json:"model"`
+	TimeoutSeconds int    `json:"timeoutSeconds"`
+
+	// GroupID 仅供迁移期间尚未切换到兼容协议工厂的内部调用编译使用。
+	// Deprecated: compatible chat providers do not use Group ID.
+	GroupID string `json:"-"`
+}
+
+// Normalized 返回适合保存和构造兼容协议客户端的对话配置。
+func (c ChatConfig) Normalized() ChatConfig {
+	return ChatConfig{
+		Provider:       strings.ToLower(strings.TrimSpace(c.Provider)),
+		APIBase:        strings.TrimRight(strings.TrimSpace(c.APIBase), "/"),
+		APIKey:         strings.TrimSpace(c.APIKey),
+		Model:          strings.TrimSpace(c.Model),
+		TimeoutSeconds: c.TimeoutSeconds,
+		GroupID:        strings.TrimSpace(c.GroupID),
+	}
+}
+
+// Validate 校验对话配置是否完整且使用受支持的兼容协议。
+func (c ChatConfig) Validate() error {
+	c = c.Normalized()
+	switch c.Provider {
+	case ProviderOpenAICompatible, ProviderAnthropicCompatible:
+	default:
+		return errors.New("chat.provider must be openai-compatible or anthropic-compatible")
+	}
+	if c.APIBase == "" {
+		return errors.New("chat.apiBase is required")
+	}
+	if c.APIKey == "" {
+		return errors.New("chat.apiKey is required")
+	}
+	if c.Model == "" {
+		return errors.New("chat.model is required")
+	}
+	if c.TimeoutSeconds <= 0 {
+		return errors.New("chat.timeoutSeconds must be greater than zero")
+	}
+	return nil
 }
 
 // VideoConfig 视频模型（New API / OpenAI 兼容网关）可配置项。
@@ -106,6 +146,12 @@ func (c Config) AssistEnabled() bool {
 	return *c.Assist.Enabled
 }
 
+// EffectiveChat 返回仅由已保存兼容协议字段组成的生效对话配置。
+// 它不会继承 MiniMax 环境变量，旧配置缺少 provider 时保持未配置。
+func (c Config) EffectiveChat() ChatConfig {
+	return c.Chat.Normalized()
+}
+
 // ReadStore 从 DB 读取覆盖配置。第二个返回值表示是否已存在记录；
 // 当 db 为空或无记录时返回零值 Config 且 found=false。
 func ReadStore(ctx context.Context, db *sql.DB) (Config, bool, error) {
@@ -168,6 +214,9 @@ func (c Config) ApplyChat(base config.MiniMaxConfig) config.MiniMaxConfig {
 	}
 	if v := strings.TrimSpace(c.Chat.Model); v != "" {
 		out.Model = v
+	}
+	if c.Chat.TimeoutSeconds > 0 {
+		out.TimeoutSeconds = c.Chat.TimeoutSeconds
 	}
 	if v := strings.TrimSpace(c.Assist.SystemPrompt); v != "" {
 		out.SystemPrompt = v
@@ -312,12 +361,7 @@ func (c Config) MergeIncoming(in Config) Config {
 
 func (c Config) trimmed() Config {
 	return Config{
-		Chat: ChatConfig{
-			APIBase: strings.TrimSpace(c.Chat.APIBase),
-			APIKey:  strings.TrimSpace(c.Chat.APIKey),
-			GroupID: strings.TrimSpace(c.Chat.GroupID),
-			Model:   strings.TrimSpace(c.Chat.Model),
-		},
+		Chat: c.Chat.Normalized(),
 		Video: VideoConfig{
 			APIBase: strings.TrimSpace(c.Video.APIBase),
 			APIKey:  strings.TrimSpace(c.Video.APIKey),

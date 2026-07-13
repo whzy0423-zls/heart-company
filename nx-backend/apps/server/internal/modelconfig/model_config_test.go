@@ -1,10 +1,138 @@
 package modelconfig
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
 )
+
+func TestChatConfigNormalizedTrimsCompatibleFields(t *testing.T) {
+	cfg := ChatConfig{
+		Provider:       " OPENAI-COMPATIBLE ",
+		APIBase:        " https://gateway.example.com/v1/ ",
+		APIKey:         " secret ",
+		Model:          " gpt-5.5 ",
+		TimeoutSeconds: 45,
+	}
+
+	got := cfg.Normalized()
+
+	if got.Provider != ProviderOpenAICompatible {
+		t.Fatalf("expected normalized provider %q, got %q", ProviderOpenAICompatible, got.Provider)
+	}
+	if got.APIBase != "https://gateway.example.com/v1" || got.APIKey != "secret" || got.Model != "gpt-5.5" {
+		t.Fatalf("expected normalized chat fields, got %+v", got)
+	}
+	if got.TimeoutSeconds != 45 {
+		t.Fatalf("expected timeout to remain 45, got %d", got.TimeoutSeconds)
+	}
+}
+
+func TestChatConfigValidateAcceptsOnlyCompatibleProviders(t *testing.T) {
+	valid := ChatConfig{
+		APIBase:        "https://gateway.example.com/v1",
+		APIKey:         "secret",
+		Model:          "model",
+		TimeoutSeconds: 30,
+	}
+
+	for _, provider := range []string{ProviderOpenAICompatible, ProviderAnthropicCompatible} {
+		t.Run(provider, func(t *testing.T) {
+			cfg := valid
+			cfg.Provider = provider
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("expected provider %q to validate, got %v", provider, err)
+			}
+		})
+	}
+
+	for _, provider := range []string{"", "minimax", "openai", "unknown"} {
+		t.Run("reject_"+provider, func(t *testing.T) {
+			cfg := valid
+			cfg.Provider = provider
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("expected provider %q to be rejected", provider)
+			}
+		})
+	}
+}
+
+func TestChatConfigValidateRequiresCompleteConnectionFields(t *testing.T) {
+	valid := ChatConfig{
+		Provider:       ProviderOpenAICompatible,
+		APIBase:        "https://gateway.example.com/v1",
+		APIKey:         "secret",
+		Model:          "model",
+		TimeoutSeconds: 30,
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*ChatConfig)
+		want   string
+	}{
+		{name: "api base", mutate: func(cfg *ChatConfig) { cfg.APIBase = " " }, want: "apiBase"},
+		{name: "api key", mutate: func(cfg *ChatConfig) { cfg.APIKey = " " }, want: "apiKey"},
+		{name: "model", mutate: func(cfg *ChatConfig) { cfg.Model = " " }, want: "model"},
+		{name: "timeout", mutate: func(cfg *ChatConfig) { cfg.TimeoutSeconds = 0 }, want: "timeoutSeconds"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := valid
+			tc.mutate(&cfg)
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %s validation error, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestChatConfigJSONContainsCompatibleContractWithoutGroupID(t *testing.T) {
+	body, err := json.Marshal(ChatConfig{
+		Provider:       ProviderAnthropicCompatible,
+		APIBase:        "https://api.anthropic.com/v1",
+		APIKey:         "secret",
+		GroupID:        "legacy-group",
+		Model:          "claude-sonnet",
+		TimeoutSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"provider", "apiBase", "apiKey", "model", "timeoutSeconds"} {
+		if _, ok := got[field]; !ok {
+			t.Fatalf("expected chat JSON field %q in %s", field, body)
+		}
+	}
+	if _, ok := got["groupId"]; ok {
+		t.Fatalf("expected chat JSON to omit legacy groupId, got %s", body)
+	}
+}
+
+func TestEffectiveChatUsesOnlyStoredCompatibleConfig(t *testing.T) {
+	cfg := Config{Chat: ChatConfig{
+		Provider:       " anthropic-compatible ",
+		APIBase:        " https://api.anthropic.com/v1/ ",
+		APIKey:         " secret ",
+		Model:          " claude-sonnet ",
+		TimeoutSeconds: 60,
+	}}
+
+	got := cfg.EffectiveChat()
+
+	if got.Provider != ProviderAnthropicCompatible || got.APIBase != "https://api.anthropic.com/v1" || got.APIKey != "secret" || got.Model != "claude-sonnet" || got.TimeoutSeconds != 60 {
+		t.Fatalf("expected effective chat to be the normalized stored compatible config, got %+v", got)
+	}
+}
 
 func TestApplyAnalysisUsesVoiceMiniMaxCredentialsAndDefaultM3(t *testing.T) {
 	voiceBase := config.MiniMaxConfig{
