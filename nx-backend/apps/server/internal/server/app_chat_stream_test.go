@@ -343,6 +343,44 @@ func TestAppChatAskStreamClientCancellationDoesNotSavePartialPair(t *testing.T) 
 	}
 }
 
+func TestAppChatHandlerTotalTimeoutCancelsBeforeProviderLimit(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	providerLimit := time.Second
+	observedDeadline := make(chan time.Duration, 1)
+	generator := &controlledAppChatStreamingGenerator{
+		generateStream: func(ctx context.Context, _ rag.GenerateInput, _ rag.StreamEmitter) (string, error) {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				observedDeadline <- 0
+			} else {
+				observedDeadline <- time.Until(deadline)
+			}
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(providerLimit):
+				return "late", nil
+			}
+		},
+	}
+	s := newAppChatStreamServer(store, generator)
+	s.chatTimeout = 40 * time.Millisecond
+	writer := newAppChatBlockingStreamWriter()
+	req := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/ask/stream", strings.NewReader(`{"question":"怎么做？"}`))
+	req = req.WithContext(context.WithValue(req.Context(), appContextKey{}, auth.UserInfo{ID: 7}))
+
+	started := time.Now()
+	s.appChatRouter(writer, req)
+	elapsed := time.Since(started)
+
+	if elapsed >= providerLimit/2 {
+		t.Fatalf("handler exceeded its business timeout: elapsed=%s providerLimit=%s", elapsed, providerLimit)
+	}
+	if observed := <-observedDeadline; observed <= 0 || observed > 80*time.Millisecond {
+		t.Fatalf("generator observed wrong handler deadline: %s", observed)
+	}
+}
+
 type appChatStreamTestFlusher struct {
 	flushes int
 }

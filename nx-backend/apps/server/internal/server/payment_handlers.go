@@ -284,7 +284,8 @@ func (s *Server) reportContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), s.chatRequestTimeout())
+	generator, chatTimeout := s.chatRuntime()
+	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
 
 	unlocked, err := s.miniapp.IsReportUnlocked(ctx, uid, recordID)
@@ -311,7 +312,7 @@ func (s *Server) reportContent(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	service := rag.NewService(docs, rag.WithGenerator(s.generator()))
+	service := rag.NewService(docs, rag.WithGenerator(generator))
 	answer, err := service.Ask(ctx, rag.AskInput{
 		Question: question,
 		UserProfile: rag.UserProfile{

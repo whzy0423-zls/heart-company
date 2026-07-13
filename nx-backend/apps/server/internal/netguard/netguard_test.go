@@ -166,3 +166,72 @@ func TestGuardedClientRejectsRedirectToPrivateAddress(t *testing.T) {
 		t.Fatalf("expected private redirect rejection, got %v", err)
 	}
 }
+
+func TestGuardedClientPreservesDefaultRedirectLimit(t *testing.T) {
+	t.Parallel()
+
+	client := NewGuardedClient(time.Second)
+	req, err := http.NewRequest(http.MethodGet, "https://example.com/next", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	via := make([]*http.Request, 10)
+	if err := client.CheckRedirect(req, via); err == nil || !strings.Contains(err.Error(), "10 redirects") {
+		t.Fatalf("expected redirect limit error, got %v", err)
+	}
+}
+
+func TestInjectedGuardedClientEnforcesRedirectLimitAcrossActualHTTPChain(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://redirect.example/next", http.StatusFound)
+	}))
+	defer server.Close()
+	localAddress := server.Listener.Addr().String()
+	client := NewGuardedClientWithOptions(time.Second, TransportOptions{
+		Resolver: ResolverFunc(func(context.Context, string) ([]net.IPAddr, error) {
+			return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, nil
+		}),
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, localAddress)
+		},
+	})
+
+	_, err := client.Get("http://redirect.example/start")
+	if err == nil || !strings.Contains(err.Error(), "10 redirects") {
+		t.Fatalf("expected actual redirect-chain limit error, got %v", err)
+	}
+}
+
+func TestInjectedGuardedClientRejectsActualRedirectToPrivateTarget(t *testing.T) {
+	t.Parallel()
+
+	privateReached := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/private" {
+			privateReached = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.Redirect(w, r, "http://127.0.0.1/private", http.StatusFound)
+	}))
+	defer server.Close()
+	localAddress := server.Listener.Addr().String()
+	client := NewGuardedClientWithOptions(time.Second, TransportOptions{
+		Resolver: ResolverFunc(func(context.Context, string) ([]net.IPAddr, error) {
+			return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, nil
+		}),
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, localAddress)
+		},
+	})
+
+	_, err := client.Get("http://redirect.example/start")
+	if err == nil || !strings.Contains(err.Error(), "private or local") {
+		t.Fatalf("expected actual private redirect rejection, got %v", err)
+	}
+	if privateReached {
+		t.Fatal("private redirect target was reached")
+	}
+}

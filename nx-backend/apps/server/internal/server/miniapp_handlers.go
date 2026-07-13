@@ -191,7 +191,8 @@ func (s *Server) miniappChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 32*1024)
-	ctx, cancel := context.WithTimeout(r.Context(), s.chatRequestTimeout())
+	generator, chatTimeout := s.chatRuntime()
+	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
 
 	var body struct {
@@ -213,7 +214,7 @@ func (s *Server) miniappChat(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	service := rag.NewService(docs, rag.WithGenerator(s.generator()))
+	service := rag.NewService(docs, rag.WithGenerator(generator))
 	answer, err := service.Ask(ctx, rag.AskInput{
 		History:  body.History,
 		Question: body.Question,

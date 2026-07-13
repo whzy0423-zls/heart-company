@@ -361,22 +361,6 @@ func videoStoryboardSystemPrompt() string {
 分镜数量控制在 4-8 个。必须贴合用户主题，同时继承参考视频解析出的场景、人物、资产、语音主题和风格。不要编造无法从解析中支持的具体品牌、人物身份或台词。`
 }
 
-// polishKindLabel 返回润色类型的中文标签。
-func polishKindLabel(kind string) string {
-	if strings.TrimSpace(kind) == "video" {
-		return "文生视频"
-	}
-	return "文生图"
-}
-
-// polishSystemPrompt 按文生图/文生视频切换润色侧重点。
-func polishSystemPrompt(kind string) string {
-	if strings.TrimSpace(kind) == "video" {
-		return "你是一名资深的 AI 文生视频提示词工程师。请把用户给出的方向或草稿，扩写润色成一段结构清晰、画面感强的中文视频生成提示词。要点：明确主体与动作、镜头运动（推/拉/摇/移/跟随）、景别、光影氛围、画面风格与质感、节奏与时长感。只输出润色后的提示词正文，不要加任何解释、标题、编号或引号。"
-	}
-	return "你是一名资深的 AI 文生图提示词工程师。请把用户给出的方向或草稿，扩写润色成一段结构清晰、细节丰富的中文图像生成提示词。要点：明确主体、场景环境、构图与视角、光影氛围、色彩、材质细节、艺术风格与画质描述。只输出润色后的提示词正文，不要加任何解释、标题、编号或引号。"
-}
-
 func videoAnalysisSystemPrompt() string {
 	return `你是一名资深视频解析与 Seedance 2.0 提示词工程师。你会根据用户给出的视频地址和名称，尽可能分析视频内容，提取适合复刻或二创的结构化信息。
 请只返回 JSON，不要 Markdown，不要解释。JSON 字段必须为：

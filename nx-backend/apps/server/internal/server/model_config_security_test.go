@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -202,10 +203,12 @@ func decodeModelConfigViewChat(t *testing.T, body []byte) map[string]any {
 }
 
 type runtimeChatGenerator struct {
-	ping      llm.PingResult
-	pingCalls int
-	draft     string
-	kind      string
+	ping        llm.PingResult
+	pingCalls   int
+	pingStarted chan struct{}
+	pingRelease <-chan struct{}
+	draft       string
+	kind        string
 }
 
 func (*runtimeChatGenerator) Generate(context.Context, rag.GenerateInput) (string, error) {
@@ -222,6 +225,16 @@ func (*runtimeChatGenerator) CompleteJSON(context.Context, string, string, int) 
 }
 func (g *runtimeChatGenerator) Ping(context.Context) llm.PingResult {
 	g.pingCalls++
+	if g.pingStarted != nil {
+		select {
+		case <-g.pingStarted:
+		default:
+			close(g.pingStarted)
+		}
+	}
+	if g.pingRelease != nil {
+		<-g.pingRelease
+	}
 	return g.ping
 }
 func (g *runtimeChatGenerator) PolishPrompt(_ context.Context, draft, kind string) (string, error) {
@@ -244,13 +257,16 @@ func TestNewServerDoesNotUseMiniMaxEnvironmentForChat(t *testing.T) {
 }
 
 func TestApplyStoredModelConfigLeavesLegacyChatUnconfigured(t *testing.T) {
-	db := openModelConfigViewTestDB(t, `{"chat":{"apiBase":"https://api.minimax.chat/v1","apiKey":"old","model":"MiniMax-M2.7"}}`)
+	db := openModelConfigViewTestDB(t, `{"chat":{"apiBase":"http://127.0.0.1:8080/v1","apiKey":"old","model":"MiniMax-M2.7"},"video":{"apiBase":"https://video.example.com/v1","apiKey":"video-key","model":"video-model"}}`)
 	s := &Server{db: db, env: config.Env{MiniMax: config.MiniMaxConfig{APIKey: "env-secret"}}}
 
 	s.applyStoredModelConfig()
 
 	if got := s.generator(); got != nil {
 		t.Fatalf("expected legacy stored chat to remain unconfigured, got %T", got)
+	}
+	if s.videoStore() == nil {
+		t.Fatal("unsafe unconfigured legacy chat blocked valid non-chat startup config")
 	}
 }
 
@@ -471,6 +487,66 @@ func TestModelConfigReenablingAssistBuildsAndProbesChat(t *testing.T) {
 	}
 }
 
+func TestModelConfigDisabledAssistCanSavePromptWithoutConfiguredChat(t *testing.T) {
+	disabled := false
+	stored := modelconfig.Config{Assist: modelconfig.AssistConfig{Enabled: &disabled}}
+	db, state := openAtomicModelConfigTestDB(t, stored, nil)
+	factoryCalls := 0
+	s := &Server{
+		db: db,
+		newChatGenerator: func(llm.ChatGeneratorConfig) (llm.ChatGenerator, error) {
+			factoryCalls++
+			return nil, errors.New("must not be called")
+		},
+	}
+
+	response := performRawUnit(http.HandlerFunc(s.modelConfig), http.MethodPut, "/api/model-config", `{"assist":{"enabled":false,"systemPrompt":"保持温和简洁"}}`)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("disabled assist prompt save failed: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if factoryCalls != 0 || state.writeCount != 1 || s.generator() != nil {
+		t.Fatalf("disabled assist prompt save touched chat runtime: factory=%d writes=%d generator=%T", factoryCalls, state.writeCount, s.generator())
+	}
+	persisted, _, err := modelconfig.ReadStore(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Assist.SystemPrompt != "保持温和简洁" || persisted.Assist.Enabled == nil || *persisted.Assist.Enabled {
+		t.Fatalf("unexpected persisted assist config: %+v", persisted.Assist)
+	}
+}
+
+func TestChatRuntimeReturnsGeneratorAndTimeoutFromSameSwap(t *testing.T) {
+	t.Parallel()
+
+	first := &runtimeChatGenerator{}
+	second := &runtimeChatGenerator{}
+	s := &Server{ragGen: first, chatTimeout: 11 * time.Second}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 2000; i++ {
+			s.modelMu.Lock()
+			if i%2 == 0 {
+				s.ragGen = first
+				s.chatTimeout = 11 * time.Second
+			} else {
+				s.ragGen = second
+				s.chatTimeout = 22 * time.Second
+			}
+			s.modelMu.Unlock()
+		}
+	}()
+	for i := 0; i < 2000; i++ {
+		generator, timeout := s.chatRuntime()
+		if (generator == first && timeout != 11*time.Second) || (generator == second && timeout != 22*time.Second) {
+			t.Fatalf("observed torn runtime snapshot: generator=%T timeout=%s", generator, timeout)
+		}
+	}
+	<-done
+}
+
 func TestModelConfigProviderChangeRequiresNewAPIKey(t *testing.T) {
 	stored := modelconfig.Config{Chat: modelconfig.ChatConfig{
 		Provider:       modelconfig.ProviderOpenAICompatible,
@@ -495,13 +571,16 @@ func TestModelConfigProviderChangeRequiresNewAPIKey(t *testing.T) {
 }
 
 func TestTestChatModelAndPolishPromptUseProviderNeutralCapability(t *testing.T) {
-	stored := modelconfig.Config{Chat: modelconfig.ChatConfig{
-		Provider:       modelconfig.ProviderAnthropicCompatible,
-		APIBase:        "https://api.anthropic.com/v1",
-		APIKey:         "secret",
-		Model:          "claude-model",
-		TimeoutSeconds: 30,
-	}}
+	stored := modelconfig.Config{
+		Chat: modelconfig.ChatConfig{
+			Provider:       modelconfig.ProviderAnthropicCompatible,
+			APIBase:        "https://api.anthropic.com/v1",
+			APIKey:         "secret",
+			Model:          "claude-model",
+			TimeoutSeconds: 30,
+		},
+		Video: modelconfig.VideoConfig{APIBase: "http://127.0.0.1:8080/v1"},
+	}
 	db, _ := openAtomicModelConfigTestDB(t, stored, nil)
 	gen := &runtimeChatGenerator{ping: llm.PingResult{OK: true}}
 	factoryCalls := 0
@@ -524,6 +603,81 @@ func TestTestChatModelAndPolishPromptUseProviderNeutralCapability(t *testing.T) 
 	polishResponse := performRawUnit(http.HandlerFunc(s.polishPrompt), http.MethodPost, "/api/video/assets/polish-prompt", `{"prompt":"一只猫跑动","kind":"video"}`)
 	if polishResponse.Code != http.StatusOK || gen.draft != "一只猫跑动" || gen.kind != "video" {
 		t.Fatalf("provider-neutral polish lost draft/kind: status=%d draft=%q kind=%q body=%s", polishResponse.Code, gen.draft, gen.kind, polishResponse.Body.String())
+	}
+}
+
+func TestConcurrentModelConfigSavesPreserveBothUpdates(t *testing.T) {
+	stored := modelconfig.Config{Chat: modelconfig.ChatConfig{
+		Provider:       modelconfig.ProviderOpenAICompatible,
+		APIBase:        "https://api.openai.com/v1",
+		APIKey:         "secret",
+		Model:          "old-model",
+		TimeoutSeconds: 30,
+	}}
+	db, _ := openAtomicModelConfigTestDB(t, stored, nil)
+	pingStarted := make(chan struct{})
+	pingRelease := make(chan struct{})
+	candidate := &runtimeChatGenerator{
+		ping:        llm.PingResult{OK: true},
+		pingStarted: pingStarted,
+		pingRelease: pingRelease,
+	}
+	s := &Server{
+		db: db,
+		newChatGenerator: func(llm.ChatGeneratorConfig) (llm.ChatGenerator, error) {
+			return candidate, nil
+		},
+	}
+
+	chatDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		chatDone <- performRawUnit(http.HandlerFunc(s.modelConfig), http.MethodPut, "/api/model-config", `{"chat":{"provider":"openai-compatible","apiBase":"https://api.openai.com/v1","apiKey":"","model":"new-model","timeoutSeconds":30}}`)
+	}()
+	select {
+	case <-pingStarted:
+	case <-time.After(time.Second):
+		t.Fatal("chat save did not reach probe")
+	}
+
+	videoDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		videoDone <- performRawUnit(http.HandlerFunc(s.modelConfig), http.MethodPut, "/api/model-config", `{"video":{"apiBase":"https://video.example.com/v1","apiKey":"video-key","model":"video-model"}}`)
+	}()
+	var earlyVideo *httptest.ResponseRecorder
+	select {
+	case earlyVideo = <-videoDone:
+		// Without update serialization the unrelated save can overtake the probe.
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(pingRelease)
+
+	for _, done := range []chan *httptest.ResponseRecorder{chatDone} {
+		select {
+		case response := <-done:
+			if response.Code != http.StatusOK {
+				t.Fatalf("concurrent save failed: status=%d body=%s", response.Code, response.Body.String())
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("concurrent save did not finish")
+		}
+	}
+	if earlyVideo == nil {
+		select {
+		case earlyVideo = <-videoDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("concurrent video save did not finish")
+		}
+	}
+	if earlyVideo.Code != http.StatusOK {
+		t.Fatalf("concurrent video save failed: status=%d body=%s", earlyVideo.Code, earlyVideo.Body.String())
+	}
+
+	persisted, _, err := modelconfig.ReadStore(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Chat.Model != "new-model" || persisted.Video.Model != "video-model" {
+		t.Fatalf("concurrent saves lost an update: %+v", persisted)
 	}
 }
 

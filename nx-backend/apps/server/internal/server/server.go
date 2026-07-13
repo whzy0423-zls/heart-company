@@ -121,7 +121,8 @@ type Server struct {
 	signupSubscribers map[chan signup.Lead]struct{}
 
 	// modelMu 保护可在运行时被"模型配置"页面重建的 ragGen / analysisGen / videos。
-	modelMu sync.RWMutex
+	modelMu             sync.RWMutex
+	modelConfigUpdateMu sync.Mutex
 }
 
 var uploadPermissionCodes = []string{
@@ -252,7 +253,7 @@ func (s *Server) applyStoredModelConfig() {
 	if err != nil || !ok {
 		return
 	}
-	if err := validateModelConfigBases(cfg); err != nil {
+	if err := validateNonChatModelConfigBases(cfg); err != nil {
 		log.Printf("ignore unsafe stored model config: %v", err)
 		return
 	}
@@ -2429,6 +2430,11 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 		httpx.OK(w, buildModelConfigView(chat, stored.ApplyVideo(s.env.Video), stored.ApplyImage(s.env.Image), stored.ApplyAnalysis(s.env.MiniMax), admin, stored.DailyQuiz, stored))
 
 	case http.MethodPut:
+		// 序列化完整 read→merge→probe→persist→swap 流程，避免并发页面保存
+		// 丢字段或让 DB 与运行时指向不同版本。不要复用 modelMu 跨网络探活。
+		s.modelConfigUpdateMu.Lock()
+		defer s.modelConfigUpdateMu.Unlock()
+
 		var incoming modelconfig.Config
 		if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
@@ -2448,7 +2454,7 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 		assistWasEnabled := stored.AssistEnabled()
 		assistEnabled := merged.AssistEnabled()
 		assistChanged := assistWasEnabled != assistEnabled
-		needBuild := chatFieldsChanged || promptChanged || (!assistWasEnabled && assistEnabled)
+		needBuild := chatFieldsChanged || (!assistWasEnabled && assistEnabled) || (promptChanged && assistEnabled)
 		needProbe := chatFieldsChanged || (!assistWasEnabled && assistEnabled)
 		if err := validateNonChatModelConfigBases(merged); err != nil {
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
@@ -2534,10 +2540,6 @@ func (s *Server) testChatModel(w http.ResponseWriter, r *http.Request) {
 	}
 	// 合并：密钥留空仅在 provider 不变时沿用已存值。
 	merged := stored.MergeIncoming(incoming)
-	if err := validateModelConfigBases(merged); err != nil {
-		httpx.Fail(w, http.StatusBadRequest, err.Error())
-		return
-	}
 	chat := merged.EffectiveChat()
 	generator, err := s.buildChatGenerator(merged)
 	if err != nil {

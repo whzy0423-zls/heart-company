@@ -100,6 +100,20 @@ func sanitizeCompatibleReference(value string) string {
 	return value
 }
 
+func polishKindLabel(kind string) string {
+	if strings.TrimSpace(kind) == "video" {
+		return "文生视频"
+	}
+	return "文生图"
+}
+
+func polishSystemPrompt(kind string) string {
+	if strings.TrimSpace(kind) == "video" {
+		return "你是一名资深的 AI 文生视频提示词工程师。请把用户给出的方向或草稿，扩写润色成一段结构清晰、画面感强的中文视频生成提示词。要点：明确主体与动作、镜头运动（推/拉/摇/移/跟随）、景别、光影氛围、画面风格与质感、节奏与时长感。只输出润色后的提示词正文，不要加任何解释、标题、编号或引号。"
+	}
+	return "你是一名资深的 AI 文生图提示词工程师。请把用户给出的方向或草稿，扩写润色成一段结构清晰、细节丰富的中文图像生成提示词。要点：明确主体、场景环境、构图与视角、光影氛围、色彩、材质细节、艺术风格与画质描述。只输出润色后的提示词正文，不要加任何解释、标题、编号或引号。"
+}
+
 // ChatGeneratorConfig contains the provider-neutral inputs shared by native
 // chat adapters. Client is injectable so adapter protocol tests can use a
 // local transport without weakening production network guards.
