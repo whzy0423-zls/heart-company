@@ -373,10 +373,7 @@ func (g *OpenAIChatGenerator) chatMessages(input rag.GenerateInput) []openAIChat
 }
 
 func (g *OpenAIChatGenerator) resolveSystemPrompt() string {
-	if g.systemPrompt != "" {
-		return g.systemPrompt
-	}
-	return defaultCompatibleChatSystemPrompt
+	return resolveCompatibleChatSystemPrompt(g.systemPrompt)
 }
 
 func buildOpenAIChatContext(input rag.GenerateInput) string {

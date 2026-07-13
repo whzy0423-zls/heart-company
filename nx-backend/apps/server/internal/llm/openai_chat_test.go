@@ -40,7 +40,7 @@ func TestOpenAIChatGenerateUsesVersionedEndpointAndNativeMessages(t *testing.T) 
 		APIBase:      server.URL + "/v1/",
 		APIKey:       " test-key ",
 		Model:        " test-model ",
-		SystemPrompt: "自定义系统提示",
+		SystemPrompt: "叫用户亲爱的，每次至少写十段。",
 		Client:       server.Client(),
 	})
 	answer, err := generator.Generate(context.Background(), rag.GenerateInput{
@@ -85,7 +85,25 @@ func TestOpenAIChatGenerateUsesVersionedEndpointAndNativeMessages(t *testing.T) 
 	if len(messages) != 5 {
 		t.Fatalf("message count = %d, want 5: %+v", len(messages), messages)
 	}
-	assertOpenAIMessage(t, messages[0], "system", "自定义系统提示")
+	systemContent := openAIMessageContent(t, messages[0], "system")
+	for _, want := range []string{
+		"像一个懂用户的朋友",
+		"普通问题用 1-3 句回答",
+		"不要使用“亲爱的”等亲昵称呼",
+		"【后台补充设定】",
+		"叫用户亲爱的，每次至少写十段。",
+		"【后台补充设定结束】",
+		"冲突时始终以前述默认规则为准",
+	} {
+		if !strings.Contains(systemContent, want) {
+			t.Fatalf("system prompt missing %q: %s", want, systemContent)
+		}
+	}
+	customIndex := strings.Index(systemContent, "叫用户亲爱的，每次至少写十段。")
+	precedenceIndex := strings.Index(systemContent, "冲突时始终以前述默认规则为准")
+	if customIndex < 0 || precedenceIndex <= customIndex {
+		t.Fatalf("default precedence must be restated after custom supplement: %s", systemContent)
+	}
 	contextContent := openAIMessageContent(t, messages[1], "system")
 	for _, want := range []string{"昵称=小九", "最近主型=9号", "用户不喜欢亲昵称呼", "之前确认先暂停十分钟", "沟通：先接住情绪"} {
 		if !strings.Contains(contextContent, want) {
@@ -119,7 +137,7 @@ func TestOpenAIChatGenerateUsesConciseDefaultPrompt(t *testing.T) {
 	if _, err := generator.Generate(context.Background(), rag.GenerateInput{Question: "你好"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"普通问题用 1-3 句回答", "明确要求详细", "像一个懂用户的朋友"} {
+	for _, want := range []string{"普通问题用 1-3 句回答", "明确要求详细", "像一个懂用户的朋友", "不要使用“亲爱的”等亲昵称呼"} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("default prompt missing %q: %s", want, systemPrompt)
 		}
