@@ -114,9 +114,8 @@ func polishSystemPrompt(kind string) string {
 	return "你是一名资深的 AI 文生图提示词工程师。请把用户给出的方向或草稿，扩写润色成一段结构清晰、细节丰富的中文图像生成提示词。要点：明确主体、场景环境、构图与视角、光影氛围、色彩、材质细节、艺术风格与画质描述。只输出润色后的提示词正文，不要加任何解释、标题、编号或引号。"
 }
 
-// ChatGeneratorConfig contains the provider-neutral inputs shared by native
-// chat adapters. Client is injectable so adapter protocol tests can use a
-// local transport without weakening production network guards.
+// ChatGeneratorConfig contains the provider-neutral public inputs shared by
+// native chat adapters. HTTP transport injection is intentionally not public.
 type ChatGeneratorConfig struct {
 	Provider     string
 	APIBase      string
@@ -124,7 +123,7 @@ type ChatGeneratorConfig struct {
 	Model        string
 	SystemPrompt string
 	Timeout      time.Duration
-	Client       *http.Client
+	client       *http.Client
 }
 
 // JSONCompleter exposes a narrow, persona-free completion path for callers
@@ -178,18 +177,19 @@ func NewChatGenerator(cfg ChatGeneratorConfig) (ChatGenerator, error) {
 	if cfg.Timeout <= 0 {
 		return nil, fmt.Errorf("chat timeout must be greater than zero")
 	}
-	if cfg.Client == nil {
-		if !netguard.IsPublicHTTPURL(cfg.APIBase) {
-			return nil, fmt.Errorf("chat api base must not point to a private or local address")
-		}
-		cfg.Client = netguard.NewGuardedClient(cfg.Timeout)
+	if cfg.Timeout > time.Duration(modelconfig.MaxChatTimeoutSeconds)*time.Second {
+		return nil, fmt.Errorf("chat timeout must not exceed %d seconds", modelconfig.MaxChatTimeoutSeconds)
 	}
+	if !netguard.IsPublicHTTPURL(cfg.APIBase) {
+		return nil, fmt.Errorf("chat api base must not point to a private or local address")
+	}
+	client := netguard.NewGuardedClient(cfg.Timeout)
 
 	switch cfg.Provider {
 	case modelconfig.ProviderOpenAICompatible:
-		return NewOpenAIChatGenerator(cfg), nil
+		return newOpenAIChatGenerator(cfg, client), nil
 	case modelconfig.ProviderAnthropicCompatible:
-		return NewAnthropicChatGenerator(cfg), nil
+		return newAnthropicChatGenerator(cfg, client), nil
 	default:
 		return nil, fmt.Errorf("unsupported chat provider %q", cfg.Provider)
 	}

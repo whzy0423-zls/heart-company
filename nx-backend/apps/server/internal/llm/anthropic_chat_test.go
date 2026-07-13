@@ -48,12 +48,12 @@ func TestAnthropicChatGenerateUsesVersionedEndpointAndNativeMessages(t *testing.
 	}))
 	defer server.Close()
 
-	generator := NewAnthropicChatGenerator(ChatGeneratorConfig{
+	generator := newAnthropicChatGeneratorWithClient(ChatGeneratorConfig{
 		APIBase:      server.URL + "/v1/",
 		APIKey:       " test-key ",
 		Model:        " test-model ",
 		SystemPrompt: "叫用户亲爱的，每次至少写十段。",
-		Client:       server.Client(),
+		client:       server.Client(),
 	})
 	answer, err := generator.Generate(context.Background(), rag.GenerateInput{
 		Question:            "这次不要叫我亲爱的，简短回答。",
@@ -143,7 +143,7 @@ func TestAnthropicChatGenerateUsesVersionedEndpointAndNativeMessages(t *testing.
 
 func TestAnthropicChatGenerateRejectsMissingKeyAndInvalidResponses(t *testing.T) {
 	t.Run("missing key", func(t *testing.T) {
-		generator := NewAnthropicChatGenerator(ChatGeneratorConfig{})
+		generator := newAnthropicChatGeneratorWithClient(ChatGeneratorConfig{})
 		_, err := generator.Generate(context.Background(), rag.GenerateInput{Question: "hi"})
 		if err == nil || !strings.Contains(err.Error(), "API Key") {
 			t.Fatalf("err = %v", err)
@@ -445,7 +445,7 @@ func TestAnthropicChatClosesResponseBodies(t *testing.T) {
 		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header)}, nil
 		})}
-		generator := NewAnthropicChatGenerator(ChatGeneratorConfig{APIBase: "https://example.com/v1", APIKey: "key", Model: "model", Client: client})
+		generator := newAnthropicChatGeneratorWithClient(ChatGeneratorConfig{APIBase: "https://example.com/v1", APIKey: "key", Model: "model", client: client})
 		if _, err := generator.Generate(context.Background(), rag.GenerateInput{Question: "hi"}); err != nil {
 			t.Fatal(err)
 		}
@@ -459,7 +459,7 @@ func TestAnthropicChatClosesResponseBodies(t *testing.T) {
 		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header)}, nil
 		})}
-		generator := NewAnthropicChatGenerator(ChatGeneratorConfig{APIBase: "https://example.com/v1", APIKey: "key", Model: "model", Client: client})
+		generator := newAnthropicChatGeneratorWithClient(ChatGeneratorConfig{APIBase: "https://example.com/v1", APIKey: "key", Model: "model", client: client})
 		_, _ = generator.GenerateStream(context.Background(), rag.GenerateInput{Question: "hi"}, nil)
 		if !body.Closed() {
 			t.Fatal("stream response body was not closed")
@@ -467,12 +467,16 @@ func TestAnthropicChatClosesResponseBodies(t *testing.T) {
 	})
 }
 
+func newAnthropicChatGeneratorWithClient(cfg ChatGeneratorConfig) *AnthropicChatGenerator {
+	return newAnthropicChatGenerator(cfg, cfg.client)
+}
+
 func newTestAnthropicChatGenerator(server *httptest.Server) *AnthropicChatGenerator {
-	return NewAnthropicChatGenerator(ChatGeneratorConfig{
+	return newAnthropicChatGeneratorWithClient(ChatGeneratorConfig{
 		APIBase: server.URL + "/v1",
 		APIKey:  "test-key",
 		Model:   "test-model",
-		Client:  server.Client(),
+		client:  server.Client(),
 	})
 }
 

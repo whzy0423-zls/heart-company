@@ -59,43 +59,44 @@ import (
 )
 
 type Server struct {
-	env                   config.Env
-	mux                   *http.ServeMux
-	db                    *sql.DB
-	system                *system.Store
-	analytics             *analytics.Store
-	auditLogs             *auditlog.Store
-	builder               *siteconfig.Builder
-	engagement            *engagement.Store
-	signups               *signup.Store
-	uploads               *uploadasset.Store
-	uploader              storage.ObjectUploader
-	voices                *voice.Store
-	videos                *video.Store
-	videoAnalysis         *videoanalysis.Store
-	videoAssets           *videoasset.Store
-	storyboards           *videostoryboard.Store
-	images                *image.Store
-	miniapp               *miniapp.Store
-	wx                    *wechat.Client
-	pay                   *wxpay.Client
-	ragGen                rag.Generator
-	analysisGen           *llm.MiniMaxGenerator
-	ragDocs               ragDocumentStore
-	ragVec                *ragstore.Store
-	embedder              *embedding.Client
-	ragCache              *miniappRAGCache
-	articles              *articlestore.Store
-	mindquotes            *mindquote.Store
-	quiz                  *quiz.Store
-	appDailyQuiz          appDailyQuizService
-	appReassessment       appReassessmentService
-	appDailyQuizReminders appDailyQuizReminderService
-	appDailyQuizPushAdmin appDailyQuizPushAdminService
-	appDailyQuizBankAdmin appDailyQuizBankAdminService
-	chatLimiter           *fixedWindowRateLimiter
-	chatTimeout           time.Duration
-	newChatGenerator      func(llm.ChatGeneratorConfig) (llm.ChatGenerator, error)
+	env                     config.Env
+	mux                     *http.ServeMux
+	db                      *sql.DB
+	system                  *system.Store
+	analytics               *analytics.Store
+	auditLogs               *auditlog.Store
+	builder                 *siteconfig.Builder
+	engagement              *engagement.Store
+	signups                 *signup.Store
+	uploads                 *uploadasset.Store
+	uploader                storage.ObjectUploader
+	voices                  *voice.Store
+	videos                  *video.Store
+	videoAnalysis           *videoanalysis.Store
+	videoAssets             *videoasset.Store
+	storyboards             *videostoryboard.Store
+	images                  *image.Store
+	miniapp                 *miniapp.Store
+	wx                      *wechat.Client
+	pay                     *wxpay.Client
+	ragGen                  rag.Generator
+	analysisGen             *llm.MiniMaxGenerator
+	ragDocs                 ragDocumentStore
+	ragVec                  *ragstore.Store
+	embedder                *embedding.Client
+	ragCache                *miniappRAGCache
+	articles                *articlestore.Store
+	mindquotes              *mindquote.Store
+	quiz                    *quiz.Store
+	appDailyQuiz            appDailyQuizService
+	appReassessment         appReassessmentService
+	appDailyQuizReminders   appDailyQuizReminderService
+	appDailyQuizPushAdmin   appDailyQuizPushAdminService
+	appDailyQuizBankAdmin   appDailyQuizBankAdminService
+	chatLimiter             *fixedWindowRateLimiter
+	chatTimeout             time.Duration
+	modelConfigProbeTimeout time.Duration
+	newChatGenerator        func(llm.ChatGeneratorConfig) (llm.ChatGenerator, error)
 
 	appUsers                 *appuser.Store
 	appChat                  appChatStore
@@ -137,6 +138,8 @@ var uploadPermissionCodes = []string{
 	"Voice:Profile:Manage",
 	"Website:Write",
 }
+
+const defaultModelConfigProbeTimeout = 15 * time.Second
 
 func New(env config.Env, database *sql.DB) http.Handler {
 	s := newServer(env, database)
@@ -253,10 +256,6 @@ func (s *Server) applyStoredModelConfig() {
 	if err != nil || !ok {
 		return
 	}
-	if err := validateNonChatModelConfigBases(cfg); err != nil {
-		log.Printf("ignore unsafe stored model config: %v", err)
-		return
-	}
 	var chatGenerator llm.ChatGenerator
 	if cfg.AssistEnabled() {
 		chatGenerator, err = s.buildChatGenerator(cfg)
@@ -264,9 +263,9 @@ func (s *Server) applyStoredModelConfig() {
 			log.Printf("stored chat model remains unconfigured: %v", err)
 		}
 	}
-	analysisGenerator := llm.NewMiniMaxGenerator(cfg.ApplyAnalysis(s.env.MiniMax))
-	videoStore := video.NewStore(s.db, s.uploads, cfg.ApplyVideo(s.env.Video), s.uploader)
-	imageStore := image.NewStore(s.uploads, cfg.ApplyImage(s.env.Image), s.uploader)
+	analysisGenerator := llm.NewMiniMaxGenerator(safeStoredAnalysisConfig(cfg, s.env.MiniMax))
+	videoStore := video.NewStore(s.db, s.uploads, safeStoredVideoConfig(cfg, s.env.Video), s.uploader)
+	imageStore := image.NewStore(s.uploads, safeStoredImageConfig(cfg, s.env.Image), s.uploader)
 
 	s.modelMu.Lock()
 	s.ragGen = chatGenerator
@@ -317,6 +316,41 @@ func (s *Server) buildChatGenerator(cfg modelconfig.Config) (llm.ChatGenerator, 
 		SystemPrompt: cfg.Assist.SystemPrompt,
 		Timeout:      time.Duration(chat.TimeoutSeconds) * time.Second,
 	})
+}
+
+func (s *Server) modelConfigProbeDeadline(providerTimeout time.Duration) time.Duration {
+	limit := s.modelConfigProbeTimeout
+	if limit <= 0 {
+		limit = defaultModelConfigProbeTimeout
+	}
+	if providerTimeout > 0 && providerTimeout < limit {
+		return providerTimeout
+	}
+	return limit
+}
+
+func safeStoredVideoConfig(cfg modelconfig.Config, base config.VideoConfig) config.VideoConfig {
+	if err := validateExternalAPIBase("video.apiBase", cfg.Video.APIBase); err != nil {
+		log.Printf("ignore unsafe stored video model config: %v", err)
+		return base
+	}
+	return cfg.ApplyVideo(base)
+}
+
+func safeStoredImageConfig(cfg modelconfig.Config, base config.ImageConfig) config.ImageConfig {
+	if err := validateExternalAPIBase("image.apiBase", cfg.Image.APIBase); err != nil {
+		log.Printf("ignore unsafe stored image model config: %v", err)
+		return base
+	}
+	return cfg.ApplyImage(base)
+}
+
+func safeStoredAnalysisConfig(cfg modelconfig.Config, base config.MiniMaxConfig) config.MiniMaxConfig {
+	if err := validateExternalAPIBase("analysis.apiBase", cfg.Analysis.APIBase); err != nil {
+		log.Printf("ignore unsafe stored analysis model config: %v", err)
+		return modelconfig.Config{}.ApplyAnalysis(base)
+	}
+	return cfg.ApplyAnalysis(base)
 }
 
 func (s *Server) analysisGenerator() *llm.MiniMaxGenerator {
@@ -2469,7 +2503,7 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if needProbe {
-				probeCtx, cancel := context.WithTimeout(r.Context(), time.Duration(mergedChat.TimeoutSeconds)*time.Second)
+				probeCtx, cancel := context.WithTimeout(r.Context(), s.modelConfigProbeDeadline(time.Duration(mergedChat.TimeoutSeconds)*time.Second))
 				result := candidate.Ping(probeCtx)
 				cancel()
 				if !result.OK {
@@ -2484,15 +2518,6 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		s.recordAdminAudit(r, auditlog.Entry{
-			Action:     "model_config.update",
-			TargetType: "model_config",
-			TargetID:   "global",
-			Before:     modelConfigAuditSnapshot(stored),
-			After:      modelConfigAuditSnapshot(merged),
-			Summary:    "更新模型配置",
-		})
-
 		chat := merged.EffectiveChat()
 		vid := merged.ApplyVideo(s.env.Video)
 		img := merged.ApplyImage(s.env.Image)
@@ -2514,6 +2539,15 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 		s.videos = video.NewStore(s.db, s.uploads, vid, s.uploader)
 		s.images = image.NewStore(s.uploads, img, s.uploader)
 		s.modelMu.Unlock()
+
+		s.recordAdminAudit(r, auditlog.Entry{
+			Action:     "model_config.update",
+			TargetType: "model_config",
+			TargetID:   "global",
+			Before:     modelConfigAuditSnapshot(stored),
+			After:      modelConfigAuditSnapshot(merged),
+			Summary:    "更新模型配置",
+		})
 
 		httpx.OK(w, buildModelConfigView(chat, vid, img, analysis, admin, merged.DailyQuiz, merged))
 	}

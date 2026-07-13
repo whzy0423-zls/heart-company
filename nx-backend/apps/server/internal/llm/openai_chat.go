@@ -60,7 +60,7 @@ type openAIError struct {
 	Code    any    `json:"code,omitempty"`
 }
 
-func NewOpenAIChatGenerator(cfg ChatGeneratorConfig) *OpenAIChatGenerator {
+func newOpenAIChatGenerator(cfg ChatGeneratorConfig, client *http.Client) *OpenAIChatGenerator {
 	apiBase := strings.TrimRight(strings.TrimSpace(cfg.APIBase), "/")
 	if apiBase == "" {
 		apiBase = openAIChatDefaultAPIBase
@@ -73,7 +73,6 @@ func NewOpenAIChatGenerator(cfg ChatGeneratorConfig) *OpenAIChatGenerator {
 	if timeout <= 0 {
 		timeout = 25 * time.Second
 	}
-	client := cfg.Client
 	if client == nil {
 		client = &http.Client{Timeout: timeout}
 	}

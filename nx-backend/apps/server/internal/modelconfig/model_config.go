@@ -30,6 +30,7 @@ const DefaultAnalysisTimeoutSeconds = 180
 const (
 	ProviderOpenAICompatible    = "openai-compatible"
 	ProviderAnthropicCompatible = "anthropic-compatible"
+	MaxChatTimeoutSeconds       = 300
 )
 
 // ChatConfig 对话模型兼容协议可配置项。
@@ -71,6 +72,9 @@ func (c ChatConfig) Validate() error {
 	}
 	if c.TimeoutSeconds <= 0 {
 		return errors.New("chat.timeoutSeconds must be greater than zero")
+	}
+	if c.TimeoutSeconds > MaxChatTimeoutSeconds {
+		return errors.New("chat.timeoutSeconds must not exceed 300")
 	}
 	return nil
 }
@@ -301,30 +305,34 @@ func isMiniMaxAnalysisModel(model string) bool {
 }
 
 // MergeIncoming 把后台提交的新值合并到当前覆盖配置之上。
-// 密钥字段为空表示"不修改"，沿用 c 中已有的值；其余字段直接覆盖（含置空）。
+// 整页配置接口也允许局部提交：所有省略/空值字段沿用已存值。
+// 对话 provider 显式切换时例外：空 API key 不得继承旧 provider 的密钥。
 func (c Config) MergeIncoming(in Config) Config {
 	out := in.trimmed()
-	storedChat := c.Chat.Normalized()
-	if out.Chat == (ChatConfig{}) {
-		out.Chat = storedChat
-	} else if out.Chat.APIKey == "" && out.Chat.Provider == storedChat.Provider {
-		out.Chat.APIKey = c.Chat.APIKey
+	stored := c.trimmed()
+	providerChanged := out.Chat.Provider != "" && out.Chat.Provider != stored.Chat.Provider
+	out.Chat.Provider = keepStoredString(out.Chat.Provider, stored.Chat.Provider)
+	out.Chat.APIBase = keepStoredString(out.Chat.APIBase, stored.Chat.APIBase)
+	if out.Chat.APIKey == "" && !providerChanged {
+		out.Chat.APIKey = stored.Chat.APIKey
 	}
-	if out.Video.APIKey == "" {
-		out.Video.APIKey = c.Video.APIKey
+	out.Chat.Model = keepStoredString(out.Chat.Model, stored.Chat.Model)
+	if out.Chat.TimeoutSeconds == 0 {
+		out.Chat.TimeoutSeconds = stored.Chat.TimeoutSeconds
 	}
-	if out.Image.APIKey == "" {
-		out.Image.APIKey = c.Image.APIKey
-	}
-	if out.Analysis.APIKey == "" {
-		out.Analysis.APIKey = c.Analysis.APIKey
-	}
-	if out.Admin.APIKey == "" {
-		out.Admin.APIKey = c.Admin.APIKey
-	}
-	if out.DailyQuiz.APIKey == "" {
-		out.DailyQuiz.APIKey = c.DailyQuiz.APIKey
-	}
+
+	out.Video.APIBase = keepStoredString(out.Video.APIBase, stored.Video.APIBase)
+	out.Video.APIKey = keepStoredString(out.Video.APIKey, stored.Video.APIKey)
+	out.Video.Model = keepStoredString(out.Video.Model, stored.Video.Model)
+	out.Image.APIBase = keepStoredString(out.Image.APIBase, stored.Image.APIBase)
+	out.Image.APIKey = keepStoredString(out.Image.APIKey, stored.Image.APIKey)
+	out.Image.Model = keepStoredString(out.Image.Model, stored.Image.Model)
+	out.Analysis.APIBase = keepStoredString(out.Analysis.APIBase, stored.Analysis.APIBase)
+	out.Analysis.APIKey = keepStoredString(out.Analysis.APIKey, stored.Analysis.APIKey)
+	out.Analysis.GroupID = keepStoredString(out.Analysis.GroupID, stored.Analysis.GroupID)
+	out.Analysis.Model = keepStoredString(out.Analysis.Model, stored.Analysis.Model)
+	out.Admin = mergeCompatibleModelConfig(stored.Admin, out.Admin)
+	out.DailyQuiz = mergeCompatibleModelConfig(stored.DailyQuiz, out.DailyQuiz)
 	// 整个 assist 段未提交时视为局部页面保存，完整沿用已存值；
 	// 提交了 systemPrompt 但未带 enabled 时只沿用开关。
 	if in.Assist.Enabled == nil && strings.TrimSpace(in.Assist.SystemPrompt) == "" {
@@ -333,6 +341,25 @@ func (c Config) MergeIncoming(in Config) Config {
 		out.Assist.Enabled = c.Assist.Enabled
 	}
 	return out
+}
+
+func keepStoredString(incoming, stored string) string {
+	if incoming == "" {
+		return stored
+	}
+	return incoming
+}
+
+func mergeCompatibleModelConfig(stored, incoming CompatibleModelConfig) CompatibleModelConfig {
+	incoming.Provider = keepStoredString(incoming.Provider, stored.Provider)
+	incoming.APIBase = keepStoredString(incoming.APIBase, stored.APIBase)
+	incoming.APIKey = keepStoredString(incoming.APIKey, stored.APIKey)
+	incoming.GroupID = keepStoredString(incoming.GroupID, stored.GroupID)
+	incoming.Model = keepStoredString(incoming.Model, stored.Model)
+	if incoming.TimeoutSeconds == 0 {
+		incoming.TimeoutSeconds = stored.TimeoutSeconds
+	}
+	return incoming
 }
 
 func (c Config) trimmed() Config {

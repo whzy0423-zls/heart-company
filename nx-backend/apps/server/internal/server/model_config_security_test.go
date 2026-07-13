@@ -9,10 +9,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/auditlog"
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/llm"
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
@@ -207,6 +209,7 @@ type runtimeChatGenerator struct {
 	pingCalls   int
 	pingStarted chan struct{}
 	pingRelease <-chan struct{}
+	pingFunc    func(context.Context) llm.PingResult
 	draft       string
 	kind        string
 }
@@ -223,7 +226,11 @@ func (*runtimeChatGenerator) SummarizeConversation(_ context.Context, previous s
 func (*runtimeChatGenerator) CompleteJSON(context.Context, string, string, int) (string, error) {
 	return `{}`, nil
 }
-func (g *runtimeChatGenerator) Ping(context.Context) llm.PingResult {
+func (g *runtimeChatGenerator) Ping(ctx context.Context) llm.PingResult {
+	if g.pingFunc != nil {
+		g.pingCalls++
+		return g.pingFunc(ctx)
+	}
 	g.pingCalls++
 	if g.pingStarted != nil {
 		select {
@@ -267,6 +274,77 @@ func TestApplyStoredModelConfigLeavesLegacyChatUnconfigured(t *testing.T) {
 	}
 	if s.videoStore() == nil {
 		t.Fatal("unsafe unconfigured legacy chat blocked valid non-chat startup config")
+	}
+}
+
+func TestApplyStoredModelConfigLoadsValidChatWhenVideoSectionIsUnsafe(t *testing.T) {
+	stored := modelconfig.Config{
+		Chat: modelconfig.ChatConfig{
+			Provider:       modelconfig.ProviderOpenAICompatible,
+			APIBase:        "https://api.openai.com/v1",
+			APIKey:         "secret",
+			Model:          "gpt-model",
+			TimeoutSeconds: 30,
+		},
+		Video: modelconfig.VideoConfig{APIBase: "http://127.0.0.1:8080/v1", APIKey: "unsafe", Model: "unsafe-video"},
+	}
+	db, _ := openAtomicModelConfigTestDB(t, stored, nil)
+	candidate := &runtimeChatGenerator{}
+	s := &Server{
+		db:  db,
+		env: config.Env{Video: config.VideoConfig{APIBase: "https://safe-video.example/v1", APIKey: "env-video", Model: "env-video"}},
+		newChatGenerator: func(llm.ChatGeneratorConfig) (llm.ChatGenerator, error) {
+			return candidate, nil
+		},
+	}
+
+	s.applyStoredModelConfig()
+
+	if s.generator() != candidate {
+		t.Fatalf("unsafe video section blocked valid compatible chat startup: %T", s.generator())
+	}
+}
+
+func TestStoredRuntimeSectionsFallbackIndependently(t *testing.T) {
+	env := config.Env{
+		Video:   config.VideoConfig{APIBase: "https://env-video.example/v1", APIKey: "env-video-key", Model: "env-video"},
+		Image:   config.ImageConfig{APIBase: "https://env-image.example/v1", APIKey: "env-image-key", Model: "env-image"},
+		MiniMax: config.MiniMaxConfig{APIBase: "https://api.minimaxi.com", APIKey: "env-analysis-key", GroupID: "env-group", Model: "MiniMax-M3"},
+	}
+	cfg := modelconfig.Config{
+		Video:    modelconfig.VideoConfig{APIBase: "http://127.0.0.1:8080/v1", APIKey: "bad-video", Model: "bad-video"},
+		Image:    modelconfig.ImageConfig{APIBase: "https://stored-image.example/v1", APIKey: "stored-image-key", Model: "stored-image"},
+		Analysis: modelconfig.AnalysisConfig{APIBase: "https://analysis.example/v1", Model: "MiniMax-M3-Preview"},
+	}
+
+	videoCfg := safeStoredVideoConfig(cfg, env.Video)
+	imageCfg := safeStoredImageConfig(cfg, env.Image)
+	analysisCfg := safeStoredAnalysisConfig(cfg, env.MiniMax)
+	if videoCfg != env.Video {
+		t.Fatalf("unsafe video did not fall back to env: %+v", videoCfg)
+	}
+	if imageCfg.Model != "stored-image" || imageCfg.APIKey != "stored-image-key" {
+		t.Fatalf("valid image section was not applied: %+v", imageCfg)
+	}
+	if analysisCfg.Model != "MiniMax-M3-Preview" {
+		t.Fatalf("valid analysis section was not applied: %+v", analysisCfg)
+	}
+
+	cfg.Video = modelconfig.VideoConfig{APIBase: "https://stored-video.example/v1", APIKey: "stored-video-key", Model: "stored-video"}
+	cfg.Image = modelconfig.ImageConfig{APIBase: "http://127.0.0.1:8080/v1", APIKey: "bad-image", Model: "bad-image"}
+	cfg.Analysis = modelconfig.AnalysisConfig{APIBase: "http://127.0.0.1:8080/v1", Model: "MiniMax-M3-Preview"}
+	videoCfg = safeStoredVideoConfig(cfg, env.Video)
+	imageCfg = safeStoredImageConfig(cfg, env.Image)
+	analysisCfg = safeStoredAnalysisConfig(cfg, env.MiniMax)
+	if videoCfg.Model != "stored-video" || videoCfg.APIKey != "stored-video-key" {
+		t.Fatalf("valid video section was not applied: %+v", videoCfg)
+	}
+	if imageCfg != env.Image {
+		t.Fatalf("unsafe image did not fall back to env: %+v", imageCfg)
+	}
+	wantAnalysis := modelconfig.Config{}.ApplyAnalysis(env.MiniMax)
+	if analysisCfg != wantAnalysis {
+		t.Fatalf("unsafe analysis did not fall back to env baseline: got=%+v want=%+v", analysisCfg, wantAnalysis)
 	}
 }
 
@@ -393,6 +471,101 @@ func TestModelConfigSaveIsAtomicAcrossProbePersistenceAndRuntimeSwap(t *testing.
 				t.Fatalf("expected configured timeout after swap, got %s", s.chatRequestTimeout())
 			}
 		})
+	}
+}
+
+func TestModelConfigSaveCapsBlockingProbeWhileHoldingUpdateLock(t *testing.T) {
+	stored := modelconfig.Config{Chat: modelconfig.ChatConfig{
+		Provider:       modelconfig.ProviderOpenAICompatible,
+		APIBase:        "https://api.openai.com/v1",
+		APIKey:         "old-secret",
+		Model:          "old-model",
+		TimeoutSeconds: 20,
+	}}
+	db, state := openAtomicModelConfigTestDB(t, stored, nil)
+	old := &runtimeChatGenerator{}
+	observedDeadline := make(chan time.Duration, 1)
+	candidate := &runtimeChatGenerator{pingFunc: func(ctx context.Context) llm.PingResult {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			observedDeadline <- 0
+		} else {
+			observedDeadline <- time.Until(deadline)
+		}
+		<-ctx.Done()
+		return llm.PingResult{Message: ctx.Err().Error()}
+	}}
+	s := &Server{
+		db:                      db,
+		ragGen:                  old,
+		modelConfigProbeTimeout: 35 * time.Millisecond,
+		newChatGenerator: func(llm.ChatGeneratorConfig) (llm.ChatGenerator, error) {
+			return candidate, nil
+		},
+	}
+
+	started := time.Now()
+	response := performRawUnit(http.HandlerFunc(s.modelConfig), http.MethodPut, "/api/model-config", `{"chat":{"provider":"openai-compatible","apiBase":"https://api.openai.com/v1","apiKey":"","model":"new-model","timeoutSeconds":300}}`)
+	elapsed := time.Since(started)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("expected timed out probe rejection, status=%d body=%s", response.Code, response.Body.String())
+	}
+	if elapsed > 300*time.Millisecond {
+		t.Fatalf("probe was not capped: elapsed=%s", elapsed)
+	}
+	if deadline := <-observedDeadline; deadline <= 0 || deadline > 70*time.Millisecond {
+		t.Fatalf("candidate observed uncapped deadline: %s", deadline)
+	}
+	if state.writeCount != 0 || s.generator() != old {
+		t.Fatal("timed out probe changed persistence or runtime")
+	}
+}
+
+func TestModelConfigSwapsRuntimeBeforeAuditRecording(t *testing.T) {
+	stored := modelconfig.Config{Chat: modelconfig.ChatConfig{
+		Provider:       modelconfig.ProviderOpenAICompatible,
+		APIBase:        "https://api.openai.com/v1",
+		APIKey:         "secret",
+		Model:          "old-model",
+		TimeoutSeconds: 20,
+	}}
+	db, state := openAtomicModelConfigTestDB(t, stored, nil)
+	state.auditStarted = make(chan struct{})
+	state.auditRelease = make(chan struct{})
+	candidate := &runtimeChatGenerator{ping: llm.PingResult{OK: true}}
+	s := &Server{
+		db:        db,
+		auditLogs: auditlog.NewStore(db),
+		newChatGenerator: func(llm.ChatGeneratorConfig) (llm.ChatGenerator, error) {
+			return candidate, nil
+		},
+	}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- performRawUnit(http.HandlerFunc(s.modelConfig), http.MethodPut, "/api/model-config", `{"chat":{"provider":"openai-compatible","apiBase":"https://api.openai.com/v1","apiKey":"","model":"new-model","timeoutSeconds":20}}`)
+	}()
+
+	select {
+	case <-state.auditStarted:
+	case <-time.After(time.Second):
+		t.Fatal("audit recording did not start")
+	}
+	if s.generator() != candidate {
+		t.Fatalf("runtime was not swapped before audit: %T", s.generator())
+	}
+	persisted, _, err := modelconfig.ReadStore(context.Background(), db)
+	if err != nil || persisted.Chat.Model != "new-model" {
+		t.Fatalf("config was not persisted before audit: cfg=%+v err=%v", persisted.Chat, err)
+	}
+	close(state.auditRelease)
+	select {
+	case response := <-done:
+		if response.Code != http.StatusOK {
+			t.Fatalf("save failed after audit release: %d %s", response.Code, response.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("save did not finish after audit release")
 	}
 }
 
@@ -697,10 +870,12 @@ var (
 )
 
 type atomicModelConfigState struct {
-	mu         sync.Mutex
-	raw        []byte
-	execErr    error
-	writeCount int
+	mu           sync.Mutex
+	raw          []byte
+	execErr      error
+	writeCount   int
+	auditStarted chan struct{}
+	auditRelease chan struct{}
 }
 
 type atomicModelConfigDriver struct{}
@@ -727,7 +902,24 @@ func (c *atomicModelConfigConn) QueryContext(context.Context, string, []driver.N
 	defer c.state.mu.Unlock()
 	return &modelConfigViewTestRows{raw: append([]byte(nil), c.state.raw...)}, nil
 }
-func (c *atomicModelConfigConn) ExecContext(_ context.Context, _ string, args []driver.NamedValue) (driver.Result, error) {
+func (c *atomicModelConfigConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	if strings.Contains(query, "admin_operation_logs") {
+		c.state.mu.Lock()
+		started := c.state.auditStarted
+		release := c.state.auditRelease
+		c.state.mu.Unlock()
+		if started != nil {
+			select {
+			case <-started:
+			default:
+				close(started)
+			}
+		}
+		if release != nil {
+			<-release
+		}
+		return driver.RowsAffected(1), nil
+	}
 	c.state.mu.Lock()
 	defer c.state.mu.Unlock()
 	if c.state.execErr != nil {

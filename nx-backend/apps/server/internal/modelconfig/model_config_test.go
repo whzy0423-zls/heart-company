@@ -77,6 +77,7 @@ func TestChatConfigValidateRequiresCompleteConnectionFields(t *testing.T) {
 		{name: "api key", mutate: func(cfg *ChatConfig) { cfg.APIKey = " " }, want: "apiKey"},
 		{name: "model", mutate: func(cfg *ChatConfig) { cfg.Model = " " }, want: "model"},
 		{name: "timeout", mutate: func(cfg *ChatConfig) { cfg.TimeoutSeconds = 0 }, want: "timeoutSeconds"},
+		{name: "timeout too large", mutate: func(cfg *ChatConfig) { cfg.TimeoutSeconds = MaxChatTimeoutSeconds + 1 }, want: "timeoutSeconds"},
 	}
 
 	for _, tc := range tests {
@@ -186,6 +187,52 @@ func TestMergeIncomingPartialPagePreservesOmittedChatAssist(t *testing.T) {
 	}
 	if merged.Assist.SystemPrompt != "保持简洁" || merged.Assist.Enabled == nil || !*merged.Assist.Enabled {
 		t.Fatalf("omitted assist was changed: %+v", merged.Assist)
+	}
+}
+
+func TestMergeIncomingPreservesEveryOmittedSectionField(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	stored := Config{
+		Chat:      ChatConfig{Provider: ProviderOpenAICompatible, APIBase: "https://chat.example/v1", APIKey: "chat-key", Model: "chat-old", TimeoutSeconds: 31},
+		Video:     VideoConfig{APIBase: "https://video.example/v1", APIKey: "video-key", Model: "video-old"},
+		Image:     ImageConfig{APIBase: "https://image.example/v1", APIKey: "image-key", Model: "image-old"},
+		Analysis:  AnalysisConfig{APIBase: "https://analysis.example/v1", APIKey: "analysis-key", GroupID: "analysis-group", Model: "MiniMax-M3"},
+		Admin:     CompatibleModelConfig{Provider: ProviderOpenAICompatible, APIBase: "https://admin.example/v1", APIKey: "admin-key", GroupID: "admin-group", Model: "admin-old", TimeoutSeconds: 41},
+		DailyQuiz: CompatibleModelConfig{Provider: ProviderAnthropicCompatible, APIBase: "https://quiz.example/v1", APIKey: "quiz-key", GroupID: "quiz-group", Model: "quiz-old", TimeoutSeconds: 51},
+		Assist:    AssistConfig{Enabled: &enabled, SystemPrompt: "old prompt"},
+	}
+	incoming := Config{
+		Chat:      ChatConfig{Model: "chat-new"},
+		Video:     VideoConfig{Model: "video-new"},
+		Image:     ImageConfig{Model: "image-new"},
+		Analysis:  AnalysisConfig{Model: "MiniMax-M3-Preview"},
+		Admin:     CompatibleModelConfig{Model: "admin-new"},
+		DailyQuiz: CompatibleModelConfig{Model: "quiz-new"},
+	}
+
+	got := stored.MergeIncoming(incoming)
+	if got.Chat.Provider != stored.Chat.Provider || got.Chat.APIBase != stored.Chat.APIBase || got.Chat.APIKey != stored.Chat.APIKey || got.Chat.TimeoutSeconds != stored.Chat.TimeoutSeconds || got.Chat.Model != "chat-new" {
+		t.Fatalf("chat omitted fields were not preserved: %+v", got.Chat)
+	}
+	if got.Video.APIBase != stored.Video.APIBase || got.Video.APIKey != stored.Video.APIKey || got.Video.Model != "video-new" {
+		t.Fatalf("video omitted fields were not preserved: %+v", got.Video)
+	}
+	if got.Image.APIBase != stored.Image.APIBase || got.Image.APIKey != stored.Image.APIKey || got.Image.Model != "image-new" {
+		t.Fatalf("image omitted fields were not preserved: %+v", got.Image)
+	}
+	if got.Analysis.APIBase != stored.Analysis.APIBase || got.Analysis.APIKey != stored.Analysis.APIKey || got.Analysis.GroupID != stored.Analysis.GroupID || got.Analysis.Model != "MiniMax-M3-Preview" {
+		t.Fatalf("analysis omitted fields were not preserved: %+v", got.Analysis)
+	}
+	if got.Admin.Provider != stored.Admin.Provider || got.Admin.APIBase != stored.Admin.APIBase || got.Admin.APIKey != stored.Admin.APIKey || got.Admin.GroupID != stored.Admin.GroupID || got.Admin.TimeoutSeconds != stored.Admin.TimeoutSeconds || got.Admin.Model != "admin-new" {
+		t.Fatalf("admin omitted fields were not preserved: %+v", got.Admin)
+	}
+	if got.DailyQuiz.Provider != stored.DailyQuiz.Provider || got.DailyQuiz.APIBase != stored.DailyQuiz.APIBase || got.DailyQuiz.APIKey != stored.DailyQuiz.APIKey || got.DailyQuiz.GroupID != stored.DailyQuiz.GroupID || got.DailyQuiz.TimeoutSeconds != stored.DailyQuiz.TimeoutSeconds || got.DailyQuiz.Model != "quiz-new" {
+		t.Fatalf("daily quiz omitted fields were not preserved: %+v", got.DailyQuiz)
+	}
+	if got.Assist.SystemPrompt != stored.Assist.SystemPrompt || got.Assist.Enabled == nil || !*got.Assist.Enabled {
+		t.Fatalf("assist omitted fields were not preserved: %+v", got.Assist)
 	}
 }
 

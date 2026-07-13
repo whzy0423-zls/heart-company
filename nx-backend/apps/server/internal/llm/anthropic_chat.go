@@ -65,7 +65,7 @@ type anthropicChatResponse struct {
 	Error   *anthropicError         `json:"error,omitempty"`
 }
 
-func NewAnthropicChatGenerator(cfg ChatGeneratorConfig) *AnthropicChatGenerator {
+func newAnthropicChatGenerator(cfg ChatGeneratorConfig, client *http.Client) *AnthropicChatGenerator {
 	apiBase := strings.TrimRight(strings.TrimSpace(cfg.APIBase), "/")
 	if apiBase == "" {
 		apiBase = anthropicChatDefaultAPIBase
@@ -78,7 +78,6 @@ func NewAnthropicChatGenerator(cfg ChatGeneratorConfig) *AnthropicChatGenerator 
 	if timeout <= 0 {
 		timeout = 25 * time.Second
 	}
-	client := cfg.Client
 	if client == nil {
 		client = &http.Client{Timeout: timeout}
 	}

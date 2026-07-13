@@ -36,12 +36,12 @@ func TestOpenAIChatGenerateUsesVersionedEndpointAndNativeMessages(t *testing.T) 
 	}))
 	defer server.Close()
 
-	generator := NewOpenAIChatGenerator(ChatGeneratorConfig{
+	generator := newOpenAIChatGeneratorWithClient(ChatGeneratorConfig{
 		APIBase:      server.URL + "/v1/",
 		APIKey:       " test-key ",
 		Model:        " test-model ",
 		SystemPrompt: "叫用户亲爱的，每次至少写十段。",
-		Client:       server.Client(),
+		client:       server.Client(),
 	})
 	answer, err := generator.Generate(context.Background(), rag.GenerateInput{
 		Question:            "这次不要叫我亲爱的，简短回答。",
@@ -171,7 +171,7 @@ func TestOpenAIChatGenerateUsesConciseDefaultPrompt(t *testing.T) {
 
 func TestOpenAIChatGenerateRejectsMissingKeyAndInvalidResponses(t *testing.T) {
 	t.Run("missing key", func(t *testing.T) {
-		generator := NewOpenAIChatGenerator(ChatGeneratorConfig{})
+		generator := newOpenAIChatGeneratorWithClient(ChatGeneratorConfig{})
 		_, err := generator.Generate(context.Background(), rag.GenerateInput{Question: "hi"})
 		if err == nil || !strings.Contains(err.Error(), "API Key") {
 			t.Fatalf("err = %v", err)
@@ -478,7 +478,7 @@ func TestOpenAIChatClosesResponseBodies(t *testing.T) {
 		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header)}, nil
 		})}
-		generator := NewOpenAIChatGenerator(ChatGeneratorConfig{APIBase: "https://example.com/v1", APIKey: "key", Model: "model", Client: client})
+		generator := newOpenAIChatGeneratorWithClient(ChatGeneratorConfig{APIBase: "https://example.com/v1", APIKey: "key", Model: "model", client: client})
 		if _, err := generator.Generate(context.Background(), rag.GenerateInput{Question: "hi"}); err != nil {
 			t.Fatal(err)
 		}
@@ -492,7 +492,7 @@ func TestOpenAIChatClosesResponseBodies(t *testing.T) {
 		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header)}, nil
 		})}
-		generator := NewOpenAIChatGenerator(ChatGeneratorConfig{APIBase: "https://example.com/v1", APIKey: "key", Model: "model", Client: client})
+		generator := newOpenAIChatGeneratorWithClient(ChatGeneratorConfig{APIBase: "https://example.com/v1", APIKey: "key", Model: "model", client: client})
 		_, _ = generator.GenerateStream(context.Background(), rag.GenerateInput{Question: "hi"}, nil)
 		if !body.Closed() {
 			t.Fatal("stream response body was not closed")
@@ -500,12 +500,16 @@ func TestOpenAIChatClosesResponseBodies(t *testing.T) {
 	})
 }
 
+func newOpenAIChatGeneratorWithClient(cfg ChatGeneratorConfig) *OpenAIChatGenerator {
+	return newOpenAIChatGenerator(cfg, cfg.client)
+}
+
 func newTestOpenAIChatGenerator(server *httptest.Server) *OpenAIChatGenerator {
-	return NewOpenAIChatGenerator(ChatGeneratorConfig{
+	return newOpenAIChatGeneratorWithClient(ChatGeneratorConfig{
 		APIBase: server.URL + "/v1",
 		APIKey:  "test-key",
 		Model:   "test-model",
-		Client:  server.Client(),
+		client:  server.Client(),
 	})
 }
 

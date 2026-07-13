@@ -18,13 +18,11 @@ func (contractChatGenerator) Generate(context.Context, rag.GenerateInput) (strin
 func TestNewChatGeneratorConstructsOnlySupportedProviders(t *testing.T) {
 	t.Parallel()
 
-	client := &http.Client{}
 	base := ChatGeneratorConfig{
-		APIBase: "http://127.0.0.1:9999/v1",
+		APIBase: "https://models.example.com/v1",
 		APIKey:  "secret",
 		Model:   "test-model",
 		Timeout: 13 * time.Second,
-		Client:  client,
 	}
 
 	tests := []struct {
@@ -79,6 +77,7 @@ func TestNewChatGeneratorRejectsUnsupportedOrIncompleteConfiguration(t *testing.
 		{name: "blank key", cfg: ChatGeneratorConfig{Provider: "openai-compatible", APIBase: "https://api.example.com/v1", Model: "model", Timeout: time.Second}},
 		{name: "blank model", cfg: ChatGeneratorConfig{Provider: "openai-compatible", APIBase: "https://api.example.com/v1", APIKey: "secret", Timeout: time.Second}},
 		{name: "blank timeout", cfg: ChatGeneratorConfig{Provider: "openai-compatible", APIBase: "https://api.example.com/v1", APIKey: "secret", Model: "model"}},
+		{name: "timeout too large", cfg: ChatGeneratorConfig{Provider: "openai-compatible", APIBase: "https://api.example.com/v1", APIKey: "secret", Model: "model", Timeout: 301 * time.Second}},
 	}
 
 	for _, tt := range tests {
@@ -105,6 +104,29 @@ func TestNewChatGeneratorProductionClientRejectsLocalAPIBase(t *testing.T) {
 	}
 }
 
+func TestNewChatGeneratorAlwaysUsesGuardedProductionClient(t *testing.T) {
+	t.Parallel()
+
+	generator, err := NewChatGenerator(ChatGeneratorConfig{
+		Provider: "openai-compatible",
+		APIBase:  "https://models.example.com/v1",
+		APIKey:   "secret",
+		Model:    "model",
+		Timeout:  12 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	openAI := generator.(*OpenAIChatGenerator)
+	transport, ok := openAI.client.Transport.(*http.Transport)
+	if !ok || transport.DialContext == nil || transport.TLSHandshakeTimeout <= 0 || transport.ResponseHeaderTimeout <= 0 {
+		t.Fatalf("expected guarded production transport, got %#v", openAI.client.Transport)
+	}
+	if openAI.client.CheckRedirect == nil {
+		t.Fatal("expected guarded redirect policy")
+	}
+}
+
 func (contractChatGenerator) GenerateStream(context.Context, rag.GenerateInput, rag.StreamEmitter) (string, error) {
 	return "", nil
 }
@@ -128,10 +150,9 @@ func (contractChatGenerator) PolishPrompt(context.Context, string, string) (stri
 var _ ChatGenerator = contractChatGenerator{}
 var _ JSONCompleter = contractChatGenerator{}
 
-func TestChatGeneratorContractPreservesProviderConfigurationAndInjectedClient(t *testing.T) {
+func TestChatGeneratorContractPreservesProviderConfiguration(t *testing.T) {
 	t.Parallel()
 
-	client := &http.Client{}
 	timeout := 17 * time.Second
 	cfg := ChatGeneratorConfig{
 		Provider:     "openai-compatible",
@@ -140,7 +161,6 @@ func TestChatGeneratorContractPreservesProviderConfigurationAndInjectedClient(t 
 		Model:        "example-model",
 		SystemPrompt: "be concise",
 		Timeout:      timeout,
-		Client:       client,
 	}
 
 	if cfg.Provider != "openai-compatible" {
@@ -154,8 +174,5 @@ func TestChatGeneratorContractPreservesProviderConfigurationAndInjectedClient(t 
 	}
 	if cfg.Timeout != timeout {
 		t.Fatalf("unexpected timeout: %s", cfg.Timeout)
-	}
-	if cfg.Client != client {
-		t.Fatal("injected HTTP client was not preserved")
 	}
 }
