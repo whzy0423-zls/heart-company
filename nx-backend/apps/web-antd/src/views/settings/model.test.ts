@@ -71,6 +71,7 @@ vi.mock('ant-design-vue', () => {
     message: { error: vi.fn(), success: vi.fn() },
     Row: passthrough('Row'),
     Select: defineComponent({
+      emits: ['update:value'],
       inheritAttrs: false,
       name: 'Select',
       props: {
@@ -78,14 +79,23 @@ vi.mock('ant-design-vue', () => {
         placeholder: { default: '', type: String },
         value: { default: '', type: String },
       },
-      setup(props, { attrs }) {
+      setup(props, { attrs, emit }) {
         return () =>
-          h('div', attrs, [
-            props.value || props.placeholder,
-            ...(props.options as Array<{ label: string }>).map(
-              (option) => option.label,
-            ),
-          ]);
+          h(
+            'select',
+            {
+              ...attrs,
+              onChange: (event: Event) =>
+                emit('update:value', (event.target as HTMLSelectElement).value),
+              value: props.value,
+            },
+            [
+              h('option', { disabled: true, value: '' }, props.placeholder),
+              ...(props.options as Array<{ label: string; value: string }>).map(
+                (option) => h('option', { value: option.value }, option.label),
+              ),
+            ],
+          );
       },
     }),
     Switch: passthrough('Switch', 'button'),
@@ -161,6 +171,24 @@ async function setChatTimeout(value: string) {
   ) as HTMLInputElement;
   timeout.value = value;
   timeout.dispatchEvent(new Event('input', { bubbles: true }));
+  await flushVuePromises();
+}
+
+async function setChatProvider(value: string) {
+  const provider = document.body.querySelector(
+    '[data-testid="chat-model-section"] select',
+  ) as HTMLSelectElement;
+  provider.value = value;
+  provider.dispatchEvent(new Event('change', { bubbles: true }));
+  await flushVuePromises();
+}
+
+async function setChatApiKey(value: string) {
+  const apiKey = document.body.querySelector(
+    '[data-testid="chat-model-section"] input[autocomplete="new-password"]',
+  ) as HTMLInputElement;
+  apiKey.value = value;
+  apiKey.dispatchEvent(new Event('input', { bubbles: true }));
   await flushVuePromises();
 }
 
@@ -321,4 +349,115 @@ describe('model settings compatible chat configuration', () => {
     );
     wrapper.unmount();
   });
+
+  it.each([
+    ['save', '保存'],
+    ['connection test', '测试连通性'],
+  ])(
+    'blocks %s when a legacy chat provider is blank',
+    async (_name, action) => {
+      vi.mocked(getModelConfigApi).mockResolvedValue(modelConfig() as any);
+
+      const wrapper = mountVueComponent(ModelSettings);
+      await flushVuePromises();
+
+      wrapper.button(action)?.click();
+      await flushVuePromises();
+
+      expect(updateModelConfigApi).not.toHaveBeenCalled();
+      expect(testChatModelApi).not.toHaveBeenCalled();
+      expect(message.error).toHaveBeenCalledWith(
+        '请选择 OpenAI 或 Anthropic 协议',
+      );
+      wrapper.unmount();
+    },
+  );
+
+  it.each([
+    ['save', '保存'],
+    ['connection test', '测试连通性'],
+  ])('blocks %s for an unknown chat provider', async (_name, action) => {
+    vi.mocked(getModelConfigApi).mockResolvedValue(
+      modelConfig({ provider: 'minimax', timeoutSeconds: 30 }) as any,
+    );
+
+    const wrapper = mountVueComponent(ModelSettings);
+    await flushVuePromises();
+
+    wrapper.button(action)?.click();
+    await flushVuePromises();
+
+    expect(updateModelConfigApi).not.toHaveBeenCalled();
+    expect(testChatModelApi).not.toHaveBeenCalled();
+    expect(message.error).toHaveBeenCalledWith(
+      '请选择 OpenAI 或 Anthropic 协议',
+    );
+    wrapper.unmount();
+  });
+
+  it.each([
+    ['save', '保存'],
+    ['connection test', '测试连通性'],
+  ])(
+    'blocks %s when the provider changes but the API key stays blank',
+    async (_name, action) => {
+      vi.mocked(getModelConfigApi).mockResolvedValue(
+        modelConfig({
+          provider: 'openai-compatible',
+          timeoutSeconds: 30,
+        }) as any,
+      );
+
+      const wrapper = mountVueComponent(ModelSettings);
+      await flushVuePromises();
+      await setChatProvider('anthropic-compatible');
+
+      wrapper.button(action)?.click();
+      await flushVuePromises();
+
+      expect(updateModelConfigApi).not.toHaveBeenCalled();
+      expect(testChatModelApi).not.toHaveBeenCalled();
+      expect(message.error).toHaveBeenCalledWith(
+        '切换协议后请重新填写 API Key',
+      );
+      wrapper.unmount();
+    },
+  );
+
+  it.each([
+    ['save', '保存'],
+    ['connection test', '测试连通性'],
+  ])(
+    'allows %s after a provider switch when a new API key is entered',
+    async (name, action) => {
+      vi.mocked(getModelConfigApi).mockResolvedValue(
+        modelConfig({
+          provider: 'openai-compatible',
+          timeoutSeconds: 30,
+        }) as any,
+      );
+      vi.mocked(updateModelConfigApi).mockResolvedValue(
+        modelConfig({
+          provider: 'anthropic-compatible',
+          timeoutSeconds: 30,
+        }) as any,
+      );
+
+      const wrapper = mountVueComponent(ModelSettings);
+      await flushVuePromises();
+      await setChatProvider('anthropic-compatible');
+      await setChatApiKey('new-provider-key');
+
+      wrapper.button(action)?.click();
+      await flushVuePromises();
+
+      if (name === 'save') {
+        expect(updateModelConfigApi).toHaveBeenCalledOnce();
+      } else {
+        expect(testChatModelApi).toHaveBeenCalledOnce();
+      }
+      expect(message.error).not.toHaveBeenCalled();
+      wrapper.unmount();
+    },
+  );
 });

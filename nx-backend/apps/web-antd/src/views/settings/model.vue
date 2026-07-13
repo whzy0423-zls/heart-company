@@ -75,6 +75,7 @@ const form = ref<ModelConfigPayload>({
   assist: { enabled: true, systemPrompt: '' },
 });
 const chatKeySet = ref(false);
+const loadedChatProvider = ref('');
 const videoKeySet = ref(false);
 const imageKeySet = ref(false);
 const analysisKeySet = ref(false);
@@ -85,6 +86,15 @@ const chatProviderOptions = [
   { label: 'OpenAI 协议', value: 'openai-compatible' },
   { label: 'Anthropic 协议', value: 'anthropic-compatible' },
 ];
+const chatProviderValues = new Set(
+  chatProviderOptions.map((option) => option.value),
+);
+const chatKeyReusable = computed(
+  () =>
+    chatKeySet.value &&
+    chatProviderValues.has(form.value.chat.provider) &&
+    form.value.chat.provider === loadedChatProvider.value,
+);
 const adminProviderOptions = [
   ...chatProviderOptions,
   { label: 'MiniMax 协议', value: 'minimax' },
@@ -165,6 +175,7 @@ async function load() {
         },
       };
       form.value = nextForm;
+      loadedChatProvider.value = data.chat?.provider ?? '';
       chatKeySet.value = data.chat?.apiKeySet ?? false;
       videoKeySet.value = data.video?.apiKeySet ?? false;
       imageKeySet.value = data.image?.apiKeySet ?? false;
@@ -178,6 +189,19 @@ async function load() {
 }
 
 function currentChatPayload(): ModelConfigPayload['chat'] | null {
+  const provider = form.value.chat.provider;
+  if (!chatProviderValues.has(provider)) {
+    message.error('请选择 OpenAI 或 Anthropic 协议');
+    return null;
+  }
+  if (!form.value.chat.apiKey.trim() && !chatKeyReusable.value) {
+    message.error(
+      provider !== loadedChatProvider.value
+        ? '切换协议后请重新填写 API Key'
+        : '请填写对话模型 API Key',
+    );
+    return null;
+  }
   const timeoutSeconds = parseChatTimeout(form.value.chat.timeoutSeconds);
   if (timeoutSeconds === null) {
     message.error(chatTimeoutError);
@@ -187,7 +211,7 @@ function currentChatPayload(): ModelConfigPayload['chat'] | null {
     apiBase: form.value.chat.apiBase,
     apiKey: form.value.chat.apiKey,
     model: form.value.chat.model,
-    provider: form.value.chat.provider,
+    provider,
     timeoutSeconds,
   };
 }
@@ -231,6 +255,7 @@ async function save() {
     form.value.analysis.apiKey = '';
     form.value.admin.apiKey = '';
     form.value.dailyQuiz.apiKey = '';
+    loadedChatProvider.value = saved.chat?.provider ?? chat.provider;
     chatKeySet.value = saved.chat?.apiKeySet ?? false;
     videoKeySet.value = saved.video?.apiKeySet ?? false;
     imageKeySet.value = saved.image?.apiKeySet ?? false;
@@ -313,7 +338,11 @@ async function testChat() {
                 <Input.Password
                   v-model:value="form.chat.apiKey"
                   :placeholder="
-                    chatKeySet ? '已配置，留空表示不修改' : '请输入 API Key'
+                    chatKeyReusable
+                      ? '已配置，留空表示不修改'
+                      : form.chat.provider !== loadedChatProvider
+                        ? '切换协议后请输入新的 API Key'
+                        : '请输入 API Key'
                   "
                   autocomplete="new-password"
                 />
