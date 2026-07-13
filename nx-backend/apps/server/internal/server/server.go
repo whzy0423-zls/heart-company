@@ -2428,20 +2428,21 @@ func validateNonChatModelConfigBases(cfg modelconfig.Config) error {
 	return nil
 }
 
-func validateIncomingNonChatModelConfigBases(incoming, merged modelconfig.Config) error {
+func validateChangedIncomingNonChatModelConfigBases(incoming, stored, merged modelconfig.Config) error {
 	sections := []struct {
 		name    string
 		label   string
 		apiBase string
+		changed bool
 	}{
-		{name: "analysis", label: "analysis.apiBase", apiBase: merged.Analysis.APIBase},
-		{name: "admin", label: "admin.apiBase", apiBase: merged.Admin.APIBase},
-		{name: "dailyQuiz", label: "dailyQuiz.apiBase", apiBase: merged.DailyQuiz.APIBase},
-		{name: "image", label: "image.apiBase", apiBase: merged.Image.APIBase},
-		{name: "video", label: "video.apiBase", apiBase: merged.Video.APIBase},
+		{name: "analysis", label: "analysis.apiBase", apiBase: merged.Analysis.APIBase, changed: stored.Analysis != merged.Analysis},
+		{name: "admin", label: "admin.apiBase", apiBase: merged.Admin.APIBase, changed: stored.Admin != merged.Admin},
+		{name: "dailyQuiz", label: "dailyQuiz.apiBase", apiBase: merged.DailyQuiz.APIBase, changed: stored.DailyQuiz != merged.DailyQuiz},
+		{name: "image", label: "image.apiBase", apiBase: merged.Image.APIBase, changed: stored.Image != merged.Image},
+		{name: "video", label: "video.apiBase", apiBase: merged.Video.APIBase, changed: stored.Video != merged.Video},
 	}
 	for _, section := range sections {
-		if !incoming.SectionPresent(section.name) {
+		if !incoming.SectionPresent(section.name) || !section.changed {
 			continue
 		}
 		if err := validateExternalAPIBase(section.label, section.apiBase); err != nil {
@@ -2516,7 +2517,7 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 		analysisChanged := stored.Analysis != merged.Analysis
 		needBuild := chatFieldsChanged || (!assistWasEnabled && assistEnabled) || (promptChanged && assistEnabled)
 		needProbe := chatFieldsChanged || (!assistWasEnabled && assistEnabled)
-		if err := validateIncomingNonChatModelConfigBases(incoming, merged); err != nil {
+		if err := validateChangedIncomingNonChatModelConfigBases(incoming, stored, merged); err != nil {
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
 		}

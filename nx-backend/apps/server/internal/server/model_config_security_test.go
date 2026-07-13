@@ -652,12 +652,43 @@ func TestModelConfigChatOnlySaveIgnoresAndDoesNotRebuildOmittedUnsafeNonChatSect
 	}
 }
 
+func TestModelConfigFullPageChatSaveIgnoresUnchangedUnsafeNonChatSections(t *testing.T) {
+	stored := modelconfig.Config{
+		Chat:      modelconfig.ChatConfig{Provider: modelconfig.ProviderOpenAICompatible, APIBase: "https://api.openai.com/v1", APIKey: "chat-key", Model: "old-model", TimeoutSeconds: 20},
+		Video:     modelconfig.VideoConfig{APIBase: "http://127.0.0.1:8080/v1", APIKey: "video-key", Model: "legacy-video"},
+		Image:     modelconfig.ImageConfig{APIBase: "http://127.0.0.1:8081/v1", APIKey: "image-key", Model: "legacy-image"},
+		Analysis:  modelconfig.AnalysisConfig{APIBase: "http://127.0.0.1:8082/v1", APIKey: "analysis-key", GroupID: "analysis-group", Model: "MiniMax-M3"},
+		Admin:     modelconfig.CompatibleModelConfig{Provider: "minimax", APIBase: "http://127.0.0.1:8083/v1", APIKey: "admin-key", GroupID: "admin-group", Model: "admin-model", TimeoutSeconds: 30},
+		DailyQuiz: modelconfig.CompatibleModelConfig{Provider: modelconfig.ProviderOpenAICompatible, APIBase: "http://127.0.0.1:8084/v1", APIKey: "quiz-key", GroupID: "quiz-group", Model: "quiz-model", TimeoutSeconds: 30},
+	}
+	db, _ := openAtomicModelConfigTestDB(t, stored, nil)
+	candidate := &runtimeChatGenerator{ping: llm.PingResult{OK: true}}
+	s := &Server{db: db, newChatGenerator: func(llm.ChatGeneratorConfig) (llm.ChatGenerator, error) { return candidate, nil }}
+	payload := `{
+		"chat":{"provider":"openai-compatible","apiBase":"https://api.openai.com/v1","apiKey":"","model":"new-model","timeoutSeconds":20},
+		"video":{"apiBase":"http://127.0.0.1:8080/v1","apiKey":"","model":"legacy-video"},
+		"image":{"apiBase":"http://127.0.0.1:8081/v1","apiKey":"","model":"legacy-image"},
+		"analysis":{"apiBase":"http://127.0.0.1:8082/v1","apiKey":"","groupId":"analysis-group","model":"MiniMax-M3"},
+		"admin":{"provider":"minimax","apiBase":"http://127.0.0.1:8083/v1","apiKey":"","groupId":"admin-group","model":"admin-model","timeoutSeconds":30},
+		"dailyQuiz":{"provider":"openai-compatible","apiBase":"http://127.0.0.1:8084/v1","apiKey":"","groupId":"quiz-group","model":"quiz-model","timeoutSeconds":30}
+	}`
+
+	response := performRawUnit(http.HandlerFunc(s.modelConfig), http.MethodPut, "/api/model-config", payload)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("full-page chat save was blocked by unchanged unsafe sections: %d %s", response.Code, response.Body.String())
+	}
+	if s.generator() != candidate || s.videoStore() != nil || s.imageStore() != nil || s.analysisGenerator() != nil {
+		t.Fatalf("unexpected runtime activation/rebuild: chat=%T video=%v image=%v analysis=%v", s.generator(), s.videoStore(), s.imageStore(), s.analysisGenerator())
+	}
+}
+
 func TestModelConfigPresentUnsafeNonChatSectionIsStillValidated(t *testing.T) {
-	stored := modelconfig.Config{Video: modelconfig.VideoConfig{APIBase: "http://127.0.0.1:8080/v1", APIKey: "legacy-video", Model: "legacy-video"}}
+	stored := modelconfig.Config{Video: modelconfig.VideoConfig{APIBase: "https://video.example.com/v1", APIKey: "video-key", Model: "video-model"}}
 	db, _ := openAtomicModelConfigTestDB(t, stored, nil)
 	s := &Server{db: db}
 
-	response := performRawUnit(http.HandlerFunc(s.modelConfig), http.MethodPut, "/api/model-config", `{"video":{"apiBase":"http://127.0.0.1:8080/v1","model":"legacy-video"}}`)
+	response := performRawUnit(http.HandlerFunc(s.modelConfig), http.MethodPut, "/api/model-config", `{"video":{"apiBase":"http://127.0.0.1:8080/v1","model":"video-model"}}`)
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("present unsafe video section was not validated: %d %s", response.Code, response.Body.String())
