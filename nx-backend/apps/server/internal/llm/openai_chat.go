@@ -354,9 +354,6 @@ func (g *OpenAIChatGenerator) requireAPIKey() error {
 
 func (g *OpenAIChatGenerator) chatMessages(input rag.GenerateInput) []openAIChatMessage {
 	messages := []openAIChatMessage{{Role: "system", Content: g.resolveSystemPrompt()}}
-	if contextMessage := buildOpenAIChatContext(input); contextMessage != "" {
-		messages = append(messages, openAIChatMessage{Role: "system", Content: contextMessage})
-	}
 	for _, message := range input.History {
 		role := strings.TrimSpace(message.Role)
 		if role != "user" && role != "assistant" {
@@ -368,54 +365,12 @@ func (g *OpenAIChatGenerator) chatMessages(input rag.GenerateInput) []openAIChat
 		}
 		messages = append(messages, openAIChatMessage{Role: role, Content: content})
 	}
-	messages = append(messages, openAIChatMessage{Role: "user", Content: strings.TrimSpace(input.Question)})
+	messages = append(messages, openAIChatMessage{Role: "user", Content: buildCompatibleChatUserMessage(input)})
 	return messages
 }
 
 func (g *OpenAIChatGenerator) resolveSystemPrompt() string {
 	return resolveCompatibleChatSystemPrompt(g.systemPrompt)
-}
-
-func buildOpenAIChatContext(input rag.GenerateInput) string {
-	var contextMessage strings.Builder
-	if input.UserProfile.Nickname != "" || input.UserProfile.MainType > 0 {
-		contextMessage.WriteString("用户档案：")
-		if nickname := strings.TrimSpace(input.UserProfile.Nickname); nickname != "" {
-			contextMessage.WriteString("昵称=" + nickname + "；")
-		}
-		if input.UserProfile.MainType > 0 {
-			contextMessage.WriteString(fmt.Sprintf("最近主型=%d号；", input.UserProfile.MainType))
-		}
-		contextMessage.WriteByte('\n')
-	}
-	if len(input.UserProfile.Memories) > 0 {
-		written := 0
-		for _, memory := range input.UserProfile.Memories {
-			memory = strings.TrimSpace(memory)
-			if memory == "" {
-				continue
-			}
-			if written == 0 {
-				contextMessage.WriteString("近期记忆：\n")
-			}
-			written++
-			contextMessage.WriteString(fmt.Sprintf("%d. %s\n", written, trimRunes(memory, 160)))
-			if written >= 6 {
-				break
-			}
-		}
-	}
-	if summary := strings.TrimSpace(input.ConversationSummary); summary != "" {
-		contextMessage.WriteString("会话前情：\n")
-		contextMessage.WriteString(trimRunes(summary, 1200) + "\n")
-	}
-	if len(input.Sources) > 0 {
-		contextMessage.WriteString("检索资料：\n")
-		for i, source := range input.Sources {
-			contextMessage.WriteString(fmt.Sprintf("%d. %s：%s\n", i+1, strings.TrimSpace(source.Title), strings.TrimSpace(source.Snippet)))
-		}
-	}
-	return strings.TrimSpace(contextMessage.String())
 }
 
 func openAIStatusError(resp *http.Response) error {
