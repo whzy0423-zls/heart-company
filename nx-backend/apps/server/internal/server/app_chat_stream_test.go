@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -67,6 +69,99 @@ func TestAppChatSessionIDFromPathRejectsInvalidPaths(t *testing.T) {
 			t.Fatalf("appChatSessionIDFromPath(%q) = id=%d ok=true, want ok=false", path, id)
 		}
 	}
+}
+
+func TestAppChatStreamingProxyConfig(t *testing.T) {
+	repoRoot := appChatStreamTestRepoRoot(t)
+	configPaths := []string{
+		"website-react/nginx.conf",
+		"nx-backend/scripts/deploy/nginx.conf",
+	}
+	requiredDirectives := []string{
+		"proxy_pass http://backend;",
+		"proxy_http_version 1.1;",
+		`proxy_set_header Connection "";`,
+		"proxy_buffering off;",
+		"proxy_cache off;",
+		"gzip off;",
+		"proxy_connect_timeout 30s;",
+		"proxy_read_timeout 180s;",
+		"proxy_send_timeout 180s;",
+		"proxy_set_header Host $host;",
+		"proxy_set_header X-Real-IP $remote_addr;",
+		"proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+		"proxy_set_header X-Forwarded-Proto $scheme;",
+	}
+
+	for _, relativePath := range configPaths {
+		t.Run(relativePath, func(t *testing.T) {
+			body, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(relativePath)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			config := string(body)
+			focusedStart := strings.Index(config, "location ^~ /api/app/chat/")
+			if focusedStart < 0 {
+				t.Fatalf("%s missing focused app chat streaming location", relativePath)
+			}
+			genericStart := strings.Index(config, "location /api/")
+			if genericStart < 0 {
+				t.Fatalf("%s missing generic /api/ location", relativePath)
+			}
+			if focusedStart > genericStart {
+				t.Fatalf("%s focused app chat location must appear before generic /api/ location", relativePath)
+			}
+
+			block := appChatNginxLocationBlock(t, config[focusedStart:])
+			normalized := strings.Join(strings.Fields(block), " ")
+			for _, directive := range requiredDirectives {
+				if !strings.Contains(normalized, strings.Join(strings.Fields(directive), " ")) {
+					t.Errorf("%s app chat location missing %q; block=%q", relativePath, directive, block)
+				}
+			}
+		})
+	}
+}
+
+func appChatStreamTestRepoRoot(t *testing.T) string {
+	t.Helper()
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller could not locate app chat stream test")
+	}
+	dir := filepath.Dir(filename)
+	for range 8 {
+		if _, err := os.Stat(filepath.Join(dir, "website-react", "nginx.conf")); err == nil {
+			if _, err := os.Stat(filepath.Join(dir, "nx-backend", "scripts", "deploy", "nginx.conf")); err == nil {
+				return dir
+			}
+		}
+		dir = filepath.Dir(dir)
+	}
+	t.Fatalf("could not locate repository root from %s", filename)
+	return ""
+}
+
+func appChatNginxLocationBlock(t *testing.T, config string) string {
+	t.Helper()
+	open := strings.IndexByte(config, '{')
+	if open < 0 {
+		t.Fatal("nginx location missing opening brace")
+	}
+	depth := 0
+	for index := open; index < len(config); index++ {
+		switch config[index] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return config[:index+1]
+			}
+		}
+	}
+	t.Fatal("nginx location missing closing brace")
+	return ""
 }
 
 func TestAppChatAskStreamFlushesFirstDeltaBeforeGenerationCompletes(t *testing.T) {
