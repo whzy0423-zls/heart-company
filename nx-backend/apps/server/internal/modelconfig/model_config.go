@@ -1,11 +1,10 @@
-// Package modelconfig 负责把"对话模型(MiniMax)"与"视频模型"的可配置参数
-// （接口地址 / 密钥 / 模型名 / GroupID）持久化到 site_configs KV 表，
-// 并在运行时与环境变量基线合并，供 server 重建对应客户端使用。
+// Package modelconfig 负责把兼容协议对话模型及视频、图片、分析模型配置
+// 持久化到 site_configs KV 表，并供 server 在运行时重建对应客户端。
 //
 // 设计要点：
 //   - 复用既有的 site_configs(key, config jsonb, update_time) 表，key 固定为 "model_config"。
-//   - DB 中仅存"覆盖值"：任何为空的字段都会回退到环境变量基线（env），
-//     这样首次部署无需写库即可工作，后台保存后才落库覆盖。
+//   - 对话模型只使用明确保存的 OpenAI/Anthropic 兼容配置，不继承 MiniMax 环境变量。
+//   - 视频、图片、分析等旧功能仍按各自规则与环境变量基线合并。
 //   - 密钥永不回显：HTTP 层负责脱敏，本包只负责存储与合并。
 package modelconfig
 
@@ -40,10 +39,6 @@ type ChatConfig struct {
 	APIKey         string `json:"apiKey"`
 	Model          string `json:"model"`
 	TimeoutSeconds int    `json:"timeoutSeconds"`
-
-	// GroupID 仅供迁移期间尚未切换到兼容协议工厂的内部调用编译使用。
-	// Deprecated: compatible chat providers do not use Group ID.
-	GroupID string `json:"-"`
 }
 
 // Normalized 返回适合保存和构造兼容协议客户端的对话配置。
@@ -54,7 +49,6 @@ func (c ChatConfig) Normalized() ChatConfig {
 		APIKey:         strings.TrimSpace(c.APIKey),
 		Model:          strings.TrimSpace(c.Model),
 		TimeoutSeconds: c.TimeoutSeconds,
-		GroupID:        strings.TrimSpace(c.GroupID),
 	}
 }
 
@@ -200,30 +194,6 @@ func UpsertStore(ctx context.Context, db *sql.DB, cfg Config) error {
 	return err
 }
 
-// ApplyChat 把覆盖值叠加到环境变量基线上，空字段回退到 base。
-func (c Config) ApplyChat(base config.MiniMaxConfig) config.MiniMaxConfig {
-	out := base
-	if v := strings.TrimSpace(c.Chat.APIBase); v != "" {
-		out.APIBase = v
-	}
-	if v := strings.TrimSpace(c.Chat.APIKey); v != "" {
-		out.APIKey = v
-	}
-	if v := strings.TrimSpace(c.Chat.GroupID); v != "" {
-		out.GroupID = v
-	}
-	if v := strings.TrimSpace(c.Chat.Model); v != "" {
-		out.Model = v
-	}
-	if c.Chat.TimeoutSeconds > 0 {
-		out.TimeoutSeconds = c.Chat.TimeoutSeconds
-	}
-	if v := strings.TrimSpace(c.Assist.SystemPrompt); v != "" {
-		out.SystemPrompt = v
-	}
-	return out
-}
-
 // ApplyVideo 把覆盖值叠加到环境变量基线上，空字段回退到 base。
 func (c Config) ApplyVideo(base config.VideoConfig) config.VideoConfig {
 	out := base
@@ -334,7 +304,10 @@ func isMiniMaxAnalysisModel(model string) bool {
 // 密钥字段为空表示"不修改"，沿用 c 中已有的值；其余字段直接覆盖（含置空）。
 func (c Config) MergeIncoming(in Config) Config {
 	out := in.trimmed()
-	if out.Chat.APIKey == "" {
+	storedChat := c.Chat.Normalized()
+	if out.Chat == (ChatConfig{}) {
+		out.Chat = storedChat
+	} else if out.Chat.APIKey == "" && out.Chat.Provider == storedChat.Provider {
 		out.Chat.APIKey = c.Chat.APIKey
 	}
 	if out.Video.APIKey == "" {
@@ -352,8 +325,11 @@ func (c Config) MergeIncoming(in Config) Config {
 	if out.DailyQuiz.APIKey == "" {
 		out.DailyQuiz.APIKey = c.DailyQuiz.APIKey
 	}
-	// AI 辅助开关：提交未带 enabled 字段时沿用已存值。
-	if out.Assist.Enabled == nil {
+	// 整个 assist 段未提交时视为局部页面保存，完整沿用已存值；
+	// 提交了 systemPrompt 但未带 enabled 时只沿用开关。
+	if in.Assist.Enabled == nil && strings.TrimSpace(in.Assist.SystemPrompt) == "" {
+		out.Assist = c.Assist
+	} else if out.Assist.Enabled == nil {
 		out.Assist.Enabled = c.Assist.Enabled
 	}
 	return out

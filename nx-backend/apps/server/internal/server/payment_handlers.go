@@ -284,7 +284,7 @@ func (s *Server) reportContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), s.chatTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), s.chatRequestTimeout())
 	defer cancel()
 
 	unlocked, err := s.miniapp.IsReportUnlocked(ctx, uid, recordID)

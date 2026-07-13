@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/modelconfig"
+	"nine-xing/nx-backend/apps/server/internal/netguard"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
@@ -116,6 +119,16 @@ type JSONCompleter interface {
 	CompleteJSON(ctx context.Context, system, user string, maxTokens int) (string, error)
 }
 
+// PingResult is the provider-neutral connection-test response exposed by the
+// management API. It deliberately contains no credentials.
+type PingResult struct {
+	OK        bool   `json:"ok"`
+	Message   string `json:"message"`
+	LatencyMs int64  `json:"latencyMs"`
+	APIBase   string `json:"apiBase"`
+	Model     string `json:"model"`
+}
+
 // ChatGenerator is the complete provider-neutral capability contract used by
 // the chat runtime. Concrete provider construction is intentionally separate.
 type ChatGenerator interface {
@@ -125,4 +138,45 @@ type ChatGenerator interface {
 	JSONCompleter
 	Ping(ctx context.Context) PingResult
 	PolishPrompt(ctx context.Context, draft, kind string) (string, error)
+}
+
+// NewChatGenerator is the single construction path for interactive chat.
+// Supplying Client is an explicit test seam; production construction always
+// uses the guarded transport and rejects local/private API bases.
+func NewChatGenerator(cfg ChatGeneratorConfig) (ChatGenerator, error) {
+	cfg.Provider = strings.ToLower(strings.TrimSpace(cfg.Provider))
+	cfg.APIBase = strings.TrimRight(strings.TrimSpace(cfg.APIBase), "/")
+	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
+	cfg.Model = strings.TrimSpace(cfg.Model)
+	if cfg.Provider != modelconfig.ProviderOpenAICompatible && cfg.Provider != modelconfig.ProviderAnthropicCompatible {
+		return nil, fmt.Errorf("chat provider must be openai-compatible or anthropic-compatible")
+	}
+	parsed, err := url.Parse(cfg.APIBase)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return nil, fmt.Errorf("chat api base must be an http(s) URL")
+	}
+	if cfg.APIKey == "" {
+		return nil, fmt.Errorf("chat api key is required")
+	}
+	if cfg.Model == "" {
+		return nil, fmt.Errorf("chat model is required")
+	}
+	if cfg.Timeout <= 0 {
+		return nil, fmt.Errorf("chat timeout must be greater than zero")
+	}
+	if cfg.Client == nil {
+		if !netguard.IsPublicHTTPURL(cfg.APIBase) {
+			return nil, fmt.Errorf("chat api base must not point to a private or local address")
+		}
+		cfg.Client = netguard.NewGuardedClient(cfg.Timeout)
+	}
+
+	switch cfg.Provider {
+	case modelconfig.ProviderOpenAICompatible:
+		return NewOpenAIChatGenerator(cfg), nil
+	case modelconfig.ProviderAnthropicCompatible:
+		return NewAnthropicChatGenerator(cfg), nil
+	default:
+		return nil, fmt.Errorf("unsupported chat provider %q", cfg.Provider)
+	}
 }

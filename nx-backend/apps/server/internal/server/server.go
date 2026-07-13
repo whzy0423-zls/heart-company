@@ -95,6 +95,7 @@ type Server struct {
 	appDailyQuizBankAdmin appDailyQuizBankAdminService
 	chatLimiter           *fixedWindowRateLimiter
 	chatTimeout           time.Duration
+	newChatGenerator      func(llm.ChatGeneratorConfig) (llm.ChatGenerator, error)
 
 	appUsers                 *appuser.Store
 	appChat                  appChatStore
@@ -137,6 +138,11 @@ var uploadPermissionCodes = []string{
 }
 
 func New(env config.Env, database *sql.DB) http.Handler {
+	s := newServer(env, database)
+	return s.withCORS(s.mux)
+}
+
+func newServer(env config.Env, database *sql.DB) *Server {
 	trustedProxyCIDRs, err := realip.ParseTrustedProxyCIDRs(env.TrustedProxyCIDRs)
 	if err != nil {
 		panic("trusted proxy cidrs: " + err.Error())
@@ -169,7 +175,10 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.miniapp = miniapp.NewStore(database)
 	s.wx = newWeChatClient(env)
 	s.pay = mustWxPayClient(env)
-	s.ragGen = llm.NewMiniMaxGenerator(env.MiniMax)
+	// Interactive chat is intentionally unconfigured until a stored compatible
+	// provider exists. Legacy MiniMax environment credentials are still used by
+	// analysis/voice features, but never as an implicit chat fallback.
+	s.ragGen = nil
 	s.analysisGen = llm.NewMiniMaxGenerator(modelconfig.Config{}.ApplyAnalysis(env.MiniMax))
 	s.ragDocs = ragstore.NewStore(database)
 	s.articles = articlestore.NewStore(database)
@@ -186,6 +195,8 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	})
 	s.ragCache = newMiniappRAGCache(2 * time.Minute)
 	s.chatLimiter = newFixedWindowRateLimiter(env.MiniappChat.RateLimitPerMinute, time.Minute)
+	// MINIAPP_CHAT_TIMEOUT_SECONDS 仅是尚未配置 compatible chat 时的旧版业务超时；
+	// 一旦加载/保存有效 chat.timeoutSeconds，运行时会在同一把锁下替换它。
 	s.chatTimeout = time.Duration(env.MiniappChat.TimeoutSeconds) * time.Second
 	if s.chatTimeout <= 0 {
 		s.chatTimeout = 28 * time.Second
@@ -224,7 +235,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 		go s.runPushAsyncRecoveryLoop(context.Background())
 		go s.runProfileCalibrationPushLoop(context.Background())
 	}
-	return s.withCORS(s.mux)
+	return s
 }
 
 func newWeChatClient(env config.Env) *wechat.Client {
@@ -235,7 +246,7 @@ func newWeChatClient(env config.Env) *wechat.Client {
 }
 
 // applyStoredModelConfig 读取 DB 中持久化的模型配置覆盖（若有），
-// 用覆盖后的凭据重建对话/视频客户端。无配置或 DB 不可用时静默回退到 env 基线。
+// 用覆盖后的凭据重建对话/视频客户端。对话不回退到 MiniMax 环境变量。
 func (s *Server) applyStoredModelConfig() {
 	cfg, ok, err := modelconfig.ReadStore(context.Background(), s.db)
 	if err != nil || !ok {
@@ -245,22 +256,66 @@ func (s *Server) applyStoredModelConfig() {
 		log.Printf("ignore unsafe stored model config: %v", err)
 		return
 	}
-	// AI 辅助关闭时不挂生成器：聊天仅走资料检索/固定兜底（rag.Service 对 nil 生成器安全）。
+	var chatGenerator llm.ChatGenerator
 	if cfg.AssistEnabled() {
-		s.ragGen = llm.NewMiniMaxGenerator(cfg.ApplyChat(s.env.MiniMax))
-	} else {
-		s.ragGen = nil
+		chatGenerator, err = s.buildChatGenerator(cfg)
+		if err != nil {
+			log.Printf("stored chat model remains unconfigured: %v", err)
+		}
 	}
-	s.analysisGen = llm.NewMiniMaxGenerator(cfg.ApplyAnalysis(s.env.MiniMax))
-	s.videos = video.NewStore(s.db, s.uploads, cfg.ApplyVideo(s.env.Video), s.uploader)
-	s.images = image.NewStore(s.uploads, cfg.ApplyImage(s.env.Image), s.uploader)
+	analysisGenerator := llm.NewMiniMaxGenerator(cfg.ApplyAnalysis(s.env.MiniMax))
+	videoStore := video.NewStore(s.db, s.uploads, cfg.ApplyVideo(s.env.Video), s.uploader)
+	imageStore := image.NewStore(s.uploads, cfg.ApplyImage(s.env.Image), s.uploader)
+
+	s.modelMu.Lock()
+	s.ragGen = chatGenerator
+	if chatGenerator != nil {
+		s.chatTimeout = time.Duration(cfg.EffectiveChat().TimeoutSeconds) * time.Second
+	}
+	s.analysisGen = analysisGenerator
+	s.videos = videoStore
+	s.images = imageStore
+	s.modelMu.Unlock()
 }
 
 // generator 返回当前生效的对话生成器；持读锁以兼容"模型配置"页面运行时重建。
 func (s *Server) generator() rag.Generator {
+	generator, _ := s.chatRuntime()
+	return generator
+}
+
+func (s *Server) chatRuntime() (rag.Generator, time.Duration) {
 	s.modelMu.RLock()
 	defer s.modelMu.RUnlock()
-	return s.ragGen
+	timeout := s.chatTimeout
+	if timeout <= 0 {
+		timeout = 28 * time.Second
+	}
+	return s.ragGen, timeout
+}
+
+func (s *Server) chatRequestTimeout() time.Duration {
+	_, timeout := s.chatRuntime()
+	return timeout
+}
+
+func (s *Server) buildChatGenerator(cfg modelconfig.Config) (llm.ChatGenerator, error) {
+	chat := cfg.EffectiveChat()
+	if err := chat.Validate(); err != nil {
+		return nil, err
+	}
+	factory := s.newChatGenerator
+	if factory == nil {
+		factory = llm.NewChatGenerator
+	}
+	return factory(llm.ChatGeneratorConfig{
+		Provider:     chat.Provider,
+		APIBase:      chat.APIBase,
+		APIKey:       chat.APIKey,
+		Model:        chat.Model,
+		SystemPrompt: cfg.Assist.SystemPrompt,
+		Timeout:      time.Duration(chat.TimeoutSeconds) * time.Second,
+	})
 }
 
 func (s *Server) analysisGenerator() *llm.MiniMaxGenerator {
@@ -319,9 +374,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/public/admin-branding-assets/", s.method(http.MethodGet, s.publicAdminBrandingAsset))
 	s.mux.HandleFunc("/api/public/admin-branding-uploads/", s.method(http.MethodGet, s.publicAdminBrandingUpload))
 	s.mux.HandleFunc("/api/admin-branding", s.requirePermission("System:Branding", s.adminBranding))
-	// 模型配置：读取/保存对话(MiniMax)与视频模型的地址/密钥/模型名，均需登录。
+	// 模型配置：读取/保存兼容协议对话模型及视频、图片、分析模型配置，均需登录。
 	s.mux.HandleFunc("/api/model-config", s.requirePermission("System:Model:Config", s.modelConfig))
-	// 对话模型连通性测试：对 MiniMax 网关做一次轻量探活，需登录。
+	// 对话模型连通性测试：通过统一 provider 工厂做一次轻量探活，需登录。
 	s.mux.HandleFunc("/api/model-config/test-chat", s.requirePermission("System:Model:Config", s.method(http.MethodPost, s.testChatModel)))
 	// ===== App API =====
 	s.mux.HandleFunc("/api/app/health", s.method(http.MethodGet, s.appHealth))
@@ -1197,7 +1252,7 @@ func (s *Server) generateImageAsset(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, result)
 }
 
-// polishPrompt 复用对话模型（MiniMax）把用户给出的方向或草稿润色成高质量的文生图/文生视频提示词。
+// polishPrompt 复用当前兼容协议对话模型把用户给出的方向或草稿润色成高质量提示词。
 func (s *Server) polishPrompt(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 	var body struct {
@@ -1213,7 +1268,9 @@ func (s *Server) polishPrompt(w http.ResponseWriter, r *http.Request) {
 	if kind == "" {
 		kind = strings.TrimSpace(body.Type)
 	}
-	gen, ok := s.generator().(*llm.MiniMaxGenerator)
+	gen, ok := s.generator().(interface {
+		PolishPrompt(context.Context, string, string) (string, error)
+	})
 	if !ok || gen == nil {
 		httpx.Fail(w, http.StatusServiceUnavailable, "AI 润色未启用，请先在模型配置中配置对话模型")
 		return
@@ -2315,10 +2372,16 @@ func buildModelConfigView(chat modelconfig.ChatConfig, vid config.VideoConfig, i
 }
 
 func validateModelConfigBases(cfg modelconfig.Config) error {
+	if err := validateExternalAPIBase("chat.apiBase", cfg.Chat.APIBase); err != nil {
+		return err
+	}
+	return validateNonChatModelConfigBases(cfg)
+}
+
+func validateNonChatModelConfigBases(cfg modelconfig.Config) error {
 	for label, apiBase := range map[string]string{
 		"analysis.apiBase":  cfg.Analysis.APIBase,
 		"admin.apiBase":     cfg.Admin.APIBase,
-		"chat.apiBase":      cfg.Chat.APIBase,
 		"dailyQuiz.apiBase": cfg.DailyQuiz.APIBase,
 		"image.apiBase":     cfg.Image.APIBase,
 		"video.apiBase":     cfg.Video.APIBase,
@@ -2376,12 +2439,41 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		// 合并：密钥留空表示沿用已存值，避免脱敏后前端回传空串清空密钥。
+		// 合并：同一 provider 的密钥留空表示沿用已存值；切换 provider 必须提交新密钥。
 		merged := stored.MergeIncoming(incoming)
-		if err := validateModelConfigBases(merged); err != nil {
+		storedChat := stored.EffectiveChat()
+		mergedChat := merged.EffectiveChat()
+		chatFieldsChanged := storedChat != mergedChat
+		promptChanged := strings.TrimSpace(stored.Assist.SystemPrompt) != strings.TrimSpace(merged.Assist.SystemPrompt)
+		assistWasEnabled := stored.AssistEnabled()
+		assistEnabled := merged.AssistEnabled()
+		assistChanged := assistWasEnabled != assistEnabled
+		needBuild := chatFieldsChanged || promptChanged || (!assistWasEnabled && assistEnabled)
+		needProbe := chatFieldsChanged || (!assistWasEnabled && assistEnabled)
+		if err := validateNonChatModelConfigBases(merged); err != nil {
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
+
+		var candidate llm.ChatGenerator
+		if needBuild {
+			candidate, err = s.buildChatGenerator(merged)
+			if err != nil {
+				httpx.Fail(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			if needProbe {
+				probeCtx, cancel := context.WithTimeout(r.Context(), time.Duration(mergedChat.TimeoutSeconds)*time.Second)
+				result := candidate.Ping(probeCtx)
+				cancel()
+				if !result.OK {
+					httpx.Fail(w, http.StatusBadRequest, firstNonEmpty(result.Message, "对话模型连通性测试失败"))
+					return
+				}
+			}
+		}
+
+		// Candidate 已验证后才持久化；只有持久化成功才做无失败运行时交换。
 		if err := modelconfig.UpsertStore(r.Context(), s.db, merged); err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, err.Error())
 			return
@@ -2396,18 +2488,21 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 		})
 
 		chat := merged.EffectiveChat()
-		legacyChat := merged.ApplyChat(s.env.MiniMax)
 		vid := merged.ApplyVideo(s.env.Video)
 		img := merged.ApplyImage(s.env.Image)
 		analysis := merged.ApplyAnalysis(s.env.MiniMax)
 		admin := merged.ApplyAdmin(s.env.MiniMax)
-		// 写锁下重建运行时客户端，使新配置立即生效。
-		// AI 辅助关闭时不挂生成器：聊天仅走资料检索/固定兜底（rag.Service 对 nil 生成器安全）。
+		// 写锁下做不再失败的指针交换，使新配置立即生效。
 		s.modelMu.Lock()
-		if merged.AssistEnabled() {
-			s.ragGen = llm.NewMiniMaxGenerator(legacyChat)
-		} else {
-			s.ragGen = nil
+		if chatFieldsChanged || promptChanged || assistChanged {
+			if assistEnabled {
+				s.ragGen = candidate
+			} else {
+				s.ragGen = nil
+			}
+			if candidate != nil {
+				s.chatTimeout = time.Duration(mergedChat.TimeoutSeconds) * time.Second
+			}
 		}
 		s.analysisGen = llm.NewMiniMaxGenerator(analysis)
 		s.videos = video.NewStore(s.db, s.uploads, vid, s.uploader)
@@ -2418,8 +2513,8 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// testChatModel 对对话模型（MiniMax）网关做一次连通性探活（POST，需登录）。
-// 入参可选：前端表单当前填写的"地址/密钥/GroupId/模型名"。密钥留空表示沿用已存配置，
+// testChatModel 通过统一兼容协议工厂做一次对话模型连通性探活（POST，需登录）。
+// 入参可选：前端表单当前填写的 provider/地址/密钥/模型名。密钥留空仅在 provider 不变时沿用，
 // 这样用户既能测"刚输入还没保存"的配置，也能直接测"当前已保存"的配置。
 // 返回结构化探活结果（ok/message/延迟），密钥一律不回传。
 func (s *Server) testChatModel(w http.ResponseWriter, r *http.Request) {
@@ -2437,17 +2532,22 @@ func (s *Server) testChatModel(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// 合并：密钥留空沿用已存值；地址/模型名以前端填写为准（含回退到 env）。
+	// 合并：密钥留空仅在 provider 不变时沿用已存值。
 	merged := stored.MergeIncoming(incoming)
 	if err := validateModelConfigBases(merged); err != nil {
 		httpx.Fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	chat := merged.ApplyChat(s.env.MiniMax)
+	chat := merged.EffectiveChat()
+	generator, err := s.buildChatGenerator(merged)
+	if err != nil {
+		httpx.Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(chat.TimeoutSeconds)*time.Second)
 	defer cancel()
-	result := llm.NewMiniMaxGenerator(chat).Ping(ctx)
+	result := generator.Ping(ctx)
 
 	httpx.OK(w, result)
 }

@@ -207,7 +207,8 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), s.chatTimeout)
+	generator, chatTimeout := s.chatRuntime()
+	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
 
 	docs, _ := s.retrieveAppDocsForQuery(ctx, body.Question, 6)
@@ -222,7 +223,6 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
 		profile.Memories = memories
 	}
-	generator := s.generator()
 	promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
 
 	ans, err := rag.NewService(docs, rag.WithGenerator(generator)).Ask(ctx, rag.AskInput{
@@ -287,7 +287,8 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), s.chatTimeout)
+	generator, chatTimeout := s.chatRuntime()
+	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
 
 	docs, _ := s.retrieveAppDocsForQuery(ctx, body.Question, 6)
@@ -305,7 +306,6 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
 		profile.Memories = memories
 	}
-	generator := s.generator()
 	promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
 
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")

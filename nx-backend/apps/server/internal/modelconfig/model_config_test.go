@@ -96,7 +96,6 @@ func TestChatConfigJSONContainsCompatibleContractWithoutGroupID(t *testing.T) {
 		Provider:       ProviderAnthropicCompatible,
 		APIBase:        "https://api.anthropic.com/v1",
 		APIKey:         "secret",
-		GroupID:        "legacy-group",
 		Model:          "claude-sonnet",
 		TimeoutSeconds: 60,
 	})
@@ -134,6 +133,62 @@ func TestEffectiveChatUsesOnlyStoredCompatibleConfig(t *testing.T) {
 	}
 }
 
+func TestMergeIncomingChatKeyRetentionDependsOnProviderIdentity(t *testing.T) {
+	t.Parallel()
+
+	stored := Config{Chat: ChatConfig{
+		Provider:       ProviderOpenAICompatible,
+		APIBase:        "https://api.openai.com/v1",
+		APIKey:         "openai-secret",
+		Model:          "gpt-model",
+		TimeoutSeconds: 30,
+	}}
+
+	unchanged := stored.MergeIncoming(Config{Chat: ChatConfig{
+		Provider:       ProviderOpenAICompatible,
+		APIBase:        "https://api.openai.com/v1",
+		Model:          "gpt-model",
+		TimeoutSeconds: 30,
+	}})
+	if unchanged.Chat.APIKey != "openai-secret" {
+		t.Fatalf("expected unchanged provider to retain its key, got %q", unchanged.Chat.APIKey)
+	}
+
+	changed := stored.MergeIncoming(Config{Chat: ChatConfig{
+		Provider:       ProviderAnthropicCompatible,
+		APIBase:        "https://api.anthropic.com/v1",
+		Model:          "claude-model",
+		TimeoutSeconds: 30,
+	}})
+	if changed.Chat.APIKey != "" {
+		t.Fatalf("expected provider change to require a new key, got %q", changed.Chat.APIKey)
+	}
+}
+
+func TestMergeIncomingPartialPagePreservesOmittedChatAssist(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	stored := Config{
+		Chat: ChatConfig{
+			Provider:       ProviderOpenAICompatible,
+			APIBase:        "https://api.openai.com/v1",
+			APIKey:         "secret",
+			Model:          "gpt-model",
+			TimeoutSeconds: 30,
+		},
+		Assist: AssistConfig{Enabled: &enabled, SystemPrompt: "保持简洁"},
+	}
+
+	merged := stored.MergeIncoming(Config{Video: VideoConfig{Model: "new-video-model"}})
+	if merged.Chat != stored.Chat.Normalized() {
+		t.Fatalf("omitted chat was changed: %+v", merged.Chat)
+	}
+	if merged.Assist.SystemPrompt != "保持简洁" || merged.Assist.Enabled == nil || !*merged.Assist.Enabled {
+		t.Fatalf("omitted assist was changed: %+v", merged.Assist)
+	}
+}
+
 func TestApplyAnalysisUsesVoiceMiniMaxCredentialsAndDefaultM3(t *testing.T) {
 	voiceBase := config.MiniMaxConfig{
 		APIBase:        "https://api.minimaxi.com",
@@ -146,7 +201,6 @@ func TestApplyAnalysisUsesVoiceMiniMaxCredentialsAndDefaultM3(t *testing.T) {
 		Chat: ChatConfig{
 			APIBase: "https://coding-play.codes",
 			APIKey:  "chat-key",
-			GroupID: "chat-group",
 			Model:   "gpt-5.5",
 		},
 		Analysis: AnalysisConfig{

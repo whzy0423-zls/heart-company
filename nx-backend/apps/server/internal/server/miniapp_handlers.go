@@ -191,7 +191,7 @@ func (s *Server) miniappChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 32*1024)
-	ctx, cancel := context.WithTimeout(r.Context(), s.chatTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), s.chatRequestTimeout())
 	defer cancel()
 
 	var body struct {

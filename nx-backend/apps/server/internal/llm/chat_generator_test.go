@@ -15,6 +15,96 @@ func (contractChatGenerator) Generate(context.Context, rag.GenerateInput) (strin
 	return "", nil
 }
 
+func TestNewChatGeneratorConstructsOnlySupportedProviders(t *testing.T) {
+	t.Parallel()
+
+	client := &http.Client{}
+	base := ChatGeneratorConfig{
+		APIBase: "http://127.0.0.1:9999/v1",
+		APIKey:  "secret",
+		Model:   "test-model",
+		Timeout: 13 * time.Second,
+		Client:  client,
+	}
+
+	tests := []struct {
+		name     string
+		provider string
+		assert   func(*testing.T, ChatGenerator)
+	}{
+		{
+			name:     "openai",
+			provider: "openai-compatible",
+			assert: func(t *testing.T, generator ChatGenerator) {
+				if _, ok := generator.(*OpenAIChatGenerator); !ok {
+					t.Fatalf("expected OpenAI generator, got %T", generator)
+				}
+			},
+		},
+		{
+			name:     "anthropic",
+			provider: "anthropic-compatible",
+			assert: func(t *testing.T, generator ChatGenerator) {
+				if _, ok := generator.(*AnthropicChatGenerator); !ok {
+					t.Fatalf("expected Anthropic generator, got %T", generator)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := base
+			cfg.Provider = tt.provider
+			generator, err := NewChatGenerator(cfg)
+			if err != nil {
+				t.Fatalf("NewChatGenerator returned error: %v", err)
+			}
+			tt.assert(t, generator)
+		})
+	}
+}
+
+func TestNewChatGeneratorRejectsUnsupportedOrIncompleteConfiguration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		cfg  ChatGeneratorConfig
+	}{
+		{name: "blank provider", cfg: ChatGeneratorConfig{APIBase: "https://api.example.com/v1", APIKey: "secret", Model: "model", Timeout: time.Second}},
+		{name: "minimax", cfg: ChatGeneratorConfig{Provider: "minimax", APIBase: "https://api.example.com/v1", APIKey: "secret", Model: "model", Timeout: time.Second}},
+		{name: "unknown", cfg: ChatGeneratorConfig{Provider: "other", APIBase: "https://api.example.com/v1", APIKey: "secret", Model: "model", Timeout: time.Second}},
+		{name: "blank base", cfg: ChatGeneratorConfig{Provider: "openai-compatible", APIKey: "secret", Model: "model", Timeout: time.Second}},
+		{name: "blank key", cfg: ChatGeneratorConfig{Provider: "openai-compatible", APIBase: "https://api.example.com/v1", Model: "model", Timeout: time.Second}},
+		{name: "blank model", cfg: ChatGeneratorConfig{Provider: "openai-compatible", APIBase: "https://api.example.com/v1", APIKey: "secret", Timeout: time.Second}},
+		{name: "blank timeout", cfg: ChatGeneratorConfig{Provider: "openai-compatible", APIBase: "https://api.example.com/v1", APIKey: "secret", Model: "model"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if generator, err := NewChatGenerator(tt.cfg); err == nil || generator != nil {
+				t.Fatalf("expected rejected configuration, got generator=%T err=%v", generator, err)
+			}
+		})
+	}
+}
+
+func TestNewChatGeneratorProductionClientRejectsLocalAPIBase(t *testing.T) {
+	t.Parallel()
+
+	generator, err := NewChatGenerator(ChatGeneratorConfig{
+		Provider: "openai-compatible",
+		APIBase:  "http://127.0.0.1:8080/v1",
+		APIKey:   "secret",
+		Model:    "model",
+		Timeout:  time.Second,
+	})
+	if err == nil || generator != nil {
+		t.Fatalf("expected local API base rejection, got generator=%T err=%v", generator, err)
+	}
+}
+
 func (contractChatGenerator) GenerateStream(context.Context, rag.GenerateInput, rag.StreamEmitter) (string, error) {
 	return "", nil
 }
