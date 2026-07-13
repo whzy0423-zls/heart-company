@@ -68,7 +68,7 @@ vi.mock('ant-design-vue', () => {
     Divider: passthrough('Divider'),
     Form,
     Input,
-    message: { success: vi.fn() },
+    message: { error: vi.fn(), success: vi.fn() },
     Row: passthrough('Row'),
     Select: defineComponent({
       inheritAttrs: false,
@@ -115,6 +115,7 @@ import {
   testChatModelApi,
   updateModelConfigApi,
 } from '#/api';
+import { message } from 'ant-design-vue';
 
 import ModelSettings from './model.vue';
 
@@ -154,6 +155,15 @@ function modelConfig(chat: Record<string, unknown> = {}) {
   };
 }
 
+async function setChatTimeout(value: string) {
+  const timeout = document.body.querySelector(
+    '[data-testid="chat-model-section"] input[type="number"]',
+  ) as HTMLInputElement;
+  timeout.value = value;
+  timeout.dispatchEvent(new Event('input', { bubbles: true }));
+  await flushVuePromises();
+}
+
 describe('model settings compatible chat configuration', () => {
   afterEach(() => {
     document.body.replaceChildren();
@@ -163,6 +173,7 @@ describe('model settings compatible chat configuration', () => {
     vi.mocked(getModelConfigApi).mockReset();
     vi.mocked(testChatModelApi).mockReset();
     vi.mocked(updateModelConfigApi).mockReset();
+    vi.mocked(message.error).mockReset();
     vi.mocked(updateModelConfigApi).mockResolvedValue(modelConfig() as any);
     vi.mocked(testChatModelApi).mockResolvedValue({
       apiBase: '',
@@ -238,12 +249,7 @@ describe('model settings compatible chat configuration', () => {
     const wrapper = mountVueComponent(ModelSettings);
     await flushVuePromises();
 
-    const timeout = document.body.querySelector(
-      '[data-testid="chat-model-section"] input[type="number"]',
-    ) as HTMLInputElement;
-    timeout.value = '75';
-    timeout.dispatchEvent(new Event('input', { bubbles: true }));
-    await flushVuePromises();
+    await setChatTimeout('75');
 
     wrapper.button('测试连通性')?.click();
     await flushVuePromises();
@@ -259,6 +265,60 @@ describe('model settings compatible chat configuration', () => {
     expect(payload).not.toHaveProperty('groupId');
     expect(wrapper.text()).toContain('最小探测请求');
     expect(wrapper.text()).not.toContain('不消耗生成额度');
+    wrapper.unmount();
+  });
+
+  it.each([
+    ['empty', ''],
+    ['zero', '0'],
+    ['negative', '-1'],
+    ['fractional', '1.5'],
+  ])('blocks save for an %s chat timeout', async (_label, value) => {
+    vi.mocked(getModelConfigApi).mockResolvedValue(
+      modelConfig({
+        provider: 'openai-compatible',
+        timeoutSeconds: 30,
+      }) as any,
+    );
+
+    const wrapper = mountVueComponent(ModelSettings);
+    await flushVuePromises();
+    await setChatTimeout(value);
+
+    wrapper.button('保存')?.click();
+    await flushVuePromises();
+
+    expect(updateModelConfigApi).not.toHaveBeenCalled();
+    expect(message.error).toHaveBeenCalledWith(
+      '对话模型超时时间必须是大于 0 的整数',
+    );
+    wrapper.unmount();
+  });
+
+  it.each([
+    ['empty', ''],
+    ['zero', '0'],
+    ['negative', '-1'],
+    ['fractional', '1.5'],
+  ])('blocks connection test for an %s chat timeout', async (_label, value) => {
+    vi.mocked(getModelConfigApi).mockResolvedValue(
+      modelConfig({
+        provider: 'anthropic-compatible',
+        timeoutSeconds: 30,
+      }) as any,
+    );
+
+    const wrapper = mountVueComponent(ModelSettings);
+    await flushVuePromises();
+    await setChatTimeout(value);
+
+    wrapper.button('测试连通性')?.click();
+    await flushVuePromises();
+
+    expect(testChatModelApi).not.toHaveBeenCalled();
+    expect(message.error).toHaveBeenCalledWith(
+      '对话模型超时时间必须是大于 0 的整数',
+    );
     wrapper.unmount();
   });
 });

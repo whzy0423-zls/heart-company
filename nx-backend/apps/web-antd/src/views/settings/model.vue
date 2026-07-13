@@ -93,14 +93,21 @@ const dailyQuizProviderOptions = [
   { label: '继承管理端', value: '' },
   ...adminProviderOptions,
 ];
+const chatTimeoutError = '对话模型超时时间必须是大于 0 的整数';
+
+function parseChatTimeout(value: unknown) {
+  if (value === '') return null;
+  const timeout = Number(value);
+  return Number.isInteger(timeout) && timeout > 0 ? timeout : null;
+}
+
 const chatTimeoutRules = [
   { message: '请输入超时时间（秒）', required: true },
   {
     validator: (_rule: unknown, value: unknown) => {
-      const timeout = Number(value);
-      return Number.isInteger(timeout) && timeout > 0
+      return parseChatTimeout(value) !== null
         ? Promise.resolve()
-        : Promise.reject(new Error('超时时间必须是大于 0 的整数'));
+        : Promise.reject(new Error(chatTimeoutError));
     },
   },
 ];
@@ -170,22 +177,29 @@ async function load() {
   }
 }
 
-function currentChatPayload(): ModelConfigPayload['chat'] {
+function currentChatPayload(): ModelConfigPayload['chat'] | null {
+  const timeoutSeconds = parseChatTimeout(form.value.chat.timeoutSeconds);
+  if (timeoutSeconds === null) {
+    message.error(chatTimeoutError);
+    return null;
+  }
   return {
     apiBase: form.value.chat.apiBase,
     apiKey: form.value.chat.apiKey,
     model: form.value.chat.model,
     provider: form.value.chat.provider,
-    timeoutSeconds: Number(form.value.chat.timeoutSeconds),
+    timeoutSeconds,
   };
 }
 
 async function save() {
   saving.value = true;
   try {
+    const chat = currentChatPayload();
+    if (!chat) return;
     const payload: ModelConfigPayload = {
       ...form.value,
-      chat: currentChatPayload(),
+      chat,
       analysis: {
         apiBase: '',
         apiKey: '',
@@ -237,7 +251,9 @@ async function testChat() {
   pingResult.value = null;
   try {
     // 携带当前表单的对话配置（密钥留空则回退到已保存/环境基线）
-    pingResult.value = await testChatModelApi(currentChatPayload());
+    const chat = currentChatPayload();
+    if (!chat) return;
+    pingResult.value = await testChatModelApi(chat);
   } finally {
     testing.value = false;
   }
