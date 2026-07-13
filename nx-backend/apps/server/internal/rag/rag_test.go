@@ -163,6 +163,39 @@ func (f *fakeGenerator) Generate(_ context.Context, input GenerateInput) (string
 	return f.answer, nil
 }
 
+type partialFailStreamingGenerator struct {
+	err error
+}
+
+func (f *partialFailStreamingGenerator) Generate(context.Context, GenerateInput) (string, error) {
+	return "", f.err
+}
+
+func (f *partialFailStreamingGenerator) GenerateStream(_ context.Context, _ GenerateInput, emit StreamEmitter) (string, error) {
+	if err := emit("部分回答"); err != nil {
+		return "", err
+	}
+	return "部分回答", f.err
+}
+
+func TestAskStreamReturnsErrorWithoutFallbackAfterPartialOutput(t *testing.T) {
+	wantErr := errors.New("stream interrupted")
+	service := NewService(nil, WithGenerator(&partialFailStreamingGenerator{err: wantErr}))
+
+	var chunks []string
+	_, err := service.AskStream(context.Background(), AskInput{Question: "我该怎么办？"}, func(delta string) error {
+		chunks = append(chunks, delta)
+		return nil
+	})
+
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected stream error, got %v", err)
+	}
+	if got := strings.Join(chunks, ""); got != "部分回答" {
+		t.Fatalf("streamed chunks = %q, want partial output only", got)
+	}
+}
+
 func TestAskStreamEmitsGeneratedChunksAndReturnsMetadata(t *testing.T) {
 	generator := &fakeGenerator{answer: "第一段，第二段。"}
 	service := NewService([]Document{{ID: "type-1", Title: "1号", Content: "1号重视原则和秩序。"}}, WithGenerator(generator))

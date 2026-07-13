@@ -186,6 +186,16 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 	if utf8.RuneCountInString(question) > 300 {
 		return Answer{}, errors.New("问题太长，请控制在 300 字以内")
 	}
+	streamStarted := false
+	trackedEmit := func(delta string) error {
+		if delta != "" {
+			streamStarted = true
+		}
+		if emit == nil {
+			return nil
+		}
+		return emit(delta)
+	}
 
 	matches := s.search(question, input.UserProfile.MainType, 4)
 	if len(matches) == 0 {
@@ -196,7 +206,10 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 				Question:            question,
 				Sources:             nil,
 				UserProfile:         input.UserProfile,
-			}, emit)
+			}, trackedEmit)
+			if err != nil && streamStarted {
+				return Answer{}, err
+			}
 			if err == nil && strings.TrimSpace(generated) != "" {
 				return Answer{
 					Answer:      strings.TrimSpace(generated),
@@ -246,7 +259,10 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 			Question:            question,
 			Sources:             sources,
 			UserProfile:         input.UserProfile,
-		}, emit)
+		}, trackedEmit)
+		if err != nil && streamStarted {
+			return Answer{}, err
+		}
 		if err == nil && strings.TrimSpace(generated) != "" {
 			return Answer{Answer: strings.TrimSpace(generated), Sources: sources, Suggestions: suggestions}, nil
 		}
