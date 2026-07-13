@@ -32,7 +32,9 @@ import EditorShell from '../site-config/components/editor-shell.vue';
 const loading = ref(true);
 const saving = ref(false);
 const route = useRoute();
-const isAdminModelOnly = computed(() => route.path.includes('/settings/admin-model'));
+const isAdminModelOnly = computed(() =>
+  route.path.includes('/settings/admin-model'),
+);
 const pageTitle = computed(() =>
   isAdminModelOnly.value ? '管理端大模型配置' : '模型配置',
 );
@@ -44,7 +46,13 @@ const pageDescription = computed(() =>
 
 // apiKey 留空表示不修改；apiKeySet 用于提示是否已配置过密钥
 const form = ref<ModelConfigPayload>({
-  chat: { apiBase: '', apiKey: '', groupId: '', model: '' },
+  chat: {
+    apiBase: '',
+    apiKey: '',
+    model: '',
+    provider: '',
+    timeoutSeconds: 30,
+  },
   video: { apiBase: '', apiKey: '', model: '' },
   image: { apiBase: '', apiKey: '', model: '' },
   analysis: { apiBase: '', apiKey: '', groupId: '', model: '' },
@@ -73,14 +81,28 @@ const analysisKeySet = ref(false);
 const adminKeySet = ref(false);
 const dailyQuizKeySet = ref(false);
 
-const providerOptions = [
+const chatProviderOptions = [
   { label: 'OpenAI 协议', value: 'openai-compatible' },
   { label: 'Anthropic 协议', value: 'anthropic-compatible' },
+];
+const adminProviderOptions = [
+  ...chatProviderOptions,
   { label: 'MiniMax 协议', value: 'minimax' },
 ];
 const dailyQuizProviderOptions = [
   { label: '继承管理端', value: '' },
-  ...providerOptions,
+  ...adminProviderOptions,
+];
+const chatTimeoutRules = [
+  { message: '请输入超时时间（秒）', required: true },
+  {
+    validator: (_rule: unknown, value: unknown) => {
+      const timeout = Number(value);
+      return Number.isInteger(timeout) && timeout > 0
+        ? Promise.resolve()
+        : Promise.reject(new Error('超时时间必须是大于 0 的整数'));
+    },
+  },
 ];
 
 onMounted(load);
@@ -94,8 +116,9 @@ async function load() {
         chat: {
           apiBase: data.chat?.apiBase ?? '',
           apiKey: '',
-          groupId: data.chat?.groupId ?? '',
           model: data.chat?.model ?? '',
+          provider: data.chat?.provider ?? '',
+          timeoutSeconds: data.chat?.timeoutSeconds ?? 30,
         },
         video: {
           apiBase: data.video?.apiBase ?? '',
@@ -147,11 +170,22 @@ async function load() {
   }
 }
 
+function currentChatPayload(): ModelConfigPayload['chat'] {
+  return {
+    apiBase: form.value.chat.apiBase,
+    apiKey: form.value.chat.apiKey,
+    model: form.value.chat.model,
+    provider: form.value.chat.provider,
+    timeoutSeconds: Number(form.value.chat.timeoutSeconds),
+  };
+}
+
 async function save() {
   saving.value = true;
   try {
     const payload: ModelConfigPayload = {
       ...form.value,
+      chat: currentChatPayload(),
       analysis: {
         apiBase: '',
         apiKey: '',
@@ -203,7 +237,7 @@ async function testChat() {
   pingResult.value = null;
   try {
     // 携带当前表单的对话配置（密钥留空则回退到已保存/环境基线）
-    pingResult.value = await testChatModelApi(form.value.chat);
+    pingResult.value = await testChatModelApi(currentChatPayload());
   } finally {
     testing.value = false;
   }
@@ -220,59 +254,89 @@ async function testChat() {
   >
     <Form v-if="form" layout="vertical">
       <template v-if="!isAdminModelOnly">
-        <Divider orientation="left">对话模型（手机端聊天窗口作答所用）</Divider>
-        <Row :gutter="24">
-          <Col :md="12" :xs="24">
-            <Form.Item label="接口地址 (API Base)">
-              <Input
-                v-model:value="form.chat.apiBase"
-                placeholder="留空则使用环境变量默认值"
-              />
-            </Form.Item>
-            <Form.Item label="模型名 (Model)">
-              <Input
-                v-model:value="form.chat.model"
-                placeholder="如 abab6.5s-chat"
-              />
-            </Form.Item>
-          </Col>
-          <Col :md="12" :xs="24">
-            <Form.Item label="Group ID">
-              <Input
-                v-model:value="form.chat.groupId"
-                placeholder="对话模型网关分配的 Group ID"
-              />
-            </Form.Item>
-            <Form.Item label="密钥 (API Key)">
-              <Input.Password
-                v-model:value="form.chat.apiKey"
-                :placeholder="
-                  chatKeySet ? '已配置，留空表示不修改' : '请输入 API Key'
-                "
-                autocomplete="new-password"
-              />
-            </Form.Item>
-            <Form.Item label="连通性测试">
-              <Button :loading="testing" @click="testChat">
-                测试连通性
-              </Button>
-              <span class="ml-2 text-xs text-gray-400">
-                对网关做一次轻量探活，不消耗生成额度
-              </span>
-            </Form.Item>
-          </Col>
-        </Row>
+        <section data-testid="chat-model-section">
+          <Divider orientation="left">
+            对话模型（手机端聊天窗口作答所用）
+          </Divider>
+          <Alert
+            v-if="!form.chat.provider"
+            class="mb-4"
+            description="请选择协议并重新填写对应 API Key 后再保存，旧聊天配置不会自动迁移。"
+            message="对话模型尚未配置"
+            show-icon
+            type="warning"
+          />
+          <Row :gutter="24">
+            <Col :md="12" :xs="24">
+              <Form.Item
+                label="协议"
+                :rules="[{ required: true, message: '请选择协议' }]"
+                required
+              >
+                <Select
+                  v-model:value="form.chat.provider"
+                  :options="chatProviderOptions"
+                  placeholder="请选择协议"
+                />
+              </Form.Item>
+              <Form.Item label="接口地址 (API Base)">
+                <Input
+                  v-model:value="form.chat.apiBase"
+                  placeholder="如 https://api.openai.com/v1 或 https://api.anthropic.com/v1"
+                />
+              </Form.Item>
+              <Form.Item label="模型名 (Model)">
+                <Input
+                  v-model:value="form.chat.model"
+                  placeholder="如 gpt-4.1-mini / claude-sonnet-4-5"
+                />
+              </Form.Item>
+            </Col>
+            <Col :md="12" :xs="24">
+              <Form.Item label="密钥 (API Key)">
+                <Input.Password
+                  v-model:value="form.chat.apiKey"
+                  :placeholder="
+                    chatKeySet ? '已配置，留空表示不修改' : '请输入 API Key'
+                  "
+                  autocomplete="new-password"
+                />
+              </Form.Item>
+              <Form.Item
+                label="超时时间（秒）"
+                :rules="chatTimeoutRules"
+                required
+              >
+                <Input
+                  v-model:value="form.chat.timeoutSeconds"
+                  min="1"
+                  placeholder="默认 30"
+                  step="1"
+                  type="number"
+                />
+              </Form.Item>
+              <Form.Item label="连通性测试">
+                <Button :loading="testing" @click="testChat">
+                  测试连通性
+                </Button>
+                <span class="ml-2 text-xs text-gray-400">
+                  会发送一次最小探测请求，可能产生少量 Token/额度
+                </span>
+              </Form.Item>
+            </Col>
+          </Row>
 
-        <Alert
-          v-if="pingResult"
-          class="mt-2"
-          :type="pingResult.ok ? 'success' : 'error'"
-          show-icon
-          :message="pingResult.ok ? '对话模型连通正常' : '对话模型连通失败'"
-          :description="`${pingResult.message}${
-            pingResult.ok ? `（耗时 ${pingResult.latencyMs}ms）` : ''
-          }`"
-        />
+          <Alert
+            v-if="pingResult"
+            class="mt-2"
+            :type="pingResult.ok ? 'success' : 'error'"
+            show-icon
+            :message="pingResult.ok ? '对话模型连通正常' : '对话模型连通失败'"
+            :description="`${pingResult.message}${
+              pingResult.ok ? `（耗时 ${pingResult.latencyMs}ms）` : ''
+            }`"
+          />
+        </section>
 
         <Divider orientation="left">视频模型</Divider>
         <Row :gutter="24">
@@ -387,7 +451,7 @@ async function testChat() {
           <Form.Item label="协议">
             <Select
               v-model:value="form.admin.provider"
-              :options="providerOptions"
+              :options="adminProviderOptions"
             />
           </Form.Item>
           <Form.Item label="接口地址 (API Base)">
@@ -478,7 +542,9 @@ async function testChat() {
             <Input.Password
               v-model:value="form.dailyQuiz.apiKey"
               :placeholder="
-                dailyQuizKeySet ? '已单独配置，留空表示不修改' : '留空继承管理端密钥'
+                dailyQuizKeySet
+                  ? '已单独配置，留空表示不修改'
+                  : '留空继承管理端密钥'
               "
               autocomplete="new-password"
             />
