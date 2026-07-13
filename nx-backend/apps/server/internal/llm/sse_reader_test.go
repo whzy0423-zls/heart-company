@@ -112,6 +112,50 @@ func TestSSEReaderRejectsEventOverOneMiBBoundary(t *testing.T) {
 	}
 }
 
+func TestSSEReaderAcceptsMultilineCRLFEventExactlyAtOneMiBBoundary(t *testing.T) {
+	t.Parallel()
+
+	const firstLine = "event: delta\r\n"
+	const secondLine = "data: first\r\n"
+	const finalPrefix = "data: "
+	const finalSuffix = "\r\n"
+	fixedBytes := len(firstLine) + len(secondLine) + len(finalPrefix) + len(finalSuffix)
+	payload := strings.Repeat("x", maxSSEEventBytes-fixedBytes)
+	stream := firstLine + secondLine + finalPrefix + payload + finalSuffix + "\r\n"
+
+	var got sseEvent
+	err := readSSE(context.Background(), strings.NewReader(stream), func(event sseEvent) error {
+		got = event
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("exactly 1 MiB CRLF event should be accepted: %v", err)
+	}
+	if got.Event != "delta" || got.Data != "first\n"+payload {
+		t.Fatalf("unexpected event: name=%q data length=%d", got.Event, len(got.Data))
+	}
+}
+
+func TestSSEReaderRejectsMultilineCRLFEventOverOneMiBBoundary(t *testing.T) {
+	t.Parallel()
+
+	const firstLine = "event: delta\r\n"
+	const secondLine = "data: first\r\n"
+	const finalPrefix = "data: "
+	const finalSuffix = "\r\n"
+	fixedBytes := len(firstLine) + len(secondLine) + len(finalPrefix) + len(finalSuffix)
+	payload := strings.Repeat("x", maxSSEEventBytes-fixedBytes+1)
+	stream := firstLine + secondLine + finalPrefix + payload + finalSuffix + "\r\n"
+
+	err := readSSE(context.Background(), strings.NewReader(stream), func(sseEvent) error {
+		t.Fatal("oversized CRLF event must not be emitted")
+		return nil
+	})
+	if !errors.Is(err, ErrSSEEventTooLarge) {
+		t.Fatalf("expected ErrSSEEventTooLarge, got %v", err)
+	}
+}
+
 func TestSSEReaderReturnsConsumerErrorUnchanged(t *testing.T) {
 	t.Parallel()
 

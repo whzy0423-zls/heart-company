@@ -82,7 +82,6 @@ func readSSE(ctx context.Context, stream io.Reader, emit sseEmitter) error {
 		}
 
 		if len(rawLine) > 0 {
-			terminated := rawLine[len(rawLine)-1] == '\n'
 			line := bytes.TrimSuffix(rawLine, []byte("\n"))
 			line = bytes.TrimSuffix(line, []byte("\r"))
 			if len(line) == 0 {
@@ -90,11 +89,7 @@ func readSSE(ctx context.Context, stream io.Reader, emit sseEmitter) error {
 					return err
 				}
 			} else {
-				logicalBytes := len(line)
-				if terminated {
-					logicalBytes++
-				}
-				eventBytes += logicalBytes
+				eventBytes += len(rawLine)
 				if eventBytes > maxSSEEventBytes {
 					return fmt.Errorf("%w: maximum %d bytes", ErrSSEEventTooLarge, maxSSEEventBytes)
 				}
