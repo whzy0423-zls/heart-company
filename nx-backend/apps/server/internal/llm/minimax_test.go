@@ -3,10 +3,13 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/rag"
@@ -17,6 +20,429 @@ func newLocalMiniMaxGenerator(upstream *httptest.Server, cfg config.MiniMaxConfi
 	generator := NewMiniMaxGenerator(cfg)
 	generator.client = upstream.Client()
 	return generator
+}
+
+func TestMiniMaxGeneratorGenerateStreamEmitsBeforeUpstreamCompletes(t *testing.T) {
+	firstFlushed := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseSecond:
+		default:
+			close(releaseSecond)
+		}
+	}()
+	requestErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/text/chatcompletion_v2" {
+			requestErr <- fmt.Errorf("unexpected endpoint: %s", r.URL.Path)
+			return
+		}
+		if r.URL.Query().Get("GroupId") != "test-group" {
+			requestErr <- fmt.Errorf("unexpected GroupId: %s", r.URL.RawQuery)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer test-key" {
+			requestErr <- fmt.Errorf("unexpected authorization: %s", r.Header.Get("Authorization"))
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			requestErr <- err
+			return
+		}
+		encoded, _ := json.Marshal(body)
+		for _, want := range []string{"MiniMax-M3", "测试系统提示", "现在怎么办？", "先稳住情绪"} {
+			if !strings.Contains(string(encoded), want) {
+				requestErr <- fmt.Errorf("request missing %q: %s", want, encoded)
+				return
+			}
+		}
+		if body["stream"] != true {
+			requestErr <- fmt.Errorf("expected stream=true, got %+v", body["stream"])
+			return
+		}
+		if body["tokens_to_generate"] != float64(360) {
+			requestErr <- fmt.Errorf("unexpected token budget: %+v", body["tokens_to_generate"])
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"先听你说。\"}}]}\n\n")
+		w.(http.Flusher).Flush()
+		close(firstFlushed)
+		<-releaseSecond
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"我们慢慢来。\"}}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{
+		APIKey:       "test-key",
+		GroupID:      "test-group",
+		Model:        "MiniMax-M3",
+		SystemPrompt: "测试系统提示",
+	})
+	emitted := make(chan string, 2)
+	result := make(chan struct {
+		answer string
+		err    error
+	}, 1)
+	go func() {
+		answer, err := generator.GenerateStream(context.Background(), rag.GenerateInput{
+			Question: "现在怎么办？",
+			Sources:  []rag.Source{{Title: "资料", Snippet: "先稳住情绪"}},
+		}, func(delta string) error {
+			emitted <- delta
+			return nil
+		})
+		result <- struct {
+			answer string
+			err    error
+		}{answer: answer, err: err}
+	}()
+
+	select {
+	case <-firstFlushed:
+	case err := <-requestErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("upstream did not flush the first event")
+	}
+	select {
+	case got := <-emitted:
+		if got != "先听你说。" {
+			t.Fatalf("unexpected first delta: %q", got)
+		}
+	case got := <-result:
+		t.Fatalf("GenerateStream completed before the upstream second event: %+v", got)
+	case <-time.After(time.Second):
+		t.Fatal("first delta was not emitted while upstream was still blocked")
+	}
+	select {
+	case got := <-result:
+		t.Fatalf("GenerateStream completed before release: %+v", got)
+	default:
+	}
+	close(releaseSecond)
+
+	select {
+	case got := <-emitted:
+		if got != "我们慢慢来。" {
+			t.Fatalf("unexpected second delta: %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second delta was not emitted")
+	}
+	select {
+	case got := <-result:
+		if got.err != nil {
+			t.Fatalf("GenerateStream returned error: %v", got.err)
+		}
+		if got.answer != "先听你说。我们慢慢来。" {
+			t.Fatalf("unexpected complete answer: %q", got.answer)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("GenerateStream did not complete")
+	}
+}
+
+func TestMiniMaxGeneratorGenerateStreamParsesSSEVariants(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "LF OpenAI delta content",
+			body: "data: {\"choices\":[{\"delta\":{\"content\":\"甲\"}}]}\n\n" +
+				"data: [DONE]\n\n",
+			want: "甲",
+		},
+		{
+			name: "CRLF MiniMax string delta",
+			body: "data: {\"choices\":[{\"delta\":\"乙\"}]}\r\n\r\n" +
+				"data: [DONE]\r\n\r\n",
+			want: "乙",
+		},
+		{
+			name: "multiple events and messages text",
+			body: ": keepalive\n\n" +
+				"data: {\"choices\":[{\"messages\":[{\"text\":\"丙\"}]}]}\n\n" +
+				"data: {\"choices\":[{\"text\":\"丁\"}]}\n\n" +
+				"data: {\"usage\":{\"total_tokens\":2}}\n\n" +
+				"data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n" +
+				"data: [DONE]\n\n",
+			want: "丙丁",
+		},
+		{
+			name: "message content compatibility",
+			body: "event: message\n" +
+				"data: {\"choices\":[{\"message\":{\"content\":\"戊\"}}]}\n\n",
+			want: "戊",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprint(w, tt.body)
+			}))
+			defer server.Close()
+
+			generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key"})
+			var emitted strings.Builder
+			answer, err := generator.GenerateStream(context.Background(), rag.GenerateInput{Question: "test"}, func(delta string) error {
+				emitted.WriteString(delta)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("GenerateStream returned error: %v", err)
+			}
+			if answer != tt.want || emitted.String() != tt.want {
+				t.Fatalf("answer/emitted = %q/%q, want %q", answer, emitted.String(), tt.want)
+			}
+		})
+	}
+}
+
+func TestMiniMaxGeneratorGenerateStreamDoesNotDuplicateFinalSnapshot(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":\"你\"}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"message\":{\"content\":\"你好\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key"})
+	var emitted strings.Builder
+	answer, err := generator.GenerateStream(context.Background(), rag.GenerateInput{Question: "test"}, func(delta string) error {
+		emitted.WriteString(delta)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream returned error: %v", err)
+	}
+	if answer != "你好" || emitted.String() != "你好" {
+		t.Fatalf("answer/emitted = %q/%q, want deduplicated snapshot %q", answer, emitted.String(), "你好")
+	}
+}
+
+func TestMiniMaxGeneratorGenerateStreamDoesNotUseClientTotalTimeout(t *testing.T) {
+	firstFlushed := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseSecond:
+		default:
+			close(releaseSecond)
+		}
+	}()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":\"长\"}]}\n\n")
+		w.(http.Flusher).Flush()
+		close(firstFlushed)
+		<-releaseSecond
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":\"答\"}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key"})
+	generator.client.Timeout = 20 * time.Millisecond
+	result := make(chan error, 1)
+	go func() {
+		answer, err := generator.GenerateStream(context.Background(), rag.GenerateInput{Question: "test"}, func(string) error { return nil })
+		if err == nil && answer != "长答" {
+			err = fmt.Errorf("unexpected answer: %q", answer)
+		}
+		result <- err
+	}()
+	select {
+	case <-firstFlushed:
+	case <-time.After(time.Second):
+		t.Fatal("upstream did not flush")
+	}
+	time.Sleep(60 * time.Millisecond)
+	close(releaseSecond)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("stream must outlive the client's total timeout: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("GenerateStream did not complete")
+	}
+}
+
+func TestMiniMaxGeneratorGenerateStreamHandlesDelimiterAcrossReads(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		for _, part := range []string{
+			"data: {\"choices\":[{\"delta\":\"分片\"}]}\r",
+			"\n\r",
+			"\n",
+			"data: [DONE]\n",
+			"\n",
+		} {
+			_, _ = fmt.Fprint(w, part)
+			flusher.Flush()
+		}
+	}))
+	defer server.Close()
+
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key"})
+	answer, err := generator.GenerateStream(context.Background(), rag.GenerateInput{Question: "test"}, func(string) error { return nil })
+	if err != nil {
+		t.Fatalf("GenerateStream returned error: %v", err)
+	}
+	if answer != "分片" {
+		t.Fatalf("unexpected answer: %q", answer)
+	}
+}
+
+func TestMiniMaxGeneratorGenerateStreamRejectsProtocolErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantError  string
+	}{
+		{name: "non 2xx", statusCode: http.StatusBadGateway, body: "upstream unavailable", wantError: "请求失败(502)"},
+		{name: "SSE error event", body: "event: error\ndata: {\"message\":\"限流了\"}\n\n", wantError: "限流了"},
+		{name: "plain text SSE error event", body: "event: error\ndata: rate limited\n\n", wantError: "rate limited"},
+		{name: "error JSON", body: "data: {\"error\":{\"message\":\"鉴权失败\"}}\n\n", wantError: "鉴权失败"},
+		{name: "base response error", body: "data: {\"base_resp\":{\"status_code\":1001,\"status_msg\":\"参数错误\"}}\n\n", wantError: "参数错误"},
+		{name: "malformed JSON", body: "data: {not-json}\n\n", wantError: "响应解析失败"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				statusCode := tt.statusCode
+				if statusCode == 0 {
+					statusCode = http.StatusOK
+				}
+				w.WriteHeader(statusCode)
+				_, _ = fmt.Fprint(w, tt.body)
+			}))
+			defer server.Close()
+
+			generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key"})
+			answer, err := generator.GenerateStream(context.Background(), rag.GenerateInput{Question: "test"}, func(string) error { return nil })
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("answer/error = %q/%v, want error containing %q", answer, err, tt.wantError)
+			}
+			if answer != "" {
+				t.Fatalf("error body must not become an answer: %q", answer)
+			}
+		})
+	}
+}
+
+func TestMiniMaxGeneratorGenerateStreamRejectsOversizedEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":%q}]}\n\n", strings.Repeat("x", miniMaxMaxStreamEventBytes))
+	}))
+	defer server.Close()
+
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key"})
+	_, err := generator.GenerateStream(context.Background(), rag.GenerateInput{Question: "test"}, func(string) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "事件过大") {
+		t.Fatalf("expected oversized event error, got %v", err)
+	}
+}
+
+func TestMiniMaxGeneratorGenerateStreamAcceptsEventAtSizeLimit(t *testing.T) {
+	prefix := "data: {\"choices\":[{\"delta\":\""
+	suffix := "\"}]}\n"
+	delta := strings.Repeat("x", miniMaxMaxStreamEventBytes-len(prefix)-len(suffix))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, prefix+delta+suffix+"\n")
+	}))
+	defer server.Close()
+
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key"})
+	answer, err := generator.GenerateStream(context.Background(), rag.GenerateInput{Question: "test"}, nil)
+	if err != nil {
+		t.Fatalf("event at size limit must be accepted: %v", err)
+	}
+	if answer != delta {
+		t.Fatalf("unexpected answer length: got %d, want %d", len(answer), len(delta))
+	}
+}
+
+func TestMiniMaxGeneratorGenerateStreamPropagatesContextCancellation(t *testing.T) {
+	firstFlushed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":\"第一段\"}]}\n\n")
+		w.(http.Flusher).Flush()
+		close(firstFlushed)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key"})
+	emitted := make(chan string, 1)
+	result := make(chan error, 1)
+	go func() {
+		_, err := generator.GenerateStream(ctx, rag.GenerateInput{Question: "test"}, func(delta string) error {
+			emitted <- delta
+			return nil
+		})
+		result <- err
+	}()
+
+	select {
+	case <-firstFlushed:
+	case <-time.After(time.Second):
+		t.Fatal("upstream did not flush")
+	}
+	select {
+	case got := <-emitted:
+		if got != "第一段" {
+			t.Fatalf("unexpected delta: %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first delta was not emitted")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context cancellation, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("GenerateStream did not stop after cancellation")
+	}
+}
+
+func TestMiniMaxGeneratorGenerateStreamPropagatesEmitterError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":\"内容\"}]}\n\n")
+	}))
+	defer server.Close()
+
+	wantErr := errors.New("client disconnected")
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key"})
+	_, err := generator.GenerateStream(context.Background(), rag.GenerateInput{Question: "test"}, func(string) error {
+		return wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected emitter error, got %v", err)
+	}
+}
+
+func TestMiniMaxGeneratorGenerateStreamRequiresAPIKey(t *testing.T) {
+	_, err := NewMiniMaxGenerator(config.MiniMaxConfig{}).GenerateStream(context.Background(), rag.GenerateInput{Question: "hi"}, nil)
+	if err == nil {
+		t.Fatal("expected missing api key error")
+	}
 }
 
 func TestMiniMaxGeneratorSendsRAGContext(t *testing.T) {

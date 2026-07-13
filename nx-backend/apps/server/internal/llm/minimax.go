@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -17,6 +18,8 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/netguard"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
+
+const miniMaxMaxStreamEventBytes = 1024 * 1024
 
 type MiniMaxGenerator struct {
 	apiBase      string
@@ -174,6 +177,256 @@ func (g *MiniMaxGenerator) Generate(ctx context.Context, input rag.GenerateInput
 		return "", fmt.Errorf("MiniMax 未返回文本回答")
 	}
 	return strings.TrimSpace(answer), nil
+}
+
+// GenerateStream requests MiniMax's SSE response and forwards each model delta
+// as soon as it arrives. It intentionally does not buffer the successful
+// response body so callers can flush deltas to their clients in real time.
+func (g *MiniMaxGenerator) GenerateStream(ctx context.Context, input rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+	if g.apiKey == "" {
+		return "", fmt.Errorf("请先配置 MINIMAX_API_KEY")
+	}
+
+	body := map[string]any{
+		"model":              g.model,
+		"temperature":        0.55,
+		"tokens_to_generate": 360,
+		"stream":             true,
+		"messages": []map[string]string{
+			{"role": "system", "content": g.resolveSystemPrompt()},
+			{"role": "user", "content": buildUserPrompt(input)},
+		},
+	}
+	payload, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.endpoint("/v1/text/chatcompletion_v2"), bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+g.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	streamClient := *g.client
+	streamClient.Timeout = 0
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+		return "", fmt.Errorf("MiniMax 请求失败(%d): %s", resp.StatusCode, compact(raw))
+	}
+
+	answer, err := consumeMiniMaxStream(ctx, resp.Body, emit)
+	if err != nil {
+		return "", err
+	}
+	answer = strings.TrimSpace(answer)
+	if answer == "" {
+		return "", fmt.Errorf("MiniMax 未返回文本回答")
+	}
+	return answer, nil
+}
+
+func consumeMiniMaxStream(ctx context.Context, body io.Reader, emit rag.StreamEmitter) (string, error) {
+	reader := bufio.NewReaderSize(body, 32*1024)
+	var answer strings.Builder
+	var eventData strings.Builder
+	eventType := ""
+	eventBytes := 0
+
+	dispatch := func() (bool, error) {
+		data := strings.TrimSpace(eventData.String())
+		defer func() {
+			eventType = ""
+			eventData.Reset()
+			eventBytes = 0
+		}()
+		if data == "" {
+			return false, nil
+		}
+		if data == "[DONE]" {
+			return true, nil
+		}
+
+		if eventType == "error" {
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(data), &payload); err == nil {
+				return false, miniMaxStreamEventError(payload, data)
+			}
+			return false, fmt.Errorf("MiniMax 返回错误: %s", compact([]byte(data)))
+		}
+
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(data), &payload); err != nil {
+			return false, fmt.Errorf("MiniMax 流响应解析失败: %w", err)
+		}
+		if err := miniMaxStreamPayloadError(payload); err != nil {
+			return false, err
+		}
+
+		delta := findString(payload,
+			"choices.0.delta.content",
+			"choices.0.delta.text",
+			"choices.0.delta",
+			"delta.content",
+			"delta.text",
+			"delta",
+			"data.choices.0.delta.content",
+			"data.choices.0.delta",
+		)
+		if delta == "" {
+			snapshot := findString(payload,
+				"choices.0.messages.0.text",
+				"choices.0.messages.0.content",
+				"choices.0.message.content",
+				"choices.0.message.text",
+				"choices.0.text",
+				"reply",
+				"data.reply",
+				"data.choices.0.messages.0.text",
+				"data.choices.0.message.content",
+			)
+			accumulated := answer.String()
+			switch {
+			case snapshot == "":
+				return false, nil
+			case strings.HasPrefix(snapshot, accumulated):
+				delta = strings.TrimPrefix(snapshot, accumulated)
+			case strings.HasPrefix(accumulated, snapshot):
+				return false, nil
+			default:
+				delta = snapshot
+			}
+		}
+		if delta == "" {
+			return false, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if emit != nil {
+			if err := emit(delta); err != nil {
+				return false, err
+			}
+		}
+		answer.WriteString(delta)
+		return false, nil
+	}
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		line, readErr := readMiniMaxStreamLine(reader, miniMaxMaxStreamEventBytes-eventBytes+2)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return "", ctxErr
+			}
+			return "", readErr
+		}
+		if len(line) > 0 {
+			line = bytes.TrimSuffix(line, []byte("\n"))
+			line = bytes.TrimSuffix(line, []byte("\r"))
+			if len(line) == 0 {
+				done, err := dispatch()
+				if err != nil {
+					return "", err
+				}
+				if done {
+					return answer.String(), nil
+				}
+			} else {
+				eventBytes += len(line) + 1
+				if eventBytes > miniMaxMaxStreamEventBytes {
+					return "", fmt.Errorf("MiniMax 流事件过大（上限 %d 字节）", miniMaxMaxStreamEventBytes)
+				}
+				if line[0] == ':' {
+					continue
+				}
+				field, value, found := bytes.Cut(line, []byte(":"))
+				if !found {
+					value = nil
+				}
+				value = bytes.TrimPrefix(value, []byte(" "))
+				switch string(field) {
+				case "event":
+					eventType = string(value)
+				case "data":
+					if eventData.Len() > 0 {
+						eventData.WriteByte('\n')
+					}
+					eventData.Write(value)
+				}
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			done, err := dispatch()
+			if err != nil {
+				return "", err
+			}
+			_ = done
+			return answer.String(), nil
+		}
+	}
+}
+
+func readMiniMaxStreamLine(reader *bufio.Reader, maxBytes int) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, fmt.Errorf("MiniMax 流事件过大（上限 %d 字节）", miniMaxMaxStreamEventBytes)
+	}
+	line := make([]byte, 0, min(maxBytes, 32*1024))
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		if len(line)+len(fragment) > maxBytes {
+			return nil, fmt.Errorf("MiniMax 流事件过大（上限 %d 字节）", miniMaxMaxStreamEventBytes)
+		}
+		line = append(line, fragment...)
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return line, err
+	}
+}
+
+func miniMaxStreamPayloadError(payload map[string]any) error {
+	if err := baseRespError(payload); err != nil {
+		return err
+	}
+	errorValue, ok := payload["error"]
+	if !ok || errorValue == nil {
+		return nil
+	}
+	switch value := errorValue.(type) {
+	case string:
+		if strings.TrimSpace(value) != "" {
+			return fmt.Errorf("MiniMax 返回错误: %s", strings.TrimSpace(value))
+		}
+	case map[string]any:
+		message := findString(value, "message", "msg", "status_msg")
+		if strings.TrimSpace(message) != "" {
+			return fmt.Errorf("MiniMax 返回错误: %s", strings.TrimSpace(message))
+		}
+	}
+	return fmt.Errorf("MiniMax 返回错误")
+}
+
+func miniMaxStreamEventError(payload map[string]any, raw string) error {
+	if err := miniMaxStreamPayloadError(payload); err != nil {
+		return err
+	}
+	message := findString(payload, "message", "msg", "status_msg")
+	if strings.TrimSpace(message) == "" {
+		message = compact([]byte(raw))
+	}
+	if message == "" {
+		message = "MiniMax 流返回错误事件"
+	}
+	return fmt.Errorf("MiniMax 返回错误: %s", message)
 }
 
 func (g *MiniMaxGenerator) SummarizeConversation(ctx context.Context, previousSummary string, messages []rag.Message) (string, error) {
