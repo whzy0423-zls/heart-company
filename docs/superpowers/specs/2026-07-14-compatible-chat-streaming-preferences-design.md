@@ -46,6 +46,8 @@ timeoutSeconds: integer
 
 保存顺序固定为：合并输入并校验 → 构造候选生成器并执行最小探测 → 持久化配置 → 在锁内进行不会失败的实例交换。任何前置步骤失败时，数据库与运行时实例均保持旧值。provider 发生变化时必须重新提交 API key，不得继承上一供应商的密钥。配置校验与“测试连接”必须走同一个工厂。未知 provider、空 provider、缺少 API key/model 或不合法超时均返回明确错误。
 
+模型配置接口仍是整页统一保存，因此只有聊天字段实际变化，或 `assist.enabled` 从关闭切到开启时才执行聊天探测。修改视频、图片、管理任务等无关配置不得消耗聊天额度，也不得因为聊天尚未配置而被阻塞。
+
 ## Provider 适配器
 
 ### 公共接口
@@ -57,10 +59,11 @@ Generate(ctx, input) (string, error)
 GenerateStream(ctx, input, emit) (string, error)
 Ping(ctx) PingResult
 SummarizeConversation(ctx, input) (string, error)
-PolishPrompt(ctx, prompt) (string, error)
+PolishPrompt(ctx, draft, kind) (string, error)
+CompleteJSON(ctx, system, user, maxTokens) (string, error)
 ```
 
-公共层负责输入上下文、最终文本累积和错误分类；适配器只负责请求构造、鉴权、上游响应解析和原生错误提取。现有 `rag.ConversationSummarizer` 和提示词润色调用必须改为 provider-neutral 能力，不能继续断言 `*MiniMaxGenerator`。
+公共层负责输入上下文、最终文本累积和错误分类；适配器只负责请求构造、鉴权、上游响应解析和原生错误提取。现有 `rag.ConversationSummarizer` 必须保留 `(previousSummary, messages)` 语义，提示词润色必须保留 `(draft, kind)` 的图像/视频区分；偏好模型提取使用不混入 RAG/人设的窄 `CompleteJSON` 能力。它们都改为 provider-neutral 能力，不能继续断言 `*MiniMaxGenerator`。
 
 ### OpenAI-compatible
 
@@ -82,7 +85,7 @@ PolishPrompt(ctx, prompt) (string, error)
 
 动态 `apiBase` 必须继续使用现有 `netguard` 公网 URL 校验和受保护 transport，拒绝 localhost、私网地址、危险重定向和 DNS rebinding。测试通过注入 HTTP client/transport 使用本地 `httptest.Server`，不得为测试放宽生产校验。
 
-超时分为三层：provider 请求总上限、聊天 handler 总业务上限、SSE 空闲上限。Flutter 不使用普通 response receive timeout，但后端仍保留有限的总时长和空闲时长；配置优先级必须明确，不能让旧的 `MINIAPP_CHAT_TIMEOUT_SECONDS` 静默覆盖后台模型超时。
+超时分为三层：受保护 transport 的连接/响应头上限、`chat.timeoutSeconds` 的端到端聊天总上限、短于总上限且只由有效模型 delta 重置的 provider SSE 空闲上限。兼容聊天启用后，旧的 `MINIAPP_CHAT_TIMEOUT_SECONDS` 不再静默覆盖后台值，只保留为旧环境回退。Flutter 不使用普通 response receive timeout，但后端仍保留有限的总时长和 provider 空闲时长；出站 heartbeat 不能重置 provider 空闲计时。
 
 ### 统一输出
 
@@ -133,7 +136,7 @@ updatedAt
 
 当前消息中的明确指令直接进入本轮 prompt，因此首次说“不要叫我亲爱的”“以后回答短一点”时，本轮回答就必须遵守，不能等待异步提取完成。
 
-常见明确表达由本地确定性规则在生成前识别为本轮 overlay，并同步持久化，至少在发送成功 `done` 前完成；因此 AI 不能在数据库写入失败时伪装“已经记住”。即使本轮模型生成失败，用户明确表达的长期新增、取消或忘记指令仍然保留，因为它本身就是独立的用户设置操作。
+常见明确表达由本地确定性规则在生成前识别为本轮 overlay，并同步持久化，至少在发送成功 `done` 前完成；因此 AI 不能在数据库写入失败时伪装“已经记住”。明确的长期新增、取消或忘记指令写入失败时，本轮在调用模型前返回可重试错误；写入成功后即使模型生成失败，该设置仍然保留，因为它本身就是独立的用户设置操作。
 
 模型只异步补充确定性规则无法识别、但明显属于交流风格的偏好；使用独立 bounded context 和小并发槽，不依赖请求 context。模型提取失败不影响主回答，也不得承诺已记住。常见明确表达包括：
 
