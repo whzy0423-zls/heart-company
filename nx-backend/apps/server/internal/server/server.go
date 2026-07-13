@@ -2187,10 +2187,11 @@ func (s *Server) adminBranding(w http.ResponseWriter, r *http.Request) {
 // 仅以布尔位告知当前是否已配置密钥（用于前端 placeholder 提示）。
 type modelConfigView struct {
 	Chat struct {
-		APIBase   string `json:"apiBase"`
-		GroupID   string `json:"groupId"`
-		Model     string `json:"model"`
-		APIKeySet bool   `json:"apiKeySet"`
+		Provider       string `json:"provider"`
+		APIBase        string `json:"apiBase"`
+		Model          string `json:"model"`
+		TimeoutSeconds int    `json:"timeoutSeconds"`
+		APIKeySet      bool   `json:"apiKeySet"`
 	} `json:"chat"`
 	Video struct {
 		APIBase   string `json:"apiBase"`
@@ -2235,10 +2236,11 @@ func modelConfigAuditSnapshot(cfg modelconfig.Config) map[string]any {
 	return map[string]any{
 		"assistEnabled": cfg.AssistEnabled(),
 		"chat": map[string]any{
-			"apiBase":   cfg.Chat.APIBase,
-			"apiKeySet": cfg.Chat.APIKey != "",
-			"groupId":   cfg.Chat.GroupID,
-			"model":     cfg.Chat.Model,
+			"provider":       cfg.Chat.Provider,
+			"apiBase":        cfg.Chat.APIBase,
+			"apiKeySet":      cfg.Chat.APIKey != "",
+			"model":          cfg.Chat.Model,
+			"timeoutSeconds": cfg.Chat.TimeoutSeconds,
 		},
 		"video": map[string]any{
 			"apiBase":   cfg.Video.APIBase,
@@ -2278,11 +2280,12 @@ func modelConfigAuditSnapshot(cfg modelconfig.Config) map[string]any {
 // buildModelConfigView 根据 env+DB 覆盖后的生效配置构造脱敏视图。
 // dailyQuiz 返回的是每日题的单独覆盖值；留空字段在实际生成时继承 admin。
 // stored 用于回显 AI 辅助开关与系统提示词（提示词非密钥，明文回显）。
-func buildModelConfigView(chat config.MiniMaxConfig, vid config.VideoConfig, img config.ImageConfig, analysis config.MiniMaxConfig, admin modelconfig.AdminModelConfig, dailyQuiz modelconfig.CompatibleModelConfig, stored modelconfig.Config) modelConfigView {
+func buildModelConfigView(chat modelconfig.ChatConfig, vid config.VideoConfig, img config.ImageConfig, analysis config.MiniMaxConfig, admin modelconfig.AdminModelConfig, dailyQuiz modelconfig.CompatibleModelConfig, stored modelconfig.Config) modelConfigView {
 	var view modelConfigView
+	view.Chat.Provider = chat.Provider
 	view.Chat.APIBase = chat.APIBase
-	view.Chat.GroupID = chat.GroupID
 	view.Chat.Model = chat.Model
+	view.Chat.TimeoutSeconds = chat.TimeoutSeconds
 	view.Chat.APIKeySet = strings.TrimSpace(chat.APIKey) != ""
 	view.Video.APIBase = vid.APIBase
 	view.Video.Model = vid.Model
@@ -2358,7 +2361,7 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		chat := stored.ApplyChat(s.env.MiniMax)
+		chat := stored.EffectiveChat()
 		admin := stored.ApplyAdmin(s.env.MiniMax)
 		httpx.OK(w, buildModelConfigView(chat, stored.ApplyVideo(s.env.Video), stored.ApplyImage(s.env.Image), stored.ApplyAnalysis(s.env.MiniMax), admin, stored.DailyQuiz, stored))
 
@@ -2392,7 +2395,8 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 			Summary:    "更新模型配置",
 		})
 
-		chat := merged.ApplyChat(s.env.MiniMax)
+		chat := merged.EffectiveChat()
+		legacyChat := merged.ApplyChat(s.env.MiniMax)
 		vid := merged.ApplyVideo(s.env.Video)
 		img := merged.ApplyImage(s.env.Image)
 		analysis := merged.ApplyAnalysis(s.env.MiniMax)
@@ -2401,7 +2405,7 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 		// AI 辅助关闭时不挂生成器：聊天仅走资料检索/固定兜底（rag.Service 对 nil 生成器安全）。
 		s.modelMu.Lock()
 		if merged.AssistEnabled() {
-			s.ragGen = llm.NewMiniMaxGenerator(chat)
+			s.ragGen = llm.NewMiniMaxGenerator(legacyChat)
 		} else {
 			s.ragGen = nil
 		}
