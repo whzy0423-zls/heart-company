@@ -84,6 +84,26 @@ func TestAskUsesGeneratorWithRetrievedContext(t *testing.T) {
 	}
 }
 
+func TestAskPropagatesPreferencesAndCurrentDirectives(t *testing.T) {
+	generator := &fakeGenerator{answer: "模型回答"}
+	service := NewService(nil, WithGenerator(generator))
+
+	_, err := service.Ask(context.Background(), AskInput{
+		Question:          "这次详细说",
+		UserPreferences:   []string{"回答简短，避免长篇大论"},
+		CurrentDirectives: []string{"回答更详细"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(generator.input.UserPreferences, "|") != "回答简短，避免长篇大论" {
+		t.Fatalf("preferences not propagated: %+v", generator.input)
+	}
+	if strings.Join(generator.input.CurrentDirectives, "|") != "回答更详细" {
+		t.Fatalf("current directives not propagated: %+v", generator.input)
+	}
+}
+
 func TestAskLimitsGeneratorHistory(t *testing.T) {
 	generator := &fakeGenerator{answer: "模型回答"}
 	service := NewService([]Document{
@@ -226,4 +246,39 @@ func TestAskStreamEmitsGeneratedChunksAndReturnsMetadata(t *testing.T) {
 	if generator.input.ConversationSummary != "用户之前提到孩子害怕犯错。" {
 		t.Fatalf("streaming generator did not receive conversation summary: %+v", generator.input)
 	}
+}
+
+func TestAskStreamPropagatesPreferencesAndCurrentDirectives(t *testing.T) {
+	generator := &capturingStreamingGenerator{answer: "流式回答"}
+	service := NewService(nil, WithGenerator(generator))
+
+	_, err := service.AskStream(context.Background(), AskInput{
+		Question:          "直接说",
+		UserPreferences:   []string{"语气温柔友好"},
+		CurrentDirectives: []string{"表达直接，少说教"},
+	}, func(string) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(generator.input.UserPreferences, "|") != "语气温柔友好" ||
+		strings.Join(generator.input.CurrentDirectives, "|") != "表达直接，少说教" {
+		t.Fatalf("stream input not propagated: %+v", generator.input)
+	}
+}
+
+type capturingStreamingGenerator struct {
+	input  GenerateInput
+	answer string
+}
+
+func (g *capturingStreamingGenerator) Generate(context.Context, GenerateInput) (string, error) {
+	return "", errors.New("unexpected non-streaming call")
+}
+
+func (g *capturingStreamingGenerator) GenerateStream(_ context.Context, input GenerateInput, emit StreamEmitter) (string, error) {
+	g.input = input
+	if err := emit(g.answer); err != nil {
+		return "", err
+	}
+	return g.answer, nil
 }

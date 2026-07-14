@@ -362,13 +362,16 @@ func (g *AnthropicChatGenerator) requireAPIKey() error {
 }
 
 func (g *AnthropicChatGenerator) chatMessages(input rag.GenerateInput) []anthropicChatMessage {
-	messages := make([]anthropicChatMessage, 0, len(input.History)+1)
+	messages := make([]anthropicChatMessage, 0, len(input.History)+2)
 	appendMessage := func(role, content string) {
 		if len(messages) > 0 && messages[len(messages)-1].Role == role {
 			messages[len(messages)-1].Content += "\n\n" + content
 			return
 		}
 		messages = append(messages, anthropicChatMessage{Role: role, Content: content})
+	}
+	if preferences := buildCompatibleChatPreferenceMessage(input.UserPreferences); preferences != "" {
+		appendMessage("user", preferences)
 	}
 	for _, message := range input.History {
 		role := strings.TrimSpace(message.Role)

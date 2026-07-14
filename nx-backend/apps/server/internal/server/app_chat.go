@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/rag"
+	"nine-xing/nx-backend/apps/server/internal/userpreference"
 )
 
 const appChatHistoryLimit = 12
@@ -45,6 +47,20 @@ type appChatStore interface {
 	ListFavorites(ctx context.Context, appUserID, cardID int64) ([]chat.FavoriteItem, error)
 	SearchMessages(ctx context.Context, appUserID, cardID int64, keyword string) ([]chat.SearchResult, error)
 }
+
+type appChatPreferenceStore interface {
+	List(ctx context.Context, userID int64) ([]userpreference.Preference, error)
+	Apply(ctx context.Context, userID int64, mutations []userpreference.Mutation) error
+}
+
+type appChatPreferenceExtractor interface {
+	Extract(ctx context.Context, message string) userpreference.Extraction
+}
+
+var (
+	errAppChatPreferenceSave = errors.New("偏好保存失败，请重试")
+	errAppChatPreferenceRead = errors.New("偏好读取失败，请重试")
+)
 
 func compactAppChatContext(ctx context.Context, previousSummary string, messages []chat.Message, summarizer rag.ConversationSummarizer) appChatPromptContext {
 	validChatMessages := validAppChatMessages(messages)
@@ -210,15 +226,24 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	generator, chatTimeout := s.chatRuntime()
 	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
+	preferences, directives, err := s.prepareAppChatPreferences(ctx, userInfo.ID, body.Question)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, appChatPreferencePublicError(err))
+		return
+	}
 
 	docs, _ := s.retrieveAppDocsForQuery(ctx, body.Question, 6)
 	profile := rag.UserProfile{}
-	if appUser, err := s.appUsers.FindByID(ctx, userInfo.ID); err == nil {
-		profile.Nickname = appUser.Nickname
+	if s.appUsers != nil {
+		if appUser, err := s.appUsers.FindByID(ctx, userInfo.ID); err == nil {
+			profile.Nickname = appUser.Nickname
+		}
 	}
 	// 注入用户主型，供检索加权与 AI 个性化作答（未测/无主卡时为 0，rag 仅在 >0 时使用）。
-	if card, err := s.quiz.PrimaryCard(ctx, userInfo.ID); err == nil {
-		profile.MainType = card.MainType
+	if s.quiz != nil {
+		if card, err := s.quiz.PrimaryCard(ctx, userInfo.ID); err == nil {
+			profile.MainType = card.MainType
+		}
 	}
 	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
 		profile.Memories = memories
@@ -230,6 +255,8 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		ConversationSummary: promptContext.Summary,
 		Question:            body.Question,
 		UserProfile:         profile,
+		UserPreferences:     preferences,
+		CurrentDirectives:   directives,
 	})
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
@@ -238,8 +265,8 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 
 	sourcesJSON, _ := json.Marshal(ans.Sources)
 	messageID, saveErr := s.appChat.SavePair(ctx, sessionID, body.Question, ans.Answer, sourcesJSON)
-	if saveErr != nil {
-		_ = saveErr
+	if saveErr == nil {
+		s.scheduleAppChatPreferenceFallback(userInfo.ID, body.Question)
 	}
 	s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, body.Question, ans.Answer)
 	if messageID > 0 {
@@ -290,6 +317,11 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	generator, chatTimeout := s.chatRuntime()
 	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
+	preferences, directives, err := s.prepareAppChatPreferences(ctx, userInfo.ID, body.Question)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, appChatPreferencePublicError(err))
+		return
+	}
 
 	docs, _ := s.retrieveAppDocsForQuery(ctx, body.Question, 6)
 	profile := rag.UserProfile{}
@@ -318,6 +350,8 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 		ConversationSummary: promptContext.Summary,
 		Question:            body.Question,
 		UserProfile:         profile,
+		UserPreferences:     preferences,
+		CurrentDirectives:   directives,
 	}, func(delta string) error {
 		return writeAppChatSSE(w, flusher, "delta", map[string]string{"content": delta})
 	})
@@ -332,12 +366,77 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答保存失败，请重试"})
 		return
 	}
+	s.scheduleAppChatPreferenceFallback(userInfo.ID, body.Question)
 	s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, body.Question, ans.Answer)
 	if messageID > 0 {
 		s.recordAppProfileEvidenceAsync(userInfo.ID, sess.CardID, "chat", messageID, body.Question)
 	}
 
 	_ = writeAppChatSSE(w, flusher, "done", askResponse{Answer: ans, MessageID: messageID})
+}
+
+func (s *Server) prepareAppChatPreferences(ctx context.Context, userID int64, question string) ([]string, []string, error) {
+	extraction := userpreference.Extract(question)
+	if len(extraction.Mutations) > 0 {
+		if s.userPreferences == nil {
+			return nil, nil, fmt.Errorf("%w: preference store is unavailable", errAppChatPreferenceSave)
+		}
+		if err := s.userPreferences.Apply(ctx, userID, extraction.Mutations); err != nil {
+			return nil, nil, fmt.Errorf("%w: %v", errAppChatPreferenceSave, err)
+		}
+	}
+	if s.userPreferences == nil {
+		return nil, append([]string(nil), extraction.CurrentDirectives...), nil
+	}
+	stored, err := s.userPreferences.List(ctx, userID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", errAppChatPreferenceRead, err)
+	}
+	preferences := make([]string, 0, len(stored))
+	for _, preference := range stored {
+		instruction := strings.TrimSpace(preference.Instruction)
+		if instruction != "" {
+			preferences = append(preferences, instruction)
+		}
+	}
+	return preferences, append([]string(nil), extraction.CurrentDirectives...), nil
+}
+
+func appChatPreferencePublicError(err error) string {
+	if errors.Is(err, errAppChatPreferenceSave) {
+		return errAppChatPreferenceSave.Error()
+	}
+	return errAppChatPreferenceRead.Error()
+}
+
+func (s *Server) scheduleAppChatPreferenceFallback(userID int64, question string) bool {
+	if userID <= 0 || s.userPreferences == nil || s.preferenceExtractor == nil ||
+		!userpreference.NeedsLLMFallback(question) {
+		return false
+	}
+	if s.preferenceAsyncSlots == nil {
+		return false
+	}
+	select {
+	case s.preferenceAsyncSlots <- struct{}{}:
+	default:
+		return false
+	}
+	timeout := s.preferenceAsyncTimeout
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	go func() {
+		defer func() { <-s.preferenceAsyncSlots }()
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		extraction := s.preferenceExtractor.Extract(ctx, question)
+		if len(extraction.Mutations) == 0 || ctx.Err() != nil {
+			return
+		}
+		_ = s.userPreferences.Apply(ctx, userID, extraction.Mutations)
+	}()
+	return true
 }
 
 func writeAppChatSSE(w io.Writer, flusher http.Flusher, event string, payload any) error {

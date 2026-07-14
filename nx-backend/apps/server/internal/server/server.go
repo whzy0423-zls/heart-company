@@ -49,6 +49,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/system"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
+	"nine-xing/nx-backend/apps/server/internal/userpreference"
 	"nine-xing/nx-backend/apps/server/internal/video"
 	"nine-xing/nx-backend/apps/server/internal/videoanalysis"
 	"nine-xing/nx-backend/apps/server/internal/videoasset"
@@ -100,6 +101,10 @@ type Server struct {
 
 	appUsers                 *appuser.Store
 	appChat                  appChatStore
+	userPreferences          appChatPreferenceStore
+	preferenceExtractor      appChatPreferenceExtractor
+	preferenceAsyncSlots     chan struct{}
+	preferenceAsyncTimeout   time.Duration
 	pushStore                *push.Store
 	pushSendTimeout          time.Duration
 	pushRecoveryInterval     time.Duration
@@ -217,6 +222,14 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		s.appDailyQuizBankAdmin = profileStore
 	}
 	s.appChat = chat.NewStore(database)
+	s.userPreferences = userpreference.NewStore(database)
+	s.preferenceAsyncSlots = make(chan struct{}, 2)
+	s.preferenceAsyncTimeout = 2 * time.Second
+	s.preferenceExtractor = userpreference.NewLLMExtractor(
+		s.completePreferenceJSON,
+		userpreference.WithLLMTimeout(s.preferenceAsyncTimeout),
+		userpreference.WithLLMConcurrency(cap(s.preferenceAsyncSlots)),
+	)
 	s.loginLimiter = newStrRateLimiter(10, time.Minute)
 	s.loginDBLimiter = newDBRateLimiter(database, "admin_login", 10, time.Minute)
 	s.smsPhoneLimiter = newStrRateLimiter(1, time.Minute)
@@ -292,6 +305,15 @@ func (s *Server) chatRuntime() (rag.Generator, time.Duration) {
 		timeout = 28 * time.Second
 	}
 	return s.ragGen, timeout
+}
+
+func (s *Server) completePreferenceJSON(ctx context.Context, systemPrompt, userMessage string, maxTokens int) (string, error) {
+	generator, _ := s.chatRuntime()
+	completer, ok := generator.(llm.JSONCompleter)
+	if !ok || completer == nil {
+		return "", errors.New("chat generator does not support structured completion")
+	}
+	return completer.CompleteJSON(ctx, systemPrompt, userMessage, maxTokens)
 }
 
 func (s *Server) chatRequestTimeout() time.Duration {

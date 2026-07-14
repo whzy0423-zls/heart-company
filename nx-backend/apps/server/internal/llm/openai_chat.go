@@ -353,6 +353,9 @@ func (g *OpenAIChatGenerator) requireAPIKey() error {
 
 func (g *OpenAIChatGenerator) chatMessages(input rag.GenerateInput) []openAIChatMessage {
 	messages := []openAIChatMessage{{Role: "system", Content: g.resolveSystemPrompt()}}
+	if preferences := buildCompatibleChatPreferenceMessage(input.UserPreferences); preferences != "" {
+		messages = append(messages, openAIChatMessage{Role: "user", Content: preferences})
+	}
 	for _, message := range input.History {
 		role := strings.TrimSpace(message.Role)
 		if role != "user" && role != "assistant" {
