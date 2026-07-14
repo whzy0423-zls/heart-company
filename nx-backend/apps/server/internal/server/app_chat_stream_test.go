@@ -211,7 +211,17 @@ func TestAppChatAskStreamFlushesFirstDeltaBeforeGenerationCompletes(t *testing.T
 		close(releaseSecond)
 		t.Fatal("generator did not emit first delta")
 	}
-	firstEvent, err := readAppChatSSEEvent(bufio.NewReader(response.Body))
+	reader := bufio.NewReader(response.Body)
+	initialEvent, err := readAppChatSSEEvent(reader)
+	if err != nil {
+		close(releaseSecond)
+		t.Fatal(err)
+	}
+	if initialEvent != ": ping\n\n" {
+		close(releaseSecond)
+		t.Fatalf("unexpected initial event: %q", initialEvent)
+	}
+	firstEvent, err := readAppChatSSEEvent(reader)
 	if err != nil {
 		close(releaseSecond)
 		t.Fatal(err)
@@ -229,6 +239,118 @@ func TestAppChatAskStreamFlushesFirstDeltaBeforeGenerationCompletes(t *testing.T
 	if _, err := io.ReadAll(response.Body); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestAppChatStreamInitialFlushAndHeartbeatArriveBeforeFirstDelta(t *testing.T) {
+	generatorStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	releaseDone := make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseFirst:
+		default:
+			close(releaseFirst)
+		}
+		select {
+		case <-releaseDone:
+		default:
+			close(releaseDone)
+		}
+	}()
+
+	generator := &controlledAppChatStreamingGenerator{
+		generateStream: func(ctx context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+			close(generatorStarted)
+			select {
+			case <-releaseFirst:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			if err := emit("第一段"); err != nil {
+				return "", err
+			}
+			select {
+			case <-releaseDone:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			return "第一段", nil
+		},
+	}
+	s := newAppChatStreamServer(newFakeAppChatStreamStore(), generator)
+	s.chatHeartbeatInterval = 20 * time.Millisecond
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/app/chat/sessions/", func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), appContextKey{}, auth.UserInfo{ID: 7})
+		s.appChatRouter(w, r.WithContext(ctx))
+	})
+	httpServer := httptest.NewServer(mux)
+	defer httpServer.Close()
+
+	responseCh := make(chan *http.Response, 1)
+	errorCh := make(chan error, 1)
+	go func() {
+		response, err := http.Post(httpServer.URL+"/api/app/chat/sessions/42/ask/stream", "application/json", strings.NewReader(`{"question":"怎么做？"}`))
+		if err != nil {
+			errorCh <- err
+			return
+		}
+		responseCh <- response
+	}()
+
+	select {
+	case <-generatorStarted:
+	case err := <-errorCh:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("generator did not start")
+	}
+
+	var response *http.Response
+	select {
+	case response = <-responseCh:
+	case err := <-errorCh:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("response headers and initial SSE comment were not flushed before first delta")
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	firstEvent, err := readAppChatSSEEvent(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstEvent != ": ping\n\n" {
+		t.Fatalf("first SSE event = %q, want initial ping", firstEvent)
+	}
+
+	select {
+	case <-time.After(30 * time.Millisecond):
+	case <-response.Request.Context().Done():
+		t.Fatal(response.Request.Context().Err())
+	}
+	heartbeat, err := readAppChatSSEEvent(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if heartbeat != ": ping\n\n" {
+		t.Fatalf("heartbeat = %q, want ping comment", heartbeat)
+	}
+
+	close(releaseFirst)
+	deltaEvent, err := readAppChatSSEEvent(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(deltaEvent, "event: delta\n") || !strings.Contains(deltaEvent, "第一段") {
+		t.Fatalf("unexpected delta event: %q", deltaEvent)
+	}
+	select {
+	case <-releaseDone:
+		t.Fatal("generation completed before the test released it")
+	default:
+	}
+	close(releaseDone)
 }
 
 func TestAppChatAskStreamDoesNotSavePartialAnswerWhenGenerationFails(t *testing.T) {

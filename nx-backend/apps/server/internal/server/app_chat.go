@@ -335,17 +335,68 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+	if err := writeAppChatSSEComment(w, flusher, "ping"); err != nil {
+		return
+	}
 
-	ans, err := rag.NewService(docs, rag.WithGenerator(generator)).AskStream(ctx, rag.AskInput{
-		History:             promptContext.History,
-		ConversationSummary: promptContext.Summary,
-		Question:            body.Question,
-		UserProfile:         profile,
-		UserPreferences:     preferences,
-		CurrentDirectives:   directives,
-	}, func(delta string) error {
-		return writeAppChatSSE(w, flusher, "delta", map[string]string{"content": delta})
-	})
+	type streamResult struct {
+		answer rag.Answer
+		err    error
+	}
+	generationCtx, cancelGeneration := context.WithCancel(ctx)
+	defer cancelGeneration()
+	deltas := make(chan string)
+	result := make(chan streamResult, 1)
+	go func() {
+		answer, streamErr := rag.NewService(docs, rag.WithGenerator(generator)).AskStream(generationCtx, rag.AskInput{
+			History:             promptContext.History,
+			ConversationSummary: promptContext.Summary,
+			Question:            body.Question,
+			UserProfile:         profile,
+			UserPreferences:     preferences,
+			CurrentDirectives:   directives,
+		}, func(delta string) error {
+			select {
+			case deltas <- delta:
+				return nil
+			case <-generationCtx.Done():
+				return generationCtx.Err()
+			}
+		})
+		result <- streamResult{answer: answer, err: streamErr}
+	}()
+
+	heartbeatInterval := s.chatHeartbeatInterval
+	if heartbeatInterval <= 0 {
+		heartbeatInterval = 12 * time.Second
+	}
+	heartbeat := time.NewTicker(heartbeatInterval)
+	defer heartbeat.Stop()
+
+	var ans rag.Answer
+	for {
+		select {
+		case delta := <-deltas:
+			if err := writeAppChatSSE(w, flusher, "delta", map[string]string{"content": delta}); err != nil {
+				cancelGeneration()
+				return
+			}
+		case completed := <-result:
+			ans = completed.answer
+			err = completed.err
+			goto generationComplete
+		case <-heartbeat.C:
+			if err := writeAppChatSSEComment(w, flusher, "ping"); err != nil {
+				cancelGeneration()
+				return
+			}
+		case <-ctx.Done():
+			cancelGeneration()
+			return
+		}
+	}
+
+generationComplete:
 	if err != nil {
 		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成失败，请重试"})
 		return
@@ -429,6 +480,18 @@ func writeAppChatSSE(w io.Writer, flusher http.Flusher, event string, payload an
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+		return err
+	}
+	flusher.Flush()
+	return nil
+}
+
+func writeAppChatSSEComment(w io.Writer, flusher http.Flusher, comment string) error {
+	comment = strings.TrimSpace(strings.ReplaceAll(comment, "\n", " "))
+	if comment == "" {
+		comment = "ping"
+	}
+	if _, err := fmt.Fprintf(w, ": %s\n\n", comment); err != nil {
 		return err
 	}
 	flusher.Flush()

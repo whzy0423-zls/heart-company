@@ -96,6 +96,7 @@ type Server struct {
 	appDailyQuizBankAdmin appDailyQuizBankAdminService
 	chatLimiter           *fixedWindowRateLimiter
 	chatTimeout           time.Duration
+	chatHeartbeatInterval time.Duration
 
 	appUsers                 *appuser.Store
 	appChat                  appChatStore
@@ -192,6 +193,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	if s.chatTimeout <= 0 {
 		s.chatTimeout = 28 * time.Second
 	}
+	s.chatHeartbeatInterval = 12 * time.Second
 	s.appUsers = appuser.NewStore(database)
 	s.quiz = quiz.NewStore(database)
 	if database != nil {
