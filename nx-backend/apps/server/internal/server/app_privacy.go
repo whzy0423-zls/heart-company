@@ -18,12 +18,13 @@ type appPrivacyPolicyResponse struct {
 }
 
 type appPrivacyExportResponse struct {
-	GeneratedAt  string           `json:"generatedAt"`
-	User         appuser.User     `json:"user"`
-	Cards        []appPrivacyCard `json:"cards"`
-	Memories     []appMemoryItem  `json:"memories"`
-	SessionCount int              `json:"sessionCount"`
-	MessageCount int              `json:"messageCount"`
+	GeneratedAt  string                 `json:"generatedAt"`
+	User         appuser.User           `json:"user"`
+	Cards        []appPrivacyCard       `json:"cards"`
+	Memories     []appMemoryItem        `json:"memories"`
+	Preferences  []appPrivacyPreference `json:"preferences"`
+	SessionCount int                    `json:"sessionCount"`
+	MessageCount int                    `json:"messageCount"`
 }
 
 type appPrivacyCard struct {
@@ -38,6 +39,16 @@ type appPrivacyCard struct {
 	Status     string          `json:"status"`
 	CreateTime string          `json:"createTime"`
 	UpdateTime string          `json:"updateTime"`
+}
+
+type appPrivacyPreference struct {
+	ID          int64  `json:"id"`
+	Category    string `json:"category"`
+	Slot        string `json:"slot"`
+	Instruction string `json:"instruction"`
+	SourceText  string `json:"sourceText"`
+	CreateTime  string `json:"createTime"`
+	UpdateTime  string `json:"updateTime"`
 }
 
 func (s *Server) appPrivacyPolicy(w http.ResponseWriter, _ *http.Request) {
@@ -71,6 +82,11 @@ func (s *Server) appPrivacyExport(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
+	preferences, err := s.appPrivacyPreferences(r, userInfo.ID)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
 	sessionCount, messageCount, err := s.appPrivacyChatCounts(r, userInfo.ID)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
@@ -82,6 +98,7 @@ func (s *Server) appPrivacyExport(w http.ResponseWriter, r *http.Request) {
 		User:         user,
 		Cards:        cards,
 		Memories:     memories,
+		Preferences:  preferences,
 		SessionCount: sessionCount,
 		MessageCount: messageCount,
 	})
@@ -93,8 +110,22 @@ func (s *Server) appPrivacyDeleteMemories(w http.ResponseWriter, r *http.Request
 		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	res, err := s.db.ExecContext(r.Context(), `DELETE FROM app_memories WHERE app_user_id = $1`, userInfo.ID)
+	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(r.Context(), `DELETE FROM app_memories WHERE app_user_id = $1`, userInfo.ID)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), `DELETE FROM app_user_preferences WHERE app_user_id = $1`, userInfo.ID); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	if err := tx.Commit(); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
@@ -117,6 +148,7 @@ func (s *Server) appPrivacyDeleteAccount(w http.ResponseWriter, r *http.Request)
 
 	steps := []string{
 		`DELETE FROM app_memories WHERE app_user_id = $1`,
+		`DELETE FROM app_user_preferences WHERE app_user_id = $1`,
 		`DELETE FROM app_chat_sessions WHERE app_user_id = $1`,
 		`DELETE FROM app_compatibility_reports WHERE app_user_id = $1`,
 		`DELETE FROM app_daily_checkins WHERE app_user_id = $1`,
@@ -208,6 +240,39 @@ func (s *Server) appPrivacyMemories(r *http.Request, appUserID int64) ([]appMemo
 		memories = append(memories, item)
 	}
 	return memories, rows.Err()
+}
+
+func (s *Server) appPrivacyPreferences(r *http.Request, appUserID int64) ([]appPrivacyPreference, error) {
+	rows, err := s.db.QueryContext(r.Context(),
+		`SELECT id, category, slot, instruction, source_text, create_time, update_time
+		   FROM app_user_preferences
+		  WHERE app_user_id = $1
+		  ORDER BY category, slot, id`,
+		appUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	preferences := []appPrivacyPreference{}
+	for rows.Next() {
+		var preference appPrivacyPreference
+		var createTime, updateTime time.Time
+		if err := rows.Scan(
+			&preference.ID,
+			&preference.Category,
+			&preference.Slot,
+			&preference.Instruction,
+			&preference.SourceText,
+			&createTime,
+			&updateTime,
+		); err != nil {
+			return nil, err
+		}
+		preference.CreateTime = appMemoryTime(createTime)
+		preference.UpdateTime = appMemoryTime(updateTime)
+		preferences = append(preferences, preference)
+	}
+	return preferences, rows.Err()
 }
 
 func (s *Server) appPrivacyChatCounts(r *http.Request, appUserID int64) (int, int, error) {

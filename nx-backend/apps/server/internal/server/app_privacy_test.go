@@ -72,6 +72,8 @@ func TestAppPrivacyExportAndMemoryDeletionAreScopedToCurrentUser(t *testing.T) {
 	otherCardID := insertAppAPICard(t, database, otherUserID, "其他用户")
 	insertAppAPIMemory(t, database, userID, cardID, "current user memory")
 	insertAppAPIMemory(t, database, otherUserID, otherCardID, "other user memory")
+	insertAppAPIPreference(t, database, userID, "length", "length.detail_level", "回答简短，避免长篇大论")
+	insertAppAPIPreference(t, database, otherUserID, "tone", "tone.direct", "表达直接，少说教")
 	insertAppAPIChatPair(t, database, userID, cardID)
 
 	export := performAppAPI(handler, http.MethodPost, "/api/app/privacy/export", token, nil)
@@ -84,17 +86,26 @@ func TestAppPrivacyExportAndMemoryDeletionAreScopedToCurrentUser(t *testing.T) {
 			User struct {
 				ID int64 `json:"id"`
 			} `json:"user"`
-			Cards        []any `json:"cards"`
-			Memories     []any `json:"memories"`
-			SessionCount int   `json:"sessionCount"`
-			MessageCount int   `json:"messageCount"`
+			Cards       []any `json:"cards"`
+			Memories    []any `json:"memories"`
+			Preferences []struct {
+				Category    string `json:"category"`
+				Slot        string `json:"slot"`
+				Instruction string `json:"instruction"`
+				SourceText  string `json:"sourceText"`
+			} `json:"preferences"`
+			SessionCount int `json:"sessionCount"`
+			MessageCount int `json:"messageCount"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(export.Body.Bytes(), &exportBody); err != nil {
 		t.Fatal(err)
 	}
-	if exportBody.Code != 0 || exportBody.Data.User.ID != userID || len(exportBody.Data.Cards) == 0 || len(exportBody.Data.Memories) != 1 || exportBody.Data.SessionCount != 1 || exportBody.Data.MessageCount != 2 {
+	if exportBody.Code != 0 || exportBody.Data.User.ID != userID || len(exportBody.Data.Cards) == 0 || len(exportBody.Data.Memories) != 1 || len(exportBody.Data.Preferences) != 1 || exportBody.Data.SessionCount != 1 || exportBody.Data.MessageCount != 2 {
 		t.Fatalf("unexpected export data: %+v", exportBody.Data)
+	}
+	if exportBody.Data.Preferences[0].Instruction != "回答简短，避免长篇大论" {
+		t.Fatalf("unexpected exported preferences: %+v", exportBody.Data.Preferences)
 	}
 
 	clear := performAppAPI(handler, http.MethodDelete, "/api/app/privacy/memories", token, nil)
@@ -107,6 +118,12 @@ func TestAppPrivacyExportAndMemoryDeletionAreScopedToCurrentUser(t *testing.T) {
 	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_memories WHERE app_user_id = $1`, otherUserID); got != 1 {
 		t.Fatalf("expected other user's memories to remain, got %d", got)
 	}
+	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_user_preferences WHERE app_user_id = $1`, userID); got != 0 {
+		t.Fatalf("expected current user's communication preferences to be cleared, got %d", got)
+	}
+	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_user_preferences WHERE app_user_id = $1`, otherUserID); got != 1 {
+		t.Fatalf("expected other user's communication preferences to remain, got %d", got)
+	}
 }
 
 func TestAppPrivacyAccountDeletionDisablesCurrentUserAndRevokesTokens(t *testing.T) {
@@ -117,6 +134,8 @@ func TestAppPrivacyAccountDeletionDisablesCurrentUserAndRevokesTokens(t *testing
 	otherCardID := insertAppAPICard(t, database, otherUserID, "其他用户")
 	insertAppAPIMemory(t, database, userID, cardID, "current user memory")
 	insertAppAPIMemory(t, database, otherUserID, otherCardID, "other user memory")
+	insertAppAPIPreference(t, database, userID, "length", "length.detail_level", "回答简短，避免长篇大论")
+	insertAppAPIPreference(t, database, otherUserID, "tone", "tone.direct", "表达直接，少说教")
 
 	res := performAppAPI(handler, http.MethodDelete, "/api/app/privacy/account", accessToken, nil)
 	if res.Code != http.StatusOK {
@@ -138,6 +157,12 @@ func TestAppPrivacyAccountDeletionDisablesCurrentUserAndRevokesTokens(t *testing
 	}
 	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_memories WHERE app_user_id = $1`, userID); got != 0 {
 		t.Fatalf("expected current user's memories to be removed, got %d", got)
+	}
+	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_user_preferences WHERE app_user_id = $1`, userID); got != 0 {
+		t.Fatalf("expected current user's communication preferences to be removed, got %d", got)
+	}
+	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_user_preferences WHERE app_user_id = $1`, otherUserID); got != 1 {
+		t.Fatalf("expected other user's communication preferences to remain, got %d", got)
 	}
 	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_users WHERE id = $1 AND status = 'active'`, otherUserID); got != 1 {
 		t.Fatalf("expected other user to remain active, got %d", got)
@@ -242,6 +267,16 @@ func insertAppAPIMemory(t *testing.T, database *sql.DB, userID, cardID int64, co
 		`INSERT INTO app_memories (app_user_id, card_id, content) VALUES ($1, $2, $3)`,
 		userID, cardID, content); err != nil {
 		t.Fatalf("insert memory: %v", err)
+	}
+}
+
+func insertAppAPIPreference(t *testing.T, database *sql.DB, userID int64, category, slot, instruction string) {
+	t.Helper()
+	if _, err := database.Exec(
+		`INSERT INTO app_user_preferences (app_user_id, category, slot, instruction, source_text)
+		 VALUES ($1, $2, $3, $4, 'privacy test')`,
+		userID, category, slot, instruction); err != nil {
+		t.Fatalf("insert preference: %v", err)
 	}
 }
 
