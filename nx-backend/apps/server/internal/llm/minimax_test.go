@@ -595,6 +595,24 @@ func TestBuildUserPromptDoesNotForceFixedAnswerStructure(t *testing.T) {
 	}
 }
 
+func TestBuildUserPromptPutsCurrentDirectivesAfterSavedPreferencesAndQuestion(t *testing.T) {
+	prompt := buildUserPrompt(rag.GenerateInput{
+		Question:          "不要叫我亲爱的",
+		UserPreferences:   []string{"称呼用户为亲爱的", "回答更详细"},
+		CurrentDirectives: []string{"不要使用“亲爱的”等亲昵称呼", "回答简短，避免长篇大论"},
+	})
+
+	savedIndex := strings.Index(prompt, "已保存的交流偏好")
+	questionIndex := strings.Index(prompt, "用户问题：不要叫我亲爱的")
+	currentIndex := strings.Index(prompt, "当前消息优先规则")
+	if savedIndex < 0 || questionIndex < 0 || currentIndex < 0 || !(savedIndex < questionIndex && questionIndex < currentIndex) {
+		t.Fatalf("prompt precedence order is wrong: %s", prompt)
+	}
+	if !strings.Contains(prompt, "与旧偏好或历史冲突时，以当前规则为准") {
+		t.Fatalf("prompt missing explicit current-message precedence: %s", prompt)
+	}
+}
+
 func TestResolveSystemPromptKeepsConfiguredOverride(t *testing.T) {
 	const customPrompt = "你是用户自定义的专属陪伴者。"
 	generator := NewMiniMaxGenerator(config.MiniMaxConfig{SystemPrompt: customPrompt})

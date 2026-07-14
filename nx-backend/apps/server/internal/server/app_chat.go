@@ -13,6 +13,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/rag"
+	"nine-xing/nx-backend/apps/server/internal/userpreference"
 )
 
 const appChatHistoryLimit = 12
@@ -44,6 +45,11 @@ type appChatStore interface {
 	ToggleFavorite(ctx context.Context, appUserID, messageID int64) (bool, error)
 	ListFavorites(ctx context.Context, appUserID, cardID int64) ([]chat.FavoriteItem, error)
 	SearchMessages(ctx context.Context, appUserID, cardID int64, keyword string) ([]chat.SearchResult, error)
+}
+
+type appChatPreferenceStore interface {
+	List(ctx context.Context, userID int64) ([]userpreference.Preference, error)
+	Apply(ctx context.Context, userID int64, mutations []userpreference.Mutation) error
 }
 
 func compactAppChatContext(ctx context.Context, previousSummary string, messages []chat.Message, summarizer rag.ConversationSummarizer) appChatPromptContext {
@@ -209,6 +215,11 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), s.chatTimeout)
 	defer cancel()
+	preferences, directives, extraction, err := s.prepareAppChatPreferences(ctx, userInfo.ID, body.Question)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "偏好读取失败，请重试")
+		return
+	}
 
 	docs, _ := s.retrieveAppDocsForQuery(ctx, body.Question, 6)
 	profile := rag.UserProfile{}
@@ -230,6 +241,8 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		ConversationSummary: promptContext.Summary,
 		Question:            body.Question,
 		UserProfile:         profile,
+		UserPreferences:     preferences,
+		CurrentDirectives:   directives,
 	})
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
@@ -239,7 +252,12 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	sourcesJSON, _ := json.Marshal(ans.Sources)
 	messageID, saveErr := s.appChat.SavePair(ctx, sessionID, body.Question, ans.Answer, sourcesJSON)
 	if saveErr != nil {
-		_ = saveErr
+		httpx.Fail(w, http.StatusInternalServerError, "回答保存失败，请重试")
+		return
+	}
+	if err := s.persistAppChatPreferences(ctx, userInfo.ID, extraction); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "偏好保存失败，请重试")
+		return
 	}
 	s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, body.Question, ans.Answer)
 	if messageID > 0 {
@@ -289,6 +307,11 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), s.chatTimeout)
 	defer cancel()
+	preferences, directives, extraction, err := s.prepareAppChatPreferences(ctx, userInfo.ID, body.Question)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "偏好读取失败，请重试")
+		return
+	}
 
 	docs, _ := s.retrieveAppDocsForQuery(ctx, body.Question, 6)
 	profile := rag.UserProfile{}
@@ -318,6 +341,8 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 		ConversationSummary: promptContext.Summary,
 		Question:            body.Question,
 		UserProfile:         profile,
+		UserPreferences:     preferences,
+		CurrentDirectives:   directives,
 	}, func(delta string) error {
 		return writeAppChatSSE(w, flusher, "delta", map[string]string{"content": delta})
 	})
@@ -332,12 +357,70 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答保存失败，请重试"})
 		return
 	}
+	if err := s.persistAppChatPreferences(ctx, userInfo.ID, extraction); err != nil {
+		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "偏好保存失败，请重试"})
+		return
+	}
 	s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, body.Question, ans.Answer)
 	if messageID > 0 {
 		s.recordAppProfileEvidenceAsync(userInfo.ID, sess.CardID, "chat", messageID, body.Question)
 	}
 
 	_ = writeAppChatSSE(w, flusher, "done", askResponse{Answer: ans, MessageID: messageID})
+}
+
+func (s *Server) prepareAppChatPreferences(ctx context.Context, userID int64, question string) ([]string, []string, userpreference.Extraction, error) {
+	extraction := userpreference.Extract(question)
+	directives := append([]string(nil), extraction.CurrentDirectives...)
+	if s.userPreferences == nil {
+		return nil, directives, extraction, nil
+	}
+	stored, err := s.userPreferences.List(ctx, userID)
+	if err != nil {
+		return nil, nil, extraction, err
+	}
+	overriddenSlots := appChatDirectiveSlots(directives)
+	preferences := make([]string, 0, len(stored))
+	for _, preference := range stored {
+		if _, overridden := overriddenSlots[preference.Slot]; overridden {
+			continue
+		}
+		instruction := strings.TrimSpace(preference.Instruction)
+		if instruction != "" {
+			preferences = append(preferences, instruction)
+		}
+	}
+	return preferences, directives, extraction, nil
+}
+
+func (s *Server) persistAppChatPreferences(ctx context.Context, userID int64, extraction userpreference.Extraction) error {
+	if len(extraction.Mutations) == 0 || s.userPreferences == nil {
+		return nil
+	}
+	return s.userPreferences.Apply(ctx, userID, extraction.Mutations)
+}
+
+func appChatDirectiveSlots(directives []string) map[string]struct{} {
+	slots := make(map[string]struct{}, len(directives))
+	for _, directive := range directives {
+		switch {
+		case directive == "不要使用“亲爱的”等亲昵称呼":
+			slots["addressing.avoid_dear"] = struct{}{}
+		case strings.HasPrefix(directive, "称呼用户为"):
+			slots["addressing.preferred_name"] = struct{}{}
+		case directive == "回答简短，避免长篇大论", directive == "回答更详细", directive == "只回答一句":
+			slots["length.detail_level"] = struct{}{}
+		case directive == "表达直接，少说教":
+			slots["tone.direct"] = struct{}{}
+		case directive == "不要使用列表":
+			slots["format.no_lists"] = struct{}{}
+		case directive == "先给结论", directive == "只给结论":
+			slots["format.conclusion_first"] = struct{}{}
+		case directive == "不要反问或追问":
+			slots["interaction.no_followup"] = struct{}{}
+		}
+	}
+	return slots
 }
 
 func writeAppChatSSE(w io.Writer, flusher http.Flusher, event string, payload any) error {

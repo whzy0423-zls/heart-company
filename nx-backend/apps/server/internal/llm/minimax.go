@@ -1476,6 +1476,16 @@ func buildUserPrompt(input rag.GenerateInput) string {
 			b.WriteString(fmt.Sprintf("%d. %s\n", i+1, trimRunes(memory, 160)))
 		}
 	}
+	if len(input.UserPreferences) > 0 {
+		b.WriteString("已保存的交流偏好：\n")
+		for _, preference := range input.UserPreferences {
+			preference = strings.TrimSpace(preference)
+			if preference == "" {
+				continue
+			}
+			b.WriteString("- " + trimRunes(preference, 160) + "\n")
+		}
+	}
 	if summary := strings.TrimSpace(input.ConversationSummary); summary != "" {
 		b.WriteString("会话前情：\n")
 		b.WriteString(trimRunes(summary, 1200) + "\n")
@@ -1487,6 +1497,16 @@ func buildUserPrompt(input rag.GenerateInput) string {
 		}
 	}
 	b.WriteString("用户问题：" + input.Question + "\n")
+	if len(input.CurrentDirectives) > 0 {
+		b.WriteString("当前消息优先规则（与旧偏好或历史冲突时，以当前规则为准）：\n")
+		for _, directive := range input.CurrentDirectives {
+			directive = strings.TrimSpace(directive)
+			if directive == "" {
+				continue
+			}
+			b.WriteString("- " + trimRunes(directive, 160) + "\n")
+		}
+	}
 	b.WriteString("检索资料：\n")
 	if len(input.Sources) == 0 {
 		b.WriteString("暂无高相关资料。\n")

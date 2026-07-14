@@ -115,6 +115,7 @@ func TestExtractCurrentOnlyInstructionsAreImmediateAndNotPersisted(t *testing.T)
 		directive string
 	}{
 		{message: "这次只给结论", directive: "只给结论"},
+		{message: "这次只回答一句", directive: "只回答一句"},
 		{message: "这次详细说", directive: "回答更详细"},
 		{message: "这次回答短一点", directive: "回答简短，避免长篇大论"},
 	}

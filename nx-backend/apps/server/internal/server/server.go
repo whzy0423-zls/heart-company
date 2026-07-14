@@ -49,6 +49,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/system"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
+	"nine-xing/nx-backend/apps/server/internal/userpreference"
 	"nine-xing/nx-backend/apps/server/internal/video"
 	"nine-xing/nx-backend/apps/server/internal/videoanalysis"
 	"nine-xing/nx-backend/apps/server/internal/videoasset"
@@ -98,6 +99,7 @@ type Server struct {
 
 	appUsers                 *appuser.Store
 	appChat                  appChatStore
+	userPreferences          appChatPreferenceStore
 	pushStore                *push.Store
 	pushSendTimeout          time.Duration
 	pushRecoveryInterval     time.Duration
@@ -202,6 +204,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 		s.appDailyQuizBankAdmin = profileStore
 	}
 	s.appChat = chat.NewStore(database)
+	s.userPreferences = userpreference.NewStore(database)
 	s.loginLimiter = newStrRateLimiter(10, time.Minute)
 	s.loginDBLimiter = newDBRateLimiter(database, "admin_login", 10, time.Minute)
 	s.smsPhoneLimiter = newStrRateLimiter(1, time.Minute)

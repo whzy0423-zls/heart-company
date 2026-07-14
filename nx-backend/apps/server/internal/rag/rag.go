@@ -40,6 +40,8 @@ type AskInput struct {
 	ConversationSummary string      `json:"conversationSummary,omitempty"`
 	Question            string      `json:"question"`
 	UserProfile         UserProfile `json:"userProfile"`
+	UserPreferences     []string    `json:"userPreferences,omitempty"`
+	CurrentDirectives   []string    `json:"currentDirectives,omitempty"`
 }
 
 type Answer struct {
@@ -73,6 +75,8 @@ type GenerateInput struct {
 	Question            string      `json:"question"`
 	Sources             []Source    `json:"sources"`
 	UserProfile         UserProfile `json:"userProfile"`
+	UserPreferences     []string    `json:"userPreferences,omitempty"`
+	CurrentDirectives   []string    `json:"currentDirectives,omitempty"`
 }
 
 type Option func(*Service)
@@ -122,6 +126,8 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 				Question:            question,
 				Sources:             nil,
 				UserProfile:         input.UserProfile,
+				UserPreferences:     input.UserPreferences,
+				CurrentDirectives:   input.CurrentDirectives,
 			})
 			if err == nil && strings.TrimSpace(generated) != "" {
 				return Answer{
@@ -169,6 +175,8 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 			Question:            question,
 			Sources:             sources,
 			UserProfile:         input.UserProfile,
+			UserPreferences:     input.UserPreferences,
+			CurrentDirectives:   input.CurrentDirectives,
 		})
 		if err == nil && strings.TrimSpace(generated) != "" {
 			return Answer{Answer: strings.TrimSpace(generated), Sources: sources, Suggestions: suggestions}, nil
@@ -206,6 +214,8 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 				Question:            question,
 				Sources:             nil,
 				UserProfile:         input.UserProfile,
+				UserPreferences:     input.UserPreferences,
+				CurrentDirectives:   input.CurrentDirectives,
 			}, trackedEmit)
 			if err != nil && streamStarted {
 				return Answer{}, err
@@ -259,6 +269,8 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 			Question:            question,
 			Sources:             sources,
 			UserProfile:         input.UserProfile,
+			UserPreferences:     input.UserPreferences,
+			CurrentDirectives:   input.CurrentDirectives,
 		}, trackedEmit)
 		if err != nil && streamStarted {
 			return Answer{}, err
