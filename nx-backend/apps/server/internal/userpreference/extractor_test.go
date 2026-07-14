@@ -131,6 +131,55 @@ func TestExtractCurrentOnlyInstructionsAreImmediateAndNotPersisted(t *testing.T)
 	}
 }
 
+func TestExtractScopesCurrentAndDurableInstructionsPerClause(t *testing.T) {
+	tests := []struct {
+		name            string
+		message         string
+		wantDirective   string
+		wantInstruction string
+	}{
+		{
+			name:            "durable concise then current detailed",
+			message:         "以后回答简短，但这次详细说",
+			wantDirective:   "回答更详细",
+			wantInstruction: "回答简短，避免长篇大论",
+		},
+		{
+			name:            "current detailed then durable concise",
+			message:         "这次详细说，但以后回答简短",
+			wantDirective:   "回答简短，避免长篇大论",
+			wantInstruction: "回答简短，避免长篇大论",
+		},
+		{
+			name:            "durable detailed then current concise",
+			message:         "以后详细一点；本次回答短一点",
+			wantDirective:   "回答简短，避免长篇大论",
+			wantInstruction: "回答更详细",
+		},
+		{
+			name:            "current concise then durable detailed",
+			message:         "这一条回答短一点，不过以后详细一点",
+			wantDirective:   "回答更详细",
+			wantInstruction: "回答更详细",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Extract(tt.message)
+			if len(got.CurrentDirectives) != 1 || got.CurrentDirectives[0] != tt.wantDirective {
+				t.Fatalf("current directive: want %q, got %+v", tt.wantDirective, got.CurrentDirectives)
+			}
+			if len(got.Mutations) != 1 || got.Mutations[0].Upsert == nil {
+				t.Fatalf("expected one durable upsert, got %+v", got.Mutations)
+			}
+			if got.Mutations[0].Upsert.Instruction != tt.wantInstruction {
+				t.Fatalf("durable instruction: want %q, got %+v", tt.wantInstruction, got.Mutations[0].Upsert)
+			}
+		})
+	}
+}
+
 func TestExtractUsesLastInstructionForConflictingSlot(t *testing.T) {
 	got := Extract("回答短一点，不过以后还是详细一点")
 	if len(got.CurrentDirectives) != 1 || got.CurrentDirectives[0] != "回答更详细" {
@@ -214,12 +263,18 @@ func TestExtractCancellationDeletesMatchingSlotOrCategory(t *testing.T) {
 func TestExtractAvoidsQuotedOtherPersonAndOrdinaryFalsePositives(t *testing.T) {
 	messages := []string{
 		`他说“不要叫我亲爱的”，这句话是什么意思？`,
+		`“不要叫我亲爱的”`,
+		`请分析“不要叫我亲爱的”这句文案`,
 		"她不喜欢别人叫她亲爱的，我该怎么办？",
 		"亲爱的是一种什么称呼？",
 		"小林以后叫他的同事亲爱的。",
 		"长篇大论通常指多长？",
 		"怎么让另一个人回答短一点？",
+		"请详细展开数据库结构",
+		"下面是详细资料",
 		"我今天直接去了公司。",
+		"请直接打开文件",
+		"直接一点打开文件",
 		"请帮我写一个有列表的项目计划",
 	}
 	for _, message := range messages {
@@ -227,6 +282,26 @@ func TestExtractAvoidsQuotedOtherPersonAndOrdinaryFalsePositives(t *testing.T) {
 			got := Extract(message)
 			if len(got.CurrentDirectives) != 0 || len(got.Mutations) != 0 {
 				t.Fatalf("false positive for %q: %+v", message, got)
+			}
+		})
+	}
+}
+
+func TestExtractAcceptsQuotedNicknameAndExplicitMetaStyle(t *testing.T) {
+	tests := []struct {
+		message string
+		slot    string
+	}{
+		{message: `不要叫我“亲爱的”`, slot: "addressing.avoid_dear"},
+		{message: "回答详细一点", slot: "length.detail_level"},
+		{message: "语气直接一点", slot: "tone.direct"},
+		{message: "直接一点", slot: "tone.direct"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.message, func(t *testing.T) {
+			got := Extract(tt.message)
+			if len(got.Mutations) != 1 || got.Mutations[0].Upsert == nil || got.Mutations[0].Upsert.Slot != tt.slot {
+				t.Fatalf("expected explicit style slot %q, got %+v", tt.slot, got)
 			}
 		})
 	}

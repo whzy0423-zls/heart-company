@@ -57,13 +57,13 @@ var deterministicRules = []deterministicRule{
 		instruction: "回答简短，避免长篇大论",
 	},
 	{
-		pattern:     regexp.MustCompile(`(?:以后|今后|之后)?(?:回答|回复)?(?:再)?(?:详细|展开)(?:一点|一些|说)?|(?:回答|回复)(?:得|时)?更详细`),
+		pattern:     regexp.MustCompile(`(?:回答|回复)(?:得|时)?(?:再|更)?(?:详细|展开)(?:一点|一些|说)?|(?:以后|今后|之后|这次|本次|这一条|这轮)(?:回答|回复)?(?:还是|还|都)?(?:再|更)?(?:详细|展开)(?:一点|一些|说)?`),
 		slot:        "length.detail_level",
 		category:    "length",
 		instruction: "回答更详细",
 	},
 	{
-		pattern:     regexp.MustCompile(`少说教|(?:回答|回复|表达|说话)(?:再)?直接(?:一点|一些)?|直接(?:一点|一些)`),
+		pattern:     regexp.MustCompile(`少说教|(?:回答|回复|表达|说话|语气)(?:再|更)?直接(?:一点|一些)?|^\s*(?:请)?直接(?:一点|一些)(?:吧|就好)?\s*$`),
 		slot:        "tone.direct",
 		category:    "tone",
 		instruction: "表达直接，少说教",
@@ -121,12 +121,66 @@ func Extract(message string) Extraction {
 
 	candidates := make([]extractionCandidate, 0, 8)
 	source := truncateRunes(message, MaxSourceTextRunes)
-	oneTurnOnly := oneTurnPattern.MatchString(message) && !durablePattern.MatchString(message)
+	for _, clause := range splitClauses(message) {
+		if isFalsePositiveContext(clause.text) {
+			continue
+		}
+		candidates = append(candidates, extractClauseCandidates(clause, source)...)
+	}
+
+	return coalesceCandidates(candidates)
+}
+
+type messageClause struct {
+	text   string
+	offset int
+}
+
+var clauseSeparatorPattern = regexp.MustCompile(`[，,。；;！？!?\n]+|(?:不过|然而|可是|然后|后来|同时|但)`)
+
+func splitClauses(message string) []messageClause {
+	separators := clauseSeparatorPattern.FindAllStringIndex(message, -1)
+	clauses := make([]messageClause, 0, len(separators)+1)
+	start := 0
+	for _, separator := range separators {
+		appendClause := func(end int) {
+			left := start
+			for left < end && (message[left] == ' ' || message[left] == '\t' || message[left] == '\r') {
+				left++
+			}
+			right := end
+			for right > left && (message[right-1] == ' ' || message[right-1] == '\t' || message[right-1] == '\r') {
+				right--
+			}
+			if left < right {
+				clauses = append(clauses, messageClause{text: message[left:right], offset: left})
+			}
+		}
+		appendClause(separator[0])
+		start = separator[1]
+	}
+	left := start
+	for left < len(message) && (message[left] == ' ' || message[left] == '\t' || message[left] == '\r') {
+		left++
+	}
+	right := len(message)
+	for right > left && (message[right-1] == ' ' || message[right-1] == '\t' || message[right-1] == '\r') {
+		right--
+	}
+	if left < right {
+		clauses = append(clauses, messageClause{text: message[left:right], offset: left})
+	}
+	return clauses
+}
+
+func extractClauseCandidates(clause messageClause, source string) []extractionCandidate {
+	candidates := make([]extractionCandidate, 0, 4)
+	oneTurnOnly := oneTurnPattern.MatchString(clause.text) && !durablePattern.MatchString(clause.text)
 
 	for _, rule := range deterministicRules {
-		indexes := rule.pattern.FindAllStringSubmatchIndex(message, -1)
+		indexes := rule.pattern.FindAllStringSubmatchIndex(clause.text, -1)
 		for _, index := range indexes {
-			matches := submatches(message, index)
+			matches := submatches(clause.text, index)
 			instruction := rule.instruction
 			if rule.build != nil {
 				instruction = rule.build(matches)
@@ -141,7 +195,7 @@ func Extract(message string) Extraction {
 				SourceText:  source,
 			}
 			candidates = append(candidates, extractionCandidate{
-				position:    index[0],
+				position:    clause.offset + index[0],
 				slot:        rule.slot,
 				directive:   instruction,
 				preference:  preference,
@@ -150,21 +204,21 @@ func Extract(message string) Extraction {
 		}
 	}
 
-	for _, index := range currentConclusionOnlyPattern.FindAllStringIndex(message, -1) {
+	for _, index := range currentConclusionOnlyPattern.FindAllStringIndex(clause.text, -1) {
 		candidates = append(candidates, extractionCandidate{
-			position:    index[0],
+			position:    clause.offset + index[0],
 			slot:        "format.conclusion_first",
 			directive:   "只给结论",
 			currentOnly: true,
 		})
 	}
 
-	if cancellationPattern.MatchString(message) {
+	if cancellationPattern.MatchString(clause.text) {
 		for _, rule := range cancellationRules {
-			for _, index := range rule.pattern.FindAllStringIndex(message, -1) {
+			for _, index := range rule.pattern.FindAllStringIndex(clause.text, -1) {
 				for _, slot := range rule.slots {
 					candidates = append(candidates, extractionCandidate{
-						position:   index[1],
+						position:   clause.offset + index[1],
 						slot:       slot,
 						deleteSlot: slot,
 					})
@@ -172,8 +226,7 @@ func Extract(message string) Extraction {
 			}
 		}
 	}
-
-	return coalesceCandidates(candidates)
+	return candidates
 }
 
 func coalesceCandidates(candidates []extractionCandidate) Extraction {
@@ -187,38 +240,50 @@ func coalesceCandidates(candidates []extractionCandidate) Extraction {
 		return candidates[i].position < candidates[j].position
 	})
 
-	latest := make(map[string]extractionCandidate, len(candidates))
+	currentLatest := make(map[string]extractionCandidate, len(candidates))
+	durableLatest := make(map[string]extractionCandidate, len(candidates))
 	for _, candidate := range candidates {
-		latest[candidate.slot] = candidate
-	}
-	final := make([]extractionCandidate, 0, len(latest))
-	for _, candidate := range latest {
-		final = append(final, candidate)
-	}
-	sort.Slice(final, func(i, j int) bool {
-		if final[i].position == final[j].position {
-			return final[i].slot < final[j].slot
+		currentLatest[candidate.slot] = candidate
+		if candidate.deleteSlot != "" || (candidate.preference != nil && !candidate.currentOnly) {
+			durableLatest[candidate.slot] = candidate
 		}
-		return final[i].position < final[j].position
-	})
+	}
+	current := sortedCandidates(currentLatest)
+	durable := sortedCandidates(durableLatest)
 
 	result := Extraction{
-		CurrentDirectives: make([]string, 0, len(final)),
-		Mutations:         make([]Mutation, 0, len(final)),
+		CurrentDirectives: make([]string, 0, len(current)),
+		Mutations:         make([]Mutation, 0, len(durable)),
 	}
-	for _, candidate := range final {
+	for _, candidate := range current {
+		if candidate.deleteSlot == "" && candidate.directive != "" {
+			result.CurrentDirectives = append(result.CurrentDirectives, candidate.directive)
+		}
+	}
+	for _, candidate := range durable {
 		if candidate.deleteSlot != "" {
 			result.Mutations = append(result.Mutations, Mutation{DeleteSlot: candidate.deleteSlot})
 			continue
 		}
-		if candidate.directive != "" {
-			result.CurrentDirectives = append(result.CurrentDirectives, candidate.directive)
-		}
-		if !candidate.currentOnly && candidate.preference != nil {
+		if candidate.preference != nil {
 			preference := *candidate.preference
 			result.Mutations = append(result.Mutations, Mutation{Upsert: &preference})
 		}
 	}
+	return result
+}
+
+func sortedCandidates(latest map[string]extractionCandidate) []extractionCandidate {
+	result := make([]extractionCandidate, 0, len(latest))
+	for _, candidate := range latest {
+		result = append(result, candidate)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].position == result[j].position {
+			return result[i].slot < result[j].slot
+		}
+		return result[i].position < result[j].position
+	})
 	return result
 }
 
@@ -234,19 +299,37 @@ func submatches(message string, indexes []int) []string {
 }
 
 func isFalsePositiveContext(message string) bool {
+	message = strings.TrimSpace(message)
 	lower := strings.ToLower(message)
 	if strings.Contains(message, "另一个人") || strings.Contains(message, "别人") ||
 		strings.Contains(message, "怎么让他") || strings.Contains(message, "怎么让她") ||
 		strings.Contains(message, "让另") {
 		return true
 	}
+	if isEntirelyQuoted(message) {
+		return true
+	}
 	if (strings.Contains(message, "他说") || strings.Contains(message, "她说") ||
-		strings.Contains(message, "这句话") || strings.Contains(message, "什么意思")) &&
+		strings.Contains(message, "朋友说") || strings.Contains(message, "分析") ||
+		strings.Contains(message, "解释") || strings.Contains(message, "翻译") ||
+		strings.Contains(message, "引用") || strings.Contains(message, "文案") ||
+		strings.Contains(message, "这句") || strings.Contains(message, "这句话") ||
+		strings.Contains(message, "什么意思")) &&
 		containsQuotedSpan(message) {
 		return true
 	}
 	if strings.Contains(lower, "what does") && containsQuotedSpan(message) {
 		return true
+	}
+	return false
+}
+
+func isEntirelyQuoted(message string) bool {
+	pairs := [][2]string{{"“", "”"}, {"‘", "’"}, {`"`, `"`}, {"「", "」"}, {"『", "』"}}
+	for _, pair := range pairs {
+		if strings.HasPrefix(message, pair[0]) && strings.HasSuffix(message, pair[1]) && len(message) >= len(pair[0])+len(pair[1]) {
+			return true
+		}
 	}
 	return false
 }

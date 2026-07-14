@@ -74,10 +74,11 @@ func NewLLMExtractor(complete CompleteJSON, options ...LLMExtractorOption) *LLME
 // Extract performs a best-effort fallback. A busy extractor, timeout, provider
 // error, or invalid output always returns an empty result and never blocks chat.
 func (e *LLMExtractor) Extract(ctx context.Context, message string) Extraction {
-	if e == nil || e.complete == nil || !isUnresolvedStyleMessage(message) {
+	if e == nil || e.complete == nil {
 		return Extraction{}
 	}
-	if local := Extract(message); len(local.CurrentDirectives) > 0 || len(local.Mutations) > 0 {
+	unresolved := unresolvedStyleClauses(message)
+	if unresolved == "" {
 		return Extraction{}
 	}
 	select {
@@ -95,7 +96,7 @@ func (e *LLMExtractor) Extract(ctx context.Context, message string) Extraction {
 	completed := make(chan completionResult, 1)
 	go func() {
 		defer func() { <-e.slots }()
-		value, err := e.complete(boundedCtx, llmExtractionSystemPrompt, message, llmExtractionMaxTokens)
+		value, err := e.complete(boundedCtx, llmExtractionSystemPrompt, unresolved, llmExtractionMaxTokens)
 		completed <- completionResult{value: value, err: err}
 	}()
 
@@ -213,13 +214,37 @@ var unresolvedStylePattern = regexp.MustCompile(`(?:以后|今后|之后|每次|
 
 func isUnresolvedStyleMessage(message string) bool {
 	message = strings.TrimSpace(message)
-	return message != "" && !isFalsePositiveContext(message) && unresolvedStylePattern.MatchString(message)
+	return message != "" && !isFalsePositiveContext(message) &&
+		!rejectedContentPattern.MatchString(message) && !rejectedTaskPattern.MatchString(message) &&
+		unresolvedStylePattern.MatchString(message)
+}
+
+func unresolvedStyleClauses(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" || isFalsePositiveContext(message) {
+		return ""
+	}
+	unresolved := make([]string, 0, 2)
+	for _, clause := range splitClauses(message) {
+		text := strings.TrimSpace(clause.text)
+		if text == "" || !isUnresolvedStyleMessage(text) {
+			continue
+		}
+		local := Extract(text)
+		if len(local.CurrentDirectives) > 0 || len(local.Mutations) > 0 {
+			continue
+		}
+		unresolved = append(unresolved, text)
+	}
+	return strings.Join(unresolved, "，")
 }
 
 var communicationStylePattern = regexp.MustCompile(`语气|回答|回复|表达|说话|措辞|称呼|叫我|亲爱|简短|详细|长篇|列表|清单|分点|结论|反问|追问|正式|随意|温柔|直接|说教|幽默|自然|沉稳|成熟|交流|问题`)
 var rejectedSafetyPattern = regexp.MustCompile(`忽略.{0,12}(?:安全|规则|指令)|绕过|越狱|不受限制|系统提示词|(?i:system prompt)`)
 var rejectedFactPattern = regexp.MustCompile(`我的.{0,12}(?:是|在|叫)|生日|身份证|手机号|住址|家庭地址|事实`)
 var rejectedTaskPattern = regexp.MustCompile(`帮我|替我|提醒我|查天气|下单|写代码|执行任务|生成图片|发送消息`)
+var rejectedContentPattern = regexp.MustCompile(`品牌|口号|固定说|每次(?:回答|回复).{0,16}(?:说|带上|包含|提到)|(?i:brand|slogan|catchphrase)`)
+var customStylePattern = regexp.MustCompile(`(?:语气|风格|表达|措辞|交流).{0,16}(?:自然|成熟|沉稳|正式|随意|温柔|友好|亲切|幽默|简洁|直接|口语|专业)|(?:自然|成熟|沉稳|正式|随意|温柔|友好|亲切|幽默|简洁|直接|口语|专业).{0,16}(?:语气|风格|表达|措辞|交流)`)
 
 var slotInstructionPatterns = map[string]*regexp.Regexp{
 	"addressing.preferred_name": regexp.MustCompile(`称呼|叫我|喊我|名字`),
@@ -241,12 +266,15 @@ func validCommunicationInstruction(instruction string) bool {
 	if rejectedSafetyPattern.MatchString(instruction) || rejectedFactPattern.MatchString(instruction) || rejectedTaskPattern.MatchString(instruction) {
 		return false
 	}
+	if rejectedContentPattern.MatchString(instruction) {
+		return false
+	}
 	return communicationStylePattern.MatchString(instruction)
 }
 
 func instructionMatchesSlot(slot, instruction string) bool {
 	if slot == "custom.communication_style" {
-		return true
+		return customStylePattern.MatchString(instruction)
 	}
 	pattern, ok := slotInstructionPatterns[slot]
 	return ok && pattern.MatchString(instruction)

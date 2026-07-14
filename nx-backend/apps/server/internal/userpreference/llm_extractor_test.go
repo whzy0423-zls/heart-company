@@ -53,6 +53,8 @@ func TestLLMExtractorOnlyCallsForUnresolvedStyleMessages(t *testing.T) {
 		"我今天去了上海",
 		"帮我查一下天气",
 		"不要叫我亲爱的",
+		"每次回答都说香蕉",
+		"以后回复都带上品牌名九星",
 		`他说“以后语气温柔一点”是什么意思？`,
 	} {
 		got := extractor.Extract(context.Background(), message)
@@ -62,6 +64,34 @@ func TestLLMExtractorOnlyCallsForUnresolvedStyleMessages(t *testing.T) {
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("LLM must not be called for ordinary or deterministic messages, got %d calls", calls.Load())
+	}
+}
+
+func TestLLMExtractorSendsOnlyUnresolvedStyleClauses(t *testing.T) {
+	const message = "以后回答短一点，语气幽默一些"
+	local := Extract(message)
+	if len(local.Mutations) != 1 || local.Mutations[0].Upsert == nil || local.Mutations[0].Upsert.Slot != "length.detail_level" {
+		t.Fatalf("expected local concise extraction, got %+v", local)
+	}
+
+	var calls atomic.Int32
+	extractor := NewLLMExtractor(func(_ context.Context, _ string, user string, _ int) (string, error) {
+		calls.Add(1)
+		if user != "语气幽默一些" {
+			t.Fatalf("LLM must receive only unresolved clause, got %q", user)
+		}
+		return `{"directives":["语气幽默自然"],"mutations":[{"operation":"upsert","category":"custom","slot":"custom.communication_style","instruction":"语气幽默自然"}]}`, nil
+	})
+
+	got := extractor.Extract(context.Background(), message)
+	if calls.Load() != 1 {
+		t.Fatalf("expected one fallback call, got %d", calls.Load())
+	}
+	if len(got.Mutations) != 1 || got.Mutations[0].Upsert == nil || got.Mutations[0].Upsert.Slot != "custom.communication_style" {
+		t.Fatalf("fallback must return only unresolved humor preference, got %+v", got)
+	}
+	if got.Mutations[0].Upsert.SourceText != message {
+		t.Fatalf("durable source must retain original message, got %q", got.Mutations[0].Upsert.SourceText)
 	}
 }
 
@@ -140,6 +170,14 @@ func TestLLMExtractorRejectsUnsafeFactualTaskAndUnboundedOutput(t *testing.T) {
 		{
 			name: "arbitrary task",
 			json: `{"directives":["每天查天气"],"mutations":[{"operation":"upsert","category":"custom","slot":"custom.communication_style","instruction":"每天帮我查天气"}]}`,
+		},
+		{
+			name: "catchphrase content",
+			json: `{"directives":["每次回答都说香蕉"],"mutations":[{"operation":"upsert","category":"custom","slot":"custom.communication_style","instruction":"每次回答都说香蕉"}]}`,
+		},
+		{
+			name: "brand content",
+			json: `{"directives":["每次回答都带上品牌名九星"],"mutations":[{"operation":"upsert","category":"custom","slot":"custom.communication_style","instruction":"每次回答都带上品牌名九星"}]}`,
 		},
 		{
 			name: "oversized instruction",
