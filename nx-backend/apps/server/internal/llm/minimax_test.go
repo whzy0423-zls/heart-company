@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -62,7 +63,7 @@ func TestMiniMaxGeneratorGenerateStreamEmitsBeforeUpstreamCompletes(t *testing.T
 			requestErr <- fmt.Errorf("expected stream=true, got %+v", body["stream"])
 			return
 		}
-		if body["tokens_to_generate"] != float64(360) {
+		if body["tokens_to_generate"] != float64(220) {
 			requestErr <- fmt.Errorf("unexpected token budget: %+v", body["tokens_to_generate"])
 			return
 		}
@@ -512,8 +513,49 @@ func TestMiniMaxGeneratorUsesConciseChatTokenBudget(t *testing.T) {
 		t.Fatalf("Generate returned error: %v", err)
 	}
 
-	if requestBody["tokens_to_generate"] != float64(360) {
-		t.Fatalf("expected chat token budget 360, got %+v", requestBody["tokens_to_generate"])
+	if requestBody["tokens_to_generate"] != float64(220) {
+		t.Fatalf("expected chat token budget 220, got %+v", requestBody["tokens_to_generate"])
+	}
+}
+
+func TestChatTokenBudget(t *testing.T) {
+	tests := []struct {
+		question string
+		want     int
+	}{
+		{question: "不要叫我亲爱的", want: 220},
+		{question: "简单说重点", want: 220},
+		{question: "请详细展开分析原因和步骤", want: 420},
+		{question: "请完整分析一下", want: 420},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.question, func(t *testing.T) {
+			if got := chatTokenBudget(tt.question); got != tt.want {
+				t.Fatalf("chatTokenBudget(%q) = %d, want %d", tt.question, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMiniMaxGeneratorGenerateStreamUsesAdaptiveChatTokenBudget(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"回答\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{APIKey: "test-key"})
+	if _, err := generator.GenerateStream(context.Background(), rag.GenerateInput{Question: "请详细展开分析原因"}, nil); err != nil {
+		t.Fatalf("GenerateStream returned error: %v", err)
+	}
+
+	if requestBody["tokens_to_generate"] != float64(420) {
+		t.Fatalf("expected stream chat token budget 420, got %+v", requestBody["tokens_to_generate"])
 	}
 }
 
@@ -524,8 +566,11 @@ func TestDefaultSystemPromptUsesWarmConciseAdaptiveStyle(t *testing.T) {
 	for _, want := range []string{
 		"像一个懂用户的朋友",
 		"自然、有温度、少说教",
-		"简单问题用 2-4 句回答",
-		"复杂问题才用简短段落展开",
+		"普通问题通常只回答 1-3 句",
+		"只有用户明确要求展开",
+		"不主动使用亲爱的、宝贝等亲昵称呼",
+		"用户要求纠正时立即按新要求重答",
+		"不要解释为什么要纠正",
 		"不要机械复述用户的话",
 		"不要固定总结",
 		"不要固定给建议",

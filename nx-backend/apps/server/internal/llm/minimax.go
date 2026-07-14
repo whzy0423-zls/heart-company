@@ -136,7 +136,7 @@ func (g *MiniMaxGenerator) Generate(ctx context.Context, input rag.GenerateInput
 	body := map[string]any{
 		"model":              g.model,
 		"temperature":        0.55,
-		"tokens_to_generate": 360,
+		"tokens_to_generate": chatTokenBudget(input.Question),
 		"messages": []map[string]string{
 			{"role": "system", "content": g.resolveSystemPrompt()},
 			{"role": "user", "content": buildUserPrompt(input)},
@@ -190,7 +190,7 @@ func (g *MiniMaxGenerator) GenerateStream(ctx context.Context, input rag.Generat
 	body := map[string]any{
 		"model":              g.model,
 		"temperature":        0.55,
-		"tokens_to_generate": 360,
+		"tokens_to_generate": chatTokenBudget(input.Question),
 		"stream":             true,
 		"messages": []map[string]string{
 			{"role": "system", "content": g.resolveSystemPrompt()},
@@ -1439,7 +1439,17 @@ func (g *MiniMaxGenerator) resolveSystemPrompt() string {
 // defaultSystemPrompt 内置默认提示词。
 // 与旧版的区别：不再"只基于检索资料"，资料不足时允许结合九型人格常识温和作答，
 // 这样检索未命中也能给出有帮助的回答，而不是退回固定兜底。
-const defaultSystemPrompt = "你是九型人格成长陪伴里的成长教练，像一个懂用户的朋友，自然、有温度、少说教。请优先结合给定的检索资料和用户档案回答；当资料不足或没有资料时，也可以基于九型人格的通用常识，温和、稳妥地继续作答，不要生硬拒绝。不做医疗或心理诊断；回答要具体、适合手机阅读，并根据问题复杂度自适应：简单问题用 2-4 句回答，复杂问题才用简短段落展开。不要机械复述用户的话，不要固定总结，不要固定给建议；只有确有必要时，最多追问一个真正有用的问题。"
+const defaultSystemPrompt = "你是九型人格成长陪伴里的成长教练，像一个懂用户的朋友，自然、有温度、少说教。请优先结合给定的检索资料和用户档案回答；当资料不足或没有资料时，也可以基于九型人格的通用常识，温和、稳妥地继续作答，不要生硬拒绝。不做医疗或心理诊断。回答要具体、先给重点、适合手机阅读：普通问题通常只回答 1-3 句，只有用户明确要求展开、详细说明或完整分析时才使用简短段落展开。不主动使用亲爱的、宝贝等亲昵称呼。用户要求纠正时立即按新要求重答，不要解释为什么要纠正，也不要维护之前的回答。不要机械复述用户的话，不要固定总结，不要固定给建议；只有确有必要时，最多追问一个真正有用的问题。"
+
+func chatTokenBudget(question string) int {
+	question = strings.TrimSpace(question)
+	for _, marker := range []string{"详细", "展开", "完整分析", "深入分析", "逐步说明"} {
+		if strings.Contains(question, marker) {
+			return 420
+		}
+	}
+	return 220
+}
 
 func buildUserPrompt(input rag.GenerateInput) string {
 	var b strings.Builder
