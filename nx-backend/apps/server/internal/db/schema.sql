@@ -671,6 +671,24 @@ CREATE TABLE IF NOT EXISTS app_users (
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS app_user_preferences (
+  id            BIGSERIAL PRIMARY KEY,
+  app_user_id   BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  category      TEXT NOT NULL CHECK (category IN ('addressing', 'length', 'tone', 'format', 'interaction', 'custom')),
+  slot          TEXT NOT NULL CHECK (slot IN ('addressing.preferred_name', 'addressing.avoid_dear', 'length.detail_level', 'tone.direct', 'tone.formality', 'tone.warmth', 'format.no_lists', 'format.conclusion_first', 'interaction.no_followup', 'custom.communication_style')),
+  instruction   TEXT NOT NULL CHECK (char_length(instruction) BETWEEN 1 AND 512),
+  source_text   TEXT NOT NULL DEFAULT '' CHECK (char_length(source_text) <= 1024),
+  create_time   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (split_part(slot, '.', 1) = category),
+  UNIQUE (app_user_id, slot)
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_user_preferences_user_order
+  ON app_user_preferences(app_user_id, category, slot);
+CREATE INDEX IF NOT EXISTS idx_app_user_preferences_category
+  ON app_user_preferences(category, app_user_id);
+
 CREATE TABLE IF NOT EXISTS app_sms_codes (
   id          BIGSERIAL PRIMARY KEY,
   phone       TEXT NOT NULL,
