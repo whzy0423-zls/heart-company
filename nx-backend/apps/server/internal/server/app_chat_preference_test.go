@@ -374,6 +374,16 @@ func TestNewerPreferenceTurnWaitsForAsyncCheckAndApplyThenWins(t *testing.T) {
 		t.Fatal("newer turn completed while older async apply held the ordering lock")
 	case <-time.After(20 * time.Millisecond):
 	}
+	otherUserDone := make(chan struct{})
+	go func() {
+		defer close(otherUserDone)
+		performPreferenceStreamRequest(t, s, 8, 44, "怎么做？", context.Background())
+	}()
+	select {
+	case <-otherUserDone:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("a slow preference apply for user A blocked user B")
+	}
 	close(releaseApply)
 	select {
 	case <-newerDone:

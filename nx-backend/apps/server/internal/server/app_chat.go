@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/chat"
@@ -61,8 +62,8 @@ type appChatPreferenceExtractor interface {
 type appChatPreferenceTurnState struct {
 	mu      sync.Mutex
 	version uint64
-	active  int
-	pending int
+	active  atomic.Int32
+	pending atomic.Int32
 }
 
 type appChatPreferenceTurn struct {
@@ -396,7 +397,6 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) beginAppChatPreferenceTurn(userID int64) appChatPreferenceTurn {
 	s.preferenceTurnsMu.Lock()
-	defer s.preferenceTurnsMu.Unlock()
 	if s.preferenceTurns == nil {
 		s.preferenceTurns = make(map[int64]*appChatPreferenceTurnState)
 	}
@@ -405,10 +405,11 @@ func (s *Server) beginAppChatPreferenceTurn(userID int64) appChatPreferenceTurn 
 		state = &appChatPreferenceTurnState{}
 		s.preferenceTurns[userID] = state
 	}
+	state.active.Add(1)
+	s.preferenceTurnsMu.Unlock()
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.version++
-	state.active++
 	return appChatPreferenceTurn{userID: userID, state: state, version: state.version}
 }
 
@@ -416,11 +417,7 @@ func (s *Server) finishAppChatPreferenceTurn(turn appChatPreferenceTurn) {
 	if turn.state == nil {
 		return
 	}
-	turn.state.mu.Lock()
-	if turn.state.active > 0 {
-		turn.state.active--
-	}
-	turn.state.mu.Unlock()
+	turn.state.active.Add(-1)
 	s.cleanupAppChatPreferenceTurn(turn)
 }
 
@@ -433,9 +430,7 @@ func (s *Server) cleanupAppChatPreferenceTurn(turn appChatPreferenceTurn) {
 	if s.preferenceTurns[turn.userID] != turn.state {
 		return
 	}
-	turn.state.mu.Lock()
-	defer turn.state.mu.Unlock()
-	if turn.state.active == 0 && turn.state.pending == 0 {
+	if turn.state.active.Load() == 0 && turn.state.pending.Load() == 0 {
 		delete(s.preferenceTurns, turn.userID)
 	}
 }
@@ -504,7 +499,7 @@ func (s *Server) scheduleAppChatPreferenceFallback(turn appChatPreferenceTurn, q
 		<-s.preferenceAsyncSlots
 		return false
 	}
-	turn.state.pending++
+	turn.state.pending.Add(1)
 	turn.state.mu.Unlock()
 	timeout := s.preferenceAsyncTimeout
 	if timeout <= 0 {
@@ -519,7 +514,7 @@ func (s *Server) scheduleAppChatPreferenceFallback(turn appChatPreferenceTurn, q
 		if turn.state.version == turn.version && len(extraction.Mutations) > 0 && ctx.Err() == nil {
 			_ = s.userPreferences.Apply(ctx, turn.userID, extraction.Mutations)
 		}
-		turn.state.pending--
+		turn.state.pending.Add(-1)
 		turn.state.mu.Unlock()
 		s.cleanupAppChatPreferenceTurn(turn)
 	}()
