@@ -536,6 +536,46 @@ func TestNewerPreferenceTurnWaitsForAsyncCheckAndApplyThenWins(t *testing.T) {
 	}
 }
 
+func TestPreferenceTurnVersionsAreIssuedInArrivalOrderWithoutWaitingForApplyLock(t *testing.T) {
+	state := newAppChatPreferenceTurnState()
+	s := &Server{preferenceTurns: map[int64]*appChatPreferenceTurnState{7: state}}
+	state.mu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			state.mu.Unlock()
+		}
+	}()
+
+	firstCh := make(chan appChatPreferenceTurn, 1)
+	go func() { firstCh <- s.beginAppChatPreferenceTurn(7) }()
+	var first appChatPreferenceTurn
+	select {
+	case first = <-firstCh:
+	case <-time.After(50 * time.Millisecond):
+		state.mu.Unlock()
+		locked = false
+		t.Fatal("first turn waited for the apply lock before receiving a version")
+	}
+	secondCh := make(chan appChatPreferenceTurn, 1)
+	go func() { secondCh <- s.beginAppChatPreferenceTurn(7) }()
+	var second appChatPreferenceTurn
+	select {
+	case second = <-secondCh:
+	case <-time.After(50 * time.Millisecond):
+		state.mu.Unlock()
+		locked = false
+		t.Fatal("second turn waited for the apply lock before receiving a version")
+	}
+	state.mu.Unlock()
+	locked = false
+	defer s.finishAppChatPreferenceTurn(first)
+	defer s.finishAppChatPreferenceTurn(second)
+	if first.version != 1 || second.version != 2 {
+		t.Fatalf("same-user versions were inverted: first=%d second=%d", first.version, second.version)
+	}
+}
+
 func TestAppChatPreferenceFallbackDoesNotRunAfterSaveFailure(t *testing.T) {
 	chatStore := newFakeAppChatStreamStore()
 	chatStore.saveErr = errors.New("save failed")

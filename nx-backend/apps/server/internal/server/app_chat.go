@@ -61,7 +61,7 @@ type appChatPreferenceExtractor interface {
 
 type appChatPreferenceTurnState struct {
 	mu      sync.Mutex
-	version uint64
+	version atomic.Uint64
 	active  atomic.Int32
 	pending atomic.Int32
 }
@@ -405,20 +405,22 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) beginAppChatPreferenceTurn(userID int64) appChatPreferenceTurn {
 	s.preferenceTurnsMu.Lock()
+	defer s.preferenceTurnsMu.Unlock()
 	if s.preferenceTurns == nil {
 		s.preferenceTurns = make(map[int64]*appChatPreferenceTurnState)
 	}
 	state := s.preferenceTurns[userID]
 	if state == nil {
-		state = &appChatPreferenceTurnState{}
+		state = newAppChatPreferenceTurnState()
 		s.preferenceTurns[userID] = state
 	}
 	state.active.Add(1)
-	s.preferenceTurnsMu.Unlock()
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	state.version++
-	return appChatPreferenceTurn{userID: userID, state: state, version: state.version}
+	version := state.version.Add(1)
+	return appChatPreferenceTurn{userID: userID, state: state, version: version}
+}
+
+func newAppChatPreferenceTurnState() *appChatPreferenceTurnState {
+	return &appChatPreferenceTurnState{}
 }
 
 func (s *Server) finishAppChatPreferenceTurn(turn appChatPreferenceTurn) {
@@ -447,7 +449,7 @@ func (s *Server) prepareAppChatPreferences(ctx context.Context, turn appChatPref
 	if turn.state != nil {
 		turn.state.mu.Lock()
 		defer turn.state.mu.Unlock()
-		if turn.state.version != turn.version {
+		if turn.state.version.Load() != turn.version {
 			return nil, nil, errAppChatPreferenceStale
 		}
 	} else if len(extraction.Mutations) > 0 {
@@ -502,7 +504,7 @@ func (s *Server) scheduleAppChatPreferenceFallback(turn appChatPreferenceTurn, q
 		return false
 	}
 	turn.state.mu.Lock()
-	if turn.state.version != turn.version {
+	if turn.state.version.Load() != turn.version {
 		turn.state.mu.Unlock()
 		<-s.preferenceAsyncSlots
 		return false
@@ -519,7 +521,7 @@ func (s *Server) scheduleAppChatPreferenceFallback(turn appChatPreferenceTurn, q
 		defer cancel()
 		extraction := s.preferenceExtractor.Extract(ctx, question)
 		turn.state.mu.Lock()
-		if turn.state.version == turn.version && len(extraction.Mutations) > 0 && ctx.Err() == nil {
+		if turn.state.version.Load() == turn.version && len(extraction.Mutations) > 0 && ctx.Err() == nil {
 			_ = s.userPreferences.Apply(ctx, turn.userID, extraction.Mutations)
 		}
 		turn.state.pending.Add(-1)
