@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
+	"nine-xing/nx-backend/apps/server/internal/llm"
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
 	"nine-xing/nx-backend/apps/server/internal/profilecalibration"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 	"nine-xing/nx-backend/apps/server/internal/ragstore"
-	"nine-xing/nx-backend/apps/server/internal/llm"
 )
 
 func TestServerDailyQuizQuestionGeneratorUsesKnowledgeContextAndModelConfig(t *testing.T) {
@@ -74,7 +74,9 @@ func (f *fakeDailyQuizRAGStore) EnabledDocuments(context.Context) ([]rag.Documen
 	return f.docs, nil
 }
 
-func (f *fakeDailyQuizRAGStore) DeleteDocument(context.Context, string) (bool, error) { return false, nil }
+func (f *fakeDailyQuizRAGStore) DeleteDocument(context.Context, string) (bool, error) {
+	return false, nil
+}
 func (f *fakeDailyQuizRAGStore) ListDocuments(context.Context, map[string]string) (ragstore.PageResult[ragstore.Document], error) {
 	return ragstore.PageResult[ragstore.Document]{}, nil
 }
