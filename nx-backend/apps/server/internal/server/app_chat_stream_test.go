@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"io"
@@ -601,6 +603,108 @@ func TestAppChatStreamClosedWorkerStillEmitsTotalTimeoutTerminal(t *testing.T) {
 	}
 }
 
+func TestAppChatStreamQueuedDoneWinsOverExpiredContext(t *testing.T) {
+	s := &Server{
+		chatHeartbeatInterval:   time.Second,
+		chatProviderIdleTimeout: time.Second,
+	}
+	wrongTerminal := 0
+	for range 100 {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		events := make(chan appChatStreamEvent, 1)
+		events <- appChatStreamEvent{
+			kind: appChatStreamDone,
+			response: askResponse{
+				Answer:    rag.Answer{Answer: "已保存"},
+				MessageID: 88,
+			},
+		}
+		close(events)
+		writer := newAppChatBlockingStreamWriter()
+		s.pumpAppChatStream(ctx, func() {}, context.Background(), writer, writer, events, 7, 42, time.Now(), time.Second)
+		body := writer.BodyString()
+		if strings.Count(body, "event: done\n") != 1 || strings.Count(body, "event: error\n") != 0 || !strings.Contains(body, `"messageId":88`) {
+			wrongTerminal++
+		}
+	}
+	if wrongTerminal != 0 {
+		t.Fatalf("%d queued committed results lost to the expired context", wrongTerminal)
+	}
+}
+
+func TestAppChatAskStreamCommittedSaveDoneSurvivesBlockedPostSaveMemory(t *testing.T) {
+	memoryStarted := make(chan struct{})
+	releaseMemory := make(chan struct{})
+	memoryFinished := make(chan struct{})
+	memoryContext := make(chan context.Context, 1)
+	database := sql.OpenDB(&blockingAppChatExecConnector{
+		started:  memoryStarted,
+		release:  releaseMemory,
+		finished: memoryFinished,
+		contexts: memoryContext,
+	})
+	defer database.Close()
+
+	store := newFakeAppChatStreamStore()
+	store.cardID = 9
+	store.messageID = 123
+	s := newAppChatStreamServer(store, successfulAppChatGenerator("完整回答"))
+	s.db = database
+	s.chatTimeout = 60 * time.Millisecond
+	writer := newAppChatBlockingStreamWriter()
+	req := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/ask/stream", strings.NewReader(`{"question":"记住我喜欢安静"}`))
+	req = req.WithContext(context.WithValue(context.Background(), appContextKey{}, auth.UserInfo{ID: 7}))
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		s.appChatRouter(writer, req)
+	}()
+
+	select {
+	case <-memoryStarted:
+	case <-time.After(time.Second):
+		t.Fatal("post-save memory side effect did not start")
+	}
+	postSaveCtx := <-memoryContext
+	deadline, ok := postSaveCtx.Deadline()
+	if !ok {
+		close(releaseMemory)
+		t.Fatal("post-save memory context is not bounded")
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 || remaining > 3*time.Second {
+		close(releaseMemory)
+		t.Fatalf("post-save memory deadline remaining = %s, want (0, 3s]", remaining)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		close(releaseMemory)
+		t.Fatal("handler did not finish within its bounded deadline")
+	}
+	close(releaseMemory)
+	select {
+	case <-memoryFinished:
+	case <-time.After(time.Second):
+		t.Fatal("bounded post-save memory worker did not exit")
+	}
+
+	body := writer.BodyString()
+	if got := strings.Count(body, "event: done\n"); got != 1 {
+		t.Fatalf("done terminal count = %d, want 1; body=%q", got, body)
+	}
+	if strings.Contains(body, "event: error\n") {
+		t.Fatalf("committed save was reported as an error: %q", body)
+	}
+	if !strings.Contains(body, `"messageId":123`) {
+		t.Fatalf("done event missing committed message id: %q", body)
+	}
+	if store.saveCallCount() != 1 {
+		t.Fatalf("SavePair called %d times, want 1", store.saveCallCount())
+	}
+}
+
 func TestAppChatAskStreamDoesNotSavePartialAnswerWhenGenerationFails(t *testing.T) {
 	store := newFakeAppChatStreamStore()
 	generator := &controlledAppChatStreamingGenerator{
@@ -798,6 +902,7 @@ type fakeAppChatStreamStore struct {
 	onSave         func()
 	contextStarted chan struct{}
 	contextRelease chan struct{}
+	cardID         int64
 }
 
 func newFakeAppChatStreamStore() *fakeAppChatStreamStore {
@@ -805,7 +910,7 @@ func newFakeAppChatStreamStore() *fakeAppChatStreamStore {
 }
 
 func (s *fakeAppChatStreamStore) GetSession(context.Context, int64, int64) (chat.Session, error) {
-	return chat.Session{ID: 42}, nil
+	return chat.Session{ID: 42, CardID: s.cardID}, nil
 }
 
 func (s *fakeAppChatStreamStore) GetConversationState(ctx context.Context, _ int64) (chat.ConversationState, error) {
@@ -870,6 +975,55 @@ func (*emptyAppChatRAGStore) EnabledDocuments(context.Context) ([]rag.Document, 
 type blockingAppChatPreferenceStore struct {
 	started chan struct{}
 	release chan struct{}
+}
+
+type blockingAppChatExecConnector struct {
+	started  chan struct{}
+	release  chan struct{}
+	finished chan struct{}
+	contexts chan context.Context
+}
+
+func (c *blockingAppChatExecConnector) Connect(context.Context) (driver.Conn, error) {
+	return &blockingAppChatExecConn{connector: c}, nil
+}
+
+func (*blockingAppChatExecConnector) Driver() driver.Driver {
+	return blockingAppChatExecDriver{}
+}
+
+type blockingAppChatExecDriver struct{}
+
+func (blockingAppChatExecDriver) Open(string) (driver.Conn, error) {
+	return nil, errors.New("use connector")
+}
+
+type blockingAppChatExecConn struct {
+	connector *blockingAppChatExecConnector
+}
+
+func (*blockingAppChatExecConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare unsupported")
+}
+
+func (*blockingAppChatExecConn) Close() error { return nil }
+
+func (*blockingAppChatExecConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("transactions unsupported")
+}
+
+func (c *blockingAppChatExecConn) ExecContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Result, error) {
+	if c.connector.contexts != nil {
+		c.connector.contexts <- ctx
+	}
+	close(c.connector.started)
+	defer close(c.connector.finished)
+	select {
+	case <-c.connector.release:
+		return driver.RowsAffected(1), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (s *blockingAppChatPreferenceStore) List(ctx context.Context, _ int64) ([]userpreference.Preference, error) {

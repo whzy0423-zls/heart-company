@@ -27,6 +27,7 @@ const appChatFallbackHistoryLimit = 20
 const (
 	defaultAppChatHeartbeatInterval = 15 * time.Second
 	defaultAppChatProviderIdle      = 20 * time.Second
+	defaultAppChatPostSaveTimeout   = 2 * time.Second
 	appChatStreamEventBuffer        = 16
 )
 
@@ -40,12 +41,13 @@ const (
 )
 
 type appChatStreamEvent struct {
-	kind        appChatStreamEventKind
-	delta       string
-	writeResult chan error
-	response    askResponse
-	publicError string
-	errorPhase  string
+	kind          appChatStreamEventKind
+	delta         string
+	writeResult   chan error
+	postSaveReady <-chan struct{}
+	response      askResponse
+	publicError   string
+	errorPhase    string
 }
 
 type appChatPromptContext struct {
@@ -484,12 +486,23 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 		send(appChatStreamEvent{kind: appChatStreamError, publicError: "回答保存失败，请重试", errorPhase: "save"})
 		return
 	}
+	// SavePair has committed. The client-facing terminal must no longer be
+	// dropped merely because the request deadline expires during post-save work.
+	postSaveReady := make(chan struct{})
+	events <- appChatStreamEvent{
+		kind:          appChatStreamDone,
+		response:      askResponse{Answer: ans, MessageID: messageID},
+		postSaveReady: postSaveReady,
+	}
 	s.scheduleAppChatPreferenceFallback(input.preferenceTurn, input.question)
-	s.rememberChatAnswer(ctx, input.userID, input.cardID, input.question, ans.Answer)
+	close(postSaveReady)
+
+	postSaveCtx, cancelPostSave := context.WithTimeout(context.Background(), defaultAppChatPostSaveTimeout)
+	s.rememberChatAnswer(postSaveCtx, input.userID, input.cardID, input.question, ans.Answer)
+	cancelPostSave()
 	if messageID > 0 {
 		s.recordAppProfileEvidenceAsync(input.userID, input.cardID, "chat", messageID, input.question)
 	}
-	send(appChatStreamEvent{kind: appChatStreamDone, response: askResponse{Answer: ans, MessageID: messageID}})
 }
 
 func (s *Server) pumpAppChatStream(
@@ -530,64 +543,82 @@ func (s *Server) pumpAppChatStream(
 	}
 
 	firstDelta := true
-	for {
-		select {
-		case event, ok := <-events:
-			if !ok {
-				if requestCtx.Err() != nil {
-					logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
-					return
-				}
-				if ctx.Err() != nil {
-					_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成超时，请重试"})
-					logAppChatStreamTiming("error", userID, sessionID, startedAt, "total_timeout")
-					return
-				}
-				if writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成失败，请重试"}) != nil {
-					cancel()
-				}
-				logAppChatStreamTiming("error", userID, sessionID, startedAt, "worker_closed")
-				return
+	handleEvent := func(event appChatStreamEvent, ok bool) bool {
+		if !ok {
+			if requestCtx.Err() != nil {
+				logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
+				return true
 			}
-			switch event.kind {
-			case appChatStreamProviderStarted:
-				resetIdle()
-			case appChatStreamDelta:
-				if event.delta == "" {
-					if event.writeResult != nil {
-						event.writeResult <- nil
-					}
-					continue
-				}
-				if err := writeAppChatSSE(w, flusher, "delta", map[string]string{"content": event.delta}); err != nil {
-					if event.writeResult != nil {
-						event.writeResult <- err
-					}
-					cancel()
-					logAppChatStreamTiming("error", userID, sessionID, startedAt, "delta_write")
-					return
-				}
+			if ctx.Err() != nil {
+				_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成超时，请重试"})
+				logAppChatStreamTiming("error", userID, sessionID, startedAt, "total_timeout")
+				return true
+			}
+			if writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成失败，请重试"}) != nil {
+				cancel()
+			}
+			logAppChatStreamTiming("error", userID, sessionID, startedAt, "worker_closed")
+			return true
+		}
+		switch event.kind {
+		case appChatStreamProviderStarted:
+			resetIdle()
+		case appChatStreamDelta:
+			if event.delta == "" {
 				if event.writeResult != nil {
 					event.writeResult <- nil
 				}
-				resetIdle()
-				if firstDelta {
-					firstDelta = false
-					logAppChatStreamTiming("first_delta", userID, sessionID, startedAt, "")
+				return false
+			}
+			if err := writeAppChatSSE(w, flusher, "delta", map[string]string{"content": event.delta}); err != nil {
+				if event.writeResult != nil {
+					event.writeResult <- err
 				}
-			case appChatStreamDone:
-				if err := writeAppChatSSE(w, flusher, "done", event.response); err != nil {
-					cancel()
-					logAppChatStreamTiming("error", userID, sessionID, startedAt, "done_write")
-					return
-				}
-				logAppChatStreamTiming("completed", userID, sessionID, startedAt, "")
+				cancel()
+				logAppChatStreamTiming("error", userID, sessionID, startedAt, "delta_write")
+				return true
+			}
+			if event.writeResult != nil {
+				event.writeResult <- nil
+			}
+			resetIdle()
+			if firstDelta {
+				firstDelta = false
+				logAppChatStreamTiming("first_delta", userID, sessionID, startedAt, "")
+			}
+		case appChatStreamDone:
+			if err := writeAppChatSSE(w, flusher, "done", event.response); err != nil {
+				cancel()
+				logAppChatStreamTiming("error", userID, sessionID, startedAt, "done_write")
+				return true
+			}
+			if event.postSaveReady != nil {
+				<-event.postSaveReady
+			}
+			logAppChatStreamTiming("completed", userID, sessionID, startedAt, "")
+			return true
+		case appChatStreamError:
+			if err := writeAppChatSSE(w, flusher, "error", map[string]string{"message": event.publicError}); err != nil {
+				cancel()
+			}
+			logAppChatStreamTiming("error", userID, sessionID, startedAt, event.errorPhase)
+			return true
+		}
+		return false
+	}
+
+	for {
+		select {
+		case event, ok := <-events:
+			if handleEvent(event, ok) {
 				return
-			case appChatStreamError:
-				if err := writeAppChatSSE(w, flusher, "error", map[string]string{"message": event.publicError}); err != nil {
-					cancel()
-				}
-				logAppChatStreamTiming("error", userID, sessionID, startedAt, event.errorPhase)
+			}
+			continue
+		default:
+		}
+		select {
+		case event, ok := <-events:
+			if handleEvent(event, ok) {
 				return
 			}
 		case <-heartbeat.C:
@@ -597,11 +628,25 @@ func (s *Server) pumpAppChatStream(
 				return
 			}
 		case <-idle:
+			select {
+			case event, ok := <-events:
+				if handleEvent(event, ok) {
+					return
+				}
+			default:
+			}
 			cancel()
 			_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成超时，请重试"})
 			logAppChatStreamTiming("idle", userID, sessionID, startedAt, "provider")
 			return
 		case <-ctx.Done():
+			select {
+			case event, ok := <-events:
+				if handleEvent(event, ok) {
+					return
+				}
+			default:
+			}
 			if requestCtx.Err() != nil {
 				logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
 				return
