@@ -595,6 +595,73 @@ func TestBuildUserPromptDoesNotForceFixedAnswerStructure(t *testing.T) {
 	}
 }
 
+func TestBuildUserPromptEndsWithFixedConciseInstruction(t *testing.T) {
+	prompt := buildUserPrompt(rag.GenerateInput{
+		Question: "观察型怎么沟通？",
+		Sources: []rag.Source{{
+			Title:   "5号 观察型",
+			Snippet: "观察型重视边界和独处空间。",
+		}},
+	})
+
+	questionIndex := strings.Index(prompt, "用户问题：观察型怎么沟通？")
+	sourceIndex := strings.Index(prompt, "1. 5号 观察型：观察型重视边界和独处空间。")
+	instructionIndex := strings.LastIndex(prompt, fixedConciseReplyInstruction)
+	if questionIndex < 0 || sourceIndex < 0 || instructionIndex < 0 || !(questionIndex < sourceIndex && sourceIndex < instructionIndex) {
+		t.Fatalf("prompt order is wrong: %s", prompt)
+	}
+	if !strings.HasSuffix(prompt, fixedConciseReplyInstruction) {
+		t.Fatalf("prompt must end with fixed concise instruction: %s", prompt)
+	}
+}
+
+func TestMiniMaxGeneratorKeepsConfiguredSystemPromptAndAddsFixedConciseInstruction(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": "简短回答"}}},
+		})
+	}))
+	defer server.Close()
+
+	const configuredSystemPrompt = "这是后台配置的系统提示词。"
+	generator := newLocalMiniMaxGenerator(server, config.MiniMaxConfig{
+		APIKey:       "test-key",
+		Model:        "configured-chat-model",
+		SystemPrompt: configuredSystemPrompt,
+	})
+	_, err := generator.Generate(context.Background(), rag.GenerateInput{
+		Question: "完美型怎么成长？",
+		Sources: []rag.Source{{
+			Title:   "1号 完美型",
+			Snippet: "允许不完美。",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	if requestBody["model"] != "configured-chat-model" {
+		t.Fatalf("configured model was not used: %+v", requestBody["model"])
+	}
+	messages, ok := requestBody["messages"].([]any)
+	if !ok || len(messages) != 2 {
+		t.Fatalf("unexpected messages: %+v", requestBody["messages"])
+	}
+	system, _ := messages[0].(map[string]any)
+	user, _ := messages[1].(map[string]any)
+	if system["content"] != configuredSystemPrompt {
+		t.Fatalf("configured system prompt was not preserved: %+v", system)
+	}
+	userPrompt, _ := user["content"].(string)
+	if !strings.Contains(userPrompt, "允许不完美。") || !strings.HasSuffix(userPrompt, fixedConciseReplyInstruction) {
+		t.Fatalf("user prompt missing RAG context or fixed instruction: %s", userPrompt)
+	}
+}
+
 func TestBuildUserPromptPutsCurrentDirectivesAfterSavedPreferencesAndQuestion(t *testing.T) {
 	prompt := buildUserPrompt(rag.GenerateInput{
 		Question:          "不要叫我亲爱的",
