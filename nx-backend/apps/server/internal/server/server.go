@@ -2494,7 +2494,7 @@ func validateExternalAPIBase(label string, raw string) error {
 	return nil
 }
 
-// modelConfig 读取/保存对话(MiniMax)与视频模型配置；GET/PUT 均需登录（已由 requireAuth 包裹）。
+// modelConfig 读取/保存兼容协议对话模型与视频模型配置；GET/PUT 均需登录（已由 requireAuth 包裹）。
 // GET 返回 env+DB 覆盖后的"生效"配置，但密钥一律脱敏为布尔位；
 // PUT 仅持久化覆盖值，密钥留空表示"不修改"，保存后在写锁下重建运行时客户端。
 func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
