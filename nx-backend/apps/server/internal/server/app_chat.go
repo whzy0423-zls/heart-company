@@ -60,16 +60,17 @@ type appChatPreferenceExtractor interface {
 }
 
 type appChatPreferenceTurnState struct {
-	mu      sync.Mutex
-	version atomic.Uint64
-	active  atomic.Int32
-	pending atomic.Int32
+	mu           sync.Mutex
+	nextTicket   atomic.Uint64
+	latestBySlot map[string]uint64
+	active       atomic.Int32
+	pending      atomic.Int32
 }
 
 type appChatPreferenceTurn struct {
-	userID  int64
-	state   *appChatPreferenceTurnState
-	version uint64
+	userID int64
+	state  *appChatPreferenceTurnState
+	ticket uint64
 }
 
 var (
@@ -415,12 +416,12 @@ func (s *Server) beginAppChatPreferenceTurn(userID int64) appChatPreferenceTurn 
 		s.preferenceTurns[userID] = state
 	}
 	state.active.Add(1)
-	version := state.version.Add(1)
-	return appChatPreferenceTurn{userID: userID, state: state, version: version}
+	ticket := state.nextTicket.Add(1)
+	return appChatPreferenceTurn{userID: userID, state: state, ticket: ticket}
 }
 
 func newAppChatPreferenceTurnState() *appChatPreferenceTurnState {
-	return &appChatPreferenceTurnState{}
+	return &appChatPreferenceTurnState{latestBySlot: make(map[string]uint64)}
 }
 
 func (s *Server) finishAppChatPreferenceTurn(turn appChatPreferenceTurn) {
@@ -449,9 +450,6 @@ func (s *Server) prepareAppChatPreferences(ctx context.Context, turn appChatPref
 	if turn.state != nil {
 		turn.state.mu.Lock()
 		defer turn.state.mu.Unlock()
-		if turn.state.version.Load() != turn.version {
-			return nil, nil, errAppChatPreferenceStale
-		}
 	} else if len(extraction.Mutations) > 0 {
 		return nil, nil, errAppChatPreferenceStale
 	}
@@ -459,7 +457,11 @@ func (s *Server) prepareAppChatPreferences(ctx context.Context, turn appChatPref
 		if s.userPreferences == nil {
 			return nil, nil, fmt.Errorf("%w: preference store is unavailable", errAppChatPreferenceSave)
 		}
-		if err := s.userPreferences.Apply(ctx, turn.userID, extraction.Mutations); err != nil {
+		accepted := filterAndMarkAppChatPreferenceMutations(turn.state, turn.ticket, extraction.Mutations)
+		if len(accepted) == 0 {
+			return nil, nil, errAppChatPreferenceStale
+		}
+		if err := s.userPreferences.Apply(ctx, turn.userID, accepted); err != nil {
 			return nil, nil, fmt.Errorf("%w: %v", errAppChatPreferenceSave, err)
 		}
 	}
@@ -504,11 +506,6 @@ func (s *Server) scheduleAppChatPreferenceFallback(turn appChatPreferenceTurn, q
 		return false
 	}
 	turn.state.mu.Lock()
-	if turn.state.version.Load() != turn.version {
-		turn.state.mu.Unlock()
-		<-s.preferenceAsyncSlots
-		return false
-	}
 	turn.state.pending.Add(1)
 	turn.state.mu.Unlock()
 	timeout := s.preferenceAsyncTimeout
@@ -521,14 +518,40 @@ func (s *Server) scheduleAppChatPreferenceFallback(turn appChatPreferenceTurn, q
 		defer cancel()
 		extraction := s.preferenceExtractor.Extract(ctx, question)
 		turn.state.mu.Lock()
-		if turn.state.version.Load() == turn.version && len(extraction.Mutations) > 0 && ctx.Err() == nil {
-			_ = s.userPreferences.Apply(ctx, turn.userID, extraction.Mutations)
+		if len(extraction.Mutations) > 0 && ctx.Err() == nil {
+			accepted := filterAndMarkAppChatPreferenceMutations(turn.state, turn.ticket, extraction.Mutations)
+			if len(accepted) > 0 {
+				_ = s.userPreferences.Apply(ctx, turn.userID, accepted)
+			}
 		}
 		turn.state.pending.Add(-1)
 		turn.state.mu.Unlock()
 		s.cleanupAppChatPreferenceTurn(turn)
 	}()
 	return true
+}
+
+// filterAndMarkAppChatPreferenceMutations must be called with state.mu held.
+func filterAndMarkAppChatPreferenceMutations(state *appChatPreferenceTurnState, ticket uint64, mutations []userpreference.Mutation) []userpreference.Mutation {
+	if state == nil || ticket == 0 || len(mutations) == 0 {
+		return nil
+	}
+	if state.latestBySlot == nil {
+		state.latestBySlot = make(map[string]uint64)
+	}
+	accepted := make([]userpreference.Mutation, 0, len(mutations))
+	for _, mutation := range mutations {
+		slot := strings.TrimSpace(mutation.DeleteSlot)
+		if mutation.Upsert != nil {
+			slot = strings.TrimSpace(mutation.Upsert.Slot)
+		}
+		if slot == "" || state.latestBySlot[slot] > ticket {
+			continue
+		}
+		state.latestBySlot[slot] = ticket
+		accepted = append(accepted, mutation)
+	}
+	return accepted
 }
 
 func writeAppChatSSE(w io.Writer, flusher http.Flusher, event string, payload any) error {

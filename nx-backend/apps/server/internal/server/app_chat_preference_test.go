@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -331,6 +332,106 @@ func TestOrdinaryChatDoesNotInvalidatePendingDurablePreference(t *testing.T) {
 	}
 }
 
+func TestAsyncPreferenceDifferentSlotSurvivesNewerSynchronousPreference(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	extractor := &fakeAppChatPreferenceExtractor{
+		extract: func(context.Context, string) userpreference.Extraction {
+			close(started)
+			<-release
+			return userpreference.Extraction{Mutations: []userpreference.Mutation{{Upsert: &userpreference.Preference{
+				Category: "custom", Slot: "custom.communication_style", Instruction: "语气幽默自然",
+			}}}}
+		},
+	}
+	preferences := newFakeAppChatPreferenceStore()
+	s := newAppChatStreamServer(newFakeAppChatStreamStore(), successfulAppChatGenerator("回答"))
+	s.userPreferences = preferences
+	s.preferenceExtractor = extractor
+	s.preferenceAsyncSlots = make(chan struct{}, 1)
+
+	performPreferenceStreamRequest(t, s, 7, 42, "以后回答风格更幽默一些", context.Background())
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("older async extraction did not start")
+	}
+	performPreferenceStreamRequest(t, s, 7, 43, "以后回答短一点", context.Background())
+	close(release)
+	waitForPreferenceTurnCleanup(t, s, 7)
+
+	assertPreferenceInstructions(t, preferences, 7, "回答简短，避免长篇大论", "语气幽默自然")
+}
+
+func TestAsyncPreferencesInDifferentSlotsBothPersist(t *testing.T) {
+	olderStarted := make(chan struct{})
+	releaseOlder := make(chan struct{})
+	extractor := &fakeAppChatPreferenceExtractor{
+		extract: func(_ context.Context, message string) userpreference.Extraction {
+			if strings.Contains(message, "温暖") {
+				close(olderStarted)
+				<-releaseOlder
+				return userpreference.Extraction{Mutations: []userpreference.Mutation{{Upsert: &userpreference.Preference{
+					Category: "tone", Slot: "tone.warmth", Instruction: "语气温柔友好",
+				}}}}
+			}
+			return userpreference.Extraction{Mutations: []userpreference.Mutation{{Upsert: &userpreference.Preference{
+				Category: "length", Slot: "length.detail_level", Instruction: "回答简短，避免长篇大论",
+			}}}}
+		},
+	}
+	preferences := newFakeAppChatPreferenceStore()
+	s := newAppChatStreamServer(newFakeAppChatStreamStore(), successfulAppChatGenerator("回答"))
+	s.userPreferences = preferences
+	s.preferenceExtractor = extractor
+	s.preferenceAsyncSlots = make(chan struct{}, 2)
+
+	performPreferenceStreamRequest(t, s, 7, 42, "以后回答风格更温暖一些", context.Background())
+	select {
+	case <-olderStarted:
+	case <-time.After(time.Second):
+		t.Fatal("older async extraction did not start")
+	}
+	performPreferenceStreamRequest(t, s, 7, 43, "以后回答风格更凝练一些", context.Background())
+	waitForPreferenceInstruction(t, preferences, 7, "回答简短，避免长篇大论")
+	close(releaseOlder)
+	waitForPreferenceTurnCleanup(t, s, 7)
+
+	assertPreferenceInstructions(t, preferences, 7, "回答简短，避免长篇大论", "语气温柔友好")
+}
+
+func TestAsyncMultiMutationFiltersOnlySlotsTouchedByNewerCancellation(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	extractor := &fakeAppChatPreferenceExtractor{
+		extract: func(context.Context, string) userpreference.Extraction {
+			close(started)
+			<-release
+			return userpreference.Extraction{Mutations: []userpreference.Mutation{
+				{Upsert: &userpreference.Preference{Category: "tone", Slot: "tone.warmth", Instruction: "语气温柔友好"}},
+				{Upsert: &userpreference.Preference{Category: "custom", Slot: "custom.communication_style", Instruction: "语气幽默自然"}},
+			}}
+		},
+	}
+	preferences := newFakeAppChatPreferenceStore()
+	s := newAppChatStreamServer(newFakeAppChatStreamStore(), successfulAppChatGenerator("回答"))
+	s.userPreferences = preferences
+	s.preferenceExtractor = extractor
+	s.preferenceAsyncSlots = make(chan struct{}, 1)
+
+	performPreferenceStreamRequest(t, s, 7, 42, "以后回答风格更温暖幽默一些", context.Background())
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("older multi-mutation extraction did not start")
+	}
+	performPreferenceStreamRequest(t, s, 7, 43, "取消所有语气要求", context.Background())
+	close(release)
+	waitForPreferenceTurnCleanup(t, s, 7)
+
+	assertPreferenceInstructions(t, preferences, 7, "语气幽默自然")
+}
+
 func TestCurrentOnlyDirectiveDoesNotInvalidatePendingDurablePreference(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -571,8 +672,8 @@ func TestPreferenceTurnVersionsAreIssuedInArrivalOrderWithoutWaitingForApplyLock
 	locked = false
 	defer s.finishAppChatPreferenceTurn(first)
 	defer s.finishAppChatPreferenceTurn(second)
-	if first.version != 1 || second.version != 2 {
-		t.Fatalf("same-user versions were inverted: first=%d second=%d", first.version, second.version)
+	if first.ticket != 1 || second.ticket != 2 {
+		t.Fatalf("same-user tickets were inverted: first=%d second=%d", first.ticket, second.ticket)
 	}
 }
 
@@ -761,6 +862,23 @@ func waitForPreferenceInstruction(t *testing.T, store *fakeAppChatPreferenceStor
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for preference %q", instruction)
+}
+
+func assertPreferenceInstructions(t *testing.T, store *fakeAppChatPreferenceStore, userID int64, want ...string) {
+	t.Helper()
+	stored, err := store.List(context.Background(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(stored))
+	for _, preference := range stored {
+		got = append(got, preference.Instruction)
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("preference instructions = %+v, want %+v", got, want)
+	}
 }
 
 func (s *fakeAppChatPreferenceStore) waitForApply(t *testing.T, count int) {
