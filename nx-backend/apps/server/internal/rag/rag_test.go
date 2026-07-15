@@ -268,6 +268,32 @@ func TestAskStreamEmitsGeneratedChunksAndReturnsMetadata(t *testing.T) {
 	}
 }
 
+func TestAskStreamPassesOriginalQuestionAndSourcesToGeneratorUnchanged(t *testing.T) {
+	generator := &capturingStreamingGenerator{answer: "模型原样回答。"}
+	service := NewService([]Document{
+		{ID: "type-5", Title: "5号 观察型", Content: "观察型重视知识、边界和独处空间。", Tags: []string{"观察型"}},
+	}, WithGenerator(generator))
+
+	const question = "观察型怎么沟通？"
+	var chunks []string
+	answer, err := service.AskStream(context.Background(), AskInput{Question: question}, func(delta string) error {
+		chunks = append(chunks, delta)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("AskStream returned error: %v", err)
+	}
+	if generator.input.Question != question {
+		t.Fatalf("generator question = %q, want original %q", generator.input.Question, question)
+	}
+	if len(generator.input.Sources) != 1 || generator.input.Sources[0].ID != "type-5" {
+		t.Fatalf("generator sources = %+v, want retrieved type-5", generator.input.Sources)
+	}
+	if answer.Answer != generator.answer || strings.Join(chunks, "") != generator.answer {
+		t.Fatalf("model answer was rewritten: answer=%q chunks=%q", answer.Answer, strings.Join(chunks, ""))
+	}
+}
+
 func TestAskStreamPropagatesPreferencesAndCurrentDirectives(t *testing.T) {
 	generator := &capturingStreamingGenerator{answer: "流式回答"}
 	service := NewService(nil, WithGenerator(generator))
