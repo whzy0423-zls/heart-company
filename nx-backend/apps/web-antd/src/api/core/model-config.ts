@@ -104,13 +104,16 @@ export interface ModelConfigPayload {
   };
 }
 
+/** 模型配置局部更新：未提交的配置分区由服务端保留原值。 */
+export type ModelConfigUpdatePayload = Partial<ModelConfigPayload>;
+
 /** 读取当前生效的模型配置（对话 / 视频），需登录。 */
 export function getModelConfigApi() {
   return requestClient.get<ModelConfigView>('/model-config');
 }
 
 /** 保存模型配置（对话 / 视频），返回脱敏后的最新视图。需登录。 */
-export function updateModelConfigApi(data: ModelConfigPayload) {
+export function updateModelConfigApi(data: ModelConfigUpdatePayload) {
   return requestClient.put<ModelConfigView>('/model-config', data);
 }
 

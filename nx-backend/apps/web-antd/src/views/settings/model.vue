@@ -2,6 +2,7 @@
 import type {
   ChatPingResult,
   ModelConfigPayload,
+  ModelConfigUpdatePayload,
   ModelConfigView,
 } from '#/api';
 
@@ -219,49 +220,59 @@ function currentChatPayload(): ModelConfigPayload['chat'] | null {
 async function save() {
   saving.value = true;
   try {
-    const chat = currentChatPayload();
-    if (!chat) return;
-    const payload: ModelConfigPayload = {
-      ...form.value,
-      chat,
-      analysis: {
-        apiBase: '',
-        apiKey: '',
-        groupId: '',
-        model: form.value.analysis.model,
-      },
-      admin: {
-        apiBase: form.value.admin.apiBase,
-        apiKey: form.value.admin.apiKey,
-        groupId: form.value.admin.groupId,
-        model: form.value.admin.model,
-        provider: form.value.admin.provider,
-        timeoutSeconds: Number(form.value.admin.timeoutSeconds || 30),
-      },
-      dailyQuiz: {
-        apiBase: form.value.dailyQuiz.apiBase,
-        apiKey: form.value.dailyQuiz.apiKey,
-        groupId: form.value.dailyQuiz.groupId,
-        model: form.value.dailyQuiz.model,
-        provider: form.value.dailyQuiz.provider,
-        timeoutSeconds: Number(form.value.dailyQuiz.timeoutSeconds || 30),
-      },
+    const admin = {
+      apiBase: form.value.admin.apiBase,
+      apiKey: form.value.admin.apiKey,
+      groupId: form.value.admin.groupId,
+      model: form.value.admin.model,
+      provider: form.value.admin.provider,
+      timeoutSeconds: Number(form.value.admin.timeoutSeconds || 30),
     };
+    const dailyQuiz = {
+      apiBase: form.value.dailyQuiz.apiBase,
+      apiKey: form.value.dailyQuiz.apiKey,
+      groupId: form.value.dailyQuiz.groupId,
+      model: form.value.dailyQuiz.model,
+      provider: form.value.dailyQuiz.provider,
+      timeoutSeconds: Number(form.value.dailyQuiz.timeoutSeconds || 30),
+    };
+    let chat: ModelConfigPayload['chat'] | null = null;
+    let payload: ModelConfigUpdatePayload;
+    if (isAdminModelOnly.value) {
+      payload = { admin, dailyQuiz };
+    } else {
+      chat = currentChatPayload();
+      if (!chat) return;
+      payload = {
+        ...form.value,
+        chat,
+        analysis: {
+          apiBase: '',
+          apiKey: '',
+          groupId: '',
+          model: form.value.analysis.model,
+        },
+        admin,
+        dailyQuiz,
+      };
+    }
     const saved = await updateModelConfigApi(payload);
     // 保存后清空密钥输入，刷新「已配置」状态
-    form.value.chat.apiKey = '';
-    form.value.video.apiKey = '';
-    form.value.image.apiKey = '';
-    form.value.analysis.apiKey = '';
     form.value.admin.apiKey = '';
     form.value.dailyQuiz.apiKey = '';
-    loadedChatProvider.value = saved.chat?.provider ?? chat.provider;
-    chatKeySet.value = saved.chat?.apiKeySet ?? false;
-    videoKeySet.value = saved.video?.apiKeySet ?? false;
-    imageKeySet.value = saved.image?.apiKeySet ?? false;
-    analysisKeySet.value = saved.analysis?.apiKeySet ?? false;
     adminKeySet.value = saved.admin?.apiKeySet ?? false;
     dailyQuizKeySet.value = saved.dailyQuiz?.apiKeySet ?? false;
+    if (chat) {
+      form.value.chat.apiKey = '';
+      form.value.video.apiKey = '';
+      form.value.image.apiKey = '';
+      form.value.analysis.apiKey = '';
+      loadedChatProvider.value = saved.chat?.provider ?? chat.provider;
+      chatKeySet.value = saved.chat?.apiKeySet ?? false;
+      videoKeySet.value = saved.video?.apiKeySet ?? false;
+      imageKeySet.value = saved.image?.apiKeySet ?? false;
+      analysisKeySet.value = saved.analysis?.apiKeySet ?? false;
+    }
     message.success('模型配置已保存并即时生效');
   } finally {
     saving.value = false;

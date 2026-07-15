@@ -102,8 +102,10 @@ vi.mock('ant-design-vue', () => {
   };
 });
 
+const routeState = vi.hoisted(() => ({ path: '/settings/model' }));
+
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ path: '/settings/model' }),
+  useRoute: () => routeState,
 }));
 
 vi.mock('../site-config/components/editor-shell.vue', () => ({
@@ -192,12 +194,23 @@ async function setChatApiKey(value: string) {
   await flushVuePromises();
 }
 
+async function setModelInput(index: number, value: string) {
+  const labels = [...document.body.querySelectorAll('label')].filter((label) =>
+    label.textContent?.startsWith('模型名 (Model)'),
+  );
+  const input = labels[index]?.querySelector('input') as HTMLInputElement;
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  await flushVuePromises();
+}
+
 describe('model settings compatible chat configuration', () => {
   afterEach(() => {
     document.body.replaceChildren();
   });
 
   beforeEach(() => {
+    routeState.path = '/settings/model';
     vi.mocked(getModelConfigApi).mockReset();
     vi.mocked(testChatModelApi).mockReset();
     vi.mocked(updateModelConfigApi).mockReset();
@@ -210,6 +223,29 @@ describe('model settings compatible chat configuration', () => {
       model: '',
       ok: true,
     });
+  });
+
+  it('saves only admin sections without validating hidden chat configuration', async () => {
+    routeState.path = '/settings/admin-model';
+    vi.mocked(getModelConfigApi).mockResolvedValue(modelConfig() as any);
+
+    const wrapper = mountVueComponent(ModelSettings);
+    await flushVuePromises();
+    await setModelInput(0, 'admin-model-updated');
+    await setModelInput(1, 'daily-quiz-model-updated');
+
+    wrapper.button('保存')?.click();
+    await flushVuePromises();
+
+    expect(message.error).not.toHaveBeenCalled();
+    expect(updateModelConfigApi).toHaveBeenCalledOnce();
+    expect(testChatModelApi).not.toHaveBeenCalled();
+    const payload = vi.mocked(updateModelConfigApi).mock.calls[0]?.[0];
+    expect(Object.keys(payload ?? {}).sort()).toEqual(['admin', 'dailyQuiz']);
+    expect(payload).not.toHaveProperty('chat');
+    expect(payload?.admin?.model).toBe('admin-model-updated');
+    expect(payload?.dailyQuiz?.model).toBe('daily-quiz-model-updated');
+    wrapper.unmount();
   });
 
   it('keeps a legacy chat provider unconfigured and offers only OpenAI or Anthropic', async () => {
