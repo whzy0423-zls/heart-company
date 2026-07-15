@@ -147,7 +147,7 @@ func TestExtractScopesCurrentAndDurableInstructionsPerClause(t *testing.T) {
 		{
 			name:            "current detailed then durable concise",
 			message:         "这次详细说，但以后回答简短",
-			wantDirective:   "回答简短，避免长篇大论",
+			wantDirective:   "回答更详细",
 			wantInstruction: "回答简短，避免长篇大论",
 		},
 		{
@@ -159,7 +159,7 @@ func TestExtractScopesCurrentAndDurableInstructionsPerClause(t *testing.T) {
 		{
 			name:            "current concise then durable detailed",
 			message:         "这一条回答短一点，不过以后详细一点",
-			wantDirective:   "回答更详细",
+			wantDirective:   "回答简短，避免长篇大论",
 			wantInstruction: "回答更详细",
 		},
 	}

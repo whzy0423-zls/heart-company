@@ -105,6 +105,8 @@ type Server struct {
 	preferenceExtractor      appChatPreferenceExtractor
 	preferenceAsyncSlots     chan struct{}
 	preferenceAsyncTimeout   time.Duration
+	preferenceTurnsMu        sync.Mutex
+	preferenceTurns          map[int64]*appChatPreferenceTurnState
 	pushStore                *push.Store
 	pushSendTimeout          time.Duration
 	pushRecoveryInterval     time.Duration

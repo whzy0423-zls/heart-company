@@ -240,13 +240,25 @@ func coalesceCandidates(candidates []extractionCandidate) Extraction {
 		return candidates[i].position < candidates[j].position
 	})
 
-	currentLatest := make(map[string]extractionCandidate, len(candidates))
+	currentScoped := make(map[string]extractionCandidate, len(candidates))
+	currentFallback := make(map[string]extractionCandidate, len(candidates))
 	durableLatest := make(map[string]extractionCandidate, len(candidates))
 	for _, candidate := range candidates {
-		currentLatest[candidate.slot] = candidate
+		if candidate.currentOnly {
+			currentScoped[candidate.slot] = candidate
+		} else {
+			currentFallback[candidate.slot] = candidate
+		}
 		if candidate.deleteSlot != "" || (candidate.preference != nil && !candidate.currentOnly) {
 			durableLatest[candidate.slot] = candidate
 		}
+	}
+	currentLatest := make(map[string]extractionCandidate, len(currentScoped)+len(currentFallback))
+	for slot, candidate := range currentFallback {
+		currentLatest[slot] = candidate
+	}
+	for slot, candidate := range currentScoped {
+		currentLatest[slot] = candidate
 	}
 	current := sortedCandidates(currentLatest)
 	durable := sortedCandidates(durableLatest)
