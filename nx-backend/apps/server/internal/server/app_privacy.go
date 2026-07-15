@@ -8,6 +8,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/userpreference"
 )
 
 type appPrivacyPolicyResponse struct {
@@ -18,12 +19,22 @@ type appPrivacyPolicyResponse struct {
 }
 
 type appPrivacyExportResponse struct {
-	GeneratedAt  string           `json:"generatedAt"`
-	User         appuser.User     `json:"user"`
-	Cards        []appPrivacyCard `json:"cards"`
-	Memories     []appMemoryItem  `json:"memories"`
-	SessionCount int              `json:"sessionCount"`
-	MessageCount int              `json:"messageCount"`
+	GeneratedAt  string                 `json:"generatedAt"`
+	User         appuser.User           `json:"user"`
+	Cards        []appPrivacyCard       `json:"cards"`
+	Memories     []appMemoryItem        `json:"memories"`
+	Preferences  []appPrivacyPreference `json:"preferences"`
+	SessionCount int                    `json:"sessionCount"`
+	MessageCount int                    `json:"messageCount"`
+}
+
+type appPrivacyPreference struct {
+	Category    string `json:"category"`
+	Slot        string `json:"slot"`
+	Instruction string `json:"instruction"`
+	SourceText  string `json:"sourceText"`
+	CreateTime  string `json:"createTime"`
+	UpdateTime  string `json:"updateTime"`
 }
 
 type appPrivacyCard struct {
@@ -43,9 +54,9 @@ type appPrivacyCard struct {
 func (s *Server) appPrivacyPolicy(w http.ResponseWriter, _ *http.Request) {
 	httpx.OK(w, appPrivacyPolicyResponse{
 		Title:       "九型芯之力 App 隐私政策",
-		Version:     "2026-07-03",
-		EffectiveAt: "2026-07-03",
-		Content:     "我们仅为账号登录、九型测评、成长卡片、对话记忆、消息推送和服务改进处理必要信息。你可以在 App 内导出个人数据、清空记忆或注销账号。注销后账号将被禁用，登录凭证失效，App 侧个人数据会按当前能力清理或匿名化。后续如引入后台可配置版本，将以最新发布文本为准。",
+		Version:     "2026-07-15",
+		EffectiveAt: "2026-07-15",
+		Content:     "我们仅为账号登录、九型测评、成长卡片、对话记忆、学习到的沟通偏好、消息推送和服务改进处理必要信息。你可以在 App 内导出个人数据、清空记忆或注销账号。清空记忆会同时删除卡片对话记忆和学习到的沟通偏好；注销后账号将被禁用，登录凭证失效，App 侧个人数据会按当前能力清理或匿名化。后续如引入后台可配置版本，将以最新发布文本为准。",
 	})
 }
 
@@ -71,6 +82,11 @@ func (s *Server) appPrivacyExport(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
+	preferences, err := s.appPrivacyPreferences(r, userInfo.ID)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
 	sessionCount, messageCount, err := s.appPrivacyChatCounts(r, userInfo.ID)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
@@ -82,9 +98,33 @@ func (s *Server) appPrivacyExport(w http.ResponseWriter, r *http.Request) {
 		User:         user,
 		Cards:        cards,
 		Memories:     memories,
+		Preferences:  preferences,
 		SessionCount: sessionCount,
 		MessageCount: messageCount,
 	})
+}
+
+func (s *Server) appPrivacyPreferences(r *http.Request, appUserID int64) ([]appPrivacyPreference, error) {
+	stored, err := s.userPreferences.List(r.Context(), appUserID)
+	if err != nil {
+		return nil, err
+	}
+	preferences := make([]appPrivacyPreference, 0, len(stored))
+	for _, preference := range stored {
+		preferences = append(preferences, privacyPreference(preference))
+	}
+	return preferences, nil
+}
+
+func privacyPreference(preference userpreference.Preference) appPrivacyPreference {
+	return appPrivacyPreference{
+		Category:    preference.Category,
+		Slot:        preference.Slot,
+		Instruction: preference.Instruction,
+		SourceText:  preference.SourceText,
+		CreateTime:  appMemoryTime(preference.CreateTime),
+		UpdateTime:  appMemoryTime(preference.UpdateTime),
+	}
 }
 
 func (s *Server) appPrivacyDeleteMemories(w http.ResponseWriter, r *http.Request) {
@@ -93,13 +133,37 @@ func (s *Server) appPrivacyDeleteMemories(w http.ResponseWriter, r *http.Request
 		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	res, err := s.db.ExecContext(r.Context(), `DELETE FROM app_memories WHERE app_user_id = $1`, userInfo.ID)
+	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	deleted, _ := res.RowsAffected()
-	httpx.OK(w, map[string]int64{"deleted": deleted})
+	defer tx.Rollback()
+
+	var lockedUserID int64
+	if err := tx.QueryRowContext(r.Context(),
+		`SELECT id FROM app_users WHERE id = $1 FOR UPDATE`, userInfo.ID,
+	).Scan(&lockedUserID); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	memoryResult, err := tx.ExecContext(r.Context(), `DELETE FROM app_memories WHERE app_user_id = $1`, userInfo.ID)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	preferenceResult, err := tx.ExecContext(r.Context(), `DELETE FROM app_user_preferences WHERE app_user_id = $1`, userInfo.ID)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	memoryDeleted, _ := memoryResult.RowsAffected()
+	preferenceDeleted, _ := preferenceResult.RowsAffected()
+	httpx.OK(w, map[string]int64{"deleted": memoryDeleted, "preferenceDeleted": preferenceDeleted})
 }
 
 func (s *Server) appPrivacyDeleteAccount(w http.ResponseWriter, r *http.Request) {
@@ -114,9 +178,17 @@ func (s *Server) appPrivacyDeleteAccount(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer tx.Rollback()
+	var lockedUserID int64
+	if err := tx.QueryRowContext(r.Context(),
+		`SELECT id FROM app_users WHERE id = $1 FOR UPDATE`, userInfo.ID,
+	).Scan(&lockedUserID); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
 
 	steps := []string{
 		`DELETE FROM app_memories WHERE app_user_id = $1`,
+		`DELETE FROM app_user_preferences WHERE app_user_id = $1`,
 		`DELETE FROM app_chat_sessions WHERE app_user_id = $1`,
 		`DELETE FROM app_compatibility_reports WHERE app_user_id = $1`,
 		`DELETE FROM app_daily_checkins WHERE app_user_id = $1`,

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -40,6 +41,8 @@ type Preference struct {
 	Slot        string
 	Instruction string
 	SourceText  string
+	CreateTime  time.Time
+	UpdateTime  time.Time
 }
 
 type Mutation struct {
@@ -60,7 +63,7 @@ func (s *Store) List(ctx context.Context, userID int64) ([]Preference, error) {
 		return nil, invalid("user ID must be positive")
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT category, slot, instruction, source_text
+		`SELECT category, slot, instruction, source_text, create_time, update_time
 		 FROM app_user_preferences
 		 WHERE app_user_id = $1
 		 ORDER BY category, slot
@@ -76,7 +79,7 @@ func (s *Store) List(ctx context.Context, userID int64) ([]Preference, error) {
 	totalRunes := 0
 	for rows.Next() {
 		var preference Preference
-		if err := rows.Scan(&preference.Category, &preference.Slot, &preference.Instruction, &preference.SourceText); err != nil {
+		if err := rows.Scan(&preference.Category, &preference.Slot, &preference.Instruction, &preference.SourceText, &preference.CreateTime, &preference.UpdateTime); err != nil {
 			return nil, fmt.Errorf("userpreference: scan: %w", err)
 		}
 		if _, err := normalizePreference(preference); err != nil {

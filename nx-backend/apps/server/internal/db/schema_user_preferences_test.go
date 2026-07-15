@@ -1,9 +1,14 @@
 package db
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"nine-xing/nx-backend/apps/server/internal/testutil"
 )
 
 func TestSchemaIncludesUserPreferencesAfterAppUsers(t *testing.T) {
@@ -50,5 +55,67 @@ func TestSchemaIncludesUserPreferencesAfterAppUsers(t *testing.T) {
 		if !strings.Contains(schema, index) {
 			t.Fatalf("schema is missing user preference index %q", index)
 		}
+	}
+}
+
+func TestSchemaUserPreferencesPostgresConstraintsAndCascade(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set TEST_DATABASE_URL to run user preference schema integration tests")
+	}
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	database, err := Open(ctx, dsn, "admin", "123456")
+	if err != nil {
+		t.Fatalf("db open: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	var userID int64
+	if err := database.QueryRowContext(ctx,
+		`INSERT INTO app_users (phone) VALUES ($1) RETURNING id`,
+		fmt.Sprintf("pref-schema-%d", time.Now().UnixNano()),
+	).Scan(&userID); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if _, err := database.ExecContext(ctx,
+		`INSERT INTO app_user_preferences (app_user_id, category, slot, instruction, source_text)
+		 VALUES ($1, 'length', 'length.detail_level', '回答简短一些', '以后短一点')`, userID,
+	); err != nil {
+		t.Fatalf("insert valid preference: %v", err)
+	}
+
+	invalidStatements := []struct {
+		name  string
+		query string
+	}{
+		{name: "category", query: `INSERT INTO app_user_preferences (app_user_id, category, slot, instruction) VALUES ($1, 'identity', 'length.detail_level', 'x')`},
+		{name: "slot", query: `INSERT INTO app_user_preferences (app_user_id, category, slot, instruction) VALUES ($1, 'length', 'length.unknown', 'x')`},
+		{name: "category slot mismatch", query: `INSERT INTO app_user_preferences (app_user_id, category, slot, instruction) VALUES ($1, 'tone', 'format.no_lists', 'x')`},
+		{name: "empty instruction", query: `INSERT INTO app_user_preferences (app_user_id, category, slot, instruction) VALUES ($1, 'tone', 'tone.direct', '')`},
+		{name: "duplicate slot", query: `INSERT INTO app_user_preferences (app_user_id, category, slot, instruction) VALUES ($1, 'length', 'length.detail_level', 'duplicate')`},
+	}
+	for _, tt := range invalidStatements {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := database.ExecContext(ctx, tt.query, userID); err == nil {
+				t.Fatalf("expected PostgreSQL to reject %s", tt.name)
+			}
+		})
+	}
+
+	if _, err := database.ExecContext(ctx, `DELETE FROM app_users WHERE id = $1`, userID); err != nil {
+		t.Fatalf("delete user: %v", err)
+	}
+	var count int
+	if err := database.QueryRowContext(ctx,
+		`SELECT count(*) FROM app_user_preferences WHERE app_user_id = $1`, userID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count preferences after user delete: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("ON DELETE CASCADE left %d preferences", count)
 	}
 }
