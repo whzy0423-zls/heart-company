@@ -379,6 +379,137 @@ func TestAppChatAskStreamValidDeltasResetProviderIdle(t *testing.T) {
 	}
 }
 
+func TestAppChatAskStreamProviderIdleStopsBeforeBlockedSavePair(t *testing.T) {
+	saveStarted := make(chan struct{})
+	releaseSave := make(chan struct{})
+	store := newFakeAppChatStreamStore()
+	store.beforeSaveReturn = func(context.Context) {
+		close(saveStarted)
+		<-releaseSave
+	}
+	s := newAppChatStreamServer(store, successfulAppChatGenerator("完整回答"))
+	s.chatTimeout = 750 * time.Millisecond
+	s.chatHeartbeatInterval = 10 * time.Millisecond
+	s.chatProviderIdleTimeout = 35 * time.Millisecond
+	writer := newAppChatBlockingStreamWriter()
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		s.appChatRouter(writer, newAppChatStreamRequest(context.Background()))
+	}()
+
+	select {
+	case <-saveStarted:
+	case <-time.After(time.Second):
+		t.Fatal("SavePair did not start")
+	}
+	select {
+	case <-handlerDone:
+		close(releaseSave)
+		t.Fatalf("provider idle ended stream during persistence: %q", writer.BodyString())
+	case <-time.After(120 * time.Millisecond):
+	}
+
+	close(releaseSave)
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not finish after SavePair was released")
+	}
+	body := writer.BodyString()
+	if strings.Count(body, "event: done\n") != 1 || strings.Contains(body, "event: error\n") {
+		t.Fatalf("blocked successful save terminal was wrong: %q", body)
+	}
+}
+
+func TestAppChatAskStreamCommittedSaveReturningAtTotalDeadlineStillSendsMessageID(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	store.messageID = 88
+	store.beforeSaveReturn = func(ctx context.Context) {
+		<-ctx.Done()
+	}
+	s := newAppChatStreamServer(store, successfulAppChatGenerator("完整回答"))
+	s.chatTimeout = 45 * time.Millisecond
+	s.chatHeartbeatInterval = 10 * time.Millisecond
+	s.chatProviderIdleTimeout = time.Second
+	writer := newAppChatBlockingStreamWriter()
+
+	s.appChatRouter(writer, newAppChatStreamRequest(context.Background()))
+
+	body := writer.BodyString()
+	if strings.Count(body, "event: done\n") != 1 || strings.Count(body, "event: error\n") != 0 || !strings.Contains(body, `"messageId":88`) {
+		t.Fatalf("save committed at deadline lost its terminal: %q", body)
+	}
+	if store.saveCallCount() != 1 {
+		t.Fatalf("SavePair called %d times, want 1", store.saveCallCount())
+	}
+}
+
+func TestAppChatAskStreamUncommittedSaveTimeoutEmitsOneError(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	store.saveErr = context.DeadlineExceeded
+	store.beforeSaveReturn = func(ctx context.Context) {
+		<-ctx.Done()
+	}
+	s := newAppChatStreamServer(store, successfulAppChatGenerator("完整回答"))
+	s.chatTimeout = 45 * time.Millisecond
+	s.chatHeartbeatInterval = 10 * time.Millisecond
+	s.chatProviderIdleTimeout = time.Second
+	writer := newAppChatBlockingStreamWriter()
+
+	s.appChatRouter(writer, newAppChatStreamRequest(context.Background()))
+
+	body := writer.BodyString()
+	if strings.Count(body, "event: error\n") != 1 || strings.Contains(body, "event: done\n") {
+		t.Fatalf("uncommitted save timeout terminal count was wrong: %q", body)
+	}
+	if store.saveCallCount() != 1 {
+		t.Fatalf("SavePair called %d times, want 1", store.saveCallCount())
+	}
+}
+
+func TestAppChatAskStreamClientDisconnectCancelsBlockedSaveWithoutWorkerLeak(t *testing.T) {
+	saveStarted := make(chan struct{})
+	saveFinished := make(chan struct{})
+	store := newFakeAppChatStreamStore()
+	store.beforeSaveReturn = func(ctx context.Context) {
+		close(saveStarted)
+		<-ctx.Done()
+		close(saveFinished)
+	}
+	s := newAppChatStreamServer(store, successfulAppChatGenerator("完整回答"))
+	s.chatHeartbeatInterval = time.Second
+	s.chatProviderIdleTimeout = time.Second
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	writer := newAppChatBlockingStreamWriter()
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		s.appChatRouter(writer, newAppChatStreamRequest(requestCtx))
+	}()
+
+	select {
+	case <-saveStarted:
+	case <-time.After(time.Second):
+		t.Fatal("SavePair did not start")
+	}
+	cancelRequest()
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not return after client disconnect")
+	}
+	select {
+	case <-saveFinished:
+	case <-time.After(time.Second):
+		t.Fatal("SavePair worker did not observe client cancellation")
+	}
+	body := writer.BodyString()
+	if strings.Contains(body, "event: done\n") || strings.Contains(body, "event: error\n") {
+		t.Fatalf("client disconnect received an unexpected terminal: %q", body)
+	}
+}
+
 func TestAppChatAskStreamConnectedWriteFailureDoesNotStartPipeline(t *testing.T) {
 	providerStarted := make(chan struct{}, 1)
 	store := newFakeAppChatStreamStore()
@@ -581,6 +712,27 @@ func TestAppChatStreamTimingBoundsIdleByTotalDeadline(t *testing.T) {
 	}
 }
 
+func TestAppChatStreamLifecycleArbitratesTimeoutAndPersistence(t *testing.T) {
+	t.Run("timeout wins", func(t *testing.T) {
+		lifecycle := &appChatStreamLifecycle{}
+		if !lifecycle.stopBeforePersistence() {
+			t.Fatal("timeout failed to stop generation")
+		}
+		if lifecycle.beginPersistence() {
+			t.Fatal("SavePair entered after timeout won")
+		}
+	})
+	t.Run("persistence wins", func(t *testing.T) {
+		lifecycle := &appChatStreamLifecycle{}
+		if !lifecycle.beginPersistence() {
+			t.Fatal("SavePair failed to enter persistence")
+		}
+		if lifecycle.stopBeforePersistence() {
+			t.Fatal("timeout overrode persistence")
+		}
+	})
+}
+
 func TestAppChatStreamClosedWorkerStillEmitsTotalTimeoutTerminal(t *testing.T) {
 	s := &Server{
 		chatHeartbeatInterval:   time.Second,
@@ -593,7 +745,7 @@ func TestAppChatStreamClosedWorkerStillEmitsTotalTimeoutTerminal(t *testing.T) {
 		events := make(chan appChatStreamEvent)
 		close(events)
 		writer := newAppChatBlockingStreamWriter()
-		s.pumpAppChatStream(ctx, func() {}, context.Background(), writer, writer, events, 7, 42, time.Now(), time.Second)
+		s.pumpAppChatStream(ctx, func() {}, context.Background(), writer, writer, events, &appChatStreamLifecycle{}, 7, 42, time.Now(), time.Second)
 		if strings.Count(writer.BodyString(), "event: error\n") != 1 {
 			missingTerminal++
 		}
@@ -622,7 +774,7 @@ func TestAppChatStreamQueuedDoneWinsOverExpiredContext(t *testing.T) {
 		}
 		close(events)
 		writer := newAppChatBlockingStreamWriter()
-		s.pumpAppChatStream(ctx, func() {}, context.Background(), writer, writer, events, 7, 42, time.Now(), time.Second)
+		s.pumpAppChatStream(ctx, func() {}, context.Background(), writer, writer, events, &appChatStreamLifecycle{}, 7, 42, time.Now(), time.Second)
 		body := writer.BodyString()
 		if strings.Count(body, "event: done\n") != 1 || strings.Count(body, "event: error\n") != 0 || !strings.Contains(body, `"messageId":88`) {
 			wrongTerminal++
@@ -630,6 +782,60 @@ func TestAppChatStreamQueuedDoneWinsOverExpiredContext(t *testing.T) {
 	}
 	if wrongTerminal != 0 {
 		t.Fatalf("%d queued committed results lost to the expired context", wrongTerminal)
+	}
+}
+
+func TestAppChatStreamPersistencePhaseWaitsForDelayedCommittedTerminalAfterDeadline(t *testing.T) {
+	s := &Server{
+		chatHeartbeatInterval:   time.Second,
+		chatProviderIdleTimeout: time.Second,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan appChatStreamEvent, 1)
+	lifecycle := &appChatStreamLifecycle{}
+	if !lifecycle.beginPersistence() {
+		t.Fatal("failed to enter persistence phase")
+	}
+	// Queueing the phase before cancellation models SavePair entering its
+	// may-commit window while the committed terminal is not enqueued yet.
+	events <- appChatStreamEvent{kind: appChatStreamPersistenceStarted}
+	cancel()
+
+	releaseDone := make(chan struct{})
+	go func() {
+		<-releaseDone
+		events <- appChatStreamEvent{
+			kind: appChatStreamDone,
+			response: askResponse{
+				Answer:    rag.Answer{Answer: "已保存"},
+				MessageID: 88,
+			},
+		}
+		close(events)
+	}()
+
+	writer := newAppChatBlockingStreamWriter()
+	pumpDone := make(chan struct{})
+	go func() {
+		defer close(pumpDone)
+		s.pumpAppChatStream(ctx, func() {}, context.Background(), writer, writer, events, lifecycle, 7, 42, time.Now(), time.Second)
+	}()
+	select {
+	case <-pumpDone:
+		// The buggy pump exits here with a timeout before the committed result
+		// can be enqueued. Continue so the terminal assertion shows the defect.
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseDone)
+	select {
+	case <-pumpDone:
+	case <-time.After(time.Second):
+		t.Fatal("pump did not finish after committed terminal was released")
+	}
+
+	body := writer.BodyString()
+	if strings.Count(body, "event: done\n") != 1 || strings.Count(body, "event: error\n") != 0 || !strings.Contains(body, `"messageId":88`) {
+		t.Fatalf("committed terminal lost during enqueue window: %q", body)
 	}
 }
 
@@ -702,6 +908,77 @@ func TestAppChatAskStreamCommittedSaveDoneSurvivesBlockedPostSaveMemory(t *testi
 	}
 	if store.saveCallCount() != 1 {
 		t.Fatalf("SavePair called %d times, want 1", store.saveCallCount())
+	}
+}
+
+func TestAppChatAskStreamDoneDoesNotWaitForFallbackPreferenceLock(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	s := newAppChatStreamServer(store, successfulAppChatGenerator("完整回答"))
+	s.userPreferences = newFakeAppChatPreferenceStore()
+	s.preferenceExtractor = &fakeAppChatPreferenceExtractor{}
+	s.preferenceAsyncSlots = make(chan struct{}, 1)
+	s.preferenceAsyncTimeout = time.Second
+
+	lockedState := make(chan *appChatPreferenceTurnState, 1)
+	store.onSave = func() {
+		s.preferenceTurnsMu.Lock()
+		state := s.preferenceTurns[7]
+		s.preferenceTurnsMu.Unlock()
+		if state == nil {
+			lockedState <- nil
+			return
+		}
+		state.mu.Lock()
+		lockedState <- state
+	}
+
+	writer := newAppChatBlockingStreamWriter()
+	req := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/ask/stream", strings.NewReader(`{"question":"以后回答语气更成熟一点"}`))
+	req = req.WithContext(context.WithValue(context.Background(), appContextKey{}, auth.UserInfo{ID: 7}))
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		s.appChatRouter(writer, req)
+	}()
+
+	var state *appChatPreferenceTurnState
+	select {
+	case state = <-lockedState:
+		if state == nil {
+			t.Fatal("preference turn state was missing at SavePair")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SavePair did not lock the preference state")
+	}
+	finishedWhileLocked := false
+	select {
+	case <-handlerDone:
+		finishedWhileLocked = true
+	case <-time.After(80 * time.Millisecond):
+	}
+	reservedWhileLocked := state.pending.Load() == 1
+	state.mu.Unlock()
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not finish after preference state was unlocked")
+	}
+	if !finishedWhileLocked {
+		t.Fatal("committed done waited for fallback preference scheduling")
+	}
+	if !reservedWhileLocked {
+		t.Fatal("fallback ownership was not reserved before handler return")
+	}
+	body := writer.BodyString()
+	if strings.Count(body, "event: done\n") != 1 || strings.Contains(body, "event: error\n") {
+		t.Fatalf("committed terminal was wrong: %q", body)
+	}
+	deadline := time.Now().Add(time.Second)
+	for state.pending.Load() != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if state.pending.Load() != 0 {
+		t.Fatal("fallback worker did not release its pending reservation")
 	}
 }
 
@@ -859,6 +1136,13 @@ func TestAppChatHandlerTotalTimeoutCancelsBeforeProviderLimit(t *testing.T) {
 	if observed := <-observedDeadline; observed <= 0 || observed > 80*time.Millisecond {
 		t.Fatalf("generator observed wrong handler deadline: %s", observed)
 	}
+	body := writer.BodyString()
+	if strings.Count(body, "event: error\n") != 1 || strings.Contains(body, "event: done\n") {
+		t.Fatalf("pre-persistence timeout terminal count was wrong: %q", body)
+	}
+	if store.saveCallCount() != 0 {
+		t.Fatalf("SavePair called %d times before persistence, want 0", store.saveCallCount())
+	}
 }
 
 type appChatStreamTestFlusher struct {
@@ -894,15 +1178,16 @@ func successfulAppChatGenerator(answer string) rag.Generator {
 
 type fakeAppChatStreamStore struct {
 	appChatStore
-	mu             sync.Mutex
-	messages       []chat.Message
-	messageID      int64
-	saveCalls      int
-	saveErr        error
-	onSave         func()
-	contextStarted chan struct{}
-	contextRelease chan struct{}
-	cardID         int64
+	mu               sync.Mutex
+	messages         []chat.Message
+	messageID        int64
+	saveCalls        int
+	saveErr          error
+	onSave           func()
+	beforeSaveReturn func(context.Context)
+	contextStarted   chan struct{}
+	contextRelease   chan struct{}
+	cardID           int64
 }
 
 func newFakeAppChatStreamStore() *fakeAppChatStreamStore {
@@ -937,7 +1222,7 @@ func (s *fakeAppChatStreamStore) UpdateConversationSummary(context.Context, int6
 	return true, nil
 }
 
-func (s *fakeAppChatStreamStore) SavePair(_ context.Context, sessionID int64, question, answer string, _ json.RawMessage) (int64, error) {
+func (s *fakeAppChatStreamStore) SavePair(ctx context.Context, sessionID int64, question, answer string, _ json.RawMessage) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.saveCalls++
@@ -945,7 +1230,13 @@ func (s *fakeAppChatStreamStore) SavePair(_ context.Context, sessionID int64, qu
 		s.onSave()
 	}
 	if s.saveErr != nil {
+		if s.beforeSaveReturn != nil {
+			s.beforeSaveReturn(ctx)
+		}
 		return 0, s.saveErr
+	}
+	if s.beforeSaveReturn != nil {
+		s.beforeSaveReturn(ctx)
 	}
 	s.messages = append(s.messages,
 		chat.Message{SessionID: sessionID, Role: "user", Content: question},

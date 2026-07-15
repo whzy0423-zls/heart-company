@@ -38,16 +38,38 @@ const (
 	appChatStreamDelta
 	appChatStreamDone
 	appChatStreamError
+	appChatStreamPersistenceStarted
 )
 
 type appChatStreamEvent struct {
-	kind          appChatStreamEventKind
-	delta         string
-	writeResult   chan error
-	postSaveReady <-chan struct{}
-	response      askResponse
-	publicError   string
-	errorPhase    string
+	kind        appChatStreamEventKind
+	delta       string
+	writeResult chan error
+	response    askResponse
+	publicError string
+	errorPhase  string
+}
+
+type appChatStreamLifecycle struct {
+	phase atomic.Int32
+}
+
+const (
+	appChatStreamGenerating int32 = iota
+	appChatStreamPersisting
+	appChatStreamStopped
+)
+
+func (l *appChatStreamLifecycle) beginPersistence() bool {
+	return l.phase.CompareAndSwap(appChatStreamGenerating, appChatStreamPersisting)
+}
+
+func (l *appChatStreamLifecycle) stopBeforePersistence() bool {
+	return l.phase.CompareAndSwap(appChatStreamGenerating, appChatStreamStopped)
+}
+
+func (l *appChatStreamLifecycle) persistenceStarted() bool {
+	return l.phase.Load() == appChatStreamPersisting
 }
 
 type appChatPromptContext struct {
@@ -385,6 +407,7 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	logAppChatStreamTiming("connected", userInfo.ID, sessionID, streamStartedAt, "")
 
 	events := make(chan appChatStreamEvent, appChatStreamEventBuffer)
+	lifecycle := &appChatStreamLifecycle{}
 	go s.runAppChatStreamPipeline(ctx, events, appChatStreamPipelineInput{
 		userID:               userInfo.ID,
 		sessionID:            sessionID,
@@ -393,8 +416,9 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 		preferenceTurn:       preferenceTurn,
 		preferenceExtraction: preferenceExtraction,
 		generator:            generator,
+		lifecycle:            lifecycle,
 	})
-	s.pumpAppChatStream(ctx, cancel, r.Context(), w, flusher, events, userInfo.ID, sessionID, streamStartedAt, chatTimeout)
+	s.pumpAppChatStream(ctx, cancel, r.Context(), w, flusher, events, lifecycle, userInfo.ID, sessionID, streamStartedAt, chatTimeout)
 }
 
 type appChatStreamPipelineInput struct {
@@ -405,6 +429,7 @@ type appChatStreamPipelineInput struct {
 	preferenceTurn       appChatPreferenceTurn
 	preferenceExtraction userpreference.Extraction
 	generator            rag.Generator
+	lifecycle            *appChatStreamLifecycle
 }
 
 func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- appChatStreamEvent, input appChatStreamPipelineInput) {
@@ -481,21 +506,24 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 	}
 
 	sourcesJSON, _ := json.Marshal(ans.Sources)
-	messageID, saveErr := s.appChat.SavePair(ctx, input.sessionID, input.question, ans.Answer, sourcesJSON)
-	if saveErr != nil {
-		send(appChatStreamEvent{kind: appChatStreamError, publicError: "回答保存失败，请重试", errorPhase: "save"})
+	// Atomically arbitrate with total/idle timeout before entering SavePair's
+	// may-commit window. Once persistence wins, the pump waits for its terminal.
+	if !input.lifecycle.beginPersistence() {
 		return
 	}
-	// SavePair has committed. The client-facing terminal must no longer be
-	// dropped merely because the request deadline expires during post-save work.
-	postSaveReady := make(chan struct{})
-	events <- appChatStreamEvent{
-		kind:          appChatStreamDone,
-		response:      askResponse{Answer: ans, MessageID: messageID},
-		postSaveReady: postSaveReady,
+	events <- appChatStreamEvent{kind: appChatStreamPersistenceStarted}
+	messageID, saveErr := s.appChat.SavePair(ctx, input.sessionID, input.question, ans.Answer, sourcesJSON)
+	if saveErr != nil {
+		events <- appChatStreamEvent{kind: appChatStreamError, publicError: "回答保存失败，请重试", errorPhase: "save"}
+		return
 	}
+	// Reserve fallback ownership without waiting on the per-user mutation lock,
+	// then publish the committed terminal immediately.
 	s.scheduleAppChatPreferenceFallback(input.preferenceTurn, input.question)
-	close(postSaveReady)
+	events <- appChatStreamEvent{
+		kind:     appChatStreamDone,
+		response: askResponse{Answer: ans, MessageID: messageID},
+	}
 
 	postSaveCtx, cancelPostSave := context.WithTimeout(context.Background(), defaultAppChatPostSaveTimeout)
 	s.rememberChatAnswer(postSaveCtx, input.userID, input.cardID, input.question, ans.Answer)
@@ -512,6 +540,7 @@ func (s *Server) pumpAppChatStream(
 	w io.Writer,
 	flusher http.Flusher,
 	events <-chan appChatStreamEvent,
+	lifecycle *appChatStreamLifecycle,
 	userID, sessionID int64,
 	startedAt time.Time,
 	totalTimeout time.Duration,
@@ -541,14 +570,28 @@ func (s *Server) pumpAppChatStream(
 		}
 		idleTimer.Reset(providerIdleTimeout)
 	}
+	stopIdle := func() {
+		idle = nil
+		if idleTimer == nil {
+			return
+		}
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+	}
 
 	firstDelta := true
+	persistenceStarted := false
 	handleEvent := func(event appChatStreamEvent, ok bool) bool {
+		if requestCtx.Err() != nil {
+			cancel()
+			logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
+			return true
+		}
 		if !ok {
-			if requestCtx.Err() != nil {
-				logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
-				return true
-			}
 			if ctx.Err() != nil {
 				_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成超时，请重试"})
 				logAppChatStreamTiming("error", userID, sessionID, startedAt, "total_timeout")
@@ -563,6 +606,9 @@ func (s *Server) pumpAppChatStream(
 		switch event.kind {
 		case appChatStreamProviderStarted:
 			resetIdle()
+		case appChatStreamPersistenceStarted:
+			persistenceStarted = true
+			stopIdle()
 		case appChatStreamDelta:
 			if event.delta == "" {
 				if event.writeResult != nil {
@@ -592,9 +638,6 @@ func (s *Server) pumpAppChatStream(
 				logAppChatStreamTiming("error", userID, sessionID, startedAt, "done_write")
 				return true
 			}
-			if event.postSaveReady != nil {
-				<-event.postSaveReady
-			}
 			logAppChatStreamTiming("completed", userID, sessionID, startedAt, "")
 			return true
 		case appChatStreamError:
@@ -606,15 +649,29 @@ func (s *Server) pumpAppChatStream(
 		}
 		return false
 	}
+	drainEvents := func() bool {
+		for {
+			select {
+			case event, ok := <-events:
+				if handleEvent(event, ok) {
+					return true
+				}
+			default:
+				return false
+			}
+		}
+	}
+	totalDone := ctx.Done()
+	requestDone := requestCtx.Done()
 
 	for {
-		select {
-		case event, ok := <-events:
-			if handleEvent(event, ok) {
-				return
-			}
-			continue
-		default:
+		if requestCtx.Err() != nil {
+			cancel()
+			logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
+			return
+		}
+		if drainEvents() {
+			return
 		}
 		select {
 		case event, ok := <-events:
@@ -628,28 +685,43 @@ func (s *Server) pumpAppChatStream(
 				return
 			}
 		case <-idle:
-			select {
-			case event, ok := <-events:
-				if handleEvent(event, ok) {
-					return
-				}
-			default:
+			if drainEvents() {
+				return
+			}
+			if persistenceStarted || lifecycle.persistenceStarted() {
+				persistenceStarted = true
+				stopIdle()
+				continue
+			}
+			if !lifecycle.stopBeforePersistence() {
+				continue
 			}
 			cancel()
 			_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成超时，请重试"})
 			logAppChatStreamTiming("idle", userID, sessionID, startedAt, "provider")
 			return
-		case <-ctx.Done():
-			select {
-			case event, ok := <-events:
-				if handleEvent(event, ok) {
-					return
-				}
-			default:
+		case <-requestDone:
+			lifecycle.stopBeforePersistence()
+			cancel()
+			logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
+			return
+		case <-totalDone:
+			if drainEvents() {
+				return
 			}
 			if requestCtx.Err() != nil {
 				logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
 				return
+			}
+			if persistenceStarted || lifecycle.persistenceStarted() {
+				persistenceStarted = true
+				stopIdle()
+				totalDone = nil
+				continue
+			}
+			if !lifecycle.stopBeforePersistence() {
+				totalDone = nil
+				continue
 			}
 			_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成超时，请重试"})
 			logAppChatStreamTiming("error", userID, sessionID, startedAt, "total_timeout")
@@ -798,9 +870,7 @@ func (s *Server) scheduleAppChatPreferenceFallback(turn appChatPreferenceTurn, q
 	default:
 		return false
 	}
-	turn.state.mu.Lock()
 	turn.state.pending.Add(1)
-	turn.state.mu.Unlock()
 	timeout := s.preferenceAsyncTimeout
 	if timeout <= 0 {
 		timeout = 2 * time.Second
