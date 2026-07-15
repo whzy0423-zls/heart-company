@@ -238,13 +238,17 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "question required")
 		return
 	}
-	preferenceTurn := s.beginAppChatPreferenceTurn(userInfo.ID)
+	preferenceExtraction := userpreference.Extract(body.Question)
+	preferenceTurn := appChatPreferenceTurn{userID: userInfo.ID}
+	if len(preferenceExtraction.Mutations) > 0 || userpreference.NeedsLLMFallback(body.Question) {
+		preferenceTurn = s.beginAppChatPreferenceTurn(userInfo.ID)
+	}
 	defer s.finishAppChatPreferenceTurn(preferenceTurn)
 
 	generator, chatTimeout := s.chatRuntime()
 	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
-	preferences, directives, err := s.prepareAppChatPreferences(ctx, preferenceTurn, body.Question)
+	preferences, directives, err := s.prepareAppChatPreferences(ctx, preferenceTurn, preferenceExtraction)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, appChatPreferencePublicError(err))
 		return
@@ -331,13 +335,17 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "question required")
 		return
 	}
-	preferenceTurn := s.beginAppChatPreferenceTurn(userInfo.ID)
+	preferenceExtraction := userpreference.Extract(body.Question)
+	preferenceTurn := appChatPreferenceTurn{userID: userInfo.ID}
+	if len(preferenceExtraction.Mutations) > 0 || userpreference.NeedsLLMFallback(body.Question) {
+		preferenceTurn = s.beginAppChatPreferenceTurn(userInfo.ID)
+	}
 	defer s.finishAppChatPreferenceTurn(preferenceTurn)
 
 	generator, chatTimeout := s.chatRuntime()
 	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
-	preferences, directives, err := s.prepareAppChatPreferences(ctx, preferenceTurn, body.Question)
+	preferences, directives, err := s.prepareAppChatPreferences(ctx, preferenceTurn, preferenceExtraction)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, appChatPreferencePublicError(err))
 		return
@@ -435,14 +443,14 @@ func (s *Server) cleanupAppChatPreferenceTurn(turn appChatPreferenceTurn) {
 	}
 }
 
-func (s *Server) prepareAppChatPreferences(ctx context.Context, turn appChatPreferenceTurn, question string) ([]string, []string, error) {
-	extraction := userpreference.Extract(question)
-	if turn.state == nil {
-		return nil, nil, errAppChatPreferenceStale
-	}
-	turn.state.mu.Lock()
-	defer turn.state.mu.Unlock()
-	if turn.state.version != turn.version {
+func (s *Server) prepareAppChatPreferences(ctx context.Context, turn appChatPreferenceTurn, extraction userpreference.Extraction) ([]string, []string, error) {
+	if turn.state != nil {
+		turn.state.mu.Lock()
+		defer turn.state.mu.Unlock()
+		if turn.state.version != turn.version {
+			return nil, nil, errAppChatPreferenceStale
+		}
+	} else if len(extraction.Mutations) > 0 {
 		return nil, nil, errAppChatPreferenceStale
 	}
 	if len(extraction.Mutations) > 0 {

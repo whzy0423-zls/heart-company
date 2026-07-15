@@ -294,6 +294,141 @@ func TestAppChatPreferenceFallbackDoesNotOverwriteNewerDurablePreference(t *test
 	}
 }
 
+func TestOrdinaryChatDoesNotInvalidatePendingDurablePreference(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	extractor := &fakeAppChatPreferenceExtractor{
+		extract: func(context.Context, string) userpreference.Extraction {
+			close(started)
+			<-release
+			return userpreference.Extraction{Mutations: []userpreference.Mutation{{Upsert: &userpreference.Preference{
+				Category: "tone", Slot: "tone.formality", Instruction: "使用正式语气",
+			}}}}
+		},
+	}
+	preferences := newFakeAppChatPreferenceStore()
+	s := newAppChatStreamServer(newFakeAppChatStreamStore(), successfulAppChatGenerator("回答"))
+	s.userPreferences = preferences
+	s.preferenceExtractor = extractor
+	s.preferenceAsyncSlots = make(chan struct{}, 1)
+
+	performPreferenceStreamRequest(t, s, 7, 42, "以后回答语气更成熟一些", context.Background())
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("durable async extraction did not start")
+	}
+	performPreferenceStreamRequest(t, s, 7, 43, "谢谢", context.Background())
+	close(release)
+	waitForPreferenceTurnCleanup(t, s, 7)
+
+	stored, err := preferences.List(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 || stored[0].Instruction != "使用正式语气" {
+		t.Fatalf("ordinary chat invalidated pending durable preference: %+v", stored)
+	}
+}
+
+func TestCurrentOnlyDirectiveDoesNotInvalidatePendingDurablePreference(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	extractor := &fakeAppChatPreferenceExtractor{
+		extract: func(context.Context, string) userpreference.Extraction {
+			close(started)
+			<-release
+			return userpreference.Extraction{Mutations: []userpreference.Mutation{{Upsert: &userpreference.Preference{
+				Category: "tone", Slot: "tone.formality", Instruction: "使用正式语气",
+			}}}}
+		},
+	}
+	preferences := newFakeAppChatPreferenceStore()
+	var mu sync.Mutex
+	var inputs []rag.GenerateInput
+	generator := &controlledAppChatStreamingGenerator{
+		generateStream: func(_ context.Context, input rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+			mu.Lock()
+			inputs = append(inputs, input)
+			mu.Unlock()
+			if err := emit("回答"); err != nil {
+				return "", err
+			}
+			return "回答", nil
+		},
+	}
+	s := newAppChatStreamServer(newFakeAppChatStreamStore(), generator)
+	s.userPreferences = preferences
+	s.preferenceExtractor = extractor
+	s.preferenceAsyncSlots = make(chan struct{}, 1)
+
+	performPreferenceStreamRequest(t, s, 7, 42, "以后回答语气更成熟一些", context.Background())
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("durable async extraction did not start")
+	}
+	performPreferenceStreamRequest(t, s, 7, 43, "这次详细说", context.Background())
+	close(release)
+	waitForPreferenceTurnCleanup(t, s, 7)
+
+	stored, err := preferences.List(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 || stored[0].Instruction != "使用正式语气" {
+		t.Fatalf("current-only directive invalidated pending durable preference: %+v", stored)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(inputs) != 2 || strings.Join(inputs[1].CurrentDirectives, "|") != "回答更详细" {
+		t.Fatalf("current-only directive did not reach its own response: %+v", inputs)
+	}
+}
+
+func TestNewerUnresolvedDurablePreferenceSupersedesOlderAsyncExtraction(t *testing.T) {
+	olderStarted := make(chan struct{})
+	releaseOlder := make(chan struct{})
+	extractor := &fakeAppChatPreferenceExtractor{
+		extract: func(_ context.Context, message string) userpreference.Extraction {
+			if strings.Contains(message, "凝练") {
+				close(olderStarted)
+				<-releaseOlder
+				return userpreference.Extraction{Mutations: []userpreference.Mutation{{Upsert: &userpreference.Preference{
+					Category: "length", Slot: "length.detail_level", Instruction: "回答简短，避免长篇大论",
+				}}}}
+			}
+			return userpreference.Extraction{Mutations: []userpreference.Mutation{{Upsert: &userpreference.Preference{
+				Category: "length", Slot: "length.detail_level", Instruction: "回答更详细",
+			}}}}
+		},
+	}
+	preferences := newFakeAppChatPreferenceStore()
+	s := newAppChatStreamServer(newFakeAppChatStreamStore(), successfulAppChatGenerator("回答"))
+	s.userPreferences = preferences
+	s.preferenceExtractor = extractor
+	s.preferenceAsyncSlots = make(chan struct{}, 2)
+
+	performPreferenceStreamRequest(t, s, 7, 42, "以后回答风格更凝练一些", context.Background())
+	select {
+	case <-olderStarted:
+	case <-time.After(time.Second):
+		t.Fatal("older unresolved extraction did not start")
+	}
+	performPreferenceStreamRequest(t, s, 7, 43, "以后回答风格更铺陈一些", context.Background())
+	waitForPreferenceInstruction(t, preferences, 7, "回答更详细")
+	close(releaseOlder)
+	waitForPreferenceTurnCleanup(t, s, 7)
+
+	stored, err := preferences.List(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 || stored[0].Instruction != "回答更详细" {
+		t.Fatalf("older unresolved result overwrote newer unresolved preference: %+v", stored)
+	}
+}
+
 func TestAppChatPreferenceFallbackDoesNotResurrectNewerCancellation(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -568,6 +703,24 @@ func waitForPreferenceTurnCleanup(t *testing.T, s *Server, userID int64) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("timed out waiting for preference turn cleanup")
+}
+
+func waitForPreferenceInstruction(t *testing.T, store *fakeAppChatPreferenceStore, userID int64, instruction string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		stored, err := store.List(context.Background(), userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, preference := range stored {
+			if preference.Instruction == instruction {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for preference %q", instruction)
 }
 
 func (s *fakeAppChatPreferenceStore) waitForApply(t *testing.T, count int) {
