@@ -122,6 +122,13 @@ type appChatPreferenceTurn struct {
 	ticket uint64
 }
 
+type appChatPreferenceFallbackReservation struct {
+	server   *Server
+	turn     appChatPreferenceTurn
+	question string
+	claim    sync.Once
+}
+
 var (
 	errAppChatPreferenceSave  = errors.New("偏好保存失败，请重试")
 	errAppChatPreferenceRead  = errors.New("偏好读取失败，请重试")
@@ -506,20 +513,25 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 	}
 
 	sourcesJSON, _ := json.Marshal(ans.Sources)
+	// Reserve the original turn state before SavePair can outlive the handler.
+	// This keeps later same-user turns in the same ticket-ordering domain.
+	fallback := s.reserveAppChatPreferenceFallback(input.preferenceTurn, input.question)
 	// Atomically arbitrate with total/idle timeout before entering SavePair's
 	// may-commit window. Once persistence wins, the pump waits for its terminal.
 	if !input.lifecycle.beginPersistence() {
+		fallback.release()
 		return
 	}
 	events <- appChatStreamEvent{kind: appChatStreamPersistenceStarted}
 	messageID, saveErr := s.appChat.SavePair(ctx, input.sessionID, input.question, ans.Answer, sourcesJSON)
 	if saveErr != nil {
+		fallback.release()
 		events <- appChatStreamEvent{kind: appChatStreamError, publicError: "回答保存失败，请重试", errorPhase: "save"}
 		return
 	}
-	// Reserve fallback ownership without waiting on the per-user mutation lock,
+	// Start the reserved fallback without waiting on the per-user mutation lock,
 	// then publish the committed terminal immediately.
-	s.scheduleAppChatPreferenceFallback(input.preferenceTurn, input.question)
+	fallback.start()
 	events <- appChatStreamEvent{
 		kind:     appChatStreamDone,
 		response: askResponse{Answer: ans, MessageID: messageID},
@@ -587,6 +599,7 @@ func (s *Server) pumpAppChatStream(
 	persistenceStarted := false
 	handleEvent := func(event appChatStreamEvent, ok bool) bool {
 		if requestCtx.Err() != nil {
+			lifecycle.stopBeforePersistence()
 			cancel()
 			logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
 			return true
@@ -666,6 +679,7 @@ func (s *Server) pumpAppChatStream(
 
 	for {
 		if requestCtx.Err() != nil {
+			lifecycle.stopBeforePersistence()
 			cancel()
 			logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
 			return
@@ -858,40 +872,70 @@ func appChatPreferencePublicError(err error) string {
 }
 
 func (s *Server) scheduleAppChatPreferenceFallback(turn appChatPreferenceTurn, question string) bool {
+	return s.reserveAppChatPreferenceFallback(turn, question).start()
+}
+
+func (s *Server) reserveAppChatPreferenceFallback(turn appChatPreferenceTurn, question string) *appChatPreferenceFallbackReservation {
 	if turn.userID <= 0 || turn.state == nil || s.userPreferences == nil || s.preferenceExtractor == nil ||
 		!userpreference.NeedsLLMFallback(question) {
-		return false
+		return nil
 	}
 	if s.preferenceAsyncSlots == nil {
-		return false
+		return nil
 	}
 	select {
 	case s.preferenceAsyncSlots <- struct{}{}:
 	default:
-		return false
+		return nil
 	}
 	turn.state.pending.Add(1)
+	return &appChatPreferenceFallbackReservation{server: s, turn: turn, question: question}
+}
+
+func (r *appChatPreferenceFallbackReservation) start() bool {
+	if r == nil {
+		return false
+	}
+	started := false
+	r.claim.Do(func() {
+		started = true
+		go r.run()
+	})
+	return started
+}
+
+func (r *appChatPreferenceFallbackReservation) release() {
+	if r == nil {
+		return
+	}
+	r.claim.Do(r.finish)
+}
+
+func (r *appChatPreferenceFallbackReservation) run() {
+	s := r.server
+	turn := r.turn
 	timeout := s.preferenceAsyncTimeout
 	if timeout <= 0 {
 		timeout = 2 * time.Second
 	}
-	go func() {
-		defer func() { <-s.preferenceAsyncSlots }()
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		extraction := s.preferenceExtractor.Extract(ctx, question)
-		turn.state.mu.Lock()
-		if len(extraction.Mutations) > 0 && ctx.Err() == nil {
-			accepted := filterAndMarkAppChatPreferenceMutations(turn.state, turn.ticket, extraction.Mutations)
-			if len(accepted) > 0 {
-				_ = s.userPreferences.Apply(ctx, turn.userID, accepted)
-			}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	defer r.finish()
+	extraction := s.preferenceExtractor.Extract(ctx, r.question)
+	turn.state.mu.Lock()
+	if len(extraction.Mutations) > 0 && ctx.Err() == nil {
+		accepted := filterAndMarkAppChatPreferenceMutations(turn.state, turn.ticket, extraction.Mutations)
+		if len(accepted) > 0 {
+			_ = s.userPreferences.Apply(ctx, turn.userID, accepted)
 		}
-		turn.state.pending.Add(-1)
-		turn.state.mu.Unlock()
-		s.cleanupAppChatPreferenceTurn(turn)
-	}()
-	return true
+	}
+	turn.state.mu.Unlock()
+}
+
+func (r *appChatPreferenceFallbackReservation) finish() {
+	r.turn.state.pending.Add(-1)
+	<-r.server.preferenceAsyncSlots
+	r.server.cleanupAppChatPreferenceTurn(r.turn)
 }
 
 // filterAndMarkAppChatPreferenceMutations must be called with state.mu held.

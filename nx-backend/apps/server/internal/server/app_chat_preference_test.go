@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -199,6 +200,32 @@ func TestAppChatPreferenceFallbackSkipsImmediatelyWhenSlotFull(t *testing.T) {
 	}
 }
 
+func TestAppChatPreferenceFallbackReservationReleasesOwnershipExactlyOnce(t *testing.T) {
+	s := &Server{
+		userPreferences:      newFakeAppChatPreferenceStore(),
+		preferenceExtractor:  &fakeAppChatPreferenceExtractor{},
+		preferenceAsyncSlots: make(chan struct{}, 1),
+	}
+	turn := s.beginAppChatPreferenceTurn(7)
+	reservation := s.reserveAppChatPreferenceFallback(turn, "以后回答语气更成熟一点")
+	if reservation == nil {
+		t.Fatal("fallback reservation was not acquired")
+	}
+	if turn.state.pending.Load() != 1 || len(s.preferenceAsyncSlots) != 1 {
+		t.Fatalf("reservation ownership = pending:%d slots:%d, want 1/1", turn.state.pending.Load(), len(s.preferenceAsyncSlots))
+	}
+	reservation.release()
+	reservation.release()
+	if reservation.start() {
+		t.Fatal("released reservation started an async fallback")
+	}
+	if turn.state.pending.Load() != 0 || len(s.preferenceAsyncSlots) != 0 {
+		t.Fatalf("released ownership = pending:%d slots:%d, want 0/0", turn.state.pending.Load(), len(s.preferenceAsyncSlots))
+	}
+	s.finishAppChatPreferenceTurn(turn)
+	waitForPreferenceTurnCleanup(t, s, 7)
+}
+
 func TestAppChatPreferenceFallbackUsesIndependentBoundedContextAndIgnoresCurrentDirectives(t *testing.T) {
 	started := make(chan context.Context, 1)
 	release := make(chan struct{})
@@ -292,6 +319,82 @@ func TestAppChatPreferenceFallbackDoesNotOverwriteNewerDurablePreference(t *test
 	}
 	if len(stored) != 1 || stored[0].Instruction != "回答更详细" {
 		t.Fatalf("older async extraction overwrote newer durable setting: %+v", stored)
+	}
+}
+
+func TestAppChatPreferenceCommittedFallbackKeepsOrderingAfterClientDisconnect(t *testing.T) {
+	store := &firstSaveBlockingAppChatStore{
+		fakeAppChatStreamStore: newFakeAppChatStreamStore(),
+		firstStarted:           make(chan struct{}),
+		releaseFirst:           make(chan struct{}),
+		firstCommitted:         make(chan struct{}),
+	}
+	released := false
+	defer func() {
+		if !released {
+			close(store.releaseFirst)
+		}
+	}()
+	extractor := &fakeAppChatPreferenceExtractor{
+		extract: func(context.Context, string) userpreference.Extraction {
+			return userpreference.Extraction{Mutations: []userpreference.Mutation{{Upsert: &userpreference.Preference{
+				Category: "length", Slot: "length.detail_level", Instruction: "回答简短，避免长篇大论",
+			}}}}
+		},
+	}
+	preferences := newFakeAppChatPreferenceStore()
+	s := newAppChatStreamServer(store, successfulAppChatGenerator("回答"))
+	s.userPreferences = preferences
+	s.preferenceExtractor = extractor
+	s.preferenceAsyncSlots = make(chan struct{}, 1)
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		performPreferenceStreamRequest(t, s, 7, 42, "以后回答风格更凝练一点", firstCtx)
+	}()
+	select {
+	case <-store.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first SavePair did not enter its may-commit window")
+	}
+	s.preferenceTurnsMu.Lock()
+	firstState := s.preferenceTurns[7]
+	s.preferenceTurnsMu.Unlock()
+	if firstState == nil {
+		t.Fatal("first preference turn state was missing")
+	}
+	cancelFirst()
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first handler did not return after client disconnect")
+	}
+	s.preferenceTurnsMu.Lock()
+	retainedState := s.preferenceTurns[7]
+	s.preferenceTurnsMu.Unlock()
+	if retainedState != firstState {
+		t.Fatal("may-commit fallback ownership did not retain the original turn state")
+	}
+
+	performPreferenceStreamRequest(t, s, 7, 43, "以后回答详细一点", context.Background())
+	preferences.waitForApply(t, 1)
+	close(store.releaseFirst)
+	released = true
+	select {
+	case <-store.firstCommitted:
+	case <-time.After(time.Second):
+		t.Fatal("first SavePair did not report its committed result")
+	}
+	waitForPreferenceTurnCleanup(t, s, 7)
+
+	stored, err := preferences.List(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 || stored[0].Instruction != "回答更详细" {
+		t.Fatalf("disconnected older fallback escaped ticket ordering: %+v", stored)
 	}
 }
 
@@ -691,6 +794,10 @@ func TestAppChatPreferenceFallbackDoesNotRunAfterSaveFailure(t *testing.T) {
 	if extractor.calls.Load() != 0 {
 		t.Fatalf("async extractor called %d times after SavePair failure", extractor.calls.Load())
 	}
+	if len(s.preferenceAsyncSlots) != 0 {
+		t.Fatalf("save failure leaked %d fallback slots", len(s.preferenceAsyncSlots))
+	}
+	waitForPreferenceTurnCleanup(t, s, 7)
 }
 
 func TestAppChatPreferenceFallbackDoesNotRunAfterPartialGenerationFailure(t *testing.T) {
@@ -782,6 +889,24 @@ type fakeAppChatPreferenceStore struct {
 	onApply     func()
 	beforeApply func([]userpreference.Mutation)
 	applyCall   chan struct{}
+}
+
+type firstSaveBlockingAppChatStore struct {
+	*fakeAppChatStreamStore
+	calls          atomic.Int32
+	firstStarted   chan struct{}
+	releaseFirst   chan struct{}
+	firstCommitted chan struct{}
+}
+
+func (s *firstSaveBlockingAppChatStore) SavePair(_ context.Context, _ int64, _, _ string, _ json.RawMessage) (int64, error) {
+	call := s.calls.Add(1)
+	if call == 1 {
+		close(s.firstStarted)
+		<-s.releaseFirst
+		close(s.firstCommitted)
+	}
+	return int64(100 + call), nil
 }
 
 func newFakeAppChatPreferenceStore() *fakeAppChatPreferenceStore {
