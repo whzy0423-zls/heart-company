@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +23,30 @@ import (
 const appChatHistoryLimit = 12
 
 const appChatFallbackHistoryLimit = 20
+
+const (
+	defaultAppChatHeartbeatInterval = 15 * time.Second
+	defaultAppChatProviderIdle      = 20 * time.Second
+	appChatStreamEventBuffer        = 16
+)
+
+type appChatStreamEventKind uint8
+
+const (
+	appChatStreamProviderStarted appChatStreamEventKind = iota + 1
+	appChatStreamDelta
+	appChatStreamDone
+	appChatStreamError
+)
+
+type appChatStreamEvent struct {
+	kind        appChatStreamEventKind
+	delta       string
+	writeResult chan error
+	response    askResponse
+	publicError string
+	errorPhase  string
+}
 
 type appChatPromptContext struct {
 	Summary                     string
@@ -346,62 +371,285 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	generator, chatTimeout := s.chatRuntime()
 	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
-	preferences, directives, err := s.prepareAppChatPreferences(ctx, preferenceTurn, preferenceExtraction)
-	if err != nil {
-		httpx.Fail(w, http.StatusInternalServerError, appChatPreferencePublicError(err))
-		return
-	}
-
-	docs, _ := s.retrieveAppDocsForQuery(ctx, body.Question, 6)
-	profile := rag.UserProfile{}
-	if s.appUsers != nil {
-		if appUser, err := s.appUsers.FindByID(ctx, userInfo.ID); err == nil {
-			profile.Nickname = appUser.Nickname
-		}
-	}
-	if s.quiz != nil {
-		if card, err := s.quiz.PrimaryCard(ctx, userInfo.ID); err == nil {
-			profile.MainType = card.MainType
-		}
-	}
-	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
-		profile.Memories = memories
-	}
-	promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
-
+	streamStartedAt := time.Now()
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+	if err := writeAppChatSSEComment(w, flusher, "connected"); err != nil {
+		logAppChatStreamTiming("error", userInfo.ID, sessionID, streamStartedAt, "connected_write")
+		return
+	}
+	logAppChatStreamTiming("connected", userInfo.ID, sessionID, streamStartedAt, "")
 
-	ans, err := rag.NewService(docs, rag.WithGenerator(generator)).AskStream(ctx, rag.AskInput{
+	events := make(chan appChatStreamEvent, appChatStreamEventBuffer)
+	go s.runAppChatStreamPipeline(ctx, events, appChatStreamPipelineInput{
+		userID:               userInfo.ID,
+		sessionID:            sessionID,
+		cardID:               sess.CardID,
+		question:             body.Question,
+		preferenceTurn:       preferenceTurn,
+		preferenceExtraction: preferenceExtraction,
+		generator:            generator,
+	})
+	s.pumpAppChatStream(ctx, cancel, r.Context(), w, flusher, events, userInfo.ID, sessionID, streamStartedAt, chatTimeout)
+}
+
+type appChatStreamPipelineInput struct {
+	userID               int64
+	sessionID            int64
+	cardID               int64
+	question             string
+	preferenceTurn       appChatPreferenceTurn
+	preferenceExtraction userpreference.Extraction
+	generator            rag.Generator
+}
+
+func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- appChatStreamEvent, input appChatStreamPipelineInput) {
+	defer close(events)
+	send := func(event appChatStreamEvent) bool {
+		if ctx.Err() != nil {
+			return false
+		}
+		select {
+		case events <- event:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
+	preferences, directives, err := s.prepareAppChatPreferences(ctx, input.preferenceTurn, input.preferenceExtraction)
+	if err != nil {
+		send(appChatStreamEvent{kind: appChatStreamError, publicError: appChatPreferencePublicError(err), errorPhase: "preferences"})
+		return
+	}
+
+	docs, _ := s.retrieveAppDocsForQuery(ctx, input.question, 6)
+	profile := rag.UserProfile{}
+	if s.appUsers != nil {
+		if appUser, err := s.appUsers.FindByID(ctx, input.userID); err == nil {
+			profile.Nickname = appUser.Nickname
+		}
+	}
+	if s.quiz != nil {
+		if card, err := s.quiz.PrimaryCard(ctx, input.userID); err == nil {
+			profile.MainType = card.MainType
+		}
+	}
+	if memories, err := s.appChatMemoriesForPrompt(ctx, input.userID, input.cardID, 6); err == nil {
+		profile.Memories = memories
+	}
+	promptContext := s.appChatContextForPrompt(ctx, input.sessionID, input.generator)
+	if !send(appChatStreamEvent{kind: appChatStreamProviderStarted}) {
+		return
+	}
+
+	ans, err := rag.NewService(docs, rag.WithGenerator(input.generator)).AskStream(ctx, rag.AskInput{
 		History:             promptContext.History,
 		ConversationSummary: promptContext.Summary,
-		Question:            body.Question,
+		Question:            input.question,
 		UserProfile:         profile,
 		UserPreferences:     preferences,
 		CurrentDirectives:   directives,
 	}, func(delta string) error {
-		return writeAppChatSSE(w, flusher, "delta", map[string]string{"content": delta})
+		if delta == "" {
+			return nil
+		}
+		writeResult := make(chan error, 1)
+		if !send(appChatStreamEvent{kind: appChatStreamDelta, delta: delta, writeResult: writeResult}) {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return context.Canceled
+		}
+		select {
+		case err := <-writeResult:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	})
 	if err != nil {
-		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成失败，请重试"})
+		send(appChatStreamEvent{kind: appChatStreamError, publicError: "回答生成失败，请重试", errorPhase: "provider"})
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 
 	sourcesJSON, _ := json.Marshal(ans.Sources)
-	messageID, saveErr := s.appChat.SavePair(ctx, sessionID, body.Question, ans.Answer, sourcesJSON)
+	messageID, saveErr := s.appChat.SavePair(ctx, input.sessionID, input.question, ans.Answer, sourcesJSON)
 	if saveErr != nil {
-		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答保存失败，请重试"})
+		send(appChatStreamEvent{kind: appChatStreamError, publicError: "回答保存失败，请重试", errorPhase: "save"})
 		return
 	}
-	s.scheduleAppChatPreferenceFallback(preferenceTurn, body.Question)
-	s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, body.Question, ans.Answer)
+	s.scheduleAppChatPreferenceFallback(input.preferenceTurn, input.question)
+	s.rememberChatAnswer(ctx, input.userID, input.cardID, input.question, ans.Answer)
 	if messageID > 0 {
-		s.recordAppProfileEvidenceAsync(userInfo.ID, sess.CardID, "chat", messageID, body.Question)
+		s.recordAppProfileEvidenceAsync(input.userID, input.cardID, "chat", messageID, input.question)
+	}
+	send(appChatStreamEvent{kind: appChatStreamDone, response: askResponse{Answer: ans, MessageID: messageID}})
+}
+
+func (s *Server) pumpAppChatStream(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	requestCtx context.Context,
+	w io.Writer,
+	flusher http.Flusher,
+	events <-chan appChatStreamEvent,
+	userID, sessionID int64,
+	startedAt time.Time,
+	totalTimeout time.Duration,
+) {
+	heartbeatInterval, providerIdleTimeout := s.appChatStreamTiming(totalTimeout)
+	heartbeat := time.NewTicker(heartbeatInterval)
+	defer heartbeat.Stop()
+
+	var idleTimer *time.Timer
+	var idle <-chan time.Time
+	defer func() {
+		if idleTimer != nil {
+			idleTimer.Stop()
+		}
+	}()
+	resetIdle := func() {
+		if idleTimer == nil {
+			idleTimer = time.NewTimer(providerIdleTimeout)
+			idle = idleTimer.C
+			return
+		}
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+		idleTimer.Reset(providerIdleTimeout)
 	}
 
-	_ = writeAppChatSSE(w, flusher, "done", askResponse{Answer: ans, MessageID: messageID})
+	firstDelta := true
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				if requestCtx.Err() != nil {
+					logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
+					return
+				}
+				if ctx.Err() != nil {
+					_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成超时，请重试"})
+					logAppChatStreamTiming("error", userID, sessionID, startedAt, "total_timeout")
+					return
+				}
+				if writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成失败，请重试"}) != nil {
+					cancel()
+				}
+				logAppChatStreamTiming("error", userID, sessionID, startedAt, "worker_closed")
+				return
+			}
+			switch event.kind {
+			case appChatStreamProviderStarted:
+				resetIdle()
+			case appChatStreamDelta:
+				if event.delta == "" {
+					if event.writeResult != nil {
+						event.writeResult <- nil
+					}
+					continue
+				}
+				if err := writeAppChatSSE(w, flusher, "delta", map[string]string{"content": event.delta}); err != nil {
+					if event.writeResult != nil {
+						event.writeResult <- err
+					}
+					cancel()
+					logAppChatStreamTiming("error", userID, sessionID, startedAt, "delta_write")
+					return
+				}
+				if event.writeResult != nil {
+					event.writeResult <- nil
+				}
+				resetIdle()
+				if firstDelta {
+					firstDelta = false
+					logAppChatStreamTiming("first_delta", userID, sessionID, startedAt, "")
+				}
+			case appChatStreamDone:
+				if err := writeAppChatSSE(w, flusher, "done", event.response); err != nil {
+					cancel()
+					logAppChatStreamTiming("error", userID, sessionID, startedAt, "done_write")
+					return
+				}
+				logAppChatStreamTiming("completed", userID, sessionID, startedAt, "")
+				return
+			case appChatStreamError:
+				if err := writeAppChatSSE(w, flusher, "error", map[string]string{"message": event.publicError}); err != nil {
+					cancel()
+				}
+				logAppChatStreamTiming("error", userID, sessionID, startedAt, event.errorPhase)
+				return
+			}
+		case <-heartbeat.C:
+			if err := writeAppChatSSEComment(w, flusher, "ping"); err != nil {
+				cancel()
+				logAppChatStreamTiming("error", userID, sessionID, startedAt, "heartbeat_write")
+				return
+			}
+		case <-idle:
+			cancel()
+			_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成超时，请重试"})
+			logAppChatStreamTiming("idle", userID, sessionID, startedAt, "provider")
+			return
+		case <-ctx.Done():
+			if requestCtx.Err() != nil {
+				logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
+				return
+			}
+			_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成超时，请重试"})
+			logAppChatStreamTiming("error", userID, sessionID, startedAt, "total_timeout")
+			return
+		}
+	}
+}
+
+func (s *Server) appChatStreamTiming(totalTimeout time.Duration) (time.Duration, time.Duration) {
+	idle := s.chatProviderIdleTimeout
+	if idle <= 0 {
+		idle = defaultAppChatProviderIdle
+	}
+	if totalTimeout > 0 {
+		maxIdle := totalTimeout * 3 / 4
+		if maxIdle <= 0 {
+			maxIdle = totalTimeout
+		}
+		if idle >= totalTimeout || idle > maxIdle {
+			idle = maxIdle
+		}
+	}
+	if idle <= 0 {
+		idle = time.Second
+	}
+
+	heartbeat := s.chatHeartbeatInterval
+	if heartbeat <= 0 {
+		heartbeat = defaultAppChatHeartbeatInterval
+	}
+	if heartbeat >= idle {
+		heartbeat = idle / 3
+	}
+	if heartbeat <= 0 {
+		heartbeat = time.Millisecond
+	}
+	return heartbeat, idle
+}
+
+func logAppChatStreamTiming(stage string, userID, sessionID int64, startedAt time.Time, phase string) {
+	if phase == "" {
+		log.Printf("app_chat_stream stage=%s user_id=%d session_id=%d elapsed_ms=%d", stage, userID, sessionID, time.Since(startedAt).Milliseconds())
+		return
+	}
+	log.Printf("app_chat_stream stage=%s phase=%s user_id=%d session_id=%d elapsed_ms=%d", stage, phase, userID, sessionID, time.Since(startedAt).Milliseconds())
 }
 
 func (s *Server) beginAppChatPreferenceTurn(userID int64) appChatPreferenceTurn {
@@ -561,6 +809,19 @@ func writeAppChatSSE(w io.Writer, flusher http.Flusher, event string, payload an
 	}
 	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
 		return err
+	}
+	flusher.Flush()
+	return nil
+}
+
+func writeAppChatSSEComment(w io.Writer, flusher http.Flusher, comment string) error {
+	frame := ": " + comment + "\n\n"
+	written, err := io.WriteString(w, frame)
+	if err != nil {
+		return err
+	}
+	if written != len(frame) {
+		return io.ErrShortWrite
 	}
 	flusher.Flush()
 	return nil

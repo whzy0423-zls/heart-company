@@ -96,6 +96,8 @@ type Server struct {
 	appDailyQuizBankAdmin   appDailyQuizBankAdminService
 	chatLimiter             *fixedWindowRateLimiter
 	chatTimeout             time.Duration
+	chatHeartbeatInterval   time.Duration
+	chatProviderIdleTimeout time.Duration
 	modelConfigProbeTimeout time.Duration
 	newChatGenerator        func(llm.ChatGeneratorConfig) (llm.ChatGenerator, error)
 

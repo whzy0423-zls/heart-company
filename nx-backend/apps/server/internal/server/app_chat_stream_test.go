@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/rag"
+	"nine-xing/nx-backend/apps/server/internal/userpreference"
 )
 
 func TestWriteAppChatSSEWritesDeltaEventAndFlushes(t *testing.T) {
@@ -211,7 +213,17 @@ func TestAppChatAskStreamFlushesFirstDeltaBeforeGenerationCompletes(t *testing.T
 		close(releaseSecond)
 		t.Fatal("generator did not emit first delta")
 	}
-	firstEvent, err := readAppChatSSEEvent(bufio.NewReader(response.Body))
+	reader := bufio.NewReader(response.Body)
+	connected, err := readAppChatSSEEvent(reader)
+	if err != nil {
+		close(releaseSecond)
+		t.Fatal(err)
+	}
+	if connected != ": connected\n\n" {
+		close(releaseSecond)
+		t.Fatalf("unexpected initial frame: %q", connected)
+	}
+	firstEvent, err := readAppChatSSEEvent(reader)
 	if err != nil {
 		close(releaseSecond)
 		t.Fatal(err)
@@ -228,6 +240,364 @@ func TestAppChatAskStreamFlushesFirstDeltaBeforeGenerationCompletes(t *testing.T
 	close(releaseSecond)
 	if _, err := io.ReadAll(response.Body); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAppChatAskStreamWritesHeartbeatWhileProviderWaits(t *testing.T) {
+	providerStarted := make(chan struct{})
+	releaseProvider := make(chan struct{})
+	store := newFakeAppChatStreamStore()
+	generator := &controlledAppChatStreamingGenerator{
+		generateStream: func(ctx context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+			close(providerStarted)
+			select {
+			case <-releaseProvider:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			if err := emit("回答"); err != nil {
+				return "", err
+			}
+			return "回答", nil
+		},
+	}
+	s := newAppChatStreamServer(store, generator)
+	s.chatHeartbeatInterval = 15 * time.Millisecond
+	s.chatProviderIdleTimeout = time.Second
+	httpServer := newAppChatStreamHTTPServerForServer(t, s)
+	defer httpServer.Close()
+
+	response, err := http.Post(httpServer.URL+"/api/app/chat/sessions/42/ask/stream", "application/json", strings.NewReader(`{"question":"怎么做？"}`))
+	if err != nil {
+		close(releaseProvider)
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	if frame, err := readAppChatSSEEvent(reader); err != nil || frame != ": connected\n\n" {
+		close(releaseProvider)
+		t.Fatalf("connected frame = %q, err=%v", frame, err)
+	}
+	select {
+	case <-providerStarted:
+	case <-time.After(time.Second):
+		close(releaseProvider)
+		t.Fatal("provider did not start")
+	}
+	if frame, err := readAppChatSSEEvent(reader); err != nil || frame != ": ping\n\n" {
+		close(releaseProvider)
+		t.Fatalf("heartbeat frame = %q, err=%v", frame, err)
+	}
+
+	close(releaseProvider)
+	if _, err := io.ReadAll(response.Body); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAppChatAskStreamProviderIdleIgnoresHeartbeatAndDoesNotSave(t *testing.T) {
+	providerFinished := make(chan struct{})
+	store := newFakeAppChatStreamStore()
+	generator := &controlledAppChatStreamingGenerator{
+		generateStream: func(ctx context.Context, _ rag.GenerateInput, _ rag.StreamEmitter) (string, error) {
+			defer close(providerFinished)
+			<-ctx.Done()
+			return "", ctx.Err()
+		},
+	}
+	s := newAppChatStreamServer(store, generator)
+	s.chatTimeout = 2 * time.Second
+	s.chatHeartbeatInterval = 10 * time.Millisecond
+	s.chatProviderIdleTimeout = 55 * time.Millisecond
+	writer := newAppChatBlockingStreamWriter()
+	req := newAppChatStreamRequest(context.Background())
+
+	started := time.Now()
+	s.appChatRouter(writer, req)
+	elapsed := time.Since(started)
+
+	select {
+	case <-providerFinished:
+	case <-time.After(time.Second):
+		t.Fatal("provider worker did not exit after idle timeout")
+	}
+	if elapsed >= 500*time.Millisecond {
+		t.Fatalf("idle timeout was not effective: elapsed=%s", elapsed)
+	}
+	body := writer.BodyString()
+	if strings.Count(body, ": ping\n\n") < 2 {
+		t.Fatalf("heartbeat did not run while provider was idle: %q", body)
+	}
+	if got := strings.Count(body, "event: error\n"); got != 1 {
+		t.Fatalf("error terminal count = %d, want 1; body=%q", got, body)
+	}
+	if strings.Contains(body, "event: done\n") {
+		t.Fatalf("idle stream unexpectedly completed: %q", body)
+	}
+	if store.saveCallCount() != 0 {
+		t.Fatalf("SavePair called %d times after idle timeout", store.saveCallCount())
+	}
+}
+
+func TestAppChatAskStreamValidDeltasResetProviderIdle(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	generator := &controlledAppChatStreamingGenerator{
+		generateStream: func(ctx context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+			for _, delta := range []string{"一", "二", "三"} {
+				if err := emit(delta); err != nil {
+					return "", err
+				}
+				select {
+				case <-time.After(35 * time.Millisecond):
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
+			}
+			return "一二三", nil
+		},
+	}
+	s := newAppChatStreamServer(store, generator)
+	s.chatHeartbeatInterval = 10 * time.Millisecond
+	s.chatProviderIdleTimeout = 60 * time.Millisecond
+	writer := newAppChatBlockingStreamWriter()
+	s.appChatRouter(writer, newAppChatStreamRequest(context.Background()))
+
+	body := writer.BodyString()
+	if got := strings.Count(body, "event: delta\n"); got != 3 {
+		t.Fatalf("delta count = %d, want 3; body=%q", got, body)
+	}
+	if got := strings.Count(body, "event: done\n"); got != 1 {
+		t.Fatalf("done terminal count = %d, want 1; body=%q", got, body)
+	}
+	if strings.Contains(body, "event: error\n") {
+		t.Fatalf("valid delta resets still timed out: %q", body)
+	}
+	if store.saveCallCount() != 1 {
+		t.Fatalf("SavePair called %d times, want 1", store.saveCallCount())
+	}
+}
+
+func TestAppChatAskStreamConnectedWriteFailureDoesNotStartPipeline(t *testing.T) {
+	providerStarted := make(chan struct{}, 1)
+	store := newFakeAppChatStreamStore()
+	generator := &controlledAppChatStreamingGenerator{
+		generateStream: func(context.Context, rag.GenerateInput, rag.StreamEmitter) (string, error) {
+			providerStarted <- struct{}{}
+			return "unexpected", nil
+		},
+	}
+	s := newAppChatStreamServer(store, generator)
+	writer := &failingFrameAppChatStreamWriter{header: make(http.Header), failFrame: ": connected\n\n"}
+	s.appChatRouter(writer, newAppChatStreamRequest(context.Background()))
+
+	select {
+	case <-providerStarted:
+		t.Fatal("provider started after connected frame write failed")
+	default:
+	}
+	if store.saveCallCount() != 0 {
+		t.Fatalf("SavePair called %d times", store.saveCallCount())
+	}
+}
+
+func TestAppChatAskStreamHeartbeatWriteFailureCancelsWorker(t *testing.T) {
+	providerFinished := make(chan struct{})
+	store := newFakeAppChatStreamStore()
+	generator := &controlledAppChatStreamingGenerator{
+		generateStream: func(ctx context.Context, _ rag.GenerateInput, _ rag.StreamEmitter) (string, error) {
+			defer close(providerFinished)
+			<-ctx.Done()
+			return "", ctx.Err()
+		},
+	}
+	s := newAppChatStreamServer(store, generator)
+	s.chatHeartbeatInterval = 10 * time.Millisecond
+	s.chatProviderIdleTimeout = time.Second
+	writer := &failingFrameAppChatStreamWriter{header: make(http.Header), failFrame: ": ping\n\n"}
+	s.appChatRouter(writer, newAppChatStreamRequest(context.Background()))
+
+	select {
+	case <-providerFinished:
+	case <-time.After(time.Second):
+		t.Fatal("provider worker leaked after heartbeat write failed")
+	}
+	if store.saveCallCount() != 0 {
+		t.Fatalf("SavePair called %d times", store.saveCallCount())
+	}
+}
+
+func TestAppChatAskStreamWriterPumpNeverWritesFramesConcurrently(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	generator := &controlledAppChatStreamingGenerator{
+		generateStream: func(_ context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+			var answer strings.Builder
+			for range 30 {
+				answer.WriteByte('x')
+				if err := emit("x"); err != nil {
+					return "", err
+				}
+			}
+			return answer.String(), nil
+		},
+	}
+	s := newAppChatStreamServer(store, generator)
+	s.chatHeartbeatInterval = time.Millisecond
+	s.chatProviderIdleTimeout = time.Second
+	writer := newConcurrencyCheckingAppChatStreamWriter()
+	s.appChatRouter(writer, newAppChatStreamRequest(context.Background()))
+
+	if writer.concurrent.Load() {
+		t.Fatal("ResponseWriter was written concurrently")
+	}
+	if got := strings.Count(writer.BodyString(), "event: done\n"); got != 1 {
+		t.Fatalf("done terminal count = %d, want 1", got)
+	}
+}
+
+func TestAppChatAskStreamFlushesConnectedBeforeSlowSummary(t *testing.T) {
+	summaryStarted := make(chan struct{})
+	releaseSummary := make(chan struct{})
+	store := newFakeAppChatStreamStore()
+	store.contextStarted = summaryStarted
+	store.contextRelease = releaseSummary
+	generator := successfulAppChatGenerator("完整回答")
+	s := newAppChatStreamServer(store, generator)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/app/chat/sessions/", func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), appContextKey{}, auth.UserInfo{ID: 7})
+		s.appChatRouter(w, r.WithContext(ctx))
+	})
+	httpServer := httptest.NewServer(mux)
+	defer httpServer.Close()
+
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	response, err := client.Post(httpServer.URL+"/api/app/chat/sessions/42/ask/stream", "application/json", strings.NewReader(`{"question":"怎么做？"}`))
+	if err != nil {
+		close(releaseSummary)
+		t.Fatalf("request did not receive the connected frame before summary completed: %v", err)
+	}
+	defer response.Body.Close()
+
+	frame, err := readAppChatSSEEvent(bufio.NewReader(response.Body))
+	if err != nil {
+		close(releaseSummary)
+		t.Fatal(err)
+	}
+	if frame != ": connected\n\n" {
+		close(releaseSummary)
+		t.Fatalf("first SSE frame = %q, want connected comment", frame)
+	}
+	select {
+	case <-summaryStarted:
+	case <-time.After(time.Second):
+		close(releaseSummary)
+		t.Fatal("summary did not start after the stream connected")
+	}
+
+	close(releaseSummary)
+	if _, err := io.ReadAll(response.Body); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAppChatAskStreamFlushesConnectedBeforePreferenceRead(t *testing.T) {
+	preferenceReadStarted := make(chan struct{})
+	releasePreferenceRead := make(chan struct{})
+	store := newFakeAppChatStreamStore()
+	s := newAppChatStreamServer(store, successfulAppChatGenerator("完整回答"))
+	s.userPreferences = &blockingAppChatPreferenceStore{started: preferenceReadStarted, release: releasePreferenceRead}
+	httpServer := newAppChatStreamHTTPServerForServer(t, s)
+	defer httpServer.Close()
+
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	response, err := client.Post(httpServer.URL+"/api/app/chat/sessions/42/ask/stream", "application/json", strings.NewReader(`{"question":"怎么做？"}`))
+	if err != nil {
+		close(releasePreferenceRead)
+		t.Fatalf("request did not receive connected before preference read: %v", err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	if frame, err := readAppChatSSEEvent(reader); err != nil || frame != ": connected\n\n" {
+		close(releasePreferenceRead)
+		t.Fatalf("connected frame = %q, err=%v", frame, err)
+	}
+	select {
+	case <-preferenceReadStarted:
+	case <-time.After(time.Second):
+		close(releasePreferenceRead)
+		t.Fatal("preference read did not start")
+	}
+
+	close(releasePreferenceRead)
+	if _, err := io.ReadAll(response.Body); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAppChatAskStreamDeltaWriteFailureCancelsWorkerWithoutSaving(t *testing.T) {
+	providerFinished := make(chan struct{})
+	store := newFakeAppChatStreamStore()
+	generator := &controlledAppChatStreamingGenerator{
+		generateStream: func(_ context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+			defer close(providerFinished)
+			for range 1000 {
+				if err := emit("x"); err != nil {
+					return "", err
+				}
+			}
+			return strings.Repeat("x", 1000), nil
+		},
+	}
+	s := newAppChatStreamServer(store, generator)
+	s.chatHeartbeatInterval = time.Second
+	s.chatProviderIdleTimeout = 2 * time.Second
+	writer := &failingFrameAppChatStreamWriter{header: make(http.Header), failFrame: "event: delta\n"}
+	s.appChatRouter(writer, newAppChatStreamRequest(context.Background()))
+
+	select {
+	case <-providerFinished:
+	case <-time.After(time.Second):
+		t.Fatal("provider worker leaked after delta write failed")
+	}
+	if store.saveCallCount() != 0 {
+		t.Fatalf("SavePair called %d times", store.saveCallCount())
+	}
+}
+
+func TestAppChatStreamTimingBoundsIdleByTotalDeadline(t *testing.T) {
+	s := &Server{
+		chatHeartbeatInterval:   time.Minute,
+		chatProviderIdleTimeout: time.Minute,
+	}
+	heartbeat, idle := s.appChatStreamTiming(80 * time.Millisecond)
+	if idle <= 0 || idle >= 80*time.Millisecond {
+		t.Fatalf("idle timeout = %s, want positive and shorter than total", idle)
+	}
+	if heartbeat <= 0 || heartbeat >= idle {
+		t.Fatalf("heartbeat interval = %s, want positive and shorter than idle %s", heartbeat, idle)
+	}
+}
+
+func TestAppChatStreamClosedWorkerStillEmitsTotalTimeoutTerminal(t *testing.T) {
+	s := &Server{
+		chatHeartbeatInterval:   time.Second,
+		chatProviderIdleTimeout: time.Second,
+	}
+	missingTerminal := 0
+	for range 100 {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		events := make(chan appChatStreamEvent)
+		close(events)
+		writer := newAppChatBlockingStreamWriter()
+		s.pumpAppChatStream(ctx, func() {}, context.Background(), writer, writer, events, 7, 42, time.Now(), time.Second)
+		if strings.Count(writer.BodyString(), "event: error\n") != 1 {
+			missingTerminal++
+		}
+	}
+	if missingTerminal != 0 {
+		t.Fatalf("%d canceled worker closures omitted the total-timeout terminal", missingTerminal)
 	}
 }
 
@@ -249,6 +619,9 @@ func TestAppChatAskStreamDoesNotSavePartialAnswerWhenGenerationFails(t *testing.
 	}
 	if !strings.Contains(body, "event: error\n") {
 		t.Fatalf("SSE output missing error event: %q", body)
+	}
+	if got := strings.Count(body, "event: error\n"); got != 1 {
+		t.Fatalf("error terminal count = %d, want 1; body=%q", got, body)
 	}
 	if strings.Contains(body, "event: done\n") {
 		t.Fatalf("SSE output unexpectedly contains done event: %q", body)
@@ -281,6 +654,9 @@ func TestAppChatAskStreamSaveFailureEmitsErrorWithoutDone(t *testing.T) {
 	}
 	if !strings.Contains(body, "event: error\n") {
 		t.Fatalf("SSE output missing error event after save failure: %q", body)
+	}
+	if got := strings.Count(body, "event: error\n"); got != 1 {
+		t.Fatalf("error terminal count = %d, want 1; body=%q", got, body)
 	}
 	if strings.Contains(body, "event: done\n") {
 		t.Fatalf("SSE output unexpectedly contains done after save failure: %q", body)
@@ -414,12 +790,14 @@ func successfulAppChatGenerator(answer string) rag.Generator {
 
 type fakeAppChatStreamStore struct {
 	appChatStore
-	mu        sync.Mutex
-	messages  []chat.Message
-	messageID int64
-	saveCalls int
-	saveErr   error
-	onSave    func()
+	mu             sync.Mutex
+	messages       []chat.Message
+	messageID      int64
+	saveCalls      int
+	saveErr        error
+	onSave         func()
+	contextStarted chan struct{}
+	contextRelease chan struct{}
 }
 
 func newFakeAppChatStreamStore() *fakeAppChatStreamStore {
@@ -430,7 +808,15 @@ func (s *fakeAppChatStreamStore) GetSession(context.Context, int64, int64) (chat
 	return chat.Session{ID: 42}, nil
 }
 
-func (s *fakeAppChatStreamStore) GetConversationState(context.Context, int64) (chat.ConversationState, error) {
+func (s *fakeAppChatStreamStore) GetConversationState(ctx context.Context, _ int64) (chat.ConversationState, error) {
+	if s.contextStarted != nil {
+		close(s.contextStarted)
+		select {
+		case <-s.contextRelease:
+		case <-ctx.Done():
+			return chat.ConversationState{}, ctx.Err()
+		}
+	}
 	return chat.ConversationState{}, nil
 }
 
@@ -481,6 +867,25 @@ func (*emptyAppChatRAGStore) EnabledDocuments(context.Context) ([]rag.Document, 
 	return nil, nil
 }
 
+type blockingAppChatPreferenceStore struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingAppChatPreferenceStore) List(ctx context.Context, _ int64) ([]userpreference.Preference, error) {
+	close(s.started)
+	select {
+	case <-s.release:
+		return nil, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (*blockingAppChatPreferenceStore) Apply(context.Context, int64, []userpreference.Mutation) error {
+	return nil
+}
+
 func newAppChatStreamServer(store appChatStore, generator rag.Generator) *Server {
 	return &Server{
 		env:         config.Env{SiteConfig: filepath.Join("..", "..", "..", "shared", "site-config.json")},
@@ -493,13 +898,22 @@ func newAppChatStreamServer(store appChatStore, generator rag.Generator) *Server
 
 func newAppChatStreamHTTPServer(t *testing.T, store appChatStore, generator rag.Generator) *httptest.Server {
 	t.Helper()
-	s := newAppChatStreamServer(store, generator)
+	return newAppChatStreamHTTPServerForServer(t, newAppChatStreamServer(store, generator))
+}
+
+func newAppChatStreamHTTPServerForServer(t *testing.T, s *Server) *httptest.Server {
+	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/app/chat/sessions/", func(w http.ResponseWriter, r *http.Request) {
 		ctx := context.WithValue(r.Context(), appContextKey{}, auth.UserInfo{ID: 7})
 		s.appChatRouter(w, r.WithContext(ctx))
 	})
 	return httptest.NewServer(mux)
+}
+
+func newAppChatStreamRequest(ctx context.Context) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/ask/stream", strings.NewReader(`{"question":"怎么做？"}`))
+	return req.WithContext(context.WithValue(ctx, appContextKey{}, auth.UserInfo{ID: 7}))
 }
 
 func performAppChatStreamRequest(t *testing.T, store *fakeAppChatStreamStore, generator rag.Generator, ctx context.Context, writer http.ResponseWriter) string {
@@ -511,9 +925,7 @@ func performAppChatStreamRequest(t *testing.T, store *fakeAppChatStreamStore, ge
 	if ordered, ok := writer.(*orderedAppChatStreamWriter); ok {
 		store.onSave = func() { ordered.order = append(ordered.order, "save") }
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/ask/stream", strings.NewReader(`{"question":"怎么做？"}`))
-	req = req.WithContext(context.WithValue(ctx, appContextKey{}, auth.UserInfo{ID: 7}))
-	s.appChatRouter(writer, req)
+	s.appChatRouter(writer, newAppChatStreamRequest(ctx))
 	switch typed := writer.(type) {
 	case interface{ BodyString() string }:
 		return typed.BodyString()
@@ -574,6 +986,54 @@ func (w *orderedAppChatStreamWriter) Write(p []byte) (int, error) {
 type failingDoneAppChatStreamWriter struct {
 	header http.Header
 	body   bytes.Buffer
+}
+
+type failingFrameAppChatStreamWriter struct {
+	header    http.Header
+	body      bytes.Buffer
+	failFrame string
+}
+
+func (w *failingFrameAppChatStreamWriter) Header() http.Header { return w.header }
+func (w *failingFrameAppChatStreamWriter) WriteHeader(int)     {}
+func (w *failingFrameAppChatStreamWriter) Flush()              {}
+func (w *failingFrameAppChatStreamWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), w.failFrame) {
+		return 0, errors.New("forced stream write failure")
+	}
+	return w.body.Write(p)
+}
+
+type concurrencyCheckingAppChatStreamWriter struct {
+	header     http.Header
+	bodyMu     sync.Mutex
+	body       bytes.Buffer
+	writing    atomic.Int32
+	concurrent atomic.Bool
+}
+
+func newConcurrencyCheckingAppChatStreamWriter() *concurrencyCheckingAppChatStreamWriter {
+	return &concurrencyCheckingAppChatStreamWriter{header: make(http.Header)}
+}
+
+func (w *concurrencyCheckingAppChatStreamWriter) Header() http.Header { return w.header }
+func (w *concurrencyCheckingAppChatStreamWriter) WriteHeader(int)     {}
+func (w *concurrencyCheckingAppChatStreamWriter) Flush()              {}
+func (w *concurrencyCheckingAppChatStreamWriter) Write(p []byte) (int, error) {
+	if w.writing.Add(1) != 1 {
+		w.concurrent.Store(true)
+	}
+	defer w.writing.Add(-1)
+	time.Sleep(200 * time.Microsecond)
+	w.bodyMu.Lock()
+	defer w.bodyMu.Unlock()
+	return w.body.Write(p)
+}
+
+func (w *concurrencyCheckingAppChatStreamWriter) BodyString() string {
+	w.bodyMu.Lock()
+	defer w.bodyMu.Unlock()
+	return w.body.String()
 }
 
 func (w *failingDoneAppChatStreamWriter) Header() http.Header { return w.header }
