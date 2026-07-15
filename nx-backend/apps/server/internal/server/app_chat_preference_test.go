@@ -398,6 +398,157 @@ func TestAppChatPreferenceCommittedFallbackKeepsOrderingAfterClientDisconnect(t 
 	}
 }
 
+func TestAppChatPreferenceHeartbeatFailureBeforePersistenceStopsLateSave(t *testing.T) {
+	hookReached := make(chan struct{})
+	releaseHook := make(chan struct{})
+	store := newFakeAppChatStreamStore()
+	saveCalls := make(chan struct{}, 4)
+	store.onSave = func() { saveCalls <- struct{}{} }
+	extractor := &fakeAppChatPreferenceExtractor{
+		extract: func(context.Context, string) userpreference.Extraction {
+			return userpreference.Extraction{Mutations: []userpreference.Mutation{{Upsert: &userpreference.Preference{
+				Category: "length", Slot: "length.detail_level", Instruction: "回答简短，避免长篇大论",
+			}}}}
+		},
+	}
+	preferences := newFakeAppChatPreferenceStore()
+	s := newAppChatStreamServer(store, successfulAppChatGenerator("回答"))
+	s.userPreferences = preferences
+	s.preferenceExtractor = extractor
+	s.preferenceAsyncSlots = make(chan struct{}, 1)
+	s.chatHeartbeatInterval = 10 * time.Millisecond
+	s.chatProviderIdleTimeout = time.Second
+	var hookCalls atomic.Int32
+	s.chatPersistHook = func() {
+		if hookCalls.Add(1) != 1 {
+			return
+		}
+		close(hookReached)
+		<-releaseHook
+	}
+
+	writer := &failingFrameAppChatStreamWriter{header: make(http.Header), failFrame: ": ping\n\n"}
+	req := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/ask/stream", strings.NewReader(`{"question":"以后回答风格更凝练一点"}`))
+	req = req.WithContext(context.WithValue(context.Background(), appContextKey{}, auth.UserInfo{ID: 7}))
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		s.appChatRouter(writer, req)
+	}()
+	select {
+	case <-hookReached:
+	case <-time.After(time.Second):
+		close(releaseHook)
+		t.Fatal("pipeline did not reach the pre-persistence window")
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		close(releaseHook)
+		t.Fatal("heartbeat write failure did not return the handler")
+	}
+
+	performPreferenceStreamRequest(t, s, 7, 43, "以后回答详细一点", context.Background())
+	preferences.waitForApply(t, 1)
+	select {
+	case <-saveCalls:
+	case <-time.After(time.Second):
+		close(releaseHook)
+		t.Fatal("newer turn was not saved")
+	}
+	close(releaseHook)
+	select {
+	case <-saveCalls:
+		t.Fatal("pre-persistence heartbeat failure still entered SavePair")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if extractor.calls.Load() != 0 {
+		t.Fatalf("pre-persistence heartbeat failure started %d fallbacks", extractor.calls.Load())
+	}
+	stored, err := preferences.List(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 || stored[0].Instruction != "回答更详细" {
+		t.Fatalf("late pre-persistence worker overwrote the newer preference: %+v", stored)
+	}
+}
+
+func TestAppChatPreferenceHeartbeatFailureAfterPersistenceKeepsOrdering(t *testing.T) {
+	store := &firstSaveBlockingAppChatStore{
+		fakeAppChatStreamStore: newFakeAppChatStreamStore(),
+		firstStarted:           make(chan struct{}),
+		releaseFirst:           make(chan struct{}),
+		firstCommitted:         make(chan struct{}),
+	}
+	released := false
+	defer func() {
+		if !released {
+			close(store.releaseFirst)
+		}
+	}()
+	extractor := &fakeAppChatPreferenceExtractor{
+		extract: func(context.Context, string) userpreference.Extraction {
+			return userpreference.Extraction{Mutations: []userpreference.Mutation{{Upsert: &userpreference.Preference{
+				Category: "length", Slot: "length.detail_level", Instruction: "回答简短，避免长篇大论",
+			}}}}
+		},
+	}
+	preferences := newFakeAppChatPreferenceStore()
+	s := newAppChatStreamServer(store, successfulAppChatGenerator("回答"))
+	s.userPreferences = preferences
+	s.preferenceExtractor = extractor
+	s.preferenceAsyncSlots = make(chan struct{}, 1)
+	s.chatHeartbeatInterval = 10 * time.Millisecond
+	s.chatProviderIdleTimeout = time.Second
+
+	writer := &failingFrameAppChatStreamWriter{header: make(http.Header), failFrame: ": ping\n\n"}
+	req := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/ask/stream", strings.NewReader(`{"question":"以后回答风格更凝练一点"}`))
+	req = req.WithContext(context.WithValue(context.Background(), appContextKey{}, auth.UserInfo{ID: 7}))
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		s.appChatRouter(writer, req)
+	}()
+	select {
+	case <-store.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("SavePair did not enter persistence")
+	}
+	s.preferenceTurnsMu.Lock()
+	firstState := s.preferenceTurns[7]
+	s.preferenceTurnsMu.Unlock()
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat write failure did not return during persistence")
+	}
+	s.preferenceTurnsMu.Lock()
+	retainedState := s.preferenceTurns[7]
+	s.preferenceTurnsMu.Unlock()
+	if firstState == nil || retainedState != firstState {
+		t.Fatal("persistence ownership was released after heartbeat failure")
+	}
+
+	performPreferenceStreamRequest(t, s, 7, 43, "以后回答详细一点", context.Background())
+	preferences.waitForApply(t, 1)
+	close(store.releaseFirst)
+	released = true
+	select {
+	case <-store.firstCommitted:
+	case <-time.After(time.Second):
+		t.Fatal("older SavePair did not commit")
+	}
+	waitForPreferenceTurnCleanup(t, s, 7)
+	stored, err := preferences.List(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 || stored[0].Instruction != "回答更详细" {
+		t.Fatalf("older committed fallback escaped ordering after heartbeat failure: %+v", stored)
+	}
+}
+
 func TestOrdinaryChatDoesNotInvalidatePendingDurablePreference(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})

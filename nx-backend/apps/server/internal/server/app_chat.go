@@ -511,6 +511,9 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 	if ctx.Err() != nil {
 		return
 	}
+	if s.chatPersistHook != nil {
+		s.chatPersistHook()
+	}
 
 	sourcesJSON, _ := json.Marshal(ans.Sources)
 	// Reserve the original turn state before SavePair can outlive the handler.
@@ -594,13 +597,16 @@ func (s *Server) pumpAppChatStream(
 			}
 		}
 	}
+	stopBeforePersistenceAndCancel := func() {
+		lifecycle.stopBeforePersistence()
+		cancel()
+	}
 
 	firstDelta := true
 	persistenceStarted := false
 	handleEvent := func(event appChatStreamEvent, ok bool) bool {
 		if requestCtx.Err() != nil {
-			lifecycle.stopBeforePersistence()
-			cancel()
+			stopBeforePersistenceAndCancel()
 			logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
 			return true
 		}
@@ -611,7 +617,7 @@ func (s *Server) pumpAppChatStream(
 				return true
 			}
 			if writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成失败，请重试"}) != nil {
-				cancel()
+				stopBeforePersistenceAndCancel()
 			}
 			logAppChatStreamTiming("error", userID, sessionID, startedAt, "worker_closed")
 			return true
@@ -630,10 +636,10 @@ func (s *Server) pumpAppChatStream(
 				return false
 			}
 			if err := writeAppChatSSE(w, flusher, "delta", map[string]string{"content": event.delta}); err != nil {
+				stopBeforePersistenceAndCancel()
 				if event.writeResult != nil {
 					event.writeResult <- err
 				}
-				cancel()
 				logAppChatStreamTiming("error", userID, sessionID, startedAt, "delta_write")
 				return true
 			}
@@ -647,7 +653,7 @@ func (s *Server) pumpAppChatStream(
 			}
 		case appChatStreamDone:
 			if err := writeAppChatSSE(w, flusher, "done", event.response); err != nil {
-				cancel()
+				stopBeforePersistenceAndCancel()
 				logAppChatStreamTiming("error", userID, sessionID, startedAt, "done_write")
 				return true
 			}
@@ -655,7 +661,7 @@ func (s *Server) pumpAppChatStream(
 			return true
 		case appChatStreamError:
 			if err := writeAppChatSSE(w, flusher, "error", map[string]string{"message": event.publicError}); err != nil {
-				cancel()
+				stopBeforePersistenceAndCancel()
 			}
 			logAppChatStreamTiming("error", userID, sessionID, startedAt, event.errorPhase)
 			return true
@@ -679,8 +685,7 @@ func (s *Server) pumpAppChatStream(
 
 	for {
 		if requestCtx.Err() != nil {
-			lifecycle.stopBeforePersistence()
-			cancel()
+			stopBeforePersistenceAndCancel()
 			logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
 			return
 		}
@@ -694,7 +699,7 @@ func (s *Server) pumpAppChatStream(
 			}
 		case <-heartbeat.C:
 			if err := writeAppChatSSEComment(w, flusher, "ping"); err != nil {
-				cancel()
+				stopBeforePersistenceAndCancel()
 				logAppChatStreamTiming("error", userID, sessionID, startedAt, "heartbeat_write")
 				return
 			}
@@ -715,8 +720,7 @@ func (s *Server) pumpAppChatStream(
 			logAppChatStreamTiming("idle", userID, sessionID, startedAt, "provider")
 			return
 		case <-requestDone:
-			lifecycle.stopBeforePersistence()
-			cancel()
+			stopBeforePersistenceAndCancel()
 			logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
 			return
 		case <-totalDone:

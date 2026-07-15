@@ -109,6 +109,7 @@ type Server struct {
 	preferenceAsyncTimeout   time.Duration
 	preferenceTurnsMu        sync.Mutex
 	preferenceTurns          map[int64]*appChatPreferenceTurnState
+	chatPersistHook          func()
 	pushStore                *push.Store
 	pushSendTimeout          time.Duration
 	pushRecoveryInterval     time.Duration
