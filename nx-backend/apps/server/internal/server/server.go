@@ -70,6 +70,8 @@ type Server struct {
 	engagement            *engagement.Store
 	signups               *signup.Store
 	uploads               *uploadasset.Store
+	voiceAssetCreate      func(context.Context, uploadasset.CreateInput) (uploadasset.Asset, error)
+	voiceAssetFind        func(context.Context, int64) (uploadasset.Asset, error)
 	uploader              storage.ObjectUploader
 	voices                *voice.Store
 	videos                *video.Store

@@ -760,6 +760,8 @@ func (s *Server) appChatRouter(w http.ResponseWriter, r *http.Request) {
 		s.appChatAskStream(w, r)
 	case strings.HasSuffix(path, "/ask") && r.Method == http.MethodPost:
 		s.appChatAsk(w, r)
+	case strings.HasSuffix(path, "/voice") && r.Method == http.MethodPost:
+		s.appChatVoice(w, r)
 	default:
 		httpx.Fail(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -773,6 +775,8 @@ func (s *Server) appChatMessageRouter(w http.ResponseWriter, r *http.Request) {
 		s.appChatFeedback(w, r)
 	case strings.HasSuffix(path, "/favorite") && r.Method == http.MethodPost:
 		s.appChatFavorite(w, r)
+	case strings.HasSuffix(path, "/audio") && r.Method == http.MethodGet:
+		s.appChatVoiceAudio(w, r)
 	default:
 		httpx.Fail(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
