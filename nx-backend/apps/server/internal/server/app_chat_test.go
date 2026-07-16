@@ -18,19 +18,23 @@ import (
 func TestAppChatHistoryFromMessagesFiltersInvalidEntries(t *testing.T) {
 	history := appChatHistoryFromMessages([]chat.Message{
 		{Role: "user", Content: "  我女儿今年八岁  "},
+		{Role: "user", MessageType: "voice", Transcript: "  她最近不愿意沟通  "},
 		{Role: "tool", Content: "不应注入"},
 		{Role: "assistant", Content: "  我记住了  "},
 		{Role: "user", Content: "   "},
 	})
 
-	if len(history) != 2 {
-		t.Fatalf("expected 2 valid history messages, got %+v", history)
+	if len(history) != 3 {
+		t.Fatalf("expected 3 valid history messages, got %+v", history)
 	}
 	if history[0].Role != "user" || history[0].Content != "我女儿今年八岁" {
 		t.Fatalf("unexpected first history message: %+v", history[0])
 	}
-	if history[1].Role != "assistant" || history[1].Content != "我记住了" {
+	if history[1].Role != "user" || history[1].Content != "她最近不愿意沟通" {
 		t.Fatalf("unexpected second history message: %+v", history[1])
+	}
+	if history[2].Role != "assistant" || history[2].Content != "我记住了" {
+		t.Fatalf("unexpected third history message: %+v", history[2])
 	}
 }
 

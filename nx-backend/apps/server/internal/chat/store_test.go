@@ -24,13 +24,16 @@ func TestListRecentMessagesFiltersInvalidTailBeforeLimiting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRecentMessages returned error: %v", err)
 	}
-	if len(messages) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(messages))
+	if len(messages) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(messages))
 	}
 	if messages[0].Role != "user" || messages[0].Content != "我女儿今年八岁" {
 		t.Fatalf("expected oldest selected message first, got %+v", messages[0])
 	}
-	if messages[1].Role != "assistant" || messages[1].Content != "我记住了" {
+	if messages[1].MessageType != "voice" || messages[1].EffectiveContent() != "她最近不愿意沟通" || messages[1].AudioURL != "/api/app/chat/messages/3/audio" {
+		t.Fatalf("expected hidden voice transcript in the middle, got %+v", messages[1])
+	}
+	if messages[2].Role != "assistant" || messages[2].Content != "我记住了" {
 		t.Fatalf("expected newest selected message last, got %+v", messages[1])
 	}
 }
@@ -61,7 +64,7 @@ func (recentMessagesConn) QueryContext(_ context.Context, query string, args []d
 	if !strings.Contains(query, "FROM app_chat_messages") ||
 		!strings.Contains(query, "session_id = $1") ||
 		!strings.Contains(query, "role IN ('user', 'assistant')") ||
-		!strings.Contains(query, "btrim(content) <> ''") ||
+		!strings.Contains(query, "btrim(transcript) <> ''") ||
 		!strings.Contains(query, "ORDER BY create_time DESC, id DESC") ||
 		!strings.Contains(query, "LIMIT $2") {
 		return nil, errors.New("recent messages query must be scoped, limited, and newest first")
@@ -71,8 +74,9 @@ func (recentMessagesConn) QueryContext(_ context.Context, query string, args []d
 	}
 	now := time.Now()
 	return &recentMessagesRows{values: [][]driver.Value{
-		{int64(2), int64(42), "assistant", "我记住了", []byte("[]"), false, "", now.Add(time.Second)},
-		{int64(1), int64(42), "user", "我女儿今年八岁", []byte("[]"), false, "", now},
+		{int64(2), int64(42), "assistant", "我记住了", []byte("[]"), false, "", "text", nil, int64(0), "", now.Add(2 * time.Second)},
+		{int64(3), int64(42), "user", "", []byte("[]"), false, "", "voice", int64(88), int64(3200), "她最近不愿意沟通", now.Add(time.Second)},
+		{int64(1), int64(42), "user", "我女儿今年八岁", []byte("[]"), false, "", "text", nil, int64(0), "", now},
 	}}, nil
 }
 
@@ -82,7 +86,7 @@ type recentMessagesRows struct {
 }
 
 func (r *recentMessagesRows) Columns() []string {
-	return []string{"id", "session_id", "role", "content", "sources", "favorite", "feedback", "create_time"}
+	return []string{"id", "session_id", "role", "content", "sources", "favorite", "feedback", "message_type", "audio_asset_id", "audio_duration_ms", "transcript", "create_time"}
 }
 func (r *recentMessagesRows) Close() error { return nil }
 func (r *recentMessagesRows) Next(dest []driver.Value) error {

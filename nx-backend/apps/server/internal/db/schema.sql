@@ -840,6 +840,10 @@ CREATE TABLE IF NOT EXISTS app_chat_messages (
 
 ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS favorite BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS feedback TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS message_type TEXT NOT NULL DEFAULT 'text';
+ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS audio_asset_id BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL;
+ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS audio_duration_ms INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS transcript TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_app_chat_messages_session ON app_chat_messages(session_id, create_time);
 CREATE INDEX IF NOT EXISTS idx_app_chat_messages_favorite ON app_chat_messages(favorite) WHERE favorite = true;

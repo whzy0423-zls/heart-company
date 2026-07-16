@@ -547,7 +547,7 @@ func appChatHistoryFromMessages(messages []chat.Message) []rag.Message {
 	history := make([]rag.Message, 0, len(messages))
 	for _, message := range messages {
 		role := strings.TrimSpace(message.Role)
-		content := strings.TrimSpace(message.Content)
+		content := message.EffectiveContent()
 		if (role != "user" && role != "assistant") || content == "" {
 			continue
 		}
@@ -560,7 +560,7 @@ func validAppChatMessages(messages []chat.Message) []chat.Message {
 	valid := make([]chat.Message, 0, len(messages))
 	for _, message := range messages {
 		role := strings.TrimSpace(message.Role)
-		content := strings.TrimSpace(message.Content)
+		content := message.EffectiveContent()
 		if (role != "user" && role != "assistant") || content == "" {
 			continue
 		}

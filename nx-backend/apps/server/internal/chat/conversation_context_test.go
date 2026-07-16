@@ -28,7 +28,7 @@ func TestConversationContextStoreReadsStateAndMessagesAfterWatermark(t *testing.
 	if err != nil {
 		t.Fatalf("ListMessagesAfter returned error: %v", err)
 	}
-	if len(messages) != 2 || messages[0].ID != 9 || messages[1].ID != 10 {
+	if len(messages) != 3 || messages[0].ID != 9 || messages[1].ID != 10 || messages[2].EffectiveContent() != "语音里的问题" {
 		t.Fatalf("unexpected messages: %+v", messages)
 	}
 }
@@ -85,9 +85,10 @@ func (conversationContextConn) QueryContext(_ context.Context, query string, arg
 			return nil, errors.New("invalid messages-after-watermark query")
 		}
 		now := time.Now()
-		return &conversationContextRows{columns: []string{"id", "session_id", "role", "content", "sources", "favorite", "feedback", "create_time"}, values: [][]driver.Value{
-			{int64(9), int64(42), "user", "新问题", []byte("[]"), false, "", now},
-			{int64(10), int64(42), "assistant", "新回答", []byte("[]"), false, "", now.Add(time.Second)},
+		return &conversationContextRows{columns: []string{"id", "session_id", "role", "content", "sources", "favorite", "feedback", "message_type", "audio_asset_id", "audio_duration_ms", "transcript", "create_time"}, values: [][]driver.Value{
+			{int64(9), int64(42), "user", "新问题", []byte("[]"), false, "", "text", nil, int64(0), "", now},
+			{int64(10), int64(42), "assistant", "新回答", []byte("[]"), false, "", "text", nil, int64(0), "", now.Add(time.Second)},
+			{int64(11), int64(42), "user", "", []byte("[]"), false, "", "voice", int64(88), int64(2600), "语音里的问题", now.Add(2 * time.Second)},
 		}}, nil
 	}
 	return nil, errors.New("unexpected query")

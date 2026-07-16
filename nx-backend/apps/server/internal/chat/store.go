@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -20,14 +22,26 @@ type Session struct {
 }
 
 type Message struct {
-	ID         int64           `json:"id"`
-	SessionID  int64           `json:"sessionId"`
-	Role       string          `json:"role"`
-	Content    string          `json:"content"`
-	Sources    json.RawMessage `json:"sources"`
-	Favorite   bool            `json:"favorite"`
-	Feedback   string          `json:"feedback"`
-	CreateTime string          `json:"createTime"`
+	ID              int64           `json:"id"`
+	SessionID       int64           `json:"sessionId"`
+	Role            string          `json:"role"`
+	Content         string          `json:"content"`
+	Sources         json.RawMessage `json:"sources"`
+	Favorite        bool            `json:"favorite"`
+	Feedback        string          `json:"feedback"`
+	MessageType     string          `json:"messageType"`
+	AudioDurationMs int             `json:"audioDurationMs,omitempty"`
+	AudioURL        string          `json:"audioUrl,omitempty"`
+	AudioAssetID    int64           `json:"-"`
+	Transcript      string          `json:"-"`
+	CreateTime      string          `json:"createTime"`
+}
+
+func (m Message) EffectiveContent() string {
+	if strings.TrimSpace(m.MessageType) == "voice" {
+		return strings.TrimSpace(m.Transcript)
+	}
+	return strings.TrimSpace(m.Content)
 }
 
 type ConversationState struct {
@@ -53,6 +67,35 @@ func scanSession(row interface{ Scan(...interface{}) error }) (Session, error) {
 	s.UpdatedAt = formatTime(updatedAt)
 	s.CreateTime = formatTime(createTime)
 	return s, err
+}
+
+func scanMessage(row interface{ Scan(...interface{}) error }) (Message, error) {
+	var message Message
+	var audioAssetID sql.NullInt64
+	var createTime time.Time
+	err := row.Scan(
+		&message.ID,
+		&message.SessionID,
+		&message.Role,
+		&message.Content,
+		&message.Sources,
+		&message.Favorite,
+		&message.Feedback,
+		&message.MessageType,
+		&audioAssetID,
+		&message.AudioDurationMs,
+		&message.Transcript,
+		&createTime,
+	)
+	if err != nil {
+		return message, err
+	}
+	message.AudioAssetID = audioAssetID.Int64
+	message.CreateTime = formatTime(createTime)
+	if message.MessageType == "voice" && message.AudioAssetID > 0 {
+		message.AudioURL = fmt.Sprintf("/api/app/chat/messages/%d/audio", message.ID)
+	}
+	return message, nil
 }
 
 // ListSessions 返回用户所有会话（按最近更新倒序）。
@@ -113,7 +156,8 @@ func (s *Store) GetSession(ctx context.Context, appUserID, sessionID int64) (Ses
 // ListMessages 返回会话的全部消息（按时间正序）。
 func (s *Store) ListMessages(ctx context.Context, sessionID int64) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, session_id, role, content, sources, favorite, feedback, create_time
+		`SELECT id, session_id, role, content, sources, favorite, feedback,
+		        message_type, audio_asset_id, audio_duration_ms, transcript, create_time
 		 FROM app_chat_messages WHERE session_id = $1 ORDER BY create_time, id`,
 		sessionID)
 	if err != nil {
@@ -122,12 +166,10 @@ func (s *Store) ListMessages(ctx context.Context, sessionID int64) ([]Message, e
 	defer rows.Close()
 	var out []Message
 	for rows.Next() {
-		var m Message
-		var createTime time.Time
-		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Content, &m.Sources, &m.Favorite, &m.Feedback, &createTime); err != nil {
+		m, err := scanMessage(rows)
+		if err != nil {
 			return nil, err
 		}
-		m.CreateTime = formatTime(createTime)
 		out = append(out, m)
 	}
 	return out, rows.Err()
@@ -142,11 +184,13 @@ func (s *Store) ListRecentMessages(ctx context.Context, sessionID int64, limit i
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, session_id, role, content, sources, favorite, feedback, create_time
+		`SELECT id, session_id, role, content, sources, favorite, feedback,
+		        message_type, audio_asset_id, audio_duration_ms, transcript, create_time
 		 FROM app_chat_messages
 		 WHERE session_id = $1
 		   AND role IN ('user', 'assistant')
-		   AND btrim(content) <> ''
+		   AND ((message_type = 'voice' AND btrim(transcript) <> '')
+		        OR (message_type <> 'voice' AND btrim(content) <> ''))
 		 ORDER BY create_time DESC, id DESC
 		 LIMIT $2`,
 		sessionID, limit)
@@ -157,12 +201,10 @@ func (s *Store) ListRecentMessages(ctx context.Context, sessionID int64, limit i
 
 	out := make([]Message, 0, limit)
 	for rows.Next() {
-		var m Message
-		var createTime time.Time
-		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Content, &m.Sources, &m.Favorite, &m.Feedback, &createTime); err != nil {
+		m, err := scanMessage(rows)
+		if err != nil {
 			return nil, err
 		}
-		m.CreateTime = formatTime(createTime)
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {
@@ -186,7 +228,8 @@ func (s *Store) GetConversationState(ctx context.Context, sessionID int64) (Conv
 
 func (s *Store) ListMessagesAfter(ctx context.Context, sessionID, afterMessageID int64) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, session_id, role, content, sources, favorite, feedback, create_time
+		`SELECT id, session_id, role, content, sources, favorite, feedback,
+		        message_type, audio_asset_id, audio_duration_ms, transcript, create_time
 		 FROM app_chat_messages
 		 WHERE session_id = $1 AND id > $2
 		 ORDER BY id`,
@@ -198,12 +241,10 @@ func (s *Store) ListMessagesAfter(ctx context.Context, sessionID, afterMessageID
 
 	var out []Message
 	for rows.Next() {
-		var message Message
-		var createTime time.Time
-		if err := rows.Scan(&message.ID, &message.SessionID, &message.Role, &message.Content, &message.Sources, &message.Favorite, &message.Feedback, &createTime); err != nil {
+		message, err := scanMessage(rows)
+		if err != nil {
 			return nil, err
 		}
-		message.CreateTime = formatTime(createTime)
 		out = append(out, message)
 	}
 	return out, rows.Err()
@@ -258,6 +299,68 @@ func (s *Store) SavePair(ctx context.Context, sessionID int64, question, answer 
 		return 0, err
 	}
 	return assistantID, nil
+}
+
+// SaveVoicePair atomically stores a playable user voice message and the AI text answer.
+// The transcript is server-only context and is never exposed through Message JSON.
+func (s *Store) SaveVoicePair(ctx context.Context, sessionID, audioAssetID int64, durationMs int, transcript, answer string, sources json.RawMessage) (int64, int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback()
+
+	if sources == nil {
+		sources = json.RawMessage("[]")
+	}
+	var userID int64
+	err = tx.QueryRowContext(ctx,
+		`INSERT INTO app_chat_messages
+		 (session_id, role, content, sources, message_type, audio_asset_id, audio_duration_ms, transcript)
+		 VALUES ($1,'user','','[]','voice',$2,$3,$4)
+		 RETURNING id`,
+		sessionID, audioAssetID, durationMs, strings.TrimSpace(transcript),
+	).Scan(&userID)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	var assistantID int64
+	err = tx.QueryRowContext(ctx,
+		`INSERT INTO app_chat_messages (session_id, role, content, sources)
+		 VALUES ($1,'assistant',$2,$3)
+		 RETURNING id`,
+		sessionID, answer, sources,
+	).Scan(&assistantID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE app_chat_sessions SET updated_at=now() WHERE id=$1`, sessionID); err != nil {
+		return 0, 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return userID, assistantID, nil
+}
+
+// GetVoiceAudioAssetID returns the backing asset only when the App user owns
+// the voice message's session.
+func (s *Store) GetVoiceAudioAssetID(ctx context.Context, appUserID, messageID int64) (int64, error) {
+	var assetID int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT m.audio_asset_id
+		 FROM app_chat_messages m
+		 JOIN app_chat_sessions s ON s.id = m.session_id
+		 WHERE m.id = $1 AND s.app_user_id = $2
+		   AND m.role = 'user' AND m.message_type = 'voice'
+		   AND m.audio_asset_id IS NOT NULL`,
+		messageID, appUserID,
+	).Scan(&assetID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return assetID, err
 }
 
 // SetFeedback 设置某条 AI 消息的反馈（'helpful' | 'inaccurate' | 'continue' | ”）。
