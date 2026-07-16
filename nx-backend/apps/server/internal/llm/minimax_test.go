@@ -527,6 +527,7 @@ func TestChatTokenBudget(t *testing.T) {
 		{question: "简单说重点", want: 220},
 		{question: "请详细展开分析原因和步骤", want: 420},
 		{question: "请完整分析一下", want: 420},
+		{question: "1-9型号的孩子我们如何应用", want: 1200},
 	}
 
 	for _, tt := range tests {
@@ -612,6 +613,34 @@ func TestBuildUserPromptEndsWithFixedConciseInstruction(t *testing.T) {
 	}
 	if !strings.HasSuffix(prompt, fixedConciseReplyInstruction) {
 		t.Fatalf("prompt must end with fixed concise instruction: %s", prompt)
+	}
+}
+
+func TestBuildUserPromptUsesAllTypesCoverageInstruction(t *testing.T) {
+	prompt := buildUserPrompt(rag.GenerateInput{
+		Question: "1-9型号的孩子我们如何应用",
+		UserProfile: rag.UserProfile{
+			MainType: 6,
+		},
+		Sources: []rag.Source{{
+			Title:   "6号 忠诚型",
+			Snippet: "忠诚型重视安全感。",
+		}},
+	})
+
+	for _, want := range []string{
+		"按1号到9号的顺序逐一回答",
+		"孩子的典型特点",
+		"家长如何理解和沟通",
+		"一个具体应用方法",
+		"不能因为检索资料不完整而遗漏任何型号",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("all-types prompt missing %q: %s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, fixedConciseReplyInstruction) {
+		t.Fatalf("all-types prompt must not force the fixed concise instruction: %s", prompt)
 	}
 }
 

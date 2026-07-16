@@ -1443,14 +1443,48 @@ const defaultSystemPrompt = "你是九型人格成长陪伴里的成长教练，
 
 const fixedConciseReplyInstruction = "请基于检索资料直接回答当前问题。请精简一些告诉我，优先使用 1～3 句话，不要长篇展开，不使用“亲爱的”等亲昵称呼。"
 
+const allTypesReplyInstruction = "请完整回答当前问题，按1号到9号的顺序逐一回答，不能遗漏或只围绕用户自己的主型。每个型号都要紧扣用户当前主题给出特点和具体应用；如果问题涉及孩子，每个型号必须包含：孩子的典型特点、家长如何理解和沟通、一个具体应用方法。检索资料只作参考，不能因为检索资料不完整而遗漏任何型号；缺少的部分可基于稳妥的九型人格通用常识补充。使用清晰、适合手机阅读的编号列表，不使用“亲爱的”等亲昵称呼。"
+
 func chatTokenBudget(question string) int {
 	question = strings.TrimSpace(question)
+	if requestsAllEnneagramTypes(question) {
+		return 1200
+	}
 	for _, marker := range []string{"详细", "展开", "完整分析", "深入分析", "逐步说明"} {
 		if strings.Contains(question, marker) {
 			return 420
 		}
 	}
 	return 220
+}
+
+func requestsAllEnneagramTypes(question string) bool {
+	normalized := strings.NewReplacer(
+		" ", "",
+		"－", "-",
+		"—", "-",
+		"–", "-",
+		"～", "-",
+		"~", "-",
+	).Replace(strings.TrimSpace(question))
+	for _, marker := range []string{
+		"1-9",
+		"1到9",
+		"1至9",
+		"九种类型",
+		"九个类型",
+		"所有型号",
+		"全部型号",
+		"每个型号",
+		"逐个型号",
+		"所有类型",
+		"全部类型",
+	} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildUserPrompt(input rag.GenerateInput) string {
@@ -1517,7 +1551,11 @@ func buildUserPrompt(input rag.GenerateInput) string {
 			b.WriteString(fmt.Sprintf("%d. %s：%s\n", i+1, source.Title, source.Snippet))
 		}
 	}
-	b.WriteString(fixedConciseReplyInstruction)
+	if requestsAllEnneagramTypes(input.Question) {
+		b.WriteString(allTypesReplyInstruction)
+	} else {
+		b.WriteString(fixedConciseReplyInstruction)
+	}
 	return b.String()
 }
 
