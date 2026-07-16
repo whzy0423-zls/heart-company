@@ -99,6 +99,44 @@ func TestVoiceChatPersistsAudioAndHidesTranscriptFromResponse(t *testing.T) {
 	}
 }
 
+func TestVoiceChatRejectsPunctuationOnlySilentTranscriptBeforeAI(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"text": "."})
+	}))
+	defer upstream.Close()
+	previousClientFactory := newASRHTTPClient
+	newASRHTTPClient = func(timeout time.Duration) *http.Client {
+		client := upstream.Client()
+		client.Timeout = timeout
+		return client
+	}
+	t.Cleanup(func() { newASRHTTPClient = previousClientFactory })
+
+	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	generator := &voiceChatGenerator{answer: "不应该生成回答"}
+	assetCreateCalls := 0
+	s := newVoiceChatTestServer(store, generator)
+	s.env.ASR = config.ASRConfig{APIBase: upstream.URL, APIKey: "test-key", Model: "whisper-1", TimeoutSeconds: 3}
+	s.voiceAssetCreate = func(_ context.Context, _ uploadasset.CreateInput) (uploadasset.Asset, error) {
+		assetCreateCalls++
+		return uploadasset.Asset{ID: 88}, nil
+	}
+	body, contentType := voiceChatMultipartBody(t, "silent.aac", "audio/aac", "audio", "2500")
+	req := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/voice", body)
+	req.Header.Set("Content-Type", contentType)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	response := httptest.NewRecorder()
+
+	s.appChatRouter(response, req)
+
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "没有识别到有效语音") {
+		t.Fatalf("expected silent transcript rejection, got %d %s", response.Code, response.Body.String())
+	}
+	if generator.calls != 0 || assetCreateCalls != 0 || store.audioAssetID != 0 {
+		t.Fatalf("silent voice reached downstream: generator=%d assets=%d storedAsset=%d", generator.calls, assetCreateCalls, store.audioAssetID)
+	}
+}
+
 func TestVoiceAudioRequiresOwnershipAndReturnsBytes(t *testing.T) {
 	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore(), ownedAssetID: 88}
 	s := newVoiceChatTestServer(store, nil)
@@ -149,9 +187,11 @@ func (s *fakeVoiceChatStore) GetVoiceAudioAssetID(_ context.Context, appUserID, 
 type voiceChatGenerator struct {
 	answer   string
 	question string
+	calls    int
 }
 
 func (g *voiceChatGenerator) Generate(_ context.Context, input rag.GenerateInput) (string, error) {
+	g.calls++
 	g.question = input.Question
 	return g.answer, nil
 }

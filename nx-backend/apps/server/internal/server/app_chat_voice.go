@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
@@ -93,7 +94,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	transcript = strings.TrimSpace(transcript)
-	if transcript == "" {
+	if !hasVoiceTranscriptContent(transcript) {
 		httpx.Fail(w, http.StatusUnprocessableEntity, "没有识别到有效语音，请重试")
 		return
 	}
@@ -182,6 +183,15 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		Answer:    answer,
 		MessageID: assistantMessageID,
 	})
+}
+
+func hasVoiceTranscriptContent(transcript string) bool {
+	for _, r := range strings.TrimSpace(transcript) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) appChatVoiceAudio(w http.ResponseWriter, r *http.Request) {
