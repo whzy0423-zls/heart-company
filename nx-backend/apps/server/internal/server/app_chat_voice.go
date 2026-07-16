@@ -26,6 +26,7 @@ const (
 
 type appChatVoiceStore interface {
 	SaveVoicePair(ctx context.Context, sessionID, audioAssetID int64, durationMs int, transcript, answer string, sources json.RawMessage) (int64, int64, error)
+	SaveVoiceMessage(ctx context.Context, sessionID, audioAssetID int64, durationMs int, transcript string) (int64, error)
 	GetVoiceAudioAssetID(ctx context.Context, appUserID, messageID int64) (int64, error)
 }
 
@@ -95,7 +96,48 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 	}
 	transcript = strings.TrimSpace(transcript)
 	if !hasVoiceTranscriptContent(transcript) {
-		httpx.Fail(w, http.StatusUnprocessableEntity, "没有识别到有效语音，请重试")
+		contentType := strings.TrimSpace(header.Header.Get("Content-Type"))
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		asset, createErr := s.createVoiceAsset(ctx, uploadasset.CreateInput{
+			ContentType: contentType,
+			Data:        audioData,
+			Dir:         "app/chat/voice",
+			Name:        header.Filename,
+			Size:        int64(len(audioData)),
+		})
+		if createErr != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "语音保存失败，请重试")
+			return
+		}
+		voiceStore, storeOK := s.appChat.(appChatVoiceStore)
+		if !storeOK {
+			httpx.Fail(w, http.StatusInternalServerError, "语音消息存储不可用")
+			return
+		}
+		userMessageID, saveErr := voiceStore.SaveVoiceMessage(ctx, sessionID, asset.ID, durationMs, "")
+		if saveErr != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "语音保存失败，请重试")
+			return
+		}
+		httpx.OK(w, voiceChatResponse{
+			UserMessage: chat.Message{
+				ID:              userMessageID,
+				SessionID:       sessionID,
+				Role:            "user",
+				Content:         "",
+				Sources:         json.RawMessage("[]"),
+				MessageType:     "voice",
+				AudioDurationMs: durationMs,
+				AudioURL:        fmt.Sprintf("/api/app/chat/messages/%d/audio", userMessageID),
+			},
+			Answer: rag.Answer{
+				Answer:  "我没有听清你说了什么。请按住麦克风说话，靠近手机一些，松开后发送。",
+				Sources: []rag.Source{},
+			},
+			MessageID: 0,
+		})
 		return
 	}
 

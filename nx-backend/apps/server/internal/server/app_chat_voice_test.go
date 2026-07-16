@@ -99,7 +99,7 @@ func TestVoiceChatPersistsAudioAndHidesTranscriptFromResponse(t *testing.T) {
 	}
 }
 
-func TestVoiceChatRejectsPunctuationOnlySilentTranscriptBeforeAI(t *testing.T) {
+func TestVoiceChatPersistsPunctuationOnlySilentAudioWithoutAI(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"text": "."})
 	}))
@@ -129,10 +129,20 @@ func TestVoiceChatRejectsPunctuationOnlySilentTranscriptBeforeAI(t *testing.T) {
 
 	s.appChatRouter(response, req)
 
-	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "没有识别到有效语音") {
-		t.Fatalf("expected silent transcript rejection, got %d %s", response.Code, response.Body.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected silent voice success, got %d %s", response.Code, response.Body.String())
 	}
-	if generator.calls != 0 || assetCreateCalls != 0 || store.audioAssetID != 0 {
+	for _, expected := range []string{
+		`"messageType":"voice"`,
+		`"audioUrl":"/api/app/chat/messages/11/audio"`,
+		`"messageId":0`,
+		"我没有听清你说了什么",
+	} {
+		if !strings.Contains(response.Body.String(), expected) {
+			t.Fatalf("silent voice response missing %q: %s", expected, response.Body.String())
+		}
+	}
+	if generator.calls != 0 || assetCreateCalls != 1 || store.audioAssetID != 88 || store.silentVoiceSaves != 1 {
 		t.Fatalf("silent voice reached downstream: generator=%d assets=%d storedAsset=%d", generator.calls, assetCreateCalls, store.audioAssetID)
 	}
 }
@@ -167,12 +177,20 @@ type fakeVoiceChatStore struct {
 	ownedAssetID         int64
 	audioLookupUserID    int64
 	audioLookupMessageID int64
+	silentVoiceSaves     int
 }
 
 func (s *fakeVoiceChatStore) SaveVoicePair(_ context.Context, _ int64, audioAssetID int64, _ int, transcript, _ string, _ json.RawMessage) (int64, int64, error) {
 	s.audioAssetID = audioAssetID
 	s.transcript = transcript
 	return 11, 12, nil
+}
+
+func (s *fakeVoiceChatStore) SaveVoiceMessage(_ context.Context, _ int64, audioAssetID int64, _ int, transcript string) (int64, error) {
+	s.audioAssetID = audioAssetID
+	s.transcript = transcript
+	s.silentVoiceSaves++
+	return 11, nil
 }
 
 func (s *fakeVoiceChatStore) GetVoiceAudioAssetID(_ context.Context, appUserID, messageID int64) (int64, error) {

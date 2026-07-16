@@ -344,6 +344,36 @@ func (s *Store) SaveVoicePair(ctx context.Context, sessionID, audioAssetID int64
 	return userID, assistantID, nil
 }
 
+// SaveVoiceMessage atomically stores a playable user voice message without an
+// assistant response. It is used when the audio is valid but contains no
+// recognizable speech.
+func (s *Store) SaveVoiceMessage(ctx context.Context, sessionID, audioAssetID int64, durationMs int, transcript string) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	var userID int64
+	err = tx.QueryRowContext(ctx,
+		`INSERT INTO app_chat_messages
+		 (session_id, role, content, sources, message_type, audio_asset_id, audio_duration_ms, transcript)
+		 VALUES ($1,'user','','[]','voice',$2,$3,$4)
+		 RETURNING id`,
+		sessionID, audioAssetID, durationMs, strings.TrimSpace(transcript),
+	).Scan(&userID)
+	if err != nil {
+		return 0, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE app_chat_sessions SET updated_at=now() WHERE id=$1`, sessionID); err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	return userID, nil
+}
+
 // GetVoiceAudioAssetID returns the backing asset only when the App user owns
 // the voice message's session.
 func (s *Store) GetVoiceAudioAssetID(ctx context.Context, appUserID, messageID int64) (int64, error) {

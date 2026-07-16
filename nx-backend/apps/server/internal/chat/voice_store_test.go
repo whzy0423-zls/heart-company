@@ -31,6 +31,25 @@ func TestSaveVoicePairPersistsHiddenTranscriptAndAudioMetadata(t *testing.T) {
 	}
 }
 
+func TestSaveVoiceMessagePersistsWithoutAssistantPair(t *testing.T) {
+	registerVoiceStoreDriver()
+	database, err := sql.Open(voiceStoreDriverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	userID, err := NewStore(database).SaveVoiceMessage(
+		context.Background(), 42, 88, 2500, "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if userID != 11 {
+		t.Fatalf("user message id = %d, want 11", userID)
+	}
+}
+
 func TestGetVoiceAudioAssetIDChecksAppOwnership(t *testing.T) {
 	registerVoiceStoreDriver()
 	database, err := sql.Open(voiceStoreDriverName, "")
@@ -77,7 +96,12 @@ func (*voiceStoreConn) ExecContext(_ context.Context, query string, args []drive
 func (*voiceStoreConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	switch {
 	case strings.Contains(query, "message_type, audio_asset_id, audio_duration_ms, transcript"):
-		if len(args) != 4 || args[0].Value != int64(42) || args[1].Value != int64(88) || args[2].Value != int64(3200) || args[3].Value != "孩子最近不愿意沟通" {
+		if len(args) != 4 {
+			return nil, errors.New("unexpected voice insert argument count")
+		}
+		validSpoken := args[2].Value == int64(3200) && args[3].Value == "孩子最近不愿意沟通"
+		validSilent := args[2].Value == int64(2500) && args[3].Value == ""
+		if args[0].Value != int64(42) || args[1].Value != int64(88) || (!validSpoken && !validSilent) {
 			return nil, errors.New("unexpected voice insert arguments")
 		}
 		return &singleValueRows{value: int64(11)}, nil
