@@ -48,11 +48,32 @@ func appCardLimit(memberLevel string) int {
 	return 5
 }
 
-func appPlanName(memberLevel string) string {
-	if memberLevel == "" || memberLevel == "free" {
-		return "免费版"
+func appPlanCode(memberLevel string) string {
+	switch memberLevel {
+	case "", "free":
+		return "free"
+	case "vip":
+		return "vip_month"
+	case "svip":
+		return "vip_year"
+	default:
+		return memberLevel
 	}
-	return "会员版"
+}
+
+func appPlanName(planCode string) string {
+	switch planCode {
+	case "free":
+		return "免费版"
+	case "vip_month":
+		return "月卡会员"
+	case "vip_quarter":
+		return "季卡会员"
+	case "vip_year":
+		return "年卡会员"
+	default:
+		return "会员版"
+	}
 }
 
 func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) {
@@ -71,13 +92,14 @@ func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) 
 		`SELECT count(*) FROM app_user_cards
 		 WHERE app_user_id = $1 AND card_type='secondary' AND status='active'`,
 		userInfo.ID).Scan(&cardUsed)
+	planCode := appPlanCode(user.MemberLevel)
 	httpx.OK(w, appEntitlementResp{
-		PlanName:            appPlanName(user.MemberLevel),
-		PlanCode:            user.MemberLevel,
-		IsMember:            user.MemberLevel != "" && user.MemberLevel != "free",
+		PlanName:            appPlanName(planCode),
+		PlanCode:            planCode,
+		IsMember:            planCode != "free",
 		ChatRemaining:       0,
 		DeepReportRemaining: 0,
-		CardLimit:           appCardLimit(user.MemberLevel),
+		CardLimit:           appCardLimit(planCode),
 		CardUsed:            cardUsed,
 	})
 }
