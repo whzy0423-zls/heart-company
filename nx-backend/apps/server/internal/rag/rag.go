@@ -30,18 +30,28 @@ type UserProfile struct {
 	Memories []string `json:"memories,omitempty"`
 }
 
+type ConversationCard struct {
+	CardType string `json:"cardType,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Relation string `json:"relation,omitempty"`
+	MainType int    `json:"mainType,omitempty"`
+	WingType int    `json:"wingType,omitempty"`
+	Profile  string `json:"profile,omitempty"`
+}
+
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
 type AskInput struct {
-	History             []Message   `json:"history"`
-	ConversationSummary string      `json:"conversationSummary,omitempty"`
-	Question            string      `json:"question"`
-	UserProfile         UserProfile `json:"userProfile"`
-	UserPreferences     []string    `json:"userPreferences,omitempty"`
-	CurrentDirectives   []string    `json:"currentDirectives,omitempty"`
+	History             []Message        `json:"history"`
+	ConversationSummary string           `json:"conversationSummary,omitempty"`
+	Question            string           `json:"question"`
+	UserProfile         UserProfile      `json:"userProfile"`
+	ConversationCard    ConversationCard `json:"conversationCard,omitempty"`
+	UserPreferences     []string         `json:"userPreferences,omitempty"`
+	CurrentDirectives   []string         `json:"currentDirectives,omitempty"`
 }
 
 type Answer struct {
@@ -70,13 +80,14 @@ type ConversationSummarizer interface {
 }
 
 type GenerateInput struct {
-	History             []Message   `json:"history"`
-	ConversationSummary string      `json:"conversationSummary,omitempty"`
-	Question            string      `json:"question"`
-	Sources             []Source    `json:"sources"`
-	UserProfile         UserProfile `json:"userProfile"`
-	UserPreferences     []string    `json:"userPreferences,omitempty"`
-	CurrentDirectives   []string    `json:"currentDirectives,omitempty"`
+	History             []Message        `json:"history"`
+	ConversationSummary string           `json:"conversationSummary,omitempty"`
+	Question            string           `json:"question"`
+	Sources             []Source         `json:"sources"`
+	UserProfile         UserProfile      `json:"userProfile"`
+	ConversationCard    ConversationCard `json:"conversationCard,omitempty"`
+	UserPreferences     []string         `json:"userPreferences,omitempty"`
+	CurrentDirectives   []string         `json:"currentDirectives,omitempty"`
 }
 
 type Option func(*Service)
@@ -115,7 +126,7 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 		return Answer{}, errors.New("问题太长，请控制在 300 字以内")
 	}
 
-	matches := s.search(question, input.UserProfile.MainType, 4)
+	matches := s.search(question, relevantMainType(input), 4)
 	if len(matches) == 0 {
 		// 检索未命中：仍尝试让 AI 结合九型常识作答（Sources 为空）；
 		// 只有 AI 不可用或返回空时，才回退到固定兜底文案。
@@ -126,6 +137,7 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 				Question:            question,
 				Sources:             nil,
 				UserProfile:         input.UserProfile,
+				ConversationCard:    input.ConversationCard,
 				UserPreferences:     input.UserPreferences,
 				CurrentDirectives:   input.CurrentDirectives,
 			})
@@ -163,7 +175,9 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 		name = "你"
 	}
 	answer := name + "，我先按你问到的重点检索了九型资料："
-	if input.UserProfile.MainType > 0 {
+	if input.ConversationCard.MainType > 0 {
+		answer += "结合当前关注对象的主型，"
+	} else if input.UserProfile.MainType > 0 {
 		answer += "结合你最近的主型结果，"
 	}
 	answer += strings.Join(parts, "；") + "。你可以继续追问具体关系、职场、亲密关系或成长练习，我会沿着这些资料继续细化。"
@@ -175,6 +189,7 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 			Question:            question,
 			Sources:             sources,
 			UserProfile:         input.UserProfile,
+			ConversationCard:    input.ConversationCard,
 			UserPreferences:     input.UserPreferences,
 			CurrentDirectives:   input.CurrentDirectives,
 		})
@@ -205,7 +220,7 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 		return emit(delta)
 	}
 
-	matches := s.search(question, input.UserProfile.MainType, 4)
+	matches := s.search(question, relevantMainType(input), 4)
 	if len(matches) == 0 {
 		if s.generator != nil {
 			generated, err := s.generateStreaming(ctx, GenerateInput{
@@ -214,6 +229,7 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 				Question:            question,
 				Sources:             nil,
 				UserProfile:         input.UserProfile,
+				ConversationCard:    input.ConversationCard,
 				UserPreferences:     input.UserPreferences,
 				CurrentDirectives:   input.CurrentDirectives,
 			}, trackedEmit)
@@ -257,7 +273,9 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 		name = "你"
 	}
 	answer := name + "，我先按你问到的重点检索了九型资料："
-	if input.UserProfile.MainType > 0 {
+	if input.ConversationCard.MainType > 0 {
+		answer += "结合当前关注对象的主型，"
+	} else if input.UserProfile.MainType > 0 {
 		answer += "结合你最近的主型结果，"
 	}
 	answer += strings.Join(parts, "；") + "。你可以继续追问具体关系、职场、亲密关系或成长练习，我会沿着这些资料继续细化。"
@@ -269,6 +287,7 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 			Question:            question,
 			Sources:             sources,
 			UserProfile:         input.UserProfile,
+			ConversationCard:    input.ConversationCard,
 			UserPreferences:     input.UserPreferences,
 			CurrentDirectives:   input.CurrentDirectives,
 		}, trackedEmit)
@@ -348,6 +367,13 @@ func shouldFlushStreamChunk(r rune, runeCount int) bool {
 type scoredDoc struct {
 	doc   Document
 	score int
+}
+
+func relevantMainType(input AskInput) int {
+	if input.ConversationCard.MainType > 0 {
+		return input.ConversationCard.MainType
+	}
+	return input.UserProfile.MainType
 }
 
 func (s *Service) search(question string, mainType int, limit int) []scoredDoc {

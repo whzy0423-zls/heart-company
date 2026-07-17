@@ -12,6 +12,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/quiz"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 	"nine-xing/nx-backend/apps/server/internal/userpreference"
 )
@@ -25,6 +26,40 @@ type appChatPromptContext struct {
 	History                     []rag.Message
 	SummaryThroughMessageID     int64
 	ShouldPersistUpdatedSummary bool
+}
+
+func buildAppChatConversationCard(card quiz.Card) rag.ConversationCard {
+	profile := strings.TrimSpace(string(card.Profile))
+	if runes := []rune(profile); len(runes) > 2000 {
+		profile = string(runes[:2000])
+	}
+	return rag.ConversationCard{
+		CardType: card.CardType,
+		Name:     card.Name,
+		Relation: card.Relation,
+		MainType: card.MainType,
+		WingType: card.WingType,
+		Profile:  profile,
+	}
+}
+
+func (s *Server) appChatProfilesForCard(ctx context.Context, appUserID, cardID int64) (rag.UserProfile, rag.ConversationCard) {
+	profile := rag.UserProfile{}
+	if s.appUsers != nil {
+		if appUser, err := s.appUsers.FindByID(ctx, appUserID); err == nil {
+			profile.Nickname = appUser.Nickname
+		}
+	}
+	cardContext := rag.ConversationCard{}
+	if s.quiz != nil {
+		if primary, err := s.quiz.PrimaryCard(ctx, appUserID); err == nil {
+			profile.MainType = primary.MainType
+		}
+		if card, err := s.quiz.GetCard(ctx, appUserID, cardID); err == nil {
+			cardContext = buildAppChatConversationCard(card)
+		}
+	}
+	return profile, cardContext
 }
 
 type appChatContextStore interface {
@@ -222,14 +257,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	docs, _ := s.retrieveAppDocsForQuery(ctx, body.Question, 6)
-	profile := rag.UserProfile{}
-	if appUser, err := s.appUsers.FindByID(ctx, userInfo.ID); err == nil {
-		profile.Nickname = appUser.Nickname
-	}
-	// 注入用户主型，供检索加权与 AI 个性化作答（未测/无主卡时为 0，rag 仅在 >0 时使用）。
-	if card, err := s.quiz.PrimaryCard(ctx, userInfo.ID); err == nil {
-		profile.MainType = card.MainType
-	}
+	profile, conversationCard := s.appChatProfilesForCard(ctx, userInfo.ID, sess.CardID)
 	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
 		profile.Memories = memories
 	}
@@ -241,6 +269,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		ConversationSummary: promptContext.Summary,
 		Question:            body.Question,
 		UserProfile:         profile,
+		ConversationCard:    conversationCard,
 		UserPreferences:     preferences,
 		CurrentDirectives:   directives,
 	})
@@ -314,17 +343,7 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	docs, _ := s.retrieveAppDocsForQuery(ctx, body.Question, 6)
-	profile := rag.UserProfile{}
-	if s.appUsers != nil {
-		if appUser, err := s.appUsers.FindByID(ctx, userInfo.ID); err == nil {
-			profile.Nickname = appUser.Nickname
-		}
-	}
-	if s.quiz != nil {
-		if card, err := s.quiz.PrimaryCard(ctx, userInfo.ID); err == nil {
-			profile.MainType = card.MainType
-		}
-	}
+	profile, conversationCard := s.appChatProfilesForCard(ctx, userInfo.ID, sess.CardID)
 	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
 		profile.Memories = memories
 	}
@@ -353,6 +372,7 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 			ConversationSummary: promptContext.Summary,
 			Question:            body.Question,
 			UserProfile:         profile,
+			ConversationCard:    conversationCard,
 			UserPreferences:     preferences,
 			CurrentDirectives:   directives,
 		}, func(delta string) error {

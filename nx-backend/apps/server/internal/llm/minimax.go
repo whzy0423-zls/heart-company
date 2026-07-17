@@ -1499,6 +1499,29 @@ func buildUserPrompt(input rag.GenerateInput) string {
 		}
 		b.WriteString("\n")
 	}
+	card := input.ConversationCard
+	if card.Name != "" || card.Relation != "" || card.MainType > 0 || card.WingType > 0 || card.Profile != "" {
+		b.WriteString("当前关注对象：")
+		if card.Name != "" {
+			b.WriteString("称呼=" + strings.TrimSpace(card.Name) + "；")
+		}
+		if card.Relation != "" {
+			b.WriteString("与用户关系=" + strings.TrimSpace(card.Relation) + "；")
+		}
+		if card.MainType > 0 {
+			b.WriteString(fmt.Sprintf("主型=%d号；", card.MainType))
+		}
+		if card.WingType > 0 {
+			b.WriteString(fmt.Sprintf("翼型=%d号；", card.WingType))
+		}
+		if profile := strings.TrimSpace(card.Profile); profile != "" {
+			b.WriteString("画像=" + trimRunes(profile, 800) + "；")
+		}
+		b.WriteString("\n")
+		if strings.EqualFold(strings.TrimSpace(card.CardType), "secondary") {
+			b.WriteString("当前关注对象是用户正在咨询的 TA，不要把当前关注对象当成正在输入的用户本人，也不要冒充当前关注对象；请围绕用户与 TA 的关系提供分析和建议。\n")
+		}
+	}
 	if len(input.UserProfile.Memories) > 0 {
 		b.WriteString("近期记忆：\n")
 		for i, memory := range input.UserProfile.Memories {

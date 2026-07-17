@@ -12,8 +12,27 @@ import (
 	"testing"
 
 	"nine-xing/nx-backend/apps/server/internal/chat"
+	"nine-xing/nx-backend/apps/server/internal/quiz"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
+
+func TestBuildAppChatConversationCardPreservesSecondaryProfile(t *testing.T) {
+	got := buildAppChatConversationCard(quiz.Card{
+		CardType: "secondary",
+		Name:     "妈妈",
+		Relation: "家人",
+		MainType: 2,
+		WingType: 1,
+		Profile:  []byte(`{"primaryMotivation":"希望被需要"}`),
+	})
+
+	if got.CardType != "secondary" || got.Name != "妈妈" || got.Relation != "家人" || got.MainType != 2 || got.WingType != 1 {
+		t.Fatalf("unexpected conversation card: %+v", got)
+	}
+	if !strings.Contains(got.Profile, "希望被需要") {
+		t.Fatalf("expected bounded profile JSON, got %q", got.Profile)
+	}
+}
 
 func TestAppChatHistoryFromMessagesFiltersInvalidEntries(t *testing.T) {
 	history := appChatHistoryFromMessages([]chat.Message{

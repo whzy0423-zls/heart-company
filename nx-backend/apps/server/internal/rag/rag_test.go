@@ -2,10 +2,37 @@ package rag
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 )
+
+func TestAskPrioritizesConversationCardMainType(t *testing.T) {
+	service := NewService([]Document{
+		{ID: "type-2", Title: "2号 助人型", Content: "助人型重视关系和被需要。"},
+		{ID: "type-6", Title: "6号 忠诚型", Content: "忠诚型重视安全和确定。"},
+	})
+	var input AskInput
+	if err := json.Unmarshal([]byte(`{
+		"question":"我该怎么和她沟通？",
+		"userProfile":{"mainType":6},
+		"conversationCard":{"name":"妈妈","relation":"家人","mainType":2,"wingType":1}
+	}`), &input); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := service.Ask(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Sources) == 0 || result.Sources[0].ID != "type-2" {
+		t.Fatalf("expected conversation card type-2 to lead retrieval, got %+v", result.Sources)
+	}
+	if !strings.Contains(result.Answer, "当前关注对象的主型") {
+		t.Fatalf("fallback answer must describe the card subject, got %q", result.Answer)
+	}
+}
 
 func TestAskRetrievesRelevantKnowledge(t *testing.T) {
 	service := NewService([]Document{

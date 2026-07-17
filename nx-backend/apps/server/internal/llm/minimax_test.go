@@ -596,6 +596,40 @@ func TestBuildUserPromptDoesNotForceFixedAnswerStructure(t *testing.T) {
 	}
 }
 
+func TestBuildUserPromptIncludesSecondaryConversationCardBoundary(t *testing.T) {
+	var input rag.GenerateInput
+	if err := json.Unmarshal([]byte(`{
+		"question":"她最近为什么总是迎合别人？",
+		"userProfile":{"nickname":"小王","mainType":6},
+		"conversationCard":{
+			"cardType":"secondary",
+			"name":"妈妈",
+			"relation":"家人",
+			"mainType":2,
+			"wingType":1,
+			"profile":"{\"primaryMotivation\":\"希望被需要\"}"
+		}
+	}`), &input); err != nil {
+		t.Fatal(err)
+	}
+	prompt := buildUserPrompt(input)
+
+	for _, want := range []string{
+		"当前关注对象",
+		"称呼=妈妈",
+		"与用户关系=家人",
+		"主型=2号",
+		"翼型=1号",
+		"希望被需要",
+		"不要把当前关注对象当成正在输入的用户本人",
+		"不要冒充当前关注对象",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("secondary card prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
 func TestBuildUserPromptEndsWithFixedConciseInstruction(t *testing.T) {
 	prompt := buildUserPrompt(rag.GenerateInput{
 		Question: "观察型怎么沟通？",
