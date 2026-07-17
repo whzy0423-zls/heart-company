@@ -12,10 +12,83 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/auth"
 )
+
+func TestAppPlanCodeNormalizesLegacyMemberLevels(t *testing.T) {
+	tests := []struct {
+		name        string
+		memberLevel string
+		want        string
+	}{
+		{name: "empty is free", memberLevel: "", want: "free"},
+		{name: "free stays free", memberLevel: "free", want: "free"},
+		{name: "legacy vip becomes month", memberLevel: "vip", want: "vip_month"},
+		{name: "legacy svip becomes year", memberLevel: "svip", want: "vip_year"},
+		{name: "month stays month", memberLevel: "vip_month", want: "vip_month"},
+		{name: "quarter stays quarter", memberLevel: "vip_quarter", want: "vip_quarter"},
+		{name: "year stays year", memberLevel: "vip_year", want: "vip_year"},
+		{name: "unknown member remains member safe", memberLevel: "legacy_partner", want: "legacy_partner"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := appPlanCode(tt.memberLevel); got != tt.want {
+				t.Fatalf("appPlanCode(%q) = %q, want %q", tt.memberLevel, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAppPlanNameUsesNormalizedPlanCodes(t *testing.T) {
+	tests := []struct {
+		planCode string
+		want     string
+	}{
+		{planCode: "free", want: "免费版"},
+		{planCode: "vip_month", want: "月卡会员"},
+		{planCode: "vip_quarter", want: "季卡会员"},
+		{planCode: "vip_year", want: "年卡会员"},
+		{planCode: "legacy_partner", want: "会员版"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.planCode, func(t *testing.T) {
+			if got := appPlanName(tt.planCode); got != tt.want {
+				t.Fatalf("appPlanName(%q) = %q, want %q", tt.planCode, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAppBillingEntitlementsUsesNormalizedPlan(t *testing.T) {
+	s := newAppBillingEntitlementTestServer(t, "vip")
+
+	response := performAppBillingRequest(t, s.appBillingEntitlements, http.MethodGet, "/api/app/billing/entitlements", nil)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Code int                `json:"code"`
+		Data appEntitlementResp `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Data.PlanCode != "vip_month" || body.Data.PlanName != "月卡会员" {
+		t.Fatalf("expected normalized monthly plan, got %+v", body.Data)
+	}
+	if !body.Data.IsMember {
+		t.Fatalf("expected legacy vip to remain a member, got %+v", body.Data)
+	}
+	if body.Data.ChatRemaining != 0 || body.Data.DeepReportRemaining != 0 {
+		t.Fatalf("expected numeric quota placeholders to remain zero, got %+v", body.Data)
+	}
+}
 
 func TestAppBillingCreateOrderReturnsNotConfiguredPayment(t *testing.T) {
 	s := newAppBillingTestServer(t)
@@ -129,6 +202,20 @@ func newAppBillingTestServer(t *testing.T) *Server {
 	}
 }
 
+func newAppBillingEntitlementTestServer(t *testing.T, memberLevel string) *Server {
+	t.Helper()
+	registerAppBillingTestDriver()
+	db, err := sql.Open(appBillingTestDriverName, memberLevel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return &Server{
+		db:       db,
+		appUsers: appuser.NewStore(db),
+	}
+}
+
 func performAppBillingRequest(t *testing.T, handler http.HandlerFunc, method, path string, payload any) *httptest.ResponseRecorder {
 	t.Helper()
 	var body bytes.Buffer
@@ -173,11 +260,13 @@ func registerAppBillingTestDriver() {
 
 type appBillingTestDriver struct{}
 
-func (appBillingTestDriver) Open(string) (driver.Conn, error) {
-	return &appBillingTestConn{}, nil
+func (appBillingTestDriver) Open(memberLevel string) (driver.Conn, error) {
+	return &appBillingTestConn{memberLevel: memberLevel}, nil
 }
 
-type appBillingTestConn struct{}
+type appBillingTestConn struct {
+	memberLevel string
+}
 
 func (c *appBillingTestConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
 func (c *appBillingTestConn) Close() error                        { return nil }
@@ -195,6 +284,19 @@ func (c *appBillingTestConn) ExecContext(_ context.Context, query string, _ []dr
 }
 
 func (c *appBillingTestConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if strings.Contains(query, "FROM app_users") {
+		now := time.Now()
+		return &appBillingTestRows{
+			columns: []string{"id", "phone", "nickname", "avatar", "status", "member_level", "register_source", "last_login_at", "create_time", "update_time"},
+			values:  [][]driver.Value{{int64(7), "13800000000", "tester", "", "active", c.memberLevel, "app", nil, now, now}},
+		}, nil
+	}
+	if strings.Contains(query, "FROM app_user_cards") {
+		return &appBillingTestRows{
+			columns: []string{"count"},
+			values:  [][]driver.Value{{int64(0)}},
+		}, nil
+	}
 	if strings.Contains(query, "FROM app_orders") {
 		outTradeNo := "app7-vip_month-1"
 		if len(args) >= 2 {
