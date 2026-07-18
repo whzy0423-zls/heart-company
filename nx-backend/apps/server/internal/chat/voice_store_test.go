@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -65,6 +66,131 @@ func TestGetVoiceAudioAssetIDChecksAppOwnership(t *testing.T) {
 	if assetID != 88 {
 		t.Fatalf("asset id = %d, want 88", assetID)
 	}
+}
+
+func TestGetVoiceTranscriptChecksOwnershipAndReturnsTrimmedTranscript(t *testing.T) {
+	database := openVoiceTranscriptStoreDatabase(t, voiceTranscriptQueryResult{
+		value: "  孩子最近不愿意沟通 \n",
+	})
+
+	transcript, err := NewStore(database).GetVoiceTranscript(context.Background(), 7, 11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transcript != "孩子最近不愿意沟通" {
+		t.Fatalf("transcript = %q, want trimmed transcript", transcript)
+	}
+}
+
+func TestGetVoiceTranscriptReturnsEmptyTranscript(t *testing.T) {
+	database := openVoiceTranscriptStoreDatabase(t, voiceTranscriptQueryResult{value: " \n\t "})
+
+	transcript, err := NewStore(database).GetVoiceTranscript(context.Background(), 7, 11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transcript != "" {
+		t.Fatalf("transcript = %q, want empty string", transcript)
+	}
+}
+
+func TestGetVoiceTranscriptMapsNoRowsToNotFound(t *testing.T) {
+	database := openVoiceTranscriptStoreDatabase(t, voiceTranscriptQueryResult{err: sql.ErrNoRows})
+
+	_, err := NewStore(database).GetVoiceTranscript(context.Background(), 7, 11)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestGetVoiceTranscriptPreservesDatabaseErrors(t *testing.T) {
+	wantErr := errors.New("database unavailable")
+	database := openVoiceTranscriptStoreDatabase(t, voiceTranscriptQueryResult{err: wantErr})
+
+	_, err := NewStore(database).GetVoiceTranscript(context.Background(), 7, 11)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+}
+
+const voiceTranscriptStoreDriverName = "chat_voice_transcript_store_test"
+
+var (
+	registerVoiceTranscriptStoreDriverOnce sync.Once
+	voiceTranscriptQueryMu                 sync.Mutex
+	voiceTranscriptQueryResults            = map[string]voiceTranscriptQueryResult{}
+	voiceTranscriptQuerySequence           int
+)
+
+type voiceTranscriptQueryResult struct {
+	value string
+	err   error
+}
+
+func openVoiceTranscriptStoreDatabase(t *testing.T, result voiceTranscriptQueryResult) *sql.DB {
+	t.Helper()
+	registerVoiceTranscriptStoreDriverOnce.Do(func() {
+		sql.Register(voiceTranscriptStoreDriverName, voiceTranscriptStoreDriver{})
+	})
+
+	voiceTranscriptQueryMu.Lock()
+	voiceTranscriptQuerySequence++
+	dsn := fmt.Sprintf("voice-transcript-%d", voiceTranscriptQuerySequence)
+	voiceTranscriptQueryResults[dsn] = result
+	voiceTranscriptQueryMu.Unlock()
+
+	database, err := sql.Open(voiceTranscriptStoreDriverName, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = database.Close()
+		voiceTranscriptQueryMu.Lock()
+		delete(voiceTranscriptQueryResults, dsn)
+		voiceTranscriptQueryMu.Unlock()
+	})
+	return database
+}
+
+type voiceTranscriptStoreDriver struct{}
+
+func (voiceTranscriptStoreDriver) Open(dsn string) (driver.Conn, error) {
+	voiceTranscriptQueryMu.Lock()
+	result, ok := voiceTranscriptQueryResults[dsn]
+	voiceTranscriptQueryMu.Unlock()
+	if !ok {
+		return nil, errors.New("missing voice transcript query result")
+	}
+	return &voiceTranscriptStoreConn{result: result}, nil
+}
+
+type voiceTranscriptStoreConn struct {
+	result voiceTranscriptQueryResult
+}
+
+func (*voiceTranscriptStoreConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
+func (*voiceTranscriptStoreConn) Close() error                        { return nil }
+func (*voiceTranscriptStoreConn) Begin() (driver.Tx, error)           { return nil, driver.ErrSkip }
+func (c *voiceTranscriptStoreConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	requiredSQL := []string{
+		"JOIN app_chat_sessions",
+		"m.id = $1",
+		"s.app_user_id = $2",
+		"m.role = 'user'",
+		"m.message_type = 'voice'",
+	}
+	for _, fragment := range requiredSQL {
+		if !strings.Contains(query, fragment) {
+			return nil, fmt.Errorf("voice transcript lookup missing SQL fragment %q", fragment)
+		}
+	}
+	if len(args) != 2 || args[0].Value != int64(11) || args[1].Value != int64(7) {
+		return nil, errors.New("voice transcript ownership lookup arguments mismatch")
+	}
+	if c.result.err != nil {
+		return nil, c.result.err
+	}
+	return &singleValueRows{value: c.result.value}, nil
 }
 
 const voiceStoreDriverName = "chat_voice_store_test"

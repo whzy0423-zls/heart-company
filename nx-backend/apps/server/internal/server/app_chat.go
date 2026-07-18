@@ -787,7 +787,7 @@ func (s *Server) appChatRouter(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// appChatMessageRouter dispatches /api/app/chat/messages/{id}/{feedback|favorite}.
+// appChatMessageRouter dispatches /api/app/chat/messages/{id}/{feedback|favorite|audio|transcript}.
 func (s *Server) appChatMessageRouter(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	switch {
@@ -797,6 +797,8 @@ func (s *Server) appChatMessageRouter(w http.ResponseWriter, r *http.Request) {
 		s.appChatFavorite(w, r)
 	case strings.HasSuffix(path, "/audio") && r.Method == http.MethodGet:
 		s.appChatVoiceAudio(w, r)
+	case strings.HasSuffix(path, "/transcript") && r.Method == http.MethodGet:
+		s.appChatVoiceTranscript(w, r)
 	default:
 		httpx.Fail(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

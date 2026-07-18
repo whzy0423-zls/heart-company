@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -170,14 +171,129 @@ func TestVoiceAudioRequiresOwnershipAndReturnsBytes(t *testing.T) {
 	}
 }
 
+func TestVoiceTranscriptReturnsStoredText(t *testing.T) {
+	store := &fakeVoiceChatStore{
+		fakeAppChatStreamStore: newFakeAppChatStreamStore(),
+		voiceTranscript:        "孩子最近不愿意沟通",
+	}
+	s := newVoiceChatTestServer(store, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/app/chat/messages/11/transcript", nil)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	response := httptest.NewRecorder()
+
+	s.appChatMessageRouter(response, req)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("unexpected transcript response: %d %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Data struct {
+			Text string `json:"text"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Data.Text != "孩子最近不愿意沟通" {
+		t.Fatalf("transcript text = %q", payload.Data.Text)
+	}
+	if store.transcriptLookupUserID != 7 || store.transcriptLookupMessageID != 11 {
+		t.Fatalf("ownership lookup mismatch: user=%d message=%d", store.transcriptLookupUserID, store.transcriptLookupMessageID)
+	}
+}
+
+func TestVoiceTranscriptReturnsEmptyText(t *testing.T) {
+	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	s := newVoiceChatTestServer(store, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/app/chat/messages/11/transcript", nil)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	response := httptest.NewRecorder()
+
+	s.appChatMessageRouter(response, req)
+
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"text":""`) {
+		t.Fatalf("unexpected empty transcript response: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestVoiceTranscriptMapsNotFoundTo404(t *testing.T) {
+	store := &fakeVoiceChatStore{
+		fakeAppChatStreamStore: newFakeAppChatStreamStore(),
+		voiceTranscriptErr:     chat.ErrNotFound,
+	}
+	s := newVoiceChatTestServer(store, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/app/chat/messages/11/transcript", nil)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	response := httptest.NewRecorder()
+
+	s.appChatMessageRouter(response, req)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestVoiceTranscriptMapsStoreFailureTo500(t *testing.T) {
+	store := &fakeVoiceChatStore{
+		fakeAppChatStreamStore: newFakeAppChatStreamStore(),
+		voiceTranscriptErr:     errors.New("database unavailable"),
+	}
+	s := newVoiceChatTestServer(store, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/app/chat/messages/11/transcript", nil)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	response := httptest.NewRecorder()
+
+	s.appChatMessageRouter(response, req)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestVoiceTranscriptRejectsInvalidMessageID(t *testing.T) {
+	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	s := newVoiceChatTestServer(store, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/app/chat/messages/not-a-number/transcript", nil)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	response := httptest.NewRecorder()
+
+	s.appChatMessageRouter(response, req)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestVoiceTranscriptRouteRejectsUnsupportedMethod(t *testing.T) {
+	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	s := newVoiceChatTestServer(store, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/app/chat/messages/11/transcript", nil)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	response := httptest.NewRecorder()
+
+	s.appChatMessageRouter(response, req)
+
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d %s", response.Code, response.Body.String())
+	}
+	if store.transcriptLookupCalls != 0 {
+		t.Fatalf("transcript store called %d times", store.transcriptLookupCalls)
+	}
+}
+
 type fakeVoiceChatStore struct {
 	*fakeAppChatStreamStore
-	transcript           string
-	audioAssetID         int64
-	ownedAssetID         int64
-	audioLookupUserID    int64
-	audioLookupMessageID int64
-	silentVoiceSaves     int
+	transcript                string
+	audioAssetID              int64
+	ownedAssetID              int64
+	audioLookupUserID         int64
+	audioLookupMessageID      int64
+	voiceTranscript           string
+	voiceTranscriptErr        error
+	transcriptLookupUserID    int64
+	transcriptLookupMessageID int64
+	transcriptLookupCalls     int
+	silentVoiceSaves          int
 }
 
 func (s *fakeVoiceChatStore) SaveVoicePair(_ context.Context, _ int64, audioAssetID int64, _ int, transcript, _ string, _ json.RawMessage) (int64, int64, error) {
@@ -200,6 +316,13 @@ func (s *fakeVoiceChatStore) GetVoiceAudioAssetID(_ context.Context, appUserID, 
 		return 0, chat.ErrNotFound
 	}
 	return s.ownedAssetID, nil
+}
+
+func (s *fakeVoiceChatStore) GetVoiceTranscript(_ context.Context, appUserID, messageID int64) (string, error) {
+	s.transcriptLookupCalls++
+	s.transcriptLookupUserID = appUserID
+	s.transcriptLookupMessageID = messageID
+	return s.voiceTranscript, s.voiceTranscriptErr
 }
 
 type voiceChatGenerator struct {
