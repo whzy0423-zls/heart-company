@@ -28,6 +28,7 @@ type appChatVoiceStore interface {
 	SaveVoicePair(ctx context.Context, sessionID, audioAssetID int64, durationMs int, transcript, answer string, sources json.RawMessage) (int64, int64, error)
 	SaveVoiceMessage(ctx context.Context, sessionID, audioAssetID int64, durationMs int, transcript string) (int64, error)
 	GetVoiceAudioAssetID(ctx context.Context, appUserID, messageID int64) (int64, error)
+	GetVoiceTranscript(ctx context.Context, appUserID, messageID int64) (string, error)
 }
 
 type voiceChatResponse struct {
@@ -271,6 +272,34 @@ func (s *Server) appChatVoiceAudio(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(asset.Data)
+}
+
+func (s *Server) appChatVoiceTranscript(w http.ResponseWriter, r *http.Request) {
+	userInfo, ok := appUserFromContext(r)
+	if !ok {
+		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	messageID, ok := messageIDFromPath(r.URL.Path, "transcript")
+	if !ok {
+		httpx.Fail(w, http.StatusBadRequest, "invalid message id")
+		return
+	}
+	voiceStore, ok := s.appChat.(appChatVoiceStore)
+	if !ok {
+		httpx.Fail(w, http.StatusInternalServerError, "语音消息存储不可用")
+		return
+	}
+	transcript, err := voiceStore.GetVoiceTranscript(r.Context(), userInfo.ID, messageID)
+	if errors.Is(err, chat.ErrNotFound) {
+		httpx.Fail(w, http.StatusNotFound, "voice message not found")
+		return
+	}
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	httpx.OK(w, map[string]string{"text": transcript})
 }
 
 func (s *Server) createVoiceAsset(ctx context.Context, input uploadasset.CreateInput) (uploadasset.Asset, error) {
