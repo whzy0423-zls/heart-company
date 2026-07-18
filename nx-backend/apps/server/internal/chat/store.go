@@ -393,6 +393,24 @@ func (s *Store) GetVoiceAudioAssetID(ctx context.Context, appUserID, messageID i
 	return assetID, err
 }
 
+// GetVoiceTranscript returns the hidden ASR transcript only when the App user
+// owns the voice message's session.
+func (s *Store) GetVoiceTranscript(ctx context.Context, appUserID, messageID int64) (string, error) {
+	var transcript string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT m.transcript
+		 FROM app_chat_messages m
+		 JOIN app_chat_sessions s ON s.id = m.session_id
+		 WHERE m.id = $1 AND s.app_user_id = $2
+		   AND m.role = 'user' AND m.message_type = 'voice'`,
+		messageID, appUserID,
+	).Scan(&transcript)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return strings.TrimSpace(transcript), err
+}
+
 // SetFeedback 设置某条 AI 消息的反馈（'helpful' | 'inaccurate' | 'continue' | ”）。
 // 通过 session→app_user_id 联结校验归属，防越权。
 func (s *Store) SetFeedback(ctx context.Context, appUserID, messageID int64, feedback string) error {
