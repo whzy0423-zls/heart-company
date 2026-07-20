@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,9 +50,9 @@ func TestAppPlanNameUsesNormalizedPlanCodes(t *testing.T) {
 		want     string
 	}{
 		{planCode: "free", want: "免费版"},
-		{planCode: "vip_month", want: "月卡会员"},
-		{planCode: "vip_quarter", want: "季卡会员"},
-		{planCode: "vip_year", want: "年卡会员"},
+		{planCode: "vip_month", want: "VIP 会员"},
+		{planCode: "vip_quarter", want: "VIP 会员"},
+		{planCode: "vip_year", want: "VIP 会员"},
 		{planCode: "legacy_partner", want: "会员版"},
 	}
 
@@ -79,7 +80,7 @@ func TestAppBillingEntitlementsUsesNormalizedPlan(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Data.PlanCode != "vip_month" || body.Data.PlanName != "月卡会员" {
+	if body.Data.PlanCode != "vip_month" || body.Data.PlanName != "VIP 会员" {
 		t.Fatalf("expected normalized monthly plan, got %+v", body.Data)
 	}
 	if !body.Data.IsMember {
@@ -87,6 +88,20 @@ func TestAppBillingEntitlementsUsesNormalizedPlan(t *testing.T) {
 	}
 	if body.Data.ChatRemaining != 0 || body.Data.DeepReportRemaining != 0 {
 		t.Fatalf("expected numeric quota placeholders to remain zero, got %+v", body.Data)
+	}
+}
+
+func TestAppBillingEntitlementsIncludesExistingPendingOrder(t *testing.T) {
+	s := newAppBillingEntitlementTestServer(t, "pending|active:vip_month")
+	response := performAppBillingRequest(t, s.appBillingEntitlements, http.MethodGet, "/api/app/billing/entitlements", nil)
+	var body struct {
+		Data appEntitlementResp `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Data.PendingOrder == nil || body.Data.PendingOrder.OutTradeNo != "app7-vip_month-existing" {
+		t.Fatalf("expected existing pending order, got %+v", body.Data.PendingOrder)
 	}
 }
 
@@ -150,6 +165,24 @@ func TestAppBillingCreateOrderReturnsPendingCustomerConfirmation(t *testing.T) {
 	if !strings.Contains(body.Data.Message, "客服") {
 		t.Fatalf("expected customer confirmation message, got %q", body.Data.Message)
 	}
+	if body.Data.DurationDays != 30 || body.Data.EstimatedExpiresAt == "" {
+		t.Fatalf("expected renewal preview metadata, got %+v", body.Data)
+	}
+}
+
+func TestAppBillingCreateOrderReusesExistingPendingOrder(t *testing.T) {
+	appBillingInsertCount.Store(0)
+	s := newAppBillingEntitlementTestServer(t, "pending|active:vip_month")
+	response := performAppBillingRequest(t, s.appBillingCreateOrder, http.MethodPost, "/api/app/billing/orders", map[string]any{
+		"productId": "vip_year",
+	})
+	body := decodeAppBillingResponse(t, response)
+	if body.Data.OutTradeNo != "app7-vip_month-existing" || body.Data.ProductID != "vip_month" {
+		t.Fatalf("expected existing pending order to be reused, got %+v", body.Data)
+	}
+	if got := appBillingInsertCount.Load(); got != 0 {
+		t.Fatalf("expected no insert for duplicate pending order, got %d", got)
+	}
 }
 
 func TestAppBillingProductsExposeThreeCustomerServicePlans(t *testing.T) {
@@ -179,6 +212,9 @@ func TestAppBillingProductsExposeThreeCustomerServicePlans(t *testing.T) {
 		}
 		if product.ID == "deep_report" {
 			t.Fatalf("deep report must not be offered: %+v", product)
+		}
+		if product.DurationDays != map[string]int{"vip_month": 30, "vip_quarter": 90, "vip_year": 365}[product.ID] {
+			t.Fatalf("unexpected duration for product %+v", product)
 		}
 	}
 }
@@ -282,6 +318,7 @@ func decodeAppBillingResponse(t *testing.T, response *httptest.ResponseRecorder)
 const appBillingTestDriverName = "app_billing_test"
 
 var registerAppBillingTestDriverOnce sync.Once
+var appBillingInsertCount atomic.Int64
 
 func registerAppBillingTestDriver() {
 	registerAppBillingTestDriverOnce.Do(func() {
@@ -309,14 +346,29 @@ func (c *appBillingTestConn) BeginTx(context.Context, driver.TxOptions) (driver.
 
 func (c *appBillingTestConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
 	if strings.Contains(query, "INSERT INTO app_orders") && strings.Contains(query, "pending_confirmation") {
+		appBillingInsertCount.Add(1)
 		return driver.RowsAffected(1), nil
 	}
 	return nil, driver.ErrSkip
 }
 
 func (c *appBillingTestConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if strings.Contains(query, "SELECT member_expires_at FROM app_users") {
+		level := strings.TrimPrefix(c.memberLevel, "pending|")
+		var expiresAt driver.Value
+		if strings.HasPrefix(level, "active:") {
+			expiresAt = time.Now().Add(30 * 24 * time.Hour)
+		} else if strings.HasPrefix(level, "expired:") {
+			expiresAt = time.Now().Add(-time.Hour)
+		}
+		return &appBillingTestRows{
+			columns: []string{"member_expires_at"},
+			values:  [][]driver.Value{{expiresAt}},
+		}, nil
+	}
 	if strings.Contains(query, "FROM app_users") {
 		level := c.memberLevel
+		level = strings.TrimPrefix(level, "pending|")
 		var startedAt driver.Value
 		var expiresAt driver.Value
 		now := time.Now()
@@ -341,7 +393,13 @@ func (c *appBillingTestConn) QueryContext(_ context.Context, query string, args 
 		}, nil
 	}
 	if strings.Contains(query, "FROM app_orders") {
+		if strings.Contains(query, "status='pending_confirmation'") && !strings.HasPrefix(c.memberLevel, "pending|") {
+			return &appBillingTestRows{columns: []string{"out_trade_no", "product_id", "title", "amount", "status"}}, nil
+		}
 		outTradeNo := "app7-vip_month-1"
+		if strings.Contains(query, "status='pending_confirmation'") {
+			outTradeNo = "app7-vip_month-existing"
+		}
 		if len(args) >= 2 {
 			outTradeNo, _ = args[1].Value.(string)
 		}

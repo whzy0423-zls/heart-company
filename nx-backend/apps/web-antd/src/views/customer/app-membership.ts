@@ -23,3 +23,22 @@ export function membershipStatusLabel(status?: string) {
 export function buildMembershipGrantPayload(activationAt: Date) {
   return { activationAt: activationAt.toISOString() };
 }
+
+export function previewMembershipExpiry(
+  currentExpiresAt: string | undefined,
+  activationAt: Date,
+  durationDays: number,
+) {
+  if (!Number.isFinite(durationDays) || durationDays <= 0) return undefined;
+  const normalizedCurrent = currentExpiresAt?.replaceAll('/', '-');
+  const currentExpiry = normalizedCurrent
+    ? new Date(normalizedCurrent)
+    : undefined;
+  const base =
+    currentExpiry &&
+    !Number.isNaN(currentExpiry.getTime()) &&
+    currentExpiry > activationAt
+      ? currentExpiry
+      : activationAt;
+  return new Date(base.getTime() + durationDays * 24 * 60 * 60 * 1000);
+}

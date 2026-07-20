@@ -5,6 +5,7 @@ export interface AppOrder {
   amount: number;
   appUserId: number;
   createTime: string;
+  durationDays: number;
   id: number;
   memberLevel: string;
   memberExpiresAt?: string;

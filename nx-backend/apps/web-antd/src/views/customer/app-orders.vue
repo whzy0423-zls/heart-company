@@ -28,6 +28,7 @@ import {
   buildMembershipGrantPayload,
   memberPlanLabel,
   membershipStatusLabel,
+  previewMembershipExpiry,
 } from './app-membership';
 
 const APP_ORDER_WRITE_PERMISSION = 'Customer:AppOrders:Write';
@@ -45,6 +46,15 @@ const grantOpen = ref(false);
 const grantSaving = ref(false);
 const grantRecord = ref<AppOrder>();
 const activationAt = ref<Dayjs>(dayjs());
+const estimatedExpiry = computed(() => {
+  const record = grantRecord.value;
+  if (!record || !activationAt.value) return undefined;
+  return previewMembershipExpiry(
+    record.memberExpiresAt,
+    activationAt.value.toDate(),
+    record.durationDays,
+  );
+});
 
 const query = reactive({
   keyword: '',
@@ -102,6 +112,10 @@ function memberLabel(level?: string) {
 
 function amountText(amount?: number) {
   return `¥${((amount ?? 0) / 100).toFixed(2)}`;
+}
+
+function dateText(value?: Date) {
+  return value ? dayjs(value).format('YYYY/MM/DD HH:mm:ss') : '-';
 }
 
 async function load() {
@@ -248,6 +262,7 @@ onMounted(() => {
           {{ current.phone || '-' }} / {{ current.nickname || '-' }} / #{{ current.appUserId }}
         </Descriptions.Item>
         <Descriptions.Item label="商品">{{ current.title }}（{{ current.productId }}）</Descriptions.Item>
+        <Descriptions.Item label="会员时长">{{ current.durationDays }} 天</Descriptions.Item>
         <Descriptions.Item label="金额">{{ amountText(current.amount) }}</Descriptions.Item>
         <Descriptions.Item label="状态">{{ statusLabel(current.status) }}</Descriptions.Item>
         <Descriptions.Item label="交易号">{{ current.transactionId || '-' }}</Descriptions.Item>
@@ -271,6 +286,13 @@ onMounted(() => {
         <Descriptions.Item label="套餐">{{ grantRecord.title }}</Descriptions.Item>
         <Descriptions.Item label="用户手机号">{{ grantRecord.phone || '-' }}</Descriptions.Item>
         <Descriptions.Item label="订单号">{{ grantRecord.outTradeNo }}</Descriptions.Item>
+        <Descriptions.Item label="当前会员到期">
+          {{ grantRecord.memberExpiresAt || '当前无有效会员' }}
+        </Descriptions.Item>
+        <Descriptions.Item label="续费时长">{{ grantRecord.durationDays }} 天</Descriptions.Item>
+        <Descriptions.Item label="预计续费后到期">
+          {{ dateText(estimatedExpiry) }}
+        </Descriptions.Item>
       </Descriptions>
       <div class="activation-field">
         <div class="activation-label">会员生效时间</div>

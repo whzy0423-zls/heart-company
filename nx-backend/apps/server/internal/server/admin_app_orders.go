@@ -22,6 +22,7 @@ type adminAppOrder struct {
 	Status              string `json:"status"`
 	TransactionID       string `json:"transactionId"`
 	CreateTime          string `json:"createTime"`
+	DurationDays        int    `json:"durationDays"`
 	UpdateTime          string `json:"updateTime"`
 	PaidAt              string `json:"paidAt"`
 	MemberStartedAt     string `json:"memberStartedAt"`
@@ -93,6 +94,7 @@ func (s *Server) adminAppOrders(w http.ResponseWriter, r *http.Request) {
 		if paidAt.Valid {
 			item.PaidAt = paidAt.Time.Format("2006/01/02 15:04:05")
 		}
+		item.DurationDays, _ = membershipDurationDays(item.ProductID)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {

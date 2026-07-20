@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -13,15 +14,16 @@ import (
 )
 
 type appEntitlementResp struct {
-	PlanName            string `json:"planName"`
-	PlanCode            string `json:"planCode"`
-	IsMember            bool   `json:"isMember"`
-	ChatRemaining       int    `json:"chatRemaining"`
-	DeepReportRemaining int    `json:"deepReportRemaining"`
-	CardLimit           int    `json:"cardLimit"`
-	CardUsed            int    `json:"cardUsed"`
-	StartedAt           string `json:"startedAt,omitempty"`
-	ExpiresAt           string `json:"expiresAt,omitempty"`
+	PlanName            string        `json:"planName"`
+	PlanCode            string        `json:"planCode"`
+	IsMember            bool          `json:"isMember"`
+	ChatRemaining       int           `json:"chatRemaining"`
+	DeepReportRemaining int           `json:"deepReportRemaining"`
+	CardLimit           int           `json:"cardLimit"`
+	CardUsed            int           `json:"cardUsed"`
+	StartedAt           string        `json:"startedAt,omitempty"`
+	ExpiresAt           string        `json:"expiresAt,omitempty"`
+	PendingOrder        *appOrderResp `json:"pendingOrder,omitempty"`
 }
 
 type appProductResp struct {
@@ -36,6 +38,7 @@ type appProductResp struct {
 	ConfigurationStatus string   `json:"configurationStatus"`
 	DisabledReason      string   `json:"disabledReason,omitempty"`
 	PurchaseMode        string   `json:"purchaseMode"`
+	DurationDays        int      `json:"durationDays"`
 }
 
 const (
@@ -69,11 +72,11 @@ func appPlanName(planCode string) string {
 	case "free":
 		return "免费版"
 	case "vip_month":
-		return "月卡会员"
+		return "VIP 会员"
 	case "vip_quarter":
-		return "季卡会员"
+		return "VIP 会员"
 	case "vip_year":
-		return "年卡会员"
+		return "VIP 会员"
 	default:
 		return "会员版"
 	}
@@ -115,6 +118,13 @@ func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) 
 	if isMember && memberExpiresAt.Valid {
 		expiresAt = memberExpiresAt.Time.Format(time.RFC3339)
 	}
+	var pendingOrder *appOrderResp
+	if order, found, err := s.findPendingAppOrder(r.Context(), userInfo.ID); err == nil && found {
+		enriched, enrichErr := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, order)
+		if enrichErr == nil {
+			pendingOrder = &enriched
+		}
+	}
 	httpx.OK(w, appEntitlementResp{
 		PlanName:            appPlanName(planCode),
 		PlanCode:            planCode,
@@ -125,6 +135,7 @@ func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) 
 		CardUsed:            cardUsed,
 		StartedAt:           startedAt,
 		ExpiresAt:           expiresAt,
+		PendingOrder:        pendingOrder,
 	})
 }
 
@@ -162,6 +173,7 @@ func (s *Server) appBillingProducts(w http.ResponseWriter, r *http.Request) {
 func appCustomerServiceProduct(product appProductResp) appProductResp {
 	product.PayEnabled = false
 	product.PurchaseMode = appPurchaseModeCustomerService
+	product.DurationDays, _ = membershipDurationDays(product.ID)
 	return product
 }
 
@@ -183,6 +195,9 @@ type appOrderResp struct {
 	Message              string         `json:"message"`
 	PurchaseMode         string         `json:"purchaseMode"`
 	CustomerServiceQRURL string         `json:"customerServiceQrUrl"`
+	DurationDays         int            `json:"durationDays"`
+	CurrentExpiresAt     string         `json:"currentExpiresAt,omitempty"`
+	EstimatedExpiresAt   string         `json:"estimatedExpiresAt,omitempty"`
 }
 
 func appProductTitle(productID string) string {
@@ -229,6 +244,18 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "invalid product")
 		return
 	}
+	if existing, found, err := s.findPendingAppOrder(r.Context(), userInfo.ID); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	} else if found {
+		enriched, enrichErr := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, existing)
+		if enrichErr != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "server error")
+			return
+		}
+		httpx.OK(w, enriched)
+		return
+	}
 	outTradeNo := fmt.Sprintf("app%d-%s-%d", userInfo.ID, productID, time.Now().UnixNano())
 	if _, err := s.db.ExecContext(r.Context(),
 		`INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, status)
@@ -237,13 +264,18 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	httpx.OK(w, appCustomerServiceOrder(appOrderResp{
+	order, err := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, appOrderResp{
 		OutTradeNo: outTradeNo,
 		ProductID:  productID,
 		Title:      title,
 		Amount:     amount,
 		Status:     appOrderPendingConfirmation,
-	}))
+	})
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	httpx.OK(w, order)
 }
 
 func (s *Server) appBillingOrderStatus(w http.ResponseWriter, r *http.Request) {
@@ -266,7 +298,52 @@ func (s *Server) appBillingOrderStatus(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusNotFound, "order not found")
 		return
 	}
-	httpx.OK(w, appCustomerServiceOrder(resp))
+	enriched, err := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, resp)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	httpx.OK(w, enriched)
+}
+
+func (s *Server) findPendingAppOrder(ctx context.Context, appUserID int64) (appOrderResp, bool, error) {
+	var resp appOrderResp
+	err := s.db.QueryRowContext(ctx, `
+		SELECT out_trade_no, product_id, title, amount, status
+		FROM app_orders
+		WHERE app_user_id=$1 AND status='pending_confirmation'
+		ORDER BY create_time DESC, id DESC LIMIT 1`, appUserID).Scan(
+		&resp.OutTradeNo, &resp.ProductID, &resp.Title, &resp.Amount, &resp.Status,
+	)
+	if err == sql.ErrNoRows {
+		return appOrderResp{}, false, nil
+	}
+	if err != nil {
+		return appOrderResp{}, false, err
+	}
+	return resp, true, nil
+}
+
+func (s *Server) enrichCustomerServiceOrder(ctx context.Context, appUserID int64, resp appOrderResp) (appOrderResp, error) {
+	resp = appCustomerServiceOrder(resp)
+	resp.DurationDays, _ = membershipDurationDays(resp.ProductID)
+	var currentExpiresAt sql.NullTime
+	if err := s.db.QueryRowContext(ctx, `SELECT member_expires_at FROM app_users WHERE id=$1`, appUserID).Scan(&currentExpiresAt); err != nil {
+		return appOrderResp{}, err
+	}
+	if currentExpiresAt.Valid {
+		resp.CurrentExpiresAt = currentExpiresAt.Time.Format(time.RFC3339)
+	}
+	var currentExpiry *time.Time
+	if currentExpiresAt.Valid {
+		currentExpiry = &currentExpiresAt.Time
+	}
+	period, err := calculateMembershipPeriod(resp.ProductID, time.Now(), currentExpiry)
+	if err != nil {
+		return appOrderResp{}, err
+	}
+	resp.EstimatedExpiresAt = period.Expires.Format(time.RFC3339)
+	return resp, nil
 }
 
 func appCustomerServiceOrder(resp appOrderResp) appOrderResp {
