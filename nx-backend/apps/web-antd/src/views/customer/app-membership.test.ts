@@ -4,6 +4,7 @@ import {
   buildMembershipGrantPayload,
   memberPlanLabel,
   membershipStatusLabel,
+  previewMembershipExpiry,
 } from './app-membership';
 
 describe('app membership helpers', () => {
@@ -23,5 +24,25 @@ describe('app membership helpers', () => {
     expect(
       buildMembershipGrantPayload(new Date('2026-07-20T10:30:00+08:00')),
     ).toEqual({ activationAt: '2026-07-20T02:30:00.000Z' });
+  });
+
+  it('previews renewal after the current active expiry', () => {
+    expect(
+      previewMembershipExpiry(
+        '2026-08-01T00:00:00.000Z',
+        new Date('2026-07-20T00:00:00.000Z'),
+        30,
+      )?.toISOString(),
+    ).toBe('2026-08-31T00:00:00.000Z');
+  });
+
+  it('previews renewal from activation when membership has expired', () => {
+    expect(
+      previewMembershipExpiry(
+        '2026-07-01T00:00:00.000Z',
+        new Date('2026-07-20T00:00:00.000Z'),
+        90,
+      )?.toISOString(),
+    ).toBe('2026-10-18T00:00:00.000Z');
   });
 });
