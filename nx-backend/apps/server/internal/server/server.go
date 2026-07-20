@@ -100,26 +100,27 @@ type Server struct {
 	chatTimeout           time.Duration
 	chatHeartbeatInterval time.Duration
 
-	appUsers                 *appuser.Store
-	appChat                  appChatStore
-	userPreferences          appChatPreferenceStore
-	pushStore                *push.Store
-	pushSendTimeout          time.Duration
-	pushRecoveryInterval     time.Duration
-	pushSendSlots            chan struct{}
-	smsSender                sms.Sender
-	loginLimiter             *strRateLimiter
-	loginDBLimiter           *dbRateLimiter
-	smsPhoneLimiter          *strRateLimiter
-	smsIPLimiter             *strRateLimiter
-	smsVerifyPhoneLimiter    *strRateLimiter
-	smsVerifyIPLimiter       *strRateLimiter
-	publicSignupIPLimiter    *strRateLimiter
-	publicAnalyticsIPLimiter *strRateLimiter
-	publicGameIPLimiter      *strRateLimiter
-	videoAnalysisSlots       chan struct{}
-	videoStoryboardSlots     chan struct{}
-	trustedProxyCIDRs        []netip.Prefix
+	appUsers                       *appuser.Store
+	appChat                        appChatStore
+	appChatProfilesForCardOverride func(context.Context, int64, int64) (rag.UserProfile, rag.ConversationCard)
+	userPreferences                appChatPreferenceStore
+	pushStore                      *push.Store
+	pushSendTimeout                time.Duration
+	pushRecoveryInterval           time.Duration
+	pushSendSlots                  chan struct{}
+	smsSender                      sms.Sender
+	loginLimiter                   *strRateLimiter
+	loginDBLimiter                 *dbRateLimiter
+	smsPhoneLimiter                *strRateLimiter
+	smsIPLimiter                   *strRateLimiter
+	smsVerifyPhoneLimiter          *strRateLimiter
+	smsVerifyIPLimiter             *strRateLimiter
+	publicSignupIPLimiter          *strRateLimiter
+	publicAnalyticsIPLimiter       *strRateLimiter
+	publicGameIPLimiter            *strRateLimiter
+	videoAnalysisSlots             chan struct{}
+	videoStoryboardSlots           chan struct{}
+	trustedProxyCIDRs              []netip.Prefix
 
 	signupMu          sync.Mutex
 	signupSubscribers map[chan signup.Lead]struct{}

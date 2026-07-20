@@ -11,6 +11,8 @@ import (
 
 const recentHistoryLimit = 20
 
+const minRAGRelevanceScore = 6
+
 type Document struct {
 	ID      string   `json:"id"`
 	Title   string   `json:"title"`
@@ -52,6 +54,7 @@ type AskInput struct {
 	ConversationCard    ConversationCard `json:"conversationCard,omitempty"`
 	UserPreferences     []string         `json:"userPreferences,omitempty"`
 	CurrentDirectives   []string         `json:"currentDirectives,omitempty"`
+	Tier                string           `json:"tier,omitempty"`
 }
 
 type Answer struct {
@@ -88,6 +91,7 @@ type GenerateInput struct {
 	ConversationCard    ConversationCard `json:"conversationCard,omitempty"`
 	UserPreferences     []string         `json:"userPreferences,omitempty"`
 	CurrentDirectives   []string         `json:"currentDirectives,omitempty"`
+	Tier                string           `json:"tier,omitempty"`
 }
 
 type Option func(*Service)
@@ -140,6 +144,7 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 				ConversationCard:    input.ConversationCard,
 				UserPreferences:     input.UserPreferences,
 				CurrentDirectives:   input.CurrentDirectives,
+				Tier:                input.Tier,
 			})
 			if err == nil && strings.TrimSpace(generated) != "" {
 				return Answer{
@@ -192,6 +197,7 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 			ConversationCard:    input.ConversationCard,
 			UserPreferences:     input.UserPreferences,
 			CurrentDirectives:   input.CurrentDirectives,
+			Tier:                input.Tier,
 		})
 		if err == nil && strings.TrimSpace(generated) != "" {
 			return Answer{Answer: strings.TrimSpace(generated), Sources: sources, Suggestions: suggestions}, nil
@@ -232,6 +238,7 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 				ConversationCard:    input.ConversationCard,
 				UserPreferences:     input.UserPreferences,
 				CurrentDirectives:   input.CurrentDirectives,
+				Tier:                input.Tier,
 			}, trackedEmit)
 			if err != nil && streamStarted {
 				return Answer{}, err
@@ -290,6 +297,7 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 			ConversationCard:    input.ConversationCard,
 			UserPreferences:     input.UserPreferences,
 			CurrentDirectives:   input.CurrentDirectives,
+			Tier:                input.Tier,
 		}, trackedEmit)
 		if err != nil && streamStarted {
 			return Answer{}, err
@@ -385,24 +393,28 @@ func (s *Service) search(question string, mainType int, limit int) []scoredDoc {
 	}
 	for _, doc := range s.docs {
 		text := strings.ToLower(doc.Title + " " + doc.Content + " " + strings.Join(doc.Tags, " "))
-		score := 0
+		questionScore := 0
 		for _, term := range terms {
 			if term == "" {
 				continue
 			}
 			if strings.Contains(text, term) {
-				score += 3
+				questionScore += 3
 			}
 			for _, tag := range doc.Tags {
 				if strings.Contains(strings.ToLower(tag), term) {
-					score += 2
+					questionScore += 2
 				}
 			}
 		}
+		if questionScore == 0 {
+			continue
+		}
+		score := questionScore
 		if mainTypeToken != "" && (strings.Contains(doc.ID, "type-"+mainTypeToken) || strings.Contains(doc.Title, mainTypeToken+"号")) {
 			score += 2
 		}
-		if score > 0 {
+		if score >= minRAGRelevanceScore {
 			scored = append(scored, scoredDoc{doc: doc, score: score})
 		}
 	}

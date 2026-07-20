@@ -15,7 +15,7 @@ func TestAskPrioritizesConversationCardMainType(t *testing.T) {
 	})
 	var input AskInput
 	if err := json.Unmarshal([]byte(`{
-		"question":"我该怎么和她沟通？",
+		"question":"助人型在关系里该怎么和她沟通？",
 		"userProfile":{"mainType":6},
 		"conversationCard":{"name":"妈妈","relation":"家人","mainType":2,"wingType":1}
 	}`), &input); err != nil {
@@ -31,6 +31,47 @@ func TestAskPrioritizesConversationCardMainType(t *testing.T) {
 	}
 	if !strings.Contains(result.Answer, "当前关注对象的主型") {
 		t.Fatalf("fallback answer must describe the card subject, got %q", result.Answer)
+	}
+}
+
+func TestSearchDoesNotUseMainTypeAsOnlyRelevanceEvidence(t *testing.T) {
+	service := NewService([]Document{
+		{ID: "type-6", Title: "6号 忠诚型", Content: "忠诚型重视安全和确定。"},
+	})
+
+	matches := service.search("推荐几道菜以及具体做法", 6, 4)
+	if len(matches) != 0 {
+		t.Fatalf("main type alone must not select unrelated documents: %+v", matches)
+	}
+}
+
+func TestSearchUsesMainTypeAsBoostAfterQuestionMatch(t *testing.T) {
+	service := NewService([]Document{
+		{ID: "type-2", Title: "2号 助人型", Content: "关系沟通需要尊重彼此边界。"},
+		{ID: "type-6", Title: "6号 忠诚型", Content: "关系沟通需要尊重彼此边界。"},
+	})
+
+	matches := service.search("关系沟通需要注意什么", 6, 4)
+	if len(matches) != 2 || matches[0].doc.ID != "type-6" {
+		t.Fatalf("expected textual matches with type-6 boosted first, got %+v", matches)
+	}
+}
+
+func TestAskRecipeQuestionDoesNotAttachEnneagramSources(t *testing.T) {
+	generator := &fakeGenerator{answer: "可以做番茄炒蛋：先炒蛋，再炒番茄，最后合炒调味。"}
+	service := NewService([]Document{
+		{ID: "type-6", Title: "6号 忠诚型", Content: "忠诚型面对决策时可能担心风险，重视安全和确定。"},
+	}, WithGenerator(generator))
+
+	answer, err := service.Ask(context.Background(), AskInput{
+		Question:    "推荐几道菜以及具体做法",
+		UserProfile: UserProfile{MainType: 6},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(answer.Sources) != 0 || len(generator.input.Sources) != 0 {
+		t.Fatalf("recipe request must not receive enneagram sources: answer=%+v generator=%+v", answer.Sources, generator.input.Sources)
 	}
 }
 
@@ -128,6 +169,19 @@ func TestAskPropagatesPreferencesAndCurrentDirectives(t *testing.T) {
 	}
 	if strings.Join(generator.input.CurrentDirectives, "|") != "回答更详细" {
 		t.Fatalf("current directives not propagated: %+v", generator.input)
+	}
+}
+
+func TestAskPropagatesConversationTier(t *testing.T) {
+	generator := &fakeGenerator{answer: "模型回答"}
+	service := NewService(nil, WithGenerator(generator))
+
+	_, err := service.Ask(context.Background(), AskInput{Question: "帮我分析", Tier: "deep"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generator.input.Tier != "deep" {
+		t.Fatalf("conversation tier not propagated: %+v", generator.input)
 	}
 }
 
@@ -265,7 +319,7 @@ func TestAskStreamReturnsErrorWithoutFallbackAfterPartialOutput(t *testing.T) {
 
 func TestAskStreamEmitsGeneratedChunksAndReturnsMetadata(t *testing.T) {
 	generator := &fakeGenerator{answer: "第一段，第二段。"}
-	service := NewService([]Document{{ID: "type-1", Title: "1号", Content: "1号重视原则和秩序。"}}, WithGenerator(generator))
+	service := NewService([]Document{{ID: "type-1", Title: "1号", Content: "1号孩子重视原则和秩序。"}}, WithGenerator(generator))
 
 	var chunks []string
 	answer, err := service.AskStream(context.Background(), AskInput{

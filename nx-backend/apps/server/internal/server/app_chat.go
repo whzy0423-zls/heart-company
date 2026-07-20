@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +21,54 @@ import (
 const appChatHistoryLimit = 12
 
 const appChatFallbackHistoryLimit = 20
+
+var (
+	errInvalidAppChatTier            = errors.New("invalid app chat tier")
+	errAppChatTierRequiresMembership = errors.New("app chat tier requires membership")
+)
+
+func resolveAppChatTier(requested, memberLevel string) (string, error) {
+	tier := strings.ToLower(strings.TrimSpace(requested))
+	if tier == "" {
+		tier = "basic"
+	}
+	if tier != "basic" && tier != "deep" && tier != "companion" {
+		return "", errInvalidAppChatTier
+	}
+	if tier != "basic" {
+		level := strings.ToLower(strings.TrimSpace(memberLevel))
+		if level == "" || level == "free" {
+			return "", errAppChatTierRequiresMembership
+		}
+	}
+	return tier, nil
+}
+
+func (s *Server) appChatTierForUser(ctx context.Context, appUserID int64, requested string) (string, error) {
+	tier, err := resolveAppChatTier(requested, "free")
+	if err == nil || errors.Is(err, errInvalidAppChatTier) {
+		return tier, err
+	}
+	if s.appUsers == nil {
+		return "", errors.New("app user store unavailable")
+	}
+	user, err := s.appUsers.FindByID(ctx, appUserID)
+	if err != nil {
+		return "", err
+	}
+	return resolveAppChatTier(requested, user.MemberLevel)
+}
+
+func failAppChatTier(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errInvalidAppChatTier):
+		httpx.Fail(w, http.StatusBadRequest, "不支持的对话模式")
+	case errors.Is(err, errAppChatTierRequiresMembership):
+		httpx.Fail(w, http.StatusForbidden, "当前对话模式需要会员权益")
+	default:
+		httpx.Fail(w, http.StatusInternalServerError, "会员权益读取失败，请重试")
+	}
+}
 
 type appChatPromptContext struct {
 	Summary                     string
@@ -44,6 +93,9 @@ func buildAppChatConversationCard(card quiz.Card) rag.ConversationCard {
 }
 
 func (s *Server) appChatProfilesForCard(ctx context.Context, appUserID, cardID int64) (rag.UserProfile, rag.ConversationCard) {
+	if s.appChatProfilesForCardOverride != nil {
+		return s.appChatProfilesForCardOverride(ctx, appUserID, cardID)
+	}
 	profile := rag.UserProfile{}
 	if s.appUsers != nil {
 		if appUser, err := s.appUsers.FindByID(ctx, appUserID); err == nil {
@@ -242,9 +294,15 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Question string        `json:"question"`
 		History  []rag.Message `json:"history"`
+		Tier     string        `json:"tier"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 32<<10)).Decode(&body); err != nil || strings.TrimSpace(body.Question) == "" {
 		httpx.Fail(w, http.StatusBadRequest, "question required")
+		return
+	}
+	tier, err := s.appChatTierForUser(r.Context(), userInfo.ID, body.Tier)
+	if err != nil {
+		failAppChatTier(w, err)
 		return
 	}
 
@@ -272,6 +330,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		ConversationCard:    conversationCard,
 		UserPreferences:     preferences,
 		CurrentDirectives:   directives,
+		Tier:                tier,
 	})
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
@@ -328,9 +387,15 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Question string        `json:"question"`
 		History  []rag.Message `json:"history"`
+		Tier     string        `json:"tier"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 32<<10)).Decode(&body); err != nil || strings.TrimSpace(body.Question) == "" {
 		httpx.Fail(w, http.StatusBadRequest, "question required")
+		return
+	}
+	tier, err := s.appChatTierForUser(r.Context(), userInfo.ID, body.Tier)
+	if err != nil {
+		failAppChatTier(w, err)
 		return
 	}
 
@@ -375,6 +440,7 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 			ConversationCard:    conversationCard,
 			UserPreferences:     preferences,
 			CurrentDirectives:   directives,
+			Tier:                tier,
 		}, func(delta string) error {
 			select {
 			case deltas <- delta:

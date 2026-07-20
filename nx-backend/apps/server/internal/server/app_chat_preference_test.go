@@ -147,6 +147,9 @@ func TestAppChatAvoidDearCorrectionReachesCurrentModelRequest(t *testing.T) {
 	if strings.Join(captured.CurrentDirectives, "|") != "不要使用“亲爱的”等亲昵称呼" {
 		t.Fatalf("addressing correction missing from current request: %+v", captured)
 	}
+	if captured.Tier != "basic" {
+		t.Fatalf("stream conversation tier = %q, want basic", captured.Tier)
+	}
 }
 
 func performAppChatPreferenceRequest(t *testing.T, s *Server, userID, sessionID int64, question string) string {

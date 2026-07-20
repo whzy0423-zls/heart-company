@@ -34,6 +34,42 @@ func TestBuildAppChatConversationCardPreservesSecondaryProfile(t *testing.T) {
 	}
 }
 
+func TestResolveAppChatTierDefaultsToBasic(t *testing.T) {
+	tier, err := resolveAppChatTier("", "free")
+	if err != nil || tier != "basic" {
+		t.Fatalf("resolveAppChatTier() = %q, %v; want basic, nil", tier, err)
+	}
+}
+
+func TestResolveAppChatTierAcceptsMemberModesForVIP(t *testing.T) {
+	for _, requested := range []string{"basic", "deep", "companion"} {
+		t.Run(requested, func(t *testing.T) {
+			tier, err := resolveAppChatTier(requested, "vip")
+			if err != nil || tier != requested {
+				t.Fatalf("resolveAppChatTier(%q, vip) = %q, %v", requested, tier, err)
+			}
+		})
+	}
+}
+
+func TestResolveAppChatTierRejectsUnknownTier(t *testing.T) {
+	_, err := resolveAppChatTier("expert", "vip")
+	if !errors.Is(err, errInvalidAppChatTier) {
+		t.Fatalf("expected errInvalidAppChatTier, got %v", err)
+	}
+}
+
+func TestResolveAppChatTierRejectsMemberModesForFreeUser(t *testing.T) {
+	for _, requested := range []string{"deep", "companion"} {
+		t.Run(requested, func(t *testing.T) {
+			_, err := resolveAppChatTier(requested, "free")
+			if !errors.Is(err, errAppChatTierRequiresMembership) {
+				t.Fatalf("expected membership error for %q, got %v", requested, err)
+			}
+		})
+	}
+}
+
 func TestAppChatHistoryFromMessagesFiltersInvalidEntries(t *testing.T) {
 	history := appChatHistoryFromMessages([]chat.Message{
 		{Role: "user", Content: "  我女儿今年八岁  "},
