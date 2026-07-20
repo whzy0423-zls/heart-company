@@ -665,6 +665,8 @@ CREATE TABLE IF NOT EXISTS app_users (
   avatar          TEXT NOT NULL DEFAULT '',
   status          TEXT NOT NULL DEFAULT 'active',
   member_level    TEXT NOT NULL DEFAULT 'free',
+  member_started_at TIMESTAMPTZ,
+  member_expires_at TIMESTAMPTZ,
   register_source TEXT NOT NULL DEFAULT 'sms',
   last_login_at   TIMESTAMPTZ,
   create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -893,8 +895,15 @@ CREATE TABLE IF NOT EXISTS app_orders (
   transaction_id  TEXT NOT NULL DEFAULT '',
   create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  paid_at         TIMESTAMPTZ
+  paid_at         TIMESTAMPTZ,
+  activation_at TIMESTAMPTZ,
+  membership_expires_at TIMESTAMPTZ
 );
+
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS member_started_at TIMESTAMPTZ;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS member_expires_at TIMESTAMPTZ;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS activation_at TIMESTAMPTZ;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS membership_expires_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_app_orders_user ON app_orders(app_user_id, create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_app_orders_status ON app_orders(status, create_time DESC);

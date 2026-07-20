@@ -90,7 +90,38 @@ func TestAppBillingEntitlementsUsesNormalizedPlan(t *testing.T) {
 	}
 }
 
-func TestAppBillingCreateOrderReturnsNotConfiguredPayment(t *testing.T) {
+func TestAppBillingEntitlementsReturnsActiveMembershipDates(t *testing.T) {
+	s := newAppBillingEntitlementTestServer(t, "active:vip_quarter")
+	response := performAppBillingRequest(t, s.appBillingEntitlements, http.MethodGet, "/api/app/billing/entitlements", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Data appEntitlementResp `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Data.IsMember || body.Data.PlanCode != "vip_quarter" || body.Data.StartedAt == "" || body.Data.ExpiresAt == "" {
+		t.Fatalf("expected active dated quarter membership, got %+v", body.Data)
+	}
+}
+
+func TestAppBillingEntitlementsTreatsExpiredMembershipAsFree(t *testing.T) {
+	s := newAppBillingEntitlementTestServer(t, "expired:vip_year")
+	response := performAppBillingRequest(t, s.appBillingEntitlements, http.MethodGet, "/api/app/billing/entitlements", nil)
+	var body struct {
+		Data appEntitlementResp `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Data.IsMember || body.Data.PlanCode != "free" || body.Data.ExpiresAt != "" {
+		t.Fatalf("expected expired membership to be free, got %+v", body.Data)
+	}
+}
+
+func TestAppBillingCreateOrderReturnsPendingCustomerConfirmation(t *testing.T) {
 	s := newAppBillingTestServer(t)
 
 	response := performAppBillingRequest(t, s.appBillingCreateOrder, http.MethodPost, "/api/app/billing/orders", map[string]any{
@@ -101,27 +132,27 @@ func TestAppBillingCreateOrderReturnsNotConfiguredPayment(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", response.Code, response.Body.String())
 	}
 	body := decodeAppBillingResponse(t, response)
-	if body.Data.PayStatus != "not_configured" {
-		t.Fatalf("expected payStatus not_configured, got %+v", body.Data)
+	if body.Data.PayStatus != "pending_confirmation" {
+		t.Fatalf("expected payStatus pending_confirmation, got %+v", body.Data)
 	}
-	if body.Data.Status != "not_configured" {
-		t.Fatalf("expected placeholder order status not_configured, got %+v", body.Data)
+	if body.Data.Status != "pending_confirmation" {
+		t.Fatalf("expected order status pending_confirmation, got %+v", body.Data)
 	}
 	if body.Data.PayEnabled {
-		t.Fatalf("expected payment to be disabled until configured, got %+v", body.Data)
+		t.Fatalf("expected SDK payment to stay disabled, got %+v", body.Data)
 	}
-	if body.Data.ConfigurationStatus != "payment_not_configured" {
-		t.Fatalf("expected payment_not_configured configuration status, got %+v", body.Data)
+	if body.Data.PurchaseMode != "customer_service" {
+		t.Fatalf("expected customer service purchase mode, got %+v", body.Data)
 	}
-	if body.Data.DisabledReason == "" {
-		t.Fatalf("expected disabled reason, got %+v", body.Data)
+	if body.Data.CustomerServiceQRURL != "/api/public/customer-service-qr" {
+		t.Fatalf("expected public customer QR endpoint, got %+v", body.Data)
 	}
-	if !strings.Contains(body.Data.Message, "不会扣款") {
-		t.Fatalf("expected explicit no-charge message, got %q", body.Data.Message)
+	if !strings.Contains(body.Data.Message, "客服") {
+		t.Fatalf("expected customer confirmation message, got %q", body.Data.Message)
 	}
 }
 
-func TestAppBillingProductsExposePaymentPlaceholder(t *testing.T) {
+func TestAppBillingProductsExposeThreeCustomerServicePlans(t *testing.T) {
 	s := newAppBillingTestServer(t)
 
 	response := performAppBillingRequest(t, s.appBillingProducts, http.MethodGet, "/api/app/billing/products", nil)
@@ -136,23 +167,23 @@ func TestAppBillingProductsExposePaymentPlaceholder(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Data) == 0 {
-		t.Fatal("expected products")
+	if len(body.Data) != 3 {
+		t.Fatalf("expected three membership products, got %+v", body.Data)
 	}
 	for _, product := range body.Data {
-		if product.Enabled || product.PayEnabled {
-			t.Fatalf("expected product disabled while payment is not configured, got %+v", product)
+		if !product.Enabled || product.PayEnabled {
+			t.Fatalf("expected enabled manual product without SDK payment, got %+v", product)
 		}
-		if product.ConfigurationStatus != "payment_not_configured" {
-			t.Fatalf("expected payment_not_configured configuration status, got %+v", product)
+		if product.PurchaseMode != "customer_service" {
+			t.Fatalf("expected customer service mode, got %+v", product)
 		}
-		if product.DisabledReason == "" {
-			t.Fatalf("expected disabled reason, got %+v", product)
+		if product.ID == "deep_report" {
+			t.Fatalf("deep report must not be offered: %+v", product)
 		}
 	}
 }
 
-func TestAppBillingOrderStatusKeepsPaymentNotConfigured(t *testing.T) {
+func TestAppBillingOrderStatusKeepsPendingCustomerConfirmation(t *testing.T) {
 	s := newAppBillingTestServer(t)
 
 	response := performAppBillingRequest(t, s.appBillingOrderStatus, http.MethodGet, "/api/app/billing/orders/status?outTradeNo=app7-vip_month-1", nil)
@@ -161,20 +192,20 @@ func TestAppBillingOrderStatusKeepsPaymentNotConfigured(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", response.Code, response.Body.String())
 	}
 	body := decodeAppBillingResponse(t, response)
-	if body.Data.Status != "pending" {
-		t.Fatalf("expected stored order status pending from fixture, got %+v", body.Data)
+	if body.Data.Status != "pending_confirmation" {
+		t.Fatalf("expected stored pending confirmation status, got %+v", body.Data)
 	}
-	if body.Data.PayStatus != "not_configured" {
-		t.Fatalf("expected payStatus not_configured until payment is configured, got %+v", body.Data)
+	if body.Data.PayStatus != "pending_confirmation" {
+		t.Fatalf("expected payStatus pending_confirmation, got %+v", body.Data)
 	}
 	if body.Data.PayEnabled {
 		t.Fatalf("expected payment disabled until configured, got %+v", body.Data)
 	}
-	if body.Data.ConfigurationStatus != "payment_not_configured" {
-		t.Fatalf("expected payment_not_configured configuration status, got %+v", body.Data)
+	if body.Data.PurchaseMode != "customer_service" {
+		t.Fatalf("expected customer service purchase mode, got %+v", body.Data)
 	}
-	if !strings.Contains(body.Data.Message, "不会扣款") {
-		t.Fatalf("expected explicit no-charge message, got %q", body.Data.Message)
+	if !strings.Contains(body.Data.Message, "客服") {
+		t.Fatalf("expected customer confirmation message, got %q", body.Data.Message)
 	}
 }
 
@@ -277,7 +308,7 @@ func (c *appBillingTestConn) BeginTx(context.Context, driver.TxOptions) (driver.
 }
 
 func (c *appBillingTestConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
-	if strings.Contains(query, "INSERT INTO app_orders") && strings.Contains(query, "not_configured") {
+	if strings.Contains(query, "INSERT INTO app_orders") && strings.Contains(query, "pending_confirmation") {
 		return driver.RowsAffected(1), nil
 	}
 	return nil, driver.ErrSkip
@@ -285,10 +316,22 @@ func (c *appBillingTestConn) ExecContext(_ context.Context, query string, _ []dr
 
 func (c *appBillingTestConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	if strings.Contains(query, "FROM app_users") {
+		level := c.memberLevel
+		var startedAt driver.Value
+		var expiresAt driver.Value
 		now := time.Now()
+		if strings.HasPrefix(level, "active:") {
+			level = strings.TrimPrefix(level, "active:")
+			startedAt = now.Add(-24 * time.Hour)
+			expiresAt = now.Add(30 * 24 * time.Hour)
+		} else if strings.HasPrefix(level, "expired:") {
+			level = strings.TrimPrefix(level, "expired:")
+			startedAt = now.Add(-31 * 24 * time.Hour)
+			expiresAt = now.Add(-time.Hour)
+		}
 		return &appBillingTestRows{
-			columns: []string{"id", "phone", "nickname", "avatar", "status", "member_level", "register_source", "last_login_at", "create_time", "update_time"},
-			values:  [][]driver.Value{{int64(7), "13800000000", "tester", "", "active", c.memberLevel, "app", nil, now, now}},
+			columns: []string{"member_level", "member_started_at", "member_expires_at"},
+			values:  [][]driver.Value{{level, startedAt, expiresAt}},
 		}, nil
 	}
 	if strings.Contains(query, "FROM app_user_cards") {
@@ -304,7 +347,7 @@ func (c *appBillingTestConn) QueryContext(_ context.Context, query string, args 
 		}
 		return &appBillingTestRows{
 			columns: []string{"out_trade_no", "product_id", "title", "amount", "status"},
-			values:  [][]driver.Value{{outTradeNo, "vip_month", "月卡会员", int64(2900), "pending"}},
+			values:  [][]driver.Value{{outTradeNo, "vip_month", "月卡会员", int64(2900), "pending_confirmation"}},
 		}, nil
 	}
 	return nil, driver.ErrSkip
