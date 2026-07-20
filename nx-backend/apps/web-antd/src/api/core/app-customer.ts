@@ -6,9 +6,12 @@ export interface AppCustomer {
   id: number;
   lastLoginAt: null | string;
   memberLevel: string;
+  memberExpiresAt?: string;
+  memberStartedAt?: string;
   nickname: string;
   phone: string;
   registerSource: string;
+  remainingDays?: number;
   status: string;
   updateTime: string;
 }

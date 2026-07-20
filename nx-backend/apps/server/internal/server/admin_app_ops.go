@@ -3,6 +3,7 @@ package server
 import (
 	"database/sql"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -48,42 +49,108 @@ func (s *Server) adminAppOrderGrant(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var before adminAppOrder
-	if err := s.db.QueryRowContext(r.Context(), `
-		SELECT o.id, o.out_trade_no, o.app_user_id, COALESCE(u.phone,''), COALESCE(u.nickname,''), COALESCE(u.member_level,''),
-		       o.product_id, o.title, o.amount, o.status, o.transaction_id,
-		       to_char(o.create_time AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'),
-		       to_char(o.update_time AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'), o.paid_at
-		FROM app_orders o LEFT JOIN app_users u ON u.id=o.app_user_id WHERE o.id=$1`, id).Scan(
-		&before.ID, &before.OutTradeNo, &before.AppUserID, &before.Phone, &before.Nickname, &before.MemberLevel,
-		&before.ProductID, &before.Title, &before.Amount, &before.Status, &before.TransactionID,
-		&before.CreateTime, &before.UpdateTime, new(sql.NullTime)); err != nil {
-		httpx.Fail(w, http.StatusNotFound, "order not found")
+	var body struct {
+		ActivationAt string `json:"activationAt"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&body); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "请选择会员生效时间")
+		return
+	}
+	activationAt, err := time.Parse(time.RFC3339, strings.TrimSpace(body.ActivationAt))
+	if err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "会员生效时间格式不正确")
 		return
 	}
 
-	tx, err := s.db.BeginTx(r.Context(), nil)
+	tx, err := s.db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(r.Context(), `UPDATE app_orders SET status='paid', paid_at=COALESCE(paid_at, now()), update_time=now() WHERE id=$1`, id); err != nil {
-		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+	var before adminAppOrder
+	if err := tx.QueryRowContext(r.Context(), `
+		SELECT id, out_trade_no, app_user_id, product_id, title, amount, status, transaction_id
+		FROM app_orders WHERE id=$1 FOR UPDATE`, id).Scan(
+		&before.ID, &before.OutTradeNo, &before.AppUserID, &before.ProductID,
+		&before.Title, &before.Amount, &before.Status, &before.TransactionID,
+	); err != nil {
+		httpx.Fail(w, http.StatusNotFound, "order not found")
 		return
 	}
-	if strings.HasPrefix(before.ProductID, "vip_") {
-		if _, err := tx.ExecContext(r.Context(), `UPDATE app_users SET member_level='vip', update_time=now() WHERE id=$1`, before.AppUserID); err != nil {
+	if before.Status == "paid" {
+		var level string
+		var startedAt, expiresAt sql.NullTime
+		if err := tx.QueryRowContext(r.Context(), `SELECT member_level, member_started_at, member_expires_at FROM app_users WHERE id=$1`, before.AppUserID).Scan(&level, &startedAt, &expiresAt); err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		if err := tx.Commit(); err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		httpx.OK(w, adminMembershipGrantResp{OrderID: id, PlanCode: level, StartedAt: formatNullableTime(startedAt), ExpiresAt: formatNullableTime(expiresAt), AlreadyGranted: true})
+		return
+	}
+	if _, err := membershipDurationDays(before.ProductID); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "订单商品不是可开通的会员套餐")
+		return
+	}
+	var currentStartedAt, currentExpiresAt sql.NullTime
+	if err := tx.QueryRowContext(r.Context(), `SELECT member_started_at, member_expires_at FROM app_users WHERE id=$1 FOR UPDATE`, before.AppUserID).Scan(&currentStartedAt, &currentExpiresAt); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var currentExpiry *time.Time
+	if currentExpiresAt.Valid {
+		currentExpiry = &currentExpiresAt.Time
+	}
+	period, err := calculateMembershipPeriod(before.ProductID, activationAt, currentExpiry)
+	if err != nil {
+		httpx.Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	startedAt := period.Start
+	if currentExpiresAt.Valid && currentExpiresAt.Time.After(activationAt) && currentStartedAt.Valid {
+		startedAt = currentStartedAt.Time
+	}
+	if _, err := tx.ExecContext(r.Context(), `
+		UPDATE app_users
+		SET member_level=$1, member_started_at=$2, member_expires_at=$3, update_time=now()
+		WHERE id=$4`, before.ProductID, startedAt, period.Expires, before.AppUserID); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), `
+		UPDATE app_orders
+		SET status='paid', paid_at=COALESCE(paid_at, now()), activation_at=$2,
+		    membership_expires_at=$3, update_time=now()
+		WHERE id=$1`, id, activationAt, period.Expires); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	if err := tx.Commit(); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.recordAdminAudit(r, auditlog.Entry{Action: "app_order.grant", TargetType: "app_order", TargetID: strconv.FormatInt(id, 10), Before: before, After: map[string]any{"status": "paid", "memberLevelGranted": strings.HasPrefix(before.ProductID, "vip_")}, Summary: "补发 App 订单权益"})
-	httpx.OK(w, true)
+	after := adminMembershipGrantResp{OrderID: id, PlanCode: before.ProductID, StartedAt: startedAt.Format(time.RFC3339), ExpiresAt: period.Expires.Format(time.RFC3339)}
+	s.recordAdminAudit(r, auditlog.Entry{Action: "app_order.grant", TargetType: "app_order", TargetID: strconv.FormatInt(id, 10), Before: before, After: after, Summary: "确认收款并开通 App 会员"})
+	httpx.OK(w, after)
+}
+
+type adminMembershipGrantResp struct {
+	OrderID        int64  `json:"orderId"`
+	PlanCode       string `json:"planCode"`
+	StartedAt      string `json:"startedAt"`
+	ExpiresAt      string `json:"expiresAt"`
+	AlreadyGranted bool   `json:"alreadyGranted"`
+}
+
+func formatNullableTime(value sql.NullTime) string {
+	if !value.Valid {
+		return ""
+	}
+	return value.Time.Format(time.RFC3339)
 }
 
 func (s *Server) adminAppChatMessages(w http.ResponseWriter, r *http.Request) {

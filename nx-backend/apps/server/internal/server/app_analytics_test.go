@@ -459,7 +459,7 @@ func (c *appAnalyticsTestConn) QueryContext(ctx context.Context, query string, a
 	if strings.Contains(query, "FROM app_users") {
 		now := time.Now()
 		return &appAnalyticsRows{
-			columns: []string{"id", "phone", "nickname", "avatar", "status", "member_level", "register_source", "last_login_at", "create_time", "update_time"},
+			columns: []string{"id", "phone", "nickname", "avatar", "status", "member_level", "member_started_at", "member_expires_at", "register_source", "last_login_at", "create_time", "update_time"},
 			values: [][]driver.Value{{
 				int64(42),
 				"13800009005",
@@ -467,6 +467,8 @@ func (c *appAnalyticsTestConn) QueryContext(ctx context.Context, query string, a
 				"",
 				"active",
 				"free",
+				nil,
+				nil,
 				"sms",
 				nil,
 				now,

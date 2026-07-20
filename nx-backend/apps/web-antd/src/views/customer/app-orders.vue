@@ -2,6 +2,7 @@
 import type { AppOrder } from '#/api';
 
 import { computed, onMounted, reactive, ref } from 'vue';
+import dayjs, { type Dayjs } from 'dayjs';
 
 import { Page } from '@vben/common-ui';
 import { useAccessStore } from '@vben/stores';
@@ -12,6 +13,7 @@ import {
   message,
   Modal,
   Descriptions,
+  DatePicker,
   Drawer,
   Input,
   Select,
@@ -22,6 +24,11 @@ import {
 
 import { getAppOrderListApi, grantAppOrderApi } from '#/api';
 import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
+import {
+  buildMembershipGrantPayload,
+  memberPlanLabel,
+  membershipStatusLabel,
+} from './app-membership';
 
 const APP_ORDER_WRITE_PERMISSION = 'Customer:AppOrders:Write';
 
@@ -34,6 +41,10 @@ const orders = ref<AppOrder[]>([]);
 const total = ref(0);
 const detailOpen = ref(false);
 const current = ref<AppOrder>();
+const grantOpen = ref(false);
+const grantSaving = ref(false);
+const grantRecord = ref<AppOrder>();
+const activationAt = ref<Dayjs>(dayjs());
 
 const query = reactive({
   keyword: '',
@@ -45,9 +56,8 @@ const query = reactive({
 
 const statusOptions = [
   { label: '全部状态', value: '' },
-  { label: '待配置支付', value: 'not_configured' },
-  { label: '待支付', value: 'pending' },
-  { label: '已支付', value: 'paid' },
+  { label: '待客服确认', value: 'pending_confirmation' },
+  { label: '已开通', value: 'paid' },
   { label: '已关闭', value: 'closed' },
 ];
 
@@ -56,7 +66,6 @@ const productOptions = [
   { label: '月卡会员', value: 'vip_month' },
   { label: '季卡会员', value: 'vip_quarter' },
   { label: '年卡会员', value: 'vip_year' },
-  { label: '深度报告', value: 'deep_report' },
 ];
 
 const columns = [
@@ -66,6 +75,8 @@ const columns = [
   { dataIndex: 'amount', title: '金额', width: 100 },
   { dataIndex: 'status', title: '状态', width: 120 },
   { dataIndex: 'memberLevel', title: '会员', width: 100 },
+  { dataIndex: 'memberExpiresAt', title: '会员到期', width: 180 },
+  { dataIndex: 'remainingDays', title: '剩余天数', width: 100 },
   { dataIndex: 'createTime', title: '创建时间', width: 180 },
   { fixed: 'right' as const, key: 'action', title: '操作', width: 100 },
 ];
@@ -75,7 +86,7 @@ function orderRecord(record: Record<string, any>): AppOrder {
 }
 
 function statusLabel(status?: string) {
-  return statusOptions.find((item) => item.value === status)?.label || status || '-';
+  return membershipStatusLabel(status);
 }
 
 function statusColor(status?: string) {
@@ -86,9 +97,7 @@ function statusColor(status?: string) {
 }
 
 function memberLabel(level?: string) {
-  if (level === 'vip') return 'VIP';
-  if (level === 'svip') return 'SVIP';
-  return '普通';
+  return memberPlanLabel(level);
 }
 
 function amountText(amount?: number) {
@@ -131,16 +140,28 @@ function openDetail(record: AppOrder) {
   detailOpen.value = true;
 }
 
-async function grantOrder(record: AppOrder) {
-  Modal.confirm({
-    title: '确认补发权益？',
-    content: `将订单 ${record.outTradeNo} 标记为已支付，并按商品发放权益。`,
-    async onOk() {
-      await grantAppOrderApi(record.id);
-      message.success('订单权益已补发');
-      await load();
-    },
-  });
+function grantOrder(record: AppOrder) {
+  grantRecord.value = record;
+  activationAt.value = dayjs();
+  grantOpen.value = true;
+}
+
+async function confirmGrant() {
+  if (!grantRecord.value || !activationAt.value) return;
+  grantSaving.value = true;
+  try {
+    const result = await grantAppOrderApi(
+      grantRecord.value.id,
+      buildMembershipGrantPayload(activationAt.value.toDate()),
+    );
+    message.success(
+      result.alreadyGranted ? '该订单已经开通过会员' : `会员已开通，有效期至 ${result.expiresAt}`,
+    );
+    grantOpen.value = false;
+    await load();
+  } finally {
+    grantSaving.value = false;
+  }
 }
 
 onMounted(() => {
@@ -149,7 +170,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <Page description="查看 App 用户创建的订单，后续可扩展补发权益和异常处理。" title="App 订单">
+  <Page description="处理用户通过客服微信转账后创建的会员订单。" title="App 订单">
     <Card :bordered="false">
       <div class="toolbar">
         <Input
@@ -212,7 +233,7 @@ onMounted(() => {
                 type="link"
                 @click="grantOrder(orderRecord(record))"
               >
-                补发
+                确认开通
               </Button>
             </Space>
           </template>
@@ -233,8 +254,35 @@ onMounted(() => {
         <Descriptions.Item label="创建时间">{{ current.createTime }}</Descriptions.Item>
         <Descriptions.Item label="更新时间">{{ current.updateTime }}</Descriptions.Item>
         <Descriptions.Item label="支付时间">{{ current.paidAt || '-' }}</Descriptions.Item>
+        <Descriptions.Item label="会员生效时间">{{ current.activationAt || '-' }}</Descriptions.Item>
+        <Descriptions.Item label="本单开通后到期">{{ current.membershipExpiresAt || '-' }}</Descriptions.Item>
+        <Descriptions.Item label="当前会员到期">{{ current.memberExpiresAt || '-' }}</Descriptions.Item>
       </Descriptions>
     </Drawer>
+
+    <Modal
+      v-model:open="grantOpen"
+      :confirm-loading="grantSaving"
+      ok-text="确认收款并开通"
+      title="确认会员开通"
+      @ok="confirmGrant"
+    >
+      <Descriptions v-if="grantRecord" bordered :column="1" size="small">
+        <Descriptions.Item label="套餐">{{ grantRecord.title }}</Descriptions.Item>
+        <Descriptions.Item label="用户手机号">{{ grantRecord.phone || '-' }}</Descriptions.Item>
+        <Descriptions.Item label="订单号">{{ grantRecord.outTradeNo }}</Descriptions.Item>
+      </Descriptions>
+      <div class="activation-field">
+        <div class="activation-label">会员生效时间</div>
+        <DatePicker
+          v-model:value="activationAt"
+          show-time
+          class="activation-picker"
+          format="YYYY-MM-DD HH:mm:ss"
+        />
+        <div class="activation-help">仍在有效期内的会员会从原到期时间继续顺延。</div>
+      </div>
+    </Modal>
   </Page>
 </template>
 
@@ -252,5 +300,24 @@ onMounted(() => {
 
 .filter-select {
   width: 160px;
+}
+
+.activation-field {
+  margin-top: 20px;
+}
+
+.activation-label {
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.activation-picker {
+  width: 100%;
+}
+
+.activation-help {
+  margin-top: 8px;
+  color: var(--ant-color-text-secondary);
+  font-size: 13px;
 }
 </style>

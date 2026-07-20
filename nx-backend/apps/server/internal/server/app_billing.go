@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +20,8 @@ type appEntitlementResp struct {
 	DeepReportRemaining int    `json:"deepReportRemaining"`
 	CardLimit           int    `json:"cardLimit"`
 	CardUsed            int    `json:"cardUsed"`
+	StartedAt           string `json:"startedAt,omitempty"`
+	ExpiresAt           string `json:"expiresAt,omitempty"`
 }
 
 type appProductResp struct {
@@ -32,13 +35,13 @@ type appProductResp struct {
 	PayEnabled          bool     `json:"payEnabled"`
 	ConfigurationStatus string   `json:"configurationStatus"`
 	DisabledReason      string   `json:"disabledReason,omitempty"`
+	PurchaseMode        string   `json:"purchaseMode"`
 }
 
 const (
-	appPaymentConfigurationNotConfigured = "payment_not_configured"
-	appPaymentStatusNotConfigured        = "not_configured"
-	appPaymentDisabledReason             = "支付通道未配置，当前不会扣款"
-	appPaymentNotConfiguredMessage       = "支付通道未开放，不会扣款"
+	appPurchaseModeCustomerService = "customer_service"
+	appOrderPendingConfirmation    = "pending_confirmation"
+	appCustomerServiceQRURL        = "/api/public/customer-service-qr"
 )
 
 func appCardLimit(memberLevel string) int {
@@ -82,8 +85,14 @@ func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) 
 		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	user, err := s.appUsers.FindByID(r.Context(), userInfo.ID)
-	if err != nil {
+	var memberLevel string
+	var memberStartedAt sql.NullTime
+	var memberExpiresAt sql.NullTime
+	if err := s.db.QueryRowContext(r.Context(), `
+		SELECT member_level, member_started_at, member_expires_at
+		FROM app_users WHERE id=$1 AND status='active'`, userInfo.ID).Scan(
+		&memberLevel, &memberStartedAt, &memberExpiresAt,
+	); err != nil {
 		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -92,62 +101,67 @@ func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) 
 		`SELECT count(*) FROM app_user_cards
 		 WHERE app_user_id = $1 AND card_type='secondary' AND status='active'`,
 		userInfo.ID).Scan(&cardUsed)
-	planCode := appPlanCode(user.MemberLevel)
+	planCode := appPlanCode(memberLevel)
+	legacyWithoutExpiry := (memberLevel == "vip" || memberLevel == "svip") && !memberExpiresAt.Valid
+	isMember := planCode != "free" && (legacyWithoutExpiry || (memberExpiresAt.Valid && memberExpiresAt.Time.After(time.Now())))
+	if !isMember {
+		planCode = "free"
+	}
+	startedAt := ""
+	expiresAt := ""
+	if isMember && memberStartedAt.Valid {
+		startedAt = memberStartedAt.Time.Format(time.RFC3339)
+	}
+	if isMember && memberExpiresAt.Valid {
+		expiresAt = memberExpiresAt.Time.Format(time.RFC3339)
+	}
 	httpx.OK(w, appEntitlementResp{
 		PlanName:            appPlanName(planCode),
 		PlanCode:            planCode,
-		IsMember:            planCode != "free",
+		IsMember:            isMember,
 		ChatRemaining:       0,
 		DeepReportRemaining: 0,
 		CardLimit:           appCardLimit(planCode),
 		CardUsed:            cardUsed,
+		StartedAt:           startedAt,
+		ExpiresAt:           expiresAt,
 	})
 }
 
 func (s *Server) appBillingProducts(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, []appProductResp{
-		appPaymentPlaceholderProduct(appProductResp{
+		appCustomerServiceProduct(appProductResp{
 			ID:        "vip_month",
 			Title:     "月卡会员",
 			Subtitle:  "适合轻度陪伴与日常问答",
-			PriceText: "待开放",
+			PriceText: "¥29",
 			Badge:     "推荐",
 			Features:  []string{"更多问答额度", "最多 5 张人物卡", "成长练习完整记录"},
-			Enabled:   false,
+			Enabled:   true,
 		}),
-		appPaymentPlaceholderProduct(appProductResp{
+		appCustomerServiceProduct(appProductResp{
 			ID:        "vip_quarter",
 			Title:     "季卡会员",
 			Subtitle:  "适合持续成长陪伴",
-			PriceText: "待开放",
+			PriceText: "¥79",
 			Features:  []string{"月卡全部权益", "更长会员有效期", "后续周报优先体验"},
-			Enabled:   false,
+			Enabled:   true,
 		}),
-		appPaymentPlaceholderProduct(appProductResp{
+		appCustomerServiceProduct(appProductResp{
 			ID:        "vip_year",
 			Title:     "年卡会员",
 			Subtitle:  "适合长期自我探索",
-			PriceText: "待开放",
+			PriceText: "¥199",
 			Badge:     "省心",
-			Features:  []string{"全年会员权益", "深度报告权益", "新功能优先体验"},
-			Enabled:   false,
-		}),
-		appPaymentPlaceholderProduct(appProductResp{
-			ID:        "deep_report",
-			Title:     "深度报告",
-			Subtitle:  "解锁更完整的人格分析",
-			PriceText: "待开放",
-			Features:  []string{"压力点分析", "关系模式分析", "成长建议整理"},
-			Enabled:   false,
+			Features:  []string{"全年会员权益", "长期成长画像", "会员专属海报模板"},
+			Enabled:   true,
 		}),
 	})
 }
 
-func appPaymentPlaceholderProduct(product appProductResp) appProductResp {
-	product.Enabled = false
+func appCustomerServiceProduct(product appProductResp) appProductResp {
 	product.PayEnabled = false
-	product.ConfigurationStatus = appPaymentConfigurationNotConfigured
-	product.DisabledReason = appPaymentDisabledReason
+	product.PurchaseMode = appPurchaseModeCustomerService
 	return product
 }
 
@@ -156,17 +170,19 @@ type appOrderCreateReq struct {
 }
 
 type appOrderResp struct {
-	OutTradeNo          string         `json:"outTradeNo"`
-	ProductID           string         `json:"productId"`
-	Title               string         `json:"title"`
-	Amount              int            `json:"amount"`
-	Status              string         `json:"status"`
-	PayStatus           string         `json:"payStatus"`
-	PayEnabled          bool           `json:"payEnabled"`
-	ConfigurationStatus string         `json:"configurationStatus"`
-	DisabledReason      string         `json:"disabledReason,omitempty"`
-	PayParams           map[string]any `json:"payParams,omitempty"`
-	Message             string         `json:"message"`
+	OutTradeNo           string         `json:"outTradeNo"`
+	ProductID            string         `json:"productId"`
+	Title                string         `json:"title"`
+	Amount               int            `json:"amount"`
+	Status               string         `json:"status"`
+	PayStatus            string         `json:"payStatus"`
+	PayEnabled           bool           `json:"payEnabled"`
+	ConfigurationStatus  string         `json:"configurationStatus"`
+	DisabledReason       string         `json:"disabledReason,omitempty"`
+	PayParams            map[string]any `json:"payParams,omitempty"`
+	Message              string         `json:"message"`
+	PurchaseMode         string         `json:"purchaseMode"`
+	CustomerServiceQRURL string         `json:"customerServiceQrUrl"`
 }
 
 func appProductTitle(productID string) string {
@@ -177,8 +193,6 @@ func appProductTitle(productID string) string {
 		return "季卡会员"
 	case "vip_year":
 		return "年卡会员"
-	case "deep_report":
-		return "深度报告"
 	default:
 		return ""
 	}
@@ -192,8 +206,6 @@ func appProductAmount(productID string) int {
 		return 7900
 	case "vip_year":
 		return 19900
-	case "deep_report":
-		return 990
 	default:
 		return 0
 	}
@@ -220,17 +232,17 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 	outTradeNo := fmt.Sprintf("app%d-%s-%d", userInfo.ID, productID, time.Now().UnixNano())
 	if _, err := s.db.ExecContext(r.Context(),
 		`INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, status)
-		 VALUES ($1, $2, $3, $4, $5, 'not_configured')`,
+		 VALUES ($1, $2, $3, $4, $5, 'pending_confirmation')`,
 		outTradeNo, userInfo.ID, productID, title, amount); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	httpx.OK(w, appPaymentNotConfiguredOrder(appOrderResp{
+	httpx.OK(w, appCustomerServiceOrder(appOrderResp{
 		OutTradeNo: outTradeNo,
 		ProductID:  productID,
 		Title:      title,
 		Amount:     amount,
-		Status:     appPaymentStatusNotConfigured,
+		Status:     appOrderPendingConfirmation,
 	}))
 }
 
@@ -254,14 +266,18 @@ func (s *Server) appBillingOrderStatus(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusNotFound, "order not found")
 		return
 	}
-	httpx.OK(w, appPaymentNotConfiguredOrder(resp))
+	httpx.OK(w, appCustomerServiceOrder(resp))
 }
 
-func appPaymentNotConfiguredOrder(resp appOrderResp) appOrderResp {
-	resp.PayStatus = appPaymentStatusNotConfigured
+func appCustomerServiceOrder(resp appOrderResp) appOrderResp {
+	resp.PayStatus = resp.Status
 	resp.PayEnabled = false
-	resp.ConfigurationStatus = appPaymentConfigurationNotConfigured
-	resp.DisabledReason = appPaymentDisabledReason
-	resp.Message = appPaymentNotConfiguredMessage
+	resp.PurchaseMode = appPurchaseModeCustomerService
+	resp.CustomerServiceQRURL = appCustomerServiceQRURL
+	if resp.Status == "paid" {
+		resp.Message = "会员已由客服确认开通"
+	} else {
+		resp.Message = "请添加客服微信并提供手机号和订单号，转账后由客服确认开通"
+	}
 	return resp
 }

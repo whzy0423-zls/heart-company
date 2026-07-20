@@ -35,6 +35,7 @@ import {
   canEditAppCustomer,
   createAppCustomerEditForm,
 } from './app-user-edit';
+import { memberPlanLabel } from './app-membership';
 
 const statusOptions = [
   { color: 'success', label: '正常', value: 'active' },
@@ -63,6 +64,9 @@ const memberLevelLabels: Record<string, string> = {
   free: '普通用户',
   vip: 'VIP 会员',
   svip: '超级会员',
+  vip_month: '月包会员',
+  vip_quarter: '季包会员',
+  vip_year: '年包会员',
 };
 
 const router = useRouter();
@@ -96,6 +100,8 @@ const columns = [
   { dataIndex: 'phone', fixed: 'left' as const, title: '手机号', width: 160 },
   { dataIndex: 'nickname', title: '昵称', width: 160 },
   { dataIndex: 'memberLevel', title: '会员等级', width: 130 },
+  { dataIndex: 'memberExpiresAt', title: '会员到期', width: 180 },
+  { dataIndex: 'remainingDays', title: '剩余天数', width: 100 },
   { dataIndex: 'status', title: '状态', width: 100 },
   { dataIndex: 'registerSource', title: '注册来源', width: 130 },
   { dataIndex: 'lastLoginAt', title: '最后登录', width: 180 },
@@ -111,7 +117,7 @@ function statusMeta(status?: string): StatusMeta {
 
 function memberLevelLabel(value?: string) {
   if (!value) return '-';
-  return memberLevelLabels[value] || value;
+  return memberLevelLabels[value] || memberPlanLabel(value);
 }
 
 function sourceLabel(value?: string) {
@@ -393,6 +399,15 @@ onMounted(() => {
           </Descriptions.Item>
           <Descriptions.Item label="会员等级">
             {{ memberLevelLabel(detail.memberLevel) }}
+          </Descriptions.Item>
+          <Descriptions.Item label="会员开始时间">
+            {{ detail.memberStartedAt || '-' }}
+          </Descriptions.Item>
+          <Descriptions.Item label="会员到期时间">
+            {{ detail.memberExpiresAt || '-' }}
+          </Descriptions.Item>
+          <Descriptions.Item label="剩余天数">
+            {{ detail.remainingDays ?? 0 }} 天
           </Descriptions.Item>
           <Descriptions.Item label="状态">
             {{ statusMeta(detail.status).label }}
