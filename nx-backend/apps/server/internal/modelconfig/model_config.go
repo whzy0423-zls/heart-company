@@ -33,11 +33,13 @@ const (
 	ProviderAnthropicCompatible = "anthropic-compatible"
 )
 
-// ChatConfig 对话模型（MiniMax 兼容）可配置项。
+// ChatConfig 对话模型中转站可配置项。
 type ChatConfig struct {
-	APIBase string `json:"apiBase"`
-	APIKey  string `json:"apiKey"`
-	GroupID string `json:"groupId"`
+	Provider string `json:"provider"`
+	APIBase  string `json:"apiBase"`
+	APIKey   string `json:"apiKey"`
+	// GroupID 仅用于读取旧配置；兼容协议运行时不会使用或回显。
+	GroupID string `json:"groupId,omitempty"`
 	Model   string `json:"model"`
 }
 
@@ -157,15 +159,25 @@ func UpsertStore(ctx context.Context, db *sql.DB, cfg Config) error {
 // ApplyChat 把覆盖值叠加到环境变量基线上，空字段回退到 base。
 func (c Config) ApplyChat(base config.MiniMaxConfig) config.MiniMaxConfig {
 	out := base
+	provider := normalizeProvider(c.Chat.Provider)
+	if provider == "" {
+		provider = normalizeProvider(base.Provider)
+	}
+	if provider == "" {
+		provider = ProviderOpenAICompatible
+	}
+	out.Provider = provider
 	if v := strings.TrimSpace(c.Chat.APIBase); v != "" {
 		out.APIBase = v
+	}
+	out.APIBase = strings.TrimRight(strings.TrimSpace(out.APIBase), "/")
+	if out.APIBase == "" {
+		out.APIBase = "https://coding-play.codes"
 	}
 	if v := strings.TrimSpace(c.Chat.APIKey); v != "" {
 		out.APIKey = v
 	}
-	if v := strings.TrimSpace(c.Chat.GroupID); v != "" {
-		out.GroupID = v
-	}
+	out.GroupID = ""
 	if v := strings.TrimSpace(c.Chat.Model); v != "" {
 		out.Model = v
 	}
@@ -313,10 +325,10 @@ func (c Config) MergeIncoming(in Config) Config {
 func (c Config) trimmed() Config {
 	return Config{
 		Chat: ChatConfig{
-			APIBase: strings.TrimSpace(c.Chat.APIBase),
-			APIKey:  strings.TrimSpace(c.Chat.APIKey),
-			GroupID: strings.TrimSpace(c.Chat.GroupID),
-			Model:   strings.TrimSpace(c.Chat.Model),
+			Provider: normalizeProvider(c.Chat.Provider),
+			APIBase:  strings.TrimRight(strings.TrimSpace(c.Chat.APIBase), "/"),
+			APIKey:   strings.TrimSpace(c.Chat.APIKey),
+			Model:    strings.TrimSpace(c.Chat.Model),
 		},
 		Video: VideoConfig{
 			APIBase: strings.TrimSpace(c.Video.APIBase),

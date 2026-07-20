@@ -106,6 +106,7 @@ type EmbeddingConfig struct {
 }
 
 type MiniMaxConfig struct {
+	Provider       string
 	APIBase        string
 	APIKey         string
 	GroupID        string
@@ -277,6 +278,7 @@ func Load() Env {
 		PublicBaseURL:     strings.TrimRight(strings.TrimSpace(getenv("PUBLIC_BASE_URL", "")), "/"),
 		TrustedProxyCIDRs: parseCSV(getenv("TRUSTED_PROXY_CIDRS", "")),
 		MiniMax: MiniMaxConfig{
+			Provider:       getenv("CHAT_MODEL_PROVIDER", "openai-compatible"),
 			APIBase:        getenv("MINIMAX_API_BASE", "https://api.minimaxi.com"),
 			APIKey:         getenv("MINIMAX_API_KEY", ""),
 			GroupID:        getenv("MINIMAX_GROUP_ID", ""),

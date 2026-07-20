@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/llm"
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
@@ -663,6 +664,29 @@ func TestBuildModelConfigViewIncludesDailyQuizConfig(t *testing.T) {
 	}
 	if !view.DailyQuiz.APIKeySet {
 		t.Fatal("expected daily quiz apiKeySet to reflect configured secret")
+	}
+}
+
+func TestBuildModelConfigViewIncludesCompatibleChatProviderWithoutGroupID(t *testing.T) {
+	chat := config.MiniMaxConfig{
+		Provider: modelconfig.ProviderAnthropicCompatible,
+		APIBase:  "https://coding-play.codes",
+		APIKey:   "chat-secret",
+		Model:    "claude-sonnet-4-5",
+		GroupID:  "legacy-group",
+	}
+
+	view := buildModelConfigView(chat, config.VideoConfig{}, config.ImageConfig{}, config.MiniMaxConfig{}, modelconfig.AdminModelConfig{}, modelconfig.CompatibleModelConfig{}, modelconfig.Config{})
+
+	if view.Chat.Provider != modelconfig.ProviderAnthropicCompatible || view.Chat.APIBase != "https://coding-play.codes" || view.Chat.Model != "claude-sonnet-4-5" || !view.Chat.APIKeySet {
+		t.Fatalf("unexpected compatible chat view: %+v", view.Chat)
+	}
+}
+
+func TestNewChatGeneratorUsesCompatibleProtocolAdapter(t *testing.T) {
+	generator := newChatGenerator(config.MiniMaxConfig{Provider: modelconfig.ProviderOpenAICompatible})
+	if _, ok := generator.(*llm.CompatibleChatGenerator); !ok {
+		t.Fatalf("chat generator type = %T", generator)
 	}
 }
 

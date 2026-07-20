@@ -175,7 +175,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.miniapp = miniapp.NewStore(database)
 	s.wx = newWeChatClient(env)
 	s.pay = mustWxPayClient(env)
-	s.ragGen = llm.NewMiniMaxGenerator(env.MiniMax)
+	s.ragGen = newChatGenerator(modelconfig.Config{}.ApplyChat(env.MiniMax))
 	s.analysisGen = llm.NewMiniMaxGenerator(modelconfig.Config{}.ApplyAnalysis(env.MiniMax))
 	s.ragDocs = ragstore.NewStore(database)
 	s.articles = articlestore.NewStore(database)
@@ -255,7 +255,7 @@ func (s *Server) applyStoredModelConfig() {
 	}
 	// AI 辅助关闭时不挂生成器：聊天仅走资料检索/固定兜底（rag.Service 对 nil 生成器安全）。
 	if cfg.AssistEnabled() {
-		s.ragGen = llm.NewMiniMaxGenerator(cfg.ApplyChat(s.env.MiniMax))
+		s.ragGen = newChatGenerator(cfg.ApplyChat(s.env.MiniMax))
 	} else {
 		s.ragGen = nil
 	}
@@ -269,6 +269,10 @@ func (s *Server) generator() rag.Generator {
 	s.modelMu.RLock()
 	defer s.modelMu.RUnlock()
 	return s.ragGen
+}
+
+func newChatGenerator(cfg config.MiniMaxConfig) rag.Generator {
+	return llm.NewCompatibleChatGenerator(cfg)
 }
 
 func (s *Server) analysisGenerator() *llm.MiniMaxGenerator {
@@ -2195,8 +2199,8 @@ func (s *Server) adminBranding(w http.ResponseWriter, r *http.Request) {
 // 仅以布尔位告知当前是否已配置密钥（用于前端 placeholder 提示）。
 type modelConfigView struct {
 	Chat struct {
+		Provider  string `json:"provider"`
 		APIBase   string `json:"apiBase"`
-		GroupID   string `json:"groupId"`
 		Model     string `json:"model"`
 		APIKeySet bool   `json:"apiKeySet"`
 	} `json:"chat"`
@@ -2243,9 +2247,9 @@ func modelConfigAuditSnapshot(cfg modelconfig.Config) map[string]any {
 	return map[string]any{
 		"assistEnabled": cfg.AssistEnabled(),
 		"chat": map[string]any{
+			"provider":  cfg.Chat.Provider,
 			"apiBase":   cfg.Chat.APIBase,
 			"apiKeySet": cfg.Chat.APIKey != "",
-			"groupId":   cfg.Chat.GroupID,
 			"model":     cfg.Chat.Model,
 		},
 		"video": map[string]any{
@@ -2288,8 +2292,8 @@ func modelConfigAuditSnapshot(cfg modelconfig.Config) map[string]any {
 // stored 用于回显 AI 辅助开关与系统提示词（提示词非密钥，明文回显）。
 func buildModelConfigView(chat config.MiniMaxConfig, vid config.VideoConfig, img config.ImageConfig, analysis config.MiniMaxConfig, admin modelconfig.AdminModelConfig, dailyQuiz modelconfig.CompatibleModelConfig, stored modelconfig.Config) modelConfigView {
 	var view modelConfigView
+	view.Chat.Provider = chat.Provider
 	view.Chat.APIBase = chat.APIBase
-	view.Chat.GroupID = chat.GroupID
 	view.Chat.Model = chat.Model
 	view.Chat.APIKeySet = strings.TrimSpace(chat.APIKey) != ""
 	view.Video.APIBase = vid.APIBase
@@ -2320,6 +2324,9 @@ func buildModelConfigView(chat config.MiniMaxConfig, vid config.VideoConfig, img
 }
 
 func validateModelConfigBases(cfg modelconfig.Config) error {
+	if provider := strings.ToLower(strings.TrimSpace(cfg.Chat.Provider)); provider != "" && provider != modelconfig.ProviderOpenAICompatible && provider != modelconfig.ProviderAnthropicCompatible && provider != "openai" && provider != "anthropic" {
+		return fmt.Errorf("chat.provider must be openai-compatible or anthropic-compatible")
+	}
 	for label, apiBase := range map[string]string{
 		"analysis.apiBase":  cfg.Analysis.APIBase,
 		"admin.apiBase":     cfg.Admin.APIBase,
@@ -2409,7 +2416,7 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 		// AI 辅助关闭时不挂生成器：聊天仅走资料检索/固定兜底（rag.Service 对 nil 生成器安全）。
 		s.modelMu.Lock()
 		if merged.AssistEnabled() {
-			s.ragGen = llm.NewMiniMaxGenerator(chat)
+			s.ragGen = newChatGenerator(chat)
 		} else {
 			s.ragGen = nil
 		}
@@ -2422,8 +2429,8 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// testChatModel 对对话模型（MiniMax）网关做一次连通性探活（POST，需登录）。
-// 入参可选：前端表单当前填写的"地址/密钥/GroupId/模型名"。密钥留空表示沿用已存配置，
+// testChatModel 对对话模型中转站做一次连通性探活（POST，需登录）。
+// 入参可选：前端表单当前填写的"协议/地址/密钥/模型名"。密钥留空表示沿用已存配置，
 // 这样用户既能测"刚输入还没保存"的配置，也能直接测"当前已保存"的配置。
 // 返回结构化探活结果（ok/message/延迟），密钥一律不回传。
 func (s *Server) testChatModel(w http.ResponseWriter, r *http.Request) {
@@ -2451,7 +2458,7 @@ func (s *Server) testChatModel(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	result := llm.NewMiniMaxGenerator(chat).Ping(ctx)
+	result := llm.NewCompatibleChatGenerator(chat).Ping(ctx)
 
 	httpx.OK(w, result)
 }
