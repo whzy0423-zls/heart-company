@@ -100,6 +100,59 @@ func TestVoiceChatPersistsAudioAndHidesTranscriptFromResponse(t *testing.T) {
 	}
 }
 
+func TestVoiceChatPassesSecondaryCardContextToGenerator(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"text": "她最近为什么总是迎合别人？"})
+	}))
+	defer upstream.Close()
+	previousClientFactory := newASRHTTPClient
+	newASRHTTPClient = func(timeout time.Duration) *http.Client {
+		client := upstream.Client()
+		client.Timeout = timeout
+		return client
+	}
+	t.Cleanup(func() { newASRHTTPClient = previousClientFactory })
+
+	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	generator := &voiceChatGenerator{answer: "可以先确认她真正想要什么"}
+	s := newVoiceChatTestServer(store, generator)
+	s.env.ASR = config.ASRConfig{APIBase: upstream.URL, APIKey: "test-key", Model: "whisper-1", TimeoutSeconds: 3}
+	s.appChatProfilesForCardOverride = func(_ context.Context, userID, cardID int64) (rag.UserProfile, rag.ConversationCard) {
+		if userID != 7 || cardID != 0 {
+			t.Fatalf("unexpected profile lookup: user=%d card=%d", userID, cardID)
+		}
+		return rag.UserProfile{Nickname: "小王", MainType: 6}, rag.ConversationCard{
+			CardType: "secondary",
+			Name:     "妈妈",
+			Relation: "家人",
+			MainType: 2,
+			WingType: 1,
+			Profile:  `{"primaryMotivation":"希望被需要"}`,
+		}
+	}
+	s.voiceAssetCreate = func(_ context.Context, input uploadasset.CreateInput) (uploadasset.Asset, error) {
+		return uploadasset.Asset{ID: 88}, nil
+	}
+	body, contentType := voiceChatMultipartBody(t, "voice.aac", "audio/aac", "audio", "3200")
+	req := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/voice", body)
+	req.Header.Set("Content-Type", contentType)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	response := httptest.NewRecorder()
+
+	s.appChatRouter(response, req)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("voice chat failed: %d %s", response.Code, response.Body.String())
+	}
+	card := generator.input.ConversationCard
+	if card.CardType != "secondary" || card.Name != "妈妈" || card.Relation != "家人" || card.MainType != 2 || card.WingType != 1 || !strings.Contains(card.Profile, "希望被需要") {
+		t.Fatalf("secondary conversation card missing from voice generation: %+v", card)
+	}
+	if generator.input.Tier != "basic" {
+		t.Fatalf("voice conversation tier = %q, want basic", generator.input.Tier)
+	}
+}
+
 func TestVoiceChatPersistsPunctuationOnlySilentAudioWithoutAI(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"text": "."})
@@ -329,11 +382,13 @@ type voiceChatGenerator struct {
 	answer   string
 	question string
 	calls    int
+	input    rag.GenerateInput
 }
 
 func (g *voiceChatGenerator) Generate(_ context.Context, input rag.GenerateInput) (string, error) {
 	g.calls++
 	g.question = input.Question
+	g.input = input
 	return g.answer, nil
 }
 

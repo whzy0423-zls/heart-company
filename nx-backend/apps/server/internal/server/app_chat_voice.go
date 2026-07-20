@@ -63,6 +63,11 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "文件过大或格式错误")
 		return
 	}
+	tier, err := s.appChatTierForUser(r.Context(), userInfo.ID, r.FormValue("tier"))
+	if err != nil {
+		failAppChatTier(w, err)
+		return
+	}
 	durationMs, err := strconv.Atoi(strings.TrimSpace(r.FormValue("durationMs")))
 	if err != nil || durationMs < voiceChatMinDurationMs || durationMs > voiceChatMaxDurationMs {
 		httpx.Fail(w, http.StatusBadRequest, "语音时长需在 0.8 到 60 秒之间")
@@ -148,17 +153,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	docs, _ := s.retrieveAppDocsForQuery(ctx, transcript, 6)
-	profile := rag.UserProfile{}
-	if s.appUsers != nil {
-		if appUser, findErr := s.appUsers.FindByID(ctx, userInfo.ID); findErr == nil {
-			profile.Nickname = appUser.Nickname
-		}
-	}
-	if s.quiz != nil {
-		if card, cardErr := s.quiz.PrimaryCard(ctx, userInfo.ID); cardErr == nil {
-			profile.MainType = card.MainType
-		}
-	}
+	profile, conversationCard := s.appChatProfilesForCard(ctx, userInfo.ID, sess.CardID)
 	if memories, memoryErr := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); memoryErr == nil {
 		profile.Memories = memories
 	}
@@ -169,8 +164,10 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		ConversationSummary: promptContext.Summary,
 		Question:            transcript,
 		UserProfile:         profile,
+		ConversationCard:    conversationCard,
 		UserPreferences:     preferences,
 		CurrentDirectives:   directives,
+		Tier:                tier,
 	})
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")

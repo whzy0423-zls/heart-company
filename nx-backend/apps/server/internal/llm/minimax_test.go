@@ -539,6 +539,45 @@ func TestChatTokenBudget(t *testing.T) {
 	}
 }
 
+func TestChatTokenBudgetUsesConversationTier(t *testing.T) {
+	tests := []struct {
+		tier string
+		want int
+	}{
+		{tier: "basic", want: 220},
+		{tier: "companion", want: 500},
+		{tier: "deep", want: 700},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tier, func(t *testing.T) {
+			if got := chatTokenBudgetForTier("我该怎么办？", tt.tier); got != tt.want {
+				t.Fatalf("chatTokenBudgetForTier(%q) = %d, want %d", tt.tier, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildUserPromptUsesConversationTierInstruction(t *testing.T) {
+	tests := []struct {
+		tier string
+		want string
+	}{
+		{tier: "basic", want: "通常用 1～3 句话直接回答"},
+		{tier: "deep", want: "核心判断、原因与模式、影响、具体行动"},
+		{tier: "companion", want: "先回应用户的情绪和处境"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tier, func(t *testing.T) {
+			prompt := buildUserPrompt(rag.GenerateInput{Question: "我该怎么办？", Tier: tt.tier})
+			if !strings.Contains(prompt, tt.want) {
+				t.Fatalf("tier %q prompt missing %q: %s", tt.tier, tt.want, prompt)
+			}
+		})
+	}
+}
+
 func TestMiniMaxGeneratorGenerateStreamUsesAdaptiveChatTokenBudget(t *testing.T) {
 	var requestBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -576,6 +615,20 @@ func TestDefaultSystemPromptUsesWarmConciseAdaptiveStyle(t *testing.T) {
 		"不要固定总结",
 		"不要固定给建议",
 		"最多追问一个真正有用的问题",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("default system prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestDefaultSystemPromptAllowsDirectGeneralKnowledgeAnswers(t *testing.T) {
+	prompt := NewMiniMaxGenerator(config.MiniMaxConfig{}).resolveSystemPrompt()
+	for _, want := range []string{
+		"菜谱、生活知识等普通问题",
+		"直接使用通用知识回答",
+		"不要强行关联九型人格",
+		"不要默认让用户自行上网搜索",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("default system prompt missing %q: %s", want, prompt)

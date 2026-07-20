@@ -136,7 +136,7 @@ func (g *MiniMaxGenerator) Generate(ctx context.Context, input rag.GenerateInput
 	body := map[string]any{
 		"model":              g.model,
 		"temperature":        0.55,
-		"tokens_to_generate": chatTokenBudget(input.Question),
+		"tokens_to_generate": chatTokenBudgetForTier(input.Question, input.Tier),
 		"messages": []map[string]string{
 			{"role": "system", "content": g.resolveSystemPrompt()},
 			{"role": "user", "content": buildUserPrompt(input)},
@@ -190,7 +190,7 @@ func (g *MiniMaxGenerator) GenerateStream(ctx context.Context, input rag.Generat
 	body := map[string]any{
 		"model":              g.model,
 		"temperature":        0.55,
-		"tokens_to_generate": chatTokenBudget(input.Question),
+		"tokens_to_generate": chatTokenBudgetForTier(input.Question, input.Tier),
 		"stream":             true,
 		"messages": []map[string]string{
 			{"role": "system", "content": g.resolveSystemPrompt()},
@@ -1439,9 +1439,13 @@ func (g *MiniMaxGenerator) resolveSystemPrompt() string {
 // defaultSystemPrompt 内置默认提示词。
 // 与旧版的区别：不再"只基于检索资料"，资料不足时允许结合九型人格常识温和作答，
 // 这样检索未命中也能给出有帮助的回答，而不是退回固定兜底。
-const defaultSystemPrompt = "你是九型人格成长陪伴里的成长教练，像一个懂用户的朋友，自然、有温度、少说教。请优先结合给定的检索资料和用户档案回答；当资料不足或没有资料时，也可以基于九型人格的通用常识，温和、稳妥地继续作答，不要生硬拒绝。不做医疗或心理诊断。回答要具体、先给重点、适合手机阅读：普通问题通常只回答 1-3 句，只有用户明确要求展开、详细说明或完整分析时才使用简短段落展开。不主动使用亲爱的、宝贝等亲昵称呼。用户要求纠正时立即按新要求重答，不要解释为什么要纠正，也不要维护之前的回答。不要机械复述用户的话，不要固定总结，不要固定给建议；只有确有必要时，最多追问一个真正有用的问题。"
+const defaultSystemPrompt = "你是九型人格成长陪伴里的成长教练，像一个懂用户的朋友，自然、有温度、少说教。请优先结合给定的高相关检索资料和用户档案回答；当资料不足或没有资料时，也可以基于稳妥的通用知识继续作答，不要生硬拒绝。菜谱、生活知识等普通问题应直接使用通用知识回答，不要强行关联九型人格，也不要默认让用户自行上网搜索；只有实时价格、营业状态等确实需要外部核实的信息，才提醒用户核实。不做医疗或心理诊断。回答要具体、先给重点、适合手机阅读：未指定模式时，普通问题通常只回答 1-3 句，只有用户明确要求展开、详细说明或完整分析时才使用简短段落展开；请求里有明确对话模式时，以该模式规则为准。不主动使用亲爱的、宝贝等亲昵称呼。用户要求纠正时立即按新要求重答，不要解释为什么要纠正，也不要维护之前的回答。不要机械复述用户的话，不要固定总结，不要固定给建议；只有确有必要时，最多追问一个真正有用的问题。"
 
-const fixedConciseReplyInstruction = "请基于检索资料直接回答当前问题。请精简一些告诉我，优先使用 1～3 句话，不要长篇展开，不使用“亲爱的”等亲昵称呼。"
+const fixedConciseReplyInstruction = "基础问答模式：请直接回答当前问题；有高相关检索资料时可参考，没有时使用通用知识。通常用 1～3 句话直接回答，不要长篇展开，不使用“亲爱的”等亲昵称呼。"
+
+const deepReplyInstruction = "深度分析模式：请按“核心判断、原因与模式、影响、具体行动”的顺序深入展开。结合高相关资料与人物画像，但不要为了套用九型而偏离用户问题；内容要清晰、具体、适合手机阅读。"
+
+const companionReplyInstruction = "专业陪伴模式：先回应用户的情绪和处境，再温和梳理正在发生的事情与可尝试的下一步。不要说教，不要急于贴九型标签；只有确有帮助时，最多追问一个问题。"
 
 const allTypesReplyInstruction = "请完整回答当前问题，按1号到9号的顺序逐一回答，不能遗漏或只围绕用户自己的主型。每个型号都要紧扣用户当前主题给出特点和具体应用；如果问题涉及孩子，每个型号必须包含：孩子的典型特点、家长如何理解和沟通、一个具体应用方法。检索资料只作参考，不能因为检索资料不完整而遗漏任何型号；缺少的部分可基于稳妥的九型人格通用常识补充。使用清晰、适合手机阅读的编号列表，不使用“亲爱的”等亲昵称呼。"
 
@@ -1456,6 +1460,22 @@ func chatTokenBudget(question string) int {
 		}
 	}
 	return 220
+}
+
+func chatTokenBudgetForTier(question, tier string) int {
+	if requestsAllEnneagramTypes(question) {
+		return 1200
+	}
+	switch strings.ToLower(strings.TrimSpace(tier)) {
+	case "basic":
+		return 220
+	case "companion":
+		return 500
+	case "deep":
+		return 700
+	default:
+		return chatTokenBudget(question)
+	}
 }
 
 func requestsAllEnneagramTypes(question string) bool {
@@ -1577,7 +1597,14 @@ func buildUserPrompt(input rag.GenerateInput) string {
 	if requestsAllEnneagramTypes(input.Question) {
 		b.WriteString(allTypesReplyInstruction)
 	} else {
-		b.WriteString(fixedConciseReplyInstruction)
+		switch strings.ToLower(strings.TrimSpace(input.Tier)) {
+		case "deep":
+			b.WriteString(deepReplyInstruction)
+		case "companion":
+			b.WriteString(companionReplyInstruction)
+		default:
+			b.WriteString(fixedConciseReplyInstruction)
+		}
 	}
 	return b.String()
 }
