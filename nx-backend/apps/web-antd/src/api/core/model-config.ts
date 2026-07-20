@@ -3,9 +3,9 @@ import { requestClient } from '#/api/request';
 /** 模型配置视图（读取）：密钥不回传，仅以 apiKeySet 标记是否已配置。 */
 export interface ModelConfigView {
   chat: {
+    provider: string;
     apiBase: string;
     apiKeySet: boolean;
-    groupId: string;
     model: string;
   };
   video: {
@@ -54,9 +54,9 @@ export interface ModelConfigView {
 /** 模型配置提交（保存）：apiKey 留空表示不修改既有密钥。 */
 export interface ModelConfigPayload {
   chat: {
+    provider: string;
     apiBase: string;
     apiKey: string;
-    groupId: string;
     model: string;
   };
   video: {

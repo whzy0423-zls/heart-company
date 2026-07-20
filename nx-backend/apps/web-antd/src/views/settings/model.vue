@@ -44,7 +44,12 @@ const pageDescription = computed(() =>
 
 // apiKey 留空表示不修改；apiKeySet 用于提示是否已配置过密钥
 const form = ref<ModelConfigPayload>({
-  chat: { apiBase: '', apiKey: '', groupId: '', model: '' },
+  chat: {
+    provider: 'openai-compatible',
+    apiBase: 'https://coding-play.codes',
+    apiKey: '',
+    model: '',
+  },
   video: { apiBase: '', apiKey: '', model: '' },
   image: { apiBase: '', apiKey: '', model: '' },
   analysis: { apiBase: '', apiKey: '', groupId: '', model: '' },
@@ -78,10 +83,23 @@ const providerOptions = [
   { label: 'Anthropic 协议', value: 'anthropic-compatible' },
   { label: 'MiniMax 协议', value: 'minimax' },
 ];
+const chatProviderOptions = [
+  { label: 'OpenAI 协议', value: 'openai-compatible' },
+  { label: 'Anthropic 协议', value: 'anthropic-compatible' },
+];
 const dailyQuizProviderOptions = [
   { label: '继承管理端', value: '' },
   ...providerOptions,
 ];
+const chatEndpointHint = computed(() => {
+  const base = (form.value.chat.apiBase || 'https://coding-play.codes').replace(
+    /\/$/,
+    '',
+  );
+  return form.value.chat.provider === 'anthropic-compatible'
+    ? `将请求 POST ${base}/v1/messages`
+    : `将请求 POST ${base}/v1/chat/completions`;
+});
 
 onMounted(load);
 
@@ -92,9 +110,9 @@ async function load() {
     if (data) {
       const nextForm: ModelConfigPayload = {
         chat: {
-          apiBase: data.chat?.apiBase ?? '',
+          provider: data.chat?.provider ?? 'openai-compatible',
+          apiBase: data.chat?.apiBase || 'https://coding-play.codes',
           apiKey: '',
-          groupId: data.chat?.groupId ?? '',
           model: data.chat?.model ?? '',
         },
         video: {
@@ -223,24 +241,27 @@ async function testChat() {
         <Divider orientation="left">对话模型（手机端聊天窗口作答所用）</Divider>
         <Row :gutter="24">
           <Col :md="12" :xs="24">
+            <Form.Item label="协议">
+              <Select
+                v-model:value="form.chat.provider"
+                :options="chatProviderOptions"
+              />
+            </Form.Item>
             <Form.Item label="接口地址 (API Base)">
               <Input
                 v-model:value="form.chat.apiBase"
-                placeholder="留空则使用环境变量默认值"
+                placeholder="https://coding-play.codes"
               />
-            </Form.Item>
-            <Form.Item label="模型名 (Model)">
-              <Input
-                v-model:value="form.chat.model"
-                placeholder="如 abab6.5s-chat"
-              />
+              <span class="mt-1 block text-xs text-gray-400">
+                {{ chatEndpointHint }}
+              </span>
             </Form.Item>
           </Col>
           <Col :md="12" :xs="24">
-            <Form.Item label="Group ID">
+            <Form.Item label="模型名 (Model)">
               <Input
-                v-model:value="form.chat.groupId"
-                placeholder="对话模型网关分配的 Group ID"
+                v-model:value="form.chat.model"
+                placeholder="如 gpt-5.6-sol / claude-sonnet-4-5"
               />
             </Form.Item>
             <Form.Item label="密钥 (API Key)">
@@ -257,7 +278,7 @@ async function testChat() {
                 测试连通性
               </Button>
               <span class="ml-2 text-xs text-gray-400">
-                对网关做一次轻量探活，不消耗生成额度
+                按当前协议对中转站做一次最小请求
               </span>
             </Form.Item>
           </Col>
