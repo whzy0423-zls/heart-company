@@ -5,6 +5,37 @@ import (
 	"testing"
 )
 
+func TestDefaultMenusIncludeAppReleaseManagement(t *testing.T) {
+	var foundList bool
+	var foundWrite bool
+	for _, menu := range defaultMenus {
+		switch menu.ID {
+		case 315:
+			foundList = true
+			if menu.PID != 300 || menu.Name != "WebsiteAppReleases" {
+				t.Fatalf("unexpected App release menu identity: %+v", menu)
+			}
+			if menu.Path != "/website/app-releases" || menu.Component != "/site-config/app-releases" {
+				t.Fatalf("unexpected App release menu route: %+v", menu)
+			}
+			if menu.AuthCode != "Website:AppReleases:List" || menu.Type != "menu" || menu.Title != "App 版本" {
+				t.Fatalf("unexpected App release menu metadata: %+v", menu)
+			}
+		case 316:
+			foundWrite = true
+			if menu.PID != 315 || menu.Type != "button" || menu.AuthCode != "Website:AppReleases:Write" {
+				t.Fatalf("unexpected App release write permission: %+v", menu)
+			}
+		}
+	}
+	if !foundList {
+		t.Fatal("expected default menu WebsiteAppReleases")
+	}
+	if !foundWrite {
+		t.Fatal("expected App release write permission button")
+	}
+}
+
 func TestDefaultMenusIncludeRAGKnowledgeManagement(t *testing.T) {
 	var found bool
 	for _, menu := range defaultMenus {

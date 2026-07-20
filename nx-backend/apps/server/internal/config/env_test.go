@@ -1,10 +1,75 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestLoadAppReleaseDefaults(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("APP_RELEASE_PACKAGE_NAME", "")
+	t.Setenv("APP_RELEASE_CERT_SHA256", "")
+
+	env := Load()
+
+	if env.AppRelease.PackageName != "com.xinzhili.nine_xing_app" {
+		t.Fatalf("expected default App package name, got %q", env.AppRelease.PackageName)
+	}
+	if env.AppRelease.CertificateSHA256 != "" {
+		t.Fatalf("expected empty App release certificate by default, got %q", env.AppRelease.CertificateSHA256)
+	}
+}
+
+func TestLoadAppReleaseTrimsCertificateWithoutNormalizing(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("APP_RELEASE_PACKAGE_NAME", " com.example.ninexing ")
+	t.Setenv("APP_RELEASE_CERT_SHA256", "  AA:bb:CC  ")
+
+	env := Load()
+
+	if env.AppRelease.PackageName != "com.example.ninexing" {
+		t.Fatalf("expected trimmed package name, got %q", env.AppRelease.PackageName)
+	}
+	if env.AppRelease.CertificateSHA256 != "AA:bb:CC" {
+		t.Fatalf("expected trimmed but otherwise unchanged certificate, got %q", env.AppRelease.CertificateSHA256)
+	}
+}
+
+func TestAppReleaseConfigExpectedCertificateSHA256NormalizesValue(t *testing.T) {
+	raw := "  " + strings.Repeat("AA:", 31) + "AA  "
+
+	got, err := (AppReleaseConfig{CertificateSHA256: raw}).ExpectedCertificateSHA256()
+	if err != nil {
+		t.Fatalf("ExpectedCertificateSHA256() error = %v", err)
+	}
+	if want := strings.Repeat("aa", 32); got != want {
+		t.Fatalf("ExpectedCertificateSHA256() = %q, want %q", got, want)
+	}
+}
+
+func TestAppReleaseConfigExpectedCertificateSHA256RequiresConfiguration(t *testing.T) {
+	_, err := (AppReleaseConfig{CertificateSHA256: " \t\n "}).ExpectedCertificateSHA256()
+	if !errors.Is(err, ErrAppReleaseCertificateNotConfigured) {
+		t.Fatalf("ExpectedCertificateSHA256() error = %v, want ErrAppReleaseCertificateNotConfigured", err)
+	}
+}
+
+func TestAppReleaseConfigExpectedCertificateSHA256RejectsInvalidValues(t *testing.T) {
+	for name, value := range map[string]string{
+		"wrong length": strings.Repeat("a", 63),
+		"non hex":      strings.Repeat("g", 64),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := (AppReleaseConfig{CertificateSHA256: value}).ExpectedCertificateSHA256()
+			if !errors.Is(err, ErrInvalidAppReleaseCertificate) {
+				t.Fatalf("ExpectedCertificateSHA256() error = %v, want ErrInvalidAppReleaseCertificate", err)
+			}
+		})
+	}
+}
 
 func TestLoadMiniappChatDefaults(t *testing.T) {
 	t.Setenv("MINIAPP_CHAT_RATE_LIMIT_PER_MINUTE", "")

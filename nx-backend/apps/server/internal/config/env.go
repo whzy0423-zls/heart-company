@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"net/netip"
 	"net/url"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"nine-xing/nx-backend/apps/server/internal/netguard"
 	"nine-xing/nx-backend/apps/server/internal/storage"
@@ -24,6 +26,7 @@ type Env struct {
 	AppEnv string
 	// AppVersion 应用版本号，编译时注入或环境变量指定。
 	AppVersion string
+	AppRelease AppReleaseConfig
 	// CORSAllowedOrigins 允许跨域访问 API 的 Origin 白名单；为空时 dev/test 允许任意 Origin，production 不回写 CORS。
 	CORSAllowedOrigins []string
 	// AdminConfig 后台品牌配置（名称/Logo/加载文案）JSON 文件路径。
@@ -149,6 +152,38 @@ type JPushConfig struct {
 	MasterSecret string
 }
 
+var (
+	ErrAppReleaseCertificateNotConfigured = errors.New("app release certificate SHA-256 is not configured")
+	ErrInvalidAppReleaseCertificate       = errors.New("invalid app release certificate SHA-256")
+)
+
+type AppReleaseConfig struct {
+	PackageName       string
+	CertificateSHA256 string
+}
+
+func (c AppReleaseConfig) ExpectedCertificateSHA256() (string, error) {
+	if strings.TrimSpace(c.CertificateSHA256) == "" {
+		return "", ErrAppReleaseCertificateNotConfigured
+	}
+
+	normalized := strings.Map(func(r rune) rune {
+		if r == ':' || unicode.IsSpace(r) {
+			return -1
+		}
+		return unicode.ToLower(r)
+	}, c.CertificateSHA256)
+	if len(normalized) != 64 {
+		return "", ErrInvalidAppReleaseCertificate
+	}
+	for _, r := range normalized {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return "", ErrInvalidAppReleaseCertificate
+		}
+	}
+	return normalized, nil
+}
+
 func Load() Env {
 	loadDotEnv()
 
@@ -251,10 +286,14 @@ func Load() Env {
 	appEnv := NormalizeAppEnv(getenv("APP_ENV", ""))
 
 	return Env{
-		AdminPassword:      getenv("ADMIN_PASSWORD", "123456"),
-		AdminUsername:      getenv("ADMIN_USERNAME", "admin"),
-		AppEnv:             appEnv,
-		AppVersion:         getenv("APP_VERSION", "0.0.1"),
+		AdminPassword: getenv("ADMIN_PASSWORD", "123456"),
+		AdminUsername: getenv("ADMIN_USERNAME", "admin"),
+		AppEnv:        appEnv,
+		AppVersion:    getenv("APP_VERSION", "0.0.1"),
+		AppRelease: AppReleaseConfig{
+			PackageName:       strings.TrimSpace(getenv("APP_RELEASE_PACKAGE_NAME", "com.xinzhili.nine_xing_app")),
+			CertificateSHA256: strings.TrimSpace(getenv("APP_RELEASE_CERT_SHA256", "")),
+		},
 		CORSAllowedOrigins: parseCSV(getenv("CORS_ALLOWED_ORIGINS", "")),
 		JWTSecret:          getenv("JWT_SECRET", "nine-xing-dev-secret"),
 		Port:               port,
