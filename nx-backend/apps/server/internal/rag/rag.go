@@ -129,29 +129,9 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 	if utf8.RuneCountInString(question) > 300 {
 		return Answer{}, errors.New("问题太长，请控制在 300 字以内")
 	}
-	if isSmalltalkQuestion(question) {
-		if s.generator != nil {
-			generated, err := s.generator.Generate(ctx, GenerateInput{
-				History:             cleanHistory(input.History, recentHistoryLimit),
-				ConversationSummary: input.ConversationSummary,
-				Question:            question,
-				Sources:             nil,
-				UserProfile:         input.UserProfile,
-				ConversationCard:    input.ConversationCard,
-				UserPreferences:     input.UserPreferences,
-				CurrentDirectives:   input.CurrentDirectives,
-				Tier:                input.Tier,
-			})
-			if err == nil && strings.TrimSpace(generated) != "" {
-				return Answer{Answer: strings.TrimSpace(generated), Sources: []Source{}, Suggestions: []string{}}, nil
-			}
-		}
-		return Answer{Answer: buildSmalltalkFallback(question), Sources: []Source{}, Suggestions: []string{}}, nil
-	}
 
 	matches := s.search(question, relevantMainType(input), 4)
 	if len(matches) == 0 {
-		generationFailed := s.generator != nil
 		// 检索未命中：仍尝试让 AI 结合九型常识作答（Sources 为空）；
 		// 只有 AI 不可用或返回空时，才回退到固定兜底文案。
 		if s.generator != nil {
@@ -173,13 +153,6 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 					Suggestions: buildSuggestions(nil),
 				}, nil
 			}
-		}
-		if generationFailed && !isExplicitEnneagramQuestion(question) {
-			return Answer{
-				Answer:      buildGenerationUnavailableAnswer(),
-				Sources:     []Source{},
-				Suggestions: buildSuggestions(nil),
-			}, nil
 		}
 		return Answer{
 			Answer:      buildFallbackAnswer(input.UserProfile),
@@ -214,7 +187,6 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 	}
 	answer += strings.Join(parts, "；") + "。你可以继续追问具体关系、职场、亲密关系或成长练习，我会沿着这些资料继续细化。"
 
-	generationFailed := s.generator != nil
 	if s.generator != nil {
 		generated, err := s.generator.Generate(ctx, GenerateInput{
 			History:             cleanHistory(input.History, recentHistoryLimit),
@@ -230,13 +202,6 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 		if err == nil && strings.TrimSpace(generated) != "" {
 			return Answer{Answer: strings.TrimSpace(generated), Sources: sources, Suggestions: suggestions}, nil
 		}
-	}
-	if generationFailed && !isExplicitEnneagramQuestion(question) {
-		return Answer{
-			Answer:      buildGenerationUnavailableAnswer(),
-			Sources:     []Source{},
-			Suggestions: buildSuggestions(nil),
-		}, nil
 	}
 
 	return Answer{Answer: answer, Sources: sources, Suggestions: suggestions}, nil
@@ -260,36 +225,9 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 		}
 		return emit(delta)
 	}
-	if isSmalltalkQuestion(question) {
-		if s.generator != nil {
-			generated, err := s.generateStreaming(ctx, GenerateInput{
-				History:             cleanHistory(input.History, recentHistoryLimit),
-				ConversationSummary: input.ConversationSummary,
-				Question:            question,
-				Sources:             nil,
-				UserProfile:         input.UserProfile,
-				ConversationCard:    input.ConversationCard,
-				UserPreferences:     input.UserPreferences,
-				CurrentDirectives:   input.CurrentDirectives,
-				Tier:                input.Tier,
-			}, trackedEmit)
-			if err != nil && streamStarted {
-				return Answer{}, err
-			}
-			if err == nil && strings.TrimSpace(generated) != "" {
-				return Answer{Answer: strings.TrimSpace(generated), Sources: []Source{}, Suggestions: []string{}}, nil
-			}
-		}
-		answer := buildSmalltalkFallback(question)
-		if err := emitTextChunks(answer, emit); err != nil {
-			return Answer{}, err
-		}
-		return Answer{Answer: answer, Sources: []Source{}, Suggestions: []string{}}, nil
-	}
 
 	matches := s.search(question, relevantMainType(input), 4)
 	if len(matches) == 0 {
-		generationFailed := s.generator != nil
 		if s.generator != nil {
 			generated, err := s.generateStreaming(ctx, GenerateInput{
 				History:             cleanHistory(input.History, recentHistoryLimit),
@@ -312,13 +250,6 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 					Suggestions: buildSuggestions(nil),
 				}, nil
 			}
-		}
-		if generationFailed && !isExplicitEnneagramQuestion(question) {
-			answer := buildGenerationUnavailableAnswer()
-			if err := emitTextChunks(answer, emit); err != nil {
-				return Answer{}, err
-			}
-			return Answer{Answer: answer, Sources: []Source{}, Suggestions: buildSuggestions(nil)}, nil
 		}
 		answer := buildFallbackAnswer(input.UserProfile)
 		if err := emitTextChunks(answer, emit); err != nil {
@@ -356,7 +287,6 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 	}
 	answer += strings.Join(parts, "；") + "。你可以继续追问具体关系、职场、亲密关系或成长练习，我会沿着这些资料继续细化。"
 
-	generationFailed := s.generator != nil
 	if s.generator != nil {
 		generated, err := s.generateStreaming(ctx, GenerateInput{
 			History:             cleanHistory(input.History, recentHistoryLimit),
@@ -375,13 +305,6 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 		if err == nil && strings.TrimSpace(generated) != "" {
 			return Answer{Answer: strings.TrimSpace(generated), Sources: sources, Suggestions: suggestions}, nil
 		}
-	}
-	if generationFailed && !isExplicitEnneagramQuestion(question) {
-		answer := buildGenerationUnavailableAnswer()
-		if err := emitTextChunks(answer, emit); err != nil {
-			return Answer{}, err
-		}
-		return Answer{Answer: answer, Sources: []Source{}, Suggestions: buildSuggestions(nil)}, nil
 	}
 
 	if err := emitTextChunks(answer, emit); err != nil {
@@ -472,7 +395,7 @@ func (s *Service) search(question string, mainType int, limit int) []scoredDoc {
 		text := strings.ToLower(doc.Title + " " + doc.Content + " " + strings.Join(doc.Tags, " "))
 		questionScore := 0
 		for _, term := range terms {
-			if term == "" || isGenericConversationTerm(term) {
+			if term == "" {
 				continue
 			}
 			if strings.Contains(text, term) {
@@ -505,83 +428,6 @@ func (s *Service) search(question string, mainType int, limit int) []scoredDoc {
 		scored = scored[:limit]
 	}
 	return scored
-}
-
-func isSmalltalkQuestion(question string) bool {
-	normalized := normalizeConversationalText(question)
-	switch normalized {
-	case "hi", "hello", "嗨", "哈喽", "你好", "您好", "在吗", "你在吗", "你在干嘛", "你在干什么", "你干嘛呢", "干嘛呢", "你是谁", "你是干嘛的", "你能做什么":
-		return true
-	default:
-		return false
-	}
-}
-
-func normalizeConversationalText(text string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsLetter(r) || unicode.IsNumber(r) {
-			return unicode.ToLower(r)
-		}
-		return -1
-	}, strings.TrimSpace(text))
-}
-
-func buildSmalltalkFallback(question string) string {
-	switch normalizeConversationalText(question) {
-	case "在吗", "你在吗":
-		return "在的，我一直在这里。你现在想聊点什么？"
-	case "你好", "您好", "hi", "hello", "嗨", "哈喽":
-		return "你好，我在这里。你可以和我聊九型人格、关系沟通，也可以直接问生活里的具体问题。"
-	case "你是谁", "你是干嘛的", "你能做什么":
-		return "我是九型问答里的成长陪伴助手，可以陪你聊天，也能结合人物画像帮你分析关系和具体问题。"
-	default:
-		return "我在这里，正在等你和我聊天。你现在想聊什么？"
-	}
-}
-
-func buildGenerationUnavailableAnswer() string {
-	return "我在，但刚才回答生成遇到了一点问题。你可以重新发一次，我会重新回答。"
-}
-
-func isExplicitEnneagramQuestion(question string) bool {
-	question = strings.ToLower(strings.TrimSpace(question))
-	for _, marker := range []string{
-		"九型", "型号", "人格", "主型", "翼型",
-		"完美型", "助人型", "成就型", "自我型", "艺术型", "观察型", "思想型",
-		"忠诚型", "活跃型", "享乐型", "领袖型", "挑战型", "和平型", "调停型",
-		"1号", "2号", "3号", "4号", "5号", "6号", "7号", "8号", "9号",
-	} {
-		if strings.Contains(question, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func isGenericConversationTerm(term string) bool {
-	term = strings.ToLower(strings.TrimSpace(term))
-	if term == "" {
-		return true
-	}
-	if genericSearchTerms[term] {
-		return true
-	}
-	runes := []rune(term)
-	if len(runes) > 4 {
-		return false
-	}
-	for _, r := range runes {
-		if !strings.ContainsRune("你我他她它在有是的了吗嘛呢啊呀干做说想要么什怎哪谁好您好请问能会可", r) {
-			return false
-		}
-	}
-	return true
-}
-
-var genericSearchTerms = map[string]bool{
-	"怎么": true, "什么": true, "如何": true, "需要": true, "可以": true,
-	"这个": true, "那个": true, "一下": true, "告诉": true, "请问": true,
-	"我们": true, "你们": true, "他们": true,
 }
 
 func tokenize(text string) []string {
