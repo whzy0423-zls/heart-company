@@ -94,13 +94,32 @@ func TestFileStoreStageRejectsNonAPKExtensionWithoutCreatingTemp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, name := range []string{"release.zip", "release.apk.zip", "release.APK", "release"} {
+	for _, name := range []string{"release.zip", "release.apk.zip", "release"} {
 		t.Run(name, func(t *testing.T) {
 			_, err := store.Stage(name, strings.NewReader("bytes"))
 			if !isError(err, ErrInvalidExtension) {
 				t.Fatalf("Stage(%q) error = %v, want ErrInvalidExtension", name, err)
 			}
 			assertNoTemps(t, root)
+		})
+	}
+}
+
+func TestFileStoreStageAcceptsCaseInsensitiveAPKExtension(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"release.APK", "release.ApK"} {
+		t.Run(name, func(t *testing.T) {
+			staged, err := store.Stage(name, strings.NewReader("bytes"))
+			if err != nil {
+				t.Fatalf("Stage(%q) error = %v, want success", name, err)
+			}
+			if staged.OriginalName != name {
+				t.Fatalf("OriginalName = %q, want %q", staged.OriginalName, name)
+			}
 		})
 	}
 }

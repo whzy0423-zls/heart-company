@@ -62,7 +62,7 @@ func (s *FileStore) Root() string {
 }
 
 func (s *FileStore) Stage(originalName string, src io.Reader) (StagedFile, error) {
-	if filepath.Ext(originalName) != ".apk" {
+	if !strings.EqualFold(filepath.Ext(originalName), ".apk") {
 		return StagedFile{}, ErrInvalidExtension
 	}
 	if src == nil {
