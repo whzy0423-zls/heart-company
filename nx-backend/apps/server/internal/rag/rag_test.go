@@ -75,6 +75,69 @@ func TestAskRecipeQuestionDoesNotAttachEnneagramSources(t *testing.T) {
 	}
 }
 
+func TestAskSmalltalkSkipsKnowledgeAndUsesNaturalFallbackWhenGeneratorFails(t *testing.T) {
+	service := NewService([]Document{
+		{ID: "kb-100247", Title: "自我提升后的拖绳效应", Content: "一开始你在自己的方向上前进，对方会想你早干嘛去了。"},
+	}, WithGenerator(&fakeGenerator{err: errors.New("model unavailable")}))
+
+	for _, question := range []string{"你在干嘛", "在吗", "你好", "你是谁"} {
+		t.Run(question, func(t *testing.T) {
+			answer, err := service.Ask(context.Background(), AskInput{Question: question, UserProfile: UserProfile{MainType: 6}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(answer.Sources) != 0 {
+				t.Fatalf("smalltalk must not return knowledge sources: %+v", answer.Sources)
+			}
+			if strings.Contains(answer.Answer, "检索了九型资料") || strings.Contains(answer.Answer, "拖绳效应") {
+				t.Fatalf("smalltalk fallback is unrelated: %q", answer.Answer)
+			}
+		})
+	}
+}
+
+func TestAskSmalltalkPassesNoSourcesToGenerator(t *testing.T) {
+	generator := &fakeGenerator{answer: "我在这里，正等你和我聊天。"}
+	service := NewService([]Document{
+		{ID: "kb-100247", Title: "自我提升后的拖绳效应", Content: "一开始你在自己的方向上前进，对方会想你早干嘛去了。"},
+	}, WithGenerator(generator))
+
+	answer, err := service.Ask(context.Background(), AskInput{Question: "你在干嘛"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer.Answer != generator.answer || len(generator.input.Sources) != 0 || len(answer.Sources) != 0 {
+		t.Fatalf("smalltalk must bypass retrieval: answer=%+v input=%+v", answer, generator.input)
+	}
+}
+
+func TestSearchIgnoresGenericConversationTermsFromRealDocument(t *testing.T) {
+	service := NewService([]Document{
+		{ID: "kb-100247", Title: "自我提升后的拖绳效应", Content: "一开始你在自己的方向上前进，对方会想你早干嘛去了。"},
+	})
+
+	if matches := service.search("你在干嘛", 6, 4); len(matches) != 0 {
+		t.Fatalf("generic conversation terms must not retrieve documents: %+v", matches)
+	}
+}
+
+func TestAskOrdinaryQuestionDoesNotUseSourcedTemplateWhenGeneratorFails(t *testing.T) {
+	service := NewService([]Document{
+		{ID: "kb-1", Title: "关系沟通", Content: "关系沟通需要表达真实需要并尊重边界。"},
+	}, WithGenerator(&fakeGenerator{err: errors.New("model unavailable")}))
+
+	answer, err := service.Ask(context.Background(), AskInput{Question: "关系沟通需要注意什么"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(answer.Sources) != 0 || strings.Contains(answer.Answer, "检索了九型资料") {
+		t.Fatalf("ordinary generator failure must not use sourced template: %+v", answer)
+	}
+	if !strings.Contains(answer.Answer, "重新") {
+		t.Fatalf("ordinary generator failure should offer a retry: %q", answer.Answer)
+	}
+}
+
 func TestAskRetrievesRelevantKnowledge(t *testing.T) {
 	service := NewService([]Document{
 		{ID: "type-1", Title: "1号 完美型", Content: "完美型重视原则、秩序和高标准，成长建议是允许不完美。", Tags: []string{"完美型", "原则"}},
