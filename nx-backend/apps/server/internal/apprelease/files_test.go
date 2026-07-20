@@ -24,21 +24,21 @@ func TestFileStoreStageStreamsAndHashesAPK(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if staged.OriginalName != "release.apk" {
-		t.Fatalf("OriginalName = %q, want release.apk", staged.OriginalName)
+	if staged.OriginalName() != "release.apk" {
+		t.Fatalf("OriginalName = %q, want release.apk", staged.OriginalName())
 	}
-	if staged.Size != int64(len(payload)) {
-		t.Fatalf("Size = %d, want %d", staged.Size, len(payload))
+	if staged.Size() != int64(len(payload)) {
+		t.Fatalf("Size = %d, want %d", staged.Size(), len(payload))
 	}
-	if staged.SHA256 != sha256Hex([]byte(payload)) {
-		t.Fatalf("SHA256 = %q, want %q", staged.SHA256, sha256Hex([]byte(payload)))
+	if staged.SHA256() != sha256Hex([]byte(payload)) {
+		t.Fatalf("SHA256 = %q, want %q", staged.SHA256(), sha256Hex([]byte(payload)))
 	}
-	if !strings.HasPrefix(filepath.Base(staged.TempPath), ".tmp-") {
-		t.Fatalf("TempPath = %q, want .tmp-* basename", staged.TempPath)
+	if !strings.HasPrefix(filepath.Base(staged.Path()), ".tmp-") {
+		t.Fatalf("Path = %q, want .tmp-* basename", staged.Path())
 	}
-	assertRegularFile(t, staged.TempPath)
-	assertFileContents(t, staged.TempPath, payload)
-	assertFileMode(t, staged.TempPath, 0o640)
+	assertRegularFile(t, staged.Path())
+	assertFileContents(t, staged.Path(), payload)
+	assertFileMode(t, staged.Path(), 0o640)
 }
 
 func TestFileStoreStageRejectsMoreThanLimitAndCleansTemp(t *testing.T) {
@@ -65,8 +65,8 @@ func TestFileStoreStageAcceptsExactlyLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if staged.Size != 8 {
-		t.Fatalf("Size = %d, want 8", staged.Size)
+	if staged.Size() != 8 {
+		t.Fatalf("Size = %d, want 8", staged.Size())
 	}
 }
 
@@ -117,8 +117,8 @@ func TestFileStoreStageAcceptsCaseInsensitiveAPKExtension(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Stage(%q) error = %v, want success", name, err)
 			}
-			if staged.OriginalName != name {
-				t.Fatalf("OriginalName = %q, want %q", staged.OriginalName, name)
+			if staged.OriginalName() != name {
+				t.Fatalf("OriginalName = %q, want %q", staged.OriginalName(), name)
 			}
 		})
 	}
@@ -145,10 +145,10 @@ func TestFileStoreCommitUsesManifestVersionThenAtomicallyRenames(t *testing.T) {
 	if saved.Path != filepath.Join(store.Root(), filepath.FromSlash(saved.Key)) {
 		t.Fatalf("Path = %q, want path for key %q", saved.Path, saved.Key)
 	}
-	if saved.OriginalName != staged.OriginalName || saved.Size != staged.Size || saved.SHA256 != staged.SHA256 {
+	if saved.OriginalName != staged.OriginalName() || saved.Size != staged.Size() || saved.SHA256 != staged.SHA256() {
 		t.Fatalf("saved metadata = %+v, staged metadata = %+v", saved, staged)
 	}
-	assertNotExists(t, staged.TempPath)
+	assertNotExists(t, staged.Path())
 	assertRegularFile(t, saved.Path)
 	assertFileContents(t, saved.Path, "bytes")
 	assertFileMode(t, saved.Path, 0o640)
@@ -165,6 +165,7 @@ func TestFileStoreCommitRejectsAnythingExceptOwnedTempFiles(t *testing.T) {
 		name string
 		path string
 	}{
+		{name: "unregistered root temp", path: filepath.Join(root, ".tmp-fake")},
 		{name: "ordinary file", path: filepath.Join(root, "upload.apk")},
 		{name: "outside temp", path: filepath.Join(t.TempDir(), ".tmp-outside")},
 		{name: "nested temp", path: filepath.Join(root, "nested", ".tmp-nested")},
@@ -177,13 +178,135 @@ func TestFileStoreCommitRejectsAnythingExceptOwnedTempFiles(t *testing.T) {
 			if err := os.WriteFile(test.path, []byte("do-not-move"), 0o640); err != nil {
 				t.Fatal(err)
 			}
-			_, err := store.Commit(StagedFile{TempPath: test.path}, "android", 123)
+			payload := []byte("do-not-move")
+			forged := StagedFile{
+				id:           "forged-stage-id",
+				path:         test.path,
+				originalName: "forged.apk",
+				size:         int64(len(payload)),
+				sha256:       sha256Hex(payload),
+			}
+			_, err := store.Commit(forged, "android", 123)
 			if !isError(err, ErrUnsafePath) {
 				t.Fatalf("Commit() error = %v, want ErrUnsafePath", err)
 			}
 			assertFileContents(t, test.path, "do-not-move")
+			assertNoFinalAPKs(t, root)
 		})
 	}
+}
+
+func TestFileStoreCommitRejectsChangedStagedFileWithoutCreatingFinalFile(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := store.Stage("release.apk", strings.NewReader("original"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Discard(staged) })
+	if err := os.WriteFile(staged.Path(), []byte("tampered"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = store.Commit(staged, "android", 123)
+	if !isError(err, ErrStagedFileChanged) {
+		t.Fatalf("Commit() error = %v, want ErrStagedFileChanged", err)
+	}
+	assertRegularFile(t, staged.Path())
+	assertNoFinalAPKs(t, store.Root())
+}
+
+func TestFileStoreCommitRejectsReplacedStagedFileEvenWhenContentsMatch(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := store.Stage("release.apk", strings.NewReader("same-bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(staged.Path()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(staged.Path(), []byte("same-bytes"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(staged.Path()) })
+
+	_, err = store.Commit(staged, "android", 123)
+	if !isError(err, ErrStagedFileChanged) {
+		t.Fatalf("Commit() error = %v, want ErrStagedFileChanged", err)
+	}
+	assertNoFinalAPKs(t, store.Root())
+}
+
+func TestFileStoreCommitUsesRegisteredMetadataInsteadOfHandleFields(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := store.Stage("release.apk", strings.NewReader("bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged := staged
+	forged.path = filepath.Join(store.Root(), ".tmp-fake")
+	forged.originalName = "forged.apk"
+	forged.size = 999
+	forged.sha256 = strings.Repeat("f", 64)
+
+	saved, err := store.Commit(forged, "android", 123)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.OriginalName != "release.apk" || saved.Size != 5 || saved.SHA256 != sha256Hex([]byte("bytes")) {
+		t.Fatalf("Commit() trusted forged handle metadata: %+v", saved)
+	}
+}
+
+func TestFileStoreCommitRejectsAndroidDirectoryReplacedBySymlink(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	store, err := NewFileStore(root, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := store.Stage("release.apk", strings.NewReader("bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Discard(staged) })
+	androidDir := filepath.Join(root, "android")
+	if err := os.Mkdir(androidDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(androidDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, androidDir); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	info, err := os.Lstat(androidDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("%q mode = %v, want symlink", androidDir, info.Mode())
+	}
+
+	_, err = store.Commit(staged, "android", 123)
+	if !isError(err, ErrUnsafePath) {
+		t.Fatalf("Commit() error = %v, want ErrUnsafePath", err)
+	}
+	info, err = os.Lstat(androidDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("Commit replaced symlink %q with mode %v", androidDir, info.Mode())
+	}
+	assertNoFinalAPKs(t, outside)
 }
 
 func TestFileStoreCommitRejectsUnsupportedPlatformAndInvalidVersion(t *testing.T) {
@@ -199,11 +322,11 @@ func TestFileStoreCommitRejectsUnsupportedPlatformAndInvalidVersion(t *testing.T
 	if _, err := store.Commit(staged, "ios", 123); !isError(err, ErrUnsupportedPlatform) {
 		t.Fatalf("Commit(ios) error = %v, want ErrUnsupportedPlatform", err)
 	}
-	assertRegularFile(t, staged.TempPath)
+	assertRegularFile(t, staged.Path())
 	if _, err := store.Commit(staged, "android", 0); !isError(err, ErrInvalidVersion) {
 		t.Fatalf("Commit(version 0) error = %v, want ErrInvalidVersion", err)
 	}
-	assertRegularFile(t, staged.TempPath)
+	assertRegularFile(t, staged.Path())
 }
 
 func TestFileStoreDiscardAndRemoveCleanTheirOwnedFiles(t *testing.T) {
@@ -219,7 +342,7 @@ func TestFileStoreDiscardAndRemoveCleanTheirOwnedFiles(t *testing.T) {
 	if err := store.Discard(discarded); err != nil {
 		t.Fatal(err)
 	}
-	assertNotExists(t, discarded.TempPath)
+	assertNotExists(t, discarded.Path())
 	if err := store.Discard(discarded); err != nil {
 		t.Fatalf("second Discard() = %v, want idempotent success", err)
 	}
@@ -350,7 +473,7 @@ func TestFileStoreCleanupStaleTempsOnlyDeletesFilesOlderThanCutoff(t *testing.T)
 	assertRegularFile(t, recent)
 	assertRegularFile(t, atCutoff)
 	assertRegularFile(t, nonTemp)
-	if info, err := os.Stat(tempDir); err != nil || !info.IsDir() {
+	if info, err := os.Lstat(tempDir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		t.Fatalf("temp directory should remain: info=%v err=%v", info, err)
 	}
 }
@@ -464,13 +587,24 @@ func assertNoTemps(t *testing.T, root string) {
 	}
 }
 
+func assertNoFinalAPKs(t *testing.T, root string) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(root, "android", "*.apk"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("final APK files unexpectedly created: %q", matches)
+	}
+}
+
 func assertRegularFile(t *testing.T, path string) {
 	t.Helper()
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
-		t.Fatalf("stat %q: %v", path, err)
+		t.Fatalf("lstat %q: %v", path, err)
 	}
-	if !info.Mode().IsRegular() {
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		t.Fatalf("%q mode = %v, want regular file", path, info.Mode())
 	}
 }
@@ -495,9 +629,12 @@ func assertFileContents(t *testing.T, path, want string) {
 
 func assertFileMode(t *testing.T, path string, want os.FileMode) {
 	t.Helper()
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("%q is a symlink", path)
 	}
 	if got := info.Mode().Perm(); got != want {
 		t.Fatalf("mode of %q = %o, want %o", path, got, want)

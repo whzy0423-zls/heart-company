@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,17 @@ const randomFileTokenBytes = 16
 type FileStore struct {
 	root     string
 	maxBytes int64
+
+	mu     sync.Mutex
+	staged map[string]stagedFileRecord
+}
+
+type stagedFileRecord struct {
+	path         string
+	originalName string
+	size         int64
+	sha256       string
+	info         os.FileInfo
 }
 
 func NewFileStore(root string, maxBytes int64) (*FileStore, error) {
@@ -46,15 +58,23 @@ func NewFileStore(root string, maxBytes int64) (*FileStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve canonical app release root: %w", err)
 	}
-	info, err := os.Stat(canonicalRoot)
+	canonicalRoot = filepath.Clean(canonicalRoot)
+	info, err := os.Lstat(canonicalRoot)
 	if err != nil {
 		return nil, fmt.Errorf("stat app release root: %w", err)
 	}
-	if !info.IsDir() {
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return nil, fmt.Errorf("create app release file store: root is not a directory")
 	}
+	if err := os.Chmod(canonicalRoot, 0o750); err != nil {
+		return nil, fmt.Errorf("set app release root permissions: %w", err)
+	}
 
-	return &FileStore{root: filepath.Clean(canonicalRoot), maxBytes: maxBytes}, nil
+	return &FileStore{
+		root:     canonicalRoot,
+		maxBytes: maxBytes,
+		staged:   make(map[string]stagedFileRecord),
+	}, nil
 }
 
 func (s *FileStore) Root() string {
@@ -68,11 +88,14 @@ func (s *FileStore) Stage(originalName string, src io.Reader) (StagedFile, error
 	if src == nil {
 		return StagedFile{}, fmt.Errorf("stream staged APK: reader is nil")
 	}
-	if err := s.ensureRootDirectory(); err != nil {
+
+	s.mu.Lock()
+	if err := s.ensureRootDirectoryLocked(); err != nil {
+		s.mu.Unlock()
 		return StagedFile{}, err
 	}
-
 	tmp, err := os.CreateTemp(s.root, ".tmp-*")
+	s.mu.Unlock()
 	if err != nil {
 		return StagedFile{}, fmt.Errorf("create staged APK: %w", err)
 	}
@@ -101,16 +124,38 @@ func (s *FileStore) Stage(originalName string, src io.Reader) (StagedFile, error
 		cleanup()
 		return StagedFile{}, fmt.Errorf("sync staged APK: %w", err)
 	}
+	info, err := tmp.Stat()
+	if err != nil {
+		cleanup()
+		return StagedFile{}, fmt.Errorf("stat staged APK: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() != n {
+		cleanup()
+		return StagedFile{}, ErrStagedFileChanged
+	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpName)
 		return StagedFile{}, fmt.Errorf("close staged APK: %w", err)
 	}
 
+	record := stagedFileRecord{
+		path:         tmpName,
+		originalName: originalName,
+		size:         n,
+		sha256:       hex.EncodeToString(hash.Sum(nil)),
+		info:         info,
+	}
+	id, err := s.registerStaged(record)
+	if err != nil {
+		_ = os.Remove(tmpName)
+		return StagedFile{}, err
+	}
 	return StagedFile{
-		TempPath:     tmpName,
-		OriginalName: originalName,
-		Size:         n,
-		SHA256:       hex.EncodeToString(hash.Sum(nil)),
+		id:           id,
+		path:         record.path,
+		originalName: record.originalName,
+		size:         record.size,
+		sha256:       record.sha256,
 	}, nil
 }
 
@@ -121,14 +166,56 @@ func (s *FileStore) Commit(staged StagedFile, platform string, versionCode int64
 	if versionCode <= 0 {
 		return SavedFile{}, ErrInvalidVersion
 	}
-	tempPath, err := s.validateStagedPath(staged.TempPath, true)
-	if err != nil {
-		return SavedFile{}, err
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.staged[staged.id]
+	if !ok || staged.id == "" {
+		return SavedFile{}, ErrUnsafePath
 	}
 
 	androidDir := filepath.Join(s.root, "android")
-	if err := s.ensureDirectory(androidDir); err != nil {
+	if err := s.ensureDirectoryLocked(androidDir); err != nil {
 		return SavedFile{}, fmt.Errorf("create Android release directory: %w", err)
+	}
+
+	stagedFile, stagedInfo, err := s.openRegisteredStagedLocked(record)
+	if err != nil {
+		return SavedFile{}, err
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = stagedFile.Close()
+		}
+	}()
+
+	hash := sha256.New()
+	n, err := io.Copy(hash, stagedFile)
+	if err != nil {
+		return SavedFile{}, fmt.Errorf("rehash staged APK: %w", err)
+	}
+	afterHashInfo, err := stagedFile.Stat()
+	if err != nil {
+		return SavedFile{}, fmt.Errorf("stat rehashed staged APK: %w", err)
+	}
+	digest := hex.EncodeToString(hash.Sum(nil))
+	if !sameRegisteredFile(record, stagedInfo) ||
+		!sameRegisteredFile(record, afterHashInfo) ||
+		!os.SameFile(stagedInfo, afterHashInfo) ||
+		n != record.size || digest != record.sha256 {
+		return SavedFile{}, ErrStagedFileChanged
+	}
+
+	pathInfo, err := os.Lstat(record.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return SavedFile{}, ErrStagedFileChanged
+		}
+		return SavedFile{}, fmt.Errorf("recheck staged APK path: %w", err)
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.Mode().IsRegular() || !os.SameFile(afterHashInfo, pathInfo) {
+		return SavedFile{}, ErrStagedFileChanged
 	}
 
 	token, err := randomFileToken()
@@ -136,7 +223,7 @@ func (s *FileStore) Commit(staged StagedFile, platform string, versionCode int64
 		return SavedFile{}, fmt.Errorf("generate app release filename: %w", err)
 	}
 	key := path.Join("android", fmt.Sprintf("%d-%s.apk", versionCode, token))
-	destination, err := s.Resolve(key)
+	destination, err := s.resolveLocked(key)
 	if err != nil {
 		return SavedFile{}, err
 	}
@@ -145,37 +232,58 @@ func (s *FileStore) Commit(staged StagedFile, platform string, versionCode int64
 	} else if !os.IsNotExist(err) {
 		return SavedFile{}, fmt.Errorf("check app release destination: %w", err)
 	}
-	if err := os.Rename(tempPath, destination); err != nil {
+	if err := os.Rename(record.path, destination); err != nil {
 		return SavedFile{}, fmt.Errorf("commit staged APK: %w", err)
 	}
+
+	if err := s.verifyCommittedFileLocked(stagedFile, record, key, destination); err != nil {
+		return SavedFile{}, s.rollbackCommittedFileLocked(staged.id, destination, err)
+	}
+	if err := syncDirectory(androidDir); err != nil {
+		return SavedFile{}, s.rollbackCommittedFileLocked(staged.id, destination, fmt.Errorf("sync Android release directory: %w", err))
+	}
+	if err := stagedFile.Close(); err != nil {
+		closed = true
+		return SavedFile{}, s.rollbackCommittedFileLocked(staged.id, destination, fmt.Errorf("close committed APK: %w", err))
+	}
+	closed = true
+	delete(s.staged, staged.id)
 
 	return SavedFile{
 		Key:          key,
 		Path:         destination,
-		OriginalName: staged.OriginalName,
-		Size:         staged.Size,
-		SHA256:       staged.SHA256,
+		OriginalName: record.originalName,
+		Size:         record.size,
+		SHA256:       record.sha256,
 	}, nil
 }
 
 func (s *FileStore) Discard(staged StagedFile) error {
-	tempPath, err := s.validateStagedPath(staged.TempPath, false)
-	if err != nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.staged[staged.id]
+	if !ok || staged.id == "" {
+		return nil
+	}
+	if err := s.ensureRootDirectoryLocked(); err != nil {
 		return err
 	}
-	info, err := os.Lstat(tempPath)
+	info, err := os.Lstat(record.path)
 	if os.IsNotExist(err) {
+		delete(s.staged, staged.id)
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("stat staged APK: %w", err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return ErrUnsafePath
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || !os.SameFile(record.info, info) {
+		delete(s.staged, staged.id)
+		return ErrStagedFileChanged
 	}
-	if err := os.Remove(tempPath); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(record.path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("discard staged APK: %w", err)
 	}
+	delete(s.staged, staged.id)
 	return nil
 }
 
@@ -183,7 +291,9 @@ func (s *FileStore) Remove(key string) error {
 	if path.Ext(key) != ".apk" {
 		return ErrUnsafePath
 	}
-	resolved, err := s.Resolve(key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	resolved, err := s.resolveLocked(key)
 	if err != nil {
 		return err
 	}
@@ -204,11 +314,214 @@ func (s *FileStore) Remove(key string) error {
 }
 
 func (s *FileStore) Resolve(key string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resolveLocked(key)
+}
+
+func (s *FileStore) CleanupStaleTemps(now time.Time, maxAge time.Duration) error {
+	if maxAge <= 0 {
+		return fmt.Errorf("clean stale app release temps: max age must be positive")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureRootDirectoryLocked(); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return fmt.Errorf("list staged APK files: %w", err)
+	}
+	registered := make(map[string]struct{}, len(s.staged))
+	for _, record := range s.staged {
+		registered[record.path] = struct{}{}
+	}
+	cutoff := now.Add(-maxAge)
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), ".tmp-") {
+			continue
+		}
+		filePath := filepath.Join(s.root, entry.Name())
+		if _, ok := registered[filePath]; ok {
+			continue
+		}
+		info, err := os.Lstat(filePath)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("stat staged APK %q: %w", entry.Name(), err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale staged APK %q: %w", entry.Name(), err)
+		}
+	}
+	return nil
+}
+
+func (s *FileStore) AuditOrphans(referenced map[string]struct{}) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureRootDirectoryLocked(); err != nil {
+		return nil, err
+	}
+	orphans := make([]string, 0)
+	err := filepath.WalkDir(s.root, func(filePath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if filePath == s.root {
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !entry.Type().IsRegular() || filepath.Ext(entry.Name()) != ".apk" || strings.HasPrefix(entry.Name(), ".tmp-") {
+			return nil
+		}
+		rel, err := filepath.Rel(s.root, filePath)
+		if err != nil {
+			return err
+		}
+		key := filepath.ToSlash(rel)
+		if !strings.HasPrefix(key, "android/") {
+			return nil
+		}
+		if _, ok := referenced[key]; !ok {
+			orphans = append(orphans, key)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("audit app release files: %w", err)
+	}
+	sort.Strings(orphans)
+	return orphans, nil
+}
+
+func (s *FileStore) registerStaged(record stagedFileRecord) (string, error) {
+	for {
+		id, err := randomFileToken()
+		if err != nil {
+			return "", fmt.Errorf("generate staged APK handle: %w", err)
+		}
+		s.mu.Lock()
+		if _, exists := s.staged[id]; exists {
+			s.mu.Unlock()
+			continue
+		}
+		if err := s.ensureRootDirectoryLocked(); err != nil {
+			s.mu.Unlock()
+			return "", err
+		}
+		cleanPath, err := s.validateStagedPathLocked(record.path)
+		if err != nil {
+			s.mu.Unlock()
+			return "", err
+		}
+		info, err := os.Lstat(cleanPath)
+		if err != nil {
+			s.mu.Unlock()
+			return "", fmt.Errorf("register staged APK: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || !os.SameFile(record.info, info) {
+			s.mu.Unlock()
+			return "", ErrStagedFileChanged
+		}
+		s.staged[id] = record
+		s.mu.Unlock()
+		return id, nil
+	}
+}
+
+func (s *FileStore) openRegisteredStagedLocked(record stagedFileRecord) (*os.File, os.FileInfo, error) {
+	if err := s.ensureRootDirectoryLocked(); err != nil {
+		return nil, nil, err
+	}
+	cleanPath, err := s.validateStagedPathLocked(record.path)
+	if err != nil {
+		return nil, nil, err
+	}
+	pathInfo, err := os.Lstat(cleanPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, ErrStagedFileChanged
+		}
+		return nil, nil, fmt.Errorf("stat staged APK: %w", err)
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.Mode().IsRegular() || !os.SameFile(record.info, pathInfo) {
+		return nil, nil, ErrStagedFileChanged
+	}
+	file, err := os.Open(cleanPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open staged APK: %w", err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("stat opened staged APK: %w", err)
+	}
+	if !sameRegisteredFile(record, info) || !os.SameFile(pathInfo, info) {
+		_ = file.Close()
+		return nil, nil, ErrStagedFileChanged
+	}
+	return file, info, nil
+}
+
+func (s *FileStore) verifyCommittedFileLocked(file *os.File, record stagedFileRecord, key, destination string) error {
+	resolved, err := s.resolveLocked(key)
+	if err != nil {
+		return err
+	}
+	if resolved != destination {
+		return ErrUnsafePath
+	}
+	destinationInfo, err := os.Lstat(resolved)
+	if err != nil {
+		return fmt.Errorf("lstat committed APK: %w", err)
+	}
+	if destinationInfo.Mode()&os.ModeSymlink != 0 || !destinationInfo.Mode().IsRegular() {
+		return ErrUnsafePath
+	}
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat committed APK descriptor: %w", err)
+	}
+	if !sameRegisteredFile(record, fileInfo) || !os.SameFile(fileInfo, destinationInfo) {
+		return ErrStagedFileChanged
+	}
+	return nil
+}
+
+func (s *FileStore) rollbackCommittedFileLocked(id, destination string, cause error) error {
+	delete(s.staged, id)
+	if err := os.Remove(destination); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("%w (cleanup committed APK: %v)", cause, err)
+	}
+	return cause
+}
+
+func sameRegisteredFile(record stagedFileRecord, info os.FileInfo) bool {
+	return info != nil &&
+		info.Mode().IsRegular() &&
+		os.SameFile(record.info, info) &&
+		info.Mode() == record.info.Mode() &&
+		info.Size() == record.size &&
+		info.ModTime().Equal(record.info.ModTime())
+}
+
+func (s *FileStore) resolveLocked(key string) (string, error) {
 	cleanKey, err := cleanStorageKey(key)
 	if err != nil {
 		return "", err
 	}
-	if err := s.ensureRootDirectory(); err != nil {
+	if err := s.ensureRootDirectoryLocked(); err != nil {
 		return "", err
 	}
 
@@ -243,85 +556,7 @@ func (s *FileStore) Resolve(key string) (string, error) {
 	return candidate, nil
 }
 
-func (s *FileStore) CleanupStaleTemps(now time.Time, maxAge time.Duration) error {
-	if maxAge <= 0 {
-		return fmt.Errorf("clean stale app release temps: max age must be positive")
-	}
-	if err := s.ensureRootDirectory(); err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(s.root)
-	if err != nil {
-		return fmt.Errorf("list staged APK files: %w", err)
-	}
-	cutoff := now.Add(-maxAge)
-	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), ".tmp-") {
-			continue
-		}
-		filePath := filepath.Join(s.root, entry.Name())
-		info, err := os.Lstat(filePath)
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("stat staged APK %q: %w", entry.Name(), err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || !info.ModTime().Before(cutoff) {
-			continue
-		}
-		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove stale staged APK %q: %w", entry.Name(), err)
-		}
-	}
-	return nil
-}
-
-func (s *FileStore) AuditOrphans(referenced map[string]struct{}) ([]string, error) {
-	if err := s.ensureRootDirectory(); err != nil {
-		return nil, err
-	}
-	orphans := make([]string, 0)
-	err := filepath.WalkDir(s.root, func(filePath string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if filePath == s.root {
-			return nil
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		if !entry.Type().IsRegular() || filepath.Ext(entry.Name()) != ".apk" || strings.HasPrefix(entry.Name(), ".tmp-") {
-			return nil
-		}
-		rel, err := filepath.Rel(s.root, filePath)
-		if err != nil {
-			return err
-		}
-		key := filepath.ToSlash(rel)
-		if !strings.HasPrefix(key, "android/") {
-			return nil
-		}
-		if _, ok := referenced[key]; !ok {
-			orphans = append(orphans, key)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("audit app release files: %w", err)
-	}
-	sort.Strings(orphans)
-	return orphans, nil
-}
-
-func (s *FileStore) ensureRootDirectory() error {
+func (s *FileStore) ensureRootDirectoryLocked() error {
 	info, err := os.Lstat(s.root)
 	if err != nil {
 		return fmt.Errorf("stat app release root: %w", err)
@@ -332,12 +567,12 @@ func (s *FileStore) ensureRootDirectory() error {
 	return nil
 }
 
-func (s *FileStore) ensureDirectory(directory string) error {
+func (s *FileStore) ensureDirectoryLocked(directory string) error {
 	rel, err := filepath.Rel(s.root, directory)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 		return ErrUnsafePath
 	}
-	resolved, err := s.Resolve(filepath.ToSlash(rel))
+	resolved, err := s.resolveLocked(filepath.ToSlash(rel))
 	if err != nil {
 		return err
 	}
@@ -357,32 +592,26 @@ func (s *FileStore) ensureDirectory(directory string) error {
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return ErrUnsafePath
 	}
+	if err := os.Chmod(directory, 0o750); err != nil {
+		return err
+	}
+	info, err = os.Lstat(directory)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm() != 0o750 {
+		return ErrUnsafePath
+	}
 	return nil
 }
 
-func (s *FileStore) validateStagedPath(tempPath string, requireExisting bool) (string, error) {
+func (s *FileStore) validateStagedPathLocked(tempPath string) (string, error) {
 	if tempPath == "" || !filepath.IsAbs(tempPath) {
 		return "", ErrUnsafePath
 	}
 	cleanPath := filepath.Clean(tempPath)
 	rel, err := filepath.Rel(s.root, cleanPath)
 	if err != nil || rel == "." || filepath.IsAbs(rel) || filepath.Dir(rel) != "." || !strings.HasPrefix(filepath.Base(rel), ".tmp-") {
-		return "", ErrUnsafePath
-	}
-	if err := s.ensureRootDirectory(); err != nil {
-		return "", err
-	}
-	info, err := os.Lstat(cleanPath)
-	if os.IsNotExist(err) && !requireExisting {
-		return cleanPath, nil
-	}
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("stat staged APK: %w", err)
-		}
-		return "", fmt.Errorf("stat staged APK: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return "", ErrUnsafePath
 	}
 	return cleanPath, nil
@@ -421,4 +650,16 @@ func randomFileToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(raw), nil
+}
+
+func syncDirectory(directory string) error {
+	dir, err := os.Open(directory)
+	if err != nil {
+		return err
+	}
+	if err := dir.Sync(); err != nil {
+		_ = dir.Close()
+		return err
+	}
+	return dir.Close()
 }

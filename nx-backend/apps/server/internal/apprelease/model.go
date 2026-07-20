@@ -30,10 +30,27 @@ type Release struct {
 }
 
 type StagedFile struct {
-	TempPath     string
-	OriginalName string
-	Size         int64
-	SHA256       string
+	id           string
+	path         string
+	originalName string
+	size         int64
+	sha256       string
+}
+
+func (f StagedFile) Path() string {
+	return f.path
+}
+
+func (f StagedFile) OriginalName() string {
+	return f.originalName
+}
+
+func (f StagedFile) Size() int64 {
+	return f.size
+}
+
+func (f StagedFile) SHA256() string {
+	return f.sha256
 }
 
 type SavedFile struct {
@@ -48,6 +65,7 @@ var (
 	ErrFileTooLarge                  = errors.New("apprelease: file too large")
 	ErrInvalidExtension              = errors.New("apprelease: invalid file extension")
 	ErrUnsafePath                    = errors.New("apprelease: unsafe file path")
+	ErrStagedFileChanged             = errors.New("apprelease: staged file changed")
 	ErrUnsupportedPlatform           = errors.New("apprelease: unsupported platform")
 	ErrInvalidVersion                = errors.New("apprelease: invalid version")
 	ErrInvalidAPK                    = errors.New("apprelease: invalid APK")
