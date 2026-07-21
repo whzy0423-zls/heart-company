@@ -130,6 +130,30 @@ docker run --rm -v nine-xing_site-config:/data -v "$PWD":/backup alpine \
 
 # 备份数据库
 docker compose exec db pg_dump -U nx nx_admin > nx_admin.backup.sql
+
+## Android App 版本发布
+
+后台上传正式签名 APK 前，配置 `APP_RELEASE_PACKAGE_NAME` 和 APK 签名证书的 SHA-256 指纹
+`APP_RELEASE_CERT_SHA256`。指纹是公开元数据；服务器不需要、也不应保存 keystore 或私钥。
+可使用 Android build-tools 的 `apksigner verify --verbose --print-certs app-release.apk` 获取指纹。
+指纹未配置时允许保存草稿，但发布会失败关闭。
+
+外层 nginx、宝塔或 CDN 必须仅对 `/api/app-releases/upload` 允许 **301 MiB**，并关闭请求缓冲；
+两个公开 APK 下载路径应关闭代理缓冲与缓存。普通 `/api/` 仍保留现有限制。
+
+APK 文件持久化在 `/data/uploads/app-releases`。一致性备份时先停止写入和公开服务：
+
+```bash
+docker compose stop admin website server
+mkdir -p backups
+docker compose exec -T db sh -lc 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > backups/nx-admin.dump
+docker compose run --rm --no-deps --user root -v "$PWD/backups:/backup" server sh -c 'tar -C /data/uploads -czf /backup/app-releases.tgz app-releases'
+sha256sum backups/nx-admin.dump backups/app-releases.tgz > backups/SHA256SUMS
+```
+
+恢复时数据库和 `app-releases.tgz` 必须使用同一批备份。恢复文件后执行
+`docker compose run --rm --no-deps --user root server chown -R app:app /data/uploads`，再启动服务并下载
+当前正式版本，对比 API、数据库和 APK 文件的 SHA-256。历史归档包会永久保留，除非运维明确清理。
 ```
 
 ## 五、关键配置位置

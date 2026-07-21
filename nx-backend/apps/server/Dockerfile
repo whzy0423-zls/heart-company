@@ -25,7 +25,7 @@ COPY --from=builder /out/server /app/server
 COPY shared/site-config.json /app/default-site-config.json
 COPY nx-backend/apps/server/docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh && \
-    mkdir -p /data && chown -R app:app /app /data
+    mkdir -p /data/uploads/app-releases && chown -R app:app /app /data
 
 USER app
 
