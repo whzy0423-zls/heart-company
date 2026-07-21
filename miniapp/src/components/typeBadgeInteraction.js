@@ -1,4 +1,6 @@
-export function handleTypeBadgeClick(disabled, emit, event) {
+export function handleTypeBadgeClick(interactive, disabled, emit, event) {
+  if (!interactive) return false
+
   if (disabled) {
     event?.preventDefault?.()
     event?.stopPropagation?.()
