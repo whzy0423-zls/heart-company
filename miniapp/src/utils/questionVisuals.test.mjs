@@ -1,15 +1,20 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
+import { QUESTIONS } from '../data/enneagramGame.js'
 import { QUESTION_VISUAL_CENTERS, questionVisualCenter } from './questionVisuals.js'
 
 const allowedCenters = new Set(['head', 'heart', 'gut'])
 
-assert.equal(QUESTION_VISUAL_CENTERS.length, 12, 'presentation mapping should define exactly 12 question indices')
+assert.equal(
+  QUESTION_VISUAL_CENTERS.length,
+  QUESTIONS.length,
+  'presentation mapping should define one visual center for every live question',
+)
 assert.deepEqual(
   Object.keys(QUESTION_VISUAL_CENTERS),
-  Array.from({ length: 12 }, (_, index) => String(index)),
-  'presentation mapping should cover indices 0 through 11 without gaps',
+  Array.from({ length: QUESTIONS.length }, (_, index) => String(index)),
+  'presentation mapping should cover every live question index without gaps',
 )
 for (const center of QUESTION_VISUAL_CENTERS) {
   assert.ok(allowedCenters.has(center), `unexpected visual center: ${center}`)
@@ -25,7 +30,7 @@ for (let index = 0; index < QUESTION_VISUAL_CENTERS.length; index += 1) {
 }
 
 assert.equal(questionVisualCenter(-1), 'head', 'negative indices should use the stable fallback')
-assert.equal(questionVisualCenter(12), 'head', 'indices beyond the explicit mapping should use the stable fallback')
+assert.equal(questionVisualCenter(QUESTIONS.length), 'head', 'indices beyond the live questions should use the stable fallback')
 assert.equal(questionVisualCenter(Number.NaN), 'head', 'invalid indices should use the stable fallback')
 
 const source = readFileSync(new URL('./questionVisuals.js', import.meta.url), 'utf8')

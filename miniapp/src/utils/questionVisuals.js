@@ -1,4 +1,4 @@
-// Presentation-only sequence for the first twelve editorial quiz frames.
+// Presentation-only sequence aligned one-to-one with the editorial quiz frames.
 export const QUESTION_VISUAL_CENTERS = Object.freeze([
   'heart',
   'head',
@@ -10,6 +10,12 @@ export const QUESTION_VISUAL_CENTERS = Object.freeze([
   'heart',
   'head',
   'gut',
+  'gut',
+  'head',
+  'heart',
+  'gut',
+  'head',
+  'heart',
   'gut',
   'head',
 ])
