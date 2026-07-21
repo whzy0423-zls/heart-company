@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { typeTheme } from '../utils/typeTheme'
+import { handleTypeBadgeClick } from './typeBadgeInteraction'
 
 const props = defineProps({
   typeId: {
@@ -24,6 +25,7 @@ const props = defineProps({
     default: false,
   },
 })
+const emit = defineEmits(['click'])
 
 const theme = computed(() => typeTheme(props.typeId))
 const themeStyle = computed(() => ({
@@ -31,6 +33,10 @@ const themeStyle = computed(() => ({
   '--type-soft': theme.value.soft,
   '--type-ink': theme.value.ink,
 }))
+
+function onClick(event) {
+  return handleTypeBadgeClick(props.disabled, emit, event)
+}
 </script>
 
 <template>
@@ -43,6 +49,7 @@ const themeStyle = computed(() => ({
     :style="themeStyle"
     :aria-disabled="disabled ? 'true' : 'false'"
     :aria-pressed="selected ? 'true' : 'false'"
+    @click="onClick"
   >
     <text class="type-badge__number">{{ typeId }}</text>
     <text v-if="label" class="type-badge__label">{{ label }}</text>

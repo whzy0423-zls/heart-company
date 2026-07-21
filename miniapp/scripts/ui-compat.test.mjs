@@ -26,6 +26,7 @@ assert.match(appVue, /@import ['"]\.\/styles\/apple-mobile\.css['"];/, 'App.vue 
 for (const token of ['--nx-bg', '--nx-ink', '--nx-blue', '--nx-coral', '--nx-error', '--nx-focus']) {
   assert.match(appleMobileStyle, new RegExp(token), `apple-mobile.css should define ${token}`)
 }
+assert.match(appleMobileStyle, /--nx-radius-lg:\s*32rpx/, 'the largest global content radius should be 32rpx')
 for (const className of ['.nx-page', '.nx-editorial-hero', '.nx-panel', '.nx-media-row', '.nx-quote', '.nx-field', '.nx-empty', '.nx-error']) {
   assert.match(appleMobileStyle, new RegExp(className.replace('.', '\\.') + '\\s*\\{'), `apple-mobile.css should define ${className}`)
 }

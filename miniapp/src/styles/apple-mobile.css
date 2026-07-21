@@ -16,7 +16,7 @@ page {
 
   --nx-radius-sm: 16rpx;
   --nx-radius-md: 24rpx;
-  --nx-radius-lg: 36rpx;
+  --nx-radius-lg: 32rpx;
   --nx-radius-pill: 999rpx;
   --nx-shadow-sm: 0 8rpx 24rpx rgba(23, 33, 43, .08);
   --nx-shadow-md: 0 20rpx 54rpx rgba(23, 33, 43, .12);
