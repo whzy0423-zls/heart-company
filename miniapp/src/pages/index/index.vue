@@ -17,6 +17,23 @@ const COURSE_FALLBACKS = [
   '/static/editorial/course-growth.webp',
   '/static/editorial/course-relation.webp',
 ]
+const TEACHER_SECTION_PATHS = [
+  ['teacher'],
+  ['teachers'],
+  ['home', 'teacher'],
+  ['home', 'teachers'],
+  ['home', 'teacherTeaser'],
+]
+const COURSE_SECTION_PATHS = [
+  ['courseware'],
+  ['materials'],
+  ['lessons'],
+  ['courses'],
+  ['home', 'courseware'],
+  ['home', 'materials'],
+  ['home', 'lessons'],
+  ['home', 'courses'],
+]
 
 const total = QUESTIONS.length
 const teachers = ref(normalizeTeachers())
@@ -38,18 +55,49 @@ function courseFallback(index) {
   return COURSE_FALLBACKS[index % COURSE_FALLBACKS.length]
 }
 
+function hasSectionAtPath(config, path) {
+  let current = config
+  for (let index = 0; index < path.length; index += 1) {
+    if (!current || typeof current !== 'object') return false
+    const key = path[index]
+    if (!Object.prototype.hasOwnProperty.call(current, key)) return false
+    if (index === path.length - 1) return true
+    current = current[key]
+  }
+  return false
+}
+
+function hasTeacherSection(config) {
+  return TEACHER_SECTION_PATHS.some((path) => hasSectionAtPath(config, path))
+}
+
+function hasCourseSection(config) {
+  return COURSE_SECTION_PATHS.some((path) => hasSectionAtPath(config, path))
+}
+
+function homeCourseCover(course, index) {
+  const cover = typeof course?.cover === 'string' ? course.cover.trim() : ''
+  const isLegacyWheel = /^\/static\/wheel\.png(?:[?#].*)?$/i.test(cover)
+  return !cover || isLegacyWheel ? courseFallback(index) : cover
+}
+
 function syncContentImages() {
   teacherImageFallbackUsed.value = false
   courseImageFallbackUsed.value = {}
   teacherImage.value = resolveContentAsset(teacher.value?.avatar, TEACHER_FALLBACK)
   courseImages.value = courses.value.map((course, index) => (
-    resolveContentAsset(course.cover, courseFallback(index))
+    resolveContentAsset(homeCourseCover(course, index), courseFallback(index))
   ))
 }
 
-function applyContent(config) {
-  teachers.value = normalizeTeachers(config)
-  courses.value = normalizeCoursewareItems(config)
+function applyContent(config, options = {}) {
+  const preserveMissing = !!options.preserveMissing
+  if (!preserveMissing || hasTeacherSection(config)) {
+    teachers.value = normalizeTeachers(config)
+  }
+  if (!preserveMissing || hasCourseSection(config)) {
+    courses.value = normalizeCoursewareItems(config)
+  }
   syncContentImages()
 }
 
@@ -75,7 +123,7 @@ async function loadContent() {
   try {
     const config = await refreshSiteConfig()
     if (ticket !== loadTicket) return
-    applyContent(config)
+    applyContent(config, { preserveMissing: true })
   } catch (error) {
     if (ticket !== loadTicket) return
     loadError.value = userErrorMessage(error, '内容更新失败，当前仍可继续浏览')
