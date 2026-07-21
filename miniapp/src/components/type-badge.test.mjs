@@ -65,6 +65,14 @@ assert.match(source, /\{\{\s*label\s*\}\}/, 'type badge should render the provid
 assert.match(source, /\.type-badge__number\s*\{[\s\S]*color:\s*var\(--badge-ink\)/, 'badge digits should use the guaranteed high-contrast ink token')
 assert.match(source, /\.type-badge__label\s*\{[\s\S]*color:\s*var\(--badge-ink\)/, 'badge labels should use the guaranteed high-contrast ink token')
 assert.doesNotMatch(source, /\.type-badge__number\s*\{[\s\S]*?color:\s*var\(--type-accent\)/, 'accent colors should not be used for small digit text')
+
+const baseStyle = source.match(/(?:^|\n)\.type-badge\s*\{([\s\S]*?)\n\}/)?.[1] || ''
+const selectedStyle = source.match(/\.type-badge--selected\s*\{([\s\S]*?)\n\}/)?.[1] || ''
+assert.match(baseStyle, /border:\s*2rpx solid var\(--nx-line/, 'unselected badges should use a neutral low-emphasis border')
+assert.match(baseStyle, /background:\s*var\(--nx-surface/, 'unselected badges should use the neutral surface background')
+assert.match(selectedStyle, /background:\s*var\(--type-soft\)/, 'selected badges should use a stronger type-colored fill')
+assert.match(selectedStyle, /box-shadow:\s*inset 0 0 0 4rpx var\(--type-accent\)/, 'selected badges should add a strong accent indicator without changing layout geometry')
+assert.doesNotMatch(selectedStyle, /border-width:\s*(?!2rpx)/, 'selected styling should not change border width and cause layout shift')
 assert.doesNotMatch(source, /type-(?:1|2|3|4|5|6|7|8|9)\b/, 'type badge should not duplicate nine per-type CSS classes')
 
 const dir = await mkdtemp(join(tmpdir(), 'nx-miniapp-type-badge-interaction-'))

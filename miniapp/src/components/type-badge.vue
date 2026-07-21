@@ -117,9 +117,9 @@ function onClick(event) {
   gap: 10rpx;
   min-height: 56rpx;
   padding: 8rpx 18rpx;
-  border: 2rpx solid var(--type-accent);
+  border: 2rpx solid var(--nx-line, #DEDCD5);
   border-radius: 999rpx;
-  background: var(--type-soft);
+  background: var(--nx-surface, #FFFDF8);
   color: var(--badge-ink);
   box-sizing: border-box;
   transition: opacity .16s ease, transform .16s ease, box-shadow .16s ease;
@@ -131,7 +131,8 @@ function onClick(event) {
 
 .type-badge--selected {
   border-color: var(--type-accent);
-  box-shadow: 0 0 0 4rpx var(--type-soft);
+  background: var(--type-soft);
+  box-shadow: inset 0 0 0 4rpx var(--type-accent);
 }
 
 .type-badge--disabled {
