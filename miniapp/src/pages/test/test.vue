@@ -537,15 +537,26 @@ onUnload(() => {
 }
 
 @media screen and (min-width: 768px) {
+  .test.wrap {
+    max-width: 1400rpx;
+    padding-left: clamp(32rpx, 4vw, 56rpx);
+    padding-right: clamp(32rpx, 4vw, 56rpx);
+  }
+  .gender {
+    width: 100%;
+    max-width: 900rpx;
+    margin: 0 auto;
+    box-sizing: border-box;
+  }
   .quiz {
-    max-width: 1180rpx;
+    max-width: 1280rpx;
     padding: 48rpx;
   }
   .quiz__body {
     display: grid;
-    grid-template-columns: minmax(260rpx, .78fr) minmax(0, 1.35fr);
+    grid-template-columns: minmax(0, .58fr) minmax(0, 1.42fr);
     align-items: start;
-    gap: 52rpx;
+    gap: 40rpx;
   }
   .quiz__media-column {
     min-width: 0;
