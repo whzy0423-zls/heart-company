@@ -26,6 +26,16 @@ assert.equal(
   '/api/public/site-uploads should resolve against the HTTPS API origin without duplicating /api',
 )
 
+let excessivelyEncodedDot = '%2e'
+for (let index = 0; index < 8; index += 1) excessivelyEncodedDot = encodeURIComponent(excessivelyEncodedDot)
+const protectedPrefixes = ['/static/', '/assets/', '/api/public/site-uploads/']
+const encodedAttackPaths = protectedPrefixes.flatMap((prefix) => [
+  `${prefix}%2e%2e/private.jpg`,
+  `${prefix}%252e%252e/private.jpg`,
+  `${prefix}folder%5cprivate.jpg`,
+  `${prefix}folder%255cprivate.jpg`,
+])
+
 for (const unsafe of [
   '',
   '   ',
@@ -36,9 +46,29 @@ for (const unsafe of [
   'teacher.jpg',
   'https://',
   '/assets/../private.jpg',
+  '/api/public/site-uploads/folder%2f..%2fprivate.jpg',
+  '/api/public/site-uploads/file%00.jpg',
+  '/assets/file%250a.jpg',
+  '/static/file%C2%85.jpg',
+  '/assets/file%25C2%2585.jpg',
+  '/static/bad%encoding.jpg',
+  `/assets/${excessivelyEncodedDot}.jpg`,
+  ...encodedAttackPaths,
 ]) {
   assert.equal(resolveContentAsset(unsafe, fallback), fallback, `unsafe or malformed asset should use fallback: ${unsafe}`)
 }
+
+assert.equal(resolveContentAsset('/static/%E8%AF%BE%E7%A8%8B.webp', fallback), '/static/%E8%AF%BE%E7%A8%8B.webp', 'a valid encoded local filename should remain local')
+assert.equal(
+  resolveContentAsset('/assets/%E9%9F%A9%E8%80%81%E5%B8%88.jpg', fallback),
+  'https://api.nine-xing.test/assets/%E9%9F%A9%E8%80%81%E5%B8%88.jpg',
+  'a valid encoded asset filename should resolve normally',
+)
+assert.equal(
+  resolveContentAsset('/api/public/site-uploads/%E8%80%81%E5%B8%88.jpg', fallback),
+  'https://api.nine-xing.test/api/public/site-uploads/%E8%80%81%E5%B8%88.jpg',
+  'a valid encoded upload filename should resolve normally',
+)
 assert.equal(resolveContentAsset(null, ''), '', 'the caller-provided fallback should be deterministic even when empty')
 
 console.log('content asset resolver tests passed')

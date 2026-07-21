@@ -1,12 +1,31 @@
 import { API_BASE } from '../config'
 
-function isSafeLocalPath(value, prefix) {
-  if (!value.startsWith(prefix) || value.includes('\\')) return false
-  try {
-    return !decodeURIComponent(value).split(/[/?#]/).includes('..')
-  } catch {
-    return false
+const MAX_DECODE_PASSES = 6
+
+function hasUnsafePathContent(value) {
+  return /[\u0000-\u001f\u007f-\u009f]/.test(value)
+    || value.includes('\\')
+    || value.split(/[/?#]/).some((segment) => segment === '..')
+}
+
+function isSafelyEncodedPath(value) {
+  let decoded = value
+  for (let pass = 0; pass < MAX_DECODE_PASSES; pass += 1) {
+    if (hasUnsafePathContent(decoded)) return false
+    let next
+    try {
+      next = decodeURIComponent(decoded)
+    } catch {
+      return false
+    }
+    if (next === decoded) return true
+    decoded = next
   }
+  return false
+}
+
+function isSafeLocalPath(value, prefix) {
+  return value.startsWith(prefix) && isSafelyEncodedPath(value)
 }
 
 function httpsApiOrigin() {
