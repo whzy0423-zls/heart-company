@@ -60,14 +60,19 @@ for (const file of ['src/pages/relation/relation.vue', 'src/pages/test/test.vue'
 }
 
 const indexPage = readFileSync('src/pages/index/index.vue', 'utf8')
-const homeFeatureCards = indexPage.match(/<view\b[^>]*role=["']button["'][^>]*>/g) || []
-assert.ok(homeFeatureCards.length >= 3, 'home page should keep non-chat feature cards exposed as button-like controls')
-for (const card of homeFeatureCards) {
-  assert.match(card, /aria-label=["'][^"']+["']/, `home feature card should expose an accessibility label: ${card}`)
-  assert.match(card, /aria-pressed=["']false["']/, `home feature card should expose explicit non-toggle pressed state: ${card}`)
-  assert.match(card, /hover-class=["']grid__item--hover["']/, `home feature card should expose a hover/press visual state: ${card}`)
-}
-assert.match(indexPage, /\.grid__item--hover\s*\{[\s\S]*(?:opacity|transform)/, 'home feature card hover state should have visible feedback')
+const primaryHomeCtaCopies = indexPage.match(/开始测试/g) || []
+assert.equal(primaryHomeCtaCopies.length, 1, 'home page should expose exactly one primary CTA copy: 开始测试')
+assert.match(indexPage, /<view\s+class=["'][^"']*nx-editorial-hero[^"']*home-editorial-hero[^"']*["']/, 'home page should expose the editorial hero marker')
+assert.match(indexPage, /<image\b[^>]*class=["'][^"']*home-hero__image[^"']*["'][^>]*src=["']\/static\/editorial\/home-hero\.webp["'][^>]*>/, 'home hero should use the dedicated editorial artwork')
+assert.doesNotMatch(indexPage.match(/<image\b[^>]*class=["'][^"']*home-hero__image[^"']*["'][^>]*>/)?.[0] || '', /lazy-load/, 'above-fold home hero should load eagerly')
+assert.match(indexPage, /import\s+TypeBadge\s+from\s+["'][^"']*type-badge\.vue["']/, 'home page should use the shared type badge component')
+assert.match(indexPage, /<TypeBadge\b[^>]*v-for=["']typeId in typeIds["'][^>]*:type-id=["']typeId["'][^>]*>/, 'home page should visibly loop through type badges 1-9')
+assert.match(indexPage, /const\s+typeIds\s*=\s*\[1,\s*2,\s*3,\s*4,\s*5,\s*6,\s*7,\s*8,\s*9\]/, 'home page should expose all nine type badge ids')
+assert.match(indexPage, /class=["'][^"']*home-entry--relation[^"']*["'][\s\S]*@click=["']goRelation["']/, 'home page should keep a relationship matching entry')
+assert.match(indexPage, /class=["'][^"']*home-entry--learn[^"']*["'][\s\S]*@click=["']goLearn["']/, 'home page should keep a learning entry')
+assert.match(indexPage, /DEFAULT_COURSEWARE_ITEMS\[0\]/, 'home recommended course should use the fixed local fallback')
+assert.match(indexPage, /class=["'][^"']*home-course[^"']*["'][\s\S]*@click=["']goLearn["']/, 'home page should expose a recommended course media entry')
+assert.match(indexPage, /<button\s+class=["'][^"']*nx-button--primary[^"']*["'][^>]*@click=["']startTest["'][^>]*>\s*开始测试\s*<\/button>/, 'home primary CTA should use the shared 88rpx tap-target class')
 assert.doesNotMatch(indexPage, /openChatPage|goChat|问 AI|AI 对话|打开 AI 对话/, 'home page must not expose AI chat entry copy or handlers')
 
 
