@@ -228,6 +228,21 @@ assert.match(testPage, /<button\b[\s\S]*class=["'][^"']*quiz__back[^"']*["'][\s\
 assert.match(testPage, /<button\b[\s\S]*v-for=["']\(opt, k\) in q\.options["'][\s\S]*class=["']quiz__opt["'][\s\S]*:aria-label=/, 'quiz options should use button semantics with accessibility labels')
 assert.match(testPage, /\.quiz__opt\s*\{[\s\S]*min-height:\s*88rpx/, 'quiz options should keep an 88rpx touch target')
 assert.match(testPage, /\.quiz__opt:focus-visible[\s\S]*\.quiz__back:focus-visible\s*\{[^}]*outline:/, 'quiz controls should expose a visible keyboard focus state')
+assert.match(testPage, /const\s+currentVisualCenter\s*=\s*computed\(\(\)\s*=>\s*questionVisualCenter\(step\.value\)\)/, 'quiz atmosphere should derive only from the existing question visual center mapping')
+assert.match(testPage, /:class=["']\[?[^"']*["']quiz--["']\s*\+\s*currentVisualCenter/, 'quiz should expose a head, heart, or gut presentation class from currentVisualCenter')
+for (const center of ['head', 'heart', 'gut']) {
+  assert.match(testPage, new RegExp(`\\.quiz--${center}\\s*\\{[^}]*(?:background|--quiz-accent):`), `quiz should define a controlled ${center} atmosphere`)
+}
+assert.match(testPage, /<text\s+class=["']quiz__idx["'][^>]*>\{\{\s*letter\(k\)\s*\}\}<\/text>/, 'quiz options should expose a visible A/B/C marker')
+assert.match(testPage, /class=["']quiz__opt-accent["']\s+aria-hidden=["']true["']/, 'quiz options should expose a decorative left-side structural accent')
+assert.match(testPage, /class=["']quiz__check["']\s+aria-hidden=["']true["']/, 'quiz selected options should expose a visible shape/check indicator')
+assert.match(testPage, /\.quiz__opt--selected[\s\S]*?\{[^}]*(?:background|background-color):\s*(?!transparent|none)[^;}]+[^}]*box-shadow:/, 'quiz selection should use a distinct fill and ring instead of border alone')
+assert.match(testPage, /animation:\s*quiz-enter\s+\.(?:18|19|2[0-6])s\s+[^;]*backwards/, 'quiz question/media/options should enter within the 180-260ms motion budget without persisting final styles')
+assert.doesNotMatch(testPage, /animation:\s*quiz-enter[^;]*(?:both|forwards)/, 'quiz entry animation must not persist opacity or transform after entry')
+assert.match(testPage, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?animation:\s*none[\s\S]*?transition:\s*none/, 'quiz should disable nonessential motion when reduced motion is requested')
+assert.match(testPage, /@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{[\s\S]*?\.quiz__body\s*\{[^}]*grid-template-columns:/, 'tablet quiz should become an intentional two-column media/content composition at 768px')
+assert.doesNotMatch(testPage, /(?:backdrop-)?filter\s*:/, 'quiz must not use filter or backdrop-filter effects')
+assert.doesNotMatch(testPage, /\.(?:wrap|quiz)(?:__canvas|__texture)?[^\{]*\{[^}]*animation:\s*[^;}]*infinite/, 'quiz must not continuously animate full-page or texture layers')
 
 assert.match(learnPage, /getStoredSiteConfig/, 'learn page should render stored site config before network refresh')
 assert.match(learnPage, /refreshSiteConfig/, 'learn page should refresh site config in the background')

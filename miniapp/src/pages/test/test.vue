@@ -17,8 +17,8 @@ let advanceTimer = null
 
 const q = computed(() => QUESTIONS[step.value])
 const progress = computed(() => ((step.value + 1) / QUESTIONS.length) * 100)
-const visualCenter = computed(() => questionVisualCenter(step.value))
-const questionVisualSrc = computed(() => `/static/editorial/center-${visualCenter.value}.webp`)
+const currentVisualCenter = computed(() => questionVisualCenter(step.value))
+const questionVisualSrc = computed(() => `/static/editorial/center-${currentVisualCenter.value}.webp`)
 
 function start(g) {
   clearAdvanceTimer()
@@ -131,7 +131,7 @@ onUnload(() => {
     </view>
 
     <!-- 答题 -->
-    <view v-else class="quiz nx-panel">
+    <view v-else class="quiz nx-panel" :class="'quiz--' + currentVisualCenter">
       <view class="quiz__progress-copy">
         <text class="quiz__progress-label">测试进度</text>
         <text class="quiz__progress-count">进度 {{ step + 1 }} / {{ QUESTIONS.length }}</text>
@@ -147,58 +147,66 @@ onUnload(() => {
         <view class="quiz__bar-fill" :style="{ width: progress + '%' }" />
       </view>
 
-      <view class="quiz__visual" aria-hidden="true">
-        <image
-          class="quiz__illustration"
-          :src="questionVisualSrc"
-          mode="aspectFill"
-          :alt="'第 ' + (step + 1) + ' 题抽象插画'"
-        />
-      </view>
+      <view class="quiz__body">
+        <view :key="'visual-' + step" class="quiz__media-column">
+          <view class="quiz__visual" aria-hidden="true">
+            <image
+              class="quiz__illustration"
+              :src="questionVisualSrc"
+              mode="aspectFill"
+              :alt="'第 ' + (step + 1) + ' 题抽象插画'"
+            />
+          </view>
+        </view>
 
-      <view class="quiz__question-block">
-        <text class="quiz__number">第 {{ step + 1 }} 题</text>
-        <text
-          ref="questionHeading"
-          class="quiz__q"
-          tabindex="-1"
-          aria-live="polite"
-          aria-atomic="true"
-        >
-          {{ q.q }}
-        </text>
-      </view>
+        <view class="quiz__content-column">
+          <view :key="'question-' + step" class="quiz__question-block">
+            <text class="quiz__number">第 {{ step + 1 }} 题</text>
+            <text
+              ref="questionHeading"
+              class="quiz__q"
+              tabindex="-1"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {{ q.q }}
+            </text>
+          </view>
 
-      <view class="quiz__options">
-        <button
-          v-for="(opt, k) in q.options"
-          :key="step + '-' + k"
-          class="quiz__opt"
-          :class="{
-            'quiz__opt--selected': answers[step] === opt,
-            'quiz__opt--locked': answerLocked,
-          }"
-          :disabled="answerLocked"
-          :aria-pressed="answers[step] === opt"
-          :aria-label="'选择答案 ' + letter(k) + '：' + opt.t"
-          hover-class="quiz__opt--hover"
-          @click="choose(opt)"
-        >
-          <text class="quiz__idx">{{ letter(k) }}</text>
-          <text class="quiz__t">{{ opt.t }}</text>
-        </button>
-      </view>
+          <view :key="'options-' + step" class="quiz__options">
+            <button
+              v-for="(opt, k) in q.options"
+              :key="step + '-' + k"
+              class="quiz__opt"
+              :class="{
+                'quiz__opt--selected': answers[step] === opt,
+                'quiz__opt--locked': answerLocked,
+              }"
+              :disabled="answerLocked"
+              :aria-pressed="answers[step] === opt"
+              :aria-label="'选择答案 ' + letter(k) + '：' + opt.t"
+              hover-class="quiz__opt--hover"
+              @click="choose(opt)"
+            >
+              <view class="quiz__opt-accent" aria-hidden="true" />
+              <text class="quiz__idx">{{ letter(k) }}</text>
+              <text class="quiz__t">{{ opt.t }}</text>
+              <text class="quiz__check" aria-hidden="true">✓</text>
+            </button>
+          </view>
 
-      <view class="quiz__footer">
-        <button
-          class="nx-button--text quiz__back"
-          v-if="step > 0"
-          aria-label="返回上一题"
-          hover-class="quiz__back--hover"
-          @click="back"
-        >
-          ← 上一题
-        </button>
+          <view class="quiz__footer">
+            <button
+              class="nx-button--text quiz__back"
+              v-if="step > 0"
+              aria-label="返回上一题"
+              hover-class="quiz__back--hover"
+              @click="back"
+            >
+              ← 上一题
+            </button>
+          </view>
+        </view>
       </view>
     </view>
   </view>
@@ -287,11 +295,31 @@ onUnload(() => {
 }
 
 .quiz {
+  --quiz-accent: var(--nx-blue);
+  --quiz-selected-bg: #E4E9FC;
+  --quiz-atmosphere: rgba(49, 91, 234, .10);
   width: 100%;
   max-width: 720rpx;
   margin: 0 auto;
   padding: 36rpx;
+  overflow: hidden;
   box-sizing: border-box;
+  background: linear-gradient(145deg, var(--quiz-atmosphere) 0, rgba(255, 253, 248, .96) 34%, #FFFDF8 100%);
+}
+.quiz--head {
+  --quiz-accent: #315BEA;
+  --quiz-selected-bg: #E4E9FC;
+  --quiz-atmosphere: rgba(49, 91, 234, .12);
+}
+.quiz--heart {
+  --quiz-accent: #C9472D;
+  --quiz-selected-bg: #F5DDD6;
+  --quiz-atmosphere: rgba(201, 71, 45, .12);
+}
+.quiz--gut {
+  --quiz-accent: #347B62;
+  --quiz-selected-bg: #DDECE6;
+  --quiz-atmosphere: rgba(52, 123, 98, .13);
 }
 .quiz__progress-copy {
   display: flex;
@@ -320,8 +348,14 @@ onUnload(() => {
 .quiz__bar-fill {
   height: 100%;
   border-radius: inherit;
-  background: var(--nx-coral);
+  background: var(--quiz-accent);
   transition: width .24s ease;
+}
+.quiz__body {
+  min-width: 0;
+}
+.quiz__media-column {
+  animation: quiz-enter .22s ease-out backwards;
 }
 .quiz__visual {
   width: 100%;
@@ -330,7 +364,10 @@ onUnload(() => {
   margin: 24rpx auto 0;
   overflow: hidden;
   border-radius: var(--nx-radius-md);
-  background: var(--nx-bg);
+  border: 2rpx solid rgba(23, 33, 43, .10);
+  background: var(--quiz-selected-bg);
+  box-shadow: 0 14rpx 32rpx rgba(23, 33, 43, .10);
+  box-sizing: border-box;
 }
 .quiz__illustration {
   display: block;
@@ -342,9 +379,10 @@ onUnload(() => {
   flex-direction: column;
   gap: 14rpx;
   margin-top: 36rpx;
+  animation: quiz-enter .22s ease-out backwards;
 }
 .quiz__number {
-  color: var(--nx-coral);
+  color: var(--quiz-accent);
   font-size: 24rpx;
   font-weight: 800;
   letter-spacing: 2rpx;
@@ -364,8 +402,10 @@ onUnload(() => {
   flex-direction: column;
   gap: 20rpx;
   margin-top: 36rpx;
+  animation: quiz-enter .24s ease-out .04s backwards;
 }
 .quiz__opt {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 20rpx;
@@ -375,25 +415,35 @@ onUnload(() => {
   border: 2rpx solid var(--nx-line);
   border-radius: var(--nx-radius-sm);
   background: var(--nx-surface);
-  padding: 24rpx;
+  padding: 24rpx 24rpx 24rpx 30rpx;
+  overflow: hidden;
   box-sizing: border-box;
   text-align: left;
   line-height: 1.2;
   touch-action: manipulation;
-  transition: border-color .16s ease, background-color .16s ease, box-shadow .16s ease, transform .16s ease;
+  transition: opacity .22s ease, transform .22s ease, border-color .22s ease, background-color .22s ease, box-shadow .22s ease;
 }
 .quiz__opt::after { border: none; }
 .quiz__opt[disabled] {
   pointer-events: none;
   opacity: .5;
 }
-.quiz__opt--hover { transform: translateY(2rpx) scale(.992); }
+.quiz__opt--hover { opacity: .84; transform: translateY(2rpx) scale(.992); }
 .quiz__opt--selected,
 .quiz__opt--selected[disabled] {
-  border-color: var(--nx-blue);
-  background: var(--nx-primary-soft);
-  box-shadow: 0 0 0 4rpx rgba(49, 91, 234, .12);
+  border-color: var(--quiz-accent);
+  background: var(--quiz-selected-bg);
+  box-shadow: inset 0 0 0 2rpx var(--quiz-accent), 0 8rpx 22rpx rgba(23, 33, 43, .12);
   opacity: 1;
+}
+.quiz__opt-accent {
+  position: absolute;
+  top: 18rpx;
+  bottom: 18rpx;
+  left: 0;
+  width: 8rpx;
+  border-radius: 0 8rpx 8rpx 0;
+  background: var(--quiz-accent);
 }
 .quiz__idx {
   width: 56rpx;
@@ -410,8 +460,8 @@ onUnload(() => {
   justify-content: center;
 }
 .quiz__opt--selected .quiz__idx {
-  border-color: var(--nx-blue);
-  background: var(--nx-blue);
+  border-color: var(--quiz-accent);
+  background: var(--quiz-accent);
   color: #FFFFFF;
 }
 .quiz__t {
@@ -420,6 +470,26 @@ onUnload(() => {
   font-size: 29rpx;
   font-weight: 600;
   line-height: 1.5;
+}
+.quiz__check {
+  width: 44rpx;
+  height: 44rpx;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--quiz-accent);
+  color: #FFFFFF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24rpx;
+  font-weight: 900;
+  opacity: 0;
+  transform: scale(.72);
+  transition: opacity .22s ease, transform .22s ease;
+}
+.quiz__opt--selected .quiz__check {
+  opacity: 1;
+  transform: scale(1);
 }
 .quiz__footer {
   display: flex;
@@ -444,6 +514,13 @@ onUnload(() => {
   outline-offset: 4rpx;
 }
 
+@keyframes quiz-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12rpx);
+  }
+}
+
 @media (max-width: 420px) {
   .gender__row {
     flex-direction: column;
@@ -459,9 +536,39 @@ onUnload(() => {
   }
 }
 
-@media (min-width: 760px) {
+@media screen and (min-width: 768px) {
   .quiz {
+    max-width: 1180rpx;
     padding: 48rpx;
+  }
+  .quiz__body {
+    display: grid;
+    grid-template-columns: minmax(260rpx, .78fr) minmax(0, 1.35fr);
+    align-items: start;
+    gap: 52rpx;
+  }
+  .quiz__media-column {
+    min-width: 0;
+  }
+  .quiz__visual {
+    max-width: none;
+    margin-top: 38rpx;
+  }
+  .quiz__content-column {
+    min-width: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quiz__media-column,
+  .quiz__question-block,
+  .quiz__options {
+    animation: none;
+  }
+  .quiz__bar-fill,
+  .quiz__opt,
+  .quiz__check {
+    transition: none;
   }
 }
 </style>
