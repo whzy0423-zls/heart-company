@@ -210,7 +210,7 @@ function goRelation() {
 .home-hero__art {
   position: relative;
   width: 100%;
-  height: 410rpx;
+  aspect-ratio: 4 / 3;
   overflow: hidden;
   background: var(--nx-coral-soft);
 }
@@ -218,7 +218,7 @@ function goRelation() {
 .home-hero__image {
   display: block;
   width: 100%;
-  height: 410rpx;
+  height: 100%;
 }
 
 .home-hero__caption {
@@ -435,8 +435,6 @@ function goRelation() {
 @media screen and (min-width: 700px) {
   .home-hero__copy { padding: 54rpx 48rpx 42rpx; }
   .home-hero__title { font-size: 64rpx; }
-  .home-hero__art,
-  .home-hero__image { height: 450rpx; }
   .home-entry { min-height: 300rpx; }
   .home-entry--learn { margin-top: 34rpx; }
 }

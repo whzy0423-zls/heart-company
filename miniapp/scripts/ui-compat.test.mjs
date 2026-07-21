@@ -65,6 +65,8 @@ assert.equal(primaryHomeCtaCopies.length, 1, 'home page should expose exactly on
 assert.match(indexPage, /<view\s+class=["'][^"']*nx-editorial-hero[^"']*home-editorial-hero[^"']*["']/, 'home page should expose the editorial hero marker')
 assert.match(indexPage, /<image\b[^>]*class=["'][^"']*home-hero__image[^"']*["'][^>]*src=["']\/static\/editorial\/home-hero\.webp["'][^>]*>/, 'home hero should use the dedicated editorial artwork')
 assert.doesNotMatch(indexPage.match(/<image\b[^>]*class=["'][^"']*home-hero__image[^"']*["'][^>]*>/)?.[0] || '', /lazy-load/, 'above-fold home hero should load eagerly')
+assert.match(indexPage, /\.home-hero__art\s*\{[^}]*aspect-ratio:\s*4\s*\/\s*3/, 'home hero frame should preserve the source artwork 4:3 aspect ratio')
+assert.doesNotMatch(indexPage, /\.home-hero__art\s*\{[^}]*height:\s*(?:410|450)rpx/, 'home hero frame should not force a conflicting fixed height')
 assert.match(indexPage, /import\s+TypeBadge\s+from\s+["'][^"']*type-badge\.vue["']/, 'home page should use the shared type badge component')
 assert.match(indexPage, /<TypeBadge\b[^>]*v-for=["']typeId in typeIds["'][^>]*:type-id=["']typeId["'][^>]*>/, 'home page should visibly loop through type badges 1-9')
 assert.match(indexPage, /const\s+typeIds\s*=\s*\[1,\s*2,\s*3,\s*4,\s*5,\s*6,\s*7,\s*8,\s*9\]/, 'home page should expose all nine type badge ids')
