@@ -50,6 +50,35 @@ function normalizeTags(value) {
   return []
 }
 
+function normalizeTextList(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean)
+  if (typeof value === 'string') return value.split(/[、,，/]+/).map((item) => item.trim()).filter(Boolean)
+  return []
+}
+
+function meaningfulEyebrow(value) {
+  const eyebrow = typeof value === 'string' ? value.trim() : ''
+  if (!eyebrow || /^(老师|导师|师资)(简介|介绍)?$/.test(eyebrow)) return ''
+  return eyebrow
+}
+
+function teacherNameAndTitle(source) {
+  const explicitName = firstText(source, ['name', 'teacherName', 'nickname'])
+  if (explicitName) {
+    return {
+      name: explicitName,
+      title: firstText(source, ['title', 'role', 'position', 'subtitle']) || meaningfulEyebrow(source?.eyebrow) || '九型人格导师',
+    }
+  }
+
+  const combinedTitle = firstText(source, ['title'])
+  const [name, ...identityParts] = combinedTitle.split(/[｜|]/).map((part) => part.trim()).filter(Boolean)
+  return {
+    name: name || '九型老师',
+    title: identityParts.join('｜') || meaningfulEyebrow(source?.eyebrow) || '九型人格导师',
+  }
+}
+
 function uniqueByTitle(items) {
   const seen = new Set()
   return items.filter((item) => {
@@ -66,15 +95,17 @@ export function normalizeTeachers(config) {
     ...asArray(config?.teachers),
     ...asArray(config?.home?.teacher),
     ...asArray(config?.home?.teachers),
+    ...asArray(config?.home?.teacherTeaser),
   ]
 
   const teachers = candidates.map((item) => {
     const source = item || {}
+    const identity = teacherNameAndTitle(source)
     return {
-      name: firstText(source, ['name', 'teacherName', 'nickname', 'title']) || '九型老师',
-      title: firstText(source, ['title', 'role', 'position', 'subtitle']) || '九型人格导师',
+      name: identity.name,
+      title: identity.title,
       avatar: firstText(source, ['avatar', 'photo', 'image', 'cover']) || '/static/avatars/9.png',
-      bio: firstText(source, ['bio', 'description', 'desc', 'intro', 'summary']) || '带你用九型人格看见真实动机，把课程内容落到每天可练习的沟通与成长里。',
+      bio: firstText(source, ['bio', 'description', 'desc', 'intro', 'summary', 'lead']) || '带你用九型人格看见真实动机，把课程内容落到每天可练习的沟通与成长里。',
       tags: normalizeTags(source.tags || source.badges || source.specialties || source.skills),
     }
   }).filter((item) => item.name || item.bio)
@@ -82,17 +113,46 @@ export function normalizeTeachers(config) {
   return teachers.length > 0 ? teachers : DEFAULT_TEACHERS
 }
 
-function normalizeCoursewareSource(item) {
+const COURSE_EDITORIAL = [
+  {
+    match: /个人|成长|疗愈/,
+    cover: '/static/editorial/course-growth.webp',
+    materialTypes: ['课件', '音频'],
+    duration: '6 讲 · 约 90 分钟',
+  },
+  {
+    match: /领导|团队|企业|组织/,
+    cover: '/static/editorial/course-intro.webp',
+    materialTypes: ['课件', '视频'],
+    duration: '8 讲 · 约 120 分钟',
+  },
+  {
+    match: /家庭|亲子|夫妻|婚姻|系统排列/,
+    cover: '/static/editorial/course-relation.webp',
+    materialTypes: ['课件', '视频', '音频'],
+    duration: '5 讲 · 约 75 分钟',
+  },
+]
+
+function courseEditorial(title, index) {
+  return COURSE_EDITORIAL.find((item) => item.match.test(title)) || COURSE_EDITORIAL[index % COURSE_EDITORIAL.length]
+}
+
+function normalizeCoursewareSource(item, index) {
   const source = item || {}
   const title = firstText(source, ['title', 'name', 'courseTitle', 'lessonTitle'])
   const description = firstText(source, ['description', 'desc', 'summary', 'intro', 'content'])
   if (!title && !description) return null
+  const editorial = courseEditorial(title, index)
+  const materialTypes = normalizeTextList(source.materialTypes || source.mediaTypes || source.formats)
   return {
     title: title || '课程资料',
     description: description || '老师整理的九型人格学习资料，适合课前预习和课后复盘。',
-    cover: firstText(source, ['cover', 'image', 'thumb', 'poster', 'avatar']) || '/static/wheel.png',
+    cover: firstText(source, ['cover', 'image', 'thumb', 'poster', 'avatar']) || editorial.cover,
     badge: firstText(source, ['badge', 'tag', 'type', 'label']) || '课程',
-    duration: firstText(source, ['duration', 'time', 'minutes', 'length']) || '',
+    duration: firstText(source, ['duration', 'time', 'minutes', 'length']) || editorial.duration,
+    materialTypes: materialTypes.length > 0 ? materialTypes : editorial.materialTypes,
+    bullets: normalizeTextList(source.bullets),
     url: firstText(source, ['url', 'link', 'path', 'href']) || '',
   }
 }

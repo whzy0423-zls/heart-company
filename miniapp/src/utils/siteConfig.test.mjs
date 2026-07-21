@@ -45,11 +45,13 @@ assert.equal(hasSiteConfigLearningContent(refreshed), true, 'site config with co
 assert.equal(hasSiteConfigLearningContent({ home: {} }), false, 'empty site config should not replace cached learning content')
 assert.equal(hasSiteConfigLearningContent({ teacher: { name: '韩老师' } }), true, 'root teacher profile should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ home: { teachers: [{ name: '韩老师' }] } }), true, 'home teachers should count as learning content')
+assert.equal(hasSiteConfigLearningContent({ home: { teacherTeaser: { title: '韩常青（老韩）｜九型芯之力首席导师' } } }), true, 'home teacherTeaser should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ materials: [{ title: '课件' }] }), true, 'root materials should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ home: { courseware: { items: [{ title: '课件' }] } } }), true, 'home courseware should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ home: { courses: { items: [] }, quotes: { items: [] } } }), false, 'empty learning arrays should not count as visible learning content')
 assert.equal(hasSiteConfigLearningSection({ home: {} }), false, 'missing learning section should be treated as incomplete')
 assert.equal(hasSiteConfigLearningSection({ home: { teacher: {} } }), true, 'explicit teacher section should be treated as intentional content')
+assert.equal(hasSiteConfigLearningSection({ home: { teacherTeaser: {} } }), true, 'explicit teacherTeaser should be treated as an intentional learning section')
 assert.equal(hasSiteConfigLearningSection({ courses: { list: [] } }), true, 'courses.list should be treated as an intentional learning section')
 assert.equal(hasSiteConfigLearningSection({ home: { courses: { items: [] }, quotes: { items: [] } } }), true, 'explicit empty learning arrays should be treated as intentional content')
 
@@ -84,6 +86,25 @@ assert.notDeepEqual(third, first)
 clearSiteConfigCache()
 await getCachedSiteConfig({ api, now: () => now, ttlMs: 60000 })
 assert.equal(calls, 4, 'manual cache clear should refetch')
+
+clearSiteConfigCache()
+const teacherTeaserOnly = {
+  home: {
+    teacherTeaser: {
+      eyebrow: '老师简介',
+      title: '韩常青（老韩）｜九型芯之力首席导师',
+      lead: '北京九型成长平台、芯之力创始人。',
+      image: '/assets/teacher-poster.jpg',
+    },
+  },
+}
+await getCachedSiteConfig({ api: async () => teacherTeaserOnly, now: () => now + 1, ttlMs: 60000 })
+await refreshSiteConfig({ api: async () => ({ home: {} }), now: () => now + 2 })
+assert.deepEqual(
+  getStoredSiteConfig(),
+  teacherTeaserOnly,
+  'a teacherTeaser-only cache should survive a later response that omits learning sections',
+)
 
 console.log('site config cache tests passed')
 await rm(dir, { force: true, recursive: true })
