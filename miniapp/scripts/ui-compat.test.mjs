@@ -82,6 +82,26 @@ assert.match(indexPage, /\.home-entry:focus-visible[\s\S]*\.home-course:focus-vi
 assert.match(indexPage, /<button\s+class=["'][^"']*nx-button--primary[^"']*["'][^>]*@click=["']startTest["'][^>]*>\s*开始测试\s*<\/button>/, 'home primary CTA should use the shared 88rpx tap-target class')
 assert.doesNotMatch(indexPage, /openChatPage|goChat|问 AI|AI 对话|打开 AI 对话/, 'home page must not expose AI chat entry copy or handlers')
 
+assert.match(indexPage, /class=["'][^"']*home-hero__composition[^"']*["']/, 'home hero should expose a layered editorial composition')
+assert.match(indexPage, /\.home-hero__copy\s*\{[^}]*margin-(?:top|bottom):\s*-\d+rpx/, 'home hero copy carrier should visibly overlap the artwork')
+assert.match(indexPage, /\.home-hero__art\s*\{[^}]*(?:margin-left:\s*-\d+rpx|width:\s*calc\(100%\s*\+\s*\d+rpx\))/, 'home hero artwork should break into a full-bleed layer')
+const decorativeHeroToken = indexPage.match(/<view\b[^>]*class=["'][^"']*home-hero__float-token[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(decorativeHeroToken, /aria-hidden=["']true["']/, 'floating hero type token should be purely decorative')
+assert.match(indexPage, /\.home-hero__float-token\s*\{[^}]*pointer-events:\s*none/, 'decorative hero type token must not intercept interaction')
+assert.match(indexPage, /class=["'][^"']*home-bento[^"']*["']/, 'secondary home actions should share an asymmetric Bento composition')
+assert.match(indexPage, /grid-template-areas:\s*["'][^"']*relation[^"']*learn[^"']*["']\s*["'][^"']*relation[^"']*course[^"']*["']/, 'Bento blocks should occupy visibly different grid areas')
+assert.match(indexPage, /\.home-entry--relation\s*\{[^}]*grid-area:\s*relation/, 'relationship entry should use the large Bento area')
+assert.match(indexPage, /\.home-entry--learn\s*\{[^}]*grid-area:\s*learn/, 'learning entry should use a distinct Bento area')
+assert.match(indexPage, /\.home-course-wrap\s*\{[^}]*grid-area:\s*course/, 'course recommendation should use a distinct Bento area')
+assert.match(indexPage, /class=["'][^"']*home-explore-band[^"']*["']/, 'explore section should expose a section color-band layer')
+assert.match(indexPage, /\.home-explore-band\s*\{[^}]*(?:linear-gradient|repeating-linear-gradient)/, 'section band should use a static CSS paper texture')
+assert.match(indexPage, /@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{[\s\S]*?\.home-hero__composition\s*\{[^}]*grid-template-columns:[^}]*/, 'tablet home hero should become an intentional two-column composition at 768px')
+assert.match(indexPage, /@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{[\s\S]*?\.home-bento\s*\{[^}]*grid-template-columns:[^}]*/, 'tablet Bento should become an intentional two-column composition at 768px')
+assert.match(indexPage, /transition:\s*(?:opacity|transform)\s+\.(?:18|19|2[0-6])s[^;]*,\s*(?:opacity|transform)\s+\.(?:18|19|2[0-6])s/, 'home press feedback should stay within the 180-260ms opacity/transform motion budget')
+assert.match(indexPage, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*transition:\s*none/, 'home should disable nonessential motion when reduced motion is requested')
+assert.doesNotMatch(indexPage, /(?:backdrop-)?filter\s*:/, 'home must not use filter or backdrop-filter effects')
+assert.doesNotMatch(indexPage, /\.home(?:__canvas|-explore-band)[^{]*\{[^}]*animation:\s*[^;}]*infinite/, 'home must not continuously animate full-page or texture layers')
+
 
 assert.match(appleMobileStyle, /\.page-stack\s*\{[\s\S]*safe-area-inset-bottom/, 'page-stack should reserve bottom safe area globally')
 assert.match(appleMobileStyle, /\.page-stack\s*\{[\s\S]*var\(--window-bottom,\s*0px\)/, 'page-stack should reserve H5 tabbar/window bottom globally')
