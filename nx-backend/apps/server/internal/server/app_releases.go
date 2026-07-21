@@ -1,17 +1,34 @@
 package server
 
 import (
+	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/apprelease"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 )
+
+type appReleaseService interface {
+	List(context.Context, int, int) (apprelease.ListResult, error)
+	StageAPK(string, io.Reader) (apprelease.StagedFile, error)
+	DiscardStaged(apprelease.StagedFile) error
+	CreateDraftFromStaged(context.Context, apprelease.StagedFile, string) (apprelease.Release, error)
+	Publish(context.Context, int64) (apprelease.Release, error)
+	Archive(context.Context, int64) (apprelease.Release, error)
+	Latest(context.Context, string) (apprelease.Release, error)
+	Open(context.Context, int64) (apprelease.Release, *os.File, error)
+	OpenIcon(context.Context, int64) (apprelease.Release, *os.File, error)
+	Maintain(context.Context, time.Time) error
+}
 
 func (s *Server) appReleaseList(w http.ResponseWriter, r *http.Request) {
 	if s.appReleases == nil {
@@ -26,6 +43,70 @@ func (s *Server) appReleaseList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.OK(w, result)
+}
+
+func (s *Server) appReleaseIcon(w http.ResponseWriter, r *http.Request) {
+	const prefix = "/api/app-release-icons/"
+	rawID := strings.TrimPrefix(r.URL.Path, prefix)
+	if rawID == r.URL.Path || rawID == "" || strings.Contains(rawID, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	for _, char := range rawID {
+		if char < '0' || char > '9' {
+			http.NotFound(w, r)
+			return
+		}
+	}
+	id, err := strconv.ParseInt(rawID, 10, 64)
+	if err != nil || id <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	if s.appReleases == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "App release service unavailable")
+		return
+	}
+	release, file, err := s.appReleases.OpenIcon(r.Context(), id)
+	if errors.Is(err, apprelease.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "App release icon unavailable")
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.NotFound(w, r)
+			return
+		}
+		httpx.Fail(w, http.StatusServiceUnavailable, "App release icon unavailable")
+		return
+	}
+	validator := sha256.Sum256([]byte(fmt.Sprintf("%s\n%d\n%d", release.SHA256, info.Size(), info.ModTime().UnixNano())))
+	etag := fmt.Sprintf(`"%x"`, validator)
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, max-age=300, must-revalidate")
+	w.Header().Set("ETag", etag)
+	if ifNoneMatch(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	http.ServeContent(w, r, "icon.png", info.ModTime(), file)
+}
+
+func ifNoneMatch(header, etag string) bool {
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "*" || candidate == etag || strings.TrimPrefix(candidate, "W/") == etag {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) appReleaseUpload(w http.ResponseWriter, r *http.Request) {

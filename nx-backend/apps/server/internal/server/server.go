@@ -71,7 +71,7 @@ type Server struct {
 	engagement            *engagement.Store
 	signups               *signup.Store
 	uploads               *uploadasset.Store
-	appReleases           *apprelease.Service
+	appReleases           appReleaseService
 	voiceAssetCreate      func(context.Context, uploadasset.CreateInput) (uploadasset.Asset, error)
 	voiceAssetFind        func(context.Context, int64) (uploadasset.Asset, error)
 	uploader              storage.ObjectUploader
@@ -310,6 +310,7 @@ func (s *Server) imageStore() *image.Store {
 func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app-releases/list", s.method(http.MethodGet, s.requirePermission("Website:AppReleases:List", s.appReleaseList)))
 	s.mux.HandleFunc("/api/app-releases/upload", s.method(http.MethodPost, s.requirePermission("Website:AppReleases:Write", s.appReleaseUpload)))
+	s.mux.HandleFunc("/api/app-release-icons/", s.getOrHead(s.requirePermission("Website:AppReleases:List", s.appReleaseIcon)))
 	s.mux.HandleFunc("/api/app-releases/", s.requirePermission("Website:AppReleases:Write", s.appReleaseMutation))
 	s.mux.HandleFunc("/api/public/app-release/latest", s.method(http.MethodGet, s.publicAppReleaseLatest))
 	s.mux.HandleFunc("/api/public/app-release/download", s.getOrHead(s.publicAppReleaseLatestDownload))
