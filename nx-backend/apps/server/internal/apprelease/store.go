@@ -243,19 +243,21 @@ func (s *Store) Publish(ctx context.Context, id int64, platform string) (Release
 }
 
 func (s *Store) ReferencedKeys(ctx context.Context) (map[string]struct{}, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT file_path FROM app_releases`)
+	rows, err := s.db.QueryContext(ctx, `SELECT file_path, icon_path FROM app_releases`)
 	if err != nil {
 		return nil, fmt.Errorf("list app release file keys: %w", err)
 	}
 	defer rows.Close()
 	keys := make(map[string]struct{})
 	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
+		var fileKey, iconKey string
+		if err := rows.Scan(&fileKey, &iconKey); err != nil {
 			return nil, fmt.Errorf("scan app release file key: %w", err)
 		}
-		if key = strings.TrimSpace(key); key != "" {
-			keys[key] = struct{}{}
+		for _, key := range []string{fileKey, iconKey} {
+			if key = strings.TrimSpace(key); key != "" {
+				keys[key] = struct{}{}
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {

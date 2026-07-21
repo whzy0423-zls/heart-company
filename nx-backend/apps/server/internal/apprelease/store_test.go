@@ -84,8 +84,11 @@ func TestStoreCreateDraftAndReadLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := keys[created.FilePath]; !ok || len(keys) != 1 {
-		t.Fatalf("ReferencedKeys() = %+v, want only %q", keys, created.FilePath)
+	if _, apkOK := keys[created.FilePath]; !apkOK {
+		t.Fatalf("ReferencedKeys() = %+v, want APK key %q", keys, created.FilePath)
+	}
+	if _, iconOK := keys[created.IconPath]; !iconOK || len(keys) != 2 {
+		t.Fatalf("ReferencedKeys() = %+v, want APK and icon keys", keys)
 	}
 
 	if _, err := store.LatestPublished(ctx, "android"); !errors.Is(err, ErrNotFound) {

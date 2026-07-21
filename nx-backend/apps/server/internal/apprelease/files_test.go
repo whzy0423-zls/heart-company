@@ -1,8 +1,12 @@
 package apprelease
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"os"
 	"path/filepath"
@@ -364,6 +368,140 @@ func TestFileStoreDiscardAndRemoveCleanTheirOwnedFiles(t *testing.T) {
 	}
 }
 
+func TestFileStoreSaveIconDerivesKeyAndWritesAtomically(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := store.Stage("release.apk", strings.NewReader("apk"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.Commit(staged, "android", 123)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := testPNG(t)
+	iconKey, err := store.SaveIcon(saved.Key, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantKey := strings.TrimSuffix(saved.Key, ".apk") + ".png"
+	if iconKey != wantKey {
+		t.Fatalf("SaveIcon() key = %q, want %q", iconKey, wantKey)
+	}
+	iconPath, err := store.Resolve(iconKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRegularFile(t, iconPath)
+	assertFileMode(t, iconPath, 0o640)
+	got, err := os.ReadFile(iconPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("saved icon bytes differ: got %d bytes, want %d", len(got), len(payload))
+	}
+	temps, err := filepath.Glob(filepath.Join(filepath.Dir(iconPath), "."+filepath.Base(iconPath)+".tmp-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(temps) != 0 {
+		t.Fatalf("temporary icon files left behind: %q", temps)
+	}
+}
+
+func TestFileStoreSaveIconRejectsInvalidOversizedAndUnsafeInputs(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.SaveIcon("android/123-release.apk", []byte("not png")); err == nil {
+		t.Fatal("SaveIcon(invalid PNG) error = nil, want rejection")
+	}
+	truncated := testPNG(t)
+	truncated = truncated[:len(truncated)-5]
+	if _, err := store.SaveIcon("android/123-release.apk", truncated); err == nil {
+		t.Fatal("SaveIcon(truncated PNG) error = nil, want rejection")
+	}
+	if _, err := store.SaveIcon("android/123-release.apk", make([]byte, maxIconBytes+1)); !isError(err, ErrFileTooLarge) {
+		t.Fatalf("SaveIcon(oversized) error = %v, want ErrFileTooLarge", err)
+	}
+	for _, key := range []string{
+		"",
+		"android/release.png",
+		"ios/release.apk",
+		"../release.apk",
+		"android/../release.apk",
+		`C:\release.apk`,
+	} {
+		t.Run(key, func(t *testing.T) {
+			if _, err := store.SaveIcon(key, testPNG(t)); !isError(err, ErrUnsafePath) {
+				t.Fatalf("SaveIcon(%q) error = %v, want ErrUnsafePath", key, err)
+			}
+		})
+	}
+}
+
+func TestFileStoreSaveIconRejectsSymlinkDestinations(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	store, err := NewFileStore(root, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := store.Stage("release.apk", strings.NewReader("apk"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.Commit(staged, "android", 123)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outsidePath := filepath.Join(outside, "outside.png")
+	if err := os.WriteFile(outsidePath, []byte("outside"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	iconPath := strings.TrimSuffix(saved.Path, ".apk") + ".png"
+	if err := os.Symlink(outsidePath, iconPath); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if _, err := store.SaveIcon(saved.Key, testPNG(t)); !isError(err, ErrUnsafePath) {
+		t.Fatalf("SaveIcon(symlink destination) error = %v, want ErrUnsafePath", err)
+	}
+	assertFileContents(t, outsidePath, "outside")
+}
+
+func TestFileStoreRemoveDeletesManagedIcon(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := store.Stage("release.apk", strings.NewReader("apk"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.Commit(staged, "android", 123)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iconKey, err := store.SaveIcon(saved.Key, testPNG(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	iconPath, err := store.Resolve(iconKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Remove(iconKey); err != nil {
+		t.Fatal(err)
+	}
+	assertNotExists(t, iconPath)
+}
+
 func TestFileStoreResolveRejectsAbsoluteAndTraversalPaths(t *testing.T) {
 	store, err := NewFileStore(t.TempDir(), 64)
 	if err != nil {
@@ -378,12 +516,30 @@ func TestFileStoreResolveRejectsAbsoluteAndTraversalPaths(t *testing.T) {
 		"android/../outside.apk",
 		`C:\outside.apk`,
 		`\\server\share\outside.apk`,
+		"ios/release.apk",
+		"android/release.txt",
 	} {
 		t.Run(key, func(t *testing.T) {
 			if _, err := store.Resolve(key); !isError(err, ErrUnsafePath) {
 				t.Fatalf("Resolve(%q) error = %v, want ErrUnsafePath", key, err)
 			}
 		})
+	}
+}
+
+func TestFileStoreResolveAllowsNestedManagedArtifacts(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"android/releases/release.apk", "android/icons/release.png"} {
+		resolved, err := store.Resolve(key)
+		if err != nil {
+			t.Fatalf("Resolve(%q) error = %v, want managed path", key, err)
+		}
+		if resolved != filepath.Join(store.Root(), filepath.FromSlash(key)) {
+			t.Fatalf("Resolve(%q) = %q, want managed path", key, resolved)
+		}
 	}
 }
 
@@ -478,7 +634,7 @@ func TestFileStoreCleanupStaleTempsOnlyDeletesFilesOlderThanCutoff(t *testing.T)
 	}
 }
 
-func TestFileStoreAuditReportsSortedOrphansWithoutDeletingOrFollowingSymlinks(t *testing.T) {
+func TestFileStoreAuditOrphansReportsAPKAndPNGWithoutDeletingOrFollowingSymlinks(t *testing.T) {
 	store, err := NewFileStore(t.TempDir(), 64)
 	if err != nil {
 		t.Fatal(err)
@@ -487,10 +643,16 @@ func TestFileStoreAuditReportsSortedOrphansWithoutDeletingOrFollowingSymlinks(t 
 	if err := os.MkdirAll(androidDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
+	iconsDir := filepath.Join(androidDir, "icons")
+	if err := os.MkdirAll(iconsDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
 	orphanB := filepath.Join(androidDir, "200-b.apk")
 	orphanA := filepath.Join(androidDir, "100-a.apk")
+	orphanIcon := filepath.Join(iconsDir, "100-a.png")
 	referenced := filepath.Join(androidDir, "150-referenced.apk")
-	for _, path := range []string{orphanB, orphanA, referenced} {
+	referencedIcon := filepath.Join(iconsDir, "150-referenced.png")
+	for _, path := range []string{orphanB, orphanA, orphanIcon, referenced, referencedIcon} {
 		if err := os.WriteFile(path, []byte("apk"), 0o640); err != nil {
 			t.Fatal(err)
 		}
@@ -522,12 +684,13 @@ func TestFileStoreAuditReportsSortedOrphansWithoutDeletingOrFollowingSymlinks(t 
 	}
 
 	got, err := store.AuditOrphans(map[string]struct{}{
-		"android/150-referenced.apk": {},
+		"android/150-referenced.apk":       {},
+		"android/icons/150-referenced.png": {},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"android/100-a.apk", "android/200-b.apk"}
+	want := []string{"android/100-a.apk", "android/200-b.apk", "android/icons/100-a.png"}
 	if len(got) != len(want) {
 		t.Fatalf("AuditOrphans() = %q, want %q", got, want)
 	}
@@ -536,9 +699,20 @@ func TestFileStoreAuditReportsSortedOrphansWithoutDeletingOrFollowingSymlinks(t 
 			t.Fatalf("AuditOrphans() = %q, want %q", got, want)
 		}
 	}
-	for _, path := range []string{orphanA, orphanB, referenced, outsideAPK} {
+	for _, path := range []string{orphanA, orphanB, orphanIcon, referenced, referencedIcon, outsideAPK} {
 		assertRegularFile(t, path)
 	}
+}
+
+func testPNG(t *testing.T) []byte {
+	t.Helper()
+	icon := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	icon.Set(0, 0, color.RGBA{R: 0x33, G: 0x66, B: 0x99, A: 0xff})
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, icon); err != nil {
+		t.Fatal(err)
+	}
+	return encoded.Bytes()
 }
 
 type failingReader struct {

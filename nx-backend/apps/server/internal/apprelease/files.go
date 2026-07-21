@@ -1,10 +1,12 @@
 package apprelease
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"image/png"
 	"io"
 	"math"
 	"os"
@@ -16,7 +18,10 @@ import (
 	"time"
 )
 
-const randomFileTokenBytes = 16
+const (
+	randomFileTokenBytes = 16
+	maxIconBytes         = 8 << 20
+)
 
 type FileStore struct {
 	root     string
@@ -287,9 +292,100 @@ func (s *FileStore) Discard(staged StagedFile) error {
 	return nil
 }
 
+func (s *FileStore) SaveIcon(apkKey string, pngData []byte) (string, error) {
+	if err := validateManagedArtifactKey(apkKey, ".apk"); err != nil {
+		return "", err
+	}
+	if len(pngData) > maxIconBytes {
+		return "", ErrFileTooLarge
+	}
+	if len(pngData) == 0 {
+		return "", fmt.Errorf("save app release icon: PNG data is empty")
+	}
+	config, err := png.DecodeConfig(bytes.NewReader(pngData))
+	if err != nil {
+		return "", fmt.Errorf("save app release icon: invalid PNG: %w", err)
+	}
+	if config.Width <= 0 || config.Height <= 0 ||
+		config.Width > maxAPKIconDimension || config.Height > maxAPKIconDimension ||
+		int64(config.Width)*int64(config.Height) > maxAPKIconPixels {
+		return "", fmt.Errorf("save app release icon: invalid PNG dimensions")
+	}
+	if _, err := png.Decode(bytes.NewReader(pngData)); err != nil {
+		return "", fmt.Errorf("save app release icon: invalid PNG: %w", err)
+	}
+
+	iconKey := strings.TrimSuffix(apkKey, ".apk") + ".png"
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	destination, err := s.resolveLocked(iconKey)
+	if err != nil {
+		return "", err
+	}
+	iconDir := filepath.Dir(destination)
+	if err := s.ensureDirectoryTreeLocked(iconDir); err != nil {
+		return "", fmt.Errorf("create Android release icon directory: %w", err)
+	}
+	if info, err := os.Lstat(destination); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return "", ErrUnsafePath
+		}
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("check app release icon destination: %w", err)
+	}
+
+	tmp, err := os.CreateTemp(iconDir, "."+filepath.Base(destination)+".tmp-*")
+	if err != nil {
+		return "", fmt.Errorf("create app release icon temp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+	}
+	if err := tmp.Chmod(0o640); err != nil {
+		cleanup()
+		return "", fmt.Errorf("set app release icon permissions: %w", err)
+	}
+	n, err := tmp.Write(pngData)
+	if err != nil {
+		cleanup()
+		return "", fmt.Errorf("write app release icon: %w", err)
+	}
+	if n != len(pngData) {
+		cleanup()
+		return "", io.ErrShortWrite
+	}
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return "", fmt.Errorf("sync app release icon: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("close app release icon: %w", err)
+	}
+	if err := os.Rename(tmpPath, destination); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("commit app release icon: %w", err)
+	}
+	info, err := os.Lstat(destination)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() != int64(len(pngData)) {
+		_ = os.Remove(destination)
+		if err != nil {
+			return "", fmt.Errorf("verify app release icon: %w", err)
+		}
+		return "", ErrUnsafePath
+	}
+	if err := syncDirectory(iconDir); err != nil {
+		_ = os.Remove(destination)
+		return "", fmt.Errorf("sync Android release directory: %w", err)
+	}
+	return iconKey, nil
+}
+
 func (s *FileStore) Remove(key string) error {
-	if path.Ext(key) != ".apk" {
-		return ErrUnsafePath
+	if err := validateManagedArtifactKey(key, ".apk", ".png"); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -308,12 +404,18 @@ func (s *FileStore) Remove(key string) error {
 		return ErrUnsafePath
 	}
 	if err := os.Remove(resolved); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove saved APK: %w", err)
+		return fmt.Errorf("remove saved app release file: %w", err)
+	}
+	if err := syncDirectory(filepath.Dir(resolved)); err != nil {
+		return fmt.Errorf("sync app release directory after remove: %w", err)
 	}
 	return nil
 }
 
 func (s *FileStore) Resolve(key string) (string, error) {
+	if err := validateManagedArtifactKey(key, ".apk", ".png"); err != nil {
+		return "", err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.resolveLocked(key)
@@ -382,7 +484,7 @@ func (s *FileStore) AuditOrphans(referenced map[string]struct{}) ([]string, erro
 		if entry.IsDir() {
 			return nil
 		}
-		if !entry.Type().IsRegular() || filepath.Ext(entry.Name()) != ".apk" || strings.HasPrefix(entry.Name(), ".tmp-") {
+		if !entry.Type().IsRegular() || strings.HasPrefix(entry.Name(), ".tmp-") {
 			return nil
 		}
 		rel, err := filepath.Rel(s.root, filePath)
@@ -390,7 +492,7 @@ func (s *FileStore) AuditOrphans(referenced map[string]struct{}) ([]string, erro
 			return err
 		}
 		key := filepath.ToSlash(rel)
-		if !strings.HasPrefix(key, "android/") {
+		if validateManagedArtifactKey(key, ".apk", ".png") != nil {
 			return nil
 		}
 		if _, ok := referenced[key]; !ok {
@@ -403,6 +505,23 @@ func (s *FileStore) AuditOrphans(referenced map[string]struct{}) ([]string, erro
 	}
 	sort.Strings(orphans)
 	return orphans, nil
+}
+
+func validateManagedArtifactKey(key string, extensions ...string) error {
+	cleaned, err := cleanStorageKey(key)
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(cleaned, "android/") || filepath.Base(cleaned) == "." {
+		return ErrUnsafePath
+	}
+	ext := path.Ext(cleaned)
+	for _, allowed := range extensions {
+		if ext == allowed {
+			return nil
+		}
+	}
+	return ErrUnsafePath
 }
 
 func (s *FileStore) registerStaged(record stagedFileRecord) (string, error) {
@@ -601,6 +720,24 @@ func (s *FileStore) ensureDirectoryLocked(directory string) error {
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm() != 0o750 {
 		return ErrUnsafePath
+	}
+	return nil
+}
+
+func (s *FileStore) ensureDirectoryTreeLocked(directory string) error {
+	rel, err := filepath.Rel(s.root, directory)
+	if err != nil || rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return ErrUnsafePath
+	}
+	current := s.root
+	for _, part := range strings.Split(rel, string(os.PathSeparator)) {
+		if part == "" || part == "." || part == ".." {
+			return ErrUnsafePath
+		}
+		current = filepath.Join(current, part)
+		if err := s.ensureDirectoryLocked(current); err != nil {
+			return err
+		}
 	}
 	return nil
 }
