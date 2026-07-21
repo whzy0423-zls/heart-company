@@ -3,7 +3,7 @@ import type { AppRelease } from '#/api';
 
 import { defineComponent, h } from 'vue';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { flushVuePromises, mountVueComponent } from '#/test-utils/vue-mount';
 
@@ -44,10 +44,37 @@ vi.mock('ant-design-vue', async () => {
     });
   const Input = passthrough('Input', 'input') as any;
   Input.TextArea = passthrough('InputTextArea', 'textarea');
+  const Table = defineComponent({
+    name: 'TableStub',
+    props: {
+      columns: { default: () => [], type: Array },
+      dataSource: { default: () => [], type: Array },
+      scroll: { default: () => ({}), type: Object },
+    },
+    setup(props, { slots }) {
+      return () =>
+        h(
+          'div',
+          {
+            class: 'mock-table',
+            'data-scroll-x': (props.scroll as { x?: number }).x,
+          },
+          (props.dataSource as Record<string, any>[]).flatMap((record) =>
+            (props.columns as Record<string, any>[]).map((column) =>
+              h('div', { class: 'mock-cell' }, [
+                String(record[column.dataIndex] ?? ''),
+                slots.bodyCell?.({ column, record }),
+              ]),
+            ),
+          ),
+        );
+    },
+  });
   return {
     ...stubs,
     Input,
     Progress: passthrough('Progress'),
+    Table,
     Upload: Object.assign(passthrough('Upload'), {
       LIST_IGNORE: 'LIST_IGNORE',
     }),
@@ -60,18 +87,18 @@ vi.mock('./app-release-icon.vue', () => ({
     inheritAttrs: false,
     props: {
       appName: { default: '', type: String },
-      iconUrl: { default: '', type: String },
       packageName: { default: '', type: String },
       size: { default: 40, type: Number },
+      src: { default: '', type: String },
     },
     setup(props) {
       return () =>
         h('span', {
           class: 'app-release-icon-stub',
           'data-app-name': props.appName,
-          'data-icon-url': props.iconUrl,
           'data-package-name': props.packageName,
           'data-size': props.size,
+          'data-src': props.src,
         });
     },
   }),
@@ -87,6 +114,14 @@ vi.mock('#/api', () => ({
 import { getAppReleaseListApi } from '#/api';
 
 import AppReleases from './app-releases.vue';
+
+const fetchMock = vi.fn<typeof fetch>();
+
+async function flushResolver() {
+  await flushVuePromises();
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
+  await flushVuePromises();
+}
 
 function release(input: Partial<AppRelease>): AppRelease {
   return {
@@ -111,6 +146,15 @@ function release(input: Partial<AppRelease>): AppRelease {
 
 describe('App release metadata page', () => {
   beforeEach(() => {
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue({
+      blob: async () => new Blob(['icon'], { type: 'image/png' }),
+      ok: true,
+      status: 200,
+    } as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:shared-app-icon');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
     vi.mocked(getAppReleaseListApi).mockReset();
     vi.mocked(getAppReleaseListApi).mockResolvedValue({
       current: release({
@@ -127,7 +171,7 @@ describe('App release metadata page', () => {
         release({
           appName: '历史测试应用',
           fileName: 'history.apk',
-          iconUrl: '/api/app-release-icons/history',
+          iconUrl: '/api/app-release-icons/current',
           id: 9,
           packageName: 'com.example.history.application.with.long.name',
           status: 'archived',
@@ -142,10 +186,16 @@ describe('App release metadata page', () => {
     });
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = '';
+  });
+
   it('renders current and history app identities with versions and stable icons', async () => {
     const wrapper = mountVueComponent(AppReleases);
 
-    await flushVuePromises();
+    await flushResolver();
 
     expect(wrapper.text()).toContain('当前正式应用');
     expect(wrapper.text()).toContain('com.example.current.application');
@@ -162,6 +212,24 @@ describe('App release metadata page', () => {
     expect(icons).toHaveLength(2);
     expect((icons[0] as HTMLElement | undefined)?.dataset.size).toBe('48');
     expect((icons[1] as HTMLElement | undefined)?.dataset.size).toBe('40');
+    expect((icons[0] as HTMLElement | undefined)?.dataset.src).toBe(
+      'blob:shared-app-icon',
+    );
+    expect((icons[1] as HTMLElement | undefined)?.dataset.src).toBe(
+      'blob:shared-app-icon',
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/app-release-icons/current',
+      expect.objectContaining({
+        headers: { Authorization: 'Bearer page-token' },
+      }),
+    );
+    expect(
+      (document.body.querySelector('.mock-table') as HTMLElement | null)
+        ?.dataset.scrollX,
+    ).toBe('1320');
     wrapper.unmount();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:shared-app-icon');
   });
 });

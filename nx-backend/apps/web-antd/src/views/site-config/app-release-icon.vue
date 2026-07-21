@@ -3,36 +3,26 @@ import { computed, ref, watch } from 'vue';
 
 import { Avatar } from 'ant-design-vue';
 
-import { useUploadAssetPreviewUrl } from '#/utils/upload-asset-preview';
-
 const props = withDefaults(
   defineProps<{
-    accessToken?: null | string;
     appName?: string;
-    iconUrl?: string;
     packageName?: string;
     size?: number;
+    src?: string;
   }>(),
   {
-    accessToken: '',
     appName: '',
-    iconUrl: '',
     packageName: '',
     size: 40,
+    src: '',
   },
 );
 
 const imageLoadError = ref(false);
-const previewUrl = useUploadAssetPreviewUrl(
-  () => props.iconUrl,
-  () => props.accessToken,
-);
 const displayName = computed(
   () => props.appName.trim() || props.packageName.trim() || 'Android 应用',
 );
-const showImage = computed(
-  () => Boolean(previewUrl.value) && !imageLoadError.value,
-);
+const showImage = computed(() => Boolean(props.src) && !imageLoadError.value);
 const accessibleLabel = computed(() =>
   showImage.value
     ? `${displayName.value}应用图标`
@@ -43,11 +33,16 @@ const placeholderText = computed(() =>
 );
 
 watch(
-  () => [props.iconUrl, previewUrl.value],
+  () => props.src,
   () => {
     imageLoadError.value = false;
   },
 );
+
+function handleImageLoadError() {
+  imageLoadError.value = true;
+  return true;
+}
 </script>
 
 <template>
@@ -58,8 +53,8 @@ watch(
     role="img"
     shape="square"
     :size="size"
-    :src="showImage ? previewUrl : undefined"
-    @error="imageLoadError = true"
+    :src="showImage ? src : undefined"
+    :load-error="handleImageLoadError"
   >
     <span aria-hidden="true">{{ placeholderText }}</span>
   </Avatar>

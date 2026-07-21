@@ -27,6 +27,7 @@ import {
   publishAppReleaseApi,
   uploadAppReleaseApi,
 } from '#/api';
+import { useUploadAssetPreviewResolver } from '#/utils/upload-asset-preview';
 
 import AppReleaseIcon from './app-release-icon.vue';
 import {
@@ -38,6 +39,9 @@ import {
 } from './app-release-view';
 
 const access = useAccessStore();
+const iconPreviewResolver = useUploadAssetPreviewResolver(
+  () => access.accessToken,
+);
 const canWrite = computed(() =>
   access.accessCodes.includes('Website:AppReleases:Write'),
 );
@@ -91,6 +95,9 @@ function asRelease(record: Record<string, any>) {
 }
 function appDisplayName(record: AppRelease) {
   return record.appName?.trim() || record.packageName?.trim() || 'Android 应用';
+}
+function appIconPreview(record: AppRelease) {
+  return iconPreviewResolver.resolve(record.iconUrl);
 }
 async function upload() {
   if (!selectedFile.value) {
@@ -158,11 +165,10 @@ onMounted(load);
       <template v-if="current">
         <div class="current-release">
           <AppReleaseIcon
-            :access-token="access.accessToken"
             :app-name="appDisplayName(current)"
-            :icon-url="current.iconUrl"
             :package-name="current.packageName"
             :size="48"
+            :src="appIconPreview(current)"
           />
           <div class="current-release__content">
             <div class="current-release__heading">
@@ -232,6 +238,7 @@ onMounted(load);
         :data-source="items"
         :loading="loading"
         row-key="id"
+        :scroll="{ x: 1320 }"
         :pagination="{ current: page, pageSize, total }"
         @change="
           (p: any) => {
@@ -244,11 +251,10 @@ onMounted(load);
           <template v-if="column.key === 'app'">
             <div class="release-app-cell">
               <AppReleaseIcon
-                :access-token="access.accessToken"
                 :app-name="appDisplayName(asRelease(record))"
-                :icon-url="record.iconUrl"
                 :package-name="record.packageName"
                 :size="40"
+                :src="appIconPreview(asRelease(record))"
               />
               <div class="release-app-cell__text">
                 <strong>{{ appDisplayName(asRelease(record)) }}</strong>

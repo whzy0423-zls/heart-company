@@ -1,7 +1,7 @@
 /* eslint-disable vue/one-component-per-file */
 import { createApp, defineComponent, h, nextTick } from 'vue';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('ant-design-vue', () => ({
   Avatar: defineComponent({
@@ -9,6 +9,7 @@ vi.mock('ant-design-vue', () => ({
     inheritAttrs: false,
     props: {
       alt: { default: '', type: String },
+      loadError: { default: undefined, type: Function },
       shape: { default: 'circle', type: String },
       size: { default: 40, type: Number },
       src: { default: '', type: String },
@@ -24,7 +25,11 @@ vi.mock('ant-design-vue', () => ({
             style: { height: `${props.size}px`, width: `${props.size}px` },
           },
           props.src
-            ? h('img', { alt: props.alt, src: props.src })
+            ? h('img', {
+                alt: props.alt,
+                onError: () => props.loadError?.(),
+                src: props.src,
+              })
             : slots.default?.(),
         );
     },
@@ -33,25 +38,14 @@ vi.mock('ant-design-vue', () => ({
 
 import AppReleaseIcon from './app-release-icon.vue';
 
-const fetchMock = vi.fn<typeof fetch>();
-const createObjectURL = vi.fn(() => 'blob:app-release-icon');
-const revokeObjectURL = vi.fn();
-
-async function flushPreview() {
-  await Promise.resolve();
-  await Promise.resolve();
-  await nextTick();
-}
-
-function mountIcon(iconUrl: string) {
+function mountIcon(src: string) {
   const root = document.createElement('div');
   document.body.append(root);
   const app = createApp(AppReleaseIcon, {
-    accessToken: 'protected-token',
     appName: '九型人格',
-    iconUrl,
     packageName: 'com.example.ninexing',
     size: 48,
+    src,
   });
   app.mount(root);
   return {
@@ -64,38 +58,14 @@ function mountIcon(iconUrl: string) {
 }
 
 describe('AppReleaseIcon', () => {
-  beforeEach(() => {
-    fetchMock.mockReset();
-    createObjectURL.mockClear();
-    revokeObjectURL.mockClear();
-    vi.stubGlobal('fetch', fetchMock);
-    vi.stubGlobal(
-      'URL',
-      Object.assign(globalThis.URL, { createObjectURL, revokeObjectURL }),
-    );
-  });
-
   afterEach(() => {
-    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     document.body.innerHTML = '';
   });
 
-  it('renders a protected icon blob with a meaningful accessible label', async () => {
-    fetchMock.mockResolvedValue({
-      blob: async () => new Blob(['icon'], { type: 'image/png' }),
-      ok: true,
-      status: 200,
-    } as Response);
-    const wrapper = mountIcon('/api/app-release-icons/1');
+  it('renders a resolved image with a meaningful accessible label', () => {
+    const wrapper = mountIcon('blob:app-release-icon');
 
-    await flushPreview();
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/app-release-icons/1',
-      expect.objectContaining({
-        headers: { Authorization: 'Bearer protected-token' },
-      }),
-    );
     expect(wrapper.root.querySelector('img')).toMatchObject({
       alt: '九型人格应用图标',
       src: 'blob:app-release-icon',
@@ -103,48 +73,27 @@ describe('AppReleaseIcon', () => {
     expect(
       wrapper.root.querySelector('.avatar-stub')?.getAttribute('aria-label'),
     ).toBe('九型人格应用图标');
-
     wrapper.unmount();
-    expect(revokeObjectURL).toHaveBeenCalledWith('blob:app-release-icon');
   });
 
-  it.each([
-    [
-      'a rejected request',
-      () => fetchMock.mockRejectedValue(new Error('offline')),
-    ],
-    [
-      'a 404 response',
-      () =>
-        fetchMock.mockResolvedValue({
-          blob: async () => new Blob(),
-          ok: false,
-          status: 404,
-        } as Response),
-    ],
-  ])(
-    'keeps an accessible fixed-size placeholder for %s',
-    async (_, arrange) => {
-      arrange();
-      const wrapper = mountIcon('/api/app-release-icons/missing');
+  it('uses the Avatar loadError callback to reveal the accessible fallback', async () => {
+    const wrapper = mountIcon('blob:broken-app-release-icon');
 
-      await flushPreview();
+    wrapper.root.querySelector('img')?.dispatchEvent(new Event('error'));
+    await nextTick();
 
-      expect(wrapper.root.querySelector('img')).toBeNull();
-      const avatar = wrapper.root.querySelector('.avatar-stub') as HTMLElement;
-      expect(avatar.getAttribute('aria-label')).toBe('九型人格应用图标占位符');
-      expect(avatar.style.height).toBe('48px');
-      expect(avatar.style.width).toBe('48px');
-      wrapper.unmount();
-    },
-  );
+    expect(wrapper.root.querySelector('img')).toBeNull();
+    const avatar = wrapper.root.querySelector('.avatar-stub') as HTMLElement;
+    expect(avatar.getAttribute('aria-label')).toBe('九型人格应用图标占位符');
+    expect(avatar.style.height).toBe('48px');
+    expect(avatar.style.width).toBe('48px');
+    expect(avatar.textContent).toBe('九');
+    wrapper.unmount();
+  });
 
-  it('uses the same stable placeholder without fetching when the icon url is empty', async () => {
+  it('uses the same stable placeholder when the resolved src is empty', () => {
     const wrapper = mountIcon('');
 
-    await flushPreview();
-
-    expect(fetchMock).not.toHaveBeenCalled();
     expect(wrapper.root.querySelector('img')).toBeNull();
     expect(
       wrapper.root.querySelector('.avatar-stub')?.getAttribute('aria-label'),
