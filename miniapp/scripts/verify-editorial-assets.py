@@ -37,6 +37,8 @@ RESULT_ASSETS = {
     for number in range(1, 10)
 }
 
+ALLOWED_ARTIFACTS = set(INITIAL_ASSETS) | set(RESULT_ASSETS) | {".gitkeep"}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -86,14 +88,9 @@ def main() -> int:
         expected.update(RESULT_ASSETS)
 
     errors: list[str] = []
-    actual_names = (
-        {path.name for path in ASSET_DIR.glob("*.webp")}
-        if ASSET_DIR.is_dir()
-        else set()
-    )
-    expected_names = set(expected)
+    actual_names = {path.name for path in ASSET_DIR.iterdir()} if ASSET_DIR.is_dir() else set()
 
-    for unexpected in sorted(actual_names - expected_names):
+    for unexpected in sorted(actual_names - ALLOWED_ARTIFACTS):
         errors.append(f"unexpected: {ASSET_DIR.relative_to(ROOT) / unexpected}")
 
     for name, spec in expected.items():
