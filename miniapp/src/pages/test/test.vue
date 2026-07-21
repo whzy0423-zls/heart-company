@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { onUnload } from '@dcloudio/uni-app'
 import { QUESTIONS } from '../../data/enneagramGame'
 import { calcType } from '../../utils/enneagram'
@@ -12,10 +12,11 @@ const gender = ref(null)
 const step = ref(0)
 const answers = ref([])
 const answerLocked = ref(false)
+const questionHeading = ref(null)
 let advanceTimer = null
 
 const q = computed(() => QUESTIONS[step.value])
-const progress = computed(() => ((step.value + (answers.value[step.value] ? 1 : 0)) / QUESTIONS.length) * 100)
+const progress = computed(() => ((step.value + 1) / QUESTIONS.length) * 100)
 const visualCenter = computed(() => questionVisualCenter(step.value))
 const questionVisualSrc = computed(() => `/static/editorial/center-${visualCenter.value}.webp`)
 
@@ -26,12 +27,22 @@ function start(g) {
   step.value = 0
   answers.value = []
   answerLocked.value = false
+  focusQuestionHeading()
 }
 
 function clearAdvanceTimer() {
   if (!advanceTimer) return
   clearTimeout(advanceTimer)
   advanceTimer = null
+}
+
+function focusQuestionHeading() {
+  nextTick(() => {
+    // #ifdef H5
+    const heading = questionHeading.value?.$el || questionHeading.value
+    heading?.focus?.()
+    // #endif
+  })
 }
 
 function choose(opt) {
@@ -44,16 +55,24 @@ function choose(opt) {
       step.value += 1
       answerLocked.value = false
       advanceTimer = null
+      focusQuestionHeading()
     }, 160)
   } else {
-    finish()
+    clearAdvanceTimer()
+    advanceTimer = setTimeout(() => {
+      advanceTimer = null
+      finish()
+    }, 220)
   }
 }
 
 function back() {
   clearAdvanceTimer()
   answerLocked.value = false
-  if (step.value > 0) step.value -= 1
+  if (step.value > 0) {
+    step.value -= 1
+    focusQuestionHeading()
+  }
 }
 
 function letter(k) {
@@ -122,8 +141,8 @@ onUnload(() => {
         role="progressbar"
         aria-valuemin="0"
         :aria-valuemax="QUESTIONS.length"
-        :aria-valuenow="step + (answers[step] ? 1 : 0)"
-        :aria-valuetext="'已完成 ' + (step + (answers[step] ? 1 : 0)) + ' / ' + QUESTIONS.length + ' 题'"
+        :aria-valuenow="step + 1"
+        :aria-valuetext="'当前第 ' + (step + 1) + ' / ' + QUESTIONS.length + ' 题'"
       >
         <view class="quiz__bar-fill" :style="{ width: progress + '%' }" />
       </view>
@@ -139,13 +158,21 @@ onUnload(() => {
 
       <view class="quiz__question-block">
         <text class="quiz__number">第 {{ step + 1 }} 题</text>
-        <text class="quiz__q">{{ q.q }}</text>
+        <text
+          ref="questionHeading"
+          class="quiz__q"
+          tabindex="-1"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {{ q.q }}
+        </text>
       </view>
 
       <view class="quiz__options">
         <button
           v-for="(opt, k) in q.options"
-          :key="k"
+          :key="step + '-' + k"
           class="quiz__opt"
           :class="{
             'quiz__opt--selected': answers[step] === opt,
@@ -298,8 +325,9 @@ onUnload(() => {
 }
 .quiz__visual {
   width: 100%;
+  max-width: 260rpx;
   aspect-ratio: 3 / 2;
-  margin-top: 32rpx;
+  margin: 24rpx auto 0;
   overflow: hidden;
   border-radius: var(--nx-radius-md);
   background: var(--nx-bg);
@@ -326,6 +354,10 @@ onUnload(() => {
   font-size: 42rpx;
   font-weight: 900;
   line-height: 1.38;
+}
+.quiz__q:focus-visible {
+  outline: 4rpx solid var(--nx-focus);
+  outline-offset: 6rpx;
 }
 .quiz__options {
   display: flex;
