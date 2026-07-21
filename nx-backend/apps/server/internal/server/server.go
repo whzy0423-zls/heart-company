@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/analytics"
+	"nine-xing/nx-backend/apps/server/internal/apprelease"
 	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/articlestore"
 	"nine-xing/nx-backend/apps/server/internal/auditlog"
@@ -70,6 +71,7 @@ type Server struct {
 	engagement            *engagement.Store
 	signups               *signup.Store
 	uploads               *uploadasset.Store
+	appReleases           *apprelease.Service
 	voiceAssetCreate      func(context.Context, uploadasset.CreateInput) (uploadasset.Asset, error)
 	voiceAssetFind        func(context.Context, int64) (uploadasset.Asset, error)
 	uploader              storage.ObjectUploader
@@ -162,6 +164,16 @@ func New(env config.Env, database *sql.DB) http.Handler {
 		trustedProxyCIDRs: trustedProxyCIDRs,
 
 		signupSubscribers: map[chan signup.Lead]struct{}{},
+	}
+	if database != nil {
+		files, fileErr := apprelease.NewFileStore(filepath.Join(env.UploadDir, "app-releases"), apprelease.MaxAPKBytes)
+		if fileErr != nil {
+			panic("app release file store: " + fileErr.Error())
+		}
+		s.appReleases = apprelease.NewService(apprelease.NewStore(database), files, apprelease.NewAPKInspector(), env.AppRelease.PackageName, env.AppRelease.ExpectedCertificateSHA256)
+		if maintainErr := s.appReleases.Maintain(context.Background(), time.Now()); maintainErr != nil {
+			log.Printf("app release maintenance: %v", maintainErr)
+		}
 	}
 	if uploader, err := s.objectUploader(); err == nil {
 		s.uploader = uploader
@@ -296,6 +308,12 @@ func (s *Server) imageStore() *image.Store {
 }
 
 func (s *Server) routes() {
+	s.mux.HandleFunc("/api/app-releases/list", s.method(http.MethodGet, s.requirePermission("Website:AppReleases:List", s.appReleaseList)))
+	s.mux.HandleFunc("/api/app-releases/upload", s.method(http.MethodPost, s.requirePermission("Website:AppReleases:Write", s.appReleaseUpload)))
+	s.mux.HandleFunc("/api/app-releases/", s.requirePermission("Website:AppReleases:Write", s.appReleaseMutation))
+	s.mux.HandleFunc("/api/public/app-release/latest", s.method(http.MethodGet, s.publicAppReleaseLatest))
+	s.mux.HandleFunc("/api/public/app-release/download", s.getOrHead(s.publicAppReleaseLatestDownload))
+	s.mux.HandleFunc("/api/public/app-releases/", s.getOrHead(s.publicAppReleaseDownload))
 	s.mux.HandleFunc("/api/status", s.method(http.MethodGet, s.status))
 	s.mux.HandleFunc("/api/auth/login", s.method(http.MethodPost, s.login))
 	s.mux.HandleFunc("/api/auth/logout", s.method(http.MethodPost, s.logout))
