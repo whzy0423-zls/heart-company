@@ -3,6 +3,7 @@ package apprelease
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,31 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/testutil"
 )
 
+func TestStoreReleaseMetadataJSONContract(t *testing.T) {
+	raw, err := json.Marshal(Release{
+		AppName:     "九星",
+		PackageName: "com.example.ninexing",
+		IconPath:    "private/icon.png",
+		IconURL:     "https://cdn.example.com/icon.png",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["appName"] != "九星" || payload["packageName"] != "com.example.ninexing" || payload["iconUrl"] != "https://cdn.example.com/icon.png" {
+		t.Fatalf("metadata JSON = %s, want public metadata fields", raw)
+	}
+	if _, exists := payload["IconPath"]; exists {
+		t.Fatalf("metadata JSON = %s, must not expose IconPath", raw)
+	}
+	if _, exists := payload["iconPath"]; exists {
+		t.Fatalf("metadata JSON = %s, must not expose iconPath", raw)
+	}
+}
+
 func TestStoreCreateDraftAndReadLifecycle(t *testing.T) {
 	database := openAppReleaseTestDB(t)
 	store := NewStore(database)
@@ -21,6 +47,9 @@ func TestStoreCreateDraftAndReadLifecycle(t *testing.T) {
 
 	created, err := store.CreateDraft(ctx, Release{
 		Platform:     "android",
+		AppName:      "九星",
+		PackageName:  "com.example.ninexing",
+		IconPath:     "android/icons/nine-xing.png",
 		VersionName:  "1.2.3",
 		VersionCode:  123,
 		ReleaseNotes: "Fix startup reliability.",
@@ -38,12 +67,16 @@ func TestStoreCreateDraftAndReadLifecycle(t *testing.T) {
 	if created.CreatedAt.IsZero() {
 		t.Fatal("created release should include createdAt")
 	}
+	if created.AppName != "九星" || created.PackageName != "com.example.ninexing" || created.IconPath != "android/icons/nine-xing.png" {
+		t.Fatalf("CreateDraft() metadata = (%q, %q, %q), want persisted metadata", created.AppName, created.PackageName, created.IconPath)
+	}
 
 	found, err := store.FindByID(ctx, created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if found.FilePath != created.FilePath || found.VersionCode != created.VersionCode || found.SHA256 != created.SHA256 {
+	if found.FilePath != created.FilePath || found.VersionCode != created.VersionCode || found.SHA256 != created.SHA256 ||
+		found.AppName != created.AppName || found.PackageName != created.PackageName || found.IconPath != created.IconPath {
 		t.Fatalf("FindByID() = %+v, want persisted release %+v", found, created)
 	}
 
@@ -60,6 +93,29 @@ func TestStoreCreateDraftAndReadLifecycle(t *testing.T) {
 	}
 	if _, err := store.FindByID(ctx, created.ID+999); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("FindByID() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestStoreReadsDefaultMetadataForExistingRelease(t *testing.T) {
+	database := openAppReleaseTestDB(t)
+	store := NewStore(database)
+
+	var id int64
+	err := database.QueryRow(`
+		INSERT INTO app_releases
+		(platform, version_name, version_code, release_notes, file_name, file_path, file_size, sha256, status)
+		VALUES ('android','1.0.1',101,'legacy','legacy.apk','android/legacy.apk',1024,$1,'draft')
+		RETURNING id`, repeatedSHA("a")).Scan(&id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	found, err := store.FindByID(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found.AppName != "" || found.PackageName != "" || found.IconPath != "" {
+		t.Fatalf("legacy metadata = (%q, %q, %q), want empty defaults", found.AppName, found.PackageName, found.IconPath)
 	}
 }
 
@@ -100,9 +156,11 @@ func TestStoreListReturnsPageCurrentAndTotalStorage(t *testing.T) {
 	if len(result.Items) != 1 || result.Items[0].ID != newest.ID {
 		t.Fatalf("Items = %+v, want newest release %d", result.Items, newest.ID)
 	}
+	assertReleaseMetadata(t, result.Items[0], newest)
 	if result.Current == nil || result.Current.ID != current.ID {
 		t.Fatalf("Current = %+v, want published release %d", result.Current, current.ID)
 	}
+	assertReleaseMetadata(t, *result.Current, current)
 	wantSize := old.FileSize + current.FileSize + newest.FileSize
 	if result.TotalFileSize != wantSize {
 		t.Fatalf("TotalFileSize = %d, want %d", result.TotalFileSize, wantSize)
@@ -129,6 +187,7 @@ func TestStoreArchivePublishedReleaseKeepsRecord(t *testing.T) {
 	if archived.Status != StatusArchived || archived.PublishedAt == nil {
 		t.Fatalf("Archive() = %+v, want archived release retaining publishedAt", archived)
 	}
+	assertReleaseMetadata(t, archived, current)
 	if status := releaseStatus(t, database, current.ID); status != StatusArchived {
 		t.Fatalf("stored status = %q, want archived", status)
 	}
@@ -163,6 +222,7 @@ func TestStorePublishArchivesPreviousVersionAtomically(t *testing.T) {
 	if published.ID != target.ID || published.Status != StatusPublished || published.PublishedAt == nil {
 		t.Fatalf("Publish() = %+v, want target published", published)
 	}
+	assertReleaseMetadata(t, published, target)
 	if got := releaseStatus(t, database, target.ID); got != StatusPublished {
 		t.Fatalf("target status = %q, want published", got)
 	}
@@ -289,6 +349,9 @@ func releaseFixture(versionCode int64, status Status) Release {
 	}
 	return Release{
 		Platform:     "android",
+		AppName:      fmt.Sprintf("Nine Xing %d", versionCode),
+		PackageName:  "com.example.ninexing",
+		IconPath:     fmt.Sprintf("android/icons/%d.png", versionCode),
 		VersionName:  fmt.Sprintf("1.0.%d", versionCode),
 		VersionCode:  versionCode,
 		ReleaseNotes: fmt.Sprintf("release %d", versionCode),
@@ -324,16 +387,24 @@ func insertRelease(t *testing.T, database *sql.DB, release Release) Release {
 	}
 	err := database.QueryRow(`
 		INSERT INTO app_releases
-		(platform, version_name, version_code, release_notes, file_name, file_path, file_size, sha256, status, published_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		(platform, app_name, package_name, icon_path, version_name, version_code, release_notes, file_name, file_path, file_size, sha256, status, published_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		RETURNING id, created_at`,
-		release.Platform, release.VersionName, release.VersionCode, release.ReleaseNotes,
-		release.FileName, release.FilePath, release.FileSize, release.SHA256, release.Status, publishedAt,
+		release.Platform, release.AppName, release.PackageName, release.IconPath, release.VersionName, release.VersionCode,
+		release.ReleaseNotes, release.FileName, release.FilePath, release.FileSize, release.SHA256, release.Status, publishedAt,
 	).Scan(&release.ID, &release.CreatedAt)
 	if err != nil {
 		t.Fatalf("insert release: %v", err)
 	}
 	return release
+}
+
+func assertReleaseMetadata(t *testing.T, got, want Release) {
+	t.Helper()
+	if got.AppName != want.AppName || got.PackageName != want.PackageName || got.IconPath != want.IconPath {
+		t.Fatalf("release metadata = (%q, %q, %q), want (%q, %q, %q)",
+			got.AppName, got.PackageName, got.IconPath, want.AppName, want.PackageName, want.IconPath)
+	}
 }
 
 func setCreatedAt(t *testing.T, database *sql.DB, id int64, value time.Time) {

@@ -16,6 +16,10 @@ const (
 type Release struct {
 	ID            int64      `json:"id"`
 	Platform      string     `json:"platform"`
+	AppName       string     `json:"appName"`
+	PackageName   string     `json:"packageName"`
+	IconPath      string     `json:"-"`
+	IconURL       string     `json:"iconUrl"`
 	VersionName   string     `json:"versionName"`
 	VersionCode   int64      `json:"versionCode"`
 	ReleaseNotes  string     `json:"releaseNotes"`

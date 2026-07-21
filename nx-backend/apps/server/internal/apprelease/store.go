@@ -34,7 +34,7 @@ type releaseScanner interface {
 }
 
 const releaseColumns = `
-	id, platform, version_name, version_code, release_notes, file_name, file_path,
+	id, platform, app_name, package_name, icon_path, version_name, version_code, release_notes, file_name, file_path,
 	file_size, sha256, status, created_at, published_at`
 
 func NewStore(database *sql.DB) *Store {
@@ -50,10 +50,13 @@ func (s *Store) CreateDraft(ctx context.Context, input Release) (Release, error)
 	}
 	row := s.db.QueryRowContext(ctx, `
 		INSERT INTO app_releases
-		(platform, version_name, version_code, release_notes, file_name, file_path, file_size, sha256, status)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'draft')
+		(platform, app_name, package_name, icon_path, version_name, version_code, release_notes, file_name, file_path, file_size, sha256, status)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'draft')
 		RETURNING `+releaseColumns,
 		input.Platform,
+		strings.TrimSpace(input.AppName),
+		strings.TrimSpace(input.PackageName),
+		strings.TrimSpace(input.IconPath),
 		strings.TrimSpace(input.VersionName),
 		input.VersionCode,
 		strings.TrimSpace(input.ReleaseNotes),
@@ -270,6 +273,9 @@ func scanRelease(scanner releaseScanner) (Release, error) {
 	err := scanner.Scan(
 		&release.ID,
 		&release.Platform,
+		&release.AppName,
+		&release.PackageName,
+		&release.IconPath,
 		&release.VersionName,
 		&release.VersionCode,
 		&release.ReleaseNotes,

@@ -17,6 +17,9 @@ func TestSchemaDefinesAppReleaseConstraints(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS app_releases",
 		"id BIGSERIAL PRIMARY KEY",
 		"platform TEXT NOT NULL CHECK (platform IN ('android'))",
+		"app_name TEXT NOT NULL DEFAULT ''",
+		"package_name TEXT NOT NULL DEFAULT ''",
+		"icon_path TEXT NOT NULL DEFAULT ''",
 		"version_name TEXT NOT NULL",
 		"version_code BIGINT NOT NULL CHECK (version_code > 0)",
 		"release_notes TEXT NOT NULL DEFAULT ''",
@@ -31,6 +34,9 @@ func TestSchemaDefinesAppReleaseConstraints(t *testing.T) {
 		"CREATE UNIQUE INDEX IF NOT EXISTS idx_app_releases_one_published_per_platform",
 		"ON app_releases(platform)",
 		"WHERE status = 'published'",
+		"ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS app_name TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS package_name TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS icon_path TEXT NOT NULL DEFAULT ''",
 	} {
 		if !strings.Contains(schema, fragment) {
 			t.Fatalf("expected app release schema to contain %q", fragment)
