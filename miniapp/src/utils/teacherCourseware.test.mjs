@@ -17,6 +17,12 @@ const {
 
 assert.ok(DEFAULT_TEACHERS.length > 0, 'stable fallback teachers should be available')
 assert.ok(DEFAULT_COURSEWARE_ITEMS.length > 0, 'stable fallback courseware should be available')
+const courseSchemaKeys = ['badge', 'bullets', 'cover', 'description', 'duration', 'materialTypes', 'title', 'url']
+for (const item of DEFAULT_COURSEWARE_ITEMS) {
+  assert.deepEqual(Object.keys(item).sort(), courseSchemaKeys, 'default courseware should expose the complete normalized schema')
+  assert.equal(Array.isArray(item.bullets), true, 'default courseware bullets should always be an array')
+  assert.equal(Array.isArray(item.materialTypes), true, 'default courseware materialTypes should always be an array')
+}
 
 assert.deepEqual(
   normalizeTeachers({ teacher: { name: '韩老师', title: '九型导师', avatar: '/a.png', bio: '十年咨询经验', tags: ['课程研发'] } })[0],
@@ -34,6 +40,12 @@ assert.equal(
   'teachers.items should accept teacherName aliases',
 )
 assert.deepEqual(normalizeTeachers({ home: {} }), DEFAULT_TEACHERS, 'missing teachers should use stable defaults')
+assert.deepEqual(normalizeTeachers({ home: { teacherTeaser: {} } }), [], 'an explicit empty teacherTeaser should remain empty')
+assert.equal(
+  normalizeTeachers({ teacher: { name: '优先老师' }, home: { teacherTeaser: {} } })[0].name,
+  '优先老师',
+  'a nonempty higher-priority teacher source should win over an empty teacherTeaser',
+)
 
 const teacherTeaser = {
   eyebrow: '老师简介',
@@ -141,6 +153,11 @@ const realCourses = [
   },
 ]
 const enrichedCourses = normalizeCoursewareItems({ home: { courses: { items: realCourses } } })
+for (const item of enrichedCourses) {
+  assert.deepEqual(Object.keys(item).sort(), courseSchemaKeys, 'backend courses should expose the complete normalized schema')
+  assert.equal(Array.isArray(item.bullets), true, 'backend course bullets should always be an array')
+  assert.equal(Array.isArray(item.materialTypes), true, 'backend course materialTypes should always be an array')
+}
 assert.deepEqual(
   enrichedCourses.map((item) => item.bullets),
   realCourses.map((item) => item.bullets),
@@ -184,8 +201,15 @@ assert.equal(richCourse.cover, '/custom-cover.jpg', 'an existing rich cover shou
 assert.equal(richCourse.duration, '自定义时长', 'an existing duration should win over local enrichment')
 assert.deepEqual(richCourse.materialTypes, ['直播', '讲义'], 'existing material types should win over local enrichment')
 assert.deepEqual(richCourse.bullets, ['保留目录'], 'richer backend course content should remain intact')
+assert.deepEqual(Object.keys(richCourse).sort(), courseSchemaKeys, 'backend courseware should use the same normalized schema as defaults')
 
 assert.deepEqual(normalizeCoursewareItems({ home: {} }), DEFAULT_COURSEWARE_ITEMS, 'missing courseware should use stable defaults')
+assert.deepEqual(normalizeCoursewareItems({ home: { courses: { items: [] } } }), [], 'an explicit empty home courses section should remain empty')
+assert.equal(
+  normalizeCoursewareItems({ courseware: [{ title: '优先课件' }], home: { courses: { items: [] } } })[0].title,
+  '优先课件',
+  'a nonempty higher-priority courseware source should win over an empty home courses section',
+)
 
 console.log('teacher/courseware normalization tests passed')
 await rm(dir, { force: true, recursive: true })

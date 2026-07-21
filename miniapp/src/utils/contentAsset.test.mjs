@@ -11,6 +11,13 @@ await writeFile(modulePath, source)
 
 const { resolveContentAsset } = await import(`file://${modulePath}`)
 const fallback = '/static/editorial/home-hero.webp'
+const originalURL = globalThis.URL
+globalThis.URL = undefined
+
+assert.doesNotThrow(
+  () => resolveContentAsset('https://cdn.example.com/teacher.jpg', fallback),
+  'the resolver should not depend on a global WHATWG URL implementation',
+)
 
 assert.equal(
   resolveContentAsset('https://cdn.example.com/teacher.jpg', fallback),
@@ -18,6 +25,7 @@ assert.equal(
   'absolute HTTPS assets should pass through unchanged',
 )
 assert.equal(resolveContentAsset('HTTPS://cdn.example.com/teacher.jpg', fallback), 'HTTPS://cdn.example.com/teacher.jpg', 'HTTPS matching should be case-insensitive')
+assert.equal(resolveContentAsset('https://cdn.example.com:8443/teacher.jpg', fallback), 'https://cdn.example.com:8443/teacher.jpg', 'HTTPS assets should support a valid optional port')
 assert.equal(resolveContentAsset('/static/editorial/course-intro.webp', fallback), '/static/editorial/course-intro.webp', '/static assets should stay local')
 assert.equal(resolveContentAsset('/assets/teacher-poster.jpg', fallback), 'https://api.nine-xing.test/assets/teacher-poster.jpg', '/assets should resolve against the HTTPS API origin')
 assert.equal(
@@ -45,6 +53,23 @@ for (const unsafe of [
   '//cdn.example.com/teacher.jpg',
   'teacher.jpg',
   'https://',
+  'https:///teacher.jpg',
+  'https://user:pass@cdn.example.com/teacher.jpg',
+  'https://user@cdn.example.com/teacher.jpg',
+  'https://cdn.example.com:0/teacher.jpg',
+  'https://cdn.example.com:65536/teacher.jpg',
+  'https://cdn.example.com:abc/teacher.jpg',
+  'https://bad..example/teacher.jpg',
+  'https://-bad.example/teacher.jpg',
+  'https://bad-.example/teacher.jpg',
+  'https://999.999.999.999/teacher.jpg',
+  'https://cdn .example.com/teacher.jpg',
+  '\nhttps://cdn.example.com/teacher.jpg',
+  'https://cdn.example.com/teacher.jpg\r',
+  'https://cdn.example.com\\@evil.test/teacher.jpg',
+  'https://cdn.example.com/%252e%252e/private.jpg',
+  'https://cdn.example.com/file%00.jpg',
+  'https://cdn.example.com/bad%encoding.jpg',
   '/assets/../private.jpg',
   '/api/public/site-uploads/folder%2f..%2fprivate.jpg',
   '/api/public/site-uploads/file%00.jpg',
@@ -71,5 +96,6 @@ assert.equal(
 )
 assert.equal(resolveContentAsset(null, ''), '', 'the caller-provided fallback should be deterministic even when empty')
 
+globalThis.URL = originalURL
 console.log('content asset resolver tests passed')
 await rm(dir, { force: true, recursive: true })

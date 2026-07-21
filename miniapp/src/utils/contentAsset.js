@@ -28,33 +28,50 @@ function isSafeLocalPath(value, prefix) {
   return value.startsWith(prefix) && isSafelyEncodedPath(value)
 }
 
-function httpsApiOrigin() {
-  try {
-    const apiUrl = new URL(API_BASE)
-    return apiUrl.protocol === 'https:' ? apiUrl.origin : ''
-  } catch {
-    return ''
+function validPort(value) {
+  if (!value) return true
+  if (!/^[1-9]\d{0,4}$/.test(value)) return false
+  return Number(value) <= 65535
+}
+
+function validHostname(value) {
+  if (!value || value.length > 253 || value.startsWith('.') || value.endsWith('.')) return false
+  const labels = value.split('.')
+  if (labels.some((label) => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label))) return false
+  if (labels.length === 4 && labels.every((label) => /^\d+$/.test(label))) {
+    return labels.every((label) => Number(label) <= 255)
   }
+  return true
+}
+
+function httpsOrigin(value) {
+  if (typeof value !== 'string' || /[\s\u0000-\u001f\u007f-\u009f\\]/.test(value)) return ''
+  const match = /^https:\/\/([^/?#]+)(?=\/|\?|#|$)/i.exec(value)
+  if (!match) return ''
+  const authority = match[1]
+  if (authority.includes('@')) return ''
+
+  const authorityMatch = /^([^:]+)(?::([^:]+))?$/.exec(authority)
+  if (!authorityMatch) return ''
+  const [, hostname, port = ''] = authorityMatch
+  if (!validHostname(hostname) || !validPort(port)) return ''
+  return `https://${authority}`
 }
 
 export function resolveContentAsset(value, fallback = '') {
   const safeFallback = typeof fallback === 'string' ? fallback : ''
   if (typeof value !== 'string') return safeFallback
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(value)) return safeFallback
   const asset = value.trim()
   if (!asset || asset.startsWith('//')) return safeFallback
 
   if (/^https:\/\//i.test(asset)) {
-    try {
-      const url = new URL(asset)
-      return url.protocol === 'https:' ? asset : safeFallback
-    } catch {
-      return safeFallback
-    }
+    return httpsOrigin(asset) && isSafelyEncodedPath(asset) ? asset : safeFallback
   }
 
   if (isSafeLocalPath(asset, '/static/')) return asset
   if (!isSafeLocalPath(asset, '/assets/') && !isSafeLocalPath(asset, '/api/public/site-uploads/')) return safeFallback
 
-  const origin = httpsApiOrigin()
-  return origin ? new URL(asset, origin).href : safeFallback
+  const origin = httpsOrigin(API_BASE)
+  return origin ? `${origin}${asset}` : safeFallback
 }

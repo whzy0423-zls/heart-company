@@ -15,6 +15,8 @@ export const DEFAULT_COURSEWARE_ITEMS = [
     cover: '/static/wheel.png',
     badge: '入门',
     duration: '约 20 分钟',
+    materialTypes: ['课件'],
+    bullets: [],
     url: '',
   },
   {
@@ -23,6 +25,8 @@ export const DEFAULT_COURSEWARE_ITEMS = [
     cover: '/static/wheel.png',
     badge: '练习',
     duration: '课后练习',
+    materialTypes: ['课件', '练习'],
+    bullets: [],
     url: '',
   },
 ]
@@ -33,6 +37,13 @@ function asArray(value) {
   if (Array.isArray(value.items)) return value.items
   if (Array.isArray(value.list)) return value.list
   return typeof value === 'object' ? [value] : []
+}
+
+function hasExplicitSection(value) {
+  return Array.isArray(value)
+    || Array.isArray(value?.items)
+    || Array.isArray(value?.list)
+    || !!(value && typeof value === 'object')
 }
 
 function firstText(source, keys) {
@@ -79,6 +90,14 @@ function teacherNameAndTitle(source) {
   }
 }
 
+function hasTeacherContent(source) {
+  if (!source || typeof source !== 'object') return false
+  return !!firstText(source, [
+    'name', 'teacherName', 'nickname', 'title', 'role', 'position', 'subtitle',
+    'avatar', 'photo', 'image', 'cover', 'bio', 'description', 'desc', 'intro', 'summary', 'lead',
+  ]) || normalizeTags(source.tags || source.badges || source.specialties || source.skills).length > 0
+}
+
 function uniqueByTitle(items) {
   const seen = new Set()
   return items.filter((item) => {
@@ -90,13 +109,14 @@ function uniqueByTitle(items) {
 }
 
 export function normalizeTeachers(config) {
-  const candidates = [
-    ...asArray(config?.teacher),
-    ...asArray(config?.teachers),
-    ...asArray(config?.home?.teacher),
-    ...asArray(config?.home?.teachers),
-    ...asArray(config?.home?.teacherTeaser),
+  const sources = [
+    config?.teacher,
+    config?.teachers,
+    config?.home?.teacher,
+    config?.home?.teachers,
+    config?.home?.teacherTeaser,
   ]
+  const candidates = sources.flatMap(asArray).filter(hasTeacherContent)
 
   const teachers = candidates.map((item) => {
     const source = item || {}
@@ -110,7 +130,8 @@ export function normalizeTeachers(config) {
     }
   }).filter((item) => item.name || item.bio)
 
-  return teachers.length > 0 ? teachers : DEFAULT_TEACHERS
+  if (teachers.length > 0) return teachers
+  return sources.some(hasExplicitSection) ? [] : DEFAULT_TEACHERS
 }
 
 const COURSE_EDITORIAL = [
@@ -158,17 +179,19 @@ function normalizeCoursewareSource(item, index) {
 }
 
 export function normalizeCoursewareItems(config) {
-  const candidates = [
-    ...asArray(config?.courseware),
-    ...asArray(config?.materials),
-    ...asArray(config?.lessons),
-    ...asArray(config?.courses),
-    ...asArray(config?.home?.courseware),
-    ...asArray(config?.home?.materials),
-    ...asArray(config?.home?.lessons),
-    ...asArray(config?.home?.courses),
+  const sources = [
+    config?.courseware,
+    config?.materials,
+    config?.lessons,
+    config?.courses,
+    config?.home?.courseware,
+    config?.home?.materials,
+    config?.home?.lessons,
+    config?.home?.courses,
   ]
+  const candidates = sources.flatMap(asArray)
 
   const items = uniqueByTitle(candidates.map(normalizeCoursewareSource).filter(Boolean))
-  return items.length > 0 ? items : DEFAULT_COURSEWARE_ITEMS
+  if (items.length > 0) return items
+  return sources.some(hasExplicitSection) ? [] : DEFAULT_COURSEWARE_ITEMS
 }
