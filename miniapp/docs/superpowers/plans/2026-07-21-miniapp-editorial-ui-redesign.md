@@ -242,3 +242,42 @@
 - [ ] 运行 `node scripts/ui-compat.test.mjs && npm run test:config && npm run build:h5 && npm run build:mp-weixin`，预期全部 PASS。
 - [ ] 复用 `http://127.0.0.1:5176/#/pages/test/test`，分别以 375×812、390×844、768×1024 视口检查性别页和至少一题答题状态并保存截图；确认插画仍为辅助层、前三个选项可见或可自然滚动、中心主题下文字对比度达到 AA、选项可点击/Tab 聚焦、无横向滚动。
 - [ ] 提交：`git add src/pages/test/test.vue scripts/ui-compat.test.mjs && git commit -m "feat: enrich quiz visual rhythm"`。
+
+---
+
+## Chunk 8：老师品牌与课件资料最终方向
+
+### Task 17：打通后台老师资料
+
+**Files:** `src/utils/teacherCourseware.js`, `src/utils/teacherCourseware.test.mjs`
+
+- [ ] 写失败测试：`normalizeTeachers({ home: { teacherTeaser: ... } })` 能返回后台老师姓名、身份、图片和简介；空配置仍使用本地兜底。
+- [ ] 运行 `node src/utils/teacherCourseware.test.mjs`，预期 teacherTeaser 用例 FAIL。
+- [ ] 实现 `home.teacherTeaser` 兼容，不破坏现有 `teacher/teachers/home.teacher` 来源优先级。
+- [ ] 运行 `node src/utils/teacherCourseware.test.mjs && npm run test:config`，预期 PASS。
+- [ ] 提交：`git add src/utils/teacherCourseware.js src/utils/teacherCourseware.test.mjs && git commit -m "feat: connect miniapp teacher content"`。
+
+### Task 18：重做老师课程型首页
+
+**Files:** `src/pages/index/index.vue`, `scripts/ui-compat.test.mjs`
+
+- [ ] 写失败断言：老师照片主视觉、老师身份与简介、唯一“开始学习”主按钮、精选课程、课件资料、次要“九型自测”入口、后台缓存/刷新和兜底状态。
+- [ ] 运行 `node scripts/ui-compat.test.mjs`，预期新首页契约 FAIL。
+- [ ] 使用 `getStoredSiteConfig/refreshSiteConfig`、`normalizeTeachers/normalizeCoursewareItems`；先展示缓存或本地兜底，再静默刷新。
+- [ ] 使用米白/墨色/深绿/朱红出版物视觉；减少圆角卡片和装饰徽章；老师主图固定比例并带单次本地回退。
+- [ ] 保留原有测试、学习和关系导航函数；“开始学习”进入学一学，“九型自测”进入测试。
+- [ ] 运行 `node scripts/ui-compat.test.mjs && npm run test:config && npm run build:h5 && npm run build:mp-weixin`，预期 PASS。
+- [ ] 启动 H5 并在 375×812、390×844、768×1024 检查老师视觉、课程书刊比例、对比度、焦点和无横向滚动。
+- [ ] 提交：`git add src/pages/index/index.vue scripts/ui-compat.test.mjs && git commit -m "feat: redesign home around teacher and courses"`。
+
+### Task 19：重做老师与课件资料页
+
+**Files:** `src/pages/learn/learn.vue`, `scripts/ui-compat.test.mjs`
+
+- [ ] 写失败断言：编辑式老师介绍、课程出版物列表、资料类型/时长、语录引用、后置紧凑九型索引，以及 loading/error/empty/retry 和图片单次回退。
+- [ ] 运行 `node scripts/ui-compat.test.mjs`，预期新学习页契约 FAIL。
+- [ ] 保留现有站点配置缓存、老师/课程 normalize 和重试逻辑；不新增课程路由。
+- [ ] 页面采用老师访谈、书架和资料目录式布局；主要操作引导测试或预约，九型图鉴降级。
+- [ ] 运行 `node scripts/ui-compat.test.mjs && npm run test:config && npm run build:h5 && npm run build:mp-weixin`，预期 PASS。
+- [ ] 在三个视口检查老师图文、课程封面、长简介、空/错误状态和按钮焦点。
+- [ ] 提交：`git add src/pages/learn/learn.vue scripts/ui-compat.test.mjs && git commit -m "feat: redesign teacher and courseware learning page"`。
