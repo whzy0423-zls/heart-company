@@ -10,17 +10,17 @@ APK metadata extraction remains inside `apprelease.APKInspector`, alongside the 
 
 `apprelease.Service` persists text metadata with the release record and stores the normalized icon next to the APK in managed app-release storage. The database stores only the icon's managed relative path, not image bytes or a data URL.
 
-The server exposes a dedicated icon response for a release. App icons are non-sensitive APK metadata, so the endpoint may be loaded directly by an `<img>` element without requiring the admin bearer-token request client. The endpoint never exposes a draft APK or arbitrary filesystem paths.
+The server exposes the protected route `GET|HEAD /api/app-release-icons/{id}` before the existing app-release mutation catch-all. It requires `Website:AppReleases:List`, allowing draft and archived icons to be shown only to authorized administrators. The frontend reuses the existing bearer-authenticated protected-image resolver, extended to recognize this path. The endpoint never exposes an APK or accepts a filesystem path.
 
 ## Data Model and Compatibility
 
-Add nullable/default-compatible columns to `app_releases`:
+Add backward-compatible columns to `app_releases`:
 
 - `app_name`: extracted localized or fallback display name.
 - `package_name`: manifest package identifier.
 - `icon_path`: managed relative path for the normalized PNG icon.
 
-The schema includes idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements so existing production databases migrate at startup. Existing rows remain valid with empty metadata and display a placeholder. Newly uploaded releases receive complete metadata when available.
+Each column is `TEXT NOT NULL DEFAULT ''`. The schema includes idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements so existing production databases migrate at startup without producing `NULL` values that would break the existing direct string scanners. Existing rows remain valid with empty metadata and display a placeholder. Newly uploaded releases receive complete metadata when available.
 
 ## Extraction and Fallbacks
 
@@ -31,14 +31,16 @@ Optional presentation metadata is best effort:
 1. Try the `zh-CN` application label.
 2. Fall back to the APK's default label.
 3. Fall back to the package name.
-4. Try to decode the launcher icon and encode it as PNG.
-5. If icon decoding fails, accept the APK and leave `icon_path` empty so the UI shows a placeholder.
+4. Try to decode a raster PNG or JPEG launcher icon and encode it as PNG.
+5. Adaptive/vector XML icons are not rendered in this iteration; they use the placeholder unless the APK also resolves a raster launcher resource.
+6. Reject optional icon processing when the source exceeds 8 MiB, dimensions exceed 2048×2048, or total pixels exceed 4 million. The normalized PNG output is capped at 8 MiB.
+7. If icon resolution, format, limit validation, decoding, or encoding fails, accept the APK and leave `icon_path` empty so the UI shows a placeholder.
 
 Signature and expected-package validation remain unchanged.
 
 ## API and UI
 
-Release JSON adds `appName`, `packageName`, and `iconUrl`. `iconUrl` is empty when no extracted icon exists.
+Release JSON adds `appName`, `packageName`, and `iconUrl`. `iconUrl` is `/api/app-release-icons/{id}` when an icon exists and empty otherwise.
 
 The current published release card shows:
 
@@ -53,8 +55,10 @@ The history table groups the icon, app name, and package name in an “应用”
 ## Error Handling and Security
 
 - Optional label/icon extraction errors do not fail a valid upload.
-- Icon paths are created and resolved through managed release storage; request paths never select filesystem paths directly.
-- The icon response uses a fixed image content type, nosniff headers, and cache validation.
+- Icon keys are derived from the committed APK key by replacing `.apk` with `.png`. `FileStore` writes PNGs atomically through a temporary file, caps them at 8 MiB, and only resolves/removes audited `.apk` and `.png` keys beneath `android/`.
+- Icon persistence is best effort. A valid APK remains uploadable when the optional icon cannot be saved.
+- If the icon is saved but database creation fails, service rollback removes both APK and PNG. Database reference enumeration and orphan auditing include both `file_path` and `icon_path` so maintenance treats them as one release artifact set.
+- The protected icon response supports GET and HEAD, uses `image/png`, `X-Content-Type-Options: nosniff`, the release SHA-256 plus icon metadata for its ETag, and returns `404` for absent rows/files.
 - Missing icon files return `404` and the UI falls back to a placeholder.
 - APK upload size, signature, package identity, and version validation are unchanged.
 
