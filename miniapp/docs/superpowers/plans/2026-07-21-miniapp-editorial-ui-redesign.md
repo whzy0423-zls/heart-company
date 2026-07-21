@@ -249,21 +249,25 @@
 
 ### Task 17：打通后台老师资料
 
-**Files:** `src/utils/teacherCourseware.js`, `src/utils/teacherCourseware.test.mjs`
+**Files:** `src/utils/teacherCourseware.js`, `src/utils/teacherCourseware.test.mjs`, `src/utils/siteConfig.js`, `src/utils/siteConfig.test.mjs`, `src/utils/contentAsset.js`, `src/utils/contentAsset.test.mjs`, `package.json`
 
-- [ ] 写失败测试：`normalizeTeachers({ home: { teacherTeaser: ... } })` 能返回后台老师姓名、身份、图片和简介；空配置仍使用本地兜底。
-- [ ] 运行 `node src/utils/teacherCourseware.test.mjs`，预期 teacherTeaser 用例 FAIL。
-- [ ] 实现 `home.teacherTeaser` 兼容，不破坏现有 `teacher/teachers/home.teacher` 来源优先级。
-- [ ] 运行 `node src/utils/teacherCourseware.test.mjs && npm run test:config`，预期 PASS。
-- [ ] 提交：`git add src/utils/teacherCourseware.js src/utils/teacherCourseware.test.mjs && git commit -m "feat: connect miniapp teacher content"`。
+- [ ] 写失败测试：使用真实 fixture `title: "韩常青（老韩）｜九型芯之力首席导师"`，断言拆成姓名/身份且不重复；图片和简介正确；空配置仍使用本地兜底。
+- [ ] 写失败测试：真实 `home.courses.items` 仅含 `badge/title/description/bullets` 时，归一化后保留 bullets，并按三类课程补充不同封面、资料类型和时长。
+- [ ] 写失败测试：`hasSiteConfigLearningContent/Section` 能识别仅含 `home.teacherTeaser` 的配置，并覆盖缓存保留场景。
+- [ ] 写 `contentAsset` 失败测试：HTTPS 原样、`/static` 本地保留、`/assets` 与 `/api/public/site-uploads` 按 API origin 绝对化、HTTP/javascript/空值回退。
+- [ ] 运行 `node src/utils/teacherCourseware.test.mjs && node src/utils/siteConfig.test.mjs && node src/utils/contentAsset.test.mjs`，预期新增用例 FAIL。
+- [ ] 实现 teacherTeaser 拆分、课程本地元数据补充、缓存识别和图片 URL 解析；将新测试加入 `test:config`。
+- [ ] 运行上述三个测试与 `npm run test:config`，预期 PASS。
+- [ ] 提交：`git add src/utils/teacherCourseware.js src/utils/teacherCourseware.test.mjs src/utils/siteConfig.js src/utils/siteConfig.test.mjs src/utils/contentAsset.js src/utils/contentAsset.test.mjs package.json && git commit -m "feat: connect miniapp teacher and course content"`。
 
 ### Task 18：重做老师课程型首页
 
 **Files:** `src/pages/index/index.vue`, `scripts/ui-compat.test.mjs`
 
 - [ ] 写失败断言：老师照片主视觉、老师身份与简介、唯一“开始学习”主按钮、精选课程、课件资料、次要“九型自测”入口、后台缓存/刷新和兜底状态。
+- [ ] 断言老师图片使用内容 URL resolver、提供可访问名称并只回退一次；课程封面相邻标题存在时 `aria-hidden="true"`。
 - [ ] 运行 `node scripts/ui-compat.test.mjs`，预期新首页契约 FAIL。
-- [ ] 使用 `getStoredSiteConfig/refreshSiteConfig`、`normalizeTeachers/normalizeCoursewareItems`；先展示缓存或本地兜底，再静默刷新。
+- [ ] 使用 `getStoredSiteConfig/refreshSiteConfig`、`normalizeTeachers/normalizeCoursewareItems`；先展示缓存或本地兜底，再静默刷新。明确空区块显示空状态，缺少旧区块保留兜底，请求失败保留内容并显示重试。
 - [ ] 使用米白/墨色/深绿/朱红出版物视觉；减少圆角卡片和装饰徽章；老师主图固定比例并带单次本地回退。
 - [ ] 保留原有测试、学习和关系导航函数；“开始学习”进入学一学，“九型自测”进入测试。
 - [ ] 运行 `node scripts/ui-compat.test.mjs && npm run test:config && npm run build:h5 && npm run build:mp-weixin`，预期 PASS。
@@ -275,6 +279,7 @@
 **Files:** `src/pages/learn/learn.vue`, `scripts/ui-compat.test.mjs`
 
 - [ ] 写失败断言：编辑式老师介绍、课程出版物列表、资料类型/时长、语录引用、后置紧凑九型索引，以及 loading/error/empty/retry 和图片单次回退。
+- [ ] 断言老师照片可访问名称、课程封面装饰语义，以及请求成功明确空区块与请求失败保留兜底的不同状态。
 - [ ] 运行 `node scripts/ui-compat.test.mjs`，预期新学习页契约 FAIL。
 - [ ] 保留现有站点配置缓存、老师/课程 normalize 和重试逻辑；不新增课程路由。
 - [ ] 页面采用老师访谈、书架和资料目录式布局；主要操作引导测试或预约，九型图鉴降级。
