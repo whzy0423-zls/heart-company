@@ -175,3 +175,69 @@ func TestMergeIncomingPreservesAdminAndDailyQuizAPIKeys(t *testing.T) {
 		t.Fatalf("expected non-secret fields to update, got %+v", got)
 	}
 }
+
+func TestApplyXinzhiliVoiceNormalizesDefaultsAndConfiguration(t *testing.T) {
+	cfg := Config{XinzhiliVoice: XinzhiliVoiceConfig{
+		Enabled: true,
+		ASR: SpeechModelConfig{
+			APIBase: " https://speech.example.com/v1/ ",
+			APIKey:  " asr-secret ",
+			Model:   " whisper-1 ",
+		},
+		TTS: SpeechModelConfig{
+			APIBase: " https://speech.example.com/v1/ ",
+			APIKey:  " tts-secret ",
+			Model:   " tts-1 ",
+			Voice:   " alloy ",
+		},
+	}}
+
+	got := cfg.ApplyXinzhiliVoice()
+
+	if !got.Enabled || got.ASR.APIBase != "https://speech.example.com/v1" || got.TTS.APIBase != "https://speech.example.com/v1" {
+		t.Fatalf("unexpected normalized config: %+v", got)
+	}
+	if got.ASR.Language != "zh" || got.ASR.TimeoutSeconds != 30 {
+		t.Fatalf("unexpected ASR defaults: %+v", got.ASR)
+	}
+	if got.TTS.ResponseFormat != "mp3" || got.TTS.Speed != 1 || got.TTS.TimeoutSeconds != 45 {
+		t.Fatalf("unexpected TTS defaults: %+v", got.TTS)
+	}
+	if got.Interaction.EndSilenceMs != 700 || got.Interaction.MinSpeechMs != 300 || got.Interaction.MaxTurnSeconds != 60 || !got.Interaction.AutoRelisten || !got.Interaction.TapToInterrupt {
+		t.Fatalf("unexpected interaction defaults: %+v", got.Interaction)
+	}
+	if err := got.ValidateReady(); err != nil {
+		t.Fatalf("configured voice models should be ready: %v", err)
+	}
+}
+
+func TestXinzhiliVoiceValidateReadyRequiresEnabledASRAndTTS(t *testing.T) {
+	cases := []XinzhiliVoiceConfig{
+		{},
+		{Enabled: true},
+		{Enabled: true, ASR: SpeechModelConfig{APIBase: "https://speech.example.com/v1", APIKey: "asr", Model: "whisper-1"}},
+	}
+	for _, cfg := range cases {
+		if err := cfg.ValidateReady(); err == nil {
+			t.Fatalf("ValidateReady(%+v) unexpectedly succeeded", cfg)
+		}
+	}
+}
+
+func TestMergeIncomingPreservesXinzhiliSpeechKeys(t *testing.T) {
+	current := Config{XinzhiliVoice: XinzhiliVoiceConfig{
+		ASR: SpeechModelConfig{APIKey: "asr-secret"},
+		TTS: SpeechModelConfig{APIKey: "tts-secret"},
+	}}
+	incoming := Config{XinzhiliVoice: XinzhiliVoiceConfig{
+		Enabled: true,
+		ASR:     SpeechModelConfig{APIBase: "https://new.example/v1", Model: "whisper-new"},
+		TTS:     SpeechModelConfig{APIBase: "https://new.example/v1", Model: "tts-new", Voice: "nova"},
+	}}
+
+	got := current.MergeIncoming(incoming)
+
+	if got.XinzhiliVoice.ASR.APIKey != "asr-secret" || got.XinzhiliVoice.TTS.APIKey != "tts-secret" {
+		t.Fatalf("expected xinzhili keys to be preserved: %+v", got.XinzhiliVoice)
+	}
+}

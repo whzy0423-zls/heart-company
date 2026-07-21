@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -664,6 +665,27 @@ func TestBuildModelConfigViewIncludesDailyQuizConfig(t *testing.T) {
 	}
 	if !view.DailyQuiz.APIKeySet {
 		t.Fatal("expected daily quiz apiKeySet to reflect configured secret")
+	}
+}
+
+func TestBuildModelConfigViewMasksXinzhiliVoiceSecrets(t *testing.T) {
+	stored := modelconfig.Config{XinzhiliVoice: modelconfig.XinzhiliVoiceConfig{
+		Enabled: true,
+		ASR:     modelconfig.SpeechModelConfig{APIBase: "https://speech.example/v1", APIKey: "asr-secret", Model: "whisper-1"},
+		TTS:     modelconfig.SpeechModelConfig{APIBase: "https://speech.example/v1", APIKey: "tts-secret", Model: "tts-1", Voice: "alloy"},
+	}}
+
+	view := buildModelConfigView(config.MiniMaxConfig{}, config.VideoConfig{}, config.ImageConfig{}, config.MiniMaxConfig{}, modelconfig.AdminModelConfig{}, modelconfig.CompatibleModelConfig{}, stored)
+
+	if !view.XinzhiliVoice.Enabled || !view.XinzhiliVoice.ASR.APIKeySet || !view.XinzhiliVoice.TTS.APIKeySet {
+		t.Fatalf("unexpected xinzhili voice view: %+v", view.XinzhiliVoice)
+	}
+	encoded, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "asr-secret") || strings.Contains(string(encoded), "tts-secret") {
+		t.Fatalf("view leaked speech secret: %s", encoded)
 	}
 }
 

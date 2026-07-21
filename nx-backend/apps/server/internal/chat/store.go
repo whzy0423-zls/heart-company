@@ -102,7 +102,7 @@ func scanMessage(row interface{ Scan(...interface{}) error }) (Message, error) {
 func (s *Store) ListSessions(ctx context.Context, appUserID int64) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, app_user_id, card_id, title, updated_at, create_time
-		 FROM app_chat_sessions WHERE app_user_id = $1
+		 FROM app_chat_sessions WHERE app_user_id = $1 AND scene = 'chat'
 		 ORDER BY updated_at DESC`, appUserID)
 	if err != nil {
 		return nil, err
@@ -121,11 +121,20 @@ func (s *Store) ListSessions(ctx context.Context, appUserID int64) ([]Session, e
 
 // GetOrCreateSession 找到 card 的最近会话，若无则新建。
 func (s *Store) GetOrCreateSession(ctx context.Context, appUserID, cardID int64) (Session, error) {
+	return s.GetOrCreateSceneSession(ctx, appUserID, cardID, "chat")
+}
+
+// GetOrCreateSceneSession 在指定场景内恢复最近会话，避免芯之力语音与普通卡片聊天共享上下文。
+func (s *Store) GetOrCreateSceneSession(ctx context.Context, appUserID, cardID int64, scene string) (Session, error) {
+	scene = strings.TrimSpace(scene)
+	if scene == "" {
+		scene = "chat"
+	}
 	sess, err := scanSession(s.db.QueryRowContext(ctx,
 		`SELECT id, app_user_id, card_id, title, updated_at, create_time
-		 FROM app_chat_sessions WHERE app_user_id = $1 AND card_id = $2
+		 FROM app_chat_sessions WHERE app_user_id = $1 AND card_id = $2 AND scene = $3
 		 ORDER BY updated_at DESC LIMIT 1`,
-		appUserID, cardID,
+		appUserID, cardID, scene,
 	))
 	if err == nil {
 		return sess, nil
@@ -135,9 +144,9 @@ func (s *Store) GetOrCreateSession(ctx context.Context, appUserID, cardID int64)
 	}
 	// 新建
 	sess, err = scanSession(s.db.QueryRowContext(ctx,
-		`INSERT INTO app_chat_sessions (app_user_id, card_id) VALUES ($1, $2)
+		`INSERT INTO app_chat_sessions (app_user_id, card_id, scene) VALUES ($1, $2, $3)
 		 RETURNING id, app_user_id, card_id, title, updated_at, create_time`,
-		appUserID, cardID))
+		appUserID, cardID, scene))
 	return sess, err
 }
 

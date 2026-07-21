@@ -846,15 +846,18 @@ CREATE TABLE IF NOT EXISTS app_chat_sessions (
   title       TEXT NOT NULL DEFAULT '',
   context_summary TEXT NOT NULL DEFAULT '',
   context_summary_through_message_id BIGINT NOT NULL DEFAULT 0,
+  scene       TEXT NOT NULL DEFAULT 'chat',
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   create_time TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 ALTER TABLE app_chat_sessions ADD COLUMN IF NOT EXISTS context_summary TEXT NOT NULL DEFAULT '';
 ALTER TABLE app_chat_sessions ADD COLUMN IF NOT EXISTS context_summary_through_message_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE app_chat_sessions ADD COLUMN IF NOT EXISTS scene TEXT NOT NULL DEFAULT 'chat';
 
 CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_user ON app_chat_sessions(app_user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_card ON app_chat_sessions(card_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_scene ON app_chat_sessions(app_user_id, card_id, scene, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS app_chat_messages (
   id         BIGSERIAL PRIMARY KEY,

@@ -101,6 +101,13 @@ type Server struct {
 	chatLimiter           *fixedWindowRateLimiter
 	chatTimeout           time.Duration
 	chatHeartbeatInterval time.Duration
+	xinzhiliConfigLoader  func(context.Context) (modelconfig.XinzhiliVoiceConfig, error)
+	xinzhiliMemberCheck   func(context.Context, int64) error
+	xinzhiliTranscribe    func(context.Context, []byte, string) (string, error)
+	xinzhiliSynthesize    func(context.Context, string) ([]byte, string, error)
+	xinzhiliSession       func(context.Context, int64) (chat.Session, error)
+	xinzhiliRetrieveDocs  func(context.Context, string, int) ([]rag.Document, error)
+	xinzhiliSavePair      func(context.Context, int64, string, string, json.RawMessage) (int64, error)
 
 	appUsers                       *appuser.Store
 	appChat                        appChatStore
@@ -406,6 +413,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/push/unregister", s.method(http.MethodPost, s.requireAppAuth(s.appPushUnregister)))
 	// 语音识别
 	s.mux.HandleFunc("/api/app/voice/recognize", s.method(http.MethodPost, s.requireAppAuth(s.appVoiceRecognize)))
+	// 芯之力：会员专属的一轮实时语音对话（multipart 上传 + SSE 文字/语音分段返回）。
+	s.mux.HandleFunc("/api/app/xinzhili/turns/stream", s.method(http.MethodPost, s.requireAppAuth(s.appXinzhiliVoiceTurnStream)))
 
 	// ===== 小程序（微信）=====
 	s.mux.HandleFunc("/api/wx/login", s.method(http.MethodPost, s.wxLogin))
@@ -2260,6 +2269,29 @@ type modelConfigView struct {
 		Enabled      bool   `json:"enabled"`
 		SystemPrompt string `json:"systemPrompt"`
 	} `json:"assist"`
+	XinzhiliVoice struct {
+		Enabled bool `json:"enabled"`
+		ASR     struct {
+			Provider       string `json:"provider"`
+			APIBase        string `json:"apiBase"`
+			Model          string `json:"model"`
+			Language       string `json:"language"`
+			TimeoutSeconds int    `json:"timeoutSeconds"`
+			APIKeySet      bool   `json:"apiKeySet"`
+		} `json:"asr"`
+		TTS struct {
+			Provider       string  `json:"provider"`
+			APIBase        string  `json:"apiBase"`
+			Model          string  `json:"model"`
+			Voice          string  `json:"voice"`
+			Speed          float64 `json:"speed"`
+			ResponseFormat string  `json:"responseFormat"`
+			TimeoutSeconds int     `json:"timeoutSeconds"`
+			APIKeySet      bool    `json:"apiKeySet"`
+		} `json:"tts"`
+		Interaction  modelconfig.XinzhiliInteractionConfig `json:"interaction"`
+		SystemPrompt string                                `json:"systemPrompt"`
+	} `json:"xinzhiliVoice"`
 }
 
 func modelConfigAuditSnapshot(cfg modelconfig.Config) map[string]any {
@@ -2303,6 +2335,11 @@ func modelConfigAuditSnapshot(cfg modelconfig.Config) map[string]any {
 			"model":          cfg.DailyQuiz.Model,
 			"timeoutSeconds": cfg.DailyQuiz.TimeoutSeconds,
 		},
+		"xinzhiliVoice": map[string]any{
+			"enabled": cfg.XinzhiliVoice.Enabled,
+			"asr":     map[string]any{"apiBase": cfg.XinzhiliVoice.ASR.APIBase, "apiKeySet": cfg.XinzhiliVoice.ASR.APIKey != "", "model": cfg.XinzhiliVoice.ASR.Model},
+			"tts":     map[string]any{"apiBase": cfg.XinzhiliVoice.TTS.APIBase, "apiKeySet": cfg.XinzhiliVoice.TTS.APIKey != "", "model": cfg.XinzhiliVoice.TTS.Model, "voice": cfg.XinzhiliVoice.TTS.Voice},
+		},
 	}
 }
 
@@ -2339,6 +2376,24 @@ func buildModelConfigView(chat config.MiniMaxConfig, vid config.VideoConfig, img
 	view.DailyQuiz.APIKeySet = strings.TrimSpace(dailyQuiz.APIKey) != ""
 	view.Assist.Enabled = stored.AssistEnabled()
 	view.Assist.SystemPrompt = stored.Assist.SystemPrompt
+	voiceConfig := stored.ApplyXinzhiliVoice()
+	view.XinzhiliVoice.Enabled = voiceConfig.Enabled
+	view.XinzhiliVoice.ASR.Provider = voiceConfig.ASR.Provider
+	view.XinzhiliVoice.ASR.APIBase = voiceConfig.ASR.APIBase
+	view.XinzhiliVoice.ASR.Model = voiceConfig.ASR.Model
+	view.XinzhiliVoice.ASR.Language = voiceConfig.ASR.Language
+	view.XinzhiliVoice.ASR.TimeoutSeconds = voiceConfig.ASR.TimeoutSeconds
+	view.XinzhiliVoice.ASR.APIKeySet = voiceConfig.ASR.APIKey != ""
+	view.XinzhiliVoice.TTS.Provider = voiceConfig.TTS.Provider
+	view.XinzhiliVoice.TTS.APIBase = voiceConfig.TTS.APIBase
+	view.XinzhiliVoice.TTS.Model = voiceConfig.TTS.Model
+	view.XinzhiliVoice.TTS.Voice = voiceConfig.TTS.Voice
+	view.XinzhiliVoice.TTS.Speed = voiceConfig.TTS.Speed
+	view.XinzhiliVoice.TTS.ResponseFormat = voiceConfig.TTS.ResponseFormat
+	view.XinzhiliVoice.TTS.TimeoutSeconds = voiceConfig.TTS.TimeoutSeconds
+	view.XinzhiliVoice.TTS.APIKeySet = voiceConfig.TTS.APIKey != ""
+	view.XinzhiliVoice.Interaction = voiceConfig.Interaction
+	view.XinzhiliVoice.SystemPrompt = voiceConfig.SystemPrompt
 	return view
 }
 
@@ -2347,12 +2402,14 @@ func validateModelConfigBases(cfg modelconfig.Config) error {
 		return fmt.Errorf("chat.provider must be openai-compatible or anthropic-compatible")
 	}
 	for label, apiBase := range map[string]string{
-		"analysis.apiBase":  cfg.Analysis.APIBase,
-		"admin.apiBase":     cfg.Admin.APIBase,
-		"chat.apiBase":      cfg.Chat.APIBase,
-		"dailyQuiz.apiBase": cfg.DailyQuiz.APIBase,
-		"image.apiBase":     cfg.Image.APIBase,
-		"video.apiBase":     cfg.Video.APIBase,
+		"analysis.apiBase":          cfg.Analysis.APIBase,
+		"admin.apiBase":             cfg.Admin.APIBase,
+		"chat.apiBase":              cfg.Chat.APIBase,
+		"dailyQuiz.apiBase":         cfg.DailyQuiz.APIBase,
+		"image.apiBase":             cfg.Image.APIBase,
+		"video.apiBase":             cfg.Video.APIBase,
+		"xinzhiliVoice.asr.apiBase": cfg.XinzhiliVoice.ASR.APIBase,
+		"xinzhiliVoice.tts.apiBase": cfg.XinzhiliVoice.TTS.APIBase,
 	} {
 		if err := validateExternalAPIBase(label, apiBase); err != nil {
 			return err

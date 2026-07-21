@@ -49,6 +49,35 @@ export interface ModelConfigView {
     enabled: boolean;
     systemPrompt: string;
   };
+  xinzhiliVoice: {
+    enabled: boolean;
+    asr: {
+      provider: string;
+      apiBase: string;
+      apiKeySet: boolean;
+      model: string;
+      language: string;
+      timeoutSeconds: number;
+    };
+    tts: {
+      provider: string;
+      apiBase: string;
+      apiKeySet: boolean;
+      model: string;
+      voice: string;
+      speed: number;
+      responseFormat: string;
+      timeoutSeconds: number;
+    };
+    interaction: {
+      endSilenceMs: number;
+      minSpeechMs: number;
+      maxTurnSeconds: number;
+      autoRelisten: boolean;
+      tapToInterrupt: boolean;
+    };
+    systemPrompt: string;
+  };
 }
 
 /** 模型配置提交（保存）：apiKey 留空表示不修改既有密钥。 */
@@ -98,6 +127,35 @@ export interface ModelConfigPayload {
   /** AI 辅助：开关 + 系统提示词。enabled 始终回传当前值。 */
   assist: {
     enabled: boolean;
+    systemPrompt: string;
+  };
+  xinzhiliVoice: {
+    enabled: boolean;
+    asr: {
+      provider: string;
+      apiBase: string;
+      apiKey: string;
+      model: string;
+      language: string;
+      timeoutSeconds: number;
+    };
+    tts: {
+      provider: string;
+      apiBase: string;
+      apiKey: string;
+      model: string;
+      voice: string;
+      speed: number;
+      responseFormat: string;
+      timeoutSeconds: number;
+    };
+    interaction: {
+      endSilenceMs: number;
+      minSpeechMs: number;
+      maxTurnSeconds: number;
+      autoRelisten: boolean;
+      tapToInterrupt: boolean;
+    };
     systemPrompt: string;
   };
 }

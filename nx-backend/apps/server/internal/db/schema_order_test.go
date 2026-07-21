@@ -59,3 +59,19 @@ func TestSchemaMigratesChatSessionContextSummary(t *testing.T) {
 		}
 	}
 }
+
+func TestSchemaMigratesChatSessionScene(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(raw)
+	for _, statement := range []string{
+		"ALTER TABLE app_chat_sessions ADD COLUMN IF NOT EXISTS scene",
+		"idx_app_chat_sessions_scene",
+	} {
+		if !strings.Contains(sql, statement) {
+			t.Fatalf("schema is missing chat scene migration %q", statement)
+		}
+	}
+}

@@ -38,6 +38,71 @@ func TestListRecentMessagesFiltersInvalidTailBeforeLimiting(t *testing.T) {
 	}
 }
 
+func TestGetOrCreateSceneSessionScopesLookupByScene(t *testing.T) {
+	registerSceneSessionDriver()
+	database, err := sql.Open(sceneSessionDriverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	session, err := NewStore(database).GetOrCreateSceneSession(context.Background(), 7, 9, "xinzhili_voice")
+	if err != nil {
+		t.Fatalf("GetOrCreateSceneSession returned error: %v", err)
+	}
+	if session.ID != 42 || session.AppUserID != 7 || session.CardID != 9 {
+		t.Fatalf("unexpected session: %+v", session)
+	}
+}
+
+const sceneSessionDriverName = "chat_scene_session_test"
+
+var registerSceneSessionDriverOnce sync.Once
+
+func registerSceneSessionDriver() {
+	registerSceneSessionDriverOnce.Do(func() {
+		sql.Register(sceneSessionDriverName, sceneSessionDriver{})
+	})
+}
+
+type sceneSessionDriver struct{}
+
+func (sceneSessionDriver) Open(string) (driver.Conn, error) { return sceneSessionConn{}, nil }
+
+type sceneSessionConn struct{}
+
+func (sceneSessionConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
+func (sceneSessionConn) Close() error                        { return nil }
+func (sceneSessionConn) Begin() (driver.Tx, error)           { return nil, driver.ErrSkip }
+func (sceneSessionConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if !strings.Contains(query, "FROM app_chat_sessions") || !strings.Contains(query, "scene = $3") {
+		return nil, errors.New("scene session lookup must filter by scene")
+	}
+	if len(args) != 3 || args[0].Value != int64(7) || args[1].Value != int64(9) || args[2].Value != "xinzhili_voice" {
+		return nil, errors.New("unexpected scene session arguments")
+	}
+	now := time.Now()
+	return &singleSessionRows{values: []driver.Value{int64(42), int64(7), int64(9), "", now, now}}, nil
+}
+
+type singleSessionRows struct {
+	values []driver.Value
+	done   bool
+}
+
+func (r *singleSessionRows) Columns() []string {
+	return []string{"id", "app_user_id", "card_id", "title", "updated_at", "create_time"}
+}
+func (r *singleSessionRows) Close() error { return nil }
+func (r *singleSessionRows) Next(dest []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+	copy(dest, r.values)
+	r.done = true
+	return nil
+}
+
 const recentMessagesDriverName = "chat_recent_messages_test"
 
 var registerRecentMessagesDriverOnce sync.Once

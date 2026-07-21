@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -89,15 +90,66 @@ type AssistConfig struct {
 	SystemPrompt string `json:"systemPrompt"`
 }
 
+// SpeechModelConfig 是芯之力使用的 OpenAI-compatible 语音模型配置。
+// ASR 使用 /audio/transcriptions，TTS 使用 /audio/speech。
+type SpeechModelConfig struct {
+	Provider       string  `json:"provider"`
+	APIBase        string  `json:"apiBase"`
+	APIKey         string  `json:"apiKey"`
+	Model          string  `json:"model"`
+	Language       string  `json:"language,omitempty"`
+	Voice          string  `json:"voice,omitempty"`
+	Speed          float64 `json:"speed,omitempty"`
+	ResponseFormat string  `json:"responseFormat,omitempty"`
+	TimeoutSeconds int     `json:"timeoutSeconds"`
+}
+
+type XinzhiliInteractionConfig struct {
+	EndSilenceMs   int  `json:"endSilenceMs"`
+	MinSpeechMs    int  `json:"minSpeechMs"`
+	MaxTurnSeconds int  `json:"maxTurnSeconds"`
+	AutoRelisten   bool `json:"autoRelisten"`
+	TapToInterrupt bool `json:"tapToInterrupt"`
+}
+
+type XinzhiliVoiceConfig struct {
+	Enabled      bool                      `json:"enabled"`
+	ASR          SpeechModelConfig         `json:"asr"`
+	TTS          SpeechModelConfig         `json:"tts"`
+	Interaction  XinzhiliInteractionConfig `json:"interaction"`
+	SystemPrompt string                    `json:"systemPrompt"`
+}
+
+func (c XinzhiliVoiceConfig) ValidateReady() error {
+	c = c.normalized()
+	if !c.Enabled {
+		return errors.New("请先在后台配置好芯之力语音模型后再重试")
+	}
+	for label, model := range map[string]SpeechModelConfig{"ASR": c.ASR, "TTS": c.TTS} {
+		if model.Provider != ProviderOpenAICompatible || model.APIBase == "" || model.APIKey == "" || model.Model == "" {
+			return fmt.Errorf("请先在后台配置好芯之力%s模型后再重试", label)
+		}
+	}
+	if c.TTS.Voice == "" {
+		return errors.New("请先在后台配置好芯之力TTS音色后再重试")
+	}
+	return nil
+}
+
 // Config 模型配置覆盖值集合，整体作为一条 JSON 落库。
 type Config struct {
-	Chat      ChatConfig       `json:"chat"`
-	Video     VideoConfig      `json:"video"`
-	Image     ImageConfig      `json:"image"`
-	Analysis  AnalysisConfig   `json:"analysis"`
-	Admin     AdminModelConfig `json:"admin"`
-	DailyQuiz AdminModelConfig `json:"dailyQuiz"`
-	Assist    AssistConfig     `json:"assist"`
+	Chat          ChatConfig          `json:"chat"`
+	Video         VideoConfig         `json:"video"`
+	Image         ImageConfig         `json:"image"`
+	Analysis      AnalysisConfig      `json:"analysis"`
+	Admin         AdminModelConfig    `json:"admin"`
+	DailyQuiz     AdminModelConfig    `json:"dailyQuiz"`
+	Assist        AssistConfig        `json:"assist"`
+	XinzhiliVoice XinzhiliVoiceConfig `json:"xinzhiliVoice"`
+}
+
+func (c Config) ApplyXinzhiliVoice() XinzhiliVoiceConfig {
+	return c.XinzhiliVoice.normalized()
 }
 
 // AssistEnabled 解析 AI 辅助开关：未设置时默认启用。
@@ -315,6 +367,12 @@ func (c Config) MergeIncoming(in Config) Config {
 	if out.DailyQuiz.APIKey == "" {
 		out.DailyQuiz.APIKey = c.DailyQuiz.APIKey
 	}
+	if out.XinzhiliVoice.ASR.APIKey == "" {
+		out.XinzhiliVoice.ASR.APIKey = c.XinzhiliVoice.ASR.APIKey
+	}
+	if out.XinzhiliVoice.TTS.APIKey == "" {
+		out.XinzhiliVoice.TTS.APIKey = c.XinzhiliVoice.TTS.APIKey
+	}
 	// AI 辅助开关：提交未带 enabled 字段时沿用已存值。
 	if out.Assist.Enabled == nil {
 		out.Assist.Enabled = c.Assist.Enabled
@@ -359,7 +417,58 @@ func (c Config) trimmed() Config {
 			Enabled:      c.Assist.Enabled,
 			SystemPrompt: strings.TrimSpace(c.Assist.SystemPrompt),
 		},
+		XinzhiliVoice: c.XinzhiliVoice.normalized(),
 	}
+}
+
+func (c XinzhiliVoiceConfig) normalized() XinzhiliVoiceConfig {
+	c.ASR = c.ASR.normalized()
+	c.TTS = c.TTS.normalized()
+	if c.ASR.Language == "" {
+		c.ASR.Language = "zh"
+	}
+	if c.ASR.TimeoutSeconds <= 0 {
+		c.ASR.TimeoutSeconds = 30
+	}
+	if c.TTS.Speed <= 0 {
+		c.TTS.Speed = 1
+	}
+	if c.TTS.ResponseFormat == "" {
+		c.TTS.ResponseFormat = "mp3"
+	}
+	if c.TTS.TimeoutSeconds <= 0 {
+		c.TTS.TimeoutSeconds = 45
+	}
+	if c.Interaction.EndSilenceMs <= 0 {
+		c.Interaction.EndSilenceMs = 700
+	}
+	if c.Interaction.MinSpeechMs <= 0 {
+		c.Interaction.MinSpeechMs = 300
+	}
+	if c.Interaction.MaxTurnSeconds <= 0 {
+		c.Interaction.MaxTurnSeconds = 60
+	}
+	// 旧配置没有交互字段时，默认启用电话式自动复听和点击打断。
+	if c.Interaction == (XinzhiliInteractionConfig{EndSilenceMs: c.Interaction.EndSilenceMs, MinSpeechMs: c.Interaction.MinSpeechMs, MaxTurnSeconds: c.Interaction.MaxTurnSeconds}) {
+		c.Interaction.AutoRelisten = true
+		c.Interaction.TapToInterrupt = true
+	}
+	c.SystemPrompt = strings.TrimSpace(c.SystemPrompt)
+	return c
+}
+
+func (c SpeechModelConfig) normalized() SpeechModelConfig {
+	c.Provider = normalizeProvider(c.Provider)
+	if c.Provider == "" {
+		c.Provider = ProviderOpenAICompatible
+	}
+	c.APIBase = strings.TrimRight(strings.TrimSpace(c.APIBase), "/")
+	c.APIKey = strings.TrimSpace(c.APIKey)
+	c.Model = strings.TrimSpace(c.Model)
+	c.Language = strings.TrimSpace(c.Language)
+	c.Voice = strings.TrimSpace(c.Voice)
+	c.ResponseFormat = strings.ToLower(strings.TrimSpace(c.ResponseFormat))
+	return c
 }
 
 func (c CompatibleModelConfig) normalized() CompatibleModelConfig {
