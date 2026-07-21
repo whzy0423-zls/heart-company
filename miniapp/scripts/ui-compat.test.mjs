@@ -275,7 +275,8 @@ assert.match(learnPage, /\.learn-retry:focus-visible[\s\S]*\.learn-primary:focus
 assert.match(learnPage, /@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{[\s\S]*?\.learn-teacher\s*\{[^}]*grid-template-columns:/, 'tablet teacher section should become a two-column editorial composition')
 const learnTabletMedia = learnPage.match(/@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{([\s\S]*?)\n\}/)?.[1] || ''
 assert.doesNotMatch(learnTabletMedia, /\.publication-list\s*\{[^}]*grid-template-columns:\s*repeat\(2/, 'tablet course publications should remain a readable single-column list')
-assert.match(learnPage, /@media\s+screen\s+and\s+\(min-width:\s*1024px\)\s*\{[\s\S]*?\.publication-list\s*\{[^}]*grid-template-columns:\s*repeat\(2/, 'course publication columns should begin only on wide desktop viewports')
+assert.doesNotMatch(learnPage, /\.publication-list\s*\{[^}]*grid-template-columns:\s*repeat\(2/, 'course publications should remain a readable single-column editorial list at every viewport width')
+assert.match(learnTabletMedia, /\.learn-primary\s*\{[^}]*width:\s*100%[^}]*max-width:\s*360rpx[^}]*min-width:\s*0[^}]*box-sizing:\s*border-box/, 'tablet teacher CTA should fit its grid column without rpx overflow')
 assert.match(learnPage, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*transition:\s*none/, 'learn page should disable nonessential motion when reduced motion is requested')
 assert.doesNotMatch(learnPage, /animation:\s*[^;}]*infinite|(?:backdrop-)?filter\s*:/, 'learn page should use only static texture and avoid glass effects')
 

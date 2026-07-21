@@ -760,7 +760,7 @@ function goTest() {
   }
 
   .learn-teacher__copy { padding: 54rpx 0 54rpx 48rpx; justify-content: center; }
-  .learn-primary { width: auto; min-width: 360rpx; }
+  .learn-primary { width: 100%; max-width: 360rpx; min-width: 0; box-sizing: border-box; }
 
   .section-heading {
     flex-direction: row;
@@ -773,13 +773,6 @@ function goTest() {
   .type-index__list { grid-template-columns: repeat(9, minmax(0, 1fr)); }
   .type-index__item { flex-direction: column; justify-content: center; text-align: center; }
   .type-index__keywords { display: none; }
-}
-
-@media screen and (min-width: 1024px) {
-  .publication-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    column-gap: 40rpx;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
