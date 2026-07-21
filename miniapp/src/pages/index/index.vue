@@ -142,6 +142,8 @@ function activateAction(action, event) {
 
 function onActionKeydown(event, action) {
   if (!['Enter', ' ', 'Spacebar'].includes(event?.key)) return
+  event.preventDefault?.()
+  event.stopPropagation?.()
   activateAction(action, event)
 }
 
@@ -202,7 +204,7 @@ function goRelation() {
           tabindex="0"
           hover-class="control--pressed"
           @click="activateAction(loadContent, $event)"
-          @keydown.stop.prevent="onActionKeydown($event, loadContent)"
+          @keydown="onActionKeydown($event, loadContent)"
         >重试更新</view>
       </view>
 
@@ -237,7 +239,7 @@ function goRelation() {
             tabindex="0"
             hover-class="control--pressed"
             @click="activateAction(goLearn, $event)"
-            @keydown.stop.prevent="onActionKeydown($event, goLearn)"
+            @keydown="onActionKeydown($event, goLearn)"
           >开始学习</view>
         </view>
 
@@ -265,7 +267,7 @@ function goRelation() {
             :aria-label="`查看课程：${featuredCourse.title}`"
             hover-class="control--pressed"
             @click="activateAction(goLearn, $event)"
-            @keydown.stop.prevent="onActionKeydown($event, goLearn)"
+            @keydown="onActionKeydown($event, goLearn)"
           >
             <view class="featured-course__visual">
               <image
@@ -310,7 +312,7 @@ function goRelation() {
               :aria-label="`查看资料：${course.title}`"
               hover-class="control--pressed"
               @click="activateAction(goLearn, $event)"
-              @keydown.stop.prevent="onActionKeydown($event, goLearn)"
+              @keydown="onActionKeydown($event, goLearn)"
             >
               <image
                 class="material-card__cover"
@@ -356,7 +358,7 @@ function goRelation() {
           tabindex="0"
           hover-class="control--pressed"
           @click="activateAction(startTest, $event)"
-          @keydown.stop.prevent="onActionKeydown($event, startTest)"
+          @keydown="onActionKeydown($event, startTest)"
         >
           <view>
             <text class="secondary-entry__kicker">SELF TEST · {{ total }} 题</text>
@@ -370,7 +372,7 @@ function goRelation() {
           tabindex="0"
           hover-class="control--pressed"
           @click="activateAction(goRelation, $event)"
-          @keydown.stop.prevent="onActionKeydown($event, goRelation)"
+          @keydown="onActionKeydown($event, goRelation)"
         >
           <view>
             <text class="secondary-entry__kicker">RELATIONSHIP</text>

@@ -98,9 +98,9 @@ const primaryHomeAction = indexPage.match(/<view\b[^>]*class=["'][^"']*home-prim
 assert.match(primaryHomeAction, /role=["']button["']/, 'home primary action should expose button semantics on H5')
 assert.match(primaryHomeAction, /tabindex=["']0["']/, 'home primary action should be keyboard focusable on H5')
 assert.match(primaryHomeAction, /@click=["']activateAction\(goLearn,\s*\$event\)["']/, 'home primary action should preserve click and mini-program tap activation')
-assert.match(primaryHomeAction, /@keydown\.stop\.prevent=["']onActionKeydown\(\$event,\s*goLearn\)["']/, 'home primary action should compile one keydown handler for Enter and Space')
+assert.match(primaryHomeAction, /@keydown=["']onActionKeydown\(\$event,\s*goLearn\)["']/, 'home primary action should compile one unmodified keydown handler for Enter and Space')
 assert.match(indexPage, /function\s+activateAction\(action,\s*event\)\s*\{[\s\S]*?event\?\.repeat[\s\S]*?keyboardActivationAt[\s\S]*?action\(\)/, 'home keyboard activation should ignore repeats and suppress the synthetic follow-up click')
-assert.match(indexPage, /function\s+onActionKeydown\(event,\s*action\)\s*\{[\s\S]*?\['Enter',\s*' ',\s*'Spacebar'\][\s\S]*?activateAction\(action,\s*event\)/, 'the shared keydown handler should activate only for Enter, Space, and legacy Spacebar')
+assert.match(indexPage, /function\s+onActionKeydown\(event,\s*action\)\s*\{\s*if\s*\(!\['Enter',\s*' ',\s*'Spacebar'\]\.includes\(event\?\.key\)\)\s*return\s*event\.preventDefault\?\.\(\)\s*event\.stopPropagation\?\.\(\)\s*activateAction\(action,\s*event\)/, 'the shared keydown handler should prevent only Enter/Space after filtering, leaving Tab untouched')
 
 assert.match(indexPage, /class=["'][^"']*featured-course[^"']*["']/, 'home page should render one featured course like a publication')
 assert.match(indexPage, /class=["'][^"']*material-shelf[^"']*["']/, 'home page should render a courseware and materials shelf')
@@ -126,14 +126,14 @@ for (const action of secondaryHomeActions) {
   assert.match(action, /role=["']button["']/, 'secondary home actions should expose button semantics on H5')
   assert.match(action, /tabindex=["']0["']/, 'secondary home actions should be keyboard focusable on H5')
   assert.match(action, /@click=["']activateAction\(/, 'secondary home actions should preserve click and mini-program tap activation')
-  assert.match(action, /@keydown\.stop\.prevent=["']onActionKeydown\(/, 'secondary home actions should compile one shared keydown handler')
+  assert.match(action, /@keydown=["']onActionKeydown\(/, 'secondary home actions should compile one unmodified shared keydown handler')
 }
 const roleButtonViews = indexPage.match(/<view\b(?=[^>]*role=["']button["'])[^>]*>/g) || []
 assert.ok(roleButtonViews.length >= 6, 'all home interaction surfaces should expose cross-platform button semantics')
 for (const action of roleButtonViews) {
-  assert.equal((action.match(/@keydown\.stop\.prevent=/g) || []).length, 1, 'each home action should declare exactly one keydown binding')
+  assert.equal((action.match(/@keydown=/g) || []).length, 1, 'each home action should declare exactly one keydown binding')
 }
-assert.doesNotMatch(indexPage, /@keydown\.(?:enter|space)/, 'separate key modifiers must not compile duplicate catchkeydown attributes in WXML')
+assert.doesNotMatch(indexPage, /@keydown\./, 'keydown modifiers must not intercept Tab or compile duplicate WXML attributes')
 assert.doesNotMatch(indexPage, /<button\b[^>]*class=["'][^"']*(?:home-primary|secondary-entry)[^"']*["']/, 'home primary and secondary actions should not rely on non-focusable H5 uni-button output')
 
 assert.match(indexPage, /\.home-primary\s*\{[^}]*min-height:\s*88rpx/, 'home primary CTA should keep an 88rpx touch target')
