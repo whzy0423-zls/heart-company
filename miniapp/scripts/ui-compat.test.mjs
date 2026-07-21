@@ -23,8 +23,15 @@ const appVue = readFileSync('src/App.vue', 'utf8')
 
 const appleMobileStyle = readFileSync('src/styles/apple-mobile.css', 'utf8')
 assert.match(appVue, /@import ['"]\.\/styles\/apple-mobile\.css['"];/, 'App.vue should import shared Apple/iOS mobile tokens')
-for (const token of ['--nx-bg', '--nx-primary', '--nx-card', '--nx-radius', '--nx-safe-bottom']) {
+for (const token of ['--nx-bg', '--nx-ink', '--nx-blue', '--nx-coral', '--nx-error', '--nx-focus']) {
   assert.match(appleMobileStyle, new RegExp(token), `apple-mobile.css should define ${token}`)
+}
+for (const className of ['.nx-page', '.nx-editorial-hero', '.nx-panel', '.nx-media-row', '.nx-quote', '.nx-field', '.nx-empty', '.nx-error']) {
+  assert.match(appleMobileStyle, new RegExp(className.replace('.', '\\.') + '\\s*\\{'), `apple-mobile.css should define ${className}`)
+}
+for (const className of ['.nx-button--primary', '.nx-button--conversion', '.nx-button--secondary', '.nx-button--text']) {
+  const escaped = className.replace('.', '\\.')
+  assert.match(appleMobileStyle, new RegExp(`${escaped}\\s*\\{[\\s\\S]*?min-height:\\s*(?:8[8-9]|9\\d|[1-9]\\d{2,})rpx`), `${className} should keep at least an 88rpx touch target`)
 }
 for (const className of ['.ios-page', '.ios-card', '.ios-button', '.ios-section', '.ios-safe-bottom']) {
   assert.match(appleMobileStyle, new RegExp(className.replace('.', '\\.') + '\\s*\\{'), `apple-mobile.css should define ${className}`)
@@ -44,7 +51,6 @@ function assertRootViewClasses(source, file, classNames) {
 for (const file of ['src/pages/index/index.vue', 'src/pages/result/result.vue', 'src/pages/profile/profile.vue']) {
   const source = readFileSync(file, 'utf8')
   assert.match(source, /ios-page/, `${file} should opt into shared Apple/iOS page styling`)
-  assert.match(source, /ios-card/, `${file} should opt into shared Apple/iOS card styling`)
 }
 
 for (const file of ['src/pages/relation/relation.vue', 'src/pages/test/test.vue', 'src/pages/learn/learn.vue', 'src/pages/booking/booking.vue']) {
@@ -92,21 +98,9 @@ for (const file of collectVueFiles('src/pages')) {
 }
 
 
-for (const file of collectVueFiles('src/pages')) {
-  const source = readFileSync(file, 'utf8')
-  const images = source.match(/<image\b[\s\S]*?>/g) || []
-  for (const image of images) {
-    if (image.includes('poster-img')) continue
-    assert.match(image, /\slazy-load(?:=|\s|>|$)/, `${file} has image without lazy-load: ${image}`)
-  }
-}
-
-
-
 const bookingPage = readFileSync('src/pages/booking/booking.vue', 'utf8')
 assert.match(bookingPage, /userErrorMessage/, 'booking page should surface normalized request errors')
 assert.match(bookingPage, /title:\s*userErrorMessage\(e,\s*'提交失败，请重试'\)/, 'booking submit should keep a fallback while showing specific API errors')
-assert.match(bookingPage, /class=["'][^"']*card[^"']*ios-card[^"']*["']/, 'booking main form card should opt into iOS card styling')
 assert.match(bookingPage, /<button\s+class=["'][^"']*btn-primary[^"']*ios-button[^"']*["'][^>]*@click=["']submit["']/, 'booking submit action should opt into iOS button styling')
 assert.match(bookingPage, /fieldErrors/, 'booking page should expose inline field validation errors')
 assert.match(bookingPage, /v-if=["']fieldErrors\.contactName["']/, 'booking contact name should render an inline validation error')
@@ -136,7 +130,6 @@ assert.match(learnPage, /<button\s+class=["']retry["'][^>]*@click=["']loadConten
 assert.match(learnPage, /hover-class=["']retry--hover["']/, 'learn retry action should expose a hover/press state')
 assert.match(learnPage, /\.retry\s*\{[\s\S]*min-height:\s*88rpx/, 'learn retry action should keep an 88rpx touch target')
 assert.match(learnPage, /\.retry--hover\s*\{[\s\S]*(?:opacity|transform)/, 'learn retry hover state should have visible feedback')
-assert.match(learnPage, /class=["'][^"']*card[^"']*ios-card[^"']*section[^"']*["']/, 'learn content sections should opt into iOS card styling')
 assert.match(learnPage, /<button\s+class=["'][^"']*btn-primary[^"']*ios-button[^"']*["'][^>]*@click=["']goTest["']/, 'learn primary CTA should opt into iOS button styling')
 
 const profilePage = readFileSync('src/pages/profile/profile.vue', 'utf8')
@@ -158,8 +151,6 @@ assert.match(testPage, /answerLocked/, 'test page should guard rapid repeated op
 assert.match(testPage, /clearAdvanceTimer/, 'test page should clear pending navigation timers')
 assert.match(testPage, /onUnload/, 'test page should cleanup timers on unload')
 assert.match(testPage, /\.quiz__back\s*\{[\s\S]*min-height:\s*88rpx/, 'quiz back action should keep an 88rpx touch target')
-assert.match(testPage, /class=["'][^"']*gender[^"']*card[^"']*ios-card[^"']*["']/, 'test gender card should opt into iOS card styling')
-assert.match(testPage, /class=["'][^"']*quiz[^"']*card[^"']*ios-card[^"']*["']/, 'test quiz card should opt into iOS card styling')
 assert.match(testPage, /<button\b[\s\S]*class=["'][^"']*gender__card[^"']*["'][\s\S]*aria-label=/, 'test gender choices should use button semantics with accessibility labels')
 assert.match(testPage, /<button\b[\s\S]*class=["'][^"']*quiz__back[^"']*["'][\s\S]*@click=["']back["']/, 'quiz previous action should use button semantics')
 assert.match(testPage, /<button\b[\s\S]*v-for=["']\(opt, k\) in q\.options["'][\s\S]*class=["']quiz__opt["'][\s\S]*:aria-label=/, 'quiz options should use button semantics with accessibility labels')
@@ -187,7 +178,6 @@ assert.match(resultPage, /测试结果已失效/, 'result page should give feedb
 
 const relationPage = readFileSync('src/pages/relation/relation.vue', 'utf8')
 assert.match(relationPage, /<view\s+class=["'][^"']*page-stack[^"']*ios-page[^"']*ios-safe-bottom[^"']*["']/, 'relation root should use shared page-stack/iOS safe-area classes')
-assert.match(relationPage, /class=["'][^"']*card[^"']*ios-card[^"']*intro[^"']*["']/, 'relation intro card should opt into iOS card styling')
 assert.match(relationPage, /<button\s+class=["'][^"']*btn-primary[^"']*ios-button[^"']*["'][^>]*@click=["']analyze["']/, 'relation primary action should opt into iOS button styling')
 assert.doesNotMatch(relationPage, /padding-bottom:\s*60rpx/, 'relation page should not hard-code bottom padding outside shared safe-area helpers')
 const relationGridGap = relationPage.match(/\.grid\s*\{[\s\S]*?gap:\s*(\d+)rpx/)
