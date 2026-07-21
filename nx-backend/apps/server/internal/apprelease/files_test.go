@@ -551,6 +551,49 @@ func TestFileStoreSaveIconDirectoryReplacementDoesNotDeleteReplacementTempPath(t
 	}
 }
 
+func TestFileStoreSaveIconDirectoryReplacementCannotRedirectRename(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := store.Stage("release.apk", strings.NewReader("apk"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.Commit(staged, "android", 123)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iconDir := filepath.Join(store.Root(), "android")
+	movedDir := filepath.Join(store.Root(), "android-original")
+	var replacementTempPath, replacementDestination string
+	store.beforeIconRename = func(tempPath, destination string) {
+		if err := os.Rename(iconDir, movedDir); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(iconDir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		replacementTempPath = tempPath
+		replacementDestination = destination
+		if err := os.WriteFile(replacementTempPath, []byte("replacement"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := store.SaveIcon(saved.Key, testPNG(t)); !isError(err, ErrUnsafePath) {
+		t.Fatalf("SaveIcon(rename directory replacement) error = %v, want ErrUnsafePath", err)
+	}
+	assertFileContents(t, replacementTempPath, "replacement")
+	if _, err := os.Lstat(replacementDestination); !os.IsNotExist(err) {
+		t.Fatalf("replacement directory received destination or stat failed: %v", err)
+	}
+	originalDestination := filepath.Join(movedDir, filepath.Base(replacementDestination))
+	if _, err := os.Lstat(originalDestination); !os.IsNotExist(err) {
+		t.Fatalf("original directory retained committed destination or stat failed: %v", err)
+	}
+}
+
 func TestFileStoreRemoveDeletesManagedIcon(t *testing.T) {
 	store, err := NewFileStore(t.TempDir(), 64)
 	if err != nil {
