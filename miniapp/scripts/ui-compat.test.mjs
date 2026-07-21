@@ -185,9 +185,10 @@ assert.match(bookingPage, /:aria-invalid=["']!!fieldErrors\.contactName["']/, 'b
 assert.match(bookingPage, /:aria-invalid=["']!!fieldErrors\.phone["']/, 'booking phone input should expose aria-invalid when invalid')
 
 const learnPage = readFileSync('src/pages/learn/learn.vue', 'utf8')
+const learningPageStateSource = readFileSync('src/utils/learningPageState.js', 'utf8')
 
-assert.match(learnPage, /normalizeTeachers/, 'learn page should normalize teacher profile data from site config')
-assert.match(learnPage, /normalizeCoursewareItems/, 'learn page should normalize courseware and course data from site config')
+assert.match(learningPageStateSource, /normalizeTeachers/, 'learn state utility should normalize teacher profile data from site config')
+assert.match(learningPageStateSource, /normalizeCoursewareItems/, 'learn state utility should normalize courseware and course data from site config')
 assert.match(learnPage, /resolveContentAsset/, 'learn page should resolve backend teacher and course image assets safely')
 assert.match(learnPage, /老师专访|主讲老师/, 'learn page should introduce the teacher like an editorial profile')
 assert.match(learnPage, /课件出版|资料书架|课程资料库/, 'learn page should present courseware as a publication library')
@@ -237,17 +238,20 @@ assert.doesNotMatch(indexPage, /AI 对话/, 'home page primary feature cards sho
 assert.match(learnPage, /loadError/, 'learn page should expose a non-blocking failure state')
 assert.match(learnPage, /v-if=["']loading["']/, 'learn page should show a loading cue while retaining local fallback content')
 assert.match(learnPage, /资料整理中/, 'explicit empty teacher or course sections should render an editorial empty state')
-assert.match(learnPage, /const\s+teachers\s*=\s*ref\(normalizeTeachers\(\)\)/, 'initial uncached render should include local teacher fallback')
-assert.match(learnPage, /const\s+coursewareItems\s*=\s*ref\(normalizeCoursewareItems\(\)\)/, 'initial uncached render should include local course fallback')
-assert.match(learnPage, /const\s+TEACHER_SECTION_PATHS\s*=\s*\[[\s\S]*?teacherTeaser[\s\S]*?\]/, 'learn page should enumerate all teacher section sources')
-assert.match(learnPage, /const\s+COURSE_SECTION_PATHS\s*=\s*\[[\s\S]*?courseware[\s\S]*?materials[\s\S]*?lessons[\s\S]*?courses[\s\S]*?\]/, 'learn page should enumerate course and material sources')
-assert.match(learnPage, /Object\.prototype\.hasOwnProperty\.call/, 'learn section detection should distinguish missing fields from explicit empty fields')
-assert.match(learnPage, /if\s*\(!preserveMissing\s*\|\|\s*hasTeacherSection\(config\)\)\s*\{[\s\S]*?teachers\.value\s*=\s*normalizeTeachers\(config\)/, 'partial refreshes missing teacher fields should preserve current content')
-assert.match(learnPage, /if\s*\(!preserveMissing\s*\|\|\s*hasCourseSection\(config\)\)\s*\{[\s\S]*?coursewareItems\.value\s*=\s*normalizeCoursewareItems\(config\)/, 'partial refreshes missing course fields should preserve current content')
+assert.match(learnPage, /createInitialLearningContent\(\)/, 'initial uncached render should use tested local learning fallbacks')
+assert.match(learningPageStateSource, /const\s+TEACHER_SECTION_PATHS\s*=\s*\[[\s\S]*?teacherTeaser[\s\S]*?\]/, 'learn state should enumerate all teacher section sources')
+assert.match(learningPageStateSource, /const\s+COURSE_SECTION_PATHS\s*=\s*\[[\s\S]*?courseware[\s\S]*?materials[\s\S]*?lessons[\s\S]*?courses[\s\S]*?\]/, 'learn state should enumerate course and material sources')
+assert.match(learningPageStateSource, /Object\.prototype\.hasOwnProperty\.call/, 'learn section detection should distinguish missing fields from explicit empty fields')
+assert.match(learnPage, /applyLearningContent\(/, 'learn page should apply content through the behavior-tested state utility')
 assert.match(learnPage, /applyContent\(config,\s*\{\s*preserveMissing:\s*true\s*\}\)/, 'successful refresh should merge only explicitly present learning sections')
-assert.match(learnPage, /let\s+loadTicket\s*=\s*0/, 'learn page should guard against stale refresh responses')
-assert.match(learnPage, /ticket\s*!==\s*loadTicket/, 'learn page should ignore stale refresh responses')
+assert.match(learnPage, /createLatestRequestGuard\(\)/, 'learn page should use the tested latest-request guard')
+assert.match(learnPage, /requestGuard\.isLatest\(ticket\)/, 'learn page should ignore stale refresh responses')
+assert.match(learnPage, /retainLearningContentOnError\(/, 'learn request failures should preserve current content through the tested state utility')
 assert.doesNotMatch(learnPage, /teachers\.value\s*=\s*normalizeTeachers\(\)[\s\S]*coursewareItems\.value\s*=\s*normalizeCoursewareItems\(\)[\s\S]*loadError\.value/, 'request failure should not replace currently visible content')
+assert.match(learnPage, /id=["']learn-teacher-heading["']\s+class=["']editorial-empty__title["']/, 'empty teacher state should keep the aria-labelledby target available')
+for (const keyKind of ['course', 'tag', 'material', 'bullet', 'quote']) {
+  assert.match(learnPage, new RegExp(`::${keyKind}::|${keyKind}::`), `learn ${keyKind} keys should include stable delimiters and indices`)
+}
 
 const learnRetry = learnPage.match(/<view\b[^>]*class=["'][^"']*learn-retry[^"']*["'][^>]*>/)?.[0] || ''
 assert.match(learnRetry, /role=["']button["']/, 'learn retry should expose button semantics on H5')
@@ -259,7 +263,7 @@ assert.match(learnPrimaryAction, /role=["']button["']/, 'learn primary action sh
 assert.match(learnPrimaryAction, /tabindex=["']0["']/, 'learn primary action should be keyboard focusable on H5')
 assert.match(learnPrimaryAction, /@click=["']activateAction\(goTest,\s*\$event\)["']/, 'learn primary action should guide to the existing test')
 assert.match(learnPrimaryAction, /@keydown=["']onActionKeydown\(\$event,\s*goTest\)["']/, 'learn primary action should use one plain keydown handler')
-assert.match(learnPage, /function\s+onActionKeydown\(event,\s*action\)\s*\{\s*if\s*\(!\['Enter',\s*' ',\s*'Spacebar'\]\.includes\(event\?\.key\)\)\s*return\s*event\.preventDefault\?\.\(\)\s*event\.stopPropagation\?\.\(\)\s*activateAction\(action,\s*event\)/, 'learn keydown handler should prevent only Enter and Space, leaving Tab untouched')
+assert.match(learnPage, /handleActionKeydown\(event,\s*\(\)\s*=>\s*activateAction\(action,\s*event\)\)/, 'learn keydown handler should delegate to the behavior-tested activation filter')
 const learnRoleButtons = learnPage.match(/<view\b(?=[^>]*role=["']button["'])[^>]*>/g) || []
 for (const action of learnRoleButtons) {
   assert.equal((action.match(/@keydown=/g) || []).length, 1, 'each learn action should declare exactly one keydown binding')
@@ -269,7 +273,9 @@ assert.match(learnPage, /\.learn-retry\s*\{[^}]*min-height:\s*88rpx/, 'learn ret
 assert.match(learnPage, /\.learn-primary\s*\{[^}]*min-height:\s*88rpx/, 'learn primary action should keep an 88rpx touch target')
 assert.match(learnPage, /\.learn-retry:focus-visible[\s\S]*\.learn-primary:focus-visible[\s\S]*outline:/, 'learn controls should expose a visible keyboard focus state')
 assert.match(learnPage, /@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{[\s\S]*?\.learn-teacher\s*\{[^}]*grid-template-columns:/, 'tablet teacher section should become a two-column editorial composition')
-assert.match(learnPage, /@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{[\s\S]*?\.publication-list\s*\{[^}]*grid-template-columns:/, 'tablet course library should become a shelf grid')
+const learnTabletMedia = learnPage.match(/@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{([\s\S]*?)\n\}/)?.[1] || ''
+assert.doesNotMatch(learnTabletMedia, /\.publication-list\s*\{[^}]*grid-template-columns:\s*repeat\(2/, 'tablet course publications should remain a readable single-column list')
+assert.match(learnPage, /@media\s+screen\s+and\s+\(min-width:\s*1024px\)\s*\{[\s\S]*?\.publication-list\s*\{[^}]*grid-template-columns:\s*repeat\(2/, 'course publication columns should begin only on wide desktop viewports')
 assert.match(learnPage, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*transition:\s*none/, 'learn page should disable nonessential motion when reduced motion is requested')
 assert.doesNotMatch(learnPage, /animation:\s*[^;}]*infinite|(?:backdrop-)?filter\s*:/, 'learn page should use only static texture and avoid glass effects')
 

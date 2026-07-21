@@ -4,10 +4,15 @@ import { TYPES_INFO } from '../../data/enneagramGame'
 import { resolveContentAsset } from '../../utils/contentAsset'
 import { getStoredSiteConfig, refreshSiteConfig } from '../../utils/siteConfig'
 import {
-  DEFAULT_TEACHERS,
-  normalizeCoursewareItems,
-  normalizeTeachers,
-} from '../../utils/teacherCourseware'
+  applyLearningContent,
+  createActionActivationGuard,
+  createInitialLearningContent,
+  createLatestRequestGuard,
+  createOneShotFallbackRegistry,
+  handleActionKeydown,
+  retainLearningContentOnError,
+} from '../../utils/learningPageState'
+import { DEFAULT_TEACHERS } from '../../utils/teacherCourseware'
 import { userErrorMessage } from '../../utils/userMessage'
 
 const TEACHER_FALLBACK = DEFAULT_TEACHERS[0].avatar
@@ -16,91 +21,25 @@ const COURSE_FALLBACKS = [
   '/static/editorial/course-growth.webp',
   '/static/editorial/course-relation.webp',
 ]
-const TEACHER_SECTION_PATHS = [
-  ['teacher'],
-  ['teachers'],
-  ['home', 'teacher'],
-  ['home', 'teachers'],
-  ['home', 'teacherTeaser'],
-]
-const COURSE_SECTION_PATHS = [
-  ['courseware'],
-  ['materials'],
-  ['lessons'],
-  ['courses'],
-  ['home', 'courseware'],
-  ['home', 'materials'],
-  ['home', 'lessons'],
-  ['home', 'courses'],
-]
-const QUOTE_SECTION_PATHS = [
-  ['quotes'],
-  ['home', 'quotes'],
-]
-
-const teachers = ref(normalizeTeachers())
-const coursewareItems = ref(normalizeCoursewareItems())
-const quotes = ref([])
+const initialContent = createInitialLearningContent()
+const teachers = ref(initialContent.teachers)
+const coursewareItems = ref(initialContent.coursewareItems)
+const quotes = ref(initialContent.quotes)
 const types = ref(Object.keys(TYPES_INFO).map((id) => ({ id: Number(id), ...TYPES_INFO[id] })))
 const loading = ref(true)
 const loadError = ref('')
 const teacherImage = ref(TEACHER_FALLBACK)
 const courseImages = ref([])
-const teacherImageFallbackUsed = ref(false)
-const courseImageFallbackUsed = ref({})
-let loadTicket = 0
-let keyboardActivationAt = 0
-let keyboardActivationTarget = null
+const teacherImageFallbackUsed = createOneShotFallbackRegistry()
+const courseImageFallbackUsed = createOneShotFallbackRegistry()
+const requestGuard = createLatestRequestGuard()
+const actionActivationGuard = createActionActivationGuard()
 
 const teacher = computed(() => teachers.value[0] || null)
 const teacherImageLabel = computed(() => teacher.value ? `${teacher.value.name}老师肖像` : '主讲老师肖像')
 
 function courseFallback(index) {
   return COURSE_FALLBACKS[index % COURSE_FALLBACKS.length]
-}
-
-function hasSectionAtPath(config, path) {
-  let current = config
-  for (let index = 0; index < path.length; index += 1) {
-    if (!current || typeof current !== 'object') return false
-    const key = path[index]
-    if (!Object.prototype.hasOwnProperty.call(current, key)) return false
-    if (index === path.length - 1) return true
-    current = current[key]
-  }
-  return false
-}
-
-function hasTeacherSection(config) {
-  return TEACHER_SECTION_PATHS.some((path) => hasSectionAtPath(config, path))
-}
-
-function hasCourseSection(config) {
-  return COURSE_SECTION_PATHS.some((path) => hasSectionAtPath(config, path))
-}
-
-function hasQuoteSection(config) {
-  return QUOTE_SECTION_PATHS.some((path) => hasSectionAtPath(config, path))
-}
-
-function quoteItems(value) {
-  const items = Array.isArray(value)
-    ? value
-    : Array.isArray(value?.items)
-      ? value.items
-      : Array.isArray(value?.list)
-        ? value.list
-        : []
-  return items.map((item) => {
-    if (typeof item === 'string') return item.trim()
-    const text = item?.quote || item?.text || item?.content || ''
-    return typeof text === 'string' ? text.trim() : ''
-  }).filter(Boolean)
-}
-
-function normalizeQuotes(config) {
-  if (hasSectionAtPath(config, ['quotes'])) return quoteItems(config?.quotes)
-  return quoteItems(config?.home?.quotes)
 }
 
 function learnCourseCover(course, index) {
@@ -110,8 +49,8 @@ function learnCourseCover(course, index) {
 }
 
 function syncContentImages() {
-  teacherImageFallbackUsed.value = false
-  courseImageFallbackUsed.value = {}
+  teacherImageFallbackUsed.reset()
+  courseImageFallbackUsed.reset()
   teacherImage.value = resolveContentAsset(teacher.value?.avatar, TEACHER_FALLBACK)
   courseImages.value = coursewareItems.value.map((course, index) => (
     resolveContentAsset(learnCourseCover(course, index), courseFallback(index))
@@ -119,77 +58,54 @@ function syncContentImages() {
 }
 
 function applyContent(config, options = {}) {
-  const preserveMissing = !!options.preserveMissing
-  if (!preserveMissing || hasTeacherSection(config)) {
-    teachers.value = normalizeTeachers(config)
-  }
-  if (!preserveMissing || hasCourseSection(config)) {
-    coursewareItems.value = normalizeCoursewareItems(config)
-  }
-  if (!preserveMissing || hasQuoteSection(config)) {
-    quotes.value = normalizeQuotes(config)
-  }
+  const next = applyLearningContent({
+    teachers: teachers.value,
+    coursewareItems: coursewareItems.value,
+    quotes: quotes.value,
+  }, config, options)
+  teachers.value = next.teachers
+  coursewareItems.value = next.coursewareItems
+  quotes.value = next.quotes
   syncContentImages()
 }
 
 function onTeacherImageError() {
-  if (teacherImageFallbackUsed.value) return
-  teacherImageFallbackUsed.value = true
+  if (!teacherImageFallbackUsed.consume('portrait')) return
   teacherImage.value = TEACHER_FALLBACK
 }
 
 function onCourseImageError(index) {
-  if (courseImageFallbackUsed.value[index]) return
-  courseImageFallbackUsed.value = {
-    ...courseImageFallbackUsed.value,
-    [index]: true,
-  }
+  if (!courseImageFallbackUsed.consume(`course:${index}`)) return
   courseImages.value[index] = courseFallback(index)
 }
 
 function activateAction(action, event) {
-  const eventType = event?.type || ''
-  const now = Date.now()
-  if (eventType === 'keydown') {
-    if (event?.repeat) return
-    keyboardActivationAt = now
-    keyboardActivationTarget = event?.currentTarget || null
-    action()
-    return
-  }
-  if (
-    eventType === 'click'
-    && keyboardActivationTarget === (event?.currentTarget || null)
-    && now - keyboardActivationAt < 500
-  ) {
-    keyboardActivationTarget = null
-    return
-  }
-  keyboardActivationTarget = null
-  action()
+  if (actionActivationGuard.shouldActivate(event)) action()
 }
 
 function onActionKeydown(event, action) {
-  if (!['Enter', ' ', 'Spacebar'].includes(event?.key)) return
-  event.preventDefault?.()
-  event.stopPropagation?.()
-  activateAction(action, event)
+  handleActionKeydown(event, () => activateAction(action, event))
 }
 
 async function loadContent(options = {}) {
   const silent = !!options.silent
-  const ticket = ++loadTicket
+  const ticket = requestGuard.issue()
   if (!silent) loading.value = true
   loadError.value = ''
   try {
     const config = await refreshSiteConfig()
-    if (ticket !== loadTicket) return
+    if (!requestGuard.isLatest(ticket)) return
     applyContent(config, { preserveMissing: true })
   } catch (error) {
-    if (ticket !== loadTicket) return
-    loadError.value = userErrorMessage(error, '内容更新失败，当前资料仍可继续浏览')
+    if (!requestGuard.isLatest(ticket)) return
+    const retained = retainLearningContentOnError({
+      teachers: teachers.value,
+      coursewareItems: coursewareItems.value,
+      quotes: quotes.value,
+    }, userErrorMessage(error, '内容更新失败，当前资料仍可继续浏览'))
+    loadError.value = retained.loadError
   } finally {
-    if (ticket === loadTicket) loading.value = false
+    if (requestGuard.isLatest(ticket)) loading.value = false
   }
 }
 
@@ -257,7 +173,7 @@ function goTest() {
           <view class="learn-teacher__rule" aria-hidden="true" />
           <text class="learn-teacher__bio">{{ teacher.bio }}</text>
           <view v-if="teacher.tags.length" class="learn-teacher__tags" aria-label="老师擅长领域">
-            <text v-for="tag in teacher.tags" :key="tag" class="learn-teacher__tag">{{ tag }}</text>
+            <text v-for="(tag, tagIndex) in teacher.tags" :key="`${teacher.name}::tag::${tagIndex}::${tag}`" class="learn-teacher__tag">{{ tag }}</text>
           </view>
           <view
             class="learn-primary"
@@ -270,7 +186,7 @@ function goTest() {
         </view>
 
         <view v-else class="editorial-empty learn-teacher__empty">
-          <text class="editorial-empty__title">老师资料整理中</text>
+          <text id="learn-teacher-heading" class="editorial-empty__title">老师资料整理中</text>
           <text>课程团队正在整理主讲老师的介绍与研究方向。</text>
         </view>
       </section>
@@ -287,7 +203,7 @@ function goTest() {
         <view v-if="coursewareItems.length" class="publication-list">
           <article
             v-for="(course, index) in coursewareItems"
-            :key="course.title + index"
+            :key="`${course.title}::course::${index}`"
             class="publication-card"
           >
             <view class="publication-card__visual">
@@ -310,10 +226,10 @@ function goTest() {
               <text class="publication-card__title">{{ course.title }}</text>
               <text class="publication-card__desc">{{ course.description }}</text>
               <view v-if="course.materialTypes.length" class="material-types" aria-label="资料形式">
-                <text v-for="type in course.materialTypes" :key="type">{{ type }}</text>
+                <text v-for="(type, typeIndex) in course.materialTypes" :key="`${course.title}::material::${index}::${typeIndex}::${type}`">{{ type }}</text>
               </view>
               <view v-if="course.bullets.length" class="publication-card__bullets">
-                <text v-for="bullet in course.bullets" :key="bullet">— {{ bullet }}</text>
+                <text v-for="(bullet, bulletIndex) in course.bullets" :key="`${course.title}::bullet::${index}::${bulletIndex}::${bullet}`">— {{ bullet }}</text>
               </view>
               <text class="publication-card__status">馆藏资料 · 持续更新</text>
             </view>
@@ -332,7 +248,7 @@ function goTest() {
           <text id="quote-heading">从一句话，回到真实的自己</text>
         </view>
         <view v-if="quotes.length" class="quote-stack">
-          <view v-for="quote in quotes" :key="quote" class="quote-card">
+          <view v-for="(quote, quoteIndex) in quotes" :key="`quote::${quoteIndex}::${quote}`" class="quote-card">
             <view class="pull-quote">
               <text class="quote-card__text">“{{ quote }}”</text>
               <text class="quote-card__mark">”</text>
@@ -348,7 +264,7 @@ function goTest() {
           <text id="type-index-heading">九种类型速查</text>
         </view>
         <view class="type-index__list">
-          <view v-for="type in types" :key="type.id" class="type-index__item">
+          <view v-for="type in types" :key="`type::${type.id}`" class="type-index__item">
             <text class="type-index__number">{{ type.id }}</text>
             <view class="type-index__copy">
               <text class="type-index__name">{{ type.name }}</text>
@@ -852,16 +768,18 @@ function goTest() {
     justify-content: space-between;
   }
 
-  .publication-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    column-gap: 40rpx;
-  }
-
   .publication-card { grid-template-columns: 180rpx minmax(0, 1fr); }
   .quote-stack { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .type-index__list { grid-template-columns: repeat(9, minmax(0, 1fr)); }
   .type-index__item { flex-direction: column; justify-content: center; text-align: center; }
   .type-index__keywords { display: none; }
+}
+
+@media screen and (min-width: 1024px) {
+  .publication-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 40rpx;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
