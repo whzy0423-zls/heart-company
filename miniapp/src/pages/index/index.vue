@@ -224,6 +224,7 @@ function goRelation() {
   margin-top: 4rpx;
   border: 0;
   box-shadow: none;
+  transition: transform .22s ease, background-color .22s ease, box-shadow .22s ease;
 }
 
 .home-hero__art {
@@ -435,7 +436,7 @@ function goRelation() {
   font-weight: 900;
 }
 
-.home-course__edition { color: var(--nx-jade); }
+.home-course__edition { color: #59636C; }
 
 .home-course {
   width: 100%;
@@ -568,6 +569,7 @@ function goRelation() {
 
 @media (prefers-reduced-motion: reduce) {
   .home-hero__copy,
+  .home-hero__cta,
   .home-entry,
   .home-course,
   .home-course-wrap {

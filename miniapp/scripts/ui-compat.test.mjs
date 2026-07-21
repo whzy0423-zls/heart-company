@@ -101,6 +101,10 @@ assert.match(indexPage, /transition:\s*(?:opacity|transform)\s+\.(?:18|19|2[0-6]
 assert.match(indexPage, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*transition:\s*none/, 'home should disable nonessential motion when reduced motion is requested')
 assert.doesNotMatch(indexPage, /(?:backdrop-)?filter\s*:/, 'home must not use filter or backdrop-filter effects')
 assert.doesNotMatch(indexPage, /\.home(?:__canvas|-explore-band)[^{]*\{[^}]*animation:\s*[^;}]*infinite/, 'home must not continuously animate full-page or texture layers')
+assert.match(indexPage, /\.home-course-wrap\s*\{[^}]*background:\s*#F2E8D0/, 'home course block should keep the approved paper background')
+assert.match(indexPage, /\.home-course__edition\s*\{[^}]*color:\s*#59636C/, 'WEEKLY EDIT label should use the tested 5.03:1 foreground on #F2E8D0')
+assert.match(indexPage, /\.home-hero__cta\s*\{[^}]*transition:\s*transform\s+\.22s[^;]*,\s*background-color\s+\.22s[^;]*,\s*box-shadow\s+\.22s/, 'home primary CTA should use a scoped 220ms press transition')
+assert.match(indexPage, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\.home-hero__cta,[\s\S]*?transition:\s*none/, 'reduced motion should disable the home primary CTA transition')
 
 
 assert.match(appleMobileStyle, /\.page-stack\s*\{[\s\S]*safe-area-inset-bottom/, 'page-stack should reserve bottom safe area globally')
