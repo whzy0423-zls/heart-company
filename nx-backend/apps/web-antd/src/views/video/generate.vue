@@ -436,10 +436,6 @@ async function loadModelConfig() {
 
 async function generate() {
   const { audios, images, prompt, videos } = readEditor();
-  if (!prompt) {
-    message.warning('请输入视频提示词');
-    return;
-  }
   generating.value = true;
   try {
     const result = await generateVideoApi({
