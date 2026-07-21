@@ -105,6 +105,12 @@ assert.match(indexPage, /\.home-course-wrap\s*\{[^}]*background:\s*#F2E8D0/, 'ho
 assert.match(indexPage, /\.home-course__edition\s*\{[^}]*color:\s*#59636C/, 'WEEKLY EDIT label should use the tested 5.03:1 foreground on #F2E8D0')
 assert.match(indexPage, /\.home-hero__cta\s*\{[^}]*transition:\s*transform\s+\.22s[^;]*,\s*opacity\s+\.22s[^;]*,\s*background-color\s+\.22s[^;]*,\s*box-shadow\s+\.22s/, 'home primary CTA should use a scoped 220ms transform, opacity, background, and shadow press transition')
 assert.match(indexPage, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\.home-hero__cta,[\s\S]*?transition:\s*none/, 'reduced motion should disable the home primary CTA transition')
+const homeEntryStyles = indexPage.match(/\.home-entry\s*\{([^}]*)\}/)?.[1] || ''
+assert.match(homeEntryStyles, /animation:\s*home-rise\s+\.22s\s+ease-out\s+backwards/, 'home entry animation should stop filling after entry so press transforms can apply')
+assert.doesNotMatch(homeEntryStyles, /animation:[^;]*(?:both|forwards)/, 'home entry animation must not persist its final transform or opacity')
+assert.match(indexPage, /\.home-entry--pressed,[\s\S]*?\.home-course--pressed\s*\{[^}]*opacity:\s*\.82[^}]*transform:\s*scale\(\.985\)/, 'home entry pressed state should retain visible opacity and scale feedback')
+assert.match(indexPage, /\.home-entry--relation\s*\{[^}]*background:\s*#C9472D[^}]*color:\s*#FFFFFF/, 'relationship block should expose the tested coral and white contrast pair')
+assert.match(indexPage, /\.home-entry--relation\s+\.home-entry__kicker\s*\{[^}]*color:\s*#FFFFFF[^}]*opacity:\s*1/, 'RELATIONSHIP label should render full-opacity white on #C9472D for 4.75:1 contrast')
 
 
 assert.match(appleMobileStyle, /\.page-stack\s*\{[\s\S]*safe-area-inset-bottom/, 'page-stack should reserve bottom safe area globally')

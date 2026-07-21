@@ -353,13 +353,13 @@ function goRelation() {
   text-align: left;
   transition: opacity .22s ease, transform .22s ease;
   touch-action: manipulation;
-  animation: home-rise .22s ease-out both;
+  animation: home-rise .22s ease-out backwards;
 }
 
 .home-entry--relation {
   grid-area: relation;
   min-height: 360rpx;
-  background: var(--nx-coral);
+  background: #C9472D;
   color: #FFFFFF;
 }
 
@@ -387,6 +387,11 @@ function goRelation() {
 }
 
 .home-entry__kicker { opacity: .72; }
+
+.home-entry--relation .home-entry__kicker {
+  color: #FFFFFF;
+  opacity: 1;
+}
 
 .home-entry__title {
   font-size: 36rpx;
