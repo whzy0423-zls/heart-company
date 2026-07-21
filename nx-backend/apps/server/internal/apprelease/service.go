@@ -31,9 +31,20 @@ type apkInspector interface {
 	Inspect(string) (APKInfo, error)
 }
 
+type releaseFileStore interface {
+	Stage(string, io.Reader) (StagedFile, error)
+	Discard(StagedFile) error
+	Commit(StagedFile, string, int64) (SavedFile, error)
+	SaveIcon(string, []byte) (string, error)
+	Remove(string) error
+	Resolve(string) (string, error)
+	CleanupStaleTemps(time.Time, time.Duration) error
+	AuditOrphans(map[string]struct{}) ([]string, error)
+}
+
 type Service struct {
 	store       releaseStore
-	files       *FileStore
+	files       releaseFileStore
 	inspector   apkInspector
 	packageName string
 	certificate CertificateProvider
@@ -83,11 +94,16 @@ func (s *Service) CreateDraftFromStaged(ctx context.Context, staged StagedFile, 
 		SHA256:       saved.SHA256,
 	})
 	if err != nil {
+		cleanupErrors := []error{err}
 		if iconKey != "" {
-			_ = s.files.Remove(iconKey)
+			if cleanupErr := s.files.Remove(iconKey); cleanupErr != nil {
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("remove app release icon after create failure: %w", cleanupErr))
+			}
 		}
-		_ = s.files.Remove(saved.Key)
-		return Release{}, err
+		if cleanupErr := s.files.Remove(saved.Key); cleanupErr != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove app release APK after create failure: %w", cleanupErr))
+		}
+		return Release{}, errors.Join(cleanupErrors...)
 	}
 	return s.enrichRelease(release), nil
 }

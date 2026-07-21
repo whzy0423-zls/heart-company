@@ -475,6 +475,82 @@ func TestFileStoreSaveIconRejectsSymlinkDestinations(t *testing.T) {
 	assertFileContents(t, outsidePath, "outside")
 }
 
+func TestFileStoreSaveIconRejectsExistingDestinationWithoutReplacingIt(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := store.Stage("release.apk", strings.NewReader("apk"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.Commit(staged, "android", 123)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iconKey, err := store.SaveIcon(saved.Key, testPNG(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	iconPath, err := store.Resolve(iconKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(iconPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.SaveIcon(saved.Key, testPNGColor(t, color.Black)); err == nil {
+		t.Fatal("SaveIcon(existing destination) error = nil, want rejection")
+	}
+	got, err := os.ReadFile(iconPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("SaveIcon(existing destination) replaced the existing icon")
+	}
+}
+
+func TestFileStoreSaveIconDirectoryReplacementDoesNotDeleteReplacementTempPath(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := store.Stage("release.apk", strings.NewReader("apk"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.Commit(staged, "android", 123)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iconDir := filepath.Join(store.Root(), "android")
+	movedDir := filepath.Join(store.Root(), "android-original")
+	var replacementTempPath string
+	store.afterIconTempCreated = func(tempPath string) {
+		if err := os.Rename(iconDir, movedDir); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(iconDir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		replacementTempPath = tempPath
+		if err := os.WriteFile(replacementTempPath, []byte("replacement"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := store.SaveIcon(saved.Key, testPNG(t)); !isError(err, ErrUnsafePath) {
+		t.Fatalf("SaveIcon(directory replacement) error = %v, want ErrUnsafePath", err)
+	}
+	assertFileContents(t, replacementTempPath, "replacement")
+	if _, err := os.Lstat(filepath.Join(iconDir, strings.TrimSuffix(filepath.Base(saved.Key), ".apk")+".png")); !os.IsNotExist(err) {
+		t.Fatalf("replacement directory contains destination or stat failed: %v", err)
+	}
+}
+
 func TestFileStoreRemoveDeletesManagedIcon(t *testing.T) {
 	store, err := NewFileStore(t.TempDir(), 64)
 	if err != nil {
@@ -705,9 +781,13 @@ func TestFileStoreAuditOrphansReportsAPKAndPNGWithoutDeletingOrFollowingSymlinks
 }
 
 func testPNG(t *testing.T) []byte {
+	return testPNGColor(t, color.RGBA{R: 0x33, G: 0x66, B: 0x99, A: 0xff})
+}
+
+func testPNGColor(t *testing.T, fill color.Color) []byte {
 	t.Helper()
 	icon := image.NewRGBA(image.Rect(0, 0, 1, 1))
-	icon.Set(0, 0, color.RGBA{R: 0x33, G: 0x66, B: 0x99, A: 0xff})
+	icon.Set(0, 0, fill)
 	var encoded bytes.Buffer
 	if err := png.Encode(&encoded, icon); err != nil {
 		t.Fatal(err)

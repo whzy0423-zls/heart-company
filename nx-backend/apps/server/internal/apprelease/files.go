@@ -29,6 +29,8 @@ type FileStore struct {
 
 	mu     sync.Mutex
 	staged map[string]stagedFileRecord
+
+	afterIconTempCreated func(string)
 }
 
 type stagedFileRecord struct {
@@ -326,10 +328,16 @@ func (s *FileStore) SaveIcon(apkKey string, pngData []byte) (string, error) {
 	if err := s.ensureDirectoryTreeLocked(iconDir); err != nil {
 		return "", fmt.Errorf("create Android release icon directory: %w", err)
 	}
+	directory, directoryInfo, err := openDirectoryIdentity(iconDir)
+	if err != nil {
+		return "", err
+	}
+	defer directory.Close()
 	if info, err := os.Lstat(destination); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return "", ErrUnsafePath
 		}
+		return "", fmt.Errorf("save app release icon: destination already exists")
 	} else if !os.IsNotExist(err) {
 		return "", fmt.Errorf("check app release icon destination: %w", err)
 	}
@@ -339,9 +347,25 @@ func (s *FileStore) SaveIcon(apkKey string, pngData []byte) (string, error) {
 		return "", fmt.Errorf("create app release icon temp: %w", err)
 	}
 	tmpPath := tmp.Name()
+	tmpInfo, err := tmp.Stat()
+	if err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("stat app release icon temp: %w", err)
+	}
 	cleanup := func() {
 		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
+		removePathIfSameFile(tmpPath, tmpInfo)
+	}
+	if s.afterIconTempCreated != nil {
+		s.afterIconTempCreated(tmpPath)
+	}
+	if err := validateDirectoryIdentity(iconDir, directory, directoryInfo); err != nil {
+		cleanup()
+		return "", err
+	}
+	if !pathMatchesFile(tmpPath, tmpInfo) {
+		cleanup()
+		return "", ErrUnsafePath
 	}
 	if err := tmp.Chmod(0o640); err != nil {
 		cleanup()
@@ -361,24 +385,59 @@ func (s *FileStore) SaveIcon(apkKey string, pngData []byte) (string, error) {
 		return "", fmt.Errorf("sync app release icon: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
+		removePathIfSameFile(tmpPath, tmpInfo)
 		return "", fmt.Errorf("close app release icon: %w", err)
 	}
+	if err := validateDirectoryIdentity(iconDir, directory, directoryInfo); err != nil {
+		removePathIfSameFile(tmpPath, tmpInfo)
+		return "", err
+	}
+	if !pathMatchesFile(tmpPath, tmpInfo) {
+		return "", ErrUnsafePath
+	}
+	if info, err := os.Lstat(destination); err == nil {
+		removePathIfSameFile(tmpPath, tmpInfo)
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return "", ErrUnsafePath
+		}
+		return "", fmt.Errorf("save app release icon: destination already exists")
+	} else if !os.IsNotExist(err) {
+		removePathIfSameFile(tmpPath, tmpInfo)
+		return "", fmt.Errorf("recheck app release icon destination: %w", err)
+	}
 	if err := os.Rename(tmpPath, destination); err != nil {
-		_ = os.Remove(tmpPath)
+		removePathIfSameFile(tmpPath, tmpInfo)
 		return "", fmt.Errorf("commit app release icon: %w", err)
 	}
+	if err := validateDirectoryIdentity(iconDir, directory, directoryInfo); err != nil {
+		removePathIfSameFile(destination, tmpInfo)
+		return "", err
+	}
+	if !pathMatchesFile(destination, tmpInfo) {
+		return "", ErrUnsafePath
+	}
 	info, err := os.Lstat(destination)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() != int64(len(pngData)) {
-		_ = os.Remove(destination)
+	if err != nil || info.Size() != int64(len(pngData)) {
+		removePathIfSameFile(destination, tmpInfo)
 		if err != nil {
 			return "", fmt.Errorf("verify app release icon: %w", err)
 		}
 		return "", ErrUnsafePath
 	}
-	if err := syncDirectory(iconDir); err != nil {
-		_ = os.Remove(destination)
+	if err := validateDirectoryIdentity(iconDir, directory, directoryInfo); err != nil {
+		removePathIfSameFile(destination, tmpInfo)
+		return "", err
+	}
+	if err := directory.Sync(); err != nil {
+		removePathIfSameFile(destination, tmpInfo)
 		return "", fmt.Errorf("sync Android release directory: %w", err)
+	}
+	if err := validateDirectoryIdentity(iconDir, directory, directoryInfo); err != nil {
+		removePathIfSameFile(destination, tmpInfo)
+		return "", err
+	}
+	if !pathMatchesFile(destination, tmpInfo) {
+		return "", ErrUnsafePath
 	}
 	return iconKey, nil
 }
@@ -799,4 +858,55 @@ func syncDirectory(directory string) error {
 		return err
 	}
 	return dir.Close()
+}
+
+func openDirectoryIdentity(directory string) (*os.File, os.FileInfo, error) {
+	pathInfo, err := os.Lstat(directory)
+	if err != nil {
+		return nil, nil, fmt.Errorf("stat app release icon directory: %w", err)
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.IsDir() {
+		return nil, nil, ErrUnsafePath
+	}
+	dir, err := os.Open(directory)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open app release icon directory: %w", err)
+	}
+	descriptorInfo, err := dir.Stat()
+	if err != nil {
+		_ = dir.Close()
+		return nil, nil, fmt.Errorf("stat opened app release icon directory: %w", err)
+	}
+	if !descriptorInfo.IsDir() || !os.SameFile(pathInfo, descriptorInfo) {
+		_ = dir.Close()
+		return nil, nil, ErrUnsafePath
+	}
+	return dir, descriptorInfo, nil
+}
+
+func validateDirectoryIdentity(directory string, descriptor *os.File, expected os.FileInfo) error {
+	pathInfo, err := os.Lstat(directory)
+	if err != nil {
+		return ErrUnsafePath
+	}
+	descriptorInfo, err := descriptor.Stat()
+	if err != nil {
+		return ErrUnsafePath
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.IsDir() || !descriptorInfo.IsDir() ||
+		!os.SameFile(expected, pathInfo) || !os.SameFile(expected, descriptorInfo) {
+		return ErrUnsafePath
+	}
+	return nil
+}
+
+func pathMatchesFile(filePath string, expected os.FileInfo) bool {
+	info, err := os.Lstat(filePath)
+	return err == nil && info.Mode()&os.ModeSymlink == 0 && info.Mode().IsRegular() && os.SameFile(expected, info)
+}
+
+func removePathIfSameFile(filePath string, expected os.FileInfo) {
+	if pathMatchesFile(filePath, expected) {
+		_ = os.Remove(filePath)
+	}
 }

@@ -119,6 +119,40 @@ func TestServiceCreateDraftRollbackRemovesAPKAndIcon(t *testing.T) {
 	}
 }
 
+func TestServiceCreateDraftRollbackSurfacesCleanupErrorsAndAttemptsBothRemovals(t *testing.T) {
+	storeErr := errors.New("create failed")
+	iconRemoveErr := errors.New("icon remove failed")
+	apkRemoveErr := errors.New("apk remove failed")
+	files := &rollbackFailureFileStore{
+		FileStore:  &FileStore{},
+		saved:      SavedFile{Key: "android/123-release.apk", OriginalName: "release.apk", Size: 9, SHA256: strings.Repeat("a", 64)},
+		iconKey:    "android/123-release.png",
+		removeErrs: map[string]error{"android/123-release.png": iconRemoveErr, "android/123-release.apk": apkRemoveErr},
+	}
+	service := &Service{
+		store:       &stubReleaseStore{createErr: storeErr},
+		files:       files,
+		inspector:   stubAPKInspector{info: APKInfo{PackageName: "com.example.ninexing", VersionName: "1.2.3", VersionCode: 123, IconPNG: testPNG(t)}},
+		packageName: "com.example.ninexing",
+	}
+
+	_, err := service.CreateDraftFromStaged(context.Background(), StagedFile{}, "")
+	for _, want := range []error{storeErr, iconRemoveErr, apkRemoveErr} {
+		if !errors.Is(err, want) {
+			t.Fatalf("CreateDraftFromStaged() error = %v, want joined error containing %v", err, want)
+		}
+	}
+	wantAttempts := []string{files.iconKey, files.saved.Key}
+	if len(files.removeAttempts) != len(wantAttempts) {
+		t.Fatalf("Remove attempts = %q, want %q", files.removeAttempts, wantAttempts)
+	}
+	for i := range wantAttempts {
+		if files.removeAttempts[i] != wantAttempts[i] {
+			t.Fatalf("Remove attempts = %q, want %q", files.removeAttempts, wantAttempts)
+		}
+	}
+}
+
 func TestServiceEnrichesEveryReleaseResponseConsistently(t *testing.T) {
 	files, release := managedReleaseFixture(t)
 	store := &stubReleaseStore{release: release, list: ListResult{Current: releasePtr(release), Items: []Release{release}}}
@@ -207,6 +241,27 @@ func TestServiceOpenIconReturnsNotFoundForMissingMetadataOrFile(t *testing.T) {
 type stubAPKInspector struct {
 	info APKInfo
 	err  error
+}
+
+type rollbackFailureFileStore struct {
+	*FileStore
+	saved          SavedFile
+	iconKey        string
+	removeErrs     map[string]error
+	removeAttempts []string
+}
+
+func (s *rollbackFailureFileStore) Commit(StagedFile, string, int64) (SavedFile, error) {
+	return s.saved, nil
+}
+
+func (s *rollbackFailureFileStore) SaveIcon(string, []byte) (string, error) {
+	return s.iconKey, nil
+}
+
+func (s *rollbackFailureFileStore) Remove(key string) error {
+	s.removeAttempts = append(s.removeAttempts, key)
+	return s.removeErrs[key]
 }
 
 func (s stubAPKInspector) Inspect(string) (APKInfo, error) { return s.info, s.err }
