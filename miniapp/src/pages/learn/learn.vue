@@ -1,250 +1,873 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { TYPES_INFO } from '../../data/enneagramGame'
-import { getStoredSiteConfig, hasSiteConfigLearningSection, refreshSiteConfig } from '../../utils/siteConfig'
+import { resolveContentAsset } from '../../utils/contentAsset'
+import { getStoredSiteConfig, refreshSiteConfig } from '../../utils/siteConfig'
+import {
+  DEFAULT_TEACHERS,
+  normalizeCoursewareItems,
+  normalizeTeachers,
+} from '../../utils/teacherCourseware'
 import { userErrorMessage } from '../../utils/userMessage'
-import { normalizeCoursewareItems, normalizeTeachers } from '../../utils/teacherCourseware'
 
-const teachers = ref([])
-const coursewareItems = ref([])
+const TEACHER_FALLBACK = DEFAULT_TEACHERS[0].avatar
+const COURSE_FALLBACKS = [
+  '/static/editorial/course-intro.webp',
+  '/static/editorial/course-growth.webp',
+  '/static/editorial/course-relation.webp',
+]
+const TEACHER_SECTION_PATHS = [
+  ['teacher'],
+  ['teachers'],
+  ['home', 'teacher'],
+  ['home', 'teachers'],
+  ['home', 'teacherTeaser'],
+]
+const COURSE_SECTION_PATHS = [
+  ['courseware'],
+  ['materials'],
+  ['lessons'],
+  ['courses'],
+  ['home', 'courseware'],
+  ['home', 'materials'],
+  ['home', 'lessons'],
+  ['home', 'courses'],
+]
+const QUOTE_SECTION_PATHS = [
+  ['quotes'],
+  ['home', 'quotes'],
+]
+
+const teachers = ref(normalizeTeachers())
+const coursewareItems = ref(normalizeCoursewareItems())
 const quotes = ref([])
 const types = ref(Object.keys(TYPES_INFO).map((id) => ({ id: Number(id), ...TYPES_INFO[id] })))
 const loading = ref(true)
 const loadError = ref('')
+const teacherImage = ref(TEACHER_FALLBACK)
+const courseImages = ref([])
+const teacherImageFallbackUsed = ref(false)
+const courseImageFallbackUsed = ref({})
 let loadTicket = 0
+let keyboardActivationAt = 0
+let keyboardActivationTarget = null
 
-function applyContent(cfg) {
-  teachers.value = normalizeTeachers(cfg)
-  coursewareItems.value = normalizeCoursewareItems(cfg)
-  quotes.value = cfg?.home?.quotes?.items || []
+const teacher = computed(() => teachers.value[0] || null)
+const teacherImageLabel = computed(() => teacher.value ? `${teacher.value.name}老师肖像` : '主讲老师肖像')
+
+function courseFallback(index) {
+  return COURSE_FALLBACKS[index % COURSE_FALLBACKS.length]
 }
 
-function showStoredContent() {
-  const cached = getStoredSiteConfig()
-  if (!cached) return false
-  applyContent(cached)
-  loading.value = false
-  loadError.value = ''
-  return true
+function hasSectionAtPath(config, path) {
+  let current = config
+  for (let index = 0; index < path.length; index += 1) {
+    if (!current || typeof current !== 'object') return false
+    const key = path[index]
+    if (!Object.prototype.hasOwnProperty.call(current, key)) return false
+    if (index === path.length - 1) return true
+    current = current[key]
+  }
+  return false
+}
+
+function hasTeacherSection(config) {
+  return TEACHER_SECTION_PATHS.some((path) => hasSectionAtPath(config, path))
+}
+
+function hasCourseSection(config) {
+  return COURSE_SECTION_PATHS.some((path) => hasSectionAtPath(config, path))
+}
+
+function hasQuoteSection(config) {
+  return QUOTE_SECTION_PATHS.some((path) => hasSectionAtPath(config, path))
+}
+
+function quoteItems(value) {
+  const items = Array.isArray(value)
+    ? value
+    : Array.isArray(value?.items)
+      ? value.items
+      : Array.isArray(value?.list)
+        ? value.list
+        : []
+  return items.map((item) => {
+    if (typeof item === 'string') return item.trim()
+    const text = item?.quote || item?.text || item?.content || ''
+    return typeof text === 'string' ? text.trim() : ''
+  }).filter(Boolean)
+}
+
+function normalizeQuotes(config) {
+  if (hasSectionAtPath(config, ['quotes'])) return quoteItems(config?.quotes)
+  return quoteItems(config?.home?.quotes)
+}
+
+function learnCourseCover(course, index) {
+  const cover = typeof course?.cover === 'string' ? course.cover.trim() : ''
+  const isLegacyWheel = /^\/static\/wheel\.png(?:[?#].*)?$/i.test(cover)
+  return !cover || isLegacyWheel ? courseFallback(index) : cover
+}
+
+function syncContentImages() {
+  teacherImageFallbackUsed.value = false
+  courseImageFallbackUsed.value = {}
+  teacherImage.value = resolveContentAsset(teacher.value?.avatar, TEACHER_FALLBACK)
+  courseImages.value = coursewareItems.value.map((course, index) => (
+    resolveContentAsset(learnCourseCover(course, index), courseFallback(index))
+  ))
+}
+
+function applyContent(config, options = {}) {
+  const preserveMissing = !!options.preserveMissing
+  if (!preserveMissing || hasTeacherSection(config)) {
+    teachers.value = normalizeTeachers(config)
+  }
+  if (!preserveMissing || hasCourseSection(config)) {
+    coursewareItems.value = normalizeCoursewareItems(config)
+  }
+  if (!preserveMissing || hasQuoteSection(config)) {
+    quotes.value = normalizeQuotes(config)
+  }
+  syncContentImages()
+}
+
+function onTeacherImageError() {
+  if (teacherImageFallbackUsed.value) return
+  teacherImageFallbackUsed.value = true
+  teacherImage.value = TEACHER_FALLBACK
+}
+
+function onCourseImageError(index) {
+  if (courseImageFallbackUsed.value[index]) return
+  courseImageFallbackUsed.value = {
+    ...courseImageFallbackUsed.value,
+    [index]: true,
+  }
+  courseImages.value[index] = courseFallback(index)
+}
+
+function activateAction(action, event) {
+  const eventType = event?.type || ''
+  const now = Date.now()
+  if (eventType === 'keydown') {
+    if (event?.repeat) return
+    keyboardActivationAt = now
+    keyboardActivationTarget = event?.currentTarget || null
+    action()
+    return
+  }
+  if (
+    eventType === 'click'
+    && keyboardActivationTarget === (event?.currentTarget || null)
+    && now - keyboardActivationAt < 500
+  ) {
+    keyboardActivationTarget = null
+    return
+  }
+  keyboardActivationTarget = null
+  action()
+}
+
+function onActionKeydown(event, action) {
+  if (!['Enter', ' ', 'Spacebar'].includes(event?.key)) return
+  event.preventDefault?.()
+  event.stopPropagation?.()
+  activateAction(action, event)
 }
 
 async function loadContent(options = {}) {
   const silent = !!options.silent
   const ticket = ++loadTicket
-  if (!silent) {
-    loading.value = true
-    loadError.value = ''
-  }
+  if (!silent) loading.value = true
+  loadError.value = ''
   try {
-    const cfg = await refreshSiteConfig()
+    const config = await refreshSiteConfig()
     if (ticket !== loadTicket) return
-    if (silent && !hasSiteConfigLearningSection(cfg)) return
-    applyContent(cfg)
-    loadError.value = ''
-  } catch (e) {
+    applyContent(config, { preserveMissing: true })
+  } catch (error) {
     if (ticket !== loadTicket) return
-    if (!silent) {
-      teachers.value = normalizeTeachers()
-      coursewareItems.value = normalizeCoursewareItems()
-      quotes.value = []
-      loadError.value = userErrorMessage(e, '内容加载失败，请稍后重试')
-    }
+    loadError.value = userErrorMessage(error, '内容更新失败，当前资料仍可继续浏览')
   } finally {
     if (ticket === loadTicket) loading.value = false
   }
 }
 
 onMounted(() => {
-  const hasCachedContent = showStoredContent()
-  loadContent({ silent: hasCachedContent })
+  const cached = getStoredSiteConfig()
+  if (cached) {
+    applyContent(cached)
+    loading.value = false
+  } else {
+    syncContentImages()
+  }
+  loadContent({ silent: !!cached })
 })
 
 function goTest() {
-  uni.switchTab({ url: '/pages/index/index' })
+  uni.navigateTo({ url: '/pages/test/test' })
 }
 </script>
 
 <template>
   <view class="wrap learn page-stack ios-page ios-safe-bottom">
-    <view class="card ios-card section teacher-section">
-      <text class="eyebrow">老师资料</text>
-      <text class="sec-title">跟着老师系统学习</text>
-      <view v-if="loading" class="empty">老师资料加载中…</view>
-      <view v-else-if="loadError" class="empty empty--error">
+    <view class="learn-paper">
+      <header class="learn-masthead">
+        <text class="learn-masthead__brand">九型芯之力</text>
+        <text class="learn-masthead__edition">人物与课程 · 学习专刊</text>
+      </header>
+
+      <view v-if="loading" class="learn-sync" role="status">
+        <text class="learn-sync__rule" aria-hidden="true" />
+        <text>正在更新老师与课程资料，先读本地内容…</text>
+      </view>
+
+      <view v-if="loadError" class="learn-error" role="status">
         <text>{{ loadError }}</text>
-        <button class="retry" hover-class="retry--hover" @click="loadContent">重新加载</button>
+        <view
+          class="learn-retry"
+          role="button"
+          tabindex="0"
+          hover-class="control--pressed"
+          @click="activateAction(loadContent, $event)"
+          @keydown="onActionKeydown($event, loadContent)"
+        >重试更新</view>
       </view>
-      <view v-for="teacher in teachers" :key="teacher.name" class="teacher-card">
-        <image class="teacher-card__avatar" :src="teacher.avatar" mode="aspectFill" lazy-load />
-        <view class="teacher-card__body">
-          <text class="teacher-card__name">{{ teacher.name }}</text>
-          <text class="teacher-card__title">{{ teacher.title }}</text>
-          <text class="teacher-card__bio">{{ teacher.bio }}</text>
-          <view v-if="teacher.tags.length" class="teacher-card__tags">
-            <text v-for="tag in teacher.tags" :key="tag" class="teacher-card__tag">{{ tag }}</text>
+
+      <section class="learn-teacher" aria-labelledby="learn-teacher-heading">
+        <view v-if="teacher" class="learn-teacher__portrait">
+          <image
+            class="learn-teacher__image"
+            :src="teacherImage"
+            mode="aspectFill"
+            role="img"
+            :aria-label="teacherImageLabel"
+            @error="onTeacherImageError"
+          />
+          <view class="learn-teacher__stamp" aria-hidden="true">
+            <text>老师专访</text>
+            <text>PROFILE</text>
           </view>
         </view>
-      </view>
-    </view>
 
-    <view class="card ios-card section courseware-section">
-      <text class="eyebrow">课程资料</text>
-      <text class="sec-title">课件 / 课程展示</text>
-      <view v-if="loading" class="empty">课件内容加载中…</view>
-      <block v-else>
-        <view v-for="(c, i) in coursewareItems" :key="c.title + i" class="courseware-card">
-          <image class="courseware-card__cover" :src="c.cover" mode="aspectFill" lazy-load />
-          <view class="courseware-card__body">
-            <view class="courseware-card__meta">
-              <text class="chip courseware-card__badge">{{ c.badge || (i + 1) }}</text>
-              <text v-if="c.duration" class="courseware-card__duration">{{ c.duration }}</text>
+        <view v-if="teacher" class="learn-teacher__copy">
+          <text class="editorial-kicker">主讲老师 / PERSONAL VOICE</text>
+          <text id="learn-teacher-heading" class="learn-teacher__name">{{ teacher.name }}</text>
+          <text class="learn-teacher__title">{{ teacher.title }}</text>
+          <view class="learn-teacher__rule" aria-hidden="true" />
+          <text class="learn-teacher__bio">{{ teacher.bio }}</text>
+          <view v-if="teacher.tags.length" class="learn-teacher__tags" aria-label="老师擅长领域">
+            <text v-for="tag in teacher.tags" :key="tag" class="learn-teacher__tag">{{ tag }}</text>
+          </view>
+          <view
+            class="learn-primary"
+            role="button"
+            tabindex="0"
+            hover-class="control--pressed"
+            @click="activateAction(goTest, $event)"
+            @keydown="onActionKeydown($event, goTest)"
+          >先完成九型自测，再开始系统学习 →</view>
+        </view>
+
+        <view v-else class="editorial-empty learn-teacher__empty">
+          <text class="editorial-empty__title">老师资料整理中</text>
+          <text>课程团队正在整理主讲老师的介绍与研究方向。</text>
+        </view>
+      </section>
+
+      <section class="publication-section" aria-labelledby="publication-heading">
+        <view class="section-heading">
+          <view>
+            <text class="editorial-kicker">COURSEWARE PUBLICATION / 课件出版</text>
+            <text id="publication-heading" class="section-heading__title">把课程留成可反复翻阅的资料书架</text>
+          </view>
+          <text class="section-heading__note">课件 · 视频 · 音频 · 练习</text>
+        </view>
+
+        <view v-if="coursewareItems.length" class="publication-list">
+          <article
+            v-for="(course, index) in coursewareItems"
+            :key="course.title + index"
+            class="publication-card"
+          >
+            <view class="publication-card__visual">
+              <image
+                class="publication-card__cover"
+                :class="`publication-card__cover--${['book', 'magazine', 'folio'][index % 3]}`"
+                :src="courseImages[index]"
+                mode="aspectFill"
+                aria-hidden="true"
+                lazy-load
+                @error="onCourseImageError(index)"
+              />
+              <text class="publication-card__number" aria-hidden="true">0{{ index + 1 }}</text>
             </view>
-            <text class="courseware-card__title">{{ c.title }}</text>
-            <text class="courseware-card__desc">{{ c.description }}</text>
+            <view class="publication-card__copy">
+              <view class="publication-card__meta">
+                <text>{{ course.badge }}</text>
+                <text v-if="course.duration">{{ course.duration }}</text>
+              </view>
+              <text class="publication-card__title">{{ course.title }}</text>
+              <text class="publication-card__desc">{{ course.description }}</text>
+              <view v-if="course.materialTypes.length" class="material-types" aria-label="资料形式">
+                <text v-for="type in course.materialTypes" :key="type">{{ type }}</text>
+              </view>
+              <view v-if="course.bullets.length" class="publication-card__bullets">
+                <text v-for="bullet in course.bullets" :key="bullet">— {{ bullet }}</text>
+              </view>
+              <text class="publication-card__status">馆藏资料 · 持续更新</text>
+            </view>
+          </article>
+        </view>
+
+        <view v-else class="editorial-empty">
+          <text class="editorial-empty__title">课程资料整理中</text>
+          <text>新一期课件、视频与音频资料正在编校入库。</text>
+        </view>
+      </section>
+
+      <section class="quote-section" aria-labelledby="quote-heading">
+        <view class="quote-section__heading">
+          <text class="editorial-kicker">TEACHER'S NOTE / 课堂札记</text>
+          <text id="quote-heading">从一句话，回到真实的自己</text>
+        </view>
+        <view v-if="quotes.length" class="quote-stack">
+          <view v-for="quote in quotes" :key="quote" class="quote-card">
+            <view class="pull-quote">
+              <text class="quote-card__text">“{{ quote }}”</text>
+              <text class="quote-card__mark">”</text>
+            </view>
           </view>
         </view>
-      </block>
-    </view>
+        <view v-else class="quote-empty">老师的课堂札记正在整理中。</view>
+      </section>
 
-    <view class="card ios-card section">
-      <text class="eyebrow">老韩语录</text>
-      <text class="sec-title">语录互动区</text>
-      <view v-if="loading" class="empty">语录内容加载中…</view>
-      <view v-else-if="!loadError && quotes.length === 0" class="empty">语录内容即将上线</view>
-      <view v-for="quote in quotes" :key="quote" class="quote-card">
-        <text class="quote-card__text">“{{ quote }}”</text>
-        <text class="quote-card__mark">”</text>
-      </view>
-    </view>
-
-    <view class="card ios-card section">
-      <text class="eyebrow">九型图鉴</text>
-      <text class="sec-title">九种性格图鉴</text>
-      <view class="types">
-        <view v-for="t in types" :key="t.id" class="type" :class="'type--' + t.color">
-          <image class="type__avatar" :src="`/static/avatars/${t.id}.png`" mode="aspectFill" lazy-load />
-          <text class="type__num">{{ t.id }}</text>
-          <text class="type__name">{{ t.name }}</text>
-          <text class="type__kw">{{ t.keywords }}</text>
+      <section class="type-index" aria-labelledby="type-index-heading">
+        <view class="type-index__heading">
+          <text class="editorial-kicker">REFERENCE / 九型索引</text>
+          <text id="type-index-heading">九种类型速查</text>
         </view>
-      </view>
+        <view class="type-index__list">
+          <view v-for="type in types" :key="type.id" class="type-index__item">
+            <text class="type-index__number">{{ type.id }}</text>
+            <view class="type-index__copy">
+              <text class="type-index__name">{{ type.name }}</text>
+              <text class="type-index__keywords">{{ type.keywords }}</text>
+            </view>
+          </view>
+        </view>
+      </section>
     </view>
-
-    <button class="btn-primary ios-button" @click="goTest">先测类型，再跟课学习 →</button>
   </view>
 </template>
 
 <style scoped>
-.sec-title { font-size: 34rpx; font-weight: 900; display: block; margin: 16rpx 0 20rpx; }
-.section { display: flex; flex-direction: column; }
-.empty { color: #767d89; font-size: 26rpx; padding: 20rpx 0; }
-.empty--error { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; }
-.retry {
-  flex-shrink: 0;
+.learn {
+  --paper: #F6F0E4;
+  --paper-deep: #E8DCC5;
+  --ink: #24241F;
+  --muted: #665F54;
+  --green: #173F35;
+  --green-soft: #D9E2D8;
+  --cinnabar: #A43C2C;
+  --sand: #CFB785;
+  min-width: 0;
+  overflow-x: hidden;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.learn-paper {
+  width: 100%;
+  max-width: 1100rpx;
+  margin: 0 auto;
+  padding: 20rpx 24rpx 56rpx;
+  box-sizing: border-box;
+  background:
+    repeating-linear-gradient(0deg, transparent 0, transparent 15rpx, rgba(36, 36, 31, .018) 16rpx),
+    var(--paper);
+}
+
+.learn-masthead {
+  padding: 20rpx 0 16rpx;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16rpx;
+  border-bottom: 2rpx solid var(--ink);
+}
+
+.learn-masthead__brand {
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 35rpx;
+  font-weight: 900;
+  letter-spacing: 3rpx;
+}
+
+.learn-masthead__edition,
+.editorial-kicker,
+.section-heading__note {
+  color: var(--muted);
+  font-size: 19rpx;
+  font-weight: 800;
+  line-height: 1.45;
+  letter-spacing: 1rpx;
+}
+
+.learn-sync,
+.learn-error {
+  min-height: 70rpx;
+  padding: 8rpx 0;
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  box-sizing: border-box;
+  color: var(--muted);
+  font-size: 22rpx;
+  line-height: 1.5;
+}
+
+.learn-sync__rule {
+  flex: 0 0 36rpx;
+  width: 36rpx;
+  height: 2rpx;
+  background: var(--cinnabar);
+}
+
+.learn-error {
+  justify-content: space-between;
+  color: #752A20;
+  border-bottom: 2rpx solid rgba(117, 42, 32, .24);
+}
+
+.learn-retry {
+  flex: 0 0 auto;
+  min-height: 88rpx;
+  padding: 0 22rpx;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 88rpx;
-  min-height: 88rpx;
-  padding: 0 18rpx;
-  color: #2b7fff;
+  color: #752A20;
+  font-size: 23rpx;
   font-weight: 900;
+  transition: opacity .2s ease, transform .2s ease;
   touch-action: manipulation;
-  background: transparent;
-  border: none;
-  line-height: 1;
 }
-.retry::after { border: none; }
-.retry--hover { opacity: .82; transform: scale(.985); }
-.teacher-card { display: flex; gap: 22rpx; padding: 24rpx; border-radius: 28rpx; background: rgba(255,255,255,.72); border: 2rpx solid rgba(255,255,255,.88); box-shadow: 0 16rpx 38rpx -28rpx rgba(28,40,70,.42); }
-.teacher-card__avatar { flex-shrink: 0; width: 132rpx; height: 132rpx; border-radius: 28rpx; border: 4rpx solid rgba(255,255,255,.94); background: #f8fafc; }
-.teacher-card__body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 8rpx; }
-.teacher-card__name { color: #12151b; font-size: 32rpx; font-weight: 900; line-height: 1.25; }
-.teacher-card__title { color: #2563eb; font-size: 24rpx; font-weight: 900; }
-.teacher-card__bio { color: #3c424d; font-size: 25rpx; line-height: 1.62; }
-.teacher-card__tags { display: flex; flex-wrap: wrap; gap: 10rpx; margin-top: 4rpx; }
-.teacher-card__tag { min-height: 44rpx; padding: 0 16rpx; border-radius: 999rpx; background: rgba(37,99,235,.09); color: #2563eb; font-size: 21rpx; font-weight: 900; display: inline-flex; align-items: center; }
-.courseware-card { display: flex; gap: 18rpx; padding: 22rpx 0; border-bottom: 2rpx solid rgba(20,24,32,.07); }
-.courseware-card:last-child { border-bottom: none; }
-.courseware-card__cover { flex-shrink: 0; width: 152rpx; height: 112rpx; border-radius: 22rpx; background: #e2e8f0; }
-.courseware-card__body { min-width: 0; flex: 1; }
-.courseware-card__meta { display: flex; align-items: center; gap: 12rpx; margin-bottom: 8rpx; }
-.courseware-card__badge { flex-shrink: 0; }
-.courseware-card__duration { color: #64748b; font-size: 22rpx; font-weight: 800; }
-.courseware-card__title { color: #12151b; font-size: 30rpx; font-weight: 900; display: block; }
-.courseware-card__desc { color: #3c424d; font-size: 25rpx; line-height: 1.65; display: block; margin-top: 6rpx; }
+
+.learn-teacher {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  border-bottom: 2rpx solid var(--ink);
+}
+
+.learn-teacher__portrait {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  overflow: hidden;
+  background: var(--paper-deep);
+}
+
+.learn-teacher__image {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.learn-teacher__stamp {
+  position: absolute;
+  left: 22rpx;
+  bottom: 22rpx;
+  padding: 12rpx 16rpx;
+  display: flex;
+  flex-direction: column;
+  background: var(--cinnabar);
+  color: #FFFFFF;
+  font-size: 18rpx;
+  font-weight: 900;
+  line-height: 1.35;
+  letter-spacing: 1rpx;
+}
+
+.learn-teacher__copy {
+  min-width: 0;
+  padding: 36rpx 4rpx 44rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16rpx;
+}
+
+.editorial-kicker { color: var(--cinnabar); }
+
+.learn-teacher__name {
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 62rpx;
+  font-weight: 900;
+  line-height: 1.12;
+  letter-spacing: 2rpx;
+}
+
+.learn-teacher__title {
+  color: var(--green);
+  font-size: 26rpx;
+  font-weight: 800;
+  line-height: 1.5;
+}
+
+.learn-teacher__rule {
+  width: 82rpx;
+  height: 4rpx;
+  margin: 4rpx 0;
+  background: var(--sand);
+}
+
+.learn-teacher__bio {
+  max-width: 640rpx;
+  color: #4E4A42;
+  font-size: 27rpx;
+  line-height: 1.75;
+}
+
+.learn-teacher__tags,
+.material-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+}
+
+.learn-teacher__tag,
+.material-types text {
+  padding: 7rpx 14rpx;
+  border: 2rpx solid rgba(23, 63, 53, .38);
+  color: var(--green);
+  font-size: 20rpx;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.learn-primary {
+  width: 100%;
+  min-height: 88rpx;
+  margin-top: 14rpx;
+  padding: 0 28rpx;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  background: var(--green);
+  color: #FFFFFF;
+  font-size: 26rpx;
+  font-weight: 900;
+  line-height: 1.4;
+  text-align: center;
+  box-shadow: 8rpx 8rpx 0 var(--sand);
+  transition: opacity .2s ease, transform .2s ease;
+  touch-action: manipulation;
+}
+
+.learn-teacher__empty { grid-column: 1 / -1; }
+
+.publication-section { padding: 52rpx 0 16rpx; }
+
+.section-heading {
+  padding-bottom: 24rpx;
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
+  border-bottom: 4rpx solid var(--green);
+}
+
+.section-heading__title {
+  display: block;
+  max-width: 720rpx;
+  margin-top: 10rpx;
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 42rpx;
+  font-weight: 900;
+  line-height: 1.32;
+}
+
+.publication-list {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.publication-card {
+  min-width: 0;
+  padding: 30rpx 0 34rpx;
+  display: grid;
+  grid-template-columns: 190rpx minmax(0, 1fr);
+  gap: 24rpx;
+  border-bottom: 2rpx solid rgba(36, 36, 31, .28);
+}
+
+.publication-card__visual {
+  position: relative;
+  align-self: start;
+  min-width: 0;
+}
+
+.publication-card__cover {
+  display: block;
+  width: 100%;
+  background: var(--green-soft);
+  box-shadow: 8rpx 10rpx 0 rgba(207, 183, 133, .72);
+}
+
+.publication-card__cover--book { aspect-ratio: 3 / 4; }
+.publication-card__cover--magazine { aspect-ratio: 4 / 5; }
+.publication-card__cover--folio { aspect-ratio: 4 / 3; }
+
+.publication-card__number {
+  position: absolute;
+  right: -8rpx;
+  bottom: -12rpx;
+  padding: 5rpx 9rpx;
+  background: var(--cinnabar);
+  color: #FFFFFF;
+  font-size: 17rpx;
+  font-weight: 900;
+  letter-spacing: 1rpx;
+}
+
+.publication-card__copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10rpx;
+}
+
+.publication-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8rpx 16rpx;
+  color: var(--cinnabar);
+  font-size: 19rpx;
+  font-weight: 900;
+}
+
+.publication-card__title {
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 33rpx;
+  font-weight: 900;
+  line-height: 1.32;
+}
+
+.publication-card__desc {
+  color: var(--muted);
+  font-size: 24rpx;
+  line-height: 1.65;
+}
+
+.publication-card__bullets {
+  display: flex;
+  flex-direction: column;
+  gap: 6rpx;
+  color: #4E4A42;
+  font-size: 21rpx;
+  line-height: 1.52;
+}
+
+.publication-card__status {
+  margin-top: auto;
+  padding-top: 6rpx;
+  color: var(--green);
+  font-size: 19rpx;
+  font-weight: 800;
+  letter-spacing: 1rpx;
+}
+
+.editorial-empty {
+  min-height: 220rpx;
+  padding: 36rpx 4rpx;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10rpx;
+  border-bottom: 2rpx solid var(--ink);
+  color: var(--muted);
+  font-size: 24rpx;
+  line-height: 1.6;
+}
+
+.editorial-empty__title {
+  color: var(--ink);
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 32rpx;
+  font-weight: 900;
+}
+
+.quote-section {
+  padding: 46rpx 0;
+  border-top: 2rpx solid var(--ink);
+  border-bottom: 2rpx solid var(--ink);
+}
+
+.quote-section__heading {
+  margin-bottom: 24rpx;
+  display: flex;
+  flex-direction: column;
+  gap: 8rpx;
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 34rpx;
+  font-weight: 900;
+  line-height: 1.35;
+}
+
+.quote-stack { display: grid; gap: 20rpx; }
+
 .quote-card {
   position: relative;
-  min-height: 116rpx;
-  margin-bottom: 18rpx;
-  padding: 28rpx 82rpx 28rpx 28rpx;
-  border-radius: 24rpx;
-  background: rgba(255,255,255,.68);
-  border: 2rpx solid rgba(255,255,255,.86);
-  box-shadow: 0 16rpx 38rpx -28rpx rgba(28,40,70,.42);
   overflow: hidden;
+  background: var(--green);
+  color: #FFFFFF;
+}
+
+.pull-quote {
+  position: relative;
+  min-height: 160rpx;
+  padding: 34rpx 86rpx 34rpx 30rpx;
+  display: flex;
+  align-items: center;
   box-sizing: border-box;
 }
-.quote-card:last-child { margin-bottom: 0; }
+
 .quote-card__text {
   position: relative;
   z-index: 1;
-  color: #12151b;
-  font-size: 28rpx;
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 31rpx;
   font-weight: 800;
   line-height: 1.7;
 }
+
 .quote-card__mark {
   position: absolute;
-  top: 8rpx;
-  right: 18rpx;
-  z-index: 0;
-  color: rgba(43,127,255,.13);
+  top: 2rpx;
+  right: 16rpx;
+  color: rgba(255, 255, 255, .15);
   font-family: Georgia, serif;
-  font-size: 110rpx;
+  font-size: 126rpx;
   line-height: 1;
   pointer-events: none;
 }
-.types { display: flex; flex-wrap: wrap; gap: 16rpx; }
-.type {
-  position: relative;
-  width: calc((100% - 32rpx) / 3);
-  min-height: 236rpx;
-  box-sizing: border-box;
-  background: rgba(255,255,255,.68);
-  border: 2rpx solid rgba(255,255,255,.86);
-  border-radius: 24rpx;
-  padding: 18rpx 10rpx;
+
+.quote-empty {
+  padding: 26rpx 0;
+  color: var(--muted);
+  font-size: 23rpx;
+}
+
+.type-index { padding: 42rpx 0 8rpx; }
+
+.type-index__heading {
+  padding-bottom: 18rpx;
   display: flex;
-  flex-direction: column;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18rpx;
+  border-bottom: 2rpx solid var(--green);
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 30rpx;
+  font-weight: 900;
+}
+
+.type-index__list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.type-index__item {
+  min-width: 0;
+  min-height: 88rpx;
+  padding: 10rpx 8rpx;
+  display: flex;
   align-items: center;
-  gap: 6rpx;
-  box-shadow: 0 10rpx 28rpx -24rpx rgba(28,40,70,.42);
+  gap: 8rpx;
+  box-sizing: border-box;
+  border-bottom: 2rpx solid rgba(36, 36, 31, .18);
 }
-.type__avatar {
-  width: 82rpx;
-  height: 82rpx;
-  border-radius: 50%;
-  border: 4rpx solid rgba(255,255,255,.92);
-  box-shadow: 0 10rpx 24rpx -18rpx rgba(28,40,70,.46);
-}
-.type__num {
-  position: absolute;
-  top: 70rpx;
-  right: 22rpx;
+
+.type-index__number {
+  flex: 0 0 38rpx;
   width: 38rpx;
   height: 38rpx;
-  border-radius: 13rpx;
-  color: #fff;
-  font-weight: 900;
-  font-size: 21rpx;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  background: var(--sand);
+  color: var(--ink);
+  font-size: 19rpx;
+  font-weight: 900;
 }
-.type--green .type__num { background: #25b365; }
-.type--blue .type__num { background: #2b7fff; }
-.type--red .type__num { background: #e23a47; }
-.type__name { color: #12151b; font-size: 26rpx; font-weight: 900; }
-.type__kw { font-size: 18rpx; color: #767d89; text-align: center; line-height: 1.45; }
+
+.type-index__copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2rpx;
+}
+
+.type-index__name {
+  font-size: 21rpx;
+  font-weight: 900;
+  line-height: 1.3;
+}
+
+.type-index__keywords {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 16rpx;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control--pressed { opacity: .82; transform: translateY(2rpx); }
+
+.learn-retry:focus-visible,
+.learn-primary:focus-visible {
+  outline: 4rpx solid #C84D3A;
+  outline-offset: 4rpx;
+}
+
+@media screen and (min-width: 768px) {
+  .learn-paper { padding-left: 48rpx; padding-right: 48rpx; }
+
+  .learn-teacher {
+    grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+    align-items: stretch;
+  }
+
+  .learn-teacher__copy { padding: 54rpx 0 54rpx 48rpx; justify-content: center; }
+  .learn-primary { width: auto; min-width: 360rpx; }
+
+  .section-heading {
+    flex-direction: row;
+    align-items: flex-end;
+    justify-content: space-between;
+  }
+
+  .publication-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 40rpx;
+  }
+
+  .publication-card { grid-template-columns: 180rpx minmax(0, 1fr); }
+  .quote-stack { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .type-index__list { grid-template-columns: repeat(9, minmax(0, 1fr)); }
+  .type-index__item { flex-direction: column; justify-content: center; text-align: center; }
+  .type-index__keywords { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .learn-retry,
+  .learn-primary {
+    transition: none;
+  }
+}
 </style>
