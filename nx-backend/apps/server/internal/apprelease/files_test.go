@@ -567,7 +567,7 @@ func TestFileStoreSaveIconDirectoryReplacementCannotRedirectRename(t *testing.T)
 	iconDir := filepath.Join(store.Root(), "android")
 	movedDir := filepath.Join(store.Root(), "android-original")
 	var replacementTempPath, replacementDestination string
-	store.beforeIconRename = func(tempPath, destination string) {
+	store.beforeIconCommit = func(tempPath, destination string) {
 		if err := os.Rename(iconDir, movedDir); err != nil {
 			t.Fatal(err)
 		}
@@ -592,6 +592,33 @@ func TestFileStoreSaveIconDirectoryReplacementCannotRedirectRename(t *testing.T)
 	if _, err := os.Lstat(originalDestination); !os.IsNotExist(err) {
 		t.Fatalf("original directory retained committed destination or stat failed: %v", err)
 	}
+}
+
+func TestFileStoreSaveIconCommitDoesNotClobberDestinationCreatedAtCommit(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := store.Stage("release.apk", strings.NewReader("apk"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.Commit(staged, "android", 123)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var destination string
+	store.beforeIconCommit = func(_, destinationPath string) {
+		destination = destinationPath
+		if err := os.WriteFile(destination, []byte("sentinel"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := store.SaveIcon(saved.Key, testPNG(t)); err == nil {
+		t.Fatal("SaveIcon(destination created at commit) error = nil, want no-clobber failure")
+	}
+	assertFileContents(t, destination, "sentinel")
 }
 
 func TestFileStoreRemoveDeletesManagedIcon(t *testing.T) {
