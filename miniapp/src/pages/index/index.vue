@@ -224,7 +224,7 @@ function goRelation() {
   margin-top: 4rpx;
   border: 0;
   box-shadow: none;
-  transition: transform .22s ease, background-color .22s ease, box-shadow .22s ease;
+  transition: transform .22s ease, opacity .22s ease, background-color .22s ease, box-shadow .22s ease;
 }
 
 .home-hero__art {
