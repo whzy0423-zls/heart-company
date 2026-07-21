@@ -74,6 +74,11 @@ assert.match(indexPage, /class=["'][^"']*home-entry--relation[^"']*["'][\s\S]*@c
 assert.match(indexPage, /class=["'][^"']*home-entry--learn[^"']*["'][\s\S]*@click=["']goLearn["']/, 'home page should keep a learning entry')
 assert.match(indexPage, /DEFAULT_COURSEWARE_ITEMS\[0\]/, 'home recommended course should use the fixed local fallback')
 assert.match(indexPage, /class=["'][^"']*home-course[^"']*["'][\s\S]*@click=["']goLearn["']/, 'home page should expose a recommended course media entry')
+for (const className of ['home-entry--relation', 'home-entry--learn', 'home-course']) {
+  assert.match(indexPage, new RegExp(`<button\\b[^>]*class=["'][^"']*${className}[^"']*["'][^>]*>`), `home navigation control ${className} should use native button semantics`)
+}
+assert.doesNotMatch(indexPage, /aria-pressed=["']false["']/, 'home navigation links should not claim toggle-button semantics')
+assert.match(indexPage, /\.home-entry:focus-visible[\s\S]*\.home-course:focus-visible\s*\{[^}]*outline:/, 'home navigation controls should expose a visible keyboard focus state')
 assert.match(indexPage, /<button\s+class=["'][^"']*nx-button--primary[^"']*["'][^>]*@click=["']startTest["'][^>]*>\s*开始测试\s*<\/button>/, 'home primary CTA should use the shared 88rpx tap-target class')
 assert.doesNotMatch(indexPage, /openChatPage|goChat|问 AI|AI 对话|打开 AI 对话/, 'home page must not expose AI chat entry copy or handlers')
 

@@ -59,11 +59,9 @@ function goRelation() {
       </view>
 
       <view class="home-entries">
-        <view
+        <button
           class="home-entry home-entry--relation"
-          role="button"
           aria-label="进入关系合盘"
-          aria-pressed="false"
           hover-class="home-entry--pressed"
           @click="goRelation"
         >
@@ -74,13 +72,11 @@ function goRelation() {
             <text class="home-entry__desc">看见彼此的沟通节奏、冲突触发点与相处底色。</text>
           </view>
           <text class="home-entry__arrow" aria-hidden="true">↗</text>
-        </view>
+        </button>
 
-        <view
+        <button
           class="home-entry home-entry--learn"
-          role="button"
           aria-label="进入九型学习"
-          aria-pressed="false"
           hover-class="home-entry--pressed"
           @click="goLearn"
         >
@@ -91,7 +87,7 @@ function goRelation() {
             <text class="home-entry__desc">从老师资料、课件与课程路径，建立清晰的九型地图。</text>
           </view>
           <text class="home-entry__arrow" aria-hidden="true">↗</text>
-        </view>
+        </button>
       </view>
 
       <view class="home-course-wrap">
@@ -99,11 +95,9 @@ function goRelation() {
           <text class="home-course__label">本周推荐</text>
           <text class="home-course__edition">WEEKLY EDIT</text>
         </view>
-        <view
+        <button
           class="home-course nx-media-row"
-          role="button"
           aria-label="打开推荐课程"
-          aria-pressed="false"
           hover-class="home-course--pressed"
           @click="goLearn"
         >
@@ -122,7 +116,7 @@ function goRelation() {
             <text class="home-course__desc">{{ recommendedCourse.description }}</text>
             <text class="home-course__link">查看课程与课件 →</text>
           </view>
-        </view>
+        </button>
       </view>
     </view>
   </view>
@@ -277,7 +271,9 @@ function goRelation() {
 
 .home-entry {
   position: relative;
+  width: 100%;
   min-height: 330rpx;
+  margin: 0;
   padding: 30rpx;
   display: flex;
   flex-direction: column;
@@ -285,7 +281,12 @@ function goRelation() {
   gap: 26rpx;
   overflow: hidden;
   border: 2rpx solid var(--nx-ink);
+  border-radius: 0;
   box-sizing: border-box;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
   transition: opacity .16s ease, transform .16s ease;
   touch-action: manipulation;
 }
@@ -368,11 +369,32 @@ function goRelation() {
 .home-course__edition { color: var(--nx-jade); }
 
 .home-course {
+  width: 100%;
   min-height: 230rpx;
-  padding-top: 24rpx;
+  margin: 0;
+  padding: 24rpx 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-sizing: border-box;
   align-items: stretch;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
   transition: opacity .16s ease, transform .16s ease;
   touch-action: manipulation;
+}
+
+.home-entry::after,
+.home-course::after {
+  border: 0;
+}
+
+.home-entry:focus-visible,
+.home-course:focus-visible {
+  outline: 4rpx solid var(--nx-focus);
+  outline-offset: 4rpx;
 }
 
 .home-course__cover {
