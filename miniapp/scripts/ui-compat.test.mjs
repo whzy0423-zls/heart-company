@@ -79,11 +79,12 @@ assert.match(indexPage, /let\s+loadTicket\s*=\s*0/, 'home page should guard agai
 assert.match(indexPage, /ticket\s*!==\s*loadTicket/, 'home page should ignore a stale refresh response')
 assert.match(indexPage, /v-if=["']loading["']/, 'home page should expose an explicit loading state')
 assert.match(indexPage, /v-if=["']loadError["']/, 'home page should expose a non-blocking refresh error')
-assert.match(indexPage, /@click=["']loadContent["']/, 'home refresh failure should provide retry')
+assert.match(indexPage, /@click=["']activateAction\(loadContent,\s*\$event\)["']/, 'home refresh failure should provide a cross-platform retry action')
 assert.match(indexPage, /资料整理中/, 'explicit empty teacher or course sections should render an editorial empty state')
 
 const teacherHeroImage = indexPage.match(/<image\b[^>]*class=["'][^"']*teacher-hero__image[^"']*["'][^>]*>/)?.[0] || ''
 assert.match(teacherHeroImage, /:src=["']teacherImage["']/, 'teacher portrait should use a resolved render source')
+assert.match(teacherHeroImage, /role=["']img["']/, 'teacher image host should expose an img role on H5')
 assert.match(teacherHeroImage, /:aria-label=["']teacherImageLabel["']/, 'teacher portrait should expose a meaningful accessible label')
 assert.match(teacherHeroImage, /@error=["']onTeacherImageError["']/, 'teacher portrait should provide a local image fallback')
 assert.doesNotMatch(teacherHeroImage, /lazy-load/, 'dominant above-fold teacher portrait should load eagerly')
@@ -93,7 +94,13 @@ assert.match(indexPage, /\.teacher-hero__portrait\s*\{[^}]*aspect-ratio:\s*4\s*\
 assert.match(indexPage, /teacher\.name/, 'teacher hero should render the teacher name')
 assert.match(indexPage, /teacher\.title/, 'teacher hero should render teacher identity')
 assert.match(indexPage, /teacher\.bio/, 'teacher hero should render a concise credibility biography')
-assert.match(indexPage, /<button\s+class=["'][^"']*home-primary[^"']*["'][^>]*@click=["']goLearn["'][^>]*>\s*开始学习\s*<\/button>/, 'the single primary action should navigate to learning')
+const primaryHomeAction = indexPage.match(/<view\b[^>]*class=["'][^"']*home-primary[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(primaryHomeAction, /role=["']button["']/, 'home primary action should expose button semantics on H5')
+assert.match(primaryHomeAction, /tabindex=["']0["']/, 'home primary action should be keyboard focusable on H5')
+assert.match(primaryHomeAction, /@click=["']activateAction\(goLearn,\s*\$event\)["']/, 'home primary action should preserve click and mini-program tap activation')
+assert.match(primaryHomeAction, /@keydown\.enter\.stop\.prevent=["']activateAction\(goLearn,\s*\$event\)["']/, 'home primary action should activate from Enter')
+assert.match(primaryHomeAction, /@keydown\.space\.stop\.prevent=["']activateAction\(goLearn,\s*\$event\)["']/, 'home primary action should activate from Space')
+assert.match(indexPage, /function\s+activateAction\(action,\s*event\)\s*\{[\s\S]*?event\?\.repeat[\s\S]*?keyboardActivationAt[\s\S]*?action\(\)/, 'home keyboard activation should ignore repeats and suppress the synthetic follow-up click')
 
 assert.match(indexPage, /class=["'][^"']*featured-course[^"']*["']/, 'home page should render one featured course like a publication')
 assert.match(indexPage, /class=["'][^"']*material-shelf[^"']*["']/, 'home page should render a courseware and materials shelf')
@@ -113,8 +120,16 @@ assert.match(indexPage, /return\s+!cover\s*\|\|\s*isLegacyWheel\s*\?\s*courseFal
 assert.match(indexPage, /resolveContentAsset\(homeCourseCover\(course,\s*index\),\s*courseFallback\(index\)\)/, 'featured and shelf course images should resolve the mapped publication cover')
 assert.doesNotMatch(indexPage, /resolveContentAsset\(course\.cover,/, 'DEFAULT_COURSEWARE_ITEMS wheel covers must not render directly on home')
 assert.match(indexPage, /courseImageFallbackUsed/, 'course cover fallback should be applied only once per item')
-assert.match(indexPage, /<button\s+class=["'][^"']*secondary-entry[^"']*["'][^>]*@click=["']startTest["'][^>]*>[\s\S]*九型自测/, '九型自测 should remain a small secondary native button')
-assert.match(indexPage, /<button\s+class=["'][^"']*secondary-entry[^"']*["'][^>]*@click=["']goRelation["']/, 'relationship analysis may remain as a secondary native button')
+const secondaryHomeActions = indexPage.match(/<view\b[^>]*class=["'][^"']*secondary-entry[^"']*["'][^>]*>/g) || []
+assert.equal(secondaryHomeActions.length, 2, 'home should expose exactly two secondary cross-platform actions')
+for (const action of secondaryHomeActions) {
+  assert.match(action, /role=["']button["']/, 'secondary home actions should expose button semantics on H5')
+  assert.match(action, /tabindex=["']0["']/, 'secondary home actions should be keyboard focusable on H5')
+  assert.match(action, /@click=["']activateAction\(/, 'secondary home actions should preserve click and mini-program tap activation')
+  assert.match(action, /@keydown\.enter\.stop\.prevent=["']activateAction\(/, 'secondary home actions should activate from Enter')
+  assert.match(action, /@keydown\.space\.stop\.prevent=["']activateAction\(/, 'secondary home actions should activate from Space')
+}
+assert.doesNotMatch(indexPage, /<button\b[^>]*class=["'][^"']*(?:home-primary|secondary-entry)[^"']*["']/, 'home primary and secondary actions should not rely on non-focusable H5 uni-button output')
 
 assert.match(indexPage, /\.home-primary\s*\{[^}]*min-height:\s*88rpx/, 'home primary CTA should keep an 88rpx touch target')
 assert.match(indexPage, /\.secondary-entry\s*\{[^}]*min-height:\s*88rpx/, 'secondary entries should keep an 88rpx touch target')

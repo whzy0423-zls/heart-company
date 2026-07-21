@@ -45,6 +45,8 @@ const courseImages = ref([])
 const teacherImageFallbackUsed = ref(false)
 const courseImageFallbackUsed = ref({})
 let loadTicket = 0
+let keyboardActivationAt = 0
+let keyboardActivationTarget = null
 
 const teacher = computed(() => teachers.value[0] || null)
 const featuredCourse = computed(() => courses.value[0] || null)
@@ -116,6 +118,28 @@ function onCourseImageError(index) {
   courseImages.value[index] = courseFallback(index)
 }
 
+function activateAction(action, event) {
+  const eventType = event?.type || ''
+  const now = Date.now()
+  if (eventType === 'keydown') {
+    if (event?.repeat) return
+    keyboardActivationAt = now
+    keyboardActivationTarget = event?.currentTarget || null
+    action()
+    return
+  }
+  if (
+    eventType === 'click' &&
+    keyboardActivationTarget === (event?.currentTarget || null) &&
+    now - keyboardActivationAt < 500
+  ) {
+    keyboardActivationTarget = null
+    return
+  }
+  keyboardActivationTarget = null
+  action()
+}
+
 async function loadContent() {
   const ticket = ++loadTicket
   loading.value = true
@@ -167,7 +191,15 @@ function goRelation() {
 
       <view v-if="loadError" class="home-error" role="status">
         <text>{{ loadError }}</text>
-        <button class="home-retry" hover-class="control--pressed" @click="loadContent">重试更新</button>
+        <view
+          class="home-retry"
+          role="button"
+          tabindex="0"
+          hover-class="control--pressed"
+          @click="activateAction(loadContent, $event)"
+          @keydown.enter.stop.prevent="activateAction(loadContent, $event)"
+          @keydown.space.stop.prevent="activateAction(loadContent, $event)"
+        >重试更新</view>
       </view>
 
       <section class="teacher-hero" aria-labelledby="teacher-heading">
@@ -176,6 +208,7 @@ function goRelation() {
             class="teacher-hero__image"
             :src="teacherImage"
             mode="aspectFill"
+            role="img"
             :aria-label="teacherImageLabel"
             @error="onTeacherImageError"
           />
@@ -194,7 +227,15 @@ function goRelation() {
           <view v-if="teacher.tags.length" class="teacher-hero__tags" aria-label="老师擅长领域">
             <text v-for="tag in teacher.tags" :key="tag" class="teacher-hero__tag">{{ tag }}</text>
           </view>
-          <button class="home-primary" hover-class="control--pressed" @click="goLearn">开始学习</button>
+          <view
+            class="home-primary"
+            role="button"
+            tabindex="0"
+            hover-class="control--pressed"
+            @click="activateAction(goLearn, $event)"
+            @keydown.enter.stop.prevent="activateAction(goLearn, $event)"
+            @keydown.space.stop.prevent="activateAction(goLearn, $event)"
+          >开始学习</view>
         </view>
 
         <view v-else class="editorial-empty teacher-hero__empty">
@@ -213,12 +254,16 @@ function goRelation() {
         </view>
 
         <view v-if="courses.length" class="course-layout">
-          <button
+          <view
             v-if="featuredCourse"
             class="featured-course"
+            role="button"
+            tabindex="0"
             :aria-label="`查看课程：${featuredCourse.title}`"
             hover-class="control--pressed"
-            @click="goLearn"
+            @click="activateAction(goLearn, $event)"
+            @keydown.enter.stop.prevent="activateAction(goLearn, $event)"
+            @keydown.space.stop.prevent="activateAction(goLearn, $event)"
           >
             <view class="featured-course__visual">
               <image
@@ -246,7 +291,7 @@ function goRelation() {
               </view>
               <text class="featured-course__link">查看课程资料 →</text>
             </view>
-          </button>
+          </view>
 
           <view class="material-shelf">
             <view class="material-shelf__heading">
@@ -254,13 +299,17 @@ function goRelation() {
               <text>MATERIAL SHELF</text>
             </view>
 
-            <button
+            <view
               v-for="(course, index) in materialCourses"
               :key="course.title + index"
               class="material-card"
+              role="button"
+              tabindex="0"
               :aria-label="`查看资料：${course.title}`"
               hover-class="control--pressed"
-              @click="goLearn"
+              @click="activateAction(goLearn, $event)"
+              @keydown.enter.stop.prevent="activateAction(goLearn, $event)"
+              @keydown.space.stop.prevent="activateAction(goLearn, $event)"
             >
               <image
                 class="material-card__cover"
@@ -285,7 +334,7 @@ function goRelation() {
                   <text v-for="bullet in course.bullets" :key="bullet">— {{ bullet }}</text>
                 </view>
               </view>
-            </button>
+            </view>
 
             <view v-if="materialCourses.length === 0" class="editorial-empty editorial-empty--compact">
               <text class="editorial-empty__title">其余课件资料整理中</text>
@@ -300,20 +349,36 @@ function goRelation() {
       </section>
 
       <nav class="secondary-nav" aria-label="更多九型工具">
-        <button class="secondary-entry" hover-class="control--pressed" @click="startTest">
+        <view
+          class="secondary-entry"
+          role="button"
+          tabindex="0"
+          hover-class="control--pressed"
+          @click="activateAction(startTest, $event)"
+          @keydown.enter.stop.prevent="activateAction(startTest, $event)"
+          @keydown.space.stop.prevent="activateAction(startTest, $event)"
+        >
           <view>
             <text class="secondary-entry__kicker">SELF TEST · {{ total }} 题</text>
             <text class="secondary-entry__title">九型自测</text>
           </view>
           <text aria-hidden="true">→</text>
-        </button>
-        <button class="secondary-entry" hover-class="control--pressed" @click="goRelation">
+        </view>
+        <view
+          class="secondary-entry"
+          role="button"
+          tabindex="0"
+          hover-class="control--pressed"
+          @click="activateAction(goRelation, $event)"
+          @keydown.enter.stop.prevent="activateAction(goRelation, $event)"
+          @keydown.space.stop.prevent="activateAction(goRelation, $event)"
+        >
           <view>
             <text class="secondary-entry__kicker">RELATIONSHIP</text>
             <text class="secondary-entry__title">关系合盘</text>
           </view>
           <text aria-hidden="true">→</text>
-        </button>
+        </view>
       </nav>
     </view>
   </view>

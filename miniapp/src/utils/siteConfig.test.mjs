@@ -106,5 +106,64 @@ assert.deepEqual(
   'a teacherTeaser-only cache should survive a later response that omits learning sections',
 )
 
+clearSiteConfigCache()
+const completeLearningConfig = {
+  home: {
+    teacherTeaser: { title: '缓存老师', lead: '缓存老师介绍' },
+    courses: { items: [{ title: '缓存课程' }] },
+    quotes: { items: ['缓存语录'] },
+  },
+  theme: { issue: 'spring' },
+}
+await refreshSiteConfig({ api: async () => completeLearningConfig, now: () => now + 10 })
+
+const teacherOnlyRefresh = { home: { teacherTeaser: { title: '更新老师' } } }
+const teacherOnlySnapshot = structuredClone(teacherOnlyRefresh)
+await refreshSiteConfig({ api: async () => teacherOnlyRefresh, now: () => now + 11 })
+assert.deepEqual(teacherOnlyRefresh, teacherOnlySnapshot, 'section-aware cache merge must not mutate a teacher-only response')
+assert.deepEqual(
+  getStoredSiteConfig(),
+  {
+    home: {
+      teacherTeaser: { title: '更新老师' },
+      courses: { items: [{ title: '缓存课程' }] },
+      quotes: { items: ['缓存语录'] },
+    },
+  },
+  'a teacher-only refresh should preserve cached course and quote sections for the next mount',
+)
+
+const courseOnlyRefresh = { home: { courses: { items: [{ title: '更新课程' }] } } }
+const courseOnlySnapshot = structuredClone(courseOnlyRefresh)
+await refreshSiteConfig({ api: async () => courseOnlyRefresh, now: () => now + 12 })
+assert.deepEqual(courseOnlyRefresh, courseOnlySnapshot, 'section-aware cache merge must not mutate a course-only response')
+assert.deepEqual(
+  getStoredSiteConfig(),
+  {
+    home: {
+      teacherTeaser: { title: '更新老师' },
+      courses: { items: [{ title: '更新课程' }] },
+      quotes: { items: ['缓存语录'] },
+    },
+  },
+  'a course-only refresh should preserve cached teacher and quote sections for the next mount',
+)
+
+const explicitEmptyRefresh = {
+  home: {
+    teacherTeaser: {},
+    courses: { items: [] },
+    quotes: { items: [] },
+  },
+}
+const explicitEmptySnapshot = structuredClone(explicitEmptyRefresh)
+await refreshSiteConfig({ api: async () => explicitEmptyRefresh, now: () => now + 13 })
+assert.deepEqual(explicitEmptyRefresh, explicitEmptySnapshot, 'explicit empty section caching must not mutate the response')
+assert.deepEqual(
+  getStoredSiteConfig(),
+  explicitEmptyRefresh,
+  'explicit empty teacher, course, and quote sections should clear their cached counterparts',
+)
+
 console.log('site config cache tests passed')
 await rm(dir, { force: true, recursive: true })
