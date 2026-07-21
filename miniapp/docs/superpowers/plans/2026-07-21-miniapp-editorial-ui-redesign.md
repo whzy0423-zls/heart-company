@@ -214,3 +214,29 @@
 - [ ] 检查图片体积：`find src/static/editorial -maxdepth 1 -type f -print0 | xargs -0 du -h`。
 - [ ] 运行 `git status --short`，确认无意外文件。
 - [ ] 若验证产生必要修正，按 `git status --short` 列出的具体文件执行 `git add <files> && git commit -m "fix: finalize miniapp editorial ui verification"`；若工作区干净则不创建空提交。
+
+---
+
+## Chunk 7：首轮验收后的视觉层次深化
+
+### Task 15：首页层次深化
+
+**Files:** `src/pages/index/index.vue`, `scripts/ui-compat.test.mjs`
+
+- [ ] 先写失败断言：全幅/重叠 hero 层、非交互悬浮徽章层、不同尺寸 Bento 区块、章节背景层、装饰层 `pointer-events: none`、平板双栏规则、reduced-motion。
+- [ ] 运行 `node scripts/ui-compat.test.mjs`，预期缺少深化结构而 FAIL。
+- [ ] 保留唯一主 CTA、三个原有导航函数和本地推荐课程数据；只调整模板层次与 CSS。
+- [ ] 首页图片与文字形成叠层，但正文对比度保持 AA，按钮层级高于装饰层。
+- [ ] 运行 `node scripts/ui-compat.test.mjs && npm run test:config && npm run build:h5 && npm run build:mp-weixin`，预期全部 PASS。
+- [ ] 提交：`git add src/pages/index/index.vue scripts/ui-compat.test.mjs && git commit -m "feat: enrich homepage editorial depth"`。
+
+### Task 16：答题页层次深化
+
+**Files:** `src/pages/test/test.vue`, `scripts/ui-compat.test.mjs`
+
+- [ ] 先写失败断言：三中心氛围 class、选项编号/侧边强调/选中填充、题目切换动效、reduced-motion、768px 双栏。
+- [ ] 运行 `node scripts/ui-compat.test.mjs`，预期缺少深化样式而 FAIL。
+- [ ] 根据现有 `questionVisualCenter(step)` 只派生展示 class，不改映射和评分。
+- [ ] 保留焦点移动、live region、220ms 最终反馈、按钮语义和 88rpx 触控区。
+- [ ] 运行 `node scripts/ui-compat.test.mjs && npm run test:config && npm run build:h5 && npm run build:mp-weixin`，预期全部 PASS。
+- [ ] 提交：`git add src/pages/test/test.vue scripts/ui-compat.test.mjs && git commit -m "feat: enrich quiz visual rhythm"`。
