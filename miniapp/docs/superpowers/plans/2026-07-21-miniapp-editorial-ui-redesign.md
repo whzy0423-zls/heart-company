@@ -223,11 +223,12 @@
 
 **Files:** `src/pages/index/index.vue`, `scripts/ui-compat.test.mjs`
 
-- [ ] 先写失败断言：全幅/重叠 hero 层、非交互悬浮徽章层、不同尺寸 Bento 区块、章节背景层、装饰层 `pointer-events: none`、平板双栏规则、reduced-motion。
+- [ ] 先写失败断言：全幅/重叠 hero 层、非交互悬浮徽章层、不同尺寸 Bento 区块、章节背景层、装饰层同时具备 `pointer-events: none` 与 `aria-hidden="true"`、平板双栏规则、reduced-motion；并禁止全页 `filter`/`backdrop-filter` 和持续纹理动画。
 - [ ] 运行 `node scripts/ui-compat.test.mjs`，预期缺少深化结构而 FAIL。
 - [ ] 保留唯一主 CTA、三个原有导航函数和本地推荐课程数据；只调整模板层次与 CSS。
 - [ ] 首页图片与文字形成叠层，但正文对比度保持 AA，按钮层级高于装饰层。
 - [ ] 运行 `node scripts/ui-compat.test.mjs && npm run test:config && npm run build:h5 && npm run build:mp-weixin`，预期全部 PASS。
+- [ ] 启动 `npm run dev:h5 -- --host 127.0.0.1 --port 5176`，分别以 375×812、390×844、768×1024 视口检查首页并保存截图；确认无横向滚动、hero 文本有高对比承载层、Bento 尺度明显不同、三个导航按钮可点击且 Tab 可聚焦、装饰层不截获事件。
 - [ ] 提交：`git add src/pages/index/index.vue scripts/ui-compat.test.mjs && git commit -m "feat: enrich homepage editorial depth"`。
 
 ### Task 16：答题页层次深化
@@ -239,4 +240,5 @@
 - [ ] 根据现有 `questionVisualCenter(step)` 只派生展示 class，不改映射和评分。
 - [ ] 保留焦点移动、live region、220ms 最终反馈、按钮语义和 88rpx 触控区。
 - [ ] 运行 `node scripts/ui-compat.test.mjs && npm run test:config && npm run build:h5 && npm run build:mp-weixin`，预期全部 PASS。
+- [ ] 复用 `http://127.0.0.1:5176/#/pages/test/test`，分别以 375×812、390×844、768×1024 视口检查性别页和至少一题答题状态并保存截图；确认插画仍为辅助层、前三个选项可见或可自然滚动、中心主题下文字对比度达到 AA、选项可点击/Tab 聚焦、无横向滚动。
 - [ ] 提交：`git add src/pages/test/test.vue scripts/ui-compat.test.mjs && git commit -m "feat: enrich quiz visual rhythm"`。
