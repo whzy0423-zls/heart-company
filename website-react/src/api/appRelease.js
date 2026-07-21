@@ -32,7 +32,12 @@ export async function getLatestAppRelease({
         signal,
       },
     )
-    const body = await response.json().catch(() => ({}))
+    let body = {}
+    try {
+      body = await response.json()
+    } catch (error) {
+      if (error?.name === 'AbortError') throw error
+    }
 
     if (!response.ok || body?.code !== 0) {
       throw new AppReleaseAPIError(LOAD_ERROR_MESSAGE, { status: response.status })

@@ -681,6 +681,7 @@ section.block { padding: clamp(46px, 6.5vw, 92px) 0; }
 
 /* 减少动效偏好 */
 @media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
 
@@ -1676,7 +1677,7 @@ img[data-zoom] { cursor: zoom-in; }
 .app-download__action:disabled { cursor: not-allowed; opacity: .5; }
 .app-download__retry { color: var(--blue); background: rgba(43,127,255,.08); }
 .app-download__action-placeholder { min-height: 44px; display: grid; place-items: center; padding: 10px; color: var(--muted); text-align: center; }
-.app-download__qr-space { text-align: center; color: var(--muted); font-size: 13px; }
+.app-download__qr-space { min-height: 260px; text-align: center; color: var(--muted); font-size: 13px; }
 .app-download__qr-frame { width: 224px; height: 224px; display: grid; place-items: center; margin: 0 auto 10px; padding: 10px; border-radius: 16px; background: #fff; box-shadow: var(--shadow-sm); }
 .app-download__qr-loading, .app-download__qr-fallback { padding: 16px; }
 .app-download__device-note { min-height: 76px; display: grid; place-items: center; padding: 16px; border-radius: 12px; background: rgba(37,179,101,.07); }
@@ -1687,6 +1688,7 @@ img[data-zoom] { cursor: zoom-in; }
   .app-download__grid { grid-template-columns: 1fr; }
   .app-download__content { min-height: 460px; }
   .app-download__facts { grid-template-columns: 1fr; }
+  .app-download__qr-space { min-height: 260px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

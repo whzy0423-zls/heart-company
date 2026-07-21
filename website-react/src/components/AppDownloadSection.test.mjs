@@ -99,3 +99,21 @@ test('uses reduced-motion-aware hash scrolling in the global layout', () => {
   assert.match(layoutSource, /matchMedia\(['"]\(prefers-reduced-motion: reduce\)['"]\)/)
   assert.match(layoutSource, /behavior:\s*reduceMotion\s*\?\s*['"]auto['"]\s*:\s*['"]smooth['"]/)
 })
+
+test('disables native smooth scrolling for reduced-motion users', () => {
+  assert.match(
+    cssSource,
+    /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*html\s*\{[^}]*scroll-behavior:\s*auto;/s,
+  )
+})
+
+test('reserves the published QR footprint across mobile loading and error states', () => {
+  assert.match(
+    cssSource,
+    /\.app-download__qr-space\s*\{[^}]*min-height:\s*26\dpx;/s,
+  )
+  assert.match(
+    cssSource,
+    /@media\s*\(max-width:\s*(?:760|768)px\)[\s\S]*\.app-download__qr-space\s*\{[^}]*min-height:\s*26\dpx;/s,
+  )
+})

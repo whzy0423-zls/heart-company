@@ -88,6 +88,23 @@ test('preserves AbortError unchanged', async () => {
   )
 })
 
+test('preserves AbortError raised while reading the response body', async () => {
+  const abortError = new DOMException('The operation was aborted', 'AbortError')
+
+  await assert.rejects(
+    getLatestAppRelease({
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        async json() {
+          throw abortError
+        },
+      }),
+    }),
+    (error) => error === abortError,
+  )
+})
+
 test('wraps network failures in a safe API error', async () => {
   await assert.rejects(
     getLatestAppRelease({
