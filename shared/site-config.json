@@ -77,6 +77,12 @@
           "to": "#enterprise",
           "type": "anchor",
           "variant": "ghost"
+        },
+        {
+          "label": "下载 App",
+          "to": "#download-app",
+          "type": "anchor",
+          "variant": "ghost"
         }
       ],
       "eyebrow": "基础介绍",
@@ -97,6 +103,25 @@
         }
       ],
       "title": "九型芯之力"
+    },
+    "appDownload": {
+      "androidButtonText": "下载 Android 版",
+      "eyebrow": "官方 App",
+      "features": [
+        "官方安装包，版本信息清晰可查",
+        "课程与成长内容随时随地学习",
+        "持续更新，陪伴你的长期成长"
+      ],
+      "installSteps": [
+        "下载 APK 后打开安装文件",
+        "如系统提示，请允许本次安装来源",
+        "按提示完成安装并打开 App"
+      ],
+      "iosComingSoonText": "iOS 敬请期待",
+      "lead": "把九型学习、练习与成长内容装进口袋，随时回到自己的成长节奏。",
+      "retryText": "重新加载",
+      "title": "九型芯之力 App",
+      "unavailableText": "Android 版本暂未开放下载"
     },
     "quotes": {
       "eyebrow": "老韩语录",
@@ -201,6 +226,11 @@
         "type": "route"
       },
       {
+        "label": "下载 App",
+        "to": "/#download-app",
+        "type": "hash"
+      },
+      {
         "label": "企业",
         "to": "/#enterprise",
         "type": "hash"
@@ -256,6 +286,11 @@
         "label": "小游戏",
         "to": "/game",
         "type": "route"
+      },
+      {
+        "label": "下载 App",
+        "to": "/#download-app",
+        "type": "hash"
       },
       {
         "label": "企业",

@@ -33,7 +33,8 @@ export default function Layout() {
       // 等懒加载页面渲染完成
       const t = setTimeout(() => {
         const el = document.getElementById(id)
-        if (el) el.scrollIntoView({ behavior: 'smooth' })
+        const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        if (el) el.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth' })
       }, 60)
       return () => clearTimeout(t)
     }
