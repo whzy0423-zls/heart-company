@@ -30,6 +30,7 @@ export function isProtectedUploadAssetSource(source?: string) {
 
 function isProtectedUploadAssetPath(pathname: string) {
   return (
+    pathname.startsWith('/api/app-release-icons/') ||
     pathname.startsWith('/api/upload-assets/') ||
     pathname.startsWith('/api/uploads/')
   );

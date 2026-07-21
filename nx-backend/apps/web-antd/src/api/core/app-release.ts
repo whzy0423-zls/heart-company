@@ -2,9 +2,11 @@ import { requestClient } from '#/api/request';
 
 export type AppReleaseStatus = 'archived' | 'draft' | 'published';
 export interface AppRelease {
-  createdAt: string; fileAvailable: boolean; fileName: string; fileSize: number;
-  id: number; platform: 'android'; publishedAt: null | string; releaseNotes: string;
-  sha256: string; status: AppReleaseStatus; versionCode: number; versionName: string;
+  appName: string; createdAt: string; fileAvailable: boolean; fileName: string;
+  fileSize: number; iconUrl: string; id: number; packageName: string;
+  platform: 'android'; publishedAt: null | string; releaseNotes: string;
+  sha256: string; status: AppReleaseStatus; versionCode: number;
+  versionName: string;
 }
 export interface AppReleaseListResult {
   current: AppRelease | null; items: AppRelease[]; page: number; pageSize: number;

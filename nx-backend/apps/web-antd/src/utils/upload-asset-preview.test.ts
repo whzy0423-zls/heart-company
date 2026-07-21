@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
 import { effectScope } from 'vue';
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createUploadAssetObjectURL,
@@ -36,6 +37,31 @@ describe('upload asset preview urls', () => {
         Authorization: 'Bearer abc',
       },
     });
+  });
+
+  it('fetches protected app release icons with Authorization', async () => {
+    const blob = new Blob(['icon'], { type: 'image/png' });
+    const fetchMock = vi.fn().mockResolvedValue({
+      blob: () => Promise.resolve(blob),
+      ok: true,
+    });
+    globalThis.fetch = fetchMock;
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:app-release-icon');
+
+    const url = await createUploadAssetObjectURL(
+      '/api/app-release-icons/com.example.app.png',
+      'release-token',
+    );
+
+    expect(url).toBe('blob:app-release-icon');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/app-release-icons/com.example.app.png',
+      {
+        headers: {
+          Authorization: 'Bearer release-token',
+        },
+      },
+    );
   });
 
   it('leaves public urls unchanged', async () => {
@@ -93,6 +119,28 @@ describe('upload asset preview urls', () => {
     ).toBe(true);
     expect(
       isProtectedUploadAssetSource('https://cdn.example.com/api/uploads/logo.png'),
+    ).toBe(false);
+  });
+
+  it('recognizes only relative and same-origin app release icon urls as protected', () => {
+    expect(
+      isProtectedUploadAssetSource(
+        '/api/app-release-icons/com.example.app.png',
+      ),
+    ).toBe(true);
+    expect(
+      isProtectedUploadAssetSource(
+        `${window.location.origin}/api/app-release-icons/com.example.app.png`,
+      ),
+    ).toBe(true);
+    expect(
+      isProtectedUploadAssetSource(
+        'https://cdn.example.com/api/app-release-icons/com.example.app.png',
+      ),
+    ).toBe(false);
+    expect(isProtectedUploadAssetSource('/api/app-release-icons')).toBe(false);
+    expect(
+      isProtectedUploadAssetSource('/api/app-release-icons-unsafe/icon.png'),
     ).toBe(false);
   });
 
