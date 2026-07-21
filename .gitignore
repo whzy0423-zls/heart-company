@@ -28,3 +28,5 @@ certs/
 # 站点配置备份
 site-config.backup.json
 .ace-tool/
+.worktrees/
+**/.superpowers/
