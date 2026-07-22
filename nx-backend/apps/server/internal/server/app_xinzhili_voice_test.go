@@ -424,6 +424,31 @@ func TestAppXinzhiliVoiceTurnPersistsOnlyTextPairAndPreferences(t *testing.T) {
 	if len(storedPreferences) != 1 || storedPreferences[0].Slot != "length.detail_level" {
 		t.Fatalf("saved preferences = %+v", storedPreferences)
 	}
+
+	var ordinaryInputs []rag.GenerateInput
+	ordinaryGenerator := &controlledAppChatStreamingGenerator{
+		generateStream: func(_ context.Context, input rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+			ordinaryInputs = append(ordinaryInputs, input)
+			if err := emit("普通聊天回答"); err != nil {
+				return "", err
+			}
+			return "普通聊天回答", nil
+		},
+	}
+	ordinary := newAppChatStreamServer(store, ordinaryGenerator)
+	ordinary.userPreferences = preferences
+	performAppChatPreferenceRequest(t, ordinary, 7, 42, "换到普通聊天继续")
+	performAppChatPreferenceRequest(t, ordinary, 8, 43, "另一个用户的问题")
+
+	if len(ordinaryInputs) != 2 {
+		t.Fatalf("ordinary chat model inputs = %d, want 2", len(ordinaryInputs))
+	}
+	if strings.Join(ordinaryInputs[0].UserPreferences, "|") != "回答简短，避免长篇大论" {
+		t.Fatalf("ordinary chat did not load xinzhili preference: %+v", ordinaryInputs[0])
+	}
+	if len(ordinaryInputs[1].UserPreferences) != 0 {
+		t.Fatalf("xinzhili preference leaked to another user: %+v", ordinaryInputs[1])
+	}
 }
 
 func readyXinzhiliVoiceConfig() modelconfig.XinzhiliVoiceConfig {

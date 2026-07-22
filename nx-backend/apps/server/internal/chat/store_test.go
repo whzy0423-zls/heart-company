@@ -4,12 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"nine-xing/nx-backend/apps/server/internal/db"
+	"nine-xing/nx-backend/apps/server/internal/testutil"
 )
 
 func TestListRecentMessagesFiltersInvalidTailBeforeLimiting(t *testing.T) {
@@ -69,6 +76,142 @@ func TestXinzhiliSceneSessionIsExcludedFromRegularSessionList(t *testing.T) {
 	}
 }
 
+func TestStorePostgresKeepsXinzhiliSceneAndTextMessagesHidden(t *testing.T) {
+	database := openChatBoundaryTestDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	suffix := time.Now().UnixNano()
+	var userID, cardID int64
+	if err := database.QueryRowContext(ctx,
+		`INSERT INTO app_users (phone) VALUES ($1) RETURNING id`,
+		fmt.Sprintf("chat-boundary-%d", suffix),
+	).Scan(&userID); err != nil {
+		t.Fatalf("create app user: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_, _ = database.ExecContext(cleanupCtx, `DELETE FROM app_users WHERE id = $1`, userID)
+	})
+	if err := database.QueryRowContext(ctx,
+		`INSERT INTO app_user_cards (app_user_id, card_type, name) VALUES ($1, 'primary', '测试卡片') RETURNING id`,
+		userID,
+	).Scan(&cardID); err != nil {
+		t.Fatalf("create app user card: %v", err)
+	}
+
+	store := NewStore(database)
+	regular, err := store.GetOrCreateSession(ctx, userID, cardID)
+	if err != nil {
+		t.Fatalf("GetOrCreateSession: %v", err)
+	}
+	xinzhili, err := store.GetOrCreateSceneSession(ctx, userID, cardID, "xinzhili_voice")
+	if err != nil {
+		t.Fatalf("GetOrCreateSceneSession: %v", err)
+	}
+	if regular.ID == xinzhili.ID {
+		t.Fatalf("chat and xinzhili scenes shared session %d", regular.ID)
+	}
+
+	againRegular, err := store.GetOrCreateSceneSession(ctx, userID, cardID, "chat")
+	if err != nil {
+		t.Fatalf("resume chat scene: %v", err)
+	}
+	againXinzhili, err := store.GetOrCreateSceneSession(ctx, userID, cardID, "xinzhili_voice")
+	if err != nil {
+		t.Fatalf("resume xinzhili scene: %v", err)
+	}
+	if againRegular.ID != regular.ID || againXinzhili.ID != xinzhili.ID {
+		t.Fatalf("scene resume crossed boundaries: chat=%d/%d xinzhili=%d/%d", regular.ID, againRegular.ID, xinzhili.ID, againXinzhili.ID)
+	}
+
+	sessions, err := store.ListSessions(ctx, userID)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != regular.ID {
+		t.Fatalf("regular session list = %+v, want only chat session %d", sessions, regular.ID)
+	}
+
+	sources := json.RawMessage(`[{"id":"kb-1","title":"知识"}]`)
+	if _, err := store.SavePair(ctx, xinzhili.ID, "我最近总是着急", "先停一下。", sources); err != nil {
+		t.Fatalf("SavePair: %v", err)
+	}
+	rows, err := database.QueryContext(ctx,
+		`SELECT role, content, sources, message_type, audio_asset_id, audio_duration_ms, transcript
+		 FROM app_chat_messages WHERE session_id = $1 ORDER BY id`,
+		xinzhili.ID,
+	)
+	if err != nil {
+		t.Fatalf("read saved messages: %v", err)
+	}
+	defer rows.Close()
+
+	type storedMessage struct {
+		role, content, messageType, transcript string
+		sources                                json.RawMessage
+		audioAssetID                           sql.NullInt64
+		audioDurationMs                        int
+	}
+	var messages []storedMessage
+	for rows.Next() {
+		var message storedMessage
+		if err := rows.Scan(&message.role, &message.content, &message.sources, &message.messageType, &message.audioAssetID, &message.audioDurationMs, &message.transcript); err != nil {
+			t.Fatalf("scan saved message: %v", err)
+		}
+		messages = append(messages, message)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate saved messages: %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("saved messages = %+v, want text pair", messages)
+	}
+	wantContents := []string{"我最近总是着急", "先停一下。"}
+	wantRoles := []string{"user", "assistant"}
+	for i, message := range messages {
+		if message.role != wantRoles[i] || message.content != wantContents[i] || message.messageType != "text" {
+			t.Fatalf("saved message %d = %+v", i, message)
+		}
+		if message.audioAssetID.Valid || message.audioDurationMs != 0 || message.transcript != "" {
+			t.Fatalf("saved text message %d contains voice columns: %+v", i, message)
+		}
+	}
+	if string(messages[0].sources) != "[]" {
+		t.Fatalf("user sources = %s, want []", messages[0].sources)
+	}
+	var gotSources, wantSources any
+	if err := json.Unmarshal(messages[1].sources, &gotSources); err != nil {
+		t.Fatalf("decode assistant sources: %v", err)
+	}
+	if err := json.Unmarshal(sources, &wantSources); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotSources, wantSources) {
+		t.Fatalf("assistant sources = %s, want %s", messages[1].sources, sources)
+	}
+}
+
+func openChatBoundaryTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set TEST_DATABASE_URL to run chat boundary PostgreSQL integration tests")
+	}
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	database, err := db.Open(ctx, dsn, "chat_boundary_test", "123456")
+	if err != nil {
+		t.Fatalf("open test database: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	return database
+}
+
 const sceneSessionDriverName = "chat_scene_session_test"
 
 var registerSceneSessionDriverOnce sync.Once
@@ -90,19 +233,20 @@ func (sceneSessionConn) Close() error                        { return nil }
 func (sceneSessionConn) Begin() (driver.Tx, error)           { return nil, driver.ErrSkip }
 func (sceneSessionConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	now := time.Now()
-	switch {
-	case strings.Contains(query, "FROM app_chat_sessions") && strings.Contains(query, "scene = $3"):
+	normalized := strings.Join(strings.Fields(query), " ")
+	switch normalized {
+	case "SELECT id, app_user_id, card_id, title, updated_at, create_time FROM app_chat_sessions WHERE app_user_id = $1 AND card_id = $2 AND scene = $3 ORDER BY updated_at DESC LIMIT 1":
 		if len(args) != 3 || args[0].Value != int64(7) || args[1].Value != int64(9) || args[2].Value != "xinzhili_voice" {
 			return nil, errors.New("unexpected scene session arguments")
 		}
 		return &singleSessionRows{values: []driver.Value{int64(42), int64(7), int64(9), "", now, now}}, nil
-	case strings.Contains(query, "FROM app_chat_sessions") && strings.Contains(query, "scene = 'chat'"):
+	case "SELECT id, app_user_id, card_id, title, updated_at, create_time FROM app_chat_sessions WHERE app_user_id = $1 AND scene = 'chat' ORDER BY updated_at DESC":
 		if len(args) != 1 || args[0].Value != int64(7) {
 			return nil, errors.New("unexpected regular session list arguments")
 		}
 		return &singleSessionRows{values: []driver.Value{int64(43), int64(7), int64(9), "普通聊天", now, now}}, nil
 	default:
-		return nil, errors.New("session query must keep xinzhili and regular chat scenes isolated")
+		return nil, fmt.Errorf("unexpected session query: %s", normalized)
 	}
 }
 
