@@ -38,7 +38,7 @@ func TestListRecentMessagesFiltersInvalidTailBeforeLimiting(t *testing.T) {
 	}
 }
 
-func TestGetOrCreateSceneSessionScopesLookupByScene(t *testing.T) {
+func TestXinzhiliSceneSessionIsExcludedFromRegularSessionList(t *testing.T) {
 	registerSceneSessionDriver()
 	database, err := sql.Open(sceneSessionDriverName, "")
 	if err != nil {
@@ -46,12 +46,26 @@ func TestGetOrCreateSceneSessionScopesLookupByScene(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = database.Close() })
 
-	session, err := NewStore(database).GetOrCreateSceneSession(context.Background(), 7, 9, "xinzhili_voice")
+	store := NewStore(database)
+	session, err := store.GetOrCreateSceneSession(context.Background(), 7, 9, "xinzhili_voice")
 	if err != nil {
 		t.Fatalf("GetOrCreateSceneSession returned error: %v", err)
 	}
 	if session.ID != 42 || session.AppUserID != 7 || session.CardID != 9 {
 		t.Fatalf("unexpected session: %+v", session)
+	}
+
+	sessions, err := store.ListSessions(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("ListSessions returned error: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != 43 {
+		t.Fatalf("regular session list = %+v, want only chat session 43", sessions)
+	}
+	for _, listed := range sessions {
+		if listed.ID == session.ID {
+			t.Fatalf("xinzhili scene session %d leaked into regular session list", session.ID)
+		}
 	}
 }
 
@@ -75,14 +89,21 @@ func (sceneSessionConn) Prepare(string) (driver.Stmt, error) { return nil, drive
 func (sceneSessionConn) Close() error                        { return nil }
 func (sceneSessionConn) Begin() (driver.Tx, error)           { return nil, driver.ErrSkip }
 func (sceneSessionConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-	if !strings.Contains(query, "FROM app_chat_sessions") || !strings.Contains(query, "scene = $3") {
-		return nil, errors.New("scene session lookup must filter by scene")
-	}
-	if len(args) != 3 || args[0].Value != int64(7) || args[1].Value != int64(9) || args[2].Value != "xinzhili_voice" {
-		return nil, errors.New("unexpected scene session arguments")
-	}
 	now := time.Now()
-	return &singleSessionRows{values: []driver.Value{int64(42), int64(7), int64(9), "", now, now}}, nil
+	switch {
+	case strings.Contains(query, "FROM app_chat_sessions") && strings.Contains(query, "scene = $3"):
+		if len(args) != 3 || args[0].Value != int64(7) || args[1].Value != int64(9) || args[2].Value != "xinzhili_voice" {
+			return nil, errors.New("unexpected scene session arguments")
+		}
+		return &singleSessionRows{values: []driver.Value{int64(42), int64(7), int64(9), "", now, now}}, nil
+	case strings.Contains(query, "FROM app_chat_sessions") && strings.Contains(query, "scene = 'chat'"):
+		if len(args) != 1 || args[0].Value != int64(7) {
+			return nil, errors.New("unexpected regular session list arguments")
+		}
+		return &singleSessionRows{values: []driver.Value{int64(43), int64(7), int64(9), "普通聊天", now, now}}, nil
+	default:
+		return nil, errors.New("session query must keep xinzhili and regular chat scenes isolated")
+	}
 }
 
 type singleSessionRows struct {

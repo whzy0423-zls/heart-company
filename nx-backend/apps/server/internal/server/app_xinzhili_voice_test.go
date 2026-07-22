@@ -380,6 +380,8 @@ func TestAppXinzhiliVoiceTurnDoesNotGeneratePsychologyForBlankTranscript(t *test
 func TestAppXinzhiliVoiceTurnPersistsOnlyTextPairAndPreferences(t *testing.T) {
 	store := &xinzhiliEphemeralAudioStoreSpy{fakeAppChatStreamStore: newFakeAppChatStreamStore(), t: t}
 	preferences := newFakeAppChatPreferenceStore()
+	preferenceApplyCalls := 0
+	preferences.onApply = func() { preferenceApplyCalls++ }
 	s := newSuccessfulXinzhiliVoiceServer(t)
 	s.appChat = store
 	s.userPreferences = preferences
@@ -406,6 +408,14 @@ func TestAppXinzhiliVoiceTurnPersistsOnlyTextPairAndPreferences(t *testing.T) {
 	}
 	if len(messages) != 2 || messages[0].Content != "以后回答短一点，我最近总是着急" || messages[1].Content != "先停一下。再感受身体。" {
 		t.Fatalf("saved text pair = %+v", messages)
+	}
+	for _, message := range messages {
+		if message.MessageType == "voice" || message.AudioAssetID != 0 || message.AudioDurationMs != 0 || message.AudioURL != "" || message.Transcript != "" {
+			t.Fatalf("xinzhili message contains voice-only storage fields: %+v", message)
+		}
+	}
+	if preferenceApplyCalls != 1 {
+		t.Fatalf("persistAppChatPreferences Apply calls = %d, want 1", preferenceApplyCalls)
 	}
 	storedPreferences, err := preferences.List(context.Background(), 7)
 	if err != nil {
