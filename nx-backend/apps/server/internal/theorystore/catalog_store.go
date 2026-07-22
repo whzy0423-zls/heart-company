@@ -20,6 +20,8 @@ var (
 	ErrDuplicateHashMismatch  = errors.New("duplicate source files have different sha256")
 	ErrDuplicateCycle         = errors.New("duplicate source file cycle")
 	ErrDuplicateCrossLibrary  = errors.New("duplicate source files belong to different libraries")
+	ErrCanonicalWorkSelf      = errors.New("source work cannot be its own canonical work")
+	ErrCatalogScopeChanged    = errors.New("source catalog library scope changed")
 	ErrInvalidExtractionState = errors.New("invalid extraction status update")
 )
 
@@ -72,6 +74,7 @@ func (s *Store) RegisterWork(parent context.Context, work SourceWork) (SourceWor
 			metadata = EXCLUDED.metadata,
 			status = EXCLUDED.status,
 			update_time = now()
+		WHERE theory_source_works.id IS DISTINCT FROM EXCLUDED.canonical_work_id
 		RETURNING id, library_id, canonical_key, title, original_title, authors, editors, translators,
 			publisher, published_year, edition, isbn, work_type, authority_level, epistemic_status,
 			copyright_scope, canonical_work_id, metadata, status, create_time, update_time`,
@@ -81,6 +84,9 @@ func (s *Store) RegisterWork(parent context.Context, work SourceWork) (SourceWor
 		work.EpistemicStatus, work.CopyrightScope, work.CanonicalWorkID, jsonArgument(work.Metadata, `{}`), work.Status,
 	)
 	registered, err := scanWork(row)
+	if errors.Is(err, sql.ErrNoRows) && work.CanonicalWorkID != nil {
+		return SourceWork{}, fmt.Errorf("register source work: %w", ErrCanonicalWorkSelf)
+	}
 	if err != nil {
 		return SourceWork{}, fmt.Errorf("register source work: %w", err)
 	}
@@ -112,12 +118,48 @@ func (s *Store) RegisterFile(parent context.Context, file SourceFile) (SourceFil
 	if err := tx.QueryRowContext(ctx, `
 		SELECT library_id
 		FROM theory_source_works
-		WHERE id = $1
-		FOR SHARE`, file.WorkID).Scan(&libraryID); err != nil {
+		WHERE id = $1`, file.WorkID).Scan(&libraryID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return SourceFile{}, fmt.Errorf("register source file work %d: %w", file.WorkID, ErrWorkNotFound)
 		}
 		return SourceFile{}, fmt.Errorf("register source file: find work: %w", err)
+	}
+
+	libraryScope := []int64{libraryID}
+	var initialTargetLibraryID int64
+	if file.DuplicateOfFileID != nil {
+		var targetID int64
+		var targetSHA string
+		err := tx.QueryRowContext(ctx, `
+			SELECT file.id, work.library_id, file.sha256
+			FROM theory_source_files file
+			JOIN theory_source_works work ON work.id = file.work_id
+			WHERE file.id = $1`, *file.DuplicateOfFileID).Scan(&targetID, &initialTargetLibraryID, &targetSHA)
+		if errors.Is(err, sql.ErrNoRows) {
+			return SourceFile{}, fmt.Errorf("register source file duplicate target %d: %w", *file.DuplicateOfFileID, ErrFileNotFound)
+		}
+		if err != nil {
+			return SourceFile{}, fmt.Errorf("register source file: find duplicate target: %w", err)
+		}
+		libraryScope = append(libraryScope, initialTargetLibraryID)
+	}
+	if err := lockTheoryLibraries(ctx, tx, libraryScope...); err != nil {
+		return SourceFile{}, fmt.Errorf("register source file: lock libraries: %w", err)
+	}
+
+	var lockedLibraryID int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT library_id
+		FROM theory_source_works
+		WHERE id = $1
+		FOR SHARE`, file.WorkID).Scan(&lockedLibraryID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return SourceFile{}, fmt.Errorf("register source file work %d: %w", file.WorkID, ErrWorkNotFound)
+		}
+		return SourceFile{}, fmt.Errorf("register source file: lock work: %w", err)
+	}
+	if lockedLibraryID != libraryID {
+		return SourceFile{}, fmt.Errorf("register source file: %w", ErrCatalogScopeChanged)
 	}
 
 	if file.DuplicateOfFileID != nil {
@@ -128,14 +170,17 @@ func (s *Store) RegisterFile(parent context.Context, file SourceFile) (SourceFil
 			FROM theory_source_files file
 			JOIN theory_source_works work ON work.id = file.work_id
 			WHERE file.id = $1
-			FOR UPDATE OF file`, *file.DuplicateOfFileID).Scan(&targetID, &targetLibraryID, &targetSHA)
+			FOR UPDATE OF file, work`, *file.DuplicateOfFileID).Scan(&targetID, &targetLibraryID, &targetSHA)
 		if errors.Is(err, sql.ErrNoRows) {
 			return SourceFile{}, fmt.Errorf("register source file duplicate target %d: %w", *file.DuplicateOfFileID, ErrFileNotFound)
 		}
 		if err != nil {
-			return SourceFile{}, fmt.Errorf("register source file: find duplicate target: %w", err)
+			return SourceFile{}, fmt.Errorf("register source file: lock duplicate target: %w", err)
 		}
-		if targetLibraryID != libraryID {
+		if targetLibraryID != initialTargetLibraryID {
+			return SourceFile{}, fmt.Errorf("register source file: %w", ErrCatalogScopeChanged)
+		}
+		if targetLibraryID != lockedLibraryID {
 			return SourceFile{}, fmt.Errorf("register source file: %w", ErrDuplicateCrossLibrary)
 		}
 		if targetSHA != file.SHA256 {
@@ -223,51 +268,36 @@ func (s *Store) MarkDuplicate(parent context.Context, fileID, duplicateOfFileID 
 		return fmt.Errorf("mark duplicate: %w", ErrDuplicateSelf)
 	}
 
-	rows, err := tx.QueryContext(ctx, `
-		SELECT file.id, file.work_id, work.library_id, file.sha256
-		FROM theory_source_files file
-		JOIN theory_source_works work ON work.id = file.work_id
-		WHERE file.id IN ($1, $2)
-		ORDER BY file.id
-		FOR UPDATE OF file, work`, fileID, duplicateOfFileID)
+	discovered, err := loadDuplicateFiles(ctx, tx, fileID, duplicateOfFileID, false)
 	if err != nil {
-		return fmt.Errorf("mark duplicate: lock files: %w", err)
+		return fmt.Errorf("mark duplicate: discover files: %w", err)
 	}
-	type lockedFile struct {
-		workID, libraryID int64
-		sha256            string
-	}
-	locked := make(map[int64]lockedFile, 2)
-	for rows.Next() {
-		var id int64
-		var item lockedFile
-		if err := rows.Scan(&id, &item.workID, &item.libraryID, &item.sha256); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("mark duplicate: scan locked file: %w", err)
-		}
-		locked[id] = item
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("mark duplicate: close locked files: %w", err)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("mark duplicate: read locked files: %w", err)
-	}
-	source, sourceFound := locked[fileID]
-	target, targetFound := locked[duplicateOfFileID]
+	source, sourceFound := discovered[fileID]
+	target, targetFound := discovered[duplicateOfFileID]
 	if !sourceFound || !targetFound {
 		return fmt.Errorf("mark duplicate: %w", ErrFileNotFound)
 	}
-	if source.libraryID != target.libraryID {
+	if err := lockTheoryLibraries(ctx, tx, source.libraryID, target.libraryID); err != nil {
+		return fmt.Errorf("mark duplicate: lock libraries: %w", err)
+	}
+
+	locked, err := loadDuplicateFiles(ctx, tx, fileID, duplicateOfFileID, true)
+	if err != nil {
+		return fmt.Errorf("mark duplicate: lock files: %w", err)
+	}
+	lockedSource, sourceFound := locked[fileID]
+	lockedTarget, targetFound := locked[duplicateOfFileID]
+	if !sourceFound || !targetFound {
+		return fmt.Errorf("mark duplicate: %w", ErrFileNotFound)
+	}
+	if lockedSource.libraryID != source.libraryID || lockedTarget.libraryID != target.libraryID {
+		return fmt.Errorf("mark duplicate: %w", ErrCatalogScopeChanged)
+	}
+	if lockedSource.libraryID != lockedTarget.libraryID {
 		return fmt.Errorf("mark duplicate: %w", ErrDuplicateCrossLibrary)
 	}
-	if source.sha256 != target.sha256 {
+	if lockedSource.sha256 != lockedTarget.sha256 {
 		return fmt.Errorf("mark duplicate: %w", ErrDuplicateHashMismatch)
-	}
-	var advisoryLockResult any
-	if err := tx.QueryRowContext(ctx, `
-		SELECT lock_theory_libraries(ARRAY[$1]::BIGINT[])`, source.libraryID).Scan(&advisoryLockResult); err != nil {
-		return fmt.Errorf("mark duplicate: lock library: %w", err)
 	}
 
 	var cycle bool
@@ -326,7 +356,44 @@ func (s *Store) UpdateExtractionStatus(parent context.Context, fileID int64, sta
 		errorCode = ""
 		errorMessage = ""
 	}
-	result, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("update extraction status: begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var libraryID int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT work.library_id
+		FROM theory_source_files file
+		JOIN theory_source_works work ON work.id = file.work_id
+		WHERE file.id = $1`, fileID).Scan(&libraryID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("update extraction status: %w", ErrFileNotFound)
+		}
+		return fmt.Errorf("update extraction status: discover file: %w", err)
+	}
+	if err := lockTheoryLibraries(ctx, tx, libraryID); err != nil {
+		return fmt.Errorf("update extraction status: lock library: %w", err)
+	}
+
+	var lockedLibraryID int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT work.library_id
+		FROM theory_source_files file
+		JOIN theory_source_works work ON work.id = file.work_id
+		WHERE file.id = $1
+		FOR UPDATE OF file, work`, fileID).Scan(&lockedLibraryID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("update extraction status: %w", ErrFileNotFound)
+		}
+		return fmt.Errorf("update extraction status: lock file: %w", err)
+	}
+	if lockedLibraryID != libraryID {
+		return fmt.Errorf("update extraction status: %w", ErrCatalogScopeChanged)
+	}
+
+	result, err := tx.ExecContext(ctx, `
 		UPDATE theory_source_files
 		SET extraction_status = $1, extraction_quality = $2, error_code = $3, error_message = $4, update_time = now()
 		WHERE id = $5`, status, quality, errorCode, errorMessage, fileID)
@@ -339,6 +406,9 @@ func (s *Store) UpdateExtractionStatus(parent context.Context, fileID int64, sta
 	}
 	if affected == 0 {
 		return fmt.Errorf("update extraction status: %w", ErrFileNotFound)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("update extraction status: commit: %w", err)
 	}
 	return nil
 }
@@ -395,6 +465,55 @@ func normalizedJSON(value json.RawMessage, fallback string) json.RawMessage {
 
 func jsonArgument(value json.RawMessage, fallback string) string {
 	return string(normalizedJSON(value, fallback))
+}
+
+func lockTheoryLibraries(ctx context.Context, tx *sql.Tx, libraryIDs ...int64) error {
+	var row *sql.Row
+	switch len(libraryIDs) {
+	case 1:
+		row = tx.QueryRowContext(ctx, `SELECT lock_theory_libraries(ARRAY[$1]::BIGINT[])`, libraryIDs[0])
+	case 2:
+		row = tx.QueryRowContext(ctx, `SELECT lock_theory_libraries(ARRAY[$1, $2]::BIGINT[])`, libraryIDs[0], libraryIDs[1])
+	default:
+		return fmt.Errorf("library lock scope must contain one or two ids")
+	}
+	var result any
+	return row.Scan(&result)
+}
+
+type duplicateFileState struct {
+	workID, libraryID int64
+	sha256            string
+}
+
+func loadDuplicateFiles(ctx context.Context, tx *sql.Tx, fileID, duplicateOfFileID int64, lock bool) (map[int64]duplicateFileState, error) {
+	query := `
+		SELECT file.id, file.work_id, work.library_id, file.sha256
+		FROM theory_source_files file
+		JOIN theory_source_works work ON work.id = file.work_id
+		WHERE file.id IN ($1, $2)
+		ORDER BY file.id`
+	if lock {
+		query += ` FOR UPDATE OF file, work`
+	}
+	rows, err := tx.QueryContext(ctx, query, fileID, duplicateOfFileID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	files := make(map[int64]duplicateFileState, 2)
+	for rows.Next() {
+		var id int64
+		var item duplicateFileState
+		if err := rows.Scan(&id, &item.workID, &item.libraryID, &item.sha256); err != nil {
+			return nil, err
+		}
+		files[id] = item
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 
 type rowScanner interface {

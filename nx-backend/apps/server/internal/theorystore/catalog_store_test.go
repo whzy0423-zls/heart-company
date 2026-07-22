@@ -49,16 +49,37 @@ func TestCatalogRegisterWorkUpsertsTrimmedParametersAndScansResult(t *testing.T)
 	}
 }
 
+func TestCatalogRegisterWorkRejectsCanonicalSelfReferenceOnConflict(t *testing.T) {
+	canonicalID := int64(11)
+	db, script := openCatalogDB(t,
+		queryEmptyStep("theory_source_works.id IS DISTINCT FROM EXCLUDED.canonical_work_id", []any{
+			int64(1), "work", "Work", "", `[]`, `[]`, `[]`, "", nil, "", "", "book", 3,
+			"source_text", "metadata_only", canonicalID, `{}`, "registered",
+		}, workColumns()),
+	)
+	work := catalogWork()
+	work.CanonicalWorkID = &canonicalID
+	_, err := NewStore(db).RegisterWork(context.Background(), work)
+	if !errors.Is(err, ErrCanonicalWorkSelf) {
+		t.Fatalf("expected ErrCanonicalWorkSelf, got %v", err)
+	}
+	script.assertDone(t)
+}
+
 func TestCatalogRegisterFileAlwaysInsertsIndependentPhysicalRows(t *testing.T) {
 	now := time.Unix(1_700_000_001, 0).UTC()
 	hash := strings.Repeat("a", 64)
 	db, script := openCatalogDB(t,
 		beginStep(),
 		queryStep("FROM theory_source_works", []any{int64(10)}, []string{"library_id"}, []driver.Value{int64(2)}),
+		queryStep("lock_theory_libraries", []any{int64(2)}, []string{"lock_theory_libraries"}, []driver.Value{nil}),
+		queryStep("FOR SHARE", []any{int64(10)}, []string{"library_id"}, []driver.Value{int64(2)}),
 		queryStep("INSERT INTO theory_source_files", fileInsertArgs(10, "one/file.pdf", hash, nil), fileColumns(), fileValues(101, 10, "one/file.pdf", hash, nil, now)),
 		commitStep(),
 		beginStep(),
 		queryStep("FROM theory_source_works", []any{int64(20)}, []string{"library_id"}, []driver.Value{int64(2)}),
+		queryStep("lock_theory_libraries", []any{int64(2)}, []string{"lock_theory_libraries"}, []driver.Value{nil}),
+		queryStep("FOR SHARE", []any{int64(20)}, []string{"library_id"}, []driver.Value{int64(2)}),
 		queryStep("INSERT INTO theory_source_files", fileInsertArgs(20, "two/file.pdf", hash, nil), fileColumns(), fileValues(102, 20, "two/file.pdf", hash, nil, now)),
 		commitStep(),
 	)
@@ -79,6 +100,7 @@ func TestCatalogRegisterFileAlwaysInsertsIndependentPhysicalRows(t *testing.T) {
 			t.Fatalf("file insert must not deduplicate by hash: %s", call.query)
 		}
 	}
+	assertNoRowLockBeforeAdvisory(t, script)
 	script.assertDone(t)
 }
 
@@ -98,7 +120,10 @@ func TestCatalogRegisterFileExplicitDuplicateUsesSameValidation(t *testing.T) {
 	db, script := openCatalogDB(t,
 		beginStep(),
 		queryStep("FROM theory_source_works", []any{int64(20)}, []string{"library_id"}, []driver.Value{int64(4)}),
-		queryStep("FOR UPDATE OF file", []any{duplicateID}, []string{"id", "library_id", "sha256"}, []driver.Value{duplicateID, int64(4), hash}),
+		queryStep("FROM theory_source_files file", []any{duplicateID}, []string{"id", "library_id", "sha256"}, []driver.Value{duplicateID, int64(4), hash}),
+		queryStep("lock_theory_libraries", []any{int64(4), int64(4)}, []string{"lock_theory_libraries"}, []driver.Value{nil}),
+		queryStep("FOR SHARE", []any{int64(20)}, []string{"library_id"}, []driver.Value{int64(4)}),
+		queryStep("FOR UPDATE OF file, work", []any{duplicateID}, []string{"id", "library_id", "sha256"}, []driver.Value{duplicateID, int64(4), hash}),
 		queryStep("INSERT INTO theory_source_files", fileInsertArgs(20, "copy.pdf", hash, &duplicateID), fileColumns(), fileValues(21, 20, "copy.pdf", hash, &duplicateID, now)),
 		commitStep(),
 	)
@@ -111,6 +136,23 @@ func TestCatalogRegisterFileExplicitDuplicateUsesSameValidation(t *testing.T) {
 	if got.DuplicateOfFileID == nil || *got.DuplicateOfFileID != duplicateID {
 		t.Fatalf("duplicate target not scanned: %+v", got)
 	}
+	assertNoRowLockBeforeAdvisory(t, script)
+	script.assertDone(t)
+}
+
+func TestCatalogRegisterFileRechecksWorkAfterAdvisoryLock(t *testing.T) {
+	db, script := openCatalogDB(t,
+		beginStep(),
+		queryStep("FROM theory_source_works", []any{int64(20)}, []string{"library_id"}, []driver.Value{int64(4)}),
+		queryStep("lock_theory_libraries", []any{int64(4)}, []string{"lock_theory_libraries"}, []driver.Value{nil}),
+		queryEmptyStep("FOR SHARE", []any{int64(20)}, []string{"library_id"}),
+		rollbackStep(),
+	)
+	_, err := NewStore(db).RegisterFile(context.Background(), catalogFile(20, "gone.pdf", strings.Repeat("3", 64)))
+	if !errors.Is(err, ErrWorkNotFound) {
+		t.Fatalf("expected post-lock ErrWorkNotFound, got %v", err)
+	}
+	assertNoRowLockBeforeAdvisory(t, script)
 	script.assertDone(t)
 }
 
@@ -145,10 +187,13 @@ func TestDuplicateMarkSameLibrarySameHashTransactionOrder(t *testing.T) {
 	hash := strings.Repeat("f", 64)
 	db, script := openCatalogDB(t,
 		beginStep(),
-		queryRowsStep("FOR UPDATE", []any{int64(10), int64(20)}, []string{"id", "work_id", "library_id", "sha256"}, [][]driver.Value{
+		queryRowsStep("WHERE file.id IN", []any{int64(10), int64(20)}, []string{"id", "work_id", "library_id", "sha256"}, [][]driver.Value{
 			{int64(10), int64(1), int64(5), hash}, {int64(20), int64(2), int64(5), hash},
 		}),
-		queryStep("lock_theory_libraries", []any{int64(5)}, []string{"lock_theory_libraries"}, []driver.Value{nil}),
+		queryStep("lock_theory_libraries", []any{int64(5), int64(5)}, []string{"lock_theory_libraries"}, []driver.Value{nil}),
+		queryRowsStep("FOR UPDATE OF file, work", []any{int64(10), int64(20)}, []string{"id", "work_id", "library_id", "sha256"}, [][]driver.Value{
+			{int64(10), int64(1), int64(5), hash}, {int64(20), int64(2), int64(5), hash},
+		}),
 		queryStep("WITH RECURSIVE", []any{int64(20), int64(10)}, []string{"exists"}, []driver.Value{false}),
 		execStep("UPDATE theory_source_files", []any{int64(20), int64(10)}, 1),
 		commitStep(),
@@ -156,7 +201,37 @@ func TestDuplicateMarkSameLibrarySameHashTransactionOrder(t *testing.T) {
 	if err := NewStore(db).MarkDuplicate(context.Background(), 10, 20); err != nil {
 		t.Fatalf("MarkDuplicate: %v", err)
 	}
+	assertNoRowLockBeforeAdvisory(t, script)
 	script.assertDone(t)
+}
+
+func TestDuplicateMarkRechecksRowsAndScopeAfterAdvisoryLock(t *testing.T) {
+	hash := strings.Repeat("4", 64)
+	tests := []struct {
+		name       string
+		lockedRows [][]driver.Value
+		want       error
+	}{
+		{name: "target disappeared", lockedRows: [][]driver.Value{{int64(10), int64(1), int64(5), hash}}, want: ErrFileNotFound},
+		{name: "library changed", lockedRows: duplicateRows(hash, hash, 5, 6), want: ErrCatalogScopeChanged},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, script := openCatalogDB(t,
+				beginStep(),
+				queryRowsStep("WHERE file.id IN", []any{int64(10), int64(20)}, []string{"id", "work_id", "library_id", "sha256"}, duplicateRows(hash, hash, 5, 5)),
+				queryStep("lock_theory_libraries", []any{int64(5), int64(5)}, []string{"lock_theory_libraries"}, []driver.Value{nil}),
+				queryRowsStep("FOR UPDATE OF file, work", []any{int64(10), int64(20)}, []string{"id", "work_id", "library_id", "sha256"}, tt.lockedRows),
+				rollbackStep(),
+			)
+			err := NewStore(db).MarkDuplicate(context.Background(), 10, 20)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("expected %v, got %v", tt.want, err)
+			}
+			assertNoRowLockBeforeAdvisory(t, script)
+			script.assertDone(t)
+		})
+	}
 }
 
 func TestDuplicateMarkRejectsInvalidRelations(t *testing.T) {
@@ -183,9 +258,12 @@ func TestDuplicateMarkRejectsInvalidRelations(t *testing.T) {
 			if tt.fileID == tt.targetID {
 				steps = append(steps, rollbackStep())
 			} else {
-				steps = append(steps, queryRowsStep("FOR UPDATE", []any{tt.fileID, tt.targetID}, []string{"id", "work_id", "library_id", "sha256"}, tt.rows))
+				steps = append(steps, queryRowsStep("WHERE file.id IN", []any{tt.fileID, tt.targetID}, []string{"id", "work_id", "library_id", "sha256"}, tt.rows))
+				if len(tt.rows) == 2 {
+					steps = append(steps, queryStep("lock_theory_libraries", []any{tt.rows[0][2], tt.rows[1][2]}, []string{"lock_theory_libraries"}, []driver.Value{nil}))
+					steps = append(steps, queryRowsStep("FOR UPDATE OF file, work", []any{tt.fileID, tt.targetID}, []string{"id", "work_id", "library_id", "sha256"}, tt.rows))
+				}
 				if tt.cycle != nil {
-					steps = append(steps, queryStep("lock_theory_libraries", []any{int64(5)}, []string{"lock_theory_libraries"}, []driver.Value{nil}))
 					steps = append(steps, queryStep("WITH RECURSIVE", []any{tt.targetID, tt.fileID}, []string{"exists"}, []driver.Value{*tt.cycle}))
 				}
 				steps = append(steps, rollbackStep())
@@ -202,8 +280,18 @@ func TestDuplicateMarkRejectsInvalidRelations(t *testing.T) {
 
 func TestCatalogUpdateExtractionStatusValidatesAndUpdates(t *testing.T) {
 	db, script := openCatalogDB(t,
+		beginStep(),
+		queryStep("JOIN theory_source_works", []any{int64(42)}, []string{"library_id"}, []driver.Value{int64(7)}),
+		queryStep("lock_theory_libraries", []any{int64(7)}, []string{"lock_theory_libraries"}, []driver.Value{nil}),
+		queryStep("FOR UPDATE OF file, work", []any{int64(42)}, []string{"library_id"}, []driver.Value{int64(7)}),
 		execStep("UPDATE theory_source_files", []any{"failed", 0.25, "OCR_TIMEOUT", "timed out", int64(42)}, 1),
+		commitStep(),
+		beginStep(),
+		queryStep("JOIN theory_source_works", []any{int64(42)}, []string{"library_id"}, []driver.Value{int64(7)}),
+		queryStep("lock_theory_libraries", []any{int64(7)}, []string{"lock_theory_libraries"}, []driver.Value{nil}),
+		queryStep("FOR UPDATE OF file, work", []any{int64(42)}, []string{"library_id"}, []driver.Value{int64(7)}),
 		execStep("UPDATE theory_source_files", []any{"extracted", 0.9, "", "", int64(42)}, 1),
+		commitStep(),
 	)
 	store := NewStore(db)
 	if err := store.UpdateExtractionStatus(nil, 42, ExtractionStatusFailed, .25, " OCR_TIMEOUT ", " timed out "); err != nil {
@@ -213,8 +301,17 @@ func TestCatalogUpdateExtractionStatusValidatesAndUpdates(t *testing.T) {
 		t.Fatalf("successful update: %v", err)
 	}
 	if !strings.Contains(script.calls[0].query, "update_time = now()") {
-		t.Fatalf("status update must touch update_time: %s", script.calls[0].query)
+		foundUpdate := false
+		for _, call := range script.calls {
+			if strings.Contains(call.query, "UPDATE theory_source_files") && strings.Contains(call.query, "update_time = now()") {
+				foundUpdate = true
+			}
+		}
+		if !foundUpdate {
+			t.Fatal("status update must touch update_time")
+		}
 	}
+	assertNoRowLockBeforeAdvisory(t, script)
 	script.assertDone(t)
 }
 
@@ -223,11 +320,19 @@ func TestCatalogUpdateExtractionStatusRejectsInvalidInputAndMissingFile(t *testi
 	if err := store.UpdateExtractionStatus(nil, 1, ExtractionStatusPending, 0, "", ""); !errors.Is(err, ErrStoreUnavailable) {
 		t.Fatalf("nil db: %v", err)
 	}
-	db, script := openCatalogDB(t, execStep("UPDATE theory_source_files", []any{"pending", 0.5, "", "", int64(99)}, 0))
+	db, script := openCatalogDB(t,
+		beginStep(),
+		queryStep("JOIN theory_source_works", []any{int64(99)}, []string{"library_id"}, []driver.Value{int64(7)}),
+		queryStep("lock_theory_libraries", []any{int64(7)}, []string{"lock_theory_libraries"}, []driver.Value{nil}),
+		queryStep("FOR UPDATE OF file, work", []any{int64(99)}, []string{"library_id"}, []driver.Value{int64(7)}),
+		execStep("UPDATE theory_source_files", []any{"pending", 0.5, "", "", int64(99)}, 0),
+		rollbackStep(),
+	)
 	store = NewStore(db)
 	if err := store.UpdateExtractionStatus(nil, 99, ExtractionStatusPending, .5, "", ""); !errors.Is(err, ErrFileNotFound) {
 		t.Fatalf("missing file: %v", err)
 	}
+	assertNoRowLockBeforeAdvisory(t, script)
 	for _, tc := range []struct {
 		name    string
 		status  ExtractionStatus
@@ -386,6 +491,19 @@ func (s *catalogScript) assertDone(t *testing.T) {
 	if len(s.steps) != 0 {
 		t.Fatalf("%d database steps not executed; next=%s", len(s.steps), s.steps[0].op)
 	}
+}
+
+func assertNoRowLockBeforeAdvisory(t *testing.T, script *catalogScript) {
+	t.Helper()
+	for _, call := range script.calls {
+		if strings.Contains(call.query, "lock_theory_libraries") {
+			return
+		}
+		if strings.Contains(call.query, "FOR SHARE") || strings.Contains(call.query, "FOR UPDATE") {
+			t.Fatalf("row lock acquired before library advisory lock: %s", call.query)
+		}
+	}
+	t.Fatal("library advisory lock was not acquired")
 }
 
 var catalogDriverSequence atomic.Int64
