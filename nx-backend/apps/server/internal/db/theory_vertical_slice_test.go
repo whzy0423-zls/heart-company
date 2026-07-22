@@ -90,7 +90,11 @@ func TestTheoryVerticalSliceSeedExecutesTwice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = database.Close() })
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("close PostgreSQL database: %v", err)
+		}
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	t.Cleanup(cancel)
 
@@ -98,11 +102,21 @@ func TestTheoryVerticalSliceSeedExecutesTwice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = conn.Close() })
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("close PostgreSQL connection: %v", err)
+		}
+	})
 	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(782145901)`); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(782145901)`) })
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := conn.ExecContext(cleanupCtx, `SELECT pg_advisory_unlock(782145901)`); err != nil {
+			t.Errorf("release theory seed advisory lock: %v", err)
+		}
+	})
 
 	schema, err := os.ReadFile("schema.sql")
 	if err != nil {
@@ -121,7 +135,11 @@ func TestTheoryVerticalSliceSeedExecutesTwice(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_ = cleanupTheoryVerticalSliceSeed(context.Background(), database)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if err := cleanupTheoryVerticalSliceSeed(cleanupCtx, database); err != nil {
+			t.Errorf("clean up theory vertical slice seed: %v", err)
+		}
 	})
 	for i := 0; i < 2; i++ {
 		if _, err := conn.ExecContext(ctx, string(seed)); err != nil {
@@ -174,6 +192,45 @@ func TestTheoryVerticalSliceSeedExecutesTwice(t *testing.T) {
 	}
 	if chainCount != 1 {
 		t.Fatalf("active vertical slice chain count = %d, want 1", chainCount)
+	}
+
+	if _, err := conn.ExecContext(ctx, `
+		UPDATE theory_library_releases release
+		SET status='retired', update_time=now()
+		FROM theory_libraries library
+		WHERE release.library_id=library.id AND library.key='xinzhili' AND release.version=1;
+		INSERT INTO theory_library_releases (
+			library_id, version, status, embedding_model, embedding_dimensions, retrieval_mode,
+			index_version, card_count, chunk_count, build_error, activated_at
+		)
+		SELECT id, 2, 'active', '', 1536, 'lexical_only', 'test-v2', 1, 1, '', now()
+		FROM theory_libraries WHERE key='xinzhili';
+		INSERT INTO theory_release_cards (release_id, card_id, chunk_id)
+		SELECT release.id, card.id, chunk.id
+		FROM theory_libraries library
+		JOIN theory_library_releases release ON release.library_id=library.id AND release.version=2
+		JOIN theory_cards card ON card.library_id=library.id
+		  AND card.canonical_key='inner_observer' AND card.version=1
+		JOIN theory_chunks chunk ON chunk.library_id=library.id
+		  AND chunk.chunk_key='inner_observer.card' AND chunk.version=1
+		WHERE library.key='xinzhili';
+		UPDATE theory_libraries SET current_version=2 WHERE key='xinzhili'`); err != nil {
+		t.Fatalf("create active v2 fixture: %v", err)
+	}
+	if _, err := conn.ExecContext(ctx, string(seed)); err != nil {
+		t.Fatalf("seed execution with active v2: %v", err)
+	}
+
+	var currentVersion, activeVersion int
+	if err := conn.QueryRowContext(ctx, `
+		SELECT library.current_version, release.version
+		FROM theory_libraries library
+		JOIN theory_library_releases release ON release.library_id=library.id AND release.status='active'
+		WHERE library.key='xinzhili'`).Scan(&currentVersion, &activeVersion); err != nil {
+		t.Fatal(err)
+	}
+	if currentVersion != 2 || activeVersion != 2 {
+		t.Fatalf("seed after active v2 left current/active version = %d/%d, want 2/2", currentVersion, activeVersion)
 	}
 }
 

@@ -44,7 +44,11 @@ func TestTheoryStorePostgresVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = database.Close() })
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("close PostgreSQL database: %v", err)
+		}
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	t.Cleanup(cancel)
 
@@ -116,7 +120,11 @@ func TestTheoryStorePostgresVerticalSlice(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() {
-			_, _ = database.ExecContext(context.Background(), fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON theory_libraries; DROP FUNCTION IF EXISTS %s()", triggerName, functionName))
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cleanupCancel()
+			if _, err := database.ExecContext(cleanupCtx, fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON theory_libraries; DROP FUNCTION IF EXISTS %s()", triggerName, functionName)); err != nil {
+				t.Errorf("drop rollback injection trigger: %v", err)
+			}
 		})
 
 		err := store.ActivateRelease(ctx, fixture.libraryID, candidate.ID, fixture.actorID)
@@ -137,6 +145,31 @@ func TestTheoryStorePostgresVerticalSlice(t *testing.T) {
 		}
 		if currentVersion != 3 || oldStatus != ReleaseStatusActive || newStatus != ReleaseStatusReady {
 			t.Fatalf("rollback state current=%d old=%s new=%s, want 3/active/ready", currentVersion, oldStatus, newStatus)
+		}
+	})
+
+	t.Run("fixture cleanup removes all owned rows", func(t *testing.T) {
+		label := fmt.Sprintf("cleanup_%d", postgresFixtureSequence.Add(1))
+		var cleanupFixture postgresVerticalFixture
+		t.Run("create fixture", func(t *testing.T) {
+			cleanupFixture = createPostgresVerticalFixture(t, ctx, database, store, label)
+		})
+
+		var sources, libraries, users int
+		if err := database.QueryRowContext(ctx, `
+			SELECT
+			  (SELECT count(*)
+			   FROM theory_card_sources source
+			   JOIN theory_cards card ON card.id=source.card_id
+			   JOIN theory_libraries library ON library.id=card.library_id
+			   WHERE library.key=$1),
+			  (SELECT count(*) FROM theory_libraries WHERE key=$1),
+			  (SELECT count(*) FROM users WHERE id=$2)`,
+			cleanupFixture.libraryKey, cleanupFixture.actorID).Scan(&sources, &libraries, &users); err != nil {
+			t.Fatal(err)
+		}
+		if sources != 0 || libraries != 0 || users != 0 {
+			t.Fatalf("fixture residue sources/libraries/users = %d/%d/%d, want 0/0/0", sources, libraries, users)
 		}
 	})
 
@@ -197,7 +230,13 @@ func executeTheorySchemaTwice(t *testing.T, ctx context.Context, database *sql.D
 	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(782145901)`); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(782145901)`) }()
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := conn.ExecContext(cleanupCtx, `SELECT pg_advisory_unlock(782145901)`); err != nil {
+			t.Errorf("release theory schema advisory lock: %v", err)
+		}
+	}()
 	for i := 0; i < 2; i++ {
 		if _, err := conn.ExecContext(ctx, string(raw)); err != nil {
 			t.Fatalf("schema execution %d: %v", i+1, err)
@@ -218,8 +257,7 @@ func createPostgresVerticalFixture(t *testing.T, ctx context.Context, database *
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_, _ = database.ExecContext(context.Background(), `DELETE FROM theory_libraries WHERE key=$1`, key)
-		_, _ = database.ExecContext(context.Background(), `DELETE FROM users WHERE username=$1`, username)
+		cleanupPostgresVerticalFixture(t, database, key, actorID)
 	})
 
 	work, err := store.RegisterWork(ctx, SourceWork{
@@ -279,6 +317,27 @@ func createPostgresVerticalFixture(t *testing.T, ctx context.Context, database *
 		t.Fatal(err)
 	}
 	return fixture
+}
+
+func cleanupPostgresVerticalFixture(t *testing.T, database *sql.DB, libraryKey string, actorID int64) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := database.ExecContext(ctx, `
+		DELETE FROM theory_card_sources source
+		USING theory_cards card, theory_libraries library
+		WHERE source.card_id=card.id
+		  AND card.library_id=library.id
+		  AND library.key=$1`, libraryKey); err != nil {
+		t.Errorf("delete theory fixture card sources for %q: %v", libraryKey, err)
+	}
+	if _, err := database.ExecContext(ctx, `DELETE FROM theory_libraries WHERE key=$1`, libraryKey); err != nil {
+		t.Errorf("delete theory fixture library %q: %v", libraryKey, err)
+	}
+	if _, err := database.ExecContext(ctx, `DELETE FROM users WHERE id=$1`, actorID); err != nil {
+		t.Errorf("delete theory fixture actor %d: %v", actorID, err)
+	}
 }
 
 func buildPostgresRelease(t *testing.T, ctx context.Context, store *Store, fixture postgresVerticalFixture, version int, mode RetrievalMode, model string) Release {

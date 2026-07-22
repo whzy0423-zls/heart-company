@@ -167,26 +167,33 @@ ON CONFLICT (library_id, chunk_key, version) DO UPDATE SET
   update_time = now();
 
 WITH library AS (
-  SELECT id FROM theory_libraries WHERE key = 'xinzhili'
-)
-UPDATE theory_library_releases release
-SET status = 'retired', update_time = now()
-FROM library
-WHERE release.library_id = library.id
-  AND release.status = 'active'
-  AND release.version <> 1;
-
-WITH library AS (
-  SELECT id FROM theory_libraries WHERE key = 'xinzhili'
+  SELECT library.id,
+    NOT EXISTS (
+      SELECT 1
+      FROM theory_library_releases active_release
+      WHERE active_release.library_id = library.id AND active_release.status = 'active'
+    ) AS should_activate_v1
+  FROM theory_libraries library
+  WHERE library.key = 'xinzhili'
 )
 INSERT INTO theory_library_releases (
   library_id, version, status, embedding_model, embedding_dimensions, retrieval_mode,
   index_version, card_count, chunk_count, build_error, activated_at
 )
-SELECT id, 1, 'active', '', 1536, 'lexical_only', 'seed-v1', 1, 1, '', now()
+SELECT id, 1, CASE WHEN should_activate_v1 THEN 'active' ELSE 'retired' END,
+  '', 1536, 'lexical_only', 'seed-v1', 1, 1, '',
+  CASE WHEN should_activate_v1 THEN now() ELSE NULL END
 FROM library
 ON CONFLICT (library_id, version) DO UPDATE SET
-  status = 'active',
+  status = CASE
+    WHEN NOT EXISTS (
+      SELECT 1
+      FROM theory_library_releases active_release
+      WHERE active_release.library_id = EXCLUDED.library_id
+        AND active_release.status = 'active'
+    ) THEN 'active'
+    ELSE theory_library_releases.status
+  END,
   embedding_model = EXCLUDED.embedding_model,
   embedding_dimensions = EXCLUDED.embedding_dimensions,
   retrieval_mode = EXCLUDED.retrieval_mode,
