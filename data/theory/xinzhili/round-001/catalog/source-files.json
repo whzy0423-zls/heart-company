@@ -1,0 +1,612 @@
+{
+  "files": [
+    {
+      "budgetPageEquivalent": 6,
+      "byteSize": 162952,
+      "canonicalWorkId": "work-8d4500a96172b72f",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_ocr_selected",
+      "fileId": "file-ba0a45c6a83535ae",
+      "mediaType": "pdf",
+      "ocrPageCount": 6,
+      "processedUnitCount": 6,
+      "processedUnitType": "page",
+      "relativePath": "能量/01 英雄之旅概述（纯中）.pdf",
+      "selectedRanges": [
+        "page:1-6"
+      ],
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sha256": "5d3c4761a6c17a5dbbc4de3214e10994c6484a1a8807327c44bb0255c3198dd8",
+      "unitEstimate": {
+        "budgetPageEquivalent": 6,
+        "sampleTextCharacters": 90,
+        "sampledPages": 5,
+        "unitCount": 6,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 1,
+      "byteSize": 948047,
+      "canonicalWorkId": "work-ee23992ae3ca9364",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_ocr_selected",
+      "fileId": "file-c2ea1f11365a7b0c",
+      "mediaType": "pdf",
+      "ocrPageCount": 1,
+      "processedUnitCount": 1,
+      "processedUnitType": "page",
+      "relativePath": "能量/02.聆听召唤（纯中）.pdf",
+      "selectedRanges": [
+        "page:1"
+      ],
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sha256": "454c3af739c58883501aaefef83ed7add93b668fe22ee94bcfed73a7f2f21069",
+      "unitEstimate": {
+        "budgetPageEquivalent": 1,
+        "sampleTextCharacters": 18,
+        "sampledPages": 1,
+        "unitCount": 1,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 1,
+      "byteSize": 941449,
+      "canonicalWorkId": "work-72108bab7e54b9d7",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_ocr_selected",
+      "fileId": "file-0b02dcaf38ff6b6f",
+      "mediaType": "pdf",
+      "ocrPageCount": 1,
+      "processedUnitCount": 1,
+      "processedUnitType": "page",
+      "relativePath": "能量/03.拒绝召唤，找到向导（纯中）.pdf",
+      "selectedRanges": [
+        "page:1"
+      ],
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sha256": "7bb595df179c33898e7310f8d9258cddb466360fac1c13913a6b217c6e7b4765",
+      "unitEstimate": {
+        "budgetPageEquivalent": 1,
+        "sampleTextCharacters": 18,
+        "sampledPages": 1,
+        "unitCount": 1,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 1,
+      "byteSize": 1973752,
+      "canonicalWorkId": "work-941f993584b1a354",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_ocr_selected",
+      "fileId": "file-2e724a7ee2ef48fa",
+      "mediaType": "pdf",
+      "ocrPageCount": 1,
+      "processedUnitCount": 1,
+      "processedUnitType": "page",
+      "relativePath": "能量/04.找到创造性心智（中英）.pdf",
+      "selectedRanges": [
+        "page:1"
+      ],
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sha256": "0bd39b44c72f5f3176fc74e550e1cb33d608de3ed679c7b3515d947550d766ca",
+      "unitEstimate": {
+        "budgetPageEquivalent": 1,
+        "sampleTextCharacters": 18,
+        "sampledPages": 1,
+        "unitCount": 1,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 1,
+      "byteSize": 1248870,
+      "canonicalWorkId": "work-e484184145af7165",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_ocr_selected",
+      "fileId": "file-f5453db78961a47a",
+      "mediaType": "pdf",
+      "ocrPageCount": 1,
+      "processedUnitCount": 1,
+      "processedUnitType": "page",
+      "relativePath": "能量/05.三颗正念种子（纯中）.pdf",
+      "selectedRanges": [
+        "page:1"
+      ],
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sha256": "29144d15a67ae6af79f727fa426755fb881a6841c2ca8d3d58f12ee2355d9e13",
+      "unitEstimate": {
+        "budgetPageEquivalent": 1,
+        "sampleTextCharacters": 18,
+        "sampledPages": 1,
+        "unitCount": 1,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 1,
+      "byteSize": 1243781,
+      "canonicalWorkId": "work-29882d46ddde3bad",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_ocr_selected",
+      "fileId": "file-391418e366dcdc95",
+      "mediaType": "pdf",
+      "ocrPageCount": 1,
+      "processedUnitCount": 1,
+      "processedUnitType": "page",
+      "relativePath": "能量/06.三个正向连接（纯中）.pdf",
+      "selectedRanges": [
+        "page:1"
+      ],
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sha256": "49c3bd482845355a867b0550552912e0cfd2eecb506af9217b2bfc42c114c0a8",
+      "unitEstimate": {
+        "budgetPageEquivalent": 1,
+        "sampleTextCharacters": 18,
+        "sampledPages": 1,
+        "unitCount": 1,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 1,
+      "byteSize": 1062014,
+      "canonicalWorkId": "work-9a3aa92e9e8eb636",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_ocr_selected",
+      "fileId": "file-efd404a48ff8f24a",
+      "mediaType": "pdf",
+      "ocrPageCount": 1,
+      "processedUnitCount": 1,
+      "processedUnitType": "page",
+      "relativePath": "能量/07.三种原型能量（纯中）.pdf",
+      "selectedRanges": [
+        "page:1"
+      ],
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sha256": "c166156e17a60058b960581a13e9438d18dab84199d77e456750e2d77e2f5da5",
+      "unitEstimate": {
+        "budgetPageEquivalent": 1,
+        "sampleTextCharacters": 18,
+        "sampledPages": 1,
+        "unitCount": 1,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 1,
+      "byteSize": 922753,
+      "canonicalWorkId": "work-531360bd07bdf788",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_ocr_selected",
+      "fileId": "file-1ace19ab11a9e870",
+      "mediaType": "pdf",
+      "ocrPageCount": 1,
+      "processedUnitCount": 1,
+      "processedUnitType": "page",
+      "relativePath": "能量/08.用原型能量面对障碍（纯中）.pdf",
+      "selectedRanges": [
+        "page:1"
+      ],
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sha256": "45cdd8454fa15695391ab99a9f3290b4032dd68ff6cd42e7e38f9abd36c6b164",
+      "unitEstimate": {
+        "budgetPageEquivalent": 1,
+        "sampleTextCharacters": 18,
+        "sampledPages": 1,
+        "unitCount": 1,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 1,
+      "byteSize": 941632,
+      "canonicalWorkId": "work-027a530c08f99fe3",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_ocr_selected",
+      "fileId": "file-64cab57df3a05eee",
+      "mediaType": "pdf",
+      "ocrPageCount": 1,
+      "processedUnitCount": 1,
+      "processedUnitType": "page",
+      "relativePath": "能量/09.转化恶魔（纯中）.pdf",
+      "selectedRanges": [
+        "page:1"
+      ],
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sha256": "b86fa6339cdae7e6da1ba9fd927b744241f20481ae8a6719d41e25876f3ced86",
+      "unitEstimate": {
+        "budgetPageEquivalent": 1,
+        "sampleTextCharacters": 18,
+        "sampledPages": 1,
+        "unitCount": 1,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 1,
+      "byteSize": 779179,
+      "canonicalWorkId": "work-10c6a75fc5553a10",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_ocr_selected",
+      "fileId": "file-67e8311ec4615f2e",
+      "mediaType": "pdf",
+      "ocrPageCount": 1,
+      "processedUnitCount": 1,
+      "processedUnitType": "page",
+      "relativePath": "能量/10.目标与障碍的和谐（纯中）.pdf",
+      "selectedRanges": [
+        "page:1"
+      ],
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sha256": "98a3a2b129cdb0397eabbe58717c9eba0aa19cd365e899ff030c142a177c4b62",
+      "unitEstimate": {
+        "budgetPageEquivalent": 1,
+        "sampleTextCharacters": 18,
+        "sampledPages": 1,
+        "unitCount": 1,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 1,
+      "byteSize": 971264,
+      "canonicalWorkId": "work-f7e3b5f4fc15ea77",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_ocr_selected",
+      "fileId": "file-5226bc90b4068153",
+      "mediaType": "pdf",
+      "ocrPageCount": 1,
+      "processedUnitCount": 1,
+      "processedUnitType": "page",
+      "relativePath": "能量/11.传下去给他人（纯中）.pdf",
+      "selectedRanges": [
+        "page:1"
+      ],
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sha256": "d61dc134719acf9967399935150bd647b4b31c1ac2fb27d0c7e2cab9594d33ae",
+      "unitEstimate": {
+        "budgetPageEquivalent": 1,
+        "sampleTextCharacters": 18,
+        "sampledPages": 1,
+        "unitCount": 1,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 1,
+      "byteSize": 925074,
+      "canonicalWorkId": "work-dca12d747fcb8fac",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_ocr_selected",
+      "fileId": "file-b5f5be9554760d0c",
+      "mediaType": "pdf",
+      "ocrPageCount": 1,
+      "processedUnitCount": 1,
+      "processedUnitType": "page",
+      "relativePath": "能量/12.回顾这段英雄之旅（纯中）.pdf",
+      "selectedRanges": [
+        "page:1"
+      ],
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sha256": "9b42dbbfd7b7b3d6c4102fa7d95916879efd9f8a73ad9ac234bfb1cfcf8107ff",
+      "unitEstimate": {
+        "budgetPageEquivalent": 1,
+        "sampleTextCharacters": 18,
+        "sampledPages": 1,
+        "unitCount": 1,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 137,
+      "byteSize": 6646482,
+      "canonicalWorkId": "work-0b2e7f11c70be00e",
+      "duplicateGroupId": null,
+      "extractionRoute": "epub_xhtml",
+      "fileId": "file-8bf6e1c4be298d82",
+      "mediaType": "epub",
+      "ocrPageCount": 0,
+      "processedUnitCount": 21,
+      "processedUnitType": "spine_item",
+      "relativePath": "九型理论基础/九型人格·珍藏版.epub",
+      "selectedRanges": [
+        "spine:all"
+      ],
+      "selectionReason": "九型人格首轮核心电子书；XHTML 可直接抽取，按 1800 个非空字符折算。",
+      "sha256": "a7b200a8c4c33b37af49fd088cbf3990bff4b749c1d96983785520bd2c1a680d",
+      "unitEstimate": {
+        "budgetPageEquivalent": 137,
+        "normalizedTextCharacters": 244831,
+        "unitCount": 21,
+        "unitType": "spine_item"
+      }
+    },
+    {
+      "budgetPageEquivalent": 72,
+      "byteSize": 1006103,
+      "canonicalWorkId": "work-2d9022cc6583619c",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_text_layer",
+      "fileId": "file-d267a65a8ca71df8",
+      "mediaType": "pdf",
+      "ocrPageCount": 0,
+      "processedUnitCount": 72,
+      "processedUnitType": "page",
+      "relativePath": "(NEW)周易.pdf",
+      "selectedRanges": [
+        "page:1-72"
+      ],
+      "selectionReason": "周易方向核心资料；72 页均有可用文本层。",
+      "sha256": "d2971a52eabd7198bacde6717a2a2aa826c122fb0cb212976232e2ca12b9036a",
+      "unitEstimate": {
+        "budgetPageEquivalent": 72,
+        "sampleTextCharacters": 2156,
+        "sampledPages": 5,
+        "unitCount": 72,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 13,
+      "byteSize": 281088,
+      "canonicalWorkId": "work-70432bdbd4ac5cd6",
+      "duplicateGroupId": null,
+      "extractionRoute": "textutil_plain_text",
+      "fileId": "file-ae513db9e9dda335",
+      "mediaType": "doc",
+      "ocrPageCount": 0,
+      "processedUnitCount": 13,
+      "processedUnitType": "normalized_text_page",
+      "relativePath": "周易说卦传正解.doc",
+      "selectedRanges": [
+        "normalized-text:1-13"
+      ],
+      "selectionReason": "周易方向核心资料；textutil 可读，按 1800 个非空字符折算。",
+      "sha256": "bb96ab6e3e9859ea43359fbd572d6caec7b13da85e32fe54ed96793e34732d5f",
+      "unitEstimate": {
+        "budgetPageEquivalent": 13,
+        "normalizedTextCharacters": 22960,
+        "unitCount": 13,
+        "unitType": "normalized_text_page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 2,
+      "byteSize": 18250,
+      "canonicalWorkId": "work-b8f287607035c4cc",
+      "duplicateGroupId": null,
+      "extractionRoute": "textutil_plain_text",
+      "fileId": "file-18b7985501dfec59",
+      "mediaType": "docx",
+      "ocrPageCount": 0,
+      "processedUnitCount": 2,
+      "processedUnitType": "normalized_text_page",
+      "relativePath": "《易经》中蕴含人生大智慧的30个成语.docx",
+      "selectedRanges": [
+        "normalized-text:1-2"
+      ],
+      "selectionReason": "易经生活化概念资料；textutil 可读，按 1800 个非空字符折算。",
+      "sha256": "ed391e6fe171f996db1abbde61be538a47a3249a1bf5e8a60505ee722d1a2849",
+      "unitEstimate": {
+        "budgetPageEquivalent": 2,
+        "normalizedTextCharacters": 2824,
+        "unitCount": 2,
+        "unitType": "normalized_text_page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 323,
+      "byteSize": 9841518,
+      "canonicalWorkId": "work-8cd6404c4631cf8a",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_text_layer",
+      "fileId": "file-527cd054c982a24e",
+      "mediaType": "pdf",
+      "ocrPageCount": 0,
+      "processedUnitCount": 323,
+      "processedUnitType": "page",
+      "relativePath": "英雄之旅.pdf",
+      "selectedRanges": [
+        "page:1-323"
+      ],
+      "selectionReason": "英雄之旅核心理论资料；323 页文本层可直接抽取。",
+      "sha256": "0446c63ead6810271d28dac0b8def59cff20bda5c61210bb0c946d1a10fb4de3",
+      "unitEstimate": {
+        "budgetPageEquivalent": 323,
+        "sampleTextCharacters": 477,
+        "sampledPages": 5,
+        "unitCount": 323,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 273,
+      "byteSize": 10591591,
+      "canonicalWorkId": "work-df6072dffa7716ae",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_text_layer",
+      "fileId": "file-03072f88433fe3e2",
+      "mediaType": "pdf",
+      "ocrPageCount": 0,
+      "processedUnitCount": 273,
+      "processedUnitType": "page",
+      "relativePath": "《千面英雄》-约瑟夫-坎贝尔.pdf",
+      "selectedRanges": [
+        "page:1-273"
+      ],
+      "selectionReason": "英雄之旅经典主来源；273 页文本层可直接抽取。",
+      "sha256": "e3c42510e570d52fdca9dec5013ed71f6472c47320416a6d526f3a798b9e0f41",
+      "unitEstimate": {
+        "budgetPageEquivalent": 273,
+        "sampleTextCharacters": 3631,
+        "sampledPages": 5,
+        "unitCount": 273,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 214,
+      "byteSize": 3466545,
+      "canonicalWorkId": "work-c0bb068ef102dd42",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_text_layer",
+      "fileId": "file-1b4235a7b349190a",
+      "mediaType": "pdf",
+      "ocrPageCount": 0,
+      "processedUnitCount": 214,
+      "processedUnitType": "page",
+      "relativePath": "《李中莹NLP精义》（李中莹）.pdf",
+      "selectedRanges": [
+        "page:1-214"
+      ],
+      "selectionReason": "NLP 方向首轮核心资料；214 页文本层可直接抽取。",
+      "sha256": "7b0d865f7cf61df726a9674ed6e21785df3e57dc44c94f111d89792c43c5960c",
+      "unitEstimate": {
+        "budgetPageEquivalent": 214,
+        "sampleTextCharacters": 6367,
+        "sampledPages": 5,
+        "unitCount": 214,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 78,
+      "byteSize": 6125576,
+      "canonicalWorkId": "work-12fe59413f84afbb",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_text_layer",
+      "fileId": "file-413c7cfd5cf9fb4c",
+      "mediaType": "pdf",
+      "ocrPageCount": 0,
+      "processedUnitCount": 78,
+      "processedUnitType": "page",
+      "relativePath": "《成功母亲教育：亲子关系全面技巧》（李中莹）.pdf",
+      "selectedRanges": [
+        "page:1-78"
+      ],
+      "selectionReason": "亲子关系可读的 78 页版本；替代 296 页无文本层白金版以节省 OCR 预算。",
+      "sha256": "92b19c78e5f3b025abd66bdd08ec777cd289e6058a6448f335bd3d51dc588873",
+      "unitEstimate": {
+        "budgetPageEquivalent": 78,
+        "sampleTextCharacters": 5340,
+        "sampledPages": 5,
+        "unitCount": 78,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 80,
+      "byteSize": 12998528,
+      "canonicalWorkId": "work-9602ec673bc48be2",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_ocr_selected",
+      "fileId": "file-c688f6a9aa035158",
+      "mediaType": "pdf",
+      "ocrPageCount": 80,
+      "processedUnitCount": 80,
+      "processedUnitType": "page",
+      "relativePath": "重塑心灵-李中莹.pdf",
+      "selectedRanges": [
+        "page:1-80"
+      ],
+      "selectionReason": "扫描版无文本层；首轮选择前 80 页 OCR，余页进入后续批次。",
+      "sha256": "c447ec8485ee5a7ca2070b555e21f0a1070dd04e188323dc5dff1f2c31153eb6",
+      "unitEstimate": {
+        "budgetPageEquivalent": 400,
+        "sampleTextCharacters": 0,
+        "sampledPages": 5,
+        "unitCount": 400,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 80,
+      "byteSize": 7415265,
+      "canonicalWorkId": "work-6131070748ca9974",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_ocr_selected",
+      "fileId": "file-76c067f474997079",
+      "mediaType": "pdf",
+      "ocrPageCount": 80,
+      "processedUnitCount": 80,
+      "processedUnitType": "page",
+      "relativePath": "《NLP简快心理疗法》李中莹.pdf",
+      "selectedRanges": [
+        "page:1-80"
+      ],
+      "selectionReason": "扫描版无文本层；首轮选择前 80 页 OCR，余页进入后续批次。",
+      "sha256": "d0728e91e2676a1a09161b0845cf94da139f12ba644b8b8d2675914d0fa75e5a",
+      "unitEstimate": {
+        "budgetPageEquivalent": 265,
+        "sampleTextCharacters": 0,
+        "sampledPages": 5,
+        "unitCount": 265,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 80,
+      "byteSize": 21853317,
+      "canonicalWorkId": "work-116bb9f973fc6e92",
+      "duplicateGroupId": null,
+      "extractionRoute": "pdf_ocr_selected",
+      "fileId": "file-ccca14188ceacfa5",
+      "mediaType": "pdf",
+      "ocrPageCount": 80,
+      "processedUnitCount": 80,
+      "processedUnitType": "page",
+      "relativePath": "情绪的语言.pdf",
+      "selectedRanges": [
+        "page:1-80"
+      ],
+      "selectionReason": "实际路径存在但为扫描版；首轮选择前 80 页 OCR，余页进入后续批次。",
+      "sha256": "3c801d9cebabf847643ec1881297e09f00b58b0e8f435630203c81731e7fd812",
+      "unitEstimate": {
+        "budgetPageEquivalent": 371,
+        "sampleTextCharacters": 0,
+        "sampledPages": 5,
+        "unitCount": 371,
+        "unitType": "page"
+      }
+    },
+    {
+      "budgetPageEquivalent": 66,
+      "byteSize": 1436773,
+      "canonicalWorkId": "work-63453c5888b12a35",
+      "duplicateGroupId": null,
+      "extractionRoute": "epub_xhtml",
+      "fileId": "file-6009e970531b13ee",
+      "mediaType": "epub",
+      "ocrPageCount": 0,
+      "processedUnitCount": 25,
+      "processedUnitType": "spine_item",
+      "relativePath": "非暴力沟通 (卢森堡) (Z-Library).epub",
+      "selectedRanges": [
+        "spine:all"
+      ],
+      "selectionReason": "实际 EPUB 路径存在且 XHTML 可读；按 1800 个非空字符折算。",
+      "sha256": "0d9fff959e6cd6bc4ceabb9459404d78ae541e1ec1a88dbc99f23a3b9ad7e6e0",
+      "unitEstimate": {
+        "budgetPageEquivalent": 66,
+        "normalizedTextCharacters": 117185,
+        "unitCount": 25,
+        "unitType": "spine_item"
+      }
+    }
+  ],
+  "roundId": "round-001",
+  "schemaVersion": "xinzhili.round-source-files.v1",
+  "summary": {
+    "budgetPageEquivalent": 1435,
+    "limits": {
+      "budgetPageEquivalent": 2000,
+      "ocrPageCount": 300,
+      "selectedFiles": 24
+    },
+    "ocrPageCount": 257,
+    "selectedCount": 24
+  }
+}
