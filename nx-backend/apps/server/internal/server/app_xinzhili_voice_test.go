@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/chat"
@@ -34,10 +38,162 @@ func TestAppXinzhiliVoiceTurnRejectsOversizedRequestWithoutMultipartResidue(t *t
 
 	s.appXinzhiliVoiceTurnStream(res, req)
 
-	if res.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d; body=%s", res.Code, http.StatusBadRequest, res.Body.String())
+	if res.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d; body=%s", res.Code, http.StatusRequestEntityTooLarge, res.Body.String())
+	}
+	if body := res.Body.String(); !strings.Contains(body, "音频文件无效或过大") {
+		t.Fatalf("oversized response body = %s", body)
 	}
 	assertNoMultipartResidue(t, tmpDir)
+}
+
+func TestAppXinzhiliVoiceTurnKeepsMalformedMultipartAsBadRequest(t *testing.T) {
+	s := &Server{
+		xinzhiliConfigLoader: func(context.Context) (modelconfig.XinzhiliVoiceConfig, error) { return readyXinzhiliVoiceConfig(), nil },
+		xinzhiliMemberCheck:  func(context.Context, int64) error { return nil },
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/app/xinzhili/turns/stream", strings.NewReader("not multipart"))
+	req.Header.Set("Content-Type", "multipart/form-data; boundary=broken")
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	res := httptest.NewRecorder()
+
+	s.appXinzhiliVoiceTurnStream(res, req)
+
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "音频上传格式不正确") {
+		t.Fatalf("malformed response = %d %s", res.Code, res.Body.String())
+	}
+}
+
+func TestAppXinzhiliVoiceTurnRateLimitsPerUserBeforePaidWork(t *testing.T) {
+	asrCalls := 0
+	s := newSuccessfulXinzhiliVoiceServer(t)
+	s.chatLimiter = newFixedWindowRateLimiter(1, time.Minute)
+	s.xinzhiliTranscribe = func(context.Context, []byte, string) (string, error) {
+		asrCalls++
+		return "", context.DeadlineExceeded
+	}
+	s.ragGen = generatorFunc(func(context.Context, rag.GenerateInput) (string, error) {
+		t.Fatal("rate-limited request must not call the generator")
+		return "", nil
+	})
+	s.xinzhiliSynthesize = func(context.Context, string) ([]byte, string, error) {
+		t.Fatal("rate-limited request must not call TTS")
+		return nil, "", nil
+	}
+
+	perform := func(userID int64) *httptest.ResponseRecorder {
+		req := newXinzhiliMultipartRequest(t, []byte("wav"), 1300)
+		req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: userID}))
+		res := httptest.NewRecorder()
+		s.appXinzhiliVoiceTurnStream(res, req)
+		return res
+	}
+
+	first := perform(7)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first request status = %d, body=%s", first.Code, first.Body.String())
+	}
+	limited := perform(7)
+	if limited.Code != http.StatusTooManyRequests || !strings.Contains(limited.Body.String(), "请求过于频繁，请稍后再试") {
+		t.Fatalf("limited response = %d %s", limited.Code, limited.Body.String())
+	}
+	otherUser := perform(8)
+	if otherUser.Code != http.StatusOK {
+		t.Fatalf("different user status = %d, body=%s", otherUser.Code, otherUser.Body.String())
+	}
+	if asrCalls != 2 {
+		t.Fatalf("ASR calls = %d, want 2", asrCalls)
+	}
+}
+
+func TestAppXinzhiliVoiceTurnWaitsForIdleTTSWorkerAfterStreamWriteFailure(t *testing.T) {
+	workerStarted := make(chan struct{})
+	workerExited := make(chan struct{})
+	s := newSuccessfulXinzhiliVoiceServer(t)
+	s.ragGen = xinzhiliStreamingGeneratorFunc(func(_ context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+		<-workerStarted
+		if err := emit("还没有形成完整句子"); err != nil {
+			return "", err
+		}
+		return "还没有形成完整句子", nil
+	})
+	req := newXinzhiliMultipartRequest(t, []byte("wav"), 1300)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	writer := &failingXinzhiliSSEWriter{header: make(http.Header), failEvent: "text_delta"}
+
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		s.appXinzhiliVoiceTurnStreamWithRuntimeHooks(writer, req, xinzhiliMultipartMemory, xinzhiliVoiceRuntimeHooks{
+			onTTSWorkerStart: func() { close(workerStarted) },
+			onTTSWorkerExit:  func() { close(workerExited) },
+		})
+	}()
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("handler remained blocked waiting for the idle TTS worker")
+	}
+	select {
+	case <-workerExited:
+	default:
+		t.Fatal("handler completed before the idle TTS worker exited")
+	}
+}
+
+func TestAppXinzhiliVoiceTurnWaitsForIdleTTSWorkerAfterRequestCancellation(t *testing.T) {
+	workerStarted := make(chan struct{})
+	workerExited := make(chan struct{})
+	releaseGeneration := make(chan struct{})
+	defer close(releaseGeneration)
+	ctx, cancel := context.WithCancel(context.Background())
+	s := newSuccessfulXinzhiliVoiceServer(t)
+	s.ragGen = xinzhiliStreamingGeneratorFunc(func(_ context.Context, _ rag.GenerateInput, _ rag.StreamEmitter) (string, error) {
+		<-workerStarted
+		cancel()
+		<-releaseGeneration
+		return "", context.Canceled
+	})
+	req := newXinzhiliMultipartRequest(t, []byte("wav"), 1300)
+	req = req.WithContext(contextWithAppUser(ctx, auth.UserInfo{ID: 7}))
+	writer := httptest.NewRecorder()
+
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		s.appXinzhiliVoiceTurnStreamWithRuntimeHooks(writer, req, xinzhiliMultipartMemory, xinzhiliVoiceRuntimeHooks{
+			onTTSWorkerStart: func() { close(workerStarted) },
+			onTTSWorkerExit:  func() { close(workerExited) },
+		})
+	}()
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("handler remained blocked waiting for the idle TTS worker after request cancellation")
+	}
+	select {
+	case <-workerExited:
+	default:
+		t.Fatal("handler completed before the canceled TTS worker exited")
+	}
+}
+
+func TestCleanupXinzhiliMultipartFormLogsRemoveFailureWithoutRequestContent(t *testing.T) {
+	var logged string
+	cleanupXinzhiliMultipartForm(
+		&multipart.Form{},
+		func(*multipart.Form) error { return errors.New("disk cleanup failed") },
+		func(format string, args ...any) { logged = fmt.Sprintf(format, args...) },
+	)
+
+	if !strings.Contains(logged, "xinzhili multipart cleanup failed") || !strings.Contains(logged, "disk cleanup failed") {
+		t.Fatalf("cleanup warning = %q", logged)
+	}
+	for _, sensitive := range []string{"audioBase64", "我最近总是着急", "先停一下"} {
+		if strings.Contains(logged, sensitive) {
+			t.Fatalf("cleanup warning leaked request content %q: %s", sensitive, logged)
+		}
+	}
 }
 
 func TestAppXinzhiliVoiceTurnAcceptsTenMiBAudio(t *testing.T) {
@@ -348,6 +504,31 @@ type generatorFunc func(context.Context, rag.GenerateInput) (string, error)
 
 func (f generatorFunc) Generate(ctx context.Context, input rag.GenerateInput) (string, error) {
 	return f(ctx, input)
+}
+
+type xinzhiliStreamingGeneratorFunc func(context.Context, rag.GenerateInput, rag.StreamEmitter) (string, error)
+
+func (f xinzhiliStreamingGeneratorFunc) Generate(context.Context, rag.GenerateInput) (string, error) {
+	return "", errors.New("unexpected non-streaming generation")
+}
+
+func (f xinzhiliStreamingGeneratorFunc) GenerateStream(ctx context.Context, input rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+	return f(ctx, input, emit)
+}
+
+type failingXinzhiliSSEWriter struct {
+	header    http.Header
+	failEvent string
+}
+
+func (w *failingXinzhiliSSEWriter) Header() http.Header { return w.header }
+func (w *failingXinzhiliSSEWriter) WriteHeader(int)     {}
+func (w *failingXinzhiliSSEWriter) Flush()              {}
+func (w *failingXinzhiliSSEWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), "event: "+w.failEvent+"\n") {
+		return 0, io.ErrClosedPipe
+	}
+	return len(p), nil
 }
 
 type xinzhiliEphemeralAudioStoreSpy struct {

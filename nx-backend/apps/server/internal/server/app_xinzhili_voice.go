@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/chat"
@@ -42,6 +45,11 @@ type xinzhiliTTSResult struct {
 	Err         error
 }
 
+type xinzhiliVoiceRuntimeHooks struct {
+	onTTSWorkerStart func()
+	onTTSWorkerExit  func()
+}
+
 // appXinzhiliVoiceTurnStream 完成一轮“录音→ASR→检索→LLM→分句TTS”的低延迟对话。
 func (s *Server) appXinzhiliVoiceTurnStream(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, xinzhiliMaxRequestBytes)
@@ -49,9 +57,17 @@ func (s *Server) appXinzhiliVoiceTurnStream(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) appXinzhiliVoiceTurnStreamWithMultipartMemory(w http.ResponseWriter, r *http.Request, maxMemory int64) {
+	s.appXinzhiliVoiceTurnStreamWithRuntimeHooks(w, r, maxMemory, xinzhiliVoiceRuntimeHooks{})
+}
+
+func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWriter, r *http.Request, maxMemory int64, hooks xinzhiliVoiceRuntimeHooks) {
 	userInfo, ok := appUserFromContext(r)
 	if !ok {
 		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if !s.chatLimiter.Allow(userInfo.ID, time.Now()) {
+		httpx.Fail(w, http.StatusTooManyRequests, "请求过于频繁，请稍后再试")
 		return
 	}
 	flusher, ok := w.(http.Flusher)
@@ -76,6 +92,10 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithMultipartMemory(w http.ResponseWr
 	cleanupMultipart, err := parseXinzhiliMultipartForm(r, maxMemory)
 	defer cleanupMultipart()
 	if err != nil {
+		if isTooLarge(err) {
+			httpx.Fail(w, http.StatusRequestEntityTooLarge, "音频文件无效或过大")
+			return
+		}
 		httpx.Fail(w, http.StatusBadRequest, "音频上传格式不正确")
 		return
 	}
@@ -157,7 +177,6 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithMultipartMemory(w http.ResponseWr
 	_ = writeAppChatSSE(w, flusher, "state", map[string]string{"state": "thinking"})
 
 	generationCtx, cancelGeneration := context.WithCancel(ctx)
-	defer cancelGeneration()
 	deltas := make(chan string)
 	type generationResult struct {
 		Answer rag.Answer
@@ -182,9 +201,31 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithMultipartMemory(w http.ResponseWr
 
 	ttsJobs := make(chan xinzhiliTTSJob, 8)
 	ttsResults := make(chan xinzhiliTTSResult, 8)
+	ttsWorkerDone := make(chan struct{})
+	var closeTTSJobsOnce sync.Once
+	closeTTSJobs := func() {
+		closeTTSJobsOnce.Do(func() { close(ttsJobs) })
+	}
 	go func() {
+		defer close(ttsWorkerDone)
+		if hooks.onTTSWorkerStart != nil {
+			hooks.onTTSWorkerStart()
+		}
+		if hooks.onTTSWorkerExit != nil {
+			defer hooks.onTTSWorkerExit()
+		}
 		defer close(ttsResults)
-		for job := range ttsJobs {
+		for {
+			var job xinzhiliTTSJob
+			select {
+			case <-generationCtx.Done():
+				return
+			case received, open := <-ttsJobs:
+				if !open {
+					return
+				}
+				job = received
+			}
 			audioBytes, contentType, synthErr := s.synthesizeXinzhili(generationCtx, cfg, job.Text)
 			select {
 			case ttsResults <- xinzhiliTTSResult{Job: job, Audio: audioBytes, ContentType: contentType, Err: synthErr}:
@@ -196,6 +237,11 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithMultipartMemory(w http.ResponseWr
 			}
 		}
 	}()
+	defer func() {
+		cancelGeneration()
+		closeTTSJobs()
+		<-ttsWorkerDone
+	}()
 
 	chunker := voice.NewSentenceChunker(42)
 	nextSegment := 0
@@ -205,7 +251,6 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithMultipartMemory(w http.ResponseWr
 	deltaCh := (<-chan string)(deltas)
 	resultCh := (<-chan generationResult)(generationDone)
 	audioCh := (<-chan xinzhiliTTSResult)(ttsResults)
-	jobsClosed := false
 
 	queueChunks := func(chunks []string) bool {
 		for _, chunk := range chunks {
@@ -245,10 +290,7 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithMultipartMemory(w http.ResponseWr
 				cancelGeneration()
 				return
 			}
-			if !jobsClosed {
-				close(ttsJobs)
-				jobsClosed = true
-			}
+			closeTTSJobs()
 		case result, open := <-audioCh:
 			if !open {
 				audioCh = nil
@@ -271,9 +313,7 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithMultipartMemory(w http.ResponseWr
 			return
 		}
 	}
-	if !jobsClosed {
-		close(ttsJobs)
-	}
+	closeTTSJobs()
 	if generationErr != nil || strings.TrimSpace(answer.Answer) == "" {
 		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"code": "generation_failed", "message": "回答生成失败，请重试"})
 		return
@@ -295,10 +335,19 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithMultipartMemory(w http.ResponseWr
 func parseXinzhiliMultipartForm(r *http.Request, maxMemory int64) (func(), error) {
 	err := r.ParseMultipartForm(maxMemory)
 	return func() {
-		if r.MultipartForm != nil {
-			_ = r.MultipartForm.RemoveAll()
-		}
+		cleanupXinzhiliMultipartForm(r.MultipartForm, func(form *multipart.Form) error {
+			return form.RemoveAll()
+		}, log.Printf)
 	}, err
+}
+
+func cleanupXinzhiliMultipartForm(form *multipart.Form, removeAll func(*multipart.Form) error, warnf func(string, ...any)) {
+	if form == nil {
+		return
+	}
+	if err := removeAll(form); err != nil {
+		warnf("xinzhili multipart cleanup failed: %v", err)
+	}
 }
 
 func (s *Server) ensureXinzhiliMember(ctx context.Context, userID int64) error {
