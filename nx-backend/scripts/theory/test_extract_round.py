@@ -480,6 +480,61 @@ class AtomicOutputTest(unittest.TestCase):
         self.assertNotIn("/Users/", rendered)
         self.assertNotIn("Secret Folder", rendered)
 
+    def test_safe_error_redacts_absolute_paths_in_any_context_but_keeps_relative_details(self):
+        failures = (
+            FileNotFoundError(2, "No such file or directory", "/Users/example/My Folder/book.pdf"),
+            RuntimeError("path:/opt/private data/input.pdf"),
+            RuntimeError("failed at (/Users/example/资料 文件/book.epub)"),
+            RuntimeError("source:'/custom/root/with spaces/file.docx'"),
+        )
+        for failure in failures:
+            with self.subTest(failure=str(failure)):
+                rendered = json.dumps(self.module.safe_error(failure), ensure_ascii=False)
+                self.assertNotIn("/Users/", rendered)
+                self.assertNotIn("/opt/", rendered)
+                self.assertNotIn("/custom/", rendered)
+                self.assertNotIn("with spaces", rendered)
+        relative = self.module.safe_error(RuntimeError("读取 relative/path/file.pdf 失败"))
+        self.assertIn("relative/path/file.pdf", relative["reason"])
+
+    def test_legacy_quality_migration_is_copy_on_write_and_round_rollback_is_byte_exact(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            live = root / "sources/sample"
+            source, entry, manifest, quality = write_valid_pdf_output(live, self.module)
+            legacy = {"status": "pending_human_review",
+                      "scope": self.module.LEGACY_QUALITY_SCOPES["page"],
+                      "renders": quality["renders"],
+                      "extractionQuality": quality["extractionQuality"]}
+            self.module.write_json(live / "quality.json", legacy)
+
+            def snapshot():
+                return {path.relative_to(root / "sources").as_posix(): path.read_bytes()
+                        for path in (root / "sources").glob("**/*") if path.is_file()}
+
+            before = snapshot()
+            next_sources = root / "next"
+            self.module.clone_source_tree(live, next_sources / "sample")
+            migrated = self.module.migrate_legacy_quality(next_sources / "sample", source, entry)
+            self.assertIsNotNone(migrated)
+            self.assertEqual(before, snapshot(), "staged migration must not mutate live hardlinks")
+            with self.assertRaisesRegex(RuntimeError, "commit failed"):
+                self.module.commit_source_set(
+                    root, next_sources,
+                    lambda: (_ for _ in ()).throw(RuntimeError("commit failed")),
+                )
+            self.assertEqual(before, snapshot(), "failed round commit must restore live bytes exactly")
+
+            next_sources = root / "next-success"
+            self.module.clone_source_tree(live, next_sources / "sample")
+            self.assertIsNotNone(
+                self.module.migrate_legacy_quality(next_sources / "sample", source, entry)
+            )
+            self.module.commit_source_set(root, next_sources, lambda: None)
+            new_quality = json.loads((root / "sources/sample/quality.json").read_text("utf-8"))
+            self.assertEqual(self.module.PDF_QUALITY_SCOPE, new_quality["scope"])
+            self.assertIsNotNone(self.module.load_reusable_source(root / "sources/sample", source, entry))
+
     def test_json_output_is_deterministic_and_has_no_absolute_source_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "manifest.json"

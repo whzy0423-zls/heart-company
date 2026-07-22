@@ -53,12 +53,38 @@ def write_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     rendered = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    path.write_bytes((rendered + "\n").encode("utf-8"))
+    payload = (rendered + "\n").encode("utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.write-{os.getpid()}-", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def contains_posix_absolute_path(message):
+    for index, character in enumerate(message):
+        if character != "/":
+            continue
+        previous = message[index - 1] if index else ""
+        following = message[index + 1] if index + 1 < len(message) else ""
+        if following == "/" or previous == "/":
+            continue
+        if previous and (previous.isalnum() or previous in "._-"):
+            continue
+        return True
+    return False
 
 
 def safe_error(exc):
     message = str(exc).replace("\n", " ").replace("\r", " ")
-    if re.search(r"(?:^|\s)/(?:Users|home|private|tmp|var|opt|Volumes)/", message):
+    if contains_posix_absolute_path(message):
         message = "错误详情包含本地绝对路径，已整体脱敏"
     return {"errorType": type(exc).__name__, "reason": message[:500] or "未提供错误信息"}
 
@@ -969,6 +995,8 @@ def commit_source_set(output_root, next_sources, finalizer):
 
 def clone_source_tree(source, destination):
     def link_or_copy(source_file, destination_file):
+        if Path(source_file).suffix.lower() == ".json":
+            return shutil.copy2(source_file, destination_file)
         try:
             os.link(source_file, destination_file)
             return destination_file
