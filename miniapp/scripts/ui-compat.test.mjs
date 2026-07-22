@@ -144,8 +144,6 @@ for (const file of ['src/pages/relation/relation.vue', 'src/pages/test/test.vue'
 const indexPage = readFileSync('src/pages/index/index.vue', 'utf8')
 const indexTemplate = indexPage.match(/<template>[\s\S]*?<\/template>/)?.[0] || ''
 const teacherCoursewareSource = readFileSync('src/utils/teacherCourseware.js', 'utf8')
-const primaryHomeCtaCopies = indexPage.match(/开始学习/g) || []
-assert.equal(primaryHomeCtaCopies.length, 1, 'home page should expose exactly one primary CTA copy: 开始学习')
 assert.match(indexPage, /getStoredSiteConfig/, 'home page should render stored site config before refreshing')
 assert.match(indexPage, /refreshSiteConfig/, 'home page should refresh site config in the background')
 assert.match(indexPage, /normalizeTeachers/, 'home page should normalize teacher data including teacherTeaser')
@@ -163,7 +161,7 @@ assert.match(indexPage, /ticket\s*!==\s*loadTicket/, 'home page should ignore a 
 assert.match(indexPage, /v-if=["']loading["']/, 'home page should expose an explicit loading state')
 assert.match(indexPage, /v-if=["']loadError["']/, 'home page should expose a non-blocking refresh error')
 assert.match(indexPage, /@click=["']activateAction\(loadContent,\s*\$event\)["']/, 'home refresh failure should provide a cross-platform retry action')
-assert.match(indexPage, /资料整理中/, 'explicit empty teacher or course sections should render an editorial empty state')
+assert.match(indexPage, /资料整理中/, 'explicit empty teacher or course sections should render a local empty state')
 
 const teacherHeroImage = indexPage.match(/<image\b[^>]*class=["'][^"']*teacher-hero__image[^"']*["'][^>]*>/)?.[0] || ''
 assert.match(teacherHeroImage, /:src=["']teacherImage["']/, 'teacher portrait should use a resolved render source')
@@ -173,22 +171,43 @@ assert.match(teacherHeroImage, /@error=["']onTeacherImageError["']/, 'teacher po
 assert.doesNotMatch(teacherHeroImage, /lazy-load/, 'dominant above-fold teacher portrait should load eagerly')
 assert.match(indexPage, /resolveContentAsset\(teacher\.value\?\.avatar,\s*TEACHER_FALLBACK\)/, 'teacher image should resolve backend content before rendering')
 assert.match(indexPage, /teacherImageFallbackUsed/, 'teacher fallback should be applied only once')
-assert.match(indexPage, /\.teacher-hero__portrait\s*\{[^}]*aspect-ratio:\s*4\s*\/\s*5/, 'teacher portrait should reserve a stable editorial 4:5 frame')
 assert.match(indexPage, /teacher\.name/, 'teacher hero should render the teacher name')
 assert.match(indexPage, /teacher\.title/, 'teacher hero should render teacher identity')
 assert.match(indexPage, /teacher\.bio/, 'teacher hero should render a concise credibility biography')
-const primaryHomeAction = indexPage.match(/<view\b[^>]*class=["'][^"']*home-primary[^"']*["'][^>]*>/)?.[0] || ''
-assert.match(primaryHomeAction, /role=["']button["']/, 'home primary action should expose button semantics on H5')
-assert.match(primaryHomeAction, /tabindex=["']0["']/, 'home primary action should be keyboard focusable on H5')
-assert.match(primaryHomeAction, /@click=["']activateAction\(goLearn,\s*\$event\)["']/, 'home primary action should preserve click and mini-program tap activation')
-assert.match(primaryHomeAction, /@keydown=["']onActionKeydown\(\$event,\s*goLearn\)["']/, 'home primary action should compile one unmodified keydown handler for Enter and Space')
 assert.match(indexPage, /function\s+activateAction\(action,\s*event\)\s*\{[\s\S]*?event\?\.repeat[\s\S]*?keyboardActivationAt[\s\S]*?action\(\)/, 'home keyboard activation should ignore repeats and suppress the synthetic follow-up click')
 assert.match(indexPage, /function\s+onActionKeydown\(event,\s*action\)\s*\{\s*if\s*\(!\['Enter',\s*' ',\s*'Spacebar'\]\.includes\(event\?\.key\)\)\s*return\s*event\.preventDefault\?\.\(\)\s*event\.stopPropagation\?\.\(\)\s*activateAction\(action,\s*event\)/, 'the shared keydown handler should prevent only Enter/Space after filtering, leaving Tab untouched')
 
 const teacherHeroImages = indexPage.match(/<image\b[^>]*class=["'][^"']*teacher-hero__image[^"']*["'][^>]*>/g) || []
 assert.equal(teacherHeroImages.length, 1, 'home page should render exactly one teacher hero image')
+assert.match(indexPage, /class=["'][^"']*teacher-welcome[^"']*["']/, 'home should use a compact teacher welcome section')
+const teacherToggle = indexPage.match(/<view\b[^>]*class=["'][^"']*teacher-toggle[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(teacherToggle, /role=["']button["']/, 'teacher intro toggle should expose button semantics')
+assert.match(teacherToggle, /tabindex=["']0["']/, 'teacher intro toggle should be keyboard focusable')
+assert.match(teacherToggle, /:aria-expanded=["']teacherExpanded["']/, 'teacher intro toggle should expose expanded state')
+assert.match(teacherToggle, /aria-controls=["']teacher-bio["']/, 'teacher intro toggle should identify the controlled biography')
+assert.match(teacherToggle, /@click=["']activateAction\(toggleTeacher,\s*\$event\)["']/, 'teacher intro toggle should support click and mini-program tap')
+assert.match(teacherToggle, /@keydown=["']onActionKeydown\(\$event,\s*toggleTeacher\)["']/, 'teacher intro toggle should support Enter and Space')
+assert.match(indexPage, /\.teacher-toggle\s*\{[^}]*min-height:\s*88rpx/, 'teacher intro toggle should keep an 88rpx touch target')
+
+const serviceEntries = indexPage.match(/<view\b[^>]*class=["'][^"']*service-entry[^"']*["'][^>]*>/g) || []
+assert.equal(serviceEntries.length, 4, 'home should expose exactly four primary service entries')
+for (const copy of ['课程学习', '课件资料', '九型测试', '关系合盘']) {
+  assert.equal((indexPage.match(new RegExp(copy, 'g')) || []).length, 1, `home should expose one ${copy} service entry`)
+}
+for (const action of serviceEntries) {
+  assert.match(action, /role=["']button["']/, 'service entries should expose button semantics')
+  assert.match(action, /tabindex=["']0["']/, 'service entries should be keyboard focusable')
+  assert.match(action, /@click=["']activateAction\(/, 'service entries should preserve tap and click activation')
+  assert.match(action, /@keydown=["']onActionKeydown\(/, 'service entries should support Enter and Space')
+}
+assert.match(indexPage, /setLearningNavIntent\(['"]course['"]\)[\s\S]*?uni\.switchTab\([\s\S]*?clearLearningNavIntent/, 'course navigation should set a short-lived intent and clear it if switchTab fails')
+assert.match(indexPage, /setLearningNavIntent\(['"]material['"]\)[\s\S]*?uni\.switchTab\([\s\S]*?clearLearningNavIntent/, 'material navigation should set a short-lived intent and clear it if switchTab fails')
+assert.match(indexPage, /uni\.navigateTo\(\{\s*url:\s*['"]\/pages\/test\/test['"]/, 'test service should navigate to the test page')
+assert.match(indexPage, /uni\.navigateTo\(\{\s*url:\s*['"]\/pages\/relation\/relation['"]/, 'relation service should navigate to the relation page')
+
 const featuredCourseActions = indexPage.match(/<view\b[^>]*class=["']featured-course["'][^>]*>/g) || []
-assert.equal(featuredCourseActions.length, 1, 'home page should render exactly one featured course')
+assert.equal(featuredCourseActions.length, 1, 'home should render exactly one recommended course row')
+assert.equal((indexPage.match(/推荐课程/g) || []).length, 1, 'home should label the recommended course section once')
 assert.doesNotMatch(indexPage, /material-shelf|material-card|v-for=["']\(course,\s*index\) in materialCourses/, 'home page should not render a course shelf or additional course list')
 const courseCoverImages = indexPage.match(/<image\b[^>]*class=["'][^"']*featured-course__cover[^"']*["'][^>]*>/g) || []
 assert.equal(courseCoverImages.length, 1, 'home page should render exactly one featured course cover')
@@ -203,40 +222,27 @@ assert.match(indexPage, /return\s+!cover\s*\|\|\s*isLegacyWheel\s*\?\s*courseFal
 assert.match(indexPage, /resolveContentAsset\(homeCourseCover\(course,\s*index\),\s*courseFallback\(index\)\)/, 'featured and shelf course images should resolve the mapped publication cover')
 assert.doesNotMatch(indexPage, /resolveContentAsset\(course\.cover,/, 'DEFAULT_COURSEWARE_ITEMS wheel covers must not render directly on home')
 assert.match(indexPage, /courseImageFallbackUsed/, 'course cover fallback should be applied only once per item')
-const secondaryHomeActions = indexPage.match(/<view\b[^>]*class=["'][^"']*secondary-entry[^"']*["'][^>]*>/g) || []
-assert.equal(secondaryHomeActions.length, 2, 'home should expose exactly two secondary cross-platform actions')
-assert.equal((indexPage.match(/九型自测/g) || []).length, 1, 'home should expose one light 九型自测 entry')
-assert.equal((indexPage.match(/预约咨询/g) || []).length, 1, 'home should expose one light 预约咨询 entry')
-assert.doesNotMatch(indexPage, /关系合盘|goRelation|pages\/relation\/relation/, 'home should remove the old relationship entry without changing the relation page')
+assert.equal((indexPage.match(/最新课件/g) || []).length, 1, 'home should expose one latest material section')
+assert.match(indexPage, /class=["'][^"']*latest-material[^"']*["']/, 'home should render a latest material row')
+assert.equal((indexPage.match(/预约咨询/g) || []).length, 1, 'home should expose one lightweight booking prompt')
+assert.match(indexPage, /class=["'][^"']*booking-prompt[^"']*["']/, 'home should render booking as a lightweight prompt')
 assert.match(indexPage, /function\s+goBooking\(\)\s*\{\s*uni\.switchTab\(\{\s*url:\s*['"]\/pages\/booking\/booking['"]\s*\}\)\s*\}/, 'home consultation entry should switch to the booking tab')
 assert.match(indexPage, /@click=["']activateAction\(goBooking,\s*\$event\)["']/, 'home consultation entry should activate booking on click or tap')
 assert.match(indexPage, /@keydown=["']onActionKeydown\(\$event,\s*goBooking\)["']/, 'home consultation entry should activate booking from Enter or Space')
-for (const action of secondaryHomeActions) {
-  assert.match(action, /role=["']button["']/, 'secondary home actions should expose button semantics on H5')
-  assert.match(action, /tabindex=["']0["']/, 'secondary home actions should be keyboard focusable on H5')
-  assert.match(action, /@click=["']activateAction\(/, 'secondary home actions should preserve click and mini-program tap activation')
-  assert.match(action, /@keydown=["']onActionKeydown\(/, 'secondary home actions should compile one unmodified shared keydown handler')
-}
 const roleButtonViews = indexPage.match(/<view\b(?=[^>]*role=["']button["'])[^>]*>/g) || []
-assert.equal(roleButtonViews.length, 5, 'home should expose only retry, primary, featured course, and two secondary actions')
 for (const action of roleButtonViews) {
   assert.equal((action.match(/@keydown=/g) || []).length, 1, 'each home action should declare exactly one keydown binding')
 }
 assert.doesNotMatch(indexPage, /@keydown\./, 'keydown modifiers must not intercept Tab or compile duplicate WXML attributes')
-assert.doesNotMatch(indexPage, /<button\b[^>]*class=["'][^"']*(?:home-primary|secondary-entry)[^"']*["']/, 'home primary and secondary actions should not rely on non-focusable H5 uni-button output')
-
-assert.match(indexPage, /\.home-primary\s*\{[^}]*min-height:\s*88rpx/, 'home primary CTA should keep an 88rpx touch target')
-assert.match(indexPage, /\.secondary-entry\s*\{[^}]*min-height:\s*88rpx/, 'secondary entries should keep an 88rpx touch target')
-assert.match(indexPage, /\.home-primary:focus-visible[\s\S]*\.secondary-entry:focus-visible[\s\S]*outline:/, 'home controls should expose a visible keyboard focus state')
-assert.match(indexPage, /@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{[\s\S]*?\.teacher-hero\s*\{[^}]*grid-template-columns:/, 'tablet teacher hero should become a two-column editorial composition')
-assert.match(indexPage, /--home-bg:\s*#F6F1E7/i, 'home should use the approved warm plain background')
-assert.match(indexPage, /--home-surface:\s*#FFFDF8/i, 'home should use the approved warm content surface')
+assert.match(indexPage, /\.service-entry\s*\{[^}]*min-height:\s*(?:8[8-9]|9\d|[1-9]\d{2,})rpx/, 'service entries should keep at least an 88rpx touch target')
+assert.match(indexPage, /\.service-entry:focus-visible[\s\S]*\.booking-prompt:focus-visible[\s\S]*outline:/, 'home controls should expose a visible keyboard focus state')
+assert.match(indexPage, /--home-bg:\s*#F5F6F4/i, 'home should use a light WeUI-like page background')
+assert.match(indexPage, /--home-surface:\s*#FFFFFF/i, 'home should use white service blocks')
 assert.match(indexPage, /--home-ink:\s*#20252B/i, 'home should use the approved restrained ink color')
 assert.match(indexPage, /--home-green:\s*#335B4A/i, 'home should use the approved restrained green accent')
-assert.doesNotMatch(indexTemplate, /home-masthead|editorial-kicker|section-heading|portrait-mark|featured-course__spine|material-shelf|material-card|home-bento|float-token|texture|pattern|CURRICULUM|FEATURED|TEACHER|SELF TEST|RELATIONSHIP|学习专刊/, 'home should omit decorative layers, editorial numbering, and English labels')
+assert.doesNotMatch(indexTemplate, /home-primary|开始学习|teacher-hero__portrait|home-masthead|editorial-kicker|portrait-mark|featured-course__spine|material-shelf|material-card|home-bento|float-token|texture|pattern|CURRICULUM|FEATURED|TEACHER|SELF TEST|RELATIONSHIP|学习专刊/, 'home should omit the old long-page hero, main button, and decorative promotional layers')
 assert.doesNotMatch(indexPage, /(?:repeating-)?(?:linear|radial)-gradient|background-image|box-shadow|@keyframes|animation\s*:|backdrop-filter|filter\s*:/, 'home should use a plain background with no texture, normal shadow, filter, or entry animation')
 assert.doesNotMatch(indexPage, /border-radius:\s*(?:[3-9]\d|\d{3,})rpx/, 'home radii should stay within the restrained 16-24rpx range')
-assert.doesNotMatch(indexPage, /grid-template-columns:\s*repeat\(/, 'home should avoid complex Bento-style grids')
 
 
 assert.match(appleMobileStyle, /\.page-stack\s*\{[\s\S]*safe-area-inset-bottom/, 'page-stack should reserve bottom safe area globally')

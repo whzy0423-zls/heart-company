@@ -9,6 +9,7 @@ import {
   normalizeCoursewareItems,
   normalizeTeachers,
 } from '../../utils/teacherCourseware'
+import { clearLearningNavIntent, setLearningNavIntent } from '../../utils/learningNavIntent'
 import { userErrorMessage } from '../../utils/userMessage'
 
 const TEACHER_FALLBACK = DEFAULT_TEACHERS[0].avatar
@@ -40,6 +41,7 @@ const teachers = ref(normalizeTeachers())
 const courses = ref(normalizeCoursewareItems())
 const loading = ref(true)
 const loadError = ref('')
+const teacherExpanded = ref(false)
 const teacherImage = ref(TEACHER_FALLBACK)
 const courseImages = ref([])
 const teacherImageFallbackUsed = ref(false)
@@ -50,6 +52,11 @@ let keyboardActivationTarget = null
 
 const teacher = computed(() => teachers.value[0] || null)
 const featuredCourse = computed(() => courses.value[0] || null)
+const latestMaterial = computed(() => {
+  const course = courses.value.find((item) => Array.isArray(item.materialTypes) && item.materialTypes.length > 0)
+  if (!course) return null
+  return { course, type: course.materialTypes[0] }
+})
 const teacherImageLabel = computed(() => teacher.value ? `${teacher.value.name}老师肖像` : '授课老师肖像')
 
 function courseFallback(index) {
@@ -128,9 +135,9 @@ function activateAction(action, event) {
     return
   }
   if (
-    eventType === 'click' &&
-    keyboardActivationTarget === (event?.currentTarget || null) &&
-    now - keyboardActivationAt < 500
+    eventType === 'click'
+    && keyboardActivationTarget === (event?.currentTarget || null)
+    && now - keyboardActivationAt < 500
   ) {
     keyboardActivationTarget = null
     return
@@ -169,12 +176,36 @@ onMounted(() => {
   loadContent()
 })
 
+function toggleTeacher() {
+  teacherExpanded.value = !teacherExpanded.value
+}
+
+function goCourse() {
+  setLearningNavIntent('course')
+  uni.switchTab({
+    url: '/pages/learn/learn',
+    fail() {
+      clearLearningNavIntent()
+    },
+  })
+}
+
+function goMaterial() {
+  setLearningNavIntent('material')
+  uni.switchTab({
+    url: '/pages/learn/learn',
+    fail() {
+      clearLearningNavIntent()
+    },
+  })
+}
+
 function startTest() {
   uni.navigateTo({ url: '/pages/test/test' })
 }
 
-function goLearn() {
-  uni.switchTab({ url: '/pages/learn/learn' })
+function goRelation() {
+  uni.navigateTo({ url: '/pages/relation/relation' })
 }
 
 function goBooking() {
@@ -185,9 +216,7 @@ function goBooking() {
 <template>
   <view class="home nx-page page-stack ios-page ios-safe-bottom">
     <main class="home__content">
-      <view v-if="loading" class="sync-note" role="status">
-        正在更新老师与课程资料…
-      </view>
+      <view v-if="loading" class="sync-note" role="status">正在更新老师与课程资料…</view>
 
       <view v-if="loadError" class="home-error" role="status">
         <text>{{ loadError }}</text>
@@ -201,8 +230,8 @@ function goBooking() {
         >重试更新</view>
       </view>
 
-      <section class="teacher-hero" aria-labelledby="teacher-heading">
-        <view v-if="teacher" class="teacher-hero__portrait">
+      <section class="teacher-welcome" aria-labelledby="teacher-heading">
+        <template v-if="teacher">
           <image
             class="teacher-hero__image"
             :src="teacherImage"
@@ -211,30 +240,63 @@ function goBooking() {
             :aria-label="teacherImageLabel"
             @error="onTeacherImageError"
           />
-        </view>
-
-        <view v-if="teacher" class="teacher-hero__copy">
-          <text id="teacher-heading" class="teacher-hero__name">{{ teacher.name }}</text>
-          <text class="teacher-hero__identity">{{ teacher.title }}</text>
-          <text class="teacher-hero__bio">{{ teacher.bio }}</text>
+          <view class="teacher-copy">
+            <text class="teacher-eyebrow">你好，我是</text>
+            <text id="teacher-heading" class="teacher-name">{{ teacher.name }}</text>
+            <text class="teacher-identity">{{ teacher.title }}</text>
+          </view>
+          <text id="teacher-bio" class="teacher-bio" :class="{ 'teacher-bio--expanded': teacherExpanded }">{{ teacher.bio }}</text>
           <view
-            class="home-primary"
+            class="teacher-toggle"
             role="button"
             tabindex="0"
+            :aria-expanded="teacherExpanded"
+            aria-controls="teacher-bio"
             hover-class="control--pressed"
-            @click="activateAction(goLearn, $event)"
-            @keydown="onActionKeydown($event, goLearn)"
-          >开始学习</view>
-        </view>
-
-        <view v-else class="home-empty teacher-hero__empty">
+            @click="activateAction(toggleTeacher, $event)"
+            @keydown="onActionKeydown($event, toggleTeacher)"
+          >{{ teacherExpanded ? '收起介绍' : '了解老师' }} <text aria-hidden="true">{{ teacherExpanded ? '↑' : '↓' }}</text></view>
+        </template>
+        <view v-else class="home-empty teacher-empty">
           <text id="teacher-heading" class="home-empty__title">老师资料整理中</text>
           <text>课程团队正在完善主讲老师介绍，稍后再来看看。</text>
         </view>
       </section>
 
-      <section class="course-section" aria-labelledby="course-heading">
-        <text id="course-heading" class="course-section__title">精选课程</text>
+      <section class="service-section" aria-labelledby="service-heading">
+        <view class="section-heading">
+          <text id="service-heading" class="section-title">常用服务</text>
+          <text class="section-note">选择你现在想了解的内容</text>
+        </view>
+        <nav class="service-grid" aria-label="常用服务">
+          <view class="service-entry" role="button" tabindex="0" hover-class="control--pressed" @click="activateAction(goCourse, $event)" @keydown="onActionKeydown($event, goCourse)">
+            <text class="service-index" aria-hidden="true">01</text>
+            <text class="service-title">课程学习</text>
+            <text class="service-desc">系统认识九型人格</text>
+          </view>
+          <view class="service-entry" role="button" tabindex="0" hover-class="control--pressed" @click="activateAction(goMaterial, $event)" @keydown="onActionKeydown($event, goMaterial)">
+            <text class="service-index" aria-hidden="true">02</text>
+            <text class="service-title">课件资料</text>
+            <text class="service-desc">随时复习课程重点</text>
+          </view>
+          <view class="service-entry" role="button" tabindex="0" hover-class="control--pressed" @click="activateAction(startTest, $event)" @keydown="onActionKeydown($event, startTest)">
+            <text class="service-index" aria-hidden="true">03</text>
+            <text class="service-title">九型测试</text>
+            <text class="service-desc">{{ total }} 道题认识自己</text>
+          </view>
+          <view class="service-entry" role="button" tabindex="0" hover-class="control--pressed" @click="activateAction(goRelation, $event)" @keydown="onActionKeydown($event, goRelation)">
+            <text class="service-index" aria-hidden="true">04</text>
+            <text class="service-title">关系合盘</text>
+            <text class="service-desc">看懂彼此相处模式</text>
+          </view>
+        </nav>
+      </section>
+
+      <section class="content-section" aria-labelledby="course-heading">
+        <view class="section-heading section-heading--row">
+          <text id="course-heading" class="section-title">推荐课程</text>
+          <text class="section-link">更多课程</text>
+        </view>
         <view
           v-if="featuredCourse"
           class="featured-course"
@@ -242,67 +304,66 @@ function goBooking() {
           tabindex="0"
           :aria-label="`查看课程：${featuredCourse.title}`"
           hover-class="control--pressed"
-          @click="activateAction(goLearn, $event)"
-          @keydown="onActionKeydown($event, goLearn)"
+          @click="activateAction(goCourse, $event)"
+          @keydown="onActionKeydown($event, goCourse)"
         >
-          <image
-            class="featured-course__cover"
-            :src="courseImages[0]"
-            mode="aspectFill"
-            aria-hidden="true"
-            @error="onCourseImageError(0)"
-          />
-          <view class="featured-course__copy">
-            <text class="featured-course__title">{{ featuredCourse.title }}</text>
-            <text class="featured-course__desc">{{ featuredCourse.description }}</text>
-            <text class="featured-course__meta">{{ featuredCourse.badge }} · {{ featuredCourse.duration }}</text>
+          <image class="featured-course__cover" :src="courseImages[0]" mode="aspectFill" aria-hidden="true" @error="onCourseImageError(0)" />
+          <view class="course-copy">
+            <text class="course-title">{{ featuredCourse.title }}</text>
+            <text class="course-desc">{{ featuredCourse.description }}</text>
+            <text class="course-meta">{{ featuredCourse.badge }} · {{ featuredCourse.duration }}</text>
           </view>
+          <text class="row-arrow" aria-hidden="true">›</text>
         </view>
-
         <view v-else class="home-empty">
           <text class="home-empty__title">课程资料整理中</text>
           <text>新一期课程正在准备，稍后再来看看。</text>
         </view>
       </section>
 
-      <nav class="secondary-nav" aria-label="更多服务">
-        <view
-          class="secondary-entry"
-          role="button"
-          tabindex="0"
-          hover-class="control--pressed"
-          @click="activateAction(startTest, $event)"
-          @keydown="onActionKeydown($event, startTest)"
-        >
-          <view>
-            <text class="secondary-entry__title">九型自测</text>
-            <text class="secondary-entry__desc">用 {{ total }} 道题了解自己的性格模式</text>
-          </view>
-          <text class="secondary-entry__arrow" aria-hidden="true">→</text>
+      <section class="content-section" aria-labelledby="material-heading">
+        <view class="section-heading section-heading--row">
+          <text id="material-heading" class="section-title">最新课件</text>
+          <text class="section-link">全部资料</text>
         </view>
         <view
-          class="secondary-entry"
+          v-if="latestMaterial"
+          class="latest-material"
           role="button"
           tabindex="0"
+          :aria-label="`查看课件：${latestMaterial.course.title}`"
           hover-class="control--pressed"
-          @click="activateAction(goBooking, $event)"
-          @keydown="onActionKeydown($event, goBooking)"
+          @click="activateAction(goMaterial, $event)"
+          @keydown="onActionKeydown($event, goMaterial)"
         >
-          <view>
-            <text class="secondary-entry__title">预约咨询</text>
-            <text class="secondary-entry__desc">选择合适的时间与老师交流</text>
+          <view class="material-icon" aria-hidden="true">文</view>
+          <view class="material-copy">
+            <text class="material-title">{{ latestMaterial.course.title }}</text>
+            <text class="material-meta">{{ latestMaterial.type }} · {{ latestMaterial.course.duration }}</text>
           </view>
-          <text class="secondary-entry__arrow" aria-hidden="true">→</text>
+          <text class="row-arrow" aria-hidden="true">›</text>
         </view>
-      </nav>
+        <view v-else class="home-empty">
+          <text class="home-empty__title">学习资料整理中</text>
+          <text>老师正在整理新的学习资料。</text>
+        </view>
+      </section>
+
+      <view class="booking-prompt" role="button" tabindex="0" hover-class="control--pressed" @click="activateAction(goBooking, $event)" @keydown="onActionKeydown($event, goBooking)">
+        <view class="booking-copy">
+          <text class="booking-title">预约咨询</text>
+          <text class="booking-desc">有具体困惑？和老师一对一聊聊</text>
+        </view>
+        <text class="booking-action">去预约 <text aria-hidden="true">›</text></text>
+      </view>
     </main>
   </view>
 </template>
 
 <style scoped>
 .home {
-  --home-bg: #F6F1E7;
-  --home-surface: #FFFDF8;
+  --home-bg: #F5F6F4;
+  --home-surface: #FFFFFF;
   --home-ink: #20252B;
   --home-green: #335B4A;
   min-width: 0;
@@ -315,7 +376,7 @@ function goBooking() {
   width: 100%;
   max-width: 900rpx;
   margin: 0 auto;
-  padding: 28rpx 24rpx 52rpx;
+  padding: 24rpx 24rpx 48rpx;
   box-sizing: border-box;
 }
 
@@ -332,200 +393,273 @@ function goBooking() {
 
 .home-error {
   justify-content: space-between;
+  margin-bottom: 16rpx;
   color: #8C3C30;
-  border-bottom: 2rpx solid rgba(140, 60, 48, .24);
+}
+
+.home-retry,
+.teacher-toggle {
+  min-height: 88rpx;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--home-green);
+  font-size: 24rpx;
+  font-weight: 700;
 }
 
 .home-retry {
   flex: 0 0 auto;
-  min-height: 88rpx;
   padding: 0 20rpx;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #8C3C30;
-  font-size: 23rpx;
-  font-weight: 700;
 }
 
-.teacher-hero {
+.teacher-welcome {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 30rpx;
-  padding: 24rpx 0 48rpx;
-}
-
-.teacher-hero__portrait {
-  width: 100%;
-  aspect-ratio: 4 / 5;
-  overflow: hidden;
-  border-radius: 24rpx;
+  grid-template-columns: 112rpx minmax(0, 1fr);
+  column-gap: 20rpx;
+  padding: 24rpx;
+  border: 2rpx solid #E6EAE6;
+  border-radius: 20rpx;
   background: var(--home-surface);
 }
 
 .teacher-hero__image {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
-.teacher-hero__copy {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 14rpx;
-}
-
-.teacher-hero__name {
-  color: var(--home-ink);
-  font-size: 48rpx;
-  font-weight: 800;
-  line-height: 1.2;
-}
-
-.teacher-hero__identity {
-  color: var(--home-green);
-  font-size: 25rpx;
-  font-weight: 700;
-  line-height: 1.5;
-}
-
-.teacher-hero__bio {
-  color: #59615D;
-  font-size: 27rpx;
-  line-height: 1.72;
-}
-
-.home-primary {
-  width: 100%;
-  min-height: 88rpx;
-  margin-top: 12rpx;
-  padding: 0 32rpx;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  border-radius: 20rpx;
-  background: var(--home-green);
-  color: #FFFFFF;
-  font-size: 28rpx;
-  font-weight: 800;
-  touch-action: manipulation;
-}
-
-.course-section {
-  padding: 8rpx 0 36rpx;
-}
-
-.course-section__title {
-  display: block;
-  margin-bottom: 20rpx;
-  color: var(--home-ink);
-  font-size: 32rpx;
-  font-weight: 800;
-  line-height: 1.35;
-}
-
-.featured-course {
-  width: 100%;
-  min-width: 0;
-  min-height: 88rpx;
-  padding: 18rpx;
-  display: grid;
-  grid-template-columns: 176rpx minmax(0, 1fr);
-  align-items: center;
-  gap: 22rpx;
-  box-sizing: border-box;
-  border: 2rpx solid rgba(51, 91, 74, .24);
-  border-radius: 20rpx;
-  background: var(--home-surface);
-  color: inherit;
-  text-align: left;
-  touch-action: manipulation;
-}
-
-.featured-course__cover {
-  display: block;
-  width: 176rpx;
-  height: 176rpx;
+  grid-row: 1 / span 2;
+  width: 112rpx;
+  height: 112rpx;
   border-radius: 16rpx;
-  background: var(--home-bg);
+  background: #EEF1EE;
 }
 
-.featured-course__copy {
+.teacher-copy {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 8rpx;
+  justify-content: center;
+  gap: 3rpx;
 }
 
-.featured-course__title {
-  color: var(--home-ink);
-  font-size: 29rpx;
-  font-weight: 800;
-  line-height: 1.38;
-}
-
-.featured-course__desc {
-  color: #59615D;
-  font-size: 23rpx;
-  line-height: 1.55;
-}
-
-.featured-course__meta {
-  color: var(--home-green);
-  font-size: 21rpx;
-  font-weight: 700;
+.teacher-eyebrow,
+.teacher-identity {
+  color: #68716C;
+  font-size: 22rpx;
   line-height: 1.4;
 }
 
-.secondary-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 14rpx;
-  padding-top: 8rpx;
-}
-
-.secondary-entry {
-  width: 100%;
-  min-height: 88rpx;
-  padding: 18rpx 22rpx;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20rpx;
-  box-sizing: border-box;
-  border: 2rpx solid rgba(51, 91, 74, .28);
-  border-radius: 16rpx;
-  background: transparent;
+.teacher-name {
   color: var(--home-ink);
-  text-align: left;
-  touch-action: manipulation;
+  font-size: 32rpx;
+  font-weight: 800;
+  line-height: 1.3;
 }
 
-.secondary-entry > view {
-  min-width: 0;
+.teacher-identity {
+  color: var(--home-green);
+}
+
+.teacher-bio {
+  grid-column: 1 / -1;
+  margin-top: 20rpx;
+  overflow: hidden;
+  color: #59615D;
+  font-size: 25rpx;
+  line-height: 1.65;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.teacher-bio--expanded {
+  display: block;
+  overflow: visible;
+}
+
+.teacher-toggle {
+  grid-column: 1 / -1;
+  justify-self: start;
+  gap: 8rpx;
+}
+
+.teacher-empty {
+  grid-column: 1 / -1;
+}
+
+.service-section,
+.content-section {
+  margin-top: 32rpx;
+}
+
+.section-heading {
+  margin-bottom: 16rpx;
   display: flex;
   flex-direction: column;
   gap: 4rpx;
 }
 
-.secondary-entry__title {
+.section-heading--row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.section-title {
+  color: var(--home-ink);
+  font-size: 30rpx;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.section-note,
+.section-link {
+  color: #7A827E;
+  font-size: 22rpx;
+  line-height: 1.4;
+}
+
+.section-link {
+  color: var(--home-green);
+}
+
+.service-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14rpx;
+}
+
+.service-entry {
+  min-width: 0;
+  min-height: 168rpx;
+  padding: 20rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  box-sizing: border-box;
+  border: 2rpx solid #E6EAE6;
+  border-radius: 18rpx;
+  background: var(--home-surface);
+  touch-action: manipulation;
+}
+
+.service-index {
+  margin-bottom: 12rpx;
+  color: var(--home-green);
+  font-size: 21rpx;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.service-title {
+  color: var(--home-ink);
   font-size: 27rpx;
   font-weight: 800;
   line-height: 1.4;
 }
 
-.secondary-entry__desc {
-  color: #66706B;
-  font-size: 22rpx;
-  line-height: 1.5;
+.service-desc {
+  margin-top: 4rpx;
+  color: #737B77;
+  font-size: 21rpx;
+  line-height: 1.45;
 }
 
-.secondary-entry__arrow {
+.featured-course,
+.latest-material,
+.booking-prompt {
+  width: 100%;
+  min-width: 0;
+  min-height: 88rpx;
+  padding: 18rpx;
+  display: flex;
+  align-items: center;
+  gap: 18rpx;
+  box-sizing: border-box;
+  border: 2rpx solid #E6EAE6;
+  border-radius: 18rpx;
+  background: var(--home-surface);
+  color: inherit;
+  touch-action: manipulation;
+}
+
+.featured-course__cover {
+  flex: 0 0 auto;
+  width: 144rpx;
+  height: 108rpx;
+  border-radius: 14rpx;
+  background: #EEF1EE;
+}
+
+.course-copy,
+.material-copy,
+.booking-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5rpx;
+}
+
+.course-title,
+.material-title,
+.booking-title {
+  color: var(--home-ink);
+  font-size: 26rpx;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.course-desc {
+  overflow: hidden;
+  color: #69716D;
+  font-size: 21rpx;
+  line-height: 1.45;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.course-meta,
+.material-meta,
+.booking-desc {
+  color: #747C78;
+  font-size: 21rpx;
+  line-height: 1.45;
+}
+
+.course-meta {
+  color: var(--home-green);
+}
+
+.row-arrow {
+  flex: 0 0 auto;
+  color: #9BA19E;
+  font-size: 38rpx;
+}
+
+.material-icon {
+  flex: 0 0 auto;
+  width: 72rpx;
+  height: 72rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16rpx;
+  background: #EDF3EF;
+  color: var(--home-green);
+  font-size: 24rpx;
+  font-weight: 800;
+}
+
+.booking-prompt {
+  margin-top: 32rpx;
+  padding: 22rpx 24rpx;
+  border-color: #DDE5DF;
+}
+
+.booking-action {
   flex: 0 0 auto;
   color: var(--home-green);
-  font-size: 30rpx;
+  font-size: 23rpx;
+  font-weight: 700;
 }
 
 .home-empty {
@@ -533,8 +667,8 @@ function goBooking() {
   display: flex;
   flex-direction: column;
   gap: 8rpx;
-  border: 2rpx solid rgba(51, 91, 74, .2);
-  border-radius: 16rpx;
+  border: 2rpx solid #E6EAE6;
+  border-radius: 18rpx;
   background: var(--home-surface);
   color: #66706B;
   font-size: 24rpx;
@@ -547,37 +681,25 @@ function goBooking() {
   font-weight: 800;
 }
 
-.teacher-hero__empty {
-  grid-column: 1 / -1;
-}
-
 .control--pressed {
-  opacity: .74;
+  opacity: .72;
 }
 
-.home-primary:focus-visible,
 .home-retry:focus-visible,
+.teacher-toggle:focus-visible,
+.service-entry:focus-visible,
 .featured-course:focus-visible,
-.secondary-entry:focus-visible {
+.latest-material:focus-visible,
+.booking-prompt:focus-visible {
   outline: 4rpx solid #176B58;
   outline-offset: 4rpx;
 }
 
 @media screen and (min-width: 768px) {
   .home__content {
-    max-width: 1240rpx;
+    max-width: 1120rpx;
     padding-left: 40rpx;
     padding-right: 40rpx;
-  }
-
-  .teacher-hero {
-    grid-template-columns: minmax(0, 1fr) minmax(0, .9fr);
-    align-items: center;
-    gap: 48rpx;
-  }
-
-  .home-primary {
-    width: 320rpx;
   }
 }
 </style>
