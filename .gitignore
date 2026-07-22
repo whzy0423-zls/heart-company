@@ -28,3 +28,10 @@ certs/
 # 站点配置备份
 site-config.backup.json
 .ace-tool/
+
+# 理论库原始抽取/OCR 工作底稿（仅本地，不提交全文）
+var/theory-work/
+
+# Python 本地缓存
+__pycache__/
+*.py[cod]
