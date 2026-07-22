@@ -320,25 +320,25 @@
 
 ### Task 22：调整原生导航
 
-**Files:** `src/pages.json`, `scripts/project-config.test.mjs`, `scripts/ui-compat.test.mjs`
+**Files:** `src/pages.json`, `src/static/tabbar/test-active-green.png`, `src/static/tabbar/learn-active-green.png`, `src/static/tabbar/booking-active-green.png`, `src/static/tabbar/profile-active-green.png`, `scripts/project-config.test.mjs`, `scripts/ui-compat.test.mjs`
 
-- [ ] 写失败断言：tab 文案为首页/学习/预约/我的，首页和学习导航标题正确，selectedColor 为 `#335B4A`，仍为四项原生 tabBar。
+- [ ] 写失败断言：tab 文案为首页/学习/预约/我的，首页和学习导航标题正确，selectedColor 为 `#335B4A`、backgroundColor 为 `#FFFDF8`，四项 selectedIconPath 均指向新的绿色 PNG，仍为四项原生 tabBar。
 - [ ] 运行 `node scripts/project-config.test.mjs && node scripts/ui-compat.test.mjs`，预期 FAIL。
-- [ ] 修改 pages.json，不新增自定义 tabBar。
+- [ ] 由现有图标生成同尺寸深绿色选中 PNG，并修改 pages.json；不新增自定义 tabBar。
 - [ ] 运行配置测试、全量测试和 H5/MP 构建，预期 PASS。
-- [ ] 提交：`git add src/pages.json scripts/project-config.test.mjs scripts/ui-compat.test.mjs && git commit -m "feat: align miniapp primary navigation"`。
+- [ ] 提交：`git add src/pages.json src/static/tabbar/*-active-green.png scripts/project-config.test.mjs scripts/ui-compat.test.mjs && git commit -m "feat: align miniapp primary navigation"`。
 
 ### Task 23：重构服务型首页
 
 **Files:** `src/pages/index/index.vue`, `src/utils/learningNavIntent.js`, `src/utils/learningNavIntent.test.mjs`, `scripts/ui-compat.test.mjs`, `package.json`
 
-- [ ] 写失败测试：学习导航意图只接受 course/material/quote，支持写入、读取清除和非法值回退。
+- [ ] 写失败测试：学习导航意图只接受 course/material/quote，写入 10 秒过期时间，支持读取清除、过期自动清除、非法值回退和显式清除。
 - [ ] 写失败 UI 断言：紧凑老师区、四个服务入口、推荐课程、最新课件、轻量预约；旧长页主按钮/大幅宣传结构不存在。
 - [ ] 运行新增测试和 UI 测试，预期 FAIL。
 - [ ] 实现导航意图工具并注册测试。
-- [ ] 首页课程/课件入口写入意图后 `switchTab` 学习；测试、合盘和预约进入现有页面。
-- [ ] 老师介绍支持可访问展开/收起；保留后台缓存、图片和错误逻辑。
-- [ ] 运行完整测试与 H5/MP 构建，检查 WXML 和三个视口。
+- [ ] 首页课程/课件入口写入意图后 `switchTab` 学习，`fail` 回调立即清除意图；测试/合盘使用 `navigateTo`，预约使用 `switchTab`。
+- [ ] 老师介绍展开控件具备 `role="button"`、`tabindex="0"`、`aria-expanded`、`aria-controls`、Enter/Space 和至少 88rpx；保留后台缓存、图片和错误逻辑。
+- [ ] 运行完整测试与 H5/MP 构建；在 375×812、390×844、768×1024 检查无横向滚动、主要服务在一到两个手机屏内可发现、loading/error/retry/老师空/课程空状态可见且控件可聚焦。
 - [ ] 提交：`git add src/pages/index/index.vue src/utils/learningNavIntent.js src/utils/learningNavIntent.test.mjs scripts/ui-compat.test.mjs package.json && git commit -m "feat: rebuild miniapp service home"`。
 
 ### Task 24：重构学习中心分类
@@ -346,10 +346,10 @@
 **Files:** `src/pages/learn/learn.vue`, `src/utils/learningPageState.js`, `src/utils/learningPageState.test.mjs`, `scripts/ui-compat.test.mjs`
 
 - [ ] 写失败测试：课程数据可展开为稳定的资料条目；onShow 导航意图可切换分类并清除；无意图保持当前分类。
-- [ ] 写失败 UI 断言：课程/课件/语录三项分类、紧凑老师展开区、分类对应列表和空状态。
+- [ ] 写失败 UI 断言：课程/课件/语录三项分类、紧凑老师展开区、分类对应列表，以及课程空/课件空/语录空、loading、error、retry 状态。
 - [ ] 运行测试，预期 FAIL。
-- [ ] 使用 `onShow` 读取导航意图；分类控件具备 selected/aria/键盘/tap 状态。
+- [ ] 使用 `onShow` 读取导航意图；分类容器具备 `role="tablist"`，分类项具备 `role="tab"`、`aria-selected`、可见焦点和 Enter/Space/左右方向键选择，微信端保留 tap。
 - [ ] 课程分类显示课程列表；课件分类展开 materialTypes；语录显示完整列表；九型速查降级。
 - [ ] 保留缓存、错误、图片回退、唯一键和无障碍逻辑。
-- [ ] 运行完整测试与 H5/MP 构建，检查 WXML、分类交互和三个视口。
+- [ ] 运行完整测试与 H5/MP 构建；在 375×812、390×844、768×1024 检查无横向滚动、分类焦点/选择、老师展开、loading/error/retry 和三类空状态。
 - [ ] 提交：`git add src/pages/learn/learn.vue src/utils/learningPageState.js src/utils/learningPageState.test.mjs scripts/ui-compat.test.mjs && git commit -m "feat: organize miniapp learning center"`。
