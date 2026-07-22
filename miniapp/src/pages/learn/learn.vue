@@ -385,7 +385,7 @@ function goTest() {
 
 .learn-teacher__bio {
   color: rgba(32, 37, 43, .76);
-  font-size: 24rpx;
+  font-size: 26rpx;
   line-height: 1.65;
 }
 
@@ -402,7 +402,7 @@ function goTest() {
   border: 2rpx solid rgba(51, 91, 74, .3);
   border-radius: 16rpx;
   color: var(--learn-green);
-  font-size: 19rpx;
+  font-size: 23rpx;
   font-weight: 800;
   line-height: 1.3;
 }
@@ -494,13 +494,13 @@ function goTest() {
 
 .course-row__duration {
   color: var(--learn-green);
-  font-size: 19rpx;
+  font-size: 23rpx;
   font-weight: 800;
 }
 
 .course-row__desc {
   color: rgba(32, 37, 43, .7);
-  font-size: 22rpx;
+  font-size: 26rpx;
   line-height: 1.55;
 }
 
@@ -595,7 +595,7 @@ function goTest() {
   border-radius: 16rpx;
   background: var(--learn-surface);
   color: var(--learn-green);
-  font-size: 19rpx;
+  font-size: 22rpx;
   line-height: 1.35;
 }
 
