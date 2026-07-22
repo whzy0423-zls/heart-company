@@ -1,5 +1,59 @@
 import { normalizeCoursewareItems, normalizeTeachers } from './teacherCourseware.js'
 
+const LEARNING_CATEGORIES = new Set(['course', 'material', 'quote'])
+
+function identityText(value, fallback) {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  return fallback
+}
+
+function materialIdentity(material, index) {
+  if (typeof material === 'string') {
+    const text = material.trim()
+    return text ? { id: text, label: text } : null
+  }
+  if (!material || typeof material !== 'object') return null
+  const label = identityText(material.name || material.title || material.type || material.label, '')
+  if (!label) return null
+  return {
+    id: identityText(material.id || material.key || material.code, label || `material-${index}`),
+    label,
+  }
+}
+
+export function flattenLearningMaterials(courses) {
+  if (!Array.isArray(courses)) return []
+  const keyCounts = new Map()
+  return courses.flatMap((course, courseIndex) => {
+    if (!course || typeof course !== 'object' || !Array.isArray(course.materialTypes)) return []
+    const rawCourseTitle = identityText(course.title || course.name, '')
+    const courseTitle = rawCourseTitle || '未命名课程'
+    const courseId = identityText(course.id || course.key || course.courseId, rawCourseTitle || `course-${courseIndex}`)
+    return course.materialTypes.map((material, materialIndex) => {
+      const identity = materialIdentity(material, materialIndex)
+      if (!identity) return null
+      const baseKey = `${courseId}::material::${identity.id}`
+      const occurrence = (keyCounts.get(baseKey) || 0) + 1
+      keyCounts.set(baseKey, occurrence)
+      return {
+        key: occurrence === 1 ? baseKey : `${baseKey}::${occurrence}`,
+        courseKey: courseId,
+        courseTitle,
+        type: identity.label,
+        description: identityText(course.description, ''),
+        duration: identityText(course.duration, ''),
+        url: identityText(material?.url || course.url, ''),
+      }
+    }).filter(Boolean)
+  })
+}
+
+export function resolveLearningCategory(currentCategory, navigationIntent) {
+  if (LEARNING_CATEGORIES.has(navigationIntent)) return navigationIntent
+  return LEARNING_CATEGORIES.has(currentCategory) ? currentCategory : 'course'
+}
+
 export const TEACHER_SECTION_PATHS = [
   ['teacher'],
   ['teachers'],

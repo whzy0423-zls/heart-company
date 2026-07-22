@@ -5,9 +5,16 @@ import {
   createInitialLearningContent,
   createLatestRequestGuard,
   createOneShotFallbackRegistry,
+  flattenLearningMaterials,
   handleActionKeydown,
+  resolveLearningCategory,
   retainLearningContentOnError,
 } from './learningPageState.js'
+import {
+  LEARNING_NAV_INTENT_KEY,
+  readLearningNavIntent,
+  setLearningNavIntent,
+} from './learningNavIntent.js'
 
 const initial = createInitialLearningContent()
 assert.ok(initial.teachers.length > 0, 'uncached learning content should start with the local teacher fallback')
@@ -96,5 +103,68 @@ assert.equal(enterHandled, true, 'Enter should be handled as an activation key')
 assert.equal(prevented, 1, 'Enter should be prevented after key filtering')
 assert.equal(stopped, 1, 'handled activation keys should stop propagation')
 assert.equal(activated, 1, 'Enter should trigger the supplied action')
+
+const materialCourses = [
+  {
+    id: 'course-a',
+    title: '九型入门',
+    description: '建立九型基础地图',
+    duration: '20 分钟',
+    materialTypes: [
+      { id: 'slides', name: '讲义' },
+      { id: 'audio', name: '音频' },
+    ],
+  },
+  {
+    title: '关系练习',
+    materialTypes: ['讲义', '讲义'],
+  },
+]
+const flattenedMaterials = flattenLearningMaterials(materialCourses)
+assert.deepEqual(
+  flattenedMaterials.map(({ key, courseTitle, type }) => ({ key, courseTitle, type })),
+  [
+    { key: 'course-a::material::slides', courseTitle: '九型入门', type: '讲义' },
+    { key: 'course-a::material::audio', courseTitle: '九型入门', type: '音频' },
+    { key: '关系练习::material::讲义', courseTitle: '关系练习', type: '讲义' },
+    { key: '关系练习::material::讲义::2', courseTitle: '关系练习', type: '讲义' },
+  ],
+  'course data should flatten into stable, unique material entries using course and material identities',
+)
+assert.deepEqual(
+  flattenLearningMaterials(materialCourses).map((item) => item.key),
+  flattenedMaterials.map((item) => item.key),
+  'material keys should remain stable across repeated normalization',
+)
+assert.deepEqual(flattenLearningMaterials(null), [], 'malformed course data should flatten safely')
+assert.deepEqual(
+  flattenLearningMaterials([{ title: '无资料课程', materialTypes: null }, null]),
+  [],
+  'courses without valid material types should not create placeholder materials',
+)
+
+for (const category of ['course', 'material', 'quote']) {
+  assert.equal(resolveLearningCategory('course', category), category, `${category} navigation intent should select its matching category`)
+}
+assert.equal(resolveLearningCategory('material', null), 'material', 'no navigation intent should retain the current valid category')
+assert.equal(resolveLearningCategory('quote', 'unknown'), 'quote', 'invalid navigation intent should retain the current valid category')
+assert.equal(resolveLearningCategory('unknown', null), 'course', 'an invalid current category should fall back to courses')
+
+const intentStorage = new Map()
+globalThis.uni = {
+  getStorageSync: (key) => intentStorage.has(key) ? intentStorage.get(key) : '',
+  setStorageSync: (key, value) => intentStorage.set(key, value),
+  removeStorageSync: (key) => intentStorage.delete(key),
+}
+setLearningNavIntent('quote', { now: () => 1000 })
+const categoryAfterShow = resolveLearningCategory('course', readLearningNavIntent({ now: () => 1001 }))
+assert.equal(categoryAfterShow, 'quote', 'onShow-style intent consumption should change to the requested category')
+assert.equal(intentStorage.has(LEARNING_NAV_INTENT_KEY), false, 'reading a navigation intent should clear it immediately')
+assert.equal(
+  resolveLearningCategory(categoryAfterShow, readLearningNavIntent({ now: () => 1002 })),
+  'quote',
+  'a later onShow without an intent should retain the current category',
+)
+delete globalThis.uni
 
 console.log('learning page state tests passed')

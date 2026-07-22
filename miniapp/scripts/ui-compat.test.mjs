@@ -315,6 +315,8 @@ const learningPageStateSource = readFileSync('src/utils/learningPageState.js', '
 
 assert.match(learningPageStateSource, /normalizeTeachers/, 'learn state utility should normalize teacher profile data from site config')
 assert.match(learningPageStateSource, /normalizeCoursewareItems/, 'learn state utility should normalize courseware and course data from site config')
+assert.match(learningPageStateSource, /function\s+flattenLearningMaterials\(/, 'learn state should flatten course material types into category rows')
+assert.match(learningPageStateSource, /function\s+resolveLearningCategory\(/, 'learn state should resolve one-time navigation intent without corrupting the active category')
 assert.match(learnPage, /resolveContentAsset/, 'learn page should resolve backend teacher and course image assets safely')
 const learnTemplate = learnPage.match(/<template>[\s\S]*?<\/template>/)?.[0] || ''
 const learnTeacherSections = learnTemplate.match(/<section\b[^>]*class=["'][^"']*learn-teacher[^"']*["'][^>]*>/g) || []
@@ -324,6 +326,30 @@ assert.match(learnPage, /teacher\.name/, 'teacher profile should render the teac
 assert.match(learnPage, /teacher\.title/, 'teacher profile should render the teacher title')
 assert.match(learnPage, /teacher\.bio/, 'teacher profile should render the teacher biography')
 assert.match(learnPage, /teacher\.tags/, 'teacher profile should render teacher expertise tags')
+const learnTeacherToggle = learnPage.match(/<view\b[^>]*class=["'][^"']*learn-teacher__toggle[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(learnTeacherToggle, /role=["']button["']/, 'compact teacher introduction should expose an accessible expand control')
+assert.match(learnTeacherToggle, /tabindex=["']0["']/, 'teacher introduction toggle should be keyboard focusable')
+assert.match(learnTeacherToggle, /:aria-expanded=["']teacherExpanded["']/, 'teacher introduction toggle should expose its expanded state')
+assert.match(learnTeacherToggle, /aria-controls=["']learn-teacher-details["']/, 'teacher introduction toggle should identify the expandable details')
+assert.match(learnTeacherToggle, /@keydown=["']onActionKeydown\(\$event,\s*toggleTeacher\)["']/, 'teacher introduction toggle should support Enter and Space')
+
+const learnTabList = learnPage.match(/<view\b[^>]*class=["'][^"']*learn-tabs[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(learnTabList, /role=["']tablist["']/, 'learning categories should expose tablist semantics')
+const learnTabs = learnPage.match(/<view\b(?=[^>]*class=["'][^"']*learn-tab[^"']*["'])(?=[^>]*role=["']tab["'])[^>]*>/g) || []
+assert.equal(learnTabs.length, 3, 'learning center should expose exactly three category tabs')
+for (const tab of learnTabs) {
+  assert.match(tab, /:aria-selected=/, 'each learning tab should expose its selected state')
+  assert.match(tab, /:tabindex=/, 'each learning tab should participate in roving keyboard focus')
+  assert.match(tab, /@click=/, 'each learning tab should support tap and click selection')
+  assert.match(tab, /@keydown=/, 'each learning tab should support Enter, Space, and arrow keys')
+  assert.equal((tab.match(/@keydown=/g) || []).length, 1, 'each learning tab should declare one keyboard event binding')
+}
+for (const category of ['课程', '课件', '语录']) {
+  assert.equal((learnTemplate.match(new RegExp(`>${category}<`, 'g')) || []).length, 1, `learning center should expose one ${category} tab`)
+}
+assert.match(learnPage, /onShow\(consumeNavigationIntent\)/, 'learning center should consume home navigation intent every time the tab is shown')
+assert.match(learnPage, /readLearningNavIntent\(\)/, 'learning center should use the one-time read-and-clear navigation intent')
+assert.match(learnPage, /resolveLearningCategory\(activeCategory\.value,\s*readLearningNavIntent\(\)\)/, 'missing intent should retain the current valid learning category')
 
 const learnTeacherImage = learnPage.match(/<image\b[^>]*class=["'][^"']*learn-teacher__image[^"']*["'][^>]*>/)?.[0] || ''
 assert.match(learnTeacherImage, /:src=["']teacherImage["']/, 'teacher portrait should use a resolved render source')
@@ -353,14 +379,17 @@ assert.match(learnPage, /resolveContentAsset\(learnCourseCover\(course,\s*index\
 assert.match(learnPage, /courseImageFallbackUsed/, 'course cover fallback should be applied only once per item')
 assert.doesNotMatch(learnPage, /class=["'][^"']*course-row[^"']*["'][^>]*role=["']button["']/, 'course rows should remain display-only until a course route exists')
 
-assert.match(learnPage, /class=["'][^"']*pull-quote[^"']*["']/, 'quotes should render as a typographic editorial pull quote')
-assert.match(learnTemplate, /v-if=["']quotes\.length["'][\s\S]*?quotes\[0\]/, 'learn page should render only the first quote when available')
-assert.doesNotMatch(learnTemplate, /v-for=["'][^"']*quote/, 'learn page should not render a quote stack')
-assert.match(learnTemplate, /v-else[^>]*class=["'][^"']*quote-empty/, 'learn page should render an explicit quote empty state')
+assert.match(learnTemplate, /activeCategory\s*===\s*'course'[\s\S]*?class=["'][^"']*course-list/, 'course category should render the course list')
+assert.match(learnTemplate, /activeCategory\s*===\s*'material'[\s\S]*?v-for=["']material in materialItems["']/, 'material category should render every flattened material row')
+assert.match(learnTemplate, /activeCategory\s*===\s*'quote'[\s\S]*?v-for=["']\(quote,\s*quoteIndex\) in quotes["']/, 'quote category should render all teacher quotes')
+assert.match(learnPage, /flattenLearningMaterials\(coursewareItems\.value\)/, 'material category should derive rows from normalized courses')
+assert.match(learnPage, /课程内容整理中/, 'course category should provide a dedicated empty state')
+assert.match(learnPage, /课件资料整理中/, 'material category should provide a dedicated empty state')
+assert.match(learnPage, /老师语录整理中/, 'quote category should provide a dedicated empty state')
 assert.match(learnPage, /class=["'][^"']*type-index[^"']*["']/, 'the type index should remain available late in the page')
 assert.match(learnPage, /\.learn-teacher__bio\s*\{[^}]*font-size:\s*(?:2[6-9]|[3-9]\d|\d{3,})rpx/, 'teacher biography should remain readable at 26rpx or larger')
 assert.match(learnPage, /\.course-row__desc\s*\{[^}]*font-size:\s*(?:2[6-9]|[3-9]\d|\d{3,})rpx/, 'course descriptions should remain readable at 26rpx or larger')
-assert.match(learnPage, /\.material-types text\s*\{[^}]*font-size:\s*(?:2[2-9]|[3-9]\d|\d{3,})rpx/, 'material metadata should remain readable at 22rpx or larger')
+assert.match(learnPage, /\.material-row__type\s*\{[^}]*font-size:\s*(?:2[2-9]|[3-9]\d|\d{3,})rpx/, 'material metadata should remain readable at 22rpx or larger')
 assert.match(learnPage, /\.course-row__duration\s*\{[^}]*font-size:\s*(?:2[2-9]|[3-9]\d|\d{3,})rpx/, 'duration metadata should remain readable at 22rpx or larger')
 assert.match(learnPage, /\.type-index__item\s*\{[^}]*font-size:\s*(?:2[2-9]|[3-9]\d|\d{3,})rpx/, 'type index text should remain readable at 22rpx or larger')
 assert.doesNotMatch(learnPage, /font-size:\s*19rpx/, 'learn page should not use 19rpx content text')
@@ -392,20 +421,16 @@ assert.match(learnPage, /requestGuard\.isLatest\(ticket\)/, 'learn page should i
 assert.match(learnPage, /retainLearningContentOnError\(/, 'learn request failures should preserve current content through the tested state utility')
 assert.doesNotMatch(learnPage, /teachers\.value\s*=\s*normalizeTeachers\(\)[\s\S]*coursewareItems\.value\s*=\s*normalizeCoursewareItems\(\)[\s\S]*loadError\.value/, 'request failure should not replace currently visible content')
 assert.match(learnPage, /id=["']learn-teacher-heading["']\s+class=["']editorial-empty__title["']/, 'empty teacher state should keep the aria-labelledby target available')
-for (const keyKind of ['course', 'tag', 'material']) {
+for (const keyKind of ['course', 'tag']) {
   assert.match(learnPage, new RegExp(`::${keyKind}::|${keyKind}::`), `learn ${keyKind} keys should include stable delimiters and indices`)
 }
+assert.match(learningPageStateSource, /::material::/, 'flattened material keys should include an explicit material identity delimiter')
 
 const learnRetry = learnPage.match(/<view\b[^>]*class=["'][^"']*learn-retry[^"']*["'][^>]*>/)?.[0] || ''
 assert.match(learnRetry, /role=["']button["']/, 'learn retry should expose button semantics on H5')
 assert.match(learnRetry, /tabindex=["']0["']/, 'learn retry should be keyboard focusable on H5')
 assert.match(learnRetry, /@click=["']activateAction\(loadContent,\s*\$event\)["']/, 'learn retry should preserve mini-program tap and H5 click activation')
 assert.match(learnRetry, /@keydown=["']onActionKeydown\(\$event,\s*loadContent\)["']/, 'learn retry should use one plain keydown handler')
-const learnPrimaryAction = learnPage.match(/<view\b[^>]*class=["'][^"']*learn-primary[^"']*["'][^>]*>/)?.[0] || ''
-assert.match(learnPrimaryAction, /role=["']button["']/, 'learn primary action should expose button semantics on H5')
-assert.match(learnPrimaryAction, /tabindex=["']0["']/, 'learn primary action should be keyboard focusable on H5')
-assert.match(learnPrimaryAction, /@click=["']activateAction\(goTest,\s*\$event\)["']/, 'learn primary action should guide to the existing test')
-assert.match(learnPrimaryAction, /@keydown=["']onActionKeydown\(\$event,\s*goTest\)["']/, 'learn primary action should use one plain keydown handler')
 assert.match(learnPage, /handleActionKeydown\(event,\s*\(\)\s*=>\s*activateAction\(action,\s*event\)\)/, 'learn keydown handler should delegate to the behavior-tested activation filter')
 const learnRoleButtons = learnPage.match(/<view\b(?=[^>]*role=["']button["'])[^>]*>/g) || []
 for (const action of learnRoleButtons) {
@@ -413,13 +438,12 @@ for (const action of learnRoleButtons) {
 }
 assert.doesNotMatch(learnPage, /@keydown\./, 'learn keydown modifiers must not compile duplicate WXML attributes or intercept Tab')
 assert.match(learnPage, /\.learn-retry\s*\{[^}]*min-height:\s*88rpx/, 'learn retry should keep an 88rpx touch target')
-assert.match(learnPage, /\.learn-primary\s*\{[^}]*min-height:\s*88rpx/, 'learn primary action should keep an 88rpx touch target')
-assert.match(learnPage, /\.learn-retry:focus-visible[\s\S]*\.learn-primary:focus-visible[\s\S]*outline:/, 'learn controls should expose a visible keyboard focus state')
-assert.match(learnPage, /@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{[\s\S]*?\.learn-teacher\s*\{[^}]*grid-template-columns:/, 'tablet teacher section should become a two-column editorial composition')
+assert.match(learnPage, /\.learn-tab:focus-visible[\s\S]*outline:/, 'learning tabs should expose a visible keyboard focus state')
+assert.match(learnPage, /\.learn-teacher__toggle\s*\{[^}]*min-height:\s*88rpx/, 'teacher details toggle should keep an 88rpx touch target')
 const learnTabletMedia = learnPage.match(/@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{([\s\S]*?)\n\}/)?.[1] || ''
 assert.doesNotMatch(learnTabletMedia, /\.course-list\s*\{[^}]*grid-template-columns:\s*repeat\(2/, 'tablet courses should remain a readable single-column list')
 assert.doesNotMatch(learnPage, /\.course-list\s*\{[^}]*grid-template-columns:\s*repeat\(2/, 'courses should remain a readable single-column list at every viewport width')
-assert.match(learnTabletMedia, /\.learn-primary\s*\{[^}]*width:\s*100%[^}]*max-width:\s*360rpx[^}]*min-width:\s*0[^}]*box-sizing:\s*border-box/, 'tablet teacher CTA should fit its grid column without rpx overflow')
+assert.doesNotMatch(learnPage, /min-width:\s*(?:7[5-9]\d|[89]\d{2}|\d{4,})rpx/, 'learning center should not force horizontal overflow at phone widths')
 
 const profilePage = readFileSync('src/pages/profile/profile.vue', 'utf8')
 assert.match(profilePage, /profileLoading/, 'profile page should expose a loading state for non-blocking history fetch')
