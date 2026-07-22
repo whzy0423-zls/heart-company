@@ -553,8 +553,9 @@ assert.match(resultPage, /normalizeLastResult/, 'result page should validate cac
 assert.match(resultPage, /测试结果已失效/, 'result page should give feedback when cached result schema is invalid')
 
 const relationPage = readFileSync('src/pages/relation/relation.vue', 'utf8')
+const relationTemplate = stripMarkupAndCssComments(relationPage.match(/<template>([\s\S]*)<\/template>\s*<style/)?.[1] || '')
+const relationStyle = stripMarkupAndCssComments(vueSection(relationPage, 'style') || '')
 assert.match(relationPage, /<view\s+class=["'][^"']*page-stack[^"']*ios-page[^"']*ios-safe-bottom[^"']*["']/, 'relation root should use shared page-stack/iOS safe-area classes')
-assert.match(relationPage, /class=["'][^"']*card[^"']*ios-card[^"']*intro[^"']*["']/, 'relation intro card should opt into iOS card styling')
 assert.match(relationPage, /<button\s+class=["'][^"']*btn-primary[^"']*ios-button[^"']*["'][^>]*@click=["']analyze["']/, 'relation primary action should opt into iOS button styling')
 assert.doesNotMatch(relationPage, /padding-bottom:\s*60rpx/, 'relation page should not hard-code bottom padding outside shared safe-area helpers')
 const relationGridGap = relationPage.match(/\.grid\s*\{[\s\S]*?gap:\s*(\d+)rpx/)
@@ -564,10 +565,97 @@ assert.match(relationPage, /stage\.value\s*=\s*'redirecting'/, 'relation invalid
 assert.match(relationPage, /v-else-if="stage === 'result'"/, 'relation result view should be explicit so redirecting can show a safe placeholder')
 assert.match(relationPage, /型号参数无效/, 'relation page should explain invalid query type before navigation')
 assert.match(relationPage, /\/pages\/test\/test/, 'relation page should return to the test page for invalid query type')
-assert.match(relationPage, /\.chip\s*\{[\s\S]*min-height:\s*88rpx/, 'relation type chips should keep an 88rpx touch target')
-assert.match(relationPage, /<button\b[\s\S]*v-for=["']t in allTypes["'][\s\S]*class=["']chip["'][\s\S]*:aria-label=/, 'relation type chips should use button semantics with accessibility labels')
-assert.match(relationPage, /hover-class=["']chip--hover["']/, 'relation type chips should expose a hover/press visual state')
-assert.match(relationPage, /\.chip--hover\s*\{[\s\S]*(?:opacity|transform)/, 'relation chip hover state should have visible feedback')
+assert.match(relationTemplate, /class=["'][^"']*relation-hero[^"']*nx-page-hero[^"']*["']/, 'relation pick stage should use a themed hero')
+
+const relationViews = openingTagsFor(relationTemplate, 'view')
+const typePickers = relationViews.filter((tag) => staticClassTokens(tag).includes('type-picker'))
+assert.equal(typePickers.length, 2, 'relation should render exactly two type pickers')
+for (const picker of typePickers) {
+  assert.ok(staticClassTokens(picker).includes('nx-panel'), 'each relation type picker should use the shared panel surface')
+}
+
+const relationButtons = openingTagsFor(relationTemplate, 'button')
+assert.equal(relationButtons.filter((tag) => tagAttribute(tag, '@click') === 'analyze').length, 1, 'relation pick stage should keep exactly one primary analyze action')
+const typeChips = relationButtons.filter((tag) => tagAttribute(tag, 'v-for') === 't in allTypes')
+assert.equal(typeChips.length, 2, 'relation should render one native type-chip loop for each person')
+for (const { keyPrefix, ariaLabel, ariaPressed, handler } of [
+  { keyPrefix: "'m' + t.id", ariaLabel: '`选择我的型号 ${t.id} ${t.name}`', ariaPressed: 'myType === t.id', handler: 'pickMy(t.id)' },
+  { keyPrefix: "'t' + t.id", ariaLabel: '`选择 TA 的型号 ${t.id} ${t.name}`', ariaPressed: 'taType === t.id', handler: 'pickTa(t.id)' },
+]) {
+  const chip = typeChips.find((tag) => tagAttribute(tag, ':key') === keyPrefix)
+  assert.ok(chip, `relation should render the ${keyPrefix} type-chip loop`)
+  assert.equal(tagAttribute(chip, 'class'), 'type-chip nx-focusable', 'relation type chips should use the exact shared focusable classes')
+  assert.equal(tagAttribute(chip, ':aria-label'), ariaLabel, 'relation type chip should keep its accessible label on the native button')
+  assert.equal(tagAttribute(chip, ':aria-pressed'), ariaPressed, 'relation type chip should expose its selected state on the native button')
+  assert.equal(tagAttribute(chip, 'hover-class'), 'type-chip--pressed', 'relation type chip should expose pressed feedback on the native button')
+  assert.equal(tagAttribute(chip, '@click'), handler, 'relation type chip should keep its selection handler on the native button')
+}
+
+const chipBodies = [...relationTemplate.matchAll(/<button\b(?=[^>]*class=["']type-chip nx-focusable["'])[^>]*>([\s\S]*?)<\/button>/g)]
+assert.equal(chipBodies.length, 2, 'relation should keep selected text inside both type-chip templates')
+for (const [, body] of chipBodies) {
+  assert.match(body, /<text\s+class=["']type-chip__number["']>\{\{ t\.id \}\}<\/text>/, 'type chip should visibly render its number')
+  assert.match(body, /<text\s+class=["']type-chip__name["']>\{\{ t\.name \}\}<\/text>/, 'type chip should visibly render its abbreviated name')
+  assert.match(body, /<text\s+v-if=["'][^"']+ === t\.id["']\s+class=["']type-chip__selected["']>已选<\/text>/, 'selected chip should include a visible text marker')
+}
+
+const typeChipStyle = pageStyleDeclarations(relationStyle, '.type-chip')
+assert.match(typeChipStyle, /min-height:\s*88rpx\s*;/, 'relation type chips should keep an 88rpx touch target')
+assert.match(typeChipStyle, /border-radius:\s*24rpx\s*;/, 'relation type chips should keep the planned 24rpx radius')
+const selectedChipStyle = pageStyleDeclarations(relationStyle, '.type-chip.on')
+assert.match(selectedChipStyle, /border:\s*4rpx\s+solid\s+#9333ea\s*;/i, 'selected relation type should keep the planned purple border')
+assert.match(selectedChipStyle, /box-shadow:[^;]*\binset\b/i, 'selected relation type should include a non-color-only inset emphasis')
+assert.match(pageStyleDeclarations(relationStyle, '.type-chip--pressed'), /(?:opacity|transform)\s*:/, 'relation chip press state should have visible feedback')
+
+const relationHeroStyle = pageStyleDeclarations(relationStyle, '.relation-hero')
+assert.match(relationHeroStyle, /background:\s*linear-gradient\(135deg,\s*#6d28d9\s+0%,\s*#db2777\s+100%\)\s*;/i, 'relation hero should keep the exact purple-to-pink gradient')
+for (const selector of ['.relation-hero__eyebrow', '.relation-hero__title', '.relation-hero__desc']) {
+  assert.match(pageStyleDeclarations(relationStyle, selector), /color:\s*(?:#fff(?:fff)?|rgba\(\s*255\s*,\s*255\s*,\s*255\s*,\s*\.9\d*\s*\))\s*;/i, `${selector} should keep accessible white hero text`)
+}
+
+assert.match(relationPage, /const myAvatarFailed = ref\(false\)/, 'relation should track my avatar failure')
+assert.match(relationPage, /const taAvatarFailed = ref\(false\)/, 'relation should track TA avatar failure')
+assert.match(sourceBracedBody(relationPage, /function\s+analyze\s*\(\s*\)\s*\{/.exec(relationPage)), /myAvatarFailed\.value\s*=\s*false[\s\S]*taAvatarFailed\.value\s*=\s*false/, 'relation analyze should reset both avatar failure states')
+assert.match(sourceBracedBody(relationPage, /function\s+reset\s*\(\s*\)\s*\{/.exec(relationPage)), /myAvatarFailed\.value\s*=\s*false[\s\S]*taAvatarFailed\.value\s*=\s*false/, 'relation reset should clear both avatar failure states')
+
+const relationImages = openingTagsFor(relationTemplate, 'image')
+assert.equal(relationImages.length, 2, 'relation result should render exactly two avatar image templates')
+for (const { condition, errorHandler } of [
+  { condition: '!myAvatarFailed', errorHandler: 'onMyAvatarError' },
+  { condition: '!taAvatarFailed', errorHandler: 'onTaAvatarError' },
+]) {
+  const avatar = relationImages.find((tag) => tagAttribute(tag, 'v-if') === condition)
+  assert.ok(avatar, `relation should render the ${condition} avatar while available`)
+  assert.ok(staticClassTokens(avatar).includes('pair__avatar'), 'relation avatars should use the fixed avatar class')
+  assert.equal(tagAttribute(avatar, '@error'), errorHandler, 'relation avatar should set its failure flag on image error')
+  assert.match(avatar, /\slazy-load(?:=|\s|>|$)/, 'relation avatars should lazy-load')
+}
+
+const avatarFallbacks = relationViews.filter((tag) => staticClassTokens(tag).includes('pair__avatar-fallback'))
+assert.equal(avatarFallbacks.length, 2, 'relation should render one fallback for each avatar')
+for (const fallback of avatarFallbacks) {
+  assert.ok(/\sv-else(?:\s|>|$)/.test(fallback), 'relation avatar fallback should be mutually exclusive with its image')
+}
+for (const selector of ['.pair__avatar', '.pair__avatar-fallback']) {
+  const declarations = pageStyleDeclarations(relationStyle, selector)
+  assert.match(declarations, /width:\s*112rpx\s*;/, `${selector} should keep the planned fixed width`)
+  assert.match(declarations, /height:\s*112rpx\s*;/, `${selector} should keep the planned fixed height`)
+}
+
+const pairHero = relationViews.find((tag) => staticClassTokens(tag).includes('pair'))
+assert.ok(pairHero && staticClassTokens(pairHero).includes('nx-page-hero'), 'relation result pair should use the shared hero container')
+assert.ok(relationViews.some((tag) => staticClassTokens(tag).includes('pair-connection')), 'relation result should render the connection visual')
+for (const modifier of ['insight--bond', 'insight--friction', 'insight--tip']) {
+  assert.ok(relationViews.some((tag) => staticClassTokens(tag).includes(modifier)), `relation result should include ${modifier}`)
+}
+assert.ok(relationViews.some((tag) => staticClassTokens(tag).includes('drive-pair')), 'relation drives should use a two-column container')
+assert.match(pageStyleDeclarations(relationStyle, '.drive-pair'), /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)\s*;/, 'relation drives should remain two equal columns')
+assert.match(pageStyleDeclarations(relationStyle, '.insight--bond'), /border-color:\s*#c084fc\s*;/i, 'bond insight should keep its purple connection accent')
+assert.match(pageStyleDeclarations(relationStyle, '.insight--friction'), /border-color:\s*#fb7185\s*;/i, 'friction insight should keep its coral accent')
+assert.match(pageStyleDeclarations(relationStyle, '.insight--tip'), /border-color:\s*#2dd4bf\s*;/i, 'advice insight should keep its teal accent')
+const relationBodyColor = pageStyleDeclarations(relationStyle, '.insight__text')?.match(/color:\s*(#[\da-f]{6})\s*;/i)?.[1]
+assert.ok(relationBodyColor, 'relation insight body copy should expose a parseable text color')
+assert.ok(contrastRatio(relationBodyColor, '#ffffff') >= 4.5, 'relation insight body copy should meet 4.5:1 contrast on white')
 
 assert.match(
   resultPage,
