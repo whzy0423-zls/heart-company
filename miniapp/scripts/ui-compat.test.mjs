@@ -200,14 +200,36 @@ for (const action of serviceEntries) {
   assert.match(action, /@click=["']activateAction\(/, 'service entries should preserve tap and click activation')
   assert.match(action, /@keydown=["']onActionKeydown\(/, 'service entries should support Enter and Space')
 }
-assert.match(indexPage, /setLearningNavIntent\(['"]course['"]\)[\s\S]*?uni\.switchTab\([\s\S]*?clearLearningNavIntent/, 'course navigation should set a short-lived intent and clear it if switchTab fails')
-assert.match(indexPage, /setLearningNavIntent\(['"]material['"]\)[\s\S]*?uni\.switchTab\([\s\S]*?clearLearningNavIntent/, 'material navigation should set a short-lived intent and clear it if switchTab fails')
+
+function functionSource(source, name, nextName) {
+  const start = source.indexOf(`function ${name}(`)
+  const end = source.indexOf(`function ${nextName}(`, start)
+  assert.notEqual(start, -1, `${name} should exist`)
+  assert.notEqual(end, -1, `${nextName} should follow ${name}`)
+  return source.slice(start, end)
+}
+
+const goCourseSource = functionSource(indexPage, 'goCourse', 'goMaterial')
+const goMaterialSource = functionSource(indexPage, 'goMaterial', 'startTest')
+for (const [source, intent, label] of [
+  [goCourseSource, 'course', 'course'],
+  [goMaterialSource, 'material', 'material'],
+]) {
+  assert.match(source, new RegExp(`setLearningNavIntent\\(['"]${intent}['"]\\)`), `${label} navigation should set its short-lived intent`)
+  assert.match(source, /uni\.switchTab\(\{[\s\S]*?url:\s*['"]\/pages\/learn\/learn['"]/, `${label} navigation should switch to the learning tab`)
+  assert.match(source, /fail\(\)\s*\{\s*clearLearningNavIntent\(\)\s*\}/, `${label} navigation should clear its intent if switchTab fails`)
+}
 assert.match(indexPage, /uni\.navigateTo\(\{\s*url:\s*['"]\/pages\/test\/test['"]/, 'test service should navigate to the test page')
 assert.match(indexPage, /uni\.navigateTo\(\{\s*url:\s*['"]\/pages\/relation\/relation['"]/, 'relation service should navigate to the relation page')
 
 const featuredCourseActions = indexPage.match(/<view\b[^>]*class=["']featured-course["'][^>]*>/g) || []
 assert.equal(featuredCourseActions.length, 1, 'home should render exactly one recommended course row')
 assert.equal((indexPage.match(/推荐课程/g) || []).length, 1, 'home should label the recommended course section once')
+const moreCoursesAction = indexPage.match(/<view\b[^>]*class=["'][^"']*section-link--course[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(moreCoursesAction, /role=["']button["']/, 'more courses should be an accessible action')
+assert.match(moreCoursesAction, /tabindex=["']0["']/, 'more courses should be keyboard focusable')
+assert.match(moreCoursesAction, /@click=["']activateAction\(goCourse,\s*\$event\)["']/, 'more courses should open the course category')
+assert.match(moreCoursesAction, /@keydown=["']onActionKeydown\(\$event,\s*goCourse\)["']/, 'more courses should support Enter and Space')
 assert.doesNotMatch(indexPage, /material-shelf|material-card|v-for=["']\(course,\s*index\) in materialCourses/, 'home page should not render a course shelf or additional course list')
 const courseCoverImages = indexPage.match(/<image\b[^>]*class=["'][^"']*featured-course__cover[^"']*["'][^>]*>/g) || []
 assert.equal(courseCoverImages.length, 1, 'home page should render exactly one featured course cover')
@@ -224,6 +246,11 @@ assert.doesNotMatch(indexPage, /resolveContentAsset\(course\.cover,/, 'DEFAULT_C
 assert.match(indexPage, /courseImageFallbackUsed/, 'course cover fallback should be applied only once per item')
 assert.equal((indexPage.match(/最新课件/g) || []).length, 1, 'home should expose one latest material section')
 assert.match(indexPage, /class=["'][^"']*latest-material[^"']*["']/, 'home should render a latest material row')
+const allMaterialsAction = indexPage.match(/<view\b[^>]*class=["'][^"']*section-link--material[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(allMaterialsAction, /role=["']button["']/, 'all materials should be an accessible action')
+assert.match(allMaterialsAction, /tabindex=["']0["']/, 'all materials should be keyboard focusable')
+assert.match(allMaterialsAction, /@click=["']activateAction\(goMaterial,\s*\$event\)["']/, 'all materials should open the material category')
+assert.match(allMaterialsAction, /@keydown=["']onActionKeydown\(\$event,\s*goMaterial\)["']/, 'all materials should support Enter and Space')
 assert.equal((indexPage.match(/预约咨询/g) || []).length, 1, 'home should expose one lightweight booking prompt')
 assert.match(indexPage, /class=["'][^"']*booking-prompt[^"']*["']/, 'home should render booking as a lightweight prompt')
 assert.match(indexPage, /function\s+goBooking\(\)\s*\{\s*uni\.switchTab\(\{\s*url:\s*['"]\/pages\/booking\/booking['"]\s*\}\)\s*\}/, 'home consultation entry should switch to the booking tab')

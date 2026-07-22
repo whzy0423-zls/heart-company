@@ -9,9 +9,18 @@ const source = await readFile(new URL('./learningNavIntent.js', import.meta.url)
 await writeFile(modulePath, source)
 
 let storage = {}
+let failNextWrite = false
 globalThis.uni = {
-  getStorageSync(key) { return storage[key] || '' },
-  setStorageSync(key, value) { storage[key] = value },
+  getStorageSync(key) {
+    return Object.prototype.hasOwnProperty.call(storage, key) ? storage[key] : ''
+  },
+  setStorageSync(key, value) {
+    if (failNextWrite) {
+      failNextWrite = false
+      throw new Error('storage write failed')
+    }
+    storage[key] = value
+  },
   removeStorageSync(key) { delete storage[key] },
 }
 
@@ -45,8 +54,15 @@ for (const value of ['', 'lesson', 'COURSE', null, undefined]) {
   assert.equal(storage[LEARNING_NAV_INTENT_KEY], undefined, 'rejecting an invalid value should clear stale intent')
 }
 
+storage[LEARNING_NAV_INTENT_KEY] = { value: 'course', expiresAt: 99_000 }
+failNextWrite = true
+assert.equal(setLearningNavIntent('material', { now: () => 1_000 }), false, 'a failed storage write should be reported')
+assert.equal(storage[LEARNING_NAV_INTENT_KEY], undefined, 'a failed write should clear the older navigation intent')
+
 for (const invalid of [
   'not-json',
+  false,
+  0,
   { value: 'lesson', expiresAt: 99_000 },
   { value: 'course', expiresAt: 'soon' },
   { value: 'course' },

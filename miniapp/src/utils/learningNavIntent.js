@@ -27,6 +27,7 @@ export function setLearningNavIntent(value, options = {}) {
     })
     return true
   } catch {
+    clearLearningNavIntent()
     return false
   }
 }
@@ -35,7 +36,7 @@ export function readLearningNavIntent(options = {}) {
   let cached
   try {
     const raw = uni.getStorageSync(LEARNING_NAV_INTENT_KEY)
-    if (!raw) return null
+    if (raw === '') return null
     cached = typeof raw === 'string' ? JSON.parse(raw) : raw
   } catch {
     clearLearningNavIntent()

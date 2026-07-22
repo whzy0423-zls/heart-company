@@ -295,7 +295,14 @@ function goBooking() {
       <section class="content-section" aria-labelledby="course-heading">
         <view class="section-heading section-heading--row">
           <text id="course-heading" class="section-title">推荐课程</text>
-          <text class="section-link">更多课程</text>
+          <view
+            class="section-link section-link--course"
+            role="button"
+            tabindex="0"
+            hover-class="control--pressed"
+            @click="activateAction(goCourse, $event)"
+            @keydown="onActionKeydown($event, goCourse)"
+          >更多课程</view>
         </view>
         <view
           v-if="featuredCourse"
@@ -324,7 +331,14 @@ function goBooking() {
       <section class="content-section" aria-labelledby="material-heading">
         <view class="section-heading section-heading--row">
           <text id="material-heading" class="section-title">最新课件</text>
-          <text class="section-link">全部资料</text>
+          <view
+            class="section-link section-link--material"
+            role="button"
+            tabindex="0"
+            hover-class="control--pressed"
+            @click="activateAction(goMaterial, $event)"
+            @keydown="onActionKeydown($event, goMaterial)"
+          >全部资料</view>
         </view>
         <view
           v-if="latestMaterial"
@@ -517,6 +531,9 @@ function goBooking() {
 }
 
 .section-link {
+  min-height: 88rpx;
+  display: inline-flex;
+  align-items: center;
   color: var(--home-green);
 }
 
@@ -687,6 +704,7 @@ function goBooking() {
 
 .home-retry:focus-visible,
 .teacher-toggle:focus-visible,
+.section-link:focus-visible,
 .service-entry:focus-visible,
 .featured-course:focus-visible,
 .latest-material:focus-visible,
