@@ -20,8 +20,10 @@ import (
 )
 
 const (
-	xinzhiliMaxAudioBytes = 10 << 20
-	xinzhiliScene         = "xinzhili_voice"
+	xinzhiliMaxAudioBytes   = 10 << 20
+	xinzhiliMaxRequestBytes = 11 << 20
+	xinzhiliMultipartMemory = 1 << 20
+	xinzhiliScene           = "xinzhili_voice"
 )
 
 type appXinzhiliSceneStore interface {
@@ -42,6 +44,11 @@ type xinzhiliTTSResult struct {
 
 // appXinzhiliVoiceTurnStream 完成一轮“录音→ASR→检索→LLM→分句TTS”的低延迟对话。
 func (s *Server) appXinzhiliVoiceTurnStream(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, xinzhiliMaxRequestBytes)
+	s.appXinzhiliVoiceTurnStreamWithMultipartMemory(w, r, xinzhiliMultipartMemory)
+}
+
+func (s *Server) appXinzhiliVoiceTurnStreamWithMultipartMemory(w http.ResponseWriter, r *http.Request, maxMemory int64) {
 	userInfo, ok := appUserFromContext(r)
 	if !ok {
 		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
@@ -66,7 +73,9 @@ func (s *Server) appXinzhiliVoiceTurnStream(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if err := r.ParseMultipartForm(xinzhiliMaxAudioBytes); err != nil {
+	cleanupMultipart, err := parseXinzhiliMultipartForm(r, maxMemory)
+	defer cleanupMultipart()
+	if err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "音频上传格式不正确")
 		return
 	}
@@ -281,6 +290,15 @@ func (s *Server) appXinzhiliVoiceTurnStream(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	_ = writeAppChatSSE(w, flusher, "done", map[string]any{"answer": answer.Answer, "sources": answer.Sources, "messageId": messageID})
+}
+
+func parseXinzhiliMultipartForm(r *http.Request, maxMemory int64) (func(), error) {
+	err := r.ParseMultipartForm(maxMemory)
+	return func() {
+		if r.MultipartForm != nil {
+			_ = r.MultipartForm.RemoveAll()
+		}
+	}, err
 }
 
 func (s *Server) ensureXinzhiliMember(ctx context.Context, userID int64) error {
