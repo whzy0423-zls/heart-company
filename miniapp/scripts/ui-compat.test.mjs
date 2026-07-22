@@ -201,9 +201,10 @@ const learningPageStateSource = readFileSync('src/utils/learningPageState.js', '
 assert.match(learningPageStateSource, /normalizeTeachers/, 'learn state utility should normalize teacher profile data from site config')
 assert.match(learningPageStateSource, /normalizeCoursewareItems/, 'learn state utility should normalize courseware and course data from site config')
 assert.match(learnPage, /resolveContentAsset/, 'learn page should resolve backend teacher and course image assets safely')
-assert.match(learnPage, /老师专访|主讲老师/, 'learn page should introduce the teacher like an editorial profile')
-assert.match(learnPage, /课件出版|资料书架|课程资料库/, 'learn page should present courseware as a publication library')
-assert.match(learnPage, /class=["'][^"']*learn-teacher[^"']*["']/, 'learn page should render a dominant teacher profile')
+const learnTemplate = learnPage.match(/<template>[\s\S]*?<\/template>/)?.[0] || ''
+const learnTeacherSections = learnTemplate.match(/<section\b[^>]*class=["'][^"']*learn-teacher[^"']*["'][^>]*>/g) || []
+assert.equal(learnTeacherSections.length, 1, 'learn page should render exactly one compact teacher introduction section')
+assert.match(learnPage, /主讲老师/, 'learn page should introduce the teacher in concise Chinese copy')
 assert.match(learnPage, /teacher\.name/, 'teacher profile should render the teacher name')
 assert.match(learnPage, /teacher\.title/, 'teacher profile should render the teacher title')
 assert.match(learnPage, /teacher\.bio/, 'teacher profile should render the teacher biography')
@@ -219,28 +220,39 @@ assert.match(learnPage, /resolveContentAsset\(teacher\.value\?\.avatar,\s*TEACHE
 assert.match(learnPage, /teacherImageFallbackUsed/, 'teacher portrait fallback should be applied only once')
 assert.match(learnPage, /\.learn-teacher__portrait\s*\{[^}]*aspect-ratio:\s*4\s*\/\s*5/, 'teacher portrait should reserve an editorial 4:5 frame')
 
-assert.match(learnPage, /class=["'][^"']*publication-list[^"']*["']/, 'learn page should render a publication-style course and material list')
-assert.match(learnPage, /course\.materialTypes/, 'course publications should expose material types')
-assert.match(learnPage, /course\.duration/, 'course publications should expose duration metadata')
-assert.match(learnPage, /course\.bullets/, 'course publications should expose learning bullets')
-const learnCourseCovers = learnPage.match(/<image\b[^>]*class=["'][^"']*publication-card__cover[^"']*["'][^>]*>/g) || []
-assert.ok(learnCourseCovers.length >= 1, 'course publications should reserve a distinct editorial cover visual')
+assert.match(learnPage, /class=["'][^"']*course-list[^"']*["']/, 'learn page should render a simple course media list')
+assert.match(learnPage, /class=["'][^"']*course-row[^"']*["']/, 'learn page should render courses as lightweight media rows')
+assert.match(learnPage, /course\.materialTypes/, 'course rows should expose material types')
+assert.match(learnPage, /course\.duration/, 'course rows should expose duration metadata')
+assert.match(learnPage, /course\.description/, 'course rows should expose a short description')
+assert.doesNotMatch(learnTemplate, /course\.bullets|bulletIndex|::bullet::/, 'course bullet data should not be rendered on the minimal learning page')
+const learnCourseCovers = learnPage.match(/<image\b[^>]*class=["'][^"']*course-row__cover[^"']*["'][^>]*>/g) || []
+assert.ok(learnCourseCovers.length >= 1, 'course rows should keep one compact cover visual')
 for (const image of learnCourseCovers) {
   assert.match(image, /aria-hidden=["']true["']/, 'course covers should be decorative because the title is adjacent')
   assert.match(image, /@error=["']onCourseImageError\(/, 'course covers should provide a one-shot local fallback')
 }
 assert.match(learnPage, /function\s+learnCourseCover\(course,\s*index\)/, 'learn page should map unsuitable legacy covers before rendering')
 assert.ok(learnPage.includes('\\/static\\/wheel\\.png'), 'learn page should recognize the legacy wheel cover')
-assert.match(learnPage, /resolveContentAsset\(learnCourseCover\(course,\s*index\),\s*courseFallback\(index\)\)/, 'course covers should resolve mapped publication assets')
+assert.match(learnPage, /resolveContentAsset\(learnCourseCover\(course,\s*index\),\s*courseFallback\(index\)\)/, 'course covers should resolve mapped content assets')
 assert.match(learnPage, /courseImageFallbackUsed/, 'course cover fallback should be applied only once per item')
-assert.match(learnPage, /publication-card__cover--/, 'publication covers should use varied but coherent ratios')
-assert.doesNotMatch(learnPage, /class=["'][^"']*publication-card[^"']*["'][^>]*role=["']button["']/, 'course rows should remain display-only until a course route exists')
+assert.doesNotMatch(learnPage, /class=["'][^"']*course-row[^"']*["'][^>]*role=["']button["']/, 'course rows should remain display-only until a course route exists')
 
 assert.match(learnPage, /class=["'][^"']*pull-quote[^"']*["']/, 'quotes should render as a typographic editorial pull quote')
+assert.match(learnTemplate, /v-if=["']quotes\.length["'][\s\S]*?quotes\[0\]/, 'learn page should render only the first quote when available')
+assert.doesNotMatch(learnTemplate, /v-for=["'][^"']*quote/, 'learn page should not render a quote stack')
+assert.match(learnTemplate, /v-else[^>]*class=["'][^"']*quote-empty/, 'learn page should render an explicit quote empty state')
 assert.match(learnPage, /class=["'][^"']*type-index[^"']*["']/, 'the type index should remain available late in the page')
-assert.match(learnPage, /\.type-index__item\s*\{[^}]*min-height:\s*88rpx/, 'compact type index items should retain accessible touch sizing')
-assert.doesNotMatch(learnPage, /\.type\s*\{[^}]*width:\s*calc\(\(100%\s*-\s*32rpx\)\s*\/\s*3\)[^}]*min-height:\s*236rpx/, 'learn page should not preserve the old prominent three-column type cards')
+assert.match(learnPage, /\.type-index__item\s*\{[^}]*font-size:\s*(?:1[6-9]|2[0-2])rpx/, 'type index items should remain typographically lightweight')
+assert.doesNotMatch(learnPage, /\.type-index__item\s*\{[^}]*min-height:\s*(?:8[8-9]|9\d|[1-9]\d{2,})rpx/, 'display-only type index chips should not become dominant touch cards')
 assert.doesNotMatch(learnPage, /class=["'][^"']*ios-card[^"']*["']/, 'learn editorial sections should not fall back to generic ios-card surfaces')
+assert.doesNotMatch(learnTemplate, /learn-masthead|publication-section|publication-card|老师专访|PROFILE|PERSONAL VOICE|COURSEWARE PUBLICATION|REFERENCE|TEACHER'S NOTE|馆藏资料|0\{\{\s*index/, 'learn template should omit the complex publication shelf, chapter numbering, and English labels')
+assert.doesNotMatch(learnPage, /(?:repeating-)?(?:linear|radial)-gradient|background-image|box-shadow|@keyframes|animation\s*:|(?:backdrop-)?filter\s*:/, 'learn page should use a plain background without texture, gradients, shadows, filters, or animation')
+assert.doesNotMatch(learnPage, /border-radius:\s*(?:[3-9]\d|\d{3,})rpx/, 'learn radii should stay within the restrained 16-24rpx range')
+assert.match(learnPage, /--learn-bg:\s*#F6F1E7/i, 'learn page should use the approved warm plain background')
+assert.match(learnPage, /--learn-surface:\s*#FFFDF8/i, 'learn page should use a warm white content surface')
+assert.match(learnPage, /--learn-ink:\s*#20252B/i, 'learn page should use restrained charcoal text')
+assert.match(learnPage, /--learn-green:\s*#335B4A/i, 'learn page should use restrained dark green accents')
 
 assert.match(indexPage, /老师|导师/, 'home page should emphasize teacher guidance')
 assert.match(indexPage, /课件|课程/, 'home page should emphasize courseware and courses')
@@ -260,7 +272,7 @@ assert.match(learnPage, /requestGuard\.isLatest\(ticket\)/, 'learn page should i
 assert.match(learnPage, /retainLearningContentOnError\(/, 'learn request failures should preserve current content through the tested state utility')
 assert.doesNotMatch(learnPage, /teachers\.value\s*=\s*normalizeTeachers\(\)[\s\S]*coursewareItems\.value\s*=\s*normalizeCoursewareItems\(\)[\s\S]*loadError\.value/, 'request failure should not replace currently visible content')
 assert.match(learnPage, /id=["']learn-teacher-heading["']\s+class=["']editorial-empty__title["']/, 'empty teacher state should keep the aria-labelledby target available')
-for (const keyKind of ['course', 'tag', 'material', 'bullet', 'quote']) {
+for (const keyKind of ['course', 'tag', 'material']) {
   assert.match(learnPage, new RegExp(`::${keyKind}::|${keyKind}::`), `learn ${keyKind} keys should include stable delimiters and indices`)
 }
 
@@ -285,11 +297,9 @@ assert.match(learnPage, /\.learn-primary\s*\{[^}]*min-height:\s*88rpx/, 'learn p
 assert.match(learnPage, /\.learn-retry:focus-visible[\s\S]*\.learn-primary:focus-visible[\s\S]*outline:/, 'learn controls should expose a visible keyboard focus state')
 assert.match(learnPage, /@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{[\s\S]*?\.learn-teacher\s*\{[^}]*grid-template-columns:/, 'tablet teacher section should become a two-column editorial composition')
 const learnTabletMedia = learnPage.match(/@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{([\s\S]*?)\n\}/)?.[1] || ''
-assert.doesNotMatch(learnTabletMedia, /\.publication-list\s*\{[^}]*grid-template-columns:\s*repeat\(2/, 'tablet course publications should remain a readable single-column list')
-assert.doesNotMatch(learnPage, /\.publication-list\s*\{[^}]*grid-template-columns:\s*repeat\(2/, 'course publications should remain a readable single-column editorial list at every viewport width')
+assert.doesNotMatch(learnTabletMedia, /\.course-list\s*\{[^}]*grid-template-columns:\s*repeat\(2/, 'tablet courses should remain a readable single-column list')
+assert.doesNotMatch(learnPage, /\.course-list\s*\{[^}]*grid-template-columns:\s*repeat\(2/, 'courses should remain a readable single-column list at every viewport width')
 assert.match(learnTabletMedia, /\.learn-primary\s*\{[^}]*width:\s*100%[^}]*max-width:\s*360rpx[^}]*min-width:\s*0[^}]*box-sizing:\s*border-box/, 'tablet teacher CTA should fit its grid column without rpx overflow')
-assert.match(learnPage, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*transition:\s*none/, 'learn page should disable nonessential motion when reduced motion is requested')
-assert.doesNotMatch(learnPage, /animation:\s*[^;}]*infinite|(?:backdrop-)?filter\s*:/, 'learn page should use only static texture and avoid glass effects')
 
 const profilePage = readFileSync('src/pages/profile/profile.vue', 'utf8')
 assert.match(profilePage, /profileLoading/, 'profile page should expose a loading state for non-blocking history fetch')
