@@ -96,13 +96,51 @@ docker compose logs -f server
 
 ## 二、更新发布
 
+### 后端 `server`：芯之力会话锁升级约束
+
+当前版本使用 PostgreSQL transaction advisory lock 保证同一用户、卡片的 `xinzhili_voice` 场景只创建一个会话。这个锁是所有新版 `server` 实例共同遵守的应用协议，旧版实例不会获取该锁。因此发布本版本时，**禁止旧版和新版 `server` 实例混跑**，不能直接对 `server` 执行常规零停机滚动更新。
+
+后端发布按下面顺序执行；多主机或编排平台需在所有节点完成同一步骤后再进入下一步：
+
+1. 在摘流前构建并标记待发布镜像，记录镜像 tag 或 digest；不要在停服窗口内临时修改代码。
+2. 从负载均衡、网关或服务发现中摘除全部旧 `server` 实例，停止向它们分配新请求。
+3. 通过负载均衡监控、访问日志或连接指标确认旧实例的活跃请求已经归零；芯之力流式请求最长可能持续数分钟，应等待其自然结束，不要强杀仍在处理请求的进程。
+4. 停止所有旧 `server` 容器或进程。逐台执行只针对 `server` 的停止操作，禁止使用会删除数据库卷或无差别删除容器/进程的命令。
+5. 用只读检查确认所有节点均不存在旧版运行实例，再启动全部新版 `server` 实例。
+6. 检查容器状态和日志，并请求 `GET /api/app/health`；全部新版实例健康后再恢复负载均衡流量。
+
+单机 Docker Compose 可参考以下检查清单。构建发生在摘流前；摘流和确认活跃请求需在实际使用的负载均衡或网关上完成：
+
+```bash
+# 摘流前：只构建 server，并记录最终镜像 ID
+docker compose build server
+docker compose images server
+
+# 已摘流且活跃请求归零后：只停止 server，不影响 db/admin/website 和数据卷
+docker compose stop server
+
+# 只读确认：Compose 中 server 未运行，且没有同项目遗留的运行中 server 容器
+docker compose ps server
+docker ps --filter 'label=com.docker.compose.service=server' --format 'table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Names}}'
+
+# 所有旧实例均停止后，启动已构建的新版 server
+docker compose up -d --no-deps server
+
+# 恢复流量前检查状态、近期日志和健康接口
+docker compose ps server
+docker compose logs --since=10m server
+curl --fail --silent --show-error http://127.0.0.1:8080/api/app/health
+```
+
+若业务必须采用旧版、新版实例混跑的零停机滚动发布，本版本的 advisory lock 方案**不保证混跑期间的会话唯一性**。在执行这种发布方式前，必须先单独设计和验证仅作用于 `xinzhili_voice` 的 partial unique 约束，以及历史重复会话的消息归并、去重和安全迁移方案；不得直接增加覆盖普通 `chat` 的全局唯一约束。
+
 ```bash
 # 改了代码后重新构建对应服务
 docker compose up -d --build admin      # 只更新后台
 docker compose up -d --build website    # 只更新官网
-docker compose up -d --build server     # 只更新后端
+docker compose up -d --build server     # 只更新后端（本版本须遵循上面的摘流停旧流程）
 
-# 全部更新
+# 全部更新（如包含 server，仍须先完成上面的摘流、停旧和检查步骤）
 docker compose up -d --build
 ```
 

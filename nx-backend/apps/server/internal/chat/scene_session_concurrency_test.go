@@ -121,6 +121,22 @@ func TestGetOrCreateSceneSessionDoesNotSerializeRegularChat(t *testing.T) {
 	}
 }
 
+func TestGetOrCreateSceneSessionUsesStableOrderForLegacyDuplicates(t *testing.T) {
+	state := &sceneSessionTxState{existing: true, requireStableOrder: true}
+	store := newSceneSessionTxStore(t, state)
+
+	session, err := store.GetOrCreateSceneSession(context.Background(), 7, 9, "xinzhili_voice")
+	if err != nil {
+		t.Fatalf("GetOrCreateSceneSession: %v", err)
+	}
+	if session.ID != 41 {
+		t.Fatalf("session id = %d, want latest legacy row 41", session.ID)
+	}
+	if state.selectCount != 1 || state.insertCount != 0 {
+		t.Fatalf("query counts = select:%d insert:%d, want 1/0", state.selectCount, state.insertCount)
+	}
+}
+
 func TestGetOrCreateSceneSessionConcurrentPostgres(t *testing.T) {
 	database := openChatBoundaryTestDB(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -247,6 +263,71 @@ func TestGetOrCreateSceneSessionPostgresKeepsKeysAndChatRowsDistinct(t *testing.
 	}
 }
 
+func TestGetOrCreateSceneSessionPostgresKeepsLegacyXinzhiliDuplicates(t *testing.T) {
+	database := openChatBoundaryTestDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	userID, cardID := createSceneSessionTestUserAndCard(t, ctx, database, "legacy-duplicates")
+	var oldestID, tiedID, newestID int64
+	if err := database.QueryRowContext(ctx,
+		`INSERT INTO app_chat_sessions (app_user_id, card_id, scene, updated_at)
+		 VALUES ($1,$2,'xinzhili_voice','2000-01-01T00:00:00Z') RETURNING id`,
+		userID, cardID,
+	).Scan(&oldestID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx,
+		`INSERT INTO app_chat_sessions (app_user_id, card_id, scene, updated_at)
+		 VALUES ($1,$2,'xinzhili_voice','2099-01-01T00:00:00Z') RETURNING id`,
+		userID, cardID,
+	).Scan(&tiedID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx,
+		`INSERT INTO app_chat_sessions (app_user_id, card_id, scene, updated_at)
+		 VALUES ($1,$2,'xinzhili_voice','2099-01-01T00:00:00Z') RETURNING id`,
+		userID, cardID,
+	).Scan(&newestID); err != nil {
+		t.Fatal(err)
+	}
+	if !(oldestID < tiedID && tiedID < newestID) {
+		t.Fatalf("unexpected inserted ids: %d, %d, %d", oldestID, tiedID, newestID)
+	}
+
+	session, err := NewStore(database).GetOrCreateSceneSession(ctx, userID, cardID, "xinzhili_voice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.ID != newestID {
+		t.Fatalf("session id = %d, want latest id %d among equal updated_at rows", session.ID, newestID)
+	}
+	rows, err := database.QueryContext(ctx,
+		`SELECT id FROM app_chat_sessions
+		 WHERE app_user_id=$1 AND card_id=$2 AND scene='xinzhili_voice'
+		 ORDER BY id`,
+		userID, cardID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 3 || ids[0] != oldestID || ids[1] != tiedID || ids[2] != newestID {
+		t.Fatalf("legacy duplicate ids = %v, want exact preserved set [%d %d %d]", ids, oldestID, tiedID, newestID)
+	}
+}
+
 func createSceneSessionTestUserAndCard(t *testing.T, ctx context.Context, database *sql.DB, label string) (int64, int64) {
 	t.Helper()
 	var userID, cardID int64
@@ -277,21 +358,22 @@ var (
 )
 
 type sceneSessionTxState struct {
-	existing      bool
-	beginErr      error
-	lockErr       error
-	selectErr     error
-	insertErr     error
-	commitErr     error
-	rollbackErr   error
-	beginCount    int
-	isolation     driver.IsolationLevel
-	lockKey       string
-	lockCount     int
-	selectCount   int
-	insertCount   int
-	commitCount   int
-	rollbackCount int
+	existing           bool
+	requireStableOrder bool
+	beginErr           error
+	lockErr            error
+	selectErr          error
+	insertErr          error
+	commitErr          error
+	rollbackErr        error
+	beginCount         int
+	isolation          driver.IsolationLevel
+	lockKey            string
+	lockCount          int
+	selectCount        int
+	insertCount        int
+	commitCount        int
+	rollbackCount      int
 }
 
 func newSceneSessionTxStore(t *testing.T, state *sceneSessionTxState) *Store {
@@ -351,6 +433,9 @@ func (c *sceneSessionTxConn) QueryContext(_ context.Context, query string, _ []d
 	switch {
 	case strings.Contains(query, "SELECT id, app_user_id"):
 		c.state.selectCount++
+		if c.state.requireStableOrder && !strings.Contains(query, "ORDER BY updated_at DESC, id DESC LIMIT 1") {
+			return nil, errors.New("scene session lookup must use stable updated_at/id ordering")
+		}
 		if c.state.selectErr != nil {
 			return nil, c.state.selectErr
 		}
