@@ -283,12 +283,21 @@ type sceneSessionConn struct{}
 
 func (sceneSessionConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
 func (sceneSessionConn) Close() error                        { return nil }
-func (sceneSessionConn) Begin() (driver.Tx, error)           { return nil, driver.ErrSkip }
+func (sceneSessionConn) Begin() (driver.Tx, error)           { return sceneSessionNoopTx{}, nil }
+func (sceneSessionConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return sceneSessionNoopTx{}, nil
+}
+func (sceneSessionConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+	if !strings.Contains(query, "pg_advisory_xact_lock") {
+		return nil, fmt.Errorf("unexpected session exec: %s", query)
+	}
+	return driver.RowsAffected(1), nil
+}
 func (sceneSessionConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	now := time.Now()
 	normalized := strings.Join(strings.Fields(query), " ")
 	switch normalized {
-	case "SELECT id, app_user_id, card_id, title, updated_at, create_time FROM app_chat_sessions WHERE app_user_id = $1 AND card_id = $2 AND scene = $3 ORDER BY updated_at DESC LIMIT 1":
+	case "SELECT id, app_user_id, card_id, title, updated_at, create_time FROM app_chat_sessions WHERE app_user_id = $1 AND card_id = $2 AND scene = $3 ORDER BY updated_at DESC, id DESC LIMIT 1":
 		if len(args) != 3 || args[0].Value != int64(7) || args[1].Value != int64(9) || args[2].Value != "xinzhili_voice" {
 			return nil, errors.New("unexpected scene session arguments")
 		}
@@ -302,6 +311,11 @@ func (sceneSessionConn) QueryContext(_ context.Context, query string, args []dri
 		return nil, fmt.Errorf("unexpected session query: %s", normalized)
 	}
 }
+
+type sceneSessionNoopTx struct{}
+
+func (sceneSessionNoopTx) Commit() error   { return nil }
+func (sceneSessionNoopTx) Rollback() error { return nil }
 
 type singleSessionRows struct {
 	values []driver.Value
