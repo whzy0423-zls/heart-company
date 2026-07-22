@@ -299,6 +299,8 @@ for (const [selector, message] of [
 }
 assert.match(indexPage, /\.section-note,\s*\.section-link\s*\{(?=[^}]*font-size:\s*(?:2[4-9]|[3-9]\d|\d{3,})rpx)(?=[^}]*color:\s*var\(--home-muted\))[^}]*\}/, 'section helper and link base text should use readable muted styling')
 assert.match(indexPage, /\.course-meta,\s*\.material-meta,\s*\.booking-desc\s*\{(?=[^}]*font-size:\s*(?:2[4-9]|[3-9]\d|\d{3,})rpx)(?=[^}]*color:\s*var\(--home-muted\))[^}]*\}/, 'home metadata should use at least 24rpx readable muted text')
+assert.match(indexPage, /\.sync-note,\s*\.home-error\s*\{(?=[^}]*font-size:\s*(?:2[4-9]|[3-9]\d|\d{3,})rpx)[^}]*\}/, 'home loading and error status text should use at least 24rpx')
+assert.match(indexPage, /\.teacher-eyebrow,\s*\.teacher-identity\s*\{(?=[^}]*font-size:\s*(?:2[4-9]|[3-9]\d|\d{3,})rpx)[^}]*\}/, 'teacher helper and identity text should use at least 24rpx')
 assert.doesNotMatch(indexTemplate, /home-primary|开始学习|teacher-hero__portrait|home-masthead|editorial-kicker|portrait-mark|featured-course__spine|material-shelf|material-card|home-bento|float-token|texture|pattern|CURRICULUM|FEATURED|TEACHER|SELF TEST|RELATIONSHIP|学习专刊/, 'home should omit the old long-page hero, main button, and decorative promotional layers')
 assert.doesNotMatch(indexPage, /(?:repeating-)?(?:linear|radial)-gradient|background-image|box-shadow|@keyframes|animation\s*:|backdrop-filter|filter\s*:/, 'home should use a plain background with no texture, normal shadow, filter, or entry animation')
 assert.doesNotMatch(indexPage, /border-radius:\s*(?:[3-9]\d|\d{3,})rpx/, 'home radii should stay within the restrained 16-24rpx range')

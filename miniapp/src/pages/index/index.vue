@@ -402,7 +402,7 @@ function goBooking() {
   align-items: center;
   gap: 16rpx;
   color: #66706B;
-  font-size: 23rpx;
+  font-size: 24rpx;
   line-height: 1.5;
 }
 
@@ -457,7 +457,7 @@ function goBooking() {
 .teacher-eyebrow,
 .teacher-identity {
   color: #68716C;
-  font-size: 22rpx;
+  font-size: 24rpx;
   line-height: 1.4;
 }
 
