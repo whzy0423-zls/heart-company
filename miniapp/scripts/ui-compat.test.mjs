@@ -555,6 +555,33 @@ assert.match(resultPage, /测试结果已失效/, 'result page should give feedb
 const relationPage = readFileSync('src/pages/relation/relation.vue', 'utf8')
 const relationTemplate = stripMarkupAndCssComments(relationPage.match(/<template>([\s\S]*)<\/template>\s*<style/)?.[1] || '')
 const relationStyle = stripMarkupAndCssComments(vueSection(relationPage, 'style') || '')
+
+function elementBlocksByStaticClass(source, tagName, className) {
+  const escapedTagName = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const tags = [...source.matchAll(new RegExp(`<\\/?${escapedTagName}\\b[^>]*>`, 'g'))]
+  const blocks = []
+  for (let startIndex = 0; startIndex < tags.length; startIndex += 1) {
+    const openingTag = tags[startIndex][0]
+    if (openingTag.startsWith('</') || openingTag.endsWith('/>')) continue
+    if (!staticClassTokens(openingTag).includes(className)) continue
+    let depth = 1
+    for (let endIndex = startIndex + 1; endIndex < tags.length; endIndex += 1) {
+      const tag = tags[endIndex][0]
+      if (tag.startsWith('</')) depth -= 1
+      else if (!tag.endsWith('/>')) depth += 1
+      if (depth !== 0) continue
+      blocks.push(source.slice(tags[startIndex].index, tags[endIndex].index + tag.length))
+      break
+    }
+  }
+  return blocks
+}
+
+const enneagramGameSource = readFileSync('src/data/enneagramGame.js', 'utf8')
+const typesInfoSource = enneagramGameSource.match(/export const TYPES_INFO\s*=\s*\{([\s\S]*?)\n\}\n\nexport const CENTERS/)?.[1] || ''
+const typeIds = [...typesInfoSource.matchAll(/^\s{2}([1-9]):\s*\{/gm)].map((match) => Number(match[1]))
+assert.deepEqual(typeIds, [1, 2, 3, 4, 5, 6, 7, 8, 9], 'enneagram type data should expose every type id from 1 through 9')
+assert.match(relationPage, /const allTypes = Object\.keys\(TYPES_INFO\)\.map\(/, 'relation allTypes should cover every TYPES_INFO entry')
 assert.match(relationPage, /<view\s+class=["'][^"']*page-stack[^"']*ios-page[^"']*ios-safe-bottom[^"']*["']/, 'relation root should use shared page-stack/iOS safe-area classes')
 assert.match(relationPage, /<button\s+class=["'][^"']*btn-primary[^"']*ios-button[^"']*["'][^>]*@click=["']analyze["']/, 'relation primary action should opt into iOS button styling')
 assert.doesNotMatch(relationPage, /padding-bottom:\s*60rpx/, 'relation page should not hard-code bottom padding outside shared safe-area helpers')
@@ -636,6 +663,10 @@ assert.equal(avatarFallbacks.length, 2, 'relation should render one fallback for
 for (const fallback of avatarFallbacks) {
   assert.ok(/\sv-else(?:\s|>|$)/.test(fallback), 'relation avatar fallback should be mutually exclusive with its image')
 }
+const avatarFallbackBlocks = elementBlocksByStaticClass(relationTemplate, 'view', 'pair__avatar-fallback')
+assert.equal(avatarFallbackBlocks.length, 2, 'relation should expose two bounded avatar fallback elements')
+assert.match(avatarFallbackBlocks[0], /^<view\b[^>]*>\{\{ myInfo\.id \}\}<\/view>$/, 'my avatar fallback should display my type number within its own element')
+assert.match(avatarFallbackBlocks[1], /^<view\b[^>]*>\{\{ taInfo\.id \}\}<\/view>$/, 'TA avatar fallback should display TA type number within its own element')
 for (const selector of ['.pair__avatar', '.pair__avatar-fallback']) {
   const declarations = pageStyleDeclarations(relationStyle, selector)
   assert.match(declarations, /width:\s*112rpx\s*;/, `${selector} should keep the planned fixed width`)
@@ -645,17 +676,41 @@ for (const selector of ['.pair__avatar', '.pair__avatar-fallback']) {
 const pairHero = relationViews.find((tag) => staticClassTokens(tag).includes('pair'))
 assert.ok(pairHero && staticClassTokens(pairHero).includes('nx-page-hero'), 'relation result pair should use the shared hero container')
 assert.ok(relationViews.some((tag) => staticClassTokens(tag).includes('pair-connection')), 'relation result should render the connection visual')
-for (const modifier of ['insight--bond', 'insight--friction', 'insight--tip']) {
+const pairConnectionBlocks = elementBlocksByStaticClass(relationTemplate, 'view', 'pair-connection')
+assert.equal(pairConnectionBlocks.length, 1, 'relation result should render exactly one bounded connection visual')
+assert.match(pairConnectionBlocks[0], /<text\s+class=["']pair-connection__score["']>\{\{ analysis\.score \}\}<\/text>/, 'connection visual should bind the analysis score inside its own container')
+assert.match(pairConnectionBlocks[0], /<text\s+class=["']pair-connection__label["']>契合指数<\/text>/, 'connection visual should label the score inside its own container')
+
+const insightContracts = [
+  { modifier: 'insight--bond', binding: 'analysis.bond' },
+  { modifier: 'insight--friction', binding: 'analysis.friction' },
+  { modifier: 'insight--tip', binding: 'analysis.tip' },
+]
+for (const { modifier, binding } of insightContracts) {
   assert.ok(relationViews.some((tag) => staticClassTokens(tag).includes(modifier)), `relation result should include ${modifier}`)
+  const blocks = elementBlocksByStaticClass(relationTemplate, 'view', modifier)
+  assert.equal(blocks.length, 1, `relation result should render exactly one bounded ${modifier} panel`)
+  assert.match(blocks[0], new RegExp(`<text\\s+class=["']insight__text["']>\\{\\{ ${binding.replace('.', '\\.')} \\}\\}<\\/text>`), `${modifier} should bind ${binding} inside its own panel`)
 }
 assert.ok(relationViews.some((tag) => staticClassTokens(tag).includes('drive-pair')), 'relation drives should use a two-column container')
+const drivePairBlocks = elementBlocksByStaticClass(relationTemplate, 'view', 'drive-pair')
+assert.equal(drivePairBlocks.length, 1, 'relation should render exactly one bounded drive-pair container')
+assert.match(drivePairBlocks[0], /\{\{ analysis\.myDrive \}\}/, 'drive-pair should bind my drive inside its own container')
+assert.match(drivePairBlocks[0], /\{\{ analysis\.taDrive \}\}/, 'drive-pair should bind TA drive inside its own container')
 assert.match(pageStyleDeclarations(relationStyle, '.drive-pair'), /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)\s*;/, 'relation drives should remain two equal columns')
 assert.match(pageStyleDeclarations(relationStyle, '.insight--bond'), /border-color:\s*#c084fc\s*;/i, 'bond insight should keep its purple connection accent')
 assert.match(pageStyleDeclarations(relationStyle, '.insight--friction'), /border-color:\s*#fb7185\s*;/i, 'friction insight should keep its coral accent')
 assert.match(pageStyleDeclarations(relationStyle, '.insight--tip'), /border-color:\s*#2dd4bf\s*;/i, 'advice insight should keep its teal accent')
 const relationBodyColor = pageStyleDeclarations(relationStyle, '.insight__text')?.match(/color:\s*(#[\da-f]{6})\s*;/i)?.[1]
 assert.ok(relationBodyColor, 'relation insight body copy should expose a parseable text color')
-assert.ok(contrastRatio(relationBodyColor, '#ffffff') >= 4.5, 'relation insight body copy should meet 4.5:1 contrast on white')
+for (const { modifier } of insightContracts) {
+  const background = pageStyleDeclarations(relationStyle, `.${modifier}`)?.match(/background:\s*linear-gradient\([^,]+,\s*(#[\da-f]{3,6})\s*,\s*(#[\da-f]{3,6})\s*\)\s*;/i)
+  assert.ok(background, `${modifier} should expose two parseable gradient background endpoints`)
+  for (const endpoint of background.slice(1)) {
+    const ratio = contrastRatio(relationBodyColor, endpoint)
+    assert.ok(ratio >= 4.5, `${modifier} body text should meet 4.5:1 contrast against ${endpoint}, got ${ratio.toFixed(2)}:1`)
+  }
+}
 
 assert.match(
   resultPage,
