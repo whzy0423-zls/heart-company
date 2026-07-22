@@ -26,9 +26,37 @@ assert.match(appVue, /@import ['"]\.\/styles\/apple-mobile\.css['"];/, 'App.vue 
 for (const token of ['--nx-bg', '--nx-primary', '--nx-card', '--nx-radius', '--nx-safe-bottom']) {
   assert.match(appleMobileStyle, new RegExp(token), `apple-mobile.css should define ${token}`)
 }
+for (const token of [
+  '--nx-page-bg',
+  '--nx-surface',
+  '--nx-surface-soft',
+  '--nx-line',
+  '--nx-blue',
+  '--nx-purple',
+  '--nx-pink',
+  '--nx-teal',
+  '--nx-green',
+  '--nx-orange',
+  '--nx-danger',
+]) {
+  assert.match(appleMobileStyle, new RegExp(`${token}\\s*:`), `apple-mobile.css should define ${token}`)
+}
 for (const className of ['.ios-page', '.ios-card', '.ios-button', '.ios-section', '.ios-safe-bottom']) {
   assert.match(appleMobileStyle, new RegExp(className.replace('.', '\\.') + '\\s*\\{'), `apple-mobile.css should define ${className}`)
 }
+for (const className of ['.nx-page-hero', '.nx-section-head', '.nx-panel', '.nx-state', '.nx-tag', '.nx-focusable']) {
+  assert.match(appleMobileStyle, new RegExp(className.replace('.', '\\.') + '\\s*\\{'), `apple-mobile.css should define ${className}`)
+}
+assert.match(
+  appleMobileStyle,
+  /\.nx-focusable:focus\s*\{[^}]*(?:outline|box-shadow)\s*:/,
+  '.nx-focusable:focus should expose a visible outline or box shadow',
+)
+assert.match(
+  appleMobileStyle,
+  /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.nx-focusable\s*\{[^}]*(?:animation|transition)\s*:\s*none\s*;/,
+  'reduced-motion styles should disable .nx-focusable motion',
+)
 assert.match(appleMobileStyle, /min-height:\s*88rpx/, 'Apple/iOS buttons should keep an 88rpx touch target')
 assert.match(appleMobileStyle, /safe-area-inset-bottom/, 'Apple/iOS style tokens should reserve safe-area bottom')
 
