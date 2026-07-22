@@ -581,7 +581,11 @@ const enneagramGameSource = readFileSync('src/data/enneagramGame.js', 'utf8')
 const typesInfoSource = enneagramGameSource.match(/export const TYPES_INFO\s*=\s*\{([\s\S]*?)\n\}\n\nexport const CENTERS/)?.[1] || ''
 const typeIds = [...typesInfoSource.matchAll(/^\s{2}([1-9]):\s*\{/gm)].map((match) => Number(match[1]))
 assert.deepEqual(typeIds, [1, 2, 3, 4, 5, 6, 7, 8, 9], 'enneagram type data should expose every type id from 1 through 9')
-assert.match(relationPage, /const allTypes = Object\.keys\(TYPES_INFO\)\.map\(/, 'relation allTypes should cover every TYPES_INFO entry')
+assert.match(
+  relationPage,
+  /^const[ \t]+allTypes[ \t]*=[ \t]*Object\.keys\(TYPES_INFO\)\.map\([ \t]*\(id\)[ \t]*=>[ \t]*\(\{[ \t]*id:[ \t]*Number\(id\),[ \t]*\.\.\.TYPES_INFO\[id\][ \t]*\}\)[ \t]*\)[ \t]*;?[ \t]*$/m,
+  'relation allTypes should map every TYPES_INFO entry without trailing slice or filter chains',
+)
 assert.match(relationPage, /<view\s+class=["'][^"']*page-stack[^"']*ios-page[^"']*ios-safe-bottom[^"']*["']/, 'relation root should use shared page-stack/iOS safe-area classes')
 assert.match(relationPage, /<button\s+class=["'][^"']*btn-primary[^"']*ios-button[^"']*["'][^>]*@click=["']analyze["']/, 'relation primary action should opt into iOS button styling')
 assert.doesNotMatch(relationPage, /padding-bottom:\s*60rpx/, 'relation page should not hard-code bottom padding outside shared safe-area helpers')
