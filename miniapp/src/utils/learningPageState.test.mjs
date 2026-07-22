@@ -116,6 +116,7 @@ const materialCourses = [
     ],
   },
   {
+    id: 'course-b',
     title: '关系练习',
     materialTypes: ['讲义', '讲义'],
   },
@@ -126,8 +127,8 @@ assert.deepEqual(
   [
     { key: 'course-a::material::slides', courseTitle: '九型入门', type: '讲义' },
     { key: 'course-a::material::audio', courseTitle: '九型入门', type: '音频' },
-    { key: '关系练习::material::讲义', courseTitle: '关系练习', type: '讲义' },
-    { key: '关系练习::material::讲义::2', courseTitle: '关系练习', type: '讲义' },
+    { key: 'course-b::material::讲义', courseTitle: '关系练习', type: '讲义' },
+    { key: 'course-b::material::讲义::2', courseTitle: '关系练习', type: '讲义' },
   ],
   'course data should flatten into stable, unique material entries using course and material identities',
 )
@@ -135,6 +136,18 @@ assert.deepEqual(
   flattenLearningMaterials(materialCourses).map((item) => item.key),
   flattenedMaterials.map((item) => item.key),
   'material keys should remain stable across repeated normalization',
+)
+const sameTitleCourses = [
+  { title: '沟通练习', description: '亲密关系沟通', duration: '30 分钟', materialTypes: ['讲义'] },
+  { title: '沟通练习', description: '团队协作沟通', duration: '45 分钟', materialTypes: ['讲义'] },
+]
+const sameTitleKeys = (courses) => Object.fromEntries(
+  flattenLearningMaterials(courses).map((item) => [item.description, item.key]),
+)
+assert.deepEqual(
+  sameTitleKeys([...sameTitleCourses].reverse()),
+  sameTitleKeys(sameTitleCourses),
+  'same-title courses with distinguishable stable content should retain their logical material keys when backend order changes',
 )
 assert.deepEqual(flattenLearningMaterials(null), [], 'malformed course data should flatten safely')
 assert.deepEqual(

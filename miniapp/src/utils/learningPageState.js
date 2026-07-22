@@ -8,7 +8,40 @@ function identityText(value, fallback) {
   return fallback
 }
 
-function materialIdentity(material, index) {
+function canonicalValue(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalValue).sort().join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalValue(value[key])}`).join(',')}}`
+  }
+  if (typeof value === 'string') return JSON.stringify(value.trim().replace(/\s+/g, ' '))
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  if (typeof value === 'boolean') return String(value)
+  return 'null'
+}
+
+function stableHash(value) {
+  let hash = 2166136261
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+function courseIdentity(course) {
+  const explicit = identityText(course.id || course.key || course.courseId, '')
+  if (explicit) return explicit
+  return `course-${stableHash(canonicalValue({
+    title: course.title || course.name,
+    description: course.description,
+    duration: course.duration,
+    materialTypes: course.materialTypes,
+    badge: course.badge,
+    url: course.url,
+  }))}`
+}
+
+function materialIdentity(material) {
   if (typeof material === 'string') {
     const text = material.trim()
     return text ? { id: text, label: text } : null
@@ -16,8 +49,9 @@ function materialIdentity(material, index) {
   if (!material || typeof material !== 'object') return null
   const label = identityText(material.name || material.title || material.type || material.label, '')
   if (!label) return null
+  const explicit = identityText(material.id || material.key || material.code, '')
   return {
-    id: identityText(material.id || material.key || material.code, label || `material-${index}`),
+    id: explicit || `${label}-${stableHash(canonicalValue(material))}`,
     label,
   }
 }
@@ -25,13 +59,12 @@ function materialIdentity(material, index) {
 export function flattenLearningMaterials(courses) {
   if (!Array.isArray(courses)) return []
   const keyCounts = new Map()
-  return courses.flatMap((course, courseIndex) => {
+  return courses.flatMap((course) => {
     if (!course || typeof course !== 'object' || !Array.isArray(course.materialTypes)) return []
-    const rawCourseTitle = identityText(course.title || course.name, '')
-    const courseTitle = rawCourseTitle || '未命名课程'
-    const courseId = identityText(course.id || course.key || course.courseId, rawCourseTitle || `course-${courseIndex}`)
-    return course.materialTypes.map((material, materialIndex) => {
-      const identity = materialIdentity(material, materialIndex)
+    const courseTitle = identityText(course.title || course.name, '未命名课程')
+    const courseId = courseIdentity(course)
+    return course.materialTypes.map((material) => {
+      const identity = materialIdentity(material)
       if (!identity) return null
       const baseKey = `${courseId}::material::${identity.id}`
       const occurrence = (keyCounts.get(baseKey) || 0) + 1

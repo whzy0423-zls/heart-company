@@ -363,7 +363,7 @@ onMounted(() => {
 .learn-teacher__tag { padding: 6rpx 12rpx; border-radius: 16rpx; background: rgba(51, 91, 74, .08); color: var(--learn-green); font-size: 22rpx; line-height: 1.4; }
 
 .learn-tabs { margin-top: 20rpx; padding: 6rpx; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4rpx; border: 2rpx solid rgba(32, 37, 43, .1); border-radius: 18rpx; background: var(--learn-surface); }
-.learn-tab { min-width: 0; min-height: 76rpx; display: flex; align-items: center; justify-content: center; border-radius: 14rpx; color: rgba(32, 37, 43, .62); font-size: 26rpx; font-weight: 700; touch-action: manipulation; }
+.learn-tab { min-width: 0; min-height: 88rpx; display: flex; align-items: center; justify-content: center; border-radius: 14rpx; color: rgba(32, 37, 43, .62); font-size: 26rpx; font-weight: 700; touch-action: manipulation; }
 .learn-tab--active { background: var(--learn-green); color: #FFFFFF; }
 .learn-tab--pressed { opacity: .82; }
 

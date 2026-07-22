@@ -439,6 +439,7 @@ for (const action of learnRoleButtons) {
 assert.doesNotMatch(learnPage, /@keydown\./, 'learn keydown modifiers must not compile duplicate WXML attributes or intercept Tab')
 assert.match(learnPage, /\.learn-retry\s*\{[^}]*min-height:\s*88rpx/, 'learn retry should keep an 88rpx touch target')
 assert.match(learnPage, /\.learn-tab:focus-visible[\s\S]*outline:/, 'learning tabs should expose a visible keyboard focus state')
+assert.match(learnPage, /\.learn-tab\s*\{[^}]*min-height:\s*(?:8[8-9]|9\d|[1-9]\d{2,})rpx/, 'learning category tabs should keep an 88rpx minimum touch target')
 assert.match(learnPage, /\.learn-teacher__toggle\s*\{[^}]*min-height:\s*88rpx/, 'teacher details toggle should keep an 88rpx touch target')
 const learnTabletMedia = learnPage.match(/@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{([\s\S]*?)\n\}/)?.[1] || ''
 assert.doesNotMatch(learnTabletMedia, /\.course-list\s*\{[^}]*grid-template-columns:\s*repeat\(2/, 'tablet courses should remain a readable single-column list')
