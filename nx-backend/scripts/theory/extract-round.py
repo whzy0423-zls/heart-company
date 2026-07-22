@@ -24,6 +24,14 @@ MAX_EPUB_MEMBER = 64 * 1024 * 1024
 DEFAULT_COMPRESSION_RATIO = 200
 PDF_SLICE_CHARACTERS = 4000
 OCR_DPI = 150
+PDF_QUALITY_SCOPE = "PDF 选中页文本与封面/确定性抽样页已生成；自动检查不等于人工通过"
+EPUB_QUALITY_SCOPE = "EPUB 选中 spine 的语义段落已生成；自动检查不等于人工通过"
+OFFICE_QUALITY_SCOPE = "DOC/DOCX 选中段落已生成；自动检查不等于人工通过"
+LEGACY_QUALITY_SCOPES = {
+    "page": "封面及一个选中页面；自动检查不等于人工通过",
+    "spine_item": "严格 XHTML 语义块与空单元覆盖检查；不等于人工通过",
+    "paragraph": "textutil UTF-8 转换与段落覆盖检查；不等于人工通过",
+}
 
 
 def sha256_bytes(payload):
@@ -356,7 +364,7 @@ def safe_relative_file(root, relative_value, label):
     return path
 
 
-def validate_complete_source_output(target, source, entry):
+def validate_complete_source_output(target, source, entry, *, allow_legacy_quality=False):
     target = Path(target).resolve()
     try:
         manifest = json.loads((target / "manifest.json").read_text("utf-8"))
@@ -481,6 +489,25 @@ def validate_complete_source_output(target, source, entry):
             raise ValueError("PDF QA 目录包含未引用或缺失文件")
     elif renders is not None or (target / "qa").exists():
         raise ValueError("非 PDF 来源不得伪造 renders")
+    expected_quality = expected_quality_contract(source, records, renders if is_pdf else None)
+    if quality != expected_quality:
+        if not allow_legacy_quality:
+            raise ValueError("quality.json 完整合同与重算结果不一致")
+        legacy_expected = {
+            "page": {"status": "pending_human_review", "scope": LEGACY_QUALITY_SCOPES["page"],
+                     "renders": renders, "extractionQuality": summarize_extraction_quality(records)},
+            "spine_item": {"status": "pending_human_review",
+                           "scope": LEGACY_QUALITY_SCOPES["spine_item"],
+                           "selectedSpineItems": source["processedUnitCount"],
+                           "emptyTextUnits": sum(1 for record in records if record["emptyText"]),
+                           "extractionQuality": summarize_extraction_quality(records)},
+            "paragraph": {"status": "pending_human_review",
+                          "scope": LEGACY_QUALITY_SCOPES["paragraph"],
+                          "selectedParagraphs": source["processedUnitCount"],
+                          "extractionQuality": summarize_extraction_quality(records)},
+        }[unit_type]
+        if quality != legacy_expected:
+            raise ValueError("legacy quality.json 不符合可迁移合同")
     return manifest, quality
 
 
@@ -563,10 +590,7 @@ def create_pdf_qa(path, staging, selected):
         image = render_pdf_page(path, page, qa_dir / label, 120)
         records.append({"kind": label, "page": page, "imageFile": image.relative_to(staging).as_posix(),
                         "imageSha256": sha256_file(image), "automatedChecks": inspect_png(image)})
-    quality = {"status": "pending_human_review",
-               "scope": "封面及一个选中页面；自动检查不等于人工通过", "renders": records}
-    write_json(staging / "quality.json", quality)
-    return quality
+    return records
 
 
 def unit_filename(unit_type, locator):
@@ -593,6 +617,43 @@ def summarize_extraction_quality(records):
     }
 
 
+def expected_quality_contract(source, records, renders=None):
+    unit_type = source["processedUnitType"]
+    common = {"status": "pending_human_review",
+              "extractionQuality": summarize_extraction_quality(records)}
+    if unit_type == "page":
+        selected = parse_selected_ranges(source["selectedRanges"], "page")
+        page_characters = {page: 0 for page in selected}
+        for record in records:
+            page_characters[record["locator"]["page"]] += record["characterCount"]
+        renders = renders or []
+        checks = [render["automatedChecks"] for render in renders]
+        return {
+            **common,
+            "scope": PDF_QUALITY_SCOPE,
+            "selectedPages": len(selected),
+            "extractedPages": len({record["locator"]["page"] for record in records}),
+            "emptyTextPages": sum(1 for count in page_characters.values() if count == 0),
+            "emptyTextUnits": sum(1 for record in records if record["emptyText"]),
+            "renderCount": len(renders),
+            "qaSummary": {
+                "blackFailures": sum(1 for check in checks if check.get("notBlack") is False),
+                "blankFailures": sum(1 for check in checks if check.get("notBlank") is False),
+                "edgeCropWarnings": sum(1 for check in checks if check.get("possibleEdgeCropping") is True),
+            },
+            "renders": renders,
+        }
+    if unit_type == "spine_item":
+        return {**common, "scope": EPUB_QUALITY_SCOPE,
+                "selectedSpineItems": source["processedUnitCount"],
+                "extractedParagraphs": len(records),
+                "emptyTextUnits": sum(1 for record in records if record["emptyText"])}
+    return {**common, "scope": OFFICE_QUALITY_SCOPE,
+            "selectedParagraphs": source["processedUnitCount"],
+            "extractedParagraphs": len(records),
+            "emptyTextUnits": sum(1 for record in records if record["emptyText"])}
+
+
 def extract_source(source, entry, path, selected, output, tools):
     unit_type = source["processedUnitType"]
     def produce(staging):
@@ -608,19 +669,14 @@ def extract_source(source, entry, path, selected, output, tools):
                     for item in slice_pdf_page(page, text):
                         item["confidence"] = confidence
                         extracted.append(item)
-            quality = create_pdf_qa(path, staging, selected)
+            renders = create_pdf_qa(path, staging, selected)
         elif unit_type == "spine_item":
             extracted = epub_units(path, selected)
-            quality = {"status": "pending_human_review", "selectedSpineItems": len(selected),
-                       "emptyTextUnits": sum(1 for item in extracted if item.get("emptyText")),
-                       "scope": "严格 XHTML 语义块与空单元覆盖检查；不等于人工通过"}
-            write_json(staging / "quality.json", quality)
+            renders = None
         else:
             text = run_checked(["textutil", "-convert", "txt", "-stdout", str(path)], text=True)
             extracted = office_units(text, selected)
-            quality = {"status": "pending_human_review", "selectedParagraphs": len(selected),
-                       "scope": "textutil UTF-8 转换与段落覆盖检查；不等于人工通过"}
-            write_json(staging / "quality.json", quality)
+            renders = None
         records = [write_text_unit(staging, unit_filename(unit_type, item["locator"]), item["text"],
                                    item["locator"], item.get("confidence", 1.0),
                                    item.get("emptyText", False)) for item in extracted]
@@ -629,7 +685,7 @@ def extract_source(source, entry, path, selected, output, tools):
         distinct = distinct_unit_count(records, unit_type)
         if distinct != source["processedUnitCount"]:
             raise ValueError("实际处理单元数与选择合同不一致")
-        quality["extractionQuality"] = summarize_extraction_quality(records)
+        quality = expected_quality_contract(source, records, renders)
         write_json(staging / "quality.json", quality)
         parameters = {
             "pdf_text_layer": ["pdftotext -f <PAGE> -l <PAGE> -enc UTF-8 -layout <SOURCE> -"],
@@ -661,6 +717,22 @@ def source_directory_name(relative_path, source_sha):
 
 def load_reusable_source(target, source, entry):
     try:
+        return validate_complete_source_output(target, source, entry)
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def migrate_legacy_quality(target, source, entry):
+    try:
+        manifest, legacy_quality = validate_complete_source_output(
+            target, source, entry, allow_legacy_quality=True
+        )
+        expected = expected_quality_contract(
+            source, manifest["units"], legacy_quality.get("renders")
+        )
+        if legacy_quality == expected:
+            return manifest, legacy_quality
+        write_json(Path(target) / "quality.json", expected)
         return validate_complete_source_output(target, source, entry)
     except (OSError, UnicodeError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return None
@@ -780,6 +852,8 @@ def build_round(selection_path, catalog_path, source_root, output_root):
         target = output_root / "sources" / directory
         try:
             reusable = load_reusable_source(target, source, entry)
+            if reusable is None:
+                reusable = migrate_legacy_quality(target, source, entry)
             if reusable is None:
                 extract_source(source, entry, path, selected, target, tools)
                 manifest, quality = validate_complete_source_output(target, source, entry)

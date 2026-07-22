@@ -85,7 +85,15 @@ def write_valid_pdf_output(root, module):
     automated_checks = module.inspect_png(qa / "cover.png")
     quality = {
         "status": "pending_human_review",
-        "scope": "测试 QA",
+        "scope": module.PDF_QUALITY_SCOPE,
+        "selectedPages": 2,
+        "extractedPages": 2,
+        "emptyTextPages": 0,
+        "emptyTextUnits": 0,
+        "renderCount": 2,
+        "qaSummary": {
+            "blackFailures": 2, "blankFailures": 0, "edgeCropWarnings": 2,
+        },
         "renders": [
             {"kind": "cover", "page": 1, "imageFile": "qa/cover.png",
              "imageSha256": sha256_bytes(PNG_1X1), "automatedChecks": automated_checks},
@@ -102,6 +110,50 @@ def write_valid_pdf_output(root, module):
         "budgetPageEquivalent": 2, "ocrPageCount": 0, "tools": {}, "parameters": [],
         "units": units, "qualityReport": "quality.json", "errorReport": "errors.json",
     }
+    module.write_json(Path(root) / "manifest.json", manifest)
+    module.write_json(Path(root) / "quality.json", quality)
+    module.write_json(Path(root) / "errors.json", {"status": "complete", "errors": []})
+    return source, entry, manifest, quality
+
+
+def write_valid_non_pdf_output(root, module, unit_type):
+    if unit_type == "spine_item":
+        relative_path, route, selected_ranges = "sample.epub", "epub_xhtml", ["spine-item:1-2"]
+        locator_values = [
+            {"spineItem": 1, "chapter": "第一章", "paragraph": 1},
+            {"spineItem": 2, "chapter": "第二章", "paragraph": 1},
+        ]
+        scope = module.EPUB_QUALITY_SCOPE
+    else:
+        relative_path, route, selected_ranges = "sample.docx", "textutil_plain_text", ["paragraph:1-2"]
+        locator_values = [{"heading": "第一章", "paragraph": 1}, {"heading": "第一章", "paragraph": 2}]
+        scope = module.OFFICE_QUALITY_SCOPE
+    source = {
+        "relativePath": relative_path, "selectedRanges": selected_ranges,
+        "processedUnitType": unit_type, "processedUnitCount": 2,
+        "budgetPageEquivalent": 1, "ocrPageCount": 0, "selectionReason": "测试",
+    }
+    entry = {"relativePath": relative_path, "sha256": "b" * 64, "catalogStatus": "selected",
+             "extractionRoute": route, "unitEstimate": {"unitType": unit_type, "unitCount": 2,
+                                                          "budgetPageEquivalent": 1}}
+    units = [module.write_text_unit(root, f"units/unit-{index}.txt", f"文本{index}", locator, 1.0)
+             for index, locator in enumerate(locator_values, start=1)]
+    quality = {"status": "pending_human_review", "scope": scope,
+               "extractedParagraphs": 2, "emptyTextUnits": 0,
+               "extractionQuality": module.summarize_extraction_quality(units)}
+    if unit_type == "spine_item":
+        quality["selectedSpineItems"] = 2
+    else:
+        quality["selectedParagraphs"] = 2
+    manifest = {
+        "schemaVersion": module.SCHEMA_VERSION, "status": "complete", "roundId": "round-001",
+        "relativePath": relative_path, "sourceSha256": entry["sha256"], "extractionRoute": route,
+        "selectedRanges": selected_ranges, "processedUnitType": unit_type, "processedUnitCount": 2,
+        "budgetPageEquivalent": 1, "ocrPageCount": 0, "tools": {}, "parameters": [],
+        "units": units, "qualityReport": "quality.json", "errorReport": "errors.json",
+    }
+    if unit_type == "spine_item":
+        manifest["semanticBlockContract"] = "v1"
     module.write_json(Path(root) / "manifest.json", manifest)
     module.write_json(Path(root) / "quality.json", quality)
     module.write_json(Path(root) / "errors.json", {"status": "complete", "errors": []})
@@ -390,16 +442,37 @@ class AtomicOutputTest(unittest.TestCase):
                 self.assertIsNone(self.module.load_reusable_source(root, source, entry))
 
     def test_reuse_rejects_quality_or_manifest_contract_tampering(self):
-        for mutation in ("quality", "manifest"):
+        for mutation in ("quality", "manifest", "scope", "extra-field"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp_dir:
                 root = Path(temp_dir)
                 source, entry, manifest, quality = write_valid_pdf_output(root, self.module)
                 if mutation == "quality":
                     quality["extractionQuality"]["characterCount"] += 1
                     self.module.write_json(root / "quality.json", quality)
-                else:
+                elif mutation == "manifest":
                     manifest["units"][0]["characterCount"] += 1
                     self.module.write_json(root / "manifest.json", manifest)
+                elif mutation == "scope":
+                    quality["scope"] = "被篡改的审核说明"
+                    self.module.write_json(root / "quality.json", quality)
+                else:
+                    quality["unexpected"] = True
+                    self.module.write_json(root / "quality.json", quality)
+                self.assertIsNone(self.module.load_reusable_source(root, source, entry))
+
+    def test_reuse_rejects_epub_or_office_quality_statistics_tampering(self):
+        for unit_type, field in (("spine_item", "selectedSpineItems"),
+                                 ("spine_item", "extractedParagraphs"),
+                                 ("spine_item", "emptyTextUnits"),
+                                 ("paragraph", "selectedParagraphs"),
+                                 ("paragraph", "extractedParagraphs"),
+                                 ("paragraph", "emptyTextUnits")):
+            with self.subTest(unit_type=unit_type, field=field), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                source, entry, _, quality = write_valid_non_pdf_output(root, self.module, unit_type)
+                self.assertIsNotNone(self.module.load_reusable_source(root, source, entry))
+                quality[field] += 1
+                self.module.write_json(root / "quality.json", quality)
                 self.assertIsNone(self.module.load_reusable_source(root, source, entry))
 
     def test_contact_sheets_are_built_from_verified_qa_and_hash_checked(self):
