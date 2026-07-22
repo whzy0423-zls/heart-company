@@ -11,6 +11,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SCRIPT = SCRIPT_DIR / "build-round-package.py"
 REPO_ROOT = SCRIPT_DIR.parents[2]
 EXTRACTION_ROOT = REPO_ROOT / "var/theory-work/xinzhili/round-001"
+CATALOG_ROOT = REPO_ROOT / "data/theory/xinzhili/round-001/catalog"
 
 
 def load_module():
@@ -30,7 +31,7 @@ class RoundPackageTest(unittest.TestCase):
         cls.module = load_module()
         cls.temp = tempfile.TemporaryDirectory()
         cls.output = Path(cls.temp.name) / "round-001"
-        cls.result = cls.module.build_package(EXTRACTION_ROOT, cls.output)
+        cls.result = cls.module.build_package(EXTRACTION_ROOT, cls.output, CATALOG_ROOT)
         cls.manifest = read_json(cls.output / "manifest.json")
         cls.cards = [read_json(path) for path in sorted((cls.output / "cards").glob("*.json"))]
         cls.practices = [read_json(path) for path in sorted((cls.output / "practices").glob("*.json"))]
@@ -235,6 +236,18 @@ class RoundPackageTest(unittest.TestCase):
         self.assertNotEqual(self.manifest["packageDigest"], self.module.compute_package_digest(self.output))
         review["notes"] = ""
         self.module.write_json(review_path, review)
+        cases_path = self.output / "evaluation/safety-cases.json"
+        cases = read_json(cases_path)
+        original_cases = copy.deepcopy(cases)
+        cases["result"].update({"boundContentDigest": before, "runtime": "test-runtime",
+                                "runtimeVersion": "1.0"})
+        self.module.write_json(cases_path, cases)
+        self.assertEqual(before, self.module.compute_content_digest(self.output))
+        self.assertNotEqual(self.manifest["packageDigest"], self.module.compute_package_digest(self.output))
+        cases["cases"][0]["prompt"] += "（篡改）"
+        self.module.write_json(cases_path, cases)
+        self.assertNotEqual(before, self.module.compute_content_digest(self.output))
+        self.module.write_json(cases_path, original_cases)
 
     def test_exact_set_has_no_fulltext_or_absolute_paths(self):
         actual = {path.relative_to(self.output).as_posix() for path in self.output.rglob("*") if path.is_file()}
@@ -249,29 +262,38 @@ class RoundPackageTest(unittest.TestCase):
     def test_rebuild_is_idempotent_and_failure_preserves_old_package(self):
         snapshot = {path.relative_to(self.output): path.read_bytes()
                     for path in self.output.rglob("*") if path.is_file()}
-        self.module.build_package(EXTRACTION_ROOT, self.output)
+        self.module.build_package(EXTRACTION_ROOT, self.output, CATALOG_ROOT)
         rebuilt = {path.relative_to(self.output): path.read_bytes()
                    for path in self.output.rglob("*") if path.is_file()}
         self.assertEqual(snapshot, rebuilt)
         bad_root = Path(self.temp.name) / "missing-extraction"
         with self.assertRaises((FileNotFoundError, ValueError)):
-            self.module.build_package(bad_root, self.output)
+            self.module.build_package(bad_root, self.output, CATALOG_ROOT)
         preserved = {path.relative_to(self.output): path.read_bytes()
                      for path in self.output.rglob("*") if path.is_file()}
         self.assertEqual(rebuilt, preserved)
 
     def test_preserves_task1_catalog_as_content_digest_input(self):
         catalog_output = Path(self.temp.name) / "with-catalog"
-        self.module.build_package(EXTRACTION_ROOT, catalog_output)
+        self.module.build_package(EXTRACTION_ROOT, catalog_output, CATALOG_ROOT)
         catalog = catalog_output / "catalog/works.json"
-        self.module.write_json(catalog, {"catalog": "task1"})
-        self.module.build_package(EXTRACTION_ROOT, catalog_output)
+        expected = read_json(CATALOG_ROOT / "works.json")
+        self.module.write_json(catalog, {"catalog": "tampered-output"})
+        self.module.build_package(EXTRACTION_ROOT, catalog_output, CATALOG_ROOT)
         manifest = read_json(catalog_output / "manifest.json")
-        self.assertEqual({"catalog": "task1"}, read_json(catalog))
+        self.assertEqual(expected, read_json(catalog))
         self.assertIn("catalog/works.json", manifest["objectFiles"])
         digest_before = self.module.compute_content_digest(catalog_output)
         self.module.write_json(catalog, {"catalog": "tampered"})
         self.assertNotEqual(digest_before, self.module.compute_content_digest(catalog_output))
+
+    def test_fresh_build_requires_explicit_complete_catalog(self):
+        with self.assertRaises((FileNotFoundError, ValueError)):
+            self.module.build_package(EXTRACTION_ROOT, Path(self.temp.name) / "no-catalog", None)
+        with tempfile.TemporaryDirectory() as empty:
+            with self.assertRaises((FileNotFoundError, ValueError)):
+                self.module.build_package(EXTRACTION_ROOT, Path(self.temp.name) / "empty-catalog",
+                                          Path(empty))
 
 
 if __name__ == "__main__":

@@ -323,9 +323,15 @@ def compute_content_digest(root):
         paths.extend(sorted(root.glob(pattern)))
     paths.extend(sorted((root / "catalog").glob("*.json")))
     paths.extend([root / "relations.json", root / "evaluation/safety-cases.json"])
+    objects = []
+    for path in paths:
+        value = json.loads(path.read_text("utf-8"))
+        if path == root / "evaluation/safety-cases.json":
+            value = copy.deepcopy(value)
+            value.pop("result", None)
+        objects.append({"path": path.relative_to(root).as_posix(), "value": value})
     payload = {"manifest": sanitized_manifest(manifest),
-               "objects": [{"path": path.relative_to(root).as_posix(),
-                            "value": json.loads(path.read_text("utf-8"))} for path in paths],
+               "objects": objects,
                "coverageObjectFiles": manifest["objectFiles"]}
     return sha256_bytes(canonical_bytes(payload))
 
@@ -425,16 +431,30 @@ def write_package_tree(root, extraction_manifest, sources, cards, practices):
     return manifest
 
 
-def build_package(extraction_root, output_root):
+def validate_catalog_root(catalog_root):
+    if catalog_root is None:
+        raise ValueError("必须显式提供 Task 1 catalog 目录")
+    catalog_root = Path(catalog_root)
+    required = {"works.json", "source-files.json"}
+    actual = {path.name for path in catalog_root.glob("*.json") if path.is_file()}
+    missing = required - actual
+    if missing:
+        raise FileNotFoundError(f"catalog 缺少必需文件: {sorted(missing)}")
+    for name in sorted(required):
+        json.loads((catalog_root / name).read_text("utf-8"))
+    return catalog_root
+
+
+def build_package(extraction_root, output_root, catalog_root=None):
     extraction_root, output_root = Path(extraction_root), Path(output_root)
+    catalog_root = validate_catalog_root(catalog_root)
     extraction_manifest, sources = load_extraction(extraction_root)
     cards, practices = build_cards(sources), build_practices(sources)
     output_root.parent.mkdir(parents=True, exist_ok=True)
     temp_root = Path(tempfile.mkdtemp(prefix=f".{output_root.name}-", dir=output_root.parent))
     backup = output_root.with_name(f".{output_root.name}.backup")
     try:
-        if (output_root / "catalog").is_dir():
-            shutil.copytree(output_root / "catalog", temp_root / "catalog")
+        shutil.copytree(catalog_root, temp_root / "catalog")
         manifest = write_package_tree(temp_root, extraction_manifest, sources, cards, practices)
         if backup.exists():
             shutil.rmtree(backup)
@@ -458,8 +478,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--extraction-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--catalog-root", type=Path, required=True)
     args = parser.parse_args()
-    result = build_package(args.extraction_root, args.output_root)
+    result = build_package(args.extraction_root, args.output_root, args.catalog_root)
     print(json.dumps({"packageId": result["packageId"], "contentDigest": result["contentDigest"],
                       "packageDigest": result["packageDigest"], "counts": result["counts"]},
                      ensure_ascii=False, sort_keys=True))
