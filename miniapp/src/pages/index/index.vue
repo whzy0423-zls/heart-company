@@ -653,8 +653,8 @@ function hideWheel() {
     align-items: flex-start;
   }
   .hero__copy {
-    width: 100%;
-    max-width: 100%;
+    width: 68%;
+    max-width: 68%;
   }
   .hero__title {
     max-width: 430rpx;
@@ -664,7 +664,7 @@ function hideWheel() {
     max-width: 410rpx;
   }
   .hero__visual {
-    right: -40rpx;
+    right: -68rpx;
     bottom: 8rpx;
   }
   .growth-card {
