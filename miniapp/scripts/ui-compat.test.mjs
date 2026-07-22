@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { inflateSync } from 'node:zlib'
 
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
 
@@ -15,6 +16,87 @@ const pagesConfig = readFileSync('src/pages.json', 'utf8')
 assert.doesNotMatch(pagesConfig, /pages\/chat\/chat/, 'pages.json must not register the removed chat page')
 assert.doesNotMatch(pagesConfig, /问 AI|AI 对话/, 'tabBar must not expose an AI chat entry')
 assert.equal(statSync('src/pages/chat', { throwIfNoEntry: false }), undefined, 'removed chat page directory should stay deleted')
+
+function decodeRgbaPng(path) {
+  const png = readFileSync(path)
+  assert.deepEqual(
+    png.subarray(0, 8),
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    `${path} should have a valid PNG signature`,
+  )
+  const width = png.readUInt32BE(16)
+  const height = png.readUInt32BE(20)
+  assert.equal(png[24], 8, `${path} should use 8-bit channels`)
+  assert.equal(png[25], 6, `${path} should preserve RGBA transparency`)
+  assert.equal(png[28], 0, `${path} should remain non-interlaced`)
+
+  const idat = []
+  for (let offset = 8; offset < png.length;) {
+    const length = png.readUInt32BE(offset)
+    const type = png.subarray(offset + 4, offset + 8).toString('ascii')
+    if (type === 'IDAT') idat.push(png.subarray(offset + 8, offset + 8 + length))
+    offset += 12 + length
+  }
+
+  const filtered = inflateSync(Buffer.concat(idat))
+  const stride = width * 4
+  const rgba = Buffer.alloc(stride * height)
+  let sourceOffset = 0
+  for (let y = 0; y < height; y += 1) {
+    const filter = filtered[sourceOffset]
+    sourceOffset += 1
+    for (let x = 0; x < stride; x += 1) {
+      const raw = filtered[sourceOffset + x]
+      const left = x >= 4 ? rgba[y * stride + x - 4] : 0
+      const up = y > 0 ? rgba[(y - 1) * stride + x] : 0
+      const upperLeft = y > 0 && x >= 4 ? rgba[(y - 1) * stride + x - 4] : 0
+      let value
+      if (filter === 0) value = raw
+      else if (filter === 1) value = raw + left
+      else if (filter === 2) value = raw + up
+      else if (filter === 3) value = raw + Math.floor((left + up) / 2)
+      else if (filter === 4) {
+        const estimate = left + up - upperLeft
+        const leftDistance = Math.abs(estimate - left)
+        const upDistance = Math.abs(estimate - up)
+        const upperLeftDistance = Math.abs(estimate - upperLeft)
+        value = raw + (leftDistance <= upDistance && leftDistance <= upperLeftDistance
+          ? left
+          : upDistance <= upperLeftDistance ? up : upperLeft)
+      } else {
+        assert.fail(`${path} uses unsupported PNG filter ${filter}`)
+      }
+      rgba[y * stride + x] = value & 0xff
+    }
+    sourceOffset += stride
+  }
+  return { width, height, rgba }
+}
+
+for (const name of ['test', 'learn', 'booking', 'profile']) {
+  const path = `src/static/tabbar/${name}-active-green.png`
+  assert.equal(existsSync(path), true, `${path} should exist`)
+  const { width, height, rgba } = decodeRgbaPng(path)
+  assert.deepEqual([width, height], [81, 81], `${path} should retain the existing tab icon dimensions`)
+  const original = decodeRgbaPng(`src/static/tabbar/${name}-active.png`)
+  assert.deepEqual([original.width, original.height], [width, height], `${path} should match the existing active icon dimensions`)
+
+  const colorCounts = new Map()
+  for (let offset = 0; offset < rgba.length; offset += 4) {
+    assert.equal(
+      rgba[offset + 3],
+      original.rgba[offset + 3],
+      `${path} should preserve the existing active icon alpha silhouette at pixel ${offset / 4}`,
+    )
+    if (rgba[offset + 3] === 0) continue
+    const color = `${rgba[offset]},${rgba[offset + 1]},${rgba[offset + 2]}`
+    colorCounts.set(color, (colorCounts.get(color) || 0) + 1)
+    assert.equal(color, '51,91,74', `${path} visible pixel ${offset / 4} should use brand green #335B4A`)
+  }
+  const dominantColor = [...colorCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+  assert.equal(dominantColor, '51,91,74', `${path} dominant selected color should be brand green #335B4A`)
+  assert.equal(colorCounts.has('43,127,255'), false, `${path} should not retain the old selected blue`)
+}
 
 const h5Index = readFileSync('index.html', 'utf8')
 assert.match(h5Index, /viewport-fit=cover/, 'H5 viewport meta should enable iOS safe-area env variables')
