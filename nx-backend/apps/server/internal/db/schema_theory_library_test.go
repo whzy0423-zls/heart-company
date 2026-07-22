@@ -1,9 +1,15 @@
 package db
 
 import (
+	"context"
+	"database/sql"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"nine-xing/nx-backend/apps/server/internal/testutil"
 )
 
 func TestSchemaIncludesTheoryLibraryFoundation(t *testing.T) {
@@ -30,9 +36,30 @@ func TestSchemaIncludesTheoryLibraryFoundation(t *testing.T) {
 		"CREATE UNIQUE INDEX IF NOT EXISTS uq_theory_release_chunk ON theory_release_cards(release_id, chunk_id)",
 		"ALTER TABLE theory_chunk_embeddings ADD COLUMN IF NOT EXISTS embedding vector(1536)",
 		"CREATE INDEX IF NOT EXISTS idx_theory_chunk_embeddings_hnsw ON theory_chunk_embeddings USING hnsw (embedding vector_cosine_ops)",
-		"CREATE OR REPLACE FUNCTION validate_theory_card_source_file_work()",
+		"CREATE OR REPLACE FUNCTION validate_theory_library_ownership()",
+		"DROP TRIGGER IF EXISTS theory_card_sources_file_work_match ON theory_card_sources",
 		"CREATE CONSTRAINT TRIGGER theory_card_sources_file_work_match",
 		"DEFERRABLE INITIALLY DEFERRED",
+		"CREATE CONSTRAINT TRIGGER theory_card_relations_ownership",
+		"CREATE CONSTRAINT TRIGGER theory_chunks_ownership",
+		"CREATE CONSTRAINT TRIGGER theory_release_cards_ownership",
+		"CREATE CONSTRAINT TRIGGER theory_cards_ownership_dependents",
+		"CREATE CONSTRAINT TRIGGER theory_source_works_ownership_dependents",
+		"CREATE CONSTRAINT TRIGGER theory_source_files_card_source_work_match",
+		"CREATE CONSTRAINT TRIGGER theory_practices_ownership_dependents",
+		"CREATE CONSTRAINT TRIGGER theory_library_releases_ownership_dependents",
+		"theory relation cards must belong to the same library",
+		"theory card source card, work, and file must share ownership",
+		"theory chunk library, card, and practice ownership mismatch",
+		"theory release card mapping ownership mismatch",
+		"theory canonical work must belong to the same library",
+		"theory duplicate source file must belong to the same library",
+		"LOCK TABLE theory_card_relations, theory_card_sources, theory_source_files, theory_source_works, theory_cards, theory_practices, theory_chunks, theory_library_releases, theory_release_cards IN SHARE ROW EXCLUSIVE MODE",
+		"Replacement transaction order: supersede the old published card before publishing the new version.",
+		"ADD CONSTRAINT ck_theory_source_works_authors_array",
+		"ADD CONSTRAINT ck_theory_cards_aliases_array",
+		"ADD CONSTRAINT ck_theory_practices_steps_array",
+		"ADD CONSTRAINT ck_theory_chunks_keywords_array",
 		"CREATE EXTENSION IF NOT EXISTS pg_trgm",
 		"CREATE INDEX IF NOT EXISTS idx_theory_chunks_lexical_trgm ON theory_chunks USING gin ((title || ' ' || content || ' ' || keywords::text || ' ' || tags::text) gin_trgm_ops)",
 		"CREATE INDEX IF NOT EXISTS idx_theory_cards_lexical_trgm ON theory_cards USING gin ((canonical_name || ' ' || aliases::text) gin_trgm_ops)",
@@ -102,6 +129,9 @@ func TestSchemaIncludesTheoryLibraryFoundation(t *testing.T) {
 			"CHECK (work_type IN ('book','course','handout','article','original_text','research','other'))",
 			"CHECK (authority_level BETWEEN 1 AND 5)",
 			"CHECK (status IN ('registered','extracting','reviewed','archived'))",
+			"CHECK (jsonb_typeof(authors) = 'array')",
+			"CHECK (jsonb_typeof(editors) = 'array')",
+			"CHECK (jsonb_typeof(translators) = 'array')",
 		},
 		"theory_source_files": {
 			"CHECK (extraction_class IN ('text_rich','mixed','image_dominant','cover_only'))",
@@ -114,10 +144,18 @@ func TestSchemaIncludesTheoryLibraryFoundation(t *testing.T) {
 			"CHECK (clinical_safety IN ('general','caution','restricted','escalate'))",
 			"CHECK (authority_level BETWEEN 1 AND 5)",
 			"CHECK (status IN ('draft','in_review','published','superseded','retired'))",
+			"CHECK (jsonb_typeof(aliases) = 'array')",
+			"CHECK (jsonb_typeof(observable_signals) = 'array')",
+			"CHECK (jsonb_typeof(common_triggers) = 'array')",
 		},
 		"theory_practices": {
 			"practice_schema_version TEXT NOT NULL DEFAULT 'xinzhili.practice.v1'",
 			"CHECK (status IN ('draft','in_review','published','superseded','retired'))",
+			"CHECK (jsonb_typeof(steps) = 'array')",
+			"CHECK (jsonb_typeof(reflection_prompts) = 'array')",
+			"CHECK (jsonb_typeof(expected_feedback) = 'array')",
+			"CHECK (jsonb_typeof(stop_conditions) = 'array')",
+			"CHECK (jsonb_typeof(professional_escalation) = 'array')",
 		},
 		"theory_card_relations": {
 			"CHECK (from_card_id <> to_card_id)",
@@ -136,6 +174,8 @@ func TestSchemaIncludesTheoryLibraryFoundation(t *testing.T) {
 			"CHECK (evidence_level IN ('strong','moderate','limited','traditional','experiential','unknown'))",
 			"CHECK (clinical_safety IN ('general','caution','restricted','escalate'))",
 			"CHECK (status IN ('enabled','disabled','retired'))",
+			"CHECK (jsonb_typeof(keywords) = 'array')",
+			"CHECK (jsonb_typeof(tags) = 'array')",
 		},
 		"theory_chunk_embeddings": {
 			"CHECK (dimensions = 1536)",
@@ -211,6 +251,321 @@ func TestTheoryLibrarySchemaOrdersDependenciesAndProtectsOptionalExtensions(t *t
 			t.Errorf("pgvector block missing %q", fragment)
 		}
 	}
+	if strings.Count(vectorBlock, "EXCEPTION WHEN OTHERS") < 4 {
+		t.Fatal("pgvector extension, theory vector column, HNSW index, and legacy rag index each need independent exception handling")
+	}
+	columnBlock := schemaSection(t, vectorBlock,
+		"-- theory embedding column is independently optional",
+		"-- theory HNSW index is independently optional")
+	if !strings.Contains(columnBlock, "EXCEPTION WHEN OTHERS") ||
+		!strings.Contains(columnBlock, "ALTER TABLE theory_chunk_embeddings ADD COLUMN IF NOT EXISTS embedding vector(1536)") {
+		t.Fatal("theory embedding column DDL must be independently exception-safe")
+	}
+	hnswBlock := schemaSection(t, vectorBlock,
+		"-- theory HNSW index is independently optional",
+		"END $$;")
+	if !strings.Contains(hnswBlock, "EXCEPTION WHEN OTHERS") ||
+		!strings.Contains(hnswBlock, "CREATE INDEX IF NOT EXISTS idx_theory_chunk_embeddings_hnsw") {
+		t.Fatal("theory HNSW DDL must be independently exception-safe")
+	}
+}
+
+func TestTheoryLibraryOwnershipConstraints(t *testing.T) {
+	database := openTheorySchemaTestDB(t)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	var libraryA, libraryB int64
+	for _, item := range []struct {
+		key string
+		id  *int64
+	}{{"ownership-a-" + suffix, &libraryA}, {"ownership-b-" + suffix, &libraryB}} {
+		if err := database.QueryRowContext(ctx,
+			`INSERT INTO theory_libraries (key, name, status) VALUES ($1, $1, 'enabled') RETURNING id`, item.key,
+		).Scan(item.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = database.ExecContext(context.Background(), `DELETE FROM theory_libraries WHERE id IN ($1,$2)`, libraryA, libraryB)
+	})
+
+	workA := insertTheoryWork(t, database, libraryA, "work-a-"+suffix)
+	workB := insertTheoryWork(t, database, libraryB, "work-b-"+suffix)
+	fileA := insertTheoryFile(t, database, workA, "file-a-"+suffix)
+	fileB := insertTheoryFile(t, database, workB, "file-b-"+suffix)
+	cardA := insertTheoryCard(t, database, libraryA, "card-a-"+suffix)
+	cardB := insertTheoryCard(t, database, libraryB, "card-b-"+suffix)
+	practiceB := insertTheoryPractice(t, database, cardB)
+	chunkA := insertTheoryChunk(t, database, libraryA, cardA, nil, "chunk-a-"+suffix)
+	chunkB := insertTheoryChunk(t, database, libraryB, cardB, &practiceB, "chunk-b-"+suffix)
+	releaseA := insertTheoryRelease(t, database, libraryA)
+
+	t.Run("relation cards share a library", func(t *testing.T) {
+		expectDeferredConstraintFailure(t, database, func(tx *sql.Tx) error {
+			_, err := tx.Exec(`INSERT INTO theory_card_relations (from_card_id, to_card_id, relation_type) VALUES ($1,$2,'supports')`, cardA, cardB)
+			return err
+		})
+	})
+	t.Run("card source card and work share a library", func(t *testing.T) {
+		expectDeferredConstraintFailure(t, database, func(tx *sql.Tx) error {
+			_, err := tx.Exec(`INSERT INTO theory_card_sources (card_id, work_id, source_role) VALUES ($1,$2,'primary')`, cardA, workB)
+			return err
+		})
+	})
+	t.Run("card source file belongs to work", func(t *testing.T) {
+		expectDeferredConstraintFailure(t, database, func(tx *sql.Tx) error {
+			_, err := tx.Exec(`INSERT INTO theory_card_sources (card_id, work_id, file_id, source_role) VALUES ($1,$2,$3,'primary')`, cardA, workA, fileB)
+			return err
+		})
+	})
+	t.Run("chunk card belongs to library", func(t *testing.T) {
+		expectDeferredConstraintFailure(t, database, func(tx *sql.Tx) error {
+			_, err := tx.Exec(`INSERT INTO theory_chunks (library_id, card_id, chunk_key, chunk_kind, title, content, authority_level, evidence_level, clinical_safety, content_hash) VALUES ($1,$2,$3,'card','x','x',1,'unknown','general',$3)`, libraryB, cardA, "bad-library-"+suffix)
+			return err
+		})
+	})
+	t.Run("chunk practice belongs to card", func(t *testing.T) {
+		expectDeferredConstraintFailure(t, database, func(tx *sql.Tx) error {
+			_, err := tx.Exec(`INSERT INTO theory_chunks (library_id, card_id, practice_id, chunk_key, chunk_kind, title, content, authority_level, evidence_level, clinical_safety, content_hash) VALUES ($1,$2,$3,$4,'practice','x','x',1,'unknown','general',$4)`, libraryA, cardA, practiceB, "bad-practice-"+suffix)
+			return err
+		})
+	})
+	t.Run("release card and chunk share ownership", func(t *testing.T) {
+		expectDeferredConstraintFailure(t, database, func(tx *sql.Tx) error {
+			_, err := tx.Exec(`INSERT INTO theory_release_cards (release_id, card_id, chunk_id) VALUES ($1,$2,$3)`, releaseA, cardA, chunkB)
+			return err
+		})
+	})
+	t.Run("canonical work stays in the same library", func(t *testing.T) {
+		expectDeferredConstraintFailure(t, database, func(tx *sql.Tx) error {
+			_, err := tx.Exec(`UPDATE theory_source_works SET canonical_work_id=$1 WHERE id=$2`, workB, workA)
+			return err
+		})
+	})
+	t.Run("duplicate file stays in the same library", func(t *testing.T) {
+		expectDeferredConstraintFailure(t, database, func(tx *sql.Tx) error {
+			_, err := tx.Exec(`UPDATE theory_source_files SET duplicate_of_file_id=$1 WHERE id=$2`, fileB, fileA)
+			return err
+		})
+	})
+
+	if _, err := database.ExecContext(ctx, `INSERT INTO theory_release_cards (release_id, card_id, chunk_id) VALUES ($1,$2,$3)`, releaseA, cardA, chunkA); err != nil {
+		t.Fatalf("valid ownership mapping rejected: %v", err)
+	}
+
+	t.Run("coordinated ownership updates can finish within one transaction", func(t *testing.T) {
+		left := insertTheoryCard(t, database, libraryA, "move-left-"+suffix)
+		right := insertTheoryCard(t, database, libraryA, "move-right-"+suffix)
+		if _, err := database.ExecContext(ctx, `INSERT INTO theory_card_relations (from_card_id, to_card_id, relation_type) VALUES ($1,$2,'supports')`, left, right); err != nil {
+			t.Fatal(err)
+		}
+		tx, err := database.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`UPDATE theory_cards SET library_id=$1 WHERE id=$2`, libraryB, left); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`UPDATE theory_cards SET library_id=$1 WHERE id=$2`, libraryB, right); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("coordinated deferred update rejected: %v", err)
+		}
+	})
+
+	t.Run("published replacement supersedes old version first", func(t *testing.T) {
+		key := "published-replacement-" + suffix
+		oldID := insertPublishedTheoryCard(t, database, libraryA, key, 1)
+		tx, err := database.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO theory_cards
+			  (library_id, canonical_key, canonical_name, card_kind, epistemic_status, evidence_level, clinical_safety, authority_level, status, version)
+			VALUES ($1,$2,$2,'concept','source_text','unknown','general',1,'published',2)
+		`, libraryA, key); err == nil {
+			_ = tx.Rollback()
+			t.Fatal("expected simultaneous published versions to be rejected")
+		}
+		_ = tx.Rollback()
+
+		tx, err = database.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`UPDATE theory_cards SET status='superseded' WHERE id=$1`, oldID); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO theory_cards
+			  (library_id, canonical_key, canonical_name, card_kind, epistemic_status, evidence_level, clinical_safety, authority_level, status, version)
+			VALUES ($1,$2,$2,'concept','source_text','unknown','general',1,'published',2)
+		`, libraryA, key); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("ordered published replacement rejected: %v", err)
+		}
+	})
+}
+
+func TestTheoryLibraryArrayChecksUpgradeExistingTables(t *testing.T) {
+	database := openTheorySchemaTestDB(t)
+	ctx := context.Background()
+	constraints := []struct {
+		table string
+		name  string
+	}{
+		{"theory_source_works", "ck_theory_source_works_authors_array"},
+		{"theory_source_works", "ck_theory_source_works_editors_array"},
+		{"theory_source_works", "ck_theory_source_works_translators_array"},
+		{"theory_cards", "ck_theory_cards_aliases_array"},
+		{"theory_cards", "ck_theory_cards_observable_signals_array"},
+		{"theory_cards", "ck_theory_cards_common_triggers_array"},
+		{"theory_practices", "ck_theory_practices_steps_array"},
+		{"theory_practices", "ck_theory_practices_reflection_prompts_array"},
+		{"theory_practices", "ck_theory_practices_expected_feedback_array"},
+		{"theory_practices", "ck_theory_practices_stop_conditions_array"},
+		{"theory_practices", "ck_theory_practices_professional_escalation_array"},
+		{"theory_chunks", "ck_theory_chunks_keywords_array"},
+		{"theory_chunks", "ck_theory_chunks_tags_array"},
+	}
+	for _, constraint := range constraints {
+		if _, err := database.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s`, constraint.table, constraint.name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := database.ExecContext(ctx, schemaSQL); err != nil {
+		t.Fatalf("reapply schema after removing array checks: %v", err)
+	}
+	for _, constraint := range constraints {
+		var count int
+		if err := database.QueryRowContext(ctx, `SELECT count(*) FROM pg_constraint WHERE conname=$1`, constraint.name).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Errorf("expected upgraded array check %s, got %d", constraint.name, count)
+		}
+	}
+}
+
+func TestTheoryLibraryConcurrentOwnershipWritesCannotBothCommit(t *testing.T) {
+	database := openTheorySchemaTestDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	var libraryA, libraryB int64
+	if err := database.QueryRowContext(ctx, `INSERT INTO theory_libraries (key,name) VALUES ($1,$1) RETURNING id`, "concurrency-a-"+suffix).Scan(&libraryA); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `INSERT INTO theory_libraries (key,name) VALUES ($1,$1) RETURNING id`, "concurrency-b-"+suffix).Scan(&libraryB); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = database.ExecContext(context.Background(), `DELETE FROM theory_libraries WHERE id IN ($1,$2)`, libraryA, libraryB)
+	})
+	workA := insertTheoryWork(t, database, libraryA, "concurrency-work-a-"+suffix)
+	workB := insertTheoryWork(t, database, libraryB, "concurrency-work-b-"+suffix)
+	fileA := insertTheoryFile(t, database, workA, "concurrency-file-a-"+suffix)
+	cardA := insertTheoryCard(t, database, libraryA, "concurrency-card-a-"+suffix)
+
+	sourceTx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sourceTx.ExecContext(ctx, `INSERT INTO theory_card_sources (card_id,work_id,file_id,source_role) VALUES ($1,$2,$3,'primary')`, cardA, workA, fileA); err != nil {
+		_ = sourceTx.Rollback()
+		t.Fatal(err)
+	}
+	fileTx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		_ = sourceTx.Rollback()
+		t.Fatal(err)
+	}
+	if _, err := fileTx.ExecContext(ctx, `UPDATE theory_source_files SET work_id=$1 WHERE id=$2`, workB, fileA); err != nil {
+		_ = sourceTx.Rollback()
+		_ = fileTx.Rollback()
+		t.Fatal(err)
+	}
+
+	type result struct {
+		tx  *sql.Tx
+		err error
+	}
+	results := make(chan result, 2)
+	for _, tx := range []*sql.Tx{sourceTx, fileTx} {
+		go func(tx *sql.Tx) {
+			_, err := tx.ExecContext(ctx, `SET CONSTRAINTS ALL IMMEDIATE`)
+			results <- result{tx: tx, err: err}
+		}(tx)
+	}
+	commits := 0
+	for range 2 {
+		outcome := <-results
+		if outcome.err != nil {
+			_ = outcome.tx.Rollback()
+			continue
+		}
+		if err := outcome.tx.Commit(); err == nil {
+			commits++
+		}
+	}
+	if commits > 1 {
+		t.Fatal("concurrent card-source insert and file ownership move both committed")
+	}
+
+	var invalid int
+	if err := database.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM theory_card_sources source
+		JOIN theory_source_files file ON file.id=source.file_id
+		WHERE file.work_id IS DISTINCT FROM source.work_id
+	`).Scan(&invalid); err != nil {
+		t.Fatal(err)
+	}
+	if invalid != 0 {
+		t.Fatalf("concurrent writes left %d mismatched card-source files", invalid)
+	}
+}
+
+func TestTheoryLibraryTriggerCreationIsTableScoped(t *testing.T) {
+	database := openTheorySchemaTestDB(t)
+	ctx := context.Background()
+	if _, err := database.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS theory_trigger_name_probe (id BIGSERIAL PRIMARY KEY);
+		CREATE OR REPLACE FUNCTION theory_trigger_name_probe_fn() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql;
+		DROP TRIGGER IF EXISTS theory_card_sources_file_work_match ON theory_trigger_name_probe;
+		CREATE TRIGGER theory_card_sources_file_work_match BEFORE INSERT ON theory_trigger_name_probe FOR EACH ROW EXECUTE FUNCTION theory_trigger_name_probe_fn();
+		DROP TRIGGER IF EXISTS theory_card_sources_file_work_match ON theory_card_sources;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = database.ExecContext(context.Background(), `DROP TABLE IF EXISTS theory_trigger_name_probe CASCADE`)
+	})
+
+	if _, err := database.ExecContext(ctx, schemaSQL); err != nil {
+		t.Fatalf("rerun schema with unrelated same-name trigger: %v", err)
+	}
+	var count int
+	if err := database.QueryRowContext(ctx, `
+		SELECT count(*) FROM pg_trigger
+		WHERE tgname='theory_card_sources_file_work_match'
+		  AND tgrelid='theory_card_sources'::regclass
+	`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected target-table trigger to be recreated, got %d", count)
+	}
 }
 
 func TestTheoryChunkReleaseOwnershipIsOnlyInReleaseCards(t *testing.T) {
@@ -263,4 +618,127 @@ func schemaSection(t *testing.T, sqlText, startMarker, endMarker string) string 
 		t.Fatalf("schema section %q missing end marker %q", startMarker, endMarker)
 	}
 	return sqlText[start : start+end]
+}
+
+func openTheorySchemaTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set TEST_DATABASE_URL to run theory schema integration tests")
+	}
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if _, err := database.ExecContext(ctx, schemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+	if _, err := database.ExecContext(ctx, schemaSQL); err != nil {
+		t.Fatalf("reapply schema: %v", err)
+	}
+	return database
+}
+
+func insertTheoryWork(t *testing.T, database *sql.DB, libraryID int64, key string) int64 {
+	t.Helper()
+	var id int64
+	if err := database.QueryRow(`
+		INSERT INTO theory_source_works
+		  (library_id, canonical_key, title, work_type, authority_level, epistemic_status, copyright_scope)
+		VALUES ($1,$2,$2,'book',1,'source_text','metadata_only') RETURNING id
+	`, libraryID, key).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func insertTheoryFile(t *testing.T, database *sql.DB, workID int64, name string) int64 {
+	t.Helper()
+	var id int64
+	if err := database.QueryRow(`
+		INSERT INTO theory_source_files
+		  (work_id, relative_path, original_filename, file_format, sha256, title_source, extraction_class)
+		VALUES ($1,$2,$2,'pdf',$2,'filename','text_rich') RETURNING id
+	`, workID, name).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func insertTheoryCard(t *testing.T, database *sql.DB, libraryID int64, key string) int64 {
+	t.Helper()
+	var id int64
+	if err := database.QueryRow(`
+		INSERT INTO theory_cards
+		  (library_id, canonical_key, canonical_name, card_kind, epistemic_status, evidence_level, clinical_safety, authority_level)
+		VALUES ($1,$2,$2,'concept','source_text','unknown','general',1) RETURNING id
+	`, libraryID, key).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func insertPublishedTheoryCard(t *testing.T, database *sql.DB, libraryID int64, key string, version int) int64 {
+	t.Helper()
+	var id int64
+	if err := database.QueryRow(`
+		INSERT INTO theory_cards
+		  (library_id, canonical_key, canonical_name, card_kind, epistemic_status, evidence_level, clinical_safety, authority_level, status, version)
+		VALUES ($1,$2,$2,'concept','source_text','unknown','general',1,'published',$3) RETURNING id
+	`, libraryID, key, version).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func insertTheoryPractice(t *testing.T, database *sql.DB, cardID int64) int64 {
+	t.Helper()
+	var id int64
+	if err := database.QueryRow(`INSERT INTO theory_practices (card_id, goal) VALUES ($1,'goal') RETURNING id`, cardID).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func insertTheoryChunk(t *testing.T, database *sql.DB, libraryID, cardID int64, practiceID *int64, key string) int64 {
+	t.Helper()
+	var id int64
+	if err := database.QueryRow(`
+		INSERT INTO theory_chunks
+		  (library_id, card_id, practice_id, chunk_key, chunk_kind, title, content, authority_level, evidence_level, clinical_safety, content_hash)
+		VALUES ($1,$2,$3,$4,'card',$4,$4,1,'unknown','general',$4) RETURNING id
+	`, libraryID, cardID, practiceID, key).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func insertTheoryRelease(t *testing.T, database *sql.DB, libraryID int64) int64 {
+	t.Helper()
+	var id int64
+	if err := database.QueryRow(`INSERT INTO theory_library_releases (library_id, version) VALUES ($1,1) RETURNING id`, libraryID).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func expectDeferredConstraintFailure(t *testing.T, database *sql.DB, insert func(*sql.Tx) error) {
+	t.Helper()
+	tx, err := database.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := insert(tx); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("expected deferred check to allow statement, got %v", err)
+	}
+	if err := tx.Commit(); err == nil {
+		t.Fatal("expected deferred ownership constraint failure at commit")
+	}
 }
