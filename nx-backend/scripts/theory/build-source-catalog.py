@@ -21,6 +21,12 @@ IGNORED_SYSTEM_FILES = {".DS_Store"}
 TEXT_EQUIVALENT_EXTENSIONS = {".epub", ".doc", ".docx"}
 
 
+class SelectedSourceProbeError(ValueError):
+    def __init__(self, relative_paths, catalog):
+        super().__init__(f"选中来源探测失败，拒绝生成首轮数据: {relative_paths}")
+        self.catalog = catalog
+
+
 def sha256_file(path):
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -419,6 +425,30 @@ def safe_probe_error(exc, suffix):
     return normalized, "；".join(reason_parts)
 
 
+def build_catalog_document(source_root, selection, entries, paths, hash_groups):
+    status_counts = Counter(entry["catalogStatus"] for entry in entries)
+    for status in ("selected", "backlog", "duplicate", "excluded", "error"):
+        status_counts.setdefault(status, 0)
+    if sum(status_counts.values()) != len(paths):
+        raise AssertionError("目录状态合计与实际内容文件数不一致")
+    return {
+        "schemaVersion": "xinzhili.source-catalog.v1",
+        "sourceCollection": source_root.name,
+        "budgetRule": {
+            "version": selection["budgetRuleVersion"],
+            "normalizedTextCharactersPerPage": selection["normalizedTextCharactersPerPage"],
+            "pdfAndPptx": "实际 page/slide",
+            "epubDocDocx": "规范化非空 UTF-8 文本每 1800 字符向上取整",
+        },
+        "summary": {
+            "physicalContentFileCount": len(paths),
+            "statusCounts": dict(sorted(status_counts.items())),
+            "duplicateGroupCount": sum(1 for group in hash_groups.values() if len(group) > 1),
+        },
+        "files": entries,
+    }
+
+
 def build_catalog(source_root, selection):
     chars_per_page = selection["normalizedTextCharactersPerPage"]
     tool_versions_by_suffix = {}
@@ -504,6 +534,7 @@ def build_catalog(source_root, selection):
             "proposedBatch": batch,
         })
 
+    catalog = build_catalog_document(source_root, selection, entries, paths, hash_groups)
     entries_by_path = {entry["relativePath"]: entry for entry in entries}
     missing_selected_paths = [
         source["relativePath"] for source in selection["sources"]
@@ -511,14 +542,15 @@ def build_catalog(source_root, selection):
     ]
     if missing_selected_paths:
         raise ValueError(f"首轮来源不存在: {missing_selected_paths}")
-    processable_sources = [
-        source for source in selection["sources"]
-        if entries_by_path[source["relativePath"]]["catalogStatus"] != "error"
+    failed_selected_paths = [
+        source["relativePath"] for source in selection["sources"]
+        if entries_by_path[source["relativePath"]]["catalogStatus"] == "error"
     ]
-    processable_selection = {**selection, "sources": processable_sources}
-    budget, ocr_pages = validate_selection(processable_selection, entries_by_path)
+    if failed_selected_paths:
+        raise SelectedSourceProbeError(failed_selected_paths, catalog)
+    budget, ocr_pages = validate_selection(selection, entries_by_path)
     selected = []
-    for source in processable_sources:
+    for source in selection["sources"]:
         catalog_entry = entries_by_path[source["relativePath"]]
         if catalog_entry["catalogStatus"] != "selected":
             raise ValueError(f"首轮来源不是 canonical selected 文件: {source['relativePath']}")
@@ -538,12 +570,6 @@ def build_catalog(source_root, selection):
         selected[-1]["remainingUnitCount"] = len(remaining_units)
         selected[-1]["proposedBatch"] = "round-002" if remaining_units else selection["roundId"]
 
-    status_counts = Counter(entry["catalogStatus"] for entry in entries)
-    for status in ("selected", "backlog", "duplicate", "excluded", "error"):
-        status_counts.setdefault(status, 0)
-    if sum(status_counts.values()) != len(paths):
-        raise AssertionError("目录状态合计与实际内容文件数不一致")
-
     works = []
     selected_by_work = defaultdict(list)
     for item in selected:
@@ -557,22 +583,6 @@ def build_catalog(source_root, selection):
             "catalogStatus": "selected",
         })
 
-    catalog = {
-        "schemaVersion": "xinzhili.source-catalog.v1",
-        "sourceCollection": source_root.name,
-        "budgetRule": {
-            "version": selection["budgetRuleVersion"],
-            "normalizedTextCharactersPerPage": chars_per_page,
-            "pdfAndPptx": "实际 page/slide",
-            "epubDocDocx": "规范化非空 UTF-8 文本每 1800 字符向上取整",
-        },
-        "summary": {
-            "physicalContentFileCount": len(paths),
-            "statusCounts": dict(sorted(status_counts.items())),
-            "duplicateGroupCount": sum(1 for group in hash_groups.values() if len(group) > 1),
-        },
-        "files": entries,
-    }
     source_files = {
         "schemaVersion": "xinzhili.round-source-files.v1",
         "roundId": selection["roundId"],
@@ -609,13 +619,19 @@ def main():
     args = parser.parse_args()
 
     selection = json.loads(args.selection.read_text(encoding="utf-8"))
-    catalog, works, source_files = build_catalog(args.source_root, selection)
+    try:
+        catalog, works, source_files = build_catalog(args.source_root, selection)
+    except SelectedSourceProbeError as exc:
+        write_json(args.output_root / "source-catalog.json", exc.catalog)
+        print(str(exc), file=sys.stderr)
+        return 1
     write_json(args.output_root / "source-catalog.json", catalog)
     catalog_dir = args.output_root / selection["roundId"] / "catalog"
     write_json(catalog_dir / "works.json", works)
     write_json(catalog_dir / "source-files.json", source_files)
     print(json.dumps(source_files["summary"], ensure_ascii=False, sort_keys=True))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

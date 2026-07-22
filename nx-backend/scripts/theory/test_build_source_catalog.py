@@ -161,7 +161,7 @@ class SyntheticCatalogUnitTest(unittest.TestCase):
             self.assertNotIn("pdfinfo", entry["reason"])
             self.assertNotIn("private diagnostic", entry["reason"])
 
-    def test_missing_pdf_tool_only_marks_pdf_error_and_epub_still_builds(self):
+    def test_missing_tool_for_selected_pdf_rejects_round_outputs(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             (root / "missing-tool.pdf").write_bytes(b"not-a-pdf")
@@ -201,13 +201,55 @@ class SyntheticCatalogUnitTest(unittest.TestCase):
                 return original_command_version(command)
 
             with mock.patch.object(self.module, "command_version", side_effect=command_version):
-                catalog, _, source_files = self.module.build_catalog(root, selection)
+                with self.assertRaisesRegex(ValueError, "选中来源探测失败.*missing-tool.pdf"):
+                    self.module.build_catalog(root, selection)
 
-            entries = {item["relativePath"]: item for item in catalog["files"]}
-            self.assertEqual("error", entries["missing-tool.pdf"]["catalogStatus"])
-            self.assertEqual("selected", entries["selected.epub"]["catalogStatus"])
-            self.assertEqual(1, source_files["summary"]["selectedCount"])
-            self.assertEqual(["selected.epub"], [item["relativePath"] for item in source_files["files"]])
+    def test_failed_selected_probe_does_not_overwrite_existing_round_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "sources"
+            root.mkdir()
+            (root / "broken.epub").write_bytes(b"not-an-epub")
+            selection_path = Path(temp_dir) / "selection.json"
+            source = make_source("broken.epub")
+            source.update(
+                selectedRanges=["spine-item:1"],
+                processedUnitType="spine_item",
+                processedUnitCount=1,
+                budgetPageEquivalent=1,
+            )
+            selection_path.write_text(json.dumps(make_selection(source)), encoding="utf-8")
+            output_root = Path(temp_dir) / "output"
+            catalog_dir = output_root / "round-001" / "catalog"
+            catalog_dir.mkdir(parents=True)
+            works_path = catalog_dir / "works.json"
+            source_files_path = catalog_dir / "source-files.json"
+            works_path.write_text("existing works\n", encoding="utf-8")
+            source_files_path.write_text("existing source files\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--source-root",
+                    str(root),
+                    "--selection",
+                    str(selection_path),
+                    "--output-root",
+                    str(output_root),
+                ],
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertEqual("existing works\n", works_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                "existing source files\n", source_files_path.read_text(encoding="utf-8")
+            )
+            source_catalog = json.loads(
+                (output_root / "source-catalog.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual("error", source_catalog["files"][0]["catalogStatus"])
 
 
 class BuildSourceCatalogTest(unittest.TestCase):
