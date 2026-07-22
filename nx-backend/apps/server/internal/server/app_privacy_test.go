@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,50 @@ func TestAppPrivacyPolicyReturnsFixedText(t *testing.T) {
 	}
 	if body.Code != 0 || body.Data.Title == "" || body.Data.Content == "" || body.Data.EffectiveAt == "" {
 		t.Fatalf("expected structured privacy policy, got %+v", body)
+	}
+}
+
+func TestAppPrivacyPolicyDisclosesXinzhiliVoiceDataHandling(t *testing.T) {
+	s := &Server{}
+	req := httptest.NewRequest(http.MethodGet, "/api/app/privacy/policy", nil)
+	res := httptest.NewRecorder()
+
+	s.appPrivacyPolicy(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Data struct {
+			Content string `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+
+	required := []string{
+		"临时处理",
+		"不持久化保存原始录音",
+		"转写文字",
+		"AI 回答",
+		"回答来源",
+		"沟通偏好",
+		"对话记忆",
+		"页面不展示文字",
+		"语音识别（ASR）",
+		"语音合成（TTS）",
+		"模型服务",
+		"第三方",
+		"停用账号",
+		"撤销登录凭证",
+		"匿名化",
+		"解除关联",
+	}
+	for _, phrase := range required {
+		if !strings.Contains(body.Data.Content, phrase) {
+			t.Errorf("privacy policy missing %q; content=%q", phrase, body.Data.Content)
+		}
 	}
 }
 
