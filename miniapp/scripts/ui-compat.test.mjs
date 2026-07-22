@@ -108,9 +108,20 @@ for (const { modifier, label, handler } of energyCardContracts) {
   assert.match(card, new RegExp(`\\s@click=["']${handler}["']`), `${modifier} should invoke ${handler}`)
 }
 
-const goProfileBody = functionBody('goProfile')
-assert.ok(goProfileBody !== undefined, 'home page should define a profile navigation handler')
-assert.match(goProfileBody, /uni\.switchTab\s*\(\s*\{\s*url:\s*["']\/pages\/profile\/profile["']\s*\}\s*\)/, 'home profile navigation should switch to the profile tab')
+function assertHomeRoute(handler, navigationMethod, url, description) {
+  const body = functionBody(handler)
+  assert.ok(body !== undefined, `home page should define ${handler}()`)
+  assert.match(
+    body,
+    new RegExp(`uni\\.${navigationMethod}\\s*\\(\\s*\\{\\s*url:\\s*["']${url}["']\\s*\\}\\s*\\)`),
+    description,
+  )
+}
+
+assertHomeRoute('startTest', 'navigateTo', '/pages/test/test', 'home test action should navigate to the test page')
+assertHomeRoute('goRelation', 'navigateTo', '/pages/relation/relation', 'home relation action should navigate to the relation page')
+assertHomeRoute('goLearn', 'switchTab', '/pages/learn/learn', 'home learn action should switch to the learn tab')
+assertHomeRoute('goProfile', 'switchTab', '/pages/profile/profile', 'home profile action should switch to the profile tab')
 
 const homeProfileAction = findHomeView('home-nav__profile')
 assert.ok(homeProfileAction, 'home page should render a profile action in the top navigation')
