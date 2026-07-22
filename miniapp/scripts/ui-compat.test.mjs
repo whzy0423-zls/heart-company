@@ -338,20 +338,107 @@ assert.doesNotMatch(profilePage, /listTestRecordsApi\(\)\.catch\(\(\)\s*=>\s*\(\
 assert.doesNotMatch(profilePage, /listBookingsApi\(\)\.catch\(\(\)\s*=>\s*\(\{\s*items:\s*\[\]\s*\}\)\)/, 'profile bookings request failure must not be converted into an empty list')
 
 const testPage = readFileSync('src/pages/test/test.vue', 'utf8')
+
+function openingTagsFor(source, tagName) {
+  return source.match(new RegExp(`<${tagName}\\b[^>]*>`, 'g')) || []
+}
+
+function tagAttribute(tag, attribute) {
+  const escapedAttribute = attribute.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return tag.match(new RegExp(`\\s${escapedAttribute}=(["'])(.*?)\\1`))?.[2]
+}
+
+function pageStyleDeclarations(source, selector) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const matches = [...source.matchAll(new RegExp(`^[ \\t]*${escapedSelector}\\s*\\{([^}]*)\\}`, 'gm'))]
+  return matches.at(-1)?.[1]
+}
+
+function sourceBracedBody(source, match) {
+  if (!match) return undefined
+  const openingBrace = match.index + match[0].lastIndexOf('{')
+  let depth = 0
+  for (let index = openingBrace; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1
+    if (source[index] !== '}') continue
+    depth -= 1
+    if (depth === 0) return source.slice(openingBrace + 1, index)
+  }
+  return undefined
+}
+
 assert.match(testPage, /answerLocked/, 'test page should guard rapid repeated option taps')
 assert.match(testPage, /clearAdvanceTimer/, 'test page should clear pending navigation timers')
 assert.match(testPage, /onUnload/, 'test page should cleanup timers on unload')
 assert.match(testPage, /class=["'][^"']*test-hero[^"']*nx-page-hero/, 'test page should use the blue-purple hero')
-assert.match(testPage, /class=["'][^"']*gender__card[^"']*nx-focusable/, 'gender choices should use shared focus behavior')
 assert.match(testPage, /const total = QUESTIONS\.length/, 'test page should expose a stable total question count')
 assert.match(testPage, /class=["'][^"']*quiz__progress-meta[^"']*["'][^>]*:aria-label=["']`第 \$\{step \+ 1\} 题，共 \$\{total\} 题`["']/, 'quiz should expose question and total progress text')
-assert.match(testPage, /<button\b[^>]*class=["']quiz__opt nx-focusable["'][^>]*>/, 'quiz choices should use focusable option panels')
-assert.match(testPage, /\.quiz__opt\.on\s*\{[\s\S]*(?:border|box-shadow)/, 'selected answer should have non-color-only emphasis')
 assert.match(testPage, /\.quiz__back\s*\{[\s\S]*min-height:\s*88rpx/, 'quiz back action should keep an 88rpx touch target')
-assert.match(testPage, /class=["']quiz-shell["']/, 'test quiz should use its dedicated light surface')
-assert.match(testPage, /<button\b[\s\S]*class=["'][^"']*gender__card[^"']*["'][\s\S]*aria-label=/, 'test gender choices should use button semantics with accessibility labels')
 assert.match(testPage, /<button\b[\s\S]*class=["'][^"']*quiz__back[^"']*["'][\s\S]*@click=["']back["']/, 'quiz previous action should use button semantics')
-assert.match(testPage, /<button\b[\s\S]*v-for=["']\(opt, k\) in q\.options["'][\s\S]*class=["']quiz__opt nx-focusable["'][\s\S]*:aria-label=/, 'quiz options should use button semantics with accessibility labels')
+
+const testButtons = openingTagsFor(testPage, 'button')
+const genderButtons = testButtons.filter((tag) => staticClassTokens(tag).includes('gender__card'))
+assert.equal(genderButtons.length, 2, 'test page should render exactly two native gender buttons')
+for (const { modifier, label, handler } of [
+  { modifier: 'gender__card--m', label: '选择男生', handler: "start('male')" },
+  { modifier: 'gender__card--f', label: '选择女生', handler: "start('female')" },
+]) {
+  const button = genderButtons.find((tag) => staticClassTokens(tag).includes(modifier))
+  assert.ok(button, `test page should render the ${modifier} gender button`)
+  assert.ok(staticClassTokens(button).includes('nx-focusable'), `${modifier} should use shared focus behavior`)
+  assert.equal(tagAttribute(button, 'aria-label'), label, `${modifier} should expose its exact accessible label`)
+  assert.equal(tagAttribute(button, '@click'), handler, `${modifier} should invoke its exact start handler`)
+}
+
+const quizOption = testButtons.find((tag) => tagAttribute(tag, 'v-for') === '(opt, k) in q.options')
+assert.ok(quizOption, 'test page should render quiz options as native buttons')
+assert.equal(tagAttribute(quizOption, 'class'), 'quiz__opt nx-focusable', 'quiz options should use the exact focusable panel classes')
+assert.equal(tagAttribute(quizOption, ':class'), '{ on: answers[step] === opt, disabled: answerLocked }', 'quiz options should preserve selected and locked classes')
+assert.equal(tagAttribute(quizOption, ':disabled'), 'answerLocked', 'quiz options should preserve the rapid-tap lock')
+assert.equal(tagAttribute(quizOption, ':aria-label'), "'选择答案 ' + letter(k) + '：' + opt.t", 'quiz options should describe each answer')
+assert.equal(tagAttribute(quizOption, '@click'), 'choose(opt)', 'quiz options should preserve the answer handler')
+
+const testOpeningViews = openingTagsFor(testPage, 'view')
+const quizShellTag = testOpeningViews.find((tag) => staticClassTokens(tag).includes('quiz-shell'))
+assert.ok(quizShellTag, 'test quiz should use its dedicated light surface')
+assert.ok(!staticClassTokens(quizShellTag).includes('card'), 'quiz shell should not use the generic card class')
+
+const heroStyle = pageStyleDeclarations(testPage, '.test-hero')
+assert.ok(heroStyle, 'test hero should define a standalone style rule')
+assert.match(heroStyle, /background:\s*linear-gradient\(135deg,\s*#1d4ed8\s+0%,[\s\S]*#6d28d9\s+100%\)/i, 'test hero should keep the exact blue-to-purple gradient endpoints')
+for (const selector of ['.test-hero__eyebrow', '.test-hero__title', '.test-hero__desc']) {
+  const declarations = pageStyleDeclarations(testPage, selector)
+  assert.ok(declarations, `${selector} should define a standalone style rule`)
+  assert.match(declarations, /color:\s*(?:#fff(?:fff)?|rgba\(\s*255\s*,\s*255\s*,\s*255\s*,\s*\.9\d*\s*\))/i, `${selector} should keep accessible white hero text`)
+}
+
+const genderRowStyle = pageStyleDeclarations(testPage, '.gender__row')
+assert.match(genderRowStyle, /display:\s*flex\s*;/, 'gender choices should stay in a two-column flex row')
+const genderCardStyle = pageStyleDeclarations(testPage, '.gender__card')
+assert.match(genderCardStyle, /flex:\s*1\s*;/, 'gender cards should share the row as two equal columns')
+const genderCardMinHeight = genderCardStyle?.match(/min-height:\s*(\d+)rpx\s*;/)
+assert.ok(genderCardMinHeight && Number(genderCardMinHeight[1]) >= 230, 'gender cards should keep at least 230rpx height')
+assert.match(pageStyleDeclarations(testPage, '.gender__card--m'), /background:\s*linear-gradient\(145deg,\s*#155e75,\s*#1d4ed8\)\s*;/i, 'male gender card should keep the teal-to-blue gradient')
+assert.match(pageStyleDeclarations(testPage, '.gender__card--f'), /background:\s*linear-gradient\(145deg,\s*#7e22ce,\s*#be185d\)\s*;/i, 'female gender card should keep the purple-to-pink gradient')
+
+const quizShellStyle = pageStyleDeclarations(testPage, '.quiz-shell')
+assert.match(quizShellStyle, /background:\s*rgba\(\s*255\s*,\s*255\s*,\s*255\s*,\s*\.9\d*\s*\)\s*;/i, 'quiz shell should keep a light surface')
+const quizOptionStyle = pageStyleDeclarations(testPage, '.quiz__opt')
+assert.match(quizOptionStyle, /min-height:\s*112rpx\s*;/, 'quiz options should keep a 112rpx touch surface')
+assert.match(quizOptionStyle, /border-radius:\s*24rpx\s*;/, 'quiz options should keep a 24rpx radius')
+const selectedOptionStyle = pageStyleDeclarations(testPage, '.quiz__opt.on')
+assert.match(selectedOptionStyle, /border:\s*4rpx\s+solid\s+#4f46e5\s*;/i, 'selected answers should keep the 4rpx blue-purple border')
+assert.match(selectedOptionStyle, /box-shadow:[\s\S]*\binset\b/i, 'selected answers should keep a non-color-only inset ring')
+
+for (const selector of ['.gender__tip', '.quiz__eyebrow']) {
+  assert.match(pageStyleDeclarations(testPage, selector), /color:\s*#64748b\s*;/i, `${selector} should keep accessible secondary text`)
+}
+assert.match(pageStyleDeclarations(testPage, '.quiz__t'), /color:\s*#334155\s*;/i, 'quiz answer text should stay darker than secondary text')
+
+const compactMedia = sourceBracedBody(testPage, /@media\s*\(max-width:\s*360px\)\s*\{/.exec(testPage))
+assert.ok(compactMedia, 'test page should define the 360px compact breakpoint')
+assert.match(compactMedia, /\.quiz__q\s*\{[^}]*font-size:\s*36rpx\s*;/, 'compact screens should only reduce the question font size')
+assert.doesNotMatch(compactMedia, /\.quiz__opt\s*\{[^}]*min-height\s*:/, 'compact screens must not reduce quiz option touch height')
 
 assert.match(learnPage, /getStoredSiteConfig/, 'learn page should render stored site config before network refresh')
 assert.match(learnPage, /refreshSiteConfig/, 'learn page should refresh site config in the background')
