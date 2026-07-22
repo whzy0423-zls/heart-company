@@ -119,7 +119,7 @@ function hideWheel() {
           <view class="energy-icon__spine"></view>
         </view>
         <text class="energy-card__title">老师课程</text>
-        <text class="energy-card__desc">沿着课件系统学习</text>
+        <text class="energy-card__desc">跟着课件系统学习</text>
       </view>
 
       <view
@@ -135,7 +135,7 @@ function hideWheel() {
           <view class="energy-icon__leaf energy-icon__leaf--right"></view>
         </view>
         <text class="energy-card__title">成长档案</text>
-        <text class="energy-card__desc">记录每一次自我看见</text>
+        <text class="energy-card__desc">记录你的探索轨迹</text>
       </view>
     </view>
 
