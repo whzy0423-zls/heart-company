@@ -313,3 +313,43 @@
 - [ ] 多条语录只渲染 `quotes[0]`；明确空语录继续显示空状态。
 - [ ] 运行 `node scripts/ui-compat.test.mjs && npm run test:config && npm run build:h5 && npm run build:mp-weixin`，检查长简介、空/错状态和三个视口。
 - [ ] 提交：`git add src/pages/learn/learn.vue scripts/ui-compat.test.mjs && git commit -m "refactor: simplify teacher learning ui"`。
+
+---
+
+## Chunk 10：小程序业务结构重构
+
+### Task 22：调整原生导航
+
+**Files:** `src/pages.json`, `scripts/project-config.test.mjs`, `scripts/ui-compat.test.mjs`
+
+- [ ] 写失败断言：tab 文案为首页/学习/预约/我的，首页和学习导航标题正确，selectedColor 为 `#335B4A`，仍为四项原生 tabBar。
+- [ ] 运行 `node scripts/project-config.test.mjs && node scripts/ui-compat.test.mjs`，预期 FAIL。
+- [ ] 修改 pages.json，不新增自定义 tabBar。
+- [ ] 运行配置测试、全量测试和 H5/MP 构建，预期 PASS。
+- [ ] 提交：`git add src/pages.json scripts/project-config.test.mjs scripts/ui-compat.test.mjs && git commit -m "feat: align miniapp primary navigation"`。
+
+### Task 23：重构服务型首页
+
+**Files:** `src/pages/index/index.vue`, `src/utils/learningNavIntent.js`, `src/utils/learningNavIntent.test.mjs`, `scripts/ui-compat.test.mjs`, `package.json`
+
+- [ ] 写失败测试：学习导航意图只接受 course/material/quote，支持写入、读取清除和非法值回退。
+- [ ] 写失败 UI 断言：紧凑老师区、四个服务入口、推荐课程、最新课件、轻量预约；旧长页主按钮/大幅宣传结构不存在。
+- [ ] 运行新增测试和 UI 测试，预期 FAIL。
+- [ ] 实现导航意图工具并注册测试。
+- [ ] 首页课程/课件入口写入意图后 `switchTab` 学习；测试、合盘和预约进入现有页面。
+- [ ] 老师介绍支持可访问展开/收起；保留后台缓存、图片和错误逻辑。
+- [ ] 运行完整测试与 H5/MP 构建，检查 WXML 和三个视口。
+- [ ] 提交：`git add src/pages/index/index.vue src/utils/learningNavIntent.js src/utils/learningNavIntent.test.mjs scripts/ui-compat.test.mjs package.json && git commit -m "feat: rebuild miniapp service home"`。
+
+### Task 24：重构学习中心分类
+
+**Files:** `src/pages/learn/learn.vue`, `src/utils/learningPageState.js`, `src/utils/learningPageState.test.mjs`, `scripts/ui-compat.test.mjs`
+
+- [ ] 写失败测试：课程数据可展开为稳定的资料条目；onShow 导航意图可切换分类并清除；无意图保持当前分类。
+- [ ] 写失败 UI 断言：课程/课件/语录三项分类、紧凑老师展开区、分类对应列表和空状态。
+- [ ] 运行测试，预期 FAIL。
+- [ ] 使用 `onShow` 读取导航意图；分类控件具备 selected/aria/键盘/tap 状态。
+- [ ] 课程分类显示课程列表；课件分类展开 materialTypes；语录显示完整列表；九型速查降级。
+- [ ] 保留缓存、错误、图片回退、唯一键和无障碍逻辑。
+- [ ] 运行完整测试与 H5/MP 构建，检查 WXML、分类交互和三个视口。
+- [ ] 提交：`git add src/pages/learn/learn.vue src/utils/learningPageState.js src/utils/learningPageState.test.mjs scripts/ui-compat.test.mjs && git commit -m "feat: organize miniapp learning center"`。
