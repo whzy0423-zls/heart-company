@@ -53,14 +53,68 @@ for (const file of ['src/pages/relation/relation.vue', 'src/pages/test/test.vue'
 }
 
 const indexPage = readFileSync('src/pages/index/index.vue', 'utf8')
-const homeFeatureCards = indexPage.match(/<view\b[^>]*role=["']button["'][^>]*>/g) || []
-assert.ok(homeFeatureCards.length >= 3, 'home page should keep non-chat feature cards exposed as button-like controls')
-for (const card of homeFeatureCards) {
-  assert.match(card, /aria-label=["'][^"']+["']/, `home feature card should expose an accessibility label: ${card}`)
-  assert.match(card, /aria-pressed=["']false["']/, `home feature card should expose explicit non-toggle pressed state: ${card}`)
-  assert.match(card, /hover-class=["']grid__item--hover["']/, `home feature card should expose a hover/press visual state: ${card}`)
+const homeOpeningViews = indexPage.match(/<view\b[^>]*>/g) || []
+
+function staticClassTokens(tag) {
+  const match = tag.match(/\sclass=["']([^"']*)["']/)
+  return match ? match[1].trim().split(/\s+/).filter(Boolean) : []
 }
-assert.match(indexPage, /\.grid__item--hover\s*\{[\s\S]*(?:opacity|transform)/, 'home feature card hover state should have visible feedback')
+
+function findHomeView(className) {
+  return homeOpeningViews.find((tag) => staticClassTokens(tag).includes(className))
+}
+
+function standaloneStyleDeclarations(className) {
+  const escapedClassName = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return indexPage.match(new RegExp(`^[ \\t]*\\.${escapedClassName}\\s*\\{([^}]*)\\}`, 'm'))?.[1]
+}
+
+const energyCards = homeOpeningViews.filter((tag) => staticClassTokens(tag).includes('energy-card'))
+assert.equal(energyCards.length, 4, 'home page should render exactly four energy dashboard cards')
+for (const card of energyCards) {
+  assert.match(card, /\saria-label=["'][^"']+["']/, `energy card should expose a non-empty accessibility label: ${card}`)
+  assert.match(card, /\srole=["']button["']/, `energy card should use button semantics: ${card}`)
+  assert.match(card, /\shover-class=["']energy-card--pressed["']/, `energy card should expose the shared pressed state: ${card}`)
+}
+
+assert.match(indexPage, /function\s+goProfile\s*\(\s*\)/, 'home page should define a profile navigation handler')
+assert.match(indexPage, /function\s+goProfile\s*\(\s*\)\s*\{[\s\S]*?uni\.switchTab\s*\(\s*\{\s*url:\s*["']\/pages\/profile\/profile["']\s*\}\s*\)/, 'home profile navigation should switch to the profile tab')
+
+const homeProfileAction = findHomeView('home-nav__profile')
+assert.ok(homeProfileAction, 'home page should render a profile action in the top navigation')
+assert.match(homeProfileAction, /\srole=["']button["']/, 'home profile action should use button semantics')
+assert.match(homeProfileAction, /\saria-label=["']打开我的成长档案["']/, 'home profile action should describe the growth profile destination')
+
+const growthCard = findHomeView('growth-card')
+assert.ok(growthCard, 'home page should render a teacher and course growth card')
+assert.match(growthCard, /\srole=["']button["']/, 'home growth card should use button semantics')
+assert.match(growthCard, /\saria-label=["']打开老师课程与成长内容["']/, 'home growth card should describe the teacher and course destination')
+
+const homeOpeningImages = indexPage.match(/<image\b[^>]*>/g) || []
+const heroWheel = homeOpeningImages.find((tag) => staticClassTokens(tag).includes('hero__wheel'))
+assert.ok(heroWheel, 'home hero should render the enneagram wheel image')
+assert.match(heroWheel, /\sv-if=["']wheelVisible["']/, 'home hero wheel should only render while its image is available')
+assert.match(heroWheel, /\s@error=["']hideWheel["']/, 'home hero wheel should hide itself after image errors')
+assert.match(heroWheel, /\slazy-load(?:=|\s|>|$)/, 'home hero wheel should lazy-load')
+assert.ok(findHomeView('hero__wheel-fallback'), 'home hero should render a wheel fallback view')
+
+for (const className of ['hero__wheel', 'hero__wheel-fallback']) {
+  const declarations = standaloneStyleDeclarations(className)
+  assert.ok(declarations, `.${className} should have a standalone CSS rule`)
+  assert.match(declarations, /\bwidth:\s*\d+rpx\s*;/, `.${className} should have a fixed width`)
+  assert.match(declarations, /\bheight:\s*\d+rpx\s*;/, `.${className} should have a fixed height`)
+}
+assert.match(indexPage, /@media\s*\(prefers-reduced-motion:\s*reduce\)/, 'home page should respect reduced motion preferences')
+
+const energyCardMinHeight = standaloneStyleDeclarations('energy-card')?.match(/\bmin-height:\s*(\d+)rpx/)
+assert.ok(energyCardMinHeight && Number(energyCardMinHeight[1]) >= 176, 'energy cards should keep a minimum height of 176rpx')
+
+const profileActionStyle = standaloneStyleDeclarations('home-nav__profile')
+const profileActionMinWidth = profileActionStyle?.match(/\bmin-width:\s*(\d+)rpx/)
+const profileActionMinHeight = profileActionStyle?.match(/\bmin-height:\s*(\d+)rpx/)
+assert.ok(profileActionMinWidth && Number(profileActionMinWidth[1]) >= 88, 'home profile action should keep a minimum width of 88rpx')
+assert.ok(profileActionMinHeight && Number(profileActionMinHeight[1]) >= 88, 'home profile action should keep a minimum height of 88rpx')
+
 assert.doesNotMatch(indexPage, /openChatPage|goChat|问 AI|AI 对话|打开 AI 对话/, 'home page must not expose AI chat entry copy or handlers')
 
 
