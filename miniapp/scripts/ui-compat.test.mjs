@@ -64,6 +64,23 @@ function findHomeView(className) {
   return homeOpeningViews.find((tag) => staticClassTokens(tag).includes(className))
 }
 
+function bracedBody(match) {
+  if (!match) return undefined
+  const openingBrace = match.index + match[0].lastIndexOf('{')
+  let depth = 0
+  for (let index = openingBrace; index < indexPage.length; index += 1) {
+    if (indexPage[index] === '{') depth += 1
+    if (indexPage[index] !== '}') continue
+    depth -= 1
+    if (depth === 0) return indexPage.slice(openingBrace + 1, index)
+  }
+  return undefined
+}
+
+function functionBody(name) {
+  return bracedBody(new RegExp(`function\\s+${name}\\s*\\(\\s*\\)\\s*\\{`).exec(indexPage))
+}
+
 function standaloneStyleDeclarations(className) {
   const escapedClassName = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   return indexPage.match(new RegExp(`^[ \\t]*\\.${escapedClassName}\\s*\\{([^}]*)\\}`, 'm'))?.[1]
@@ -72,23 +89,42 @@ function standaloneStyleDeclarations(className) {
 const energyCards = homeOpeningViews.filter((tag) => staticClassTokens(tag).includes('energy-card'))
 assert.equal(energyCards.length, 4, 'home page should render exactly four energy dashboard cards')
 for (const card of energyCards) {
-  assert.match(card, /\saria-label=["'][^"']+["']/, `energy card should expose a non-empty accessibility label: ${card}`)
+  const ariaLabel = card.match(/\saria-label=["']([^"']*)["']/)?.[1]
+  assert.ok(ariaLabel?.trim(), `energy card should expose a non-empty accessibility label: ${card}`)
   assert.match(card, /\srole=["']button["']/, `energy card should use button semantics: ${card}`)
   assert.match(card, /\shover-class=["']energy-card--pressed["']/, `energy card should expose the shared pressed state: ${card}`)
 }
 
-assert.match(indexPage, /function\s+goProfile\s*\(\s*\)/, 'home page should define a profile navigation handler')
-assert.match(indexPage, /function\s+goProfile\s*\(\s*\)\s*\{[\s\S]*?uni\.switchTab\s*\(\s*\{\s*url:\s*["']\/pages\/profile\/profile["']\s*\}\s*\)/, 'home profile navigation should switch to the profile tab')
+const energyCardContracts = [
+  { modifier: 'energy-card--test', label: '开始九型人格测试', handler: 'startTest' },
+  { modifier: 'energy-card--relation', label: '打开九型关系合盘', handler: 'goRelation' },
+  { modifier: 'energy-card--learn', label: '打开老师课程与课件', handler: 'goLearn' },
+  { modifier: 'energy-card--profile', label: '打开我的成长档案', handler: 'goProfile' },
+]
+for (const { modifier, label, handler } of energyCardContracts) {
+  const card = energyCards.find((tag) => staticClassTokens(tag).includes(modifier))
+  assert.ok(card, `home page should render the ${modifier} energy card`)
+  assert.match(card, new RegExp(`\\saria-label=["']${label}["']`), `${modifier} should expose its exact accessible label`)
+  assert.match(card, new RegExp(`\\s@click=["']${handler}["']`), `${modifier} should invoke ${handler}`)
+}
+
+const goProfileBody = functionBody('goProfile')
+assert.ok(goProfileBody !== undefined, 'home page should define a profile navigation handler')
+assert.match(goProfileBody, /uni\.switchTab\s*\(\s*\{\s*url:\s*["']\/pages\/profile\/profile["']\s*\}\s*\)/, 'home profile navigation should switch to the profile tab')
 
 const homeProfileAction = findHomeView('home-nav__profile')
 assert.ok(homeProfileAction, 'home page should render a profile action in the top navigation')
 assert.match(homeProfileAction, /\srole=["']button["']/, 'home profile action should use button semantics')
 assert.match(homeProfileAction, /\saria-label=["']打开我的成长档案["']/, 'home profile action should describe the growth profile destination')
+assert.match(homeProfileAction, /\s@click=["']goProfile["']/, 'home profile action should open the growth profile')
+assert.match(homeProfileAction, /\shover-class=["']home-nav__profile--pressed["']/, 'home profile action should expose pressed feedback')
 
 const growthCard = findHomeView('growth-card')
 assert.ok(growthCard, 'home page should render a teacher and course growth card')
 assert.match(growthCard, /\srole=["']button["']/, 'home growth card should use button semantics')
 assert.match(growthCard, /\saria-label=["']打开老师课程与成长内容["']/, 'home growth card should describe the teacher and course destination')
+assert.match(growthCard, /\s@click=["']goLearn["']/, 'home growth card should open teacher courses and growth content')
+assert.match(growthCard, /\shover-class=["']growth-card--pressed["']/, 'home growth card should expose pressed feedback')
 
 const homeOpeningImages = indexPage.match(/<image\b[^>]*>/g) || []
 const heroWheel = homeOpeningImages.find((tag) => staticClassTokens(tag).includes('hero__wheel'))
@@ -96,7 +132,9 @@ assert.ok(heroWheel, 'home hero should render the enneagram wheel image')
 assert.match(heroWheel, /\sv-if=["']wheelVisible["']/, 'home hero wheel should only render while its image is available')
 assert.match(heroWheel, /\s@error=["']hideWheel["']/, 'home hero wheel should hide itself after image errors')
 assert.match(heroWheel, /\slazy-load(?:=|\s|>|$)/, 'home hero wheel should lazy-load')
-assert.ok(findHomeView('hero__wheel-fallback'), 'home hero should render a wheel fallback view')
+const heroWheelFallback = findHomeView('hero__wheel-fallback')
+assert.ok(heroWheelFallback, 'home hero should render a wheel fallback view')
+assert.match(heroWheelFallback, /\sv-else(?:\s|>|$)/, 'home hero wheel fallback should be mutually exclusive with the image')
 
 for (const className of ['hero__wheel', 'hero__wheel-fallback']) {
   const declarations = standaloneStyleDeclarations(className)
@@ -104,7 +142,16 @@ for (const className of ['hero__wheel', 'hero__wheel-fallback']) {
   assert.match(declarations, /\bwidth:\s*\d+rpx\s*;/, `.${className} should have a fixed width`)
   assert.match(declarations, /\bheight:\s*\d+rpx\s*;/, `.${className} should have a fixed height`)
 }
-assert.match(indexPage, /@media\s*\(prefers-reduced-motion:\s*reduce\)/, 'home page should respect reduced motion preferences')
+
+const reducedMotionBlock = bracedBody(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{/.exec(indexPage))
+assert.ok(reducedMotionBlock, 'home page should respect reduced motion preferences')
+assert.match(reducedMotionBlock, /\.hero__visual\s*\{[^}]*(?:animation|transition):\s*none\s*;/, 'reduced motion styles should disable hero visual motion')
+
+for (const className of ['energy-card--pressed', 'growth-card--pressed', 'home-nav__profile--pressed']) {
+  const declarations = standaloneStyleDeclarations(className)
+  assert.ok(declarations, `.${className} should have a standalone CSS rule`)
+  assert.match(declarations, /\b(?:opacity|transform):/, `.${className} should provide visible pressed feedback`)
+}
 
 const energyCardMinHeight = standaloneStyleDeclarations('energy-card')?.match(/\bmin-height:\s*(\d+)rpx/)
 assert.ok(energyCardMinHeight && Number(energyCardMinHeight[1]) >= 176, 'energy cards should keep a minimum height of 176rpx')
