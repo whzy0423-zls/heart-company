@@ -74,7 +74,7 @@ func TestContentStorePracticeAndRelationAlsoRequireDraftOwners(t *testing.T) {
 			{kind: "begin"},
 			{kind: "query", contains: "WHERE id IN", columns: []string{"id", "library_id"}, rows: [][]driver.Value{{r.FromCardID, int64(3)}, {r.ToCardID, int64(3)}}},
 			{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
-			{kind: "query", contains: "FOR UPDATE", columns: []string{"id", "status"}, rows: [][]driver.Value{{r.FromCardID, string(StatusDraft)}, {r.ToCardID, string(StatusPublished)}}},
+			{kind: "query", contains: "FOR UPDATE", columns: []string{"id", "library_id", "status"}, rows: [][]driver.Value{{r.FromCardID, int64(3), string(StatusDraft)}, {r.ToCardID, int64(3), string(StatusPublished)}}},
 			{kind: "rollback"},
 		}}
 		_, err := testStore(t, script).SaveRelation(context.Background(), r)
@@ -152,7 +152,7 @@ func TestContentStoreSaveRelationUsesValidatorAndAllFields(t *testing.T) {
 		{kind: "begin"},
 		{kind: "query", contains: "WHERE id IN", columns: []string{"id", "library_id"}, rows: [][]driver.Value{{r.FromCardID, int64(3)}, {r.ToCardID, int64(3)}}},
 		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
-		{kind: "query", contains: "FOR UPDATE", columns: []string{"id", "status"}, rows: [][]driver.Value{{r.FromCardID, string(StatusDraft)}, {r.ToCardID, string(StatusDraft)}}},
+		{kind: "query", contains: "FOR UPDATE", columns: []string{"id", "library_id", "status"}, rows: [][]driver.Value{{r.FromCardID, int64(3), string(StatusDraft)}, {r.ToCardID, int64(3), string(StatusDraft)}}},
 		{kind: "query", contains: "INSERT INTO theory_card_relations", columns: relationColumns(), rows: [][]driver.Value{relationValues(r)}},
 		{kind: "commit"},
 	}}
@@ -163,6 +163,22 @@ func TestContentStoreSaveRelationUsesValidatorAndAllFields(t *testing.T) {
 	if saved.Confidence != r.Confidence || len(script.callsSnapshot()[4].args) != 8 {
 		t.Fatalf("relation fields missing: %+v %#v", saved, script.callsSnapshot()[4].args)
 	}
+}
+
+func TestContentStoreRelationRejectsOwnershipScopeChangeAfterAdvisoryLock(t *testing.T) {
+	r := testRelation()
+	script := &sqlScript{steps: []sqlStep{
+		{kind: "begin"},
+		{kind: "query", contains: "WHERE id IN", columns: []string{"id", "library_id"}, rows: [][]driver.Value{{r.FromCardID, int64(3)}, {r.ToCardID, int64(3)}}},
+		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
+		{kind: "query", contains: "FOR UPDATE", columns: []string{"id", "library_id", "status"}, rows: [][]driver.Value{{r.FromCardID, int64(3), string(StatusDraft)}, {r.ToCardID, int64(2), string(StatusDraft)}}},
+		{kind: "rollback"},
+	}}
+	_, err := testStore(t, script).SaveRelation(context.Background(), r)
+	if !errors.Is(err, ErrOwnershipChanged) {
+		t.Fatalf("expected ErrOwnershipChanged, got %v", err)
+	}
+	script.assertDone(t)
 }
 
 func TestContentStoreChunkCreatesImmutableVersionWithoutTouchingOldEmbeddings(t *testing.T) {
@@ -274,6 +290,39 @@ func TestContentStoreLexicalEmbeddingMetadataDoesNotPretendVectorExists(t *testi
 	}
 }
 
+func TestContentStorePendingEmbeddingStateMachine(t *testing.T) {
+	base := testEmbedding()
+	base.Status, base.Embedding, base.EmbeddedAt = EmbeddingStatusPending, nil, nil
+	t.Run("ready_rejected", func(t *testing.T) {
+		script := embeddingGenerationScript(base, EmbeddingStatusReady, nil)
+		_, err := testStore(t, script).SaveEmbeddingRecord(context.Background(), base)
+		if !errors.Is(err, ErrEmbeddingAlreadyReady) {
+			t.Fatalf("expected ErrEmbeddingAlreadyReady, got %v", err)
+		}
+	})
+	t.Run("pending_idempotent", func(t *testing.T) {
+		existing := base
+		existing.ID = 81
+		script := embeddingGenerationScript(base, EmbeddingStatusPending, &existing)
+		saved, err := testStore(t, script).SaveEmbeddingRecord(context.Background(), base)
+		if err != nil || saved.ID != existing.ID || saved.Status != EmbeddingStatusPending {
+			t.Fatalf("pending idempotency failed: %+v %v", saved, err)
+		}
+		if indexCall(script.callsSnapshot(), "INSERT INTO theory_chunk_embeddings") >= 0 {
+			t.Fatal("pending idempotency rewrote generation")
+		}
+	})
+	t.Run("stale_restarts", func(t *testing.T) {
+		restarted := base
+		restarted.ID = 81
+		script := embeddingGenerationScript(base, EmbeddingStatusStale, &restarted)
+		saved, err := testStore(t, script).SaveEmbeddingRecord(context.Background(), base)
+		if err != nil || saved.Status != EmbeddingStatusPending {
+			t.Fatalf("stale restart failed: %+v %v", saved, err)
+		}
+	})
+}
+
 func TestContentStoreVectorWriteRequiresCapability(t *testing.T) {
 	r := testEmbedding()
 	script := &sqlScript{steps: []sqlStep{
@@ -373,6 +422,25 @@ func embeddingSaveScript(r EmbeddingRecord, vector bool) *sqlScript {
 		steps = append(steps, sqlStep{kind: "query", contains: "information_schema.columns", columns: []string{"exists"}, rows: [][]driver.Value{{true}}})
 	}
 	steps = append(steps, sqlStep{kind: "query", contains: "INSERT INTO theory_chunk_embeddings", columns: embeddingColumns(), rows: [][]driver.Value{embeddingValues(r)}}, sqlStep{kind: "commit"})
+	return &sqlScript{steps: steps}
+}
+
+func embeddingGenerationScript(r EmbeddingRecord, existing EmbeddingStatus, result *EmbeddingRecord) *sqlScript {
+	steps := []sqlStep{
+		{kind: "begin"},
+		{kind: "query", contains: "SELECT library_id", columns: []string{"library_id"}, rows: [][]driver.Value{{int64(3)}}},
+		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
+		{kind: "query", contains: "FROM theory_chunks", columns: []string{"library_id", "content_hash"}, rows: [][]driver.Value{{int64(3), r.ContentHash}}},
+		{kind: "query", contains: "SELECT status FROM theory_chunk_embeddings", columns: []string{"status"}, rows: [][]driver.Value{{string(existing)}}},
+	}
+	switch existing {
+	case EmbeddingStatusReady:
+		steps = append(steps, sqlStep{kind: "rollback"})
+	case EmbeddingStatusPending:
+		steps = append(steps, sqlStep{kind: "query", contains: "FROM theory_chunk_embeddings", columns: embeddingColumns(), rows: [][]driver.Value{embeddingValues(*result)}}, sqlStep{kind: "commit"})
+	case EmbeddingStatusStale, EmbeddingStatusFailed:
+		steps = append(steps, sqlStep{kind: "query", contains: "UPDATE theory_chunk_embeddings", columns: embeddingColumns(), rows: [][]driver.Value{embeddingValues(*result)}}, sqlStep{kind: "commit"})
+	}
 	return &sqlScript{steps: steps}
 }
 

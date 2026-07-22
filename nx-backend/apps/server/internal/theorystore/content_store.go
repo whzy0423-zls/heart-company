@@ -14,7 +14,9 @@ var (
 	ErrChunkVersionConflict    = errors.New("theory chunk version already exists")
 	ErrChunkNotFound           = errors.New("theory chunk not found")
 	ErrInvalidContentOwnership = errors.New("theory content ownership mismatch")
+	ErrOwnershipChanged        = errors.New("theory content ownership changed concurrently")
 	ErrEmbeddingNotPending     = errors.New("theory embedding generation is not pending")
+	ErrEmbeddingAlreadyReady   = errors.New("theory embedding generation is already ready")
 )
 
 func (s *Store) SaveCardSource(parent context.Context, source CardSource) (CardSource, error) {
@@ -239,8 +241,42 @@ func (s *Store) SaveEmbeddingRecord(parent context.Context, record EmbeddingReco
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return EmbeddingRecord{}, fmt.Errorf("save embedding: lock generation: %w", err)
 	}
-	if err == nil && existingStatus == EmbeddingStatusStale {
+	if err == nil && existingStatus == EmbeddingStatusStale && record.Status != EmbeddingStatusPending {
 		return EmbeddingRecord{}, fmt.Errorf("save embedding: generation was invalidated: %w", ErrStaleEmbedding)
+	}
+	if record.Status == EmbeddingStatusPending && err == nil {
+		switch existingStatus {
+		case EmbeddingStatusReady:
+			return EmbeddingRecord{}, fmt.Errorf("save embedding: %w", ErrEmbeddingAlreadyReady)
+		case EmbeddingStatusPending:
+			saved, scanErr := scanEmbedding(tx.QueryRowContext(ctx, `
+				SELECT id, chunk_id, embedding_model, dimensions, content_hash, embedded_at, status, error_message
+				FROM theory_chunk_embeddings
+				WHERE chunk_id=$1 AND embedding_model=$2 AND content_hash=$3`, record.ChunkID, record.EmbeddingModel, record.ContentHash))
+			if scanErr != nil {
+				return EmbeddingRecord{}, fmt.Errorf("save embedding pending: reload: %w", scanErr)
+			}
+			if err := tx.Commit(); err != nil {
+				return EmbeddingRecord{}, fmt.Errorf("save embedding pending: commit: %w", err)
+			}
+			return saved, nil
+		case EmbeddingStatusFailed, EmbeddingStatusStale:
+			saved, scanErr := scanEmbedding(tx.QueryRowContext(ctx, `
+				UPDATE theory_chunk_embeddings SET dimensions=$4, embedded_at=NULL, status='pending', error_message=''
+				WHERE chunk_id=$1 AND embedding_model=$2 AND content_hash=$3 AND status=$5
+				RETURNING id, chunk_id, embedding_model, dimensions, content_hash, embedded_at, status, error_message`,
+				record.ChunkID, record.EmbeddingModel, record.ContentHash, record.Dimensions, existingStatus))
+			if errors.Is(scanErr, sql.ErrNoRows) {
+				return EmbeddingRecord{}, fmt.Errorf("save embedding pending: %w", ErrConcurrentUpdate)
+			}
+			if scanErr != nil {
+				return EmbeddingRecord{}, fmt.Errorf("save embedding pending: restart: %w", scanErr)
+			}
+			if err := tx.Commit(); err != nil {
+				return EmbeddingRecord{}, fmt.Errorf("save embedding pending: commit: %w", err)
+			}
+			return saved, nil
+		}
 	}
 	if (record.Status == EmbeddingStatusReady || record.Status == EmbeddingStatusFailed) && (errors.Is(err, sql.ErrNoRows) || existingStatus != EmbeddingStatusPending) {
 		return EmbeddingRecord{}, fmt.Errorf("save embedding: %s requires an existing pending generation: %w", record.Status, ErrEmbeddingNotPending)
@@ -506,19 +542,22 @@ func lockEditableRelationCards(ctx context.Context, tx *sql.Tx, fromCardID, toCa
 	if err := lockTheoryLibraries(ctx, tx, libraries[fromCardID], libraries[toCardID]); err != nil {
 		return err
 	}
-	locked, err := tx.QueryContext(ctx, `SELECT id, status FROM theory_cards WHERE id IN ($1,$2) ORDER BY id FOR UPDATE`, fromCardID, toCardID)
+	locked, err := tx.QueryContext(ctx, `SELECT id, library_id, status FROM theory_cards WHERE id IN ($1,$2) ORDER BY id FOR UPDATE`, fromCardID, toCardID)
 	if err != nil {
 		return err
 	}
 	defer locked.Close()
 	count := 0
 	for locked.Next() {
-		var id int64
+		var id, libraryID int64
 		var status CardStatus
-		if err := locked.Scan(&id, &status); err != nil {
+		if err := locked.Scan(&id, &libraryID, &status); err != nil {
 			return err
 		}
 		count++
+		if libraries[id] != libraryID {
+			return ErrOwnershipChanged
+		}
 		if status != StatusDraft {
 			return ErrCardNotEditable
 		}
