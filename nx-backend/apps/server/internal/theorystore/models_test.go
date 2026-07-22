@@ -184,25 +184,32 @@ func TestValidatePracticeRequiresVersionedStringArrays(t *testing.T) {
 	}
 }
 
-func TestValidatePracticeAllowsDraftWithEmptySteps(t *testing.T) {
-	practice := validPractice()
-	practice.Steps = json.RawMessage(`[]`)
-	if err := ValidatePractice(practice); err != nil {
-		t.Fatalf("draft practice should allow empty steps: %v", err)
+func TestValidatePracticeRequiresNonEmptySteps(t *testing.T) {
+	for _, raw := range []json.RawMessage{json.RawMessage(`[]`), json.RawMessage(`["  ", "\t"]`)} {
+		practice := validPractice()
+		practice.Steps = raw
+		assertFieldError(t, ValidatePractice(practice), "steps")
 	}
 }
 
-func TestValidatePracticeOnlyChecksVersionAndJSONArraySchema(t *testing.T) {
-	practice := Practice{
-		PracticeSchemaVersion:  PracticeSchemaV1,
-		Steps:                  json.RawMessage(`[]`),
-		ReflectionPrompts:      json.RawMessage(`[]`),
-		ExpectedFeedback:       json.RawMessage(`[]`),
-		StopConditions:         json.RawMessage(`[]`),
-		ProfessionalEscalation: json.RawMessage(`[]`),
+func TestValidatePracticeRejectsInvalidFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Practice)
+		field  string
+	}{
+		{name: "card id", mutate: func(practice *Practice) { practice.CardID = 0 }, field: "card_id"},
+		{name: "goal", mutate: func(practice *Practice) { practice.Goal = " \t " }, field: "goal"},
+		{name: "estimated minutes", mutate: func(practice *Practice) { practice.EstimatedMinutes = -1 }, field: "estimated_minutes"},
+		{name: "status", mutate: func(practice *Practice) { practice.Status = CardStatus("unknown") }, field: "status"},
+		{name: "version", mutate: func(practice *Practice) { practice.Version = 0 }, field: "version"},
 	}
-	if err := ValidatePractice(practice); err != nil {
-		t.Fatalf("base practice validation should only enforce the versioned JSON schema: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			practice := validPractice()
+			tt.mutate(&practice)
+			assertFieldError(t, ValidatePractice(practice), tt.field)
+		})
 	}
 }
 

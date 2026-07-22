@@ -632,11 +632,24 @@ func ValidateCardForPublish(card Card, sources []CardSource) error {
 }
 
 func ValidatePractice(practice Practice) error {
+	if practice.CardID <= 0 {
+		return fieldError("card_id", "must be positive")
+	}
+	if strings.TrimSpace(practice.Goal) == "" {
+		return fieldError("goal", "must not be empty")
+	}
+	if practice.EstimatedMinutes < 0 {
+		return fieldError("estimated_minutes", "must be at least 0")
+	}
 	if practice.PracticeSchemaVersion != PracticeSchemaV1 {
 		return fieldError("practice_schema_version", "unsupported value %q", practice.PracticeSchemaVersion)
 	}
-	if _, err := decodeStringArray("steps", practice.Steps); err != nil {
+	steps, err := decodeStringArray("steps", practice.Steps)
+	if err != nil {
 		return err
+	}
+	if !hasNonBlankString(steps) {
+		return fieldError("steps", "must contain at least one non-empty item")
 	}
 	if _, err := decodeStringArray("reflection_prompts", practice.ReflectionPrompts); err != nil {
 		return err
@@ -649,6 +662,12 @@ func ValidatePractice(practice Practice) error {
 	}
 	if _, err := decodeStringArray("professional_escalation", practice.ProfessionalEscalation); err != nil {
 		return err
+	}
+	if !validCardStatus(practice.Status) {
+		return fieldError("status", "invalid value %q", practice.Status)
+	}
+	if practice.Version <= 0 {
+		return fieldError("version", "must be positive")
 	}
 	return nil
 }
