@@ -18,6 +18,8 @@ var (
 	ErrOwnershipChanged         = errors.New("theory content ownership changed concurrently")
 	ErrEmbeddingNotPending      = errors.New("theory embedding generation is not pending")
 	ErrEmbeddingAlreadyReady    = errors.New("theory embedding generation is already ready")
+	ErrPracticeNotEditable      = errors.New("theory practice is not an editable draft")
+	ErrPracticeNotPublishable   = errors.New("theory practice is not publishable for this chunk")
 )
 
 func (s *Store) SaveCardSource(parent context.Context, source CardSource) (CardSource, error) {
@@ -65,6 +67,9 @@ func (s *Store) SavePractice(parent context.Context, practice Practice) (Practic
 	ctx, cancel := storeContext(parent)
 	defer cancel()
 	normalizePractice(&practice)
+	if practice.Status != StatusDraft {
+		return Practice{}, fmt.Errorf("save practice: status %s: %w", practice.Status, ErrPracticeNotEditable)
+	}
 	if err := ValidatePractice(practice); err != nil {
 		return Practice{}, fmt.Errorf("save practice: %w", err)
 	}
@@ -465,12 +470,14 @@ func lockChunkScope(ctx context.Context, tx *sql.Tx, chunk Chunk) error {
 	}
 	if chunk.PracticeID != nil {
 		var lockedPracticeCardID, lockedPracticeLibraryID int64
+		var lockedPracticeStatus CardStatus
+		var lockedPracticeVersion int
 		if err := tx.QueryRowContext(ctx, `
-			SELECT practice.card_id, practice_card.library_id
+			SELECT practice.card_id, practice_card.library_id, practice.status, practice.version
 			FROM theory_practices practice
 			JOIN theory_cards practice_card ON practice_card.id=practice.card_id
 			WHERE practice.id=$1
-			FOR SHARE OF practice, practice_card`, *chunk.PracticeID).Scan(&lockedPracticeCardID, &lockedPracticeLibraryID); err != nil {
+			FOR SHARE OF practice, practice_card`, *chunk.PracticeID).Scan(&lockedPracticeCardID, &lockedPracticeLibraryID, &lockedPracticeStatus, &lockedPracticeVersion); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrInvalidContentOwnership
 			}
@@ -478,6 +485,9 @@ func lockChunkScope(ctx context.Context, tx *sql.Tx, chunk Chunk) error {
 		}
 		if lockedPracticeCardID != chunk.CardID || lockedPracticeLibraryID != chunk.LibraryID {
 			return ErrInvalidContentOwnership
+		}
+		if lockedPracticeStatus != StatusPublished || lockedPracticeVersion != chunk.Version {
+			return ErrPracticeNotPublishable
 		}
 	}
 	return nil

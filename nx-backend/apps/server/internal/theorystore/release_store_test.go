@@ -26,7 +26,7 @@ func TestReleaseStoreRejectsDuplicateChunkMappingBeforeSQL(t *testing.T) {
 
 func TestReleaseStoreRejectsChunkCardMismatchAndRollsBack(t *testing.T) {
 	r := testRelease(RetrievalLexicalOnly)
-	script := buildPrefix(r, []sqlStep{validReleaseCardStep(), validReleaseSourcesStep(), {kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{{int64(12), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(2), int64(2), string(StatusPublished), true}}}, {kind: "rollback"}})
+	script := buildPrefix(r, []sqlStep{validReleaseCardStep(), validReleaseSourcesStep(), {kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{{int64(12), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(2), int64(2), nil, nil, nil, nil, string(StatusPublished), true}}}, {kind: "rollback"}})
 	_, err := testStore(t, script).BuildRelease(context.Background(), r, []ReleaseMapping{{CardID: 11, ChunkID: 71}})
 	if !errors.Is(err, ErrInvalidReleaseMapping) {
 		t.Fatalf("expected mapping error, got %v", err)
@@ -41,7 +41,7 @@ func TestReleaseStoreBuildsLexicalReleaseWithoutEmbeddingsAndChecksCounts(t *tes
 	steps := []sqlStep{
 		validReleaseCardStep(),
 		validReleaseSourcesStep(),
-		{kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{{int64(11), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(2), int64(2), string(StatusPublished), true}}},
+		{kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{{int64(11), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(2), int64(2), nil, nil, nil, nil, string(StatusPublished), true}}},
 		{kind: "exec", contains: "INSERT INTO theory_release_cards", affected: 1},
 		{kind: "query", contains: "status = 'ready'", columns: releaseColumns(), rows: [][]driver.Value{releaseValues(ready)}},
 		{kind: "commit"},
@@ -85,7 +85,7 @@ func TestReleaseStoreBuildValidatesEverySourceWithPublishValidator(t *testing.T)
 func TestReleaseStoreRejectsMappedChunkFromDifferentCardVersion(t *testing.T) {
 	r := testRelease(RetrievalLexicalOnly)
 	build := buildPrefix(r, []sqlStep{validReleaseCardStep(), validReleaseSourcesStep(),
-		{kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{{int64(11), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(1), int64(2), string(StatusPublished), true}}},
+		{kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{{int64(11), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(1), int64(2), nil, nil, nil, nil, string(StatusPublished), true}}},
 		{kind: "rollback"}})
 	_, err := testStore(t, build).BuildRelease(context.Background(), r, []ReleaseMapping{{CardID: 11, ChunkID: 71}})
 	if !errors.Is(err, ErrInvalidReleaseMapping) {
@@ -95,11 +95,30 @@ func TestReleaseStoreRejectsMappedChunkFromDifferentCardVersion(t *testing.T) {
 	r.ID, r.Status, r.CardCount, r.ChunkCount = 91, ReleaseStatusReady, 1, 1
 	steps := activationValidationPrefix(r)
 	steps = append(steps, validReleaseCardStep(), validReleaseSourcesStep(),
-		sqlStep{kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{{int64(11), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(1), int64(2), string(StatusPublished), true}}},
+		sqlStep{kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{{int64(11), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(1), int64(2), nil, nil, nil, nil, string(StatusPublished), true}}},
 		sqlStep{kind: "rollback"})
 	err = testStore(t, &sqlScript{steps: steps}).ActivateRelease(context.Background(), r.LibraryID, r.ID, 7)
 	if !errors.Is(err, ErrInvalidReleaseMapping) {
 		t.Fatalf("activation expected version mismatch, got %v", err)
+	}
+}
+
+func TestReleaseStoreRejectsMappedPracticeChunkUnlessPublishedAndVersionAligned(t *testing.T) {
+	r := testRelease(RetrievalLexicalOnly)
+	invalid := []driver.Value{int64(11), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(2), int64(2), int64(51), int64(11), string(StatusDraft), int64(2), string(StatusPublished), true}
+	build := buildPrefix(r, []sqlStep{validReleaseCardStep(), validReleaseSourcesStep(),
+		{kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{invalid}}, {kind: "rollback"}})
+	_, err := testStore(t, build).BuildRelease(context.Background(), r, []ReleaseMapping{{CardID: 11, ChunkID: 71}})
+	if !errors.Is(err, ErrInvalidReleaseMapping) {
+		t.Fatalf("build accepted draft practice chunk: %v", err)
+	}
+
+	r.ID, r.Status, r.CardCount, r.ChunkCount = 91, ReleaseStatusReady, 1, 1
+	steps := activationValidationPrefix(r)
+	steps = append(steps, validReleaseCardStep(), validReleaseSourcesStep(), sqlStep{kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{invalid}}, sqlStep{kind: "rollback"})
+	err = testStore(t, &sqlScript{steps: steps}).ActivateRelease(context.Background(), r.LibraryID, r.ID, 7)
+	if !errors.Is(err, ErrInvalidReleaseMapping) {
+		t.Fatalf("activation accepted draft practice chunk: %v", err)
 	}
 }
 
@@ -136,7 +155,7 @@ func TestReleaseStoreHybridRejectsMissingStaleWrongModelHashAndDimension(t *test
 				{kind: "query", contains: "information_schema.columns", columns: []string{"exists"}, rows: [][]driver.Value{{true}}},
 				validReleaseCardStep(),
 				validReleaseSourcesStep(),
-				{kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{{int64(11), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(2), int64(2), string(StatusPublished), true}}},
+				{kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{{int64(11), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(2), int64(2), nil, nil, nil, nil, string(StatusPublished), true}}},
 				{kind: "query", contains: "FROM theory_chunk_embeddings", columns: []string{"embedding_model", "dimensions", "content_hash", "status", "has_embedding"}, rows: tc.embeddingRows},
 				{kind: "rollback"},
 			}
@@ -161,7 +180,7 @@ func TestReleaseStoreActivationLocksRetiresActivatesThenUpdatesLibrary(t *testin
 		{kind: "query", contains: "FROM theory_release_cards mapping", columns: []string{"card_id", "chunk_id"}, rows: [][]driver.Value{{int64(11), int64(71)}}},
 		validReleaseCardStep(),
 		validReleaseSourcesStep(),
-		{kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{{int64(11), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(2), int64(2), string(StatusPublished), true}}},
+		{kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{{int64(11), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(2), int64(2), nil, nil, nil, nil, string(StatusPublished), true}}},
 		{kind: "exec", contains: "status = 'retired'", affected: 1},
 		{kind: "exec", contains: "status = 'active'", affected: 1},
 		{kind: "exec", contains: "current_version", affected: 1},
@@ -288,7 +307,7 @@ func TestReleaseStoreActivationRevalidatesHybridEmbedding(t *testing.T) {
 			steps = append(steps,
 				sqlStep{kind: "query", contains: "information_schema.columns", columns: []string{"exists"}, rows: [][]driver.Value{{true}}},
 				validReleaseCardStep(), validReleaseSourcesStep(),
-				sqlStep{kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{{int64(11), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(2), int64(2), string(StatusPublished), true}}},
+				sqlStep{kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{{int64(11), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(2), int64(2), nil, nil, nil, nil, string(StatusPublished), true}}},
 				sqlStep{kind: "query", contains: "FROM theory_chunk_embeddings", columns: []string{"embedding_model", "dimensions", "content_hash", "status", "has_embedding"}, rows: [][]driver.Value{tc.row}},
 				sqlStep{kind: "rollback"},
 			)
@@ -308,7 +327,7 @@ func TestReleaseStoreActivationRollsBackFailuresAfterRetiringOldActive(t *testin
 			r.ID, r.Status, r.CardCount, r.ChunkCount = 91, ReleaseStatusReady, 1, 1
 			steps := activationValidationPrefix(r)
 			steps = append(steps, validReleaseCardStep(), validReleaseSourcesStep(),
-				sqlStep{kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{{int64(11), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(2), int64(2), string(StatusPublished), true}}},
+				sqlStep{kind: "query", contains: "FROM theory_chunks chunk", columns: mappingValidationColumns(), rows: [][]driver.Value{{int64(11), r.LibraryID, string(ChunkStatusEnabled), strings.Repeat("a", 64), int64(2), int64(2), nil, nil, nil, nil, string(StatusPublished), true}}},
 				sqlStep{kind: "exec", contains: "status = 'retired'", affected: 1})
 			if stage == "activate" {
 				steps = append(steps, sqlStep{kind: "exec", contains: "status = 'active'", err: failure})
@@ -351,7 +370,7 @@ func releaseValues(r Release) []driver.Value {
 	return []driver.Value{r.ID, r.LibraryID, int64(r.Version), string(r.Status), r.EmbeddingModel, int64(r.EmbeddingDimensions), string(r.RetrievalMode), r.IndexVersion, int64(r.CardCount), int64(r.ChunkCount), r.BuildError, nullableInt(r.ActivatedBy), nullableTime(r.ActivatedAt), r.CreateTime, r.UpdateTime}
 }
 func mappingValidationColumns() []string {
-	return []string{"card_id", "library_id", "chunk_status", "content_hash", "chunk_version", "card_version", "card_status", "has_primary"}
+	return []string{"card_id", "library_id", "chunk_status", "content_hash", "chunk_version", "card_version", "practice_id", "practice_card_id", "practice_status", "practice_version", "card_status", "has_primary"}
 }
 
 func validReleaseCardStep() sqlStep {

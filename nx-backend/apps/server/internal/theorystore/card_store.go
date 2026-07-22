@@ -181,6 +181,30 @@ func (s *Store) TransitionCard(parent context.Context, cardID int64, from, to Ca
 		if err := ValidateCardForPublish(publishCandidate, sources); err != nil {
 			return Card{}, fmt.Errorf("transition card: publish validation: %w", err)
 		}
+		practices, err := loadCardPractices(ctx, tx, card.ID)
+		if err != nil {
+			return Card{}, fmt.Errorf("transition card: load practices: %w", err)
+		}
+		publishCandidate.Version = card.Version + 1
+		draftPractices := 0
+		for _, practice := range practices {
+			if err := ValidatePracticeForPublish(practice, publishCandidate); err != nil {
+				return Card{}, fmt.Errorf("transition card: practice %d publish validation: %w", practice.ID, err)
+			}
+			if practice.Status == StatusDraft {
+				draftPractices++
+			}
+		}
+		if draftPractices > 0 {
+			result, err := tx.ExecContext(ctx, `UPDATE theory_practices SET status='published', version=$2, update_time=now() WHERE card_id=$1 AND status='draft'`, card.ID, publishCandidate.Version)
+			if err != nil {
+				return Card{}, fmt.Errorf("transition card: publish practices: %w", err)
+			}
+			affected, err := result.RowsAffected()
+			if err != nil || affected != int64(draftPractices) {
+				return Card{}, fmt.Errorf("transition card: publish practice count changed: %w", ErrConcurrentUpdate)
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE theory_cards SET status = 'superseded', updated_by=$4, update_time=now()
 			WHERE library_id=$1 AND canonical_key=$2 AND status='published' AND id<>$3`, card.LibraryID, card.CanonicalKey, card.ID, reviewerID); err != nil {
@@ -207,6 +231,30 @@ func (s *Store) TransitionCard(parent context.Context, cardID int64, from, to Ca
 		return Card{}, fmt.Errorf("transition card: commit: %w", err)
 	}
 	return updated, nil
+}
+
+func loadCardPractices(ctx context.Context, tx *sql.Tx, cardID int64) ([]Practice, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, card_id, goal, estimated_minutes, steps, reflection_prompts, expected_feedback,
+			stop_conditions, professional_escalation, contraindications, practice_schema_version,
+			status, version, create_time, update_time
+		FROM theory_practices WHERE card_id=$1 ORDER BY id FOR UPDATE`, cardID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var practices []Practice
+	for rows.Next() {
+		practice, err := scanPractice(rows)
+		if err != nil {
+			return nil, err
+		}
+		practices = append(practices, practice)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return practices, nil
 }
 
 func allowedCardTransition(from, to CardStatus) bool {

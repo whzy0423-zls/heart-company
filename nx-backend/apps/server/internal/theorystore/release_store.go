@@ -299,10 +299,13 @@ func loadReleaseMappingState(ctx context.Context, tx *sql.Tx, libraryID int64, m
 	var chunkStatus ChunkStatus
 	var contentHash string
 	var chunkVersion, cardVersion int
+	var practiceID, practiceCardID, practiceVersion sql.NullInt64
+	var practiceStatus sql.NullString
 	var cardStatus CardStatus
 	var hasPrimary bool
 	err := tx.QueryRowContext(ctx, `
-		SELECT chunk.card_id, chunk.library_id, chunk.status, chunk.content_hash, chunk.version, card.version, card.status,
+		SELECT chunk.card_id, chunk.library_id, chunk.status, chunk.content_hash, chunk.version, card.version,
+			chunk.practice_id, practice.card_id, practice.status, practice.version, card.status,
 			EXISTS (
 				SELECT 1 FROM theory_card_sources source
 				WHERE source.card_id=card.id AND source.source_role='primary'
@@ -311,12 +314,19 @@ func loadReleaseMappingState(ctx context.Context, tx *sql.Tx, libraryID int64, m
 			) AS has_primary
 		FROM theory_chunks chunk
 		JOIN theory_cards card ON card.id=chunk.card_id
+		LEFT JOIN theory_practices practice ON practice.id=chunk.practice_id
 		WHERE chunk.id=$1 AND card.id=$2
 			AND btrim(card.definition) <> ''
 			AND btrim(card.applicable_context) <> ''
 			AND btrim(card.non_applicable_context) <> ''`, mapping.ChunkID, mapping.CardID).Scan(
-		&actualCardID, &actualLibraryID, &chunkStatus, &contentHash, &chunkVersion, &cardVersion, &cardStatus, &hasPrimary)
+		&actualCardID, &actualLibraryID, &chunkStatus, &contentHash, &chunkVersion, &cardVersion,
+		&practiceID, &practiceCardID, &practiceStatus, &practiceVersion, &cardStatus, &hasPrimary)
 	if errors.Is(err, sql.ErrNoRows) {
+		return releaseMappingState{}, ErrInvalidReleaseMapping
+	}
+	if practiceID.Valid && (!practiceCardID.Valid || practiceCardID.Int64 != mapping.CardID ||
+		!practiceStatus.Valid || CardStatus(practiceStatus.String) != StatusPublished ||
+		!practiceVersion.Valid || int(practiceVersion.Int64) != chunkVersion) {
 		return releaseMappingState{}, ErrInvalidReleaseMapping
 	}
 	if err != nil {

@@ -146,6 +146,21 @@ func TestContentStorePracticeChangeMarksEmbeddingsStale(t *testing.T) {
 	}
 }
 
+func TestContentStoreSavePracticeRejectsNonDraftStatusBeforeSQL(t *testing.T) {
+	for _, status := range []CardStatus{StatusInReview, StatusPublished, StatusSuperseded, StatusRetired} {
+		p := testPractice()
+		p.Status = status
+		script := &sqlScript{}
+		_, err := testStore(t, script).SavePractice(context.Background(), p)
+		if !errors.Is(err, ErrPracticeNotEditable) {
+			t.Fatalf("status %s: expected ErrPracticeNotEditable, got %v", status, err)
+		}
+		if len(script.callsSnapshot()) != 0 {
+			t.Fatalf("status %s reached SQL", status)
+		}
+	}
+}
+
 func TestContentStoreSaveRelationUsesValidatorAndAllFields(t *testing.T) {
 	r := testRelation()
 	script := &sqlScript{steps: []sqlStep{
@@ -230,12 +245,41 @@ func TestContentStorePracticeChunkLocksPracticeLibraryBeforeRows(t *testing.T) {
 		{kind: "query", contains: "LEFT JOIN theory_practices", columns: []string{"card_library_id", "practice_card_id", "practice_library_id"}, rows: [][]driver.Value{{int64(9), int64(12), int64(2)}}},
 		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
 		{kind: "query", contains: "FOR UPDATE OF card", columns: []string{"status", "card_library_id", "card_version"}, rows: [][]driver.Value{{string(StatusPublished), int64(9), int64(c.Version)}}},
-		{kind: "query", contains: "FROM theory_practices practice", columns: []string{"practice_card_id", "practice_library_id"}, rows: [][]driver.Value{{int64(12), int64(2)}}},
+		{kind: "query", contains: "FROM theory_practices practice", columns: []string{"practice_card_id", "practice_library_id", "practice_status", "practice_version"}, rows: [][]driver.Value{{int64(12), int64(2), string(StatusPublished), int64(c.Version)}}},
 		{kind: "rollback"},
 	}}
 	_, err := testStore(t, script).SaveChunk(context.Background(), c)
 	if !errors.Is(err, ErrInvalidContentOwnership) {
 		t.Fatalf("expected practice ownership rejection, got %v", err)
+	}
+}
+
+func TestContentStorePracticeChunkRequiresPublishedMatchingPracticeVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  CardStatus
+		version int
+	}{
+		{name: "draft", status: StatusDraft, version: 2},
+		{name: "wrong_version", status: StatusPublished, version: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := testChunk()
+			c.ChunkKind = ChunkKindPractice
+			c.PracticeID = int64ptr(51)
+			script := &sqlScript{steps: []sqlStep{
+				{kind: "begin"},
+				{kind: "query", contains: "LEFT JOIN theory_practices", columns: []string{"card_library_id", "practice_card_id", "practice_library_id"}, rows: [][]driver.Value{{int64(3), c.CardID, int64(3)}}},
+				{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
+				validLockedChunkStep(StatusPublished, c.Version),
+				{kind: "query", contains: "FROM theory_practices practice", columns: []string{"practice_card_id", "practice_library_id", "practice_status", "practice_version"}, rows: [][]driver.Value{{c.CardID, int64(3), string(tc.status), int64(tc.version)}}},
+				{kind: "rollback"},
+			}}
+			_, err := testStore(t, script).SaveChunk(context.Background(), c)
+			if !errors.Is(err, ErrPracticeNotPublishable) {
+				t.Fatalf("expected ErrPracticeNotPublishable, got %v", err)
+			}
+		})
 	}
 }
 

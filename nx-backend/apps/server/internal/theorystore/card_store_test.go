@@ -154,6 +154,7 @@ func TestCardStorePublishSupersedesReplacementBeforePublishing(t *testing.T) {
 		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
 		{kind: "query", contains: "FOR UPDATE", columns: cardColumns(), rows: [][]driver.Value{cardValues(card)}},
 		{kind: "query", contains: "FROM theory_card_sources", columns: cardSourceColumns(), rows: [][]driver.Value{cardSourceValues(source)}},
+		{kind: "query", contains: "FROM theory_practices", columns: practiceColumns()},
 		{kind: "exec", contains: "status = 'superseded'", affected: 1},
 		{kind: "query", contains: "status=$2", columns: cardColumns(), rows: [][]driver.Value{cardValues(withCardStatus(card, StatusPublished))}},
 		{kind: "commit"},
@@ -171,6 +172,52 @@ func TestCardStorePublishSupersedesReplacementBeforePublishing(t *testing.T) {
 		t.Fatalf("replacement ordering wrong: %#v", calls)
 	}
 	script.assertDone(t)
+}
+
+func TestCardStorePublishRejectsUnsafeRestrictedPractice(t *testing.T) {
+	card := testCard(StatusInReview)
+	card.ClinicalSafety = ClinicalRestricted
+	source := testCardSource(card.ID)
+	practice := testPractice()
+	script := &sqlScript{steps: []sqlStep{
+		{kind: "begin"},
+		{kind: "query", contains: "SELECT library_id", columns: []string{"library_id"}, rows: [][]driver.Value{{card.LibraryID}}},
+		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
+		{kind: "query", contains: "FROM theory_cards", columns: cardColumns(), rows: [][]driver.Value{cardValues(card)}},
+		{kind: "query", contains: "FROM theory_card_sources", columns: cardSourceColumns(), rows: [][]driver.Value{cardSourceValues(source)}},
+		{kind: "query", contains: "FROM theory_practices", columns: practiceColumns(), rows: [][]driver.Value{practiceValues(practice)}},
+		{kind: "rollback"},
+	}}
+	_, err := testStore(t, script).TransitionCard(context.Background(), card.ID, StatusInReview, StatusPublished, 7)
+	if err == nil || !strings.Contains(err.Error(), "stop_conditions") {
+		t.Fatalf("expected restricted practice safety rejection, got %v", err)
+	}
+}
+
+func TestCardStorePublishPromotesValidDraftPracticesToCardVersion(t *testing.T) {
+	card := testCard(StatusInReview)
+	source := testCardSource(card.ID)
+	practice := testPractice()
+	script := &sqlScript{steps: []sqlStep{
+		{kind: "begin"},
+		{kind: "query", contains: "SELECT library_id", columns: []string{"library_id"}, rows: [][]driver.Value{{card.LibraryID}}},
+		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
+		{kind: "query", contains: "FROM theory_cards", columns: cardColumns(), rows: [][]driver.Value{cardValues(card)}},
+		{kind: "query", contains: "FROM theory_card_sources", columns: cardSourceColumns(), rows: [][]driver.Value{cardSourceValues(source)}},
+		{kind: "query", contains: "FROM theory_practices", columns: practiceColumns(), rows: [][]driver.Value{practiceValues(practice)}},
+		{kind: "exec", contains: "UPDATE theory_practices", affected: 1},
+		{kind: "exec", contains: "status = 'superseded'", affected: 0},
+		{kind: "query", contains: "status=$2", columns: cardColumns(), rows: [][]driver.Value{cardValues(withCardStatus(card, StatusPublished))}},
+		{kind: "commit"},
+	}}
+	_, err := testStore(t, script).TransitionCard(context.Background(), card.ID, StatusInReview, StatusPublished, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	practiceUpdate := script.callsSnapshot()[6]
+	if practiceUpdate.args[len(practiceUpdate.args)-1] != int64(card.Version+1) {
+		t.Fatalf("practice version not aligned: %#v", practiceUpdate.args)
+	}
 }
 
 func TestCardStoreReportsConcurrentStatusChange(t *testing.T) {
