@@ -86,6 +86,22 @@ function standaloneStyleDeclarations(className) {
   return indexPage.match(new RegExp(`^[ \\t]*\\.${escapedClassName}\\s*\\{([^}]*)\\}`, 'm'))?.[1]
 }
 
+function assertKeyboardViewControl(tag, description, handler) {
+  assert.match(tag, /\srole=["']button["']/, `${description} should use web button semantics`)
+  assert.match(tag, /\saria-role=["']button["']/, `${description} should expose miniapp button semantics`)
+  assert.match(tag, /\stabindex=["']0["']/, `${description} should participate in keyboard focus order`)
+  assert.match(tag, new RegExp(`\\s@keydown\\.enter=["']${handler}["']`), `${description} should activate with Enter`)
+  assert.match(tag, new RegExp(`\\s@keydown\\.space\\.prevent=["']${handler}["']`), `${description} should activate with Space without scrolling`)
+}
+
+function assertVisibleFocusStyle(className) {
+  const escapedClassName = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const rules = [...indexPage.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+  const focusRule = rules.find(([, selector]) => new RegExp(`\\.${escapedClassName}:focus(?:-visible)?(?:\\s|,|$)`).test(selector.trim()))
+  assert.ok(focusRule, `.${className} should define a visible focus state`)
+  assert.match(focusRule[2], /\b(?:outline|box-shadow)\s*:/, `.${className} focus state should use an outline or box shadow`)
+}
+
 const energyCards = homeOpeningViews.filter((tag) => staticClassTokens(tag).includes('energy-card'))
 assert.equal(energyCards.length, 4, 'home page should render exactly four energy dashboard cards')
 for (const card of energyCards) {
@@ -106,6 +122,7 @@ for (const { modifier, label, handler } of energyCardContracts) {
   assert.ok(card, `home page should render the ${modifier} energy card`)
   assert.match(card, new RegExp(`\\saria-label=["']${label}["']`), `${modifier} should expose its exact accessible label`)
   assert.match(card, new RegExp(`\\s@click=["']${handler}["']`), `${modifier} should invoke ${handler}`)
+  assertKeyboardViewControl(card, modifier, handler)
 }
 
 function assertHomeRoute(handler, navigationMethod, url, description) {
@@ -129,6 +146,7 @@ assert.match(homeProfileAction, /\srole=["']button["']/, 'home profile action sh
 assert.match(homeProfileAction, /\saria-label=["']打开我的成长档案["']/, 'home profile action should describe the growth profile destination')
 assert.match(homeProfileAction, /\s@click=["']goProfile["']/, 'home profile action should open the growth profile')
 assert.match(homeProfileAction, /\shover-class=["']home-nav__profile--pressed["']/, 'home profile action should expose pressed feedback')
+assertKeyboardViewControl(homeProfileAction, 'home profile action', 'goProfile')
 
 const growthCard = findHomeView('growth-card')
 assert.ok(growthCard, 'home page should render a teacher and course growth card')
@@ -136,6 +154,12 @@ assert.match(growthCard, /\srole=["']button["']/, 'home growth card should use b
 assert.match(growthCard, /\saria-label=["']打开老师课程与成长内容["']/, 'home growth card should describe the teacher and course destination')
 assert.match(growthCard, /\s@click=["']goLearn["']/, 'home growth card should open teacher courses and growth content')
 assert.match(growthCard, /\shover-class=["']growth-card--pressed["']/, 'home growth card should expose pressed feedback')
+assertKeyboardViewControl(growthCard, 'home growth card', 'goLearn')
+
+const homeOpeningButtons = indexPage.match(/<button\b[^>]*>/g) || []
+const heroCta = homeOpeningButtons.find((tag) => staticClassTokens(tag).includes('hero__cta'))
+assert.ok(heroCta, 'home hero should render its primary CTA as a button')
+assert.match(heroCta, /\s@click=["']startTest["']/, 'home hero CTA should start the personality test')
 
 const homeOpeningImages = indexPage.match(/<image\b[^>]*>/g) || []
 const heroWheel = homeOpeningImages.find((tag) => staticClassTokens(tag).includes('hero__wheel'))
@@ -163,6 +187,21 @@ for (const className of ['energy-card--pressed', 'growth-card--pressed', 'home-n
   assert.ok(declarations, `.${className} should have a standalone CSS rule`)
   assert.match(declarations, /\b(?:opacity|transform):/, `.${className} should provide visible pressed feedback`)
 }
+
+for (const className of ['home-nav__profile', 'energy-card', 'growth-card', 'hero__cta']) {
+  assertVisibleFocusStyle(className)
+}
+
+for (const inaccessibleColor of ['#778197', '#7b8496', '#6f778b']) {
+  assert.doesNotMatch(indexPage, new RegExp(inaccessibleColor, 'i'), `home page should not use low-contrast light-surface color ${inaccessibleColor}`)
+}
+assert.match(indexPage, /#64748b/i, 'home page should use #64748b for secondary text on light surfaces')
+
+const heroKickerColor = standaloneStyleDeclarations('hero__kicker')?.match(/\bcolor:\s*([^;]+)\s*;/)?.[1].trim()
+const heroKickerRgba = heroKickerColor?.match(/^rgba\(\s*255\s*,\s*255\s*,\s*255\s*,\s*([\d.]+)\s*\)$/i)
+const heroKickerUsesAccessibleWhite = /^#(?:fff|ffffff)$/i.test(heroKickerColor || '')
+  || (heroKickerRgba && Number(heroKickerRgba[1]) >= 0.9)
+assert.ok(heroKickerUsesAccessibleWhite, 'home hero kicker should use white with at least 0.9 opacity')
 
 const energyCardMinHeight = standaloneStyleDeclarations('energy-card')?.match(/\bmin-height:\s*(\d+)rpx/)
 assert.ok(energyCardMinHeight && Number(energyCardMinHeight[1]) >= 176, 'energy cards should keep a minimum height of 176rpx')
