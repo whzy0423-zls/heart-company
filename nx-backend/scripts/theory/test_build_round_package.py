@@ -60,6 +60,24 @@ class RoundPackageTest(unittest.TestCase):
             self.assertEqual(unit["locator"], evidence["locator"])
             self.assertTrue((source_dir / unit["textFile"]).read_text("utf-8").strip())
 
+    def test_coverage_report_discloses_every_source_and_zero_use_sources(self):
+        report = (self.output / "reports/coverage.md").read_text("utf-8")
+        for source in self.manifest["sources"]:
+            self.assertIn(source["relativePath"], report)
+        self.assertIn("零卡片引用来源", report)
+        self.assertIn("selected 不等于必须被卡片引用", report)
+
+    def test_all_52_evidence_queries_are_explicit_non_generic_phrases(self):
+        banned = {"时", "位", "刚", "柔", "身体", "行为", "行动", "情绪", "沟通", "反馈",
+                  "资源", "支持", "世界", "目标", "障碍", "身份", "信念", "价值", "位置",
+                  "需要", "同理", "观察", "模式", "治疗", "意义", "关系", "类型"}
+        specs = self.module.CARD_SPECS + self.module.PRACTICE_SPECS
+        self.assertEqual(52, len(specs))
+        for key, _, _, queries, _ in specs:
+            self.assertEqual(1, len(queries), key)
+            self.assertGreaterEqual(len(queries[0]), 4, key)
+            self.assertNotIn(queries[0], banned, key)
+
     def test_prefers_substantive_units_over_cover_or_front_matter_matches(self):
         for card in self.cards:
             locator = card["primaryEvidence"]["locator"]
@@ -77,12 +95,54 @@ class RoundPackageTest(unittest.TestCase):
         self.assertGreater(emotion["primaryEvidence"]["locator"]["page"], 3)
         trauma = next(card for card in self.cards
                       if card["canonicalKey"] == "emotion.trauma_safety_boundary")
-        self.assertEqual(hashlib.sha256("创伤".encode()).hexdigest(),
+        self.assertEqual(hashlib.sha256("受创伤的人".encode()).hexdigest(),
                          trauma["primaryEvidence"]["groundingTermSha256"])
         self.assertGreater(trauma["primaryEvidence"]["locator"]["page"], 20)
         pattern = next(card for card in self.cards
                        if card["canonicalKey"] == "personality.pattern_not_identity")
         self.assertNotEqual("九型人格简易测试", pattern["primaryEvidence"]["locator"]["chapter"])
+
+    def test_reviewed_claims_use_specific_supporting_terms_and_locators(self):
+        expectations = {
+            "change.timing_and_position": ("六位时成", {"page": 3, "slice": 1,
+                "characterStart": 0, "characterEnd": 1099}),
+            "communication.conflict_without_violence": ("用非暴力沟通化解冲突",
+                {"spineItem": 19, "chapter": "第十一章 化解冲突，调和纷争", "paragraph": 5}),
+            "emotion.trigger_body_response": ("神经系统的活动", {"page": 39, "slice": 1,
+                "characterStart": 0, "characterEnd": 606}),
+            "belief.behavior_not_identity": ("父亲行为所做成的后果", {"page": 193, "slice": 1,
+                "characterStart": 0, "characterEnd": 1236}),
+        }
+        by_key = {card["canonicalKey"]: card for card in self.cards}
+        for key, (term, locator) in expectations.items():
+            evidence = by_key[key]["primaryEvidence"]
+            self.assertEqual(hashlib.sha256(term.encode()).hexdigest(), evidence["groundingTermSha256"])
+            self.assertEqual(locator, evidence["locator"])
+
+    def test_practice_relations_are_explicit_semantic_mappings(self):
+        relations = read_json(self.output / "relations.json")["relations"]
+        actual = {(relation["from"], relation["to"]) for relation in relations}
+        self.assertEqual({
+            ("practice.call_clues_journal", "journey.call_and_refusal"),
+            ("practice.critic_mentor_positions", "journey.mentor_and_resources"),
+            ("practice.three_seeds_settling", "energy.three_mind_seeds"),
+            ("practice.intention_center_resource", "energy.intention_center_resources"),
+            ("practice.archetype_energy_switch", "energy.gentle_fierce_playful"),
+            ("practice.obstacle_energy_rehearsal", "journey.trial_as_training"),
+            ("practice.obstacle_energy_rehearsal", "energy.integrated_expression"),
+            ("practice.body_model_positive_need", "practice.body_model_as_inquiry"),
+            ("practice.body_model_positive_need", "practice.resource_before_challenge"),
+            ("practice.goal_obstacle_integration", "practice.small_action_feedback_loop"),
+            ("practice.goal_obstacle_integration", "journey.trial_as_training"),
+            ("practice.three_win_check", "ethics.three_win"),
+            ("practice.map_clarifying_questions", "experience.map_not_territory"),
+            ("practice.emotion_wave_naming", "emotion.feedback_and_protection"),
+            ("practice.emotion_wave_naming", "emotion.allow_without_obeying"),
+            ("practice.emotion_wave_naming", "emotion.trigger_body_response"),
+            ("practice.emotion_wave_naming", "emotion.trauma_safety_boundary"),
+            ("practice.pass_it_on_without_rescue", "ethics.support_without_rescuing"),
+            ("practice.pass_it_on_without_rescue", "ethics.pass_the_gift_forward"),
+        }, actual)
 
     def test_locator_contract_matches_source_format_without_fake_pages(self):
         source_format = {source["sourceId"]: source["format"] for source in self.manifest["sources"]}

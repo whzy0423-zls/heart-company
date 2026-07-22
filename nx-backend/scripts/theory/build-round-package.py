@@ -17,65 +17,80 @@ EVIDENCE_LEVELS = {"experiential", "textual", "mixed"}
 
 # key, title, extraction directory, grounding keywords, original synthesis
 CARD_SPECS = [
-    ("personality.attention_focus", "人格模式首先表现为注意焦点", "a7b200a8c4c33b37-source", ["注意力", "注意"], "人格模式可先从反复被什么吸引、忽略什么来观察。注意焦点是探索入口，不是给人定型的结论。"),
-    ("personality.three_centers", "本能、情感与思维三中心", "a7b200a8c4c33b37-source", ["本能", "情感中心", "思维中心"], "三中心是一种整理经验的观察框架：身体行动、关系情感与分析思考会以不同优先级参与反应。"),
-    ("personality.passion_defense", "激情、防御与自动反应", "a7b200a8c4c33b37-source", ["激情", "防御机制", "自动"], "高压下反复出现的情绪动力、防御方式和行动冲动，可以作为识别自动模式的线索。"),
-    ("personality.pattern_not_identity", "九型是观察地图，不是身份标签", "a7b200a8c4c33b37-source", ["身份", "人格类型", "类型"], "九型只适合帮助提出观察问题，不能替代个人经历，也不能被用来诊断、贴标签或限制成长可能。"),
-    ("journey.call_and_refusal", "召唤与拒绝同时出现", "454c3af739c58883-02", ["召唤", "拒绝"], "重要方向出现时，向往与退缩常会并存。把拒绝看作保护信息，有助于发现需要补充的安全和资源。"),
-    ("journey.mentor_and_resources", "向导与支持资源帮助跨越门槛", "7bb595df179c3389-03", ["向导", "资源", "支持"], "跨越变化门槛不必只靠意志；可信向导、关系支持和既有能力能够降低冒进与孤立。"),
-    ("journey.trial_as_training", "障碍是能力和完整性的训练场", "45cdd8454fa15695-08", ["障碍", "面对"], "障碍可以被重新看作练习场：在可承受范围内调动不同能力，并用反馈调整行动，而非证明自我价值。"),
-    ("journey.return_with_gift", "转化以回归和贡献完成闭环", "d61dc134719acf99-11", ["贡献", "礼物", "回归"], "个人所得只有回到日常关系和真实贡献中才形成闭环；分享需要尊重他人选择和自身边界。"),
-    ("energy.intention_center_resources", "意图、身体中心与资源圆环", "0bd39b44c72f5f31-04", ["意图", "中心", "资源"], "先澄清正向意图，再觉察身体中心并盘点内外资源，可让行动从抽象愿望落到更稳定的支持结构。"),
-    ("energy.three_mind_seeds", "静止、寂静与无边无际三颗种子", "29144d15a67ae6af-05", ["静止", "寂静", "无边"], "三颗种子是一组体验性注意练习，用来暂缓自动反应并扩大觉察空间，不代表客观能量测量。"),
-    ("energy.gentle_fierce_playful", "温柔、勇猛与顽皮三种原型能量", "c166156e17a60058-07", ["温柔", "勇猛", "顽皮"], "温柔、勇猛与顽皮可作为三种行动品质：连接与照料、坚定与保护、灵活与创造。"),
-    ("energy.integrated_expression", "三种能量围绕中心协同表达", "45cdd8454fa15695-08", ["能量", "中心", "障碍"], "协同表达强调按情境调节不同品质，并持续回到中心和现实反馈，避免把单一风格绝对化。"),
-    ("change.yin_yang_complementarity", "阴阳是互补变化而非绝对对立", "d2971a52eabd7198-new", ["阴阳"], "阴阳可作为理解相反力量互相依存、彼此转化的文化解释框架，不宜简化为非黑即白。"),
-    ("change.timing_and_position", "时与位共同影响行动是否合宜", "bb96ab6e3e9859ea-source", ["时", "位"], "行动是否合宜不仅取决于愿望，也取决于时机、位置、关系和可承担后果；判断仍需现实信息。"),
-    ("change.firm_and_yielding", "刚柔需要根据情境互相调节", "d2971a52eabd7198-new", ["刚柔", "刚", "柔"], "刚与柔可理解为坚持和适应两类策略；成熟行动是在边界与弹性之间依据反馈调节。"),
-    ("change.fullness_emptiness_cycle", "盈虚消长提醒人保留调整空间", "d2971a52eabd7198-new", ["盈虚", "消长"], "盈虚消长提醒计划为变化留出余地：高点并非永久，低点也不等于终局，应保留复盘和修正空间。"),
-    ("experience.map_not_territory", "地图不是疆域", "7b0d865f7cf61df7-nlp", ["地图", "世界模式"], "人通过语言和经验模型理解现实，但模型始终是选择性的。把解释与事实分开，可以增加求证和修正。"),
-    ("experience.sensory_representation", "经验由画面、声音和身体感受组织", "7b0d865f7cf61df7-nlp", ["视觉", "听觉", "感觉"], "回忆和想象常以画面、声音与身体感觉被组织；这些是主观经验线索，不是读取客观真相。"),
-    ("experience.perceptual_positions", "自我、对方与观察者三种感知位置", "7b0d865f7cf61df7-nlp", ["感知位置", "位置"], "在自我、对方和观察者视角间切换，可帮助发现遗漏信息；对他人视角的推测仍需向本人核实。"),
-    ("experience.timeline_as_metaphor", "时间线是整理经验的主观隐喻", "7b0d865f7cf61df7-nlp", ["时间线", "时间"], "时间线是一种整理过去、现在和未来感受的隐喻工具，不应被当作记忆准确性或因果关系的证明。"),
-    ("belief.bvr_structure", "信念、价值与规条的结构", "7b0d865f7cf61df7-nlp", ["信念", "价值", "规条"], "信念说明我们认为什么成立，价值指出什么重要，规条规定何时才算达到；三者共同影响选择。"),
-    ("belief.behavior_not_identity", "行为反馈不应升级为身份否定", "c447ec8485ee5a7c-source", ["身份", "行为"], "反馈应尽量指向具体行为、情境和影响，避免把一次结果扩张为对整个人的永久否定。"),
-    ("belief.identity_mission_alignment", "身份和使命需要落实为可观察行动", "7b0d865f7cf61df7-nlp", ["身份", "使命"], "身份与使命陈述只有转化成可观察的小行动，并接受现实反馈，才不至于停留在宏大自我叙事。"),
-    ("belief.reframe_preserves_reality", "换框是在保留事实下增加选择", "7b0d865f7cf61df7-nlp", ["换框", "意义"], "换框不是否认损失或美化伤害，而是在承认事实和责任的前提下寻找其他解释与行动选项。"),
-    ("emotion.feedback_and_protection", "情绪是反馈和保护信号", "3c801d9cebabf847-source", ["情绪", "保护"], "情绪可提示需要、边界、风险或期待的变化；它提供信息，但不自动决定事实和行动。"),
-    ("emotion.trigger_body_response", "触发会先在身体和行动冲动中显现", "3c801d9cebabf847-source", ["身体", "触发", "冲动"], "触发后可能先出现呼吸、肌肉、心率和行动冲动变化。及早识别有助于暂停并选择更安全的回应。"),
-    ("emotion.allow_without_obeying", "接纳情绪不等于服从情绪", "3c801d9cebabf847-source", ["接纳", "情绪"], "允许情绪存在，是减少内耗并听取信息；它不等于按冲动行动，也不取消边界和责任。"),
-    ("emotion.trauma_safety_boundary", "强烈创伤反应需要安全与专业支持", "3c801d9cebabf847-source", ["创伤"], "当体验涉及失控、解离、持续闪回或现实安全风险时，自助练习应停止并转向合格专业支持。"),
-    ("communication.rapport_and_feedback", "沟通以连接和真实反馈校准", "0d9fff959e6cd6bc-z-library", ["沟通", "反馈", "倾听"], "连接帮助信息被听见，真实反馈帮助双方校准理解；二者都需要尊重事实和拒绝的权利。"),
-    ("communication.effect_over_being_right", "有道理不等于沟通有效", "92b19c78e5f3b025-source", ["沟通", "效果", "关系"], "观点成立不保证表达能被接收。有效沟通还需观察时机、方式、关系影响和对方反馈。"),
-    ("communication.boundary_and_responsibility", "同理、边界与责任需要同时存在", "0d9fff959e6cd6bc-z-library", ["同理", "责任", "需要"], "理解感受不等于同意所有要求；清楚表达自身边界，也不等于把结果全部推给对方。"),
-    ("communication.conflict_without_violence", "冲突可以清楚坚定而不攻击", "0d9fff959e6cd6bc-z-library", ["冲突", "暴力", "请求"], "冲突中可以区分观察、感受、需要和请求，以坚定而不羞辱的方式说明边界与后果。"),
-    ("practice.observe_before_change", "改变之前先观察自动模式", "c447ec8485ee5a7c-source", ["观察", "改变", "模式"], "在干预前记录触发、感受、解释与行为链，能把模糊自责转化为可检验、可调整的信息。"),
-    ("practice.resource_before_challenge", "接近挑战前先连接中心和资源", "49c3bd482845355a-06", ["资源", "中心", "意图"], "先确认身体稳定、支持者、退出方式和可用能力，再靠近挑战，可降低被强度淹没的风险。"),
-    ("practice.body_model_as_inquiry", "身体模型用于探索而不是诊断", "d0728e91e2676a1a-nlp", ["身体", "模式", "探索"], "身体感受可用于提出好奇问题和识别需求，但不能单独推断疾病、创伤真相或他人动机。"),
-    ("practice.small_action_feedback_loop", "以小行动和反馈替代一次性顿悟", "7b0d865f7cf61df7-nlp", ["行动", "反馈", "目标"], "把目标拆成可逆的小行动，观察结果并调整，比追求一次性解释更容易形成现实中的学习循环。"),
-    ("ethics.three_win", "三赢：自己、他人与更大系统", "49c3bd482845355a-06", ["世界", "支持", "意图"], "决策可同时检查对自己、相关他人和更大系统的影响；三赢是审视框架，不保证不存在取舍。"),
-    ("ethics.pass_the_gift_forward", "天赋和所得需要负责任地传递", "d61dc134719acf99-11", ["礼物", "贡献", "帮助"], "传递所得应以真实能力、知情同意和可承担边界为前提，而不是用使命叙事要求自己或他人。"),
-    ("ethics.support_without_rescuing", "支持他人而不扮演拯救者", "d61dc134719acf99-11", ["帮助他人", "帮助", "支持"], "支持是提供选择、资源和陪伴；拯救则可能替代他人决定、忽略拒绝，并让帮助者越过能力边界。"),
-    ("ethics.humility_and_accountability", "谦逊意味着接受反馈并承担影响", "0d9fff959e6cd6bc-z-library", ["责任", "倾听", "反馈"], "谦逊不是自我贬低，而是承认解释可能有误、主动听取反馈，并对行为造成的影响承担修正责任。"),
+    ("personality.attention_focus", "人格模式首先表现为注意焦点", "a7b200a8c4c33b37-source", ["注意力从表面特征中转移"], "人格模式可先从反复被什么吸引、忽略什么来观察。注意焦点是探索入口，不是给人定型的结论。"),
+    ("personality.three_centers", "本能、情感与思维三中心", "a7b200a8c4c33b37-source", ["大脑中心、心脏中心或者腹部中心"], "三中心是一种整理经验的观察框架：身体行动、关系情感与分析思考会以不同优先级参与反应。"),
+    ("personality.passion_defense", "激情、防御与自动反应", "a7b200a8c4c33b37-source", ["防御机制"], "高压下反复出现的情绪动力、防御方式和行动冲动，可以作为识别自动模式的线索。"),
+    ("personality.pattern_not_identity", "九型是观察地图，不是身份标签", "a7b200a8c4c33b37-source", ["旁观者的身份"], "九型只适合帮助提出观察问题，不能替代个人经历，也不能被用来诊断、贴标签或限制成长可能。"),
+    ("journey.call_and_refusal", "召唤与拒绝同时出现", "454c3af739c58883-02", ["召唤到来"], "重要方向出现时，向往与退缩常会并存。把拒绝看作保护信息，有助于发现需要补充的安全和资源。"),
+    ("journey.mentor_and_resources", "向导与支持资源帮助跨越门槛", "7bb595df179c3389-03", ["向导或者我们把它叫做导师"], "跨越变化门槛不必只靠意志；可信向导、关系支持和既有能力能够降低冒进与孤立。"),
+    ("journey.trial_as_training", "障碍是能力和完整性的训练场", "45cdd8454fa15695-08", ["非暴力地、成功地面对"], "障碍可以被重新看作练习场：在可承受范围内调动不同能力，并用反馈调整行动，而非证明自我价值。"),
+    ("journey.return_with_gift", "转化以回归和贡献完成闭环", "d61dc134719acf99-11", ["礼物要给出去"], "个人所得只有回到日常关系和真实贡献中才形成闭环；分享需要尊重他人选择和自身边界。"),
+    ("energy.intention_center_resources", "意图、身体中心与资源圆环", "49c3bd482845355a-06", ["连接着身体的中心"], "先澄清正向意图，再觉察身体中心并盘点内外资源，可让行动从抽象愿望落到更稳定的支持结构。"),
+    ("energy.three_mind_seeds", "静止、寂静与无边无际三颗种子", "29144d15a67ae6af-05", ["这颗种子是静止"], "三颗种子是一组体验性注意练习，用来暂缓自动反应并扩大觉察空间，不代表客观能量测量。"),
+    ("energy.gentle_fierce_playful", "温柔、勇猛与顽皮三种原型能量", "c166156e17a60058-07", ["温柔、勇猛和顽皮"], "温柔、勇猛与顽皮可作为三种行动品质：连接与照料、坚定与保护、灵活与创造。"),
+    ("energy.integrated_expression", "三种能量围绕中心协同表达", "45cdd8454fa15695-08", ["应用这三种原型能量"], "协同表达强调按情境调节不同品质，并持续回到中心和现实反馈，避免把单一风格绝对化。"),
+    ("change.yin_yang_complementarity", "阴阳是互补变化而非绝对对立", "d2971a52eabd7198-new", ["一阴一阳之谓道"], "阴阳可作为理解相反力量互相依存、彼此转化的文化解释框架，不宜简化为非黑即白。"),
+    ("change.timing_and_position", "时与位共同影响行动是否合宜", "d2971a52eabd7198-new", ["六位时成"], "行动是否合宜不仅取决于愿望，也取决于时机、位置、关系和可承担后果；判断仍需现实信息。"),
+    ("change.firm_and_yielding", "刚柔需要根据情境互相调节", "d2971a52eabd7198-new", ["刚柔相推"], "刚与柔可理解为坚持和适应两类策略；成熟行动是在边界与弹性之间依据反馈调节。"),
+    ("change.fullness_emptiness_cycle", "盈虚消长提醒人保留调整空间", "d2971a52eabd7198-new", ["盈不可久"], "盈虚消长提醒计划为变化留出余地：高点并非永久，低点也不等于终局，应保留复盘和修正空间。"),
+    ("experience.map_not_territory", "地图不是疆域", "7b0d865f7cf61df7-nlp", ["感官地图"], "人通过语言和经验模型理解现实，但模型始终是选择性的。把解释与事实分开，可以增加求证和修正。"),
+    ("experience.sensory_representation", "经验由画面、声音和身体感受组织", "7b0d865f7cf61df7-nlp", ["三个内感官"], "回忆和想象常以画面、声音与身体感觉被组织；这些是主观经验线索，不是读取客观真相。"),
+    ("experience.perceptual_positions", "自我、对方与观察者三种感知位置", "7b0d865f7cf61df7-nlp", ["感知位置平衡法"], "在自我、对方和观察者视角间切换，可帮助发现遗漏信息；对他人视角的推测仍需向本人核实。"),
+    ("experience.timeline_as_metaphor", "时间线是整理经验的主观隐喻", "7b0d865f7cf61df7-nlp", ["内心状态与时间线的关系"], "时间线是一种整理过去、现在和未来感受的隐喻工具，不应被当作记忆准确性或因果关系的证明。"),
+    ("belief.bvr_structure", "信念、价值与规条的结构", "7b0d865f7cf61df7-nlp", ["信念 价值观和规条"], "信念说明我们认为什么成立，价值指出什么重要，规条规定何时才算达到；三者共同影响选择。"),
+    ("belief.behavior_not_identity", "行为反馈不应升级为身份否定", "7b0d865f7cf61df7-nlp", ["父亲行为所做成的后果"], "反馈应尽量指向具体行为、情境和影响，避免把一次结果扩张为对整个人的永久否定。"),
+    ("belief.identity_mission_alignment", "身份和使命需要落实为可观察行动", "7b0d865f7cf61df7-nlp", ["理想的身份发展出来的环境及行为层次"], "身份与使命陈述只有转化成可观察的小行动，并接受现实反馈，才不至于停留在宏大自我叙事。"),
+    ("belief.reframe_preserves_reality", "换框是在保留事实下增加选择", "7b0d865f7cf61df7-nlp", ["这类技巧包括换框法"], "材料把换框法列为调整信念、价值观与规条后改变情绪状态的技巧；使用时仍须承认事实、伤害与责任。"),
+    ("emotion.feedback_and_protection", "情绪是反馈和保护信号", "3c801d9cebabf847-source", ["每种情绪都传递着自身独特的信息"], "情绪可提示需要、边界、风险或期待的变化；它提供信息，但不自动决定事实和行动。"),
+    ("emotion.trigger_body_response", "触发会先在身体和行动冲动中显现", "3c801d9cebabf847-source", ["神经系统的活动"], "自我观察时可先留意身体感觉、神经系统活动与行动冲动的变化；这些线索有助于暂停并选择更安全的回应。"),
+    ("emotion.allow_without_obeying", "接纳情绪不等于服从情绪", "3c801d9cebabf847-source", ["拜倒在情绪的"], "允许情绪存在，是减少内耗并听取信息；它不等于按冲动行动，也不取消边界和责任。"),
+    ("emotion.trauma_safety_boundary", "强烈创伤反应需要安全与专业支持", "3c801d9cebabf847-source", ["受创伤的人"], "当体验涉及失控、解离、持续闪回或现实安全风险时，自助练习应停止并转向合格专业支持。"),
+    ("communication.rapport_and_feedback", "沟通以连接和真实反馈校准", "0d9fff959e6cd6bc-z-library", ["建立了连结"], "连接帮助信息被听见，真实反馈帮助双方校准理解；二者都需要尊重事实和拒绝的权利。"),
+    ("communication.effect_over_being_right", "有道理不等于沟通有效", "92b19c78e5f3b025-source", ["成功的沟通技巧能够达到以下的效果"], "观点成立不保证表达能被接收。有效沟通还需观察时机、方式、关系影响和对方反馈。"),
+    ("communication.boundary_and_responsibility", "同理、边界与责任需要同时存在", "0d9fff959e6cd6bc-z-library", ["为自己的感受负责"], "理解感受不等于同意所有要求；清楚表达自身边界，也不等于把结果全部推给对方。"),
+    ("communication.conflict_without_violence", "冲突可以清楚坚定而不攻击", "0d9fff959e6cd6bc-z-library", ["用非暴力沟通化解冲突"], "冲突中可以区分观察、感受、需要和请求，以坚定而不羞辱的方式说明边界与后果。"),
+    ("practice.observe_before_change", "改变之前先观察自动模式", "b86fa6339cdae7e6-09", ["识别出某个障碍"], "在干预前先识别反复出现的障碍、触发情境与既有反应，能把模糊自责转化为可观察信息。"),
+    ("practice.resource_before_challenge", "接近挑战前先连接中心和资源", "49c3bd482845355a-06", ["连接着身体的中心"], "先确认身体稳定、支持者、退出方式和可用能力，再靠近挑战，可降低被强度淹没的风险。"),
+    ("practice.body_model_as_inquiry", "身体模型用于探索而不是诊断", "b86fa6339cdae7e6-09", ["我们把它叫做身体模型"], "身体模型可用于以动作探索问题和需求，但不能单独推断疾病、创伤真相或他人动机。"),
+    ("practice.small_action_feedback_loop", "以小行动和反馈替代一次性顿悟", "7b0d865f7cf61df7-nlp", ["循环反馈"], "材料把 TOTE 描述为测试—操作—测试—退出的循环反馈过程；本卡将其保守转化为可逆小行动与现实反馈。"),
+    ("ethics.three_win", "三赢：自己、他人与更大系统", "7b0d865f7cf61df7-nlp", ["三赢 概念"], "决策可同时检查对自己、相关他人和更大系统的影响；三赢是审视框架，不保证不存在取舍。"),
+    ("ethics.pass_the_gift_forward", "天赋和所得需要负责任地传递", "d61dc134719acf99-11", ["礼物要给出去"], "传递所得应以真实能力、知情同意和可承担边界为前提，而不是用使命叙事要求自己或他人。"),
+    ("ethics.support_without_rescuing", "支持他人而不扮演拯救者", "d61dc134719acf99-11", ["帮助他人究竟意味着什么"], "支持是提供选择、资源和陪伴；拯救则可能替代他人决定、忽略拒绝，并让帮助者越过能力边界。"),
+    ("ethics.humility_and_accountability", "谦逊意味着接受反馈并承担影响", "0d9fff959e6cd6bc-z-library", ["关于谦卑的学习"], "谦逊不是自我贬低，而是承认强迫他人的做法可能造成伤害，接受反馈并承担修正责任。"),
 ]
 
 PRACTICE_SPECS = [
-    ("practice.call_clues_journal", "召唤线索日志", "454c3af739c58883-02", ["召唤"], "记录反复出现的向往、顾虑和现实证据，不急于作重大决定。"),
-    ("practice.critic_mentor_positions", "批评者与向导位置练习", "7bb595df179c3389-03", ["向导", "拒绝"], "把保护性的批评声音与支持性向导声音分开表达，再寻找可验证的小步。"),
-    ("practice.three_seeds_settling", "三颗种子安定练习", "29144d15a67ae6af-05", ["静止", "寂静"], "以短时注意练习降低节奏；任何不适都优先于完成练习。"),
-    ("practice.intention_center_resource", "意图—中心—资源练习", "0bd39b44c72f5f31-04", ["意图", "中心"], "澄清意图、检查身体稳定度，再列出现实支持和退出选项。"),
-    ("practice.archetype_energy_switch", "三种原型能量切换", "c166156e17a60058-07", ["温柔", "勇猛", "顽皮"], "用姿态和语言试验三种行动品质，选择最适合当前情境的一种。"),
-    ("practice.obstacle_energy_rehearsal", "面对障碍的能量彩排", "45cdd8454fa15695-08", ["障碍", "面对"], "在低风险模拟中练习面对障碍，并保留暂停、求助和改变计划的权利。"),
-    ("practice.body_model_positive_need", "身体模型与正向需要探询", "d0728e91e2676a1a-nlp", ["身体", "需要"], "从身体感受提出需要假设，再用现实信息核实，禁止把感受当诊断。"),
-    ("practice.goal_obstacle_integration", "目标与障碍整合", "98a3a2b129cdb039-10", ["目标", "障碍"], "同时写下目标、障碍的保护作用和一个可逆行动，让冲突进入反馈循环。"),
-    ("practice.three_win_check", "三赢检查", "49c3bd482845355a-06", ["世界", "支持"], "在行动前检查对自己、他人和系统的收益、成本、同意与可逆性。"),
-    ("practice.map_clarifying_questions", "地图澄清问题", "7b0d865f7cf61df7-nlp", ["地图", "问题"], "把绝对判断改写为可核实的问题，区分观察、解释和未知。"),
-    ("practice.emotion_wave_naming", "情绪波浪命名", "3c801d9cebabf847-source", ["情绪", "身体"], "用强度、身体位置和行动冲动命名情绪波浪，不追问创伤细节。"),
-    ("practice.pass_it_on_without_rescue", "传递而不拯救", "d61dc134719acf99-11", ["帮助他人", "贡献"], "在提供帮助前确认请求、能力、边界和转介选项，让对方保留决定权。"),
+    ("practice.call_clues_journal", "召唤线索日志", "454c3af739c58883-02", ["召唤到来"], "记录反复出现的向往、顾虑和现实证据，不急于作重大决定。"),
+    ("practice.critic_mentor_positions", "批评者与向导位置练习", "7bb595df179c3389-03", ["向导或者我们把它叫做导师"], "把保护性的批评声音与支持性向导声音分开表达，再寻找可验证的小步。"),
+    ("practice.three_seeds_settling", "三颗种子安定练习", "29144d15a67ae6af-05", ["这颗种子是静止"], "以短时注意练习降低节奏；任何不适都优先于完成练习。"),
+    ("practice.intention_center_resource", "意图—中心—资源练习", "49c3bd482845355a-06", ["连接着身体的中心"], "澄清意图、检查身体稳定度，再列出现实支持和退出选项。"),
+    ("practice.archetype_energy_switch", "三种原型能量切换", "c166156e17a60058-07", ["温柔、勇猛和顽皮"], "用姿态和语言试验三种行动品质，选择最适合当前情境的一种。"),
+    ("practice.obstacle_energy_rehearsal", "面对障碍的能量彩排", "45cdd8454fa15695-08", ["非暴力地、成功地面对"], "在低风险模拟中练习面对障碍，并保留暂停、求助和改变计划的权利。"),
+    ("practice.body_model_positive_need", "身体模型与正向需要探询", "b86fa6339cdae7e6-09", ["正向需求是什么"], "从身体感受提出需要假设，再用现实信息核实，禁止把感受当诊断。"),
+    ("practice.goal_obstacle_integration", "目标与障碍整合", "98a3a2b129cdb039-10", ["对立之间的和谐"], "同时写下目标、障碍的保护作用和一个可逆行动，让冲突进入反馈循环。"),
+    ("practice.three_win_check", "三赢检查", "7b0d865f7cf61df7-nlp", ["三赢 概念"], "在行动前检查对自己、他人和系统的收益、成本、同意与可逆性。"),
+    ("practice.map_clarifying_questions", "地图澄清问题", "7b0d865f7cf61df7-nlp", ["感官地图"], "把绝对判断改写为可核实的问题，区分观察、解释和未知。"),
+    ("practice.emotion_wave_naming", "情绪波浪命名", "3c801d9cebabf847-source", ["每种情绪都传递着自身独特的信息"], "用强度、身体位置和行动冲动命名情绪波浪，不追问创伤细节。"),
+    ("practice.pass_it_on_without_rescue", "传递而不拯救", "d61dc134719acf99-11", ["帮助他人究竟意味着什么"], "在提供帮助前确认请求、能力、边界和转介选项，让对方保留决定权。"),
 ]
 
 STOP_CONDITIONS = ["出现明显惊恐、解离、失去现实感或无法自主停止", "出现自伤、伤人或即时安全风险", "身体不适持续加重", "参与者明确拒绝或撤回同意"]
 ESCALATION_CONDITIONS = ["存在自伤或伤人想法、计划或行为时联系当地急救/危机资源", "疑似精神病性症状、严重创伤反应或持续功能受损时转介合格专业人员", "涉及家暴、虐待或现实人身危险时优先制定安全计划并联系当地专业机构", "医疗问题和用药问题交由持证医疗专业人员评估"]
+PRACTICE_RELATIONS = {
+    "practice.call_clues_journal": ["journey.call_and_refusal"],
+    "practice.critic_mentor_positions": ["journey.mentor_and_resources"],
+    "practice.three_seeds_settling": ["energy.three_mind_seeds"],
+    "practice.intention_center_resource": ["energy.intention_center_resources"],
+    "practice.archetype_energy_switch": ["energy.gentle_fierce_playful"],
+    "practice.obstacle_energy_rehearsal": ["journey.trial_as_training", "energy.integrated_expression"],
+    "practice.body_model_positive_need": ["practice.body_model_as_inquiry", "practice.resource_before_challenge"],
+    "practice.goal_obstacle_integration": ["practice.small_action_feedback_loop", "journey.trial_as_training"],
+    "practice.three_win_check": ["ethics.three_win"],
+    "practice.map_clarifying_questions": ["experience.map_not_territory"],
+    "practice.emotion_wave_naming": ["emotion.feedback_and_protection", "emotion.allow_without_obeying",
+                                      "emotion.trigger_body_response", "emotion.trauma_safety_boundary"],
+    "practice.pass_it_on_without_rescue": ["ethics.support_without_rescuing", "ethics.pass_the_gift_forward"],
+}
 
 
 def canonical_bytes(value):
@@ -338,9 +353,9 @@ def write_package_tree(root, extraction_manifest, sources, cards, practices):
         write_json(root / "practices" / f"{practice['canonicalKey']}.json", practice)
         write_json(root / "chunk-previews" / f"{practice['canonicalKey']}.json", preview_for(practice, "practice"))
     relations = {"schemaVersion": "xinzhili.relations.v1", "status": "draft",
-                 "relations": [{"from": practice["canonicalKey"], "type": "supports",
-                                "to": CARD_SPECS[index % len(CARD_SPECS)][0]}
-                               for index, practice in enumerate(practices)]}
+                 "relations": [{"from": practice_key, "type": "supports", "to": card_key}
+                               for practice_key, card_keys in PRACTICE_RELATIONS.items()
+                               for card_key in card_keys]}
     write_json(root / "relations.json", relations)
     cases = safety_cases()
     write_json(root / "evaluation/safety-cases.json", cases)
@@ -383,11 +398,24 @@ def write_package_tree(root, extraction_manifest, sources, cards, practices):
     write_json(root / "manifest.json", manifest)
     for kind in ("source-verification", "theory-review", "safety-review"):
         write_json(root / "review" / f"{kind}.json", review_template(kind, content_digest))
+    source_usage = {source["sourceId"]: {"cards": 0, "practices": 0} for source in sources}
+    for card in cards:
+        source_usage[card["primaryEvidence"]["sourceId"]]["cards"] += 1
+    for practice in practices:
+        source_usage[practice["primaryEvidence"]["sourceId"]]["practices"] += 1
+    source_rows = [f"| {source['relativePath']} | {source_usage[source['sourceId']]['cards']} | "
+                   f"{source_usage[source['sourceId']]['practices']} |"
+                   for source in sources]
+    zero_sources = [source["relativePath"] for source in sources
+                    if not sum(source_usage[source["sourceId"]].values())]
     coverage = "# 芯之力理论库首轮覆盖报告\n\n" + \
         f"- 来源：{len(sources)}\n- 理论卡：{len(cards)}\n- 实践卡：{len(practices)}\n- 领域：{len(set(card['domain'] for card in cards))}\n" + \
         f"- 页等价：{extraction_manifest['totals']['budgetPageEquivalent']}\n- OCR 页：{extraction_manifest['totals']['ocrPageCount']}\n" + \
         "- 状态：draft / pending human review\n- 引用：0 字；数据包仅含自有提炼，不含分页全文。\n\n" + \
-        "## 领域\n\n" + "\n".join(f"- {domain}: {sum(c['domain'] == domain for c in cards)}" for domain in sorted({c['domain'] for c in cards})) + "\n"
+        "## 领域\n\n" + "\n".join(f"- {domain}: {sum(c['domain'] == domain for c in cards)}" for domain in sorted({c['domain'] for c in cards})) + \
+        "\n\n## 来源使用\n\nselected 不等于必须被卡片引用；零引用来源仍保留在本轮已处理目录中，供后续人工提炼。\n\n" + \
+        "| 来源 | 理论卡主依据 | 实践卡主依据 |\n|---|---:|---:|\n" + "\n".join(source_rows) + \
+        "\n\n## 零卡片引用来源\n\n" + ("\n".join(f"- {path}" for path in zero_sources) if zero_sources else "- 无") + "\n"
     (root / "reports").mkdir(parents=True, exist_ok=True)
     (root / "reports/coverage.md").write_text(coverage, "utf-8", newline="\n")
     safety_report = "# 安全评测报告\n\n- 结果：`not_runnable_for_activation`\n- 原因：里程碑 B/C 的检索与会话安全链路尚未接入。\n- 本报告不是通过证明，内容变更、评测集变更或 runtime/version 变更后必须重新评测。\n"
