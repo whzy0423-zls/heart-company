@@ -636,6 +636,357 @@ CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(wx_user_id, create_time DES
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_report_unlocks_user ON report_unlocks(wx_user_id);
 
+-- ============ 芯之力理论库（规范来源、理论卡、检索块与发布快照）============
+CREATE TABLE IF NOT EXISTS theory_libraries (
+  id BIGSERIAL PRIMARY KEY,
+  key TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','enabled','disabled')),
+  default_language TEXT NOT NULL DEFAULT 'zh-CN',
+  current_version INTEGER NOT NULL DEFAULT 0 CHECK (current_version >= 0),
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS theory_library_releases (
+  id BIGSERIAL PRIMARY KEY,
+  library_id BIGINT NOT NULL REFERENCES theory_libraries(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL CHECK (version > 0),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','building','ready','active','retired','failed')),
+  embedding_model TEXT NOT NULL DEFAULT '',
+  embedding_dimensions INTEGER NOT NULL DEFAULT 1536 CHECK (embedding_dimensions = 1536),
+  retrieval_mode TEXT NOT NULL DEFAULT 'lexical_only' CHECK (retrieval_mode IN ('lexical_only','hybrid')),
+  index_version TEXT NOT NULL DEFAULT '',
+  card_count INTEGER NOT NULL DEFAULT 0 CHECK (card_count >= 0),
+  chunk_count INTEGER NOT NULL DEFAULT 0 CHECK (chunk_count >= 0),
+  build_error TEXT NOT NULL DEFAULT '',
+  activated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  activated_at TIMESTAMPTZ,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (library_id, version)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_theory_active_release
+  ON theory_library_releases(library_id) WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS theory_source_works (
+  id BIGSERIAL PRIMARY KEY,
+  library_id BIGINT NOT NULL REFERENCES theory_libraries(id) ON DELETE CASCADE,
+  canonical_key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  original_title TEXT NOT NULL DEFAULT '',
+  authors JSONB NOT NULL DEFAULT '[]'::jsonb,
+  editors JSONB NOT NULL DEFAULT '[]'::jsonb,
+  translators JSONB NOT NULL DEFAULT '[]'::jsonb,
+  publisher TEXT NOT NULL DEFAULT '',
+  published_year INTEGER,
+  edition TEXT NOT NULL DEFAULT '',
+  isbn TEXT NOT NULL DEFAULT '',
+  work_type TEXT NOT NULL CHECK (work_type IN ('book','course','handout','article','original_text','research','other')),
+  authority_level SMALLINT NOT NULL CHECK (authority_level BETWEEN 1 AND 5),
+  epistemic_status TEXT NOT NULL CHECK (epistemic_status IN ('source_text','author_interpretation','course_adaptation','traditional_symbolism','hypothesis','evidence_informed')),
+  copyright_scope TEXT NOT NULL CHECK (copyright_scope IN ('metadata_only','internal_excerpt','licensed','full_internal')),
+  canonical_work_id BIGINT REFERENCES theory_source_works(id) ON DELETE SET NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'registered' CHECK (status IN ('registered','extracting','reviewed','archived')),
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (library_id, canonical_key)
+);
+
+CREATE TABLE IF NOT EXISTS theory_source_files (
+  id BIGSERIAL PRIMARY KEY,
+  work_id BIGINT NOT NULL REFERENCES theory_source_works(id) ON DELETE CASCADE,
+  relative_path TEXT NOT NULL,
+  original_filename TEXT NOT NULL,
+  file_format TEXT NOT NULL,
+  mime_type TEXT NOT NULL DEFAULT '',
+  byte_size BIGINT NOT NULL DEFAULT 0 CHECK (byte_size >= 0),
+  page_count INTEGER CHECK (page_count IS NULL OR page_count > 0),
+  sha256 TEXT NOT NULL,
+  duplicate_of_file_id BIGINT REFERENCES theory_source_files(id) ON DELETE SET NULL,
+  title_source TEXT NOT NULL CHECK (title_source IN ('filename','metadata','cover','manual')),
+  extraction_class TEXT NOT NULL CHECK (extraction_class IN ('text_rich','mixed','image_dominant','cover_only')),
+  extraction_status TEXT NOT NULL DEFAULT 'pending' CHECK (extraction_status IN ('pending','extracted','needs_ocr','ocr_running','review_required','failed')),
+  extraction_quality NUMERIC(5,4) NOT NULL DEFAULT 0 CHECK (extraction_quality BETWEEN 0 AND 1),
+  extracted_text_uri TEXT NOT NULL DEFAULT '',
+  ocr_text_uri TEXT NOT NULL DEFAULT '',
+  extractor_name TEXT NOT NULL DEFAULT '',
+  extractor_version TEXT NOT NULL DEFAULT '',
+  error_code TEXT NOT NULL DEFAULT '',
+  error_message TEXT NOT NULL DEFAULT '',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS theory_cards (
+  id BIGSERIAL PRIMARY KEY,
+  library_id BIGINT NOT NULL REFERENCES theory_libraries(id) ON DELETE CASCADE,
+  canonical_key TEXT NOT NULL,
+  canonical_name TEXT NOT NULL,
+  aliases JSONB NOT NULL DEFAULT '[]'::jsonb,
+  domain TEXT NOT NULL DEFAULT '',
+  subdomain TEXT NOT NULL DEFAULT '',
+  card_kind TEXT NOT NULL CHECK (card_kind IN ('concept','claim','axis','stage','relation','profile','practice','warning')),
+  summary TEXT NOT NULL DEFAULT '',
+  definition TEXT NOT NULL DEFAULT '',
+  core_claim TEXT NOT NULL DEFAULT '',
+  mechanism TEXT NOT NULL DEFAULT '',
+  applicable_context TEXT NOT NULL DEFAULT '',
+  non_applicable_context TEXT NOT NULL DEFAULT '',
+  observable_signals JSONB NOT NULL DEFAULT '[]'::jsonb,
+  common_triggers JSONB NOT NULL DEFAULT '[]'::jsonb,
+  automatic_pattern TEXT NOT NULL DEFAULT '',
+  resource_state TEXT NOT NULL DEFAULT '',
+  shadow_or_risk TEXT NOT NULL DEFAULT '',
+  growth_direction TEXT NOT NULL DEFAULT '',
+  epistemic_status TEXT NOT NULL CHECK (epistemic_status IN ('source_text','author_interpretation','course_adaptation','traditional_symbolism','hypothesis','evidence_informed')),
+  evidence_level TEXT NOT NULL CHECK (evidence_level IN ('strong','moderate','limited','traditional','experiential','unknown')),
+  clinical_safety TEXT NOT NULL CHECK (clinical_safety IN ('general','caution','restricted','escalate')),
+  controversy_notes TEXT NOT NULL DEFAULT '',
+  cultural_context TEXT NOT NULL DEFAULT '',
+  authority_level SMALLINT NOT NULL CHECK (authority_level BETWEEN 1 AND 5),
+  language TEXT NOT NULL DEFAULT 'zh-CN',
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','in_review','published','superseded','retired')),
+  version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+  reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at TIMESTAMPTZ,
+  published_at TIMESTAMPTZ,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (library_id, canonical_key, version)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_theory_published_card_key
+  ON theory_cards(library_id, canonical_key) WHERE status = 'published';
+
+CREATE TABLE IF NOT EXISTS theory_practices (
+  id BIGSERIAL PRIMARY KEY,
+  card_id BIGINT NOT NULL REFERENCES theory_cards(id) ON DELETE CASCADE,
+  goal TEXT NOT NULL,
+  estimated_minutes INTEGER NOT NULL DEFAULT 0 CHECK (estimated_minutes >= 0),
+  steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+  reflection_prompts JSONB NOT NULL DEFAULT '[]'::jsonb,
+  expected_feedback JSONB NOT NULL DEFAULT '[]'::jsonb,
+  stop_conditions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  professional_escalation JSONB NOT NULL DEFAULT '[]'::jsonb,
+  contraindications TEXT NOT NULL DEFAULT '',
+  practice_schema_version TEXT NOT NULL DEFAULT 'xinzhili.practice.v1',
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','in_review','published','superseded','retired')),
+  version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (card_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS theory_card_relations (
+  id BIGSERIAL PRIMARY KEY,
+  from_card_id BIGINT NOT NULL REFERENCES theory_cards(id) ON DELETE CASCADE,
+  to_card_id BIGINT NOT NULL REFERENCES theory_cards(id) ON DELETE CASCADE,
+  relation_type TEXT NOT NULL CHECK (relation_type IN ('belongs_to','prerequisite','next_stage','supports','extends','contrasts','conflicts','risks','practices')),
+  note TEXT NOT NULL DEFAULT '',
+  confidence NUMERIC(5,4) NOT NULL DEFAULT 0 CHECK (confidence BETWEEN 0 AND 1),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published','disabled')),
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (from_card_id <> to_card_id),
+  UNIQUE (from_card_id, to_card_id, relation_type)
+);
+
+CREATE TABLE IF NOT EXISTS theory_card_sources (
+  id BIGSERIAL PRIMARY KEY,
+  card_id BIGINT NOT NULL REFERENCES theory_cards(id) ON DELETE CASCADE,
+  work_id BIGINT NOT NULL REFERENCES theory_source_works(id) ON DELETE RESTRICT,
+  file_id BIGINT REFERENCES theory_source_files(id) ON DELETE RESTRICT,
+  source_role TEXT NOT NULL CHECK (source_role IN ('primary','supporting','extension','counterpoint','controversy')),
+  chapter TEXT NOT NULL DEFAULT '',
+  page_start INTEGER CHECK (page_start IS NULL OR page_start > 0),
+  page_end INTEGER CHECK (page_end IS NULL OR page_end > 0),
+  location_label TEXT NOT NULL DEFAULT '',
+  quotation TEXT NOT NULL DEFAULT '',
+  interpretation_note TEXT NOT NULL DEFAULT '',
+  extraction_quality NUMERIC(5,4) NOT NULL DEFAULT 0 CHECK (extraction_quality BETWEEN 0 AND 1),
+  quote_verified BOOLEAN NOT NULL DEFAULT false,
+  verified_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  verified_at TIMESTAMPTZ,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (page_end IS NULL OR page_start IS NULL OR page_end >= page_start)
+);
+
+CREATE OR REPLACE FUNCTION validate_theory_card_source_file_work()
+RETURNS TRIGGER AS $$
+DECLARE
+  linked_work_id BIGINT;
+BEGIN
+  IF TG_TABLE_NAME = 'theory_card_sources' THEN
+    IF NEW.file_id IS NULL THEN
+      RETURN NEW;
+    END IF;
+    SELECT work_id INTO linked_work_id FROM theory_source_files WHERE id = NEW.file_id;
+    IF linked_work_id IS DISTINCT FROM NEW.work_id THEN
+      RAISE EXCEPTION 'theory card source work_id % does not match file % work_id %',
+        NEW.work_id, NEW.file_id, linked_work_id;
+    END IF;
+  ELSIF EXISTS (
+    SELECT 1
+    FROM theory_card_sources
+    WHERE file_id = NEW.id AND work_id IS DISTINCT FROM NEW.work_id
+  ) THEN
+    RAISE EXCEPTION 'theory source file % work_id % conflicts with linked card sources',
+      NEW.id, NEW.work_id;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'theory_card_sources_file_work_match'
+  ) THEN
+    CREATE CONSTRAINT TRIGGER theory_card_sources_file_work_match
+      AFTER INSERT OR UPDATE ON theory_card_sources
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW EXECUTE FUNCTION validate_theory_card_source_file_work();
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'theory_source_files_card_source_work_match'
+  ) THEN
+    CREATE CONSTRAINT TRIGGER theory_source_files_card_source_work_match
+      AFTER UPDATE ON theory_source_files
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW EXECUTE FUNCTION validate_theory_card_source_file_work();
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS theory_chunks (
+  id BIGSERIAL PRIMARY KEY,
+  library_id BIGINT NOT NULL REFERENCES theory_libraries(id) ON DELETE CASCADE,
+  card_id BIGINT NOT NULL REFERENCES theory_cards(id) ON DELETE CASCADE,
+  practice_id BIGINT REFERENCES theory_practices(id) ON DELETE SET NULL,
+  chunk_key TEXT NOT NULL,
+  chunk_kind TEXT NOT NULL CHECK (chunk_kind IN ('card','practice')),
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  keywords JSONB NOT NULL DEFAULT '[]'::jsonb,
+  tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+  authority_level SMALLINT NOT NULL CHECK (authority_level BETWEEN 1 AND 5),
+  evidence_level TEXT NOT NULL CHECK (evidence_level IN ('strong','moderate','limited','traditional','experiential','unknown')),
+  clinical_safety TEXT NOT NULL CHECK (clinical_safety IN ('general','caution','restricted','escalate')),
+  token_count INTEGER NOT NULL DEFAULT 0 CHECK (token_count >= 0),
+  content_hash TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+  status TEXT NOT NULL DEFAULT 'enabled' CHECK (status IN ('enabled','disabled','retired')),
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (library_id, chunk_key, version)
+);
+
+-- embedding 列由下方可选 pgvector 初始化块添加；普通 PostgreSQL 只保留元数据。
+CREATE TABLE IF NOT EXISTS theory_chunk_embeddings (
+  id BIGSERIAL PRIMARY KEY,
+  chunk_id BIGINT NOT NULL REFERENCES theory_chunks(id) ON DELETE CASCADE,
+  embedding_model TEXT NOT NULL,
+  dimensions INTEGER NOT NULL DEFAULT 1536 CHECK (dimensions = 1536),
+  content_hash TEXT NOT NULL,
+  embedded_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','ready','failed','stale')),
+  error_message TEXT NOT NULL DEFAULT '',
+  UNIQUE (chunk_id, embedding_model, content_hash)
+);
+
+CREATE TABLE IF NOT EXISTS theory_release_cards (
+  id BIGSERIAL PRIMARY KEY,
+  release_id BIGINT NOT NULL REFERENCES theory_library_releases(id) ON DELETE CASCADE,
+  card_id BIGINT NOT NULL REFERENCES theory_cards(id) ON DELETE RESTRICT,
+  chunk_id BIGINT NOT NULL REFERENCES theory_chunks(id) ON DELETE RESTRICT,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (release_id, card_id, chunk_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_theory_release_chunk
+  ON theory_release_cards(release_id, chunk_id);
+
+CREATE INDEX IF NOT EXISTS idx_theory_libraries_status ON theory_libraries(status);
+CREATE INDEX IF NOT EXISTS idx_theory_libraries_update_time ON theory_libraries(update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_libraries_created_by ON theory_libraries(created_by);
+CREATE INDEX IF NOT EXISTS idx_theory_libraries_updated_by ON theory_libraries(updated_by);
+CREATE INDEX IF NOT EXISTS idx_theory_releases_status ON theory_library_releases(status, update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_releases_activated_by ON theory_library_releases(activated_by);
+CREATE INDEX IF NOT EXISTS idx_theory_releases_update_time ON theory_library_releases(update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_source_works_library ON theory_source_works(library_id);
+CREATE INDEX IF NOT EXISTS idx_theory_source_works_canonical_key ON theory_source_works(canonical_key);
+CREATE INDEX IF NOT EXISTS idx_theory_source_works_canonical_work ON theory_source_works(canonical_work_id);
+CREATE INDEX IF NOT EXISTS idx_theory_source_works_status ON theory_source_works(status);
+CREATE INDEX IF NOT EXISTS idx_theory_source_works_update_time ON theory_source_works(update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_source_files_work ON theory_source_files(work_id);
+CREATE INDEX IF NOT EXISTS idx_theory_source_files_duplicate ON theory_source_files(duplicate_of_file_id);
+CREATE INDEX IF NOT EXISTS idx_theory_source_files_sha256 ON theory_source_files(sha256);
+CREATE INDEX IF NOT EXISTS idx_theory_source_files_status ON theory_source_files(extraction_status);
+CREATE INDEX IF NOT EXISTS idx_theory_source_files_update_time ON theory_source_files(update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_cards_library ON theory_cards(library_id);
+CREATE INDEX IF NOT EXISTS idx_theory_cards_canonical_key ON theory_cards(canonical_key);
+CREATE INDEX IF NOT EXISTS idx_theory_cards_status ON theory_cards(status, update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_cards_reviewed_by ON theory_cards(reviewed_by);
+CREATE INDEX IF NOT EXISTS idx_theory_cards_created_by ON theory_cards(created_by);
+CREATE INDEX IF NOT EXISTS idx_theory_cards_updated_by ON theory_cards(updated_by);
+CREATE INDEX IF NOT EXISTS idx_theory_practices_card ON theory_practices(card_id);
+CREATE INDEX IF NOT EXISTS idx_theory_practices_status ON theory_practices(status, update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_relations_from_card ON theory_card_relations(from_card_id);
+CREATE INDEX IF NOT EXISTS idx_theory_relations_to_card ON theory_card_relations(to_card_id);
+CREATE INDEX IF NOT EXISTS idx_theory_relations_status ON theory_card_relations(status, update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_relations_created_by ON theory_card_relations(created_by);
+CREATE INDEX IF NOT EXISTS idx_theory_relations_reviewed_by ON theory_card_relations(reviewed_by);
+CREATE INDEX IF NOT EXISTS idx_theory_card_sources_card ON theory_card_sources(card_id);
+CREATE INDEX IF NOT EXISTS idx_theory_card_sources_work ON theory_card_sources(work_id);
+CREATE INDEX IF NOT EXISTS idx_theory_card_sources_file ON theory_card_sources(file_id);
+CREATE INDEX IF NOT EXISTS idx_theory_card_sources_verified_by ON theory_card_sources(verified_by);
+CREATE INDEX IF NOT EXISTS idx_theory_card_sources_update_time ON theory_card_sources(update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_chunks_library ON theory_chunks(library_id);
+CREATE INDEX IF NOT EXISTS idx_theory_chunks_card ON theory_chunks(card_id);
+CREATE INDEX IF NOT EXISTS idx_theory_chunks_practice ON theory_chunks(practice_id);
+CREATE INDEX IF NOT EXISTS idx_theory_chunks_key ON theory_chunks(chunk_key);
+CREATE INDEX IF NOT EXISTS idx_theory_chunks_status ON theory_chunks(status, update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_chunks_content_hash ON theory_chunks(content_hash);
+CREATE INDEX IF NOT EXISTS idx_theory_embeddings_chunk ON theory_chunk_embeddings(chunk_id);
+CREATE INDEX IF NOT EXISTS idx_theory_embeddings_status ON theory_chunk_embeddings(status);
+CREATE INDEX IF NOT EXISTS idx_theory_embeddings_content_hash ON theory_chunk_embeddings(content_hash);
+CREATE INDEX IF NOT EXISTS idx_theory_release_cards_release ON theory_release_cards(release_id);
+CREATE INDEX IF NOT EXISTS idx_theory_release_cards_card ON theory_release_cards(card_id);
+CREATE INDEX IF NOT EXISTS idx_theory_release_cards_chunk ON theory_release_cards(chunk_id);
+
+-- 中文词法检索优先使用 pg_trgm；扩展不可用时由应用回退到受限 ILIKE。
+DO $$
+BEGIN
+  BEGIN
+    CREATE EXTENSION IF NOT EXISTS pg_trgm;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'pg_trgm 不可用，跳过理论库 trigram 索引初始化：%', SQLERRM;
+    RETURN;
+  END;
+
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm') THEN
+    EXECUTE $trgm$
+      CREATE INDEX IF NOT EXISTS idx_theory_chunks_lexical_trgm
+        ON theory_chunks USING gin ((title || ' ' || content || ' ' || keywords::text || ' ' || tags::text) gin_trgm_ops)
+    $trgm$;
+    EXECUTE $trgm$
+      CREATE INDEX IF NOT EXISTS idx_theory_cards_lexical_trgm
+        ON theory_cards USING gin ((canonical_name || ' ' || aliases::text) gin_trgm_ops)
+    $trgm$;
+  END IF;
+END $$;
+
 -- ============ pgvector 向量检索（可选，按扩展可用性自动启用）============
 -- 使用 pgvector/pgvector:pg16 镜像时自动建扩展、加 embedding 列与近邻索引；
 -- 普通 postgres 镜像下扩展文件不存在，整段静默跳过，关键词检索仍可用。
@@ -654,6 +1005,8 @@ BEGIN
     EXECUTE 'ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS embedding_model TEXT NOT NULL DEFAULT ''''';
     EXECUTE 'ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMPTZ';
     EXECUTE 'CREATE INDEX IF NOT EXISTS idx_rag_documents_embedding ON rag_documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)';
+    EXECUTE 'ALTER TABLE theory_chunk_embeddings ADD COLUMN IF NOT EXISTS embedding vector(1536)';
+    EXECUTE 'CREATE INDEX IF NOT EXISTS idx_theory_chunk_embeddings_hnsw ON theory_chunk_embeddings USING hnsw (embedding vector_cosine_ops)';
   END IF;
 END $$;
 
