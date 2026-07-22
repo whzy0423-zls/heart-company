@@ -79,34 +79,7 @@ SELECT id, 'inner_observer', '内在观察者', '["自我观察"]'::jsonb, 'self
   'course_adaptation', 'experiential', 'general', '', '中文课程语境下的自有提炼。',
   5, 'zh-CN', 'published', 1, now(), now()
 FROM library
-ON CONFLICT (library_id, canonical_key, version) DO UPDATE SET
-  canonical_name = EXCLUDED.canonical_name,
-  aliases = EXCLUDED.aliases,
-  domain = EXCLUDED.domain,
-  subdomain = EXCLUDED.subdomain,
-  card_kind = EXCLUDED.card_kind,
-  summary = EXCLUDED.summary,
-  definition = EXCLUDED.definition,
-  core_claim = EXCLUDED.core_claim,
-  mechanism = EXCLUDED.mechanism,
-  applicable_context = EXCLUDED.applicable_context,
-  non_applicable_context = EXCLUDED.non_applicable_context,
-  observable_signals = EXCLUDED.observable_signals,
-  common_triggers = EXCLUDED.common_triggers,
-  automatic_pattern = EXCLUDED.automatic_pattern,
-  resource_state = EXCLUDED.resource_state,
-  shadow_or_risk = EXCLUDED.shadow_or_risk,
-  growth_direction = EXCLUDED.growth_direction,
-  epistemic_status = EXCLUDED.epistemic_status,
-  evidence_level = EXCLUDED.evidence_level,
-  clinical_safety = EXCLUDED.clinical_safety,
-  cultural_context = EXCLUDED.cultural_context,
-  authority_level = EXCLUDED.authority_level,
-  language = EXCLUDED.language,
-  status = EXCLUDED.status,
-  reviewed_at = COALESCE(theory_cards.reviewed_at, EXCLUDED.reviewed_at),
-  published_at = COALESCE(theory_cards.published_at, EXCLUDED.published_at),
-  update_time = now();
+ON CONFLICT (library_id, canonical_key, version) DO NOTHING;
 
 WITH fixture AS (
   SELECT card.id AS card_id, work.id AS work_id, file.id AS file_id
@@ -151,28 +124,15 @@ SELECT library_id, card_id, 'inner_observer.card', 'card', '内在观察者',
   5, 'experiential', 'general', 32,
   'a6ac85e507453ebe1109f78a1fd12e7af284687843a8fa8956a5539f15f0c3d2', 1, 'enabled'
 FROM fixture
-ON CONFLICT (library_id, chunk_key, version) DO UPDATE SET
-  card_id = EXCLUDED.card_id,
-  chunk_kind = EXCLUDED.chunk_kind,
-  title = EXCLUDED.title,
-  content = EXCLUDED.content,
-  keywords = EXCLUDED.keywords,
-  tags = EXCLUDED.tags,
-  authority_level = EXCLUDED.authority_level,
-  evidence_level = EXCLUDED.evidence_level,
-  clinical_safety = EXCLUDED.clinical_safety,
-  token_count = EXCLUDED.token_count,
-  content_hash = EXCLUDED.content_hash,
-  status = EXCLUDED.status,
-  update_time = now();
+ON CONFLICT (library_id, chunk_key, version) DO NOTHING;
 
 WITH library AS (
   SELECT library.id,
     NOT EXISTS (
       SELECT 1
       FROM theory_library_releases active_release
-      WHERE active_release.library_id = library.id AND active_release.status = 'active'
-    ) AS should_activate_v1
+      WHERE active_release.library_id = library.id
+    ) AND library.current_version <= 1 AS should_activate_v1
   FROM theory_libraries library
   WHERE library.key = 'xinzhili'
 )
@@ -185,15 +145,7 @@ SELECT id, 1, CASE WHEN should_activate_v1 THEN 'active' ELSE 'retired' END,
   CASE WHEN should_activate_v1 THEN now() ELSE NULL END
 FROM library
 ON CONFLICT (library_id, version) DO UPDATE SET
-  status = CASE
-    WHEN NOT EXISTS (
-      SELECT 1
-      FROM theory_library_releases active_release
-      WHERE active_release.library_id = EXCLUDED.library_id
-        AND active_release.status = 'active'
-    ) THEN 'active'
-    ELSE theory_library_releases.status
-  END,
+  status = theory_library_releases.status,
   embedding_model = EXCLUDED.embedding_model,
   embedding_dimensions = EXCLUDED.embedding_dimensions,
   retrieval_mode = EXCLUDED.retrieval_mode,

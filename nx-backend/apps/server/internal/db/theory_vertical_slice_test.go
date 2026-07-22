@@ -194,6 +194,61 @@ func TestTheoryVerticalSliceSeedExecutesTwice(t *testing.T) {
 		t.Fatalf("active vertical slice chain count = %d, want 1", chainCount)
 	}
 
+	t.Run("seed preserves published card and enabled chunk snapshots", func(t *testing.T) {
+		if _, err := conn.ExecContext(ctx, `
+			UPDATE theory_cards
+			SET definition='card-sentinel-definition'
+			WHERE canonical_key='inner_observer' AND version=1 AND library_id=(SELECT id FROM theory_libraries WHERE key='xinzhili');
+			UPDATE theory_chunks
+			SET content='chunk-sentinel-content', content_hash=repeat('f', 64)
+			WHERE chunk_key='inner_observer.card' AND version=1 AND library_id=(SELECT id FROM theory_libraries WHERE key='xinzhili')`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.ExecContext(ctx, string(seed)); err != nil {
+			t.Fatalf("seed execution after publishing sentinels: %v", err)
+		}
+
+		var definition, content, contentHash string
+		if err := conn.QueryRowContext(ctx, `
+			SELECT card.definition, chunk.content, chunk.content_hash
+			FROM theory_libraries library
+			JOIN theory_cards card ON card.library_id=library.id AND card.canonical_key='inner_observer' AND card.version=1
+			JOIN theory_chunks chunk ON chunk.library_id=library.id AND chunk.chunk_key='inner_observer.card' AND chunk.version=1
+			WHERE library.key='xinzhili'`).Scan(&definition, &content, &contentHash); err != nil {
+			t.Fatal(err)
+		}
+		if definition != "card-sentinel-definition" || content != "chunk-sentinel-content" || contentHash != strings.Repeat("f", 64) {
+			t.Fatalf("seed overwrote published snapshot: definition=%q content=%q hash=%q", definition, content, contentHash)
+		}
+	})
+
+	t.Run("seed does not activate v1 after a higher current version", func(t *testing.T) {
+		if _, err := conn.ExecContext(ctx, `
+			UPDATE theory_library_releases release
+			SET status='retired', update_time=now()
+			FROM theory_libraries library
+			WHERE release.library_id=library.id AND library.key='xinzhili' AND release.version=1;
+			UPDATE theory_libraries SET current_version=2 WHERE key='xinzhili'`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.ExecContext(ctx, string(seed)); err != nil {
+			t.Fatalf("seed execution after retiring v1 at current version 2: %v", err)
+		}
+
+		var currentVersion, activeCount int
+		if err := conn.QueryRowContext(ctx, `
+			SELECT library.current_version,
+			  count(release.id) FILTER (WHERE release.status='active')
+			FROM theory_libraries library
+			LEFT JOIN theory_library_releases release ON release.library_id=library.id
+			WHERE library.key='xinzhili' GROUP BY library.id`).Scan(&currentVersion, &activeCount); err != nil {
+			t.Fatal(err)
+		}
+		if currentVersion != 2 || activeCount != 0 {
+			t.Fatalf("seed activated release after current version advanced: current=%d active=%d, want 2/0", currentVersion, activeCount)
+		}
+	})
+
 	if _, err := conn.ExecContext(ctx, `
 		UPDATE theory_library_releases release
 		SET status='retired', update_time=now()
