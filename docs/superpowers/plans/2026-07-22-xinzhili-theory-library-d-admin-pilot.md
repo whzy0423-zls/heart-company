@@ -67,7 +67,7 @@ git commit -m "feat(admin): manage theory source catalog"
 
 - [ ] **Step 1: Write failing workflow tests**
 
-Cover store-backed list/detail queries plus draft edit, send to review, return, publish validation, supersede, retire, build release, activation conflict and rollback. Handler tests must prove all SQL/workflow ownership stays in `theorystore`.
+Cover store-backed list/detail queries plus atomic draft-aggregate editing of card fields, sources/page evidence, relations and practices; test add/update/remove child rows, stale child IDs and rollback. Also cover send to review, return, publish validation, supersede, retire, build release, activation conflict and rollback. Handler tests must prove all SQL/workflow ownership stays in `theorystore`.
 
 - [ ] **Step 2: Verify failure**
 
@@ -75,7 +75,7 @@ Run: `cd nx-backend/apps/server && go test ./internal/theorystore ./internal/ser
 
 - [ ] **Step 3: Implement APIs**
 
-Use separate endpoints for state changes; never accept an arbitrary status field in general update. Return validation errors with field names for source, evidence and safety omissions.
+Use `PUT /api/theory/cards/{id}` with a typed aggregate payload containing `card`, `sources`, `relations` and `practices`; save it through one `theorystore.SaveDraftAggregate` transaction. Use separate endpoints for state changes; never accept an arbitrary status field in general update. Return validation errors with field names for source, evidence and safety omissions.
 
 - [ ] **Step 4: Run and commit**
 
@@ -255,16 +255,19 @@ Run: `cd nx-backend/apps/server && go test ./internal/theoryingest ./internal/db
 
 - [ ] **Step 3: Implement schema and validation**
 
-The package contains `manifest.json` plus `pages/000001.txt` files. Add `theory_ingest_batches` and `theory_ingest_imports` with configured caps and actual cumulative counters. The importer must bind every package SHA/path/method/page range to a registered batch manifest, lock the batch row with `SELECT ... FOR UPDATE`, atomically reserve actual file/page/OCR counts, and reject any cap violation. It never invokes OCR.
+The package contains `manifest.json` plus `pages/000001.txt` files. Add `theory_ingest_batches`, `theory_ingest_batch_files`, `theory_ingest_imports` and `theory_generated_drafts` with configured caps, allowed package rows, actual cumulative counters and draft idempotency keys. The importer must bind every package SHA/path/method/page range to a registered batch manifest, lock the batch row with `SELECT ... FOR UPDATE`, atomically reserve actual file/page/OCR counts, and reject any cap violation. It never invokes OCR.
 
 - [ ] **Step 4: Implement dry-run and import CLI**
 
 Commands:
 
 ```bash
+go run ./cmd/theory-ingest register-batch --manifest nx-backend/scripts/theory/xinzhili-pilot-files.json --batch xinzhili-pilot-v1
 go run ./cmd/theory-ingest validate --package /path/to/package
 go run ./cmd/theory-ingest import --batch xinzhili-pilot-v1 --package /path/to/package --library xinzhili --dry-run
 ```
+
+`register-batch` atomically creates/updates the batch and allowed package rows, rejects a manifest change after any successful import unless `--new-version` is used, and is idempotent for the same manifest hash.
 
 - [ ] **Step 5: Run and commit**
 
@@ -286,7 +289,7 @@ git commit -m "feat(theory): import validated extraction packages"
 
 - [ ] **Step 1: Write failing draft contract tests**
 
-Given validated pages, assert one atomic draft contains canonical key/name, domain, kind, definition, applicability, epistemic/evidence/safety fields and source links with work/file/page/extraction quality. Reject hallucinated file/page references and any model output requesting `published` status.
+Given validated pages, assert one atomic draft contains canonical key/name, domain, kind, definition, applicability, epistemic/evidence/safety fields and source links with work/file/page/extraction quality. Reject hallucinated file/page references and any model output requesting `published` status. Re-running the same batch/work/generator-version/source-content-hash must update/reuse the same generated draft set without increasing card or evidence counts; changed source hash or generator version creates an explicit new draft generation.
 
 - [ ] **Step 2: Verify failure**
 
@@ -294,7 +297,7 @@ Run: `cd nx-backend/apps/server && go test ./internal/theoryingest -run 'Draft|S
 
 - [ ] **Step 3: Implement bounded draft generation/import**
 
-Define a `DraftGenerator` interface so tests use a fake and production uses the configured admin model. Limit input pages/tokens per call. Normalize output through the same card validators and always write `status='draft'`; automatically insert `theory_card_sources` only for page references verified against the imported package ledger.
+Define a `DraftGenerator` interface so tests use a fake and production uses the configured admin model. Limit input pages/tokens per call. Normalize output through the same card validators and always write `status='draft'`; automatically insert `theory_card_sources` only for page references verified against the imported package ledger. Persist `(batch_id, work_id, generator_version, source_content_hash)` in `theory_generated_drafts` and upsert the complete draft set transactionally so interrupted/repeated runs are resumable and idempotent.
 
 - [ ] **Step 4: Add CLI commands**
 
@@ -353,7 +356,7 @@ Expected: FAIL before `acceptance.go` and the CLI subcommand are implemented.
 
 - [ ] **Step 5: Import only validated packages**
 
-Implement `run-pilot.sh` as a manifest-driven resumable batch: validate all packages, dry-run all, import all idempotently, generate drafts work-by-work, and print ledger totals/warnings. Require `PACKAGES_ROOT`, `TEST_DATABASE_URL` or production DB configuration, and stop on the first invalid package without consuming counters.
+Implement `run-pilot.sh` as a manifest-driven resumable batch: call `register-batch` first, validate all packages, dry-run all, import all idempotently, generate drafts work-by-work idempotently, and print ledger totals/warnings. Require `PACKAGES_ROOT`, `TEST_DATABASE_URL` or production DB configuration, and stop on the first invalid package without consuming counters. Add a shell/integration test that interrupts after one work, reruns, and proves imports/draft counts/evidence weights are unchanged except for the remaining work.
 
 Run: `PACKAGES_ROOT=/secure/xinzhili-packages bash nx-backend/scripts/theory/run-pilot.sh`
 
