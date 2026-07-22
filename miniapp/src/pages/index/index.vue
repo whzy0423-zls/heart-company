@@ -399,16 +399,24 @@ function hideWheel() {
   transform: scale(.97);
 }
 .energy-card--test {
-  background: linear-gradient(140deg, #2468e8, #16bde2);
+  background:
+    linear-gradient(180deg, rgba(8, 15, 38, 0) 18%, rgba(8, 15, 38, .72) 100%),
+    linear-gradient(140deg, #2059d4, #087b9b);
 }
 .energy-card--relation {
-  background: linear-gradient(140deg, #7047df, #e94ea5);
+  background:
+    linear-gradient(180deg, rgba(8, 15, 38, 0) 18%, rgba(8, 15, 38, .72) 100%),
+    linear-gradient(140deg, #6338c7, #aa2d72);
 }
 .energy-card--learn {
-  background: linear-gradient(140deg, #0c9f9b, #32bd70);
+  background:
+    linear-gradient(180deg, rgba(8, 15, 38, 0) 18%, rgba(8, 15, 38, .72) 100%),
+    linear-gradient(140deg, #087b78, #187d45);
 }
 .energy-card--profile {
-  background: linear-gradient(140deg, #f39a2e, #ed5f63);
+  background:
+    linear-gradient(180deg, rgba(8, 15, 38, 0) 18%, rgba(8, 15, 38, .72) 100%),
+    linear-gradient(140deg, #c46813, #c93d46);
 }
 .energy-card__title {
   margin-top: auto;
@@ -417,7 +425,7 @@ function hideWheel() {
   font-weight: 900;
 }
 .energy-card__desc {
-  color: rgba(255, 255, 255, .8);
+  color: rgba(255, 255, 255, .94);
   font-size: 22rpx;
   line-height: 1.45;
 }
@@ -428,9 +436,6 @@ function hideWheel() {
   border-radius: 20rpx;
   background: rgba(255, 255, 255, .18);
   box-shadow: inset 0 1rpx 0 rgba(255, 255, 255, .22);
-}
-.energy-icon--test {
-  background: rgba(255, 255, 255, .18);
 }
 .energy-icon__ring {
   position: absolute;
@@ -446,9 +451,6 @@ function hideWheel() {
   height: 8rpx;
   border-radius: 50%;
   background: #fff;
-}
-.energy-icon--relation {
-  background: rgba(255, 255, 255, .18);
 }
 .energy-icon__person {
   position: absolute;
@@ -484,9 +486,6 @@ function hideWheel() {
   border-radius: 4rpx;
   background: #fff;
 }
-.energy-icon--learn {
-  background: rgba(255, 255, 255, .18);
-}
 .energy-icon__book {
   position: absolute;
   top: 19rpx;
@@ -511,9 +510,6 @@ function hideWheel() {
   width: 4rpx;
   height: 31rpx;
   background: #fff;
-}
-.energy-icon--profile {
-  background: rgba(255, 255, 255, .18);
 }
 .energy-icon__stem {
   position: absolute;
@@ -560,6 +556,7 @@ function hideWheel() {
   transform: scale(.985);
 }
 .growth-card__copy {
+  min-width: 0;
   display: flex;
   flex: 1;
   flex-direction: column;
