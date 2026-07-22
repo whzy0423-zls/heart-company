@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import importlib.util
 import json
@@ -11,6 +12,9 @@ from unittest import mock
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SCRIPT = SCRIPT_DIR / "extract-round.py"
+PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 def load_module():
@@ -63,6 +67,45 @@ def make_catalog(relative_path="sample.pdf", sha256="a" * 64, route="pdf_text_la
             }
         ],
     }
+
+
+def write_valid_pdf_output(root, module):
+    source = make_selection()["sources"][0]
+    entry = make_catalog()["files"][0]
+    units = []
+    for page, text in ((1, "第一页"), (2, "第二页")):
+        units.append(module.write_text_unit(
+            root, f"units/page-{page:04d}-slice-01.txt", text,
+            {"page": page, "slice": 1, "characterStart": 0, "characterEnd": len(text)}, 1.0,
+        ))
+    qa = Path(root) / "qa"
+    qa.mkdir(parents=True)
+    (qa / "cover.png").write_bytes(PNG_1X1)
+    (qa / "selected-page.png").write_bytes(PNG_1X1)
+    automated_checks = module.inspect_png(qa / "cover.png")
+    quality = {
+        "status": "pending_human_review",
+        "scope": "测试 QA",
+        "renders": [
+            {"kind": "cover", "page": 1, "imageFile": "qa/cover.png",
+             "imageSha256": sha256_bytes(PNG_1X1), "automatedChecks": automated_checks},
+            {"kind": "selected-page", "page": 2, "imageFile": "qa/selected-page.png",
+             "imageSha256": sha256_bytes(PNG_1X1), "automatedChecks": automated_checks},
+        ],
+        "extractionQuality": module.summarize_extraction_quality(units),
+    }
+    manifest = {
+        "schemaVersion": module.SCHEMA_VERSION, "status": "complete", "roundId": "round-001",
+        "relativePath": source["relativePath"], "sourceSha256": entry["sha256"],
+        "extractionRoute": entry["extractionRoute"], "selectedRanges": source["selectedRanges"],
+        "processedUnitType": "page", "processedUnitCount": 2,
+        "budgetPageEquivalent": 2, "ocrPageCount": 0, "tools": {}, "parameters": [],
+        "units": units, "qualityReport": "quality.json", "errorReport": "errors.json",
+    }
+    module.write_json(Path(root) / "manifest.json", manifest)
+    module.write_json(Path(root) / "quality.json", quality)
+    module.write_json(Path(root) / "errors.json", {"status": "complete", "errors": []})
+    return source, entry, manifest, quality
 
 
 class InputContractTest(unittest.TestCase):
@@ -140,14 +183,19 @@ class LocatorAndManifestTest(unittest.TestCase):
             self.assertEqual(sha256_bytes(payload), record["textSha256"])
             self.assertEqual(len("可追溯文本"), record["characterCount"])
             self.assertEqual(0.875, record["confidence"])
+            empty = self.module.write_text_unit(root, "units/empty.txt", "", {"page": 2}, 0.0)
+            self.assertTrue(empty["emptyText"])
 
     def test_manifest_validator_rejects_missing_or_untraceable_fields(self):
         manifest = {
-            "status": "complete",
+            "schemaVersion": self.module.SCHEMA_VERSION, "status": "complete", "roundId": "round-001",
+            "relativePath": "sample.pdf", "extractionRoute": "pdf_text_layer",
+            "selectedRanges": ["page:1"], "processedUnitType": "page",
             "sourceSha256": "a" * 64,
             "processedUnitCount": 1,
             "budgetPageEquivalent": 1,
             "ocrPageCount": 0,
+            "tools": {}, "parameters": [], "qualityReport": "quality.json", "errorReport": "errors.json",
             "units": [{"locator": {}, "characterCount": 0, "confidence": 1}],
         }
         with self.assertRaisesRegex(ValueError, "locator"):
@@ -304,30 +352,69 @@ class AtomicOutputTest(unittest.TestCase):
     def test_reuses_only_a_complete_source_with_verified_unit_hashes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            unit = root / "units/page-0001-slice-01.txt"
-            unit.parent.mkdir(parents=True)
-            unit.write_text("正文", "utf-8")
-            source = make_selection()["sources"][0]
-            entry = make_catalog()["files"][0]
-            manifest = {
-                "status": "complete", "sourceSha256": entry["sha256"],
-                "selectedRanges": source["selectedRanges"], "processedUnitType": "page",
-                "processedUnitCount": 2, "budgetPageEquivalent": 2, "ocrPageCount": 0,
-                "units": [{"textFile": "units/page-0001-slice-01.txt", "textSha256": sha256_bytes("正文".encode())}],
-            }
-            (root / "manifest.json").write_text(json.dumps(manifest), "utf-8")
-            (root / "quality.json").write_text(json.dumps({"status": "pending_human_review"}), "utf-8")
+            source, entry, manifest, _ = write_valid_pdf_output(root, self.module)
             reused = self.module.load_reusable_source(root, source, entry)
             self.assertIsNotNone(reused)
-            source["processedUnitType"] = "spine_item"
-            manifest["processedUnitType"] = "spine_item"
-            (root / "manifest.json").write_text(json.dumps(manifest), "utf-8")
+            (root / manifest["units"][0]["textFile"]).write_text("篡改", "utf-8")
             self.assertIsNone(self.module.load_reusable_source(root, source, entry))
-            source["processedUnitType"] = "page"
-            manifest["processedUnitType"] = "page"
-            (root / "manifest.json").write_text(json.dumps(manifest), "utf-8")
-            unit.write_text("篡改", "utf-8")
-            self.assertIsNone(self.module.load_reusable_source(root, source, entry))
+
+    def test_reuse_rejects_missing_or_non_complete_error_report(self):
+        for mutation in ("missing", "failed", "nonempty"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                source, entry, _, _ = write_valid_pdf_output(root, self.module)
+                if mutation == "missing":
+                    (root / "errors.json").unlink()
+                elif mutation == "failed":
+                    self.module.write_json(root / "errors.json", {"status": "failed", "errors": []})
+                else:
+                    self.module.write_json(root / "errors.json", {"status": "complete", "errors": ["x"]})
+                self.assertIsNone(self.module.load_reusable_source(root, source, entry))
+
+    def test_reuse_rejects_missing_tampered_or_wrong_page_pdf_qa(self):
+        for mutation in ("missing", "tampered", "wrong-page", "qa-checks"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                source, entry, _, quality = write_valid_pdf_output(root, self.module)
+                if mutation == "missing":
+                    (root / "qa/cover.png").unlink()
+                elif mutation == "tampered":
+                    (root / "qa/selected-page.png").write_bytes(b"changed")
+                else:
+                    if mutation == "wrong-page":
+                        quality["renders"][1]["page"] = 1
+                    else:
+                        checks = quality["renders"][1]["automatedChecks"]
+                        checks["notBlank"] = not checks["notBlank"]
+                    self.module.write_json(root / "quality.json", quality)
+                self.assertIsNone(self.module.load_reusable_source(root, source, entry))
+
+    def test_reuse_rejects_quality_or_manifest_contract_tampering(self):
+        for mutation in ("quality", "manifest"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                source, entry, manifest, quality = write_valid_pdf_output(root, self.module)
+                if mutation == "quality":
+                    quality["extractionQuality"]["characterCount"] += 1
+                    self.module.write_json(root / "quality.json", quality)
+                else:
+                    manifest["units"][0]["characterCount"] += 1
+                    self.module.write_json(root / "manifest.json", manifest)
+                self.assertIsNone(self.module.load_reusable_source(root, source, entry))
+
+    def test_contact_sheets_are_built_from_verified_qa_and_hash_checked(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "sources/sample"
+            source, entry, _, _ = write_valid_pdf_output(target, self.module)
+            review = self.module.build_round_qa(root, [(source, entry, target, {1, 2})])
+            self.module.validate_round_qa(root, review, [(source, entry, target, {1, 2})])
+            self.assertEqual(2, review["renderCount"])
+            self.assertEqual(1, len(review["contactSheets"]))
+            sheet = root / review["contactSheets"][0]["file"]
+            sheet.write_bytes(b"tampered")
+            with self.assertRaisesRegex(ValueError, "联系表"):
+                self.module.validate_round_qa(root, review, [(source, entry, target, {1, 2})])
 
 
 if __name__ == "__main__":

@@ -320,12 +320,14 @@ def write_text_unit(root, relative_file, text, locator, confidence, empty_text=F
     return {"locator": locator, "textFile": relative_file, "encoding": "utf-8",
             "textSha256": sha256_bytes(payload), "utf8Bytes": len(payload),
             "characterCount": len(text), "nonWhitespaceCharacterCount": len("".join(text.split())),
-            "confidence": round(float(confidence), 6), "emptyText": bool(empty_text)}
+            "confidence": round(float(confidence), 6), "emptyText": len(text) == 0}
 
 
 def validate_source_manifest(manifest, unit_type):
-    required = {"status", "sourceSha256", "processedUnitCount", "budgetPageEquivalent",
-                "ocrPageCount", "units"}
+    required = {"schemaVersion", "status", "roundId", "relativePath", "sourceSha256",
+                "extractionRoute", "selectedRanges", "processedUnitType", "processedUnitCount",
+                "budgetPageEquivalent", "ocrPageCount", "tools", "parameters", "units",
+                "qualityReport", "errorReport"}
     if required - set(manifest):
         raise ValueError("manifest 缺少字段")
     if manifest["status"] != "complete" or not re.fullmatch(r"[0-9a-f]{64}", manifest["sourceSha256"]):
@@ -336,8 +338,150 @@ def validate_source_manifest(manifest, unit_type):
     for unit in manifest["units"]:
         if not fields.issubset(unit.get("locator", {})):
             raise ValueError("manifest unit locator 不可回溯")
-        if "characterCount" not in unit or "confidence" not in unit:
+        unit_required = {"locator", "textFile", "encoding", "textSha256", "utf8Bytes",
+                         "characterCount", "nonWhitespaceCharacterCount", "confidence", "emptyText"}
+        if unit_required - set(unit):
             raise ValueError("manifest unit 缺少质量字段")
+
+
+def safe_relative_file(root, relative_value, label):
+    relative = Path(relative_value)
+    if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+        raise ValueError(f"{label} 路径不安全")
+    path = (Path(root) / relative).resolve()
+    try:
+        path.relative_to(Path(root).resolve())
+    except ValueError as exc:
+        raise ValueError(f"{label} 路径越界") from exc
+    return path
+
+
+def validate_complete_source_output(target, source, entry):
+    target = Path(target).resolve()
+    try:
+        manifest = json.loads((target / "manifest.json").read_text("utf-8"))
+        quality = json.loads((target / "quality.json").read_text("utf-8"))
+        errors = json.loads((target / "errors.json").read_text("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("来源输出缺少或损坏 manifest/quality/errors") from exc
+    unit_type = source["processedUnitType"]
+    validate_source_manifest(manifest, unit_type)
+    expected = {
+        "schemaVersion": SCHEMA_VERSION,
+        "status": "complete",
+        "roundId": "round-001",
+        "relativePath": source["relativePath"],
+        "sourceSha256": entry["sha256"],
+        "extractionRoute": entry["extractionRoute"],
+        "selectedRanges": source["selectedRanges"],
+        "processedUnitType": unit_type,
+        "processedUnitCount": source["processedUnitCount"],
+        "budgetPageEquivalent": source["budgetPageEquivalent"],
+        "ocrPageCount": source["ocrPageCount"],
+        "qualityReport": "quality.json",
+        "errorReport": "errors.json",
+    }
+    if any(manifest.get(key) != value for key, value in expected.items()):
+        raise ValueError("manifest 与 selection/catalog 合同不一致")
+    if unit_type == "spine_item" and manifest.get("semanticBlockContract") != "v1":
+        raise ValueError("EPUB 语义块合同版本无效")
+    if errors != {"status": "complete", "errors": []}:
+        raise ValueError("errors.json 必须为 complete 且 errors 为空")
+    selected = parse_selected_ranges(
+        source["selectedRanges"], {"page": "page", "spine_item": "spine-item", "paragraph": "paragraph"}[unit_type]
+    )
+    records = manifest["units"]
+    if not records:
+        raise ValueError("manifest units 不能为空")
+    referenced_files = set()
+    locator_values = []
+    page_slices = {}
+    for record in records:
+        path = safe_relative_file(target, record["textFile"], "unit textFile")
+        relative = path.relative_to(target.resolve()).as_posix()
+        if relative in referenced_files or not path.is_file():
+            raise ValueError("unit textFile 缺失或重复")
+        referenced_files.add(relative)
+        payload = path.read_bytes()
+        try:
+            text = payload.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise ValueError("unit textFile 不是严格 UTF-8") from exc
+        expected_unit = {
+            "encoding": "utf-8",
+            "textSha256": sha256_bytes(payload),
+            "utf8Bytes": len(payload),
+            "characterCount": len(text),
+            "nonWhitespaceCharacterCount": len("".join(text.split())),
+            "emptyText": len(text) == 0,
+        }
+        if any(record.get(key) != value for key, value in expected_unit.items()):
+            raise ValueError("manifest unit 文本统计或 hash 不一致")
+        confidence = record.get("confidence")
+        if not isinstance(confidence, (int, float)) or isinstance(confidence, bool) or not 0 <= confidence <= 1:
+            raise ValueError("manifest unit confidence 无效")
+        locator = record["locator"]
+        field = {"page": "page", "spine_item": "spineItem", "paragraph": "paragraph"}[unit_type]
+        value = locator[field]
+        if not isinstance(value, int) or isinstance(value, bool) or value not in selected:
+            raise ValueError("manifest unit locator 超出 selectedRanges")
+        locator_values.append(value)
+        if unit_type == "page":
+            if not all(isinstance(locator[name], int) and not isinstance(locator[name], bool)
+                       for name in ("page", "slice", "characterStart", "characterEnd")):
+                raise ValueError("PDF locator 数值无效")
+            page_slices.setdefault(value, []).append((locator, text))
+        elif unit_type == "spine_item":
+            if not isinstance(locator["chapter"], str) or locator["paragraph"] < 1:
+                raise ValueError("EPUB locator 无效")
+        elif locator["paragraph"] < 1 or (locator["heading"] is not None
+                                          and not isinstance(locator["heading"], str)):
+            raise ValueError("DOC/DOCX locator 无效")
+    actual_files = {path.relative_to(target).as_posix() for path in (target / "units").glob("**/*")
+                    if path.is_file()}
+    if actual_files != referenced_files:
+        raise ValueError("units 目录包含未引用或缺失文件")
+    if set(locator_values) != selected or distinct_unit_count(records, unit_type) != source["processedUnitCount"]:
+        raise ValueError("manifest unit locator/count 与 selection 不一致")
+    for page, slices in page_slices.items():
+        slices.sort(key=lambda item: item[0]["slice"])
+        offset = 0
+        for expected_slice, (locator, text) in enumerate(slices, start=1):
+            if locator["slice"] != expected_slice or locator["characterStart"] != offset:
+                raise ValueError("PDF slice locator 不连续")
+            offset += len(text)
+            if locator["characterEnd"] != offset:
+                raise ValueError("PDF slice 字符范围不一致")
+    if quality.get("status") != "pending_human_review" or not isinstance(quality.get("scope"), str):
+        raise ValueError("quality.json 状态或 scope 无效")
+    if quality.get("extractionQuality") != summarize_extraction_quality(records):
+        raise ValueError("quality.json extractionQuality 与 manifest 不一致")
+    renders = quality.get("renders")
+    is_pdf = Path(source["relativePath"]).suffix.lower() == ".pdf"
+    if is_pdf:
+        if not isinstance(renders, list) or len(renders) != 2:
+            raise ValueError("PDF 缺少 cover/selected QA")
+        expected_pages = {"cover": 1, "selected-page": max(selected)}
+        if {item.get("kind") for item in renders} != set(expected_pages):
+            raise ValueError("PDF QA kind 不完整")
+        qa_files = set()
+        for render in renders:
+            kind = render["kind"]
+            if render.get("page") != expected_pages[kind] or not isinstance(render.get("automatedChecks"), dict):
+                raise ValueError("PDF QA 页码不符合确定规则")
+            image = safe_relative_file(target, render.get("imageFile", ""), "PDF QA")
+            if not image.is_file() or sha256_file(image) != render.get("imageSha256"):
+                raise ValueError("PDF QA 文件缺失或 hash 不一致")
+            if render.get("automatedChecks") != inspect_png(image):
+                raise ValueError("PDF QA automatedChecks 与图像不一致")
+            qa_files.add(image.relative_to(target).as_posix())
+        actual_qa = {path.relative_to(target).as_posix() for path in (target / "qa").glob("**/*")
+                     if path.is_file()}
+        if qa_files != actual_qa:
+            raise ValueError("PDF QA 目录包含未引用或缺失文件")
+    elif renders is not None or (target / "qa").exists():
+        raise ValueError("非 PDF 来源不得伪造 renders")
+    return manifest, quality
 
 
 def atomic_source_output(output, producer):
@@ -516,36 +660,108 @@ def source_directory_name(relative_path, source_sha):
 
 
 def load_reusable_source(target, source, entry):
-    target = Path(target)
     try:
-        manifest = json.loads((target / "manifest.json").read_text("utf-8"))
-        quality = json.loads((target / "quality.json").read_text("utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
+        return validate_complete_source_output(target, source, entry)
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return None
-    expected = {
-        "status": "complete",
-        "sourceSha256": entry["sha256"],
-        "selectedRanges": source["selectedRanges"],
-        "processedUnitType": source["processedUnitType"],
-        "processedUnitCount": source["processedUnitCount"],
-        "budgetPageEquivalent": source["budgetPageEquivalent"],
-        "ocrPageCount": source["ocrPageCount"],
+
+
+def verified_pdf_qa_inputs(source_outputs):
+    inputs = []
+    for source, entry, target, _ in source_outputs:
+        manifest, quality = validate_complete_source_output(target, source, entry)
+        if Path(source["relativePath"]).suffix.lower() != ".pdf":
+            continue
+        by_kind = {render["kind"]: render for render in quality["renders"]}
+        for kind in ("cover", "selected-page"):
+            render = by_kind[kind]
+            inputs.append({
+                "relativePath": source["relativePath"],
+                "kind": kind,
+                "page": render["page"],
+                "imageFile": f"{Path(target).relative_to(Path(target).parents[1]).as_posix()}/{render['imageFile']}",
+                "imageSha256": render["imageSha256"],
+                "_path": safe_relative_file(target, render["imageFile"], "PDF QA"),
+                "manifestSha256": sha256_file(Path(target) / "manifest.json"),
+            })
+    return inputs
+
+
+def build_round_qa(output_root, source_outputs):
+    from PIL import Image
+
+    output_root = Path(output_root).resolve()
+    inputs = verified_pdf_qa_inputs(source_outputs)
+    contact_dir = output_root / "qa-contact-sheets"
+    shutil.rmtree(contact_dir, ignore_errors=True)
+    contact_dir.mkdir(parents=True, exist_ok=True)
+    sheets = []
+    for sheet_index, start in enumerate(range(0, len(inputs), 10), start=1):
+        chunk = inputs[start : start + 10]
+        columns, cell_width, cell_height, padding = 5, 320, 320, 8
+        rows = (len(chunk) + columns - 1) // columns
+        canvas = Image.new("RGB", (columns * (cell_width + padding), rows * (cell_height + padding)), "white")
+        for index, item in enumerate(chunk):
+            with Image.open(item["_path"]) as source_image:
+                rendered = source_image.convert("RGB")
+                rendered.thumbnail((cell_width, cell_height), Image.Resampling.LANCZOS)
+                column, row = index % columns, index // columns
+                x = column * (cell_width + padding) + (cell_width - rendered.width) // 2
+                y = row * (cell_height + padding) + (cell_height - rendered.height) // 2
+                canvas.paste(rendered, (x, y))
+        relative_file = f"qa-contact-sheets/sheet-{sheet_index:02d}.png"
+        sheet_path = output_root / relative_file
+        canvas.save(sheet_path, format="PNG", compress_level=9)
+        public_inputs = [{key: value for key, value in item.items() if key != "_path"} for item in chunk]
+        sheets.append({"file": relative_file, "sha256": sha256_file(sheet_path),
+                       "inputRenders": public_inputs})
+    checks = [item for _, quality in
+              (validate_complete_source_output(target, source, entry)
+               for source, entry, target, _ in source_outputs)
+              for render in quality.get("renders", []) for item in [render.get("automatedChecks", {})]]
+    review = {
+        "schemaVersion": "xinzhili-pdf-qa-review-v2",
+        "reviewStatus": "generated_pending_human_review",
+        "humanReviewStatus": "pending",
+        "pdfSourceCount": len(inputs) // 2,
+        "renderCount": len(inputs),
+        "automatedSummary": {
+            "blackFailures": sum(1 for check in checks if check.get("notBlack") is False),
+            "blankFailures": sum(1 for check in checks if check.get("notBlank") is False),
+            "edgeCropWarnings": sum(1 for check in checks if check.get("possibleEdgeCropping") is True),
+        },
+        "contactSheets": sheets,
     }
-    if any(manifest.get(key) != value for key, value in expected.items()):
-        return None
-    if source["processedUnitType"] == "spine_item" and manifest.get("semanticBlockContract") != "v1":
-        return None
-    for unit in manifest.get("units", []):
-        text_file = unit.get("textFile", "")
-        relative = Path(text_file)
-        if relative.is_absolute() or ".." in relative.parts:
-            return None
-        path = target / relative
-        if not path.is_file() or sha256_file(path) != unit.get("textSha256"):
-            return None
-    if not manifest.get("units") or quality.get("status") != "pending_human_review":
-        return None
-    return manifest, quality
+    write_json(output_root / "qa-visual-review.json", review)
+    validate_round_qa(output_root, review, source_outputs)
+    return review
+
+
+def validate_round_qa(output_root, review, source_outputs):
+    output_root = Path(output_root).resolve()
+    try:
+        stored = json.loads((output_root / "qa-visual-review.json").read_text("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("QA 视觉记录缺失或损坏") from exc
+    if stored != review:
+        raise ValueError("QA 视觉记录与内存结果不一致")
+    expected_inputs = [{key: value for key, value in item.items() if key != "_path"}
+                       for item in verified_pdf_qa_inputs(source_outputs)]
+    recorded_inputs = [item for sheet in review.get("contactSheets", [])
+                       for item in sheet.get("inputRenders", [])]
+    if recorded_inputs != expected_inputs or review.get("renderCount") != len(expected_inputs):
+        raise ValueError("联系表输入与当前有效 QA 不一致")
+    expected_sheets = set()
+    for sheet in review.get("contactSheets", []):
+        path = safe_relative_file(output_root, sheet.get("file", ""), "联系表")
+        if not path.is_file() or sha256_file(path) != sheet.get("sha256"):
+            raise ValueError("联系表缺失或 hash 不一致")
+        expected_sheets.add(path.relative_to(output_root).as_posix())
+    actual_sheets = {path.relative_to(output_root).as_posix()
+                     for path in (output_root / "qa-contact-sheets").glob("*.png")}
+    if actual_sheets != expected_sheets:
+        raise ValueError("联系表目录包含未记录或缺失文件")
+    return True
 
 
 def build_round(selection_path, catalog_path, source_root, output_root):
@@ -558,28 +774,36 @@ def build_round(selection_path, catalog_path, source_root, output_root):
     output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
     (output_root / "round-manifest.json").unlink(missing_ok=True)
-    summaries, failures = [], []
+    summaries, failures, source_outputs = [], [], []
     for source, entry, path, selected in validated:
         directory = source_directory_name(source["relativePath"], entry["sha256"])
         target = output_root / "sources" / directory
         try:
             reusable = load_reusable_source(target, source, entry)
-            manifest, quality = (reusable if reusable is not None else
-                                 extract_source(source, entry, path, selected, target, tools))
-            if "extractionQuality" not in quality:
-                quality["extractionQuality"] = summarize_extraction_quality(manifest["units"])
-                write_json(target / "quality.json", quality)
+            if reusable is None:
+                extract_source(source, entry, path, selected, target, tools)
+                manifest, quality = validate_complete_source_output(target, source, entry)
+            else:
+                manifest, quality = reusable
             summaries.append({"relativePath": source["relativePath"],
                               "directory": f"sources/{directory}",
                               "manifestSha256": sha256_file(target / "manifest.json"),
                               "unitFileCount": len(manifest["units"]),
                               "qualityStatus": quality["status"]})
+            source_outputs.append((source, entry, target, selected))
         except Exception as exc:
             failures.append({"relativePath": source["relativePath"], **safe_error(exc)})
             break
     if failures:
         write_json(output_root / "round-errors.json", {"status": "failed", "failures": failures})
         raise RuntimeError(f"首轮抽取失败: {failures[0]['relativePath']}")
+    try:
+        qa_review = build_round_qa(output_root, source_outputs)
+        validate_round_qa(output_root, qa_review, source_outputs)
+    except Exception as exc:
+        write_json(output_root / "round-errors.json",
+                   {"status": "failed", "failures": [{"relativePath": "round-qa", **safe_error(exc)}]})
+        raise RuntimeError("首轮 PDF QA 汇总失败") from exc
     totals = selection_totals(selection)
     manifest = {"schemaVersion": SCHEMA_VERSION, "status": "complete", "roundId": selection["roundId"],
                 "selectionSha256": sha256_file(selection_path), "catalogSha256": sha256_file(catalog_path),
@@ -589,7 +813,11 @@ def build_round(selection_path, catalog_path, source_root, output_root):
                 "limits": {"maxSelectedFiles": selection["maxSelectedFiles"],
                            "maxBudgetPageEquivalent": selection["maxBudgetPageEquivalent"],
                            "maxOcrPageCount": selection["maxOcrPageCount"]},
-                "sources": summaries, "humanReviewStatus": "pending"}
+                "sources": summaries, "humanReviewStatus": "pending",
+                "qaVisualReview": {"file": "qa-visual-review.json",
+                                   "sha256": sha256_file(output_root / "qa-visual-review.json"),
+                                   "pdfSourceCount": qa_review["pdfSourceCount"],
+                                   "renderCount": qa_review["renderCount"]}}
     write_json(output_root / "round-errors.json", {"status": "complete", "errors": []})
     write_json(output_root / "round-manifest.json", manifest)
     return manifest
