@@ -85,7 +85,7 @@
     },
     {
       "catalogStatus": "selected",
-      "selectionReason": "实际 EPUB 路径存在且 XHTML 可读；按 1800 个非空字符折算。",
+      "selectionReason": "实际 EPUB 路径存在且 XHTML 可读；来源定位使用真实 OPF spine item，按 1800 个非空字符折算。",
       "sourceFileIds": [
         "file-6009e970531b13ee"
       ],
@@ -94,7 +94,7 @@
     },
     {
       "catalogStatus": "selected",
-      "selectionReason": "周易方向核心资料；textutil 可读，按 1800 个非空字符折算。",
+      "selectionReason": "周易方向核心资料；textutil 可读，来源定位使用真实段落，预算按 1800 个非空字符折算。",
       "sourceFileIds": [
         "file-ae513db9e9dda335"
       ],
@@ -157,7 +157,7 @@
     },
     {
       "catalogStatus": "selected",
-      "selectionReason": "易经生活化概念资料；textutil 可读，按 1800 个非空字符折算。",
+      "selectionReason": "易经生活化概念资料；textutil 可读，来源定位使用真实段落，预算按 1800 个非空字符折算。",
       "sourceFileIds": [
         "file-18b7985501dfec59"
       ],

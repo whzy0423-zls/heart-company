@@ -6,14 +6,18 @@ import hashlib
 import html
 import json
 import math
+import posixpath
 import re
 import subprocess
+import sys
 import zipfile
 from collections import Counter, defaultdict
 from pathlib import Path
+from urllib.parse import unquote
+from xml.etree import ElementTree
 
 
-CONTENT_EXTENSIONS = {".pdf", ".epub", ".doc", ".docx", ".pptx", ".mobi", ".azw3", ".jpg"}
+IGNORED_SYSTEM_FILES = {".DS_Store"}
 TEXT_EQUIVALENT_EXTENSIONS = {".epub", ".doc", ".docx"}
 
 
@@ -34,6 +38,30 @@ def run_text(command):
     return result.stdout.decode("utf-8", errors="ignore")
 
 
+def command_version(command):
+    result = subprocess.run(command, check=True, capture_output=True)
+    output = (result.stdout + result.stderr).decode("utf-8", errors="ignore").strip()
+    return output.splitlines()[0] if output else "version-unavailable"
+
+
+def collect_tool_versions():
+    macos_version = command_version(["sw_vers", "-productVersion"])
+    return {
+        "pdfinfo": command_version(["pdfinfo", "-v"]),
+        "pdftotext": command_version(["pdftotext", "-v"]),
+        "textutil": f"Apple textutil on macOS {macos_version}",
+        "textutilBinarySha256": sha256_file(Path("/usr/bin/textutil")),
+        "epubParser": f"python-{sys.version_info.major}.{sys.version_info.minor}.zipfile+ElementTree",
+        "pptxParser": f"python-{sys.version_info.major}.{sys.version_info.minor}.zipfile+ElementTree",
+        "catalogParser": "xinzhili-source-catalog-v1",
+    }
+
+
+def canonical_hash(value):
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def pdf_probe(path):
     info = run_text(["pdfinfo", str(path)])
     match = re.search(r"^Pages:\s+(\d+)$", info, re.MULTILINE)
@@ -43,6 +71,7 @@ def pdf_probe(path):
     sample_pages = min(page_count, 5)
     sample = run_text(["pdftotext", "-f", "1", "-l", str(sample_pages), str(path), "-"])
     sample_chars = normalized_nonspace_length(sample)
+    normalized_sample = "".join(sample.split())
     text_chars_per_page = sample_chars // max(sample_pages, 1)
     needs_ocr = text_chars_per_page < 80
     return {
@@ -55,6 +84,12 @@ def pdf_probe(path):
             "sampleTextCharacters": sample_chars,
         },
         "ocrPageEstimate": page_count if needs_ocr else 0,
+        "_normalizedProbeOutput": {
+            "pageCount": page_count,
+            "sampledPages": sample_pages,
+            "normalizedSampleSha256": hashlib.sha256(normalized_sample.encode("utf-8")).hexdigest(),
+            "normalizedSampleCharacters": sample_chars,
+        },
     }
 
 
@@ -76,22 +111,58 @@ def safe_epub_members(path):
 
 def epub_probe(path, chars_per_page):
     members = safe_epub_members(path)
+    member_map = {name: raw for name, raw in members}
+    with zipfile.ZipFile(path) as archive:
+        container = ElementTree.fromstring(archive.read("META-INF/container.xml"))
+        rootfile = next(
+            item.attrib["full-path"] for item in container.iter() if item.tag.endswith("rootfile")
+        )
+        package = ElementTree.fromstring(archive.read(rootfile))
+        manifest = {
+            item.attrib["id"]: item.attrib["href"]
+            for item in package.iter()
+            if item.tag.endswith("item") and "id" in item.attrib and "href" in item.attrib
+        }
+        base = posixpath.dirname(rootfile)
+        spine = []
+        for index, item in enumerate(
+            (node for node in package.iter() if node.tag.endswith("itemref")), start=1
+        ):
+            idref = item.attrib["idref"]
+            href = manifest.get(idref)
+            if not href:
+                raise ValueError(f"EPUB spine 引用缺失 manifest item: {idref}")
+            member_name = posixpath.normpath(posixpath.join(base, unquote(href)))
+            if member_name not in member_map:
+                raise ValueError(f"EPUB spine 文件不存在: {member_name}")
+            spine.append({"index": index, "idref": idref, "href": member_name})
+
     character_count = 0
-    for _, raw in members:
+    normalized_parts = []
+    for item in spine:
+        raw = member_map[item["href"]]
         markup = raw.decode("utf-8", errors="ignore")
         markup = re.sub(r"<(script|style)\b.*?</\1>", " ", markup, flags=re.IGNORECASE | re.DOTALL)
         text = html.unescape(re.sub(r"<[^>]+>", " ", markup))
-        character_count += normalized_nonspace_length(text)
+        normalized = "".join(text.split())
+        normalized_parts.append(normalized)
+        character_count += len(normalized)
     equivalent = max(1, math.ceil(character_count / chars_per_page))
     return {
         "extractionRoute": "epub_xhtml",
         "unitEstimate": {
             "unitType": "spine_item",
-            "unitCount": len(members),
+            "unitCount": len(spine),
             "budgetPageEquivalent": equivalent,
             "normalizedTextCharacters": character_count,
+            "locatorInventory": spine,
         },
         "ocrPageEstimate": 0,
+        "_normalizedProbeOutput": {
+            "spine": spine,
+            "normalizedTextSha256": hashlib.sha256("".join(normalized_parts).encode("utf-8")).hexdigest(),
+            "normalizedTextCharacters": character_count,
+        },
     }
 
 
@@ -99,15 +170,21 @@ def office_text_probe(path, chars_per_page):
     text = run_text(["textutil", "-convert", "txt", "-stdout", str(path)])
     character_count = normalized_nonspace_length(text)
     equivalent = max(1, math.ceil(character_count / chars_per_page))
+    paragraphs = [line.strip() for line in text.splitlines() if line.strip()]
     return {
         "extractionRoute": "textutil_plain_text",
         "unitEstimate": {
-            "unitType": "normalized_text_page",
-            "unitCount": equivalent,
+            "unitType": "paragraph",
+            "unitCount": len(paragraphs),
             "budgetPageEquivalent": equivalent,
             "normalizedTextCharacters": character_count,
         },
         "ocrPageEstimate": 0,
+        "_normalizedProbeOutput": {
+            "paragraphCount": len(paragraphs),
+            "normalizedTextSha256": hashlib.sha256("".join(text.split()).encode("utf-8")).hexdigest(),
+            "normalizedTextCharacters": character_count,
+        },
     }
 
 
@@ -122,32 +199,55 @@ def pptx_probe(path):
         "extractionRoute": "pptx_slide_xml",
         "unitEstimate": {"unitType": "slide", "unitCount": count, "budgetPageEquivalent": count},
         "ocrPageEstimate": 0,
+        "_normalizedProbeOutput": {"slideCount": count},
     }
 
 
-def probe_file(path, chars_per_page):
+def probe_file(path, chars_per_page, tool_versions):
     suffix = path.suffix.lower()
     if suffix == ".pdf":
-        return pdf_probe(path)
-    if suffix == ".epub":
-        return epub_probe(path, chars_per_page)
-    if suffix in {".doc", ".docx"}:
-        return office_text_probe(path, chars_per_page)
-    if suffix == ".pptx":
-        return pptx_probe(path)
-    if suffix in {".mobi", ".azw3"}:
-        return {
+        result = pdf_probe(path)
+        tools = {key: tool_versions[key] for key in ("pdfinfo", "pdftotext")}
+    elif suffix == ".epub":
+        result = epub_probe(path, chars_per_page)
+        tools = {"epubParser": tool_versions["epubParser"]}
+    elif suffix in {".doc", ".docx"}:
+        result = office_text_probe(path, chars_per_page)
+        tools = {key: tool_versions[key] for key in ("textutil", "textutilBinarySha256")}
+    elif suffix == ".pptx":
+        result = pptx_probe(path)
+        tools = {"pptxParser": tool_versions["pptxParser"]}
+    elif suffix in {".mobi", ".azw3"}:
+        result = {
             "extractionRoute": "ebook_convert_required",
             "unitEstimate": {"unitType": "chapter", "unitCount": 0, "budgetPageEquivalent": 0},
             "ocrPageEstimate": 0,
+            "_normalizedProbeOutput": {"probeStatus": "converter-required", "byteSize": path.stat().st_size},
         }
-    if suffix == ".jpg":
-        return {
+        tools = {"catalogParser": tool_versions["catalogParser"]}
+    elif suffix == ".jpg":
+        result = {
             "extractionRoute": "image_ocr",
             "unitEstimate": {"unitType": "image", "unitCount": 1, "budgetPageEquivalent": 1},
             "ocrPageEstimate": 1,
+            "_normalizedProbeOutput": {"imageCount": 1, "byteSize": path.stat().st_size},
         }
-    raise ValueError(f"不支持的文件格式: {suffix}")
+        tools = {"catalogParser": tool_versions["catalogParser"]}
+    else:
+        result = {
+            "extractionRoute": "unsupported_format",
+            "unitEstimate": {"unitType": "file", "unitCount": 1, "budgetPageEquivalent": 0},
+            "ocrPageEstimate": 0,
+            "_normalizedProbeOutput": {"probeStatus": "unsupported-format", "suffix": suffix},
+        }
+        tools = {"catalogParser": tool_versions["catalogParser"]}
+    normalized_output = result.pop("_normalizedProbeOutput")
+    result["probe"] = {
+        "normalization": "xinzhili-probe-output-v1",
+        "outputSha256": canonical_hash(normalized_output),
+        "toolVersions": tools,
+    }
+    return result
 
 
 def stable_id(prefix, value):
@@ -158,6 +258,60 @@ def title_from_path(relative_path):
     title = Path(relative_path).stem
     title = re.sub(r"\(\d+\)$", "", title)
     return title.strip(" 《》_-")
+
+
+def range_contract(relative_path):
+    suffix = Path(relative_path).suffix.lower()
+    if suffix == ".pdf":
+        return "page", "page"
+    if suffix == ".epub":
+        return "spine_item", "spine-item"
+    if suffix in {".doc", ".docx"}:
+        return "paragraph", "paragraph"
+    if suffix == ".pptx":
+        return "slide", "slide"
+    raise ValueError(f"首轮来源格式不支持范围选择: {relative_path}")
+
+
+def expand_selected_ranges(source, unit_count):
+    expected_type, prefix = range_contract(source["relativePath"])
+    if source["processedUnitType"] != expected_type:
+        raise ValueError(f"单元类型与格式不匹配: {source['relativePath']}")
+    selected_units = []
+    pattern = re.compile(rf"^{re.escape(prefix)}:(\d+)(?:-(\d+))?$")
+    for locator in source["selectedRanges"]:
+        match = pattern.fullmatch(locator)
+        if not match:
+            raise ValueError(f"范围语法或类型非法: {source['relativePath']} {locator}")
+        start = int(match.group(1))
+        end = int(match.group(2) or start)
+        if start < 1 or end < start:
+            raise ValueError(f"范围起止非法: {source['relativePath']} {locator}")
+        if end > unit_count:
+            raise ValueError(f"选择范围越界: {source['relativePath']} {locator}")
+        selected_units.extend(range(start, end + 1))
+    if len(selected_units) != len(set(selected_units)):
+        raise ValueError(f"选择范围重叠: {source['relativePath']}")
+    if len(selected_units) != source["processedUnitCount"]:
+        raise ValueError(
+            f"选择范围展开数量与 processedUnitCount 不一致: {source['relativePath']}"
+        )
+    return selected_units, prefix
+
+
+def collapse_ranges(unit_numbers, prefix):
+    if not unit_numbers:
+        return []
+    ranges = []
+    start = previous = unit_numbers[0]
+    for number in unit_numbers[1:]:
+        if number == previous + 1:
+            previous = number
+            continue
+        ranges.append(f"{prefix}:{start}" if start == previous else f"{prefix}:{start}-{previous}")
+        start = previous = number
+    ranges.append(f"{prefix}:{start}" if start == previous else f"{prefix}:{start}-{previous}")
+    return ranges
 
 
 def validate_selection(selection, entries_by_path):
@@ -183,8 +337,7 @@ def validate_selection(selection, entries_by_path):
     for source in sources:
         entry = entries_by_path[source["relativePath"]]
         estimate = entry["unitEstimate"]
-        if source["processedUnitCount"] > estimate["unitCount"]:
-            raise ValueError(f"选择范围超过实际单元数: {source['relativePath']}")
+        selected_units, _ = expand_selected_ranges(source, estimate["unitCount"])
         if source["budgetPageEquivalent"] > estimate["budgetPageEquivalent"]:
             raise ValueError(f"折算预算超过来源总量: {source['relativePath']}")
         if source["ocrPageCount"] > source["processedUnitCount"]:
@@ -192,13 +345,23 @@ def validate_selection(selection, entries_by_path):
         if Path(source["relativePath"]).suffix.lower() in TEXT_EQUIVALENT_EXTENSIONS:
             if source["budgetPageEquivalent"] != estimate["budgetPageEquivalent"]:
                 raise ValueError(f"文本折算预算与实际字符数不一致: {source['relativePath']}")
+        route = entry["extractionRoute"]
+        if route == "pdf_ocr_selected":
+            if not selected_units or source["ocrPageCount"] != len(selected_units):
+                raise ValueError(f"OCR 页数必须与选定页数一致且大于零: {source['relativePath']}")
+        elif source["ocrPageCount"] != 0:
+            raise ValueError(f"非 OCR 抽取路线不得声明 OCR 页数: {source['relativePath']}")
     return budget, ocr_pages
 
 
 def build_catalog(source_root, selection):
     chars_per_page = selection["normalizedTextCharactersPerPage"]
+    tool_versions = collect_tool_versions()
     paths = sorted(
-        (path for path in source_root.rglob("*") if path.is_file() and path.suffix.lower() in CONTENT_EXTENSIONS),
+        (
+            path for path in source_root.rglob("*")
+            if path.is_file() and path.name not in IGNORED_SYSTEM_FILES
+        ),
         key=lambda path: path.relative_to(source_root).as_posix(),
     )
     hashes = {path: sha256_file(path) for path in paths}
@@ -217,12 +380,26 @@ def build_catalog(source_root, selection):
         canonical_work_id = stable_id("work", digest)
         error = None
         try:
-            probe = probe_file(path, chars_per_page)
-        except (OSError, subprocess.CalledProcessError, ValueError, zipfile.BadZipFile) as exc:
+            probe = probe_file(path, chars_per_page, tool_versions)
+        except (
+            KeyError,
+            OSError,
+            StopIteration,
+            subprocess.CalledProcessError,
+            ValueError,
+            zipfile.BadZipFile,
+            ElementTree.ParseError,
+        ) as exc:
+            normalized_error = {"errorType": type(exc).__name__, "suffix": path.suffix.lower()}
             probe = {
                 "extractionRoute": "manual_review_required",
                 "unitEstimate": {"unitType": "unknown", "unitCount": 0, "budgetPageEquivalent": 0},
                 "ocrPageEstimate": 0,
+                "probe": {
+                    "normalization": "xinzhili-probe-output-v1",
+                    "outputSha256": canonical_hash(normalized_error),
+                    "toolVersions": {"catalogParser": tool_versions["catalogParser"]},
+                },
             }
             error = str(exc).splitlines()[0]
 
@@ -233,6 +410,9 @@ def build_catalog(source_root, selection):
             reason = f"SHA-256 与 {canonical_path} 相同，不重复计权。"
         elif relative_path in selected_paths:
             status, priority, batch, reason = "selected", 1, selection["roundId"], "进入首轮提炼范围。"
+        elif probe["extractionRoute"] == "unsupported_format":
+            status, priority, batch = "excluded", 9, "not-applicable"
+            reason = f"未识别格式 {path.suffix.lower() or '[无扩展名]'}；已纳入目录，需明确转换器后再处理。"
         elif path.suffix.lower() == ".jpg":
             status, priority, batch, reason = "excluded", 9, "not-applicable", "仅为封面图片，不作为独立理论来源。"
         else:
@@ -267,10 +447,18 @@ def build_catalog(source_root, selection):
         selected.append({
             **{key: catalog_entry[key] for key in (
                 "fileId", "relativePath", "sha256", "byteSize", "mediaType", "canonicalWorkId",
-                "duplicateGroupId", "extractionRoute", "unitEstimate",
+                "duplicateGroupId", "extractionRoute", "unitEstimate", "probe",
             )},
             **source,
         })
+
+        selected_units, prefix = expand_selected_ranges(source, catalog_entry["unitEstimate"]["unitCount"])
+        remaining_units = sorted(
+            set(range(1, catalog_entry["unitEstimate"]["unitCount"] + 1)) - set(selected_units)
+        )
+        selected[-1]["remainingRanges"] = collapse_ranges(remaining_units, prefix)
+        selected[-1]["remainingUnitCount"] = len(remaining_units)
+        selected[-1]["proposedBatch"] = "round-002" if remaining_units else selection["roundId"]
 
     status_counts = Counter(entry["catalogStatus"] for entry in entries)
     for status in ("selected", "backlog", "duplicate", "excluded", "error"):
