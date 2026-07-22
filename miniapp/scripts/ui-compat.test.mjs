@@ -49,13 +49,18 @@ for (const className of ['.nx-page-hero', '.nx-section-head', '.nx-panel', '.nx-
 }
 assert.match(
   appleMobileStyle,
-  /\.nx-focusable:focus\s*\{[^}]*(?:outline|box-shadow)\s*:/,
-  '.nx-focusable:focus should expose a visible outline or box shadow',
+  /\.nx-focusable:focus\s*\{[^}]*outline\s*:\s*4rpx\s+solid\s+rgba\(\s*37\s*,\s*99\s*,\s*235\s*,\s*\.34\s*\)\s*;/,
+  '.nx-focusable:focus should expose the planned visible outline',
 )
 assert.match(
   appleMobileStyle,
-  /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.nx-focusable\s*\{[^}]*(?:animation|transition)\s*:\s*none\s*;/,
-  'reduced-motion styles should disable .nx-focusable motion',
+  /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.nx-focusable\s*\{[^}]*animation\s*:\s*none\s*;/,
+  'reduced-motion styles should disable .nx-focusable animation',
+)
+assert.match(
+  appleMobileStyle,
+  /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.nx-focusable\s*\{[^}]*transition\s*:\s*none\s*;/,
+  'reduced-motion styles should disable .nx-focusable transition',
 )
 assert.match(appleMobileStyle, /min-height:\s*88rpx/, 'Apple/iOS buttons should keep an 88rpx touch target')
 assert.match(appleMobileStyle, /safe-area-inset-bottom/, 'Apple/iOS style tokens should reserve safe-area bottom')
