@@ -825,116 +825,295 @@ CREATE TABLE IF NOT EXISTS theory_card_sources (
   CHECK (page_end IS NULL OR page_start IS NULL OR page_end >= page_start)
 );
 
+CREATE OR REPLACE FUNCTION lock_theory_libraries(library_ids BIGINT[])
+RETURNS VOID AS $$
+DECLARE
+  candidate BIGINT;
+BEGIN
+  FOR candidate IN
+    SELECT DISTINCT value
+    FROM unnest(library_ids) AS value
+    WHERE value IS NOT NULL
+    ORDER BY value
+  LOOP
+    PERFORM pg_advisory_xact_lock(hashtextextended('nine-xing:theory-library:' || candidate::text, 0));
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION lock_theory_ownership_scope()
+RETURNS TRIGGER AS $$
+DECLARE
+  scope_ids BIGINT[];
+  new_row JSONB := to_jsonb(NEW);
+  old_row JSONB := to_jsonb(OLD);
+BEGIN
+  IF TG_TABLE_NAME = 'theory_source_works' THEN
+    SELECT array_agg(DISTINCT library_id) INTO scope_ids
+    FROM (
+      SELECT (new_row->>'library_id')::BIGINT AS library_id
+      UNION ALL SELECT (old_row->>'library_id')::BIGINT
+      UNION ALL SELECT library_id FROM theory_source_works WHERE id IN ((new_row->>'canonical_work_id')::BIGINT, (old_row->>'canonical_work_id')::BIGINT)
+    ) scope;
+  ELSIF TG_TABLE_NAME = 'theory_source_files' THEN
+    SELECT array_agg(DISTINCT library_id) INTO scope_ids
+    FROM (
+      SELECT work.library_id FROM theory_source_works work WHERE work.id IN ((new_row->>'work_id')::BIGINT, (old_row->>'work_id')::BIGINT)
+      UNION ALL
+      SELECT duplicate_work.library_id
+      FROM theory_source_files duplicate
+      JOIN theory_source_works duplicate_work ON duplicate_work.id = duplicate.work_id
+      WHERE duplicate.id IN ((new_row->>'duplicate_of_file_id')::BIGINT, (old_row->>'duplicate_of_file_id')::BIGINT)
+    ) scope;
+  ELSIF TG_TABLE_NAME = 'theory_cards' THEN
+    scope_ids := ARRAY[(new_row->>'library_id')::BIGINT, (old_row->>'library_id')::BIGINT];
+  ELSIF TG_TABLE_NAME = 'theory_card_relations' THEN
+    SELECT array_agg(DISTINCT library_id) INTO scope_ids
+    FROM theory_cards
+    WHERE id IN ((new_row->>'from_card_id')::BIGINT, (new_row->>'to_card_id')::BIGINT,
+      (old_row->>'from_card_id')::BIGINT, (old_row->>'to_card_id')::BIGINT);
+  ELSIF TG_TABLE_NAME = 'theory_card_sources' THEN
+    SELECT array_agg(DISTINCT library_id) INTO scope_ids
+    FROM (
+      SELECT library_id FROM theory_cards WHERE id IN ((new_row->>'card_id')::BIGINT, (old_row->>'card_id')::BIGINT)
+      UNION ALL SELECT library_id FROM theory_source_works WHERE id IN ((new_row->>'work_id')::BIGINT, (old_row->>'work_id')::BIGINT)
+      UNION ALL
+      SELECT work.library_id
+      FROM theory_source_files file
+      JOIN theory_source_works work ON work.id = file.work_id
+      WHERE file.id IN ((new_row->>'file_id')::BIGINT, (old_row->>'file_id')::BIGINT)
+    ) scope;
+  ELSIF TG_TABLE_NAME = 'theory_practices' THEN
+    SELECT array_agg(DISTINCT library_id) INTO scope_ids
+    FROM theory_cards
+    WHERE id IN ((new_row->>'card_id')::BIGINT, (old_row->>'card_id')::BIGINT);
+  ELSIF TG_TABLE_NAME = 'theory_chunks' THEN
+    SELECT array_agg(DISTINCT library_id) INTO scope_ids
+    FROM (
+      SELECT (new_row->>'library_id')::BIGINT AS library_id
+      UNION ALL SELECT (old_row->>'library_id')::BIGINT
+      UNION ALL SELECT library_id FROM theory_cards WHERE id IN ((new_row->>'card_id')::BIGINT, (old_row->>'card_id')::BIGINT)
+      UNION ALL
+      SELECT card.library_id
+      FROM theory_practices practice
+      JOIN theory_cards card ON card.id = practice.card_id
+      WHERE practice.id IN ((new_row->>'practice_id')::BIGINT, (old_row->>'practice_id')::BIGINT)
+    ) scope;
+  ELSIF TG_TABLE_NAME = 'theory_library_releases' THEN
+    scope_ids := ARRAY[(new_row->>'library_id')::BIGINT, (old_row->>'library_id')::BIGINT];
+  ELSIF TG_TABLE_NAME = 'theory_release_cards' THEN
+    SELECT array_agg(DISTINCT library_id) INTO scope_ids
+    FROM (
+      SELECT library_id FROM theory_library_releases WHERE id IN ((new_row->>'release_id')::BIGINT, (old_row->>'release_id')::BIGINT)
+      UNION ALL SELECT library_id FROM theory_cards WHERE id IN ((new_row->>'card_id')::BIGINT, (old_row->>'card_id')::BIGINT)
+      UNION ALL SELECT library_id FROM theory_chunks WHERE id IN ((new_row->>'chunk_id')::BIGINT, (old_row->>'chunk_id')::BIGINT)
+    ) scope;
+  ELSE
+    RETURN NEW;
+  END IF;
+  PERFORM lock_theory_libraries(scope_ids);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE OR REPLACE FUNCTION validate_theory_library_ownership()
 RETURNS TRIGGER AS $$
+DECLARE
+  target_id BIGINT := (to_jsonb(NEW)->>'id')::BIGINT;
+  target_library_id BIGINT := (to_jsonb(NEW)->>'library_id')::BIGINT;
+  target_card_id BIGINT := (to_jsonb(NEW)->>'card_id')::BIGINT;
 BEGIN
-  -- Serialize ownership validation with every transaction that touched these tables.
-  -- Concurrent conflicting writers may be aborted by PostgreSQL deadlock detection,
-  -- but can never both commit a write-skew that leaves cross-library references.
-  LOCK TABLE theory_card_relations, theory_card_sources, theory_source_files,
-    theory_source_works, theory_cards, theory_practices, theory_chunks,
-    theory_library_releases, theory_release_cards IN SHARE ROW EXCLUSIVE MODE;
-
-  IF EXISTS (
-    SELECT 1
-    FROM theory_source_works work
-    JOIN theory_source_works canonical ON canonical.id = work.canonical_work_id
-    WHERE work.library_id IS DISTINCT FROM canonical.library_id
-  ) THEN
-    RAISE EXCEPTION 'theory canonical work must belong to the same library';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1
-    FROM theory_source_files file
-    JOIN theory_source_works work ON work.id = file.work_id
-    JOIN theory_source_files duplicate ON duplicate.id = file.duplicate_of_file_id
-    JOIN theory_source_works duplicate_work ON duplicate_work.id = duplicate.work_id
-    WHERE work.library_id IS DISTINCT FROM duplicate_work.library_id
-  ) THEN
-    RAISE EXCEPTION 'theory duplicate source file must belong to the same library';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1
-    FROM theory_card_relations relation
-    JOIN theory_cards from_card ON from_card.id = relation.from_card_id
-    JOIN theory_cards to_card ON to_card.id = relation.to_card_id
-    WHERE from_card.library_id IS DISTINCT FROM to_card.library_id
-  ) THEN
-    RAISE EXCEPTION 'theory relation cards must belong to the same library';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1
-    FROM theory_card_sources source
-    JOIN theory_cards card ON card.id = source.card_id
-    JOIN theory_source_works work ON work.id = source.work_id
-    LEFT JOIN theory_source_files file ON file.id = source.file_id
-    WHERE card.library_id IS DISTINCT FROM work.library_id
-       OR (source.file_id IS NOT NULL AND file.work_id IS DISTINCT FROM source.work_id)
-  ) THEN
-    RAISE EXCEPTION 'theory card source card, work, and file must share ownership';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1
-    FROM theory_chunks chunk
-    JOIN theory_cards card ON card.id = chunk.card_id
-    LEFT JOIN theory_practices practice ON practice.id = chunk.practice_id
-    WHERE chunk.library_id IS DISTINCT FROM card.library_id
-       OR (chunk.practice_id IS NOT NULL AND practice.card_id IS DISTINCT FROM chunk.card_id)
-  ) THEN
-    RAISE EXCEPTION 'theory chunk library, card, and practice ownership mismatch';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1
-    FROM theory_release_cards mapping
-    JOIN theory_library_releases release ON release.id = mapping.release_id
-    JOIN theory_cards card ON card.id = mapping.card_id
-    JOIN theory_chunks chunk ON chunk.id = mapping.chunk_id
-    WHERE release.library_id IS DISTINCT FROM card.library_id
-       OR release.library_id IS DISTINCT FROM chunk.library_id
-       OR chunk.card_id IS DISTINCT FROM mapping.card_id
-  ) THEN
-    RAISE EXCEPTION 'theory release card mapping ownership mismatch';
+  IF TG_TABLE_NAME = 'theory_source_works' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_source_works work
+      JOIN theory_source_works canonical ON canonical.id = work.canonical_work_id
+      WHERE (work.id = target_id OR canonical.id = target_id)
+        AND work.library_id IS DISTINCT FROM canonical.library_id
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: canonical work must belong to the same library';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM theory_card_sources source
+      JOIN theory_cards card ON card.id = source.card_id
+      JOIN theory_source_works work ON work.id = source.work_id
+      LEFT JOIN theory_source_files file ON file.id = source.file_id
+      WHERE source.work_id = target_id
+        AND (card.library_id IS DISTINCT FROM work.library_id OR (source.file_id IS NOT NULL AND file.work_id IS DISTINCT FROM source.work_id))
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: card source card, work, and file must share ownership';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM theory_source_files file
+      JOIN theory_source_works work ON work.id = file.work_id
+      JOIN theory_source_files duplicate ON duplicate.id = file.duplicate_of_file_id
+      JOIN theory_source_works duplicate_work ON duplicate_work.id = duplicate.work_id
+      WHERE (work.id = target_id OR duplicate_work.id = target_id)
+        AND work.library_id IS DISTINCT FROM duplicate_work.library_id
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: duplicate source file must belong to the same library';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'theory_source_files' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_source_files file
+      JOIN theory_source_works work ON work.id = file.work_id
+      JOIN theory_source_files duplicate ON duplicate.id = file.duplicate_of_file_id
+      JOIN theory_source_works duplicate_work ON duplicate_work.id = duplicate.work_id
+      WHERE (file.id = target_id OR duplicate.id = target_id)
+        AND work.library_id IS DISTINCT FROM duplicate_work.library_id
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: duplicate source file must belong to the same library';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM theory_card_sources source
+      JOIN theory_cards card ON card.id = source.card_id
+      JOIN theory_source_works work ON work.id = source.work_id
+      LEFT JOIN theory_source_files file ON file.id = source.file_id
+      WHERE source.file_id = target_id
+        AND (card.library_id IS DISTINCT FROM work.library_id OR file.work_id IS DISTINCT FROM source.work_id)
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: card source card, work, and file must share ownership';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'theory_cards' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_card_relations relation
+      JOIN theory_cards from_card ON from_card.id = relation.from_card_id
+      JOIN theory_cards to_card ON to_card.id = relation.to_card_id
+      WHERE (relation.from_card_id = target_id OR relation.to_card_id = target_id)
+        AND from_card.library_id IS DISTINCT FROM to_card.library_id
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: relation cards must belong to the same library';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM theory_card_sources source
+      JOIN theory_source_works work ON work.id = source.work_id
+      LEFT JOIN theory_source_files file ON file.id = source.file_id
+      WHERE source.card_id = target_id
+        AND (target_library_id IS DISTINCT FROM work.library_id OR (source.file_id IS NOT NULL AND file.work_id IS DISTINCT FROM source.work_id))
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: card source card, work, and file must share ownership';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM theory_chunks chunk
+      LEFT JOIN theory_practices practice ON practice.id = chunk.practice_id
+      WHERE chunk.card_id = target_id
+        AND (chunk.library_id IS DISTINCT FROM target_library_id OR (chunk.practice_id IS NOT NULL AND practice.card_id IS DISTINCT FROM chunk.card_id))
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: chunk library, card, and practice ownership mismatch';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM theory_release_cards mapping
+      JOIN theory_library_releases release ON release.id = mapping.release_id
+      JOIN theory_chunks chunk ON chunk.id = mapping.chunk_id
+      WHERE mapping.card_id = target_id
+        AND (release.library_id IS DISTINCT FROM target_library_id OR release.library_id IS DISTINCT FROM chunk.library_id OR chunk.card_id IS DISTINCT FROM mapping.card_id)
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: release card mapping ownership mismatch';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'theory_card_relations' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_card_relations relation
+      JOIN theory_cards from_card ON from_card.id = relation.from_card_id
+      JOIN theory_cards to_card ON to_card.id = relation.to_card_id
+      WHERE relation.id = target_id AND from_card.library_id IS DISTINCT FROM to_card.library_id
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: relation cards must belong to the same library';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'theory_card_sources' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_card_sources source
+      JOIN theory_cards card ON card.id = source.card_id
+      JOIN theory_source_works work ON work.id = source.work_id
+      LEFT JOIN theory_source_files file ON file.id = source.file_id
+      WHERE source.id = target_id
+        AND (card.library_id IS DISTINCT FROM work.library_id OR (source.file_id IS NOT NULL AND file.work_id IS DISTINCT FROM source.work_id))
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: card source card, work, and file must share ownership';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'theory_practices' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_chunks chunk
+      WHERE chunk.practice_id = target_id AND chunk.card_id IS DISTINCT FROM target_card_id
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: chunk library, card, and practice ownership mismatch';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'theory_chunks' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_chunks chunk
+      JOIN theory_cards card ON card.id = chunk.card_id
+      LEFT JOIN theory_practices practice ON practice.id = chunk.practice_id
+      WHERE chunk.id = target_id
+        AND (chunk.library_id IS DISTINCT FROM card.library_id OR (chunk.practice_id IS NOT NULL AND practice.card_id IS DISTINCT FROM chunk.card_id))
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: chunk library, card, and practice ownership mismatch';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM theory_release_cards mapping
+      JOIN theory_library_releases release ON release.id = mapping.release_id
+      JOIN theory_cards card ON card.id = mapping.card_id
+      WHERE mapping.chunk_id = target_id
+        AND (release.library_id IS DISTINCT FROM card.library_id OR release.library_id IS DISTINCT FROM target_library_id OR target_card_id IS DISTINCT FROM mapping.card_id)
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: release card mapping ownership mismatch';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'theory_library_releases' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_release_cards mapping
+      JOIN theory_cards card ON card.id = mapping.card_id
+      JOIN theory_chunks chunk ON chunk.id = mapping.chunk_id
+      WHERE mapping.release_id = target_id
+        AND (target_library_id IS DISTINCT FROM card.library_id OR target_library_id IS DISTINCT FROM chunk.library_id OR chunk.card_id IS DISTINCT FROM mapping.card_id)
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: release card mapping ownership mismatch';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'theory_release_cards' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_release_cards mapping
+      JOIN theory_library_releases release ON release.id = mapping.release_id
+      JOIN theory_cards card ON card.id = mapping.card_id
+      JOIN theory_chunks chunk ON chunk.id = mapping.chunk_id
+      WHERE mapping.id = target_id
+        AND (release.library_id IS DISTINCT FROM card.library_id OR release.library_id IS DISTINCT FROM chunk.library_id OR chunk.card_id IS DISTINCT FROM mapping.card_id)
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: release card mapping ownership mismatch';
+    END IF;
   END IF;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
--- Constraint triggers are recreated per target table so an unrelated trigger with the same
--- name can never suppress ownership validation during an idempotent schema rerun.
+-- Lock triggers use only the related library IDs, so unrelated libraries remain concurrent.
+DROP TRIGGER IF EXISTS theory_source_works_ownership_lock ON theory_source_works;
+CREATE TRIGGER theory_source_works_ownership_lock BEFORE INSERT OR UPDATE ON theory_source_works
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
+DROP TRIGGER IF EXISTS theory_source_files_ownership_lock ON theory_source_files;
+CREATE TRIGGER theory_source_files_ownership_lock BEFORE INSERT OR UPDATE ON theory_source_files
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
+DROP TRIGGER IF EXISTS theory_cards_ownership_lock ON theory_cards;
+CREATE TRIGGER theory_cards_ownership_lock BEFORE INSERT OR UPDATE ON theory_cards
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
+DROP TRIGGER IF EXISTS theory_card_relations_ownership_lock ON theory_card_relations;
+CREATE TRIGGER theory_card_relations_ownership_lock BEFORE INSERT OR UPDATE ON theory_card_relations
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
+DROP TRIGGER IF EXISTS theory_card_sources_ownership_lock ON theory_card_sources;
+CREATE TRIGGER theory_card_sources_ownership_lock BEFORE INSERT OR UPDATE ON theory_card_sources
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
+
+-- Constraint triggers are recreated per target table so unrelated same-name triggers cannot suppress them.
 DROP TRIGGER IF EXISTS theory_card_relations_ownership ON theory_card_relations;
-CREATE CONSTRAINT TRIGGER theory_card_relations_ownership
-  AFTER INSERT OR UPDATE ON theory_card_relations
-  DEFERRABLE INITIALLY DEFERRED
-  FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
-
+CREATE CONSTRAINT TRIGGER theory_card_relations_ownership AFTER INSERT OR UPDATE ON theory_card_relations
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
 DROP TRIGGER IF EXISTS theory_card_sources_file_work_match ON theory_card_sources;
-CREATE CONSTRAINT TRIGGER theory_card_sources_file_work_match
-  AFTER INSERT OR UPDATE ON theory_card_sources
-  DEFERRABLE INITIALLY DEFERRED
-  FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
-
+CREATE CONSTRAINT TRIGGER theory_card_sources_file_work_match AFTER INSERT OR UPDATE ON theory_card_sources
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
 DROP TRIGGER IF EXISTS theory_source_files_card_source_work_match ON theory_source_files;
-CREATE CONSTRAINT TRIGGER theory_source_files_card_source_work_match
-  AFTER INSERT OR UPDATE ON theory_source_files
-  DEFERRABLE INITIALLY DEFERRED
-  FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
-
+CREATE CONSTRAINT TRIGGER theory_source_files_card_source_work_match AFTER INSERT OR UPDATE ON theory_source_files
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
 DROP TRIGGER IF EXISTS theory_cards_ownership_dependents ON theory_cards;
-CREATE CONSTRAINT TRIGGER theory_cards_ownership_dependents
-  AFTER INSERT OR UPDATE ON theory_cards
-  DEFERRABLE INITIALLY DEFERRED
-  FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
-
+CREATE CONSTRAINT TRIGGER theory_cards_ownership_dependents AFTER INSERT OR UPDATE ON theory_cards
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
 DROP TRIGGER IF EXISTS theory_source_works_ownership_dependents ON theory_source_works;
-CREATE CONSTRAINT TRIGGER theory_source_works_ownership_dependents
-  AFTER INSERT OR UPDATE ON theory_source_works
-  DEFERRABLE INITIALLY DEFERRED
-  FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
+CREATE CONSTRAINT TRIGGER theory_source_works_ownership_dependents AFTER INSERT OR UPDATE ON theory_source_works
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
 
 CREATE TABLE IF NOT EXISTS theory_chunks (
   id BIGSERIAL PRIMARY KEY,
@@ -981,24 +1160,36 @@ CREATE TABLE IF NOT EXISTS theory_release_cards (
   UNIQUE (release_id, card_id, chunk_id)
 );
 
+DROP TRIGGER IF EXISTS theory_practices_ownership_lock ON theory_practices;
+CREATE TRIGGER theory_practices_ownership_lock BEFORE INSERT OR UPDATE ON theory_practices
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
 DROP TRIGGER IF EXISTS theory_practices_ownership_dependents ON theory_practices;
 CREATE CONSTRAINT TRIGGER theory_practices_ownership_dependents
   AFTER INSERT OR UPDATE ON theory_practices
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
 
+DROP TRIGGER IF EXISTS theory_chunks_ownership_lock ON theory_chunks;
+CREATE TRIGGER theory_chunks_ownership_lock BEFORE INSERT OR UPDATE ON theory_chunks
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
 DROP TRIGGER IF EXISTS theory_chunks_ownership ON theory_chunks;
 CREATE CONSTRAINT TRIGGER theory_chunks_ownership
   AFTER INSERT OR UPDATE ON theory_chunks
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
 
+DROP TRIGGER IF EXISTS theory_library_releases_ownership_lock ON theory_library_releases;
+CREATE TRIGGER theory_library_releases_ownership_lock BEFORE INSERT OR UPDATE ON theory_library_releases
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
 DROP TRIGGER IF EXISTS theory_library_releases_ownership_dependents ON theory_library_releases;
 CREATE CONSTRAINT TRIGGER theory_library_releases_ownership_dependents
   AFTER INSERT OR UPDATE ON theory_library_releases
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
 
+DROP TRIGGER IF EXISTS theory_release_cards_ownership_lock ON theory_release_cards;
+CREATE TRIGGER theory_release_cards_ownership_lock BEFORE INSERT OR UPDATE ON theory_release_cards
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
 DROP TRIGGER IF EXISTS theory_release_cards_ownership ON theory_release_cards;
 CREATE CONSTRAINT TRIGGER theory_release_cards_ownership
   AFTER INSERT OR UPDATE ON theory_release_cards
@@ -1102,6 +1293,8 @@ CREATE INDEX IF NOT EXISTS idx_theory_release_cards_chunk ON theory_release_card
 
 -- 中文词法检索优先使用 pg_trgm；扩展不可用时由应用回退到受限 ILIKE。
 DO $$
+DECLARE
+  pg_trgm_schema TEXT;
 BEGIN
   BEGIN
     CREATE EXTENSION IF NOT EXISTS pg_trgm;
@@ -1110,15 +1303,28 @@ BEGIN
     RETURN;
   END;
 
-  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm') THEN
-    EXECUTE $trgm$
-      CREATE INDEX IF NOT EXISTS idx_theory_chunks_lexical_trgm
-        ON theory_chunks USING gin ((title || ' ' || content || ' ' || keywords::text || ' ' || tags::text) gin_trgm_ops)
-    $trgm$;
-    EXECUTE $trgm$
-      CREATE INDEX IF NOT EXISTS idx_theory_cards_lexical_trgm
-        ON theory_cards USING gin ((canonical_name || ' ' || aliases::text) gin_trgm_ops)
-    $trgm$;
+  SELECT namespace.nspname INTO pg_trgm_schema
+  FROM pg_extension extension
+  JOIN pg_namespace namespace ON namespace.oid = extension.extnamespace
+  WHERE extension.extname = 'pg_trgm';
+
+  IF pg_trgm_schema IS NOT NULL THEN
+    BEGIN
+      EXECUTE format($trgm$
+        CREATE INDEX IF NOT EXISTS idx_theory_chunks_lexical_trgm
+          ON theory_chunks USING gin ((title || ' ' || content || ' ' || keywords::text || ' ' || tags::text) %I.gin_trgm_ops)
+      $trgm$, pg_trgm_schema);
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE '理论块 trigram 索引不可用，回退到 ILIKE：%', SQLERRM;
+    END;
+    BEGIN
+      EXECUTE format($trgm$
+        CREATE INDEX IF NOT EXISTS idx_theory_cards_lexical_trgm
+          ON theory_cards USING gin ((canonical_name || ' ' || aliases::text) %I.gin_trgm_ops)
+      $trgm$, pg_trgm_schema);
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE '理论卡 trigram 索引不可用，回退到 ILIKE：%', SQLERRM;
+    END;
   END IF;
 END $$;
 

@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/testutil"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestSchemaIncludesTheoryLibraryFoundation(t *testing.T) {
@@ -48,21 +51,22 @@ func TestSchemaIncludesTheoryLibraryFoundation(t *testing.T) {
 		"CREATE CONSTRAINT TRIGGER theory_source_files_card_source_work_match",
 		"CREATE CONSTRAINT TRIGGER theory_practices_ownership_dependents",
 		"CREATE CONSTRAINT TRIGGER theory_library_releases_ownership_dependents",
-		"theory relation cards must belong to the same library",
-		"theory card source card, work, and file must share ownership",
-		"theory chunk library, card, and practice ownership mismatch",
-		"theory release card mapping ownership mismatch",
-		"theory canonical work must belong to the same library",
-		"theory duplicate source file must belong to the same library",
-		"LOCK TABLE theory_card_relations, theory_card_sources, theory_source_files, theory_source_works, theory_cards, theory_practices, theory_chunks, theory_library_releases, theory_release_cards IN SHARE ROW EXCLUSIVE MODE",
+		"theory ownership constraint: relation cards must belong to the same library",
+		"theory ownership constraint: card source card, work, and file must share ownership",
+		"theory ownership constraint: chunk library, card, and practice ownership mismatch",
+		"theory ownership constraint: release card mapping ownership mismatch",
+		"theory ownership constraint: canonical work must belong to the same library",
+		"theory ownership constraint: duplicate source file must belong to the same library",
+		"pg_advisory_xact_lock",
+		"lock_theory_ownership_scope",
 		"Replacement transaction order: supersede the old published card before publishing the new version.",
 		"ADD CONSTRAINT ck_theory_source_works_authors_array",
 		"ADD CONSTRAINT ck_theory_cards_aliases_array",
 		"ADD CONSTRAINT ck_theory_practices_steps_array",
 		"ADD CONSTRAINT ck_theory_chunks_keywords_array",
 		"CREATE EXTENSION IF NOT EXISTS pg_trgm",
-		"CREATE INDEX IF NOT EXISTS idx_theory_chunks_lexical_trgm ON theory_chunks USING gin ((title || ' ' || content || ' ' || keywords::text || ' ' || tags::text) gin_trgm_ops)",
-		"CREATE INDEX IF NOT EXISTS idx_theory_cards_lexical_trgm ON theory_cards USING gin ((canonical_name || ' ' || aliases::text) gin_trgm_ops)",
+		"CREATE INDEX IF NOT EXISTS idx_theory_chunks_lexical_trgm",
+		"CREATE INDEX IF NOT EXISTS idx_theory_cards_lexical_trgm",
 		"idx_theory_libraries_created_by",
 		"idx_theory_libraries_updated_by",
 		"idx_theory_releases_activated_by",
@@ -230,12 +234,20 @@ func TestTheoryLibrarySchemaOrdersDependenciesAndProtectsOptionalExtensions(t *t
 	for _, fragment := range []string{
 		"EXCEPTION WHEN OTHERS",
 		"CREATE EXTENSION IF NOT EXISTS pg_trgm",
+		"JOIN pg_namespace",
+		"gin_trgm_ops",
 		"idx_theory_chunks_lexical_trgm",
 		"idx_theory_cards_lexical_trgm",
 	} {
 		if !strings.Contains(trgmBlock, fragment) {
 			t.Errorf("pg_trgm block missing %q", fragment)
 		}
+	}
+	if strings.Count(trgmBlock, "EXCEPTION WHEN OTHERS") < 3 {
+		t.Fatal("pg_trgm extension and both GIN indexes need independent exception handling")
+	}
+	if strings.Contains(sqlText, "LOCK TABLE theory_card_relations") {
+		t.Fatal("ownership validation must not lock all theory tables")
 	}
 
 	vectorBlock := schemaSection(t, sqlText,
@@ -490,37 +502,27 @@ func TestTheoryLibraryConcurrentOwnershipWritesCannotBothCommit(t *testing.T) {
 		_ = sourceTx.Rollback()
 		t.Fatal(err)
 	}
-	if _, err := fileTx.ExecContext(ctx, `UPDATE theory_source_files SET work_id=$1 WHERE id=$2`, workB, fileA); err != nil {
-		_ = sourceTx.Rollback()
+	started := make(chan struct{})
+	fileResult := make(chan error, 1)
+	go func() {
+		close(started)
+		if _, err := fileTx.ExecContext(ctx, `UPDATE theory_source_files SET work_id=$1 WHERE id=$2`, workB, fileA); err != nil {
+			_ = fileTx.Rollback()
+			fileResult <- err
+			return
+		}
+		fileResult <- fileTx.Commit()
+	}()
+	<-started
+	if err := sourceTx.Commit(); err != nil {
 		_ = fileTx.Rollback()
-		t.Fatal(err)
+		t.Fatalf("first ownership transaction must commit: %v", err)
 	}
-
-	type result struct {
-		tx  *sql.Tx
-		err error
+	conflictErr := <-fileResult
+	if conflictErr == nil {
+		t.Fatal("conflicting ownership transaction unexpectedly committed")
 	}
-	results := make(chan result, 2)
-	for _, tx := range []*sql.Tx{sourceTx, fileTx} {
-		go func(tx *sql.Tx) {
-			_, err := tx.ExecContext(ctx, `SET CONSTRAINTS ALL IMMEDIATE`)
-			results <- result{tx: tx, err: err}
-		}(tx)
-	}
-	commits := 0
-	for range 2 {
-		outcome := <-results
-		if outcome.err != nil {
-			_ = outcome.tx.Rollback()
-			continue
-		}
-		if err := outcome.tx.Commit(); err == nil {
-			commits++
-		}
-	}
-	if commits > 1 {
-		t.Fatal("concurrent card-source insert and file ownership move both committed")
-	}
+	assertOwnershipConstraintError(t, conflictErr)
 
 	var invalid int
 	if err := database.QueryRowContext(ctx, `
@@ -533,6 +535,86 @@ func TestTheoryLibraryConcurrentOwnershipWritesCannotBothCommit(t *testing.T) {
 	}
 	if invalid != 0 {
 		t.Fatalf("concurrent writes left %d mismatched card-source files", invalid)
+	}
+}
+
+func TestTheoryLibraryUnrelatedConcurrentWritesBothCommit(t *testing.T) {
+	database := openTheorySchemaTestDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	var libraryA, libraryB int64
+	if err := database.QueryRowContext(ctx, `INSERT INTO theory_libraries (key,name) VALUES ($1,$1) RETURNING id`, "unrelated-a-"+suffix).Scan(&libraryA); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `INSERT INTO theory_libraries (key,name) VALUES ($1,$1) RETURNING id`, "unrelated-b-"+suffix).Scan(&libraryB); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = database.ExecContext(context.Background(), `DELETE FROM theory_libraries WHERE id IN ($1,$2)`, libraryA, libraryB)
+	})
+
+	txA, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txB, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		_ = txA.Rollback()
+		t.Fatal(err)
+	}
+	if _, err := txA.ExecContext(ctx, `INSERT INTO theory_source_works (library_id,canonical_key,title,work_type,authority_level,epistemic_status,copyright_scope) VALUES ($1,$2,$2,'book',1,'source_text','metadata_only')`, libraryA, "unrelated-work-a-"+suffix); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := txB.ExecContext(ctx, `INSERT INTO theory_source_works (library_id,canonical_key,title,work_type,authority_level,epistemic_status,copyright_scope) VALUES ($1,$2,$2,'book',1,'source_text','metadata_only')`, libraryB, "unrelated-work-b-"+suffix); err != nil {
+		t.Fatal(err)
+	}
+
+	results := make(chan error, 2)
+	go func() { results <- txA.Commit() }()
+	go func() { results <- txB.Commit() }()
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("unrelated library write failed: %v", err)
+		}
+	}
+}
+
+func TestTheoryLibraryPgTrgmCustomSchemaIsOptional(t *testing.T) {
+	database := openTheorySchemaTestDB(t)
+	ctx := context.Background()
+	var ownsExtension bool
+	if err := database.QueryRowContext(ctx, `
+		SELECT pg_get_userbyid(extowner) = current_user
+		FROM pg_extension
+		WHERE extname='pg_trgm'
+	`).Scan(&ownsExtension); err != nil {
+		t.Fatal(err)
+	}
+	if !ownsExtension {
+		t.Skip("custom-schema pg_trgm relocation requires the test user to own the extension")
+	}
+	if _, err := database.ExecContext(ctx, `
+		DROP INDEX IF EXISTS idx_theory_chunks_lexical_trgm;
+		DROP INDEX IF EXISTS idx_theory_cards_lexical_trgm;
+		CREATE SCHEMA IF NOT EXISTS extensions;
+		ALTER EXTENSION pg_trgm SET SCHEMA extensions;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = database.ExecContext(context.Background(), `ALTER EXTENSION pg_trgm SET SCHEMA public`)
+	})
+	if _, err := database.ExecContext(ctx, schemaSQL); err != nil {
+		t.Fatalf("schema must survive pg_trgm outside search_path: %v", err)
+	}
+	var count int
+	if err := database.QueryRowContext(ctx, `SELECT count(*) FROM pg_indexes WHERE indexname IN ('idx_theory_chunks_lexical_trgm','idx_theory_cards_lexical_trgm')`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("expected both schema-qualified trigram indexes, got %d", count)
 	}
 }
 
@@ -740,5 +822,19 @@ func expectDeferredConstraintFailure(t *testing.T, database *sql.DB, insert func
 	}
 	if err := tx.Commit(); err == nil {
 		t.Fatal("expected deferred ownership constraint failure at commit")
+	}
+}
+
+func assertOwnershipConstraintError(t *testing.T, err error) {
+	t.Helper()
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		t.Fatalf("expected PostgreSQL ownership error, got %T: %v", err, err)
+	}
+	if pgErr.Code != "23514" {
+		t.Fatalf("expected ownership SQLSTATE 23514, got %s: %v", pgErr.Code, err)
+	}
+	if !strings.Contains(pgErr.Message, "theory ownership constraint") {
+		t.Fatalf("expected ownership constraint message, got %q", pgErr.Message)
 	}
 }
