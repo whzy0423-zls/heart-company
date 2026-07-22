@@ -52,7 +52,7 @@ func (s *Server) appReportList(w http.ResponseWriter, r *http.Request) {
 	var firstSession sql.NullTime
 	err = s.db.QueryRowContext(r.Context(), `
 		SELECT MIN(create_time) FROM app_chat_sessions
-		WHERE card_id = $1
+		WHERE card_id = $1 AND scene = 'chat'
 	`, cardID).Scan(&firstSession)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "query failed")
@@ -85,6 +85,7 @@ func (s *Server) appReportList(w http.ResponseWriter, r *http.Request) {
 		FROM app_chat_messages m
 		JOIN app_chat_sessions s ON m.session_id = s.id
 		WHERE s.card_id = $1
+		  AND s.scene = 'chat'
 		  AND m.create_time >= $2
 		  AND m.create_time <= $3
 		GROUP BY week_start
@@ -162,7 +163,7 @@ func (s *Server) appReportDetail(w http.ResponseWriter, r *http.Request, reportI
 	var firstSession sql.NullTime
 	err = s.db.QueryRowContext(r.Context(), `
 		SELECT MIN(create_time) FROM app_chat_sessions
-		WHERE card_id = $1
+		WHERE card_id = $1 AND scene = 'chat'
 	`, cardID).Scan(&firstSession)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "query failed")
@@ -190,6 +191,7 @@ func (s *Server) appReportDetail(w http.ResponseWriter, r *http.Request, reportI
 		FROM app_chat_messages m
 		JOIN app_chat_sessions s ON m.session_id = s.id
 		WHERE s.card_id = $1
+		  AND s.scene = 'chat'
 		  AND m.create_time >= $2
 		  AND m.create_time < $3
 		ORDER BY m.create_time

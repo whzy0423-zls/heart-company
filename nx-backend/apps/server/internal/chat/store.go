@@ -154,7 +154,7 @@ func (s *Store) GetOrCreateSceneSession(ctx context.Context, appUserID, cardID i
 func (s *Store) GetSession(ctx context.Context, appUserID, sessionID int64) (Session, error) {
 	sess, err := scanSession(s.db.QueryRowContext(ctx,
 		`SELECT id, app_user_id, card_id, title, updated_at, create_time
-		 FROM app_chat_sessions WHERE id = $1 AND app_user_id = $2`,
+		 FROM app_chat_sessions WHERE id = $1 AND app_user_id = $2 AND scene = 'chat'`,
 		sessionID, appUserID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return sess, ErrNotFound
@@ -165,9 +165,12 @@ func (s *Store) GetSession(ctx context.Context, appUserID, sessionID int64) (Ses
 // ListMessages 返回会话的全部消息（按时间正序）。
 func (s *Store) ListMessages(ctx context.Context, sessionID int64) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, session_id, role, content, sources, favorite, feedback,
-		        message_type, audio_asset_id, audio_duration_ms, transcript, create_time
-		 FROM app_chat_messages WHERE session_id = $1 ORDER BY create_time, id`,
+		`SELECT m.id, m.session_id, m.role, m.content, m.sources, m.favorite, m.feedback,
+		        m.message_type, m.audio_asset_id, m.audio_duration_ms, m.transcript, m.create_time
+		 FROM app_chat_messages m
+		 JOIN app_chat_sessions s ON s.id = m.session_id
+		 WHERE m.session_id = $1 AND s.scene = 'chat'
+		 ORDER BY m.create_time, m.id`,
 		sessionID)
 	if err != nil {
 		return nil, err
@@ -392,6 +395,7 @@ func (s *Store) GetVoiceAudioAssetID(ctx context.Context, appUserID, messageID i
 		 FROM app_chat_messages m
 		 JOIN app_chat_sessions s ON s.id = m.session_id
 		 WHERE m.id = $1 AND s.app_user_id = $2
+		   AND s.scene = 'chat'
 		   AND m.role = 'user' AND m.message_type = 'voice'
 		   AND m.audio_asset_id IS NOT NULL`,
 		messageID, appUserID,
@@ -411,6 +415,7 @@ func (s *Store) GetVoiceTranscript(ctx context.Context, appUserID, messageID int
 		 FROM app_chat_messages m
 		 JOIN app_chat_sessions s ON s.id = m.session_id
 		 WHERE m.id = $1 AND s.app_user_id = $2
+		   AND s.scene = 'chat'
 		   AND m.role = 'user' AND m.message_type = 'voice'`,
 		messageID, appUserID,
 	).Scan(&transcript)
@@ -426,7 +431,8 @@ func (s *Store) SetFeedback(ctx context.Context, appUserID, messageID int64, fee
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE app_chat_messages m SET feedback = $3
 		 FROM app_chat_sessions s
-		 WHERE m.id = $1 AND m.session_id = s.id AND s.app_user_id = $2 AND m.role = 'assistant'`,
+		 WHERE m.id = $1 AND m.session_id = s.id AND s.app_user_id = $2
+		   AND s.scene = 'chat' AND m.role = 'assistant'`,
 		messageID, appUserID, feedback)
 	if err != nil {
 		return err
@@ -444,7 +450,8 @@ func (s *Store) ToggleFavorite(ctx context.Context, appUserID, messageID int64) 
 	err := s.db.QueryRowContext(ctx,
 		`UPDATE app_chat_messages m SET favorite = NOT m.favorite
 		 FROM app_chat_sessions s
-		 WHERE m.id = $1 AND m.session_id = s.id AND s.app_user_id = $2 AND m.role = 'assistant'
+		 WHERE m.id = $1 AND m.session_id = s.id AND s.app_user_id = $2
+		   AND s.scene = 'chat' AND m.role = 'assistant'
 		 RETURNING m.favorite`,
 		messageID, appUserID).Scan(&favorite)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -469,7 +476,8 @@ func (s *Store) ListFavorites(ctx context.Context, appUserID, cardID int64) ([]F
 		`SELECT m.id, m.session_id, s.card_id, m.content, m.sources, m.create_time
 		 FROM app_chat_messages m
 		 JOIN app_chat_sessions s ON s.id = m.session_id
-		 WHERE s.app_user_id = $1 AND m.favorite = true
+		 WHERE s.app_user_id = $1 AND s.scene = 'chat'
+		   AND m.favorite = true
 		   AND ($2 = 0 OR s.card_id = $2)
 		 ORDER BY m.create_time DESC, m.id DESC`,
 		appUserID, cardID)
@@ -508,7 +516,7 @@ func (s *Store) SearchMessages(ctx context.Context, appUserID, cardID int64, key
 		`SELECT m.id, m.session_id, s.card_id, m.role, m.content, m.sources, m.favorite, m.create_time
 		 FROM app_chat_messages m
 		 JOIN app_chat_sessions s ON s.id = m.session_id
-		 WHERE s.app_user_id = $1
+		 WHERE s.app_user_id = $1 AND s.scene = 'chat'
 		   AND ($2 = 0 OR s.card_id = $2)
 		   AND m.content ILIKE '%' || $3 || '%'
 		 ORDER BY m.create_time DESC, m.id DESC

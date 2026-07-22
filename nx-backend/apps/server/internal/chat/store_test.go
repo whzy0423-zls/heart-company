@@ -135,9 +135,50 @@ func TestStorePostgresKeepsXinzhiliSceneAndTextMessagesHidden(t *testing.T) {
 	}
 
 	sources := json.RawMessage(`[{"id":"kb-1","title":"知识"}]`)
-	if _, err := store.SavePair(ctx, xinzhili.ID, "我最近总是着急", "先停一下。", sources); err != nil {
+	hiddenAssistantID, err := store.SavePair(ctx, xinzhili.ID, "我最近总是着急", "先停一下。", sources)
+	if err != nil {
 		t.Fatalf("SavePair: %v", err)
 	}
+	if _, err := store.SavePair(ctx, regular.ID, "普通聊天问题", "普通聊天回答", nil); err != nil {
+		t.Fatalf("SavePair regular chat: %v", err)
+	}
+
+	if _, err := store.GetSession(ctx, userID, xinzhili.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetSession hidden scene error = %v, want ErrNotFound", err)
+	}
+	hiddenMessages, err := store.ListMessages(ctx, xinzhili.ID)
+	if err != nil {
+		t.Fatalf("ListMessages hidden scene: %v", err)
+	}
+	if len(hiddenMessages) != 0 {
+		t.Fatalf("ListMessages exposed hidden scene messages: %+v", hiddenMessages)
+	}
+	searchResults, err := store.SearchMessages(ctx, userID, cardID, "着急")
+	if err != nil {
+		t.Fatalf("SearchMessages hidden text: %v", err)
+	}
+	if len(searchResults) != 0 {
+		t.Fatalf("SearchMessages exposed hidden text: %+v", searchResults)
+	}
+	if err := store.SetFeedback(ctx, userID, hiddenAssistantID, "helpful"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetFeedback hidden message error = %v, want ErrNotFound", err)
+	}
+	if _, err := store.ToggleFavorite(ctx, userID, hiddenAssistantID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ToggleFavorite hidden message error = %v, want ErrNotFound", err)
+	}
+	if _, err := database.ExecContext(ctx, `UPDATE app_chat_messages SET favorite = true WHERE id = $1`, hiddenAssistantID); err != nil {
+		t.Fatalf("mark hidden message favorite: %v", err)
+	}
+	favorites, err := store.ListFavorites(ctx, userID, cardID)
+	if err != nil {
+		t.Fatalf("ListFavorites hidden message: %v", err)
+	}
+	for _, favorite := range favorites {
+		if favorite.ID == hiddenAssistantID {
+			t.Fatalf("ListFavorites exposed hidden message: %+v", favorite)
+		}
+	}
+
 	rows, err := database.QueryContext(ctx,
 		`SELECT role, content, sources, message_type, audio_asset_id, audio_duration_ms, transcript
 		 FROM app_chat_messages WHERE session_id = $1 ORDER BY id`,
@@ -190,6 +231,18 @@ func TestStorePostgresKeepsXinzhiliSceneAndTextMessagesHidden(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotSources, wantSources) {
 		t.Fatalf("assistant sources = %s, want %s", messages[1].sources, sources)
+	}
+
+	var hiddenVoiceMessageID int64
+	if err := database.QueryRowContext(ctx,
+		`INSERT INTO app_chat_messages (session_id, role, content, message_type, transcript)
+		 VALUES ($1, 'user', '', 'voice', '隐藏语音转写') RETURNING id`,
+		xinzhili.ID,
+	).Scan(&hiddenVoiceMessageID); err != nil {
+		t.Fatalf("insert hidden voice message: %v", err)
+	}
+	if _, err := store.GetVoiceTranscript(ctx, userID, hiddenVoiceMessageID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetVoiceTranscript hidden message error = %v, want ErrNotFound", err)
 	}
 }
 
