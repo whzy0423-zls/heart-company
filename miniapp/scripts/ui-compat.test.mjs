@@ -60,6 +60,7 @@ for (const file of ['src/pages/relation/relation.vue', 'src/pages/test/test.vue'
 }
 
 const indexPage = readFileSync('src/pages/index/index.vue', 'utf8')
+const indexTemplate = indexPage.match(/<template>[\s\S]*?<\/template>/)?.[0] || ''
 const teacherCoursewareSource = readFileSync('src/utils/teacherCourseware.js', 'utf8')
 const primaryHomeCtaCopies = indexPage.match(/开始学习/g) || []
 assert.equal(primaryHomeCtaCopies.length, 1, 'home page should expose exactly one primary CTA copy: 开始学习')
@@ -102,13 +103,13 @@ assert.match(primaryHomeAction, /@keydown=["']onActionKeydown\(\$event,\s*goLear
 assert.match(indexPage, /function\s+activateAction\(action,\s*event\)\s*\{[\s\S]*?event\?\.repeat[\s\S]*?keyboardActivationAt[\s\S]*?action\(\)/, 'home keyboard activation should ignore repeats and suppress the synthetic follow-up click')
 assert.match(indexPage, /function\s+onActionKeydown\(event,\s*action\)\s*\{\s*if\s*\(!\['Enter',\s*' ',\s*'Spacebar'\]\.includes\(event\?\.key\)\)\s*return\s*event\.preventDefault\?\.\(\)\s*event\.stopPropagation\?\.\(\)\s*activateAction\(action,\s*event\)/, 'the shared keydown handler should prevent only Enter/Space after filtering, leaving Tab untouched')
 
-assert.match(indexPage, /class=["'][^"']*featured-course[^"']*["']/, 'home page should render one featured course like a publication')
-assert.match(indexPage, /class=["'][^"']*material-shelf[^"']*["']/, 'home page should render a courseware and materials shelf')
-assert.match(indexPage, /materialTypes/, 'course rows should expose material types')
-assert.match(indexPage, /course\.duration/, 'course rows should expose duration metadata')
-assert.match(indexPage, /course\.bullets/, 'course rows should expose learning bullets when provided')
-const courseCoverImages = indexPage.match(/<image\b[^>]*class=["'][^"']*(?:featured-course__cover|material-card__cover)[^"']*["'][^>]*>/g) || []
-assert.ok(courseCoverImages.length >= 2, 'featured course and material shelf should reserve distinct cover visuals')
+const teacherHeroImages = indexPage.match(/<image\b[^>]*class=["'][^"']*teacher-hero__image[^"']*["'][^>]*>/g) || []
+assert.equal(teacherHeroImages.length, 1, 'home page should render exactly one teacher hero image')
+const featuredCourseActions = indexPage.match(/<view\b[^>]*class=["']featured-course["'][^>]*>/g) || []
+assert.equal(featuredCourseActions.length, 1, 'home page should render exactly one featured course')
+assert.doesNotMatch(indexPage, /material-shelf|material-card|v-for=["']\(course,\s*index\) in materialCourses/, 'home page should not render a course shelf or additional course list')
+const courseCoverImages = indexPage.match(/<image\b[^>]*class=["'][^"']*featured-course__cover[^"']*["'][^>]*>/g) || []
+assert.equal(courseCoverImages.length, 1, 'home page should render exactly one featured course cover')
 for (const image of courseCoverImages) {
   assert.match(image, /aria-hidden=["']true["']/, 'course covers should be hidden from assistive technology because titles are adjacent')
   assert.match(image, /@error=["']onCourseImageError\(/, 'course covers should provide a one-shot local editorial fallback')
@@ -122,6 +123,12 @@ assert.doesNotMatch(indexPage, /resolveContentAsset\(course\.cover,/, 'DEFAULT_C
 assert.match(indexPage, /courseImageFallbackUsed/, 'course cover fallback should be applied only once per item')
 const secondaryHomeActions = indexPage.match(/<view\b[^>]*class=["'][^"']*secondary-entry[^"']*["'][^>]*>/g) || []
 assert.equal(secondaryHomeActions.length, 2, 'home should expose exactly two secondary cross-platform actions')
+assert.equal((indexPage.match(/九型自测/g) || []).length, 1, 'home should expose one light 九型自测 entry')
+assert.equal((indexPage.match(/预约咨询/g) || []).length, 1, 'home should expose one light 预约咨询 entry')
+assert.doesNotMatch(indexPage, /关系合盘|goRelation|pages\/relation\/relation/, 'home should remove the old relationship entry without changing the relation page')
+assert.match(indexPage, /function\s+goBooking\(\)\s*\{\s*uni\.switchTab\(\{\s*url:\s*['"]\/pages\/booking\/booking['"]\s*\}\)\s*\}/, 'home consultation entry should switch to the booking tab')
+assert.match(indexPage, /@click=["']activateAction\(goBooking,\s*\$event\)["']/, 'home consultation entry should activate booking on click or tap')
+assert.match(indexPage, /@keydown=["']onActionKeydown\(\$event,\s*goBooking\)["']/, 'home consultation entry should activate booking from Enter or Space')
 for (const action of secondaryHomeActions) {
   assert.match(action, /role=["']button["']/, 'secondary home actions should expose button semantics on H5')
   assert.match(action, /tabindex=["']0["']/, 'secondary home actions should be keyboard focusable on H5')
@@ -129,7 +136,7 @@ for (const action of secondaryHomeActions) {
   assert.match(action, /@keydown=["']onActionKeydown\(/, 'secondary home actions should compile one unmodified shared keydown handler')
 }
 const roleButtonViews = indexPage.match(/<view\b(?=[^>]*role=["']button["'])[^>]*>/g) || []
-assert.ok(roleButtonViews.length >= 6, 'all home interaction surfaces should expose cross-platform button semantics')
+assert.equal(roleButtonViews.length, 5, 'home should expose only retry, primary, featured course, and two secondary actions')
 for (const action of roleButtonViews) {
   assert.equal((action.match(/@keydown=/g) || []).length, 1, 'each home action should declare exactly one keydown binding')
 }
@@ -140,10 +147,14 @@ assert.match(indexPage, /\.home-primary\s*\{[^}]*min-height:\s*88rpx/, 'home pri
 assert.match(indexPage, /\.secondary-entry\s*\{[^}]*min-height:\s*88rpx/, 'secondary entries should keep an 88rpx touch target')
 assert.match(indexPage, /\.home-primary:focus-visible[\s\S]*\.secondary-entry:focus-visible[\s\S]*outline:/, 'home controls should expose a visible keyboard focus state')
 assert.match(indexPage, /@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{[\s\S]*?\.teacher-hero\s*\{[^}]*grid-template-columns:/, 'tablet teacher hero should become a two-column editorial composition')
-assert.match(indexPage, /@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{[\s\S]*?\.course-layout\s*\{[^}]*grid-template-columns:/, 'tablet course content should become a two-column editorial composition')
-assert.match(indexPage, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*transition:\s*none/, 'home should disable nonessential motion when reduced motion is requested')
-assert.doesNotMatch(indexPage, /TypeBadge|home-hero__float-token|home-bento|巨型转盘|backdrop-filter|filter\s*:/, 'home should avoid floating type tokens, Bento, wheel, and glass effects')
-assert.doesNotMatch(indexPage, /animation:\s*[^;}]*infinite/, 'home should not continuously animate texture or content')
+assert.match(indexPage, /--home-bg:\s*#F6F1E7/i, 'home should use the approved warm plain background')
+assert.match(indexPage, /--home-surface:\s*#FFFDF8/i, 'home should use the approved warm content surface')
+assert.match(indexPage, /--home-ink:\s*#20252B/i, 'home should use the approved restrained ink color')
+assert.match(indexPage, /--home-green:\s*#335B4A/i, 'home should use the approved restrained green accent')
+assert.doesNotMatch(indexTemplate, /home-masthead|editorial-kicker|section-heading|portrait-mark|featured-course__spine|material-shelf|material-card|home-bento|float-token|texture|pattern|CURRICULUM|FEATURED|TEACHER|SELF TEST|RELATIONSHIP|学习专刊/, 'home should omit decorative layers, editorial numbering, and English labels')
+assert.doesNotMatch(indexPage, /(?:repeating-)?(?:linear|radial)-gradient|background-image|box-shadow|@keyframes|animation\s*:|backdrop-filter|filter\s*:/, 'home should use a plain background with no texture, normal shadow, filter, or entry animation')
+assert.doesNotMatch(indexPage, /border-radius:\s*(?:[3-9]\d|\d{3,})rpx/, 'home radii should stay within the restrained 16-24rpx range')
+assert.doesNotMatch(indexPage, /grid-template-columns:\s*repeat\(/, 'home should avoid complex Bento-style grids')
 
 
 assert.match(appleMobileStyle, /\.page-stack\s*\{[\s\S]*safe-area-inset-bottom/, 'page-stack should reserve bottom safe area globally')
