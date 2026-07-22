@@ -117,11 +117,11 @@ func TestTheoryVerticalSliceSeedExecutesTwice(t *testing.T) {
 			t.Fatalf("schema execution %d: %v", i+1, err)
 		}
 	}
-	if _, err := conn.ExecContext(ctx, `DELETE FROM theory_libraries WHERE key='xinzhili'`); err != nil {
+	if err := cleanupTheoryVerticalSliceSeed(ctx, conn); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_, _ = database.ExecContext(context.Background(), `DELETE FROM theory_libraries WHERE key='xinzhili'`)
+		_ = cleanupTheoryVerticalSliceSeed(context.Background(), database)
 	})
 	for i := 0; i < 2; i++ {
 		if _, err := conn.ExecContext(ctx, string(seed)); err != nil {
@@ -175,4 +175,17 @@ func TestTheoryVerticalSliceSeedExecutesTwice(t *testing.T) {
 	if chainCount != 1 {
 		t.Fatalf("active vertical slice chain count = %d, want 1", chainCount)
 	}
+}
+
+type theoryVerticalSliceExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func cleanupTheoryVerticalSliceSeed(ctx context.Context, execer theoryVerticalSliceExecer) error {
+	_, err := execer.ExecContext(ctx, `
+		DELETE FROM theory_card_sources source
+		USING theory_cards card, theory_libraries library
+		WHERE source.card_id=card.id AND card.library_id=library.id AND library.key='xinzhili';
+		DELETE FROM theory_libraries WHERE key='xinzhili'`)
+	return err
 }

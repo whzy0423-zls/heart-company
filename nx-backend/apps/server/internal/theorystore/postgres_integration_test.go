@@ -319,6 +319,23 @@ func assertPostgresConstraintFailures(t *testing.T, ctx context.Context, databas
 	t.Helper()
 	_, err := database.ExecContext(ctx, `INSERT INTO theory_libraries (key,name,status) VALUES ($1,'bad','invalid')`, fixture.libraryKey+"_bad")
 	requirePostgresCode(t, err, "23514")
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO theory_source_files (work_id,relative_path,original_filename,file_format,sha256,title_source,extraction_class,extraction_status,extraction_quality)
+		VALUES (9223372036854775807,'missing-work.md','missing-work.md','md',$1,'manual','text_rich','extracted',0.95)`, strings.Repeat("5", 64))
+	requirePostgresForeignKey(t, err, "theory_source_files_work_id_fkey")
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO theory_cards (
+			library_id,canonical_key,canonical_name,card_kind,definition,applicable_context,non_applicable_context,
+			epistemic_status,evidence_level,clinical_safety,authority_level,status,version
+		) VALUES (
+			9223372036854775807,'missing-library','missing library','concept','definition','context','not context',
+			'course_adaptation','experiential','general',5,'draft',1
+		)`)
+	requirePostgresForeignKey(t, err, "theory_cards_library_id_fkey")
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO theory_card_sources (card_id,work_id,source_role,extraction_quality)
+		VALUES (9223372036854775807,$1,'primary',0.95)`, fixture.work.ID)
+	requirePostgresForeignKey(t, err, "theory_card_sources_card_id_fkey")
 
 	_, err = database.ExecContext(ctx, `
 		INSERT INTO theory_source_files (work_id,relative_path,original_filename,file_format,page_count,sha256,title_source,extraction_class,extraction_status,extraction_quality)
@@ -342,7 +359,7 @@ func assertPostgresConstraintFailures(t *testing.T, ctx context.Context, databas
 	} else {
 		_ = tx.Rollback()
 	}
-	requirePostgresCode(t, err, "P0001")
+	requirePostgresConstraint(t, err, "23514", "theory ownership constraint: duplicate source file must belong to the same library")
 
 	tx, err = database.BeginTx(ctx, nil)
 	if err != nil {
@@ -354,7 +371,7 @@ func assertPostgresConstraintFailures(t *testing.T, ctx context.Context, databas
 	} else {
 		_ = tx.Rollback()
 	}
-	requirePostgresCode(t, err, "P0001")
+	requirePostgresConstraint(t, err, "23514", "theory ownership constraint: relation cards must belong to the same library")
 
 	tx, err = database.BeginTx(ctx, nil)
 	if err != nil {
@@ -366,7 +383,7 @@ func assertPostgresConstraintFailures(t *testing.T, ctx context.Context, databas
 	} else {
 		_ = tx.Rollback()
 	}
-	requirePostgresCode(t, err, "P0001")
+	requirePostgresConstraint(t, err, "23514", "theory ownership constraint: release card mapping ownership mismatch")
 
 	err = store.MarkDuplicate(ctx, other.file.ID, fixture.file.ID)
 	if !errors.Is(err, ErrDuplicateCrossLibrary) {
@@ -385,5 +402,33 @@ func requirePostgresCode(t *testing.T, err error, code string) {
 	}
 	if pgErr.Code != code {
 		t.Fatalf("SQLSTATE = %s (%v), want %s", pgErr.Code, err, code)
+	}
+}
+
+func requirePostgresConstraint(t *testing.T, err error, code, message string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("operation succeeded, want PostgreSQL SQLSTATE %s containing %q", code, message)
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		t.Fatalf("error %v is not a PostgreSQL error", err)
+	}
+	if pgErr.Code != code || !strings.Contains(pgErr.Message, message) {
+		t.Fatalf("PostgreSQL error code/message = %s/%q, want %s containing %q", pgErr.Code, pgErr.Message, code, message)
+	}
+}
+
+func requirePostgresForeignKey(t *testing.T, err error, constraint string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("operation succeeded, want PostgreSQL foreign-key constraint %q", constraint)
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		t.Fatalf("error %v is not a PostgreSQL error", err)
+	}
+	if pgErr.Code != "23503" || pgErr.ConstraintName != constraint {
+		t.Fatalf("PostgreSQL error code/constraint = %s/%q, want 23503/%q", pgErr.Code, pgErr.ConstraintName, constraint)
 	}
 }
