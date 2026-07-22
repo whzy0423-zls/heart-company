@@ -267,6 +267,38 @@ assert.match(indexPage, /--home-bg:\s*#F5F6F4/i, 'home should use a light WeUI-l
 assert.match(indexPage, /--home-surface:\s*#FFFFFF/i, 'home should use white service blocks')
 assert.match(indexPage, /--home-ink:\s*#20252B/i, 'home should use the approved restrained ink color')
 assert.match(indexPage, /--home-green:\s*#335B4A/i, 'home should use the approved restrained green accent')
+assert.match(indexPage, /--home-muted:\s*#4F5A54/i, 'home should define a darker readable muted text color')
+
+function channelLuminance(channel) {
+  const normalized = channel / 255
+  return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4
+}
+
+function contrastRatio(foreground, background) {
+  const channels = (hex) => hex.match(/[a-f\d]{2}/gi).map((value) => Number.parseInt(value, 16))
+  const luminance = (hex) => {
+    const [red, green, blue] = channels(hex).map(channelLuminance)
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+  }
+  const lighter = Math.max(luminance(foreground), luminance(background))
+  const darker = Math.min(luminance(foreground), luminance(background))
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+for (const background of ['#FFFFFF', '#F5F6F4']) {
+  assert.ok(contrastRatio('#4F5A54', background) >= 4.5, `muted home text should meet AA contrast on ${background}`)
+  assert.ok(contrastRatio('#335B4A', background) >= 4.5, `green home actions should meet AA contrast on ${background}`)
+}
+
+for (const [selector, message] of [
+  ['service-desc', 'service descriptions'],
+  ['course-desc', 'course descriptions'],
+  ['booking-action', 'booking action text'],
+]) {
+  assert.match(indexPage, new RegExp(`\\.${selector}\\s*\\{(?=[^}]*font-size:\\s*(?:2[4-9]|[3-9]\\d|\\d{3,})rpx)(?=[^}]*color:\\s*(?:var\\(--home-muted\\)|var\\(--home-green\\)))[^}]*\\}`), `${message} should use at least 24rpx readable AA text`)
+}
+assert.match(indexPage, /\.section-note,\s*\.section-link\s*\{(?=[^}]*font-size:\s*(?:2[4-9]|[3-9]\d|\d{3,})rpx)(?=[^}]*color:\s*var\(--home-muted\))[^}]*\}/, 'section helper and link base text should use readable muted styling')
+assert.match(indexPage, /\.course-meta,\s*\.material-meta,\s*\.booking-desc\s*\{(?=[^}]*font-size:\s*(?:2[4-9]|[3-9]\d|\d{3,})rpx)(?=[^}]*color:\s*var\(--home-muted\))[^}]*\}/, 'home metadata should use at least 24rpx readable muted text')
 assert.doesNotMatch(indexTemplate, /home-primary|开始学习|teacher-hero__portrait|home-masthead|editorial-kicker|portrait-mark|featured-course__spine|material-shelf|material-card|home-bento|float-token|texture|pattern|CURRICULUM|FEATURED|TEACHER|SELF TEST|RELATIONSHIP|学习专刊/, 'home should omit the old long-page hero, main button, and decorative promotional layers')
 assert.doesNotMatch(indexPage, /(?:repeating-)?(?:linear|radial)-gradient|background-image|box-shadow|@keyframes|animation\s*:|backdrop-filter|filter\s*:/, 'home should use a plain background with no texture, normal shadow, filter, or entry animation')
 assert.doesNotMatch(indexPage, /border-radius:\s*(?:[3-9]\d|\d{3,})rpx/, 'home radii should stay within the restrained 16-24rpx range')

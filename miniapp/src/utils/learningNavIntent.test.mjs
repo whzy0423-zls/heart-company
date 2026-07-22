@@ -10,6 +10,7 @@ await writeFile(modulePath, source)
 
 let storage = {}
 let failNextWrite = false
+let failRemovals = false
 globalThis.uni = {
   getStorageSync(key) {
     return Object.prototype.hasOwnProperty.call(storage, key) ? storage[key] : ''
@@ -21,7 +22,10 @@ globalThis.uni = {
     }
     storage[key] = value
   },
-  removeStorageSync(key) { delete storage[key] },
+  removeStorageSync(key) {
+    if (failRemovals) throw new Error('storage removal failed')
+    delete storage[key]
+  },
 }
 
 const {
@@ -47,6 +51,13 @@ for (const value of ['course', 'material', 'quote']) {
 storage[LEARNING_NAV_INTENT_KEY] = { value: 'material', expiresAt: 11_000 }
 assert.equal(readLearningNavIntent({ now: () => 11_000 }), null, 'an expired intent should be ignored')
 assert.equal(storage[LEARNING_NAV_INTENT_KEY], undefined, 'an expired intent should be cleared automatically')
+
+setLearningNavIntent('course', { now: () => 1_000 })
+failRemovals = true
+assert.equal(readLearningNavIntent({ now: () => 1_000 }), 'course', 'a valid intent may still be returned when persistent cleanup fails')
+assert.equal(readLearningNavIntent({ now: () => 1_000 }), null, 'the same intent should not be consumed twice when persistent cleanup fails')
+failRemovals = false
+delete storage[LEARNING_NAV_INTENT_KEY]
 
 for (const value of ['', 'lesson', 'COURSE', null, undefined]) {
   storage[LEARNING_NAV_INTENT_KEY] = { value: 'course', expiresAt: 99_000 }

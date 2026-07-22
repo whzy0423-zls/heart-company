@@ -380,6 +380,7 @@ function goBooking() {
   --home-surface: #FFFFFF;
   --home-ink: #20252B;
   --home-green: #335B4A;
+  --home-muted: #4F5A54;
   min-width: 0;
   overflow-x: hidden;
   background: var(--home-bg);
@@ -525,8 +526,8 @@ function goBooking() {
 
 .section-note,
 .section-link {
-  color: #7A827E;
-  font-size: 22rpx;
+  color: var(--home-muted);
+  font-size: 24rpx;
   line-height: 1.4;
 }
 
@@ -575,8 +576,8 @@ function goBooking() {
 
 .service-desc {
   margin-top: 4rpx;
-  color: #737B77;
-  font-size: 21rpx;
+  color: var(--home-muted);
+  font-size: 24rpx;
   line-height: 1.45;
 }
 
@@ -627,8 +628,8 @@ function goBooking() {
 
 .course-desc {
   overflow: hidden;
-  color: #69716D;
-  font-size: 21rpx;
+  color: var(--home-muted);
+  font-size: 24rpx;
   line-height: 1.45;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -637,8 +638,8 @@ function goBooking() {
 .course-meta,
 .material-meta,
 .booking-desc {
-  color: #747C78;
-  font-size: 21rpx;
+  color: var(--home-muted);
+  font-size: 24rpx;
   line-height: 1.45;
 }
 
@@ -675,7 +676,7 @@ function goBooking() {
 .booking-action {
   flex: 0 0 auto;
   color: var(--home-green);
-  font-size: 23rpx;
+  font-size: 24rpx;
   font-weight: 700;
 }
 

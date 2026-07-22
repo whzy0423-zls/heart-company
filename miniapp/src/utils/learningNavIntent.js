@@ -2,12 +2,14 @@ export const LEARNING_NAV_INTENT_KEY = 'nx_learning_nav_intent'
 export const LEARNING_NAV_INTENT_TTL_MS = 10_000
 
 const VALID_INTENTS = new Set(['course', 'material', 'quote'])
+let suppressStoredIntent = false
 
 function nowFrom(options) {
   return typeof options?.now === 'function' ? options.now() : Date.now()
 }
 
 export function clearLearningNavIntent() {
+  suppressStoredIntent = true
   try {
     uni.removeStorageSync(LEARNING_NAV_INTENT_KEY)
   } catch {
@@ -25,6 +27,7 @@ export function setLearningNavIntent(value, options = {}) {
       value,
       expiresAt: nowFrom(options) + LEARNING_NAV_INTENT_TTL_MS,
     })
+    suppressStoredIntent = false
     return true
   } catch {
     clearLearningNavIntent()
@@ -39,6 +42,11 @@ export function readLearningNavIntent(options = {}) {
     if (raw === '') return null
     cached = typeof raw === 'string' ? JSON.parse(raw) : raw
   } catch {
+    clearLearningNavIntent()
+    return null
+  }
+
+  if (suppressStoredIntent) {
     clearLearningNavIntent()
     return null
   }
