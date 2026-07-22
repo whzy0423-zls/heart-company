@@ -1,0 +1,179 @@
+package theorystore
+
+import (
+	"context"
+	"database/sql/driver"
+	"errors"
+	"math"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestContentStoreSaveCardSourcePersistsAuditFields(t *testing.T) {
+	source := testCardSource(11)
+	script := &sqlScript{steps: []sqlStep{{kind: "query", contains: "INSERT INTO theory_card_sources", columns: cardSourceColumns(), rows: [][]driver.Value{cardSourceValues(source)}}}}
+	saved, err := testStore(t, script).SaveCardSource(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.VerifiedBy == nil || saved.VerifiedAt == nil || saved.Quotation == "" {
+		t.Fatalf("audit fields not scanned: %+v", saved)
+	}
+	call := script.callsSnapshot()[0]
+	if len(call.args) != 14 || call.args[0] != source.CardID || call.args[1] != source.WorkID || call.args[11] != source.QuoteVerified {
+		t.Fatalf("source arguments incomplete: %#v", call.args)
+	}
+}
+
+func TestContentStoreRejectsInvalidPracticeRelationAndEmbedding(t *testing.T) {
+	store := testStore(t, &sqlScript{})
+	source := testCardSource(11)
+	source.FileID = int64ptr(0)
+	if _, err := store.SaveCardSource(context.Background(), source); err == nil {
+		t.Fatal("invalid source file id accepted")
+	}
+	practice := testPractice()
+	practice.Steps = []byte(`{}`)
+	if _, err := store.SavePractice(context.Background(), practice); err == nil {
+		t.Fatal("invalid practice accepted")
+	}
+	relation := testRelation()
+	relation.ToCardID = relation.FromCardID
+	if _, err := store.SaveRelation(context.Background(), relation); err == nil {
+		t.Fatal("self relation accepted")
+	}
+	record := testEmbedding()
+	record.Embedding[0] = float32(math.Inf(1))
+	if _, err := store.SaveEmbeddingRecord(context.Background(), record); err == nil {
+		t.Fatal("non-finite embedding accepted")
+	}
+}
+
+func TestContentStorePracticeChangeMarksEmbeddingsStale(t *testing.T) {
+	p := testPractice()
+	script := &sqlScript{steps: []sqlStep{
+		{kind: "begin"},
+		{kind: "query", contains: "INSERT INTO theory_practices", columns: practiceColumns(), rows: [][]driver.Value{practiceValues(p)}},
+		{kind: "exec", contains: "status = 'stale'", affected: 2},
+		{kind: "commit"},
+	}}
+	if _, err := testStore(t, script).SavePractice(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if indexCall(script.callsSnapshot(), "INSERT INTO theory_practices") >= indexCall(script.callsSnapshot(), "status = 'stale'") {
+		t.Fatal("embeddings invalidated before practice save")
+	}
+}
+
+func TestContentStoreSaveRelationUsesValidatorAndAllFields(t *testing.T) {
+	r := testRelation()
+	script := &sqlScript{steps: []sqlStep{{kind: "query", contains: "INSERT INTO theory_card_relations", columns: relationColumns(), rows: [][]driver.Value{relationValues(r)}}}}
+	saved, err := testStore(t, script).SaveRelation(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Confidence != r.Confidence || len(script.callsSnapshot()[0].args) != 8 {
+		t.Fatalf("relation fields missing: %+v %#v", saved, script.callsSnapshot()[0].args)
+	}
+}
+
+func TestContentStoreChunkChangeMarksOldHashEmbeddingStale(t *testing.T) {
+	c := testChunk()
+	script := &sqlScript{steps: []sqlStep{
+		{kind: "begin"},
+		{kind: "query", contains: "INSERT INTO theory_chunks", columns: chunkColumns(), rows: [][]driver.Value{chunkValues(c)}},
+		{kind: "exec", contains: "content_hash <> $2", affected: 1},
+		{kind: "commit"},
+	}}
+	saved, err := testStore(t, script).SaveChunk(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.ContentHash != c.ContentHash || saved.Version != c.Version {
+		t.Fatalf("chunk hash/version lost: %+v", saved)
+	}
+}
+
+func TestContentStoreLexicalEmbeddingMetadataDoesNotPretendVectorExists(t *testing.T) {
+	r := testEmbedding()
+	r.Status, r.Embedding, r.EmbeddedAt = EmbeddingStatusPending, nil, nil
+	script := &sqlScript{steps: []sqlStep{{kind: "query", contains: "INSERT INTO theory_chunk_embeddings", columns: embeddingColumns(), rows: [][]driver.Value{embeddingValues(r)}}}}
+	saved, err := testStore(t, script).SaveEmbeddingRecord(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Status != EmbeddingStatusPending {
+		t.Fatalf("unexpected status: %s", saved.Status)
+	}
+	if strings.Contains(script.callsSnapshot()[0].query, " embedding,") {
+		t.Fatal("metadata-only write referenced vector column")
+	}
+}
+
+func TestContentStoreVectorWriteRequiresCapability(t *testing.T) {
+	r := testEmbedding()
+	script := &sqlScript{steps: []sqlStep{{kind: "query", contains: "information_schema.columns", columns: []string{"exists"}, rows: [][]driver.Value{{false}}}}}
+	_, err := testStore(t, script).SaveEmbeddingRecord(context.Background(), r)
+	if !errors.Is(err, ErrVectorUnavailable) {
+		t.Fatalf("expected ErrVectorUnavailable, got %v", err)
+	}
+}
+
+func TestContentStoreReadyVectorWrites1536ValuesOnlyWhenColumnExists(t *testing.T) {
+	r := testEmbedding()
+	script := &sqlScript{steps: []sqlStep{
+		{kind: "query", contains: "information_schema.columns", columns: []string{"exists"}, rows: [][]driver.Value{{true}}},
+		{kind: "query", contains: "embedding = EXCLUDED.embedding", columns: embeddingColumns(), rows: [][]driver.Value{embeddingValues(r)}},
+	}}
+	if _, err := testStore(t, script).SaveEmbeddingRecord(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	calls := script.callsSnapshot()
+	vector, ok := calls[1].args[4].(string)
+	if !ok || strings.Count(vector, ",") != 1535 {
+		t.Fatalf("vector argument is not 1536-dimensional: %T", calls[1].args[4])
+	}
+}
+
+func testPractice() Practice {
+	now := time.Unix(1700000000, 0).UTC()
+	return Practice{ID: 51, CardID: 11, Goal: "observe", EstimatedMinutes: 5, Steps: []byte(`["pause"]`), ReflectionPrompts: []byte(`["what?"]`), ExpectedFeedback: []byte(`["calm"]`), StopConditions: []byte(`[]`), ProfessionalEscalation: []byte(`[]`), Contraindications: "none", PracticeSchemaVersion: PracticeSchemaV1, Status: StatusDraft, Version: 2, CreateTime: now, UpdateTime: now}
+}
+func testRelation() Relation {
+	now := time.Unix(1700000000, 0).UTC()
+	return Relation{ID: 61, FromCardID: 11, ToCardID: 12, RelationType: RelationSupports, Note: "note", Confidence: .8, Status: RelationStatusPublished, CreatedBy: int64ptr(5), ReviewedBy: int64ptr(7), CreateTime: now, UpdateTime: now}
+}
+func testChunk() Chunk {
+	now := time.Unix(1700000000, 0).UTC()
+	return Chunk{ID: 71, LibraryID: 3, CardID: 11, ChunkKey: "inner_observer/card", ChunkKind: ChunkKindCard, Title: "title", Content: "content", Keywords: []byte(`["observe"]`), Tags: []byte(`["self"]`), AuthorityLevel: 4, EvidenceLevel: EvidenceModerate, ClinicalSafety: ClinicalGeneral, TokenCount: 10, ContentHash: strings.Repeat("a", 64), Version: 2, Status: ChunkStatusEnabled, CreateTime: now, UpdateTime: now}
+}
+func testEmbedding() EmbeddingRecord {
+	now := time.Unix(1700000000, 0).UTC()
+	return EmbeddingRecord{ID: 81, ChunkID: 71, EmbeddingModel: "text-embedding-3-small", Dimensions: 1536, Embedding: make([]float32, 1536), ContentHash: strings.Repeat("a", 64), EmbeddedAt: &now, Status: EmbeddingStatusReady}
+}
+
+func practiceColumns() []string {
+	return []string{"id", "card_id", "goal", "estimated_minutes", "steps", "reflection_prompts", "expected_feedback", "stop_conditions", "professional_escalation", "contraindications", "practice_schema_version", "status", "version", "create_time", "update_time"}
+}
+func practiceValues(p Practice) []driver.Value {
+	return []driver.Value{p.ID, p.CardID, p.Goal, int64(p.EstimatedMinutes), []byte(p.Steps), []byte(p.ReflectionPrompts), []byte(p.ExpectedFeedback), []byte(p.StopConditions), []byte(p.ProfessionalEscalation), p.Contraindications, p.PracticeSchemaVersion, string(p.Status), int64(p.Version), p.CreateTime, p.UpdateTime}
+}
+func relationColumns() []string {
+	return []string{"id", "from_card_id", "to_card_id", "relation_type", "note", "confidence", "status", "created_by", "reviewed_by", "create_time", "update_time"}
+}
+func relationValues(r Relation) []driver.Value {
+	return []driver.Value{r.ID, r.FromCardID, r.ToCardID, string(r.RelationType), r.Note, r.Confidence, string(r.Status), nullableInt(r.CreatedBy), nullableInt(r.ReviewedBy), r.CreateTime, r.UpdateTime}
+}
+func chunkColumns() []string {
+	return []string{"id", "library_id", "card_id", "practice_id", "chunk_key", "chunk_kind", "title", "content", "keywords", "tags", "authority_level", "evidence_level", "clinical_safety", "token_count", "content_hash", "version", "status", "create_time", "update_time"}
+}
+func chunkValues(c Chunk) []driver.Value {
+	return []driver.Value{c.ID, c.LibraryID, c.CardID, nullableInt(c.PracticeID), c.ChunkKey, string(c.ChunkKind), c.Title, c.Content, []byte(c.Keywords), []byte(c.Tags), int64(c.AuthorityLevel), string(c.EvidenceLevel), string(c.ClinicalSafety), int64(c.TokenCount), c.ContentHash, int64(c.Version), string(c.Status), c.CreateTime, c.UpdateTime}
+}
+func embeddingColumns() []string {
+	return []string{"id", "chunk_id", "embedding_model", "dimensions", "content_hash", "embedded_at", "status", "error_message"}
+}
+func embeddingValues(r EmbeddingRecord) []driver.Value {
+	return []driver.Value{r.ID, r.ChunkID, r.EmbeddingModel, int64(r.Dimensions), r.ContentHash, nullableTime(r.EmbeddedAt), string(r.Status), r.ErrorMessage}
+}
