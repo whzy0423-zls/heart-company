@@ -286,3 +286,29 @@
 - [ ] 运行 `node scripts/ui-compat.test.mjs && npm run test:config && npm run build:h5 && npm run build:mp-weixin`，预期 PASS。
 - [ ] 在三个视口检查老师图文、课程封面、长简介、空/错误状态和按钮焦点。
 - [ ] 提交：`git add src/pages/learn/learn.vue scripts/ui-compat.test.mjs && git commit -m "feat: redesign teacher and courseware learning page"`。
+
+---
+
+## Chunk 9：最终视觉精简
+
+### Task 20：精简老师首页
+
+**Files:** `src/pages/index/index.vue`, `scripts/ui-compat.test.mjs`
+
+- [ ] 写失败断言：首页仅一个主图、一个“开始学习”主按钮、一门推荐课程、两个次要入口；不存在纹理、装饰层、章节编号、复杂 Bento 和非必要动画。
+- [ ] 运行 `node scripts/ui-compat.test.mjs`，预期精简契约 FAIL。
+- [ ] 保留老师/课程数据、缓存刷新、空错状态、图片回退和所有导航行为，只删减模板与 CSS。
+- [ ] 使用米白、深灰、墨绿，统一小圆角/细边框，普通内容无阴影。
+- [ ] 运行完整测试与 H5/MP 构建，检查 375/390/768 无溢出、按钮焦点和对比度。
+- [ ] 提交：`git add src/pages/index/index.vue scripts/ui-compat.test.mjs && git commit -m "refactor: simplify teacher home ui"`。
+
+### Task 21：精简学习资料页
+
+**Files:** `src/pages/learn/learn.vue`, `scripts/ui-compat.test.mjs`
+
+- [ ] 写失败断言：一个老师简介、单列课程媒体行、一条语录、轻量九型索引；不存在复杂书架、章节编号、纹理和非必要动画。
+- [ ] 运行 `node scripts/ui-compat.test.mjs`，预期精简契约 FAIL。
+- [ ] 保留所有测试过的状态工具、缓存、图片回退、键盘和数据逻辑，只简化模板/CSS。
+- [ ] 课程行保持封面、标题、类型、时长和短简介，长 bullets 渐进展示或隐藏，避免信息过载。
+- [ ] 运行完整测试与 H5/MP 构建，检查长简介、空/错状态和三个视口。
+- [ ] 提交：`git add src/pages/learn/learn.vue scripts/ui-compat.test.mjs && git commit -m "refactor: simplify teacher learning ui"`。
