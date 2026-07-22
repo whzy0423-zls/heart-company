@@ -117,3 +117,14 @@ test('reserves the published QR footprint across mobile loading and error states
     /@media\s*\(max-width:\s*(?:760|768)px\)[\s\S]*\.app-download__qr-space\s*\{[^}]*min-height:\s*26\dpx;/s,
   )
 })
+
+test('keeps the QR image contained inside its frame', () => {
+  assert.match(
+    cssSource,
+    /\.app-download__qr-frame\s*\{[^}]*width:\s*min\(224px,\s*100%\)[^}]*aspect-ratio:\s*1[^}]*overflow:\s*hidden;/s,
+  )
+  assert.match(
+    cssSource,
+    /\.app-download__qr-frame\s+img\s*\{[^}]*max-width:\s*100%[^}]*max-height:\s*100%[^}]*object-fit:\s*contain;/s,
+  )
+})

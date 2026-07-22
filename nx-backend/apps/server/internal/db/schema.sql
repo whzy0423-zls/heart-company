@@ -636,6 +636,698 @@ CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(wx_user_id, create_time DES
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_report_unlocks_user ON report_unlocks(wx_user_id);
 
+-- ============ 芯之力理论库（规范来源、理论卡、检索块与发布快照）============
+CREATE TABLE IF NOT EXISTS theory_libraries (
+  id BIGSERIAL PRIMARY KEY,
+  key TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','enabled','disabled')),
+  default_language TEXT NOT NULL DEFAULT 'zh-CN',
+  current_version INTEGER NOT NULL DEFAULT 0 CHECK (current_version >= 0),
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS theory_library_releases (
+  id BIGSERIAL PRIMARY KEY,
+  library_id BIGINT NOT NULL REFERENCES theory_libraries(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL CHECK (version > 0),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','building','ready','active','retired','failed')),
+  embedding_model TEXT NOT NULL DEFAULT '',
+  embedding_dimensions INTEGER NOT NULL DEFAULT 1536 CHECK (embedding_dimensions = 1536),
+  retrieval_mode TEXT NOT NULL DEFAULT 'lexical_only' CHECK (retrieval_mode IN ('lexical_only','hybrid')),
+  index_version TEXT NOT NULL DEFAULT '',
+  card_count INTEGER NOT NULL DEFAULT 0 CHECK (card_count >= 0),
+  chunk_count INTEGER NOT NULL DEFAULT 0 CHECK (chunk_count >= 0),
+  build_error TEXT NOT NULL DEFAULT '',
+  activated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  activated_at TIMESTAMPTZ,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (library_id, version)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_theory_active_release
+  ON theory_library_releases(library_id) WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS theory_source_works (
+  id BIGSERIAL PRIMARY KEY,
+  library_id BIGINT NOT NULL REFERENCES theory_libraries(id) ON DELETE CASCADE,
+  canonical_key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  original_title TEXT NOT NULL DEFAULT '',
+  authors JSONB NOT NULL DEFAULT '[]'::jsonb CONSTRAINT ck_theory_source_works_authors_array CHECK (jsonb_typeof(authors) = 'array'),
+  editors JSONB NOT NULL DEFAULT '[]'::jsonb CONSTRAINT ck_theory_source_works_editors_array CHECK (jsonb_typeof(editors) = 'array'),
+  translators JSONB NOT NULL DEFAULT '[]'::jsonb CONSTRAINT ck_theory_source_works_translators_array CHECK (jsonb_typeof(translators) = 'array'),
+  publisher TEXT NOT NULL DEFAULT '',
+  published_year INTEGER,
+  edition TEXT NOT NULL DEFAULT '',
+  isbn TEXT NOT NULL DEFAULT '',
+  work_type TEXT NOT NULL CHECK (work_type IN ('book','course','handout','article','original_text','research','other')),
+  authority_level SMALLINT NOT NULL CHECK (authority_level BETWEEN 1 AND 5),
+  epistemic_status TEXT NOT NULL CHECK (epistemic_status IN ('source_text','author_interpretation','course_adaptation','traditional_symbolism','hypothesis','evidence_informed')),
+  copyright_scope TEXT NOT NULL CHECK (copyright_scope IN ('metadata_only','internal_excerpt','licensed','full_internal')),
+  canonical_work_id BIGINT REFERENCES theory_source_works(id) ON DELETE SET NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'registered' CHECK (status IN ('registered','extracting','reviewed','archived')),
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (library_id, canonical_key)
+);
+
+CREATE TABLE IF NOT EXISTS theory_source_files (
+  id BIGSERIAL PRIMARY KEY,
+  work_id BIGINT NOT NULL REFERENCES theory_source_works(id) ON DELETE CASCADE,
+  relative_path TEXT NOT NULL,
+  original_filename TEXT NOT NULL,
+  file_format TEXT NOT NULL,
+  mime_type TEXT NOT NULL DEFAULT '',
+  byte_size BIGINT NOT NULL DEFAULT 0 CHECK (byte_size >= 0),
+  page_count INTEGER CHECK (page_count IS NULL OR page_count > 0),
+  sha256 TEXT NOT NULL,
+  duplicate_of_file_id BIGINT REFERENCES theory_source_files(id) ON DELETE SET NULL,
+  title_source TEXT NOT NULL CHECK (title_source IN ('filename','metadata','cover','manual')),
+  extraction_class TEXT NOT NULL CHECK (extraction_class IN ('text_rich','mixed','image_dominant','cover_only')),
+  extraction_status TEXT NOT NULL DEFAULT 'pending' CHECK (extraction_status IN ('pending','extracted','needs_ocr','ocr_running','review_required','failed')),
+  extraction_quality NUMERIC(5,4) NOT NULL DEFAULT 0 CHECK (extraction_quality BETWEEN 0 AND 1),
+  extracted_text_uri TEXT NOT NULL DEFAULT '',
+  ocr_text_uri TEXT NOT NULL DEFAULT '',
+  extractor_name TEXT NOT NULL DEFAULT '',
+  extractor_version TEXT NOT NULL DEFAULT '',
+  error_code TEXT NOT NULL DEFAULT '',
+  error_message TEXT NOT NULL DEFAULT '',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS theory_cards (
+  id BIGSERIAL PRIMARY KEY,
+  library_id BIGINT NOT NULL REFERENCES theory_libraries(id) ON DELETE CASCADE,
+  canonical_key TEXT NOT NULL,
+  canonical_name TEXT NOT NULL,
+  aliases JSONB NOT NULL DEFAULT '[]'::jsonb CONSTRAINT ck_theory_cards_aliases_array CHECK (jsonb_typeof(aliases) = 'array'),
+  domain TEXT NOT NULL DEFAULT '',
+  subdomain TEXT NOT NULL DEFAULT '',
+  card_kind TEXT NOT NULL CHECK (card_kind IN ('concept','claim','axis','stage','relation','profile','practice','warning')),
+  summary TEXT NOT NULL DEFAULT '',
+  definition TEXT NOT NULL DEFAULT '',
+  core_claim TEXT NOT NULL DEFAULT '',
+  mechanism TEXT NOT NULL DEFAULT '',
+  applicable_context TEXT NOT NULL DEFAULT '',
+  non_applicable_context TEXT NOT NULL DEFAULT '',
+  observable_signals JSONB NOT NULL DEFAULT '[]'::jsonb CONSTRAINT ck_theory_cards_observable_signals_array CHECK (jsonb_typeof(observable_signals) = 'array'),
+  common_triggers JSONB NOT NULL DEFAULT '[]'::jsonb CONSTRAINT ck_theory_cards_common_triggers_array CHECK (jsonb_typeof(common_triggers) = 'array'),
+  automatic_pattern TEXT NOT NULL DEFAULT '',
+  resource_state TEXT NOT NULL DEFAULT '',
+  shadow_or_risk TEXT NOT NULL DEFAULT '',
+  growth_direction TEXT NOT NULL DEFAULT '',
+  epistemic_status TEXT NOT NULL CHECK (epistemic_status IN ('source_text','author_interpretation','course_adaptation','traditional_symbolism','hypothesis','evidence_informed')),
+  evidence_level TEXT NOT NULL CHECK (evidence_level IN ('strong','moderate','limited','traditional','experiential','unknown')),
+  clinical_safety TEXT NOT NULL CHECK (clinical_safety IN ('general','caution','restricted','escalate')),
+  controversy_notes TEXT NOT NULL DEFAULT '',
+  cultural_context TEXT NOT NULL DEFAULT '',
+  authority_level SMALLINT NOT NULL CHECK (authority_level BETWEEN 1 AND 5),
+  language TEXT NOT NULL DEFAULT 'zh-CN',
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','in_review','published','superseded','retired')),
+  version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+  reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at TIMESTAMPTZ,
+  published_at TIMESTAMPTZ,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (library_id, canonical_key, version)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_theory_published_card_key
+  ON theory_cards(library_id, canonical_key) WHERE status = 'published';
+-- Replacement transaction order: supersede the old published card before publishing the new version.
+-- The partial unique index intentionally forbids two simultaneously published versions of one canonical key.
+
+CREATE TABLE IF NOT EXISTS theory_practices (
+  id BIGSERIAL PRIMARY KEY,
+  card_id BIGINT NOT NULL REFERENCES theory_cards(id) ON DELETE CASCADE,
+  goal TEXT NOT NULL,
+  estimated_minutes INTEGER NOT NULL DEFAULT 0 CHECK (estimated_minutes >= 0),
+  steps JSONB NOT NULL DEFAULT '[]'::jsonb CONSTRAINT ck_theory_practices_steps_array CHECK (jsonb_typeof(steps) = 'array'),
+  reflection_prompts JSONB NOT NULL DEFAULT '[]'::jsonb CONSTRAINT ck_theory_practices_reflection_prompts_array CHECK (jsonb_typeof(reflection_prompts) = 'array'),
+  expected_feedback JSONB NOT NULL DEFAULT '[]'::jsonb CONSTRAINT ck_theory_practices_expected_feedback_array CHECK (jsonb_typeof(expected_feedback) = 'array'),
+  stop_conditions JSONB NOT NULL DEFAULT '[]'::jsonb CONSTRAINT ck_theory_practices_stop_conditions_array CHECK (jsonb_typeof(stop_conditions) = 'array'),
+  professional_escalation JSONB NOT NULL DEFAULT '[]'::jsonb CONSTRAINT ck_theory_practices_professional_escalation_array CHECK (jsonb_typeof(professional_escalation) = 'array'),
+  contraindications TEXT NOT NULL DEFAULT '',
+  practice_schema_version TEXT NOT NULL DEFAULT 'xinzhili.practice.v1',
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','in_review','published','superseded','retired')),
+  version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (card_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS theory_card_relations (
+  id BIGSERIAL PRIMARY KEY,
+  from_card_id BIGINT NOT NULL REFERENCES theory_cards(id) ON DELETE CASCADE,
+  to_card_id BIGINT NOT NULL REFERENCES theory_cards(id) ON DELETE CASCADE,
+  relation_type TEXT NOT NULL CHECK (relation_type IN ('belongs_to','prerequisite','next_stage','supports','extends','contrasts','conflicts','risks','practices')),
+  note TEXT NOT NULL DEFAULT '',
+  confidence NUMERIC(5,4) NOT NULL DEFAULT 0 CHECK (confidence BETWEEN 0 AND 1),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published','disabled')),
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (from_card_id <> to_card_id),
+  UNIQUE (from_card_id, to_card_id, relation_type)
+);
+
+CREATE TABLE IF NOT EXISTS theory_card_sources (
+  id BIGSERIAL PRIMARY KEY,
+  card_id BIGINT NOT NULL REFERENCES theory_cards(id) ON DELETE CASCADE,
+  work_id BIGINT NOT NULL REFERENCES theory_source_works(id) ON DELETE RESTRICT,
+  file_id BIGINT REFERENCES theory_source_files(id) ON DELETE RESTRICT,
+  source_role TEXT NOT NULL CHECK (source_role IN ('primary','supporting','extension','counterpoint','controversy')),
+  chapter TEXT NOT NULL DEFAULT '',
+  page_start INTEGER CHECK (page_start IS NULL OR page_start > 0),
+  page_end INTEGER CHECK (page_end IS NULL OR page_end > 0),
+  location_label TEXT NOT NULL DEFAULT '',
+  quotation TEXT NOT NULL DEFAULT '',
+  interpretation_note TEXT NOT NULL DEFAULT '',
+  extraction_quality NUMERIC(5,4) NOT NULL DEFAULT 0 CHECK (extraction_quality BETWEEN 0 AND 1),
+  quote_verified BOOLEAN NOT NULL DEFAULT false,
+  verified_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  verified_at TIMESTAMPTZ,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (page_end IS NULL OR page_start IS NULL OR page_end >= page_start)
+);
+
+CREATE OR REPLACE FUNCTION lock_theory_libraries(library_ids BIGINT[])
+RETURNS VOID AS $$
+DECLARE
+  candidate BIGINT;
+BEGIN
+  FOR candidate IN
+    SELECT DISTINCT value
+    FROM unnest(library_ids) AS value
+    WHERE value IS NOT NULL
+    ORDER BY value
+  LOOP
+    PERFORM pg_advisory_xact_lock(hashtextextended('nine-xing:theory-library:' || candidate::text, 0));
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION lock_theory_ownership_scope()
+RETURNS TRIGGER AS $$
+DECLARE
+  scope_ids BIGINT[];
+  new_row JSONB := to_jsonb(NEW);
+  old_row JSONB := to_jsonb(OLD);
+BEGIN
+  IF TG_TABLE_NAME = 'theory_source_works' THEN
+    SELECT array_agg(DISTINCT library_id) INTO scope_ids
+    FROM (
+      SELECT (new_row->>'library_id')::BIGINT AS library_id
+      UNION ALL SELECT (old_row->>'library_id')::BIGINT
+      UNION ALL SELECT library_id FROM theory_source_works WHERE id IN ((new_row->>'canonical_work_id')::BIGINT, (old_row->>'canonical_work_id')::BIGINT)
+    ) scope;
+  ELSIF TG_TABLE_NAME = 'theory_source_files' THEN
+    SELECT array_agg(DISTINCT library_id) INTO scope_ids
+    FROM (
+      SELECT work.library_id FROM theory_source_works work WHERE work.id IN ((new_row->>'work_id')::BIGINT, (old_row->>'work_id')::BIGINT)
+      UNION ALL
+      SELECT duplicate_work.library_id
+      FROM theory_source_files duplicate
+      JOIN theory_source_works duplicate_work ON duplicate_work.id = duplicate.work_id
+      WHERE duplicate.id IN ((new_row->>'duplicate_of_file_id')::BIGINT, (old_row->>'duplicate_of_file_id')::BIGINT)
+    ) scope;
+  ELSIF TG_TABLE_NAME = 'theory_cards' THEN
+    scope_ids := ARRAY[(new_row->>'library_id')::BIGINT, (old_row->>'library_id')::BIGINT];
+  ELSIF TG_TABLE_NAME = 'theory_card_relations' THEN
+    SELECT array_agg(DISTINCT library_id) INTO scope_ids
+    FROM theory_cards
+    WHERE id IN ((new_row->>'from_card_id')::BIGINT, (new_row->>'to_card_id')::BIGINT,
+      (old_row->>'from_card_id')::BIGINT, (old_row->>'to_card_id')::BIGINT);
+  ELSIF TG_TABLE_NAME = 'theory_card_sources' THEN
+    SELECT array_agg(DISTINCT library_id) INTO scope_ids
+    FROM (
+      SELECT library_id FROM theory_cards WHERE id IN ((new_row->>'card_id')::BIGINT, (old_row->>'card_id')::BIGINT)
+      UNION ALL SELECT library_id FROM theory_source_works WHERE id IN ((new_row->>'work_id')::BIGINT, (old_row->>'work_id')::BIGINT)
+      UNION ALL
+      SELECT work.library_id
+      FROM theory_source_files file
+      JOIN theory_source_works work ON work.id = file.work_id
+      WHERE file.id IN ((new_row->>'file_id')::BIGINT, (old_row->>'file_id')::BIGINT)
+    ) scope;
+  ELSIF TG_TABLE_NAME = 'theory_practices' THEN
+    SELECT array_agg(DISTINCT library_id) INTO scope_ids
+    FROM theory_cards
+    WHERE id IN ((new_row->>'card_id')::BIGINT, (old_row->>'card_id')::BIGINT);
+  ELSIF TG_TABLE_NAME = 'theory_chunks' THEN
+    SELECT array_agg(DISTINCT library_id) INTO scope_ids
+    FROM (
+      SELECT (new_row->>'library_id')::BIGINT AS library_id
+      UNION ALL SELECT (old_row->>'library_id')::BIGINT
+      UNION ALL SELECT library_id FROM theory_cards WHERE id IN ((new_row->>'card_id')::BIGINT, (old_row->>'card_id')::BIGINT)
+      UNION ALL
+      SELECT card.library_id
+      FROM theory_practices practice
+      JOIN theory_cards card ON card.id = practice.card_id
+      WHERE practice.id IN ((new_row->>'practice_id')::BIGINT, (old_row->>'practice_id')::BIGINT)
+    ) scope;
+  ELSIF TG_TABLE_NAME = 'theory_library_releases' THEN
+    scope_ids := ARRAY[(new_row->>'library_id')::BIGINT, (old_row->>'library_id')::BIGINT];
+  ELSIF TG_TABLE_NAME = 'theory_release_cards' THEN
+    SELECT array_agg(DISTINCT library_id) INTO scope_ids
+    FROM (
+      SELECT library_id FROM theory_library_releases WHERE id IN ((new_row->>'release_id')::BIGINT, (old_row->>'release_id')::BIGINT)
+      UNION ALL SELECT library_id FROM theory_cards WHERE id IN ((new_row->>'card_id')::BIGINT, (old_row->>'card_id')::BIGINT)
+      UNION ALL SELECT library_id FROM theory_chunks WHERE id IN ((new_row->>'chunk_id')::BIGINT, (old_row->>'chunk_id')::BIGINT)
+    ) scope;
+  ELSE
+    RETURN NEW;
+  END IF;
+  PERFORM lock_theory_libraries(scope_ids);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION validate_theory_library_ownership()
+RETURNS TRIGGER AS $$
+DECLARE
+  target_id BIGINT := (to_jsonb(NEW)->>'id')::BIGINT;
+  target_library_id BIGINT := (to_jsonb(NEW)->>'library_id')::BIGINT;
+  target_card_id BIGINT := (to_jsonb(NEW)->>'card_id')::BIGINT;
+BEGIN
+  IF TG_TABLE_NAME = 'theory_source_works' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_source_works work
+      JOIN theory_source_works canonical ON canonical.id = work.canonical_work_id
+      WHERE (work.id = target_id OR canonical.id = target_id)
+        AND work.library_id IS DISTINCT FROM canonical.library_id
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: canonical work must belong to the same library';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM theory_card_sources source
+      JOIN theory_cards card ON card.id = source.card_id
+      JOIN theory_source_works work ON work.id = source.work_id
+      LEFT JOIN theory_source_files file ON file.id = source.file_id
+      WHERE source.work_id = target_id
+        AND (card.library_id IS DISTINCT FROM work.library_id OR (source.file_id IS NOT NULL AND file.work_id IS DISTINCT FROM source.work_id))
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: card source card, work, and file must share ownership';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM theory_source_files file
+      JOIN theory_source_works work ON work.id = file.work_id
+      JOIN theory_source_files duplicate ON duplicate.id = file.duplicate_of_file_id
+      JOIN theory_source_works duplicate_work ON duplicate_work.id = duplicate.work_id
+      WHERE (work.id = target_id OR duplicate_work.id = target_id)
+        AND work.library_id IS DISTINCT FROM duplicate_work.library_id
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: duplicate source file must belong to the same library';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'theory_source_files' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_source_files file
+      JOIN theory_source_works work ON work.id = file.work_id
+      JOIN theory_source_files duplicate ON duplicate.id = file.duplicate_of_file_id
+      JOIN theory_source_works duplicate_work ON duplicate_work.id = duplicate.work_id
+      WHERE (file.id = target_id OR duplicate.id = target_id)
+        AND work.library_id IS DISTINCT FROM duplicate_work.library_id
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: duplicate source file must belong to the same library';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM theory_card_sources source
+      JOIN theory_cards card ON card.id = source.card_id
+      JOIN theory_source_works work ON work.id = source.work_id
+      LEFT JOIN theory_source_files file ON file.id = source.file_id
+      WHERE source.file_id = target_id
+        AND (card.library_id IS DISTINCT FROM work.library_id OR file.work_id IS DISTINCT FROM source.work_id)
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: card source card, work, and file must share ownership';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'theory_cards' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_card_relations relation
+      JOIN theory_cards from_card ON from_card.id = relation.from_card_id
+      JOIN theory_cards to_card ON to_card.id = relation.to_card_id
+      WHERE (relation.from_card_id = target_id OR relation.to_card_id = target_id)
+        AND from_card.library_id IS DISTINCT FROM to_card.library_id
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: relation cards must belong to the same library';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM theory_card_sources source
+      JOIN theory_source_works work ON work.id = source.work_id
+      LEFT JOIN theory_source_files file ON file.id = source.file_id
+      WHERE source.card_id = target_id
+        AND (target_library_id IS DISTINCT FROM work.library_id OR (source.file_id IS NOT NULL AND file.work_id IS DISTINCT FROM source.work_id))
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: card source card, work, and file must share ownership';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM theory_chunks chunk
+      LEFT JOIN theory_practices practice ON practice.id = chunk.practice_id
+      WHERE chunk.card_id = target_id
+        AND (chunk.library_id IS DISTINCT FROM target_library_id OR (chunk.practice_id IS NOT NULL AND practice.card_id IS DISTINCT FROM chunk.card_id))
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: chunk library, card, and practice ownership mismatch';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM theory_release_cards mapping
+      JOIN theory_library_releases release ON release.id = mapping.release_id
+      JOIN theory_chunks chunk ON chunk.id = mapping.chunk_id
+      WHERE mapping.card_id = target_id
+        AND (release.library_id IS DISTINCT FROM target_library_id OR release.library_id IS DISTINCT FROM chunk.library_id OR chunk.card_id IS DISTINCT FROM mapping.card_id)
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: release card mapping ownership mismatch';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'theory_card_relations' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_card_relations relation
+      JOIN theory_cards from_card ON from_card.id = relation.from_card_id
+      JOIN theory_cards to_card ON to_card.id = relation.to_card_id
+      WHERE relation.id = target_id AND from_card.library_id IS DISTINCT FROM to_card.library_id
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: relation cards must belong to the same library';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'theory_card_sources' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_card_sources source
+      JOIN theory_cards card ON card.id = source.card_id
+      JOIN theory_source_works work ON work.id = source.work_id
+      LEFT JOIN theory_source_files file ON file.id = source.file_id
+      WHERE source.id = target_id
+        AND (card.library_id IS DISTINCT FROM work.library_id OR (source.file_id IS NOT NULL AND file.work_id IS DISTINCT FROM source.work_id))
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: card source card, work, and file must share ownership';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'theory_practices' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_chunks chunk
+      WHERE chunk.practice_id = target_id AND chunk.card_id IS DISTINCT FROM target_card_id
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: chunk library, card, and practice ownership mismatch';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'theory_chunks' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_chunks chunk
+      JOIN theory_cards card ON card.id = chunk.card_id
+      LEFT JOIN theory_practices practice ON practice.id = chunk.practice_id
+      WHERE chunk.id = target_id
+        AND (chunk.library_id IS DISTINCT FROM card.library_id OR (chunk.practice_id IS NOT NULL AND practice.card_id IS DISTINCT FROM chunk.card_id))
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: chunk library, card, and practice ownership mismatch';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM theory_release_cards mapping
+      JOIN theory_library_releases release ON release.id = mapping.release_id
+      JOIN theory_cards card ON card.id = mapping.card_id
+      WHERE mapping.chunk_id = target_id
+        AND (release.library_id IS DISTINCT FROM card.library_id OR release.library_id IS DISTINCT FROM target_library_id OR target_card_id IS DISTINCT FROM mapping.card_id)
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: release card mapping ownership mismatch';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'theory_library_releases' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_release_cards mapping
+      JOIN theory_cards card ON card.id = mapping.card_id
+      JOIN theory_chunks chunk ON chunk.id = mapping.chunk_id
+      WHERE mapping.release_id = target_id
+        AND (target_library_id IS DISTINCT FROM card.library_id OR target_library_id IS DISTINCT FROM chunk.library_id OR chunk.card_id IS DISTINCT FROM mapping.card_id)
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: release card mapping ownership mismatch';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'theory_release_cards' THEN
+    IF EXISTS (
+      SELECT 1 FROM theory_release_cards mapping
+      JOIN theory_library_releases release ON release.id = mapping.release_id
+      JOIN theory_cards card ON card.id = mapping.card_id
+      JOIN theory_chunks chunk ON chunk.id = mapping.chunk_id
+      WHERE mapping.id = target_id
+        AND (release.library_id IS DISTINCT FROM card.library_id OR release.library_id IS DISTINCT FROM chunk.library_id OR chunk.card_id IS DISTINCT FROM mapping.card_id)
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'theory ownership constraint: release card mapping ownership mismatch';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Lock triggers use only the related library IDs, so unrelated libraries remain concurrent.
+DROP TRIGGER IF EXISTS theory_source_works_ownership_lock ON theory_source_works;
+CREATE TRIGGER theory_source_works_ownership_lock BEFORE INSERT OR UPDATE ON theory_source_works
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
+DROP TRIGGER IF EXISTS theory_source_files_ownership_lock ON theory_source_files;
+CREATE TRIGGER theory_source_files_ownership_lock BEFORE INSERT OR UPDATE ON theory_source_files
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
+DROP TRIGGER IF EXISTS theory_cards_ownership_lock ON theory_cards;
+CREATE TRIGGER theory_cards_ownership_lock BEFORE INSERT OR UPDATE ON theory_cards
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
+DROP TRIGGER IF EXISTS theory_card_relations_ownership_lock ON theory_card_relations;
+CREATE TRIGGER theory_card_relations_ownership_lock BEFORE INSERT OR UPDATE ON theory_card_relations
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
+DROP TRIGGER IF EXISTS theory_card_sources_ownership_lock ON theory_card_sources;
+CREATE TRIGGER theory_card_sources_ownership_lock BEFORE INSERT OR UPDATE ON theory_card_sources
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
+
+-- Constraint triggers are recreated per target table so unrelated same-name triggers cannot suppress them.
+DROP TRIGGER IF EXISTS theory_card_relations_ownership ON theory_card_relations;
+CREATE CONSTRAINT TRIGGER theory_card_relations_ownership AFTER INSERT OR UPDATE ON theory_card_relations
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
+DROP TRIGGER IF EXISTS theory_card_sources_file_work_match ON theory_card_sources;
+CREATE CONSTRAINT TRIGGER theory_card_sources_file_work_match AFTER INSERT OR UPDATE ON theory_card_sources
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
+DROP TRIGGER IF EXISTS theory_source_files_card_source_work_match ON theory_source_files;
+CREATE CONSTRAINT TRIGGER theory_source_files_card_source_work_match AFTER INSERT OR UPDATE ON theory_source_files
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
+DROP TRIGGER IF EXISTS theory_cards_ownership_dependents ON theory_cards;
+CREATE CONSTRAINT TRIGGER theory_cards_ownership_dependents AFTER INSERT OR UPDATE ON theory_cards
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
+DROP TRIGGER IF EXISTS theory_source_works_ownership_dependents ON theory_source_works;
+CREATE CONSTRAINT TRIGGER theory_source_works_ownership_dependents AFTER INSERT OR UPDATE ON theory_source_works
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
+
+CREATE TABLE IF NOT EXISTS theory_chunks (
+  id BIGSERIAL PRIMARY KEY,
+  library_id BIGINT NOT NULL REFERENCES theory_libraries(id) ON DELETE CASCADE,
+  card_id BIGINT NOT NULL REFERENCES theory_cards(id) ON DELETE CASCADE,
+  practice_id BIGINT REFERENCES theory_practices(id) ON DELETE SET NULL,
+  chunk_key TEXT NOT NULL,
+  chunk_kind TEXT NOT NULL CHECK (chunk_kind IN ('card','practice')),
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  keywords JSONB NOT NULL DEFAULT '[]'::jsonb CONSTRAINT ck_theory_chunks_keywords_array CHECK (jsonb_typeof(keywords) = 'array'),
+  tags JSONB NOT NULL DEFAULT '[]'::jsonb CONSTRAINT ck_theory_chunks_tags_array CHECK (jsonb_typeof(tags) = 'array'),
+  authority_level SMALLINT NOT NULL CHECK (authority_level BETWEEN 1 AND 5),
+  evidence_level TEXT NOT NULL CHECK (evidence_level IN ('strong','moderate','limited','traditional','experiential','unknown')),
+  clinical_safety TEXT NOT NULL CHECK (clinical_safety IN ('general','caution','restricted','escalate')),
+  token_count INTEGER NOT NULL DEFAULT 0 CHECK (token_count >= 0),
+  content_hash TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+  status TEXT NOT NULL DEFAULT 'enabled' CHECK (status IN ('enabled','disabled','retired')),
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (library_id, chunk_key, version)
+);
+
+-- embedding 列由下方可选 pgvector 初始化块添加；普通 PostgreSQL 只保留元数据。
+CREATE TABLE IF NOT EXISTS theory_chunk_embeddings (
+  id BIGSERIAL PRIMARY KEY,
+  chunk_id BIGINT NOT NULL REFERENCES theory_chunks(id) ON DELETE CASCADE,
+  embedding_model TEXT NOT NULL,
+  dimensions INTEGER NOT NULL DEFAULT 1536 CHECK (dimensions = 1536),
+  content_hash TEXT NOT NULL,
+  embedded_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','ready','failed','stale')),
+  error_message TEXT NOT NULL DEFAULT '',
+  UNIQUE (chunk_id, embedding_model, content_hash)
+);
+
+CREATE TABLE IF NOT EXISTS theory_release_cards (
+  id BIGSERIAL PRIMARY KEY,
+  release_id BIGINT NOT NULL REFERENCES theory_library_releases(id) ON DELETE CASCADE,
+  card_id BIGINT NOT NULL REFERENCES theory_cards(id) ON DELETE RESTRICT,
+  chunk_id BIGINT NOT NULL REFERENCES theory_chunks(id) ON DELETE RESTRICT,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (release_id, card_id, chunk_id)
+);
+
+DROP TRIGGER IF EXISTS theory_practices_ownership_lock ON theory_practices;
+CREATE TRIGGER theory_practices_ownership_lock BEFORE INSERT OR UPDATE ON theory_practices
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
+DROP TRIGGER IF EXISTS theory_practices_ownership_dependents ON theory_practices;
+CREATE CONSTRAINT TRIGGER theory_practices_ownership_dependents
+  AFTER INSERT OR UPDATE ON theory_practices
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
+
+DROP TRIGGER IF EXISTS theory_chunks_ownership_lock ON theory_chunks;
+CREATE TRIGGER theory_chunks_ownership_lock BEFORE INSERT OR UPDATE ON theory_chunks
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
+DROP TRIGGER IF EXISTS theory_chunks_ownership ON theory_chunks;
+CREATE CONSTRAINT TRIGGER theory_chunks_ownership
+  AFTER INSERT OR UPDATE ON theory_chunks
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
+
+DROP TRIGGER IF EXISTS theory_library_releases_ownership_lock ON theory_library_releases;
+CREATE TRIGGER theory_library_releases_ownership_lock BEFORE INSERT OR UPDATE ON theory_library_releases
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
+DROP TRIGGER IF EXISTS theory_library_releases_ownership_dependents ON theory_library_releases;
+CREATE CONSTRAINT TRIGGER theory_library_releases_ownership_dependents
+  AFTER INSERT OR UPDATE ON theory_library_releases
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
+
+DROP TRIGGER IF EXISTS theory_release_cards_ownership_lock ON theory_release_cards;
+CREATE TRIGGER theory_release_cards_ownership_lock BEFORE INSERT OR UPDATE ON theory_release_cards
+  FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
+DROP TRIGGER IF EXISTS theory_release_cards_ownership ON theory_release_cards;
+CREATE CONSTRAINT TRIGGER theory_release_cards_ownership
+  AFTER INSERT OR UPDATE ON theory_release_cards
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
+
+-- Existing installations created before the array contracts need explicit, idempotent upgrades.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'theory_source_works'::regclass AND conname = 'ck_theory_source_works_authors_array') THEN
+    ALTER TABLE theory_source_works ADD CONSTRAINT ck_theory_source_works_authors_array CHECK (jsonb_typeof(authors) = 'array');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'theory_source_works'::regclass AND conname = 'ck_theory_source_works_editors_array') THEN
+    ALTER TABLE theory_source_works ADD CONSTRAINT ck_theory_source_works_editors_array CHECK (jsonb_typeof(editors) = 'array');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'theory_source_works'::regclass AND conname = 'ck_theory_source_works_translators_array') THEN
+    ALTER TABLE theory_source_works ADD CONSTRAINT ck_theory_source_works_translators_array CHECK (jsonb_typeof(translators) = 'array');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'theory_cards'::regclass AND conname = 'ck_theory_cards_aliases_array') THEN
+    ALTER TABLE theory_cards ADD CONSTRAINT ck_theory_cards_aliases_array CHECK (jsonb_typeof(aliases) = 'array');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'theory_cards'::regclass AND conname = 'ck_theory_cards_observable_signals_array') THEN
+    ALTER TABLE theory_cards ADD CONSTRAINT ck_theory_cards_observable_signals_array CHECK (jsonb_typeof(observable_signals) = 'array');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'theory_cards'::regclass AND conname = 'ck_theory_cards_common_triggers_array') THEN
+    ALTER TABLE theory_cards ADD CONSTRAINT ck_theory_cards_common_triggers_array CHECK (jsonb_typeof(common_triggers) = 'array');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'theory_practices'::regclass AND conname = 'ck_theory_practices_steps_array') THEN
+    ALTER TABLE theory_practices ADD CONSTRAINT ck_theory_practices_steps_array CHECK (jsonb_typeof(steps) = 'array');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'theory_practices'::regclass AND conname = 'ck_theory_practices_reflection_prompts_array') THEN
+    ALTER TABLE theory_practices ADD CONSTRAINT ck_theory_practices_reflection_prompts_array CHECK (jsonb_typeof(reflection_prompts) = 'array');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'theory_practices'::regclass AND conname = 'ck_theory_practices_expected_feedback_array') THEN
+    ALTER TABLE theory_practices ADD CONSTRAINT ck_theory_practices_expected_feedback_array CHECK (jsonb_typeof(expected_feedback) = 'array');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'theory_practices'::regclass AND conname = 'ck_theory_practices_stop_conditions_array') THEN
+    ALTER TABLE theory_practices ADD CONSTRAINT ck_theory_practices_stop_conditions_array CHECK (jsonb_typeof(stop_conditions) = 'array');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'theory_practices'::regclass AND conname = 'ck_theory_practices_professional_escalation_array') THEN
+    ALTER TABLE theory_practices ADD CONSTRAINT ck_theory_practices_professional_escalation_array CHECK (jsonb_typeof(professional_escalation) = 'array');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'theory_chunks'::regclass AND conname = 'ck_theory_chunks_keywords_array') THEN
+    ALTER TABLE theory_chunks ADD CONSTRAINT ck_theory_chunks_keywords_array CHECK (jsonb_typeof(keywords) = 'array');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'theory_chunks'::regclass AND conname = 'ck_theory_chunks_tags_array') THEN
+    ALTER TABLE theory_chunks ADD CONSTRAINT ck_theory_chunks_tags_array CHECK (jsonb_typeof(tags) = 'array');
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_theory_release_chunk
+  ON theory_release_cards(release_id, chunk_id);
+
+CREATE INDEX IF NOT EXISTS idx_theory_libraries_status ON theory_libraries(status);
+CREATE INDEX IF NOT EXISTS idx_theory_libraries_update_time ON theory_libraries(update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_libraries_created_by ON theory_libraries(created_by);
+CREATE INDEX IF NOT EXISTS idx_theory_libraries_updated_by ON theory_libraries(updated_by);
+CREATE INDEX IF NOT EXISTS idx_theory_releases_status ON theory_library_releases(status, update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_releases_activated_by ON theory_library_releases(activated_by);
+CREATE INDEX IF NOT EXISTS idx_theory_releases_update_time ON theory_library_releases(update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_source_works_library ON theory_source_works(library_id);
+CREATE INDEX IF NOT EXISTS idx_theory_source_works_canonical_key ON theory_source_works(canonical_key);
+CREATE INDEX IF NOT EXISTS idx_theory_source_works_canonical_work ON theory_source_works(canonical_work_id);
+CREATE INDEX IF NOT EXISTS idx_theory_source_works_status ON theory_source_works(status);
+CREATE INDEX IF NOT EXISTS idx_theory_source_works_update_time ON theory_source_works(update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_source_files_work ON theory_source_files(work_id);
+CREATE INDEX IF NOT EXISTS idx_theory_source_files_duplicate ON theory_source_files(duplicate_of_file_id);
+CREATE INDEX IF NOT EXISTS idx_theory_source_files_sha256 ON theory_source_files(sha256);
+CREATE INDEX IF NOT EXISTS idx_theory_source_files_status ON theory_source_files(extraction_status);
+CREATE INDEX IF NOT EXISTS idx_theory_source_files_update_time ON theory_source_files(update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_cards_library ON theory_cards(library_id);
+CREATE INDEX IF NOT EXISTS idx_theory_cards_canonical_key ON theory_cards(canonical_key);
+CREATE INDEX IF NOT EXISTS idx_theory_cards_status ON theory_cards(status, update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_cards_reviewed_by ON theory_cards(reviewed_by);
+CREATE INDEX IF NOT EXISTS idx_theory_cards_created_by ON theory_cards(created_by);
+CREATE INDEX IF NOT EXISTS idx_theory_cards_updated_by ON theory_cards(updated_by);
+CREATE INDEX IF NOT EXISTS idx_theory_practices_card ON theory_practices(card_id);
+CREATE INDEX IF NOT EXISTS idx_theory_practices_status ON theory_practices(status, update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_relations_from_card ON theory_card_relations(from_card_id);
+CREATE INDEX IF NOT EXISTS idx_theory_relations_to_card ON theory_card_relations(to_card_id);
+CREATE INDEX IF NOT EXISTS idx_theory_relations_status ON theory_card_relations(status, update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_relations_created_by ON theory_card_relations(created_by);
+CREATE INDEX IF NOT EXISTS idx_theory_relations_reviewed_by ON theory_card_relations(reviewed_by);
+CREATE INDEX IF NOT EXISTS idx_theory_card_sources_card ON theory_card_sources(card_id);
+CREATE INDEX IF NOT EXISTS idx_theory_card_sources_work ON theory_card_sources(work_id);
+CREATE INDEX IF NOT EXISTS idx_theory_card_sources_file ON theory_card_sources(file_id);
+CREATE INDEX IF NOT EXISTS idx_theory_card_sources_verified_by ON theory_card_sources(verified_by);
+CREATE INDEX IF NOT EXISTS idx_theory_card_sources_update_time ON theory_card_sources(update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_chunks_library ON theory_chunks(library_id);
+CREATE INDEX IF NOT EXISTS idx_theory_chunks_card ON theory_chunks(card_id);
+CREATE INDEX IF NOT EXISTS idx_theory_chunks_practice ON theory_chunks(practice_id);
+CREATE INDEX IF NOT EXISTS idx_theory_chunks_key ON theory_chunks(chunk_key);
+CREATE INDEX IF NOT EXISTS idx_theory_chunks_status ON theory_chunks(status, update_time DESC);
+CREATE INDEX IF NOT EXISTS idx_theory_chunks_content_hash ON theory_chunks(content_hash);
+CREATE INDEX IF NOT EXISTS idx_theory_embeddings_chunk ON theory_chunk_embeddings(chunk_id);
+CREATE INDEX IF NOT EXISTS idx_theory_embeddings_status ON theory_chunk_embeddings(status);
+CREATE INDEX IF NOT EXISTS idx_theory_embeddings_content_hash ON theory_chunk_embeddings(content_hash);
+CREATE INDEX IF NOT EXISTS idx_theory_release_cards_release ON theory_release_cards(release_id);
+CREATE INDEX IF NOT EXISTS idx_theory_release_cards_card ON theory_release_cards(card_id);
+CREATE INDEX IF NOT EXISTS idx_theory_release_cards_chunk ON theory_release_cards(chunk_id);
+
+-- 中文词法检索优先使用 pg_trgm；扩展不可用时由应用回退到受限 ILIKE。
+DO $$
+DECLARE
+  pg_trgm_schema TEXT;
+BEGIN
+  BEGIN
+    CREATE EXTENSION IF NOT EXISTS pg_trgm;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'pg_trgm 不可用，跳过理论库 trigram 索引初始化：%', SQLERRM;
+    RETURN;
+  END;
+
+  SELECT namespace.nspname INTO pg_trgm_schema
+  FROM pg_extension extension
+  JOIN pg_namespace namespace ON namespace.oid = extension.extnamespace
+  WHERE extension.extname = 'pg_trgm';
+
+  IF pg_trgm_schema IS NOT NULL THEN
+    BEGIN
+      EXECUTE format($trgm$
+        CREATE INDEX IF NOT EXISTS idx_theory_chunks_lexical_trgm
+          ON theory_chunks USING gin ((title || ' ' || content || ' ' || keywords::text || ' ' || tags::text) %I.gin_trgm_ops)
+      $trgm$, pg_trgm_schema);
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE '理论块 trigram 索引不可用，回退到 ILIKE：%', SQLERRM;
+    END;
+    BEGIN
+      EXECUTE format($trgm$
+        CREATE INDEX IF NOT EXISTS idx_theory_cards_lexical_trgm
+          ON theory_cards USING gin ((canonical_name || ' ' || aliases::text) %I.gin_trgm_ops)
+      $trgm$, pg_trgm_schema);
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE '理论卡 trigram 索引不可用，回退到 ILIKE：%', SQLERRM;
+    END;
+  END IF;
+END $$;
+
 -- ============ pgvector 向量检索（可选，按扩展可用性自动启用）============
 -- 使用 pgvector/pgvector:pg16 镜像时自动建扩展、加 embedding 列与近邻索引；
 -- 普通 postgres 镜像下扩展文件不存在，整段静默跳过，关键词检索仍可用。
@@ -649,11 +1341,34 @@ BEGIN
   END;
 
   IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'vector') THEN
-    -- 1536 维对应多数 text-embedding 模型；换模型时一并调整。
-    EXECUTE 'ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS embedding vector(1536)';
-    EXECUTE 'ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS embedding_model TEXT NOT NULL DEFAULT ''''';
-    EXECUTE 'ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMPTZ';
-    EXECUTE 'CREATE INDEX IF NOT EXISTS idx_rag_documents_embedding ON rag_documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)';
+    -- theory embedding column is independently optional: type/search_path failures degrade safely.
+    BEGIN
+      EXECUTE 'ALTER TABLE theory_chunk_embeddings ADD COLUMN IF NOT EXISTS embedding vector(1536)';
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE '理论库 vector 列不可用，保留纯元数据模式：%', SQLERRM;
+    END;
+
+    -- theory HNSW index is independently optional: old pgvector/operator class failures do not abort startup.
+    BEGIN
+      EXECUTE 'CREATE INDEX IF NOT EXISTS idx_theory_chunk_embeddings_hnsw ON theory_chunk_embeddings USING hnsw (embedding vector_cosine_ops)';
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE '理论库 HNSW 索引不可用，跳过向量索引：%', SQLERRM;
+    END;
+
+    -- 兼容旧知识库向量列；任何旧版 pgvector 差异不影响后续 schema。
+    BEGIN
+      EXECUTE 'ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS embedding vector(1536)';
+      EXECUTE 'ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS embedding_model TEXT NOT NULL DEFAULT ''''';
+      EXECUTE 'ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMPTZ';
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE '知识库 vector 列不可用，保留关键词模式：%', SQLERRM;
+    END;
+
+    BEGIN
+      EXECUTE 'CREATE INDEX IF NOT EXISTS idx_rag_documents_embedding ON rag_documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)';
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE '知识库 ivfflat 索引不可用，跳过向量索引：%', SQLERRM;
+    END;
   END IF;
 END $$;
 
