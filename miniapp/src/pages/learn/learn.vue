@@ -10,9 +10,13 @@ import {
   createActionActivationGuard,
   createInitialLearningContent,
   createLatestRequestGuard,
+  createLearningCourseEntries,
+  createLearningQuoteEntries,
+  createLearningTagEntries,
   createOneShotFallbackRegistry,
   flattenLearningMaterials,
   handleActionKeydown,
+  learningTabTransition,
   resolveLearningCategory,
   retainLearningContentOnError,
 } from '../../utils/learningPageState'
@@ -25,7 +29,6 @@ const COURSE_FALLBACKS = [
   '/static/editorial/course-growth.webp',
   '/static/editorial/course-relation.webp',
 ]
-const CATEGORY_ORDER = ['course', 'material', 'quote']
 const initialContent = createInitialLearningContent()
 const teachers = ref(initialContent.teachers)
 const coursewareItems = ref(initialContent.coursewareItems)
@@ -36,7 +39,7 @@ const teacherExpanded = ref(false)
 const loading = ref(true)
 const loadError = ref('')
 const teacherImage = ref(TEACHER_FALLBACK)
-const courseImages = ref([])
+const courseImages = ref({})
 const teacherImageFallbackUsed = createOneShotFallbackRegistry()
 const courseImageFallbackUsed = createOneShotFallbackRegistry()
 const requestGuard = createLatestRequestGuard()
@@ -44,25 +47,33 @@ const actionActivationGuard = createActionActivationGuard()
 
 const teacher = computed(() => teachers.value[0] || null)
 const teacherImageLabel = computed(() => teacher.value ? `${teacher.value.name}老师肖像` : '主讲老师肖像')
+const courseEntries = computed(() => createLearningCourseEntries(coursewareItems.value))
 const materialItems = computed(() => flattenLearningMaterials(coursewareItems.value))
+const quoteEntries = computed(() => createLearningQuoteEntries(quotes.value))
+const teacherTagEntries = computed(() => createLearningTagEntries(
+  teacher.value?.tags,
+  `${teacher.value?.name || ''}::${teacher.value?.title || ''}`,
+))
 
-function courseFallback(index) {
-  return COURSE_FALLBACKS[index % COURSE_FALLBACKS.length]
+function courseFallback(courseKey) {
+  const slot = [...String(courseKey)].reduce((total, character) => total + character.charCodeAt(0), 0)
+  return COURSE_FALLBACKS[slot % COURSE_FALLBACKS.length]
 }
 
-function learnCourseCover(course, index) {
+function learnCourseCover(course, courseKey) {
   const cover = typeof course?.cover === 'string' ? course.cover.trim() : ''
   const isLegacyWheel = /^\/static\/wheel\.png(?:[?#].*)?$/i.test(cover)
-  return !cover || isLegacyWheel ? courseFallback(index) : cover
+  return !cover || isLegacyWheel ? courseFallback(courseKey) : cover
 }
 
 function syncContentImages() {
   teacherImageFallbackUsed.reset()
   courseImageFallbackUsed.reset()
   teacherImage.value = resolveContentAsset(teacher.value?.avatar, TEACHER_FALLBACK)
-  courseImages.value = coursewareItems.value.map((course, index) => (
-    resolveContentAsset(learnCourseCover(course, index), courseFallback(index))
-  ))
+  courseImages.value = Object.fromEntries(courseEntries.value.map(({ key: courseKey, item: course }) => [
+    courseKey,
+    resolveContentAsset(learnCourseCover(course, courseKey), courseFallback(courseKey)),
+  ]))
 }
 
 function applyContent(config, options = {}) {
@@ -82,9 +93,9 @@ function onTeacherImageError() {
   teacherImage.value = TEACHER_FALLBACK
 }
 
-function onCourseImageError(index) {
-  if (!courseImageFallbackUsed.consume(`course:${index}`)) return
-  courseImages.value[index] = courseFallback(index)
+function onCourseImageError(courseKey) {
+  if (!courseImageFallbackUsed.consume(courseKey)) return
+  courseImages.value[courseKey] = courseFallback(courseKey)
 }
 
 function activateAction(action, event) {
@@ -104,22 +115,12 @@ function selectCategory(category) {
 }
 
 function onTabKeydown(event, category) {
-  const key = event?.key
-  if (['Enter', ' ', 'Spacebar'].includes(key)) {
-    event.preventDefault?.()
-    event.stopPropagation?.()
-    selectCategory(category)
-    return
-  }
-  if (!['ArrowLeft', 'ArrowRight'].includes(key)) return
+  const transition = learningTabTransition(category, event?.key)
+  if (!transition.handled) return
   event.preventDefault?.()
   event.stopPropagation?.()
-  const currentIndex = CATEGORY_ORDER.indexOf(category)
-  const step = key === 'ArrowRight' ? 1 : -1
-  const nextIndex = (currentIndex + step + CATEGORY_ORDER.length) % CATEGORY_ORDER.length
-  const nextCategory = CATEGORY_ORDER[nextIndex]
-  selectCategory(nextCategory)
-  event?.currentTarget?.parentElement?.children?.[nextIndex]?.focus?.()
+  selectCategory(transition.category)
+  event?.currentTarget?.parentElement?.children?.[transition.focusIndex]?.focus?.()
 }
 
 function consumeNavigationIntent() {
@@ -217,8 +218,8 @@ onMounted(() => {
           </view>
           <view v-if="teacherExpanded" id="learn-teacher-details" class="learn-teacher__details">
             <text class="learn-teacher__bio">{{ teacher.bio }}</text>
-            <view v-if="teacher.tags.length" class="learn-teacher__tags" aria-label="老师擅长领域">
-              <text v-for="(tag, tagIndex) in teacher.tags" :key="`${teacher.name}::tag::${tagIndex}::${tag}`" class="learn-teacher__tag">{{ tag }}</text>
+            <view v-if="teacherTagEntries.length" class="learn-teacher__tags" aria-label="老师擅长领域">
+              <text v-for="tagEntry in teacherTagEntries" :key="tagEntry.key" class="learn-teacher__tag">{{ tagEntry.text }}</text>
             </view>
           </view>
         </view>
@@ -230,21 +231,21 @@ onMounted(() => {
       </section>
 
       <view class="learn-tabs" role="tablist" aria-label="学习内容分类">
-        <view class="learn-tab" :class="{ 'learn-tab--active': activeCategory === 'course' }" role="tab" data-category="course" :aria-selected="activeCategory === 'course'" :tabindex="activeCategory === 'course' ? 0 : -1" hover-class="learn-tab--pressed" @click="selectCategory('course')" @keydown="onTabKeydown($event, 'course')">课程</view>
-        <view class="learn-tab" :class="{ 'learn-tab--active': activeCategory === 'material' }" role="tab" data-category="material" :aria-selected="activeCategory === 'material'" :tabindex="activeCategory === 'material' ? 0 : -1" hover-class="learn-tab--pressed" @click="selectCategory('material')" @keydown="onTabKeydown($event, 'material')">课件</view>
-        <view class="learn-tab" :class="{ 'learn-tab--active': activeCategory === 'quote' }" role="tab" data-category="quote" :aria-selected="activeCategory === 'quote'" :tabindex="activeCategory === 'quote' ? 0 : -1" hover-class="learn-tab--pressed" @click="selectCategory('quote')" @keydown="onTabKeydown($event, 'quote')">语录</view>
+        <view id="learn-tab-course" class="learn-tab" :class="{ 'learn-tab--active': activeCategory === 'course' }" role="tab" data-category="course" aria-controls="learn-panel-course" :aria-selected="activeCategory === 'course'" :tabindex="activeCategory === 'course' ? 0 : -1" hover-class="learn-tab--pressed" @click="selectCategory('course')" @keydown="onTabKeydown($event, 'course')">课程</view>
+        <view id="learn-tab-material" class="learn-tab" :class="{ 'learn-tab--active': activeCategory === 'material' }" role="tab" data-category="material" aria-controls="learn-panel-material" :aria-selected="activeCategory === 'material'" :tabindex="activeCategory === 'material' ? 0 : -1" hover-class="learn-tab--pressed" @click="selectCategory('material')" @keydown="onTabKeydown($event, 'material')">课件</view>
+        <view id="learn-tab-quote" class="learn-tab" :class="{ 'learn-tab--active': activeCategory === 'quote' }" role="tab" data-category="quote" aria-controls="learn-panel-quote" :aria-selected="activeCategory === 'quote'" :tabindex="activeCategory === 'quote' ? 0 : -1" hover-class="learn-tab--pressed" @click="selectCategory('quote')" @keydown="onTabKeydown($event, 'quote')">语录</view>
       </view>
 
-      <section v-if="activeCategory === 'course'" class="learning-panel" aria-labelledby="course-panel-heading">
+      <section v-if="activeCategory === 'course'" id="learn-panel-course" role="tabpanel" aria-labelledby="learn-tab-course" class="learning-panel">
         <text id="course-panel-heading" class="panel-title">全部课程</text>
-        <view v-if="coursewareItems.length" class="course-list">
-          <article v-for="(course, index) in coursewareItems" :key="`${course.title}::course::${index}`" class="course-row">
-            <image class="course-row__cover" :src="courseImages[index]" mode="aspectFill" aria-hidden="true" lazy-load @error="onCourseImageError(index)" />
+        <view v-if="courseEntries.length" class="course-list">
+          <article v-for="courseEntry in courseEntries" :key="courseEntry.key" class="course-row">
+            <image class="course-row__cover" :src="courseImages[courseEntry.key]" mode="aspectFill" aria-hidden="true" lazy-load @error="onCourseImageError(courseEntry.key)" />
             <view class="course-row__copy">
-              <text class="course-row__title">{{ course.title }}</text>
-              <text v-if="course.materialTypes.length" class="course-row__materials">{{ course.materialTypes.join(' · ') }}</text>
-              <text v-if="course.duration" class="course-row__duration">{{ course.duration }}</text>
-              <text class="course-row__desc">{{ course.description }}</text>
+              <text class="course-row__title">{{ courseEntry.item.title }}</text>
+              <text v-if="courseEntry.item.materialTypes.length" class="course-row__materials">{{ courseEntry.item.materialTypes.join(' · ') }}</text>
+              <text v-if="courseEntry.item.duration" class="course-row__duration">{{ courseEntry.item.duration }}</text>
+              <text class="course-row__desc">{{ courseEntry.item.description }}</text>
             </view>
           </article>
         </view>
@@ -254,7 +255,7 @@ onMounted(() => {
         </view>
       </section>
 
-      <section v-else-if="activeCategory === 'material'" class="learning-panel" aria-labelledby="material-panel-heading">
+      <section v-else-if="activeCategory === 'material'" id="learn-panel-material" role="tabpanel" aria-labelledby="learn-tab-material" class="learning-panel">
         <text id="material-panel-heading" class="panel-title">全部课件</text>
         <view v-if="materialItems.length" class="material-list">
           <article v-for="material in materialItems" :key="material.key" class="material-row">
@@ -275,12 +276,12 @@ onMounted(() => {
         </view>
       </section>
 
-      <section v-else-if="activeCategory === 'quote'" class="learning-panel" aria-labelledby="quote-panel-heading">
+      <section v-else-if="activeCategory === 'quote'" id="learn-panel-quote" role="tabpanel" aria-labelledby="learn-tab-quote" class="learning-panel">
         <text id="quote-panel-heading" class="panel-title">老师语录</text>
-        <view v-if="quotes.length" class="quote-list">
-          <article v-for="(quote, quoteIndex) in quotes" :key="`quote::${quoteIndex}::${quote}`" class="quote-card">
+        <view v-if="quoteEntries.length" class="quote-list">
+          <article v-for="quoteEntry in quoteEntries" :key="quoteEntry.key" class="quote-card">
             <text class="quote-card__mark">”</text>
-            <text class="quote-card__text">{{ quote }}</text>
+            <text class="quote-card__text">{{ quoteEntry.text }}</text>
           </article>
         </view>
         <view v-else class="editorial-empty">

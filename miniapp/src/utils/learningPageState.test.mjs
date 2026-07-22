@@ -4,9 +4,13 @@ import {
   createActionActivationGuard,
   createInitialLearningContent,
   createLatestRequestGuard,
+  createLearningCourseEntries,
+  createLearningQuoteEntries,
+  createLearningTagEntries,
   createOneShotFallbackRegistry,
   flattenLearningMaterials,
   handleActionKeydown,
+  learningTabTransition,
   resolveLearningCategory,
   retainLearningContentOnError,
 } from './learningPageState.js'
@@ -123,15 +127,16 @@ const materialCourses = [
 ]
 const flattenedMaterials = flattenLearningMaterials(materialCourses)
 assert.deepEqual(
-  flattenedMaterials.map(({ key, courseTitle, type }) => ({ key, courseTitle, type })),
+  flattenedMaterials.map(({ courseTitle, type }) => ({ courseTitle, type })),
   [
-    { key: 'course-a::material::slides', courseTitle: '九型入门', type: '讲义' },
-    { key: 'course-a::material::audio', courseTitle: '九型入门', type: '音频' },
-    { key: 'course-b::material::讲义', courseTitle: '关系练习', type: '讲义' },
-    { key: 'course-b::material::讲义::2', courseTitle: '关系练习', type: '讲义' },
+    { courseTitle: '九型入门', type: '讲义' },
+    { courseTitle: '九型入门', type: '音频' },
+    { courseTitle: '关系练习', type: '讲义' },
+    { courseTitle: '关系练习', type: '讲义' },
   ],
   'course data should flatten into stable, unique material entries using course and material identities',
 )
+assert.equal(new Set(flattenedMaterials.map((item) => item.key)).size, flattenedMaterials.length, 'flattened material keys should remain unique')
 assert.deepEqual(
   flattenLearningMaterials(materialCourses).map((item) => item.key),
   flattenedMaterials.map((item) => item.key),
@@ -149,6 +154,106 @@ assert.deepEqual(
   sameTitleKeys(sameTitleCourses),
   'same-title courses with distinguishable stable content should retain their logical material keys when backend order changes',
 )
+
+const sharedExplicitIdentity = [
+  {
+    id: 'shared-course',
+    title: '同名课程',
+    description: '课程甲',
+    materialTypes: [{ id: 'shared-material', name: '讲义', url: '/a.pdf' }],
+  },
+  {
+    id: 'shared-course',
+    title: '同名课程',
+    description: '课程乙',
+    materialTypes: [{ id: 'shared-material', name: '讲义', url: '/b.pdf' }],
+  },
+]
+assert.deepEqual(
+  sameTitleKeys([...sharedExplicitIdentity].reverse()),
+  sameTitleKeys(sharedExplicitIdentity),
+  'different courses and materials sharing explicit ids should retain deterministic keys under reorder',
+)
+
+const priorFnvCollisionCourses = [
+  { title: '哈希碰撞课程', description: 'desc-7iilspgbrvu-91242', materialTypes: ['讲义'] },
+  { title: '哈希碰撞课程', description: 'desc-2mqk7cq64l7-132603', materialTypes: ['讲义'] },
+]
+assert.deepEqual(
+  sameTitleKeys([...priorFnvCollisionCourses].reverse()),
+  sameTitleKeys(priorFnvCollisionCourses),
+  'known prior FNV collision content should not fall back to encounter-order suffixes',
+)
+
+const circularCourse = { title: '循环课程', description: '循环结构也不能导致页面失败' }
+const circularMaterial = { name: '循环讲义' }
+circularCourse.self = circularCourse
+circularMaterial.course = circularCourse
+circularCourse.materialTypes = [circularMaterial]
+assert.doesNotThrow(() => flattenLearningMaterials([circularCourse]), 'circular course and material data should be canonicalized safely')
+assert.equal(flattenLearningMaterials([circularCourse]).length, 1, 'valid circular material content should remain renderable')
+
+const throwingCourse = { title: '异常课程' }
+Object.defineProperty(throwingCourse, 'materialTypes', { get() { throw new Error('getter failed') } })
+const throwingMaterial = { id: 'bad-material' }
+Object.defineProperty(throwingMaterial, 'name', { get() { throw new Error('getter failed') } })
+assert.doesNotThrow(
+  () => flattenLearningMaterials([throwingCourse, { title: '部分异常', materialTypes: [throwingMaterial, '正常讲义'] }]),
+  'throwing accessors should fail closed instead of blanking the learning page',
+)
+assert.equal(
+  flattenLearningMaterials([throwingCourse, { title: '部分异常', materialTypes: [throwingMaterial, '正常讲义'] }]).length,
+  1,
+  'malformed entries should be skipped while valid sibling materials remain available',
+)
+const exoticMaterial = {
+  name: '特殊类型讲义',
+  date: new Date('2026-07-22T00:00:00.000Z'),
+  map: new Map([['b', 2], ['a', 1]]),
+  set: new Set(['b', 'a']),
+  callable: function lessonHelper() {},
+  symbolic: Symbol.for('lesson'),
+  large: 9007199254740993n,
+  missing: undefined,
+  nan: NaN,
+  positiveInfinity: Infinity,
+  negativeInfinity: -Infinity,
+}
+const exoticCourse = { title: '特殊类型课程', materialTypes: [exoticMaterial] }
+assert.doesNotThrow(() => flattenLearningMaterials([exoticCourse]), 'supported non-JSON values should have deterministic fail-closed identities')
+assert.equal(
+  flattenLearningMaterials([exoticCourse])[0].key,
+  flattenLearningMaterials([exoticCourse])[0].key,
+  'Date, Map, Set, function, symbol, bigint, undefined, and non-finite number handling should be deterministic',
+)
+const throwingProxyMaterial = new Proxy({ name: '代理讲义' }, { ownKeys() { throw new Error('ownKeys failed') } })
+assert.doesNotThrow(
+  () => flattenLearningMaterials([{ title: '代理课程', materialTypes: [throwingProxyMaterial] }]),
+  'property enumeration failures should be contained by canonicalization',
+)
+
+const courseEntries = createLearningCourseEntries(sameTitleCourses)
+assert.equal(new Set(courseEntries.map((entry) => entry.key)).size, courseEntries.length, 'course rows should receive stable unique keys')
+assert.deepEqual(
+  Object.fromEntries(createLearningCourseEntries([...sameTitleCourses].reverse()).map((entry) => [entry.item.description, entry.key])),
+  Object.fromEntries(courseEntries.map((entry) => [entry.item.description, entry.key])),
+  'course row keys should follow logical content rather than array position',
+)
+const quoteEntries = createLearningQuoteEntries(['同一句', '另一句', '同一句'])
+assert.equal(new Set(quoteEntries.map((entry) => entry.key)).size, quoteEntries.length, 'duplicate quotes should still receive unique row keys')
+assert.equal(
+  createLearningQuoteEntries(['另一句', '同一句']).find((entry) => entry.text === '另一句').key,
+  createLearningQuoteEntries(['同一句', '另一句']).find((entry) => entry.text === '另一句').key,
+  'distinct quote keys should not depend on list position',
+)
+const tagEntries = createLearningTagEntries(['关系沟通', '成长练习', '关系沟通'], 'teacher-a')
+assert.equal(new Set(tagEntries.map((entry) => entry.key)).size, tagEntries.length, 'duplicate teacher tags should receive unique stable keys')
+
+assert.deepEqual(learningTabTransition('course', 'Enter'), { handled: true, category: 'course', focusIndex: 0 }, 'Enter should select the focused tab')
+assert.deepEqual(learningTabTransition('material', ' '), { handled: true, category: 'material', focusIndex: 1 }, 'Space should select the focused tab')
+assert.deepEqual(learningTabTransition('course', 'ArrowLeft'), { handled: true, category: 'quote', focusIndex: 2 }, 'ArrowLeft should wrap to the last tab')
+assert.deepEqual(learningTabTransition('quote', 'ArrowRight'), { handled: true, category: 'course', focusIndex: 0 }, 'ArrowRight should wrap to the first tab')
+assert.deepEqual(learningTabTransition('material', 'Tab'), { handled: false, category: 'material', focusIndex: 1 }, 'unhandled keys should retain selection and focus')
 assert.deepEqual(flattenLearningMaterials(null), [], 'malformed course data should flatten safely')
 assert.deepEqual(
   flattenLearningMaterials([{ title: '无资料课程', materialTypes: null }, null]),

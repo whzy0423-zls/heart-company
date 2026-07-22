@@ -1,6 +1,7 @@
 import { normalizeCoursewareItems, normalizeTeachers } from './teacherCourseware.js'
 
 const LEARNING_CATEGORIES = new Set(['course', 'material', 'quote'])
+const LEARNING_CATEGORY_ORDER = ['course', 'material', 'quote']
 
 function identityText(value, fallback) {
   if (typeof value === 'number' && Number.isFinite(value)) return String(value)
@@ -8,37 +9,99 @@ function identityText(value, fallback) {
   return fallback
 }
 
-function canonicalValue(value) {
-  if (Array.isArray(value)) return `[${value.map(canonicalValue).sort().join(',')}]`
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalValue(value[key])}`).join(',')}}`
+function safeGet(value, key, fallback) {
+  try {
+    const result = value?.[key]
+    return result === undefined ? fallback : result
+  } catch {
+    return fallback
   }
-  if (typeof value === 'string') return JSON.stringify(value.trim().replace(/\s+/g, ' '))
-  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
-  if (typeof value === 'boolean') return String(value)
-  return 'null'
 }
 
-function stableHash(value) {
-  let hash = 2166136261
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
+function canonicalPropertyKey(key) {
+  if (typeof key === 'symbol') {
+    let globalKey = ''
+    try { globalKey = Symbol.keyFor(key) || '' } catch { globalKey = '' }
+    return `symbol:${globalKey || key.description || ''}`
   }
-  return (hash >>> 0).toString(36)
+  return `string:${String(key)}`
+}
+
+function canonicalValue(value, stack = new Map(), path = '$') {
+  try {
+    if (value === null) return 'null'
+    if (value === undefined) return '{"$type":"undefined"}'
+    if (typeof value === 'string') return JSON.stringify(value.trim().replace(/\s+/g, ' '))
+    if (typeof value === 'number') {
+      if (Number.isNaN(value)) return '{"$number":"NaN"}'
+      if (value === Infinity) return '{"$number":"Infinity"}'
+      if (value === -Infinity) return '{"$number":"-Infinity"}'
+      if (Object.is(value, -0)) return '{"$number":"-0"}'
+      return String(value)
+    }
+    if (typeof value === 'boolean') return String(value)
+    if (typeof value === 'bigint') return `{"$bigint":${JSON.stringify(String(value))}}`
+    if (typeof value === 'symbol') return `{"$symbol":${JSON.stringify(canonicalPropertyKey(value))}}`
+    if (typeof value === 'function') return `{"$function":${JSON.stringify(identityText(value.name, 'anonymous'))}}`
+    if (stack.has(value)) return `{"$cycle":${JSON.stringify(stack.get(value))}}`
+
+    stack.set(value, path)
+    try {
+      let tag = ''
+      try { tag = Object.prototype.toString.call(value) } catch { tag = '[object Unknown]' }
+      if (tag === '[object Date]') {
+        let timestamp = NaN
+        try { timestamp = value.getTime() } catch { timestamp = NaN }
+        return `{"$date":${JSON.stringify(Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : 'invalid')}}`
+      }
+      if (tag === '[object Map]') {
+        let entries
+        try { entries = Array.from(value.entries()) } catch { return '{"$error":"map-read"}' }
+        return `{"$map":[${entries.map(([key, item], index) => (
+          `${canonicalValue(key, stack, `${path}.map-key-${index}`)}:${canonicalValue(item, stack, `${path}.map-value-${index}`)}`
+        )).sort().join(',')}]}`
+      }
+      if (tag === '[object Set]') {
+        let entries
+        try { entries = Array.from(value.values()) } catch { return '{"$error":"set-read"}' }
+        return `{"$set":[${entries.map((item, index) => canonicalValue(item, stack, `${path}.set-${index}`)).sort().join(',')}]}`
+      }
+      if (Array.isArray(value)) {
+        const length = Number(safeGet(value, 'length', 0)) || 0
+        const items = []
+        for (let index = 0; index < length; index += 1) {
+          items.push(canonicalValue(safeGet(value, index, { $error: 'array-read' }), stack, `${path}[${index}]`))
+        }
+        return `[${items.sort().join(',')}]`
+      }
+
+      let keys
+      try { keys = Reflect.ownKeys(value) } catch { return '{"$error":"object-keys"}' }
+      const properties = keys.map((key) => {
+        const canonicalKey = canonicalPropertyKey(key)
+        let property
+        try { property = value[key] } catch { property = { $error: 'property-read' } }
+        return `${JSON.stringify(canonicalKey)}:${canonicalValue(property, stack, `${path}.${canonicalKey}`)}`
+      }).sort()
+      return `{${properties.join(',')}}`
+    } finally {
+      stack.delete(value)
+    }
+  } catch {
+    return '{"$error":"canonicalize"}'
+  }
+}
+
+function stableKey(namespace, explicitIdentity, content) {
+  return `${namespace}::${canonicalValue(explicitIdentity)}::${canonicalValue(content)}`
 }
 
 function courseIdentity(course) {
-  const explicit = identityText(course.id || course.key || course.courseId, '')
-  if (explicit) return explicit
-  return `course-${stableHash(canonicalValue({
-    title: course.title || course.name,
-    description: course.description,
-    duration: course.duration,
-    materialTypes: course.materialTypes,
-    badge: course.badge,
-    url: course.url,
-  }))}`
+  const explicit = identityText(
+    safeGet(course, 'id', '') || safeGet(course, 'key', '') || safeGet(course, 'courseId', ''),
+    '',
+  )
+  return stableKey('course', explicit || null, course)
 }
 
 function materialIdentity(material) {
@@ -47,44 +110,92 @@ function materialIdentity(material) {
     return text ? { id: text, label: text } : null
   }
   if (!material || typeof material !== 'object') return null
-  const label = identityText(material.name || material.title || material.type || material.label, '')
+  const label = identityText(
+    safeGet(material, 'name', '') || safeGet(material, 'title', '') || safeGet(material, 'type', '') || safeGet(material, 'label', ''),
+    '',
+  )
   if (!label) return null
-  const explicit = identityText(material.id || material.key || material.code, '')
+  const explicit = identityText(
+    safeGet(material, 'id', '') || safeGet(material, 'key', '') || safeGet(material, 'code', ''),
+    '',
+  )
   return {
-    id: explicit || `${label}-${stableHash(canonicalValue(material))}`,
+    id: stableKey('material', explicit || null, material),
     label,
   }
 }
 
-export function flattenLearningMaterials(courses) {
+function withUniqueKeys(entries) {
+  const counts = new Map()
+  return entries.map((entry) => {
+    const occurrence = (counts.get(entry.baseKey) || 0) + 1
+    counts.set(entry.baseKey, occurrence)
+    return {
+      ...entry,
+      key: occurrence === 1 ? entry.baseKey : `${entry.baseKey}::duplicate::${occurrence}`,
+    }
+  })
+}
+
+export function createLearningCourseEntries(courses) {
   if (!Array.isArray(courses)) return []
-  const keyCounts = new Map()
-  return courses.flatMap((course) => {
-    if (!course || typeof course !== 'object' || !Array.isArray(course.materialTypes)) return []
-    const courseTitle = identityText(course.title || course.name, '未命名课程')
-    const courseId = courseIdentity(course)
-    return course.materialTypes.map((material) => {
+  return withUniqueKeys(courses.flatMap((course) => {
+    if (!course || typeof course !== 'object') return []
+    return [{ baseKey: courseIdentity(course), item: course }]
+  })).map(({ baseKey, ...entry }) => entry)
+}
+
+export function createLearningQuoteEntries(quotes) {
+  if (!Array.isArray(quotes)) return []
+  return withUniqueKeys(quotes.flatMap((quote) => {
+    const text = identityText(quote, '')
+    return text ? [{ baseKey: stableKey('quote', null, text), text }] : []
+  })).map(({ baseKey, ...entry }) => entry)
+}
+
+export function createLearningTagEntries(tags, ownerIdentity = '') {
+  if (!Array.isArray(tags)) return []
+  return withUniqueKeys(tags.flatMap((tag) => {
+    const text = identityText(tag, '')
+    return text ? [{ baseKey: stableKey('tag', ownerIdentity || null, text), text }] : []
+  })).map(({ baseKey, ...entry }) => entry)
+}
+
+export function flattenLearningMaterials(courses) {
+  const materials = createLearningCourseEntries(courses).flatMap(({ key: courseKey, item: course }) => {
+    const materialTypes = safeGet(course, 'materialTypes', null)
+    if (!Array.isArray(materialTypes)) return []
+    const courseTitle = identityText(safeGet(course, 'title', '') || safeGet(course, 'name', ''), '未命名课程')
+    return materialTypes.map((material) => {
       const identity = materialIdentity(material)
       if (!identity) return null
-      const baseKey = `${courseId}::material::${identity.id}`
-      const occurrence = (keyCounts.get(baseKey) || 0) + 1
-      keyCounts.set(baseKey, occurrence)
       return {
-        key: occurrence === 1 ? baseKey : `${baseKey}::${occurrence}`,
-        courseKey: courseId,
+        baseKey: `${courseKey}::material::${identity.id}`,
+        courseKey,
         courseTitle,
         type: identity.label,
-        description: identityText(course.description, ''),
-        duration: identityText(course.duration, ''),
-        url: identityText(material?.url || course.url, ''),
+        description: identityText(safeGet(course, 'description', ''), ''),
+        duration: identityText(safeGet(course, 'duration', ''), ''),
+        url: identityText(safeGet(material, 'url', '') || safeGet(course, 'url', ''), ''),
       }
     }).filter(Boolean)
   })
+  return withUniqueKeys(materials).map(({ baseKey, ...entry }) => entry)
 }
 
 export function resolveLearningCategory(currentCategory, navigationIntent) {
   if (LEARNING_CATEGORIES.has(navigationIntent)) return navigationIntent
   return LEARNING_CATEGORIES.has(currentCategory) ? currentCategory : 'course'
+}
+
+export function learningTabTransition(currentCategory, key) {
+  const category = resolveLearningCategory(currentCategory, null)
+  const currentIndex = LEARNING_CATEGORY_ORDER.indexOf(category)
+  if (['Enter', ' ', 'Spacebar'].includes(key)) return { handled: true, category, focusIndex: currentIndex }
+  if (!['ArrowLeft', 'ArrowRight'].includes(key)) return { handled: false, category, focusIndex: currentIndex }
+  const step = key === 'ArrowRight' ? 1 : -1
+  const focusIndex = (currentIndex + step + LEARNING_CATEGORY_ORDER.length) % LEARNING_CATEGORY_ORDER.length
+  return { handled: true, category: LEARNING_CATEGORY_ORDER[focusIndex], focusIndex }
 }
 
 export const TEACHER_SECTION_PATHS = [
