@@ -16,6 +16,34 @@ func TestReleaseStoreRejectsEmptyMapping(t *testing.T) {
 	}
 }
 
+func TestReleaseStoreRejectsNonMonotonicBuildAndActivationVersions(t *testing.T) {
+	r := testRelease(RetrievalLexicalOnly)
+	build := &sqlScript{steps: []sqlStep{
+		{kind: "begin"},
+		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
+		{kind: "query", contains: "FROM theory_libraries", columns: []string{"id", "current_version"}, rows: [][]driver.Value{{r.LibraryID, int64(r.Version)}}},
+		{kind: "rollback"},
+	}}
+	_, err := testStore(t, build).BuildRelease(context.Background(), r, []ReleaseMapping{{CardID: 11, ChunkID: 71}})
+	if !errors.Is(err, ErrReleaseVersionConflict) {
+		t.Fatalf("expected build version conflict, got %v", err)
+	}
+
+	r.ID, r.Status, r.CardCount, r.ChunkCount = 91, ReleaseStatusReady, 1, 1
+	activate := &sqlScript{steps: []sqlStep{
+		{kind: "begin"},
+		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
+		{kind: "query", contains: "FROM theory_libraries", columns: []string{"id", "current_version"}, rows: [][]driver.Value{{r.LibraryID, int64(r.Version)}}},
+		{kind: "query", contains: "SELECT library_id, status", columns: []string{"library_id", "status"}, rows: [][]driver.Value{{r.LibraryID, string(ReleaseStatusReady)}}},
+		{kind: "query", contains: "FROM theory_library_releases", columns: releaseColumns(), rows: [][]driver.Value{releaseValues(r)}},
+		{kind: "rollback"},
+	}}
+	err = testStore(t, activate).ActivateRelease(context.Background(), r.LibraryID, r.ID, 7)
+	if !errors.Is(err, ErrReleaseVersionConflict) {
+		t.Fatalf("expected activation version conflict, got %v", err)
+	}
+}
+
 func TestReleaseStoreRejectsDuplicateChunkMappingBeforeSQL(t *testing.T) {
 	mappings := []ReleaseMapping{{CardID: 11, ChunkID: 71}, {CardID: 11, ChunkID: 71}}
 	_, err := testStore(t, &sqlScript{}).BuildRelease(context.Background(), testRelease(RetrievalLexicalOnly), mappings)
@@ -174,7 +202,7 @@ func TestReleaseStoreActivationLocksRetiresActivatesThenUpdatesLibrary(t *testin
 	script := &sqlScript{steps: []sqlStep{
 		{kind: "begin"},
 		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
-		{kind: "query", contains: "FROM theory_libraries", columns: []string{"id"}, rows: [][]driver.Value{{r.LibraryID}}},
+		{kind: "query", contains: "FROM theory_libraries", columns: []string{"id", "current_version"}, rows: [][]driver.Value{{r.LibraryID, int64(3)}}},
 		{kind: "query", contains: "SELECT library_id, status", columns: []string{"library_id", "status"}, rows: [][]driver.Value{{r.LibraryID, string(ReleaseStatusReady)}}},
 		{kind: "query", contains: "FROM theory_library_releases", columns: releaseColumns(), rows: [][]driver.Value{releaseValues(r)}},
 		{kind: "query", contains: "FROM theory_release_cards mapping", columns: []string{"card_id", "chunk_id"}, rows: [][]driver.Value{{int64(11), int64(71)}}},
@@ -194,7 +222,7 @@ func TestReleaseStoreActivationLocksRetiresActivatesThenUpdatesLibrary(t *testin
 	if activeCall.args[len(activeCall.args)-1] != int64(7) {
 		t.Fatalf("activated_by parameter missing: %#v", activeCall.args)
 	}
-	if !(indexCall(calls, "lock_theory_libraries") < indexCall(calls, "FROM theory_libraries") && indexCall(calls, "status = 'retired'") < indexCall(calls, "status = 'active'") && indexCall(calls, "status = 'active'") < indexCall(calls, "current_version")) {
+	if !(indexCall(calls, "lock_theory_libraries") < indexCall(calls, "FROM theory_libraries") && indexCall(calls, "status = 'retired'") < indexCall(calls, "status = 'active'") && indexCall(calls, "status = 'active'") < indexCall(calls, "SET current_version")) {
 		t.Fatalf("activation order wrong: %#v", calls)
 	}
 }
@@ -216,7 +244,7 @@ func TestReleaseStoreActivationFailureRollsBackBeforeOldActiveChanges(t *testing
 	script := &sqlScript{steps: []sqlStep{
 		{kind: "begin"},
 		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
-		{kind: "query", contains: "FROM theory_libraries", columns: []string{"id"}, rows: [][]driver.Value{{r.LibraryID}}},
+		{kind: "query", contains: "FROM theory_libraries", columns: []string{"id", "current_version"}, rows: [][]driver.Value{{r.LibraryID, int64(3)}}},
 		{kind: "query", contains: "SELECT library_id, status", columns: []string{"library_id", "status"}, rows: [][]driver.Value{{r.LibraryID, string(ReleaseStatusReady)}}},
 		{kind: "query", contains: "FROM theory_library_releases", columns: releaseColumns(), rows: [][]driver.Value{releaseValues(r)}},
 		{kind: "query", contains: "FROM theory_release_cards mapping", columns: []string{"card_id", "chunk_id"}, rows: [][]driver.Value{{int64(11), int64(71)}}},
@@ -236,7 +264,7 @@ func TestReleaseStoreActivationRejectsNonReadyOrDifferentLibrary(t *testing.T) {
 	script := &sqlScript{steps: []sqlStep{
 		{kind: "begin"},
 		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
-		{kind: "query", contains: "FROM theory_libraries", columns: []string{"id"}, rows: [][]driver.Value{{r.LibraryID}}},
+		{kind: "query", contains: "FROM theory_libraries", columns: []string{"id", "current_version"}, rows: [][]driver.Value{{r.LibraryID, int64(3)}}},
 		{kind: "query", contains: "SELECT library_id, status", columns: []string{"library_id", "status"}, rows: [][]driver.Value{{r.LibraryID, string(ReleaseStatusReady)}}},
 		{kind: "query", contains: "FROM theory_library_releases", columns: releaseColumns()},
 		{kind: "rollback"},
@@ -262,7 +290,7 @@ func TestReleaseStoreActivationReturnsDistinctStableLookupErrors(t *testing.T) {
 			script := &sqlScript{steps: []sqlStep{
 				{kind: "begin"},
 				{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
-				{kind: "query", contains: "FROM theory_libraries", columns: []string{"id"}, rows: [][]driver.Value{{int64(3)}}},
+				{kind: "query", contains: "FROM theory_libraries", columns: []string{"id", "current_version"}, rows: [][]driver.Value{{int64(3), int64(3)}}},
 				{kind: "query", contains: "SELECT library_id, status", columns: []string{"library_id", "status"}, rows: tc.rows},
 				{kind: "rollback"},
 			}}
@@ -278,7 +306,7 @@ func TestReleaseStoreActivationReturnsLibraryNotFound(t *testing.T) {
 	script := &sqlScript{steps: []sqlStep{
 		{kind: "begin"},
 		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
-		{kind: "query", contains: "FROM theory_libraries", columns: []string{"id"}},
+		{kind: "query", contains: "FROM theory_libraries", columns: []string{"id", "current_version"}},
 		{kind: "rollback"},
 	}}
 	err := testStore(t, script).ActivateRelease(context.Background(), 3, 91, 7)
@@ -359,7 +387,7 @@ func testRelease(mode RetrievalMode) Release {
 func buildPrefix(r Release, tail []sqlStep) *sqlScript {
 	building := r
 	building.ID, building.Status = 91, ReleaseStatusBuilding
-	steps := []sqlStep{{kind: "begin"}, {kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}}, {kind: "query", contains: "FROM theory_libraries", columns: []string{"id"}, rows: [][]driver.Value{{r.LibraryID}}}, {kind: "query", contains: "INSERT INTO theory_library_releases", columns: releaseColumns(), rows: [][]driver.Value{releaseValues(building)}}, {kind: "exec", contains: "DELETE FROM theory_release_cards", affected: 0}}
+	steps := []sqlStep{{kind: "begin"}, {kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}}, {kind: "query", contains: "FROM theory_libraries", columns: []string{"id", "current_version"}, rows: [][]driver.Value{{r.LibraryID, int64(3)}}}, {kind: "query", contains: "INSERT INTO theory_library_releases", columns: releaseColumns(), rows: [][]driver.Value{releaseValues(building)}}, {kind: "exec", contains: "DELETE FROM theory_release_cards", affected: 0}}
 	steps = append(steps, tail...)
 	return &sqlScript{steps: steps}
 }
@@ -387,7 +415,7 @@ func activationValidationPrefix(r Release) []sqlStep {
 	return []sqlStep{
 		{kind: "begin"},
 		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
-		{kind: "query", contains: "FROM theory_libraries", columns: []string{"id"}, rows: [][]driver.Value{{r.LibraryID}}},
+		{kind: "query", contains: "FROM theory_libraries", columns: []string{"id", "current_version"}, rows: [][]driver.Value{{r.LibraryID, int64(3)}}},
 		{kind: "query", contains: "SELECT library_id, status", columns: []string{"library_id", "status"}, rows: [][]driver.Value{{r.LibraryID, string(ReleaseStatusReady)}}},
 		{kind: "query", contains: "FROM theory_library_releases", columns: releaseColumns(), rows: [][]driver.Value{releaseValues(r)}},
 		{kind: "query", contains: "FROM theory_release_cards mapping", columns: []string{"card_id", "chunk_id"}, rows: [][]driver.Value{{int64(11), int64(71)}}},

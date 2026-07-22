@@ -66,6 +66,19 @@ func TestCardStoreRejectsInvalidTransitionBeforeSQL(t *testing.T) {
 	}
 }
 
+func TestCardStoreEveryTransitionRequiresPositiveActorBeforeSQL(t *testing.T) {
+	for _, edge := range [][2]CardStatus{{StatusDraft, StatusInReview}, {StatusInReview, StatusDraft}, {StatusInReview, StatusPublished}, {StatusPublished, StatusSuperseded}, {StatusSuperseded, StatusRetired}} {
+		script := &sqlScript{}
+		_, err := testStore(t, script).TransitionCard(context.Background(), 11, edge[0], edge[1], 0)
+		if err == nil || !strings.Contains(err.Error(), "actor") {
+			t.Fatalf("%s->%s accepted actor 0: %v", edge[0], edge[1], err)
+		}
+		if len(script.callsSnapshot()) != 0 {
+			t.Fatalf("%s->%s reached SQL", edge[0], edge[1])
+		}
+	}
+}
+
 func TestCardStoreTransitionMatrixContainsOnlyReviewWorkflowEdges(t *testing.T) {
 	allowed := map[[2]CardStatus]bool{
 		{StatusDraft, StatusInReview}:       true,
@@ -254,6 +267,41 @@ func TestCardStoreSupersedingPublishedSnapshotDoesNotChangeContentVersion(t *tes
 	}
 	if got.Version != card.Version {
 		t.Fatalf("superseding changed snapshot version: %d -> %d", card.Version, got.Version)
+	}
+}
+
+func TestCardStoreRetireRejectsCardMappedByActiveRelease(t *testing.T) {
+	card := testCard(StatusSuperseded)
+	script := &sqlScript{steps: []sqlStep{
+		{kind: "begin"},
+		{kind: "query", contains: "SELECT library_id", columns: []string{"library_id"}, rows: [][]driver.Value{{card.LibraryID}}},
+		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
+		{kind: "query", contains: "FROM theory_cards", columns: cardColumns(), rows: [][]driver.Value{cardValues(card)}},
+		{kind: "query", contains: "theory_release_cards", columns: []string{"exists"}, rows: [][]driver.Value{{true}}},
+		{kind: "rollback"},
+	}}
+	_, err := testStore(t, script).TransitionCard(context.Background(), card.ID, StatusSuperseded, StatusRetired, 7)
+	if !errors.Is(err, ErrCardInActiveRelease) {
+		t.Fatalf("expected ErrCardInActiveRelease, got %v", err)
+	}
+}
+
+func TestCardStoreRetireSucceedsWhenNoActiveReleaseMapsCard(t *testing.T) {
+	card := testCard(StatusSuperseded)
+	retired := card
+	retired.Status = StatusRetired
+	script := &sqlScript{steps: []sqlStep{
+		{kind: "begin"},
+		{kind: "query", contains: "SELECT library_id", columns: []string{"library_id"}, rows: [][]driver.Value{{card.LibraryID}}},
+		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
+		{kind: "query", contains: "FROM theory_cards", columns: cardColumns(), rows: [][]driver.Value{cardValues(card)}},
+		{kind: "query", contains: "theory_release_cards", columns: []string{"exists"}, rows: [][]driver.Value{{false}}},
+		{kind: "query", contains: "status=$2", columns: cardColumns(), rows: [][]driver.Value{cardValues(retired)}},
+		{kind: "commit"},
+	}}
+	got, err := testStore(t, script).TransitionCard(context.Background(), card.ID, StatusSuperseded, StatusRetired, 7)
+	if err != nil || got.Status != StatusRetired {
+		t.Fatalf("retire failed: %+v %v", got, err)
 	}
 }
 

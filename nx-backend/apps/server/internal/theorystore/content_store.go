@@ -267,11 +267,15 @@ func (s *Store) SaveEmbeddingRecord(parent context.Context, record EmbeddingReco
 			}
 			return saved, nil
 		case EmbeddingStatusFailed, EmbeddingStatusStale:
-			saved, scanErr := scanEmbedding(tx.QueryRowContext(ctx, `
-				UPDATE theory_chunk_embeddings SET dimensions=$4, embedded_at=NULL, status='pending', error_message=''
-				WHERE chunk_id=$1 AND embedding_model=$2 AND content_hash=$3 AND status=$5
-				RETURNING id, chunk_id, embedding_model, dimensions, content_hash, embedded_at, status, error_message`,
-				record.ChunkID, record.EmbeddingModel, record.ContentHash, record.Dimensions, existingStatus))
+			capable, capabilityErr := vectorColumnAvailable(ctx, tx)
+			if capabilityErr != nil {
+				return EmbeddingRecord{}, fmt.Errorf("save embedding pending: detect vector capability: %w", capabilityErr)
+			}
+			query := `UPDATE theory_chunk_embeddings SET dimensions=$4, embedded_at=NULL, status='pending', error_message='' WHERE chunk_id=$1 AND embedding_model=$2 AND content_hash=$3 AND status=$5 RETURNING id, chunk_id, embedding_model, dimensions, content_hash, embedded_at, status, error_message`
+			if capable {
+				query = `UPDATE theory_chunk_embeddings SET dimensions=$4, embedding=NULL, embedded_at=NULL, status='pending', error_message='' WHERE chunk_id=$1 AND embedding_model=$2 AND content_hash=$3 AND status=$5 RETURNING id, chunk_id, embedding_model, dimensions, content_hash, embedded_at, status, error_message`
+			}
+			saved, scanErr := scanEmbedding(tx.QueryRowContext(ctx, query, record.ChunkID, record.EmbeddingModel, record.ContentHash, record.Dimensions, existingStatus))
 			if errors.Is(scanErr, sql.ErrNoRows) {
 				return EmbeddingRecord{}, fmt.Errorf("save embedding pending: %w", ErrConcurrentUpdate)
 			}

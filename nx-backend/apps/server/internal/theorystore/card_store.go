@@ -9,10 +9,11 @@ import (
 )
 
 var (
-	ErrCardNotFound      = errors.New("theory card not found")
-	ErrCardNotEditable   = errors.New("theory card is not an editable draft")
-	ErrInvalidTransition = errors.New("invalid theory card transition")
-	ErrConcurrentUpdate  = errors.New("theory card changed concurrently")
+	ErrCardNotFound        = errors.New("theory card not found")
+	ErrCardNotEditable     = errors.New("theory card is not an editable draft")
+	ErrInvalidTransition   = errors.New("invalid theory card transition")
+	ErrConcurrentUpdate    = errors.New("theory card changed concurrently")
+	ErrCardInActiveRelease = errors.New("theory card is mapped by an active release")
 )
 
 const cardReturningColumns = `
@@ -144,8 +145,8 @@ func (s *Store) TransitionCard(parent context.Context, cardID int64, from, to Ca
 	if !allowedCardTransition(from, to) {
 		return Card{}, fmt.Errorf("transition card %s to %s: %w", from, to, ErrInvalidTransition)
 	}
-	if to == StatusPublished && reviewerID <= 0 {
-		return Card{}, fmt.Errorf("transition card: reviewer id must be positive")
+	if reviewerID <= 0 {
+		return Card{}, fmt.Errorf("transition card: actor id must be positive")
 	}
 	ctx, cancel := storeContext(parent)
 	defer cancel()
@@ -170,6 +171,20 @@ func (s *Store) TransitionCard(parent context.Context, cardID int64, from, to Ca
 	}
 	if card.Status != from {
 		return Card{}, fmt.Errorf("transition card: expected %s, found %s: %w", from, card.Status, ErrConcurrentUpdate)
+	}
+	if to == StatusRetired {
+		var inActiveRelease bool
+		if err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM theory_release_cards mapping
+				JOIN theory_library_releases release ON release.id=mapping.release_id
+				WHERE mapping.card_id=$1 AND release.library_id=$2 AND release.status='active'
+			)`, card.ID, card.LibraryID).Scan(&inActiveRelease); err != nil {
+			return Card{}, fmt.Errorf("transition card: check active release: %w", err)
+		}
+		if inActiveRelease {
+			return Card{}, fmt.Errorf("transition card: %w", ErrCardInActiveRelease)
+		}
 	}
 	if to == StatusPublished {
 		sources, err := loadCardSources(ctx, tx, card.ID)

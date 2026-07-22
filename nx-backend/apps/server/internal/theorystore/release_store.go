@@ -18,6 +18,7 @@ var (
 	ErrReleaseLibraryMismatch  = errors.New("theory release belongs to another library")
 	ErrEmbeddingNotReady       = errors.New("theory chunk embedding is not ready")
 	ErrStaleEmbedding          = errors.New("theory chunk embedding is stale")
+	ErrReleaseVersionConflict  = errors.New("theory release version is not newer than current")
 )
 
 type ReleaseMapping struct {
@@ -56,11 +57,15 @@ func (s *Store) BuildRelease(parent context.Context, release Release, mappings [
 		return Release{}, fmt.Errorf("build release: lock library: %w", err)
 	}
 	var lockedLibraryID int64
-	if err := tx.QueryRowContext(ctx, `SELECT id FROM theory_libraries WHERE id=$1 FOR SHARE`, release.LibraryID).Scan(&lockedLibraryID); err != nil {
+	var currentVersion int
+	if err := tx.QueryRowContext(ctx, `SELECT id, current_version FROM theory_libraries WHERE id=$1 FOR SHARE`, release.LibraryID).Scan(&lockedLibraryID, &currentVersion); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Release{}, fmt.Errorf("build release: library: %w", ErrLibraryNotFound)
 		}
 		return Release{}, fmt.Errorf("build release: lock library row: %w", err)
+	}
+	if release.Version <= currentVersion {
+		return Release{}, fmt.Errorf("build release: version %d <= current %d: %w", release.Version, currentVersion, ErrReleaseVersionConflict)
 	}
 	building, err := scanRelease(tx.QueryRowContext(ctx, `
 		INSERT INTO theory_library_releases (
@@ -169,7 +174,8 @@ func (s *Store) ActivateRelease(parent context.Context, libraryID, releaseID, ac
 		return fmt.Errorf("activate release: lock library scope: %w", err)
 	}
 	var lockedLibraryID int64
-	if err := tx.QueryRowContext(ctx, `SELECT id FROM theory_libraries WHERE id=$1 FOR UPDATE`, libraryID).Scan(&lockedLibraryID); err != nil {
+	var currentVersion int
+	if err := tx.QueryRowContext(ctx, `SELECT id, current_version FROM theory_libraries WHERE id=$1 FOR UPDATE`, libraryID).Scan(&lockedLibraryID, &currentVersion); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("activate release: library: %w", ErrLibraryNotFound)
 		}
@@ -199,6 +205,9 @@ func (s *Store) ActivateRelease(parent context.Context, libraryID, releaseID, ac
 	}
 	if err != nil {
 		return fmt.Errorf("activate release: lock ready release: %w", err)
+	}
+	if release.Version <= currentVersion {
+		return fmt.Errorf("activate release: version %d <= current %d: %w", release.Version, currentVersion, ErrReleaseVersionConflict)
 	}
 	mappings, err := loadReleaseMappings(ctx, tx, release.ID)
 	if err != nil {

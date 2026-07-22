@@ -389,6 +389,9 @@ func TestContentStorePendingEmbeddingStateMachine(t *testing.T) {
 		if err != nil || saved.Status != EmbeddingStatusPending {
 			t.Fatalf("stale restart failed: %+v %v", saved, err)
 		}
+		if !strings.Contains(script.callsSnapshot()[6].query, "embedding=NULL") {
+			t.Fatal("vector-capable stale restart did not clear old vector")
+		}
 	})
 }
 
@@ -508,7 +511,7 @@ func embeddingGenerationScript(r EmbeddingRecord, existing EmbeddingStatus, resu
 	case EmbeddingStatusPending:
 		steps = append(steps, sqlStep{kind: "query", contains: "FROM theory_chunk_embeddings", columns: embeddingColumns(), rows: [][]driver.Value{embeddingValues(*result)}}, sqlStep{kind: "commit"})
 	case EmbeddingStatusStale, EmbeddingStatusFailed:
-		steps = append(steps, sqlStep{kind: "query", contains: "UPDATE theory_chunk_embeddings", columns: embeddingColumns(), rows: [][]driver.Value{embeddingValues(*result)}}, sqlStep{kind: "commit"})
+		steps = append(steps, sqlStep{kind: "query", contains: "information_schema.columns", columns: []string{"exists"}, rows: [][]driver.Value{{true}}}, sqlStep{kind: "query", contains: "UPDATE theory_chunk_embeddings", columns: embeddingColumns(), rows: [][]driver.Value{embeddingValues(*result)}}, sqlStep{kind: "commit"})
 	}
 	return &sqlScript{steps: steps}
 }
