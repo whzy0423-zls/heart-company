@@ -32,9 +32,12 @@ function hideWheel() {
       <view
         class="home-nav__profile"
         role="button"
+        tabindex="0"
         aria-label="打开我的成长档案"
         hover-class="home-nav__profile--pressed"
         @click="goProfile"
+        @keydown.enter="goProfile"
+        @keydown.space.prevent="goProfile"
       >
         <view class="profile-icon" aria-hidden="true">
           <view class="profile-icon__head"></view>
@@ -63,6 +66,7 @@ function hideWheel() {
           src="/static/wheel.png"
           mode="aspectFit"
           lazy-load
+          aria-hidden="true"
           @error="hideWheel"
         />
         <view v-else class="hero__wheel-fallback" aria-hidden="true">9</view>
@@ -78,9 +82,12 @@ function hideWheel() {
       <view
         class="energy-card energy-card--test"
         role="button"
+        tabindex="0"
         aria-label="开始九型人格测试"
         hover-class="energy-card--pressed"
         @click="startTest"
+        @keydown.enter="startTest"
+        @keydown.space.prevent="startTest"
       >
         <view class="energy-icon energy-icon--test" aria-hidden="true">
           <view class="energy-icon__ring"></view>
@@ -93,9 +100,12 @@ function hideWheel() {
       <view
         class="energy-card energy-card--relation"
         role="button"
+        tabindex="0"
         aria-label="打开九型关系合盘"
         hover-class="energy-card--pressed"
         @click="goRelation"
+        @keydown.enter="goRelation"
+        @keydown.space.prevent="goRelation"
       >
         <view class="energy-icon energy-icon--relation" aria-hidden="true">
           <view class="energy-icon__person energy-icon__person--left"></view>
@@ -109,9 +119,12 @@ function hideWheel() {
       <view
         class="energy-card energy-card--learn"
         role="button"
+        tabindex="0"
         aria-label="打开老师课程与课件"
         hover-class="energy-card--pressed"
         @click="goLearn"
+        @keydown.enter="goLearn"
+        @keydown.space.prevent="goLearn"
       >
         <view class="energy-icon energy-icon--learn" aria-hidden="true">
           <view class="energy-icon__book energy-icon__book--left"></view>
@@ -125,9 +138,12 @@ function hideWheel() {
       <view
         class="energy-card energy-card--profile"
         role="button"
+        tabindex="0"
         aria-label="打开我的成长档案"
         hover-class="energy-card--pressed"
         @click="goProfile"
+        @keydown.enter="goProfile"
+        @keydown.space.prevent="goProfile"
       >
         <view class="energy-icon energy-icon--profile" aria-hidden="true">
           <view class="energy-icon__stem"></view>
@@ -142,9 +158,12 @@ function hideWheel() {
     <view
       class="growth-card"
       role="button"
+      tabindex="0"
       aria-label="打开老师课程与成长内容"
       hover-class="growth-card--pressed"
       @click="goLearn"
+      @keydown.enter="goLearn"
+      @keydown.space.prevent="goLearn"
     >
       <view class="growth-card__copy">
         <text class="growth-card__eyebrow">老师陪伴 · 持续成长</text>
@@ -316,6 +335,7 @@ function hideWheel() {
   filter: drop-shadow(0 26rpx 32rpx rgba(31, 51, 91, .18));
 }
 .hero__wheel-fallback {
+  box-sizing: border-box;
   width: 300rpx;
   height: 300rpx;
   display: flex;
@@ -561,6 +581,12 @@ function hideWheel() {
 @media (prefers-reduced-motion: reduce) {
   .hero__visual {
     animation: none;
+    transition: none;
+  }
+  .energy-card,
+  .growth-card,
+  .home-nav__profile,
+  .hero__cta {
     transition: none;
   }
 }
