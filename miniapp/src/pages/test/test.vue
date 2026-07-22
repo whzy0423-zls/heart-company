@@ -245,7 +245,7 @@ onUnload(() => {
   line-height: 1.3;
 }
 .gender__tip {
-  color: #64748b;
+  color: #52627a;
   font-size: 25rpx;
   line-height: 1.6;
 }
@@ -302,13 +302,13 @@ onUnload(() => {
 }
 .gender__d {
   color: rgba(255, 255, 255, .86);
-  font-size: 22rpx;
+  font-size: 24rpx;
   line-height: 1.5;
 }
 .gender__go {
   margin-top: auto;
   color: #fff;
-  font-size: 22rpx;
+  font-size: 24rpx;
   font-weight: 800;
 }
 
