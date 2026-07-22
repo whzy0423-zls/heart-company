@@ -44,17 +44,27 @@ def command_version(command):
     return output.splitlines()[0] if output else "version-unavailable"
 
 
-def collect_tool_versions():
-    macos_version = command_version(["sw_vers", "-productVersion"])
-    return {
-        "pdfinfo": command_version(["pdfinfo", "-v"]),
-        "pdftotext": command_version(["pdftotext", "-v"]),
-        "textutil": f"Apple textutil on macOS {macos_version}",
-        "textutilBinarySha256": sha256_file(Path("/usr/bin/textutil")),
-        "epubParser": f"python-{sys.version_info.major}.{sys.version_info.minor}.zipfile+ElementTree",
-        "pptxParser": f"python-{sys.version_info.major}.{sys.version_info.minor}.zipfile+ElementTree",
-        "catalogParser": "xinzhili-source-catalog-v1",
-    }
+def parser_version(name):
+    return f"python-{sys.version_info.major}.{sys.version_info.minor}.{name}"
+
+
+def collect_tool_versions_for_suffix(suffix):
+    if suffix == ".pdf":
+        return {
+            "pdfinfo": command_version(["pdfinfo", "-v"]),
+            "pdftotext": command_version(["pdftotext", "-v"]),
+        }
+    if suffix == ".epub":
+        return {"epubParser": parser_version("zipfile+ElementTree")}
+    if suffix in {".doc", ".docx"}:
+        macos_version = command_version(["sw_vers", "-productVersion"])
+        return {
+            "textutil": f"Apple textutil on macOS {macos_version}",
+            "textutilBinarySha256": sha256_file(Path("/usr/bin/textutil")),
+        }
+    if suffix == ".pptx":
+        return {"pptxParser": parser_version("zipfile+ElementTree")}
+    return {"catalogParser": "xinzhili-source-catalog-v1"}
 
 
 def canonical_hash(value):
@@ -203,20 +213,17 @@ def pptx_probe(path):
     }
 
 
-def probe_file(path, chars_per_page, tool_versions):
+def probe_file(path, chars_per_page, tool_versions=None):
     suffix = path.suffix.lower()
+    tools = tool_versions or collect_tool_versions_for_suffix(suffix)
     if suffix == ".pdf":
         result = pdf_probe(path)
-        tools = {key: tool_versions[key] for key in ("pdfinfo", "pdftotext")}
     elif suffix == ".epub":
         result = epub_probe(path, chars_per_page)
-        tools = {"epubParser": tool_versions["epubParser"]}
     elif suffix in {".doc", ".docx"}:
         result = office_text_probe(path, chars_per_page)
-        tools = {key: tool_versions[key] for key in ("textutil", "textutilBinarySha256")}
     elif suffix == ".pptx":
         result = pptx_probe(path)
-        tools = {"pptxParser": tool_versions["pptxParser"]}
     elif suffix in {".mobi", ".azw3"}:
         result = {
             "extractionRoute": "ebook_convert_required",
@@ -224,7 +231,6 @@ def probe_file(path, chars_per_page, tool_versions):
             "ocrPageEstimate": 0,
             "_normalizedProbeOutput": {"probeStatus": "converter-required", "byteSize": path.stat().st_size},
         }
-        tools = {"catalogParser": tool_versions["catalogParser"]}
     elif suffix == ".jpg":
         result = {
             "extractionRoute": "image_ocr",
@@ -232,7 +238,6 @@ def probe_file(path, chars_per_page, tool_versions):
             "ocrPageEstimate": 1,
             "_normalizedProbeOutput": {"imageCount": 1, "byteSize": path.stat().st_size},
         }
-        tools = {"catalogParser": tool_versions["catalogParser"]}
     else:
         result = {
             "extractionRoute": "unsupported_format",
@@ -240,7 +245,6 @@ def probe_file(path, chars_per_page, tool_versions):
             "ocrPageEstimate": 0,
             "_normalizedProbeOutput": {"probeStatus": "unsupported-format", "suffix": suffix},
         }
-        tools = {"catalogParser": tool_versions["catalogParser"]}
     normalized_output = result.pop("_normalizedProbeOutput")
     result["probe"] = {
         "normalization": "xinzhili-probe-output-v1",
@@ -324,6 +328,24 @@ def validate_selection(selection, entries_by_path):
         missing = [source["relativePath"] for source in sources if source["relativePath"] not in entries_by_path]
         raise ValueError(f"首轮来源不存在: {missing}")
 
+    for source in sources:
+        relative_path = source["relativePath"]
+        if not isinstance(source.get("selectedRanges"), list) or not source["selectedRanges"]:
+            raise ValueError(f"选择范围不能为空: {relative_path}")
+        if not all(isinstance(locator, str) for locator in source["selectedRanges"]):
+            raise ValueError(f"选择范围必须为字符串列表: {relative_path}")
+        processed_count = source.get("processedUnitCount")
+        if (
+            not isinstance(processed_count, int)
+            or isinstance(processed_count, bool)
+            or processed_count <= 0
+        ):
+            raise ValueError(f"processedUnitCount 必须为正整数: {relative_path}")
+        for field in ("budgetPageEquivalent", "ocrPageCount"):
+            value = source.get(field)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"{field} 必须为非负整数: {relative_path}")
+
     hashes = [entries_by_path[source["relativePath"]]["sha256"] for source in sources]
     if len(hashes) != len(set(hashes)):
         raise ValueError("首轮选择包含 SHA-256 重复文件")
@@ -338,13 +360,31 @@ def validate_selection(selection, entries_by_path):
         entry = entries_by_path[source["relativePath"]]
         estimate = entry["unitEstimate"]
         selected_units, _ = expand_selected_ranges(source, estimate["unitCount"])
-        if source["budgetPageEquivalent"] > estimate["budgetPageEquivalent"]:
-            raise ValueError(f"折算预算超过来源总量: {source['relativePath']}")
+        suffix = Path(source["relativePath"]).suffix.lower()
+        if suffix in {".pdf", ".pptx"}:
+            if source["budgetPageEquivalent"] != len(selected_units):
+                raise ValueError(
+                    f"页或幻灯片预算必须等于选定单元数: {source['relativePath']}"
+                )
+        elif suffix in TEXT_EQUIVALENT_EXTENSIONS:
+            character_count = estimate.get("normalizedTextCharacters")
+            chars_per_page = selection.get("normalizedTextCharactersPerPage")
+            if (
+                not isinstance(character_count, int)
+                or isinstance(character_count, bool)
+                or character_count < 0
+                or not isinstance(chars_per_page, int)
+                or isinstance(chars_per_page, bool)
+                or chars_per_page <= 0
+            ):
+                raise ValueError(f"文本折算探测数据非法: {source['relativePath']}")
+            expected_budget = max(1, math.ceil(character_count / chars_per_page))
+            if estimate.get("budgetPageEquivalent") != expected_budget:
+                raise ValueError(f"目录文本折算预算不符合既定规则: {source['relativePath']}")
+            if source["budgetPageEquivalent"] != expected_budget:
+                raise ValueError(f"文本折算预算与目录探测不一致: {source['relativePath']}")
         if source["ocrPageCount"] > source["processedUnitCount"]:
             raise ValueError(f"OCR 页数超过处理单元: {source['relativePath']}")
-        if Path(source["relativePath"]).suffix.lower() in TEXT_EQUIVALENT_EXTENSIONS:
-            if source["budgetPageEquivalent"] != estimate["budgetPageEquivalent"]:
-                raise ValueError(f"文本折算预算与实际字符数不一致: {source['relativePath']}")
         route = entry["extractionRoute"]
         if route == "pdf_ocr_selected":
             if not selected_units or source["ocrPageCount"] != len(selected_units):
@@ -354,9 +394,34 @@ def validate_selection(selection, entries_by_path):
     return budget, ocr_pages
 
 
+def safe_probe_error(exc, suffix):
+    allowed_types = {
+        "BadZipFile",
+        "CalledProcessError",
+        "FileNotFoundError",
+        "KeyError",
+        "OSError",
+        "ParseError",
+        "PermissionError",
+        "StopIteration",
+        "ValueError",
+    }
+    error_type = type(exc).__name__
+    if error_type not in allowed_types:
+        error_type = "OSError" if isinstance(exc, OSError) else "ProbeError"
+    safe_suffix = suffix.lower().lstrip(".") or "no-extension"
+    safe_code = f"probe-{safe_suffix}-{re.sub(r'(?<!^)(?=[A-Z])', '-', error_type).lower()}"
+    normalized = {"errorType": error_type, "suffix": suffix.lower(), "safeCode": safe_code}
+    reason_parts = [f"错误类型 {error_type}", f"安全代码 {safe_code}"]
+    if isinstance(exc, subprocess.CalledProcessError) and isinstance(exc.returncode, int):
+        normalized["exitCode"] = exc.returncode
+        reason_parts.insert(1, f"退出码 {exc.returncode}")
+    return normalized, "；".join(reason_parts)
+
+
 def build_catalog(source_root, selection):
     chars_per_page = selection["normalizedTextCharactersPerPage"]
-    tool_versions = collect_tool_versions()
+    tool_versions_by_suffix = {}
     paths = sorted(
         (
             path for path in source_root.rglob("*")
@@ -380,7 +445,10 @@ def build_catalog(source_root, selection):
         canonical_work_id = stable_id("work", digest)
         error = None
         try:
-            probe = probe_file(path, chars_per_page, tool_versions)
+            suffix = path.suffix.lower()
+            if suffix not in tool_versions_by_suffix:
+                tool_versions_by_suffix[suffix] = collect_tool_versions_for_suffix(suffix)
+            probe = probe_file(path, chars_per_page, tool_versions_by_suffix[suffix])
         except (
             KeyError,
             OSError,
@@ -390,7 +458,7 @@ def build_catalog(source_root, selection):
             zipfile.BadZipFile,
             ElementTree.ParseError,
         ) as exc:
-            normalized_error = {"errorType": type(exc).__name__, "suffix": path.suffix.lower()}
+            normalized_error, error = safe_probe_error(exc, path.suffix)
             probe = {
                 "extractionRoute": "manual_review_required",
                 "unitEstimate": {"unitType": "unknown", "unitCount": 0, "budgetPageEquivalent": 0},
@@ -398,10 +466,9 @@ def build_catalog(source_root, selection):
                 "probe": {
                     "normalization": "xinzhili-probe-output-v1",
                     "outputSha256": canonical_hash(normalized_error),
-                    "toolVersions": {"catalogParser": tool_versions["catalogParser"]},
+                    "toolVersions": {"catalogParser": "xinzhili-source-catalog-v1"},
                 },
             }
-            error = str(exc).splitlines()[0]
 
         if error:
             status, priority, batch, reason = "error", 9, "round-999", f"目录探测失败，需人工修复后重试：{error}"
@@ -438,9 +505,20 @@ def build_catalog(source_root, selection):
         })
 
     entries_by_path = {entry["relativePath"]: entry for entry in entries}
-    budget, ocr_pages = validate_selection(selection, entries_by_path)
+    missing_selected_paths = [
+        source["relativePath"] for source in selection["sources"]
+        if source["relativePath"] not in entries_by_path
+    ]
+    if missing_selected_paths:
+        raise ValueError(f"首轮来源不存在: {missing_selected_paths}")
+    processable_sources = [
+        source for source in selection["sources"]
+        if entries_by_path[source["relativePath"]]["catalogStatus"] != "error"
+    ]
+    processable_selection = {**selection, "sources": processable_sources}
+    budget, ocr_pages = validate_selection(processable_selection, entries_by_path)
     selected = []
-    for source in selection["sources"]:
+    for source in processable_sources:
         catalog_entry = entries_by_path[source["relativePath"]]
         if catalog_entry["catalogStatus"] != "selected":
             raise ValueError(f"首轮来源不是 canonical selected 文件: {source['relativePath']}")

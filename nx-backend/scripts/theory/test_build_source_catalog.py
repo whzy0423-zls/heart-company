@@ -6,8 +6,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from collections import Counter
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -24,6 +26,188 @@ def load_catalog_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def make_selection(source):
+    return {
+        "roundId": "round-001",
+        "budgetRuleVersion": "xinzhili-page-equivalent-v1",
+        "normalizedTextCharactersPerPage": 1800,
+        "maxSelectedFiles": 24,
+        "maxBudgetPageEquivalent": 2000,
+        "maxOcrPageCount": 300,
+        "sources": [source],
+    }
+
+
+def make_entry(relative_path="sample.pdf", unit_type="page", unit_count=5, budget=5):
+    return {
+        "relativePath": relative_path,
+        "sha256": "a" * 64,
+        "unitEstimate": {
+            "unitType": unit_type,
+            "unitCount": unit_count,
+            "budgetPageEquivalent": budget,
+        },
+        "extractionRoute": "pdf_text_layer",
+    }
+
+
+def make_source(relative_path="sample.pdf"):
+    return {
+        "relativePath": relative_path,
+        "selectedRanges": ["page:1-2"],
+        "processedUnitType": "page",
+        "processedUnitCount": 2,
+        "budgetPageEquivalent": 2,
+        "ocrPageCount": 0,
+        "selectionReason": "合成测试来源",
+    }
+
+
+class SelectionValidationUnitTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load_catalog_module()
+
+    def assert_rejected(self, source, entry, message_pattern):
+        with self.assertRaisesRegex(ValueError, message_pattern):
+            self.module.validate_selection(
+                make_selection(source), {entry["relativePath"]: entry}
+            )
+
+    def test_rejects_empty_selected_ranges(self):
+        source = make_source()
+        source["selectedRanges"] = []
+        self.assert_rejected(source, make_entry(), "选择范围不能为空")
+
+    def test_rejects_non_positive_processed_unit_count(self):
+        for invalid in (0, -1):
+            with self.subTest(invalid=invalid):
+                source = make_source()
+                source["processedUnitCount"] = invalid
+                self.assert_rejected(source, make_entry(), "processedUnitCount 必须为正整数")
+
+    def test_rejects_negative_and_non_integer_numeric_fields(self):
+        cases = (
+            ("processedUnitCount", 1.5, "processedUnitCount 必须为正整数"),
+            ("budgetPageEquivalent", -1, "budgetPageEquivalent 必须为非负整数"),
+            ("budgetPageEquivalent", 1.5, "budgetPageEquivalent 必须为非负整数"),
+            ("ocrPageCount", -1, "ocrPageCount 必须为非负整数"),
+            ("ocrPageCount", 1.5, "ocrPageCount 必须为非负整数"),
+        )
+        for field, invalid, message in cases:
+            with self.subTest(field=field, invalid=invalid):
+                source = make_source()
+                source[field] = invalid
+                self.assert_rejected(source, make_entry(), message)
+
+    def test_pdf_budget_must_equal_expanded_selected_pages(self):
+        source = make_source()
+        source["budgetPageEquivalent"] = 1
+        self.assert_rejected(source, make_entry(), "页或幻灯片预算必须等于选定单元数")
+
+    def test_pptx_budget_must_equal_expanded_selected_slides(self):
+        entry = make_entry("sample.pptx", "slide", 5, 5)
+        entry["extractionRoute"] = "pptx_slide_xml"
+        source = make_source("sample.pptx")
+        source.update(
+            selectedRanges=["slide:1-2"],
+            processedUnitType="slide",
+            budgetPageEquivalent=3,
+        )
+        self.assert_rejected(source, entry, "页或幻灯片预算必须等于选定单元数")
+
+    def test_text_budget_must_equal_catalog_probe_estimate(self):
+        entry = make_entry("sample.epub", "spine_item", 2, 7)
+        entry["unitEstimate"]["normalizedTextCharacters"] = 12600
+        entry["extractionRoute"] = "epub_xhtml"
+        source = make_source("sample.epub")
+        source.update(
+            selectedRanges=["spine-item:1-2"],
+            processedUnitType="spine_item",
+            budgetPageEquivalent=6,
+        )
+        self.assert_rejected(source, entry, "文本折算预算与目录探测不一致")
+
+
+class SyntheticCatalogUnitTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load_catalog_module()
+
+    def empty_selection(self):
+        selection = make_selection(make_source())
+        selection["sources"] = []
+        return selection
+
+    def test_probe_error_reason_never_contains_command_or_absolute_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "sample.pdf"
+            source.write_bytes(b"not-a-pdf")
+            secret_path = root / "private" / "document.pdf"
+            failure = subprocess.CalledProcessError(
+                17, ["pdfinfo", str(secret_path)], stderr=b"private diagnostic"
+            )
+            with mock.patch.object(self.module, "probe_file", side_effect=failure):
+                catalog, _, _ = self.module.build_catalog(root, self.empty_selection())
+
+            entry = catalog["files"][0]
+            self.assertEqual("error", entry["catalogStatus"])
+            self.assertIn("CalledProcessError", entry["reason"])
+            self.assertIn("退出码 17", entry["reason"])
+            self.assertNotIn(str(root), entry["reason"])
+            self.assertNotIn("pdfinfo", entry["reason"])
+            self.assertNotIn("private diagnostic", entry["reason"])
+
+    def test_missing_pdf_tool_only_marks_pdf_error_and_epub_still_builds(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "missing-tool.pdf").write_bytes(b"not-a-pdf")
+            epub_path = root / "selected.epub"
+            with zipfile.ZipFile(epub_path, "w") as archive:
+                archive.writestr(
+                    "META-INF/container.xml",
+                    '<container><rootfiles><rootfile full-path="OPS/package.opf"/></rootfiles></container>',
+                )
+                archive.writestr(
+                    "OPS/package.opf",
+                    '<package><manifest><item id="chapter" href="chapter.xhtml"/></manifest>'
+                    '<spine><itemref idref="chapter"/></spine></package>',
+                )
+                archive.writestr("OPS/chapter.xhtml", "<html><body>可提炼内容</body></html>")
+
+            source = make_source("selected.epub")
+            source.update(
+                selectedRanges=["spine-item:1"],
+                processedUnitType="spine_item",
+                processedUnitCount=1,
+                budgetPageEquivalent=1,
+            )
+            missing_pdf_source = make_source("missing-tool.pdf")
+            missing_pdf_source.update(
+                selectedRanges=["page:1"],
+                processedUnitCount=1,
+                budgetPageEquivalent=1,
+            )
+            selection = make_selection(source)
+            selection["sources"].append(missing_pdf_source)
+            original_command_version = self.module.command_version
+
+            def command_version(command):
+                if command[0] == "pdfinfo":
+                    raise FileNotFoundError("/private/bin/pdfinfo")
+                return original_command_version(command)
+
+            with mock.patch.object(self.module, "command_version", side_effect=command_version):
+                catalog, _, source_files = self.module.build_catalog(root, selection)
+
+            entries = {item["relativePath"]: item for item in catalog["files"]}
+            self.assertEqual("error", entries["missing-tool.pdf"]["catalogStatus"])
+            self.assertEqual("selected", entries["selected.epub"]["catalogStatus"])
+            self.assertEqual(1, source_files["summary"]["selectedCount"])
+            self.assertEqual(["selected.epub"], [item["relativePath"] for item in source_files["files"]])
 
 
 class BuildSourceCatalogTest(unittest.TestCase):

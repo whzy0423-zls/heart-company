@@ -3267,13 +3267,13 @@
       "priority": 9,
       "probe": {
         "normalization": "xinzhili-probe-output-v1",
-        "outputSha256": "6b80b88871223e9c8d2601fd9884e10f98727c4992ef40e45e3f99e5a3530578",
+        "outputSha256": "d6fed73ac1e42442c3b1885fc10458bcefbe251bafa47c428e23ad1a0e50ef92",
         "toolVersions": {
           "catalogParser": "xinzhili-source-catalog-v1"
         }
       },
       "proposedBatch": "round-999",
-      "reason": "目录探测失败，需人工修复后重试：File is not a zip file",
+      "reason": "目录探测失败，需人工修复后重试：错误类型 BadZipFile；安全代码 probe-epub-bad-zip-file",
       "relativePath": "九型理论基础/九型人格与领导力(中信管理经典）.epub",
       "sha256": "0cf06f9bba1fc5fc6e8adc2d7950660bec575818322500dfa2bd85ec7f604f2e",
       "unitEstimate": {
