@@ -187,7 +187,7 @@ func TestContentStoreChunkCreatesImmutableVersionWithoutTouchingOldEmbeddings(t 
 		{kind: "begin"},
 		validChunkScopeStep(c),
 		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
-		validLockedChunkStep(StatusDraft),
+		validLockedChunkStep(StatusPublished, c.Version),
 		{kind: "query", contains: "INSERT INTO theory_chunks", columns: chunkColumns(), rows: [][]driver.Value{chunkValues(c)}},
 		{kind: "commit"},
 	}}
@@ -206,7 +206,7 @@ func TestContentStoreChunkVersionConflictCannotOverwriteSnapshot(t *testing.T) {
 		{kind: "begin"},
 		validChunkScopeStep(c),
 		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
-		validLockedChunkStep(StatusDraft),
+		validLockedChunkStep(StatusPublished, c.Version),
 		{kind: "query", contains: "ON CONFLICT", columns: chunkColumns()},
 		{kind: "rollback"},
 	}}
@@ -229,13 +229,38 @@ func TestContentStorePracticeChunkLocksPracticeLibraryBeforeRows(t *testing.T) {
 		{kind: "begin"},
 		{kind: "query", contains: "LEFT JOIN theory_practices", columns: []string{"card_library_id", "practice_card_id", "practice_library_id"}, rows: [][]driver.Value{{int64(9), int64(12), int64(2)}}},
 		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
-		{kind: "query", contains: "FOR UPDATE OF card", columns: []string{"status", "card_library_id"}, rows: [][]driver.Value{{string(StatusDraft), int64(9)}}},
+		{kind: "query", contains: "FOR UPDATE OF card", columns: []string{"status", "card_library_id", "card_version"}, rows: [][]driver.Value{{string(StatusPublished), int64(9), int64(c.Version)}}},
 		{kind: "query", contains: "FROM theory_practices practice", columns: []string{"practice_card_id", "practice_library_id"}, rows: [][]driver.Value{{int64(12), int64(2)}}},
 		{kind: "rollback"},
 	}}
 	_, err := testStore(t, script).SaveChunk(context.Background(), c)
 	if !errors.Is(err, ErrInvalidContentOwnership) {
 		t.Fatalf("expected practice ownership rejection, got %v", err)
+	}
+}
+
+func TestContentStoreChunkRequiresPublishedCardAndMatchingVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		status      CardStatus
+		cardVersion int
+		want        error
+	}{
+		{name: "draft", status: StatusDraft, cardVersion: 2, want: ErrCardNotEditable},
+		{name: "version_mismatch", status: StatusPublished, cardVersion: 3, want: ErrChunkCardVersionMismatch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := testChunk()
+			script := &sqlScript{steps: []sqlStep{
+				{kind: "begin"}, validChunkScopeStep(c),
+				{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
+				validLockedChunkStep(tc.status, tc.cardVersion), {kind: "rollback"},
+			}}
+			_, err := testStore(t, script).SaveChunk(context.Background(), c)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("expected %v, got %v", tc.want, err)
+			}
+		})
 	}
 }
 
@@ -453,8 +478,8 @@ func validLockedCardSourceStep(status CardStatus) sqlStep {
 func validChunkScopeStep(c Chunk) sqlStep {
 	return sqlStep{kind: "query", contains: "LEFT JOIN theory_practices", columns: []string{"card_library_id", "practice_card_id", "practice_library_id"}, rows: [][]driver.Value{{c.LibraryID, nil, nil}}}
 }
-func validLockedChunkStep(status CardStatus) sqlStep {
-	return sqlStep{kind: "query", contains: "FOR UPDATE OF card", columns: []string{"status", "card_library_id"}, rows: [][]driver.Value{{string(status), int64(3)}}}
+func validLockedChunkStep(status CardStatus, version int) sqlStep {
+	return sqlStep{kind: "query", contains: "FOR UPDATE OF card", columns: []string{"status", "card_library_id", "card_version"}, rows: [][]driver.Value{{string(status), int64(3), int64(version)}}}
 }
 
 func testPractice() Practice {

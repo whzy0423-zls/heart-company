@@ -10,13 +10,14 @@ import (
 )
 
 var (
-	ErrVectorUnavailable       = errors.New("theory embedding vector column unavailable")
-	ErrChunkVersionConflict    = errors.New("theory chunk version already exists")
-	ErrChunkNotFound           = errors.New("theory chunk not found")
-	ErrInvalidContentOwnership = errors.New("theory content ownership mismatch")
-	ErrOwnershipChanged        = errors.New("theory content ownership changed concurrently")
-	ErrEmbeddingNotPending     = errors.New("theory embedding generation is not pending")
-	ErrEmbeddingAlreadyReady   = errors.New("theory embedding generation is already ready")
+	ErrVectorUnavailable        = errors.New("theory embedding vector column unavailable")
+	ErrChunkVersionConflict     = errors.New("theory chunk version already exists")
+	ErrChunkCardVersionMismatch = errors.New("theory chunk version does not match published card")
+	ErrChunkNotFound            = errors.New("theory chunk not found")
+	ErrInvalidContentOwnership  = errors.New("theory content ownership mismatch")
+	ErrOwnershipChanged         = errors.New("theory content ownership changed concurrently")
+	ErrEmbeddingNotPending      = errors.New("theory embedding generation is not pending")
+	ErrEmbeddingAlreadyReady    = errors.New("theory embedding generation is already ready")
 )
 
 func (s *Store) SaveCardSource(parent context.Context, source CardSource) (CardSource, error) {
@@ -442,21 +443,25 @@ func lockChunkScope(ctx context.Context, tx *sql.Tx, chunk Chunk) error {
 	}
 	var status CardStatus
 	var lockedCardLibraryID int64
+	var lockedCardVersion int
 	if err := tx.QueryRowContext(ctx, `
-		SELECT card.status, card.library_id
+		SELECT card.status, card.library_id, card.version
 		FROM theory_cards card
 		WHERE card.id=$1
-		FOR UPDATE OF card`, chunk.CardID).Scan(&status, &lockedCardLibraryID); err != nil {
+		FOR UPDATE OF card`, chunk.CardID).Scan(&status, &lockedCardLibraryID, &lockedCardVersion); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrInvalidContentOwnership
 		}
 		return err
 	}
-	if status != StatusDraft {
+	if status != StatusPublished {
 		return ErrCardNotEditable
 	}
 	if lockedCardLibraryID != chunk.LibraryID {
 		return ErrInvalidContentOwnership
+	}
+	if lockedCardVersion != chunk.Version {
+		return ErrChunkCardVersionMismatch
 	}
 	if chunk.PracticeID != nil {
 		var lockedPracticeCardID, lockedPracticeLibraryID int64

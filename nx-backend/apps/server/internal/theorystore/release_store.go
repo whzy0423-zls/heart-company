@@ -148,12 +148,15 @@ func (s *Store) BuildRelease(parent context.Context, release Release, mappings [
 	return ready, nil
 }
 
-func (s *Store) ActivateRelease(parent context.Context, libraryID, releaseID int64) error {
+func (s *Store) ActivateRelease(parent context.Context, libraryID, releaseID, activatedBy int64) error {
 	if err := s.available(); err != nil {
 		return err
 	}
 	if libraryID <= 0 || releaseID <= 0 {
 		return fmt.Errorf("activate release: library and release ids must be positive")
+	}
+	if activatedBy <= 0 {
+		return fmt.Errorf("activate release: activated by must be positive")
 	}
 	ctx, cancel := storeContext(parent)
 	defer cancel()
@@ -239,8 +242,8 @@ func (s *Store) ActivateRelease(parent context.Context, libraryID, releaseID int
 		return fmt.Errorf("activate release: retire old active release: %w", err)
 	}
 	result, err := tx.ExecContext(ctx, `
-		UPDATE theory_library_releases SET status = 'active', activated_at=now(), update_time=now()
-		WHERE id=$1 AND library_id=$2 AND status='ready'`, releaseID, libraryID)
+		UPDATE theory_library_releases SET status = 'active', activated_by=$3, activated_at=now(), update_time=now()
+		WHERE id=$1 AND library_id=$2 AND status='ready'`, releaseID, libraryID, activatedBy)
 	if err != nil {
 		return fmt.Errorf("activate release: activate new release: %w", err)
 	}
@@ -295,10 +298,11 @@ func loadReleaseMappingState(ctx context.Context, tx *sql.Tx, libraryID int64, m
 	var actualCardID, actualLibraryID int64
 	var chunkStatus ChunkStatus
 	var contentHash string
+	var chunkVersion, cardVersion int
 	var cardStatus CardStatus
 	var hasPrimary bool
 	err := tx.QueryRowContext(ctx, `
-		SELECT chunk.card_id, chunk.library_id, chunk.status, chunk.content_hash, card.status,
+		SELECT chunk.card_id, chunk.library_id, chunk.status, chunk.content_hash, chunk.version, card.version, card.status,
 			EXISTS (
 				SELECT 1 FROM theory_card_sources source
 				WHERE source.card_id=card.id AND source.source_role='primary'
@@ -311,7 +315,7 @@ func loadReleaseMappingState(ctx context.Context, tx *sql.Tx, libraryID int64, m
 			AND btrim(card.definition) <> ''
 			AND btrim(card.applicable_context) <> ''
 			AND btrim(card.non_applicable_context) <> ''`, mapping.ChunkID, mapping.CardID).Scan(
-		&actualCardID, &actualLibraryID, &chunkStatus, &contentHash, &cardStatus, &hasPrimary)
+		&actualCardID, &actualLibraryID, &chunkStatus, &contentHash, &chunkVersion, &cardVersion, &cardStatus, &hasPrimary)
 	if errors.Is(err, sql.ErrNoRows) {
 		return releaseMappingState{}, ErrInvalidReleaseMapping
 	}
@@ -319,7 +323,7 @@ func loadReleaseMappingState(ctx context.Context, tx *sql.Tx, libraryID int64, m
 		return releaseMappingState{}, err
 	}
 	if actualCardID != mapping.CardID || actualLibraryID != libraryID || chunkStatus != ChunkStatusEnabled ||
-		(cardStatus != StatusPublished && cardStatus != StatusSuperseded) || !hasPrimary {
+		chunkVersion != cardVersion || (cardStatus != StatusPublished && cardStatus != StatusSuperseded) || !hasPrimary {
 		return releaseMappingState{}, ErrInvalidReleaseMapping
 	}
 	return releaseMappingState{contentHash: contentHash}, nil
