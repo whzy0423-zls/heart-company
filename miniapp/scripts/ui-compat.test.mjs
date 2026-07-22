@@ -340,7 +340,21 @@ assert.doesNotMatch(profilePage, /listBookingsApi\(\)\.catch\(\(\)\s*=>\s*\(\{\s
 const testPage = readFileSync('src/pages/test/test.vue', 'utf8')
 
 function openingTagsFor(source, tagName) {
-  return source.match(new RegExp(`<${tagName}\\b[^>]*>`, 'g')) || []
+  const tags = []
+  const opening = new RegExp(`<${tagName}\\b`, 'g')
+  for (const match of source.matchAll(opening)) {
+    let quote = null
+    for (let index = match.index; index < source.length; index += 1) {
+      const character = source[index]
+      if ((character === '"' || character === "'") && (!quote || quote === character)) {
+        quote = quote ? null : character
+      }
+      if (character !== '>' || quote) continue
+      tags.push(source.slice(match.index, index + 1))
+      break
+    }
+  }
+  return tags
 }
 
 function tagAttribute(tag, attribute) {
@@ -348,10 +362,14 @@ function tagAttribute(tag, attribute) {
   return tag.match(new RegExp(`\\s${escapedAttribute}=(["'])(.*?)\\1`))?.[2]
 }
 
-function pageStyleDeclarations(source, selector) {
+function pageStyleDeclarationBlocks(source, selector) {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const matches = [...source.matchAll(new RegExp(`^[ \\t]*${escapedSelector}\\s*\\{([^}]*)\\}`, 'gm'))]
-  return matches.at(-1)?.[1]
+  return [...source.matchAll(new RegExp(`^[ \\t]*${escapedSelector}\\s*\\{([^}]*)\\}`, 'gm'))]
+    .map((match) => match[1])
+}
+
+function pageStyleDeclarations(source, selector) {
+  return pageStyleDeclarationBlocks(source, selector).at(-1)
 }
 
 function sourceBracedBody(source, match) {
@@ -372,9 +390,12 @@ assert.match(testPage, /clearAdvanceTimer/, 'test page should clear pending navi
 assert.match(testPage, /onUnload/, 'test page should cleanup timers on unload')
 assert.match(testPage, /class=["'][^"']*test-hero[^"']*nx-page-hero/, 'test page should use the blue-purple hero')
 assert.match(testPage, /const total = QUESTIONS\.length/, 'test page should expose a stable total question count')
-assert.match(testPage, /class=["'][^"']*quiz__progress-meta[^"']*["'][^>]*:aria-label=["']`第 \$\{step \+ 1\} 题，共 \$\{total\} 题`["']/, 'quiz should expose question and total progress text')
-assert.match(testPage, /\.quiz__back\s*\{[\s\S]*min-height:\s*88rpx/, 'quiz back action should keep an 88rpx touch target')
-assert.match(testPage, /<button\b[\s\S]*class=["'][^"']*quiz__back[^"']*["'][\s\S]*@click=["']back["']/, 'quiz previous action should use button semantics')
+
+const progressContainer = testPage.match(/<view\b(?=[^>]*class=["'][^"']*quiz__progress-meta[^"']*["'])[^>]*>([\s\S]*?)<\/view>/)
+assert.ok(progressContainer, 'quiz should render a bounded progress metadata container')
+assert.match(progressContainer[0], /:aria-label=["']`第 \$\{step \+ 1\} 题，共 \$\{total\} 题`["']/, 'quiz progress should expose the full accessible question count')
+assert.match(progressContainer[1], /<text\s+class=["']quiz__step["']>第 \{\{ step \+ 1 \}\} 题<\/text>/, 'quiz progress should visibly render the current question')
+assert.match(progressContainer[1], /<text\s+class=["']quiz__total["']>\/ 共 \{\{ total \}\} 题<\/text>/, 'quiz progress should visibly render the total question count')
 
 const testButtons = openingTagsFor(testPage, 'button')
 const genderButtons = testButtons.filter((tag) => staticClassTokens(tag).includes('gender__card'))
@@ -397,6 +418,13 @@ assert.equal(tagAttribute(quizOption, ':class'), '{ on: answers[step] === opt, d
 assert.equal(tagAttribute(quizOption, ':disabled'), 'answerLocked', 'quiz options should preserve the rapid-tap lock')
 assert.equal(tagAttribute(quizOption, ':aria-label'), "'选择答案 ' + letter(k) + '：' + opt.t", 'quiz options should describe each answer')
 assert.equal(tagAttribute(quizOption, '@click'), 'choose(opt)', 'quiz options should preserve the answer handler')
+
+const quizBackButton = testButtons.find((tag) => staticClassTokens(tag).includes('quiz__back'))
+assert.ok(quizBackButton, 'quiz previous action should be a native button element')
+assert.equal(tagAttribute(quizBackButton, '@click'), 'back', 'quiz previous button should invoke the back handler on itself')
+const quizBackTouchStyle = pageStyleDeclarationBlocks(testPage, '.quiz__back')
+  .find((declarations) => /min-height:/.test(declarations))
+assert.match(quizBackTouchStyle, /min-height:\s*88rpx\s*;/, 'quiz back action should keep an 88rpx touch target')
 
 const testOpeningViews = openingTagsFor(testPage, 'view')
 const quizShellTag = testOpeningViews.find((tag) => staticClassTokens(tag).includes('quiz-shell'))
@@ -423,7 +451,8 @@ assert.match(pageStyleDeclarations(testPage, '.gender__card--f'), /background:\s
 
 const quizShellStyle = pageStyleDeclarations(testPage, '.quiz-shell')
 assert.match(quizShellStyle, /background:\s*rgba\(\s*255\s*,\s*255\s*,\s*255\s*,\s*\.9\d*\s*\)\s*;/i, 'quiz shell should keep a light surface')
-const quizOptionStyle = pageStyleDeclarations(testPage, '.quiz__opt')
+const quizOptionStyle = pageStyleDeclarationBlocks(testPage, '.quiz__opt')
+  .find((declarations) => /min-height:\s*112rpx\s*;/.test(declarations))
 assert.match(quizOptionStyle, /min-height:\s*112rpx\s*;/, 'quiz options should keep a 112rpx touch surface')
 assert.match(quizOptionStyle, /border-radius:\s*24rpx\s*;/, 'quiz options should keep a 24rpx radius')
 const selectedOptionStyle = pageStyleDeclarations(testPage, '.quiz__opt.on')
@@ -437,8 +466,12 @@ assert.match(pageStyleDeclarations(testPage, '.quiz__t'), /color:\s*#334155\s*;/
 
 const compactMedia = sourceBracedBody(testPage, /@media\s*\(max-width:\s*360px\)\s*\{/.exec(testPage))
 assert.ok(compactMedia, 'test page should define the 360px compact breakpoint')
-assert.match(compactMedia, /\.quiz__q\s*\{[^}]*font-size:\s*36rpx\s*;/, 'compact screens should only reduce the question font size')
-assert.doesNotMatch(compactMedia, /\.quiz__opt\s*\{[^}]*min-height\s*:/, 'compact screens must not reduce quiz option touch height')
+const compactRules = [...compactMedia.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+assert.equal(compactRules.length, 1, 'compact breakpoint should contain only the question typography rule')
+assert.equal(compactRules[0][1].trim(), '.quiz__q', 'compact breakpoint should only target the question text')
+assert.match(compactRules[0][2].trim(), /^font-size:\s*36rpx\s*;$/, 'compact screens should only reduce the question font size')
+assert.doesNotMatch(compactMedia, /\b(?:min-)?height\s*:/, 'compact breakpoint must not reduce any touch height')
+assert.doesNotMatch(compactMedia, /\.(?:quiz__back|quiz__opt)\b/, 'compact breakpoint must not override quiz touch controls')
 
 assert.match(learnPage, /getStoredSiteConfig/, 'learn page should render stored site config before network refresh')
 assert.match(learnPage, /refreshSiteConfig/, 'learn page should refresh site config in the background')
