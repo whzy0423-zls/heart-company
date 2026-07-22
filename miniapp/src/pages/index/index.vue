@@ -32,6 +32,7 @@ function hideWheel() {
       <view
         class="home-nav__profile"
         role="button"
+        aria-role="button"
         tabindex="0"
         aria-label="打开我的成长档案"
         hover-class="home-nav__profile--pressed"
@@ -82,6 +83,7 @@ function hideWheel() {
       <view
         class="energy-card energy-card--test"
         role="button"
+        aria-role="button"
         tabindex="0"
         aria-label="开始九型人格测试"
         hover-class="energy-card--pressed"
@@ -100,6 +102,7 @@ function hideWheel() {
       <view
         class="energy-card energy-card--relation"
         role="button"
+        aria-role="button"
         tabindex="0"
         aria-label="打开九型关系合盘"
         hover-class="energy-card--pressed"
@@ -119,6 +122,7 @@ function hideWheel() {
       <view
         class="energy-card energy-card--learn"
         role="button"
+        aria-role="button"
         tabindex="0"
         aria-label="打开老师课程与课件"
         hover-class="energy-card--pressed"
@@ -138,6 +142,7 @@ function hideWheel() {
       <view
         class="energy-card energy-card--profile"
         role="button"
+        aria-role="button"
         tabindex="0"
         aria-label="打开我的成长档案"
         hover-class="energy-card--pressed"
@@ -158,6 +163,7 @@ function hideWheel() {
     <view
       class="growth-card"
       role="button"
+      aria-role="button"
       tabindex="0"
       aria-label="打开老师课程与成长内容"
       hover-class="growth-card--pressed"
@@ -208,7 +214,7 @@ function hideWheel() {
   letter-spacing: 1rpx;
 }
 .home-nav__tagline {
-  color: #778197;
+  color: #64748b;
   font-size: 23rpx;
   font-weight: 600;
 }
@@ -298,7 +304,7 @@ function hideWheel() {
   gap: 16rpx;
 }
 .hero__kicker {
-  color: rgba(255, 255, 255, .78);
+  color: rgba(255, 255, 255, .94);
   font-size: 23rpx;
   font-weight: 800;
 }
@@ -373,7 +379,7 @@ function hideWheel() {
   font-weight: 900;
 }
 .section-lead {
-  color: #7b8496;
+  color: #64748b;
   font-size: 24rpx;
   line-height: 1.5;
 }
@@ -621,7 +627,7 @@ function hideWheel() {
   font-weight: 900;
 }
 .growth-card__desc {
-  color: #6f778b;
+  color: #64748b;
   font-size: 23rpx;
   line-height: 1.5;
 }
@@ -631,6 +637,14 @@ function hideWheel() {
   border-top: 4rpx solid #7771a4;
   border-right: 4rpx solid #7771a4;
   transform: rotate(45deg);
+}
+.home-nav__profile:focus,
+.energy-card:focus,
+.growth-card:focus,
+.hero__cta:focus {
+  outline: 4rpx solid #2563eb;
+  outline-offset: 6rpx;
+  box-shadow: 0 0 0 8rpx rgba(37, 99, 235, .2);
 }
 @keyframes hero-float {
   0%, 100% { transform: translateY(0); }
