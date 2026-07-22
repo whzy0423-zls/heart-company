@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type LibraryStatus string
@@ -445,10 +446,10 @@ func ValidateRelease(release Release) error {
 	if release.RetrievalMode != RetrievalLexicalOnly && release.RetrievalMode != RetrievalHybrid {
 		return fieldError("retrieval_mode", "invalid value %q", release.RetrievalMode)
 	}
+	if release.EmbeddingDimensions != 1536 {
+		return fieldError("embedding_dimensions", "must equal 1536")
+	}
 	if release.RetrievalMode == RetrievalHybrid {
-		if release.EmbeddingDimensions != 1536 {
-			return fieldError("embedding_dimensions", "must equal 1536 for hybrid retrieval")
-		}
 		if strings.TrimSpace(release.EmbeddingModel) == "" {
 			return fieldError("embedding_model", "must not be empty for hybrid retrieval")
 		}
@@ -609,8 +610,16 @@ func ValidateCardForPublish(card Card, sources []CardSource) error {
 		if source.ExtractionQuality < 0.70 {
 			problems = append(problems, fmt.Sprintf("sources[%d].extraction_quality: must be at least 0.70 for publish", i))
 		}
-		if strings.TrimSpace(source.Quotation) != "" && !source.QuoteVerified {
-			problems = append(problems, fmt.Sprintf("sources[%d].quote_verified: must be true for a published quotation", i))
+		if strings.TrimSpace(source.Quotation) != "" {
+			if !source.QuoteVerified {
+				problems = append(problems, fmt.Sprintf("sources[%d].quote_verified: must be true for a published quotation", i))
+			}
+			if source.VerifiedBy == nil || *source.VerifiedBy <= 0 {
+				problems = append(problems, fmt.Sprintf("sources[%d].verified_by: must be positive for a published quotation", i))
+			}
+			if source.VerifiedAt == nil || source.VerifiedAt.IsZero() {
+				problems = append(problems, fmt.Sprintf("sources[%d].verified_at: must be set for a published quotation", i))
+			}
 		}
 	}
 	if !hasPrimary {
@@ -623,24 +632,11 @@ func ValidateCardForPublish(card Card, sources []CardSource) error {
 }
 
 func ValidatePractice(practice Practice) error {
-	if practice.CardID <= 0 {
-		return fieldError("card_id", "must be positive")
-	}
-	if strings.TrimSpace(practice.Goal) == "" {
-		return fieldError("goal", "must not be empty")
-	}
-	if practice.EstimatedMinutes < 0 {
-		return fieldError("estimated_minutes", "must be at least 0")
-	}
 	if practice.PracticeSchemaVersion != PracticeSchemaV1 {
 		return fieldError("practice_schema_version", "unsupported value %q", practice.PracticeSchemaVersion)
 	}
-	steps, err := decodeStringArray("steps", practice.Steps)
-	if err != nil {
+	if _, err := decodeStringArray("steps", practice.Steps); err != nil {
 		return err
-	}
-	if len(steps) == 0 {
-		return fieldError("steps", "must contain at least one item")
 	}
 	if _, err := decodeStringArray("reflection_prompts", practice.ReflectionPrompts); err != nil {
 		return err
@@ -654,32 +650,36 @@ func ValidatePractice(practice Practice) error {
 	if _, err := decodeStringArray("professional_escalation", practice.ProfessionalEscalation); err != nil {
 		return err
 	}
-	if !validCardStatus(practice.Status) {
-		return fieldError("status", "invalid value %q", practice.Status)
-	}
-	if practice.Version <= 0 {
-		return fieldError("version", "must be positive")
-	}
 	return nil
 }
 
-func ValidatePracticeForPublish(practice Practice, safety ClinicalSafety) error {
+func ValidatePracticeForPublish(practice Practice, card Card) error {
 	if err := ValidatePractice(practice); err != nil {
 		return err
 	}
-	if !validClinicalSafety(safety) {
-		return fieldError("clinical_safety", "invalid value %q", safety)
+	if card.ID <= 0 {
+		return fieldError("card_id", "associated card id must be positive")
 	}
-	if safety != ClinicalRestricted && safety != ClinicalEscalate {
+	if practice.CardID != card.ID {
+		return fieldError("card_id", "must match associated card id")
+	}
+	if !validClinicalSafety(card.ClinicalSafety) {
+		return fieldError("clinical_safety", "invalid value %q", card.ClinicalSafety)
+	}
+	steps, _ := decodeStringArray("steps", practice.Steps)
+	if !hasNonBlankString(steps) {
+		return fieldError("steps", "must contain at least one non-empty item for publish")
+	}
+	if card.ClinicalSafety != ClinicalRestricted && card.ClinicalSafety != ClinicalEscalate {
 		return nil
 	}
 	stopConditions, _ := decodeStringArray("stop_conditions", practice.StopConditions)
-	if len(stopConditions) == 0 {
-		return fieldError("stop_conditions", "must contain at least one item for %s practice", safety)
+	if !hasNonBlankString(stopConditions) {
+		return fieldError("stop_conditions", "must contain at least one non-empty item for %s practice", card.ClinicalSafety)
 	}
 	escalation, _ := decodeStringArray("professional_escalation", practice.ProfessionalEscalation)
-	if len(escalation) == 0 {
-		return fieldError("professional_escalation", "must contain at least one item for %s practice", safety)
+	if !hasNonBlankString(escalation) {
+		return fieldError("professional_escalation", "must contain at least one non-empty item for %s practice", card.ClinicalSafety)
 	}
 	return nil
 }
@@ -747,6 +747,9 @@ func ValidateChunk(chunk Chunk) error {
 	if chunk.ChunkKind == ChunkKindPractice && (chunk.PracticeID == nil || *chunk.PracticeID <= 0) {
 		return fieldError("practice_id", "must be positive for a practice chunk")
 	}
+	if chunk.ChunkKind == ChunkKindCard && chunk.PracticeID != nil {
+		return fieldError("practice_id", "must be nil for a card chunk")
+	}
 	if strings.TrimSpace(chunk.Title) == "" {
 		return fieldError("title", "must not be empty")
 	}
@@ -799,15 +802,31 @@ func ValidateEmbeddingRecord(record EmbeddingRecord) error {
 	if record.Status == EmbeddingStatusReady && len(record.Embedding) != record.Dimensions {
 		return fieldError("embedding", "must contain 1536 values when status is ready")
 	}
+	if record.Status == EmbeddingStatusReady {
+		for _, value := range record.Embedding {
+			if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+				return fieldError("embedding", "must contain only finite values when status is ready")
+			}
+		}
+	}
 	return nil
 }
 
 func decodeStringArray(field string, raw json.RawMessage) ([]string, error) {
 	var values []string
-	if len(raw) == 0 || json.Unmarshal(raw, &values) != nil || values == nil {
+	if len(raw) == 0 || !utf8.Valid(raw) || json.Unmarshal(raw, &values) != nil || values == nil {
 		return nil, fieldError(field, "must be a JSON array of strings")
 	}
 	return values, nil
+}
+
+func hasNonBlankString(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func validateAuthority(value int) error {

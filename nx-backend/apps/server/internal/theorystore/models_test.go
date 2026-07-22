@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateLibraryRejectsInvalidStatus(t *testing.T) {
@@ -33,6 +34,11 @@ func TestValidateReleaseEnforcesRetrievalContract(t *testing.T) {
 			release: Release{LibraryID: 1, Version: 1, Status: ReleaseStatusDraft, RetrievalMode: RetrievalHybrid, EmbeddingDimensions: 1536},
 			field:   "embedding_model",
 		},
+		{
+			name:    "lexical dimensions",
+			release: Release{LibraryID: 1, Version: 1, Status: ReleaseStatusDraft, RetrievalMode: RetrievalLexicalOnly},
+			field:   "embedding_dimensions",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -40,7 +46,7 @@ func TestValidateReleaseEnforcesRetrievalContract(t *testing.T) {
 		})
 	}
 
-	if err := ValidateRelease(Release{LibraryID: 1, Version: 1, Status: ReleaseStatusReady, RetrievalMode: RetrievalLexicalOnly}); err != nil {
+	if err := ValidateRelease(Release{LibraryID: 1, Version: 1, Status: ReleaseStatusReady, RetrievalMode: RetrievalLexicalOnly, EmbeddingDimensions: 1536}); err != nil {
 		t.Fatalf("lexical-only release should not require an embedding model: %v", err)
 	}
 }
@@ -116,6 +122,34 @@ func TestValidateCardForPublishRejectsLowQualityAndUnverifiedQuotation(t *testin
 	assertFieldError(t, ValidateCardForPublish(card, []CardSource{unverifiedQuote}), "quote_verified")
 }
 
+func TestValidateCardForPublishRequiresQuotationAuditFields(t *testing.T) {
+	card := validCard()
+	card.Status = StatusPublished
+	verifiedBy := int64(9)
+	verifiedAt := time.Now()
+	tests := []struct {
+		name   string
+		mutate func(*CardSource)
+		field  string
+	}{
+		{name: "missing verifier", mutate: func(source *CardSource) { source.VerifiedBy = nil }, field: "verified_by"},
+		{name: "invalid verifier", mutate: func(source *CardSource) { invalid := int64(0); source.VerifiedBy = &invalid }, field: "verified_by"},
+		{name: "missing verification time", mutate: func(source *CardSource) { source.VerifiedAt = nil }, field: "verified_at"},
+		{name: "zero verification time", mutate: func(source *CardSource) { zero := time.Time{}; source.VerifiedAt = &zero }, field: "verified_at"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := validCardSource()
+			source.Quotation = "逐字引文"
+			source.QuoteVerified = true
+			source.VerifiedBy = &verifiedBy
+			source.VerifiedAt = &verifiedAt
+			tt.mutate(&source)
+			assertFieldError(t, ValidateCardForPublish(card, []CardSource{source}), tt.field)
+		})
+	}
+}
+
 func TestValidateCardForPublishAcceptsCompleteCard(t *testing.T) {
 	card := validCard()
 	card.Status = StatusPublished
@@ -135,7 +169,7 @@ func TestValidatePracticeRequiresVersionedStringArrays(t *testing.T) {
 		{name: "steps not json", mutate: func(p *Practice) { p.Steps = json.RawMessage(`not-json`) }, field: "steps"},
 		{name: "steps not array", mutate: func(p *Practice) { p.Steps = json.RawMessage(`{"text":"step"}`) }, field: "steps"},
 		{name: "steps contain non-string", mutate: func(p *Practice) { p.Steps = json.RawMessage(`[1]`) }, field: "steps"},
-		{name: "steps empty", mutate: func(p *Practice) { p.Steps = json.RawMessage(`[]`) }, field: "steps"},
+		{name: "steps invalid utf8", mutate: func(p *Practice) { p.Steps = json.RawMessage{'[', '"', 0xff, '"', ']'} }, field: "steps"},
 		{name: "reflection prompts", mutate: func(p *Practice) { p.ReflectionPrompts = json.RawMessage(`[false]`) }, field: "reflection_prompts"},
 		{name: "expected feedback", mutate: func(p *Practice) { p.ExpectedFeedback = json.RawMessage(`null`) }, field: "expected_feedback"},
 		{name: "stop conditions", mutate: func(p *Practice) { p.StopConditions = json.RawMessage(`[{}]`) }, field: "stop_conditions"},
@@ -150,27 +184,87 @@ func TestValidatePracticeRequiresVersionedStringArrays(t *testing.T) {
 	}
 }
 
+func TestValidatePracticeAllowsDraftWithEmptySteps(t *testing.T) {
+	practice := validPractice()
+	practice.Steps = json.RawMessage(`[]`)
+	if err := ValidatePractice(practice); err != nil {
+		t.Fatalf("draft practice should allow empty steps: %v", err)
+	}
+}
+
+func TestValidatePracticeOnlyChecksVersionAndJSONArraySchema(t *testing.T) {
+	practice := Practice{
+		PracticeSchemaVersion:  PracticeSchemaV1,
+		Steps:                  json.RawMessage(`[]`),
+		ReflectionPrompts:      json.RawMessage(`[]`),
+		ExpectedFeedback:       json.RawMessage(`[]`),
+		StopConditions:         json.RawMessage(`[]`),
+		ProfessionalEscalation: json.RawMessage(`[]`),
+	}
+	if err := ValidatePractice(practice); err != nil {
+		t.Fatalf("base practice validation should only enforce the versioned JSON schema: %v", err)
+	}
+}
+
+func TestValidatePracticeForPublishRequiresTrimmedNonEmptyItems(t *testing.T) {
+	card := validCard()
+	card.ID = 1
+	practice := validPractice()
+	practice.Steps = json.RawMessage(`["  "]`)
+	assertFieldError(t, ValidatePracticeForPublish(practice, card), "steps")
+
+	card.ClinicalSafety = ClinicalRestricted
+	practice = validPractice()
+	practice.StopConditions = json.RawMessage(`["\t"]`)
+	assertFieldError(t, ValidatePracticeForPublish(practice, card), "stop_conditions")
+
+	card.ClinicalSafety = ClinicalEscalate
+	practice = validPractice()
+	practice.ProfessionalEscalation = json.RawMessage(`["\n"]`)
+	assertFieldError(t, ValidatePracticeForPublish(practice, card), "professional_escalation")
+}
+
 func TestValidatePracticeRequiresSafetyActionsForRestrictedAndEscalate(t *testing.T) {
 	for _, safety := range []ClinicalSafety{ClinicalRestricted, ClinicalEscalate} {
 		t.Run(string(safety), func(t *testing.T) {
+			card := validCard()
+			card.ID = 1
+			card.ClinicalSafety = safety
 			practice := validPractice()
 			practice.StopConditions = json.RawMessage(`[]`)
-			assertFieldError(t, ValidatePracticeForPublish(practice, safety), "stop_conditions")
+			assertFieldError(t, ValidatePracticeForPublish(practice, card), "stop_conditions")
 
 			practice = validPractice()
 			practice.ProfessionalEscalation = json.RawMessage(`[]`)
-			assertFieldError(t, ValidatePracticeForPublish(practice, safety), "professional_escalation")
+			assertFieldError(t, ValidatePracticeForPublish(practice, card), "professional_escalation")
 		})
 	}
 }
 
 func TestValidatePracticeForPublishAcceptsGeneralPracticeWithoutSafetyActions(t *testing.T) {
+	card := validCard()
+	card.ID = 1
 	practice := validPractice()
 	practice.StopConditions = json.RawMessage(`[]`)
 	practice.ProfessionalEscalation = json.RawMessage(`[]`)
-	if err := ValidatePracticeForPublish(practice, ClinicalGeneral); err != nil {
+	if err := ValidatePracticeForPublish(practice, card); err != nil {
 		t.Fatalf("general practice should not require restricted safety actions: %v", err)
 	}
+}
+
+func TestValidatePracticeForPublishBindsPracticeToCard(t *testing.T) {
+	card := validCard()
+	card.ID = 2
+	assertFieldError(t, ValidatePracticeForPublish(validPractice(), card), "card_id")
+}
+
+func TestValidatePracticeForPublishCannotDowngradeParentCardSafety(t *testing.T) {
+	card := validCard()
+	card.ID = 1
+	card.ClinicalSafety = ClinicalRestricted
+	practice := validPractice()
+	practice.StopConditions = json.RawMessage(`[]`)
+	assertFieldError(t, ValidatePracticeForPublish(practice, card), "stop_conditions")
 }
 
 func TestValidateRelationRejectsSelfRelationAndInvalidConfidence(t *testing.T) {
@@ -217,6 +311,11 @@ func TestValidateChunkChecksEnumsAuthorityAndOwnership(t *testing.T) {
 	chunk = validChunk()
 	chunk.ChunkKind = ChunkKindPractice
 	assertFieldError(t, ValidateChunk(chunk), "practice_id")
+
+	chunk = validChunk()
+	practiceID := int64(3)
+	chunk.PracticeID = &practiceID
+	assertFieldError(t, ValidateChunk(chunk), "practice_id")
 }
 
 func TestValidateEmbeddingRecordChecksDimensionsAndStatus(t *testing.T) {
@@ -231,6 +330,25 @@ func TestValidateEmbeddingRecordChecksDimensionsAndStatus(t *testing.T) {
 	record = validEmbeddingRecord()
 	record.Status = EmbeddingStatusReady
 	assertFieldError(t, ValidateEmbeddingRecord(record), "embedding")
+}
+
+func TestValidateEmbeddingRecordRejectsNonFiniteReadyVector(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		value float32
+	}{
+		{name: "nan", value: float32(math.NaN())},
+		{name: "positive infinity", value: float32(math.Inf(1))},
+		{name: "negative infinity", value: float32(math.Inf(-1))},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			record := validEmbeddingRecord()
+			record.Status = EmbeddingStatusReady
+			record.Embedding = make([]float32, 1536)
+			record.Embedding[17] = tt.value
+			assertFieldError(t, ValidateEmbeddingRecord(record), "embedding")
+		})
+	}
 }
 
 func validSourceWork() SourceWork {
