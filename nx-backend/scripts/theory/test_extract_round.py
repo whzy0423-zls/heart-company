@@ -102,12 +102,13 @@ def write_valid_pdf_output(root, module):
         ],
         "extractionQuality": module.summarize_extraction_quality(units),
     }
+    tools, parameters = module.current_provenance(entry["extractionRoute"])
     manifest = {
         "schemaVersion": module.SCHEMA_VERSION, "status": "complete", "roundId": "round-001",
         "relativePath": source["relativePath"], "sourceSha256": entry["sha256"],
         "extractionRoute": entry["extractionRoute"], "selectedRanges": source["selectedRanges"],
         "processedUnitType": "page", "processedUnitCount": 2,
-        "budgetPageEquivalent": 2, "ocrPageCount": 0, "tools": {}, "parameters": [],
+        "budgetPageEquivalent": 2, "ocrPageCount": 0, "tools": tools, "parameters": parameters,
         "units": units, "qualityReport": "quality.json", "errorReport": "errors.json",
     }
     module.write_json(Path(root) / "manifest.json", manifest)
@@ -145,11 +146,12 @@ def write_valid_non_pdf_output(root, module, unit_type):
         quality["selectedSpineItems"] = 2
     else:
         quality["selectedParagraphs"] = 2
+    tools, parameters = module.current_provenance(route)
     manifest = {
         "schemaVersion": module.SCHEMA_VERSION, "status": "complete", "roundId": "round-001",
         "relativePath": relative_path, "sourceSha256": entry["sha256"], "extractionRoute": route,
         "selectedRanges": selected_ranges, "processedUnitType": unit_type, "processedUnitCount": 2,
-        "budgetPageEquivalent": 1, "ocrPageCount": 0, "tools": {}, "parameters": [],
+        "budgetPageEquivalent": 1, "ocrPageCount": 0, "tools": tools, "parameters": parameters,
         "units": units, "qualityReport": "quality.json", "errorReport": "errors.json",
     }
     if unit_type == "spine_item":
@@ -381,15 +383,102 @@ class AtomicOutputTest(unittest.TestCase):
     def test_failed_source_never_leaves_complete_manifest(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir) / "source"
+            output.mkdir()
+            (output / "manifest.json").write_text('{"old":true}', "utf-8")
             with self.assertRaisesRegex(RuntimeError, "boom"):
                 self.module.atomic_source_output(
                     output,
                     lambda staging: (_ for _ in ()).throw(RuntimeError("boom")),
                 )
-            self.assertFalse((output / "manifest.json").exists())
-            failure = json.loads((output / "errors.json").read_text("utf-8"))
-            self.assertEqual("failed", failure["status"])
-            self.assertNotIn(str(Path(temp_dir)), json.dumps(failure, ensure_ascii=False))
+            self.assertEqual({"old": True}, json.loads((output / "manifest.json").read_text("utf-8")))
+
+    def test_atomic_source_output_uses_unique_staging_and_rolls_back_replace_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "source"
+            output.mkdir()
+            (output / "manifest.json").write_text('{"old":true}', "utf-8")
+            staging_paths = []
+
+            def producer(staging):
+                staging_paths.append(staging)
+                self.module.write_json(staging / "manifest.json", {"new": True})
+
+            real_replace = self.module.os.replace
+            calls = 0
+            def flaky_replace(source, destination):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise OSError("replace interrupted")
+                return real_replace(source, destination)
+
+            with mock.patch.object(self.module.os, "replace", side_effect=flaky_replace):
+                with self.assertRaisesRegex(OSError, "replace interrupted"):
+                    self.module.atomic_source_output(output, producer)
+            self.assertEqual({"old": True}, json.loads((output / "manifest.json").read_text("utf-8")))
+            self.module.atomic_source_output(output, producer)
+            self.assertEqual({"new": True}, json.loads((output / "manifest.json").read_text("utf-8")))
+            self.assertEqual(2, len(set(map(str, staging_paths))))
+
+    def test_round_lock_rejects_concurrent_writer(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.module.exclusive_round_lock(Path(temp_dir)):
+                with self.assertRaisesRegex(RuntimeError, "正在被另一个进程处理"):
+                    with self.module.exclusive_round_lock(Path(temp_dir)):
+                        pass
+
+    def test_source_set_commit_is_exact_and_failure_restores_old_set(self):
+        for old_names, next_names in (({"a", "b"}, {"a"}), ({"old-sha"}, {"new-sha"}),
+                                      ({"a", "stranger"}, {"a"})):
+            with self.subTest(old=old_names, next=next_names), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                for name in old_names:
+                    (root / "sources" / name).mkdir(parents=True)
+                next_sources = root / "next"
+                for name in next_names:
+                    (next_sources / name).mkdir(parents=True)
+                self.module.commit_source_set(root, next_sources, lambda: None)
+                self.assertEqual(next_names, {path.name for path in (root / "sources").iterdir()})
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                for name in old_names:
+                    (root / "sources" / name).mkdir(parents=True)
+                next_sources = root / "next"
+                for name in next_names:
+                    (next_sources / name).mkdir(parents=True)
+                with self.assertRaisesRegex(RuntimeError, "finalizer failed"):
+                    self.module.commit_source_set(
+                        root, next_sources,
+                        lambda: (_ for _ in ()).throw(RuntimeError("finalizer failed")),
+                    )
+                self.assertEqual(old_names, {path.name for path in (root / "sources").iterdir()})
+
+    def test_provenance_tampering_or_absolute_parameters_rejects_reuse(self):
+        for mutation in ("tool-value", "extra-tool", "missing-parameter", "absolute-path"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                source, entry, manifest, _ = write_valid_pdf_output(root, self.module)
+                if mutation == "tool-value":
+                    key = next(iter(manifest["tools"]))
+                    manifest["tools"][key] = "伪造版本"
+                elif mutation == "extra-tool":
+                    manifest["tools"]["unexpected"] = "x"
+                elif mutation == "missing-parameter":
+                    manifest["parameters"].pop(next(iter(manifest["parameters"])))
+                else:
+                    manifest["parameters"][next(iter(manifest["parameters"]))].append(
+                        "/Users/example/My Secret File.pdf"
+                    )
+                self.module.write_json(root / "manifest.json", manifest)
+                self.assertIsNone(self.module.load_reusable_source(root, source, entry))
+
+    def test_safe_error_redacts_absolute_path_containing_spaces(self):
+        failure = self.module.safe_error(
+            RuntimeError("failed /Users/example/My Secret Folder/book.pdf during extraction")
+        )
+        rendered = json.dumps(failure, ensure_ascii=False)
+        self.assertNotIn("/Users/", rendered)
+        self.assertNotIn("Secret Folder", rendered)
 
     def test_json_output_is_deterministic_and_has_no_absolute_source_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:

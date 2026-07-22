@@ -2,6 +2,7 @@
 """生成本地、可复现且可追溯的理论资料抽取工作包。"""
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -11,7 +12,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote
 
@@ -55,7 +58,8 @@ def write_json(path, value):
 
 def safe_error(exc):
     message = str(exc).replace("\n", " ").replace("\r", " ")
-    message = re.sub(r"(?:/[^\s:]+)+", "<path>", message)
+    if re.search(r"(?:^|\s)/(?:Users|home|private|tmp|var|opt|Volumes)/", message):
+        message = "错误详情包含本地绝对路径，已整体脱敏"
     return {"errorType": type(exc).__name__, "reason": message[:500] or "未提供错误信息"}
 
 
@@ -99,9 +103,51 @@ def require_runtime(*, needs_ocr, needs_office):
         versions["tesseract"] = tool_version(["tesseract", "--version"])
         versions["tesseractLanguages"] = ["chi_sim", "eng"]
     if needs_office:
-        versions["textutil"] = "Apple textutil"
+        versions["textutil"] = f"Apple textutil on macOS {tool_version(['sw_vers', '-productVersion'])}"
         versions["textutilBinarySha256"] = sha256_file(Path("/usr/bin/textutil"))
     return versions
+
+
+def parameter_contract(route):
+    contracts = {
+        "pdf_text_layer": {
+            "textExtraction": ["pdftotext", "-f", "<PAGE>", "-l", "<PAGE>", "-enc", "UTF-8",
+                               "-layout", "<SOURCE>", "-"],
+            "qaRendering": ["pdftoppm", "-f", "<PAGE>", "-l", "<PAGE>", "-r", "120", "-png",
+                            "-singlefile", "<SOURCE>", "<OUTPUT_PREFIX>"],
+        },
+        "pdf_ocr_selected": {
+            "ocrRendering": ["pdftoppm", "-f", "<PAGE>", "-l", "<PAGE>", "-r", str(OCR_DPI),
+                             "-png", "-singlefile", "<SOURCE>", "<TEMP_PREFIX>"],
+            "ocr": ["tesseract", "<IMAGE>", "<OUTPUT>", "-l", "chi_sim+eng", "--psm", "6",
+                    "txt", "tsv"],
+            "qaRendering": ["pdftoppm", "-f", "<PAGE>", "-l", "<PAGE>", "-r", "120", "-png",
+                            "-singlefile", "<SOURCE>", "<OUTPUT_PREFIX>"],
+        },
+        "epub_xhtml": {
+            "parser": ["strict ZIP", "OPF spine", "lxml XMLParser(resolve_entities=False,no_network=True,"
+                       "recover=False,huge_tree=False)"],
+        },
+        "textutil_plain_text": {
+            "conversion": ["textutil", "-convert", "txt", "-stdout", "<SOURCE>"],
+        },
+    }
+    if route not in contracts:
+        raise ValueError(f"不支持的 extractionRoute: {route}")
+    return contracts[route]
+
+
+def current_provenance(route, runtime_tools=None):
+    if runtime_tools is None:
+        runtime_tools = require_runtime(needs_ocr=route == "pdf_ocr_selected",
+                                        needs_office=route == "textutil_plain_text")
+    tool_keys = {
+        "pdf_text_layer": ("pdftotext", "pdftoppm"),
+        "pdf_ocr_selected": ("pdftoppm", "tesseract", "tesseractLanguages"),
+        "epub_xhtml": ("epubParser",),
+        "textutil_plain_text": ("textutil", "textutilBinarySha256"),
+    }[route]
+    return ({key: runtime_tools[key] for key in tool_keys}, parameter_contract(route))
 
 
 def parse_selected_ranges(ranges, expected_prefix):
@@ -364,7 +410,8 @@ def safe_relative_file(root, relative_value, label):
     return path
 
 
-def validate_complete_source_output(target, source, entry, *, allow_legacy_quality=False):
+def validate_complete_source_output(target, source, entry, *, allow_legacy_quality=False,
+                                    runtime_tools=None):
     target = Path(target).resolve()
     try:
         manifest = json.loads((target / "manifest.json").read_text("utf-8"))
@@ -391,6 +438,9 @@ def validate_complete_source_output(target, source, entry, *, allow_legacy_quali
     }
     if any(manifest.get(key) != value for key, value in expected.items()):
         raise ValueError("manifest 与 selection/catalog 合同不一致")
+    expected_tools, expected_parameters = current_provenance(entry["extractionRoute"], runtime_tools)
+    if manifest.get("tools") != expected_tools or manifest.get("parameters") != expected_parameters:
+        raise ValueError("manifest provenance 与当前工具/固定参数合同不一致")
     if unit_type == "spine_item" and manifest.get("semanticBlockContract") != "v1":
         raise ValueError("EPUB 语义块合同版本无效")
     if errors != {"status": "complete", "errors": []}:
@@ -512,21 +562,34 @@ def validate_complete_source_output(target, source, entry, *, allow_legacy_quali
 
 
 def atomic_source_output(output, producer):
-    output, staging = Path(output), Path(str(output) + ".staging")
-    shutil.rmtree(staging, ignore_errors=True)
-    staging.mkdir(parents=True, exist_ok=True)
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.staging-{os.getpid()}-",
+                                    dir=output.parent))
+    backup = output.parent / f".{output.name}.backup-{os.getpid()}-{uuid.uuid4().hex}"
+    backup_made = False
     try:
         result = producer(staging)
         if not (staging / "manifest.json").is_file():
             raise RuntimeError("抽取器未生成 manifest.json")
-        shutil.rmtree(output, ignore_errors=True)
-        staging.replace(output)
+        if output.exists():
+            os.replace(output, backup)
+            backup_made = True
+        try:
+            os.replace(staging, output)
+        except Exception:
+            if backup_made and backup.exists() and not output.exists():
+                os.replace(backup, output)
+                backup_made = False
+            raise
+        if backup_made:
+            shutil.rmtree(backup)
         return result
-    except Exception as exc:
-        shutil.rmtree(staging, ignore_errors=True)
-        shutil.rmtree(output, ignore_errors=True)
-        output.mkdir(parents=True, exist_ok=True)
-        write_json(output / "errors.json", {"status": "failed", **safe_error(exc)})
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        if backup_made and backup.exists() and not output.exists():
+            os.replace(backup, output)
         raise
 
 
@@ -687,19 +750,14 @@ def extract_source(source, entry, path, selected, output, tools):
             raise ValueError("实际处理单元数与选择合同不一致")
         quality = expected_quality_contract(source, records, renders)
         write_json(staging / "quality.json", quality)
-        parameters = {
-            "pdf_text_layer": ["pdftotext -f <PAGE> -l <PAGE> -enc UTF-8 -layout <SOURCE> -"],
-            "pdf_ocr_selected": [f"pdftoppm -r {OCR_DPI} -png -singlefile <SOURCE> <TEMP>",
-                                 "tesseract <IMAGE> <OUTPUT> -l chi_sim+eng --psm 6 txt tsv"],
-            "epub_xhtml": ["strict ZIP + OPF spine + lxml XMLParser(no_network,no_entities)"],
-            "textutil_plain_text": ["textutil -convert txt -stdout <SOURCE>"],
-        }[route]
+        source_tools, parameters = current_provenance(route, tools)
         manifest = {"schemaVersion": SCHEMA_VERSION, "status": "complete", "roundId": "round-001",
                     "relativePath": source["relativePath"], "sourceSha256": entry["sha256"],
                     "extractionRoute": route, "selectedRanges": source["selectedRanges"],
                     "processedUnitType": unit_type, "processedUnitCount": distinct,
                     "budgetPageEquivalent": source["budgetPageEquivalent"],
-                    "ocrPageCount": source["ocrPageCount"], "tools": tools, "parameters": parameters,
+                    "ocrPageCount": source["ocrPageCount"], "tools": source_tools,
+                    "parameters": parameters,
                     "units": records, "qualityReport": "quality.json", "errorReport": "errors.json"}
         if unit_type == "spine_item":
             manifest["semanticBlockContract"] = "v1"
@@ -715,17 +773,17 @@ def source_directory_name(relative_path, source_sha):
     return f"{source_sha[:16]}-{slug or 'source'}"
 
 
-def load_reusable_source(target, source, entry):
+def load_reusable_source(target, source, entry, runtime_tools=None):
     try:
-        return validate_complete_source_output(target, source, entry)
+        return validate_complete_source_output(target, source, entry, runtime_tools=runtime_tools)
     except (OSError, UnicodeError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return None
 
 
-def migrate_legacy_quality(target, source, entry):
+def migrate_legacy_quality(target, source, entry, runtime_tools=None):
     try:
         manifest, legacy_quality = validate_complete_source_output(
-            target, source, entry, allow_legacy_quality=True
+            target, source, entry, allow_legacy_quality=True, runtime_tools=runtime_tools
         )
         expected = expected_quality_contract(
             source, manifest["units"], legacy_quality.get("renders")
@@ -733,7 +791,7 @@ def migrate_legacy_quality(target, source, entry):
         if legacy_quality == expected:
             return manifest, legacy_quality
         write_json(Path(target) / "quality.json", expected)
-        return validate_complete_source_output(target, source, entry)
+        return validate_complete_source_output(target, source, entry, runtime_tools=runtime_tools)
     except (OSError, UnicodeError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return None
 
@@ -836,6 +894,89 @@ def validate_round_qa(output_root, review, source_outputs):
     return True
 
 
+@contextmanager
+def exclusive_round_lock(output_root):
+    output_root = Path(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+    lock_path = output_root / ".round.lock"
+    handle = lock_path.open("a+", encoding="utf-8")
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("该理论抽取轮次正在被另一个进程处理") from exc
+        handle.seek(0)
+        handle.truncate()
+        handle.write(f"pid={os.getpid()}\n")
+        handle.flush()
+        yield
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
+def commit_source_set(output_root, next_sources, finalizer):
+    output_root = Path(output_root).resolve()
+    next_sources = Path(next_sources).resolve()
+    expected_names = {path.name for path in next_sources.iterdir() if path.is_dir()}
+    quarantine = output_root / f".round-quarantine-{os.getpid()}-{uuid.uuid4().hex}"
+    quarantine.mkdir(parents=True, exist_ok=False)
+    current_sources = output_root / "sources"
+    old_sources = quarantine / "sources"
+    managed_names = ("qa-contact-sheets", "qa-visual-review.json", "round-manifest.json",
+                     "round-errors.json")
+    moved_managed = []
+    installed = False
+    try:
+        if current_sources.exists():
+            os.replace(current_sources, old_sources)
+        for name in managed_names:
+            current = output_root / name
+            if current.exists():
+                os.replace(current, quarantine / name)
+                moved_managed.append(name)
+        os.replace(next_sources, current_sources)
+        installed = True
+        actual_names = {path.name for path in current_sources.iterdir() if path.is_dir()}
+        if actual_names != expected_names:
+            raise RuntimeError("sources 物理目录集合与当前 selection 不一致")
+        finalizer()
+        actual_names = {path.name for path in current_sources.iterdir() if path.is_dir()}
+        if actual_names != expected_names:
+            raise RuntimeError("round 完成前 sources 集合发生变化")
+        shutil.rmtree(quarantine)
+    except Exception:
+        if installed and current_sources.exists():
+            shutil.rmtree(current_sources, ignore_errors=True)
+        for name in managed_names:
+            current = output_root / name
+            if current.exists():
+                if current.is_dir():
+                    shutil.rmtree(current, ignore_errors=True)
+                else:
+                    current.unlink(missing_ok=True)
+        if old_sources.exists():
+            os.replace(old_sources, current_sources)
+        for name in moved_managed:
+            saved = quarantine / name
+            if saved.exists():
+                os.replace(saved, output_root / name)
+        shutil.rmtree(quarantine, ignore_errors=True)
+        raise
+
+
+def clone_source_tree(source, destination):
+    def link_or_copy(source_file, destination_file):
+        try:
+            os.link(source_file, destination_file)
+            return destination_file
+        except OSError:
+            return shutil.copy2(source_file, destination_file)
+    shutil.copytree(source, destination, copy_function=link_or_copy)
+
+
 def build_round(selection_path, catalog_path, source_root, output_root):
     selection = json.loads(Path(selection_path).read_text("utf-8"))
     catalog = json.loads(Path(catalog_path).read_text("utf-8"))
@@ -843,58 +984,78 @@ def build_round(selection_path, catalog_path, source_root, output_root):
     tools = require_runtime(needs_ocr=any(s["ocrPageCount"] for s, _, _, _ in validated),
                             needs_office=any(s["processedUnitType"] == "paragraph"
                                              for s, _, _, _ in validated))
-    output_root = Path(output_root)
+    output_root = Path(output_root).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
-    (output_root / "round-manifest.json").unlink(missing_ok=True)
-    summaries, failures, source_outputs = [], [], []
-    for source, entry, path, selected in validated:
-        directory = source_directory_name(source["relativePath"], entry["sha256"])
-        target = output_root / "sources" / directory
+    with exclusive_round_lock(output_root):
+        run_root = Path(tempfile.mkdtemp(prefix=f".round-run-{os.getpid()}-", dir=output_root))
+        next_sources = run_root / "sources"
+        next_sources.mkdir()
+        summaries = []
         try:
-            reusable = load_reusable_source(target, source, entry)
-            if reusable is None:
-                reusable = migrate_legacy_quality(target, source, entry)
-            if reusable is None:
-                extract_source(source, entry, path, selected, target, tools)
-                manifest, quality = validate_complete_source_output(target, source, entry)
-            else:
-                manifest, quality = reusable
-            summaries.append({"relativePath": source["relativePath"],
-                              "directory": f"sources/{directory}",
-                              "manifestSha256": sha256_file(target / "manifest.json"),
-                              "unitFileCount": len(manifest["units"]),
-                              "qualityStatus": quality["status"]})
-            source_outputs.append((source, entry, target, selected))
-        except Exception as exc:
-            failures.append({"relativePath": source["relativePath"], **safe_error(exc)})
-            break
-    if failures:
-        write_json(output_root / "round-errors.json", {"status": "failed", "failures": failures})
-        raise RuntimeError(f"首轮抽取失败: {failures[0]['relativePath']}")
-    try:
-        qa_review = build_round_qa(output_root, source_outputs)
-        validate_round_qa(output_root, qa_review, source_outputs)
-    except Exception as exc:
-        write_json(output_root / "round-errors.json",
-                   {"status": "failed", "failures": [{"relativePath": "round-qa", **safe_error(exc)}]})
-        raise RuntimeError("首轮 PDF QA 汇总失败") from exc
-    totals = selection_totals(selection)
-    manifest = {"schemaVersion": SCHEMA_VERSION, "status": "complete", "roundId": selection["roundId"],
-                "selectionSha256": sha256_file(selection_path), "catalogSha256": sha256_file(catalog_path),
-                "budgetRuleVersion": selection["budgetRuleVersion"],
-                "normalizedTextCharactersPerPage": selection["normalizedTextCharactersPerPage"],
-                "totals": totals,
-                "limits": {"maxSelectedFiles": selection["maxSelectedFiles"],
-                           "maxBudgetPageEquivalent": selection["maxBudgetPageEquivalent"],
-                           "maxOcrPageCount": selection["maxOcrPageCount"]},
-                "sources": summaries, "humanReviewStatus": "pending",
-                "qaVisualReview": {"file": "qa-visual-review.json",
-                                   "sha256": sha256_file(output_root / "qa-visual-review.json"),
-                                   "pdfSourceCount": qa_review["pdfSourceCount"],
-                                   "renderCount": qa_review["renderCount"]}}
-    write_json(output_root / "round-errors.json", {"status": "complete", "errors": []})
-    write_json(output_root / "round-manifest.json", manifest)
-    return manifest
+            for source, entry, path, selected in validated:
+                directory = source_directory_name(source["relativePath"], entry["sha256"])
+                current_target = output_root / "sources" / directory
+                staged_target = next_sources / directory
+                reusable = None
+                if current_target.is_dir():
+                    clone_source_tree(current_target, staged_target)
+                    reusable = load_reusable_source(staged_target, source, entry, tools)
+                    if reusable is None:
+                        reusable = migrate_legacy_quality(staged_target, source, entry, tools)
+                if reusable is None:
+                    if staged_target.exists():
+                        shutil.rmtree(staged_target)
+                    extract_source(source, entry, path, selected, staged_target, tools)
+                manifest, quality = validate_complete_source_output(
+                    staged_target, source, entry, runtime_tools=tools
+                )
+                summaries.append({"relativePath": source["relativePath"],
+                                  "directory": f"sources/{directory}",
+                                  "manifestSha256": sha256_file(staged_target / "manifest.json"),
+                                  "unitFileCount": len(manifest["units"]),
+                                  "qualityStatus": quality["status"]})
+
+            expected_names = {source_directory_name(source["relativePath"], entry["sha256"])
+                              for source, entry, _, _ in validated}
+            if {path.name for path in next_sources.iterdir() if path.is_dir()} != expected_names:
+                raise RuntimeError("staging sources 集合与 selection 不一致")
+
+            result = {}
+            def finalize_round():
+                live_outputs = []
+                for source, entry, _, selected in validated:
+                    directory = source_directory_name(source["relativePath"], entry["sha256"])
+                    target = output_root / "sources" / directory
+                    validate_complete_source_output(target, source, entry, runtime_tools=tools)
+                    live_outputs.append((source, entry, target, selected))
+                qa_review = build_round_qa(output_root, live_outputs)
+                validate_round_qa(output_root, qa_review, live_outputs)
+                totals = selection_totals(selection)
+                round_manifest = {
+                    "schemaVersion": SCHEMA_VERSION, "status": "complete",
+                    "roundId": selection["roundId"],
+                    "selectionSha256": sha256_file(selection_path),
+                    "catalogSha256": sha256_file(catalog_path),
+                    "budgetRuleVersion": selection["budgetRuleVersion"],
+                    "normalizedTextCharactersPerPage": selection["normalizedTextCharactersPerPage"],
+                    "totals": totals,
+                    "limits": {"maxSelectedFiles": selection["maxSelectedFiles"],
+                               "maxBudgetPageEquivalent": selection["maxBudgetPageEquivalent"],
+                               "maxOcrPageCount": selection["maxOcrPageCount"]},
+                    "sources": summaries, "humanReviewStatus": "pending",
+                    "qaVisualReview": {"file": "qa-visual-review.json",
+                                       "sha256": sha256_file(output_root / "qa-visual-review.json"),
+                                       "pdfSourceCount": qa_review["pdfSourceCount"],
+                                       "renderCount": qa_review["renderCount"]},
+                }
+                write_json(output_root / "round-errors.json", {"status": "complete", "errors": []})
+                write_json(output_root / "round-manifest.json", round_manifest)
+                result.update(round_manifest)
+
+            commit_source_set(output_root, next_sources, finalize_round)
+            return result
+        finally:
+            shutil.rmtree(run_root, ignore_errors=True)
 
 
 def parse_args(argv=None):

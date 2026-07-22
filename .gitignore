@@ -35,3 +35,6 @@ var/theory-work/
 # Python 本地缓存
 __pycache__/
 *.py[cod]
+
+# 本地临时检查产物
+tmp/
