@@ -13,6 +13,7 @@ const answers = ref([])
 const answerLocked = ref(false)
 let advanceTimer = null
 
+const total = QUESTIONS.length
 const q = computed(() => QUESTIONS[step.value])
 const progress = computed(() => ((step.value + (answers.value[step.value] ? 1 : 0)) / QUESTIONS.length) * 100)
 
@@ -79,48 +80,69 @@ onUnload(() => {
 
 <template>
   <view class="wrap test page-stack ios-page ios-safe-bottom">
-    <!-- 选性别 -->
-    <view v-if="stage === 'gender'" class="gender card ios-card">
-      <text class="eyebrow">开始之前</text>
-      <text class="gender__title gradient-title">先选择你的性别</text>
-      <text class="gender__tip">用于微调同分情况下的决胜权重，让画像更贴近你。</text>
+    <view v-if="stage === 'gender'" class="gender">
+      <view class="test-hero nx-page-hero">
+        <text class="test-hero__eyebrow">自我探索 · 从这里开始</text>
+        <text class="test-hero__title">遇见更真实的自己</text>
+        <text class="test-hero__desc">先告诉我们你的性别，它只用于微调同分时的判断，让最终画像更贴近你。</text>
+      </view>
+
+      <view class="gender__intro">
+        <text class="gender__title">选择你的身份</text>
+        <text class="gender__tip">选择后将进入正式答题，全程大约需要 3 分钟。</text>
+      </view>
       <view class="gender__row">
         <button
-          class="gender__card gender__card--m"
+          class="gender__card gender__card--m nx-focusable"
           aria-label="选择男生"
           hover-class="gender__card--hover"
           @click="start('male')"
         >
           <text class="gender__mark">M</text>
           <text class="gender__b">男生</text>
-          <text class="gender__d">更偏行动、边界与掌控感</text>
+          <text class="gender__d">关注行动方式与边界感</text>
+          <text class="gender__go">开始探索 →</text>
         </button>
         <button
-          class="gender__card gender__card--f"
+          class="gender__card gender__card--f nx-focusable"
           aria-label="选择女生"
           hover-class="gender__card--hover"
           @click="start('female')"
         >
           <text class="gender__mark">F</text>
           <text class="gender__b">女生</text>
-          <text class="gender__d">更偏关系、细腻与安全感</text>
+          <text class="gender__d">关注关系方式与安全感</text>
+          <text class="gender__go">开始探索 →</text>
         </button>
       </view>
     </view>
 
-    <!-- 答题 -->
-    <view v-else class="quiz card ios-card">
-      <view class="quiz__bar"><view class="quiz__bar-fill" :style="{ width: progress + '%' }" /></view>
-      <view class="quiz__head">
-        <text>第 {{ step + 1 }} / {{ QUESTIONS.length }} 题</text>
-        <button v-if="step > 0" class="quiz__back" hover-class="quiz__back--hover" @click="back">上一题</button>
+    <view v-else class="quiz-shell">
+      <view class="quiz__topline">
+        <view
+          class="quiz__progress-meta"
+          :aria-label="`第 ${step + 1} 题，共 ${total} 题`"
+        >
+          <text class="quiz__step">第 {{ step + 1 }} 题</text>
+          <text class="quiz__total">/ 共 {{ total }} 题</text>
+        </view>
+        <text class="quiz__percent">{{ Math.round(progress) }}%</text>
       </view>
-      <text class="quiz__q">{{ q.q }}</text>
+
+      <view class="quiz__bar" aria-hidden="true">
+        <view class="quiz__bar-fill" :style="{ width: progress + '%' }" />
+      </view>
+
+      <view class="quiz__question-block">
+        <text class="quiz__eyebrow">选择最符合你真实反应的一项</text>
+        <text class="quiz__q">{{ q.q }}</text>
+      </view>
+
       <view class="quiz__options">
         <button
           v-for="(opt, k) in q.options"
           :key="k"
-          class="quiz__opt"
+          class="quiz__opt nx-focusable"
           :class="{ on: answers[step] === opt, disabled: answerLocked }"
           :disabled="answerLocked"
           :aria-label="'选择答案 ' + letter(k) + '：' + opt.t"
@@ -131,181 +153,318 @@ onUnload(() => {
           <text class="quiz__t">{{ opt.t }}</text>
         </button>
       </view>
+
+      <button
+        v-if="step > 0"
+        class="quiz__back nx-focusable"
+        aria-label="返回上一题"
+        hover-class="quiz__back--hover"
+        @click="back"
+      >
+        ← 上一题
+      </button>
     </view>
   </view>
 </template>
 
 <style scoped>
+.test {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 8% 8%, rgba(59, 130, 246, .15), transparent 34%),
+    radial-gradient(circle at 94% 20%, rgba(109, 40, 217, .14), transparent 32%),
+    #f5f7ff;
+}
 .gender {
-  min-height: 680rpx;
   display: flex;
   flex-direction: column;
-  gap: 18rpx;
-  padding: 48rpx 34rpx;
+  gap: 34rpx;
+}
+.test-hero {
+  position: relative;
+  overflow: hidden;
+  min-height: 330rpx;
+  padding: 48rpx 40rpx;
+  border-radius: 38rpx;
+  background: linear-gradient(135deg, #1d4ed8 0%, #4338ca 48%, #6d28d9 100%);
+  box-shadow: 0 28rpx 70rpx -34rpx rgba(67, 56, 202, .74);
+  box-sizing: border-box;
+}
+.test-hero::after {
+  content: '';
+  position: absolute;
+  right: -94rpx;
+  bottom: -150rpx;
+  width: 330rpx;
+  height: 330rpx;
+  border: 2rpx solid rgba(255, 255, 255, .18);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 46rpx rgba(255, 255, 255, .055),
+    0 0 0 92rpx rgba(255, 255, 255, .035);
+}
+.test-hero__eyebrow,
+.test-hero__title,
+.test-hero__desc {
+  position: relative;
+  z-index: 1;
+  display: block;
+}
+.test-hero__eyebrow {
+  color: rgba(255, 255, 255, .92);
+  font-size: 23rpx;
+  font-weight: 700;
+  letter-spacing: 3rpx;
+}
+.test-hero__title {
+  margin-top: 24rpx;
+  color: #fff;
+  font-size: 52rpx;
+  font-weight: 900;
+  line-height: 1.2;
+  letter-spacing: -1rpx;
+}
+.test-hero__desc {
+  max-width: 560rpx;
+  margin-top: 20rpx;
+  color: rgba(255, 255, 255, .92);
+  font-size: 27rpx;
+  line-height: 1.68;
+}
+.gender__intro {
+  display: flex;
+  flex-direction: column;
+  gap: 10rpx;
+  padding: 0 8rpx;
 }
 .gender__title {
-  font-size: 52rpx;
+  color: #0f172a;
+  font-size: 38rpx;
+  font-weight: 900;
+  line-height: 1.3;
 }
 .gender__tip {
-  color: #3c424d;
-  font-size: 27rpx;
-  line-height: 1.7;
+  color: #64748b;
+  font-size: 25rpx;
+  line-height: 1.6;
 }
 .gender__row {
   display: flex;
   gap: 20rpx;
-  margin-top: 34rpx;
 }
 .gender__card {
   flex: 1;
-  min-height: 300rpx;
+  min-height: 260rpx;
   margin: 0;
-  border-radius: 28rpx;
-  background: rgba(255,255,255,.68);
-  border: 2rpx solid rgba(255,255,255,.92);
+  border: 0;
+  border-radius: 32rpx;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  justify-content: center;
-  gap: 14rpx;
-  padding: 28rpx;
-  box-shadow: 0 18rpx 42rpx -30rpx rgba(28,40,70,.46);
+  justify-content: flex-start;
+  gap: 12rpx;
+  padding: 30rpx 28rpx 28rpx;
   box-sizing: border-box;
   line-height: 1.2;
   text-align: left;
   touch-action: manipulation;
+  transition: transform .2s ease, opacity .2s ease, box-shadow .2s ease;
 }
 .gender__card::after { border: none; }
-.gender__card--hover { opacity: .86; transform: scale(.985); }
+.gender__card--hover { opacity: .9; transform: scale(.98); }
 .gender__card--m {
-  background: linear-gradient(145deg, rgba(90,160,255,.22), rgba(255,255,255,.72));
+  background: linear-gradient(145deg, #155e75, #1d4ed8);
+  box-shadow: 0 24rpx 52rpx -34rpx rgba(29, 78, 216, .82);
 }
 .gender__card--f {
-  background: linear-gradient(145deg, rgba(255,90,106,.18), rgba(255,255,255,.72));
+  background: linear-gradient(145deg, #7e22ce, #be185d);
+  box-shadow: 0 24rpx 52rpx -34rpx rgba(190, 24, 93, .74);
 }
 .gender__mark {
-  width: 76rpx;
-  height: 76rpx;
-  border-radius: 24rpx;
+  width: 70rpx;
+  height: 70rpx;
+  border-radius: 22rpx;
+  background: rgba(255, 255, 255, .16);
   color: #fff;
   font-weight: 900;
-  font-size: 34rpx;
+  font-size: 38rpx;
   display: flex;
   align-items: center;
   justify-content: center;
-}
-.gender__card--m .gender__mark {
-  background: linear-gradient(135deg, #5aa0ff, #2b7fff);
-}
-.gender__card--f .gender__mark {
-  background: linear-gradient(135deg, #ff5a6a, #e23a47);
+  border: 2rpx solid rgba(255, 255, 255, .2);
 }
 .gender__b {
-  color: #12151b;
+  margin-top: 4rpx;
+  color: #fff;
   font-size: 32rpx;
   font-weight: 900;
 }
 .gender__d {
-  color: #767d89;
+  color: rgba(255, 255, 255, .86);
   font-size: 22rpx;
-  line-height: 1.45;
+  line-height: 1.5;
+}
+.gender__go {
+  margin-top: auto;
+  color: #fff;
+  font-size: 22rpx;
+  font-weight: 800;
 }
 
-.quiz {
-  padding: 36rpx 30rpx;
+.quiz-shell {
+  position: relative;
+  padding: 38rpx 32rpx 34rpx;
+  border: 2rpx solid rgba(99, 102, 241, .11);
+  border-radius: 36rpx;
+  background: rgba(255, 255, 255, .94);
+  box-shadow: 0 28rpx 80rpx -48rpx rgba(49, 46, 129, .52);
+  box-sizing: border-box;
+}
+.quiz__topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20rpx;
+  margin-bottom: 18rpx;
+}
+.quiz__progress-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8rpx;
+}
+.quiz__step {
+  color: #3730a3;
+  font-size: 28rpx;
+  font-weight: 900;
+}
+.quiz__total,
+.quiz__percent {
+  color: #64748b;
+  font-size: 23rpx;
+  font-weight: 700;
 }
 .quiz__bar {
-  height: 12rpx;
-  background: rgba(20,24,32,.08);
+  height: 14rpx;
+  background: #e9eaf8;
   border-radius: 999rpx;
   overflow: hidden;
 }
 .quiz__bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, #25b365, #2b7fff 52%, #e23a47);
-  transition: width .3s;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #6d28d9);
+  transition: width .3s ease;
 }
-.quiz__head {
+.quiz__question-block {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  color: #767d89;
-  font-size: 24rpx;
+  flex-direction: column;
+  gap: 16rpx;
+  margin-top: 46rpx;
+}
+.quiz__eyebrow {
+  color: #64748b;
+  font-size: 23rpx;
   font-weight: 700;
-  margin: 28rpx 0 22rpx;
 }
 .quiz__back {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 88rpx;
+  width: 100%;
   min-height: 88rpx;
-  margin: 0;
-  color: #2b7fff;
-  padding: 0 18rpx;
-  border-radius: 999rpx;
-  background: rgba(43,127,255,.1);
-  border: none;
-  font-size: 24rpx;
+  margin: 28rpx 0 0;
+  color: #4338ca;
+  padding: 0 24rpx;
+  border: 2rpx solid #d8dcf4;
+  border-radius: 22rpx;
+  background: #f8f9ff;
+  font-size: 26rpx;
   font-weight: 800;
   line-height: 1.2;
   touch-action: manipulation;
+  transition: transform .2s ease, opacity .2s ease;
 }
 .quiz__back::after { border: none; }
 .quiz__back--hover { opacity: .82; transform: scale(.985); }
 .quiz__q {
-  color: #12151b;
-  font-size: 39rpx;
+  color: #0f172a;
+  font-size: 40rpx;
   font-weight: 900;
-  line-height: 1.45;
+  line-height: 1.48;
 }
 .quiz__options {
   display: flex;
   flex-direction: column;
   gap: 18rpx;
-  margin-top: 34rpx;
+  margin-top: 38rpx;
 }
 .quiz__opt {
   display: flex;
   align-items: center;
   gap: 18rpx;
   width: 100%;
+  min-height: 112rpx;
   margin: 0;
-  background: rgba(255,255,255,.72);
-  border: 2rpx solid rgba(20,24,32,.08);
+  background: #f8faff;
+  border: 2rpx solid #dce1f0;
   border-radius: 24rpx;
-  padding: 28rpx 24rpx;
-  box-shadow: 0 10rpx 30rpx -28rpx rgba(28,40,70,.45);
+  padding: 24rpx;
+  box-shadow: 0 12rpx 30rpx -28rpx rgba(30, 41, 59, .55);
   box-sizing: border-box;
   text-align: left;
   line-height: 1.2;
   touch-action: manipulation;
+  transition: transform .2s ease, opacity .2s ease, border-color .2s ease, box-shadow .2s ease;
 }
 .quiz__opt::after { border: none; }
 .quiz__opt.disabled,
 .quiz__opt[disabled] { pointer-events: none; opacity: .72; }
 .quiz__opt--hover { opacity: .86; transform: scale(.992); }
 .quiz__opt.on {
-  border-color: rgba(43,127,255,.46);
-  background: linear-gradient(120deg, rgba(43,127,255,.12), rgba(37,179,101,.08));
+  border: 4rpx solid #4f46e5;
+  background: linear-gradient(120deg, #eef2ff, #f5f3ff);
+  box-shadow:
+    inset 0 0 0 4rpx rgba(255, 255, 255, .9),
+    inset 0 0 0 8rpx rgba(79, 70, 229, .16),
+    0 18rpx 36rpx -30rpx rgba(79, 70, 229, .7);
 }
 .quiz__idx {
-  width: 52rpx;
-  height: 52rpx;
+  width: 58rpx;
+  height: 58rpx;
   flex-shrink: 0;
-  border-radius: 17rpx;
-  background: linear-gradient(135deg, #5aa0ff, #2b7fff);
-  color: #fff;
+  border-radius: 18rpx;
+  background: #e4e8f8;
+  color: #3730a3;
   font-weight: 900;
   font-size: 25rpx;
   display: flex;
   align-items: center;
   justify-content: center;
 }
+.quiz__opt.on .quiz__idx {
+  background: linear-gradient(135deg, #2563eb, #6d28d9);
+  color: #fff;
+}
 .quiz__t {
   flex: 1;
-  color: #3c424d;
-  font-size: 29rpx;
+  color: #334155;
+  font-size: 28rpx;
   line-height: 1.55;
+}
+
+@media (max-width: 360px) {
+  .quiz__q {
+    font-size: 36rpx;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gender__card,
+  .quiz__bar-fill,
+  .quiz__opt,
+  .quiz__back {
+    transition: none;
+  }
 }
 </style>
