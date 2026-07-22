@@ -620,6 +620,24 @@ for (const { keyPrefix, ariaLabel, ariaPressed, handler } of [
   assert.equal(tagAttribute(chip, ':aria-pressed'), ariaPressed, 'relation type chip should expose its selected state on the native button')
   assert.equal(tagAttribute(chip, 'hover-class'), 'type-chip--pressed', 'relation type chip should expose pressed feedback on the native button')
   assert.equal(tagAttribute(chip, '@click'), handler, 'relation type chip should keep its selection handler on the native button')
+  assert.equal(tagAttribute(chip, 'role'), 'button', 'relation type chip should expose H5 button semantics')
+  assert.equal(tagAttribute(chip, 'aria-role'), 'button', 'relation type chip should expose miniapp button semantics')
+  assert.equal(tagAttribute(chip, 'tabindex'), '0', 'relation type chip should participate in H5 keyboard focus order')
+  assert.equal(tagAttribute(chip, '@keydown.enter'), handler, 'relation type chip should activate with Enter')
+  assert.equal(tagAttribute(chip, '@keydown.space.prevent'), handler, 'relation type chip should activate with Space without scrolling')
+}
+
+for (const { handler, description } of [
+  { handler: 'analyze', description: 'relation analyze action' },
+  { handler: 'reset', description: 'relation reset action' },
+]) {
+  const button = relationButtons.find((tag) => tagAttribute(tag, '@click') === handler)
+  assert.ok(button, `${description} should be a native button`)
+  assert.equal(tagAttribute(button, 'role'), 'button', `${description} should expose H5 button semantics`)
+  assert.equal(tagAttribute(button, 'aria-role'), 'button', `${description} should expose miniapp button semantics`)
+  assert.equal(tagAttribute(button, 'tabindex'), '0', `${description} should participate in H5 keyboard focus order`)
+  assert.equal(tagAttribute(button, '@keydown.enter'), handler, `${description} should activate with Enter`)
+  assert.equal(tagAttribute(button, '@keydown.space.prevent'), handler, `${description} should activate with Space without scrolling`)
 }
 
 const chipBodies = [...relationTemplate.matchAll(/<button\b(?=[^>]*class=["']type-chip nx-focusable["'])[^>]*>([\s\S]*?)<\/button>/g)]
@@ -628,11 +646,17 @@ for (const [, body] of chipBodies) {
   assert.match(body, /<text\s+class=["']type-chip__number["']>\{\{ t\.id \}\}<\/text>/, 'type chip should visibly render its number')
   assert.match(body, /<text\s+class=["']type-chip__name["']>\{\{ t\.name \}\}<\/text>/, 'type chip should visibly render its abbreviated name')
   assert.match(body, /<text\s+v-if=["'][^"']+ === t\.id["']\s+class=["']type-chip__selected["']>已选<\/text>/, 'selected chip should include a visible text marker')
+  assert.match(body, /<text\s+v-else\s+class=["']type-chip__selected type-chip__selected--placeholder["']\s+aria-hidden=["']true["']>/, 'unselected chip should reserve the selected-marker layout slot')
 }
 
 const typeChipStyle = pageStyleDeclarations(relationStyle, '.type-chip')
-assert.match(typeChipStyle, /min-height:\s*88rpx\s*;/, 'relation type chips should keep an 88rpx touch target')
+const typeChipHeight = typeChipStyle?.match(/height:\s*(\d+)rpx\s*;/)
+const typeChipMinHeight = typeChipStyle?.match(/min-height:\s*(\d+)rpx\s*;/)
+assert.ok(typeChipHeight && typeChipMinHeight, 'relation type chips should define stable height and minimum height')
+assert.equal(typeChipHeight[1], typeChipMinHeight[1], 'selected and unselected relation chips should share one stable height')
+assert.ok(Number(typeChipHeight[1]) >= 88, 'relation type chips should keep at least an 88rpx touch target')
 assert.match(typeChipStyle, /border-radius:\s*24rpx\s*;/, 'relation type chips should keep the planned 24rpx radius')
+assert.match(pageStyleDeclarations(relationStyle, '.type-chip__selected--placeholder'), /visibility:\s*hidden\s*;/, 'unselected relation chips should reserve marker height without showing placeholder copy')
 const selectedChipStyle = pageStyleDeclarations(relationStyle, '.type-chip.on')
 assert.match(selectedChipStyle, /border:\s*4rpx\s+solid\s+#9333ea\s*;/i, 'selected relation type should keep the planned purple border')
 assert.match(selectedChipStyle, /box-shadow:[^;]*\binset\b/i, 'selected relation type should include a non-color-only inset emphasis')
@@ -714,6 +738,31 @@ for (const { modifier } of insightContracts) {
     const ratio = contrastRatio(relationBodyColor, endpoint)
     assert.ok(ratio >= 4.5, `${modifier} body text should meet 4.5:1 contrast against ${endpoint}, got ${ratio.toFixed(2)}:1`)
   }
+}
+
+for (const { selector, minimum } of [
+  { selector: '.type-chip__name', minimum: 20 },
+  { selector: '.type-chip__selected', minimum: 20 },
+  { selector: '.pair__role', minimum: 20 },
+  { selector: '.pair__name', minimum: 24 },
+  { selector: '.pair-connection__eyebrow', minimum: 20 },
+  { selector: '.pair-connection__label', minimum: 20 },
+  { selector: '.insight__eyebrow', minimum: 20 },
+  { selector: '.insight__text', minimum: 24 },
+  { selector: '.drive__eyebrow', minimum: 20 },
+  { selector: '.drive-card__label', minimum: 20 },
+  { selector: '.drive-card__text', minimum: 24 },
+]) {
+  const fontSize = pageStyleDeclarations(relationStyle, selector)?.match(/font-size:\s*(\d+)rpx\s*;/)
+  assert.ok(fontSize && Number(fontSize[1]) >= minimum, `${selector} should keep at least ${minimum}rpx readable text`)
+}
+
+assert.doesNotMatch(relationTemplate, /✦|⚡|↗/, 'relation insight icons should not depend on emoji or character glyphs')
+for (const modifier of ['bond', 'friction', 'tip']) {
+  const marks = elementBlocksByStaticClass(relationTemplate, 'view', `insight__icon--${modifier}`)
+  assert.equal(marks.length, 1, `relation should render one CSS icon container for ${modifier}`)
+  assert.match(marks[0], new RegExp(`<view\\s+class=["']insight__mark insight__mark--${modifier}["']\\s*\\/>`), `${modifier} insight should render a CSS-only mark`)
+  assert.ok(pageStyleDeclarations(relationStyle, `.insight__mark--${modifier}`), `${modifier} insight should define its CSS mark shape`)
 }
 
 assert.match(

@@ -141,12 +141,18 @@ function reset() {
             class="type-chip nx-focusable" :class="{ on: myType === t.id }"
             :aria-label="`选择我的型号 ${t.id} ${t.name}`"
             :aria-pressed="myType === t.id"
+            role="button"
+            aria-role="button"
+            tabindex="0"
             hover-class="type-chip--pressed"
             @click="pickMy(t.id)"
+            @keydown.enter="pickMy(t.id)"
+            @keydown.space.prevent="pickMy(t.id)"
           >
             <text class="type-chip__number">{{ t.id }}</text>
             <text class="type-chip__name">{{ t.name }}</text>
             <text v-if="myType === t.id" class="type-chip__selected">已选</text>
+            <text v-else class="type-chip__selected type-chip__selected--placeholder" aria-hidden="true">已选</text>
           </button>
         </view>
       </view>
@@ -165,17 +171,32 @@ function reset() {
             class="type-chip nx-focusable" :class="{ on: taType === t.id }"
             :aria-label="`选择 TA 的型号 ${t.id} ${t.name}`"
             :aria-pressed="taType === t.id"
+            role="button"
+            aria-role="button"
+            tabindex="0"
             hover-class="type-chip--pressed"
             @click="pickTa(t.id)"
+            @keydown.enter="pickTa(t.id)"
+            @keydown.space.prevent="pickTa(t.id)"
           >
             <text class="type-chip__number">{{ t.id }}</text>
             <text class="type-chip__name">{{ t.name }}</text>
             <text v-if="taType === t.id" class="type-chip__selected">已选</text>
+            <text v-else class="type-chip__selected type-chip__selected--placeholder" aria-hidden="true">已选</text>
           </button>
         </view>
       </view>
 
-      <button class="btn-primary ios-button nx-focusable" hover-class="analyze--pressed" @click="analyze">生成合盘解读</button>
+      <button
+        class="btn-primary ios-button nx-focusable"
+        role="button"
+        aria-role="button"
+        tabindex="0"
+        hover-class="analyze--pressed"
+        @click="analyze"
+        @keydown.enter="analyze"
+        @keydown.space.prevent="analyze"
+      >生成合盘解读</button>
     </template>
 
     <!-- 结果 -->
@@ -202,7 +223,9 @@ function reset() {
       </view>
 
       <view class="insight nx-panel insight--bond">
-        <view class="insight__icon insight__icon--bond">✦</view>
+        <view class="insight__icon insight__icon--bond" aria-hidden="true">
+          <view class="insight__mark insight__mark--bond" />
+        </view>
         <view class="insight__content">
           <text class="insight__eyebrow">RELATION BOND</text>
           <text class="insight__title">相处底色</text>
@@ -211,7 +234,9 @@ function reset() {
       </view>
 
       <view class="insight nx-panel insight--friction">
-        <view class="insight__icon insight__icon--friction">⚡</view>
+        <view class="insight__icon insight__icon--friction" aria-hidden="true">
+          <view class="insight__mark insight__mark--friction" />
+        </view>
         <view class="insight__content">
           <text class="insight__eyebrow">FRICTION POINT</text>
           <text class="insight__title">潜在摩擦</text>
@@ -220,7 +245,9 @@ function reset() {
       </view>
 
       <view class="insight nx-panel insight--tip">
-        <view class="insight__icon insight__icon--tip">↗</view>
+        <view class="insight__icon insight__icon--tip" aria-hidden="true">
+          <view class="insight__mark insight__mark--tip" />
+        </view>
         <view class="insight__content">
           <text class="insight__eyebrow">GROW TOGETHER</text>
           <text class="insight__title">相处建议</text>
@@ -245,7 +272,16 @@ function reset() {
         </view>
       </view>
 
-      <button class="btn-ghost ios-button nx-focusable" hover-class="reset--pressed" @click="reset">换一对再看</button>
+      <button
+        class="btn-ghost ios-button nx-focusable"
+        role="button"
+        aria-role="button"
+        tabindex="0"
+        hover-class="reset--pressed"
+        @click="reset"
+        @keydown.enter="reset"
+        @keydown.space.prevent="reset"
+      >换一对再看</button>
       <text class="disclaimer">合盘基于九型中心与型号关系生成，供关系沟通参考，非专业咨询结论。</text>
     </template>
 
@@ -315,7 +351,8 @@ function reset() {
 .grid { display: flex; flex-wrap: wrap; gap: 16rpx; }
 .type-chip {
   width: calc((100% - 32rpx) / 3);
-  min-height: 88rpx;
+  height: 128rpx;
+  min-height: 128rpx;
   margin: 0;
   padding: 13rpx 12rpx;
   border-radius: 24rpx;
@@ -338,8 +375,9 @@ function reset() {
 }
 .type-chip--pressed { opacity: .82; transform: scale(.98); }
 .type-chip__number { font-size: 30rpx; font-weight: 900; }
-.type-chip__name { font-size: 21rpx; font-weight: 700; line-height: 1.25; margin-top: 7rpx; }
-.type-chip__selected { color: #86198f; font-size: 18rpx; font-weight: 900; margin-top: 7rpx; }
+.type-chip__name { font-size: 22rpx; font-weight: 700; line-height: 1.25; margin-top: 7rpx; }
+.type-chip__selected { color: #86198f; font-size: 20rpx; font-weight: 900; line-height: 1.2; margin-top: 7rpx; }
+.type-chip__selected--placeholder { visibility: hidden; }
 .analyze--pressed, .reset--pressed { opacity: .84; transform: scale(.985); }
 
 .pair {
@@ -385,37 +423,44 @@ function reset() {
   font-size: 42rpx;
   font-weight: 900;
 }
-.pair__role { color: rgba(255, 255, 255, .88); font-size: 19rpx; font-weight: 800; margin-top: 14rpx; }
-.pair__name { max-width: 190rpx; color: #fff; font-size: 23rpx; font-weight: 800; line-height: 1.35; margin-top: 6rpx; text-align: center; }
+.pair__role { color: rgba(255, 255, 255, .88); font-size: 20rpx; font-weight: 800; margin-top: 14rpx; }
+.pair__name { max-width: 190rpx; color: #fff; font-size: 24rpx; font-weight: 800; line-height: 1.35; margin-top: 6rpx; text-align: center; }
 .pair-connection { position: relative; z-index: 1; width: 154rpx; display: flex; flex-direction: column; align-items: center; }
-.pair-connection__eyebrow { color: rgba(255, 255, 255, .86); font-size: 16rpx; font-weight: 900; letter-spacing: 1rpx; }
+.pair-connection__eyebrow { color: rgba(255, 255, 255, .86); font-size: 20rpx; font-weight: 900; letter-spacing: 1rpx; }
 .pair-connection__score { color: #fff; font-size: 72rpx; font-weight: 900; line-height: 1; margin-top: 9rpx; }
-.pair-connection__label { color: #fff; font-size: 20rpx; font-weight: 800; margin-top: 8rpx; }
+.pair-connection__label { color: #fff; font-size: 22rpx; font-weight: 800; margin-top: 8rpx; }
 .pair-connection__line { width: 112rpx; height: 4rpx; border-radius: 999rpx; margin-top: 18rpx; background: linear-gradient(90deg, transparent, #f9a8d4, transparent); }
 
 .insight { display: flex; align-items: flex-start; gap: 22rpx; border-width: 2rpx; border-style: solid; box-shadow: 0 16rpx 42rpx rgba(51, 65, 85, .06); }
 .insight--bond { border-color: #c084fc; background: linear-gradient(135deg, #fff, #faf5ff); }
 .insight--friction { border-color: #fb7185; background: linear-gradient(135deg, #fff, #fff1f2); }
 .insight--tip { border-color: #2dd4bf; background: linear-gradient(135deg, #fff, #f0fdfa); }
-.insight__icon { flex: 0 0 72rpx; width: 72rpx; height: 72rpx; border-radius: 22rpx; display: flex; align-items: center; justify-content: center; font-size: 34rpx; font-weight: 900; }
+.insight__icon { flex: 0 0 72rpx; width: 72rpx; height: 72rpx; border-radius: 22rpx; display: flex; align-items: center; justify-content: center; }
 .insight__icon--bond { color: #7e22ce; background: #f3e8ff; }
 .insight__icon--friction { color: #be123c; background: #ffe4e6; }
 .insight__icon--tip { color: #0f766e; background: #ccfbf1; }
+.insight__mark { position: relative; display: block; box-sizing: border-box; color: inherit; }
+.insight__mark--bond { width: 28rpx; height: 28rpx; border: 5rpx solid currentColor; border-radius: 50%; }
+.insight__mark--bond::after { content: ''; position: absolute; width: 8rpx; height: 8rpx; border-radius: 50%; left: 5rpx; top: 5rpx; background: currentColor; }
+.insight__mark--friction { width: 7rpx; height: 34rpx; border-radius: 999rpx; background: currentColor; transform: rotate(28deg); }
+.insight__mark--friction::after { content: ''; position: absolute; width: 7rpx; height: 22rpx; border-radius: 999rpx; left: 9rpx; top: 5rpx; background: currentColor; transform: rotate(-56deg); }
+.insight__mark--tip { width: 27rpx; height: 27rpx; border-top: 5rpx solid currentColor; border-right: 5rpx solid currentColor; }
+.insight__mark--tip::after { content: ''; position: absolute; width: 5rpx; height: 35rpx; border-radius: 999rpx; right: 10rpx; top: -3rpx; background: currentColor; transform: rotate(45deg); transform-origin: top center; }
 .insight__content { flex: 1; min-width: 0; }
-.insight__eyebrow { color: #64748b; font-size: 18rpx; font-weight: 900; letter-spacing: 1rpx; }
+.insight__eyebrow { color: #64748b; font-size: 20rpx; font-weight: 900; letter-spacing: 1rpx; }
 .insight__title { display: block; color: #1e293b; font-size: 30rpx; font-weight: 900; margin-top: 5rpx; }
 .insight__text { display: block; color: #334155; font-size: 26rpx; line-height: 1.72; margin-top: 13rpx; }
 
 .drive { box-shadow: 0 16rpx 42rpx rgba(51, 65, 85, .06); }
 .drive__head { margin-bottom: 20rpx; }
-.drive__eyebrow { display: block; color: #7e22ce; font-size: 19rpx; font-weight: 900; letter-spacing: 2rpx; }
+.drive__eyebrow { display: block; color: #7e22ce; font-size: 20rpx; font-weight: 900; letter-spacing: 2rpx; }
 .drive__title { display: block; color: #1e293b; font-size: 30rpx; font-weight: 900; margin-top: 7rpx; }
 .drive-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16rpx; }
 .drive-card { min-height: 170rpx; padding: 22rpx; border-radius: 24rpx; box-sizing: border-box; }
 .drive-card--mine { background: #f5f3ff; }
 .drive-card--ta { background: #fdf2f8; }
 .drive-card__label { display: block; color: #6b21a8; font-size: 20rpx; font-weight: 900; }
-.drive-card__text { display: block; color: #334155; font-size: 23rpx; line-height: 1.6; margin-top: 10rpx; }
+.drive-card__text { display: block; color: #334155; font-size: 24rpx; line-height: 1.6; margin-top: 10rpx; }
 
 .redirecting { text-align: center; }
 .btn-primary, .btn-ghost { border-radius: 999rpx; font-size: 30rpx; }
