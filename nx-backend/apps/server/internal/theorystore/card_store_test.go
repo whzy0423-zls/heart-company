@@ -31,6 +31,29 @@ func TestCardStoreCreateUsesValidatedParameterizedSQLAndScans(t *testing.T) {
 	}
 }
 
+func TestCardStoreCreateDefaultsEmptyStatusButRejectsPublishedSnapshot(t *testing.T) {
+	card := testCard("")
+	card.Version = 1
+	draft := card
+	draft.Status = StatusDraft
+	script := &sqlScript{steps: []sqlStep{{kind: "query", contains: "INSERT INTO theory_cards", columns: cardColumns(), rows: [][]driver.Value{cardValues(draft)}}}}
+	created, err := testStore(t, script).CreateCard(context.Background(), card)
+	if err != nil || created.Status != StatusDraft {
+		t.Fatalf("empty status was not normalized to draft: %+v %v", created, err)
+	}
+
+	published := testCard(StatusPublished)
+	published.Version = 3
+	rejectScript := &sqlScript{}
+	_, err = testStore(t, rejectScript).CreateCard(context.Background(), published)
+	if !errors.Is(err, ErrCardNotEditable) {
+		t.Fatalf("expected published create rejection, got %v", err)
+	}
+	if len(rejectScript.callsSnapshot()) != 0 {
+		t.Fatal("published create reached SQL")
+	}
+}
+
 func TestCardStoreRejectsInvalidTransitionBeforeSQL(t *testing.T) {
 	script := &sqlScript{}
 	store := testStore(t, script)
@@ -83,6 +106,24 @@ func TestCardStoreUpdateUsesOptimisticVersionAndInvalidatesEmbeddings(t *testing
 	call := script.callsSnapshot()[3]
 	if call.args[len(call.args)-2] != string(card.Status) || call.args[len(call.args)-1] != int64(card.Version) {
 		t.Fatalf("missing optimistic status/version: %#v", call.args)
+	}
+	if !strings.Contains(script.callsSnapshot()[4].query, "pending") {
+		t.Fatal("card change did not stale in-flight pending embeddings")
+	}
+}
+
+func TestCardStoreUpdateRejectsEveryNonDraftSnapshotBeforeSQL(t *testing.T) {
+	for _, status := range []CardStatus{StatusInReview, StatusPublished, StatusSuperseded, StatusRetired} {
+		t.Run(string(status), func(t *testing.T) {
+			script := &sqlScript{}
+			_, err := testStore(t, script).UpdateCard(context.Background(), testCard(status))
+			if !errors.Is(err, ErrCardNotEditable) {
+				t.Fatalf("expected ErrCardNotEditable, got %v", err)
+			}
+			if len(script.callsSnapshot()) != 0 {
+				t.Fatal("immutable snapshot reached SQL")
+			}
+		})
 	}
 }
 
@@ -145,6 +186,27 @@ func TestCardStoreReportsConcurrentStatusChange(t *testing.T) {
 	_, err := store.TransitionCard(context.Background(), card.ID, StatusDraft, StatusInReview, 7)
 	if !errors.Is(err, ErrConcurrentUpdate) {
 		t.Fatalf("expected ErrConcurrentUpdate, got %v", err)
+	}
+}
+
+func TestCardStoreSupersedingPublishedSnapshotDoesNotChangeContentVersion(t *testing.T) {
+	card := testCard(StatusPublished)
+	superseded := withCardStatus(card, StatusSuperseded)
+	superseded.Version = card.Version
+	script := &sqlScript{steps: []sqlStep{
+		{kind: "begin"},
+		{kind: "query", contains: "SELECT library_id", columns: []string{"library_id"}, rows: [][]driver.Value{{card.LibraryID}}},
+		{kind: "query", contains: "lock_theory_libraries", columns: []string{"locked"}, rows: [][]driver.Value{{nil}}},
+		{kind: "query", contains: "FOR UPDATE", columns: cardColumns(), rows: [][]driver.Value{cardValues(card)}},
+		{kind: "query", contains: "CASE WHEN $2='published' THEN version+1 ELSE version END", columns: cardColumns(), rows: [][]driver.Value{cardValues(superseded)}},
+		{kind: "commit"},
+	}}
+	got, err := testStore(t, script).TransitionCard(context.Background(), card.ID, StatusPublished, StatusSuperseded, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != card.Version {
+		t.Fatalf("superseding changed snapshot version: %d -> %d", card.Version, got.Version)
 	}
 }
 

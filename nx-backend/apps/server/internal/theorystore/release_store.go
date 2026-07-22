@@ -12,8 +12,10 @@ var (
 	ErrDuplicateReleaseMapping = errors.New("duplicate theory release mapping")
 	ErrInvalidReleaseMapping   = errors.New("invalid theory release mapping")
 	ErrReleaseCountMismatch    = errors.New("theory release mapping counts do not match")
+	ErrLibraryNotFound         = errors.New("theory library not found")
 	ErrReleaseNotFound         = errors.New("theory release not found")
 	ErrReleaseNotReady         = errors.New("theory release is not ready")
+	ErrReleaseLibraryMismatch  = errors.New("theory release belongs to another library")
 	ErrEmbeddingNotReady       = errors.New("theory chunk embedding is not ready")
 	ErrStaleEmbedding          = errors.New("theory chunk embedding is stale")
 )
@@ -56,7 +58,7 @@ func (s *Store) BuildRelease(parent context.Context, release Release, mappings [
 	var lockedLibraryID int64
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM theory_libraries WHERE id=$1 FOR SHARE`, release.LibraryID).Scan(&lockedLibraryID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return Release{}, fmt.Errorf("build release: library: %w", ErrReleaseNotFound)
+			return Release{}, fmt.Errorf("build release: library: %w", ErrLibraryNotFound)
 		}
 		return Release{}, fmt.Errorf("build release: lock library row: %w", err)
 	}
@@ -95,6 +97,12 @@ func (s *Store) BuildRelease(parent context.Context, release Release, mappings [
 	cards := make(map[int64]struct{}, len(mappings))
 	written := 0
 	for _, mapping := range mappings {
+		if _, validated := cards[mapping.CardID]; !validated {
+			if err := validateReleaseCard(ctx, tx, release.LibraryID, mapping.CardID); err != nil {
+				return Release{}, fmt.Errorf("build release card %d: %w", mapping.CardID, err)
+			}
+			cards[mapping.CardID] = struct{}{}
+		}
 		state, err := loadReleaseMappingState(ctx, tx, release.LibraryID, mapping)
 		if err != nil {
 			return Release{}, fmt.Errorf("build release mapping card=%d chunk=%d: %w", mapping.CardID, mapping.ChunkID, err)
@@ -116,7 +124,6 @@ func (s *Store) BuildRelease(parent context.Context, release Release, mappings [
 			return Release{}, fmt.Errorf("build release: expected one mapping row, got %d: %w", affected, ErrReleaseCountMismatch)
 		}
 		written++
-		cards[mapping.CardID] = struct{}{}
 	}
 	if written != len(mappings) {
 		return Release{}, fmt.Errorf("build release: %w", ErrReleaseCountMismatch)
@@ -161,9 +168,23 @@ func (s *Store) ActivateRelease(parent context.Context, libraryID, releaseID int
 	var lockedLibraryID int64
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM theory_libraries WHERE id=$1 FOR UPDATE`, libraryID).Scan(&lockedLibraryID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("activate release: library: %w", ErrReleaseNotFound)
+			return fmt.Errorf("activate release: library: %w", ErrLibraryNotFound)
 		}
 		return fmt.Errorf("activate release: lock library: %w", err)
+	}
+	var actualLibraryID int64
+	var actualStatus ReleaseStatus
+	if err := tx.QueryRowContext(ctx, `SELECT library_id, status FROM theory_library_releases WHERE id=$1`, releaseID).Scan(&actualLibraryID, &actualStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("activate release: %w", ErrReleaseNotFound)
+		}
+		return fmt.Errorf("activate release: find release: %w", err)
+	}
+	if actualLibraryID != libraryID {
+		return fmt.Errorf("activate release: release library %d, requested %d: %w", actualLibraryID, libraryID, ErrReleaseLibraryMismatch)
+	}
+	if actualStatus != ReleaseStatusReady {
+		return fmt.Errorf("activate release: status %s: %w", actualStatus, ErrReleaseNotReady)
 	}
 	release, err := scanRelease(tx.QueryRowContext(ctx, `
 		SELECT `+releaseReturningColumns+`
@@ -171,7 +192,7 @@ func (s *Store) ActivateRelease(parent context.Context, libraryID, releaseID int
 		WHERE id=$1 AND library_id=$2 AND status='ready'
 		FOR UPDATE`, releaseID, libraryID))
 	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("activate release: %w", ErrReleaseNotReady)
+		return fmt.Errorf("activate release: status changed concurrently: %w", ErrReleaseNotReady)
 	}
 	if err != nil {
 		return fmt.Errorf("activate release: lock ready release: %w", err)
@@ -194,7 +215,14 @@ func (s *Store) ActivateRelease(parent context.Context, libraryID, releaseID int
 			return fmt.Errorf("activate release: %w", ErrVectorUnavailable)
 		}
 	}
+	validatedCards := make(map[int64]struct{}, release.CardCount)
 	for _, mapping := range mappings {
+		if _, validated := validatedCards[mapping.CardID]; !validated {
+			if err := validateReleaseCard(ctx, tx, libraryID, mapping.CardID); err != nil {
+				return fmt.Errorf("activate release card %d: %w", mapping.CardID, err)
+			}
+			validatedCards[mapping.CardID] = struct{}{}
+		}
 		state, err := loadReleaseMappingState(ctx, tx, libraryID, mapping)
 		if err != nil {
 			return fmt.Errorf("activate release mapping card=%d chunk=%d: %w", mapping.CardID, mapping.ChunkID, err)
@@ -241,6 +269,27 @@ func (s *Store) ActivateRelease(parent context.Context, libraryID, releaseID int
 }
 
 type releaseMappingState struct{ contentHash string }
+
+func validateReleaseCard(ctx context.Context, tx *sql.Tx, libraryID, cardID int64) error {
+	card, err := scanCard(tx.QueryRowContext(ctx, `SELECT `+cardReturningColumns+` FROM theory_cards WHERE id=$1 AND library_id=$2 FOR UPDATE`, cardID, libraryID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrInvalidReleaseMapping
+	}
+	if err != nil {
+		return err
+	}
+	if card.Status != StatusPublished && card.Status != StatusSuperseded {
+		return ErrInvalidReleaseMapping
+	}
+	sources, err := loadCardSources(ctx, tx, cardID)
+	if err != nil {
+		return err
+	}
+	if err := ValidateCardForPublish(card, sources); err != nil {
+		return err
+	}
+	return nil
+}
 
 func loadReleaseMappingState(ctx context.Context, tx *sql.Tx, libraryID int64, mapping ReleaseMapping) (releaseMappingState, error) {
 	var actualCardID, actualLibraryID int64

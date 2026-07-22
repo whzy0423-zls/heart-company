@@ -10,6 +10,7 @@ import (
 
 var (
 	ErrCardNotFound      = errors.New("theory card not found")
+	ErrCardNotEditable   = errors.New("theory card is not an editable draft")
 	ErrInvalidTransition = errors.New("invalid theory card transition")
 	ErrConcurrentUpdate  = errors.New("theory card changed concurrently")
 )
@@ -29,6 +30,12 @@ func (s *Store) CreateCard(parent context.Context, card Card) (Card, error) {
 	ctx, cancel := storeContext(parent)
 	defer cancel()
 	normalizeCard(&card)
+	if card.Status == "" {
+		card.Status = StatusDraft
+	}
+	if card.Status != StatusDraft {
+		return Card{}, fmt.Errorf("create card: status %s: %w", card.Status, ErrCardNotEditable)
+	}
 	if err := ValidateCard(card); err != nil {
 		return Card{}, fmt.Errorf("create card: %w", err)
 	}
@@ -67,6 +74,9 @@ func (s *Store) UpdateCard(parent context.Context, card Card) (Card, error) {
 	normalizeCard(&card)
 	if card.ID <= 0 {
 		return Card{}, fmt.Errorf("update card: id must be positive")
+	}
+	if card.Status != StatusDraft {
+		return Card{}, fmt.Errorf("update card: status %s: %w", card.Status, ErrCardNotEditable)
 	}
 	if err := ValidateCard(card); err != nil {
 		return Card{}, fmt.Errorf("update card: %w", err)
@@ -115,7 +125,7 @@ func (s *Store) UpdateCard(parent context.Context, card Card) (Card, error) {
 		UPDATE theory_chunk_embeddings embedding
 		SET status = 'stale', error_message = 'card content changed'
 		FROM theory_chunks chunk
-		WHERE chunk.card_id = $1 AND embedding.chunk_id = chunk.id AND embedding.status = 'ready'`, card.ID); err != nil {
+		WHERE chunk.card_id = $1 AND embedding.chunk_id = chunk.id AND embedding.status IN ('pending','ready')`, card.ID); err != nil {
 		return Card{}, fmt.Errorf("update card: invalidate embeddings: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -172,7 +182,7 @@ func (s *Store) TransitionCard(parent context.Context, cardID int64, from, to Ca
 			return Card{}, fmt.Errorf("transition card: publish validation: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE theory_cards SET status = 'superseded', updated_by=$4, version=version+1, update_time=now()
+			UPDATE theory_cards SET status = 'superseded', updated_by=$4, update_time=now()
 			WHERE library_id=$1 AND canonical_key=$2 AND status='published' AND id<>$3`, card.LibraryID, card.CanonicalKey, card.ID, reviewerID); err != nil {
 			return Card{}, fmt.Errorf("transition card: supersede replacement: %w", err)
 		}
@@ -184,7 +194,7 @@ func (s *Store) TransitionCard(parent context.Context, cardID int64, from, to Ca
 			reviewed_at=CASE WHEN $2='published' THEN now() ELSE reviewed_at END,
 			published_at=CASE WHEN $2='published' THEN now() ELSE published_at END,
 			updated_by=CASE WHEN $3 > 0 THEN $3 ELSE updated_by END,
-			version=version+1, update_time=now()
+			version=CASE WHEN $2='published' THEN version+1 ELSE version END, update_time=now()
 		WHERE id=$1 AND status=$4
 		RETURNING `+cardReturningColumns, card.ID, to, reviewerID, from))
 	if errors.Is(err, sql.ErrNoRows) {
