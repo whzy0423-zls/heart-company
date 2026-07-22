@@ -7,6 +7,46 @@ import (
 	"testing"
 )
 
+func TestNginxLocationBlockIgnoresCommentedBraces(t *testing.T) {
+	config := `location = /api/app/xinzhili/turns/stream { # } must not close the block
+  proxy_request_buffering off;
+}`
+
+	block := appChatNginxLocationBlock(t, config)
+	if !strings.Contains(block, "proxy_request_buffering off;") {
+		t.Fatalf("commented closing brace truncated location block: %q", block)
+	}
+}
+
+func TestNginxLocationBlockDoesNotExposeCommentedDirectives(t *testing.T) {
+	config := `location = /api/app/xinzhili/turns/stream {
+  # proxy_request_buffering off;
+  proxy_buffering off;
+  proxy_set_header X-Debug "value } # retained";
+}`
+
+	block := appChatNginxLocationBlock(t, config)
+	if appChatNginxLocationHasDirective(block, "proxy_request_buffering off;") {
+		t.Fatalf("commented directive passed the contract check: %q", block)
+	}
+	if !appChatNginxLocationHasDirective(block, "proxy_buffering off;") {
+		t.Fatalf("active directive was not recognized: %q", block)
+	}
+	if !strings.Contains(block, `proxy_set_header X-Debug "value } # retained";`) {
+		t.Fatalf("brace or hash inside quoted value affected parsing: %q", block)
+	}
+}
+
+func TestNginxLocationHasDirectiveRequiresWholeStatement(t *testing.T) {
+	block := appChatNginxLocationBlock(t, `location = /test {
+  proxy_set_header X-Debug "proxy_request_buffering off";
+}`)
+
+	if appChatNginxLocationHasDirective(block, "proxy_request_buffering off;") {
+		t.Fatalf("directive text inside another directive value was accepted: %q", block)
+	}
+}
+
 func TestXinzhiliVoiceProxyConfig(t *testing.T) {
 	repoRoot := appChatStreamTestRepoRoot(t)
 	configPaths := []string{
@@ -37,7 +77,7 @@ func TestXinzhiliVoiceProxyConfig(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			config := string(body)
+			config := appChatNginxStripComments(string(body))
 			exactLocation := "location = /api/app/xinzhili/turns/stream"
 			exactStart := strings.Index(config, exactLocation)
 			if exactStart < 0 {
@@ -56,9 +96,8 @@ func TestXinzhiliVoiceProxyConfig(t *testing.T) {
 			if firstLine != exactLocation {
 				t.Fatalf("%s matched wrong location header %q", relativePath, firstLine)
 			}
-			normalized := strings.Join(strings.Fields(block), " ")
 			for _, directive := range requiredDirectives {
-				if !strings.Contains(normalized, strings.Join(strings.Fields(directive), " ")) {
+				if !appChatNginxLocationHasDirective(block, directive) {
 					t.Errorf("%s xinzhili voice location missing %q; block=%q", relativePath, directive, block)
 				}
 			}

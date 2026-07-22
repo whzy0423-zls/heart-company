@@ -122,11 +122,37 @@ www.example.com    → 127.0.0.1:8000
 芯之力的 `POST /api/app/xinzhili/turns/stream` 同时包含音频上传和 SSE 响应。容器内 nginx 已为该路径设置
 `client_max_body_size 11m`、关闭请求/响应缓冲并使用 180 秒超时；宿主机 nginx、宝塔和 CDN 等外层代理也必须为同一精确路径配置：
 
-- 精确路由必须排在通用 `/api/` 规则前，上传大小限制不得小于 **11 MiB**。
-- nginx/宝塔关闭请求缓冲（`proxy_request_buffering off`），并关闭响应缓冲、缓存和压缩，避免上传完成前落临时文件或 SSE 增量被聚合。
+- 为便于阅读和配置审计，约定将精确路由写在通用 `/api/` 规则前；nginx 的 exact location 匹配语义本身不依赖书写顺序。上传大小限制不得小于 **11 MiB**。
+- nginx/宝塔关闭请求缓冲（`proxy_request_buffering off`），并关闭响应缓冲、缓存和压缩，避免该代理层先整包缓冲请求或聚合 SSE 增量。
 - 保留 HTTP/1.1、清空上游 `Connection` 请求头，并将连接、读取和发送超时设置为至少 180 秒。
-- CDN/WAF 必须确认支持流式请求体和 SSE；该路径绕过缓存后，再用实际音频验证首个 SSE 事件能及时到达。
-- 发布后检查最终生效配置，而不只检查面板表单；nginx 可用 `nginx -T` 确认精确路由没有被通用 `/api/` 覆盖。
+- CDN/WAF 必须确认支持流式请求体和 SSE；该路径绕过缓存后，再用实际音频验证上传与应用层解析完成后的首个 SSE 事件能及时到达。
+- 发布后检查最终生效配置，而不只检查面板表单；nginx 可用 `nginx -T` 确认精确路由及其指令实际存在，并位于约定的审计位置。
+
+宿主机 nginx 或宝塔可按下面模板配置；将 `<port>` 替换成该域名对应的容器入口端口（后台 `8080`，官网 `8000`）：
+
+```nginx
+location = /api/app/xinzhili/turns/stream {
+    client_max_body_size 11m;
+    proxy_pass http://127.0.0.1:<port>;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_request_buffering off;
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    proxy_connect_timeout 30s;
+    proxy_read_timeout 180s;
+    proxy_send_timeout 180s;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+这里的 `proxy_pass` 必须只有 `http://127.0.0.1:<port>`，不能附加 URI，也不能在端口后写尾随 `/`；否则 nginx 会把 exact location 的原始请求路径替换成 `/`，导致第二层 nginx 或 Go 无法匹配 `/api/app/xinzhili/turns/stream`。
+
+关闭代理请求缓冲只消除当前代理层的整包缓冲，不代表全链路不使用临时文件，也不代表客户端上传过程中就会收到 SSE。Go handler 仍通过 `ParseMultipartForm` 解析请求，超过内存阈值的 multipart 内容可能写入系统临时目录，并在 handler 结束时调用 `MultipartForm.RemoveAll` 清理；首个 SSE 事件应在上传和应用层解析完成后验证。
 
 如果某一层代理确实无法关闭请求缓冲，发布说明必须明确披露：音频会先完整写入该层临时目录，首个 SSE 事件会相应延迟；同时记录临时目录位置、磁盘容量告警和清理责任。nginx 正常完成或中止请求时会清理请求体临时文件；清理疑似遗留文件前必须先摘流/停止对应代理并确认没有活跃请求，禁止在运行中直接删除正在使用的临时文件。
 
