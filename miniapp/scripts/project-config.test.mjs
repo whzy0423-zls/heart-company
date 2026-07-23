@@ -5,6 +5,25 @@ import { resolve } from 'node:path'
 const projectConfig = JSON.parse(readFileSync(resolve('project.config.json'), 'utf8'))
 const manifest = JSON.parse(readFileSync(resolve('src/manifest.json'), 'utf8'))
 const packageJson = JSON.parse(readFileSync(resolve('package.json'), 'utf8'))
+const productionWeChatAppId = 'wx7d12bddbec8e17f7'
+
+assert.equal(
+  projectConfig.appid,
+  productionWeChatAppId,
+  'project.config.json must use the production WeChat AppID',
+)
+
+assert.equal(
+  manifest?.['mp-weixin']?.appid,
+  productionWeChatAppId,
+  'manifest mp-weixin.appid must use the production WeChat AppID',
+)
+
+assert.equal(
+  projectConfig.appid,
+  manifest?.['mp-weixin']?.appid,
+  'project.config.json and manifest must use the same WeChat AppID',
+)
 
 assert.notEqual(
   projectConfig?.setting?.urlCheck,

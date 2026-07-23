@@ -1,8 +1,17 @@
 const DEFAULT_API_BASE = 'https://xn--9iq9az5uo8fz16d.com/api'
-const PLACEHOLDER_API_BASE = 'https://api.example.com/api'
 
 function cleanBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '')
+}
+
+function isRealProductionApiBase(value) {
+  if (!value.startsWith('https://')) return false
+
+  const hostname = value.slice('https://'.length).split(/[/:?#]/, 1)[0].toLowerCase()
+  if (!hostname) return false
+
+  const labels = hostname.split('.')
+  return !labels.some((label) => ['example', 'yourdomain', 'local'].includes(label))
 }
 
 // 后端 API 基址。
@@ -14,7 +23,7 @@ export function resolveApiBase(options = {}) {
   const env = options.env || import.meta.env || { DEV: true }
   const configured = cleanBaseUrl(env.VITE_API_BASE)
   if (configured) {
-    if (!env.DEV && (configured === PLACEHOLDER_API_BASE || !configured.startsWith('https://'))) {
+    if (!env.DEV && !isRealProductionApiBase(configured)) {
       throw new Error('Production VITE_API_BASE must be a real HTTPS API URL')
     }
     return configured
