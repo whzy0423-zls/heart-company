@@ -43,6 +43,12 @@
       }
     },
     {
+      "path": "pages/booking-records/booking-records",
+      "style": {
+        "navigationBarTitleText": "预约记录"
+      }
+    },
+    {
       "path": "pages/profile/profile",
       "style": {
         "navigationBarTitleText": "我的"
