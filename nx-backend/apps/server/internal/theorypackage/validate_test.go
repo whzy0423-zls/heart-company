@@ -213,6 +213,26 @@ func TestValidateRejectsResignedSemanticViolations(t *testing.T) {
 		{"declared card count differs from files", func(t *testing.T, root string) {
 			mutateJSON(t, root, "manifest.json", func(x map[string]any) { x["counts"].(map[string]any)["cards"] = float64(41) })
 		}},
+		{"declared domain count differs from cards", func(t *testing.T, root string) {
+			mutateJSON(t, root, "manifest.json", func(x map[string]any) { x["counts"].(map[string]any)["domains"] = float64(11) })
+		}},
+		{"digest contract changed", func(t *testing.T, root string) {
+			mutateJSON(t, root, "manifest.json", func(x map[string]any) {
+				x["digestContract"].(map[string]any)["canonicalJson"] = "attacker-defined"
+			})
+		}},
+		{"budget follows forged catalog summary", func(t *testing.T, root string) {
+			mutateJSON(t, root, "manifest.json", func(x map[string]any) {
+				budget := x["budget"].(map[string]any)
+				budget["pageEquivalent"] = float64(1436)
+				budget["ocrPages"] = float64(258)
+			})
+			mutateJSON(t, root, "catalog/source-files.json", func(x map[string]any) {
+				summary := x["summary"].(map[string]any)
+				summary["budgetPageEquivalent"] = float64(1436)
+				summary["ocrPageCount"] = float64(258)
+			})
+		}},
 		{"page budget exceeds hard limit", func(t *testing.T, root string) {
 			mutateJSON(t, root, "manifest.json", func(x map[string]any) {
 				budget := x["budget"].(map[string]any)
@@ -240,6 +260,16 @@ func TestValidateRejectsResignedSemanticViolations(t *testing.T) {
 		{"evidence locator", func(t *testing.T, root string) {
 			mutateJSON(t, root, "cards/personality.attention_focus.json", func(x map[string]any) {
 				x["primaryEvidence"].(map[string]any)["locator"].(map[string]any)["paragraph"] = float64(18)
+			})
+		}},
+		{"primary evidence unknown field", func(t *testing.T, root string) {
+			mutateJSON(t, root, "cards/personality.attention_focus.json", func(x map[string]any) {
+				x["primaryEvidence"].(map[string]any)["quotationText"] = "不得进入数据包"
+			})
+		}},
+		{"primary evidence quote presence mismatch", func(t *testing.T, root string) {
+			mutateJSON(t, root, "cards/personality.attention_focus.json", func(x map[string]any) {
+				x["primaryEvidence"].(map[string]any)["quotationPresent"] = true
 			})
 		}},
 		{"evidence source sha", func(t *testing.T, root string) {
@@ -287,6 +317,60 @@ func TestValidateRejectsResignedSemanticViolations(t *testing.T) {
 				writeJSONObject(t, filename, item)
 			}
 		}},
+		{"canonical work quote aggregate limit", func(t *testing.T, root string) {
+			paths, err := filepath.Glob(filepath.Join(root, "cards", "*.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := readJSONObject(t, filepath.Join(root, "cards/personality.attention_focus.json"))["primaryEvidence"].(map[string]any)
+			second := readJSONObject(t, filepath.Join(root, "cards/change.timing_and_position.json"))["primaryEvidence"].(map[string]any)
+			for index, filename := range paths[:12] {
+				reference := first
+				if index >= 6 {
+					reference = second
+				}
+				item := readJSONObject(t, filename)
+				evidence := map[string]any{}
+				for key, value := range reference {
+					evidence[key] = value
+				}
+				evidence["quotationPresent"], evidence["quoteVerified"], evidence["quotationCharacters"] = true, true, float64(80)
+				item["primaryEvidence"] = evidence
+				writeJSONObject(t, filename, item)
+			}
+			mutateJSON(t, root, "manifest.json", func(x map[string]any) {
+				stats := x["copyright"].(map[string]any)["quoteStatistics"].(map[string]any)
+				stats["quoteCount"], stats["totalCharacters"], stats["ocrVerifiedQuoteCount"] = float64(12), float64(960), float64(12)
+			})
+			mutateJSON(t, root, "catalog/source-files.json", func(x map[string]any) {
+				files := x["files"].([]any)
+				var workID any
+				var secondFileID any
+				for _, raw := range files {
+					entry := raw.(map[string]any)
+					if entry["relativePath"] == "九型理论基础/九型人格·珍藏版.epub" {
+						workID = entry["canonicalWorkId"]
+					}
+					if entry["relativePath"] == "(NEW)周易.pdf" {
+						secondFileID = entry["fileId"]
+					}
+				}
+				for _, raw := range files {
+					entry := raw.(map[string]any)
+					if entry["relativePath"] == "(NEW)周易.pdf" {
+						entry["canonicalWorkId"] = workID
+					}
+				}
+				mutateJSON(t, root, "catalog/works.json", func(x map[string]any) {
+					for _, raw := range x["works"].([]any) {
+						work := raw.(map[string]any)
+						if work["workId"] == workID {
+							work["sourceFileIds"] = append(work["sourceFileIds"].([]any), secondFileID)
+						}
+					}
+				})
+			})
+		}},
 		{"metadata only quote", func(t *testing.T, root string) {
 			mutateJSON(t, root, "manifest.json", func(x map[string]any) { x["sources"].([]any)[12].(map[string]any)["copyrightMode"] = "metadata_only" })
 			mutateJSON(t, root, "cards/personality.attention_focus.json", func(x map[string]any) {
@@ -322,6 +406,58 @@ func TestValidateRejectsResignedSemanticViolations(t *testing.T) {
 			resignPackage(t, root)
 			expectInvalid(t, root)
 		})
+	}
+}
+
+func TestValidateRejectsResignedSafetyEvaluationOverlays(t *testing.T) {
+	t.Run("runnable result missing bindings", func(t *testing.T) {
+		root := copyPackage(t)
+		mutateJSON(t, root, "evaluation/safety-cases.json", func(x map[string]any) {
+			x["result"].(map[string]any)["status"] = "passed"
+		})
+		mutateSafetyReport(t, root, "passed", "里程碑 B/C 的检索与会话安全链路尚未接入。")
+		resignPackage(t, root)
+		expectInvalid(t, root)
+	})
+	t.Run("not runnable result with passed report", func(t *testing.T) {
+		root := copyPackage(t)
+		mutateSafetyReport(t, root, "passed", "评测通过。")
+		resignPackage(t, root)
+		expectInvalid(t, root)
+	})
+}
+
+func TestValidateAcceptsFullyBoundPassedSafetyEvaluation(t *testing.T) {
+	root := copyPackage(t)
+	manifest := readJSONObject(t, filepath.Join(root, "manifest.json"))
+	cases := readJSONObject(t, filepath.Join(root, "evaluation/safety-cases.json"))
+	reason := "固定评测集已在指定运行时通过"
+	cases["result"] = map[string]any{
+		"status":              "passed",
+		"reason":              reason,
+		"boundContentDigest":  manifest["contentDigest"],
+		"safetyCaseSetDigest": cases["caseSetDigest"],
+		"runtime":             "test-runtime",
+		"runtimeVersion":      "1.0.0",
+	}
+	writeJSONObject(t, filepath.Join(root, "evaluation/safety-cases.json"), cases)
+	report := "# 安全评测报告\n\n- 结果：`passed`\n- 原因：" + reason +
+		"\n- 绑定内容：`" + manifest["contentDigest"].(string) + "`\n- 评测集：`" + cases["caseSetDigest"].(string) +
+		"`\n- 运行时：`test-runtime/1.0.0`\n"
+	if err := os.WriteFile(filepath.Join(root, "reports/safety-evaluation.md"), []byte(report), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resignPackage(t, root)
+	if _, err := Validate(root); err != nil {
+		t.Fatalf("Validate() rejected fully bound safety result: %v", err)
+	}
+}
+
+func mutateSafetyReport(t *testing.T, root, status, reason string) {
+	t.Helper()
+	report := "# 安全评测报告\n\n- 结果：`" + status + "`\n- 原因：" + reason + "\n"
+	if err := os.WriteFile(filepath.Join(root, "reports/safety-evaluation.md"), []byte(report), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

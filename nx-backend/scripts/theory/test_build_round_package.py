@@ -259,6 +259,11 @@ class RoundPackageTest(unittest.TestCase):
         self.module.write_json(cases_path, cases)
         self.assertNotEqual(before, self.module.compute_content_digest(self.output))
         self.module.write_json(cases_path, original_cases)
+        report_path = self.output / "reports/safety-evaluation.md"
+        original_report = report_path.read_text("utf-8")
+        report_path.write_text(original_report.replace("not_runnable_for_activation", "passed"), "utf-8")
+        self.assertNotEqual(self.manifest["packageDigest"], self.module.compute_package_digest(self.output))
+        report_path.write_text(original_report, "utf-8")
 
     def test_exact_set_has_no_fulltext_or_absolute_paths(self):
         actual = {path.relative_to(self.output).as_posix() for path in self.output.rglob("*") if path.is_file()}

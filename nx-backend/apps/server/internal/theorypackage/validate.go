@@ -48,6 +48,13 @@ func Validate(root string) (Report, error) {
 	if str(manifest, "packageId") == "" || str(manifest, "contentDigest") == "" || str(manifest, "packageDigest") == "" {
 		return Report{}, invalid("manifest digest or package id missing")
 	}
+	if !sameJSON(manifest["digestContract"], map[string]any{
+		"canonicalJson":         "UTF-8 LF; object keys sorted; arrays preserve semantic order; no extra whitespace",
+		"contentDigestExcludes": []any{"contentDigest", "packageDigest", "reviews", "checksums.sha256"},
+		"packageDigestExcludes": []any{"packageDigest", "checksums.sha256"},
+	}) {
+		return Report{}, invalid("digest contract differs from fixed v1 contract")
+	}
 	if err := validateFileSet(files, manifest); err != nil {
 		return Report{}, err
 	}
@@ -204,9 +211,55 @@ func validateBudget(files map[string][]byte, m map[string]any) error {
 	if err != nil {
 		return err
 	}
+	selectedPaths := set()
+	selectedPages, selectedOCR := 0, 0
+	for _, raw := range arr(catalog, "files") {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			return invalid("source catalog entry invalid")
+		}
+		ranges := arr(entry, "selectedRanges")
+		if len(ranges) == 0 {
+			continue
+		}
+		relativePath := str(entry, "relativePath")
+		if relativePath == "" {
+			return invalid("selected source catalog path missing")
+		}
+		if _, duplicate := selectedPaths[relativePath]; duplicate {
+			return invalid("selected source catalog path duplicated")
+		}
+		for _, selectedRange := range ranges {
+			if value, ok := selectedRange.(string); !ok || value == "" {
+				return invalid("selected source range invalid")
+			}
+		}
+		pageCount, ok := integer(entry, "budgetPageEquivalent")
+		if !ok || pageCount < 0 {
+			return invalid("selected source page budget invalid")
+		}
+		ocrCount, ok := integer(entry, "ocrPageCount")
+		if !ok || ocrCount < 0 || ocrCount > pageCount {
+			return invalid("selected source OCR budget invalid")
+		}
+		selectedPaths[relativePath] = struct{}{}
+		selectedPages += pageCount
+		selectedOCR += ocrCount
+	}
+	manifestPaths := set()
+	for _, raw := range arr(m, "sources") {
+		source, ok := raw.(map[string]any)
+		if !ok {
+			return invalid("manifest source invalid")
+		}
+		manifestPaths[str(source, "relativePath")] = struct{}{}
+	}
+	if !sameStringSet(selectedPaths, manifestPaths) || len(selectedPaths) != actualSources || selectedPages != num(budget, "pageEquivalent") || selectedOCR != num(budget, "ocrPages") {
+		return invalid("budget or selected sources do not match catalog file ranges")
+	}
 	summary := mapv(catalog, "summary")
-	if num(summary, "budgetPageEquivalent") != num(budget, "pageEquivalent") || num(summary, "ocrPageCount") != num(budget, "ocrPages") || num(summary, "selectedCount") != actualSources {
-		return invalid("budget does not match source catalog")
+	if num(summary, "budgetPageEquivalent") != selectedPages || num(summary, "ocrPageCount") != selectedOCR || num(summary, "selectedCount") != len(selectedPaths) {
+		return invalid("source catalog summary does not match selected files")
 	}
 	return nil
 }
@@ -258,7 +311,32 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 		}
 		catalogSources[relativePath] = entry
 	}
+	worksCatalog, err := object(files["catalog/works.json"], "catalog/works.json")
+	if err != nil {
+		return err
+	}
+	workFileIDs := map[string]map[string]struct{}{}
+	for _, raw := range arr(worksCatalog, "works") {
+		work, ok := raw.(map[string]any)
+		if !ok {
+			return invalid("work catalog entry invalid")
+		}
+		workID := str(work, "workId")
+		if workID == "" || workFileIDs[workID] != nil {
+			return invalid("work catalog id invalid or duplicated")
+		}
+		fileIDs := set()
+		for _, rawFileID := range arr(work, "sourceFileIds") {
+			fileID, ok := rawFileID.(string)
+			if !ok || fileID == "" {
+				return invalid("work catalog source file id invalid")
+			}
+			fileIDs[fileID] = struct{}{}
+		}
+		workFileIDs[workID] = fileIDs
+	}
 	sources := map[string]map[string]any{}
+	sourceWorks := map[string]string{}
 	for _, v := range arr(m, "sources") {
 		s, ok := v.(map[string]any)
 		if !ok {
@@ -275,7 +353,15 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 			str(s, "humanReviewStatus") != "pending" || (str(s, "copyrightMode") != "metadata_only" && str(s, "copyrightMode") != "metadata_and_original_synthesis_only") {
 			return invalid("source %q does not match source catalog or draft policy", id)
 		}
+		workID := str(catalogSource, "canonicalWorkId")
+		if workID == "" || workFileIDs[workID] == nil {
+			return invalid("source %q has no catalog work", id)
+		}
+		if _, ok := workFileIDs[workID][str(catalogSource, "fileId")]; !ok {
+			return invalid("source %q is not a member of its canonical work", id)
+		}
 		sources[id] = s
+		sourceWorks[id] = workID
 	}
 	units := map[string]map[string]any{}
 	if str(index, "schemaVersion") != "xinzhili.evidence-index.v1" {
@@ -305,6 +391,7 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 	workQuotes := map[string]int{}
 	cardQuotes := map[string]int{}
 	keys := set()
+	domains := set()
 	previews := map[string]bool{}
 	quoteCount, quoteCharacters, ocrVerifiedQuoteCount := 0, 0, 0
 	for p, b := range files {
@@ -321,8 +408,15 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 			if err := exactKeys(item, allowed, p); err != nil {
 				return err
 			}
-			if err := validateItem(item, isPractice, sources, units, workQuotes, cardQuotes); err != nil {
+			if err := validateItem(item, isPractice, sources, sourceWorks, units, workQuotes, cardQuotes); err != nil {
 				return err
+			}
+			if !isPractice {
+				domain := str(item, "domain")
+				if domain == "" {
+					return invalid("card %q has no domain", str(item, "canonicalKey"))
+				}
+				domains[domain] = struct{}{}
 			}
 			evidence := mapv(item, "primaryEvidence")
 			quoted := num(evidence, "quotationCharacters")
@@ -370,14 +464,20 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 	if num(statistics, "quoteCount") != quoteCount || num(statistics, "totalCharacters") != quoteCharacters || num(statistics, "ocrVerifiedQuoteCount") != ocrVerifiedQuoteCount {
 		return invalid("copyright quote statistics do not match package content")
 	}
+	if len(domains) != num(mapv(m, "counts"), "domains") {
+		return invalid("declared domain count does not match cards")
+	}
 	return nil
 }
-func validateItem(x map[string]any, practice bool, sources, units map[string]map[string]any, works, cards map[string]int) error {
+func validateItem(x map[string]any, practice bool, sources map[string]map[string]any, sourceWorks map[string]string, units map[string]map[string]any, works, cards map[string]int) error {
 	key := str(x, "canonicalKey")
 	if key == "" || str(x, "status") != "draft" || str(x, "title") == "" {
 		return invalid("invalid item")
 	}
 	e := mapv(x, "primaryEvidence")
+	if err := exactKeys(e, set("extractionRoute", "groundingTermSha256", "locator", "quotationCharacters", "quotationPresent", "quoteVerified", "sourceId", "textSha256"), "primaryEvidence"); err != nil {
+		return err
+	}
 	sid := str(e, "sourceId")
 	shaText := str(e, "textSha256")
 	unit := units[sid+":"+shaText]
@@ -390,15 +490,14 @@ func validateItem(x map[string]any, practice bool, sources, units map[string]map
 	if !sameJSON(e["locator"], unit["locator"]) {
 		return invalid("evidence locator is not bound to indexed text for %q", key)
 	}
-	q := num(e, "quotationCharacters")
-	if q < 0 || q > 80 {
+	q, ok := integer(e, "quotationCharacters")
+	if !ok || q < 0 || q > 80 || !sha256hex(str(e, "groundingTermSha256")) {
 		return invalid("single quote limit")
 	}
-	if e["quotationPresent"] == false && q != 0 {
+	quotationPresent, presentOK := e["quotationPresent"].(bool)
+	quoteVerified, verifiedOK := e["quoteVerified"].(bool)
+	if !presentOK || !verifiedOK || quotationPresent != (q > 0) || quoteVerified != (q > 0) {
 		return invalid("quote metadata mismatch")
-	}
-	if q > 0 && e["quoteVerified"] != true {
-		return invalid("unverified quote")
 	}
 	if q > 0 && unit["ocrVerified"] != true {
 		return invalid("unverified OCR quote")
@@ -406,9 +505,9 @@ func validateItem(x map[string]any, practice bool, sources, units map[string]map
 	if str(sources[sid], "copyrightMode") == "metadata_only" && q > 0 {
 		return invalid("metadata-only source has quote")
 	}
-	works[sid] += q
+	works[sourceWorks[sid]] += q
 	cards[key] += q
-	if works[sid] > 800 || cards[key] > 160 {
+	if works[sourceWorks[sid]] > 800 || cards[key] > 160 {
 		return invalid("quote aggregate limit")
 	}
 	if practice {
@@ -462,11 +561,37 @@ func validateReviews(files map[string][]byte, m map[string]any) error {
 	if err != nil {
 		return err
 	}
+	if shaCanonical(cases["cases"]) != str(cases, "caseSetDigest") {
+		return invalid("safety case set digest mismatch")
+	}
 	result := mapv(cases, "result")
-	if result["boundContentDigest"] != nil || result["runtime"] != nil || result["runtimeVersion"] != nil {
-		if str(result, "boundContentDigest") != str(m, "contentDigest") {
-			return invalid("safety result bound to wrong content digest")
+	status := str(result, "status")
+	reason := str(result, "reason")
+	if reason == "" {
+		return invalid("safety result reason missing")
+	}
+	var expectedReport string
+	if status == "not_runnable_for_activation" {
+		if err := exactKeys(result, set("boundContentDigest", "reason", "runtime", "runtimeVersion", "status"), "safety result"); err != nil {
+			return err
 		}
+		if result["boundContentDigest"] != nil || result["runtime"] != nil || result["runtimeVersion"] != nil {
+			return invalid("not-runnable safety result must not claim runtime bindings")
+		}
+		expectedReport = "# 安全评测报告\n\n- 结果：`not_runnable_for_activation`\n- 原因：" + reason + "。\n- 本报告不是通过证明，内容变更、评测集变更或 runtime/version 变更后必须重新评测。\n"
+	} else if status == "passed" || status == "runnable_for_activation" {
+		if err := exactKeys(result, set("boundContentDigest", "reason", "runtime", "runtimeVersion", "safetyCaseSetDigest", "status"), "safety result"); err != nil {
+			return err
+		}
+		if str(result, "boundContentDigest") != str(m, "contentDigest") || str(result, "safetyCaseSetDigest") != str(cases, "caseSetDigest") || str(result, "runtime") == "" || str(result, "runtimeVersion") == "" {
+			return invalid("runnable safety result has incomplete bindings")
+		}
+		expectedReport = "# 安全评测报告\n\n- 结果：`" + status + "`\n- 原因：" + reason + "\n- 绑定内容：`" + str(result, "boundContentDigest") + "`\n- 评测集：`" + str(result, "safetyCaseSetDigest") + "`\n- 运行时：`" + str(result, "runtime") + "/" + str(result, "runtimeVersion") + "`\n"
+	} else {
+		return invalid("unknown safety result status")
+	}
+	if string(files["reports/safety-evaluation.md"]) != expectedReport {
+		return invalid("safety evaluation report disagrees with structured result")
 	}
 	return nil
 }
@@ -549,7 +674,7 @@ func digestPackage(files map[string][]byte, m map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return shaCanonical(map[string]any{"manifest": manifest, "contentDigest": m["contentDigest"], "reviews": reviews, "safetyEvaluationResult": cases["result"], "safetyCaseSetDigest": cases["caseSetDigest"]}), nil
+	return shaCanonical(map[string]any{"manifest": manifest, "contentDigest": m["contentDigest"], "reviews": reviews, "safetyEvaluationResult": cases["result"], "safetyCaseSetDigest": cases["caseSetDigest"], "safetyEvaluationReport": string(files["reports/safety-evaluation.md"])}), nil
 }
 func validateChecksums(files map[string][]byte) error {
 	lines := strings.Split(strings.TrimSpace(string(files["checksums.sha256"])), "\n")
@@ -656,12 +781,31 @@ func num(x map[string]any, k string) int {
 	n, _ := v.Int64()
 	return int(n)
 }
+func integer(x map[string]any, k string) (int, bool) {
+	v, ok := x[k].(json.Number)
+	if !ok {
+		return 0, false
+	}
+	n, err := v.Int64()
+	return int(n), err == nil
+}
 func set(v ...string) map[string]struct{} {
 	x := map[string]struct{}{}
 	for _, s := range v {
 		x[s] = struct{}{}
 	}
 	return x
+}
+func sameStringSet(a, b map[string]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for value := range a {
+		if _, ok := b[value]; !ok {
+			return false
+		}
+	}
+	return true
 }
 func clone(x map[string]any) map[string]any {
 	b, _ := json.Marshal(x)

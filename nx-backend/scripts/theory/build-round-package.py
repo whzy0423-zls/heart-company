@@ -348,7 +348,8 @@ def compute_package_digest(root):
     cases = json.loads((root / "evaluation/safety-cases.json").read_text("utf-8"))
     payload = {"manifest": sanitized_manifest(manifest, package=True),
                "contentDigest": manifest["contentDigest"], "reviews": reviews,
-               "safetyEvaluationResult": cases["result"], "safetyCaseSetDigest": cases["caseSetDigest"]}
+               "safetyEvaluationResult": cases["result"], "safetyCaseSetDigest": cases["caseSetDigest"],
+               "safetyEvaluationReport": (root / "reports/safety-evaluation.md").read_text("utf-8")}
     return sha256_bytes(canonical_bytes(payload))
 
 
