@@ -741,19 +741,25 @@ for (const { modifier } of insightContracts) {
 }
 
 for (const { selector, minimum } of [
-  { selector: '.type-chip__name', minimum: 20 },
-  { selector: '.type-chip__selected', minimum: 20 },
-  { selector: '.pair__role', minimum: 20 },
+  { selector: '.relation-hero__eyebrow', minimum: 24 },
+  { selector: '.type-picker__step', minimum: 24 },
+  { selector: '.type-picker__hint', minimum: 24 },
+  { selector: '.type-chip__name', minimum: 24 },
+  { selector: '.type-chip__selected', minimum: 24 },
+  { selector: '.pair__role', minimum: 24 },
   { selector: '.pair__name', minimum: 24 },
-  { selector: '.pair-connection__eyebrow', minimum: 20 },
-  { selector: '.pair-connection__label', minimum: 20 },
-  { selector: '.insight__eyebrow', minimum: 20 },
+  { selector: '.pair-connection__eyebrow', minimum: 24 },
+  { selector: '.pair-connection__label', minimum: 24 },
+  { selector: '.insight__eyebrow', minimum: 24 },
   { selector: '.insight__text', minimum: 24 },
-  { selector: '.drive__eyebrow', minimum: 20 },
-  { selector: '.drive-card__label', minimum: 20 },
+  { selector: '.drive__eyebrow', minimum: 24 },
+  { selector: '.drive-card__label', minimum: 24 },
   { selector: '.drive-card__text', minimum: 24 },
+  { selector: '.disclaimer', minimum: 24 },
 ]) {
-  const fontSize = pageStyleDeclarations(relationStyle, selector)?.match(/font-size:\s*(\d+)rpx\s*;/)
+  const fontSizeRule = pageStyleDeclarationBlocks(relationStyle, selector)
+    .find((declarations) => /font-size:/.test(declarations))
+  const fontSize = fontSizeRule?.match(/font-size:\s*(\d+)rpx\s*;/)
   assert.ok(fontSize && Number(fontSize[1]) >= minimum, `${selector} should keep at least ${minimum}rpx readable text`)
 }
 
