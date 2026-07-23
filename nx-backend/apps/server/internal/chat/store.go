@@ -166,9 +166,12 @@ func (s *Store) GetSession(ctx context.Context, appUserID, sessionID int64) (Ses
 // ListMessages 返回会话的全部消息（按时间正序）。
 func (s *Store) ListMessages(ctx context.Context, sessionID int64) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, session_id, role, content, sources, favorite, feedback,
-		        message_type, audio_asset_id, audio_duration_ms, transcript, create_time
-		 FROM app_chat_messages WHERE session_id = $1 ORDER BY create_time, id`,
+		`SELECT m.id, m.session_id, m.role, m.content, m.sources, m.favorite, m.feedback,
+		        m.message_type, m.audio_asset_id, m.audio_duration_ms, m.transcript, m.create_time
+		 FROM app_chat_messages m
+		 JOIN app_chat_sessions s ON s.id = m.session_id
+		 WHERE m.session_id = $1 AND s.scene = 'chat'
+		 ORDER BY m.create_time, m.id`,
 		sessionID)
 	if err != nil {
 		return nil, err

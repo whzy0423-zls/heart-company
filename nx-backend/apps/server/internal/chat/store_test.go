@@ -116,6 +116,10 @@ func TestSceneHiddenMessagesAreRejectedByOrdinaryChatFeatures(t *testing.T) {
 	if err := database.QueryRow(`INSERT INTO app_chat_messages(session_id, role, content, message_type, transcript) VALUES ($1,'user','','voice','芯之力隐藏转写') RETURNING id`, voice.ID).Scan(&userVoiceID); err != nil {
 		t.Fatal(err)
 	}
+	messages, err := store.ListMessages(context.Background(), voice.ID)
+	if err != nil || len(messages) != 0 {
+		t.Fatalf("ListMessages leaked hidden scene messages=%+v err=%v", messages, err)
+	}
 	if err := store.SetFeedback(context.Background(), userID, assistantID, "helpful"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("SetFeedback err=%v", err)
 	}

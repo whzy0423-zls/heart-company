@@ -62,7 +62,8 @@ func TestXinzhiliSchemaMigratesCleanAndLegacyDatabasesIdempotently(t *testing.T)
 			`); err != nil {
 				t.Fatalf("prerequisite schema: %v", err)
 			}
-			var legacySessionID int64
+			var legacySessionID, legacyMessageID int64
+			const legacyMessageContent = "迁移前普通聊天内容必须保留"
 			if legacy {
 				if _, err := conn.ExecContext(ctx, `
 					CREATE TABLE app_chat_sessions (
@@ -92,6 +93,9 @@ func TestXinzhiliSchemaMigratesCleanAndLegacyDatabasesIdempotently(t *testing.T)
 				if err := conn.QueryRowContext(ctx, `INSERT INTO app_chat_sessions(app_user_id, card_id) VALUES ($1,$2) RETURNING id`, userID, cardID).Scan(&legacySessionID); err != nil {
 					t.Fatal(err)
 				}
+				if err := conn.QueryRowContext(ctx, `INSERT INTO app_chat_messages(session_id, role, content) VALUES ($1,'assistant',$2) RETURNING id`, legacySessionID, legacyMessageContent).Scan(&legacyMessageID); err != nil {
+					t.Fatal(err)
+				}
 			}
 
 			migration := xinzhiliChatMigrationSQL(t)
@@ -100,7 +104,7 @@ func TestXinzhiliSchemaMigratesCleanAndLegacyDatabasesIdempotently(t *testing.T)
 					t.Fatalf("migration pass %d: %v", i+1, err)
 				}
 			}
-			assertXinzhiliSchema(t, ctx, conn, legacySessionID)
+			assertXinzhiliSchema(t, ctx, conn, legacySessionID, legacyMessageID, legacyMessageContent)
 		})
 	}
 }
@@ -115,7 +119,7 @@ func xinzhiliChatMigrationSQL(t *testing.T) string {
 	return schemaSQL[start : start+end]
 }
 
-func assertXinzhiliSchema(t *testing.T, ctx context.Context, conn *sql.Conn, legacySessionID int64) {
+func assertXinzhiliSchema(t *testing.T, ctx context.Context, conn *sql.Conn, legacySessionID, legacyMessageID int64, legacyMessageContent string) {
 	t.Helper()
 	if _, err := conn.ExecContext(ctx, `INSERT INTO app_users(phone) SELECT 'schema-assert' WHERE NOT EXISTS (SELECT 1 FROM app_users)`); err != nil {
 		t.Fatal(err)
@@ -133,6 +137,16 @@ func assertXinzhiliSchema(t *testing.T, ctx context.Context, conn *sql.Conn, leg
 			t.Fatalf("legacy scene=%q err=%v", scene, err)
 		}
 	}
+	if legacyMessageID != 0 {
+		var content string
+		var status, deliveredText, mode sql.NullString
+		if err := conn.QueryRowContext(ctx, `SELECT content, delivery_status, delivered_text, xinzhili_mode FROM app_chat_messages WHERE id=$1`, legacyMessageID).Scan(&content, &status, &deliveredText, &mode); err != nil {
+			t.Fatal(err)
+		}
+		if content != legacyMessageContent || status.Valid || deliveredText.Valid || mode.Valid {
+			t.Fatalf("legacy message content=%q status=%+v delivered=%+v mode=%+v", content, status, deliveredText, mode)
+		}
+	}
 	for _, column := range []string{"delivery_status", "delivered_text", "xinzhili_mode"} {
 		var nullable string
 		if err := conn.QueryRowContext(ctx, `SELECT is_nullable FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='app_chat_messages' AND column_name=$1`, column).Scan(&nullable); err != nil || nullable != "YES" {
@@ -146,6 +160,53 @@ func assertXinzhiliSchema(t *testing.T, ctx context.Context, conn *sql.Conn, leg
 	for _, part := range []string{"app_user_id", "card_id", "scene", "updated_at DESC"} {
 		if !strings.Contains(indexDef, part) {
 			t.Fatalf("index missing %q: %s", part, indexDef)
+		}
+	}
+	var constraintUserID, constraintCardID, constraintSessionID int64
+	if err := conn.QueryRowContext(ctx, `INSERT INTO app_users(phone) VALUES ($1) RETURNING id`, fmt.Sprintf("constraint-%d", time.Now().UnixNano())).Scan(&constraintUserID); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRowContext(ctx, `INSERT INTO app_user_cards(app_user_id, card_type, name, relation, enneagram, wing, profile, status) VALUES ($1,'primary','约束卡','self',1,2,'{}','active') RETURNING id`, constraintUserID).Scan(&constraintCardID); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRowContext(ctx, `INSERT INTO app_chat_sessions(app_user_id, card_id, scene) VALUES ($1,$2,'xinzhili_voice') RETURNING id`, constraintUserID, constraintCardID).Scan(&constraintSessionID); err != nil {
+		t.Fatal(err)
+	}
+	var validMessageID int64
+	if err := conn.QueryRowContext(ctx, `INSERT INTO app_chat_messages(session_id, role, content, delivery_status, delivered_text, xinzhili_mode) VALUES ($1,'assistant','完整回答','generated','','normal') RETURNING id`, constraintSessionID).Scan(&validMessageID); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []any{"generated", "synthesizing", "sent", "played", "tts_failed", "interrupted", "unconfirmed", nil} {
+		if _, err := conn.ExecContext(ctx, `UPDATE app_chat_messages SET delivery_status=$2 WHERE id=$1`, validMessageID, status); err != nil {
+			t.Fatalf("valid delivery status %v: %v", status, err)
+		}
+	}
+	for _, mode := range []any{"normal", "argument", "comfort", "deep_listening", nil} {
+		if _, err := conn.ExecContext(ctx, `UPDATE app_chat_messages SET xinzhili_mode=$2 WHERE id=$1`, validMessageID, mode); err != nil {
+			t.Fatalf("valid xinzhili mode %v: %v", mode, err)
+		}
+	}
+	for _, prefix := range []any{"", "完整", "完整回答", nil} {
+		if _, err := conn.ExecContext(ctx, `UPDATE app_chat_messages SET delivered_text=$2 WHERE id=$1`, validMessageID, prefix); err != nil {
+			t.Fatalf("valid delivered prefix %v: %v", prefix, err)
+		}
+	}
+	for name, statement := range map[string]string{
+		"invalid delivery insert": `INSERT INTO app_chat_messages(session_id, role, content, delivery_status) VALUES ($1,'assistant','回答','invalid')`,
+		"invalid mode insert":     `INSERT INTO app_chat_messages(session_id, role, content, xinzhili_mode) VALUES ($1,'assistant','回答','invalid')`,
+		"invalid prefix insert":   `INSERT INTO app_chat_messages(session_id, role, content, delivered_text) VALUES ($1,'assistant','回答','不匹配')`,
+	} {
+		if _, err := conn.ExecContext(ctx, statement, constraintSessionID); err == nil {
+			t.Fatalf("%s should violate CHECK", name)
+		}
+	}
+	for name, statement := range map[string]string{
+		"invalid delivery update": `UPDATE app_chat_messages SET delivery_status='invalid' WHERE id=$1`,
+		"invalid mode update":     `UPDATE app_chat_messages SET xinzhili_mode='invalid' WHERE id=$1`,
+		"invalid prefix update":   `UPDATE app_chat_messages SET delivered_text='不匹配' WHERE id=$1`,
+	} {
+		if _, err := conn.ExecContext(ctx, statement, validMessageID); err == nil {
+			t.Fatalf("%s should violate CHECK", name)
 		}
 	}
 	if _, err := conn.ExecContext(ctx, `INSERT INTO app_xinzhili_mode_preferences(app_user_id, requested_mode, revision) SELECT id, 'invalid', 1 FROM app_users LIMIT 1`); err == nil {
