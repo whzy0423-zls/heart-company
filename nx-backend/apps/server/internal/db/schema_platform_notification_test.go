@@ -19,41 +19,73 @@ func TestPlatformNotificationMigrationContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schema := string(raw)
-	ordered := []string{
-		"ALTER TABLE signups ADD COLUMN IF NOT EXISTS source_platform TEXT",
-		"ALTER TABLE messages ADD COLUMN IF NOT EXISTS platform TEXT",
-		"ALTER TABLE messages ADD COLUMN IF NOT EXISTS event_key TEXT",
-		"UPDATE signups SET source_platform = 'website'",
-		"UPDATE signups s\nSET source_platform = 'miniapp'",
-		"UPDATE messages m\nSET platform = CASE",
-		"INSERT INTO migration_logs",
-		"UPDATE bookings b\nSET signup_id = NULL",
-		"DELETE FROM messages duplicate",
-		"ADD CONSTRAINT chk_signups_source_platform",
-		"ADD CONSTRAINT fk_bookings_signup",
-		"CREATE UNIQUE INDEX IF NOT EXISTS uq_messages_event_business",
-		"ALTER COLUMN source_platform SET NOT NULL",
-		"ALTER COLUMN platform SET NOT NULL",
-		"ALTER COLUMN event_key SET NOT NULL",
+	if err := validatePlatformNotificationMigrationOrder(string(raw)); err != nil {
+		t.Fatal(err)
 	}
+}
+
+func TestPlatformNotificationMigrationContractRejectsMissingOrReorderedBackfill(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := string(raw)
+	missing := strings.Replace(schema, platformNotificationMigrationOrder[7], "-- removed miniapp test backfill", 1)
+	if err := validatePlatformNotificationMigrationOrder(missing); err == nil {
+		t.Fatal("migration order gate accepted a missing miniapp test backfill")
+	}
+
+	userMarker := platformNotificationMigrationOrder[6]
+	testMarker := platformNotificationMigrationOrder[7]
+	reordered := strings.Replace(schema, userMarker, "__USER_BACKFILL_MARKER__", 1)
+	reordered = strings.Replace(reordered, testMarker, userMarker, 1)
+	reordered = strings.Replace(reordered, "__USER_BACKFILL_MARKER__", testMarker, 1)
+	if err := validatePlatformNotificationMigrationOrder(reordered); err == nil {
+		t.Fatal("migration order gate accepted reordered miniapp user/test backfills")
+	}
+}
+
+var platformNotificationMigrationOrder = []string{
+	"ALTER TABLE signups ADD COLUMN IF NOT EXISTS source_platform TEXT",
+	"ALTER TABLE messages ADD COLUMN IF NOT EXISTS platform TEXT",
+	"ALTER TABLE messages ADD COLUMN IF NOT EXISTS event_key TEXT",
+	"UPDATE signups SET source_platform = 'website'",
+	"UPDATE signups s\nSET source_platform = 'miniapp'",
+	"UPDATE messages m\nSET platform = CASE",
+	"event_key = 'miniapp.user.created'",
+	"event_key = 'miniapp.quiz.submitted'",
+	"UPDATE messages\nSET platform = 'system'",
+	"INSERT INTO migration_logs",
+	"UPDATE bookings b\nSET signup_id = NULL",
+	"DELETE FROM messages duplicate",
+	"ADD CONSTRAINT chk_signups_source_platform",
+	"ADD CONSTRAINT chk_messages_platform",
+	"ADD CONSTRAINT fk_bookings_signup",
+	"CREATE UNIQUE INDEX IF NOT EXISTS uq_messages_event_business",
+	"ALTER COLUMN source_platform SET NOT NULL",
+	"ALTER COLUMN platform SET NOT NULL",
+	"ALTER COLUMN event_key SET NOT NULL",
+}
+
+func validatePlatformNotificationMigrationOrder(schema string) error {
 	last := -1
-	for _, want := range ordered {
+	for _, want := range platformNotificationMigrationOrder {
 		at := strings.Index(schema, want)
 		if at < 0 {
-			t.Fatalf("schema is missing %q", want)
+			return fmt.Errorf("schema is missing %q", want)
 		}
 		if at <= last {
-			t.Fatalf("%q appears out of migration order", want)
+			return fmt.Errorf("%q appears out of migration order", want)
 		}
 		last = at
 	}
 
 	bookingsCreate := strings.Index(schema, "CREATE TABLE IF NOT EXISTS bookings")
-	migrationStart := strings.Index(schema, ordered[0])
+	migrationStart := strings.Index(schema, platformNotificationMigrationOrder[0])
 	if bookingsCreate < 0 || migrationStart <= bookingsCreate {
-		t.Fatal("platform migration must run after bookings is created")
+		return fmt.Errorf("platform migration must run after bookings is created")
 	}
+	return nil
 }
 
 func TestPlatformNotificationMigration(t *testing.T) {
@@ -74,6 +106,16 @@ func TestPlatformNotificationMigration(t *testing.T) {
 	defer cancel()
 	if _, err := database.ExecContext(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
 		t.Fatalf("reset test database: %v", err)
+	}
+	for run := 1; run <= 2; run++ {
+		if _, err := database.ExecContext(ctx, schemaSQL); err != nil {
+			t.Fatalf("apply schema to fresh database run %d: %v", run, err)
+		}
+	}
+	assertPlatformNotificationSchemaShape(t, database)
+
+	if _, err := database.ExecContext(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
+		t.Fatalf("reset test database for legacy migration: %v", err)
 	}
 	if _, err := database.ExecContext(ctx, legacyPlatformNotificationSchema); err != nil {
 		t.Fatalf("create legacy schema: %v", err)
@@ -149,15 +191,8 @@ func TestPlatformNotificationMigration(t *testing.T) {
 	assertJSONLogCount(t, database, "platform_notification.orphan_bookings", 1)
 	assertJSONLogCount(t, database, "platform_notification.duplicate_messages", 1)
 
-	for _, constraint := range []string{"chk_signups_source_platform", "chk_messages_platform", "fk_bookings_signup"} {
-		assertIntQuery(t, database, `SELECT count(*) FROM pg_constraint WHERE conname=$1`, 1, constraint)
-	}
+	assertPlatformNotificationSchemaShape(t, database)
 	assertTextQuery(t, database, `SELECT confdeltype::text FROM pg_constraint WHERE conname='fk_bookings_signup'`, "n")
-	for _, index := range []string{"uq_messages_event_business", "idx_messages_unread_id", "idx_messages_platform_create_time", "idx_signups_source_create_time"} {
-		assertIntQuery(t, database, `SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND indexname=$1`, 1, index)
-	}
-	assertIntQuery(t, database, `SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='signups' AND column_name='source_platform' AND is_nullable='NO'`, 1)
-	assertIntQuery(t, database, `SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='messages' AND column_name IN ('platform','event_key') AND is_nullable='NO'`, 2)
 
 	if _, err := database.ExecContext(ctx, `INSERT INTO messages (title) VALUES ('默认系统消息一'), ('默认系统消息二')`); err != nil {
 		t.Fatalf("safe message defaults must support legacy insert paths: %v", err)
@@ -173,6 +208,18 @@ func TestPlatformNotificationMigration(t *testing.T) {
 	if _, err := database.ExecContext(ctx, `INSERT INTO bookings (wx_user_id,signup_id) VALUES ($1,987654321)`, wxUserID); err == nil {
 		t.Fatal("bookings signup foreign key did not reject missing signup")
 	}
+}
+
+func assertPlatformNotificationSchemaShape(t *testing.T, database *sql.DB) {
+	t.Helper()
+	for _, constraint := range []string{"chk_signups_source_platform", "chk_messages_platform", "fk_bookings_signup"} {
+		assertIntQuery(t, database, `SELECT count(*) FROM pg_constraint WHERE conname=$1`, 1, constraint)
+	}
+	for _, index := range []string{"uq_messages_event_business", "idx_messages_unread_id", "idx_messages_platform_create_time", "idx_signups_source_create_time"} {
+		assertIntQuery(t, database, `SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND indexname=$1`, 1, index)
+	}
+	assertIntQuery(t, database, `SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='signups' AND column_name='source_platform' AND is_nullable='NO'`, 1)
+	assertIntQuery(t, database, `SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='messages' AND column_name IN ('platform','event_key') AND is_nullable='NO'`, 2)
 }
 
 func assertHistoricalMessage(t *testing.T, database *sql.DB, title, platform, eventKey, businessType, businessID, targetPath string) {
