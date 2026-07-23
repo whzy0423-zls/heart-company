@@ -105,7 +105,9 @@ func TestEnvelopeSessionIDLifecycle(t *testing.T) {
 		wantError    bool
 	}{
 		{"session start before ready permits null", EventSessionStart, DirectionClient, false, nil, false},
+		{"session start before ready rejects id", EventSessionStart, DirectionClient, false, stringptr("session-1"), true},
 		{"session start after ready requires id", EventSessionStart, DirectionClient, true, nil, true},
+		{"session start after ready rejects restart", EventSessionStart, DirectionClient, true, stringptr("session-1"), true},
 		{"session ready requires id", EventSessionReady, DirectionServer, false, nil, true},
 		{"post-ready event requires id", EventSessionPing, DirectionClient, true, nil, true},
 		{"post-ready event accepts id", EventSessionPing, DirectionClient, true, stringptr("session-1"), false},
@@ -117,6 +119,79 @@ func TestEnvelopeSessionIDLifecycle(t *testing.T) {
 			err := ValidateEnvelope(envelope, tt.direction, tt.sessionReady)
 			if (err != nil) != tt.wantError {
 				t.Fatalf("err=%v wantError=%v", err, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestDecodeEnvelopeRequiresNonNullPublicFields(t *testing.T) {
+	base := []byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.ping","sessionId":"session-1","generation":0,"turnId":null,"sessionSeq":0,"turnSeq":null,"configVersion":0,"timestampMs":0,"payload":{}}`)
+	required := []string{"protocolVersion", "type", "generation", "sessionSeq", "configVersion", "timestampMs", "payload"}
+	for _, field := range required {
+		for _, variant := range []string{"omitted", "null"} {
+			t.Run(field+"_"+variant, func(t *testing.T) {
+				var object map[string]json.RawMessage
+				if err := json.Unmarshal(base, &object); err != nil {
+					t.Fatal(err)
+				}
+				if variant == "omitted" {
+					delete(object, field)
+				} else {
+					object[field] = json.RawMessage("null")
+				}
+				encoded, err := json.Marshal(object)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = DecodeEnvelope(encoded, DirectionClient, true)
+				if err == nil {
+					t.Fatal("expected decode error")
+				}
+				var protocolErr *ProtocolError
+				if !errors.As(err, &protocolErr) {
+					t.Fatalf("err=%T %v", err, err)
+				}
+				wantCode := ProtocolErrorInvalidEnvelope
+				if field == "payload" {
+					wantCode = ProtocolErrorInvalidPayload
+				}
+				if protocolErr.Code != wantCode {
+					t.Fatalf("code=%q want=%q", protocolErr.Code, wantCode)
+				}
+			})
+		}
+	}
+}
+
+func TestDecodeEnvelopeAcceptsZeroRequiredNumbers(t *testing.T) {
+	data := []byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.ping","sessionId":"session-1","generation":0,"turnId":null,"sessionSeq":0,"turnSeq":null,"configVersion":0,"timestampMs":0,"payload":{}}`)
+	decoded, err := DecodeEnvelope(data, DirectionClient, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Generation != 0 || decoded.SessionSeq == nil || *decoded.SessionSeq != 0 || decoded.ConfigVersion != 0 || decoded.TimestampMs != 0 {
+		t.Fatalf("decoded=%+v", decoded)
+	}
+}
+
+func TestEnvelopePayloadMustBeJSONObject(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{"null", "null"},
+		{"number", "1"},
+		{"string", `"text"`},
+		{"array", `[]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			envelope := validEnvelope(EventSessionPing)
+			envelope.Payload = json.RawMessage(tt.payload)
+			err := ValidateEnvelope(envelope, DirectionClient, true)
+			var protocolErr *ProtocolError
+			if !errors.As(err, &protocolErr) || protocolErr.Code != ProtocolErrorInvalidPayload {
+				t.Fatalf("err=%T %v", err, err)
 			}
 		})
 	}
@@ -158,7 +233,6 @@ func TestEnvelopeRequiresProtocolAndSessionSequence(t *testing.T) {
 	}{
 		{"protocol version", func(e *Envelope) { e.ProtocolVersion = "v2" }},
 		{"session sequence", func(e *Envelope) { e.SessionSeq = nil }},
-		{"timestamp", func(e *Envelope) { e.TimestampMs = 0 }},
 		{"payload", func(e *Envelope) { e.Payload = nil }},
 	}
 	for _, tt := range tests {
@@ -182,6 +256,7 @@ func TestEnvelopeTurnStartValidatesTurnKey(t *testing.T) {
 		{"matching", `{"turnKey":6919734513873532354}`, false},
 		{"mismatch", `{"turnKey":1}`, true},
 		{"missing", `{}`, true},
+		{"unknown", `{"turnKey":6919734513873532354,"extra":true}`, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -194,6 +269,34 @@ func TestEnvelopeTurnStartValidatesTurnKey(t *testing.T) {
 				t.Fatalf("err=%v wantError=%v", err, tt.wantError)
 			}
 		})
+	}
+}
+
+func TestProtocolErrorCodesAreStableAndUnwrap(t *testing.T) {
+	tests := []struct {
+		name      string
+		data      []byte
+		direction Direction
+		wantCode  string
+	}{
+		{"invalid envelope", []byte(`{"protocolVersion":`), DirectionClient, ProtocolErrorInvalidEnvelope},
+		{"unsupported version", []byte(`{"protocolVersion":"v2","type":"session.ping","sessionId":"s","generation":0,"turnId":null,"sessionSeq":0,"turnSeq":null,"configVersion":0,"timestampMs":0,"payload":{}}`), DirectionClient, ProtocolErrorUnsupportedVersion},
+		{"invalid direction", []byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.ready","sessionId":"s","generation":0,"turnId":null,"sessionSeq":0,"turnSeq":null,"configVersion":0,"timestampMs":0,"payload":{}}`), DirectionClient, ProtocolErrorInvalidEventDirection},
+		{"invalid payload", []byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.ping","sessionId":"s","generation":0,"turnId":null,"sessionSeq":0,"turnSeq":null,"configVersion":0,"timestampMs":0,"payload":[]}`), DirectionClient, ProtocolErrorInvalidPayload},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := DecodeEnvelope(tt.data, tt.direction, true)
+			var protocolErr *ProtocolError
+			if !errors.As(err, &protocolErr) || protocolErr.Code != tt.wantCode || protocolErr.Unwrap() == nil {
+				t.Fatalf("err=%T %v", err, err)
+			}
+		})
+	}
+	cause := errors.New("cause")
+	wrapped := &ProtocolError{Code: ProtocolErrorInvalidEnvelope, Err: cause}
+	if !errors.Is(wrapped, cause) {
+		t.Fatal("ProtocolError must unwrap for errors.Is")
 	}
 }
 
@@ -301,9 +404,10 @@ func TestBinaryHeaderValidatesFrameSpecificFlagsAndSegments(t *testing.T) {
 		frame     BinaryFrame
 		wantError bool
 	}{
-		{"input plain", BinaryFrame{FrameType: FrameTypeInputPCM, Payload: []byte{1}}, false},
+		{"input zero missing start", BinaryFrame{FrameType: FrameTypeInputPCM, Payload: []byte{1}}, true},
 		{"input start", BinaryFrame{FrameType: FrameTypeInputPCM, Flags: FlagStart, Payload: []byte{1}}, false},
 		{"input late start", BinaryFrame{FrameType: FrameTypeInputPCM, Flags: FlagStart, AudioSeq: 1, Payload: []byte{1}}, true},
+		{"input continuation", BinaryFrame{FrameType: FrameTypeInputPCM, AudioSeq: 1, Payload: []byte{1}}, false},
 		{"input end forbidden", BinaryFrame{FrameType: FrameTypeInputPCM, Flags: FlagEnd, Payload: []byte{1}}, true},
 		{"input segment nonzero", BinaryFrame{FrameType: FrameTypeInputPCM, SegmentSeq: 1, Payload: []byte{1}}, true},
 		{"tts complete", BinaryFrame{FrameType: FrameTypeAssistantMP3, Flags: FlagStart | FlagEnd, Payload: []byte{1}}, false},
@@ -320,22 +424,35 @@ func TestBinaryHeaderValidatesFrameSpecificFlagsAndSegments(t *testing.T) {
 	}
 }
 
-func TestBinaryHeaderPayloadLengthOverflow(t *testing.T) {
-	if testing.Short() {
-		t.Skip("requires a synthetic oversized slice; normal tests cover wire length mismatches")
-	}
-	// The wire length is uint32. This assertion documents the public bound
-	// without allocating 4 GiB in the test process.
+func TestBinaryWirePayloadLengthUsesUint32Contract(t *testing.T) {
 	if MaxBinaryPayloadLength != int64(^uint32(0)) {
 		t.Fatalf("MaxBinaryPayloadLength=%d", MaxBinaryPayloadLength)
 	}
+}
+
+func FuzzDecodeEnvelope(f *testing.F) {
+	f.Add([]byte{})
+	f.Add([]byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.ping","sessionId":"s","generation":0,"turnId":null,"sessionSeq":0,"turnSeq":null,"configVersion":0,"timestampMs":0,"payload":{}}`))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		envelope, err := DecodeEnvelope(data, DirectionClient, true)
+		if err != nil {
+			return
+		}
+		encoded, err := EncodeEnvelope(envelope, DirectionClient, true)
+		if err != nil {
+			t.Fatalf("decoded envelope cannot encode: %v", err)
+		}
+		if _, err := DecodeEnvelope(encoded, DirectionClient, true); err != nil {
+			t.Fatalf("encoded envelope cannot decode: %v", err)
+		}
+	})
 }
 
 func FuzzDecodeBinaryFrame(f *testing.F) {
 	f.Add([]byte{})
 	f.Add([]byte("XZV1"))
 	f.Add([]byte{
-		0x58, 0x5a, 0x56, 0x31, 0x01, 0x01, 0x00, 0x20,
+		0x58, 0x5a, 0x56, 0x31, 0x01, 0x01, 0x01, 0x20,
 		0, 0, 0, 1, 0x60, 0x07, 0xd5, 0xe0, 0xc7, 0x71, 0x35, 0xc2,
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0x01,
 	})

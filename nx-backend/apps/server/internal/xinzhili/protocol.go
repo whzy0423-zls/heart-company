@@ -19,6 +19,26 @@ const (
 
 var ErrInvalidBinaryFrame = errors.New("invalid xinzhili binary frame")
 
+const (
+	ProtocolErrorInvalidEnvelope       = "invalid_envelope"
+	ProtocolErrorUnsupportedVersion    = "unsupported_version"
+	ProtocolErrorInvalidEventDirection = "invalid_event_direction"
+	ProtocolErrorInvalidPayload        = "invalid_payload"
+)
+
+type ProtocolError struct {
+	Code string
+	Err  error
+}
+
+func (err *ProtocolError) Error() string {
+	return err.Code + ": " + err.Err.Error()
+}
+
+func (err *ProtocolError) Unwrap() error {
+	return err.Err
+}
+
 type Direction string
 
 const (
@@ -79,13 +99,17 @@ func EncodeEnvelope(envelope Envelope, direction Direction, sessionReady bool) (
 }
 
 func DecodeEnvelope(data []byte, direction Direction, sessionReady bool) (Envelope, error) {
-	var envelope Envelope
+	var wire wireEnvelope
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&envelope); err != nil {
-		return Envelope{}, fmt.Errorf("decode envelope: %w", err)
+	if err := decoder.Decode(&wire); err != nil {
+		return Envelope{}, newProtocolError(ProtocolErrorInvalidEnvelope, fmt.Errorf("decode envelope: %w", err))
 	}
 	if err := requireJSONEOF(decoder); err != nil {
+		return Envelope{}, newProtocolError(ProtocolErrorInvalidEnvelope, err)
+	}
+	envelope, err := wire.envelope()
+	if err != nil {
 		return Envelope{}, err
 	}
 	if err := ValidateEnvelope(envelope, direction, sessionReady); err != nil {
@@ -96,51 +120,155 @@ func DecodeEnvelope(data []byte, direction Direction, sessionReady bool) (Envelo
 
 func ValidateEnvelope(envelope Envelope, direction Direction, sessionReady bool) error {
 	if envelope.ProtocolVersion != ProtocolVersion {
-		return fmt.Errorf("unsupported protocolVersion %q", envelope.ProtocolVersion)
+		return newProtocolError(ProtocolErrorUnsupportedVersion, fmt.Errorf("unsupported protocolVersion %q", envelope.ProtocolVersion))
 	}
 	eventLevel, err := validateEventDirection(envelope.Type, direction)
 	if err != nil {
-		return err
+		return newProtocolError(ProtocolErrorInvalidEventDirection, err)
 	}
 	if envelope.SessionSeq == nil {
-		return errors.New("sessionSeq is required")
+		return newProtocolError(ProtocolErrorInvalidEnvelope, errors.New("sessionSeq is required"))
 	}
-	if envelope.TimestampMs <= 0 {
-		return errors.New("timestampMs must be positive")
+	if !isJSONObject(envelope.Payload) {
+		return newProtocolError(ProtocolErrorInvalidPayload, errors.New("payload must be a JSON object"))
 	}
-	if len(envelope.Payload) == 0 || !json.Valid(envelope.Payload) {
-		return errors.New("payload must be valid JSON")
+
+	if envelope.Type == EventSessionStart {
+		if sessionReady {
+			return newProtocolError(ProtocolErrorInvalidEnvelope, errors.New("session.start is only valid before session.ready"))
+		}
+		if envelope.SessionID != nil {
+			return newProtocolError(ProtocolErrorInvalidEnvelope, errors.New("session.start requires null sessionId"))
+		}
 	}
 
 	requiresSessionID := sessionReady || envelope.Type == EventSessionReady
 	if requiresSessionID && (envelope.SessionID == nil || *envelope.SessionID == "") {
-		return errors.New("sessionId is required")
+		return newProtocolError(ProtocolErrorInvalidEnvelope, errors.New("sessionId is required"))
 	}
 	if envelope.SessionID != nil && *envelope.SessionID == "" {
-		return errors.New("sessionId cannot be empty")
+		return newProtocolError(ProtocolErrorInvalidEnvelope, errors.New("sessionId cannot be empty"))
 	}
 
 	if eventLevel == eventLevelSession {
 		if envelope.TurnID != nil || envelope.TurnSeq != nil {
-			return errors.New("session event requires null turnId and turnSeq")
+			return newProtocolError(ProtocolErrorInvalidEnvelope, errors.New("session event requires null turnId and turnSeq"))
 		}
 	} else {
 		if envelope.TurnID == nil || *envelope.TurnID == "" || envelope.TurnSeq == nil {
-			return errors.New("turn event requires turnId and turnSeq")
+			return newProtocolError(ProtocolErrorInvalidEnvelope, errors.New("turn event requires turnId and turnSeq"))
 		}
 	}
 
 	if envelope.Type == EventTurnStart {
 		if err := validateTurnStartPayload(envelope); err != nil {
-			return err
+			return newProtocolError(ProtocolErrorInvalidPayload, err)
 		}
 	}
 	if envelope.Type == EventError {
 		if err := validateErrorPayload(envelope.Payload); err != nil {
-			return err
+			return newProtocolError(ProtocolErrorInvalidPayload, err)
 		}
 	}
 	return nil
+}
+
+type wireEnvelope struct {
+	ProtocolVersion json.RawMessage `json:"protocolVersion"`
+	Type            json.RawMessage `json:"type"`
+	SessionID       json.RawMessage `json:"sessionId"`
+	Generation      json.RawMessage `json:"generation"`
+	TurnID          json.RawMessage `json:"turnId"`
+	SessionSeq      json.RawMessage `json:"sessionSeq"`
+	TurnSeq         json.RawMessage `json:"turnSeq"`
+	ConfigVersion   json.RawMessage `json:"configVersion"`
+	TimestampMs     json.RawMessage `json:"timestampMs"`
+	Payload         json.RawMessage `json:"payload"`
+}
+
+func (wire wireEnvelope) envelope() (Envelope, error) {
+	var envelope Envelope
+	if err := decodeRequired(wire.ProtocolVersion, "protocolVersion", &envelope.ProtocolVersion); err != nil {
+		return Envelope{}, err
+	}
+	if err := decodeRequired(wire.Type, "type", &envelope.Type); err != nil {
+		return Envelope{}, err
+	}
+	if err := decodeOptional(wire.SessionID, "sessionId", &envelope.SessionID); err != nil {
+		return Envelope{}, err
+	}
+	if err := decodeRequired(wire.Generation, "generation", &envelope.Generation); err != nil {
+		return Envelope{}, err
+	}
+	if err := decodeOptional(wire.TurnID, "turnId", &envelope.TurnID); err != nil {
+		return Envelope{}, err
+	}
+	if err := decodeRequiredPointer(wire.SessionSeq, "sessionSeq", &envelope.SessionSeq); err != nil {
+		return Envelope{}, err
+	}
+	if err := decodeOptional(wire.TurnSeq, "turnSeq", &envelope.TurnSeq); err != nil {
+		return Envelope{}, err
+	}
+	if err := decodeRequired(wire.ConfigVersion, "configVersion", &envelope.ConfigVersion); err != nil {
+		return Envelope{}, err
+	}
+	if err := decodeRequired(wire.TimestampMs, "timestampMs", &envelope.TimestampMs); err != nil {
+		return Envelope{}, err
+	}
+	if len(wire.Payload) == 0 || isJSONNull(wire.Payload) {
+		return Envelope{}, newProtocolError(ProtocolErrorInvalidPayload, errors.New("payload is required and cannot be null"))
+	}
+	envelope.Payload = bytes.Clone(wire.Payload)
+	return envelope, nil
+}
+
+func decodeRequired[T any](raw json.RawMessage, name string, destination *T) error {
+	if len(raw) == 0 || isJSONNull(raw) {
+		return newProtocolError(ProtocolErrorInvalidEnvelope, fmt.Errorf("%s is required and cannot be null", name))
+	}
+	if err := json.Unmarshal(raw, destination); err != nil {
+		return newProtocolError(ProtocolErrorInvalidEnvelope, fmt.Errorf("decode %s: %w", name, err))
+	}
+	return nil
+}
+
+func decodeRequiredPointer[T any](raw json.RawMessage, name string, destination **T) error {
+	var value T
+	if err := decodeRequired(raw, name, &value); err != nil {
+		return err
+	}
+	*destination = &value
+	return nil
+}
+
+func decodeOptional[T any](raw json.RawMessage, name string, destination **T) error {
+	if len(raw) == 0 || isJSONNull(raw) {
+		*destination = nil
+		return nil
+	}
+	var value T
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return newProtocolError(ProtocolErrorInvalidEnvelope, fmt.Errorf("decode %s: %w", name, err))
+	}
+	*destination = &value
+	return nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+}
+
+func isJSONObject(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) >= 2 && trimmed[0] == '{' && trimmed[len(trimmed)-1] == '}' && json.Valid(trimmed)
+}
+
+func newProtocolError(code string, err error) error {
+	var protocolErr *ProtocolError
+	if errors.As(err, &protocolErr) {
+		return err
+	}
+	return &ProtocolError{Code: code, Err: err}
 }
 
 type eventLevel uint8
@@ -197,8 +325,12 @@ func validateTurnStartPayload(envelope Envelope) error {
 		TurnKey *uint64 `json:"turnKey"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(envelope.Payload))
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&payload); err != nil {
 		return fmt.Errorf("decode turn.start payload: %w", err)
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		return err
 	}
 	if payload.TurnKey == nil {
 		return errors.New("turn.start payload requires turnKey")
@@ -334,8 +466,8 @@ func validateBinaryFrame(frame BinaryFrame) error {
 		if frame.Flags&FlagEnd != 0 {
 			return invalidBinaryFrame("input_pcm frame cannot set end flag")
 		}
-		if frame.Flags&FlagStart != 0 && frame.AudioSeq != 0 {
-			return invalidBinaryFrame("input_pcm start flag is only valid on audioSeq zero")
+		if (frame.AudioSeq == 0) != (frame.Flags&FlagStart != 0) {
+			return invalidBinaryFrame("input_pcm start flag must be set exactly when audioSeq is zero")
 		}
 		if frame.SegmentSeq != 0 {
 			return invalidBinaryFrame("input_pcm segmentSeq must be zero")

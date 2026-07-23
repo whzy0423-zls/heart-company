@@ -2,6 +2,8 @@ package xinzhili
 
 import (
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -130,6 +132,22 @@ func TestSequenceTerminalEventsAreIdempotent(t *testing.T) {
 	}
 }
 
+func TestSequenceMarkTerminalDeletesBothDirectionTurnCursors(t *testing.T) {
+	guard := NewSequenceGuard(1)
+	if got, err := guard.Observe(DirectionClient, turnEnvelope(1, 0, 0, "turn-1")); got != SequenceAccept || err != nil {
+		t.Fatalf("client event got=(%v,%v)", got, err)
+	}
+	if got, err := guard.Observe(DirectionServer, turnEnvelope(1, 0, 0, "turn-1")); got != SequenceAccept || err != nil {
+		t.Fatalf("server event got=(%v,%v)", got, err)
+	}
+	guard.MarkTerminal("turn-1")
+	for _, direction := range []Direction{DirectionClient, DirectionServer} {
+		if _, exists := guard.turns[turnSequenceKey{direction: direction, turnID: "turn-1"}]; exists {
+			t.Fatalf("%s turn cursor retained after terminal", direction)
+		}
+	}
+}
+
 func TestSequenceDropsLateTurnEventsAfterTerminalWithoutAdvancingTurnSequence(t *testing.T) {
 	guard := NewSequenceGuard(1)
 	if got, err := guard.Observe(DirectionClient, turnEnvelope(1, 0, 0, "turn-1")); got != SequenceAccept || err != nil {
@@ -156,8 +174,8 @@ func TestSequenceDropsLateTurnEventsAfterTerminalWithoutAdvancingTurnSequence(t 
 	}
 
 	clientCursor := guard.turns[turnSequenceKey{direction: DirectionClient, turnID: "turn-1"}]
-	if !clientCursor.seen || clientCursor.last != 0 {
-		t.Fatalf("client turn cursor advanced after terminal: %+v", clientCursor)
+	if clientCursor.seen {
+		t.Fatalf("client turn cursor retained after terminal: %+v", clientCursor)
 	}
 	if _, exists := guard.turns[turnSequenceKey{direction: DirectionServer, turnID: "turn-1"}]; exists {
 		t.Fatal("server turn cursor created for terminal event")
@@ -171,6 +189,56 @@ func TestSequenceDropsLateTurnEventsAfterTerminalWithoutAdvancingTurnSequence(t 
 	if got, err := guard.Observe(DirectionServer, serverSession); got != SequenceAccept || err != nil {
 		t.Fatalf("server session event got=(%v,%v)", got, err)
 	}
+}
+
+func TestSequenceTerminalWindowIsBoundedAndKeepsRecentTurns(t *testing.T) {
+	guard := NewSequenceGuard(1)
+	for i := 0; i <= TerminalTurnWindowSize; i++ {
+		guard.MarkTerminal(fmt.Sprintf("turn-%d", i))
+	}
+	if len(guard.terminalTurns) != TerminalTurnWindowSize {
+		t.Fatalf("terminalTurns=%d want=%d", len(guard.terminalTurns), TerminalTurnWindowSize)
+	}
+	if _, exists := guard.terminalTurns["turn-0"]; exists {
+		t.Fatal("oldest terminal turn was not evicted")
+	}
+	if _, exists := guard.terminalTurns[fmt.Sprintf("turn-%d", TerminalTurnWindowSize)]; !exists {
+		t.Fatal("most recent terminal turn was evicted")
+	}
+
+	recent := fmt.Sprintf("turn-%d", TerminalTurnWindowSize)
+	if got, err := guard.Observe(DirectionClient, turnEnvelope(1, 0, 0, recent)); got != SequenceDrop || err != nil {
+		t.Fatalf("recent terminal event got=(%v,%v)", got, err)
+	}
+}
+
+func TestSequenceGuardConcurrentAccess(t *testing.T) {
+	guard := NewSequenceGuard(1)
+	var wait sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		i := i
+		wait.Add(4)
+		go func() {
+			defer wait.Done()
+			guard.Observe(DirectionClient, sessionEnvelope(1, 0))
+		}()
+		go func() {
+			defer wait.Done()
+			turnID := fmt.Sprintf("terminal-%d", i)
+			guard.MarkTerminal(turnID)
+		}()
+		go func() {
+			defer wait.Done()
+			turnID := fmt.Sprintf("active-%d", i)
+			guard.RegisterActiveTurn(turnID, uint64(i+1))
+			guard.ReleaseActiveTurn(turnID)
+		}()
+		go func() {
+			defer wait.Done()
+			guard.AdvanceGeneration(2)
+		}()
+	}
+	wait.Wait()
 }
 
 func TestSequenceActiveTurnKeyCollision(t *testing.T) {

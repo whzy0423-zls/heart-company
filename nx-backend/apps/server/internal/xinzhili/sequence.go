@@ -3,6 +3,7 @@ package xinzhili
 import (
 	"errors"
 	"fmt"
+	"sync"
 )
 
 var (
@@ -10,6 +11,8 @@ var (
 	ErrGenerationMismatch = errors.New("generation_mismatch")
 	ErrTurnKeyCollision   = errors.New("turn_key_collision")
 )
+
+const TerminalTurnWindowSize = 1024
 
 type SequenceDisposition uint8
 
@@ -50,10 +53,12 @@ type turnSequenceKey struct {
 }
 
 type SequenceGuard struct {
+	mu            sync.Mutex
 	generation    uint32
 	session       map[Direction]sequenceCursor
 	turns         map[turnSequenceKey]sequenceCursor
 	terminalTurns map[string]struct{}
+	terminalOrder []string
 	activeByID    map[string]uint64
 	activeByKey   map[uint64]string
 }
@@ -65,6 +70,9 @@ func NewSequenceGuard(generation uint32) *SequenceGuard {
 }
 
 func (guard *SequenceGuard) Observe(direction Direction, envelope Envelope) (SequenceDisposition, error) {
+	guard.mu.Lock()
+	defer guard.mu.Unlock()
+
 	if direction != DirectionClient && direction != DirectionServer {
 		return SequenceDrop, fmt.Errorf("unknown direction %q", direction)
 	}
@@ -118,6 +126,9 @@ func (guard *SequenceGuard) Observe(direction Direction, envelope Envelope) (Seq
 }
 
 func (guard *SequenceGuard) AdvanceGeneration(generation uint32) error {
+	guard.mu.Lock()
+	defer guard.mu.Unlock()
+
 	if guard.generation == ^uint32(0) || generation != guard.generation+1 {
 		return ErrGenerationMismatch
 	}
@@ -126,15 +137,30 @@ func (guard *SequenceGuard) AdvanceGeneration(generation uint32) error {
 }
 
 func (guard *SequenceGuard) MarkTerminal(turnID string) SequenceDisposition {
+	guard.mu.Lock()
+	defer guard.mu.Unlock()
+
 	if _, exists := guard.terminalTurns[turnID]; exists {
 		return SequenceDrop
 	}
+	if len(guard.terminalOrder) == TerminalTurnWindowSize {
+		oldest := guard.terminalOrder[0]
+		delete(guard.terminalTurns, oldest)
+		copy(guard.terminalOrder, guard.terminalOrder[1:])
+		guard.terminalOrder = guard.terminalOrder[:TerminalTurnWindowSize-1]
+	}
 	guard.terminalTurns[turnID] = struct{}{}
-	guard.ReleaseActiveTurn(turnID)
+	guard.terminalOrder = append(guard.terminalOrder, turnID)
+	delete(guard.turns, turnSequenceKey{direction: DirectionClient, turnID: turnID})
+	delete(guard.turns, turnSequenceKey{direction: DirectionServer, turnID: turnID})
+	guard.releaseActiveTurnLocked(turnID)
 	return SequenceAccept
 }
 
 func (guard *SequenceGuard) RegisterActiveTurn(turnID string, turnKey uint64) error {
+	guard.mu.Lock()
+	defer guard.mu.Unlock()
+
 	if existingKey, exists := guard.activeByID[turnID]; exists {
 		if existingKey == turnKey {
 			return nil
@@ -150,6 +176,12 @@ func (guard *SequenceGuard) RegisterActiveTurn(turnID string, turnKey uint64) er
 }
 
 func (guard *SequenceGuard) ReleaseActiveTurn(turnID string) {
+	guard.mu.Lock()
+	defer guard.mu.Unlock()
+	guard.releaseActiveTurnLocked(turnID)
+}
+
+func (guard *SequenceGuard) releaseActiveTurnLocked(turnID string) {
 	turnKey, exists := guard.activeByID[turnID]
 	if !exists {
 		return
@@ -163,6 +195,7 @@ func (guard *SequenceGuard) reset(generation uint32) {
 	guard.session = make(map[Direction]sequenceCursor, 2)
 	guard.turns = make(map[turnSequenceKey]sequenceCursor)
 	guard.terminalTurns = make(map[string]struct{})
+	guard.terminalOrder = make([]string, 0, TerminalTurnWindowSize)
 	guard.activeByID = make(map[string]uint64)
 	guard.activeByKey = make(map[uint64]string)
 }
