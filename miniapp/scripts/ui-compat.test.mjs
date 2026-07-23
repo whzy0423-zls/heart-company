@@ -15,6 +15,11 @@ const pagesConfig = readFileSync('src/pages.json', 'utf8')
 assert.doesNotMatch(pagesConfig, /pages\/chat\/chat/, 'pages.json must not register the removed chat page')
 assert.doesNotMatch(pagesConfig, /问 AI|AI 对话/, 'tabBar must not expose an AI chat entry')
 assert.equal(statSync('src/pages/chat', { throwIfNoEntry: false }), undefined, 'removed chat page directory should stay deleted')
+assert.match(
+  pagesConfig,
+  /"path"\s*:\s*"pages\/profile-edit\/profile-edit"[\s\S]*?"navigationBarTitleText"\s*:\s*"个人资料"/,
+  'pages.json should register the dedicated personal-profile page with its approved title',
+)
 
 const h5Index = readFileSync('index.html', 'utf8')
 assert.match(h5Index, /viewport-fit=cover/, 'H5 viewport meta should enable iOS safe-area env variables')
@@ -432,6 +437,7 @@ assert.match(learnPage, /class=["'][^"']*card[^"']*ios-card[^"']*section[^"']*["
 assert.match(learnPage, /<button\s+class=["'][^"']*btn-primary[^"']*ios-button[^"']*["'][^>]*@click=["']goTest["']/, 'learn primary CTA should opt into iOS button styling')
 
 const profilePage = readFileSync('src/pages/profile/profile.vue', 'utf8')
+const profileEditPage = readFileSync('src/pages/profile-edit/profile-edit.vue', 'utf8')
 assert.match(profilePage, /profileLoading/, 'profile page should expose a loading state for non-blocking history fetch')
 assert.match(profilePage, /v-if="profileLoading"/, 'profile page should render loading placeholder before empty states')
 assert.match(profilePage, /loadTicket/, 'profile page should ignore stale concurrent loads')
@@ -774,6 +780,66 @@ for (const selector of ['.learn-hero__lead', '.empty', '.teacher-card__title', '
 const learnSecondary = pageStyleDeclarations(learnStyle, '.courseware-card__desc')?.match(/color:\s*(#[\da-f]{6})\s*;/i)?.[1]
 assert.ok(learnSecondary, 'course descriptions should expose a parseable text color')
 assert.ok(contrastRatio(learnSecondary, '#ffffff') >= 4.5, 'course descriptions should meet 4.5:1 contrast on the panel surface')
+
+const profileEditTemplateRaw = vueSection(profileEditPage, 'template') || ''
+const profileEditTemplate = stripMarkupAndCssComments(profileEditTemplateRaw)
+const profileEditStyle = stripMarkupAndCssComments(vueSection(profileEditPage, 'style') || '')
+assertRootViewClasses(profileEditPage, 'src/pages/profile-edit/profile-edit.vue', ['page-stack', 'ios-page', 'ios-safe-bottom'])
+assert.match(profileEditTemplate, /class=["'][^"']*profile-edit-hero[^"']*nx-page-hero[^"']*["']/, 'personal profile should open with the shared blue-purple hero')
+assert.match(profileEditTemplate, /class=["'][^"']*profile-edit-panel[^"']*nx-panel[^"']*ios-card[^"']*["']/, 'personal profile editing should use the shared panel surface')
+assert.match(profileEditPage, /import\s*\{[^}]*getToken[^}]*clearToken[^}]*\}\s*from\s*["']\.\.\/\.\.\/utils\/auth["']/, 'personal profile should use the shared token boundary')
+assert.match(profileEditPage, /import\s*\{[^}]*getUserInfoApi[^}]*updateUserInfoApi[^}]*\}\s*from\s*["']\.\.\/\.\.\/api["']/, 'personal profile should reuse the existing user GET and PUT APIs')
+assert.match(profileEditPage, /const profileLoading = ref\(false\)/, 'personal profile should track initial loading independently')
+assert.match(profileEditPage, /const profileSyncing = ref\(false\)/, 'personal profile should track WeChat synchronization independently')
+assert.match(profileEditPage, /const profileSaving = ref\(false\)/, 'personal profile should track saving independently')
+for (const [state, operation] of [
+  ['profileLoading', 'loading'],
+  ['profileSyncing', 'synchronization'],
+  ['profileSaving', 'saving'],
+]) {
+  assert.match(profileEditPage, new RegExp(`if \\(\\s*${state}\\.value\\s*\\) return`), `personal profile ${operation} should reject duplicate work`)
+}
+assert.match(profileEditPage, /let sessionGeneration = 0/, 'personal profile should maintain a page-session generation')
+assert.match(profileEditPage, /onHide\([^)]*invalidateProfileSession[^)]*\)/, 'personal profile should invalidate stale work when hidden')
+assert.match(profileEditPage, /onUnload\([^)]*invalidateProfileSession[^)]*\)/, 'personal profile should invalidate stale work when unloaded')
+assert.match(profileEditPage, /function\s+isCurrentProfileSession[\s\S]*generation === sessionGeneration[\s\S]*token === getToken\(\)/, 'personal profile should reject responses from old page or token sessions')
+
+const profileEditAuthBody = sourceBracedBody(profileEditPage, /function\s+redirectToProfileLogin\s*\([^)]*\)\s*\{/.exec(profileEditPage)) || ''
+assert.match(profileEditAuthBody, /if \(authRedirected\) return[\s\S]*authRedirected = true/, 'personal profile auth expiry should only redirect once')
+assert.match(profileEditAuthBody, /clearToken\(\)/, 'personal profile auth expiry should clear the local token')
+assert.match(profileEditAuthBody, /uni\.showToast\(\{\s*title:\s*'登录已过期，请重新登录',\s*icon:\s*'none'\s*\}\)/, 'personal profile auth expiry should show one clear login toast')
+assert.match(profileEditAuthBody, /uni\.switchTab\(\{\s*url:\s*'\/pages\/profile\/profile'\s*\}\)/, 'personal profile auth expiry should return to the profile tab')
+assert.match(profileEditPage, /statusCode === 401[\s\S]*statusCode === 403/, 'personal profile should recognize both 401 and 403 authentication failures')
+assert.match(profileEditPage, /if \(!token\)\s*\{\s*redirectToProfileLogin\(\)\s*return\s*\}/, 'personal profile should redirect before requesting when no token exists')
+
+const profileEditLoadBody = sourceBracedBody(profileEditPage, /async\s+function\s+loadProfile\s*\(\s*\)\s*\{/.exec(profileEditPage)) || ''
+assert.match(profileEditLoadBody, /const loadedUser = await getUserInfoApi\(\)\s*if \(!isCurrentProfileSession\(generation, token\)\) return\s*user\.value = loadedUser/, 'personal profile should guard the user GET response before mutating state')
+assert.match(profileEditLoadBody, /isAuthFailure\(e\)[\s\S]*redirectToProfileLogin\(\)/, 'personal profile should redirect after authenticated GET failures')
+assert.match(profileEditTemplate, /v-if=["']profileLoading["'][^>]*aria-live=["']polite["']/, 'personal profile should announce its loading state')
+assert.match(profileEditTemplate, /v-else-if=["']loadError["'][\s\S]*@click=["']loadProfile["']/, 'personal profile should expose a readable non-auth error and retry')
+
+const wechatProfileBlocks = [...profileEditPage.matchAll(/\/\/ #ifndef H5([\s\S]*?)\/\/ #endif/g)].map((match) => match[1]).join('\n')
+assert.match(wechatProfileBlocks, /getWechatProfilePayload/, 'the non-H5 profile implementation should keep WeChat one-click synchronization')
+assert.match(wechatProfileBlocks, /async function syncWechatProfile/, 'the non-H5 build should define the WeChat synchronization handler')
+const wechatTemplateBlocks = [...profileEditTemplateRaw.matchAll(/<!-- #ifndef H5 -->([\s\S]*?)<!-- #endif -->/g)].map((match) => match[1]).join('\n')
+assert.match(wechatTemplateBlocks, /open-type=["']chooseAvatar["'][^>]*@chooseavatar=["']onChooseAvatar["']/, 'the WeChat profile page should use the current chooseAvatar capability')
+assert.match(wechatTemplateBlocks, /type=["']nickname["'][^>]*@input=["']onNicknameInput["']/, 'the WeChat profile page should use the current nickname input capability')
+assert.match(wechatTemplateBlocks, /:loading=["']profileSyncing["'][^>]*:disabled=["']profileSyncing["'][^>]*@click=["']syncWechatProfile["']/, 'the WeChat sync button should expose and lock its independent loading state')
+const h5ProfileEditBlocks = [...profileEditTemplateRaw.matchAll(/<!-- #ifdef H5 -->([\s\S]*?)<!-- #endif -->/g)].map((match) => match[1]).join('\n')
+assert.match(h5ProfileEditBlocks, /请在微信小程序内同步微信资料/, 'H5 should explain where WeChat profile synchronization is available')
+assert.match(h5ProfileEditBlocks, /<button\b[^>]*\bdisabled\b[^>]*>[^<]*微信[^<]*<\/button>/, 'H5 should render disabled WeChat capability guidance')
+assert.doesNotMatch(h5ProfileEditBlocks, /getUserProfile|chooseAvatar|chooseavatar|syncWechatProfile|onChooseAvatar/, 'H5 template blocks must not bind WeChat-only handlers')
+assert.match(h5ProfileEditBlocks, /type=["']text["'][^>]*@input=["']onNicknameInput["']/, 'H5 should keep nickname editing available for an existing token')
+
+const profileEditSaveBody = sourceBracedBody(profileEditPage, /async\s+function\s+saveProfile\s*\(\s*\)\s*\{/.exec(profileEditPage)) || ''
+assert.match(profileEditSaveBody, /normalizeWechatProfile\([\s\S]*nickname:\s*nicknameDraft\.value[\s\S]*avatar:\s*avatarDraft\.value/, 'personal profile save should normalize the current nickname and avatar draft')
+assert.match(profileEditSaveBody, /hasProfilePayload\(payload\)/, 'personal profile save should reject an empty normalized payload')
+assert.match(profileEditSaveBody, /const updatedUser = await updateUserInfoApi\(payload\)\s*if \(!isCurrentProfileSession\(generation, token\)\) return\s*user\.value = updatedUser\s*syncDraftFromUser\(\)/, 'personal profile save should guard the PUT response and refresh the form in place')
+assert.doesNotMatch(profileEditSaveBody, /uni\.(?:navigateBack|switchTab)\s*\(/, 'successful profile save should remain on the dedicated page')
+assert.match(profileEditTemplate, /:loading=["']profileSaving["'][^>]*:disabled=["']profileSaving["'][^>]*@click=["']saveProfile["']/, 'personal profile save should expose and lock its independent loading state')
+assert.doesNotMatch(profileEditPage, /setStorageSync|saveProfileDraft|loadProfileDraft/, 'unsaved personal-profile edits should not be persisted across page exits')
+assert.match(pageStyleDeclarations(profileEditStyle, '.profile-edit-hero'), /linear-gradient\(145deg,\s*#172554,\s*#4338ca 56%,\s*#7c3aed\)/, 'personal profile hero should reuse the approved blue-purple palette')
+assert.match(pageStyleDeclarations(profileEditStyle, '.profile-save'), /min-height:\s*88rpx\s*;/, 'personal profile save should keep an 88rpx touch target')
 
 assert.match(profilePage, /wechatLoginReady/, 'profile page should expose a WeChat login integration slot')
 assert.match(profilePage, /open-type="chooseAvatar"/, 'profile page should keep WeChat avatar slot')
