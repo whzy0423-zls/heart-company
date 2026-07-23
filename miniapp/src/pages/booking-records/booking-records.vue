@@ -39,6 +39,27 @@ function isAuthError(error) {
   return statusCode === 401 || statusCode === 403
 }
 
+function isCurrentBookingSession(ticket, token, error) {
+  if (ticket !== loadTicket) return false
+  const currentToken = getToken()
+  if (token === currentToken) return true
+  return Boolean(
+    !currentToken
+    && error?.authExpired
+    && error.requestToken === token,
+  )
+}
+
+function invalidateStaleBookingSession(ticket = loadTicket) {
+  if (ticket !== loadTicket) return
+  loadTicket += 1
+  loadedToken = ''
+  bookings.value = []
+  loadError.value = '登录状态已更新，请重新加载预约记录'
+  loading.value = false
+  clearBookingSession()
+}
+
 function handleAuthLoss(ticket = loadTicket) {
   if (ticket !== loadTicket) return
 
@@ -71,23 +92,25 @@ async function loadBookings() {
 
   try {
     const response = await listBookingsApi()
-    if (ticket !== loadTicket) return
-    if (getToken() !== requestToken) {
-      handleAuthLoss(ticket)
+    if (!isCurrentBookingSession(ticket, requestToken)) {
+      invalidateStaleBookingSession(ticket)
       return
     }
 
     loadedToken = requestToken
     bookings.value = Array.isArray(response?.items) ? response.items : []
   } catch (error) {
-    if (ticket !== loadTicket) return
-    if (isAuthError(error) || getToken() !== requestToken) {
+    if (!isCurrentBookingSession(ticket, requestToken, error)) {
+      invalidateStaleBookingSession(ticket)
+      return
+    }
+    if (isAuthError(error)) {
       handleAuthLoss(ticket)
       return
     }
     loadError.value = userErrorMessage(error, '预约记录加载失败，请重试')
   } finally {
-    if (ticket === loadTicket && getToken() === requestToken) {
+    if (isCurrentBookingSession(ticket, requestToken)) {
       loading.value = false
     }
   }
@@ -105,9 +128,13 @@ function bookingSummary(record) {
 
 function openBooking(record) {
   const currentToken = getToken()
-  if (!currentToken || currentToken !== loadedToken) {
+  if (!currentToken) {
     const ticket = ++loadTicket
     handleAuthLoss(ticket)
+    return
+  }
+  if (currentToken !== loadedToken) {
+    invalidateStaleBookingSession()
     return
   }
 
