@@ -9,6 +9,17 @@ await copyFile(new URL('./config.js', import.meta.url), modulePath)
 await copyFile(new URL('./apiBaseValidation.mjs', import.meta.url), join(dir, 'apiBaseValidation.mjs'))
 const { resolveApiBase } = await import(`file://${modulePath}`)
 
+const originalURL = globalThis.URL
+try {
+  globalThis.URL = undefined
+  assert.equal(
+    resolveApiBase({ env: { DEV: false, VITE_API_BASE: 'https://xn--9iq9az5uo8fz16d.com/api' } }),
+    'https://xn--9iq9az5uo8fz16d.com/api',
+  )
+} finally {
+  globalThis.URL = originalURL
+}
+
 assert.equal(
   resolveApiBase({ env: { DEV: true, VITE_API_BASE: '' } }),
   'https://xn--9iq9az5uo8fz16d.com/api',
@@ -35,6 +46,7 @@ for (const loopbackApiBase of [
   'https://127.1/api',
   'https://2130706433/api',
   'https://0x7f000001/api',
+  'https://08/api',
   'https://[::1]/api',
   'https://example.com/api',
   'https://yourdomain.com/api',

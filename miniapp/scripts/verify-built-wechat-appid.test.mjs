@@ -76,4 +76,14 @@ withBuild(
   },
 )
 
+withBuild(
+  {
+    js: `new URL('${productionApiBase}'); exports.API_BASE = '${productionApiBase}'`,
+  },
+  (result) => {
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /without global URL/)
+  },
+)
+
 console.log('built WeChat config verifier tests passed')

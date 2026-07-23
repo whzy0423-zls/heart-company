@@ -37,4 +37,8 @@ for (const invalidApiBase of [
   assert.match(result.stderr, /must not use placeholder or local development hosts/)
 }
 
+const invalidNumericHost = verify('https://08/api')
+assert.notEqual(invalidNumericHost.status, 0)
+assert.match(invalidNumericHost.stderr, /must be a valid HTTPS URL/)
+
 console.log('production API base verifier tests passed')

@@ -43,11 +43,15 @@ if (!existsSync(builtConfigPath)) {
 }
 
 let effectiveApiBase
+const originalURL = globalThis.URL
 try {
+  globalThis.URL = undefined
   const require = createRequire(import.meta.url)
   effectiveApiBase = require(builtConfigPath).API_BASE
 } catch (error) {
-  fail(`Unable to read the effective production API base: ${error.message}`)
+  fail(`Unable to load built API config without global URL: ${error.message}`)
+} finally {
+  globalThis.URL = originalURL
 }
 
 if (effectiveApiBase !== productionApiBase) {
