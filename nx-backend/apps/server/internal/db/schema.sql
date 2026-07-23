@@ -635,7 +635,16 @@ SET platform = CASE WHEN s.source_platform = 'miniapp' THEN 'miniapp' ELSE 'webs
     business_id = s.id::text
 FROM signups s
 WHERE m.business_type = 'signup'
-  AND m.business_id = s.id::text;
+  AND m.business_id = s.id::text
+  AND (
+    m.platform IS NULL OR btrim(m.platform) = ''
+    OR m.event_key IS NULL OR btrim(m.event_key) = ''
+    OR (
+      m.platform = 'system'
+      AND m.event_key = 'system.legacy'
+      AND m.target_path IN ('', '/message/management?type=signup')
+    )
+  );
 
 UPDATE messages m
 SET platform = 'miniapp',
@@ -644,7 +653,12 @@ SET platform = 'miniapp',
     business_id = u.id::text
 FROM wx_users u
 WHERE m.business_type = 'miniapp-user'
-  AND m.business_id = u.id::text;
+  AND m.business_id = u.id::text
+  AND (
+    m.platform IS NULL OR btrim(m.platform) = ''
+    OR m.event_key IS NULL OR btrim(m.event_key) = ''
+    OR (m.platform = 'system' AND m.event_key = 'system.legacy')
+  );
 
 UPDATE messages m
 SET platform = 'miniapp',
@@ -654,14 +668,24 @@ SET platform = 'miniapp',
     business_id = r.id::text
 FROM test_records r
 WHERE m.business_type = 'miniapp-test-record'
-  AND m.business_id = r.id::text;
+  AND m.business_id = r.id::text
+  AND (
+    m.platform IS NULL OR btrim(m.platform) = ''
+    OR m.event_key IS NULL OR btrim(m.event_key) = ''
+    OR (m.platform = 'system' AND m.event_key = 'system.legacy')
+  );
 
 UPDATE messages
-SET platform = 'system',
-    event_key = 'system.legacy',
+SET platform = CASE WHEN platform IS NULL OR btrim(platform) = '' THEN 'system' ELSE platform END,
+    event_key = CASE
+      WHEN event_key IS NULL OR btrim(event_key) = '' OR event_key = 'system.legacy'
+        THEN 'system.legacy.' || id::text
+      ELSE event_key
+    END,
     business_type = CASE WHEN btrim(business_type) = '' THEN 'message' ELSE business_type END,
     business_id = CASE WHEN btrim(business_id) = '' THEN id::text ELSE business_id END
-WHERE platform IS NULL OR platform = '' OR event_key IS NULL OR event_key = '';
+WHERE platform IS NULL OR btrim(platform) = ''
+   OR event_key IS NULL OR btrim(event_key) = '' OR event_key = 'system.legacy';
 
 -- 第四阶段：先记录历史异常摘要，再清理，之后才能安全增加约束。
 WITH orphaned AS (
@@ -712,15 +736,24 @@ WHERE duplicate.id = ranked.id
 -- 第五阶段：历史数据干净后增加取值、引用和幂等约束。
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_signups_source_platform') THEN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_signups_source_platform' AND conrelid = 'signups'::regclass
+  ) THEN
     ALTER TABLE signups ADD CONSTRAINT chk_signups_source_platform
       CHECK (source_platform IN ('website', 'miniapp'));
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_messages_platform') THEN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_messages_platform' AND conrelid = 'messages'::regclass
+  ) THEN
     ALTER TABLE messages ADD CONSTRAINT chk_messages_platform
       CHECK (platform IN ('website', 'miniapp', 'system'));
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_bookings_signup') THEN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_bookings_signup' AND conrelid = 'bookings'::regclass
+  ) THEN
     ALTER TABLE bookings ADD CONSTRAINT fk_bookings_signup
       FOREIGN KEY (signup_id) REFERENCES signups(id) ON DELETE SET NULL;
   END IF;

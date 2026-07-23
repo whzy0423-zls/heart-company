@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -54,7 +55,7 @@ var platformNotificationMigrationOrder = []string{
 	"UPDATE messages m\nSET platform = CASE",
 	"event_key = 'miniapp.user.created'",
 	"event_key = 'miniapp.quiz.submitted'",
-	"UPDATE messages\nSET platform = 'system'",
+	"UPDATE messages\nSET platform = CASE",
 	"INSERT INTO migration_logs",
 	"UPDATE bookings b\nSET signup_id = NULL",
 	"DELETE FROM messages duplicate",
@@ -96,17 +97,32 @@ func TestPlatformNotificationMigration(t *testing.T) {
 	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
 		t.Fatal(err)
 	}
-	database, err := sql.Open("pgx", dsn)
+	adminDatabase, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = database.Close() })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	if _, err := database.ExecContext(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
-		t.Fatalf("reset test database: %v", err)
+	schemaName := fmt.Sprintf("platform_notification_%d", time.Now().UnixNano())
+	if _, err := adminDatabase.ExecContext(ctx, "CREATE SCHEMA "+schemaName); err != nil {
+		_ = adminDatabase.Close()
+		t.Fatalf("create isolated test schema: %v", err)
 	}
+	scopedDSN, err := postgresDSNWithSearchPath(dsn, schemaName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("pgx", scopedDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = database.Close()
+		_, _ = adminDatabase.ExecContext(context.Background(), "DROP SCHEMA IF EXISTS "+schemaName+" CASCADE")
+		_ = adminDatabase.Close()
+	})
+
 	for run := 1; run <= 2; run++ {
 		if _, err := database.ExecContext(ctx, schemaSQL); err != nil {
 			t.Fatalf("apply schema to fresh database run %d: %v", run, err)
@@ -114,7 +130,7 @@ func TestPlatformNotificationMigration(t *testing.T) {
 	}
 	assertPlatformNotificationSchemaShape(t, database)
 
-	if _, err := database.ExecContext(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
+	if _, err := adminDatabase.ExecContext(ctx, "DROP SCHEMA "+schemaName+" CASCADE; CREATE SCHEMA "+schemaName); err != nil {
 		t.Fatalf("reset test database for legacy migration: %v", err)
 	}
 	if _, err := database.ExecContext(ctx, legacyPlatformNotificationSchema); err != nil {
@@ -155,6 +171,8 @@ func TestPlatformNotificationMigration(t *testing.T) {
 		{"miniapp", "小程序新用户", fmt.Sprint(wxUserID), "miniapp-user", ""},
 		{"miniapp", "小程序测评", fmt.Sprint(testRecordID), "miniapp-test-record", ""},
 		{"notice", "未知系统消息", "", "", ""},
+		{"notice", "未知同业务消息一", "shared-business", "external", ""},
+		{"notice", "未知同业务消息二", "shared-business", "external", ""},
 	}
 	for _, fixture := range fixtures {
 		if _, err := database.ExecContext(ctx, messageInsert, fixture...); err != nil {
@@ -162,10 +180,19 @@ func TestPlatformNotificationMigration(t *testing.T) {
 		}
 	}
 
-	for run := 1; run <= 2; run++ {
-		if _, err := database.ExecContext(ctx, schemaSQL); err != nil {
-			t.Fatalf("apply schema run %d: %v", run, err)
-		}
+	if _, err := database.ExecContext(ctx, schemaSQL); err != nil {
+		t.Fatalf("apply legacy migration first run: %v", err)
+	}
+	var explicitMessageID int64
+	if err := database.QueryRowContext(ctx, `
+		INSERT INTO messages (type,title,business_id,business_type,target_path,platform,event_key)
+		VALUES ('signup','显式新事件',$1,'signup','/custom/signup-target','website','signup.followup')
+		RETURNING id
+	`, fmt.Sprint(orphanSignupID)).Scan(&explicitMessageID); err != nil {
+		t.Fatalf("insert explicit post-migration message: %v", err)
+	}
+	if _, err := database.ExecContext(ctx, schemaSQL); err != nil {
+		t.Fatalf("apply legacy migration second run: %v", err)
 	}
 
 	assertTextQuery(t, database, `SELECT source_platform FROM signups WHERE id=$1`, "website", websiteSignupID)
@@ -182,9 +209,13 @@ func TestPlatformNotificationMigration(t *testing.T) {
 	if err := database.QueryRowContext(ctx, `SELECT id,platform,event_key,business_type,business_id FROM messages WHERE title='未知系统消息'`).Scan(&unknownID, &unknownPlatform, &unknownEventKey, &unknownBusinessType, &unknownBusinessID); err != nil {
 		t.Fatal(err)
 	}
-	if unknownPlatform != "system" || unknownEventKey != "system.legacy" || unknownBusinessType != "message" || unknownBusinessID != fmt.Sprint(unknownID) {
+	if unknownPlatform != "system" || unknownEventKey != "system.legacy."+fmt.Sprint(unknownID) || unknownBusinessType != "message" || unknownBusinessID != fmt.Sprint(unknownID) {
 		t.Fatalf("unknown message backfill = platform:%q event:%q type:%q id:%q, row id %d", unknownPlatform, unknownEventKey, unknownBusinessType, unknownBusinessID, unknownID)
 	}
+	assertIntQuery(t, database, `SELECT count(*) FROM messages WHERE title IN ('未知同业务消息一','未知同业务消息二')`, 2)
+	assertIntQuery(t, database, `SELECT count(DISTINCT event_key) FROM messages WHERE title IN ('未知同业务消息一','未知同业务消息二')`, 2)
+	assertHistoricalMessage(t, database, "显式新事件", "website", "signup.followup", "signup", fmt.Sprint(orphanSignupID), "/custom/signup-target")
+	assertIntQuery(t, database, `SELECT count(*) FROM messages WHERE id=$1`, 1, explicitMessageID)
 
 	assertIntQuery(t, database, `SELECT count(*) FROM messages WHERE business_type='signup' AND business_id=$1`, 1, fmt.Sprint(websiteSignupID))
 	assertIntQuery(t, database, `SELECT count(*) FROM bookings WHERE contact_name='孤儿预约' AND signup_id IS NULL`, 1)
@@ -192,7 +223,7 @@ func TestPlatformNotificationMigration(t *testing.T) {
 	assertJSONLogCount(t, database, "platform_notification.duplicate_messages", 1)
 
 	assertPlatformNotificationSchemaShape(t, database)
-	assertTextQuery(t, database, `SELECT confdeltype::text FROM pg_constraint WHERE conname='fk_bookings_signup'`, "n")
+	assertTextQuery(t, database, `SELECT confdeltype::text FROM pg_constraint WHERE conname='fk_bookings_signup' AND conrelid='bookings'::regclass`, "n")
 
 	if _, err := database.ExecContext(ctx, `INSERT INTO messages (title) VALUES ('默认系统消息一'), ('默认系统消息二')`); err != nil {
 		t.Fatalf("safe message defaults must support legacy insert paths: %v", err)
@@ -210,10 +241,29 @@ func TestPlatformNotificationMigration(t *testing.T) {
 	}
 }
 
+func postgresDSNWithSearchPath(dsn, schemaName string) (string, error) {
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		return "", err
+	}
+	query := parsed.Query()
+	query.Set("search_path", schemaName)
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
+}
+
 func assertPlatformNotificationSchemaShape(t *testing.T, database *sql.DB) {
 	t.Helper()
-	for _, constraint := range []string{"chk_signups_source_platform", "chk_messages_platform", "fk_bookings_signup"} {
-		assertIntQuery(t, database, `SELECT count(*) FROM pg_constraint WHERE conname=$1`, 1, constraint)
+	constraints := []struct {
+		name  string
+		table string
+	}{
+		{"chk_signups_source_platform", "signups"},
+		{"chk_messages_platform", "messages"},
+		{"fk_bookings_signup", "bookings"},
+	}
+	for _, constraint := range constraints {
+		assertIntQuery(t, database, `SELECT count(*) FROM pg_constraint WHERE conname=$1 AND conrelid=$2::regclass`, 1, constraint.name, constraint.table)
 	}
 	for _, index := range []string{"uq_messages_event_business", "idx_messages_unread_id", "idx_messages_platform_create_time", "idx_signups_source_create_time"} {
 		assertIntQuery(t, database, `SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND indexname=$1`, 1, index)
