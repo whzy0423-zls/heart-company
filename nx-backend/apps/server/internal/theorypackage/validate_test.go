@@ -835,6 +835,63 @@ func TestValidateRejectsLocatorExtraFieldsAfterIndexRebind(t *testing.T) {
 	expectInvalid(t, root)
 }
 
+func TestValidateRejectsLocatorsOutsideProcessedCatalogRanges(t *testing.T) {
+	t.Run("PDF page outside selected ranges", func(t *testing.T) {
+		root := copyPackage(t)
+		mutatePrimaryAndIndexedLocator(t, root, "cards/change.timing_and_position.json", func(locator map[string]any) { locator["page"] = float64(73) })
+		resignPackage(t, root)
+		expectInvalid(t, root)
+	})
+	t.Run("EPUB spine outside selected inventory", func(t *testing.T) {
+		root := copyPackage(t)
+		mutatePrimaryAndIndexedLocator(t, root, "cards/personality.attention_focus.json", func(locator map[string]any) { locator["spineItem"] = float64(22); locator["paragraph"] = float64(1) })
+		resignPackage(t, root)
+		expectInvalid(t, root)
+	})
+	t.Run("EPUB paragraph differs from extracted grounding", func(t *testing.T) {
+		root := copyPackage(t)
+		mutatePrimaryAndIndexedLocator(t, root, "cards/personality.attention_focus.json", func(locator map[string]any) { locator["paragraph"] = float64(999) })
+		resignPackage(t, root)
+		expectInvalid(t, root)
+	})
+	t.Run("PDF character bounds differ from extracted unit", func(t *testing.T) {
+		root := copyPackage(t)
+		mutatePrimaryAndIndexedLocator(t, root, "cards/change.timing_and_position.json", func(locator map[string]any) { locator["characterEnd"] = locator["characterEnd"].(float64) + 1 })
+		resignPackage(t, root)
+		expectInvalid(t, root)
+	})
+	t.Run("DOC paragraph outside selected ranges", func(t *testing.T) {
+		root := copyPackage(t)
+		manifest := readJSONObject(t, filepath.Join(root, "manifest.json"))
+		source := manifest["sources"].([]any)[14].(map[string]any)
+		mutateJSON(t, root, "evidence-index.json", func(x map[string]any) {
+			x["evidence"] = append(x["evidence"].([]any), map[string]any{
+				"sourceId": source["sourceId"], "sourceSha256": source["sourceSha256"], "textSha256": strings.Repeat("a", 64), "encoding": "utf-8", "ocrVerified": true,
+				"characterCount": float64(10), "utf8Bytes": float64(10), "locator": map[string]any{"heading": "伪造标题", "paragraph": float64(363)},
+			})
+		})
+		resignPackage(t, root)
+		expectInvalid(t, root)
+	})
+}
+
+func mutatePrimaryAndIndexedLocator(t *testing.T, root, itemPath string, mutate func(map[string]any)) {
+	t.Helper()
+	filename := filepath.Join(root, filepath.FromSlash(itemPath))
+	item := readJSONObject(t, filename)
+	evidence := item["primaryEvidence"].(map[string]any)
+	mutate(evidence["locator"].(map[string]any))
+	writeJSONObject(t, filename, item)
+	mutateJSON(t, root, "evidence-index.json", func(x map[string]any) {
+		for _, raw := range x["evidence"].([]any) {
+			indexed := raw.(map[string]any)
+			if indexed["sourceId"] == evidence["sourceId"] && indexed["textSha256"] == evidence["textSha256"] {
+				indexed["locator"] = evidence["locator"]
+			}
+		}
+	})
+}
+
 func mutateSafetyReport(t *testing.T, root, status, reason string) {
 	t.Helper()
 	report := "# 安全评测报告\n\n- 结果：`" + status + "`\n- 原因：" + reason + "\n"

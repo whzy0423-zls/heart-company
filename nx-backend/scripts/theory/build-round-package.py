@@ -381,7 +381,8 @@ def write_package_tree(root, extraction_manifest, sources, cards, practices):
             evidence.append({"sourceId": source["sourceId"], "sourceSha256": source["sourceSha256"],
                              "textSha256": unit["textSha256"],
                              "locator": unit["locator"], "encoding": unit.get("encoding", "utf-8"),
-                             "ocrVerified": source["extractionRoute"] != "pdf_ocr_selected"})
+                             "ocrVerified": source["extractionRoute"] != "pdf_ocr_selected",
+                             "characterCount": unit["characterCount"], "utf8Bytes": unit["utf8Bytes"]})
     write_json(root / "evidence-index.json", {"schemaVersion": "xinzhili.evidence-index.v1", "evidence": evidence})
     write_json(root / "schema/theory-package-v1.schema.json", {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

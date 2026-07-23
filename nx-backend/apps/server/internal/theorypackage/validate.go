@@ -23,8 +23,9 @@ import (
 var errInvalidPackage = errors.New("invalid theory package")
 
 const (
-	roundOneSafetyCaseSetDigest = "d646838a32c9a8b77cc8aa04167dd59baa75c9e73d0d55d5e24a27348028a7cc"
-	reviewInstructions          = "正式审核必须由后台或 CLI 核验数据库用户与角色后写入；构包身份不得充当 reviewer。"
+	roundOneSafetyCaseSetDigest     = "d646838a32c9a8b77cc8aa04167dd59baa75c9e73d0d55d5e24a27348028a7cc"
+	roundOneEvidenceGroundingDigest = "611c16e7b3de03d6f8b6c87e475df8a9a83ef5db6bf79cead27d13c4c24aa1c8"
+	reviewInstructions              = "正式审核必须由后台或 CLI 核验数据库用户与角色后写入；构包身份不得充当 reviewer。"
 )
 
 func invalid(format string, args ...any) error {
@@ -769,6 +770,7 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 	}
 	sources := map[string]map[string]any{}
 	sourceWorks := map[string]string{}
+	sourceCatalogEntries := map[string]map[string]any{}
 	for _, v := range arr(m, "sources") {
 		s, ok := v.(map[string]any)
 		if !ok {
@@ -801,8 +803,10 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 		}
 		sources[id] = s
 		sourceWorks[id] = workID
+		sourceCatalogEntries[id] = catalogSource
 	}
 	units := map[string]map[string]any{}
+	grounding := []any{}
 	if err := exactKeys(index, set("evidence", "schemaVersion"), "evidence index"); err != nil {
 		return err
 	}
@@ -814,21 +818,36 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 		if !ok {
 			return invalid("evidence index item invalid")
 		}
-		if err := exactKeys(e, set("encoding", "locator", "ocrVerified", "sourceId", "sourceSha256", "textSha256"), "evidence index item"); err != nil {
+		if err := exactKeys(e, set("characterCount", "encoding", "locator", "ocrVerified", "sourceId", "sourceSha256", "textSha256", "utf8Bytes"), "evidence index item"); err != nil {
 			return err
 		}
 		sid, textSHA := str(e, "sourceId"), str(e, "textSha256")
-		if sources[sid] == nil || !sha256hex(textSHA) || str(e, "sourceSha256") != str(sources[sid], "sourceSha256") || str(e, "encoding") != "utf-8" || !validLocator(e["locator"], str(sources[sid], "format")) {
+		characterCount, characterOK := integer(e, "characterCount")
+		utf8Bytes, bytesOK := integer(e, "utf8Bytes")
+		if sources[sid] == nil || !sha256hex(textSHA) || str(e, "sourceSha256") != str(sources[sid], "sourceSha256") || str(e, "encoding") != "utf-8" ||
+			!characterOK || !bytesOK || characterCount < 1 || characterCount > 100000 || utf8Bytes < characterCount || characterCount > math.MaxInt/4 || utf8Bytes > characterCount*4 ||
+			!validProcessedLocator(e["locator"], str(sources[sid], "format"), sourceCatalogEntries[sid], characterCount) {
 			return invalid("invalid evidence index")
 		}
 		if _, ok := e["ocrVerified"].(bool); !ok {
 			return invalid("invalid evidence OCR verification state")
 		}
+		grounding = append(grounding, map[string]any{
+			"sourceId":       e["sourceId"],
+			"sourceSha256":   e["sourceSha256"],
+			"textSha256":     e["textSha256"],
+			"locator":        e["locator"],
+			"characterCount": e["characterCount"],
+			"utf8Bytes":      e["utf8Bytes"],
+		})
 		unitKey := sid + ":" + textSHA
 		if units[unitKey] != nil {
 			return invalid("duplicate evidence index item")
 		}
 		units[unitKey] = e
+	}
+	if shaCanonical(grounding) != roundOneEvidenceGroundingDigest {
+		return invalid("evidence grounding differs from reviewed extraction allowlist")
 	}
 	workQuotes := map[string]int{}
 	cardQuotes := map[string]int{}
@@ -933,6 +952,74 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 		return err
 	}
 	return nil
+}
+
+func validProcessedLocator(locator any, format string, catalogSource map[string]any, characterCount int) bool {
+	if !validLocator(locator, format) || catalogSource == nil {
+		return false
+	}
+	x := locator.(map[string]any)
+	ranges := arr(catalogSource, "selectedRanges")
+	switch format {
+	case "pdf":
+		page, _ := integer(x, "page")
+		slice, _ := integer(x, "slice")
+		start, _ := integer(x, "characterStart")
+		end, _ := integer(x, "characterEnd")
+		return rangeContainsValue(ranges, "page:", page) && slice == 1 && start == 0 && end == characterCount
+	case "epub":
+		spine, _ := integer(x, "spineItem")
+		if !rangeContainsValue(ranges, "spine-item:", spine) {
+			return false
+		}
+		for _, raw := range arr(mapv(catalogSource, "unitEstimate"), "locatorInventory") {
+			item, ok := raw.(map[string]any)
+			if !ok {
+				return false
+			}
+			index, _ := integer(item, "index")
+			if index == spine {
+				return true
+			}
+		}
+		return false
+	case "doc", "docx":
+		paragraph, _ := integer(x, "paragraph")
+		return rangeContainsValue(ranges, "paragraph:", paragraph)
+	default:
+		return false
+	}
+}
+
+func rangeContainsValue(ranges []any, prefix string, target int) bool {
+	if target < 1 {
+		return false
+	}
+	for _, raw := range ranges {
+		value, ok := raw.(string)
+		if !ok || !strings.HasPrefix(value, prefix) {
+			return false
+		}
+		bounds := strings.Split(strings.TrimPrefix(value, prefix), "-")
+		if len(bounds) < 1 || len(bounds) > 2 {
+			return false
+		}
+		start, err := strconv.Atoi(bounds[0])
+		if err != nil {
+			return false
+		}
+		end := start
+		if len(bounds) == 2 {
+			end, err = strconv.Atoi(bounds[1])
+			if err != nil {
+				return false
+			}
+		}
+		if target >= start && target <= end {
+			return true
+		}
+	}
+	return false
 }
 func isSafeWorkDirectory(value string) bool {
 	return validText(value, 500) && strings.HasPrefix(value, "sources/") && path.Clean(value) == value && !strings.Contains(value, "\\") && !strings.Contains(value, "../")

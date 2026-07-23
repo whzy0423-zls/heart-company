@@ -217,6 +217,8 @@ class RoundPackageTest(unittest.TestCase):
             indexed = evidence[(primary["sourceId"], primary["textSha256"])]
             self.assertEqual(sources[primary["sourceId"]]["sourceSha256"], indexed["sourceSha256"])
             self.assertEqual(primary["locator"], indexed["locator"])
+            self.assertGreater(indexed["characterCount"], 0)
+            self.assertGreaterEqual(indexed["utf8Bytes"], indexed["characterCount"])
 
     def test_reviews_are_pending_offline_templates_bound_to_content_digest(self):
         digest = self.manifest["contentDigest"]
