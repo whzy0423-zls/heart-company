@@ -146,6 +146,18 @@ type userServiceFakeMessages struct {
 	event   businessmessage.Event
 }
 
+func validTestRecordInput(resultType int) TestRecordInput {
+	return TestRecordInput{
+		ResultType: resultType,
+		Score:      json.RawMessage(`{}`),
+		Centers:    json.RawMessage(`[]`),
+	}
+}
+
+func newTestRecordService(beginner dbtx.Beginner, store *userServiceFakeUsers, messages messageWriter) *Service {
+	return NewService(beginner, store, messages, WithTestRecordWriter(store))
+}
+
 func (f *userServiceFakeMessages) Create(ctx context.Context, q dbtx.DBTX, event businessmessage.Event) (bool, error) {
 	f.calls++
 	f.gotCtx = ctx
@@ -385,9 +397,9 @@ func TestMiniappTestRecordCreatesMessageAndUpdatesMainTypeInSameTransaction(t *t
 	}
 	messages := &userServiceFakeMessages{created: true}
 	beginner := &userServiceFakeBeginner{tx: tx}
-	in := TestRecordInput{Gender: "female", ResultType: 9, SecondType: 1, Scores: json.RawMessage(`{"9":18}`), Centers: json.RawMessage(`[{"key":"gut","pct":80}]`)}
+	in := TestRecordInput{Gender: "female", ResultType: 9, SecondType: 1, Score: json.RawMessage(`{"9":18}`), Centers: json.RawMessage(`[{"key":"gut","pct":80}]`)}
 
-	record, err := NewService(beginner, store, messages).SaveTestRecord(context.Background(), 42, in)
+	record, err := newTestRecordService(beginner, store, messages).SaveTestRecord(context.Background(), 42, in)
 
 	if err != nil {
 		t.Fatalf("SaveTestRecord() error = %v", err)
@@ -407,6 +419,9 @@ func TestMiniappTestRecordCreatesMessageAndUpdatesMainTypeInSameTransaction(t *t
 	}
 	if store.insertUID != 42 || store.updateUID != 42 || store.mainType != 9 {
 		t.Fatalf("unexpected user/main type writes: insertUID=%d updateUID=%d mainType=%d", store.insertUID, store.updateUID, store.mainType)
+	}
+	if string(store.input.Scores) != `{"9":18}` || len(store.input.Score) != 0 {
+		t.Fatalf("store input scores were not normalized: score=%s scores=%s", store.input.Score, store.input.Scores)
 	}
 	wantEvent := businessmessage.MiniappQuizSubmitted("77", "42", "微信用户42", 9)
 	wantEvent.Content += "，提交时间：2026/07/23 12:34:56"
@@ -432,7 +447,7 @@ func TestMiniappTestRecordMessageNeverUsesNicknameThatMayContainWechatIdentity(t
 			}
 			messages := &userServiceFakeMessages{created: true}
 
-			_, err := NewService(&userServiceFakeBeginner{tx: tx}, store, messages).SaveTestRecord(context.Background(), 42, TestRecordInput{ResultType: 9})
+			_, err := newTestRecordService(&userServiceFakeBeginner{tx: tx}, store, messages).SaveTestRecord(context.Background(), 42, validTestRecordInput(9))
 
 			if err != nil {
 				t.Fatalf("SaveTestRecord() error = %v", err)
@@ -466,7 +481,7 @@ func TestMiniappTestRecordFailuresRollbackWithoutCommit(t *testing.T) {
 			messages := &userServiceFakeMessages{}
 			tt.configure(store, messages)
 
-			_, err := NewService(&userServiceFakeBeginner{tx: tx}, store, messages).SaveTestRecord(context.Background(), 42, TestRecordInput{ResultType: 9})
+			_, err := newTestRecordService(&userServiceFakeBeginner{tx: tx}, store, messages).SaveTestRecord(context.Background(), 42, validTestRecordInput(9))
 
 			if !errors.Is(err, wantErr) || !strings.Contains(err.Error(), tt.wantPrefix) {
 				t.Fatalf("error = %v, want wrapped %q", err, tt.wantPrefix)
@@ -488,7 +503,7 @@ func TestMiniappTestRecordRepeatedSubmissionsCreateDistinctMessages(t *testing.T
 		store := &userServiceFakeUsers{id: 42, user: User{ID: "42", Nickname: "小芯"}, record: TestRecord{ID: recordID, ResultType: 9}}
 		messages := &userServiceFakeMessages{created: true}
 
-		if _, err := NewService(&userServiceFakeBeginner{tx: tx}, store, messages).SaveTestRecord(context.Background(), 42, TestRecordInput{ResultType: 9}); err != nil {
+		if _, err := newTestRecordService(&userServiceFakeBeginner{tx: tx}, store, messages).SaveTestRecord(context.Background(), 42, validTestRecordInput(9)); err != nil {
 			t.Fatalf("SaveTestRecord(%s) error = %v", recordID, err)
 		}
 		events = append(events, messages.event)
@@ -503,7 +518,7 @@ func TestMiniappTestRecordCommitFailureReturnsError(t *testing.T) {
 	tx := &userServiceFakeTx{commitErr: wantErr}
 	store := &userServiceFakeUsers{id: 42, user: User{ID: "42"}, record: TestRecord{ID: "77", ResultType: 9}}
 
-	_, err := NewService(&userServiceFakeBeginner{tx: tx}, store, &userServiceFakeMessages{}).SaveTestRecord(context.Background(), 42, TestRecordInput{ResultType: 9})
+	_, err := newTestRecordService(&userServiceFakeBeginner{tx: tx}, store, &userServiceFakeMessages{}).SaveTestRecord(context.Background(), 42, validTestRecordInput(9))
 
 	if !errors.Is(err, wantErr) || !strings.Contains(err.Error(), "commit miniapp test transaction") {
 		t.Fatalf("error = %v, want wrapped commit error", err)
@@ -519,7 +534,7 @@ func TestMiniappTestRecordCanceledContextRollsBack(t *testing.T) {
 	tx := &userServiceFakeTx{}
 	store := &userServiceFakeUsers{id: 42, waitInsert: true}
 
-	_, err := NewService(&userServiceFakeBeginner{tx: tx}, store, &userServiceFakeMessages{}).SaveTestRecord(ctx, 42, TestRecordInput{ResultType: 9})
+	_, err := newTestRecordService(&userServiceFakeBeginner{tx: tx}, store, &userServiceFakeMessages{}).SaveTestRecord(ctx, 42, validTestRecordInput(9))
 
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context canceled", err)
@@ -530,25 +545,34 @@ func TestMiniappTestRecordCanceledContextRollsBack(t *testing.T) {
 }
 
 func TestMiniappTestRecordRejectsInvalidInputBeforeTransaction(t *testing.T) {
+	valid := validTestRecordInput(1)
 	tests := []struct {
 		name string
 		uid  int64
 		in   TestRecordInput
 	}{
-		{name: "invalid user", uid: 0, in: TestRecordInput{ResultType: 1}},
-		{name: "invalid result", uid: 1, in: TestRecordInput{ResultType: 10}},
-		{name: "invalid second", uid: 1, in: TestRecordInput{ResultType: 1, SecondType: -1}},
-		{name: "invalid scores json", uid: 1, in: TestRecordInput{ResultType: 1, Scores: json.RawMessage(`{`)}},
-		{name: "invalid centers json", uid: 1, in: TestRecordInput{ResultType: 1, Centers: json.RawMessage(`[`)}},
-		{name: "scores too large", uid: 1, in: TestRecordInput{ResultType: 1, Scores: json.RawMessage(`{"value":"` + strings.Repeat("x", maxTestRecordJSONBytes) + `"}`)}},
-		{name: "centers too large", uid: 1, in: TestRecordInput{ResultType: 1, Centers: json.RawMessage(`["` + strings.Repeat("x", maxTestRecordJSONBytes) + `"]`)}},
+		{name: "invalid user", uid: 0, in: valid},
+		{name: "invalid result", uid: 1, in: TestRecordInput{ResultType: 10, Score: json.RawMessage(`{}`), Centers: json.RawMessage(`[]`)}},
+		{name: "invalid second", uid: 1, in: TestRecordInput{ResultType: 1, SecondType: -1, Score: json.RawMessage(`{}`), Centers: json.RawMessage(`[]`)}},
+		{name: "same result and second", uid: 1, in: TestRecordInput{ResultType: 1, SecondType: 1, Score: json.RawMessage(`{}`), Centers: json.RawMessage(`[]`)}},
+		{name: "missing score", uid: 1, in: TestRecordInput{ResultType: 1, Centers: json.RawMessage(`[]`)}},
+		{name: "null score", uid: 1, in: TestRecordInput{ResultType: 1, Score: json.RawMessage(`null`), Centers: json.RawMessage(`[]`)}},
+		{name: "array score", uid: 1, in: TestRecordInput{ResultType: 1, Score: json.RawMessage(`[]`), Centers: json.RawMessage(`[]`)}},
+		{name: "invalid score json", uid: 1, in: TestRecordInput{ResultType: 1, Score: json.RawMessage(`{`), Centers: json.RawMessage(`[]`)}},
+		{name: "conflicting score aliases", uid: 1, in: TestRecordInput{ResultType: 1, Score: json.RawMessage(`{"1":1}`), Scores: json.RawMessage(`{"1":2}`), Centers: json.RawMessage(`[]`)}},
+		{name: "missing centers", uid: 1, in: TestRecordInput{ResultType: 1, Score: json.RawMessage(`{}`)}},
+		{name: "null centers", uid: 1, in: TestRecordInput{ResultType: 1, Score: json.RawMessage(`{}`), Centers: json.RawMessage(`null`)}},
+		{name: "object centers", uid: 1, in: TestRecordInput{ResultType: 1, Score: json.RawMessage(`{}`), Centers: json.RawMessage(`{}`)}},
+		{name: "invalid centers json", uid: 1, in: TestRecordInput{ResultType: 1, Score: json.RawMessage(`{}`), Centers: json.RawMessage(`[`)}},
+		{name: "score too large", uid: 1, in: TestRecordInput{ResultType: 1, Score: json.RawMessage(`{"value":"` + strings.Repeat("x", maxTestRecordJSONBytes) + `"}`), Centers: json.RawMessage(`[]`)}},
+		{name: "centers too large", uid: 1, in: TestRecordInput{ResultType: 1, Score: json.RawMessage(`{}`), Centers: json.RawMessage(`["` + strings.Repeat("x", maxTestRecordJSONBytes) + `"]`)}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			beginner := &userServiceFakeBeginner{tx: &userServiceFakeTx{}}
 			store := &userServiceFakeUsers{id: tt.uid}
 
-			_, err := NewService(beginner, store, &userServiceFakeMessages{}).SaveTestRecord(context.Background(), tt.uid, tt.in)
+			_, err := newTestRecordService(beginner, store, &userServiceFakeMessages{}).SaveTestRecord(context.Background(), tt.uid, tt.in)
 
 			if !errors.Is(err, ErrInvalidTestRecord) {
 				t.Fatalf("error = %v, want ErrInvalidTestRecord", err)
@@ -562,7 +586,7 @@ func TestMiniappTestRecordRejectsInvalidInputBeforeTransaction(t *testing.T) {
 
 func TestMiniappTestRecordStoreRejectsNilQueryTarget(t *testing.T) {
 	store := &Store{}
-	_, err := store.InsertTestRecord(context.Background(), nil, 1, TestRecordInput{ResultType: 1})
+	_, err := store.InsertTestRecord(context.Background(), nil, 1, validTestRecordInput(1))
 	if !errors.Is(err, ErrNilDBTX) {
 		t.Fatalf("InsertTestRecord() error = %v, want ErrNilDBTX", err)
 	}
@@ -577,18 +601,49 @@ func TestMiniappTestRecordRejectsUnconfiguredService(t *testing.T) {
 		service *Service
 	}{
 		{name: "nil receiver", service: nil},
-		{name: "missing beginner", service: NewService(nil, &userServiceFakeUsers{}, &userServiceFakeMessages{})},
-		{name: "missing users and tests", service: NewService(&userServiceFakeBeginner{tx: &userServiceFakeTx{}}, nil, &userServiceFakeMessages{})},
-		{name: "login only users", service: NewService(&userServiceFakeBeginner{tx: &userServiceFakeTx{}}, loginOnlyUsers{inner: &userServiceFakeUsers{}}, &userServiceFakeMessages{})},
-		{name: "missing messages", service: NewService(&userServiceFakeBeginner{tx: &userServiceFakeTx{}}, &userServiceFakeUsers{}, nil)},
+		{name: "missing beginner", service: NewService(nil, &userServiceFakeUsers{}, &userServiceFakeMessages{}, WithTestRecordWriter(&userServiceFakeUsers{}))},
+		{name: "missing users", service: NewService(&userServiceFakeBeginner{tx: &userServiceFakeTx{}}, nil, &userServiceFakeMessages{}, WithTestRecordWriter(&userServiceFakeUsers{}))},
+		{name: "missing test writer option", service: NewService(&userServiceFakeBeginner{tx: &userServiceFakeTx{}}, &userServiceFakeUsers{}, &userServiceFakeMessages{})},
+		{name: "missing messages", service: NewService(&userServiceFakeBeginner{tx: &userServiceFakeTx{}}, &userServiceFakeUsers{}, nil, WithTestRecordWriter(&userServiceFakeUsers{}))},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := tt.service.SaveTestRecord(context.Background(), 1, TestRecordInput{ResultType: 1})
+			_, err := tt.service.SaveTestRecord(context.Background(), 1, validTestRecordInput(1))
 			if !errors.Is(err, ErrServiceNotConfigured) {
 				t.Fatalf("error = %v, want ErrServiceNotConfigured", err)
 			}
 		})
+	}
+}
+
+func TestNormalizeScoresPrefersClientScoreAndSupportsLegacyScores(t *testing.T) {
+	tests := []struct {
+		name   string
+		score  json.RawMessage
+		scores json.RawMessage
+		want   string
+	}{
+		{name: "client score", score: json.RawMessage(`{"9":18}`), want: `{"9":18}`},
+		{name: "legacy scores", scores: json.RawMessage(`{"8":12}`), want: `{"8":12}`},
+		{name: "matching aliases", score: json.RawMessage(`{"1":1,"2":2}`), scores: json.RawMessage(`{"2":2,"1":1}`), want: `{"1":1,"2":2}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NormalizeScores(tt.score, tt.scores)
+			if err != nil || string(got) != tt.want {
+				t.Fatalf("NormalizeScores() = %s, %v; want %s, nil", got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeScoresRejectsDifferentLargeIntegerAliases(t *testing.T) {
+	_, err := NormalizeScores(
+		json.RawMessage(`{"1":9007199254740992}`),
+		json.RawMessage(`{"1":9007199254740993}`),
+	)
+	if !errors.Is(err, ErrInvalidTestRecord) {
+		t.Fatalf("NormalizeScores() error = %v, want ErrInvalidTestRecord", err)
 	}
 }
 

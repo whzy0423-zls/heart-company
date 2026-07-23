@@ -3,6 +3,7 @@ package miniapp
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -34,18 +35,31 @@ func TestMiniappTestRecordServicePostgresIsAtomic(t *testing.T) {
 		if err := database.QueryRowContext(ctx, `INSERT INTO wx_users (openid,nickname,main_type) VALUES ('quiz-success','小芯',2) RETURNING id`).Scan(&userID); err != nil {
 			t.Fatal(err)
 		}
-		service := NewService(dbtx.SQLBeginner{DB: database}, NewStore(database), businessmessage.Store{})
-		record, err := service.SaveTestRecord(ctx, userID, TestRecordInput{ResultType: 9, SecondType: 1})
+		store := NewStore(database)
+		service := NewService(dbtx.SQLBeginner{DB: database}, store, businessmessage.Store{}, WithTestRecordWriter(store))
+		record, err := service.SaveTestRecord(ctx, userID, TestRecordInput{
+			ResultType: 9,
+			SecondType: 1,
+			Score:      json.RawMessage(`{"9":18,"1":4}`),
+			Centers:    json.RawMessage(`[{"key":"gut","pct":80}]`),
+		})
 		if err != nil {
 			t.Fatalf("SaveTestRecord() error = %v", err)
 		}
 
 		var recordCount, mainType, messageCount int
+		var storedScoreOK, storedCentersOK bool
 		var title, content, platform, eventKey, businessID, businessType, targetPath string
 		if err := database.QueryRowContext(ctx, `SELECT count(*) FROM test_records WHERE wx_user_id=$1 AND id=$2`, userID, record.ID).Scan(&recordCount); err != nil {
 			t.Fatal(err)
 		}
 		if err := database.QueryRowContext(ctx, `SELECT main_type FROM wx_users WHERE id=$1`, userID).Scan(&mainType); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.QueryRowContext(ctx, `
+			SELECT scores = '{"9":18,"1":4}'::jsonb,
+			       centers = '[{"key":"gut","pct":80}]'::jsonb
+			FROM test_records WHERE id=$1`, record.ID).Scan(&storedScoreOK, &storedCentersOK); err != nil {
 			t.Fatal(err)
 		}
 		if err := database.QueryRowContext(ctx, `
@@ -55,8 +69,8 @@ func TestMiniappTestRecordServicePostgresIsAtomic(t *testing.T) {
 		); err != nil {
 			t.Fatal(err)
 		}
-		if recordCount != 1 || mainType != 9 || messageCount != 1 {
-			t.Fatalf("record/main/message = %d/%d/%d, want 1/9/1", recordCount, mainType, messageCount)
+		if recordCount != 1 || mainType != 9 || messageCount != 1 || !storedScoreOK || !storedCentersOK {
+			t.Fatalf("record/main/message/score/centers = %d/%d/%d/%v/%v, want 1/9/1/true/true", recordCount, mainType, messageCount, storedScoreOK, storedCentersOK)
 		}
 		if title != "新的小程序测评" || platform != "miniapp" || eventKey != "miniapp.quiz.submitted" || businessID != record.ID || businessType != "miniapp-test-record" {
 			t.Fatalf("unexpected message identity: %q %q %q %q %q", title, platform, eventKey, businessType, businessID)
@@ -79,8 +93,9 @@ func TestMiniappTestRecordServicePostgresIsAtomic(t *testing.T) {
 			t.Fatal(err)
 		}
 		wantErr := errors.New("message unavailable")
-		service := NewService(dbtx.SQLBeginner{DB: database}, NewStore(database), failingTestRecordMessageWriter{err: wantErr})
-		_, err := service.SaveTestRecord(ctx, userID, TestRecordInput{ResultType: 8})
+		store := NewStore(database)
+		service := NewService(dbtx.SQLBeginner{DB: database}, store, failingTestRecordMessageWriter{err: wantErr}, WithTestRecordWriter(store))
+		_, err := service.SaveTestRecord(ctx, userID, TestRecordInput{ResultType: 8, Score: json.RawMessage(`{}`), Centers: json.RawMessage(`[]`)})
 		if !errors.Is(err, wantErr) {
 			t.Fatalf("SaveTestRecord() error = %v, want message error", err)
 		}

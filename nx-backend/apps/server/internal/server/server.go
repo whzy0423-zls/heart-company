@@ -204,7 +204,12 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.storyboards = videostoryboard.NewStore(database)
 	s.images = image.NewStore(s.uploads, env.Image, s.uploader)
 	s.miniapp = miniapp.NewStore(database)
-	miniappService := miniapp.NewService(dbtx.SQLBeginner{DB: database}, s.miniapp, businessmessage.Store{})
+	miniappService := miniapp.NewService(
+		dbtx.SQLBeginner{DB: database},
+		s.miniapp,
+		businessmessage.Store{},
+		miniapp.WithTestRecordWriter(s.miniapp),
+	)
 	s.miniappService = miniappService
 	s.miniappTestService = miniappService
 	s.wx = newWeChatClient(env)

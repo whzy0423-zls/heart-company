@@ -38,9 +38,22 @@ type Service struct {
 	messages messageWriter
 }
 
-func NewService(beginner dbtx.Beginner, users userWriter, messages messageWriter) *Service {
-	tests, _ := users.(testRecordWriter)
-	return &Service{beginner: beginner, users: users, tests: tests, messages: messages}
+type ServiceOption func(*Service)
+
+func WithTestRecordWriter(writer testRecordWriter) ServiceOption {
+	return func(service *Service) {
+		service.tests = writer
+	}
+}
+
+func NewService(beginner dbtx.Beginner, users userWriter, messages messageWriter, options ...ServiceOption) *Service {
+	service := &Service{beginner: beginner, users: users, messages: messages}
+	for _, option := range options {
+		if option != nil {
+			option(service)
+		}
+	}
+	return service
 }
 
 func (s *Service) UpsertUser(ctx context.Context, openid, unionid, channel, scene string) (int64, error) {

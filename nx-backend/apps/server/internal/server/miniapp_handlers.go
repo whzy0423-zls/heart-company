@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -141,16 +142,18 @@ func (s *Server) miniappTestRecords(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if s.miniappTestService == nil {
-			httpx.Fail(w, http.StatusInternalServerError, miniapp.ErrServiceNotConfigured.Error())
+			log.Printf("miniapp test record: %v", miniapp.ErrServiceNotConfigured)
+			httpx.Fail(w, http.StatusInternalServerError, "测评提交失败，请稍后重试")
 			return
 		}
 		rec, err := s.miniappTestService.SaveTestRecord(r.Context(), uid, in)
 		if err != nil {
 			if errors.Is(err, miniapp.ErrInvalidTestRecord) {
-				httpx.Fail(w, http.StatusBadRequest, err.Error())
+				httpx.Fail(w, http.StatusBadRequest, "测评数据格式不正确")
 				return
 			}
-			httpx.Fail(w, http.StatusInternalServerError, err.Error())
+			log.Printf("miniapp test record: %v", err)
+			httpx.Fail(w, http.StatusInternalServerError, "测评提交失败，请稍后重试")
 			return
 		}
 		httpx.OK(w, rec)

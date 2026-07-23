@@ -291,12 +291,12 @@ func TestMiniappTestRecordsPostUsesTransactionalServiceAndKeepsResponseCompatibl
 	}}
 	s := &Server{miniappTestService: service}
 
-	response := performMiniappTestRecordPost(s, `{"gender":"female","resultType":9,"secondType":1,"scores":{"9":18},"centers":[]}`)
+	response := performMiniappTestRecordPost(s, `{"gender":"female","resultType":9,"secondType":1,"score":{"9":18},"centers":[]}`)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
 	}
-	if service.calls != 1 || service.uid != 42 || service.input.ResultType != 9 || service.input.SecondType != 1 {
+	if service.calls != 1 || service.uid != 42 || service.input.ResultType != 9 || service.input.SecondType != 1 || string(service.input.Score) != `{"9":18}` || len(service.input.Scores) != 0 {
 		t.Fatalf("unexpected service call: %+v", service)
 	}
 	var envelope struct {
@@ -315,16 +315,22 @@ func TestMiniappTestRecordsPostMapsValidationAndInternalErrors(t *testing.T) {
 		name       string
 		err        error
 		wantStatus int
+		wantBody   string
+		secret     string
 	}{
-		{name: "validation", err: fmt.Errorf("invalid: %w", miniapp.ErrInvalidTestRecord), wantStatus: http.StatusBadRequest},
-		{name: "internal", err: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError},
+		{name: "validation", err: fmt.Errorf("unsafe validation details: %w", miniapp.ErrInvalidTestRecord), wantStatus: http.StatusBadRequest, wantBody: "测评数据格式不正确", secret: "unsafe validation details"},
+		{name: "internal sentinel", err: miniapp.ErrServiceNotConfigured, wantStatus: http.StatusInternalServerError, wantBody: "测评提交失败，请稍后重试", secret: miniapp.ErrServiceNotConfigured.Error()},
+		{name: "database error", err: errors.New("database password=super-secret unavailable"), wantStatus: http.StatusInternalServerError, wantBody: "测评提交失败，请稍后重试", secret: "super-secret"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			service := &miniappTestRecorderFake{err: tt.err}
-			response := performMiniappTestRecordPost(&Server{miniappTestService: service}, `{"resultType":9}`)
+			response := performMiniappTestRecordPost(&Server{miniappTestService: service}, `{"resultType":9,"score":{},"centers":[]}`)
 			if response.Code != tt.wantStatus {
 				t.Fatalf("status = %d body=%s, want %d", response.Code, response.Body.String(), tt.wantStatus)
+			}
+			if !strings.Contains(response.Body.String(), tt.wantBody) || strings.Contains(response.Body.String(), tt.secret) {
+				t.Fatalf("unsafe response body = %s, want %q without %q", response.Body.String(), tt.wantBody, tt.secret)
 			}
 		})
 	}
@@ -338,7 +344,7 @@ func TestMiniappTestRecordsPostRejectsMalformedTrailingAndOversizedJSON(t *testi
 		{name: "malformed", payload: `{"resultType":`},
 		{name: "trailing", payload: `{"resultType":9} trailing-garbage`},
 		{name: "multiple values", payload: `{"resultType":9}{"resultType":8}`},
-		{name: "oversized", payload: `{"resultType":9,"scores":{"value":"` + strings.Repeat("x", 132*1024) + `"}}`},
+		{name: "oversized", payload: `{"resultType":9,"score":{"value":"` + strings.Repeat("x", 132*1024) + `"},"centers":[]}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

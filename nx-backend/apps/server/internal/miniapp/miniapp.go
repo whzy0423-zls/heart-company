@@ -2,6 +2,7 @@
 package miniapp
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -239,30 +240,87 @@ type TestRecordInput struct {
 	Gender     string          `json:"gender"`
 	ResultType int             `json:"resultType"`
 	SecondType int             `json:"secondType"`
+	Score      json.RawMessage `json:"score"`
 	Scores     json.RawMessage `json:"scores"`
 	Centers    json.RawMessage `json:"centers"`
 }
 
+func NormalizeScores(score, legacyScores json.RawMessage) (json.RawMessage, error) {
+	if len(score) == 0 && len(legacyScores) == 0 {
+		return nil, ErrInvalidTestRecord
+	}
+	var preferred json.RawMessage
+	var preferredValue []byte
+	if len(score) > 0 {
+		var err error
+		preferred, preferredValue, err = normalizeScoreObject(score)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(legacyScores) > 0 {
+		legacy, legacyValue, err := normalizeScoreObject(legacyScores)
+		if err != nil {
+			return nil, err
+		}
+		if len(score) == 0 {
+			return legacy, nil
+		}
+		if !bytes.Equal(preferredValue, legacyValue) {
+			return nil, ErrInvalidTestRecord
+		}
+	}
+	return preferred, nil
+}
+
+func normalizeScoreObject(raw json.RawMessage) (json.RawMessage, []byte, error) {
+	if len(raw) == 0 || len(raw) > maxTestRecordJSONBytes || !json.Valid(raw) {
+		return nil, nil, ErrInvalidTestRecord
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value map[string]any
+	if err := decoder.Decode(&value); err != nil || value == nil {
+		return nil, nil, ErrInvalidTestRecord
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return nil, nil, ErrInvalidTestRecord
+	}
+	return append(json.RawMessage(nil), raw...), canonical, nil
+}
+
+func normalizeCenters(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 || len(raw) > maxTestRecordJSONBytes || !json.Valid(raw) {
+		return nil, ErrInvalidTestRecord
+	}
+	var value []any
+	if err := json.Unmarshal(raw, &value); err != nil || value == nil {
+		return nil, ErrInvalidTestRecord
+	}
+	return append(json.RawMessage(nil), raw...), nil
+}
+
 func normalizeTestRecordInput(userID int64, in TestRecordInput) (TestRecordInput, error) {
-	if userID <= 0 || in.ResultType < 1 || in.ResultType > 9 || in.SecondType < 0 || in.SecondType > 9 {
+	if userID <= 0 || in.ResultType < 1 || in.ResultType > 9 || in.SecondType < 0 || in.SecondType > 9 ||
+		(in.SecondType != 0 && in.SecondType == in.ResultType) {
 		return TestRecordInput{}, ErrInvalidTestRecord
 	}
 	in.Gender = strings.TrimSpace(in.Gender)
 	if utf8.RuneCountInString(in.Gender) > maxTestGenderRunes || containsControl(in.Gender) {
 		return TestRecordInput{}, ErrInvalidTestRecord
 	}
-	if len(in.Scores) == 0 {
-		in.Scores = json.RawMessage(`{}`)
-	}
-	if len(in.Centers) == 0 {
-		in.Centers = json.RawMessage(`[]`)
-	}
-	if len(in.Scores) > maxTestRecordJSONBytes || len(in.Centers) > maxTestRecordJSONBytes ||
-		!json.Valid(in.Scores) || !json.Valid(in.Centers) {
+	scores, err := NormalizeScores(in.Score, in.Scores)
+	if err != nil {
 		return TestRecordInput{}, ErrInvalidTestRecord
 	}
-	in.Scores = append(json.RawMessage(nil), in.Scores...)
-	in.Centers = append(json.RawMessage(nil), in.Centers...)
+	centers, err := normalizeCenters(in.Centers)
+	if err != nil {
+		return TestRecordInput{}, ErrInvalidTestRecord
+	}
+	in.Score = nil
+	in.Scores = scores
+	in.Centers = centers
 	return in, nil
 }
 
@@ -311,31 +369,6 @@ func (s *Store) UpdateMainType(ctx context.Context, q dbtx.DBTX, userID int64, r
 		return sql.ErrNoRows
 	}
 	return nil
-}
-
-// SaveTestRecord 已弃用：新调用方应通过 Service.SaveTestRecord 同时写入业务消息。
-func (s *Store) SaveTestRecord(ctx context.Context, userID int64, in TestRecordInput) (TestRecord, error) {
-	if s == nil || s.db == nil {
-		return TestRecord{}, ErrNilDBTX
-	}
-	c, cancel := s.ctx(ctx)
-	defer cancel()
-	tx, err := s.db.BeginTx(c, nil)
-	if err != nil {
-		return TestRecord{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	record, err := s.InsertTestRecord(c, tx, userID, in)
-	if err != nil {
-		return TestRecord{}, err
-	}
-	if err := s.UpdateMainType(c, tx, userID, record.ResultType); err != nil {
-		return TestRecord{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return TestRecord{}, err
-	}
-	return record, nil
 }
 
 func (s *Store) ListTestRecords(ctx context.Context, userID int64) ([]TestRecord, error) {
