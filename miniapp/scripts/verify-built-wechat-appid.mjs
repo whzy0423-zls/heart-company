@@ -1,8 +1,10 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { extname, resolve } from 'node:path'
 
 const buildRoot = resolve('dist/build/mp-weixin')
 const projectConfigPath = resolve(buildRoot, 'project.config.json')
+const builtConfigPath = resolve(buildRoot, 'config.js')
 const productionAppId = 'wx7d12bddbec8e17f7'
 const productionApiBase = 'https://xn--9iq9az5uo8fz16d.com/api'
 const forbiddenApiHosts = [
@@ -36,8 +38,20 @@ if (projectConfig.appid !== productionAppId) {
 const javaScriptFiles = findJavaScriptFiles(buildRoot)
 const builtJavaScript = javaScriptFiles.map((path) => readFileSync(path, 'utf8')).join('\n')
 
-if (!builtJavaScript.includes(productionApiBase)) {
-  fail(`Built JavaScript must contain the production API base ${productionApiBase}.`)
+if (!existsSync(builtConfigPath)) {
+  fail(`Built miniapp API config not found: ${builtConfigPath}`)
+}
+
+let effectiveApiBase
+try {
+  const require = createRequire(import.meta.url)
+  effectiveApiBase = require(builtConfigPath).API_BASE
+} catch (error) {
+  fail(`Unable to read the effective production API base: ${error.message}`)
+}
+
+if (effectiveApiBase !== productionApiBase) {
+  fail(`Built miniapp effective production API base must be ${productionApiBase}.`)
 }
 
 if (forbiddenApiHosts.some((pattern) => pattern.test(builtJavaScript))) {

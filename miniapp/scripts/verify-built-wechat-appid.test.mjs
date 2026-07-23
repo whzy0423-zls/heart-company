@@ -9,12 +9,17 @@ const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), 'verify-buil
 const productionAppId = 'wx7d12bddbec8e17f7'
 const productionApiBase = 'https://xn--9iq9az5uo8fz16d.com/api'
 
-function createBuild({ appid = productionAppId, js = `const API_BASE = '${productionApiBase}'` } = {}) {
+function createBuild({
+  appid = productionAppId,
+  js = `exports.API_BASE = '${productionApiBase}'`,
+  extraJs = '',
+} = {}) {
   const root = mkdtempSync(resolve(tmpdir(), 'nine-xing-built-miniapp-'))
   const buildRoot = resolve(root, 'dist/build/mp-weixin')
   mkdirSync(resolve(buildRoot, 'common/vendor'), { recursive: true })
   writeFileSync(resolve(buildRoot, 'project.config.json'), JSON.stringify({ appid }))
-  writeFileSync(resolve(buildRoot, 'common/vendor/index.js'), js)
+  writeFileSync(resolve(buildRoot, 'config.js'), js)
+  writeFileSync(resolve(buildRoot, 'common/vendor/index.js'), extraJs)
   return root
 }
 
@@ -44,7 +49,7 @@ withBuild({ appid: 'wx-old-appid' }, (result) => {
   assert.match(result.stderr, /AppID/)
 })
 
-withBuild({ js: "const API_BASE = 'https://api.example.com/api'" }, (result) => {
+withBuild({ js: "exports.API_BASE = 'https://api.example.com/api'" }, (result) => {
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /production API base/)
 })
@@ -54,10 +59,21 @@ for (const forbidden of [
   'https://api.yourdomain.com/api',
   'https://nine-xing.local/api',
 ]) {
-  withBuild({ js: `const PROD = '${productionApiBase}'; const BAD = '${forbidden}'` }, (result) => {
+  withBuild({ extraJs: `const BAD = '${forbidden}'` }, (result) => {
     assert.notEqual(result.status, 0)
     assert.match(result.stderr, /forbidden API host/)
   })
 }
+
+withBuild(
+  {
+    js: "exports.API_BASE = 'https://alternate.example.net/api'",
+    extraJs: `const DEFAULT_API_BASE = '${productionApiBase}'`,
+  },
+  (result) => {
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /effective production API base/)
+  },
+)
 
 console.log('built WeChat config verifier tests passed')

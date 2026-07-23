@@ -4,14 +4,56 @@ function cleanBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '')
 }
 
+function extractHostname(value) {
+  const authority = value.slice('https://'.length).split(/[/?#]/, 1)[0]
+  const hostAndPort = authority.slice(authority.lastIndexOf('@') + 1)
+  if (hostAndPort.startsWith('[')) {
+    const closingBracket = hostAndPort.indexOf(']')
+    return closingBracket > 0 ? hostAndPort.slice(1, closingBracket).toLowerCase() : ''
+  }
+  return hostAndPort.split(':', 1)[0].toLowerCase()
+}
+
+function isPrivateIPv4(value) {
+  const parts = value.split('.').map((part) => Number(part))
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false
+  }
+
+  return (
+    parts[0] === 10 ||
+    parts[0] === 127 ||
+    (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+    (parts[0] === 192 && parts[1] === 168) ||
+    (parts[0] === 169 && parts[1] === 254) ||
+    parts[0] === 0
+  )
+}
+
+function hasBlockedDomainSuffix(hostname, secondLevelLabel) {
+  const labels = hostname.split('.')
+  return (
+    labels.length >= 3 &&
+    labels[labels.length - 2] === secondLevelLabel &&
+    labels[labels.length - 1] === 'com'
+  )
+}
+
 function isRealProductionApiBase(value) {
   if (!value.startsWith('https://')) return false
 
-  const hostname = value.slice('https://'.length).split(/[/:?#]/, 1)[0].toLowerCase()
+  const hostname = extractHostname(value)
   if (!hostname) return false
 
-  const labels = hostname.split('.')
-  return !labels.some((label) => ['example', 'yourdomain', 'local'].includes(label))
+  return !(
+    hostname === 'localhost' ||
+    hostname.endsWith('.localhost') ||
+    hostname.endsWith('.local') ||
+    hostname === '::1' ||
+    isPrivateIPv4(hostname) ||
+    hasBlockedDomainSuffix(hostname, 'example') ||
+    hasBlockedDomainSuffix(hostname, 'yourdomain')
+  )
 }
 
 // 后端 API 基址。
