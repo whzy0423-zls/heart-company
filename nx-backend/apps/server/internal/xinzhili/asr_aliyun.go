@@ -495,7 +495,9 @@ func runTaskMessage(taskID string) any {
 		},
 		"payload": map[string]any{
 			"task_group": "audio", "task": "asr", "function": "recognition", "model": RealtimeASRModel,
-			"parameters": map[string]any{"format": "pcm", "sample_rate": 16000, "channels": 1},
+			// DashScope exposes mono as an input-audio contract rather than a
+			// run-task parameter. Callers must provide PCM16LE 16 kHz mono bytes.
+			"parameters": map[string]any{"format": "pcm", "sample_rate": 16000},
 			"input":      map[string]any{},
 		},
 	}

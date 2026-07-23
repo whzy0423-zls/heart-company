@@ -37,7 +37,7 @@ type asrWireMessage struct {
 		Parameters struct {
 			Format     string `json:"format"`
 			SampleRate int    `json:"sample_rate"`
-			Channels   int    `json:"channels"`
+			Channels   *int   `json:"channels"`
 		} `json:"parameters"`
 	} `json:"payload"`
 }
@@ -163,7 +163,7 @@ func TestASRLifecycleAuthenticatesAndKeepsTaskIDAcrossStrictSequence(t *testing.
 		if run.Payload.Model != RealtimeASRModel {
 			t.Errorf("model=%q", run.Payload.Model)
 		}
-		if run.Payload.Parameters.Format != "pcm" || run.Payload.Parameters.SampleRate != 16000 || run.Payload.Parameters.Channels != 1 {
+		if run.Payload.Parameters.Format != "pcm" || run.Payload.Parameters.SampleRate != 16000 || run.Payload.Parameters.Channels != nil {
 			t.Errorf("parameters=%+v", run.Payload.Parameters)
 		}
 		writeASREvent(t, conn, run.Header.TaskID, "task-started", map[string]any{})
