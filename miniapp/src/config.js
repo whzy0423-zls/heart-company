@@ -1,5 +1,6 @@
+import { validateProductionApiBase } from './apiBaseValidation.mjs'
+
 const DEFAULT_API_BASE = 'https://xn--9iq9az5uo8fz16d.com/api'
-const PLACEHOLDER_API_BASE = 'https://api.example.com/api'
 
 function cleanBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '')
@@ -14,7 +15,7 @@ export function resolveApiBase(options = {}) {
   const env = options.env || import.meta.env || { DEV: true }
   const configured = cleanBaseUrl(env.VITE_API_BASE)
   if (configured) {
-    if (!env.DEV && (configured === PLACEHOLDER_API_BASE || !configured.startsWith('https://'))) {
+    if (!env.DEV && !validateProductionApiBase(configured).ok) {
       throw new Error('Production VITE_API_BASE must be a real HTTPS API URL')
     }
     return configured

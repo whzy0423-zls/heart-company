@@ -5,6 +5,25 @@ import { resolve } from 'node:path'
 const projectConfig = JSON.parse(readFileSync(resolve('project.config.json'), 'utf8'))
 const manifest = JSON.parse(readFileSync(resolve('src/manifest.json'), 'utf8'))
 const packageJson = JSON.parse(readFileSync(resolve('package.json'), 'utf8'))
+const productionWeChatAppId = 'wx7d12bddbec8e17f7'
+
+assert.equal(
+  projectConfig.appid,
+  productionWeChatAppId,
+  'project.config.json must use the production WeChat AppID',
+)
+
+assert.equal(
+  manifest?.['mp-weixin']?.appid,
+  productionWeChatAppId,
+  'manifest mp-weixin.appid must use the production WeChat AppID',
+)
+
+assert.equal(
+  projectConfig.appid,
+  manifest?.['mp-weixin']?.appid,
+  'project.config.json and manifest must use the same WeChat AppID',
+)
 
 assert.notEqual(
   projectConfig?.setting?.urlCheck,
@@ -43,8 +62,14 @@ assert.match(productionExample, /VITE_API_BASE=https:\/\/xn--9iq9az5uo8fz16d\.co
 assert.match(productionExample, /CI|release|上线|生产/)
 
 const productionCheck = readFileSync(resolve('scripts/verify-production-api-base.mjs'), 'utf8')
-assert.match(productionCheck, /\.local/, 'production API validation should reject .local placeholder/internal hosts')
-assert.match(productionCheck, /yourdomain\.com/, 'production API validation should reject unchanged example hosts')
+assert.match(
+  productionCheck,
+  /validateProductionApiBase/,
+  'production build validation should reuse the runtime API host validation',
+)
+const apiBaseValidation = readFileSync(resolve('src/apiBaseValidation.mjs'), 'utf8')
+assert.match(apiBaseValidation, /\.local/, 'production API validation should reject .local hosts')
+assert.match(apiBaseValidation, /yourdomain/, 'production API validation should reject placeholder hosts')
 assert.doesNotMatch(qa, /\nnpm run build:h5\n/, 'QA automation should not suggest production H5 build without VITE_API_BASE')
 assert.doesNotMatch(qa, /nine-xing\.local/, 'QA automation should not use .local placeholder API hosts')
 
