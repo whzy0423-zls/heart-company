@@ -2,73 +2,39 @@ package server
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"nine-xing/nx-backend/apps/server/internal/businessmessage"
-	"nine-xing/nx-backend/apps/server/internal/dbtx"
 	"nine-xing/nx-backend/apps/server/internal/signup"
 )
 
-type publicSignupTx struct {
-	commitErr error
+type publicSignupCreator struct {
+	lead signup.Lead
+	err  error
 }
 
-func (t *publicSignupTx) ExecContext(context.Context, string, ...any) (sql.Result, error) {
-	return nil, errors.New("unexpected ExecContext")
-}
-
-func (t *publicSignupTx) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
-	return nil, errors.New("unexpected QueryContext")
-}
-
-func (t *publicSignupTx) QueryRowContext(context.Context, string, ...any) *sql.Row { return &sql.Row{} }
-func (t *publicSignupTx) Commit() error                                            { return t.commitErr }
-func (t *publicSignupTx) Rollback() error                                          { return nil }
-
-type publicSignupBeginner struct{ tx *publicSignupTx }
-
-func (b publicSignupBeginner) BeginTx(context.Context, *sql.TxOptions) (dbtx.Tx, error) {
-	return b.tx, nil
-}
-
-type publicSignupLeadWriter struct {
-	lead        signup.Lead
-	gotPlatform string
-}
-
-func (w *publicSignupLeadWriter) CreateWithDBTX(_ context.Context, _ dbtx.DBTX, _ signup.LeadInput, _ *http.Request, platform string) (signup.Lead, error) {
-	w.gotPlatform = platform
-	return w.lead, nil
-}
-
-type publicSignupMessageWriter struct{}
-
-func (publicSignupMessageWriter) Create(context.Context, dbtx.DBTX, businessmessage.Event) (bool, error) {
-	return true, nil
+func (c publicSignupCreator) CreateWebsiteSignup(_ context.Context, _ signup.LeadInput, _ *http.Request) (signup.Lead, error) {
+	return c.lead, c.err
 }
 
 func TestPublicSignupBroadcastsOnlyAfterServiceCommit(t *testing.T) {
 	tests := []struct {
 		name          string
-		commitErr     error
+		serviceErr    error
 		wantStatus    int
 		wantBroadcast bool
 	}{
 		{name: "committed", wantStatus: http.StatusOK, wantBroadcast: true},
-		{name: "commit failed", commitErr: errors.New("commit failed"), wantStatus: http.StatusBadRequest, wantBroadcast: false},
+		{name: "commit failed", serviceErr: errors.New("commit failed"), wantStatus: http.StatusBadRequest, wantBroadcast: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			lead := signup.Lead{ID: "42", Name: "张三", Contact: "13812345678", ContactType: signup.ContactTypePhone, SourcePlatform: "website"}
-			leadWriter := &publicSignupLeadWriter{lead: lead}
-			service := signup.NewService(publicSignupBeginner{tx: &publicSignupTx{commitErr: tt.commitErr}}, leadWriter, publicSignupMessageWriter{})
 			s := &Server{
-				signupService:     service,
+				signupService:     publicSignupCreator{lead: lead, err: tt.serviceErr},
 				signupSubscribers: map[chan signup.Lead]struct{}{},
 			}
 			ch := make(chan signup.Lead, 1)
@@ -80,9 +46,6 @@ func TestPublicSignupBroadcastsOnlyAfterServiceCommit(t *testing.T) {
 
 			if recorder.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d; body=%s", recorder.Code, tt.wantStatus, recorder.Body.String())
-			}
-			if leadWriter.gotPlatform != "website" {
-				t.Fatalf("service source platform = %q, want website", leadWriter.gotPlatform)
 			}
 			select {
 			case got := <-ch:

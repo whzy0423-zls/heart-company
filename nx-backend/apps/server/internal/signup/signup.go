@@ -127,10 +127,10 @@ func NewStore(database *sql.DB) *Store {
 	return &Store{db: database}
 }
 
-// Create is kept temporarily for the miniapp booking compatibility path.
-// It creates only the signup row, marks it as miniapp, and intentionally does
-// not create a legacy message. The booking service will own the atomic signup,
-// booking, and message transaction after its migration.
+// Deprecated: Create is a temporary compatibility path used only by miniapp
+// bookings until their transaction service is migrated. It marks the signup as
+// miniapp and intentionally creates no legacy message. New call sites must use
+// a domain service that owns the complete transaction.
 func (s *Store) Create(ctx context.Context, input LeadInput, r *http.Request) (Lead, error) {
 	if s == nil || s.db == nil {
 		return Lead{}, dbtx.ErrNilDB

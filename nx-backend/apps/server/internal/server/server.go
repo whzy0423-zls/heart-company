@@ -72,7 +72,7 @@ type Server struct {
 	builder               *siteconfig.Builder
 	engagement            *engagement.Store
 	signups               *signup.Store
-	signupService         *signup.Service
+	signupService         websiteSignupCreator
 	uploads               *uploadasset.Store
 	appReleases           appReleaseService
 	voiceAssetCreate      func(context.Context, uploadasset.CreateInput) (uploadasset.Asset, error)
@@ -132,6 +132,10 @@ type Server struct {
 
 	// modelMu 保护可在运行时被"模型配置"页面重建的 ragGen / analysisGen / videos。
 	modelMu sync.RWMutex
+}
+
+type websiteSignupCreator interface {
+	CreateWebsiteSignup(context.Context, signup.LeadInput, *http.Request) (signup.Lead, error)
 }
 
 var uploadPermissionCodes = []string{

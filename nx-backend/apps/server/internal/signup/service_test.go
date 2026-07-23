@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/businessmessage"
 	"nine-xing/nx-backend/apps/server/internal/dbtx"
@@ -16,10 +17,12 @@ type fakeBeginner struct {
 	tx    *fakeTx
 	err   error
 	calls int
+	ctx   context.Context
 }
 
-func (f *fakeBeginner) BeginTx(context.Context, *sql.TxOptions) (dbtx.Tx, error) {
+func (f *fakeBeginner) BeginTx(ctx context.Context, _ *sql.TxOptions) (dbtx.Tx, error) {
 	f.calls++
+	f.ctx = ctx
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -60,14 +63,21 @@ type fakeLeadWriter struct {
 	gotInput    LeadInput
 	gotRequest  *http.Request
 	gotPlatform string
+	gotCtx      context.Context
+	waitForDone bool
 }
 
-func (f *fakeLeadWriter) CreateWithDBTX(_ context.Context, q dbtx.DBTX, input LeadInput, r *http.Request, platform string) (Lead, error) {
+func (f *fakeLeadWriter) CreateWithDBTX(ctx context.Context, q dbtx.DBTX, input LeadInput, r *http.Request, platform string) (Lead, error) {
 	f.calls++
+	f.gotCtx = ctx
 	f.gotQ = q
 	f.gotInput = input
 	f.gotRequest = r
 	f.gotPlatform = platform
+	if f.waitForDone {
+		<-ctx.Done()
+		return Lead{}, ctx.Err()
+	}
 	return f.lead, f.err
 }
 
@@ -77,10 +87,12 @@ type fakeMessageWriter struct {
 	calls   int
 	gotQ    dbtx.DBTX
 	event   businessmessage.Event
+	gotCtx  context.Context
 }
 
-func (f *fakeMessageWriter) Create(_ context.Context, q dbtx.DBTX, event businessmessage.Event) (bool, error) {
+func (f *fakeMessageWriter) Create(ctx context.Context, q dbtx.DBTX, event businessmessage.Event) (bool, error) {
 	f.calls++
+	f.gotCtx = ctx
 	f.gotQ = q
 	f.event = event
 	return f.created, f.err
@@ -161,7 +173,9 @@ func TestWebsiteSignupSuccessUsesWebsiteSourceAndCommittedMessage(t *testing.T) 
 	leads := &fakeLeadWriter{lead: want}
 	messages := &fakeMessageWriter{created: true}
 
-	got, err := NewService(&fakeBeginner{tx: tx}, leads, messages).CreateWebsiteSignup(context.Background(), input, request)
+	beginner := &fakeBeginner{tx: tx}
+	started := time.Now()
+	got, err := NewService(beginner, leads, messages).CreateWebsiteSignup(context.Background(), input, request)
 
 	if err != nil {
 		t.Fatalf("CreateWebsiteSignup() error = %v", err)
@@ -171,6 +185,17 @@ func TestWebsiteSignupSuccessUsesWebsiteSourceAndCommittedMessage(t *testing.T) 
 	}
 	if leads.gotQ != tx || messages.gotQ != tx {
 		t.Fatal("lead and message must share the same transaction")
+	}
+	if beginner.ctx != leads.gotCtx || beginner.ctx != messages.gotCtx {
+		t.Fatal("begin, lead, and message must receive the same operation context")
+	}
+	deadline, ok := beginner.ctx.Deadline()
+	if !ok {
+		t.Fatal("website signup operation context must have a deadline")
+	}
+	remaining := deadline.Sub(started)
+	if remaining < 9*time.Second || remaining > 11*time.Second {
+		t.Fatalf("website signup deadline remaining = %v, want about 10s", remaining)
 	}
 	if leads.gotPlatform != "website" {
 		t.Fatalf("source platform = %q, want website", leads.gotPlatform)
@@ -183,5 +208,61 @@ func TestWebsiteSignupSuccessUsesWebsiteSourceAndCommittedMessage(t *testing.T) 
 	}
 	if tx.commitCalls != 1 || tx.rollbackCalls != 1 {
 		t.Fatalf("expected one commit and deferred rollback, got commit=%d rollback=%d", tx.commitCalls, tx.rollbackCalls)
+	}
+}
+
+func TestWebsiteSignupCanceledContextRollsBackWithoutCommit(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	cancel()
+	tx := &fakeTx{}
+	leads := &fakeLeadWriter{waitForDone: true}
+	messages := &fakeMessageWriter{}
+
+	_, err := NewService(&fakeBeginner{tx: tx}, leads, messages).CreateWebsiteSignup(parent, LeadInput{Name: "张三"}, nil)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+	if tx.rollbackCalls != 1 || tx.commitCalls != 0 {
+		t.Fatalf("expected rollback without commit, got rollback=%d commit=%d", tx.rollbackCalls, tx.commitCalls)
+	}
+	if messages.calls != 0 {
+		t.Fatalf("message must not run after cancellation, calls=%d", messages.calls)
+	}
+}
+
+func TestWebsiteSignupDeadlineExceededRollsBackWithoutCommit(t *testing.T) {
+	parent, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	tx := &fakeTx{}
+	leads := &fakeLeadWriter{waitForDone: true}
+
+	_, err := NewService(&fakeBeginner{tx: tx}, leads, &fakeMessageWriter{}).CreateWebsiteSignup(parent, LeadInput{Name: "张三"}, nil)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded, got %v", err)
+	}
+	if tx.rollbackCalls != 1 || tx.commitCalls != 0 {
+		t.Fatalf("expected rollback without commit, got rollback=%d commit=%d", tx.rollbackCalls, tx.commitCalls)
+	}
+}
+
+func TestWebsiteSignupRejectsUnconfiguredService(t *testing.T) {
+	tests := []struct {
+		name    string
+		service *Service
+	}{
+		{name: "nil receiver", service: nil},
+		{name: "missing beginner", service: NewService(nil, &fakeLeadWriter{}, &fakeMessageWriter{})},
+		{name: "missing leads", service: NewService(&fakeBeginner{tx: &fakeTx{}}, nil, &fakeMessageWriter{})},
+		{name: "missing messages", service: NewService(&fakeBeginner{tx: &fakeTx{}}, &fakeLeadWriter{}, nil)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.service.CreateWebsiteSignup(context.Background(), LeadInput{}, nil)
+			if !errors.Is(err, ErrServiceNotConfigured) {
+				t.Fatalf("expected ErrServiceNotConfigured, got %v", err)
+			}
+		})
 	}
 }
