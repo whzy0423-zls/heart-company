@@ -632,6 +632,112 @@ func TestStageRepairsLegacyImportAndThenPromotes(t *testing.T) {
 	}
 }
 
+func TestLegacyTriggerRejectsFakeRepairContracts(t *testing.T) {
+	db := openPackageTestDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	for index, statement := range []string{
+		`UPDATE theory_package_imports SET payload_sha256=repeat('a',64),payload_receipt_sha256=repeat('b',64),object_fingerprints=jsonb_set(object_fingerprints,'{payloadSha256}',to_jsonb(repeat('a',64))) WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`,
+		`UPDATE theory_package_imports SET payload_sha256=theory_package_jsonb_sha256(payload),payload_receipt_sha256=repeat('f',64),object_fingerprints=jsonb_set(object_fingerprints,'{payloadSha256}',to_jsonb(theory_package_jsonb_sha256(payload))) WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`,
+		`UPDATE theory_package_imports SET payload_sha256=theory_package_jsonb_sha256(payload),payload_receipt_sha256=theory_package_receipt_sha256(package_id,content_digest,package_digest,theory_package_jsonb_sha256(payload),schema_version,library_id,target_database,desired_release_version),object_fingerprints=jsonb_set(object_fingerprints,'{payloadSha256}',to_jsonb(repeat('e',64))) WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`,
+	} {
+		t.Run(fmt.Sprintf("fake_%d", index), func(t *testing.T) {
+			key := fmt.Sprintf("xinzhili_test_fake_repair_%d", index)
+			cleanupPackageFixture(t, db, key)
+			defer cleanupPackageFixture(t, db, key)
+			actor := createPackageTestUser(t, db, key+"-actor")
+			syncer := NewPackageSyncer(db)
+			syncer.libraryKey = key
+			if _, err := syncer.Stage(ctx, roundPackageRoot(t), actor); err != nil {
+				t.Fatal(err)
+			}
+			downgradeImportToLegacy(t, db, key)
+			if _, err := db.Exec(statement, key); err == nil || !strings.Contains(err.Error(), "23514") {
+				t.Fatalf("fake repair was not rejected by contract trigger: %v", err)
+			}
+		})
+	}
+}
+
+func TestSchemaReplayMigratesLegacyHashContracts(t *testing.T) {
+	db := openPackageTestDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	schema, err := os.ReadFile(filepath.Join("..", "db", "schema.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, promoted := range []bool{false, true} {
+		name := "staged"
+		if promoted {
+			name = "promoted"
+		}
+		t.Run(name, func(t *testing.T) {
+			key := "xinzhili_test_schema_replay_" + name
+			cleanupPackageFixture(t, db, key)
+			defer cleanupPackageFixture(t, db, key)
+			actor := createPackageTestUser(t, db, key+"-actor")
+			syncer := NewPackageSyncer(db)
+			syncer.libraryKey = key
+			if promoted {
+				stageAndReviewPackage(t, db, syncer, key, actor)
+				if _, err := syncer.Promote(ctx, "xinzhili-round-001", actor); err != nil {
+					t.Fatal(err)
+				}
+			} else if _, err := syncer.Stage(ctx, roundPackageRoot(t), actor); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := db.Exec(`DROP TRIGGER theory_package_imports_immutable ON theory_package_imports;
+				ALTER TABLE theory_package_imports DROP CONSTRAINT ck_theory_package_imports_payload_hash_contract;
+				ALTER TABLE theory_package_imports ALTER COLUMN payload_hash_contract DROP NOT NULL`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(`UPDATE theory_package_imports
+				SET payload_hash_contract=NULL,
+				    payload_sha256=repeat('a',64),
+				    payload_receipt_sha256=repeat('b',64),
+				    object_fingerprints=jsonb_set(object_fingerprints,'{payloadSha256}',to_jsonb(repeat('a',64)))
+				WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(string(schema)); err != nil {
+				t.Fatalf("replay schema over %s legacy import: %v", name, err)
+			}
+
+			var payloadSHA, receiptSHA, contract string
+			var hasPayloadFingerprint, payloadValid, receiptValid, snapshotValid bool
+			if err := db.QueryRow(`SELECT payload_sha256,payload_receipt_sha256,payload_hash_contract,
+				object_fingerprints ? 'payloadSha256',
+				payload_sha256=theory_package_jsonb_sha256(payload),
+				payload_receipt_sha256=theory_package_receipt_sha256(package_id,content_digest,package_digest,payload_sha256,schema_version,library_id,target_database,desired_release_version),
+				object_fingerprints->>'sha256'=theory_package_jsonb_sha256(object_fingerprints->'snapshot')
+				FROM theory_package_imports WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key).Scan(&payloadSHA, &receiptSHA, &contract, &hasPayloadFingerprint, &payloadValid, &receiptValid, &snapshotValid); err != nil {
+				t.Fatal(err)
+			}
+			if contract != payloadHashContract {
+				t.Fatalf("hash contract=%q", contract)
+			}
+			if promoted {
+				if !hasPayloadFingerprint || !payloadValid || !receiptValid || !snapshotValid {
+					t.Fatalf("promoted migration invalid: payload=%v receipt=%v fingerprint=%v snapshot=%v", payloadValid, receiptValid, hasPayloadFingerprint, snapshotValid)
+				}
+				if result, err := syncer.Promote(ctx, "xinzhili-round-001", actor); err != nil || !result.NoOp {
+					t.Fatalf("promoted no-op after migration=%+v err=%v", result, err)
+				}
+			} else {
+				if payloadSHA != strings.Repeat("0", 64) || receiptSHA != strings.Repeat("0", 64) || hasPayloadFingerprint {
+					t.Fatalf("staged migration did not fail closed: payload=%s receipt=%s fingerprint=%v", payloadSHA, receiptSHA, hasPayloadFingerprint)
+				}
+				if result, err := syncer.Stage(ctx, roundPackageRoot(t), actor); err != nil || !result.Repaired {
+					t.Fatalf("staged repair after migration=%+v err=%v", result, err)
+				}
+			}
+		})
+	}
+}
+
 func TestStageLegacyRepairRejectsPayloadAndDatabaseChanges(t *testing.T) {
 	db := openPackageTestDatabase(t)
 	defer db.Close()

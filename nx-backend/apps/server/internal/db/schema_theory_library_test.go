@@ -39,6 +39,9 @@ func TestSchemaIncludesTheoryLibraryFoundation(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS theory_package_promotions",
 		"payload_sha256 TEXT NOT NULL",
 		"payload_receipt_sha256 TEXT NOT NULL",
+		"payload_hash_contract TEXT NOT NULL",
+		"CREATE OR REPLACE FUNCTION theory_package_jsonb_sha256",
+		"CREATE OR REPLACE FUNCTION theory_package_receipt_sha256",
 		"CREATE OR REPLACE FUNCTION protect_theory_package_import_contract()",
 		"CREATE TRIGGER theory_package_imports_immutable",
 		"one-way legacy fingerprint repair",
@@ -205,6 +208,7 @@ func TestSchemaIncludesTheoryLibraryFoundation(t *testing.T) {
 			"CHECK (jsonb_typeof(object_fingerprints) = 'object')",
 			"CHECK (payload_sha256 ~ '^[0-9a-f]{64}$')",
 			"CHECK (payload_receipt_sha256 ~ '^[0-9a-f]{64}$')",
+			"CHECK (payload_hash_contract = 'postgres-jsonb-text-sha256-v1')",
 		},
 		"theory_package_reviews": {
 			"CHECK (review_type IN ('source-verification','theory-review','safety-review'))",

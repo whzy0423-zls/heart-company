@@ -1174,6 +1174,7 @@ CREATE TABLE IF NOT EXISTS theory_package_imports (
   payload JSONB NOT NULL CONSTRAINT ck_theory_package_imports_payload_object CHECK (jsonb_typeof(payload) = 'object'),
   payload_sha256 TEXT NOT NULL CONSTRAINT ck_theory_package_imports_payload_sha256 CHECK (payload_sha256 ~ '^[0-9a-f]{64}$'),
   payload_receipt_sha256 TEXT NOT NULL CONSTRAINT ck_theory_package_imports_payload_receipt_sha256 CHECK (payload_receipt_sha256 ~ '^[0-9a-f]{64}$'),
+  payload_hash_contract TEXT NOT NULL DEFAULT 'postgres-jsonb-text-sha256-v1' CONSTRAINT ck_theory_package_imports_payload_hash_contract CHECK (payload_hash_contract = 'postgres-jsonb-text-sha256-v1'),
   object_fingerprints JSONB NOT NULL DEFAULT '{}'::jsonb CONSTRAINT ck_theory_package_imports_fingerprints_object CHECK (jsonb_typeof(object_fingerprints) = 'object'),
   staged_by BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   staged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1210,13 +1211,69 @@ CREATE INDEX IF NOT EXISTS idx_theory_package_imports_library ON theory_package_
 CREATE INDEX IF NOT EXISTS idx_theory_package_reviews_import ON theory_package_reviews(import_id, review_type);
 CREATE INDEX IF NOT EXISTS idx_theory_package_promotions_release ON theory_package_promotions(release_id);
 
--- Existing imports from the pre-fingerprint schema remain fail-closed until restaged.
+CREATE OR REPLACE FUNCTION theory_package_jsonb_sha256(value JSONB)
+RETURNS TEXT
+LANGUAGE SQL IMMUTABLE STRICT
+AS $$
+  SELECT encode(sha256(convert_to(value::text, 'UTF8')), 'hex')
+$$;
+
+CREATE OR REPLACE FUNCTION theory_package_receipt_sha256(
+  package_id TEXT,
+  content_digest TEXT,
+  package_digest TEXT,
+  payload_sha256 TEXT,
+  schema_version TEXT,
+  library_id BIGINT,
+  target_database TEXT,
+  desired_release_version INTEGER
+)
+RETURNS TEXT
+LANGUAGE SQL IMMUTABLE STRICT
+AS $$
+  SELECT theory_package_jsonb_sha256(jsonb_build_object(
+    'packageId', package_id,
+    'contentDigest', content_digest,
+    'packageDigest', package_digest,
+    'payloadSha256', payload_sha256,
+    'schemaVersion', schema_version,
+    'libraryId', library_id,
+    'targetDatabase', target_database,
+    'desiredReleaseVersion', desired_release_version
+  ))
+$$;
+
+-- Drop the previous contract trigger before migrating existing rows; otherwise its
+-- old immutability rules can block the one-time hash-contract upgrade.
+DROP TRIGGER IF EXISTS theory_package_imports_immutable ON theory_package_imports;
+
+-- Existing imports from the pre-PostgreSQL hash contract are migrated fail-closed.
 ALTER TABLE theory_package_imports ADD COLUMN IF NOT EXISTS payload_sha256 TEXT;
 ALTER TABLE theory_package_imports ADD COLUMN IF NOT EXISTS payload_receipt_sha256 TEXT;
+ALTER TABLE theory_package_imports ADD COLUMN IF NOT EXISTS payload_hash_contract TEXT;
 UPDATE theory_package_imports SET payload_sha256=repeat('0',64) WHERE payload_sha256 IS NULL;
 UPDATE theory_package_imports SET payload_receipt_sha256=repeat('0',64) WHERE payload_receipt_sha256 IS NULL;
+UPDATE theory_package_imports
+SET payload_sha256 = CASE WHEN state='promoted' THEN theory_package_jsonb_sha256(payload) ELSE repeat('0',64) END,
+    payload_receipt_sha256 = CASE WHEN state='promoted' THEN theory_package_receipt_sha256(
+      package_id, content_digest, package_digest, theory_package_jsonb_sha256(payload), schema_version,
+      library_id, target_database, desired_release_version
+    ) ELSE repeat('0',64) END,
+    payload_hash_contract = 'postgres-jsonb-text-sha256-v1',
+    object_fingerprints = CASE WHEN state='promoted' THEN
+      jsonb_set(
+        jsonb_set(
+          object_fingerprints || jsonb_build_object('payloadSha256', theory_package_jsonb_sha256(payload)),
+          '{sha256}', to_jsonb(theory_package_jsonb_sha256(object_fingerprints->'snapshot'))
+        ),
+        '{schemaVersion}', to_jsonb('xinzhili.database-snapshot.v1'::text)
+      )
+    ELSE object_fingerprints - 'payloadSha256' END
+WHERE payload_hash_contract IS DISTINCT FROM 'postgres-jsonb-text-sha256-v1';
 ALTER TABLE theory_package_imports ALTER COLUMN payload_sha256 SET NOT NULL;
 ALTER TABLE theory_package_imports ALTER COLUMN payload_receipt_sha256 SET NOT NULL;
+ALTER TABLE theory_package_imports ALTER COLUMN payload_hash_contract SET DEFAULT 'postgres-jsonb-text-sha256-v1';
+ALTER TABLE theory_package_imports ALTER COLUMN payload_hash_contract SET NOT NULL;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='theory_package_imports'::regclass AND conname='ck_theory_package_imports_payload_sha256') THEN
@@ -1225,25 +1282,64 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='theory_package_imports'::regclass AND conname='ck_theory_package_imports_payload_receipt_sha256') THEN
     ALTER TABLE theory_package_imports ADD CONSTRAINT ck_theory_package_imports_payload_receipt_sha256 CHECK (payload_receipt_sha256 ~ '^[0-9a-f]{64}$');
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='theory_package_imports'::regclass AND conname='ck_theory_package_imports_payload_hash_contract') THEN
+    ALTER TABLE theory_package_imports ADD CONSTRAINT ck_theory_package_imports_payload_hash_contract CHECK (payload_hash_contract = 'postgres-jsonb-text-sha256-v1');
+  END IF;
 END $$;
 
 CREATE OR REPLACE FUNCTION protect_theory_package_import_contract()
 RETURNS TRIGGER AS $$
 DECLARE
-  -- one-way legacy fingerprint repair: only the two zero hashes and legacy fingerprint may advance together.
-  legacy_repair BOOLEAN :=
+  expected_payload_sha256 TEXT;
+  expected_receipt_sha256 TEXT;
+  valid_fingerprint BOOLEAN;
+  legacy_repair BOOLEAN := FALSE;
+BEGIN
+  expected_payload_sha256 := theory_package_jsonb_sha256(NEW.payload);
+  expected_receipt_sha256 := theory_package_receipt_sha256(
+    NEW.package_id, NEW.content_digest, NEW.package_digest, expected_payload_sha256,
+    NEW.schema_version, NEW.library_id, NEW.target_database, NEW.desired_release_version
+  );
+  valid_fingerprint :=
+    jsonb_typeof(NEW.object_fingerprints) = 'object'
+    AND NEW.object_fingerprints ?& ARRAY['schemaVersion','sha256','payloadSha256','snapshot']
+    AND (NEW.object_fingerprints - ARRAY['schemaVersion','sha256','payloadSha256','snapshot']::TEXT[]) = '{}'::jsonb
+    AND NEW.object_fingerprints->>'schemaVersion' = 'xinzhili.database-snapshot.v1'
+    AND NEW.object_fingerprints->>'payloadSha256' = NEW.payload_sha256
+    AND jsonb_typeof(NEW.object_fingerprints->'snapshot') = 'object'
+    AND (NEW.object_fingerprints->'snapshot') ?& ARRAY['schemaVersion','cards','practices','sourceWorks','sourceFiles','cardSources','relations']
+    AND ((NEW.object_fingerprints->'snapshot') - ARRAY['schemaVersion','cards','practices','sourceWorks','sourceFiles','cardSources','relations']::TEXT[]) = '{}'::jsonb
+    AND NEW.object_fingerprints->'snapshot'->>'schemaVersion' = 'xinzhili.database-snapshot.v1'
+    AND jsonb_typeof(NEW.object_fingerprints->'snapshot'->'cards') = 'array'
+    AND jsonb_typeof(NEW.object_fingerprints->'snapshot'->'practices') = 'array'
+    AND jsonb_typeof(NEW.object_fingerprints->'snapshot'->'sourceWorks') = 'array'
+    AND jsonb_typeof(NEW.object_fingerprints->'snapshot'->'sourceFiles') = 'array'
+    AND jsonb_typeof(NEW.object_fingerprints->'snapshot'->'cardSources') = 'array'
+    AND jsonb_typeof(NEW.object_fingerprints->'snapshot'->'relations') = 'array'
+    AND NEW.object_fingerprints->>'sha256' = theory_package_jsonb_sha256(NEW.object_fingerprints->'snapshot');
+
+  IF NEW.payload_hash_contract <> 'postgres-jsonb-text-sha256-v1'
+    OR NEW.payload_sha256 <> expected_payload_sha256
+    OR NEW.payload_receipt_sha256 <> expected_receipt_sha256
+    OR valid_fingerprint IS NOT TRUE THEN
+    RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='theory package import PostgreSQL hash contract is invalid';
+  END IF;
+
+  IF TG_OP = 'INSERT' THEN
+    RETURN NEW;
+  END IF;
+
+  -- one-way legacy fingerprint repair: only a database-recomputed payload,
+  -- receipt, and complete fingerprint may replace the two zero hashes.
+  legacy_repair :=
     OLD.state = 'staged'
     AND NEW.state = 'staged'
     AND NEW.promoted_at IS NOT DISTINCT FROM OLD.promoted_at
+    AND OLD.payload_hash_contract = 'postgres-jsonb-text-sha256-v1'
     AND OLD.payload_sha256 = repeat('0',64)
     AND OLD.payload_receipt_sha256 = repeat('0',64)
-    AND NOT (OLD.object_fingerprints ? 'payloadSha256')
-    AND NEW.payload_sha256 ~ '^[0-9a-f]{64}$'
-    AND NEW.payload_sha256 <> repeat('0',64)
-    AND NEW.payload_receipt_sha256 ~ '^[0-9a-f]{64}$'
-    AND NEW.payload_receipt_sha256 <> repeat('0',64)
-    AND NEW.object_fingerprints ? 'payloadSha256';
-BEGIN
+    AND NOT (OLD.object_fingerprints ? 'payloadSha256');
+
   IF NEW.package_id IS DISTINCT FROM OLD.package_id
     OR NEW.content_digest IS DISTINCT FROM OLD.content_digest
     OR NEW.package_digest IS DISTINCT FROM OLD.package_digest
@@ -1252,6 +1348,7 @@ BEGIN
     OR NEW.target_database IS DISTINCT FROM OLD.target_database
     OR NEW.desired_release_version IS DISTINCT FROM OLD.desired_release_version
     OR NEW.payload IS DISTINCT FROM OLD.payload
+    OR NEW.payload_hash_contract IS DISTINCT FROM OLD.payload_hash_contract
     OR NEW.staged_by IS DISTINCT FROM OLD.staged_by
     OR NEW.staged_at IS DISTINCT FROM OLD.staged_at
     OR NEW.create_time IS DISTINCT FROM OLD.create_time THEN
@@ -1267,9 +1364,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS theory_package_imports_immutable ON theory_package_imports;
 CREATE TRIGGER theory_package_imports_immutable
-  BEFORE UPDATE ON theory_package_imports
+  BEFORE INSERT OR UPDATE ON theory_package_imports
   FOR EACH ROW EXECUTE FUNCTION protect_theory_package_import_contract();
 
 DROP TRIGGER IF EXISTS theory_practices_ownership_lock ON theory_practices;
