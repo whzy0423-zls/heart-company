@@ -206,6 +206,28 @@ func TestDefaultMenusIncludeCustomerUserInsights(t *testing.T) {
 	}
 }
 
+func TestDefaultMenusIncludeCustomerMiniappUsers(t *testing.T) {
+	for _, menu := range defaultMenus {
+		if menu.ID != 511 {
+			continue
+		}
+		if menu.PID != 500 || menu.Name != "CustomerMiniappUsers" {
+			t.Fatalf("unexpected miniapp customer menu identity: %+v", menu)
+		}
+		if menu.Path != "/customer/miniapp-users" || menu.Component != "/customer/miniapp-users" {
+			t.Fatalf("unexpected miniapp customer menu route: %+v", menu)
+		}
+		if menu.AuthCode != "Customer:Miniapp:List" || menu.Type != "menu" || menu.Sort != 8 {
+			t.Fatalf("unexpected miniapp customer menu permission: %+v", menu)
+		}
+		if menu.Icon == "" || menu.Title != "小程序客户" {
+			t.Fatalf("unexpected miniapp customer menu metadata: %+v", menu)
+		}
+		return
+	}
+	t.Fatal("expected default menu CustomerMiniappUsers with fixed id 511")
+}
+
 func TestDefaultMenusIncludeAppAnalyticsDashboard(t *testing.T) {
 	var found bool
 	for _, menu := range defaultMenus {
