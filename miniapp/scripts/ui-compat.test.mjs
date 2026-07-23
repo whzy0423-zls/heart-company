@@ -784,6 +784,47 @@ assert.match(profilePage, /#ifdef H5[\s\S]*请在微信小程序内登录[\s\S]*
 assert.doesNotMatch(profilePage, /后端暂未开通|前端占位|占位/, '用户侧文案不能暴露手机号授权后端占位状态')
 assert.doesNotMatch(profilePage, /openChatPage|goChat|clearChatMessages|问 AI|AI 对话/, 'profile page must not expose or reset removed AI chat state')
 
+const profileTemplate = stripMarkupAndCssComments(vueSection(profilePage, 'template') || '')
+const profileStyle = stripMarkupAndCssComments(vueSection(profilePage, 'style') || '')
+assert.match(profileTemplate, /class=["'][^"']*profile-hero[^"']*nx-page-hero[^"']*["']/, 'profile should open with the shared growth hero')
+assert.match(profilePage, /const recordCount = computed\(\(\) => records\.value\.length\)/, 'profile summary should derive its record count from loaded records')
+assert.match(profilePage, /const bookingCount = computed\(\(\) => bookings\.value\.length\)/, 'profile summary should derive its booking count from loaded bookings')
+assert.match(profilePage, /const recordCountLabel = computed\(\(\) => profileLoading\.value \? ['"]—['"] : String\(recordCount\.value\)\)/, 'profile record count should stay stable while loading')
+assert.match(profilePage, /const bookingCountLabel = computed\(\(\) => profileLoading\.value \? ['"]—['"] : String\(bookingCount\.value\)\)/, 'profile booking count should stay stable while loading')
+assert.ok((profileTemplate.match(/class=["'][^"']*profile-stat(?:\s|["'])/g) || []).length >= 3, 'profile hero should present three growth statistics')
+assert.match(profileTemplate, /class=["'][^"']*history-timeline[^"']*["']/, 'profile histories should use a timeline')
+assert.match(profileTemplate, /class=["'][^"']*history-item[^"']*["']/, 'profile timeline should expose structured items')
+assert.match(profileTemplate, /class=["'][^"']*history-item__dot[^"']*["']/, 'profile timeline should expose a visible dot')
+assert.match(profileTemplate, /class=["'][^"']*history-item__body[^"']*["']/, 'profile timeline should keep content separate from its dot')
+assert.match(profilePage, /const userAvatarFailed = ref\(false\)/, 'profile should track user avatar failures')
+assert.match(profilePage, /const draftAvatarFailed = ref\(false\)/, 'profile should track draft avatar failures')
+assert.match(profilePage, /function onUserAvatarError\(\)\s*\{\s*userAvatarFailed\.value = true\s*\}/, 'profile should replace failed user avatars')
+assert.match(profilePage, /function onDraftAvatarError\(\)\s*\{\s*draftAvatarFailed\.value = true\s*\}/, 'profile should replace failed draft avatars')
+assert.doesNotMatch(profilePage, /管理档案/, 'profile must not invent an unsupported archive-management action')
+assert.match(profileTemplate, /记录每一次自我看见/, 'profile hero should lead with the approved growth message')
+assert.match(profileTemplate, /class=["'][^"']*profile-edit[^"']*nx-panel[^"']*["']/, 'profile editing should use the shared panel surface')
+assert.ok((profileTemplate.match(/class=["'][^"']*history-section[^"']*nx-panel[^"']*["']/g) || []).length >= 2, 'both history sections should use shared panel surfaces')
+assert.match(profileTemplate, /v-if=["']profileLoading["'][\s\S]*v-else-if=["']recordsError["'][\s\S]*v-else-if=["']records\.length === 0["'][\s\S]*v-else class=["']history-timeline["']/, 'profile records should keep loading, error, empty, and timeline precedence')
+assert.match(profileTemplate, /v-if=["']profileLoading["'][\s\S]*v-else-if=["']bookingsError["'][\s\S]*v-else-if=["']bookings\.length === 0["'][\s\S]*v-else class=["']history-timeline["']/, 'profile bookings should keep loading, error, empty, and timeline precedence')
+const h5ProfileLogin = profilePage.match(/<!-- #ifdef H5 -->([\s\S]*?)<!-- #endif -->/)?.[1] || ''
+assert.match(h5ProfileLogin, /<button\b[^>]*\bdisabled\b[^>]*>请在微信小程序内登录<\/button>/, 'H5 profile login guidance should remain disabled')
+assert.doesNotMatch(h5ProfileLogin, /@click=["']login["']/, 'H5 profile guidance must not call WeChat login')
+
+const profileHeroStyle = pageStyleDeclarations(profileStyle, '.profile-hero')
+assert.match(profileHeroStyle, /linear-gradient\(145deg,\s*#172554,\s*#4338ca 56%,\s*#7c3aed\)/, 'profile hero should use the approved deep blue-purple palette')
+assert.match(profileHeroStyle, /border-radius:\s*38rpx\s*;/, 'profile hero should use the approved radius')
+assert.match(pageStyleDeclarations(profileStyle, '.profile-stats'), /grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)\s*;/, 'profile statistics should stay in three stable columns')
+assert.match(pageStyleDeclarations(profileStyle, '.profile-stat__value'), /font-size:\s*34rpx\s*;[\s\S]*font-weight:\s*900\s*;/, 'profile statistic values should keep the approved hierarchy')
+assert.match(pageStyleDeclarations(profileStyle, '.history-item'), /min-height:\s*88rpx\s*;/, 'profile history rows should keep a stable touch-friendly rhythm')
+assert.match(pageStyleDeclarations(profileStyle, '.history-item__dot'), /width:\s*16rpx\s*;[\s\S]*height:\s*16rpx\s*;/, 'profile timeline dots should use the approved fixed size')
+assert.match(pageStyleDeclarations(profileStyle, '.logout'), /min-height:\s*88rpx\s*;/, 'profile logout should keep an 88rpx touch target')
+for (const selector of ['.profile-hero__eyebrow', '.profile-hero__lead', '.profile-stat__label', '.wechat-slot__desc', '.history-item__meta', '.more-tip']) {
+  const fontSize = pageStyleDeclarations(profileStyle, selector)?.match(/font-size:\s*(\d+)rpx\s*;/)
+  assert.ok(fontSize && Number(fontSize[1]) >= 24, `${selector} should keep at least 24rpx readable text`)
+}
+const historyMetaColor = pageStyleDeclarations(profileStyle, '.history-item__meta')?.match(/color:\s*(#[\da-f]{6})\s*;/i)?.[1]
+assert.ok(historyMetaColor && contrastRatio(historyMetaColor, '#ffffff') >= 4.5, 'profile history metadata should meet 4.5:1 contrast')
+
 
 const resultPage = readFileSync('src/pages/result/result.vue', 'utf8')
 const resultTemplateRaw = resultPage.match(/<template>([\s\S]*)<\/template>\s*<style/)?.[1] || ''
