@@ -102,7 +102,7 @@ func scanMessage(row interface{ Scan(...interface{}) error }) (Message, error) {
 func (s *Store) ListSessions(ctx context.Context, appUserID int64) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, app_user_id, card_id, title, updated_at, create_time
-		 FROM app_chat_sessions WHERE app_user_id = $1
+		 FROM app_chat_sessions WHERE app_user_id = $1 AND scene = 'chat'
 		 ORDER BY updated_at DESC`, appUserID)
 	if err != nil {
 		return nil, err
@@ -121,11 +121,21 @@ func (s *Store) ListSessions(ctx context.Context, appUserID int64) ([]Session, e
 
 // GetOrCreateSession 找到 card 的最近会话，若无则新建。
 func (s *Store) GetOrCreateSession(ctx context.Context, appUserID, cardID int64) (Session, error) {
+	return s.GetOrCreateSceneSession(ctx, appUserID, cardID, "chat")
+}
+
+// GetOrCreateSceneSession finds the most recent session for an explicitly
+// selected internal scene. Public chat callers must use GetOrCreateSession.
+func (s *Store) GetOrCreateSceneSession(ctx context.Context, appUserID, cardID int64, scene string) (Session, error) {
+	scene = strings.TrimSpace(scene)
+	if scene == "" {
+		return Session{}, errors.New("chat: scene is required")
+	}
 	sess, err := scanSession(s.db.QueryRowContext(ctx,
 		`SELECT id, app_user_id, card_id, title, updated_at, create_time
-		 FROM app_chat_sessions WHERE app_user_id = $1 AND card_id = $2
+		 FROM app_chat_sessions WHERE app_user_id = $1 AND card_id = $2 AND scene = $3
 		 ORDER BY updated_at DESC LIMIT 1`,
-		appUserID, cardID,
+		appUserID, cardID, scene,
 	))
 	if err == nil {
 		return sess, nil
@@ -135,9 +145,9 @@ func (s *Store) GetOrCreateSession(ctx context.Context, appUserID, cardID int64)
 	}
 	// 新建
 	sess, err = scanSession(s.db.QueryRowContext(ctx,
-		`INSERT INTO app_chat_sessions (app_user_id, card_id) VALUES ($1, $2)
+		`INSERT INTO app_chat_sessions (app_user_id, card_id, scene) VALUES ($1, $2, $3)
 		 RETURNING id, app_user_id, card_id, title, updated_at, create_time`,
-		appUserID, cardID))
+		appUserID, cardID, scene))
 	return sess, err
 }
 
@@ -145,7 +155,7 @@ func (s *Store) GetOrCreateSession(ctx context.Context, appUserID, cardID int64)
 func (s *Store) GetSession(ctx context.Context, appUserID, sessionID int64) (Session, error) {
 	sess, err := scanSession(s.db.QueryRowContext(ctx,
 		`SELECT id, app_user_id, card_id, title, updated_at, create_time
-		 FROM app_chat_sessions WHERE id = $1 AND app_user_id = $2`,
+		 FROM app_chat_sessions WHERE id = $1 AND app_user_id = $2 AND scene = 'chat'`,
 		sessionID, appUserID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return sess, ErrNotFound
@@ -184,13 +194,20 @@ func (s *Store) ListRecentMessages(ctx context.Context, sessionID int64, limit i
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, session_id, role, content, sources, favorite, feedback,
-		        message_type, audio_asset_id, audio_duration_ms, transcript, create_time
-		 FROM app_chat_messages
+		`SELECT m.id, m.session_id, m.role,
+		        CASE WHEN s.scene = 'xinzhili_voice' AND m.role = 'assistant'
+		             THEN COALESCE(m.delivered_text, '') ELSE m.content END,
+		        m.sources, m.favorite, m.feedback, m.message_type, m.audio_asset_id,
+		        m.audio_duration_ms, m.transcript, m.create_time
+		 FROM app_chat_messages m
+		 JOIN (SELECT id AS scene_session_id, scene FROM ONLY app_chat_sessions) s
+		   ON s.scene_session_id = m.session_id
 		 WHERE session_id = $1
 		   AND role IN ('user', 'assistant')
 		   AND ((message_type = 'voice' AND btrim(transcript) <> '')
-		        OR (message_type <> 'voice' AND btrim(content) <> ''))
+		        OR (message_type <> 'voice' AND btrim(CASE
+		              WHEN s.scene = 'xinzhili_voice' AND m.role = 'assistant'
+		              THEN COALESCE(m.delivered_text, '') ELSE m.content END) <> ''))
 		 ORDER BY create_time DESC, id DESC
 		 LIMIT $2`,
 		sessionID, limit)
@@ -228,9 +245,14 @@ func (s *Store) GetConversationState(ctx context.Context, sessionID int64) (Conv
 
 func (s *Store) ListMessagesAfter(ctx context.Context, sessionID, afterMessageID int64) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, session_id, role, content, sources, favorite, feedback,
-		        message_type, audio_asset_id, audio_duration_ms, transcript, create_time
-		 FROM app_chat_messages
+		`SELECT m.id, m.session_id, m.role,
+		        CASE WHEN s.scene = 'xinzhili_voice' AND m.role = 'assistant'
+		             THEN COALESCE(m.delivered_text, '') ELSE m.content END,
+		        m.sources, m.favorite, m.feedback, m.message_type, m.audio_asset_id,
+		        m.audio_duration_ms, m.transcript, m.create_time
+		 FROM app_chat_messages m
+		 JOIN (SELECT id AS scene_session_id, scene FROM ONLY app_chat_sessions) s
+		   ON s.scene_session_id = m.session_id
 		 WHERE session_id = $1 AND id > $2
 		 ORDER BY id`,
 		sessionID, afterMessageID)
@@ -383,6 +405,7 @@ func (s *Store) GetVoiceAudioAssetID(ctx context.Context, appUserID, messageID i
 		 FROM app_chat_messages m
 		 JOIN app_chat_sessions s ON s.id = m.session_id
 		 WHERE m.id = $1 AND s.app_user_id = $2
+		   AND s.scene = 'chat'
 		   AND m.role = 'user' AND m.message_type = 'voice'
 		   AND m.audio_asset_id IS NOT NULL`,
 		messageID, appUserID,
@@ -402,6 +425,7 @@ func (s *Store) GetVoiceTranscript(ctx context.Context, appUserID, messageID int
 		 FROM app_chat_messages m
 		 JOIN app_chat_sessions s ON s.id = m.session_id
 		 WHERE m.id = $1 AND s.app_user_id = $2
+		   AND s.scene = 'chat'
 		   AND m.role = 'user' AND m.message_type = 'voice'`,
 		messageID, appUserID,
 	).Scan(&transcript)
@@ -417,7 +441,8 @@ func (s *Store) SetFeedback(ctx context.Context, appUserID, messageID int64, fee
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE app_chat_messages m SET feedback = $3
 		 FROM app_chat_sessions s
-		 WHERE m.id = $1 AND m.session_id = s.id AND s.app_user_id = $2 AND m.role = 'assistant'`,
+		 WHERE m.id = $1 AND m.session_id = s.id AND s.app_user_id = $2
+		   AND s.scene = 'chat' AND m.role = 'assistant'`,
 		messageID, appUserID, feedback)
 	if err != nil {
 		return err
@@ -435,7 +460,8 @@ func (s *Store) ToggleFavorite(ctx context.Context, appUserID, messageID int64) 
 	err := s.db.QueryRowContext(ctx,
 		`UPDATE app_chat_messages m SET favorite = NOT m.favorite
 		 FROM app_chat_sessions s
-		 WHERE m.id = $1 AND m.session_id = s.id AND s.app_user_id = $2 AND m.role = 'assistant'
+		 WHERE m.id = $1 AND m.session_id = s.id AND s.app_user_id = $2
+		   AND s.scene = 'chat' AND m.role = 'assistant'
 		 RETURNING m.favorite`,
 		messageID, appUserID).Scan(&favorite)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -460,7 +486,7 @@ func (s *Store) ListFavorites(ctx context.Context, appUserID, cardID int64) ([]F
 		`SELECT m.id, m.session_id, s.card_id, m.content, m.sources, m.create_time
 		 FROM app_chat_messages m
 		 JOIN app_chat_sessions s ON s.id = m.session_id
-		 WHERE s.app_user_id = $1 AND m.favorite = true
+		 WHERE s.app_user_id = $1 AND s.scene = 'chat' AND m.favorite = true
 		   AND ($2 = 0 OR s.card_id = $2)
 		 ORDER BY m.create_time DESC, m.id DESC`,
 		appUserID, cardID)
@@ -499,7 +525,7 @@ func (s *Store) SearchMessages(ctx context.Context, appUserID, cardID int64, key
 		`SELECT m.id, m.session_id, s.card_id, m.role, m.content, m.sources, m.favorite, m.create_time
 		 FROM app_chat_messages m
 		 JOIN app_chat_sessions s ON s.id = m.session_id
-		 WHERE s.app_user_id = $1
+		 WHERE s.app_user_id = $1 AND s.scene = 'chat'
 		   AND ($2 = 0 OR s.card_id = $2)
 		   AND m.content ILIKE '%' || $3 || '%'
 		 ORDER BY m.create_time DESC, m.id DESC
