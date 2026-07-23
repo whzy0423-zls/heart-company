@@ -62,8 +62,14 @@ assert.match(productionExample, /VITE_API_BASE=https:\/\/xn--9iq9az5uo8fz16d\.co
 assert.match(productionExample, /CI|release|上线|生产/)
 
 const productionCheck = readFileSync(resolve('scripts/verify-production-api-base.mjs'), 'utf8')
-assert.match(productionCheck, /\.local/, 'production API validation should reject .local placeholder/internal hosts')
-assert.match(productionCheck, /yourdomain\.com/, 'production API validation should reject unchanged example hosts')
+assert.match(
+  productionCheck,
+  /validateProductionApiBase/,
+  'production build validation should reuse the runtime API host validation',
+)
+const apiBaseValidation = readFileSync(resolve('src/apiBaseValidation.mjs'), 'utf8')
+assert.match(apiBaseValidation, /\.local/, 'production API validation should reject .local hosts')
+assert.match(apiBaseValidation, /yourdomain/, 'production API validation should reject placeholder hosts')
 assert.doesNotMatch(qa, /\nnpm run build:h5\n/, 'QA automation should not suggest production H5 build without VITE_API_BASE')
 assert.doesNotMatch(qa, /nine-xing\.local/, 'QA automation should not use .local placeholder API hosts')
 

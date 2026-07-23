@@ -1,54 +1,9 @@
+import { validateProductionApiBase } from './apiBaseValidation.mjs'
+
 const DEFAULT_API_BASE = 'https://xn--9iq9az5uo8fz16d.com/api'
 
 function cleanBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '')
-}
-
-function isPrivateIPv4(value) {
-  const parts = value.split('.').map((part) => Number(part))
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false
-  }
-
-  return (
-    parts[0] === 10 ||
-    parts[0] === 127 ||
-    (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
-    (parts[0] === 192 && parts[1] === 168) ||
-    (parts[0] === 169 && parts[1] === 254) ||
-    parts[0] === 0
-  )
-}
-
-function hasBlockedDomainSuffix(hostname, secondLevelLabel) {
-  const labels = hostname.split('.')
-  return (
-    labels.length >= 3 &&
-    labels[labels.length - 2] === secondLevelLabel &&
-    labels[labels.length - 1] === 'com'
-  )
-}
-
-function isRealProductionApiBase(value) {
-  if (!value.startsWith('https://')) return false
-
-  let hostname
-  try {
-    hostname = new URL(value).hostname.toLowerCase().replace(/^\[|\]$/g, '')
-  } catch {
-    return false
-  }
-  if (!hostname) return false
-
-  return !(
-    hostname === 'localhost' ||
-    hostname.endsWith('.localhost') ||
-    hostname.endsWith('.local') ||
-    hostname === '::1' ||
-    isPrivateIPv4(hostname) ||
-    hasBlockedDomainSuffix(hostname, 'example') ||
-    hasBlockedDomainSuffix(hostname, 'yourdomain')
-  )
 }
 
 // 后端 API 基址。
@@ -60,7 +15,7 @@ export function resolveApiBase(options = {}) {
   const env = options.env || import.meta.env || { DEV: true }
   const configured = cleanBaseUrl(env.VITE_API_BASE)
   if (configured) {
-    if (!env.DEV && !isRealProductionApiBase(configured)) {
+    if (!env.DEV && !validateProductionApiBase(configured).ok) {
       throw new Error('Production VITE_API_BASE must be a real HTTPS API URL')
     }
     return configured

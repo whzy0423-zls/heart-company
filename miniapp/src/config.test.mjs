@@ -6,6 +6,7 @@ import { join } from 'node:path'
 const dir = await mkdtemp(join(tmpdir(), 'nx-miniapp-config-'))
 const modulePath = join(dir, 'config.mjs')
 await copyFile(new URL('./config.js', import.meta.url), modulePath)
+await copyFile(new URL('./apiBaseValidation.mjs', import.meta.url), join(dir, 'apiBaseValidation.mjs'))
 const { resolveApiBase } = await import(`file://${modulePath}`)
 
 assert.equal(
@@ -35,6 +36,14 @@ for (const loopbackApiBase of [
   'https://2130706433/api',
   'https://0x7f000001/api',
   'https://[::1]/api',
+  'https://example.com/api',
+  'https://yourdomain.com/api',
+  'https://localhost./api',
+  'https://service.local./api',
+  'https://api.example.com./api',
+  'https://[fc00::1]/api',
+  'https://[fd12:3456:789a::1]/api',
+  'https://[fe80::1]/api',
 ]) {
   assert.throws(
     () => resolveApiBase({ env: { DEV: false, VITE_API_BASE: loopbackApiBase } }),
