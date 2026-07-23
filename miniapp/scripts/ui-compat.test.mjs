@@ -546,8 +546,92 @@ assert.doesNotMatch(profilePage, /openChatPage|goChat|clearChatMessages|问 AI|A
 
 
 const resultPage = readFileSync('src/pages/result/result.vue', 'utf8')
-assert.match(resultPage, /v-else-if="reportError"/, 'result page should render report failure state before falling back to manual fetch')
-assert.match(resultPage, /report__retry[\s\S]*@click="loadReportContent"/, 'result page should allow retrying report content fetch from the error state')
+const resultTemplateRaw = resultPage.match(/<template>([\s\S]*)<\/template>\s*<style/)?.[1] || ''
+const resultTemplate = stripMarkupAndCssComments(resultTemplateRaw)
+const resultStyle = stripMarkupAndCssComments(vueSection(resultPage, 'style') || '')
+const resultViews = openingTagsFor(resultTemplate, 'view')
+
+assert.match(resultPage, /import\s*\{\s*reportDisplayState\s*\}\s*from\s*['"]\.\.\/\.\.\/utils\/reportDisplayState['"]/, 'result page should use the pure report display-state helper')
+assert.match(resultPage, /const reportPriceCents = ref\(null\)/, 'result price should start unknown instead of assuming a charge')
+assert.match(resultPage, /const reportStatusLoading = ref\(false\)/, 'result page should track report status loading separately')
+assert.match(resultPage, /const reportStatusError = ref\(['"]['"]\)/, 'result page should expose report status errors')
+assert.match(resultPage, /const reportState = computed\(\(\) => reportDisplayState\(\{[\s\S]*recordId:[\s\S]*loading:\s*reportStatusLoading\.value,[\s\S]*error:\s*reportStatusError\.value,[\s\S]*unlocked:\s*reportUnlocked\.value,[\s\S]*priceCents:\s*reportPriceCents\.value,[\s\S]*\}\)\)/, 'result page should derive its report UI from the pure five-state helper')
+assert.doesNotMatch(resultPage, /ref\(990\)/, 'result page must not hard-code a default report price')
+
+for (const className of ['result-hero', 'drive-grid', 'center-panel', 'direction-grid', 'report-panel']) {
+  assert.ok(resultViews.some((tag) => staticClassTokens(tag).includes(className)), `result page should render ${className}`)
+}
+assert.match(resultTemplate, /class=["'][^"']*result-hero[^"']*nx-page-hero[^"']*["']/, 'result hero should use the shared hero surface')
+assert.match(resultTemplate, /class=["']result-hero[^"']*["']\s+:class=["']`result-hero--\$\{info\.color\}`["']/, 'result hero should use the personality color modifier')
+assert.match(resultPage, /const avatarFailed = ref\(false\)/, 'result page should track avatar load failure')
+const resultAvatar = openingTagsFor(resultTemplate, 'image').find((tag) => staticClassTokens(tag).includes('result-hero__avatar'))
+assert.ok(resultAvatar, 'result hero should render a fixed avatar image')
+assert.equal(tagAttribute(resultAvatar, 'v-if'), '!avatarFailed', 'result avatar should be replaced after an image error')
+assert.equal(tagAttribute(resultAvatar, '@error'), 'avatarFailed = true', 'result avatar should record image errors')
+assert.match(resultAvatar, /\slazy-load(?:=|\s|>|$)/, 'result avatar should lazy-load')
+const resultAvatarFallback = resultViews.find((tag) => staticClassTokens(tag).includes('result-hero__avatar-fallback'))
+assert.ok(resultAvatarFallback && /\sv-else(?:\s|>|$)/.test(resultAvatarFallback), 'result hero should render a mutually exclusive avatar fallback')
+for (const selector of ['.result-hero__avatar', '.result-hero__avatar-fallback']) {
+  const declarations = pageStyleDeclarations(resultStyle, selector)
+  assert.match(declarations, /width:\s*184rpx\s*;/, `${selector} should reserve 184rpx width`)
+  assert.match(declarations, /height:\s*184rpx\s*;/, `${selector} should reserve 184rpx height`)
+}
+
+const reportPanel = resultTemplate.match(/<view\s+class=["']report-panel["']>([\s\S]*?)<view\s+class=["']result-actions["']>/)?.[1]
+assert.ok(reportPanel, 'result page should expose one bounded report panel')
+for (const state of ['needs-save', 'status-loading', 'status-error', 'ready']) {
+  assert.match(reportPanel, new RegExp(`reportState\\.key === '${state}'`), `report panel should render ${state}`)
+}
+assert.match(reportPanel, /<template\s+v-else>/, 'report panel final branch should render the unlocked state')
+assert.equal((reportPanel.match(/@click=["']saveRecord["']/g) || []).length, 1, 'save should exist exactly once inside needs-save')
+assert.equal((reportPanel.match(/@click=["']unlockReport["']/g) || []).length, 1, 'unlock should exist exactly once inside ready')
+assert.equal((resultTemplate.match(/@click=["']saveRecord["']/g) || []).length, 1, 'result page should not duplicate its save CTA outside the report panel')
+assert.equal((resultTemplate.match(/@click=["']unlockReport["']/g) || []).length, 1, 'result page should not duplicate its unlock CTA outside the report panel')
+assert.match(reportPanel, /aria-live=["']polite["'][^>]*>\s*查询报告状态/, 'report status loading should be announced politely')
+assert.match(reportPanel, /report__retry[^>]*@click=["']refreshReportStatus["']/, 'report status failure should allow retrying status fetch')
+assert.match(reportPanel, /report__content-retry[^>]*@click=["']loadReportContent["']/, 'unlocked content failure should allow retrying content fetch')
+
+const resultH5Blocks = [...resultTemplateRaw.matchAll(/<!-- #ifdef H5 -->([\s\S]*?)<!-- #endif -->/g)].map((match) => match[1])
+const h5SaveBlock = resultH5Blocks.find((block) => block.includes('请在微信小程序内登录后保存'))
+assert.ok(h5SaveBlock, 'H5 needs-save should explain that saving requires the miniapp')
+assert.match(h5SaveBlock, /<button\b[^>]*\sdisabled(?:\s|>)/, 'H5 save guidance should be disabled')
+assert.doesNotMatch(h5SaveBlock, /@click=/, 'H5 save guidance must not bind a save handler')
+const h5PaymentBlock = resultH5Blocks.find((block) => block.includes('请在微信小程序内完成存档与支付'))
+assert.ok(h5PaymentBlock, 'H5 ready state should explain that payment requires the miniapp')
+assert.match(h5PaymentBlock, /<button\b[^>]*\sdisabled(?:\s|>)/, 'H5 payment guidance should be disabled')
+assert.doesNotMatch(h5PaymentBlock, /@click=/, 'H5 payment guidance must not bind a payment handler')
+const h5PosterBlock = resultH5Blocks.find((block) => block.includes('小程序内生成海报'))
+assert.ok(h5PosterBlock && /\sdisabled(?:\s|>)/.test(h5PosterBlock), 'H5 poster action should remain disabled guidance')
+assert.doesNotMatch(resultH5Blocks.join('\n'), /open-type=["']share["']/, 'H5 should not expose miniapp sharing')
+
+const resultMpBlocks = [...resultTemplateRaw.matchAll(/<!-- #ifdef MP-WEIXIN -->([\s\S]*?)<!-- #endif -->/g)].map((match) => match[1])
+assert.ok(resultMpBlocks.some((block) => /open-type=["']share["']/.test(block)), 'WeChat should preserve friend sharing')
+assert.ok(resultMpBlocks.some((block) => /@click=["']saveRecord["']/.test(block)), 'WeChat should preserve saving')
+assert.ok(resultMpBlocks.some((block) => /@click=["']unlockReport["']/.test(block)), 'WeChat should preserve report payment')
+
+const refreshStatusBody = sourceBracedBody(resultPage, /async function\s+refreshReportStatus\s*\(\s*\)\s*\{/.exec(resultPage))
+assert.match(refreshStatusBody, /reportStatusLoading\.value\s*=\s*true/, 'report status refresh should enter loading state')
+assert.match(refreshStatusBody, /reportStatusError\.value\s*=\s*['"]['"]/, 'report status refresh should clear its prior error')
+assert.match(refreshStatusBody, /reportUnlocked\.value\s*=\s*!!st\.unlocked/, 'report status refresh should apply unlocked before validating price')
+assert.match(refreshStatusBody, /Number\.isFinite\(st\.priceCents\)[\s\S]*st\.priceCents\s*>\s*0/, 'locked report should accept only a finite positive price')
+assert.match(refreshStatusBody, /finally\s*\{[\s\S]*reportStatusLoading\.value\s*=\s*false/, 'report status refresh should always stop loading')
+assert.match(resultPage, /const reportPriceYuan = computed\(\(\) => \{[\s\S]*Number\.isFinite\(reportPriceCents\.value\)[\s\S]*reportPriceCents\.value\s*>\s*0[\s\S]*return ''/, 'report price display should stay blank until a valid positive price is known')
+
+const reportStyle = pageStyleDeclarations(resultStyle, '.report-panel')
+assert.match(reportStyle, /background:\s*linear-gradient\(135deg,\s*#111827\s+0%,\s*#312e81\s+100%\)\s*;/i, 'report panel should keep the exact dark indigo gradient')
+assert.match(reportStyle, /border-radius:\s*34rpx\s*;/, 'report panel should use the planned 34rpx radius')
+assert.match(reportStyle, /padding:\s*34rpx\s*;/, 'report panel should use the planned 34rpx padding')
+for (const selector of ['.report__cta', '.report__secondary', '.result-actions button', '.restart-button']) {
+  const declarations = pageStyleDeclarations(resultStyle, selector)
+  assert.match(declarations, /min-height:\s*88rpx\s*;/, `${selector} should keep an 88rpx touch target`)
+}
+for (const selector of ['.report__intro', '.report__status', '.report__error', '.report__content', '.disclaimer']) {
+  const fontSize = pageStyleDeclarations(resultStyle, selector)?.match(/font-size:\s*(\d+)rpx\s*;/)
+  assert.ok(fontSize && Number(fontSize[1]) >= 24, `${selector} should keep at least 24rpx readable text`)
+}
+assert.match(pageStyleDeclarations(resultStyle, '.drive-grid'), /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)\s*;/, 'result drives should stay in equal columns')
+assert.match(pageStyleDeclarations(resultStyle, '.direction-grid'), /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)\s*;/, 'result directions should stay in equal columns')
+assert.match(resultTemplate, /aria-label=["']关闭海报["']/, 'poster close action should expose an accessible label')
 assert.match(resultPage, /userErrorMessage/, 'result page should surface normalized request errors')
 assert.match(resultPage, /normalizeLastResult/, 'result page should validate cached result schema before rendering')
 assert.match(resultPage, /测试结果已失效/, 'result page should give feedback when cached result schema is invalid')
