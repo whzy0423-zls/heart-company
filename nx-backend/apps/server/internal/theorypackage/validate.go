@@ -441,12 +441,34 @@ func validateBudget(files map[string][]byte, m map[string]any) error {
 }
 
 func selectedRangeUnits(ranges []any, prefix string) (int, bool) {
+	return rangeUnits(ranges, prefix, false)
+}
+
+func rangeUnits(ranges []any, prefix string, allowEmpty bool) (int, bool) {
+	if len(ranges) == 0 {
+		return 0, allowEmpty
+	}
+	if len(ranges) > 32 {
+		return 0, false
+	}
 	total := 0
+	totalCharacters := 0
+	seen := set()
+	type interval struct{ start, end int }
+	intervals := []interval{}
 	for _, raw := range ranges {
 		value, ok := raw.(string)
 		if !ok || !strings.HasPrefix(value, prefix) {
 			return 0, false
 		}
+		totalCharacters += len([]rune(value))
+		if totalCharacters > 2048 {
+			return 0, false
+		}
+		if _, duplicate := seen[value]; duplicate {
+			return 0, false
+		}
+		seen[value] = struct{}{}
 		bounds := strings.Split(strings.TrimPrefix(value, prefix), "-")
 		if len(bounds) < 1 || len(bounds) > 2 {
 			return 0, false
@@ -463,12 +485,18 @@ func selectedRangeUnits(ranges []any, prefix string) (int, bool) {
 			}
 		}
 		count := end - start + 1
+		for _, existing := range intervals {
+			if start <= existing.end && end >= existing.start {
+				return 0, false
+			}
+		}
+		intervals = append(intervals, interval{start: start, end: end})
 		if count < 1 || total > math.MaxInt-count {
 			return 0, false
 		}
 		total += count
 	}
-	return total, total > 0
+	return total, true
 }
 
 func validateSourceCatalog(catalog map[string]any) error {
@@ -534,6 +562,25 @@ func validateSourceCatalog(catalog map[string]any) error {
 					return invalid("source range value invalid")
 				}
 			}
+		}
+		prefix := "page:"
+		switch str(entry, "mediaType") {
+		case "epub":
+			prefix = "spine-item:"
+		case "doc", "docx":
+			prefix = "paragraph:"
+		}
+		selectedUnits, selectedOK := rangeUnits(arr(entry, "selectedRanges"), prefix, true)
+		remainingUnits, remainingOK := rangeUnits(arr(entry, "remainingRanges"), prefix, true)
+		allRanges := append([]any{}, arr(entry, "selectedRanges")...)
+		allRanges = append(allRanges, arr(entry, "remainingRanges")...)
+		allUnits, allOK := rangeUnits(allRanges, prefix, true)
+		processedUnits, processedOK := integer(entry, "processedUnitCount")
+		remainingCount, remainingCountOK := integer(entry, "remainingUnitCount")
+		estimatedUnits, estimatedOK := integer(mapv(entry, "unitEstimate"), "unitCount")
+		if !selectedOK || !remainingOK || !allOK || allUnits != selectedUnits+remainingUnits || !processedOK || !remainingCountOK || !estimatedOK || selectedUnits != processedUnits || remainingUnits != remainingCount ||
+			processedUnits > math.MaxInt-remainingCount || processedUnits+remainingCount != estimatedUnits {
+			return invalid("source selected and remaining ranges do not match unit counts")
 		}
 		probe := mapv(entry, "probe")
 		if err := exactKeys(probe, set("normalization", "outputSha256", "toolVersions"), "source probe"); err != nil {
@@ -1049,7 +1096,7 @@ func validateItem(x map[string]any, practice bool, sources map[string]map[string
 }
 func validText(value string, maxRunes int) bool {
 	trimmed := strings.TrimSpace(value)
-	return trimmed != "" && len([]rune(value)) <= maxRunes && !strings.ContainsAny(value, "\x00\f")
+	return trimmed != "" && len([]rune(value)) <= maxRunes && !containsJSONControl(value)
 }
 func validLocator(v any, format string) bool {
 	x, ok := v.(map[string]any)
@@ -1104,7 +1151,7 @@ func validateReviews(files map[string][]byte, m map[string]any) error {
 		if str(x, "schemaVersion") != "xinzhili.offline-review-template.v1" || str(x, "reviewType") != template.reviewType || x["reviewerUserId"] != nil ||
 			str(x, "requiredDatabaseRole") != template.role || str(x, "trustedReviewerRequirement") != "database_user_with_required_role" || x["offlineTemplateOnly"] != true ||
 			str(x, "status") != "pending" || str(x, "contentDigest") != str(m, "contentDigest") || x["authorizesPromotion"] != false || str(x, "instructions") != reviewInstructions ||
-			!notesOK || len([]rune(notes)) > 500 || reviewNotesAuthorize(notes) {
+			!notesOK || notes != "" {
 			return invalid("review %q not a bound pending template", p)
 		}
 	}
@@ -1161,16 +1208,6 @@ func validateReviews(files map[string][]byte, m map[string]any) error {
 		return invalid("safety evaluation report disagrees with structured result")
 	}
 	return nil
-}
-
-func reviewNotesAuthorize(notes string) bool {
-	lower := strings.ToLower(notes)
-	for _, phrase := range []string{"approved", "approve", "promote", "授权发布", "可直接发布", "通过审核"} {
-		if strings.Contains(lower, phrase) {
-			return true
-		}
-	}
-	return false
 }
 
 func sameJSON(a, b any) bool {
@@ -1288,14 +1325,14 @@ func object(b []byte, name string) (map[string]any, error) {
 	if d.Decode(&struct{}{}) != io.EOF {
 		return nil, invalid("trailing JSON %s", name)
 	}
-	nodes := 0
-	if err := validateJSONStrings(x, 0, &nodes); err != nil {
+	nodes, totalCharacters := 0, 0
+	if err := validateJSONStrings(x, 0, &nodes, &totalCharacters); err != nil {
 		return nil, invalid("invalid JSON strings %s: %v", name, err)
 	}
 	return x, nil
 }
 
-func validateJSONStrings(value any, depth int, nodes *int) error {
+func validateJSONStrings(value any, depth int, nodes, totalCharacters *int) error {
 	if depth > 64 {
 		return errors.New("nesting too deep")
 	}
@@ -1309,13 +1346,17 @@ func validateJSONStrings(value any, depth int, nodes *int) error {
 			if key == "" || utf8.RuneCountInString(key) > 128 || containsJSONControl(key) {
 				return errors.New("invalid object key")
 			}
-			if err := validateJSONStrings(child, depth+1, nodes); err != nil {
+			*totalCharacters += utf8.RuneCountInString(key)
+			if *totalCharacters > 65536 {
+				return errors.New("too many cumulative string characters")
+			}
+			if err := validateJSONStrings(child, depth+1, nodes, totalCharacters); err != nil {
 				return err
 			}
 		}
 	case []any:
 		for _, child := range current {
-			if err := validateJSONStrings(child, depth+1, nodes); err != nil {
+			if err := validateJSONStrings(child, depth+1, nodes, totalCharacters); err != nil {
 				return err
 			}
 		}
@@ -1323,13 +1364,17 @@ func validateJSONStrings(value any, depth int, nodes *int) error {
 		if utf8.RuneCountInString(current) > 4096 || containsJSONControl(current) {
 			return errors.New("string too long or contains control characters")
 		}
+		*totalCharacters += utf8.RuneCountInString(current)
+		if *totalCharacters > 65536 {
+			return errors.New("too many cumulative string characters")
+		}
 	}
 	return nil
 }
 
 func containsJSONControl(value string) bool {
 	for _, r := range value {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
 			return true
 		}
 	}

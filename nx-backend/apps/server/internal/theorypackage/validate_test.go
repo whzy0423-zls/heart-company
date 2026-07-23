@@ -526,6 +526,7 @@ func TestJSONParserRejectsLongAndControlledStringsRecursively(t *testing.T) {
 		{"long key", `{"` + longKey + `":"x"}`},
 		{"long nested value", `{"outer":{"value":"` + strings.Repeat("x", 5000) + `"}}`},
 		{"control value", `{"value":"\u0001"}`},
+		{"cumulative values", `{"values":["` + strings.Join(makeRepeatedStrings("x", 1000, 100), `","`) + `"]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := object([]byte(tc.payload), "test.json"); err == nil {
@@ -533,6 +534,36 @@ func TestJSONParserRejectsLongAndControlledStringsRecursively(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestJSONParserAllowsNormalNewlinesAndTabs(t *testing.T) {
+	if _, err := object([]byte("{\"value\":\"第一行\\n\\t第二行\"}"), "test.json"); err != nil {
+		t.Fatalf("normal newline/tab rejected: %v", err)
+	}
+}
+
+func TestValidateRejectsOversizedDuplicateRemainingRanges(t *testing.T) {
+	root := copyPackage(t)
+	mutateJSON(t, root, "catalog/source-files.json", func(x map[string]any) {
+		entry := x["files"].([]any)[0].(map[string]any)
+		ranges := make([]any, 33)
+		for i := range ranges {
+			ranges[i] = "page:1"
+		}
+		entry["remainingRanges"] = ranges
+		entry["remainingUnitCount"] = float64(33)
+		entry["unitEstimate"].(map[string]any)["unitCount"] = entry["processedUnitCount"].(float64) + 33
+	})
+	resignPackage(t, root)
+	expectInvalid(t, root)
+}
+
+func makeRepeatedStrings(value string, count, width int) []string {
+	result := make([]string, count)
+	for i := range result {
+		result[i] = strings.Repeat(value, width)
+	}
+	return result
 }
 
 func TestValidateRejectsControlledCoverageReportAfterChecksumRewrite(t *testing.T) {
