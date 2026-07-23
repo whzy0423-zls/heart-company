@@ -1214,6 +1214,7 @@ CREATE INDEX IF NOT EXISTS idx_theory_package_promotions_release ON theory_packa
 CREATE OR REPLACE FUNCTION theory_package_jsonb_sha256(value JSONB)
 RETURNS TEXT
 LANGUAGE SQL IMMUTABLE STRICT
+SET search_path = pg_catalog
 AS $$
   SELECT encode(sha256(convert_to(value::text, 'UTF8')), 'hex')
 $$;
@@ -1230,8 +1231,9 @@ CREATE OR REPLACE FUNCTION theory_package_receipt_sha256(
 )
 RETURNS TEXT
 LANGUAGE SQL IMMUTABLE STRICT
+SET search_path = pg_catalog
 AS $$
-  SELECT theory_package_jsonb_sha256(jsonb_build_object(
+  SELECT public.theory_package_jsonb_sha256(jsonb_build_object(
     'packageId', package_id,
     'contentDigest', content_digest,
     'packageDigest', package_digest,
@@ -1241,6 +1243,73 @@ AS $$
     'targetDatabase', target_database,
     'desiredReleaseVersion', desired_release_version
   ))
+$$;
+
+CREATE OR REPLACE FUNCTION theory_package_database_snapshot(p_library_id BIGINT)
+RETURNS JSONB
+LANGUAGE SQL STABLE
+SET search_path = pg_catalog
+AS $$
+  SELECT jsonb_build_object(
+    'schemaVersion', 'xinzhili.database-snapshot.v1',
+    'cards', (
+      SELECT COALESCE(jsonb_agg(item ORDER BY item->>'canonical_key'), '[]'::jsonb)
+      FROM (
+        SELECT to_jsonb(c)-ARRAY['id','library_id','status','reviewed_by','reviewed_at','published_at','created_by','updated_by','create_time','update_time'] AS item
+        FROM public.theory_cards c
+        WHERE c.library_id=p_library_id
+      ) rows
+    ),
+    'practices', (
+      SELECT COALESCE(jsonb_agg(item ORDER BY item->>'card_canonical_key'), '[]'::jsonb)
+      FROM (
+        SELECT (to_jsonb(p)-ARRAY['id','card_id','status','create_time','update_time'])||jsonb_build_object('card_canonical_key',c.canonical_key) AS item
+        FROM public.theory_practices p
+        JOIN public.theory_cards c ON c.id=p.card_id
+        WHERE c.library_id=p_library_id
+      ) rows
+    ),
+    'sourceWorks', (
+      SELECT COALESCE(jsonb_agg(item ORDER BY item->>'canonical_key'), '[]'::jsonb)
+      FROM (
+        SELECT (to_jsonb(w)-ARRAY['id','library_id','canonical_work_id','status','create_time','update_time'])||jsonb_build_object('canonical_work_key',canonical.canonical_key) AS item
+        FROM public.theory_source_works w
+        LEFT JOIN public.theory_source_works canonical ON canonical.id=w.canonical_work_id
+        WHERE w.library_id=p_library_id
+      ) rows
+    ),
+    'sourceFiles', (
+      SELECT COALESCE(jsonb_agg(item ORDER BY item->>'work_canonical_key',item->>'relative_path',item->>'sha256'), '[]'::jsonb)
+      FROM (
+        SELECT (to_jsonb(f)-ARRAY['id','work_id','duplicate_of_file_id','create_time','update_time'])||jsonb_build_object('work_canonical_key',w.canonical_key,'duplicate_sha256',duplicate.sha256) AS item
+        FROM public.theory_source_files f
+        JOIN public.theory_source_works w ON w.id=f.work_id
+        LEFT JOIN public.theory_source_files duplicate ON duplicate.id=f.duplicate_of_file_id
+        WHERE w.library_id=p_library_id
+      ) rows
+    ),
+    'cardSources', (
+      SELECT COALESCE(jsonb_agg(item ORDER BY item->>'card_canonical_key',item->>'work_canonical_key',item->>'file_sha256',item->>'location_label'), '[]'::jsonb)
+      FROM (
+        SELECT (to_jsonb(s)-ARRAY['id','card_id','work_id','file_id','verified_by','verified_at','create_time','update_time'])||jsonb_build_object('card_canonical_key',c.canonical_key,'work_canonical_key',w.canonical_key,'file_sha256',f.sha256) AS item
+        FROM public.theory_card_sources s
+        JOIN public.theory_cards c ON c.id=s.card_id
+        JOIN public.theory_source_works w ON w.id=s.work_id
+        LEFT JOIN public.theory_source_files f ON f.id=s.file_id
+        WHERE c.library_id=p_library_id
+      ) rows
+    ),
+    'relations', (
+      SELECT COALESCE(jsonb_agg(item ORDER BY item->>'from_canonical_key',item->>'to_canonical_key',item->>'relation_type'), '[]'::jsonb)
+      FROM (
+        SELECT (to_jsonb(r)-ARRAY['id','from_card_id','to_card_id','status','created_by','reviewed_by','create_time','update_time'])||jsonb_build_object('from_canonical_key',source.canonical_key,'to_canonical_key',target.canonical_key) AS item
+        FROM public.theory_card_relations r
+        JOIN public.theory_cards source ON source.id=r.from_card_id
+        JOIN public.theory_cards target ON target.id=r.to_card_id
+        WHERE source.library_id=p_library_id
+      ) rows
+    )
+  )
 $$;
 
 -- Drop the previous contract trigger before migrating existing rows; otherwise its
@@ -1254,17 +1323,17 @@ ALTER TABLE theory_package_imports ADD COLUMN IF NOT EXISTS payload_hash_contrac
 UPDATE theory_package_imports SET payload_sha256=repeat('0',64) WHERE payload_sha256 IS NULL;
 UPDATE theory_package_imports SET payload_receipt_sha256=repeat('0',64) WHERE payload_receipt_sha256 IS NULL;
 UPDATE theory_package_imports
-SET payload_sha256 = CASE WHEN state='promoted' THEN theory_package_jsonb_sha256(payload) ELSE repeat('0',64) END,
-    payload_receipt_sha256 = CASE WHEN state='promoted' THEN theory_package_receipt_sha256(
-      package_id, content_digest, package_digest, theory_package_jsonb_sha256(payload), schema_version,
+SET payload_sha256 = CASE WHEN state='promoted' THEN public.theory_package_jsonb_sha256(payload) ELSE repeat('0',64) END,
+    payload_receipt_sha256 = CASE WHEN state='promoted' THEN public.theory_package_receipt_sha256(
+      package_id, content_digest, package_digest, public.theory_package_jsonb_sha256(payload), schema_version,
       library_id, target_database, desired_release_version
     ) ELSE repeat('0',64) END,
     payload_hash_contract = 'postgres-jsonb-text-sha256-v1',
     object_fingerprints = CASE WHEN state='promoted' THEN
       jsonb_set(
         jsonb_set(
-          object_fingerprints || jsonb_build_object('payloadSha256', theory_package_jsonb_sha256(payload)),
-          '{sha256}', to_jsonb(theory_package_jsonb_sha256(object_fingerprints->'snapshot'))
+          object_fingerprints || jsonb_build_object('payloadSha256', public.theory_package_jsonb_sha256(payload)),
+          '{sha256}', to_jsonb(public.theory_package_jsonb_sha256(object_fingerprints->'snapshot'))
         ),
         '{schemaVersion}', to_jsonb('xinzhili.database-snapshot.v1'::text)
       )
@@ -1295,8 +1364,8 @@ DECLARE
   valid_fingerprint BOOLEAN;
   legacy_repair BOOLEAN := FALSE;
 BEGIN
-  expected_payload_sha256 := theory_package_jsonb_sha256(NEW.payload);
-  expected_receipt_sha256 := theory_package_receipt_sha256(
+  expected_payload_sha256 := public.theory_package_jsonb_sha256(NEW.payload);
+  expected_receipt_sha256 := public.theory_package_receipt_sha256(
     NEW.package_id, NEW.content_digest, NEW.package_digest, expected_payload_sha256,
     NEW.schema_version, NEW.library_id, NEW.target_database, NEW.desired_release_version
   );
@@ -1316,7 +1385,8 @@ BEGIN
     AND jsonb_typeof(NEW.object_fingerprints->'snapshot'->'sourceFiles') = 'array'
     AND jsonb_typeof(NEW.object_fingerprints->'snapshot'->'cardSources') = 'array'
     AND jsonb_typeof(NEW.object_fingerprints->'snapshot'->'relations') = 'array'
-    AND NEW.object_fingerprints->>'sha256' = theory_package_jsonb_sha256(NEW.object_fingerprints->'snapshot');
+    AND NEW.object_fingerprints->'snapshot' = public.theory_package_database_snapshot(NEW.library_id)
+    AND NEW.object_fingerprints->>'sha256' = public.theory_package_jsonb_sha256(NEW.object_fingerprints->'snapshot');
 
   IF NEW.payload_hash_contract <> 'postgres-jsonb-text-sha256-v1'
     OR NEW.payload_sha256 <> expected_payload_sha256
@@ -1331,14 +1401,16 @@ BEGIN
 
   -- one-way legacy fingerprint repair: only a database-recomputed payload,
   -- receipt, and complete fingerprint may replace the two zero hashes.
-  legacy_repair :=
+  legacy_repair := (
     OLD.state = 'staged'
     AND NEW.state = 'staged'
     AND NEW.promoted_at IS NOT DISTINCT FROM OLD.promoted_at
     AND OLD.payload_hash_contract = 'postgres-jsonb-text-sha256-v1'
     AND OLD.payload_sha256 = repeat('0',64)
     AND OLD.payload_receipt_sha256 = repeat('0',64)
-    AND NOT (OLD.object_fingerprints ? 'payloadSha256');
+    AND NOT (OLD.object_fingerprints ? 'payloadSha256')
+    AND OLD.object_fingerprints->'snapshot' = NEW.object_fingerprints->'snapshot'
+  ) IS TRUE;
 
   IF NEW.package_id IS DISTINCT FROM OLD.package_id
     OR NEW.content_digest IS DISTINCT FROM OLD.content_digest
@@ -1362,7 +1434,7 @@ BEGIN
   END IF;
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SET search_path = pg_catalog;
 
 CREATE TRIGGER theory_package_imports_immutable
   BEFORE INSERT OR UPDATE ON theory_package_imports

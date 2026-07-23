@@ -640,6 +640,7 @@ func TestLegacyTriggerRejectsFakeRepairContracts(t *testing.T) {
 		`UPDATE theory_package_imports SET payload_sha256=repeat('a',64),payload_receipt_sha256=repeat('b',64),object_fingerprints=jsonb_set(object_fingerprints,'{payloadSha256}',to_jsonb(repeat('a',64))) WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`,
 		`UPDATE theory_package_imports SET payload_sha256=theory_package_jsonb_sha256(payload),payload_receipt_sha256=repeat('f',64),object_fingerprints=jsonb_set(object_fingerprints,'{payloadSha256}',to_jsonb(theory_package_jsonb_sha256(payload))) WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`,
 		`UPDATE theory_package_imports SET payload_sha256=theory_package_jsonb_sha256(payload),payload_receipt_sha256=theory_package_receipt_sha256(package_id,content_digest,package_digest,theory_package_jsonb_sha256(payload),schema_version,library_id,target_database,desired_release_version),object_fingerprints=jsonb_set(object_fingerprints,'{payloadSha256}',to_jsonb(repeat('e',64))) WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`,
+		`UPDATE theory_package_imports SET payload_sha256=theory_package_jsonb_sha256(payload),payload_receipt_sha256=theory_package_receipt_sha256(package_id,content_digest,package_digest,theory_package_jsonb_sha256(payload),schema_version,library_id,target_database,desired_release_version),object_fingerprints=jsonb_build_object('schemaVersion','xinzhili.database-snapshot.v1','sha256',theory_package_jsonb_sha256('{"schemaVersion":"xinzhili.database-snapshot.v1","cards":[],"practices":[],"sourceWorks":[],"sourceFiles":[],"cardSources":[],"relations":[]}'::jsonb),'payloadSha256',theory_package_jsonb_sha256(payload),'snapshot','{"schemaVersion":"xinzhili.database-snapshot.v1","cards":[],"practices":[],"sourceWorks":[],"sourceFiles":[],"cardSources":[],"relations":[]}'::jsonb) WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`,
 	} {
 		t.Run(fmt.Sprintf("fake_%d", index), func(t *testing.T) {
 			key := fmt.Sprintf("xinzhili_test_fake_repair_%d", index)
@@ -654,6 +655,79 @@ func TestLegacyTriggerRejectsFakeRepairContracts(t *testing.T) {
 			downgradeImportToLegacy(t, db, key)
 			if _, err := db.Exec(statement, key); err == nil || !strings.Contains(err.Error(), "23514") {
 				t.Fatalf("fake repair was not rejected by contract trigger: %v", err)
+			}
+		})
+	}
+}
+
+func TestLegacyTriggerRejectsRewrittenDatabaseSnapshot(t *testing.T) {
+	db := openPackageTestDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	key := "xinzhili_test_rewritten_snapshot"
+	cleanupPackageFixture(t, db, key)
+	defer cleanupPackageFixture(t, db, key)
+	actor := createPackageTestUser(t, db, key+"-actor")
+	syncer := NewPackageSyncer(db)
+	syncer.libraryKey = key
+	if _, err := syncer.Stage(ctx, roundPackageRoot(t), actor); err != nil {
+		t.Fatal(err)
+	}
+	downgradeImportToLegacy(t, db, key)
+	if _, err := db.Exec(`UPDATE theory_cards SET summary=summary||'篡改' WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key); err != nil {
+		t.Fatal(err)
+	}
+	_, err := db.Exec(`UPDATE theory_package_imports
+		SET payload_sha256=theory_package_jsonb_sha256(payload),
+		    payload_receipt_sha256=theory_package_receipt_sha256(package_id,content_digest,package_digest,theory_package_jsonb_sha256(payload),schema_version,library_id,target_database,desired_release_version),
+		    object_fingerprints=jsonb_build_object(
+		      'schemaVersion','xinzhili.database-snapshot.v1',
+		      'sha256',theory_package_jsonb_sha256(theory_package_database_snapshot(library_id)),
+		      'payloadSha256',theory_package_jsonb_sha256(payload),
+		      'snapshot',theory_package_database_snapshot(library_id)
+		    )
+		WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key)
+	if err == nil || !strings.Contains(err.Error(), "23514") {
+		t.Fatalf("rewritten database snapshot was accepted: %v", err)
+	}
+}
+
+func TestLegacyTriggerRejectsMissingOldSnapshot(t *testing.T) {
+	db := openPackageTestDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	for index, expression := range []string{
+		`object_fingerprints-'snapshot'`,
+		`jsonb_set(object_fingerprints,'{snapshot}','null'::jsonb)`,
+	} {
+		t.Run(fmt.Sprintf("invalid_old_snapshot_%d", index), func(t *testing.T) {
+			key := fmt.Sprintf("xinzhili_test_missing_old_snapshot_%d", index)
+			cleanupPackageFixture(t, db, key)
+			defer cleanupPackageFixture(t, db, key)
+			actor := createPackageTestUser(t, db, key+"-actor")
+			syncer := NewPackageSyncer(db)
+			syncer.libraryKey = key
+			if _, err := syncer.Stage(ctx, roundPackageRoot(t), actor); err != nil {
+				t.Fatal(err)
+			}
+			downgradeImportToLegacy(t, db, key)
+			setImportContractTrigger(t, db, false)
+			if _, err := db.Exec(`UPDATE theory_package_imports SET object_fingerprints=`+expression+` WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key); err != nil {
+				t.Fatal(err)
+			}
+			setImportContractTrigger(t, db, true)
+			_, err := db.Exec(`UPDATE theory_package_imports
+				SET payload_sha256=theory_package_jsonb_sha256(payload),
+				    payload_receipt_sha256=theory_package_receipt_sha256(package_id,content_digest,package_digest,theory_package_jsonb_sha256(payload),schema_version,library_id,target_database,desired_release_version),
+				    object_fingerprints=jsonb_build_object(
+				      'schemaVersion','xinzhili.database-snapshot.v1',
+				      'sha256',theory_package_jsonb_sha256(theory_package_database_snapshot(library_id)),
+				      'payloadSha256',theory_package_jsonb_sha256(payload),
+				      'snapshot',theory_package_database_snapshot(library_id)
+				    )
+				WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key)
+			if err == nil || !strings.Contains(err.Error(), "23514") {
+				t.Fatalf("repair accepted invalid OLD snapshot: %v", err)
 			}
 		})
 	}

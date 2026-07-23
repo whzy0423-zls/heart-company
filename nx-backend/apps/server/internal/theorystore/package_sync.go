@@ -702,27 +702,13 @@ func databaseFingerprintJSON(ctx context.Context, tx *sql.Tx, libraryID int64, p
 }
 
 func loadCanonicalDatabaseSnapshot(ctx context.Context, tx *sql.Tx, libraryID int64) (canonicalDatabaseSnapshot, error) {
-	snapshot := canonicalDatabaseSnapshot{SchemaVersion: "xinzhili.database-snapshot.v1"}
-	queries := []struct {
-		target      *json.RawMessage
-		name, query string
-	}{
-		{&snapshot.Cards, "cards", `SELECT COALESCE(jsonb_agg(item ORDER BY item->>'canonical_key'),'[]'::jsonb) FROM (SELECT to_jsonb(c)-ARRAY['id','library_id','status','reviewed_by','reviewed_at','published_at','created_by','updated_by','create_time','update_time'] AS item FROM theory_cards c WHERE c.library_id=$1) rows`},
-		{&snapshot.Practices, "practices", `SELECT COALESCE(jsonb_agg(item ORDER BY item->>'card_canonical_key'),'[]'::jsonb) FROM (SELECT (to_jsonb(p)-ARRAY['id','card_id','status','create_time','update_time'])||jsonb_build_object('card_canonical_key',c.canonical_key) AS item FROM theory_practices p JOIN theory_cards c ON c.id=p.card_id WHERE c.library_id=$1) rows`},
-		{&snapshot.SourceWorks, "source works", `SELECT COALESCE(jsonb_agg(item ORDER BY item->>'canonical_key'),'[]'::jsonb) FROM (SELECT (to_jsonb(w)-ARRAY['id','library_id','canonical_work_id','status','create_time','update_time'])||jsonb_build_object('canonical_work_key',canonical.canonical_key) AS item FROM theory_source_works w LEFT JOIN theory_source_works canonical ON canonical.id=w.canonical_work_id WHERE w.library_id=$1) rows`},
-		{&snapshot.SourceFiles, "source files", `SELECT COALESCE(jsonb_agg(item ORDER BY item->>'work_canonical_key',item->>'relative_path',item->>'sha256'),'[]'::jsonb) FROM (SELECT (to_jsonb(f)-ARRAY['id','work_id','duplicate_of_file_id','create_time','update_time'])||jsonb_build_object('work_canonical_key',w.canonical_key,'duplicate_sha256',duplicate.sha256) AS item FROM theory_source_files f JOIN theory_source_works w ON w.id=f.work_id LEFT JOIN theory_source_files duplicate ON duplicate.id=f.duplicate_of_file_id WHERE w.library_id=$1) rows`},
-		{&snapshot.CardSources, "card sources", `SELECT COALESCE(jsonb_agg(item ORDER BY item->>'card_canonical_key',item->>'work_canonical_key',item->>'file_sha256',item->>'location_label'),'[]'::jsonb) FROM (SELECT (to_jsonb(s)-ARRAY['id','card_id','work_id','file_id','verified_by','verified_at','create_time','update_time'])||jsonb_build_object('card_canonical_key',c.canonical_key,'work_canonical_key',w.canonical_key,'file_sha256',f.sha256) AS item FROM theory_card_sources s JOIN theory_cards c ON c.id=s.card_id JOIN theory_source_works w ON w.id=s.work_id LEFT JOIN theory_source_files f ON f.id=s.file_id WHERE c.library_id=$1) rows`},
-		{&snapshot.Relations, "relations", `SELECT COALESCE(jsonb_agg(item ORDER BY item->>'from_canonical_key',item->>'to_canonical_key',item->>'relation_type'),'[]'::jsonb) FROM (SELECT (to_jsonb(r)-ARRAY['id','from_card_id','to_card_id','status','created_by','reviewed_by','create_time','update_time'])||jsonb_build_object('from_canonical_key',source.canonical_key,'to_canonical_key',target.canonical_key) AS item FROM theory_card_relations r JOIN theory_cards source ON source.id=r.from_card_id JOIN theory_cards target ON target.id=r.to_card_id WHERE source.library_id=$1) rows`},
+	var raw []byte
+	if err := tx.QueryRowContext(ctx, `SELECT public.theory_package_database_snapshot($1)`, libraryID).Scan(&raw); err != nil {
+		return canonicalDatabaseSnapshot{}, databaseFailure("load database snapshot", err)
 	}
-	for _, query := range queries {
-		var raw []byte
-		if err := tx.QueryRowContext(ctx, query.query, libraryID).Scan(&raw); err != nil {
-			return canonicalDatabaseSnapshot{}, databaseFailure("snapshot "+query.name, err)
-		}
-		if !json.Valid(raw) {
-			return canonicalDatabaseSnapshot{}, fmt.Errorf("snapshot %s returned invalid JSON", query.name)
-		}
-		*query.target = append((*query.target)[:0], raw...)
+	var snapshot canonicalDatabaseSnapshot
+	if err := decodeStrictJSON(raw, &snapshot); err != nil || snapshot.SchemaVersion != "xinzhili.database-snapshot.v1" || !completeSnapshotContract(snapshot) {
+		return canonicalDatabaseSnapshot{}, fmt.Errorf("database snapshot contract invalid: %v: %w", err, ErrPackageConflict)
 	}
 	return snapshot, nil
 }
@@ -843,7 +829,7 @@ func completeSnapshotContract(snapshot canonicalDatabaseSnapshot) bool {
 
 func postgresJSONBSHA256(ctx context.Context, tx *sql.Tx, payload []byte) (string, error) {
 	var digest string
-	if err := tx.QueryRowContext(ctx, `SELECT theory_package_jsonb_sha256($1::jsonb)`, payload).Scan(&digest); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT public.theory_package_jsonb_sha256($1::jsonb)`, payload).Scan(&digest); err != nil {
 		return "", databaseFailure("hash JSONB payload", err)
 	}
 	if !isLowerSHA256(digest) {
@@ -854,7 +840,7 @@ func postgresJSONBSHA256(ctx context.Context, tx *sql.Tx, payload []byte) (strin
 
 func postgresReceiptSHA256(ctx context.Context, tx *sql.Tx, packageID, contentDigest, packageDigest, payloadSHA256, schemaVersion string, libraryID int64, targetDatabase string, desiredReleaseVersion int) (string, error) {
 	var digest string
-	if err := tx.QueryRowContext(ctx, `SELECT theory_package_receipt_sha256($1,$2,$3,$4,$5,$6,$7,$8)`, packageID, contentDigest, packageDigest, payloadSHA256, schemaVersion, libraryID, targetDatabase, desiredReleaseVersion).Scan(&digest); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT public.theory_package_receipt_sha256($1,$2,$3,$4,$5,$6,$7,$8)`, packageID, contentDigest, packageDigest, payloadSHA256, schemaVersion, libraryID, targetDatabase, desiredReleaseVersion).Scan(&digest); err != nil {
 		return "", databaseFailure("hash package receipt", err)
 	}
 	if !isLowerSHA256(digest) {
