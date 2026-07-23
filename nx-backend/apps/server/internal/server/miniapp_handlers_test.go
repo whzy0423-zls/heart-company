@@ -224,3 +224,30 @@ func TestWxLoginStopsWhenMiniappUserTransactionFails(t *testing.T) {
 		t.Fatalf("service calls = %d, want 1", service.calls)
 	}
 }
+
+func TestWxLoginReturnsBadRequestForInvalidChannelOrScene(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "invalid channel", payload: `{"code":"login-code","channel":"bad\u0000channel","scene":"1001"}`},
+		{name: "invalid scene", payload: `{"code":"login-code","channel":"campaign","scene":"bad\u007fscene"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &wxLoginUserServiceFake{err: miniapp.ErrInvalidUserSource}
+			s := &Server{
+				env:            config.Env{JWTSecret: "test-secret"},
+				miniapp:        miniapp.NewStore(openWxLoginReadDB(t)),
+				miniappService: service,
+				wx:             wechat.NewClient("", "", true),
+			}
+
+			response := performRawUnit(http.HandlerFunc(s.wxLogin), http.MethodPost, "/api/wx/login", tt.payload)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}

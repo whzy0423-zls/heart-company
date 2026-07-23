@@ -128,7 +128,7 @@ func TestMiniappUserFirstLoginCreatesMessageInSameTransaction(t *testing.T) {
 	beginner := &userServiceFakeBeginner{tx: tx}
 	started := time.Now()
 
-	id, err := NewService(beginner, users, messages).UpsertUser(context.Background(), " openid-secret ", " unionid-secret ", " ad ", " 1001 ")
+	id, err := NewService(beginner, users, messages).UpsertUser(context.Background(), " openid-secret ", " unionid-secret ", " 广告投放 ", " 首页二维码 ")
 
 	if err != nil {
 		t.Fatalf("UpsertUser() error = %v", err)
@@ -149,7 +149,7 @@ func TestMiniappUserFirstLoginCreatesMessageInSameTransaction(t *testing.T) {
 	if remaining := deadline.Sub(started); remaining < 9*time.Second || remaining > 11*time.Second {
 		t.Fatalf("operation deadline remaining = %v, want about 10s", remaining)
 	}
-	if users.openid != "openid-secret" || users.unionid != "unionid-secret" || users.channel != "ad" || users.scene != "1001" {
+	if users.openid != "openid-secret" || users.unionid != "unionid-secret" || users.channel != "广告投放" || users.scene != "首页二维码" {
 		t.Fatalf("service input was not trimmed: %+v", users)
 	}
 	wantEvent := businessmessage.MiniappUserCreated("42", "小芯")
@@ -268,6 +268,38 @@ func TestMiniappUserRejectsUnconfiguredService(t *testing.T) {
 	}
 }
 
+func TestMiniappUserRejectsInvalidSourceBeforeStartingTransaction(t *testing.T) {
+	tests := []struct {
+		name    string
+		openid  string
+		unionid string
+		channel string
+		scene   string
+		wantErr error
+	}{
+		{name: "openid unsafe character", openid: "openid.with-dot", wantErr: ErrInvalidOpenID},
+		{name: "unionid newline", openid: "openid", unionid: "union\nid", wantErr: ErrInvalidUserSource},
+		{name: "channel nul", openid: "openid", channel: "来源\x00参数", wantErr: ErrInvalidUserSource},
+		{name: "scene del", openid: "openid", scene: "场景\x7f参数", wantErr: ErrInvalidUserSource},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			beginner := &userServiceFakeBeginner{tx: &userServiceFakeTx{}}
+			users := &userServiceFakeUsers{id: 1}
+			messages := &userServiceFakeMessages{}
+
+			_, err := NewService(beginner, users, messages).UpsertUser(context.Background(), tt.openid, tt.unionid, tt.channel, tt.scene)
+
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tt.wantErr)
+			}
+			if beginner.calls != 0 || users.upsertCalls != 0 || messages.calls != 0 {
+				t.Fatalf("invalid source must stop before transaction: begin=%d upsert=%d message=%d", beginner.calls, users.upsertCalls, messages.calls)
+			}
+		})
+	}
+}
+
 func TestMiniappUserStoreRejectsInvalidInputBeforeQuery(t *testing.T) {
 	store := &Store{}
 	tests := []struct {
@@ -284,6 +316,14 @@ func TestMiniappUserStoreRejectsInvalidInputBeforeQuery(t *testing.T) {
 		{name: "long unionid", openid: "openid", unionid: strings.Repeat("u", maxUnionIDRunes+1), wantErr: ErrInvalidUserSource},
 		{name: "long channel", openid: "openid", channel: strings.Repeat("c", maxChannelRunes+1), wantErr: ErrInvalidUserSource},
 		{name: "long scene", openid: "openid", scene: strings.Repeat("s", maxSceneRunes+1), wantErr: ErrInvalidUserSource},
+		{name: "openid nul", openid: "open\x00id", wantErr: ErrInvalidOpenID},
+		{name: "openid newline", openid: "open\nid", wantErr: ErrInvalidOpenID},
+		{name: "openid del", openid: "open\x7fid", wantErr: ErrInvalidOpenID},
+		{name: "openid unsafe character", openid: "openid.with-dot", wantErr: ErrInvalidOpenID},
+		{name: "unionid control", openid: "openid", unionid: "union\nid", wantErr: ErrInvalidUserSource},
+		{name: "unionid unsafe character", openid: "openid", unionid: "union.id", wantErr: ErrInvalidUserSource},
+		{name: "channel control", openid: "openid", channel: "中文\x00来源", wantErr: ErrInvalidUserSource},
+		{name: "scene control", openid: "openid", scene: "中文\x7f场景", wantErr: ErrInvalidUserSource},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

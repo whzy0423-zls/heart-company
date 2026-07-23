@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -54,6 +55,10 @@ func (s *Server) wxLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	uid, err := s.miniappService.UpsertUser(r.Context(), sess.OpenID, sess.UnionID, body.Channel, body.Scene)
 	if err != nil {
+		if errors.Is(err, miniapp.ErrInvalidOpenID) || errors.Is(err, miniapp.ErrInvalidUserSource) {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}

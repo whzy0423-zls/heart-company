@@ -40,6 +40,11 @@ func (s *Service) UpsertUser(ctx context.Context, openid, unionid, channel, scen
 	if s == nil || s.beginner == nil || s.users == nil || s.messages == nil {
 		return 0, ErrServiceNotConfigured
 	}
+	var err error
+	openid, unionid, channel, scene, err = normalizeUserSource(openid, unionid, channel, scene)
+	if err != nil {
+		return 0, err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -52,10 +57,6 @@ func (s *Service) UpsertUser(ctx context.Context, openid, unionid, channel, scen
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	openid = strings.TrimSpace(openid)
-	unionid = strings.TrimSpace(unionid)
-	channel = strings.TrimSpace(channel)
-	scene = strings.TrimSpace(scene)
 	id, created, err := s.users.UpsertByOpenIDWithDBTX(opCtx, tx, openid, unionid, channel, scene)
 	if err != nil {
 		return 0, fmt.Errorf("upsert miniapp user: %w", err)

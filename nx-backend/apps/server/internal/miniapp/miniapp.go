@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"nine-xing/nx-backend/apps/server/internal/dbtx"
@@ -78,22 +79,17 @@ func (s *Store) UpsertByOpenID(ctx context.Context, openid, unionid, channel, sc
 
 // UpsertByOpenIDWithDBTX 在调用方事务中创建或更新登录用户，并明确返回是否首次创建。
 func (s *Store) UpsertByOpenIDWithDBTX(ctx context.Context, q dbtx.DBTX, openid, unionid, channel, scene string) (int64, bool, error) {
-	openid = strings.TrimSpace(openid)
-	unionid = strings.TrimSpace(unionid)
-	channel = strings.TrimSpace(channel)
-	scene = strings.TrimSpace(scene)
-	if openid == "" || utf8.RuneCountInString(openid) > maxOpenIDRunes {
-		return 0, false, ErrInvalidOpenID
-	}
-	if utf8.RuneCountInString(unionid) > maxUnionIDRunes || utf8.RuneCountInString(channel) > maxChannelRunes || utf8.RuneCountInString(scene) > maxSceneRunes {
-		return 0, false, ErrInvalidUserSource
+	var err error
+	openid, unionid, channel, scene, err = normalizeUserSource(openid, unionid, channel, scene)
+	if err != nil {
+		return 0, false, err
 	}
 	if q == nil {
 		return 0, false, ErrNilDBTX
 	}
 
 	var id int64
-	err := q.QueryRowContext(ctx,
+	err = q.QueryRowContext(ctx,
 		`INSERT INTO wx_users (openid, unionid, channel, scene)
 		 VALUES ($1,$2,$3,$4)
 		 ON CONFLICT (openid) DO NOTHING
@@ -108,18 +104,50 @@ func (s *Store) UpsertByOpenIDWithDBTX(ctx context.Context, q dbtx.DBTX, openid,
 	}
 	err = q.QueryRowContext(ctx,
 		`UPDATE wx_users
-		 SET last_login_at=now(),
-		     unionid=CASE WHEN $2 <> '' THEN $2 ELSE unionid END,
-		     channel=CASE WHEN $3 <> '' THEN $3 ELSE channel END,
-		     scene=CASE WHEN $4 <> '' THEN $4 ELSE scene END
+		 SET last_login_at=now()
 		 WHERE openid=$1
 		 RETURNING id`,
-		openid, unionid, channel, scene,
+		openid,
 	).Scan(&id)
 	if err != nil {
 		return 0, false, fmt.Errorf("update miniapp user login: %w", err)
 	}
 	return id, false, nil
+}
+
+func normalizeUserSource(openid, unionid, channel, scene string) (string, string, string, string, error) {
+	if containsControl(openid) {
+		return "", "", "", "", ErrInvalidOpenID
+	}
+	if containsControl(unionid) || containsControl(channel) || containsControl(scene) {
+		return "", "", "", "", ErrInvalidUserSource
+	}
+	openid = strings.TrimSpace(openid)
+	unionid = strings.TrimSpace(unionid)
+	channel = strings.TrimSpace(channel)
+	scene = strings.TrimSpace(scene)
+	if openid == "" || utf8.RuneCountInString(openid) > maxOpenIDRunes || !isSafeWechatID(openid) {
+		return "", "", "", "", ErrInvalidOpenID
+	}
+	if utf8.RuneCountInString(unionid) > maxUnionIDRunes || (unionid != "" && !isSafeWechatID(unionid)) ||
+		utf8.RuneCountInString(channel) > maxChannelRunes || utf8.RuneCountInString(scene) > maxSceneRunes {
+		return "", "", "", "", ErrInvalidUserSource
+	}
+	return openid, unionid, channel, scene, nil
+}
+
+func containsControl(value string) bool {
+	return strings.ContainsFunc(value, unicode.IsControl)
+}
+
+func isSafeWechatID(value string) bool {
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (s *Store) GetUser(ctx context.Context, id int64) (User, error) {

@@ -84,7 +84,7 @@ func TestMiniappUserServicePostgresConcurrentFirstLoginIsAtomicAndIdempotent(t *
 	}
 }
 
-func TestMiniappUserStorePostgresRepeatLoginUpdatesSafeSourceFields(t *testing.T) {
+func TestMiniappUserStorePostgresRepeatLoginOnlyUpdatesLastLogin(t *testing.T) {
 	database := openMiniappUserServicePostgres(t)
 	store := NewStore(database)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -108,7 +108,7 @@ func TestMiniappUserStorePostgresRepeatLoginUpdatesSafeSourceFields(t *testing.T
 	if err := database.QueryRowContext(ctx, `SELECT openid,unionid,channel,scene,last_login_at FROM wx_users WHERE id=$1`, id).Scan(&openid, &unionid, &channel, &scene, &lastLogin); err != nil {
 		t.Fatal(err)
 	}
-	if openid != "padded-openid" || unionid != "updated-unionid" || channel != "first-channel" || scene != "updated-scene" {
+	if openid != "padded-openid" || unionid != "first-unionid" || channel != "first-channel" || scene != "first-scene" {
 		t.Fatalf("stored source = %q/%q/%q/%q", openid, unionid, channel, scene)
 	}
 	if !lastLogin.After(oldLogin) {
@@ -145,7 +145,9 @@ func openMiniappUserServicePostgres(t *testing.T) *sql.DB {
 		if database != nil {
 			_ = database.Close()
 		}
-		_, _ = adminDB.ExecContext(context.Background(), "DROP SCHEMA IF EXISTS "+schemaName+" CASCADE")
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_, _ = adminDB.ExecContext(cleanupCtx, "DROP SCHEMA IF EXISTS "+schemaName+" CASCADE")
 		_ = adminDB.Close()
 	})
 	scopedDSN, err := miniappUserDSNWithSearchPath(dsn, schemaName)
