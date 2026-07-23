@@ -27,8 +27,10 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/auditlog"
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/branding"
+	"nine-xing/nx-backend/apps/server/internal/businessmessage"
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/dbtx"
 	"nine-xing/nx-backend/apps/server/internal/embedding"
 	"nine-xing/nx-backend/apps/server/internal/engagement"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
@@ -70,6 +72,7 @@ type Server struct {
 	builder               *siteconfig.Builder
 	engagement            *engagement.Store
 	signups               *signup.Store
+	signupService         *signup.Service
 	uploads               *uploadasset.Store
 	appReleases           appReleaseService
 	voiceAssetCreate      func(context.Context, uploadasset.CreateInput) (uploadasset.Asset, error)
@@ -149,6 +152,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	if err != nil {
 		panic("trusted proxy cidrs: " + err.Error())
 	}
+	signupStore := signup.NewStore(database)
 	s := &Server{
 		env:               env,
 		mux:               http.NewServeMux(),
@@ -158,7 +162,8 @@ func New(env config.Env, database *sql.DB) http.Handler {
 		auditLogs:         auditlog.NewStore(database),
 		builder:           siteconfig.NewBuilder(env.BuildScript, "", time.Duration(env.BuildTimeout)*time.Second),
 		engagement:        engagement.NewStore(database),
-		signups:           signup.NewStore(database),
+		signups:           signupStore,
+		signupService:     signup.NewService(dbtx.SQLBeginner{DB: database}, signupStore, businessmessage.Store{}),
 		uploads:           uploadasset.NewStore(database),
 		uploader:          env.ObjectUploader,
 		trustedProxyCIDRs: trustedProxyCIDRs,
@@ -920,7 +925,7 @@ func (s *Server) publicSignup(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
 		return
 	}
-	lead, err := s.signups.Create(r.Context(), body, r)
+	lead, err := s.signupService.CreateWebsiteSignup(r.Context(), body, r)
 	if err != nil {
 		httpx.Fail(w, http.StatusBadRequest, err.Error())
 		return
