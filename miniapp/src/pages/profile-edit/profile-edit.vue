@@ -39,10 +39,6 @@ function syncDraftFromUser() {
   avatarFailed.value = false
 }
 
-function isCurrentGeneration(generation) {
-  return pageActive && generation === sessionGeneration
-}
-
 function isCurrentProfileSession(generation, token) {
   return pageActive && generation === sessionGeneration && token === getToken()
 }
@@ -85,15 +81,14 @@ async function loadProfile() {
     user.value = loadedUser
     syncDraftFromUser()
   } catch (e) {
-    if (!isCurrentGeneration(generation)) return
+    if (!isCurrentProfileSession(generation, token)) return
     if (isAuthFailure(e)) {
       redirectToProfileLogin()
       return
     }
-    if (!isCurrentProfileSession(generation, token)) return
     loadError.value = userErrorMessage(e, '资料加载失败，请重试')
   } finally {
-    if (isCurrentGeneration(generation)) profileLoading.value = false
+    if (isCurrentProfileSession(generation, token)) profileLoading.value = false
   }
 }
 
@@ -130,15 +125,14 @@ async function syncWechatProfile() {
     syncDraftFromUser()
     uni.showToast({ title: '资料已同步', icon: 'success' })
   } catch (e) {
-    if (!isCurrentGeneration(generation)) return
+    if (!isCurrentProfileSession(generation, token)) return
     if (isAuthFailure(e)) {
       redirectToProfileLogin()
       return
     }
-    if (!isCurrentProfileSession(generation, token)) return
     uni.showToast({ title: '可手动补充头像昵称', icon: 'none' })
   } finally {
-    if (isCurrentGeneration(generation)) profileSyncing.value = false
+    if (isCurrentProfileSession(generation, token)) profileSyncing.value = false
   }
 }
 // #endif
@@ -169,15 +163,14 @@ async function saveProfile() {
     syncDraftFromUser()
     uni.showToast({ title: '资料已保存', icon: 'success' })
   } catch (e) {
-    if (!isCurrentGeneration(generation)) return
+    if (!isCurrentProfileSession(generation, token)) return
     if (isAuthFailure(e)) {
       redirectToProfileLogin()
       return
     }
-    if (!isCurrentProfileSession(generation, token)) return
     uni.showToast({ title: userErrorMessage(e, '保存失败，请重试'), icon: 'none' })
   } finally {
-    if (isCurrentGeneration(generation)) profileSaving.value = false
+    if (isCurrentProfileSession(generation, token)) profileSaving.value = false
   }
 }
 

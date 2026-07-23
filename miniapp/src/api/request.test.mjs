@@ -11,6 +11,7 @@ await writeFile(modulePath, source)
 
 let storage = {}
 let requestCalls = []
+let delayedUnauthorizedSuccess = null
 globalThis.uni = {
   getStorageSync(key) { return storage[key] || '' },
   setStorageSync(key, value) { storage[key] = value },
@@ -22,6 +23,10 @@ globalThis.uni = {
       return
     }
     if (options.url.includes('/unauthorized')) {
+      if (options.url.includes('/unauthorized-delayed')) {
+        delayedUnauthorizedSuccess = options.success
+        return
+      }
       options.success({ statusCode: 401, data: { code: -1, message: 'Unauthorized' } })
       return
     }
@@ -62,11 +67,25 @@ await assert.rejects(
 assert.equal(requestCalls.length, 0, 'auth request without token must not hit network')
 
 setToken('abc')
+let tokenObservedByAuthHandler = ''
 await assert.rejects(
-  request({ url: '/unauthorized', auth: true }),
+  request({ url: '/unauthorized', auth: true }).catch((err) => {
+    tokenObservedByAuthHandler = getToken()
+    throw err
+  }),
   (err) => err.statusCode === 401 && err.authExpired === true,
 )
+assert.equal(tokenObservedByAuthHandler, 'abc', 'the request owner should validate its session before automatic token cleanup')
+await new Promise((resolve) => setTimeout(resolve, 0))
 assert.equal(getToken(), '', '401/403 should clear stored token')
+
+setToken('token-a')
+const staleUnauthorized = request({ url: '/unauthorized-delayed', auth: true })
+setToken('token-b')
+delayedUnauthorizedSuccess({ statusCode: 401, data: { code: -1, message: 'Unauthorized' } })
+await assert.rejects(staleUnauthorized, (err) => err.statusCode === 401 && err.authExpired === true)
+await new Promise((resolve) => setTimeout(resolve, 0))
+assert.equal(getToken(), 'token-b', 'a stale 401 response must not clear a newer session token')
 
 await assert.rejects(
   request({ url: '/network-fail' }),
