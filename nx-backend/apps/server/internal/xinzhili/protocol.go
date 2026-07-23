@@ -129,6 +129,9 @@ func ValidateEnvelope(envelope Envelope, direction Direction, sessionReady bool)
 	if envelope.SessionSeq == nil {
 		return newProtocolError(ProtocolErrorInvalidEnvelope, errors.New("sessionSeq is required"))
 	}
+	if envelope.TimestampMs <= 0 {
+		return newProtocolError(ProtocolErrorInvalidEnvelope, errors.New("timestampMs must be positive"))
+	}
 	if !isJSONObject(envelope.Payload) {
 		return newProtocolError(ProtocolErrorInvalidPayload, errors.New("payload must be a JSON object"))
 	}
