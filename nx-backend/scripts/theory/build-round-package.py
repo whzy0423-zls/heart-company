@@ -14,6 +14,7 @@ from pathlib import Path
 SCHEMA_VERSION = "xinzhili.theory-package.v1"
 EPISTEMIC_STATUSES = {"course_adaptation", "interpretive_synthesis", "practice_framework"}
 EVIDENCE_LEVELS = {"experiential", "textual", "mixed"}
+OPTIONAL_DELIVERY_DOCUMENTS = ("README.md", "reports/final-validation.md")
 
 # key, title, extraction directory, grounding keywords, original synthesis
 CARD_SPECS = [
@@ -399,6 +400,8 @@ def write_package_tree(root, extraction_manifest, sources, cards, practices):
     object_files += ["evidence-index.json", "schema/theory-package-v1.schema.json", "relations.json", "evaluation/safety-cases.json",
                      "review/source-verification.json", "review/theory-review.json", "review/safety-review.json",
                      "reports/coverage.md", "reports/safety-evaluation.md", "checksums.sha256"]
+    object_files += [relative_path for relative_path in OPTIONAL_DELIVERY_DOCUMENTS
+                     if (root / relative_path).is_file()]
     manifest = {
         "schemaVersion": SCHEMA_VERSION, "packageId": "xinzhili-round-001", "roundId": "round-001",
         "status": "draft", "activationAllowed": False, "humanReviewStatus": "pending",
@@ -478,11 +481,21 @@ def build_package(extraction_root, output_root, catalog_root=None):
     catalog_root = validate_catalog_root(catalog_root)
     extraction_manifest, sources = load_extraction(extraction_root)
     cards, practices = build_cards(sources), build_practices(sources)
+    preserved_documents = {}
+    if output_root.exists():
+        for relative_path in OPTIONAL_DELIVERY_DOCUMENTS:
+            document_path = output_root / relative_path
+            if document_path.is_file():
+                preserved_documents[relative_path] = document_path.read_bytes()
     output_root.parent.mkdir(parents=True, exist_ok=True)
     temp_root = Path(tempfile.mkdtemp(prefix=f".{output_root.name}-", dir=output_root.parent))
     backup = output_root.with_name(f".{output_root.name}.backup")
     try:
         shutil.copytree(catalog_root, temp_root / "catalog")
+        for relative_path, payload in preserved_documents.items():
+            document_path = temp_root / relative_path
+            document_path.parent.mkdir(parents=True, exist_ok=True)
+            document_path.write_bytes(payload)
         manifest = write_package_tree(temp_root, extraction_manifest, sources, cards, practices)
         if backup.exists():
             shutil.rmtree(backup)

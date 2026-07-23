@@ -22,6 +22,87 @@ func TestValidateAcceptsRound001(t *testing.T) {
 	}
 }
 
+func TestValidateOptionalDeliveryDocuments(t *testing.T) {
+	t.Run("safe content excluded from digests", func(t *testing.T) {
+		root := copyPackage(t)
+		manifest := readJSONObject(t, filepath.Join(root, "manifest.json"))
+		p := filepath.Join(root, "README.md")
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, append(b, []byte("\n补充操作说明。\n")...), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		rewriteChecksums(t, root)
+		report, err := Validate(root)
+		if err != nil {
+			t.Fatalf("safe document update rejected: %v", err)
+		}
+		if report.ContentDigest != manifest["contentDigest"] || report.PackageDigest != manifest["packageDigest"] {
+			t.Fatal("document content changed package digests")
+		}
+	})
+	t.Run("optional path set changes content digest", func(t *testing.T) {
+		root := copyPackage(t)
+		withDocs := readJSONObject(t, filepath.Join(root, "manifest.json"))["contentDigest"]
+		for _, rel := range []string{"README.md", "reports/final-validation.md"} {
+			if err := os.Remove(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		mutateJSON(t, root, "manifest.json", func(x map[string]any) {
+			kept := []any{}
+			for _, raw := range x["objectFiles"].([]any) {
+				if raw != "README.md" && raw != "reports/final-validation.md" {
+					kept = append(kept, raw)
+				}
+			}
+			x["objectFiles"] = kept
+		})
+		resignPackage(t, root)
+		report, err := Validate(root)
+		if err != nil {
+			t.Fatalf("fresh package without optional docs rejected: %v", err)
+		}
+		if report.ContentDigest == withDocs {
+			t.Fatal("optional document path set did not change content digest")
+		}
+	})
+}
+
+func TestValidateRejectsInvalidDeliveryDocuments(t *testing.T) {
+	t.Run("third markdown", func(t *testing.T) {
+		root := copyPackage(t)
+		p := filepath.Join(root, "reports/extra.md")
+		if err := os.WriteFile(p, []byte("extra\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mutateJSON(t, root, "manifest.json", func(x map[string]any) { x["objectFiles"] = append(x["objectFiles"].([]any), "reports/extra.md") })
+		resignPackage(t, root)
+		expectInvalid(t, root)
+	})
+	t.Run("checksum tamper", func(t *testing.T) {
+		root := copyPackage(t)
+		p := filepath.Join(root, "README.md")
+		b, _ := os.ReadFile(p)
+		_ = os.WriteFile(p, append(b, 'x'), 0o644)
+		expectInvalid(t, root)
+	})
+	for _, tc := range []struct{ name, content string }{
+		{"absolute user path", "本地路径：/Users/example/private/file\n"},
+		{"controlled", "说明\x00文本\n"},
+		{"too long", strings.Repeat("文", 64<<10)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := copyPackage(t)
+			_ = os.WriteFile(filepath.Join(root, "README.md"), []byte(tc.content), 0o644)
+			rewriteChecksums(t, root)
+			expectInvalid(t, root)
+		})
+	}
+}
+
 func copyPackage(t *testing.T) string {
 	t.Helper()
 	src := filepath.Join("..", "..", "..", "..", "..", "data", "theory", "xinzhili", "round-001")

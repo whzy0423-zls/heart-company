@@ -212,7 +212,7 @@ func collectFiles(root string) (map[string][]byte, error) {
 		if info.Size() > maxFileBytes {
 			return invalid("file too large %q", rel)
 		}
-		if (strings.HasPrefix(rel, "cards/") || strings.HasPrefix(rel, "practices/") || strings.HasPrefix(rel, "chunk-previews/") || strings.HasPrefix(rel, "reports/")) && info.Size() > 64<<10 {
+		if (strings.HasPrefix(rel, "cards/") || strings.HasPrefix(rel, "practices/") || strings.HasPrefix(rel, "chunk-previews/") || strings.HasPrefix(rel, "reports/") || rel == "README.md") && info.Size() > 64<<10 {
 			return invalid("content object too large %q", rel)
 		}
 		total += info.Size()
@@ -226,10 +226,36 @@ func collectFiles(root string) (map[string][]byte, error) {
 		if strings.HasPrefix(rel, "reports/") && !validMarkdown(b) {
 			return invalid("report contains invalid or controlled text %q", rel)
 		}
+		if isDeliveryDocument(rel) && !validDeliveryDocument(b) {
+			return invalid("delivery document violates portable documentation contract %q", rel)
+		}
 		files[rel] = b
 		return nil
 	})
 	return files, err
+}
+
+func isDeliveryDocument(name string) bool {
+	return name == "README.md" || name == "reports/final-validation.md"
+}
+
+func validDeliveryDocument(payload []byte) bool {
+	if !validMarkdown(payload) || bytes.Contains(payload, []byte("\r")) {
+		return false
+	}
+	text := string(payload)
+	lower := strings.ToLower(text)
+	for _, forbidden := range []string{"/users/", "/home/", `:\users\`, "file://", "~/", "units/page-"} {
+		if strings.Contains(lower, forbidden) {
+			return false
+		}
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if len([]rune(line)) > 2000 {
+			return false
+		}
+	}
+	return true
 }
 
 func validMarkdown(payload []byte) bool {
@@ -253,6 +279,7 @@ func validateFileSet(files map[string][]byte, m map[string]any) error {
 	checksumDeclarations := 0
 	cardFiles, practiceFiles, previewFiles := 0, 0, 0
 	fixed := set("checksums.sha256", "schema/theory-package-v1.schema.json", "evidence-index.json", "relations.json", "evaluation/safety-cases.json", "catalog/works.json", "catalog/source-files.json", "review/source-verification.json", "review/theory-review.json", "review/safety-review.json", "reports/coverage.md", "reports/safety-evaluation.md")
+	optionalDocuments := set("README.md", "reports/final-validation.md")
 	for _, v := range raw {
 		p, ok := v.(string)
 		if !ok || p == "" || path.Clean(p) != p || strings.HasPrefix(p, "../") || path.IsAbs(p) {
@@ -270,7 +297,9 @@ func validateFileSet(files map[string][]byte, m map[string]any) error {
 			previewFiles++
 		default:
 			if _, ok := fixed[p]; !ok {
-				return invalid("object file path is outside fixed package layout: %q", p)
+				if _, optional := optionalDocuments[p]; !optional {
+					return invalid("object file path is outside fixed package layout: %q", p)
+				}
 			}
 		}
 		if _, seen := want[p]; seen {

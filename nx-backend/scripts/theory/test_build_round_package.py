@@ -293,6 +293,23 @@ class RoundPackageTest(unittest.TestCase):
                      for path in self.output.rglob("*") if path.is_file()}
         self.assertEqual(rebuilt, preserved)
 
+    def test_rebuild_preserves_only_optional_delivery_documents(self):
+        output = Path(self.temp.name) / "with-delivery-docs"
+        output.mkdir(parents=True)
+        readme = b"# README\n\nrelative path only\n"
+        validation = b"# Final validation\n\nnot published\n"
+        (output / "README.md").write_bytes(readme)
+        (output / "reports").mkdir()
+        (output / "reports/final-validation.md").write_bytes(validation)
+        manifest = self.module.build_package(EXTRACTION_ROOT, output, CATALOG_ROOT)
+        self.assertEqual(readme, (output / "README.md").read_bytes())
+        self.assertEqual(validation, (output / "reports/final-validation.md").read_bytes())
+        self.assertIn("README.md", manifest["objectFiles"])
+        self.assertIn("reports/final-validation.md", manifest["objectFiles"])
+        checksums = (output / "checksums.sha256").read_text("utf-8")
+        self.assertIn("  README.md\n", checksums)
+        self.assertIn("  reports/final-validation.md\n", checksums)
+
     def test_preserves_task1_catalog_as_content_digest_input(self):
         catalog_output = Path(self.temp.name) / "with-catalog"
         self.module.build_package(EXTRACTION_ROOT, catalog_output, CATALOG_ROOT)
