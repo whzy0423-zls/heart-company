@@ -88,20 +88,17 @@ export function request(options) {
           resolve(body.data)
         } else {
           const authExpired = res.statusCode === 401 || res.statusCode === 403
-          const clearRequestToken = authExpired && getToken() === requestToken
+          const authSessionCurrent = auth && authExpired && getToken() === requestToken
+          if (authSessionCurrent) clearToken()
           const error = createRequestError(body.error || body.message || `请求失败(${res.statusCode})`, {
             code: body.code,
             statusCode: res.statusCode,
             authExpired,
+            requestToken,
+            authSessionCurrent,
             retryable: res.statusCode >= 500 || res.statusCode === 429,
           })
           reject(error)
-          if (clearRequestToken) {
-            // 先让页面级 catch 校验请求所属会话，再清理仍未被替换的过期 token。
-            setTimeout(() => {
-              if (getToken() === requestToken) clearToken()
-            }, 0)
-          }
         }
       },
       fail: (err) => reject(normalizeFailError(err)),

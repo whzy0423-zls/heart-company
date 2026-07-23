@@ -68,23 +68,31 @@ assert.equal(requestCalls.length, 0, 'auth request without token must not hit ne
 
 setToken('abc')
 let tokenObservedByAuthHandler = ''
+let currentAuthError = null
 await assert.rejects(
   request({ url: '/unauthorized', auth: true }).catch((err) => {
     tokenObservedByAuthHandler = getToken()
+    currentAuthError = err
     throw err
   }),
   (err) => err.statusCode === 401 && err.authExpired === true,
 )
-assert.equal(tokenObservedByAuthHandler, 'abc', 'the request owner should validate its session before automatic token cleanup')
-await new Promise((resolve) => setTimeout(resolve, 0))
+assert.equal(tokenObservedByAuthHandler, '', '401/403 should preserve immediate token cleanup before rejection handlers run')
+assert.equal(currentAuthError.requestToken, 'abc', 'auth errors should identify the token used by the failed request')
+assert.equal(currentAuthError.authSessionCurrent, true, 'auth errors should identify when they cleared the still-current request token')
 assert.equal(getToken(), '', '401/403 should clear stored token')
 
 setToken('token-a')
 const staleUnauthorized = request({ url: '/unauthorized-delayed', auth: true })
 setToken('token-b')
 delayedUnauthorizedSuccess({ statusCode: 401, data: { code: -1, message: 'Unauthorized' } })
-await assert.rejects(staleUnauthorized, (err) => err.statusCode === 401 && err.authExpired === true)
-await new Promise((resolve) => setTimeout(resolve, 0))
+await assert.rejects(
+  staleUnauthorized,
+  (err) => err.statusCode === 401
+    && err.authExpired === true
+    && err.requestToken === 'token-a'
+    && err.authSessionCurrent === false,
+)
 assert.equal(getToken(), 'token-b', 'a stale 401 response must not clear a newer session token')
 
 await assert.rejects(

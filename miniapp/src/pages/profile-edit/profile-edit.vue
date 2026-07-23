@@ -39,8 +39,17 @@ function syncDraftFromUser() {
   avatarFailed.value = false
 }
 
-function isCurrentProfileSession(generation, token) {
-  return pageActive && generation === sessionGeneration && token === getToken()
+function isCurrentProfileSession(generation, token, error) {
+  if (!pageActive || generation !== sessionGeneration) return false
+  const currentToken = getToken()
+  if (token === currentToken) return true
+  return Boolean(
+    !currentToken
+    && error
+    && error.authExpired
+    && error.requestToken === token
+    && error.authSessionCurrent,
+  )
 }
 
 function isAuthFailure(error) {
@@ -81,7 +90,7 @@ async function loadProfile() {
     user.value = loadedUser
     syncDraftFromUser()
   } catch (e) {
-    if (!isCurrentProfileSession(generation, token)) return
+    if (!isCurrentProfileSession(generation, token, e)) return
     if (isAuthFailure(e)) {
       redirectToProfileLogin()
       return
@@ -125,7 +134,7 @@ async function syncWechatProfile() {
     syncDraftFromUser()
     uni.showToast({ title: '资料已同步', icon: 'success' })
   } catch (e) {
-    if (!isCurrentProfileSession(generation, token)) return
+    if (!isCurrentProfileSession(generation, token, e)) return
     if (isAuthFailure(e)) {
       redirectToProfileLogin()
       return
@@ -163,7 +172,7 @@ async function saveProfile() {
     syncDraftFromUser()
     uni.showToast({ title: '资料已保存', icon: 'success' })
   } catch (e) {
-    if (!isCurrentProfileSession(generation, token)) return
+    if (!isCurrentProfileSession(generation, token, e)) return
     if (isAuthFailure(e)) {
       redirectToProfileLogin()
       return
