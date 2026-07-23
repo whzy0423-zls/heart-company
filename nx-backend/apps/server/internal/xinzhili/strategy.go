@@ -58,21 +58,24 @@ type Signal struct {
 }
 
 type Engine struct {
-	mode   Mode
-	timing TimingConfig
-	clock  Clock
+	mode    Mode
+	timing  TimingConfig
+	clock   Clock
+	lastNow time.Time
 
 	sessionStartedAt time.Time
 	proactiveCount   int
 	hasEverSpoken    bool
 	deepPrompted     bool
 
-	assistantPlaying bool
-	hasValidText     bool
-	hasStableText    bool
-	highRisk         bool
-	silenceStartedAt *time.Time
-	deepSilenceAt    *time.Time
+	assistantPlaying  bool
+	pendingGeneration bool
+	proactivePending  bool
+	hasValidText      bool
+	hasStableText     bool
+	highRisk          bool
+	acousticSilenceAt *time.Time
+	deepSilenceAt     *time.Time
 
 	partialPrefix         string
 	partialFirstSeenAt    time.Time
@@ -87,15 +90,25 @@ func NewEngine(mode Mode, timing TimingConfig, clock Clock) *Engine {
 	if clock == nil {
 		panic("xinzhili: strategy Clock is required")
 	}
+	if !knownMode(mode) {
+		panic("xinzhili: strategy mode is unknown")
+	}
 	applyTimingDefaults(&timing)
+	if err := validateTiming(timing); err != nil {
+		panic(err)
+	}
 	now := clock.Now()
-	return &Engine{
+	engine := &Engine{
 		mode:             mode,
 		timing:           timing,
 		clock:            clock,
+		lastNow:          now,
 		sessionStartedAt: now,
-		deepSilenceAt:    &now,
 	}
+	if mode == ModeDeepListening {
+		engine.deepSilenceAt = &now
+	}
+	return engine
 }
 
 func (e *Engine) Apply(signal Signal) []Action {
@@ -110,9 +123,12 @@ func (e *Engine) Apply(signal Signal) []Action {
 		e.applySilence()
 	case SignalAssistantStarted:
 		e.assistantPlaying = true
+		e.pendingGeneration = false
 		e.deepSilenceAt = nil
 	case SignalAssistantStopped:
 		e.assistantPlaying = false
+		e.pendingGeneration = false
+		e.proactivePending = false
 		e.startDeepSilence()
 	case SignalTurnReset:
 		e.resetTurn()
@@ -123,7 +139,7 @@ func (e *Engine) Apply(signal Signal) []Action {
 }
 
 func (e *Engine) Tick() []Action {
-	now := e.clock.Now()
+	now := e.now()
 	if action := e.endpointAction(now); action != nil {
 		return action
 	}
@@ -138,11 +154,14 @@ func (e *Engine) applySpeechStarted(signal Signal) []Action {
 		return nil
 	}
 	e.hasEverSpoken = true
-	hadPending := e.silenceStartedAt != nil
+	hadPending := e.acousticSilenceAt != nil
+	hadPending = hadPending || e.pendingGeneration || e.proactivePending
 	interruptedAssistant := e.assistantPlaying
-	e.silenceStartedAt = nil
+	e.acousticSilenceAt = nil
 	e.deepSilenceAt = nil
 	e.midSentencePrompted = false
+	e.pendingGeneration = false
+	e.proactivePending = false
 
 	var actions []Action
 	if e.assistantPlaying {
@@ -177,8 +196,8 @@ func (e *Engine) applyPartial(signal Signal) {
 		return
 	}
 
-	now := e.clock.Now()
-	if !e.partialSeen || !sameSemanticPrefix(e.partialPrefix, text) {
+	now := e.now()
+	if !e.partialSeen || !hasStableLiteralPrefix(e.partialPrefix, text) {
 		e.partialPrefix = text
 		e.partialFirstSeenAt = now
 		e.partialSeen = true
@@ -206,39 +225,41 @@ func (e *Engine) applyStableText(signal Signal) {
 	e.hasValidText = true
 	e.hasStableText = true
 	e.highRisk = e.highRisk || signal.HighRisk
-	e.deepSilenceAt = nil
-	if e.mode == ModeArgument && e.partialSeen && !sameSemanticPrefix(e.partialPrefix, text) {
+	if e.acousticSilenceAt == nil {
+		e.deepSilenceAt = nil
+	}
+	if e.mode == ModeArgument && e.partialSeen && !hasStableLiteralPrefix(e.partialPrefix, text) {
 		e.clearPartialCandidate()
 	}
 }
 
 func (e *Engine) applySilence() {
 	e.startDeepSilence()
-	if !e.hasValidText || e.silenceStartedAt != nil {
+	if e.acousticSilenceAt != nil {
 		return
 	}
-	now := e.clock.Now()
-	e.silenceStartedAt = &now
+	now := e.now()
+	e.acousticSilenceAt = &now
 }
 
 func (e *Engine) endpointAction(now time.Time) []Action {
-	if e.silenceStartedAt == nil {
+	if e.acousticSilenceAt == nil {
 		return nil
 	}
-	elapsed := now.Sub(*e.silenceStartedAt)
+	elapsed := now.Sub(*e.acousticSilenceAt)
 
 	if e.mode == ModeArgument && !e.candidateEvaluated &&
 		elapsed >= time.Duration(e.timing.ArgumentCandidateSilenceMs)*time.Millisecond {
 		e.candidateEvaluated = true
 		if e.argumentCandidate && !e.highRisk {
-			e.resetTurn()
+			e.endpointTurn()
 			return []Action{{Kind: ActionEndpoint}}
 		}
 	}
 
 	threshold, eligible := e.endpointThreshold()
 	if eligible && elapsed >= threshold {
-		e.resetTurn()
+		e.endpointTurn()
 		return []Action{{Kind: ActionEndpoint}}
 	}
 	return nil
@@ -258,16 +279,18 @@ func (e *Engine) endpointThreshold() (time.Duration, bool) {
 }
 
 func (e *Engine) proactiveAction(now time.Time) []Action {
-	if e.timing.MaxProactivePrompts <= 0 || e.proactiveCount >= e.timing.MaxProactivePrompts {
+	if e.assistantPlaying || e.pendingGeneration || e.proactivePending ||
+		e.timing.MaxProactivePrompts <= 0 || e.proactiveCount >= e.timing.MaxProactivePrompts {
 		return nil
 	}
 
 	switch e.mode {
 	case ModeComfort:
-		if e.silenceStartedAt != nil && e.hasValidText && !e.hasStableText && !e.midSentencePrompted &&
-			now.Sub(*e.silenceStartedAt) >= comfortMidSentencePause {
+		if e.acousticSilenceAt != nil && e.hasValidText && !e.hasStableText && !e.midSentencePrompted &&
+			now.Sub(*e.acousticSilenceAt) >= comfortMidSentencePause {
 			e.midSentencePrompted = true
 			e.proactiveCount++
+			e.proactivePending = true
 			return []Action{{Kind: ActionComfortPrompt, TextKey: "comfort.mid_sentence"}}
 		}
 		if e.hasEverSpoken {
@@ -276,10 +299,12 @@ func (e *Engine) proactiveAction(now time.Time) []Action {
 		elapsed := now.Sub(e.sessionStartedAt)
 		if e.proactiveCount == 0 && elapsed >= time.Duration(e.timing.ComfortFirstPromptMs)*time.Millisecond {
 			e.proactiveCount++
+			e.proactivePending = true
 			return []Action{{Kind: ActionComfortPrompt, TextKey: "comfort.first_silence"}}
 		}
 		if e.proactiveCount == 1 && elapsed >= time.Duration(e.timing.ComfortSecondPromptMs)*time.Millisecond {
 			e.proactiveCount++
+			e.proactivePending = true
 			return []Action{{Kind: ActionComfortPrompt, TextKey: "comfort.second_silence"}}
 		}
 	case ModeDeepListening:
@@ -287,18 +312,18 @@ func (e *Engine) proactiveAction(now time.Time) []Action {
 			now.Sub(*e.deepSilenceAt) >= time.Duration(e.timing.DeepListeningPromptMs)*time.Millisecond {
 			e.deepPrompted = true
 			e.proactiveCount++
+			e.proactivePending = true
 			return []Action{{Kind: ActionComfortPrompt, TextKey: "deep_listening.silence"}}
 		}
 	}
 	return nil
 }
 
-func (e *Engine) resetTurn() {
-	e.assistantPlaying = false
+func (e *Engine) clearTurnInput() {
 	e.hasValidText = false
 	e.hasStableText = false
 	e.highRisk = false
-	e.silenceStartedAt = nil
+	e.acousticSilenceAt = nil
 	e.partialPrefix = ""
 	e.partialFirstSeenAt = time.Time{}
 	e.partialSeen = false
@@ -308,11 +333,32 @@ func (e *Engine) resetTurn() {
 	e.midSentencePrompted = false
 }
 
+func (e *Engine) endpointTurn() {
+	e.clearTurnInput()
+	e.pendingGeneration = true
+}
+
+func (e *Engine) resetTurn() {
+	e.clearTurnInput()
+	e.pendingGeneration = false
+	e.proactivePending = false
+	if e.mode == ModeDeepListening {
+		if e.assistantPlaying {
+			e.deepSilenceAt = nil
+		} else {
+			e.resetDeepSilence()
+		}
+	}
+}
+
 func (e *Engine) resetSession() {
+	e.assistantPlaying = false
 	e.resetTurn()
-	now := e.clock.Now()
+	now := e.now()
 	e.sessionStartedAt = now
-	e.deepSilenceAt = &now
+	if e.mode == ModeDeepListening {
+		e.deepSilenceAt = &now
+	}
 	e.proactiveCount = 0
 	e.hasEverSpoken = false
 	e.deepPrompted = false
@@ -322,7 +368,11 @@ func (e *Engine) startDeepSilence() {
 	if e.mode != ModeDeepListening || e.deepSilenceAt != nil {
 		return
 	}
-	now := e.clock.Now()
+	e.resetDeepSilence()
+}
+
+func (e *Engine) resetDeepSilence() {
+	now := e.now()
 	e.deepSilenceAt = &now
 }
 
@@ -338,6 +388,18 @@ func normalizeStrategyText(value string) string {
 	return strings.Join(strings.Fields(value), " ")
 }
 
-func sameSemanticPrefix(previous, current string) bool {
+// hasStableLiteralPrefix intentionally performs a conservative literal prefix
+// comparison. Punctuation or wording revisions cancel an argument candidate;
+// semantic classification belongs to the upstream model.
+func hasStableLiteralPrefix(previous, current string) bool {
 	return strings.HasPrefix(previous, current) || strings.HasPrefix(current, previous)
+}
+
+func (e *Engine) now() time.Time {
+	now := e.clock.Now()
+	if now.Before(e.lastNow) {
+		return e.lastNow
+	}
+	e.lastNow = now
+	return now
 }

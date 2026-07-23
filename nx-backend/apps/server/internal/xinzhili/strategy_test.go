@@ -15,6 +15,8 @@ func newStrategyFakeClock() *strategyFakeClock {
 func (c *strategyFakeClock) Now() time.Time          { return c.now }
 func (c *strategyFakeClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
 
+func (c *strategyFakeClock) Rewind(d time.Duration) { c.now = c.now.Add(-d) }
+
 func strategyTiming() TimingConfig {
 	return TimingConfig{
 		PartialStableMs: 150, ArgumentCandidateSilenceMs: 350, NormalEndSilenceMs: 700,
@@ -62,6 +64,31 @@ func TestStrategyNormalIgnoresBlankAndNoise(t *testing.T) {
 	engine.Apply(Signal{Kind: SignalSilence})
 	clock.Advance(2 * time.Second)
 	assertStrategyActions(t, engine.Tick())
+}
+
+func TestStrategyNormalKeepsAcousticSilenceBeforeDelayedFinal(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeNormal, strategyTiming(), clock)
+	engine.Apply(Signal{Kind: SignalSpeechStarted})
+	engine.Apply(Signal{Kind: SignalSilence})
+	clock.Advance(300 * time.Millisecond)
+	engine.Apply(Signal{Kind: SignalStableText, Transcript: "延迟到达的最终文本"})
+
+	clock.Advance(399 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick())
+	clock.Advance(time.Millisecond)
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
+}
+
+func TestStrategyComfortDelayedFinalAfterThresholdEndpointsImmediately(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeComfort, strategyTiming(), clock)
+	engine.Apply(Signal{Kind: SignalSpeechStarted})
+	engine.Apply(Signal{Kind: SignalSilence})
+	clock.Advance(1500 * time.Millisecond)
+	engine.Apply(Signal{Kind: SignalStableText, Transcript: "现在才收到最终文本"})
+
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
 }
 
 func TestStrategyArgumentEndpointsCandidateAfterStablePartialAnd350ms(t *testing.T) {
@@ -176,6 +203,21 @@ func TestStrategyArgumentMatchingFinalKeepsCandidate(t *testing.T) {
 	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
 }
 
+func TestStrategyArgumentPunctuationRevisionCancelsLiteralPrefixCandidate(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeArgument, strategyTiming(), clock)
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "我永远做不好", Stable: true, ArgumentCandidate: true})
+	clock.Advance(150 * time.Millisecond)
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "我永远做不好这件事", Stable: true})
+	engine.Apply(Signal{Kind: SignalStableText, Transcript: "我永远，做不好这件事"})
+	engine.Apply(Signal{Kind: SignalSilence})
+
+	clock.Advance(350 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick())
+	clock.Advance(350 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
+}
+
 func TestStrategyArgumentBreathAndNoiseDoNotTrigger(t *testing.T) {
 	clock := newStrategyFakeClock()
 	engine := NewEngine(ModeArgument, strategyTiming(), clock)
@@ -242,11 +284,40 @@ func TestStrategyComfortPromptsAt5And12SecondsAtMostTwice(t *testing.T) {
 	clock.Advance(time.Millisecond)
 	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionComfortPrompt, TextKey: "comfort.first_silence"})
 	assertStrategyActions(t, engine.Tick())
+	engine.Apply(Signal{Kind: SignalAssistantStarted})
+	engine.Apply(Signal{Kind: SignalAssistantStopped})
 	clock.Advance(6999 * time.Millisecond)
 	assertStrategyActions(t, engine.Tick())
 	clock.Advance(time.Millisecond)
 	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionComfortPrompt, TextKey: "comfort.second_silence"})
+	engine.Apply(Signal{Kind: SignalAssistantStarted})
+	engine.Apply(Signal{Kind: SignalAssistantStopped})
 	clock.Advance(time.Minute)
+	assertStrategyActions(t, engine.Tick())
+}
+
+func TestStrategyComfortProactivePromptWaitsForCompletionBeforeSecond(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeComfort, strategyTiming(), clock)
+	clock.Advance(12 * time.Second)
+
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionComfortPrompt, TextKey: "comfort.first_silence"})
+	assertStrategyActions(t, engine.Tick())
+	engine.Apply(Signal{Kind: SignalAssistantStarted})
+	assertStrategyActions(t, engine.Tick())
+	engine.Apply(Signal{Kind: SignalAssistantStopped})
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionComfortPrompt, TextKey: "comfort.second_silence"})
+	assertStrategyActions(t, engine.Tick())
+}
+
+func TestStrategySpeechCancelsUnplayedComfortPromptWithoutFakeStop(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeComfort, strategyTiming(), clock)
+	clock.Advance(5 * time.Second)
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionComfortPrompt, TextKey: "comfort.first_silence"})
+
+	assertStrategyActions(t, engine.Apply(Signal{Kind: SignalSpeechStarted}), Action{Kind: ActionCancelPending})
+	clock.Advance(7 * time.Second)
 	assertStrategyActions(t, engine.Tick())
 }
 
@@ -292,6 +363,8 @@ func TestStrategyDeepListeningLongSilencePromptsOnlyOnceAndNeverInterrupts(t *te
 	engine := NewEngine(ModeDeepListening, strategyTiming(), clock)
 	clock.Advance(12 * time.Second)
 	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionComfortPrompt, TextKey: "deep_listening.silence"})
+	engine.Apply(Signal{Kind: SignalAssistantStarted})
+	engine.Apply(Signal{Kind: SignalAssistantStopped})
 	clock.Advance(time.Minute)
 	assertStrategyActions(t, engine.Tick())
 }
@@ -340,6 +413,28 @@ func TestStrategySpeechDuringAssistantPlaybackAlwaysStopsAndCancelsFirst(t *test
 	}
 }
 
+func TestStrategySpeechAfterEndpointCancelsPendingGenerationWithoutFakeStop(t *testing.T) {
+	for _, mode := range []Mode{ModeNormal, ModeArgument, ModeComfort, ModeDeepListening} {
+		t.Run(string(mode), func(t *testing.T) {
+			clock := newStrategyFakeClock()
+			engine := NewEngine(mode, strategyTiming(), clock)
+			engine.Apply(Signal{Kind: SignalStableText, Transcript: "已经完成的一轮表达"})
+			engine.Apply(Signal{Kind: SignalSilence})
+			threshold := map[Mode]time.Duration{
+				ModeNormal:        700 * time.Millisecond,
+				ModeArgument:      700 * time.Millisecond,
+				ModeComfort:       1200 * time.Millisecond,
+				ModeDeepListening: 1500 * time.Millisecond,
+			}[mode]
+			clock.Advance(threshold)
+			assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
+
+			assertStrategyActions(t, engine.Apply(Signal{Kind: SignalSpeechStarted}),
+				Action{Kind: ActionCancelPending})
+		})
+	}
+}
+
 func TestStrategyTurnResetKeepsSessionPromptLimit(t *testing.T) {
 	clock := newStrategyFakeClock()
 	engine := NewEngine(ModeComfort, strategyTiming(), clock)
@@ -353,13 +448,93 @@ func TestStrategyTurnResetKeepsSessionPromptLimit(t *testing.T) {
 	assertStrategyActions(t, engine.Tick())
 }
 
+func TestStrategyDeepListeningTurnResetStartsFreshSilenceWindow(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeDeepListening, strategyTiming(), clock)
+	clock.Advance(10 * time.Second)
+	engine.Apply(Signal{Kind: SignalTurnReset})
+
+	clock.Advance(11999 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick())
+	clock.Advance(time.Millisecond)
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionComfortPrompt, TextKey: "deep_listening.silence"})
+}
+
+func TestStrategyMonotonicClockClampPreventsRollbackFromRegressingTurnResetBaseline(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeDeepListening, strategyTiming(), clock)
+	clock.Advance(6 * time.Second)
+	assertStrategyActions(t, engine.Tick())
+	clock.Rewind(5 * time.Second)
+	engine.Apply(Signal{Kind: SignalTurnReset})
+
+	clock.Advance(12 * time.Second)
+	assertStrategyActions(t, engine.Tick())
+	clock.Advance(5 * time.Second)
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionComfortPrompt, TextKey: "deep_listening.silence"})
+}
+
 func TestStrategySessionResetRestoresProactivePrompts(t *testing.T) {
 	clock := newStrategyFakeClock()
 	engine := NewEngine(ModeComfort, strategyTiming(), clock)
 	clock.Advance(12 * time.Second)
 	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionComfortPrompt, TextKey: "comfort.first_silence"})
+	engine.Apply(Signal{Kind: SignalAssistantStarted})
+	engine.Apply(Signal{Kind: SignalAssistantStopped})
 	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionComfortPrompt, TextKey: "comfort.second_silence"})
 	engine.Apply(Signal{Kind: SignalSessionReset})
 	clock.Advance(5 * time.Second)
 	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionComfortPrompt, TextKey: "comfort.first_silence"})
+}
+
+func TestStrategyNewEngineAppliesZeroTimingDefaults(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeNormal, TimingConfig{}, clock)
+	engine.Apply(Signal{Kind: SignalStableText, Transcript: "默认阈值"})
+	engine.Apply(Signal{Kind: SignalSilence})
+	clock.Advance(699 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick())
+	clock.Advance(time.Millisecond)
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
+}
+
+func TestStrategyNewEngineUsesValidCustomTiming(t *testing.T) {
+	clock := newStrategyFakeClock()
+	timing := strategyTiming()
+	timing.NormalEndSilenceMs = 900
+	engine := NewEngine(ModeNormal, timing, clock)
+	engine.Apply(Signal{Kind: SignalStableText, Transcript: "自定义阈值"})
+	engine.Apply(Signal{Kind: SignalSilence})
+	clock.Advance(899 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick())
+	clock.Advance(time.Millisecond)
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
+}
+
+func TestStrategyNewEngineRejectsInvalidDependenciesAndConfiguration(t *testing.T) {
+	tests := []struct {
+		name   string
+		mode   Mode
+		timing TimingConfig
+		clock  Clock
+	}{
+		{name: "nil clock", mode: ModeNormal, timing: strategyTiming()},
+		{name: "unknown mode", mode: Mode("mystery"), timing: strategyTiming(), clock: newStrategyFakeClock()},
+		{name: "invalid timing", mode: ModeNormal, timing: func() TimingConfig {
+			v := strategyTiming()
+			v.NormalEndSilenceMs = 100
+			return v
+		}(), clock: newStrategyFakeClock()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("NewEngine did not panic")
+				}
+			}()
+			NewEngine(tt.mode, tt.timing, tt.clock)
+		})
+	}
 }
