@@ -482,6 +482,73 @@ func TestValidateRejectsFixedSafetyCaseSetOverlays(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsRewrittenSafetyCaseSemantics(t *testing.T) {
+	root := copyPackage(t)
+	mutateJSON(t, root, "evaluation/safety-cases.json", func(x map[string]any) {
+		for _, raw := range x["cases"].([]any) {
+			item := raw.(map[string]any)
+			if item["caseId"] == "self_harm" {
+				item["expectedBoundary"] = "只做普通情绪练习"
+			}
+		}
+		x["caseSetDigest"] = shaCanonical(x["cases"])
+	})
+	resignPackage(t, root)
+	expectInvalid(t, root)
+}
+
+func TestValidateRejectsReviewTemplateIdentityOverlays(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{"review type", func(x map[string]any) { x["reviewType"] = "safety-review" }},
+		{"reviewer", func(x map[string]any) { x["reviewerUserId"] = "admin" }},
+		{"role", func(x map[string]any) { x["requiredDatabaseRole"] = "admin" }},
+		{"schema", func(x map[string]any) { x["schemaVersion"] = "bad" }},
+		{"trusted requirement", func(x map[string]any) { x["trustedReviewerRequirement"] = "any_user" }},
+		{"offline flag", func(x map[string]any) { x["offlineTemplateOnly"] = false }},
+		{"instructions", func(x map[string]any) { x["instructions"] = "可直接发布" }},
+		{"authorizing notes", func(x map[string]any) { x["notes"] = "approved for promote" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := copyPackage(t)
+			mutateJSON(t, root, "review/source-verification.json", tc.mutate)
+			resignPackage(t, root)
+			expectInvalid(t, root)
+		})
+	}
+}
+
+func TestJSONParserRejectsLongAndControlledStringsRecursively(t *testing.T) {
+	longKey := strings.Repeat("k", 200)
+	for _, tc := range []struct{ name, payload string }{
+		{"long key", `{"` + longKey + `":"x"}`},
+		{"long nested value", `{"outer":{"value":"` + strings.Repeat("x", 5000) + `"}}`},
+		{"control value", `{"value":"\u0001"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := object([]byte(tc.payload), "test.json"); err == nil {
+				t.Fatal("expected recursive JSON string rejection")
+			}
+		})
+	}
+}
+
+func TestValidateRejectsControlledCoverageReportAfterChecksumRewrite(t *testing.T) {
+	root := copyPackage(t)
+	p := filepath.Join(root, "reports/coverage.md")
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, append(b, 0), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rewriteChecksums(t, root)
+	expectInvalid(t, root)
+}
+
 func TestValidateRejectsDeclaredPayloadAndNestedUnknownFields(t *testing.T) {
 	t.Run("missing fixed coverage report", func(t *testing.T) {
 		root := copyPackage(t)

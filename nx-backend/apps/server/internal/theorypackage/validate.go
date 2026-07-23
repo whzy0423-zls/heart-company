@@ -16,9 +16,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 var errInvalidPackage = errors.New("invalid theory package")
+
+const (
+	roundOneSafetyCaseSetDigest = "d646838a32c9a8b77cc8aa04167dd59baa75c9e73d0d55d5e24a27348028a7cc"
+	reviewInstructions          = "正式审核必须由后台或 CLI 核验数据库用户与角色后写入；构包身份不得充当 reviewer。"
+)
 
 func invalid(format string, args ...any) error {
 	return fmt.Errorf("%w: "+format, append([]any{errInvalidPackage}, args...)...)
@@ -216,10 +223,25 @@ func collectFiles(root string) (map[string][]byte, error) {
 		if err != nil {
 			return err
 		}
+		if strings.HasPrefix(rel, "reports/") && !validMarkdown(b) {
+			return invalid("report contains invalid or controlled text %q", rel)
+		}
 		files[rel] = b
 		return nil
 	})
 	return files, err
+}
+
+func validMarkdown(payload []byte) bool {
+	if !utf8.Valid(payload) || len(payload) > 64<<10 {
+		return false
+	}
+	for _, r := range string(payload) {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return false
+		}
+	}
+	return true
 }
 
 func validateFileSet(files map[string][]byte, m map[string]any) error {
@@ -498,7 +520,7 @@ func validateSourceCatalog(catalog map[string]any) error {
 			return invalid("source catalog sha invalid")
 		}
 		if entry["duplicateGroupId"] != nil {
-			if value, ok := entry["duplicateGroupId"].(string); !ok || value == "" {
+			if value, ok := entry["duplicateGroupId"].(string); !ok || !validText(value, 200) {
 				return invalid("source duplicate group invalid")
 			}
 		}
@@ -508,7 +530,7 @@ func validateSourceCatalog(catalog map[string]any) error {
 				return invalid("source range list invalid")
 			}
 			for _, rawValue := range values {
-				if value, ok := rawValue.(string); !ok || value == "" {
+				if value, ok := rawValue.(string); !ok || !validText(value, 100) {
 					return invalid("source range value invalid")
 				}
 			}
@@ -536,7 +558,7 @@ func validateSourceCatalog(catalog map[string]any) error {
 			return err
 		}
 		for key := range toolFields {
-			if str(tools, key) == "" {
+			if !validText(str(tools, key), 500) {
 				return invalid("source probe tool version invalid")
 			}
 		}
@@ -577,7 +599,7 @@ func validateSourceCatalog(catalog map[string]any) error {
 				if err := exactKeys(item, set("href", "idref", "index"), "source locator inventory item"); err != nil {
 					return err
 				}
-				if str(item, "href") == "" || str(item, "idref") == "" {
+				if !validText(str(item, "href"), 1000) || !validText(str(item, "idref"), 200) {
 					return invalid("source locator inventory strings invalid")
 				}
 				if index, ok := integer(item, "index"); !ok || index < 1 {
@@ -680,7 +702,7 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 			return err
 		}
 		id := str(s, "sourceId")
-		if id == "" || sources[id] != nil {
+		if !validText(id, 200) || sources[id] != nil {
 			return invalid("invalid source id")
 		}
 		relativePath := str(s, "relativePath")
@@ -837,7 +859,7 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 	return nil
 }
 func isSafeWorkDirectory(value string) bool {
-	return strings.HasPrefix(value, "sources/") && path.Clean(value) == value && !strings.Contains(value, "\\") && !strings.Contains(value, "../")
+	return validText(value, 500) && strings.HasPrefix(value, "sources/") && path.Clean(value) == value && !strings.Contains(value, "\\") && !strings.Contains(value, "../")
 }
 
 func validateAttribution(source map[string]any) error {
@@ -1062,7 +1084,15 @@ func validLocator(v any, format string) bool {
 	}
 }
 func validateReviews(files map[string][]byte, m map[string]any) error {
-	for _, p := range []string{"review/source-verification.json", "review/theory-review.json", "review/safety-review.json"} {
+	templates := []struct {
+		path, reviewType, role string
+	}{
+		{"review/source-verification.json", "source-verification", "theory_source_reviewer"},
+		{"review/theory-review.json", "theory-review", "theory_content_reviewer"},
+		{"review/safety-review.json", "safety-review", "theory_safety_reviewer"},
+	}
+	for _, template := range templates {
+		p := template.path
 		x, err := object(files[p], p)
 		if err != nil {
 			return err
@@ -1070,7 +1100,11 @@ func validateReviews(files map[string][]byte, m map[string]any) error {
 		if err := exactKeys(x, set("authorizesPromotion", "contentDigest", "instructions", "notes", "offlineTemplateOnly", "requiredDatabaseRole", "reviewType", "reviewerUserId", "status", "schemaVersion", "trustedReviewerRequirement"), p); err != nil {
 			return err
 		}
-		if str(x, "status") != "pending" || str(x, "contentDigest") != str(m, "contentDigest") || x["authorizesPromotion"] != false {
+		notes, notesOK := x["notes"].(string)
+		if str(x, "schemaVersion") != "xinzhili.offline-review-template.v1" || str(x, "reviewType") != template.reviewType || x["reviewerUserId"] != nil ||
+			str(x, "requiredDatabaseRole") != template.role || str(x, "trustedReviewerRequirement") != "database_user_with_required_role" || x["offlineTemplateOnly"] != true ||
+			str(x, "status") != "pending" || str(x, "contentDigest") != str(m, "contentDigest") || x["authorizesPromotion"] != false || str(x, "instructions") != reviewInstructions ||
+			!notesOK || len([]rune(notes)) > 500 || reviewNotesAuthorize(notes) {
 			return invalid("review %q not a bound pending template", p)
 		}
 	}
@@ -1081,7 +1115,7 @@ func validateReviews(files map[string][]byte, m map[string]any) error {
 	if err := exactKeys(cases, set("caseSetDigest", "cases", "result", "schemaVersion"), "safety cases"); err != nil {
 		return err
 	}
-	if str(cases, "schemaVersion") != "xinzhili.safety-case-set.v1" || shaCanonical(cases["cases"]) != str(cases, "caseSetDigest") {
+	if str(cases, "schemaVersion") != "xinzhili.safety-case-set.v1" || str(cases, "caseSetDigest") != roundOneSafetyCaseSetDigest || shaCanonical(cases["cases"]) != roundOneSafetyCaseSetDigest {
 		return invalid("safety case set digest mismatch")
 	}
 	expectedCases := set("enneagram_labeling", "nlp_scientific_claim", "yijing_prediction", "trauma", "self_harm", "psychosis", "domestic_violence", "medical_advice", "course_price", "no_source_material")
@@ -1109,7 +1143,7 @@ func validateReviews(files map[string][]byte, m map[string]any) error {
 	result := mapv(cases, "result")
 	status := str(result, "status")
 	reason := str(result, "reason")
-	if reason == "" {
+	if !validText(reason, 500) {
 		return invalid("safety result reason missing")
 	}
 	if status == "not_runnable_for_activation" {
@@ -1127,6 +1161,16 @@ func validateReviews(files map[string][]byte, m map[string]any) error {
 		return invalid("safety evaluation report disagrees with structured result")
 	}
 	return nil
+}
+
+func reviewNotesAuthorize(notes string) bool {
+	lower := strings.ToLower(notes)
+	for _, phrase := range []string{"approved", "approve", "promote", "授权发布", "可直接发布", "通过审核"} {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func sameJSON(a, b any) bool {
@@ -1244,7 +1288,52 @@ func object(b []byte, name string) (map[string]any, error) {
 	if d.Decode(&struct{}{}) != io.EOF {
 		return nil, invalid("trailing JSON %s", name)
 	}
+	nodes := 0
+	if err := validateJSONStrings(x, 0, &nodes); err != nil {
+		return nil, invalid("invalid JSON strings %s: %v", name, err)
+	}
 	return x, nil
+}
+
+func validateJSONStrings(value any, depth int, nodes *int) error {
+	if depth > 64 {
+		return errors.New("nesting too deep")
+	}
+	*nodes++
+	if *nodes > 100000 {
+		return errors.New("too many JSON nodes")
+	}
+	switch current := value.(type) {
+	case map[string]any:
+		for key, child := range current {
+			if key == "" || utf8.RuneCountInString(key) > 128 || containsJSONControl(key) {
+				return errors.New("invalid object key")
+			}
+			if err := validateJSONStrings(child, depth+1, nodes); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, child := range current {
+			if err := validateJSONStrings(child, depth+1, nodes); err != nil {
+				return err
+			}
+		}
+	case string:
+		if utf8.RuneCountInString(current) > 4096 || containsJSONControl(current) {
+			return errors.New("string too long or contains control characters")
+		}
+	}
+	return nil
+}
+
+func containsJSONControl(value string) bool {
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return true
+		}
+	}
+	return false
 }
 func noDuplicateKeys(b []byte) error {
 	d := json.NewDecoder(bytes.NewReader(b))
