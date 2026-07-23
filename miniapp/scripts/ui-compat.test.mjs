@@ -15,6 +15,11 @@ const pagesConfig = readFileSync('src/pages.json', 'utf8')
 assert.doesNotMatch(pagesConfig, /pages\/chat\/chat/, 'pages.json must not register the removed chat page')
 assert.doesNotMatch(pagesConfig, /问 AI|AI 对话/, 'tabBar must not expose an AI chat entry')
 assert.equal(statSync('src/pages/chat', { throwIfNoEntry: false }), undefined, 'removed chat page directory should stay deleted')
+assert.match(
+  pagesConfig,
+  /"path"\s*:\s*"pages\/booking-records\/booking-records"[\s\S]*?"navigationBarTitleText"\s*:\s*"预约记录"/,
+  'pages.json should register the appointment records page with its Chinese title',
+)
 
 const h5Index = readFileSync('index.html', 'utf8')
 assert.match(h5Index, /viewport-fit=cover/, 'H5 viewport meta should enable iOS safe-area env variables')
@@ -327,6 +332,85 @@ assert.doesNotMatch(profilePage, /@getphonenumber="onGetPhoneNumber"/, '未接�
 assert.match(profilePage, /#ifdef H5[\s\S]*请在微信小程序内登录[\s\S]*#endif/, 'H5 profile login entry should be a disabled miniapp guidance instead of a failing WeChat login CTA')
 assert.doesNotMatch(profilePage, /后端暂未开通|前端占位|占位/, '用户侧文案不能暴露手机号授权后端占位状态')
 assert.doesNotMatch(profilePage, /openChatPage|goChat|clearChatMessages|问 AI|AI 对话/, 'profile page must not expose or reset removed AI chat state')
+
+const bookingRecordsPath = 'src/pages/booking-records/booking-records.vue'
+assert.ok(statSync(bookingRecordsPath, { throwIfNoEntry: false })?.isFile(), 'appointment records page should exist')
+const bookingRecordsPage = readFileSync(bookingRecordsPath, 'utf8')
+assert.match(bookingRecordsPage, /listBookingsApi/, 'appointment records should use the authenticated booking list API')
+assert.match(bookingRecordsPage, /getToken/, 'appointment records should validate the current auth token')
+assert.match(bookingRecordsPage, /clearToken/, 'appointment records should clear auth after missing or expired authentication')
+assert.match(bookingRecordsPage, /clearBookingSession/, 'appointment records should clear token-bound booking state when auth changes')
+assert.match(bookingRecordsPage, /setBookingSession\(currentToken,\s*record\)/, 'appointment records should bind the selected record to the current token')
+assert.match(bookingRecordsPage, /bookingKindLabel/, 'appointment records should render Chinese booking kinds')
+assert.match(bookingRecordsPage, /bookingStatusLabel/, 'appointment records should render Chinese booking statuses')
+assert.match(bookingRecordsPage, /maskBookingPhone/, 'appointment records should mask phone numbers')
+assert.doesNotMatch(bookingRecordsPage, /\.sort\s*\(/, 'appointment records should preserve the API response order')
+assert.match(bookingRecordsPage, /v-if=["']loading["']/, 'appointment records should expose a loading state')
+assert.match(bookingRecordsPage, /v-else-if=["']loadError["']/, 'appointment records should expose an error state before empty state')
+assert.match(bookingRecordsPage, /v-else-if=["']bookings\.length === 0["']/, 'appointment records should expose an empty state')
+assert.match(bookingRecordsPage, /aria-live=["']polite["']/, 'appointment records async state should announce changes politely')
+assert.match(
+  bookingRecordsPage,
+  /<button\s+class=["'][^"']*retry-button[^"']*["'][^>]*tabindex=["']0["'][^>]*@click\.stop=["']retryLoad["'][^>]*>/,
+  'appointment records retry should be an independently focusable native button that stops propagation',
+)
+assert.match(
+  bookingRecordsPage,
+  /<button\s+class=["'][^"']*empty-action[^"']*["'][^>]*@click=["']goBooking["'][^>]*>去预约<\/button>/,
+  'appointment records empty state should switch to the booking tab',
+)
+assert.match(
+  bookingRecordsPage,
+  /uni\.switchTab\s*\(\s*\{\s*url:\s*["']\/pages\/booking\/booking["']\s*\}\s*\)/,
+  'appointment records empty action should switch to the booking tab',
+)
+
+const bookingRecordOpenTags = (bookingRecordsPage.match(/<view\b[^>]*class=["'][^"']*booking-record__open[^"']*["'][^>]*>/g) || [])
+assert.ok(bookingRecordOpenTags.length > 0, 'appointment records should render a dedicated navigation body')
+for (const tag of bookingRecordOpenTags) {
+  assert.match(tag, /\srole=["']button["']/, 'appointment navigation body should use H5 button semantics')
+  assert.match(tag, /\saria-role=["']button["']/, 'appointment navigation body should use WeChat button semantics')
+  assert.match(tag, /\stabindex=["']0["']/, 'appointment navigation body should participate in keyboard focus order')
+  assert.match(tag, /\s@click=["']openBooking\(record\)["']/, 'appointment navigation body should open its record')
+  assert.match(tag, /\s@keydown\.enter=["']openBooking\(record\)["']/, 'appointment navigation body should activate with Enter')
+  assert.match(tag, /\s@keydown\.space\.prevent=["']openBooking\(record\)["']/, 'appointment navigation body should activate with Space')
+}
+assert.match(
+  bookingRecordsPage,
+  /uni\.navigateTo\s*\(\s*\{\s*url:\s*`\/pages\/booking-detail\/booking-detail\?id=\$\{[^}]+\}`\s*\}\s*\)/,
+  'appointment navigation should include the selected booking ID in the detail URL',
+)
+
+function vueFunctionBody(source, name) {
+  const match = new RegExp(`(?:async\\s+)?function\\s+${name}\\s*\\([^)]*\\)\\s*\\{`).exec(source)
+  if (!match) return undefined
+  const openingBrace = match.index + match[0].lastIndexOf('{')
+  let depth = 0
+  for (let index = openingBrace; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1
+    if (source[index] !== '}') continue
+    depth -= 1
+    if (depth === 0) return source.slice(openingBrace + 1, index)
+  }
+  return undefined
+}
+
+const retryLoadBody = vueFunctionBody(bookingRecordsPage, 'retryLoad')
+assert.ok(retryLoadBody !== undefined, 'appointment records should define an isolated retry handler')
+assert.doesNotMatch(retryLoadBody, /setBookingSession|navigateTo|openBooking/, 'retry must never set a booking session or navigate')
+const authLossBody = vueFunctionBody(bookingRecordsPage, 'handleAuthLoss')
+assert.ok(authLossBody !== undefined, 'appointment records should centralize authentication loss handling')
+assert.match(authLossBody, /clearToken\(\)/, 'authentication loss should clear auth')
+assert.match(authLossBody, /clearBookingSession\(\)/, 'authentication loss should clear booking session data')
+assert.match(authLossBody, /redirecting/, 'authentication loss should guard Toast and navigation side effects')
+assert.match(authLossBody, /uni\.showToast/, 'authentication loss should show one user-facing Toast')
+assert.match(authLossBody, /uni\.switchTab/, 'authentication loss should switch back to the profile tab')
+assert.match(bookingRecordsPage, /loadTicket/, 'appointment records should invalidate stale async responses')
+assert.match(bookingRecordsPage, /getToken\(\)\s*!==\s*requestToken/, 'appointment records should reject responses after token changes')
+assert.match(bookingRecordsPage, /statusCode\s*===\s*401[\s\S]*statusCode\s*===\s*403/, 'appointment records should handle both 401 and 403')
+assert.match(bookingRecordsPage, /onUnload/, 'appointment records should invalidate loads and clear session on unload')
+assert.match(bookingRecordsPage, /\.booking-record__open:focus-visible[\s\S]*(?:outline|box-shadow)/, 'appointment navigation should expose a visible focus state')
+assert.match(bookingRecordsPage, /\.booking-record__open\s*\{[\s\S]*min-height:\s*88rpx/, 'appointment navigation should keep an 88rpx touch target')
 
 
 const resultPage = readFileSync('src/pages/result/result.vue', 'utf8')
