@@ -23,7 +23,15 @@ function isPrivateIPv4(value) {
 }
 
 function isPrivateIPv6(value) {
-  if (value === '::1') return true
+  if (value === '::' || value === '::1') return true
+
+  const mappedMatch = value.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+  if (mappedMatch) {
+    const high = Number.parseInt(mappedMatch[1], 16)
+    const low = Number.parseInt(mappedMatch[2], 16)
+    const mappedIPv4 = [high >> 8, high & 0xff, low >> 8, low & 0xff].join('.')
+    return isPrivateIPv4(mappedIPv4)
+  }
 
   const firstHextet = Number.parseInt(value.split(':', 1)[0], 16)
   if (!Number.isInteger(firstHextet)) return false

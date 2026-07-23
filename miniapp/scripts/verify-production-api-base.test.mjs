@@ -14,6 +14,7 @@ function verify(apiBase) {
 }
 
 assert.equal(verify('https://alternate.example.net/api').status, 0)
+assert.equal(verify('https://[::ffff:8.8.8.8]/api').status, 0)
 
 for (const invalidApiBase of [
   'https://example.com/api',
@@ -21,7 +22,12 @@ for (const invalidApiBase of [
   'https://localhost./api',
   'https://service.local./api',
   'https://api.example.com./api',
+  'https://[::]/api',
   'https://[::1]/api',
+  'https://[::ffff:127.0.0.1]/api',
+  'https://[::ffff:7f00:1]/api',
+  'https://[::ffff:10.0.0.1]/api',
+  'https://[::ffff:a00:1]/api',
   'https://[fc00::1]/api',
   'https://[fd12:3456:789a::1]/api',
   'https://[fe80::1]/api',
