@@ -789,8 +789,8 @@ const profileStyle = stripMarkupAndCssComments(vueSection(profilePage, 'style') 
 assert.match(profileTemplate, /class=["'][^"']*profile-hero[^"']*nx-page-hero[^"']*["']/, 'profile should open with the shared growth hero')
 assert.match(profilePage, /const recordCount = computed\(\(\) => records\.value\.length\)/, 'profile summary should derive its record count from loaded records')
 assert.match(profilePage, /const bookingCount = computed\(\(\) => bookings\.value\.length\)/, 'profile summary should derive its booking count from loaded bookings')
-assert.match(profilePage, /const recordCountLabel = computed\(\(\) => profileLoading\.value \? ['"]—['"] : String\(recordCount\.value\)\)/, 'profile record count should stay stable while loading')
-assert.match(profilePage, /const bookingCountLabel = computed\(\(\) => profileLoading\.value \? ['"]—['"] : String\(bookingCount\.value\)\)/, 'profile booking count should stay stable while loading')
+assert.match(profilePage, /const recordCountLabel = computed\(\(\) => profileLoading\.value \|\| recordsError\.value \? ['"]—['"] : String\(recordCount\.value\)\)/, 'profile record count should stay unknown while loading or failed')
+assert.match(profilePage, /const bookingCountLabel = computed\(\(\) => profileLoading\.value \|\| bookingsError\.value \? ['"]—['"] : String\(bookingCount\.value\)\)/, 'profile booking count should stay unknown while loading or failed')
 assert.ok((profileTemplate.match(/class=["'][^"']*profile-stat(?:\s|["'])/g) || []).length >= 3, 'profile hero should present three growth statistics')
 assert.match(profileTemplate, /class=["'][^"']*history-timeline[^"']*["']/, 'profile histories should use a timeline')
 assert.match(profileTemplate, /class=["'][^"']*history-item[^"']*["']/, 'profile timeline should expose structured items')
@@ -809,6 +809,25 @@ assert.match(profileTemplate, /v-if=["']profileLoading["'][\s\S]*v-else-if=["']b
 const h5ProfileLogin = profilePage.match(/<!-- #ifdef H5 -->([\s\S]*?)<!-- #endif -->/)?.[1] || ''
 assert.match(h5ProfileLogin, /<button\b[^>]*\bdisabled\b[^>]*>请在微信小程序内登录<\/button>/, 'H5 profile login guidance should remain disabled')
 assert.doesNotMatch(h5ProfileLogin, /@click=["']login["']/, 'H5 profile guidance must not call WeChat login')
+const profileLoadAllBody = sourceBracedBody(profilePage, /async function\s+loadAll\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
+assert.match(profileLoadAllBody, /const loadedUser = await getUserInfoApi\(\)\s*if \(ticket !== loadTicket\) return\s*user\.value = loadedUser\s*syncDraftFromUser\(\)/, 'profile load should reject a stale user response before mutating session state')
+assert.match(profileLoadAllBody, /Promise\.allSettled\([\s\S]*?\)\s*if \(ticket !== loadTicket\) return\s*if \(rec\.status/, 'profile load should reject stale history responses before mutating lists')
+assert.match(profilePage, /let sessionGeneration = 0/, 'profile should maintain an independent authentication generation')
+const profileLoginBody = sourceBracedBody(profilePage, /async function\s+login\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
+assert.match(profileLoginBody, /await ensureLogin\(\)\s*sessionGeneration \+= 1\s*generation = sessionGeneration\s*logged\.value = true[\s\S]*await loadAll\(\)\s*if \(!logged\.value \|\| generation !== sessionGeneration\) return\s*uni\.showToast\(\{ title: '登录成功'/, 'profile login should establish a generation and suppress stale success feedback')
+assert.match(profileLoginBody, /catch \(e\) \{\s*if \(generation !== sessionGeneration\) return[\s\S]*\}\s*finally \{\s*if \(generation === sessionGeneration\) logging\.value = false/, 'profile login should suppress stale errors and protect newer login state')
+const profileResetBody = sourceBracedBody(profilePage, /function\s+resetLogin\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
+assert.match(profileResetBody, /^\s*sessionGeneration \+= 1/, 'profile reset should invalidate in-flight session work before clearing state')
+assert.match(profileResetBody, /profileSaving\.value = false/, 'profile reset should clear session-scoped saving state')
+const profileSyncBody = sourceBracedBody(profilePage, /async function\s+syncWechatProfile\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
+assert.match(profileSyncBody, /const generation = sessionGeneration[\s\S]*await getWechatProfilePayload\(\)\s*if \(!logged\.value \|\| generation !== sessionGeneration\) return/, 'profile sync should guard the profile-payload await boundary')
+assert.match(profileSyncBody, /const updatedUser = await updateUserInfoApi\(payload\)\s*if \(!logged\.value \|\| generation !== sessionGeneration\) return\s*user\.value = updatedUser/, 'profile sync should guard its update response before writing user state')
+assert.match(profileSyncBody, /catch\s*\{\s*if \(!logged\.value \|\| generation !== sessionGeneration\) return[\s\S]*\}\s*finally\s*\{\s*if \(generation === sessionGeneration\) profileSaving\.value = false/, 'profile sync should suppress stale errors and protect newer saving state')
+const profileSaveBody = sourceBracedBody(profilePage, /async function\s+saveProfile\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
+assert.match(profileSaveBody, /const generation = sessionGeneration[\s\S]*const updatedUser = await updateUserInfoApi\(payload\)\s*if \(!logged\.value \|\| generation !== sessionGeneration\) return\s*user\.value = updatedUser/, 'profile save should guard its update response before writing user state')
+assert.match(profileSaveBody, /catch\s*\{\s*if \(!logged\.value \|\| generation !== sessionGeneration\) return[\s\S]*\}\s*finally\s*\{\s*if \(generation === sessionGeneration\) profileSaving\.value = false/, 'profile save should suppress stale errors and protect newer saving state')
+assert.match(profilePage, /const recordCountLabel = computed\(\(\) => profileLoading\.value \|\| recordsError\.value \? ['"]—['"] : String\(recordCount\.value\)\)/, 'failed record counts should stay unknown instead of showing zero')
+assert.match(profilePage, /const bookingCountLabel = computed\(\(\) => profileLoading\.value \|\| bookingsError\.value \? ['"]—['"] : String\(bookingCount\.value\)\)/, 'failed booking counts should stay unknown instead of showing zero')
 
 const profileHeroStyle = pageStyleDeclarations(profileStyle, '.profile-hero')
 assert.match(profileHeroStyle, /linear-gradient\(145deg,\s*#172554,\s*#4338ca 56%,\s*#7c3aed\)/, 'profile hero should use the approved deep blue-purple palette')

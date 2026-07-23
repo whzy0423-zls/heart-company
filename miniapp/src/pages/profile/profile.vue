@@ -27,8 +27,8 @@ const hiddenRecordCount = computed(() => hiddenCount(records.value))
 const hiddenBookingCount = computed(() => hiddenCount(bookings.value))
 const recordCount = computed(() => records.value.length)
 const bookingCount = computed(() => bookings.value.length)
-const recordCountLabel = computed(() => profileLoading.value ? '—' : String(recordCount.value))
-const bookingCountLabel = computed(() => profileLoading.value ? '—' : String(bookingCount.value))
+const recordCountLabel = computed(() => profileLoading.value || recordsError.value ? '—' : String(recordCount.value))
+const bookingCountLabel = computed(() => profileLoading.value || bookingsError.value ? '—' : String(bookingCount.value))
 const wechatLoginReady = computed(() => ({
   codeLogin: true,
   profile: true,
@@ -36,6 +36,7 @@ const wechatLoginReady = computed(() => ({
   note: '微信 code 登录已接入；头像昵称已按微信新规范支持。',
 }))
 let loadTicket = 0
+let sessionGeneration = 0
 
 onShow(() => {
   logged.value = !!getToken()
@@ -44,16 +45,21 @@ onShow(() => {
 
 async function login() {
   if (logging.value) return
+  let generation = sessionGeneration
   logging.value = true
   try {
     await ensureLogin()
+    sessionGeneration += 1
+    generation = sessionGeneration
     logged.value = true
     await loadAll()
+    if (!logged.value || generation !== sessionGeneration) return
     uni.showToast({ title: '登录成功', icon: 'success' })
   } catch (e) {
+    if (generation !== sessionGeneration) return
     uni.showToast({ title: userErrorMessage(e, '登录失败'), icon: 'none' })
   } finally {
-    logging.value = false
+    if (generation === sessionGeneration) logging.value = false
   }
 }
 
@@ -63,14 +69,15 @@ async function loadAll() {
   recordsError.value = ''
   bookingsError.value = ''
   try {
-    user.value = await getUserInfoApi()
+    const loadedUser = await getUserInfoApi()
+    if (ticket !== loadTicket) return
+    user.value = loadedUser
     syncDraftFromUser()
   } catch (e) {
-    if (ticket === loadTicket) {
-      resetLogin()
-      uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' })
-      profileLoading.value = false
-    }
+    if (ticket !== loadTicket) return
+    resetLogin()
+    uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' })
+    profileLoading.value = false
     return
   }
 
@@ -105,6 +112,7 @@ function syncDraftFromUser() {
 }
 
 function resetLogin() {
+  sessionGeneration += 1
   loadTicket += 1
   clearToken()
   logged.value = false
@@ -118,6 +126,8 @@ function resetLogin() {
   userAvatarFailed.value = false
   draftAvatarFailed.value = false
   profileLoading.value = false
+  profileSaving.value = false
+  logging.value = false
 }
 
 function logout() {
@@ -144,25 +154,31 @@ function onNicknameInput(e) {
 
 async function syncWechatProfile() {
   if (profileSaving.value) return
+  const generation = sessionGeneration
   profileSaving.value = true
   try {
     const payload = await getWechatProfilePayload()
+    if (!logged.value || generation !== sessionGeneration) return
     if (hasProfilePayload(payload)) {
-      user.value = await updateUserInfoApi(payload)
+      const updatedUser = await updateUserInfoApi(payload)
+      if (!logged.value || generation !== sessionGeneration) return
+      user.value = updatedUser
       syncDraftFromUser()
       uni.showToast({ title: '资料已同步', icon: 'success' })
     } else {
       uni.showToast({ title: '请用下方头像昵称补充资料', icon: 'none' })
     }
   } catch {
+    if (!logged.value || generation !== sessionGeneration) return
     uni.showToast({ title: '可手动补充头像昵称', icon: 'none' })
   } finally {
-    profileSaving.value = false
+    if (generation === sessionGeneration) profileSaving.value = false
   }
 }
 
 async function saveProfile() {
   if (profileSaving.value) return
+  const generation = sessionGeneration
   const payload = normalizeWechatProfile({
     nickname: nicknameDraft.value,
     avatar: avatarDraft.value,
@@ -174,13 +190,16 @@ async function saveProfile() {
 
   profileSaving.value = true
   try {
-    user.value = await updateUserInfoApi(payload)
+    const updatedUser = await updateUserInfoApi(payload)
+    if (!logged.value || generation !== sessionGeneration) return
+    user.value = updatedUser
     syncDraftFromUser()
     uni.showToast({ title: '资料已保存', icon: 'success' })
   } catch {
+    if (!logged.value || generation !== sessionGeneration) return
     uni.showToast({ title: '保存失败，请重试', icon: 'none' })
   } finally {
-    profileSaving.value = false
+    if (generation === sessionGeneration) profileSaving.value = false
   }
 }
 </script>
