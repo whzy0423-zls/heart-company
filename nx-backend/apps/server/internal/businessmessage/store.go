@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"nine-xing/nx-backend/apps/server/internal/dbtx"
@@ -14,9 +15,13 @@ import (
 )
 
 const (
-	maxTitleRunes   = 100
-	maxContentRunes = 1000
-	maxTargetRunes  = 512
+	maxTitleRunes        = 100
+	maxContentRunes      = 1000
+	maxTargetRunes       = 512
+	maxTypeRunes         = 32
+	maxEventKeyRunes     = 128
+	maxBusinessTypeRunes = 64
+	maxBusinessIDRunes   = 128
 )
 
 var ErrNilDBTX = errors.New("businessmessage: query target is nil")
@@ -35,6 +40,11 @@ type Event struct {
 type Store struct{}
 
 func Validate(event Event) error {
+	event = normalizeEvent(event)
+	return validateNormalized(event)
+}
+
+func validateNormalized(event Event) error {
 	if strings.TrimSpace(event.EventKey) == "" {
 		return errors.New("businessmessage: event key is required")
 	}
@@ -51,6 +61,31 @@ func Validate(event Event) error {
 	}
 	if strings.TrimSpace(event.Type) == "" {
 		return errors.New("businessmessage: type is required")
+	}
+	if utf8.RuneCountInString(event.Type) > maxTypeRunes {
+		return errors.New("businessmessage: type is too long")
+	}
+	if utf8.RuneCountInString(event.EventKey) > maxEventKeyRunes {
+		return errors.New("businessmessage: event key is too long")
+	}
+	if utf8.RuneCountInString(event.BusinessType) > maxBusinessTypeRunes {
+		return errors.New("businessmessage: business type is too long")
+	}
+	if utf8.RuneCountInString(event.BusinessID) > maxBusinessIDRunes {
+		return errors.New("businessmessage: business id is too long")
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "type", value: event.Type},
+		{name: "event key", value: event.EventKey},
+		{name: "business type", value: event.BusinessType},
+		{name: "business id", value: event.BusinessID},
+	} {
+		if containsControlRune(field.value) {
+			return fmt.Errorf("businessmessage: %s contains control characters", field.name)
+		}
 	}
 	if strings.TrimSpace(event.Title) == "" {
 		return errors.New("businessmessage: title is required")
@@ -71,7 +106,8 @@ func Validate(event Event) error {
 }
 
 func (Store) Create(ctx context.Context, q dbtx.DBTX, event Event) (bool, error) {
-	if err := Validate(event); err != nil {
+	event = normalizeEvent(event)
+	if err := validateNormalized(event); err != nil {
 		return false, err
 	}
 	if q == nil {
@@ -98,7 +134,7 @@ func (Store) Create(ctx context.Context, q dbtx.DBTX, event Event) (bool, error)
 		return false, nil
 	}
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("create business message: %w", err)
 	}
 	return true, nil
 }
@@ -147,19 +183,44 @@ func MiniappQuizSubmitted(recordID, userID, name string, resultType int) Event {
 	}
 }
 
+// MiniappBookingCreated relies on the current invariant that every booking
+// creates an independent signup: signupID is the idempotent target and
+// bookingID remains in the message content for operational traceability.
 func MiniappBookingCreated(bookingID, signupID, name, maskedPhone string) Event {
-	_ = bookingID
 	name = displayName(name, "小程序用户")
+	bookingID = safeTraceID(bookingID)
 	return Event{
 		Type:         "miniapp",
 		Title:        "新的小程序预约",
-		Content:      fmt.Sprintf("%s提交了预约咨询，手机号：%s", name, strings.TrimSpace(maskedPhone)),
+		Content:      fmt.Sprintf("%s提交了预约咨询（预约编号：%s），手机号：%s", name, bookingID, strings.TrimSpace(maskedPhone)),
 		Platform:     "miniapp",
 		EventKey:     "miniapp.booking.created",
 		BusinessID:   strings.TrimSpace(signupID),
 		BusinessType: "signup",
 		TargetPath:   "/customer/signups?leadId=" + url.QueryEscape(strings.TrimSpace(signupID)) + "&open=detail",
 	}
+}
+
+func safeTraceID(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || utf8.RuneCountInString(value) > 64 || containsControlRune(value) {
+		return "待回填"
+	}
+	return value
+}
+
+func normalizeEvent(event Event) Event {
+	event.Type = strings.TrimSpace(event.Type)
+	event.Platform = strings.TrimSpace(event.Platform)
+	event.EventKey = strings.TrimSpace(event.EventKey)
+	event.BusinessType = strings.TrimSpace(event.BusinessType)
+	event.BusinessID = strings.TrimSpace(event.BusinessID)
+	event.TargetPath = strings.TrimSpace(event.TargetPath)
+	return event
+}
+
+func containsControlRune(value string) bool {
+	return strings.ContainsFunc(value, unicode.IsControl)
 }
 
 func displayName(value, fallback string) string {

@@ -63,6 +63,14 @@ func TestValidateRejectsInvalidPlatformAndTargetPath(t *testing.T) {
 		{name: "title too long", mutate: func(event *Event) { event.Title = strings.Repeat("题", 101) }},
 		{name: "content too long", mutate: func(event *Event) { event.Content = strings.Repeat("文", 1001) }},
 		{name: "path too long", mutate: func(event *Event) { event.TargetPath = "/" + strings.Repeat("a", 512) }},
+		{name: "type too long", mutate: func(event *Event) { event.Type = strings.Repeat("t", 33) }},
+		{name: "event key too long", mutate: func(event *Event) { event.EventKey = strings.Repeat("e", 129) }},
+		{name: "business type too long", mutate: func(event *Event) { event.BusinessType = strings.Repeat("b", 65) }},
+		{name: "business id too long", mutate: func(event *Event) { event.BusinessID = strings.Repeat("i", 129) }},
+		{name: "type control character", mutate: func(event *Event) { event.Type = "sign\nup" }},
+		{name: "event key control character", mutate: func(event *Event) { event.EventKey = "signup.\tcreated" }},
+		{name: "business type control character", mutate: func(event *Event) { event.BusinessType = "sign\rup" }},
+		{name: "business id control character", mutate: func(event *Event) { event.BusinessID = "42\u0000" }},
 	}
 
 	for _, tt := range tests {
@@ -108,7 +116,7 @@ func TestEventConstructors(t *testing.T) {
 		{
 			name: "miniapp booking",
 			got:  MiniappBookingCreated("45", "46", "小明", "138****5678"),
-			want: Event{Type: "miniapp", Title: "新的小程序预约", Content: "小明提交了预约咨询，手机号：138****5678", Platform: "miniapp", EventKey: "miniapp.booking.created", BusinessID: "46", BusinessType: "signup", TargetPath: "/customer/signups?leadId=46&open=detail"},
+			want: Event{Type: "miniapp", Title: "新的小程序预约", Content: "小明提交了预约咨询（预约编号：45），手机号：138****5678", Platform: "miniapp", EventKey: "miniapp.booking.created", BusinessID: "46", BusinessType: "signup", TargetPath: "/customer/signups?leadId=46&open=detail"},
 		},
 	}
 
@@ -121,6 +129,21 @@ func TestEventConstructors(t *testing.T) {
 				t.Fatalf("constructor leaked identity field in content: %q", tt.got.Content)
 			}
 		})
+	}
+}
+
+func TestMiniappBookingCreatedUsesSignupForIdentityAndBookingForTraceability(t *testing.T) {
+	event := MiniappBookingCreated("booking-45", "signup-46", "小明", "138****5678")
+	if event.BusinessType != "signup" || event.BusinessID != "signup-46" || event.EventKey != "miniapp.booking.created" {
+		t.Fatalf("booking identity = %q/%q/%q, want event key plus independent signup identity", event.EventKey, event.BusinessType, event.BusinessID)
+	}
+	if !strings.Contains(event.Content, "预约编号：booking-45") {
+		t.Fatalf("booking content = %q, want traceable booking id", event.Content)
+	}
+
+	missing := MiniappBookingCreated("", "signup-47", "小红", "139****5678")
+	if !strings.Contains(missing.Content, "预约编号：待回填") {
+		t.Fatalf("missing booking content = %q, want visible placeholder", missing.Content)
 	}
 }
 
@@ -167,6 +190,53 @@ func TestStoreCreateRejectsNilQueryTarget(t *testing.T) {
 	}
 }
 
+func TestStoreCreateNormalizesIdentityBeforeValidationAndInsert(t *testing.T) {
+	database, state := newMessageTestDB(t)
+	store := Store{}
+	event := WebsiteSignupCreated("42", "张三", "手机", "138****5678")
+	event.Type = "  signup  "
+	event.Platform = " website\t"
+	event.EventKey = " signup.created "
+	event.BusinessType = " signup "
+	event.BusinessID = " 42 "
+	event.TargetPath = "  /customer/signups?leadId=42&open=detail  "
+
+	created, err := store.Create(context.Background(), database, event)
+	if err != nil || !created {
+		t.Fatalf("spaced Create() = created:%v error:%v, want true/nil", created, err)
+	}
+	created, err = store.Create(context.Background(), database, WebsiteSignupCreated("42", "张三", "手机", "138****5678"))
+	if err != nil || created {
+		t.Fatalf("normalized duplicate Create() = created:%v error:%v, want false/nil", created, err)
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if len(state.seen) != 1 {
+		t.Fatalf("stored identities = %d, want normalized duplicate to keep one", len(state.seen))
+	}
+	if state.lastType != "signup" || state.lastPlatform != "website" || state.lastEventKey != "signup.created" || state.lastBusinessType != "signup" || state.lastBusinessID != "42" || state.lastTargetPath != "/customer/signups?leadId=42&open=detail" {
+		t.Fatalf("inserted normalized fields = type:%q platform:%q event:%q business:%q/%q path:%q", state.lastType, state.lastPlatform, state.lastEventKey, state.lastBusinessType, state.lastBusinessID, state.lastTargetPath)
+	}
+}
+
+func TestStoreCreateWrapsDatabaseError(t *testing.T) {
+	database, state := newMessageTestDB(t)
+	wantErr := errors.New("database unavailable")
+	state.queryErr = wantErr
+
+	created, err := (Store{}).Create(context.Background(), database, WebsiteSignupCreated("42", "张三", "手机", "138****5678"))
+	if created {
+		t.Fatal("Create() created = true, want false")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Create() error = %v, want wrapped database error", err)
+	}
+	if err == wantErr || !strings.Contains(err.Error(), "create business message") {
+		t.Fatalf("Create() error = %v, want contextual wrapping", err)
+	}
+}
+
 func TestStoreCreateValidatesBeforeCheckingQueryTarget(t *testing.T) {
 	_, err := (Store{}).Create(context.Background(), nil, Event{})
 	if err == nil {
@@ -178,11 +248,18 @@ func TestStoreCreateValidatesBeforeCheckingQueryTarget(t *testing.T) {
 }
 
 type messageDriverState struct {
-	mu          sync.Mutex
-	lastContent string
-	lastQuery   string
-	nextID      int64
-	seen        map[string]struct{}
+	mu               sync.Mutex
+	lastContent      string
+	lastQuery        string
+	lastType         string
+	lastPlatform     string
+	lastEventKey     string
+	lastBusinessID   string
+	lastBusinessType string
+	lastTargetPath   string
+	nextID           int64
+	queryErr         error
+	seen             map[string]struct{}
 }
 
 type messageConnector struct {
@@ -212,6 +289,9 @@ func (*messageConn) Close() error              { return nil }
 func (*messageConn) Begin() (driver.Tx, error) { return nil, errors.New("transaction not supported") }
 
 func (c *messageConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if c.state.queryErr != nil {
+		return nil, c.state.queryErr
+	}
 	if len(args) != 8 {
 		return nil, errors.New("unexpected message argument count")
 	}
@@ -229,6 +309,12 @@ func (c *messageConn) QueryContext(_ context.Context, query string, args []drive
 	defer c.state.mu.Unlock()
 	c.state.lastQuery = strings.Join(strings.Fields(query), " ")
 	c.state.lastContent = stringsByOrdinal[3]
+	c.state.lastType = stringsByOrdinal[1]
+	c.state.lastPlatform = stringsByOrdinal[4]
+	c.state.lastEventKey = stringsByOrdinal[5]
+	c.state.lastBusinessID = stringsByOrdinal[6]
+	c.state.lastBusinessType = stringsByOrdinal[7]
+	c.state.lastTargetPath = stringsByOrdinal[8]
 	if _, exists := c.state.seen[identity]; exists {
 		return &messageRows{columns: []string{"id"}}, nil
 	}

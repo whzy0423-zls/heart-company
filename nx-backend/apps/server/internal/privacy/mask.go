@@ -5,7 +5,10 @@ import (
 	"strings"
 )
 
-var mainlandPhonePattern = regexp.MustCompile(`1[3-9][0-9]{9}`)
+var (
+	mainlandPhoneDigitsPattern = regexp.MustCompile(`^1[3-9][0-9]{9}$`)
+	mainlandPhoneTextPattern   = regexp.MustCompile(`1[3-9][0-9]([- \x{3000}]?[0-9]{4}){2}`)
+)
 
 // MaskPhone returns a recognizable but non-sensitive representation of a phone value.
 func MaskPhone(value string) string {
@@ -16,8 +19,9 @@ func MaskPhone(value string) string {
 	if isMaskedPhone(value) {
 		return value
 	}
-	if mainlandPhonePattern.MatchString(value) && len(value) == 11 {
-		return value[:3] + "****" + value[7:]
+	digits := removePhoneSeparators(value)
+	if mainlandPhoneDigitsPattern.MatchString(digits) {
+		return digits[:3] + "****" + digits[7:]
 	}
 
 	runes := []rune(value)
@@ -29,7 +33,7 @@ func MaskPhone(value string) string {
 
 // MaskPhonesInText masks standalone mainland mobile numbers without changing other numbers.
 func MaskPhonesInText(text string) string {
-	indexes := mainlandPhonePattern.FindAllStringIndex(text, -1)
+	indexes := mainlandPhoneTextPattern.FindAllStringIndex(text, -1)
 	if len(indexes) == 0 {
 		return text
 	}
@@ -52,6 +56,10 @@ func MaskPhonesInText(text string) string {
 
 func isASCIIDigit(value byte) bool {
 	return value >= '0' && value <= '9'
+}
+
+func removePhoneSeparators(value string) string {
+	return strings.NewReplacer("-", "", " ", "", "　", "").Replace(value)
 }
 
 func isMaskedPhone(value string) bool {
