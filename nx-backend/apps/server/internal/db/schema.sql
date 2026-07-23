@@ -1172,6 +1172,8 @@ CREATE TABLE IF NOT EXISTS theory_package_imports (
   desired_release_version INTEGER NOT NULL CHECK (desired_release_version > 0),
   state TEXT NOT NULL DEFAULT 'staged' CHECK (state IN ('staged','promoted')),
   payload JSONB NOT NULL CONSTRAINT ck_theory_package_imports_payload_object CHECK (jsonb_typeof(payload) = 'object'),
+  payload_sha256 TEXT NOT NULL CONSTRAINT ck_theory_package_imports_payload_sha256 CHECK (payload_sha256 ~ '^[0-9a-f]{64}$'),
+  payload_receipt_sha256 TEXT NOT NULL CONSTRAINT ck_theory_package_imports_payload_receipt_sha256 CHECK (payload_receipt_sha256 ~ '^[0-9a-f]{64}$'),
   object_fingerprints JSONB NOT NULL DEFAULT '{}'::jsonb CONSTRAINT ck_theory_package_imports_fingerprints_object CHECK (jsonb_typeof(object_fingerprints) = 'object'),
   staged_by BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   staged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1207,6 +1209,51 @@ CREATE TABLE IF NOT EXISTS theory_package_promotions (
 CREATE INDEX IF NOT EXISTS idx_theory_package_imports_library ON theory_package_imports(library_id, state);
 CREATE INDEX IF NOT EXISTS idx_theory_package_reviews_import ON theory_package_reviews(import_id, review_type);
 CREATE INDEX IF NOT EXISTS idx_theory_package_promotions_release ON theory_package_promotions(release_id);
+
+-- Existing imports from the pre-fingerprint schema remain fail-closed until restaged.
+ALTER TABLE theory_package_imports ADD COLUMN IF NOT EXISTS payload_sha256 TEXT;
+ALTER TABLE theory_package_imports ADD COLUMN IF NOT EXISTS payload_receipt_sha256 TEXT;
+UPDATE theory_package_imports SET payload_sha256=repeat('0',64) WHERE payload_sha256 IS NULL;
+UPDATE theory_package_imports SET payload_receipt_sha256=repeat('0',64) WHERE payload_receipt_sha256 IS NULL;
+ALTER TABLE theory_package_imports ALTER COLUMN payload_sha256 SET NOT NULL;
+ALTER TABLE theory_package_imports ALTER COLUMN payload_receipt_sha256 SET NOT NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='theory_package_imports'::regclass AND conname='ck_theory_package_imports_payload_sha256') THEN
+    ALTER TABLE theory_package_imports ADD CONSTRAINT ck_theory_package_imports_payload_sha256 CHECK (payload_sha256 ~ '^[0-9a-f]{64}$');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='theory_package_imports'::regclass AND conname='ck_theory_package_imports_payload_receipt_sha256') THEN
+    ALTER TABLE theory_package_imports ADD CONSTRAINT ck_theory_package_imports_payload_receipt_sha256 CHECK (payload_receipt_sha256 ~ '^[0-9a-f]{64}$');
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION protect_theory_package_import_contract()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.package_id IS DISTINCT FROM OLD.package_id
+    OR NEW.content_digest IS DISTINCT FROM OLD.content_digest
+    OR NEW.package_digest IS DISTINCT FROM OLD.package_digest
+    OR NEW.schema_version IS DISTINCT FROM OLD.schema_version
+    OR NEW.library_id IS DISTINCT FROM OLD.library_id
+    OR NEW.target_database IS DISTINCT FROM OLD.target_database
+    OR NEW.desired_release_version IS DISTINCT FROM OLD.desired_release_version
+    OR NEW.payload IS DISTINCT FROM OLD.payload
+    OR NEW.payload_sha256 IS DISTINCT FROM OLD.payload_sha256
+    OR NEW.payload_receipt_sha256 IS DISTINCT FROM OLD.payload_receipt_sha256
+    OR NEW.object_fingerprints IS DISTINCT FROM OLD.object_fingerprints
+    OR NEW.staged_by IS DISTINCT FROM OLD.staged_by
+    OR NEW.staged_at IS DISTINCT FROM OLD.staged_at
+    OR NEW.create_time IS DISTINCT FROM OLD.create_time THEN
+    RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='theory package import staged contract is immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS theory_package_imports_immutable ON theory_package_imports;
+CREATE TRIGGER theory_package_imports_immutable
+  BEFORE UPDATE ON theory_package_imports
+  FOR EACH ROW EXECUTE FUNCTION protect_theory_package_import_contract();
 
 DROP TRIGGER IF EXISTS theory_practices_ownership_lock ON theory_practices;
 CREATE TRIGGER theory_practices_ownership_lock BEFORE INSERT OR UPDATE ON theory_practices

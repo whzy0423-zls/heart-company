@@ -262,6 +262,7 @@ type canonicalDatabaseSnapshot struct {
 type databaseFingerprint struct {
 	SchemaVersion string                    `json:"schemaVersion"`
 	SHA256        string                    `json:"sha256"`
+	PayloadSHA256 string                    `json:"payloadSha256"`
 	Snapshot      canonicalDatabaseSnapshot `json:"snapshot"`
 }
 
@@ -298,6 +299,11 @@ func (s *PackageSyncer) stageOnce(ctx context.Context, root string, actorID int6
 	if err != nil || after.ContentDigest != plan.ContentDigest || after.PackageDigest != plan.PackageDigest {
 		return PackagePlan{}, fmt.Errorf("stage package changed while reading: %w", ErrPackageConflict)
 	}
+	payloadSHA256, err := canonicalJSONSHA256(payload)
+	if err != nil {
+		return PackagePlan{}, fmt.Errorf("hash staged payload: %w", err)
+	}
+	payloadReceiptSHA256 := payloadContractReceiptSHA256(plan.PackageID, plan.ContentDigest, plan.PackageDigest, payloadSHA256)
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return PackagePlan{}, RedactDatabaseError(err)
@@ -424,12 +430,12 @@ func (s *PackageSyncer) stageOnce(ctx context.Context, root string, actorID int6
 			return PackagePlan{}, RedactDatabaseError(err)
 		}
 	}
-	fingerprints, err := databaseFingerprintJSON(ctx, tx, libraryID)
+	fingerprints, err := databaseFingerprintJSON(ctx, tx, libraryID, payloadSHA256)
 	if err != nil {
 		return PackagePlan{}, err
 	}
 	var importID int64
-	if err := tx.QueryRowContext(ctx, `INSERT INTO theory_package_imports(package_id,content_digest,package_digest,schema_version,library_id,target_database,desired_release_version,payload,object_fingerprints,staged_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10) RETURNING id`, plan.PackageID, plan.ContentDigest, plan.PackageDigest, pkg.Manifest.SchemaVersion, libraryID, currentDatabase, desiredVersion, payload, fingerprints, actorID).Scan(&importID); err != nil {
+	if err := tx.QueryRowContext(ctx, `INSERT INTO theory_package_imports(package_id,content_digest,package_digest,schema_version,library_id,target_database,desired_release_version,payload,payload_sha256,payload_receipt_sha256,object_fingerprints,staged_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11::jsonb,$12) RETURNING id`, plan.PackageID, plan.ContentDigest, plan.PackageDigest, pkg.Manifest.SchemaVersion, libraryID, currentDatabase, desiredVersion, payload, payloadSHA256, payloadReceiptSHA256, fingerprints, actorID).Scan(&importID); err != nil {
 		return PackagePlan{}, RedactDatabaseError(err)
 	}
 	if importID <= 0 {
@@ -605,7 +611,7 @@ func insertPackageSource(ctx context.Context, tx *sql.Tx, cardID, workID, fileID
 	return nil
 }
 
-func databaseFingerprintJSON(ctx context.Context, tx *sql.Tx, libraryID int64) ([]byte, error) {
+func databaseFingerprintJSON(ctx context.Context, tx *sql.Tx, libraryID int64, payloadSHA256 string) ([]byte, error) {
 	snapshot, err := loadCanonicalDatabaseSnapshot(ctx, tx, libraryID)
 	if err != nil {
 		return nil, err
@@ -615,7 +621,7 @@ func databaseFingerprintJSON(ctx context.Context, tx *sql.Tx, libraryID int64) (
 		return nil, fmt.Errorf("encode database snapshot: %w", err)
 	}
 	digest := sha256.Sum256(payload)
-	fingerprint := databaseFingerprint{SchemaVersion: "xinzhili.database-snapshot.v1", SHA256: fmt.Sprintf("%x", digest), Snapshot: snapshot}
+	fingerprint := databaseFingerprint{SchemaVersion: "xinzhili.database-snapshot.v1", SHA256: fmt.Sprintf("%x", digest), PayloadSHA256: payloadSHA256, Snapshot: snapshot}
 	encoded, err := json.Marshal(fingerprint)
 	if err != nil {
 		return nil, fmt.Errorf("encode database fingerprint: %w", err)
@@ -649,12 +655,12 @@ func loadCanonicalDatabaseSnapshot(ctx context.Context, tx *sql.Tx, libraryID in
 	return snapshot, nil
 }
 
-func verifyDatabaseFingerprint(ctx context.Context, tx *sql.Tx, libraryID int64, encoded []byte) error {
+func verifyDatabaseFingerprint(ctx context.Context, tx *sql.Tx, libraryID int64, encoded []byte, payloadSHA256 string) error {
 	var expected databaseFingerprint
 	if err := json.Unmarshal(encoded, &expected); err != nil {
 		return fmt.Errorf("decode stored database fingerprint: %w", ErrPackageConflict)
 	}
-	if expected.SchemaVersion != "xinzhili.database-snapshot.v1" || expected.Snapshot.SchemaVersion != expected.SchemaVersion || expected.SHA256 == "" {
+	if expected.SchemaVersion != "xinzhili.database-snapshot.v1" || expected.Snapshot.SchemaVersion != expected.SchemaVersion || expected.SHA256 == "" || expected.PayloadSHA256 != payloadSHA256 {
 		return fmt.Errorf("stored database fingerprint contract invalid: %w", ErrPackageConflict)
 	}
 	expectedPayload, err := json.Marshal(expected.Snapshot)
@@ -678,6 +684,30 @@ func verifyDatabaseFingerprint(ctx context.Context, tx *sql.Tx, libraryID int64,
 		return ErrImportedContentChanged
 	}
 	return nil
+}
+
+func canonicalJSONSHA256(payload []byte) (string, error) {
+	var value any
+	if err := json.Unmarshal(payload, &value); err != nil {
+		return "", err
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(canonical)
+	return fmt.Sprintf("%x", digest), nil
+}
+
+func payloadContractReceiptSHA256(packageID, contentDigest, packageDigest, payloadSHA256 string) string {
+	receipt, _ := json.Marshal(struct {
+		PackageID     string `json:"packageId"`
+		ContentDigest string `json:"contentDigest"`
+		PackageDigest string `json:"packageDigest"`
+		PayloadSHA256 string `json:"payloadSha256"`
+	}{packageID, contentDigest, packageDigest, payloadSHA256})
+	digest := sha256.Sum256(receipt)
+	return fmt.Sprintf("%x", digest)
 }
 
 func jsonBytesEqual(a, b []byte) bool {
@@ -779,8 +809,9 @@ func (s *PackageSyncer) promoteOnce(ctx context.Context, packageID string, actor
 	var importID, libraryID int64
 	var digest, packageDigest, schemaVersion, state, targetDatabase, libraryKey string
 	var desiredVersion int
+	var storedPayloadSHA256, storedPayloadReceiptSHA256 string
 	var payload, fingerprints []byte
-	if err := tx.QueryRowContext(ctx, `SELECT i.id,i.library_id,i.content_digest,i.package_digest,i.schema_version,i.state,i.target_database,l.key,i.desired_release_version,i.payload,i.object_fingerprints FROM theory_package_imports i JOIN theory_libraries l ON l.id=i.library_id WHERE i.package_id=$1 FOR UPDATE OF i`, packageID).Scan(&importID, &libraryID, &digest, &packageDigest, &schemaVersion, &state, &targetDatabase, &libraryKey, &desiredVersion, &payload, &fingerprints); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT i.id,i.library_id,i.content_digest,i.package_digest,i.schema_version,i.state,i.target_database,l.key,i.desired_release_version,i.payload,i.payload_sha256,i.payload_receipt_sha256,i.object_fingerprints FROM theory_package_imports i JOIN theory_libraries l ON l.id=i.library_id WHERE i.package_id=$1 FOR UPDATE OF i`, packageID).Scan(&importID, &libraryID, &digest, &packageDigest, &schemaVersion, &state, &targetDatabase, &libraryKey, &desiredVersion, &payload, &storedPayloadSHA256, &storedPayloadReceiptSHA256, &fingerprints); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return PromotionReceipt{}, fmt.Errorf("promote package not staged: %w", ErrPackageConflict)
 		}
@@ -799,6 +830,13 @@ func (s *PackageSyncer) promoteOnce(ctx context.Context, packageID string, actor
 	}
 	if !actorOK {
 		return PromotionReceipt{}, ErrActorInvalid
+	}
+	computedPayloadSHA256, err := canonicalJSONSHA256(payload)
+	if err != nil {
+		return PromotionReceipt{}, fmt.Errorf("canonicalize staged payload: %w", ErrPackageConflict)
+	}
+	if computedPayloadSHA256 != storedPayloadSHA256 || payloadContractReceiptSHA256(packageID, digest, packageDigest, storedPayloadSHA256) != storedPayloadReceiptSHA256 {
+		return PromotionReceipt{}, fmt.Errorf("staged payload receipt mismatch: %w", ErrPackageConflict)
 	}
 	var pkg stagedPackage
 	if err := json.Unmarshal(payload, &pkg); err != nil {
@@ -852,7 +890,7 @@ func (s *PackageSyncer) promoteOnce(ctx context.Context, packageID string, actor
 		}
 		seen[id] = true
 	}
-	if err := verifyDatabaseFingerprint(ctx, tx, libraryID, fingerprints); err != nil {
+	if err := verifyDatabaseFingerprint(ctx, tx, libraryID, fingerprints, storedPayloadSHA256); err != nil {
 		return PromotionReceipt{}, err
 	}
 	if err := verifyPackageWorkflowState(ctx, tx, libraryID, state, reviewers); err != nil {

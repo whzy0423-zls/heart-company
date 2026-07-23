@@ -2,6 +2,7 @@ package theorystore
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -277,17 +278,21 @@ func TestStageRejectsDigestDatabaseLibraryAndVersionConflicts(t *testing.T) {
 			if _, err := syncer.Stage(ctx, roundPackageRoot(t), actor); err != nil {
 				t.Fatal(err)
 			}
+			setImportContractTrigger(t, db, false)
 			if _, err := db.Exec(`UPDATE theory_package_imports SET content_digest=repeat('a',64) WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key); err != nil {
 				t.Fatal(err)
 			}
+			setImportContractTrigger(t, db, true)
 		}},
 		{"database", "xinzhili_test_database_conflict", "identity mismatch", func(t *testing.T, db *sql.DB, key string, actor int64, syncer *PackageSyncer) {
 			if _, err := syncer.Stage(ctx, roundPackageRoot(t), actor); err != nil {
 				t.Fatal(err)
 			}
+			setImportContractTrigger(t, db, false)
 			if _, err := db.Exec(`UPDATE theory_package_imports SET target_database='another_database' WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key); err != nil {
 				t.Fatal(err)
 			}
+			setImportContractTrigger(t, db, true)
 		}},
 		{"cross library", "xinzhili_test_cross_library", "another library", func(t *testing.T, db *sql.DB, key string, actor int64, _ *PackageSyncer) {
 			other := key + "_other"
@@ -505,13 +510,73 @@ func TestIdempotentPromoteRechecksStoredPackageDigests(t *testing.T) {
 			if _, err := syncer.Promote(ctx, "xinzhili-round-001", actor); err != nil {
 				t.Fatal(err)
 			}
+			setImportContractTrigger(t, db, false)
 			query := fmt.Sprintf(`UPDATE theory_package_imports SET %s=repeat('f',64) WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, tc.column)
 			if _, err := db.Exec(query, key); err != nil {
 				t.Fatal(err)
 			}
+			setImportContractTrigger(t, db, true)
 			if _, err := syncer.Promote(ctx, "xinzhili-round-001", actor); !errors.Is(err, ErrPackageConflict) {
 				t.Fatalf("digest tamper accepted: %v", err)
 			}
+		})
+	}
+}
+
+func TestPromoteRejectsPayloadAndIndependentHashTampering(t *testing.T) {
+	db := openPackageTestDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name   string
+		mutate func(*testing.T, *sql.DB, string)
+	}{
+		{"payload", func(t *testing.T, db *sql.DB, key string) {
+			text := "篡改后的正式检索文本"
+			sum := sha256.Sum256([]byte(text))
+			if _, err := db.Exec(`UPDATE theory_package_imports SET payload=jsonb_set(jsonb_set(payload,'{previews,0,text}',to_jsonb($2::text)),'{previews,0,contentHash}',to_jsonb($3::text)) WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key, text, fmt.Sprintf("%x", sum)); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"payload sha column", func(t *testing.T, db *sql.DB, key string) {
+			if _, err := db.Exec(`UPDATE theory_package_imports SET payload_sha256=repeat('f',64) WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := "xinzhili_test_payload_" + strings.ReplaceAll(tc.name, " ", "_")
+			cleanupPackageFixture(t, db, key)
+			defer cleanupPackageFixture(t, db, key)
+			actor := createPackageTestUser(t, db, key+"-actor")
+			syncer := NewPackageSyncer(db)
+			syncer.libraryKey = key
+			stageAndReviewPackage(t, db, syncer, key, actor)
+			if _, err := db.Exec(`UPDATE theory_package_imports SET package_digest=repeat('e',64) WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key); err == nil {
+				t.Fatal("immutable trigger allowed staged contract update")
+			}
+			setImportContractTrigger(t, db, false)
+			tc.mutate(t, db, key)
+			setImportContractTrigger(t, db, true)
+			if _, err := syncer.Promote(ctx, "xinzhili-round-001", actor); !errors.Is(err, ErrPackageConflict) {
+				t.Fatalf("tampered payload contract accepted: %v", err)
+			}
+		})
+	}
+}
+
+func setImportContractTrigger(t *testing.T, db *sql.DB, enabled bool) {
+	t.Helper()
+	action := "DISABLE"
+	if enabled {
+		action = "ENABLE"
+	}
+	if _, err := db.Exec(`ALTER TABLE theory_package_imports ` + action + ` TRIGGER theory_package_imports_immutable`); err != nil {
+		t.Fatal(err)
+	}
+	if !enabled {
+		t.Cleanup(func() {
+			_, _ = db.Exec(`ALTER TABLE theory_package_imports ENABLE TRIGGER theory_package_imports_immutable`)
 		})
 	}
 }
