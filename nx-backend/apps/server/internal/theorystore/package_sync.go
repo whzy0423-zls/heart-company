@@ -184,6 +184,9 @@ func (s *PackageSyncer) Plan(ctx context.Context, root string) (PackagePlan, err
 
 type packageManifest struct {
 	SchemaVersion string `json:"schemaVersion"`
+	PackageID     string `json:"packageId"`
+	ContentDigest string `json:"contentDigest"`
+	PackageDigest string `json:"packageDigest"`
 	RoundID       string `json:"roundId"`
 	Sources       []struct {
 		SourceID        string         `json:"sourceId"`
@@ -246,6 +249,22 @@ type stagedPackage struct {
 	Previews  []packagePreview  `json:"previews"`
 }
 
+type canonicalDatabaseSnapshot struct {
+	SchemaVersion string          `json:"schemaVersion"`
+	Cards         json.RawMessage `json:"cards"`
+	Practices     json.RawMessage `json:"practices"`
+	SourceWorks   json.RawMessage `json:"sourceWorks"`
+	SourceFiles   json.RawMessage `json:"sourceFiles"`
+	CardSources   json.RawMessage `json:"cardSources"`
+	Relations     json.RawMessage `json:"relations"`
+}
+
+type databaseFingerprint struct {
+	SchemaVersion string                    `json:"schemaVersion"`
+	SHA256        string                    `json:"sha256"`
+	Snapshot      canonicalDatabaseSnapshot `json:"snapshot"`
+}
+
 func (s *PackageSyncer) Stage(ctx context.Context, root string, actorID int64) (PackagePlan, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		plan, err := s.stageOnce(ctx, root, actorID)
@@ -270,7 +289,7 @@ func (s *PackageSyncer) stageOnce(ctx context.Context, root string, actorID int6
 	if actorID <= 0 {
 		return PackagePlan{}, ErrActorInvalid
 	}
-	pkg, payload, fingerprints, err := loadStagedPackage(root, plan)
+	pkg, payload, _, err := loadStagedPackage(root, plan)
 	if err != nil {
 		return PackagePlan{}, err
 	}
@@ -404,6 +423,10 @@ func (s *PackageSyncer) stageOnce(ctx context.Context, root string, actorID int6
 		if _, err := tx.ExecContext(ctx, `INSERT INTO theory_card_relations(from_card_id,to_card_id,relation_type,note,confidence,status,created_by) VALUES($1,$2,$3,'数据包显式语义关系',1,'draft',$4)`, fromID, toID, relation.Type, actorID); err != nil {
 			return PackagePlan{}, RedactDatabaseError(err)
 		}
+	}
+	fingerprints, err := databaseFingerprintJSON(ctx, tx, libraryID)
+	if err != nil {
+		return PackagePlan{}, err
 	}
 	var importID int64
 	if err := tx.QueryRowContext(ctx, `INSERT INTO theory_package_imports(package_id,content_digest,package_digest,schema_version,library_id,target_database,desired_release_version,payload,object_fingerprints,staged_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10) RETURNING id`, plan.PackageID, plan.ContentDigest, plan.PackageDigest, pkg.Manifest.SchemaVersion, libraryID, currentDatabase, desiredVersion, payload, fingerprints, actorID).Scan(&importID); err != nil {
@@ -582,6 +605,91 @@ func insertPackageSource(ctx context.Context, tx *sql.Tx, cardID, workID, fileID
 	return nil
 }
 
+func databaseFingerprintJSON(ctx context.Context, tx *sql.Tx, libraryID int64) ([]byte, error) {
+	snapshot, err := loadCanonicalDatabaseSnapshot(ctx, tx, libraryID)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("encode database snapshot: %w", err)
+	}
+	digest := sha256.Sum256(payload)
+	fingerprint := databaseFingerprint{SchemaVersion: "xinzhili.database-snapshot.v1", SHA256: fmt.Sprintf("%x", digest), Snapshot: snapshot}
+	encoded, err := json.Marshal(fingerprint)
+	if err != nil {
+		return nil, fmt.Errorf("encode database fingerprint: %w", err)
+	}
+	return encoded, nil
+}
+
+func loadCanonicalDatabaseSnapshot(ctx context.Context, tx *sql.Tx, libraryID int64) (canonicalDatabaseSnapshot, error) {
+	snapshot := canonicalDatabaseSnapshot{SchemaVersion: "xinzhili.database-snapshot.v1"}
+	queries := []struct {
+		target      *json.RawMessage
+		name, query string
+	}{
+		{&snapshot.Cards, "cards", `SELECT COALESCE(jsonb_agg(item ORDER BY item->>'canonical_key'),'[]'::jsonb) FROM (SELECT to_jsonb(c)-ARRAY['id','library_id','status','reviewed_by','reviewed_at','published_at','created_by','updated_by','create_time','update_time'] AS item FROM theory_cards c WHERE c.library_id=$1) rows`},
+		{&snapshot.Practices, "practices", `SELECT COALESCE(jsonb_agg(item ORDER BY item->>'card_canonical_key'),'[]'::jsonb) FROM (SELECT (to_jsonb(p)-ARRAY['id','card_id','status','create_time','update_time'])||jsonb_build_object('card_canonical_key',c.canonical_key) AS item FROM theory_practices p JOIN theory_cards c ON c.id=p.card_id WHERE c.library_id=$1) rows`},
+		{&snapshot.SourceWorks, "source works", `SELECT COALESCE(jsonb_agg(item ORDER BY item->>'canonical_key'),'[]'::jsonb) FROM (SELECT (to_jsonb(w)-ARRAY['id','library_id','canonical_work_id','status','create_time','update_time'])||jsonb_build_object('canonical_work_key',canonical.canonical_key) AS item FROM theory_source_works w LEFT JOIN theory_source_works canonical ON canonical.id=w.canonical_work_id WHERE w.library_id=$1) rows`},
+		{&snapshot.SourceFiles, "source files", `SELECT COALESCE(jsonb_agg(item ORDER BY item->>'work_canonical_key',item->>'relative_path',item->>'sha256'),'[]'::jsonb) FROM (SELECT (to_jsonb(f)-ARRAY['id','work_id','duplicate_of_file_id','create_time','update_time'])||jsonb_build_object('work_canonical_key',w.canonical_key,'duplicate_sha256',duplicate.sha256) AS item FROM theory_source_files f JOIN theory_source_works w ON w.id=f.work_id LEFT JOIN theory_source_files duplicate ON duplicate.id=f.duplicate_of_file_id WHERE w.library_id=$1) rows`},
+		{&snapshot.CardSources, "card sources", `SELECT COALESCE(jsonb_agg(item ORDER BY item->>'card_canonical_key',item->>'work_canonical_key',item->>'file_sha256',item->>'location_label'),'[]'::jsonb) FROM (SELECT (to_jsonb(s)-ARRAY['id','card_id','work_id','file_id','verified_by','verified_at','create_time','update_time'])||jsonb_build_object('card_canonical_key',c.canonical_key,'work_canonical_key',w.canonical_key,'file_sha256',f.sha256) AS item FROM theory_card_sources s JOIN theory_cards c ON c.id=s.card_id JOIN theory_source_works w ON w.id=s.work_id LEFT JOIN theory_source_files f ON f.id=s.file_id WHERE c.library_id=$1) rows`},
+		{&snapshot.Relations, "relations", `SELECT COALESCE(jsonb_agg(item ORDER BY item->>'from_canonical_key',item->>'to_canonical_key',item->>'relation_type'),'[]'::jsonb) FROM (SELECT (to_jsonb(r)-ARRAY['id','from_card_id','to_card_id','status','created_by','reviewed_by','create_time','update_time'])||jsonb_build_object('from_canonical_key',source.canonical_key,'to_canonical_key',target.canonical_key) AS item FROM theory_card_relations r JOIN theory_cards source ON source.id=r.from_card_id JOIN theory_cards target ON target.id=r.to_card_id WHERE source.library_id=$1) rows`},
+	}
+	for _, query := range queries {
+		var raw []byte
+		if err := tx.QueryRowContext(ctx, query.query, libraryID).Scan(&raw); err != nil {
+			return canonicalDatabaseSnapshot{}, databaseFailure("snapshot "+query.name, err)
+		}
+		if !json.Valid(raw) {
+			return canonicalDatabaseSnapshot{}, fmt.Errorf("snapshot %s returned invalid JSON", query.name)
+		}
+		*query.target = append((*query.target)[:0], raw...)
+	}
+	return snapshot, nil
+}
+
+func verifyDatabaseFingerprint(ctx context.Context, tx *sql.Tx, libraryID int64, encoded []byte) error {
+	var expected databaseFingerprint
+	if err := json.Unmarshal(encoded, &expected); err != nil {
+		return fmt.Errorf("decode stored database fingerprint: %w", ErrPackageConflict)
+	}
+	if expected.SchemaVersion != "xinzhili.database-snapshot.v1" || expected.Snapshot.SchemaVersion != expected.SchemaVersion || expected.SHA256 == "" {
+		return fmt.Errorf("stored database fingerprint contract invalid: %w", ErrPackageConflict)
+	}
+	expectedPayload, err := json.Marshal(expected.Snapshot)
+	if err != nil {
+		return fmt.Errorf("encode expected database snapshot: %w", err)
+	}
+	expectedDigest := sha256.Sum256(expectedPayload)
+	if fmt.Sprintf("%x", expectedDigest) != expected.SHA256 {
+		return fmt.Errorf("stored database fingerprint digest invalid: %w", ErrPackageConflict)
+	}
+	current, err := loadCanonicalDatabaseSnapshot(ctx, tx, libraryID)
+	if err != nil {
+		return err
+	}
+	currentPayload, err := json.Marshal(current)
+	if err != nil {
+		return fmt.Errorf("encode current database snapshot: %w", err)
+	}
+	currentDigest := sha256.Sum256(currentPayload)
+	if fmt.Sprintf("%x", currentDigest) != expected.SHA256 || !jsonBytesEqual(currentPayload, expectedPayload) {
+		return ErrImportedContentChanged
+	}
+	return nil
+}
+
+func jsonBytesEqual(a, b []byte) bool {
+	var left, right any
+	if json.Unmarshal(a, &left) != nil || json.Unmarshal(b, &right) != nil {
+		return false
+	}
+	leftJSON, _ := json.Marshal(left)
+	rightJSON, _ := json.Marshal(right)
+	return string(leftJSON) == string(rightJSON)
+}
+
 func (s *PackageSyncer) RecordReview(ctx context.Context, packageID string, reviewType ReviewType, reviewerID int64, notes string) (ReviewReceipt, error) {
 	requiredRole, ok := reviewRoles[reviewType]
 	if !ok || strings.TrimSpace(packageID) == "" || reviewerID <= 0 {
@@ -669,10 +777,10 @@ func (s *PackageSyncer) promoteOnce(ctx context.Context, packageID string, actor
 		return PromotionReceipt{}, RedactDatabaseError(err)
 	}
 	var importID, libraryID int64
-	var digest, state, targetDatabase, libraryKey string
+	var digest, packageDigest, schemaVersion, state, targetDatabase, libraryKey string
 	var desiredVersion int
-	var payload []byte
-	if err := tx.QueryRowContext(ctx, `SELECT i.id,i.library_id,i.content_digest,i.state,i.target_database,l.key,i.desired_release_version,i.payload FROM theory_package_imports i JOIN theory_libraries l ON l.id=i.library_id WHERE i.package_id=$1 FOR UPDATE OF i`, packageID).Scan(&importID, &libraryID, &digest, &state, &targetDatabase, &libraryKey, &desiredVersion, &payload); err != nil {
+	var payload, fingerprints []byte
+	if err := tx.QueryRowContext(ctx, `SELECT i.id,i.library_id,i.content_digest,i.package_digest,i.schema_version,i.state,i.target_database,l.key,i.desired_release_version,i.payload,i.object_fingerprints FROM theory_package_imports i JOIN theory_libraries l ON l.id=i.library_id WHERE i.package_id=$1 FOR UPDATE OF i`, packageID).Scan(&importID, &libraryID, &digest, &packageDigest, &schemaVersion, &state, &targetDatabase, &libraryKey, &desiredVersion, &payload, &fingerprints); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return PromotionReceipt{}, fmt.Errorf("promote package not staged: %w", ErrPackageConflict)
 		}
@@ -692,33 +800,12 @@ func (s *PackageSyncer) promoteOnce(ctx context.Context, packageID string, actor
 	if !actorOK {
 		return PromotionReceipt{}, ErrActorInvalid
 	}
-	var prior PromotionReceipt
-	err = tx.QueryRowContext(ctx, `SELECT p.release_id,r.version,r.status,r.card_count,r.chunk_count FROM theory_package_promotions p JOIN theory_library_releases r ON r.id=p.release_id WHERE p.import_id=$1 AND p.content_digest=$2`, importID, digest).Scan(&prior.ReleaseID, &prior.ReleaseVersion, &prior.ReleaseStatus, &prior.CardCount, &prior.ChunkCount)
-	if err == nil {
-		if prior.ReleaseStatus != ReleaseStatusReady && prior.ReleaseStatus != ReleaseStatusActive {
-			return PromotionReceipt{}, fmt.Errorf("promotion receipt release is not usable: %w", ErrPackageConflict)
-		}
-		var promotedPackage stagedPackage
-		if err := json.Unmarshal(payload, &promotedPackage); err != nil {
-			return PromotionReceipt{}, fmt.Errorf("decode promoted payload: %w", ErrPackageConflict)
-		}
-		if err := verifyPackageObjects(ctx, tx, libraryID, promotedPackage, "published"); err != nil {
-			return PromotionReceipt{}, err
-		}
-		if err := verifyReadyRelease(ctx, tx, prior.ReleaseID, promotedPackage); err != nil {
-			return PromotionReceipt{}, err
-		}
-		prior.PackageID, prior.ContentDigest, prior.NoOp = packageID, digest, true
-		if err := tx.Commit(); err != nil {
-			return PromotionReceipt{}, databaseFailure("commit idempotent promotion", err)
-		}
-		return prior, nil
+	var pkg stagedPackage
+	if err := json.Unmarshal(payload, &pkg); err != nil {
+		return PromotionReceipt{}, fmt.Errorf("decode staged payload: %w", ErrPackageConflict)
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return PromotionReceipt{}, RedactDatabaseError(err)
-	}
-	if state != "staged" {
-		return PromotionReceipt{}, fmt.Errorf("package state %s: %w", state, ErrPackageConflict)
+	if pkg.Manifest.PackageID != packageID || pkg.Manifest.ContentDigest != digest || pkg.Manifest.PackageDigest != packageDigest || pkg.Manifest.SchemaVersion != schemaVersion {
+		return PromotionReceipt{}, fmt.Errorf("staged package digest contract mismatch: %w", ErrPackageConflict)
 	}
 	reviewers := map[ReviewType]int64{}
 	reviewerRoles := map[ReviewType]string{}
@@ -765,19 +852,42 @@ func (s *PackageSyncer) promoteOnce(ctx context.Context, packageID string, actor
 		}
 		seen[id] = true
 	}
-	var pkg stagedPackage
-	if err := json.Unmarshal(payload, &pkg); err != nil {
-		return PromotionReceipt{}, fmt.Errorf("decode staged payload: %w", ErrPackageConflict)
-	}
-	if err := verifyPackageObjects(ctx, tx, libraryID, pkg, "draft"); err != nil {
+	if err := verifyDatabaseFingerprint(ctx, tx, libraryID, fingerprints); err != nil {
 		return PromotionReceipt{}, err
 	}
-	var currentVersion, maxRelease int
+	if err := verifyPackageWorkflowState(ctx, tx, libraryID, state, reviewers); err != nil {
+		return PromotionReceipt{}, err
+	}
+	var currentVersion, maxRelease, maxActive int
 	if err := tx.QueryRowContext(ctx, `SELECT current_version FROM theory_libraries WHERE id=$1 FOR UPDATE`, libraryID).Scan(&currentVersion); err != nil {
 		return PromotionReceipt{}, databaseFailure("publish practices", err)
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(max(version),0) FROM theory_library_releases WHERE library_id=$1`, libraryID).Scan(&maxRelease); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(max(version),0),COALESCE(max(version) FILTER(WHERE status='active'),0) FROM theory_library_releases WHERE library_id=$1`, libraryID).Scan(&maxRelease, &maxActive); err != nil {
 		return PromotionReceipt{}, RedactDatabaseError(err)
+	}
+	if currentVersion > desiredVersion || maxRelease > desiredVersion || maxActive > desiredVersion {
+		return PromotionReceipt{}, fmt.Errorf("release version %d conflicts with current/max/active %d/%d/%d: %w", desiredVersion, currentVersion, maxRelease, maxActive, ErrPackageConflict)
+	}
+	var prior PromotionReceipt
+	err = tx.QueryRowContext(ctx, `SELECT p.release_id,r.version,r.status,r.card_count,r.chunk_count FROM theory_package_promotions p JOIN theory_library_releases r ON r.id=p.release_id WHERE p.import_id=$1 AND p.content_digest=$2`, importID, digest).Scan(&prior.ReleaseID, &prior.ReleaseVersion, &prior.ReleaseStatus, &prior.CardCount, &prior.ChunkCount)
+	if err == nil {
+		if state != "promoted" || prior.ReleaseVersion != desiredVersion || maxRelease != desiredVersion || (prior.ReleaseStatus != ReleaseStatusReady && prior.ReleaseStatus != ReleaseStatusActive) {
+			return PromotionReceipt{}, fmt.Errorf("promotion receipt conflicts with package/version state: %w", ErrPackageConflict)
+		}
+		if err := verifyReadyRelease(ctx, tx, prior.ReleaseID, pkg); err != nil {
+			return PromotionReceipt{}, err
+		}
+		prior.PackageID, prior.ContentDigest, prior.NoOp = packageID, digest, true
+		if err := tx.Commit(); err != nil {
+			return PromotionReceipt{}, databaseFailure("commit idempotent promotion", err)
+		}
+		return prior, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return PromotionReceipt{}, RedactDatabaseError(err)
+	}
+	if state != "staged" {
+		return PromotionReceipt{}, fmt.Errorf("package state %s: %w", state, ErrPackageConflict)
 	}
 	if currentVersion >= desiredVersion || maxRelease >= desiredVersion {
 		return PromotionReceipt{}, fmt.Errorf("release version %d is not monotonic after %d/%d: %w", desiredVersion, currentVersion, maxRelease, ErrPackageConflict)
@@ -883,62 +993,6 @@ func (s *PackageSyncer) promoteOnce(ctx context.Context, packageID string, actor
 	return PromotionReceipt{PackageID: packageID, ContentDigest: digest, ReleaseID: releaseID, ReleaseVersion: desiredVersion, ReleaseStatus: ReleaseStatusReady, CardCount: cardCount, ChunkCount: chunkCount}, nil
 }
 
-func verifyPackageObjects(ctx context.Context, tx *sql.Tx, libraryID int64, pkg stagedPackage, expectedStatus string) error {
-	var count, sourceFiles int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM theory_cards WHERE library_id=$1`, libraryID).Scan(&count); err != nil {
-		return RedactDatabaseError(err)
-	}
-	if count != len(pkg.Cards)+len(pkg.Practices) {
-		return ErrImportedContentChanged
-	}
-	if err := tx.QueryRowContext(ctx, `SELECT count(*),count(f.id) FROM theory_source_works w LEFT JOIN theory_source_files f ON f.work_id=w.id WHERE w.library_id=$1`, libraryID).Scan(&count, &sourceFiles); err != nil {
-		return RedactDatabaseError(err)
-	}
-	if count != len(pkg.Manifest.Sources) || sourceFiles != len(pkg.Manifest.Sources) {
-		return ErrImportedContentChanged
-	}
-	for _, c := range pkg.Cards {
-		var title, summary, definition, status, epistemic, evidence, safety, shadow, cultural, sourceID string
-		var version, authority int
-		if err := tx.QueryRowContext(ctx, `SELECT c.canonical_name,c.summary,c.definition,c.status,c.version,c.authority_level,c.epistemic_status,c.evidence_level,c.clinical_safety,c.shadow_or_risk,c.cultural_context,w.canonical_key FROM theory_cards c JOIN theory_card_sources s ON s.card_id=c.id AND s.source_role='primary' JOIN theory_source_works w ON w.id=s.work_id WHERE c.library_id=$1 AND c.canonical_key=$2`, libraryID, c.CanonicalKey).Scan(&title, &summary, &definition, &status, &version, &authority, &epistemic, &evidence, &safety, &shadow, &cultural, &sourceID); err != nil {
-			return ErrImportedContentChanged
-		}
-		for field, matches := range map[string]bool{"title": title == c.Title, "summary": summary == c.Summary, "definition": definition == c.Definition, "status": status == expectedStatus, "version": version == 1, "authority": authority == c.AuthorityLevel, "epistemic": epistemic == mapCardEpistemic(c.EpistemicStatus), "evidence": evidence == mapEvidence(c.EvidenceLevel), "clinical_safety": safety == "caution", "shadow_or_risk": sameRawJSON([]byte(shadow), c.Safety), "cultural_context": sameRawJSON([]byte(cultural), c.Safety), "primary_source": sourceID == c.PrimaryEvidence.SourceID} {
-			if !matches {
-				return fmt.Errorf("%w: card %s field %s fingerprint mismatch", ErrImportedContentChanged, c.CanonicalKey, field)
-			}
-		}
-	}
-	for _, p := range pkg.Practices {
-		var title, summary, status, practiceStatus, shadow, cultural, sourceID string
-		var version int
-		var goal string
-		var steps, stops, escalation []byte
-		if err := tx.QueryRowContext(ctx, `SELECT c.canonical_name,c.summary,c.status,p.status,c.version,c.shadow_or_risk,c.cultural_context,p.goal,p.steps,p.stop_conditions,p.professional_escalation,w.canonical_key FROM theory_cards c JOIN theory_practices p ON p.card_id=c.id JOIN theory_card_sources s ON s.card_id=c.id AND s.source_role='primary' JOIN theory_source_works w ON w.id=s.work_id WHERE c.library_id=$1 AND c.canonical_key=$2`, libraryID, p.CanonicalKey).Scan(&title, &summary, &status, &practiceStatus, &version, &shadow, &cultural, &goal, &steps, &stops, &escalation, &sourceID); err != nil {
-			return fmt.Errorf("%w: practice %s fingerprint mismatch", ErrImportedContentChanged, p.CanonicalKey)
-		}
-		if title != p.Title || summary != p.Purpose || goal != p.Purpose || status != expectedStatus || practiceStatus != expectedStatus || version != 1 || !sameRawJSON([]byte(shadow), p.Safety) || !sameRawJSON([]byte(cultural), p.Safety) || sourceID != p.PrimaryEvidence.SourceID || !sameRawJSON(steps, p.Steps) || !sameRawJSON(stops, p.StopConditions) || !sameRawJSON(escalation, p.ProfessionalEscalationConditions) {
-			return ErrImportedContentChanged
-		}
-	}
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM theory_card_relations r JOIN theory_cards c ON c.id=r.from_card_id WHERE c.library_id=$1`, libraryID).Scan(&count); err != nil {
-		return RedactDatabaseError(err)
-	}
-	if count != len(pkg.Relations) {
-		return ErrImportedContentChanged
-	}
-	for _, relation := range pkg.Relations {
-		var exists bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM theory_card_relations r JOIN theory_cards f ON f.id=r.from_card_id JOIN theory_cards t ON t.id=r.to_card_id WHERE f.library_id=$1 AND f.canonical_key=$2 AND t.canonical_key=$3 AND r.relation_type=$4 AND r.status=$5 AND r.note='数据包显式语义关系' AND r.confidence=1)`, libraryID, relation.From, relation.To, relation.Type, expectedStatus).Scan(&exists); err != nil {
-			return RedactDatabaseError(err)
-		}
-		if !exists {
-			return ErrImportedContentChanged
-		}
-	}
-	return nil
-}
-
 func verifyReadyRelease(ctx context.Context, tx *sql.Tx, releaseID int64, pkg stagedPackage) error {
 	var mappings int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM theory_release_cards WHERE release_id=$1`, releaseID).Scan(&mappings); err != nil {
@@ -960,12 +1014,47 @@ func verifyReadyRelease(ctx context.Context, tx *sql.Tx, releaseID int64, pkg st
 	}
 	return nil
 }
-func sameRawJSON(a, b []byte) bool {
-	var x, y any
-	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
-		return false
+
+func verifyPackageWorkflowState(ctx context.Context, tx *sql.Tx, libraryID int64, state string, reviewers map[ReviewType]int64) error {
+	expectCard, expectPractice, expectRelation, expectWork := "draft", "draft", "draft", "registered"
+	if state == "promoted" {
+		expectCard, expectPractice, expectRelation, expectWork = "published", "published", "published", "reviewed"
+	} else if state != "staged" {
+		return fmt.Errorf("package workflow state %s invalid: %w", state, ErrPackageConflict)
 	}
-	return fmt.Sprint(x) == fmt.Sprint(y)
+	checks := []struct {
+		name, query string
+		want        int
+		args        []any
+	}{
+		{"cards", `SELECT count(*) FROM theory_cards WHERE library_id=$1 AND status=$2`, 52, []any{libraryID, expectCard}},
+		{"practices", `SELECT count(*) FROM theory_practices p JOIN theory_cards c ON c.id=p.card_id WHERE c.library_id=$1 AND p.status=$2`, 12, []any{libraryID, expectPractice}},
+		{"relations", `SELECT count(*) FROM theory_card_relations r JOIN theory_cards c ON c.id=r.from_card_id WHERE c.library_id=$1 AND r.status=$2`, 19, []any{libraryID, expectRelation}},
+		{"source works", `SELECT count(*) FROM theory_source_works WHERE library_id=$1 AND status=$2`, 24, []any{libraryID, expectWork}},
+	}
+	for _, check := range checks {
+		var count int
+		if err := tx.QueryRowContext(ctx, check.query, check.args...).Scan(&count); err != nil {
+			return databaseFailure("verify workflow "+check.name, err)
+		}
+		if count != check.want {
+			return fmt.Errorf("%w: workflow %s count %d", ErrImportedContentChanged, check.name, count)
+		}
+	}
+	var verified int
+	if state == "staged" {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM theory_card_sources s JOIN theory_cards c ON c.id=s.card_id WHERE c.library_id=$1 AND s.verified_by IS NULL AND s.verified_at IS NULL`, libraryID).Scan(&verified); err != nil {
+			return RedactDatabaseError(err)
+		}
+	} else {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM theory_card_sources s JOIN theory_cards c ON c.id=s.card_id WHERE c.library_id=$1 AND s.verified_by=$2 AND s.verified_at IS NOT NULL`, libraryID, reviewers[ReviewSourceVerification]).Scan(&verified); err != nil {
+			return RedactDatabaseError(err)
+		}
+	}
+	if verified != 52 {
+		return fmt.Errorf("%w: workflow card source verification count %d", ErrImportedContentChanged, verified)
+	}
+	return nil
 }
 func mapChunkKind(practiceID *int64) string {
 	if practiceID != nil {

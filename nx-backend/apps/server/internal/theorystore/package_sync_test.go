@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -411,6 +412,128 @@ func TestConcurrentStageAndPromoteAreIdempotent(t *testing.T) {
 	if noops != 1 {
 		t.Fatalf("concurrent promote noops=%d", noops)
 	}
+}
+
+func TestPromoteRejectsCanonicalSnapshotTampering(t *testing.T) {
+	db := openPackageTestDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	tests := []struct{ name, sql string }{
+		{"practice definition", `UPDATE theory_cards SET definition=definition||'篡改' WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1) AND canonical_key='practice.intention_center_resource'`},
+		{"practice domain", `UPDATE theory_cards SET domain='tampered' WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1) AND canonical_key='practice.intention_center_resource'`},
+		{"practice card kind", `UPDATE theory_cards SET card_kind='warning' WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1) AND canonical_key='practice.intention_center_resource'`},
+		{"practice epistemic", `UPDATE theory_cards SET epistemic_status='hypothesis' WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1) AND canonical_key='practice.intention_center_resource'`},
+		{"practice evidence", `UPDATE theory_cards SET evidence_level='unknown' WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1) AND canonical_key='practice.intention_center_resource'`},
+		{"practice authority", `UPDATE theory_cards SET authority_level=2 WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1) AND canonical_key='practice.intention_center_resource'`},
+		{"practice clinical safety", `UPDATE theory_cards SET clinical_safety='general' WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1) AND canonical_key='practice.intention_center_resource'`},
+		{"concept fixed field", `UPDATE theory_cards SET automatic_pattern='篡改' WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1) AND canonical_key='belief.behavior_not_identity'`},
+		{"practice steps", `UPDATE theory_practices SET steps='["篡改"]'::jsonb WHERE card_id=(SELECT id FROM theory_cards WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1) AND canonical_key='practice.intention_center_resource')`},
+		{"practice goal", `UPDATE theory_practices SET goal=goal||'篡改' WHERE card_id=(SELECT id FROM theory_cards WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1) AND canonical_key='practice.intention_center_resource')`},
+		{"source locator", `UPDATE theory_card_sources SET location_label='篡改' WHERE card_id=(SELECT id FROM theory_cards WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1) AND canonical_key='belief.behavior_not_identity')`},
+		{"source hash", `UPDATE theory_source_files SET sha256=repeat('f',64) WHERE work_id IN (SELECT id FROM theory_source_works WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)) AND id=(SELECT min(f.id) FROM theory_source_files f JOIN theory_source_works w ON w.id=f.work_id WHERE w.library_id=(SELECT id FROM theory_libraries WHERE key=$1))`},
+		{"source role", `UPDATE theory_card_sources SET source_role='supporting' WHERE card_id=(SELECT id FROM theory_cards WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1) AND canonical_key='belief.behavior_not_identity')`},
+		{"relation note", `UPDATE theory_card_relations SET note='篡改' WHERE id=(SELECT min(r.id) FROM theory_card_relations r JOIN theory_cards c ON c.id=r.from_card_id WHERE c.library_id=(SELECT id FROM theory_libraries WHERE key=$1))`},
+		{"relation type", `UPDATE theory_card_relations SET relation_type='extends' WHERE id=(SELECT min(r.id) FROM theory_card_relations r JOIN theory_cards c ON c.id=r.from_card_id WHERE c.library_id=(SELECT id FROM theory_libraries WHERE key=$1))`},
+	}
+	for index, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			key := fmt.Sprintf("xinzhili_test_snapshot_%02d", index)
+			cleanupPackageFixture(t, db, key)
+			defer cleanupPackageFixture(t, db, key)
+			actor := createPackageTestUser(t, db, key+"-actor")
+			syncer := NewPackageSyncer(db)
+			syncer.libraryKey = key
+			stageAndReviewPackage(t, db, syncer, key, actor)
+			if _, err := db.Exec(tc.sql, key); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := syncer.Promote(ctx, "xinzhili-round-001", actor); !errors.Is(err, ErrImportedContentChanged) {
+				t.Fatalf("tamper accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestIdempotentPromoteRechecksReviewAndVersionGates(t *testing.T) {
+	db := openPackageTestDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	key := "xinzhili_test_noop_gates"
+	cleanupPackageFixture(t, db, key)
+	defer cleanupPackageFixture(t, db, key)
+	actor := createPackageTestUser(t, db, key+"-actor")
+	syncer := NewPackageSyncer(db)
+	syncer.libraryKey = key
+	reviewers := stageAndReviewPackage(t, db, syncer, key, actor)
+	first, err := syncer.Promote(ctx, "xinzhili-round-001", actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM user_roles WHERE user_id=$1 AND role_id=(SELECT id FROM roles WHERE code='theory_safety_reviewer')`, reviewers[ReviewSafety]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := syncer.Promote(ctx, "xinzhili-round-001", actor); !errors.Is(err, ErrReviewsIncomplete) {
+		t.Fatalf("revoked review accepted: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO user_roles(user_id,role_id) VALUES($1,(SELECT id FROM roles WHERE code='theory_safety_reviewer'))`, reviewers[ReviewSafety]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO theory_library_releases(library_id,version,status) VALUES((SELECT id FROM theory_libraries WHERE key=$1),2,'active')`, key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE theory_libraries SET current_version=2 WHERE key=$1`, key); err != nil {
+		t.Fatal(err)
+	}
+	if repeated, err := syncer.Promote(ctx, "xinzhili-round-001", actor); !errors.Is(err, ErrPackageConflict) || repeated.ReleaseID != 0 {
+		t.Fatalf("higher version accepted after release %d: %+v %v", first.ReleaseID, repeated, err)
+	}
+}
+
+func TestIdempotentPromoteRechecksStoredPackageDigests(t *testing.T) {
+	db := openPackageTestDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	for _, tc := range []struct{ name, column string }{{"content digest", "content_digest"}, {"package digest", "package_digest"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := "xinzhili_test_noop_" + strings.ReplaceAll(tc.name, " ", "_")
+			cleanupPackageFixture(t, db, key)
+			defer cleanupPackageFixture(t, db, key)
+			actor := createPackageTestUser(t, db, key+"-actor")
+			syncer := NewPackageSyncer(db)
+			syncer.libraryKey = key
+			stageAndReviewPackage(t, db, syncer, key, actor)
+			if _, err := syncer.Promote(ctx, "xinzhili-round-001", actor); err != nil {
+				t.Fatal(err)
+			}
+			query := fmt.Sprintf(`UPDATE theory_package_imports SET %s=repeat('f',64) WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, tc.column)
+			if _, err := db.Exec(query, key); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := syncer.Promote(ctx, "xinzhili-round-001", actor); !errors.Is(err, ErrPackageConflict) {
+				t.Fatalf("digest tamper accepted: %v", err)
+			}
+		})
+	}
+}
+
+func stageAndReviewPackage(t *testing.T, db *sql.DB, syncer *PackageSyncer, key string, actor int64) map[ReviewType]int64 {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := syncer.Stage(ctx, roundPackageRoot(t), actor); err != nil {
+		t.Fatal(err)
+	}
+	reviewers := map[ReviewType]int64{}
+	for _, review := range []struct {
+		kind         ReviewType
+		suffix, role string
+	}{{ReviewSourceVerification, "source", "theory_source_reviewer"}, {ReviewTheory, "theory", "theory_content_reviewer"}, {ReviewSafety, "safety", "theory_safety_reviewer"}} {
+		id := createPackageReviewer(t, db, key+"-"+review.suffix, review.role)
+		reviewers[review.kind] = id
+		if _, err := syncer.RecordReview(ctx, "xinzhili-round-001", review.kind, id, "已核验"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return reviewers
 }
 
 func openPackageTestDatabase(t *testing.T) *sql.DB {
