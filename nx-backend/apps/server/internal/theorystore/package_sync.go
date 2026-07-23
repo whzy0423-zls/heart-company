@@ -29,6 +29,7 @@ var (
 	ErrReviewsIncomplete      = errors.New("three database reviews are incomplete")
 	ErrActorSeparation        = errors.New("promotion actor must be separate from all reviewers")
 	ErrImportedContentChanged = errors.New("staged package content was modified")
+	errSerializationFailure   = errors.New("database serialization failure")
 )
 
 type ReviewType string
@@ -105,30 +106,73 @@ func RedactDatabaseError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return &redactedDatabaseError{cause: err}
+	return newRedactedDatabaseError("", err)
 }
 
-type redactedDatabaseError struct{ cause error }
+type redactedDatabaseError struct {
+	operation  string
+	sqlState   string
+	matches    func(error) bool
+	serialized bool
+}
 
 func (e *redactedDatabaseError) Error() string {
-	return "database operation failed; inspect server-side database logs"
+	prefix := strings.TrimSpace(e.operation)
+	if e.sqlState != "" {
+		if prefix != "" {
+			prefix += " (SQLSTATE " + e.sqlState + "): "
+		} else {
+			prefix = "SQLSTATE " + e.sqlState + ": "
+		}
+	} else if prefix != "" {
+		prefix += ": "
+	}
+	return prefix + "database operation failed; inspect server-side database logs"
 }
-func (e *redactedDatabaseError) Unwrap() error { return e.cause }
+
+func (e *redactedDatabaseError) Is(target error) bool {
+	return e != nil && (e.serialized && target == errSerializationFailure || e.matches != nil && e.matches(target))
+}
+
+func newRedactedDatabaseError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	state := ""
+	var postgresError *pgconn.PgError
+	if errors.As(err, &postgresError) {
+		state = safeSQLState(postgresError.Code)
+	}
+	return &redactedDatabaseError{
+		operation:  operation,
+		sqlState:   state,
+		serialized: state == "40001",
+		matches:    func(target error) bool { return errors.Is(err, target) },
+	}
+}
+
+func safeSQLState(value string) string {
+	if len(value) != 5 {
+		return ""
+	}
+	for _, character := range value {
+		if !(character >= '0' && character <= '9' || character >= 'A' && character <= 'Z') {
+			return ""
+		}
+	}
+	return value
+}
 
 func isSerializationFailure(err error) bool {
+	if errors.Is(err, errSerializationFailure) {
+		return true
+	}
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "40001"
 }
 
 func databaseFailure(operation string, err error) error {
-	if err == nil {
-		return nil
-	}
-	var postgresError *pgconn.PgError
-	if errors.As(err, &postgresError) {
-		return fmt.Errorf("%s (SQLSTATE %s): %w", operation, postgresError.Code, RedactDatabaseError(err))
-	}
-	return fmt.Errorf("%s: %w", operation, RedactDatabaseError(err))
+	return newRedactedDatabaseError(operation, err)
 }
 
 func ValidatePackage(root string) (PackagePlan, error) {
@@ -158,7 +202,7 @@ func ValidatePackage(root string) (PackagePlan, error) {
 }
 
 func (s *PackageSyncer) Plan(ctx context.Context, root string) (PackagePlan, error) {
-	plan, err := ValidatePackage(root)
+	plan, pkg, payload, err := loadPackageForSync(root)
 	if err != nil {
 		return PackagePlan{}, err
 	}
@@ -166,22 +210,41 @@ func (s *PackageSyncer) Plan(ctx context.Context, root string) (PackagePlan, err
 	if s == nil || s.db == nil {
 		return PackagePlan{}, errors.New("plan package: database is unavailable")
 	}
-	var digest, databaseName, libraryKey string
-	err = s.db.QueryRowContext(ctx, `SELECT content_digest, target_database, l.key FROM theory_package_imports i JOIN theory_libraries l ON l.id=i.library_id WHERE package_id=$1`, plan.PackageID).Scan(&digest, &databaseName, &libraryKey)
-	if err == nil {
-		if digest != plan.ContentDigest || libraryKey != s.libraryKey {
-			return PackagePlan{}, fmt.Errorf("plan package: %w", ErrPackageConflict)
-		}
-		var currentDatabase string
-		if err := s.db.QueryRowContext(ctx, `SELECT current_database()`).Scan(&currentDatabase); err != nil {
-			return PackagePlan{}, RedactDatabaseError(err)
-		}
-		if databaseName != currentDatabase {
-			return PackagePlan{}, fmt.Errorf("plan package: target database mismatch: %w", ErrPackageConflict)
-		}
-		plan.NoOp = true
-	} else if !errors.Is(err, sql.ErrNoRows) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
 		return PackagePlan{}, RedactDatabaseError(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var currentDatabase string
+	if err := tx.QueryRowContext(ctx, `SELECT current_database()`).Scan(&currentDatabase); err != nil {
+		return PackagePlan{}, RedactDatabaseError(err)
+	}
+	payloadSHA256, err := postgresJSONBSHA256(ctx, tx, payload)
+	if err != nil {
+		return PackagePlan{}, err
+	}
+	stored, found, err := loadExistingPackageImport(ctx, tx, plan.PackageID, false)
+	if err != nil {
+		return PackagePlan{}, err
+	}
+	if found {
+		expected := expectedPackageImport{
+			PackageID: plan.PackageID, ContentDigest: plan.ContentDigest, PackageDigest: plan.PackageDigest,
+			SchemaVersion: pkg.Manifest.SchemaVersion, TargetDatabase: currentDatabase, LibraryKey: s.libraryKey,
+			DesiredVersion: desiredReleaseVersion(pkg.Manifest.RoundID), Payload: payload, PayloadSHA256: payloadSHA256,
+		}
+		disposition, err := inspectExistingPackageImport(ctx, tx, expected, stored)
+		if err != nil {
+			return PackagePlan{}, fmt.Errorf("plan package: %w", err)
+		}
+		if disposition == existingImportRepair {
+			plan.Operation = "repair"
+		} else {
+			plan.NoOp = true
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return PackagePlan{}, databaseFailure("commit package plan", err)
 	}
 	return plan, nil
 }
@@ -253,6 +316,113 @@ type stagedPackage struct {
 	Previews  []packagePreview  `json:"previews"`
 }
 
+type packageQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type existingPackageImport struct {
+	ID, LibraryID                                    int64
+	DesiredVersion                                   int
+	PackageID, ContentDigest, PackageDigest          string
+	SchemaVersion, TargetDatabase, LibraryKey, State string
+	PayloadSHA256, ReceiptSHA256, HashContract       string
+	Payload, Fingerprints                            []byte
+}
+
+type expectedPackageImport struct {
+	PackageID, ContentDigest, PackageDigest   string
+	SchemaVersion, TargetDatabase, LibraryKey string
+	DesiredVersion                            int
+	Payload                                   []byte
+	PayloadSHA256                             string
+}
+
+type existingImportDisposition string
+
+const (
+	existingImportNoOp   existingImportDisposition = "noop"
+	existingImportRepair existingImportDisposition = "repair"
+)
+
+func loadPackageForSync(root string) (PackagePlan, stagedPackage, []byte, error) {
+	plan, err := ValidatePackage(root)
+	if err != nil {
+		return PackagePlan{}, stagedPackage{}, nil, err
+	}
+	pkg, payload, _, err := loadStagedPackage(root, plan)
+	if err != nil {
+		return PackagePlan{}, stagedPackage{}, nil, err
+	}
+	after, err := ValidatePackage(root)
+	if err != nil || after.ContentDigest != plan.ContentDigest || after.PackageDigest != plan.PackageDigest {
+		return PackagePlan{}, stagedPackage{}, nil, fmt.Errorf("package changed while reading: %w", ErrPackageConflict)
+	}
+	return plan, pkg, payload, nil
+}
+
+func loadExistingPackageImport(ctx context.Context, queryer packageQueryer, packageID string, forUpdate bool) (existingPackageImport, bool, error) {
+	query := `SELECT i.id,i.library_id,i.package_id,i.content_digest,i.package_digest,i.schema_version,i.target_database,l.key,i.desired_release_version,i.state,i.payload,i.payload_sha256,i.payload_receipt_sha256,i.payload_hash_contract,i.object_fingerprints FROM theory_package_imports i JOIN theory_libraries l ON l.id=i.library_id WHERE i.package_id=$1`
+	if forUpdate {
+		query += ` FOR UPDATE OF i`
+	}
+	var stored existingPackageImport
+	err := queryer.QueryRowContext(ctx, query, packageID).Scan(
+		&stored.ID, &stored.LibraryID, &stored.PackageID, &stored.ContentDigest, &stored.PackageDigest,
+		&stored.SchemaVersion, &stored.TargetDatabase, &stored.LibraryKey, &stored.DesiredVersion,
+		&stored.State, &stored.Payload, &stored.PayloadSHA256, &stored.ReceiptSHA256,
+		&stored.HashContract, &stored.Fingerprints,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return existingPackageImport{}, false, nil
+	}
+	if err != nil {
+		return existingPackageImport{}, false, RedactDatabaseError(err)
+	}
+	return stored, true, nil
+}
+
+func inspectExistingPackageImport(ctx context.Context, queryer packageQueryer, expected expectedPackageImport, stored existingPackageImport) (existingImportDisposition, error) {
+	if stored.PackageID != expected.PackageID || stored.ContentDigest != expected.ContentDigest || stored.PackageDigest != expected.PackageDigest ||
+		stored.SchemaVersion != expected.SchemaVersion || stored.TargetDatabase != expected.TargetDatabase || stored.LibraryKey != expected.LibraryKey ||
+		stored.LibraryID <= 0 || stored.DesiredVersion != expected.DesiredVersion || stored.HashContract != payloadHashContract {
+		return "", fmt.Errorf("existing package identity mismatch: %w", ErrPackageConflict)
+	}
+	if !jsonBytesEqual(stored.Payload, expected.Payload) {
+		return "", fmt.Errorf("existing package payload differs: %w", ErrPackageConflict)
+	}
+	legacyZero := strings.Repeat("0", 64)
+	if stored.PayloadSHA256 == legacyZero && stored.ReceiptSHA256 == legacyZero {
+		if stored.State != "staged" {
+			return "", fmt.Errorf("legacy import is not staged: %w", ErrPackageConflict)
+		}
+		if err := verifyLegacyDatabaseFingerprint(ctx, queryer, stored.LibraryID, stored.Fingerprints); err != nil {
+			return "", err
+		}
+		if err := verifyPackageWorkflowState(ctx, queryer, stored.LibraryID, "staged", nil); err != nil {
+			return "", err
+		}
+		return existingImportRepair, nil
+	}
+	if stored.PayloadSHA256 == legacyZero || stored.ReceiptSHA256 == legacyZero {
+		return "", fmt.Errorf("partial legacy fingerprint contract: %w", ErrPackageConflict)
+	}
+	computedPayloadSHA256, err := postgresJSONBSHA256(ctx, queryer, stored.Payload)
+	if err != nil {
+		return "", err
+	}
+	computedReceiptSHA256, err := postgresReceiptSHA256(ctx, queryer, stored.PackageID, stored.ContentDigest, stored.PackageDigest, stored.PayloadSHA256, stored.SchemaVersion, stored.LibraryID, stored.TargetDatabase, stored.DesiredVersion)
+	if err != nil {
+		return "", err
+	}
+	if computedPayloadSHA256 != stored.PayloadSHA256 || stored.PayloadSHA256 != expected.PayloadSHA256 || computedReceiptSHA256 != stored.ReceiptSHA256 {
+		return "", fmt.Errorf("stored package payload receipt mismatch: %w", ErrPackageConflict)
+	}
+	if err := verifyDatabaseFingerprint(ctx, queryer, stored.LibraryID, stored.Fingerprints, stored.PayloadSHA256); err != nil {
+		return "", err
+	}
+	return existingImportNoOp, nil
+}
+
 type canonicalDatabaseSnapshot struct {
 	SchemaVersion string          `json:"schemaVersion"`
 	Cards         json.RawMessage `json:"cards"`
@@ -290,7 +460,7 @@ func (s *PackageSyncer) Stage(ctx context.Context, root string, actorID int64) (
 }
 
 func (s *PackageSyncer) stageOnce(ctx context.Context, root string, actorID int64) (PackagePlan, error) {
-	plan, err := ValidatePackage(root)
+	plan, pkg, payload, err := loadPackageForSync(root)
 	if err != nil {
 		return PackagePlan{}, err
 	}
@@ -299,15 +469,6 @@ func (s *PackageSyncer) stageOnce(ctx context.Context, root string, actorID int6
 	}
 	if actorID <= 0 {
 		return PackagePlan{}, ErrActorInvalid
-	}
-	pkg, payload, _, err := loadStagedPackage(root, plan)
-	if err != nil {
-		return PackagePlan{}, err
-	}
-	// Close the validation/read race: all files and digests must still validate after loading.
-	after, err := ValidatePackage(root)
-	if err != nil || after.ContentDigest != plan.ContentDigest || after.PackageDigest != plan.PackageDigest {
-		return PackagePlan{}, fmt.Errorf("stage package changed while reading: %w", ErrPackageConflict)
 	}
 	desiredVersion := desiredReleaseVersion(pkg.Manifest.RoundID)
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
@@ -333,38 +494,31 @@ func (s *PackageSyncer) stageOnce(ctx context.Context, root string, actorID int6
 	if err != nil {
 		return PackagePlan{}, err
 	}
-	var existingID, existingLibraryID int64
-	var existingDigest, existingPackageDigest, existingSchemaVersion, existingDatabase, existingLibrary, existingState, existingPayloadSHA, existingReceiptSHA, existingHashContract string
-	var existingDesiredVersion int
-	var existingPayload, existingFingerprints []byte
-	err = tx.QueryRowContext(ctx, `SELECT i.id,i.library_id,i.content_digest,i.package_digest,i.schema_version,i.target_database,l.key,i.desired_release_version,i.state,i.payload,i.payload_sha256,i.payload_receipt_sha256,i.payload_hash_contract,i.object_fingerprints FROM theory_package_imports i JOIN theory_libraries l ON l.id=i.library_id WHERE i.package_id=$1 FOR UPDATE OF i`, plan.PackageID).Scan(&existingID, &existingLibraryID, &existingDigest, &existingPackageDigest, &existingSchemaVersion, &existingDatabase, &existingLibrary, &existingDesiredVersion, &existingState, &existingPayload, &existingPayloadSHA, &existingReceiptSHA, &existingHashContract, &existingFingerprints)
-	if err == nil {
-		if existingDigest != plan.ContentDigest || existingPackageDigest != plan.PackageDigest || existingSchemaVersion != pkg.Manifest.SchemaVersion || existingDatabase != currentDatabase || existingLibrary != s.libraryKey || existingDesiredVersion != desiredVersion || existingHashContract != payloadHashContract {
-			return PackagePlan{}, fmt.Errorf("stage package identity mismatch: %w", ErrPackageConflict)
+	stored, found, err := loadExistingPackageImport(ctx, tx, plan.PackageID, true)
+	if err != nil {
+		return PackagePlan{}, err
+	}
+	if found {
+		expected := expectedPackageImport{
+			PackageID: plan.PackageID, ContentDigest: plan.ContentDigest, PackageDigest: plan.PackageDigest,
+			SchemaVersion: pkg.Manifest.SchemaVersion, TargetDatabase: currentDatabase, LibraryKey: s.libraryKey,
+			DesiredVersion: desiredVersion, Payload: payload, PayloadSHA256: payloadSHA256,
 		}
-		if !jsonBytesEqual(existingPayload, payload) {
-			return PackagePlan{}, fmt.Errorf("stage package payload differs from stored import: %w", ErrPackageConflict)
+		disposition, err := inspectExistingPackageImport(ctx, tx, expected, stored)
+		if err != nil {
+			return PackagePlan{}, fmt.Errorf("stage package: %w", err)
 		}
-		legacyZero := strings.Repeat("0", 64)
-		if existingPayloadSHA == legacyZero && existingReceiptSHA == legacyZero {
-			if existingState != "staged" {
-				return PackagePlan{}, fmt.Errorf("legacy import is not staged: %w", ErrPackageConflict)
-			}
-			if err := verifyLegacyDatabaseFingerprint(ctx, tx, existingLibraryID, existingFingerprints); err != nil {
-				return PackagePlan{}, err
-			}
-			if err := verifyPackageWorkflowState(ctx, tx, existingLibraryID, "staged", nil); err != nil {
-				return PackagePlan{}, err
-			}
-			newFingerprints, err := databaseFingerprintJSON(ctx, tx, existingLibraryID, payloadSHA256)
+		if disposition == existingImportRepair {
+			newFingerprints, err := databaseFingerprintJSON(ctx, tx, stored.LibraryID, payloadSHA256)
 			if err != nil {
 				return PackagePlan{}, err
 			}
-			payloadReceiptSHA256, err := postgresReceiptSHA256(ctx, tx, plan.PackageID, plan.ContentDigest, plan.PackageDigest, payloadSHA256, pkg.Manifest.SchemaVersion, existingLibraryID, currentDatabase, desiredVersion)
+			payloadReceiptSHA256, err := postgresReceiptSHA256(ctx, tx, plan.PackageID, plan.ContentDigest, plan.PackageDigest, payloadSHA256, pkg.Manifest.SchemaVersion, stored.LibraryID, currentDatabase, desiredVersion)
 			if err != nil {
 				return PackagePlan{}, err
 			}
-			result, err := tx.ExecContext(ctx, `UPDATE theory_package_imports SET payload_sha256=$2,payload_receipt_sha256=$3,object_fingerprints=$4::jsonb,update_time=now() WHERE id=$1 AND state='staged' AND payload_sha256=$5 AND payload_receipt_sha256=$5`, existingID, payloadSHA256, payloadReceiptSHA256, newFingerprints, legacyZero)
+			legacyZero := strings.Repeat("0", 64)
+			result, err := tx.ExecContext(ctx, `UPDATE theory_package_imports SET payload_sha256=$2,payload_receipt_sha256=$3,object_fingerprints=$4::jsonb,update_time=now() WHERE id=$1 AND state='staged' AND payload_sha256=$5 AND payload_receipt_sha256=$5`, stored.ID, payloadSHA256, payloadReceiptSHA256, newFingerprints, legacyZero)
 			if err != nil {
 				return PackagePlan{}, databaseFailure("repair legacy package import", err)
 			}
@@ -378,33 +532,12 @@ func (s *PackageSyncer) stageOnce(ctx context.Context, root string, actorID int6
 			}
 			return plan, nil
 		}
-		if existingPayloadSHA == legacyZero || existingReceiptSHA == legacyZero {
-			return PackagePlan{}, fmt.Errorf("partial legacy fingerprint contract: %w", ErrPackageConflict)
-		}
-		computedExistingSHA, err := postgresJSONBSHA256(ctx, tx, existingPayload)
-		if err != nil {
-			return PackagePlan{}, err
-		}
-		computedReceiptSHA, err := postgresReceiptSHA256(ctx, tx, plan.PackageID, plan.ContentDigest, plan.PackageDigest, existingPayloadSHA, existingSchemaVersion, existingLibraryID, existingDatabase, existingDesiredVersion)
-		if err != nil {
-			return PackagePlan{}, err
-		}
-		if computedExistingSHA != existingPayloadSHA || existingPayloadSHA != payloadSHA256 || computedReceiptSHA != existingReceiptSHA {
-			return PackagePlan{}, fmt.Errorf("stored package payload receipt mismatch: %w", ErrPackageConflict)
-		}
-		if err := verifyDatabaseFingerprint(ctx, tx, existingLibraryID, existingFingerprints, existingPayloadSHA); err != nil {
-			return PackagePlan{}, err
-		}
 		plan.Operation, plan.NoOp = "stage", true
 		if err := tx.Commit(); err != nil {
 			return PackagePlan{}, databaseFailure("commit idempotent stage", err)
 		}
 		return plan, nil
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return PackagePlan{}, RedactDatabaseError(err)
-	}
-
 	var libraryID int64
 	var currentVersion int
 	err = tx.QueryRowContext(ctx, `SELECT id, current_version FROM theory_libraries WHERE key=$1 FOR UPDATE`, s.libraryKey).Scan(&libraryID, &currentVersion)
@@ -701,9 +834,9 @@ func databaseFingerprintJSON(ctx context.Context, tx *sql.Tx, libraryID int64, p
 	return encoded, nil
 }
 
-func loadCanonicalDatabaseSnapshot(ctx context.Context, tx *sql.Tx, libraryID int64) (canonicalDatabaseSnapshot, error) {
+func loadCanonicalDatabaseSnapshot(ctx context.Context, queryer packageQueryer, libraryID int64) (canonicalDatabaseSnapshot, error) {
 	var raw []byte
-	if err := tx.QueryRowContext(ctx, `SELECT public.theory_package_database_snapshot($1)`, libraryID).Scan(&raw); err != nil {
+	if err := queryer.QueryRowContext(ctx, `SELECT public.theory_package_database_snapshot($1)`, libraryID).Scan(&raw); err != nil {
 		return canonicalDatabaseSnapshot{}, databaseFailure("load database snapshot", err)
 	}
 	var snapshot canonicalDatabaseSnapshot
@@ -713,7 +846,7 @@ func loadCanonicalDatabaseSnapshot(ctx context.Context, tx *sql.Tx, libraryID in
 	return snapshot, nil
 }
 
-func verifyDatabaseFingerprint(ctx context.Context, tx *sql.Tx, libraryID int64, encoded []byte, payloadSHA256 string) error {
+func verifyDatabaseFingerprint(ctx context.Context, queryer packageQueryer, libraryID int64, encoded []byte, payloadSHA256 string) error {
 	var expected databaseFingerprint
 	if err := decodeStrictJSON(encoded, &expected); err != nil {
 		return fmt.Errorf("decode stored database fingerprint: %v: %w", err, ErrPackageConflict)
@@ -725,14 +858,14 @@ func verifyDatabaseFingerprint(ctx context.Context, tx *sql.Tx, libraryID int64,
 	if err != nil {
 		return fmt.Errorf("encode expected database snapshot: %w", err)
 	}
-	expectedDigest, err := postgresJSONBSHA256(ctx, tx, expectedPayload)
+	expectedDigest, err := postgresJSONBSHA256(ctx, queryer, expectedPayload)
 	if err != nil {
 		return err
 	}
 	if expectedDigest != expected.SHA256 {
 		return fmt.Errorf("stored database fingerprint digest invalid: %w", ErrPackageConflict)
 	}
-	current, err := loadCanonicalDatabaseSnapshot(ctx, tx, libraryID)
+	current, err := loadCanonicalDatabaseSnapshot(ctx, queryer, libraryID)
 	if err != nil {
 		return err
 	}
@@ -740,7 +873,7 @@ func verifyDatabaseFingerprint(ctx context.Context, tx *sql.Tx, libraryID int64,
 	if err != nil {
 		return fmt.Errorf("encode current database snapshot: %w", err)
 	}
-	currentDigest, err := postgresJSONBSHA256(ctx, tx, currentPayload)
+	currentDigest, err := postgresJSONBSHA256(ctx, queryer, currentPayload)
 	if err != nil {
 		return err
 	}
@@ -750,7 +883,7 @@ func verifyDatabaseFingerprint(ctx context.Context, tx *sql.Tx, libraryID int64,
 	return nil
 }
 
-func verifyLegacyDatabaseFingerprint(ctx context.Context, tx *sql.Tx, libraryID int64, encoded []byte) error {
+func verifyLegacyDatabaseFingerprint(ctx context.Context, queryer packageQueryer, libraryID int64, encoded []byte) error {
 	var expected legacyDatabaseFingerprint
 	if err := decodeStrictJSON(encoded, &expected); err != nil {
 		return fmt.Errorf("decode legacy database fingerprint: %v: %w", err, ErrPackageConflict)
@@ -763,14 +896,14 @@ func verifyLegacyDatabaseFingerprint(ctx context.Context, tx *sql.Tx, libraryID 
 		return fmt.Errorf("encode legacy database snapshot: %w", err)
 	}
 	legacyDigest := sha256.Sum256(expectedPayload)
-	postgresDigest, err := postgresJSONBSHA256(ctx, tx, expectedPayload)
+	postgresDigest, err := postgresJSONBSHA256(ctx, queryer, expectedPayload)
 	if err != nil {
 		return err
 	}
 	if fmt.Sprintf("%x", legacyDigest) != expected.SHA256 && postgresDigest != expected.SHA256 {
 		return fmt.Errorf("legacy database fingerprint digest invalid: %w", ErrPackageConflict)
 	}
-	current, err := loadCanonicalDatabaseSnapshot(ctx, tx, libraryID)
+	current, err := loadCanonicalDatabaseSnapshot(ctx, queryer, libraryID)
 	if err != nil {
 		return err
 	}
@@ -779,7 +912,7 @@ func verifyLegacyDatabaseFingerprint(ctx context.Context, tx *sql.Tx, libraryID 
 		return err
 	}
 	currentLegacyDigest := sha256.Sum256(currentPayload)
-	currentPostgresDigest, err := postgresJSONBSHA256(ctx, tx, currentPayload)
+	currentPostgresDigest, err := postgresJSONBSHA256(ctx, queryer, currentPayload)
 	if err != nil {
 		return err
 	}
@@ -827,9 +960,9 @@ func completeSnapshotContract(snapshot canonicalDatabaseSnapshot) bool {
 	return true
 }
 
-func postgresJSONBSHA256(ctx context.Context, tx *sql.Tx, payload []byte) (string, error) {
+func postgresJSONBSHA256(ctx context.Context, queryer packageQueryer, payload []byte) (string, error) {
 	var digest string
-	if err := tx.QueryRowContext(ctx, `SELECT public.theory_package_jsonb_sha256($1::jsonb)`, payload).Scan(&digest); err != nil {
+	if err := queryer.QueryRowContext(ctx, `SELECT public.theory_package_jsonb_sha256($1::jsonb)`, payload).Scan(&digest); err != nil {
 		return "", databaseFailure("hash JSONB payload", err)
 	}
 	if !isLowerSHA256(digest) {
@@ -838,9 +971,9 @@ func postgresJSONBSHA256(ctx context.Context, tx *sql.Tx, payload []byte) (strin
 	return digest, nil
 }
 
-func postgresReceiptSHA256(ctx context.Context, tx *sql.Tx, packageID, contentDigest, packageDigest, payloadSHA256, schemaVersion string, libraryID int64, targetDatabase string, desiredReleaseVersion int) (string, error) {
+func postgresReceiptSHA256(ctx context.Context, queryer packageQueryer, packageID, contentDigest, packageDigest, payloadSHA256, schemaVersion string, libraryID int64, targetDatabase string, desiredReleaseVersion int) (string, error) {
 	var digest string
-	if err := tx.QueryRowContext(ctx, `SELECT public.theory_package_receipt_sha256($1,$2,$3,$4,$5,$6,$7,$8)`, packageID, contentDigest, packageDigest, payloadSHA256, schemaVersion, libraryID, targetDatabase, desiredReleaseVersion).Scan(&digest); err != nil {
+	if err := queryer.QueryRowContext(ctx, `SELECT public.theory_package_receipt_sha256($1,$2,$3,$4,$5,$6,$7,$8)`, packageID, contentDigest, packageDigest, payloadSHA256, schemaVersion, libraryID, targetDatabase, desiredReleaseVersion).Scan(&digest); err != nil {
 		return "", databaseFailure("hash package receipt", err)
 	}
 	if !isLowerSHA256(digest) {
@@ -1196,7 +1329,7 @@ func verifyReadyRelease(ctx context.Context, tx *sql.Tx, releaseID int64, pkg st
 	return nil
 }
 
-func verifyPackageWorkflowState(ctx context.Context, tx *sql.Tx, libraryID int64, state string, reviewers map[ReviewType]int64) error {
+func verifyPackageWorkflowState(ctx context.Context, queryer packageQueryer, libraryID int64, state string, reviewers map[ReviewType]int64) error {
 	expectCard, expectPractice, expectRelation, expectWork := "draft", "draft", "draft", "registered"
 	if state == "promoted" {
 		expectCard, expectPractice, expectRelation, expectWork = "published", "published", "published", "reviewed"
@@ -1215,7 +1348,7 @@ func verifyPackageWorkflowState(ctx context.Context, tx *sql.Tx, libraryID int64
 	}
 	for _, check := range checks {
 		var count int
-		if err := tx.QueryRowContext(ctx, check.query, check.args...).Scan(&count); err != nil {
+		if err := queryer.QueryRowContext(ctx, check.query, check.args...).Scan(&count); err != nil {
 			return databaseFailure("verify workflow "+check.name, err)
 		}
 		if count != check.want {
@@ -1224,11 +1357,11 @@ func verifyPackageWorkflowState(ctx context.Context, tx *sql.Tx, libraryID int64
 	}
 	var verified int
 	if state == "staged" {
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM theory_card_sources s JOIN theory_cards c ON c.id=s.card_id WHERE c.library_id=$1 AND s.verified_by IS NULL AND s.verified_at IS NULL`, libraryID).Scan(&verified); err != nil {
+		if err := queryer.QueryRowContext(ctx, `SELECT count(*) FROM theory_card_sources s JOIN theory_cards c ON c.id=s.card_id WHERE c.library_id=$1 AND s.verified_by IS NULL AND s.verified_at IS NULL`, libraryID).Scan(&verified); err != nil {
 			return RedactDatabaseError(err)
 		}
 	} else {
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM theory_card_sources s JOIN theory_cards c ON c.id=s.card_id WHERE c.library_id=$1 AND s.verified_by=$2 AND s.verified_at IS NOT NULL`, libraryID, reviewers[ReviewSourceVerification]).Scan(&verified); err != nil {
+		if err := queryer.QueryRowContext(ctx, `SELECT count(*) FROM theory_card_sources s JOIN theory_cards c ON c.id=s.card_id WHERE c.library_id=$1 AND s.verified_by=$2 AND s.verified_at IS NOT NULL`, libraryID, reviewers[ReviewSourceVerification]).Scan(&verified); err != nil {
 			return RedactDatabaseError(err)
 		}
 	}

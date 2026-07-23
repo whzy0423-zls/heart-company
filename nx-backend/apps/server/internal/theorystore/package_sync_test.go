@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -31,6 +32,47 @@ func TestTheoryDatabaseURLPriorityAndRedaction(t *testing.T) {
 	}
 	if text := RedactDatabaseError(errors.New("connect postgres://theory:top-secret@db/theory failed")).Error(); strings.Contains(text, "top-secret") || strings.Contains(text, "postgres://") {
 		t.Fatalf("redacted error leaked DSN: %q", text)
+	}
+}
+
+func TestDatabaseErrorRedactionDoesNotExposeCauseChain(t *testing.T) {
+	secret := "postgres://theory:top-secret@db/theory"
+	for name, err := range map[string]error{
+		"generic":  RedactDatabaseError(fmt.Errorf("connect %s failed: %w", secret, ErrPackageConflict)),
+		"postgres": databaseFailure("stage package", errors.Join(ErrPackageConflict, &pgconn.PgError{Code: "23514", Message: "failed", Detail: secret})),
+	} {
+		t.Run(name, func(t *testing.T) {
+			outer := fmt.Errorf("outer operation: %w", err)
+			for _, text := range []string{err.Error(), fmt.Sprintf("%v", err), fmt.Sprintf("%+v", err), outer.Error(), fmt.Sprintf("%+v", outer)} {
+				if strings.Contains(text, "top-secret") || strings.Contains(text, "postgres://") {
+					t.Fatalf("redacted error leaked secret: %q", text)
+				}
+			}
+			if unwrapped := errors.Unwrap(err); unwrapped != nil {
+				t.Fatalf("redacted error exposed cause: %T %v", unwrapped, unwrapped)
+			}
+			for current := err; current != nil; current = errors.Unwrap(current) {
+				if text := fmt.Sprintf("%+v", current); strings.Contains(text, "top-secret") || strings.Contains(text, "postgres://") {
+					t.Fatalf("error chain leaked secret: %q", text)
+				}
+			}
+			if !errors.Is(err, ErrPackageConflict) || !errors.Is(outer, ErrPackageConflict) {
+				t.Fatalf("business sentinel classification lost: %v", err)
+			}
+			if name == "postgres" && !strings.Contains(err.Error(), "SQLSTATE 23514") {
+				t.Fatalf("safe SQLSTATE missing: %v", err)
+			}
+		})
+	}
+	if RedactDatabaseError(nil) != nil || databaseFailure("nil", nil) != nil {
+		t.Fatal("nil database error must remain nil")
+	}
+	if text := databaseFailure("unsafe state", &pgconn.PgError{Code: "23514 " + secret}).Error(); strings.Contains(text, secret) || strings.Contains(text, "SQLSTATE") {
+		t.Fatalf("unsafe SQLSTATE leaked: %q", text)
+	}
+	serialization := databaseFailure("serializable write", &pgconn.PgError{Code: "40001", Message: secret})
+	if !isSerializationFailure(serialization) || errors.Unwrap(serialization) != nil {
+		t.Fatalf("safe serialization classification lost: %v", serialization)
 	}
 }
 
@@ -191,6 +233,168 @@ func TestPackageSyncPostgres(t *testing.T) {
 	}
 	if _, err := syncer.Promote(ctx, "xinzhili-round-001", actorID); !errors.Is(err, ErrImportedContentChanged) {
 		t.Fatalf("modified ready release was accepted: %v", err)
+	}
+}
+
+func TestPlanUsesStageExistingImportIdentityContract(t *testing.T) {
+	db := openPackageTestDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, mutation string
+	}{
+		{"content digest", `content_digest=repeat('c',64)`},
+		{"package digest", `package_digest=repeat('d',64)`},
+		{"schema version", `schema_version='xinzhili.package.v999'`},
+		{"target database", `target_database='another_database'`},
+		{"desired version", `desired_release_version=desired_release_version+1`},
+		{"safety payload", `payload=jsonb_set(payload,'{cards,0,safety}','{"result":"tampered"}'::jsonb)`},
+		{"payload sha", `payload_sha256=repeat('a',64)`},
+		{"payload receipt", `payload_receipt_sha256=repeat('e',64)`},
+		{"fingerprint", `object_fingerprints=jsonb_set(object_fingerprints,'{sha256}',to_jsonb(repeat('f',64)))`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := "xinzhili_test_plan_identity_" + strings.ReplaceAll(tc.name, " ", "_")
+			cleanupPackageFixture(t, db, key)
+			defer cleanupPackageFixture(t, db, key)
+			actor := createPackageTestUser(t, db, key+"-actor")
+			syncer := NewPackageSyncer(db)
+			syncer.libraryKey = key
+			if _, err := syncer.Stage(ctx, roundPackageRoot(t), actor); err != nil {
+				t.Fatal(err)
+			}
+			setImportContractTrigger(t, db, false)
+			if _, err := db.Exec(`UPDATE theory_package_imports SET `+tc.mutation+` WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key); err != nil {
+				t.Fatal(err)
+			}
+			setImportContractTrigger(t, db, true)
+			if plan, err := syncer.Plan(ctx, roundPackageRoot(t)); !errors.Is(err, ErrPackageConflict) || plan.NoOp {
+				t.Fatalf("plan accepted identity mismatch: plan=%+v err=%v", plan, err)
+			}
+			if plan, err := syncer.Stage(ctx, roundPackageRoot(t), actor); !errors.Is(err, ErrPackageConflict) || plan.NoOp {
+				t.Fatalf("stage accepted identity mismatch: plan=%+v err=%v", plan, err)
+			}
+		})
+	}
+}
+
+func TestSharedExistingImportIdentityRejectsLibraryAndHashContractDrift(t *testing.T) {
+	expected := expectedPackageImport{
+		PackageID: "package", ContentDigest: "content", PackageDigest: "package-digest",
+		SchemaVersion: "schema", TargetDatabase: "database", LibraryKey: "library",
+		DesiredVersion: 1,
+	}
+	baseline := existingPackageImport{
+		ID: 1, LibraryID: 2, PackageID: expected.PackageID, ContentDigest: expected.ContentDigest,
+		PackageDigest: expected.PackageDigest, SchemaVersion: expected.SchemaVersion,
+		TargetDatabase: expected.TargetDatabase, LibraryKey: expected.LibraryKey,
+		DesiredVersion: expected.DesiredVersion, HashContract: payloadHashContract,
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*existingPackageImport)
+	}{
+		{"library key", func(value *existingPackageImport) { value.LibraryKey = "other" }},
+		{"library id", func(value *existingPackageImport) { value.LibraryID = 0 }},
+		{"hash contract", func(value *existingPackageImport) { value.HashContract = "legacy-go-json-v1" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stored := baseline
+			tc.mutate(&stored)
+			if _, err := inspectExistingPackageImport(context.Background(), nil, expected, stored); !errors.Is(err, ErrPackageConflict) {
+				t.Fatalf("shared identity accepted %s drift: %v", tc.name, err)
+			}
+		})
+	}
+}
+
+func TestPlanAndStageRejectImportMovedToAnotherLibraryID(t *testing.T) {
+	db := openPackageTestDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	key := "xinzhili_test_plan_library_id"
+	otherKey := key + "_other"
+	cleanupPackageFixture(t, db, key)
+	cleanupPackageFixture(t, db, otherKey)
+	defer cleanupPackageFixture(t, db, key)
+	actor := createPackageTestUser(t, db, key+"-actor")
+	syncer := NewPackageSyncer(db)
+	syncer.libraryKey = key
+	if _, err := syncer.Stage(ctx, roundPackageRoot(t), actor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO theory_libraries(key,name,created_by,updated_by) VALUES($1,'other',$2,$2)`, otherKey, actor); err != nil {
+		t.Fatal(err)
+	}
+	defer cleanupPackageFixture(t, db, otherKey)
+	setImportContractTrigger(t, db, false)
+	if _, err := db.Exec(`UPDATE theory_package_imports SET library_id=(SELECT id FROM theory_libraries WHERE key=$2) WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key, otherKey); err != nil {
+		t.Fatal(err)
+	}
+	setImportContractTrigger(t, db, true)
+	if _, err := syncer.Plan(ctx, roundPackageRoot(t)); !errors.Is(err, ErrPackageConflict) {
+		t.Fatalf("plan accepted moved import: %v", err)
+	}
+	if _, err := syncer.Stage(ctx, roundPackageRoot(t), actor); !errors.Is(err, ErrPackageConflict) {
+		t.Fatalf("stage accepted moved import: %v", err)
+	}
+}
+
+func TestPlanAndStageRejectPartialOrPromotedLegacyContracts(t *testing.T) {
+	db := openPackageTestDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, mutation string
+	}{
+		{"payload zero only", `payload_sha256=repeat('0',64)`},
+		{"receipt zero only", `payload_receipt_sha256=repeat('0',64)`},
+		{"promoted legacy", `payload_sha256=repeat('0',64),payload_receipt_sha256=repeat('0',64),object_fingerprints=object_fingerprints-'payloadSha256',state='promoted'`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := "xinzhili_test_plan_partial_" + strings.ReplaceAll(tc.name, " ", "_")
+			cleanupPackageFixture(t, db, key)
+			defer cleanupPackageFixture(t, db, key)
+			actor := createPackageTestUser(t, db, key+"-actor")
+			syncer := NewPackageSyncer(db)
+			syncer.libraryKey = key
+			if _, err := syncer.Stage(ctx, roundPackageRoot(t), actor); err != nil {
+				t.Fatal(err)
+			}
+			setImportContractTrigger(t, db, false)
+			if _, err := db.Exec(`UPDATE theory_package_imports SET `+tc.mutation+` WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key); err != nil {
+				t.Fatal(err)
+			}
+			setImportContractTrigger(t, db, true)
+			if _, err := syncer.Plan(ctx, roundPackageRoot(t)); !errors.Is(err, ErrPackageConflict) {
+				t.Fatalf("plan accepted %s: %v", tc.name, err)
+			}
+			if _, err := syncer.Stage(ctx, roundPackageRoot(t), actor); !errors.Is(err, ErrPackageConflict) {
+				t.Fatalf("stage accepted %s: %v", tc.name, err)
+			}
+		})
+	}
+}
+
+func TestPlanReportsNoOpAndLegacyRepairFromFullIdentity(t *testing.T) {
+	db := openPackageTestDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	key := "xinzhili_test_plan_repair"
+	cleanupPackageFixture(t, db, key)
+	defer cleanupPackageFixture(t, db, key)
+	actor := createPackageTestUser(t, db, key+"-actor")
+	syncer := NewPackageSyncer(db)
+	syncer.libraryKey = key
+	if _, err := syncer.Stage(ctx, roundPackageRoot(t), actor); err != nil {
+		t.Fatal(err)
+	}
+	if plan, err := syncer.Plan(ctx, roundPackageRoot(t)); err != nil || !plan.NoOp || plan.Operation != "stage" {
+		t.Fatalf("modern plan=%+v err=%v", plan, err)
+	}
+	downgradeImportToLegacy(t, db, key)
+	if plan, err := syncer.Plan(ctx, roundPackageRoot(t)); err != nil || plan.NoOp || plan.Operation != "repair" || plan.WriteAllowed {
+		t.Fatalf("legacy plan=%+v err=%v", plan, err)
 	}
 }
 
