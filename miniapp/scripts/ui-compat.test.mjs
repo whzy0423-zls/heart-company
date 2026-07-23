@@ -53,6 +53,10 @@ for (const file of ['src/pages/relation/relation.vue', 'src/pages/test/test.vue'
 }
 
 const indexPage = readFileSync('src/pages/index/index.vue', 'utf8')
+assert.match(indexPage, /<swiper\b(?=[^>]*class=["']home-carousel["'])(?=[^>]*v-if=["']carousel\.items\.length["'])/, 'home page should render the configured carousel first')
+assert.match(indexPage, /:autoplay=["'][^"']*carousel\.autoplay[^"']*!carouselPaused[^"']*["']/, 'home carousel should support configured autoplay and pause state')
+assert.match(indexPage, /refreshSiteConfig/, 'home page should refresh carousel configuration')
+assert.match(indexPage, /@error=["']removeCarouselItem\(item\.image\)["']/, 'home carousel should remove failed images')
 const homeFeatureCards = indexPage.match(/<view\b[^>]*role=["']button["'][^>]*>/g) || []
 assert.ok(homeFeatureCards.length >= 3, 'home page should keep non-chat feature cards exposed as button-like controls')
 for (const card of homeFeatureCards) {
