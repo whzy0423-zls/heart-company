@@ -1105,6 +1105,8 @@ const bookingDetailTemplate = stripMarkupAndCssComments(vueSection(bookingDetail
 const bookingDetailStyle = stripMarkupAndCssComments(vueSection(bookingDetailPage, 'style') || '')
 assertRootViewClasses(bookingDetailPage, bookingDetailPath, ['page-stack', 'ios-page', 'ios-safe-bottom'])
 assert.match(bookingDetailPage, /onLoad/, 'appointment detail should read its route ID on load')
+assert.match(bookingDetailPage, /onShow/, 'appointment detail should revalidate auth and reload after returning from a hidden page')
+assert.match(bookingDetailPage, /onHide/, 'appointment detail should clear private fields as soon as it becomes hidden')
 assert.match(bookingDetailPage, /normalizeBookingId\(query\?\.id\)/, 'appointment detail should normalize untrusted route IDs safely')
 assert.match(bookingDetailPage, /readBookingSession\(requestToken,\s*bookingId\)/, 'appointment detail should try the token-bound booking session first')
 assert.match(bookingDetailPage, /listBookingsApi\(\)/, 'appointment detail should fall back to the existing booking list API')
@@ -1155,6 +1157,7 @@ assert.match(staleDetailBody, /clearBookingSession\(\)/, 'appointment detail sta
 assert.doesNotMatch(staleDetailBody, /clearToken|showToast|switchTab|navigateTo|redirectTo/, 'appointment detail stale cleanup must not mutate or redirect the newer auth session')
 assert.match(bookingDetailPage, /statusCode\s*===\s*401[\s\S]*statusCode\s*===\s*403/, 'appointment detail should handle both 401 and 403')
 assert.match(bookingDetailPage, /onUnload\s*\(\s*\(\)\s*=>\s*\{[\s\S]*loadTicket\s*\+=\s*1[\s\S]*clearBookingSession\(\)/, 'appointment detail should invalidate pending work and clear session on unload')
+assert.match(bookingDetailPage, /onHide\s*\(\s*\(\)\s*=>\s*\{[\s\S]*loadTicket\s*\+=\s*1[\s\S]*booking\.value\s*=\s*null[\s\S]*clearBookingSession\(\)/, 'appointment detail should invalidate pending work and clear private detail on hide')
 assert.match(pageStyleDeclarations(bookingDetailStyle, '.detail-action'), /min-height:\s*88rpx\s*;/, 'appointment detail actions should keep an 88rpx touch target')
 
 

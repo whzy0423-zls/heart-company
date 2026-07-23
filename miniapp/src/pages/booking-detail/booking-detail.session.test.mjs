@@ -18,6 +18,8 @@ const modulePath = join(dir, 'booking-detail-session.mjs')
 const harnessPrelude = `
 const ref = (value) => ({ value })
 const onLoad = (handler) => { globalThis.__bookingDetailHarness.onLoad = handler }
+const onShow = (handler) => { globalThis.__bookingDetailHarness.onShow = handler }
+const onHide = (handler) => { globalThis.__bookingDetailHarness.onHide = handler }
 const onUnload = (handler) => { globalThis.__bookingDetailHarness.onUnload = handler }
 const listBookingsApi = () => globalThis.__bookingDetailHarness.listBookingsApi()
 const clearToken = () => globalThis.__bookingDetailHarness.clearToken()
@@ -102,6 +104,9 @@ async function createHarness() {
 
 async function openPage(page, state, id) {
   state.onLoad({ id })
+  assert.equal(typeof state.onShow, 'function', 'booking detail should register an onShow lifecycle handler')
+  assert.equal(typeof state.onHide, 'function', 'booking detail should register an onHide lifecycle handler')
+  state.onShow()
   await Promise.resolve()
   await Promise.resolve()
 }
@@ -124,6 +129,70 @@ try {
     assert.deepEqual(state.sessionReads, [{ bookingId: '42', token: 'token-a' }])
     assert.equal(state.listCalls, 0, 'a valid token-bound session should avoid the list fallback')
     assert.equal(page.booking.value.id, 42)
+  }
+
+  {
+    const { page, state } = await createHarness()
+    state.token = 'token-a'
+    state.listBookingsApi = async () => {
+      state.listCalls += 1
+      return { items: [{ id: 7, phone: '13800138000', message: 'A 的隐私留言' }] }
+    }
+
+    await openPage(page, state, '7')
+    assert.equal(state.listCalls, 1, 'the first onShow after onLoad must not duplicate the initial request')
+    assert.equal(page.booking.value.phone, '13800138000')
+
+    const clearsBeforeHide = state.sessionClearCalls
+    state.onHide()
+    assert.equal(page.booking.value, null, 'onHide should immediately remove the complete phone and message from visible refs')
+    assert.equal(page.loading.value, false, 'onHide should stop exposing a stale loading state')
+    assert.equal(state.sessionClearCalls, clearsBeforeHide + 1, 'onHide should immediately clear token-bound booking session data')
+
+    state.token = 'token-b'
+    state.listBookingsApi = async () => {
+      state.listCalls += 1
+      return { items: [{ id: '7', phone: '13900139000', message: 'B 的新留言' }] }
+    }
+    state.onShow()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    assert.equal(state.listCalls, 2, 'returning from a hidden page should reload under the current token')
+    assert.equal(page.booking.value.phone, '13900139000', 'returning after a token change must show only the new token detail')
+    assert.equal(page.booking.value.message, 'B 的新留言')
+    assert.equal(state.toasts.length, 0)
+    assert.equal(state.switches.length, 0)
+  }
+
+  {
+    const { page, state } = await createHarness()
+    const oldPending = deferred()
+    state.token = 'token-a'
+    state.listBookingsApi = () => {
+      state.listCalls += 1
+      return oldPending.promise
+    }
+    state.onLoad({ id: '7' })
+    assert.equal(typeof state.onShow, 'function')
+    assert.equal(typeof state.onHide, 'function')
+    state.onShow()
+    state.onHide()
+
+    state.token = 'token-b'
+    state.listBookingsApi = async () => {
+      state.listCalls += 1
+      return { items: [{ id: 7, phone: 'new-token' }] }
+    }
+    state.onShow()
+    await Promise.resolve()
+    await Promise.resolve()
+    oldPending.resolve({ items: [{ id: 7, phone: 'old-token' }] })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    assert.equal(page.booking.value.phone, 'new-token', 'a request invalidated by onHide must not overwrite the reloaded token detail')
+    assert.equal(state.token, 'token-b')
   }
 
   {

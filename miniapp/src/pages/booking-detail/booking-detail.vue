@@ -1,6 +1,6 @@
 <script setup>
 import { ref } from 'vue'
-import { onLoad, onUnload } from '@dcloudio/uni-app'
+import { onHide, onLoad, onShow, onUnload } from '@dcloudio/uni-app'
 import { listBookingsApi } from '../../api'
 import { clearToken, getToken } from '../../utils/auth'
 import {
@@ -20,9 +20,13 @@ const notFound = ref(false)
 let loadTicket = 0
 let routeBookingId = ''
 let redirecting = false
+let skipNextShow = false
+let pageHidden = false
 
 onLoad((query = {}) => {
   redirecting = false
+  skipNextShow = true
+  pageHidden = false
   const nextBookingId = normalizeBookingId(query?.id)
   if (routeBookingId && routeBookingId !== nextBookingId) {
     loadTicket += 1
@@ -32,8 +36,34 @@ onLoad((query = {}) => {
   loadBookingDetail()
 })
 
+onShow(() => {
+  if (skipNextShow) {
+    skipNextShow = false
+    return
+  }
+  if (!pageHidden) return
+
+  pageHidden = false
+  redirecting = false
+  routeBookingId = normalizeBookingId(routeBookingId)
+  loadBookingDetail()
+})
+
+onHide(() => {
+  loadTicket += 1
+  skipNextShow = false
+  pageHidden = true
+  booking.value = null
+  loading.value = false
+  loadError.value = ''
+  notFound.value = false
+  clearBookingSession()
+})
+
 onUnload(() => {
   loadTicket += 1
+  skipNextShow = false
+  pageHidden = false
   routeBookingId = ''
   booking.value = null
   loading.value = false
