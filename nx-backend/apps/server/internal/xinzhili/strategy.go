@@ -72,6 +72,7 @@ type Engine struct {
 	hasStableText    bool
 	highRisk         bool
 	silenceStartedAt *time.Time
+	deepSilenceAt    *time.Time
 
 	partialPrefix         string
 	partialFirstSeenAt    time.Time
@@ -87,11 +88,13 @@ func NewEngine(mode Mode, timing TimingConfig, clock Clock) *Engine {
 		panic("xinzhili: strategy Clock is required")
 	}
 	applyTimingDefaults(&timing)
+	now := clock.Now()
 	return &Engine{
 		mode:             mode,
 		timing:           timing,
 		clock:            clock,
-		sessionStartedAt: clock.Now(),
+		sessionStartedAt: now,
+		deepSilenceAt:    &now,
 	}
 }
 
@@ -107,8 +110,10 @@ func (e *Engine) Apply(signal Signal) []Action {
 		e.applySilence()
 	case SignalAssistantStarted:
 		e.assistantPlaying = true
+		e.deepSilenceAt = nil
 	case SignalAssistantStopped:
 		e.assistantPlaying = false
+		e.startDeepSilence()
 	case SignalTurnReset:
 		e.resetTurn()
 	case SignalSessionReset:
@@ -136,6 +141,7 @@ func (e *Engine) applySpeechStarted(signal Signal) []Action {
 	hadPending := e.silenceStartedAt != nil
 	interruptedAssistant := e.assistantPlaying
 	e.silenceStartedAt = nil
+	e.deepSilenceAt = nil
 	e.midSentencePrompted = false
 
 	var actions []Action
@@ -164,6 +170,7 @@ func (e *Engine) applyPartial(signal Signal) {
 	e.hasEverSpoken = true
 	e.hasValidText = true
 	e.highRisk = e.highRisk || signal.HighRisk
+	e.deepSilenceAt = nil
 
 	if e.mode != ModeArgument || !signal.Stable || utf8.RuneCountInString(text) < minimumArgumentPartialRunes {
 		e.clearPartialCandidate()
@@ -199,9 +206,14 @@ func (e *Engine) applyStableText(signal Signal) {
 	e.hasValidText = true
 	e.hasStableText = true
 	e.highRisk = e.highRisk || signal.HighRisk
+	e.deepSilenceAt = nil
+	if e.mode == ModeArgument && e.partialSeen && !sameSemanticPrefix(e.partialPrefix, text) {
+		e.clearPartialCandidate()
+	}
 }
 
 func (e *Engine) applySilence() {
+	e.startDeepSilence()
 	if !e.hasValidText || e.silenceStartedAt != nil {
 		return
 	}
@@ -271,7 +283,8 @@ func (e *Engine) proactiveAction(now time.Time) []Action {
 			return []Action{{Kind: ActionComfortPrompt, TextKey: "comfort.second_silence"}}
 		}
 	case ModeDeepListening:
-		if !e.deepPrompted && now.Sub(e.sessionStartedAt) >= time.Duration(e.timing.DeepListeningPromptMs)*time.Millisecond {
+		if !e.deepPrompted && !e.assistantPlaying && e.deepSilenceAt != nil &&
+			now.Sub(*e.deepSilenceAt) >= time.Duration(e.timing.DeepListeningPromptMs)*time.Millisecond {
 			e.deepPrompted = true
 			e.proactiveCount++
 			return []Action{{Kind: ActionComfortPrompt, TextKey: "deep_listening.silence"}}
@@ -297,10 +310,20 @@ func (e *Engine) resetTurn() {
 
 func (e *Engine) resetSession() {
 	e.resetTurn()
-	e.sessionStartedAt = e.clock.Now()
+	now := e.clock.Now()
+	e.sessionStartedAt = now
+	e.deepSilenceAt = &now
 	e.proactiveCount = 0
 	e.hasEverSpoken = false
 	e.deepPrompted = false
+}
+
+func (e *Engine) startDeepSilence() {
+	if e.mode != ModeDeepListening || e.deepSilenceAt != nil {
+		return
+	}
+	now := e.clock.Now()
+	e.deepSilenceAt = &now
 }
 
 func (e *Engine) clearPartialCandidate() {

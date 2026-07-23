@@ -148,6 +148,34 @@ func TestStrategyArgumentPartialRevisionCancelsCandidate(t *testing.T) {
 	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
 }
 
+func TestStrategyArgumentFinalRevisionCancelsCandidate(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeArgument, strategyTiming(), clock)
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "我永远都做不好", Stable: true, ArgumentCandidate: true})
+	clock.Advance(150 * time.Millisecond)
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "我永远都做不好这件事", Stable: true})
+	engine.Apply(Signal{Kind: SignalStableText, Transcript: "其实我只是今天有点累"})
+	engine.Apply(Signal{Kind: SignalSilence})
+
+	clock.Advance(350 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick())
+	clock.Advance(350 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
+}
+
+func TestStrategyArgumentMatchingFinalKeepsCandidate(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeArgument, strategyTiming(), clock)
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "我永远都做不好", Stable: true, ArgumentCandidate: true})
+	clock.Advance(150 * time.Millisecond)
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "我永远都做不好这件事", Stable: true})
+	engine.Apply(Signal{Kind: SignalStableText, Transcript: "我永远都做不好这件事情"})
+	engine.Apply(Signal{Kind: SignalSilence})
+
+	clock.Advance(350 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
+}
+
 func TestStrategyArgumentBreathAndNoiseDoNotTrigger(t *testing.T) {
 	clock := newStrategyFakeClock()
 	engine := NewEngine(ModeArgument, strategyTiming(), clock)
@@ -266,6 +294,38 @@ func TestStrategyDeepListeningLongSilencePromptsOnlyOnceAndNeverInterrupts(t *te
 	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionComfortPrompt, TextKey: "deep_listening.silence"})
 	clock.Advance(time.Minute)
 	assertStrategyActions(t, engine.Tick())
+}
+
+func TestStrategyDeepListeningDoesNotPromptDuringOngoingSpeech(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeDeepListening, strategyTiming(), clock)
+
+	clock.Advance(6 * time.Second)
+	engine.Apply(Signal{Kind: SignalSpeechStarted})
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "我还在慢慢讲", Stable: true})
+	clock.Advance(7 * time.Second)
+	assertStrategyActions(t, engine.Tick())
+
+	engine.Apply(Signal{Kind: SignalSilence})
+	clock.Advance(11999 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick())
+	clock.Advance(time.Millisecond)
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionComfortPrompt, TextKey: "deep_listening.silence"})
+}
+
+func TestStrategyDeepListeningDoesNotPromptWhileAssistantIsPlaying(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeDeepListening, strategyTiming(), clock)
+	engine.Apply(Signal{Kind: SignalAssistantStarted})
+
+	clock.Advance(12 * time.Second)
+	assertStrategyActions(t, engine.Tick())
+
+	engine.Apply(Signal{Kind: SignalAssistantStopped})
+	clock.Advance(11999 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick())
+	clock.Advance(time.Millisecond)
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionComfortPrompt, TextKey: "deep_listening.silence"})
 }
 
 func TestStrategySpeechDuringAssistantPlaybackAlwaysStopsAndCancelsFirst(t *testing.T) {
