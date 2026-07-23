@@ -648,6 +648,15 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
 .report__price-symbol { font-size: 28rpx; }
 .report__content { color: rgba(255, 255, 255, .94); font-size: 28rpx; line-height: 1.85; }
 .report__content-error { color: #fecdd3; font-size: 26rpx; line-height: 1.65; }
+.report__cta,
+.report__secondary,
+.result-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 24rpx;
+  line-height: 1.2;
+}
 .report__cta {
   width: 100%;
   min-height: 88rpx;

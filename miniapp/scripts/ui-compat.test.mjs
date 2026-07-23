@@ -1260,6 +1260,27 @@ for (const selector of ['.report__cta', '.report__secondary', '.result-actions b
   const declarations = pageStyleDeclarations(resultStyle, selector)
   assert.match(declarations, /min-height:\s*88rpx\s*;/, `${selector} should keep an 88rpx touch target`)
 }
+const reportButtonAlignmentRule = [...resultStyle.matchAll(/^[ \t]*([^{}]+?)\s*\{([^{}]*)\}/gm)]
+  .find(([, selectorText]) => {
+    const selectors = new Set(selectorText.split(',').map((selector) => selector.trim()))
+    return ['.report__cta', '.report__secondary', '.result-actions button'].every((selector) => selectors.has(selector))
+  })
+const reportButtonAlignmentDeclarations = reportButtonAlignmentRule?.[2]
+assert.ok(reportButtonAlignmentDeclarations, 'result report buttons should share one alignment CSS rule')
+for (const [property, expected, description] of [
+  ['display', 'flex', 'use flex layout for button-label alignment'],
+  ['align-items', 'center', 'vertically center their button labels'],
+  ['justify-content', 'center', 'horizontally center their button labels'],
+  ['padding', '0 24rpx', 'keep only horizontal 24rpx padding'],
+  ['line-height', '1.2', 'use the compact centered text line height'],
+]) {
+  const escapedExpected = expected.replace('.', '\\.')
+  assert.match(
+    reportButtonAlignmentDeclarations,
+    new RegExp(`${property}:\\s*${escapedExpected.replace(' ', '\\s+')}\\s*;`),
+    `shared report button alignment should ${description}`,
+  )
+}
 for (const selector of ['.report__intro', '.report__status', '.report__error', '.report__content', '.disclaimer']) {
   const fontSize = pageStyleDeclarations(resultStyle, selector)?.match(/font-size:\s*(\d+)rpx\s*;/)
   assert.ok(fontSize && Number(fontSize[1]) >= 24, `${selector} should keep at least 24rpx readable text`)
