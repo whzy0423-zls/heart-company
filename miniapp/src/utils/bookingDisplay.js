@@ -32,12 +32,12 @@ export function bookingValue(value) {
 
 export function bookingKindLabel(value) {
   const normalized = bookingValue(value)
-  return Object.hasOwn(BOOKING_KIND_LABELS, normalized) ? BOOKING_KIND_LABELS[normalized] : normalized
+  return Object.prototype.hasOwnProperty.call(BOOKING_KIND_LABELS, normalized) ? BOOKING_KIND_LABELS[normalized] : normalized
 }
 
 export function bookingStatusLabel(value) {
   const normalized = bookingValue(value)
-  return Object.hasOwn(BOOKING_STATUS_LABELS, normalized) ? BOOKING_STATUS_LABELS[normalized] : normalized
+  return Object.prototype.hasOwnProperty.call(BOOKING_STATUS_LABELS, normalized) ? BOOKING_STATUS_LABELS[normalized] : normalized
 }
 
 export function maskBookingPhone(value) {

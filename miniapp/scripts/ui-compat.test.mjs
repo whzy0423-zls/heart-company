@@ -10,6 +10,14 @@ assert.equal(
   packageJson.dependencies['@dcloudio/uni-h5'],
   packageJson.dependencies['@dcloudio/uni-app'],
 )
+for (const requiredTest of [
+  'src/pages/profile/profile.session.test.mjs',
+  'src/pages/booking-records/booking-records.session.test.mjs',
+  'src/utils/bookingDisplay.test.mjs',
+  'src/utils/bookingSession.test.mjs',
+]) {
+  assert.match(packageJson.scripts['test:config'], new RegExp(requiredTest.replaceAll('.', '\\.')), `test:config should run ${requiredTest}`)
+}
 assert.match(
   packageJson.scripts['test:config'],
   /node src\/pages\/booking-detail\/booking-detail\.session\.test\.mjs/,
@@ -957,8 +965,11 @@ const h5ProfileLogin = profilePage.match(/<!-- #ifdef H5 -->([\s\S]*?)<!-- #endi
 assert.match(h5ProfileLogin, /<button\b[^>]*\bdisabled\b[^>]*>请在微信小程序内登录<\/button>/, 'H5 profile login guidance should remain disabled')
 assert.doesNotMatch(h5ProfileLogin, /@click=["']login["']/, 'H5 profile guidance must not call WeChat login')
 const profileLoadAllBody = sourceBracedBody(profilePage, /async function\s+loadAll\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
-assert.match(profileLoadAllBody, /const loadedUser = await getUserInfoApi\(\)\s*if \(ticket !== loadTicket\) return\s*user\.value = loadedUser/, 'profile load should reject a stale user response before mutating session state')
-assert.match(profileLoadAllBody, /Promise\.allSettled\([\s\S]*?\)\s*if \(ticket !== loadTicket\) return\s*if \(rec\.status/, 'profile load should reject stale history responses before mutating lists')
+assert.match(profileLoadAllBody, /const requestToken = getToken\(\)/, 'profile load should bind requests to the token that started them')
+assert.match(profileLoadAllBody, /const loadedUser = await getUserInfoApi\(\)\s*if \(!isCurrentProfileLoad\(ticket, requestToken\)\)/, 'profile load should reject a stale user response before mutating session state')
+assert.match(profileLoadAllBody, /Promise\.allSettled\([\s\S]*?const historyAuthError[\s\S]*if \(!isCurrentProfileLoad\(ticket, requestToken, historyAuthError\)\)[\s\S]*if \(historyAuthError\)[\s\S]*handleAuthLoss\(ticket\)/, 'profile load should reject stale history responses and centralize current auth failures')
+assert.match(profilePage, /function\s+isCurrentProfileLoad\(ticket, token, error\)/, 'profile should centralize current-token checks for all overview requests')
+assert.match(profilePage, /function\s+invalidateStaleProfileLoad\(ticket = loadTicket\)/, 'profile should isolate stale-token cleanup from auth reset')
 assert.match(profilePage, /let sessionGeneration = 0/, 'profile should maintain an independent authentication generation')
 const profileLoginBody = sourceBracedBody(profilePage, /async function\s+login\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
 assert.match(profileLoginBody, /await ensureLogin\(\)\s*sessionGeneration \+= 1\s*generation = sessionGeneration\s*logged\.value = true[\s\S]*await loadAll\(\)\s*if \(!logged\.value \|\| generation !== sessionGeneration\) return\s*uni\.showToast\(\{ title: '登录成功'/, 'profile login should establish a generation and suppress stale success feedback')

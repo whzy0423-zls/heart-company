@@ -47,6 +47,15 @@ try {
   assert.equal(bookingStatusLabel('__proto__'), '__proto__')
   assert.equal(bookingStatusLabel(null), '未填写')
 
+  const nativeHasOwn = Object.hasOwn
+  try {
+    Object.hasOwn = undefined
+    assert.equal(bookingKindLabel('consult'), '1v1 咨询', 'kind labels should work without Object.hasOwn support')
+    assert.equal(bookingStatusLabel('pending'), '待确认', 'status labels should work without Object.hasOwn support')
+  } finally {
+    Object.hasOwn = nativeHasOwn
+  }
+
   assert.equal(bookingValue('学习沟通'), '学习沟通')
   assert.equal(bookingValue(0), '0')
   assert.equal(bookingValue(false), 'false')

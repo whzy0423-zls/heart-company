@@ -52,20 +52,74 @@ async function login() {
   }
 }
 
+function isAuthError(error) {
+  const statusCode = Number(error?.statusCode)
+  return Boolean(error?.authExpired || error?.authRequired || statusCode === 401 || statusCode === 403)
+}
+
+function isCurrentProfileLoad(ticket, token, error) {
+  if (ticket !== loadTicket) return false
+  const currentToken = getToken()
+  if (token === currentToken) return true
+  return Boolean(
+    !currentToken
+    && error?.authExpired
+    && error.requestToken === token,
+  )
+}
+
+function invalidateStaleProfileLoad(ticket = loadTicket) {
+  if (ticket !== loadTicket) return
+  sessionGeneration += 1
+  loadTicket += 1
+  user.value = null
+  records.value = []
+  bookings.value = []
+  recordsError.value = ''
+  bookingsError.value = ''
+  userAvatarFailed.value = false
+  profileLoading.value = false
+  logging.value = false
+  clearBookingSession()
+}
+
+function handleAuthLoss(ticket = loadTicket) {
+  if (ticket !== loadTicket) return
+  resetLogin()
+  uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' })
+}
+
 async function loadAll() {
+  const requestToken = getToken()
   const ticket = ++loadTicket
+  if (!requestToken) {
+    handleAuthLoss(ticket)
+    return
+  }
+
   profileLoading.value = true
   recordsError.value = ''
   bookingsError.value = ''
   try {
     const loadedUser = await getUserInfoApi()
-    if (ticket !== loadTicket) return
+    if (!isCurrentProfileLoad(ticket, requestToken)) {
+      invalidateStaleProfileLoad(ticket)
+      return
+    }
     user.value = loadedUser
     userAvatarFailed.value = false
   } catch (e) {
-    if (ticket !== loadTicket) return
-    resetLogin()
-    uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' })
+    if (!isCurrentProfileLoad(ticket, requestToken, e)) {
+      invalidateStaleProfileLoad(ticket)
+      return
+    }
+    if (isAuthError(e)) {
+      handleAuthLoss(ticket)
+      return
+    }
+    const message = userErrorMessage(e, '同步失败，重试')
+    recordsError.value = message
+    bookingsError.value = message
     profileLoading.value = false
     return
   }
@@ -75,7 +129,17 @@ async function loadAll() {
     listBookingsApi(),
   ])
 
-  if (ticket !== loadTicket) return
+  const historyAuthError = [rec, bk]
+    .find((result) => result.status === 'rejected' && isAuthError(result.reason))
+    ?.reason
+  if (!isCurrentProfileLoad(ticket, requestToken, historyAuthError)) {
+    invalidateStaleProfileLoad(ticket)
+    return
+  }
+  if (historyAuthError) {
+    handleAuthLoss(ticket)
+    return
+  }
   if (rec.status === 'fulfilled') {
     records.value = rec.value.items || []
   } else {
@@ -86,7 +150,7 @@ async function loadAll() {
   } else {
     bookingsError.value = userErrorMessage(bk.reason, '同步失败，重试')
   }
-  profileLoading.value = false
+  if (isCurrentProfileLoad(ticket, requestToken)) profileLoading.value = false
 }
 
 function typeName(id) {
