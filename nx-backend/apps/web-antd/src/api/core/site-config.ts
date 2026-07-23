@@ -1,7 +1,20 @@
 import { requestClient } from '#/api/request';
 
+export interface MiniappCarouselItem {
+  enabled: boolean;
+  image: string;
+}
+
+export interface MiniappCarouselConfig {
+  autoplay: boolean;
+  interval: number;
+  items: MiniappCarouselItem[];
+}
+
 export interface SiteConfig {
-  home: Record<string, any>;
+  home: {
+    miniappCarousel?: MiniappCarouselConfig;
+  } & Record<string, any>;
   navigation: {
     drawer: NavItem[];
     main: NavItem[];
@@ -38,7 +51,6 @@ export function getSiteConfigApi() {
 export function updateSiteConfigApi(data: SiteConfig) {
   return requestClient.put<SiteConfig>('/site-config', data);
 }
-
 
 export interface SiteBuildStatus {
   durationMs: number;

@@ -5,6 +5,31 @@ import (
 	"testing"
 )
 
+func TestDefaultMenusIncludeMiniappHomeManagement(t *testing.T) {
+	var foundCatalog bool
+	var foundHome bool
+	for _, menu := range defaultMenus {
+		switch menu.Name {
+		case "MiniappManage":
+			foundCatalog = true
+			if menu.ID != 1300 || menu.PID != 0 || menu.Path != "/miniapp" || menu.Type != "catalog" || menu.Sort != 12 || menu.Icon != "lucide:smartphone" || menu.Title != "小程序管理" {
+				t.Fatalf("unexpected miniapp management catalog: %+v", menu)
+			}
+		case "MiniappHome":
+			foundHome = true
+			if menu.ID != 1301 || menu.PID != 1300 || menu.Path != "/miniapp/home" || menu.Component != "/miniapp/home" || menu.AuthCode != "Website:Write" || menu.Type != "menu" || menu.Sort != 1 || menu.Icon != "lucide:images" || menu.Title != "首页管理" {
+				t.Fatalf("unexpected miniapp home management menu: %+v", menu)
+			}
+		}
+	}
+	if !foundCatalog {
+		t.Fatal("expected default menu MiniappManage")
+	}
+	if !foundHome {
+		t.Fatal("expected default menu MiniappHome")
+	}
+}
+
 func TestDefaultMenusIncludeRAGKnowledgeManagement(t *testing.T) {
 	var found bool
 	for _, menu := range defaultMenus {

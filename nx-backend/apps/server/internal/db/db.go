@@ -119,6 +119,8 @@ var defaultMenus = []seedMenu{
 	{ID: 311, PID: 300, Name: "WebsiteSignup", Path: "/website/signup", Component: "/site-config/signup", AuthCode: "Website:Write", Type: "menu", Sort: 11, Icon: "lucide:clipboard-edit", Title: "报名表单"},
 	{ID: 312, PID: 300, Name: "WebsiteJson", Path: "/website/json", Component: "/site-config/json", AuthCode: "Website:Write", Type: "menu", Sort: 12, Icon: "lucide:braces", Title: "JSON 高级"},
 	{ID: 314, PID: 300, Name: "WebsiteMindQuotes", Path: "/website/mind-quotes", Component: "/site-config/mind-quotes", AuthCode: "Website:Write", Type: "menu", Sort: 13, Icon: "lucide:sparkles", Title: "心语管理"},
+	{ID: 1300, PID: 0, Name: "MiniappManage", Path: "/miniapp", Type: "catalog", Sort: 12, Icon: "lucide:smartphone", Title: "小程序管理"},
+	{ID: 1301, PID: 1300, Name: "MiniappHome", Path: "/miniapp/home", Component: "/miniapp/home", AuthCode: "Website:Write", Type: "menu", Sort: 1, Icon: "lucide:images", Title: "首页管理"},
 	{ID: 500, PID: 0, Name: "CustomerManage", Path: "/customer", Type: "catalog", Sort: 15, Icon: "lucide:contact-round", Title: "客户管理"},
 	{ID: 501, PID: 500, Name: "CustomerSignupLeads", Path: "/customer/signups", Component: "/site-config/signup-leads", AuthCode: "Customer:Signup:List", Type: "menu", Sort: 1, Icon: "lucide:inbox", Title: "报名信息"},
 	{ID: 502, PID: 500, Name: "CustomerAppUsers", Path: "/customer/app-users", Component: "/customer/app-users", AuthCode: "Customer:App:List", Type: "menu", Sort: 2, Icon: "lucide:smartphone", Title: "App 客户"},

@@ -1,9 +1,39 @@
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { QUESTIONS } from '../../data/enneagramGame'
+import { getStoredSiteConfig, refreshSiteConfig } from '../../utils/siteConfig'
+import { filterFailedCarouselItems, normalizeHomeCarousel } from '../../utils/homeCarousel'
 
 const total = ref(QUESTIONS.length)
 const wheelVisible = ref(true)
+const carousel = ref(normalizeHomeCarousel())
+const carouselPaused = ref(false)
+const failedCarouselImages = new Set()
+
+function applyCarousel(config) {
+  carousel.value = filterFailedCarouselItems(normalizeHomeCarousel(config), failedCarouselImages)
+  if (carousel.value.items.length <= 1) carouselPaused.value = false
+}
+
+function removeCarouselItem(image) {
+  failedCarouselImages.add(image)
+  carousel.value = filterFailedCarouselItems(carousel.value, failedCarouselImages)
+}
+
+function toggleCarouselPaused() {
+  carouselPaused.value = !carouselPaused.value
+}
+
+onMounted(() => {
+  const cached = getStoredSiteConfig()
+  if (cached) applyCarousel(cached)
+
+  refreshSiteConfig()
+    .then(applyCarousel)
+    .catch(() => {
+      // 网络刷新失败时保留已经展示的首页内容。
+    })
+})
 
 function startTest() {
   uni.navigateTo({ url: '/pages/test/test' })
@@ -24,6 +54,34 @@ function hideWheel() {
 
 <template>
   <view class="wrap home page-stack ios-page ios-safe-bottom">
+    <swiper
+      v-if="carousel.items.length"
+      class="home-carousel"
+      :autoplay="carousel.items.length > 1 && carousel.autoplay && !carouselPaused"
+      :interval="carousel.interval"
+      :duration="450"
+      :circular="carousel.items.length > 1"
+      :indicator-dots="carousel.items.length > 1"
+    >
+      <swiper-item v-for="(item, index) in carousel.items" :key="item.image">
+        <image
+          class="home-carousel__image"
+          :src="item.image"
+          mode="aspectFill"
+          lazy-load
+          :aria-label="'首页轮播图 第' + (index + 1) + '张'"
+          @error="removeCarouselItem(item.image)"
+        />
+      </swiper-item>
+    </swiper>
+    <button
+      v-if="carousel.items.length > 1 && carousel.autoplay"
+      class="home-carousel__toggle"
+      hover-class="home-carousel__toggle--pressed"
+      :aria-label="carouselPaused ? '继续轮播图自动播放' : '暂停轮播图自动播放'"
+      @click="toggleCarouselPaused"
+    >{{ carouselPaused ? '继续轮播' : '暂停轮播' }}</button>
+
     <view class="home-nav">
       <view class="home-nav__copy">
         <text class="home-nav__brand">九型芯之力</text>
@@ -194,6 +252,38 @@ function hideWheel() {
   background:
     radial-gradient(circle at 8% 12%, rgba(75, 153, 255, .12), transparent 26%),
     radial-gradient(circle at 94% 28%, rgba(145, 92, 255, .11), transparent 24%);
+}
+.home-carousel {
+  width: 100%;
+  height: 300rpx;
+  overflow: hidden;
+  border-radius: 32rpx;
+  box-shadow: 0 24rpx 48rpx rgba(47, 69, 122, .16);
+}
+.home-carousel__image {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.home-carousel__toggle {
+  align-self: flex-end;
+  min-height: 64rpx;
+  margin-top: -16rpx;
+  padding: 0 24rpx;
+  border: 1rpx solid rgba(53, 73, 115, .12);
+  border-radius: 999rpx;
+  background: rgba(255, 255, 255, .92);
+  color: #475569;
+  font-size: 22rpx;
+  font-weight: 700;
+  line-height: 64rpx;
+  box-shadow: 0 10rpx 24rpx rgba(30, 47, 81, .08);
+}
+.home-carousel__toggle::after {
+  border: 0;
+}
+.home-carousel__toggle--pressed {
+  opacity: .72;
 }
 .home-nav {
   display: flex;

@@ -114,6 +114,36 @@ for (const file of ['src/pages/relation/relation.vue', 'src/pages/test/test.vue'
 }
 
 const indexPage = readFileSync('src/pages/index/index.vue', 'utf8')
+const homeTemplate = indexPage.match(/<template>([\s\S]*?)<\/template>/)?.[1] || ''
+const homeRoot = homeTemplate.match(/<view\s+class=["']wrap home page-stack ios-page ios-safe-bottom["']>([\s\S]*?)<\/view>/)?.[1] || ''
+const carouselStart = homeRoot.indexOf('<swiper')
+const homeNavStart = homeRoot.indexOf('<view class="home-nav">')
+
+assert.ok(carouselStart >= 0, 'home root should render a carousel before its navigation')
+assert.ok(homeNavStart >= 0, 'home root should render the home navigation')
+assert.ok(carouselStart < homeNavStart, 'home carousel should be the first home content block before home navigation')
+assert.match(homeRoot, /<swiper\b(?=[^>]*\bclass=["']home-carousel["'])(?=[^>]*\bv-if=["']carousel\.items\.length["'])[^>]*>/, 'home carousel should only render when it has slides')
+const carouselTag = homeRoot.match(/<swiper\b[\s\S]*?<\/swiper>/)?.[0] || ''
+assert.match(carouselTag, /:autoplay=["'][^"']*carousel\.items\.length\s*>\s*1[^"']*carousel\.autoplay[^"']*!carouselPaused[^"']*["']/, 'home carousel should only autoplay multiple unpaused slides')
+assert.match(carouselTag, /:interval=["']carousel\.interval["']/, 'home carousel should bind its configured interval')
+assert.match(carouselTag, /:circular=["'][^"']*carousel\.items\.length\s*>\s*1[^"']*["']/, 'home carousel should only loop when it has multiple slides')
+assert.match(carouselTag, /:indicator-dots=["'][^"']*carousel\.items\.length\s*>\s*1[^"']*["']/, 'home carousel should only show indicators when it has multiple slides')
+assert.match(carouselTag, /:duration=["']450["']/, 'home carousel should use the approved slide duration')
+assert.match(homeRoot, /<swiper-item\b(?=[^>]*\sv-for=["']\(item, index\) in carousel\.items["'])(?=[^>]*\s:key=["']item\.image["'])[^>]*>/, 'home carousel should key slides by their stable image URL')
+assert.match(homeRoot, /<image\b(?=[^>]*\s:src=["']item\.image["'])(?=[^>]*\smode=["']aspectFill["'])(?=[^>]*\blazy-load(?:=|\s|>))(?=[^>]*\s@error=["']removeCarouselItem\(item\.image\)["'])(?=[^>]*\s:aria-label=["'][^"]*index[^"]*)[^>]*\/>/, 'home carousel images should fill, lazy-load, describe their slide number, and remove only their failed slide')
+assert.match(indexPage, /import\s*\{[^}]*\bonMounted\b[^}]*\}\s*from\s*['"]vue['"]/, 'home page should load carousel configuration after mounting')
+assert.match(indexPage, /getStoredSiteConfig/, 'home page should apply cached site configuration first')
+assert.match(indexPage, /refreshSiteConfig/, 'home page should refresh carousel configuration in the background')
+assert.match(indexPage, /filterFailedCarouselItems/, 'home page should preserve failed-image filtering when applying cached and refreshed configuration')
+assert.match(indexPage, /failedCarouselImages\s*=\s*new Set\(\)/, 'home page should retain failed image URLs across configuration refreshes')
+assert.match(indexPage, /failedCarouselImages\.add\(image\)/, 'home page should remember each failed carousel image URL')
+const pauseControl = homeRoot.match(/<button\b[\s\S]*?\bclass=["']home-carousel__toggle["'][\s\S]*?<\/button>/)?.[0] || ''
+assert.ok(pauseControl, 'home carousel should expose a pause or resume control')
+assert.match(pauseControl, /\bv-if=["']carousel\.items\.length\s*>\s*1\s*&&\s*carousel\.autoplay["']/, 'home carousel pause or resume control should only render for multiple autoplay slides')
+assert.match(pauseControl, /@click=["']toggleCarouselPaused["']/, 'home carousel pause control should toggle autoplay')
+assert.match(pauseControl, /:aria-label=["'][^"]*carouselPaused[^"]*["']/, 'home carousel pause control should expose a state-aware accessible label')
+assert.match(homeRoot, /\{\{ carouselPaused \? ['"]继续轮播['"] : ['"]暂停轮播['"] \}\}/, 'home carousel pause control should show clear pause and resume text')
+
 const homeOpeningViews = indexPage.match(/<view\b[^>]*>/g) || []
 
 function staticClassTokens(tag) {
@@ -146,6 +176,17 @@ function standaloneStyleDeclarations(className) {
   const escapedClassName = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   return indexPage.match(new RegExp(`^[ \\t]*\\.${escapedClassName}\\s*\\{([^}]*)\\}`, 'm'))?.[1]
 }
+
+const homeCarouselStyle = standaloneStyleDeclarations('home-carousel')
+assert.ok(homeCarouselStyle, '.home-carousel should have a standalone CSS rule')
+assert.match(homeCarouselStyle, /\bwidth:\s*100%\s*;/, 'home carousel should fill the available width')
+assert.match(homeCarouselStyle, /\bheight:\s*300rpx\s*;/, 'home carousel should keep the approved 300rpx height')
+assert.match(homeCarouselStyle, /\boverflow:\s*hidden\s*;/, 'home carousel should clip its slide content')
+assert.match(homeCarouselStyle, /\bborder-radius:\s*32rpx\s*;/, 'home carousel should use the approved rounded corners')
+const homeCarouselImageStyle = standaloneStyleDeclarations('home-carousel__image')
+assert.ok(homeCarouselImageStyle, '.home-carousel__image should have a standalone CSS rule')
+assert.match(homeCarouselImageStyle, /\bwidth:\s*100%\s*;/, 'carousel images should fill carousel width')
+assert.match(homeCarouselImageStyle, /\bheight:\s*100%\s*;/, 'carousel images should fill carousel height')
 
 function assertKeyboardViewControl(tag, description, handler) {
   assert.match(tag, /\srole=["']button["']/, `${description} should use web button semantics`)
