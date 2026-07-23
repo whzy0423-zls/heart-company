@@ -604,6 +604,135 @@ func TestPromoteRejectsFingerprintContractTampering(t *testing.T) {
 	}
 }
 
+func TestStageRepairsLegacyImportAndThenPromotes(t *testing.T) {
+	db := openPackageTestDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	key := "xinzhili_test_legacy_repair"
+	cleanupPackageFixture(t, db, key)
+	defer cleanupPackageFixture(t, db, key)
+	actor := createPackageTestUser(t, db, key+"-actor")
+	syncer := NewPackageSyncer(db)
+	syncer.libraryKey = key
+	stageAndReviewPackage(t, db, syncer, key, actor)
+	downgradeImportToLegacy(t, db, key)
+	repaired, err := syncer.Stage(ctx, roundPackageRoot(t), actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repaired.Repaired || repaired.NoOp || repaired.Operation != "repair" {
+		t.Fatalf("repair result=%+v", repaired)
+	}
+	again, err := syncer.Stage(ctx, roundPackageRoot(t), actor)
+	if err != nil || !again.NoOp || again.Repaired {
+		t.Fatalf("post-repair stage=%+v err=%v", again, err)
+	}
+	if promoted, err := syncer.Promote(ctx, "xinzhili-round-001", actor); err != nil || promoted.ReleaseStatus != ReleaseStatusReady {
+		t.Fatalf("promote=%+v err=%v", promoted, err)
+	}
+}
+
+func TestStageLegacyRepairRejectsPayloadAndDatabaseChanges(t *testing.T) {
+	db := openPackageTestDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name   string
+		mutate func(*testing.T, *sql.DB, string)
+	}{
+		{"payload", func(t *testing.T, db *sql.DB, key string) {
+			setImportContractTrigger(t, db, false)
+			if _, err := db.Exec(`UPDATE theory_package_imports SET payload=jsonb_set(payload,'{previews,0,text}',to_jsonb('篡改'::text)) WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key); err != nil {
+				t.Fatal(err)
+			}
+			setImportContractTrigger(t, db, true)
+		}},
+		{"database", func(t *testing.T, db *sql.DB, key string) {
+			if _, err := db.Exec(`UPDATE theory_cards SET automatic_pattern='篡改' WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1) AND canonical_key='belief.behavior_not_identity'`, key); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := "xinzhili_test_legacy_changed_" + tc.name
+			cleanupPackageFixture(t, db, key)
+			defer cleanupPackageFixture(t, db, key)
+			actor := createPackageTestUser(t, db, key+"-actor")
+			syncer := NewPackageSyncer(db)
+			syncer.libraryKey = key
+			if _, err := syncer.Stage(ctx, roundPackageRoot(t), actor); err != nil {
+				t.Fatal(err)
+			}
+			downgradeImportToLegacy(t, db, key)
+			tc.mutate(t, db, key)
+			if result, err := syncer.Stage(ctx, roundPackageRoot(t), actor); err == nil || result.Repaired {
+				t.Fatalf("changed legacy repaired: %+v %v", result, err)
+			}
+		})
+	}
+}
+
+func TestConcurrentLegacyRepairIsIdempotent(t *testing.T) {
+	db := openPackageTestDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	key := "xinzhili_test_legacy_concurrent"
+	cleanupPackageFixture(t, db, key)
+	defer cleanupPackageFixture(t, db, key)
+	actor := createPackageTestUser(t, db, key+"-actor")
+	base := NewPackageSyncer(db)
+	base.libraryKey = key
+	if _, err := base.Stage(ctx, roundPackageRoot(t), actor); err != nil {
+		t.Fatal(err)
+	}
+	downgradeImportToLegacy(t, db, key)
+	type result struct {
+		plan PackagePlan
+		err  error
+	}
+	results := make(chan result, 2)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			syncer := NewPackageSyncer(db)
+			syncer.libraryKey = key
+			<-start
+			plan, err := syncer.Stage(ctx, roundPackageRoot(t), actor)
+			results <- result{plan, err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	repairs, noops := 0, 0
+	for result := range results {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if result.plan.Repaired {
+			repairs++
+		}
+		if result.plan.NoOp {
+			noops++
+		}
+	}
+	if repairs != 1 || noops != 1 {
+		t.Fatalf("repairs=%d noops=%d", repairs, noops)
+	}
+}
+
+func downgradeImportToLegacy(t *testing.T, db *sql.DB, key string) {
+	t.Helper()
+	setImportContractTrigger(t, db, false)
+	if _, err := db.Exec(`UPDATE theory_package_imports SET payload_sha256=repeat('0',64),payload_receipt_sha256=repeat('0',64),object_fingerprints=object_fingerprints-'payloadSha256' WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key); err != nil {
+		t.Fatal(err)
+	}
+	setImportContractTrigger(t, db, true)
+}
+
 func setImportContractTrigger(t *testing.T, db *sql.DB, enabled bool) {
 	t.Helper()
 	action := "DISABLE"

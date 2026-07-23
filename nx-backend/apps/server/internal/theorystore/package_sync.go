@@ -74,6 +74,7 @@ type PackagePlan struct {
 	Operation     string `json:"operation"`
 	WriteAllowed  bool   `json:"writeAllowed"`
 	NoOp          bool   `json:"noOp"`
+	Repaired      bool   `json:"repaired"`
 }
 
 type PackageSyncer struct {
@@ -268,6 +269,12 @@ type databaseFingerprint struct {
 	Snapshot      canonicalDatabaseSnapshot `json:"snapshot"`
 }
 
+type legacyDatabaseFingerprint struct {
+	SchemaVersion string                    `json:"schemaVersion"`
+	SHA256        string                    `json:"sha256"`
+	Snapshot      canonicalDatabaseSnapshot `json:"snapshot"`
+}
+
 func (s *PackageSyncer) Stage(ctx context.Context, root string, actorID int64) (PackagePlan, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		plan, err := s.stageOnce(ctx, root, actorID)
@@ -325,11 +332,55 @@ func (s *PackageSyncer) stageOnce(ctx context.Context, root string, actorID int6
 	if err := tx.QueryRowContext(ctx, `SELECT current_database()`).Scan(&currentDatabase); err != nil {
 		return PackagePlan{}, RedactDatabaseError(err)
 	}
-	var existingDigest, existingDatabase, existingLibrary string
-	err = tx.QueryRowContext(ctx, `SELECT i.content_digest, i.target_database, l.key FROM theory_package_imports i JOIN theory_libraries l ON l.id=i.library_id WHERE i.package_id=$1 FOR UPDATE OF i`, plan.PackageID).Scan(&existingDigest, &existingDatabase, &existingLibrary)
+	var existingID, existingLibraryID int64
+	var existingDigest, existingPackageDigest, existingDatabase, existingLibrary, existingState, existingPayloadSHA, existingReceiptSHA string
+	var existingPayload, existingFingerprints []byte
+	err = tx.QueryRowContext(ctx, `SELECT i.id,i.library_id,i.content_digest,i.package_digest,i.target_database,l.key,i.state,i.payload,i.payload_sha256,i.payload_receipt_sha256,i.object_fingerprints FROM theory_package_imports i JOIN theory_libraries l ON l.id=i.library_id WHERE i.package_id=$1 FOR UPDATE OF i`, plan.PackageID).Scan(&existingID, &existingLibraryID, &existingDigest, &existingPackageDigest, &existingDatabase, &existingLibrary, &existingState, &existingPayload, &existingPayloadSHA, &existingReceiptSHA, &existingFingerprints)
 	if err == nil {
-		if existingDigest != plan.ContentDigest || existingDatabase != currentDatabase || existingLibrary != s.libraryKey {
+		if existingDigest != plan.ContentDigest || existingPackageDigest != plan.PackageDigest || existingDatabase != currentDatabase || existingLibrary != s.libraryKey {
 			return PackagePlan{}, fmt.Errorf("stage package identity mismatch: %w", ErrPackageConflict)
+		}
+		if !jsonBytesEqual(existingPayload, payload) {
+			return PackagePlan{}, fmt.Errorf("stage package payload differs from stored import: %w", ErrPackageConflict)
+		}
+		legacyZero := strings.Repeat("0", 64)
+		if existingPayloadSHA == legacyZero && existingReceiptSHA == legacyZero {
+			if existingState != "staged" {
+				return PackagePlan{}, fmt.Errorf("legacy import is not staged: %w", ErrPackageConflict)
+			}
+			if err := verifyLegacyDatabaseFingerprint(ctx, tx, existingLibraryID, existingFingerprints); err != nil {
+				return PackagePlan{}, err
+			}
+			if err := verifyPackageWorkflowState(ctx, tx, existingLibraryID, "staged", nil); err != nil {
+				return PackagePlan{}, err
+			}
+			newFingerprints, err := databaseFingerprintJSON(ctx, tx, existingLibraryID, payloadSHA256)
+			if err != nil {
+				return PackagePlan{}, err
+			}
+			result, err := tx.ExecContext(ctx, `UPDATE theory_package_imports SET payload_sha256=$2,payload_receipt_sha256=$3,object_fingerprints=$4::jsonb,update_time=now() WHERE id=$1 AND state='staged' AND payload_sha256=$5 AND payload_receipt_sha256=$5`, existingID, payloadSHA256, payloadReceiptSHA256, newFingerprints, legacyZero)
+			if err != nil {
+				return PackagePlan{}, databaseFailure("repair legacy package import", err)
+			}
+			affected, _ := result.RowsAffected()
+			if affected != 1 {
+				return PackagePlan{}, fmt.Errorf("legacy package repair lost concurrency race: %w", ErrPackageConflict)
+			}
+			plan.Operation, plan.WriteAllowed, plan.Repaired = "repair", true, true
+			if err := tx.Commit(); err != nil {
+				return PackagePlan{}, databaseFailure("commit legacy package repair", err)
+			}
+			return plan, nil
+		}
+		if existingPayloadSHA == legacyZero || existingReceiptSHA == legacyZero {
+			return PackagePlan{}, fmt.Errorf("partial legacy fingerprint contract: %w", ErrPackageConflict)
+		}
+		computedExistingSHA, err := canonicalJSONSHA256(existingPayload)
+		if err != nil || computedExistingSHA != existingPayloadSHA || existingPayloadSHA != payloadSHA256 || payloadContractReceiptSHA256(plan.PackageID, plan.ContentDigest, plan.PackageDigest, existingPayloadSHA) != existingReceiptSHA {
+			return PackagePlan{}, fmt.Errorf("stored package payload receipt mismatch: %w", ErrPackageConflict)
+		}
+		if err := verifyDatabaseFingerprint(ctx, tx, existingLibraryID, existingFingerprints, existingPayloadSHA); err != nil {
+			return PackagePlan{}, err
 		}
 		plan.Operation, plan.NoOp = "stage", true
 		if err := tx.Commit(); err != nil {
@@ -680,6 +731,37 @@ func verifyDatabaseFingerprint(ctx context.Context, tx *sql.Tx, libraryID int64,
 	currentPayload, err := json.Marshal(current)
 	if err != nil {
 		return fmt.Errorf("encode current database snapshot: %w", err)
+	}
+	currentDigest := sha256.Sum256(currentPayload)
+	if fmt.Sprintf("%x", currentDigest) != expected.SHA256 || !jsonBytesEqual(currentPayload, expectedPayload) {
+		return ErrImportedContentChanged
+	}
+	return nil
+}
+
+func verifyLegacyDatabaseFingerprint(ctx context.Context, tx *sql.Tx, libraryID int64, encoded []byte) error {
+	var expected legacyDatabaseFingerprint
+	if err := decodeStrictJSON(encoded, &expected); err != nil {
+		return fmt.Errorf("decode legacy database fingerprint: %v: %w", err, ErrPackageConflict)
+	}
+	if expected.SchemaVersion != "xinzhili.database-snapshot.v1" || expected.Snapshot.SchemaVersion != expected.SchemaVersion || !isLowerSHA256(expected.SHA256) || !completeSnapshotContract(expected.Snapshot) {
+		return fmt.Errorf("legacy database fingerprint contract invalid: %w", ErrPackageConflict)
+	}
+	expectedPayload, err := json.Marshal(expected.Snapshot)
+	if err != nil {
+		return fmt.Errorf("encode legacy database snapshot: %w", err)
+	}
+	digest := sha256.Sum256(expectedPayload)
+	if fmt.Sprintf("%x", digest) != expected.SHA256 {
+		return fmt.Errorf("legacy database fingerprint digest invalid: %w", ErrPackageConflict)
+	}
+	current, err := loadCanonicalDatabaseSnapshot(ctx, tx, libraryID)
+	if err != nil {
+		return err
+	}
+	currentPayload, err := json.Marshal(current)
+	if err != nil {
+		return err
 	}
 	currentDigest := sha256.Sum256(currentPayload)
 	if fmt.Sprintf("%x", currentDigest) != expected.SHA256 || !jsonBytesEqual(currentPayload, expectedPayload) {

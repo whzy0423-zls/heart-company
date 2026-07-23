@@ -41,6 +41,7 @@ func TestSchemaIncludesTheoryLibraryFoundation(t *testing.T) {
 		"payload_receipt_sha256 TEXT NOT NULL",
 		"CREATE OR REPLACE FUNCTION protect_theory_package_import_contract()",
 		"CREATE TRIGGER theory_package_imports_immutable",
+		"one-way legacy fingerprint repair",
 		"UNIQUE (package_id)",
 		"UNIQUE (import_id, review_type, content_digest)",
 		"UNIQUE (import_id, content_digest)",

@@ -1229,6 +1229,20 @@ END $$;
 
 CREATE OR REPLACE FUNCTION protect_theory_package_import_contract()
 RETURNS TRIGGER AS $$
+DECLARE
+  -- one-way legacy fingerprint repair: only the two zero hashes and legacy fingerprint may advance together.
+  legacy_repair BOOLEAN :=
+    OLD.state = 'staged'
+    AND NEW.state = 'staged'
+    AND NEW.promoted_at IS NOT DISTINCT FROM OLD.promoted_at
+    AND OLD.payload_sha256 = repeat('0',64)
+    AND OLD.payload_receipt_sha256 = repeat('0',64)
+    AND NOT (OLD.object_fingerprints ? 'payloadSha256')
+    AND NEW.payload_sha256 ~ '^[0-9a-f]{64}$'
+    AND NEW.payload_sha256 <> repeat('0',64)
+    AND NEW.payload_receipt_sha256 ~ '^[0-9a-f]{64}$'
+    AND NEW.payload_receipt_sha256 <> repeat('0',64)
+    AND NEW.object_fingerprints ? 'payloadSha256';
 BEGIN
   IF NEW.package_id IS DISTINCT FROM OLD.package_id
     OR NEW.content_digest IS DISTINCT FROM OLD.content_digest
@@ -1238,13 +1252,16 @@ BEGIN
     OR NEW.target_database IS DISTINCT FROM OLD.target_database
     OR NEW.desired_release_version IS DISTINCT FROM OLD.desired_release_version
     OR NEW.payload IS DISTINCT FROM OLD.payload
-    OR NEW.payload_sha256 IS DISTINCT FROM OLD.payload_sha256
-    OR NEW.payload_receipt_sha256 IS DISTINCT FROM OLD.payload_receipt_sha256
-    OR NEW.object_fingerprints IS DISTINCT FROM OLD.object_fingerprints
     OR NEW.staged_by IS DISTINCT FROM OLD.staged_by
     OR NEW.staged_at IS DISTINCT FROM OLD.staged_at
     OR NEW.create_time IS DISTINCT FROM OLD.create_time THEN
     RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='theory package import staged contract is immutable';
+  END IF;
+  IF (NEW.payload_sha256 IS DISTINCT FROM OLD.payload_sha256
+      OR NEW.payload_receipt_sha256 IS DISTINCT FROM OLD.payload_receipt_sha256
+      OR NEW.object_fingerprints IS DISTINCT FROM OLD.object_fingerprints)
+    AND NOT legacy_repair THEN
+    RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='theory package import fingerprint contract is immutable';
   END IF;
   RETURN NEW;
 END;
