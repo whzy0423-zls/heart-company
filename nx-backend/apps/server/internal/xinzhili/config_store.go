@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -29,12 +30,10 @@ func ReadConfig(ctx context.Context, db *sql.DB) (Config, bool, error) {
 		}
 		return Config{}, false, err
 	}
-	var cfg Config
-	if err := json.Unmarshal(raw, &cfg); err != nil {
+	cfg, err := decodeStoredConfig(raw)
+	if err != nil {
 		return Config{}, false, err
 	}
-	cfg.ClearASRKey = false
-	cfg.ClearTTSKey = false
 	return cfg, true, nil
 }
 
@@ -99,6 +98,8 @@ func UpdateConfig(ctx context.Context, db *sql.DB, incoming Config, expectedVers
 // MergeIncoming applies secret update semantics used by the store. Empty
 // incoming secrets preserve current values; explicit clear markers erase them.
 func MergeIncoming(current, incoming Config) Config {
+	incoming.RealtimeASR.APIKey = strings.TrimSpace(incoming.RealtimeASR.APIKey)
+	incoming.TTS.APIKey = strings.TrimSpace(incoming.TTS.APIKey)
 	if incoming.ClearASRKey {
 		incoming.RealtimeASR.APIKey = ""
 	} else if incoming.RealtimeASR.APIKey == "" {
@@ -122,11 +123,30 @@ func readConfigTx(ctx context.Context, tx *sql.Tx) (Config, bool, error) {
 		}
 		return Config{}, false, err
 	}
-	var cfg Config
-	if err := json.Unmarshal(raw, &cfg); err != nil {
+	cfg, err := decodeStoredConfig(raw)
+	if err != nil {
 		return Config{}, false, err
 	}
 	return cfg, true, nil
+}
+
+func decodeStoredConfig(raw []byte) (Config, error) {
+	var cfg Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return Config{}, err
+	}
+	// Clear markers are request-only controls. Even if malformed or manually
+	// written JSON contains them, reading stored state must never execute them.
+	cfg.ClearASRKey = false
+	cfg.ClearTTSKey = false
+	normalized, err := cfg.WithDefaults()
+	if err != nil {
+		return Config{}, err
+	}
+	if err := normalized.Validate(); err != nil {
+		return Config{}, err
+	}
+	return normalized, nil
 }
 
 func configContext(ctx context.Context) (context.Context, context.CancelFunc) {

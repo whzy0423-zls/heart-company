@@ -240,6 +240,17 @@ func TestConfigWithDefaultsNormalizesModesAndPrompts(t *testing.T) {
 	}
 }
 
+func TestConfigWithDefaultsRejectsDuplicateNormalizedModePromptKeys(t *testing.T) {
+	cfg := validConfig()
+	cfg.ModePrompts = map[Mode]string{
+		ModeNormal:       "first",
+		Mode(" normal "): "second",
+	}
+	if _, err := cfg.WithDefaults(); err == nil {
+		t.Fatal("duplicate normalized mode prompt keys should fail")
+	}
+}
+
 func TestConfigValidateRejectsUnknownModesAndOversizedPrompts(t *testing.T) {
 	cfg := validConfig()
 	cfg.EnabledModes = append(cfg.EnabledModes, Mode("unknown"))
@@ -302,5 +313,21 @@ func TestConfigClearKeyMarkersAreExplicitAndTransient(t *testing.T) {
 	}
 	if merged.ClearASRKey || merged.ClearTTSKey {
 		t.Fatal("clear markers must not survive merge")
+	}
+}
+
+func TestMergeIncomingPreservesSecretsForWhitespaceWithoutClear(t *testing.T) {
+	current := validConfig()
+	incoming := validConfig()
+	incoming.Enabled = false
+	incoming.RealtimeASR.APIKey = " \t\n "
+	incoming.TTS.APIKey = "  "
+
+	merged := MergeIncoming(current, incoming)
+	if merged.RealtimeASR.APIKey != "asr-secret" {
+		t.Fatalf("ASR API key=%q want preserved secret", merged.RealtimeASR.APIKey)
+	}
+	if merged.TTS.APIKey != "tts-secret" {
+		t.Fatalf("TTS API key=%q want preserved secret", merged.TTS.APIKey)
 	}
 }

@@ -19,6 +19,21 @@ import (
 
 const xinzhiliConfigKey = "xinzhili_model_config"
 
+var (
+	errConfigStoreTestDatabaseUnavailable = errors.New("set a localhost TEST_DATABASE_URL to run xinzhili config store integration tests")
+	errConfigStoreTestDatabaseRequired    = errors.New("CI requires TEST_DATABASE_URL for xinzhili config store integration tests")
+)
+
+func configStoreTestDSN(getenv func(string) string) (string, error) {
+	if dsn := strings.TrimSpace(getenv("TEST_DATABASE_URL")); dsn != "" {
+		return dsn, nil
+	}
+	if strings.TrimSpace(getenv("CI")) != "" {
+		return "", errConfigStoreTestDatabaseRequired
+	}
+	return "", errConfigStoreTestDatabaseUnavailable
+}
+
 func TestConfigStoreFirstWriteAndRead(t *testing.T) {
 	database := openConfigStoreTestDB(t)
 	cfg := validConfig()
@@ -36,6 +51,61 @@ func TestConfigStoreFirstWriteAndRead(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, created) {
 		t.Fatalf("read=%#v created=%#v", got, created)
+	}
+}
+
+func TestConfigStoreReadAppliesDefaultsToOlderStoredConfig(t *testing.T) {
+	database := openConfigStoreTestDB(t)
+	cfg := validConfig()
+	body, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO site_configs (key, config, update_time) VALUES ($1, $2::jsonb, now())`, xinzhiliConfigKey, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	got, found, err := ReadConfig(context.Background(), database)
+	if err != nil || !found {
+		t.Fatalf("ReadConfig found=%v err=%v", found, err)
+	}
+	if got.Timing.PartialStableMs != 150 || got.Timing.NormalEndSilenceMs != 700 || got.Timing.MaxProactivePrompts != 2 {
+		t.Fatalf("stored timing defaults not applied: %+v", got.Timing)
+	}
+}
+
+func TestConfigStoreReadRejectsSemanticallyInvalidStoredConfig(t *testing.T) {
+	database := openConfigStoreTestDB(t)
+	invalid := validConfig()
+	invalid.EnabledModes = []Mode{ModeComfort}
+	body, err := json.Marshal(invalid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO site_configs (key, config, update_time) VALUES ($1, $2::jsonb, now())`, xinzhiliConfigKey, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, found, err := ReadConfig(context.Background(), database); err == nil || found {
+		t.Fatalf("invalid stored config found=%v err=%v, want found=false with error", found, err)
+	}
+}
+
+func TestConfigStoreUpdateRejectsSemanticallyInvalidStoredConfig(t *testing.T) {
+	database := openConfigStoreTestDB(t)
+	invalid := validConfig()
+	invalid.RealtimeASR.Provider = "invalid-provider"
+	invalid.Version = 1
+	body, err := json.Marshal(invalid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO site_configs (key, config, update_time) VALUES ($1, $2::jsonb, now())`, xinzhiliConfigKey, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := UpdateConfig(context.Background(), database, validConfig(), 1); err == nil {
+		t.Fatal("UpdateConfig should reject invalid current stored config")
 	}
 }
 
@@ -191,11 +261,36 @@ func TestConfigStoreConcurrentFirstWriteOnlyOneSucceeds(t *testing.T) {
 	}
 }
 
+func TestConfigStoreTestDSNGuard(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		wantDSN string
+		wantErr error
+	}{
+		{name: "local without database skips", env: map[string]string{}, wantErr: errConfigStoreTestDatabaseUnavailable},
+		{name: "CI without database fails", env: map[string]string{"CI": "true"}, wantErr: errConfigStoreTestDatabaseRequired},
+		{name: "configured database", env: map[string]string{"TEST_DATABASE_URL": "postgres://localhost/example_test"}, wantDSN: "postgres://localhost/example_test"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			getenv := func(key string) string { return tt.env[key] }
+			got, err := configStoreTestDSN(getenv)
+			if got != tt.wantDSN || !errors.Is(err, tt.wantErr) {
+				t.Fatalf("dsn=%q err=%v wantDSN=%q wantErr=%v", got, err, tt.wantDSN, tt.wantErr)
+			}
+		})
+	}
+}
+
 func openConfigStoreTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("set a localhost TEST_DATABASE_URL to run xinzhili config store integration tests")
+	dsn, err := configStoreTestDSN(os.Getenv)
+	if errors.Is(err, errConfigStoreTestDatabaseUnavailable) {
+		t.Skip(err.Error())
+	}
+	if err != nil {
+		t.Fatal(err)
 	}
 	parsed, err := url.Parse(dsn)
 	if err != nil {

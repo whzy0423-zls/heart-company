@@ -141,6 +141,9 @@ func (c Config) WithDefaults() (Config, error) {
 			if !knownMode(mode) {
 				return Config{}, fmt.Errorf("未知芯之力提示词模式 %q", rawMode)
 			}
+			if _, exists := prompts[mode]; exists {
+				return Config{}, fmt.Errorf("芯之力模式提示词 %q 重复", mode)
+			}
 			prompts[mode] = strings.TrimSpace(prompt)
 		}
 		c.ModePrompts = prompts
