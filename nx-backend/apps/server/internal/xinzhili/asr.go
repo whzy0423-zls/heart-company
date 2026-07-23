@@ -21,7 +21,6 @@ type ASREventKind string
 
 const (
 	ASREventSpeechStarted ASREventKind = "speech_started"
-	ASREventSpeechEnded   ASREventKind = "speech_ended"
 	ASREventPartial       ASREventKind = "partial"
 	ASREventFinal         ASREventKind = "final"
 	ASREventTaskFinished  ASREventKind = "task_finished"

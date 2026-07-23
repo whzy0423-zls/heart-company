@@ -99,6 +99,10 @@ func (f *AliyunASRFactory) Open(ctx context.Context, cfg RealtimeASRConfig) (ASR
 		if errors.Is(dialCtx.Err(), context.DeadlineExceeded) {
 			return nil, fmt.Errorf("%w: WebSocket 握手", ErrASRTimeout)
 		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return nil, fmt.Errorf("%w: WebSocket 握手: %w", ErrASRTimeout, err)
+		}
 		return nil, fmt.Errorf("连接实时语音识别上游: %w", err)
 	}
 
@@ -131,14 +135,15 @@ func (f *AliyunASRFactory) Open(ctx context.Context, cfg RealtimeASRConfig) (ASR
 
 	sessionCtx, cancelSession := context.WithCancel(ctx)
 	session := &aliyunASRSession{
-		conn:     conn,
-		clock:    f.clock,
-		timeouts: f.timeouts,
-		taskID:   taskID,
-		ctx:      sessionCtx,
-		cancel:   cancelSession,
-		events:   make(chan ASREvent, asrEventBuffer),
-		done:     make(chan struct{}),
+		conn:       conn,
+		clock:      f.clock,
+		timeouts:   f.timeouts,
+		taskID:     taskID,
+		ctx:        sessionCtx,
+		cancel:     cancelSession,
+		events:     make(chan ASREvent, asrEventBuffer),
+		done:       make(chan struct{}),
+		finishDone: make(chan struct{}),
 	}
 	go session.readLoop()
 	go session.watchContext()
@@ -183,8 +188,11 @@ type aliyunASRSession struct {
 	writeMu      sync.Mutex
 	stateMu      sync.RWMutex
 	finished     bool
+	finishDone   chan struct{}
+	finishErr    error
 	closed       bool
 	err          error
+	speechActive bool
 	closeOnce    sync.Once
 	finalizeOnce sync.Once
 }
@@ -232,8 +240,17 @@ func (s *aliyunASRSession) FinishInput(ctx context.Context) error {
 	}
 	s.stateMu.Lock()
 	if s.finished {
+		done := s.finishDone
 		s.stateMu.Unlock()
-		return nil
+		select {
+		case <-done:
+			s.stateMu.RLock()
+			err := s.finishErr
+			s.stateMu.RUnlock()
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	if s.closed {
 		s.stateMu.Unlock()
@@ -245,6 +262,10 @@ func (s *aliyunASRSession) FinishInput(ctx context.Context) error {
 	s.writeMu.Lock()
 	err := writeASRJSON(ctx, s.conn, s.timeouts.Write, finishTaskMessage(s.taskID))
 	s.writeMu.Unlock()
+	s.stateMu.Lock()
+	s.finishErr = err
+	close(s.finishDone)
+	s.stateMu.Unlock()
 	if err != nil {
 		s.fail(err)
 		return err
@@ -315,17 +336,21 @@ func (s *aliyunASRSession) readLoop() {
 		}
 		switch message.Header.Event {
 		case "result-generated":
-			event, ok := normalizeASRResult(message, s.clock.Now())
-			if ok && !s.emit(event) {
-				return
-			}
-		case "speech-started":
-			if !s.emit(ASREvent{Kind: ASREventSpeechStarted, TaskID: s.taskID, At: s.clock.Now()}) {
-				return
-			}
-		case "speech-ended":
-			if !s.emit(ASREvent{Kind: ASREventSpeechEnded, TaskID: s.taskID, At: s.clock.Now()}) {
-				return
+			at := s.clock.Now()
+			event, ok := normalizeASRResult(message, at)
+			if ok {
+				if !s.speechActive {
+					if !s.emit(ASREvent{Kind: ASREventSpeechStarted, TaskID: s.taskID, At: at}) {
+						return
+					}
+					s.speechActive = true
+				}
+				if !s.emit(event) {
+					return
+				}
+				if event.Kind == ASREventFinal {
+					s.speechActive = false
+				}
 			}
 		case "task-finished":
 			s.emit(ASREvent{Kind: ASREventTaskFinished, TaskID: s.taskID, At: s.clock.Now()})
@@ -405,7 +430,6 @@ type asrServerMessage struct {
 	} `json:"header"`
 	Payload struct {
 		Output struct {
-			Event    string `json:"event"`
 			Sentence struct {
 				Text        string `json:"text"`
 				SentenceEnd bool   `json:"sentence_end"`
@@ -468,12 +492,6 @@ func waitForTaskStarted(ctx context.Context, conn *websocket.Conn, taskID string
 }
 
 func normalizeASRResult(message asrServerMessage, at time.Time) (ASREvent, bool) {
-	switch message.Payload.Output.Event {
-	case "speech_started":
-		return ASREvent{Kind: ASREventSpeechStarted, TaskID: message.Header.TaskID, At: at}, true
-	case "speech_ended":
-		return ASREvent{Kind: ASREventSpeechEnded, TaskID: message.Header.TaskID, At: at}, true
-	}
 	text := message.Payload.Output.Sentence.Text
 	if text == "" {
 		return ASREvent{}, false

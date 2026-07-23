@@ -249,9 +249,6 @@ func TestASRNormalizesPartialFinalAndSpeechActivity(t *testing.T) {
 	server := newFakeASRServer(t, func(conn *websocket.Conn, _ *http.Request) {
 		run := receiveRunTask(t, conn)
 		writeASREvent(t, conn, run.Header.TaskID, "task-started", map[string]any{})
-		writeASREvent(t, conn, run.Header.TaskID, "result-generated", map[string]any{
-			"output": map[string]any{"event": "speech_started"},
-		})
 		writeASREvent(t, conn, "00000000-0000-4000-8000-000000000000", "result-generated", map[string]any{
 			"output": map[string]any{"sentence": map[string]any{"text": "必须忽略", "sentence_end": true}},
 		})
@@ -326,6 +323,54 @@ func TestASRRejectsEmptyPCMAndWritesAfterFinishWhileFinishIsIdempotent(t *testin
 	if got := <-finishCount; got != 1 {
 		t.Fatalf("finish-task count=%d", got)
 	}
+}
+
+func TestASRConcurrentFinishInputSharesTheFirstSendResult(t *testing.T) {
+	server := newFakeASRServer(t, func(conn *websocket.Conn, _ *http.Request) {
+		run := receiveRunTask(t, conn)
+		writeASREvent(t, conn, run.Header.TaskID, "task-started", map[string]any{})
+		_, _, _ = conn.ReadMessage()
+	})
+	session, err := testASRFactory(nil, AliyunASRTimeouts{}).Open(context.Background(), testASRConfig(server.url))
+	if err != nil {
+		t.Fatal(err)
+	}
+	concrete := session.(*aliyunASRSession)
+	concrete.writeMu.Lock()
+	ctx, cancel := context.WithCancel(context.Background())
+	firstResult := make(chan error, 1)
+	go func() { firstResult <- session.FinishInput(ctx) }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		concrete.stateMu.RLock()
+		started := concrete.finished
+		concrete.stateMu.RUnlock()
+		if started {
+			break
+		}
+		if time.Now().After(deadline) {
+			concrete.writeMu.Unlock()
+			t.Fatal("first FinishInput did not enter the shared operation")
+		}
+		runtime.Gosched()
+	}
+	secondResult := make(chan error, 1)
+	go func() { secondResult <- session.FinishInput(context.Background()) }()
+	select {
+	case err := <-secondResult:
+		concrete.writeMu.Unlock()
+		t.Fatalf("concurrent FinishInput returned before first send completed: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	cancel()
+	concrete.writeMu.Unlock()
+	if err := <-firstResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first err=%v", err)
+	}
+	if err := <-secondResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("second err=%v", err)
+	}
+	waitASREventsClosed(t, session.Events())
 }
 
 func TestASRTaskFailedClosesEventsWithStableError(t *testing.T) {
@@ -511,7 +556,7 @@ func TestASRHandshakeAndWriteTimeoutsAreBounded(t *testing.T) {
 		defer server.Close()
 		started := time.Now()
 		_, err := testASRFactory(nil, AliyunASRTimeouts{Handshake: 40 * time.Millisecond}).Open(context.Background(), testASRConfig("ws"+strings.TrimPrefix(server.URL, "http")))
-		if err == nil || time.Since(started) > 150*time.Millisecond {
+		if !errors.Is(err, ErrASRTimeout) || time.Since(started) > 150*time.Millisecond {
 			t.Fatalf("handshake err=%v elapsed=%v", err, time.Since(started))
 		}
 	})
