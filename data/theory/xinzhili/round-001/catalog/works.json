@@ -1,0 +1,222 @@
+{
+  "roundId": "round-001",
+  "schemaVersion": "xinzhili.round-works.v1",
+  "works": [
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sourceFileIds": [
+        "file-64cab57df3a05eee"
+      ],
+      "title": "09.转化恶魔（纯中）",
+      "workId": "work-027a530c08f99fe3"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "九型人格首轮核心电子书；XHTML 可直接抽取，按 1800 个非空字符折算。",
+      "sourceFileIds": [
+        "file-8bf6e1c4be298d82"
+      ],
+      "title": "九型人格·珍藏版",
+      "workId": "work-0b2e7f11c70be00e"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sourceFileIds": [
+        "file-67e8311ec4615f2e"
+      ],
+      "title": "10.目标与障碍的和谐（纯中）",
+      "workId": "work-10c6a75fc5553a10"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "实际路径存在但为扫描版；首轮选择前 80 页 OCR，余页进入后续批次。",
+      "sourceFileIds": [
+        "file-ccca14188ceacfa5"
+      ],
+      "title": "情绪的语言",
+      "workId": "work-116bb9f973fc6e92"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "亲子关系可读的 78 页版本；替代 296 页无文本层白金版以节省 OCR 预算。",
+      "sourceFileIds": [
+        "file-413c7cfd5cf9fb4c"
+      ],
+      "title": "成功母亲教育：亲子关系全面技巧》（李中莹）",
+      "workId": "work-12fe59413f84afbb"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sourceFileIds": [
+        "file-391418e366dcdc95"
+      ],
+      "title": "06.三个正向连接（纯中）",
+      "workId": "work-29882d46ddde3bad"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "周易方向核心资料；72 页均有可用文本层。",
+      "sourceFileIds": [
+        "file-d267a65a8ca71df8"
+      ],
+      "title": "(NEW)周易",
+      "workId": "work-2d9022cc6583619c"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sourceFileIds": [
+        "file-1ace19ab11a9e870"
+      ],
+      "title": "08.用原型能量面对障碍（纯中）",
+      "workId": "work-531360bd07bdf788"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "扫描版无文本层；首轮选择前 80 页 OCR，余页进入后续批次。",
+      "sourceFileIds": [
+        "file-76c067f474997079"
+      ],
+      "title": "NLP简快心理疗法》李中莹",
+      "workId": "work-6131070748ca9974"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "实际 EPUB 路径存在且 XHTML 可读；来源定位使用真实 OPF spine item，按 1800 个非空字符折算。",
+      "sourceFileIds": [
+        "file-6009e970531b13ee"
+      ],
+      "title": "非暴力沟通 (卢森堡) (Z-Library)",
+      "workId": "work-63453c5888b12a35"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "周易方向核心资料；textutil 可读，来源定位使用真实段落，预算按 1800 个非空字符折算。",
+      "sourceFileIds": [
+        "file-ae513db9e9dda335"
+      ],
+      "title": "周易说卦传正解",
+      "workId": "work-70432bdbd4ac5cd6"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sourceFileIds": [
+        "file-0b02dcaf38ff6b6f"
+      ],
+      "title": "03.拒绝召唤，找到向导（纯中）",
+      "workId": "work-72108bab7e54b9d7"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "英雄之旅核心理论资料；323 页文本层可直接抽取。",
+      "sourceFileIds": [
+        "file-527cd054c982a24e"
+      ],
+      "title": "英雄之旅",
+      "workId": "work-8cd6404c4631cf8a"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sourceFileIds": [
+        "file-ba0a45c6a83535ae"
+      ],
+      "title": "01 英雄之旅概述（纯中）",
+      "workId": "work-8d4500a96172b72f"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sourceFileIds": [
+        "file-2e724a7ee2ef48fa"
+      ],
+      "title": "04.找到创造性心智（中英）",
+      "workId": "work-941f993584b1a354"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "扫描版无文本层；首轮选择前 80 页 OCR，余页进入后续批次。",
+      "sourceFileIds": [
+        "file-c688f6a9aa035158"
+      ],
+      "title": "重塑心灵-李中莹",
+      "workId": "work-9602ec673bc48be2"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sourceFileIds": [
+        "file-efd404a48ff8f24a"
+      ],
+      "title": "07.三种原型能量（纯中）",
+      "workId": "work-9a3aa92e9e8eb636"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "易经生活化概念资料；textutil 可读，来源定位使用真实段落，预算按 1800 个非空字符折算。",
+      "sourceFileIds": [
+        "file-18b7985501dfec59"
+      ],
+      "title": "易经》中蕴含人生大智慧的30个成语",
+      "workId": "work-b8f287607035c4cc"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "NLP 方向首轮核心资料；214 页文本层可直接抽取。",
+      "sourceFileIds": [
+        "file-1b4235a7b349190a"
+      ],
+      "title": "李中莹NLP精义》（李中莹）",
+      "workId": "work-c0bb068ef102dd42"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sourceFileIds": [
+        "file-b5f5be9554760d0c"
+      ],
+      "title": "12.回顾这段英雄之旅（纯中）",
+      "workId": "work-dca12d747fcb8fac"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "英雄之旅经典主来源；273 页文本层可直接抽取。",
+      "sourceFileIds": [
+        "file-03072f88433fe3e2"
+      ],
+      "title": "千面英雄》-约瑟夫-坎贝尔",
+      "workId": "work-df6072dffa7716ae"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sourceFileIds": [
+        "file-f5453db78961a47a"
+      ],
+      "title": "05.三颗正念种子（纯中）",
+      "workId": "work-e484184145af7165"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sourceFileIds": [
+        "file-c2ea1f11365a7b0c"
+      ],
+      "title": "02.聆听召唤（纯中）",
+      "workId": "work-ee23992ae3ca9364"
+    },
+    {
+      "catalogStatus": "selected",
+      "selectionReason": "芯之力能量课程核心课件；单页文本层极少，首轮按页 OCR。",
+      "sourceFileIds": [
+        "file-5226bc90b4068153"
+      ],
+      "title": "11.传下去给他人（纯中）",
+      "workId": "work-f7e3b5f4fc15ea77"
+    }
+  ]
+}

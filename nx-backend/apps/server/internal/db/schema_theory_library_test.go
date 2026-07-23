@@ -34,6 +34,23 @@ func TestSchemaIncludesTheoryLibraryFoundation(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS theory_chunks",
 		"CREATE TABLE IF NOT EXISTS theory_chunk_embeddings",
 		"CREATE TABLE IF NOT EXISTS theory_release_cards",
+		"CREATE TABLE IF NOT EXISTS theory_package_imports",
+		"CREATE TABLE IF NOT EXISTS theory_package_reviews",
+		"CREATE TABLE IF NOT EXISTS theory_package_promotions",
+		"payload_sha256 TEXT NOT NULL",
+		"payload_receipt_sha256 TEXT NOT NULL",
+		"payload_hash_contract TEXT NOT NULL",
+		"CREATE OR REPLACE FUNCTION theory_package_jsonb_sha256",
+		"CREATE OR REPLACE FUNCTION theory_package_receipt_sha256",
+		"CREATE OR REPLACE FUNCTION theory_package_database_snapshot",
+		"LANGUAGE SQL STABLE",
+		"SET search_path = pg_catalog",
+		"CREATE OR REPLACE FUNCTION protect_theory_package_import_contract()",
+		"CREATE TRIGGER theory_package_imports_immutable",
+		"one-way legacy fingerprint repair",
+		"UNIQUE (package_id)",
+		"UNIQUE (import_id, review_type, content_digest)",
+		"UNIQUE (import_id, content_digest)",
 		"CREATE UNIQUE INDEX IF NOT EXISTS uq_theory_active_release ON theory_library_releases(library_id) WHERE status = 'active'",
 		"CREATE UNIQUE INDEX IF NOT EXISTS uq_theory_published_card_key ON theory_cards(library_id, canonical_key) WHERE status = 'published'",
 		"CREATE UNIQUE INDEX IF NOT EXISTS uq_theory_release_chunk ON theory_release_cards(release_id, chunk_id)",
@@ -94,6 +111,9 @@ func TestSchemaIncludesTheoryLibraryFoundation(t *testing.T) {
 		"idx_theory_release_cards_release",
 		"idx_theory_release_cards_card",
 		"idx_theory_release_cards_chunk",
+		"idx_theory_package_imports_library",
+		"idx_theory_package_reviews_import",
+		"idx_theory_package_promotions_release",
 		"idx_theory_libraries_status",
 		"idx_theory_libraries_update_time",
 		"idx_theory_releases_status",
@@ -185,6 +205,18 @@ func TestSchemaIncludesTheoryLibraryFoundation(t *testing.T) {
 			"CHECK (dimensions = 1536)",
 			"CHECK (status IN ('pending','ready','failed','stale'))",
 		},
+		"theory_package_imports": {
+			"CHECK (state IN ('staged','promoted'))",
+			"CHECK (jsonb_typeof(payload) = 'object')",
+			"CHECK (jsonb_typeof(object_fingerprints) = 'object')",
+			"CHECK (payload_sha256 ~ '^[0-9a-f]{64}$')",
+			"CHECK (payload_receipt_sha256 ~ '^[0-9a-f]{64}$')",
+			"CHECK (payload_hash_contract = 'postgres-jsonb-text-sha256-v1')",
+		},
+		"theory_package_reviews": {
+			"CHECK (review_type IN ('source-verification','theory-review','safety-review'))",
+			"CHECK (decision IN ('approved','rejected'))",
+		},
 	}
 	for table, fragments := range tableContracts {
 		definition := createTableDefinition(t, sqlText, table)
@@ -215,6 +247,9 @@ func TestTheoryLibrarySchemaOrdersDependenciesAndProtectsOptionalExtensions(t *t
 		"theory_chunks",
 		"theory_chunk_embeddings",
 		"theory_release_cards",
+		"theory_package_imports",
+		"theory_package_reviews",
+		"theory_package_promotions",
 	}
 	previous := -1
 	for _, table := range tablesInDependencyOrder {
