@@ -31,6 +31,9 @@ assert.throws(
 for (const loopbackApiBase of [
   'https://localhost/api',
   'https://127.0.0.1/api',
+  'https://127.1/api',
+  'https://2130706433/api',
+  'https://0x7f000001/api',
   'https://[::1]/api',
 ]) {
   assert.throws(

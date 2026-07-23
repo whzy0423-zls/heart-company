@@ -4,16 +4,6 @@ function cleanBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '')
 }
 
-function extractHostname(value) {
-  const authority = value.slice('https://'.length).split(/[/?#]/, 1)[0]
-  const hostAndPort = authority.slice(authority.lastIndexOf('@') + 1)
-  if (hostAndPort.startsWith('[')) {
-    const closingBracket = hostAndPort.indexOf(']')
-    return closingBracket > 0 ? hostAndPort.slice(1, closingBracket).toLowerCase() : ''
-  }
-  return hostAndPort.split(':', 1)[0].toLowerCase()
-}
-
 function isPrivateIPv4(value) {
   const parts = value.split('.').map((part) => Number(part))
   if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
@@ -42,7 +32,12 @@ function hasBlockedDomainSuffix(hostname, secondLevelLabel) {
 function isRealProductionApiBase(value) {
   if (!value.startsWith('https://')) return false
 
-  const hostname = extractHostname(value)
+  let hostname
+  try {
+    hostname = new URL(value).hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  } catch {
+    return false
+  }
   if (!hostname) return false
 
   return !(
