@@ -90,6 +90,11 @@ func (guard *SequenceGuard) Observe(direction Direction, envelope Envelope) (Seq
 		if envelope.TurnID == nil || *envelope.TurnID == "" || envelope.TurnSeq == nil {
 			return SequenceDrop, errors.New("turn sequence requires turnId and turnSeq")
 		}
+		if _, terminal := guard.terminalTurns[*envelope.TurnID]; terminal {
+			sessionCursor.advance(*envelope.SessionSeq)
+			guard.session[direction] = sessionCursor
+			return SequenceDrop, nil
+		}
 		turnKey = turnSequenceKey{direction: direction, turnID: *envelope.TurnID}
 		turnCursor = guard.turns[turnKey]
 		disposition, err = turnCursor.classify(*envelope.TurnSeq)

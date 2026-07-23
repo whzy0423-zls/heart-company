@@ -130,6 +130,49 @@ func TestSequenceTerminalEventsAreIdempotent(t *testing.T) {
 	}
 }
 
+func TestSequenceDropsLateTurnEventsAfterTerminalWithoutAdvancingTurnSequence(t *testing.T) {
+	guard := NewSequenceGuard(1)
+	if got, err := guard.Observe(DirectionClient, turnEnvelope(1, 0, 0, "turn-1")); got != SequenceAccept || err != nil {
+		t.Fatalf("initial client event got=(%v,%v)", got, err)
+	}
+	guard.MarkTerminal("turn-1")
+
+	lateEvents := []struct {
+		name       string
+		direction  Direction
+		sessionSeq uint64
+		turnSeq    uint64
+	}{
+		{"client", DirectionClient, 1, 1},
+		{"server", DirectionServer, 0, 0},
+	}
+	for _, event := range lateEvents {
+		t.Run(event.name, func(t *testing.T) {
+			got, err := guard.Observe(event.direction, turnEnvelope(1, event.sessionSeq, event.turnSeq, "turn-1"))
+			if got != SequenceDrop || err != nil {
+				t.Fatalf("late event got=(%v,%v)", got, err)
+			}
+		})
+	}
+
+	clientCursor := guard.turns[turnSequenceKey{direction: DirectionClient, turnID: "turn-1"}]
+	if !clientCursor.seen || clientCursor.last != 0 {
+		t.Fatalf("client turn cursor advanced after terminal: %+v", clientCursor)
+	}
+	if _, exists := guard.turns[turnSequenceKey{direction: DirectionServer, turnID: "turn-1"}]; exists {
+		t.Fatal("server turn cursor created for terminal event")
+	}
+
+	clientSession := sessionEnvelope(1, 2)
+	if got, err := guard.Observe(DirectionClient, clientSession); got != SequenceAccept || err != nil {
+		t.Fatalf("client session event got=(%v,%v)", got, err)
+	}
+	serverSession := sessionEnvelope(1, 1)
+	if got, err := guard.Observe(DirectionServer, serverSession); got != SequenceAccept || err != nil {
+		t.Fatalf("server session event got=(%v,%v)", got, err)
+	}
+}
+
 func TestSequenceActiveTurnKeyCollision(t *testing.T) {
 	guard := NewSequenceGuard(1)
 	if err := guard.RegisterActiveTurn("turn-a", 42); err != nil {
