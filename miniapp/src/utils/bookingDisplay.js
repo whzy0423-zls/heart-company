@@ -32,17 +32,17 @@ export function bookingValue(value) {
 
 export function bookingKindLabel(value) {
   const normalized = bookingValue(value)
-  return BOOKING_KIND_LABELS[normalized] || normalized
+  return Object.hasOwn(BOOKING_KIND_LABELS, normalized) ? BOOKING_KIND_LABELS[normalized] : normalized
 }
 
 export function bookingStatusLabel(value) {
   const normalized = bookingValue(value)
-  return BOOKING_STATUS_LABELS[normalized] || normalized
+  return Object.hasOwn(BOOKING_STATUS_LABELS, normalized) ? BOOKING_STATUS_LABELS[normalized] : normalized
 }
 
 export function maskBookingPhone(value) {
   const normalized = bookingValue(value)
-  if (normalized === EMPTY_VALUE_LABEL || normalized.length < 7 || /[*＊•·]/.test(normalized)) {
+  if (normalized === EMPTY_VALUE_LABEL || normalized.length < 7 || !/^\d+$/.test(normalized)) {
     return normalized
   }
   return `${normalized.slice(0, 3)}****${normalized.slice(-4)}`
