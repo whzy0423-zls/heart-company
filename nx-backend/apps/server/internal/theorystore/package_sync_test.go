@@ -565,6 +565,45 @@ func TestPromoteRejectsPayloadAndIndependentHashTampering(t *testing.T) {
 	}
 }
 
+func TestPromoteRejectsFingerprintContractTampering(t *testing.T) {
+	db := openPackageTestDatabase(t)
+	defer db.Close()
+	ctx := context.Background()
+	tests := []struct {
+		name, expression string
+		promoteFirst     bool
+	}{
+		{"first promote extra field", `object_fingerprints||'{"tampered":true}'::jsonb`, false},
+		{"noop extra field", `object_fingerprints||'{"tampered":true}'::jsonb`, true},
+		{"known field modified", `jsonb_set(object_fingerprints,'{sha256}',to_jsonb(repeat('f',64)))`, false},
+		{"known field deleted", `object_fingerprints-'payloadSha256'`, false},
+	}
+	for index, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			key := fmt.Sprintf("xinzhili_test_fingerprint_%02d", index)
+			cleanupPackageFixture(t, db, key)
+			defer cleanupPackageFixture(t, db, key)
+			actor := createPackageTestUser(t, db, key+"-actor")
+			syncer := NewPackageSyncer(db)
+			syncer.libraryKey = key
+			stageAndReviewPackage(t, db, syncer, key, actor)
+			if tc.promoteFirst {
+				if _, err := syncer.Promote(ctx, "xinzhili-round-001", actor); err != nil {
+					t.Fatal(err)
+				}
+			}
+			setImportContractTrigger(t, db, false)
+			if _, err := db.Exec(`UPDATE theory_package_imports SET object_fingerprints=`+tc.expression+` WHERE library_id=(SELECT id FROM theory_libraries WHERE key=$1)`, key); err != nil {
+				t.Fatal(err)
+			}
+			setImportContractTrigger(t, db, true)
+			if _, err := syncer.Promote(ctx, "xinzhili-round-001", actor); !errors.Is(err, ErrPackageConflict) {
+				t.Fatalf("fingerprint tamper accepted: %v", err)
+			}
+		})
+	}
+}
+
 func setImportContractTrigger(t *testing.T, db *sql.DB, enabled bool) {
 	t.Helper()
 	action := "DISABLE"

@@ -1,12 +1,14 @@
 package theorystore
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -657,10 +659,10 @@ func loadCanonicalDatabaseSnapshot(ctx context.Context, tx *sql.Tx, libraryID in
 
 func verifyDatabaseFingerprint(ctx context.Context, tx *sql.Tx, libraryID int64, encoded []byte, payloadSHA256 string) error {
 	var expected databaseFingerprint
-	if err := json.Unmarshal(encoded, &expected); err != nil {
-		return fmt.Errorf("decode stored database fingerprint: %w", ErrPackageConflict)
+	if err := decodeStrictJSON(encoded, &expected); err != nil {
+		return fmt.Errorf("decode stored database fingerprint: %v: %w", err, ErrPackageConflict)
 	}
-	if expected.SchemaVersion != "xinzhili.database-snapshot.v1" || expected.Snapshot.SchemaVersion != expected.SchemaVersion || expected.SHA256 == "" || expected.PayloadSHA256 != payloadSHA256 {
+	if expected.SchemaVersion != "xinzhili.database-snapshot.v1" || expected.Snapshot.SchemaVersion != expected.SchemaVersion || !isLowerSHA256(expected.SHA256) || !isLowerSHA256(expected.PayloadSHA256) || expected.PayloadSHA256 != payloadSHA256 || !completeSnapshotContract(expected.Snapshot) {
 		return fmt.Errorf("stored database fingerprint contract invalid: %w", ErrPackageConflict)
 	}
 	expectedPayload, err := json.Marshal(expected.Snapshot)
@@ -684,6 +686,44 @@ func verifyDatabaseFingerprint(ctx context.Context, tx *sql.Tx, libraryID int64,
 		return ErrImportedContentChanged
 	}
 	return nil
+}
+
+func decodeStrictJSON(payload []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
+func isLowerSHA256(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func completeSnapshotContract(snapshot canonicalDatabaseSnapshot) bool {
+	for _, raw := range []json.RawMessage{snapshot.Cards, snapshot.Practices, snapshot.SourceWorks, snapshot.SourceFiles, snapshot.CardSources, snapshot.Relations} {
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) < 2 || trimmed[0] != '[' || trimmed[len(trimmed)-1] != ']' || !json.Valid(trimmed) {
+			return false
+		}
+	}
+	return true
 }
 
 func canonicalJSONSHA256(payload []byte) (string, error) {
