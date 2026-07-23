@@ -802,7 +802,10 @@ for (const [state, operation] of [
 assert.match(profileEditPage, /let sessionGeneration = 0/, 'personal profile should maintain a page-session generation')
 assert.match(profileEditPage, /onHide\([^)]*invalidateProfileSession[^)]*\)/, 'personal profile should invalidate stale work when hidden')
 assert.match(profileEditPage, /onUnload\([^)]*invalidateProfileSession[^)]*\)/, 'personal profile should invalidate stale work when unloaded')
-assert.match(profileEditPage, /function\s+isCurrentProfileSession\(generation, token, error\)[\s\S]*generation !== sessionGeneration[\s\S]*token === currentToken[\s\S]*error\.requestToken === token[\s\S]*error\.authSessionCurrent/, 'personal profile should accept only the current token or its immediately-cleared auth failure')
+assert.match(profileEditPage, /function\s+isCurrentProfileSession\(generation, token, error\)[\s\S]*generation !== sessionGeneration[\s\S]*token === currentToken[\s\S]*error\.requestToken === token/, 'personal profile should accept only the current token or an auth failure from that same token')
+const profileSessionGuardBody = sourceBracedBody(profileEditPage, /function\s+isCurrentProfileSession\(generation, token, error\)\s*\{/.exec(profileEditPage)) || ''
+assert.match(profileSessionGuardBody, /!currentToken[\s\S]*error\.authExpired[\s\S]*error\.requestToken === token/, 'personal profile should recognize a concurrent auth failure after the same token was already cleared')
+assert.doesNotMatch(profileSessionGuardBody, /authSessionCurrent/, 'personal profile must not require this request to be the first concurrent 401 that cleared the token')
 
 const profileEditAuthBody = sourceBracedBody(profileEditPage, /function\s+redirectToProfileLogin\s*\([^)]*\)\s*\{/.exec(profileEditPage)) || ''
 assert.match(profileEditAuthBody, /if \(authRedirected\) return[\s\S]*authRedirected = true/, 'personal profile auth expiry should only redirect once')
@@ -824,12 +827,13 @@ const wechatProfileBlocks = [...profileEditPage.matchAll(/\/\/ #ifndef H5([\s\S]
 assert.match(wechatProfileBlocks, /getWechatProfilePayload/, 'the non-H5 profile implementation should keep WeChat one-click synchronization')
 assert.match(wechatProfileBlocks, /async function syncWechatProfile/, 'the non-H5 build should define the WeChat synchronization handler')
 const profileEditSyncBody = sourceBracedBody(profileEditPage, /async\s+function\s+syncWechatProfile\s*\(\s*\)\s*\{/.exec(profileEditPage)) || ''
+assert.match(profileEditSyncBody, /^\s*if \(profileSyncing\.value\) return\s*if \(profileSaving\.value\) return/, 'personal profile sync should not start while either profile PUT operation is active')
 assert.match(profileEditSyncBody, /catch \(e\) \{\s*if \(!isCurrentProfileSession\(generation, token, e\)\) return/, 'personal profile sync failures, including auth failures, should reject an old token session before side effects')
 assert.match(profileEditSyncBody, /finally \{\s*if \(isCurrentProfileSession\(generation, token\)\) profileSyncing\.value = false/, 'personal profile sync completion should not mutate a replacement token session')
 const wechatTemplateBlocks = [...profileEditTemplateRaw.matchAll(/<!-- #ifndef H5 -->([\s\S]*?)<!-- #endif -->/g)].map((match) => match[1]).join('\n')
 assert.match(wechatTemplateBlocks, /open-type=["']chooseAvatar["'][^>]*@chooseavatar=["']onChooseAvatar["']/, 'the WeChat profile page should use the current chooseAvatar capability')
 assert.match(wechatTemplateBlocks, /type=["']nickname["'][^>]*@input=["']onNicknameInput["']/, 'the WeChat profile page should use the current nickname input capability')
-assert.match(wechatTemplateBlocks, /:loading=["']profileSyncing["'][^>]*:disabled=["']profileSyncing["'][^>]*@click=["']syncWechatProfile["']/, 'the WeChat sync button should expose and lock its independent loading state')
+assert.match(wechatTemplateBlocks, /:loading=["']profileSyncing["'][^>]*:disabled=["']profileSyncing \|\| profileSaving["'][^>]*@click=["']syncWechatProfile["']/, 'the WeChat sync button should lock while either profile PUT operation is active')
 const h5ProfileEditBlocks = [...profileEditTemplateRaw.matchAll(/<!-- #ifdef H5 -->([\s\S]*?)<!-- #endif -->/g)].map((match) => match[1]).join('\n')
 assert.match(h5ProfileEditBlocks, /请在微信小程序内同步微信资料/, 'H5 should explain where WeChat profile synchronization is available')
 assert.match(h5ProfileEditBlocks, /<button\b[^>]*\bdisabled\b[^>]*>[^<]*微信[^<]*<\/button>/, 'H5 should render disabled WeChat capability guidance')
@@ -837,13 +841,14 @@ assert.doesNotMatch(h5ProfileEditBlocks, /getUserProfile|chooseAvatar|chooseavat
 assert.match(h5ProfileEditBlocks, /type=["']text["'][^>]*@input=["']onNicknameInput["']/, 'H5 should keep nickname editing available for an existing token')
 
 const profileEditSaveBody = sourceBracedBody(profileEditPage, /async\s+function\s+saveProfile\s*\(\s*\)\s*\{/.exec(profileEditPage)) || ''
+assert.match(profileEditSaveBody, /^\s*if \(profileSaving\.value\) return\s*if \(profileSyncing\.value\) return/, 'personal profile save should not start while either profile PUT operation is active')
 assert.match(profileEditSaveBody, /normalizeWechatProfile\([\s\S]*nickname:\s*nicknameDraft\.value[\s\S]*avatar:\s*avatarDraft\.value/, 'personal profile save should normalize the current nickname and avatar draft')
 assert.match(profileEditSaveBody, /hasProfilePayload\(payload\)/, 'personal profile save should reject an empty normalized payload')
 assert.match(profileEditSaveBody, /const updatedUser = await updateUserInfoApi\(payload\)\s*if \(!isCurrentProfileSession\(generation, token\)\) return\s*user\.value = updatedUser\s*syncDraftFromUser\(\)/, 'personal profile save should guard the PUT response and refresh the form in place')
 assert.match(profileEditSaveBody, /catch \(e\) \{\s*if \(!isCurrentProfileSession\(generation, token, e\)\) return/, 'personal profile save failures, including auth failures, should reject an old token session before side effects')
 assert.match(profileEditSaveBody, /finally \{\s*if \(isCurrentProfileSession\(generation, token\)\) profileSaving\.value = false/, 'personal profile save completion should not mutate a replacement token session')
 assert.doesNotMatch(profileEditSaveBody, /uni\.(?:navigateBack|switchTab)\s*\(/, 'successful profile save should remain on the dedicated page')
-assert.match(profileEditTemplate, /:loading=["']profileSaving["'][^>]*:disabled=["']profileSaving["'][^>]*@click=["']saveProfile["']/, 'personal profile save should expose and lock its independent loading state')
+assert.match(profileEditTemplate, /:loading=["']profileSaving["'][^>]*:disabled=["']profileSaving \|\| profileSyncing["'][^>]*@click=["']saveProfile["']/, 'personal profile save should lock while either profile PUT operation is active')
 assert.doesNotMatch(profileEditPage, /setStorageSync|saveProfileDraft|loadProfileDraft/, 'unsaved personal-profile edits should not be persisted across page exits')
 assert.match(pageStyleDeclarations(profileEditStyle, '.profile-edit-hero'), /linear-gradient\(145deg,\s*#172554,\s*#4338ca 56%,\s*#7c3aed\)/, 'personal profile hero should reuse the approved blue-purple palette')
 assert.match(pageStyleDeclarations(profileEditStyle, '.profile-save'), /min-height:\s*88rpx\s*;/, 'personal profile save should keep an 88rpx touch target')

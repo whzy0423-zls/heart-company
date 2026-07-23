@@ -47,8 +47,7 @@ function isCurrentProfileSession(generation, token, error) {
     !currentToken
     && error
     && error.authExpired
-    && error.requestToken === token
-    && error.authSessionCurrent,
+    && error.requestToken === token,
   )
 }
 
@@ -113,6 +112,7 @@ function onChooseAvatar(e) {
 
 async function syncWechatProfile() {
   if (profileSyncing.value) return
+  if (profileSaving.value) return
   const token = getToken()
   if (!token) {
     redirectToProfileLogin()
@@ -148,6 +148,7 @@ async function syncWechatProfile() {
 
 async function saveProfile() {
   if (profileSaving.value) return
+  if (profileSyncing.value) return
   const token = getToken()
   if (!token) {
     redirectToProfileLogin()
@@ -240,7 +241,7 @@ onUnload(invalidateProfileSession)
           <text class="profile-edit-panel__title">头像与昵称</text>
         </view>
         <!-- #ifndef H5 -->
-        <button class="profile-sync" :loading="profileSyncing" :disabled="profileSyncing" @click="syncWechatProfile">一键同步</button>
+        <button class="profile-sync" :loading="profileSyncing" :disabled="profileSyncing || profileSaving" @click="syncWechatProfile">一键同步</button>
         <!-- #endif -->
         <!-- #ifdef H5 -->
         <button class="profile-sync profile-sync--disabled" disabled>微信资料需在小程序同步</button>
@@ -283,7 +284,7 @@ onUnload(invalidateProfileSession)
         </view>
       </view>
 
-      <button class="profile-save btn-primary ios-button" :loading="profileSaving" :disabled="profileSaving" @click="saveProfile">保存资料</button>
+      <button class="profile-save btn-primary ios-button" :loading="profileSaving" :disabled="profileSaving || profileSyncing" @click="saveProfile">保存资料</button>
       <text class="profile-edit-panel__hint">保存成功后会留在当前页面，你可以确认资料后再返回。</text>
     </view>
   </view>

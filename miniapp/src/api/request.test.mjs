@@ -82,6 +82,18 @@ assert.equal(currentAuthError.requestToken, 'abc', 'auth errors should identify 
 assert.equal(currentAuthError.authSessionCurrent, true, 'auth errors should identify when they cleared the still-current request token')
 assert.equal(getToken(), '', '401/403 should clear stored token')
 
+setToken('shared-token')
+const secondConcurrentUnauthorized = request({ url: '/unauthorized-delayed', auth: true })
+await assert.rejects(request({ url: '/unauthorized', auth: true }), (err) => err.authSessionCurrent === true)
+delayedUnauthorizedSuccess({ statusCode: 401, data: { code: -1, message: 'Unauthorized' } })
+await assert.rejects(
+  secondConcurrentUnauthorized,
+  (err) => err.statusCode === 401
+    && err.requestToken === 'shared-token'
+    && err.authSessionCurrent === false,
+)
+assert.equal(getToken(), '', 'concurrent 401 responses for the same expired token should leave the invalid session cleared')
+
 setToken('token-a')
 const staleUnauthorized = request({ url: '/unauthorized-delayed', auth: true })
 setToken('token-b')
