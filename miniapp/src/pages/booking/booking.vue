@@ -1,5 +1,6 @@
 <script setup>
 import { ref, watch } from 'vue'
+import { onHide, onUnload } from '@dcloudio/uni-app'
 import { ensureLogin } from '../../utils/auth'
 import { createBookingApi } from '../../api'
 import { userErrorMessage } from '../../utils/userMessage'
@@ -15,6 +16,8 @@ const emptyForm = () => ({ contactName: '', phone: '', intent: '', preferredTime
 const form = ref(emptyForm())
 const fieldErrors = ref({ contactName: '', phone: '' })
 const submitting = ref(false)
+const DRAFT_SAVE_DELAY = 250
+let draftSaveTimer = null
 const draft = loadBookingDraft()
 if (draft) {
   const restoredKindIndex = kinds.findIndex((item) => item.value === draft.kind)
@@ -23,13 +26,38 @@ if (draft) {
   delete form.value.kind
 }
 
+function currentDraft() {
+  return { kind: kinds[kindIndex.value].value, ...form.value }
+}
+
+function cancelPendingDraftSave() {
+  if (draftSaveTimer === null) return
+  clearTimeout(draftSaveTimer)
+  draftSaveTimer = null
+}
+
+function scheduleDraftSave() {
+  if (draftSaveTimer !== null) clearTimeout(draftSaveTimer)
+  draftSaveTimer = setTimeout(() => {
+    draftSaveTimer = null
+    saveBookingDraft(currentDraft())
+  }, DRAFT_SAVE_DELAY)
+}
+
+function flushDraftSave() {
+  if (draftSaveTimer !== null) clearTimeout(draftSaveTimer)
+  draftSaveTimer = null
+  saveBookingDraft(currentDraft())
+}
+
 watch(
   [kindIndex, form],
-  () => {
-    saveBookingDraft({ kind: kinds[kindIndex.value].value, ...form.value })
-  },
+  scheduleDraftSave,
   { deep: true },
 )
+
+onHide(flushDraftSave)
+onUnload(flushDraftSave)
 
 function onKindChange(e) {
   kindIndex.value = Number(e.detail.value)
@@ -58,6 +86,7 @@ async function submit() {
     await ensureLogin()
     await createBookingApi({ kind: kinds[kindIndex.value].value, ...form.value })
     uni.showToast({ title: '预约已提交', icon: 'success' })
+    cancelPendingDraftSave()
     clearBookingDraft()
     kindIndex.value = 0
     form.value = emptyForm()
@@ -85,7 +114,7 @@ async function submit() {
       </view>
       <view class="field">
         <text class="label">预约类型</text>
-        <picker :range="kinds" range-key="label" :value="kindIndex" @change="onKindChange">
+        <picker aria-label="预约类型" :range="kinds" range-key="label" :value="kindIndex" @change="onKindChange">
           <view class="picker field-control">
             <text>{{ kinds[kindIndex].label }}</text>
             <view class="picker__arrow" aria-hidden="true" />
@@ -104,24 +133,28 @@ async function submit() {
         <input
           class="input field-control"
           v-model="form.contactName"
+          aria-label="称呼"
+          aria-describedby="contact-name-error"
           placeholder="怎么称呼你"
           :aria-invalid="!!fieldErrors.contactName"
           @input="clearFieldError('contactName')"
         />
-        <text v-if="fieldErrors.contactName" class="field-error">{{ fieldErrors.contactName }}</text>
+        <text v-if="fieldErrors.contactName" id="contact-name-error" class="field-error" role="alert">{{ fieldErrors.contactName }}</text>
       </view>
       <view class="field">
         <text class="label">手机号</text>
         <input
           class="input field-control"
           v-model="form.phone"
+          aria-label="手机号"
+          aria-describedby="phone-error"
           type="number"
           maxlength="11"
           placeholder="方便老师联系"
           :aria-invalid="!!fieldErrors.phone"
           @input="clearFieldError('phone')"
         />
-        <text v-if="fieldErrors.phone" class="field-error">{{ fieldErrors.phone }}</text>
+        <text v-if="fieldErrors.phone" id="phone-error" class="field-error" role="alert">{{ fieldErrors.phone }}</text>
       </view>
     </view>
 
@@ -132,15 +165,15 @@ async function submit() {
       </view>
       <view class="field">
         <text class="label">意向方向</text>
-        <input class="input field-control" v-model="form.intent" placeholder="如：亲子关系 / 个人成长 / 团队" />
+        <input class="input field-control" v-model="form.intent" aria-label="意向方向" placeholder="如：亲子关系 / 个人成长 / 团队" />
       </view>
       <view class="field">
         <text class="label">期望时间</text>
-        <input class="input field-control" v-model="form.preferredTime" placeholder="如：周末 / 工作日晚上" />
+        <input class="input field-control" v-model="form.preferredTime" aria-label="期望时间" placeholder="如：周末 / 工作日晚上" />
       </view>
       <view class="field">
         <text class="label">留言</text>
-        <textarea class="textarea field-control" v-model="form.message" placeholder="想了解的问题（选填）" />
+        <textarea class="textarea field-control" v-model="form.message" aria-label="留言" placeholder="想了解的问题（选填）" />
       </view>
       <text class="draft-hint">填写内容会自动保存在当前设备</text>
     </view>

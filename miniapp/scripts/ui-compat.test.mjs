@@ -297,6 +297,24 @@ assert.match(bookingPage, /v-if=["']fieldErrors\.contactName["']/, 'booking cont
 assert.match(bookingPage, /v-if=["']fieldErrors\.phone["']/, 'booking phone should render an inline validation error')
 assert.match(bookingPage, /:aria-invalid=["']!!fieldErrors\.contactName["']/, 'booking contact name input should expose aria-invalid when invalid')
 assert.match(bookingPage, /:aria-invalid=["']!!fieldErrors\.phone["']/, 'booking phone input should expose aria-invalid when invalid')
+assert.match(bookingPage, /import\s*\{[^}]*onHide[^}]*onUnload[^}]*\}\s*from\s*["']@dcloudio\/uni-app["']/, 'booking should use uni-app page lifecycle hooks for draft flushing')
+assert.match(bookingPage, /const DRAFT_SAVE_DELAY = 250/, 'booking should debounce draft persistence by about 250ms')
+assert.match(bookingPage, /let draftSaveTimer = null/, 'booking should retain its pending draft timer')
+assert.match(bookingPage, /const restoredKindIndex = kinds\.findIndex\([\s\S]*if \(restoredKindIndex >= 0\) kindIndex\.value = restoredKindIndex/, 'booking should keep the default picker index for unknown draft kinds')
+assert.ok(bookingPage.indexOf('const draft = loadBookingDraft()') < bookingPage.indexOf('watch('), 'booking should restore its draft before enabling autosave')
+const bookingWatch = bookingPage.match(/watch\(\s*\[kindIndex, form\],([\s\S]*?)\{ deep: true \},\s*\)/)?.[1] || ''
+assert.match(bookingWatch, /scheduleDraftSave/, 'booking watch should schedule draft persistence')
+assert.doesNotMatch(bookingWatch, /saveBookingDraft/, 'booking watch must not persist on every input event')
+const scheduleDraftBody = sourceBracedBody(bookingPage, /function\s+scheduleDraftSave\s*\(\s*\)\s*\{/.exec(bookingPage)) || ''
+assert.match(scheduleDraftBody, /clearTimeout\(draftSaveTimer\)/, 'booking draft scheduling should reset the prior timer')
+assert.match(scheduleDraftBody, /setTimeout\([\s\S]*DRAFT_SAVE_DELAY\)/, 'booking draft scheduling should use the planned delay')
+const flushDraftBody = sourceBracedBody(bookingPage, /function\s+flushDraftSave\s*\(\s*\)\s*\{/.exec(bookingPage)) || ''
+assert.match(flushDraftBody, /clearTimeout\(draftSaveTimer\)/, 'booking draft flush should clear the pending timer')
+assert.match(flushDraftBody, /saveBookingDraft/, 'booking draft flush should synchronously save current fields')
+assert.match(bookingPage, /onHide\(flushDraftSave\)/, 'booking should flush its draft when hidden')
+assert.match(bookingPage, /onUnload\(flushDraftSave\)/, 'booking should flush its draft before unload')
+const bookingSubmitBody = sourceBracedBody(bookingPage, /async\s+function\s+submit\s*\(\s*\)\s*\{/.exec(bookingPage)) || ''
+assert.match(bookingSubmitBody, /cancelPendingDraftSave\(\)[\s\S]*clearBookingDraft\(\)/, 'successful booking should cancel delayed persistence before clearing its draft')
 assert.match(bookingTemplate, /class=["'][^"']*booking-hero[^"']*nx-page-hero[^"']*["']/, 'booking should open with the shared themed hero')
 assert.match(bookingTemplate, />预约咨询<\//, 'booking hero should keep the appointment eyebrow')
 assert.match(bookingTemplate, />让老师帮你找到合适的学习方式<\//, 'booking hero should state its primary purpose')
@@ -319,6 +337,37 @@ assert.match(bookingTemplate, /<view\s+class=["']picker__arrow["']\s+aria-hidden
 assert.match(bookingTemplate, /@input=["']clearFieldError\('contactName'\)["']/, 'contact name input should clear its nearby error while editing')
 assert.match(bookingTemplate, /@input=["']clearFieldError\('phone'\)["']/, 'phone input should clear its nearby error while editing')
 assert.match(bookingTemplate, /class=["']draft-hint["']>填写内容会自动保存在当前设备<\//, 'booking should place an autosave hint after the learning intent fields')
+
+const bookingPickers = openingTagsFor(bookingTemplate, 'picker')
+assert.equal(bookingPickers.length, 1, 'booking should render one bounded appointment type picker')
+assert.equal(tagAttribute(bookingPickers[0], 'aria-label'), '预约类型', 'booking picker should expose its visible purpose to assistive technology')
+const bookingInputs = openingTagsFor(bookingTemplate, 'input')
+const bookingInputContracts = [
+  { model: 'form.contactName', label: '称呼', describedBy: 'contact-name-error' },
+  { model: 'form.phone', label: '手机号', describedBy: 'phone-error' },
+  { model: 'form.intent', label: '意向方向' },
+  { model: 'form.preferredTime', label: '期望时间' },
+]
+assert.equal(bookingInputs.length, bookingInputContracts.length, 'booking should keep four bounded text inputs')
+for (const { model, label, describedBy } of bookingInputContracts) {
+  const input = bookingInputs.find((tag) => tagAttribute(tag, 'v-model') === model)
+  assert.ok(input, `booking should render the ${model} input`)
+  assert.equal(tagAttribute(input, 'aria-label'), label, `${model} should expose an explicit accessible label`)
+  if (describedBy) assert.equal(tagAttribute(input, 'aria-describedby'), describedBy, `${model} should reference its nearby error`)
+}
+const bookingTextareas = openingTagsFor(bookingTemplate, 'textarea')
+assert.equal(bookingTextareas.length, 1, 'booking should render one bounded message textarea')
+assert.equal(tagAttribute(bookingTextareas[0], 'aria-label'), '留言', 'booking message should expose an explicit accessible label')
+for (const { condition, id } of [
+  { condition: 'fieldErrors.contactName', id: 'contact-name-error' },
+  { condition: 'fieldErrors.phone', id: 'phone-error' },
+]) {
+  assert.match(
+    bookingTemplate,
+    new RegExp(`<text\\s+v-if=["']${condition.replace('.', '\\.')}["']\\s+id=["']${id}["']\\s+class=["']field-error["']\\s+role=["']alert["']>`),
+    `${condition} should render a stable, live nearby error`,
+  )
+}
 
 const h5BookingBlock = bookingPage.match(/<!--\s*#ifdef H5\s*-->([\s\S]*?)<!--\s*#endif\s*-->/)?.[1] || ''
 assert.match(h5BookingBlock, /<button\s+class=["']booking-submit booking-submit--disabled ios-button["']\s+disabled>请在微信小程序内提交预约<\/button>/, 'H5 should render the exact disabled booking action')

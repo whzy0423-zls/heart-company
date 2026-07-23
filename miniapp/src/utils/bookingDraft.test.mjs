@@ -53,5 +53,27 @@ assert.deepEqual(loadBookingDraft(), {
 clearBookingDraft()
 assert.equal(storage[BOOKING_DRAFT_KEY], undefined, 'clear should remove persisted draft')
 
+storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: 'consult', contactName: '旧草稿' } }
+saveBookingDraft({ kind: 'consult', contactName: '  ', phone: '', intent: '', preferredTime: '', message: '' })
+assert.equal(storage[BOOKING_DRAFT_KEY], undefined, 'saving an empty default form should clear the prior draft')
+
+storage[BOOKING_DRAFT_KEY] = '{broken json'
+assert.equal(loadBookingDraft(), null, 'corrupt serialized storage should be ignored')
+
+storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: 'future-kind', contactName: '未来类型' } }
+assert.equal(loadBookingDraft().kind, 'future-kind', 'unknown kinds should remain data-safe for the page fallback guard')
+
+globalThis.uni = {
+  getStorageSync() { throw new Error('storage unavailable') },
+  setStorageSync() { throw new Error('storage unavailable') },
+  removeStorageSync() { throw new Error('storage unavailable') },
+}
+assert.equal(loadBookingDraft(), null, 'storage read failures should degrade to no draft')
+assert.doesNotThrow(
+  () => saveBookingDraft({ kind: 'course', contactName: '测试异常', phone: '', intent: '', preferredTime: '', message: '' }),
+  'storage write failures should not interrupt form editing',
+)
+assert.doesNotThrow(() => clearBookingDraft(), 'storage removal failures should not escape')
+
 console.log('booking draft tests passed')
 await rm(dir, { force: true, recursive: true })
