@@ -59,8 +59,16 @@ async function loadContent(options = {}) {
   }
 }
 
-function markTeacherImageError(name) {
-  teacherImageErrors.value = { ...teacherImageErrors.value, [name]: true }
+function teacherMediaKey(teacher, index) {
+  return `${teacher.name || ''}::${teacher.avatar || ''}::${index}`
+}
+
+function courseMediaKey(course, index) {
+  return `${course.title || ''}::${course.cover || ''}::${index}`
+}
+
+function markTeacherImageError(key) {
+  teacherImageErrors.value = { ...teacherImageErrors.value, [key]: true }
 }
 
 function markCourseImageError(key) {
@@ -102,14 +110,14 @@ function goTest() {
           <text>{{ loadError }}</text>
           <button class="retry" hover-class="retry--hover" @click="loadContent">重新加载</button>
         </view>
-        <view v-for="teacher in teachers" :key="teacher.name" class="teacher-card">
+        <view v-for="(teacher, teacherIndex) in teachers" :key="teacherMediaKey(teacher, teacherIndex)" class="teacher-card">
           <image
-            v-if="teacher.avatar && !teacherImageErrors[teacher.name]"
+            v-if="teacher.avatar && !teacherImageErrors[teacherMediaKey(teacher, teacherIndex)]"
             class="teacher-media teacher-card__avatar"
             :src="teacher.avatar"
             mode="aspectFill"
             lazy-load
-            @error="markTeacherImageError(teacher.name)"
+            @error="markTeacherImageError(teacherMediaKey(teacher, teacherIndex))"
           />
           <view v-else class="teacher-media__fallback" aria-hidden="true">
             {{ teacher.name ? teacher.name.slice(0, 1) : '师' }}
@@ -134,14 +142,14 @@ function goTest() {
         </view>
         <view v-if="loading" class="empty">课程内容加载中…</view>
         <block v-else>
-          <view v-for="(c, i) in coursewareItems" :key="c.title + i" class="courseware-card">
+          <view v-for="(c, i) in coursewareItems" :key="courseMediaKey(c, i)" class="courseware-card">
             <image
-              v-if="c.cover && !courseImageErrors[c.title + i]"
+              v-if="c.cover && !courseImageErrors[courseMediaKey(c, i)]"
               class="course-media courseware-card__cover"
               :src="c.cover"
               mode="aspectFill"
               lazy-load
-              @error="markCourseImageError(c.title + i)"
+              @error="markCourseImageError(courseMediaKey(c, i))"
             />
             <view v-else class="course-media__fallback" aria-hidden="true">{{ c.badge || (i + 1) }}</view>
             <view class="courseware-card__body">

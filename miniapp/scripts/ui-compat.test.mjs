@@ -562,7 +562,18 @@ for (const className of ['teacher-media__fallback', 'course-media__fallback', 't
 for (const stateName of ['teacherImageErrors', 'courseImageErrors', 'typeImageErrors']) {
   assert.match(learnPage, new RegExp(`const\\s+${stateName}\\s*=\\s*ref\\(\\{\\}\\)`), `learn page should keep an independent ${stateName} map`)
 }
-assert.match(learnPage, /teacherImageErrors\.value\s*=\s*\{\s*\.\.\.teacherImageErrors\.value,\s*\[name\]:\s*true\s*\}/, 'teacher image failures should update immutably by teacher name')
+assert.match(learnPage, /function\s+teacherMediaKey\s*\(teacher,\s*index\)\s*\{\s*return\s+`\$\{teacher\.name\s*\|\|\s*''\}::\$\{teacher\.avatar\s*\|\|\s*''\}::\$\{index\}`\s*\}/, 'teacher media identity should include name, avatar, and index')
+assert.match(learnPage, /function\s+courseMediaKey\s*\(course,\s*index\)\s*\{\s*return\s+`\$\{course\.title\s*\|\|\s*''\}::\$\{course\.cover\s*\|\|\s*''\}::\$\{index\}`\s*\}/, 'course media identity should include title, cover, and index')
+const teacherKeyExpression = learnPage.match(/function\s+teacherMediaKey\s*\(teacher,\s*index\)\s*\{\s*return\s+([^\n]+)\n/)?.[1]
+const courseKeyExpression = learnPage.match(/function\s+courseMediaKey\s*\(course,\s*index\)\s*\{\s*return\s+([^\n]+)\n/)?.[1]
+assert.ok(teacherKeyExpression && courseKeyExpression, 'learn media key expressions should be executable for collision checks')
+const testedTeacherMediaKey = Function('teacher', 'index', `return ${teacherKeyExpression}`)
+const testedCourseMediaKey = Function('course', 'index', `return ${courseKeyExpression}`)
+assert.notEqual(testedTeacherMediaKey({ name: '同名', avatar: '/a.png' }, 0), testedTeacherMediaKey({ name: '同名', avatar: '/b.png' }, 0), 'same-name teachers with different avatars should not share media state')
+assert.notEqual(testedTeacherMediaKey({ name: '同名', avatar: '/a.png' }, 0), testedTeacherMediaKey({ name: '同名', avatar: '/a.png' }, 1), 'duplicate teachers should not share media state across indexes')
+assert.notEqual(testedCourseMediaKey({ title: '同名课程', cover: '/a.png' }, 0), testedCourseMediaKey({ title: '同名课程', cover: '/b.png' }, 0), 'same-title courses with different covers should not share media state')
+assert.notEqual(testedCourseMediaKey({ title: '同名课程', cover: '/a.png' }, 0), testedCourseMediaKey({ title: '同名课程', cover: '/a.png' }, 1), 'duplicate courses should not share media state across indexes')
+assert.match(learnPage, /teacherImageErrors\.value\s*=\s*\{\s*\.\.\.teacherImageErrors\.value,\s*\[key\]:\s*true\s*\}/, 'teacher image failures should update immutably by composite key')
 assert.match(learnPage, /courseImageErrors\.value\s*=\s*\{\s*\.\.\.courseImageErrors\.value,\s*\[key\]:\s*true\s*\}/, 'course image failures should update immutably by title and index key')
 assert.match(learnPage, /typeImageErrors\.value\s*=\s*\{\s*\.\.\.typeImageErrors\.value,\s*\[id\]:\s*true\s*\}/, 'type image failures should update immutably by type id')
 
@@ -571,18 +582,23 @@ const courseImages = learnImages.filter((tag) => (tagAttribute(tag, 'class') || 
 const courseCards = learnViews.filter((tag) => (tagAttribute(tag, 'class') || '').split(/\s+/).includes('courseware-card'))
 const typeImage = learnTagByClass(learnImages, 'type-badge__avatar')
 assert.ok(teacherImage, 'learn page should render a teacher image element')
-assert.equal(tagAttribute(teacherImage, 'v-if'), 'teacher.avatar && !teacherImageErrors[teacher.name]', 'teacher image should use its own failure key in v-if')
-assert.equal(tagAttribute(teacherImage, '@error'), 'markTeacherImageError(teacher.name)', 'teacher image should mark its own failure key')
+assert.equal(tagAttribute(teacherImage, 'v-if'), 'teacher.avatar && !teacherImageErrors[teacherMediaKey(teacher, teacherIndex)]', 'teacher image should use its composite failure key in v-if')
+assert.equal(tagAttribute(teacherImage, '@error'), 'markTeacherImageError(teacherMediaKey(teacher, teacherIndex))', 'teacher image should mark its composite failure key')
 assert.equal(courseImages.length, 1, 'learn template should define one repeated course media image')
-assert.equal(tagAttribute(courseImages[0], 'v-if'), 'c.cover && !courseImageErrors[c.title + i]', 'course image should use its title and index failure key in v-if')
-assert.equal(tagAttribute(courseImages[0], '@error'), 'markCourseImageError(c.title + i)', 'course image should mark its own title and index key')
+assert.equal(tagAttribute(courseImages[0], 'v-if'), 'c.cover && !courseImageErrors[courseMediaKey(c, i)]', 'course image should use its composite failure key in v-if')
+assert.equal(tagAttribute(courseImages[0], '@error'), 'markCourseImageError(courseMediaKey(c, i))', 'course image should mark its composite failure key')
 assert.equal(tagAttribute(courseImages[0], '@click'), undefined, 'course image must remain display-only without click behavior')
 assert.equal(courseCards.length, 1, 'learn template should define one repeated course card view')
 assert.equal(tagAttribute(courseCards[0], 'v-for'), '(c, i) in coursewareItems', 'course card view should repeat the configured course items')
+assert.equal(tagAttribute(courseCards[0], ':key'), 'courseMediaKey(c, i)', 'course card should use the same composite media identity as its image failure state')
 assert.equal(tagAttribute(courseCards[0], '@click'), undefined, 'course card must remain display-only without click behavior')
 assert.ok(typeImage, 'learn page should render a type image element')
 assert.equal(tagAttribute(typeImage, 'v-if'), '!typeImageErrors[t.id]', 'type image should use its own id failure key in v-if')
 assert.equal(tagAttribute(typeImage, '@error'), 'markTypeImageError(t.id)', 'type image should mark its own id')
+
+const teacherCard = learnTagByClass(learnViews, 'teacher-card')
+assert.equal(tagAttribute(teacherCard, 'v-for'), '(teacher, teacherIndex) in teachers', 'teacher cards should expose their list index for stable media identity')
+assert.equal(tagAttribute(teacherCard, ':key'), 'teacherMediaKey(teacher, teacherIndex)', 'teacher cards should use the same composite media identity as their image failure state')
 
 const teacherFallback = learnTagByClass(learnViews, 'teacher-media__fallback')
 const courseFallback = learnTagByClass(learnViews, 'course-media__fallback')
