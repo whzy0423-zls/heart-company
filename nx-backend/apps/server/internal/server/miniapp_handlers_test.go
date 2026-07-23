@@ -6,8 +6,10 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/miniapp"
 	"nine-xing/nx-backend/apps/server/internal/rag"
@@ -247,6 +250,105 @@ func TestWxLoginReturnsBadRequestForInvalidChannelOrScene(t *testing.T) {
 
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+type miniappTestRecorderFake struct {
+	record miniapp.TestRecord
+	err    error
+	calls  int
+	uid    int64
+	input  miniapp.TestRecordInput
+}
+
+func (f *miniappTestRecorderFake) SaveTestRecord(_ context.Context, uid int64, in miniapp.TestRecordInput) (miniapp.TestRecord, error) {
+	f.calls++
+	f.uid = uid
+	f.input = in
+	return f.record, f.err
+}
+
+func performMiniappTestRecordPost(s *Server, payload string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(http.MethodPost, "/api/miniapp/test-records", strings.NewReader(payload))
+	request.Header.Set("Content-Type", "application/json")
+	request = request.WithContext(withUser(request.Context(), auth.UserInfo{ID: 42, Roles: []string{miniappRole}}))
+	response := httptest.NewRecorder()
+	s.miniappTestRecords(response, request)
+	return response
+}
+
+func TestMiniappTestRecordsPostUsesTransactionalServiceAndKeepsResponseCompatible(t *testing.T) {
+	service := &miniappTestRecorderFake{record: miniapp.TestRecord{
+		ID:         "77",
+		Gender:     "female",
+		ResultType: 9,
+		SecondType: 1,
+		Scores:     json.RawMessage(`{"9":18}`),
+		Centers:    json.RawMessage(`[]`),
+		CreateTime: "2026/07/23 12:00:00",
+	}}
+	s := &Server{miniappTestService: service}
+
+	response := performMiniappTestRecordPost(s, `{"gender":"female","resultType":9,"secondType":1,"scores":{"9":18},"centers":[]}`)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+	}
+	if service.calls != 1 || service.uid != 42 || service.input.ResultType != 9 || service.input.SecondType != 1 {
+		t.Fatalf("unexpected service call: %+v", service)
+	}
+	var envelope struct {
+		Data miniapp.TestRecord `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Data.ID != "77" || envelope.Data.ResultType != 9 {
+		t.Fatalf("incompatible response: %+v", envelope.Data)
+	}
+}
+
+func TestMiniappTestRecordsPostMapsValidationAndInternalErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+	}{
+		{name: "validation", err: fmt.Errorf("invalid: %w", miniapp.ErrInvalidTestRecord), wantStatus: http.StatusBadRequest},
+		{name: "internal", err: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &miniappTestRecorderFake{err: tt.err}
+			response := performMiniappTestRecordPost(&Server{miniappTestService: service}, `{"resultType":9}`)
+			if response.Code != tt.wantStatus {
+				t.Fatalf("status = %d body=%s, want %d", response.Code, response.Body.String(), tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestMiniappTestRecordsPostRejectsMalformedTrailingAndOversizedJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "malformed", payload: `{"resultType":`},
+		{name: "trailing", payload: `{"resultType":9} trailing-garbage`},
+		{name: "multiple values", payload: `{"resultType":9}{"resultType":8}`},
+		{name: "oversized", payload: `{"resultType":9,"scores":{"value":"` + strings.Repeat("x", 132*1024) + `"}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &miniappTestRecorderFake{record: miniapp.TestRecord{ID: "77", ResultType: 9}}
+			response := performMiniappTestRecordPost(&Server{miniappTestService: service}, tt.payload)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body=%s, want 400", response.Code, response.Body.String())
+			}
+			if service.calls != 0 {
+				t.Fatalf("invalid JSON reached service %d times", service.calls)
 			}
 		})
 	}

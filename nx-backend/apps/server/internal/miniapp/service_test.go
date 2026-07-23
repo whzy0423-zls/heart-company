@@ -3,6 +3,7 @@ package miniapp
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -73,6 +74,20 @@ type userServiceFakeUsers struct {
 	channel     string
 	scene       string
 	waitForDone bool
+	record      TestRecord
+	insertErr   error
+	updateErr   error
+	insertCalls int
+	updateCalls int
+	insertQ     dbtx.DBTX
+	updateQ     dbtx.DBTX
+	insertCtx   context.Context
+	updateCtx   context.Context
+	insertUID   int64
+	updateUID   int64
+	input       TestRecordInput
+	mainType    int
+	waitInsert  bool
 }
 
 func (f *userServiceFakeUsers) UpsertByOpenIDWithDBTX(ctx context.Context, q dbtx.DBTX, openid, unionid, channel, scene string) (int64, bool, error) {
@@ -98,6 +113,28 @@ func (f *userServiceFakeUsers) GetUserWithDBTX(ctx context.Context, q dbtx.DBTX,
 		return User{}, errors.New("unexpected user id")
 	}
 	return f.user, f.getErr
+}
+
+func (f *userServiceFakeUsers) InsertTestRecord(ctx context.Context, q dbtx.DBTX, userID int64, in TestRecordInput) (TestRecord, error) {
+	f.insertCalls++
+	f.insertCtx = ctx
+	f.insertQ = q
+	f.insertUID = userID
+	f.input = in
+	if f.waitInsert {
+		<-ctx.Done()
+		return TestRecord{}, ctx.Err()
+	}
+	return f.record, f.insertErr
+}
+
+func (f *userServiceFakeUsers) UpdateMainType(ctx context.Context, q dbtx.DBTX, userID int64, resultType int) error {
+	f.updateCalls++
+	f.updateCtx = ctx
+	f.updateQ = q
+	f.updateUID = userID
+	f.mainType = resultType
+	return f.updateErr
 }
 
 type userServiceFakeMessages struct {
@@ -336,5 +373,242 @@ func TestMiniappUserStoreRejectsInvalidInputBeforeQuery(t *testing.T) {
 				t.Fatalf("error = %v, want %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestMiniappTestRecordCreatesMessageAndUpdatesMainTypeInSameTransaction(t *testing.T) {
+	tx := &userServiceFakeTx{}
+	store := &userServiceFakeUsers{
+		id:     42,
+		user:   User{ID: "42", Nickname: " 小芯 ", MainType: 0},
+		record: TestRecord{ID: "77", Gender: "female", ResultType: 9, SecondType: 1, Scores: json.RawMessage(`{"9":18}`), Centers: json.RawMessage(`[{"key":"gut","pct":80}]`), CreateTime: "2026/07/23 12:34:56"},
+	}
+	messages := &userServiceFakeMessages{created: true}
+	beginner := &userServiceFakeBeginner{tx: tx}
+	in := TestRecordInput{Gender: "female", ResultType: 9, SecondType: 1, Scores: json.RawMessage(`{"9":18}`), Centers: json.RawMessage(`[{"key":"gut","pct":80}]`)}
+
+	record, err := NewService(beginner, store, messages).SaveTestRecord(context.Background(), 42, in)
+
+	if err != nil {
+		t.Fatalf("SaveTestRecord() error = %v", err)
+	}
+	if record.ID != "77" {
+		t.Fatalf("record = %+v, want id 77", record)
+	}
+	if store.insertQ != tx || store.updateQ != tx || store.getQ != tx || messages.gotQ != tx {
+		t.Fatal("record insert, main type update, user read and message must share one transaction")
+	}
+	if beginner.ctx != store.insertCtx || beginner.ctx != store.updateCtx || beginner.ctx != store.getCtx || beginner.ctx != messages.gotCtx {
+		t.Fatal("all test record operations must share one operation context")
+	}
+	deadline, ok := beginner.ctx.Deadline()
+	if !ok || time.Until(deadline) < 9*time.Second || time.Until(deadline) > 11*time.Second {
+		t.Fatalf("operation deadline = %v, want about 10 seconds", deadline)
+	}
+	if store.insertUID != 42 || store.updateUID != 42 || store.mainType != 9 {
+		t.Fatalf("unexpected user/main type writes: insertUID=%d updateUID=%d mainType=%d", store.insertUID, store.updateUID, store.mainType)
+	}
+	wantEvent := businessmessage.MiniappQuizSubmitted("77", "42", "微信用户42", 9)
+	wantEvent.Content += "，提交时间：2026/07/23 12:34:56"
+	if messages.event != wantEvent {
+		t.Fatalf("message event = %+v, want %+v", messages.event, wantEvent)
+	}
+	if strings.Contains(messages.event.Content, "openid") || strings.Contains(messages.event.Content, "unionid") {
+		t.Fatalf("message leaked identity: %+v", messages.event)
+	}
+	if tx.commitCalls != 1 || tx.rollbackCalls != 1 {
+		t.Fatalf("commit=%d rollback=%d, want 1 and deferred 1", tx.commitCalls, tx.rollbackCalls)
+	}
+}
+
+func TestMiniappTestRecordMessageNeverUsesNicknameThatMayContainWechatIdentity(t *testing.T) {
+	for _, nickname := range []string{"openid-secret-value", "unionid-secret-value", "昵称-openid-secret-value"} {
+		t.Run(nickname, func(t *testing.T) {
+			tx := &userServiceFakeTx{}
+			store := &userServiceFakeUsers{
+				id:     42,
+				user:   User{ID: "42", Nickname: nickname},
+				record: TestRecord{ID: "77", ResultType: 9, CreateTime: "2026/07/23 12:34:56"},
+			}
+			messages := &userServiceFakeMessages{created: true}
+
+			_, err := NewService(&userServiceFakeBeginner{tx: tx}, store, messages).SaveTestRecord(context.Background(), 42, TestRecordInput{ResultType: 9})
+
+			if err != nil {
+				t.Fatalf("SaveTestRecord() error = %v", err)
+			}
+			if strings.Contains(messages.event.Content, nickname) || !strings.Contains(messages.event.Content, "微信用户42") {
+				t.Fatalf("message did not use safe identifier: %+v", messages.event)
+			}
+		})
+	}
+}
+
+func TestMiniappTestRecordFailuresRollbackWithoutCommit(t *testing.T) {
+	wantErr := errors.New("dependency failed")
+	tests := []struct {
+		name       string
+		configure  func(*userServiceFakeUsers, *userServiceFakeMessages)
+		wantPrefix string
+		wantUpdate int
+		wantGet    int
+		wantMsg    int
+	}{
+		{name: "insert", configure: func(store *userServiceFakeUsers, _ *userServiceFakeMessages) { store.insertErr = wantErr }, wantPrefix: "insert miniapp test record"},
+		{name: "update main type", configure: func(store *userServiceFakeUsers, _ *userServiceFakeMessages) { store.updateErr = wantErr }, wantPrefix: "update miniapp main type", wantUpdate: 1},
+		{name: "read user", configure: func(store *userServiceFakeUsers, _ *userServiceFakeMessages) { store.getErr = wantErr }, wantPrefix: "get miniapp test user", wantUpdate: 1, wantGet: 1},
+		{name: "create message", configure: func(_ *userServiceFakeUsers, messages *userServiceFakeMessages) { messages.err = wantErr }, wantPrefix: "create miniapp test message", wantUpdate: 1, wantGet: 1, wantMsg: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := &userServiceFakeTx{}
+			store := &userServiceFakeUsers{id: 42, user: User{ID: "42", Nickname: "小芯"}, record: TestRecord{ID: "77", ResultType: 9}}
+			messages := &userServiceFakeMessages{}
+			tt.configure(store, messages)
+
+			_, err := NewService(&userServiceFakeBeginner{tx: tx}, store, messages).SaveTestRecord(context.Background(), 42, TestRecordInput{ResultType: 9})
+
+			if !errors.Is(err, wantErr) || !strings.Contains(err.Error(), tt.wantPrefix) {
+				t.Fatalf("error = %v, want wrapped %q", err, tt.wantPrefix)
+			}
+			if tx.commitCalls != 0 || tx.rollbackCalls != 1 {
+				t.Fatalf("commit=%d rollback=%d, want 0 and 1", tx.commitCalls, tx.rollbackCalls)
+			}
+			if store.updateCalls != tt.wantUpdate || store.getCalls != tt.wantGet || messages.calls != tt.wantMsg {
+				t.Fatalf("later calls update/get/message = %d/%d/%d, want %d/%d/%d", store.updateCalls, store.getCalls, messages.calls, tt.wantUpdate, tt.wantGet, tt.wantMsg)
+			}
+		})
+	}
+}
+
+func TestMiniappTestRecordRepeatedSubmissionsCreateDistinctMessages(t *testing.T) {
+	var events []businessmessage.Event
+	for _, recordID := range []string{"77", "78"} {
+		tx := &userServiceFakeTx{}
+		store := &userServiceFakeUsers{id: 42, user: User{ID: "42", Nickname: "小芯"}, record: TestRecord{ID: recordID, ResultType: 9}}
+		messages := &userServiceFakeMessages{created: true}
+
+		if _, err := NewService(&userServiceFakeBeginner{tx: tx}, store, messages).SaveTestRecord(context.Background(), 42, TestRecordInput{ResultType: 9}); err != nil {
+			t.Fatalf("SaveTestRecord(%s) error = %v", recordID, err)
+		}
+		events = append(events, messages.event)
+	}
+	if events[0].BusinessID == events[1].BusinessID || events[0].BusinessID != "77" || events[1].BusinessID != "78" {
+		t.Fatalf("message business ids = %q, %q, want distinct record ids", events[0].BusinessID, events[1].BusinessID)
+	}
+}
+
+func TestMiniappTestRecordCommitFailureReturnsError(t *testing.T) {
+	wantErr := errors.New("commit unavailable")
+	tx := &userServiceFakeTx{commitErr: wantErr}
+	store := &userServiceFakeUsers{id: 42, user: User{ID: "42"}, record: TestRecord{ID: "77", ResultType: 9}}
+
+	_, err := NewService(&userServiceFakeBeginner{tx: tx}, store, &userServiceFakeMessages{}).SaveTestRecord(context.Background(), 42, TestRecordInput{ResultType: 9})
+
+	if !errors.Is(err, wantErr) || !strings.Contains(err.Error(), "commit miniapp test transaction") {
+		t.Fatalf("error = %v, want wrapped commit error", err)
+	}
+	if tx.commitCalls != 1 || tx.rollbackCalls != 1 {
+		t.Fatalf("commit=%d rollback=%d, want 1 and 1", tx.commitCalls, tx.rollbackCalls)
+	}
+}
+
+func TestMiniappTestRecordCanceledContextRollsBack(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	tx := &userServiceFakeTx{}
+	store := &userServiceFakeUsers{id: 42, waitInsert: true}
+
+	_, err := NewService(&userServiceFakeBeginner{tx: tx}, store, &userServiceFakeMessages{}).SaveTestRecord(ctx, 42, TestRecordInput{ResultType: 9})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+	if tx.commitCalls != 0 || tx.rollbackCalls != 1 {
+		t.Fatalf("commit=%d rollback=%d, want 0 and 1", tx.commitCalls, tx.rollbackCalls)
+	}
+}
+
+func TestMiniappTestRecordRejectsInvalidInputBeforeTransaction(t *testing.T) {
+	tests := []struct {
+		name string
+		uid  int64
+		in   TestRecordInput
+	}{
+		{name: "invalid user", uid: 0, in: TestRecordInput{ResultType: 1}},
+		{name: "invalid result", uid: 1, in: TestRecordInput{ResultType: 10}},
+		{name: "invalid second", uid: 1, in: TestRecordInput{ResultType: 1, SecondType: -1}},
+		{name: "invalid scores json", uid: 1, in: TestRecordInput{ResultType: 1, Scores: json.RawMessage(`{`)}},
+		{name: "invalid centers json", uid: 1, in: TestRecordInput{ResultType: 1, Centers: json.RawMessage(`[`)}},
+		{name: "scores too large", uid: 1, in: TestRecordInput{ResultType: 1, Scores: json.RawMessage(`{"value":"` + strings.Repeat("x", maxTestRecordJSONBytes) + `"}`)}},
+		{name: "centers too large", uid: 1, in: TestRecordInput{ResultType: 1, Centers: json.RawMessage(`["` + strings.Repeat("x", maxTestRecordJSONBytes) + `"]`)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			beginner := &userServiceFakeBeginner{tx: &userServiceFakeTx{}}
+			store := &userServiceFakeUsers{id: tt.uid}
+
+			_, err := NewService(beginner, store, &userServiceFakeMessages{}).SaveTestRecord(context.Background(), tt.uid, tt.in)
+
+			if !errors.Is(err, ErrInvalidTestRecord) {
+				t.Fatalf("error = %v, want ErrInvalidTestRecord", err)
+			}
+			if beginner.calls != 0 || store.insertCalls != 0 {
+				t.Fatalf("invalid input reached transaction: begin=%d insert=%d", beginner.calls, store.insertCalls)
+			}
+		})
+	}
+}
+
+func TestMiniappTestRecordStoreRejectsNilQueryTarget(t *testing.T) {
+	store := &Store{}
+	_, err := store.InsertTestRecord(context.Background(), nil, 1, TestRecordInput{ResultType: 1})
+	if !errors.Is(err, ErrNilDBTX) {
+		t.Fatalf("InsertTestRecord() error = %v, want ErrNilDBTX", err)
+	}
+	if err := store.UpdateMainType(context.Background(), nil, 1, 1); !errors.Is(err, ErrNilDBTX) {
+		t.Fatalf("UpdateMainType() error = %v, want ErrNilDBTX", err)
+	}
+}
+
+func TestMiniappTestRecordRejectsUnconfiguredService(t *testing.T) {
+	tests := []struct {
+		name    string
+		service *Service
+	}{
+		{name: "nil receiver", service: nil},
+		{name: "missing beginner", service: NewService(nil, &userServiceFakeUsers{}, &userServiceFakeMessages{})},
+		{name: "missing users and tests", service: NewService(&userServiceFakeBeginner{tx: &userServiceFakeTx{}}, nil, &userServiceFakeMessages{})},
+		{name: "login only users", service: NewService(&userServiceFakeBeginner{tx: &userServiceFakeTx{}}, loginOnlyUsers{inner: &userServiceFakeUsers{}}, &userServiceFakeMessages{})},
+		{name: "missing messages", service: NewService(&userServiceFakeBeginner{tx: &userServiceFakeTx{}}, &userServiceFakeUsers{}, nil)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.service.SaveTestRecord(context.Background(), 1, TestRecordInput{ResultType: 1})
+			if !errors.Is(err, ErrServiceNotConfigured) {
+				t.Fatalf("error = %v, want ErrServiceNotConfigured", err)
+			}
+		})
+	}
+}
+
+type loginOnlyUsers struct{ inner *userServiceFakeUsers }
+
+func (f loginOnlyUsers) UpsertByOpenIDWithDBTX(ctx context.Context, q dbtx.DBTX, openid, unionid, channel, scene string) (int64, bool, error) {
+	return f.inner.UpsertByOpenIDWithDBTX(ctx, q, openid, unionid, channel, scene)
+}
+
+func (f loginOnlyUsers) GetUserWithDBTX(ctx context.Context, q dbtx.DBTX, id int64) (User, error) {
+	return f.inner.GetUserWithDBTX(ctx, q, id)
+}
+
+func TestMiniappUserDoesNotRequireTestRecordDependency(t *testing.T) {
+	tx := &userServiceFakeTx{}
+	users := &userServiceFakeUsers{id: 42, created: false}
+
+	id, err := NewService(&userServiceFakeBeginner{tx: tx}, loginOnlyUsers{inner: users}, &userServiceFakeMessages{}).UpsertUser(context.Background(), "openid", "", "", "")
+
+	if err != nil || id != 42 {
+		t.Fatalf("UpsertUser() = (%d, %v), want (42, nil)", id, err)
 	}
 }

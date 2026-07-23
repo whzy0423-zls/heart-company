@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -128,14 +129,28 @@ func (s *Server) miniappTestRecords(w http.ResponseWriter, r *http.Request) {
 		}
 		httpx.OK(w, map[string]any{"items": items})
 	case http.MethodPost:
+		r.Body = http.MaxBytesReader(w, r.Body, 132*1024)
 		var in miniapp.TestRecordInput
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		decoder := json.NewDecoder(r.Body)
+		if err := decoder.Decode(&in); err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
 			return
 		}
-		rec, err := s.miniapp.SaveTestRecord(r.Context(), uid, in)
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
+			return
+		}
+		if s.miniappTestService == nil {
+			httpx.Fail(w, http.StatusInternalServerError, miniapp.ErrServiceNotConfigured.Error())
+			return
+		}
+		rec, err := s.miniappTestService.SaveTestRecord(r.Context(), uid, in)
 		if err != nil {
-			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			if errors.Is(err, miniapp.ErrInvalidTestRecord) {
+				httpx.Fail(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			httpx.Fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		httpx.OK(w, rec)

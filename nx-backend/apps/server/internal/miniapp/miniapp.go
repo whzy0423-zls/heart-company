@@ -27,6 +27,11 @@ func NewStore(database *sql.DB) *Store {
 const queryTimeout = 10 * time.Second
 
 const (
+	maxTestRecordJSONBytes = 64 * 1024
+	maxTestGenderRunes     = 32
+)
+
+const (
 	maxOpenIDRunes  = 128
 	maxUnionIDRunes = 128
 	maxChannelRunes = 64
@@ -37,6 +42,7 @@ var (
 	ErrNilDBTX           = errors.New("miniapp: query target is nil")
 	ErrInvalidOpenID     = errors.New("miniapp: invalid openid")
 	ErrInvalidUserSource = errors.New("miniapp: invalid user source")
+	ErrInvalidTestRecord = errors.New("miniapp: invalid test record")
 )
 
 func (s *Store) ctx(parent context.Context) (context.Context, context.CancelFunc) {
@@ -237,39 +243,45 @@ type TestRecordInput struct {
 	Centers    json.RawMessage `json:"centers"`
 }
 
-func (s *Store) SaveTestRecord(ctx context.Context, userID int64, in TestRecordInput) (TestRecord, error) {
-	c, cancel := s.ctx(ctx)
-	defer cancel()
-
-	scores := string(in.Scores)
-	if scores == "" {
-		scores = "{}"
+func normalizeTestRecordInput(userID int64, in TestRecordInput) (TestRecordInput, error) {
+	if userID <= 0 || in.ResultType < 1 || in.ResultType > 9 || in.SecondType < 0 || in.SecondType > 9 {
+		return TestRecordInput{}, ErrInvalidTestRecord
 	}
-	centers := string(in.Centers)
-	if centers == "" {
-		centers = "[]"
+	in.Gender = strings.TrimSpace(in.Gender)
+	if utf8.RuneCountInString(in.Gender) > maxTestGenderRunes || containsControl(in.Gender) {
+		return TestRecordInput{}, ErrInvalidTestRecord
 	}
+	if len(in.Scores) == 0 {
+		in.Scores = json.RawMessage(`{}`)
+	}
+	if len(in.Centers) == 0 {
+		in.Centers = json.RawMessage(`[]`)
+	}
+	if len(in.Scores) > maxTestRecordJSONBytes || len(in.Centers) > maxTestRecordJSONBytes ||
+		!json.Valid(in.Scores) || !json.Valid(in.Centers) {
+		return TestRecordInput{}, ErrInvalidTestRecord
+	}
+	in.Scores = append(json.RawMessage(nil), in.Scores...)
+	in.Centers = append(json.RawMessage(nil), in.Centers...)
+	return in, nil
+}
 
-	tx, err := s.db.BeginTx(c, nil)
+func (s *Store) InsertTestRecord(ctx context.Context, q dbtx.DBTX, userID int64, in TestRecordInput) (TestRecord, error) {
+	in, err := normalizeTestRecordInput(userID, in)
 	if err != nil {
 		return TestRecord{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	if q == nil {
+		return TestRecord{}, ErrNilDBTX
+	}
 
 	var id int64
 	var ct time.Time
-	if err := tx.QueryRowContext(c,
+	if err := q.QueryRowContext(ctx,
 		`INSERT INTO test_records (wx_user_id, gender, result_type, second_type, scores, centers)
 		 VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb) RETURNING id, create_time`,
-		userID, in.Gender, in.ResultType, in.SecondType, scores, centers,
+		userID, in.Gender, in.ResultType, in.SecondType, string(in.Scores), string(in.Centers),
 	).Scan(&id, &ct); err != nil {
-		return TestRecord{}, err
-	}
-	// 同步用户最近主型
-	if _, err := tx.ExecContext(c, `UPDATE wx_users SET main_type=$1 WHERE id=$2`, in.ResultType, userID); err != nil {
-		return TestRecord{}, err
-	}
-	if err := tx.Commit(); err != nil {
 		return TestRecord{}, err
 	}
 
@@ -278,10 +290,52 @@ func (s *Store) SaveTestRecord(ctx context.Context, userID int64, in TestRecordI
 		Gender:     in.Gender,
 		ResultType: in.ResultType,
 		SecondType: in.SecondType,
-		Scores:     json.RawMessage(scores),
-		Centers:    json.RawMessage(centers),
+		Scores:     in.Scores,
+		Centers:    in.Centers,
 		CreateTime: fmtTime(ct),
 	}, nil
+}
+
+func (s *Store) UpdateMainType(ctx context.Context, q dbtx.DBTX, userID int64, resultType int) error {
+	if userID <= 0 || resultType < 1 || resultType > 9 {
+		return ErrInvalidTestRecord
+	}
+	if q == nil {
+		return ErrNilDBTX
+	}
+	result, err := q.ExecContext(ctx, `UPDATE wx_users SET main_type=$1 WHERE id=$2`, resultType, userID)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// SaveTestRecord 已弃用：新调用方应通过 Service.SaveTestRecord 同时写入业务消息。
+func (s *Store) SaveTestRecord(ctx context.Context, userID int64, in TestRecordInput) (TestRecord, error) {
+	if s == nil || s.db == nil {
+		return TestRecord{}, ErrNilDBTX
+	}
+	c, cancel := s.ctx(ctx)
+	defer cancel()
+	tx, err := s.db.BeginTx(c, nil)
+	if err != nil {
+		return TestRecord{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	record, err := s.InsertTestRecord(c, tx, userID, in)
+	if err != nil {
+		return TestRecord{}, err
+	}
+	if err := s.UpdateMainType(c, tx, userID, record.ResultType); err != nil {
+		return TestRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return TestRecord{}, err
+	}
+	return record, nil
 }
 
 func (s *Store) ListTestRecords(ctx context.Context, userID int64) ([]TestRecord, error) {

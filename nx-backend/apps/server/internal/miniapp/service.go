@@ -26,14 +26,21 @@ type messageWriter interface {
 	Create(context.Context, dbtx.DBTX, businessmessage.Event) (bool, error)
 }
 
+type testRecordWriter interface {
+	InsertTestRecord(context.Context, dbtx.DBTX, int64, TestRecordInput) (TestRecord, error)
+	UpdateMainType(context.Context, dbtx.DBTX, int64, int) error
+}
+
 type Service struct {
 	beginner dbtx.Beginner
 	users    userWriter
+	tests    testRecordWriter
 	messages messageWriter
 }
 
 func NewService(beginner dbtx.Beginner, users userWriter, messages messageWriter) *Service {
-	return &Service{beginner: beginner, users: users, messages: messages}
+	tests, _ := users.(testRecordWriter)
+	return &Service{beginner: beginner, users: users, tests: tests, messages: messages}
 }
 
 func (s *Service) UpsertUser(ctx context.Context, openid, unionid, channel, scene string) (int64, error) {
@@ -75,6 +82,65 @@ func (s *Service) UpsertUser(ctx context.Context, openid, unionid, channel, scen
 		return 0, fmt.Errorf("commit miniapp user transaction: %w", err)
 	}
 	return id, nil
+}
+
+func (s *Service) SaveTestRecord(ctx context.Context, userID int64, in TestRecordInput) (TestRecord, error) {
+	if s == nil || s.beginner == nil || s.users == nil || s.tests == nil || s.messages == nil {
+		return TestRecord{}, ErrServiceNotConfigured
+	}
+	in, err := normalizeTestRecordInput(userID, in)
+	if err != nil {
+		return TestRecord{}, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	opCtx, cancel := context.WithTimeout(ctx, miniappUserTimeout)
+	defer cancel()
+
+	tx, err := s.beginner.BeginTx(opCtx, nil)
+	if err != nil {
+		return TestRecord{}, fmt.Errorf("begin miniapp test transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	record, err := s.tests.InsertTestRecord(opCtx, tx, userID, in)
+	if err != nil {
+		return TestRecord{}, fmt.Errorf("insert miniapp test record: %w", err)
+	}
+	if err := s.tests.UpdateMainType(opCtx, tx, userID, record.ResultType); err != nil {
+		return TestRecord{}, fmt.Errorf("update miniapp main type: %w", err)
+	}
+	user, err := s.users.GetUserWithDBTX(opCtx, tx, userID)
+	if err != nil {
+		return TestRecord{}, fmt.Errorf("get miniapp test user: %w", err)
+	}
+	displayName := miniappTestUserDisplayName(user, userID)
+	event := businessmessage.MiniappQuizSubmitted(record.ID, strconv.FormatInt(userID, 10), displayName, record.ResultType)
+	event.Content += "，提交时间：" + miniappTestSubmittedAt(record.CreateTime)
+	if _, err := s.messages.Create(opCtx, tx, event); err != nil {
+		return TestRecord{}, fmt.Errorf("create miniapp test message: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return TestRecord{}, fmt.Errorf("commit miniapp test transaction: %w", err)
+	}
+	return record, nil
+}
+
+func miniappTestUserDisplayName(user User, userID int64) string {
+	displayID := strconv.FormatInt(userID, 10)
+	if parsed, err := strconv.ParseInt(strings.TrimSpace(user.ID), 10, 64); err == nil && parsed == userID {
+		displayID = strconv.FormatInt(parsed, 10)
+	}
+	return "微信用户" + displayID
+}
+
+func miniappTestSubmittedAt(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len([]rune(value)) > 32 || strings.ContainsFunc(value, unicode.IsControl) {
+		return "待确认"
+	}
+	return value
 }
 
 func miniappUserDisplayName(nickname, openid, unionid string, id int64) string {
