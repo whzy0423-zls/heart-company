@@ -52,7 +52,7 @@ func (s *Server) wxLogin(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	uid, err := s.miniapp.UpsertByOpenID(r.Context(), sess.OpenID, sess.UnionID, body.Channel, body.Scene)
+	uid, err := s.miniappService.UpsertUser(r.Context(), sess.OpenID, sess.UnionID, body.Channel, body.Scene)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return

@@ -85,6 +85,7 @@ type Server struct {
 	storyboards           *videostoryboard.Store
 	images                *image.Store
 	miniapp               *miniapp.Store
+	miniappService        miniappUserUpserter
 	wx                    *wechat.Client
 	pay                   *wxpay.Client
 	ragGen                rag.Generator
@@ -136,6 +137,10 @@ type Server struct {
 
 type websiteSignupCreator interface {
 	CreateWebsiteSignup(context.Context, signup.LeadInput, *http.Request) (signup.Lead, error)
+}
+
+type miniappUserUpserter interface {
+	UpsertUser(context.Context, string, string, string, string) (int64, error)
 }
 
 var uploadPermissionCodes = []string{
@@ -194,6 +199,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.storyboards = videostoryboard.NewStore(database)
 	s.images = image.NewStore(s.uploads, env.Image, s.uploader)
 	s.miniapp = miniapp.NewStore(database)
+	s.miniappService = miniapp.NewService(dbtx.SQLBeginner{DB: database}, s.miniapp, businessmessage.Store{})
 	s.wx = newWeChatClient(env)
 	s.pay = mustWxPayClient(env)
 	s.ragGen = newChatGenerator(modelconfig.Config{}.ApplyChat(env.MiniMax))

@@ -5,9 +5,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"nine-xing/nx-backend/apps/server/internal/dbtx"
 )
 
 type Store struct {
@@ -19,6 +24,19 @@ func NewStore(database *sql.DB) *Store {
 }
 
 const queryTimeout = 10 * time.Second
+
+const (
+	maxOpenIDRunes  = 128
+	maxUnionIDRunes = 128
+	maxChannelRunes = 64
+	maxSceneRunes   = 64
+)
+
+var (
+	ErrNilDBTX           = errors.New("miniapp: query target is nil")
+	ErrInvalidOpenID     = errors.New("miniapp: invalid openid")
+	ErrInvalidUserSource = errors.New("miniapp: invalid user source")
+)
 
 func (s *Store) ctx(parent context.Context) (context.Context, context.CancelFunc) {
 	if parent == nil {
@@ -51,24 +69,76 @@ type User struct {
 func (s *Store) UpsertByOpenID(ctx context.Context, openid, unionid, channel, scene string) (int64, error) {
 	c, cancel := s.ctx(ctx)
 	defer cancel()
+	if s == nil || s.db == nil {
+		return 0, ErrNilDBTX
+	}
+	id, _, err := s.UpsertByOpenIDWithDBTX(c, s.db, openid, unionid, channel, scene)
+	return id, err
+}
+
+// UpsertByOpenIDWithDBTX 在调用方事务中创建或更新登录用户，并明确返回是否首次创建。
+func (s *Store) UpsertByOpenIDWithDBTX(ctx context.Context, q dbtx.DBTX, openid, unionid, channel, scene string) (int64, bool, error) {
+	openid = strings.TrimSpace(openid)
+	unionid = strings.TrimSpace(unionid)
+	channel = strings.TrimSpace(channel)
+	scene = strings.TrimSpace(scene)
+	if openid == "" || utf8.RuneCountInString(openid) > maxOpenIDRunes {
+		return 0, false, ErrInvalidOpenID
+	}
+	if utf8.RuneCountInString(unionid) > maxUnionIDRunes || utf8.RuneCountInString(channel) > maxChannelRunes || utf8.RuneCountInString(scene) > maxSceneRunes {
+		return 0, false, ErrInvalidUserSource
+	}
+	if q == nil {
+		return 0, false, ErrNilDBTX
+	}
+
 	var id int64
-	err := s.db.QueryRowContext(c,
+	err := q.QueryRowContext(ctx,
 		`INSERT INTO wx_users (openid, unionid, channel, scene)
 		 VALUES ($1,$2,$3,$4)
-		 ON CONFLICT (openid) DO UPDATE SET last_login_at = now()
+		 ON CONFLICT (openid) DO NOTHING
 		 RETURNING id`,
 		openid, unionid, channel, scene,
 	).Scan(&id)
-	return id, err
+	if err == nil {
+		return id, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, false, fmt.Errorf("insert miniapp user: %w", err)
+	}
+	err = q.QueryRowContext(ctx,
+		`UPDATE wx_users
+		 SET last_login_at=now(),
+		     unionid=CASE WHEN $2 <> '' THEN $2 ELSE unionid END,
+		     channel=CASE WHEN $3 <> '' THEN $3 ELSE channel END,
+		     scene=CASE WHEN $4 <> '' THEN $4 ELSE scene END
+		 WHERE openid=$1
+		 RETURNING id`,
+		openid, unionid, channel, scene,
+	).Scan(&id)
+	if err != nil {
+		return 0, false, fmt.Errorf("update miniapp user login: %w", err)
+	}
+	return id, false, nil
 }
 
 func (s *Store) GetUser(ctx context.Context, id int64) (User, error) {
 	c, cancel := s.ctx(ctx)
 	defer cancel()
+	if s == nil || s.db == nil {
+		return User{}, ErrNilDBTX
+	}
+	return s.GetUserWithDBTX(c, s.db, id)
+}
+
+func (s *Store) GetUserWithDBTX(ctx context.Context, q dbtx.DBTX, id int64) (User, error) {
+	if q == nil {
+		return User{}, ErrNilDBTX
+	}
 	var u User
 	var uid int64
 	var ct time.Time
-	err := s.db.QueryRowContext(c,
+	err := q.QueryRowContext(ctx,
 		`SELECT id, nickname, avatar, phone, gender, main_type, member_level, create_time
 		 FROM wx_users WHERE id=$1`, id,
 	).Scan(&uid, &u.Nickname, &u.Avatar, &u.Phone, &u.Gender, &u.MainType, &u.MemberLevel, &ct)
