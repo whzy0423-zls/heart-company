@@ -629,9 +629,27 @@ WHERE b.signup_id = s.id
 
 -- 第三阶段：按可验证的业务关系回填历史消息，不根据模糊标题猜测归属。
 UPDATE messages m
-SET platform = CASE WHEN s.source_platform = 'miniapp' THEN 'miniapp' ELSE 'website' END,
-    event_key = CASE WHEN s.source_platform = 'miniapp' THEN 'miniapp.booking.created' ELSE 'signup.created' END,
-    target_path = '/customer/signups?leadId=' || s.id::text || '&open=detail',
+SET platform = CASE
+      WHEN m.platform IS NULL OR btrim(m.platform) = '' THEN
+        CASE WHEN s.source_platform = 'miniapp' THEN 'miniapp' ELSE 'website' END
+      WHEN m.platform = 'system' AND m.event_key = 'system.legacy'
+        AND m.target_path IN ('', '/message/management?type=signup') THEN
+        CASE WHEN s.source_platform = 'miniapp' THEN 'miniapp' ELSE 'website' END
+      ELSE m.platform
+    END,
+    event_key = CASE
+      WHEN m.event_key IS NULL OR btrim(m.event_key) = '' THEN
+        CASE WHEN s.source_platform = 'miniapp' THEN 'miniapp.booking.created' ELSE 'signup.created' END
+      WHEN m.platform = 'system' AND m.event_key = 'system.legacy'
+        AND m.target_path IN ('', '/message/management?type=signup') THEN
+        CASE WHEN s.source_platform = 'miniapp' THEN 'miniapp.booking.created' ELSE 'signup.created' END
+      ELSE m.event_key
+    END,
+    target_path = CASE
+      WHEN btrim(m.target_path) = '' OR m.target_path = '/message/management?type=signup' THEN
+        '/customer/signups?leadId=' || s.id::text || '&open=detail'
+      ELSE m.target_path
+    END,
     business_id = s.id::text
 FROM signups s
 WHERE m.business_type = 'signup'
@@ -639,17 +657,24 @@ WHERE m.business_type = 'signup'
   AND (
     m.platform IS NULL OR btrim(m.platform) = ''
     OR m.event_key IS NULL OR btrim(m.event_key) = ''
-    OR (
-      m.platform = 'system'
-      AND m.event_key = 'system.legacy'
-      AND m.target_path IN ('', '/message/management?type=signup')
-    )
+    OR btrim(m.target_path) = '' OR m.target_path = '/message/management?type=signup'
   );
 
 UPDATE messages m
-SET platform = 'miniapp',
-    event_key = 'miniapp.user.created',
-    target_path = '/customer/miniapp-users?userId=' || u.id::text || '&open=detail',
+SET platform = CASE
+      WHEN m.platform IS NULL OR btrim(m.platform) = '' THEN 'miniapp'
+      WHEN m.platform = 'system' AND m.event_key = 'system.legacy' AND btrim(m.target_path) = '' THEN 'miniapp'
+      ELSE m.platform
+    END,
+    event_key = CASE
+      WHEN m.event_key IS NULL OR btrim(m.event_key) = '' THEN 'miniapp.user.created'
+      WHEN m.platform = 'system' AND m.event_key = 'system.legacy' AND btrim(m.target_path) = '' THEN 'miniapp.user.created'
+      ELSE m.event_key
+    END,
+    target_path = CASE
+      WHEN btrim(m.target_path) = '' THEN '/customer/miniapp-users?userId=' || u.id::text || '&open=detail'
+      ELSE m.target_path
+    END,
     business_id = u.id::text
 FROM wx_users u
 WHERE m.business_type = 'miniapp-user'
@@ -657,14 +682,25 @@ WHERE m.business_type = 'miniapp-user'
   AND (
     m.platform IS NULL OR btrim(m.platform) = ''
     OR m.event_key IS NULL OR btrim(m.event_key) = ''
-    OR (m.platform = 'system' AND m.event_key = 'system.legacy')
+    OR btrim(m.target_path) = ''
   );
 
 UPDATE messages m
-SET platform = 'miniapp',
-    event_key = 'miniapp.quiz.submitted',
-    target_path = '/customer/miniapp-users?userId=' || r.wx_user_id::text
-      || '&testRecordId=' || r.id::text || '&open=test',
+SET platform = CASE
+      WHEN m.platform IS NULL OR btrim(m.platform) = '' THEN 'miniapp'
+      WHEN m.platform = 'system' AND m.event_key = 'system.legacy' AND btrim(m.target_path) = '' THEN 'miniapp'
+      ELSE m.platform
+    END,
+    event_key = CASE
+      WHEN m.event_key IS NULL OR btrim(m.event_key) = '' THEN 'miniapp.quiz.submitted'
+      WHEN m.platform = 'system' AND m.event_key = 'system.legacy' AND btrim(m.target_path) = '' THEN 'miniapp.quiz.submitted'
+      ELSE m.event_key
+    END,
+    target_path = CASE
+      WHEN btrim(m.target_path) = '' THEN '/customer/miniapp-users?userId=' || r.wx_user_id::text
+        || '&testRecordId=' || r.id::text || '&open=test'
+      ELSE m.target_path
+    END,
     business_id = r.id::text
 FROM test_records r
 WHERE m.business_type = 'miniapp-test-record'
@@ -672,7 +708,7 @@ WHERE m.business_type = 'miniapp-test-record'
   AND (
     m.platform IS NULL OR btrim(m.platform) = ''
     OR m.event_key IS NULL OR btrim(m.event_key) = ''
-    OR (m.platform = 'system' AND m.event_key = 'system.legacy')
+    OR btrim(m.target_path) = ''
   );
 
 UPDATE messages

@@ -46,6 +46,28 @@ func TestPlatformNotificationMigrationContractRejectsMissingOrReorderedBackfill(
 	}
 }
 
+func TestPlatformNotificationMigrationBackfillPreservesExplicitPartialFields(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := string(raw)
+	if got := strings.Count(schema, "WHEN m.platform IS NULL OR btrim(m.platform) = '' THEN"); got < 3 {
+		t.Fatalf("platform backfills with per-column CASE = %d, want at least 3", got)
+	}
+	if got := strings.Count(schema, "WHEN m.event_key IS NULL OR btrim(m.event_key) = '' THEN"); got < 3 {
+		t.Fatalf("event_key backfills with per-column CASE = %d, want at least 3", got)
+	}
+	for _, targetGuard := range []string{
+		"WHEN btrim(m.target_path) = '' OR m.target_path = '/message/management?type=signup' THEN",
+		"WHEN btrim(m.target_path) = '' THEN '/customer/miniapp-users?userId='",
+	} {
+		if !strings.Contains(schema, targetGuard) {
+			t.Fatalf("schema is missing target_path preservation guard %q", targetGuard)
+		}
+	}
+}
+
 var platformNotificationMigrationOrder = []string{
 	"ALTER TABLE signups ADD COLUMN IF NOT EXISTS source_platform TEXT",
 	"ALTER TABLE messages ADD COLUMN IF NOT EXISTS platform TEXT",
@@ -53,8 +75,8 @@ var platformNotificationMigrationOrder = []string{
 	"UPDATE signups SET source_platform = 'website'",
 	"UPDATE signups s\nSET source_platform = 'miniapp'",
 	"UPDATE messages m\nSET platform = CASE",
-	"event_key = 'miniapp.user.created'",
-	"event_key = 'miniapp.quiz.submitted'",
+	"WHEN btrim(m.target_path) = '' THEN '/customer/miniapp-users?userId=' || u.id::text",
+	"WHEN btrim(m.target_path) = '' THEN '/customer/miniapp-users?userId=' || r.wx_user_id::text",
 	"UPDATE messages\nSET platform = CASE",
 	"INSERT INTO migration_logs",
 	"UPDATE bookings b\nSET signup_id = NULL",
@@ -136,6 +158,9 @@ func TestPlatformNotificationMigration(t *testing.T) {
 	if _, err := database.ExecContext(ctx, legacyPlatformNotificationSchema); err != nil {
 		t.Fatalf("create legacy schema: %v", err)
 	}
+	if _, err := database.ExecContext(ctx, `ALTER TABLE messages ADD COLUMN platform TEXT; ALTER TABLE messages ADD COLUMN event_key TEXT`); err != nil {
+		t.Fatalf("add partially migrated message columns: %v", err)
+	}
 
 	var websiteSignupID, miniappSignupID, orphanSignupID int64
 	if err := database.QueryRowContext(ctx, `INSERT INTO signups (name) VALUES ('官网客户') RETURNING id`).Scan(&websiteSignupID); err != nil {
@@ -179,6 +204,19 @@ func TestPlatformNotificationMigration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	partialMessages := [][]any{
+		{"官网部分字段", fmt.Sprint(orphanSignupID), "signup", "/custom/signup-partial", "signup.followup"},
+		{"小程序用户部分字段", fmt.Sprint(wxUserID), "miniapp-user", "/custom/miniapp-user-partial", "miniapp.user.followup"},
+		{"小程序测评部分字段", fmt.Sprint(testRecordID), "miniapp-test-record", "/custom/miniapp-test-partial", "miniapp.quiz.reviewed"},
+	}
+	for _, fixture := range partialMessages {
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO messages (type,title,business_id,business_type,target_path,platform,event_key)
+			VALUES ('notice',$1,$2,$3,$4,NULL,$5)
+		`, fixture...); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	if _, err := database.ExecContext(ctx, schemaSQL); err != nil {
 		t.Fatalf("apply legacy migration first run: %v", err)
@@ -186,7 +224,7 @@ func TestPlatformNotificationMigration(t *testing.T) {
 	var explicitMessageID int64
 	if err := database.QueryRowContext(ctx, `
 		INSERT INTO messages (type,title,business_id,business_type,target_path,platform,event_key)
-		VALUES ('signup','显式新事件',$1,'signup','/custom/signup-target','website','signup.followup')
+		VALUES ('signup','显式新事件',$1,'signup','/custom/signup-target','website','signup.assigned')
 		RETURNING id
 	`, fmt.Sprint(orphanSignupID)).Scan(&explicitMessageID); err != nil {
 		t.Fatalf("insert explicit post-migration message: %v", err)
@@ -214,8 +252,11 @@ func TestPlatformNotificationMigration(t *testing.T) {
 	}
 	assertIntQuery(t, database, `SELECT count(*) FROM messages WHERE title IN ('未知同业务消息一','未知同业务消息二')`, 2)
 	assertIntQuery(t, database, `SELECT count(DISTINCT event_key) FROM messages WHERE title IN ('未知同业务消息一','未知同业务消息二')`, 2)
-	assertHistoricalMessage(t, database, "显式新事件", "website", "signup.followup", "signup", fmt.Sprint(orphanSignupID), "/custom/signup-target")
+	assertHistoricalMessage(t, database, "显式新事件", "website", "signup.assigned", "signup", fmt.Sprint(orphanSignupID), "/custom/signup-target")
 	assertIntQuery(t, database, `SELECT count(*) FROM messages WHERE id=$1`, 1, explicitMessageID)
+	assertHistoricalMessage(t, database, "官网部分字段", "website", "signup.followup", "signup", fmt.Sprint(orphanSignupID), "/custom/signup-partial")
+	assertHistoricalMessage(t, database, "小程序用户部分字段", "miniapp", "miniapp.user.followup", "miniapp-user", fmt.Sprint(wxUserID), "/custom/miniapp-user-partial")
+	assertHistoricalMessage(t, database, "小程序测评部分字段", "miniapp", "miniapp.quiz.reviewed", "miniapp-test-record", fmt.Sprint(testRecordID), "/custom/miniapp-test-partial")
 
 	assertIntQuery(t, database, `SELECT count(*) FROM messages WHERE business_type='signup' AND business_id=$1`, 1, fmt.Sprint(websiteSignupID))
 	assertIntQuery(t, database, `SELECT count(*) FROM bookings WHERE contact_name='孤儿预约' AND signup_id IS NULL`, 1)
@@ -266,10 +307,10 @@ func assertPlatformNotificationSchemaShape(t *testing.T, database *sql.DB) {
 		assertIntQuery(t, database, `SELECT count(*) FROM pg_constraint WHERE conname=$1 AND conrelid=$2::regclass`, 1, constraint.name, constraint.table)
 	}
 	for _, index := range []string{"uq_messages_event_business", "idx_messages_unread_id", "idx_messages_platform_create_time", "idx_signups_source_create_time"} {
-		assertIntQuery(t, database, `SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND indexname=$1`, 1, index)
+		assertIntQuery(t, database, `SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname=$1`, 1, index)
 	}
-	assertIntQuery(t, database, `SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='signups' AND column_name='source_platform' AND is_nullable='NO'`, 1)
-	assertIntQuery(t, database, `SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='messages' AND column_name IN ('platform','event_key') AND is_nullable='NO'`, 2)
+	assertIntQuery(t, database, `SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='signups' AND column_name='source_platform' AND is_nullable='NO'`, 1)
+	assertIntQuery(t, database, `SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='messages' AND column_name IN ('platform','event_key') AND is_nullable='NO'`, 2)
 }
 
 func assertHistoricalMessage(t *testing.T, database *sql.DB, title, platform, eventKey, businessType, businessID, targetPath string) {
