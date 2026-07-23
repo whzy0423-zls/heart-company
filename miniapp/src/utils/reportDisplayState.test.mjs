@@ -45,15 +45,39 @@ assert.deepEqual(
   { key: 'ready', priceCents: 990 },
 )
 
+for (const priceCents of [NaN, Infinity, -Infinity, -1, 0, '990']) {
+  assert.deepEqual(
+    reportDisplayState({
+      recordId: 'r1',
+      loading: false,
+      error: '',
+      unlocked: false,
+      priceCents,
+    }),
+    { key: 'status-error', priceCents: null },
+  )
+}
+
+assert.deepEqual(
+  reportDisplayState({
+    recordId: '',
+    loading: true,
+    error: '失败',
+    unlocked: false,
+    priceCents: 990,
+  }),
+  { key: 'needs-save', priceCents: null },
+)
+
 assert.deepEqual(
   reportDisplayState({
     recordId: 'r1',
-    loading: false,
-    error: '',
+    loading: true,
+    error: '失败',
     unlocked: false,
-    priceCents: 0,
+    priceCents: 990,
   }),
-  { key: 'status-error', priceCents: null },
+  { key: 'status-loading', priceCents: null },
 )
 
 assert.deepEqual(
