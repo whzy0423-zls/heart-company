@@ -538,6 +538,17 @@ assert.match(learnPage, /silent/, 'learn background refresh should avoid replaci
 const learnTemplate = stripMarkupAndCssComments(vueSection(learnPage, 'template') || '')
 const learnStyle = stripMarkupAndCssComments(vueSection(learnPage, 'style') || '')
 const learnButtons = openingTagsFor(learnTemplate, 'button')
+const learnImages = openingTagsFor(learnTemplate, 'image')
+const learnViews = openingTagsFor(learnTemplate, 'view')
+
+function learnTagByClass(tags, className) {
+  return tags.find((tag) => (tagAttribute(tag, 'class') || '').split(/\s+/).includes(className))
+}
+
+function immediateViewText(source, openingTag) {
+  const contentStart = source.indexOf(openingTag) + openingTag.length
+  return source.slice(contentStart, source.indexOf('</view>', contentStart)).trim()
+}
 
 assert.match(learnTemplate, /class=["'][^"']*learn-hero[^"']*nx-page-hero[^"']*["']/, 'learn page should open with the approved learning hero')
 assert.match(learnTemplate, /学习中心/, 'learn hero should identify the learning center')
@@ -554,16 +565,42 @@ for (const stateName of ['teacherImageErrors', 'courseImageErrors', 'typeImageEr
 assert.match(learnPage, /teacherImageErrors\.value\s*=\s*\{\s*\.\.\.teacherImageErrors\.value,\s*\[name\]:\s*true\s*\}/, 'teacher image failures should update immutably by teacher name')
 assert.match(learnPage, /courseImageErrors\.value\s*=\s*\{\s*\.\.\.courseImageErrors\.value,\s*\[key\]:\s*true\s*\}/, 'course image failures should update immutably by title and index key')
 assert.match(learnPage, /typeImageErrors\.value\s*=\s*\{\s*\.\.\.typeImageErrors\.value,\s*\[id\]:\s*true\s*\}/, 'type image failures should update immutably by type id')
-assert.match(learnTemplate, /teacher\.name\s*\?\s*teacher\.name\.slice\(0,\s*1\)\s*:\s*'师'/, 'teacher fallback should avoid optional chaining in the template')
-assert.match(learnTemplate, /@error=["']markTeacherImageError\(teacher\.name\)["']/, 'teacher images should mark their own failure key')
-assert.match(learnTemplate, /@error=["']markCourseImageError\(c\.title\s*\+\s*i\)["']/, 'course images should mark their own title and index key')
-assert.match(learnTemplate, /@error=["']markTypeImageError\(t\.id\)["']/, 'type images should mark their own id')
+
+const teacherImage = learnTagByClass(learnImages, 'teacher-media')
+const courseImages = learnImages.filter((tag) => (tagAttribute(tag, 'class') || '').split(/\s+/).includes('course-media'))
+const typeImage = learnTagByClass(learnImages, 'type-badge__avatar')
+assert.ok(teacherImage, 'learn page should render a teacher image element')
+assert.equal(tagAttribute(teacherImage, 'v-if'), 'teacher.avatar && !teacherImageErrors[teacher.name]', 'teacher image should use its own failure key in v-if')
+assert.equal(tagAttribute(teacherImage, '@error'), 'markTeacherImageError(teacher.name)', 'teacher image should mark its own failure key')
+assert.equal(courseImages.length, 1, 'learn template should define one repeated course media image')
+assert.equal(tagAttribute(courseImages[0], 'v-if'), 'c.cover && !courseImageErrors[c.title + i]', 'course image should use its title and index failure key in v-if')
+assert.equal(tagAttribute(courseImages[0], '@error'), 'markCourseImageError(c.title + i)', 'course image should mark its own title and index key')
+assert.equal(tagAttribute(courseImages[0], '@click'), undefined, 'course media must remain display-only without click behavior')
+assert.ok(typeImage, 'learn page should render a type image element')
+assert.equal(tagAttribute(typeImage, 'v-if'), '!typeImageErrors[t.id]', 'type image should use its own id failure key in v-if')
+assert.equal(tagAttribute(typeImage, '@error'), 'markTypeImageError(t.id)', 'type image should mark its own id')
+
+const teacherFallback = learnTagByClass(learnViews, 'teacher-media__fallback')
+const courseFallback = learnTagByClass(learnViews, 'course-media__fallback')
+const typeFallback = learnTagByClass(learnViews, 'type-badge__fallback')
+for (const [fallback, description] of [
+  [teacherFallback, 'teacher'],
+  [courseFallback, 'course'],
+  [typeFallback, 'type'],
+]) {
+  assert.ok(fallback, `learn page should render a ${description} fallback element`)
+  assert.match(fallback, /\sv-else(?:\s|>|$)/, `${description} fallback should be the image v-else branch`)
+}
+assert.equal(immediateViewText(learnTemplate, teacherFallback), "{{ teacher.name ? teacher.name.slice(0, 1) : '师' }}", 'teacher fallback should show the same teacher key without optional chaining')
+assert.equal(immediateViewText(learnTemplate, courseFallback), '{{ c.badge || (i + 1) }}', 'course fallback should show the same course badge or index key')
+assert.equal(immediateViewText(learnTemplate, typeFallback), '{{ t.id }}', 'type fallback should show the same type id key')
 
 const learnCtas = learnButtons.filter((tag) => tag.includes('learn-cta'))
 assert.equal(learnCtas.length, 1, 'learn page should render one primary learning CTA')
 assert.match(learnCtas[0], /@click=["']goTest["']/, 'learn CTA should keep the existing goTest route')
 assert.match(learnTemplate, />\s*先完成测试，建立你的学习地图\s*<\/button>/, 'learn CTA should use the exact approved copy')
-assert.doesNotMatch(learnTemplate, /继续学习|课程详情|@click=["'][^"']*(?:course|Course)[^"']*["']/, 'learn page must not invent course-detail or progress interactions')
+assert.doesNotMatch(learnTemplate, /继续学习|课程详情|学习进度/, 'learn page must not expose course-detail or progress copy')
+assert.doesNotMatch(learnPage, /(?:courseProgress|learningProgress|continueLearning|openCourse|openDetail)\s*(?:=|\()/, 'learn page must not invent course-detail or learning-progress state and handlers')
 
 assert.match(learnPage, /getStoredSiteConfig/, 'learn page should keep cache-first rendering')
 assert.match(learnPage, /loadContent\(\{\s*silent:\s*hasCachedContent\s*\}\)/, 'learn page should refresh silently after rendering cached content')
