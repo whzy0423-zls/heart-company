@@ -322,7 +322,8 @@ def compute_content_digest(root):
     for pattern in ("cards/*.json", "practices/*.json", "chunk-previews/*.json"):
         paths.extend(sorted(root.glob(pattern)))
     paths.extend(sorted((root / "catalog").glob("*.json")))
-    paths.extend([root / "relations.json", root / "evaluation/safety-cases.json"])
+    paths.extend([root / "relations.json", root / "evaluation/safety-cases.json",
+                  root / "evidence-index.json", root / "schema/theory-package-v1.schema.json"])
     objects = []
     for path in paths:
         value = json.loads(path.read_text("utf-8"))
@@ -367,14 +368,37 @@ def write_package_tree(root, extraction_manifest, sources, cards, practices):
     write_json(root / "evaluation/safety-cases.json", cases)
 
     public_sources = [{key: value for key, value in source.items() if key != "units"} for source in sources]
+    # Keep only the minimum evidence index needed for offline verification. The
+    # extracted text itself remains under var/ and is never copied into data/.
+    evidence = []
+    referenced = {(item["primaryEvidence"]["sourceId"], item["primaryEvidence"]["textSha256"])
+                  for item in cards + practices}
+    for source in sources:
+        for unit, _text in source["units"]:
+            if (source["sourceId"], unit["textSha256"]) not in referenced:
+                continue
+            evidence.append({"sourceId": source["sourceId"], "sourceSha256": source["sourceSha256"],
+                             "textSha256": unit["textSha256"],
+                             "locator": unit["locator"], "encoding": unit.get("encoding", "utf-8"),
+                             "ocrVerified": source["extractionRoute"] != "pdf_ocr_selected"})
+    write_json(root / "evidence-index.json", {"schemaVersion": "xinzhili.evidence-index.v1", "evidence": evidence})
+    write_json(root / "schema/theory-package-v1.schema.json", {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://xinzhili.local/schema/theory-package-v1.schema.json",
+        "title": "Xinzhili Theory Package v1", "type": "object",
+        "required": ["schemaVersion", "packageId", "contentDigest", "packageDigest"],
+        "properties": {"schemaVersion": {"const": SCHEMA_VERSION}, "packageId": {"type": "string"},
+                       "contentDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                       "packageDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+        "additionalProperties": True})
     object_files = []
     object_files += [f"cards/{card['canonicalKey']}.json" for card in cards]
     object_files += [f"practices/{practice['canonicalKey']}.json" for practice in practices]
     object_files += [f"chunk-previews/{item['canonicalKey']}.json" for item in cards + practices]
     object_files += [path.relative_to(root).as_posix() for path in sorted((root / "catalog").glob("*.json"))]
-    object_files += ["relations.json", "evaluation/safety-cases.json",
+    object_files += ["evidence-index.json", "schema/theory-package-v1.schema.json", "relations.json", "evaluation/safety-cases.json",
                      "review/source-verification.json", "review/theory-review.json", "review/safety-review.json",
-                     "reports/coverage.md", "reports/safety-evaluation.md"]
+                     "reports/coverage.md", "reports/safety-evaluation.md", "checksums.sha256"]
     manifest = {
         "schemaVersion": SCHEMA_VERSION, "packageId": "xinzhili-round-001", "roundId": "round-001",
         "status": "draft", "activationAllowed": False, "humanReviewStatus": "pending",
@@ -428,6 +452,10 @@ def write_package_tree(root, extraction_manifest, sources, cards, practices):
     (root / "reports/safety-evaluation.md").write_text(safety_report, "utf-8", newline="\n")
     manifest["packageDigest"] = compute_package_digest(root)
     write_json(root / "manifest.json", manifest)
+    checksum_lines = []
+    for path in sorted(p for p in root.rglob("*") if p.is_file() and p.name != "checksums.sha256"):
+        checksum_lines.append(f"{sha256_bytes(path.read_bytes())}  {path.relative_to(root).as_posix()}")
+    (root / "checksums.sha256").write_text("\n".join(checksum_lines) + "\n", "utf-8", newline="\n")
     return manifest
 
 

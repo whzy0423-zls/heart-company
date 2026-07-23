@@ -203,6 +203,17 @@ class RoundPackageTest(unittest.TestCase):
             self.assertEqual("original_synthesis", preview["contentType"])
             self.assertEqual(hashlib.sha256(preview["text"].encode()).hexdigest(), preview["contentHash"])
 
+    def test_evidence_index_binds_source_text_and_locator(self):
+        sources = {source["sourceId"]: source for source in self.manifest["sources"]}
+        evidence_index = read_json(self.output / "evidence-index.json")
+        evidence = {(item["sourceId"], item["textSha256"]): item
+                    for item in evidence_index["evidence"]}
+        for item in self.cards + self.practices:
+            primary = item["primaryEvidence"]
+            indexed = evidence[(primary["sourceId"], primary["textSha256"])]
+            self.assertEqual(sources[primary["sourceId"]]["sourceSha256"], indexed["sourceSha256"])
+            self.assertEqual(primary["locator"], indexed["locator"])
+
     def test_reviews_are_pending_offline_templates_bound_to_content_digest(self):
         digest = self.manifest["contentDigest"]
         for name in ("source-verification", "theory-review", "safety-review"):
