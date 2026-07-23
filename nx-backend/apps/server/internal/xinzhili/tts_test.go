@@ -1,6 +1,7 @@
 package xinzhili
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,9 @@ func TestSplitSentences(t *testing.T) {
 		{"中英文标点", " 你好，世界。 How are you? 我很好！ ", []string{"你好，世界。", "How are you?", "我很好！"}},
 		{"无标点硬切且不拆UTF8", strings.Repeat("你", 43), []string{strings.Repeat("你", 42), "你"}},
 		{"超长优先弱标点", strings.Repeat("甲", 30) + "，" + strings.Repeat("乙", 20), []string{strings.Repeat("甲", 30) + "，", strings.Repeat("乙", 20)}},
+		{"小数域名缩写不误切", "版本3.14发布。Visit example.com now. U.S.A. test.", []string{"版本3.14发布。", "Visit example.com now.", "U.S.A. test."}},
+		{"引号跟随句末标点", "他说：“你好。”她答：“嗯……”", []string{"他说：“你好。”", "她答：“嗯……”"}},
+		{"英文引号和省略号", `He said "Hi..." Then left.`, []string{`He said "Hi..."`, "Then left."}},
 		{"空文本", " \n\t ", nil},
 	}
 	for _, tt := range tests {
@@ -148,8 +152,32 @@ func TestOpenAICompatibleTTSTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = p.Synthesize(context.Background(), cfg, "hello"); err == nil {
-		t.Fatal("expected timeout")
+	if _, _, err = p.Synthesize(context.Background(), cfg, "hello"); !errors.Is(err, ErrTTSTimeout) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestOpenAICompatibleTTSBodyReadTimeoutIsStable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		time.Sleep(100 * time.Millisecond)
+		_, _ = w.Write(testMP3())
+	}))
+	defer server.Close()
+	client := server.Client()
+	client.Timeout = 10 * time.Millisecond
+	cfg := TTSConfig{Provider: TTSProviderOpenAICompatible, Endpoint: server.URL, APIKey: "key", Model: "m", Voice: "v"}
+	provider, err := (TTSProviderFactory{HTTPClient: client}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = provider.Synthesize(context.Background(), cfg, "hello")
+	if !errors.Is(err, ErrTTSTimeout) {
+		t.Fatalf("err=%v", err)
 	}
 }
 
@@ -195,6 +223,24 @@ func TestMiniMaxTTSAdapterRejectsOversizedAudioAtProviderBoundary(t *testing.T) 
 	}
 }
 
+func TestMiniMaxTTSAdapterMapsContextDeadlineToStableTimeout(t *testing.T) {
+	client := miniMaxLimitedFunc(func(ctx context.Context, _, _, _ string, _ int64) ([]byte, string, error) {
+		<-ctx.Done()
+		return nil, "", ctx.Err()
+	})
+	cfg := TTSConfig{Provider: TTSProviderMiniMax, Model: "model", Voice: "voice"}
+	provider, err := (TTSProviderFactory{MiniMax: client}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	_, _, err = provider.Synthesize(ctx, cfg, "短句")
+	if !errors.Is(err, ErrTTSTimeout) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 type miniMaxLimitedFunc func(context.Context, string, string, string, int64) ([]byte, string, error)
 
 func (f miniMaxLimitedFunc) TextToAudioLimited(ctx context.Context, model, voice, text string, maxBytes int64) ([]byte, string, error) {
@@ -221,7 +267,8 @@ func (f *delayedTTSProvider) Synthesize(ctx context.Context, _ TTSConfig, text s
 		return nil, "", errors.New("provider full secret response")
 	}
 	if size := f.sizeFor[text]; size > 0 {
-		return append(testMP3(), make([]byte, size)...), "audio/mpeg", nil
+		frame := testMP3()
+		return bytes.Repeat(frame, (size+len(frame)-1)/len(frame)), "audio/mpeg", nil
 	}
 	return testMP3(), "audio/mpeg", nil
 }
@@ -268,6 +315,71 @@ func TestSynthesizerCancellationStopsQueuedWorkAndLateOutput(t *testing.T) {
 	}
 	if p.started.Load() != 2 || p.done.Load() != 2 || emitted.Load() != 0 {
 		t.Fatalf("started=%d done=%d emitted=%d", p.started.Load(), p.done.Load(), emitted.Load())
+	}
+}
+
+func TestSynthesizerSegmentTimeoutCancelsCompliantProviderAndExits(t *testing.T) {
+	var exited atomic.Bool
+	provider := ttsProviderFunc(func(ctx context.Context, _ TTSConfig, _ string) ([]byte, string, error) {
+		<-ctx.Done()
+		exited.Store(true)
+		return nil, "", ctx.Err()
+	})
+	start := time.Now()
+	err := NewSynthesizer(provider, 1, WithTTSSegmentTimeout(20*time.Millisecond)).Synthesize(
+		context.Background(), TTSConfig{}, "需要超时。", func(AudioSegment) error { return nil },
+	)
+	if !errors.Is(err, ErrTTSTimeout) {
+		t.Fatalf("err=%v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
+		t.Fatalf("timeout return took %v", elapsed)
+	}
+	if !exited.Load() {
+		t.Fatal("provider goroutine did not exit")
+	}
+}
+
+func TestSynthesizerDoesNotTurnProviderCancellationIntoEmptySegment(t *testing.T) {
+	provider := ttsProviderFunc(func(context.Context, TTSConfig, string) ([]byte, string, error) {
+		return nil, "", context.Canceled
+	})
+	err := NewSynthesizer(provider, 1).Synthesize(context.Background(), TTSConfig{}, "取消。", func(AudioSegment) error {
+		t.Fatal("must not emit an empty segment")
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestSynthesizerEmitFailureCancelsBlockedWorkerWithoutDrain(t *testing.T) {
+	emitErr := errors.New("emit stopped")
+	var blockedExited atomic.Bool
+	secondStarted := make(chan struct{})
+	provider := ttsProviderFunc(func(ctx context.Context, _ TTSConfig, text string) ([]byte, string, error) {
+		if text == "一。" {
+			select {
+			case <-secondStarted:
+				return testMP3(), "audio/mpeg", nil
+			case <-ctx.Done():
+				return nil, "", ctx.Err()
+			}
+		}
+		close(secondStarted)
+		<-ctx.Done()
+		blockedExited.Store(true)
+		return nil, "", ctx.Err()
+	})
+	start := time.Now()
+	err := NewSynthesizer(provider, 2, WithTTSSegmentTimeout(time.Second)).Synthesize(
+		context.Background(), TTSConfig{}, "一。二。", func(AudioSegment) error { return emitErr },
+	)
+	if !errors.Is(err, emitErr) {
+		t.Fatalf("err=%v", err)
+	}
+	if time.Since(start) > 300*time.Millisecond || !blockedExited.Load() {
+		t.Fatalf("elapsed=%v blockedExited=%v", time.Since(start), blockedExited.Load())
 	}
 }
 
@@ -405,6 +517,31 @@ func TestSynthesizerLimits(t *testing.T) {
 			t.Fatalf("err=%v", err)
 		}
 	})
+	t.Run("pending累计超过单轮上限立即取消", func(t *testing.T) {
+		largeMP3 := testMP3NearLimit()
+		var firstExited atomic.Bool
+		provider := ttsProviderFunc(func(ctx context.Context, _ TTSConfig, text string) ([]byte, string, error) {
+			if text == "零。" {
+				<-ctx.Done()
+				firstExited.Store(true)
+				return nil, "", ctx.Err()
+			}
+			return largeMP3, "audio/mpeg", nil
+		})
+		start := time.Now()
+		err := NewSynthesizer(provider, 2, WithTTSSegmentTimeout(time.Second)).Synthesize(
+			context.Background(), TTSConfig{}, "零。一。二。三。四。五。六。七。八。九。十。十一。", func(AudioSegment) error {
+				t.Fatal("blocked sequence zero means no segment may be emitted")
+				return nil
+			},
+		)
+		if !errors.Is(err, ErrTTSTurnTooLarge) {
+			t.Fatalf("err=%v", err)
+		}
+		if time.Since(start) > 500*time.Millisecond || !firstExited.Load() {
+			t.Fatalf("elapsed=%v firstExited=%v", time.Since(start), firstExited.Load())
+		}
+	})
 }
 
 type ttsProviderFunc func(context.Context, TTSConfig, string) ([]byte, string, error)
@@ -439,8 +576,15 @@ func TestSynthesizerValidatesAudioAndSanitizesErrors(t *testing.T) {
 func TestSynthesizerMetadata(t *testing.T) {
 	p := ttsProviderFunc(func(context.Context, TTSConfig, string) ([]byte, string, error) { return testMP3(), "audio/mp3", nil })
 	err := NewSynthesizer(p, 1).Synthesize(context.Background(), TTSConfig{}, "你好。", func(s AudioSegment) error {
-		if s.Seq != 0 || s.Text != "你好。" || s.MIME != "audio/mpeg" || len(s.Audio) == 0 || s.SHA256 == ([32]byte{}) {
+		if s.Seq != 0 || s.DeliveryText() != "你好。" || s.MIME != "audio/mpeg" || len(s.Audio) == 0 || s.ByteLength != len(s.Audio) || s.SHA256 == ([32]byte{}) {
 			t.Fatalf("segment=%#v", s)
+		}
+		encoded, err := json.Marshal(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(encoded, []byte("你好")) || bytes.Contains(encoded, []byte(`"Text"`)) || bytes.Contains(encoded, []byte("deliveryText")) {
+			t.Fatalf("serialized segment leaks delivery text: %s", encoded)
 		}
 		return nil
 	})
@@ -461,6 +605,9 @@ func TestValidMP3RequiresACompleteMPEGLayerIIIFrame(t *testing.T) {
 		{name: "六字节伪帧", audio: []byte{0xff, 0xfb, 0x90, 0x64, 0, 0}, want: false},
 		{name: "仅ID3标签", audio: []byte{'I', 'D', '3', 4, 0, 0, 0, 0, 0, 0}, want: false},
 		{name: "截断MPEG帧", audio: fullFrame[:len(fullFrame)-1], want: false},
+		{name: "合法首帧加截断二帧", audio: append(append([]byte{}, fullFrame...), fullFrame[:len(fullFrame)-1]...), want: false},
+		{name: "合法帧加HTML垃圾", audio: append(append([]byte{}, fullFrame...), []byte("<html>bad</html>")...), want: false},
+		{name: "多个完整合法帧", audio: append(append([]byte{}, fullFrame...), fullFrame...), want: true},
 		{name: "ID3声明越界", audio: []byte{'I', 'D', '3', 4, 0, 0, 0, 0, 1, 0}, want: false},
 	}
 	for _, tt := range tests {
@@ -477,4 +624,9 @@ func testMP3() []byte {
 	frame := make([]byte, 417)
 	copy(frame, []byte{0xff, 0xfb, 0x90, 0x64})
 	return frame
+}
+
+func testMP3NearLimit() []byte {
+	frame := testMP3()
+	return bytes.Repeat(frame, maxTTSSegmentBytes/len(frame))
 }

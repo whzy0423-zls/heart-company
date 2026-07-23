@@ -26,20 +26,34 @@ const (
 	maxTTSSegmentBytes  = 1 << 20
 	maxTTSTurnBytes     = 10 << 20
 	defaultTTSWorkers   = 2
+	defaultTTSTimeout   = 15 * time.Second
+)
+
+var (
+	ErrTTSTimeout      = errors.New("TTS 短句合成超时")
+	ErrTTSTurnTooLarge = errors.New("TTS 单轮音频超过 10MiB")
 )
 
 // AudioSegment is one complete, independently playable MP3 sentence. Audio is
 // never split at the byte level and is never persisted by this package.
 type AudioSegment struct {
-	Seq    uint32
-	Text   string
-	Audio  []byte
-	MIME   string
-	SHA256 [32]byte
+	Seq        uint32   `json:"seq"`
+	Audio      []byte   `json:"audio"`
+	MIME       string   `json:"mime"`
+	SHA256     [32]byte `json:"sha256"`
+	ByteLength int      `json:"byteLength"`
+
+	deliveryText string
 }
 
+// DeliveryText is available only to in-process orchestration. It is not an
+// exported data field and therefore cannot be serialized by encoding/json.
+func (s AudioSegment) DeliveryText() string { return s.deliveryText }
+
 // TTSProvider is deliberately stateless. Implementations return one complete
-// audio file for one short sentence.
+// audio file for one short sentence. Providers must honor ctx cancellation and
+// deadlines; Go cannot forcibly terminate an implementation that violates
+// this contract.
 type TTSProvider interface {
 	Synthesize(ctx context.Context, cfg TTSConfig, text string) ([]byte, string, error)
 }
@@ -88,6 +102,12 @@ type miniMaxTTSAdapter struct{ client MiniMaxTextToAudio }
 func (p miniMaxTTSAdapter) Synthesize(ctx context.Context, cfg TTSConfig, text string) ([]byte, string, error) {
 	audio, mimeType, err := p.client.TextToAudioLimited(ctx, cfg.Model, cfg.Voice, text, maxTTSSegmentBytes)
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, "", ErrTTSTimeout
+		}
+		if ctx.Err() != nil {
+			return nil, "", ctx.Err()
+		}
 		return nil, "", err
 	}
 	if len(audio) > maxTTSSegmentBytes {
@@ -121,6 +141,9 @@ func (p *openAICompatibleTTS) Synthesize(ctx context.Context, cfg TTSConfig, tex
 
 	resp, err := p.client.Do(req)
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, "", ErrTTSTimeout
+		}
 		if ctx.Err() != nil {
 			return nil, "", ctx.Err()
 		}
@@ -137,6 +160,12 @@ func (p *openAICompatibleTTS) Synthesize(ctx context.Context, cfg TTSConfig, tex
 	}
 	audio, err := io.ReadAll(io.LimitReader(resp.Body, maxTTSSegmentBytes+1))
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, "", ErrTTSTimeout
+		}
+		if ctx.Err() != nil {
+			return nil, "", ctx.Err()
+		}
 		return nil, "", errors.New("TTS 音频读取失败")
 	}
 	if len(audio) == 0 {
@@ -180,14 +209,17 @@ func SplitSentences(text string) []string {
 		limit := min(len(runes), maxTTSSentenceRunes)
 		cut := 0
 		for i := 0; i < limit; i++ {
-			if isStrongSentenceEnd(runes[i]) {
+			if isStrongSentenceEndAt(runes, i) {
 				cut = i + 1
+				for cut < limit && isClosingQuote(runes[cut]) {
+					cut++
+				}
 				break
 			}
 		}
 		if cut == 0 && len(runes) > maxTTSSentenceRunes {
 			for i := limit - 1; i >= 0; i-- {
-				if isWeakSentenceEnd(runes[i]) {
+				if isWeakSentenceEndAt(runes, i) {
 					cut = i + 1
 					break
 				}
@@ -205,23 +237,77 @@ func SplitSentences(text string) []string {
 	return result
 }
 
-func isStrongSentenceEnd(r rune) bool {
+func isStrongSentenceEndAt(value []rune, index int) bool {
+	r := value[index]
 	switch r {
 	case '。', '！', '？', '!', '?', ';', '；', '\n':
 		return true
+	case '…':
+		return index+1 >= len(value) || value[index+1] != '…'
 	case '.':
+		if index+1 < len(value) && value[index+1] == '.' {
+			return false
+		}
+		if index > 0 && index+1 < len(value) && isASCIIAlphaNumeric(value[index-1]) && isASCIIAlphaNumeric(value[index+1]) {
+			return false
+		}
+		if isInitialismBeforePeriod(value, index) && nextNonSpaceIsAlphaNumeric(value, index+1) {
+			return false
+		}
 		return true
 	default:
 		return false
 	}
 }
 
-func isWeakSentenceEnd(r rune) bool {
-	if isStrongSentenceEnd(r) {
+func isWeakSentenceEndAt(value []rune, index int) bool {
+	r := value[index]
+	if isStrongSentenceEndAt(value, index) {
 		return true
 	}
 	switch r {
 	case '，', ',', '、', ':', '：':
+		return true
+	default:
+		return false
+	}
+}
+
+func isASCIIAlphaNumeric(r rune) bool {
+	return r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+}
+
+func isInitialismBeforePeriod(value []rune, period int) bool {
+	start := period - 1
+	for start >= 0 && (isASCIIAlphaNumeric(value[start]) || value[start] == '.') {
+		start--
+	}
+	token := value[start+1 : period]
+	if len(token) < 3 {
+		return false
+	}
+	parts := strings.Split(string(token), ".")
+	if len(parts) < 2 {
+		return false
+	}
+	for _, part := range parts {
+		if len([]rune(part)) != 1 || !isASCIIAlphaNumeric([]rune(part)[0]) {
+			return false
+		}
+	}
+	return true
+}
+
+func nextNonSpaceIsAlphaNumeric(value []rune, start int) bool {
+	for start < len(value) && unicode.IsSpace(value[start]) {
+		start++
+	}
+	return start < len(value) && isASCIIAlphaNumeric(value[start])
+}
+
+func isClosingQuote(r rune) bool {
+	switch r {
+	case '”', '’', '"', '\'', '」', '』', '》', '）', ')', '】', ']':
 		return true
 	default:
 		return false
@@ -239,17 +325,38 @@ func trimLeftSpaceRunes(value []rune) []rune {
 // order. The callback supplies natural backpressure and makes cancellation
 // explicit, avoiding an unread output channel that can leak goroutines.
 type Synthesizer struct {
-	provider    TTSProvider
-	concurrency int
+	provider       TTSProvider
+	concurrency    int
+	segmentTimeout time.Duration
 }
 
-func NewSynthesizer(provider TTSProvider, concurrency int) *Synthesizer {
+type SynthesizerOption func(*Synthesizer)
+
+func WithTTSSegmentTimeout(timeout time.Duration) SynthesizerOption {
+	return func(s *Synthesizer) {
+		if timeout > 0 {
+			s.segmentTimeout = timeout
+		}
+	}
+}
+
+func NewSynthesizer(provider TTSProvider, concurrency int, options ...SynthesizerOption) *Synthesizer {
 	if concurrency <= 0 {
 		concurrency = defaultTTSWorkers
 	} else if concurrency > defaultTTSWorkers {
 		concurrency = defaultTTSWorkers
 	}
-	return &Synthesizer{provider: provider, concurrency: concurrency}
+	synthesizer := &Synthesizer{
+		provider:       provider,
+		concurrency:    concurrency,
+		segmentTimeout: defaultTTSTimeout,
+	}
+	for _, option := range options {
+		if option != nil {
+			option(synthesizer)
+		}
+	}
+	return synthesizer
 }
 
 type synthesisJob struct {
@@ -277,7 +384,7 @@ func (s *Synthesizer) Synthesize(ctx context.Context, cfg TTSConfig, text string
 	defer cancel()
 
 	jobs := make(chan synthesisJob)
-	results := make(chan synthesisResult, s.concurrency)
+	results := make(chan synthesisResult)
 	var workers sync.WaitGroup
 	workerCount := min(s.concurrency, len(sentences))
 	workers.Add(workerCount)
@@ -292,7 +399,9 @@ func (s *Synthesizer) Synthesize(ctx context.Context, cfg TTSConfig, text string
 					if !ok || ctx.Err() != nil {
 						return
 					}
-					result := s.synthesizeOne(ctx, cfg, job)
+					segmentCtx, segmentCancel := context.WithTimeout(ctx, s.segmentTimeout)
+					result := s.synthesizeOne(segmentCtx, cfg, job)
+					segmentCancel()
 					select {
 					case results <- result:
 					case <-ctx.Done():
@@ -312,53 +421,50 @@ func (s *Synthesizer) Synthesize(ctx context.Context, cfg TTSConfig, text string
 			}
 		}
 	}()
+	workersDone := make(chan struct{})
 	go func() {
 		workers.Wait()
 		close(results)
+		close(workersDone)
 	}()
+	stopAndWait := func(err error) error {
+		cancel()
+		<-workersDone
+		return err
+	}
 
 	pending := make(map[uint32]AudioSegment, workerCount)
 	var next uint32
-	var totalBytes int
+	var deliveredBytes int
+	var pendingBytes int
 	for result := range results {
 		if result.err != nil {
-			cancel()
-			for range results {
-			}
-			if ctx.Err() != nil && errors.Is(result.err, context.Canceled) {
-				return ctx.Err()
-			}
-			return result.err
+			return stopAndWait(result.err)
 		}
 		if ctx.Err() != nil {
-			cancel()
-			for range results {
-			}
-			return ctx.Err()
+			return stopAndWait(ctx.Err())
+		}
+		segmentBytes := len(result.segment.Audio)
+		if deliveredBytes+pendingBytes+segmentBytes > maxTTSTurnBytes {
+			return stopAndWait(ErrTTSTurnTooLarge)
 		}
 		pending[result.segment.Seq] = result.segment
+		pendingBytes += segmentBytes
 		for {
 			segment, ok := pending[next]
 			if !ok {
 				break
 			}
 			delete(pending, next)
-			totalBytes += len(segment.Audio)
-			if totalBytes > maxTTSTurnBytes {
-				cancel()
-				for range results {
-				}
-				return errors.New("TTS 单轮音频超过 10MiB")
-			}
+			pendingBytes -= len(segment.Audio)
+			deliveredBytes += len(segment.Audio)
 			if err := emit(segment); err != nil {
-				cancel()
-				for range results {
-				}
-				return err
+				return stopAndWait(err)
 			}
 			next++
 		}
 	}
+	<-workersDone
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -368,8 +474,14 @@ func (s *Synthesizer) Synthesize(ctx context.Context, cfg TTSConfig, text string
 func (s *Synthesizer) synthesizeOne(ctx context.Context, cfg TTSConfig, job synthesisJob) synthesisResult {
 	audio, contentType, err := s.provider.Synthesize(ctx, cfg, job.text)
 	if err != nil {
-		if ctx.Err() != nil {
+		if errors.Is(err, ErrTTSTimeout) || errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+			return synthesisResult{err: segmentCauseError(job.seq, ErrTTSTimeout)}
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
 			return synthesisResult{err: ctx.Err()}
+		}
+		if errors.Is(err, context.Canceled) {
+			return synthesisResult{err: context.Canceled}
 		}
 		return synthesisResult{err: segmentError(job.seq, "供应商调用失败")}
 	}
@@ -387,12 +499,16 @@ func (s *Synthesizer) synthesizeOne(ctx context.Context, cfg TTSConfig, job synt
 		return synthesisResult{err: segmentError(job.seq, "MP3 数据无效")}
 	}
 	return synthesisResult{segment: AudioSegment{
-		Seq: job.seq, Text: job.text, Audio: audio, MIME: mimeType, SHA256: sha256.Sum256(audio),
+		Seq: job.seq, Audio: audio, MIME: mimeType, SHA256: sha256.Sum256(audio), ByteLength: len(audio), deliveryText: job.text,
 	}}
 }
 
 func segmentError(seq uint32, reason string) error {
 	return fmt.Errorf("TTS segment %d failed: %s", seq, reason)
+}
+
+func segmentCauseError(seq uint32, cause error) error {
+	return fmt.Errorf("TTS segment %d failed: %w", seq, cause)
 }
 
 func normalizeMP3MIME(raw string) (string, error) {
@@ -417,8 +533,20 @@ func validMP3(audio []byte) bool {
 			return false
 		}
 	}
-	frameLength, ok := mpegLayerIIIFrameLength(audio[offset:])
-	return ok && frameLength <= len(audio)-offset
+	frames := 0
+	for offset < len(audio) {
+		if len(audio)-offset == 128 && bytes.Equal(audio[offset:offset+3], []byte("TAG")) {
+			offset += 128
+			break
+		}
+		frameLength, ok := mpegLayerIIIFrameLength(audio[offset:])
+		if !ok || frameLength > len(audio)-offset {
+			return false
+		}
+		offset += frameLength
+		frames++
+	}
+	return frames > 0 && offset == len(audio)
 }
 
 func id3v2End(audio []byte) (int, bool) {
