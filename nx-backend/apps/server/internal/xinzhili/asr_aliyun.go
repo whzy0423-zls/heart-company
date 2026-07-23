@@ -13,11 +13,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 )
 
-const asrEventBuffer = 64
+const (
+	asrEventBuffer         = 64
+	asrMaxJSONMessageBytes = 1 << 20
+	asrMaxTranscriptBytes  = 64 << 10
+	asrMaxTranscriptRunes  = 64 << 10
+)
 
 type ASRClock interface {
 	Now() time.Time
@@ -27,11 +33,23 @@ type ASRWebSocketDialer interface {
 	DialContext(ctx context.Context, urlStr string, requestHeader http.Header) (*websocket.Conn, *http.Response, error)
 }
 
+type asrWebSocketConn interface {
+	Close() error
+	ReadMessage() (messageType int, p []byte, err error)
+	SetReadDeadline(t time.Time) error
+	SetReadLimit(limit int64)
+	SetWriteDeadline(t time.Time) error
+	WriteControl(messageType int, data []byte, deadline time.Time) error
+	WriteJSON(v any) error
+	WriteMessage(messageType int, data []byte) error
+}
+
 type AliyunASRTimeouts struct {
-	Handshake  time.Duration
-	FirstEvent time.Duration
-	Write      time.Duration
-	Close      time.Duration
+	Handshake     time.Duration
+	FirstEvent    time.Duration
+	Write         time.Duration
+	Close         time.Duration
+	EventDelivery time.Duration
 }
 
 type AliyunASROptions struct {
@@ -44,6 +62,7 @@ type AliyunASRFactory struct {
 	dialer   ASRWebSocketDialer
 	clock    ASRClock
 	timeouts AliyunASRTimeouts
+	wrapConn func(*websocket.Conn) asrWebSocketConn
 }
 
 type systemASRClock struct{}
@@ -64,6 +83,9 @@ func NewAliyunASRFactory(options AliyunASROptions) *AliyunASRFactory {
 	if timeouts.Close <= 0 {
 		timeouts.Close = 5 * time.Second
 	}
+	if timeouts.EventDelivery <= 0 {
+		timeouts.EventDelivery = 250 * time.Millisecond
+	}
 	clock := options.Clock
 	if clock == nil {
 		clock = systemASRClock{}
@@ -74,7 +96,10 @@ func NewAliyunASRFactory(options AliyunASROptions) *AliyunASRFactory {
 		copy.HandshakeTimeout = timeouts.Handshake
 		dialer = &copy
 	}
-	return &AliyunASRFactory{dialer: dialer, clock: clock, timeouts: timeouts}
+	return &AliyunASRFactory{
+		dialer: dialer, clock: clock, timeouts: timeouts,
+		wrapConn: func(conn *websocket.Conn) asrWebSocketConn { return conn },
+	}
 }
 
 func (f *AliyunASRFactory) Open(ctx context.Context, cfg RealtimeASRConfig) (ASRSession, error) {
@@ -91,7 +116,7 @@ func (f *AliyunASRFactory) Open(ctx context.Context, cfg RealtimeASRConfig) (ASR
 	defer cancelDial()
 	header := make(http.Header)
 	header.Set("Authorization", "Bearer "+cfg.APIKey)
-	conn, response, err := f.dialer.DialContext(dialCtx, endpoint, header)
+	rawConn, response, err := f.dialer.DialContext(dialCtx, endpoint, header)
 	if response != nil && response.Body != nil {
 		_ = response.Body.Close()
 	}
@@ -105,6 +130,8 @@ func (f *AliyunASRFactory) Open(ctx context.Context, cfg RealtimeASRConfig) (ASR
 		}
 		return nil, fmt.Errorf("连接实时语音识别上游: %w", err)
 	}
+	conn := f.wrapConn(rawConn)
+	conn.SetReadLimit(asrMaxJSONMessageBytes)
 
 	if err := writeASRJSON(ctx, conn, f.timeouts.Write, runTaskMessage(taskID)); err != nil {
 		_ = conn.Close()
@@ -175,7 +202,7 @@ func validateASRRuntimeConfig(cfg RealtimeASRConfig) (string, error) {
 }
 
 type aliyunASRSession struct {
-	conn     *websocket.Conn
+	conn     asrWebSocketConn
 	clock    ASRClock
 	timeouts AliyunASRTimeouts
 	taskID   string
@@ -185,16 +212,18 @@ type aliyunASRSession struct {
 	events chan ASREvent
 	done   chan struct{}
 
-	writeMu      sync.Mutex
-	stateMu      sync.RWMutex
-	finished     bool
-	finishDone   chan struct{}
-	finishErr    error
-	closed       bool
-	err          error
-	speechActive bool
-	closeOnce    sync.Once
-	finalizeOnce sync.Once
+	writeMu        sync.Mutex
+	stateMu        sync.RWMutex
+	finished       bool
+	finishDone     chan struct{}
+	finishErr      error
+	finishComplete bool
+	terminal       bool
+	closed         bool
+	err            error
+	speechActive   bool
+	closeOnce      sync.Once
+	finalizeOnce   sync.Once
 }
 
 func (s *aliyunASRSession) Events() <-chan ASREvent { return s.events }
@@ -217,11 +246,11 @@ func (s *aliyunASRSession) WritePCM(ctx context.Context, pcm []byte) error {
 	s.stateMu.RLock()
 	finished, closed := s.finished, s.closed
 	s.stateMu.RUnlock()
-	if finished {
-		return ErrASRInputFinished
-	}
 	if closed {
 		return ErrASRClosed
+	}
+	if finished {
+		return ErrASRInputFinished
 	}
 	if err := setASRWriteDeadline(ctx, s.conn, s.timeouts.Write); err != nil {
 		return err
@@ -235,26 +264,20 @@ func (s *aliyunASRSession) WritePCM(ctx context.Context, pcm []byte) error {
 }
 
 func (s *aliyunASRSession) FinishInput(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	s.stateMu.Lock()
 	if s.finished {
 		done := s.finishDone
 		s.stateMu.Unlock()
-		select {
-		case <-done:
-			s.stateMu.RLock()
-			err := s.finishErr
-			s.stateMu.RUnlock()
-			return err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		<-done
+		return s.sharedFinishErr()
 	}
 	if s.closed {
 		s.stateMu.Unlock()
 		return ErrASRClosed
+	}
+	if err := ctx.Err(); err != nil {
+		s.stateMu.Unlock()
+		return err
 	}
 	s.finished = true
 	s.stateMu.Unlock()
@@ -262,25 +285,28 @@ func (s *aliyunASRSession) FinishInput(ctx context.Context) error {
 	s.writeMu.Lock()
 	err := writeASRJSON(ctx, s.conn, s.timeouts.Write, finishTaskMessage(s.taskID))
 	s.writeMu.Unlock()
-	s.stateMu.Lock()
-	s.finishErr = err
-	close(s.finishDone)
-	s.stateMu.Unlock()
 	if err != nil {
 		s.fail(err)
-		return err
+		<-s.finishDone
+		return s.sharedFinishErr()
 	}
-	if s.timeouts.Close > 0 {
-		_ = s.conn.SetReadDeadline(time.Now().Add(s.timeouts.Close))
+	timer := time.NewTimer(s.timeouts.Close)
+	defer timer.Stop()
+	select {
+	case <-s.finishDone:
+	case <-ctx.Done():
+		s.fail(ctx.Err())
+		<-s.finishDone
+	case <-timer.C:
+		s.fail(fmt.Errorf("%w: 等待 task-finished", ErrASRTimeout))
+		<-s.finishDone
 	}
-	return nil
+	return s.sharedFinishErr()
 }
 
 func (s *aliyunASRSession) Close() error {
 	s.closeOnce.Do(func() {
-		s.stateMu.Lock()
-		s.closed = true
-		s.stateMu.Unlock()
+		s.markTerminal(nil, ErrASRClosed)
 		s.cancel()
 		deadline := time.Now().Add(s.timeouts.Close)
 		_ = s.conn.WriteControl(websocket.CloseMessage,
@@ -307,8 +333,7 @@ func (s *aliyunASRSession) watchContext() {
 		closed := s.closed
 		s.stateMu.RUnlock()
 		if !closed {
-			s.setErr(s.ctx.Err())
-			_ = s.conn.Close()
+			s.fail(s.ctx.Err())
 		}
 	case <-s.done:
 	}
@@ -323,12 +348,12 @@ func (s *aliyunASRSession) readLoop() {
 			return
 		}
 		if messageType != websocket.TextMessage {
-			s.setErr(fmt.Errorf("%w: 上游返回非文本控制消息", ErrASRProtocol))
+			s.fail(fmt.Errorf("%w: 上游返回非文本控制消息", ErrASRProtocol))
 			return
 		}
 		message, err := decodeASRServerMessage(raw)
 		if err != nil {
-			s.setErr(err)
+			s.fail(err)
 			return
 		}
 		if message.Header.TaskID != s.taskID {
@@ -337,15 +362,19 @@ func (s *aliyunASRSession) readLoop() {
 		switch message.Header.Event {
 		case "result-generated":
 			at := s.clock.Now()
-			event, ok := normalizeASRResult(message, at)
+			event, ok, normalizeErr := normalizeASRResult(message, at)
+			if normalizeErr != nil {
+				s.fail(normalizeErr)
+				return
+			}
 			if ok {
 				if !s.speechActive {
-					if !s.emit(ASREvent{Kind: ASREventSpeechStarted, TaskID: s.taskID, At: at}) {
-						return
-					}
+					s.emitNonCritical(ASREvent{Kind: ASREventSpeechStarted, TaskID: s.taskID, At: at})
 					s.speechActive = true
 				}
-				if !s.emit(event) {
+				if event.Kind == ASREventPartial {
+					s.emitNonCritical(event)
+				} else if !s.emitCritical(event) {
 					return
 				}
 				if event.Kind == ASREventFinal {
@@ -353,10 +382,14 @@ func (s *aliyunASRSession) readLoop() {
 				}
 			}
 		case "task-finished":
-			s.emit(ASREvent{Kind: ASREventTaskFinished, TaskID: s.taskID, At: s.clock.Now()})
+			if !s.emitCritical(ASREvent{Kind: ASREventTaskFinished, TaskID: s.taskID, At: s.clock.Now()}) {
+				return
+			}
+			s.markTerminal(nil, nil)
 			return
 		case "task-failed":
-			s.setErr(newASRUpstreamError(message))
+			err := newASRUpstreamError(message)
+			s.fail(err)
 			return
 		case "task-started":
 			// A duplicate acknowledgement is harmless after Open has completed.
@@ -367,53 +400,89 @@ func (s *aliyunASRSession) readLoop() {
 	}
 }
 
-func (s *aliyunASRSession) emit(event ASREvent) bool {
+// Activity and partial events are advisory. When the bounded queue is full we
+// drop the current advisory event so the sole WebSocket reader keeps moving.
+func (s *aliyunASRSession) emitNonCritical(event ASREvent) {
+	select {
+	case s.events <- event:
+	default:
+	}
+}
+
+func (s *aliyunASRSession) emitCritical(event ASREvent) bool {
+	timer := time.NewTimer(s.timeouts.EventDelivery)
+	defer timer.Stop()
 	select {
 	case s.events <- event:
 		return true
 	case <-s.ctx.Done():
+		return false
+	case <-timer.C:
+		s.fail(ErrASRBackpressure)
 		return false
 	}
 }
 
 func (s *aliyunASRSession) handleReadError(err error) {
 	s.stateMu.RLock()
-	closed := s.closed
+	terminal := s.terminal
 	finished := s.finished
 	s.stateMu.RUnlock()
-	if closed {
+	if terminal {
 		return
 	}
 	if contextErr := s.ctx.Err(); contextErr != nil {
-		s.setErr(contextErr)
+		s.fail(contextErr)
 		return
 	}
 	var netErr net.Error
-	if finished && errors.As(err, &netErr) && netErr.Timeout() {
-		s.setErr(fmt.Errorf("%w: 等待 task-finished", ErrASRTimeout))
+	if errors.Is(err, websocket.ErrReadLimit) {
+		s.fail(ErrASRMessageTooLarge)
 		return
 	}
-	s.setErr(fmt.Errorf("%w: %v", ErrASRDisconnected, err))
+	if finished && errors.As(err, &netErr) && netErr.Timeout() {
+		mapped := fmt.Errorf("%w: 等待 task-finished", ErrASRTimeout)
+		s.fail(mapped)
+		return
+	}
+	mapped := fmt.Errorf("%w: %v", ErrASRDisconnected, err)
+	s.fail(mapped)
 }
 
 func (s *aliyunASRSession) fail(err error) {
-	s.setErr(err)
-	_ = s.conn.Close()
+	if s.markTerminal(err, err) {
+		_ = s.conn.Close()
+	}
 }
 
-func (s *aliyunASRSession) setErr(err error) {
-	if err == nil {
-		return
-	}
+func (s *aliyunASRSession) markTerminal(sessionErr, finishErr error) bool {
 	s.stateMu.Lock()
-	if s.err == nil {
-		s.err = err
+	defer s.stateMu.Unlock()
+	if s.terminal {
+		return false
 	}
-	s.stateMu.Unlock()
+	s.terminal = true
+	s.closed = true
+	if sessionErr != nil && s.err == nil {
+		s.err = sessionErr
+	}
+	if !s.finishComplete {
+		s.finishComplete = true
+		s.finishErr = finishErr
+		close(s.finishDone)
+	}
+	return true
+}
+
+func (s *aliyunASRSession) sharedFinishErr() error {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return s.finishErr
 }
 
 func (s *aliyunASRSession) finalize() {
 	s.finalizeOnce.Do(func() {
+		s.markTerminal(nil, ErrASRClosed)
 		_ = s.conn.Close()
 		close(s.events)
 		close(s.done)
@@ -450,7 +519,7 @@ func decodeASRServerMessage(raw []byte) (asrServerMessage, error) {
 	return message, nil
 }
 
-func waitForTaskStarted(ctx context.Context, conn *websocket.Conn, taskID string, timeout time.Duration) error {
+func waitForTaskStarted(ctx context.Context, conn asrWebSocketConn, taskID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
 		deadline = contextDeadline
@@ -463,6 +532,9 @@ func waitForTaskStarted(ctx context.Context, conn *websocket.Conn, taskID string
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
+			}
+			if errors.Is(err, websocket.ErrReadLimit) {
+				return ErrASRMessageTooLarge
 			}
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {
@@ -491,15 +563,18 @@ func waitForTaskStarted(ctx context.Context, conn *websocket.Conn, taskID string
 	}
 }
 
-func normalizeASRResult(message asrServerMessage, at time.Time) (ASREvent, bool) {
+func normalizeASRResult(message asrServerMessage, at time.Time) (ASREvent, bool, error) {
 	text := message.Payload.Output.Sentence.Text
 	if text == "" {
-		return ASREvent{}, false
+		return ASREvent{}, false, nil
+	}
+	if len(text) > asrMaxTranscriptBytes || utf8.RuneCountInString(text) > asrMaxTranscriptRunes {
+		return ASREvent{}, false, fmt.Errorf("%w: 单条识别文本超过限制", ErrASRMessageTooLarge)
 	}
 	if message.Payload.Output.Sentence.SentenceEnd {
-		return ASREvent{Kind: ASREventFinal, Final: text, Stable: true, TaskID: message.Header.TaskID, At: at}, true
+		return ASREvent{Kind: ASREventFinal, Final: text, Stable: true, TaskID: message.Header.TaskID, At: at}, true, nil
 	}
-	return ASREvent{Kind: ASREventPartial, Partial: text, TaskID: message.Header.TaskID, At: at}, true
+	return ASREvent{Kind: ASREventPartial, Partial: text, TaskID: message.Header.TaskID, At: at}, true, nil
 }
 
 func newASRUpstreamError(message asrServerMessage) error {
@@ -530,7 +605,7 @@ func finishTaskMessage(taskID string) any {
 	}
 }
 
-func writeASRJSON(ctx context.Context, conn *websocket.Conn, timeout time.Duration, value any) error {
+func writeASRJSON(ctx context.Context, conn asrWebSocketConn, timeout time.Duration, value any) error {
 	if err := setASRWriteDeadline(ctx, conn, timeout); err != nil {
 		return err
 	}
@@ -540,7 +615,7 @@ func writeASRJSON(ctx context.Context, conn *websocket.Conn, timeout time.Durati
 	return nil
 }
 
-func setASRWriteDeadline(ctx context.Context, conn *websocket.Conn, timeout time.Duration) error {
+func setASRWriteDeadline(ctx context.Context, conn asrWebSocketConn, timeout time.Duration) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

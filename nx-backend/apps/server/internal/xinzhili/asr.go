@@ -8,13 +8,15 @@ import (
 )
 
 var (
-	ErrASRClosed        = errors.New("实时语音识别会话已关闭")
-	ErrASREmptyPCM      = errors.New("实时语音识别音频帧不能为空")
-	ErrASRInputFinished = errors.New("实时语音识别输入已经结束")
-	ErrASRProtocol      = errors.New("实时语音识别上游协议错误")
-	ErrASRTimeout       = errors.New("实时语音识别上游超时")
-	ErrASRUpstream      = errors.New("实时语音识别上游失败")
-	ErrASRDisconnected  = errors.New("实时语音识别上游连接中断")
+	ErrASRClosed          = errors.New("实时语音识别会话已关闭")
+	ErrASREmptyPCM        = errors.New("实时语音识别音频帧不能为空")
+	ErrASRInputFinished   = errors.New("实时语音识别输入已经结束")
+	ErrASRProtocol        = errors.New("实时语音识别上游协议错误")
+	ErrASRMessageTooLarge = fmt.Errorf("%w: 上游消息超过大小限制", ErrASRProtocol)
+	ErrASRBackpressure    = errors.New("实时语音识别事件消费阻塞")
+	ErrASRTimeout         = errors.New("实时语音识别上游超时")
+	ErrASRUpstream        = errors.New("实时语音识别上游失败")
+	ErrASRDisconnected    = errors.New("实时语音识别上游连接中断")
 )
 
 type ASREventKind string
