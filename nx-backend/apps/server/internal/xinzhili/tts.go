@@ -47,7 +47,7 @@ type TTSProvider interface {
 // MiniMaxTextToAudio is the narrow part of voice.MiniMaxClient reused here. It
 // intentionally excludes the legacy Store, uploads and generated assets.
 type MiniMaxTextToAudio interface {
-	TextToAudio(ctx context.Context, model string, voiceID string, text string) ([]byte, string, error)
+	TextToAudioLimited(ctx context.Context, model string, voiceID string, text string, maxBytes int64) ([]byte, string, error)
 }
 
 type TTSProviderFactory struct {
@@ -86,7 +86,14 @@ func (f TTSProviderFactory) New(cfg TTSConfig) (TTSProvider, error) {
 type miniMaxTTSAdapter struct{ client MiniMaxTextToAudio }
 
 func (p miniMaxTTSAdapter) Synthesize(ctx context.Context, cfg TTSConfig, text string) ([]byte, string, error) {
-	return p.client.TextToAudio(ctx, cfg.Model, cfg.Voice, text)
+	audio, mimeType, err := p.client.TextToAudioLimited(ctx, cfg.Model, cfg.Voice, text, maxTTSSegmentBytes)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(audio) > maxTTSSegmentBytes {
+		return nil, "", errors.New("MiniMax 音频超过 1MiB")
+	}
+	return audio, mimeType, nil
 }
 
 type openAICompatibleTTS struct {
@@ -238,6 +245,8 @@ type Synthesizer struct {
 
 func NewSynthesizer(provider TTSProvider, concurrency int) *Synthesizer {
 	if concurrency <= 0 {
+		concurrency = defaultTTSWorkers
+	} else if concurrency > defaultTTSWorkers {
 		concurrency = defaultTTSWorkers
 	}
 	return &Synthesizer{provider: provider, concurrency: concurrency}
@@ -400,8 +409,73 @@ func normalizeMP3MIME(raw string) (string, error) {
 }
 
 func validMP3(audio []byte) bool {
+	offset := 0
 	if len(audio) >= 3 && bytes.Equal(audio[:3], []byte("ID3")) {
-		return true
+		var ok bool
+		offset, ok = id3v2End(audio)
+		if !ok {
+			return false
+		}
 	}
-	return len(audio) >= 2 && audio[0] == 0xff && audio[1]&0xe0 == 0xe0
+	frameLength, ok := mpegLayerIIIFrameLength(audio[offset:])
+	return ok && frameLength <= len(audio)-offset
+}
+
+func id3v2End(audio []byte) (int, bool) {
+	if len(audio) < 10 || audio[3] < 2 || audio[3] > 4 || audio[4] == 0xff {
+		return 0, false
+	}
+	for _, value := range audio[6:10] {
+		if value&0x80 != 0 {
+			return 0, false
+		}
+	}
+	size := int(audio[6])<<21 | int(audio[7])<<14 | int(audio[8])<<7 | int(audio[9])
+	end := 10 + size
+	if audio[3] == 4 && audio[5]&0x10 != 0 {
+		end += 10
+	}
+	if end < 10 || end > len(audio) {
+		return 0, false
+	}
+	return end, true
+}
+
+func mpegLayerIIIFrameLength(frame []byte) (int, bool) {
+	if len(frame) < 4 || frame[0] != 0xff || frame[1]&0xe0 != 0xe0 {
+		return 0, false
+	}
+	versionBits := (frame[1] >> 3) & 0x03
+	if versionBits == 0x01 || (frame[1]>>1)&0x03 != 0x01 {
+		return 0, false
+	}
+	bitrateIndex := (frame[2] >> 4) & 0x0f
+	sampleRateIndex := (frame[2] >> 2) & 0x03
+	if bitrateIndex == 0 || bitrateIndex == 0x0f || sampleRateIndex == 0x03 {
+		return 0, false
+	}
+
+	mpeg1Bitrates := [...]int{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320}
+	mpeg2Bitrates := [...]int{0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160}
+	mpeg1SampleRates := [...]int{44100, 48000, 32000}
+	bitrateKbps := 0
+	sampleRate := mpeg1SampleRates[sampleRateIndex]
+	coefficient := 144
+	switch versionBits {
+	case 0x03: // MPEG-1
+		bitrateKbps = mpeg1Bitrates[bitrateIndex]
+	case 0x02: // MPEG-2
+		bitrateKbps = mpeg2Bitrates[bitrateIndex]
+		sampleRate /= 2
+		coefficient = 72
+	case 0x00: // MPEG-2.5
+		bitrateKbps = mpeg2Bitrates[bitrateIndex]
+		sampleRate /= 4
+		coefficient = 72
+	default:
+		return 0, false
+	}
+	padding := int((frame[2] >> 1) & 0x01)
+	frameLength := coefficient*bitrateKbps*1000/sampleRate + padding
+	return frameLength, frameLength >= 4
 }

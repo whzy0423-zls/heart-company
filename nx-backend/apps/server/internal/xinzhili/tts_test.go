@@ -78,7 +78,7 @@ func TestOpenAICompatibleTTSAcceptsExactPathAndAudioMP3(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path = r.URL.Path
 		w.Header().Set("Content-Type", "audio/mp3; charset=binary")
-		_, _ = w.Write(append([]byte("ID3"), 1, 2, 3))
+		_, _ = w.Write(append([]byte{'I', 'D', '3', 4, 0, 0, 0, 0, 0, 0}, testMP3()...))
 	}))
 	defer server.Close()
 	cfg := TTSConfig{Provider: TTSProviderOpenAICompatible, Endpoint: server.URL + "/v1/audio/speech", APIKey: "key", Model: "m", Voice: "v"}
@@ -153,10 +153,14 @@ func TestOpenAICompatibleTTSTimeout(t *testing.T) {
 	}
 }
 
-type fakeMiniMaxTTS struct{ model, voice, text string }
+type fakeMiniMaxTTS struct {
+	model, voice, text string
+	maxBytes           int64
+}
 
-func (f *fakeMiniMaxTTS) TextToAudio(_ context.Context, model, voice, text string) ([]byte, string, error) {
+func (f *fakeMiniMaxTTS) TextToAudioLimited(_ context.Context, model, voice, text string, maxBytes int64) ([]byte, string, error) {
 	f.model, f.voice, f.text = model, voice, text
+	f.maxBytes = maxBytes
 	return testMP3(), "audio/mpeg", nil
 }
 
@@ -171,9 +175,30 @@ func TestMiniMaxTTSAdapterUsesTextToAudioOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if client.model != "speech-02" || client.voice != "voice-1" || client.text != "短句" || mime != "audio/mpeg" {
+	if client.model != "speech-02" || client.voice != "voice-1" || client.text != "短句" || client.maxBytes != maxTTSSegmentBytes || mime != "audio/mpeg" {
 		t.Fatalf("client=%#v mime=%q", client, mime)
 	}
+}
+
+func TestMiniMaxTTSAdapterRejectsOversizedAudioAtProviderBoundary(t *testing.T) {
+	client := miniMaxLimitedFunc(func(context.Context, string, string, string, int64) ([]byte, string, error) {
+		return make([]byte, maxTTSSegmentBytes+1), "audio/mpeg", nil
+	})
+	cfg := TTSConfig{Provider: TTSProviderMiniMax, Model: "model", Voice: "voice"}
+	provider, err := (TTSProviderFactory{MiniMax: client}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = provider.Synthesize(context.Background(), cfg, "短句")
+	if err == nil || !strings.Contains(err.Error(), "超过") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+type miniMaxLimitedFunc func(context.Context, string, string, string, int64) ([]byte, string, error)
+
+func (f miniMaxLimitedFunc) TextToAudioLimited(ctx context.Context, model, voice, text string, maxBytes int64) ([]byte, string, error) {
+	return f(ctx, model, voice, text, maxBytes)
 }
 
 type delayedTTSProvider struct {
@@ -305,6 +330,57 @@ func TestSynthesizerHonorsConcurrencyLimit(t *testing.T) {
 	}
 }
 
+func TestNewSynthesizerClampsConcurrencyToTwo(t *testing.T) {
+	provider := ttsProviderFunc(func(context.Context, TTSConfig, string) ([]byte, string, error) {
+		return testMP3(), "audio/mpeg", nil
+	})
+	tests := []struct {
+		input int
+		want  int
+	}{
+		{input: -1, want: 2},
+		{input: 0, want: 2},
+		{input: 1, want: 1},
+		{input: 2, want: 2},
+		{input: 8, want: 2},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("input_%d", tt.input), func(t *testing.T) {
+			if got := NewSynthesizer(provider, tt.input).concurrency; got != tt.want {
+				t.Fatalf("concurrency=%d want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSynthesizerRequestedConcurrencyEightStillPeaksAtTwo(t *testing.T) {
+	var active atomic.Int32
+	var peak atomic.Int32
+	provider := ttsProviderFunc(func(ctx context.Context, _ TTSConfig, _ string) ([]byte, string, error) {
+		current := active.Add(1)
+		defer active.Add(-1)
+		for {
+			old := peak.Load()
+			if current <= old || peak.CompareAndSwap(old, current) {
+				break
+			}
+		}
+		select {
+		case <-time.After(10 * time.Millisecond):
+			return testMP3(), "audio/mpeg", nil
+		case <-ctx.Done():
+			return nil, "", ctx.Err()
+		}
+	})
+	err := NewSynthesizer(provider, 8).Synthesize(context.Background(), TTSConfig{}, "一。二。三。四。五。六。七。八。", func(AudioSegment) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if peak.Load() != 2 {
+		t.Fatalf("peak concurrency=%d want 2", peak.Load())
+	}
+}
+
 func TestSynthesizerLimits(t *testing.T) {
 	t.Run("单片", func(t *testing.T) {
 		p := &delayedTTSProvider{delays: map[string]time.Duration{}, sizeFor: map[string]int{"一。": maxTTSSegmentBytes}}
@@ -373,4 +449,32 @@ func TestSynthesizerMetadata(t *testing.T) {
 	}
 }
 
-func testMP3() []byte { return []byte{0xff, 0xfb, 0x90, 0x64, 0, 0, 0, 0} }
+func TestValidMP3RequiresACompleteMPEGLayerIIIFrame(t *testing.T) {
+	fullFrame := testMP3()
+	tests := []struct {
+		name  string
+		audio []byte
+		want  bool
+	}{
+		{name: "完整MPEG1 Layer III帧", audio: fullFrame, want: true},
+		{name: "合法ID3后有完整帧", audio: append([]byte{'I', 'D', '3', 4, 0, 0, 0, 0, 0, 0}, fullFrame...), want: true},
+		{name: "六字节伪帧", audio: []byte{0xff, 0xfb, 0x90, 0x64, 0, 0}, want: false},
+		{name: "仅ID3标签", audio: []byte{'I', 'D', '3', 4, 0, 0, 0, 0, 0, 0}, want: false},
+		{name: "截断MPEG帧", audio: fullFrame[:len(fullFrame)-1], want: false},
+		{name: "ID3声明越界", audio: []byte{'I', 'D', '3', 4, 0, 0, 0, 0, 1, 0}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := validMP3(tt.audio); got != tt.want {
+				t.Fatalf("validMP3()=%v want %v (len=%d)", got, tt.want, len(tt.audio))
+			}
+		})
+	}
+}
+
+func testMP3() []byte {
+	// MPEG-1 Layer III, 128 kbps, 44.1 kHz, no padding => 417 bytes.
+	frame := make([]byte, 417)
+	copy(frame, []byte{0xff, 0xfb, 0x90, 0x64})
+	return frame
+}
