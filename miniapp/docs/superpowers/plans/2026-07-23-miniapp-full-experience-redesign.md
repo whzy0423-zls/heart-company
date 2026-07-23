@@ -981,7 +981,7 @@ rg -n '存入档案并查看价格' src/pages/result/result.vue
 rg -n '@click="saveRecord"' src/pages/result/result.vue
 rg -n '解锁深度报告' src/pages/result/result.vue
 rg -n '@click="unlockReport"' src/pages/result/result.vue
-test "$(rg -o '<button[^>]*class="[^"]*report-panel__cta[^"]*"[^>]*bindtap' dist/build/mp-weixin/pages/result/result.wxml | wc -l | tr -d ' ')" -eq 2
+test "$(rg -o '<button[^>]*class="[^"]*report__cta[^"]*"[^>]*bindtap' dist/build/mp-weixin/pages/result/result.wxml | wc -l | tr -d ' ')" -eq 2
 rg -n '<button[^>]*bindtap[^>]*>提交预约</button>' dist/build/mp-weixin/pages/booking/booking.wxml
 rg -n 'open-type="chooseAvatar"[^>]*bindchooseavatar' dist/build/mp-weixin/pages/profile/profile.wxml
 rg -n '<input[^>]*type="nickname"[^>]*bindinput' dist/build/mp-weixin/pages/profile/profile.wxml
