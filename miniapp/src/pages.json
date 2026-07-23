@@ -49,6 +49,12 @@
       }
     },
     {
+      "path": "pages/booking-detail/booking-detail",
+      "style": {
+        "navigationBarTitleText": "预约详情"
+      }
+    },
+    {
       "path": "pages/profile/profile",
       "style": {
         "navigationBarTitleText": "我的"

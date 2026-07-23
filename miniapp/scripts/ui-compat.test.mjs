@@ -10,6 +10,11 @@ assert.equal(
   packageJson.dependencies['@dcloudio/uni-h5'],
   packageJson.dependencies['@dcloudio/uni-app'],
 )
+assert.match(
+  packageJson.scripts['test:config'],
+  /node src\/pages\/booking-detail\/booking-detail\.session\.test\.mjs/,
+  'the default test command should cover appointment detail auth and stale-response behavior',
+)
 
 const pagesConfig = readFileSync('src/pages.json', 'utf8')
 assert.doesNotMatch(pagesConfig, /pages\/chat\/chat/, 'pages.json must not register the removed chat page')
@@ -24,6 +29,11 @@ assert.match(
   pagesConfig,
   /"path"\s*:\s*"pages\/booking-records\/booking-records"[\s\S]*?"navigationBarTitleText"\s*:\s*"预约记录"/,
   'pages.json should register the appointment records page with its Chinese title',
+)
+assert.match(
+  pagesConfig,
+  /"path"\s*:\s*"pages\/booking-detail\/booking-detail"[\s\S]*?"navigationBarTitleText"\s*:\s*"预约详情"/,
+  'pages.json should register the appointment detail page with its Chinese title',
 )
 
 const h5Index = readFileSync('index.html', 'utf8')
@@ -1019,6 +1029,65 @@ assert.match(bookingRecordsPage, /statusCode\s*===\s*401[\s\S]*statusCode\s*===\
 assert.match(bookingRecordsPage, /onUnload/, 'appointment records should invalidate loads and clear session on unload')
 assert.match(bookingRecordsPage, /\.booking-record__open:focus-visible[\s\S]*(?:outline|box-shadow)/, 'appointment navigation should expose a visible focus state')
 assert.match(bookingRecordsPage, /\.booking-record__open\s*\{[\s\S]*min-height:\s*88rpx/, 'appointment navigation should keep an 88rpx touch target')
+
+const bookingDetailPath = 'src/pages/booking-detail/booking-detail.vue'
+assert.ok(statSync(bookingDetailPath, { throwIfNoEntry: false })?.isFile(), 'appointment detail page should exist')
+const bookingDetailPage = readFileSync(bookingDetailPath, 'utf8')
+const bookingDetailTemplate = stripMarkupAndCssComments(vueSection(bookingDetailPage, 'template') || '')
+const bookingDetailStyle = stripMarkupAndCssComments(vueSection(bookingDetailPage, 'style') || '')
+assertRootViewClasses(bookingDetailPage, bookingDetailPath, ['page-stack', 'ios-page', 'ios-safe-bottom'])
+assert.match(bookingDetailPage, /onLoad/, 'appointment detail should read its route ID on load')
+assert.match(bookingDetailPage, /normalizeBookingId\(query\?\.id\)/, 'appointment detail should normalize untrusted route IDs safely')
+assert.match(bookingDetailPage, /readBookingSession\(requestToken,\s*bookingId\)/, 'appointment detail should try the token-bound booking session first')
+assert.match(bookingDetailPage, /listBookingsApi\(\)/, 'appointment detail should fall back to the existing booking list API')
+assert.match(bookingDetailPage, /\.slice\(0,\s*50\)/, 'appointment detail should inspect only the latest 50 booking records')
+assert.match(bookingDetailPage, /String\(item\?\.id\)\s*===\s*bookingId/, 'appointment detail fallback should compare numeric and string IDs equivalently')
+assert.doesNotMatch(bookingDetailPage, /getBooking|bookingDetailApi|bookingByIdApi/, 'appointment detail must not invent a new API')
+assert.match(bookingDetailPage, /v-if=["']loading["']/, 'appointment detail should expose a loading state')
+assert.match(bookingDetailPage, /v-else-if=["']loadError["']/, 'appointment detail should expose an error state before not-found')
+assert.match(bookingDetailPage, /v-else-if=["']notFound["']/, 'appointment detail should expose a dedicated not-found state')
+assert.match(bookingDetailPage, /aria-live=["']polite["']/, 'appointment detail async state should announce changes politely')
+assert.match(bookingDetailTemplate, /@click=["']retryLoad["']/, 'appointment detail error state should allow retrying')
+assert.match(bookingDetailTemplate, /@click=["']goBookingRecords["']>返回预约列表<\/button>/, 'appointment detail not-found state should return to the records list')
+assert.match(bookingDetailPage, /uni\.redirectTo\s*\(\s*\{\s*url:\s*["']\/pages\/booking-records\/booking-records["']\s*\}\s*\)/, 'appointment detail should reliably return to the records route')
+for (const label of ['预约编号', '预约类型', '当前状态', '称呼', '手机号', '学习意向', '期望时间', '留言', '创建时间']) {
+  assert.match(bookingDetailTemplate, new RegExp(`>${label}<\\/text>`), `appointment detail should show ${label}`)
+}
+for (const field of ['id', 'contactName', 'phone', 'intent', 'preferredTime', 'message', 'createTime']) {
+  assert.match(bookingDetailTemplate, new RegExp(`bookingValue\\(booking\\.${field}\\)`), `appointment detail should normalize empty ${field} values`)
+}
+assert.match(bookingDetailTemplate, /bookingKindLabel\(booking\.kind\)/, 'appointment detail should render the booking kind in Chinese')
+assert.match(bookingDetailTemplate, /bookingStatusLabel\(booking\.status\)/, 'appointment detail should render the booking status in Chinese')
+assert.doesNotMatch(bookingDetailPage, /maskBookingPhone/, 'appointment detail should show the complete phone number')
+
+const detailLoadBody = vueFunctionBody(bookingDetailPage, 'loadBookingDetail')
+assert.ok(detailLoadBody !== undefined, 'appointment detail should define an isolated loading function')
+const invalidIdIndex = detailLoadBody.indexOf('if (!bookingId)')
+const tokenIndex = detailLoadBody.indexOf('const requestToken = getToken()')
+const listIndex = detailLoadBody.indexOf('await listBookingsApi()')
+assert.ok(invalidIdIndex >= 0 && invalidIdIndex < tokenIndex && tokenIndex < listIndex, 'appointment detail should reject an invalid ID before auth or API work')
+assert.match(detailLoadBody, /readBookingSession\(requestToken,\s*bookingId\)[\s\S]*await listBookingsApi\(\)/, 'appointment detail should use session data before falling back to the list')
+const detailAuthLossBody = vueFunctionBody(bookingDetailPage, 'handleAuthLoss')
+assert.ok(detailAuthLossBody !== undefined, 'appointment detail should centralize authentication loss handling')
+assert.match(detailAuthLossBody, /clearToken\(\)/, 'appointment detail auth loss should clear auth')
+assert.match(detailAuthLossBody, /clearBookingSession\(\)/, 'appointment detail auth loss should clear booking session data')
+assert.match(detailAuthLossBody, /redirecting/, 'appointment detail auth loss should guard Toast and navigation side effects')
+assert.match(detailAuthLossBody, /uni\.showToast/, 'appointment detail auth loss should show one user-facing Toast')
+assert.match(detailAuthLossBody, /uni\.switchTab/, 'appointment detail auth loss should switch to the profile tab')
+const detailSessionGuardBody = vueFunctionBody(bookingDetailPage, 'isCurrentBookingContext')
+assert.ok(detailSessionGuardBody !== undefined, 'appointment detail should centralize stale request checks')
+assert.match(detailSessionGuardBody, /ticket !== loadTicket/, 'appointment detail should reject an old load generation')
+assert.match(detailSessionGuardBody, /bookingId !== routeBookingId/, 'appointment detail should reject a response for another route ID')
+assert.match(detailSessionGuardBody, /token === currentToken/, 'appointment detail should accept only its current token')
+assert.match(detailSessionGuardBody, /!currentToken[\s\S]*error\?\.authExpired[\s\S]*error\.requestToken === token/, 'appointment detail should recognize a current-session auth failure after request cleanup')
+const staleDetailBody = vueFunctionBody(bookingDetailPage, 'invalidateStaleBookingContext')
+assert.ok(staleDetailBody !== undefined, 'appointment detail should isolate stale response cleanup')
+assert.match(staleDetailBody, /booking\.value\s*=\s*null/, 'appointment detail stale cleanup should hide old-user data')
+assert.match(staleDetailBody, /clearBookingSession\(\)/, 'appointment detail stale cleanup should clear booking session data')
+assert.doesNotMatch(staleDetailBody, /clearToken|showToast|switchTab|navigateTo|redirectTo/, 'appointment detail stale cleanup must not mutate or redirect the newer auth session')
+assert.match(bookingDetailPage, /statusCode\s*===\s*401[\s\S]*statusCode\s*===\s*403/, 'appointment detail should handle both 401 and 403')
+assert.match(bookingDetailPage, /onUnload\s*\(\s*\(\)\s*=>\s*\{[\s\S]*loadTicket\s*\+=\s*1[\s\S]*clearBookingSession\(\)/, 'appointment detail should invalidate pending work and clear session on unload')
+assert.match(pageStyleDeclarations(bookingDetailStyle, '.detail-action'), /min-height:\s*88rpx\s*;/, 'appointment detail actions should keep an 88rpx touch target')
 
 
 const resultPage = readFileSync('src/pages/result/result.vue', 'utf8')
