@@ -535,6 +535,81 @@ assert.match(learnPage, /getStoredSiteConfig/, 'learn page should render stored 
 assert.match(learnPage, /refreshSiteConfig/, 'learn page should refresh site config in the background')
 assert.match(learnPage, /silent/, 'learn background refresh should avoid replacing cached content with a blocking state')
 
+const learnTemplate = stripMarkupAndCssComments(vueSection(learnPage, 'template') || '')
+const learnStyle = stripMarkupAndCssComments(vueSection(learnPage, 'style') || '')
+const learnButtons = openingTagsFor(learnTemplate, 'button')
+
+assert.match(learnTemplate, /class=["'][^"']*learn-hero[^"']*nx-page-hero[^"']*["']/, 'learn page should open with the approved learning hero')
+assert.match(learnTemplate, /学习中心/, 'learn hero should identify the learning center')
+assert.match(learnTemplate, /跟着老师，把九型用进生活/, 'learn hero should use the approved outcome-led title')
+for (const className of ['teacher-media', 'course-media', 'quote-editorial', 'type-badge-grid']) {
+  assert.match(learnTemplate, new RegExp(`class=["'][^"']*${className}[^"']*["']`), `learn page should render .${className}`)
+}
+for (const className of ['teacher-media__fallback', 'course-media__fallback', 'type-badge__fallback']) {
+  assert.match(learnTemplate, new RegExp(`class=["'][^"']*${className}[^"']*["']`), `learn page should render .${className}`)
+}
+for (const stateName of ['teacherImageErrors', 'courseImageErrors', 'typeImageErrors']) {
+  assert.match(learnPage, new RegExp(`const\\s+${stateName}\\s*=\\s*ref\\(\\{\\}\\)`), `learn page should keep an independent ${stateName} map`)
+}
+assert.match(learnPage, /teacherImageErrors\.value\s*=\s*\{\s*\.\.\.teacherImageErrors\.value,\s*\[name\]:\s*true\s*\}/, 'teacher image failures should update immutably by teacher name')
+assert.match(learnPage, /courseImageErrors\.value\s*=\s*\{\s*\.\.\.courseImageErrors\.value,\s*\[key\]:\s*true\s*\}/, 'course image failures should update immutably by title and index key')
+assert.match(learnPage, /typeImageErrors\.value\s*=\s*\{\s*\.\.\.typeImageErrors\.value,\s*\[id\]:\s*true\s*\}/, 'type image failures should update immutably by type id')
+assert.match(learnTemplate, /teacher\.name\s*\?\s*teacher\.name\.slice\(0,\s*1\)\s*:\s*'师'/, 'teacher fallback should avoid optional chaining in the template')
+assert.match(learnTemplate, /@error=["']markTeacherImageError\(teacher\.name\)["']/, 'teacher images should mark their own failure key')
+assert.match(learnTemplate, /@error=["']markCourseImageError\(c\.title\s*\+\s*i\)["']/, 'course images should mark their own title and index key')
+assert.match(learnTemplate, /@error=["']markTypeImageError\(t\.id\)["']/, 'type images should mark their own id')
+
+const learnCtas = learnButtons.filter((tag) => tag.includes('learn-cta'))
+assert.equal(learnCtas.length, 1, 'learn page should render one primary learning CTA')
+assert.match(learnCtas[0], /@click=["']goTest["']/, 'learn CTA should keep the existing goTest route')
+assert.match(learnTemplate, />\s*先完成测试，建立你的学习地图\s*<\/button>/, 'learn CTA should use the exact approved copy')
+assert.doesNotMatch(learnTemplate, /继续学习|课程详情|@click=["'][^"']*(?:course|Course)[^"']*["']/, 'learn page must not invent course-detail or progress interactions')
+
+assert.match(learnPage, /getStoredSiteConfig/, 'learn page should keep cache-first rendering')
+assert.match(learnPage, /loadContent\(\{\s*silent:\s*hasCachedContent\s*\}\)/, 'learn page should refresh silently after rendering cached content')
+assert.match(learnPage, /if\s*\(silent\s*&&\s*!hasSiteConfigLearningSection\(cfg\)\)\s*return/, 'silent refresh without learning content should preserve cached content')
+assert.match(learnPage, /catch\s*\([^)]*\)\s*\{[\s\S]*?if\s*\(!silent\)\s*\{[\s\S]*?normalizeTeachers\(\)[\s\S]*?normalizeCoursewareItems\(\)[\s\S]*?loadError\.value/, 'only non-silent failures should replace visible content and expose an error')
+assert.doesNotMatch(learnPage, /catch\s*\([^)]*\)\s*\{\s*(?:teachers|coursewareItems|quotes)\.value\s*=/, 'silent refresh failures must not eagerly replace cached content')
+assert.match(learnTemplate, /v-if=["']loading["'][\s\S]*v-else-if=["']loadError["'][\s\S]*@click=["']loadContent["']/, 'learn loading state should precede error and retry content')
+assert.match(learnTemplate, /v-else-if=["']!loadError\s*&&\s*quotes\.length\s*===\s*0["']/, 'learn quotes should expose an explicit non-error empty state')
+
+for (const selector of ['.teacher-media', '.teacher-media__fallback']) {
+  const declarations = pageStyleDeclarations(learnStyle, selector)
+  assert.match(declarations, /width:\s*112rpx\s*;/, `${selector} should reserve a 112rpx width`)
+  assert.match(declarations, /height:\s*112rpx\s*;/, `${selector} should reserve a 112rpx height`)
+}
+for (const selector of ['.course-media', '.course-media__fallback']) {
+  const declarations = pageStyleDeclarations(learnStyle, selector)
+  assert.match(declarations, /width:\s*220rpx\s*;/, `${selector} should reserve a 220rpx width`)
+  assert.match(declarations, /height:\s*150rpx\s*;/, `${selector} should reserve a 150rpx height`)
+}
+for (const selector of ['.type-badge__avatar', '.type-badge__fallback']) {
+  const declarations = pageStyleDeclarations(learnStyle, selector)
+  const width = declarations?.match(/width:\s*(\d+)rpx\s*;/)?.[1]
+  const height = declarations?.match(/height:\s*(\d+)rpx\s*;/)?.[1]
+  assert.ok(width && height && width === height, `${selector} should reserve a fixed square media area`)
+}
+assert.match(pageStyleDeclarations(learnStyle, '.learn-hero'), /background:\s*linear-gradient\([^;]*#0f766e[^;]*#15803d[^;]*\)\s*;/i, 'learn hero should use the approved teal-to-green gradient')
+assert.match(pageStyleDeclarations(learnStyle, '.learn-hero'), /border-radius:\s*38rpx\s*;/, 'learn hero should use the approved 38rpx radius')
+assert.match(pageStyleDeclarations(learnStyle, '.learn-sections'), /gap:\s*22rpx\s*;/, 'learn sections should use a consistent 22rpx rhythm')
+assert.match(pageStyleDeclarations(learnStyle, '.teacher-card'), /display:\s*flex\s*;/, 'teacher cards should use a horizontal media layout')
+assert.match(pageStyleDeclarationBlocks(learnStyle, '.courseware-card')[0], /gap:\s*18rpx\s*;/, 'course cards should keep an 18rpx media gap')
+assert.match(pageStyleDeclarations(learnStyle, '.courseware-card__body'), /min-width:\s*0\s*;/, 'course body should be allowed to shrink without overflow')
+assert.match(pageStyleDeclarations(learnStyle, '.quote-editorial'), /padding:\s*30rpx\s*;/, 'editorial quotes should use spacious 30rpx padding')
+assert.match(pageStyleDeclarations(learnStyle, '.quote-editorial__mark'), /font-size:\s*54rpx\s*;/, 'editorial quote mark should use the approved 54rpx size')
+assert.match(pageStyleDeclarationBlocks(learnStyle, '.type-badge-grid')[0], /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)\s*;/, 'type grid should use two columns on phones')
+assert.match(learnStyle, /@media\s*\(min-width:\s*768px\)[\s\S]*\.type-badge-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/, 'type grid should use three columns on wider screens')
+assert.match(pageStyleDeclarations(learnStyle, '.type-badge'), /min-height:\s*190rpx\s*;/, 'type cards should reserve at least 190rpx')
+assert.match(pageStyleDeclarations(learnStyle, '.learn-cta'), /min-height:\s*88rpx\s*;/, 'learn CTA should keep an 88rpx touch target')
+
+for (const selector of ['.learn-hero__lead', '.empty', '.teacher-card__title', '.teacher-card__bio', '.courseware-card__duration', '.courseware-card__desc', '.type-badge__keywords']) {
+  const fontSize = pageStyleDeclarations(learnStyle, selector)?.match(/font-size:\s*(\d+)rpx\s*;/)
+  assert.ok(fontSize && Number(fontSize[1]) >= 24, `${selector} should keep at least 24rpx readable text`)
+}
+const learnSecondary = pageStyleDeclarations(learnStyle, '.courseware-card__desc')?.match(/color:\s*(#[\da-f]{6})\s*;/i)?.[1]
+assert.ok(learnSecondary, 'course descriptions should expose a parseable text color')
+assert.ok(contrastRatio(learnSecondary, '#ffffff') >= 4.5, 'course descriptions should meet 4.5:1 contrast on the panel surface')
+
 assert.match(profilePage, /wechatLoginReady/, 'profile page should expose a WeChat login integration slot')
 assert.match(profilePage, /open-type="chooseAvatar"/, 'profile page should keep WeChat avatar slot')
 assert.match(profilePage, /type="nickname"/, 'profile page should keep WeChat nickname slot')
