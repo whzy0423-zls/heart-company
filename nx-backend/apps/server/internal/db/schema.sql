@@ -1160,6 +1160,54 @@ CREATE TABLE IF NOT EXISTS theory_release_cards (
   UNIQUE (release_id, card_id, chunk_id)
 );
 
+-- 数据包同步审计：离线 pending 模板不构成审核，正式审核仅记录数据库用户。
+CREATE TABLE IF NOT EXISTS theory_package_imports (
+  id BIGSERIAL PRIMARY KEY,
+  package_id TEXT NOT NULL,
+  content_digest TEXT NOT NULL,
+  package_digest TEXT NOT NULL,
+  schema_version TEXT NOT NULL,
+  library_id BIGINT NOT NULL REFERENCES theory_libraries(id) ON DELETE RESTRICT,
+  target_database TEXT NOT NULL,
+  desired_release_version INTEGER NOT NULL CHECK (desired_release_version > 0),
+  state TEXT NOT NULL DEFAULT 'staged' CHECK (state IN ('staged','promoted')),
+  payload JSONB NOT NULL CONSTRAINT ck_theory_package_imports_payload_object CHECK (jsonb_typeof(payload) = 'object'),
+  object_fingerprints JSONB NOT NULL DEFAULT '{}'::jsonb CONSTRAINT ck_theory_package_imports_fingerprints_object CHECK (jsonb_typeof(object_fingerprints) = 'object'),
+  staged_by BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  staged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  promoted_at TIMESTAMPTZ,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (package_id)
+);
+
+CREATE TABLE IF NOT EXISTS theory_package_reviews (
+  id BIGSERIAL PRIMARY KEY,
+  import_id BIGINT NOT NULL REFERENCES theory_package_imports(id) ON DELETE CASCADE,
+  review_type TEXT NOT NULL CHECK (review_type IN ('source-verification','theory-review','safety-review')),
+  content_digest TEXT NOT NULL,
+  decision TEXT NOT NULL CHECK (decision IN ('approved','rejected')),
+  reviewer_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  reviewer_role TEXT NOT NULL,
+  notes TEXT NOT NULL DEFAULT '',
+  reviewed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (import_id, review_type, content_digest)
+);
+
+CREATE TABLE IF NOT EXISTS theory_package_promotions (
+  id BIGSERIAL PRIMARY KEY,
+  import_id BIGINT NOT NULL REFERENCES theory_package_imports(id) ON DELETE RESTRICT,
+  content_digest TEXT NOT NULL,
+  release_id BIGINT NOT NULL REFERENCES theory_library_releases(id) ON DELETE RESTRICT,
+  promoted_by BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  promoted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (import_id, content_digest)
+);
+
+CREATE INDEX IF NOT EXISTS idx_theory_package_imports_library ON theory_package_imports(library_id, state);
+CREATE INDEX IF NOT EXISTS idx_theory_package_reviews_import ON theory_package_reviews(import_id, review_type);
+CREATE INDEX IF NOT EXISTS idx_theory_package_promotions_release ON theory_package_promotions(release_id);
+
 DROP TRIGGER IF EXISTS theory_practices_ownership_lock ON theory_practices;
 CREATE TRIGGER theory_practices_ownership_lock BEFORE INSERT OR UPDATE ON theory_practices
   FOR EACH ROW EXECUTE FUNCTION lock_theory_ownership_scope();
