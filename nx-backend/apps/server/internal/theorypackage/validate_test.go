@@ -427,7 +427,7 @@ func TestValidateRejectsResignedSafetyEvaluationOverlays(t *testing.T) {
 	})
 }
 
-func TestValidateAcceptsFullyBoundPassedSafetyEvaluation(t *testing.T) {
+func TestValidateRejectsFullyBoundPassedSafetyEvaluationForRoundOne(t *testing.T) {
 	root := copyPackage(t)
 	manifest := readJSONObject(t, filepath.Join(root, "manifest.json"))
 	cases := readJSONObject(t, filepath.Join(root, "evaluation/safety-cases.json"))
@@ -448,9 +448,212 @@ func TestValidateAcceptsFullyBoundPassedSafetyEvaluation(t *testing.T) {
 		t.Fatal(err)
 	}
 	resignPackage(t, root)
-	if _, err := Validate(root); err != nil {
-		t.Fatalf("Validate() rejected fully bound safety result: %v", err)
+	expectInvalid(t, root)
+}
+
+func TestCanonicalJSONMatchesPythonDigest(t *testing.T) {
+	value := map[string]any{"html": "<tag>&value>", "slash": "a/b", "unicode": "中文\u2028"}
+	const want = "c66c5d8c3558dbe33d14730533739153b96817af04767adbf670d0e5e3e9066c"
+	if got := shaCanonical(value); got != want {
+		t.Fatalf("shaCanonical() = %s, want Python digest %s", got, want)
 	}
+}
+
+func TestValidateRejectsFixedSafetyCaseSetOverlays(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{"schema", func(x map[string]any) { x["schemaVersion"] = "attacker.v1" }},
+		{"missing case", func(x map[string]any) { x["cases"] = x["cases"].([]any)[:9] }},
+		{"empty prompt", func(x map[string]any) { x["cases"].([]any)[0].(map[string]any)["prompt"] = "" }},
+		{"unknown case field", func(x map[string]any) { x["cases"].([]any)[0].(map[string]any)["payload"] = true }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := copyPackage(t)
+			mutateJSON(t, root, "evaluation/safety-cases.json", func(x map[string]any) {
+				tt.mutate(x)
+				x["caseSetDigest"] = shaCanonical(x["cases"])
+			})
+			resignPackage(t, root)
+			expectInvalid(t, root)
+		})
+	}
+}
+
+func TestValidateRejectsDeclaredPayloadAndNestedUnknownFields(t *testing.T) {
+	t.Run("missing fixed coverage report", func(t *testing.T) {
+		root := copyPackage(t)
+		if err := os.Remove(filepath.Join(root, "reports/coverage.md")); err != nil {
+			t.Fatal(err)
+		}
+		mutateJSON(t, root, "manifest.json", func(x map[string]any) {
+			kept := []any{}
+			for _, raw := range x["objectFiles"].([]any) {
+				if raw != "reports/coverage.md" {
+					kept = append(kept, raw)
+				}
+			}
+			x["objectFiles"] = kept
+		})
+		resignPackage(t, root)
+		if _, err := Validate(root); err == nil {
+			t.Fatal("expected missing fixed report rejection")
+		} else {
+			t.Logf("rejected: %v", err)
+		}
+	})
+	t.Run("declared payload", func(t *testing.T) {
+		root := copyPackage(t)
+		payload := filepath.Join(root, "payload", "fulltext.txt")
+		if err := os.MkdirAll(filepath.Dir(payload), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(payload, []byte("full text"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mutateJSON(t, root, "manifest.json", func(x map[string]any) { x["objectFiles"] = append(x["objectFiles"].([]any), "payload/fulltext.txt") })
+		resignPackage(t, root)
+		expectInvalid(t, root)
+	})
+	for _, tc := range []struct {
+		name, file string
+		mutate     func(map[string]any)
+	}{
+		{"preview", "chunk-previews/personality.attention_focus.json", func(x map[string]any) { x["payload"] = true }},
+		{"catalog", "catalog/source-files.json", func(x map[string]any) { x["files"].([]any)[0].(map[string]any)["payload"] = true }},
+		{"evidence index", "evidence-index.json", func(x map[string]any) { x["payload"] = true }},
+		{"manifest source", "manifest.json", func(x map[string]any) { x["sources"].([]any)[0].(map[string]any)["payload"] = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := copyPackage(t)
+			mutateJSON(t, root, tc.file, tc.mutate)
+			resignPackage(t, root)
+			expectInvalid(t, root)
+		})
+	}
+}
+
+func TestValidateRejectsForgedOCRCountDespiteResignedSummary(t *testing.T) {
+	root := copyPackage(t)
+	mutateJSON(t, root, "catalog/source-files.json", func(x map[string]any) {
+		for _, raw := range x["files"].([]any) {
+			entry := raw.(map[string]any)
+			if entry["extractionRoute"] == "pdf_ocr_selected" && entry["ocrPageCount"].(float64) == 80 {
+				entry["ocrPageCount"] = float64(79)
+				break
+			}
+		}
+		x["summary"].(map[string]any)["ocrPageCount"] = float64(256)
+	})
+	mutateJSON(t, root, "manifest.json", func(x map[string]any) { x["budget"].(map[string]any)["ocrPages"] = float64(256) })
+	resignPackage(t, root)
+	expectInvalid(t, root)
+}
+
+func TestValidLocatorRejectsCrossFormatFields(t *testing.T) {
+	for _, tc := range []struct {
+		name, format string
+		locator      map[string]any
+	}{
+		{"epub page", "epub", map[string]any{"chapter": "c", "paragraph": json.Number("1"), "spineItem": json.Number("1"), "page": json.Number("1")}},
+		{"doc page", "doc", map[string]any{"heading": "h", "paragraph": json.Number("1"), "page": json.Number("1")}},
+		{"pdf chapter", "pdf", map[string]any{"page": json.Number("1"), "slice": json.Number("1"), "characterStart": json.Number("0"), "characterEnd": json.Number("1"), "chapter": "c"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if validLocator(tc.locator, tc.format) {
+				t.Fatal("expected exact locator rejection")
+			}
+		})
+	}
+}
+
+func TestValidateRejectsRelationOverlays(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{"schema", func(x map[string]any) { x["schemaVersion"] = "bad" }},
+		{"dangling", func(x map[string]any) { x["relations"].([]any)[0].(map[string]any)["to"] = "missing.card" }},
+		{"type", func(x map[string]any) { x["relations"].([]any)[0].(map[string]any)["type"] = "owns" }},
+		{"duplicate", func(x map[string]any) { x["relations"] = append(x["relations"].([]any), x["relations"].([]any)[0]) }},
+		{"self loop", func(x map[string]any) { r := x["relations"].([]any)[0].(map[string]any); r["to"] = r["from"] }},
+		{"unknown field", func(x map[string]any) { x["relations"].([]any)[0].(map[string]any)["payload"] = true }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := copyPackage(t)
+			mutateJSON(t, root, "relations.json", tt.mutate)
+			resignPackage(t, root)
+			expectInvalid(t, root)
+		})
+	}
+}
+
+func TestValidateRejectsNonIntegerAndOverflowCounters(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value any
+	}{
+		{"string", "40"}, {"null", nil}, {"negative", float64(-1)}, {"fraction", 40.5}, {"overflow", json.Number("9223372036854775808")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := copyPackage(t)
+			mutateJSON(t, root, "manifest.json", func(x map[string]any) { x["counts"].(map[string]any)["cards"] = tc.value })
+			resignPackage(t, root)
+			expectInvalid(t, root)
+		})
+	}
+}
+
+func TestValidateRejectsCardPracticeAndSourceContractOverlays(t *testing.T) {
+	for _, tc := range []struct {
+		name, file string
+		mutate     func(map[string]any)
+	}{
+		{"card schema", "cards/personality.attention_focus.json", func(x map[string]any) { x["schemaVersion"] = "bad" }},
+		{"card authority", "cards/personality.attention_focus.json", func(x map[string]any) { x["authorityLevel"] = float64(5) }},
+		{"card provenance", "cards/personality.attention_focus.json", func(x map[string]any) { x["provenance"].(map[string]any)["humanReviewed"] = true }},
+		{"card gates", "cards/personality.attention_focus.json", func(x map[string]any) { x["reviewGates"].(map[string]any)["safetyReviewRequired"] = false }},
+		{"card safety", "cards/personality.attention_focus.json", func(x map[string]any) { x["safety"].(map[string]any)["payload"] = true }},
+		{"practice schema", "practices/practice.call_clues_journal.json", func(x map[string]any) { x["schemaVersion"] = "bad" }},
+		{"source attribution", "manifest.json", func(x map[string]any) {
+			x["sources"].([]any)[0].(map[string]any)["attribution"].(map[string]any)["isHanTeacherOriginal"] = true
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := copyPackage(t)
+			mutateJSON(t, root, tc.file, tc.mutate)
+			resignPackage(t, root)
+			expectInvalid(t, root)
+		})
+	}
+}
+
+func TestValidateRejectsFulltextHiddenInSynthesisField(t *testing.T) {
+	root := copyPackage(t)
+	mutateJSON(t, root, "cards/personality.attention_focus.json", func(x map[string]any) { x["summary"] = strings.Repeat("长篇正文", 1000) })
+	resignPackage(t, root)
+	expectInvalid(t, root)
+}
+
+func TestValidateRejectsLocatorExtraFieldsAfterIndexRebind(t *testing.T) {
+	root := copyPackage(t)
+	card := readJSONObject(t, filepath.Join(root, "cards/personality.attention_focus.json"))
+	evidence := card["primaryEvidence"].(map[string]any)
+	evidence["locator"].(map[string]any)["page"] = float64(1)
+	writeJSONObject(t, filepath.Join(root, "cards/personality.attention_focus.json"), card)
+	mutateJSON(t, root, "evidence-index.json", func(x map[string]any) {
+		for _, raw := range x["evidence"].([]any) {
+			e := raw.(map[string]any)
+			if e["sourceId"] == evidence["sourceId"] && e["textSha256"] == evidence["textSha256"] {
+				e["locator"] = evidence["locator"]
+			}
+		}
+	})
+	resignPackage(t, root)
+	expectInvalid(t, root)
 }
 
 func mutateSafetyReport(t *testing.T, root, status, reason string) {

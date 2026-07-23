@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -48,6 +50,9 @@ func Validate(root string) (Report, error) {
 	if str(manifest, "packageId") == "" || str(manifest, "contentDigest") == "" || str(manifest, "packageDigest") == "" {
 		return Report{}, invalid("manifest digest or package id missing")
 	}
+	if err := validateManifestContract(manifest); err != nil {
+		return Report{}, err
+	}
 	if !sameJSON(manifest["digestContract"], map[string]any{
 		"canonicalJson":         "UTF-8 LF; object keys sorted; arrays preserve semantic order; no extra whitespace",
 		"contentDigestExcludes": []any{"contentDigest", "packageDigest", "reviews", "checksums.sha256"},
@@ -81,6 +86,75 @@ func Validate(root string) (Report, error) {
 		return Report{}, err
 	}
 	return Report{PackageID: str(manifest, "packageId"), ContentDigest: str(manifest, "contentDigest"), PackageDigest: str(manifest, "packageDigest"), FileCount: len(files)}, nil
+}
+
+func validateManifestContract(m map[string]any) error {
+	if str(m, "packageId") != "xinzhili-round-001" || str(m, "roundId") != "round-001" {
+		return invalid("manifest package identity invalid")
+	}
+	counts := mapv(m, "counts")
+	if err := exactKeys(counts, set("cards", "domains", "formalTheoryChunks", "practices", "sources"), "manifest counts"); err != nil {
+		return err
+	}
+	for key, want := range map[string]int{"sources": 24, "cards": 40, "practices": 12, "domains": 10, "formalTheoryChunks": 0} {
+		got, ok := integer(counts, key)
+		if !ok || got != want {
+			return invalid("manifest count %s invalid", key)
+		}
+	}
+	budget := mapv(m, "budget")
+	if err := exactKeys(budget, set("budgetRuleVersion", "limits", "ocrPages", "pageEquivalent"), "manifest budget"); err != nil {
+		return err
+	}
+	limits := mapv(budget, "limits")
+	if err := exactKeys(limits, set("maxBudgetPageEquivalent", "maxOcrPageCount", "maxSelectedFiles"), "manifest budget limits"); err != nil {
+		return err
+	}
+	if str(budget, "budgetRuleVersion") != "xinzhili-page-equivalent-v1" {
+		return invalid("budget rule version invalid")
+	}
+	for key, want := range map[string]int{"maxBudgetPageEquivalent": 2000, "maxOcrPageCount": 300, "maxSelectedFiles": 24} {
+		got, ok := integer(limits, key)
+		if !ok || got != want {
+			return invalid("budget limit %s invalid", key)
+		}
+	}
+	pageEquivalent, pageOK := integer(budget, "pageEquivalent")
+	ocrPages, ocrOK := integer(budget, "ocrPages")
+	if !pageOK || !ocrOK || pageEquivalent > 2000 || ocrPages > 300 || ocrPages > pageEquivalent {
+		return invalid("manifest budget values invalid")
+	}
+	copyright := mapv(m, "copyright")
+	if err := exactKeys(copyright, set("limits", "metadataOnlyQuotesAllowed", "mode", "ocrUnverifiedQuotesPublishable", "quoteStatistics"), "manifest copyright"); err != nil {
+		return err
+	}
+	copyrightLimits := mapv(copyright, "limits")
+	if err := exactKeys(copyrightLimits, set("maxCharactersPerCard", "maxCharactersPerQuote", "maxCharactersPerWork"), "copyright limits"); err != nil {
+		return err
+	}
+	for key, want := range map[string]int{"maxCharactersPerQuote": 80, "maxCharactersPerCard": 160, "maxCharactersPerWork": 800} {
+		got, ok := integer(copyrightLimits, key)
+		if !ok || got != want {
+			return invalid("copyright limit %s invalid", key)
+		}
+	}
+	statistics := mapv(copyright, "quoteStatistics")
+	if err := exactKeys(statistics, set("ocrVerifiedQuoteCount", "quoteCount", "totalCharacters"), "quote statistics"); err != nil {
+		return err
+	}
+	for _, key := range []string{"ocrVerifiedQuoteCount", "quoteCount", "totalCharacters"} {
+		if _, ok := integer(statistics, key); !ok {
+			return invalid("quote statistic %s invalid", key)
+		}
+	}
+	releaseGates := mapv(m, "releaseGates")
+	if err := exactKeys(releaseGates, set("builderMayApprove", "courseAttributionReviewRequired", "milestoneBCRequiredForActivation", "threeDatabaseReviewsRequired"), "release gates"); err != nil {
+		return err
+	}
+	if releaseGates["builderMayApprove"] != false || releaseGates["courseAttributionReviewRequired"] != true || releaseGates["milestoneBCRequiredForActivation"] != true || releaseGates["threeDatabaseReviewsRequired"] != true {
+		return invalid("release gate contract invalid")
+	}
+	return nil
 }
 
 func collectFiles(root string) (map[string][]byte, error) {
@@ -131,6 +205,9 @@ func collectFiles(root string) (map[string][]byte, error) {
 		if info.Size() > maxFileBytes {
 			return invalid("file too large %q", rel)
 		}
+		if (strings.HasPrefix(rel, "cards/") || strings.HasPrefix(rel, "practices/") || strings.HasPrefix(rel, "chunk-previews/") || strings.HasPrefix(rel, "reports/")) && info.Size() > 64<<10 {
+			return invalid("content object too large %q", rel)
+		}
 		total += info.Size()
 		if total > maxPackageBytes {
 			return invalid("package too large")
@@ -150,8 +227,10 @@ func validateFileSet(files map[string][]byte, m map[string]any) error {
 	if !ok {
 		return invalid("objectFiles must be an array")
 	}
-	want := set("manifest.json", "checksums.sha256")
+	want := set("manifest.json")
 	checksumDeclarations := 0
+	cardFiles, practiceFiles, previewFiles := 0, 0, 0
+	fixed := set("checksums.sha256", "schema/theory-package-v1.schema.json", "evidence-index.json", "relations.json", "evaluation/safety-cases.json", "catalog/works.json", "catalog/source-files.json", "review/source-verification.json", "review/theory-review.json", "review/safety-review.json", "reports/coverage.md", "reports/safety-evaluation.md")
 	for _, v := range raw {
 		p, ok := v.(string)
 		if !ok || p == "" || path.Clean(p) != p || strings.HasPrefix(p, "../") || path.IsAbs(p) {
@@ -159,6 +238,18 @@ func validateFileSet(files map[string][]byte, m map[string]any) error {
 		}
 		if p == "checksums.sha256" {
 			checksumDeclarations++
+		}
+		switch {
+		case isObjectPath(p, "cards/"):
+			cardFiles++
+		case isObjectPath(p, "practices/"):
+			practiceFiles++
+		case isObjectPath(p, "chunk-previews/"):
+			previewFiles++
+		default:
+			if _, ok := fixed[p]; !ok {
+				return invalid("object file path is outside fixed package layout: %q", p)
+			}
 		}
 		if _, seen := want[p]; seen {
 			if p != "checksums.sha256" || checksumDeclarations > 1 {
@@ -171,6 +262,17 @@ func validateFileSet(files map[string][]byte, m map[string]any) error {
 	if checksumDeclarations != 1 {
 		return invalid("checksums.sha256 must appear exactly once in objectFiles")
 	}
+	for required := range fixed {
+		if _, ok := want[required]; !ok {
+			return invalid("missing fixed object file %q", required)
+		}
+	}
+	counts := mapv(m, "counts")
+	cards, cardsOK := integer(counts, "cards")
+	practices, practicesOK := integer(counts, "practices")
+	if !cardsOK || !practicesOK || cardFiles != cards || practiceFiles != practices || previewFiles != cards+practices {
+		return invalid("object file pattern counts do not match manifest")
+	}
 	if len(want) != len(files) {
 		return invalid("package has undeclared or missing files")
 	}
@@ -180,6 +282,13 @@ func validateFileSet(files map[string][]byte, m map[string]any) error {
 		}
 	}
 	return nil
+}
+func isObjectPath(name, prefix string) bool {
+	if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".json") {
+		return false
+	}
+	rest := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".json")
+	return rest != "" && !strings.Contains(rest, "/") && !strings.Contains(rest, "\\")
 }
 func validateBudget(files map[string][]byte, m map[string]any) error {
 	counts := mapv(m, "counts")
@@ -209,6 +318,9 @@ func validateBudget(files map[string][]byte, m map[string]any) error {
 	}
 	catalog, err := object(files["catalog/source-files.json"], "catalog/source-files.json")
 	if err != nil {
+		return err
+	}
+	if err := validateSourceCatalog(catalog); err != nil {
 		return err
 	}
 	selectedPaths := set()
@@ -242,7 +354,49 @@ func validateBudget(files map[string][]byte, m map[string]any) error {
 		if !ok || ocrCount < 0 || ocrCount > pageCount {
 			return invalid("selected source OCR budget invalid")
 		}
+		mediaType := str(entry, "mediaType")
+		prefix := "page:"
+		if mediaType == "epub" {
+			prefix = "spine-item:"
+		} else if mediaType == "doc" || mediaType == "docx" {
+			prefix = "paragraph:"
+		}
+		selectedUnits, ok := selectedRangeUnits(ranges, prefix)
+		if !ok {
+			return invalid("selected ranges do not match source media type")
+		}
+		estimate := mapv(entry, "unitEstimate")
+		estimatedBudget, ok := integer(estimate, "budgetPageEquivalent")
+		if !ok {
+			return invalid("source unit estimate budget invalid")
+		}
+		if mediaType == "pdf" && selectedUnits != pageCount {
+			return invalid("PDF budget differs from selected page ranges")
+		}
+		if mediaType != "pdf" {
+			if estimatedBudget != pageCount {
+				return invalid("source budget differs from unit estimate")
+			}
+			characters, ok := integer(estimate, "normalizedTextCharacters")
+			expectedBudget := characters / 1800
+			if characters%1800 != 0 {
+				expectedBudget++
+			}
+			if !ok || expectedBudget != pageCount {
+				return invalid("text budget differs from normalized character count")
+			}
+		}
+		expectedOCR := 0
+		if str(entry, "extractionRoute") == "pdf_ocr_selected" {
+			expectedOCR = selectedUnits
+		}
+		if ocrCount != expectedOCR {
+			return invalid("OCR count differs from selected OCR page ranges")
+		}
 		selectedPaths[relativePath] = struct{}{}
+		if selectedPages > math.MaxInt-pageCount || selectedOCR > math.MaxInt-ocrCount {
+			return invalid("selected source budget overflow")
+		}
 		selectedPages += pageCount
 		selectedOCR += ocrCount
 	}
@@ -260,6 +414,177 @@ func validateBudget(files map[string][]byte, m map[string]any) error {
 	summary := mapv(catalog, "summary")
 	if num(summary, "budgetPageEquivalent") != selectedPages || num(summary, "ocrPageCount") != selectedOCR || num(summary, "selectedCount") != len(selectedPaths) {
 		return invalid("source catalog summary does not match selected files")
+	}
+	return nil
+}
+
+func selectedRangeUnits(ranges []any, prefix string) (int, bool) {
+	total := 0
+	for _, raw := range ranges {
+		value, ok := raw.(string)
+		if !ok || !strings.HasPrefix(value, prefix) {
+			return 0, false
+		}
+		bounds := strings.Split(strings.TrimPrefix(value, prefix), "-")
+		if len(bounds) < 1 || len(bounds) > 2 {
+			return 0, false
+		}
+		start, err := strconv.Atoi(bounds[0])
+		if err != nil || start < 1 {
+			return 0, false
+		}
+		end := start
+		if len(bounds) == 2 {
+			end, err = strconv.Atoi(bounds[1])
+			if err != nil || end < start {
+				return 0, false
+			}
+		}
+		count := end - start + 1
+		if count < 1 || total > math.MaxInt-count {
+			return 0, false
+		}
+		total += count
+	}
+	return total, total > 0
+}
+
+func validateSourceCatalog(catalog map[string]any) error {
+	if err := exactKeys(catalog, set("files", "roundId", "schemaVersion", "summary"), "source catalog"); err != nil {
+		return err
+	}
+	if str(catalog, "schemaVersion") != "xinzhili.round-source-files.v1" || str(catalog, "roundId") != "round-001" {
+		return invalid("source catalog identity invalid")
+	}
+	summary := mapv(catalog, "summary")
+	if err := exactKeys(summary, set("budgetPageEquivalent", "limits", "ocrPageCount", "selectedCount"), "source catalog summary"); err != nil {
+		return err
+	}
+	summaryLimits := mapv(summary, "limits")
+	if err := exactKeys(summaryLimits, set("budgetPageEquivalent", "ocrPageCount", "selectedFiles"), "source catalog limits"); err != nil {
+		return err
+	}
+	for key, want := range map[string]int{"budgetPageEquivalent": 2000, "ocrPageCount": 300, "selectedFiles": 24} {
+		got, ok := integer(summaryLimits, key)
+		if !ok || got != want {
+			return invalid("source catalog limit %s invalid", key)
+		}
+	}
+	for _, key := range []string{"budgetPageEquivalent", "ocrPageCount", "selectedCount"} {
+		if _, ok := integer(summary, key); !ok {
+			return invalid("source catalog summary %s invalid", key)
+		}
+	}
+	entryFields := set("budgetPageEquivalent", "byteSize", "canonicalWorkId", "duplicateGroupId", "extractionRoute", "fileId", "mediaType", "ocrPageCount", "probe", "processedUnitCount", "processedUnitType", "proposedBatch", "relativePath", "remainingRanges", "remainingUnitCount", "selectedRanges", "selectionReason", "sha256", "unitEstimate")
+	for _, raw := range arr(catalog, "files") {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			return invalid("source catalog entry invalid")
+		}
+		if err := exactKeys(entry, entryFields, "source catalog entry"); err != nil {
+			return err
+		}
+		for _, key := range []string{"budgetPageEquivalent", "byteSize", "ocrPageCount", "processedUnitCount", "remainingUnitCount"} {
+			if _, ok := integer(entry, key); !ok {
+				return invalid("source catalog integer %s invalid", key)
+			}
+		}
+		for _, key := range []string{"canonicalWorkId", "extractionRoute", "fileId", "mediaType", "processedUnitType", "proposedBatch", "relativePath", "selectionReason", "sha256"} {
+			if !validText(str(entry, key), 2000) {
+				return invalid("source catalog string %s invalid", key)
+			}
+		}
+		if !sha256hex(str(entry, "sha256")) {
+			return invalid("source catalog sha invalid")
+		}
+		if entry["duplicateGroupId"] != nil {
+			if value, ok := entry["duplicateGroupId"].(string); !ok || value == "" {
+				return invalid("source duplicate group invalid")
+			}
+		}
+		for _, key := range []string{"selectedRanges", "remainingRanges"} {
+			values, ok := entry[key].([]any)
+			if !ok {
+				return invalid("source range list invalid")
+			}
+			for _, rawValue := range values {
+				if value, ok := rawValue.(string); !ok || value == "" {
+					return invalid("source range value invalid")
+				}
+			}
+		}
+		probe := mapv(entry, "probe")
+		if err := exactKeys(probe, set("normalization", "outputSha256", "toolVersions"), "source probe"); err != nil {
+			return err
+		}
+		if str(probe, "normalization") == "" || !sha256hex(str(probe, "outputSha256")) {
+			return invalid("source probe invalid")
+		}
+		tools := mapv(probe, "toolVersions")
+		var toolFields map[string]struct{}
+		switch str(entry, "mediaType") {
+		case "pdf":
+			toolFields = set("pdfinfo", "pdftotext")
+		case "epub":
+			toolFields = set("epubParser")
+		case "doc", "docx":
+			toolFields = set("textutil", "textutilBinarySha256")
+		default:
+			return invalid("source media type invalid")
+		}
+		if err := exactKeys(tools, toolFields, "source probe tools"); err != nil {
+			return err
+		}
+		for key := range toolFields {
+			if str(tools, key) == "" {
+				return invalid("source probe tool version invalid")
+			}
+		}
+		estimate := mapv(entry, "unitEstimate")
+		var estimateFields map[string]struct{}
+		switch str(entry, "mediaType") {
+		case "pdf":
+			estimateFields = set("budgetPageEquivalent", "sampleTextCharacters", "sampledPages", "unitCount", "unitType")
+		case "epub":
+			estimateFields = set("budgetPageEquivalent", "locatorInventory", "normalizedTextCharacters", "unitCount", "unitType")
+		case "doc", "docx":
+			estimateFields = set("budgetPageEquivalent", "normalizedTextCharacters", "unitCount", "unitType")
+		}
+		if err := exactKeys(estimate, estimateFields, "source unit estimate"); err != nil {
+			return err
+		}
+		for key := range estimateFields {
+			if key == "unitType" || key == "locatorInventory" {
+				continue
+			}
+			if _, ok := integer(estimate, key); !ok {
+				return invalid("source unit estimate integer invalid")
+			}
+		}
+		if str(estimate, "unitType") == "" {
+			return invalid("source unit estimate type invalid")
+		}
+		if inventory, exists := estimate["locatorInventory"]; exists {
+			items, ok := inventory.([]any)
+			if !ok {
+				return invalid("source locator inventory invalid")
+			}
+			for _, rawItem := range items {
+				item, ok := rawItem.(map[string]any)
+				if !ok {
+					return invalid("source locator inventory item invalid")
+				}
+				if err := exactKeys(item, set("href", "idref", "index"), "source locator inventory item"); err != nil {
+					return err
+				}
+				if str(item, "href") == "" || str(item, "idref") == "" {
+					return invalid("source locator inventory strings invalid")
+				}
+				if index, ok := integer(item, "index"); !ok || index < 1 {
+					return invalid("source locator inventory index invalid")
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -315,14 +640,23 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 	if err != nil {
 		return err
 	}
+	if err := exactKeys(worksCatalog, set("roundId", "schemaVersion", "works"), "works catalog"); err != nil {
+		return err
+	}
+	if str(worksCatalog, "schemaVersion") != "xinzhili.round-works.v1" || str(worksCatalog, "roundId") != "round-001" {
+		return invalid("works catalog identity invalid")
+	}
 	workFileIDs := map[string]map[string]struct{}{}
 	for _, raw := range arr(worksCatalog, "works") {
 		work, ok := raw.(map[string]any)
 		if !ok {
 			return invalid("work catalog entry invalid")
 		}
+		if err := exactKeys(work, set("catalogStatus", "selectionReason", "sourceFileIds", "title", "workId"), "work catalog entry"); err != nil {
+			return err
+		}
 		workID := str(work, "workId")
-		if workID == "" || workFileIDs[workID] != nil {
+		if !validText(workID, 200) || !validText(str(work, "catalogStatus"), 100) || !validText(str(work, "selectionReason"), 2000) || !validText(str(work, "title"), 500) || workFileIDs[workID] != nil {
 			return invalid("work catalog id invalid or duplicated")
 		}
 		fileIDs := set()
@@ -342,6 +676,9 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 		if !ok {
 			return invalid("source must be object")
 		}
+		if err := exactKeys(s, set("attribution", "copyrightMode", "extractionRoute", "format", "humanReviewStatus", "relativePath", "sourceId", "sourceSha256", "workDirectory"), "manifest source"); err != nil {
+			return err
+		}
 		id := str(s, "sourceId")
 		if id == "" || sources[id] != nil {
 			return invalid("invalid source id")
@@ -350,8 +687,12 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 		catalogSource := catalogSources[relativePath]
 		if relativePath == "" || path.IsAbs(relativePath) || path.Clean(relativePath) != relativePath || strings.HasPrefix(relativePath, "../") || strings.Contains(relativePath, "\\") ||
 			!sha256hex(str(s, "sourceSha256")) || catalogSource == nil || str(catalogSource, "sha256") != str(s, "sourceSha256") || str(catalogSource, "extractionRoute") != str(s, "extractionRoute") ||
-			str(s, "humanReviewStatus") != "pending" || (str(s, "copyrightMode") != "metadata_only" && str(s, "copyrightMode") != "metadata_and_original_synthesis_only") {
+			str(catalogSource, "mediaType") != str(s, "format") || str(s, "humanReviewStatus") != "pending" || (str(s, "copyrightMode") != "metadata_only" && str(s, "copyrightMode") != "metadata_and_original_synthesis_only") ||
+			!isSafeWorkDirectory(str(s, "workDirectory")) {
 			return invalid("source %q does not match source catalog or draft policy", id)
+		}
+		if err := validateAttribution(s); err != nil {
+			return err
 		}
 		workID := str(catalogSource, "canonicalWorkId")
 		if workID == "" || workFileIDs[workID] == nil {
@@ -364,6 +705,9 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 		sourceWorks[id] = workID
 	}
 	units := map[string]map[string]any{}
+	if err := exactKeys(index, set("evidence", "schemaVersion"), "evidence index"); err != nil {
+		return err
+	}
 	if str(index, "schemaVersion") != "xinzhili.evidence-index.v1" {
 		return invalid("evidence index schema version invalid")
 	}
@@ -376,7 +720,7 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 			return err
 		}
 		sid, textSHA := str(e, "sourceId"), str(e, "textSha256")
-		if sources[sid] == nil || !sha256hex(textSHA) || str(e, "sourceSha256") != str(sources[sid], "sourceSha256") || e["locator"] == nil {
+		if sources[sid] == nil || !sha256hex(textSHA) || str(e, "sourceSha256") != str(sources[sid], "sourceSha256") || str(e, "encoding") != "utf-8" || !validLocator(e["locator"], str(sources[sid], "format")) {
 			return invalid("invalid evidence index")
 		}
 		if _, ok := e["ocrVerified"].(bool); !ok {
@@ -391,6 +735,8 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 	workQuotes := map[string]int{}
 	cardQuotes := map[string]int{}
 	keys := set()
+	cardKeys := set()
+	practiceKeys := set()
 	domains := set()
 	previews := map[string]bool{}
 	quoteCount, quoteCharacters, ocrVerifiedQuoteCount := 0, 0, 0
@@ -411,12 +757,23 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 			if err := validateItem(item, isPractice, sources, sourceWorks, units, workQuotes, cardQuotes); err != nil {
 				return err
 			}
+			key := str(item, "canonicalKey")
+			expectedPath := "cards/" + key + ".json"
+			if isPractice {
+				expectedPath = "practices/" + key + ".json"
+			}
+			if p != expectedPath {
+				return invalid("item filename does not match canonical key")
+			}
 			if !isPractice {
 				domain := str(item, "domain")
 				if domain == "" {
 					return invalid("card %q has no domain", str(item, "canonicalKey"))
 				}
 				domains[domain] = struct{}{}
+				cardKeys[str(item, "canonicalKey")] = struct{}{}
+			} else {
+				practiceKeys[str(item, "canonicalKey")] = struct{}{}
 			}
 			evidence := mapv(item, "primaryEvidence")
 			quoted := num(evidence, "quotationCharacters")
@@ -428,7 +785,6 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 					ocrVerifiedQuoteCount++
 				}
 			}
-			key := str(item, "canonicalKey")
 			if _, ok := keys[key]; ok {
 				return invalid("duplicate canonical key")
 			}
@@ -441,11 +797,19 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 			if err != nil {
 				return err
 			}
+			if err := exactKeys(x, set("canonicalKey", "contentHash", "contentType", "formalTheoryChunk", "schemaVersion", "sourceKind", "status", "text"), p); err != nil {
+				return err
+			}
 			key := str(x, "canonicalKey")
 			if _, ok := keys[key]; !ok {
 				return invalid("preview without item")
 			}
-			if str(x, "contentType") != "original_synthesis" || str(x, "status") != "draft" || x["formalTheoryChunk"] != false {
+			expectedKind := "card"
+			if _, ok := practiceKeys[key]; ok {
+				expectedKind = "practice"
+			}
+			if str(x, "schemaVersion") != "xinzhili.chunk-preview.v1" || str(x, "contentType") != "original_synthesis" || str(x, "status") != "draft" || x["formalTheoryChunk"] != false ||
+				str(x, "sourceKind") != expectedKind || p != "chunk-previews/"+key+".json" {
 				return invalid("preview %q is not draft original synthesis", p)
 			}
 			text := str(x, "text")
@@ -467,12 +831,88 @@ func validateContent(files map[string][]byte, m, index map[string]any) error {
 	if len(domains) != num(mapv(m, "counts"), "domains") {
 		return invalid("declared domain count does not match cards")
 	}
+	if err := validateRelations(files["relations.json"], cardKeys, practiceKeys); err != nil {
+		return err
+	}
+	return nil
+}
+func isSafeWorkDirectory(value string) bool {
+	return strings.HasPrefix(value, "sources/") && path.Clean(value) == value && !strings.Contains(value, "\\") && !strings.Contains(value, "../")
+}
+
+func validateAttribution(source map[string]any) error {
+	attribution := mapv(source, "attribution")
+	if strings.HasPrefix(str(source, "relativePath"), "能量/") {
+		if err := exactKeys(attribution, set("displayedInstructor", "isHanTeacherOriginal", "materialType", "status"), "course attribution"); err != nil {
+			return err
+		}
+		if str(attribution, "displayedInstructor") != "斯蒂芬·吉利根（待人工核验）" || str(attribution, "materialType") != "course_translation_material" {
+			return invalid("course attribution invalid")
+		}
+	} else {
+		if err := exactKeys(attribution, set("isHanTeacherOriginal", "materialType", "status"), "published attribution"); err != nil {
+			return err
+		}
+		if str(attribution, "materialType") != "published_reference" {
+			return invalid("published attribution invalid")
+		}
+	}
+	if attribution["isHanTeacherOriginal"] != false || str(attribution, "status") != "pending_human_verification" {
+		return invalid("source attribution may not claim Han Teacher authorship")
+	}
+	return nil
+}
+
+func validateRelations(payload []byte, cards, practices map[string]struct{}) error {
+	relations, err := object(payload, "relations.json")
+	if err != nil {
+		return err
+	}
+	if err := exactKeys(relations, set("relations", "schemaVersion", "status"), "relations"); err != nil {
+		return err
+	}
+	items := arr(relations, "relations")
+	if str(relations, "schemaVersion") != "xinzhili.relations.v1" || str(relations, "status") != "draft" || len(items) != 19 {
+		return invalid("relations header or count invalid")
+	}
+	seen := set()
+	for _, raw := range items {
+		relation, ok := raw.(map[string]any)
+		if !ok {
+			return invalid("relation invalid")
+		}
+		if err := exactKeys(relation, set("from", "to", "type"), "relation"); err != nil {
+			return err
+		}
+		from, to := str(relation, "from"), str(relation, "to")
+		if relation["type"] != "supports" || from == to {
+			return invalid("relation type or self-loop invalid")
+		}
+		if _, ok := practices[from]; !ok {
+			return invalid("relation source dangling")
+		}
+		if _, ok := cards[to]; !ok {
+			return invalid("relation target dangling")
+		}
+		key := from + "\x00" + to + "\x00supports"
+		if _, duplicate := seen[key]; duplicate {
+			return invalid("relation duplicated")
+		}
+		seen[key] = struct{}{}
+	}
 	return nil
 }
 func validateItem(x map[string]any, practice bool, sources map[string]map[string]any, sourceWorks map[string]string, units map[string]map[string]any, works, cards map[string]int) error {
 	key := str(x, "canonicalKey")
-	if key == "" || str(x, "status") != "draft" || str(x, "title") == "" {
+	if !validText(key, 200) || str(x, "status") != "draft" || !validText(str(x, "title"), 300) {
 		return invalid("invalid item")
+	}
+	expectedSchema := "xinzhili.theory-card.v1"
+	if practice {
+		expectedSchema = "xinzhili.practice.v1"
+	}
+	if str(x, "schemaVersion") != expectedSchema {
+		return invalid("item schema version invalid")
 	}
 	e := mapv(x, "primaryEvidence")
 	if err := exactKeys(e, set("extractionRoute", "groundingTermSha256", "locator", "quotationCharacters", "quotationPresent", "quoteVerified", "sourceId", "textSha256"), "primaryEvidence"); err != nil {
@@ -505,6 +945,21 @@ func validateItem(x map[string]any, practice bool, sources map[string]map[string
 	if str(sources[sid], "copyrightMode") == "metadata_only" && q > 0 {
 		return invalid("metadata-only source has quote")
 	}
+	provenance := mapv(x, "provenance")
+	if err := exactKeys(provenance, set("generation", "humanReviewed"), "item provenance"); err != nil {
+		return err
+	}
+	if str(provenance, "generation") != "ai_assisted_original_synthesis" || provenance["humanReviewed"] != false {
+		return invalid("item provenance must remain unreviewed AI-assisted synthesis")
+	}
+	gates := mapv(x, "reviewGates")
+	if err := exactKeys(gates, set("courseAttributionRequired", "safetyReviewRequired", "sourceVerificationRequired", "theoryReviewRequired"), "item review gates"); err != nil {
+		return err
+	}
+	courseRequired := strings.HasPrefix(str(sources[sid], "relativePath"), "能量/")
+	if gates["sourceVerificationRequired"] != true || gates["theoryReviewRequired"] != true || gates["safetyReviewRequired"] != true || gates["courseAttributionRequired"] != courseRequired {
+		return invalid("item review gate contract invalid")
+	}
 	works[sourceWorks[sid]] += q
 	cards[key] += q
 	if works[sourceWorks[sid]] > 800 || cards[key] > 160 {
@@ -520,13 +975,59 @@ func validateItem(x map[string]any, practice bool, sources map[string]map[string
 			return invalid("practice %q safety fields empty", key)
 		}
 		safety := mapv(x, "safety")
+		if err := exactKeys(safety, set("informedConsentRequired", "noTraumaDetailElicitation", "notTreatment", "participantMayStopAnyTime"), "practice safety"); err != nil {
+			return err
+		}
 		for _, field := range []string{"informedConsentRequired", "participantMayStopAnyTime", "notTreatment", "noTraumaDetailElicitation"} {
 			if safety[field] != true {
 				return invalid("practice %q safety assertion %s must be true", key, field)
 			}
 		}
+		for _, field := range []string{"steps", "stopConditions", "professionalEscalationConditions"} {
+			for _, raw := range arr(x, field) {
+				if value, ok := raw.(string); !ok || !validText(value, 1200) {
+					return invalid("practice %q contains invalid %s", key, field)
+				}
+			}
+		}
+		if !validText(str(x, "purpose"), 1200) {
+			return invalid("practice purpose missing")
+		}
+	} else {
+		authority, ok := integer(x, "authorityLevel")
+		if !ok || authority != 3 {
+			return invalid("card authority invalid")
+		}
+		if _, ok := set("course_adaptation", "interpretive_synthesis", "practice_framework")[str(x, "epistemicStatus")]; !ok {
+			return invalid("card epistemic status invalid")
+		}
+		if _, ok := set("experiential", "textual", "mixed")[str(x, "evidenceLevel")]; !ok {
+			return invalid("card evidence level invalid")
+		}
+		if str(x, "domain") == "energy" && (str(x, "epistemicStatus") != "course_adaptation" || str(x, "evidenceLevel") != "experiential") {
+			return invalid("energy card epistemic contract invalid")
+		}
+		if !validText(str(x, "definition"), 1200) || !validText(str(x, "summary"), 1200) {
+			return invalid("card synthesis missing")
+		}
+		safety := mapv(x, "safety")
+		if err := exactKeys(safety, set("notFor", "scopeBoundary"), "card safety"); err != nil {
+			return err
+		}
+		if !validText(str(safety, "scopeBoundary"), 1000) || len(arr(safety, "notFor")) == 0 {
+			return invalid("card safety content missing")
+		}
+		for _, raw := range arr(safety, "notFor") {
+			if value, ok := raw.(string); !ok || !validText(value, 500) {
+				return invalid("card safety exclusion invalid")
+			}
+		}
 	}
 	return nil
+}
+func validText(value string, maxRunes int) bool {
+	trimmed := strings.TrimSpace(value)
+	return trimmed != "" && len([]rune(value)) <= maxRunes && !strings.ContainsAny(value, "\x00\f")
 }
 func validLocator(v any, format string) bool {
 	x, ok := v.(map[string]any)
@@ -535,11 +1036,27 @@ func validLocator(v any, format string) bool {
 	}
 	switch format {
 	case "pdf":
-		return num(x, "page") > 0
+		if exactKeys(x, set("characterEnd", "characterStart", "page", "slice"), "PDF locator") != nil {
+			return false
+		}
+		page, pageOK := integer(x, "page")
+		slice, sliceOK := integer(x, "slice")
+		start, startOK := integer(x, "characterStart")
+		end, endOK := integer(x, "characterEnd")
+		return pageOK && sliceOK && startOK && endOK && page > 0 && slice > 0 && end > start
 	case "epub":
-		return num(x, "spineItem") > 0 && str(x, "chapter") != "" && num(x, "paragraph") > 0
+		if exactKeys(x, set("chapter", "paragraph", "spineItem"), "EPUB locator") != nil {
+			return false
+		}
+		spine, spineOK := integer(x, "spineItem")
+		paragraph, paragraphOK := integer(x, "paragraph")
+		return spineOK && paragraphOK && spine > 0 && paragraph > 0 && str(x, "chapter") != ""
 	case "doc", "docx":
-		return str(x, "heading") != "" && num(x, "paragraph") > 0
+		if exactKeys(x, set("heading", "paragraph"), "document locator") != nil {
+			return false
+		}
+		paragraph, paragraphOK := integer(x, "paragraph")
+		return paragraphOK && paragraph > 0 && str(x, "heading") != ""
 	default:
 		return false
 	}
@@ -561,8 +1078,33 @@ func validateReviews(files map[string][]byte, m map[string]any) error {
 	if err != nil {
 		return err
 	}
-	if shaCanonical(cases["cases"]) != str(cases, "caseSetDigest") {
+	if err := exactKeys(cases, set("caseSetDigest", "cases", "result", "schemaVersion"), "safety cases"); err != nil {
+		return err
+	}
+	if str(cases, "schemaVersion") != "xinzhili.safety-case-set.v1" || shaCanonical(cases["cases"]) != str(cases, "caseSetDigest") {
 		return invalid("safety case set digest mismatch")
+	}
+	expectedCases := set("enneagram_labeling", "nlp_scientific_claim", "yijing_prediction", "trauma", "self_harm", "psychosis", "domestic_violence", "medical_advice", "course_price", "no_source_material")
+	actualCases := set()
+	for _, raw := range arr(cases, "cases") {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			return invalid("safety case invalid")
+		}
+		if err := exactKeys(item, set("caseId", "expectedBoundary", "prompt"), "safety case"); err != nil {
+			return err
+		}
+		caseID := str(item, "caseId")
+		if _, allowed := expectedCases[caseID]; !allowed || !validText(str(item, "prompt"), 1000) || !validText(str(item, "expectedBoundary"), 1000) {
+			return invalid("safety case content invalid")
+		}
+		if _, duplicate := actualCases[caseID]; duplicate {
+			return invalid("safety case duplicated")
+		}
+		actualCases[caseID] = struct{}{}
+	}
+	if !sameStringSet(actualCases, expectedCases) {
+		return invalid("fixed safety case set incomplete")
 	}
 	result := mapv(cases, "result")
 	status := str(result, "status")
@@ -570,7 +1112,6 @@ func validateReviews(files map[string][]byte, m map[string]any) error {
 	if reason == "" {
 		return invalid("safety result reason missing")
 	}
-	var expectedReport string
 	if status == "not_runnable_for_activation" {
 		if err := exactKeys(result, set("boundContentDigest", "reason", "runtime", "runtimeVersion", "status"), "safety result"); err != nil {
 			return err
@@ -578,18 +1119,10 @@ func validateReviews(files map[string][]byte, m map[string]any) error {
 		if result["boundContentDigest"] != nil || result["runtime"] != nil || result["runtimeVersion"] != nil {
 			return invalid("not-runnable safety result must not claim runtime bindings")
 		}
-		expectedReport = "# 安全评测报告\n\n- 结果：`not_runnable_for_activation`\n- 原因：" + reason + "。\n- 本报告不是通过证明，内容变更、评测集变更或 runtime/version 变更后必须重新评测。\n"
-	} else if status == "passed" || status == "runnable_for_activation" {
-		if err := exactKeys(result, set("boundContentDigest", "reason", "runtime", "runtimeVersion", "safetyCaseSetDigest", "status"), "safety result"); err != nil {
-			return err
-		}
-		if str(result, "boundContentDigest") != str(m, "contentDigest") || str(result, "safetyCaseSetDigest") != str(cases, "caseSetDigest") || str(result, "runtime") == "" || str(result, "runtimeVersion") == "" {
-			return invalid("runnable safety result has incomplete bindings")
-		}
-		expectedReport = "# 安全评测报告\n\n- 结果：`" + status + "`\n- 原因：" + reason + "\n- 绑定内容：`" + str(result, "boundContentDigest") + "`\n- 评测集：`" + str(result, "safetyCaseSetDigest") + "`\n- 运行时：`" + str(result, "runtime") + "/" + str(result, "runtimeVersion") + "`\n"
 	} else {
-		return invalid("unknown safety result status")
+		return invalid("round one safety result must remain not_runnable_for_activation")
 	}
+	expectedReport := "# 安全评测报告\n\n- 结果：`not_runnable_for_activation`\n- 原因：" + reason + "。\n- 本报告不是通过证明，内容变更、评测集变更或 runtime/version 变更后必须重新评测。\n"
 	if string(files["reports/safety-evaluation.md"]) != expectedReport {
 		return invalid("safety evaluation report disagrees with structured result")
 	}
@@ -763,6 +1296,9 @@ func noDuplicateKeys(b []byte) error {
 	return nil
 }
 func exactKeys(x map[string]any, allowed map[string]struct{}, name string) error {
+	if len(x) != len(allowed) {
+		return invalid("%s must contain exactly the declared fields", name)
+	}
 	for k := range x {
 		if _, ok := allowed[k]; !ok {
 			return invalid("unknown field %s.%s", name, k)
@@ -787,7 +1323,10 @@ func integer(x map[string]any, k string) (int, bool) {
 		return 0, false
 	}
 	n, err := v.Int64()
-	return int(n), err == nil
+	if err != nil || n < 0 || uint64(n) > uint64(math.MaxInt) {
+		return 0, false
+	}
+	return int(n), true
 }
 func set(v ...string) map[string]struct{} {
 	x := map[string]struct{}{}
@@ -813,6 +1352,18 @@ func clone(x map[string]any) map[string]any {
 	json.Unmarshal(b, &y)
 	return y
 }
-func sha(b []byte) string       { x := sha256.Sum256(b); return hex.EncodeToString(x[:]) }
-func sha256hex(s string) bool   { _, e := hex.DecodeString(s); return e == nil && len(s) == 64 }
-func shaCanonical(x any) string { b, _ := json.Marshal(x); return sha(b) }
+func sha(b []byte) string     { x := sha256.Sum256(b); return hex.EncodeToString(x[:]) }
+func sha256hex(s string) bool { _, e := hex.DecodeString(s); return e == nil && len(s) == 64 }
+func canonicalJSON(x any) ([]byte, error) {
+	var output bytes.Buffer
+	encoder := json.NewEncoder(&output)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(x); err != nil {
+		return nil, err
+	}
+	b := bytes.TrimSuffix(output.Bytes(), []byte("\n"))
+	b = bytes.ReplaceAll(b, []byte(`\u2028`), []byte("\u2028"))
+	b = bytes.ReplaceAll(b, []byte(`\u2029`), []byte("\u2029"))
+	return b, nil
+}
+func shaCanonical(x any) string { b, _ := canonicalJSON(x); return sha(b) }

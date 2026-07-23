@@ -231,7 +231,8 @@ def build_cards(sources):
             "primaryEvidence": evidence_object(source, unit, keyword),
             "safety": safety_for_domain(domain),
             "reviewGates": {"sourceVerificationRequired": True, "theoryReviewRequired": True,
-                            "safetyReviewRequired": True, "courseAttributionRequired": domain == "energy"},
+                            "safetyReviewRequired": True,
+                            "courseAttributionRequired": source["relativePath"].startswith("能量/")},
             "provenance": {"generation": "ai_assisted_original_synthesis", "humanReviewed": False},
         })
     return cards
@@ -253,10 +254,8 @@ def build_practices(sources):
             "safety": {"informedConsentRequired": True, "participantMayStopAnyTime": True,
                        "notTreatment": True, "noTraumaDetailElicitation": True},
             "reviewGates": {"sourceVerificationRequired": True, "theoryReviewRequired": True,
-                            "safetyReviewRequired": True, "courseAttributionRequired": source_dir in {
-                                "454c3af739c58883-02", "7bb595df179c3389-03", "29144d15a67ae6af-05",
-                                "0bd39b44c72f5f31-04", "c166156e17a60058-07", "45cdd8454fa15695-08",
-                                "98a3a2b129cdb039-10", "49c3bd482845355a-06", "d61dc134719acf99-11"}},
+                            "safetyReviewRequired": True,
+                            "courseAttributionRequired": source["relativePath"].startswith("能量/")},
             "provenance": {"generation": "ai_assisted_original_synthesis", "humanReviewed": False},
         })
     return practices

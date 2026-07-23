@@ -181,6 +181,10 @@ class RoundPackageTest(unittest.TestCase):
             self.assertEqual("pending_human_verification", source["attribution"]["status"])
             self.assertEqual("course_translation_material", source["attribution"]["materialType"])
             self.assertFalse(source["attribution"]["isHanTeacherOriginal"])
+        energy_source_ids = {source["sourceId"] for source in energy_sources}
+        for item in self.cards + self.practices:
+            self.assertEqual(item["primaryEvidence"]["sourceId"] in energy_source_ids,
+                             item["reviewGates"]["courseAttributionRequired"])
 
     def test_practices_have_schema_steps_stop_and_escalation_conditions(self):
         for practice in self.practices:
