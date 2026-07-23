@@ -10,8 +10,8 @@
 - 版权边界：逐字引用 0 条；仓库数据包不含原始 PDF、EPUB、DOC、DOCX、PPT、PPTX 或分页全文。
 - 草稿边界：52 个 chunk preview 均为自有提炼；数据包内正式 chunk 为 0，只有通过数据库三审并执行 `promote` 后才生成正式 chunk。
 - 固定摘要：
-  - `contentDigest`: `22a3be1be744f6ab39e8817fee55c6fbdcc701098d066f7153269325598043b8`
-  - `packageDigest`: `466ad5b421770972fbed4e5c984fc283f4cccfb4f21b6ec96bfd6cb2a224e0c1`
+  - `contentDigest`: `4bfbfc7f92d90d2e595343eae753d23f9ff5d941261378b5df97b68a1456af3d`
+  - `packageDigest`: `3ee7a374fa53db94989997dbebeca2c24fc9393cecef361657eeaceab3265d66`
 
 全量来源快照在 `../source-catalog.json`。首轮包在仓库中的位置是 `data/theory/xinzhili/round-001/`；不进入 Git 的抽取/OCR 全文工作底稿位于 `var/theory-work/xinzhili/round-001/`。
 
