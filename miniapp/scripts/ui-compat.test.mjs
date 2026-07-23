@@ -288,15 +288,74 @@ for (const file of collectVueFiles('src/pages')) {
 
 
 const bookingPage = readFileSync('src/pages/booking/booking.vue', 'utf8')
+const bookingTemplate = stripMarkupAndCssComments(vueSection(bookingPage, 'template') || '')
+const bookingStyle = stripMarkupAndCssComments(vueSection(bookingPage, 'style') || '')
 assert.match(bookingPage, /userErrorMessage/, 'booking page should surface normalized request errors')
 assert.match(bookingPage, /title:\s*userErrorMessage\(e,\s*'提交失败，请重试'\)/, 'booking submit should keep a fallback while showing specific API errors')
-assert.match(bookingPage, /class=["'][^"']*card[^"']*ios-card[^"']*["']/, 'booking main form card should opt into iOS card styling')
-assert.match(bookingPage, /<button\s+class=["'][^"']*btn-primary[^"']*ios-button[^"']*["'][^>]*@click=["']submit["']/, 'booking submit action should opt into iOS button styling')
 assert.match(bookingPage, /fieldErrors/, 'booking page should expose inline field validation errors')
 assert.match(bookingPage, /v-if=["']fieldErrors\.contactName["']/, 'booking contact name should render an inline validation error')
 assert.match(bookingPage, /v-if=["']fieldErrors\.phone["']/, 'booking phone should render an inline validation error')
 assert.match(bookingPage, /:aria-invalid=["']!!fieldErrors\.contactName["']/, 'booking contact name input should expose aria-invalid when invalid')
 assert.match(bookingPage, /:aria-invalid=["']!!fieldErrors\.phone["']/, 'booking phone input should expose aria-invalid when invalid')
+assert.match(bookingTemplate, /class=["'][^"']*booking-hero[^"']*nx-page-hero[^"']*["']/, 'booking should open with the shared themed hero')
+assert.match(bookingTemplate, />预约咨询<\//, 'booking hero should keep the appointment eyebrow')
+assert.match(bookingTemplate, />让老师帮你找到合适的学习方式<\//, 'booking hero should state its primary purpose')
+assert.match(bookingTemplate, /草稿/, 'booking hero should explain draft persistence')
+
+const bookingViews = openingTagsFor(bookingTemplate, 'view')
+const bookingSections = bookingViews.filter((tag) => staticClassTokens(tag).includes('form-section'))
+assert.equal(bookingSections.length, 3, 'booking should render exactly three bounded form sections')
+for (const section of bookingSections) {
+  assert.ok(staticClassTokens(section).includes('nx-panel'), 'each booking form section should use the shared panel surface')
+}
+for (const title of ['预约类型', '联系信息', '学习意向']) {
+  assert.match(bookingTemplate, new RegExp(`>${title}<\\/text>`), `booking should expose the ${title} section heading`)
+}
+for (const label of ['称呼', '手机号', '意向方向', '期望时间', '留言']) {
+  assert.match(bookingTemplate, new RegExp(`<text\\s+class=["']label["']>${label}<\\/text>`), `booking ${label} should use a visible label`)
+}
+assert.doesNotMatch(bookingTemplate, /⌄/, 'booking picker must not depend on a character glyph arrow')
+assert.match(bookingTemplate, /<view\s+class=["']picker__arrow["']\s+aria-hidden=["']true["']\s*\/>/, 'booking picker should use a decorative CSS arrow view')
+assert.match(bookingTemplate, /@input=["']clearFieldError\('contactName'\)["']/, 'contact name input should clear its nearby error while editing')
+assert.match(bookingTemplate, /@input=["']clearFieldError\('phone'\)["']/, 'phone input should clear its nearby error while editing')
+assert.match(bookingTemplate, /class=["']draft-hint["']>填写内容会自动保存在当前设备<\//, 'booking should place an autosave hint after the learning intent fields')
+
+const h5BookingBlock = bookingPage.match(/<!--\s*#ifdef H5\s*-->([\s\S]*?)<!--\s*#endif\s*-->/)?.[1] || ''
+assert.match(h5BookingBlock, /<button\s+class=["']booking-submit booking-submit--disabled ios-button["']\s+disabled>请在微信小程序内提交预约<\/button>/, 'H5 should render the exact disabled booking action')
+assert.doesNotMatch(h5BookingBlock, /@click=["']submit["']/, 'H5 booking action must never bind submit')
+const nonH5BookingBlock = bookingPage.match(/<!--\s*#ifndef H5\s*-->([\s\S]*?)<!--\s*#endif\s*-->/)?.[1] || ''
+assert.match(nonH5BookingBlock, /<button\s+class=["']btn-primary booking-submit ios-button["'][^>]*:loading=["']submitting["'][^>]*:disabled=["']submitting["'][^>]*@click=["']submit["']>提交预约<\/button>/, 'miniapp booking action should retain loading, disabled, and submit behavior')
+
+const bookingHeroStyle = pageStyleDeclarations(bookingStyle, '.booking-hero')
+assert.match(bookingHeroStyle, /background:\s*linear-gradient\(145deg,\s*#c2410c,\s*#2563eb\)\s*;/i, 'booking hero should keep the exact orange-to-blue gradient')
+assert.match(bookingHeroStyle, /border-radius:\s*38rpx\s*;/, 'booking hero should keep the shared 38rpx radius')
+for (const selector of ['.booking-hero__eyebrow', '.booking-hero__title', '.booking-hero__lead']) {
+  assert.match(pageStyleDeclarations(bookingStyle, selector), /color:\s*(?:#fff(?:fff)?|rgba\(\s*255\s*,\s*255\s*,\s*255\s*,\s*\.9\d*\s*\))\s*;/i, `${selector} should use accessible white hero text`)
+}
+assert.match(pageStyleDeclarations(bookingStyle, '.form-section'), /gap:\s*20rpx\s*;/, 'booking sections should use the planned 20rpx vertical rhythm')
+assert.match(pageStyleDeclarations(bookingStyle, '.form-section__title'), /font-size:\s*31rpx\s*;[\s\S]*font-weight:\s*900\s*;/, 'booking section titles should keep the planned hierarchy')
+for (const selector of ['.input', '.picker']) {
+  const declarations = pageStyleDeclarations(bookingStyle, selector)
+  const height = declarations?.match(/min-height:\s*(\d+)rpx\s*;/)
+  assert.ok(height && Number(height[1]) >= 88, `${selector} should keep at least an 88rpx touch target`)
+}
+assert.match(pageStyleDeclarations(bookingStyle, '.textarea'), /height:\s*176rpx\s*;/, 'booking message area should keep the planned stable height')
+assert.match(pageStyleDeclarations(bookingStyle, '.field-error'), /color:\s*var\(--nx-danger\)\s*;/, 'booking inline errors should use the semantic danger token')
+const pickerArrowStyle = pageStyleDeclarations(bookingStyle, '.picker__arrow')
+assert.match(pickerArrowStyle, /width:\s*18rpx\s*;/, 'booking picker arrow should keep a stable width')
+assert.match(pickerArrowStyle, /height:\s*18rpx\s*;/, 'booking picker arrow should keep a stable height')
+assert.match(pickerArrowStyle, /border-right:\s*3rpx\s+solid\s+#2563eb\s*;/i, 'booking picker arrow should draw its right stroke in blue')
+assert.match(pickerArrowStyle, /border-bottom:\s*3rpx\s+solid\s+#2563eb\s*;/i, 'booking picker arrow should draw its bottom stroke in blue')
+assert.match(pickerArrowStyle, /transform:\s*rotate\(45deg\)\s*;/, 'booking picker arrow should use the planned CSS rotation')
+const bookingSubmitStyle = pageStyleDeclarations(bookingStyle, '.booking-submit')
+assert.match(bookingSubmitStyle, /min-height:\s*88rpx\s*;/, 'booking submit should keep an 88rpx touch target')
+const disabledBookingStyle = pageStyleDeclarations(bookingStyle, '.booking-submit--disabled')
+assert.match(disabledBookingStyle, /background:\s*#f1f5f9\s*;/i, 'H5 disabled booking action should use the planned light surface')
+assert.match(disabledBookingStyle, /color:\s*#475569\s*;/i, 'H5 disabled booking copy should meet 4.5:1 contrast on its surface')
+for (const selector of ['.booking-hero__eyebrow', '.booking-hero__lead', '.form-section__step', '.label', '.field-control', '.field-error', '.draft-hint']) {
+  const fontSize = pageStyleDeclarations(bookingStyle, selector)?.match(/font-size:\s*(\d+)rpx\s*;/)
+  assert.ok(fontSize && Number(fontSize[1]) >= 24, `${selector} should keep at least 24rpx readable text`)
+}
 
 const learnPage = readFileSync('src/pages/learn/learn.vue', 'utf8')
 
