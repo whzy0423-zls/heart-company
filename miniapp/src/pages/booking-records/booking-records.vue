@@ -144,7 +144,12 @@ function openBooking(record) {
     return
   }
 
-  uni.navigateTo({ url: `/pages/booking-detail/booking-detail?id=${encodeURIComponent(bookingId)}` })
+  uni.navigateTo({
+    url: `/pages/booking-detail/booking-detail?id=${encodeURIComponent(bookingId)}`,
+    fail() {
+      clearBookingSession()
+    },
+  })
 }
 
 function goBooking() {
@@ -357,7 +362,7 @@ function goBooking() {
   border-radius: 999rpx;
   color: #295fbd;
   background: #e8f1ff;
-  font-size: 22rpx;
+  font-size: 24rpx;
   font-weight: 800;
 }
 
@@ -372,7 +377,7 @@ function goBooking() {
 .booking-record__meta {
   margin-top: 18rpx;
   color: #64748b;
-  font-size: 23rpx;
+  font-size: 24rpx;
 }
 
 .booking-record__footer {

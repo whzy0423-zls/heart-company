@@ -4,9 +4,9 @@ import { onShow } from '@dcloudio/uni-app'
 import { TYPES_INFO } from '../../data/enneagramGame'
 import { ensureLogin, getToken, clearToken } from '../../utils/auth'
 import { hiddenCount, previewItems } from '../../utils/listPreview'
-import { normalizeWechatProfile, hasProfilePayload, getWechatProfilePayload } from '../../utils/wechatProfile'
+import { clearBookingSession } from '../../utils/bookingSession'
 import { userErrorMessage } from '../../utils/userMessage'
-import { getUserInfoApi, updateUserInfoApi, listTestRecordsApi, listBookingsApi } from '../../api'
+import { getUserInfoApi, listTestRecordsApi, listBookingsApi } from '../../api'
 
 const logged = ref(false)
 const user = ref(null)
@@ -16,25 +16,14 @@ const recordsError = ref('')
 const bookingsError = ref('')
 const logging = ref(false)
 const profileLoading = ref(false)
-const profileSaving = ref(false)
-const nicknameDraft = ref('')
-const avatarDraft = ref('')
 const userAvatarFailed = ref(false)
-const draftAvatarFailed = ref(false)
 const visibleRecords = computed(() => previewItems(records.value))
-const visibleBookings = computed(() => previewItems(bookings.value))
 const hiddenRecordCount = computed(() => hiddenCount(records.value))
-const hiddenBookingCount = computed(() => hiddenCount(bookings.value))
+const latestBooking = computed(() => bookings.value[0] || null)
 const recordCount = computed(() => records.value.length)
 const bookingCount = computed(() => bookings.value.length)
 const recordCountLabel = computed(() => profileLoading.value || recordsError.value ? '—' : String(recordCount.value))
 const bookingCountLabel = computed(() => profileLoading.value || bookingsError.value ? '—' : String(bookingCount.value))
-const wechatLoginReady = computed(() => ({
-  codeLogin: true,
-  profile: true,
-  phone: false,
-  note: '微信 code 登录已接入；头像昵称已按微信新规范支持。',
-}))
 let loadTicket = 0
 let sessionGeneration = 0
 
@@ -72,7 +61,7 @@ async function loadAll() {
     const loadedUser = await getUserInfoApi()
     if (ticket !== loadTicket) return
     user.value = loadedUser
-    syncDraftFromUser()
+    userAvatarFailed.value = false
   } catch (e) {
     if (ticket !== loadTicket) return
     resetLogin()
@@ -104,29 +93,19 @@ function typeName(id) {
   return TYPES_INFO[id] ? `${id} 号 · ${TYPES_INFO[id].name}` : '—'
 }
 
-function syncDraftFromUser() {
-  nicknameDraft.value = (user.value && user.value.nickname) || ''
-  avatarDraft.value = (user.value && user.value.avatar) || ''
-  userAvatarFailed.value = false
-  draftAvatarFailed.value = false
-}
-
 function resetLogin() {
   sessionGeneration += 1
   loadTicket += 1
   clearToken()
+  clearBookingSession()
   logged.value = false
   user.value = null
   records.value = []
   bookings.value = []
   recordsError.value = ''
   bookingsError.value = ''
-  nicknameDraft.value = ''
-  avatarDraft.value = ''
   userAvatarFailed.value = false
-  draftAvatarFailed.value = false
   profileLoading.value = false
-  profileSaving.value = false
   logging.value = false
 }
 
@@ -134,73 +113,16 @@ function logout() {
   resetLogin()
 }
 
-function onChooseAvatar(e) {
-  avatarDraft.value = e.detail && e.detail.avatarUrl ? e.detail.avatarUrl : ''
-  draftAvatarFailed.value = false
-}
-
 function onUserAvatarError() {
   userAvatarFailed.value = true
 }
 
-function onDraftAvatarError() {
-  draftAvatarFailed.value = true
+function openProfileEdit() {
+  uni.navigateTo({ url: '/pages/profile-edit/profile-edit' })
 }
 
-function onNicknameInput(e) {
-  nicknameDraft.value = e.detail && e.detail.value ? e.detail.value : ''
-}
-
-
-async function syncWechatProfile() {
-  if (profileSaving.value) return
-  const generation = sessionGeneration
-  profileSaving.value = true
-  try {
-    const payload = await getWechatProfilePayload()
-    if (!logged.value || generation !== sessionGeneration) return
-    if (hasProfilePayload(payload)) {
-      const updatedUser = await updateUserInfoApi(payload)
-      if (!logged.value || generation !== sessionGeneration) return
-      user.value = updatedUser
-      syncDraftFromUser()
-      uni.showToast({ title: '资料已同步', icon: 'success' })
-    } else {
-      uni.showToast({ title: '请用下方头像昵称补充资料', icon: 'none' })
-    }
-  } catch {
-    if (!logged.value || generation !== sessionGeneration) return
-    uni.showToast({ title: '可手动补充头像昵称', icon: 'none' })
-  } finally {
-    if (generation === sessionGeneration) profileSaving.value = false
-  }
-}
-
-async function saveProfile() {
-  if (profileSaving.value) return
-  const generation = sessionGeneration
-  const payload = normalizeWechatProfile({
-    nickname: nicknameDraft.value,
-    avatar: avatarDraft.value,
-  })
-  if (!hasProfilePayload(payload)) {
-    uni.showToast({ title: '请先填写昵称或选择头像', icon: 'none' })
-    return
-  }
-
-  profileSaving.value = true
-  try {
-    const updatedUser = await updateUserInfoApi(payload)
-    if (!logged.value || generation !== sessionGeneration) return
-    user.value = updatedUser
-    syncDraftFromUser()
-    uni.showToast({ title: '资料已保存', icon: 'success' })
-  } catch {
-    if (!logged.value || generation !== sessionGeneration) return
-    uni.showToast({ title: '保存失败，请重试', icon: 'none' })
-  } finally {
-    if (generation === sessionGeneration) profileSaving.value = false
-  }
+function openBookingRecords() {
+  uni.navigateTo({ url: '/pages/booking-records/booking-records' })
 }
 </script>
 
@@ -222,9 +144,19 @@ async function saveProfile() {
 
     <template v-else>
       <view class="profile-hero nx-page-hero user">
-        <view class="profile-hero__identity">
+        <view
+          class="profile-hero__identity-action"
+          role="button"
+          aria-role="button"
+          aria-label="编辑个人资料"
+          tabindex="0"
+          hover-class="profile-hero__identity-action--pressed"
+          @click="openProfileEdit"
+          @keydown.enter="openProfileEdit"
+          @keydown.space.prevent="openProfileEdit"
+        >
           <image v-if="user && user.avatar && !userAvatarFailed" class="user__avatar" :src="user.avatar" mode="aspectFill" lazy-load @error="onUserAvatarError" />
-        <view v-else class="user__avatar user__avatar--ph">{{ (user && user.mainType) || '九' }}</view>
+          <view v-else class="user__avatar user__avatar--ph">{{ (user && user.mainType) || '九' }}</view>
           <view class="user__info">
             <text class="profile-hero__eyebrow">个人档案</text>
             <text class="user__name">{{ (user && user.nickname) || '九型用户' }}</text>
@@ -248,38 +180,6 @@ async function saveProfile() {
             <text class="profile-stat__label">预约</text>
           </view>
         </view>
-      </view>
-
-      <view class="profile-edit nx-panel ios-card profile-form">
-        <view class="profile-form__head">
-          <view>
-            <text class="section-kicker">个人信息</text>
-            <text class="sec-title">微信资料</text>
-          </view>
-          <button class="mini-link" :loading="profileSaving" :disabled="profileSaving" @click="syncWechatProfile">一键同步</button>
-        </view>
-        <view class="wechat-slot">
-          <text class="wechat-slot__title">微信登录能力</text>
-          <text class="wechat-slot__desc">{{ wechatLoginReady.note }}</text>
-        </view>
-        <view class="profile-form__row">
-          <button class="avatar-picker" open-type="chooseAvatar" @chooseavatar="onChooseAvatar">
-            <image v-if="avatarDraft && !draftAvatarFailed" class="avatar-picker__img" :src="avatarDraft" mode="aspectFill" lazy-load @error="onDraftAvatarError" />
-            <text v-else class="avatar-picker__ph">{{ (user && user.mainType) || '头像' }}</text>
-          </button>
-          <view class="nickname-field">
-            <text class="nickname-field__label">昵称</text>
-            <input
-              class="nickname-field__input"
-              type="nickname"
-              :value="nicknameDraft"
-              placeholder="填写微信昵称"
-              @input="onNicknameInput"
-              @blur="onNicknameInput"
-            />
-          </view>
-        </view>
-        <button class="btn-primary profile-form__save" :loading="profileSaving" :disabled="profileSaving" @click="saveProfile">保存资料</button>
       </view>
 
       <view class="history-section nx-panel ios-card">
@@ -308,7 +208,7 @@ async function saveProfile() {
         </view>
       </view>
 
-      <view class="history-section nx-panel ios-card">
+      <view class="booking-summary nx-panel ios-card">
         <view class="section-head">
           <view>
             <text class="section-kicker">持续陪伴</text>
@@ -316,22 +216,39 @@ async function saveProfile() {
           </view>
           <text class="section-count">{{ bookingCountLabel }}</text>
         </view>
-        <view v-if="profileLoading" class="empty">正在同步预约记录…</view>
-        <view v-else-if="bookingsError" class="empty empty--error">
-          <text>{{ bookingsError }}</text>
-          <button class="sync-retry" @click="loadAll">重试</button>
-        </view>
-        <view v-else-if="bookings.length === 0" class="empty">暂无预约</view>
-        <view v-else class="history-timeline">
-          <view v-for="b in visibleBookings" :key="b.id" class="history-item">
-            <view class="history-item__rail"><view class="history-item__dot" /></view>
-            <view class="history-item__body">
-              <text class="history-item__main">{{ b.intent || b.kind }}</text>
-              <text class="history-item__meta">{{ b.status }} · {{ b.createTime }}</text>
-            </view>
+        <view
+          class="booking-summary__open"
+          role="button"
+          aria-role="button"
+          aria-label="查看全部预约记录"
+          tabindex="0"
+          hover-class="booking-summary__open--pressed"
+          @click="openBookingRecords"
+          @keydown.enter="openBookingRecords"
+          @keydown.space.prevent="openBookingRecords"
+        >
+          <view v-if="profileLoading" class="booking-summary__state">
+            <text class="booking-summary__main">正在同步预约记录…</text>
+            <text class="booking-summary__meta">进入列表查看完整安排</text>
           </view>
-          <text v-if="hiddenBookingCount" class="more-tip">还有 {{ hiddenBookingCount }} 条预约已收起</text>
+          <view v-else-if="bookingsError" class="booking-summary__state">
+            <text class="booking-summary__main">预约记录暂时无法同步</text>
+            <text class="booking-summary__meta">{{ bookingsError }}</text>
+          </view>
+          <view v-else-if="!latestBooking" class="booking-summary__state">
+            <text class="booking-summary__main">暂无预约</text>
+            <text class="booking-summary__meta">进入列表页可以去提交新预约</text>
+          </view>
+          <view v-else class="booking-summary__state">
+            <text class="booking-summary__main">{{ latestBooking.intent || latestBooking.kind }}</text>
+            <text class="booking-summary__meta">{{ latestBooking.status }} · {{ latestBooking.createTime }}</text>
+          </view>
+          <view class="booking-summary__footer">
+            <text>查看全部预约</text>
+            <text class="booking-summary__arrow" aria-hidden="true">›</text>
+          </view>
         </view>
+        <button v-if="bookingsError" class="booking-summary__retry ios-button" tabindex="0" @click.stop="loadAll">重试</button>
       </view>
 
       <button class="logout ios-button" @click="logout">退出登录</button>
@@ -350,7 +267,9 @@ async function saveProfile() {
 .profile-login { width: 100%; min-height: 88rpx; margin-top: 16rpx; border-radius: 24rpx; background: #ffffff; color: #312e81; font-size: 28rpx; font-weight: 900; }
 .profile-login::after { border: none; }
 .login__hint { color: #ddd6fe; font-size: 24rpx; line-height: 1.55; }
-.profile-hero__identity { display: flex; align-items: center; gap: 22rpx; }
+.profile-hero__identity-action { min-height: 88rpx; display: flex; align-items: center; gap: 22rpx; border-radius: 24rpx; cursor: pointer; }
+.profile-hero__identity-action--pressed { opacity: .76; transform: scale(.992); }
+.profile-hero__identity-action:focus-visible { outline: 4rpx solid rgba(255, 255, 255, .82); outline-offset: 6rpx; }
 .profile-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12rpx; margin-top: 30rpx; }
 .profile-stat { min-width: 0; padding: 20rpx 10rpx; border-radius: 22rpx; background: rgba(255, 255, 255, .14); border: 2rpx solid rgba(255, 255, 255, .16); text-align: center; }
 .profile-stat__value { display: block; color: #ffffff; font-size: 34rpx; font-weight: 900; line-height: 1.2; font-variant-numeric: tabular-nums; }
@@ -360,25 +279,9 @@ async function saveProfile() {
 .user__avatar--ph { background: rgba(255, 255, 255, .16); color: #ffffff; font-size: 44rpx; font-weight: 900; display: flex; align-items: center; justify-content: center; }
 .user__name { color: #ffffff; font-size: 35rpx; font-weight: 900; display: block; line-height: 1.28; }
 .user__type { color: #ddd6fe; font-size: 25rpx; display: block; margin-top: 7rpx; }
-.profile-edit, .history-section { box-sizing: border-box; width: 100%; padding: 30rpx; }
-.profile-form { display: flex; flex-direction: column; gap: 22rpx; }
-.profile-form__head { display: flex; align-items: center; justify-content: space-between; gap: 18rpx; }
+.history-section, .booking-summary { box-sizing: border-box; width: 100%; padding: 30rpx; }
 .section-kicker { display: block; margin-bottom: 6rpx; color: #4f46e5; font-size: 24rpx; font-weight: 800; line-height: 1.35; }
 .sec-title { display: block; color: #0f172a; font-size: 32rpx; font-weight: 900; line-height: 1.3; }
-.mini-link { min-width: 146rpx; min-height: 88rpx; padding: 0 20rpx; border-radius: 22rpx; background: #eef2ff; color: #3730a3; font-size: 24rpx; font-weight: 900; display: flex; align-items: center; justify-content: center; }
-.mini-link::after { border: none; }
-.wechat-slot { margin: 0 0 2rpx; padding: 22rpx; border-radius: 22rpx; background: #f5f3ff; border: 2rpx solid #ede9fe; }
-.wechat-slot__title { display: block; color: #3730a3; font-size: 25rpx; font-weight: 900; margin-bottom: 8rpx; }
-.wechat-slot__desc { display: block; color: #475569; font-size: 24rpx; line-height: 1.6; }
-.profile-form__row { display: flex; align-items: center; gap: 20rpx; }
-.avatar-picker { width: 120rpx; height: 120rpx; padding: 0; border-radius: 38rpx; background: #eef2ff; border: 2rpx solid #c7d2fe; overflow: hidden; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.avatar-picker::after { border: none; }
-.avatar-picker__img { width: 120rpx; height: 120rpx; display: block; }
-.avatar-picker__ph { color: #3730a3; font-size: 24rpx; font-weight: 900; }
-.nickname-field { flex: 1; min-width: 0; min-height: 120rpx; border-radius: 26rpx; background: #ffffff; border: 2rpx solid #e2e8f0; padding: 18rpx 22rpx; box-sizing: border-box; }
-.nickname-field__label { color: #475569; font-size: 24rpx; font-weight: 900; display: block; }
-.nickname-field__input { width: 100%; min-height: 52rpx; color: #0f172a; font-size: 30rpx; font-weight: 800; margin-top: 6rpx; }
-.profile-form__save { margin-top: 4rpx; }
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; margin-bottom: 22rpx; }
 .section-count { min-width: 64rpx; color: #4338ca; font-size: 30rpx; font-weight: 900; text-align: right; font-variant-numeric: tabular-nums; }
 .empty { color: #475569; font-size: 25rpx; padding: 28rpx 20rpx; text-align: center; border-radius: 22rpx; background: #f8fafc; }
@@ -394,9 +297,19 @@ async function saveProfile() {
 .history-item__main { color: #0f172a; font-size: 28rpx; font-weight: 900; line-height: 1.35; }
 .history-item__meta { display: block; margin-top: 7rpx; color: #475569; font-size: 24rpx; line-height: 1.45; }
 .more-tip { display: block; margin-top: 16rpx; color: #475569; font-size: 24rpx; line-height: 1.5; }
+.booking-summary__open { min-height: 88rpx; padding: 24rpx; border-radius: 24rpx; background: #f8fafc; box-sizing: border-box; cursor: pointer; }
+.booking-summary__open--pressed { opacity: .76; transform: scale(.992); }
+.booking-summary__open:focus-visible { outline: 4rpx solid rgba(79, 70, 229, .62); outline-offset: 4rpx; }
+.booking-summary__state { min-height: 90rpx; display: flex; flex-direction: column; justify-content: center; }
+.booking-summary__main { color: #0f172a; font-size: 28rpx; font-weight: 900; line-height: 1.4; }
+.booking-summary__meta { display: block; margin-top: 8rpx; color: #475569; font-size: 24rpx; line-height: 1.5; }
+.booking-summary__footer { min-height: 56rpx; margin-top: 20rpx; padding-top: 18rpx; border-top: 2rpx solid #e2e8f0; color: #4338ca; font-size: 24rpx; font-weight: 900; display: flex; align-items: center; justify-content: space-between; gap: 20rpx; }
+.booking-summary__arrow { font-size: 38rpx; line-height: 1; }
+.booking-summary__retry { width: 100%; min-height: 88rpx; margin-top: 16rpx; border-radius: 22rpx; background: #eef2ff; color: #3730a3; font-size: 24rpx; font-weight: 900; }
+.booking-summary__retry::after { border: none; }
 .logout { width: 100%; min-height: 88rpx; border-radius: 24rpx; background: transparent; border: 2rpx solid #fecaca; color: #b91c1c; font-size: 26rpx; font-weight: 800; }
 .logout::after { border: none; }
 @media (max-width: 360px) {
-  .profile-hero, .profile-edit, .history-section { padding-left: 26rpx; padding-right: 26rpx; }
+  .profile-hero, .history-section, .booking-summary { padding-left: 26rpx; padding-right: 26rpx; }
 }
 </style>

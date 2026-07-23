@@ -868,9 +868,26 @@ assert.doesNotMatch(profileEditPage, /setStorageSync|saveProfileDraft|loadProfil
 assert.match(pageStyleDeclarations(profileEditStyle, '.profile-edit-hero'), /linear-gradient\(145deg,\s*#172554,\s*#4338ca 56%,\s*#7c3aed\)/, 'personal profile hero should reuse the approved blue-purple palette')
 assert.match(pageStyleDeclarations(profileEditStyle, '.profile-save'), /min-height:\s*88rpx\s*;/, 'personal profile save should keep an 88rpx touch target')
 
-assert.match(profilePage, /wechatLoginReady/, 'profile page should expose a WeChat login integration slot')
-assert.match(profilePage, /open-type="chooseAvatar"/, 'profile page should keep WeChat avatar slot')
-assert.match(profilePage, /type="nickname"/, 'profile page should keep WeChat nickname slot')
+assert.doesNotMatch(profilePage, /wechatLoginReady/, 'profile overview should leave WeChat capability guidance to the dedicated profile page')
+assert.doesNotMatch(profilePage, /open-type="chooseAvatar"/, 'profile overview should leave avatar selection to the dedicated profile page')
+assert.doesNotMatch(profilePage, /type="nickname"/, 'profile overview should leave nickname editing to the dedicated profile page')
+for (const removedProfileOverviewSymbol of [
+  'normalizeWechatProfile',
+  'hasProfilePayload',
+  'getWechatProfilePayload',
+  'updateUserInfoApi',
+  'profileSaving',
+  'nicknameDraft',
+  'avatarDraft',
+  'draftAvatarFailed',
+  'syncDraftFromUser',
+  'syncWechatProfile',
+  'saveProfile',
+  'onChooseAvatar',
+  'onNicknameInput',
+]) {
+  assert.doesNotMatch(profilePage, new RegExp(`\\b${removedProfileOverviewSymbol}\\b`), `profile overview should not retain ${removedProfileOverviewSymbol}`)
+}
 assert.doesNotMatch(profilePage, /open-type="getPhoneNumber"/, '未接通后端前，手机号授权入口不能对用户露出')
 assert.doesNotMatch(profilePage, /@getphonenumber="onGetPhoneNumber"/, '未接通后端前，不应绑定可见手机号授权占位事件')
 assert.match(profilePage, /#ifdef H5[\s\S]*请在微信小程序内登录[\s\S]*#endif/, 'H5 profile login entry should be a disabled miniapp guidance instead of a failing WeChat login CTA')
@@ -885,25 +902,55 @@ assert.match(profilePage, /const bookingCount = computed\(\(\) => bookings\.valu
 assert.match(profilePage, /const recordCountLabel = computed\(\(\) => profileLoading\.value \|\| recordsError\.value \? ['"]—['"] : String\(recordCount\.value\)\)/, 'profile record count should stay unknown while loading or failed')
 assert.match(profilePage, /const bookingCountLabel = computed\(\(\) => profileLoading\.value \|\| bookingsError\.value \? ['"]—['"] : String\(bookingCount\.value\)\)/, 'profile booking count should stay unknown while loading or failed')
 assert.ok((profileTemplate.match(/class=["'][^"']*profile-stat(?:\s|["'])/g) || []).length >= 3, 'profile hero should present three growth statistics')
-assert.match(profileTemplate, /class=["'][^"']*history-timeline[^"']*["']/, 'profile histories should use a timeline')
+assert.match(profileTemplate, /class=["'][^"']*history-timeline[^"']*["']/, 'profile test history should use a timeline')
 assert.match(profileTemplate, /class=["'][^"']*history-item[^"']*["']/, 'profile timeline should expose structured items')
 assert.match(profileTemplate, /class=["'][^"']*history-item__dot[^"']*["']/, 'profile timeline should expose a visible dot')
 assert.match(profileTemplate, /class=["'][^"']*history-item__body[^"']*["']/, 'profile timeline should keep content separate from its dot')
 assert.match(profilePage, /const userAvatarFailed = ref\(false\)/, 'profile should track user avatar failures')
-assert.match(profilePage, /const draftAvatarFailed = ref\(false\)/, 'profile should track draft avatar failures')
 assert.match(profilePage, /function onUserAvatarError\(\)\s*\{\s*userAvatarFailed\.value = true\s*\}/, 'profile should replace failed user avatars')
-assert.match(profilePage, /function onDraftAvatarError\(\)\s*\{\s*draftAvatarFailed\.value = true\s*\}/, 'profile should replace failed draft avatars')
 assert.doesNotMatch(profilePage, /管理档案/, 'profile must not invent an unsupported archive-management action')
 assert.match(profileTemplate, /记录每一次自我看见/, 'profile hero should lead with the approved growth message')
-assert.match(profileTemplate, /class=["'][^"']*profile-edit[^"']*nx-panel[^"']*["']/, 'profile editing should use the shared panel surface')
-assert.ok((profileTemplate.match(/class=["'][^"']*history-section[^"']*nx-panel[^"']*["']/g) || []).length >= 2, 'both history sections should use shared panel surfaces')
+assert.doesNotMatch(profileTemplate, /class=["'][^"']*profile-edit[^"']*nx-panel[^"']*["']/, 'profile overview should not duplicate the dedicated profile editor')
+assert.match(profileTemplate, /class=["'][^"']*history-section[^"']*nx-panel[^"']*["']/, 'test history should use a shared panel surface')
+assert.match(profileTemplate, /class=["'][^"']*booking-summary[^"']*nx-panel[^"']*["']/, 'appointment summary should use a non-interactive shared panel shell')
+assert.match(profileTemplate, /<view class=["']history-section nx-panel ios-card["']>\s*<view class=["']section-head["']>[\s\S]*?<text class=["']sec-title["']>我的测试历史<\/text>/, 'test history content should belong to the history panel')
+assert.match(profileTemplate, /<view class=["']booking-summary nx-panel ios-card["']>\s*<view class=["']section-head["']>[\s\S]*?<text class=["']sec-title["']>我的预约<\/text>/, 'appointment content should belong to the booking summary shell')
 assert.match(profileTemplate, /v-if=["']profileLoading["'][\s\S]*v-else-if=["']recordsError["'][\s\S]*v-else-if=["']records\.length === 0["'][\s\S]*v-else class=["']history-timeline["']/, 'profile records should keep loading, error, empty, and timeline precedence')
-assert.match(profileTemplate, /v-if=["']profileLoading["'][\s\S]*v-else-if=["']bookingsError["'][\s\S]*v-else-if=["']bookings\.length === 0["'][\s\S]*v-else class=["']history-timeline["']/, 'profile bookings should keep loading, error, empty, and timeline precedence')
+
+const profileViews = openingTagsFor(profileTemplate, 'view')
+const profileIdentityActions = profileViews.filter((tag) => staticClassTokens(tag).includes('profile-hero__identity-action'))
+assert.equal(profileIdentityActions.length, 1, 'logged profile hero should expose one dedicated identity action')
+assert.match(profileIdentityActions[0], /\saria-label=["']编辑个人资料["']/, 'profile identity action should describe its destination')
+assert.match(profileIdentityActions[0], /\s@click=["']openProfileEdit["']/, 'profile identity action should bind profile navigation')
+assert.match(profileIdentityActions[0], /\shover-class=["']profile-hero__identity-action--pressed["']/, 'profile identity action should expose pressed feedback')
+assertKeyboardViewControl(profileIdentityActions[0], 'profile identity action', 'openProfileEdit')
+
+const profileEditOpenBody = sourceBracedBody(profilePage, /function\s+openProfileEdit\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
+assert.match(profileEditOpenBody, /uni\.navigateTo\s*\(\s*\{\s*url:\s*["']\/pages\/profile-edit\/profile-edit["']\s*\}\s*\)/, 'profile identity action should navigate to the dedicated profile page')
+
+const bookingSummaryShells = profileViews.filter((tag) => staticClassTokens(tag).includes('booking-summary'))
+assert.equal(bookingSummaryShells.length, 1, 'profile should render one appointment summary shell')
+for (const interactiveAttribute of ['role', 'aria-role', 'tabindex', '@click', '@keydown.enter', '@keydown.space.prevent']) {
+  assert.equal(tagAttribute(bookingSummaryShells[0], interactiveAttribute), undefined, `appointment summary shell should not own ${interactiveAttribute}`)
+}
+const bookingSummaryOpenTags = profileViews.filter((tag) => staticClassTokens(tag).includes('booking-summary__open'))
+assert.equal(bookingSummaryOpenTags.length, 1, 'appointment summary should expose one independent navigation body in every async state')
+assert.match(bookingSummaryOpenTags[0], /\saria-label=["']查看全部预约记录["']/, 'appointment summary action should describe its destination')
+assert.match(bookingSummaryOpenTags[0], /\s@click=["']openBookingRecords["']/, 'appointment summary action should bind records navigation')
+assert.match(bookingSummaryOpenTags[0], /\shover-class=["']booking-summary__open--pressed["']/, 'appointment summary action should expose pressed feedback')
+assertKeyboardViewControl(bookingSummaryOpenTags[0], 'appointment summary action', 'openBookingRecords')
+assert.match(profileTemplate, /class=["']booking-summary__open["'][\s\S]*v-if=["']profileLoading["'][\s\S]*v-else-if=["']bookingsError["'][\s\S]*v-else-if=["']!latestBooking["'][\s\S]*v-else/, 'appointment navigation body should remain present around loading, error, empty, and summary states')
+assert.match(profileTemplate, /<button\s+v-if=["']bookingsError["']\s+class=["'][^"']*booking-summary__retry[^"']*["'][^>]*tabindex=["']0["'][^>]*@click\.stop=["']loadAll["'][^>]*>重试<\/button>/, 'appointment retry should be an independently focusable native sibling button that only reloads')
+
+assert.match(profilePage, /const latestBooking = computed\(\(\) => bookings\.value\[0\] \|\| null\)/, 'profile appointment summary should use the first API item as the latest record')
+assert.doesNotMatch(profilePage, /bookings\.value[^\n]*\.sort\s*\(|visibleBookings|hiddenBookingCount/, 'profile appointment summary should preserve API order and avoid a local preview list')
+const bookingRecordsOpenBody = sourceBracedBody(profilePage, /function\s+openBookingRecords\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
+assert.match(bookingRecordsOpenBody, /uni\.navigateTo\s*\(\s*\{\s*url:\s*["']\/pages\/booking-records\/booking-records["']\s*\}\s*\)/, 'profile appointment action should navigate to appointment records')
 const h5ProfileLogin = profilePage.match(/<!-- #ifdef H5 -->([\s\S]*?)<!-- #endif -->/)?.[1] || ''
 assert.match(h5ProfileLogin, /<button\b[^>]*\bdisabled\b[^>]*>请在微信小程序内登录<\/button>/, 'H5 profile login guidance should remain disabled')
 assert.doesNotMatch(h5ProfileLogin, /@click=["']login["']/, 'H5 profile guidance must not call WeChat login')
 const profileLoadAllBody = sourceBracedBody(profilePage, /async function\s+loadAll\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
-assert.match(profileLoadAllBody, /const loadedUser = await getUserInfoApi\(\)\s*if \(ticket !== loadTicket\) return\s*user\.value = loadedUser\s*syncDraftFromUser\(\)/, 'profile load should reject a stale user response before mutating session state')
+assert.match(profileLoadAllBody, /const loadedUser = await getUserInfoApi\(\)\s*if \(ticket !== loadTicket\) return\s*user\.value = loadedUser/, 'profile load should reject a stale user response before mutating session state')
 assert.match(profileLoadAllBody, /Promise\.allSettled\([\s\S]*?\)\s*if \(ticket !== loadTicket\) return\s*if \(rec\.status/, 'profile load should reject stale history responses before mutating lists')
 assert.match(profilePage, /let sessionGeneration = 0/, 'profile should maintain an independent authentication generation')
 const profileLoginBody = sourceBracedBody(profilePage, /async function\s+login\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
@@ -911,14 +958,7 @@ assert.match(profileLoginBody, /await ensureLogin\(\)\s*sessionGeneration \+= 1\
 assert.match(profileLoginBody, /catch \(e\) \{\s*if \(generation !== sessionGeneration\) return[\s\S]*\}\s*finally \{\s*if \(generation === sessionGeneration\) logging\.value = false/, 'profile login should suppress stale errors and protect newer login state')
 const profileResetBody = sourceBracedBody(profilePage, /function\s+resetLogin\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
 assert.match(profileResetBody, /^\s*sessionGeneration \+= 1/, 'profile reset should invalidate in-flight session work before clearing state')
-assert.match(profileResetBody, /profileSaving\.value = false/, 'profile reset should clear session-scoped saving state')
-const profileSyncBody = sourceBracedBody(profilePage, /async function\s+syncWechatProfile\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
-assert.match(profileSyncBody, /const generation = sessionGeneration[\s\S]*await getWechatProfilePayload\(\)\s*if \(!logged\.value \|\| generation !== sessionGeneration\) return/, 'profile sync should guard the profile-payload await boundary')
-assert.match(profileSyncBody, /const updatedUser = await updateUserInfoApi\(payload\)\s*if \(!logged\.value \|\| generation !== sessionGeneration\) return\s*user\.value = updatedUser/, 'profile sync should guard its update response before writing user state')
-assert.match(profileSyncBody, /catch\s*\{\s*if \(!logged\.value \|\| generation !== sessionGeneration\) return[\s\S]*\}\s*finally\s*\{\s*if \(generation === sessionGeneration\) profileSaving\.value = false/, 'profile sync should suppress stale errors and protect newer saving state')
-const profileSaveBody = sourceBracedBody(profilePage, /async function\s+saveProfile\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
-assert.match(profileSaveBody, /const generation = sessionGeneration[\s\S]*const updatedUser = await updateUserInfoApi\(payload\)\s*if \(!logged\.value \|\| generation !== sessionGeneration\) return\s*user\.value = updatedUser/, 'profile save should guard its update response before writing user state')
-assert.match(profileSaveBody, /catch\s*\{\s*if \(!logged\.value \|\| generation !== sessionGeneration\) return[\s\S]*\}\s*finally\s*\{\s*if \(generation === sessionGeneration\) profileSaving\.value = false/, 'profile save should suppress stale errors and protect newer saving state')
+assert.match(profileResetBody, /clearBookingSession\(\)/, 'profile reset and logout should clear token-bound appointment detail state')
 assert.match(profilePage, /const recordCountLabel = computed\(\(\) => profileLoading\.value \|\| recordsError\.value \? ['"]—['"] : String\(recordCount\.value\)\)/, 'failed record counts should stay unknown instead of showing zero')
 assert.match(profilePage, /const bookingCountLabel = computed\(\(\) => profileLoading\.value \|\| bookingsError\.value \? ['"]—['"] : String\(bookingCount\.value\)\)/, 'failed booking counts should stay unknown instead of showing zero')
 
@@ -930,7 +970,12 @@ assert.match(pageStyleDeclarations(profileStyle, '.profile-stat__value'), /font-
 assert.match(pageStyleDeclarations(profileStyle, '.history-item'), /min-height:\s*88rpx\s*;/, 'profile history rows should keep a stable touch-friendly rhythm')
 assert.match(pageStyleDeclarations(profileStyle, '.history-item__dot'), /width:\s*16rpx\s*;[\s\S]*height:\s*16rpx\s*;/, 'profile timeline dots should use the approved fixed size')
 assert.match(pageStyleDeclarations(profileStyle, '.logout'), /min-height:\s*88rpx\s*;/, 'profile logout should keep an 88rpx touch target')
-for (const selector of ['.profile-hero__eyebrow', '.profile-hero__lead', '.profile-stat__label', '.wechat-slot__desc', '.history-item__meta', '.more-tip']) {
+for (const selector of ['.profile-hero__identity-action', '.booking-summary__open']) {
+  assert.match(pageStyleDeclarations(profileStyle, selector), /min-height:\s*88rpx\s*;/, `${selector} should keep an 88rpx touch target`)
+  assert.match(profileStyle, new RegExp(`${selector.replace('.', '\\.')}--pressed\\s*\\{[^}]*(?:opacity|transform)`), `${selector} should expose visible pressed feedback`)
+  assert.match(profileStyle, new RegExp(`${selector.replace('.', '\\.')}:focus-visible\\s*\\{[^}]*(?:outline|box-shadow)`), `${selector} should expose a visible focus state`)
+}
+for (const selector of ['.profile-hero__eyebrow', '.profile-hero__lead', '.profile-stat__label', '.history-item__meta', '.more-tip']) {
   const fontSize = pageStyleDeclarations(profileStyle, selector)?.match(/font-size:\s*(\d+)rpx\s*;/)
   assert.ok(fontSize && Number(fontSize[1]) >= 24, `${selector} should keep at least 24rpx readable text`)
 }
@@ -981,7 +1026,7 @@ for (const tag of bookingRecordOpenTags) {
 }
 assert.match(
   bookingRecordsPage,
-  /uni\.navigateTo\s*\(\s*\{\s*url:\s*`\/pages\/booking-detail\/booking-detail\?id=\$\{[^}]+\}`\s*\}\s*\)/,
+  /uni\.navigateTo\s*\(\s*\{\s*url:\s*`\/pages\/booking-detail\/booking-detail\?id=\$\{[^}]+\}`[\s\S]*?\}\s*\)/,
   'appointment navigation should include the selected booking ID in the detail URL',
 )
 
@@ -1029,6 +1074,11 @@ assert.match(bookingRecordsPage, /statusCode\s*===\s*401[\s\S]*statusCode\s*===\
 assert.match(bookingRecordsPage, /onUnload/, 'appointment records should invalidate loads and clear session on unload')
 assert.match(bookingRecordsPage, /\.booking-record__open:focus-visible[\s\S]*(?:outline|box-shadow)/, 'appointment navigation should expose a visible focus state')
 assert.match(bookingRecordsPage, /\.booking-record__open\s*\{[\s\S]*min-height:\s*88rpx/, 'appointment navigation should keep an 88rpx touch target')
+for (const selector of ['.booking-record__status', '.booking-record__meta']) {
+  const fontSize = pageStyleDeclarations(stripMarkupAndCssComments(vueSection(bookingRecordsPage, 'style') || ''), selector)?.match(/font-size:\s*(\d+)rpx\s*;/)
+  assert.ok(fontSize && Number(fontSize[1]) >= 24, `${selector} should keep at least 24rpx readable text`)
+}
+assert.match(openBookingBody, /uni\.navigateTo\s*\(\s*\{[\s\S]*fail\s*\([^)]*\)\s*\{[\s\S]*clearBookingSession\(\)/, 'appointment detail navigation failure should clear the token-bound record session')
 
 const bookingDetailPath = 'src/pages/booking-detail/booking-detail.vue'
 assert.ok(statSync(bookingDetailPath, { throwIfNoEntry: false })?.isFile(), 'appointment detail page should exist')
