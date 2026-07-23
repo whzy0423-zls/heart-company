@@ -76,8 +76,8 @@ func TestDeliveryContextUsesConfirmedAssistantTextOnly(t *testing.T) {
 	if len(recent) != 2 || recent[0].Content != "我今天很难过" || recent[1].Content != "已播放部分" {
 		t.Fatalf("recent context=%+v", recent)
 	}
-	if len(after) != 1 || after[0].Content != "我今天很难过" {
-		t.Fatalf("safe incremental context=%+v", after)
+	if len(after) != 2 || after[0].Content != "我今天很难过" || after[1].Content != "已播放部分" {
+		t.Fatalf("incremental context=%+v", after)
 	}
 }
 
@@ -110,8 +110,8 @@ func TestDeliveryContextStopsBeforeMutableAssistantUntilLatePlayed(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(before) != 1 || before[0].ID != firstID {
-		t.Fatalf("mutable assistant must stop safe incremental read, got %+v", before)
+	if len(before) != 27 || before[0].ID != firstID || before[1].ID != mutableID || before[1].Content != "迟到确认" {
+		t.Fatalf("current context must retain messages around mutable assistant, got %+v", before)
 	}
 	if updated, err := store.UpdateConversationSummary(context.Background(), voice.ID, 0, "不安全摘要", lastID); err != nil || updated {
 		t.Fatalf("unsafe watermark updated=%v err=%v", updated, err)
@@ -129,6 +129,62 @@ func TestDeliveryContextStopsBeforeMutableAssistantUntilLatePlayed(t *testing.T)
 	}
 	if updated, err := store.UpdateConversationSummary(context.Background(), voice.ID, 0, "安全摘要", lastID); err != nil || !updated {
 		t.Fatalf("safe watermark updated=%v err=%v", updated, err)
+	}
+}
+
+func TestDeliveryContextKeepsMessagesAfterPermanentlyUnconfirmedAssistant(t *testing.T) {
+	database, userID, cardID, cleanup := openChatSceneFixture(t)
+	defer cleanup()
+	store := NewStore(database)
+	voice, err := store.GetOrCreateSceneSession(context.Background(), userID, cardID, "xinzhili_voice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO app_chat_messages(session_id, role, content) VALUES ($1,'user','屏障前用户消息')`, voice.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO app_chat_messages(session_id, role, content, delivery_status, delivered_text, xinzhili_mode) VALUES ($1,'assistant','永久未确认回答','unconfirmed','','normal')`, voice.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO app_chat_messages(session_id, role, content) VALUES ($1,'user','屏障后用户消息')`, voice.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO app_chat_messages(session_id, role, content, delivery_status, delivered_text, xinzhili_mode) VALUES ($1,'assistant','屏障后完整回答','played','屏障后完整回答','normal')`, voice.ID); err != nil {
+		t.Fatal(err)
+	}
+	var lastID int64
+	if err := database.QueryRow(`SELECT max(id) FROM app_chat_messages WHERE session_id=$1`, voice.ID).Scan(&lastID); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := store.ListMessagesAfter(context.Background(), voice.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 4 || messages[1].Content != "" || messages[2].Content != "屏障后用户消息" || messages[3].Content != "屏障后完整回答" {
+		t.Fatalf("current context must keep messages after mutable assistant: %+v", messages)
+	}
+	if updated, err := store.UpdateConversationSummary(context.Background(), voice.ID, 0, "不可越过", lastID); err != nil || updated {
+		t.Fatalf("watermark crossed unconfirmed updated=%v err=%v", updated, err)
+	}
+}
+
+func TestDeliverySummaryWatermarkCannotMoveBackward(t *testing.T) {
+	database, userID, cardID, cleanup := openChatSceneFixture(t)
+	defer cleanup()
+	session, err := NewStore(database).GetOrCreateSession(context.Background(), userID, cardID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE app_chat_sessions SET context_summary='原摘要', context_summary_through_message_id=5 WHERE id=$1`, session.ID); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := NewStore(database).UpdateConversationSummary(context.Background(), session.ID, 5, "倒退摘要", 4)
+	if err != nil || updated {
+		t.Fatalf("backward watermark updated=%v err=%v", updated, err)
+	}
+	state, err := NewStore(database).GetConversationState(context.Background(), session.ID)
+	if err != nil || state.Summary != "原摘要" || state.SummaryThroughMessageID != 5 {
+		t.Fatalf("state changed after backward watermark: %+v err=%v", state, err)
 	}
 }
 

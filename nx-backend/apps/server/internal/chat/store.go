@@ -257,13 +257,6 @@ func (s *Store) ListMessagesAfter(ctx context.Context, sessionID, afterMessageID
 		 JOIN (SELECT id AS scene_session_id, scene FROM ONLY app_chat_sessions) s
 		   ON s.scene_session_id = m.session_id
 		 WHERE session_id = $1 AND id > $2
-		   AND (s.scene <> 'xinzhili_voice' OR m.id < COALESCE((
-		     SELECT min(blocked.id)
-		     FROM app_chat_messages blocked
-		     WHERE blocked.session_id = m.session_id AND blocked.id > $2
-		       AND blocked.role = 'assistant'
-		       AND blocked.delivery_status IN ('generated','synthesizing','sent','unconfirmed')
-		   ), 9223372036854775807))
 		 ORDER BY id`,
 		sessionID, afterMessageID)
 	if err != nil {
@@ -286,7 +279,7 @@ func (s *Store) UpdateConversationSummary(ctx context.Context, sessionID, expect
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE app_chat_sessions
 		 SET context_summary = $2, context_summary_through_message_id = $3
-		 WHERE id = $1 AND context_summary_through_message_id = $4
+		 WHERE id = $1 AND context_summary_through_message_id = $4 AND $3 > $4
 		   AND (scene <> 'xinzhili_voice' OR NOT EXISTS (
 		     SELECT 1 FROM app_chat_messages m
 		     WHERE m.session_id = app_chat_sessions.id
