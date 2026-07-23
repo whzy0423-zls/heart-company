@@ -275,13 +275,36 @@ func seedRoles(ctx context.Context, database *sql.DB) error {
 
 // seedCustomerMiniappMenuBindings 为升级前已有客户只读权限的角色补齐小程序客户菜单。
 func seedCustomerMiniappMenuBindings(ctx context.Context, database *sql.DB) error {
-	_, err := database.ExecContext(ctx,
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const migrationKey = "seed.customer_miniapp_menu_bindings.v1"
+	var insertedKey string
+	err = tx.QueryRowContext(ctx,
+		`INSERT INTO migration_logs (key, detail)
+		 VALUES ($1, '{"description":"为已有客户只读角色补齐小程序客户菜单"}'::jsonb)
+		 ON CONFLICT (key) DO NOTHING
+		 RETURNING key`, migrationKey,
+	).Scan(&insertedKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return tx.Rollback()
+	}
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO role_menus (role_id, menu_id)
 		 SELECT DISTINCT role_id, 511
 		   FROM role_menus
 		  WHERE menu_id IN (501,502,504,505,507,508)
-		 ON CONFLICT (role_id, menu_id) DO NOTHING`)
-	return err
+		 ON CONFLICT (role_id, menu_id) DO NOTHING`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // seedMindQuotes 仅当 mind_quotes 为空时，导入默认分组与 PDF 提炼的 27 条心语。
