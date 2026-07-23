@@ -163,6 +163,7 @@ function openBookingRecords() {
             <text class="user__type" v-if="user && user.mainType">{{ typeName(user.mainType) }}</text>
             <text class="user__type" v-else>已通过微信登录</text>
           </view>
+          <text class="profile-hero__identity-arrow" aria-hidden="true">›</text>
         </view>
         <text class="profile-hero__title">记录每一次自我看见</text>
         <text class="profile-hero__lead">你的成长轨迹，正在每一次探索中变得更清晰。</text>
@@ -227,21 +228,23 @@ function openBookingRecords() {
           @keydown.enter="openBookingRecords"
           @keydown.space.prevent="openBookingRecords"
         >
-          <view v-if="profileLoading" class="booking-summary__state">
-            <text class="booking-summary__main">正在同步预约记录…</text>
-            <text class="booking-summary__meta">进入列表查看完整安排</text>
-          </view>
-          <view v-else-if="bookingsError" class="booking-summary__state">
-            <text class="booking-summary__main">预约记录暂时无法同步</text>
-            <text class="booking-summary__meta">{{ bookingsError }}</text>
-          </view>
-          <view v-else-if="!latestBooking" class="booking-summary__state">
-            <text class="booking-summary__main">暂无预约</text>
-            <text class="booking-summary__meta">进入列表页可以去提交新预约</text>
-          </view>
-          <view v-else class="booking-summary__state">
-            <text class="booking-summary__main">{{ latestBooking.intent || latestBooking.kind }}</text>
-            <text class="booking-summary__meta">{{ latestBooking.status }} · {{ latestBooking.createTime }}</text>
+          <view class="booking-summary__status" aria-live="polite">
+            <view v-if="profileLoading" class="booking-summary__state">
+              <text class="booking-summary__main">正在同步预约记录…</text>
+              <text class="booking-summary__meta">进入列表查看完整安排</text>
+            </view>
+            <view v-else-if="bookingsError" class="booking-summary__state">
+              <text class="booking-summary__main">预约记录暂时无法同步</text>
+              <text class="booking-summary__meta">{{ bookingsError }}</text>
+            </view>
+            <view v-else-if="!latestBooking" class="booking-summary__state">
+              <text class="booking-summary__main">暂无预约</text>
+              <text class="booking-summary__meta">进入列表页可以去提交新预约</text>
+            </view>
+            <view v-else class="booking-summary__state">
+              <text class="booking-summary__main">{{ latestBooking.intent || latestBooking.kind }}</text>
+              <text class="booking-summary__meta">{{ latestBooking.status }} · {{ latestBooking.createTime }}</text>
+            </view>
           </view>
           <view class="booking-summary__footer">
             <text>查看全部预约</text>
@@ -270,6 +273,7 @@ function openBookingRecords() {
 .profile-hero__identity-action { min-height: 88rpx; display: flex; align-items: center; gap: 22rpx; border-radius: 24rpx; cursor: pointer; }
 .profile-hero__identity-action--pressed { opacity: .76; transform: scale(.992); }
 .profile-hero__identity-action:focus-visible { outline: 4rpx solid rgba(255, 255, 255, .82); outline-offset: 6rpx; }
+.profile-hero__identity-arrow { flex: none; color: #ddd6fe; font-size: 40rpx; line-height: 1; }
 .profile-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12rpx; margin-top: 30rpx; }
 .profile-stat { min-width: 0; padding: 20rpx 10rpx; border-radius: 22rpx; background: rgba(255, 255, 255, .14); border: 2rpx solid rgba(255, 255, 255, .16); text-align: center; }
 .profile-stat__value { display: block; color: #ffffff; font-size: 34rpx; font-weight: 900; line-height: 1.2; font-variant-numeric: tabular-nums; }

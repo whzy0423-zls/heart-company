@@ -924,6 +924,10 @@ assert.match(profileIdentityActions[0], /\saria-label=["']编辑个人资料["']
 assert.match(profileIdentityActions[0], /\s@click=["']openProfileEdit["']/, 'profile identity action should bind profile navigation')
 assert.match(profileIdentityActions[0], /\shover-class=["']profile-hero__identity-action--pressed["']/, 'profile identity action should expose pressed feedback')
 assertKeyboardViewControl(profileIdentityActions[0], 'profile identity action', 'openProfileEdit')
+const profileIdentityActionStart = profileTemplate.indexOf(profileIdentityActions[0])
+const profileIdentityActionEnd = profileTemplate.indexOf('<text class="profile-hero__title">', profileIdentityActionStart)
+const profileIdentityActionContent = profileTemplate.slice(profileIdentityActionStart, profileIdentityActionEnd)
+assert.match(profileIdentityActionContent, /<text\s+class=["']profile-hero__identity-arrow["']\s+aria-hidden=["']true["']>›<\/text>/, 'profile identity action should include a decorative hidden right arrow')
 
 const profileEditOpenBody = sourceBracedBody(profilePage, /function\s+openProfileEdit\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
 assert.match(profileEditOpenBody, /uni\.navigateTo\s*\(\s*\{\s*url:\s*["']\/pages\/profile-edit\/profile-edit["']\s*\}\s*\)/, 'profile identity action should navigate to the dedicated profile page')
@@ -939,6 +943,9 @@ assert.match(bookingSummaryOpenTags[0], /\saria-label=["']查看全部预约记�
 assert.match(bookingSummaryOpenTags[0], /\s@click=["']openBookingRecords["']/, 'appointment summary action should bind records navigation')
 assert.match(bookingSummaryOpenTags[0], /\shover-class=["']booking-summary__open--pressed["']/, 'appointment summary action should expose pressed feedback')
 assertKeyboardViewControl(bookingSummaryOpenTags[0], 'appointment summary action', 'openBookingRecords')
+const bookingSummaryStatusTags = profileViews.filter((tag) => staticClassTokens(tag).includes('booking-summary__status'))
+assert.equal(bookingSummaryStatusTags.length, 1, 'appointment summary should expose one stable asynchronous status container')
+assert.equal(tagAttribute(bookingSummaryStatusTags[0], 'aria-live'), 'polite', 'appointment summary status changes should be announced politely')
 assert.match(profileTemplate, /class=["']booking-summary__open["'][\s\S]*v-if=["']profileLoading["'][\s\S]*v-else-if=["']bookingsError["'][\s\S]*v-else-if=["']!latestBooking["'][\s\S]*v-else/, 'appointment navigation body should remain present around loading, error, empty, and summary states')
 assert.match(profileTemplate, /<button\s+v-if=["']bookingsError["']\s+class=["'][^"']*booking-summary__retry[^"']*["'][^>]*tabindex=["']0["'][^>]*@click\.stop=["']loadAll["'][^>]*>重试<\/button>/, 'appointment retry should be an independently focusable native sibling button that only reloads')
 
