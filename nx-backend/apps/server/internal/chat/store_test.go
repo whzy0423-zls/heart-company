@@ -73,10 +73,62 @@ func TestDeliveryContextUsesConfirmedAssistantTextOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, messages := range map[string][]Message{"recent": recent, "after": after} {
-		if len(messages) != 2 || messages[0].Content != "我今天很难过" || messages[1].Content != "已播放部分" {
-			t.Fatalf("%s context=%+v", name, messages)
+	if len(recent) != 2 || recent[0].Content != "我今天很难过" || recent[1].Content != "已播放部分" {
+		t.Fatalf("recent context=%+v", recent)
+	}
+	if len(after) != 1 || after[0].Content != "我今天很难过" {
+		t.Fatalf("safe incremental context=%+v", after)
+	}
+}
+
+func TestDeliveryContextStopsBeforeMutableAssistantUntilLatePlayed(t *testing.T) {
+	database, userID, cardID, cleanup := openChatSceneFixture(t)
+	defer cleanup()
+	store := NewStore(database)
+	voice, err := store.GetOrCreateSceneSession(context.Background(), userID, cardID, "xinzhili_voice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firstID, mutableID int64
+	if err := database.QueryRow(`INSERT INTO app_chat_messages(session_id, role, content) VALUES ($1,'user','第一条') RETURNING id`, voice.ID).Scan(&firstID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`INSERT INTO app_chat_messages(session_id, role, content, delivery_status, delivered_text, xinzhili_mode) VALUES ($1,'assistant','迟到确认的完整回答','unconfirmed','迟到确认','normal') RETURNING id`, voice.ID).Scan(&mutableID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 25; i++ {
+		if _, err := database.Exec(`INSERT INTO app_chat_messages(session_id, role, content) VALUES ($1,'user',$2)`, voice.ID, fmt.Sprintf("后续消息%d", i+1)); err != nil {
+			t.Fatal(err)
 		}
+	}
+	var lastID int64
+	if err := database.QueryRow(`SELECT max(id) FROM app_chat_messages WHERE session_id=$1`, voice.ID).Scan(&lastID); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := store.ListMessagesAfter(context.Background(), voice.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 1 || before[0].ID != firstID {
+		t.Fatalf("mutable assistant must stop safe incremental read, got %+v", before)
+	}
+	if updated, err := store.UpdateConversationSummary(context.Background(), voice.ID, 0, "不安全摘要", lastID); err != nil || updated {
+		t.Fatalf("unsafe watermark updated=%v err=%v", updated, err)
+	}
+
+	if _, err := database.Exec(`UPDATE app_chat_messages SET delivery_status='played', delivered_text=content WHERE id=$1`, mutableID); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.ListMessagesAfter(context.Background(), voice.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 27 || after[1].ID != mutableID || after[1].Content != "迟到确认的完整回答" {
+		t.Fatalf("late played answer must return on next incremental read, got len=%d messages=%+v", len(after), after)
+	}
+	if updated, err := store.UpdateConversationSummary(context.Background(), voice.ID, 0, "安全摘要", lastID); err != nil || !updated {
+		t.Fatalf("safe watermark updated=%v err=%v", updated, err)
 	}
 }
 

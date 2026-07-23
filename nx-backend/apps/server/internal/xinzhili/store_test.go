@@ -220,7 +220,7 @@ func TestDeliveryConcurrentDuplicateAckIsIdempotent(t *testing.T) {
 }
 
 func TestDeliveryOnlySentMayAdvanceTextWithoutChangingStatus(t *testing.T) {
-	for _, status := range []DeliveryStatus{DeliveryGenerated, DeliverySynthesizing, DeliveryTTSFailed, DeliveryPlayed, DeliveryInterrupted} {
+	for _, status := range []DeliveryStatus{DeliveryGenerated, DeliverySynthesizing, DeliveryTTSFailed, DeliveryInterrupted} {
 		t.Run(string(status), func(t *testing.T) {
 			database, _, sessionID, cleanup := openStoreFixture(t)
 			defer cleanup()
@@ -231,7 +231,7 @@ func TestDeliveryOnlySentMayAdvanceTextWithoutChangingStatus(t *testing.T) {
 				_, _ = store.UpdateDelivery(context.Background(), messageID, DeliverySynthesizing, "")
 			case DeliveryTTSFailed:
 				_, _ = store.UpdateDelivery(context.Background(), messageID, DeliveryTTSFailed, "")
-			case DeliveryPlayed, DeliveryInterrupted:
+			case DeliveryInterrupted:
 				_, _ = store.UpdateDelivery(context.Background(), messageID, DeliverySynthesizing, "")
 				_, _ = store.UpdateDelivery(context.Background(), messageID, DeliverySent, "")
 				_, _ = store.UpdateDelivery(context.Background(), messageID, status, "")
@@ -281,6 +281,39 @@ func TestDeliveryInterruptedCapturesFinalConfirmedPrefixOnce(t *testing.T) {
 	}
 	if _, err := store.UpdateDelivery(context.Background(), messageID, DeliveryInterrupted, "完整回答"); !errors.Is(err, ErrInvalidDeliveryTransition) {
 		t.Fatalf("interrupted terminal growth err=%v", err)
+	}
+}
+
+func TestDeliveryPlayedRequiresCompleteContent(t *testing.T) {
+	for _, fromUnconfirmed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fromUnconfirmed=%v", fromUnconfirmed), func(t *testing.T) {
+			database, _, sessionID, cleanup := openStoreFixture(t)
+			defer cleanup()
+			messageID := insertAssistantDelivery(t, database, sessionID, "完整回答")
+			store := NewStore(database)
+			for _, status := range []DeliveryStatus{DeliverySynthesizing, DeliverySent} {
+				if _, err := store.UpdateDelivery(context.Background(), messageID, status, ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := store.UpdateDelivery(context.Background(), messageID, DeliverySent, "完整"); err != nil {
+				t.Fatal(err)
+			}
+			if fromUnconfirmed {
+				if _, err := store.UpdateDelivery(context.Background(), messageID, DeliveryUnconfirmed, "完整"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := store.UpdateDelivery(context.Background(), messageID, DeliveryPlayed, "完整"); !errors.Is(err, ErrInvalidDeliveredText) {
+				t.Fatalf("partial played err=%v", err)
+			}
+			if _, err := store.UpdateDelivery(context.Background(), messageID, DeliveryPlayed, "完整回答"); err != nil {
+				t.Fatalf("complete played: %v", err)
+			}
+			if _, err := store.UpdateDelivery(context.Background(), messageID, DeliveryPlayed, "完整回答"); err != nil {
+				t.Fatalf("duplicate complete played: %v", err)
+			}
+		})
 	}
 }
 

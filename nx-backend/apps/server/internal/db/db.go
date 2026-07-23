@@ -34,7 +34,7 @@ func Open(ctx context.Context, dsn, adminUser, adminPassword string) (*sql.DB, e
 		return nil, err
 	}
 
-	if _, err := database.ExecContext(ctx, schemaSQL); err != nil {
+	if err := migrateSchema(ctx, database); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
@@ -43,6 +43,21 @@ func Open(ctx context.Context, dsn, adminUser, adminPassword string) (*sql.DB, e
 	}
 
 	return database, nil
+}
+
+func migrateSchema(ctx context.Context, database *sql.DB) error {
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('nine-xing:schema-migration', 0))`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func waitReady(ctx context.Context, database *sql.DB) error {

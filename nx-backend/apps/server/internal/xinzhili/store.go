@@ -118,7 +118,7 @@ func (s *Store) UpdateDelivery(ctx context.Context, messageID int64, next Delive
 		 FROM app_chat_messages m
 		 JOIN app_chat_sessions s ON s.id=m.session_id
 		 WHERE m.id=$1 AND m.role='assistant' AND s.scene='xinzhili_voice'
-		 FOR UPDATE`, messageID,
+		 FOR UPDATE OF m`, messageID,
 	).Scan(&currentRaw, &currentText, &content)
 	if errors.Is(err, sql.ErrNoRows) || !currentRaw.Valid {
 		return DeliveryState{}, ErrDeliveryNotFound
@@ -144,6 +144,9 @@ func (s *Store) UpdateDelivery(ctx context.Context, messageID int64, next Delive
 		if textAdvanced && next != DeliveryPlayed && next != DeliveryInterrupted {
 			return DeliveryState{}, ErrInvalidDeliveryTransition
 		}
+	}
+	if next == DeliveryPlayed && deliveredText != content {
+		return DeliveryState{}, ErrInvalidDeliveredText
 	}
 	if current != next || previousText != deliveredText {
 		if _, err := tx.ExecContext(ctx,
