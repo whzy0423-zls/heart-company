@@ -462,6 +462,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app-analytics/overview", s.method(http.MethodGet, s.requirePermission("Analytics:App:Overview", s.appAnalyticsOverview)))
 	s.mux.HandleFunc("/api/game-results/overview", s.method(http.MethodGet, s.requirePermission("Analytics:GameResults", s.gameOverview)))
 	s.mux.HandleFunc("/api/messages/list", s.method(http.MethodGet, s.requirePermission("Message:Manage:List", s.messagesList)))
+	s.mux.HandleFunc("/api/messages/unread-summary", s.method(http.MethodGet, s.requirePermission("Message:Manage:List", s.messagesUnreadSummary)))
 	s.mux.HandleFunc("/api/messages/read", s.method(http.MethodPut, s.requirePermission("Message:Manage:List", s.markMessages)))
 	// 推送管理（admin）
 	s.mux.HandleFunc("/api/push/list", s.method(http.MethodGet, s.requirePermission("Push:Manage", s.adminPushList)))
@@ -1041,6 +1042,56 @@ func (s *Server) messagesList(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, result)
 }
 
+func parseNonNegativeDecimalID(value string) (int64, error) {
+	if value == "" {
+		return 0, nil
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return 0, errors.New("invalid afterId")
+		}
+	}
+	id, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || id < 0 {
+		return 0, errors.New("invalid afterId")
+	}
+	return id, nil
+}
+
+func parseUnreadLimit(value string) (int, error) {
+	if value == "" {
+		return 50, nil
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 1 || n > 100 {
+		return 0, errors.New("invalid limit")
+	}
+	return n, nil
+}
+
+func (s *Server) messagesUnreadSummary(w http.ResponseWriter, r *http.Request) {
+	afterText := strings.TrimSpace(r.URL.Query().Get("afterId"))
+	afterID, err := parseNonNegativeDecimalID(afterText)
+	if err != nil {
+		httpx.Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	limit, err := parseUnreadLimit(strings.TrimSpace(r.URL.Query().Get("limit")))
+	if err != nil {
+		httpx.Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if afterText == "" {
+		afterText = "0"
+	}
+	result, err := s.engagement.UnreadSummary(r.Context(), afterID, afterText, limit)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
 func (s *Server) markMessages(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		IDs  []string `json:"ids"`
@@ -1048,6 +1099,16 @@ func (s *Server) markMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
+		return
+	}
+	for _, id := range body.IDs {
+		if _, err := engagement.ParsePositiveMessageID(id); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if len(body.IDs) == 0 && !body.Read {
+		httpx.Fail(w, http.StatusBadRequest, "empty ids can only mark all read")
 		return
 	}
 	if err := s.engagement.MarkMessages(r.Context(), body.IDs, body.Read); err != nil {
