@@ -88,6 +88,7 @@ type Server struct {
 	miniappService        miniappUserUpserter
 	miniappTestService    miniappTestRecorder
 	miniappBookingService miniappBookingCreator
+	miniappAdmin          miniappAdminReader
 	wx                    *wechat.Client
 	pay                   *wxpay.Client
 	ragGen                rag.Generator
@@ -209,6 +210,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.storyboards = videostoryboard.NewStore(database)
 	s.images = image.NewStore(s.uploads, env.Image, s.uploader)
 	s.miniapp = miniapp.NewStore(database)
+	s.miniappAdmin = miniapp.NewAdminStore(database)
 	miniappService := miniapp.NewService(
 		dbtx.SQLBeginner{DB: database},
 		s.miniapp,
@@ -447,6 +449,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/wx/userinfo", s.requireMiniapp(s.wxUserInfo))
 	s.mux.HandleFunc("/api/miniapp/test-records", s.requireMiniapp(s.miniappTestRecords))
 	s.mux.HandleFunc("/api/miniapp/bookings", s.requireMiniapp(s.miniappBookings))
+	s.mux.HandleFunc("/api/miniapp/users", s.method(http.MethodGet, s.requirePermission("Customer:Miniapp:List", s.miniappUsers)))
+	s.mux.HandleFunc("/api/miniapp/users/", s.method(http.MethodGet, s.requirePermission("Customer:Miniapp:List", s.miniappUserByID)))
 	s.mux.HandleFunc("/api/miniapp/chat", s.method(http.MethodPost, s.requireMiniapp(s.miniappChat)))
 	// 付费解锁：下单（鉴权）→ 微信回调（公开）→ 解锁状态/报告正文（鉴权）
 	s.mux.HandleFunc("/api/miniapp/report/order", s.method(http.MethodPost, s.requireMiniapp(s.createReportOrder)))
