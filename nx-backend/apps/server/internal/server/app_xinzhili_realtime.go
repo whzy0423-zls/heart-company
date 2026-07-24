@@ -27,20 +27,22 @@ var xinzhiliUpgrader = websocket.Upgrader{
 }
 
 type xinzhiliRealtimeConn struct {
-	server        *Server
-	ws            *websocket.Conn
-	userID        int64
-	sink          *xinzhiliWSSink
-	sess          xinzhili.TurnSession
-	mu            sync.Mutex
-	closed        bool
-	sessionID     string
-	configVersion int64
-	requestedMode xinzhili.Mode
-	effectiveMode xinzhili.Mode
-	turnKey       uint64
-	turnMu        sync.Mutex
-	turns         map[uint64]string
+	server         *Server
+	ws             *websocket.Conn
+	userID         int64
+	sink           *xinzhiliWSSink
+	sess           xinzhili.TurnSession
+	mu             sync.Mutex
+	closed         bool
+	sessionID      string
+	configVersion  int64
+	cardID         int64
+	conversationID int64
+	requestedMode  xinzhili.Mode
+	effectiveMode  xinzhili.Mode
+	turnKey        uint64
+	turnMu         sync.Mutex
+	turns          map[uint64]string
 }
 
 type xinzhiliWSSink struct {
@@ -174,6 +176,8 @@ func (c *xinzhiliRealtimeConn) startSession(ctx context.Context, e xinzhili.Enve
 		return
 	}
 	c.sessionID = randomSessionID()
+	c.cardID = p.CardID
+	c.conversationID = p.ConversationID
 	c.requestedMode, c.effectiveMode = xinzhili.ModeNormal, xinzhili.ModeNormal
 	c.mu.Unlock()
 	cfg, found, err := xinzhili.ReadConfig(ctx, c.server.db)
@@ -214,7 +218,10 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 	if !modeEnabled(cfg.EnabledModes, mode) {
 		mode = xinzhili.ModeNormal
 	}
-	in := xinzhili.StartTurnInput{UserID: c.userID, TurnID: *e.TurnID, Mode: mode, ASRConfig: cfg.RealtimeASR, TTSConfig: cfg.TTS, Timing: cfg.Timing, CommonPrompt: cfg.CommonPrompt, ModePrompt: cfg.ModePrompts[mode], KnowledgeTopK: 6, KnowledgeMinScore: 0.2, TheoryTopK: 6, TheoryMinScore: 0.2}
+	c.mu.Lock()
+	cardID, conversationID := c.cardID, c.conversationID
+	c.mu.Unlock()
+	in := xinzhili.StartTurnInput{UserID: c.userID, CardID: cardID, ConversationID: conversationID, TurnID: *e.TurnID, Mode: mode, ASRConfig: cfg.RealtimeASR, TTSConfig: cfg.TTS, Timing: cfg.Timing, CommonPrompt: cfg.CommonPrompt, ModePrompt: cfg.ModePrompts[mode], KnowledgeTopK: 6, KnowledgeMinScore: 0.2, TheoryTopK: 6, TheoryMinScore: 0.2}
 	if err := c.sess.StartTurn(ctx, in); err != nil {
 		c.sendError(ctx, "turn_start_failed", "无法开始当前轮次", true, false)
 		return
