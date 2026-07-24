@@ -125,6 +125,20 @@ assert.deepEqual(
   'API paths should use the API host while local and absolute URLs remain loadable',
 )
 
+const nativeUrl = globalThis.URL
+try {
+  globalThis.URL = undefined
+  assert.deepEqual(
+    normalizeHomeCarousel({
+      home: { miniappCarousel: { items: [{ image: '/api/public/site-assets/63' }] } },
+    }, { apiBase: 'http://127.0.0.1:5320/api' }).items,
+    [{ image: 'http://127.0.0.1:5320/api/public/site-assets/63' }],
+    'API image paths should resolve without relying on the browser URL constructor',
+  )
+} finally {
+  globalThis.URL = nativeUrl
+}
+
 assert.deepEqual(
   normalizeHomeCarousel({
     home: { miniappCarousel: { items: [{ image: '/api/kept-with-null-options.png' }] } },

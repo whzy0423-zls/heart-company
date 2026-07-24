@@ -8,11 +8,8 @@ function resolveImageUrl(image, apiBase) {
   const value = image.trim()
   if (!value || /^https?:\/\//i.test(value) || !value.startsWith('/api/')) return value
 
-  try {
-    return new URL(value, apiBase).origin + value
-  } catch {
-    return value
-  }
+  const origin = String(apiBase || '').trim().match(/^(https?:\/\/[^/]+)/i)?.[1]
+  return origin ? origin + value : value
 }
 
 export function filterFailedCarouselItems(carousel, failedImages = new Set()) {
