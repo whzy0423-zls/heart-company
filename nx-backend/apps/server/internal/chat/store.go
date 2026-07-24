@@ -151,6 +151,145 @@ func (s *Store) GetOrCreateSceneSession(ctx context.Context, appUserID, cardID i
 	return sess, err
 }
 
+// ResolveSceneSession creates/resumes a scene conversation only when all four
+// isolation dimensions match. A non-zero conversationID is never silently
+// replaced by another card's or scene's latest session.
+func (s *Store) ResolveSceneSession(ctx context.Context, appUserID, cardID int64, scene string, conversationID int64) (Session, error) {
+	scene = strings.TrimSpace(scene)
+	if appUserID <= 0 || cardID <= 0 || scene == "" || conversationID < 0 {
+		return Session{}, ErrNotFound
+	}
+	if conversationID == 0 {
+		return s.GetOrCreateSceneSession(ctx, appUserID, cardID, scene)
+	}
+	session, err := scanSession(s.db.QueryRowContext(ctx,
+		`SELECT id, app_user_id, card_id, title, updated_at, create_time
+		 FROM app_chat_sessions
+		 WHERE id=$1 AND app_user_id=$2 AND card_id=$3 AND scene=$4`,
+		conversationID, appUserID, cardID, scene,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Session{}, ErrNotFound
+	}
+	return session, err
+}
+
+// SaveSceneUserText stores only hidden transcript text; no audio asset or
+// public voice message is created for the realtime xinzhili scene.
+func (s *Store) SaveSceneUserText(ctx context.Context, sessionID int64, text, mode string) (int64, error) {
+	text = strings.TrimSpace(text)
+	mode = strings.TrimSpace(mode)
+	if sessionID <= 0 || text == "" || mode == "" {
+		return 0, errors.New("chat: invalid scene user message")
+	}
+	var messageID int64
+	err := s.db.QueryRowContext(ctx,
+		`INSERT INTO app_chat_messages(session_id, role, content, sources, message_type, xinzhili_mode)
+		 SELECT id, 'user', $2, '[]'::jsonb, 'text', $3
+		 FROM app_chat_sessions WHERE id=$1 AND scene='xinzhili_voice'
+		 RETURNING id`, sessionID, text, mode,
+	).Scan(&messageID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	if err == nil {
+		_, err = s.db.ExecContext(ctx, `UPDATE app_chat_sessions SET updated_at=now() WHERE id=$1`, sessionID)
+	}
+	return messageID, err
+}
+
+// CreateSceneAssistant creates the delivery record only after transport has
+// accepted the first playable segment. delivered_text starts empty.
+func (s *Store) CreateSceneAssistant(ctx context.Context, sessionID int64, content, mode string) (int64, error) {
+	content = strings.TrimSpace(content)
+	mode = strings.TrimSpace(mode)
+	if sessionID <= 0 || content == "" || mode == "" {
+		return 0, errors.New("chat: invalid scene assistant message")
+	}
+	var messageID int64
+	err := s.db.QueryRowContext(ctx,
+		`INSERT INTO app_chat_messages(session_id, role, content, sources, message_type, delivery_status, delivered_text, xinzhili_mode)
+		 SELECT id, 'assistant', $2, '[]'::jsonb, 'text', 'sent', '', $3
+		 FROM app_chat_sessions WHERE id=$1 AND scene='xinzhili_voice'
+		 RETURNING id`, sessionID, content, mode,
+	).Scan(&messageID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return messageID, err
+}
+
+// AcknowledgeSceneAssistant advances delivered_text monotonically. Callers
+// must provide the exact concatenated text represented by acknowledged audio
+// segments; arbitrary or shrinking prefixes are rejected.
+func (s *Store) AcknowledgeSceneAssistant(ctx context.Context, messageID int64, deliveredText string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var content string
+	var previous sql.NullString
+	err = tx.QueryRowContext(ctx,
+		`SELECT m.content, m.delivered_text
+		 FROM app_chat_messages m JOIN app_chat_sessions s ON s.id=m.session_id
+		 WHERE m.id=$1 AND m.role='assistant' AND s.scene='xinzhili_voice'
+		 FOR UPDATE OF m`, messageID,
+	).Scan(&content, &previous)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	deliveredText = strings.TrimSpace(deliveredText)
+	if !strings.HasPrefix(deliveredText, previous.String) ||
+		(!strings.HasPrefix(content, deliveredText) && !strings.HasPrefix(deliveredText, content)) {
+		return errors.New("chat: invalid delivered text prefix")
+	}
+	status := "sent"
+	if deliveredText == content {
+		status = "played"
+	}
+	if _, err = tx.ExecContext(ctx,
+		`UPDATE app_chat_messages
+		 SET content=CASE WHEN length($2) > length(content) THEN $2 ELSE content END,
+		     delivered_text=$2, delivery_status=$3
+		 WHERE id=$1`,
+		messageID, deliveredText, status,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) CompleteSceneAssistant(ctx context.Context, messageID int64, content string, sources json.RawMessage) error {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return errors.New("chat: assistant content is required")
+	}
+	if sources == nil {
+		sources = json.RawMessage("[]")
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE app_chat_messages m SET content=$2, sources=$3
+		 FROM app_chat_sessions s
+		 WHERE m.id=$1 AND m.session_id=s.id AND m.role='assistant' AND s.scene='xinzhili_voice'`,
+		messageID, content, sources,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // GetSession 按 id+用户 返回会话，防越权。
 func (s *Store) GetSession(ctx context.Context, appUserID, sessionID int64) (Session, error) {
 	sess, err := scanSession(s.db.QueryRowContext(ctx,

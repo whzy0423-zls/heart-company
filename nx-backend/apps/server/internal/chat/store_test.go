@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -244,6 +245,107 @@ func TestSceneHiddenMessagesAreRejectedByOrdinaryChatFeatures(t *testing.T) {
 	}
 	if _, err := store.GetVoiceTranscript(context.Background(), userID, userVoiceID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetVoiceTranscript err=%v", err)
+	}
+}
+
+func TestConversationIsolationRequiresMatchingUserCardSceneAndConversation(t *testing.T) {
+	database, userID, cardID, cleanup := openChatSceneFixture(t)
+	defer cleanup()
+	store := NewStore(database)
+	ctx := context.Background()
+
+	voice, err := store.ResolveSceneSession(ctx, userID, cardID, "xinzhili_voice", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResolveSceneSession(ctx, userID, cardID, "xinzhili_voice", voice.ID); err != nil {
+		t.Fatalf("matching conversation rejected: %v", err)
+	}
+	if _, err := store.ResolveSceneSession(ctx, userID, cardID, "chat", voice.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("scene mismatch err=%v, want ErrNotFound", err)
+	}
+
+	var otherCardID int64
+	if err := database.QueryRow(`INSERT INTO app_user_cards(app_user_id, card_type, name, relation, enneagram, wing, profile, status) VALUES ($1,'secondary','另一张卡','friend',2,1,'{}','active') RETURNING id`, userID).Scan(&otherCardID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResolveSceneSession(ctx, userID, otherCardID, "xinzhili_voice", voice.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("card mismatch err=%v, want ErrNotFound", err)
+	}
+}
+
+func TestDeliveryPersistenceUsesAcknowledgedExactPrefixes(t *testing.T) {
+	database, userID, cardID, cleanup := openChatSceneFixture(t)
+	defer cleanup()
+	store := NewStore(database)
+	ctx := context.Background()
+
+	session, err := store.ResolveSceneSession(ctx, userID, cardID, "xinzhili_voice", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userMessageID, err := store.SaveSceneUserText(ctx, session.ID, "我想慢下来", "comfort")
+	if err != nil || userMessageID == 0 {
+		t.Fatalf("SaveSceneUserText id=%d err=%v", userMessageID, err)
+	}
+	assistantID, err := store.CreateSceneAssistant(ctx, session.ID, "先呼吸。再感受脚底。", "comfort")
+	if err != nil || assistantID == 0 {
+		t.Fatalf("CreateSceneAssistant id=%d err=%v", assistantID, err)
+	}
+	if err := store.AcknowledgeSceneAssistant(ctx, assistantID, "先呼吸。"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AcknowledgeSceneAssistant(ctx, assistantID, "先呼吸。再感受脚底。"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteSceneAssistant(ctx, assistantID, "先呼吸。再感受脚底。", json.RawMessage(`[{"id":"theory:1"}]`)); err != nil {
+		t.Fatal(err)
+	}
+
+	messages, err := store.ListRecentMessages(ctx, session.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[0].Content != "我想慢下来" || messages[1].Content != "先呼吸。再感受脚底。" {
+		t.Fatalf("unexpected delivered context: %+v", messages)
+	}
+	var status, delivered string
+	var sources []byte
+	if err := database.QueryRow(`SELECT delivery_status, delivered_text, sources FROM app_chat_messages WHERE id=$1`, assistantID).Scan(&status, &delivered, &sources); err != nil {
+		t.Fatal(err)
+	}
+	if status != "played" || delivered != "先呼吸。再感受脚底。" || !strings.Contains(string(sources), "theory:1") {
+		t.Fatalf("status=%q delivered=%q sources=%s", status, delivered, sources)
+	}
+}
+
+func TestDeliveryAcknowledgementCanAdvanceBeforeGenerationCompletes(t *testing.T) {
+	database, userID, cardID, cleanup := openChatSceneFixture(t)
+	defer cleanup()
+	store := NewStore(database)
+	ctx := context.Background()
+
+	session, err := store.ResolveSceneSession(ctx, userID, cardID, "xinzhili_voice", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assistantID, err := store.CreateSceneAssistant(ctx, session.ID, "先呼吸。", "comfort")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AcknowledgeSceneAssistant(ctx, assistantID, "先呼吸。"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AcknowledgeSceneAssistant(ctx, assistantID, "先呼吸。再感受脚底。"); err != nil {
+		t.Fatalf("acknowledge streamed prefix before completion: %v", err)
+	}
+
+	var content, delivered string
+	if err := database.QueryRow(`SELECT content, delivered_text FROM app_chat_messages WHERE id=$1`, assistantID).Scan(&content, &delivered); err != nil {
+		t.Fatal(err)
+	}
+	if content != delivered || delivered != "先呼吸。再感受脚底。" {
+		t.Fatalf("content=%q delivered=%q", content, delivered)
 	}
 }
 
