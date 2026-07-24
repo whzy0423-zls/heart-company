@@ -292,14 +292,33 @@ func TestDeliveryPersistenceUsesAcknowledgedExactPrefixes(t *testing.T) {
 	if err != nil || assistantID == 0 {
 		t.Fatalf("CreateSceneAssistant id=%d err=%v", assistantID, err)
 	}
-	if err := store.AcknowledgeSceneAssistant(ctx, assistantID, "先呼吸。"); err != nil {
+	if err := store.AcknowledgeSceneAssistant(ctx, assistantID, "先呼吸。", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AcknowledgeSceneAssistant(ctx, assistantID, "先呼吸。再感受脚底。"); err != nil {
+	var intermediateStatus string
+	if err := database.QueryRow(`SELECT delivery_status FROM app_chat_messages WHERE id=$1`, assistantID).Scan(&intermediateStatus); err != nil || intermediateStatus != "sent" {
+		t.Fatalf("first ack status=%q err=%v", intermediateStatus, err)
+	}
+	if err := store.AcknowledgeSceneAssistant(ctx, assistantID, "先呼吸。再感受脚底。", false); err != nil {
 		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT delivery_status FROM app_chat_messages WHERE id=$1`, assistantID).Scan(&intermediateStatus); err != nil || intermediateStatus != "sent" {
+		t.Fatalf("pre-completion final ack status=%q err=%v", intermediateStatus, err)
 	}
 	if err := store.CompleteSceneAssistant(ctx, assistantID, "先呼吸。再感受脚底。", json.RawMessage(`[{"id":"theory:1"}]`)); err != nil {
 		t.Fatal(err)
+	}
+	if err := store.AcknowledgeSceneAssistant(ctx, assistantID, "先呼吸。再感受脚底。", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AcknowledgeSceneAssistant(ctx, assistantID, "先呼吸。再感受脚底。", true); err != nil {
+		t.Fatalf("duplicate final ack: %v", err)
+	}
+	if err := store.AcknowledgeSceneAssistant(ctx, assistantID, "先呼吸。再感受脚底。", false); err != nil {
+		t.Fatalf("duplicate non-complete ack after played: %v", err)
+	}
+	if err := store.AcknowledgeSceneAssistant(ctx, assistantID, "先呼吸。", false); err == nil {
+		t.Fatal("backward ack must be rejected")
 	}
 
 	messages, err := store.ListRecentMessages(ctx, session.ID, 10)
@@ -333,10 +352,10 @@ func TestDeliveryAcknowledgementCanAdvanceBeforeGenerationCompletes(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AcknowledgeSceneAssistant(ctx, assistantID, "先呼吸。"); err != nil {
+	if err := store.AcknowledgeSceneAssistant(ctx, assistantID, "先呼吸。", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AcknowledgeSceneAssistant(ctx, assistantID, "先呼吸。再感受脚底。"); err != nil {
+	if err := store.AcknowledgeSceneAssistant(ctx, assistantID, "先呼吸。再感受脚底。", false); err != nil {
 		t.Fatalf("acknowledge streamed prefix before completion: %v", err)
 	}
 

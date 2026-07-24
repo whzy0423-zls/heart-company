@@ -48,9 +48,12 @@ func TestConversationWithoutChatModelReturnsStableError(t *testing.T) {
 
 func TestConversationIsolationAndRelevanceUseIndependentRetrievers(t *testing.T) {
 	fixture := newSessionFixture(t)
+	input := fixture.input("turn-retrieval")
+	input.KnowledgeTopK, input.KnowledgeMinScore = 3, 0.21
+	input.TheoryTopK, input.TheoryMinScore = 7, 0.63
 	fixture.knowledge.docs = []rag.Document{{ID: "knowledge:1", Title: "关系知识", Content: "关系冲突"}}
 	fixture.theory.docs = []rag.Document{{ID: "theory:1", Title: "理论卡", Content: "非暴力沟通"}}
-	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-retrieval")); err != nil {
+	if err := fixture.session.StartTurn(context.Background(), input); err != nil {
 		t.Fatal(err)
 	}
 	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "和伴侣冲突怎么办", Stable: true})
@@ -59,9 +62,12 @@ func TestConversationIsolationAndRelevanceUseIndependentRetrievers(t *testing.T)
 	if fixture.knowledge.calls != 1 || fixture.theory.calls != 1 {
 		t.Fatalf("knowledge calls=%d theory calls=%d", fixture.knowledge.calls, fixture.theory.calls)
 	}
-	input := fixture.generator.lastInput()
-	if len(input.Sources) != 2 || fixture.store.resolved.Scene != SceneXinzhiliVoice || fixture.store.resolved.CardID != 22 {
-		t.Fatalf("input=%+v conversation=%+v", input, fixture.store.resolved)
+	if fixture.knowledge.topK != 3 || fixture.knowledge.minScore != 0.21 || fixture.theory.topK != 7 || fixture.theory.minScore != 0.63 {
+		t.Fatalf("knowledge=(%d,%v) theory=(%d,%v)", fixture.knowledge.topK, fixture.knowledge.minScore, fixture.theory.topK, fixture.theory.minScore)
+	}
+	generated := fixture.generator.lastInput()
+	if len(generated.Sources) != 2 || fixture.store.resolved.Scene != SceneXinzhiliVoice || fixture.store.resolved.CardID != 22 {
+		t.Fatalf("input=%+v conversation=%+v", generated, fixture.store.resolved)
 	}
 }
 
@@ -76,8 +82,9 @@ func TestDeliveryCreatesAssistantAfterFirstAudioAndAcknowledgesExactPrefixes(t *
 	}
 	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "我很焦虑", Stable: true})
 	first := fixture.sink.waitAudio(t)
-	if first.Seq != 0 || fixture.store.assistantCount() != 1 {
-		t.Fatalf("first=%+v assistants=%d", first, fixture.store.assistantCount())
+	fixture.store.waitAssistantCount(t, 1)
+	if first.Seq != 0 {
+		t.Fatalf("first=%+v", first)
 	}
 	fixture.sink.waitAudio(t)
 	if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-delivery", SegmentSeq: 0}); err != nil {
@@ -88,6 +95,31 @@ func TestDeliveryCreatesAssistantAfterFirstAudioAndAcknowledgesExactPrefixes(t *
 	}
 	fixture.store.waitDelivered(t, "先呼吸。再感受脚底。")
 	fixture.store.waitCompleted(t)
+	fixture.store.waitCompleteAck(t)
+}
+
+func TestDeliveryCompletesAuditWhenLaterTTSChunkFails(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.generator.answer = "第一段。第二段。"
+	fixture.knowledge.docs = []rag.Document{{ID: "knowledge:audit", Title: "审计来源", Content: "支持回答的内容"}}
+	fixture.synth.failAt = 1
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-tts-fail")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "请分两段回答", Stable: true})
+	first := fixture.sink.waitAudio(t)
+	if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-tts-fail", SegmentSeq: first.Seq}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.sink.waitControl(t, EventError)
+	fixture.store.waitCompleted(t)
+	fixture.store.mu.Lock()
+	content, delivered := fixture.store.completedContent, fixture.store.delivered[len(fixture.store.delivered)-1]
+	sources := append(json.RawMessage(nil), fixture.store.sources...)
+	fixture.store.mu.Unlock()
+	if content != "第一段。第二段。" || delivered != "第一段。" || !strings.Contains(string(sources), "knowledge:audit") {
+		t.Fatalf("content=%q delivered=%q sources=%s", content, delivered, sources)
+	}
 }
 
 func TestDeliveryCancellationBeforeFirstAudioDoesNotCreateAssistant(t *testing.T) {
@@ -210,7 +242,7 @@ func newSessionFixture(t *testing.T) *sessionFixture {
 }
 
 func (f *sessionFixture) input(turnID string) StartTurnInput {
-	return StartTurnInput{UserID: 11, CardID: 22, ConversationID: 33, TurnID: turnID, Mode: ModeNormal, ASRConfig: RealtimeASRConfig{}, TTSConfig: TTSConfig{}, TopK: 4, MinScore: 0.35}
+	return StartTurnInput{UserID: 11, CardID: 22, ConversationID: 33, TurnID: turnID, Mode: ModeNormal, ASRConfig: RealtimeASRConfig{}, TTSConfig: TTSConfig{}, KnowledgeTopK: 4, KnowledgeMinScore: 0.35, TheoryTopK: 4, TheoryMinScore: 0.35}
 }
 
 type fakeCardProvider struct{}
@@ -225,6 +257,7 @@ type fakeConversationStore struct {
 	users            []string
 	assistants       []string
 	delivered        []string
+	completeAcks     []bool
 	sources          json.RawMessage
 	completedContent string
 }
@@ -250,11 +283,30 @@ func (s *fakeConversationStore) CreateAssistant(_ context.Context, _ Conversatio
 	s.assistants = append(s.assistants, content)
 	return int64(100 + len(s.assistants)), nil
 }
-func (s *fakeConversationStore) AcknowledgeAssistant(_ context.Context, _ int64, delivered string, _ bool) error {
+func (s *fakeConversationStore) AcknowledgeAssistant(_ context.Context, _ int64, delivered string, complete bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.delivered = append(s.delivered, delivered)
+	s.completeAcks = append(s.completeAcks, complete)
 	return nil
+}
+func (s *fakeConversationStore) waitCompleteAck(t *testing.T) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		s.mu.Lock()
+		complete := len(s.completeAcks) > 0 && s.completeAcks[len(s.completeAcks)-1]
+		s.mu.Unlock()
+		if complete {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("final acknowledged segment was not marked complete")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
 }
 func (s *fakeConversationStore) CompleteAssistant(_ context.Context, _ int64, content string, sources json.RawMessage) error {
 	s.mu.Lock()
@@ -272,6 +324,21 @@ func (s *fakeConversationStore) assistantCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.assistants)
+}
+func (s *fakeConversationStore) waitAssistantCount(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		if s.assistantCount() == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("assistants=%d want=%d", s.assistantCount(), want)
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
 }
 func (s *fakeConversationStore) completedSources() json.RawMessage {
 	s.mu.Lock()
@@ -328,12 +395,15 @@ func (fakeMemoryProvider) PromptMemories(context.Context, int64, int64) ([]strin
 }
 
 type fakeRetriever struct {
-	calls int
-	docs  []rag.Document
+	calls    int
+	docs     []rag.Document
+	topK     int
+	minScore float64
 }
 
-func (r *fakeRetriever) Search(context.Context, string, int, float64) ([]rag.Document, error) {
+func (r *fakeRetriever) Search(_ context.Context, _ string, topK int, minScore float64) ([]rag.Document, error) {
 	r.calls++
+	r.topK, r.minScore = topK, minScore
 	return append([]rag.Document(nil), r.docs...), nil
 }
 
@@ -411,6 +481,7 @@ type fakeSynthesizer struct {
 	calls    int
 	segments []AudioSegment
 	block    chan struct{}
+	failAt   int
 }
 
 func (s *fakeSynthesizer) Synthesize(ctx context.Context, _ TTSConfig, text string, emit func(AudioSegment) error) error {
@@ -426,6 +497,9 @@ func (s *fakeSynthesizer) Synthesize(ctx context.Context, _ TTSConfig, text stri
 	s.calls++
 	segments := append([]AudioSegment(nil), s.segments...)
 	s.mu.Unlock()
+	if s.failAt > 0 && index == s.failAt {
+		return errors.New("tts failed")
+	}
 	segment := AudioSegment{Audio: []byte{1}, MIME: "audio/mpeg", deliveryText: text}
 	if len(segments) > 0 {
 		if index >= len(segments) {

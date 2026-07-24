@@ -102,8 +102,8 @@ func (a serverXinzhiliConversations) CreateAssistant(ctx context.Context, conver
 	return a.store.CreateSceneAssistant(ctx, conversation.ID, content, string(mode))
 }
 
-func (a serverXinzhiliConversations) AcknowledgeAssistant(ctx context.Context, messageID int64, deliveredText string, _ bool) error {
-	return a.store.AcknowledgeSceneAssistant(ctx, messageID, deliveredText)
+func (a serverXinzhiliConversations) AcknowledgeAssistant(ctx context.Context, messageID int64, deliveredText string, complete bool) error {
+	return a.store.AcknowledgeSceneAssistant(ctx, messageID, deliveredText, complete)
 }
 
 func (a serverXinzhiliConversations) CompleteAssistant(ctx context.Context, messageID int64, content string, sources json.RawMessage) error {

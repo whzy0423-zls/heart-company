@@ -222,7 +222,7 @@ func (s *Store) CreateSceneAssistant(ctx context.Context, sessionID int64, conte
 // AcknowledgeSceneAssistant advances delivered_text monotonically. Callers
 // must provide the exact concatenated text represented by acknowledged audio
 // segments; arbitrary or shrinking prefixes are rejected.
-func (s *Store) AcknowledgeSceneAssistant(ctx context.Context, messageID int64, deliveredText string) error {
+func (s *Store) AcknowledgeSceneAssistant(ctx context.Context, messageID int64, deliveredText string, complete bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -247,14 +247,18 @@ func (s *Store) AcknowledgeSceneAssistant(ctx context.Context, messageID int64, 
 		(!strings.HasPrefix(content, deliveredText) && !strings.HasPrefix(deliveredText, content)) {
 		return errors.New("chat: invalid delivered text prefix")
 	}
+	if complete && deliveredText != content {
+		return errors.New("chat: completed delivery must equal final content")
+	}
 	status := "sent"
-	if deliveredText == content {
+	if complete {
 		status = "played"
 	}
 	if _, err = tx.ExecContext(ctx,
 		`UPDATE app_chat_messages
 		 SET content=CASE WHEN length($2) > length(content) THEN $2 ELSE content END,
-		     delivered_text=$2, delivery_status=$3
+		     delivered_text=$2,
+		     delivery_status=CASE WHEN delivery_status='played' THEN 'played' ELSE $3 END
 		 WHERE id=$1`,
 		messageID, deliveredText, status,
 	); err != nil {

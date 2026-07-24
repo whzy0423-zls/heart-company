@@ -97,18 +97,20 @@ type SessionDependencies struct {
 }
 
 type StartTurnInput struct {
-	UserID         int64
-	CardID         int64
-	ConversationID int64
-	TurnID         string
-	Mode           Mode
-	ASRConfig      RealtimeASRConfig
-	TTSConfig      TTSConfig
-	Timing         TimingConfig
-	CommonPrompt   string
-	ModePrompt     string
-	TopK           int
-	MinScore       float64
+	UserID            int64
+	CardID            int64
+	ConversationID    int64
+	TurnID            string
+	Mode              Mode
+	ASRConfig         RealtimeASRConfig
+	TTSConfig         TTSConfig
+	Timing            TimingConfig
+	CommonPrompt      string
+	ModePrompt        string
+	KnowledgeTopK     int
+	KnowledgeMinScore float64
+	TheoryTopK        int
+	TheoryMinScore    float64
 }
 
 type PCMFrame struct {
@@ -317,8 +319,11 @@ func (s *session) startTurn(ctx context.Context, input StartTurnInput) (*activeT
 	if s.deps.Cards == nil || s.deps.Conversations == nil || s.deps.ASRFactory == nil || s.deps.Sink == nil {
 		return nil, errors.New("xinzhili: session dependencies missing")
 	}
-	if input.TopK <= 0 {
-		input.TopK = 4
+	if input.KnowledgeTopK <= 0 {
+		input.KnowledgeTopK = 4
+	}
+	if input.TheoryTopK <= 0 {
+		input.TheoryTopK = 4
 	}
 	card, err := s.deps.Cards.OwnedCard(ctx, input.UserID, input.CardID)
 	if err != nil {
@@ -444,15 +449,33 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 			event.segmentAck <- err
 		}
 	case eventTTSDone:
-		if event.err != nil && !errors.Is(event.err, context.Canceled) {
-			s.sendError(current, "tts_failed", "语音回复生成失败，请重试", true)
-			return
-		}
 		current.completionDone = true
 		if current.assistantID > 0 && current.generationErr == nil && current.answer != "" {
 			sources, _ := json.Marshal(current.sources)
 			_ = s.deps.Conversations.CompleteAssistant(current.ctx, current.assistantID, current.answer, sources)
+			s.confirmCompletedPlayback(current)
 		}
+		if event.err != nil && !errors.Is(event.err, context.Canceled) {
+			s.sendError(current, "tts_failed", "语音回复生成失败，请重试", true)
+			return
+		}
+	}
+}
+
+func (s *session) confirmCompletedPlayback(turn *activeTurn) {
+	if turn.lastAck < 0 {
+		return
+	}
+	var builder strings.Builder
+	for seq := uint32(0); seq <= uint32(turn.lastAck); seq++ {
+		text, ok := turn.segments[seq]
+		if !ok {
+			return
+		}
+		builder.WriteString(text)
+	}
+	if delivered := builder.String(); delivered == turn.answer {
+		_ = s.deps.Conversations.AcknowledgeAssistant(turn.ctx, turn.assistantID, delivered, true)
 	}
 }
 
@@ -499,14 +522,14 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 		if s.deps.Memories != nil {
 			memories, _ = s.deps.Memories.PromptMemories(turn.ctx, turn.input.UserID, turn.input.CardID)
 		}
-		documents := make([]rag.Document, 0, turn.input.TopK*2)
+		documents := make([]rag.Document, 0, turn.input.KnowledgeTopK+turn.input.TheoryTopK)
 		if s.deps.Knowledge != nil {
-			if docs, err := s.deps.Knowledge.Search(turn.ctx, question, turn.input.TopK, turn.input.MinScore); err == nil {
+			if docs, err := s.deps.Knowledge.Search(turn.ctx, question, turn.input.KnowledgeTopK, turn.input.KnowledgeMinScore); err == nil {
 				documents = appendUniqueDocuments(documents, docs)
 			}
 		}
 		if s.deps.Theory != nil {
-			if docs, err := s.deps.Theory.Search(turn.ctx, question, turn.input.TopK, turn.input.MinScore); err == nil {
+			if docs, err := s.deps.Theory.Search(turn.ctx, question, turn.input.TheoryTopK, turn.input.TheoryMinScore); err == nil {
 				documents = appendUniqueDocuments(documents, docs)
 			}
 		}
