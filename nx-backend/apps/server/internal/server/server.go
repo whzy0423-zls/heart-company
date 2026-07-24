@@ -459,6 +459,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/miniapp/report/content", s.method(http.MethodGet, s.requireMiniapp(s.reportContent)))
 	s.mux.HandleFunc("/api/pay/notify", s.method(http.MethodPost, s.payNotify))
 	s.mux.HandleFunc("/api/analytics/overview", s.method(http.MethodGet, s.requirePermission("Analytics:Overview", s.analyticsOverview)))
+	s.mux.HandleFunc("/api/analytics/platform-overview", s.method(http.MethodGet, s.requirePermission("Analytics:Overview", s.platformAnalyticsOverview)))
 	s.mux.HandleFunc("/api/app-analytics/overview", s.method(http.MethodGet, s.requirePermission("Analytics:App:Overview", s.appAnalyticsOverview)))
 	s.mux.HandleFunc("/api/game-results/overview", s.method(http.MethodGet, s.requirePermission("Analytics:GameResults", s.gameOverview)))
 	s.mux.HandleFunc("/api/messages/list", s.method(http.MethodGet, s.requirePermission("Message:Manage:List", s.messagesList)))
@@ -1019,6 +1020,29 @@ func (s *Server) analyticsOverview(w http.ResponseWriter, r *http.Request) {
 	result, err := s.analytics.Overview(r.Context(), r.URL.Query())
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
+func (s *Server) platformAnalyticsOverview(w http.ResponseWriter, r *http.Request) {
+	days := 7
+	if value, ok := r.URL.Query()["days"]; ok {
+		if len(value) != 1 || (value[0] != "7" && value[0] != "30") {
+			httpx.Fail(w, http.StatusBadRequest, "days must be 7 or 30")
+			return
+		}
+		if value[0] == "30" {
+			days = 30
+		}
+	}
+	result, err := s.analytics.PlatformOverview(r.Context(), days, time.Now())
+	if errors.Is(err, analytics.ErrInvalidDays) {
+		httpx.Fail(w, http.StatusBadRequest, "days must be 7 or 30")
+		return
+	}
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "query platform analytics failed")
 		return
 	}
 	httpx.OK(w, result)
