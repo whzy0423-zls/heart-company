@@ -26,6 +26,22 @@ var xinzhiliUpgrader = websocket.Upgrader{
 	EnableCompression: true,
 }
 
+var errXinzhiliModeDisabled = errors.New("xinzhili mode is disabled")
+
+type xinzhiliModePreferenceStore interface {
+	ReadMode(context.Context, int64) (xinzhili.ModePreference, bool, error)
+	UpdateMode(context.Context, int64, xinzhili.Mode, int64) (xinzhili.ModePreference, error)
+}
+
+type xinzhiliModeSnapshot struct {
+	EnabledModes  []xinzhili.Mode `json:"enabledModes"`
+	RequestedMode xinzhili.Mode   `json:"requestedMode"`
+	PendingMode   xinzhili.Mode   `json:"pendingMode"`
+	EffectiveMode xinzhili.Mode   `json:"effectiveMode"`
+	Revision      int64           `json:"revision"`
+	ConfigVersion int64           `json:"configVersion"`
+}
+
 type xinzhiliRealtimeConn struct {
 	server         *Server
 	ws             *websocket.Conn
@@ -39,7 +55,10 @@ type xinzhiliRealtimeConn struct {
 	cardID         int64
 	conversationID int64
 	requestedMode  xinzhili.Mode
+	pendingMode    xinzhili.Mode
 	effectiveMode  xinzhili.Mode
+	modeRevision   int64
+	modeStore      xinzhiliModePreferenceStore
 	turnKey        uint64
 	turnMu         sync.Mutex
 	turns          map[uint64]string
@@ -75,7 +94,7 @@ func (s *Server) xinzhiliRealtime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws.SetReadLimit(xinzhiliMaxMessageBytes)
-	c := &xinzhiliRealtimeConn{server: s, ws: ws, userID: user.ID, turns: make(map[uint64]string)}
+	c := &xinzhiliRealtimeConn{server: s, ws: ws, userID: user.ID, turns: make(map[uint64]string), modeStore: xinzhili.NewStore(s.db)}
 	c.sink = &xinzhiliWSSink{conn: c}
 	s.replaceXinzhiliLease(c)
 	defer s.releaseXinzhiliLease(c)
@@ -178,11 +197,15 @@ func (c *xinzhiliRealtimeConn) startSession(ctx context.Context, e xinzhili.Enve
 	c.sessionID = randomSessionID()
 	c.cardID = p.CardID
 	c.conversationID = p.ConversationID
-	c.requestedMode, c.effectiveMode = xinzhili.ModeNormal, xinzhili.ModeNormal
 	c.mu.Unlock()
 	cfg, found, err := xinzhili.ReadConfig(ctx, c.server.db)
 	if err != nil || !found || !cfg.Enabled {
 		c.sendError(ctx, "xinzhili_not_configured", "请先配置芯之力会话模型后重试", false, true)
+		return
+	}
+	modeSnapshot, err := c.loadModeSnapshot(ctx, cfg)
+	if err != nil {
+		c.sendError(ctx, "mode_preference_unavailable", "模式偏好读取失败", true, true)
 		return
 	}
 	deps, err := c.server.newXinzhiliRealtimeDependencies(cfg, c.sink)
@@ -192,7 +215,9 @@ func (c *xinzhiliRealtimeConn) startSession(ctx context.Context, e xinzhili.Enve
 	}
 	c.sess = xinzhili.NewSession(deps)
 	c.configVersion = cfg.Version
-	c.sendControl(ctx, xinzhili.EventSessionReady, map[string]any{"sessionId": c.sessionID, "configVersion": cfg.Version, "cardId": p.CardID, "conversationId": p.ConversationID}, nil, nil)
+	readyPayload := map[string]any{"sessionId": c.sessionID, "cardId": p.CardID, "conversationId": p.ConversationID}
+	mergeXinzhiliModeSnapshot(readyPayload, modeSnapshot)
+	c.sendControl(ctx, xinzhili.EventSessionReady, readyPayload, nil, nil)
 }
 
 func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelope) {
@@ -213,12 +238,10 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 		return
 	}
 	c.mu.Lock()
-	mode := c.effectiveMode
-	c.mu.Unlock()
+	mode := c.pendingMode
 	if !modeEnabled(cfg.EnabledModes, mode) {
 		mode = xinzhili.ModeNormal
 	}
-	c.mu.Lock()
 	cardID, conversationID := c.cardID, c.conversationID
 	c.mu.Unlock()
 	in := xinzhili.StartTurnInput{UserID: c.userID, CardID: cardID, ConversationID: conversationID, TurnID: *e.TurnID, Mode: mode, ASRConfig: cfg.RealtimeASR, TTSConfig: cfg.TTS, Timing: cfg.Timing, CommonPrompt: cfg.CommonPrompt, ModePrompt: cfg.ModePrompts[mode], KnowledgeTopK: 6, KnowledgeMinScore: 0.2, TheoryTopK: 6, TheoryMinScore: 0.2}
@@ -226,6 +249,11 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 		c.sendError(ctx, "turn_start_failed", "无法开始当前轮次", true, false)
 		return
 	}
+	c.mu.Lock()
+	c.effectiveMode = mode
+	c.pendingMode = mode
+	c.requestedMode = mode
+	c.mu.Unlock()
 	c.turnMu.Lock()
 	c.turns[p.TurnKey] = *e.TurnID
 	c.turnMu.Unlock()
@@ -258,17 +286,84 @@ func (c *xinzhiliRealtimeConn) handleBinary(ctx context.Context, data []byte) {
 
 func (c *xinzhiliRealtimeConn) changeMode(ctx context.Context, e xinzhili.Envelope) {
 	var p struct {
-		Mode xinzhili.Mode `json:"mode"`
+		Mode             xinzhili.Mode `json:"mode"`
+		ExpectedRevision int64         `json:"expectedRevision"`
 	}
-	if json.Unmarshal(e.Payload, &p) != nil || !knownXinzhiliMode(p.Mode) {
+	if json.Unmarshal(e.Payload, &p) != nil || !knownXinzhiliMode(p.Mode) || p.ExpectedRevision < 0 {
 		c.sendError(ctx, "invalid_mode", "模式无效", false, false)
 		return
 	}
+	cfg, found, err := xinzhili.ReadConfig(ctx, c.server.db)
+	if err != nil || !found || !cfg.Enabled {
+		c.sendError(ctx, "xinzhili_not_configured", "请先配置芯之力会话模型后重试", false, false)
+		return
+	}
+	snapshot, err := c.persistModeChange(ctx, cfg, p.Mode, p.ExpectedRevision)
+	if errors.Is(err, errXinzhiliModeDisabled) {
+		c.sendError(ctx, "mode_not_enabled", "当前模式尚未启用", false, false)
+		return
+	}
+	if errors.Is(err, xinzhili.ErrModePreferenceConflict) {
+		c.sendError(ctx, "mode_revision_conflict", "模式状态已更新，请同步后重试", true, false)
+		return
+	}
+	if err != nil {
+		c.sendError(ctx, "mode_change_failed", "模式切换失败", true, false)
+		return
+	}
+	c.sendControl(ctx, xinzhili.EventModeChanged, snapshot, nil, nil)
+}
+
+func (c *xinzhiliRealtimeConn) loadModeSnapshot(ctx context.Context, cfg xinzhili.Config) (xinzhiliModeSnapshot, error) {
+	preference, found, err := c.modeStore.ReadMode(ctx, c.userID)
+	if err != nil {
+		return xinzhiliModeSnapshot{}, err
+	}
+	mode, revision := xinzhili.ModeNormal, int64(0)
+	if found {
+		mode, revision = preference.Requested, preference.Revision
+	}
+	if !modeEnabled(cfg.EnabledModes, mode) {
+		mode = xinzhili.ModeNormal
+	}
 	c.mu.Lock()
-	c.requestedMode = p.Mode
-	c.effectiveMode = p.Mode
+	c.requestedMode, c.pendingMode, c.effectiveMode, c.modeRevision = mode, mode, mode, revision
 	c.mu.Unlock()
-	c.sendControl(ctx, xinzhili.EventModeChanged, map[string]any{"requested": p.Mode, "effective": p.Mode, "pending": false}, nil, nil)
+	return c.modeSnapshot(cfg), nil
+}
+
+func (c *xinzhiliRealtimeConn) persistModeChange(ctx context.Context, cfg xinzhili.Config, mode xinzhili.Mode, expectedRevision int64) (xinzhiliModeSnapshot, error) {
+	if !modeEnabled(cfg.EnabledModes, mode) {
+		return xinzhiliModeSnapshot{}, errXinzhiliModeDisabled
+	}
+	preference, err := c.modeStore.UpdateMode(ctx, c.userID, mode, expectedRevision)
+	if err != nil {
+		return xinzhiliModeSnapshot{}, err
+	}
+	c.mu.Lock()
+	c.requestedMode = preference.Requested
+	c.pendingMode = preference.Requested
+	c.modeRevision = preference.Revision
+	c.mu.Unlock()
+	return c.modeSnapshot(cfg), nil
+}
+
+func (c *xinzhiliRealtimeConn) modeSnapshot(cfg xinzhili.Config) xinzhiliModeSnapshot {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return xinzhiliModeSnapshot{
+		EnabledModes: append([]xinzhili.Mode(nil), cfg.EnabledModes...), RequestedMode: c.requestedMode,
+		PendingMode: c.pendingMode, EffectiveMode: c.effectiveMode, Revision: c.modeRevision, ConfigVersion: cfg.Version,
+	}
+}
+
+func mergeXinzhiliModeSnapshot(dst map[string]any, snapshot xinzhiliModeSnapshot) {
+	dst["enabledModes"] = snapshot.EnabledModes
+	dst["requestedMode"] = snapshot.RequestedMode
+	dst["pendingMode"] = snapshot.PendingMode
+	dst["effectiveMode"] = snapshot.EffectiveMode
+	dst["revision"] = snapshot.Revision
+	dst["configVersion"] = snapshot.ConfigVersion
 }
 
 func (c *xinzhiliRealtimeConn) sendControl(ctx context.Context, typ xinzhili.EventType, payload any, turnID *string, turnSeq *uint64) error {
