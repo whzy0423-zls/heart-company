@@ -128,9 +128,10 @@ type Server struct {
 	signupSubscribers map[chan signup.Lead]struct{}
 
 	// modelMu 保护可在运行时被"模型配置"页面重建的 ragGen / analysisGen / videos。
-	modelMu         sync.RWMutex
-	xinzhiliLeaseMu sync.Mutex
-	xinzhiliLeases  map[int64]*xinzhiliRealtimeConn
+	modelMu             sync.RWMutex
+	xinzhiliLeaseMu     sync.Mutex
+	xinzhiliLeases      map[int64]*xinzhiliRealtimeConn
+	xinzhiliModelConfig xinzhiliModelConfigStore
 }
 
 var uploadPermissionCodes = []string{
@@ -225,6 +226,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.appChat = chat.NewStore(database)
 	s.userPreferences = userpreference.NewStore(database)
 	s.xinzhiliLeases = make(map[int64]*xinzhiliRealtimeConn)
+	s.xinzhiliModelConfig = databaseXinzhiliModelConfigStore{db: database}
 	s.loginLimiter = newStrRateLimiter(10, time.Minute)
 	s.loginDBLimiter = newDBRateLimiter(database, "admin_login", 10, time.Minute)
 	s.smsPhoneLimiter = newStrRateLimiter(1, time.Minute)
@@ -355,6 +357,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin-branding", s.requirePermission("System:Branding", s.adminBranding))
 	// 模型配置：读取/保存对话(MiniMax)与视频模型的地址/密钥/模型名，均需登录。
 	s.mux.HandleFunc("/api/model-config", s.requirePermission("System:Model:Config", s.modelConfig))
+	s.mux.HandleFunc("/api/xinzhili-model-config", s.requirePermission("System:XinzhiliModel:Config", s.xinzhiliModelConfigHandler))
 	// 对话模型连通性测试：对 MiniMax 网关做一次轻量探活，需登录。
 	s.mux.HandleFunc("/api/model-config/test-chat", s.requirePermission("System:Model:Config", s.method(http.MethodPost, s.testChatModel)))
 	// ===== App API =====
