@@ -16,13 +16,30 @@ type PlatformOverview struct {
 	RecentActivities []RecentActivity      `json:"recentActivities"`
 }
 type WebsiteOverview struct {
-	TotalUsers, NewUsersToday, ActiveUsersToday, TotalPV, TodayPV, TotalSubmissions, SubmissionsToday int
-	ConversionRate                                                                                    float64
+	TotalUsers       int     `json:"totalUsers"`
+	NewUsersToday    int     `json:"newUsersToday"`
+	ActiveUsersToday int     `json:"activeUsersToday"`
+	TotalPV          int     `json:"totalPV"`
+	TodayPV          int     `json:"todayPV"`
+	TotalSubmissions int     `json:"totalSubmissions"`
+	SubmissionsToday int     `json:"submissionsToday"`
+	ConversionRate   float64 `json:"conversionRate"`
 }
-type MiniappOverview struct{ TotalUsers, NewUsersToday, TotalTests, TestsToday, TotalBookings, BookingsToday int }
+type MiniappOverview struct {
+	TotalUsers    int `json:"totalUsers"`
+	NewUsersToday int `json:"newUsersToday"`
+	TotalTests    int `json:"totalTests"`
+	TestsToday    int `json:"testsToday"`
+	TotalBookings int `json:"totalBookings"`
+	BookingsToday int `json:"bookingsToday"`
+}
 type PlatformSeriesPoint struct {
-	Date                                                                                   string `json:"date"`
-	WebsiteActiveUsers, MiniappNewUsers, WebsiteSubmissions, MiniappTests, MiniappBookings int
+	Date               string `json:"date"`
+	WebsiteActiveUsers int    `json:"websiteActiveUsers"`
+	MiniappNewUsers    int    `json:"miniappNewUsers"`
+	WebsiteSubmissions int    `json:"websiteSubmissions"`
+	MiniappTests       int    `json:"miniappTests"`
+	MiniappBookings    int    `json:"miniappBookings"`
 }
 type RecentActivity struct {
 	ID         string `json:"id"`
