@@ -127,31 +127,6 @@ func NewStore(database *sql.DB) *Store {
 	return &Store{db: database}
 }
 
-// Deprecated: Create is a temporary compatibility path used only by miniapp
-// bookings until their transaction service is migrated. It marks the signup as
-// miniapp and intentionally creates no legacy message. New call sites must use
-// a domain service that owns the complete transaction.
-func (s *Store) Create(ctx context.Context, input LeadInput, r *http.Request) (Lead, error) {
-	if s == nil || s.db == nil {
-		return Lead{}, dbtx.ErrNilDB
-	}
-	c, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	tx, err := s.db.BeginTx(c, nil)
-	if err != nil {
-		return Lead{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	lead, err := s.CreateWithDBTX(c, tx, input, r, "miniapp")
-	if err != nil {
-		return Lead{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return Lead{}, err
-	}
-	return lead, nil
-}
-
 func (s *Store) CreateWithDBTX(ctx context.Context, q dbtx.DBTX, input LeadInput, r *http.Request, sourcePlatform string) (Lead, error) {
 	if q == nil {
 		return Lead{}, errors.New("signup: query target is nil")

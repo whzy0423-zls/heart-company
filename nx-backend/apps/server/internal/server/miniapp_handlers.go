@@ -15,7 +15,6 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/miniapp"
 	"nine-xing/nx-backend/apps/server/internal/rag"
-	"nine-xing/nx-backend/apps/server/internal/signup"
 	"nine-xing/nx-backend/apps/server/internal/siteconfig"
 )
 
@@ -174,32 +173,34 @@ func (s *Server) miniappBookings(w http.ResponseWriter, r *http.Request) {
 		}
 		httpx.OK(w, map[string]any{"items": items})
 	case http.MethodPost:
+		r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
 		var in miniapp.BookingInput
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		decoder := json.NewDecoder(r.Body)
+		if err := decoder.Decode(&in); err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
 			return
 		}
-		// 同步写一条后台客户线索，运营在「客户管理」可见
-		var signupID int64
-		lead, lerr := s.signups.Create(r.Context(), signup.LeadInput{
-			Name:        in.ContactName,
-			Contact:     in.Phone,
-			ContactType: "phone",
-			Interest:    bookingInterest(in),
-			Message:     in.Message,
-		}, r)
-		if lerr == nil {
-			if parsed, perr := strconv.ParseInt(lead.ID, 10, 64); perr == nil {
-				signupID = parsed
-			}
-			s.broadcastSignup(lead)
-		}
-		booking, err := s.miniapp.CreateBooking(r.Context(), uid, in, signupID)
-		if err != nil {
-			httpx.Fail(w, http.StatusBadRequest, err.Error())
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
 			return
 		}
-		httpx.OK(w, booking)
+		if s.miniappBookingService == nil {
+			log.Printf("miniapp booking: %v", miniapp.ErrServiceNotConfigured)
+			httpx.Fail(w, http.StatusInternalServerError, "预约提交失败，请稍后重试")
+			return
+		}
+		result, err := s.miniappBookingService.CreateBooking(r.Context(), uid, in, r)
+		if err != nil {
+			if errors.Is(err, miniapp.ErrInvalidBooking) {
+				httpx.Fail(w, http.StatusBadRequest, "预约信息格式不正确")
+				return
+			}
+			log.Printf("miniapp booking: %v", err)
+			httpx.Fail(w, http.StatusInternalServerError, "预约提交失败，请稍后重试")
+			return
+		}
+		s.broadcastSignup(result.Lead)
+		httpx.OK(w, result.Booking)
 	default:
 		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
 	}
@@ -285,21 +286,6 @@ func mergeAppRAGDocuments(siteDocs []rag.Document, knowledgeDocs []rag.Document)
 	docs = append(docs, siteDocs...)
 	docs = append(docs, knowledgeDocs...)
 	return docs
-}
-
-func bookingInterest(in miniapp.BookingInput) string {
-	label := map[string]string{
-		"consult":    "1v1 咨询预约",
-		"course":     "课程报名",
-		"enterprise": "企业课程咨询",
-	}[in.Kind]
-	if label == "" {
-		label = "小程序预约"
-	}
-	if in.Intent != "" {
-		return label + " · " + in.Intent
-	}
-	return label
 }
 
 func miniappRAGDocuments(config siteconfig.SiteConfig) []rag.Document {

@@ -5,12 +5,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/businessmessage"
 	"nine-xing/nx-backend/apps/server/internal/dbtx"
+	"nine-xing/nx-backend/apps/server/internal/signup"
 )
 
 type userServiceFakeBeginner struct {
@@ -164,6 +167,229 @@ func (f *userServiceFakeMessages) Create(ctx context.Context, q dbtx.DBTX, event
 	f.gotQ = q
 	f.event = event
 	return f.created, f.err
+}
+
+type bookingServiceFakeUsers struct {
+	user  User
+	err   error
+	calls int
+	q     dbtx.DBTX
+	ctx   context.Context
+	id    int64
+	steps *[]string
+}
+
+func (f *bookingServiceFakeUsers) UpsertByOpenIDWithDBTX(context.Context, dbtx.DBTX, string, string, string, string) (int64, bool, error) {
+	return 0, false, errors.New("unexpected user upsert")
+}
+
+func (f *bookingServiceFakeUsers) GetUserWithDBTX(ctx context.Context, q dbtx.DBTX, id int64) (User, error) {
+	f.calls++
+	f.ctx, f.q, f.id = ctx, q, id
+	if f.steps != nil {
+		*f.steps = append(*f.steps, "user")
+	}
+	return f.user, f.err
+}
+
+type bookingServiceFakeSignups struct {
+	lead     signup.Lead
+	err      error
+	calls    int
+	q        dbtx.DBTX
+	ctx      context.Context
+	input    signup.LeadInput
+	request  *http.Request
+	platform string
+	steps    *[]string
+}
+
+func (f *bookingServiceFakeSignups) CreateWithDBTX(ctx context.Context, q dbtx.DBTX, input signup.LeadInput, request *http.Request, platform string) (signup.Lead, error) {
+	f.calls++
+	f.ctx, f.q, f.input, f.request, f.platform = ctx, q, input, request, platform
+	if f.steps != nil {
+		*f.steps = append(*f.steps, "signup")
+	}
+	return f.lead, f.err
+}
+
+type bookingServiceFakeBookings struct {
+	booking  Booking
+	err      error
+	calls    int
+	q        dbtx.DBTX
+	ctx      context.Context
+	userID   int64
+	signupID int64
+	input    BookingInput
+	steps    *[]string
+}
+
+func (f *bookingServiceFakeBookings) InsertBooking(ctx context.Context, q dbtx.DBTX, userID int64, input BookingInput, signupID int64) (Booking, error) {
+	f.calls++
+	f.ctx, f.q, f.userID, f.input, f.signupID = ctx, q, userID, input, signupID
+	if f.steps != nil {
+		*f.steps = append(*f.steps, "booking")
+	}
+	return f.booking, f.err
+}
+
+type bookingServiceFakeMessages struct {
+	userServiceFakeMessages
+	steps *[]string
+}
+
+func (f *bookingServiceFakeMessages) Create(ctx context.Context, q dbtx.DBTX, event businessmessage.Event) (bool, error) {
+	if f.steps != nil {
+		*f.steps = append(*f.steps, "message")
+	}
+	return f.userServiceFakeMessages.Create(ctx, q, event)
+}
+
+func TestMiniappBookingServiceCreatesLeadBookingAndSingleMessageInSameTransaction(t *testing.T) {
+	steps := []string{}
+	tx := &userServiceFakeTx{}
+	users := &bookingServiceFakeUsers{user: User{ID: "42", Nickname: "openid-secret"}, steps: &steps}
+	leads := &bookingServiceFakeSignups{lead: signup.Lead{ID: "91", Name: "张三", Contact: "13812345678", SourcePlatform: "miniapp"}, steps: &steps}
+	bookings := &bookingServiceFakeBookings{booking: Booking{ID: "73", SignupID: "91", Kind: "course", ContactName: "张三", Phone: "13812345678"}, steps: &steps}
+	messages := &bookingServiceFakeMessages{userServiceFakeMessages: userServiceFakeMessages{created: true}, steps: &steps}
+	beginner := &userServiceFakeBeginner{tx: tx}
+	request := httptest.NewRequest(http.MethodPost, "/api/miniapp/bookings", strings.NewReader(`{}`))
+	input := BookingInput{Kind: " course ", ContactName: " 张三 ", Phone: " 138-1234 5678 ", Intent: " 深入了解 ", PreferredTime: " 周六下午 ", Message: " 请联系我 "}
+
+	result, err := NewService(beginner, users, messages, WithSignupWriter(leads), WithBookingWriter(bookings)).CreateBooking(context.Background(), 42, input, request)
+
+	if err != nil {
+		t.Fatalf("CreateBooking() error = %v", err)
+	}
+	if result.Booking.ID != "73" || result.Lead.ID != "91" {
+		t.Fatalf("result = %+v", result)
+	}
+	if strings.Join(steps, ",") != "user,signup,booking,message" {
+		t.Fatalf("operation order = %v", steps)
+	}
+	if users.q != tx || leads.q != tx || bookings.q != tx || messages.gotQ != tx {
+		t.Fatal("user read, signup, booking and message must share one transaction")
+	}
+	if beginner.ctx != users.ctx || beginner.ctx != leads.ctx || beginner.ctx != bookings.ctx || beginner.ctx != messages.gotCtx {
+		t.Fatal("all booking operations must share one timeout context")
+	}
+	if users.id != 42 || bookings.userID != 42 || bookings.signupID != 91 {
+		t.Fatalf("unexpected ids: user=%d booking user=%d signup=%d", users.id, bookings.userID, bookings.signupID)
+	}
+	if leads.platform != "miniapp" || leads.request != request {
+		t.Fatalf("signup source/request = %q/%p", leads.platform, leads.request)
+	}
+	if leads.input.Name != "张三" || leads.input.Contact != "13812345678" || leads.input.ContactType != signup.ContactTypePhone || leads.input.Interest != "课程报名 · 深入了解" || leads.input.Message != "请联系我" {
+		t.Fatalf("signup input = %+v", leads.input)
+	}
+	if bookings.input.Kind != "course" || bookings.input.ContactName != "张三" || bookings.input.Phone != "13812345678" || bookings.input.Intent != "深入了解" || bookings.input.PreferredTime != "周六下午" || bookings.input.Message != "请联系我" {
+		t.Fatalf("normalized booking input = %+v", bookings.input)
+	}
+	wantEvent := businessmessage.MiniappBookingCreated("73", "91", "微信用户42", "138****5678")
+	if messages.event != wantEvent || messages.event.EventKey == "signup.created" {
+		t.Fatalf("message = %+v, want %+v", messages.event, wantEvent)
+	}
+	if strings.Contains(messages.event.Content, "openid-secret") {
+		t.Fatalf("booking message leaked an unsafe nickname: %+v", messages.event)
+	}
+	if tx.commitCalls != 1 || tx.rollbackCalls != 1 {
+		t.Fatalf("commit=%d rollback=%d, want 1/1", tx.commitCalls, tx.rollbackCalls)
+	}
+}
+
+func TestMiniappBookingServiceRollsBackEveryFailure(t *testing.T) {
+	wantErr := errors.New("injected booking failure")
+	tests := []struct {
+		name      string
+		configure func(*bookingServiceFakeUsers, *bookingServiceFakeSignups, *bookingServiceFakeBookings, *bookingServiceFakeMessages, *userServiceFakeTx)
+		wantSteps string
+	}{
+		{name: "user read", configure: func(users *bookingServiceFakeUsers, _ *bookingServiceFakeSignups, _ *bookingServiceFakeBookings, _ *bookingServiceFakeMessages, _ *userServiceFakeTx) {
+			users.err = wantErr
+		}, wantSteps: "user"},
+		{name: "signup", configure: func(_ *bookingServiceFakeUsers, leads *bookingServiceFakeSignups, _ *bookingServiceFakeBookings, _ *bookingServiceFakeMessages, _ *userServiceFakeTx) {
+			leads.err = wantErr
+		}, wantSteps: "user,signup"},
+		{name: "booking", configure: func(_ *bookingServiceFakeUsers, _ *bookingServiceFakeSignups, bookings *bookingServiceFakeBookings, _ *bookingServiceFakeMessages, _ *userServiceFakeTx) {
+			bookings.err = wantErr
+		}, wantSteps: "user,signup,booking"},
+		{name: "message", configure: func(_ *bookingServiceFakeUsers, _ *bookingServiceFakeSignups, _ *bookingServiceFakeBookings, messages *bookingServiceFakeMessages, _ *userServiceFakeTx) {
+			messages.err = wantErr
+		}, wantSteps: "user,signup,booking,message"},
+		{name: "commit", configure: func(_ *bookingServiceFakeUsers, _ *bookingServiceFakeSignups, _ *bookingServiceFakeBookings, _ *bookingServiceFakeMessages, tx *userServiceFakeTx) {
+			tx.commitErr = wantErr
+		}, wantSteps: "user,signup,booking,message"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			steps := []string{}
+			tx := &userServiceFakeTx{}
+			users := &bookingServiceFakeUsers{user: User{ID: "42", Nickname: "小芯"}, steps: &steps}
+			leads := &bookingServiceFakeSignups{lead: signup.Lead{ID: "91", Contact: "13812345678"}, steps: &steps}
+			bookings := &bookingServiceFakeBookings{booking: Booking{ID: "73", SignupID: "91", Phone: "13812345678"}, steps: &steps}
+			messages := &bookingServiceFakeMessages{userServiceFakeMessages: userServiceFakeMessages{created: true}, steps: &steps}
+			tt.configure(users, leads, bookings, messages, tx)
+			service := NewService(&userServiceFakeBeginner{tx: tx}, users, messages, WithSignupWriter(leads), WithBookingWriter(bookings))
+
+			_, err := service.CreateBooking(context.Background(), 42, BookingInput{ContactName: "张三", Phone: "13812345678"}, httptest.NewRequest(http.MethodPost, "/", nil))
+
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("CreateBooking() error = %v, want injected error", err)
+			}
+			if strings.Join(steps, ",") != tt.wantSteps {
+				t.Fatalf("steps = %v, want %s", steps, tt.wantSteps)
+			}
+			if tx.rollbackCalls != 1 {
+				t.Fatalf("rollback calls = %d, want 1", tx.rollbackCalls)
+			}
+			wantCommit := 0
+			if tt.name == "commit" {
+				wantCommit = 1
+			}
+			if tx.commitCalls != wantCommit {
+				t.Fatalf("commit calls = %d, want %d", tx.commitCalls, wantCommit)
+			}
+		})
+	}
+}
+
+func TestMiniappBookingServiceRejectsInvalidInputBeforeTransaction(t *testing.T) {
+	beginner := &userServiceFakeBeginner{tx: &userServiceFakeTx{}}
+	service := NewService(beginner, &bookingServiceFakeUsers{}, &bookingServiceFakeMessages{}, WithSignupWriter(&bookingServiceFakeSignups{}), WithBookingWriter(&bookingServiceFakeBookings{}))
+	invalid := []BookingInput{
+		{ContactName: "张三", Phone: "123"},
+		{Kind: "unknown", ContactName: "张三", Phone: "13812345678"},
+		{ContactName: "张\x00三", Phone: "13812345678"},
+		{ContactName: strings.Repeat("名", 81), Phone: "13812345678"},
+		{ContactName: "张三", Phone: "13812345678", Intent: strings.Repeat("意", 121)},
+		{ContactName: "张三", Phone: "13812345678", PreferredTime: strings.Repeat("时", 81)},
+		{ContactName: "张三", Phone: "13812345678", Message: strings.Repeat("留", 1001)},
+	}
+	for _, input := range invalid {
+		if _, err := service.CreateBooking(context.Background(), 42, input, httptest.NewRequest(http.MethodPost, "/", nil)); !errors.Is(err, ErrInvalidBooking) {
+			t.Fatalf("input %+v error = %v, want ErrInvalidBooking", input, err)
+		}
+	}
+	if beginner.calls != 0 {
+		t.Fatalf("invalid input began %d transactions", beginner.calls)
+	}
+}
+
+func TestBookingInterestUsesNormalizedKindAndIntent(t *testing.T) {
+	tests := []struct {
+		in   BookingInput
+		want string
+	}{
+		{in: BookingInput{}, want: "1v1 咨询预约"},
+		{in: BookingInput{Kind: "course", Intent: " 深入了解 "}, want: "课程报名 · 深入了解"},
+		{in: BookingInput{Kind: "enterprise"}, want: "企业课程咨询"},
+	}
+	for _, tt := range tests {
+		if got := BookingInterest(tt.in); got != tt.want {
+			t.Fatalf("BookingInterest(%+v) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
 }
 
 func TestMiniappUserFirstLoginCreatesMessageInSameTransaction(t *testing.T) {

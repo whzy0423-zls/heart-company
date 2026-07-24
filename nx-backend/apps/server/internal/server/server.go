@@ -87,6 +87,7 @@ type Server struct {
 	miniapp               *miniapp.Store
 	miniappService        miniappUserUpserter
 	miniappTestService    miniappTestRecorder
+	miniappBookingService miniappBookingCreator
 	wx                    *wechat.Client
 	pay                   *wxpay.Client
 	ragGen                rag.Generator
@@ -146,6 +147,10 @@ type miniappUserUpserter interface {
 
 type miniappTestRecorder interface {
 	SaveTestRecord(context.Context, int64, miniapp.TestRecordInput) (miniapp.TestRecord, error)
+}
+
+type miniappBookingCreator interface {
+	CreateBooking(context.Context, int64, miniapp.BookingInput, *http.Request) (miniapp.BookingResult, error)
 }
 
 var uploadPermissionCodes = []string{
@@ -209,9 +214,12 @@ func New(env config.Env, database *sql.DB) http.Handler {
 		s.miniapp,
 		businessmessage.Store{},
 		miniapp.WithTestRecordWriter(s.miniapp),
+		miniapp.WithBookingWriter(s.miniapp),
+		miniapp.WithSignupWriter(signupStore),
 	)
 	s.miniappService = miniappService
 	s.miniappTestService = miniappService
+	s.miniappBookingService = miniappService
 	s.wx = newWeChatClient(env)
 	s.pay = mustWxPayClient(env)
 	s.ragGen = newChatGenerator(modelconfig.Config{}.ApplyChat(env.MiniMax))

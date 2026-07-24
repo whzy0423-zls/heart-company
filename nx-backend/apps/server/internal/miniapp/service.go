@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -11,6 +12,8 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/businessmessage"
 	"nine-xing/nx-backend/apps/server/internal/dbtx"
+	"nine-xing/nx-backend/apps/server/internal/privacy"
+	"nine-xing/nx-backend/apps/server/internal/signup"
 )
 
 const miniappUserTimeout = 10 * time.Second
@@ -31,10 +34,20 @@ type testRecordWriter interface {
 	UpdateMainType(context.Context, dbtx.DBTX, int64, int) error
 }
 
+type bookingWriter interface {
+	InsertBooking(context.Context, dbtx.DBTX, int64, BookingInput, int64) (Booking, error)
+}
+
+type signupWriter interface {
+	CreateWithDBTX(context.Context, dbtx.DBTX, signup.LeadInput, *http.Request, string) (signup.Lead, error)
+}
+
 type Service struct {
 	beginner dbtx.Beginner
 	users    userWriter
 	tests    testRecordWriter
+	bookings bookingWriter
+	signups  signupWriter
 	messages messageWriter
 }
 
@@ -43,6 +56,18 @@ type ServiceOption func(*Service)
 func WithTestRecordWriter(writer testRecordWriter) ServiceOption {
 	return func(service *Service) {
 		service.tests = writer
+	}
+}
+
+func WithBookingWriter(writer bookingWriter) ServiceOption {
+	return func(service *Service) {
+		service.bookings = writer
+	}
+}
+
+func WithSignupWriter(writer signupWriter) ServiceOption {
+	return func(service *Service) {
+		service.signups = writer
 	}
 }
 
@@ -138,6 +163,85 @@ func (s *Service) SaveTestRecord(ctx context.Context, userID int64, in TestRecor
 		return TestRecord{}, fmt.Errorf("commit miniapp test transaction: %w", err)
 	}
 	return record, nil
+}
+
+type BookingResult struct {
+	Booking Booking
+	Lead    signup.Lead
+}
+
+func (s *Service) CreateBooking(ctx context.Context, userID int64, in BookingInput, r *http.Request) (BookingResult, error) {
+	if s == nil || s.beginner == nil || s.users == nil || s.bookings == nil || s.signups == nil || s.messages == nil {
+		return BookingResult{}, ErrServiceNotConfigured
+	}
+	if userID <= 0 || r == nil {
+		return BookingResult{}, ErrInvalidBooking
+	}
+	in, err := normalizeBookingInput(in)
+	if err != nil {
+		return BookingResult{}, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	opCtx, cancel := context.WithTimeout(ctx, miniappUserTimeout)
+	defer cancel()
+
+	tx, err := s.beginner.BeginTx(opCtx, nil)
+	if err != nil {
+		return BookingResult{}, fmt.Errorf("begin miniapp booking transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	user, err := s.users.GetUserWithDBTX(opCtx, tx, userID)
+	if err != nil {
+		return BookingResult{}, fmt.Errorf("get miniapp booking user: %w", err)
+	}
+	lead, err := s.signups.CreateWithDBTX(opCtx, tx, signup.LeadInput{
+		Name:        in.ContactName,
+		Contact:     in.Phone,
+		ContactType: signup.ContactTypePhone,
+		Interest:    BookingInterest(in),
+		Message:     in.Message,
+	}, r, "miniapp")
+	if err != nil {
+		return BookingResult{}, fmt.Errorf("create miniapp booking signup: %w", err)
+	}
+	signupID, err := strconv.ParseInt(strings.TrimSpace(lead.ID), 10, 64)
+	if err != nil || signupID <= 0 {
+		return BookingResult{}, fmt.Errorf("create miniapp booking signup: invalid lead id")
+	}
+	booking, err := s.bookings.InsertBooking(opCtx, tx, userID, in, signupID)
+	if err != nil {
+		return BookingResult{}, fmt.Errorf("insert miniapp booking: %w", err)
+	}
+	displayName := miniappTestUserDisplayName(user, userID)
+	if _, err := s.messages.Create(opCtx, tx, businessmessage.MiniappBookingCreated(booking.ID, lead.ID, displayName, privacy.MaskPhone(in.Phone))); err != nil {
+		return BookingResult{}, fmt.Errorf("create miniapp booking message: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return BookingResult{}, fmt.Errorf("commit miniapp booking transaction: %w", err)
+	}
+	return BookingResult{Booking: booking, Lead: lead}, nil
+}
+
+func BookingInterest(in BookingInput) string {
+	kind := strings.TrimSpace(in.Kind)
+	if kind == "" {
+		kind = "consult"
+	}
+	label := map[string]string{
+		"consult":    "1v1 咨询预约",
+		"course":     "课程报名",
+		"enterprise": "企业课程咨询",
+	}[kind]
+	if label == "" {
+		label = "小程序预约"
+	}
+	if intent := strings.TrimSpace(in.Intent); intent != "" {
+		return label + " · " + intent
+	}
+	return label
 }
 
 func miniappTestUserDisplayName(user User, userID int64) string {

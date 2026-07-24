@@ -21,6 +21,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/miniapp"
 	"nine-xing/nx-backend/apps/server/internal/rag"
+	"nine-xing/nx-backend/apps/server/internal/signup"
 	"nine-xing/nx-backend/apps/server/internal/wechat"
 )
 
@@ -350,6 +351,131 @@ func TestMiniappTestRecordsPostRejectsMalformedTrailingAndOversizedJSON(t *testi
 		t.Run(tt.name, func(t *testing.T) {
 			service := &miniappTestRecorderFake{record: miniapp.TestRecord{ID: "77", ResultType: 9}}
 			response := performMiniappTestRecordPost(&Server{miniappTestService: service}, tt.payload)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body=%s, want 400", response.Code, response.Body.String())
+			}
+			if service.calls != 0 {
+				t.Fatalf("invalid JSON reached service %d times", service.calls)
+			}
+		})
+	}
+}
+
+type miniappBookingCreatorFake struct {
+	result  miniapp.BookingResult
+	err     error
+	calls   int
+	uid     int64
+	input   miniapp.BookingInput
+	request *http.Request
+}
+
+func (f *miniappBookingCreatorFake) CreateBooking(_ context.Context, uid int64, input miniapp.BookingInput, request *http.Request) (miniapp.BookingResult, error) {
+	f.calls++
+	f.uid, f.input, f.request = uid, input, request
+	return f.result, f.err
+}
+
+func performMiniappBookingPost(s *Server, payload string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(http.MethodPost, "/api/miniapp/bookings", strings.NewReader(payload))
+	request.Header.Set("Content-Type", "application/json")
+	request = request.WithContext(withUser(request.Context(), auth.UserInfo{ID: 42, Roles: []string{miniappRole}}))
+	response := httptest.NewRecorder()
+	s.miniappBookings(response, request)
+	return response
+}
+
+func TestMiniappBookingsPostUsesTransactionalServiceBroadcastsAfterSuccessAndReturnsBooking(t *testing.T) {
+	lead := signup.Lead{ID: "91", Name: "张三", SourcePlatform: "miniapp"}
+	booking := miniapp.Booking{ID: "73", SignupID: "91", Kind: "consult", ContactName: "张三", Phone: "13812345678", Status: "pending"}
+	service := &miniappBookingCreatorFake{result: miniapp.BookingResult{Booking: booking, Lead: lead}}
+	subscriber := make(chan signup.Lead, 1)
+	s := &Server{
+		miniappBookingService: service,
+		signupSubscribers:     map[chan signup.Lead]struct{}{subscriber: {}},
+	}
+
+	response := performMiniappBookingPost(s, `{"kind":"consult","contactName":"张三","phone":"13812345678"}`)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+	}
+	if service.calls != 1 || service.uid != 42 || service.input.ContactName != "张三" || service.request == nil {
+		t.Fatalf("unexpected service call: %+v", service)
+	}
+	select {
+	case got := <-subscriber:
+		if got.ID != lead.ID {
+			t.Fatalf("broadcast lead = %+v, want %+v", got, lead)
+		}
+	default:
+		t.Fatal("successful committed booking was not broadcast")
+	}
+	var envelope struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Data["id"] != "73" || envelope.Data["signupId"] != "91" || envelope.Data["contactName"] != "张三" {
+		t.Fatalf("incompatible booking response = %+v", envelope.Data)
+	}
+	if _, exists := envelope.Data["lead"]; exists {
+		t.Fatalf("response leaked internal lead result: %+v", envelope.Data)
+	}
+	if _, exists := envelope.Data["booking"]; exists {
+		t.Fatalf("response nested booking result unexpectedly: %+v", envelope.Data)
+	}
+}
+
+func TestMiniappBookingsPostDoesNotBroadcastOnFailureAndMapsErrorsSafely(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantBody   string
+		secret     string
+	}{
+		{name: "validation", err: fmt.Errorf("unsafe details: %w", miniapp.ErrInvalidBooking), wantStatus: http.StatusBadRequest, wantBody: "预约信息格式不正确", secret: "unsafe details"},
+		{name: "internal", err: errors.New("database password=super-secret unavailable"), wantStatus: http.StatusInternalServerError, wantBody: "预约提交失败，请稍后重试", secret: "super-secret"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &miniappBookingCreatorFake{err: tt.err}
+			subscriber := make(chan signup.Lead, 1)
+			s := &Server{miniappBookingService: service, signupSubscribers: map[chan signup.Lead]struct{}{subscriber: {}}}
+
+			response := performMiniappBookingPost(s, `{"contactName":"张三","phone":"13812345678"}`)
+
+			if response.Code != tt.wantStatus {
+				t.Fatalf("status = %d body=%s, want %d", response.Code, response.Body.String(), tt.wantStatus)
+			}
+			if !strings.Contains(response.Body.String(), tt.wantBody) || strings.Contains(response.Body.String(), tt.secret) {
+				t.Fatalf("unsafe response body = %s", response.Body.String())
+			}
+			select {
+			case got := <-subscriber:
+				t.Fatalf("failed booking broadcast lead: %+v", got)
+			default:
+			}
+		})
+	}
+}
+
+func TestMiniappBookingsPostRejectsMalformedTrailingAndOversizedJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "malformed", payload: `{"contactName":`},
+		{name: "trailing", payload: `{"contactName":"张三"} trailing`},
+		{name: "multiple values", payload: `{"contactName":"张三"}{"phone":"13812345678"}`},
+		{name: "oversized", payload: `{"contactName":"张三","phone":"13812345678","message":"` + strings.Repeat("x", 17*1024) + `"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &miniappBookingCreatorFake{}
+			response := performMiniappBookingPost(&Server{miniappBookingService: service}, tt.payload)
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d body=%s, want 400", response.Code, response.Body.String())
 			}

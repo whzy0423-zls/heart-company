@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +45,7 @@ var (
 	ErrInvalidOpenID     = errors.New("miniapp: invalid openid")
 	ErrInvalidUserSource = errors.New("miniapp: invalid user source")
 	ErrInvalidTestRecord = errors.New("miniapp: invalid test record")
+	ErrInvalidBooking    = errors.New("miniapp: invalid booking")
 )
 
 func (s *Store) ctx(parent context.Context) (context.Context, context.CancelFunc) {
@@ -403,6 +405,7 @@ func (s *Store) ListTestRecords(ctx context.Context, userID int64) ([]TestRecord
 
 type Booking struct {
 	ID            string `json:"id"`
+	SignupID      string `json:"signupId"`
 	Kind          string `json:"kind"`
 	ContactName   string `json:"contactName"`
 	Phone         string `json:"phone"`
@@ -422,31 +425,74 @@ type BookingInput struct {
 	Message       string `json:"message"`
 }
 
-// CreateBooking 落库预约，并返回新预约 id。signupID 为关联的后台线索 id（0 表示未关联）。
-func (s *Store) CreateBooking(ctx context.Context, userID int64, in BookingInput, signupID int64) (Booking, error) {
-	c, cancel := s.ctx(ctx)
-	defer cancel()
-	kind := in.Kind
-	if kind == "" {
-		kind = "consult"
+const (
+	maxBookingContactNameRunes   = 80
+	maxBookingIntentRunes        = 120
+	maxBookingPreferredTimeRunes = 80
+	maxBookingMessageRunes       = 1000
+)
+
+var mainlandBookingPhoneRE = regexp.MustCompile(`^1[3-9][0-9]{9}$`)
+
+func normalizeBookingInput(in BookingInput) (BookingInput, error) {
+	in.Kind = strings.TrimSpace(in.Kind)
+	if in.Kind == "" {
+		in.Kind = "consult"
 	}
-	var sid sql.NullInt64
-	if signupID > 0 {
-		sid = sql.NullInt64{Int64: signupID, Valid: true}
+	switch in.Kind {
+	case "consult", "course", "enterprise":
+	default:
+		return BookingInput{}, ErrInvalidBooking
+	}
+	in.ContactName = strings.TrimSpace(in.ContactName)
+	in.Phone = strings.TrimSpace(in.Phone)
+	in.Intent = strings.TrimSpace(in.Intent)
+	in.PreferredTime = strings.TrimSpace(in.PreferredTime)
+	in.Message = strings.TrimSpace(in.Message)
+	for _, field := range []string{in.ContactName, in.Phone, in.Intent, in.PreferredTime, in.Message} {
+		if containsControl(field) {
+			return BookingInput{}, ErrInvalidBooking
+		}
+	}
+	if in.ContactName == "" || utf8.RuneCountInString(in.ContactName) > maxBookingContactNameRunes ||
+		utf8.RuneCountInString(in.Intent) > maxBookingIntentRunes ||
+		utf8.RuneCountInString(in.PreferredTime) > maxBookingPreferredTimeRunes ||
+		utf8.RuneCountInString(in.Message) > maxBookingMessageRunes {
+		return BookingInput{}, ErrInvalidBooking
+	}
+	in.Phone = strings.NewReplacer(" ", "", "　", "", "-", "", "－", "").Replace(in.Phone)
+	if !mainlandBookingPhoneRE.MatchString(in.Phone) {
+		return BookingInput{}, ErrInvalidBooking
+	}
+	return in, nil
+}
+
+// InsertBooking 在调用方提供的事务中写入预约，并强制关联有效的小程序用户和报名线索。
+func (s *Store) InsertBooking(ctx context.Context, q dbtx.DBTX, userID int64, in BookingInput, signupID int64) (Booking, error) {
+	if userID <= 0 || signupID <= 0 {
+		return Booking{}, ErrInvalidBooking
+	}
+	in, err := normalizeBookingInput(in)
+	if err != nil {
+		return Booking{}, err
+	}
+	if q == nil {
+		return Booking{}, ErrNilDBTX
 	}
 	var id int64
 	var ct time.Time
-	err := s.db.QueryRowContext(c,
+	err = q.QueryRowContext(ctx,
 		`INSERT INTO bookings (wx_user_id, kind, contact_name, phone, intent, preferred_time, message, signup_id)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, create_time`,
-		userID, kind, in.ContactName, in.Phone, in.Intent, in.PreferredTime, in.Message, sid,
+		userID, in.Kind, in.ContactName, in.Phone, in.Intent, in.PreferredTime, in.Message, signupID,
 	).Scan(&id, &ct)
 	if err != nil {
 		return Booking{}, err
 	}
 	return Booking{
 		ID:            strconv.FormatInt(id, 10),
-		Kind:          kind,
+		SignupID:      strconv.FormatInt(signupID, 10),
+		Kind:          in.Kind,
 		ContactName:   in.ContactName,
 		Phone:         in.Phone,
 		Intent:        in.Intent,
@@ -461,7 +507,7 @@ func (s *Store) ListBookings(ctx context.Context, userID int64) ([]Booking, erro
 	c, cancel := s.ctx(ctx)
 	defer cancel()
 	rows, err := s.db.QueryContext(c,
-		`SELECT id, kind, contact_name, phone, intent, preferred_time, message, status, create_time
+		`SELECT id, COALESCE(signup_id,0), kind, contact_name, phone, intent, preferred_time, message, status, create_time
 		 FROM bookings WHERE wx_user_id=$1 ORDER BY create_time DESC LIMIT 50`, userID)
 	if err != nil {
 		return nil, err
@@ -470,12 +516,15 @@ func (s *Store) ListBookings(ctx context.Context, userID int64) ([]Booking, erro
 	items := []Booking{}
 	for rows.Next() {
 		var b Booking
-		var id int64
+		var id, signupID int64
 		var ct time.Time
-		if err := rows.Scan(&id, &b.Kind, &b.ContactName, &b.Phone, &b.Intent, &b.PreferredTime, &b.Message, &b.Status, &ct); err != nil {
+		if err := rows.Scan(&id, &signupID, &b.Kind, &b.ContactName, &b.Phone, &b.Intent, &b.PreferredTime, &b.Message, &b.Status, &ct); err != nil {
 			return nil, err
 		}
 		b.ID = strconv.FormatInt(id, 10)
+		if signupID > 0 {
+			b.SignupID = strconv.FormatInt(signupID, 10)
+		}
 		b.CreateTime = fmtTime(ct)
 		items = append(items, b)
 	}

@@ -199,40 +199,6 @@ func TestSignupSourceFollowScansSourcePlatform(t *testing.T) {
 	}
 }
 
-func TestDeprecatedCreateMarksMiniappAndDoesNotWriteLegacyMessage(t *testing.T) {
-	var queries []string
-	var insertArgs []driver.NamedValue
-	database := openSignupScriptDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-		queries = append(queries, query)
-		if !strings.Contains(query, "INSERT INTO signups") {
-			return nil, fmt.Errorf("unexpected query: %s", query)
-		}
-		insertArgs = append([]driver.NamedValue(nil), args...)
-		return &signupRows{
-			columns: []string{"id", "create_time"},
-			values:  [][]driver.Value{{int64(43), time.Date(2026, 7, 23, 9, 0, 0, 0, time.UTC)}},
-		}, nil
-	})
-	request := httptest.NewRequest("POST", "/api/miniapp/bookings", nil)
-
-	lead, err := NewStore(database).Create(context.Background(), LeadInput{
-		Name: "李四", ContactType: ContactTypePhone, Contact: "13912345678",
-	}, request)
-
-	if err != nil {
-		t.Fatalf("deprecated Create() error = %v", err)
-	}
-	if lead.SourcePlatform != "miniapp" {
-		t.Fatalf("deprecated Create() source = %q, want miniapp", lead.SourcePlatform)
-	}
-	if len(queries) != 1 || strings.Contains(strings.ToLower(queries[0]), "messages") {
-		t.Fatalf("deprecated Create() queries = %q, want signup only", queries)
-	}
-	if len(insertArgs) != 18 || insertArgs[17].Value != "miniapp" {
-		t.Fatalf("deprecated Create() args = %+v, want final miniapp source", insertArgs)
-	}
-}
-
 var signupScriptDriverID atomic.Int64
 
 type signupScript func(string, []driver.NamedValue) (driver.Rows, error)
