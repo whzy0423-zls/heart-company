@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,23 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/testutil"
 )
+
+func TestMessageSummaryRedactsIdentifiers(t *testing.T) {
+	got := messageSummary(`openid="secret-openid" unionid=secret-unionid 手机号:13800138000`)
+	for _, forbidden := range []string{"secret-openid", "secret-unionid", "13800138000"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("summary leaked %q: %q", forbidden, got)
+		}
+	}
+}
+
+func TestParsePositiveMessageIDRejectsUnsafeValues(t *testing.T) {
+	for _, value := range []string{"", "0", "-1", "1.0", "9223372036854775808"} {
+		if _, err := parsePositiveDecimalID(value); err == nil {
+			t.Fatalf("expected %q to be rejected", value)
+		}
+	}
+}
 
 func TestGameOverviewFallsBackToCenterNameFromKey(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")

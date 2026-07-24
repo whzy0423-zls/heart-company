@@ -604,6 +604,235 @@ CREATE INDEX IF NOT EXISTS idx_test_records_user ON test_records(wx_user_id, cre
 CREATE INDEX IF NOT EXISTS idx_bookings_user ON bookings(wx_user_id, create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_wx_users_create_time ON wx_users(create_time DESC);
 
+-- ============ 平台来源与统一业务消息升级 ============
+-- 迁移刻意放在 bookings/test_records/wx_users 均已创建之后，兼容旧数据库升级。
+CREATE TABLE IF NOT EXISTS migration_logs (
+  key TEXT PRIMARY KEY,
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 第一阶段：只增加可空字段，确保历史数据能够先被安全回填。
+ALTER TABLE signups ADD COLUMN IF NOT EXISTS source_platform TEXT;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS platform TEXT;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS event_key TEXT;
+
+-- 第二阶段：回填报名来源。历史报名默认来自官网，有预约关联的报名来自小程序。
+UPDATE signups SET source_platform = 'website'
+WHERE source_platform IS NULL OR source_platform = '';
+
+UPDATE signups s
+SET source_platform = 'miniapp'
+FROM bookings b
+WHERE b.signup_id = s.id
+  AND s.source_platform IS DISTINCT FROM 'miniapp';
+
+-- 第三阶段：按可验证的业务关系回填历史消息，不根据模糊标题猜测归属。
+UPDATE messages m
+SET platform = CASE
+      WHEN m.platform IS NULL OR btrim(m.platform) = '' THEN
+        CASE WHEN s.source_platform = 'miniapp' THEN 'miniapp' ELSE 'website' END
+      WHEN m.platform = 'system' AND m.event_key = 'system.legacy'
+        AND m.target_path IN ('', '/message/management?type=signup') THEN
+        CASE WHEN s.source_platform = 'miniapp' THEN 'miniapp' ELSE 'website' END
+      ELSE m.platform
+    END,
+    event_key = CASE
+      WHEN m.event_key IS NULL OR btrim(m.event_key) = '' THEN
+        CASE WHEN s.source_platform = 'miniapp' THEN 'miniapp.booking.created' ELSE 'signup.created' END
+      WHEN m.platform = 'system' AND m.event_key = 'system.legacy'
+        AND m.target_path IN ('', '/message/management?type=signup') THEN
+        CASE WHEN s.source_platform = 'miniapp' THEN 'miniapp.booking.created' ELSE 'signup.created' END
+      ELSE m.event_key
+    END,
+    target_path = CASE
+      WHEN btrim(m.target_path) = '' OR m.target_path = '/message/management?type=signup' THEN
+        '/customer/signups?leadId=' || s.id::text || '&open=detail'
+      ELSE m.target_path
+    END,
+    business_id = s.id::text
+FROM signups s
+WHERE m.business_type = 'signup'
+  AND m.business_id = s.id::text
+  AND (
+    m.platform IS NULL OR btrim(m.platform) = ''
+    OR m.event_key IS NULL OR btrim(m.event_key) = ''
+    OR btrim(m.target_path) = '' OR m.target_path = '/message/management?type=signup'
+  );
+
+UPDATE messages m
+SET platform = CASE
+      WHEN m.platform IS NULL OR btrim(m.platform) = '' THEN 'miniapp'
+      WHEN m.platform = 'system' AND m.event_key = 'system.legacy' AND btrim(m.target_path) = '' THEN 'miniapp'
+      ELSE m.platform
+    END,
+    event_key = CASE
+      WHEN m.event_key IS NULL OR btrim(m.event_key) = '' THEN 'miniapp.user.created'
+      WHEN m.platform = 'system' AND m.event_key = 'system.legacy' AND btrim(m.target_path) = '' THEN 'miniapp.user.created'
+      ELSE m.event_key
+    END,
+    target_path = CASE
+      WHEN btrim(m.target_path) = '' THEN '/customer/miniapp-users?userId=' || u.id::text || '&open=detail'
+      ELSE m.target_path
+    END,
+    business_id = u.id::text
+FROM wx_users u
+WHERE m.business_type = 'miniapp-user'
+  AND m.business_id = u.id::text
+  AND (
+    m.platform IS NULL OR btrim(m.platform) = ''
+    OR m.event_key IS NULL OR btrim(m.event_key) = ''
+    OR btrim(m.target_path) = ''
+  );
+
+UPDATE messages m
+SET platform = CASE
+      WHEN m.platform IS NULL OR btrim(m.platform) = '' THEN 'miniapp'
+      WHEN m.platform = 'system' AND m.event_key = 'system.legacy' AND btrim(m.target_path) = '' THEN 'miniapp'
+      ELSE m.platform
+    END,
+    event_key = CASE
+      WHEN m.event_key IS NULL OR btrim(m.event_key) = '' THEN 'miniapp.quiz.submitted'
+      WHEN m.platform = 'system' AND m.event_key = 'system.legacy' AND btrim(m.target_path) = '' THEN 'miniapp.quiz.submitted'
+      ELSE m.event_key
+    END,
+    target_path = CASE
+      WHEN btrim(m.target_path) = '' THEN '/customer/miniapp-users?userId=' || r.wx_user_id::text
+        || '&testRecordId=' || r.id::text || '&open=test'
+      ELSE m.target_path
+    END,
+    business_id = r.id::text
+FROM test_records r
+WHERE m.business_type = 'miniapp-test-record'
+  AND m.business_id = r.id::text
+  AND (
+    m.platform IS NULL OR btrim(m.platform) = ''
+    OR m.event_key IS NULL OR btrim(m.event_key) = ''
+    OR btrim(m.target_path) = ''
+  );
+
+UPDATE messages
+SET platform = CASE WHEN platform IS NULL OR btrim(platform) = '' THEN 'system' ELSE platform END,
+    event_key = CASE
+      WHEN event_key IS NULL OR btrim(event_key) = '' OR event_key = 'system.legacy'
+        THEN 'system.legacy.' || id::text
+      ELSE event_key
+    END,
+    business_type = CASE WHEN btrim(business_type) = '' THEN 'message' ELSE business_type END,
+    business_id = CASE WHEN btrim(business_id) = '' THEN id::text ELSE business_id END
+WHERE platform IS NULL OR btrim(platform) = ''
+   OR event_key IS NULL OR btrim(event_key) = '' OR event_key = 'system.legacy';
+
+-- 第四阶段：先记录历史异常摘要，再清理，之后才能安全增加约束。
+WITH orphaned AS (
+  SELECT b.id
+  FROM bookings b
+  LEFT JOIN signups s ON s.id = b.signup_id
+  WHERE b.signup_id IS NOT NULL AND s.id IS NULL
+), orphan_summary AS (
+  SELECT count(*) AS count,
+         COALESCE((SELECT jsonb_agg(id ORDER BY id) FROM (SELECT id FROM orphaned ORDER BY id LIMIT 20) sample), '[]'::jsonb) AS ids
+  FROM orphaned
+)
+INSERT INTO migration_logs (key, detail)
+SELECT 'platform_notification.orphan_bookings', jsonb_build_object('count', count, 'ids', ids)
+FROM orphan_summary
+ON CONFLICT (key) DO NOTHING;
+
+UPDATE bookings b
+SET signup_id = NULL
+WHERE signup_id IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM signups s WHERE s.id = b.signup_id);
+
+WITH ranked AS (
+  SELECT id,
+         row_number() OVER (PARTITION BY event_key, business_type, business_id ORDER BY id) AS duplicate_number
+  FROM messages
+), duplicate_summary AS (
+  SELECT count(*) AS count,
+         COALESCE((SELECT jsonb_agg(id ORDER BY id) FROM (SELECT id FROM ranked WHERE duplicate_number > 1 ORDER BY id LIMIT 20) sample), '[]'::jsonb) AS ids
+  FROM ranked
+  WHERE duplicate_number > 1
+)
+INSERT INTO migration_logs (key, detail)
+SELECT 'platform_notification.duplicate_messages', jsonb_build_object('count', count, 'ids', ids)
+FROM duplicate_summary
+ON CONFLICT (key) DO NOTHING;
+
+WITH ranked AS (
+  SELECT id,
+         row_number() OVER (PARTITION BY event_key, business_type, business_id ORDER BY id) AS duplicate_number
+  FROM messages
+)
+DELETE FROM messages duplicate
+USING ranked
+WHERE duplicate.id = ranked.id
+  AND ranked.duplicate_number > 1;
+
+-- 第五阶段：历史数据干净后增加取值、引用和幂等约束。
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_signups_source_platform' AND conrelid = 'signups'::regclass
+  ) THEN
+    ALTER TABLE signups ADD CONSTRAINT chk_signups_source_platform
+      CHECK (source_platform IN ('website', 'miniapp'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_messages_platform' AND conrelid = 'messages'::regclass
+  ) THEN
+    ALTER TABLE messages ADD CONSTRAINT chk_messages_platform
+      CHECK (platform IN ('website', 'miniapp', 'system'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_bookings_signup' AND conrelid = 'bookings'::regclass
+  ) THEN
+    ALTER TABLE bookings ADD CONSTRAINT fk_bookings_signup
+      FOREIGN KEY (signup_id) REFERENCES signups(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_messages_event_business
+  ON messages(event_key, business_type, business_id);
+CREATE INDEX IF NOT EXISTS idx_messages_unread_id
+  ON messages(is_read, id DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_platform_create_time
+  ON messages(platform, create_time DESC);
+CREATE INDEX IF NOT EXISTS idx_signups_source_create_time
+  ON signups(source_platform, create_time DESC);
+
+-- 最后一阶段：字段全部回填且约束就绪后，再收紧非空并提供兼容默认值。
+ALTER TABLE signups ALTER COLUMN source_platform SET NOT NULL;
+ALTER TABLE messages ALTER COLUMN platform SET NOT NULL;
+ALTER TABLE messages ALTER COLUMN event_key SET NOT NULL;
+ALTER TABLE signups ALTER COLUMN source_platform SET DEFAULT 'website';
+ALTER TABLE messages ALTER COLUMN platform SET DEFAULT 'system';
+ALTER TABLE messages ALTER COLUMN event_key SET DEFAULT 'system.legacy';
+
+-- 兼容仍未显式传入业务身份的旧消息写入路径，并避免默认消息互相触发唯一冲突。
+CREATE OR REPLACE FUNCTION normalize_legacy_message_identity()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF btrim(COALESCE(NEW.business_type, '')) = '' THEN
+    NEW.business_type := 'message';
+  END IF;
+  IF btrim(COALESCE(NEW.business_id, '')) = '' THEN
+    NEW.business_id := NEW.id::text;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_messages_normalize_legacy_identity ON messages;
+CREATE TRIGGER trg_messages_normalize_legacy_identity
+BEFORE INSERT ON messages
+FOR EACH ROW EXECUTE FUNCTION normalize_legacy_message_identity();
+
 -- ============ 支付 / 付费解锁 ============
 -- 订单：覆盖「深度报告单次解锁」等付费项。amount 单位为分。
 CREATE TABLE IF NOT EXISTS orders (

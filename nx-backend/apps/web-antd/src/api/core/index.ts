@@ -13,6 +13,7 @@ export * from './daily-quiz';
 export * from './game-results';
 export * from './menu';
 export * from './message';
+export * from './miniapp-customer';
 export * from './mind-quotes';
 export * from './model-config';
 export * from './push';

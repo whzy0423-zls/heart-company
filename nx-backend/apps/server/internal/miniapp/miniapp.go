@@ -2,12 +2,20 @@
 package miniapp
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"nine-xing/nx-backend/apps/server/internal/dbtx"
 )
 
 type Store struct {
@@ -19,6 +27,26 @@ func NewStore(database *sql.DB) *Store {
 }
 
 const queryTimeout = 10 * time.Second
+
+const (
+	maxTestRecordJSONBytes = 64 * 1024
+	maxTestGenderRunes     = 32
+)
+
+const (
+	maxOpenIDRunes  = 128
+	maxUnionIDRunes = 128
+	maxChannelRunes = 64
+	maxSceneRunes   = 64
+)
+
+var (
+	ErrNilDBTX           = errors.New("miniapp: query target is nil")
+	ErrInvalidOpenID     = errors.New("miniapp: invalid openid")
+	ErrInvalidUserSource = errors.New("miniapp: invalid user source")
+	ErrInvalidTestRecord = errors.New("miniapp: invalid test record")
+	ErrInvalidBooking    = errors.New("miniapp: invalid booking")
+)
 
 func (s *Store) ctx(parent context.Context) (context.Context, context.CancelFunc) {
 	if parent == nil {
@@ -51,24 +79,103 @@ type User struct {
 func (s *Store) UpsertByOpenID(ctx context.Context, openid, unionid, channel, scene string) (int64, error) {
 	c, cancel := s.ctx(ctx)
 	defer cancel()
+	if s == nil || s.db == nil {
+		return 0, ErrNilDBTX
+	}
+	id, _, err := s.UpsertByOpenIDWithDBTX(c, s.db, openid, unionid, channel, scene)
+	return id, err
+}
+
+// UpsertByOpenIDWithDBTX 在调用方事务中创建或更新登录用户，并明确返回是否首次创建。
+func (s *Store) UpsertByOpenIDWithDBTX(ctx context.Context, q dbtx.DBTX, openid, unionid, channel, scene string) (int64, bool, error) {
+	var err error
+	openid, unionid, channel, scene, err = normalizeUserSource(openid, unionid, channel, scene)
+	if err != nil {
+		return 0, false, err
+	}
+	if q == nil {
+		return 0, false, ErrNilDBTX
+	}
+
 	var id int64
-	err := s.db.QueryRowContext(c,
+	err = q.QueryRowContext(ctx,
 		`INSERT INTO wx_users (openid, unionid, channel, scene)
 		 VALUES ($1,$2,$3,$4)
-		 ON CONFLICT (openid) DO UPDATE SET last_login_at = now()
+		 ON CONFLICT (openid) DO NOTHING
 		 RETURNING id`,
 		openid, unionid, channel, scene,
 	).Scan(&id)
-	return id, err
+	if err == nil {
+		return id, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, false, fmt.Errorf("insert miniapp user: %w", err)
+	}
+	err = q.QueryRowContext(ctx,
+		`UPDATE wx_users
+		 SET last_login_at=now()
+		 WHERE openid=$1
+		 RETURNING id`,
+		openid,
+	).Scan(&id)
+	if err != nil {
+		return 0, false, fmt.Errorf("update miniapp user login: %w", err)
+	}
+	return id, false, nil
+}
+
+func normalizeUserSource(openid, unionid, channel, scene string) (string, string, string, string, error) {
+	if containsControl(openid) {
+		return "", "", "", "", ErrInvalidOpenID
+	}
+	if containsControl(unionid) || containsControl(channel) || containsControl(scene) {
+		return "", "", "", "", ErrInvalidUserSource
+	}
+	openid = strings.TrimSpace(openid)
+	unionid = strings.TrimSpace(unionid)
+	channel = strings.TrimSpace(channel)
+	scene = strings.TrimSpace(scene)
+	if openid == "" || utf8.RuneCountInString(openid) > maxOpenIDRunes || !isSafeWechatID(openid) {
+		return "", "", "", "", ErrInvalidOpenID
+	}
+	if utf8.RuneCountInString(unionid) > maxUnionIDRunes || (unionid != "" && !isSafeWechatID(unionid)) ||
+		utf8.RuneCountInString(channel) > maxChannelRunes || utf8.RuneCountInString(scene) > maxSceneRunes {
+		return "", "", "", "", ErrInvalidUserSource
+	}
+	return openid, unionid, channel, scene, nil
+}
+
+func containsControl(value string) bool {
+	return strings.ContainsFunc(value, unicode.IsControl)
+}
+
+func isSafeWechatID(value string) bool {
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (s *Store) GetUser(ctx context.Context, id int64) (User, error) {
 	c, cancel := s.ctx(ctx)
 	defer cancel()
+	if s == nil || s.db == nil {
+		return User{}, ErrNilDBTX
+	}
+	return s.GetUserWithDBTX(c, s.db, id)
+}
+
+func (s *Store) GetUserWithDBTX(ctx context.Context, q dbtx.DBTX, id int64) (User, error) {
+	if q == nil {
+		return User{}, ErrNilDBTX
+	}
 	var u User
 	var uid int64
 	var ct time.Time
-	err := s.db.QueryRowContext(c,
+	err := q.QueryRowContext(ctx,
 		`SELECT id, nickname, avatar, phone, gender, main_type, member_level, create_time
 		 FROM wx_users WHERE id=$1`, id,
 	).Scan(&uid, &u.Nickname, &u.Avatar, &u.Phone, &u.Gender, &u.MainType, &u.MemberLevel, &ct)
@@ -135,43 +242,106 @@ type TestRecordInput struct {
 	Gender     string          `json:"gender"`
 	ResultType int             `json:"resultType"`
 	SecondType int             `json:"secondType"`
+	Score      json.RawMessage `json:"score"`
 	Scores     json.RawMessage `json:"scores"`
 	Centers    json.RawMessage `json:"centers"`
 }
 
-func (s *Store) SaveTestRecord(ctx context.Context, userID int64, in TestRecordInput) (TestRecord, error) {
-	c, cancel := s.ctx(ctx)
-	defer cancel()
-
-	scores := string(in.Scores)
-	if scores == "" {
-		scores = "{}"
+func NormalizeScores(score, legacyScores json.RawMessage) (json.RawMessage, error) {
+	if len(score) == 0 && len(legacyScores) == 0 {
+		return nil, ErrInvalidTestRecord
 	}
-	centers := string(in.Centers)
-	if centers == "" {
-		centers = "[]"
+	var preferred json.RawMessage
+	var preferredValue []byte
+	if len(score) > 0 {
+		var err error
+		preferred, preferredValue, err = normalizeScoreObject(score)
+		if err != nil {
+			return nil, err
+		}
 	}
+	if len(legacyScores) > 0 {
+		legacy, legacyValue, err := normalizeScoreObject(legacyScores)
+		if err != nil {
+			return nil, err
+		}
+		if len(score) == 0 {
+			return legacy, nil
+		}
+		if !bytes.Equal(preferredValue, legacyValue) {
+			return nil, ErrInvalidTestRecord
+		}
+	}
+	return preferred, nil
+}
 
-	tx, err := s.db.BeginTx(c, nil)
+func normalizeScoreObject(raw json.RawMessage) (json.RawMessage, []byte, error) {
+	if len(raw) == 0 || len(raw) > maxTestRecordJSONBytes || !json.Valid(raw) {
+		return nil, nil, ErrInvalidTestRecord
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value map[string]any
+	if err := decoder.Decode(&value); err != nil || value == nil {
+		return nil, nil, ErrInvalidTestRecord
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return nil, nil, ErrInvalidTestRecord
+	}
+	return append(json.RawMessage(nil), raw...), canonical, nil
+}
+
+func normalizeCenters(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 || len(raw) > maxTestRecordJSONBytes || !json.Valid(raw) {
+		return nil, ErrInvalidTestRecord
+	}
+	var value []any
+	if err := json.Unmarshal(raw, &value); err != nil || value == nil {
+		return nil, ErrInvalidTestRecord
+	}
+	return append(json.RawMessage(nil), raw...), nil
+}
+
+func normalizeTestRecordInput(userID int64, in TestRecordInput) (TestRecordInput, error) {
+	if userID <= 0 || in.ResultType < 1 || in.ResultType > 9 || in.SecondType < 0 || in.SecondType > 9 ||
+		(in.SecondType != 0 && in.SecondType == in.ResultType) {
+		return TestRecordInput{}, ErrInvalidTestRecord
+	}
+	in.Gender = strings.TrimSpace(in.Gender)
+	if utf8.RuneCountInString(in.Gender) > maxTestGenderRunes || containsControl(in.Gender) {
+		return TestRecordInput{}, ErrInvalidTestRecord
+	}
+	scores, err := NormalizeScores(in.Score, in.Scores)
+	if err != nil {
+		return TestRecordInput{}, ErrInvalidTestRecord
+	}
+	centers, err := normalizeCenters(in.Centers)
+	if err != nil {
+		return TestRecordInput{}, ErrInvalidTestRecord
+	}
+	in.Score = nil
+	in.Scores = scores
+	in.Centers = centers
+	return in, nil
+}
+
+func (s *Store) InsertTestRecord(ctx context.Context, q dbtx.DBTX, userID int64, in TestRecordInput) (TestRecord, error) {
+	in, err := normalizeTestRecordInput(userID, in)
 	if err != nil {
 		return TestRecord{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	if q == nil {
+		return TestRecord{}, ErrNilDBTX
+	}
 
 	var id int64
 	var ct time.Time
-	if err := tx.QueryRowContext(c,
+	if err := q.QueryRowContext(ctx,
 		`INSERT INTO test_records (wx_user_id, gender, result_type, second_type, scores, centers)
 		 VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb) RETURNING id, create_time`,
-		userID, in.Gender, in.ResultType, in.SecondType, scores, centers,
+		userID, in.Gender, in.ResultType, in.SecondType, string(in.Scores), string(in.Centers),
 	).Scan(&id, &ct); err != nil {
-		return TestRecord{}, err
-	}
-	// 同步用户最近主型
-	if _, err := tx.ExecContext(c, `UPDATE wx_users SET main_type=$1 WHERE id=$2`, in.ResultType, userID); err != nil {
-		return TestRecord{}, err
-	}
-	if err := tx.Commit(); err != nil {
 		return TestRecord{}, err
 	}
 
@@ -180,10 +350,27 @@ func (s *Store) SaveTestRecord(ctx context.Context, userID int64, in TestRecordI
 		Gender:     in.Gender,
 		ResultType: in.ResultType,
 		SecondType: in.SecondType,
-		Scores:     json.RawMessage(scores),
-		Centers:    json.RawMessage(centers),
+		Scores:     in.Scores,
+		Centers:    in.Centers,
 		CreateTime: fmtTime(ct),
 	}, nil
+}
+
+func (s *Store) UpdateMainType(ctx context.Context, q dbtx.DBTX, userID int64, resultType int) error {
+	if userID <= 0 || resultType < 1 || resultType > 9 {
+		return ErrInvalidTestRecord
+	}
+	if q == nil {
+		return ErrNilDBTX
+	}
+	result, err := q.ExecContext(ctx, `UPDATE wx_users SET main_type=$1 WHERE id=$2`, resultType, userID)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) ListTestRecords(ctx context.Context, userID int64) ([]TestRecord, error) {
@@ -218,6 +405,7 @@ func (s *Store) ListTestRecords(ctx context.Context, userID int64) ([]TestRecord
 
 type Booking struct {
 	ID            string `json:"id"`
+	SignupID      string `json:"signupId"`
 	Kind          string `json:"kind"`
 	ContactName   string `json:"contactName"`
 	Phone         string `json:"phone"`
@@ -237,31 +425,74 @@ type BookingInput struct {
 	Message       string `json:"message"`
 }
 
-// CreateBooking 落库预约，并返回新预约 id。signupID 为关联的后台线索 id（0 表示未关联）。
-func (s *Store) CreateBooking(ctx context.Context, userID int64, in BookingInput, signupID int64) (Booking, error) {
-	c, cancel := s.ctx(ctx)
-	defer cancel()
-	kind := in.Kind
-	if kind == "" {
-		kind = "consult"
+const (
+	maxBookingContactNameRunes   = 80
+	maxBookingIntentRunes        = 120
+	maxBookingPreferredTimeRunes = 80
+	maxBookingMessageRunes       = 1000
+)
+
+var mainlandBookingPhoneRE = regexp.MustCompile(`^1[3-9][0-9]{9}$`)
+
+func normalizeBookingInput(in BookingInput) (BookingInput, error) {
+	in.Kind = strings.TrimSpace(in.Kind)
+	if in.Kind == "" {
+		in.Kind = "consult"
 	}
-	var sid sql.NullInt64
-	if signupID > 0 {
-		sid = sql.NullInt64{Int64: signupID, Valid: true}
+	switch in.Kind {
+	case "consult", "course", "enterprise":
+	default:
+		return BookingInput{}, ErrInvalidBooking
+	}
+	in.ContactName = strings.TrimSpace(in.ContactName)
+	in.Phone = strings.TrimSpace(in.Phone)
+	in.Intent = strings.TrimSpace(in.Intent)
+	in.PreferredTime = strings.TrimSpace(in.PreferredTime)
+	in.Message = strings.TrimSpace(in.Message)
+	for _, field := range []string{in.ContactName, in.Phone, in.Intent, in.PreferredTime, in.Message} {
+		if containsControl(field) {
+			return BookingInput{}, ErrInvalidBooking
+		}
+	}
+	if in.ContactName == "" || utf8.RuneCountInString(in.ContactName) > maxBookingContactNameRunes ||
+		utf8.RuneCountInString(in.Intent) > maxBookingIntentRunes ||
+		utf8.RuneCountInString(in.PreferredTime) > maxBookingPreferredTimeRunes ||
+		utf8.RuneCountInString(in.Message) > maxBookingMessageRunes {
+		return BookingInput{}, ErrInvalidBooking
+	}
+	in.Phone = strings.NewReplacer(" ", "", "　", "", "-", "", "－", "").Replace(in.Phone)
+	if !mainlandBookingPhoneRE.MatchString(in.Phone) {
+		return BookingInput{}, ErrInvalidBooking
+	}
+	return in, nil
+}
+
+// InsertBooking 在调用方提供的事务中写入预约，并强制关联有效的小程序用户和报名线索。
+func (s *Store) InsertBooking(ctx context.Context, q dbtx.DBTX, userID int64, in BookingInput, signupID int64) (Booking, error) {
+	if userID <= 0 || signupID <= 0 {
+		return Booking{}, ErrInvalidBooking
+	}
+	in, err := normalizeBookingInput(in)
+	if err != nil {
+		return Booking{}, err
+	}
+	if q == nil {
+		return Booking{}, ErrNilDBTX
 	}
 	var id int64
 	var ct time.Time
-	err := s.db.QueryRowContext(c,
+	err = q.QueryRowContext(ctx,
 		`INSERT INTO bookings (wx_user_id, kind, contact_name, phone, intent, preferred_time, message, signup_id)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, create_time`,
-		userID, kind, in.ContactName, in.Phone, in.Intent, in.PreferredTime, in.Message, sid,
+		userID, in.Kind, in.ContactName, in.Phone, in.Intent, in.PreferredTime, in.Message, signupID,
 	).Scan(&id, &ct)
 	if err != nil {
 		return Booking{}, err
 	}
 	return Booking{
 		ID:            strconv.FormatInt(id, 10),
-		Kind:          kind,
+		SignupID:      strconv.FormatInt(signupID, 10),
+		Kind:          in.Kind,
 		ContactName:   in.ContactName,
 		Phone:         in.Phone,
 		Intent:        in.Intent,
@@ -276,7 +507,7 @@ func (s *Store) ListBookings(ctx context.Context, userID int64) ([]Booking, erro
 	c, cancel := s.ctx(ctx)
 	defer cancel()
 	rows, err := s.db.QueryContext(c,
-		`SELECT id, kind, contact_name, phone, intent, preferred_time, message, status, create_time
+		`SELECT id, COALESCE(signup_id,0), kind, contact_name, phone, intent, preferred_time, message, status, create_time
 		 FROM bookings WHERE wx_user_id=$1 ORDER BY create_time DESC LIMIT 50`, userID)
 	if err != nil {
 		return nil, err
@@ -285,12 +516,15 @@ func (s *Store) ListBookings(ctx context.Context, userID int64) ([]Booking, erro
 	items := []Booking{}
 	for rows.Next() {
 		var b Booking
-		var id int64
+		var id, signupID int64
 		var ct time.Time
-		if err := rows.Scan(&id, &b.Kind, &b.ContactName, &b.Phone, &b.Intent, &b.PreferredTime, &b.Message, &b.Status, &ct); err != nil {
+		if err := rows.Scan(&id, &signupID, &b.Kind, &b.ContactName, &b.Phone, &b.Intent, &b.PreferredTime, &b.Message, &b.Status, &ct); err != nil {
 			return nil, err
 		}
 		b.ID = strconv.FormatInt(id, 10)
+		if signupID > 0 {
+			b.SignupID = strconv.FormatInt(signupID, 10)
+		}
 		b.CreateTime = fmtTime(ct)
 		items = append(items, b)
 	}

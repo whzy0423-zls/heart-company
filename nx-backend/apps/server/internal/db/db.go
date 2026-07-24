@@ -76,6 +76,9 @@ func seed(ctx context.Context, database *sql.DB, adminUser, adminPassword string
 	if err := seedRoles(ctx, database); err != nil {
 		return err
 	}
+	if err := seedCustomerMiniappMenuBindings(ctx, database); err != nil {
+		return err
+	}
 	if err := seedMindQuotes(ctx, database); err != nil {
 		return err
 	}
@@ -134,6 +137,7 @@ var defaultMenus = []seedMenu{
 	{ID: 508, PID: 500, Name: "CustomerAppMemory", Path: "/customer/app-memories", Component: "/customer/app-memories", AuthCode: "Customer:AppMemory:List", Type: "menu", Sort: 6, Icon: "lucide:database-zap", Title: "私库记忆"},
 	{ID: 509, PID: 508, Name: "CustomerAppMemoryWrite", AuthCode: "Customer:AppMemory:Write", Type: "button", Sort: 1, Icon: "lucide:pencil", Title: "管理私库记忆"},
 	{ID: 510, PID: 500, Name: "CustomerQuizQuestions", Path: "/customer/quiz-questions", Component: "/quiz/questions", AuthCode: "Website:Write", Type: "menu", Sort: 7, Icon: "lucide:list-checks", Title: "测评题库"},
+	{ID: 511, PID: 500, Name: "CustomerMiniappUsers", Path: "/customer/miniapp-users", Component: "/customer/miniapp-users", AuthCode: "Customer:Miniapp:List", Type: "menu", Sort: 8, Icon: "lucide:users-round", Title: "小程序客户"},
 	{ID: 1200, PID: 0, Name: "ProfileCalibration", Path: "/profile-calibration", Type: "catalog", Sort: 17, Icon: "lucide:badge-check", Title: "画像校准"},
 	{ID: 1201, PID: 1200, Name: "DailyQuizBank", Path: "/profile-calibration/daily-quiz-bank", Component: "/profile-calibration/daily-quiz-bank", AuthCode: "ProfileCalibration:DailyQuiz:Manage", Type: "menu", Sort: 1, Icon: "lucide:list-checks", Title: "每日题库管理"},
 	{ID: 603, PID: 1200, Name: "DailyQuizPushRecords", Path: "/profile-calibration/daily-quiz-push", Component: "/message/daily-quiz-push", AuthCode: "ProfileCalibration:DailyQuiz:Manage", Type: "menu", Sort: 2, Icon: "lucide:send", Title: "每日题推送记录"},
@@ -266,6 +270,40 @@ func seedRoles(ctx context.Context, database *sql.DB) error {
 		`INSERT INTO role_menus (role_id, menu_id)
 		 SELECT $1, id FROM menus
 		 ON CONFLICT (role_id, menu_id) DO NOTHING`, adminRoleID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// seedCustomerMiniappMenuBindings 为升级前已有客户只读权限的角色补齐小程序客户菜单。
+func seedCustomerMiniappMenuBindings(ctx context.Context, database *sql.DB) error {
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const migrationKey = "seed.customer_miniapp_menu_bindings.v1"
+	var insertedKey string
+	err = tx.QueryRowContext(ctx,
+		`INSERT INTO migration_logs (key, detail)
+		 VALUES ($1, '{"description":"为已有客户只读角色补齐小程序客户菜单"}'::jsonb)
+		 ON CONFLICT (key) DO NOTHING
+		 RETURNING key`, migrationKey,
+	).Scan(&insertedKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return tx.Rollback()
+	}
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO role_menus (role_id, menu_id)
+		 SELECT DISTINCT role_id, 511
+		   FROM role_menus
+		  WHERE menu_id IN (501,502,504,505,507,508)
+		 ON CONFLICT (role_id, menu_id) DO NOTHING`); err != nil {
 		return err
 	}
 	return tx.Commit()
