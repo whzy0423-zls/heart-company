@@ -53,10 +53,14 @@ vi.mock('#/views/site-config/components/editor-shell.vue', () => ({
 vi.mock('#/views/site-config/components/image-path-input.vue', () => ({
   default: {
     name: 'ImagePathInput',
-    props: ['dir', 'value'],
+    props: {
+      dir: String,
+      storeObjectUrl: Boolean,
+      value: String,
+    },
     emits: ['update:value'],
     template:
-      '<button class="image-input" :data-dir="dir" :data-value="value" @click="$emit(\'update:value\', \'/api/upload-assets/new-banner\')">上传轮播图</button>',
+      '<button class="image-input" :data-dir="dir" :data-store-object-url="String(storeObjectUrl)" :data-value="value" @click="$emit(\'update:value\', \'https://bucket.example.com/miniapp-home/new-banner.png\')">上传轮播图</button>',
   },
 }));
 
@@ -198,6 +202,11 @@ describe('miniapp home carousel management', () => {
     ).toBe('miniapp-home');
     expect(
       document.body
+        .querySelector('.image-input')
+        ?.getAttribute('data-store-object-url'),
+    ).toBe('true');
+    expect(
+      document.body
         .querySelector('[data-testid="carousel-interval"]')
         ?.getAttribute('min'),
     ).toBe('2000');
@@ -218,7 +227,10 @@ describe('miniapp home carousel management', () => {
 
     expect((config.home.miniappCarousel as any).items).toEqual([
       { enabled: true, image: '' },
-      { enabled: false, image: '/api/upload-assets/new-banner' },
+      {
+        enabled: false,
+        image: 'https://bucket.example.com/miniapp-home/new-banner.png',
+      },
       { enabled: true, image: '' },
     ]);
     expect((config.home.miniappCarousel as any).items[1]).toBe(uploadedItem);
@@ -226,7 +238,11 @@ describe('miniapp home carousel management', () => {
       [...document.body.querySelectorAll('.image-input')].map((input) =>
         input.getAttribute('data-value'),
       ),
-    ).toEqual(['', '/api/upload-assets/new-banner', '']);
+    ).toEqual([
+      '',
+      'https://bucket.example.com/miniapp-home/new-banner.png',
+      '',
+    ]);
 
     [...document.body.querySelectorAll('button')]
       .filter((button) => button.textContent?.trim() === '上移')[1]
@@ -234,7 +250,10 @@ describe('miniapp home carousel management', () => {
     await flushVuePromises();
 
     expect((config.home.miniappCarousel as any).items).toEqual([
-      { enabled: false, image: '/api/upload-assets/new-banner' },
+      {
+        enabled: false,
+        image: 'https://bucket.example.com/miniapp-home/new-banner.png',
+      },
       { enabled: true, image: '' },
       { enabled: true, image: '' },
     ]);
@@ -243,7 +262,11 @@ describe('miniapp home carousel management', () => {
       [...document.body.querySelectorAll('.image-input')].map((input) =>
         input.getAttribute('data-value'),
       ),
-    ).toEqual(['/api/upload-assets/new-banner', '', '']);
+    ).toEqual([
+      'https://bucket.example.com/miniapp-home/new-banner.png',
+      '',
+      '',
+    ]);
 
     wrapper.button('删除')?.click();
     wrapper.button('保存配置')?.click();

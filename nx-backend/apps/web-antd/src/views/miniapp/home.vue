@@ -135,6 +135,7 @@ function itemKey(item: MiniappCarouselItem) {
             v-model:value="item.image"
             dir="miniapp-home"
             empty-text="未设置轮播图"
+            store-object-url
             upload-text="上传图片"
           />
           <Switch
