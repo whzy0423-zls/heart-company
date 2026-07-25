@@ -36,7 +36,7 @@ const ENTRY_DEFAULTS: Record<MiniappHomeEntryKey, MiniappHomeEntry> = {
     enabled: true,
     icon: 'book',
     key: 'learn',
-    theme: 'orange',
+    theme: 'cyan',
     title: '老师课程',
   },
   profile: {
@@ -44,7 +44,7 @@ const ENTRY_DEFAULTS: Record<MiniappHomeEntryKey, MiniappHomeEntry> = {
     enabled: true,
     icon: 'growth',
     key: 'profile',
-    theme: 'pink',
+    theme: 'orange',
     title: '成长档案',
   },
 };

@@ -1,17 +1,19 @@
 <script setup>
-import { onMounted, ref } from 'vue'
-import { QUESTIONS } from '../../data/enneagramGame'
+import { computed, onMounted, ref } from 'vue'
 import { getStoredSiteConfig, refreshSiteConfig } from '../../utils/siteConfig'
 import { filterFailedCarouselItems, normalizeHomeCarousel } from '../../utils/homeCarousel'
+import { MINIAPP_HOME_ENTRY_BEHAVIORS, normalizeMiniappHome } from '../../utils/homeMenu'
 
-const total = ref(QUESTIONS.length)
 const wheelVisible = ref(true)
 const carousel = ref(normalizeHomeCarousel())
+const miniappHome = ref(normalizeMiniappHome())
+const enabledHomeEntries = computed(() => miniappHome.value.entriesSection.items.filter((item) => item.enabled))
 const carouselPaused = ref(false)
 const failedCarouselImages = new Set()
 
-function applyCarousel(config) {
+function applyHomeConfig(config) {
   carousel.value = filterFailedCarouselItems(normalizeHomeCarousel(config), failedCarouselImages)
+  miniappHome.value = normalizeMiniappHome(config)
   if (carousel.value.items.length <= 1) carouselPaused.value = false
 }
 
@@ -26,26 +28,31 @@ function toggleCarouselPaused() {
 
 onMounted(() => {
   const cached = getStoredSiteConfig()
-  if (cached) applyCarousel(cached)
+  if (cached) applyHomeConfig(cached)
 
   refreshSiteConfig()
-    .then(applyCarousel)
+    .then(applyHomeConfig)
     .catch(() => {
       // 网络刷新失败时保留已经展示的首页内容。
     })
 })
 
+function activateHomeEntry(key) {
+  const behavior = MINIAPP_HOME_ENTRY_BEHAVIORS[key]
+  if (!behavior) return
+  uni[behavior.method]({ url: behavior.url })
+}
 function startTest() {
-  uni.navigateTo({ url: '/pages/test/test' })
+  activateHomeEntry('test')
 }
 function goLearn() {
-  uni.switchTab({ url: '/pages/learn/learn' })
+  activateHomeEntry('learn')
 }
 function goRelation() {
-  uni.navigateTo({ url: '/pages/relation/relation' })
+  activateHomeEntry('relation')
 }
 function goProfile() {
-  uni.switchTab({ url: '/pages/profile/profile' })
+  activateHomeEntry('profile')
 }
 function hideWheel() {
   wheelVisible.value = false
@@ -82,10 +89,10 @@ function hideWheel() {
       @click="toggleCarouselPaused"
     >{{ carouselPaused ? '继续轮播' : '暂停轮播' }}</button>
 
-    <view class="home-nav">
+    <view v-if="miniappHome.brand.enabled" class="home-nav">
       <view class="home-nav__copy">
-        <text class="home-nav__brand">九型芯之力</text>
-        <text class="home-nav__tagline">看见动机，找到成长方向</text>
+        <text class="home-nav__brand">{{ miniappHome.brand.name }}</text>
+        <text class="home-nav__tagline">{{ miniappHome.brand.tagline }}</text>
       </view>
       <view
         class="home-nav__profile"
@@ -105,18 +112,18 @@ function hideWheel() {
       </view>
     </view>
 
-    <view class="hero card ios-card">
+    <view v-if="miniappHome.hero.enabled" class="hero card ios-card">
       <view class="hero__orb hero__orb--blue"></view>
       <view class="hero__orb hero__orb--orange"></view>
       <view class="hero__copy">
-        <text class="hero__kicker">老师导学 · 课程配套 · {{ total }} 题自测</text>
-        <text class="hero__title">读懂自己内在的能量地图</text>
-        <text class="hero__lead">从核心动机出发，在老师课程中理解自己，也更从容地走进关系与成长。</text>
+        <text class="hero__kicker">{{ miniappHome.hero.kicker }}</text>
+        <text class="hero__title">{{ miniappHome.hero.title }}</text>
+        <text class="hero__lead">{{ miniappHome.hero.description }}</text>
         <button
           class="hero__cta ios-button"
           hover-class="hero__cta--pressed"
           @click="startTest"
-        >开始人格测试</button>
+        >{{ miniappHome.hero.buttonText }}</button>
       </view>
       <view class="hero__visual">
         <image
@@ -132,93 +139,35 @@ function hideWheel() {
       </view>
     </view>
 
-    <view class="section-head ios-section">
-      <text class="section-title">探索你的九型能量</text>
-      <text class="section-lead">从测试、关系、课程到成长档案，选择此刻最需要的一步。</text>
+    <view v-if="miniappHome.entriesSection.enabled" class="section-head ios-section">
+      <text class="section-title">{{ miniappHome.entriesSection.title }}</text>
+      <text class="section-lead">{{ miniappHome.entriesSection.description }}</text>
     </view>
 
-    <view class="energy-grid">
+    <view v-if="miniappHome.entriesSection.enabled" class="energy-grid">
       <view
-        class="energy-card energy-card--test"
+        v-for="entry in enabledHomeEntries"
+        :key="entry.key"
+        :class="['energy-card', `energy-card--${entry.theme}`]"
         role="button"
         aria-role="button"
         tabindex="0"
-        aria-label="开始九型人格测试"
+        :aria-label="MINIAPP_HOME_ENTRY_BEHAVIORS[entry.key].ariaLabel"
         hover-class="energy-card--pressed"
-        @click="startTest"
-        @keydown.enter="startTest"
-        @keydown.space.prevent="startTest"
+        @click="activateHomeEntry(entry.key)"
+        @keydown.enter="activateHomeEntry(entry.key)"
+        @keydown.space.prevent="activateHomeEntry(entry.key)"
       >
-        <view class="energy-icon energy-icon--test" aria-hidden="true">
-          <view class="energy-icon__ring"></view>
-          <view class="energy-icon__dot"></view>
+        <view :class="['energy-icon', `energy-icon--${entry.icon}`]" aria-hidden="true">
+          <view class="energy-icon__shape"></view>
         </view>
-        <text class="energy-card__title">人格测试</text>
-        <text class="energy-card__desc">找到你的核心动机</text>
-      </view>
-
-      <view
-        class="energy-card energy-card--relation"
-        role="button"
-        aria-role="button"
-        tabindex="0"
-        aria-label="打开九型关系合盘"
-        hover-class="energy-card--pressed"
-        @click="goRelation"
-        @keydown.enter="goRelation"
-        @keydown.space.prevent="goRelation"
-      >
-        <view class="energy-icon energy-icon--relation" aria-hidden="true">
-          <view class="energy-icon__person energy-icon__person--left"></view>
-          <view class="energy-icon__person energy-icon__person--right"></view>
-          <view class="energy-icon__link"></view>
-        </view>
-        <text class="energy-card__title">关系合盘</text>
-        <text class="energy-card__desc">看见彼此的互动模式</text>
-      </view>
-
-      <view
-        class="energy-card energy-card--learn"
-        role="button"
-        aria-role="button"
-        tabindex="0"
-        aria-label="打开老师课程与课件"
-        hover-class="energy-card--pressed"
-        @click="goLearn"
-        @keydown.enter="goLearn"
-        @keydown.space.prevent="goLearn"
-      >
-        <view class="energy-icon energy-icon--learn" aria-hidden="true">
-          <view class="energy-icon__book energy-icon__book--left"></view>
-          <view class="energy-icon__book energy-icon__book--right"></view>
-          <view class="energy-icon__spine"></view>
-        </view>
-        <text class="energy-card__title">老师课程</text>
-        <text class="energy-card__desc">跟着课件系统学习</text>
-      </view>
-
-      <view
-        class="energy-card energy-card--profile"
-        role="button"
-        aria-role="button"
-        tabindex="0"
-        aria-label="打开我的成长档案"
-        hover-class="energy-card--pressed"
-        @click="goProfile"
-        @keydown.enter="goProfile"
-        @keydown.space.prevent="goProfile"
-      >
-        <view class="energy-icon energy-icon--profile" aria-hidden="true">
-          <view class="energy-icon__stem"></view>
-          <view class="energy-icon__leaf energy-icon__leaf--left"></view>
-          <view class="energy-icon__leaf energy-icon__leaf--right"></view>
-        </view>
-        <text class="energy-card__title">成长档案</text>
-        <text class="energy-card__desc">记录你的探索轨迹</text>
+        <text class="energy-card__title">{{ entry.title }}</text>
+        <text class="energy-card__desc">{{ entry.description }}</text>
       </view>
     </view>
 
     <view
+      v-if="miniappHome.growth.enabled"
       class="growth-card"
       role="button"
       aria-role="button"
@@ -236,9 +185,9 @@ function hideWheel() {
         <view class="growth-card__spark growth-card__spark--two"></view>
       </view>
       <view class="growth-card__copy">
-        <text class="growth-card__eyebrow">老师陪伴 · 持续成长</text>
-        <text class="growth-card__title">把测试发现带进课程练习</text>
-        <text class="growth-card__desc">跟随老师的课程与课件，让理解沉淀为真实的成长行动。</text>
+        <text class="growth-card__eyebrow">{{ miniappHome.growth.eyebrow }}</text>
+        <text class="growth-card__title">{{ miniappHome.growth.title }}</text>
+        <text class="growth-card__desc">{{ miniappHome.growth.description }}</text>
       </view>
       <view class="growth-card__arrow" aria-hidden="true"></view>
     </view>
@@ -494,25 +443,30 @@ function hideWheel() {
   opacity: .8;
   transform: scale(.97);
 }
-.energy-card--test {
+.energy-card--blue {
   background:
     linear-gradient(180deg, rgba(8, 15, 38, 0) 18%, rgba(8, 15, 38, .72) 100%),
     linear-gradient(140deg, #2059d4, #087b9b);
 }
-.energy-card--relation {
+.energy-card--purple {
   background:
     linear-gradient(180deg, rgba(8, 15, 38, 0) 18%, rgba(8, 15, 38, .72) 100%),
     linear-gradient(140deg, #6338c7, #aa2d72);
 }
-.energy-card--learn {
-  background:
-    linear-gradient(180deg, rgba(8, 15, 38, 0) 18%, rgba(8, 15, 38, .72) 100%),
-    linear-gradient(140deg, #087b78, #187d45);
-}
-.energy-card--profile {
+.energy-card--orange {
   background:
     linear-gradient(180deg, rgba(8, 15, 38, 0) 18%, rgba(8, 15, 38, .72) 100%),
     linear-gradient(140deg, #c46813, #c93d46);
+}
+.energy-card--pink {
+  background:
+    linear-gradient(180deg, rgba(8, 15, 38, 0) 18%, rgba(8, 15, 38, .72) 100%),
+    linear-gradient(140deg, #b72d75, #7b3bc7);
+}
+.energy-card--cyan {
+  background:
+    linear-gradient(180deg, rgba(8, 15, 38, 0) 18%, rgba(8, 15, 38, .72) 100%),
+    linear-gradient(140deg, #087b78, #187d45);
 }
 .energy-card__title {
   margin-top: auto;
@@ -533,105 +487,142 @@ function hideWheel() {
   background: rgba(255, 255, 255, .18);
   box-shadow: inset 0 1rpx 0 rgba(255, 255, 255, .22);
 }
-.energy-icon__ring {
+.energy-icon__shape,
+.energy-icon__shape::before,
+.energy-icon__shape::after {
   position: absolute;
-  inset: 17rpx;
-  border: 4rpx solid #fff;
-  border-radius: 50%;
-}
-.energy-icon__dot {
-  position: absolute;
-  top: 32rpx;
-  left: 32rpx;
-  width: 8rpx;
-  height: 8rpx;
-  border-radius: 50%;
-  background: #fff;
-}
-.energy-icon__person {
-  position: absolute;
-  top: 13rpx;
-  width: 17rpx;
-  height: 17rpx;
-  border: 4rpx solid #fff;
-  border-radius: 50%;
-}
-.energy-icon__person::after {
-  position: absolute;
-  top: 18rpx;
-  left: -6rpx;
-  width: 21rpx;
-  height: 14rpx;
-  border: 4rpx solid #fff;
-  border-bottom: 0;
-  border-radius: 14rpx 14rpx 0 0;
+  box-sizing: border-box;
   content: '';
 }
-.energy-icon__person--left {
+.energy-icon--compass {
+  color: #fff;
+}
+.energy-icon--compass .energy-icon__shape {
+  inset: 15rpx;
+  border: 4rpx solid currentColor;
+  border-radius: 50%;
+}
+.energy-icon--compass .energy-icon__shape::before {
+  top: 7rpx;
   left: 13rpx;
+  width: 10rpx;
+  height: 18rpx;
+  border: 5rpx solid transparent;
+  border-bottom-color: currentColor;
+  transform: rotate(28deg);
 }
-.energy-icon__person--right {
-  right: 13rpx;
+.energy-icon--compass .energy-icon__shape::after {
+  top: 14rpx;
+  left: 14rpx;
+  width: 7rpx;
+  height: 7rpx;
+  border-radius: 50%;
+  background: currentColor;
 }
-.energy-icon__link {
-  position: absolute;
-  right: 28rpx;
-  bottom: 15rpx;
-  width: 16rpx;
-  height: 4rpx;
-  border-radius: 4rpx;
-  background: #fff;
+.energy-icon--relation {
+  color: #fff;
 }
-.energy-icon__book {
-  position: absolute;
-  top: 19rpx;
-  width: 24rpx;
-  height: 32rpx;
-  border: 4rpx solid #fff;
+.energy-icon--relation .energy-icon__shape::before,
+.energy-icon--relation .energy-icon__shape::after {
+  top: 14rpx;
+  width: 21rpx;
+  height: 34rpx;
+  border: 4rpx solid currentColor;
+  border-radius: 50% 50% 12rpx 12rpx;
 }
-.energy-icon__book--left {
+.energy-icon--relation .energy-icon__shape::before {
   left: 12rpx;
-  border-radius: 8rpx 2rpx 2rpx 8rpx;
-  transform: skewY(7deg);
 }
-.energy-icon__book--right {
-  right: 12rpx;
-  border-radius: 2rpx 8rpx 8rpx 2rpx;
-  transform: skewY(-7deg);
+.energy-icon--relation .energy-icon__shape::after {
+  left: 39rpx;
 }
-.energy-icon__spine {
-  position: absolute;
-  top: 21rpx;
-  left: 34rpx;
-  width: 4rpx;
-  height: 31rpx;
-  background: #fff;
+.energy-icon--book {
+  color: #fff;
 }
-.energy-icon__stem {
-  position: absolute;
-  left: 34rpx;
-  bottom: 12rpx;
+.energy-icon--book .energy-icon__shape {
+  top: 18rpx;
+  left: 14rpx;
+  width: 44rpx;
+  height: 34rpx;
+  border: 4rpx solid currentColor;
+  border-radius: 7rpx;
+}
+.energy-icon--book .energy-icon__shape::after {
+  top: -4rpx;
+  left: 18rpx;
   width: 4rpx;
   height: 34rpx;
-  border-radius: 4rpx;
-  background: #fff;
+  background: currentColor;
 }
-.energy-icon__leaf {
-  position: absolute;
-  width: 20rpx;
-  height: 13rpx;
-  border: 4rpx solid #fff;
+.energy-icon--growth {
+  color: #fff;
+}
+.energy-icon--growth .energy-icon__shape {
+  left: 34rpx;
+  bottom: 13rpx;
+  width: 4rpx;
+  height: 38rpx;
+  border-radius: 4rpx;
+  background: currentColor;
+}
+.energy-icon--growth .energy-icon__shape::before,
+.energy-icon--growth .energy-icon__shape::after {
+  width: 22rpx;
+  height: 14rpx;
+  border: 4rpx solid currentColor;
   border-radius: 16rpx 2rpx 16rpx 2rpx;
 }
-.energy-icon__leaf--left {
-  top: 19rpx;
-  left: 14rpx;
-  transform: rotate(18deg);
+.energy-icon--growth .energy-icon__shape::before {
+  top: 8rpx;
+  right: 0;
 }
-.energy-icon__leaf--right {
-  top: 9rpx;
-  right: 13rpx;
-  transform: rotate(-18deg) scaleX(-1);
+.energy-icon--growth .energy-icon__shape::after {
+  top: -5rpx;
+  left: 0;
+  transform: scaleX(-1);
+}
+.energy-icon--spark {
+  color: #fff;
+}
+.energy-icon--spark .energy-icon__shape {
+  top: 17rpx;
+  left: 33rpx;
+  width: 6rpx;
+  height: 38rpx;
+  border-radius: 6rpx;
+  background: currentColor;
+}
+.energy-icon--spark .energy-icon__shape::after {
+  top: 16rpx;
+  left: -16rpx;
+  width: 38rpx;
+  height: 6rpx;
+  border-radius: 6rpx;
+  background: currentColor;
+}
+.energy-icon--heart {
+  color: #fff;
+}
+.energy-icon--heart .energy-icon__shape {
+  top: 22rpx;
+  left: 24rpx;
+  width: 28rpx;
+  height: 28rpx;
+  background: currentColor;
+  transform: rotate(45deg);
+}
+.energy-icon--heart .energy-icon__shape::before,
+.energy-icon--heart .energy-icon__shape::after {
+  width: 28rpx;
+  height: 28rpx;
+  border-radius: 50%;
+  background: currentColor;
+}
+.energy-icon--heart .energy-icon__shape::before {
+  top: -14rpx;
+}
+.energy-icon--heart .energy-icon__shape::after {
+  left: -14rpx;
 }
 .growth-card {
   min-height: 208rpx;

@@ -36,8 +36,8 @@ try {
       items: [
         { key: 'test', enabled: true, title: '人格测试', description: '找到你的核心动机', icon: 'compass', theme: 'blue' },
         { key: 'relation', enabled: true, title: '关系合盘', description: '看见彼此的互动模式', icon: 'relation', theme: 'purple' },
-        { key: 'learn', enabled: true, title: '老师课程', description: '跟着课件系统学习', icon: 'book', theme: 'orange' },
-        { key: 'profile', enabled: true, title: '成长档案', description: '记录你的探索轨迹', icon: 'growth', theme: 'pink' },
+        { key: 'learn', enabled: true, title: '老师课程', description: '跟着课件系统学习', icon: 'book', theme: 'cyan' },
+        { key: 'profile', enabled: true, title: '成长档案', description: '记录你的探索轨迹', icon: 'growth', theme: 'orange' },
       ],
     },
     growth: {
@@ -83,10 +83,10 @@ try {
           title: '  自定义入口  ',
           description: '  自定义说明  ',
           items: [
-            { key: 'profile', enabled: false, title: '  我的记录  ', description: '  看见变化  ', icon: 'heart', theme: 'cyan' },
+            { key: 'profile', enabled: false, title: '  我的记录  ', description: '  看见变化  ', icon: 'heart', theme: 'cyan', url: '/evil-url' },
             { key: 'unknown', enabled: true, title: 'unknown entry' },
             { key: 'profile', enabled: true, title: 'duplicate entry' },
-            { key: 'test', enabled: 'false', title: '', description: '', icon: 'free-form-icon', theme: '#ff00ff' },
+            { key: 'test', enabled: 'false', title: '', description: '', icon: 'free-form-icon', theme: '#ff00ff', path: '/evil-path', href: 'https://evil.invalid', route: '/evil-route' },
             null,
           ],
         },
@@ -101,10 +101,17 @@ try {
       { key: 'profile', enabled: false, title: '我的记录', description: '看见变化', icon: 'heart', theme: 'cyan' },
       { key: 'test', enabled: true, title: '人格测试', description: '找到你的核心动机', icon: 'compass', theme: 'blue' },
       { key: 'relation', enabled: true, title: '关系合盘', description: '看见彼此的互动模式', icon: 'relation', theme: 'purple' },
-      { key: 'learn', enabled: true, title: '老师课程', description: '跟着课件系统学习', icon: 'book', theme: 'orange' },
+      { key: 'learn', enabled: true, title: '老师课程', description: '跟着课件系统学习', icon: 'book', theme: 'cyan' },
     ],
     'configured order should survive while duplicate/unknown keys are dropped and missing fixed entries append',
   )
+  for (const entry of normalizedEntries.entriesSection.items) {
+    assert.deepEqual(
+      Object.keys(entry).sort(),
+      ['description', 'enabled', 'icon', 'key', 'theme', 'title'],
+      `normalized ${entry.key} entry should never expose a configurable navigation URL`,
+    )
+  }
 
   const allDisabled = normalizeMiniappHome({
     home: {

@@ -476,7 +476,7 @@ describe('miniapp home carousel management', () => {
             enabled: true,
             icon: 'book',
             key: 'learn',
-            theme: 'orange',
+            theme: 'cyan',
             title: '老师课程',
           },
           {
@@ -484,7 +484,7 @@ describe('miniapp home carousel management', () => {
             enabled: true,
             icon: 'growth',
             key: 'profile',
-            theme: 'pink',
+            theme: 'orange',
             title: '成长档案',
           },
         ],

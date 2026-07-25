@@ -41,8 +41,8 @@ export const MINIAPP_HOME_ENTRY_BEHAVIORS = Object.freeze({
 const DEFAULT_ENTRIES = Object.freeze([
   Object.freeze({ key: 'test', enabled: true, title: '人格测试', description: '找到你的核心动机', icon: 'compass', theme: 'blue' }),
   Object.freeze({ key: 'relation', enabled: true, title: '关系合盘', description: '看见彼此的互动模式', icon: 'relation', theme: 'purple' }),
-  Object.freeze({ key: 'learn', enabled: true, title: '老师课程', description: '跟着课件系统学习', icon: 'book', theme: 'orange' }),
-  Object.freeze({ key: 'profile', enabled: true, title: '成长档案', description: '记录你的探索轨迹', icon: 'growth', theme: 'pink' }),
+  Object.freeze({ key: 'learn', enabled: true, title: '老师课程', description: '跟着课件系统学习', icon: 'book', theme: 'cyan' }),
+  Object.freeze({ key: 'profile', enabled: true, title: '成长档案', description: '记录你的探索轨迹', icon: 'growth', theme: 'orange' }),
 ])
 
 const DEFAULTS = Object.freeze({
