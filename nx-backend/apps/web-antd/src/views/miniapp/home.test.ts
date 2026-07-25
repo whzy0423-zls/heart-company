@@ -9,6 +9,39 @@ vi.mock('ant-design-vue', async () => {
   const stubs = await import('#/test-utils/antd-stubs');
   return {
     ...stubs,
+    Collapse: Object.assign(
+      defineComponent({
+        setup(_, { slots }) {
+          return () => h('div', { class: 'collapse-stub' }, slots.default?.());
+        },
+      }),
+      {
+        Panel: defineComponent({
+          props: { header: String },
+          setup(props, { slots }) {
+            return () =>
+              h('section', { class: 'collapse-panel-stub' }, [
+                h('h2', props.header),
+                slots.default?.(),
+              ]);
+          },
+        }),
+      },
+    ),
+    Input: defineComponent({
+      inheritAttrs: false,
+      props: { value: { default: '', type: String } },
+      emits: ['update:value'],
+      setup(props, { attrs, emit }) {
+        return () =>
+          h('input', {
+            ...attrs,
+            value: props.value,
+            onInput: (event: Event) =>
+              emit('update:value', (event.target as HTMLInputElement).value),
+          });
+      },
+    }),
     InputNumber: defineComponent({
       props: { value: { default: 0, type: Number } },
       emits: ['update:value'],
@@ -34,6 +67,29 @@ vi.mock('ant-design-vue', async () => {
             'button',
             { ...attrs, onClick: () => emit('update:checked', !props.checked) },
             [props.checked ? '启用' : '停用'],
+          );
+      },
+    }),
+    Select: defineComponent({
+      inheritAttrs: false,
+      props: {
+        options: { default: () => [], type: Array },
+        value: { default: '', type: String },
+      },
+      emits: ['update:value'],
+      setup(props, { attrs, emit }) {
+        return () =>
+          h(
+            'select',
+            {
+              ...attrs,
+              value: props.value,
+              onChange: (event: Event) =>
+                emit('update:value', (event.target as HTMLSelectElement).value),
+            },
+            (props.options as Array<{ label: string; value: string }>).map(
+              (option) => h('option', { value: option.value }, option.label),
+            ),
           );
       },
     }),
@@ -68,6 +124,40 @@ vi.mock('#/api', () => ({
   updateSiteConfigApi: vi.fn(),
 }));
 
+vi.mock('#/views/site-config/use-site-config-editor', async () => {
+  const { onMounted, ref } = await import('vue');
+  const { getSiteConfigApi, updateSiteConfigApi } = await import('#/api');
+
+  return {
+    useSiteConfigEditor() {
+      const config = ref();
+      const loading = ref(false);
+      const saving = ref(false);
+
+      onMounted(async () => {
+        loading.value = true;
+        try {
+          config.value = await getSiteConfigApi();
+        } finally {
+          loading.value = false;
+        }
+      });
+
+      async function saveConfig() {
+        if (!config.value) return;
+        saving.value = true;
+        try {
+          config.value = await updateSiteConfigApi(config.value);
+        } finally {
+          saving.value = false;
+        }
+      }
+
+      return { config, loading, saveConfig, saving };
+    },
+  };
+});
+
 import { getSiteConfigApi, updateSiteConfigApi } from '#/api';
 
 import * as miniappHomeModule from './home.vue';
@@ -99,7 +189,11 @@ function declaration(name: string) {
 
 function literalUnion(name: string) {
   const node = declaration(name);
-  if (!node || !ts.isTypeAliasDeclaration(node) || !ts.isUnionTypeNode(node.type)) {
+  if (
+    !node ||
+    !ts.isTypeAliasDeclaration(node) ||
+    !ts.isUnionTypeNode(node.type)
+  ) {
     return undefined;
   }
   if (
@@ -113,18 +207,21 @@ function literalUnion(name: string) {
   ) {
     return undefined;
   }
-  return node.type.types.map((type) =>
-    (type as ts.LiteralTypeNode).literal.getText(apiAst).slice(1, -1),
-  ).sort();
+  return node.type.types
+    .map((type) =>
+      (type as ts.LiteralTypeNode).literal.getText(apiAst).slice(1, -1),
+    )
+    .sort();
 }
 
 function interfaceContract(name: string) {
   const node = declaration(name);
   if (!node || !ts.isInterfaceDeclaration(node)) return undefined;
   return {
-    exported: node.modifiers?.some(
-      (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
-    ) ?? false,
+    exported:
+      node.modifiers?.some(
+        (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+      ) ?? false,
     extends:
       node.heritageClauses?.flatMap((clause) =>
         clause.types.map((type) => type.expression.getText(apiAst)),
@@ -490,7 +587,7 @@ describe('miniapp home carousel management', () => {
     const wrapper = mountVueComponent(MiniappHome);
     await flushVuePromises();
 
-    expect(wrapper.text()).toContain('小程序首页顶部轮播');
+    expect(wrapper.text()).toContain('配置小程序首页轮播');
     expect(config.home).toMatchObject({
       existingHomeSetting: { keep: true },
       miniappCarousel: { autoplay: true, interval: 4000, items: [] },
@@ -508,6 +605,100 @@ describe('miniapp home carousel management', () => {
         hero: { enabled: true },
       },
     });
+    expect(
+      [...document.body.querySelectorAll('.collapse-panel-stub > h2')].map(
+        (heading) => heading.textContent,
+      ),
+    ).toEqual(['轮播图', '顶部品牌', '主视觉', '功能入口', '成长内容']);
+    const switchLabels = [
+      ...document.body.querySelectorAll('button[aria-label]'),
+    ].map((button) => button.getAttribute('aria-label'));
+    expect(switchLabels).toEqual(
+      expect.arrayContaining([
+        '自动轮播',
+        '顶部品牌显示状态',
+        '主视觉显示状态',
+        '功能入口区显示状态',
+        '人格测试入口显示状态',
+        '关系合盘入口显示状态',
+        '老师课程入口显示状态',
+        '成长档案入口显示状态',
+        '成长内容显示状态',
+      ]),
+    );
+    expect(
+      document.body.querySelector('[data-testid="brand-destination"]')
+        ?.textContent,
+    ).toContain('/pages/profile/profile（底部标签）');
+    for (const [key, destination] of Object.entries({
+      test: '/pages/test/test（页面跳转）',
+      relation: '/pages/relation/relation（页面跳转）',
+      learn: '/pages/learn/learn（底部标签）',
+      profile: '/pages/profile/profile（底部标签）',
+    })) {
+      expect(
+        document.body.querySelector(`[data-testid="entry-key-${key}"]`)
+          ?.textContent,
+      ).toBe(key);
+      expect(
+        document.body.querySelector(`[data-testid="entry-destination-${key}"]`)
+          ?.textContent,
+      ).toContain(destination);
+    }
+
+    const editInput = (testId: string, value: string) => {
+      const input = document.body.querySelector(
+        `[data-testid="${testId}"]`,
+      ) as HTMLInputElement;
+      input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    editInput('brand-name', '新的品牌名称');
+    editInput('hero-title', '新的主视觉标题');
+    editInput('entries-title', '新的入口标题');
+    editInput('growth-title', '新的成长标题');
+    for (const testId of [
+      'brand-enabled',
+      'hero-enabled',
+      'entries-enabled',
+      'growth-enabled',
+    ]) {
+      document.body
+        .querySelector(`[data-testid="${testId}"]`)
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    }
+    const relationIcon = document.body.querySelector(
+      '[data-testid="entry-icon-relation"]',
+    ) as HTMLSelectElement;
+    relationIcon.value = 'heart';
+    relationIcon.dispatchEvent(new Event('change', { bubbles: true }));
+    const relationTheme = document.body.querySelector(
+      '[data-testid="entry-theme-relation"]',
+    ) as HTMLSelectElement;
+    relationTheme.value = 'cyan';
+    relationTheme.dispatchEvent(new Event('change', { bubbles: true }));
+    expect([...relationIcon.options].map((option) => option.value)).toEqual([
+      'compass',
+      'relation',
+      'book',
+      'growth',
+      'spark',
+      'heart',
+    ]);
+    expect([...relationTheme.options].map((option) => option.value)).toEqual([
+      'blue',
+      'purple',
+      'orange',
+      'pink',
+      'cyan',
+    ]);
+    document.body
+      .querySelector('[data-testid="entry-enabled-test"]')
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    document.body
+      .querySelector('[data-testid="entry-move-down-test"]')
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushVuePromises();
 
     wrapper.button('新增轮播图')?.click();
     wrapper.button('新增轮播图')?.click();
@@ -594,7 +785,23 @@ describe('miniapp home carousel management', () => {
       { enabled: true, image: '' },
       { enabled: true, image: '' },
     ]);
+    expect(config.home.miniappHome).toMatchObject({
+      brand: { enabled: false, name: '新的品牌名称' },
+      hero: { enabled: false, title: '新的主视觉标题' },
+      entriesSection: {
+        enabled: false,
+        title: '新的入口标题',
+        items: [
+          { icon: 'heart', key: 'relation', theme: 'cyan' },
+          { enabled: false, key: 'test' },
+          { key: 'learn' },
+          { key: 'profile' },
+        ],
+      },
+      growth: { enabled: false, title: '新的成长标题' },
+    });
     expect(config.home.untouched).toEqual({ value: 'preserved' });
+    expect(updateSiteConfigApi).toHaveBeenCalledTimes(1);
     expect(updateSiteConfigApi).toHaveBeenCalledWith(config);
     wrapper.unmount();
   });

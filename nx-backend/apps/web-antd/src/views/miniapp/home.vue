@@ -8,22 +8,11 @@ import type {
   MiniappHomeThemeKey,
 } from '#/api';
 
-export const MINIAPP_HOME_ICON_KEYS: readonly MiniappHomeIconKey[] = Object.freeze([
-  'compass',
-  'relation',
-  'book',
-  'growth',
-  'spark',
-  'heart',
-]);
+export const MINIAPP_HOME_ICON_KEYS: readonly MiniappHomeIconKey[] =
+  Object.freeze(['compass', 'relation', 'book', 'growth', 'spark', 'heart']);
 
-export const MINIAPP_HOME_THEME_KEYS: readonly MiniappHomeThemeKey[] = Object.freeze([
-  'blue',
-  'purple',
-  'orange',
-  'pink',
-  'cyan',
-]);
+export const MINIAPP_HOME_THEME_KEYS: readonly MiniappHomeThemeKey[] =
+  Object.freeze(['blue', 'purple', 'orange', 'pink', 'cyan']);
 
 const ENTRY_DEFAULTS: Record<MiniappHomeEntryKey, MiniappHomeEntry> = {
   test: {
@@ -119,7 +108,10 @@ export function ensureMiniappHome(config: { home?: unknown }) {
 
   if (Array.isArray(rawEntries.items)) {
     for (const rawEntry of rawEntries.items) {
-      if (!isRecord(rawEntry) || !ENTRY_ORDER.includes(rawEntry.key as MiniappHomeEntryKey)) {
+      if (
+        !isRecord(rawEntry) ||
+        !ENTRY_ORDER.includes(rawEntry.key as MiniappHomeEntryKey)
+      ) {
         continue;
       }
       const key = rawEntry.key as MiniappHomeEntryKey;
@@ -145,10 +137,7 @@ export function ensureMiniappHome(config: { home?: unknown }) {
         '从核心动机出发，在老师课程中理解自己，也更从容地走进关系与成长。',
       ),
       enabled: normalizedEnabled(rawHero.enabled),
-      kicker: normalizedText(
-        rawHero.kicker,
-        '老师导学 · 课程配套 · 18 题自测',
-      ),
+      kicker: normalizedText(rawHero.kicker, '老师导学 · 课程配套 · 18 题自测'),
       title: normalizedText(rawHero.title, '读懂自己内在的能量地图'),
     },
     entriesSection: {
@@ -204,11 +193,24 @@ export function ensureCarousel(config: { home?: unknown }) {
 </script>
 
 <script setup lang="ts">
-import type { MiniappCarouselItem } from '#/api';
+import type {
+  MiniappCarouselItem,
+  MiniappHomeIconKey,
+  MiniappHomeThemeKey,
+} from '#/api';
 
 import { computed, watch } from 'vue';
 
-import { Button, Card, Form, InputNumber, Switch } from 'ant-design-vue';
+import {
+  Button,
+  Card,
+  Collapse,
+  Form,
+  Input,
+  InputNumber,
+  Select,
+  Switch,
+} from 'ant-design-vue';
 
 import EditorShell from '#/views/site-config/components/editor-shell.vue';
 import ImagePathInput from '#/views/site-config/components/image-path-input.vue';
@@ -219,6 +221,38 @@ const { config, loading, saveConfig, saving } = useSiteConfigEditor();
 const carousel = computed<MiniappCarouselConfig | undefined>(
   () => config.value?.home.miniappCarousel,
 );
+const miniappHome = computed<MiniappHomeConfig | undefined>(
+  () => config.value?.home.miniappHome,
+);
+const iconLabels: Record<MiniappHomeIconKey, string> = {
+  compass: '罗盘',
+  relation: '关系',
+  book: '书本',
+  growth: '成长',
+  spark: '星光',
+  heart: '爱心',
+};
+const themeLabels: Record<MiniappHomeThemeKey, string> = {
+  blue: '蓝色',
+  purple: '紫色',
+  orange: '橙色',
+  pink: '粉色',
+  cyan: '青色',
+};
+const iconOptions = MINIAPP_HOME_ICON_KEYS.map((value) => ({
+  label: iconLabels[value],
+  value,
+}));
+const themeOptions = MINIAPP_HOME_THEME_KEYS.map((value) => ({
+  label: themeLabels[value],
+  value,
+}));
+const entryDestinations: Record<MiniappHomeEntryKey, string> = {
+  test: '/pages/test/test（页面跳转）',
+  relation: '/pages/relation/relation（页面跳转）',
+  learn: '/pages/learn/learn（底部标签）',
+  profile: '/pages/profile/profile（底部标签）',
+};
 const itemKeys = new WeakMap<MiniappCarouselItem, string>();
 let nextItemKey = 0;
 
@@ -250,6 +284,14 @@ function removeItem(index: number) {
   carousel.value?.items.splice(index, 1);
 }
 
+function moveHomeEntry(index: number, direction: -1 | 1) {
+  const items = miniappHome.value?.entriesSection.items;
+  if (!items) return;
+  const nextIndex = index + direction;
+  if (nextIndex < 0 || nextIndex >= items.length) return;
+  [items[index], items[nextIndex]] = [items[nextIndex]!, items[index]!];
+}
+
 function itemKey(item: MiniappCarouselItem) {
   const existing = itemKeys.get(item);
   if (existing) return existing;
@@ -262,77 +304,265 @@ function itemKey(item: MiniappCarouselItem) {
 
 <template>
   <EditorShell
-    description="配置小程序首页顶部轮播图，图片顺序即为展示顺序。"
+    description="配置小程序首页轮播、品牌、主视觉、功能入口与成长内容。页面目标、图标和配色均使用固定安全选项。"
     :loading="loading"
     :saving="saving"
     title="首页管理"
     @save="saveConfig"
   >
-    <Form v-if="carousel" layout="vertical">
-      <div class="carousel-settings">
-        <Form.Item label="自动轮播">
-          <Switch v-model:checked="carousel.autoplay" />
-        </Form.Item>
-        <Form.Item label="轮播间隔（毫秒）">
-          <InputNumber
-            v-model:value="carousel.interval"
-            data-testid="carousel-interval"
-            :max="10_000"
-            :min="2000"
-            :step="500"
-          />
-        </Form.Item>
-      </div>
-
-      <div class="section-head">
-        <h3>轮播图片</h3>
-        <Button @click="addItem">新增轮播图</Button>
-      </div>
-
-      <p v-if="carousel.items.length === 0" class="empty-text">
-        暂无轮播图，点击“新增轮播图”后上传图片。
-      </p>
-
-      <Card
-        v-for="(item, index) in carousel.items"
-        :key="itemKey(item)"
-        class="carousel-item"
-        size="small"
+    <Form v-if="carousel && miniappHome" layout="vertical">
+      <Collapse
+        :default-active-key="['carousel', 'brand', 'hero', 'entries', 'growth']"
+        class="home-editor"
       >
-        <div class="carousel-item__content">
-          <span class="carousel-item__index">{{ index + 1 }}</span>
-          <ImagePathInput
-            v-model:value="item.image"
-            dir="miniapp-home"
-            empty-text="未设置轮播图"
-            store-object-url
-            upload-text="上传图片"
-          />
-          <Switch
-            v-model:checked="item.enabled"
-            :data-testid="`carousel-enabled-${index}`"
-            :checked-children="'启用'"
-            :un-checked-children="'停用'"
-          />
-          <div class="carousel-item__actions">
-            <Button :disabled="index === 0" @click="moveItem(index, -1)">
-              上移
-            </Button>
-            <Button
-              :disabled="index === carousel.items.length - 1"
-              @click="moveItem(index, 1)"
-            >
-              下移
-            </Button>
-            <Button danger @click="removeItem(index)">删除</Button>
+        <Collapse.Panel key="carousel" header="轮播图">
+          <div class="carousel-settings">
+            <Form.Item label="自动轮播">
+              <Switch
+                v-model:checked="carousel.autoplay"
+                aria-label="自动轮播"
+              />
+            </Form.Item>
+            <Form.Item label="轮播间隔（毫秒）">
+              <InputNumber
+                v-model:value="carousel.interval"
+                data-testid="carousel-interval"
+                :max="10_000"
+                :min="2000"
+                :step="500"
+              />
+            </Form.Item>
           </div>
-        </div>
-      </Card>
+
+          <div class="section-head">
+            <h3>轮播图片</h3>
+            <Button @click="addItem">新增轮播图</Button>
+          </div>
+
+          <p v-if="carousel.items.length === 0" class="empty-text">
+            暂无轮播图，点击“新增轮播图”后上传图片。
+          </p>
+
+          <Card
+            v-for="(item, index) in carousel.items"
+            :key="itemKey(item)"
+            class="carousel-item"
+            size="small"
+          >
+            <div class="carousel-item__content">
+              <span class="carousel-item__index">{{ index + 1 }}</span>
+              <ImagePathInput
+                v-model:value="item.image"
+                dir="miniapp-home"
+                empty-text="未设置轮播图"
+                store-object-url
+                upload-text="上传图片"
+              />
+              <Switch
+                v-model:checked="item.enabled"
+                :aria-label="`轮播图 ${index + 1} 显示状态`"
+                :data-testid="`carousel-enabled-${index}`"
+                :checked-children="'启用'"
+                :un-checked-children="'停用'"
+              />
+              <div class="carousel-item__actions">
+                <Button :disabled="index === 0" @click="moveItem(index, -1)">
+                  上移
+                </Button>
+                <Button
+                  :disabled="index === carousel.items.length - 1"
+                  @click="moveItem(index, 1)"
+                >
+                  下移
+                </Button>
+                <Button danger @click="removeItem(index)">删除</Button>
+              </div>
+            </div>
+          </Card>
+        </Collapse.Panel>
+
+        <Collapse.Panel key="brand" header="顶部品牌">
+          <div class="section-toggle">
+            <span>显示顶部品牌</span>
+            <Switch
+              v-model:checked="miniappHome.brand.enabled"
+              aria-label="顶部品牌显示状态"
+              data-testid="brand-enabled"
+            />
+          </div>
+          <div class="field-grid">
+            <Form.Item label="品牌名称">
+              <Input
+                v-model:value="miniappHome.brand.name"
+                data-testid="brand-name"
+              />
+            </Form.Item>
+            <Form.Item label="品牌说明">
+              <Input v-model:value="miniappHome.brand.tagline" />
+            </Form.Item>
+          </div>
+          <p class="fixed-destination" data-testid="brand-destination">
+            顶部头像固定目标：/pages/profile/profile（底部标签）
+          </p>
+        </Collapse.Panel>
+
+        <Collapse.Panel key="hero" header="主视觉">
+          <div class="section-toggle">
+            <span>显示主视觉</span>
+            <Switch
+              v-model:checked="miniappHome.hero.enabled"
+              aria-label="主视觉显示状态"
+              data-testid="hero-enabled"
+            />
+          </div>
+          <div class="field-grid">
+            <Form.Item label="引导短语">
+              <Input v-model:value="miniappHome.hero.kicker" />
+            </Form.Item>
+            <Form.Item label="标题">
+              <Input
+                v-model:value="miniappHome.hero.title"
+                data-testid="hero-title"
+              />
+            </Form.Item>
+            <Form.Item class="field-grid__wide" label="说明">
+              <Input v-model:value="miniappHome.hero.description" />
+            </Form.Item>
+            <Form.Item label="按钮文字">
+              <Input v-model:value="miniappHome.hero.buttonText" />
+            </Form.Item>
+          </div>
+          <p class="fixed-destination">
+            固定目标：/pages/test/test（页面跳转）
+          </p>
+        </Collapse.Panel>
+
+        <Collapse.Panel key="entries" header="功能入口">
+          <div class="section-toggle">
+            <span>显示功能入口</span>
+            <Switch
+              v-model:checked="miniappHome.entriesSection.enabled"
+              aria-label="功能入口区显示状态"
+              data-testid="entries-enabled"
+            />
+          </div>
+          <div class="field-grid">
+            <Form.Item label="区块标题">
+              <Input
+                v-model:value="miniappHome.entriesSection.title"
+                data-testid="entries-title"
+              />
+            </Form.Item>
+            <Form.Item label="区块说明">
+              <Input v-model:value="miniappHome.entriesSection.description" />
+            </Form.Item>
+          </div>
+
+          <Card
+            v-for="(entry, index) in miniappHome.entriesSection.items"
+            :key="entry.key"
+            class="home-entry"
+            size="small"
+          >
+            <div class="home-entry__head">
+              <strong>{{ entry.title }}</strong>
+              <Switch
+                v-model:checked="entry.enabled"
+                :aria-label="`${entry.title}入口显示状态`"
+                :data-testid="`entry-enabled-${entry.key}`"
+              />
+            </div>
+            <p class="fixed-entry-key">
+              固定入口键：<code :data-testid="`entry-key-${entry.key}`">{{
+                entry.key
+              }}</code>
+            </p>
+            <p
+              class="fixed-destination"
+              :data-testid="`entry-destination-${entry.key}`"
+            >
+              固定目标：{{ entryDestinations[entry.key] }}
+            </p>
+            <div class="field-grid field-grid--entry">
+              <Form.Item label="标题">
+                <Input v-model:value="entry.title" />
+              </Form.Item>
+              <Form.Item label="说明">
+                <Input v-model:value="entry.description" />
+              </Form.Item>
+              <Form.Item label="预设图标">
+                <Select
+                  v-model:value="entry.icon"
+                  :data-testid="`entry-icon-${entry.key}`"
+                  :options="iconOptions"
+                />
+              </Form.Item>
+              <Form.Item label="预设主题色">
+                <Select
+                  v-model:value="entry.theme"
+                  :data-testid="`entry-theme-${entry.key}`"
+                  :options="themeOptions"
+                />
+              </Form.Item>
+            </div>
+            <div class="home-entry__actions">
+              <Button
+                :data-testid="`entry-move-up-${entry.key}`"
+                :disabled="index === 0"
+                @click="moveHomeEntry(index, -1)"
+              >
+                上移
+              </Button>
+              <Button
+                :data-testid="`entry-move-down-${entry.key}`"
+                :disabled="
+                  index === miniappHome.entriesSection.items.length - 1
+                "
+                @click="moveHomeEntry(index, 1)"
+              >
+                下移
+              </Button>
+            </div>
+          </Card>
+        </Collapse.Panel>
+
+        <Collapse.Panel key="growth" header="成长内容">
+          <div class="section-toggle">
+            <span>显示成长内容</span>
+            <Switch
+              v-model:checked="miniappHome.growth.enabled"
+              aria-label="成长内容显示状态"
+              data-testid="growth-enabled"
+            />
+          </div>
+          <div class="field-grid">
+            <Form.Item label="引导短语">
+              <Input v-model:value="miniappHome.growth.eyebrow" />
+            </Form.Item>
+            <Form.Item label="标题">
+              <Input
+                v-model:value="miniappHome.growth.title"
+                data-testid="growth-title"
+              />
+            </Form.Item>
+            <Form.Item class="field-grid__wide" label="说明">
+              <Input v-model:value="miniappHome.growth.description" />
+            </Form.Item>
+          </div>
+          <p class="fixed-destination">
+            固定目标：/pages/learn/learn（底部标签）
+          </p>
+        </Collapse.Panel>
+      </Collapse>
     </Form>
   </EditorShell>
 </template>
 
 <style scoped>
+.home-editor :deep(.ant-collapse-content-box) {
+  padding: 16px;
+}
+
 .carousel-settings {
   display: flex;
   flex-wrap: wrap;
@@ -380,5 +610,60 @@ function itemKey(item: MiniappCarouselItem) {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.section-toggle,
+.home-entry__head {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+
+.field-grid__wide {
+  grid-column: 1 / -1;
+}
+
+.fixed-destination {
+  margin: 0 0 16px;
+  color: hsl(var(--muted-foreground));
+  overflow-wrap: anywhere;
+}
+
+.fixed-entry-key {
+  margin: 0 0 8px;
+  color: hsl(var(--foreground));
+}
+
+.home-entry + .home-entry {
+  margin-top: 12px;
+}
+
+.field-grid--entry {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.home-entry__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 900px) {
+  .field-grid,
+  .field-grid--entry {
+    grid-template-columns: 1fr;
+  }
+
+  .field-grid__wide {
+    grid-column: auto;
+  }
 }
 </style>
