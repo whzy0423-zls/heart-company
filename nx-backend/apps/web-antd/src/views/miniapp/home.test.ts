@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { readFileSync } from 'node:fs';
-
+import ts from 'typescript';
 import { defineComponent, h } from 'vue';
 
 import { flushVuePromises, mountVueComponent } from '#/test-utils/vue-mount';
@@ -72,15 +71,72 @@ vi.mock('#/api', () => ({
 import { getSiteConfigApi, updateSiteConfigApi } from '#/api';
 
 import * as miniappHomeModule from './home.vue';
+import homeSource from './home.vue?raw';
+import apiSource from '../../api/core/site-config.ts?raw';
 
 const MiniappHome = miniappHomeModule.default;
 const ensureCarousel = (miniappHomeModule as any).ensureCarousel as
   | ((config: Record<string, unknown>) => unknown)
   | undefined;
-const homeSource = readFileSync(
-  'apps/web-antd/src/views/miniapp/home.vue',
-  'utf8',
+const apiAst = ts.createSourceFile(
+  'site-config.ts',
+  apiSource,
+  ts.ScriptTarget.Latest,
+  true,
+  ts.ScriptKind.TS,
 );
+
+function declaration(name: string) {
+  return apiAst.statements.find(
+    (node) =>
+      (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) &&
+      node.name.text === name,
+  );
+}
+
+function literalUnion(name: string) {
+  const node = declaration(name);
+  if (!node || !ts.isTypeAliasDeclaration(node) || !ts.isUnionTypeNode(node.type)) {
+    return undefined;
+  }
+  if (
+    !node.modifiers?.some(
+      (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+    ) ||
+    node.type.types.some(
+      (type) =>
+        !ts.isLiteralTypeNode(type) || !ts.isStringLiteral(type.literal),
+    )
+  ) {
+    return undefined;
+  }
+  return node.type.types.map((type) =>
+    (type as ts.LiteralTypeNode).literal.getText(apiAst).slice(1, -1),
+  ).sort();
+}
+
+function interfaceContract(name: string) {
+  const node = declaration(name);
+  if (!node || !ts.isInterfaceDeclaration(node)) return undefined;
+  return {
+    exported: node.modifiers?.some(
+      (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+    ) ?? false,
+    extends:
+      node.heritageClauses?.flatMap((clause) =>
+        clause.types.map((type) => type.expression.getText(apiAst)),
+      ) ?? [],
+    fields: Object.fromEntries(
+      node.members.filter(ts.isPropertySignature).map((member) => [
+        member.name.getText(apiAst),
+        {
+          optional: Boolean(member.questionToken),
+          type: member.type?.getText(apiAst),
+        },
+      ]),
+    ),
+  };
+}
 
 function createConfig(home: Record<string, unknown> = {}) {
   return {
@@ -101,6 +157,110 @@ describe('miniapp home carousel management', () => {
   beforeEach(() => {
     vi.mocked(getSiteConfigApi).mockReset();
     vi.mocked(updateSiteConfigApi).mockReset();
+  });
+
+  it('declares the configurable miniapp home contract', () => {
+    expect(literalUnion('MiniappHomeEntryKey')).toEqual([
+      'learn',
+      'profile',
+      'relation',
+      'test',
+    ]);
+    expect(literalUnion('MiniappHomeIconKey')).toEqual([
+      'book',
+      'compass',
+      'growth',
+      'heart',
+      'relation',
+      'spark',
+    ]);
+    expect(literalUnion('MiniappHomeThemeKey')).toEqual([
+      'blue',
+      'cyan',
+      'orange',
+      'pink',
+      'purple',
+    ]);
+    const required = (type: string) => ({ optional: false, type });
+    expect(interfaceContract('MiniappHomeSectionBase')).toEqual({
+      exported: true,
+      extends: [],
+      fields: { enabled: required('boolean') },
+    });
+    expect(interfaceContract('MiniappHomeBrand')).toEqual({
+      exported: true,
+      extends: ['MiniappHomeSectionBase'],
+      fields: { name: required('string'), tagline: required('string') },
+    });
+    expect(interfaceContract('MiniappHomeHero')).toEqual({
+      exported: true,
+      extends: ['MiniappHomeSectionBase'],
+      fields: {
+        buttonText: required('string'),
+        description: required('string'),
+        kicker: required('string'),
+        title: required('string'),
+      },
+    });
+    expect(interfaceContract('MiniappHomeEntry')).toEqual({
+      exported: true,
+      extends: ['MiniappHomeSectionBase'],
+      fields: {
+        description: required('string'),
+        icon: required('MiniappHomeIconKey'),
+        key: required('MiniappHomeEntryKey'),
+        theme: required('MiniappHomeThemeKey'),
+        title: required('string'),
+      },
+    });
+    expect(interfaceContract('MiniappHomeEntriesSection')).toEqual({
+      exported: true,
+      extends: ['MiniappHomeSectionBase'],
+      fields: {
+        description: required('string'),
+        items: required('MiniappHomeEntry[]'),
+        title: required('string'),
+      },
+    });
+    expect(interfaceContract('MiniappHomeGrowth')).toEqual({
+      exported: true,
+      extends: ['MiniappHomeSectionBase'],
+      fields: {
+        description: required('string'),
+        eyebrow: required('string'),
+        title: required('string'),
+      },
+    });
+    expect(interfaceContract('MiniappHomeConfig')).toEqual({
+      exported: true,
+      extends: [],
+      fields: {
+        brand: required('MiniappHomeBrand'),
+        entriesSection: required('MiniappHomeEntriesSection'),
+        growth: required('MiniappHomeGrowth'),
+        hero: required('MiniappHomeHero'),
+      },
+    });
+
+    const siteConfig = declaration('SiteConfig');
+    expect(siteConfig && ts.isInterfaceDeclaration(siteConfig)).toBe(true);
+    const homeProperty =
+      siteConfig && ts.isInterfaceDeclaration(siteConfig)
+        ? siteConfig.members
+            .filter(ts.isPropertySignature)
+            .find((member) => member.name.getText(apiAst) === 'home')
+        : undefined;
+    const homeLiteral =
+      homeProperty?.type && ts.isIntersectionTypeNode(homeProperty.type)
+        ? homeProperty.type.types.find(ts.isTypeLiteralNode)
+        : undefined;
+    const miniappHome = homeLiteral?.members
+      .filter(ts.isPropertySignature)
+      .find((member) => member.name.getText(apiAst) === 'miniappHome');
+    expect({
+      optional: Boolean(miniappHome?.questionToken),
+      type: miniappHome?.type?.getText(apiAst),
+    }).toEqual({ optional: true, type: 'MiniappHomeConfig' });
   });
 
   it('normalizes missing and malformed home carousel config without changing other home fields', () => {
