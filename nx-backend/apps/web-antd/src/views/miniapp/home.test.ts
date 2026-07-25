@@ -78,6 +78,9 @@ const MiniappHome = miniappHomeModule.default;
 const ensureCarousel = (miniappHomeModule as any).ensureCarousel as
   | ((config: Record<string, unknown>) => unknown)
   | undefined;
+const ensureMiniappHome = (miniappHomeModule as any).ensureMiniappHome as
+  | ((config: Record<string, unknown>) => any)
+  | undefined;
 const apiAst = ts.createSourceFile(
   'site-config.ts',
   apiSource,
@@ -329,6 +332,148 @@ describe('miniapp home carousel management', () => {
     expect(ensureCarousel?.(tooSlow)).toMatchObject({ interval: 10_000 });
   });
 
+  it('initializes complete purple home defaults without replacing sibling home data', () => {
+    const carousel = { autoplay: false, interval: 3500, items: [] };
+    const keep = { value: 'preserved' };
+    const config: Record<string, any> = {
+      home: { keep, miniappCarousel: carousel },
+    };
+
+    expect(ensureMiniappHome).toBeTypeOf('function');
+    expect(ensureMiniappHome?.(config)).toEqual({
+      brand: {
+        enabled: true,
+        name: '九型芯之力',
+        tagline: '看见动机，找到成长方向',
+      },
+      hero: {
+        buttonText: '开始人格测试',
+        description:
+          '从核心动机出发，在老师课程中理解自己，也更从容地走进关系与成长。',
+        enabled: true,
+        kicker: '老师导学 · 课程配套 · 18 题自测',
+        title: '读懂自己内在的能量地图',
+      },
+      entriesSection: {
+        description: '从测试、关系、课程到成长档案，选择此刻最需要的一步。',
+        enabled: true,
+        items: [
+          {
+            description: '找到你的核心动机',
+            enabled: true,
+            icon: 'compass',
+            key: 'test',
+            theme: 'blue',
+            title: '人格测试',
+          },
+          {
+            description: '看见彼此的互动模式',
+            enabled: true,
+            icon: 'relation',
+            key: 'relation',
+            theme: 'purple',
+            title: '关系合盘',
+          },
+          {
+            description: '跟着课件系统学习',
+            enabled: true,
+            icon: 'book',
+            key: 'learn',
+            theme: 'orange',
+            title: '老师课程',
+          },
+          {
+            description: '记录你的探索轨迹',
+            enabled: true,
+            icon: 'growth',
+            key: 'profile',
+            theme: 'pink',
+            title: '成长档案',
+          },
+        ],
+        title: '探索你的九型能量',
+      },
+      growth: {
+        description: '跟随老师的课程与课件，让理解沉淀为真实的成长行动。',
+        enabled: true,
+        eyebrow: '老师陪伴 · 持续成长',
+        title: '把测试发现带进课程练习',
+      },
+    });
+    expect(config.home.keep).toBe(keep);
+    expect(config.home.miniappCarousel).toBe(carousel);
+  });
+
+  it('repairs malformed sections and preserves configured fixed-entry order once', () => {
+    const config: Record<string, any> = {
+      home: {
+        miniappHome: {
+          brand: { enabled: false, name: ' 自定义品牌 ', tagline: '' },
+          entriesSection: {
+            items: [
+              {
+                description: ' 自定义档案说明 ',
+                enabled: false,
+                icon: 'heart',
+                key: 'profile',
+                theme: 'cyan',
+                title: ' 自定义档案 ',
+              },
+              { key: 'unknown', title: '未知入口' },
+              { key: 'profile', title: '重复入口' },
+              { icon: 'bad', key: 'test', theme: 'bad' },
+            ],
+            title: ' ',
+          },
+          growth: [],
+          hero: null,
+        },
+      },
+    };
+
+    const home = ensureMiniappHome?.(config);
+    expect(home.brand).toEqual({
+      enabled: false,
+      name: '自定义品牌',
+      tagline: '看见动机，找到成长方向',
+    });
+    expect(home.hero.title).toBe('读懂自己内在的能量地图');
+    expect(home.growth.title).toBe('把测试发现带进课程练习');
+    expect(home.entriesSection.title).toBe('探索你的九型能量');
+    expect(home.entriesSection.items.map((item: any) => item.key)).toEqual([
+      'profile',
+      'test',
+      'relation',
+      'learn',
+    ]);
+    expect(home.entriesSection.items[0]).toMatchObject({
+      description: '自定义档案说明',
+      enabled: false,
+      icon: 'heart',
+      theme: 'cyan',
+      title: '自定义档案',
+    });
+    expect(home.entriesSection.items[1]).toMatchObject({
+      icon: 'compass',
+      theme: 'blue',
+    });
+
+    const allDisabled = ensureMiniappHome?.({
+      home: {
+        miniappHome: {
+          entriesSection: {
+            enabled: true,
+            items: ['test', 'relation', 'learn', 'profile'].map((key) => ({
+              enabled: false,
+              key,
+            })),
+          },
+        },
+      },
+    });
+    expect(allDisabled.entriesSection.enabled).toBe(false);
+  });
+
   it('uses a stable item identity instead of index as the carousel row key', () => {
     expect(homeSource).not.toContain(':key="index"');
     expect(homeSource).toContain(':key="itemKey(item)"');
@@ -349,6 +494,19 @@ describe('miniapp home carousel management', () => {
     expect(config.home).toMatchObject({
       existingHomeSetting: { keep: true },
       miniappCarousel: { autoplay: true, interval: 4000, items: [] },
+      miniappHome: {
+        brand: { enabled: true, name: '九型芯之力' },
+        entriesSection: {
+          items: [
+            { key: 'test' },
+            { key: 'relation' },
+            { key: 'learn' },
+            { key: 'profile' },
+          ],
+        },
+        growth: { enabled: true },
+        hero: { enabled: true },
+      },
     });
 
     wrapper.button('新增轮播图')?.click();
