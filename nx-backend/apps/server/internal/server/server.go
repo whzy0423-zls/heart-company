@@ -21,13 +21,16 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/analytics"
+	"nine-xing/nx-backend/apps/server/internal/apprelease"
 	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/articlestore"
 	"nine-xing/nx-backend/apps/server/internal/auditlog"
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/branding"
+	"nine-xing/nx-backend/apps/server/internal/businessmessage"
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/dbtx"
 	"nine-xing/nx-backend/apps/server/internal/embedding"
 	"nine-xing/nx-backend/apps/server/internal/engagement"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
@@ -69,7 +72,9 @@ type Server struct {
 	builder               *siteconfig.Builder
 	engagement            *engagement.Store
 	signups               *signup.Store
+	signupService         websiteSignupCreator
 	uploads               *uploadasset.Store
+	appReleases           appReleaseService
 	voiceAssetCreate      func(context.Context, uploadasset.CreateInput) (uploadasset.Asset, error)
 	voiceAssetFind        func(context.Context, int64) (uploadasset.Asset, error)
 	uploader              storage.ObjectUploader
@@ -80,6 +85,10 @@ type Server struct {
 	storyboards           *videostoryboard.Store
 	images                *image.Store
 	miniapp               *miniapp.Store
+	miniappService        miniappUserUpserter
+	miniappTestService    miniappTestRecorder
+	miniappBookingService miniappBookingCreator
+	miniappAdmin          miniappAdminReader
 	wx                    *wechat.Client
 	pay                   *wxpay.Client
 	ragGen                rag.Generator
@@ -129,6 +138,22 @@ type Server struct {
 	modelMu sync.RWMutex
 }
 
+type websiteSignupCreator interface {
+	CreateWebsiteSignup(context.Context, signup.LeadInput, *http.Request) (signup.Lead, error)
+}
+
+type miniappUserUpserter interface {
+	UpsertUser(context.Context, string, string, string, string) (int64, error)
+}
+
+type miniappTestRecorder interface {
+	SaveTestRecord(context.Context, int64, miniapp.TestRecordInput) (miniapp.TestRecord, error)
+}
+
+type miniappBookingCreator interface {
+	CreateBooking(context.Context, int64, miniapp.BookingInput, *http.Request) (miniapp.BookingResult, error)
+}
+
 var uploadPermissionCodes = []string{
 	"RAG:Knowledge:Manage",
 	"Reading:Article:Manage",
@@ -147,6 +172,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	if err != nil {
 		panic("trusted proxy cidrs: " + err.Error())
 	}
+	signupStore := signup.NewStore(database)
 	s := &Server{
 		env:               env,
 		mux:               http.NewServeMux(),
@@ -156,12 +182,23 @@ func New(env config.Env, database *sql.DB) http.Handler {
 		auditLogs:         auditlog.NewStore(database),
 		builder:           siteconfig.NewBuilder(env.BuildScript, "", time.Duration(env.BuildTimeout)*time.Second),
 		engagement:        engagement.NewStore(database),
-		signups:           signup.NewStore(database),
+		signups:           signupStore,
+		signupService:     signup.NewService(dbtx.SQLBeginner{DB: database}, signupStore, businessmessage.Store{}),
 		uploads:           uploadasset.NewStore(database),
 		uploader:          env.ObjectUploader,
 		trustedProxyCIDRs: trustedProxyCIDRs,
 
 		signupSubscribers: map[chan signup.Lead]struct{}{},
+	}
+	if database != nil {
+		files, fileErr := apprelease.NewFileStore(filepath.Join(env.UploadDir, "app-releases"), apprelease.MaxAPKBytes)
+		if fileErr != nil {
+			panic("app release file store: " + fileErr.Error())
+		}
+		s.appReleases = apprelease.NewService(apprelease.NewStore(database), files, apprelease.NewAPKInspector(), env.AppRelease.PackageName, env.AppRelease.ExpectedCertificateSHA256)
+		if maintainErr := s.appReleases.Maintain(context.Background(), time.Now()); maintainErr != nil {
+			log.Printf("app release maintenance: %v", maintainErr)
+		}
 	}
 	if uploader, err := s.objectUploader(); err == nil {
 		s.uploader = uploader
@@ -173,6 +210,18 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.storyboards = videostoryboard.NewStore(database)
 	s.images = image.NewStore(s.uploads, env.Image, s.uploader)
 	s.miniapp = miniapp.NewStore(database)
+	s.miniappAdmin = miniapp.NewAdminStore(database)
+	miniappService := miniapp.NewService(
+		dbtx.SQLBeginner{DB: database},
+		s.miniapp,
+		businessmessage.Store{},
+		miniapp.WithTestRecordWriter(s.miniapp),
+		miniapp.WithBookingWriter(s.miniapp),
+		miniapp.WithSignupWriter(signupStore),
+	)
+	s.miniappService = miniappService
+	s.miniappTestService = miniappService
+	s.miniappBookingService = miniappService
 	s.wx = newWeChatClient(env)
 	s.pay = mustWxPayClient(env)
 	s.ragGen = newChatGenerator(modelconfig.Config{}.ApplyChat(env.MiniMax))
@@ -296,6 +345,13 @@ func (s *Server) imageStore() *image.Store {
 }
 
 func (s *Server) routes() {
+	s.mux.HandleFunc("/api/app-releases/list", s.method(http.MethodGet, s.requirePermission("Website:AppReleases:List", s.appReleaseList)))
+	s.mux.HandleFunc("/api/app-releases/upload", s.method(http.MethodPost, s.requirePermission("Website:AppReleases:Write", s.appReleaseUpload)))
+	s.mux.HandleFunc("/api/app-release-icons/", s.getOrHead(s.requirePermission("Website:AppReleases:List", s.appReleaseIcon)))
+	s.mux.HandleFunc("/api/app-releases/", s.requirePermission("Website:AppReleases:Write", s.appReleaseMutation))
+	s.mux.HandleFunc("/api/public/app-release/latest", s.method(http.MethodGet, s.publicAppReleaseLatest))
+	s.mux.HandleFunc("/api/public/app-release/download", s.getOrHead(s.publicAppReleaseLatestDownload))
+	s.mux.HandleFunc("/api/public/app-releases/", s.getOrHead(s.publicAppReleaseDownload))
 	s.mux.HandleFunc("/api/status", s.method(http.MethodGet, s.status))
 	s.mux.HandleFunc("/api/auth/login", s.method(http.MethodPost, s.login))
 	s.mux.HandleFunc("/api/auth/logout", s.method(http.MethodPost, s.logout))
@@ -393,6 +449,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/wx/userinfo", s.requireMiniapp(s.wxUserInfo))
 	s.mux.HandleFunc("/api/miniapp/test-records", s.requireMiniapp(s.miniappTestRecords))
 	s.mux.HandleFunc("/api/miniapp/bookings", s.requireMiniapp(s.miniappBookings))
+	s.mux.HandleFunc("/api/miniapp/users", s.method(http.MethodGet, s.requirePermission("Customer:Miniapp:List", s.miniappUsers)))
+	s.mux.HandleFunc("/api/miniapp/users/", s.method(http.MethodGet, s.requirePermission("Customer:Miniapp:List", s.miniappUserByID)))
 	s.mux.HandleFunc("/api/miniapp/chat", s.method(http.MethodPost, s.requireMiniapp(s.miniappChat)))
 	// 付费解锁：下单（鉴权）→ 微信回调（公开）→ 解锁状态/报告正文（鉴权）
 	s.mux.HandleFunc("/api/miniapp/report/order", s.method(http.MethodPost, s.requireMiniapp(s.createReportOrder)))
@@ -401,9 +459,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/miniapp/report/content", s.method(http.MethodGet, s.requireMiniapp(s.reportContent)))
 	s.mux.HandleFunc("/api/pay/notify", s.method(http.MethodPost, s.payNotify))
 	s.mux.HandleFunc("/api/analytics/overview", s.method(http.MethodGet, s.requirePermission("Analytics:Overview", s.analyticsOverview)))
+	s.mux.HandleFunc("/api/analytics/platform-overview", s.method(http.MethodGet, s.requirePermission("Analytics:Overview", s.platformAnalyticsOverview)))
 	s.mux.HandleFunc("/api/app-analytics/overview", s.method(http.MethodGet, s.requirePermission("Analytics:App:Overview", s.appAnalyticsOverview)))
 	s.mux.HandleFunc("/api/game-results/overview", s.method(http.MethodGet, s.requirePermission("Analytics:GameResults", s.gameOverview)))
 	s.mux.HandleFunc("/api/messages/list", s.method(http.MethodGet, s.requirePermission("Message:Manage:List", s.messagesList)))
+	s.mux.HandleFunc("/api/messages/unread-summary", s.method(http.MethodGet, s.requirePermission("Message:Manage:List", s.messagesUnreadSummary)))
 	s.mux.HandleFunc("/api/messages/read", s.method(http.MethodPut, s.requirePermission("Message:Manage:List", s.markMessages)))
 	// 推送管理（admin）
 	s.mux.HandleFunc("/api/push/list", s.method(http.MethodGet, s.requirePermission("Push:Manage", s.adminPushList)))
@@ -901,7 +961,7 @@ func (s *Server) publicSignup(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
 		return
 	}
-	lead, err := s.signups.Create(r.Context(), body, r)
+	lead, err := s.signupService.CreateWebsiteSignup(r.Context(), body, r)
 	if err != nil {
 		httpx.Fail(w, http.StatusBadRequest, err.Error())
 		return
@@ -965,6 +1025,29 @@ func (s *Server) analyticsOverview(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, result)
 }
 
+func (s *Server) platformAnalyticsOverview(w http.ResponseWriter, r *http.Request) {
+	days := 7
+	if value, ok := r.URL.Query()["days"]; ok {
+		if len(value) != 1 || (value[0] != "7" && value[0] != "30") {
+			httpx.Fail(w, http.StatusBadRequest, "days must be 7 or 30")
+			return
+		}
+		if value[0] == "30" {
+			days = 30
+		}
+	}
+	result, err := s.analytics.PlatformOverview(r.Context(), days, time.Now())
+	if errors.Is(err, analytics.ErrInvalidDays) {
+		httpx.Fail(w, http.StatusBadRequest, "days must be 7 or 30")
+		return
+	}
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "query platform analytics failed")
+		return
+	}
+	httpx.OK(w, result)
+}
+
 func (s *Server) gameOverview(w http.ResponseWriter, r *http.Request) {
 	result, err := s.engagement.GameOverview(r.Context())
 	if err != nil {
@@ -983,6 +1066,56 @@ func (s *Server) messagesList(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, result)
 }
 
+func parseNonNegativeDecimalID(value string) (int64, error) {
+	if value == "" {
+		return 0, nil
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return 0, errors.New("invalid afterId")
+		}
+	}
+	id, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || id < 0 {
+		return 0, errors.New("invalid afterId")
+	}
+	return id, nil
+}
+
+func parseUnreadLimit(value string) (int, error) {
+	if value == "" {
+		return 50, nil
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 1 || n > 100 {
+		return 0, errors.New("invalid limit")
+	}
+	return n, nil
+}
+
+func (s *Server) messagesUnreadSummary(w http.ResponseWriter, r *http.Request) {
+	afterText := strings.TrimSpace(r.URL.Query().Get("afterId"))
+	afterID, err := parseNonNegativeDecimalID(afterText)
+	if err != nil {
+		httpx.Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	limit, err := parseUnreadLimit(strings.TrimSpace(r.URL.Query().Get("limit")))
+	if err != nil {
+		httpx.Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if afterText == "" {
+		afterText = "0"
+	}
+	result, err := s.engagement.UnreadSummary(r.Context(), afterID, afterText, limit)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpx.OK(w, result)
+}
+
 func (s *Server) markMessages(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		IDs  []string `json:"ids"`
@@ -990,6 +1123,16 @@ func (s *Server) markMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
+		return
+	}
+	for _, id := range body.IDs {
+		if _, err := engagement.ParsePositiveMessageID(id); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if len(body.IDs) == 0 && !body.Read {
+		httpx.Fail(w, http.StatusBadRequest, "empty ids can only mark all read")
 		return
 	}
 	if err := s.engagement.MarkMessages(r.Context(), body.IDs, body.Read); err != nil {

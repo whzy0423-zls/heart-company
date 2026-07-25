@@ -10,6 +10,19 @@ assert.equal(
   packageJson.dependencies['@dcloudio/uni-h5'],
   packageJson.dependencies['@dcloudio/uni-app'],
 )
+for (const requiredTest of [
+  'src/pages/profile/profile.session.test.mjs',
+  'src/pages/booking-records/booking-records.session.test.mjs',
+  'src/utils/bookingDisplay.test.mjs',
+  'src/utils/bookingSession.test.mjs',
+]) {
+  assert.match(packageJson.scripts['test:config'], new RegExp(requiredTest.replaceAll('.', '\\.')), `test:config should run ${requiredTest}`)
+}
+assert.match(
+  packageJson.scripts['test:config'],
+  /node src\/pages\/booking-detail\/booking-detail\.session\.test\.mjs/,
+  'the default test command should cover appointment detail auth and stale-response behavior',
+)
 
 const pagesConfig = readFileSync('src/pages.json', 'utf8')
 assert.doesNotMatch(pagesConfig, /pages\/chat\/chat/, 'pages.json must not register the removed chat page')
@@ -17,8 +30,18 @@ assert.doesNotMatch(pagesConfig, /问 AI|AI 对话/, 'tabBar must not expose an 
 assert.equal(statSync('src/pages/chat', { throwIfNoEntry: false }), undefined, 'removed chat page directory should stay deleted')
 assert.match(
   pagesConfig,
+  /"path"\s*:\s*"pages\/profile-edit\/profile-edit"[\s\S]*?"navigationBarTitleText"\s*:\s*"个人资料"/,
+  'pages.json should register the dedicated personal-profile page with its approved title',
+)
+assert.match(
+  pagesConfig,
   /"path"\s*:\s*"pages\/booking-records\/booking-records"[\s\S]*?"navigationBarTitleText"\s*:\s*"预约记录"/,
   'pages.json should register the appointment records page with its Chinese title',
+)
+assert.match(
+  pagesConfig,
+  /"path"\s*:\s*"pages\/booking-detail\/booking-detail"[\s\S]*?"navigationBarTitleText"\s*:\s*"预约详情"/,
+  'pages.json should register the appointment detail page with its Chinese title',
 )
 
 const h5Index = readFileSync('index.html', 'utf8')
@@ -31,9 +54,42 @@ assert.match(appVue, /@import ['"]\.\/styles\/apple-mobile\.css['"];/, 'App.vue 
 for (const token of ['--nx-bg', '--nx-primary', '--nx-card', '--nx-radius', '--nx-safe-bottom']) {
   assert.match(appleMobileStyle, new RegExp(token), `apple-mobile.css should define ${token}`)
 }
+for (const token of [
+  '--nx-page-bg',
+  '--nx-surface',
+  '--nx-surface-soft',
+  '--nx-line',
+  '--nx-blue',
+  '--nx-purple',
+  '--nx-pink',
+  '--nx-teal',
+  '--nx-green',
+  '--nx-orange',
+  '--nx-danger',
+]) {
+  assert.match(appleMobileStyle, new RegExp(`${token}\\s*:`), `apple-mobile.css should define ${token}`)
+}
 for (const className of ['.ios-page', '.ios-card', '.ios-button', '.ios-section', '.ios-safe-bottom']) {
   assert.match(appleMobileStyle, new RegExp(className.replace('.', '\\.') + '\\s*\\{'), `apple-mobile.css should define ${className}`)
 }
+for (const className of ['.nx-page-hero', '.nx-section-head', '.nx-panel', '.nx-state', '.nx-tag', '.nx-focusable']) {
+  assert.match(appleMobileStyle, new RegExp(className.replace('.', '\\.') + '\\s*\\{'), `apple-mobile.css should define ${className}`)
+}
+assert.match(
+  appleMobileStyle,
+  /\.nx-focusable:focus\s*\{[^}]*outline\s*:\s*4rpx\s+solid\s+rgba\(\s*37\s*,\s*99\s*,\s*235\s*,\s*\.34\s*\)\s*;/,
+  '.nx-focusable:focus should expose the planned visible outline',
+)
+assert.match(
+  appleMobileStyle,
+  /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.nx-focusable\s*\{[^}]*animation\s*:\s*none\s*;/,
+  'reduced-motion styles should disable .nx-focusable animation',
+)
+assert.match(
+  appleMobileStyle,
+  /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.nx-focusable\s*\{[^}]*transition\s*:\s*none\s*;/,
+  'reduced-motion styles should disable .nx-focusable transition',
+)
 assert.match(appleMobileStyle, /min-height:\s*88rpx/, 'Apple/iOS buttons should keep an 88rpx touch target')
 assert.match(appleMobileStyle, /safe-area-inset-bottom/, 'Apple/iOS style tokens should reserve safe-area bottom')
 
@@ -58,6 +114,36 @@ for (const file of ['src/pages/relation/relation.vue', 'src/pages/test/test.vue'
 }
 
 const indexPage = readFileSync('src/pages/index/index.vue', 'utf8')
+const homeTemplate = indexPage.match(/<template>([\s\S]*?)<\/template>/)?.[1] || ''
+const homeRoot = homeTemplate.match(/<view\s+class=["']wrap home page-stack ios-page ios-safe-bottom["']>([\s\S]*?)<\/view>/)?.[1] || ''
+const carouselStart = homeRoot.indexOf('<swiper')
+const homeNavStart = homeRoot.indexOf('<view class="home-nav">')
+
+assert.ok(carouselStart >= 0, 'home root should render a carousel before its navigation')
+assert.ok(homeNavStart >= 0, 'home root should render the home navigation')
+assert.ok(carouselStart < homeNavStart, 'home carousel should be the first home content block before home navigation')
+assert.match(homeRoot, /<swiper\b(?=[^>]*\bclass=["']home-carousel["'])(?=[^>]*\bv-if=["']carousel\.items\.length["'])[^>]*>/, 'home carousel should only render when it has slides')
+const carouselTag = homeRoot.match(/<swiper\b[\s\S]*?<\/swiper>/)?.[0] || ''
+assert.match(carouselTag, /:autoplay=["'][^"']*carousel\.items\.length\s*>\s*1[^"']*carousel\.autoplay[^"']*!carouselPaused[^"']*["']/, 'home carousel should only autoplay multiple unpaused slides')
+assert.match(carouselTag, /:interval=["']carousel\.interval["']/, 'home carousel should bind its configured interval')
+assert.match(carouselTag, /:circular=["'][^"']*carousel\.items\.length\s*>\s*1[^"']*["']/, 'home carousel should only loop when it has multiple slides')
+assert.match(carouselTag, /:indicator-dots=["'][^"']*carousel\.items\.length\s*>\s*1[^"']*["']/, 'home carousel should only show indicators when it has multiple slides')
+assert.match(carouselTag, /:duration=["']450["']/, 'home carousel should use the approved slide duration')
+assert.match(homeRoot, /<swiper-item\b(?=[^>]*\sv-for=["']\(item, index\) in carousel\.items["'])(?=[^>]*\s:key=["']item\.image["'])[^>]*>/, 'home carousel should key slides by their stable image URL')
+assert.match(homeRoot, /<image\b(?=[^>]*\s:src=["']item\.image["'])(?=[^>]*\smode=["']aspectFill["'])(?=[^>]*\blazy-load(?:=|\s|>))(?=[^>]*\s@error=["']removeCarouselItem\(item\.image\)["'])(?=[^>]*\s:aria-label=["'][^"]*index[^"]*)[^>]*\/>/, 'home carousel images should fill, lazy-load, describe their slide number, and remove only their failed slide')
+assert.match(indexPage, /import\s*\{[^}]*\bonMounted\b[^}]*\}\s*from\s*['"]vue['"]/, 'home page should load carousel configuration after mounting')
+assert.match(indexPage, /getStoredSiteConfig/, 'home page should apply cached site configuration first')
+assert.match(indexPage, /refreshSiteConfig/, 'home page should refresh carousel configuration in the background')
+assert.match(indexPage, /filterFailedCarouselItems/, 'home page should preserve failed-image filtering when applying cached and refreshed configuration')
+assert.match(indexPage, /failedCarouselImages\s*=\s*new Set\(\)/, 'home page should retain failed image URLs across configuration refreshes')
+assert.match(indexPage, /failedCarouselImages\.add\(image\)/, 'home page should remember each failed carousel image URL')
+const pauseControl = homeRoot.match(/<button\b[\s\S]*?\bclass=["']home-carousel__toggle["'][\s\S]*?<\/button>/)?.[0] || ''
+assert.ok(pauseControl, 'home carousel should expose a pause or resume control')
+assert.match(pauseControl, /\bv-if=["']carousel\.items\.length\s*>\s*1\s*&&\s*carousel\.autoplay["']/, 'home carousel pause or resume control should only render for multiple autoplay slides')
+assert.match(pauseControl, /@click=["']toggleCarouselPaused["']/, 'home carousel pause control should toggle autoplay')
+assert.match(pauseControl, /:aria-label=["'][^"]*carouselPaused[^"]*["']/, 'home carousel pause control should expose a state-aware accessible label')
+assert.match(homeRoot, /\{\{ carouselPaused \? ['"]继续轮播['"] : ['"]暂停轮播['"] \}\}/, 'home carousel pause control should show clear pause and resume text')
+
 const homeOpeningViews = indexPage.match(/<view\b[^>]*>/g) || []
 
 function staticClassTokens(tag) {
@@ -90,6 +176,17 @@ function standaloneStyleDeclarations(className) {
   const escapedClassName = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   return indexPage.match(new RegExp(`^[ \\t]*\\.${escapedClassName}\\s*\\{([^}]*)\\}`, 'm'))?.[1]
 }
+
+const homeCarouselStyle = standaloneStyleDeclarations('home-carousel')
+assert.ok(homeCarouselStyle, '.home-carousel should have a standalone CSS rule')
+assert.match(homeCarouselStyle, /\bwidth:\s*100%\s*;/, 'home carousel should fill the available width')
+assert.match(homeCarouselStyle, /\bheight:\s*300rpx\s*;/, 'home carousel should keep the approved 300rpx height')
+assert.match(homeCarouselStyle, /\boverflow:\s*hidden\s*;/, 'home carousel should clip its slide content')
+assert.match(homeCarouselStyle, /\bborder-radius:\s*32rpx\s*;/, 'home carousel should use the approved rounded corners')
+const homeCarouselImageStyle = standaloneStyleDeclarations('home-carousel__image')
+assert.ok(homeCarouselImageStyle, '.home-carousel__image should have a standalone CSS rule')
+assert.match(homeCarouselImageStyle, /\bwidth:\s*100%\s*;/, 'carousel images should fill carousel width')
+assert.match(homeCarouselImageStyle, /\bheight:\s*100%\s*;/, 'carousel images should fill carousel height')
 
 function assertKeyboardViewControl(tag, description, handler) {
   assert.match(tag, /\srole=["']button["']/, `${description} should use web button semantics`)
@@ -260,15 +357,123 @@ for (const file of collectVueFiles('src/pages')) {
 
 
 const bookingPage = readFileSync('src/pages/booking/booking.vue', 'utf8')
+const bookingTemplate = stripMarkupAndCssComments(vueSection(bookingPage, 'template') || '')
+const bookingStyle = stripMarkupAndCssComments(vueSection(bookingPage, 'style') || '')
 assert.match(bookingPage, /userErrorMessage/, 'booking page should surface normalized request errors')
 assert.match(bookingPage, /title:\s*userErrorMessage\(e,\s*'提交失败，请重试'\)/, 'booking submit should keep a fallback while showing specific API errors')
-assert.match(bookingPage, /class=["'][^"']*card[^"']*ios-card[^"']*["']/, 'booking main form card should opt into iOS card styling')
-assert.match(bookingPage, /<button\s+class=["'][^"']*btn-primary[^"']*ios-button[^"']*["'][^>]*@click=["']submit["']/, 'booking submit action should opt into iOS button styling')
 assert.match(bookingPage, /fieldErrors/, 'booking page should expose inline field validation errors')
 assert.match(bookingPage, /v-if=["']fieldErrors\.contactName["']/, 'booking contact name should render an inline validation error')
 assert.match(bookingPage, /v-if=["']fieldErrors\.phone["']/, 'booking phone should render an inline validation error')
 assert.match(bookingPage, /:aria-invalid=["']!!fieldErrors\.contactName["']/, 'booking contact name input should expose aria-invalid when invalid')
 assert.match(bookingPage, /:aria-invalid=["']!!fieldErrors\.phone["']/, 'booking phone input should expose aria-invalid when invalid')
+assert.match(bookingPage, /import\s*\{[^}]*onHide[^}]*onUnload[^}]*\}\s*from\s*["']@dcloudio\/uni-app["']/, 'booking should use uni-app page lifecycle hooks for draft flushing')
+assert.match(bookingPage, /const DRAFT_SAVE_DELAY = 250/, 'booking should debounce draft persistence by about 250ms')
+assert.match(bookingPage, /let draftSaveTimer = null/, 'booking should retain its pending draft timer')
+assert.match(bookingPage, /const restoredKindIndex = kinds\.findIndex\([\s\S]*if \(restoredKindIndex >= 0\) kindIndex\.value = restoredKindIndex/, 'booking should keep the default picker index for unknown draft kinds')
+assert.ok(bookingPage.indexOf('const draft = loadBookingDraft()') < bookingPage.indexOf('watch('), 'booking should restore its draft before enabling autosave')
+const bookingWatch = bookingPage.match(/watch\(\s*\[kindIndex, form\],([\s\S]*?)\{ deep: true \},\s*\)/)?.[1] || ''
+assert.match(bookingWatch, /scheduleDraftSave/, 'booking watch should schedule draft persistence')
+assert.doesNotMatch(bookingWatch, /saveBookingDraft/, 'booking watch must not persist on every input event')
+const scheduleDraftBody = sourceBracedBody(bookingPage, /function\s+scheduleDraftSave\s*\(\s*\)\s*\{/.exec(bookingPage)) || ''
+assert.match(scheduleDraftBody, /clearTimeout\(draftSaveTimer\)/, 'booking draft scheduling should reset the prior timer')
+assert.match(scheduleDraftBody, /setTimeout\([\s\S]*DRAFT_SAVE_DELAY\)/, 'booking draft scheduling should use the planned delay')
+const flushDraftBody = sourceBracedBody(bookingPage, /function\s+flushDraftSave\s*\(\s*\)\s*\{/.exec(bookingPage)) || ''
+assert.match(flushDraftBody, /clearTimeout\(draftSaveTimer\)/, 'booking draft flush should clear the pending timer')
+assert.match(flushDraftBody, /saveBookingDraft/, 'booking draft flush should synchronously save current fields')
+assert.match(bookingPage, /onHide\(flushDraftSave\)/, 'booking should flush its draft when hidden')
+assert.match(bookingPage, /onUnload\(flushDraftSave\)/, 'booking should flush its draft before unload')
+const bookingSubmitBody = sourceBracedBody(bookingPage, /async\s+function\s+submit\s*\(\s*\)\s*\{/.exec(bookingPage)) || ''
+assert.match(bookingSubmitBody, /cancelPendingDraftSave\(\)[\s\S]*clearBookingDraft\(\)/, 'successful booking should cancel delayed persistence before clearing its draft')
+assert.match(bookingTemplate, /class=["'][^"']*booking-hero[^"']*nx-page-hero[^"']*["']/, 'booking should open with the shared themed hero')
+assert.match(bookingTemplate, />预约咨询<\//, 'booking hero should keep the appointment eyebrow')
+assert.match(bookingTemplate, />让老师帮你找到合适的学习方式<\//, 'booking hero should state its primary purpose')
+assert.match(bookingTemplate, /草稿/, 'booking hero should explain draft persistence')
+
+const bookingViews = openingTagsFor(bookingTemplate, 'view')
+const bookingSections = bookingViews.filter((tag) => staticClassTokens(tag).includes('form-section'))
+assert.equal(bookingSections.length, 3, 'booking should render exactly three bounded form sections')
+for (const section of bookingSections) {
+  assert.ok(staticClassTokens(section).includes('nx-panel'), 'each booking form section should use the shared panel surface')
+}
+for (const title of ['预约类型', '联系信息', '学习意向']) {
+  assert.match(bookingTemplate, new RegExp(`>${title}<\\/text>`), `booking should expose the ${title} section heading`)
+}
+for (const label of ['称呼', '手机号', '意向方向', '期望时间', '留言']) {
+  assert.match(bookingTemplate, new RegExp(`<text\\s+class=["']label["']>${label}<\\/text>`), `booking ${label} should use a visible label`)
+}
+assert.doesNotMatch(bookingTemplate, /⌄/, 'booking picker must not depend on a character glyph arrow')
+assert.match(bookingTemplate, /<view\s+class=["']picker__arrow["']\s+aria-hidden=["']true["']\s*\/>/, 'booking picker should use a decorative CSS arrow view')
+assert.match(bookingTemplate, /@input=["']clearFieldError\('contactName'\)["']/, 'contact name input should clear its nearby error while editing')
+assert.match(bookingTemplate, /@input=["']clearFieldError\('phone'\)["']/, 'phone input should clear its nearby error while editing')
+assert.match(bookingTemplate, /class=["']draft-hint["']>填写内容会自动保存在当前设备<\//, 'booking should place an autosave hint after the learning intent fields')
+
+const bookingPickers = openingTagsFor(bookingTemplate, 'picker')
+assert.equal(bookingPickers.length, 1, 'booking should render one bounded appointment type picker')
+assert.equal(tagAttribute(bookingPickers[0], 'aria-label'), '预约类型', 'booking picker should expose its visible purpose to assistive technology')
+const bookingInputs = openingTagsFor(bookingTemplate, 'input')
+const bookingInputContracts = [
+  { model: 'form.contactName', label: '称呼', describedBy: 'contact-name-error' },
+  { model: 'form.phone', label: '手机号', describedBy: 'phone-error' },
+  { model: 'form.intent', label: '意向方向' },
+  { model: 'form.preferredTime', label: '期望时间' },
+]
+assert.equal(bookingInputs.length, bookingInputContracts.length, 'booking should keep four bounded text inputs')
+for (const { model, label, describedBy } of bookingInputContracts) {
+  const input = bookingInputs.find((tag) => tagAttribute(tag, 'v-model') === model)
+  assert.ok(input, `booking should render the ${model} input`)
+  assert.equal(tagAttribute(input, 'aria-label'), label, `${model} should expose an explicit accessible label`)
+  if (describedBy) assert.equal(tagAttribute(input, 'aria-describedby'), describedBy, `${model} should reference its nearby error`)
+}
+const bookingTextareas = openingTagsFor(bookingTemplate, 'textarea')
+assert.equal(bookingTextareas.length, 1, 'booking should render one bounded message textarea')
+assert.equal(tagAttribute(bookingTextareas[0], 'aria-label'), '留言', 'booking message should expose an explicit accessible label')
+for (const { condition, id } of [
+  { condition: 'fieldErrors.contactName', id: 'contact-name-error' },
+  { condition: 'fieldErrors.phone', id: 'phone-error' },
+]) {
+  assert.match(
+    bookingTemplate,
+    new RegExp(`<text\\s+v-if=["']${condition.replace('.', '\\.')}["']\\s+id=["']${id}["']\\s+class=["']field-error["']\\s+role=["']alert["']>`),
+    `${condition} should render a stable, live nearby error`,
+  )
+}
+
+const h5BookingBlock = bookingPage.match(/<!--\s*#ifdef H5\s*-->([\s\S]*?)<!--\s*#endif\s*-->/)?.[1] || ''
+assert.match(h5BookingBlock, /<button\s+class=["']booking-submit booking-submit--disabled ios-button["']\s+disabled>请在微信小程序内提交预约<\/button>/, 'H5 should render the exact disabled booking action')
+assert.doesNotMatch(h5BookingBlock, /@click=["']submit["']/, 'H5 booking action must never bind submit')
+const nonH5BookingBlock = bookingPage.match(/<!--\s*#ifndef H5\s*-->([\s\S]*?)<!--\s*#endif\s*-->/)?.[1] || ''
+assert.match(nonH5BookingBlock, /<button\s+class=["']btn-primary booking-submit ios-button["'][^>]*:loading=["']submitting["'][^>]*:disabled=["']submitting["'][^>]*@click=["']submit["']>提交预约<\/button>/, 'miniapp booking action should retain loading, disabled, and submit behavior')
+
+const bookingHeroStyle = pageStyleDeclarations(bookingStyle, '.booking-hero')
+assert.match(bookingHeroStyle, /background:\s*linear-gradient\(145deg,\s*#c2410c,\s*#2563eb\)\s*;/i, 'booking hero should keep the exact orange-to-blue gradient')
+assert.match(bookingHeroStyle, /border-radius:\s*38rpx\s*;/, 'booking hero should keep the shared 38rpx radius')
+for (const selector of ['.booking-hero__eyebrow', '.booking-hero__title', '.booking-hero__lead']) {
+  assert.match(pageStyleDeclarations(bookingStyle, selector), /color:\s*(?:#fff(?:fff)?|rgba\(\s*255\s*,\s*255\s*,\s*255\s*,\s*\.9\d*\s*\))\s*;/i, `${selector} should use accessible white hero text`)
+}
+assert.match(pageStyleDeclarations(bookingStyle, '.form-section'), /gap:\s*20rpx\s*;/, 'booking sections should use the planned 20rpx vertical rhythm')
+assert.match(pageStyleDeclarations(bookingStyle, '.form-section__title'), /font-size:\s*31rpx\s*;[\s\S]*font-weight:\s*900\s*;/, 'booking section titles should keep the planned hierarchy')
+for (const selector of ['.input', '.picker']) {
+  const declarations = pageStyleDeclarations(bookingStyle, selector)
+  const height = declarations?.match(/min-height:\s*(\d+)rpx\s*;/)
+  assert.ok(height && Number(height[1]) >= 88, `${selector} should keep at least an 88rpx touch target`)
+}
+assert.match(pageStyleDeclarations(bookingStyle, '.textarea'), /height:\s*176rpx\s*;/, 'booking message area should keep the planned stable height')
+assert.match(pageStyleDeclarations(bookingStyle, '.field-error'), /color:\s*var\(--nx-danger\)\s*;/, 'booking inline errors should use the semantic danger token')
+const pickerArrowStyle = pageStyleDeclarations(bookingStyle, '.picker__arrow')
+assert.match(pickerArrowStyle, /width:\s*18rpx\s*;/, 'booking picker arrow should keep a stable width')
+assert.match(pickerArrowStyle, /height:\s*18rpx\s*;/, 'booking picker arrow should keep a stable height')
+assert.match(pickerArrowStyle, /border-right:\s*3rpx\s+solid\s+#2563eb\s*;/i, 'booking picker arrow should draw its right stroke in blue')
+assert.match(pickerArrowStyle, /border-bottom:\s*3rpx\s+solid\s+#2563eb\s*;/i, 'booking picker arrow should draw its bottom stroke in blue')
+assert.match(pickerArrowStyle, /transform:\s*rotate\(45deg\)\s*;/, 'booking picker arrow should use the planned CSS rotation')
+const bookingSubmitStyle = pageStyleDeclarations(bookingStyle, '.booking-submit')
+assert.match(bookingSubmitStyle, /min-height:\s*88rpx\s*;/, 'booking submit should keep an 88rpx touch target')
+const disabledBookingStyle = pageStyleDeclarations(bookingStyle, '.booking-submit--disabled')
+assert.match(disabledBookingStyle, /background:\s*#f1f5f9\s*;/i, 'H5 disabled booking action should use the planned light surface')
+assert.match(disabledBookingStyle, /color:\s*#475569\s*;/i, 'H5 disabled booking copy should meet 4.5:1 contrast on its surface')
+for (const selector of ['.booking-hero__eyebrow', '.booking-hero__lead', '.form-section__step', '.label', '.field-control', '.field-error', '.draft-hint']) {
+  const fontSize = pageStyleDeclarations(bookingStyle, selector)?.match(/font-size:\s*(\d+)rpx\s*;/)
+  assert.ok(fontSize && Number(fontSize[1]) >= 24, `${selector} should keep at least 24rpx readable text`)
+}
 
 const learnPage = readFileSync('src/pages/learn/learn.vue', 'utf8')
 
@@ -296,6 +501,7 @@ assert.match(learnPage, /class=["'][^"']*card[^"']*ios-card[^"']*section[^"']*["
 assert.match(learnPage, /<button\s+class=["'][^"']*btn-primary[^"']*ios-button[^"']*["'][^>]*@click=["']goTest["']/, 'learn primary CTA should opt into iOS button styling')
 
 const profilePage = readFileSync('src/pages/profile/profile.vue', 'utf8')
+const profileEditPage = readFileSync('src/pages/profile-edit/profile-edit.vue', 'utf8')
 assert.match(profilePage, /profileLoading/, 'profile page should expose a loading state for non-blocking history fetch')
 assert.match(profilePage, /v-if="profileLoading"/, 'profile page should render loading placeholder before empty states')
 assert.match(profilePage, /loadTicket/, 'profile page should ignore stale concurrent loads')
@@ -310,28 +516,530 @@ assert.doesNotMatch(profilePage, /listTestRecordsApi\(\)\.catch\(\(\)\s*=>\s*\(\
 assert.doesNotMatch(profilePage, /listBookingsApi\(\)\.catch\(\(\)\s*=>\s*\(\{\s*items:\s*\[\]\s*\}\)\)/, 'profile bookings request failure must not be converted into an empty list')
 
 const testPage = readFileSync('src/pages/test/test.vue', 'utf8')
+
+function vueSection(source, tagName) {
+  return source.match(new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`))?.[1]
+}
+
+function stripMarkupAndCssComments(source) {
+  return source
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+}
+
+const testTemplate = stripMarkupAndCssComments(vueSection(testPage, 'template') || '')
+const testStyle = stripMarkupAndCssComments(vueSection(testPage, 'style') || '')
+
+function openingTagsFor(source, tagName) {
+  const tags = []
+  const opening = new RegExp(`<${tagName}\\b`, 'g')
+  for (const match of source.matchAll(opening)) {
+    let quote = null
+    for (let index = match.index; index < source.length; index += 1) {
+      const character = source[index]
+      if ((character === '"' || character === "'") && (!quote || quote === character)) {
+        quote = quote ? null : character
+      }
+      if (character !== '>' || quote) continue
+      tags.push(source.slice(match.index, index + 1))
+      break
+    }
+  }
+  return tags
+}
+
+function tagAttribute(tag, attribute) {
+  const escapedAttribute = attribute.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return tag.match(new RegExp(`\\s${escapedAttribute}=(["'])(.*?)\\1`))?.[2]
+}
+
+function pageStyleDeclarationBlocks(source, selector) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return [...source.matchAll(new RegExp(`^[ \\t]*${escapedSelector}\\s*\\{([^}]*)\\}`, 'gm'))]
+    .map((match) => match[1])
+}
+
+function pageStyleDeclarations(source, selector) {
+  return pageStyleDeclarationBlocks(source, selector).at(-1)
+}
+
+function sourceBracedBody(source, match) {
+  if (!match) return undefined
+  const openingBrace = match.index + match[0].lastIndexOf('{')
+  let depth = 0
+  for (let index = openingBrace; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1
+    if (source[index] !== '}') continue
+    depth -= 1
+    if (depth === 0) return source.slice(openingBrace + 1, index)
+  }
+  return undefined
+}
+
+function hexToRgb(hex) {
+  const normalized = hex.replace('#', '')
+  const expanded = normalized.length === 3
+    ? normalized.split('').map((character) => character + character).join('')
+    : normalized
+  return [0, 2, 4].map((offset) => Number.parseInt(expanded.slice(offset, offset + 2), 16) / 255)
+}
+
+function relativeLuminance(hex) {
+  return hexToRgb(hex)
+    .map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+    .reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0)
+}
+
+function contrastRatio(foreground, background) {
+  const lighter = Math.max(relativeLuminance(foreground), relativeLuminance(background))
+  const darker = Math.min(relativeLuminance(foreground), relativeLuminance(background))
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+const commentedSourceFixture = `
+<template>
+  <!-- <button class="quiz__back" @click="back">旧返回按钮</button> -->
+  <view class="fixture" />
+</template>
+<style>
+  /* .quiz__opt { min-height: 112rpx; } */
+  .fixture { color: #0f172a; }
+</style>
+`
+const uncommentedFixtureTemplate = stripMarkupAndCssComments(vueSection(commentedSourceFixture, 'template') || '')
+const uncommentedFixtureStyle = stripMarkupAndCssComments(vueSection(commentedSourceFixture, 'style') || '')
+assert.equal(openingTagsFor(uncommentedFixtureTemplate, 'button').length, 0, 'commented template controls must not satisfy UI contracts')
+assert.equal(pageStyleDeclarationBlocks(uncommentedFixtureStyle, '.quiz__opt').length, 0, 'commented CSS rules must not satisfy visual contracts')
+
 assert.match(testPage, /answerLocked/, 'test page should guard rapid repeated option taps')
 assert.match(testPage, /clearAdvanceTimer/, 'test page should clear pending navigation timers')
 assert.match(testPage, /onUnload/, 'test page should cleanup timers on unload')
-assert.match(testPage, /\.quiz__back\s*\{[\s\S]*min-height:\s*88rpx/, 'quiz back action should keep an 88rpx touch target')
-assert.match(testPage, /class=["'][^"']*gender[^"']*card[^"']*ios-card[^"']*["']/, 'test gender card should opt into iOS card styling')
-assert.match(testPage, /class=["'][^"']*quiz[^"']*card[^"']*ios-card[^"']*["']/, 'test quiz card should opt into iOS card styling')
-assert.match(testPage, /<button\b[\s\S]*class=["'][^"']*gender__card[^"']*["'][\s\S]*aria-label=/, 'test gender choices should use button semantics with accessibility labels')
-assert.match(testPage, /<button\b[\s\S]*class=["'][^"']*quiz__back[^"']*["'][\s\S]*@click=["']back["']/, 'quiz previous action should use button semantics')
-assert.match(testPage, /<button\b[\s\S]*v-for=["']\(opt, k\) in q\.options["'][\s\S]*class=["']quiz__opt["'][\s\S]*:aria-label=/, 'quiz options should use button semantics with accessibility labels')
+assert.match(testTemplate, /class=["'][^"']*test-hero[^"']*nx-page-hero/, 'test page should use the blue-purple hero')
+assert.match(testPage, /const total = QUESTIONS\.length/, 'test page should expose a stable total question count')
+
+const progressContainer = testTemplate.match(/<view\b(?=[^>]*class=["'][^"']*quiz__progress-meta[^"']*["'])[^>]*>([\s\S]*?)<\/view>/)
+assert.ok(progressContainer, 'quiz should render a bounded progress metadata container')
+assert.match(progressContainer[0], /:aria-label=["']`第 \$\{step \+ 1\} 题，共 \$\{total\} 题`["']/, 'quiz progress should expose the full accessible question count')
+assert.match(progressContainer[1], /<text\s+class=["']quiz__step["']>第 \{\{ step \+ 1 \}\} 题<\/text>/, 'quiz progress should visibly render the current question')
+assert.match(progressContainer[1], /<text\s+class=["']quiz__total["']>\/ 共 \{\{ total \}\} 题<\/text>/, 'quiz progress should visibly render the total question count')
+
+const testButtons = openingTagsFor(testTemplate, 'button')
+const genderButtons = testButtons.filter((tag) => staticClassTokens(tag).includes('gender__card'))
+assert.equal(genderButtons.length, 2, 'test page should render exactly two native gender buttons')
+for (const { modifier, label, handler } of [
+  { modifier: 'gender__card--m', label: '选择男生', handler: "start('male')" },
+  { modifier: 'gender__card--f', label: '选择女生', handler: "start('female')" },
+]) {
+  const button = genderButtons.find((tag) => staticClassTokens(tag).includes(modifier))
+  assert.ok(button, `test page should render the ${modifier} gender button`)
+  assert.ok(staticClassTokens(button).includes('nx-focusable'), `${modifier} should use shared focus behavior`)
+  assert.equal(tagAttribute(button, 'aria-label'), label, `${modifier} should expose its exact accessible label`)
+  assert.equal(tagAttribute(button, '@click'), handler, `${modifier} should invoke its exact start handler`)
+}
+
+const quizOption = testButtons.find((tag) => tagAttribute(tag, 'v-for') === '(opt, k) in q.options')
+assert.ok(quizOption, 'test page should render quiz options as native buttons')
+assert.equal(tagAttribute(quizOption, 'class'), 'quiz__opt nx-focusable', 'quiz options should use the exact focusable panel classes')
+assert.equal(tagAttribute(quizOption, ':class'), '{ on: answers[step] === opt, disabled: answerLocked }', 'quiz options should preserve selected and locked classes')
+assert.equal(tagAttribute(quizOption, ':disabled'), 'answerLocked', 'quiz options should preserve the rapid-tap lock')
+assert.equal(tagAttribute(quizOption, ':aria-label'), "'选择答案 ' + letter(k) + '：' + opt.t", 'quiz options should describe each answer')
+assert.equal(tagAttribute(quizOption, '@click'), 'choose(opt)', 'quiz options should preserve the answer handler')
+
+const quizBackButton = testButtons.find((tag) => staticClassTokens(tag).includes('quiz__back'))
+assert.ok(quizBackButton, 'quiz previous action should be a native button element')
+assert.equal(tagAttribute(quizBackButton, '@click'), 'back', 'quiz previous button should invoke the back handler on itself')
+const quizBackTouchStyle = pageStyleDeclarationBlocks(testStyle, '.quiz__back')
+  .find((declarations) => /min-height:/.test(declarations))
+assert.match(quizBackTouchStyle, /min-height:\s*88rpx\s*;/, 'quiz back action should keep an 88rpx touch target')
+
+const testOpeningViews = openingTagsFor(testTemplate, 'view')
+const quizShellTag = testOpeningViews.find((tag) => staticClassTokens(tag).includes('quiz-shell'))
+assert.ok(quizShellTag, 'test quiz should use its dedicated light surface')
+assert.ok(!staticClassTokens(quizShellTag).includes('card'), 'quiz shell should not use the generic card class')
+
+const heroStyle = pageStyleDeclarations(testStyle, '.test-hero')
+assert.ok(heroStyle, 'test hero should define a standalone style rule')
+assert.match(heroStyle, /background:\s*linear-gradient\(135deg,\s*#1d4ed8\s+0%,[\s\S]*#6d28d9\s+100%\)/i, 'test hero should keep the exact blue-to-purple gradient endpoints')
+for (const selector of ['.test-hero__eyebrow', '.test-hero__title', '.test-hero__desc']) {
+  const declarations = pageStyleDeclarations(testStyle, selector)
+  assert.ok(declarations, `${selector} should define a standalone style rule`)
+  assert.match(declarations, /color:\s*(?:#fff(?:fff)?|rgba\(\s*255\s*,\s*255\s*,\s*255\s*,\s*\.9\d*\s*\))/i, `${selector} should keep accessible white hero text`)
+}
+
+const genderRowStyle = pageStyleDeclarations(testStyle, '.gender__row')
+assert.match(genderRowStyle, /display:\s*flex\s*;/, 'gender choices should stay in a two-column flex row')
+const genderCardStyle = pageStyleDeclarations(testStyle, '.gender__card')
+assert.match(genderCardStyle, /flex:\s*1\s*;/, 'gender cards should share the row as two equal columns')
+const genderCardMinHeight = genderCardStyle?.match(/min-height:\s*(\d+)rpx\s*;/)
+assert.ok(genderCardMinHeight && Number(genderCardMinHeight[1]) >= 230, 'gender cards should keep at least 230rpx height')
+assert.match(pageStyleDeclarations(testStyle, '.gender__card--m'), /background:\s*linear-gradient\(145deg,\s*#155e75,\s*#1d4ed8\)\s*;/i, 'male gender card should keep the teal-to-blue gradient')
+assert.match(pageStyleDeclarations(testStyle, '.gender__card--f'), /background:\s*linear-gradient\(145deg,\s*#7e22ce,\s*#be185d\)\s*;/i, 'female gender card should keep the purple-to-pink gradient')
+
+const quizShellStyle = pageStyleDeclarations(testStyle, '.quiz-shell')
+assert.match(quizShellStyle, /background:\s*rgba\(\s*255\s*,\s*255\s*,\s*255\s*,\s*\.9\d*\s*\)\s*;/i, 'quiz shell should keep a light surface')
+const quizOptionStyle = pageStyleDeclarationBlocks(testStyle, '.quiz__opt')
+  .find((declarations) => /min-height:\s*112rpx\s*;/.test(declarations))
+assert.match(quizOptionStyle, /min-height:\s*112rpx\s*;/, 'quiz options should keep a 112rpx touch surface')
+assert.match(quizOptionStyle, /border-radius:\s*24rpx\s*;/, 'quiz options should keep a 24rpx radius')
+const selectedOptionStyle = pageStyleDeclarations(testStyle, '.quiz__opt.on')
+assert.match(selectedOptionStyle, /border:\s*4rpx\s+solid\s+#4f46e5\s*;/i, 'selected answers should keep the 4rpx blue-purple border')
+assert.match(selectedOptionStyle, /box-shadow:[\s\S]*\binset\b/i, 'selected answers should keep a non-color-only inset ring')
+
+const genderTipColor = pageStyleDeclarations(testStyle, '.gender__tip')?.match(/color:\s*(#[\da-f]{6})\s*;/i)?.[1]
+const testPageBackground = pageStyleDeclarations(testStyle, '.test')?.match(/background:[\s\S]*,\s*(#[\da-f]{6})\s*;/i)?.[1]
+assert.ok(genderTipColor && testPageBackground, 'gender helper text should expose parseable foreground and page background colors')
+assert.ok(
+  contrastRatio(genderTipColor, testPageBackground) >= 4.5,
+  `gender helper text contrast should be at least 4.5:1, got ${contrastRatio(genderTipColor, testPageBackground).toFixed(2)}:1`,
+)
+assert.match(pageStyleDeclarations(testStyle, '.quiz__eyebrow'), /color:\s*#64748b\s*;/i, '.quiz__eyebrow should keep accessible secondary text')
+assert.match(pageStyleDeclarations(testStyle, '.quiz__t'), /color:\s*#334155\s*;/i, 'quiz answer text should stay darker than secondary text')
+
+for (const selector of ['.gender__d', '.gender__go']) {
+  const fontSize = pageStyleDeclarations(testStyle, selector)?.match(/font-size:\s*(\d+)rpx\s*;/)
+  assert.ok(fontSize && Number(fontSize[1]) >= 24, `${selector} should keep at least 24rpx readable text`)
+}
+
+const compactMedia = sourceBracedBody(testStyle, /@media\s*\(max-width:\s*360px\)\s*\{/.exec(testStyle))
+assert.ok(compactMedia, 'test page should define the 360px compact breakpoint')
+const compactRules = [...compactMedia.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+assert.equal(compactRules.length, 1, 'compact breakpoint should contain only the question typography rule')
+assert.equal(compactRules[0][1].trim(), '.quiz__q', 'compact breakpoint should only target the question text')
+assert.match(compactRules[0][2].trim(), /^font-size:\s*36rpx\s*;$/, 'compact screens should only reduce the question font size')
+assert.doesNotMatch(compactMedia, /\b(?:min-)?height\s*:/, 'compact breakpoint must not reduce any touch height')
+assert.doesNotMatch(compactMedia, /\.(?:quiz__back|quiz__opt)\b/, 'compact breakpoint must not override quiz touch controls')
 
 assert.match(learnPage, /getStoredSiteConfig/, 'learn page should render stored site config before network refresh')
 assert.match(learnPage, /refreshSiteConfig/, 'learn page should refresh site config in the background')
 assert.match(learnPage, /silent/, 'learn background refresh should avoid replacing cached content with a blocking state')
 
-assert.match(profilePage, /wechatLoginReady/, 'profile page should expose a WeChat login integration slot')
-assert.match(profilePage, /open-type="chooseAvatar"/, 'profile page should keep WeChat avatar slot')
-assert.match(profilePage, /type="nickname"/, 'profile page should keep WeChat nickname slot')
+const learnTemplate = stripMarkupAndCssComments(vueSection(learnPage, 'template') || '')
+const learnStyle = stripMarkupAndCssComments(vueSection(learnPage, 'style') || '')
+const learnButtons = openingTagsFor(learnTemplate, 'button')
+const learnImages = openingTagsFor(learnTemplate, 'image')
+const learnViews = openingTagsFor(learnTemplate, 'view')
+
+function learnTagByClass(tags, className) {
+  return tags.find((tag) => (tagAttribute(tag, 'class') || '').split(/\s+/).includes(className))
+}
+
+function immediateViewText(source, openingTag) {
+  const contentStart = source.indexOf(openingTag) + openingTag.length
+  return source.slice(contentStart, source.indexOf('</view>', contentStart)).trim()
+}
+
+assert.match(learnTemplate, /class=["'][^"']*learn-hero[^"']*nx-page-hero[^"']*["']/, 'learn page should open with the approved learning hero')
+assert.match(learnTemplate, /学习中心/, 'learn hero should identify the learning center')
+assert.match(learnTemplate, /跟着老师，把九型用进生活/, 'learn hero should use the approved outcome-led title')
+for (const className of ['teacher-media', 'course-media', 'quote-editorial', 'type-badge-grid']) {
+  assert.match(learnTemplate, new RegExp(`class=["'][^"']*${className}[^"']*["']`), `learn page should render .${className}`)
+}
+for (const className of ['teacher-media__fallback', 'course-media__fallback', 'type-badge__fallback']) {
+  assert.match(learnTemplate, new RegExp(`class=["'][^"']*${className}[^"']*["']`), `learn page should render .${className}`)
+}
+for (const stateName of ['teacherImageErrors', 'courseImageErrors', 'typeImageErrors']) {
+  assert.match(learnPage, new RegExp(`const\\s+${stateName}\\s*=\\s*ref\\(\\{\\}\\)`), `learn page should keep an independent ${stateName} map`)
+}
+assert.match(learnPage, /function\s+teacherMediaKey\s*\(teacher,\s*index\)\s*\{\s*return\s+`\$\{teacher\.name\s*\|\|\s*''\}::\$\{teacher\.avatar\s*\|\|\s*''\}::\$\{index\}`\s*\}/, 'teacher media identity should include name, avatar, and index')
+assert.match(learnPage, /function\s+courseMediaKey\s*\(course,\s*index\)\s*\{\s*return\s+`\$\{course\.title\s*\|\|\s*''\}::\$\{course\.cover\s*\|\|\s*''\}::\$\{index\}`\s*\}/, 'course media identity should include title, cover, and index')
+const teacherKeyExpression = learnPage.match(/function\s+teacherMediaKey\s*\(teacher,\s*index\)\s*\{\s*return\s+([^\n]+)\n/)?.[1]
+const courseKeyExpression = learnPage.match(/function\s+courseMediaKey\s*\(course,\s*index\)\s*\{\s*return\s+([^\n]+)\n/)?.[1]
+assert.ok(teacherKeyExpression && courseKeyExpression, 'learn media key expressions should be executable for collision checks')
+const testedTeacherMediaKey = Function('teacher', 'index', `return ${teacherKeyExpression}`)
+const testedCourseMediaKey = Function('course', 'index', `return ${courseKeyExpression}`)
+assert.notEqual(testedTeacherMediaKey({ name: '同名', avatar: '/a.png' }, 0), testedTeacherMediaKey({ name: '同名', avatar: '/b.png' }, 0), 'same-name teachers with different avatars should not share media state')
+assert.notEqual(testedTeacherMediaKey({ name: '同名', avatar: '/a.png' }, 0), testedTeacherMediaKey({ name: '同名', avatar: '/a.png' }, 1), 'duplicate teachers should not share media state across indexes')
+assert.notEqual(testedCourseMediaKey({ title: '同名课程', cover: '/a.png' }, 0), testedCourseMediaKey({ title: '同名课程', cover: '/b.png' }, 0), 'same-title courses with different covers should not share media state')
+assert.notEqual(testedCourseMediaKey({ title: '同名课程', cover: '/a.png' }, 0), testedCourseMediaKey({ title: '同名课程', cover: '/a.png' }, 1), 'duplicate courses should not share media state across indexes')
+assert.match(learnPage, /teacherImageErrors\.value\s*=\s*\{\s*\.\.\.teacherImageErrors\.value,\s*\[key\]:\s*true\s*\}/, 'teacher image failures should update immutably by composite key')
+assert.match(learnPage, /courseImageErrors\.value\s*=\s*\{\s*\.\.\.courseImageErrors\.value,\s*\[key\]:\s*true\s*\}/, 'course image failures should update immutably by title and index key')
+assert.match(learnPage, /typeImageErrors\.value\s*=\s*\{\s*\.\.\.typeImageErrors\.value,\s*\[id\]:\s*true\s*\}/, 'type image failures should update immutably by type id')
+
+const teacherImage = learnTagByClass(learnImages, 'teacher-media')
+const courseImages = learnImages.filter((tag) => (tagAttribute(tag, 'class') || '').split(/\s+/).includes('course-media'))
+const courseCards = learnViews.filter((tag) => (tagAttribute(tag, 'class') || '').split(/\s+/).includes('courseware-card'))
+const typeImage = learnTagByClass(learnImages, 'type-badge__avatar')
+assert.ok(teacherImage, 'learn page should render a teacher image element')
+assert.equal(tagAttribute(teacherImage, 'v-if'), 'teacher.avatar && !teacherImageErrors[teacherMediaKey(teacher, teacherIndex)]', 'teacher image should use its composite failure key in v-if')
+assert.equal(tagAttribute(teacherImage, '@error'), 'markTeacherImageError(teacherMediaKey(teacher, teacherIndex))', 'teacher image should mark its composite failure key')
+assert.equal(courseImages.length, 1, 'learn template should define one repeated course media image')
+assert.equal(tagAttribute(courseImages[0], 'v-if'), 'c.cover && !courseImageErrors[courseMediaKey(c, i)]', 'course image should use its composite failure key in v-if')
+assert.equal(tagAttribute(courseImages[0], '@error'), 'markCourseImageError(courseMediaKey(c, i))', 'course image should mark its composite failure key')
+assert.equal(tagAttribute(courseImages[0], '@click'), undefined, 'course image must remain display-only without click behavior')
+assert.equal(courseCards.length, 1, 'learn template should define one repeated course card view')
+assert.equal(tagAttribute(courseCards[0], 'v-for'), '(c, i) in coursewareItems', 'course card view should repeat the configured course items')
+assert.equal(tagAttribute(courseCards[0], ':key'), 'courseMediaKey(c, i)', 'course card should use the same composite media identity as its image failure state')
+assert.equal(tagAttribute(courseCards[0], '@click'), undefined, 'course card must remain display-only without click behavior')
+assert.ok(typeImage, 'learn page should render a type image element')
+assert.equal(tagAttribute(typeImage, 'v-if'), '!typeImageErrors[t.id]', 'type image should use its own id failure key in v-if')
+assert.equal(tagAttribute(typeImage, '@error'), 'markTypeImageError(t.id)', 'type image should mark its own id')
+
+const teacherCard = learnTagByClass(learnViews, 'teacher-card')
+assert.equal(tagAttribute(teacherCard, 'v-for'), '(teacher, teacherIndex) in teachers', 'teacher cards should expose their list index for stable media identity')
+assert.equal(tagAttribute(teacherCard, ':key'), 'teacherMediaKey(teacher, teacherIndex)', 'teacher cards should use the same composite media identity as their image failure state')
+
+const teacherFallback = learnTagByClass(learnViews, 'teacher-media__fallback')
+const courseFallback = learnTagByClass(learnViews, 'course-media__fallback')
+const typeFallback = learnTagByClass(learnViews, 'type-badge__fallback')
+for (const [fallback, description] of [
+  [teacherFallback, 'teacher'],
+  [courseFallback, 'course'],
+  [typeFallback, 'type'],
+]) {
+  assert.ok(fallback, `learn page should render a ${description} fallback element`)
+  assert.match(fallback, /\sv-else(?:\s|>|$)/, `${description} fallback should be the image v-else branch`)
+}
+assert.equal(immediateViewText(learnTemplate, teacherFallback), "{{ teacher.name ? teacher.name.slice(0, 1) : '师' }}", 'teacher fallback should show the same teacher key without optional chaining')
+assert.equal(immediateViewText(learnTemplate, courseFallback), '{{ c.badge || (i + 1) }}', 'course fallback should show the same course badge or index key')
+assert.equal(immediateViewText(learnTemplate, typeFallback), '{{ t.id }}', 'type fallback should show the same type id key')
+
+const learnCtas = learnButtons.filter((tag) => tag.includes('learn-cta'))
+assert.equal(learnCtas.length, 1, 'learn page should render one primary learning CTA')
+assert.match(learnCtas[0], /@click=["']goTest["']/, 'learn CTA should keep the existing goTest route')
+assert.match(learnTemplate, />\s*先完成测试，建立你的学习地图\s*<\/button>/, 'learn CTA should use the exact approved copy')
+assert.doesNotMatch(learnTemplate, /继续学习|课程详情|学习进度/, 'learn page must not expose course-detail or progress copy')
+assert.doesNotMatch(learnPage, /(?:courseProgress|learningProgress|continueLearning|openCourse|openDetail)\s*(?:=|\()/, 'learn page must not invent course-detail or learning-progress state and handlers')
+
+assert.match(learnPage, /getStoredSiteConfig/, 'learn page should keep cache-first rendering')
+assert.match(learnPage, /loadContent\(\{\s*silent:\s*hasCachedContent\s*\}\)/, 'learn page should refresh silently after rendering cached content')
+assert.match(learnPage, /if\s*\(silent\s*&&\s*!hasSiteConfigLearningSection\(cfg\)\)\s*return/, 'silent refresh without learning content should preserve cached content')
+assert.match(learnPage, /catch\s*\([^)]*\)\s*\{[\s\S]*?if\s*\(!silent\)\s*\{[\s\S]*?normalizeTeachers\(\)[\s\S]*?normalizeCoursewareItems\(\)[\s\S]*?loadError\.value/, 'only non-silent failures should replace visible content and expose an error')
+assert.doesNotMatch(learnPage, /catch\s*\([^)]*\)\s*\{\s*(?:teachers|coursewareItems|quotes)\.value\s*=/, 'silent refresh failures must not eagerly replace cached content')
+assert.match(learnTemplate, /v-if=["']loading["'][\s\S]*v-else-if=["']loadError["'][\s\S]*@click=["']loadContent["']/, 'learn loading state should precede error and retry content')
+assert.match(learnTemplate, /v-else-if=["']!loadError\s*&&\s*quotes\.length\s*===\s*0["']/, 'learn quotes should expose an explicit non-error empty state')
+
+for (const selector of ['.teacher-media', '.teacher-media__fallback']) {
+  const declarations = pageStyleDeclarations(learnStyle, selector)
+  assert.match(declarations, /width:\s*112rpx\s*;/, `${selector} should reserve a 112rpx width`)
+  assert.match(declarations, /height:\s*112rpx\s*;/, `${selector} should reserve a 112rpx height`)
+}
+for (const selector of ['.course-media', '.course-media__fallback']) {
+  const declarations = pageStyleDeclarations(learnStyle, selector)
+  assert.match(declarations, /width:\s*220rpx\s*;/, `${selector} should reserve a 220rpx width`)
+  assert.match(declarations, /height:\s*150rpx\s*;/, `${selector} should reserve a 150rpx height`)
+}
+for (const selector of ['.type-badge__avatar', '.type-badge__fallback']) {
+  const declarations = pageStyleDeclarations(learnStyle, selector)
+  const width = declarations?.match(/width:\s*(\d+)rpx\s*;/)?.[1]
+  const height = declarations?.match(/height:\s*(\d+)rpx\s*;/)?.[1]
+  assert.ok(width && height && width === height, `${selector} should reserve a fixed square media area`)
+}
+assert.match(pageStyleDeclarations(learnStyle, '.learn-hero'), /background:\s*linear-gradient\([^;]*#0f766e[^;]*#15803d[^;]*\)\s*;/i, 'learn hero should use the approved teal-to-green gradient')
+assert.match(pageStyleDeclarations(learnStyle, '.learn-hero'), /border-radius:\s*38rpx\s*;/, 'learn hero should use the approved 38rpx radius')
+assert.match(pageStyleDeclarations(learnStyle, '.learn-sections'), /gap:\s*22rpx\s*;/, 'learn sections should use a consistent 22rpx rhythm')
+assert.match(pageStyleDeclarations(learnStyle, '.teacher-card'), /display:\s*flex\s*;/, 'teacher cards should use a horizontal media layout')
+assert.match(pageStyleDeclarationBlocks(learnStyle, '.courseware-card')[0], /gap:\s*18rpx\s*;/, 'course cards should keep an 18rpx media gap')
+assert.match(pageStyleDeclarations(learnStyle, '.courseware-card__body'), /min-width:\s*0\s*;/, 'course body should be allowed to shrink without overflow')
+assert.match(pageStyleDeclarations(learnStyle, '.quote-editorial'), /padding:\s*30rpx\s*;/, 'editorial quotes should use spacious 30rpx padding')
+assert.match(pageStyleDeclarations(learnStyle, '.quote-editorial__mark'), /font-size:\s*54rpx\s*;/, 'editorial quote mark should use the approved 54rpx size')
+assert.match(pageStyleDeclarationBlocks(learnStyle, '.type-badge-grid')[0], /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)\s*;/, 'type grid should use two columns on phones')
+assert.match(learnStyle, /@media\s*\(min-width:\s*768px\)[\s\S]*\.type-badge-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/, 'type grid should use three columns on wider screens')
+assert.match(pageStyleDeclarations(learnStyle, '.type-badge'), /min-height:\s*190rpx\s*;/, 'type cards should reserve at least 190rpx')
+assert.match(pageStyleDeclarations(learnStyle, '.learn-cta'), /min-height:\s*88rpx\s*;/, 'learn CTA should keep an 88rpx touch target')
+
+for (const selector of ['.learn-hero__lead', '.empty', '.teacher-card__title', '.teacher-card__bio', '.courseware-card__duration', '.courseware-card__desc', '.type-badge__keywords']) {
+  const fontSize = pageStyleDeclarations(learnStyle, selector)?.match(/font-size:\s*(\d+)rpx\s*;/)
+  assert.ok(fontSize && Number(fontSize[1]) >= 24, `${selector} should keep at least 24rpx readable text`)
+}
+const learnSecondary = pageStyleDeclarations(learnStyle, '.courseware-card__desc')?.match(/color:\s*(#[\da-f]{6})\s*;/i)?.[1]
+assert.ok(learnSecondary, 'course descriptions should expose a parseable text color')
+assert.ok(contrastRatio(learnSecondary, '#ffffff') >= 4.5, 'course descriptions should meet 4.5:1 contrast on the panel surface')
+
+const profileEditTemplateRaw = vueSection(profileEditPage, 'template') || ''
+const profileEditTemplate = stripMarkupAndCssComments(profileEditTemplateRaw)
+const profileEditStyle = stripMarkupAndCssComments(vueSection(profileEditPage, 'style') || '')
+assertRootViewClasses(profileEditPage, 'src/pages/profile-edit/profile-edit.vue', ['page-stack', 'ios-page', 'ios-safe-bottom'])
+assert.match(profileEditTemplate, /class=["'][^"']*profile-edit-hero[^"']*nx-page-hero[^"']*["']/, 'personal profile should open with the shared blue-purple hero')
+assert.match(profileEditTemplate, /class=["'][^"']*profile-edit-panel[^"']*nx-panel[^"']*ios-card[^"']*["']/, 'personal profile editing should use the shared panel surface')
+assert.match(profileEditPage, /import\s*\{[^}]*getToken[^}]*clearToken[^}]*\}\s*from\s*["']\.\.\/\.\.\/utils\/auth["']/, 'personal profile should use the shared token boundary')
+assert.match(profileEditPage, /import\s*\{[^}]*getUserInfoApi[^}]*updateUserInfoApi[^}]*\}\s*from\s*["']\.\.\/\.\.\/api["']/, 'personal profile should reuse the existing user GET and PUT APIs')
+assert.match(profileEditPage, /const profileLoading = ref\(false\)/, 'personal profile should track initial loading independently')
+assert.match(profileEditPage, /const profileSyncing = ref\(false\)/, 'personal profile should track WeChat synchronization independently')
+assert.match(profileEditPage, /const profileSaving = ref\(false\)/, 'personal profile should track saving independently')
+for (const [state, operation] of [
+  ['profileLoading', 'loading'],
+  ['profileSyncing', 'synchronization'],
+  ['profileSaving', 'saving'],
+]) {
+  assert.match(profileEditPage, new RegExp(`if \\(\\s*${state}\\.value\\s*\\) return`), `personal profile ${operation} should reject duplicate work`)
+}
+assert.match(profileEditPage, /let sessionGeneration = 0/, 'personal profile should maintain a page-session generation')
+assert.match(profileEditPage, /onHide\([^)]*invalidateProfileSession[^)]*\)/, 'personal profile should invalidate stale work when hidden')
+assert.match(profileEditPage, /onUnload\([^)]*invalidateProfileSession[^)]*\)/, 'personal profile should invalidate stale work when unloaded')
+assert.match(profileEditPage, /function\s+isCurrentProfileSession\(generation, token, error\)[\s\S]*generation !== sessionGeneration[\s\S]*token === currentToken[\s\S]*error\.requestToken === token/, 'personal profile should accept only the current token or an auth failure from that same token')
+const profileSessionGuardBody = sourceBracedBody(profileEditPage, /function\s+isCurrentProfileSession\(generation, token, error\)\s*\{/.exec(profileEditPage)) || ''
+assert.match(profileSessionGuardBody, /!currentToken[\s\S]*error\.authExpired[\s\S]*error\.requestToken === token/, 'personal profile should recognize a concurrent auth failure after the same token was already cleared')
+assert.doesNotMatch(profileSessionGuardBody, /authSessionCurrent/, 'personal profile must not require this request to be the first concurrent 401 that cleared the token')
+
+const profileEditAuthBody = sourceBracedBody(profileEditPage, /function\s+redirectToProfileLogin\s*\([^)]*\)\s*\{/.exec(profileEditPage)) || ''
+assert.match(profileEditAuthBody, /if \(authRedirected\) return[\s\S]*authRedirected = true/, 'personal profile auth expiry should only redirect once')
+assert.match(profileEditAuthBody, /clearToken\(\)/, 'personal profile auth expiry should clear the local token')
+assert.match(profileEditAuthBody, /uni\.showToast\(\{\s*title:\s*'登录已过期，请重新登录',\s*icon:\s*'none'\s*\}\)/, 'personal profile auth expiry should show one clear login toast')
+assert.match(profileEditAuthBody, /uni\.switchTab\(\{\s*url:\s*'\/pages\/profile\/profile'\s*\}\)/, 'personal profile auth expiry should return to the profile tab')
+assert.match(profileEditPage, /statusCode === 401[\s\S]*statusCode === 403/, 'personal profile should recognize both 401 and 403 authentication failures')
+assert.match(profileEditPage, /if \(!token\)\s*\{\s*redirectToProfileLogin\(\)\s*return\s*\}/, 'personal profile should redirect before requesting when no token exists')
+
+const profileEditLoadBody = sourceBracedBody(profileEditPage, /async\s+function\s+loadProfile\s*\(\s*\)\s*\{/.exec(profileEditPage)) || ''
+assert.match(profileEditLoadBody, /const loadedUser = await getUserInfoApi\(\)\s*if \(!isCurrentProfileSession\(generation, token\)\) return\s*user\.value = loadedUser/, 'personal profile should guard the user GET response before mutating state')
+assert.match(profileEditLoadBody, /isAuthFailure\(e\)[\s\S]*redirectToProfileLogin\(\)/, 'personal profile should redirect after authenticated GET failures')
+assert.match(profileEditLoadBody, /catch \(e\) \{\s*if \(!isCurrentProfileSession\(generation, token, e\)\) return/, 'personal profile load failures, including auth failures, should reject an old token session before side effects')
+assert.match(profileEditLoadBody, /finally \{\s*if \(isCurrentProfileSession\(generation, token\)\) profileLoading\.value = false/, 'personal profile load completion should not mutate a replacement token session')
+assert.match(profileEditTemplate, /v-if=["']profileLoading["'][^>]*aria-live=["']polite["']/, 'personal profile should announce its loading state')
+assert.match(profileEditTemplate, /v-else-if=["']loadError["'][\s\S]*@click=["']loadProfile["']/, 'personal profile should expose a readable non-auth error and retry')
+
+const wechatProfileBlocks = [...profileEditPage.matchAll(/\/\/ #ifndef H5([\s\S]*?)\/\/ #endif/g)].map((match) => match[1]).join('\n')
+assert.match(wechatProfileBlocks, /getWechatProfilePayload/, 'the non-H5 profile implementation should keep WeChat one-click synchronization')
+assert.match(wechatProfileBlocks, /async function syncWechatProfile/, 'the non-H5 build should define the WeChat synchronization handler')
+const profileEditSyncBody = sourceBracedBody(profileEditPage, /async\s+function\s+syncWechatProfile\s*\(\s*\)\s*\{/.exec(profileEditPage)) || ''
+assert.match(profileEditSyncBody, /^\s*if \(profileSyncing\.value\) return\s*if \(profileSaving\.value\) return/, 'personal profile sync should not start while either profile PUT operation is active')
+assert.match(profileEditSyncBody, /catch \(e\) \{\s*if \(!isCurrentProfileSession\(generation, token, e\)\) return/, 'personal profile sync failures, including auth failures, should reject an old token session before side effects')
+assert.match(profileEditSyncBody, /finally \{\s*if \(isCurrentProfileSession\(generation, token\)\) profileSyncing\.value = false/, 'personal profile sync completion should not mutate a replacement token session')
+const wechatTemplateBlocks = [...profileEditTemplateRaw.matchAll(/<!-- #ifndef H5 -->([\s\S]*?)<!-- #endif -->/g)].map((match) => match[1]).join('\n')
+assert.match(wechatTemplateBlocks, /open-type=["']chooseAvatar["'][^>]*@chooseavatar=["']onChooseAvatar["']/, 'the WeChat profile page should use the current chooseAvatar capability')
+assert.match(wechatTemplateBlocks, /type=["']nickname["'][^>]*@input=["']onNicknameInput["']/, 'the WeChat profile page should use the current nickname input capability')
+assert.match(wechatTemplateBlocks, /:loading=["']profileSyncing["'][^>]*:disabled=["']profileSyncing \|\| profileSaving["'][^>]*@click=["']syncWechatProfile["']/, 'the WeChat sync button should lock while either profile PUT operation is active')
+const h5ProfileEditBlocks = [...profileEditTemplateRaw.matchAll(/<!-- #ifdef H5 -->([\s\S]*?)<!-- #endif -->/g)].map((match) => match[1]).join('\n')
+assert.match(h5ProfileEditBlocks, /请在微信小程序内同步微信资料/, 'H5 should explain where WeChat profile synchronization is available')
+assert.match(h5ProfileEditBlocks, /<button\b[^>]*\bdisabled\b[^>]*>[^<]*微信[^<]*<\/button>/, 'H5 should render disabled WeChat capability guidance')
+assert.doesNotMatch(h5ProfileEditBlocks, /getUserProfile|chooseAvatar|chooseavatar|syncWechatProfile|onChooseAvatar/, 'H5 template blocks must not bind WeChat-only handlers')
+assert.match(h5ProfileEditBlocks, /type=["']text["'][^>]*@input=["']onNicknameInput["']/, 'H5 should keep nickname editing available for an existing token')
+
+const profileEditSaveBody = sourceBracedBody(profileEditPage, /async\s+function\s+saveProfile\s*\(\s*\)\s*\{/.exec(profileEditPage)) || ''
+assert.match(profileEditSaveBody, /^\s*if \(profileSaving\.value\) return\s*if \(profileSyncing\.value\) return/, 'personal profile save should not start while either profile PUT operation is active')
+assert.match(profileEditSaveBody, /normalizeWechatProfile\([\s\S]*nickname:\s*nicknameDraft\.value[\s\S]*avatar:\s*avatarDraft\.value/, 'personal profile save should normalize the current nickname and avatar draft')
+assert.match(profileEditSaveBody, /hasProfilePayload\(payload\)/, 'personal profile save should reject an empty normalized payload')
+assert.match(profileEditSaveBody, /const updatedUser = await updateUserInfoApi\(payload\)\s*if \(!isCurrentProfileSession\(generation, token\)\) return\s*user\.value = updatedUser\s*syncDraftFromUser\(\)/, 'personal profile save should guard the PUT response and refresh the form in place')
+assert.match(profileEditSaveBody, /catch \(e\) \{\s*if \(!isCurrentProfileSession\(generation, token, e\)\) return/, 'personal profile save failures, including auth failures, should reject an old token session before side effects')
+assert.match(profileEditSaveBody, /finally \{\s*if \(isCurrentProfileSession\(generation, token\)\) profileSaving\.value = false/, 'personal profile save completion should not mutate a replacement token session')
+assert.doesNotMatch(profileEditSaveBody, /uni\.(?:navigateBack|switchTab)\s*\(/, 'successful profile save should remain on the dedicated page')
+assert.match(profileEditTemplate, /:loading=["']profileSaving["'][^>]*:disabled=["']profileSaving \|\| profileSyncing["'][^>]*@click=["']saveProfile["']/, 'personal profile save should lock while either profile PUT operation is active')
+assert.doesNotMatch(profileEditPage, /setStorageSync|saveProfileDraft|loadProfileDraft/, 'unsaved personal-profile edits should not be persisted across page exits')
+assert.match(pageStyleDeclarations(profileEditStyle, '.profile-edit-hero'), /linear-gradient\(145deg,\s*#172554,\s*#4338ca 56%,\s*#7c3aed\)/, 'personal profile hero should reuse the approved blue-purple palette')
+assert.match(pageStyleDeclarations(profileEditStyle, '.profile-save'), /min-height:\s*88rpx\s*;/, 'personal profile save should keep an 88rpx touch target')
+
+assert.doesNotMatch(profilePage, /wechatLoginReady/, 'profile overview should leave WeChat capability guidance to the dedicated profile page')
+assert.doesNotMatch(profilePage, /open-type="chooseAvatar"/, 'profile overview should leave avatar selection to the dedicated profile page')
+assert.doesNotMatch(profilePage, /type="nickname"/, 'profile overview should leave nickname editing to the dedicated profile page')
+for (const removedProfileOverviewSymbol of [
+  'normalizeWechatProfile',
+  'hasProfilePayload',
+  'getWechatProfilePayload',
+  'updateUserInfoApi',
+  'profileSaving',
+  'nicknameDraft',
+  'avatarDraft',
+  'draftAvatarFailed',
+  'syncDraftFromUser',
+  'syncWechatProfile',
+  'saveProfile',
+  'onChooseAvatar',
+  'onNicknameInput',
+]) {
+  assert.doesNotMatch(profilePage, new RegExp(`\\b${removedProfileOverviewSymbol}\\b`), `profile overview should not retain ${removedProfileOverviewSymbol}`)
+}
 assert.doesNotMatch(profilePage, /open-type="getPhoneNumber"/, '未接通后端前，手机号授权入口不能对用户露出')
 assert.doesNotMatch(profilePage, /@getphonenumber="onGetPhoneNumber"/, '未接通后端前，不应绑定可见手机号授权占位事件')
 assert.match(profilePage, /#ifdef H5[\s\S]*请在微信小程序内登录[\s\S]*#endif/, 'H5 profile login entry should be a disabled miniapp guidance instead of a failing WeChat login CTA')
 assert.doesNotMatch(profilePage, /后端暂未开通|前端占位|占位/, '用户侧文案不能暴露手机号授权后端占位状态')
 assert.doesNotMatch(profilePage, /openChatPage|goChat|clearChatMessages|问 AI|AI 对话/, 'profile page must not expose or reset removed AI chat state')
+
+const profileTemplate = stripMarkupAndCssComments(vueSection(profilePage, 'template') || '')
+const profileStyle = stripMarkupAndCssComments(vueSection(profilePage, 'style') || '')
+assert.match(profileTemplate, /class=["'][^"']*profile-hero[^"']*nx-page-hero[^"']*["']/, 'profile should open with the shared growth hero')
+assert.match(profilePage, /const recordCount = computed\(\(\) => records\.value\.length\)/, 'profile summary should derive its record count from loaded records')
+assert.match(profilePage, /const bookingCount = computed\(\(\) => bookings\.value\.length\)/, 'profile summary should derive its booking count from loaded bookings')
+assert.match(profilePage, /const recordCountLabel = computed\(\(\) => profileLoading\.value \|\| recordsError\.value \? ['"]—['"] : String\(recordCount\.value\)\)/, 'profile record count should stay unknown while loading or failed')
+assert.match(profilePage, /const bookingCountLabel = computed\(\(\) => profileLoading\.value \|\| bookingsError\.value \? ['"]—['"] : String\(bookingCount\.value\)\)/, 'profile booking count should stay unknown while loading or failed')
+assert.ok((profileTemplate.match(/class=["'][^"']*profile-stat(?:\s|["'])/g) || []).length >= 3, 'profile hero should present three growth statistics')
+assert.match(profileTemplate, /class=["'][^"']*history-timeline[^"']*["']/, 'profile test history should use a timeline')
+assert.match(profileTemplate, /class=["'][^"']*history-item[^"']*["']/, 'profile timeline should expose structured items')
+assert.match(profileTemplate, /class=["'][^"']*history-item__dot[^"']*["']/, 'profile timeline should expose a visible dot')
+assert.match(profileTemplate, /class=["'][^"']*history-item__body[^"']*["']/, 'profile timeline should keep content separate from its dot')
+assert.match(profilePage, /const userAvatarFailed = ref\(false\)/, 'profile should track user avatar failures')
+assert.match(profilePage, /function onUserAvatarError\(\)\s*\{\s*userAvatarFailed\.value = true\s*\}/, 'profile should replace failed user avatars')
+assert.doesNotMatch(profilePage, /管理档案/, 'profile must not invent an unsupported archive-management action')
+assert.match(profileTemplate, /记录每一次自我看见/, 'profile hero should lead with the approved growth message')
+assert.doesNotMatch(profileTemplate, /class=["'][^"']*profile-edit[^"']*nx-panel[^"']*["']/, 'profile overview should not duplicate the dedicated profile editor')
+assert.match(profileTemplate, /class=["'][^"']*history-section[^"']*nx-panel[^"']*["']/, 'test history should use a shared panel surface')
+assert.match(profileTemplate, /class=["'][^"']*booking-summary[^"']*nx-panel[^"']*["']/, 'appointment summary should use a non-interactive shared panel shell')
+assert.match(profileTemplate, /<view class=["']history-section nx-panel ios-card["']>\s*<view class=["']section-head["']>[\s\S]*?<text class=["']sec-title["']>我的测试历史<\/text>/, 'test history content should belong to the history panel')
+assert.match(profileTemplate, /<view class=["']booking-summary nx-panel ios-card["']>\s*<view class=["']section-head["']>[\s\S]*?<text class=["']sec-title["']>我的预约<\/text>/, 'appointment content should belong to the booking summary shell')
+assert.match(profileTemplate, /v-if=["']profileLoading["'][\s\S]*v-else-if=["']recordsError["'][\s\S]*v-else-if=["']records\.length === 0["'][\s\S]*v-else class=["']history-timeline["']/, 'profile records should keep loading, error, empty, and timeline precedence')
+
+const profileViews = openingTagsFor(profileTemplate, 'view')
+const profileIdentityActions = profileViews.filter((tag) => staticClassTokens(tag).includes('profile-hero__identity-action'))
+assert.equal(profileIdentityActions.length, 1, 'logged profile hero should expose one dedicated identity action')
+assert.match(profileIdentityActions[0], /\saria-label=["']编辑个人资料["']/, 'profile identity action should describe its destination')
+assert.match(profileIdentityActions[0], /\s@click=["']openProfileEdit["']/, 'profile identity action should bind profile navigation')
+assert.match(profileIdentityActions[0], /\shover-class=["']profile-hero__identity-action--pressed["']/, 'profile identity action should expose pressed feedback')
+assertKeyboardViewControl(profileIdentityActions[0], 'profile identity action', 'openProfileEdit')
+const profileIdentityActionStart = profileTemplate.indexOf(profileIdentityActions[0])
+const profileIdentityActionEnd = profileTemplate.indexOf('<text class="profile-hero__title">', profileIdentityActionStart)
+const profileIdentityActionContent = profileTemplate.slice(profileIdentityActionStart, profileIdentityActionEnd)
+assert.match(profileIdentityActionContent, /<text\s+class=["']profile-hero__identity-arrow["']\s+aria-hidden=["']true["']>›<\/text>/, 'profile identity action should include a decorative hidden right arrow')
+
+const profileEditOpenBody = sourceBracedBody(profilePage, /function\s+openProfileEdit\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
+assert.match(profileEditOpenBody, /uni\.navigateTo\s*\(\s*\{\s*url:\s*["']\/pages\/profile-edit\/profile-edit["']\s*\}\s*\)/, 'profile identity action should navigate to the dedicated profile page')
+
+const bookingSummaryShells = profileViews.filter((tag) => staticClassTokens(tag).includes('booking-summary'))
+assert.equal(bookingSummaryShells.length, 1, 'profile should render one appointment summary shell')
+for (const interactiveAttribute of ['role', 'aria-role', 'tabindex', '@click', '@keydown.enter', '@keydown.space.prevent']) {
+  assert.equal(tagAttribute(bookingSummaryShells[0], interactiveAttribute), undefined, `appointment summary shell should not own ${interactiveAttribute}`)
+}
+const bookingSummaryOpenTags = profileViews.filter((tag) => staticClassTokens(tag).includes('booking-summary__open'))
+assert.equal(bookingSummaryOpenTags.length, 1, 'appointment summary should expose one independent navigation body in every async state')
+assert.match(bookingSummaryOpenTags[0], /\saria-label=["']查看全部预约记录["']/, 'appointment summary action should describe its destination')
+assert.match(bookingSummaryOpenTags[0], /\s@click=["']openBookingRecords["']/, 'appointment summary action should bind records navigation')
+assert.match(bookingSummaryOpenTags[0], /\shover-class=["']booking-summary__open--pressed["']/, 'appointment summary action should expose pressed feedback')
+assertKeyboardViewControl(bookingSummaryOpenTags[0], 'appointment summary action', 'openBookingRecords')
+const bookingSummaryStatusTags = profileViews.filter((tag) => staticClassTokens(tag).includes('booking-summary__status'))
+assert.equal(bookingSummaryStatusTags.length, 1, 'appointment summary should expose one stable asynchronous status container')
+assert.equal(tagAttribute(bookingSummaryStatusTags[0], 'aria-live'), 'polite', 'appointment summary status changes should be announced politely')
+assert.match(profileTemplate, /class=["']booking-summary__open["'][\s\S]*v-if=["']profileLoading["'][\s\S]*v-else-if=["']bookingsError["'][\s\S]*v-else-if=["']!latestBooking["'][\s\S]*v-else/, 'appointment navigation body should remain present around loading, error, empty, and summary states')
+assert.match(profileTemplate, /<button\s+v-if=["']bookingsError["']\s+class=["'][^"']*booking-summary__retry[^"']*["'][^>]*tabindex=["']0["'][^>]*@click\.stop=["']loadAll["'][^>]*>重试<\/button>/, 'appointment retry should be an independently focusable native sibling button that only reloads')
+
+assert.match(profilePage, /const latestBooking = computed\(\(\) => bookings\.value\[0\] \|\| null\)/, 'profile appointment summary should use the first API item as the latest record')
+assert.doesNotMatch(profilePage, /bookings\.value[^\n]*\.sort\s*\(|visibleBookings|hiddenBookingCount/, 'profile appointment summary should preserve API order and avoid a local preview list')
+const bookingRecordsOpenBody = sourceBracedBody(profilePage, /function\s+openBookingRecords\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
+assert.match(bookingRecordsOpenBody, /uni\.navigateTo\s*\(\s*\{\s*url:\s*["']\/pages\/booking-records\/booking-records["']\s*\}\s*\)/, 'profile appointment action should navigate to appointment records')
+const h5ProfileLogin = profilePage.match(/<!-- #ifdef H5 -->([\s\S]*?)<!-- #endif -->/)?.[1] || ''
+assert.match(h5ProfileLogin, /<button\b[^>]*\bdisabled\b[^>]*>请在微信小程序内登录<\/button>/, 'H5 profile login guidance should remain disabled')
+assert.doesNotMatch(h5ProfileLogin, /@click=["']login["']/, 'H5 profile guidance must not call WeChat login')
+const profileLoadAllBody = sourceBracedBody(profilePage, /async function\s+loadAll\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
+assert.match(profileLoadAllBody, /const requestToken = getToken\(\)/, 'profile load should bind requests to the token that started them')
+assert.match(profileLoadAllBody, /const loadedUser = await getUserInfoApi\(\)\s*if \(!isCurrentProfileLoad\(ticket, requestToken\)\)/, 'profile load should reject a stale user response before mutating session state')
+assert.match(profileLoadAllBody, /Promise\.allSettled\([\s\S]*?const historyAuthError[\s\S]*if \(!isCurrentProfileLoad\(ticket, requestToken, historyAuthError\)\)[\s\S]*if \(historyAuthError\)[\s\S]*handleAuthLoss\(ticket\)/, 'profile load should reject stale history responses and centralize current auth failures')
+assert.match(profilePage, /function\s+isCurrentProfileLoad\(ticket, token, error\)/, 'profile should centralize current-token checks for all overview requests')
+assert.match(profilePage, /function\s+invalidateStaleProfileLoad\(ticket = loadTicket\)/, 'profile should isolate stale-token cleanup from auth reset')
+assert.match(profilePage, /let sessionGeneration = 0/, 'profile should maintain an independent authentication generation')
+const profileLoginBody = sourceBracedBody(profilePage, /async function\s+login\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
+assert.match(profileLoginBody, /await ensureLogin\(\)\s*sessionGeneration \+= 1\s*generation = sessionGeneration\s*logged\.value = true[\s\S]*await loadAll\(\)\s*if \(!logged\.value \|\| generation !== sessionGeneration\) return\s*uni\.showToast\(\{ title: '登录成功'/, 'profile login should establish a generation and suppress stale success feedback')
+assert.match(profileLoginBody, /catch \(e\) \{\s*if \(generation !== sessionGeneration\) return[\s\S]*\}\s*finally \{\s*if \(generation === sessionGeneration\) logging\.value = false/, 'profile login should suppress stale errors and protect newer login state')
+const profileResetBody = sourceBracedBody(profilePage, /function\s+resetLogin\s*\(\s*\)\s*\{/.exec(profilePage)) || ''
+assert.match(profileResetBody, /^\s*sessionGeneration \+= 1/, 'profile reset should invalidate in-flight session work before clearing state')
+assert.match(profileResetBody, /clearBookingSession\(\)/, 'profile reset and logout should clear token-bound appointment detail state')
+assert.match(profilePage, /const recordCountLabel = computed\(\(\) => profileLoading\.value \|\| recordsError\.value \? ['"]—['"] : String\(recordCount\.value\)\)/, 'failed record counts should stay unknown instead of showing zero')
+assert.match(profilePage, /const bookingCountLabel = computed\(\(\) => profileLoading\.value \|\| bookingsError\.value \? ['"]—['"] : String\(bookingCount\.value\)\)/, 'failed booking counts should stay unknown instead of showing zero')
+
+const profileHeroStyle = pageStyleDeclarations(profileStyle, '.profile-hero')
+assert.match(profileHeroStyle, /linear-gradient\(145deg,\s*#172554,\s*#4338ca 56%,\s*#7c3aed\)/, 'profile hero should use the approved deep blue-purple palette')
+assert.match(profileHeroStyle, /border-radius:\s*38rpx\s*;/, 'profile hero should use the approved radius')
+assert.match(pageStyleDeclarations(profileStyle, '.profile-stats'), /grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)\s*;/, 'profile statistics should stay in three stable columns')
+assert.match(pageStyleDeclarations(profileStyle, '.profile-stat__value'), /font-size:\s*34rpx\s*;[\s\S]*font-weight:\s*900\s*;/, 'profile statistic values should keep the approved hierarchy')
+assert.match(pageStyleDeclarations(profileStyle, '.history-item'), /min-height:\s*88rpx\s*;/, 'profile history rows should keep a stable touch-friendly rhythm')
+assert.match(pageStyleDeclarations(profileStyle, '.history-item__dot'), /width:\s*16rpx\s*;[\s\S]*height:\s*16rpx\s*;/, 'profile timeline dots should use the approved fixed size')
+assert.match(pageStyleDeclarations(profileStyle, '.logout'), /min-height:\s*88rpx\s*;/, 'profile logout should keep an 88rpx touch target')
+for (const selector of ['.profile-hero__identity-action', '.booking-summary__open']) {
+  assert.match(pageStyleDeclarations(profileStyle, selector), /min-height:\s*88rpx\s*;/, `${selector} should keep an 88rpx touch target`)
+  assert.match(profileStyle, new RegExp(`${selector.replace('.', '\\.')}--pressed\\s*\\{[^}]*(?:opacity|transform)`), `${selector} should expose visible pressed feedback`)
+  assert.match(profileStyle, new RegExp(`${selector.replace('.', '\\.')}:focus-visible\\s*\\{[^}]*(?:outline|box-shadow)`), `${selector} should expose a visible focus state`)
+}
+for (const selector of ['.profile-hero__eyebrow', '.profile-hero__lead', '.profile-stat__label', '.history-item__meta', '.more-tip']) {
+  const fontSize = pageStyleDeclarations(profileStyle, selector)?.match(/font-size:\s*(\d+)rpx\s*;/)
+  assert.ok(fontSize && Number(fontSize[1]) >= 24, `${selector} should keep at least 24rpx readable text`)
+}
+const historyMetaColor = pageStyleDeclarations(profileStyle, '.history-item__meta')?.match(/color:\s*(#[\da-f]{6})\s*;/i)?.[1]
+assert.ok(historyMetaColor && contrastRatio(historyMetaColor, '#ffffff') >= 4.5, 'profile history metadata should meet 4.5:1 contrast')
 
 const bookingRecordsPath = 'src/pages/booking-records/booking-records.vue'
 assert.ok(statSync(bookingRecordsPath, { throwIfNoEntry: false })?.isFile(), 'appointment records page should exist')
@@ -377,7 +1085,7 @@ for (const tag of bookingRecordOpenTags) {
 }
 assert.match(
   bookingRecordsPage,
-  /uni\.navigateTo\s*\(\s*\{\s*url:\s*`\/pages\/booking-detail\/booking-detail\?id=\$\{[^}]+\}`\s*\}\s*\)/,
+  /uni\.navigateTo\s*\(\s*\{\s*url:\s*`\/pages\/booking-detail\/booking-detail\?id=\$\{[^}]+\}`[\s\S]*?\}\s*\)/,
   'appointment navigation should include the selected booking ID in the detail URL',
 )
 
@@ -425,18 +1133,241 @@ assert.match(bookingRecordsPage, /statusCode\s*===\s*401[\s\S]*statusCode\s*===\
 assert.match(bookingRecordsPage, /onUnload/, 'appointment records should invalidate loads and clear session on unload')
 assert.match(bookingRecordsPage, /\.booking-record__open:focus-visible[\s\S]*(?:outline|box-shadow)/, 'appointment navigation should expose a visible focus state')
 assert.match(bookingRecordsPage, /\.booking-record__open\s*\{[\s\S]*min-height:\s*88rpx/, 'appointment navigation should keep an 88rpx touch target')
+for (const selector of ['.booking-record__status', '.booking-record__meta']) {
+  const fontSize = pageStyleDeclarations(stripMarkupAndCssComments(vueSection(bookingRecordsPage, 'style') || ''), selector)?.match(/font-size:\s*(\d+)rpx\s*;/)
+  assert.ok(fontSize && Number(fontSize[1]) >= 24, `${selector} should keep at least 24rpx readable text`)
+}
+assert.match(openBookingBody, /uni\.navigateTo\s*\(\s*\{[\s\S]*fail\s*\([^)]*\)\s*\{[\s\S]*clearBookingSession\(\)/, 'appointment detail navigation failure should clear the token-bound record session')
+
+const bookingDetailPath = 'src/pages/booking-detail/booking-detail.vue'
+assert.ok(statSync(bookingDetailPath, { throwIfNoEntry: false })?.isFile(), 'appointment detail page should exist')
+const bookingDetailPage = readFileSync(bookingDetailPath, 'utf8')
+const bookingDetailTemplate = stripMarkupAndCssComments(vueSection(bookingDetailPage, 'template') || '')
+const bookingDetailStyle = stripMarkupAndCssComments(vueSection(bookingDetailPage, 'style') || '')
+assertRootViewClasses(bookingDetailPage, bookingDetailPath, ['page-stack', 'ios-page', 'ios-safe-bottom'])
+assert.match(bookingDetailPage, /onLoad/, 'appointment detail should read its route ID on load')
+assert.match(bookingDetailPage, /onShow/, 'appointment detail should revalidate auth and reload after returning from a hidden page')
+assert.match(bookingDetailPage, /onHide/, 'appointment detail should clear private fields as soon as it becomes hidden')
+assert.match(bookingDetailPage, /normalizeBookingId\(query\?\.id\)/, 'appointment detail should normalize untrusted route IDs safely')
+assert.match(bookingDetailPage, /readBookingSession\(requestToken,\s*bookingId\)/, 'appointment detail should try the token-bound booking session first')
+assert.match(bookingDetailPage, /listBookingsApi\(\)/, 'appointment detail should fall back to the existing booking list API')
+assert.match(bookingDetailPage, /\.slice\(0,\s*50\)/, 'appointment detail should inspect only the latest 50 booking records')
+assert.match(bookingDetailPage, /String\(item\?\.id\)\s*===\s*bookingId/, 'appointment detail fallback should compare numeric and string IDs equivalently')
+assert.doesNotMatch(bookingDetailPage, /getBooking|bookingDetailApi|bookingByIdApi/, 'appointment detail must not invent a new API')
+assert.match(bookingDetailPage, /v-if=["']loading["']/, 'appointment detail should expose a loading state')
+assert.match(bookingDetailPage, /v-else-if=["']loadError["']/, 'appointment detail should expose an error state before not-found')
+assert.match(bookingDetailPage, /v-else-if=["']notFound["']/, 'appointment detail should expose a dedicated not-found state')
+assert.match(bookingDetailPage, /aria-live=["']polite["']/, 'appointment detail async state should announce changes politely')
+assert.match(bookingDetailTemplate, /@click=["']retryLoad["']/, 'appointment detail error state should allow retrying')
+assert.match(bookingDetailTemplate, /@click=["']goBookingRecords["']>返回预约列表<\/button>/, 'appointment detail not-found state should return to the records list')
+assert.match(bookingDetailPage, /uni\.redirectTo\s*\(\s*\{\s*url:\s*["']\/pages\/booking-records\/booking-records["']\s*\}\s*\)/, 'appointment detail should reliably return to the records route')
+for (const label of ['预约编号', '预约类型', '当前状态', '称呼', '手机号', '学习意向', '期望时间', '留言', '创建时间']) {
+  assert.match(bookingDetailTemplate, new RegExp(`>${label}<\\/text>`), `appointment detail should show ${label}`)
+}
+for (const field of ['id', 'contactName', 'phone', 'intent', 'preferredTime', 'message', 'createTime']) {
+  assert.match(bookingDetailTemplate, new RegExp(`bookingValue\\(booking\\.${field}\\)`), `appointment detail should normalize empty ${field} values`)
+}
+assert.match(bookingDetailTemplate, /bookingKindLabel\(booking\.kind\)/, 'appointment detail should render the booking kind in Chinese')
+assert.match(bookingDetailTemplate, /bookingStatusLabel\(booking\.status\)/, 'appointment detail should render the booking status in Chinese')
+assert.doesNotMatch(bookingDetailPage, /maskBookingPhone/, 'appointment detail should show the complete phone number')
+
+const detailLoadBody = vueFunctionBody(bookingDetailPage, 'loadBookingDetail')
+assert.ok(detailLoadBody !== undefined, 'appointment detail should define an isolated loading function')
+const invalidIdIndex = detailLoadBody.indexOf('if (!bookingId)')
+const tokenIndex = detailLoadBody.indexOf('const requestToken = getToken()')
+const listIndex = detailLoadBody.indexOf('await listBookingsApi()')
+assert.ok(invalidIdIndex >= 0 && invalidIdIndex < tokenIndex && tokenIndex < listIndex, 'appointment detail should reject an invalid ID before auth or API work')
+assert.match(detailLoadBody, /readBookingSession\(requestToken,\s*bookingId\)[\s\S]*await listBookingsApi\(\)/, 'appointment detail should use session data before falling back to the list')
+const detailAuthLossBody = vueFunctionBody(bookingDetailPage, 'handleAuthLoss')
+assert.ok(detailAuthLossBody !== undefined, 'appointment detail should centralize authentication loss handling')
+assert.match(detailAuthLossBody, /clearToken\(\)/, 'appointment detail auth loss should clear auth')
+assert.match(detailAuthLossBody, /clearBookingSession\(\)/, 'appointment detail auth loss should clear booking session data')
+assert.match(detailAuthLossBody, /redirecting/, 'appointment detail auth loss should guard Toast and navigation side effects')
+assert.match(detailAuthLossBody, /uni\.showToast/, 'appointment detail auth loss should show one user-facing Toast')
+assert.match(detailAuthLossBody, /uni\.switchTab/, 'appointment detail auth loss should switch to the profile tab')
+const detailSessionGuardBody = vueFunctionBody(bookingDetailPage, 'isCurrentBookingContext')
+assert.ok(detailSessionGuardBody !== undefined, 'appointment detail should centralize stale request checks')
+assert.match(detailSessionGuardBody, /ticket !== loadTicket/, 'appointment detail should reject an old load generation')
+assert.match(detailSessionGuardBody, /bookingId !== routeBookingId/, 'appointment detail should reject a response for another route ID')
+assert.match(detailSessionGuardBody, /token === currentToken/, 'appointment detail should accept only its current token')
+assert.match(detailSessionGuardBody, /!currentToken[\s\S]*error\?\.authExpired[\s\S]*error\.requestToken === token/, 'appointment detail should recognize a current-session auth failure after request cleanup')
+const staleDetailBody = vueFunctionBody(bookingDetailPage, 'invalidateStaleBookingContext')
+assert.ok(staleDetailBody !== undefined, 'appointment detail should isolate stale response cleanup')
+assert.match(staleDetailBody, /booking\.value\s*=\s*null/, 'appointment detail stale cleanup should hide old-user data')
+assert.match(staleDetailBody, /clearBookingSession\(\)/, 'appointment detail stale cleanup should clear booking session data')
+assert.doesNotMatch(staleDetailBody, /clearToken|showToast|switchTab|navigateTo|redirectTo/, 'appointment detail stale cleanup must not mutate or redirect the newer auth session')
+assert.match(bookingDetailPage, /statusCode\s*===\s*401[\s\S]*statusCode\s*===\s*403/, 'appointment detail should handle both 401 and 403')
+assert.match(bookingDetailPage, /onUnload\s*\(\s*\(\)\s*=>\s*\{[\s\S]*loadTicket\s*\+=\s*1[\s\S]*clearBookingSession\(\)/, 'appointment detail should invalidate pending work and clear session on unload')
+assert.match(bookingDetailPage, /onHide\s*\(\s*\(\)\s*=>\s*\{[\s\S]*loadTicket\s*\+=\s*1[\s\S]*booking\.value\s*=\s*null[\s\S]*clearBookingSession\(\)/, 'appointment detail should invalidate pending work and clear private detail on hide')
+assert.match(pageStyleDeclarations(bookingDetailStyle, '.detail-action'), /min-height:\s*88rpx\s*;/, 'appointment detail actions should keep an 88rpx touch target')
 
 
 const resultPage = readFileSync('src/pages/result/result.vue', 'utf8')
-assert.match(resultPage, /v-else-if="reportError"/, 'result page should render report failure state before falling back to manual fetch')
-assert.match(resultPage, /report__retry[\s\S]*@click="loadReportContent"/, 'result page should allow retrying report content fetch from the error state')
+const resultTemplateRaw = resultPage.match(/<template>([\s\S]*)<\/template>\s*<style/)?.[1] || ''
+const resultTemplate = stripMarkupAndCssComments(resultTemplateRaw)
+const resultStyle = stripMarkupAndCssComments(vueSection(resultPage, 'style') || '')
+const resultViews = openingTagsFor(resultTemplate, 'view')
+
+assert.match(resultPage, /import\s*\{\s*reportDisplayState\s*\}\s*from\s*['"]\.\.\/\.\.\/utils\/reportDisplayState['"]/, 'result page should use the pure report display-state helper')
+assert.match(resultPage, /const reportPriceCents = ref\(null\)/, 'result price should start unknown instead of assuming a charge')
+assert.match(resultPage, /const reportStatusLoading = ref\(false\)/, 'result page should track report status loading separately')
+assert.match(resultPage, /const reportStatusError = ref\(['"]['"]\)/, 'result page should expose report status errors')
+assert.match(resultPage, /const reportState = computed\(\(\) => reportDisplayState\(\{[\s\S]*recordId:[\s\S]*loading:\s*reportStatusLoading\.value,[\s\S]*error:\s*reportStatusError\.value,[\s\S]*unlocked:\s*reportUnlocked\.value,[\s\S]*priceCents:\s*reportPriceCents\.value,[\s\S]*\}\)\)/, 'result page should derive its report UI from the pure five-state helper')
+assert.doesNotMatch(resultPage, /ref\(990\)/, 'result page must not hard-code a default report price')
+
+for (const className of ['result-hero', 'drive-grid', 'center-panel', 'direction-grid', 'report-panel']) {
+  assert.ok(resultViews.some((tag) => staticClassTokens(tag).includes(className)), `result page should render ${className}`)
+}
+assert.match(resultTemplate, /class=["'][^"']*result-hero[^"']*nx-page-hero[^"']*["']/, 'result hero should use the shared hero surface')
+assert.match(resultTemplate, /class=["']result-hero[^"']*["']\s+:class=["']`result-hero--\$\{info\.color\}`["']/, 'result hero should use the personality color modifier')
+assert.match(resultPage, /const avatarFailed = ref\(false\)/, 'result page should track avatar load failure')
+const resultAvatar = openingTagsFor(resultTemplate, 'image').find((tag) => staticClassTokens(tag).includes('result-hero__avatar'))
+assert.ok(resultAvatar, 'result hero should render a fixed avatar image')
+assert.equal(tagAttribute(resultAvatar, 'v-if'), '!avatarFailed', 'result avatar should be replaced after an image error')
+assert.equal(tagAttribute(resultAvatar, '@error'), 'avatarFailed = true', 'result avatar should record image errors')
+assert.match(resultAvatar, /\slazy-load(?:=|\s|>|$)/, 'result avatar should lazy-load')
+const resultAvatarFallback = resultViews.find((tag) => staticClassTokens(tag).includes('result-hero__avatar-fallback'))
+assert.ok(resultAvatarFallback && /\sv-else(?:\s|>|$)/.test(resultAvatarFallback), 'result hero should render a mutually exclusive avatar fallback')
+for (const selector of ['.result-hero__avatar', '.result-hero__avatar-fallback']) {
+  const declarations = pageStyleDeclarations(resultStyle, selector)
+  assert.match(declarations, /width:\s*184rpx\s*;/, `${selector} should reserve 184rpx width`)
+  assert.match(declarations, /height:\s*184rpx\s*;/, `${selector} should reserve 184rpx height`)
+}
+
+const reportPanel = resultTemplate.match(/<view\s+class=["']report-panel["']>([\s\S]*?)<view\s+class=["']result-actions["']>/)?.[1]
+assert.ok(reportPanel, 'result page should expose one bounded report panel')
+for (const state of ['needs-save', 'status-loading', 'status-error', 'ready']) {
+  assert.match(reportPanel, new RegExp(`reportState\\.key === '${state}'`), `report panel should render ${state}`)
+}
+assert.match(reportPanel, /<template\s+v-else>/, 'report panel final branch should render the unlocked state')
+assert.equal((reportPanel.match(/@click=["']saveRecord["']/g) || []).length, 1, 'save should exist exactly once inside needs-save')
+assert.equal((reportPanel.match(/@click=["']unlockReport["']/g) || []).length, 1, 'unlock should exist exactly once inside ready')
+assert.equal((resultTemplate.match(/@click=["']saveRecord["']/g) || []).length, 1, 'result page should not duplicate its save CTA outside the report panel')
+assert.equal((resultTemplate.match(/@click=["']unlockReport["']/g) || []).length, 1, 'result page should not duplicate its unlock CTA outside the report panel')
+assert.match(reportPanel, /aria-live=["']polite["'][^>]*>\s*查询报告状态/, 'report status loading should be announced politely')
+assert.match(reportPanel, /report__retry[^>]*@click=["']refreshReportStatus["']/, 'report status failure should allow retrying status fetch')
+assert.match(reportPanel, /report__content-retry[^>]*@click=["']loadReportContent["']/, 'unlocked content failure should allow retrying content fetch')
+
+const resultH5Blocks = [...resultTemplateRaw.matchAll(/<!-- #ifdef H5 -->([\s\S]*?)<!-- #endif -->/g)].map((match) => match[1])
+const h5SaveBlock = resultH5Blocks.find((block) => block.includes('请在微信小程序内登录后保存'))
+assert.ok(h5SaveBlock, 'H5 needs-save should explain that saving requires the miniapp')
+assert.match(h5SaveBlock, /<button\b[^>]*\sdisabled(?:\s|>)/, 'H5 save guidance should be disabled')
+assert.doesNotMatch(h5SaveBlock, /@click=/, 'H5 save guidance must not bind a save handler')
+const h5PaymentBlock = resultH5Blocks.find((block) => block.includes('请在微信小程序内完成存档与支付'))
+assert.ok(h5PaymentBlock, 'H5 ready state should explain that payment requires the miniapp')
+assert.match(h5PaymentBlock, /<button\b[^>]*\sdisabled(?:\s|>)/, 'H5 payment guidance should be disabled')
+assert.doesNotMatch(h5PaymentBlock, /@click=/, 'H5 payment guidance must not bind a payment handler')
+const h5PosterBlock = resultH5Blocks.find((block) => block.includes('小程序内生成海报'))
+assert.ok(h5PosterBlock && /\sdisabled(?:\s|>)/.test(h5PosterBlock), 'H5 poster action should remain disabled guidance')
+assert.doesNotMatch(resultH5Blocks.join('\n'), /open-type=["']share["']/, 'H5 should not expose miniapp sharing')
+
+const resultMpBlocks = [...resultTemplateRaw.matchAll(/<!-- #ifdef MP-WEIXIN -->([\s\S]*?)<!-- #endif -->/g)].map((match) => match[1])
+assert.ok(resultMpBlocks.some((block) => /open-type=["']share["']/.test(block)), 'WeChat should preserve friend sharing')
+assert.ok(resultMpBlocks.some((block) => /@click=["']saveRecord["']/.test(block)), 'WeChat should preserve saving')
+assert.ok(resultMpBlocks.some((block) => /@click=["']unlockReport["']/.test(block)), 'WeChat should preserve report payment')
+
+const refreshStatusBody = sourceBracedBody(resultPage, /async function\s+refreshReportStatus\s*\(\s*\)\s*\{/.exec(resultPage))
+assert.match(refreshStatusBody, /reportStatusLoading\.value\s*=\s*true/, 'report status refresh should enter loading state')
+assert.match(refreshStatusBody, /reportStatusError\.value\s*=\s*['"]['"]/, 'report status refresh should clear its prior error')
+assert.match(refreshStatusBody, /reportUnlocked\.value\s*=\s*!!st\.unlocked/, 'report status refresh should apply unlocked before validating price')
+assert.match(refreshStatusBody, /Number\.isFinite\(st\.priceCents\)[\s\S]*st\.priceCents\s*>\s*0/, 'locked report should accept only a finite positive price')
+assert.match(refreshStatusBody, /finally\s*\{[\s\S]*reportStatusLoading\.value\s*=\s*false/, 'report status refresh should always stop loading')
+assert.match(resultPage, /const reportPriceYuan = computed\(\(\) => \{[\s\S]*Number\.isFinite\(reportPriceCents\.value\)[\s\S]*reportPriceCents\.value\s*>\s*0[\s\S]*return ''/, 'report price display should stay blank until a valid positive price is known')
+
+const saveRecordBody = sourceBracedBody(resultPage, /async function\s+saveRecord\s*\(\s*\)\s*\{/.exec(resultPage))
+assert.match(saveRecordBody, /if\s*\(\s*!rec\s*\|\|\s*!rec\.id\s*\)\s*\{?\s*throw new Error\(['"]存档失败，请重试['"]\)/, 'save should reject an API response without a record id')
+const invalidRecordGuardIndex = saveRecordBody.indexOf('if (!rec || !rec.id)')
+const assignRecordIdIndex = saveRecordBody.indexOf('recordId.value = rec.id')
+const markSavedIndex = saveRecordBody.indexOf('saved.value = true')
+const successToastIndex = saveRecordBody.indexOf("uni.showToast({ title: '已存入我的档案', icon: 'success' })")
+const refreshAfterSaveIndex = saveRecordBody.indexOf('await refreshReportStatus()')
+assert.ok(invalidRecordGuardIndex >= 0 && invalidRecordGuardIndex < assignRecordIdIndex, 'save should validate the record id before storing it')
+assert.ok(assignRecordIdIndex < markSavedIndex, 'save should store the valid record id before marking the result saved')
+assert.ok(markSavedIndex < successToastIndex, 'save should mark success before showing its success toast')
+assert.ok(successToastIndex < refreshAfterSaveIndex, 'save should acknowledge the valid archive before awaiting report status')
+assert.match(saveRecordBody, /catch\s*\(e\)\s*\{[\s\S]*userErrorMessage\(e,\s*['"]存档失败，请重试['"]\)/, 'save failures should use the normalized fallback message')
+assert.match(saveRecordBody, /finally\s*\{[\s\S]*saving\.value\s*=\s*false/, 'save should always restore its loading guard')
+
+const loadReportBody = sourceBracedBody(resultPage, /async function\s+loadReportContent\s*\(\s*\)\s*\{/.exec(resultPage))
+assert.match(loadReportBody, /if\s*\(reportLoading\.value\s*\|\|\s*reportContent\.value\)\s*return/, 'report content loading should retain its duplicate-request guard')
+const unlockReportBody = sourceBracedBody(resultPage, /async function\s+unlockReport\s*\(\s*\)\s*\{/.exec(resultPage))
+assert.match(unlockReportBody, /reportUnlocked\.value\s*=\s*true[\s\S]*loadReportContent\(\)/, 'successful unlock should still load report content')
+
+const reportStyle = pageStyleDeclarations(resultStyle, '.report-panel')
+assert.match(reportStyle, /background:\s*linear-gradient\(135deg,\s*#111827\s+0%,\s*#312e81\s+100%\)\s*;/i, 'report panel should keep the exact dark indigo gradient')
+assert.match(reportStyle, /border-radius:\s*34rpx\s*;/, 'report panel should use the planned 34rpx radius')
+assert.match(reportStyle, /padding:\s*34rpx\s*;/, 'report panel should use the planned 34rpx padding')
+for (const selector of ['.report__cta', '.report__secondary', '.result-actions button', '.restart-button']) {
+  const declarations = pageStyleDeclarations(resultStyle, selector)
+  assert.match(declarations, /min-height:\s*88rpx\s*;/, `${selector} should keep an 88rpx touch target`)
+}
+const reportButtonAlignmentRule = [...resultStyle.matchAll(/^[ \t]*([^{}]+?)\s*\{([^{}]*)\}/gm)]
+  .find(([, selectorText]) => {
+    const selectors = new Set(selectorText.split(',').map((selector) => selector.trim()))
+    return ['.report__cta', '.report__secondary', '.result-actions button'].every((selector) => selectors.has(selector))
+  })
+const reportButtonAlignmentDeclarations = reportButtonAlignmentRule?.[2]
+assert.ok(reportButtonAlignmentDeclarations, 'result report buttons should share one alignment CSS rule')
+for (const [property, expected, description] of [
+  ['display', 'flex', 'use flex layout for button-label alignment'],
+  ['align-items', 'center', 'vertically center their button labels'],
+  ['justify-content', 'center', 'horizontally center their button labels'],
+  ['padding', '0 24rpx', 'keep only horizontal 24rpx padding'],
+  ['line-height', '1.2', 'use the compact centered text line height'],
+]) {
+  const escapedExpected = expected.replace('.', '\\.')
+  assert.match(
+    reportButtonAlignmentDeclarations,
+    new RegExp(`${property}:\\s*${escapedExpected.replace(' ', '\\s+')}\\s*;`),
+    `shared report button alignment should ${description}`,
+  )
+}
+for (const selector of ['.report__intro', '.report__status', '.report__error', '.report__content', '.disclaimer']) {
+  const fontSize = pageStyleDeclarations(resultStyle, selector)?.match(/font-size:\s*(\d+)rpx\s*;/)
+  assert.ok(fontSize && Number(fontSize[1]) >= 24, `${selector} should keep at least 24rpx readable text`)
+}
+assert.match(pageStyleDeclarations(resultStyle, '.drive-grid'), /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)\s*;/, 'result drives should stay in equal columns')
+assert.match(pageStyleDeclarations(resultStyle, '.direction-grid'), /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)\s*;/, 'result directions should stay in equal columns')
+assert.match(resultTemplate, /aria-label=["']关闭海报["']/, 'poster close action should expose an accessible label')
 assert.match(resultPage, /userErrorMessage/, 'result page should surface normalized request errors')
 assert.match(resultPage, /normalizeLastResult/, 'result page should validate cached result schema before rendering')
 assert.match(resultPage, /测试结果已失效/, 'result page should give feedback when cached result schema is invalid')
 
 const relationPage = readFileSync('src/pages/relation/relation.vue', 'utf8')
+const relationTemplate = stripMarkupAndCssComments(relationPage.match(/<template>([\s\S]*)<\/template>\s*<style/)?.[1] || '')
+const relationStyle = stripMarkupAndCssComments(vueSection(relationPage, 'style') || '')
+
+function elementBlocksByStaticClass(source, tagName, className) {
+  const escapedTagName = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const tags = [...source.matchAll(new RegExp(`<\\/?${escapedTagName}\\b[^>]*>`, 'g'))]
+  const blocks = []
+  for (let startIndex = 0; startIndex < tags.length; startIndex += 1) {
+    const openingTag = tags[startIndex][0]
+    if (openingTag.startsWith('</') || openingTag.endsWith('/>')) continue
+    if (!staticClassTokens(openingTag).includes(className)) continue
+    let depth = 1
+    for (let endIndex = startIndex + 1; endIndex < tags.length; endIndex += 1) {
+      const tag = tags[endIndex][0]
+      if (tag.startsWith('</')) depth -= 1
+      else if (!tag.endsWith('/>')) depth += 1
+      if (depth !== 0) continue
+      blocks.push(source.slice(tags[startIndex].index, tags[endIndex].index + tag.length))
+      break
+    }
+  }
+  return blocks
+}
+
+const enneagramGameSource = readFileSync('src/data/enneagramGame.js', 'utf8')
+const typesInfoSource = enneagramGameSource.match(/export const TYPES_INFO\s*=\s*\{([\s\S]*?)\n\}\n\nexport const CENTERS/)?.[1] || ''
+const typeIds = [...typesInfoSource.matchAll(/^\s{2}([1-9]):\s*\{/gm)].map((match) => Number(match[1]))
+assert.deepEqual(typeIds, [1, 2, 3, 4, 5, 6, 7, 8, 9], 'enneagram type data should expose every type id from 1 through 9')
+assert.match(
+  relationPage,
+  /^const[ \t]+allTypes[ \t]*=[ \t]*Object\.keys\(TYPES_INFO\)\.map\([ \t]*\(id\)[ \t]*=>[ \t]*\(\{[ \t]*id:[ \t]*Number\(id\),[ \t]*\.\.\.TYPES_INFO\[id\][ \t]*\}\)[ \t]*\)[ \t]*;?[ \t]*$/m,
+  'relation allTypes should map every TYPES_INFO entry without trailing slice or filter chains',
+)
 assert.match(relationPage, /<view\s+class=["'][^"']*page-stack[^"']*ios-page[^"']*ios-safe-bottom[^"']*["']/, 'relation root should use shared page-stack/iOS safe-area classes')
-assert.match(relationPage, /class=["'][^"']*card[^"']*ios-card[^"']*intro[^"']*["']/, 'relation intro card should opt into iOS card styling')
 assert.match(relationPage, /<button\s+class=["'][^"']*btn-primary[^"']*ios-button[^"']*["'][^>]*@click=["']analyze["']/, 'relation primary action should opt into iOS button styling')
 assert.doesNotMatch(relationPage, /padding-bottom:\s*60rpx/, 'relation page should not hard-code bottom padding outside shared safe-area helpers')
 const relationGridGap = relationPage.match(/\.grid\s*\{[\s\S]*?gap:\s*(\d+)rpx/)
@@ -446,10 +1377,180 @@ assert.match(relationPage, /stage\.value\s*=\s*'redirecting'/, 'relation invalid
 assert.match(relationPage, /v-else-if="stage === 'result'"/, 'relation result view should be explicit so redirecting can show a safe placeholder')
 assert.match(relationPage, /型号参数无效/, 'relation page should explain invalid query type before navigation')
 assert.match(relationPage, /\/pages\/test\/test/, 'relation page should return to the test page for invalid query type')
-assert.match(relationPage, /\.chip\s*\{[\s\S]*min-height:\s*88rpx/, 'relation type chips should keep an 88rpx touch target')
-assert.match(relationPage, /<button\b[\s\S]*v-for=["']t in allTypes["'][\s\S]*class=["']chip["'][\s\S]*:aria-label=/, 'relation type chips should use button semantics with accessibility labels')
-assert.match(relationPage, /hover-class=["']chip--hover["']/, 'relation type chips should expose a hover/press visual state')
-assert.match(relationPage, /\.chip--hover\s*\{[\s\S]*(?:opacity|transform)/, 'relation chip hover state should have visible feedback')
+assert.match(relationTemplate, /class=["'][^"']*relation-hero[^"']*nx-page-hero[^"']*["']/, 'relation pick stage should use a themed hero')
+
+const relationViews = openingTagsFor(relationTemplate, 'view')
+const typePickers = relationViews.filter((tag) => staticClassTokens(tag).includes('type-picker'))
+assert.equal(typePickers.length, 2, 'relation should render exactly two type pickers')
+for (const picker of typePickers) {
+  assert.ok(staticClassTokens(picker).includes('nx-panel'), 'each relation type picker should use the shared panel surface')
+}
+
+const relationButtons = openingTagsFor(relationTemplate, 'button')
+assert.equal(relationButtons.filter((tag) => tagAttribute(tag, '@click') === 'analyze').length, 1, 'relation pick stage should keep exactly one primary analyze action')
+const typeChips = relationButtons.filter((tag) => tagAttribute(tag, 'v-for') === 't in allTypes')
+assert.equal(typeChips.length, 2, 'relation should render one native type-chip loop for each person')
+for (const { keyPrefix, ariaLabel, ariaPressed, handler } of [
+  { keyPrefix: "'m' + t.id", ariaLabel: '`选择我的型号 ${t.id} ${t.name}`', ariaPressed: 'myType === t.id', handler: 'pickMy(t.id)' },
+  { keyPrefix: "'t' + t.id", ariaLabel: '`选择 TA 的型号 ${t.id} ${t.name}`', ariaPressed: 'taType === t.id', handler: 'pickTa(t.id)' },
+]) {
+  const chip = typeChips.find((tag) => tagAttribute(tag, ':key') === keyPrefix)
+  assert.ok(chip, `relation should render the ${keyPrefix} type-chip loop`)
+  assert.equal(tagAttribute(chip, 'class'), 'type-chip nx-focusable', 'relation type chips should use the exact shared focusable classes')
+  assert.equal(tagAttribute(chip, ':aria-label'), ariaLabel, 'relation type chip should keep its accessible label on the native button')
+  assert.equal(tagAttribute(chip, ':aria-pressed'), ariaPressed, 'relation type chip should expose its selected state on the native button')
+  assert.equal(tagAttribute(chip, 'hover-class'), 'type-chip--pressed', 'relation type chip should expose pressed feedback on the native button')
+  assert.equal(tagAttribute(chip, '@click'), handler, 'relation type chip should keep its selection handler on the native button')
+  assert.equal(tagAttribute(chip, 'role'), 'button', 'relation type chip should expose H5 button semantics')
+  assert.equal(tagAttribute(chip, 'aria-role'), 'button', 'relation type chip should expose miniapp button semantics')
+  assert.equal(tagAttribute(chip, 'tabindex'), '0', 'relation type chip should participate in H5 keyboard focus order')
+  assert.equal(tagAttribute(chip, '@keydown.enter'), handler, 'relation type chip should activate with Enter')
+  assert.equal(tagAttribute(chip, '@keydown.space.prevent'), handler, 'relation type chip should activate with Space without scrolling')
+}
+
+for (const { handler, description } of [
+  { handler: 'analyze', description: 'relation analyze action' },
+  { handler: 'reset', description: 'relation reset action' },
+]) {
+  const button = relationButtons.find((tag) => tagAttribute(tag, '@click') === handler)
+  assert.ok(button, `${description} should be a native button`)
+  assert.equal(tagAttribute(button, 'role'), 'button', `${description} should expose H5 button semantics`)
+  assert.equal(tagAttribute(button, 'aria-role'), 'button', `${description} should expose miniapp button semantics`)
+  assert.equal(tagAttribute(button, 'tabindex'), '0', `${description} should participate in H5 keyboard focus order`)
+  assert.equal(tagAttribute(button, '@keydown.enter'), handler, `${description} should activate with Enter`)
+  assert.equal(tagAttribute(button, '@keydown.space.prevent'), handler, `${description} should activate with Space without scrolling`)
+}
+
+const chipBodies = [...relationTemplate.matchAll(/<button\b(?=[^>]*class=["']type-chip nx-focusable["'])[^>]*>([\s\S]*?)<\/button>/g)]
+assert.equal(chipBodies.length, 2, 'relation should keep selected text inside both type-chip templates')
+for (const [, body] of chipBodies) {
+  assert.match(body, /<text\s+class=["']type-chip__number["']>\{\{ t\.id \}\}<\/text>/, 'type chip should visibly render its number')
+  assert.match(body, /<text\s+class=["']type-chip__name["']>\{\{ t\.name \}\}<\/text>/, 'type chip should visibly render its abbreviated name')
+  assert.match(body, /<text\s+v-if=["'][^"']+ === t\.id["']\s+class=["']type-chip__selected["']>已选<\/text>/, 'selected chip should include a visible text marker')
+  assert.match(body, /<text\s+v-else\s+class=["']type-chip__selected type-chip__selected--placeholder["']\s+aria-hidden=["']true["']>/, 'unselected chip should reserve the selected-marker layout slot')
+}
+
+const typeChipStyle = pageStyleDeclarations(relationStyle, '.type-chip')
+const typeChipHeight = typeChipStyle?.match(/height:\s*(\d+)rpx\s*;/)
+const typeChipMinHeight = typeChipStyle?.match(/min-height:\s*(\d+)rpx\s*;/)
+assert.ok(typeChipHeight && typeChipMinHeight, 'relation type chips should define stable height and minimum height')
+assert.equal(typeChipHeight[1], typeChipMinHeight[1], 'selected and unselected relation chips should share one stable height')
+assert.ok(Number(typeChipHeight[1]) >= 88, 'relation type chips should keep at least an 88rpx touch target')
+assert.match(typeChipStyle, /border-radius:\s*24rpx\s*;/, 'relation type chips should keep the planned 24rpx radius')
+assert.match(pageStyleDeclarations(relationStyle, '.type-chip__selected--placeholder'), /visibility:\s*hidden\s*;/, 'unselected relation chips should reserve marker height without showing placeholder copy')
+const selectedChipStyle = pageStyleDeclarations(relationStyle, '.type-chip.on')
+assert.match(selectedChipStyle, /border:\s*4rpx\s+solid\s+#9333ea\s*;/i, 'selected relation type should keep the planned purple border')
+assert.match(selectedChipStyle, /box-shadow:[^;]*\binset\b/i, 'selected relation type should include a non-color-only inset emphasis')
+assert.match(pageStyleDeclarations(relationStyle, '.type-chip--pressed'), /(?:opacity|transform)\s*:/, 'relation chip press state should have visible feedback')
+
+const relationHeroStyle = pageStyleDeclarations(relationStyle, '.relation-hero')
+assert.match(relationHeroStyle, /background:\s*linear-gradient\(135deg,\s*#6d28d9\s+0%,\s*#db2777\s+100%\)\s*;/i, 'relation hero should keep the exact purple-to-pink gradient')
+for (const selector of ['.relation-hero__eyebrow', '.relation-hero__title', '.relation-hero__desc']) {
+  assert.match(pageStyleDeclarations(relationStyle, selector), /color:\s*(?:#fff(?:fff)?|rgba\(\s*255\s*,\s*255\s*,\s*255\s*,\s*\.9\d*\s*\))\s*;/i, `${selector} should keep accessible white hero text`)
+}
+
+assert.match(relationPage, /const myAvatarFailed = ref\(false\)/, 'relation should track my avatar failure')
+assert.match(relationPage, /const taAvatarFailed = ref\(false\)/, 'relation should track TA avatar failure')
+assert.match(sourceBracedBody(relationPage, /function\s+analyze\s*\(\s*\)\s*\{/.exec(relationPage)), /myAvatarFailed\.value\s*=\s*false[\s\S]*taAvatarFailed\.value\s*=\s*false/, 'relation analyze should reset both avatar failure states')
+assert.match(sourceBracedBody(relationPage, /function\s+reset\s*\(\s*\)\s*\{/.exec(relationPage)), /myAvatarFailed\.value\s*=\s*false[\s\S]*taAvatarFailed\.value\s*=\s*false/, 'relation reset should clear both avatar failure states')
+
+const relationImages = openingTagsFor(relationTemplate, 'image')
+assert.equal(relationImages.length, 2, 'relation result should render exactly two avatar image templates')
+for (const { condition, errorHandler } of [
+  { condition: '!myAvatarFailed', errorHandler: 'onMyAvatarError' },
+  { condition: '!taAvatarFailed', errorHandler: 'onTaAvatarError' },
+]) {
+  const avatar = relationImages.find((tag) => tagAttribute(tag, 'v-if') === condition)
+  assert.ok(avatar, `relation should render the ${condition} avatar while available`)
+  assert.ok(staticClassTokens(avatar).includes('pair__avatar'), 'relation avatars should use the fixed avatar class')
+  assert.equal(tagAttribute(avatar, '@error'), errorHandler, 'relation avatar should set its failure flag on image error')
+  assert.match(avatar, /\slazy-load(?:=|\s|>|$)/, 'relation avatars should lazy-load')
+}
+
+const avatarFallbacks = relationViews.filter((tag) => staticClassTokens(tag).includes('pair__avatar-fallback'))
+assert.equal(avatarFallbacks.length, 2, 'relation should render one fallback for each avatar')
+for (const fallback of avatarFallbacks) {
+  assert.ok(/\sv-else(?:\s|>|$)/.test(fallback), 'relation avatar fallback should be mutually exclusive with its image')
+}
+const avatarFallbackBlocks = elementBlocksByStaticClass(relationTemplate, 'view', 'pair__avatar-fallback')
+assert.equal(avatarFallbackBlocks.length, 2, 'relation should expose two bounded avatar fallback elements')
+assert.match(avatarFallbackBlocks[0], /^<view\b[^>]*>\{\{ myInfo\.id \}\}<\/view>$/, 'my avatar fallback should display my type number within its own element')
+assert.match(avatarFallbackBlocks[1], /^<view\b[^>]*>\{\{ taInfo\.id \}\}<\/view>$/, 'TA avatar fallback should display TA type number within its own element')
+for (const selector of ['.pair__avatar', '.pair__avatar-fallback']) {
+  const declarations = pageStyleDeclarations(relationStyle, selector)
+  assert.match(declarations, /width:\s*112rpx\s*;/, `${selector} should keep the planned fixed width`)
+  assert.match(declarations, /height:\s*112rpx\s*;/, `${selector} should keep the planned fixed height`)
+}
+
+const pairHero = relationViews.find((tag) => staticClassTokens(tag).includes('pair'))
+assert.ok(pairHero && staticClassTokens(pairHero).includes('nx-page-hero'), 'relation result pair should use the shared hero container')
+assert.ok(relationViews.some((tag) => staticClassTokens(tag).includes('pair-connection')), 'relation result should render the connection visual')
+const pairConnectionBlocks = elementBlocksByStaticClass(relationTemplate, 'view', 'pair-connection')
+assert.equal(pairConnectionBlocks.length, 1, 'relation result should render exactly one bounded connection visual')
+assert.match(pairConnectionBlocks[0], /<text\s+class=["']pair-connection__score["']>\{\{ analysis\.score \}\}<\/text>/, 'connection visual should bind the analysis score inside its own container')
+assert.match(pairConnectionBlocks[0], /<text\s+class=["']pair-connection__label["']>契合指数<\/text>/, 'connection visual should label the score inside its own container')
+
+const insightContracts = [
+  { modifier: 'insight--bond', binding: 'analysis.bond' },
+  { modifier: 'insight--friction', binding: 'analysis.friction' },
+  { modifier: 'insight--tip', binding: 'analysis.tip' },
+]
+for (const { modifier, binding } of insightContracts) {
+  assert.ok(relationViews.some((tag) => staticClassTokens(tag).includes(modifier)), `relation result should include ${modifier}`)
+  const blocks = elementBlocksByStaticClass(relationTemplate, 'view', modifier)
+  assert.equal(blocks.length, 1, `relation result should render exactly one bounded ${modifier} panel`)
+  assert.match(blocks[0], new RegExp(`<text\\s+class=["']insight__text["']>\\{\\{ ${binding.replace('.', '\\.')} \\}\\}<\\/text>`), `${modifier} should bind ${binding} inside its own panel`)
+}
+assert.ok(relationViews.some((tag) => staticClassTokens(tag).includes('drive-pair')), 'relation drives should use a two-column container')
+const drivePairBlocks = elementBlocksByStaticClass(relationTemplate, 'view', 'drive-pair')
+assert.equal(drivePairBlocks.length, 1, 'relation should render exactly one bounded drive-pair container')
+assert.match(drivePairBlocks[0], /\{\{ analysis\.myDrive \}\}/, 'drive-pair should bind my drive inside its own container')
+assert.match(drivePairBlocks[0], /\{\{ analysis\.taDrive \}\}/, 'drive-pair should bind TA drive inside its own container')
+assert.match(pageStyleDeclarations(relationStyle, '.drive-pair'), /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)\s*;/, 'relation drives should remain two equal columns')
+assert.match(pageStyleDeclarations(relationStyle, '.insight--bond'), /border-color:\s*#c084fc\s*;/i, 'bond insight should keep its purple connection accent')
+assert.match(pageStyleDeclarations(relationStyle, '.insight--friction'), /border-color:\s*#fb7185\s*;/i, 'friction insight should keep its coral accent')
+assert.match(pageStyleDeclarations(relationStyle, '.insight--tip'), /border-color:\s*#2dd4bf\s*;/i, 'advice insight should keep its teal accent')
+const relationBodyColor = pageStyleDeclarations(relationStyle, '.insight__text')?.match(/color:\s*(#[\da-f]{6})\s*;/i)?.[1]
+assert.ok(relationBodyColor, 'relation insight body copy should expose a parseable text color')
+for (const { modifier } of insightContracts) {
+  const background = pageStyleDeclarations(relationStyle, `.${modifier}`)?.match(/background:\s*linear-gradient\([^,]+,\s*(#[\da-f]{3,6})\s*,\s*(#[\da-f]{3,6})\s*\)\s*;/i)
+  assert.ok(background, `${modifier} should expose two parseable gradient background endpoints`)
+  for (const endpoint of background.slice(1)) {
+    const ratio = contrastRatio(relationBodyColor, endpoint)
+    assert.ok(ratio >= 4.5, `${modifier} body text should meet 4.5:1 contrast against ${endpoint}, got ${ratio.toFixed(2)}:1`)
+  }
+}
+
+for (const { selector, minimum } of [
+  { selector: '.relation-hero__eyebrow', minimum: 24 },
+  { selector: '.type-picker__step', minimum: 24 },
+  { selector: '.type-picker__hint', minimum: 24 },
+  { selector: '.type-chip__name', minimum: 24 },
+  { selector: '.type-chip__selected', minimum: 24 },
+  { selector: '.pair__role', minimum: 24 },
+  { selector: '.pair__name', minimum: 24 },
+  { selector: '.pair-connection__eyebrow', minimum: 24 },
+  { selector: '.pair-connection__label', minimum: 24 },
+  { selector: '.insight__eyebrow', minimum: 24 },
+  { selector: '.insight__text', minimum: 24 },
+  { selector: '.drive__eyebrow', minimum: 24 },
+  { selector: '.drive-card__label', minimum: 24 },
+  { selector: '.drive-card__text', minimum: 24 },
+  { selector: '.disclaimer', minimum: 24 },
+]) {
+  const fontSizeRule = pageStyleDeclarationBlocks(relationStyle, selector)
+    .find((declarations) => /font-size:/.test(declarations))
+  const fontSize = fontSizeRule?.match(/font-size:\s*(\d+)rpx\s*;/)
+  assert.ok(fontSize && Number(fontSize[1]) >= minimum, `${selector} should keep at least ${minimum}rpx readable text`)
+}
+
+assert.doesNotMatch(relationTemplate, /✦|⚡|↗/, 'relation insight icons should not depend on emoji or character glyphs')
+for (const modifier of ['bond', 'friction', 'tip']) {
+  const marks = elementBlocksByStaticClass(relationTemplate, 'view', `insight__icon--${modifier}`)
+  assert.equal(marks.length, 1, `relation should render one CSS icon container for ${modifier}`)
+  assert.match(marks[0], new RegExp(`<view\\s+class=["']insight__mark insight__mark--${modifier}["']\\s*\\/>`), `${modifier} insight should render a CSS-only mark`)
+  assert.ok(pageStyleDeclarations(relationStyle, `.insight__mark--${modifier}`), `${modifier} insight should define its CSS mark shape`)
+}
 
 assert.match(
   resultPage,

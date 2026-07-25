@@ -35,8 +35,22 @@ export interface AppOpsPageResult<T> {
   total: number;
 }
 
-export function grantAppOrderApi(id: number | string) {
-  return requestClient.post<boolean>(`/app-orders/${id}/grant`);
+export interface AppMembershipGrantResult {
+  alreadyGranted: boolean;
+  expiresAt: string;
+  orderId: number;
+  planCode: string;
+  startedAt: string;
+}
+
+export function grantAppOrderApi(
+  id: number | string,
+  data: { activationAt: string },
+) {
+  return requestClient.post<AppMembershipGrantResult>(
+    `/app-orders/${id}/grant`,
+    data,
+  );
 }
 
 export function getAppChatAuditMessagesApi(params?: Record<string, any>) {

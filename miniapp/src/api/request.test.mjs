@@ -11,6 +11,7 @@ await writeFile(modulePath, source)
 
 let storage = {}
 let requestCalls = []
+let delayedUnauthorizedSuccess = null
 globalThis.uni = {
   getStorageSync(key) { return storage[key] || '' },
   setStorageSync(key, value) { storage[key] = value },
@@ -22,6 +23,10 @@ globalThis.uni = {
       return
     }
     if (options.url.includes('/unauthorized')) {
+      if (options.url.includes('/unauthorized-delayed')) {
+        delayedUnauthorizedSuccess = options.success
+        return
+      }
       options.success({ statusCode: 401, data: { code: -1, message: 'Unauthorized' } })
       return
     }
@@ -62,11 +67,45 @@ await assert.rejects(
 assert.equal(requestCalls.length, 0, 'auth request without token must not hit network')
 
 setToken('abc')
+let tokenObservedByAuthHandler = ''
+let currentAuthError = null
 await assert.rejects(
-  request({ url: '/unauthorized', auth: true }),
+  request({ url: '/unauthorized', auth: true }).catch((err) => {
+    tokenObservedByAuthHandler = getToken()
+    currentAuthError = err
+    throw err
+  }),
   (err) => err.statusCode === 401 && err.authExpired === true,
 )
+assert.equal(tokenObservedByAuthHandler, '', '401/403 should preserve immediate token cleanup before rejection handlers run')
+assert.equal(currentAuthError.requestToken, 'abc', 'auth errors should identify the token used by the failed request')
+assert.equal(currentAuthError.authSessionCurrent, true, 'auth errors should identify when they cleared the still-current request token')
 assert.equal(getToken(), '', '401/403 should clear stored token')
+
+setToken('shared-token')
+const secondConcurrentUnauthorized = request({ url: '/unauthorized-delayed', auth: true })
+await assert.rejects(request({ url: '/unauthorized', auth: true }), (err) => err.authSessionCurrent === true)
+delayedUnauthorizedSuccess({ statusCode: 401, data: { code: -1, message: 'Unauthorized' } })
+await assert.rejects(
+  secondConcurrentUnauthorized,
+  (err) => err.statusCode === 401
+    && err.requestToken === 'shared-token'
+    && err.authSessionCurrent === false,
+)
+assert.equal(getToken(), '', 'concurrent 401 responses for the same expired token should leave the invalid session cleared')
+
+setToken('token-a')
+const staleUnauthorized = request({ url: '/unauthorized-delayed', auth: true })
+setToken('token-b')
+delayedUnauthorizedSuccess({ statusCode: 401, data: { code: -1, message: 'Unauthorized' } })
+await assert.rejects(
+  staleUnauthorized,
+  (err) => err.statusCode === 401
+    && err.authExpired === true
+    && err.requestToken === 'token-a'
+    && err.authSessionCurrent === false,
+)
+assert.equal(getToken(), 'token-b', 'a stale 401 response must not clear a newer session token')
 
 await assert.rejects(
   request({ url: '/network-fail' }),

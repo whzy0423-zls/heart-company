@@ -228,3 +228,82 @@ input {
     transition: none;
   }
 }
+
+:root {
+  --nx-page-bg: #f3f6fc;
+  --nx-surface: #fff;
+  --nx-surface-soft: #f8faff;
+  --nx-line: rgba(51,65,85,.10);
+  --nx-blue: #2563eb;
+  --nx-purple: #7c3aed;
+  --nx-pink: #c0267e;
+  --nx-teal: #0f766e;
+  --nx-green: #15803d;
+  --nx-orange: #c2410c;
+  --nx-danger: #b42318;
+}
+
+.nx-page-hero {
+  position: relative;
+  overflow: hidden;
+  border-radius: 38rpx;
+  padding: 38rpx 32rpx;
+  box-sizing: border-box;
+}
+
+.nx-section-head {
+  display: flex;
+  flex-direction: column;
+  gap: 8rpx;
+  padding: 0 4rpx;
+}
+
+.nx-panel {
+  border-radius: 30rpx;
+  padding: 30rpx;
+  background: rgba(255,255,255,.88);
+  border: 2rpx solid rgba(255,255,255,.96);
+  box-sizing: border-box;
+}
+
+.nx-state {
+  min-height: 112rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16rpx;
+  color: #64748b;
+  font-size: 25rpx;
+  line-height: 1.55;
+}
+
+.nx-tag {
+  min-height: 44rpx;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 16rpx;
+  border-radius: 999rpx;
+  font-size: 21rpx;
+  font-weight: 800;
+}
+
+.nx-focusable {
+  transition: opacity .18s ease, transform .18s ease, box-shadow .18s ease;
+}
+
+.nx-focusable:focus {
+  outline: 4rpx solid rgba(37,99,235,.34);
+  outline-offset: 4rpx;
+}
+
+.nx-focusable--pressed {
+  opacity: .84;
+  transform: scale(.98);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-focusable {
+    animation: none;
+    transition: none;
+  }
+}

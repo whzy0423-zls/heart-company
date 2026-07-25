@@ -13,16 +13,19 @@ import (
 )
 
 type User struct {
-	ID             int64  `json:"id"`
-	Phone          string `json:"phone"`
-	Nickname       string `json:"nickname"`
-	Avatar         string `json:"avatar"`
-	Status         string `json:"status"`
-	MemberLevel    string `json:"memberLevel"`
-	RegisterSource string `json:"registerSource"`
-	LastLoginAt    string `json:"lastLoginAt"`
-	CreateTime     string `json:"createTime"`
-	UpdateTime     string `json:"updateTime"`
+	ID              int64  `json:"id"`
+	Phone           string `json:"phone"`
+	Nickname        string `json:"nickname"`
+	Avatar          string `json:"avatar"`
+	Status          string `json:"status"`
+	MemberLevel     string `json:"memberLevel"`
+	MemberStartedAt string `json:"memberStartedAt"`
+	MemberExpiresAt string `json:"memberExpiresAt"`
+	RemainingDays   int    `json:"remainingDays"`
+	RegisterSource  string `json:"registerSource"`
+	LastLoginAt     string `json:"lastLoginAt"`
+	CreateTime      string `json:"createTime"`
+	UpdateTime      string `json:"updateTime"`
 }
 
 type UpdateAdminFieldsInput struct {
@@ -68,13 +71,13 @@ func (s *Store) FindOrCreateByPhone(ctx context.Context, phone string) (User, er
 		return User{}, fmt.Errorf("appuser insert: %w", err)
 	}
 	var u User
-	var lastLogin sql.NullTime
+	var lastLogin, memberStartedAt, memberExpiresAt sql.NullTime
 	var createTime, updateTime time.Time
 	err = s.db.QueryRowContext(ctx,
 		`UPDATE app_users SET last_login_at = now(), update_time = now()
 		 WHERE phone = $1
-		 RETURNING id, phone, nickname, avatar, status, member_level, register_source, last_login_at, create_time, update_time`,
-		phone).Scan(&u.ID, &u.Phone, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
+		 RETURNING id, phone, nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time`,
+		phone).Scan(&u.ID, &u.Phone, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
 	if err != nil {
 		return User{}, fmt.Errorf("appuser find: %w", err)
 	}
@@ -83,17 +86,18 @@ func (s *Store) FindOrCreateByPhone(ctx context.Context, phone string) (User, er
 	}
 	u.CreateTime = formatTime(createTime)
 	u.UpdateTime = formatTime(updateTime)
+	applyMembershipTimes(&u, memberStartedAt, memberExpiresAt)
 	return u, nil
 }
 
 func (s *Store) FindByID(ctx context.Context, id int64) (User, error) {
 	var u User
-	var lastLogin sql.NullTime
+	var lastLogin, memberStartedAt, memberExpiresAt sql.NullTime
 	var createTime, updateTime time.Time
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, phone, nickname, avatar, status, member_level, register_source, last_login_at, create_time, update_time
+		`SELECT id, phone, nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time
 		 FROM app_users WHERE id = $1`, id).
-		Scan(&u.ID, &u.Phone, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
+		Scan(&u.ID, &u.Phone, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
 	if err != nil {
 		return User{}, err
 	}
@@ -102,6 +106,7 @@ func (s *Store) FindByID(ctx context.Context, id int64) (User, error) {
 	}
 	u.CreateTime = formatTime(createTime)
 	u.UpdateTime = formatTime(updateTime)
+	applyMembershipTimes(&u, memberStartedAt, memberExpiresAt)
 	return u, nil
 }
 
@@ -130,7 +135,7 @@ func (s *Store) UpdateAdminFields(ctx context.Context, id int64, input UpdateAdm
 	}
 
 	var u User
-	var lastLogin sql.NullTime
+	var lastLogin, memberStartedAt, memberExpiresAt sql.NullTime
 	var createTime, updateTime time.Time
 	err := s.db.QueryRowContext(ctx,
 		`UPDATE app_users
@@ -138,9 +143,9 @@ func (s *Store) UpdateAdminFields(ctx context.Context, id int64, input UpdateAdm
 		        member_level = COALESCE($2::text, member_level),
 		        update_time = now()
 		  WHERE id = $3
-		  RETURNING id, phone, nickname, avatar, status, member_level, register_source, last_login_at, create_time, update_time`,
+		  RETURNING id, phone, nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time`,
 		statusArg, memberLevelArg, id).
-		Scan(&u.ID, &u.Phone, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
+		Scan(&u.ID, &u.Phone, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
 	if err != nil {
 		return User{}, err
 	}
@@ -149,6 +154,7 @@ func (s *Store) UpdateAdminFields(ctx context.Context, id int64, input UpdateAdm
 	}
 	u.CreateTime = formatTime(createTime)
 	u.UpdateTime = formatTime(updateTime)
+	applyMembershipTimes(&u, memberStartedAt, memberExpiresAt)
 	return u, nil
 }
 
@@ -263,7 +269,7 @@ func (s *Store) List(ctx context.Context, query map[string]string) (PageResult[U
 	offset := (page - 1) * pageSize
 	args = append(args, pageSize, offset)
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, phone, nickname, avatar, status, member_level, register_source, last_login_at, create_time, update_time"+
+		"SELECT id, phone, nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time"+
 			" FROM app_users WHERE "+cond+
 			" ORDER BY create_time DESC, id DESC"+
 			" LIMIT $"+strconv.Itoa(len(args)-1)+" OFFSET $"+strconv.Itoa(len(args)), args...)
@@ -275,9 +281,9 @@ func (s *Store) List(ctx context.Context, query map[string]string) (PageResult[U
 	items := []User{}
 	for rows.Next() {
 		var u User
-		var lastLogin sql.NullTime
+		var lastLogin, memberStartedAt, memberExpiresAt sql.NullTime
 		var createTime, updateTime time.Time
-		if err := rows.Scan(&u.ID, &u.Phone, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &u.RegisterSource, &lastLogin, &createTime, &updateTime); err != nil {
+		if err := rows.Scan(&u.ID, &u.Phone, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime); err != nil {
 			return PageResult[User]{}, fmt.Errorf("appuser scan: %w", err)
 		}
 		if lastLogin.Valid {
@@ -285,12 +291,25 @@ func (s *Store) List(ctx context.Context, query map[string]string) (PageResult[U
 		}
 		u.CreateTime = formatTime(createTime)
 		u.UpdateTime = formatTime(updateTime)
+		applyMembershipTimes(&u, memberStartedAt, memberExpiresAt)
 		items = append(items, u)
 	}
 	if err := rows.Err(); err != nil {
 		return PageResult[User]{}, err
 	}
 	return PageResult[User]{Items: items, Total: total}, nil
+}
+
+func applyMembershipTimes(user *User, startedAt, expiresAt sql.NullTime) {
+	if startedAt.Valid {
+		user.MemberStartedAt = formatTime(startedAt.Time)
+	}
+	if expiresAt.Valid {
+		user.MemberExpiresAt = formatTime(expiresAt.Time)
+		if expiresAt.Time.After(time.Now()) {
+			user.RemainingDays = int(time.Until(expiresAt.Time).Hours()+23.999999) / 24
+		}
+	}
 }
 
 // ListInsights 分页返回管理员视角的用户提炼数据。

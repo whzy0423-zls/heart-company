@@ -1,16 +1,22 @@
 import { requestClient } from '#/api/request';
 
 export interface AppOrder {
+  activationAt?: string;
   amount: number;
   appUserId: number;
   createTime: string;
+  durationDays: number;
   id: number;
   memberLevel: string;
+  memberExpiresAt?: string;
+  memberStartedAt?: string;
+  membershipExpiresAt?: string;
   nickname: string;
   outTradeNo: string;
   paidAt: string;
   phone: string;
   productId: string;
+  remainingDays?: number;
   status: string;
   title: string;
   transactionId: string;

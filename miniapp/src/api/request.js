@@ -66,13 +66,14 @@ export function request(options) {
   const { url, method = 'GET', data, query, auth = false, timeout = 15000 } = options
   return new Promise((resolve, reject) => {
     const header = { 'Content-Type': 'application/json' }
+    let requestToken = ''
     if (auth) {
-      const token = getToken()
-      if (!token) {
+      requestToken = getToken()
+      if (!requestToken) {
         reject(createRequestError('请先登录后再继续', { statusCode: 401, authRequired: true }))
         return
       }
-      header.Authorization = `Bearer ${token}`
+      header.Authorization = `Bearer ${requestToken}`
     }
     const requestUrl = joinUrl(API_BASE, appendQuery(url, query))
     uni.request({
@@ -86,13 +87,15 @@ export function request(options) {
         if (res.statusCode >= 200 && res.statusCode < 300 && body.code === 0) {
           resolve(body.data)
         } else {
-          if (res.statusCode === 401 || res.statusCode === 403) {
-            clearToken()
-          }
+          const authExpired = res.statusCode === 401 || res.statusCode === 403
+          const authSessionCurrent = auth && authExpired && getToken() === requestToken
+          if (authSessionCurrent) clearToken()
           const error = createRequestError(body.error || body.message || `请求失败(${res.statusCode})`, {
             code: body.code,
             statusCode: res.statusCode,
-            authExpired: res.statusCode === 401 || res.statusCode === 403,
+            authExpired,
+            requestToken,
+            authSessionCurrent,
             retryable: res.statusCode >= 500 || res.statusCode === 429,
           })
           reject(error)

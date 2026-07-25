@@ -5,6 +5,62 @@ import (
 	"testing"
 )
 
+func TestDefaultMenusIncludeMiniappHomeManagement(t *testing.T) {
+	var foundCatalog bool
+	var foundHome bool
+	for _, menu := range defaultMenus {
+		switch menu.Name {
+		case "MiniappManage":
+			foundCatalog = true
+			if menu.ID != 1300 || menu.PID != 0 || menu.Path != "/miniapp" || menu.Type != "catalog" || menu.Sort != 12 || menu.Icon != "lucide:smartphone" || menu.Title != "小程序管理" {
+				t.Fatalf("unexpected miniapp management catalog: %+v", menu)
+			}
+		case "MiniappHome":
+			foundHome = true
+			if menu.ID != 1301 || menu.PID != 1300 || menu.Path != "/miniapp/home" || menu.Component != "/miniapp/home" || menu.AuthCode != "Website:Write" || menu.Type != "menu" || menu.Sort != 1 || menu.Icon != "lucide:images" || menu.Title != "首页管理" {
+				t.Fatalf("unexpected miniapp home management menu: %+v", menu)
+			}
+		}
+	}
+	if !foundCatalog {
+		t.Fatal("expected default menu MiniappManage")
+	}
+	if !foundHome {
+		t.Fatal("expected default menu MiniappHome")
+	}
+}
+
+func TestDefaultMenusIncludeAppReleaseManagement(t *testing.T) {
+	var foundList bool
+	var foundWrite bool
+	for _, menu := range defaultMenus {
+		switch menu.ID {
+		case 315:
+			foundList = true
+			if menu.PID != 300 || menu.Name != "WebsiteAppReleases" {
+				t.Fatalf("unexpected App release menu identity: %+v", menu)
+			}
+			if menu.Path != "/website/app-releases" || menu.Component != "/site-config/app-releases" {
+				t.Fatalf("unexpected App release menu route: %+v", menu)
+			}
+			if menu.AuthCode != "Website:AppReleases:List" || menu.Type != "menu" || menu.Title != "App 版本" {
+				t.Fatalf("unexpected App release menu metadata: %+v", menu)
+			}
+		case 316:
+			foundWrite = true
+			if menu.PID != 315 || menu.Type != "button" || menu.AuthCode != "Website:AppReleases:Write" {
+				t.Fatalf("unexpected App release write permission: %+v", menu)
+			}
+		}
+	}
+	if !foundList {
+		t.Fatal("expected default menu WebsiteAppReleases")
+	}
+	if !foundWrite {
+		t.Fatal("expected App release write permission button")
+	}
+}
+
 func TestDefaultMenusIncludeRAGKnowledgeManagement(t *testing.T) {
 	var found bool
 	for _, menu := range defaultMenus {
@@ -173,6 +229,28 @@ func TestDefaultMenusIncludeCustomerUserInsights(t *testing.T) {
 	if !found {
 		t.Fatal("expected default menu CustomerUserInsights")
 	}
+}
+
+func TestDefaultMenusIncludeCustomerMiniappUsers(t *testing.T) {
+	for _, menu := range defaultMenus {
+		if menu.ID != 511 {
+			continue
+		}
+		if menu.PID != 500 || menu.Name != "CustomerMiniappUsers" {
+			t.Fatalf("unexpected miniapp customer menu identity: %+v", menu)
+		}
+		if menu.Path != "/customer/miniapp-users" || menu.Component != "/customer/miniapp-users" {
+			t.Fatalf("unexpected miniapp customer menu route: %+v", menu)
+		}
+		if menu.AuthCode != "Customer:Miniapp:List" || menu.Type != "menu" || menu.Sort != 8 {
+			t.Fatalf("unexpected miniapp customer menu permission: %+v", menu)
+		}
+		if menu.Icon == "" || menu.Title != "小程序客户" {
+			t.Fatalf("unexpected miniapp customer menu metadata: %+v", menu)
+		}
+		return
+	}
+	t.Fatal("expected default menu CustomerMiniappUsers with fixed id 511")
 }
 
 func TestDefaultMenusIncludeAppAnalyticsDashboard(t *testing.T) {

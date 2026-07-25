@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 !**/.env.example
+!**/.env.production.example
 
 # 依赖与产物
 **/node_modules
@@ -28,5 +29,13 @@ certs/
 # 站点配置备份
 site-config.backup.json
 .ace-tool/
-.worktrees/
-**/.superpowers/
+
+# 理论库原始抽取/OCR 工作底稿（仅本地，不提交全文）
+var/theory-work/
+
+# Python 本地缓存
+__pycache__/
+*.py[cod]
+
+# 本地临时检查产物
+tmp/

@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"nine-xing/nx-backend/apps/server/internal/dbtx"
 	"nine-xing/nx-backend/apps/server/internal/realip"
 )
 
@@ -43,6 +44,7 @@ type Lead struct {
 	Owner          string `json:"owner"`
 	Referrer       string `json:"referrer"`
 	SourcePath     string `json:"sourcePath"`
+	SourcePlatform string `json:"sourcePlatform"`
 	UTMCampaign    string `json:"utmCampaign"`
 	UTMContent     string `json:"utmContent"`
 	UTMMedium      string `json:"utmMedium"`
@@ -125,7 +127,13 @@ func NewStore(database *sql.DB) *Store {
 	return &Store{db: database}
 }
 
-func (s *Store) Create(ctx context.Context, input LeadInput, r *http.Request) (Lead, error) {
+func (s *Store) CreateWithDBTX(ctx context.Context, q dbtx.DBTX, input LeadInput, r *http.Request, sourcePlatform string) (Lead, error) {
+	if q == nil {
+		return Lead{}, errors.New("signup: query target is nil")
+	}
+	if sourcePlatform != "website" && sourcePlatform != "miniapp" {
+		return Lead{}, errors.New("signup: invalid source platform")
+	}
 	name := truncate(strings.TrimSpace(input.Name), 80)
 	contact := strings.TrimSpace(input.Contact)
 	if name == "" {
@@ -144,21 +152,15 @@ func (s *Store) Create(ctx context.Context, input LeadInput, r *http.Request) (L
 
 	var id int64
 	var createTime time.Time
-	tx, err := s.db.BeginTx(c, nil)
-	if err != nil {
-		return Lead{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
 	gameResultID := parseOptionalInt64(input.GameResultID)
 	if gameResultID <= 0 {
-		gameResultID = findLatestGameResultID(c, tx, attribution.VisitorID)
+		gameResultID = findLatestGameResultID(c, q, attribution.VisitorID)
 	}
-	err = tx.QueryRowContext(c,
+	err = q.QueryRowContext(c,
 		`INSERT INTO signups
 		 (name, contact_type, contact, interest, message, visitor_id, source_path, landing_page, referrer,
-		  utm_source, utm_medium, utm_campaign, utm_content, utm_term, game_result_id, ip, user_agent)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+		  utm_source, utm_medium, utm_campaign, utm_content, utm_term, game_result_id, ip, user_agent, source_platform)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 		 RETURNING id, create_time`,
 		name,
 		contactType,
@@ -177,46 +179,36 @@ func (s *Store) Create(ctx context.Context, input LeadInput, r *http.Request) (L
 		nullInt64(gameResultID),
 		clientIP(r),
 		strings.TrimSpace(r.UserAgent()),
+		sourcePlatform,
 	).Scan(&id, &createTime)
 	if err != nil {
 		return Lead{}, err
 	}
 
 	lead := Lead{
-		Contact:      normalizedContact,
-		ContactType:  contactType,
-		CreateTime:   formatTime(createTime),
-		FollowStatus: "pending",
-		GameResultID: formatOptionalID(gameResultID),
-		ID:           strconv.FormatInt(id, 10),
-		Interest:     interest,
-		IP:           clientIP(r),
-		LandingPage:  attribution.LandingPage,
-		Message:      message,
-		Name:         name,
-		Referrer:     attribution.Referrer,
-		SourcePath:   attribution.SourcePath,
-		UTMCampaign:  attribution.UTMCampaign,
-		UTMContent:   attribution.UTMContent,
-		UTMMedium:    attribution.UTMMedium,
-		UTMSource:    attribution.UTMSource,
-		UTMTerm:      attribution.UTMTerm,
-		UserAgent:    strings.TrimSpace(r.UserAgent()),
-		VisitorID:    attribution.VisitorID,
+		Contact:        normalizedContact,
+		ContactType:    contactType,
+		CreateTime:     formatTime(createTime),
+		FollowStatus:   "pending",
+		GameResultID:   formatOptionalID(gameResultID),
+		ID:             strconv.FormatInt(id, 10),
+		Interest:       interest,
+		IP:             clientIP(r),
+		LandingPage:    attribution.LandingPage,
+		Message:        message,
+		Name:           name,
+		Referrer:       attribution.Referrer,
+		SourcePath:     attribution.SourcePath,
+		SourcePlatform: sourcePlatform,
+		UTMCampaign:    attribution.UTMCampaign,
+		UTMContent:     attribution.UTMContent,
+		UTMMedium:      attribution.UTMMedium,
+		UTMSource:      attribution.UTMSource,
+		UTMTerm:        attribution.UTMTerm,
+		UserAgent:      strings.TrimSpace(r.UserAgent()),
+		VisitorID:      attribution.VisitorID,
 	}
 
-	if _, err := tx.ExecContext(c,
-		`INSERT INTO messages (type, title, content, business_id, business_type, target_path)
-		 VALUES ('signup', $1, $2, $3, 'signup', '/message/management?type=signup')`,
-		"新的报名信息",
-		lead.Name+" / "+contactTypeLabel(lead.ContactType)+": "+lead.Contact,
-		lead.ID,
-	); err != nil {
-		return Lead{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return Lead{}, err
-	}
 	return lead, nil
 }
 
@@ -308,7 +300,7 @@ func (s *Store) List(ctx context.Context, query map[string]string) (PageResult[L
 	offset := (page - 1) * pageSize
 	args = append(args, pageSize, offset)
 	rows, err := s.db.QueryContext(c,
-		"SELECT id, name, contact_type, contact, interest, message, follow_status, owner, follow_note, next_follow_time, visitor_id, source_path, landing_page, referrer, utm_source, utm_medium, utm_campaign, utm_content, utm_term, COALESCE(game_result_id::text,''), ip, user_agent, create_time FROM signups WHERE "+cond+
+		"SELECT id, name, contact_type, contact, interest, message, follow_status, owner, follow_note, next_follow_time, visitor_id, source_path, source_platform, landing_page, referrer, utm_source, utm_medium, utm_campaign, utm_content, utm_term, COALESCE(game_result_id::text,''), ip, user_agent, create_time FROM signups WHERE "+cond+
 			" ORDER BY create_time DESC, id DESC LIMIT $"+strconv.Itoa(len(args)-1)+" OFFSET $"+strconv.Itoa(len(args)),
 		args...,
 	)
@@ -323,7 +315,7 @@ func (s *Store) List(ctx context.Context, query map[string]string) (PageResult[L
 		var id int64
 		var createTime time.Time
 		var nextFollow sql.NullTime
-		if err := rows.Scan(&id, &lead.Name, &lead.ContactType, &lead.Contact, &lead.Interest, &lead.Message, &lead.FollowStatus, &lead.Owner, &lead.FollowNote, &nextFollow, &lead.VisitorID, &lead.SourcePath, &lead.LandingPage, &lead.Referrer, &lead.UTMSource, &lead.UTMMedium, &lead.UTMCampaign, &lead.UTMContent, &lead.UTMTerm, &lead.GameResultID, &lead.IP, &lead.UserAgent, &createTime); err != nil {
+		if err := rows.Scan(&id, &lead.Name, &lead.ContactType, &lead.Contact, &lead.Interest, &lead.Message, &lead.FollowStatus, &lead.Owner, &lead.FollowNote, &nextFollow, &lead.VisitorID, &lead.SourcePath, &lead.SourcePlatform, &lead.LandingPage, &lead.Referrer, &lead.UTMSource, &lead.UTMMedium, &lead.UTMCampaign, &lead.UTMContent, &lead.UTMTerm, &lead.GameResultID, &lead.IP, &lead.UserAgent, &createTime); err != nil {
 			return PageResult[Lead]{}, err
 		}
 		if lead.ContactType == "" {
@@ -407,11 +399,11 @@ func (s *Store) Detail(ctx context.Context, id string) (Detail, error) {
 	var nextFollow sql.NullTime
 	if err := s.db.QueryRowContext(c,
 		`SELECT id, name, contact_type, contact, interest, message, follow_status, owner, follow_note, next_follow_time,
-		        visitor_id, source_path, landing_page, referrer, utm_source, utm_medium, utm_campaign, utm_content, utm_term, COALESCE(game_result_id::text,''),
+		        visitor_id, source_path, source_platform, landing_page, referrer, utm_source, utm_medium, utm_campaign, utm_content, utm_term, COALESCE(game_result_id::text,''),
 		        ip, user_agent, create_time
 		 FROM signups WHERE id=$1`,
 		id,
-	).Scan(&leadID, &lead.Name, &lead.ContactType, &lead.Contact, &lead.Interest, &lead.Message, &lead.FollowStatus, &lead.Owner, &lead.FollowNote, &nextFollow, &lead.VisitorID, &lead.SourcePath, &lead.LandingPage, &lead.Referrer, &lead.UTMSource, &lead.UTMMedium, &lead.UTMCampaign, &lead.UTMContent, &lead.UTMTerm, &lead.GameResultID, &lead.IP, &lead.UserAgent, &createTime); err != nil {
+	).Scan(&leadID, &lead.Name, &lead.ContactType, &lead.Contact, &lead.Interest, &lead.Message, &lead.FollowStatus, &lead.Owner, &lead.FollowNote, &nextFollow, &lead.VisitorID, &lead.SourcePath, &lead.SourcePlatform, &lead.LandingPage, &lead.Referrer, &lead.UTMSource, &lead.UTMMedium, &lead.UTMCampaign, &lead.UTMContent, &lead.UTMTerm, &lead.GameResultID, &lead.IP, &lead.UserAgent, &createTime); err != nil {
 		return Detail{}, err
 	}
 	lead.ID = strconv.FormatInt(leadID, 10)
@@ -497,10 +489,10 @@ func (s *Store) Follow(ctx context.Context, id string, input FollowInput, operat
 		 SET follow_status=$1, owner=$2, follow_note=$3, next_follow_time=$4, update_time=now()
 		 WHERE id=$5
 		 RETURNING id, name, contact_type, contact, interest, message, follow_status, owner, follow_note, next_follow_time,
-		           visitor_id, source_path, landing_page, referrer, utm_source, utm_medium, utm_campaign, utm_content, utm_term, COALESCE(game_result_id::text,''),
+		           visitor_id, source_path, source_platform, landing_page, referrer, utm_source, utm_medium, utm_campaign, utm_content, utm_term, COALESCE(game_result_id::text,''),
 		           ip, user_agent, create_time`,
 		status, owner, note, nextArg, id,
-	).Scan(&leadID, &lead.Name, &lead.ContactType, &lead.Contact, &lead.Interest, &lead.Message, &lead.FollowStatus, &lead.Owner, &lead.FollowNote, &nextStored, &lead.VisitorID, &lead.SourcePath, &lead.LandingPage, &lead.Referrer, &lead.UTMSource, &lead.UTMMedium, &lead.UTMCampaign, &lead.UTMContent, &lead.UTMTerm, &lead.GameResultID, &lead.IP, &lead.UserAgent, &createTime)
+	).Scan(&leadID, &lead.Name, &lead.ContactType, &lead.Contact, &lead.Interest, &lead.Message, &lead.FollowStatus, &lead.Owner, &lead.FollowNote, &nextStored, &lead.VisitorID, &lead.SourcePath, &lead.SourcePlatform, &lead.LandingPage, &lead.Referrer, &lead.UTMSource, &lead.UTMMedium, &lead.UTMCampaign, &lead.UTMContent, &lead.UTMTerm, &lead.GameResultID, &lead.IP, &lead.UserAgent, &createTime)
 	if err != nil {
 		return Lead{}, err
 	}

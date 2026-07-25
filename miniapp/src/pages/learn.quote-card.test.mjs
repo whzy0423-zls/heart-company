@@ -14,20 +14,26 @@ assert.match(
 
 assert.match(
   learnSource,
-  /class="quote-card"/,
-  '学习页语录卡片需要 quote-card class',
+  /<view\s+v-for="quote in quotes"\s+:key="quote"\s+class="quote-editorial">/,
+  '学习页需要使用批准的 quote-editorial 语录容器',
 )
 
 assert.match(
   learnSource,
-  /class="quote-card__mark">”<\/text>/,
-  '学习页语录卡片需要右侧双引号水印标识',
+  /<text\s+class="quote-editorial__mark"\s+aria-hidden="true">“<\/text>/,
+  '学习页语录需要展示不重复朗读的编辑式引号标识',
 )
 
 assert.match(
   learnSource,
-  /\.quote-card__mark\s*\{[^}]*position:\s*absolute/s,
-  '双引号水印需要绝对定位在卡片内',
+  /<text\s+class="quote-editorial__text">\{\{ quote \}\}<\/text>/,
+  '学习页语录正文需要原样渲染配置文本，不能额外拼接引号',
+)
+
+assert.match(
+  learnSource,
+  /\.quote-editorial\s*\{[^}]*background:\s*#ecfdf5/s,
+  '编辑式语录需要保留批准的浅绿色阅读底色',
 )
 
 console.log('miniapp learn quote card tests passed')

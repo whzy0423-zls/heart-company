@@ -55,6 +55,7 @@ async function createHarness() {
     toasts: [],
     switches: [],
     navigations: [],
+    navigateFailure: false,
     listBookingsApi: async () => ({ items: [] }),
     clearToken() {
       this.clearTokenCalls += 1
@@ -73,7 +74,10 @@ async function createHarness() {
   globalThis.uni = {
     showToast(options) { state.toasts.push(options) },
     switchTab(options) { state.switches.push(options) },
-    navigateTo(options) { state.navigations.push(options) },
+    navigateTo(options) {
+      state.navigations.push(options)
+      if (state.navigateFailure) options.fail?.(new Error('navigation failed'))
+    },
   }
 
   moduleCounter += 1
@@ -164,6 +168,22 @@ try {
     assert.equal(state.sessionClearCalls, 1, 'a current-session 401 should clear booking session data')
     assert.equal(state.toasts.length, 1, 'a current-session 401 should show one auth-expired Toast')
     assert.equal(state.switches.length, 1, 'a current-session 401 should redirect once')
+  }
+
+  {
+    const { page, state } = await createHarness()
+    const record = { id: 8, kind: 'consult' }
+    state.token = 'token-a'
+    state.listBookingsApi = async () => ({ items: [record] })
+    await page.loadBookings()
+    state.sessionClearCalls = 0
+    state.navigateFailure = true
+
+    page.openBooking(record)
+
+    assert.equal(state.sessionSets.length, 1, 'opening a record should bind it before navigation')
+    assert.equal(state.navigations.length, 1, 'opening a record should attempt detail navigation once')
+    assert.equal(state.sessionClearCalls, 1, 'failed detail navigation should clear the bound booking session')
   }
 
   console.log('booking records session tests passed')

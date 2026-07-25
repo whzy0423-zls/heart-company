@@ -285,6 +285,59 @@ func (failingQueryConn) QueryContext(context.Context, string, []driver.NamedValu
 	return nil, errors.New("db limiter unavailable")
 }
 
+var publicSiteAssetTestDriverRegisterOnce sync.Once
+
+type publicSiteAssetTestDriver struct{}
+
+type publicSiteAssetTestConn struct {
+	config []byte
+}
+
+func (publicSiteAssetTestDriver) Open(config string) (driver.Conn, error) {
+	return publicSiteAssetTestConn{config: []byte(config)}, nil
+}
+func (publicSiteAssetTestConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare unavailable")
+}
+func (publicSiteAssetTestConn) Close() error              { return nil }
+func (publicSiteAssetTestConn) Begin() (driver.Tx, error) { return nil, errors.New("tx unavailable") }
+func (c publicSiteAssetTestConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if strings.Contains(query, "FROM site_configs") {
+		return &publicSiteAssetTestRows{
+			columns: []string{"config"},
+			values:  []driver.Value{c.config},
+		}, nil
+	}
+	if strings.Contains(query, "FROM upload_assets") {
+		id, ok := args[0].Value.(int64)
+		if !ok || (id != 42 && id != 43) {
+			return nil, errors.New("unexpected upload asset id")
+		}
+		return &publicSiteAssetTestRows{
+			columns: []string{"id", "key", "name", "content_type", "size", "data", "object_key", "object_url"},
+			values:  []driver.Value{id, "upload-assets/" + strconv.FormatInt(id, 10), "carousel.png", "image/png", int64(len("carousel-image")), []byte("carousel-image"), "", ""},
+		}, nil
+	}
+	return nil, errors.New("unexpected query: " + query)
+}
+
+type publicSiteAssetTestRows struct {
+	columns []string
+	values  []driver.Value
+	done    bool
+}
+
+func (r *publicSiteAssetTestRows) Columns() []string { return r.columns }
+func (r *publicSiteAssetTestRows) Close() error      { return nil }
+func (r *publicSiteAssetTestRows) Next(dest []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+	copy(dest, r.values)
+	r.done = true
+	return nil
+}
+
 func TestBackendLoginRateLimitFallsBackToMemoryWhenDBLimiterFails(t *testing.T) {
 	driverName := "nine_xing_failing_limiter"
 	failingQueryDriverRegisterOnce.Do(func() {
@@ -547,6 +600,63 @@ func TestPublicSiteConfigRewritesAndServesReferencedLocalUpload(t *testing.T) {
 	unreferencedResp := performRawUnit(handler, http.MethodGet, "/api/public/site-uploads/site/other.png", "")
 	if unreferencedResp.Code != http.StatusNotFound {
 		t.Fatalf("expected unreferenced public upload 404, got %d", unreferencedResp.Code)
+	}
+}
+
+func TestPublicSiteConfigExposesMiniappCarouselAssetThroughPublicURL(t *testing.T) {
+	root := t.TempDir()
+	sitePath := filepath.Join(root, "site-config.json")
+	configBody := []byte(`{
+  "home": {
+    "miniappCarousel": {
+      "items": [{"image": "/api/upload-assets/42"}]
+    }
+  },
+  "navigation": {
+    "main": [{"label": "首页", "to": "/", "type": "route"}],
+    "drawer": [{"label": "首页", "to": "/", "type": "route"}],
+    "tabs": [{"label": "首页", "to": "/", "type": "route", "icon": "home", "match": "/"}]
+  },
+  "site": {"brandName": "九型芯之力", "copyright": "", "footerTagline": "", "logo": "/assets/logo.svg"},
+  "types": [{"id": "1", "name": "完美型", "description": "", "keywords": "", "avatar": "/assets/avatars/1.webp"}]
+}`)
+	if err := os.WriteFile(sitePath, configBody, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	publicSiteAssetTestDriverRegisterOnce.Do(func() {
+		sql.Register("nine_xing_public_site_asset", publicSiteAssetTestDriver{})
+	})
+	database, err := sql.Open("nine_xing_public_site_asset", string(configBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	handler := New(config.Env{JWTSecret: "test-secret", SiteConfig: sitePath}, database)
+
+	configResp := performRawUnit(handler, http.MethodGet, "/api/public/site-config", "")
+	if configResp.Code != http.StatusOK {
+		t.Fatalf("expected public site config 200, got %d body=%s", configResp.Code, configResp.Body.String())
+	}
+	if body := configResp.Body.String(); !strings.Contains(body, "/api/public/site-assets/42") || strings.Contains(body, "/api/upload-assets/42") {
+		t.Fatalf("expected carousel image to use only the public asset URL, body=%s", body)
+	}
+
+	assetResp := performRawUnit(handler, http.MethodGet, "/api/public/site-assets/42", "")
+	if assetResp.Code != http.StatusOK {
+		t.Fatalf("expected referenced public carousel asset 200, got %d body=%s", assetResp.Code, assetResp.Body.String())
+	}
+	if got := assetResp.Body.String(); got != "carousel-image" {
+		t.Fatalf("expected carousel image bytes, got %q", got)
+	}
+	if got := assetResp.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("expected carousel image content type image/png, got %q", got)
+	}
+
+	unreferencedResp := performRawUnit(handler, http.MethodGet, "/api/public/site-assets/43", "")
+	if unreferencedResp.Code != http.StatusNotFound {
+		t.Fatalf("expected unreferenced asset to return 404, got %d body=%s", unreferencedResp.Code, unreferencedResp.Body.String())
 	}
 }
 

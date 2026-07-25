@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import AppDownloadSection from '../components/AppDownloadSection'
 import Reveal from '../components/Reveal'
 import Wheel from '../components/Wheel'
 import { QUESTIONS } from '../data/enneagramGame'
@@ -37,6 +38,8 @@ export default function Home() {
           <Wheel />
         </div>
       </section>
+
+      <AppDownloadSection />
 
       {/* 老师简介 teaser */}
       <section className="wrap block" id="teacher">

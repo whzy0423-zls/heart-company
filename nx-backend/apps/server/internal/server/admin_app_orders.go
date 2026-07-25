@@ -10,20 +10,26 @@ import (
 )
 
 type adminAppOrder struct {
-	ID            int64  `json:"id"`
-	OutTradeNo    string `json:"outTradeNo"`
-	AppUserID     int64  `json:"appUserId"`
-	Phone         string `json:"phone"`
-	Nickname      string `json:"nickname"`
-	MemberLevel   string `json:"memberLevel"`
-	ProductID     string `json:"productId"`
-	Title         string `json:"title"`
-	Amount        int    `json:"amount"`
-	Status        string `json:"status"`
-	TransactionID string `json:"transactionId"`
-	CreateTime    string `json:"createTime"`
-	UpdateTime    string `json:"updateTime"`
-	PaidAt        string `json:"paidAt"`
+	ID                  int64  `json:"id"`
+	OutTradeNo          string `json:"outTradeNo"`
+	AppUserID           int64  `json:"appUserId"`
+	Phone               string `json:"phone"`
+	Nickname            string `json:"nickname"`
+	MemberLevel         string `json:"memberLevel"`
+	ProductID           string `json:"productId"`
+	Title               string `json:"title"`
+	Amount              int    `json:"amount"`
+	Status              string `json:"status"`
+	TransactionID       string `json:"transactionId"`
+	CreateTime          string `json:"createTime"`
+	DurationDays        int    `json:"durationDays"`
+	UpdateTime          string `json:"updateTime"`
+	PaidAt              string `json:"paidAt"`
+	MemberStartedAt     string `json:"memberStartedAt"`
+	MemberExpiresAt     string `json:"memberExpiresAt"`
+	RemainingDays       int    `json:"remainingDays"`
+	ActivationAt        string `json:"activationAt"`
+	MembershipExpiresAt string `json:"membershipExpiresAt"`
 }
 
 func (s *Server) adminAppOrders(w http.ResponseWriter, r *http.Request) {
@@ -61,7 +67,12 @@ func (s *Server) adminAppOrders(w http.ResponseWriter, r *http.Request) {
 		       o.product_id, o.title, o.amount, o.status, o.transaction_id,
 		       to_char(o.create_time AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'),
 		       to_char(o.update_time AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'),
-		       o.paid_at
+		       o.paid_at,
+		       COALESCE(to_char(u.member_started_at AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'), ''),
+		       COALESCE(to_char(u.member_expires_at AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'), ''),
+		       CASE WHEN u.member_expires_at > now() THEN CEIL(EXTRACT(EPOCH FROM (u.member_expires_at-now()))/86400)::int ELSE 0 END,
+		       COALESCE(to_char(o.activation_at AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'), ''),
+		       COALESCE(to_char(o.membership_expires_at AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'), '')
 		FROM app_orders o
 		LEFT JOIN app_users u ON u.id=o.app_user_id
 		WHERE `+whereSQL+`
@@ -76,13 +87,14 @@ func (s *Server) adminAppOrders(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var item adminAppOrder
 		var paidAt sql.NullTime
-		if err := rows.Scan(&item.ID, &item.OutTradeNo, &item.AppUserID, &item.Phone, &item.Nickname, &item.MemberLevel, &item.ProductID, &item.Title, &item.Amount, &item.Status, &item.TransactionID, &item.CreateTime, &item.UpdateTime, &paidAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.OutTradeNo, &item.AppUserID, &item.Phone, &item.Nickname, &item.MemberLevel, &item.ProductID, &item.Title, &item.Amount, &item.Status, &item.TransactionID, &item.CreateTime, &item.UpdateTime, &paidAt, &item.MemberStartedAt, &item.MemberExpiresAt, &item.RemainingDays, &item.ActivationAt, &item.MembershipExpiresAt); err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if paidAt.Valid {
 			item.PaidAt = paidAt.Time.Format("2006/01/02 15:04:05")
 		}
+		item.DurationDays, _ = membershipDurationDays(item.ProductID)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {

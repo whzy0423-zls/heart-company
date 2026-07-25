@@ -92,8 +92,8 @@ func (s *Store) Overview(ctx context.Context, values url.Values) (Overview, erro
 		SELECT
 			(SELECT count(DISTINCT COALESCE(NULLIF(visitor_id, ''), ip || '|' || user_agent)) FROM site_visits),
 			(SELECT count(DISTINCT COALESCE(NULLIF(visitor_id, ''), ip || '|' || user_agent)) FROM site_visits, boundary WHERE create_time >= boundary.today_start),
-			(SELECT count(*) FROM signups),
-			(SELECT count(*) FROM signups, boundary WHERE create_time >= boundary.today_start)
+			(SELECT count(*) FROM signups WHERE source_platform = 'website'),
+			(SELECT count(*) FROM signups, boundary WHERE source_platform = 'website' AND create_time >= boundary.today_start)
 	`).Scan(
 		&result.TotalVisits,
 		&result.TodayVisits,
@@ -185,7 +185,8 @@ func (s *Store) rangeTotals(ctx context.Context, start time.Time, end time.Time)
 			   AND create_time < (($2::date + 1) AT TIME ZONE 'Asia/Shanghai')),
 			(SELECT count(*)
 			 FROM signups
-			 WHERE create_time >= ($1::date AT TIME ZONE 'Asia/Shanghai')
+			 WHERE source_platform = 'website'
+			 AND create_time >= ($1::date AT TIME ZONE 'Asia/Shanghai')
 			   AND create_time < (($2::date + 1) AT TIME ZONE 'Asia/Shanghai'))
 	`, start.Format("2006-01-02"), end.Format("2006-01-02")).Scan(&visits, &leads)
 	return visits, leads, err
@@ -210,7 +211,8 @@ func (s *Store) series(ctx context.Context, start time.Time, end time.Time) ([]S
 				(create_time AT TIME ZONE 'Asia/Shanghai')::date AS day,
 				count(*) AS leads
 			FROM signups
-			WHERE create_time >= ($1::date AT TIME ZONE 'Asia/Shanghai')
+			WHERE source_platform = 'website'
+			  AND create_time >= ($1::date AT TIME ZONE 'Asia/Shanghai')
 			  AND create_time < (($2::date + 1) AT TIME ZONE 'Asia/Shanghai')
 			GROUP BY 1
 		)
