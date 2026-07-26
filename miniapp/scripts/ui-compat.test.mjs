@@ -25,24 +25,24 @@ assert.match(
 )
 
 const pagesConfig = readFileSync('src/pages.json', 'utf8')
+const pagesConfigJson = JSON.parse(pagesConfig)
+function configuredPage(path) {
+  const mainPage = pagesConfigJson.pages.find((page) => page.path === path)
+  if (mainPage) return mainPage
+  for (const subpackage of pagesConfigJson.subPackages || []) {
+    const page = subpackage.pages.find(
+      (item) => `${subpackage.root}/${item.path}`.replace(/\/+/g, '/') === path,
+    )
+    if (page) return page
+  }
+  return undefined
+}
 assert.doesNotMatch(pagesConfig, /pages\/chat\/chat/, 'pages.json must not register the removed chat page')
 assert.doesNotMatch(pagesConfig, /问 AI|AI 对话/, 'tabBar must not expose an AI chat entry')
 assert.equal(statSync('src/pages/chat', { throwIfNoEntry: false }), undefined, 'removed chat page directory should stay deleted')
-assert.match(
-  pagesConfig,
-  /"path"\s*:\s*"pages\/profile-edit\/profile-edit"[\s\S]*?"navigationBarTitleText"\s*:\s*"个人资料"/,
-  'pages.json should register the dedicated personal-profile page with its approved title',
-)
-assert.match(
-  pagesConfig,
-  /"path"\s*:\s*"pages\/booking-records\/booking-records"[\s\S]*?"navigationBarTitleText"\s*:\s*"预约记录"/,
-  'pages.json should register the appointment records page with its Chinese title',
-)
-assert.match(
-  pagesConfig,
-  /"path"\s*:\s*"pages\/booking-detail\/booking-detail"[\s\S]*?"navigationBarTitleText"\s*:\s*"预约详情"/,
-  'pages.json should register the appointment detail page with its Chinese title',
-)
+assert.equal(configuredPage('pages/profile-edit/profile-edit')?.style?.navigationBarTitleText, '个人资料')
+assert.equal(configuredPage('pages/booking-records/booking-records')?.style?.navigationBarTitleText, '预约记录')
+assert.equal(configuredPage('pages/booking-detail/booking-detail')?.style?.navigationBarTitleText, '预约详情')
 
 const h5Index = readFileSync('index.html', 'utf8')
 assert.match(h5Index, /viewport-fit=cover/, 'H5 viewport meta should enable iOS safe-area env variables')
