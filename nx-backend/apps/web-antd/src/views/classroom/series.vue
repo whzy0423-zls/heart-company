@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ClassroomSeries } from '#/api/core/classroom';
-import { onMounted, reactive, ref } from 'vue';
+import { onMounted, reactive, ref, watch } from 'vue';
 import {
   Alert,
   Button,
@@ -40,6 +40,8 @@ const editorOpen = ref(false);
 const editing = ref<ClassroomSeries>();
 const saving = ref(false);
 const actionLoadingId = ref<number>();
+const persistedSeries = ref<ClassroomSeries>();
+const metadataCommitted = ref(false);
 const form = reactive({
   title: '',
   summary: '',
@@ -67,6 +69,8 @@ async function load() {
 }
 function openEditor(record?: ClassroomSeries) {
   editing.value = record;
+  persistedSeries.value = record;
+  metadataCommitted.value = Boolean(record);
   Object.assign(
     form,
     record
@@ -94,14 +98,17 @@ async function save() {
   if (!props.canWrite && !editing.value) return;
   saving.value = true;
   try {
-    let saved = editing.value as ClassroomSeries;
-    if (props.canWrite)
-      saved = editing.value
-        ? await updateClassroomSeriesApi(editing.value.id, {
+    let saved = persistedSeries.value as ClassroomSeries;
+    if (props.canWrite && (!metadataCommitted.value || !saved)) {
+      saved = persistedSeries.value
+        ? await updateClassroomSeriesApi(persistedSeries.value.id, {
             ...seriesMetadataPayload(form),
-            expectedUpdatedAt: editing.value.updatedAt,
+            expectedUpdatedAt: persistedSeries.value.updatedAt,
           })
         : await createClassroomSeriesApi(seriesMetadataPayload(form));
+      persistedSeries.value = saved;
+      metadataCommitted.value = true;
+    }
     if (
       props.canPrice &&
       (saved.accessLevel !== form.accessLevel ||
@@ -112,6 +119,7 @@ async function save() {
         priceCents: form.accessLevel === 'paid' ? form.priceCents : 0,
         expectedUpdatedAt: saved.updatedAt,
       });
+    persistedSeries.value = saved;
     message.success('系列已保存');
     editorOpen.value = false;
     await load();
@@ -121,6 +129,13 @@ async function save() {
     saving.value = false;
   }
 }
+watch(
+  form,
+  () => {
+    if (props.canWrite) metadataCommitted.value = false;
+  },
+  { deep: true },
+);
 function confirmAction(
   record: ClassroomSeries,
   action: 'delete' | 'offline' | 'publish' | 'block' | 'unblock',
@@ -196,14 +211,18 @@ onMounted(load);
       <template #bodyCell="{ column, record }">
         <Tag v-if="column.dataIndex === 'status'">{{ record.status }}</Tag>
         <Space v-else-if="column.key === 'action'">
-          <Button v-if="canWrite" @click="openEditor(record as ClassroomSeries)"
+          <Button
+            v-if="canWrite"
+            :disabled="record.status !== 'draft'"
+            :title="record.status !== 'draft' ? '仅草稿可编辑' : '编辑系列'"
+            @click="openEditor(record as ClassroomSeries)"
             >编辑</Button
           ><Button
             v-if="canPrice"
             @click="openEditor(record as ClassroomSeries)"
             >定价</Button
           ><Button
-            v-if="canPublish && record.status !== 'published'"
+            v-if="canPublish && record.status === 'draft'"
             :loading="actionLoadingId === record.id"
             @click="confirmAction(record as ClassroomSeries, 'publish')"
             >发布</Button
@@ -215,7 +234,7 @@ onMounted(load);
             >下线</Button
           >
           <Button
-            v-if="canWrite"
+            v-if="canWrite && record.status === 'draft'"
             danger
             :loading="actionLoadingId === record.id"
             @click="confirmAction(record as ClassroomSeries, 'delete')"

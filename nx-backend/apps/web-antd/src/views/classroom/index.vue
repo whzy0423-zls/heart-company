@@ -18,6 +18,7 @@ import { useAccessStore } from '@vben/stores';
 import {
   getClassroomContentsApi,
   getClassroomSeriesApi,
+  deleteClassroomContentApi,
   offlineClassroomContentApi,
   publishClassroomContentApi,
   setClassroomContentPlaybackBlockedApi,
@@ -92,7 +93,7 @@ async function load() {
 }
 function confirmLifecycle(
   record: ClassroomContent,
-  action: 'publish' | 'offline' | 'block' | 'unblock',
+  action: 'publish' | 'offline' | 'block' | 'unblock' | 'delete',
 ) {
   Modal.confirm({
     title:
@@ -102,7 +103,9 @@ function confirmLifecycle(
           ? '下线课件？'
           : action === 'block'
             ? '阻断播放？'
-            : '恢复播放？',
+            : action === 'unblock'
+              ? '恢复播放？'
+              : '删除课件？',
     content: '请确认该操作及其对用户的影响。',
     async onOk() {
       actionLoadingId.value = record.id;
@@ -116,10 +119,16 @@ function confirmLifecycle(
             expectedUpdatedAt: record.updatedAt,
             reason: '后台操作',
           });
-        else
+        else if (action === 'block' || action === 'unblock')
           await setClassroomContentPlaybackBlockedApi(
             record.id,
             action === 'block',
+            record.updatedAt,
+            '后台操作',
+          );
+        else
+          await deleteClassroomContentApi(
+            record.id,
             record.updatedAt,
             '后台操作',
           );
@@ -197,6 +206,12 @@ onMounted(load);
               <Button
                 v-if="canPublish && record.status !== 'published'"
                 :loading="actionLoadingId === record.id"
+                :disabled="record.status !== 'ready'"
+                :title="
+                  record.status !== 'ready'
+                    ? '媒体处理完成后才可发布'
+                    : '发布课件'
+                "
                 @click="confirmLifecycle(record as ClassroomContent, 'publish')"
                 >发布</Button
               >
@@ -216,6 +231,8 @@ onMounted(load);
               >
               <Button
                 v-if="canWrite"
+                :disabled="record.status !== 'draft'"
+                :title="record.status !== 'draft' ? '仅草稿可编辑' : '编辑课件'"
                 @click="
                   editing = record as ClassroomContent;
                   editorOpen = true;
@@ -234,6 +251,13 @@ onMounted(load);
                 "
                 >{{ record.playbackBlocked ? '恢复播放' : '阻断播放' }}</Button
               >
+              <Button
+                v-if="canWrite && record.status === 'draft'"
+                danger
+                :loading="actionLoadingId === record.id"
+                @click="confirmLifecycle(record as ClassroomContent, 'delete')"
+                >删除</Button
+              >
             </Space>
           </template>
         </Table>
@@ -248,6 +272,7 @@ onMounted(load);
         v-else-if="activeTab === 'uploads' && canUpload"
         :can-upload="canUpload"
         :contents="contents"
+        @uploaded="load"
       />
     </Card>
     <Modal

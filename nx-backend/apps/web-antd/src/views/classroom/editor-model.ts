@@ -5,6 +5,31 @@ import type {
   ClassroomSeries,
 } from '#/api/core/classroom';
 
+export interface ContentSaveWorkflowState {
+  metadataCommitted: boolean;
+  persisted?: ClassroomContent;
+}
+
+export async function saveContentWorkflow(args: {
+  create: () => Promise<ClassroomContent>;
+  current?: ClassroomContent;
+  metadataCommitted: boolean;
+  price?: () => Promise<ClassroomContent>;
+  update: () => Promise<ClassroomContent>;
+  onPersist: (content: ClassroomContent) => void;
+}) {
+  let saved = args.current;
+  if (!args.metadataCommitted || !saved) {
+    saved = args.current ? await args.update() : await args.create();
+    args.onPersist(saved);
+  }
+  if (args.price) {
+    saved = await args.price();
+    args.onPersist(saved);
+  }
+  return saved;
+}
+
 export function createContentDraftDefaults(): ClassroomContentCreatePayload & {
   accessLevel: ClassroomAccessLevel;
   priceCents: number;

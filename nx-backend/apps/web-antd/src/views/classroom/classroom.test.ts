@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   contentMetadataPayload,
@@ -17,7 +17,13 @@ import {
   uploadStatusLabel,
   visibleClassroomTabs,
 } from './classroom-view-model';
-import { resolveUploadRetryContext } from './upload-flow';
+import {
+  classroomUploadMime,
+  putSignedUploadPart,
+  resolveUploadRetryContext,
+} from './upload-flow';
+import { saveContentWorkflow } from './editor-model';
+import { crc64File } from './upload-checksum';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (path: string) => readFileSync(resolve(root, path), 'utf8');
@@ -249,6 +255,110 @@ describe('teacher classroom admin UI contract', () => {
     const editor = read('views/classroom/components/content-editor.vue');
     expect(editor).toContain(':disabled="!canWrite"');
     expect(editor).toContain(':disabled="!canPrice"');
+  });
+
+  it('does not create twice when the second price step fails and is retried', async () => {
+    let creates = 0;
+    let prices = 0;
+    let persisted: any;
+    const create = async () => {
+      creates++;
+      return { id: 1, updatedAt: 'v1' } as any;
+    };
+    const update = async () => {
+      throw new Error('must not update');
+    };
+    await expect(
+      saveContentWorkflow({
+        create,
+        current: undefined,
+        metadataCommitted: false,
+        onPersist: (value) => {
+          persisted = value;
+        },
+        price: async () => {
+          prices++;
+          throw new Error('price down');
+        },
+        update,
+      }),
+    ).rejects.toThrow('price down');
+    await expect(
+      saveContentWorkflow({
+        create,
+        current: persisted,
+        metadataCommitted: true,
+        onPersist: (value) => {
+          persisted = value;
+        },
+        price: async () => {
+          prices++;
+          return { id: 1, updatedAt: 'v2' } as any;
+        },
+        update,
+      }),
+    ).resolves.toMatchObject({ id: 1, updatedAt: 'v2' });
+    expect(creates).toBe(1);
+    expect(prices).toBe(2);
+  });
+
+  it('yields checksum progress and honors cancellation for large files', async () => {
+    const file = new File([new Uint8Array(1024 * 1024)], 'large.mp4');
+    const controller = new AbortController();
+    const progress: number[] = [];
+    await expect(
+      crc64File(file, { onProgress: (value) => progress.push(value) }),
+    ).resolves.toMatch(/^crc64:\d+$/);
+    expect(progress.at(-1)).toBe(100);
+    controller.abort();
+    await expect(
+      crc64File(file, { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    const midController = new AbortController();
+    await expect(
+      crc64File(file, {
+        onProgress: () => midController.abort(),
+        signal: midController.signal,
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('falls back to filename extension when browser MIME is empty', () => {
+    expect(classroomUploadMime({ name: 'lesson.mp4', type: '' } as File)).toBe(
+      'video/mp4',
+    );
+    expect(classroomUploadMime({ name: 'lesson.mp3', type: '' } as File)).toBe(
+      'audio/mpeg',
+    );
+  });
+
+  it('requires successful PUT and exposed ETag for signed OSS parts', async () => {
+    const signal = new AbortController().signal;
+    await expect(
+      putSignedUploadPart(
+        'https://oss/part',
+        new Blob(['x']),
+        signal,
+        vi.fn().mockResolvedValue(new Response('', { status: 200 })) as any,
+      ),
+    ).rejects.toThrow('OSS CORS');
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(
+        new Response('', { status: 200, headers: { ETag: '"part-etag"' } }),
+      );
+    await expect(
+      putSignedUploadPart(
+        'https://oss/part',
+        new Blob(['x']),
+        signal,
+        fetcher as any,
+      ),
+    ).resolves.toBe('part-etag');
+    expect(fetcher).toHaveBeenCalledWith(
+      'https://oss/part',
+      expect.objectContaining({ method: 'PUT', signal }),
+    );
   });
 
   it('shows progress, retry, loading, empty and error feedback', () => {

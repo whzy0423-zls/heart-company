@@ -27,6 +27,7 @@ import {
   contentMetadataPayload,
   createContentDraftDefaults,
   purchaseStrategyRequired,
+  saveContentWorkflow,
 } from '../editor-model';
 
 const props = defineProps<{
@@ -51,6 +52,8 @@ const accessLevel = ref<'inherit' | 'public' | 'login' | 'member' | 'paid'>(
 const priceCents = ref(0);
 const saving = ref(false);
 const standalonePaidStrategy = ref<'content' | 'series'>('series');
+const persistedContent = ref<ClassroomContent>();
+const metadataCommitted = ref(false);
 
 watch(
   () => props.content,
@@ -80,6 +83,8 @@ watch(
     );
     accessLevel.value = content?.accessLevel ?? 'public';
     priceCents.value = content?.priceCents ?? 0;
+    persistedContent.value = content;
+    metadataCommitted.value = Boolean(content);
   },
   { immediate: true },
 );
@@ -91,25 +96,35 @@ async function save() {
     return message.warning('请填写有效单课价格');
   saving.value = true;
   try {
-    let saved = props.content as ClassroomContent;
-    if (props.canWrite)
-      saved = props.content
-        ? await updateClassroomContentApi(props.content.id, {
-            ...contentMetadataPayload(form),
-            expectedUpdatedAt: props.content.updatedAt,
-          })
-        : await createClassroomContentApi(contentMetadataPayload(form));
-    if (
-      props.canPrice &&
-      (saved.accessLevel !== accessLevel.value ||
-        saved.priceCents !== priceCents.value)
-    ) {
-      saved = await setClassroomContentPriceApi(saved.id, {
-        accessLevel: accessLevel.value,
-        expectedUpdatedAt: saved.updatedAt,
-        priceCents: accessLevel.value === 'paid' ? priceCents.value : 0,
-      });
-    }
+    const saved = await saveContentWorkflow({
+      create: () => createClassroomContentApi(contentMetadataPayload(form)),
+      current: persistedContent.value,
+      metadataCommitted: !props.canWrite || metadataCommitted.value,
+      update: () =>
+        updateClassroomContentApi(persistedContent.value!.id, {
+          ...contentMetadataPayload(form),
+          expectedUpdatedAt: persistedContent.value!.updatedAt,
+        }),
+      onPersist: (value) => {
+        persistedContent.value = value;
+        metadataCommitted.value = true;
+      },
+      price: props.canPrice
+        ? () => {
+            const current = persistedContent.value!;
+            if (
+              current.accessLevel === accessLevel.value &&
+              current.priceCents === priceCents.value
+            )
+              return Promise.resolve(current);
+            return setClassroomContentPriceApi(current.id, {
+              accessLevel: accessLevel.value,
+              expectedUpdatedAt: current.updatedAt,
+              priceCents: accessLevel.value === 'paid' ? priceCents.value : 0,
+            });
+          }
+        : undefined,
+    });
     message.success('课件已保存');
     emit('saved', saved);
   } catch (cause) {
@@ -150,6 +165,7 @@ watch(accessLevel, (value) => {
 watch(
   form,
   () => {
+    if (props.canWrite) metadataCommitted.value = false;
     emit('change', { ...form });
     emit(
       'validity',
