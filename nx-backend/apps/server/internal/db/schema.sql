@@ -2420,3 +2420,148 @@ CREATE TABLE IF NOT EXISTS request_rate_limits (
   PRIMARY KEY (scope, key)
 );
 CREATE INDEX IF NOT EXISTS idx_request_rate_limits_expires ON request_rate_limits(expires_at);
+
+-- ============ 老师课堂（系列、音视频课件、上传、权益与学习进度）============
+CREATE TABLE IF NOT EXISTS classroom_series (
+  id BIGSERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  cover_url TEXT NOT NULL DEFAULT '',
+  cover_asset_id BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
+  teacher_key TEXT NOT NULL DEFAULT '',
+  teacher_name_snapshot TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published','offline')),
+  playback_blocked BOOLEAN NOT NULL DEFAULT false,
+  access_level TEXT NOT NULL DEFAULT 'public' CHECK (access_level IN ('public','login','member','paid')),
+  price_cents INTEGER NOT NULL DEFAULT 0 CHECK (price_cents >= 0),
+  published_at TIMESTAMPTZ,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (access_level = 'paid' AND price_cents > 0 OR access_level <> 'paid' AND price_cents = 0)
+);
+
+CREATE TABLE IF NOT EXISTS classroom_contents (
+  id BIGSERIAL PRIMARY KEY,
+  series_id BIGINT REFERENCES classroom_series(id) ON DELETE RESTRICT,
+  show_as_standalone BOOLEAN NOT NULL DEFAULT false,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  content_type TEXT NOT NULL CHECK (content_type IN ('video','audio')),
+  media_asset_id BIGINT,
+  cover_url TEXT NOT NULL DEFAULT '',
+  duration_seconds INTEGER NOT NULL DEFAULT 0 CHECK (duration_seconds >= 0),
+  teacher_key TEXT NOT NULL DEFAULT '',
+  teacher_name_snapshot TEXT NOT NULL DEFAULT '',
+  recorded_at TIMESTAMPTZ,
+  badge TEXT NOT NULL DEFAULT '',
+  tags JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(tags) = 'array'),
+  episode_no INTEGER NOT NULL DEFAULT 0 CHECK (episode_no >= 0),
+  sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','processing','ready','published','offline','failed')),
+  playback_blocked BOOLEAN NOT NULL DEFAULT false,
+  access_level TEXT NOT NULL DEFAULT 'inherit' CHECK (access_level IN ('inherit','public','login','member','paid')),
+  price_cents INTEGER NOT NULL DEFAULT 0 CHECK (price_cents >= 0),
+  published_at TIMESTAMPTZ,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (series_id IS NOT NULL OR access_level <> 'inherit'),
+  CHECK (series_id IS NOT NULL OR show_as_standalone = false),
+  CHECK (access_level = 'paid' AND price_cents > 0 OR access_level <> 'paid' AND price_cents = 0)
+);
+
+CREATE TABLE IF NOT EXISTS classroom_media_assets (
+  id BIGSERIAL PRIMARY KEY,
+  bucket TEXT NOT NULL,
+  object_key TEXT NOT NULL,
+  etag TEXT NOT NULL DEFAULT '',
+  checksum TEXT NOT NULL DEFAULT '',
+  content_type TEXT NOT NULL CHECK (content_type IN ('video','audio')),
+  size_bytes BIGINT NOT NULL DEFAULT 0 CHECK (size_bytes >= 0),
+  duration_seconds INTEGER NOT NULL DEFAULT 0 CHECK (duration_seconds >= 0),
+  width INTEGER NOT NULL DEFAULT 0 CHECK (width >= 0),
+  height INTEGER NOT NULL DEFAULT 0 CHECK (height >= 0),
+  cover_object_key TEXT NOT NULL DEFAULT '',
+  storage_status TEXT NOT NULL DEFAULT 'pending' CHECK (storage_status IN ('pending','uploaded','processing','ready','failed','deleted')),
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (bucket, object_key),
+  CHECK (storage_status <> 'ready' OR (object_key <> '' AND etag <> '' AND checksum <> '' AND size_bytes > 0))
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_classroom_contents_media_asset') THEN
+    ALTER TABLE classroom_contents
+      ADD CONSTRAINT fk_classroom_contents_media_asset
+      FOREIGN KEY (media_asset_id) REFERENCES classroom_media_assets(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS classroom_upload_tasks (
+  id BIGSERIAL PRIMARY KEY,
+  content_id BIGINT NOT NULL REFERENCES classroom_contents(id) ON DELETE CASCADE,
+  creator_id BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  oss_upload_id TEXT NOT NULL,
+  object_key TEXT NOT NULL,
+  expected_size BIGINT NOT NULL CHECK (expected_size > 0),
+  checksum TEXT NOT NULL DEFAULT '',
+  part_size BIGINT NOT NULL CHECK (part_size > 0),
+  max_parts INTEGER NOT NULL CHECK (max_parts > 0),
+  status TEXT NOT NULL DEFAULT 'initiated' CHECK (status IN ('initiated','uploading','completed','aborted','expired','failed')),
+  expires_at TIMESTAMPTZ NOT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  cleanup_status TEXT NOT NULL DEFAULT 'pending' CHECK (cleanup_status IN ('pending','retained','cleaned','failed')),
+  media_asset_id BIGINT REFERENCES classroom_media_assets(id) ON DELETE SET NULL,
+  failure_reason TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (content_id),
+  UNIQUE (oss_upload_id)
+);
+
+CREATE TABLE IF NOT EXISTS classroom_entitlements (
+  id BIGSERIAL PRIMARY KEY,
+  wx_user_id BIGINT NOT NULL REFERENCES wx_users(id) ON DELETE CASCADE,
+  series_id BIGINT REFERENCES classroom_series(id) ON DELETE RESTRICT,
+  content_id BIGINT REFERENCES classroom_contents(id) ON DELETE RESTRICT,
+  order_id BIGINT REFERENCES orders(id) ON DELETE SET NULL,
+  source TEXT NOT NULL CHECK (source IN ('purchase','manual')),
+  expires_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((series_id IS NOT NULL)::int + (content_id IS NOT NULL)::int = 1),
+  CHECK (expires_at IS NULL OR expires_at > created_at)
+);
+
+CREATE TABLE IF NOT EXISTS classroom_progress (
+  wx_user_id BIGINT NOT NULL REFERENCES wx_users(id) ON DELETE CASCADE,
+  content_id BIGINT NOT NULL REFERENCES classroom_contents(id) ON DELETE CASCADE,
+  position_seconds INTEGER NOT NULL DEFAULT 0 CHECK (position_seconds >= 0),
+  completed BOOLEAN NOT NULL DEFAULT false,
+  last_played_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (wx_user_id, content_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_classroom_series_public_list ON classroom_series(status, sort_order, id);
+CREATE INDEX IF NOT EXISTS idx_classroom_series_access ON classroom_series(access_level, status);
+CREATE INDEX IF NOT EXISTS idx_classroom_contents_series ON classroom_contents(series_id, status, episode_no, sort_order, id);
+CREATE INDEX IF NOT EXISTS idx_classroom_contents_standalone ON classroom_contents(show_as_standalone, status, sort_order, id);
+CREATE INDEX IF NOT EXISTS idx_classroom_contents_media ON classroom_contents(media_asset_id);
+CREATE INDEX IF NOT EXISTS idx_classroom_upload_tasks_status ON classroom_upload_tasks(status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_classroom_upload_tasks_creator ON classroom_upload_tasks(creator_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_classroom_entitlements_user ON classroom_entitlements(wx_user_id, revoked_at, expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_classroom_entitlement_active_series
+  ON classroom_entitlements(wx_user_id, series_id) WHERE series_id IS NOT NULL AND revoked_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_classroom_entitlement_active_content
+  ON classroom_entitlements(wx_user_id, content_id) WHERE content_id IS NOT NULL AND revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_classroom_progress_recent ON classroom_progress(wx_user_id, last_played_at DESC);
