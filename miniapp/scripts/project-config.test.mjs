@@ -5,6 +5,7 @@ import { resolve } from 'node:path'
 const projectConfig = JSON.parse(readFileSync(resolve('project.config.json'), 'utf8'))
 const manifest = JSON.parse(readFileSync(resolve('src/manifest.json'), 'utf8'))
 const packageJson = JSON.parse(readFileSync(resolve('package.json'), 'utf8'))
+const pagesConfig = JSON.parse(readFileSync(resolve('src/pages.json'), 'utf8'))
 const productionWeChatAppId = 'wx7d12bddbec8e17f7'
 
 assert.equal(
@@ -72,5 +73,47 @@ assert.match(apiBaseValidation, /\.local/, 'production API validation should rej
 assert.match(apiBaseValidation, /yourdomain/, 'production API validation should reject placeholder hosts')
 assert.doesNotMatch(qa, /\nnpm run build:h5\n/, 'QA automation should not suggest production H5 build without VITE_API_BASE')
 assert.doesNotMatch(qa, /nine-xing\.local/, 'QA automation should not use .local placeholder API hosts')
+
+const mainPagePaths = pagesConfig.pages.map((page) => page.path)
+const expectedMainPages = [
+  'pages/index/index',
+  'pages/learn/learn',
+  'pages/booking/booking',
+  'pages/profile/profile',
+]
+assert.deepEqual(
+  [...mainPagePaths].sort(),
+  [...expectedMainPages].sort(),
+  'the main package should contain only tab pages',
+)
+
+const subpackagePagePaths = (pagesConfig.subPackages || []).flatMap((subpackage) =>
+  subpackage.pages.map((page) => `${subpackage.root}/${page.path}`.replace(/\/+/g, '/')),
+)
+const expectedSubpackagePages = [
+  'pages/test/test',
+  'pages/result/result',
+  'pages/relation/relation',
+  'pages/profile-edit/profile-edit',
+  'pages/booking-records/booking-records',
+  'pages/booking-detail/booking-detail',
+]
+assert.deepEqual(
+  [...subpackagePagePaths].sort(),
+  [...expectedSubpackagePages].sort(),
+  'all non-tab pages should be registered in subpackages without changing their URLs',
+)
+assert.equal(
+  new Set([...mainPagePaths, ...subpackagePagePaths]).size,
+  mainPagePaths.length + subpackagePagePaths.length,
+  'no page should be registered in both the main package and a subpackage',
+)
+for (const tab of pagesConfig.tabBar.list) {
+  assert.equal(
+    mainPagePaths.includes(tab.pagePath),
+    true,
+    `tabBar page ${tab.pagePath} must stay in the main package`,
+  )
+}
 
 console.log('project config tests passed')

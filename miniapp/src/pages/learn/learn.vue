@@ -14,6 +14,8 @@ const courseImageErrors = ref({})
 const typeImageErrors = ref({})
 const loading = ref(true)
 const loadError = ref('')
+const refreshError = ref('')
+const refreshing = ref(false)
 let loadTicket = 0
 
 function applyContent(cfg) {
@@ -26,7 +28,7 @@ function applyContent(cfg) {
 
 function showStoredContent() {
   const cached = getStoredSiteConfig()
-  if (!cached) return false
+  if (!cached || !hasSiteConfigLearningSection(cached)) return false
   applyContent(cached)
   loading.value = false
   loadError.value = ''
@@ -36,9 +38,13 @@ function showStoredContent() {
 async function loadContent(options = {}) {
   const silent = !!options.silent
   const ticket = ++loadTicket
-  if (!silent) {
+  if (silent) {
+    refreshing.value = true
+  } else {
+    refreshing.value = false
     loading.value = true
     loadError.value = ''
+    refreshError.value = ''
   }
   try {
     const cfg = await refreshSiteConfig()
@@ -46,8 +52,12 @@ async function loadContent(options = {}) {
     if (silent && !hasSiteConfigLearningSection(cfg)) return
     applyContent(cfg)
     loadError.value = ''
+    refreshError.value = ''
   } catch (e) {
     if (ticket !== loadTicket) return
+    if (silent) {
+      refreshError.value = userErrorMessage(e, '内容更新失败，请稍后重试')
+    }
     if (!silent) {
       teachers.value = normalizeTeachers()
       coursewareItems.value = normalizeCoursewareItems()
@@ -55,8 +65,15 @@ async function loadContent(options = {}) {
       loadError.value = userErrorMessage(e, '内容加载失败，请稍后重试')
     }
   } finally {
-    if (ticket === loadTicket) loading.value = false
+    if (ticket === loadTicket) {
+      if (silent) refreshing.value = false
+      loading.value = false
+    }
   }
+}
+
+function retryContentRefresh() {
+  return loadContent({ silent: true })
 }
 
 function teacherMediaKey(teacher, index) {
@@ -95,6 +112,15 @@ function goTest() {
       <text class="learn-hero__eyebrow">学习中心</text>
       <text class="learn-hero__title">跟着老师，把九型用进生活</text>
       <text class="learn-hero__lead">从理解自己开始，在关系与日常选择中练习更清醒的回应。</text>
+    </view>
+
+    <view v-if="refreshError" class="content-refresh-notice" aria-live="polite">
+      <text class="content-refresh-notice__text">{{ refreshError }}，当前仍展示上次内容。</text>
+      <button
+        class="refresh-retry"
+        :disabled="refreshing"
+        @click="retryContentRefresh"
+      >{{ refreshing ? '更新中…' : '重试' }}</button>
     </view>
 
     <view class="learn-sections">
@@ -223,6 +249,32 @@ function goTest() {
 .learn-hero__eyebrow { display: block; color: #ffffff; font-size: 24rpx; font-weight: 800; }
 .learn-hero__title { display: block; margin-top: 14rpx; color: #ffffff; font-size: 44rpx; font-weight: 900; line-height: 1.28; }
 .learn-hero__lead { display: block; margin-top: 16rpx; color: #ffffff; font-size: 26rpx; line-height: 1.65; }
+.content-refresh-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  padding: 20rpx 24rpx;
+  color: #52625b;
+  background: #f0fdf4;
+  border: 2rpx solid #bbf7d0;
+  border-radius: 24rpx;
+}
+.content-refresh-notice__text { flex: 1; font-size: 24rpx; line-height: 1.55; }
+.refresh-retry {
+  flex-shrink: 0;
+  min-height: 88rpx;
+  padding: 0 22rpx;
+  color: #0f6b4f;
+  font-size: 24rpx;
+  font-weight: 900;
+  background: #ffffff;
+  border: 2rpx solid #86efac;
+  border-radius: 16rpx;
+  line-height: 88rpx;
+}
+.refresh-retry::after { border: none; }
+.refresh-retry[disabled] { opacity: .6; }
 .learn-sections { display: flex; flex-direction: column; gap: 22rpx; }
 .learn-section { display: flex; flex-direction: column; padding: 30rpx; }
 .section-kicker { display: block; color: #0f766e; font-size: 24rpx; font-weight: 800; }

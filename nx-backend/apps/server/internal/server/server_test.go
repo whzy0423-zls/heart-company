@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -121,6 +122,32 @@ func testVbenCompatibleAPI(t *testing.T) {
 			t.Fatal(err)
 		}
 		config["site"].(map[string]any)["brandName"] = "九型芯之力"
+		home := config["home"].(map[string]any)
+		carousel := map[string]any{
+			"autoplay": true,
+			"interval": float64(4000),
+			"items": []any{map[string]any{
+				"enabled": true,
+				"image":   "https://nine-xing.oss-cn-hangzhou.aliyuncs.com/miniapp/carousel-1.webp",
+			}},
+		}
+		miniappHome := map[string]any{
+			"brand": map[string]any{"enabled": true, "name": "九型芯之力", "tagline": "看见动机，找到成长方向"},
+			"hero": map[string]any{
+				"enabled": true, "kicker": "老师导学", "title": "读懂自己", "description": "从核心动机出发", "buttonText": "开始人格测试",
+			},
+			"entriesSection": map[string]any{
+				"enabled": true, "title": "探索你的九型能量", "description": "选择此刻最需要的一步",
+				"items": []any{map[string]any{
+					"key": "test", "enabled": true, "title": "人格测试", "description": "找到核心动机", "icon": "compass", "theme": "blue",
+				}},
+			},
+			"growth": map[string]any{
+				"enabled": true, "eyebrow": "老师陪伴", "title": "把测试发现带进课程练习", "description": "让理解沉淀为行动",
+			},
+		}
+		home["miniappCarousel"] = carousel
+		home["miniappHome"] = miniappHome
 
 		response := perform(handler, http.MethodPut, "/api/site-config", adminToken, config)
 		body := decodeBody(t, response)
@@ -131,6 +158,26 @@ func testVbenCompatibleAPI(t *testing.T) {
 		nextRaw, _ := os.ReadFile(configPath)
 		if !bytes.Contains(nextRaw, []byte("九型芯之力")) {
 			t.Fatal("expected file to be updated")
+		}
+
+		publicResponse := perform(handler, http.MethodGet, "/api/public/site-config", "", nil)
+		publicBody := decodeBody(t, publicResponse)
+		if publicResponse.Code != http.StatusOK || publicBody.Code != 0 {
+			t.Fatalf("expected public site config success, got status=%d body=%+v", publicResponse.Code, publicBody)
+		}
+		publicConfig := publicBody.Data.(map[string]any)
+		publicHome := publicConfig["home"].(map[string]any)
+		if !reflect.DeepEqual(publicHome["miniappHome"], miniappHome) {
+			t.Fatalf("expected miniappHome to survive authenticated update and public read: got=%#v want=%#v", publicHome["miniappHome"], miniappHome)
+		}
+		if !reflect.DeepEqual(publicHome["miniappCarousel"], carousel) {
+			t.Fatalf("expected miniappCarousel to remain unchanged: got=%#v want=%#v", publicHome["miniappCarousel"], carousel)
+		}
+		publicCarousel := publicHome["miniappCarousel"].(map[string]any)
+		publicItems := publicCarousel["items"].([]any)
+		publicImage := publicItems[0].(map[string]any)["image"]
+		if publicImage != "https://nine-xing.oss-cn-hangzhou.aliyuncs.com/miniapp/carousel-1.webp" {
+			t.Fatalf("expected OSS carousel URL to remain unchanged, got %v", publicImage)
 		}
 	})
 

@@ -7,24 +7,6 @@
       }
     },
     {
-      "path": "pages/test/test",
-      "style": {
-        "navigationBarTitleText": "九型性格测试"
-      }
-    },
-    {
-      "path": "pages/result/result",
-      "style": {
-        "navigationBarTitleText": "你的性格芯片"
-      }
-    },
-    {
-      "path": "pages/relation/relation",
-      "style": {
-        "navigationBarTitleText": "九型关系合盘"
-      }
-    },
-    {
       "path": "pages/learn/learn",
       "style": {
         "navigationBarTitleText": "学一学"
@@ -37,28 +19,78 @@
       }
     },
     {
-      "path": "pages/profile-edit/profile-edit",
-      "style": {
-        "navigationBarTitleText": "个人资料"
-      }
-    },
-    {
-      "path": "pages/booking-records/booking-records",
-      "style": {
-        "navigationBarTitleText": "预约记录"
-      }
-    },
-    {
-      "path": "pages/booking-detail/booking-detail",
-      "style": {
-        "navigationBarTitleText": "预约详情"
-      }
-    },
-    {
       "path": "pages/profile/profile",
       "style": {
         "navigationBarTitleText": "我的"
       }
+    }
+  ],
+  "subPackages": [
+    {
+      "root": "pages/test",
+      "pages": [
+        {
+          "path": "test",
+          "style": {
+            "navigationBarTitleText": "九型性格测试"
+          }
+        }
+      ]
+    },
+    {
+      "root": "pages/result",
+      "pages": [
+        {
+          "path": "result",
+          "style": {
+            "navigationBarTitleText": "你的性格芯片"
+          }
+        }
+      ]
+    },
+    {
+      "root": "pages/relation",
+      "pages": [
+        {
+          "path": "relation",
+          "style": {
+            "navigationBarTitleText": "九型关系合盘"
+          }
+        }
+      ]
+    },
+    {
+      "root": "pages/profile-edit",
+      "pages": [
+        {
+          "path": "profile-edit",
+          "style": {
+            "navigationBarTitleText": "个人资料"
+          }
+        }
+      ]
+    },
+    {
+      "root": "pages/booking-records",
+      "pages": [
+        {
+          "path": "booking-records",
+          "style": {
+            "navigationBarTitleText": "预约记录"
+          }
+        }
+      ]
+    },
+    {
+      "root": "pages/booking-detail",
+      "pages": [
+        {
+          "path": "booking-detail",
+          "style": {
+            "navigationBarTitleText": "预约详情"
+          }
+        }
+      ]
     }
   ],
   "tabBar": {

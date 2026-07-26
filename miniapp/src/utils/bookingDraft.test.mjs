@@ -19,6 +19,34 @@ const { loadBookingDraft, saveBookingDraft, clearBookingDraft, BOOKING_DRAFT_KEY
 
 assert.deepEqual(loadBookingDraft(), null, 'empty storage should not return a draft')
 
+storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: 'consult' } }
+assert.equal(loadBookingDraft(), null, 'the untouched default form should not be restored as a draft')
+
+storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: '   ' } }
+assert.equal(loadBookingDraft(), null, 'a whitespace-only booking kind should normalize to the default kind')
+
+storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: ' consult ' } }
+assert.equal(loadBookingDraft(), null, 'a padded default kind should not make an untouched form meaningful')
+
+storage[BOOKING_DRAFT_KEY] = {
+  ts: 1,
+  data: { kind: 'consult', contactName: '  ', phone: '\n', intent: '', preferredTime: '', message: '\t' },
+}
+assert.equal(loadBookingDraft(), null, 'whitespace-only default fields should not count as a meaningful draft')
+
+storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: 'course' } }
+assert.deepEqual(loadBookingDraft(), {
+  kind: 'course',
+  contactName: '',
+  phone: '',
+  intent: '',
+  preferredTime: '',
+  message: '',
+}, 'a non-default booking kind should remain a meaningful draft')
+
+storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: 'consult', message: ' 需要回电 ' } }
+assert.equal(loadBookingDraft().message, ' 需要回电 ', 'any non-blank field should keep the default-kind draft meaningful')
+
 saveBookingDraft({
   kind: 'course',
   contactName: ' 小九 ',
@@ -62,6 +90,9 @@ assert.equal(loadBookingDraft(), null, 'corrupt serialized storage should be ign
 
 storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: 'future-kind', contactName: '未来类型' } }
 assert.equal(loadBookingDraft().kind, 'future-kind', 'unknown kinds should remain data-safe for the page fallback guard')
+
+storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: ' future-kind ' } }
+assert.equal(loadBookingDraft().kind, 'future-kind', 'meaningful unknown kinds should remain forward-compatible after trimming')
 
 globalThis.uni = {
   getStorageSync() { throw new Error('storage unavailable') },
