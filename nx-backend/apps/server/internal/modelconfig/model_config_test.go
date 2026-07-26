@@ -224,6 +224,45 @@ func TestApplyXinzhiliVoiceNormalizesDefaultsAndConfiguration(t *testing.T) {
 	}
 }
 
+func TestApplyXinzhiliVoiceSiliconFlowFreePresetNormalizesAndValidates(t *testing.T) {
+	cfg := Config{XinzhiliVoice: XinzhiliVoiceConfig{
+		Enabled: true,
+		ASR: SpeechModelConfig{
+			Provider: " openai ",
+			APIBase:  " https://api.siliconflow.cn/v1/ ",
+			APIKey:   " siliconflow-key ",
+			Model:    " FunAudioLLM/SenseVoiceSmall ",
+			Language: " zh ",
+		},
+		TTS: SpeechModelConfig{
+			Provider:       ProviderOpenAICompatible,
+			APIBase:        " https://api.siliconflow.cn/v1/ ",
+			APIKey:         " siliconflow-key ",
+			Model:          " FunAudioLLM/CosyVoice2-0.5B ",
+			Voice:          " FunAudioLLM/CosyVoice2-0.5B:alex ",
+			ResponseFormat: " MP3 ",
+		},
+	}}
+
+	got := cfg.ApplyXinzhiliVoice()
+
+	if got.ASR.Provider != ProviderOpenAICompatible || got.TTS.Provider != ProviderOpenAICompatible {
+		t.Fatalf("SiliconFlow speech providers = %q/%q, want %q/%q", got.ASR.Provider, got.TTS.Provider, ProviderOpenAICompatible, ProviderOpenAICompatible)
+	}
+	if got.ASR.APIBase != "https://api.siliconflow.cn/v1" || got.TTS.APIBase != "https://api.siliconflow.cn/v1" {
+		t.Fatalf("SiliconFlow API base was not normalized: asr=%q tts=%q", got.ASR.APIBase, got.TTS.APIBase)
+	}
+	if got.ASR.Model != "FunAudioLLM/SenseVoiceSmall" || got.TTS.Model != "FunAudioLLM/CosyVoice2-0.5B" {
+		t.Fatalf("unexpected SiliconFlow models: asr=%q tts=%q", got.ASR.Model, got.TTS.Model)
+	}
+	if got.TTS.Voice != "FunAudioLLM/CosyVoice2-0.5B:alex" || got.TTS.ResponseFormat != "mp3" {
+		t.Fatalf("unexpected SiliconFlow TTS options: voice=%q format=%q", got.TTS.Voice, got.TTS.ResponseFormat)
+	}
+	if err := got.ValidateReady(); err != nil {
+		t.Fatalf("SiliconFlow free preset should be ready: %v", err)
+	}
+}
+
 func TestXinzhiliVoiceValidateReadyRequiresEnabledASRAndTTS(t *testing.T) {
 	cases := []XinzhiliVoiceConfig{
 		{},
@@ -252,5 +291,50 @@ func TestMergeIncomingPreservesXinzhiliSpeechKeys(t *testing.T) {
 
 	if got.XinzhiliVoice.ASR.APIKey != "asr-secret" || got.XinzhiliVoice.TTS.APIKey != "tts-secret" {
 		t.Fatalf("expected xinzhili keys to be preserved: %+v", got.XinzhiliVoice)
+	}
+}
+
+func TestMergeIncomingPreservesSiliconFlowSpeechKeysOnPartialUpdate(t *testing.T) {
+	var stored Config
+	if err := json.Unmarshal([]byte(`{
+		"xinzhiliVoice": {
+			"enabled": true,
+			"asr": {
+				"provider": "openai-compatible",
+				"apiBase": "https://api.siliconflow.cn/v1",
+				"apiKey": "stored-siliconflow-key",
+				"model": "FunAudioLLM/SenseVoiceSmall",
+				"language": "zh"
+			},
+			"tts": {
+				"provider": "openai-compatible",
+				"apiBase": "https://api.siliconflow.cn/v1",
+				"apiKey": "stored-siliconflow-key",
+				"model": "FunAudioLLM/CosyVoice2-0.5B",
+				"voice": "FunAudioLLM/CosyVoice2-0.5B:alex",
+				"responseFormat": "mp3"
+			}
+		}
+	}`), &stored); err != nil {
+		t.Fatal(err)
+	}
+	var incoming Config
+	if err := json.Unmarshal([]byte(`{
+		"xinzhiliVoice": {
+			"enabled": true,
+			"asr": {"apiBase": "https://api.siliconflow.cn/v1", "model": "FunAudioLLM/SenseVoiceSmall"},
+			"tts": {"apiBase": "https://api.siliconflow.cn/v1", "model": "FunAudioLLM/CosyVoice2-0.5B", "voice": "FunAudioLLM/CosyVoice2-0.5B:alex"}
+		}
+	}`), &incoming); err != nil {
+		t.Fatal(err)
+	}
+
+	got := stored.MergeIncoming(incoming).ApplyXinzhiliVoice()
+
+	if got.ASR.APIKey != "stored-siliconflow-key" || got.TTS.APIKey != "stored-siliconflow-key" {
+		t.Fatalf("partial SiliconFlow update lost speech API keys: asr=%q tts=%q", got.ASR.APIKey, got.TTS.APIKey)
+	}
+	if err := got.ValidateReady(); err != nil {
+		t.Fatalf("partial SiliconFlow update should remain ready: %v", err)
 	}
 }
