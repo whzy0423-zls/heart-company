@@ -101,8 +101,7 @@ export interface ClassroomSeriesCreatePayload {
   title: string;
 }
 
-export interface ClassroomSeriesUpdatePayload
-  extends ClassroomSeriesCreatePayload {
+export interface ClassroomSeriesUpdatePayload extends ClassroomSeriesCreatePayload {
   expectedUpdatedAt: string;
 }
 
@@ -123,8 +122,7 @@ export interface ClassroomContentCreatePayload {
   title: string;
 }
 
-export interface ClassroomContentUpdatePayload
-  extends ClassroomContentCreatePayload {
+export interface ClassroomContentUpdatePayload extends ClassroomContentCreatePayload {
   expectedUpdatedAt: string;
 }
 

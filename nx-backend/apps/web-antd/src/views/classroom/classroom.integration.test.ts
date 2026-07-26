@@ -128,18 +128,34 @@ describe('classroom upload retry identity and persisted progress integration', (
   });
 
   async function mountUploadTasks(taskValue = task) {
-    mocks.uploadTasks.mockResolvedValue({ items: [taskValue], page: 1, pageSize: 50, total: 1 });
+    mocks.uploadTasks.mockResolvedValue({
+      items: [taskValue],
+      page: 1,
+      pageSize: 50,
+      total: 1,
+    });
     const { defineComponent, h } = await import('vue');
     const { default: UploadTasks } = await import('./upload-tasks.vue');
-    const Host = defineComponent({ setup: () => () => h(UploadTasks, { canUpload: true, contents: [{ id: 7, title: '课件', status: 'draft' }] as any }) });
+    const Host = defineComponent({
+      setup: () => () =>
+        h(UploadTasks, {
+          canUpload: true,
+          contents: [{ id: 7, title: '课件', status: 'draft' }] as any,
+        }),
+    });
     const wrapper = mountVueComponent(Host);
     await flushVuePromises();
     return wrapper;
   }
 
   function choose(file: File) {
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
-    Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+    const input = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [file],
+    });
     input.dispatchEvent(new Event('change'));
   }
 
@@ -177,11 +193,24 @@ describe('classroom upload retry identity and persisted progress integration', (
     const mergeSpy = vi.spyOn(uploadFlow, 'mergeUploadProgress');
     vi.useFakeTimers();
     mocks.uploadTasks
-      .mockResolvedValueOnce({ items: [{ ...task, progressPercent: 42, completedBytes: 2 }], page: 1, pageSize: 50, total: 1 })
-      .mockResolvedValueOnce({ items: [{ ...task, progressPercent: 76, completedBytes: 3 }], page: 1, pageSize: 50, total: 1 });
+      .mockResolvedValueOnce({
+        items: [{ ...task, progressPercent: 42, completedBytes: 2 }],
+        page: 1,
+        pageSize: 50,
+        total: 1,
+      })
+      .mockResolvedValueOnce({
+        items: [{ ...task, progressPercent: 76, completedBytes: 3 }],
+        page: 1,
+        pageSize: 50,
+        total: 1,
+      });
     const { defineComponent, h } = await import('vue');
     const { default: UploadTasks } = await import('./upload-tasks.vue');
-    const Host = defineComponent({ setup: () => () => h(UploadTasks, { canUpload: true, contents: [] as any }) });
+    const Host = defineComponent({
+      setup: () => () =>
+        h(UploadTasks, { canUpload: true, contents: [] as any }),
+    });
     const wrapper = mountVueComponent(Host);
     await flushVuePromises();
     expect(mergeSpy).toHaveBeenCalled();
