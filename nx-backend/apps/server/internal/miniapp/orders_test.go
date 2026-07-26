@@ -116,15 +116,15 @@ func TestMarkOrderPaidRejectsMembershipWithoutDuration(t *testing.T) {
 	if _, err := store.MarkOrderPaid(context.Background(), "member-order", "wx-transaction"); err == nil {
 		t.Fatal("expected a new membership order without an explicit duration to fail")
 	}
-	if state.membershipGrantCount != 0 {
-		t.Fatalf("invalid membership must not grant entitlement, grants=%d", state.membershipGrantCount)
+	if state.membershipGrantCount != 0 || state.commitCount != 0 || state.rollbackCount != 1 {
+		t.Fatalf("invalid membership must rollback without commit, grants=%d commits=%d rollbacks=%d", state.membershipGrantCount, state.commitCount, state.rollbackCount)
 	}
 }
 
-func TestRevokeMembershipClearsAuthoritativeFields(t *testing.T) {
+func TestRevokeAllMembershipClearsAuthoritativeFields(t *testing.T) {
 	state := &orderTestState{}
 	store := newOrderTestStore(t, state)
-	if err := store.RevokeMembership(context.Background(), 7); err != nil {
+	if err := store.RevokeAllMembership(context.Background(), 7); err != nil {
 		t.Fatal(err)
 	}
 	if !state.membershipRevoked {
@@ -175,6 +175,8 @@ type orderTestState struct {
 	membershipDurationDays            int
 	membershipRenewsFromCurrentExpiry bool
 	membershipRevoked                 bool
+	commitCount                       int
+	rollbackCount                     int
 }
 
 type orderTestDriver struct{}
@@ -191,9 +193,9 @@ type orderTestConn struct {
 
 func (c *orderTestConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
 func (c *orderTestConn) Close() error                        { return nil }
-func (c *orderTestConn) Begin() (driver.Tx, error)           { return orderTestTx{}, nil }
+func (c *orderTestConn) Begin() (driver.Tx, error)           { return &orderTestTx{state: c.state}, nil }
 func (c *orderTestConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
-	return orderTestTx{}, nil
+	return &orderTestTx{state: c.state}, nil
 }
 
 func (c *orderTestConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
@@ -269,10 +271,22 @@ func (c *orderTestConn) QueryContext(_ context.Context, query string, args []dri
 
 func (c *orderTestConn) CheckNamedValue(*driver.NamedValue) error { return nil }
 
-type orderTestTx struct{}
+type orderTestTx struct {
+	state     *orderTestState
+	committed bool
+}
 
-func (orderTestTx) Commit() error   { return nil }
-func (orderTestTx) Rollback() error { return nil }
+func (tx *orderTestTx) Commit() error {
+	tx.committed = true
+	tx.state.commitCount++
+	return nil
+}
+func (tx *orderTestTx) Rollback() error {
+	if !tx.committed {
+		tx.state.rollbackCount++
+	}
+	return nil
+}
 
 type orderTestRows struct {
 	columns []string
@@ -296,5 +310,5 @@ var _ driver.ConnBeginTx = (*orderTestConn)(nil)
 var _ driver.ExecerContext = (*orderTestConn)(nil)
 var _ driver.QueryerContext = (*orderTestConn)(nil)
 var _ driver.NamedValueChecker = (*orderTestConn)(nil)
-var _ driver.Tx = orderTestTx{}
+var _ driver.Tx = (*orderTestTx)(nil)
 var _ driver.Rows = (*orderTestRows)(nil)

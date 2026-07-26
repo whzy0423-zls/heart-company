@@ -91,6 +91,7 @@ type Server struct {
 	miniappAdmin          miniappAdminReader
 	wx                    *wechat.Client
 	pay                   *wxpay.Client
+	payNotifyParser       func(http.Header, []byte) (wxpay.CallbackResult, error)
 	ragGen                rag.Generator
 	analysisGen           *llm.MiniMaxGenerator
 	ragDocs               ragDocumentStore

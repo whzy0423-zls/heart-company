@@ -254,10 +254,11 @@ func (s *Store) MarkOrderPaid(ctx context.Context, outTradeNo, transactionID str
 	return true, nil
 }
 
-// RevokeMembership immediately removes miniapp membership (for a refund or
-// manual revocation). Classroom entitlement checks use the same wx_users
-// fields, so no second membership source can remain active.
-func (s *Store) RevokeMembership(ctx context.Context, userID int64) error {
+// RevokeAllMembership is an administrator-level full entitlement revocation.
+// It deliberately clears every membership period for the user. It is not an
+// order refund operation; order-scoped refund and audit handling must account
+// for other paid periods before calling or superseding this boundary.
+func (s *Store) RevokeAllMembership(ctx context.Context, userID int64) error {
 	c, cancel := s.ctx(ctx)
 	defer cancel()
 	if userID <= 0 {

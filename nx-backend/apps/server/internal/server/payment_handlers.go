@@ -223,7 +223,11 @@ func (s *Server) payNotify(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "read body failed")
 		return
 	}
-	result, err := s.pay.ParseCallbackWithHeaders(r.Header, raw)
+	parseCallback := s.pay.ParseCallbackWithHeaders
+	if s.payNotifyParser != nil {
+		parseCallback = s.payNotifyParser
+	}
+	result, err := parseCallback(r.Header, raw)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"code": "FAIL", "message": err.Error()})
