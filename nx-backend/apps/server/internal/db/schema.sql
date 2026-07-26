@@ -2564,4 +2564,5 @@ CREATE INDEX IF NOT EXISTS idx_classroom_entitlements_user ON classroom_entitlem
 -- and therefore permanently blocked renewal rows after an entitlement expired.
 DROP INDEX IF EXISTS uq_classroom_entitlement_active_series;
 DROP INDEX IF EXISTS uq_classroom_entitlement_active_content;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_classroom_entitlements_order ON classroom_entitlements(order_id) WHERE order_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_classroom_progress_recent ON classroom_progress(wx_user_id, last_played_at DESC);

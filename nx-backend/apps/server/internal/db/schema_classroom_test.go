@@ -93,3 +93,15 @@ func TestClassroomEntitlementSchemaDropsLegacyRenewalBlockingIndexes(t *testing.
 		}
 	}
 }
+
+func TestClassroomEntitlementsHaveOrderIdempotencyIndex(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(raw)
+	statement := "CREATE UNIQUE INDEX IF NOT EXISTS uq_classroom_entitlements_order ON classroom_entitlements(order_id) WHERE order_id IS NOT NULL"
+	if !strings.Contains(sql, statement) {
+		t.Fatalf("schema is missing order entitlement idempotency index %q", statement)
+	}
+}

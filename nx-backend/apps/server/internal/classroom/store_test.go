@@ -185,6 +185,10 @@ func TestStoreOptimisticUpdateRequiresVersionAndDetectsStaleWrite(t *testing.T) 
 	if _, err := NewStore(nil).UpdateSeries(context.Background(), series, time.Time{}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("zero expectedUpdatedAt error = %v, want ErrConflict", err)
 	}
+	content := Content{ID: 4, Title: "课时", ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}
+	if _, err := NewStore(nil).UpdateContent(context.Background(), content, time.Time{}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("zero content expectedUpdatedAt error = %v, want ErrConflict", err)
+	}
 
 	db := openClassroomQueryDB(t, func(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
 		if strings.Contains(query, "FROM classroom_series WHERE id") {
@@ -203,11 +207,14 @@ func TestStoreOptimisticUpdateRequiresVersionAndDetectsStaleWrite(t *testing.T) 
 func TestStoreOptimisticUpdateSucceedsWithMatchingVersion(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	series := Series{ID: 3, Title: "系列", Status: SeriesDraft, AccessLevel: AccessPublic, UpdatedAt: now}
-	db := openClassroomQueryDB(t, func(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	db := openClassroomQueryDB(t, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 		if strings.Contains(query, "FROM classroom_series WHERE id") {
 			return classroomRows(seriesColumns, [][]driver.Value{seriesValues(series)}), nil
 		}
 		if strings.Contains(query, "UPDATE classroom_series") {
+			if len(args) != 15 || args[14].Value != now {
+				t.Fatalf("series CAS args = %+v", args)
+			}
 			return classroomRows([]string{"created_at", "updated_at"}, [][]driver.Value{{now.Add(-time.Hour), now.Add(time.Second)}}), nil
 		}
 		return nil, fmt.Errorf("unexpected query: %s", query)
@@ -283,5 +290,163 @@ func seriesValues(s Series) []driver.Value {
 var contentColumns = []string{"id", "series_id", "show_as_standalone", "title", "description", "content_type", "media_asset_id", "cover_url", "duration_seconds", "teacher_key", "teacher_name_snapshot", "recorded_at", "badge", "tags", "episode_no", "sort_order", "status", "playback_blocked", "access_level", "price_cents", "published_at", "created_by", "updated_by", "created_at", "updated_at"}
 
 func contentValues(c Content) []driver.Value {
-	return []driver.Value{c.ID, nil, c.ShowAsStandalone, c.Title, c.Description, string(c.ContentType), nil, c.CoverURL, int64(c.DurationSeconds), c.TeacherKey, c.TeacherNameSnapshot, nil, c.Badge, []byte(`[]`), int64(c.EpisodeNo), int64(c.SortOrder), string(c.Status), c.PlaybackBlocked, string(c.AccessLevel), int64(c.PriceCents), nil, nil, nil, c.CreatedAt, c.UpdatedAt}
+	return []driver.Value{c.ID, nullableInt64(c.SeriesID), c.ShowAsStandalone, c.Title, c.Description, string(c.ContentType), nullableInt64(c.MediaAssetID), c.CoverURL, int64(c.DurationSeconds), c.TeacherKey, c.TeacherNameSnapshot, nullableTime(c.RecordedAt), c.Badge, []byte(`[]`), int64(c.EpisodeNo), int64(c.SortOrder), string(c.Status), c.PlaybackBlocked, string(c.AccessLevel), int64(c.PriceCents), nullableTime(c.PublishedAt), nullableInt64(c.CreatedBy), nullableInt64(c.UpdatedBy), c.CreatedAt, c.UpdatedAt}
+}
+func nullableInt64(value *int64) driver.Value {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+func nullableTime(value *time.Time) driver.Value {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func TestStoreCreateOnlyAcceptsDraftInitialState(t *testing.T) {
+	for _, status := range []SeriesStatus{SeriesPublished, SeriesOffline} {
+		_, err := NewStore(nil).CreateSeries(context.Background(), Series{Title: "非法初态", Status: status, AccessLevel: AccessPublic})
+		if err == nil {
+			t.Fatalf("CreateSeries accepted initial status %q", status)
+		}
+	}
+	for _, status := range []ContentStatus{ContentProcessing, ContentReady, ContentPublished, ContentOffline, ContentFailed} {
+		_, err := NewStore(nil).CreateContent(context.Background(), Content{Title: "非法初态", ContentType: ContentVideo, Status: status, AccessLevel: AccessPublic})
+		if err == nil {
+			t.Fatalf("CreateContent accepted initial status %q", status)
+		}
+	}
+}
+
+func TestStorePublishedContentUpdateLocksValidationRowsInTransaction(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	mediaID, seriesID := int64(9), int64(3)
+	current := Content{ID: 7, SeriesID: &seriesID, Title: "已发布", ContentType: ContentVideo, MediaAssetID: &mediaID, Status: ContentPublished, AccessLevel: AccessInherit, UpdatedAt: now}
+	parent := Series{ID: seriesID, Title: "系列", Status: SeriesPublished, AccessLevel: AccessPublic, UpdatedAt: now}
+	media := MediaAsset{ID: mediaID, Bucket: "private", ObjectKey: "classroom/video/9.mp4", ETag: "etag", Checksum: "sum", ContentType: ContentVideo, SizeBytes: 10, DurationSeconds: 2, StorageStatus: MediaReady}
+	state := &classroomTxState{}
+	db := openClassroomTxDB(t, state, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "FROM classroom_contents WHERE id"):
+			if !strings.Contains(query, "FOR UPDATE") {
+				t.Fatalf("content validation query lacks FOR UPDATE: %s", query)
+			}
+			return classroomRows(contentColumns, [][]driver.Value{contentValues(current)}), nil
+		case strings.Contains(query, "FROM classroom_media_assets WHERE id"):
+			if !strings.Contains(query, "FOR UPDATE") {
+				t.Fatalf("media validation query lacks FOR UPDATE: %s", query)
+			}
+			return classroomRows(mediaColumns, [][]driver.Value{mediaValues(media)}), nil
+		case strings.Contains(query, "FROM classroom_series WHERE id"):
+			if !strings.Contains(query, "FOR UPDATE") {
+				t.Fatalf("parent series query lacks FOR UPDATE: %s", query)
+			}
+			return classroomRows(seriesColumns, [][]driver.Value{seriesValues(parent)}), nil
+		case strings.Contains(query, "UPDATE classroom_contents"):
+			if len(args) != 23 || args[22].Value != now {
+				t.Fatalf("content CAS args = %+v", args)
+			}
+			return classroomRows([]string{"created_at", "updated_at"}, [][]driver.Value{{now.Add(-time.Hour), now.Add(time.Second)}}), nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", query)
+		}
+	})
+	updated, err := NewStore(db).UpdateContent(context.Background(), current, now)
+	if err != nil {
+		t.Fatalf("published update: %v", err)
+	}
+	if !state.began || !state.committed || state.rolledBack {
+		t.Fatalf("transaction state: %+v", state)
+	}
+	if !updated.UpdatedAt.Equal(now.Add(time.Second)) {
+		t.Fatalf("updated timestamp = %v", updated.UpdatedAt)
+	}
+}
+
+func TestStoreDatabaseErrorsIncludeOperationContext(t *testing.T) {
+	sentinel := errors.New("db unavailable")
+	db := openClassroomQueryDB(t, func(_ context.Context, _ string, _ []driver.NamedValue) (driver.Rows, error) { return nil, sentinel })
+	_, err := NewStore(db).GetSeries(context.Background(), 1)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("wrapped error lost cause: %v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "get classroom series") {
+		t.Fatalf("database error lacks operation context: %v", err)
+	}
+}
+
+var mediaColumns = []string{"id", "bucket", "object_key", "etag", "checksum", "content_type", "size_bytes", "duration_seconds", "width", "height", "cover_object_key", "storage_status", "created_by", "created_at", "updated_at"}
+
+func mediaValues(m MediaAsset) []driver.Value {
+	return []driver.Value{m.ID, m.Bucket, m.ObjectKey, m.ETag, m.Checksum, string(m.ContentType), m.SizeBytes, int64(m.DurationSeconds), int64(m.Width), int64(m.Height), m.CoverObjectKey, string(m.StorageStatus), nil, m.CreatedAt, m.UpdatedAt}
+}
+
+type classroomTxState struct{ began, committed, rolledBack bool }
+
+func openClassroomTxDB(t *testing.T, state *classroomTxState, query func(context.Context, string, []driver.NamedValue) (driver.Rows, error)) *sql.DB {
+	t.Helper()
+	name := fmt.Sprintf("classroom_tx_test_%d", classroomDriverSequence.Add(1))
+	sql.Register(name, classroomTxDriver{state: state, query: query})
+	db, err := sql.Open(name, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+type classroomTxDriver struct {
+	state *classroomTxState
+	query func(context.Context, string, []driver.NamedValue) (driver.Rows, error)
+}
+
+func (d classroomTxDriver) Open(string) (driver.Conn, error) {
+	return &classroomTxConn{state: d.state, query: d.query}, nil
+}
+
+type classroomTxConn struct {
+	state *classroomTxState
+	query func(context.Context, string, []driver.NamedValue) (driver.Rows, error)
+}
+
+func (*classroomTxConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
+func (*classroomTxConn) Close() error                        { return nil }
+func (c *classroomTxConn) Begin() (driver.Tx, error) {
+	c.state.began = true
+	return classroomTx{state: c.state}, nil
+}
+func (c *classroomTxConn) QueryContext(ctx context.Context, q string, a []driver.NamedValue) (driver.Rows, error) {
+	return c.query(ctx, q, a)
+}
+
+type classroomTx struct{ state *classroomTxState }
+
+func (t classroomTx) Commit() error   { t.state.committed = true; return nil }
+func (t classroomTx) Rollback() error { t.state.rolledBack = true; return nil }
+
+func TestStoreContentOptimisticUpdateDetectsStaleVersion(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	content := Content{ID: 4, Title: "草稿", ContentType: ContentAudio, Status: ContentDraft, AccessLevel: AccessPublic, UpdatedAt: now}
+	state := &classroomTxState{}
+	db := openClassroomTxDB(t, state, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		if strings.Contains(query, "FROM classroom_contents WHERE id") {
+			return classroomRows(contentColumns, [][]driver.Value{contentValues(content)}), nil
+		}
+		if strings.Contains(query, "UPDATE classroom_contents") {
+			if len(args) != 23 || args[22].Value != now.Add(-time.Second) {
+				t.Fatalf("content stale CAS args = %+v", args)
+			}
+			return classroomRows([]string{"created_at", "updated_at"}, nil), nil
+		}
+		return nil, fmt.Errorf("unexpected query: %s", query)
+	})
+	_, err := NewStore(db).UpdateContent(context.Background(), content, now.Add(-time.Second))
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale content update error = %v, want ErrConflict", err)
+	}
+	if !state.began || !state.rolledBack || state.committed {
+		t.Fatalf("stale transaction state: %+v", state)
+	}
 }
