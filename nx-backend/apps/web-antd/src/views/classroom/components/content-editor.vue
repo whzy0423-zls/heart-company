@@ -23,6 +23,11 @@ import {
   setClassroomContentPriceApi,
   updateClassroomContentApi,
 } from '#/api/core/classroom';
+import {
+  contentMetadataPayload,
+  createContentDraftDefaults,
+  purchaseStrategyRequired,
+} from '../editor-model';
 
 const props = defineProps<{
   canPrice?: boolean;
@@ -38,19 +43,20 @@ const emit = defineEmits<{
 }>();
 
 const form = reactive<ClassroomContentCreatePayload>({
-  contentType: 'video',
-  showAsStandalone: true,
-  title: '',
+  ...contentMetadataPayload(createContentDraftDefaults()),
 });
 const accessLevel = ref<'inherit' | 'public' | 'login' | 'member' | 'paid'>(
-  'inherit',
+  'public',
 );
 const priceCents = ref(0);
 const saving = ref(false);
+const standalonePaidStrategy = ref<'content' | 'series'>('series');
 
 watch(
   () => props.content,
   (content) => {
+    for (const key of Object.keys(form))
+      delete (form as Record<string, unknown>)[key];
     Object.assign(
       form,
       content
@@ -70,9 +76,9 @@ watch(
             teacherName: content.teacherName,
             title: content.title,
           }
-        : { contentType: 'video', showAsStandalone: true, title: '' },
+        : contentMetadataPayload(createContentDraftDefaults()),
     );
-    accessLevel.value = content?.accessLevel ?? 'inherit';
+    accessLevel.value = content?.accessLevel ?? 'public';
     priceCents.value = content?.priceCents ?? 0;
   },
   { immediate: true },
@@ -80,18 +86,19 @@ watch(
 
 async function save() {
   if (!form.title.trim()) return message.warning('请填写课件标题');
-  if (standalonePaidPolicyError.value)
-    return message.warning('请先明确独立付费课件的购买策略');
+  if (!props.canWrite && !props.content) return;
   if (accessLevel.value === 'paid' && priceCents.value < 1)
     return message.warning('请填写有效单课价格');
   saving.value = true;
   try {
-    let saved = props.content
-      ? await updateClassroomContentApi(props.content.id, {
-          ...form,
-          expectedUpdatedAt: props.content.updatedAt,
-        })
-      : await createClassroomContentApi({ ...form });
+    let saved = props.content as ClassroomContent;
+    if (props.canWrite)
+      saved = props.content
+        ? await updateClassroomContentApi(props.content.id, {
+            ...contentMetadataPayload(form),
+            expectedUpdatedAt: props.content.updatedAt,
+          })
+        : await createClassroomContentApi(contentMetadataPayload(form));
     if (
       props.canPrice &&
       (saved.accessLevel !== accessLevel.value ||
@@ -105,6 +112,8 @@ async function save() {
     }
     message.success('课件已保存');
     emit('saved', saved);
+  } catch (cause) {
+    message.error(cause instanceof Error ? cause.message : '课件保存失败');
   } finally {
     saving.value = false;
   }
@@ -113,14 +122,30 @@ async function save() {
 const parentSeries = computed(() =>
   props.series.find((item) => item.id === form.seriesId),
 );
-const standalonePaidPolicyError = computed(() =>
-  Boolean(
-    form.showAsStandalone &&
-    form.seriesId &&
-    accessLevel.value === 'inherit' &&
-    parentSeries.value?.accessLevel === 'paid',
-  ),
+const standalonePaidPolicyError = computed(
+  () =>
+    purchaseStrategyRequired(
+      {
+        accessLevel: accessLevel.value,
+        seriesId: form.seriesId,
+        showAsStandalone: Boolean(form.showAsStandalone),
+      },
+      parentSeries.value,
+    ) && !standalonePaidStrategy.value,
 );
+
+watch(
+  () => form.seriesId,
+  (seriesId) => {
+    if (!seriesId) {
+      form.showAsStandalone = false;
+      if (accessLevel.value === 'inherit') accessLevel.value = 'public';
+    }
+  },
+);
+watch(accessLevel, (value) => {
+  if (value === 'inherit' && !form.seriesId) accessLevel.value = 'public';
+});
 
 watch(
   form,
@@ -146,12 +171,6 @@ watch(
         ><Radio.Button value="audio">音频课件</Radio.Button>
       </Radio.Group>
     </Form.Item>
-    <Form.Item label="内容入口">
-      <Radio.Group v-model:value="form.showAsStandalone">
-        <Radio :value="false">系列内容</Radio
-        ><Radio :value="true">独立内容</Radio>
-      </Radio.Group>
-    </Form.Item>
     <Form.Item label="所属系列">
       <Select
         v-model:value="form.seriesId"
@@ -160,12 +179,20 @@ watch(
         :options="series.map((item) => ({ label: item.title, value: item.id }))"
       />
     </Form.Item>
+    <Form.Item v-if="form.seriesId" label="展示入口">
+      <Checkbox v-model:checked="form.showAsStandalone"
+        >同时在独立内容入口展示</Checkbox
+      >
+      <span class="field-hint"
+        >关闭时仅作为系列内容展示；独立课件无需开启此项。</span
+      >
+    </Form.Item>
     <Form.Item label="访问权限">
       <Select
         v-model:value="accessLevel"
         :disabled="!canPrice"
         :options="[
-          { label: '继承系列', value: 'inherit' },
+          { label: '继承系列', value: 'inherit', disabled: !form.seriesId },
           { label: '公开', value: 'public' },
           { label: '登录后', value: 'login' },
           { label: '会员', value: 'member' },
@@ -186,11 +213,28 @@ watch(
       />
     </Form.Item>
     <Alert
-      v-if="standalonePaidPolicyError"
-      type="warning"
+      v-if="
+        purchaseStrategyRequired(
+          {
+            accessLevel,
+            seriesId: form.seriesId,
+            showAsStandalone: Boolean(form.showAsStandalone),
+          },
+          parentSeries,
+        )
+      "
+      type="info"
       show-icon
-      message="该课件以独立入口展示且继承付费系列；请明确采用“购买系列”策略，或将单课权限设为单课付费后再发布。"
-    />
+      message="该课件继承付费系列并在独立入口展示，请确认用户购买策略。"
+      ><template #description
+        ><Radio.Group v-model:value="standalonePaidStrategy"
+          ><Radio value="series">购买系列（推荐，解锁系列全部课件）</Radio
+          ><Radio value="content" disabled
+            >单课付费（请先将访问权限切换为单课付费）</Radio
+          ></Radio.Group
+        ></template
+      ></Alert
+    >
     <p v-else-if="form.showAsStandalone && form.seriesId" class="policy-hint">
       独立入口会展示购买策略：继承系列时购买系列；单课付费时购买本课。
     </p>
@@ -203,16 +247,13 @@ watch(
     <Form.Item label="排序"
       ><InputNumber v-model:value="form.sortOrder" :min="0"
     /></Form.Item>
-    <Checkbox v-model:checked="form.showAsStandalone"
-      >在独立内容入口展示</Checkbox
-    >
     <div class="editor-actions">
       <Space
         ><Button @click="emit('cancel')">取消</Button
         ><Button
           type="primary"
           :loading="saving"
-          :disabled="!canWrite"
+          :disabled="!canWrite && !content"
           @click="save"
           >保存课件</Button
         ></Space

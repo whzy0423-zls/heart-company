@@ -25,13 +25,19 @@ import {
 import ContentEditor from './components/content-editor.vue';
 import SeriesView from './series.vue';
 import UploadTasks from './upload-tasks.vue';
+import {
+  classroomOperationError,
+  classroomPermissions,
+} from './classroom-view-model';
 
 const accessStore = useAccessStore();
-const access = (code: string) => accessStore.accessCodes.includes(code);
-const canUpload = computed(() => access('Miniapp:Classroom:Upload'));
-const canPublish = computed(() => access('Miniapp:Classroom:Publish'));
-const canPrice = computed(() => access('Miniapp:Classroom:Price'));
-const canWrite = computed(() => access('Miniapp:Classroom:Write'));
+const permissions = computed(() =>
+  classroomPermissions(accessStore.accessCodes),
+);
+const canUpload = computed(() => permissions.value.canUpload);
+const canPublish = computed(() => permissions.value.canPublish);
+const canPrice = computed(() => permissions.value.canPrice);
+const canWrite = computed(() => permissions.value.canWrite);
 const activeTab = ref('contents');
 const loading = ref(false);
 const error = ref('');
@@ -39,6 +45,7 @@ const contents = ref<ClassroomContent[]>([]);
 const series = ref<ClassroomSeries[]>([]);
 const editorOpen = ref(false);
 const editing = ref<ClassroomContent>();
+const actionLoadingId = ref<number>();
 const columns = [
   { dataIndex: 'title', title: '课件' },
   { dataIndex: 'contentType', title: '类型' },
@@ -77,7 +84,7 @@ async function load() {
 }
 function confirmLifecycle(
   record: ClassroomContent,
-  action: 'publish' | 'offline' | 'block',
+  action: 'publish' | 'offline' | 'block' | 'unblock',
 ) {
   Modal.confirm({
     title:
@@ -85,27 +92,37 @@ function confirmLifecycle(
         ? '发布课件？'
         : action === 'offline'
           ? '下线课件？'
-          : '阻断播放？',
+          : action === 'block'
+            ? '阻断播放？'
+            : '恢复播放？',
     content: '请确认该操作及其对用户的影响。',
     async onOk() {
-      if (action === 'publish')
-        await publishClassroomContentApi(record.id, {
-          expectedUpdatedAt: record.updatedAt,
-        });
-      else if (action === 'offline')
-        await offlineClassroomContentApi(record.id, {
-          expectedUpdatedAt: record.updatedAt,
-          reason: '后台操作',
-        });
-      else
-        await setClassroomContentPlaybackBlockedApi(
-          record.id,
-          true,
-          record.updatedAt,
-          '后台操作',
-        );
-      message.success('操作成功');
-      await load();
+      actionLoadingId.value = record.id;
+      try {
+        if (action === 'publish')
+          await publishClassroomContentApi(record.id, {
+            expectedUpdatedAt: record.updatedAt,
+          });
+        else if (action === 'offline')
+          await offlineClassroomContentApi(record.id, {
+            expectedUpdatedAt: record.updatedAt,
+            reason: '后台操作',
+          });
+        else
+          await setClassroomContentPlaybackBlockedApi(
+            record.id,
+            action === 'block',
+            record.updatedAt,
+            '后台操作',
+          );
+        message.success('操作成功');
+        await load();
+      } catch (cause) {
+        message.error(classroomOperationError(cause, '操作失败'));
+        throw cause;
+      } finally {
+        actionLoadingId.value = undefined;
+      }
     },
   });
 }
@@ -171,15 +188,22 @@ onMounted(load);
             <Space v-else-if="column.key === 'action'">
               <Button
                 v-if="canPublish && record.status !== 'published'"
+                :loading="actionLoadingId === record.id"
                 @click="confirmLifecycle(record as ClassroomContent, 'publish')"
                 >发布</Button
               >
               <Button
                 v-if="canPublish && record.status === 'published'"
+                :loading="actionLoadingId === record.id"
                 @click="confirmLifecycle(record as ClassroomContent, 'offline')"
                 >下线</Button
               >
-              <Button v-if="canPrice" disabled title="价格在编辑器中配置"
+              <Button
+                v-if="canPrice"
+                @click="
+                  editing = record as ClassroomContent;
+                  editorOpen = true;
+                "
                 >定价</Button
               >
               <Button
@@ -193,8 +217,14 @@ onMounted(load);
               <Button
                 v-if="canPublish"
                 danger
-                @click="confirmLifecycle(record as ClassroomContent, 'block')"
-                >阻断播放</Button
+                :loading="actionLoadingId === record.id"
+                @click="
+                  confirmLifecycle(
+                    record as ClassroomContent,
+                    record.playbackBlocked ? 'unblock' : 'block',
+                  )
+                "
+                >{{ record.playbackBlocked ? '恢复播放' : '阻断播放' }}</Button
               >
             </Space>
           </template>

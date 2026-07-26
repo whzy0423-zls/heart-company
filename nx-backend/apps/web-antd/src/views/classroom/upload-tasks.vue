@@ -3,12 +3,14 @@ import type {
   ClassroomContent,
   ClassroomUploadTask,
 } from '#/api/core/classroom';
+import { resolveUploadRetryContext } from './upload-flow';
 import { onMounted, ref } from 'vue';
 import {
   Alert,
   Button,
   Card,
   Empty,
+  Modal,
   Progress,
   Select,
   Space,
@@ -36,6 +38,8 @@ const selectedContentId = ref<number>();
 const selectedFile = ref<File>();
 const uploading = ref(false);
 const uploadPercent = ref(0);
+const activeTaskId = ref<number>();
+const uploadContexts = new Map<number, { contentId: number; file: File }>();
 const columns = [
   { dataIndex: 'id', title: '任务' },
   { dataIndex: 'contentId', title: '课件' },
@@ -75,12 +79,25 @@ async function load() {
     loading.value = false;
   }
 }
-async function abort(task: ClassroomUploadTask) {
-  await abortClassroomUploadApi(task.id);
-  await load();
-}
-function retry() {
-  void load();
+function confirmAbort(task: ClassroomUploadTask) {
+  Modal.confirm({
+    title: '终止上传任务？',
+    content: '已上传的分片将被清理，之后需要重新选择文件上传。',
+    async onOk() {
+      activeTaskId.value = task.id;
+      try {
+        await abortClassroomUploadApi(task.id);
+        uploadContexts.delete(task.id);
+        message.success('上传任务已终止');
+        await load();
+      } catch (cause) {
+        message.error(cause instanceof Error ? cause.message : '终止上传失败');
+        throw cause;
+      } finally {
+        activeTaskId.value = undefined;
+      }
+    },
+  });
 }
 function chooseFile(event: Event) {
   selectedFile.value = (event.target as HTMLInputElement).files?.[0];
@@ -131,10 +148,7 @@ async function fileCRC64(file: File) {
     );
   return `crc64:${crc64Decimal(state)}`;
 }
-async function uploadFile() {
-  if (!props.canUpload || !selectedContentId.value || !selectedFile.value)
-    return message.warning('请选择草稿课件和媒体文件');
-  const file = selectedFile.value;
+async function performUpload(file: File, contentId: number) {
   uploading.value = true;
   uploadPercent.value = 0;
   try {
@@ -146,11 +160,13 @@ async function uploadFile() {
     const checksum = await fileCRC64(file);
     const { task } = await initiateClassroomUploadApi({
       checksum,
-      contentId: selectedContentId.value,
+      contentId,
       contentType: mime,
       filename: file.name,
       sizeBytes: file.size,
     });
+    activeTaskId.value = task.id;
+    uploadContexts.set(task.id, { contentId, file });
     const parts: Array<{ etag: string; partNumber: number }> = [];
     for (
       let partNumber = 1, offset = 0;
@@ -173,13 +189,33 @@ async function uploadFile() {
       );
     }
     await completeClassroomUploadApi(task.id, parts);
+    uploadContexts.delete(task.id);
     message.success('媒体上传完成，正在处理');
     await load();
   } catch (cause) {
     message.error(cause instanceof Error ? cause.message : '媒体上传失败');
   } finally {
     uploading.value = false;
+    activeTaskId.value = undefined;
   }
+}
+async function uploadFile() {
+  if (!props.canUpload || !selectedContentId.value || !selectedFile.value)
+    return message.warning('请选择草稿课件和媒体文件');
+  await performUpload(selectedFile.value, selectedContentId.value);
+}
+async function retry(task: ClassroomUploadTask) {
+  const context = resolveUploadRetryContext(
+    task,
+    uploadContexts,
+    selectedFile.value,
+  );
+  if (!context) {
+    selectedContentId.value = task.contentId;
+    return message.warning('请选择原媒体文件后重试，系统会重新发起分片上传');
+  }
+  selectedContentId.value = context.contentId;
+  await performUpload(context.file, context.contentId);
 }
 onMounted(load);
 </script>
@@ -238,13 +274,15 @@ onMounted(load);
             ><Button
               v-if="record.status === 'failed' || record.status === 'expired'"
               :disabled="!canUpload"
-              @click="retry"
+              :loading="activeTaskId === record.id"
+              @click="retry(record as ClassroomUploadTask)"
               >重试</Button
             ><Button
               v-if="!['completed', 'aborted'].includes(record.status)"
               danger
               :disabled="!canUpload"
-              @click="abort(record as ClassroomUploadTask)"
+              :loading="activeTaskId === record.id"
+              @click="confirmAbort(record as ClassroomUploadTask)"
               >终止</Button
             ></Space
           ></template

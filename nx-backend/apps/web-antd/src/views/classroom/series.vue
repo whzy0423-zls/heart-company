@@ -22,9 +22,11 @@ import {
   getClassroomSeriesApi,
   offlineClassroomSeriesApi,
   publishClassroomSeriesApi,
+  setClassroomSeriesPlaybackBlockedApi,
   setClassroomSeriesPriceApi,
   updateClassroomSeriesApi,
 } from '#/api/core/classroom';
+import { seriesMetadataPayload } from './series-model';
 
 const props = defineProps<{
   canPrice?: boolean;
@@ -37,6 +39,7 @@ const rows = ref<ClassroomSeries[]>([]);
 const editorOpen = ref(false);
 const editing = ref<ClassroomSeries>();
 const saving = ref(false);
+const actionLoadingId = ref<number>();
 const form = reactive({
   title: '',
   summary: '',
@@ -88,14 +91,17 @@ function openEditor(record?: ClassroomSeries) {
 }
 async function save() {
   if (!form.title.trim()) return message.warning('请填写系列名称');
+  if (!props.canWrite && !editing.value) return;
   saving.value = true;
   try {
-    let saved = editing.value
-      ? await updateClassroomSeriesApi(editing.value.id, {
-          ...form,
-          expectedUpdatedAt: editing.value.updatedAt,
-        })
-      : await createClassroomSeriesApi({ ...form });
+    let saved = editing.value as ClassroomSeries;
+    if (props.canWrite)
+      saved = editing.value
+        ? await updateClassroomSeriesApi(editing.value.id, {
+            ...seriesMetadataPayload(form),
+            expectedUpdatedAt: editing.value.updatedAt,
+          })
+        : await createClassroomSeriesApi(seriesMetadataPayload(form));
     if (
       props.canPrice &&
       (saved.accessLevel !== form.accessLevel ||
@@ -109,13 +115,15 @@ async function save() {
     message.success('系列已保存');
     editorOpen.value = false;
     await load();
+  } catch (cause) {
+    message.error(cause instanceof Error ? cause.message : '系列保存失败');
   } finally {
     saving.value = false;
   }
 }
 function confirmAction(
   record: ClassroomSeries,
-  action: 'delete' | 'offline' | 'publish',
+  action: 'delete' | 'offline' | 'publish' | 'block' | 'unblock',
 ) {
   Modal.confirm({
     title:
@@ -123,22 +131,45 @@ function confirmAction(
         ? '删除课程系列？'
         : action === 'offline'
           ? '下线课程系列？'
-          : '发布课程系列？',
+          : action === 'publish'
+            ? '发布课程系列？'
+            : action === 'block'
+              ? '阻断系列播放？'
+              : '恢复系列播放？',
     content: '此操作会影响小程序中的可见性，请确认。',
     async onOk() {
-      if (action === 'delete')
-        await deleteClassroomSeriesApi(record.id, record.updatedAt, '后台操作');
-      else if (action === 'offline')
-        await offlineClassroomSeriesApi(record.id, {
-          expectedUpdatedAt: record.updatedAt,
-          reason: '后台操作',
-        });
-      else
-        await publishClassroomSeriesApi(record.id, {
-          expectedUpdatedAt: record.updatedAt,
-        });
-      message.success('操作成功');
-      await load();
+      actionLoadingId.value = record.id;
+      try {
+        if (action === 'delete')
+          await deleteClassroomSeriesApi(
+            record.id,
+            record.updatedAt,
+            '后台操作',
+          );
+        else if (action === 'offline')
+          await offlineClassroomSeriesApi(record.id, {
+            expectedUpdatedAt: record.updatedAt,
+            reason: '后台操作',
+          });
+        else if (action === 'publish')
+          await publishClassroomSeriesApi(record.id, {
+            expectedUpdatedAt: record.updatedAt,
+          });
+        else
+          await setClassroomSeriesPlaybackBlockedApi(
+            record.id,
+            action === 'block',
+            record.updatedAt,
+            '后台操作',
+          );
+        message.success('操作成功');
+        await load();
+      } catch (cause) {
+        message.error(cause instanceof Error ? cause.message : '操作失败');
+        throw cause;
+      } finally {
+        actionLoadingId.value = undefined;
+      }
     },
   });
 }
@@ -168,20 +199,38 @@ onMounted(load);
           <Button v-if="canWrite" @click="openEditor(record as ClassroomSeries)"
             >编辑</Button
           ><Button
+            v-if="canPrice"
+            @click="openEditor(record as ClassroomSeries)"
+            >定价</Button
+          ><Button
             v-if="canPublish && record.status !== 'published'"
+            :loading="actionLoadingId === record.id"
             @click="confirmAction(record as ClassroomSeries, 'publish')"
             >发布</Button
           >
           <Button
             v-if="canPublish && record.status === 'published'"
+            :loading="actionLoadingId === record.id"
             @click="confirmAction(record as ClassroomSeries, 'offline')"
             >下线</Button
           >
           <Button
             v-if="canWrite"
             danger
+            :loading="actionLoadingId === record.id"
             @click="confirmAction(record as ClassroomSeries, 'delete')"
             >删除</Button
+          >
+          <Button
+            v-if="canPublish"
+            :loading="actionLoadingId === record.id"
+            @click="
+              confirmAction(
+                record as ClassroomSeries,
+                record.playbackBlocked ? 'unblock' : 'block',
+              )
+            "
+            >{{ record.playbackBlocked ? '恢复播放' : '阻断播放' }}</Button
           >
         </Space>
       </template>
@@ -192,6 +241,7 @@ onMounted(load);
     title="课程系列"
     ok-text="保存系列"
     :confirm-loading="saving"
+    :ok-button-props="{ disabled: !canWrite && !canPrice }"
     @ok="save"
   >
     <Form layout="vertical"
