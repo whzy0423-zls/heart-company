@@ -43,12 +43,13 @@ const (
 	MediaFailed     MediaStatus = "failed"
 	MediaDeleted    MediaStatus = "deleted"
 
-	UploadInitiated UploadStatus = "initiated"
-	UploadUploading UploadStatus = "uploading"
-	UploadCompleted UploadStatus = "completed"
-	UploadAborted   UploadStatus = "aborted"
-	UploadExpired   UploadStatus = "expired"
-	UploadFailed    UploadStatus = "failed"
+	UploadInitiated  UploadStatus = "initiated"
+	UploadUploading  UploadStatus = "uploading"
+	UploadCompleted  UploadStatus = "completed"
+	UploadCompleting UploadStatus = "completing"
+	UploadAborted    UploadStatus = "aborted"
+	UploadExpired    UploadStatus = "expired"
+	UploadFailed     UploadStatus = "failed"
 
 	EntitlementPurchase EntitlementSource = "purchase"
 	EntitlementManual   EntitlementSource = "manual"
@@ -269,7 +270,7 @@ func (u UploadTask) Validate() error {
 	if u.ExpectedSize <= 0 || u.PartSize <= 0 || u.MaxParts <= 0 || u.AttemptCount < 0 {
 		return errors.New("invalid upload task size or attempts")
 	}
-	if !oneOf(string(u.Status), string(UploadInitiated), string(UploadUploading), string(UploadCompleted), string(UploadAborted), string(UploadExpired), string(UploadFailed)) {
+	if !oneOf(string(u.Status), string(UploadInitiated), string(UploadUploading), string(UploadCompleting), string(UploadCompleted), string(UploadAborted), string(UploadExpired), string(UploadFailed)) {
 		return fmt.Errorf("invalid upload status %q", u.Status)
 	}
 	if u.ExpiresAt.IsZero() {

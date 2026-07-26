@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -96,5 +97,31 @@ func TestClassroomUploadNilServiceHandlersReturn503(t *testing.T) {
 		if w.Code != http.StatusServiceUnavailable {
 			t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 		}
+	}
+}
+
+type fakeClassroomMaintenance struct {
+	calls int
+	mu    sync.Mutex
+}
+
+func (f *fakeClassroomMaintenance) CleanupPending(context.Context, int) (int, error) {
+	f.mu.Lock()
+	f.calls++
+	f.mu.Unlock()
+	return 0, nil
+}
+func TestClassroomUploadMaintenanceIsRunnable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	svc := &fakeClassroomMaintenance{}
+	go startClassroomUploadMaintenance(ctx, svc, 5*time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	svc.mu.Lock()
+	calls := svc.calls
+	svc.mu.Unlock()
+	if calls < 1 {
+		t.Fatalf("maintenance calls=%d", calls)
 	}
 }

@@ -116,3 +116,27 @@ func TestSchemaClassroomUploadCleanupStatusUsesCleanedValue(t *testing.T) {
 		t.Fatalf("cleanup status constraint must use cleaned: %s", fragment)
 	}
 }
+
+func TestSchemaClassroomUploadSupportsCompletionClaimState(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fragment := extractClassroomCreateTable(string(raw), "classroom_upload_tasks")
+	if !strings.Contains(fragment, "'completing'") {
+		t.Fatalf("missing completing claim state: %s", fragment)
+	}
+}
+
+func TestSchemaMigratesExistingClassroomUploadStatusConstraint(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(raw)
+	for _, fragment := range []string{"DROP CONSTRAINT IF EXISTS classroom_upload_tasks_status_check", "ADD CONSTRAINT classroom_upload_tasks_status_check", "'completing'"} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("missing migration fragment %q", fragment)
+		}
+	}
+}

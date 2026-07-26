@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/classroom"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
@@ -169,4 +171,35 @@ func writeClassroomUploadError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	}
 	httpx.Fail(w, status, err.Error())
+}
+
+type classroomUploadMaintenance interface {
+	CleanupPending(context.Context, int) (int, error)
+}
+
+func startClassroomUploadMaintenance(ctx context.Context, svc classroomUploadMaintenance, interval time.Duration) {
+	if svc == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = 15 * time.Minute
+	}
+	run := func() {
+		if _, err := svc.CleanupPending(ctx, 100); err != nil {
+			log.Printf("classroom upload cleanup: %v", err)
+		}
+	}
+	run()
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				run()
+			}
+		}
+	}()
 }

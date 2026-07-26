@@ -111,6 +111,7 @@ type Server struct {
 	chatTimeout           time.Duration
 	chatHeartbeatInterval time.Duration
 	classroomUploads      classroomUploadHandlerService
+	classroomMaintenance  classroomUploadMaintenance
 
 	appUsers                       *appuser.Store
 	appChat                        appChatStore
@@ -206,7 +207,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	if uploader, err := s.objectUploader(); err == nil {
 		s.uploader = uploader
 	}
-	if strings.TrimSpace(env.ClassroomMedia.Bucket) != "" {
+	if database != nil && strings.TrimSpace(env.ClassroomMedia.Bucket) != "" {
 		mediaOSS := env.OSS
 		mediaOSS.Bucket = env.ClassroomMedia.Bucket
 		mediaOSS.Endpoint = env.ClassroomMedia.Endpoint
@@ -214,7 +215,10 @@ func New(env config.Env, database *sql.DB) http.Handler {
 		mediaOSS.Prefix = ""
 		if multipartStore, mediaErr := storage.NewOSSUploader(mediaOSS); mediaErr == nil {
 			probe := classroom.FFProbe{Signer: multipartStore}
-			s.classroomUploads = classroom.NewUploadService(classroom.NewStore(database), multipartStore, probe, classroom.UploadConfig{Bucket: env.ClassroomMedia.Bucket, Prefix: "classroom", PartSize: env.ClassroomMedia.PartSizeBytes, MaxParts: env.ClassroomMedia.MaxParts, CredentialTTL: time.Duration(env.ClassroomMedia.CredentialTTLSeconds) * time.Second, TaskTTL: 24 * time.Hour, MaxVideoBytes: env.ClassroomMedia.MaxVideoBytes, MaxAudioBytes: env.ClassroomMedia.MaxAudioBytes, MaxAttempts: 3}, time.Now).WithCoverExtractor(classroom.FFmpegCoverExtractor{Signer: multipartStore, Uploader: multipartStore})
+			classroomService := classroom.NewUploadService(classroom.NewStore(database), multipartStore, probe, classroom.UploadConfig{Bucket: env.ClassroomMedia.Bucket, Prefix: "classroom", PartSize: env.ClassroomMedia.PartSizeBytes, MaxParts: env.ClassroomMedia.MaxParts, CredentialTTL: time.Duration(env.ClassroomMedia.CredentialTTLSeconds) * time.Second, TaskTTL: 24 * time.Hour, MaxVideoBytes: env.ClassroomMedia.MaxVideoBytes, MaxAudioBytes: env.ClassroomMedia.MaxAudioBytes, MaxAttempts: 3}, time.Now).WithCoverExtractor(classroom.FFmpegCoverExtractor{Signer: multipartStore, Uploader: multipartStore})
+			s.classroomUploads = classroomService
+			s.classroomMaintenance = classroomService
+			startClassroomUploadMaintenance(context.Background(), classroomService, 15*time.Minute)
 		} else {
 			log.Printf("classroom multipart storage disabled: %v", mediaErr)
 		}

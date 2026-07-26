@@ -48,5 +48,5 @@ curl -s "$API/api/health" >/dev/null
 ## 运行依赖与清理调度
 
 - API 服务主机必须安装 `ffprobe` 与 `ffmpeg`。视频 probe 通过后，服务端使用 `ffmpeg` 在约 1 秒处抽取 JPEG 封面并上传到同一私有课堂 Bucket。
-- 调度器应周期调用课堂上传服务的 `CleanupExpired(ctx, limit)` hook。该 hook 对已过期的 `initiated/uploading` 任务执行 `AbortMultipartUpload`，成功后写入 `status=expired, cleanup_status=cleaned`；失败则写入 `cleanup_status=failed` 供下一轮告警/人工处理。
+- API 服务启动后会立即运行一次课堂上传维护任务，并每 15 分钟调用 `CleanupPending(ctx, limit)`。维护任务会处理过期的 `initiated/uploading/completing` 任务以及 `failed/expired/aborted + cleanup pending/failed` 记录：中止 multipart、删除完整对象与抽取封面，成功写入 `cleanup_status=cleaned`，失败保留原 object key/upload id 并写入 `cleanup_status=failed` 供下轮重试。
 - `MaxAttempts` 表示实际发起 multipart upload 的次数；一次失败不会额外消耗次数，只有重新 initiate 才会递增。

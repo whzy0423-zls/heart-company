@@ -23,6 +23,9 @@ type fakeMultipartStorage struct {
 	parts                                    []storage.MultipartPart
 	initiateCalls, completeCalls, abortCalls int
 	completeDelay                            time.Duration
+	deleteCalls                              []string
+	abortErr                                 error
+	deleteErr                                error
 }
 
 func (f *fakeMultipartStorage) InitiateMultipart(_ context.Context, in storage.InitiateMultipartInput) (storage.InitiateMultipartResult, error) {
@@ -45,7 +48,11 @@ func (f *fakeMultipartStorage) CompleteMultipart(_ context.Context, in storage.C
 func (f *fakeMultipartStorage) AbortMultipart(_ context.Context, in storage.AbortMultipartInput) error {
 	f.aborted = in
 	f.abortCalls++
-	return nil
+	return f.abortErr
+}
+func (f *fakeMultipartStorage) DeleteObject(_ context.Context, key string) error {
+	f.deleteCalls = append(f.deleteCalls, key)
+	return f.deleteErr
 }
 func (f *fakeMultipartStorage) ListMultipartParts(context.Context, storage.ListPartsInput) ([]storage.MultipartPart, error) {
 	return f.parts, nil
@@ -67,6 +74,8 @@ type fakeUploadRepo struct {
 }
 
 func (r *fakeUploadRepo) GetContent(context.Context, int64) (Content, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.content.ID == 0 {
 		return Content{}, ErrNotFound
 	}
@@ -85,6 +94,8 @@ func (r *fakeUploadRepo) CreateUploadTask(_ context.Context, v UploadTask) (Uplo
 	return v, nil
 }
 func (r *fakeUploadRepo) GetUploadTask(context.Context, int64) (UploadTask, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.task.ID == 0 {
 		return UploadTask{}, ErrNotFound
 	}
@@ -96,18 +107,55 @@ func (r *fakeUploadRepo) SaveUploadTask(_ context.Context, v UploadTask) (Upload
 	r.task = v
 	return v, nil
 }
+func (r *fakeUploadRepo) ClaimUploadCompletion(_ context.Context, id int64) (UploadTask, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.task.ID != id {
+		return UploadTask{}, false, ErrNotFound
+	}
+	if r.task.Status != UploadInitiated && r.task.Status != UploadUploading {
+		return r.task, false, nil
+	}
+	r.task.Status = UploadCompleting
+	return r.task, true, nil
+}
+func (r *fakeUploadRepo) ClaimUploadAbort(_ context.Context, id int64) (UploadTask, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.task.ID != id {
+		return UploadTask{}, false, ErrNotFound
+	}
+	if r.task.Status != UploadInitiated && r.task.Status != UploadUploading && r.task.Status != UploadFailed {
+		return r.task, false, nil
+	}
+	r.task.Status = UploadAborted
+	r.task.CleanupStatus = "pending"
+	return r.task, true, nil
+}
+
+func (r *fakeUploadRepo) GetMediaAsset(context.Context, int64) (MediaAsset, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.media, nil
+}
 func (r *fakeUploadRepo) CreateMediaAsset(_ context.Context, v MediaAsset) (MediaAsset, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	v.ID = 91
 	r.media = v
 	r.mediaStatuses = append(r.mediaStatuses, v.StorageStatus)
 	return v, nil
 }
 func (r *fakeUploadRepo) UpdateMediaAsset(_ context.Context, v MediaAsset) (MediaAsset, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.media = v
 	r.mediaStatuses = append(r.mediaStatuses, v.StorageStatus)
 	return v, nil
 }
 func (r *fakeUploadRepo) SetContentMediaState(_ context.Context, _ int64, mediaID *int64, status ContentStatus, duration int) (Content, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.content.MediaAssetID = mediaID
 	r.content.Status = status
 	r.content.DurationSeconds = duration
@@ -115,6 +163,8 @@ func (r *fakeUploadRepo) SetContentMediaState(_ context.Context, _ int64, mediaI
 	return r.content, nil
 }
 func (r *fakeUploadRepo) FinalizeUpload(_ context.Context, task UploadTask, media MediaAsset) (UploadTask, MediaAsset, Content, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.finalizeCalls++
 	r.task = task
 	r.media = media
@@ -471,5 +521,93 @@ func TestFFmpegCoverExtractorRunsSnapshotAndUploadsJPEG(t *testing.T) {
 	}
 	if key != "classroom/covers/generated.jpg" || string(uploader.data) != "jpeg" {
 		t.Fatalf("key=%q data=%q", key, uploader.data)
+	}
+}
+
+func TestClassroomUploadTwoServiceInstancesCompleteIdempotently(t *testing.T) {
+	now := time.Now()
+	repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}, task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1, Status: UploadUploading, ExpiresAt: now.Add(time.Hour), AttemptCount: 1}}
+	st := &fakeMultipartStorage{completeDelay: 30 * time.Millisecond, parts: []storage.MultipartPart{{PartNumber: 1, ETag: "e", Size: 10}}, head: storage.ObjectMetadata{ETag: "final-etag", Size: 10, Checksum: "crc64:123", ContentType: "video/mp4"}}
+	a := newUploadService(repo, st, now)
+	b := newUploadService(repo, st, now)
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, svc := range []*UploadService{a, b} {
+		go func(svc *UploadService) {
+			<-start
+			_, err := svc.Complete(context.Background(), 1, 42, []storage.CompletedPart{{PartNumber: 1, ETag: "e"}})
+			errs <- err
+		}(svc)
+	}
+	close(start)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st.completeCalls != 1 {
+		t.Fatalf("complete calls=%d", st.completeCalls)
+	}
+}
+
+func TestClassroomUploadTwoServiceInstancesAbortIdempotently(t *testing.T) {
+	now := time.Now()
+	repo := &fakeUploadRepo{task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1, Status: UploadUploading, ExpiresAt: now.Add(time.Hour), AttemptCount: 1}}
+	st := &fakeMultipartStorage{}
+	a := newUploadService(repo, st, now)
+	b := newUploadService(repo, st, now)
+	errs := make(chan error, 2)
+	for _, svc := range []*UploadService{a, b} {
+		go func(svc *UploadService) { _, err := svc.Abort(context.Background(), 1, 42); errs <- err }(svc)
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st.abortCalls != 1 {
+		t.Fatalf("abort calls=%d", st.abortCalls)
+	}
+}
+
+func TestClassroomUploadCleanupPendingFailedDeletesObjectAndCoverBeforeRetry(t *testing.T) {
+	now := time.Now()
+	mid := int64(91)
+	repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentFailed, AccessLevel: AccessPublic}, media: MediaAsset{ID: mid, ObjectKey: "old.mp4", CoverObjectKey: "old.jpg", ContentType: ContentVideo, StorageStatus: MediaFailed}, task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "old-u", ObjectKey: "old.mp4", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1, Status: UploadFailed, ExpiresAt: now.Add(time.Hour), AttemptCount: 1, CleanupStatus: "pending", MediaAssetID: &mid}}
+	repo.expired = []UploadTask{repo.task}
+	st := &fakeMultipartStorage{}
+	svc := newUploadService(repo, st, now)
+	count, err := svc.CleanupPending(context.Background(), 100)
+	if err != nil || count != 1 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	if repo.task.CleanupStatus != "cleaned" || st.abortCalls != 1 || len(st.deleteCalls) != 2 {
+		t.Fatalf("task=%+v abort=%d deletes=%v", repo.task, st.abortCalls, st.deleteCalls)
+	}
+	if _, err := svc.Initiate(context.Background(), InitiateUploadInput{ContentID: 7, CreatorID: 42, Filename: "new.mp4", ContentType: "video/mp4", SizeBytes: 10, Checksum: "crc64:123"}); err != nil {
+		t.Fatal(err)
+	}
+	if repo.task.ObjectKey == "old.mp4" {
+		t.Fatal("retry did not replace cleaned reference")
+	}
+}
+
+func TestClassroomUploadRetryPreservesFailedReferenceWhenCleanupFails(t *testing.T) {
+	now := time.Now()
+	repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentFailed, AccessLevel: AccessPublic}, task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "old-u", ObjectKey: "old.mp4", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1, Status: UploadFailed, ExpiresAt: now.Add(time.Hour), AttemptCount: 1, CleanupStatus: "pending"}}
+	st := &fakeMultipartStorage{deleteErr: errors.New("delete failed")}
+	svc := newUploadService(repo, st, now)
+	_, err := svc.Initiate(context.Background(), InitiateUploadInput{ContentID: 7, CreatorID: 42, Filename: "new.mp4", ContentType: "video/mp4", SizeBytes: 10, Checksum: "crc64:123"})
+	if err == nil {
+		t.Fatal("expected cleanup failure")
+	}
+	if repo.task.ObjectKey != "old.mp4" || repo.task.CleanupStatus != "failed" {
+		t.Fatalf("reference overwritten: %+v", repo.task)
+	}
+}
+
+func TestValidateMediaProbeRequiresMP3CodecForMP3Container(t *testing.T) {
+	if err := ValidateMediaProbe(ContentAudio, MediaProbeResult{Container: "mp3", AudioCodec: "aac", DurationSeconds: 1}); err == nil {
+		t.Fatal("MP3 container with AAC accepted")
 	}
 }

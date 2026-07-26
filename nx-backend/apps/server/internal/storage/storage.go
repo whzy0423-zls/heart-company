@@ -33,6 +33,7 @@ type MultipartStorage interface {
 	AbortMultipart(context.Context, AbortMultipartInput) error
 	ListMultipartParts(context.Context, ListPartsInput) ([]MultipartPart, error)
 	HeadObject(context.Context, string) (ObjectMetadata, error)
+	DeleteObject(context.Context, string) error
 }
 
 type InitiateMultipartInput struct{ ObjectKey, ContentType, Checksum string }
@@ -304,6 +305,11 @@ func (u *OSSUploader) HeadObject(ctx context.Context, objectKey string) (ObjectM
 		checksum = value
 	}
 	return ObjectMetadata{ObjectKey: key, ETag: ptrString(result.ETag), Checksum: checksum, ContentType: ptrString(result.ContentType), Size: result.ContentLength}, nil
+}
+
+func (u *OSSUploader) DeleteObject(ctx context.Context, objectKey string) error {
+	_, err := u.client.DeleteObject(ctx, &oss.DeleteObjectRequest{Bucket: oss.Ptr(u.bucket), Key: oss.Ptr(strings.TrimLeft(objectKey, "/"))})
+	return err
 }
 
 func crc64Value(value *string) string {
