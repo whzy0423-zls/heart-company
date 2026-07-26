@@ -10,10 +10,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
-	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
 func newLocalMiniMaxGenerator(upstream *httptest.Server, cfg config.MiniMaxConfig) *MiniMaxGenerator {

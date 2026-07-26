@@ -7,6 +7,8 @@ export interface ModelConfigView {
     apiBase: string;
     apiKeySet: boolean;
     model: string;
+    provider: string;
+    timeoutSeconds: number;
   };
   video: {
     apiBase: string;
@@ -58,6 +60,8 @@ export interface ModelConfigPayload {
     apiBase: string;
     apiKey: string;
     model: string;
+    provider: string;
+    timeoutSeconds: number;
   };
   video: {
     apiBase: string;
@@ -102,17 +106,20 @@ export interface ModelConfigPayload {
   };
 }
 
+/** 模型配置局部更新：未提交的配置分区由服务端保留原值。 */
+export type ModelConfigUpdatePayload = Partial<ModelConfigPayload>;
+
 /** 读取当前生效的模型配置（对话 / 视频），需登录。 */
 export function getModelConfigApi() {
   return requestClient.get<ModelConfigView>('/model-config');
 }
 
 /** 保存模型配置（对话 / 视频），返回脱敏后的最新视图。需登录。 */
-export function updateModelConfigApi(data: ModelConfigPayload) {
+export function updateModelConfigApi(data: ModelConfigUpdatePayload) {
   return requestClient.put<ModelConfigView>('/model-config', data);
 }
 
-/** 对话模型连通性测试结果：仅返回探活信息，不含密钥。 */
+/** 对话模型连通性测试结果：仅返回最小探测信息，不含密钥。 */
 export interface ChatPingResult {
   ok: boolean;
   message: string;
@@ -122,8 +129,8 @@ export interface ChatPingResult {
 }
 
 /**
- * 测试对话模型（MiniMax）连通性：对网关做一次轻量探活，不消耗生成额度。需登录。
- * 可传入未保存的对话配置（地址 / 密钥 / GroupId / 模型名）以测试当前表单；
+ * 测试兼容协议对话模型连通性：会发送最小生成探测请求，可能产生少量 Token/额度。需登录。
+ * 可传入未保存的对话配置（协议 / 地址 / 密钥 / 模型名 / 超时）以测试当前表单；
  * 留空字段会回退到已保存或环境基线配置。
  */
 export function testChatModelApi(data?: ModelConfigPayload['chat']) {

@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/chat"
@@ -306,7 +309,8 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), s.chatTimeout)
+	generator, chatTimeout := s.chatRuntime()
+	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
 	preferences, directives, extraction, err := s.prepareAppChatPreferences(ctx, userInfo.ID, body.Question)
 	if err != nil {
@@ -319,7 +323,6 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
 		profile.Memories = memories
 	}
-	generator := s.generator()
 	promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
 
 	ans, err := rag.NewService(docs, rag.WithGenerator(generator)).Ask(ctx, rag.AskInput{
@@ -399,7 +402,8 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), s.chatTimeout)
+	generator, chatTimeout := s.chatRuntime()
+	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
 	preferences, directives, extraction, err := s.prepareAppChatPreferences(ctx, userInfo.ID, body.Question)
 	if err != nil {
@@ -484,14 +488,24 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 
 generationComplete:
 	if err != nil {
-		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成失败，请重试"})
+		send(appChatStreamEvent{kind: appChatStreamError, publicError: "回答生成失败，请重试", errorPhase: "provider"})
 		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	if s.chatPersistHook != nil {
+		s.chatPersistHook()
 	}
 
 	sourcesJSON, _ := json.Marshal(ans.Sources)
-	messageID, saveErr := s.appChat.SavePair(ctx, sessionID, body.Question, ans.Answer, sourcesJSON)
-	if saveErr != nil {
-		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答保存失败，请重试"})
+	// Reserve the original turn state before SavePair can outlive the handler.
+	// This keeps later same-user turns in the same ticket-ordering domain.
+	fallback := s.reserveAppChatPreferenceFallback(input.preferenceTurn, input.question)
+	// Atomically arbitrate with total/idle timeout before entering SavePair's
+	// may-commit window. Once persistence wins, the pump waits for its terminal.
+	if !input.lifecycle.beginPersistence() {
+		fallback.release()
 		return
 	}
 	if err := s.persistAppChatPreferences(ctx, userInfo.ID, extraction); err != nil {
@@ -503,7 +517,429 @@ generationComplete:
 		s.recordAppProfileEvidenceAsync(userInfo.ID, sess.CardID, "chat", messageID, body.Question)
 	}
 
-	_ = writeAppChatSSE(w, flusher, "done", askResponse{Answer: ans, MessageID: messageID})
+	postSaveCtx, cancelPostSave := context.WithTimeout(context.Background(), defaultAppChatPostSaveTimeout)
+	s.rememberChatAnswer(postSaveCtx, input.userID, input.cardID, input.question, ans.Answer)
+	cancelPostSave()
+	if messageID > 0 {
+		s.recordAppProfileEvidenceAsync(input.userID, input.cardID, "chat", messageID, input.question)
+	}
+}
+
+func (s *Server) pumpAppChatStream(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	requestCtx context.Context,
+	w io.Writer,
+	flusher http.Flusher,
+	events <-chan appChatStreamEvent,
+	lifecycle *appChatStreamLifecycle,
+	userID, sessionID int64,
+	startedAt time.Time,
+	totalTimeout time.Duration,
+) {
+	heartbeatInterval, providerIdleTimeout := s.appChatStreamTiming(totalTimeout)
+	heartbeat := time.NewTicker(heartbeatInterval)
+	defer heartbeat.Stop()
+
+	var idleTimer *time.Timer
+	var idle <-chan time.Time
+	defer func() {
+		if idleTimer != nil {
+			idleTimer.Stop()
+		}
+	}()
+	resetIdle := func() {
+		if idleTimer == nil {
+			idleTimer = time.NewTimer(providerIdleTimeout)
+			idle = idleTimer.C
+			return
+		}
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+		idleTimer.Reset(providerIdleTimeout)
+	}
+	stopIdle := func() {
+		idle = nil
+		if idleTimer == nil {
+			return
+		}
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+	}
+	stopBeforePersistenceAndCancel := func() {
+		lifecycle.stopBeforePersistence()
+		cancel()
+	}
+
+	firstDelta := true
+	persistenceStarted := false
+	handleEvent := func(event appChatStreamEvent, ok bool) bool {
+		if requestCtx.Err() != nil {
+			stopBeforePersistenceAndCancel()
+			logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
+			return true
+		}
+		if !ok {
+			if ctx.Err() != nil {
+				_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成超时，请重试"})
+				logAppChatStreamTiming("error", userID, sessionID, startedAt, "total_timeout")
+				return true
+			}
+			if writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成失败，请重试"}) != nil {
+				stopBeforePersistenceAndCancel()
+			}
+			logAppChatStreamTiming("error", userID, sessionID, startedAt, "worker_closed")
+			return true
+		}
+		switch event.kind {
+		case appChatStreamProviderStarted:
+			resetIdle()
+		case appChatStreamPersistenceStarted:
+			persistenceStarted = true
+			stopIdle()
+		case appChatStreamDelta:
+			if event.delta == "" {
+				if event.writeResult != nil {
+					event.writeResult <- nil
+				}
+				return false
+			}
+			if err := writeAppChatSSE(w, flusher, "delta", map[string]string{"content": event.delta}); err != nil {
+				stopBeforePersistenceAndCancel()
+				if event.writeResult != nil {
+					event.writeResult <- err
+				}
+				logAppChatStreamTiming("error", userID, sessionID, startedAt, "delta_write")
+				return true
+			}
+			if event.writeResult != nil {
+				event.writeResult <- nil
+			}
+			resetIdle()
+			if firstDelta {
+				firstDelta = false
+				logAppChatStreamTiming("first_delta", userID, sessionID, startedAt, "")
+			}
+		case appChatStreamDone:
+			if err := writeAppChatSSE(w, flusher, "done", event.response); err != nil {
+				stopBeforePersistenceAndCancel()
+				logAppChatStreamTiming("error", userID, sessionID, startedAt, "done_write")
+				return true
+			}
+			logAppChatStreamTiming("completed", userID, sessionID, startedAt, "")
+			return true
+		case appChatStreamError:
+			if err := writeAppChatSSE(w, flusher, "error", map[string]string{"message": event.publicError}); err != nil {
+				stopBeforePersistenceAndCancel()
+			}
+			logAppChatStreamTiming("error", userID, sessionID, startedAt, event.errorPhase)
+			return true
+		}
+		return false
+	}
+	drainEvents := func() bool {
+		for {
+			select {
+			case event, ok := <-events:
+				if handleEvent(event, ok) {
+					return true
+				}
+			default:
+				return false
+			}
+		}
+	}
+	totalDone := ctx.Done()
+	requestDone := requestCtx.Done()
+
+	for {
+		if requestCtx.Err() != nil {
+			stopBeforePersistenceAndCancel()
+			logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
+			return
+		}
+		if drainEvents() {
+			return
+		}
+		select {
+		case event, ok := <-events:
+			if handleEvent(event, ok) {
+				return
+			}
+		case <-heartbeat.C:
+			if err := writeAppChatSSEComment(w, flusher, "ping"); err != nil {
+				stopBeforePersistenceAndCancel()
+				logAppChatStreamTiming("error", userID, sessionID, startedAt, "heartbeat_write")
+				return
+			}
+		case <-idle:
+			if drainEvents() {
+				return
+			}
+			if persistenceStarted || lifecycle.persistenceStarted() {
+				persistenceStarted = true
+				stopIdle()
+				continue
+			}
+			if !lifecycle.stopBeforePersistence() {
+				continue
+			}
+			cancel()
+			_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成超时，请重试"})
+			logAppChatStreamTiming("idle", userID, sessionID, startedAt, "provider")
+			return
+		case <-requestDone:
+			stopBeforePersistenceAndCancel()
+			logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
+			return
+		case <-totalDone:
+			if drainEvents() {
+				return
+			}
+			if requestCtx.Err() != nil {
+				logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
+				return
+			}
+			if persistenceStarted || lifecycle.persistenceStarted() {
+				persistenceStarted = true
+				stopIdle()
+				totalDone = nil
+				continue
+			}
+			if !lifecycle.stopBeforePersistence() {
+				totalDone = nil
+				continue
+			}
+			_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成超时，请重试"})
+			logAppChatStreamTiming("error", userID, sessionID, startedAt, "total_timeout")
+			return
+		}
+	}
+}
+
+func (s *Server) appChatStreamTiming(totalTimeout time.Duration) (time.Duration, time.Duration) {
+	idle := s.chatProviderIdleTimeout
+	if idle <= 0 {
+		idle = defaultAppChatProviderIdle
+	}
+	if totalTimeout > 0 {
+		maxIdle := totalTimeout * 3 / 4
+		if maxIdle <= 0 {
+			maxIdle = totalTimeout
+		}
+		if idle >= totalTimeout || idle > maxIdle {
+			idle = maxIdle
+		}
+	}
+	if idle <= 0 {
+		idle = time.Second
+	}
+
+	heartbeat := s.chatHeartbeatInterval
+	if heartbeat <= 0 {
+		heartbeat = defaultAppChatHeartbeatInterval
+	}
+	if heartbeat >= idle {
+		heartbeat = idle / 3
+	}
+	if heartbeat <= 0 {
+		heartbeat = time.Millisecond
+	}
+	return heartbeat, idle
+}
+
+func logAppChatStreamTiming(stage string, userID, sessionID int64, startedAt time.Time, phase string) {
+	if phase == "" {
+		log.Printf("app_chat_stream stage=%s user_id=%d session_id=%d elapsed_ms=%d", stage, userID, sessionID, time.Since(startedAt).Milliseconds())
+		return
+	}
+	log.Printf("app_chat_stream stage=%s phase=%s user_id=%d session_id=%d elapsed_ms=%d", stage, phase, userID, sessionID, time.Since(startedAt).Milliseconds())
+}
+
+func (s *Server) beginAppChatPreferenceTurn(userID int64) appChatPreferenceTurn {
+	s.preferenceTurnsMu.Lock()
+	defer s.preferenceTurnsMu.Unlock()
+	if s.preferenceTurns == nil {
+		s.preferenceTurns = make(map[int64]*appChatPreferenceTurnState)
+	}
+	state := s.preferenceTurns[userID]
+	if state == nil {
+		state = newAppChatPreferenceTurnState()
+		s.preferenceTurns[userID] = state
+	}
+	state.active.Add(1)
+	ticket := state.nextTicket.Add(1)
+	return appChatPreferenceTurn{userID: userID, state: state, ticket: ticket}
+}
+
+func newAppChatPreferenceTurnState() *appChatPreferenceTurnState {
+	return &appChatPreferenceTurnState{latestBySlot: make(map[string]uint64)}
+}
+
+func (s *Server) finishAppChatPreferenceTurn(turn appChatPreferenceTurn) {
+	if turn.state == nil {
+		return
+	}
+	turn.state.active.Add(-1)
+	s.cleanupAppChatPreferenceTurn(turn)
+}
+
+func (s *Server) cleanupAppChatPreferenceTurn(turn appChatPreferenceTurn) {
+	if turn.state == nil {
+		return
+	}
+	s.preferenceTurnsMu.Lock()
+	defer s.preferenceTurnsMu.Unlock()
+	if s.preferenceTurns[turn.userID] != turn.state {
+		return
+	}
+	if turn.state.active.Load() == 0 && turn.state.pending.Load() == 0 {
+		delete(s.preferenceTurns, turn.userID)
+	}
+}
+
+func (s *Server) prepareAppChatPreferences(ctx context.Context, turn appChatPreferenceTurn, extraction userpreference.Extraction) ([]string, []string, error) {
+	if turn.state != nil {
+		turn.state.mu.Lock()
+		defer turn.state.mu.Unlock()
+	} else if len(extraction.Mutations) > 0 {
+		return nil, nil, errAppChatPreferenceStale
+	}
+	if len(extraction.Mutations) > 0 {
+		if s.userPreferences == nil {
+			return nil, nil, fmt.Errorf("%w: preference store is unavailable", errAppChatPreferenceSave)
+		}
+		accepted := filterAndMarkAppChatPreferenceMutations(turn.state, turn.ticket, extraction.Mutations)
+		if len(accepted) == 0 {
+			return nil, nil, errAppChatPreferenceStale
+		}
+		if err := s.userPreferences.Apply(ctx, turn.userID, accepted); err != nil {
+			return nil, nil, fmt.Errorf("%w: %v", errAppChatPreferenceSave, err)
+		}
+	}
+	if s.userPreferences == nil {
+		return nil, append([]string(nil), extraction.CurrentDirectives...), nil
+	}
+	stored, err := s.userPreferences.List(ctx, turn.userID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", errAppChatPreferenceRead, err)
+	}
+	preferences := make([]string, 0, len(stored))
+	for _, preference := range stored {
+		instruction := strings.TrimSpace(preference.Instruction)
+		if instruction != "" {
+			preferences = append(preferences, instruction)
+		}
+	}
+	return preferences, append([]string(nil), extraction.CurrentDirectives...), nil
+}
+
+func appChatPreferencePublicError(err error) string {
+	if errors.Is(err, errAppChatPreferenceSave) {
+		return errAppChatPreferenceSave.Error()
+	}
+	if errors.Is(err, errAppChatPreferenceStale) {
+		return errAppChatPreferenceStale.Error()
+	}
+	return errAppChatPreferenceRead.Error()
+}
+
+func (s *Server) scheduleAppChatPreferenceFallback(turn appChatPreferenceTurn, question string) bool {
+	return s.reserveAppChatPreferenceFallback(turn, question).start()
+}
+
+func (s *Server) reserveAppChatPreferenceFallback(turn appChatPreferenceTurn, question string) *appChatPreferenceFallbackReservation {
+	if turn.userID <= 0 || turn.state == nil || s.userPreferences == nil || s.preferenceExtractor == nil ||
+		!userpreference.NeedsLLMFallback(question) {
+		return nil
+	}
+	if s.preferenceAsyncSlots == nil {
+		return nil
+	}
+	select {
+	case s.preferenceAsyncSlots <- struct{}{}:
+	default:
+		return nil
+	}
+	turn.state.pending.Add(1)
+	return &appChatPreferenceFallbackReservation{server: s, turn: turn, question: question}
+}
+
+func (r *appChatPreferenceFallbackReservation) start() bool {
+	if r == nil {
+		return false
+	}
+	started := false
+	r.claim.Do(func() {
+		started = true
+		go r.run()
+	})
+	return started
+}
+
+func (r *appChatPreferenceFallbackReservation) release() {
+	if r == nil {
+		return
+	}
+	r.claim.Do(r.finish)
+}
+
+func (r *appChatPreferenceFallbackReservation) run() {
+	s := r.server
+	turn := r.turn
+	timeout := s.preferenceAsyncTimeout
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	defer r.finish()
+	extraction := s.preferenceExtractor.Extract(ctx, r.question)
+	turn.state.mu.Lock()
+	if len(extraction.Mutations) > 0 && ctx.Err() == nil {
+		accepted := filterAndMarkAppChatPreferenceMutations(turn.state, turn.ticket, extraction.Mutations)
+		if len(accepted) > 0 {
+			_ = s.userPreferences.Apply(ctx, turn.userID, accepted)
+		}
+	}
+	turn.state.mu.Unlock()
+}
+
+func (r *appChatPreferenceFallbackReservation) finish() {
+	r.turn.state.pending.Add(-1)
+	<-r.server.preferenceAsyncSlots
+	r.server.cleanupAppChatPreferenceTurn(r.turn)
+}
+
+// filterAndMarkAppChatPreferenceMutations must be called with state.mu held.
+func filterAndMarkAppChatPreferenceMutations(state *appChatPreferenceTurnState, ticket uint64, mutations []userpreference.Mutation) []userpreference.Mutation {
+	if state == nil || ticket == 0 || len(mutations) == 0 {
+		return nil
+	}
+	if state.latestBySlot == nil {
+		state.latestBySlot = make(map[string]uint64)
+	}
+	accepted := make([]userpreference.Mutation, 0, len(mutations))
+	for _, mutation := range mutations {
+		slot := strings.TrimSpace(mutation.DeleteSlot)
+		if mutation.Upsert != nil {
+			slot = strings.TrimSpace(mutation.Upsert.Slot)
+		}
+		if slot == "" || state.latestBySlot[slot] > ticket {
+			continue
+		}
+		state.latestBySlot[slot] = ticket
+		accepted = append(accepted, mutation)
+	}
+	return accepted
 }
 
 func (s *Server) prepareAppChatPreferences(ctx context.Context, userID int64, question string) ([]string, []string, userpreference.Extraction, error) {

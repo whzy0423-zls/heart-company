@@ -1,11 +1,10 @@
-// Package modelconfig 负责把"对话模型(MiniMax)"与"视频模型"的可配置参数
-// （接口地址 / 密钥 / 模型名 / GroupID）持久化到 site_configs KV 表，
-// 并在运行时与环境变量基线合并，供 server 重建对应客户端使用。
+// Package modelconfig 负责把兼容协议对话模型及视频、图片、分析模型配置
+// 持久化到 site_configs KV 表，并供 server 在运行时重建对应客户端。
 //
 // 设计要点：
 //   - 复用既有的 site_configs(key, config jsonb, update_time) 表，key 固定为 "model_config"。
-//   - DB 中仅存"覆盖值"：任何为空的字段都会回退到环境变量基线（env），
-//     这样首次部署无需写库即可工作，后台保存后才落库覆盖。
+//   - 对话模型只使用明确保存的 OpenAI/Anthropic 兼容配置，不继承 MiniMax 环境变量。
+//   - 视频、图片、分析等旧功能仍按各自规则与环境变量基线合并。
 //   - 密钥永不回显：HTTP 层负责脱敏，本包只负责存储与合并。
 package modelconfig
 
@@ -31,6 +30,7 @@ const DefaultAnalysisTimeoutSeconds = 180
 const (
 	ProviderOpenAICompatible    = "openai-compatible"
 	ProviderAnthropicCompatible = "anthropic-compatible"
+	MaxChatTimeoutSeconds       = 300
 )
 
 // ChatConfig 对话模型中转站可配置项。
@@ -98,6 +98,66 @@ type Config struct {
 	Admin     AdminModelConfig `json:"admin"`
 	DailyQuiz AdminModelConfig `json:"dailyQuiz"`
 	Assist    AssistConfig     `json:"assist"`
+	presence  map[string]bool
+}
+
+func (c *Config) UnmarshalJSON(data []byte) error {
+	type plainConfig Config
+	var decoded plainConfig
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*c = Config(decoded)
+	var sections map[string]json.RawMessage
+	if err := json.Unmarshal(data, &sections); err != nil {
+		return err
+	}
+	c.presence = make(map[string]bool)
+	for section, raw := range sections {
+		c.presence[section] = true
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			continue
+		}
+		for field := range fields {
+			c.presence[section+"."+field] = true
+		}
+	}
+	return nil
+}
+
+// SectionPresent reports whether an incoming JSON payload explicitly included
+// a configuration section. Programmatically constructed configs infer
+// presence from non-zero fields for backwards-compatible unit use.
+func (c Config) SectionPresent(section string) bool {
+	if c.presence != nil {
+		return c.presence[section]
+	}
+	switch section {
+	case "chat":
+		return c.Chat != (ChatConfig{})
+	case "video":
+		return c.Video != (VideoConfig{})
+	case "image":
+		return c.Image != (ImageConfig{})
+	case "analysis":
+		return c.Analysis != (AnalysisConfig{})
+	case "admin":
+		return c.Admin != (AdminModelConfig{})
+	case "dailyQuiz":
+		return c.DailyQuiz != (AdminModelConfig{})
+	case "assist":
+		return c.Assist.Enabled != nil || strings.TrimSpace(c.Assist.SystemPrompt) != ""
+	default:
+		return false
+	}
+}
+
+func (c Config) fieldPresent(path string, inferred bool) bool {
+	if c.presence != nil {
+		return c.presence[path]
+	}
+	return inferred
 }
 
 // AssistEnabled 解析 AI 辅助开关：未设置时默认启用。
@@ -106,6 +166,12 @@ func (c Config) AssistEnabled() bool {
 		return true
 	}
 	return *c.Assist.Enabled
+}
+
+// EffectiveChat 返回仅由已保存兼容协议字段组成的生效对话配置。
+// 它不会继承 MiniMax 环境变量，旧配置缺少 provider 时保持未配置。
+func (c Config) EffectiveChat() ChatConfig {
+	return c.Chat.Normalized()
 }
 
 // ReadStore 从 DB 读取覆盖配置。第二个返回值表示是否已存在记录；
@@ -294,32 +360,90 @@ func isMiniMaxAnalysisModel(model string) bool {
 }
 
 // MergeIncoming 把后台提交的新值合并到当前覆盖配置之上。
-// 密钥字段为空表示"不修改"，沿用 c 中已有的值；其余字段直接覆盖（含置空）。
+// 整页配置接口也允许局部提交：所有省略/空值字段沿用已存值。
+// 对话 provider 显式切换时例外：空 API key 不得继承旧 provider 的密钥。
 func (c Config) MergeIncoming(in Config) Config {
 	out := in.trimmed()
-	if out.Chat.APIKey == "" {
-		out.Chat.APIKey = c.Chat.APIKey
+	stored := c.trimmed()
+	providerPresent := in.fieldPresent("chat.provider", out.Chat.Provider != "")
+	providerChanged := providerPresent && out.Chat.Provider != stored.Chat.Provider
+	if !providerPresent {
+		out.Chat.Provider = stored.Chat.Provider
 	}
-	if out.Video.APIKey == "" {
-		out.Video.APIKey = c.Video.APIKey
+	if !in.fieldPresent("chat.apiBase", out.Chat.APIBase != "") {
+		out.Chat.APIBase = stored.Chat.APIBase
 	}
-	if out.Image.APIKey == "" {
-		out.Image.APIKey = c.Image.APIKey
+	if out.Chat.APIKey == "" && !providerChanged {
+		out.Chat.APIKey = stored.Chat.APIKey
 	}
-	if out.Analysis.APIKey == "" {
-		out.Analysis.APIKey = c.Analysis.APIKey
+	if !in.fieldPresent("chat.model", out.Chat.Model != "") {
+		out.Chat.Model = stored.Chat.Model
 	}
-	if out.Admin.APIKey == "" {
-		out.Admin.APIKey = c.Admin.APIKey
+	if !in.fieldPresent("chat.timeoutSeconds", out.Chat.TimeoutSeconds != 0) {
+		out.Chat.TimeoutSeconds = stored.Chat.TimeoutSeconds
 	}
-	if out.DailyQuiz.APIKey == "" {
-		out.DailyQuiz.APIKey = c.DailyQuiz.APIKey
+
+	if !in.fieldPresent("video.apiBase", out.Video.APIBase != "") {
+		out.Video.APIBase = stored.Video.APIBase
 	}
-	// AI 辅助开关：提交未带 enabled 字段时沿用已存值。
-	if out.Assist.Enabled == nil {
-		out.Assist.Enabled = c.Assist.Enabled
+	out.Video.APIKey = keepStoredString(out.Video.APIKey, stored.Video.APIKey)
+	if !in.fieldPresent("video.model", out.Video.Model != "") {
+		out.Video.Model = stored.Video.Model
 	}
+	if !in.fieldPresent("image.apiBase", out.Image.APIBase != "") {
+		out.Image.APIBase = stored.Image.APIBase
+	}
+	out.Image.APIKey = keepStoredString(out.Image.APIKey, stored.Image.APIKey)
+	if !in.fieldPresent("image.model", out.Image.Model != "") {
+		out.Image.Model = stored.Image.Model
+	}
+	if !in.fieldPresent("analysis.apiBase", out.Analysis.APIBase != "") {
+		out.Analysis.APIBase = stored.Analysis.APIBase
+	}
+	out.Analysis.APIKey = keepStoredString(out.Analysis.APIKey, stored.Analysis.APIKey)
+	if !in.fieldPresent("analysis.groupId", out.Analysis.GroupID != "") {
+		out.Analysis.GroupID = stored.Analysis.GroupID
+	}
+	if !in.fieldPresent("analysis.model", out.Analysis.Model != "") {
+		out.Analysis.Model = stored.Analysis.Model
+	}
+	out.Admin = mergeCompatibleModelConfig(in, "admin", stored.Admin, out.Admin)
+	out.DailyQuiz = mergeCompatibleModelConfig(in, "dailyQuiz", stored.DailyQuiz, out.DailyQuiz)
+	if !in.fieldPresent("assist.enabled", out.Assist.Enabled != nil) {
+		out.Assist.Enabled = stored.Assist.Enabled
+	}
+	if !in.fieldPresent("assist.systemPrompt", out.Assist.SystemPrompt != "") {
+		out.Assist.SystemPrompt = stored.Assist.SystemPrompt
+	}
+	out.presence = in.presence
 	return out
+}
+
+func keepStoredString(incoming, stored string) string {
+	if incoming == "" {
+		return stored
+	}
+	return incoming
+}
+
+func mergeCompatibleModelConfig(source Config, section string, stored, incoming CompatibleModelConfig) CompatibleModelConfig {
+	if !source.fieldPresent(section+".provider", incoming.Provider != "") {
+		incoming.Provider = stored.Provider
+	}
+	if !source.fieldPresent(section+".apiBase", incoming.APIBase != "") {
+		incoming.APIBase = stored.APIBase
+	}
+	incoming.APIKey = keepStoredString(incoming.APIKey, stored.APIKey)
+	if !source.fieldPresent(section+".groupId", incoming.GroupID != "") {
+		incoming.GroupID = stored.GroupID
+	}
+	if !source.fieldPresent(section+".model", incoming.Model != "") {
+		incoming.Model = stored.Model
+	}
+	if !source.fieldPresent(section+".timeoutSeconds", incoming.TimeoutSeconds != 0) {
+		incoming.TimeoutSeconds = stored.TimeoutSeconds
+	}
+	return incoming
 }
 
 func (c Config) trimmed() Config {
@@ -360,6 +484,8 @@ func (c Config) trimmed() Config {
 			SystemPrompt: strings.TrimSpace(c.Assist.SystemPrompt),
 		},
 	}
+	out.presence = c.presence
+	return out
 }
 
 func (c CompatibleModelConfig) normalized() CompatibleModelConfig {

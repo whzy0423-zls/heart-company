@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -16,18 +15,14 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/netguard"
-	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
-const miniMaxMaxStreamEventBytes = 1024 * 1024
-
 type MiniMaxGenerator struct {
-	apiBase      string
-	apiKey       string
-	client       *http.Client
-	groupID      string
-	model        string
-	systemPrompt string
+	apiBase string
+	apiKey  string
+	client  *http.Client
+	groupID string
+	model   string
 }
 
 type VideoAnalysisResult struct {
@@ -122,9 +117,8 @@ func NewMiniMaxGenerator(cfg config.MiniMaxConfig) *MiniMaxGenerator {
 			Timeout:   timeout,
 			Transport: netguard.NewGuardedTransport(),
 		},
-		groupID:      strings.TrimSpace(cfg.GroupID),
-		model:        model,
-		systemPrompt: strings.TrimSpace(cfg.SystemPrompt),
+		groupID: strings.TrimSpace(cfg.GroupID),
+		model:   model,
 	}
 }
 
@@ -801,22 +795,6 @@ func videoStoryboardSystemPrompt() string {
 分镜数量控制在 4-8 个。必须贴合用户主题，同时继承参考视频解析出的场景、人物、资产、语音主题和风格。不要编造无法从解析中支持的具体品牌、人物身份或台词。`
 }
 
-// polishKindLabel 返回润色类型的中文标签。
-func polishKindLabel(kind string) string {
-	if strings.TrimSpace(kind) == "video" {
-		return "文生视频"
-	}
-	return "文生图"
-}
-
-// polishSystemPrompt 按文生图/文生视频切换润色侧重点。
-func polishSystemPrompt(kind string) string {
-	if strings.TrimSpace(kind) == "video" {
-		return "你是一名资深的 AI 文生视频提示词工程师。请把用户给出的方向或草稿，扩写润色成一段结构清晰、画面感强的中文视频生成提示词。要点：明确主体与动作、镜头运动（推/拉/摇/移/跟随）、景别、光影氛围、画面风格与质感、节奏与时长感。只输出润色后的提示词正文，不要加任何解释、标题、编号或引号。"
-	}
-	return "你是一名资深的 AI 文生图提示词工程师。请把用户给出的方向或草稿，扩写润色成一段结构清晰、细节丰富的中文图像生成提示词。要点：明确主体、场景环境、构图与视角、光影氛围、色彩、材质细节、艺术风格与画质描述。只输出润色后的提示词正文，不要加任何解释、标题、编号或引号。"
-}
-
 func videoAnalysisSystemPrompt() string {
 	return `你是一名资深视频解析与 Seedance 2.0 提示词工程师。你会根据用户给出的视频地址和名称，尽可能分析视频内容，提取适合复刻或二创的结构化信息。
 请只返回 JSON，不要 Markdown，不要解释。JSON 字段必须为：
@@ -1349,71 +1327,6 @@ func cleanStringList(values []string) []string {
 		out = append(out, value)
 	}
 	return out
-}
-
-// PingResult 对话模型连通性检测结果：仅暴露安全信息，绝不回传密钥。
-type PingResult struct {
-	OK        bool   `json:"ok"`
-	Message   string `json:"message"`
-	LatencyMs int64  `json:"latencyMs"`
-	APIBase   string `json:"apiBase"`
-	Model     string `json:"model"`
-}
-
-// Ping 对 MiniMax 对话网关做一次轻量探活。
-// MiniMax 没有 OpenAI 风格的 /v1/models 只读端点，因此发一条最小的
-// chatcompletion_v2 请求（仅 1 token）来验证"地址可达 + 密钥有效 + GroupId/模型名正确"。
-// 返回结构化结果而非直接 error，便于上层把"配置缺失/网络失败/鉴权失败"统一呈现给前端。
-func (g *MiniMaxGenerator) Ping(ctx context.Context) PingResult {
-	res := PingResult{APIBase: g.apiBase, Model: g.model}
-	if g.apiKey == "" {
-		res.Message = "请先配置 MINIMAX_API_KEY"
-		return res
-	}
-
-	body := map[string]any{
-		"model":              g.model,
-		"temperature":        0.01,
-		"tokens_to_generate": 1,
-		"messages": []map[string]string{
-			{"role": "user", "content": "ping"},
-		},
-	}
-	payload, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.endpoint("/v1/text/chatcompletion_v2"), bytes.NewReader(payload))
-	if err != nil {
-		res.Message = err.Error()
-		return res
-	}
-	req.Header.Set("Authorization", "Bearer "+g.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	start := time.Now()
-	resp, err := g.client.Do(req)
-	res.LatencyMs = time.Since(start).Milliseconds()
-	if err != nil {
-		res.Message = err.Error()
-		return res
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		res.Message = fmt.Sprintf("MiniMax 请求失败(%d): %s", resp.StatusCode, compact(raw))
-		return res
-	}
-	var result map[string]any
-	if err := json.Unmarshal(raw, &result); err != nil {
-		res.Message = "MiniMax 响应解析失败: " + err.Error()
-		return res
-	}
-	if err := baseRespError(result); err != nil {
-		res.Message = err.Error()
-		return res
-	}
-
-	res.OK = true
-	res.Message = fmt.Sprintf("连通正常，对话模型 %s 已响应", g.model)
-	return res
 }
 
 func (g *MiniMaxGenerator) endpoint(path string) string {

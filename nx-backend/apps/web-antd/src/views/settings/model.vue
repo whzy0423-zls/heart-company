@@ -2,6 +2,7 @@
 import type {
   ChatPingResult,
   ModelConfigPayload,
+  ModelConfigUpdatePayload,
   ModelConfigView,
 } from '#/api';
 
@@ -32,7 +33,9 @@ import EditorShell from '../site-config/components/editor-shell.vue';
 const loading = ref(true);
 const saving = ref(false);
 const route = useRoute();
-const isAdminModelOnly = computed(() => route.path.includes('/settings/admin-model'));
+const isAdminModelOnly = computed(() =>
+  route.path.includes('/settings/admin-model'),
+);
 const pageTitle = computed(() =>
   isAdminModelOnly.value ? '管理端大模型配置' : '模型配置',
 );
@@ -72,15 +75,28 @@ const form = ref<ModelConfigPayload>({
   assist: { enabled: true, systemPrompt: '' },
 });
 const chatKeySet = ref(false);
+const loadedChatProvider = ref('');
 const videoKeySet = ref(false);
 const imageKeySet = ref(false);
 const analysisKeySet = ref(false);
 const adminKeySet = ref(false);
 const dailyQuizKeySet = ref(false);
 
-const providerOptions = [
+const chatProviderOptions = [
   { label: 'OpenAI 协议', value: 'openai-compatible' },
   { label: 'Anthropic 协议', value: 'anthropic-compatible' },
+];
+const chatProviderValues = new Set(
+  chatProviderOptions.map((option) => option.value),
+);
+const chatKeyReusable = computed(
+  () =>
+    chatKeySet.value &&
+    chatProviderValues.has(form.value.chat.provider) &&
+    form.value.chat.provider === loadedChatProvider.value,
+);
+const adminProviderOptions = [
+  ...chatProviderOptions,
   { label: 'MiniMax 协议', value: 'minimax' },
 ];
 const chatProviderOptions = [
@@ -89,7 +105,25 @@ const chatProviderOptions = [
 ];
 const dailyQuizProviderOptions = [
   { label: '继承管理端', value: '' },
-  ...providerOptions,
+  ...adminProviderOptions,
+];
+const chatTimeoutError = '对话模型超时时间必须是大于 0 的整数';
+
+function parseChatTimeout(value: unknown) {
+  if (value === '') return null;
+  const timeout = Number(value);
+  return Number.isInteger(timeout) && timeout > 0 ? timeout : null;
+}
+
+const chatTimeoutRules = [
+  { message: '请输入超时时间（秒）', required: true },
+  {
+    validator: (_rule: unknown, value: unknown) => {
+      return parseChatTimeout(value) !== null
+        ? Promise.resolve()
+        : Promise.reject(new Error(chatTimeoutError));
+    },
+  },
 ];
 const chatEndpointHint = computed(() => {
   const base = (form.value.chat.apiBase || 'https://coding-play.codes').replace(
@@ -114,6 +148,8 @@ async function load() {
           apiBase: data.chat?.apiBase || 'https://coding-play.codes',
           apiKey: '',
           model: data.chat?.model ?? '',
+          provider: data.chat?.provider ?? '',
+          timeoutSeconds: data.chat?.timeoutSeconds ?? 30,
         },
         video: {
           apiBase: data.video?.apiBase ?? '',
@@ -153,6 +189,7 @@ async function load() {
         },
       };
       form.value = nextForm;
+      loadedChatProvider.value = data.chat?.provider ?? '';
       chatKeySet.value = data.chat?.apiKeySet ?? false;
       videoKeySet.value = data.video?.apiKeySet ?? false;
       imageKeySet.value = data.image?.apiKeySet ?? false;
@@ -165,48 +202,90 @@ async function load() {
   }
 }
 
+function currentChatPayload(): ModelConfigPayload['chat'] | null {
+  const provider = form.value.chat.provider;
+  if (!chatProviderValues.has(provider)) {
+    message.error('请选择 OpenAI 或 Anthropic 协议');
+    return null;
+  }
+  if (!form.value.chat.apiKey.trim() && !chatKeyReusable.value) {
+    message.error(
+      provider !== loadedChatProvider.value
+        ? '切换协议后请重新填写 API Key'
+        : '请填写对话模型 API Key',
+    );
+    return null;
+  }
+  const timeoutSeconds = parseChatTimeout(form.value.chat.timeoutSeconds);
+  if (timeoutSeconds === null) {
+    message.error(chatTimeoutError);
+    return null;
+  }
+  return {
+    apiBase: form.value.chat.apiBase,
+    apiKey: form.value.chat.apiKey,
+    model: form.value.chat.model,
+    provider,
+    timeoutSeconds,
+  };
+}
+
 async function save() {
   saving.value = true;
   try {
-    const payload: ModelConfigPayload = {
-      ...form.value,
-      analysis: {
-        apiBase: '',
-        apiKey: '',
-        groupId: '',
-        model: form.value.analysis.model,
-      },
-      admin: {
-        apiBase: form.value.admin.apiBase,
-        apiKey: form.value.admin.apiKey,
-        groupId: form.value.admin.groupId,
-        model: form.value.admin.model,
-        provider: form.value.admin.provider,
-        timeoutSeconds: Number(form.value.admin.timeoutSeconds || 30),
-      },
-      dailyQuiz: {
-        apiBase: form.value.dailyQuiz.apiBase,
-        apiKey: form.value.dailyQuiz.apiKey,
-        groupId: form.value.dailyQuiz.groupId,
-        model: form.value.dailyQuiz.model,
-        provider: form.value.dailyQuiz.provider,
-        timeoutSeconds: Number(form.value.dailyQuiz.timeoutSeconds || 30),
-      },
+    const admin = {
+      apiBase: form.value.admin.apiBase,
+      apiKey: form.value.admin.apiKey,
+      groupId: form.value.admin.groupId,
+      model: form.value.admin.model,
+      provider: form.value.admin.provider,
+      timeoutSeconds: Number(form.value.admin.timeoutSeconds || 30),
     };
+    const dailyQuiz = {
+      apiBase: form.value.dailyQuiz.apiBase,
+      apiKey: form.value.dailyQuiz.apiKey,
+      groupId: form.value.dailyQuiz.groupId,
+      model: form.value.dailyQuiz.model,
+      provider: form.value.dailyQuiz.provider,
+      timeoutSeconds: Number(form.value.dailyQuiz.timeoutSeconds || 30),
+    };
+    let chat: ModelConfigPayload['chat'] | null = null;
+    let payload: ModelConfigUpdatePayload;
+    if (isAdminModelOnly.value) {
+      payload = { admin, dailyQuiz };
+    } else {
+      chat = currentChatPayload();
+      if (!chat) return;
+      payload = {
+        ...form.value,
+        chat,
+        analysis: {
+          apiBase: '',
+          apiKey: '',
+          groupId: '',
+          model: form.value.analysis.model,
+        },
+        admin,
+        dailyQuiz,
+      };
+    }
     const saved = await updateModelConfigApi(payload);
     // 保存后清空密钥输入，刷新「已配置」状态
-    form.value.chat.apiKey = '';
-    form.value.video.apiKey = '';
-    form.value.image.apiKey = '';
-    form.value.analysis.apiKey = '';
     form.value.admin.apiKey = '';
     form.value.dailyQuiz.apiKey = '';
-    chatKeySet.value = saved.chat?.apiKeySet ?? false;
-    videoKeySet.value = saved.video?.apiKeySet ?? false;
-    imageKeySet.value = saved.image?.apiKeySet ?? false;
-    analysisKeySet.value = saved.analysis?.apiKeySet ?? false;
     adminKeySet.value = saved.admin?.apiKeySet ?? false;
     dailyQuizKeySet.value = saved.dailyQuiz?.apiKeySet ?? false;
+    if (chat) {
+      form.value.chat.apiKey = '';
+      form.value.video.apiKey = '';
+      form.value.image.apiKey = '';
+      form.value.analysis.apiKey = '';
+      loadedChatProvider.value = saved.chat?.provider ?? chat.provider;
+      chatKeySet.value = saved.chat?.apiKeySet ?? false;
+      videoKeySet.value = saved.video?.apiKeySet ?? false;
+      imageKeySet.value = saved.image?.apiKeySet ?? false;
+      analysisKeySet.value = saved.analysis?.apiKeySet ?? false;
+    }
     message.success('模型配置已保存并即时生效');
   } finally {
     saving.value = false;
@@ -221,7 +300,9 @@ async function testChat() {
   pingResult.value = null;
   try {
     // 携带当前表单的对话配置（密钥留空则回退到已保存/环境基线）
-    pingResult.value = await testChatModelApi(form.value.chat);
+    const chat = currentChatPayload();
+    if (!chat) return;
+    pingResult.value = await testChatModelApi(chat);
   } finally {
     testing.value = false;
   }
@@ -284,16 +365,17 @@ async function testChat() {
           </Col>
         </Row>
 
-        <Alert
-          v-if="pingResult"
-          class="mt-2"
-          :type="pingResult.ok ? 'success' : 'error'"
-          show-icon
-          :message="pingResult.ok ? '对话模型连通正常' : '对话模型连通失败'"
-          :description="`${pingResult.message}${
-            pingResult.ok ? `（耗时 ${pingResult.latencyMs}ms）` : ''
-          }`"
-        />
+          <Alert
+            v-if="pingResult"
+            class="mt-2"
+            :type="pingResult.ok ? 'success' : 'error'"
+            show-icon
+            :message="pingResult.ok ? '对话模型连通正常' : '对话模型连通失败'"
+            :description="`${pingResult.message}${
+              pingResult.ok ? `（耗时 ${pingResult.latencyMs}ms）` : ''
+            }`"
+          />
+        </section>
 
         <Divider orientation="left">视频模型</Divider>
         <Row :gutter="24">
@@ -408,7 +490,7 @@ async function testChat() {
           <Form.Item label="协议">
             <Select
               v-model:value="form.admin.provider"
-              :options="providerOptions"
+              :options="adminProviderOptions"
             />
           </Form.Item>
           <Form.Item label="接口地址 (API Base)">
@@ -499,7 +581,9 @@ async function testChat() {
             <Input.Password
               v-model:value="form.dailyQuiz.apiKey"
               :placeholder="
-                dailyQuizKeySet ? '已单独配置，留空表示不修改' : '留空继承管理端密钥'
+                dailyQuizKeySet
+                  ? '已单独配置，留空表示不修改'
+                  : '留空继承管理端密钥'
               "
               autocomplete="new-password"
             />

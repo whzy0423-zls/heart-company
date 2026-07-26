@@ -64,7 +64,6 @@ func TestApplyAnalysisUsesVoiceMiniMaxCredentialsAndDefaultM3(t *testing.T) {
 		Chat: ChatConfig{
 			APIBase: "https://coding-play.codes",
 			APIKey:  "chat-key",
-			GroupID: "chat-group",
 			Model:   "gpt-5.5",
 		},
 		Analysis: AnalysisConfig{

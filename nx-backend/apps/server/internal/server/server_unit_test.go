@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -767,7 +768,7 @@ func TestBuildModelConfigViewIncludesDailyQuizConfig(t *testing.T) {
 		TimeoutSeconds: 52,
 	}
 
-	view := buildModelConfigView(config.MiniMaxConfig{}, config.VideoConfig{}, config.ImageConfig{}, config.MiniMaxConfig{}, admin, dailyQuiz, modelconfig.Config{})
+	view := buildModelConfigView(modelconfig.ChatConfig{}, config.VideoConfig{}, config.ImageConfig{}, config.MiniMaxConfig{}, admin, dailyQuiz, modelconfig.Config{})
 
 	if view.DailyQuiz.Provider != modelconfig.ProviderAnthropicCompatible || view.DailyQuiz.APIBase != "https://quiz.example.com/v1" || view.DailyQuiz.Model != "claude-quiz" || view.DailyQuiz.TimeoutSeconds != 52 {
 		t.Fatalf("expected daily quiz model config in view, got %+v", view.DailyQuiz)
