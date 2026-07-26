@@ -5,8 +5,9 @@ const FIELDS = ['contactName', 'phone', 'intent', 'preferredTime', 'message']
 
 function normalizeDraft(input) {
   if (!input || typeof input !== 'object') return null
+  const kind = typeof input.kind === 'string' ? input.kind.trim() : ''
   const data = {
-    kind: typeof input.kind === 'string' && input.kind ? input.kind : DEFAULT_KIND,
+    kind: kind || DEFAULT_KIND,
   }
   for (const field of FIELDS) {
     data[field] = typeof input[field] === 'string' ? input[field] : ''
