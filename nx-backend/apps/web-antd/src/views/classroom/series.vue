@@ -246,9 +246,11 @@ onMounted(load);
   >
     <Form layout="vertical"
       ><Form.Item label="系列名称" required
-        ><Input v-model:value="form.title" /></Form.Item
+        ><Input v-model:value="form.title" :disabled="!canWrite" /></Form.Item
       ><Form.Item label="老师"
-        ><Input v-model:value="form.teacherName" /></Form.Item
+        ><Input
+          v-model:value="form.teacherName"
+          :disabled="!canWrite" /></Form.Item
       ><Form.Item label="权限"
         ><Select
           v-model:value="form.accessLevel"
@@ -265,7 +267,9 @@ onMounted(load);
           :disabled="!canPrice"
           :min="1" /></Form.Item
       ><Form.Item label="简介"
-        ><Input.TextArea v-model:value="form.summary" /></Form.Item
+        ><Input.TextArea
+          v-model:value="form.summary"
+          :disabled="!canWrite" /></Form.Item
     ></Form>
   </Modal>
 </template>

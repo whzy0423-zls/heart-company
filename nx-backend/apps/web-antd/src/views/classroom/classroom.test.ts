@@ -14,6 +14,8 @@ import {
   classroomOperationError,
   classroomPermissions,
   playbackControl,
+  uploadStatusLabel,
+  visibleClassroomTabs,
 } from './classroom-view-model';
 import { resolveUploadRetryContext } from './upload-flow';
 
@@ -224,6 +226,29 @@ describe('teacher classroom admin UI contract', () => {
       '价格冲突',
     );
     expect(classroomOperationError({}, '保存失败')).toBe('保存失败');
+  });
+
+  it('hides upload tab and upload task mount when Upload permission is missing', () => {
+    expect(visibleClassroomTabs(false)).toEqual(['contents', 'series']);
+    expect(visibleClassroomTabs(true)).toContain('uploads');
+    const source = read('views/classroom/index.vue');
+    expect(source).toContain('visibleClassroomTabs(canUpload.value)');
+    expect(source).toContain("activeTab === 'uploads' && canUpload");
+  });
+
+  it('merges upload task and content media statuses for operator-visible state', () => {
+    expect(uploadStatusLabel('initiated')).toBe('等待上传');
+    expect(uploadStatusLabel('uploading')).toBe('上传中');
+    expect(uploadStatusLabel('completing')).toBe('正在合并');
+    expect(uploadStatusLabel('completed', 'processing')).toBe('媒体处理中');
+    expect(uploadStatusLabel('completed', 'ready')).toBe('可发布');
+    expect(uploadStatusLabel('failed')).toBe('失败');
+  });
+
+  it('keeps metadata controls read-only for Price-only operators', () => {
+    const editor = read('views/classroom/components/content-editor.vue');
+    expect(editor).toContain(':disabled="!canWrite"');
+    expect(editor).toContain(':disabled="!canPrice"');
   });
 
   it('shows progress, retry, loading, empty and error feedback', () => {

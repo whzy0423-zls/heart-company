@@ -163,10 +163,17 @@ watch(
 <template>
   <Form layout="vertical" class="editor-form">
     <Form.Item label="课件标题" required
-      ><Input v-model:value="form.title" placeholder="请输入清晰、可检索的标题"
+      ><Input
+        v-model:value="form.title"
+        :disabled="!canWrite"
+        placeholder="请输入清晰、可检索的标题"
     /></Form.Item>
     <Form.Item label="课件类型" required>
-      <Radio.Group v-model:value="form.contentType" button-style="solid">
+      <Radio.Group
+        v-model:value="form.contentType"
+        :disabled="!canWrite"
+        button-style="solid"
+      >
         <Radio.Button value="video">视频课件</Radio.Button
         ><Radio.Button value="audio">音频课件</Radio.Button>
       </Radio.Group>
@@ -174,13 +181,14 @@ watch(
     <Form.Item label="所属系列">
       <Select
         v-model:value="form.seriesId"
+        :disabled="!canWrite"
         allow-clear
         placeholder="不选择则为独立课件"
         :options="series.map((item) => ({ label: item.title, value: item.id }))"
       />
     </Form.Item>
     <Form.Item v-if="form.seriesId" label="展示入口">
-      <Checkbox v-model:checked="form.showAsStandalone"
+      <Checkbox v-model:checked="form.showAsStandalone" :disabled="!canWrite"
         >同时在独立内容入口展示</Checkbox
       >
       <span class="field-hint"
@@ -227,7 +235,9 @@ watch(
       show-icon
       message="该课件继承付费系列并在独立入口展示，请确认用户购买策略。"
       ><template #description
-        ><Radio.Group v-model:value="standalonePaidStrategy"
+        ><Radio.Group
+          v-model:value="standalonePaidStrategy"
+          :disabled="!canWrite"
           ><Radio value="series">购买系列（推荐，解锁系列全部课件）</Radio
           ><Radio value="content" disabled
             >单课付费（请先将访问权限切换为单课付费）</Radio
@@ -239,13 +249,19 @@ watch(
       独立入口会展示购买策略：继承系列时购买系列；单课付费时购买本课。
     </p>
     <Form.Item label="老师名称"
-      ><Input v-model:value="form.teacherName"
+      ><Input v-model:value="form.teacherName" :disabled="!canWrite"
     /></Form.Item>
     <Form.Item label="简介"
-      ><Input.TextArea v-model:value="form.description" :rows="4"
+      ><Input.TextArea
+        v-model:value="form.description"
+        :disabled="!canWrite"
+        :rows="4"
     /></Form.Item>
     <Form.Item label="排序"
-      ><InputNumber v-model:value="form.sortOrder" :min="0"
+      ><InputNumber
+        v-model:value="form.sortOrder"
+        :disabled="!canWrite"
+        :min="0"
     /></Form.Item>
     <div class="editor-actions">
       <Space

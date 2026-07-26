@@ -4,6 +4,7 @@ import type {
   ClassroomUploadTask,
 } from '#/api/core/classroom';
 import { resolveUploadRetryContext } from './upload-flow';
+import { uploadStatusLabel } from './classroom-view-model';
 import { onMounted, ref } from 'vue';
 import {
   Alert,
@@ -47,17 +48,12 @@ const columns = [
   { dataIndex: 'status', title: '状态' },
   { key: 'action', title: '操作' },
 ];
-const statusText: Record<string, string> = {
-  initiated: '等待上传',
-  uploading: '上传中',
-  completing: '正在合并',
-  completed: '上传完成',
-  processing: '媒体处理中',
-  ready: '可发布',
-  failed: '失败',
-  aborted: '已终止',
-  expired: '已过期',
-};
+function contentStatus(task: ClassroomUploadTask) {
+  return props.contents?.find((item) => item.id === task.contentId)?.status;
+}
+function displayStatus(task: ClassroomUploadTask) {
+  return uploadStatusLabel(task.status, contentStatus(task));
+}
 
 function progress(task: ClassroomUploadTask) {
   return task.status === 'completed'
@@ -267,7 +263,9 @@ onMounted(load);
             size="small"
         /></template>
         <template v-else-if="column.dataIndex === 'status'"
-          ><Tag>{{ statusText[record.status] || record.status }}</Tag></template
+          ><Tag>{{
+            displayStatus(record as ClassroomUploadTask)
+          }}</Tag></template
         >
         <template v-else-if="column.key === 'action'"
           ><Space

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ClassroomContent, ClassroomSeries } from '#/api/core/classroom';
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { Page } from '@vben/common-ui';
 import {
   Alert,
@@ -28,6 +28,7 @@ import UploadTasks from './upload-tasks.vue';
 import {
   classroomOperationError,
   classroomPermissions,
+  visibleClassroomTabs,
 } from './classroom-view-model';
 
 const accessStore = useAccessStore();
@@ -53,11 +54,18 @@ const columns = [
   { dataIndex: 'status', title: '状态' },
   { key: 'action', title: '操作' },
 ];
-const tabs = [
+const allTabs = [
   { key: 'contents', label: '课件管理' },
   { key: 'series', label: '课程系列' },
   { key: 'uploads', label: '上传任务' },
 ];
+const tabs = computed(() => {
+  const visible = visibleClassroomTabs(canUpload.value);
+  return allTabs.filter((item) => visible.includes(item.key));
+});
+watch(canUpload, (allowed) => {
+  if (!allowed && activeTab.value === 'uploads') activeTab.value = 'contents';
+});
 const statusText: Record<string, string> = {
   draft: '草稿',
   published: '已发布',
@@ -236,7 +244,11 @@ onMounted(load);
         :can-publish="canPublish"
         :can-write="canWrite"
       />
-      <UploadTasks v-else :can-upload="canUpload" :contents="contents" />
+      <UploadTasks
+        v-else-if="activeTab === 'uploads' && canUpload"
+        :can-upload="canUpload"
+        :contents="contents"
+      />
     </Card>
     <Modal
       v-model:open="editorOpen"
