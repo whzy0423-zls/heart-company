@@ -174,6 +174,10 @@ assert.match(pauseControl, /\bv-if=["']carousel\.items\.length\s*>\s*1\s*&&\s*ca
 assert.match(pauseControl, /@click=["']toggleCarouselPaused["']/, 'home carousel pause control should toggle autoplay')
 assert.match(pauseControl, /:aria-label=["'][^"]*carouselPaused[^"]*["']/, 'home carousel pause control should expose a state-aware accessible label')
 assert.match(homeRoot, /\{\{ carouselPaused \? ['"]继续轮播['"] : ['"]暂停轮播['"] \}\}/, 'home carousel pause control should show clear pause and resume text')
+assert.match(indexPage, /\.home-carousel__toggle\s*\{[^}]*min-height:\s*88rpx\s*;[^}]*line-height:\s*88rpx\s*;/, 'home carousel control source should define an 88rpx touch target and line box')
+const homeCarouselToggleStyle = pageStyleDeclarations(vueSection(indexPage, 'style') || '', '.home-carousel__toggle')
+assert.match(homeCarouselToggleStyle, /min-height:\s*88rpx\s*;/, 'home carousel control should keep an 88rpx minimum touch target')
+assert.match(homeCarouselToggleStyle, /line-height:\s*88rpx\s*;/, 'home carousel control should keep its label centered in the enlarged target')
 
 const homeOpeningViews = indexPage.match(/<view\b[^>]*>/g) || []
 
