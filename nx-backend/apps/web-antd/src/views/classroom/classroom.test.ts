@@ -338,6 +338,9 @@ describe('teacher classroom admin UI contract', () => {
     expect(read('views/classroom/upload-tasks.vue')).toContain(
       'const activeAtStart = activeTaskId.value',
     );
+    expect(read('views/classroom/upload-tasks.vue')).toContain(
+      'await abortClassroomUploadApi(taskId)',
+    );
   });
 
   it('requires task-specific retry identity and merges real bytes progress', () => {

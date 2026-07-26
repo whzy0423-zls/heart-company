@@ -147,6 +147,20 @@ function chooseFile(event: Event) {
   selectedFile.value = (event.target as HTMLInputElement).files?.[0];
   retryConfirmed.value = false;
 }
+async function cancelCurrentUpload() {
+  const taskId = activeTaskId.value;
+  uploadController.value?.abort();
+  if (!taskId) return;
+  try {
+    await abortClassroomUploadApi(taskId);
+    uploadContexts.delete(taskId);
+    message.info('上传已取消');
+    await load();
+  } catch (cause) {
+    if ((cause as { status?: number })?.status !== 409)
+      message.error(cause instanceof Error ? cause.message : '取消上传失败');
+  }
+}
 async function performUpload(file: File, contentId: number) {
   if (uploading.value)
     return message.warning('已有上传任务正在进行，请等待完成或终止');
@@ -325,7 +339,7 @@ onMounted(() => {
         >开始上传</Button
       >
       <Progress v-if="uploading" :percent="uploadPercent" />
-      <Button v-if="uploading" danger @click="uploadController?.abort()"
+      <Button v-if="uploading" danger @click="cancelCurrentUpload"
         >取消当前上传</Button
       >
     </div>
