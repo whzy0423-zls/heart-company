@@ -25,24 +25,24 @@ assert.match(
 )
 
 const pagesConfig = readFileSync('src/pages.json', 'utf8')
+const pagesConfigJson = JSON.parse(pagesConfig)
+function configuredPage(path) {
+  const mainPage = pagesConfigJson.pages.find((page) => page.path === path)
+  if (mainPage) return mainPage
+  for (const subpackage of pagesConfigJson.subPackages || []) {
+    const page = subpackage.pages.find(
+      (item) => `${subpackage.root}/${item.path}`.replace(/\/+/g, '/') === path,
+    )
+    if (page) return page
+  }
+  return undefined
+}
 assert.doesNotMatch(pagesConfig, /pages\/chat\/chat/, 'pages.json must not register the removed chat page')
 assert.doesNotMatch(pagesConfig, /问 AI|AI 对话/, 'tabBar must not expose an AI chat entry')
 assert.equal(statSync('src/pages/chat', { throwIfNoEntry: false }), undefined, 'removed chat page directory should stay deleted')
-assert.match(
-  pagesConfig,
-  /"path"\s*:\s*"pages\/profile-edit\/profile-edit"[\s\S]*?"navigationBarTitleText"\s*:\s*"个人资料"/,
-  'pages.json should register the dedicated personal-profile page with its approved title',
-)
-assert.match(
-  pagesConfig,
-  /"path"\s*:\s*"pages\/booking-records\/booking-records"[\s\S]*?"navigationBarTitleText"\s*:\s*"预约记录"/,
-  'pages.json should register the appointment records page with its Chinese title',
-)
-assert.match(
-  pagesConfig,
-  /"path"\s*:\s*"pages\/booking-detail\/booking-detail"[\s\S]*?"navigationBarTitleText"\s*:\s*"预约详情"/,
-  'pages.json should register the appointment detail page with its Chinese title',
-)
+assert.equal(configuredPage('pages/profile-edit/profile-edit')?.style?.navigationBarTitleText, '个人资料')
+assert.equal(configuredPage('pages/booking-records/booking-records')?.style?.navigationBarTitleText, '预约记录')
+assert.equal(configuredPage('pages/booking-detail/booking-detail')?.style?.navigationBarTitleText, '预约详情')
 
 const h5Index = readFileSync('index.html', 'utf8')
 assert.match(h5Index, /viewport-fit=cover/, 'H5 viewport meta should enable iOS safe-area env variables')
@@ -117,7 +117,7 @@ const indexPage = readFileSync('src/pages/index/index.vue', 'utf8')
 const homeTemplate = indexPage.match(/<template>([\s\S]*?)<\/template>/)?.[1] || ''
 const homeRoot = homeTemplate.match(/<view\s+class=["']wrap home page-stack ios-page ios-safe-bottom["']>([\s\S]*?)<\/view>/)?.[1] || ''
 const carouselStart = homeRoot.indexOf('<swiper')
-const homeNavStart = homeRoot.indexOf('<view class="home-nav">')
+const homeNavStart = homeRoot.search(/<view\b[^>]*\bclass=["']home-nav["']/)
 
 assert.ok(carouselStart >= 0, 'home root should render a carousel before its navigation')
 assert.ok(homeNavStart >= 0, 'home root should render the home navigation')
@@ -137,6 +137,37 @@ assert.match(indexPage, /refreshSiteConfig/, 'home page should refresh carousel 
 assert.match(indexPage, /filterFailedCarouselItems/, 'home page should preserve failed-image filtering when applying cached and refreshed configuration')
 assert.match(indexPage, /failedCarouselImages\s*=\s*new Set\(\)/, 'home page should retain failed image URLs across configuration refreshes')
 assert.match(indexPage, /failedCarouselImages\.add\(image\)/, 'home page should remember each failed carousel image URL')
+assert.match(indexPage, /import\s*\{[^}]*\bnormalizeMiniappHome\b[^}]*\}\s*from\s*['"]\.\.\/\.\.\/utils\/homeMenu['"]/, 'home page should import the normalized miniapp home contract')
+assert.match(indexPage, /const\s+miniappHome\s*=\s*ref\(normalizeMiniappHome\(\)\)/, 'home page should start from backward-compatible purple home defaults')
+const applyHomeConfigBody = bracedBody(/function\s+applyHomeConfig\s*\(\s*config\s*\)\s*\{/.exec(indexPage)) || ''
+assert.match(applyHomeConfigBody, /normalizeHomeCarousel\(config\)/, 'one site-config application should update the carousel')
+assert.match(applyHomeConfigBody, /miniappHome\.value\s*=\s*normalizeMiniappHome\(config\)/, 'one site-config application should update the configured home sections')
+assert.match(indexPage, /if\s*\(cached\)\s*applyHomeConfig\(cached\)/, 'cached site configuration should update carousel and home copy together')
+assert.match(indexPage, /refreshSiteConfig\(\)[\s\S]*?\.then\(applyHomeConfig\)/, 'refreshed site configuration should update carousel and home copy together')
+assert.match(homeTemplate, /<view\b(?=[^>]*\bclass=["']home-nav["'])(?=[^>]*\bv-if=["']miniappHome\.brand\.enabled["'])[^>]*>/, 'brand navigation should follow configured visibility')
+assert.match(homeTemplate, /<text\s+class=["']home-nav__brand["']>\{\{ miniappHome\.brand\.name \}\}<\/text>/, 'brand name should render normalized configuration')
+assert.match(homeTemplate, /<text\s+class=["']home-nav__tagline["']>\{\{ miniappHome\.brand\.tagline \}\}<\/text>/, 'brand tagline should render normalized configuration')
+assert.match(homeTemplate, /<view\b(?=[^>]*\bclass=["']hero card ios-card["'])(?=[^>]*\bv-if=["']miniappHome\.hero\.enabled["'])[^>]*>/, 'hero should follow configured visibility')
+for (const [className, field] of [
+  ['hero__kicker', 'kicker'],
+  ['hero__title', 'title'],
+  ['hero__lead', 'description'],
+]) {
+  assert.match(homeTemplate, new RegExp(`<text\\s+class=["']${className}["']>\\{\\{ miniappHome\\.hero\\.${field} \\}\\}<\\/text>`), `.${className} should render normalized hero copy`)
+}
+assert.match(homeTemplate, /<button\b[^>]*\bclass=["']hero__cta ios-button["'][^>]*>[\s\S]*?\{\{ miniappHome\.hero\.buttonText \}\}[\s\S]*?<\/button>/, 'hero CTA should render normalized button copy')
+assert.match(homeTemplate, /<view\b(?=[^>]*\bclass=["']section-head ios-section["'])(?=[^>]*\bv-if=["']miniappHome\.entriesSection\.enabled["'])[^>]*>/, 'entry section heading should follow configured visibility')
+assert.match(homeTemplate, /<text\s+class=["']section-title["']>\{\{ miniappHome\.entriesSection\.title \}\}<\/text>/, 'entry section title should render normalized configuration')
+assert.match(homeTemplate, /<text\s+class=["']section-lead["']>\{\{ miniappHome\.entriesSection\.description \}\}<\/text>/, 'entry section description should render normalized configuration')
+assert.match(homeTemplate, /<view\b(?=[^>]*\bclass=["']energy-grid["'])(?=[^>]*\bv-if=["']miniappHome\.entriesSection\.enabled["'])[^>]*>/, 'entry grid should follow configured section visibility')
+assert.match(homeTemplate, /<view\b(?=[^>]*\bclass=["']growth-card["'])(?=[^>]*\bv-if=["']miniappHome\.growth\.enabled["'])[^>]*>/, 'growth section should follow configured visibility')
+for (const [className, field] of [
+  ['growth-card__eyebrow', 'eyebrow'],
+  ['growth-card__title', 'title'],
+  ['growth-card__desc', 'description'],
+]) {
+  assert.match(homeTemplate, new RegExp(`<text\\s+class=["']${className}["']>\\{\\{ miniappHome\\.growth\\.${field} \\}\\}<\\/text>`), `.${className} should render normalized growth copy`)
+}
 const pauseControl = homeRoot.match(/<button\b[\s\S]*?\bclass=["']home-carousel__toggle["'][\s\S]*?<\/button>/)?.[0] || ''
 assert.ok(pauseControl, 'home carousel should expose a pause or resume control')
 assert.match(pauseControl, /\bv-if=["']carousel\.items\.length\s*>\s*1\s*&&\s*carousel\.autoplay["']/, 'home carousel pause or resume control should only render for multiple autoplay slides')
@@ -204,43 +235,50 @@ function assertVisibleFocusStyle(className) {
   assert.match(focusRule[2], /\b(?:outline|box-shadow)\s*:/, `.${className} focus state should use an outline or box shadow`)
 }
 
-const energyCards = homeOpeningViews.filter((tag) => staticClassTokens(tag).includes('energy-card'))
-assert.equal(energyCards.length, 4, 'home page should render exactly four energy dashboard cards')
-for (const card of energyCards) {
-  const ariaLabel = card.match(/\saria-label=["']([^"']*)["']/)?.[1]
-  assert.ok(ariaLabel?.trim(), `energy card should expose a non-empty accessibility label: ${card}`)
-  assert.match(card, /\srole=["']button["']/, `energy card should use button semantics: ${card}`)
-  assert.match(card, /\shover-class=["']energy-card--pressed["']/, `energy card should expose the shared pressed state: ${card}`)
+assert.match(indexPage, /import\s*\{[^}]*\bMINIAPP_HOME_ENTRY_BEHAVIORS\b[^}]*\}\s*from\s*['"]\.\.\/\.\.\/utils\/homeMenu['"]/, 'home page should import the fixed entry behavior map')
+const energyCards = homeOpeningViews.filter((tag) => staticClassTokens(tag).includes('energy-card') || (tag.includes(':class=') && tag.includes("'energy-card'")))
+assert.equal(energyCards.length, 1, 'home page should use one ordered entry template instead of four hard-coded cards')
+const energyCard = energyCards[0] || ''
+assert.match(indexPage, /const\s+enabledHomeEntries\s*=\s*computed\(\(\)\s*=>\s*miniappHome\.value\.entriesSection\.items\.filter\(\(item\)\s*=>\s*item\.enabled\)\)/, 'enabled entry state should preserve normalized order while filtering hidden cards')
+assert.match(energyCard, /\sv-for=["']entry in enabledHomeEntries["']/, 'energy cards should render the normalized enabled entry list')
+assert.match(energyCard, /\s:key=["']entry\.key["']/, 'energy cards should use the fixed entry key as stable identity')
+assert.match(energyCard, /:class=["'][^\n>]*energy-card--\$\{entry\.theme\}[^\n>]*["']/, 'energy cards should apply only normalized theme modifier classes')
+assert.match(energyCard, /:aria-label=["']MINIAPP_HOME_ENTRY_BEHAVIORS\[entry\.key\]\.ariaLabel["']/, 'energy cards should use the fixed accessible destination label')
+assert.match(energyCard, /\srole=["']button["']/, 'energy card template should use button semantics')
+assert.match(energyCard, /\shover-class=["']energy-card--pressed["']/, 'energy card template should retain pressed feedback')
+assert.match(energyCard, /\s@click=["']activateHomeEntry\(entry\.key\)["']/, 'energy card template should use the fixed entry dispatcher')
+assertKeyboardViewControl(energyCard, 'energy card template', 'activateHomeEntry\\(entry\\.key\\)')
+assert.match(homeTemplate, /<view\b(?=[^>]*:class=["'][^>]*energy-icon--\$\{entry\.icon\}[^>]*["'])(?=[^>]*aria-hidden=["']true["'])[^>]*>/, 'energy icons should apply only normalized icon modifier classes')
+assert.match(homeTemplate, /<text\s+class=["']energy-card__title["']>\{\{ entry\.title \}\}<\/text>/, 'energy cards should render configured titles')
+assert.match(homeTemplate, /<text\s+class=["']energy-card__desc["']>\{\{ entry\.description \}\}<\/text>/, 'energy cards should render configured descriptions')
+assert.doesNotMatch(indexPage, /entry\.(?:url|path|href|route)/, 'configured entry data must never supply navigation URLs')
+
+const activateHomeEntryBody = bracedBody(/function\s+activateHomeEntry\s*\(\s*key\s*\)\s*\{/.exec(indexPage)) || ''
+assert.match(activateHomeEntryBody, /const\s+behavior\s*=\s*MINIAPP_HOME_ENTRY_BEHAVIORS\[key\]/, 'entry activation should resolve only fixed behavior metadata')
+assert.match(activateHomeEntryBody, /if\s*\(!behavior\)\s*return/, 'entry activation should ignore unknown keys')
+assert.match(activateHomeEntryBody, /uni\[behavior\.method\]\(\{\s*url:\s*behavior\.url\s*\}\)/, 'entry activation should invoke the fixed navigation method and URL')
+for (const [handler, key] of [['startTest', 'test'], ['goRelation', 'relation'], ['goLearn', 'learn'], ['goProfile', 'profile']]) {
+  assert.match(functionBody(handler) || '', new RegExp(`activateHomeEntry\\(["']${key}["']\\)`), `${handler} should reuse the fixed ${key} entry mapping`)
 }
 
-const energyCardContracts = [
-  { modifier: 'energy-card--test', label: '开始九型人格测试', handler: 'startTest' },
-  { modifier: 'energy-card--relation', label: '打开九型关系合盘', handler: 'goRelation' },
-  { modifier: 'energy-card--learn', label: '打开老师课程与课件', handler: 'goLearn' },
-  { modifier: 'energy-card--profile', label: '打开我的成长档案', handler: 'goProfile' },
-]
-for (const { modifier, label, handler } of energyCardContracts) {
-  const card = energyCards.find((tag) => staticClassTokens(tag).includes(modifier))
-  assert.ok(card, `home page should render the ${modifier} energy card`)
-  assert.match(card, new RegExp(`\\saria-label=["']${label}["']`), `${modifier} should expose its exact accessible label`)
-  assert.match(card, new RegExp(`\\s@click=["']${handler}["']`), `${modifier} should invoke ${handler}`)
-  assertKeyboardViewControl(card, modifier, handler)
+for (const theme of ['blue', 'purple', 'orange', 'pink', 'cyan']) {
+  const declarations = standaloneStyleDeclarations(`energy-card--${theme}`)
+  assert.ok(declarations, `.energy-card--${theme} should define a curated theme preset`)
+  assert.match(declarations, /\bbackground\s*:/, `.energy-card--${theme} should provide its curated background`)
 }
-
-function assertHomeRoute(handler, navigationMethod, url, description) {
-  const body = functionBody(handler)
-  assert.ok(body !== undefined, `home page should define ${handler}()`)
+for (const icon of ['compass', 'relation', 'book', 'growth', 'spark', 'heart']) {
+  const declarations = standaloneStyleDeclarations(`energy-icon--${icon}`)
+  assert.ok(declarations, `.energy-icon--${icon} should define a CSS-only icon preset`)
+  const shapeDeclarations = [...indexPage.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter(([, selector]) => new RegExp(`\\.energy-icon--${icon}\\s+\\.energy-icon__shape`).test(selector))
+    .map(([, , body]) => body)
+    .join('\n')
   assert.match(
-    body,
-    new RegExp(`uni\\.${navigationMethod}\\s*\\(\\s*\\{\\s*url:\\s*["']${url}["']\\s*\\}\\s*\\)`),
-    description,
+    shapeDeclarations,
+    /\b(?:width|height|border|background|border-radius)\s*:/,
+    `.energy-icon--${icon} should include a concrete CSS shape rule with visible geometry`,
   )
 }
-
-assertHomeRoute('startTest', 'navigateTo', '/pages/test/test', 'home test action should navigate to the test page')
-assertHomeRoute('goRelation', 'navigateTo', '/pages/relation/relation', 'home relation action should navigate to the relation page')
-assertHomeRoute('goLearn', 'switchTab', '/pages/learn/learn', 'home learn action should switch to the learn tab')
-assertHomeRoute('goProfile', 'switchTab', '/pages/profile/profile', 'home profile action should switch to the profile tab')
 
 const homeProfileAction = findHomeView('home-nav__profile')
 assert.ok(homeProfileAction, 'home page should render a profile action in the top navigation')
@@ -371,6 +409,7 @@ assert.match(bookingPage, /const DRAFT_SAVE_DELAY = 250/, 'booking should deboun
 assert.match(bookingPage, /let draftSaveTimer = null/, 'booking should retain its pending draft timer')
 assert.match(bookingPage, /const restoredKindIndex = kinds\.findIndex\([\s\S]*if \(restoredKindIndex >= 0\) kindIndex\.value = restoredKindIndex/, 'booking should keep the default picker index for unknown draft kinds')
 assert.ok(bookingPage.indexOf('const draft = loadBookingDraft()') < bookingPage.indexOf('watch('), 'booking should restore its draft before enabling autosave')
+assert.match(bookingPage, /const restoredDraftNotice = ref\(!!draft\)/, 'booking should only show its recovery notice after restoring a meaningful draft')
 const bookingWatch = bookingPage.match(/watch\(\s*\[kindIndex, form\],([\s\S]*?)\{ deep: true \},\s*\)/)?.[1] || ''
 assert.match(bookingWatch, /scheduleDraftSave/, 'booking watch should schedule draft persistence')
 assert.doesNotMatch(bookingWatch, /saveBookingDraft/, 'booking watch must not persist on every input event')
@@ -384,6 +423,12 @@ assert.match(bookingPage, /onHide\(flushDraftSave\)/, 'booking should flush its 
 assert.match(bookingPage, /onUnload\(flushDraftSave\)/, 'booking should flush its draft before unload')
 const bookingSubmitBody = sourceBracedBody(bookingPage, /async\s+function\s+submit\s*\(\s*\)\s*\{/.exec(bookingPage)) || ''
 assert.match(bookingSubmitBody, /cancelPendingDraftSave\(\)[\s\S]*clearBookingDraft\(\)/, 'successful booking should cancel delayed persistence before clearing its draft')
+const clearRestoredDraftBody = sourceBracedBody(bookingPage, /function\s+clearRestoredDraft\s*\(\s*\)\s*\{/.exec(bookingPage)) || ''
+assert.match(clearRestoredDraftBody, /cancelPendingDraftSave\(\)[\s\S]*clearBookingDraft\(\)[\s\S]*kindIndex\.value\s*=\s*0[\s\S]*form\.value\s*=\s*emptyForm\(\)[\s\S]*fieldErrors\.value\s*=\s*\{\s*contactName:\s*['"]['"],\s*phone:\s*['"]['"]\s*\}[\s\S]*restoredDraftNotice\.value\s*=\s*false/, 'clearing a restored draft should cancel autosave, clear storage, reset kind, form and errors, then hide the notice')
+assert.match(bookingTemplate, /class=["'][^"']*draft-restored[^"']*["'][^>]*aria-live=["']polite["']/, 'restored booking drafts should be announced in a lightweight notice')
+assert.match(bookingTemplate, /v-if=["']restoredDraftNotice["']/, 'booking should only render the recovery notice for a restored draft')
+assert.match(bookingTemplate, /<button\s+class=["'][^"']*draft-restored__clear[^"']*["'][^>]*@click=["']clearRestoredDraft["'][^>]*>清空草稿<\/button>/, 'booking recovery notice should expose an explicit native clear action')
+assert.match(pageStyleDeclarations(bookingStyle, '.draft-restored__clear'), /min-height:\s*88rpx\s*;/, 'booking draft clear action should keep an accessible touch target')
 assert.match(bookingTemplate, /class=["'][^"']*booking-hero[^"']*nx-page-hero[^"']*["']/, 'booking should open with the shared themed hero')
 assert.match(bookingTemplate, />预约咨询<\//, 'booking hero should keep the appointment eyebrow')
 assert.match(bookingTemplate, />让老师帮你找到合适的学习方式<\//, 'booking hero should state its primary purpose')
@@ -1221,6 +1266,9 @@ for (const className of ['result-hero', 'drive-grid', 'center-panel', 'direction
 assert.match(resultTemplate, /class=["'][^"']*result-hero[^"']*nx-page-hero[^"']*["']/, 'result hero should use the shared hero surface')
 assert.match(resultTemplate, /class=["']result-hero[^"']*["']\s+:class=["']`result-hero--\$\{info\.color\}`["']/, 'result hero should use the personality color modifier')
 assert.match(resultPage, /const avatarFailed = ref\(false\)/, 'result page should track avatar load failure')
+assert.match(resultPage, /import\s*\{\s*createResultPoster\s*\}\s*from\s*['"]\.\.\/\.\.\/utils\/resultPoster['"]/, 'result page should delegate canvas drawing to the poster utility')
+assert.doesNotMatch(resultPage, /function\s+drawPoster\s*\(/, 'result page should not retain canvas drawing implementation')
+assert.match(resultPage, /const posterError = ref\(['"]['"]\)/, 'result page should expose recoverable poster errors')
 const resultAvatar = openingTagsFor(resultTemplate, 'image').find((tag) => staticClassTokens(tag).includes('result-hero__avatar'))
 assert.ok(resultAvatar, 'result hero should render a fixed avatar image')
 assert.equal(tagAttribute(resultAvatar, 'v-if'), '!avatarFailed', 'result avatar should be replaced after an image error')
@@ -1329,6 +1377,12 @@ for (const selector of ['.report__intro', '.report__status', '.report__error', '
 assert.match(pageStyleDeclarations(resultStyle, '.drive-grid'), /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)\s*;/, 'result drives should stay in equal columns')
 assert.match(pageStyleDeclarations(resultStyle, '.direction-grid'), /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)\s*;/, 'result directions should stay in equal columns')
 assert.match(resultTemplate, /aria-label=["']关闭海报["']/, 'poster close action should expose an accessible label')
+const posterDialog = resultTemplate.match(/<view\b[^>]*class=["']poster-box["'][^>]*>/)?.[0] || ''
+assert.match(posterDialog, /\srole=["']dialog["']/, 'poster surface should use dialog semantics')
+assert.match(posterDialog, /\saria-modal=["']true["']/, 'poster surface should identify itself as modal')
+assert.match(resultTemplate, /poster-loading[^>]*aria-live=["']polite["']/, 'poster generation should announce progress')
+assert.match(resultTemplate, /poster-error[^>]*aria-live=["']polite["'][\s\S]*?@click=["']makePoster["']/, 'poster failure should remain visible and retryable')
+assert.match(resultTemplate, /v-if=["']posterUrl\s*&&\s*!posterLoading["'][^>]*@click=["']savePoster["']/, 'poster save action should only exist after generation completes')
 assert.match(resultPage, /userErrorMessage/, 'result page should surface normalized request errors')
 assert.match(resultPage, /normalizeLastResult/, 'result page should validate cached result schema before rendering')
 assert.match(resultPage, /测试结果已失效/, 'result page should give feedback when cached result schema is invalid')

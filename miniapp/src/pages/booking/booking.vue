@@ -19,6 +19,7 @@ const submitting = ref(false)
 const DRAFT_SAVE_DELAY = 250
 let draftSaveTimer = null
 const draft = loadBookingDraft()
+const restoredDraftNotice = ref(!!draft)
 if (draft) {
   const restoredKindIndex = kinds.findIndex((item) => item.value === draft.kind)
   if (restoredKindIndex >= 0) kindIndex.value = restoredKindIndex
@@ -68,6 +69,15 @@ function clearFieldError(field) {
   fieldErrors.value = { ...fieldErrors.value, [field]: '' }
 }
 
+function clearRestoredDraft() {
+  cancelPendingDraftSave()
+  clearBookingDraft()
+  kindIndex.value = 0
+  form.value = emptyForm()
+  fieldErrors.value = { contactName: '', phone: '' }
+  restoredDraftNotice.value = false
+}
+
 function validateForm() {
   const nextErrors = { contactName: '', phone: '' }
   if (!form.value.contactName.trim()) nextErrors.contactName = '请填写称呼'
@@ -91,6 +101,7 @@ async function submit() {
     kindIndex.value = 0
     form.value = emptyForm()
     fieldErrors.value = { contactName: '', phone: '' }
+    restoredDraftNotice.value = false
   } catch (e) {
     uni.showToast({ title: userErrorMessage(e, '提交失败，请重试'), icon: 'none' })
   } finally {
@@ -105,6 +116,14 @@ async function submit() {
       <text class="booking-hero__eyebrow">预约咨询</text>
       <text class="booking-hero__title">让老师帮你找到合适的学习方式</text>
       <text class="booking-hero__lead">填写你的需求，老师会尽快联系你。未提交前，草稿会自动保存在当前设备。</text>
+    </view>
+
+    <view v-if="restoredDraftNotice" class="draft-restored nx-panel" aria-live="polite">
+      <view class="draft-restored__copy">
+        <text class="draft-restored__title">已恢复上次填写的草稿</text>
+        <text class="draft-restored__hint">你可以继续填写，或清空后重新开始。</text>
+      </view>
+      <button class="draft-restored__clear" @click="clearRestoredDraft">清空草稿</button>
     </view>
 
     <view class="form-section nx-panel">
@@ -216,6 +235,50 @@ async function submit() {
   color: rgba(255, 255, 255, .94);
   font-size: 26rpx;
   line-height: 1.65;
+}
+.draft-restored {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20rpx;
+  padding: 22rpx 24rpx;
+  border: 2rpx solid rgba(37, 99, 235, .16);
+  background: rgba(239, 246, 255, .88);
+}
+.draft-restored__copy {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6rpx;
+}
+.draft-restored__title {
+  color: #1e3a8a;
+  font-size: 26rpx;
+  font-weight: 800;
+  line-height: 1.4;
+}
+.draft-restored__hint {
+  color: #475569;
+  font-size: 23rpx;
+  line-height: 1.5;
+}
+.draft-restored__clear {
+  flex: none;
+  min-width: 152rpx;
+  min-height: 88rpx;
+  margin: 0;
+  padding: 0 22rpx;
+  border: 2rpx solid rgba(37, 99, 235, .24);
+  border-radius: 18rpx;
+  background: #fff;
+  color: #1d4ed8;
+  font-size: 24rpx;
+  font-weight: 800;
+  line-height: 84rpx;
+}
+.draft-restored__clear::after {
+  border: none;
 }
 .form-section {
   display: flex;

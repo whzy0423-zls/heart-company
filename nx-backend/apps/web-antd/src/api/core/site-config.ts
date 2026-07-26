@@ -11,9 +11,70 @@ export interface MiniappCarouselConfig {
   items: MiniappCarouselItem[];
 }
 
+export type MiniappHomeEntryKey = 'learn' | 'profile' | 'relation' | 'test';
+
+export type MiniappHomeIconKey =
+  | 'book'
+  | 'compass'
+  | 'growth'
+  | 'heart'
+  | 'relation'
+  | 'spark';
+
+export type MiniappHomeThemeKey =
+  | 'blue'
+  | 'cyan'
+  | 'orange'
+  | 'pink'
+  | 'purple';
+
+export interface MiniappHomeSectionBase {
+  enabled: boolean;
+}
+
+export interface MiniappHomeBrand extends MiniappHomeSectionBase {
+  name: string;
+  tagline: string;
+}
+
+export interface MiniappHomeHero extends MiniappHomeSectionBase {
+  buttonText: string;
+  description: string;
+  kicker: string;
+  title: string;
+}
+
+export interface MiniappHomeEntry extends MiniappHomeSectionBase {
+  description: string;
+  icon: MiniappHomeIconKey;
+  key: MiniappHomeEntryKey;
+  theme: MiniappHomeThemeKey;
+  title: string;
+}
+
+export interface MiniappHomeEntriesSection extends MiniappHomeSectionBase {
+  description: string;
+  items: MiniappHomeEntry[];
+  title: string;
+}
+
+export interface MiniappHomeGrowth extends MiniappHomeSectionBase {
+  description: string;
+  eyebrow: string;
+  title: string;
+}
+
+export interface MiniappHomeConfig {
+  brand: MiniappHomeBrand;
+  entriesSection: MiniappHomeEntriesSection;
+  growth: MiniappHomeGrowth;
+  hero: MiniappHomeHero;
+}
+
 export interface SiteConfig {
   home: {
     miniappCarousel?: MiniappCarouselConfig;
+    miniappHome?: MiniappHomeConfig;
   } & Record<string, any>;
   navigation: {
     drawer: NavItem[];

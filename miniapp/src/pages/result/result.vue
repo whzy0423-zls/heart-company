@@ -10,6 +10,7 @@ import { saveTestRecordApi, reportStatusApi, reportContentApi } from '../../api'
 import { payForReport } from '../../utils/payment'
 import { userErrorMessage } from '../../utils/userMessage'
 import { reportDisplayState } from '../../utils/reportDisplayState'
+import { createResultPoster } from '../../utils/resultPoster'
 
 const result = ref(null)
 const gender = ref(null)
@@ -36,6 +37,7 @@ const paying = ref(false)
 const posterUrl = ref('')
 const posterShow = ref(false)
 const posterLoading = ref(false)
+const posterError = ref('')
 const avatarFailed = ref(false)
 const instance = getCurrentInstance()
 
@@ -187,11 +189,18 @@ async function makePoster() {
   if (posterLoading.value) return
   posterLoading.value = true
   posterShow.value = true
+  posterError.value = ''
+  posterUrl.value = ''
   try {
-    posterUrl.value = await drawPoster()
+    posterUrl.value = await createResultPoster({
+      instance,
+      result: result.value,
+      info: info.value,
+      summary: r.value.summary,
+      title: r.value.title,
+    })
   } catch (e) {
-    uni.showToast({ title: '海报生成失败', icon: 'none' })
-    posterShow.value = false
+    posterError.value = userErrorMessage(e, '海报生成失败，请重试')
   } finally {
     posterLoading.value = false
   }
@@ -206,104 +215,6 @@ function savePoster() {
   })
 }
 
-// 用 canvas 2d 画竖版分享海报，返回临时文件路径
-function drawPoster() {
-  return new Promise((resolve, reject) => {
-    const query = uni.createSelectorQuery().in(instance.proxy)
-    query.select('#poster-canvas').fields({ node: true, size: true }).exec((res) => {
-      if (!res || !res[0] || !res[0].node) return reject(new Error('canvas not found'))
-      const canvas = res[0].node
-      const ctx = canvas.getContext('2d')
-      const dpr = uni.getSystemInfoSync().pixelRatio || 2
-      const W = 320
-      const H = 460
-      canvas.width = W * dpr
-      canvas.height = H * dpr
-      ctx.scale(dpr, dpr)
-
-      const t = result.value.type
-      const accent = { green: '#38a83a', blue: '#1f73c4', red: '#e23a2f' }[info.value.color] || '#1f73c4'
-
-      // 背景
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(0, 0, W, H)
-      ctx.fillStyle = accent
-      ctx.fillRect(0, 0, W, 6)
-
-      ctx.textAlign = 'center'
-      ctx.fillStyle = '#9aa7b5'
-      ctx.font = '12px sans-serif'
-      ctx.fillText('九型芯之力 · 性格芯片测试', W / 2, 34)
-
-      // 头像
-      const avatar = canvas.createImage()
-      avatar.onload = () => {
-        const cx = W / 2
-        const cy = 110
-        const rad = 52
-        ctx.save()
-        ctx.beginPath()
-        ctx.arc(cx, cy, rad, 0, Math.PI * 2)
-        ctx.clip()
-        ctx.drawImage(avatar, cx - rad, cy - rad, rad * 2, rad * 2)
-        ctx.restore()
-        ctx.beginPath()
-        ctx.arc(cx, cy, rad, 0, Math.PI * 2)
-        ctx.lineWidth = 3
-        ctx.strokeStyle = accent
-        ctx.stroke()
-
-        // 文案
-        ctx.fillStyle = '#1a2430'
-        ctx.font = 'bold 24px sans-serif'
-        ctx.fillText(`${t}号 · ${r.value.title}`, W / 2, 195)
-        ctx.fillStyle = accent
-        ctx.font = 'bold 13px sans-serif'
-        ctx.fillText(`${info.value.en} · ${info.value.keywords}`, W / 2, 220)
-
-        // summary 折行
-        ctx.fillStyle = '#42505e'
-        ctx.font = '14px sans-serif'
-        wrapText(ctx, r.value.summary, W / 2, 252, W - 56, 22)
-
-        // 底部引导
-        ctx.fillStyle = '#f4f7f9'
-        ctx.fillRect(0, H - 80, W, 80)
-        ctx.fillStyle = '#1a2430'
-        ctx.font = 'bold 14px sans-serif'
-        ctx.fillText('长按识别 · 测测你是哪一块性格芯片', W / 2, H - 46)
-        ctx.fillStyle = accent
-        ctx.font = '12px sans-serif'
-        ctx.fillText('微信搜索「九型芯之力」小程序', W / 2, H - 24)
-
-        uni.canvasToTempFilePath({
-          canvas,
-          success: (r2) => resolve(r2.tempFilePath),
-          fail: reject,
-        }, instance.proxy)
-      }
-      avatar.onerror = reject
-      avatar.src = `/static/avatars/${t}.png`
-    })
-  })
-}
-
-// canvas 文字折行
-function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
-  const chars = text.split('')
-  let line = ''
-  let ty = y
-  for (const ch of chars) {
-    if (ctx.measureText(line + ch).width > maxWidth && line) {
-      ctx.fillText(line, x, ty)
-      line = ch
-      ty += lineHeight
-    } else {
-      line += ch
-    }
-  }
-  if (line) ctx.fillText(line, x, ty)
-}
 </script>
 
 <template>
@@ -432,14 +343,18 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
 
     <!-- 海报弹层 -->
     <view v-if="posterShow" class="poster-mask" @click="posterShow = false">
-      <view class="poster-box" @click.stop>
-        <view v-if="posterLoading" class="poster-loading">海报生成中…</view>
+      <view class="poster-box" role="dialog" aria-modal="true" @click.stop>
+        <view v-if="posterLoading" class="poster-loading" aria-live="polite">海报生成中…</view>
         <image v-else-if="posterUrl" class="poster-img" :src="posterUrl" mode="widthFix" show-menu-by-longpress />
+        <view v-else-if="posterError" class="poster-error" aria-live="polite">
+          <text>{{ posterError }}</text>
+          <button class="btn-primary ios-button" :disabled="posterLoading" @click="makePoster">重新生成</button>
+        </view>
         <view class="poster-ops">
-          <button class="btn-primary ios-button" @click="savePoster">保存到相册</button>
+          <button v-if="posterUrl && !posterLoading" class="btn-primary ios-button" @click="savePoster">保存到相册</button>
           <button class="btn-ghost ios-button" aria-label="关闭海报" @click="posterShow = false">关闭</button>
         </view>
-        <text class="poster-tip">也可长按图片转发给好友</text>
+        <text v-if="posterUrl" class="poster-tip">也可长按图片转发给好友</text>
       </view>
     </view>
   </view>
@@ -516,6 +431,8 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
   box-sizing: border-box;
 }
 .poster-loading { padding: 80rpx 0; color: #64748b; font-size: 28rpx; }
+.poster-error { width: 100%; padding: 48rpx 0 24rpx; color: #b45309; font-size: 26rpx; line-height: 1.6; text-align: center; }
+.poster-error .btn-primary { margin-top: 24rpx; }
 .poster-img { width: 100%; border-radius: 18rpx; }
 .poster-ops { display: flex; gap: 16rpx; width: 100%; }
 .poster-ops .btn-primary,
