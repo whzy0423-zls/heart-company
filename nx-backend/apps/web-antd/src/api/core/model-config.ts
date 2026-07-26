@@ -7,7 +7,6 @@ export interface ModelConfigView {
     apiBase: string;
     apiKeySet: boolean;
     model: string;
-    provider: string;
     timeoutSeconds: number;
   };
   video: {
@@ -89,7 +88,6 @@ export interface ModelConfigPayload {
     apiBase: string;
     apiKey: string;
     model: string;
-    provider: string;
     timeoutSeconds: number;
   };
   video: {
