@@ -29,6 +29,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/branding"
 	"nine-xing/nx-backend/apps/server/internal/businessmessage"
 	"nine-xing/nx-backend/apps/server/internal/chat"
+	"nine-xing/nx-backend/apps/server/internal/classroom"
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/dbtx"
 	"nine-xing/nx-backend/apps/server/internal/embedding"
@@ -109,6 +110,7 @@ type Server struct {
 	chatLimiter           *fixedWindowRateLimiter
 	chatTimeout           time.Duration
 	chatHeartbeatInterval time.Duration
+	classroomUploads      classroomUploadHandlerService
 
 	appUsers                       *appuser.Store
 	appChat                        appChatStore
@@ -203,6 +205,19 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	}
 	if uploader, err := s.objectUploader(); err == nil {
 		s.uploader = uploader
+	}
+	if strings.TrimSpace(env.ClassroomMedia.Bucket) != "" {
+		mediaOSS := env.OSS
+		mediaOSS.Bucket = env.ClassroomMedia.Bucket
+		mediaOSS.Endpoint = env.ClassroomMedia.Endpoint
+		mediaOSS.Region = env.ClassroomMedia.Region
+		mediaOSS.Prefix = ""
+		if multipartStore, mediaErr := storage.NewOSSUploader(mediaOSS); mediaErr == nil {
+			probe := classroom.FFProbe{Signer: multipartStore}
+			s.classroomUploads = classroom.NewUploadService(classroom.NewStore(database), multipartStore, probe, classroom.UploadConfig{Bucket: env.ClassroomMedia.Bucket, Prefix: "classroom", PartSize: env.ClassroomMedia.PartSizeBytes, MaxParts: env.ClassroomMedia.MaxParts, CredentialTTL: time.Duration(env.ClassroomMedia.CredentialTTLSeconds) * time.Second, TaskTTL: 24 * time.Hour, MaxVideoBytes: env.ClassroomMedia.MaxVideoBytes, MaxAudioBytes: env.ClassroomMedia.MaxAudioBytes, MaxAttempts: 3}, time.Now)
+		} else {
+			log.Printf("classroom multipart storage disabled: %v", mediaErr)
+		}
 	}
 	s.voices = voice.NewStore(database, s.uploads, env.MiniMax)
 	s.videos = video.NewStore(database, s.uploads, env.Video, s.uploader)
@@ -453,6 +468,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/miniapp/users", s.method(http.MethodGet, s.requirePermission("Customer:Miniapp:List", s.miniappUsers)))
 	s.mux.HandleFunc("/api/miniapp/users/", s.method(http.MethodGet, s.requirePermission("Customer:Miniapp:List", s.miniappUserByID)))
 	s.mux.HandleFunc("/api/miniapp/chat", s.method(http.MethodPost, s.requireMiniapp(s.miniappChat)))
+	registerClassroomUploadRoutes(s.mux, s.requirePermission, s.classroomUploadInit, s.classroomUploadPart, s.classroomUploadComplete, s.classroomUploadAbort)
 	// 付费解锁：下单（鉴权）→ 微信回调（公开）→ 解锁状态/报告正文（鉴权）
 	s.mux.HandleFunc("/api/miniapp/report/order", s.method(http.MethodPost, s.requireMiniapp(s.createReportOrder)))
 	s.mux.HandleFunc("/api/miniapp/report/dev-pay", s.method(http.MethodPost, s.requireMiniapp(s.devPayReportOrder)))

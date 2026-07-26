@@ -410,3 +410,31 @@ func TestValidateProductionAcceptsCompleteOptionalConfig(t *testing.T) {
 		t.Fatalf("expected complete production config to pass, got %v", err)
 	}
 }
+
+func TestLoadClassroomMediaConfig(t *testing.T) {
+	t.Setenv("CLASSROOM_MEDIA_ENDPOINT", "https://oss-cn-test.aliyuncs.com")
+	t.Setenv("CLASSROOM_MEDIA_BUCKET", "private-classroom")
+	t.Setenv("CLASSROOM_MEDIA_REGION", "cn-test")
+	t.Setenv("CLASSROOM_MEDIA_PART_SIZE_MB", "8")
+	t.Setenv("CLASSROOM_MEDIA_MAX_PARTS", "5000")
+	t.Setenv("CLASSROOM_MEDIA_CREDENTIAL_TTL_SECONDS", "600")
+	t.Setenv("CLASSROOM_MEDIA_MAX_VIDEO_MB", "4096")
+	t.Setenv("CLASSROOM_MEDIA_MAX_AUDIO_MB", "1024")
+	env := Load()
+	if env.ClassroomMedia.Endpoint != "https://oss-cn-test.aliyuncs.com" || env.ClassroomMedia.Bucket != "private-classroom" || env.ClassroomMedia.Region != "cn-test" {
+		t.Fatalf("unexpected classroom media storage config: %+v", env.ClassroomMedia)
+	}
+	if env.ClassroomMedia.PartSizeBytes != 8<<20 || env.ClassroomMedia.MaxParts != 5000 || env.ClassroomMedia.CredentialTTLSeconds != 600 || env.ClassroomMedia.MaxVideoBytes != 4096<<20 || env.ClassroomMedia.MaxAudioBytes != 1024<<20 {
+		t.Fatalf("unexpected classroom media limits: %+v", env.ClassroomMedia)
+	}
+}
+
+func TestLoadClassroomMediaConfigUsesBoundedDefaults(t *testing.T) {
+	for _, key := range []string{"CLASSROOM_MEDIA_PART_SIZE_MB", "CLASSROOM_MEDIA_MAX_PARTS", "CLASSROOM_MEDIA_CREDENTIAL_TTL_SECONDS", "CLASSROOM_MEDIA_MAX_VIDEO_MB", "CLASSROOM_MEDIA_MAX_AUDIO_MB"} {
+		t.Setenv(key, "-1")
+	}
+	env := Load()
+	if env.ClassroomMedia.PartSizeBytes <= 0 || env.ClassroomMedia.MaxParts <= 0 || env.ClassroomMedia.CredentialTTLSeconds <= 0 || env.ClassroomMedia.MaxVideoBytes <= 0 || env.ClassroomMedia.MaxAudioBytes <= 0 {
+		t.Fatalf("defaults must be positive: %+v", env.ClassroomMedia)
+	}
+}

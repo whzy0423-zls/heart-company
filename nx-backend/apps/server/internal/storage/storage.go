@@ -24,6 +24,53 @@ type ObjectSigner interface {
 	PresignGetURL(ctx context.Context, objectKey string, expires time.Duration) (string, error)
 }
 
+// MultipartStorage is the narrow boundary used by long-running browser uploads.
+// It intentionally coexists with ObjectUploader so existing small-file callers remain unchanged.
+type MultipartStorage interface {
+	InitiateMultipart(context.Context, InitiateMultipartInput) (InitiateMultipartResult, error)
+	SignMultipartPart(context.Context, SignPartInput) (SignPartResult, error)
+	CompleteMultipart(context.Context, CompleteMultipartInput) (CompleteMultipartResult, error)
+	AbortMultipart(context.Context, AbortMultipartInput) error
+	ListMultipartParts(context.Context, ListPartsInput) ([]MultipartPart, error)
+	HeadObject(context.Context, string) (ObjectMetadata, error)
+}
+
+type InitiateMultipartInput struct{ ObjectKey, ContentType, Checksum string }
+type InitiateMultipartResult struct{ UploadID string }
+type SignPartInput struct {
+	ObjectKey, UploadID string
+	PartNumber          int
+	Expires             time.Duration
+}
+type SignPartResult struct {
+	URL        string
+	PartNumber int
+	ExpiresAt  time.Time
+}
+type CompletedPart struct {
+	PartNumber int    `json:"partNumber"`
+	ETag       string `json:"etag"`
+}
+type CompleteMultipartInput struct {
+	ObjectKey, UploadID string
+	Parts               []CompletedPart
+}
+type CompleteMultipartResult struct{ ETag, Checksum string }
+type AbortMultipartInput struct{ ObjectKey, UploadID string }
+type ListPartsInput struct {
+	ObjectKey, UploadID string
+	MaxParts            int
+}
+type MultipartPart struct {
+	PartNumber int
+	ETag       string
+	Size       int64
+}
+type ObjectMetadata struct {
+	ObjectKey, ETag, Checksum, ContentType string
+	Size                                   int64
+}
+
 type UploadInput struct {
 	ContentType string
 	Dir         string
@@ -179,6 +226,91 @@ func (u *OSSUploader) publicObjectURL(key string) string {
 		return fmt.Sprintf("https://%s.%s/%s", u.bucket, u.endpoint, key)
 	}
 	return "/" + strings.TrimLeft(key, "/")
+}
+
+func (u *OSSUploader) InitiateMultipart(ctx context.Context, input InitiateMultipartInput) (InitiateMultipartResult, error) {
+	result, err := u.client.InitiateMultipartUpload(ctx, &oss.InitiateMultipartUploadRequest{Bucket: oss.Ptr(u.bucket), Key: oss.Ptr(strings.TrimLeft(input.ObjectKey, "/")), ContentType: oss.Ptr(input.ContentType), ForbidOverwrite: oss.Ptr("true"), Metadata: map[string]string{"checksum": input.Checksum}})
+	if err != nil {
+		return InitiateMultipartResult{}, err
+	}
+	return InitiateMultipartResult{UploadID: ptrString(result.UploadId)}, nil
+}
+
+func (u *OSSUploader) SignMultipartPart(ctx context.Context, input SignPartInput) (SignPartResult, error) {
+	if input.PartNumber < 1 || input.PartNumber > 10000 {
+		return SignPartResult{}, fmt.Errorf("invalid part number")
+	}
+	expires := input.Expires
+	if expires <= 0 {
+		expires = 15 * time.Minute
+	}
+	result, err := u.client.Presign(ctx, &oss.UploadPartRequest{Bucket: oss.Ptr(u.bucket), Key: oss.Ptr(strings.TrimLeft(input.ObjectKey, "/")), UploadId: oss.Ptr(input.UploadID), PartNumber: int32(input.PartNumber)}, oss.PresignExpires(expires))
+	if err != nil {
+		return SignPartResult{}, err
+	}
+	return SignPartResult{URL: result.URL, PartNumber: input.PartNumber, ExpiresAt: time.Now().Add(expires)}, nil
+}
+
+func (u *OSSUploader) CompleteMultipart(ctx context.Context, input CompleteMultipartInput) (CompleteMultipartResult, error) {
+	parts := make([]oss.UploadPart, 0, len(input.Parts))
+	for _, part := range input.Parts {
+		parts = append(parts, oss.UploadPart{PartNumber: int32(part.PartNumber), ETag: oss.Ptr(part.ETag)})
+	}
+	result, err := u.client.CompleteMultipartUpload(ctx, &oss.CompleteMultipartUploadRequest{Bucket: oss.Ptr(u.bucket), Key: oss.Ptr(strings.TrimLeft(input.ObjectKey, "/")), UploadId: oss.Ptr(input.UploadID), ForbidOverwrite: oss.Ptr("true"), CompleteMultipartUpload: &oss.CompleteMultipartUpload{Parts: parts}})
+	if err != nil {
+		return CompleteMultipartResult{}, err
+	}
+	return CompleteMultipartResult{ETag: ptrString(result.ETag), Checksum: "crc64:" + ptrString(result.HashCRC64)}, nil
+}
+
+func (u *OSSUploader) AbortMultipart(ctx context.Context, input AbortMultipartInput) error {
+	_, err := u.client.AbortMultipartUpload(ctx, &oss.AbortMultipartUploadRequest{Bucket: oss.Ptr(u.bucket), Key: oss.Ptr(strings.TrimLeft(input.ObjectKey, "/")), UploadId: oss.Ptr(input.UploadID)})
+	return err
+}
+
+func (u *OSSUploader) ListMultipartParts(ctx context.Context, input ListPartsInput) ([]MultipartPart, error) {
+	maxParts := input.MaxParts
+	if maxParts <= 0 || maxParts > 1000 {
+		maxParts = 1000
+	}
+	marker := int32(0)
+	parts := []MultipartPart{}
+	for {
+		result, err := u.client.ListParts(ctx, &oss.ListPartsRequest{Bucket: oss.Ptr(u.bucket), Key: oss.Ptr(strings.TrimLeft(input.ObjectKey, "/")), UploadId: oss.Ptr(input.UploadID), MaxParts: int32(maxParts), PartNumberMarker: marker})
+		if err != nil {
+			return nil, err
+		}
+		for _, part := range result.Parts {
+			parts = append(parts, MultipartPart{PartNumber: int(part.PartNumber), ETag: ptrString(part.ETag), Size: part.Size})
+		}
+		if !result.IsTruncated {
+			return parts, nil
+		}
+		marker = result.NextPartNumberMarker
+	}
+}
+
+func (u *OSSUploader) HeadObject(ctx context.Context, objectKey string) (ObjectMetadata, error) {
+	key := strings.TrimLeft(objectKey, "/")
+	result, err := u.client.HeadObject(ctx, &oss.HeadObjectRequest{Bucket: oss.Ptr(u.bucket), Key: oss.Ptr(key)})
+	if err != nil {
+		return ObjectMetadata{}, err
+	}
+	checksum := ptrString(result.ContentMD5)
+	if value := ptrString(result.HashCRC64); value != "" {
+		checksum = "crc64:" + value
+	}
+	if value := result.Metadata["checksum"]; value != "" && checksum == "" {
+		checksum = value
+	}
+	return ObjectMetadata{ObjectKey: key, ETag: ptrString(result.ETag), Checksum: checksum, ContentType: ptrString(result.ContentType), Size: result.ContentLength}, nil
+}
+
+func ptrString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.Trim(*value, `"`)
 }
 
 func (u *LocalUploader) Upload(ctx context.Context, input UploadInput) (UploadResult, error) {
