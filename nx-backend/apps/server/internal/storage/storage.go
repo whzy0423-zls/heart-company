@@ -260,7 +260,7 @@ func (u *OSSUploader) CompleteMultipart(ctx context.Context, input CompleteMulti
 	if err != nil {
 		return CompleteMultipartResult{}, err
 	}
-	return CompleteMultipartResult{ETag: ptrString(result.ETag), Checksum: "crc64:" + ptrString(result.HashCRC64)}, nil
+	return CompleteMultipartResult{ETag: ptrString(result.ETag), Checksum: crc64Value(result.HashCRC64)}, nil
 }
 
 func (u *OSSUploader) AbortMultipart(ctx context.Context, input AbortMultipartInput) error {
@@ -297,13 +297,20 @@ func (u *OSSUploader) HeadObject(ctx context.Context, objectKey string) (ObjectM
 		return ObjectMetadata{}, err
 	}
 	checksum := ptrString(result.ContentMD5)
-	if value := ptrString(result.HashCRC64); value != "" {
-		checksum = "crc64:" + value
+	if value := crc64Value(result.HashCRC64); value != "" {
+		checksum = value
 	}
 	if value := result.Metadata["checksum"]; value != "" && checksum == "" {
 		checksum = value
 	}
 	return ObjectMetadata{ObjectKey: key, ETag: ptrString(result.ETag), Checksum: checksum, ContentType: ptrString(result.ContentType), Size: result.ContentLength}, nil
+}
+
+func crc64Value(value *string) string {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return ""
+	}
+	return "crc64:" + strings.TrimSpace(*value)
 }
 
 func ptrString(value *string) string {

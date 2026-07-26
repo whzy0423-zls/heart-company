@@ -78,6 +78,10 @@ func (s *Server) classroomUploadInit(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, result)
 }
 func (s *Server) classroomUploadPart(w http.ResponseWriter, r *http.Request) {
+	if s.classroomUploads == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "classroom uploads unavailable")
+		return
+	}
 	id, partNo, ok := parseClassroomUploadPartPath(r.URL.Path)
 	if !ok {
 		httpx.Fail(w, http.StatusBadRequest, "invalid upload part")
@@ -91,6 +95,10 @@ func (s *Server) classroomUploadPart(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, result)
 }
 func (s *Server) classroomUploadComplete(w http.ResponseWriter, r *http.Request) {
+	if s.classroomUploads == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "classroom uploads unavailable")
+		return
+	}
 	id, ok := parseClassroomUploadActionPath(r.URL.Path, "complete")
 	if !ok {
 		httpx.Fail(w, http.StatusBadRequest, "invalid upload id")
@@ -111,6 +119,10 @@ func (s *Server) classroomUploadComplete(w http.ResponseWriter, r *http.Request)
 	httpx.OK(w, result)
 }
 func (s *Server) classroomUploadAbort(w http.ResponseWriter, r *http.Request) {
+	if s.classroomUploads == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "classroom uploads unavailable")
+		return
+	}
 	id, ok := parseClassroomUploadActionPath(r.URL.Path, "abort")
 	if !ok {
 		httpx.Fail(w, http.StatusBadRequest, "invalid upload id")

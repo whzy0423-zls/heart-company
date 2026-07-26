@@ -450,3 +450,43 @@ func TestStoreContentOptimisticUpdateDetectsStaleVersion(t *testing.T) {
 		t.Fatalf("stale transaction state: %+v", state)
 	}
 }
+
+func TestStoreSaveUploadTaskPersistsSchemaCleanupValueCleaned(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	db := openClassroomQueryDB(t, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		if !strings.Contains(query, "UPDATE classroom_upload_tasks") {
+			return nil, fmt.Errorf("unexpected query: %s", query)
+		}
+		if len(args) != 14 || args[10].Value != "cleaned" {
+			t.Fatalf("cleanup args=%+v", args)
+		}
+		return classroomRows([]string{"created_at", "updated_at"}, [][]driver.Value{{now, now.Add(time.Second)}}), nil
+	})
+	task := UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1, Status: UploadAborted, ExpiresAt: now.Add(time.Hour), AttemptCount: 1, CleanupStatus: "cleaned"}
+	got, err := NewStore(db).SaveUploadTask(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CleanupStatus != "cleaned" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestUploadTaskCleanupStatusMatchesSchemaConstraint(t *testing.T) {
+	base := UploadTask{ContentID: 1, CreatorID: 1, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 1, Checksum: "crc64:1", PartSize: 1, MaxParts: 1, Status: UploadAborted, ExpiresAt: time.Now().Add(time.Hour), AttemptCount: 1}
+	base.CleanupStatus = "clean"
+	if err := base.Validate(); err == nil {
+		t.Fatal("legacy clean value accepted")
+	}
+	base.CleanupStatus = "cleaned"
+	if err := base.Validate(); err != nil {
+		t.Fatalf("cleaned rejected: %v", err)
+	}
+}
+
+func TestStoreSaveUploadTaskRejectsCleanupOutsideSchemaConstraint(t *testing.T) {
+	task := UploadTask{ID: 1, ContentID: 1, CreatorID: 1, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 1, Checksum: "crc64:1", PartSize: 1, MaxParts: 1, Status: UploadAborted, ExpiresAt: time.Now().Add(time.Hour), AttemptCount: 1, CleanupStatus: "clean"}
+	if _, err := NewStore(nil).SaveUploadTask(context.Background(), task); err == nil {
+		t.Fatal("expected store validation before SQL")
+	}
+}

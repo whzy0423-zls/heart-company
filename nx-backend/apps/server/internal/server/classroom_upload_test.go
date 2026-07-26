@@ -85,3 +85,16 @@ func TestClassroomUploadCompleteAcceptsPartEtagsAndIsJSON(t *testing.T) {
 		t.Fatalf("unexpected %d %s", rr.Code, rr.Body.String())
 	}
 }
+
+func TestClassroomUploadNilServiceHandlersReturn503(t *testing.T) {
+	s := &Server{}
+	for _, handler := range []http.HandlerFunc{s.classroomUploadPart, s.classroomUploadComplete, s.classroomUploadAbort} {
+		r := httptest.NewRequest(http.MethodPost, "/api/admin/classroom/uploads/1/complete", strings.NewReader(`{"parts":[]}`))
+		r = r.WithContext(withUser(r.Context(), auth.UserInfo{ID: 42}))
+		w := httptest.NewRecorder()
+		handler(w, r)
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+		}
+	}
+}

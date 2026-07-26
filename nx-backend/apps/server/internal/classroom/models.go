@@ -275,6 +275,9 @@ func (u UploadTask) Validate() error {
 	if u.ExpiresAt.IsZero() {
 		return errors.New("upload task expiry is required")
 	}
+	if u.CleanupStatus != "" && !oneOf(u.CleanupStatus, "pending", "retained", "cleaned", "failed") {
+		return fmt.Errorf("invalid cleanup status %q", u.CleanupStatus)
+	}
 	return nil
 }
 

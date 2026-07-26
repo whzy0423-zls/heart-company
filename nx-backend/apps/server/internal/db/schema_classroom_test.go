@@ -105,3 +105,14 @@ func TestClassroomEntitlementsHaveOrderIdempotencyIndex(t *testing.T) {
 		t.Fatalf("schema is missing order entitlement idempotency index %q", statement)
 	}
 }
+
+func TestSchemaClassroomUploadCleanupStatusUsesCleanedValue(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fragment := extractClassroomCreateTable(string(raw), "classroom_upload_tasks")
+	if !strings.Contains(fragment, "'cleaned'") || strings.Contains(fragment, "'clean'\")") {
+		t.Fatalf("cleanup status constraint must use cleaned: %s", fragment)
+	}
+}

@@ -3,7 +3,11 @@ package classroom
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +22,7 @@ type fakeMultipartStorage struct {
 	head                                     storage.ObjectMetadata
 	parts                                    []storage.MultipartPart
 	initiateCalls, completeCalls, abortCalls int
+	completeDelay                            time.Duration
 }
 
 func (f *fakeMultipartStorage) InitiateMultipart(_ context.Context, in storage.InitiateMultipartInput) (storage.InitiateMultipartResult, error) {
@@ -32,6 +37,9 @@ func (f *fakeMultipartStorage) SignMultipartPart(_ context.Context, in storage.S
 func (f *fakeMultipartStorage) CompleteMultipart(_ context.Context, in storage.CompleteMultipartInput) (storage.CompleteMultipartResult, error) {
 	f.completed = in
 	f.completeCalls++
+	if f.completeDelay > 0 {
+		time.Sleep(f.completeDelay)
+	}
 	return storage.CompleteMultipartResult{ETag: "final-etag"}, nil
 }
 func (f *fakeMultipartStorage) AbortMultipart(_ context.Context, in storage.AbortMultipartInput) error {
@@ -47,10 +55,15 @@ func (f *fakeMultipartStorage) HeadObject(context.Context, string) (storage.Obje
 }
 
 type fakeUploadRepo struct {
-	content Content
-	task    UploadTask
-	media   MediaAsset
-	nextID  int64
+	mu              sync.Mutex
+	content         Content
+	task            UploadTask
+	media           MediaAsset
+	nextID          int64
+	mediaStatuses   []MediaStatus
+	contentStatuses []ContentStatus
+	expired         []UploadTask
+	finalizeCalls   int
 }
 
 func (r *fakeUploadRepo) GetContent(context.Context, int64) (Content, error) {
@@ -78,19 +91,42 @@ func (r *fakeUploadRepo) GetUploadTask(context.Context, int64) (UploadTask, erro
 	return r.task, nil
 }
 func (r *fakeUploadRepo) SaveUploadTask(_ context.Context, v UploadTask) (UploadTask, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.task = v
 	return v, nil
 }
 func (r *fakeUploadRepo) CreateMediaAsset(_ context.Context, v MediaAsset) (MediaAsset, error) {
 	v.ID = 91
 	r.media = v
+	r.mediaStatuses = append(r.mediaStatuses, v.StorageStatus)
 	return v, nil
 }
-func (r *fakeUploadRepo) AttachMediaToContent(_ context.Context, contentID int64, media MediaAsset) (Content, error) {
-	r.content.MediaAssetID = &media.ID
-	r.content.DurationSeconds = media.DurationSeconds
-	r.content.Status = ContentReady
+func (r *fakeUploadRepo) UpdateMediaAsset(_ context.Context, v MediaAsset) (MediaAsset, error) {
+	r.media = v
+	r.mediaStatuses = append(r.mediaStatuses, v.StorageStatus)
+	return v, nil
+}
+func (r *fakeUploadRepo) SetContentMediaState(_ context.Context, _ int64, mediaID *int64, status ContentStatus, duration int) (Content, error) {
+	r.content.MediaAssetID = mediaID
+	r.content.Status = status
+	r.content.DurationSeconds = duration
+	r.contentStatuses = append(r.contentStatuses, status)
 	return r.content, nil
+}
+func (r *fakeUploadRepo) FinalizeUpload(_ context.Context, task UploadTask, media MediaAsset) (UploadTask, MediaAsset, Content, error) {
+	r.finalizeCalls++
+	r.task = task
+	r.media = media
+	r.mediaStatuses = append(r.mediaStatuses, media.StorageStatus)
+	r.content.MediaAssetID = &media.ID
+	r.content.Status = ContentReady
+	r.content.DurationSeconds = media.DurationSeconds
+	r.contentStatuses = append(r.contentStatuses, ContentReady)
+	return task, media, r.content, nil
+}
+func (r *fakeUploadRepo) ListExpiredUploadTasks(context.Context, int) ([]UploadTask, error) {
+	return r.expired, nil
 }
 
 type fakeProbe struct {
@@ -103,7 +139,7 @@ func (p fakeProbe) Probe(context.Context, ProbeInput) (MediaProbeResult, error) 
 }
 
 func newUploadService(repo *fakeUploadRepo, store *fakeMultipartStorage, now time.Time) *UploadService {
-	return NewUploadService(repo, store, fakeProbe{result: MediaProbeResult{Container: "mp4", VideoCodec: "h264", AudioCodec: "aac", DurationSeconds: 125, Width: 1920, Height: 1080}}, UploadConfig{Bucket: "private-classroom", Prefix: "classroom", PartSize: 5 << 20, MaxParts: 10000, CredentialTTL: 15 * time.Minute, TaskTTL: time.Hour, MaxVideoBytes: 2 << 30, MaxAudioBytes: 512 << 20, MaxAttempts: 3}, func() time.Time { return now })
+	return NewUploadService(repo, store, fakeProbe{result: MediaProbeResult{Container: "mp4", VideoCodec: "h264", AudioCodec: "aac", DurationSeconds: 125, Width: 1920, Height: 1080}}, UploadConfig{Bucket: "private-classroom", Prefix: "classroom", PartSize: 5 << 20, MaxParts: 10000, CredentialTTL: 15 * time.Minute, TaskTTL: time.Hour, MaxVideoBytes: 2 << 30, MaxAudioBytes: 512 << 20, MaxAttempts: 3}, func() time.Time { return now }).WithCoverExtractor(&fakeCoverExtractor{key: "classroom/covers/default.jpg"})
 }
 
 func TestClassroomUploadInitiateGeneratesPrivateObjectKeyAndBindsDraft(t *testing.T) {
@@ -111,7 +147,7 @@ func TestClassroomUploadInitiateGeneratesPrivateObjectKeyAndBindsDraft(t *testin
 	repo := &fakeUploadRepo{content: Content{ID: 7, Title: "lesson", ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}}
 	store := &fakeMultipartStorage{}
 	svc := newUploadService(repo, store, now)
-	got, err := svc.Initiate(context.Background(), InitiateUploadInput{ContentID: 7, CreatorID: 42, Filename: "../teacher class.mp4", ContentType: "video/mp4", SizeBytes: 30 << 20, Checksum: "sha256:abc"})
+	got, err := svc.Initiate(context.Background(), InitiateUploadInput{ContentID: 7, CreatorID: 42, Filename: "../teacher class.mp4", ContentType: "video/mp4", SizeBytes: 30 << 20, Checksum: "crc64:123"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +157,7 @@ func TestClassroomUploadInitiateGeneratesPrivateObjectKeyAndBindsDraft(t *testin
 	if !strings.HasPrefix(got.Task.ObjectKey, "classroom/video/2026/07/26/content-7/") || strings.Contains(got.Task.ObjectKey, "..") {
 		t.Fatalf("unsafe server object key %q", got.Task.ObjectKey)
 	}
-	if got.Task.ObjectKey != store.initiated.ObjectKey || store.initiated.ContentType != "video/mp4" || store.initiated.Checksum != "sha256:abc" {
+	if got.Task.ObjectKey != store.initiated.ObjectKey || store.initiated.ContentType != "video/mp4" || store.initiated.Checksum != "crc64:123" {
 		t.Fatalf("storage initiate mismatch: %+v", store.initiated)
 	}
 }
@@ -139,7 +175,7 @@ func TestClassroomUploadRejectsNonDraftDuplicateAndOversize(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := newUploadService(tc.repo, &fakeMultipartStorage{}, now).Initiate(context.Background(), InitiateUploadInput{ContentID: 7, CreatorID: 42, Filename: "a.mp4", ContentType: "video/mp4", SizeBytes: tc.size, Checksum: "sha256:x"})
+			_, err := newUploadService(tc.repo, &fakeMultipartStorage{}, now).Initiate(context.Background(), InitiateUploadInput{ContentID: 7, CreatorID: 42, Filename: "a.mp4", ContentType: "video/mp4", SizeBytes: tc.size, Checksum: "crc64:123"})
 			if err == nil {
 				t.Fatal("expected rejection")
 			}
@@ -173,8 +209,8 @@ func TestClassroomUploadSignChecksOwnershipExpiryPartAndAttempts(t *testing.T) {
 
 func TestClassroomUploadCompleteValidatesPartsHeadChecksumAndProbe(t *testing.T) {
 	now := time.Now()
-	repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}, task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "classroom/video/x.mp4", ExpectedSize: 10, Checksum: "sha256:abc", PartSize: 5, MaxParts: 2, Status: UploadUploading, ExpiresAt: now.Add(time.Hour), AttemptCount: 1}}
-	store := &fakeMultipartStorage{parts: []storage.MultipartPart{{PartNumber: 1, ETag: "e1", Size: 5}, {PartNumber: 2, ETag: "e2", Size: 5}}, head: storage.ObjectMetadata{ObjectKey: "classroom/video/x.mp4", ETag: "final-etag", Size: 10, Checksum: "sha256:abc", ContentType: "video/mp4"}}
+	repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}, task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "classroom/video/x.mp4", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 5, MaxParts: 2, Status: UploadUploading, ExpiresAt: now.Add(time.Hour), AttemptCount: 1}}
+	store := &fakeMultipartStorage{parts: []storage.MultipartPart{{PartNumber: 1, ETag: "e1", Size: 5}, {PartNumber: 2, ETag: "e2", Size: 5}}, head: storage.ObjectMetadata{ObjectKey: "classroom/video/x.mp4", ETag: "final-etag", Size: 10, Checksum: "crc64:123", ContentType: "video/mp4"}}
 	svc := newUploadService(repo, store, now)
 	got, err := svc.Complete(context.Background(), 1, 42, []storage.CompletedPart{{PartNumber: 1, ETag: "e1"}, {PartNumber: 2, ETag: "e2"}})
 	if err != nil {
@@ -196,18 +232,18 @@ func TestClassroomUploadCompleteMarksFailedOnHeadOrProbeMismatch(t *testing.T) {
 		head  storage.ObjectMetadata
 		probe fakeProbe
 	}{
-		{"size", storage.ObjectMetadata{ETag: "x", Size: 9, Checksum: "sha256:abc", ContentType: "video/mp4"}, fakeProbe{}},
+		{"size", storage.ObjectMetadata{ETag: "x", Size: 9, Checksum: "crc64:123", ContentType: "video/mp4"}, fakeProbe{}},
 		{"checksum", storage.ObjectMetadata{ETag: "x", Size: 10, Checksum: "sha256:wrong", ContentType: "video/mp4"}, fakeProbe{}},
-		{"codec", storage.ObjectMetadata{ETag: "x", Size: 10, Checksum: "sha256:abc", ContentType: "video/mp4"}, fakeProbe{result: MediaProbeResult{Container: "mp4", VideoCodec: "hevc", AudioCodec: "aac"}}},
+		{"codec", storage.ObjectMetadata{ETag: "x", Size: 10, Checksum: "crc64:123", ContentType: "video/mp4"}, fakeProbe{result: MediaProbeResult{Container: "mp4", VideoCodec: "hevc", AudioCodec: "aac"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}, task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 10, Checksum: "sha256:abc", PartSize: 10, MaxParts: 1, Status: UploadUploading, ExpiresAt: now.Add(time.Hour), AttemptCount: 2}}
+			repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}, task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1, Status: UploadUploading, ExpiresAt: now.Add(time.Hour), AttemptCount: 2}}
 			st := &fakeMultipartStorage{parts: []storage.MultipartPart{{PartNumber: 1, ETag: "e", Size: 10}}, head: tc.head}
 			svc := NewUploadService(repo, st, tc.probe, UploadConfig{Bucket: "b", PartSize: 10, MaxParts: 1, TaskTTL: time.Hour, MaxVideoBytes: 100, MaxAudioBytes: 100, MaxAttempts: 3}, func() time.Time { return now })
 			if _, err := svc.Complete(context.Background(), 1, 42, []storage.CompletedPart{{PartNumber: 1, ETag: "e"}}); err == nil {
 				t.Fatal("expected mismatch")
 			}
-			if repo.task.Status != UploadFailed || repo.task.AttemptCount != 3 || repo.task.FailureReason == "" {
+			if repo.task.Status != UploadFailed || repo.task.AttemptCount != 2 || repo.task.FailureReason == "" {
 				t.Fatalf("failure state not persisted: %+v", repo.task)
 			}
 		})
@@ -223,7 +259,7 @@ func TestClassroomUploadAbortIsIdempotentAndOwned(t *testing.T) {
 		t.Fatalf("ownership %v", err)
 	}
 	got, err := svc.Abort(context.Background(), 1, 42)
-	if err != nil || got.Status != UploadAborted || got.CleanupStatus != "clean" {
+	if err != nil || got.Status != UploadAborted || got.CleanupStatus != "cleaned" {
 		t.Fatalf("abort %+v %v", got, err)
 	}
 	if _, err := svc.Abort(context.Background(), 1, 42); err != nil || st.abortCalls != 1 {
@@ -254,5 +290,186 @@ func TestClassroomUploadRejectsOSSCompletedChecksumMismatch(t *testing.T) {
 	err := validateHead(task, storage.CompleteMultipartResult{ETag: "etag", Checksum: "crc64:999"}, storage.ObjectMetadata{ETag: "etag", Size: 10, Checksum: "crc64:123"})
 	if err == nil {
 		t.Fatal("expected OSS completed checksum mismatch")
+	}
+}
+
+func TestClassroomUploadAbortUsesSchemaCleanupStatusCleaned(t *testing.T) {
+	now := time.Now()
+	repo := &fakeUploadRepo{task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 10, PartSize: 5, MaxParts: 2, Status: UploadUploading, ExpiresAt: now.Add(time.Hour), AttemptCount: 1}}
+	got, err := newUploadService(repo, &fakeMultipartStorage{}, now).Abort(context.Background(), 1, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CleanupStatus != "cleaned" {
+		t.Fatalf("cleanup status = %q", got.CleanupStatus)
+	}
+}
+
+func TestClassroomUploadMaxAttemptsCountsActualAttemptsAcrossFailureRetryFailure(t *testing.T) {
+	now := time.Now()
+	repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}}
+	st := &fakeMultipartStorage{parts: []storage.MultipartPart{{PartNumber: 1, ETag: "e", Size: 10}}, head: storage.ObjectMetadata{ETag: "e", Size: 9, Checksum: "crc64:123", ContentType: "video/mp4"}}
+	svc := NewUploadService(repo, st, fakeProbe{result: MediaProbeResult{Container: "mp4", VideoCodec: "h264", AudioCodec: "aac", DurationSeconds: 1}}, UploadConfig{Bucket: "b", PartSize: 10, MaxParts: 1, TaskTTL: time.Hour, MaxVideoBytes: 100, MaxAudioBytes: 100, MaxAttempts: 2}, func() time.Time { return now })
+	repo.task = UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1, Status: UploadUploading, ExpiresAt: now.Add(time.Hour), AttemptCount: 1}
+	_, _ = svc.Complete(context.Background(), 1, 42, []storage.CompletedPart{{PartNumber: 1, ETag: "e"}})
+	if repo.task.AttemptCount != 1 || repo.task.Status != UploadFailed {
+		t.Fatalf("first failure task=%+v", repo.task)
+	}
+	_, err := svc.Initiate(context.Background(), InitiateUploadInput{ContentID: 7, CreatorID: 42, Filename: "a.mp4", ContentType: "video/mp4", SizeBytes: 10, Checksum: "crc64:123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repo.task.AttemptCount != 2 {
+		t.Fatalf("retry attempt=%d", repo.task.AttemptCount)
+	}
+	repo.task.Status = UploadUploading
+	repo.task.ExpiresAt = now.Add(time.Hour)
+	_, _ = svc.Complete(context.Background(), 1, 42, []storage.CompletedPart{{PartNumber: 1, ETag: "e"}})
+	if repo.task.AttemptCount != 2 {
+		t.Fatalf("second failure attempt=%d", repo.task.AttemptCount)
+	}
+	if _, err := svc.Initiate(context.Background(), InitiateUploadInput{ContentID: 7, CreatorID: 42, Filename: "a.mp4", ContentType: "video/mp4", SizeBytes: 10, Checksum: "crc64:123"}); !errors.Is(err, ErrUploadAttempts) {
+		t.Fatalf("expected retry limit, got %v", err)
+	}
+}
+
+func TestClassroomUploadPartsRequireBidirectionalUniqueSet(t *testing.T) {
+	task := UploadTask{ExpectedSize: 10, MaxParts: 2}
+	listed := []storage.MultipartPart{{PartNumber: 1, ETag: "a", Size: 5}, {PartNumber: 2, ETag: "b", Size: 5}}
+	if err := validateCompletedParts(task, []storage.CompletedPart{{PartNumber: 1, ETag: "a"}, {PartNumber: 1, ETag: "a"}}, listed); err == nil {
+		t.Fatal("expected duplicate part rejection")
+	}
+}
+
+func TestClassroomUploadRequiresChecksumAndAAC(t *testing.T) {
+	repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}}
+	_, err := newUploadService(repo, &fakeMultipartStorage{}, time.Now()).Initiate(context.Background(), InitiateUploadInput{ContentID: 7, CreatorID: 42, Filename: "a.mp4", ContentType: "video/mp4", SizeBytes: 10, Checksum: "sha256:x"})
+	if err == nil {
+		t.Fatal("expected crc64 checksum requirement")
+	}
+	if err := ValidateMediaProbe(ContentVideo, MediaProbeResult{Container: "mp4", VideoCodec: "h264", AudioCodec: "", DurationSeconds: 1}); err == nil {
+		t.Fatal("expected AAC requirement")
+	}
+}
+
+type fakeCoverExtractor struct {
+	key   string
+	calls int
+}
+
+func (f *fakeCoverExtractor) Extract(context.Context, string, int64) (string, error) {
+	f.calls++
+	return f.key, nil
+}
+
+func TestClassroomUploadTransitionsMediaProcessingThenReadyWithCover(t *testing.T) {
+	now := time.Now()
+	repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}, task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1, Status: UploadUploading, ExpiresAt: now.Add(time.Hour), AttemptCount: 1}}
+	st := &fakeMultipartStorage{parts: []storage.MultipartPart{{PartNumber: 1, ETag: "e", Size: 10}}, head: storage.ObjectMetadata{ETag: "final-etag", Size: 10, Checksum: "crc64:123", ContentType: "video/mp4"}}
+	cover := &fakeCoverExtractor{key: "classroom/covers/7.jpg"}
+	svc := NewUploadService(repo, st, fakeProbe{result: MediaProbeResult{Container: "mp4", VideoCodec: "h264", AudioCodec: "aac", DurationSeconds: 2}}, UploadConfig{Bucket: "b", PartSize: 10, MaxParts: 1, TaskTTL: time.Hour, MaxVideoBytes: 100, MaxAudioBytes: 100}, func() time.Time { return now }).WithCoverExtractor(cover)
+	got, err := svc.Complete(context.Background(), 1, 42, []storage.CompletedPart{{PartNumber: 1, ETag: "e"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.mediaStatuses) < 2 || repo.mediaStatuses[0] != MediaProcessing || repo.mediaStatuses[len(repo.mediaStatuses)-1] != MediaReady {
+		t.Fatalf("media states=%v", repo.mediaStatuses)
+	}
+	if len(repo.contentStatuses) < 2 || repo.contentStatuses[0] != ContentProcessing || repo.contentStatuses[len(repo.contentStatuses)-1] != ContentReady {
+		t.Fatalf("content states=%v", repo.contentStatuses)
+	}
+	if got.Media.CoverObjectKey != "classroom/covers/7.jpg" || cover.calls != 1 {
+		t.Fatalf("cover=%q calls=%d", got.Media.CoverObjectKey, cover.calls)
+	}
+	if repo.finalizeCalls != 1 {
+		t.Fatalf("atomic finalize calls=%d", repo.finalizeCalls)
+	}
+}
+
+func TestClassroomUploadFailureWritesFailedMediaAndContent(t *testing.T) {
+	now := time.Now()
+	repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}, task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1, Status: UploadUploading, ExpiresAt: now.Add(time.Hour), AttemptCount: 1}}
+	st := &fakeMultipartStorage{parts: []storage.MultipartPart{{PartNumber: 1, ETag: "e", Size: 10}}, head: storage.ObjectMetadata{ETag: "bad", Size: 9, Checksum: "crc64:123", ContentType: "video/mp4"}}
+	_, err := newUploadService(repo, st, now).Complete(context.Background(), 1, 42, []storage.CompletedPart{{PartNumber: 1, ETag: "e"}})
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	if repo.media.StorageStatus != MediaFailed || repo.content.Status != ContentFailed || repo.task.MediaAssetID == nil {
+		t.Fatalf("task=%+v media=%+v content=%+v", repo.task, repo.media, repo.content)
+	}
+	if len(repo.mediaStatuses) < 2 || repo.mediaStatuses[0] != MediaProcessing || repo.mediaStatuses[len(repo.mediaStatuses)-1] != MediaFailed {
+		t.Fatalf("media failure states=%v", repo.mediaStatuses)
+	}
+	if len(repo.contentStatuses) < 2 || repo.contentStatuses[0] != ContentProcessing || repo.contentStatuses[len(repo.contentStatuses)-1] != ContentFailed {
+		t.Fatalf("content failure states=%v", repo.contentStatuses)
+	}
+}
+
+func TestClassroomUploadCleanupExpiredAbortsOrphans(t *testing.T) {
+	now := time.Now()
+	repo := &fakeUploadRepo{expired: []UploadTask{{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 10, PartSize: 10, MaxParts: 1, Status: UploadUploading, ExpiresAt: now.Add(-time.Minute), AttemptCount: 1, CleanupStatus: "pending"}}}
+	repo.task = repo.expired[0]
+	st := &fakeMultipartStorage{}
+	svc := newUploadService(repo, st, now)
+	count, err := svc.CleanupExpired(context.Background(), 100)
+	if err != nil || count != 1 || st.abortCalls != 1 || repo.task.Status != UploadExpired || repo.task.CleanupStatus != "cleaned" {
+		t.Fatalf("count=%d err=%v calls=%d task=%+v", count, err, st.abortCalls, repo.task)
+	}
+}
+
+func TestClassroomUploadConcurrentCompleteCallsStorageOnce(t *testing.T) {
+	now := time.Now()
+	repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}, task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1, Status: UploadUploading, ExpiresAt: now.Add(time.Hour), AttemptCount: 1}}
+	st := &fakeMultipartStorage{completeDelay: 20 * time.Millisecond, parts: []storage.MultipartPart{{PartNumber: 1, ETag: "e", Size: 10}}, head: storage.ObjectMetadata{ETag: "final-etag", Size: 10, Checksum: "crc64:123", ContentType: "video/mp4"}}
+	svc := newUploadService(repo, st, now)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			defer wg.Done()
+			_, err := svc.Complete(context.Background(), 1, 42, []storage.CompletedPart{{PartNumber: 1, ETag: "e"}})
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st.completeCalls != 1 {
+		t.Fatalf("complete calls=%d", st.completeCalls)
+	}
+}
+
+type fakeCoverSigner struct{}
+
+func (fakeCoverSigner) PresignGetURL(context.Context, string, time.Duration) (string, error) {
+	return "https://media.test/video.mp4", nil
+}
+
+type fakeCoverUploader struct{ data []byte }
+
+func (f *fakeCoverUploader) Upload(_ context.Context, in storage.UploadInput) (storage.UploadResult, error) {
+	f.data, _ = io.ReadAll(in.Reader)
+	return storage.UploadResult{Key: "classroom/covers/generated.jpg"}, nil
+}
+func TestFFmpegCoverExtractorRunsSnapshotAndUploadsJPEG(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "ffmpeg")
+	script := "#!/bin/sh\nprintf jpeg > \"$8\"\n"
+	if err := os.WriteFile(binary, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	uploader := &fakeCoverUploader{}
+	extractor := FFmpegCoverExtractor{Signer: fakeCoverSigner{}, Uploader: uploader, Binary: binary}
+	key, err := extractor.Extract(context.Background(), "classroom/video/a.mp4", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != "classroom/covers/generated.jpg" || string(uploader.data) != "jpeg" {
+		t.Fatalf("key=%q data=%q", key, uploader.data)
 	}
 }
