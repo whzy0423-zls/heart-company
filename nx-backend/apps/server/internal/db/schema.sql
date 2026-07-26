@@ -2071,6 +2071,7 @@ CREATE TABLE IF NOT EXISTS app_chat_sessions (
   scene       TEXT NOT NULL DEFAULT 'chat',
   context_summary TEXT NOT NULL DEFAULT '',
   context_summary_through_message_id BIGINT NOT NULL DEFAULT 0,
+  scene       TEXT NOT NULL DEFAULT 'chat',
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   create_time TIMESTAMPTZ NOT NULL DEFAULT now()
 );

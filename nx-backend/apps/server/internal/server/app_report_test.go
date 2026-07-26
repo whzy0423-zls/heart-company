@@ -266,6 +266,9 @@ func (appReportNoSessionsConn) QueryContext(_ context.Context, query string, _ [
 			values:  [][]driver.Value{{int64(7)}},
 		}, nil
 	case strings.Contains(query, "SELECT MIN(create_time) FROM app_chat_sessions"):
+		if !strings.Contains(strings.Join(strings.Fields(query), " "), "WHERE card_id = $1 AND scene = 'chat'") {
+			return nil, errors.New("first-session query must exclude non-chat scenes")
+		}
 		return &appReportRows{
 			columns: []string{"min"},
 			values:  [][]driver.Value{{nil}},
@@ -326,6 +329,9 @@ func (appReportSessionQueryErrorConn) QueryContext(_ context.Context, query stri
 		}, nil
 	}
 	if strings.Contains(query, "SELECT MIN(create_time) FROM app_chat_sessions") {
+		if !strings.Contains(strings.Join(strings.Fields(query), " "), "WHERE card_id = $1 AND scene = 'chat'") {
+			return nil, errors.New("first-session query must exclude non-chat scenes")
+		}
 		return nil, errors.New("session query failed")
 	}
 	return nil, errors.New("unexpected query: " + query)
@@ -366,6 +372,9 @@ func (appReportWeeklyAggregateConn) QueryContext(_ context.Context, query string
 			values:  [][]driver.Value{{int64(7)}},
 		}, nil
 	case strings.Contains(query, "SELECT MIN(create_time) FROM app_chat_sessions"):
+		if !strings.Contains(strings.Join(strings.Fields(query), " "), "WHERE card_id = $1 AND scene = 'chat'") {
+			return nil, errors.New("first-session query must exclude non-chat scenes")
+		}
 		return &appReportRows{
 			columns: []string{"min"},
 			values: [][]driver.Value{{
@@ -373,6 +382,9 @@ func (appReportWeeklyAggregateConn) QueryContext(_ context.Context, query string
 			}},
 		}, nil
 	case strings.Contains(query, "date_trunc('week'"):
+		if !strings.Contains(strings.Join(strings.Fields(query), " "), "WHERE s.card_id = $1 AND s.scene = 'chat'") {
+			return nil, errors.New("weekly aggregate must exclude non-chat scenes")
+		}
 		appReportWeeklyQueryCount++
 		return &appReportRows{
 			columns: []string{"week_start", "msg_count"},
@@ -423,11 +435,17 @@ func (appReportSequentialIDsConn) QueryContext(_ context.Context, query string, 
 			values:  [][]driver.Value{{int64(7)}},
 		}, nil
 	case strings.Contains(query, "SELECT MIN(create_time) FROM app_chat_sessions"):
+		if !strings.Contains(strings.Join(strings.Fields(query), " "), "WHERE card_id = $1 AND scene = 'chat'") {
+			return nil, errors.New("first-session query must exclude non-chat scenes")
+		}
 		return &appReportRows{
 			columns: []string{"min"},
 			values:  [][]driver.Value{{appReportSequentialFirstWeek.Add(8 * time.Hour)}},
 		}, nil
 	case strings.Contains(query, "date_trunc('week'"):
+		if !strings.Contains(strings.Join(strings.Fields(query), " "), "WHERE s.card_id = $1 AND s.scene = 'chat'") {
+			return nil, errors.New("weekly aggregate must exclude non-chat scenes")
+		}
 		return &appReportRows{
 			columns: []string{"week_start", "msg_count"},
 			values: [][]driver.Value{

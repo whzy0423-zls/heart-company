@@ -72,6 +72,35 @@ const form = ref<ModelConfigPayload>({
     provider: '',
     timeoutSeconds: 30,
   },
+  xinzhiliVoice: {
+    enabled: false,
+    asr: {
+      provider: 'openai-compatible',
+      apiBase: '',
+      apiKey: '',
+      model: '',
+      language: 'zh',
+      timeoutSeconds: 30,
+    },
+    tts: {
+      provider: 'openai-compatible',
+      apiBase: '',
+      apiKey: '',
+      model: '',
+      voice: '',
+      speed: 1,
+      responseFormat: 'mp3',
+      timeoutSeconds: 45,
+    },
+    interaction: {
+      endSilenceMs: 700,
+      minSpeechMs: 300,
+      maxTurnSeconds: 60,
+      autoRelisten: true,
+      tapToInterrupt: true,
+    },
+    systemPrompt: '',
+  },
   assist: { enabled: true, systemPrompt: '' },
 });
 const chatKeySet = ref(false);
@@ -81,6 +110,8 @@ const imageKeySet = ref(false);
 const analysisKeySet = ref(false);
 const adminKeySet = ref(false);
 const dailyQuizKeySet = ref(false);
+const xinzhiliAsrKeySet = ref(false);
+const xinzhiliTtsKeySet = ref(false);
 
 const chatProviderOptions = [
   { label: 'OpenAI 协议', value: 'openai-compatible' },
@@ -183,6 +214,39 @@ async function load() {
           provider: data.dailyQuiz?.provider ?? '',
           timeoutSeconds: data.dailyQuiz?.timeoutSeconds ?? 30,
         },
+        xinzhiliVoice: {
+          enabled: data.xinzhiliVoice?.enabled ?? false,
+          asr: {
+            provider: 'openai-compatible',
+            apiBase: data.xinzhiliVoice?.asr.apiBase ?? '',
+            apiKey: '',
+            model: data.xinzhiliVoice?.asr.model ?? '',
+            language: data.xinzhiliVoice?.asr.language ?? 'zh',
+            timeoutSeconds: data.xinzhiliVoice?.asr.timeoutSeconds ?? 30,
+          },
+          tts: {
+            provider: 'openai-compatible',
+            apiBase: data.xinzhiliVoice?.tts.apiBase ?? '',
+            apiKey: '',
+            model: data.xinzhiliVoice?.tts.model ?? '',
+            voice: data.xinzhiliVoice?.tts.voice ?? '',
+            speed: data.xinzhiliVoice?.tts.speed ?? 1,
+            responseFormat: data.xinzhiliVoice?.tts.responseFormat ?? 'mp3',
+            timeoutSeconds: data.xinzhiliVoice?.tts.timeoutSeconds ?? 45,
+          },
+          interaction: {
+            endSilenceMs:
+              data.xinzhiliVoice?.interaction.endSilenceMs ?? 700,
+            minSpeechMs: data.xinzhiliVoice?.interaction.minSpeechMs ?? 300,
+            maxTurnSeconds:
+              data.xinzhiliVoice?.interaction.maxTurnSeconds ?? 60,
+            autoRelisten:
+              data.xinzhiliVoice?.interaction.autoRelisten ?? true,
+            tapToInterrupt:
+              data.xinzhiliVoice?.interaction.tapToInterrupt ?? true,
+          },
+          systemPrompt: data.xinzhiliVoice?.systemPrompt ?? '',
+        },
         assist: {
           enabled: data.assist?.enabled ?? true,
           systemPrompt: data.assist?.systemPrompt ?? '',
@@ -196,6 +260,10 @@ async function load() {
       analysisKeySet.value = data.analysis?.apiKeySet ?? false;
       adminKeySet.value = data.admin?.apiKeySet ?? false;
       dailyQuizKeySet.value = data.dailyQuiz?.apiKeySet ?? false;
+      xinzhiliAsrKeySet.value =
+        data.xinzhiliVoice?.asr.apiKeySet ?? false;
+      xinzhiliTtsKeySet.value =
+        data.xinzhiliVoice?.tts.apiKeySet ?? false;
     }
   } finally {
     loading.value = false;
@@ -599,6 +667,172 @@ async function testChat() {
       </Row>
 
       <template v-if="!isAdminModelOnly">
+        <Divider orientation="left">芯之力语音配置</Divider>
+        <Alert
+          class="mb-4"
+          type="info"
+          show-icon
+          message="电话式低延迟语音链路"
+          description="ASR 与 TTS 使用 OpenAI 兼容协议；中间回答继续使用页面顶部配置的对话模型。任一语音模型未配置时，App 会明确提示先完成配置。"
+        />
+        <Form.Item label="启用芯之力语音">
+          <Switch v-model:checked="form.xinzhiliVoice.enabled" />
+        </Form.Item>
+        <Row :gutter="24">
+          <Col :md="12" :xs="24">
+            <Divider dashed orientation="left">ASR 语音识别</Divider>
+            <Form.Item label="协议">
+              <Input value="OpenAI 兼容协议" disabled />
+            </Form.Item>
+            <Form.Item label="接口地址 (API Base)">
+              <Input
+                v-model:value="form.xinzhiliVoice.asr.apiBase"
+                placeholder="如 https://api.openai.com/v1"
+              />
+            </Form.Item>
+            <Form.Item label="模型名 (Model)">
+              <Input
+                v-model:value="form.xinzhiliVoice.asr.model"
+                placeholder="如 whisper-1 / SenseVoice"
+              />
+            </Form.Item>
+            <Form.Item label="语言">
+              <Input
+                v-model:value="form.xinzhiliVoice.asr.language"
+                placeholder="zh"
+              />
+            </Form.Item>
+            <Form.Item label="新密钥 (API Key)">
+              <Input.Password
+                v-model:value="form.xinzhiliVoice.asr.apiKey"
+                :placeholder="
+                  xinzhiliAsrKeySet
+                    ? '已配置，留空表示不修改'
+                    : '请输入 ASR API Key'
+                "
+                autocomplete="new-password"
+              />
+            </Form.Item>
+            <Form.Item label="超时时间（秒）">
+              <Input
+                v-model:value="form.xinzhiliVoice.asr.timeoutSeconds"
+                type="number"
+              />
+            </Form.Item>
+          </Col>
+          <Col :md="12" :xs="24">
+            <Divider dashed orientation="left">TTS 语音回复</Divider>
+            <Form.Item label="协议">
+              <Input value="OpenAI 兼容协议" disabled />
+            </Form.Item>
+            <Form.Item label="接口地址 (API Base)">
+              <Input
+                v-model:value="form.xinzhiliVoice.tts.apiBase"
+                placeholder="如 https://api.openai.com/v1"
+              />
+            </Form.Item>
+            <Form.Item label="模型名 (Model)">
+              <Input
+                v-model:value="form.xinzhiliVoice.tts.model"
+                placeholder="如 tts-1"
+              />
+            </Form.Item>
+            <Form.Item label="音色 (Voice)">
+              <Input
+                v-model:value="form.xinzhiliVoice.tts.voice"
+                placeholder="如 alloy / nova"
+              />
+            </Form.Item>
+            <Form.Item label="新密钥 (API Key)">
+              <Input.Password
+                v-model:value="form.xinzhiliVoice.tts.apiKey"
+                :placeholder="
+                  xinzhiliTtsKeySet
+                    ? '已配置，留空表示不修改'
+                    : '请输入 TTS API Key'
+                "
+                autocomplete="new-password"
+              />
+            </Form.Item>
+            <Row :gutter="12">
+              <Col :span="8">
+                <Form.Item label="语速">
+                  <Input
+                    v-model:value="form.xinzhiliVoice.tts.speed"
+                    type="number"
+                  />
+                </Form.Item>
+              </Col>
+              <Col :span="8">
+                <Form.Item label="格式">
+                  <Input
+                    v-model:value="form.xinzhiliVoice.tts.responseFormat"
+                    placeholder="mp3"
+                  />
+                </Form.Item>
+              </Col>
+              <Col :span="8">
+                <Form.Item label="超时（秒）">
+                  <Input
+                    v-model:value="form.xinzhiliVoice.tts.timeoutSeconds"
+                    type="number"
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+          </Col>
+        </Row>
+        <Divider dashed orientation="left">交互与断句</Divider>
+        <Row :gutter="16">
+          <Col :md="8" :xs="24">
+            <Form.Item label="结束静音（毫秒）">
+              <Input
+                v-model:value="form.xinzhiliVoice.interaction.endSilenceMs"
+                type="number"
+              />
+            </Form.Item>
+          </Col>
+          <Col :md="8" :xs="24">
+            <Form.Item label="最短有效声音（毫秒）">
+              <Input
+                v-model:value="form.xinzhiliVoice.interaction.minSpeechMs"
+                type="number"
+              />
+            </Form.Item>
+          </Col>
+          <Col :md="8" :xs="24">
+            <Form.Item label="单轮最长（秒）">
+              <Input
+                v-model:value="form.xinzhiliVoice.interaction.maxTurnSeconds"
+                type="number"
+              />
+            </Form.Item>
+          </Col>
+        </Row>
+        <Row :gutter="24">
+          <Col :md="12" :xs="24">
+            <Form.Item label="语音播完后自动复听">
+              <Switch
+                v-model:checked="form.xinzhiliVoice.interaction.autoRelisten"
+              />
+            </Form.Item>
+          </Col>
+          <Col :md="12" :xs="24">
+            <Form.Item label="点击球体打断 AI">
+              <Switch
+                v-model:checked="form.xinzhiliVoice.interaction.tapToInterrupt"
+              />
+            </Form.Item>
+          </Col>
+        </Row>
+        <Form.Item label="芯之力专属系统提示词">
+          <Input.TextArea
+            v-model:value="form.xinzhiliVoice.systemPrompt"
+            :auto-size="{ minRows: 4, maxRows: 10 }"
+            placeholder="约束电话式回复的语气、长度和九型知识使用方式。"
+          />
+        </Form.Item>
+
         <Divider orientation="left">智能辅助作答</Divider>
         <Row :gutter="24">
           <Col :xs="24">

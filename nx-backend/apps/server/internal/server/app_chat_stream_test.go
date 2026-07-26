@@ -103,7 +103,7 @@ func TestAppChatStreamingProxyConfig(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			config := string(body)
+			config := appChatNginxStripComments(string(body))
 			focusedStart := strings.Index(config, "location ^~ /api/app/chat/")
 			if focusedStart < 0 {
 				t.Fatalf("%s missing focused app chat streaming location", relativePath)
@@ -117,9 +117,8 @@ func TestAppChatStreamingProxyConfig(t *testing.T) {
 			}
 
 			block := appChatNginxLocationBlock(t, config[focusedStart:])
-			normalized := strings.Join(strings.Fields(block), " ")
 			for _, directive := range requiredDirectives {
-				if !strings.Contains(normalized, strings.Join(strings.Fields(directive), " ")) {
+				if !appChatNginxLocationHasDirective(block, directive) {
 					t.Errorf("%s app chat location missing %q; block=%q", relativePath, directive, block)
 				}
 			}
@@ -148,13 +147,33 @@ func appChatStreamTestRepoRoot(t *testing.T) string {
 
 func appChatNginxLocationBlock(t *testing.T, config string) string {
 	t.Helper()
+	config = appChatNginxStripComments(config)
 	open := strings.IndexByte(config, '{')
 	if open < 0 {
 		t.Fatal("nginx location missing opening brace")
 	}
 	depth := 0
+	var quote byte
+	escaped := false
 	for index := open; index < len(config); index++ {
-		switch config[index] {
+		char := config[index]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			if char == '\\' {
+				escaped = true
+			} else if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		if char == '\'' || char == '"' {
+			quote = char
+			continue
+		}
+		switch char {
 		case '{':
 			depth++
 		case '}':
@@ -166,6 +185,87 @@ func appChatNginxLocationBlock(t *testing.T, config string) string {
 	}
 	t.Fatal("nginx location missing closing brace")
 	return ""
+}
+
+func appChatNginxStripComments(config string) string {
+	var result strings.Builder
+	result.Grow(len(config))
+	var quote byte
+	escaped := false
+	for index := 0; index < len(config); index++ {
+		char := config[index]
+		if escaped {
+			result.WriteByte(char)
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			result.WriteByte(char)
+			if char == '\\' {
+				escaped = true
+			} else if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		if char == '\'' || char == '"' {
+			quote = char
+			result.WriteByte(char)
+			continue
+		}
+		if char == '#' {
+			for index < len(config) && config[index] != '\n' {
+				index++
+			}
+			if index < len(config) {
+				result.WriteByte('\n')
+			}
+			continue
+		}
+		result.WriteByte(char)
+	}
+	return result.String()
+}
+
+func appChatNginxLocationHasDirective(block, directive string) bool {
+	open := strings.IndexByte(block, '{')
+	close := strings.LastIndexByte(block, '}')
+	if open < 0 || close <= open {
+		return false
+	}
+	want := strings.Join(strings.Fields(directive), " ")
+	body := block[open+1 : close]
+	statementStart := 0
+	var quote byte
+	escaped := false
+	for index := 0; index < len(body); index++ {
+		char := body[index]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			if char == '\\' {
+				escaped = true
+			} else if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		if char == '\'' || char == '"' {
+			quote = char
+			continue
+		}
+		if char != ';' {
+			continue
+		}
+		statement := strings.Join(strings.Fields(body[statementStart:index]), " ")
+		if statement+";" == want {
+			return true
+		}
+		statementStart = index + 1
+	}
+	return false
 }
 
 func TestAppChatAskStreamFlushesFirstDeltaBeforeGenerationCompletes(t *testing.T) {

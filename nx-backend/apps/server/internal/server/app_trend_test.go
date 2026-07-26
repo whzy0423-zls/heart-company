@@ -1,9 +1,80 @@
 package server
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"errors"
+	"io"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestAppTrendMessageSignalsExcludeNonChatScenes(t *testing.T) {
+	registerAppTrendSceneDriverOnce.Do(func() {
+		sql.Register(appTrendSceneDriverName, appTrendSceneDriver{})
+	})
+	database, err := sql.Open(appTrendSceneDriverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	signals := map[string]appTrendDaySignals{}
+	server := &Server{db: database}
+	if err := server.addAppTrendMessageSignals(context.Background(), signals, 7, 9, start, start.AddDate(0, 0, 1)); err != nil {
+		t.Fatalf("addAppTrendMessageSignals returned error: %v", err)
+	}
+	if signals["2026-07-01"].UserMessages != 1 {
+		t.Fatalf("signals = %+v, want one regular chat message", signals)
+	}
+}
+
+const appTrendSceneDriverName = "app_trend_scene_test"
+
+var registerAppTrendSceneDriverOnce sync.Once
+
+type appTrendSceneDriver struct{}
+
+func (appTrendSceneDriver) Open(string) (driver.Conn, error) { return appTrendSceneConn{}, nil }
+
+type appTrendSceneConn struct{}
+
+func (appTrendSceneConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
+func (appTrendSceneConn) Close() error                        { return nil }
+func (appTrendSceneConn) Begin() (driver.Tx, error)           { return nil, driver.ErrSkip }
+func (appTrendSceneConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	normalized := strings.Join(strings.Fields(query), " ")
+	want := "SELECT m.role, m.content, m.favorite, m.feedback, m.create_time FROM app_chat_sessions s JOIN app_chat_messages m ON m.session_id = s.id WHERE s.app_user_id = $1 AND s.card_id = $2 AND s.scene = 'chat' AND m.create_time >= $3 AND m.create_time < $4 ORDER BY m.create_time"
+	if normalized != want {
+		return nil, errors.New("trend message query is missing the exact regular-chat scene boundary: " + normalized)
+	}
+	if len(args) != 4 || args[0].Value != int64(7) || args[1].Value != int64(9) {
+		return nil, errors.New("unexpected trend query arguments")
+	}
+	return &appTrendSceneRows{values: [][]driver.Value{{"user", "普通聊天", false, "", time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)}}}, nil
+}
+
+type appTrendSceneRows struct {
+	values [][]driver.Value
+	index  int
+}
+
+func (*appTrendSceneRows) Columns() []string {
+	return []string{"role", "content", "favorite", "feedback", "create_time"}
+}
+func (*appTrendSceneRows) Close() error { return nil }
+func (r *appTrendSceneRows) Next(dest []driver.Value) error {
+	if r.index >= len(r.values) {
+		return io.EOF
+	}
+	copy(dest, r.values[r.index])
+	r.index++
+	return nil
+}
 
 func TestBuildAppTrendSeriesUsesRealDailySignals(t *testing.T) {
 	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)

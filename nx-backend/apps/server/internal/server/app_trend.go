@@ -179,6 +179,7 @@ func (s *Server) addAppTrendMessageSignals(ctx context.Context, signals map[stri
 		JOIN app_chat_messages m ON m.session_id = s.id
 		WHERE s.app_user_id = $1
 		  AND s.card_id = $2
+		  AND s.scene = 'chat'
 		  AND m.create_time >= $3
 		  AND m.create_time < $4
 		ORDER BY m.create_time

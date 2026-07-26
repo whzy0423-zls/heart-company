@@ -4,16 +4,21 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/db"
+	"nine-xing/nx-backend/apps/server/internal/rag"
 	"nine-xing/nx-backend/apps/server/internal/testutil"
 	"nine-xing/nx-backend/apps/server/internal/userpreference"
 )
@@ -46,6 +51,198 @@ func TestAppPrivacyPolicyReturnsFixedText(t *testing.T) {
 	if !bytes.Contains([]byte(body.Data.Content), []byte("学习到的沟通偏好")) {
 		t.Fatalf("privacy policy must name learned communication preferences, got %q", body.Data.Content)
 	}
+}
+
+func TestAppPrivacyPolicyDisclosesXinzhiliVoiceDataHandling(t *testing.T) {
+	s := &Server{}
+	req := httptest.NewRequest(http.MethodGet, "/api/app/privacy/policy", nil)
+	res := httptest.NewRecorder()
+
+	s.appPrivacyPolicy(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Data struct {
+			Version     string `json:"version"`
+			EffectiveAt string `json:"effectiveAt"`
+			Content     string `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Data.Version != "2026-07-23" || body.Data.EffectiveAt != "2026-07-23" {
+		t.Fatalf("privacy policy dates = version %q effective %q", body.Data.Version, body.Data.EffectiveAt)
+	}
+
+	content := normalizePrivacyPolicy(body.Data.Content)
+	requiredParagraphs := []string{
+		`使用芯之力语音对话时，服务会临时处理你提交的音频，用于语音识别（ASR）、生成回答和语音合成（TTS）。我们的自有后台不持久化保存原始录音。即使页面不展示文字，成功完成并保存的芯之力对话仍会将转写文字、AI回答和回答来源保存为隐藏对话历史。服务可能保存你明确表达的沟通偏好，并在回答时使用已有对话历史和已有专属记忆（如适用），以保持上下文并提供更贴合你的后续回答。`,
+		`根据后台配置，完成语音识别（ASR）、语音合成（TTS）或回答生成所必需的音频、文字及上下文可能会发送给相应的第三方模型服务提供方处理。第三方的处理范围和保留规则受我们与其约定及其适用政策约束；我们不会将“页面不展示文字”等同于“不处理或不保存文字”。`,
+		`注销后，主业务库中的聊天会话及消息、专属记忆、沟通偏好、兼容报告、签到记录和设备令牌会被删除；成长卡片仅标记删除，相关数据行可能为保持关联一致性而保留，但不再正常展示或使用。刷新令牌会被撤销，账号会停用并匿名化登录标识，分析记录会与账号解除关联。`,
+		`订单、会员和交易记录，以及依法或履约需留存的其他记录，可能继续保留；备份和安全运维日志也可能按适用法规和实际系统配置的周期保留，期满后删除或去标识。你可以通过隐私渠道查询当前适用的保留期限。`,
+	}
+	for _, paragraph := range requiredParagraphs {
+		if !strings.Contains(content, normalizePrivacyPolicy(paragraph)) {
+			t.Errorf("privacy policy missing paragraph %q; content=%q", paragraph, body.Data.Content)
+		}
+	}
+
+	prohibited := []string{
+		"永久保存原始录音",
+		"页面不展示所以不处理文字",
+		"芯之力会创建专属记忆",
+		"注销立即删除全部数据",
+		"注销后全部数据立即删除",
+	}
+	for _, statement := range prohibited {
+		if strings.Contains(content, normalizePrivacyPolicy(statement)) {
+			t.Errorf("privacy policy contains prohibited overclaim %q", statement)
+		}
+	}
+}
+
+func normalizePrivacyPolicy(value string) string {
+	return strings.Join(strings.Fields(value), "")
+}
+
+func TestAppPrivacyXinzhiliVoiceHandlerLogsExcludeConversationContent(t *testing.T) {
+	const (
+		filename          = "privacy-filename-canary.wav"
+		transcript        = "隐私转写金丝雀"
+		answer            = "隐私回答金丝雀。"
+		providerErrorBody = "privacy-provider-error-body-canary"
+	)
+	audio := []byte("privacy-raw-audio-canary")
+	sensitive := []string{filename, transcript, answer, string(audio), base64.StdEncoding.EncodeToString(audio), providerErrorBody}
+	tmpDir := t.TempDir()
+	t.Setenv("TMPDIR", tmpDir)
+
+	var logs bytes.Buffer
+	originalWriter, originalFlags, originalPrefix := log.Writer(), log.Flags(), log.Prefix()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+		log.SetPrefix(originalPrefix)
+	})
+
+	request := func() *http.Request {
+		req := newPrivacyXinzhiliMultipartRequest(t, filename, audio)
+		return req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	}
+	assertASRInput := func(gotAudio []byte, gotFilename string) {
+		if !bytes.Equal(gotAudio, audio) || gotFilename != filename {
+			t.Fatalf("ASR input filename=%q audio=%q", gotFilename, gotAudio)
+		}
+	}
+	run := func(s *Server, req *http.Request, maxMemory int64) string {
+		res := httptest.NewRecorder()
+		s.appXinzhiliVoiceTurnStreamWithMultipartMemory(res, req, maxMemory)
+		return res.Body.String()
+	}
+
+	success := newSuccessfulXinzhiliVoiceServer(t)
+	success.xinzhiliTranscribe = func(_ context.Context, gotAudio []byte, gotFilename string) (string, error) {
+		assertASRInput(gotAudio, gotFilename)
+		return transcript, nil
+	}
+	success.ragGen = xinzhiliStreamingGeneratorFunc(func(_ context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+		if err := emit(answer); err != nil {
+			return "", err
+		}
+		return answer, nil
+	})
+	if body := run(success, request(), xinzhiliMultipartMemory); !strings.Contains(body, "event: done") {
+		t.Fatalf("success path did not complete: %s", body)
+	}
+
+	asrFailure := newSuccessfulXinzhiliVoiceServer(t)
+	asrFailure.xinzhiliTranscribe = func(_ context.Context, gotAudio []byte, gotFilename string) (string, error) {
+		assertASRInput(gotAudio, gotFilename)
+		return "", errors.New(providerErrorBody)
+	}
+	if body := run(asrFailure, request(), xinzhiliMultipartMemory); !strings.Contains(body, `"code":"asr_failed"`) {
+		t.Fatalf("ASR failure path did not run: %s", body)
+	}
+
+	modelFailure := newSuccessfulXinzhiliVoiceServer(t)
+	modelFailure.xinzhiliTranscribe = func(_ context.Context, gotAudio []byte, gotFilename string) (string, error) {
+		assertASRInput(gotAudio, gotFilename)
+		return transcript, nil
+	}
+	modelFailure.ragGen = xinzhiliStreamingGeneratorFunc(func(_ context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+		if err := emit(answer); err != nil {
+			return "", err
+		}
+		return "", errors.New(providerErrorBody)
+	})
+	if body := run(modelFailure, request(), xinzhiliMultipartMemory); !strings.Contains(body, `"code":"generation_failed"`) {
+		t.Fatalf("model failure path did not run: %s", body)
+	}
+
+	cleanupFailure := newSuccessfulXinzhiliVoiceServer(t)
+	cleanupReq := request()
+	cleanupFailure.xinzhiliTranscribe = func(_ context.Context, gotAudio []byte, gotFilename string) (string, error) {
+		assertASRInput(gotAudio, gotFilename)
+		if cleanupReq.MultipartForm == nil {
+			t.Fatal("handler did not parse multipart form before ASR")
+		}
+		temporaryFiles, err := filepath.Glob(filepath.Join(tmpDir, "multipart-*"))
+		if err != nil || len(temporaryFiles) != 1 {
+			t.Fatalf("multipart temporary files = %v, err=%v", temporaryFiles, err)
+		}
+		if err := os.Remove(temporaryFiles[0]); err != nil {
+			t.Fatalf("remove multipart temporary file: %v", err)
+		}
+		if err := os.Mkdir(temporaryFiles[0], 0o700); err != nil {
+			t.Fatalf("replace multipart temporary file with directory: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(temporaryFiles[0], "keep"), []byte("keep"), 0o600); err != nil {
+			t.Fatalf("make replacement directory non-empty: %v", err)
+		}
+		return transcript, nil
+	}
+	cleanupFailure.ragGen = success.ragGen
+	if body := run(cleanupFailure, cleanupReq, 1); !strings.Contains(body, "event: done") {
+		t.Fatalf("cleanup failure path did not otherwise complete: %s", body)
+	}
+
+	logged := logs.String()
+	if !strings.Contains(logged, "xinzhili multipart cleanup failed") {
+		t.Fatalf("expected full handler cleanup warning, logs=%q", logged)
+	}
+	for _, value := range sensitive {
+		if strings.Contains(logged, value) {
+			t.Errorf("xinzhili handler logs leaked sensitive canary %q: %s", value, logged)
+		}
+	}
+}
+
+func newPrivacyXinzhiliMultipartRequest(t *testing.T, filename string, audio []byte) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("audio", filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(audio); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteField("durationMs", "1300"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/app/xinzhili/turns/stream", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	return req
 }
 
 func TestAppPrivacyRoutesRequireAuth(t *testing.T) {

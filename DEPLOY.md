@@ -96,13 +96,51 @@ docker compose logs -f server
 
 ## 二、更新发布
 
+### 后端 `server`：芯之力会话锁升级约束
+
+当前版本使用 PostgreSQL transaction advisory lock 保证同一用户、卡片的 `xinzhili_voice` 场景只创建一个会话。这个锁是所有新版 `server` 实例共同遵守的应用协议，旧版实例不会获取该锁。因此发布本版本时，**禁止旧版和新版 `server` 实例混跑**，不能直接对 `server` 执行常规零停机滚动更新。
+
+后端发布按下面顺序执行；多主机或编排平台需在所有节点完成同一步骤后再进入下一步：
+
+1. 在摘流前构建并标记待发布镜像，记录镜像 tag 或 digest；不要在停服窗口内临时修改代码。
+2. 从负载均衡、网关或服务发现中摘除全部旧 `server` 实例，停止向它们分配新请求。
+3. 通过负载均衡监控、访问日志或连接指标确认旧实例的活跃请求已经归零；芯之力流式请求最长可能持续数分钟，应等待其自然结束，不要强杀仍在处理请求的进程。
+4. 停止所有旧 `server` 容器或进程。逐台执行只针对 `server` 的停止操作，禁止使用会删除数据库卷或无差别删除容器/进程的命令。
+5. 用只读检查确认所有节点均不存在旧版运行实例，再启动全部新版 `server` 实例。
+6. 检查容器状态和日志，并请求 `GET /api/app/health`；全部新版实例健康后再恢复负载均衡流量。
+
+单机 Docker Compose 可参考以下检查清单。构建发生在摘流前；摘流和确认活跃请求需在实际使用的负载均衡或网关上完成：
+
+```bash
+# 摘流前：只构建 server，并记录最终镜像 ID
+docker compose build server
+docker compose images server
+
+# 已摘流且活跃请求归零后：只停止 server，不影响 db/admin/website 和数据卷
+docker compose stop server
+
+# 只读确认：Compose 中 server 未运行，且没有同项目遗留的运行中 server 容器
+docker compose ps server
+docker ps --filter 'label=com.docker.compose.service=server' --format 'table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Names}}'
+
+# 所有旧实例均停止后，启动已构建的新版 server
+docker compose up -d --no-deps server
+
+# 恢复流量前检查状态、近期日志和健康接口
+docker compose ps server
+docker compose logs --since=10m server
+curl --fail --silent --show-error http://127.0.0.1:8080/api/app/health
+```
+
+若业务必须采用旧版、新版实例混跑的零停机滚动发布，本版本的 advisory lock 方案**不保证混跑期间的会话唯一性**。在执行这种发布方式前，必须先单独设计和验证仅作用于 `xinzhili_voice` 的 partial unique 约束，以及历史重复会话的消息归并、去重和安全迁移方案；不得直接增加覆盖普通 `chat` 的全局唯一约束。
+
 ```bash
 # 改了代码后重新构建对应服务
 docker compose up -d --build admin      # 只更新后台
 docker compose up -d --build website    # 只更新官网
-docker compose up -d --build server     # 只更新后端
+docker compose up -d --build server     # 只更新后端（本版本须遵循上面的摘流停旧流程）
 
-# 全部更新
+# 全部更新（如包含 server，仍须先完成上面的摘流、停旧和检查步骤）
 docker compose up -d --build
 ```
 
@@ -116,6 +154,45 @@ www.example.com    → 127.0.0.1:8000
 ```
 
 此时无需改容器：后台/官网的 `/api` 已由各自容器内 nginx 反代到 server，外层只做 80/443 → 8080/8000 的转发即可。
+
+### 芯之力语音流式接口的外层代理检查清单
+
+芯之力的 `POST /api/app/xinzhili/turns/stream` 同时包含音频上传和 SSE 响应。容器内 nginx 已为该路径设置
+`client_max_body_size 11m`、关闭请求/响应缓冲并使用 180 秒超时；宿主机 nginx、宝塔和 CDN 等外层代理也必须为同一精确路径配置：
+
+- 为便于阅读和配置审计，约定将精确路由写在通用 `/api/` 规则前；nginx 的 exact location 匹配语义本身不依赖书写顺序。上传大小限制不得小于 **11 MiB**。
+- nginx/宝塔关闭请求缓冲（`proxy_request_buffering off`），并关闭响应缓冲、缓存和压缩，避免该代理层先整包缓冲请求或聚合 SSE 增量。
+- 保留 HTTP/1.1、清空上游 `Connection` 请求头，并将连接超时设置为 30 秒，读取和发送超时设置为至少 180 秒。
+- CDN/WAF 必须确认支持流式请求体和 SSE；该路径绕过缓存后，再用实际音频验证上传与应用层解析完成后的首个 SSE 事件能及时到达。
+- 发布后检查最终生效配置，而不只检查面板表单；nginx 可用 `nginx -T` 确认精确路由及其指令实际存在，并位于约定的审计位置。
+
+宿主机 nginx 或宝塔可按下面模板配置；将 `<port>` 替换成该域名对应的容器入口端口（后台 `8080`，官网 `8000`）：
+
+```nginx
+location = /api/app/xinzhili/turns/stream {
+    client_max_body_size 11m;
+    proxy_pass http://127.0.0.1:<port>;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_request_buffering off;
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    proxy_connect_timeout 30s;
+    proxy_read_timeout 180s;
+    proxy_send_timeout 180s;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+这里的 `proxy_pass` 必须只有 `http://127.0.0.1:<port>`，不能附加 URI，也不能在端口后写尾随 `/`；否则 nginx 会把 exact location 的原始请求路径替换成 `/`，导致第二层 nginx 或 Go 无法匹配 `/api/app/xinzhili/turns/stream`。
+
+关闭代理请求缓冲只消除当前代理层的整包缓冲，不代表全链路不使用临时文件，也不代表客户端上传过程中就会收到 SSE。Go handler 仍通过 `ParseMultipartForm` 解析请求，超过内存阈值的 multipart 内容可能写入系统临时目录，并在 handler 结束时调用 `MultipartForm.RemoveAll` 清理；首个 SSE 事件应在上传和应用层解析完成后验证。
+
+如果某一层代理确实无法关闭请求缓冲，发布说明必须明确披露：音频会先完整写入该层临时目录，首个 SSE 事件会相应延迟；同时记录临时目录位置、磁盘容量告警和清理责任。nginx 正常完成或中止请求时会清理请求体临时文件；清理疑似遗留文件前必须先摘流/停止对应代理并确认没有活跃请求，禁止在运行中直接删除正在使用的临时文件。
 
 ## 四、常用运维
 
