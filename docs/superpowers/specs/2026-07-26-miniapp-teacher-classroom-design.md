@@ -59,9 +59,11 @@
 - `title`
 - `summary`
 - `cover_url` / `cover_asset_id`
-- `teacher_name`
+- `teacher_key`
+- `teacher_name_snapshot`
 - `sort_order`
 - `status`: `draft | published | offline`
+- `playback_blocked`
 - `access_level`: `public | login | member | paid`
 - `price_cents`（系列打包价）
 - `published_at`
@@ -77,11 +79,13 @@
 - `media_asset_id` / object key
 - `cover_url`
 - `duration_seconds`
-- `teacher_name`
+- `teacher_key`
+- `teacher_name_snapshot`
 - `recorded_at`
 - `badge`, `tags`
 - `episode_no`, `sort_order`
 - `status`: `draft | processing | ready | published | offline | failed`
+- `playback_blocked`
 - `access_level`: `inherit | public | login | member | paid`
 - `price_cents`
 - `published_at`
@@ -90,6 +94,8 @@
 #### `classroom_upload_tasks`
 
 记录分片上传任务、媒体校验、封面抽取、时长读取、失败原因、重试次数和最终资产引用。大文件不写入数据库 BYTEA。
+
+任务至少包含：`content_id`（唯一绑定草稿）、`creator_id`、`oss_upload_id`、服务端生成的 `object_key`、`expected_size`、`checksum`、`part_size`、`max_parts`、`expires_at`、`attempt_count`、`cleanup_status` 和 timestamps，并为 `content_id/status/expires_at` 建索引。
 
 #### `classroom_media_assets`
 
@@ -113,11 +119,12 @@
 
 #### 订单与权益
 
-复用现有 `orders` 支付回调体系，不引入第二套订单表：
+复用现有 `orders` 支付回调体系，不引入第二套订单表。现表继续使用 `orders.product` 字段，新增课堂 product 枚举值，不另造 `product_type`：
 
-- `product_type`: `classroom_series | classroom_content`
+- `product`: `classroom_series | classroom_content`
 - `ref_id` 指向系列或课件
-- 保存金额快照、支付状态、退款状态和幂等键
+- `ref_id` 由 `product` 决定目标类型，创建订单时由服务层验证目标存在且可售
+- 保存商品标题/金额快照、支付状态、退款状态和幂等键；同一用户同一目标只允许一个有效 pending 订单
 - 支付成功回调在同一事务内发放 `classroom_entitlements`
 - 权益约束保证 series/content 恰好命中一个目标；记录订单来源、有效期、撤销时间
 - 退款、人工补发、重复回调和已购保留策略必须显式处理
@@ -162,6 +169,8 @@ POST /api/miniapp/classroom/content/:id/play
 
 公开内容也统一经过播放票据/签名接口：未登录用户使用短时匿名票据并限流，登录用户使用小程序 JWT。列表和详情接口只返回元数据，不返回永久 `object_url`。播放对象必须支持 HTTP Range/206；不经过现有 BYTEA 公共资源响应。
 
+匿名播放票据由服务端签名，claims 至少包含 `content_id`、媒体版本、`exp`（不超过 5 分钟）和随机 nonce；限流键使用 IP + 设备标识，刷新接口按内容和客户端限频。票据在 TTL 内允许播放器 Range 请求复用，但不能跨内容或媒体版本使用；OSS/CDN 同时配置短 TTL、防盗链和签名 URL。
+
 第一阶段音频采用页面内播放器，支持播放、暂停、拖动、续播和地址刷新；离开详情页后暂停。锁屏控制、系统后台持续播放和播放队列放到第二阶段。
 
 ### 3.4 后台权限
@@ -174,12 +183,13 @@ POST /api/miniapp/classroom/content/:id/play
 
 - 课件状态：`draft → processing → ready → published → offline`；失败状态只能重试或回到草稿，未 `ready` 不得发布；
 - 系列状态：`draft → published → offline`；属于系列的课件发布前要求系列已发布；系列下线后默认隐藏系列及其课时，但已购用户仍可按权益规则播放；
+- 系列和课件均有 `playback_blocked` 紧急停播开关；普通 `offline` 停止公开展示和新购买，但已购用户仍可播放；硬停播时所有播放都拒绝；
 - `series_id` 可空；系列内容通过 `show_as_standalone=true` 才额外进入独立内容入口，两个入口分别排序且单个列表内不重复；删除系列默认 `RESTRICT`，先迁移或解除课时归属；
 - 系列/课件排序使用稳定的 `sort_order + id`，列表接口分页、过滤权限后再返回；公开列表只查 `published` 且有效媒体；
 - API 定义 ETag/缓存失效规则；发布、下线、改价、系列排序会清理相关缓存；
 - 进度写入校验用户与课件归属，服务端限制频率并使用幂等 upsert，不接受任意客户端 completed 百分比；
-- 老师信息采用 `teacher_id`（如已有老师实体）+ 发布时名称快照；若当前老师仍来自站点配置，先提供明确的兼容映射，不让 `teacher_name` 出现两套无规则来源；
-- 权限过滤在查询层或明确的服务层统一完成，避免先返回付费内容元数据再由前端隐藏。
+- 老师信息第一阶段统一使用 `teacher_key + teacher_name_snapshot`，不引入 `teacher_id`；先修复站点配置兼容映射，发布时写入名称快照；
+- 权限过滤在查询层或服务层统一完成：所有已发布且可售内容可返回安全元数据和价格，服务端计算 `canPlay=false`；只有媒体地址、受保护详情和播放票据受限，不能依赖前端隐藏付费卡片。
 
 ### 3.5.1 权限解析规则
 
@@ -189,8 +199,10 @@ POST /api/miniapp/classroom/content/:id/play
 4. 系列购买解锁仍属于该系列的当前和未来课时；课时移出系列后不再由系列权益覆盖；
 5. 单课购买只解锁该课；先单买后买系列，第一阶段不做金额抵扣；
 6. `paid` 发布时必须有大于 0 的人民币分值价格；非付费权限价格必须为空或 0；改价不影响已有订单金额快照；
-7. 系列下线默认从公开列表移除、停止新购买，但已购用户仍可从“我的学习”播放；管理员可使用紧急停播开关阻止所有播放；
+7. 系列下线只影响系列入口；其中 `show_as_standalone=true` 且课件仍为 published 的内容继续出现在独立内容入口。普通下线停止新购买但保留已购播放；`playback_blocked=true` 时系列/课件全部拒绝播放；
 8. 公开内容无需登录，登录内容要求 JWT，会员内容读取现有会员权威状态，付费内容检查系列或单课权益。
+
+会员权威字段为 `wx_users.member_level` 与新增的 `member_started_at/member_expires_at`；现有会员支付回调同步写入有效期。历史永久会员可用 `member_expires_at IS NULL` 表示，新的周期会员必须写入明确到期时间。
 
 ### 3.5.2 公开与小程序 API
 
@@ -206,7 +218,7 @@ PUT  /api/miniapp/classroom/content/:id/progress
 GET  /api/miniapp/classroom/continue-learning
 ```
 
-列表和详情返回 `effectiveAccess`、`canPlay`、`purchaseState`、`priceCents` 等展示字段，但不返回媒体 object key/永久 URL。公开匿名请求不返回用户状态；登录请求可附带用户态字段。
+列表和详情返回 `effectiveAccess`、`canPlay`、`purchaseState`、`priceCents` 等展示字段，但不返回媒体 object key/永久 URL。已发布且可售的付费内容仍返回安全元数据供发现和购买。公开匿名响应与登录用户响应分开缓存，登录响应使用 `Vary: Authorization` 或不进入共享 CDN 缓存。
 
 ### 3.5.3 进度与匿名行为
 
