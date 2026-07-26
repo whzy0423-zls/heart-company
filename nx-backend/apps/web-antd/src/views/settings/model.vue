@@ -48,10 +48,11 @@ const pageDescription = computed(() =>
 // apiKey 留空表示不修改；apiKeySet 用于提示是否已配置过密钥
 const form = ref<ModelConfigPayload>({
   chat: {
-    provider: 'openai-compatible',
+    provider: '',
     apiBase: 'https://coding-play.codes',
     apiKey: '',
     model: '',
+    timeoutSeconds: 30,
   },
   video: { apiBase: '', apiKey: '', model: '' },
   image: { apiBase: '', apiKey: '', model: '' },
@@ -130,10 +131,6 @@ const adminProviderOptions = [
   ...chatProviderOptions,
   { label: 'MiniMax 协议', value: 'minimax' },
 ];
-const chatProviderOptions = [
-  { label: 'OpenAI 协议', value: 'openai-compatible' },
-  { label: 'Anthropic 协议', value: 'anthropic-compatible' },
-];
 const dailyQuizProviderOptions = [
   { label: '继承管理端', value: '' },
   ...adminProviderOptions,
@@ -156,16 +153,6 @@ const chatTimeoutRules = [
     },
   },
 ];
-const chatEndpointHint = computed(() => {
-  const base = (form.value.chat.apiBase || 'https://coding-play.codes').replace(
-    /\/$/,
-    '',
-  );
-  return form.value.chat.provider === 'anthropic-compatible'
-    ? `将请求 POST ${base}/v1/messages`
-    : `将请求 POST ${base}/v1/chat/completions`;
-});
-
 onMounted(load);
 
 async function load() {
@@ -175,8 +162,7 @@ async function load() {
     if (data) {
       const nextForm: ModelConfigPayload = {
         chat: {
-          provider: data.chat?.provider ?? 'openai-compatible',
-          apiBase: data.chat?.apiBase || 'https://coding-play.codes',
+          apiBase: data.chat?.apiBase ?? '',
           apiKey: '',
           model: data.chat?.model ?? '',
           provider: data.chat?.provider ?? '',
@@ -298,6 +284,26 @@ function currentChatPayload(): ModelConfigPayload['chat'] | null {
   };
 }
 
+function applySiliconFlowVoicePreset() {
+  Object.assign(form.value.xinzhiliVoice.asr, {
+    provider: 'openai-compatible',
+    apiBase: 'https://api.siliconflow.cn/v1',
+    model: 'FunAudioLLM/SenseVoiceSmall',
+    language: 'zh',
+    timeoutSeconds: 30,
+  });
+  Object.assign(form.value.xinzhiliVoice.tts, {
+    provider: 'openai-compatible',
+    apiBase: 'https://api.siliconflow.cn/v1',
+    model: 'FunAudioLLM/CosyVoice2-0.5B',
+    voice: 'FunAudioLLM/CosyVoice2-0.5B:alex',
+    speed: 1,
+    responseFormat: 'mp3',
+    timeoutSeconds: 45,
+  });
+  message.success('已填充硅基流动免费语音预设，已输入的 API Key 保持不变');
+}
+
 async function save() {
   saving.value = true;
   try {
@@ -387,52 +393,77 @@ async function testChat() {
   >
     <Form v-if="form" layout="vertical">
       <template v-if="!isAdminModelOnly">
-        <Divider orientation="left">对话模型（手机端聊天窗口作答所用）</Divider>
-        <Row :gutter="24">
-          <Col :md="12" :xs="24">
-            <Form.Item label="协议">
-              <Select
-                v-model:value="form.chat.provider"
-                :options="chatProviderOptions"
-              />
-            </Form.Item>
-            <Form.Item label="接口地址 (API Base)">
-              <Input
-                v-model:value="form.chat.apiBase"
-                placeholder="https://coding-play.codes"
-              />
-              <span class="mt-1 block text-xs text-gray-400">
-                {{ chatEndpointHint }}
-              </span>
-            </Form.Item>
-          </Col>
-          <Col :md="12" :xs="24">
-            <Form.Item label="模型名 (Model)">
-              <Input
-                v-model:value="form.chat.model"
-                placeholder="如 gpt-5.6-sol / claude-sonnet-4-5"
-              />
-            </Form.Item>
-            <Form.Item label="密钥 (API Key)">
-              <Input.Password
-                v-model:value="form.chat.apiKey"
-                :placeholder="
-                  chatKeySet ? '已配置，留空表示不修改' : '请输入 API Key'
-                "
-                autocomplete="new-password"
-              />
-            </Form.Item>
-            <Form.Item label="连通性测试">
-              <Button :loading="testing" @click="testChat">
-                测试连通性
-              </Button>
-              <span class="ml-2 text-xs text-gray-400">
-                按当前协议对中转站做一次最小请求
-              </span>
-            </Form.Item>
-          </Col>
-        </Row>
-
+        <section data-testid="chat-model-section">
+          <Divider orientation="left">
+            对话模型（手机端聊天窗口作答所用）
+          </Divider>
+          <Alert
+            v-if="!form.chat.provider"
+            class="mb-4"
+            description="请选择协议并重新填写对应 API Key 后再保存，旧聊天配置不会自动迁移。"
+            message="对话模型尚未配置"
+            show-icon
+            type="warning"
+          />
+          <Row :gutter="24">
+            <Col :md="12" :xs="24">
+              <Form.Item label="协议" required>
+                <Select
+                  v-model:value="form.chat.provider"
+                  :options="chatProviderOptions"
+                  placeholder="请选择协议"
+                />
+              </Form.Item>
+              <Form.Item label="接口地址 (API Base)">
+                <Input
+                  v-model:value="form.chat.apiBase"
+                  placeholder="如 https://api.openai.com/v1 或 https://api.anthropic.com/v1"
+                />
+              </Form.Item>
+              <Form.Item label="模型名 (Model)">
+                <Input
+                  v-model:value="form.chat.model"
+                  placeholder="如 gpt-4.1-mini / claude-sonnet-4-5"
+                />
+              </Form.Item>
+            </Col>
+            <Col :md="12" :xs="24">
+              <Form.Item label="密钥 (API Key)">
+                <Input.Password
+                  v-model:value="form.chat.apiKey"
+                  :placeholder="
+                    chatKeyReusable
+                      ? '已配置，留空表示不修改'
+                      : form.chat.provider !== loadedChatProvider
+                        ? '切换协议后请输入新的 API Key'
+                        : '请输入 API Key'
+                  "
+                  autocomplete="new-password"
+                />
+              </Form.Item>
+              <Form.Item
+                label="超时时间（秒）"
+                :rules="chatTimeoutRules"
+                required
+              >
+                <Input
+                  v-model:value="form.chat.timeoutSeconds"
+                  min="1"
+                  placeholder="默认 30"
+                  step="1"
+                  type="number"
+                />
+              </Form.Item>
+              <Form.Item label="连通性测试">
+                <Button :loading="testing" @click="testChat">
+                  测试连通性
+                </Button>
+                <span class="ml-2 text-xs text-gray-400">
+                  会发送一次最小探测请求，可能产生少量 Token/额度
+                </span>
+              </Form.Item>
+            </Col>
+          </Row>
           <Alert
             v-if="pingResult"
             class="mt-2"
@@ -444,7 +475,6 @@ async function testChat() {
             }`"
           />
         </section>
-
         <Divider orientation="left">视频模型</Divider>
         <Row :gutter="24">
           <Col :md="12" :xs="24">
@@ -677,6 +707,14 @@ async function testChat() {
         />
         <Form.Item label="启用芯之力语音">
           <Switch v-model:checked="form.xinzhiliVoice.enabled" />
+        </Form.Item>
+        <Form.Item label="快捷预设">
+          <Button @click="applySiliconFlowVoicePreset">
+            使用硅基流动免费预设
+          </Button>
+          <span class="ml-2 text-xs text-gray-400">
+            只填充模型、地址与音色，不会修改 ASR / TTS API Key
+          </span>
         </Form.Item>
         <Row :gutter="24">
           <Col :md="12" :xs="24">
