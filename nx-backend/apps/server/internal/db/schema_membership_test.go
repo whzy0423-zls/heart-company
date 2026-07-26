@@ -27,3 +27,21 @@ func TestSchemaContainsTimeBoundAppMembershipColumns(t *testing.T) {
 		}
 	}
 }
+
+func TestSchemaContainsTimeBoundMiniappMembershipColumns(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := string(raw)
+	for _, statement := range []string{
+		"member_started_at TIMESTAMPTZ",
+		"member_expires_at TIMESTAMPTZ",
+		"ALTER TABLE wx_users ADD COLUMN IF NOT EXISTS member_started_at",
+		"ALTER TABLE wx_users ADD COLUMN IF NOT EXISTS member_expires_at",
+	} {
+		if !strings.Contains(schema, statement) {
+			t.Fatalf("schema missing %q", statement)
+		}
+	}
+}

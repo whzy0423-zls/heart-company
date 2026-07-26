@@ -80,7 +80,7 @@ func validateWxPayCallbackAgainstOrder(env config.Env, result wxpay.CallbackResu
 	if result.AmountTotal <= 0 || result.AmountTotal != order.Amount {
 		return fmt.Errorf("wxpay amount mismatch: callback=%d order=%d", result.AmountTotal, order.Amount)
 	}
-	if order.Product != "report" {
+	if order.Product != "report" && order.Product != "member" {
 		return fmt.Errorf("unsupported payment product: %s", order.Product)
 	}
 	return nil

@@ -569,11 +569,16 @@ CREATE TABLE IF NOT EXISTS wx_users (
   gender        TEXT NOT NULL DEFAULT '',
   main_type     INT  NOT NULL DEFAULT 0,
   member_level  INT  NOT NULL DEFAULT 0,
+  member_started_at TIMESTAMPTZ,
+  member_expires_at TIMESTAMPTZ,
   channel       TEXT NOT NULL DEFAULT '',
   scene         TEXT NOT NULL DEFAULT '',
   create_time   TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_login_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE wx_users ADD COLUMN IF NOT EXISTS member_started_at TIMESTAMPTZ;
+ALTER TABLE wx_users ADD COLUMN IF NOT EXISTS member_expires_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS test_records (
   id          BIGSERIAL PRIMARY KEY,

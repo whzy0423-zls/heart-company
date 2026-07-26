@@ -178,7 +178,7 @@ func (s *Store) PaymentOrderSnapshot(ctx context.Context, outTradeNo string) (Pa
 }
 
 // MarkOrderPaid 支付成功落账：幂等地把订单置为 paid，并按产品类型发放权益。
-// report 产品 → 写 report_unlocks；member 产品 → 抬升 wx_users.member_level。
+// report 产品 → 写 report_unlocks；member 产品 → 原子更新会员等级与有效期。
 // 返回是否为本次新置（true 表示首次确认，可用于决定是否发通知）。
 func (s *Store) MarkOrderPaid(ctx context.Context, outTradeNo, transactionID string) (bool, error) {
 	c, cancel := s.ctx(ctx)
@@ -224,8 +224,25 @@ func (s *Store) MarkOrderPaid(ctx context.Context, outTradeNo, transactionID str
 			}
 		}
 	case "member":
+		// ref_id stores the purchased membership duration in days. Requiring an
+		// explicit positive duration prevents new periodic memberships from
+		// accidentally becoming lifetime memberships.
+		if refID <= 0 {
+			return false, fmt.Errorf("membership order missing duration")
+		}
 		if _, err := tx.ExecContext(c,
-			`UPDATE wx_users SET member_level=GREATEST(member_level,1) WHERE id=$1`, wxUserID,
+			`UPDATE wx_users
+			 SET member_level=GREATEST(member_level,1),
+			     member_started_at=CASE
+			       WHEN member_level > 0 AND (member_expires_at IS NULL OR member_expires_at > now())
+			         THEN COALESCE(member_started_at, now())
+			       ELSE now()
+			     END,
+			     member_expires_at=CASE
+			       WHEN member_level > 0 AND member_expires_at IS NULL THEN NULL
+			       ELSE GREATEST(COALESCE(member_expires_at, now()), now()) + ($2 * interval '1 day')
+			     END
+			 WHERE id=$1`, wxUserID, refID,
 		); err != nil {
 			return false, err
 		}
@@ -235,6 +252,22 @@ func (s *Store) MarkOrderPaid(ctx context.Context, outTradeNo, transactionID str
 		return false, err
 	}
 	return true, nil
+}
+
+// RevokeMembership immediately removes miniapp membership (for a refund or
+// manual revocation). Classroom entitlement checks use the same wx_users
+// fields, so no second membership source can remain active.
+func (s *Store) RevokeMembership(ctx context.Context, userID int64) error {
+	c, cancel := s.ctx(ctx)
+	defer cancel()
+	if userID <= 0 {
+		return fmt.Errorf("invalid miniapp user id")
+	}
+	_, err := s.db.ExecContext(c,
+		`UPDATE wx_users
+		 SET member_level=0, member_started_at=NULL, member_expires_at=NULL
+		 WHERE id=$1`, userID)
+	return err
 }
 
 // IsReportUnlocked 查询某用户对某测试记录是否已解锁深度报告。

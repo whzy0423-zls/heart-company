@@ -77,6 +77,61 @@ func TestCreateOrReusePendingOrderClosesMismatchedPendingOrderAndCreatesNew(t *t
 	}
 }
 
+func TestMarkOrderPaidStartsDatedMembership(t *testing.T) {
+	state := &orderTestState{paidProduct: "member", paidRefID: 30}
+	store := newOrderTestStore(t, state)
+
+	changed, err := store.MarkOrderPaid(context.Background(), "member-order", "wx-transaction")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("expected first callback to grant membership")
+	}
+	if state.membershipGrantCount != 1 || state.membershipDurationDays != 30 {
+		t.Fatalf("expected one 30-day membership grant, got count=%d days=%d", state.membershipGrantCount, state.membershipDurationDays)
+	}
+	if !state.membershipRenewsFromCurrentExpiry {
+		t.Fatal("expected membership renewal to extend from a current future expiry")
+	}
+}
+
+func TestMarkOrderPaidDuplicateCallbackIsIdempotent(t *testing.T) {
+	state := &orderTestState{paidProduct: "member", paidRefID: 30, paidStatus: "paid"}
+	store := newOrderTestStore(t, state)
+
+	changed, err := store.MarkOrderPaid(context.Background(), "member-order", "wx-transaction")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed || state.membershipGrantCount != 0 {
+		t.Fatalf("expected duplicate callback to be a no-op, changed=%v grants=%d", changed, state.membershipGrantCount)
+	}
+}
+
+func TestMarkOrderPaidRejectsMembershipWithoutDuration(t *testing.T) {
+	state := &orderTestState{paidProduct: "member"}
+	store := newOrderTestStore(t, state)
+
+	if _, err := store.MarkOrderPaid(context.Background(), "member-order", "wx-transaction"); err == nil {
+		t.Fatal("expected a new membership order without an explicit duration to fail")
+	}
+	if state.membershipGrantCount != 0 {
+		t.Fatalf("invalid membership must not grant entitlement, grants=%d", state.membershipGrantCount)
+	}
+}
+
+func TestRevokeMembershipClearsAuthoritativeFields(t *testing.T) {
+	state := &orderTestState{}
+	store := newOrderTestStore(t, state)
+	if err := store.RevokeMembership(context.Background(), 7); err != nil {
+		t.Fatal(err)
+	}
+	if !state.membershipRevoked {
+		t.Fatal("expected revoke to clear wx_users membership fields")
+	}
+}
+
 func newOrderTestStore(t *testing.T, state *orderTestState) *Store {
 	t.Helper()
 	registerOrderTestDriver()
@@ -106,12 +161,20 @@ func registerOrderTestDriver() {
 }
 
 type orderTestState struct {
-	existing       bool
-	existingAmount int
-	existingTitle  string
-	insertCount    int
-	lockCount      int
-	closeCount     int
+	existing                          bool
+	existingAmount                    int
+	existingTitle                     string
+	insertCount                       int
+	lockCount                         int
+	closeCount                        int
+	paidProduct                       string
+	paidRefID                         int64
+	paidStatus                        string
+	orderPaidCount                    int
+	membershipGrantCount              int
+	membershipDurationDays            int
+	membershipRenewsFromCurrentExpiry bool
+	membershipRevoked                 bool
 }
 
 type orderTestDriver struct{}
@@ -133,7 +196,7 @@ func (c *orderTestConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, e
 	return orderTestTx{}, nil
 }
 
-func (c *orderTestConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+func (c *orderTestConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	if strings.Contains(query, "pg_advisory_xact_lock") {
 		c.state.lockCount++
 	}
@@ -141,11 +204,39 @@ func (c *orderTestConn) ExecContext(_ context.Context, query string, _ []driver.
 		c.state.closeCount++
 		c.state.existing = false
 	}
+	if strings.Contains(query, "UPDATE orders SET status='paid'") {
+		c.state.orderPaidCount++
+	}
+	if strings.Contains(query, "UPDATE wx_users") && strings.Contains(query, "member_expires_at") {
+		c.state.membershipGrantCount++
+		c.state.membershipRenewsFromCurrentExpiry = strings.Contains(query, "GREATEST(COALESCE(member_expires_at, now()), now())")
+		if len(args) > 1 {
+			if days, ok := args[1].Value.(int64); ok {
+				c.state.membershipDurationDays = int(days)
+			}
+		}
+	}
+	if strings.Contains(query, "member_level=0") && strings.Contains(query, "member_started_at=NULL") {
+		c.state.membershipRevoked = true
+	}
 	return driver.RowsAffected(1), nil
 }
 
 func (c *orderTestConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	switch {
+	case strings.Contains(query, "FROM orders WHERE out_trade_no=$1 FOR UPDATE"):
+		status := c.state.paidStatus
+		if status == "" {
+			status = "pending"
+		}
+		product := c.state.paidProduct
+		if product == "" {
+			product = "report"
+		}
+		return &orderTestRows{
+			columns: []string{"id", "wx_user_id", "ref_id", "product", "status"},
+			values:  [][]driver.Value{{int64(21), int64(7), c.state.paidRefID, product, status}},
+		}, nil
 	case strings.Contains(query, "WHERE wx_user_id=$1") && strings.Contains(query, "status='pending'"):
 		if !c.state.existing {
 			return &orderTestRows{columns: []string{"id", "out_trade_no", "product", "ref_id", "title", "amount", "status", "transaction_id", "create_time"}}, nil
