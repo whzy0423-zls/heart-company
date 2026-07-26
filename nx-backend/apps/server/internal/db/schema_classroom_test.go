@@ -73,7 +73,23 @@ func TestClassroomEntitlementSchemaAllowsRenewalAfterExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	sql := string(raw)
-	if strings.Contains(sql, "uq_classroom_entitlement_active_series") || strings.Contains(sql, "uq_classroom_entitlement_active_content") {
+	if strings.Contains(sql, "CREATE UNIQUE INDEX IF NOT EXISTS uq_classroom_entitlement_active_series") || strings.Contains(sql, "CREATE UNIQUE INDEX IF NOT EXISTS uq_classroom_entitlement_active_content") {
 		t.Fatal("partial unique indexes permanently block renewal after an entitlement expires; renewal idempotency belongs in the transactional entitlement service")
+	}
+}
+
+func TestClassroomEntitlementSchemaDropsLegacyRenewalBlockingIndexes(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(raw)
+	for _, statement := range []string{
+		"DROP INDEX IF EXISTS uq_classroom_entitlement_active_series",
+		"DROP INDEX IF EXISTS uq_classroom_entitlement_active_content",
+	} {
+		if !strings.Contains(sql, statement) {
+			t.Fatalf("schema is missing legacy entitlement index cleanup %q", statement)
+		}
 	}
 }
