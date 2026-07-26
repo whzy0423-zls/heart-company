@@ -112,6 +112,7 @@ type Server struct {
 	chatHeartbeatInterval time.Duration
 	classroomUploads      classroomUploadHandlerService
 	classroomMaintenance  classroomUploadMaintenance
+	maintenanceCancel     context.CancelFunc
 
 	appUsers                       *appuser.Store
 	appChat                        appChatStore
@@ -218,7 +219,9 @@ func New(env config.Env, database *sql.DB) http.Handler {
 			classroomService := classroom.NewUploadService(classroom.NewStore(database), multipartStore, probe, classroom.UploadConfig{Bucket: env.ClassroomMedia.Bucket, Prefix: "classroom", PartSize: env.ClassroomMedia.PartSizeBytes, MaxParts: env.ClassroomMedia.MaxParts, CredentialTTL: time.Duration(env.ClassroomMedia.CredentialTTLSeconds) * time.Second, TaskTTL: 24 * time.Hour, MaxVideoBytes: env.ClassroomMedia.MaxVideoBytes, MaxAudioBytes: env.ClassroomMedia.MaxAudioBytes, MaxAttempts: 3}, time.Now).WithCoverExtractor(classroom.FFmpegCoverExtractor{Signer: multipartStore, Uploader: multipartStore})
 			s.classroomUploads = classroomService
 			s.classroomMaintenance = classroomService
-			startClassroomUploadMaintenance(context.Background(), classroomService, 15*time.Minute)
+			maintenanceCtx, maintenanceCancel := context.WithCancel(context.Background())
+			s.maintenanceCancel = maintenanceCancel
+			go startClassroomUploadMaintenance(maintenanceCtx, classroomService, 15*time.Minute)
 		} else {
 			log.Printf("classroom multipart storage disabled: %v", mediaErr)
 		}
@@ -606,6 +609,12 @@ func (s *Server) routes() {
 		http.MethodDelete: "System:Menu:Delete",
 		http.MethodPut:    "System:Menu:Update",
 	}, s.system.HandleMenuByID))
+}
+
+func (s *Server) Shutdown() {
+	if s.maintenanceCancel != nil {
+		s.maintenanceCancel()
+	}
 }
 
 func (s *Server) status(w http.ResponseWriter, _ *http.Request) {

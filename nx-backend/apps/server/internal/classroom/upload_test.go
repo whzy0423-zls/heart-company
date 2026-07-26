@@ -72,6 +72,7 @@ type fakeUploadRepo struct {
 	expired         []UploadTask
 	finalizeCalls   int
 	updateErr       error
+	initMu          sync.Mutex
 }
 
 func (r *fakeUploadRepo) GetContent(context.Context, int64) (Content, error) {
@@ -109,6 +110,32 @@ func (r *fakeUploadRepo) SaveUploadTask(_ context.Context, v UploadTask) (Upload
 	defer r.mu.Unlock()
 	r.task = v
 	return v, nil
+}
+func (r *fakeUploadRepo) AcquireUploadLock(context.Context, int64) (func(), error) {
+	r.initMu.Lock()
+	return func() { r.initMu.Unlock() }, nil
+}
+func (r *fakeUploadRepo) MarkUploadUploading(_ context.Context, id int64) (UploadTask, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.task.ID != id {
+		return UploadTask{}, ErrNotFound
+	}
+	if r.task.Status == UploadInitiated {
+		r.task.Status = UploadUploading
+	}
+	return r.task, nil
+}
+func (r *fakeUploadRepo) ClaimUploadCleanup(_ context.Context, expected UploadTask, status UploadStatus) (UploadTask, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.task.ID != expected.ID || r.task.Status != expected.Status || !r.task.UpdatedAt.Equal(expected.UpdatedAt) {
+		return UploadTask{}, false, nil
+	}
+	r.task.Status = status
+	r.task.CleanupStatus = "pending"
+	r.task.UpdatedAt = time.Now()
+	return r.task, true, nil
 }
 func (r *fakeUploadRepo) ClaimUploadCompletion(_ context.Context, id int64) (UploadTask, bool, error) {
 	r.mu.Lock()

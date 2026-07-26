@@ -202,11 +202,30 @@ func positiveIntEnv(key string, fallback int) int {
 	if err != nil || v <= 0 {
 		return fallback
 	}
+	max := 1000000
+	if key == "CLASSROOM_MEDIA_PART_SIZE_MB" {
+		max = 1024
+	}
+	if key == "CLASSROOM_MEDIA_MAX_PARTS" {
+		max = 10000
+	}
+	if key == "CLASSROOM_MEDIA_CREDENTIAL_TTL_SECONDS" {
+		max = 86400
+	}
+	if v > max {
+		return fallback
+	}
 	return v
 }
 func positiveInt64Env(key string, fallback int64) int64 {
 	v, err := strconv.ParseInt(getenv(key, ""), 10, 64)
 	if err != nil || v <= 0 {
+		return fallback
+	}
+	if key == "CLASSROOM_MEDIA_MAX_VIDEO_MB" && v > 4*1024*1024 {
+		return fallback
+	}
+	if key == "CLASSROOM_MEDIA_MAX_AUDIO_MB" && v > 1024*1024 {
 		return fallback
 	}
 	return v

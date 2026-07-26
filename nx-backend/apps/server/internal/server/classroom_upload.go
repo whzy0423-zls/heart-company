@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -68,7 +69,14 @@ func (s *Server) classroomUploadInit(w http.ResponseWriter, r *http.Request) {
 		SizeBytes   int64  `json:"sizeBytes"`
 		Checksum    string `json:"checksum"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "invalid upload request")
+		return
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "invalid upload request")
 		return
 	}
@@ -109,7 +117,14 @@ func (s *Server) classroomUploadComplete(w http.ResponseWriter, r *http.Request)
 	var body struct {
 		Parts []storage.CompletedPart `json:"parts"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "invalid parts")
+		return
+	}
+	if err := ensureJSONEOF(decoder); err != nil || len(body.Parts) == 0 || len(body.Parts) > 10000 {
 		httpx.Fail(w, http.StatusBadRequest, "invalid parts")
 		return
 	}
@@ -160,17 +175,33 @@ func parseClassroomUploadActionPath(path, action string) (int64, bool) {
 }
 func writeClassroomUploadError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
+	message := "classroom upload failed"
 	switch {
 	case errors.Is(err, classroom.ErrUploadOwnership):
 		status = http.StatusForbidden
+		message = "forbidden"
 	case errors.Is(err, classroom.ErrUploadExpired), errors.Is(err, classroom.ErrUploadAttempts):
 		status = http.StatusGone
+		message = "upload unavailable"
 	case errors.Is(err, classroom.ErrUploadConflict), errors.Is(err, classroom.ErrInvalidUploadPart):
 		status = http.StatusConflict
+		message = "upload conflict"
 	case errors.Is(err, classroom.ErrNotFound):
 		status = http.StatusNotFound
+		message = "upload not found"
 	}
-	httpx.Fail(w, status, err.Error())
+	httpx.Fail(w, status, message)
+}
+func ensureJSONEOF(decoder *json.Decoder) error {
+	var extra any
+	err := decoder.Decode(&extra)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err == nil {
+		return errors.New("trailing json")
+	}
+	return err
 }
 
 type classroomUploadMaintenance interface {
