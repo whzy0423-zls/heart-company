@@ -344,8 +344,8 @@ func ValidateUploadDraftBinding(task UploadTask, content Content) error {
 	if content.ID != task.ContentID {
 		return errors.New("upload task content binding does not match")
 	}
-	if content.Status != ContentDraft && content.Status != ContentFailed {
-		return errors.New("upload task requires a draft or failed content")
+	if content.Status != ContentDraft {
+		return errors.New("upload task requires draft content")
 	}
 	return nil
 }

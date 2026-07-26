@@ -66,3 +66,14 @@ func extractClassroomCreateTable(sql, table string) string {
 	}
 	return rest[:end+2]
 }
+
+func TestClassroomEntitlementSchemaAllowsRenewalAfterExpiry(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(raw)
+	if strings.Contains(sql, "uq_classroom_entitlement_active_series") || strings.Contains(sql, "uq_classroom_entitlement_active_content") {
+		t.Fatal("partial unique indexes permanently block renewal after an entitlement expires; renewal idempotency belongs in the transactional entitlement service")
+	}
+}

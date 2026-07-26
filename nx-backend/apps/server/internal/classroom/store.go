@@ -47,6 +47,9 @@ func (s *Store) GetSeries(ctx context.Context, id int64) (Series, error) {
 }
 
 func (s *Store) UpdateSeries(ctx context.Context, item Series, expectedUpdatedAt time.Time) (Series, error) {
+	if expectedUpdatedAt.IsZero() {
+		return Series{}, ErrConflict
+	}
 	if err := item.Validate(); err != nil {
 		return Series{}, err
 	}
@@ -56,9 +59,6 @@ func (s *Store) UpdateSeries(ctx context.Context, item Series, expectedUpdatedAt
 	}
 	if !CanTransitionSeries(current.Status, item.Status) {
 		return Series{}, fmt.Errorf("invalid series transition %s -> %s", current.Status, item.Status)
-	}
-	if expectedUpdatedAt.IsZero() {
-		expectedUpdatedAt = current.UpdatedAt
 	}
 	err = s.db.QueryRowContext(ctx, `UPDATE classroom_series SET title=$1,summary=$2,cover_url=$3,cover_asset_id=$4,teacher_key=$5,teacher_name_snapshot=$6,sort_order=$7,status=$8,playback_blocked=$9,access_level=$10,price_cents=$11,published_at=$12,updated_by=$13,updated_at=now() WHERE id=$14 AND updated_at=$15 RETURNING created_at,updated_at`, item.Title, item.Summary, item.CoverURL, item.CoverAssetID, item.TeacherKey, item.TeacherNameSnapshot, item.SortOrder, item.Status, item.PlaybackBlocked, item.AccessLevel, item.PriceCents, item.PublishedAt, item.UpdatedBy, item.ID, expectedUpdatedAt).Scan(&item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -97,6 +97,9 @@ func (s *Store) ListSeries(ctx context.Context, filter SeriesFilter) ([]Series, 
 }
 
 func (s *Store) CreateContent(ctx context.Context, item Content) (Content, error) {
+	if item.Status == ContentPublished {
+		return Content{}, errors.New("content must be ready before publication")
+	}
 	if err := item.Validate(); err != nil {
 		return Content{}, err
 	}
@@ -117,6 +120,9 @@ func (s *Store) GetContent(ctx context.Context, id int64) (Content, error) {
 }
 
 func (s *Store) UpdateContent(ctx context.Context, item Content, expectedUpdatedAt time.Time) (Content, error) {
+	if expectedUpdatedAt.IsZero() {
+		return Content{}, ErrConflict
+	}
 	if err := item.Validate(); err != nil {
 		return Content{}, err
 	}
@@ -127,7 +133,7 @@ func (s *Store) UpdateContent(ctx context.Context, item Content, expectedUpdated
 	if !CanTransitionContent(current.Status, item.Status) {
 		return Content{}, fmt.Errorf("invalid content transition %s -> %s", current.Status, item.Status)
 	}
-	if item.Status == ContentPublished && current.Status != ContentPublished {
+	if item.Status == ContentPublished {
 		if item.MediaAssetID == nil {
 			return Content{}, errors.New("published content requires media")
 		}
@@ -148,9 +154,6 @@ func (s *Store) UpdateContent(ctx context.Context, item Content, expectedUpdated
 		if err := ValidateContentPublish(ready, media, parent); err != nil {
 			return Content{}, err
 		}
-	}
-	if expectedUpdatedAt.IsZero() {
-		expectedUpdatedAt = current.UpdatedAt
 	}
 	tags, err := json.Marshal(item.Tags)
 	if err != nil {

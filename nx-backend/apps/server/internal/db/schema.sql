@@ -2560,8 +2560,4 @@ CREATE INDEX IF NOT EXISTS idx_classroom_contents_media ON classroom_contents(me
 CREATE INDEX IF NOT EXISTS idx_classroom_upload_tasks_status ON classroom_upload_tasks(status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_classroom_upload_tasks_creator ON classroom_upload_tasks(creator_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_classroom_entitlements_user ON classroom_entitlements(wx_user_id, revoked_at, expires_at);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_classroom_entitlement_active_series
-  ON classroom_entitlements(wx_user_id, series_id) WHERE series_id IS NOT NULL AND revoked_at IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_classroom_entitlement_active_content
-  ON classroom_entitlements(wx_user_id, content_id) WHERE content_id IS NOT NULL AND revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_classroom_progress_recent ON classroom_progress(wx_user_id, last_played_at DESC);
