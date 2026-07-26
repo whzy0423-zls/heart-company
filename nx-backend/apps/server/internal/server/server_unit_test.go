@@ -785,7 +785,7 @@ func TestBuildModelConfigViewMasksXinzhiliVoiceSecrets(t *testing.T) {
 		TTS:     modelconfig.SpeechModelConfig{APIBase: "https://speech.example/v1", APIKey: "tts-secret", Model: "tts-1", Voice: "alloy"},
 	}}
 
-	view := buildModelConfigView(config.MiniMaxConfig{}, config.VideoConfig{}, config.ImageConfig{}, config.MiniMaxConfig{}, modelconfig.AdminModelConfig{}, modelconfig.CompatibleModelConfig{}, stored)
+	view := buildModelConfigView(modelconfig.ChatConfig{}, config.VideoConfig{}, config.ImageConfig{}, config.MiniMaxConfig{}, modelconfig.AdminModelConfig{}, modelconfig.CompatibleModelConfig{}, stored)
 
 	if !view.XinzhiliVoice.Enabled || !view.XinzhiliVoice.ASR.APIKeySet || !view.XinzhiliVoice.TTS.APIKeySet {
 		t.Fatalf("unexpected xinzhili voice view: %+v", view.XinzhiliVoice)
@@ -800,12 +800,13 @@ func TestBuildModelConfigViewMasksXinzhiliVoiceSecrets(t *testing.T) {
 }
 
 func TestBuildModelConfigViewIncludesCompatibleChatProviderWithoutGroupID(t *testing.T) {
-	chat := config.MiniMaxConfig{
-		Provider: modelconfig.ProviderAnthropicCompatible,
-		APIBase:  "https://coding-play.codes",
-		APIKey:   "chat-secret",
-		Model:    "claude-sonnet-4-5",
-		GroupID:  "legacy-group",
+	chat := modelconfig.ChatConfig{
+		Provider:       modelconfig.ProviderAnthropicCompatible,
+		APIBase:        "https://coding-play.codes",
+		APIKey:         "chat-secret",
+		Model:          "claude-sonnet-4-5",
+		GroupID:        "legacy-group",
+		TimeoutSeconds: 30,
 	}
 
 	view := buildModelConfigView(chat, config.VideoConfig{}, config.ImageConfig{}, config.MiniMaxConfig{}, modelconfig.AdminModelConfig{}, modelconfig.CompatibleModelConfig{}, modelconfig.Config{})

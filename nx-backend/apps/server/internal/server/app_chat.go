@@ -38,11 +38,8 @@ func resolveAppChatTier(requested, memberLevel string) (string, error) {
 	if tier != "basic" && tier != "deep" && tier != "companion" {
 		return "", errInvalidAppChatTier
 	}
-	if tier != "basic" {
-		level := strings.ToLower(strings.TrimSpace(memberLevel))
-		if level == "" || level == "free" {
-			return "", errAppChatTierRequiresMembership
-		}
+	if tier != "basic" && (strings.TrimSpace(memberLevel) == "" || strings.EqualFold(strings.TrimSpace(memberLevel), "free")) {
+		return "", errAppChatTierRequiresMembership
 	}
 	return tier, nil
 }
@@ -73,26 +70,12 @@ func failAppChatTier(w http.ResponseWriter, err error) {
 	}
 }
 
-type appChatPromptContext struct {
-	Summary                     string
-	History                     []rag.Message
-	SummaryThroughMessageID     int64
-	ShouldPersistUpdatedSummary bool
-}
-
 func buildAppChatConversationCard(card quiz.Card) rag.ConversationCard {
 	profile := strings.TrimSpace(string(card.Profile))
 	if runes := []rune(profile); len(runes) > 2000 {
 		profile = string(runes[:2000])
 	}
-	return rag.ConversationCard{
-		CardType: card.CardType,
-		Name:     card.Name,
-		Relation: card.Relation,
-		MainType: card.MainType,
-		WingType: card.WingType,
-		Profile:  profile,
-	}
+	return rag.ConversationCard{CardType: card.CardType, Name: card.Name, Relation: card.Relation, MainType: card.MainType, WingType: card.WingType, Profile: profile}
 }
 
 func (s *Server) appChatProfilesForCard(ctx context.Context, appUserID, cardID int64) (rag.UserProfile, rag.ConversationCard) {
@@ -115,6 +98,61 @@ func (s *Server) appChatProfilesForCard(ctx context.Context, appUserID, cardID i
 		}
 	}
 	return profile, cardContext
+}
+
+const (
+	defaultAppChatHeartbeatInterval = 15 * time.Second
+	defaultAppChatProviderIdle      = 20 * time.Second
+	defaultAppChatPostSaveTimeout   = 2 * time.Second
+	appChatStreamEventBuffer        = 16
+)
+
+type appChatStreamEventKind uint8
+
+const (
+	appChatStreamProviderStarted appChatStreamEventKind = iota + 1
+	appChatStreamDelta
+	appChatStreamDone
+	appChatStreamError
+	appChatStreamPersistenceStarted
+)
+
+type appChatStreamEvent struct {
+	kind        appChatStreamEventKind
+	delta       string
+	writeResult chan error
+	response    askResponse
+	publicError string
+	errorPhase  string
+}
+
+type appChatStreamLifecycle struct {
+	phase atomic.Int32
+}
+
+const (
+	appChatStreamGenerating int32 = iota
+	appChatStreamPersisting
+	appChatStreamStopped
+)
+
+func (l *appChatStreamLifecycle) beginPersistence() bool {
+	return l.phase.CompareAndSwap(appChatStreamGenerating, appChatStreamPersisting)
+}
+
+func (l *appChatStreamLifecycle) stopBeforePersistence() bool {
+	return l.phase.CompareAndSwap(appChatStreamGenerating, appChatStreamStopped)
+}
+
+func (l *appChatStreamLifecycle) persistenceStarted() bool {
+	return l.phase.Load() == appChatStreamPersisting
+}
+
+type appChatPromptContext struct {
+	Summary                     string
+	History                     []rag.Message
+	SummaryThroughMessageID     int64
+	ShouldPersistUpdatedSummary bool
 }
 
 type appChatContextStore interface {
@@ -141,6 +179,37 @@ type appChatPreferenceStore interface {
 	List(ctx context.Context, userID int64) ([]userpreference.Preference, error)
 	Apply(ctx context.Context, userID int64, mutations []userpreference.Mutation) error
 }
+
+type appChatPreferenceExtractor interface {
+	Extract(ctx context.Context, message string) userpreference.Extraction
+}
+
+type appChatPreferenceTurnState struct {
+	mu           sync.Mutex
+	nextTicket   atomic.Uint64
+	latestBySlot map[string]uint64
+	active       atomic.Int32
+	pending      atomic.Int32
+}
+
+type appChatPreferenceTurn struct {
+	userID int64
+	state  *appChatPreferenceTurnState
+	ticket uint64
+}
+
+type appChatPreferenceFallbackReservation struct {
+	server   *Server
+	turn     appChatPreferenceTurn
+	question string
+	claim    sync.Once
+}
+
+var (
+	errAppChatPreferenceSave  = errors.New("偏好保存失败，请重试")
+	errAppChatPreferenceRead  = errors.New("偏好读取失败，请重试")
+	errAppChatPreferenceStale = errors.New("请求已被新的消息更新，请重试")
+)
 
 func compactAppChatContext(ctx context.Context, previousSummary string, messages []chat.Message, summarizer rag.ConversationSummarizer) appChatPromptContext {
 	validChatMessages := validAppChatMessages(messages)
@@ -297,29 +366,40 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Question string        `json:"question"`
 		History  []rag.Message `json:"history"`
-		Tier     string        `json:"tier"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 32<<10)).Decode(&body); err != nil || strings.TrimSpace(body.Question) == "" {
 		httpx.Fail(w, http.StatusBadRequest, "question required")
 		return
 	}
-	tier, err := s.appChatTierForUser(r.Context(), userInfo.ID, body.Tier)
-	if err != nil {
-		failAppChatTier(w, err)
-		return
+	preferenceExtraction := userpreference.Extract(body.Question)
+	preferenceTurn := appChatPreferenceTurn{userID: userInfo.ID}
+	if len(preferenceExtraction.Mutations) > 0 || userpreference.NeedsLLMFallback(body.Question) {
+		preferenceTurn = s.beginAppChatPreferenceTurn(userInfo.ID)
 	}
+	defer s.finishAppChatPreferenceTurn(preferenceTurn)
 
 	generator, chatTimeout := s.chatRuntime()
 	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
-	preferences, directives, extraction, err := s.prepareAppChatPreferences(ctx, userInfo.ID, body.Question)
+	preferences, directives, err := s.prepareAppChatPreferences(ctx, preferenceTurn, preferenceExtraction)
 	if err != nil {
-		httpx.Fail(w, http.StatusInternalServerError, "偏好读取失败，请重试")
+		httpx.Fail(w, http.StatusInternalServerError, appChatPreferencePublicError(err))
 		return
 	}
 
 	docs, _ := s.retrieveAppDocsForQuery(ctx, body.Question, 6)
-	profile, conversationCard := s.appChatProfilesForCard(ctx, userInfo.ID, sess.CardID)
+	profile := rag.UserProfile{}
+	if s.appUsers != nil {
+		if appUser, err := s.appUsers.FindByID(ctx, userInfo.ID); err == nil {
+			profile.Nickname = appUser.Nickname
+		}
+	}
+	// 注入用户主型，供检索加权与 AI 个性化作答（未测/无主卡时为 0，rag 仅在 >0 时使用）。
+	if s.quiz != nil {
+		if card, err := s.quiz.PrimaryCard(ctx, userInfo.ID); err == nil {
+			profile.MainType = card.MainType
+		}
+	}
 	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
 		profile.Memories = memories
 	}
@@ -330,10 +410,8 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		ConversationSummary: promptContext.Summary,
 		Question:            body.Question,
 		UserProfile:         profile,
-		ConversationCard:    conversationCard,
 		UserPreferences:     preferences,
 		CurrentDirectives:   directives,
-		Tier:                tier,
 	})
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
@@ -342,13 +420,8 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 
 	sourcesJSON, _ := json.Marshal(ans.Sources)
 	messageID, saveErr := s.appChat.SavePair(ctx, sessionID, body.Question, ans.Answer, sourcesJSON)
-	if saveErr != nil {
-		httpx.Fail(w, http.StatusInternalServerError, "回答保存失败，请重试")
-		return
-	}
-	if err := s.persistAppChatPreferences(ctx, userInfo.ID, extraction); err != nil {
-		httpx.Fail(w, http.StatusInternalServerError, "偏好保存失败，请重试")
-		return
+	if saveErr == nil {
+		s.scheduleAppChatPreferenceFallback(preferenceTurn, body.Question)
 	}
 	s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, body.Question, ans.Answer)
 	if messageID > 0 {
@@ -390,103 +463,123 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Question string        `json:"question"`
 		History  []rag.Message `json:"history"`
-		Tier     string        `json:"tier"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 32<<10)).Decode(&body); err != nil || strings.TrimSpace(body.Question) == "" {
 		httpx.Fail(w, http.StatusBadRequest, "question required")
 		return
 	}
-	tier, err := s.appChatTierForUser(r.Context(), userInfo.ID, body.Tier)
-	if err != nil {
-		failAppChatTier(w, err)
-		return
+	preferenceExtraction := userpreference.Extract(body.Question)
+	preferenceTurn := appChatPreferenceTurn{userID: userInfo.ID}
+	if len(preferenceExtraction.Mutations) > 0 || userpreference.NeedsLLMFallback(body.Question) {
+		preferenceTurn = s.beginAppChatPreferenceTurn(userInfo.ID)
 	}
+	defer s.finishAppChatPreferenceTurn(preferenceTurn)
 
 	generator, chatTimeout := s.chatRuntime()
 	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
-	preferences, directives, extraction, err := s.prepareAppChatPreferences(ctx, userInfo.ID, body.Question)
-	if err != nil {
-		httpx.Fail(w, http.StatusInternalServerError, "偏好读取失败，请重试")
-		return
-	}
-
-	docs, _ := s.retrieveAppDocsForQuery(ctx, body.Question, 6)
-	profile, conversationCard := s.appChatProfilesForCard(ctx, userInfo.ID, sess.CardID)
-	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
-		profile.Memories = memories
-	}
-	generator := s.generator()
-	promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
-
+	streamStartedAt := time.Now()
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-	if err := writeAppChatSSEComment(w, flusher, "ping"); err != nil {
+	if err := writeAppChatSSEComment(w, flusher, "connected"); err != nil {
+		logAppChatStreamTiming("error", userInfo.ID, sessionID, streamStartedAt, "connected_write")
 		return
 	}
+	logAppChatStreamTiming("connected", userInfo.ID, sessionID, streamStartedAt, "")
 
-	type streamResult struct {
-		answer rag.Answer
-		err    error
-	}
-	generationCtx, cancelGeneration := context.WithCancel(ctx)
-	defer cancelGeneration()
-	deltas := make(chan string)
-	result := make(chan streamResult, 1)
-	go func() {
-		answer, streamErr := rag.NewService(docs, rag.WithGenerator(generator)).AskStream(generationCtx, rag.AskInput{
-			History:             promptContext.History,
-			ConversationSummary: promptContext.Summary,
-			Question:            body.Question,
-			UserProfile:         profile,
-			ConversationCard:    conversationCard,
-			UserPreferences:     preferences,
-			CurrentDirectives:   directives,
-			Tier:                tier,
-		}, func(delta string) error {
-			select {
-			case deltas <- delta:
-				return nil
-			case <-generationCtx.Done():
-				return generationCtx.Err()
-			}
-		})
-		result <- streamResult{answer: answer, err: streamErr}
-	}()
+	events := make(chan appChatStreamEvent, appChatStreamEventBuffer)
+	lifecycle := &appChatStreamLifecycle{}
+	go s.runAppChatStreamPipeline(ctx, events, appChatStreamPipelineInput{
+		userID:               userInfo.ID,
+		sessionID:            sessionID,
+		cardID:               sess.CardID,
+		question:             body.Question,
+		preferenceTurn:       preferenceTurn,
+		preferenceExtraction: preferenceExtraction,
+		generator:            generator,
+		lifecycle:            lifecycle,
+	})
+	s.pumpAppChatStream(ctx, cancel, r.Context(), w, flusher, events, lifecycle, userInfo.ID, sessionID, streamStartedAt, chatTimeout)
+}
 
-	heartbeatInterval := s.chatHeartbeatInterval
-	if heartbeatInterval <= 0 {
-		heartbeatInterval = 12 * time.Second
-	}
-	heartbeat := time.NewTicker(heartbeatInterval)
-	defer heartbeat.Stop()
+type appChatStreamPipelineInput struct {
+	userID               int64
+	sessionID            int64
+	cardID               int64
+	question             string
+	preferenceTurn       appChatPreferenceTurn
+	preferenceExtraction userpreference.Extraction
+	generator            rag.Generator
+	lifecycle            *appChatStreamLifecycle
+}
 
-	var ans rag.Answer
-	for {
+func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- appChatStreamEvent, input appChatStreamPipelineInput) {
+	defer close(events)
+	send := func(event appChatStreamEvent) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		select {
-		case delta := <-deltas:
-			if err := writeAppChatSSE(w, flusher, "delta", map[string]string{"content": delta}); err != nil {
-				cancelGeneration()
-				return
-			}
-		case completed := <-result:
-			ans = completed.answer
-			err = completed.err
-			goto generationComplete
-		case <-heartbeat.C:
-			if err := writeAppChatSSEComment(w, flusher, "ping"); err != nil {
-				cancelGeneration()
-				return
-			}
+		case events <- event:
+			return true
 		case <-ctx.Done():
-			cancelGeneration()
-			return
+			return false
 		}
 	}
 
-generationComplete:
+	preferences, directives, err := s.prepareAppChatPreferences(ctx, input.preferenceTurn, input.preferenceExtraction)
+	if err != nil {
+		send(appChatStreamEvent{kind: appChatStreamError, publicError: appChatPreferencePublicError(err), errorPhase: "preferences"})
+		return
+	}
+
+	docs, _ := s.retrieveAppDocsForQuery(ctx, input.question, 6)
+	profile := rag.UserProfile{}
+	if s.appUsers != nil {
+		if appUser, err := s.appUsers.FindByID(ctx, input.userID); err == nil {
+			profile.Nickname = appUser.Nickname
+		}
+	}
+	if s.quiz != nil {
+		if card, err := s.quiz.PrimaryCard(ctx, input.userID); err == nil {
+			profile.MainType = card.MainType
+		}
+	}
+	if memories, err := s.appChatMemoriesForPrompt(ctx, input.userID, input.cardID, 6); err == nil {
+		profile.Memories = memories
+	}
+	promptContext := s.appChatContextForPrompt(ctx, input.sessionID, input.generator)
+	if !send(appChatStreamEvent{kind: appChatStreamProviderStarted}) {
+		return
+	}
+
+	ans, err := rag.NewService(docs, rag.WithGenerator(input.generator)).AskStream(ctx, rag.AskInput{
+		History:             promptContext.History,
+		ConversationSummary: promptContext.Summary,
+		Question:            input.question,
+		UserProfile:         profile,
+		UserPreferences:     preferences,
+		CurrentDirectives:   directives,
+	}, func(delta string) error {
+		if delta == "" {
+			return nil
+		}
+		writeResult := make(chan error, 1)
+		if !send(appChatStreamEvent{kind: appChatStreamDelta, delta: delta, writeResult: writeResult}) {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return context.Canceled
+		}
+		select {
+		case err := <-writeResult:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
 	if err != nil {
 		send(appChatStreamEvent{kind: appChatStreamError, publicError: "回答生成失败，请重试", errorPhase: "provider"})
 		return
@@ -508,13 +601,19 @@ generationComplete:
 		fallback.release()
 		return
 	}
-	if err := s.persistAppChatPreferences(ctx, userInfo.ID, extraction); err != nil {
-		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "偏好保存失败，请重试"})
+	events <- appChatStreamEvent{kind: appChatStreamPersistenceStarted}
+	messageID, saveErr := s.appChat.SavePair(ctx, input.sessionID, input.question, ans.Answer, sourcesJSON)
+	if saveErr != nil {
+		fallback.release()
+		events <- appChatStreamEvent{kind: appChatStreamError, publicError: "回答保存失败，请重试", errorPhase: "save"}
 		return
 	}
-	s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, body.Question, ans.Answer)
-	if messageID > 0 {
-		s.recordAppProfileEvidenceAsync(userInfo.ID, sess.CardID, "chat", messageID, body.Question)
+	// Start the reserved fallback without waiting on the per-user mutation lock,
+	// then publish the committed terminal immediately.
+	fallback.start()
+	events <- appChatStreamEvent{
+		kind:     appChatStreamDone,
+		response: askResponse{Answer: ans, MessageID: messageID},
 	}
 
 	postSaveCtx, cancelPostSave := context.WithTimeout(context.Background(), defaultAppChatPostSaveTimeout)
@@ -842,6 +941,33 @@ func (s *Server) prepareAppChatPreferences(ctx context.Context, turn appChatPref
 	return preferences, append([]string(nil), extraction.CurrentDirectives...), nil
 }
 
+func (s *Server) prepareAppChatPreferencesLegacy(ctx context.Context, userID int64, question string) ([]string, []string, userpreference.Extraction, error) {
+	extraction := userpreference.Extract(question)
+	directives := append([]string(nil), extraction.CurrentDirectives...)
+	if s.userPreferences == nil {
+		return nil, directives, extraction, nil
+	}
+	stored, err := s.userPreferences.List(ctx, userID)
+	if err != nil {
+		return nil, nil, extraction, err
+	}
+	preferences := make([]string, 0, len(stored))
+	for _, preference := range stored {
+		instruction := strings.TrimSpace(preference.Instruction)
+		if instruction != "" {
+			preferences = append(preferences, instruction)
+		}
+	}
+	return preferences, directives, extraction, nil
+}
+
+func (s *Server) persistAppChatPreferences(ctx context.Context, userID int64, extraction userpreference.Extraction) error {
+	if len(extraction.Mutations) == 0 || s.userPreferences == nil {
+		return nil
+	}
+	return s.userPreferences.Apply(ctx, userID, extraction.Mutations)
+}
+
 func appChatPreferencePublicError(err error) string {
 	if errors.Is(err, errAppChatPreferenceSave) {
 		return errAppChatPreferenceSave.Error()
@@ -942,60 +1068,6 @@ func filterAndMarkAppChatPreferenceMutations(state *appChatPreferenceTurnState, 
 	return accepted
 }
 
-func (s *Server) prepareAppChatPreferences(ctx context.Context, userID int64, question string) ([]string, []string, userpreference.Extraction, error) {
-	extraction := userpreference.Extract(question)
-	directives := append([]string(nil), extraction.CurrentDirectives...)
-	if s.userPreferences == nil {
-		return nil, directives, extraction, nil
-	}
-	stored, err := s.userPreferences.List(ctx, userID)
-	if err != nil {
-		return nil, nil, extraction, err
-	}
-	overriddenSlots := appChatDirectiveSlots(directives)
-	preferences := make([]string, 0, len(stored))
-	for _, preference := range stored {
-		if _, overridden := overriddenSlots[preference.Slot]; overridden {
-			continue
-		}
-		instruction := strings.TrimSpace(preference.Instruction)
-		if instruction != "" {
-			preferences = append(preferences, instruction)
-		}
-	}
-	return preferences, directives, extraction, nil
-}
-
-func (s *Server) persistAppChatPreferences(ctx context.Context, userID int64, extraction userpreference.Extraction) error {
-	if len(extraction.Mutations) == 0 || s.userPreferences == nil {
-		return nil
-	}
-	return s.userPreferences.Apply(ctx, userID, extraction.Mutations)
-}
-
-func appChatDirectiveSlots(directives []string) map[string]struct{} {
-	slots := make(map[string]struct{}, len(directives))
-	for _, directive := range directives {
-		switch {
-		case directive == "不要使用“亲爱的”等亲昵称呼":
-			slots["addressing.avoid_dear"] = struct{}{}
-		case strings.HasPrefix(directive, "称呼用户为"):
-			slots["addressing.preferred_name"] = struct{}{}
-		case directive == "回答简短，避免长篇大论", directive == "回答更详细", directive == "只回答一句":
-			slots["length.detail_level"] = struct{}{}
-		case directive == "表达直接，少说教":
-			slots["tone.direct"] = struct{}{}
-		case directive == "不要使用列表":
-			slots["format.no_lists"] = struct{}{}
-		case directive == "先给结论", directive == "只给结论":
-			slots["format.conclusion_first"] = struct{}{}
-		case directive == "不要反问或追问":
-			slots["interaction.no_followup"] = struct{}{}
-		}
-	}
-	return slots
-}
-
 func writeAppChatSSE(w io.Writer, flusher http.Flusher, event string, payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -1009,12 +1081,13 @@ func writeAppChatSSE(w io.Writer, flusher http.Flusher, event string, payload an
 }
 
 func writeAppChatSSEComment(w io.Writer, flusher http.Flusher, comment string) error {
-	comment = strings.TrimSpace(strings.ReplaceAll(comment, "\n", " "))
-	if comment == "" {
-		comment = "ping"
-	}
-	if _, err := fmt.Fprintf(w, ": %s\n\n", comment); err != nil {
+	frame := ": " + comment + "\n\n"
+	written, err := io.WriteString(w, frame)
+	if err != nil {
 		return err
+	}
+	if written != len(frame) {
+		return io.ErrShortWrite
 	}
 	flusher.Flush()
 	return nil

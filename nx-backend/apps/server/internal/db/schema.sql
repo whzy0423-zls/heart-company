@@ -2172,6 +2172,8 @@ CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_user ON app_chat_sessions(app_u
 CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_card ON app_chat_sessions(card_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_user_card_scene
   ON app_chat_sessions(app_user_id, card_id, scene, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_scene
+  ON app_chat_sessions(app_user_id, card_id, scene, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS app_xinzhili_mode_preferences (
   app_user_id BIGINT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,

@@ -147,7 +147,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	preferences, directives, extraction, err := s.prepareAppChatPreferences(ctx, userInfo.ID, transcript)
+	preferences, directives, extraction, err := s.prepareAppChatPreferencesLegacy(ctx, userInfo.ID, transcript)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "偏好读取失败，请重试")
 		return

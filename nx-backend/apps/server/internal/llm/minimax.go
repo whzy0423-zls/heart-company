@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -15,14 +16,18 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/netguard"
+	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
+const miniMaxMaxStreamEventBytes = 1024 * 1024
+
 type MiniMaxGenerator struct {
-	apiBase string
-	apiKey  string
-	client  *http.Client
-	groupID string
-	model   string
+	apiBase      string
+	apiKey       string
+	client       *http.Client
+	groupID      string
+	model        string
+	systemPrompt string
 }
 
 type VideoAnalysisResult struct {
@@ -117,8 +122,9 @@ func NewMiniMaxGenerator(cfg config.MiniMaxConfig) *MiniMaxGenerator {
 			Timeout:   timeout,
 			Transport: netguard.NewGuardedTransport(),
 		},
-		groupID: strings.TrimSpace(cfg.GroupID),
-		model:   model,
+		groupID:      strings.TrimSpace(cfg.GroupID),
+		model:        model,
+		systemPrompt: strings.TrimSpace(cfg.SystemPrompt),
 	}
 }
 

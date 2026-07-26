@@ -156,7 +156,7 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 	docs, _ := s.retrieveXinzhiliDocs(ctx, transcript, 8)
 	_ = writeAppChatSSE(w, flusher, "state", map[string]string{"state": "retrieving_theory"})
 
-	preferences, directives, extraction, err := s.prepareAppChatPreferences(ctx, userInfo.ID, transcript)
+	preferences, directives, extraction, err := s.prepareAppChatPreferencesLegacy(ctx, userInfo.ID, transcript)
 	if err != nil {
 		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"code": "context_failed", "message": "上下文读取失败，请重试"})
 		return

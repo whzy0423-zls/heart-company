@@ -89,7 +89,6 @@ var deterministicRules = []deterministicRule{
 }
 
 var currentConclusionOnlyPattern = regexp.MustCompile(`(?:这次|本次|这一条|这轮)(?:回答)?只(?:说|给)?结论`)
-var currentOneSentencePattern = regexp.MustCompile(`(?:这次|本次|这一条|这轮)(?:只)?(?:回答|回复)(?:我)?一句`)
 var oneTurnPattern = regexp.MustCompile(`这次|本次|这一条|这轮|这回`)
 var durablePattern = regexp.MustCompile(`以后|今后|之后|每次|一直|长期|都`)
 var cancellationPattern = regexp.MustCompile(`取消|忘掉|删除|去掉|恢复默认|不再遵守`)
@@ -213,14 +212,6 @@ func extractClauseCandidates(clause messageClause, source string) []extractionCa
 			currentOnly: true,
 		})
 	}
-	for _, index := range currentOneSentencePattern.FindAllStringIndex(clause.text, -1) {
-		candidates = append(candidates, extractionCandidate{
-			position:    clause.offset + index[0],
-			slot:        "length.detail_level",
-			directive:   "只回答一句",
-			currentOnly: true,
-		})
-	}
 
 	if cancellationPattern.MatchString(clause.text) {
 		for _, rule := range cancellationRules {
@@ -249,13 +240,25 @@ func coalesceCandidates(candidates []extractionCandidate) Extraction {
 		return candidates[i].position < candidates[j].position
 	})
 
-	currentLatest := make(map[string]extractionCandidate, len(candidates))
+	currentScoped := make(map[string]extractionCandidate, len(candidates))
+	currentFallback := make(map[string]extractionCandidate, len(candidates))
 	durableLatest := make(map[string]extractionCandidate, len(candidates))
 	for _, candidate := range candidates {
-		currentLatest[candidate.slot] = candidate
+		if candidate.currentOnly {
+			currentScoped[candidate.slot] = candidate
+		} else {
+			currentFallback[candidate.slot] = candidate
+		}
 		if candidate.deleteSlot != "" || (candidate.preference != nil && !candidate.currentOnly) {
 			durableLatest[candidate.slot] = candidate
 		}
+	}
+	currentLatest := make(map[string]extractionCandidate, len(currentScoped)+len(currentFallback))
+	for slot, candidate := range currentFallback {
+		currentLatest[slot] = candidate
+	}
+	for slot, candidate := range currentScoped {
+		currentLatest[slot] = candidate
 	}
 	current := sortedCandidates(currentLatest)
 	durable := sortedCandidates(durableLatest)

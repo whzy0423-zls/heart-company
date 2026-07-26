@@ -65,63 +65,72 @@ import (
 )
 
 type Server struct {
-	env                   config.Env
-	mux                   *http.ServeMux
-	db                    *sql.DB
-	system                *system.Store
-	analytics             *analytics.Store
-	auditLogs             *auditlog.Store
-	builder               *siteconfig.Builder
-	engagement            *engagement.Store
-	signups               *signup.Store
-	signupService         websiteSignupCreator
-	uploads               *uploadasset.Store
-	appReleases           appReleaseService
-	voiceAssetCreate      func(context.Context, uploadasset.CreateInput) (uploadasset.Asset, error)
-	voiceAssetFind        func(context.Context, int64) (uploadasset.Asset, error)
-	uploader              storage.ObjectUploader
-	voices                *voice.Store
-	videos                *video.Store
-	videoAnalysis         *videoanalysis.Store
-	videoAssets           *videoasset.Store
-	storyboards           *videostoryboard.Store
-	images                *image.Store
-	miniapp               *miniapp.Store
-	miniappService        miniappUserUpserter
-	miniappTestService    miniappTestRecorder
-	miniappBookingService miniappBookingCreator
-	miniappAdmin          miniappAdminReader
-	wx                    *wechat.Client
-	pay                   *wxpay.Client
-	ragGen                rag.Generator
-	analysisGen           *llm.MiniMaxGenerator
-	ragDocs               ragDocumentStore
-	ragVec                *ragstore.Store
-	embedder              *embedding.Client
-	ragCache              *miniappRAGCache
-	articles              *articlestore.Store
-	mindquotes            *mindquote.Store
-	quiz                  *quiz.Store
-	appDailyQuiz          appDailyQuizService
-	appReassessment       appReassessmentService
-	appDailyQuizReminders appDailyQuizReminderService
-	appDailyQuizPushAdmin appDailyQuizPushAdminService
-	appDailyQuizBankAdmin appDailyQuizBankAdminService
-	chatLimiter           *fixedWindowRateLimiter
-	chatTimeout           time.Duration
-	chatHeartbeatInterval time.Duration
-	xinzhiliConfigLoader  func(context.Context) (modelconfig.XinzhiliVoiceConfig, error)
-	xinzhiliMemberCheck   func(context.Context, int64) error
-	xinzhiliTranscribe    func(context.Context, []byte, string) (string, error)
-	xinzhiliSynthesize    func(context.Context, string) ([]byte, string, error)
-	xinzhiliSession       func(context.Context, int64) (chat.Session, error)
-	xinzhiliRetrieveDocs  func(context.Context, string, int) ([]rag.Document, error)
-	xinzhiliSavePair      func(context.Context, int64, string, string, json.RawMessage) (int64, error)
+	env                     config.Env
+	mux                     *http.ServeMux
+	db                      *sql.DB
+	system                  *system.Store
+	analytics               *analytics.Store
+	auditLogs               *auditlog.Store
+	builder                 *siteconfig.Builder
+	engagement              *engagement.Store
+	signups                 *signup.Store
+	signupService           websiteSignupCreator
+	uploads                 *uploadasset.Store
+	appReleases             appReleaseService
+	voiceAssetCreate        func(context.Context, uploadasset.CreateInput) (uploadasset.Asset, error)
+	voiceAssetFind          func(context.Context, int64) (uploadasset.Asset, error)
+	uploader                storage.ObjectUploader
+	voices                  *voice.Store
+	videos                  *video.Store
+	videoAnalysis           *videoanalysis.Store
+	videoAssets             *videoasset.Store
+	storyboards             *videostoryboard.Store
+	images                  *image.Store
+	miniapp                 *miniapp.Store
+	miniappService          miniappUserUpserter
+	miniappTestService      miniappTestRecorder
+	miniappBookingService   miniappBookingCreator
+	miniappAdmin            miniappAdminReader
+	wx                      *wechat.Client
+	pay                     *wxpay.Client
+	ragGen                  rag.Generator
+	analysisGen             *llm.MiniMaxGenerator
+	ragDocs                 ragDocumentStore
+	ragVec                  *ragstore.Store
+	embedder                *embedding.Client
+	ragCache                *miniappRAGCache
+	articles                *articlestore.Store
+	mindquotes              *mindquote.Store
+	quiz                    *quiz.Store
+	appDailyQuiz            appDailyQuizService
+	appReassessment         appReassessmentService
+	appDailyQuizReminders   appDailyQuizReminderService
+	appDailyQuizPushAdmin   appDailyQuizPushAdminService
+	appDailyQuizBankAdmin   appDailyQuizBankAdminService
+	chatLimiter             *fixedWindowRateLimiter
+	chatTimeout             time.Duration
+	chatHeartbeatInterval   time.Duration
+	chatProviderIdleTimeout time.Duration
+	modelConfigProbeTimeout time.Duration
+	newChatGenerator        func(llm.ChatGeneratorConfig) (llm.ChatGenerator, error)
+	xinzhiliConfigLoader    func(context.Context) (modelconfig.XinzhiliVoiceConfig, error)
+	xinzhiliMemberCheck     func(context.Context, int64) error
+	xinzhiliTranscribe      func(context.Context, []byte, string) (string, error)
+	xinzhiliSynthesize      func(context.Context, string) ([]byte, string, error)
+	xinzhiliSession         func(context.Context, int64) (chat.Session, error)
+	xinzhiliRetrieveDocs    func(context.Context, string, int) ([]rag.Document, error)
+	xinzhiliSavePair        func(context.Context, int64, string, string, json.RawMessage) (int64, error)
 
 	appUsers                       *appuser.Store
 	appChat                        appChatStore
 	appChatProfilesForCardOverride func(context.Context, int64, int64) (rag.UserProfile, rag.ConversationCard)
 	userPreferences                appChatPreferenceStore
+	preferenceExtractor            appChatPreferenceExtractor
+	preferenceAsyncSlots           chan struct{}
+	preferenceAsyncTimeout         time.Duration
+	preferenceTurnsMu              sync.Mutex
+	preferenceTurns                map[int64]*appChatPreferenceTurnState
+	chatPersistHook                func()
 	pushStore                      *push.Store
 	pushSendTimeout                time.Duration
 	pushRecoveryInterval           time.Duration
@@ -148,6 +157,7 @@ type Server struct {
 
 	// modelMu 保护可在运行时被"模型配置"页面重建的 ragGen / analysisGen / videos。
 	modelMu             sync.RWMutex
+	modelConfigUpdateMu sync.Mutex
 	xinzhiliLeaseMu     sync.Mutex
 	xinzhiliLeases      map[int64]*xinzhiliRealtimeConn
 	xinzhiliModelConfig xinzhiliModelConfigStore
@@ -253,7 +263,9 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.miniappBookingService = miniappService
 	s.wx = newWeChatClient(env)
 	s.pay = mustWxPayClient(env)
-	s.ragGen = newChatGenerator(modelconfig.Config{}.ApplyChat(env.MiniMax))
+	// 普通对话仅使用后台保存的 OpenAI/Anthropic 兼容配置；MiniMax 环境变量
+	// 继续服务于分析与语音能力，不作为会话模型的隐式回退。
+	s.ragGen = nil
 	s.analysisGen = llm.NewMiniMaxGenerator(modelconfig.Config{}.ApplyAnalysis(env.MiniMax))
 	s.ragDocs = ragstore.NewStore(database)
 	s.articles = articlestore.NewStore(database)
@@ -290,6 +302,13 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	}
 	s.appChat = chat.NewStore(database)
 	s.userPreferences = userpreference.NewStore(database)
+	s.preferenceAsyncSlots = make(chan struct{}, 2)
+	s.preferenceAsyncTimeout = 2 * time.Second
+	s.preferenceExtractor = userpreference.NewLLMExtractor(
+		s.completePreferenceJSON,
+		userpreference.WithLLMTimeout(s.preferenceAsyncTimeout),
+		userpreference.WithLLMConcurrency(cap(s.preferenceAsyncSlots)),
+	)
 	s.xinzhiliLeases = make(map[int64]*xinzhiliRealtimeConn)
 	s.xinzhiliModelConfig = databaseXinzhiliModelConfigStore{db: database}
 	s.loginLimiter = newStrRateLimiter(10, time.Minute)
@@ -349,9 +368,10 @@ func (s *Server) applyStoredModelConfig() {
 	}
 	var chatGenerator llm.ChatGenerator
 	if cfg.AssistEnabled() {
-		s.ragGen = newChatGenerator(cfg.ApplyChat(s.env.MiniMax))
-	} else {
-		s.ragGen = nil
+		chatGenerator, err = s.buildChatGenerator(cfg)
+		if err != nil {
+			log.Printf("stored chat model remains unconfigured: %v", err)
+		}
 	}
 	analysisGenerator := llm.NewMiniMaxGenerator(safeStoredAnalysisConfig(cfg, s.env.MiniMax))
 	videoStore := video.NewStore(s.db, s.uploads, safeStoredVideoConfig(cfg, s.env.Video), s.uploader)
@@ -2518,10 +2538,11 @@ func (s *Server) adminBranding(w http.ResponseWriter, r *http.Request) {
 // 仅以布尔位告知当前是否已配置密钥（用于前端 placeholder 提示）。
 type modelConfigView struct {
 	Chat struct {
-		Provider  string `json:"provider"`
-		APIBase   string `json:"apiBase"`
-		Model     string `json:"model"`
-		APIKeySet bool   `json:"apiKeySet"`
+		Provider       string `json:"provider"`
+		APIBase        string `json:"apiBase"`
+		Model          string `json:"model"`
+		TimeoutSeconds int    `json:"timeoutSeconds"`
+		APIKeySet      bool   `json:"apiKeySet"`
 	} `json:"chat"`
 	Video struct {
 		APIBase   string `json:"apiBase"`
@@ -2589,10 +2610,11 @@ func modelConfigAuditSnapshot(cfg modelconfig.Config) map[string]any {
 	return map[string]any{
 		"assistEnabled": cfg.AssistEnabled(),
 		"chat": map[string]any{
-			"provider":  cfg.Chat.Provider,
-			"apiBase":   cfg.Chat.APIBase,
-			"apiKeySet": cfg.Chat.APIKey != "",
-			"model":     cfg.Chat.Model,
+			"provider":       cfg.Chat.Provider,
+			"apiBase":        cfg.Chat.APIBase,
+			"apiKeySet":      cfg.Chat.APIKey != "",
+			"model":          cfg.Chat.Model,
+			"timeoutSeconds": cfg.Chat.TimeoutSeconds,
 		},
 		"video": map[string]any{
 			"apiBase":   cfg.Video.APIBase,
@@ -2861,24 +2883,6 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 			Summary:    "更新模型配置",
 		})
 
-		chat := merged.ApplyChat(s.env.MiniMax)
-		vid := merged.ApplyVideo(s.env.Video)
-		img := merged.ApplyImage(s.env.Image)
-		analysis := merged.ApplyAnalysis(s.env.MiniMax)
-		admin := merged.ApplyAdmin(s.env.MiniMax)
-		// 写锁下重建运行时客户端，使新配置立即生效。
-		// AI 辅助关闭时不挂生成器：聊天仅走资料检索/固定兜底（rag.Service 对 nil 生成器安全）。
-		s.modelMu.Lock()
-		if merged.AssistEnabled() {
-			s.ragGen = newChatGenerator(chat)
-		} else {
-			s.ragGen = nil
-		}
-		s.analysisGen = llm.NewMiniMaxGenerator(analysis)
-		s.videos = video.NewStore(s.db, s.uploads, vid, s.uploader)
-		s.images = image.NewStore(s.uploads, img, s.uploader)
-		s.modelMu.Unlock()
-
 		httpx.OK(w, buildModelConfigView(chat, vid, img, analysis, admin, merged.DailyQuiz, merged))
 	}
 }
@@ -2913,7 +2917,7 @@ func (s *Server) testChatModel(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(chat.TimeoutSeconds)*time.Second)
 	defer cancel()
-	result := llm.NewCompatibleChatGenerator(chat).Ping(ctx)
+	result := generator.Ping(ctx)
 
 	httpx.OK(w, result)
 }

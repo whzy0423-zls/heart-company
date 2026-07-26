@@ -8,7 +8,6 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
-	"nine-xing/nx-backend/apps/server/internal/userpreference"
 )
 
 type appPrivacyPolicyResponse struct {
@@ -55,9 +54,19 @@ type appPrivacyPreference struct {
 func (s *Server) appPrivacyPolicy(w http.ResponseWriter, _ *http.Request) {
 	httpx.OK(w, appPrivacyPolicyResponse{
 		Title:       "九型芯之力 App 隐私政策",
-		Version:     "2026-07-15",
-		EffectiveAt: "2026-07-15",
-		Content:     "我们仅为账号登录、九型测评、成长卡片、对话记忆、学习到的沟通偏好、消息推送和服务改进处理必要信息。你可以在 App 内导出个人数据、清空记忆或注销账号。清空记忆会同时删除卡片对话记忆和学习到的沟通偏好；注销后账号将被禁用，登录凭证失效，App 侧个人数据会按当前能力清理或匿名化。后续如引入后台可配置版本，将以最新发布文本为准。",
+		Version:     "2026-07-23",
+		EffectiveAt: "2026-07-23",
+		Content: `我们仅为账号登录、九型测评、成长卡片、对话服务、学习到的沟通偏好、消息推送和服务改进处理必要信息。
+
+使用芯之力语音对话时，服务会临时处理你提交的音频，用于语音识别（ASR）、生成回答和语音合成（TTS）。我们的自有后台不持久化保存原始录音。即使页面不展示文字，成功完成并保存的芯之力对话仍会将转写文字、AI 回答和回答来源保存为隐藏对话历史。服务可能保存你明确表达的沟通偏好，并在回答时使用已有对话历史和已有专属记忆（如适用），以保持上下文并提供更贴合你的后续回答。
+
+根据后台配置，完成语音识别（ASR）、语音合成（TTS）或回答生成所必需的音频、文字及上下文可能会发送给相应的第三方模型服务提供方处理。第三方的处理范围和保留规则受我们与其约定及其适用政策约束；我们不会将“页面不展示文字”等同于“不处理或不保存文字”。
+
+你可以在 App 内导出个人数据、清空记忆或注销账号。清空记忆会删除当前账号的专属记忆和沟通偏好，但不会删除隐藏对话历史。
+
+注销后，主业务库中的聊天会话及消息、专属记忆、沟通偏好、兼容报告、签到记录和设备令牌会被删除；成长卡片仅标记删除，相关数据行可能为保持关联一致性而保留，但不再正常展示或使用。刷新令牌会被撤销，账号会停用并匿名化登录标识，分析记录会与账号解除关联。
+
+订单、会员和交易记录，以及依法或履约需留存的其他记录，可能继续保留；备份和安全运维日志也可能按适用法规和实际系统配置的周期保留，期满后删除或去标识。你可以通过隐私渠道查询当前适用的保留期限。`,
 	})
 }
 
@@ -103,29 +112,6 @@ func (s *Server) appPrivacyExport(w http.ResponseWriter, r *http.Request) {
 		SessionCount: sessionCount,
 		MessageCount: messageCount,
 	})
-}
-
-func (s *Server) appPrivacyPreferences(r *http.Request, appUserID int64) ([]appPrivacyPreference, error) {
-	stored, err := s.userPreferences.List(r.Context(), appUserID)
-	if err != nil {
-		return nil, err
-	}
-	preferences := make([]appPrivacyPreference, 0, len(stored))
-	for _, preference := range stored {
-		preferences = append(preferences, privacyPreference(preference))
-	}
-	return preferences, nil
-}
-
-func privacyPreference(preference userpreference.Preference) appPrivacyPreference {
-	return appPrivacyPreference{
-		Category:    preference.Category,
-		Slot:        preference.Slot,
-		Instruction: preference.Instruction,
-		SourceText:  preference.SourceText,
-		CreateTime:  appMemoryTime(preference.CreateTime),
-		UpdateTime:  appMemoryTime(preference.UpdateTime),
-	}
 }
 
 func (s *Server) appPrivacyDeleteMemories(w http.ResponseWriter, r *http.Request) {

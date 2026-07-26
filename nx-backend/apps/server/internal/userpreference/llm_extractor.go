@@ -272,5 +272,12 @@ func unresolvedStyleClauses(message string) string {
 	return strings.Join(unresolved, "，")
 }
 
+// NeedsLLMFallback reports whether a message contains a clearly style-related
+// clause that the deterministic extractor could not resolve. It lets callers
+// avoid starting background work for ordinary chat messages.
+func NeedsLLMFallback(message string) bool {
+	return unresolvedStyleClauses(message) != ""
+}
+
 var rejectedTaskPattern = regexp.MustCompile(`帮我|替我|提醒我|查天气|下单|写代码|执行任务|生成图片|发送消息`)
 var rejectedContentPattern = regexp.MustCompile(`品牌|口号|固定说|每次(?:回答|回复).{0,16}(?:说|带上|包含|提到)|(?i:brand|slogan|catchphrase)`)

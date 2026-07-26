@@ -129,12 +129,23 @@ func (s *Store) GetOrCreateSession(ctx context.Context, appUserID, cardID int64)
 func (s *Store) GetOrCreateSceneSession(ctx context.Context, appUserID, cardID int64, scene string) (Session, error) {
 	scene = strings.TrimSpace(scene)
 	if scene == "" {
-		return Session{}, errors.New("chat: scene is required")
+		scene = "chat"
 	}
-	sess, err := scanSession(s.db.QueryRowContext(ctx,
+	if scene == "xinzhili_voice" {
+		return s.getOrCreateSerializedSceneSession(ctx, appUserID, cardID, scene)
+	}
+	return getOrCreateSceneSession(ctx, s.db, appUserID, cardID, scene)
+}
+
+type sceneSessionQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func getOrCreateSceneSession(ctx context.Context, queryer sceneSessionQueryer, appUserID, cardID int64, scene string) (Session, error) {
+	sess, err := scanSession(queryer.QueryRowContext(ctx,
 		`SELECT id, app_user_id, card_id, title, updated_at, create_time
 		 FROM app_chat_sessions WHERE app_user_id = $1 AND card_id = $2 AND scene = $3
-		 ORDER BY updated_at DESC LIMIT 1`,
+		 ORDER BY updated_at DESC, id DESC LIMIT 1`,
 		appUserID, cardID, scene,
 	))
 	if err == nil {
@@ -144,11 +155,42 @@ func (s *Store) GetOrCreateSceneSession(ctx context.Context, appUserID, cardID i
 		return sess, err
 	}
 	// 新建
-	sess, err = scanSession(s.db.QueryRowContext(ctx,
+	sess, err = scanSession(queryer.QueryRowContext(ctx,
 		`INSERT INTO app_chat_sessions (app_user_id, card_id, scene) VALUES ($1, $2, $3)
 		 RETURNING id, app_user_id, card_id, title, updated_at, create_time`,
 		appUserID, cardID, scene))
 	return sess, err
+}
+
+func (s *Store) getOrCreateSerializedSceneSession(ctx context.Context, appUserID, cardID int64, scene string) (sess Session, retErr error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return Session{}, fmt.Errorf("begin scene session transaction: %w", err)
+	}
+	defer func() {
+		rollbackErr := tx.Rollback()
+		if rollbackErr == nil || errors.Is(rollbackErr, sql.ErrTxDone) {
+			return
+		}
+		wrapped := fmt.Errorf("rollback scene session transaction: %w", rollbackErr)
+		if retErr != nil {
+			retErr = errors.Join(retErr, wrapped)
+			return
+		}
+		retErr = wrapped
+	}()
+	lockKey := fmt.Sprintf("app-chat-scene-session:%d:%d:%s", appUserID, cardID, scene)
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
+		return Session{}, fmt.Errorf("lock scene session: %w", err)
+	}
+	sess, err = getOrCreateSceneSession(ctx, tx, appUserID, cardID, scene)
+	if err != nil {
+		return Session{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Session{}, fmt.Errorf("commit scene session transaction: %w", err)
+	}
+	return sess, nil
 }
 
 // ResolveSceneSession creates/resumes a scene conversation only when all four

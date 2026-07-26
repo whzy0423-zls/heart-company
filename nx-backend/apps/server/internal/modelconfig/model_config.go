@@ -40,8 +40,34 @@ type ChatConfig struct {
 	APIBase  string `json:"apiBase"`
 	APIKey   string `json:"apiKey"`
 	// GroupID 仅用于读取旧配置；兼容协议运行时不会使用或回显。
-	GroupID string `json:"groupId,omitempty"`
-	Model   string `json:"model"`
+	GroupID        string `json:"groupId,omitempty"`
+	Model          string `json:"model"`
+	TimeoutSeconds int    `json:"timeoutSeconds"`
+}
+
+func (c ChatConfig) Normalized() ChatConfig {
+	return ChatConfig{
+		Provider:       normalizeProvider(c.Provider),
+		APIBase:        strings.TrimRight(strings.TrimSpace(c.APIBase), "/"),
+		APIKey:         strings.TrimSpace(c.APIKey),
+		GroupID:        strings.TrimSpace(c.GroupID),
+		Model:          strings.TrimSpace(c.Model),
+		TimeoutSeconds: c.TimeoutSeconds,
+	}
+}
+
+func (c ChatConfig) Validate() error {
+	c = c.Normalized()
+	if c.Provider != ProviderOpenAICompatible && c.Provider != ProviderAnthropicCompatible {
+		return errors.New("chat.provider must be openai-compatible or anthropic-compatible")
+	}
+	if c.APIBase == "" || c.APIKey == "" || c.Model == "" {
+		return errors.New("chat compatible model configuration is incomplete")
+	}
+	if c.TimeoutSeconds <= 0 || c.TimeoutSeconds > MaxChatTimeoutSeconds {
+		return errors.New("chat.timeoutSeconds must be between 1 and 300")
+	}
+	return nil
 }
 
 // VideoConfig 视频模型（New API / OpenAI 兼容网关）可配置项。
@@ -138,14 +164,19 @@ func (c XinzhiliVoiceConfig) ValidateReady() error {
 
 // Config 模型配置覆盖值集合，整体作为一条 JSON 落库。
 type Config struct {
-	Chat      ChatConfig       `json:"chat"`
-	Video     VideoConfig      `json:"video"`
-	Image     ImageConfig      `json:"image"`
-	Analysis  AnalysisConfig   `json:"analysis"`
-	Admin     AdminModelConfig `json:"admin"`
-	DailyQuiz AdminModelConfig `json:"dailyQuiz"`
-	Assist    AssistConfig     `json:"assist"`
-	presence  map[string]bool
+	Chat          ChatConfig          `json:"chat"`
+	Video         VideoConfig         `json:"video"`
+	Image         ImageConfig         `json:"image"`
+	Analysis      AnalysisConfig      `json:"analysis"`
+	Admin         AdminModelConfig    `json:"admin"`
+	DailyQuiz     AdminModelConfig    `json:"dailyQuiz"`
+	Assist        AssistConfig        `json:"assist"`
+	XinzhiliVoice XinzhiliVoiceConfig `json:"xinzhiliVoice"`
+	presence      map[string]bool
+}
+
+func (c Config) ApplyXinzhiliVoice() XinzhiliVoiceConfig {
+	return c.XinzhiliVoice.normalized()
 }
 
 func (c *Config) UnmarshalJSON(data []byte) error {
@@ -195,6 +226,8 @@ func (c Config) SectionPresent(section string) bool {
 		return c.DailyQuiz != (AdminModelConfig{})
 	case "assist":
 		return c.Assist.Enabled != nil || strings.TrimSpace(c.Assist.SystemPrompt) != ""
+	case "xinzhiliVoice":
+		return c.XinzhiliVoice.Enabled || strings.TrimSpace(c.XinzhiliVoice.ASR.APIBase) != "" || strings.TrimSpace(c.XinzhiliVoice.TTS.APIBase) != ""
 	default:
 		return false
 	}
@@ -462,6 +495,12 @@ func (c Config) MergeIncoming(in Config) Config {
 	if !in.fieldPresent("assist.systemPrompt", out.Assist.SystemPrompt != "") {
 		out.Assist.SystemPrompt = stored.Assist.SystemPrompt
 	}
+	if out.XinzhiliVoice.ASR.APIKey == "" {
+		out.XinzhiliVoice.ASR.APIKey = stored.XinzhiliVoice.ASR.APIKey
+	}
+	if out.XinzhiliVoice.TTS.APIKey == "" {
+		out.XinzhiliVoice.TTS.APIKey = stored.XinzhiliVoice.TTS.APIKey
+	}
 	out.presence = in.presence
 	return out
 }
@@ -494,12 +533,14 @@ func mergeCompatibleModelConfig(source Config, section string, stored, incoming 
 }
 
 func (c Config) trimmed() Config {
-	return Config{
+	out := Config{
 		Chat: ChatConfig{
-			Provider: normalizeProvider(c.Chat.Provider),
-			APIBase:  strings.TrimRight(strings.TrimSpace(c.Chat.APIBase), "/"),
-			APIKey:   strings.TrimSpace(c.Chat.APIKey),
-			Model:    strings.TrimSpace(c.Chat.Model),
+			Provider:       normalizeProvider(c.Chat.Provider),
+			APIBase:        strings.TrimRight(strings.TrimSpace(c.Chat.APIBase), "/"),
+			APIKey:         strings.TrimSpace(c.Chat.APIKey),
+			GroupID:        strings.TrimSpace(c.Chat.GroupID),
+			Model:          strings.TrimSpace(c.Chat.Model),
+			TimeoutSeconds: c.Chat.TimeoutSeconds,
 		},
 		Video: VideoConfig{
 			APIBase: strings.TrimSpace(c.Video.APIBase),

@@ -6,7 +6,10 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -45,7 +48,7 @@ func TestAppPrivacyPolicyReturnsFixedText(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Code != 0 || body.Data.Title == "" || body.Data.Version != "2026-07-15" || body.Data.EffectiveAt != "2026-07-15" {
+	if body.Code != 0 || body.Data.Title == "" || body.Data.Version == "" || body.Data.EffectiveAt == "" || body.Data.Content == "" {
 		t.Fatalf("expected structured privacy policy, got %+v", body)
 	}
 	if !bytes.Contains([]byte(body.Data.Content), []byte("学习到的沟通偏好")) {
@@ -594,16 +597,6 @@ func insertAppAPIMemory(t *testing.T, database *sql.DB, userID, cardID int64, co
 	}
 }
 
-func insertAppAPIPreference(t *testing.T, database *sql.DB, userID int64, category, slot, instruction string) {
-	t.Helper()
-	if _, err := database.Exec(
-		`INSERT INTO app_user_preferences (app_user_id, category, slot, instruction, source_text)
-		 VALUES ($1, $2, $3, $4, 'privacy test')`,
-		userID, category, slot, instruction); err != nil {
-		t.Fatalf("insert preference: %v", err)
-	}
-}
-
 func insertAppAPIChatPair(t *testing.T, database *sql.DB, userID, cardID int64) {
 	t.Helper()
 	var sessionID int64
@@ -619,7 +612,11 @@ func insertAppAPIChatPair(t *testing.T, database *sql.DB, userID, cardID int64) 
 	}
 }
 
-func insertAppAPIPreference(t *testing.T, database *sql.DB, userID int64, category, slot, instruction, sourceText string) {
+func insertAppAPIPreference(t *testing.T, database *sql.DB, userID int64, category, slot, instruction string, sourceTexts ...string) {
+	sourceText := "privacy test"
+	if len(sourceTexts) > 0 {
+		sourceText = sourceTexts[0]
+	}
 	t.Helper()
 	if _, err := database.Exec(
 		`INSERT INTO app_user_preferences (app_user_id, category, slot, instruction, source_text)

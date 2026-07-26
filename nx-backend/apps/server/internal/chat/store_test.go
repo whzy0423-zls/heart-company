@@ -10,12 +10,15 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"nine-xing/nx-backend/apps/server/internal/db"
+	"nine-xing/nx-backend/apps/server/internal/testutil"
 )
 
 func TestSceneSessionsDoNotReuseOrdinaryChatAndLegacyReadersHideThem(t *testing.T) {
