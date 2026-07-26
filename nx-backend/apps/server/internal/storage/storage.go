@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -26,6 +27,23 @@ type ObjectSigner interface {
 
 // MultipartStorage is the narrow boundary used by long-running browser uploads.
 // It intentionally coexists with ObjectUploader so existing small-file callers remain unchanged.
+var ErrAlreadyGone = errors.New("storage object already gone")
+
+func IsAlreadyGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrAlreadyGone) {
+		return true
+	}
+	var service *oss.ServiceError
+	if errors.As(err, &service) {
+		return service.StatusCode == 404 || service.Code == "NoSuchUpload" || service.Code == "NoSuchKey" || service.Code == "NoSuchObject"
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "nosuchupload") || strings.Contains(message, "no such upload") || strings.Contains(message, "not found") || strings.Contains(message, "already gone")
+}
+
 type MultipartStorage interface {
 	InitiateMultipart(context.Context, InitiateMultipartInput) (InitiateMultipartResult, error)
 	SignMultipartPart(context.Context, SignPartInput) (SignPartResult, error)
