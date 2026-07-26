@@ -20,6 +20,7 @@ type fakeClassroomAdminService struct {
 	content      classroom.Content
 	calls        []string
 	getSeriesErr error
+	uploadTasks  []classroom.UploadTask
 }
 
 func (f *fakeClassroomAdminService) ListSeries(context.Context, classroom.SeriesFilter) ([]classroom.Series, int, error) {
@@ -64,7 +65,28 @@ func (f *fakeClassroomAdminService) DeleteContent(context.Context, int64, time.T
 }
 func (f *fakeClassroomAdminService) ListUploadTasks(context.Context, int, int) ([]classroom.UploadTask, int, error) {
 	f.calls = append(f.calls, "list-tasks")
-	return nil, 0, nil
+	return f.uploadTasks, len(f.uploadTasks), nil
+}
+
+func TestClassroomAdminUploadTasksExposeSafeIdentityAndPersistedProgress(t *testing.T) {
+	f := &fakeClassroomAdminService{uploadTasks: []classroom.UploadTask{{ID: 4, ContentID: 8, OriginalFilename: "teacher-lesson.mp4", OSSUploadID: "upload-secret", ObjectKey: "private/secret.mp4", ExpectedSize: 200, Checksum: "crc64:123", CompletedParts: 3, CompletedBytes: 75, PartSize: 25, MaxParts: 8, Status: classroom.UploadUploading}}}
+	s := &Server{classroomAdmin: f}
+	rr := httptest.NewRecorder()
+	s.classroomUploadTasks(rr, classroomUser(httptest.NewRequest(http.MethodGet, "/api/admin/classroom/upload-tasks", nil)))
+	raw := rr.Body.String()
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, raw)
+	}
+	for _, want := range []string{`"originalFilename":"teacher-lesson.mp4"`, `"expectedChecksum":"crc64:123"`, `"completedParts":3`, `"completedBytes":75`, `"totalBytes":200`, `"progressPercent":37.5`} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("missing %s in %s", want, raw)
+		}
+	}
+	for _, forbidden := range []string{"objectKey", "ossUploadId", "upload-secret", "private/secret.mp4"} {
+		if strings.Contains(raw, forbidden) {
+			t.Errorf("unsafe field %q in %s", forbidden, raw)
+		}
+	}
 }
 
 func classroomUser(r *http.Request) *http.Request {

@@ -503,7 +503,7 @@ func TestStoreSaveUploadTaskPersistsSchemaCleanupValueCleaned(t *testing.T) {
 		if !strings.Contains(query, "UPDATE classroom_upload_tasks") {
 			return nil, fmt.Errorf("unexpected query: %s", query)
 		}
-		if len(args) != 14 || args[10].Value != "cleaned" {
+		if len(args) != 17 || args[13].Value != "cleaned" {
 			t.Fatalf("cleanup args=%+v", args)
 		}
 		return classroomRows([]string{"created_at", "updated_at"}, [][]driver.Value{{now, now.Add(time.Second)}}), nil

@@ -485,7 +485,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/miniapp/users", s.method(http.MethodGet, s.requirePermission("Customer:Miniapp:List", s.miniappUsers)))
 	s.mux.HandleFunc("/api/miniapp/users/", s.method(http.MethodGet, s.requirePermission("Customer:Miniapp:List", s.miniappUserByID)))
 	s.mux.HandleFunc("/api/miniapp/chat", s.method(http.MethodPost, s.requireMiniapp(s.miniappChat)))
-	registerClassroomUploadRoutes(s.mux, s.requirePermission, s.classroomUploadInit, s.classroomUploadPart, s.classroomUploadComplete, s.classroomUploadAbort)
+	registerClassroomUploadRoutes(s.mux, s.requirePermission, s.classroomUploadInit, s.classroomUploadPart, s.classroomUploadComplete, s.classroomUploadAbort, s.classroomUploadProgress)
 	registerClassroomAdminRoutes(s.mux, s.requirePermission, s)
 	// 付费解锁：下单（鉴权）→ 微信回调（公开）→ 解锁状态/报告正文（鉴权）
 	s.mux.HandleFunc("/api/miniapp/report/order", s.method(http.MethodPost, s.requireMiniapp(s.createReportOrder)))

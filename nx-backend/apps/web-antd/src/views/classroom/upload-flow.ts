@@ -45,11 +45,15 @@ export function matchesUploadIdentity(
 
 export function mergeUploadProgress(
   local: { completedBytes: number; totalBytes: number },
-  task: { completedBytes?: number; expectedSize: number },
+  task: {
+    completedBytes?: number;
+    expectedSize: number;
+    totalBytes?: number;
+  },
 ) {
   return {
     completedBytes: Math.max(local.completedBytes, task.completedBytes ?? 0),
-    totalBytes: task.expectedSize || local.totalBytes,
+    totalBytes: task.totalBytes || task.expectedSize || local.totalBytes,
   };
 }
 

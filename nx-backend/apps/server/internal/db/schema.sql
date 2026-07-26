@@ -2512,10 +2512,13 @@ CREATE TABLE IF NOT EXISTS classroom_upload_tasks (
   id BIGSERIAL PRIMARY KEY,
   content_id BIGINT NOT NULL REFERENCES classroom_contents(id) ON DELETE CASCADE,
   creator_id BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  original_filename TEXT NOT NULL DEFAULT '',
   oss_upload_id TEXT NOT NULL,
   object_key TEXT NOT NULL,
   expected_size BIGINT NOT NULL CHECK (expected_size > 0),
   checksum TEXT NOT NULL DEFAULT '',
+  completed_parts INTEGER NOT NULL DEFAULT 0 CHECK (completed_parts >= 0),
+  completed_bytes BIGINT NOT NULL DEFAULT 0 CHECK (completed_bytes >= 0 AND completed_bytes <= expected_size),
   part_size BIGINT NOT NULL CHECK (part_size > 0),
   max_parts INTEGER NOT NULL CHECK (max_parts > 0),
   status TEXT NOT NULL DEFAULT 'initiated' CHECK (status IN ('initiating','initiated','uploading','completing','cleaning','completed','aborted','expired','failed')),
@@ -2529,6 +2532,19 @@ CREATE TABLE IF NOT EXISTS classroom_upload_tasks (
   UNIQUE (content_id),
   UNIQUE (oss_upload_id)
 );
+
+ALTER TABLE classroom_upload_tasks ADD COLUMN IF NOT EXISTS original_filename TEXT NOT NULL DEFAULT '';
+ALTER TABLE classroom_upload_tasks ADD COLUMN IF NOT EXISTS completed_parts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE classroom_upload_tasks ADD COLUMN IF NOT EXISTS completed_bytes BIGINT NOT NULL DEFAULT 0;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'classroom_upload_tasks_progress_parts_check') THEN
+    ALTER TABLE classroom_upload_tasks ADD CONSTRAINT classroom_upload_tasks_progress_parts_check CHECK (completed_parts >= 0 AND completed_parts <= max_parts);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'classroom_upload_tasks_progress_bytes_check') THEN
+    ALTER TABLE classroom_upload_tasks ADD CONSTRAINT classroom_upload_tasks_progress_bytes_check CHECK (completed_bytes >= 0 AND completed_bytes <= expected_size);
+  END IF;
+END $$;
 
 -- Upgrade databases created before the completing claim state was introduced.
 DO $$

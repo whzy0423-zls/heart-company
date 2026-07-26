@@ -21,9 +21,10 @@ type classroomUploadHandlerService interface {
 	SignPart(context.Context, int64, int64, int) (storage.SignPartResult, error)
 	Complete(context.Context, int64, int64, []storage.CompletedPart) (classroom.CompleteUploadResult, error)
 	Abort(context.Context, int64, int64) (classroom.UploadTask, error)
+	ReportProgress(context.Context, int64, int64, int, int64) (classroom.UploadTask, error)
 }
 
-func registerClassroomUploadRoutes(mux *http.ServeMux, permission func(string, http.HandlerFunc) http.HandlerFunc, initiate, part, complete, abort http.HandlerFunc) {
+func registerClassroomUploadRoutes(mux *http.ServeMux, permission func(string, http.HandlerFunc) http.HandlerFunc, initiate, part, complete, abort, progress http.HandlerFunc) {
 	mux.HandleFunc("/api/admin/classroom/uploads/initiate", permission("Miniapp:Classroom:Upload", classroomMethod(http.MethodPost, initiate)))
 	mux.HandleFunc("/api/admin/classroom/uploads/", permission("Miniapp:Classroom:Upload", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/admin/classroom/uploads/")
@@ -37,6 +38,10 @@ func registerClassroomUploadRoutes(mux *http.ServeMux, permission func(string, h
 		}
 		if strings.HasSuffix(path, "/complete") {
 			complete(w, r)
+			return
+		}
+		if strings.HasSuffix(path, "/progress") {
+			progress(w, r)
 			return
 		}
 		if strings.HasSuffix(path, "/abort") {
@@ -157,6 +162,35 @@ func (s *Server) classroomUploadAbort(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, toClassroomUploadTaskDTO(result))
 }
 
+func (s *Server) classroomUploadProgress(w http.ResponseWriter, r *http.Request) {
+	if s.classroomUploads == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "classroom uploads unavailable")
+		return
+	}
+	id, ok := parseClassroomUploadActionPath(r.URL.Path, "progress")
+	if !ok {
+		httpx.Fail(w, http.StatusBadRequest, "invalid upload id")
+		return
+	}
+	var body struct {
+		CompletedParts int   `json:"completedParts"`
+		CompletedBytes int64 `json:"completedBytes"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&body) != nil || ensureJSONEOF(decoder) != nil {
+		httpx.Fail(w, http.StatusBadRequest, "invalid upload progress")
+		return
+	}
+	result, err := s.classroomUploads.ReportProgress(r.Context(), id, userFromRequest(r).ID, body.CompletedParts, body.CompletedBytes)
+	if err != nil {
+		writeClassroomUploadError(w, err)
+		return
+	}
+	httpx.OK(w, toClassroomUploadTaskDTO(result))
+}
+
 type classroomUploadInitiateDTO struct {
 	Task classroomUploadTaskDTO `json:"task"`
 }
@@ -187,7 +221,18 @@ type classroomUploadContentDTO struct {
 }
 
 func toClassroomUploadTaskDTO(v classroom.UploadTask) classroomUploadTaskDTO {
-	return classroomUploadTaskDTO{v.ID, v.ContentID, v.ExpectedSize, v.PartSize, v.MaxParts, v.Status, v.ExpiresAt, v.AttemptCount, v.CleanupStatus, v.MediaAssetID, v.FailureReason, v.CreatedAt, v.UpdatedAt}
+	if v.Status == classroom.UploadCompleted {
+		v.CompletedParts = v.MaxParts
+		v.CompletedBytes = v.ExpectedSize
+	}
+	progress := float64(0)
+	if v.ExpectedSize > 0 {
+		progress = float64(v.CompletedBytes) * 100 / float64(v.ExpectedSize)
+	}
+	if progress > 100 {
+		progress = 100
+	}
+	return classroomUploadTaskDTO{ID: v.ID, ContentID: v.ContentID, OriginalFilename: v.OriginalFilename, ExpectedSize: v.ExpectedSize, ExpectedChecksum: v.Checksum, CompletedParts: v.CompletedParts, CompletedBytes: v.CompletedBytes, TotalBytes: v.ExpectedSize, ProgressPercent: progress, PartSize: v.PartSize, MaxParts: v.MaxParts, Status: v.Status, ExpiresAt: v.ExpiresAt, AttemptCount: v.AttemptCount, CleanupStatus: v.CleanupStatus, MediaAssetID: v.MediaAssetID, FailureReason: v.FailureReason, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
 }
 
 func parseClassroomUploadPartPath(path string) (int64, int, bool) {
@@ -226,6 +271,9 @@ func writeClassroomUploadError(w http.ResponseWriter, err error) {
 	case errors.Is(err, classroom.ErrUploadConflict), errors.Is(err, classroom.ErrInvalidUploadPart):
 		status = http.StatusConflict
 		message = "upload conflict"
+	case errors.Is(err, classroom.ErrInvalidUploadProgress):
+		status = http.StatusConflict
+		message = "invalid upload progress"
 	case errors.Is(err, classroom.ErrNotFound):
 		status = http.StatusNotFound
 		message = "upload not found"

@@ -134,6 +134,12 @@ export interface ClassroomUploadTask {
   contentId: number;
   createdAt: string;
   expectedSize: number;
+  originalFilename: string;
+  expectedChecksum: string;
+  completedParts?: number;
+  completedBytes?: number;
+  totalBytes?: number;
+  progressPercent?: number;
   expiresAt: string;
   failureReason?: string;
   id: number;
@@ -446,6 +452,18 @@ export function signClassroomUploadPartApi(id: number, partNumber: number) {
     requestClient.post<ClassroomSignedPart>(
       `/admin/classroom/uploads/${id}/parts/${partNumber}/sign`,
       {},
+    ),
+  );
+}
+
+export function reportClassroomUploadProgressApi(
+  id: number,
+  data: { completedParts: number; completedBytes: number },
+) {
+  return classroomRequest(
+    requestClient.post<ClassroomUploadTask>(
+      `/admin/classroom/uploads/${id}/progress`,
+      data,
     ),
   );
 }

@@ -243,23 +243,26 @@ func (m MediaAsset) Validate() error {
 }
 
 type UploadTask struct {
-	ID            int64
-	ContentID     int64
-	CreatorID     int64
-	OSSUploadID   string
-	ObjectKey     string
-	ExpectedSize  int64
-	Checksum      string
-	PartSize      int64
-	MaxParts      int
-	Status        UploadStatus
-	ExpiresAt     time.Time
-	AttemptCount  int
-	CleanupStatus string
-	MediaAssetID  *int64
-	FailureReason string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID               int64
+	ContentID        int64
+	CreatorID        int64
+	OriginalFilename string
+	OSSUploadID      string
+	ObjectKey        string
+	ExpectedSize     int64
+	Checksum         string
+	CompletedParts   int
+	CompletedBytes   int64
+	PartSize         int64
+	MaxParts         int
+	Status           UploadStatus
+	ExpiresAt        time.Time
+	AttemptCount     int
+	CleanupStatus    string
+	MediaAssetID     *int64
+	FailureReason    string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 func (u UploadTask) Validate() error {
@@ -271,6 +274,9 @@ func (u UploadTask) Validate() error {
 	}
 	if u.ExpectedSize <= 0 || u.PartSize <= 0 || u.MaxParts <= 0 || u.AttemptCount < 0 {
 		return errors.New("invalid upload task size or attempts")
+	}
+	if u.CompletedParts < 0 || u.CompletedParts > u.MaxParts || u.CompletedBytes < 0 || u.CompletedBytes > u.ExpectedSize {
+		return errors.New("invalid upload task progress")
 	}
 	if !oneOf(string(u.Status), string(UploadInitiating), string(UploadInitiated), string(UploadUploading), string(UploadCompleting), string(UploadCleaning), string(UploadCompleted), string(UploadAborted), string(UploadExpired), string(UploadFailed)) {
 		return fmt.Errorf("invalid upload status %q", u.Status)

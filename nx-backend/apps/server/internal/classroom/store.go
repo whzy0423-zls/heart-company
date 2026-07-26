@@ -266,7 +266,7 @@ func (s *Store) CreateUploadTask(ctx context.Context, item UploadTask) (UploadTa
 	if err := ValidateUploadDraftBinding(item, content); err != nil {
 		return UploadTask{}, err
 	}
-	err = s.db.QueryRowContext(ctx, `INSERT INTO classroom_upload_tasks (content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id,created_at,updated_at`, item.ContentID, item.CreatorID, item.OSSUploadID, item.ObjectKey, item.ExpectedSize, item.Checksum, item.PartSize, item.MaxParts, item.Status, item.ExpiresAt, item.AttemptCount, defaultCleanup(item.CleanupStatus), item.MediaAssetID, item.FailureReason).Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	err = s.db.QueryRowContext(ctx, `INSERT INTO classroom_upload_tasks (content_id,creator_id,original_filename,oss_upload_id,object_key,expected_size,checksum,completed_parts,completed_bytes,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id,created_at,updated_at`, item.ContentID, item.CreatorID, item.OriginalFilename, item.OSSUploadID, item.ObjectKey, item.ExpectedSize, item.Checksum, item.CompletedParts, item.CompletedBytes, item.PartSize, item.MaxParts, item.Status, item.ExpiresAt, item.AttemptCount, defaultCleanup(item.CleanupStatus), item.MediaAssetID, item.FailureReason).Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		return UploadTask{}, fmt.Errorf("create classroom upload task: %w", err)
 	}
@@ -275,7 +275,7 @@ func (s *Store) CreateUploadTask(ctx context.Context, item UploadTask) (UploadTa
 
 func (s *Store) GetUploadTask(ctx context.Context, id int64) (UploadTask, error) {
 	var item UploadTask
-	err := s.db.QueryRowContext(ctx, `SELECT id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at FROM classroom_upload_tasks WHERE id=$1`, id).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id,content_id,creator_id,original_filename,oss_upload_id,object_key,expected_size,checksum,completed_parts,completed_bytes,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at FROM classroom_upload_tasks WHERE id=$1`, id).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OriginalFilename, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.CompletedParts, &item.CompletedBytes, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrNotFound
 	}

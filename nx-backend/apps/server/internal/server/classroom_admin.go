@@ -192,7 +192,7 @@ func (a *classroomAdminStore) ListUploadTasks(ctx context.Context, limit, offset
 	if err := a.db.QueryRowContext(ctx, "SELECT count(*) FROM classroom_upload_tasks").Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := a.db.QueryContext(ctx, `SELECT id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at FROM classroom_upload_tasks ORDER BY created_at DESC,id DESC LIMIT $1 OFFSET $2`, limit, offset)
+	rows, err := a.db.QueryContext(ctx, `SELECT id,content_id,creator_id,original_filename,oss_upload_id,object_key,expected_size,checksum,completed_parts,completed_bytes,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at FROM classroom_upload_tasks ORDER BY created_at DESC,id DESC LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -200,7 +200,7 @@ func (a *classroomAdminStore) ListUploadTasks(ctx context.Context, limit, offset
 	items := []classroom.UploadTask{}
 	for rows.Next() {
 		var v classroom.UploadTask
-		if err := rows.Scan(&v.ID, &v.ContentID, &v.CreatorID, &v.OSSUploadID, &v.ObjectKey, &v.ExpectedSize, &v.Checksum, &v.PartSize, &v.MaxParts, &v.Status, &v.ExpiresAt, &v.AttemptCount, &v.CleanupStatus, &v.MediaAssetID, &v.FailureReason, &v.CreatedAt, &v.UpdatedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.ContentID, &v.CreatorID, &v.OriginalFilename, &v.OSSUploadID, &v.ObjectKey, &v.ExpectedSize, &v.Checksum, &v.CompletedParts, &v.CompletedBytes, &v.PartSize, &v.MaxParts, &v.Status, &v.ExpiresAt, &v.AttemptCount, &v.CleanupStatus, &v.MediaAssetID, &v.FailureReason, &v.CreatedAt, &v.UpdatedAt); err != nil {
 			return nil, 0, err
 		}
 		items = append(items, v)
@@ -259,19 +259,25 @@ type classroomContentDTO struct {
 	UpdatedAt            time.Time               `json:"updatedAt"`
 }
 type classroomUploadTaskDTO struct {
-	ID            int64                  `json:"id"`
-	ContentID     int64                  `json:"contentId"`
-	ExpectedSize  int64                  `json:"expectedSize"`
-	PartSize      int64                  `json:"partSize"`
-	MaxParts      int                    `json:"maxParts"`
-	Status        classroom.UploadStatus `json:"status"`
-	ExpiresAt     time.Time              `json:"expiresAt"`
-	AttemptCount  int                    `json:"attemptCount"`
-	CleanupStatus string                 `json:"cleanupStatus"`
-	MediaAssetID  *int64                 `json:"mediaAssetId,omitempty"`
-	FailureReason string                 `json:"failureReason,omitempty"`
-	CreatedAt     time.Time              `json:"createdAt"`
-	UpdatedAt     time.Time              `json:"updatedAt"`
+	ID               int64                  `json:"id"`
+	ContentID        int64                  `json:"contentId"`
+	OriginalFilename string                 `json:"originalFilename"`
+	ExpectedSize     int64                  `json:"expectedSize"`
+	ExpectedChecksum string                 `json:"expectedChecksum"`
+	CompletedParts   int                    `json:"completedParts"`
+	CompletedBytes   int64                  `json:"completedBytes"`
+	TotalBytes       int64                  `json:"totalBytes"`
+	ProgressPercent  float64                `json:"progressPercent"`
+	PartSize         int64                  `json:"partSize"`
+	MaxParts         int                    `json:"maxParts"`
+	Status           classroom.UploadStatus `json:"status"`
+	ExpiresAt        time.Time              `json:"expiresAt"`
+	AttemptCount     int                    `json:"attemptCount"`
+	CleanupStatus    string                 `json:"cleanupStatus"`
+	MediaAssetID     *int64                 `json:"mediaAssetId,omitempty"`
+	FailureReason    string                 `json:"failureReason,omitempty"`
+	CreatedAt        time.Time              `json:"createdAt"`
+	UpdatedAt        time.Time              `json:"updatedAt"`
 }
 
 func registerClassroomAdminRoutes(mux *http.ServeMux, permission func(string, http.HandlerFunc) http.HandlerFunc, s *Server) {
@@ -730,7 +736,7 @@ func (s *Server) classroomUploadTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]classroomUploadTaskDTO, 0, len(items))
 	for _, v := range items {
-		out = append(out, classroomUploadTaskDTO{v.ID, v.ContentID, v.ExpectedSize, v.PartSize, v.MaxParts, v.Status, v.ExpiresAt, v.AttemptCount, v.CleanupStatus, v.MediaAssetID, v.FailureReason, v.CreatedAt, v.UpdatedAt})
+		out = append(out, toClassroomUploadTaskDTO(v))
 	}
 	httpx.OK(w, classroomPage[classroomUploadTaskDTO]{out, total, page, size})
 }

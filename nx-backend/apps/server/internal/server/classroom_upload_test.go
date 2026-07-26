@@ -22,6 +22,7 @@ type fakeClassroomUploadHandlerService struct {
 	completeErr error
 	aborted     classroom.UploadTask
 	calls       []string
+	progress    classroom.UploadTask
 }
 
 func (f *fakeClassroomUploadHandlerService) Initiate(context.Context, classroom.InitiateUploadInput) (classroom.InitiateUploadResult, error) {
@@ -52,6 +53,44 @@ func (f *fakeClassroomUploadHandlerService) Abort(context.Context, int64, int64)
 	f.calls = append(f.calls, "abort")
 	return f.aborted, nil
 }
+func (f *fakeClassroomUploadHandlerService) ReportProgress(context.Context, int64, int64, int, int64) (classroom.UploadTask, error) {
+	f.calls = append(f.calls, "progress")
+	return f.progress, nil
+}
+
+func TestClassroomUploadProgressHandlerReportsPersistedProgress(t *testing.T) {
+	f := &fakeClassroomUploadHandlerService{progress: classroom.UploadTask{ID: 9, ContentID: 7, OriginalFilename: "lesson.mp4", ExpectedSize: 100, Checksum: "crc64:abc", CompletedParts: 2, CompletedBytes: 60, PartSize: 30, MaxParts: 4, Status: classroom.UploadUploading}}
+	s := &Server{classroomUploads: f}
+	req := classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/uploads/9/progress", strings.NewReader(`{"completedParts":2,"completedBytes":60}`)))
+	rr := httptest.NewRecorder()
+	s.classroomUploadProgress(rr, req)
+	if rr.Code != http.StatusOK || len(f.calls) != 1 || f.calls[0] != "progress" {
+		t.Fatalf("status=%d calls=%v body=%s", rr.Code, f.calls, rr.Body.String())
+	}
+	for _, forbidden := range []string{"objectKey", "ossUploadId", "uploadID"} {
+		if strings.Contains(rr.Body.String(), forbidden) {
+			t.Fatalf("unsafe progress response: %s", rr.Body.String())
+		}
+	}
+	if !strings.Contains(rr.Body.String(), `"completedParts":2`) || !strings.Contains(rr.Body.String(), `"progressPercent":60`) {
+		t.Fatalf("missing progress DTO: %s", rr.Body.String())
+	}
+}
+
+func TestClassroomUploadCompletedDTOFallsBackToHundredPercent(t *testing.T) {
+	dto := toClassroomUploadTaskDTO(classroom.UploadTask{
+		ID:             9,
+		ContentID:      7,
+		ExpectedSize:   100,
+		CompletedParts: 2,
+		CompletedBytes: 60,
+		MaxParts:       4,
+		Status:         classroom.UploadCompleted,
+	})
+	if dto.CompletedParts != 4 || dto.CompletedBytes != 100 || dto.ProgressPercent != 100 {
+		t.Fatalf("completed DTO did not normalize to 100%%: %+v", dto)
+	}
+}
 
 func TestClassroomUploadRoutesRequireDedicatedPermission(t *testing.T) {
 	f := &fakeClassroomUploadHandlerService{}
@@ -62,7 +101,7 @@ func TestClassroomUploadRoutesRequireDedicatedPermission(t *testing.T) {
 		permissionCode = code
 		return func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "forbidden", http.StatusForbidden) }
 	}
-	registerClassroomUploadRoutes(mux, deny, s.classroomUploadInit, s.classroomUploadPart, s.classroomUploadComplete, s.classroomUploadAbort)
+	registerClassroomUploadRoutes(mux, deny, s.classroomUploadInit, s.classroomUploadPart, s.classroomUploadComplete, s.classroomUploadAbort, s.classroomUploadProgress)
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/classroom/uploads/initiate", strings.NewReader(`{"contentId":7,"filename":"lesson.mp4","contentType":"video/mp4","sizeBytes":10,"checksum":"sha256:x"}`))
 	req = req.WithContext(withUser(req.Context(), auth.UserInfo{ID: 42}))
 	rr := httptest.NewRecorder()

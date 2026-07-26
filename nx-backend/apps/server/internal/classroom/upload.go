@@ -19,12 +19,13 @@ import (
 )
 
 var (
-	ErrUploadOwnership   = errors.New("classroom upload is owned by another user")
-	ErrUploadExpired     = errors.New("classroom upload expired")
-	ErrInvalidUploadPart = errors.New("invalid classroom upload part")
-	ErrUploadConflict    = errors.New("classroom content already has an active upload")
-	ErrUploadInProgress  = errors.New("classroom upload is in progress")
-	ErrUploadAttempts    = errors.New("classroom upload retry limit reached")
+	ErrUploadOwnership       = errors.New("classroom upload is owned by another user")
+	ErrUploadExpired         = errors.New("classroom upload expired")
+	ErrInvalidUploadPart     = errors.New("invalid classroom upload part")
+	ErrUploadConflict        = errors.New("classroom content already has an active upload")
+	ErrUploadInProgress      = errors.New("classroom upload is in progress")
+	ErrUploadAttempts        = errors.New("classroom upload retry limit reached")
+	ErrInvalidUploadProgress = errors.New("invalid classroom upload progress")
 )
 
 type UploadConfig struct {
@@ -96,6 +97,7 @@ type UploadRepository interface {
 	MarkUploadUploading(context.Context, int64) (UploadTask, error)
 	ClaimUploadCleanup(context.Context, UploadTask, UploadStatus) (UploadTask, bool, error)
 	FinishUploadCleanup(context.Context, UploadTask, UploadStatus, string, string) (UploadTask, bool, error)
+	UpdateUploadProgress(context.Context, int64, int64, int, int64) (UploadTask, error)
 }
 
 type UploadService struct {
@@ -205,7 +207,7 @@ func (s *UploadService) Initiate(ctx context.Context, input InitiateUploadInput)
 		attempt = previous.AttemptCount + 1
 	}
 	objectKey := s.objectKey(content, input.Filename)
-	reservation := UploadTask{ContentID: input.ContentID, CreatorID: input.CreatorID, OSSUploadID: "initiating:" + randomUploadToken(), ObjectKey: objectKey, ExpectedSize: input.SizeBytes, Checksum: strings.TrimSpace(input.Checksum), PartSize: s.config.PartSize, MaxParts: parts, Status: UploadInitiating, ExpiresAt: s.now().Add(s.config.TaskTTL), AttemptCount: attempt, CleanupStatus: "pending"}
+	reservation := UploadTask{ContentID: input.ContentID, CreatorID: input.CreatorID, OriginalFilename: filepath.Base(input.Filename), OSSUploadID: "initiating:" + randomUploadToken(), ObjectKey: objectKey, ExpectedSize: input.SizeBytes, Checksum: strings.TrimSpace(input.Checksum), PartSize: s.config.PartSize, MaxParts: parts, Status: UploadInitiating, ExpiresAt: s.now().Add(s.config.TaskTTL), AttemptCount: attempt, CleanupStatus: "pending"}
 	var expected *UploadTask
 	if findErr == nil {
 		expected = &previous
@@ -408,6 +410,26 @@ func (s *UploadService) Abort(ctx context.Context, taskID, creatorID int64) (Upl
 		return UploadTask{}, err
 	}
 	return task, nil
+}
+
+// ReportProgress persists client-confirmed multipart progress. It is deliberately
+// separate from signing: a signed URL does not prove that the browser PUT finished.
+func (s *UploadService) ReportProgress(ctx context.Context, taskID, creatorID int64, completedParts int, completedBytes int64) (UploadTask, error) {
+	task, err := s.ownedTask(ctx, taskID, creatorID)
+	if err != nil {
+		return UploadTask{}, err
+	}
+	if completedParts < task.CompletedParts || completedBytes < task.CompletedBytes || completedParts < 0 || completedBytes < 0 || completedParts > task.MaxParts || completedBytes > task.ExpectedSize {
+		return UploadTask{}, ErrInvalidUploadProgress
+	}
+	updated, err := s.repo.UpdateUploadProgress(ctx, taskID, creatorID, completedParts, completedBytes)
+	if err != nil {
+		return UploadTask{}, err
+	}
+	if updated.CreatorID != creatorID {
+		return UploadTask{}, ErrUploadOwnership
+	}
+	return updated, nil
 }
 
 func (s *UploadService) ownedTask(ctx context.Context, id, creator int64) (UploadTask, error) {
@@ -817,7 +839,7 @@ func (p FFProbe) Probe(ctx context.Context, input ProbeInput) (MediaProbeResult,
 // Store upload persistence methods live here to keep the classroom store API cohesive.
 func (s *Store) FindUploadTaskByContent(ctx context.Context, contentID int64) (UploadTask, error) {
 	var item UploadTask
-	err := s.db.QueryRowContext(ctx, `SELECT id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at FROM classroom_upload_tasks WHERE content_id=$1`, contentID).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id,content_id,creator_id,original_filename,oss_upload_id,object_key,expected_size,checksum,completed_parts,completed_bytes,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at FROM classroom_upload_tasks WHERE content_id=$1`, contentID).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OriginalFilename, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.CompletedParts, &item.CompletedBytes, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UploadTask{}, ErrNotFound
 	}
@@ -832,9 +854,9 @@ func (s *Store) ReserveUploadInitiation(ctx context.Context, item UploadTask, ex
 	}
 	var err error
 	if expected == nil {
-		err = s.db.QueryRowContext(ctx, `INSERT INTO classroom_upload_tasks (content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'initiating',$9,$10,'pending',NULL,'') ON CONFLICT (content_id) DO NOTHING RETURNING id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, item.ContentID, item.CreatorID, item.OSSUploadID, item.ObjectKey, item.ExpectedSize, item.Checksum, item.PartSize, item.MaxParts, item.ExpiresAt, item.AttemptCount).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
+		err = s.db.QueryRowContext(ctx, `INSERT INTO classroom_upload_tasks (content_id,creator_id,original_filename,oss_upload_id,object_key,expected_size,checksum,completed_parts,completed_bytes,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,0,0,$8,$9,'initiating',$10,$11,'pending',NULL,'') ON CONFLICT (content_id) DO NOTHING RETURNING id,content_id,creator_id,original_filename,oss_upload_id,object_key,expected_size,checksum,completed_parts,completed_bytes,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, item.ContentID, item.CreatorID, item.OriginalFilename, item.OSSUploadID, item.ObjectKey, item.ExpectedSize, item.Checksum, item.PartSize, item.MaxParts, item.ExpiresAt, item.AttemptCount).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OriginalFilename, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.CompletedParts, &item.CompletedBytes, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
 	} else {
-		err = s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET creator_id=$1,oss_upload_id=$2,object_key=$3,expected_size=$4,checksum=$5,part_size=$6,max_parts=$7,status='initiating',expires_at=$8,attempt_count=$9,cleanup_status='pending',media_asset_id=NULL,failure_reason='',updated_at=now() WHERE id=$10 AND status=$11 AND updated_at=$12 RETURNING id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, item.CreatorID, item.OSSUploadID, item.ObjectKey, item.ExpectedSize, item.Checksum, item.PartSize, item.MaxParts, item.ExpiresAt, item.AttemptCount, expected.ID, expected.Status, expected.UpdatedAt).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
+		err = s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET creator_id=$1,original_filename=$2,oss_upload_id=$3,object_key=$4,expected_size=$5,checksum=$6,completed_parts=0,completed_bytes=0,part_size=$7,max_parts=$8,status='initiating',expires_at=$9,attempt_count=$10,cleanup_status='pending',media_asset_id=NULL,failure_reason='',updated_at=now() WHERE id=$11 AND status=$12 AND updated_at=$13 RETURNING id,content_id,creator_id,original_filename,oss_upload_id,object_key,expected_size,checksum,completed_parts,completed_bytes,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, item.CreatorID, item.OriginalFilename, item.OSSUploadID, item.ObjectKey, item.ExpectedSize, item.Checksum, item.PartSize, item.MaxParts, item.ExpiresAt, item.AttemptCount, expected.ID, expected.Status, expected.UpdatedAt).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OriginalFilename, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.CompletedParts, &item.CompletedBytes, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		current, getErr := s.FindUploadTaskByContent(ctx, item.ContentID)
@@ -844,7 +866,7 @@ func (s *Store) ReserveUploadInitiation(ctx context.Context, item UploadTask, ex
 }
 func (s *Store) ConfirmUploadInitiation(ctx context.Context, expected UploadTask, uploadID string) (UploadTask, bool, error) {
 	var item UploadTask
-	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET oss_upload_id=$1,status='initiated',updated_at=now() WHERE id=$2 AND status='initiating' AND updated_at=$3 RETURNING id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, uploadID, expected.ID, expected.UpdatedAt).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET oss_upload_id=$1,status='initiated',updated_at=now() WHERE id=$2 AND status='initiating' AND updated_at=$3 RETURNING id,content_id,creator_id,original_filename,oss_upload_id,object_key,expected_size,checksum,completed_parts,completed_bytes,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, uploadID, expected.ID, expected.UpdatedAt).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OriginalFilename, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.CompletedParts, &item.CompletedBytes, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		current, getErr := s.GetUploadTask(ctx, expected.ID)
 		return current, false, getErr
@@ -856,7 +878,7 @@ func (s *Store) FailUploadInitiation(ctx context.Context, expected UploadTask, u
 		return UploadTask{}, false, errors.New("invalid initiation cleanup status")
 	}
 	var item UploadTask
-	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET oss_upload_id=CASE WHEN $1='' THEN oss_upload_id ELSE $1 END,status='failed',cleanup_status=$2,failure_reason=$3,updated_at=now() WHERE id=$4 AND status='initiating' AND updated_at=$5 RETURNING id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, uploadID, cleanupStatus, reason, expected.ID, expected.UpdatedAt).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET oss_upload_id=CASE WHEN $1='' THEN oss_upload_id ELSE $1 END,status='failed',cleanup_status=$2,failure_reason=$3,updated_at=now() WHERE id=$4 AND status='initiating' AND updated_at=$5 RETURNING id,content_id,creator_id,original_filename,oss_upload_id,object_key,expected_size,checksum,completed_parts,completed_bytes,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, uploadID, cleanupStatus, reason, expected.ID, expected.UpdatedAt).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OriginalFilename, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.CompletedParts, &item.CompletedBytes, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		current, getErr := s.GetUploadTask(ctx, expected.ID)
 		return current, false, getErr
@@ -867,7 +889,7 @@ func (s *Store) SaveUploadTask(ctx context.Context, item UploadTask) (UploadTask
 	if err := item.Validate(); err != nil {
 		return UploadTask{}, err
 	}
-	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET creator_id=$1,oss_upload_id=$2,object_key=$3,expected_size=$4,checksum=$5,part_size=$6,max_parts=$7,status=$8,expires_at=$9,attempt_count=$10,cleanup_status=$11,media_asset_id=$12,failure_reason=$13,updated_at=now() WHERE id=$14 RETURNING created_at,updated_at`, item.CreatorID, item.OSSUploadID, item.ObjectKey, item.ExpectedSize, item.Checksum, item.PartSize, item.MaxParts, item.Status, item.ExpiresAt, item.AttemptCount, item.CleanupStatus, item.MediaAssetID, item.FailureReason, item.ID).Scan(&item.CreatedAt, &item.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET creator_id=$1,original_filename=$2,oss_upload_id=$3,object_key=$4,expected_size=$5,checksum=$6,completed_parts=$7,completed_bytes=$8,part_size=$9,max_parts=$10,status=$11,expires_at=$12,attempt_count=$13,cleanup_status=$14,media_asset_id=$15,failure_reason=$16,updated_at=now() WHERE id=$17 RETURNING created_at,updated_at`, item.CreatorID, item.OriginalFilename, item.OSSUploadID, item.ObjectKey, item.ExpectedSize, item.Checksum, item.CompletedParts, item.CompletedBytes, item.PartSize, item.MaxParts, item.Status, item.ExpiresAt, item.AttemptCount, item.CleanupStatus, item.MediaAssetID, item.FailureReason, item.ID).Scan(&item.CreatedAt, &item.UpdatedAt)
 	return item, err
 }
 func (s *Store) UpdateMediaAsset(ctx context.Context, item MediaAsset) (MediaAsset, error) {
@@ -888,7 +910,7 @@ func (s *Store) ListExpiredUploadTasks(ctx context.Context, limit int) ([]Upload
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at FROM classroom_upload_tasks WHERE ((((status IN ('initiating','initiated','uploading','completing') AND expires_at<=now()) OR status IN ('failed','expired','aborted')) AND cleanup_status IN ('pending','failed')) OR (status='cleaning' AND cleanup_status IN ('pending','failed') AND updated_at <= now()-interval '15 minutes')) ORDER BY expires_at,id LIMIT $1`, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,content_id,creator_id,original_filename,oss_upload_id,object_key,expected_size,checksum,completed_parts,completed_bytes,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at FROM classroom_upload_tasks WHERE ((((status IN ('initiating','initiated','uploading','completing') AND expires_at<=now()) OR status IN ('failed','expired','aborted')) AND cleanup_status IN ('pending','failed')) OR (status='cleaning' AND cleanup_status IN ('pending','failed') AND updated_at <= now()-interval '15 minutes')) ORDER BY expires_at,id LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -896,7 +918,7 @@ func (s *Store) ListExpiredUploadTasks(ctx context.Context, limit int) ([]Upload
 	items := []UploadTask{}
 	for rows.Next() {
 		var item UploadTask
-		if err := rows.Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OriginalFilename, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.CompletedParts, &item.CompletedBytes, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -906,9 +928,18 @@ func (s *Store) ListExpiredUploadTasks(ctx context.Context, limit int) ([]Upload
 
 func (s *Store) MarkUploadUploading(ctx context.Context, id int64) (UploadTask, error) {
 	var item UploadTask
-	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET status='uploading',updated_at=now() WHERE id=$1 AND status='initiated' RETURNING id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, id).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET status='uploading',updated_at=now() WHERE id=$1 AND status='initiated' RETURNING id,content_id,creator_id,original_filename,oss_upload_id,object_key,expected_size,checksum,completed_parts,completed_bytes,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, id).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OriginalFilename, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.CompletedParts, &item.CompletedBytes, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return s.GetUploadTask(ctx, id)
+	}
+	return item, err
+}
+
+func (s *Store) UpdateUploadProgress(ctx context.Context, id, creatorID int64, completedParts int, completedBytes int64) (UploadTask, error) {
+	var item UploadTask
+	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET completed_parts=$1,completed_bytes=$2,status=CASE WHEN status='initiated' THEN 'uploading' ELSE status END,updated_at=now() WHERE id=$3 AND creator_id=$4 AND status IN ('initiated','uploading') AND completed_parts<=$1 AND completed_bytes<=$2 AND max_parts>=$1 AND expected_size>=$2 RETURNING id,content_id,creator_id,original_filename,oss_upload_id,object_key,expected_size,checksum,completed_parts,completed_bytes,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, completedParts, completedBytes, id, creatorID).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OriginalFilename, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.CompletedParts, &item.CompletedBytes, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadTask{}, ErrInvalidUploadProgress
 	}
 	return item, err
 }
@@ -926,9 +957,9 @@ func (s *Store) claimUploadStatus(ctx context.Context, id int64, from []UploadSt
 		values[i] = fmt.Sprintf("$%d", i+4)
 		args = append(args, status)
 	}
-	query := `UPDATE classroom_upload_tasks SET status=$1,cleanup_status=$2,expires_at=CASE WHEN $1='completing' THEN GREATEST(expires_at,now()+interval '30 minutes') ELSE expires_at END,updated_at=now() WHERE id=$3 AND status IN (` + strings.Join(values, ",") + `) RETURNING id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`
+	query := `UPDATE classroom_upload_tasks SET status=$1,cleanup_status=$2,expires_at=CASE WHEN $1='completing' THEN GREATEST(expires_at,now()+interval '30 minutes') ELSE expires_at END,updated_at=now() WHERE id=$3 AND status IN (` + strings.Join(values, ",") + `) RETURNING id,content_id,creator_id,original_filename,oss_upload_id,object_key,expected_size,checksum,completed_parts,completed_bytes,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`
 	var item UploadTask
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OriginalFilename, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.CompletedParts, &item.CompletedBytes, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		current, getErr := s.GetUploadTask(ctx, id)
 		return current, false, getErr
@@ -938,7 +969,7 @@ func (s *Store) claimUploadStatus(ctx context.Context, id int64, from []UploadSt
 
 func (s *Store) ClaimUploadCleanup(ctx context.Context, expected UploadTask, status UploadStatus) (UploadTask, bool, error) {
 	var item UploadTask
-	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET status='cleaning',cleanup_status='pending',updated_at=now() WHERE id=$1 AND updated_at=$3 AND ((status=$2 AND status<>'cleaning') OR (status='cleaning' AND updated_at <= now()-interval '15 minutes')) RETURNING id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, expected.ID, expected.Status, expected.UpdatedAt).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET status='cleaning',cleanup_status='pending',updated_at=now() WHERE id=$1 AND updated_at=$3 AND ((status=$2 AND status<>'cleaning') OR (status='cleaning' AND updated_at <= now()-interval '15 minutes')) RETURNING id,content_id,creator_id,original_filename,oss_upload_id,object_key,expected_size,checksum,completed_parts,completed_bytes,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, expected.ID, expected.Status, expected.UpdatedAt).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OriginalFilename, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.CompletedParts, &item.CompletedBytes, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UploadTask{}, false, nil
 	}
@@ -947,7 +978,7 @@ func (s *Store) ClaimUploadCleanup(ctx context.Context, expected UploadTask, sta
 
 func (s *Store) FinishUploadCleanup(ctx context.Context, expected UploadTask, status UploadStatus, cleanupStatus, failureReason string) (UploadTask, bool, error) {
 	var item UploadTask
-	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET status=$1,cleanup_status=$2,failure_reason=$3,updated_at=now() WHERE id=$4 AND status='cleaning' AND updated_at=$5 RETURNING id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, status, cleanupStatus, failureReason, expected.ID, expected.UpdatedAt).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET status=$1,cleanup_status=$2,failure_reason=$3,updated_at=now() WHERE id=$4 AND status='cleaning' AND updated_at=$5 RETURNING id,content_id,creator_id,original_filename,oss_upload_id,object_key,expected_size,checksum,completed_parts,completed_bytes,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, status, cleanupStatus, failureReason, expected.ID, expected.UpdatedAt).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OriginalFilename, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.CompletedParts, &item.CompletedBytes, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UploadTask{}, false, nil
 	}
@@ -977,10 +1008,12 @@ func (s *Store) FinalizeUpload(ctx context.Context, task UploadTask, media Media
 	if rows, _ := result.RowsAffected(); rows != 1 {
 		return UploadTask{}, MediaAsset{}, Content{}, ErrConflict
 	}
-	err = tx.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET status='completed',cleanup_status='retained',media_asset_id=$1,failure_reason='',updated_at=now() WHERE id=$2 AND status='completing' RETURNING created_at,updated_at`, media.ID, task.ID).Scan(&task.CreatedAt, &task.UpdatedAt)
+	err = tx.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET status='completed',cleanup_status='retained',completed_parts=max_parts,completed_bytes=expected_size,media_asset_id=$1,failure_reason='',updated_at=now() WHERE id=$2 AND status='completing' RETURNING created_at,updated_at`, media.ID, task.ID).Scan(&task.CreatedAt, &task.UpdatedAt)
 	if err != nil {
 		return UploadTask{}, MediaAsset{}, Content{}, err
 	}
+	task.CompletedParts = task.MaxParts
+	task.CompletedBytes = task.ExpectedSize
 	content, err := getContent(ctx, tx, task.ContentID, false)
 	if err != nil {
 		return UploadTask{}, MediaAsset{}, Content{}, err

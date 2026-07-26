@@ -125,6 +125,22 @@ func (r *fakeUploadRepo) SaveUploadTask(_ context.Context, v UploadTask) (Upload
 	r.task = v
 	return v, nil
 }
+func (r *fakeUploadRepo) UpdateUploadProgress(_ context.Context, id, creatorID int64, completedParts int, completedBytes int64) (UploadTask, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.task.ID != id {
+		return UploadTask{}, ErrNotFound
+	}
+	if r.task.CreatorID != creatorID {
+		return UploadTask{}, ErrUploadOwnership
+	}
+	r.task.CompletedParts = completedParts
+	r.task.CompletedBytes = completedBytes
+	if r.task.Status == UploadInitiated {
+		r.task.Status = UploadUploading
+	}
+	return r.task, nil
+}
 func (r *fakeUploadRepo) ReserveUploadInitiation(_ context.Context, v UploadTask, expected *UploadTask) (UploadTask, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -433,6 +449,25 @@ func TestClassroomUploadRejectsNonDraftDuplicateAndOversize(t *testing.T) {
 				t.Fatal("expected rejection")
 			}
 		})
+	}
+}
+
+func TestClassroomUploadReportProgressPersistsOnlyMonotonicOwnedProgress(t *testing.T) {
+	now := time.Now()
+	repo := &fakeUploadRepo{task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 100, Checksum: "crc64:123", CompletedParts: 1, CompletedBytes: 25, PartSize: 25, MaxParts: 4, Status: UploadUploading, ExpiresAt: now.Add(time.Hour), AttemptCount: 1}}
+	svc := newUploadService(repo, &fakeMultipartStorage{}, now)
+	got, err := svc.ReportProgress(context.Background(), 1, 42, 2, 50)
+	if err != nil || got.CompletedParts != 2 || got.CompletedBytes != 50 {
+		t.Fatalf("progress=%+v err=%v", got, err)
+	}
+	if _, err := svc.ReportProgress(context.Background(), 1, 42, 1, 40); !errors.Is(err, ErrInvalidUploadProgress) {
+		t.Fatalf("regression err=%v", err)
+	}
+	if _, err := svc.ReportProgress(context.Background(), 1, 99, 3, 75); !errors.Is(err, ErrUploadOwnership) {
+		t.Fatalf("ownership err=%v", err)
+	}
+	if _, err := svc.ReportProgress(context.Background(), 1, 42, 5, 101); !errors.Is(err, ErrInvalidUploadProgress) {
+		t.Fatalf("overflow err=%v", err)
 	}
 }
 

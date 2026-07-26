@@ -150,6 +150,24 @@ func TestSchemaClassroomUploadSupportsInitiatingReservationState(t *testing.T) {
 	}
 }
 
+func TestSchemaClassroomUploadPersistsRetryIdentityAndProgress(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fragment := extractClassroomCreateTable(string(raw), "classroom_upload_tasks")
+	for _, column := range []string{"original_filename", "completed_parts", "completed_bytes"} {
+		if !strings.Contains(fragment, column) {
+			t.Errorf("missing upload task column %q", column)
+		}
+	}
+	for _, migration := range []string{"ADD COLUMN IF NOT EXISTS original_filename", "ADD COLUMN IF NOT EXISTS completed_parts", "ADD COLUMN IF NOT EXISTS completed_bytes"} {
+		if !strings.Contains(string(raw), migration) {
+			t.Errorf("missing upgrade migration %q", migration)
+		}
+	}
+}
+
 func TestSchemaMigratesExistingClassroomUploadStatusConstraint(t *testing.T) {
 	raw, err := os.ReadFile("schema.sql")
 	if err != nil {
