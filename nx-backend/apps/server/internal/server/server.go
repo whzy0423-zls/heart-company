@@ -112,6 +112,7 @@ type Server struct {
 	chatHeartbeatInterval time.Duration
 	classroomUploads      classroomUploadHandlerService
 	classroomAdmin        classroomAdminService
+	classroomAudit        classroomAuditRecorder
 	classroomMaintenance  classroomUploadMaintenance
 	maintenanceCancel     context.CancelFunc
 
@@ -236,6 +237,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.miniapp = miniapp.NewStore(database)
 	s.miniappAdmin = miniapp.NewAdminStore(database)
 	s.classroomAdmin = newClassroomAdminStore(database)
+	s.classroomAudit = s.auditLogs
 	miniappService := miniapp.NewService(
 		dbtx.SQLBeginner{DB: database},
 		s.miniapp,

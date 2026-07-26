@@ -80,12 +80,9 @@ export interface ClassroomContent {
 }
 
 export interface ClassroomSeriesPayload {
-  accessLevel: Exclude<ClassroomAccessLevel, 'inherit'>;
   coverAssetId?: number;
   coverUrl?: string;
   expectedUpdatedAt?: string;
-  playbackBlocked?: boolean;
-  priceCents: number;
   sortOrder?: number;
   summary?: string;
   teacherKey?: string;
@@ -94,7 +91,6 @@ export interface ClassroomSeriesPayload {
 }
 
 export interface ClassroomContentPayload {
-  accessLevel: ClassroomAccessLevel;
   badge?: string;
   contentType: ClassroomContentType;
   coverUrl?: string;
@@ -102,8 +98,6 @@ export interface ClassroomContentPayload {
   durationSeconds?: number;
   episodeNo?: number;
   expectedUpdatedAt?: string;
-  playbackBlocked?: boolean;
-  priceCents: number;
   recordedAt?: string;
   seriesId?: number;
   showAsStandalone?: boolean;
@@ -146,10 +140,36 @@ export interface ClassroomUploadInitiatePayload {
 }
 
 export interface ClassroomUploadInitiateResult {
-  credentialExpiresAt: string;
-  maxParts: number;
-  partSize: number;
   task: ClassroomUploadTask;
+}
+
+export interface ClassroomUploadCompleteResult {
+  content: {
+    durationSeconds: number;
+    id: number;
+    mediaAssetId?: number;
+    status: ClassroomContentStatus;
+  };
+  media: {
+    contentType: ClassroomContentType;
+    durationSeconds: number;
+    height: number;
+    id: number;
+    sizeBytes: number;
+    status: string;
+    width: number;
+  };
+  task: ClassroomUploadTask;
+}
+
+export interface ClassroomActionPayload {
+  expectedUpdatedAt: string;
+  reason?: string;
+}
+
+export interface ClassroomPricePayload extends ClassroomActionPayload {
+  accessLevel: ClassroomAccessLevel;
+  priceCents: number;
 }
 
 export interface ClassroomSignedPart {
@@ -233,30 +253,33 @@ export function updateClassroomSeriesApi(
   );
 }
 
-export function publishClassroomSeriesApi(id: number) {
+export function publishClassroomSeriesApi(
+  id: number,
+  data: ClassroomActionPayload,
+) {
   return classroomRequest(
     requestClient.post<ClassroomSeries>(
       `/admin/classroom/series/${id}/publish`,
-      {},
+      data,
     ),
   );
 }
 
-export function offlineClassroomSeriesApi(id: number) {
+export function offlineClassroomSeriesApi(
+  id: number,
+  data: ClassroomActionPayload,
+) {
   return classroomRequest(
     requestClient.post<ClassroomSeries>(
       `/admin/classroom/series/${id}/offline`,
-      {},
+      data,
     ),
   );
 }
 
 export function setClassroomSeriesPriceApi(
   id: number,
-  data: Pick<
-    ClassroomSeriesPayload,
-    'accessLevel' | 'expectedUpdatedAt' | 'priceCents'
-  >,
+  data: ClassroomPricePayload,
 ) {
   return classroomRequest(
     requestClient.post<ClassroomSeries>(
@@ -269,12 +292,13 @@ export function setClassroomSeriesPriceApi(
 export function setClassroomSeriesPlaybackBlockedApi(
   id: number,
   blocked: boolean,
-  expectedUpdatedAt?: string,
+  expectedUpdatedAt: string,
+  reason?: string,
 ) {
   return classroomRequest(
     requestClient.post<ClassroomSeries>(
       `/admin/classroom/series/${id}/playback-blocked`,
-      { blocked, expectedUpdatedAt },
+      { blocked, expectedUpdatedAt, reason },
     ),
   );
 }
@@ -319,30 +343,33 @@ export function updateClassroomContentApi(
   );
 }
 
-export function publishClassroomContentApi(id: number) {
+export function publishClassroomContentApi(
+  id: number,
+  data: ClassroomActionPayload,
+) {
   return classroomRequest(
     requestClient.post<ClassroomContent>(
       `/admin/classroom/contents/${id}/publish`,
-      {},
+      data,
     ),
   );
 }
 
-export function offlineClassroomContentApi(id: number) {
+export function offlineClassroomContentApi(
+  id: number,
+  data: ClassroomActionPayload,
+) {
   return classroomRequest(
     requestClient.post<ClassroomContent>(
       `/admin/classroom/contents/${id}/offline`,
-      {},
+      data,
     ),
   );
 }
 
 export function setClassroomContentPriceApi(
   id: number,
-  data: Pick<
-    ClassroomContentPayload,
-    'accessLevel' | 'expectedUpdatedAt' | 'priceCents'
-  >,
+  data: ClassroomPricePayload,
 ) {
   return classroomRequest(
     requestClient.post<ClassroomContent>(
@@ -355,12 +382,13 @@ export function setClassroomContentPriceApi(
 export function setClassroomContentPlaybackBlockedApi(
   id: number,
   blocked: boolean,
-  expectedUpdatedAt?: string,
+  expectedUpdatedAt: string,
+  reason?: string,
 ) {
   return classroomRequest(
     requestClient.post<ClassroomContent>(
       `/admin/classroom/contents/${id}/playback-blocked`,
-      { blocked, expectedUpdatedAt },
+      { blocked, expectedUpdatedAt, reason },
     ),
   );
 }
@@ -402,9 +430,35 @@ export function completeClassroomUploadApi(
   parts: ClassroomCompletedPart[],
 ) {
   return classroomRequest(
-    requestClient.post<{ task: ClassroomUploadTask }>(
+    requestClient.post<ClassroomUploadCompleteResult>(
       `/admin/classroom/uploads/${id}/complete`,
       { parts },
+    ),
+  );
+}
+
+export function deleteClassroomSeriesApi(
+  id: number,
+  expectedUpdatedAt: string,
+  reason?: string,
+) {
+  return classroomRequest(
+    requestClient.delete<{ deleted: boolean }>(
+      `/admin/classroom/series/${id}`,
+      { params: { expectedUpdatedAt, reason } },
+    ),
+  );
+}
+
+export function deleteClassroomContentApi(
+  id: number,
+  expectedUpdatedAt: string,
+  reason?: string,
+) {
+  return classroomRequest(
+    requestClient.delete<{ deleted: boolean }>(
+      `/admin/classroom/contents/${id}`,
+      { params: { expectedUpdatedAt, reason } },
     ),
   );
 }

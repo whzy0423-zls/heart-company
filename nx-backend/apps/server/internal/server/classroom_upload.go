@@ -85,7 +85,7 @@ func (s *Server) classroomUploadInit(w http.ResponseWriter, r *http.Request) {
 		writeClassroomUploadError(w, err)
 		return
 	}
-	httpx.OK(w, result)
+	httpx.OK(w, classroomUploadInitiateDTO{Task: toClassroomUploadTaskDTO(result.Task)})
 }
 func (s *Server) classroomUploadPart(w http.ResponseWriter, r *http.Request) {
 	if s.classroomUploads == nil {
@@ -102,7 +102,7 @@ func (s *Server) classroomUploadPart(w http.ResponseWriter, r *http.Request) {
 		writeClassroomUploadError(w, err)
 		return
 	}
-	httpx.OK(w, result)
+	httpx.OK(w, classroomSignedPartDTO{URL: result.URL, PartNumber: result.PartNumber, ExpiresAt: result.ExpiresAt})
 }
 func (s *Server) classroomUploadComplete(w http.ResponseWriter, r *http.Request) {
 	if s.classroomUploads == nil {
@@ -133,7 +133,11 @@ func (s *Server) classroomUploadComplete(w http.ResponseWriter, r *http.Request)
 		writeClassroomUploadError(w, err)
 		return
 	}
-	httpx.OK(w, result)
+	httpx.OK(w, classroomUploadCompleteDTO{
+		Task:    toClassroomUploadTaskDTO(result.Task),
+		Media:   classroomUploadMediaDTO{ID: result.Media.ID, ContentType: result.Media.ContentType, SizeBytes: result.Media.SizeBytes, DurationSeconds: result.Media.DurationSeconds, Width: result.Media.Width, Height: result.Media.Height, Status: result.Media.StorageStatus},
+		Content: classroomUploadContentDTO{ID: result.Content.ID, Status: result.Content.Status, MediaAssetID: result.Content.MediaAssetID, DurationSeconds: result.Content.DurationSeconds},
+	})
 }
 func (s *Server) classroomUploadAbort(w http.ResponseWriter, r *http.Request) {
 	if s.classroomUploads == nil {
@@ -150,7 +154,40 @@ func (s *Server) classroomUploadAbort(w http.ResponseWriter, r *http.Request) {
 		writeClassroomUploadError(w, err)
 		return
 	}
-	httpx.OK(w, result)
+	httpx.OK(w, toClassroomUploadTaskDTO(result))
+}
+
+type classroomUploadInitiateDTO struct {
+	Task classroomUploadTaskDTO `json:"task"`
+}
+type classroomSignedPartDTO struct {
+	URL        string    `json:"url"`
+	PartNumber int       `json:"partNumber"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+}
+type classroomUploadCompleteDTO struct {
+	Task    classroomUploadTaskDTO    `json:"task"`
+	Media   classroomUploadMediaDTO   `json:"media"`
+	Content classroomUploadContentDTO `json:"content"`
+}
+type classroomUploadMediaDTO struct {
+	ID              int64                 `json:"id"`
+	ContentType     classroom.ContentType `json:"contentType"`
+	SizeBytes       int64                 `json:"sizeBytes"`
+	DurationSeconds int                   `json:"durationSeconds"`
+	Width           int                   `json:"width"`
+	Height          int                   `json:"height"`
+	Status          classroom.MediaStatus `json:"status"`
+}
+type classroomUploadContentDTO struct {
+	ID              int64                   `json:"id"`
+	Status          classroom.ContentStatus `json:"status"`
+	MediaAssetID    *int64                  `json:"mediaAssetId,omitempty"`
+	DurationSeconds int                     `json:"durationSeconds"`
+}
+
+func toClassroomUploadTaskDTO(v classroom.UploadTask) classroomUploadTaskDTO {
+	return classroomUploadTaskDTO{v.ID, v.ContentID, v.ExpectedSize, v.PartSize, v.MaxParts, v.Status, v.ExpiresAt, v.AttemptCount, v.CleanupStatus, v.MediaAssetID, v.FailureReason, v.CreatedAt, v.UpdatedAt}
 }
 
 func parseClassroomUploadPartPath(path string) (int64, int, bool) {

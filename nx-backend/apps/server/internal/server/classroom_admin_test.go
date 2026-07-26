@@ -3,20 +3,23 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/auditlog"
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/classroom"
 )
 
 type fakeClassroomAdminService struct {
-	series  classroom.Series
-	content classroom.Content
-	calls   []string
+	series       classroom.Series
+	content      classroom.Content
+	calls        []string
+	getSeriesErr error
 }
 
 func (f *fakeClassroomAdminService) ListSeries(context.Context, classroom.SeriesFilter) ([]classroom.Series, int, error) {
@@ -25,7 +28,7 @@ func (f *fakeClassroomAdminService) ListSeries(context.Context, classroom.Series
 }
 func (f *fakeClassroomAdminService) GetSeries(context.Context, int64) (classroom.Series, error) {
 	f.calls = append(f.calls, "get-series")
-	return f.series, nil
+	return f.series, f.getSeriesErr
 }
 func (f *fakeClassroomAdminService) CreateSeries(context.Context, classroom.Series) (classroom.Series, error) {
 	f.calls = append(f.calls, "create-series")
@@ -50,6 +53,14 @@ func (f *fakeClassroomAdminService) CreateContent(context.Context, classroom.Con
 func (f *fakeClassroomAdminService) UpdateContent(_ context.Context, value classroom.Content, _ time.Time) (classroom.Content, error) {
 	f.calls = append(f.calls, "update-content")
 	return value, nil
+}
+func (f *fakeClassroomAdminService) DeleteSeries(context.Context, int64, time.Time) error {
+	f.calls = append(f.calls, "delete-series")
+	return nil
+}
+func (f *fakeClassroomAdminService) DeleteContent(context.Context, int64, time.Time) error {
+	f.calls = append(f.calls, "delete-content")
+	return nil
 }
 func (f *fakeClassroomAdminService) ListUploadTasks(context.Context, int, int) ([]classroom.UploadTask, int, error) {
 	f.calls = append(f.calls, "list-tasks")
@@ -126,14 +137,118 @@ func TestClassroomAdminPublishOfflineAndDraftCRUD(t *testing.T) {
 	mux := http.NewServeMux()
 	registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
 	publish := httptest.NewRecorder()
-	mux.ServeHTTP(publish, classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/series/4/publish", strings.NewReader(`{}`))))
+	mux.ServeHTTP(publish, classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/series/4/publish", strings.NewReader(`{"expectedUpdatedAt":"2026-07-26T10:00:00Z"}`))))
 	if publish.Code != http.StatusOK || !strings.Contains(publish.Body.String(), `"status":"published"`) {
 		t.Fatalf("publish status=%d body=%s", publish.Code, publish.Body.String())
 	}
 	offline := httptest.NewRecorder()
 	f.series.Status = classroom.SeriesPublished
-	mux.ServeHTTP(offline, classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/series/4/offline", strings.NewReader(`{}`))))
+	mux.ServeHTTP(offline, classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/series/4/offline", strings.NewReader(`{"expectedUpdatedAt":"2026-07-26T10:00:00Z"}`))))
 	if offline.Code != http.StatusOK || !strings.Contains(offline.Body.String(), `"status":"offline"`) {
 		t.Fatalf("offline status=%d body=%s", offline.Code, offline.Body.String())
+	}
+}
+
+type failingClassroomAudit struct{ calls int }
+
+func (f *failingClassroomAudit) Record(context.Context, auditlog.Entry) error {
+	f.calls++
+	return errors.New("audit unavailable")
+}
+
+func TestClassroomWriteRejectsSensitiveFieldsAndPublishedEdits(t *testing.T) {
+	f := &fakeClassroomAdminService{series: classroom.Series{ID: 8, Title: "published", Status: classroom.SeriesPublished, AccessLevel: classroom.AccessPublic, UpdatedAt: time.Now()}}
+	s := &Server{classroomAdmin: f}
+	mux := http.NewServeMux()
+	registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
+	create := httptest.NewRecorder()
+	mux.ServeHTTP(create, classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/series", strings.NewReader(`{"title":"S","accessLevel":"paid","priceCents":100}`))))
+	if create.Code != http.StatusBadRequest {
+		t.Fatalf("sensitive create status=%d body=%s", create.Code, create.Body.String())
+	}
+	update := httptest.NewRecorder()
+	mux.ServeHTTP(update, classroomUser(httptest.NewRequest(http.MethodPut, "/api/admin/classroom/series/8", strings.NewReader(`{"title":"changed","expectedUpdatedAt":"2026-07-26T10:00:00Z"}`))))
+	if update.Code != http.StatusConflict {
+		t.Fatalf("published update status=%d body=%s", update.Code, update.Body.String())
+	}
+}
+
+func TestClassroomActionsRequireExpectedUpdatedAt(t *testing.T) {
+	f := &fakeClassroomAdminService{series: classroom.Series{ID: 4, Title: "S", Status: classroom.SeriesDraft, AccessLevel: classroom.AccessPublic, UpdatedAt: time.Now()}}
+	s := &Server{classroomAdmin: f}
+	mux := http.NewServeMux()
+	registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/series/4/publish", strings.NewReader(`{}`))))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestClassroomDeleteDraftRoutes(t *testing.T) {
+	f := &fakeClassroomAdminService{series: classroom.Series{ID: 2, Title: "draft", Status: classroom.SeriesDraft, AccessLevel: classroom.AccessPublic, UpdatedAt: time.Now()}}
+	s := &Server{classroomAdmin: f}
+	mux := http.NewServeMux()
+	registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodDelete, "/api/admin/classroom/series/2?expectedUpdatedAt=2026-07-26T10:00:00Z", nil)))
+	if rr.Code != http.StatusOK || !containsString(f.calls, "delete-series") {
+		t.Fatalf("status=%d calls=%v body=%s", rr.Code, f.calls, rr.Body.String())
+	}
+}
+
+func TestClassroomAuditFailureIsReturned(t *testing.T) {
+	f := &fakeClassroomAdminService{series: classroom.Series{ID: 2, Title: "draft", Status: classroom.SeriesDraft, AccessLevel: classroom.AccessPublic, UpdatedAt: time.Now()}}
+	audit := &failingClassroomAudit{}
+	s := &Server{classroomAdmin: f, classroomAudit: audit}
+	mux := http.NewServeMux()
+	registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodDelete, "/api/admin/classroom/series/2?expectedUpdatedAt=2026-07-26T10:00:00Z", nil)))
+	if rr.Code != http.StatusInternalServerError || audit.calls != 1 {
+		t.Fatalf("status=%d audit=%d body=%s", rr.Code, audit.calls, rr.Body.String())
+	}
+}
+
+type capturingClassroomAudit struct{ entry auditlog.Entry }
+
+func (c *capturingClassroomAudit) Record(_ context.Context, entry auditlog.Entry) error {
+	c.entry = entry
+	return nil
+}
+
+func TestClassroomAuditCapturesActorActionObjectAndReason(t *testing.T) {
+	f := &fakeClassroomAdminService{series: classroom.Series{ID: 9, Title: "draft", Status: classroom.SeriesDraft, AccessLevel: classroom.AccessPublic, UpdatedAt: time.Now()}}
+	audit := &capturingClassroomAudit{}
+	s := &Server{classroomAdmin: f, classroomAudit: audit}
+	mux := http.NewServeMux()
+	registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/series/9/price", strings.NewReader(`{"expectedUpdatedAt":"2026-07-26T10:00:00Z","accessLevel":"public","priceCents":0,"reason":"活动结束"}`))))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if audit.entry.OperatorID != 42 || audit.entry.OperatorName != "老师" || audit.entry.Action != "price" || audit.entry.TargetType != "classroom_series" || audit.entry.TargetID != "9" || !strings.Contains(audit.entry.Summary, "活动结束") {
+		t.Fatalf("incomplete audit: %+v", audit.entry)
+	}
+}
+
+func TestClassroomEffectiveAccessParentFailureAndPurchaseTarget(t *testing.T) {
+	seriesID := int64(3)
+	f := &fakeClassroomAdminService{content: classroom.Content{ID: 7, SeriesID: &seriesID, Title: "lesson", ContentType: classroom.ContentVideo, Status: classroom.ContentDraft, AccessLevel: classroom.AccessInherit}, getSeriesErr: errors.New("parent unavailable")}
+	s := &Server{classroomAdmin: f}
+	mux := http.NewServeMux()
+	registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodGet, "/api/admin/classroom/contents", nil)))
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	f.getSeriesErr = nil
+	f.series = classroom.Series{ID: seriesID, AccessLevel: classroom.AccessPublic}
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodGet, "/api/admin/classroom/contents", nil)))
+	if strings.Contains(rr.Body.String(), `"purchaseTarget"`) {
+		t.Fatalf("public content must not set purchase target: %s", rr.Body.String())
 	}
 }

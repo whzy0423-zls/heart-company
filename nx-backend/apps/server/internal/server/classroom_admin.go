@@ -18,15 +18,21 @@ import (
 
 const maxClassroomPriceCents = 99_999_900
 
+type classroomAuditRecorder interface {
+	Record(context.Context, auditlog.Entry) error
+}
+
 type classroomAdminService interface {
 	ListSeries(context.Context, classroom.SeriesFilter) ([]classroom.Series, int, error)
 	GetSeries(context.Context, int64) (classroom.Series, error)
 	CreateSeries(context.Context, classroom.Series) (classroom.Series, error)
 	UpdateSeries(context.Context, classroom.Series, time.Time) (classroom.Series, error)
+	DeleteSeries(context.Context, int64, time.Time) error
 	ListContents(context.Context, classroom.ContentFilter) ([]classroom.Content, int, error)
 	GetContent(context.Context, int64) (classroom.Content, error)
 	CreateContent(context.Context, classroom.Content) (classroom.Content, error)
 	UpdateContent(context.Context, classroom.Content, time.Time) (classroom.Content, error)
+	DeleteContent(context.Context, int64, time.Time) error
 	ListUploadTasks(context.Context, int, int) ([]classroom.UploadTask, int, error)
 }
 
@@ -50,6 +56,41 @@ func (a *classroomAdminStore) CreateSeries(ctx context.Context, v classroom.Seri
 func (a *classroomAdminStore) UpdateSeries(ctx context.Context, v classroom.Series, at time.Time) (classroom.Series, error) {
 	return a.store.UpdateSeries(ctx, v, at)
 }
+func (a *classroomAdminStore) DeleteSeries(ctx context.Context, id int64, expected time.Time) error {
+	if expected.IsZero() {
+		return classroom.ErrConflict
+	}
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var status classroom.SeriesStatus
+	var updated time.Time
+	if err = tx.QueryRowContext(ctx, "SELECT status,updated_at FROM classroom_series WHERE id=$1 FOR UPDATE", id).Scan(&status, &updated); errors.Is(err, sql.ErrNoRows) {
+		return classroom.ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	if !updated.Equal(expected) {
+		return classroom.ErrConflict
+	}
+	if status != classroom.SeriesDraft {
+		return errors.New("only draft series can be deleted")
+	}
+	var dependencies int
+	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM classroom_contents WHERE series_id=$1", id).Scan(&dependencies); err != nil {
+		return err
+	}
+	if dependencies > 0 {
+		return errors.New("series has dependent contents")
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM classroom_series WHERE id=$1", id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (a *classroomAdminStore) GetContent(ctx context.Context, id int64) (classroom.Content, error) {
 	return a.store.GetContent(ctx, id)
 }
@@ -59,6 +100,45 @@ func (a *classroomAdminStore) CreateContent(ctx context.Context, v classroom.Con
 func (a *classroomAdminStore) UpdateContent(ctx context.Context, v classroom.Content, at time.Time) (classroom.Content, error) {
 	return a.store.UpdateContent(ctx, v, at)
 }
+func (a *classroomAdminStore) DeleteContent(ctx context.Context, id int64, expected time.Time) error {
+	if expected.IsZero() {
+		return classroom.ErrConflict
+	}
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var status classroom.ContentStatus
+	var updated time.Time
+	var mediaID *int64
+	if err = tx.QueryRowContext(ctx, "SELECT status,updated_at,media_asset_id FROM classroom_contents WHERE id=$1 FOR UPDATE", id).Scan(&status, &updated, &mediaID); errors.Is(err, sql.ErrNoRows) {
+		return classroom.ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	if !updated.Equal(expected) {
+		return classroom.ErrConflict
+	}
+	if status != classroom.ContentDraft {
+		return errors.New("only draft content can be deleted")
+	}
+	if mediaID != nil {
+		return errors.New("content has media dependency")
+	}
+	var uploads int
+	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM classroom_upload_tasks WHERE content_id=$1", id).Scan(&uploads); err != nil {
+		return err
+	}
+	if uploads > 0 {
+		return errors.New("content has upload dependencies")
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM classroom_contents WHERE id=$1", id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (a *classroomAdminStore) ListSeries(ctx context.Context, f classroom.SeriesFilter) ([]classroom.Series, int, error) {
 	items, err := a.store.ListSeries(ctx, f)
 	if err != nil {
@@ -317,20 +397,19 @@ func (s *Server) classroomContentList(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]classroomContentDTO, 0, len(items))
 	for _, v := range items {
-		out = append(out, s.toContentDTO(r.Context(), v))
+		dto, err := s.toContentDTO(r.Context(), v)
+		if err != nil {
+			writeClassroomAdminError(w, err)
+			return
+		}
+		out = append(out, dto)
 	}
 	httpx.OK(w, classroomPage[classroomContentDTO]{out, total, page, size})
 }
 
 func (s *Server) classroomSeriesCreate(w http.ResponseWriter, r *http.Request) {
-	var in seriesInput
+	var in seriesWriteInput
 	if !decodeClassroomJSON(w, r, &in) {
-		return
-	}
-	if in.AccessLevel == "" {
-		in.AccessLevel = classroom.AccessPublic
-	}
-	if !validClassroomPrice(w, in.AccessLevel, in.PriceCents) {
 		return
 	}
 	user := userFromRequest(r)
@@ -342,18 +421,15 @@ func (s *Server) classroomSeriesCreate(w http.ResponseWriter, r *http.Request) {
 		writeClassroomAdminError(w, err)
 		return
 	}
-	s.recordClassroomAudit(r, "create", "classroom_series", created.ID, nil, created, "创建课程系列")
+	if err := s.recordClassroomAudit(r, "create", "classroom_series", created.ID, nil, created, "创建课程系列"); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "record classroom audit failed")
+		return
+	}
 	httpx.OK(w, toSeriesDTO(created))
 }
 func (s *Server) classroomContentCreate(w http.ResponseWriter, r *http.Request) {
-	var in contentInput
+	var in contentWriteInput
 	if !decodeClassroomJSON(w, r, &in) {
-		return
-	}
-	if in.AccessLevel == "" {
-		in.AccessLevel = classroom.AccessPublic
-	}
-	if !validClassroomPriceForContent(w, in.SeriesID, in.AccessLevel, in.PriceCents) {
 		return
 	}
 	user := userFromRequest(r)
@@ -365,8 +441,16 @@ func (s *Server) classroomContentCreate(w http.ResponseWriter, r *http.Request) 
 		writeClassroomAdminError(w, err)
 		return
 	}
-	s.recordClassroomAudit(r, "create", "classroom_content", created.ID, nil, created, "创建课件草稿")
-	httpx.OK(w, s.toContentDTO(r.Context(), created))
+	if err := s.recordClassroomAudit(r, "create", "classroom_content", created.ID, nil, created, "创建课件草稿"); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "record classroom audit failed")
+		return
+	}
+	dto, err := s.toContentDTO(r.Context(), created)
+	if err != nil {
+		writeClassroomAdminError(w, err)
+		return
+	}
+	httpx.OK(w, dto)
 }
 
 func (s *Server) classroomSeriesItem(w http.ResponseWriter, r *http.Request) {
@@ -388,24 +472,41 @@ func (s *Server) classroomSeriesItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if action == "" && r.Method == http.MethodPut {
-		var in seriesInput
-		if !decodeClassroomJSON(w, r, &in) {
+		if current.Status != classroom.SeriesDraft {
+			httpx.Fail(w, http.StatusConflict, "only draft series can be edited")
 			return
 		}
-		if in.AccessLevel == "" {
-			in.AccessLevel = current.AccessLevel
-			in.PriceCents = current.PriceCents
-		}
-		if !validClassroomPrice(w, in.AccessLevel, in.PriceCents) {
+		var in seriesWriteInput
+		if !decodeClassroomJSON(w, r, &in) {
 			return
 		}
 		next := in.series()
 		next.ID = id
 		next.Status = current.Status
+		next.AccessLevel = current.AccessLevel
+		next.PriceCents = current.PriceCents
+		next.PlaybackBlocked = current.PlaybackBlocked
 		next.PublishedAt = current.PublishedAt
 		next.CreatedBy = current.CreatedBy
 		next.CreatedAt = current.CreatedAt
 		s.updateSeries(w, r, current, next, in.ExpectedUpdatedAt, "update", "更新课程系列")
+		return
+	}
+	if action == "" && r.Method == http.MethodDelete {
+		expected, ok := expectedUpdatedAtFromQuery(r)
+		if !ok {
+			httpx.Fail(w, http.StatusBadRequest, "expectedUpdatedAt is required")
+			return
+		}
+		if err := s.classroomAdmin.DeleteSeries(r.Context(), id, expected); err != nil {
+			writeClassroomAdminError(w, err)
+			return
+		}
+		if err := s.recordClassroomAudit(r, "delete", "classroom_series", id, current, nil, classroomAuditSummary("删除课程系列", r.URL.Query().Get("reason"))); err != nil {
+			httpx.Fail(w, 500, "record classroom audit failed")
+			return
+		}
+		httpx.OK(w, map[string]any{"deleted": true})
 		return
 	}
 	s.mutateSeries(w, r, current, action)
@@ -417,33 +518,41 @@ func (s *Server) mutateSeries(w http.ResponseWriter, r *http.Request, current cl
 	}
 	next := current
 	var expected time.Time
+	var actionBody classroomActionInput
+	if !decodeClassroomJSON(w, r, &actionBody) {
+		return
+	}
+	if actionBody.ExpectedUpdatedAt.IsZero() {
+		httpx.Fail(w, http.StatusBadRequest, "expectedUpdatedAt is required")
+		return
+	}
+	expected = actionBody.ExpectedUpdatedAt
 	var reason string
 	switch action {
 	case "publish":
 		next.Status = classroom.SeriesPublished
 		now := time.Now()
 		next.PublishedAt = &now
-		reason = "发布课程系列"
+		reason = classroomAuditSummary("发布课程系列", actionBody.Reason)
 	case "offline":
 		next.Status = classroom.SeriesOffline
-		reason = "下线课程系列"
+		reason = classroomAuditSummary("下线课程系列", actionBody.Reason)
 	case "price":
+		if current.Status != classroom.SeriesDraft {
+			httpx.Fail(w, http.StatusConflict, "price can only change on draft series")
+			return
+		}
 		var in priceInput
-		if !decodeClassroomJSON(w, r, &in) || !validClassroomPrice(w, in.AccessLevel, in.PriceCents) {
+		in = priceInput{AccessLevel: actionBody.AccessLevel, PriceCents: actionBody.PriceCents, ExpectedUpdatedAt: expected}
+		if !validClassroomPrice(w, in.AccessLevel, in.PriceCents) {
 			return
 		}
 		next.AccessLevel = in.AccessLevel
 		next.PriceCents = in.PriceCents
-		expected = in.ExpectedUpdatedAt
-		reason = "调整课程系列价格"
+		reason = classroomAuditSummary("调整课程系列价格", actionBody.Reason)
 	case "playback-blocked":
-		var in blockInput
-		if !decodeClassroomJSON(w, r, &in) {
-			return
-		}
-		next.PlaybackBlocked = in.Blocked
-		expected = in.ExpectedUpdatedAt
-		reason = "调整课程系列停播状态"
+		next.PlaybackBlocked = actionBody.Blocked
+		reason = classroomAuditSummary("调整课程系列停播状态", actionBody.Reason)
 	default:
 		httpx.Fail(w, 404, "Not Found")
 		return
@@ -452,7 +561,8 @@ func (s *Server) mutateSeries(w http.ResponseWriter, r *http.Request, current cl
 }
 func (s *Server) updateSeries(w http.ResponseWriter, r *http.Request, before, next classroom.Series, expected time.Time, action, summary string) {
 	if expected.IsZero() {
-		expected = before.UpdatedAt
+		httpx.Fail(w, http.StatusBadRequest, "expectedUpdatedAt is required")
+		return
 	}
 	uid := userFromRequest(r).ID
 	next.UpdatedBy = &uid
@@ -461,7 +571,10 @@ func (s *Server) updateSeries(w http.ResponseWriter, r *http.Request, before, ne
 		writeClassroomAdminError(w, err)
 		return
 	}
-	s.recordClassroomAudit(r, action, "classroom_series", updated.ID, before, updated, summary)
+	if err := s.recordClassroomAudit(r, action, "classroom_series", updated.ID, before, updated, summary); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "record classroom audit failed")
+		return
+	}
 	httpx.OK(w, toSeriesDTO(updated))
 }
 
@@ -480,29 +593,51 @@ func (s *Server) classroomContentItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if action == "" && r.Method == http.MethodGet {
-		httpx.OK(w, s.toContentDTO(r.Context(), current))
+		dto, err := s.toContentDTO(r.Context(), current)
+		if err != nil {
+			writeClassroomAdminError(w, err)
+			return
+		}
+		httpx.OK(w, dto)
 		return
 	}
 	if action == "" && r.Method == http.MethodPut {
-		var in contentInput
-		if !decodeClassroomJSON(w, r, &in) {
+		if current.Status != classroom.ContentDraft {
+			httpx.Fail(w, http.StatusConflict, "only draft content can be edited")
 			return
 		}
-		if in.AccessLevel == "" {
-			in.AccessLevel = current.AccessLevel
-			in.PriceCents = current.PriceCents
-		}
-		if !validClassroomPriceForContent(w, in.SeriesID, in.AccessLevel, in.PriceCents) {
+		var in contentWriteInput
+		if !decodeClassroomJSON(w, r, &in) {
 			return
 		}
 		next := in.content()
 		next.ID = id
 		next.Status = current.Status
 		next.MediaAssetID = current.MediaAssetID
+		next.AccessLevel = current.AccessLevel
+		next.PriceCents = current.PriceCents
+		next.PlaybackBlocked = current.PlaybackBlocked
 		next.PublishedAt = current.PublishedAt
 		next.CreatedBy = current.CreatedBy
 		next.CreatedAt = current.CreatedAt
 		s.updateContent(w, r, current, next, in.ExpectedUpdatedAt, "update", "更新课件草稿")
+		return
+	}
+	if action == "" && r.Method == http.MethodDelete {
+		expected, ok := expectedUpdatedAtFromQuery(r)
+		if !ok {
+			httpx.Fail(w, http.StatusBadRequest, "expectedUpdatedAt is required")
+			return
+		}
+		if err := s.classroomAdmin.DeleteContent(r.Context(), id, expected); err != nil {
+			writeClassroomAdminError(w, err)
+			return
+		}
+		if err := s.recordClassroomAudit(r, "delete", "classroom_content", id, current, nil, classroomAuditSummary("删除课件草稿", r.URL.Query().Get("reason"))); err != nil {
+			httpx.Fail(w, 500, "record classroom audit failed")
+			return
+		}
+		httpx.OK(w, map[string]any{"deleted": true})
 		return
 	}
 	s.mutateContent(w, r, current, action)
@@ -514,33 +649,41 @@ func (s *Server) mutateContent(w http.ResponseWriter, r *http.Request, current c
 	}
 	next := current
 	var expected time.Time
+	var actionBody classroomActionInput
+	if !decodeClassroomJSON(w, r, &actionBody) {
+		return
+	}
+	if actionBody.ExpectedUpdatedAt.IsZero() {
+		httpx.Fail(w, http.StatusBadRequest, "expectedUpdatedAt is required")
+		return
+	}
+	expected = actionBody.ExpectedUpdatedAt
 	var reason string
 	switch action {
 	case "publish":
 		next.Status = classroom.ContentPublished
 		now := time.Now()
 		next.PublishedAt = &now
-		reason = "发布课件"
+		reason = classroomAuditSummary("发布课件", actionBody.Reason)
 	case "offline":
 		next.Status = classroom.ContentOffline
-		reason = "下线课件"
+		reason = classroomAuditSummary("下线课件", actionBody.Reason)
 	case "price":
+		if current.Status != classroom.ContentDraft {
+			httpx.Fail(w, http.StatusConflict, "price can only change on draft content")
+			return
+		}
 		var in priceInput
-		if !decodeClassroomJSON(w, r, &in) || !validClassroomPriceForContent(w, current.SeriesID, in.AccessLevel, in.PriceCents) {
+		in = priceInput{AccessLevel: actionBody.AccessLevel, PriceCents: actionBody.PriceCents, ExpectedUpdatedAt: expected}
+		if !validClassroomPriceForContent(w, current.SeriesID, in.AccessLevel, in.PriceCents) {
 			return
 		}
 		next.AccessLevel = in.AccessLevel
 		next.PriceCents = in.PriceCents
-		expected = in.ExpectedUpdatedAt
-		reason = "调整课件价格"
+		reason = classroomAuditSummary("调整课件价格", actionBody.Reason)
 	case "playback-blocked":
-		var in blockInput
-		if !decodeClassroomJSON(w, r, &in) {
-			return
-		}
-		next.PlaybackBlocked = in.Blocked
-		expected = in.ExpectedUpdatedAt
-		reason = "调整课件停播状态"
+		next.PlaybackBlocked = actionBody.Blocked
+		reason = classroomAuditSummary("调整课件停播状态", actionBody.Reason)
 	default:
 		httpx.Fail(w, 404, "Not Found")
 		return
@@ -549,7 +692,8 @@ func (s *Server) mutateContent(w http.ResponseWriter, r *http.Request, current c
 }
 func (s *Server) updateContent(w http.ResponseWriter, r *http.Request, before, next classroom.Content, expected time.Time, action, summary string) {
 	if expected.IsZero() {
-		expected = before.UpdatedAt
+		httpx.Fail(w, http.StatusBadRequest, "expectedUpdatedAt is required")
+		return
 	}
 	uid := userFromRequest(r).ID
 	next.UpdatedBy = &uid
@@ -558,8 +702,16 @@ func (s *Server) updateContent(w http.ResponseWriter, r *http.Request, before, n
 		writeClassroomAdminError(w, err)
 		return
 	}
-	s.recordClassroomAudit(r, action, "classroom_content", updated.ID, before, updated, summary)
-	httpx.OK(w, s.toContentDTO(r.Context(), updated))
+	if err := s.recordClassroomAudit(r, action, "classroom_content", updated.ID, before, updated, summary); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "record classroom audit failed")
+		return
+	}
+	dto, err := s.toContentDTO(r.Context(), updated)
+	if err != nil {
+		writeClassroomAdminError(w, err)
+		return
+	}
+	httpx.OK(w, dto)
 }
 
 func (s *Server) classroomUploadTasks(w http.ResponseWriter, r *http.Request) {
@@ -587,29 +739,22 @@ func (s *Server) classroomUploadTasks(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, classroomPage[classroomUploadTaskDTO]{out, total, page, size})
 }
 
-type seriesInput struct {
-	Title             string                `json:"title"`
-	Summary           string                `json:"summary"`
-	CoverURL          string                `json:"coverUrl"`
-	CoverAssetID      *int64                `json:"coverAssetId"`
-	TeacherKey        string                `json:"teacherKey"`
-	TeacherName       string                `json:"teacherName"`
-	SortOrder         int                   `json:"sortOrder"`
-	PlaybackBlocked   bool                  `json:"playbackBlocked"`
-	AccessLevel       classroom.AccessLevel `json:"accessLevel"`
-	PriceCents        int                   `json:"priceCents"`
-	ExpectedUpdatedAt time.Time             `json:"expectedUpdatedAt"`
+type seriesWriteInput struct {
+	Title             string    `json:"title"`
+	Summary           string    `json:"summary"`
+	CoverURL          string    `json:"coverUrl"`
+	CoverAssetID      *int64    `json:"coverAssetId"`
+	TeacherKey        string    `json:"teacherKey"`
+	TeacherName       string    `json:"teacherName"`
+	SortOrder         int       `json:"sortOrder"`
+	ExpectedUpdatedAt time.Time `json:"expectedUpdatedAt"`
 }
 
-func (i seriesInput) series() classroom.Series {
-	access := i.AccessLevel
-	if access == "" {
-		access = classroom.AccessPublic
-	}
-	return classroom.Series{Title: strings.TrimSpace(i.Title), Summary: i.Summary, CoverURL: i.CoverURL, CoverAssetID: i.CoverAssetID, TeacherKey: i.TeacherKey, TeacherNameSnapshot: i.TeacherName, SortOrder: i.SortOrder, Status: classroom.SeriesDraft, PlaybackBlocked: i.PlaybackBlocked, AccessLevel: i.AccessLevel, PriceCents: i.PriceCents}
+func (i seriesWriteInput) series() classroom.Series {
+	return classroom.Series{Title: strings.TrimSpace(i.Title), Summary: i.Summary, CoverURL: i.CoverURL, CoverAssetID: i.CoverAssetID, TeacherKey: i.TeacherKey, TeacherNameSnapshot: i.TeacherName, SortOrder: i.SortOrder, Status: classroom.SeriesDraft, AccessLevel: classroom.AccessPublic}
 }
 
-type contentInput struct {
+type contentWriteInput struct {
 	SeriesID          *int64                `json:"seriesId"`
 	ShowAsStandalone  bool                  `json:"showAsStandalone"`
 	Title             string                `json:"title"`
@@ -624,18 +769,11 @@ type contentInput struct {
 	Tags              []string              `json:"tags"`
 	EpisodeNo         int                   `json:"episodeNo"`
 	SortOrder         int                   `json:"sortOrder"`
-	PlaybackBlocked   bool                  `json:"playbackBlocked"`
-	AccessLevel       classroom.AccessLevel `json:"accessLevel"`
-	PriceCents        int                   `json:"priceCents"`
 	ExpectedUpdatedAt time.Time             `json:"expectedUpdatedAt"`
 }
 
-func (i contentInput) content() classroom.Content {
-	access := i.AccessLevel
-	if access == "" {
-		access = classroom.AccessPublic
-	}
-	return classroom.Content{SeriesID: i.SeriesID, ShowAsStandalone: i.ShowAsStandalone, Title: strings.TrimSpace(i.Title), Description: i.Description, ContentType: i.ContentType, CoverURL: i.CoverURL, DurationSeconds: i.DurationSeconds, TeacherKey: i.TeacherKey, TeacherNameSnapshot: i.TeacherName, RecordedAt: i.RecordedAt, Badge: i.Badge, Tags: i.Tags, EpisodeNo: i.EpisodeNo, SortOrder: i.SortOrder, Status: classroom.ContentDraft, PlaybackBlocked: i.PlaybackBlocked, AccessLevel: i.AccessLevel, PriceCents: i.PriceCents}
+func (i contentWriteInput) content() classroom.Content {
+	return classroom.Content{SeriesID: i.SeriesID, ShowAsStandalone: i.ShowAsStandalone, Title: strings.TrimSpace(i.Title), Description: i.Description, ContentType: i.ContentType, CoverURL: i.CoverURL, DurationSeconds: i.DurationSeconds, TeacherKey: i.TeacherKey, TeacherNameSnapshot: i.TeacherName, RecordedAt: i.RecordedAt, Badge: i.Badge, Tags: i.Tags, EpisodeNo: i.EpisodeNo, SortOrder: i.SortOrder, Status: classroom.ContentDraft, AccessLevel: classroom.AccessPublic}
 }
 
 type priceInput struct {
@@ -646,6 +784,13 @@ type priceInput struct {
 type blockInput struct {
 	Blocked           bool      `json:"blocked"`
 	ExpectedUpdatedAt time.Time `json:"expectedUpdatedAt"`
+}
+type classroomActionInput struct {
+	ExpectedUpdatedAt time.Time             `json:"expectedUpdatedAt"`
+	Reason            string                `json:"reason"`
+	AccessLevel       classroom.AccessLevel `json:"accessLevel"`
+	PriceCents        int                   `json:"priceCents"`
+	Blocked           bool                  `json:"blocked"`
 }
 
 func validClassroomPrice(w http.ResponseWriter, access classroom.AccessLevel, price int) bool {
@@ -700,19 +845,42 @@ func parseClassroomItemPath(path, kind string) (int64, string, bool) {
 	}
 	return id, action, true
 }
+func expectedUpdatedAtFromQuery(r *http.Request) (time.Time, bool) {
+	raw := strings.TrimSpace(r.URL.Query().Get("expectedUpdatedAt"))
+	if raw == "" {
+		return time.Time{}, false
+	}
+	v, err := time.Parse(time.RFC3339Nano, raw)
+	return v, err == nil && !v.IsZero()
+}
+func classroomAuditSummary(action, reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return action
+	}
+	return action + "：" + reason
+}
 func toSeriesDTO(v classroom.Series) classroomSeriesDTO {
 	return classroomSeriesDTO{v.ID, v.Title, v.Summary, v.CoverURL, v.TeacherKey, v.TeacherNameSnapshot, v.SortOrder, v.Status, v.PlaybackBlocked, v.AccessLevel, v.PriceCents, v.PublishedAt, v.CreatedAt, v.UpdatedAt}
 }
-func (s *Server) toContentDTO(ctx context.Context, v classroom.Content) classroomContentDTO {
-	effective, price, target := v.AccessLevel, v.PriceCents, "content"
+func (s *Server) toContentDTO(ctx context.Context, v classroom.Content) (classroomContentDTO, error) {
+	effective, price, target := v.AccessLevel, v.PriceCents, ""
 	if v.AccessLevel == classroom.AccessInherit && v.SeriesID != nil {
-		if parent, err := s.classroomAdmin.GetSeries(ctx, *v.SeriesID); err == nil {
-			effective = parent.AccessLevel
-			price = parent.PriceCents
+		parent, err := s.classroomAdmin.GetSeries(ctx, *v.SeriesID)
+		if err != nil {
+			return classroomContentDTO{}, err
+		}
+		effective = parent.AccessLevel
+		price = parent.PriceCents
+	}
+	if effective == classroom.AccessPaid {
+		if v.AccessLevel == classroom.AccessInherit {
 			target = "series"
+		} else {
+			target = "content"
 		}
 	}
-	return classroomContentDTO{v.ID, v.SeriesID, v.ShowAsStandalone, v.Title, v.Description, v.ContentType, v.MediaAssetID, v.CoverURL, v.DurationSeconds, v.TeacherKey, v.TeacherNameSnapshot, v.RecordedAt, v.Badge, v.Tags, v.EpisodeNo, v.SortOrder, v.Status, v.PlaybackBlocked, v.AccessLevel, effective, v.PriceCents, price, target, v.PublishedAt, v.CreatedAt, v.UpdatedAt}
+	return classroomContentDTO{v.ID, v.SeriesID, v.ShowAsStandalone, v.Title, v.Description, v.ContentType, v.MediaAssetID, v.CoverURL, v.DurationSeconds, v.TeacherKey, v.TeacherNameSnapshot, v.RecordedAt, v.Badge, v.Tags, v.EpisodeNo, v.SortOrder, v.Status, v.PlaybackBlocked, v.AccessLevel, effective, v.PriceCents, price, target, v.PublishedAt, v.CreatedAt, v.UpdatedAt}, nil
 }
 func writeClassroomAdminError(w http.ResponseWriter, err error) {
 	switch {
@@ -720,6 +888,8 @@ func writeClassroomAdminError(w http.ResponseWriter, err error) {
 		httpx.Fail(w, 404, "classroom record not found")
 	case errors.Is(err, classroom.ErrConflict):
 		httpx.Fail(w, 409, "classroom record was modified")
+	case strings.Contains(err.Error(), "only draft"), strings.Contains(err.Error(), "dependent"), strings.Contains(err.Error(), "dependencies"):
+		httpx.Fail(w, http.StatusConflict, err.Error())
 	default:
 		var status = 500
 		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "must") || strings.Contains(err.Error(), "price") {
@@ -728,10 +898,13 @@ func writeClassroomAdminError(w http.ResponseWriter, err error) {
 		httpx.Fail(w, status, err.Error())
 	}
 }
-func (s *Server) recordClassroomAudit(r *http.Request, action, target string, id int64, before, after any, summary string) {
-	if s.auditLogs == nil {
-		return
+func (s *Server) recordClassroomAudit(r *http.Request, action, target string, id int64, before, after any, summary string) error {
+	if s.classroomAudit == nil {
+		if s.auditLogs == nil {
+			return nil
+		}
+		s.classroomAudit = s.auditLogs
 	}
 	u := userFromRequest(r)
-	_ = s.auditLogs.Record(r.Context(), auditlog.Entry{OperatorID: u.ID, OperatorName: firstNonEmpty(strings.TrimSpace(u.RealName), strings.TrimSpace(u.Username), strconv.FormatInt(u.ID, 10)), Action: action, TargetType: target, TargetID: strconv.FormatInt(id, 10), IP: r.RemoteAddr, UserAgent: r.UserAgent(), Before: before, After: after, Summary: summary})
+	return s.classroomAudit.Record(r.Context(), auditlog.Entry{OperatorID: u.ID, OperatorName: firstNonEmpty(strings.TrimSpace(u.RealName), strings.TrimSpace(u.Username), strconv.FormatInt(u.ID, 10)), Action: action, TargetType: target, TargetID: strconv.FormatInt(id, 10), IP: r.RemoteAddr, UserAgent: r.UserAgent(), Before: before, After: after, Summary: summary})
 }

@@ -151,3 +151,31 @@ func TestServerShutdownCancelsClassroomMaintenanceContext(t *testing.T) {
 		t.Fatal("maintenance context was not canceled")
 	}
 }
+
+func TestClassroomUploadResponsesUseSafeCamelCaseDTOs(t *testing.T) {
+	f := &fakeClassroomUploadHandlerService{
+		initiated: classroom.InitiateUploadResult{Task: classroom.UploadTask{ID: 5, ContentID: 7, ObjectKey: "private/secret.mp4", OSSUploadID: "upload-secret", Status: classroom.UploadInitiated}},
+		aborted:   classroom.UploadTask{ID: 5, ContentID: 7, ObjectKey: "private/secret.mp4", OSSUploadID: "upload-secret", Status: classroom.UploadAborted},
+	}
+	s := &Server{classroomUploads: f}
+	for _, tc := range []struct {
+		path    string
+		handler http.HandlerFunc
+		body    string
+	}{
+		{"/api/admin/classroom/uploads/initiate", s.classroomUploadInit, `{"contentId":7,"filename":"lesson.mp4","contentType":"video/mp4","sizeBytes":10,"checksum":"sha256:x"}`},
+		{"/api/admin/classroom/uploads/5/abort", s.classroomUploadAbort, ""},
+		{"/api/admin/classroom/uploads/5/complete", s.classroomUploadComplete, `{"parts":[{"partNumber":1,"etag":"e1"}]}`},
+	} {
+		rr := httptest.NewRecorder()
+		req := classroomUser(httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body)))
+		tc.handler(rr, req)
+		raw := rr.Body.String()
+		if strings.Contains(raw, "ObjectKey") || strings.Contains(raw, "objectKey") || strings.Contains(raw, "OSSUploadID") || strings.Contains(raw, "upload-secret") || strings.Contains(raw, "private/secret") {
+			t.Fatalf("unsafe upload response: %s", raw)
+		}
+		if !strings.Contains(raw, `"contentId"`) || strings.Contains(raw, `"ContentID"`) {
+			t.Fatalf("not camelCase: %s", raw)
+		}
+	}
+}
