@@ -390,6 +390,9 @@ func (s *UploadService) Abort(ctx context.Context, taskID, creatorID int64) (Upl
 	if task.Status == UploadCleaning {
 		return s.waitForCleaned(ctx, task.ID)
 	}
+	if task.Status == UploadInitiating {
+		return UploadTask{}, ErrUploadInProgress
+	}
 	if task.Status == UploadCompleting {
 		return UploadTask{}, ErrUploadConflict
 	}
@@ -563,7 +566,7 @@ func (s *UploadService) CleanupPending(ctx context.Context, limit int) (int, err
 	cleaned := 0
 	for i := range tasks {
 		status := tasks[i].Status
-		if status == UploadInitiating || status == UploadInitiated || status == UploadUploading || status == UploadCompleting {
+		if status == UploadInitiating || status == UploadInitiated || status == UploadUploading || status == UploadCompleting || status == UploadCleaning {
 			status = UploadExpired
 		}
 		claimed, ok, claimErr := s.repo.ClaimUploadCleanup(ctx, tasks[i], status)
@@ -885,7 +888,7 @@ func (s *Store) ListExpiredUploadTasks(ctx context.Context, limit int) ([]Upload
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at FROM classroom_upload_tasks WHERE ((status IN ('initiating','initiated','uploading','completing') AND expires_at<=now()) OR status IN ('failed','expired','aborted')) AND cleanup_status IN ('pending','failed') ORDER BY expires_at,id LIMIT $1`, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at FROM classroom_upload_tasks WHERE ((((status IN ('initiating','initiated','uploading','completing') AND expires_at<=now()) OR status IN ('failed','expired','aborted')) AND cleanup_status IN ('pending','failed')) OR (status='cleaning' AND cleanup_status IN ('pending','failed') AND updated_at <= now()-interval '15 minutes')) ORDER BY expires_at,id LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -935,7 +938,7 @@ func (s *Store) claimUploadStatus(ctx context.Context, id int64, from []UploadSt
 
 func (s *Store) ClaimUploadCleanup(ctx context.Context, expected UploadTask, status UploadStatus) (UploadTask, bool, error) {
 	var item UploadTask
-	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET status='cleaning',cleanup_status='pending',updated_at=now() WHERE id=$1 AND status=$2 AND updated_at=$3 AND status<>'cleaning' RETURNING id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, expected.ID, expected.Status, expected.UpdatedAt).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET status='cleaning',cleanup_status='pending',updated_at=now() WHERE id=$1 AND updated_at=$3 AND ((status=$2 AND status<>'cleaning') OR (status='cleaning' AND updated_at <= now()-interval '15 minutes')) RETURNING id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, expected.ID, expected.Status, expected.UpdatedAt).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UploadTask{}, false, nil
 	}
