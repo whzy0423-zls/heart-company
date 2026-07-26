@@ -111,6 +111,7 @@ type Server struct {
 	chatTimeout           time.Duration
 	chatHeartbeatInterval time.Duration
 	classroomUploads      classroomUploadHandlerService
+	classroomAdmin        classroomAdminService
 	classroomMaintenance  classroomUploadMaintenance
 	maintenanceCancel     context.CancelFunc
 
@@ -234,6 +235,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.images = image.NewStore(s.uploads, env.Image, s.uploader)
 	s.miniapp = miniapp.NewStore(database)
 	s.miniappAdmin = miniapp.NewAdminStore(database)
+	s.classroomAdmin = newClassroomAdminStore(database)
 	miniappService := miniapp.NewService(
 		dbtx.SQLBeginner{DB: database},
 		s.miniapp,
@@ -482,6 +484,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/miniapp/users/", s.method(http.MethodGet, s.requirePermission("Customer:Miniapp:List", s.miniappUserByID)))
 	s.mux.HandleFunc("/api/miniapp/chat", s.method(http.MethodPost, s.requireMiniapp(s.miniappChat)))
 	registerClassroomUploadRoutes(s.mux, s.requirePermission, s.classroomUploadInit, s.classroomUploadPart, s.classroomUploadComplete, s.classroomUploadAbort)
+	registerClassroomAdminRoutes(s.mux, s.requirePermission, s)
 	// 付费解锁：下单（鉴权）→ 微信回调（公开）→ 解锁状态/报告正文（鉴权）
 	s.mux.HandleFunc("/api/miniapp/report/order", s.method(http.MethodPost, s.requireMiniapp(s.createReportOrder)))
 	s.mux.HandleFunc("/api/miniapp/report/dev-pay", s.method(http.MethodPost, s.requireMiniapp(s.devPayReportOrder)))

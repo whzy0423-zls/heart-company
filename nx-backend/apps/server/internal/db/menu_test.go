@@ -283,3 +283,17 @@ func TestDeprecatedMenusRemoveStaleCustomerPrivateRuleRoute(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultMenusIncludeTeacherClassroomPermissions(t *testing.T) {
+	want := map[string]bool{"Miniapp:Classroom:List": false, "Miniapp:Classroom:Write": false, "Miniapp:Classroom:Upload": false, "Miniapp:Classroom:Publish": false, "Miniapp:Classroom:Price": false}
+	for _, menu := range defaultMenus {
+		if _, ok := want[menu.AuthCode]; ok {
+			want[menu.AuthCode] = true
+		}
+	}
+	for code, found := range want {
+		if !found {
+			t.Fatalf("missing classroom permission menu %s", code)
+		}
+	}
+}

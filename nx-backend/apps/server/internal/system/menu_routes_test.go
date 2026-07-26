@@ -24,3 +24,11 @@ func TestRouteMenusOnlyDropsButtonPermissions(t *testing.T) {
 		t.Fatalf("button permissions must not be returned as route children: %+v", appUsers.Children)
 	}
 }
+
+func TestRouteMenusHideClassroomButtonPermissions(t *testing.T) {
+	flat := []MenuItem{{ID: 1400, Name: "MiniappClassroom", Path: "/miniapp/classroom", Type: "menu", Status: 1}, {ID: 1401, PID: 1400, Name: "MiniappClassroomPublish", AuthCode: "Miniapp:Classroom:Publish", Type: "button", Status: 1}}
+	tree := buildTree(routeMenusOnly(flat), 0)
+	if len(tree) != 1 || len(tree[0].Children) != 0 {
+		t.Fatalf("classroom button must not be route child: %+v", tree)
+	}
+}
