@@ -1,21 +1,56 @@
 import type { ClassroomUploadTask } from '#/api/core/classroom';
 
 export interface UploadRetryContext {
+  checksum?: string;
   contentId: number;
   file: File;
+  filename?: string;
+  size?: number;
 }
 
 export function resolveUploadRetryContext(
   task: ClassroomUploadTask,
   contexts: Map<number, UploadRetryContext>,
-  selectedFile?: File,
 ): UploadRetryContext | undefined {
+  return contexts.get(task.id);
+}
+
+export function shouldAbortController(
+  activeTaskId: number | undefined,
+  taskId: number,
+) {
+  return activeTaskId === taskId;
+}
+
+export interface UploadIdentity {
+  checksum: string;
+  contentId: number;
+  filename: string;
+  size: number;
+}
+
+export function matchesUploadIdentity(
+  identity: UploadIdentity,
+  candidate: Pick<File, 'name' | 'size'>,
+  contentId: number,
+  checksum?: string,
+) {
   return (
-    contexts.get(task.id) ??
-    (selectedFile
-      ? { contentId: task.contentId, file: selectedFile }
-      : undefined)
+    identity.contentId === contentId &&
+    identity.filename === candidate.name &&
+    identity.size === candidate.size &&
+    (!checksum || identity.checksum === checksum)
   );
+}
+
+export function mergeUploadProgress(
+  local: { completedBytes: number; totalBytes: number },
+  task: { completedBytes?: number; expectedSize: number },
+) {
+  return {
+    completedBytes: Math.max(local.completedBytes, task.completedBytes ?? 0),
+    totalBytes: task.expectedSize || local.totalBytes,
+  };
 }
 
 export function classroomUploadMime(file: Pick<File, 'name' | 'type'>) {

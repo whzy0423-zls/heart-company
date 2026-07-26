@@ -19,8 +19,11 @@ import {
 } from './classroom-view-model';
 import {
   classroomUploadMime,
+  matchesUploadIdentity,
+  mergeUploadProgress,
   putSignedUploadPart,
   resolveUploadRetryContext,
+  shouldAbortController,
 } from './upload-flow';
 import { saveContentWorkflow } from './editor-model';
 import { crc64File } from './upload-checksum';
@@ -212,11 +215,7 @@ describe('teacher classroom admin UI contract', () => {
         new Map([[7, { contentId: 9, file: original }]]),
       ),
     ).toEqual({ contentId: 9, file: original });
-    const reselected = new File(['b'], 'lesson.mp4', { type: 'video/mp4' });
-    expect(resolveUploadRetryContext(task, new Map(), reselected)).toEqual({
-      contentId: 9,
-      file: reselected,
-    });
+    expect(resolveUploadRetryContext(task, new Map())).toBeUndefined();
     expect(resolveUploadRetryContext(task, new Map())).toBeUndefined();
   });
 
@@ -330,6 +329,46 @@ describe('teacher classroom admin UI contract', () => {
     expect(classroomUploadMime({ name: 'lesson.mp3', type: '' } as File)).toBe(
       'audio/mpeg',
     );
+  });
+
+  it('aborts only the original active task controller', () => {
+    expect(shouldAbortController(3, 3)).toBe(true);
+    expect(shouldAbortController(3, 4)).toBe(false);
+    expect(shouldAbortController(undefined, 3)).toBe(false);
+    expect(read('views/classroom/upload-tasks.vue')).toContain(
+      'const activeAtStart = activeTaskId.value',
+    );
+  });
+
+  it('requires task-specific retry identity and merges real bytes progress', () => {
+    const identity = {
+      checksum: 'crc64:1',
+      contentId: 7,
+      filename: 'a.mp4',
+      size: 10,
+    };
+    expect(
+      matchesUploadIdentity(
+        identity,
+        { name: 'a.mp4', size: 10 },
+        7,
+        'crc64:1',
+      ),
+    ).toBe(true);
+    expect(
+      matchesUploadIdentity(
+        identity,
+        { name: 'b.mp4', size: 10 },
+        7,
+        'crc64:1',
+      ),
+    ).toBe(false);
+    expect(
+      mergeUploadProgress(
+        { completedBytes: 4, totalBytes: 10 },
+        { completedBytes: 7, expectedSize: 10 },
+      ),
+    ).toEqual({ completedBytes: 7, totalBytes: 10 });
   });
 
   it('requires successful PUT and exposed ETag for signed OSS parts', async () => {

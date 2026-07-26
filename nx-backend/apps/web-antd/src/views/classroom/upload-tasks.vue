@@ -7,6 +7,7 @@ import {
   classroomUploadMime,
   putSignedUploadPart,
   resolveUploadRetryContext,
+  shouldAbortController,
 } from './upload-flow';
 import { uploadStatusLabel } from './classroom-view-model';
 import { crc64File } from './upload-checksum';
@@ -47,8 +48,22 @@ const uploading = ref(false);
 const uploadPercent = ref(0);
 const activeTaskId = ref<number>();
 const pendingRetryTask = ref<ClassroomUploadTask>();
+const retryConfirmed = ref(false);
 const uploadController = ref<AbortController>();
-const uploadContexts = new Map<number, { contentId: number; file: File }>();
+const uploadContexts = new Map<
+  number,
+  {
+    checksum: string;
+    contentId: number;
+    file: File;
+    filename: string;
+    size: number;
+  }
+>();
+const localProgress = new Map<
+  number,
+  { completedBytes: number; totalBytes: number }
+>();
 const columns = [
   { dataIndex: 'id', title: '任务' },
   { dataIndex: 'contentId', title: '课件' },
@@ -65,11 +80,18 @@ function displayStatus(task: ClassroomUploadTask) {
 
 function progress(task: ClassroomUploadTask) {
   if (task.id === activeTaskId.value) return uploadPercent.value;
-  return task.status === 'completed'
-    ? 100
-    : task.status === 'uploading'
-      ? 60
-      : 10;
+  const remote = task as ClassroomUploadTask & {
+    completedBytes?: number;
+    progressPercent?: number;
+  };
+  if (typeof remote.progressPercent === 'number') return remote.progressPercent;
+  const local = localProgress.get(task.id);
+  if (local)
+    return Math.min(
+      100,
+      Math.round((local.completedBytes / local.totalBytes) * 100),
+    );
+  return task.status === 'completed' ? 100 : 0;
 }
 async function load() {
   loading.value = true;
@@ -78,6 +100,14 @@ async function load() {
     tasks.value = (
       await getClassroomUploadTasksApi({ page: 1, pageSize: 50 })
     ).items;
+    for (const task of tasks.value) {
+      const remote = task as ClassroomUploadTask & { completedBytes?: number };
+      if (typeof remote.completedBytes === 'number')
+        localProgress.set(task.id, {
+          completedBytes: remote.completedBytes,
+          totalBytes: task.expectedSize,
+        });
+    }
   } catch {
     error.value = '上传任务加载失败，请重试。';
   } finally {
@@ -89,14 +119,22 @@ function confirmAbort(task: ClassroomUploadTask) {
     title: '终止上传任务？',
     content: '已上传的分片将被清理，之后需要重新选择文件上传。',
     async onOk() {
+      const activeAtStart = activeTaskId.value;
+      const controllerAtStart = uploadController.value;
       activeTaskId.value = task.id;
       try {
-        if (activeTaskId.value === task.id) uploadController.value?.abort();
+        if (shouldAbortController(activeAtStart, task.id))
+          controllerAtStart?.abort();
         await abortClassroomUploadApi(task.id);
         uploadContexts.delete(task.id);
         message.success('上传任务已终止');
         await load();
       } catch (cause) {
+        if ((cause as { status?: number })?.status === 409) {
+          message.info('上传任务已完成或已终止');
+          await load();
+          return;
+        }
         message.error(cause instanceof Error ? cause.message : '终止上传失败');
         throw cause;
       } finally {
@@ -107,6 +145,7 @@ function confirmAbort(task: ClassroomUploadTask) {
 }
 function chooseFile(event: Event) {
   selectedFile.value = (event.target as HTMLInputElement).files?.[0];
+  retryConfirmed.value = false;
 }
 async function performUpload(file: File, contentId: number) {
   if (uploading.value)
@@ -136,7 +175,18 @@ async function performUpload(file: File, contentId: number) {
       sizeBytes: file.size,
     });
     activeTaskId.value = task.id;
-    uploadContexts.set(task.id, { contentId, file });
+    uploadContexts.set(task.id, {
+      checksum,
+      contentId,
+      file,
+      filename: file.name,
+      size: file.size,
+    });
+    tasks.value = [
+      { ...task, status: 'uploading' },
+      ...tasks.value.filter((item) => item.id !== task.id),
+    ];
+    localProgress.set(task.id, { completedBytes: 0, totalBytes: file.size });
     const parts: Array<{ etag: string; partNumber: number }> = [];
     for (
       let partNumber = 1, offset = 0;
@@ -153,6 +203,10 @@ async function performUpload(file: File, contentId: number) {
         etag: etag.replaceAll('"', ''),
         partNumber,
       });
+      localProgress.set(task.id, {
+        completedBytes: Math.min(file.size, offset + task.partSize),
+        totalBytes: file.size,
+      });
       uploadPercent.value = Math.min(
         100,
         20 + Math.round(((offset + task.partSize) / file.size) * 80),
@@ -160,10 +214,15 @@ async function performUpload(file: File, contentId: number) {
     }
     await completeClassroomUploadApi(task.id, parts);
     uploadContexts.delete(task.id);
+    localProgress.set(task.id, {
+      completedBytes: file.size,
+      totalBytes: file.size,
+    });
     message.success('媒体上传完成，正在处理');
     selectedFile.value = undefined;
     selectedContentId.value = undefined;
     pendingRetryTask.value = undefined;
+    retryConfirmed.value = false;
     emit('uploaded');
     await load();
   } catch (cause) {
@@ -182,14 +241,21 @@ async function uploadFile() {
     selectedFile.value.size !== pendingRetryTask.value.expectedSize
   )
     return message.error('重试文件大小与原任务不一致，请选择原文件');
+  if (pendingRetryTask.value && !retryConfirmed.value) {
+    Modal.confirm({
+      title: '确认使用此文件重试？',
+      content: '系统会为该任务重新校验并发起分片上传。',
+      onOk: () => {
+        retryConfirmed.value = true;
+        void uploadFile();
+      },
+    });
+    return;
+  }
   await performUpload(selectedFile.value, selectedContentId.value);
 }
 async function retry(task: ClassroomUploadTask) {
-  const context = resolveUploadRetryContext(
-    task,
-    uploadContexts,
-    selectedFile.value,
-  );
+  const context = resolveUploadRetryContext(task, uploadContexts);
   if (!context) {
     pendingRetryTask.value = task;
     selectedFile.value = undefined;
@@ -197,7 +263,12 @@ async function retry(task: ClassroomUploadTask) {
     return message.warning('请选择原媒体文件后重试，系统会重新发起分片上传');
   }
   selectedContentId.value = context.contentId;
-  if (context.file.size !== task.expectedSize)
+  if (
+    context.contentId !== task.contentId ||
+    context.file.name !== context.filename ||
+    context.file.size !== context.size ||
+    context.file.size !== task.expectedSize
+  )
     return message.error('重试文件大小与原任务不一致');
   await performUpload(context.file, context.contentId);
 }
@@ -208,6 +279,7 @@ watch(selectedContentId, (value, previous) => {
   ) {
     pendingRetryTask.value = undefined;
     selectedFile.value = undefined;
+    retryConfirmed.value = false;
   }
 });
 function beforeUnload(event: BeforeUnloadEvent) {
@@ -219,6 +291,8 @@ function beforeUnload(event: BeforeUnloadEvent) {
 onBeforeUnmount(() => {
   if (uploading.value) message.warning('离开上传页面，当前上传已取消');
   uploadController.value?.abort();
+  if (activeTaskId.value)
+    void abortClassroomUploadApi(activeTaskId.value).catch(() => undefined);
   window.removeEventListener('beforeunload', beforeUnload);
 });
 onMounted(() => {
