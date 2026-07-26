@@ -409,6 +409,7 @@ assert.match(bookingPage, /const DRAFT_SAVE_DELAY = 250/, 'booking should deboun
 assert.match(bookingPage, /let draftSaveTimer = null/, 'booking should retain its pending draft timer')
 assert.match(bookingPage, /const restoredKindIndex = kinds\.findIndex\([\s\S]*if \(restoredKindIndex >= 0\) kindIndex\.value = restoredKindIndex/, 'booking should keep the default picker index for unknown draft kinds')
 assert.ok(bookingPage.indexOf('const draft = loadBookingDraft()') < bookingPage.indexOf('watch('), 'booking should restore its draft before enabling autosave')
+assert.match(bookingPage, /const restoredDraftNotice = ref\(!!draft\)/, 'booking should only show its recovery notice after restoring a meaningful draft')
 const bookingWatch = bookingPage.match(/watch\(\s*\[kindIndex, form\],([\s\S]*?)\{ deep: true \},\s*\)/)?.[1] || ''
 assert.match(bookingWatch, /scheduleDraftSave/, 'booking watch should schedule draft persistence')
 assert.doesNotMatch(bookingWatch, /saveBookingDraft/, 'booking watch must not persist on every input event')
@@ -422,6 +423,12 @@ assert.match(bookingPage, /onHide\(flushDraftSave\)/, 'booking should flush its 
 assert.match(bookingPage, /onUnload\(flushDraftSave\)/, 'booking should flush its draft before unload')
 const bookingSubmitBody = sourceBracedBody(bookingPage, /async\s+function\s+submit\s*\(\s*\)\s*\{/.exec(bookingPage)) || ''
 assert.match(bookingSubmitBody, /cancelPendingDraftSave\(\)[\s\S]*clearBookingDraft\(\)/, 'successful booking should cancel delayed persistence before clearing its draft')
+const clearRestoredDraftBody = sourceBracedBody(bookingPage, /function\s+clearRestoredDraft\s*\(\s*\)\s*\{/.exec(bookingPage)) || ''
+assert.match(clearRestoredDraftBody, /cancelPendingDraftSave\(\)[\s\S]*clearBookingDraft\(\)[\s\S]*kindIndex\.value\s*=\s*0[\s\S]*form\.value\s*=\s*emptyForm\(\)[\s\S]*fieldErrors\.value\s*=\s*\{\s*contactName:\s*['"]['"],\s*phone:\s*['"]['"]\s*\}[\s\S]*restoredDraftNotice\.value\s*=\s*false/, 'clearing a restored draft should cancel autosave, clear storage, reset kind, form and errors, then hide the notice')
+assert.match(bookingTemplate, /class=["'][^"']*draft-restored[^"']*["'][^>]*aria-live=["']polite["']/, 'restored booking drafts should be announced in a lightweight notice')
+assert.match(bookingTemplate, /v-if=["']restoredDraftNotice["']/, 'booking should only render the recovery notice for a restored draft')
+assert.match(bookingTemplate, /<button\s+class=["'][^"']*draft-restored__clear[^"']*["'][^>]*@click=["']clearRestoredDraft["'][^>]*>清空草稿<\/button>/, 'booking recovery notice should expose an explicit native clear action')
+assert.match(pageStyleDeclarations(bookingStyle, '.draft-restored__clear'), /min-height:\s*88rpx\s*;/, 'booking draft clear action should keep an accessible touch target')
 assert.match(bookingTemplate, /class=["'][^"']*booking-hero[^"']*nx-page-hero[^"']*["']/, 'booking should open with the shared themed hero')
 assert.match(bookingTemplate, />预约咨询<\//, 'booking hero should keep the appointment eyebrow')
 assert.match(bookingTemplate, />让老师帮你找到合适的学习方式<\//, 'booking hero should state its primary purpose')

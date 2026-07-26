@@ -19,6 +19,28 @@ const { loadBookingDraft, saveBookingDraft, clearBookingDraft, BOOKING_DRAFT_KEY
 
 assert.deepEqual(loadBookingDraft(), null, 'empty storage should not return a draft')
 
+storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: 'consult' } }
+assert.equal(loadBookingDraft(), null, 'the untouched default form should not be restored as a draft')
+
+storage[BOOKING_DRAFT_KEY] = {
+  ts: 1,
+  data: { kind: 'consult', contactName: '  ', phone: '\n', intent: '', preferredTime: '', message: '\t' },
+}
+assert.equal(loadBookingDraft(), null, 'whitespace-only default fields should not count as a meaningful draft')
+
+storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: 'course' } }
+assert.deepEqual(loadBookingDraft(), {
+  kind: 'course',
+  contactName: '',
+  phone: '',
+  intent: '',
+  preferredTime: '',
+  message: '',
+}, 'a non-default booking kind should remain a meaningful draft')
+
+storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: 'consult', message: ' 需要回电 ' } }
+assert.equal(loadBookingDraft().message, ' 需要回电 ', 'any non-blank field should keep the default-kind draft meaningful')
+
 saveBookingDraft({
   kind: 'course',
   contactName: ' 小九 ',

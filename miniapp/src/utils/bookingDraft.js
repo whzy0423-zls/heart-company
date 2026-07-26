@@ -25,7 +25,8 @@ export function loadBookingDraft() {
     const raw = uni.getStorageSync(BOOKING_DRAFT_KEY)
     if (!raw) return null
     const cached = typeof raw === 'string' ? JSON.parse(raw) : raw
-    return normalizeDraft(cached && cached.data ? cached.data : cached)
+    const data = normalizeDraft(cached && cached.data ? cached.data : cached)
+    return hasMeaningfulDraft(data) ? data : null
   } catch {
     return null
   }
