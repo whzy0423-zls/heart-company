@@ -125,3 +125,16 @@ func TestClassroomUploadMaintenanceIsRunnable(t *testing.T) {
 		t.Fatalf("maintenance calls=%d", calls)
 	}
 }
+
+func TestServerShutdownCancelsClassroomMaintenanceContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &Server{maintenanceCancel: cancel}
+
+	s.Shutdown()
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("maintenance context was not canceled")
+	}
+}

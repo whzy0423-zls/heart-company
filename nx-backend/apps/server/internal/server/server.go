@@ -304,7 +304,13 @@ func New(env config.Env, database *sql.DB) http.Handler {
 		go s.runPushAsyncRecoveryLoop(context.Background())
 		go s.runProfileCalibrationPushLoop(context.Background())
 	}
-	return s.withCORS(s.mux)
+	return s
+}
+
+// ServeHTTP keeps Server itself as the public handler so lifecycle methods such
+// as Shutdown remain reachable while preserving the existing CORS middleware.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.withCORS(s.mux).ServeHTTP(w, r)
 }
 
 func newWeChatClient(env config.Env) *wechat.Client {
