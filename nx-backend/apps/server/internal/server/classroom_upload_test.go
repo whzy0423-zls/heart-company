@@ -16,11 +16,12 @@ import (
 )
 
 type fakeClassroomUploadHandlerService struct {
-	initiated classroom.InitiateUploadResult
-	signed    storage.SignPartResult
-	completed classroom.CompleteUploadResult
-	aborted   classroom.UploadTask
-	calls     []string
+	initiated   classroom.InitiateUploadResult
+	signed      storage.SignPartResult
+	completed   classroom.CompleteUploadResult
+	completeErr error
+	aborted     classroom.UploadTask
+	calls       []string
 }
 
 func (f *fakeClassroomUploadHandlerService) Initiate(context.Context, classroom.InitiateUploadInput) (classroom.InitiateUploadResult, error) {
@@ -33,7 +34,19 @@ func (f *fakeClassroomUploadHandlerService) SignPart(context.Context, int64, int
 }
 func (f *fakeClassroomUploadHandlerService) Complete(context.Context, int64, int64, []storage.CompletedPart) (classroom.CompleteUploadResult, error) {
 	f.calls = append(f.calls, "complete")
-	return f.completed, nil
+	return f.completed, f.completeErr
+}
+
+func TestClassroomUploadCompleteInProgressReturnsAccepted(t *testing.T) {
+	f := &fakeClassroomUploadHandlerService{completeErr: classroom.ErrUploadInProgress}
+	s := &Server{classroomUploads: f}
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/classroom/uploads/3/complete", strings.NewReader(`{"parts":[{"partNumber":1,"etag":"e1"}]}`))
+	req = req.WithContext(withUser(req.Context(), auth.UserInfo{ID: 42}))
+	rr := httptest.NewRecorder()
+	s.classroomUploadComplete(rr, req)
+	if rr.Code != http.StatusAccepted || !strings.Contains(rr.Body.String(), "upload in progress") {
+		t.Fatalf("unexpected %d %s", rr.Code, rr.Body.String())
+	}
 }
 func (f *fakeClassroomUploadHandlerService) Abort(context.Context, int64, int64) (classroom.UploadTask, error) {
 	f.calls = append(f.calls, "abort")

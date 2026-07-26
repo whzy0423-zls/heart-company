@@ -765,6 +765,20 @@ func TestClassroomUploadInitiateRejectsActiveCompletingRegardlessCleanup(t *test
 	}
 }
 
+func TestClassroomUploadDuplicateCompleteReturnsInProgressAfterConfiguredWait(t *testing.T) {
+	now := time.Now()
+	repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentProcessing, AccessLevel: AccessPublic}, task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "video.mp4", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1, Status: UploadCompleting, ExpiresAt: now.Add(time.Hour), AttemptCount: 1, CleanupStatus: "pending"}}
+	svc := NewUploadService(repo, &fakeMultipartStorage{}, fakeProbe{}, UploadConfig{Bucket: "b", PartSize: 10, MaxParts: 1, TaskTTL: time.Hour, CompletionWait: 20 * time.Millisecond, MaxVideoBytes: 100, MaxAudioBytes: 100}, func() time.Time { return now })
+	started := time.Now()
+	_, err := svc.Complete(context.Background(), 1, 42, []storage.CompletedPart{{PartNumber: 1, ETag: "e"}})
+	if !errors.Is(err, ErrUploadInProgress) {
+		t.Fatalf("err=%v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("configured wait ignored: %s", elapsed)
+	}
+}
+
 func TestClassroomUploadInitiateRejectsCleaningTask(t *testing.T) {
 	now := time.Now()
 	repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentFailed, AccessLevel: AccessPublic}, task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "old", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1, Status: UploadCleaning, ExpiresAt: now.Add(time.Hour), AttemptCount: 1, CleanupStatus: "pending"}}

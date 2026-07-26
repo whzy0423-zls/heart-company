@@ -177,6 +177,9 @@ func writeClassroomUploadError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	message := "classroom upload failed"
 	switch {
+	case errors.Is(err, classroom.ErrUploadInProgress):
+		status = http.StatusAccepted
+		message = "upload in progress"
 	case errors.Is(err, classroom.ErrUploadOwnership):
 		status = http.StatusForbidden
 		message = "forbidden"

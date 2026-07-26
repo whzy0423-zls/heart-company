@@ -23,19 +23,21 @@ var (
 	ErrUploadExpired     = errors.New("classroom upload expired")
 	ErrInvalidUploadPart = errors.New("invalid classroom upload part")
 	ErrUploadConflict    = errors.New("classroom content already has an active upload")
+	ErrUploadInProgress  = errors.New("classroom upload is in progress")
 	ErrUploadAttempts    = errors.New("classroom upload retry limit reached")
 )
 
 type UploadConfig struct {
-	Bucket        string
-	Prefix        string
-	PartSize      int64
-	MaxParts      int
-	CredentialTTL time.Duration
-	TaskTTL       time.Duration
-	MaxVideoBytes int64
-	MaxAudioBytes int64
-	MaxAttempts   int
+	Bucket         string
+	Prefix         string
+	PartSize       int64
+	MaxParts       int
+	CredentialTTL  time.Duration
+	TaskTTL        time.Duration
+	MaxVideoBytes  int64
+	MaxAudioBytes  int64
+	MaxAttempts    int
+	CompletionWait time.Duration
 }
 
 type InitiateUploadInput struct {
@@ -112,6 +114,9 @@ func NewUploadService(repo UploadRepository, store storage.MultipartStorage, pro
 	}
 	if config.MaxParts <= 0 || config.MaxParts > 10000 {
 		config.MaxParts = 10000
+	}
+	if config.CompletionWait <= 0 {
+		config.CompletionWait = 3 * time.Second
 	}
 	if config.CredentialTTL <= 0 {
 		config.CredentialTTL = 15 * time.Minute
@@ -570,14 +575,14 @@ func (s *UploadService) CleanupExpired(ctx context.Context, limit int) (int, err
 func (s *UploadService) waitForCompleted(ctx context.Context, id int64) (CompleteUploadResult, error) {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
-	timeout := time.NewTimer(3 * time.Second)
+	timeout := time.NewTimer(s.config.CompletionWait)
 	defer timeout.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return CompleteUploadResult{}, ctx.Err()
 		case <-timeout.C:
-			return CompleteUploadResult{}, ErrUploadConflict
+			return CompleteUploadResult{}, ErrUploadInProgress
 		case <-ticker.C:
 			task, err := s.repo.GetUploadTask(ctx, id)
 			if err != nil {
