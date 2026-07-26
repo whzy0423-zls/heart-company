@@ -2068,6 +2068,7 @@ CREATE TABLE IF NOT EXISTS app_chat_sessions (
   app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
   card_id     BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
   title       TEXT NOT NULL DEFAULT '',
+  scene       TEXT NOT NULL DEFAULT 'chat',
   context_summary TEXT NOT NULL DEFAULT '',
   context_summary_through_message_id BIGINT NOT NULL DEFAULT 0,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -2076,9 +2077,19 @@ CREATE TABLE IF NOT EXISTS app_chat_sessions (
 
 ALTER TABLE app_chat_sessions ADD COLUMN IF NOT EXISTS context_summary TEXT NOT NULL DEFAULT '';
 ALTER TABLE app_chat_sessions ADD COLUMN IF NOT EXISTS context_summary_through_message_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE app_chat_sessions ADD COLUMN IF NOT EXISTS scene TEXT NOT NULL DEFAULT 'chat';
 
 CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_user ON app_chat_sessions(app_user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_card ON app_chat_sessions(card_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_user_card_scene
+  ON app_chat_sessions(app_user_id, card_id, scene, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS app_xinzhili_mode_preferences (
+  app_user_id BIGINT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
+  requested_mode TEXT NOT NULL CHECK (requested_mode IN ('normal', 'argument', 'comfort', 'deep_listening')),
+  revision BIGINT NOT NULL CHECK (revision > 0),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS app_chat_messages (
   id         BIGSERIAL PRIMARY KEY,
@@ -2088,6 +2099,9 @@ CREATE TABLE IF NOT EXISTS app_chat_messages (
   sources    JSONB NOT NULL DEFAULT '[]'::jsonb,
   favorite   BOOLEAN NOT NULL DEFAULT false,  -- 是否被用户收藏
   feedback   TEXT NOT NULL DEFAULT '',        -- 'helpful' | 'inaccurate' | 'continue' | ''
+  delivery_status TEXT,
+  delivered_text TEXT,
+  xinzhili_mode TEXT,
   create_time TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -2097,6 +2111,25 @@ ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS message_type TEXT NOT NUL
 ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS audio_asset_id BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL;
 ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS audio_duration_ms INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS transcript TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS delivery_status TEXT;
+ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS delivered_text TEXT;
+ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS xinzhili_mode TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'app_chat_messages_delivery_status_check' AND conrelid = 'app_chat_messages'::regclass) THEN
+    ALTER TABLE app_chat_messages ADD CONSTRAINT app_chat_messages_delivery_status_check
+      CHECK (delivery_status IS NULL OR delivery_status IN ('generated', 'synthesizing', 'sent', 'played', 'tts_failed', 'interrupted', 'unconfirmed'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'app_chat_messages_xinzhili_mode_check' AND conrelid = 'app_chat_messages'::regclass) THEN
+    ALTER TABLE app_chat_messages ADD CONSTRAINT app_chat_messages_xinzhili_mode_check
+      CHECK (xinzhili_mode IS NULL OR xinzhili_mode IN ('normal', 'argument', 'comfort', 'deep_listening'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'app_chat_messages_delivered_text_check' AND conrelid = 'app_chat_messages'::regclass) THEN
+    ALTER TABLE app_chat_messages ADD CONSTRAINT app_chat_messages_delivered_text_check
+      CHECK (delivered_text IS NULL OR left(content, char_length(delivered_text)) = delivered_text);
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_app_chat_messages_session ON app_chat_messages(session_id, create_time);
 CREATE INDEX IF NOT EXISTS idx_app_chat_messages_favorite ON app_chat_messages(favorite) WHERE favorite = true;

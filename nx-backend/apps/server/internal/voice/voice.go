@@ -777,6 +777,19 @@ func (c *MiniMaxClient) CloneVoice(ctx context.Context, fileID string, voiceID s
 }
 
 func (c *MiniMaxClient) TextToAudio(ctx context.Context, model string, voiceID string, text string) ([]byte, string, error) {
+	return c.textToAudio(ctx, model, voiceID, text, 50*1024*1024, false)
+}
+
+// TextToAudioLimited is the bounded variant used by latency-sensitive callers.
+// It limits both inline JSON audio and downloaded audio before returning bytes.
+func (c *MiniMaxClient) TextToAudioLimited(ctx context.Context, model string, voiceID string, text string, maxBytes int64) ([]byte, string, error) {
+	if maxBytes <= 0 {
+		return nil, "", fmt.Errorf("MiniMax 音频上限无效")
+	}
+	return c.textToAudio(ctx, model, voiceID, text, maxBytes, true)
+}
+
+func (c *MiniMaxClient) textToAudio(ctx context.Context, model string, voiceID string, text string, maxBytes int64, safeErrors bool) ([]byte, string, error) {
 	if err := c.ensureReady(); err != nil {
 		return nil, "", err
 	}
@@ -804,7 +817,12 @@ func (c *MiniMaxClient) TextToAudio(ctx context.Context, model string, voiceID s
 	}
 	c.auth(req)
 	req.Header.Set("Content-Type", "application/json")
-	result, err := c.doJSON(req)
+	var result map[string]any
+	if safeErrors {
+		result, err = c.doJSONLimited(req, inlineAudioJSONLimit(maxBytes))
+	} else {
+		result, err = c.doJSON(req)
+	}
 	if err != nil {
 		return nil, "", err
 	}
@@ -813,15 +831,37 @@ func (c *MiniMaxClient) TextToAudio(ctx context.Context, model string, voiceID s
 		return nil, "", fmt.Errorf("MiniMax 未返回音频数据")
 	}
 	if strings.HasPrefix(audioValue, "http://") || strings.HasPrefix(audioValue, "https://") {
-		return c.download(ctx, audioValue)
+		return c.downloadLimited(ctx, audioValue, maxBytes)
+	}
+	if int64(len(audioValue)) > maxBytes*2 {
+		return nil, "", fmt.Errorf("MiniMax 音频超过大小上限")
 	}
 	if decoded, err := hex.DecodeString(audioValue); err == nil && len(decoded) > 0 {
+		if int64(len(decoded)) > maxBytes {
+			return nil, "", fmt.Errorf("MiniMax 音频超过大小上限")
+		}
 		return decoded, "audio/mpeg", nil
 	}
+	if int64(len(audioValue)) > int64(base64.StdEncoding.EncodedLen(int(maxBytes))) {
+		return nil, "", fmt.Errorf("MiniMax 音频超过大小上限")
+	}
 	if decoded, err := base64.StdEncoding.DecodeString(audioValue); err == nil && len(decoded) > 0 {
+		if int64(len(decoded)) > maxBytes {
+			return nil, "", fmt.Errorf("MiniMax 音频超过大小上限")
+		}
 		return decoded, "audio/mpeg", nil
 	}
 	return nil, "", fmt.Errorf("MiniMax 音频格式无法识别")
+}
+
+func inlineAudioJSONLimit(maxBytes int64) int64 {
+	const jsonOverhead = int64(64 * 1024)
+	if maxBytes > (int64(^uint64(0)>>1)-jsonOverhead)/2 {
+		return int64(^uint64(0) >> 1)
+	}
+	// Hex is the largest supported inline representation at two bytes of JSON
+	// text per decoded byte. The fixed allowance covers response metadata.
+	return maxBytes*2 + jsonOverhead
 }
 
 func (c *MiniMaxClient) OfficialVoices(ctx context.Context) ([]VoiceOption, error) {
@@ -889,7 +929,39 @@ func (c *MiniMaxClient) doJSON(req *http.Request) (map[string]any, error) {
 	return payload, nil
 }
 
+func (c *MiniMaxClient) doJSONLimited(req *http.Request, maxBytes int64) (map[string]any, error) {
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("MiniMax 响应读取失败")
+	}
+	if int64(len(raw)) > maxBytes {
+		return nil, fmt.Errorf("MiniMax 响应过大")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("MiniMax 请求失败(%d)", resp.StatusCode)
+	}
+	var payload map[string]any
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, fmt.Errorf("MiniMax 响应格式无效")
+		}
+	}
+	if err := minimaxBaseError(payload); err != nil {
+		return nil, fmt.Errorf("MiniMax 返回业务错误")
+	}
+	return payload, nil
+}
+
 func (c *MiniMaxClient) download(ctx context.Context, audioURL string) ([]byte, string, error) {
+	return c.downloadLimited(ctx, audioURL, 50*1024*1024)
+}
+
+func (c *MiniMaxClient) downloadLimited(ctx context.Context, audioURL string, maxBytes int64) ([]byte, string, error) {
 	if !netguard.IsPublicHTTPURL(audioURL) {
 		return nil, "", fmt.Errorf("MiniMax 返回了不安全的音频地址")
 	}
@@ -905,9 +977,12 @@ func (c *MiniMaxClient) download(ctx context.Context, audioURL string) ([]byte, 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", fmt.Errorf("下载 MiniMax 音频失败(%d)", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 50*1024*1024))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		return nil, "", err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, "", fmt.Errorf("MiniMax 音频超过大小上限")
 	}
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {

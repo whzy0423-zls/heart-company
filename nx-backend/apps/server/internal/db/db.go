@@ -34,7 +34,7 @@ func Open(ctx context.Context, dsn, adminUser, adminPassword string) (*sql.DB, e
 		return nil, err
 	}
 
-	if _, err := database.ExecContext(ctx, schemaSQL); err != nil {
+	if err := migrateSchema(ctx, database); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
@@ -43,6 +43,21 @@ func Open(ctx context.Context, dsn, adminUser, adminPassword string) (*sql.DB, e
 	}
 
 	return database, nil
+}
+
+func migrateSchema(ctx context.Context, database *sql.DB) error {
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('nine-xing:schema-migration', 0))`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func waitReady(ctx context.Context, database *sql.DB) error {
@@ -150,6 +165,7 @@ var defaultMenus = []seedMenu{
 	{ID: 703, PID: 700, Name: "VoiceContent", Path: "/voice/content", Component: "/voice/content", AuthCode: "Voice:Content:Manage", Type: "menu", Sort: 3, Icon: "lucide:file-audio", Title: "内容转语音"},
 	{ID: 800, PID: 0, Name: "RAGCenter", Path: "/rag", Type: "catalog", Sort: 19, Icon: "lucide:brain-circuit", Title: "RAG 知识库"},
 	{ID: 801, PID: 800, Name: "RAGKnowledge", Path: "/rag/knowledge", Component: "/rag/knowledge", AuthCode: "RAG:Knowledge:Manage", Type: "menu", Sort: 1, Icon: "lucide:library-big", Title: "知识库管理"},
+	{ID: 802, PID: 800, Name: "TheoryLibrary", Path: "/theory/library", Component: "/theory/library", AuthCode: "System:TheoryLibrary:Manage", Type: "menu", Sort: 2, Icon: "lucide:book-marked", Title: "理论库"},
 	{ID: 900, PID: 0, Name: "ReadingCenter", Path: "/reading", Type: "catalog", Sort: 19, Icon: "lucide:book-open-text", Title: "阅读管理"},
 	{ID: 901, PID: 900, Name: "ReadingArticles", Path: "/reading/articles", Component: "/reading/articles", AuthCode: "Reading:Article:Manage", Type: "menu", Sort: 1, Icon: "lucide:newspaper", Title: "文章管理"},
 	{ID: 1000, PID: 0, Name: "VideoCenter", Path: "/video", Type: "catalog", Sort: 19, Icon: "lucide:clapperboard", Title: "视频生成"},
@@ -165,6 +181,7 @@ var defaultMenus = []seedMenu{
 	{ID: 1100, PID: 0, Name: "ModelSettings", Path: "/settings", Type: "catalog", Sort: 21, Icon: "lucide:cpu", Title: "模型配置"},
 	{ID: 1101, PID: 1100, Name: "ModelPairing", Path: "/settings/model", Component: "/settings/model", AuthCode: "System:Model:Config", Type: "menu", Sort: 1, Icon: "lucide:plug-zap", Title: "模型配对"},
 	{ID: 1102, PID: 1100, Name: "AdminModelConfig", Path: "/settings/admin-model", Component: "/settings/model", AuthCode: "System:Model:Config", Type: "menu", Sort: 2, Icon: "lucide:bot", Title: "管理端大模型配置"},
+	{ID: 1103, PID: 1100, Name: "XinzhiliModelConfig", Path: "/settings/xinzhili-model", Component: "/settings/xinzhili-model", AuthCode: "System:XinzhiliModel:Config", Type: "menu", Sort: 3, Icon: "lucide:audio-waveform", Title: "芯之力模型配置"},
 	{ID: 400, PID: 0, Name: "SystemManage", Path: "/system", Type: "catalog", Sort: 20, Icon: "lucide:shield-check", Title: "系统管理"},
 	{ID: 401, PID: 400, Name: "SystemUser", Path: "/system/user", Component: "/system/user/list", AuthCode: "System:User:List", Type: "menu", Sort: 1, Icon: "lucide:users", Title: "用户管理"},
 	{ID: 402, PID: 400, Name: "SystemRole", Path: "/system/role", Component: "/system/role/list", AuthCode: "System:Role:List", Type: "menu", Sort: 2, Icon: "lucide:user-cog", Title: "角色管理"},
