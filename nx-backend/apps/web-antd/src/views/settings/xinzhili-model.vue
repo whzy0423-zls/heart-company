@@ -9,6 +9,7 @@ import { onMounted, ref } from 'vue';
 
 import {
   Alert,
+  Button,
   Col,
   Divider,
   Form,
@@ -152,6 +153,18 @@ function errorStatus(error: unknown) {
   return (error as { response?: { status?: number } })?.response?.status;
 }
 
+function applyFreeTtsPreset() {
+  form.value.tts = {
+    ...form.value.tts,
+    endpoint: 'https://api.siliconflow.cn/v1',
+    format: 'mp3',
+    model: 'FunAudioLLM/CosyVoice2-0.5B',
+    provider: 'openai-compatible',
+    voice: 'FunAudioLLM/CosyVoice2-0.5B:alex',
+  };
+  message.success('已填充硅基流动免费额度 TTS 预设，请确认 API Key 后保存');
+}
+
 async function save() {
   if (loadError.value) {
     message.warning('请先重新加载芯之力模型配置');
@@ -236,6 +249,19 @@ async function save() {
       </Row>
 
       <Divider orientation="left">AI 语音合成</Divider>
+      <Alert
+        description="实时 ASR 继续使用阿里云百炼 Paraformer；语音合成可使用硅基流动免费额度。预设按钮只填写 TTS 协议、地址、模型、音色和格式，按钮不会覆盖已填写的 API Key。"
+        message="免费额度配置说明"
+        show-icon
+        type="info"
+        style="margin-bottom: 16px"
+      >
+        <template #action>
+          <Button size="small" type="primary" @click="applyFreeTtsPreset">
+            填充免费额度 TTS 预设
+          </Button>
+        </template>
+      </Alert>
       <Row :gutter="24">
         <Col :md="12" :xs="24">
           <Form.Item label="协议">
