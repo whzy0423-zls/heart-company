@@ -172,6 +172,11 @@ export interface ClassroomPricePayload extends ClassroomActionPayload {
   priceCents: number;
 }
 
+export interface ClassroomSeriesPricePayload extends ClassroomActionPayload {
+  accessLevel: Exclude<ClassroomAccessLevel, 'inherit'>;
+  priceCents: number;
+}
+
 export interface ClassroomSignedPart {
   expiresAt: string;
   partNumber: number;
@@ -279,7 +284,7 @@ export function offlineClassroomSeriesApi(
 
 export function setClassroomSeriesPriceApi(
   id: number,
-  data: ClassroomPricePayload,
+  data: ClassroomSeriesPricePayload,
 ) {
   return classroomRequest(
     requestClient.post<ClassroomSeries>(
