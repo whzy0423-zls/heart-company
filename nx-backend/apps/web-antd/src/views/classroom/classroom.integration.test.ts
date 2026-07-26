@@ -1,3 +1,5 @@
+/** @vitest-environment happy-dom */
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent } from 'vue';
 import { flushVuePromises, mountVueComponent } from '#/test-utils/vue-mount';
