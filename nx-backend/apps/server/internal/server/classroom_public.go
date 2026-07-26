@@ -34,6 +34,7 @@ type classroomPublicSeries struct {
 	EffectiveAccess classroom.AccessLevel `json:"effectiveAccess"`
 	PriceCents      int                   `json:"priceCents"`
 	CanPlay         bool                  `json:"canPlay"`
+	PurchaseState   string                `json:"purchaseState"`
 	PlaybackBlocked bool                  `json:"playbackBlocked"`
 }
 type classroomPublicContent struct {
@@ -66,7 +67,7 @@ type classroomPublicService interface {
 	ListStandalone(context.Context, classroomPublicQuery, int64) ([]classroomPublicContent, int, error)
 	GetSeries(context.Context, int64, int64) (classroomPublicSeriesDetail, error)
 	GetContent(context.Context, int64, int64) (classroomPublicContent, error)
-	Playback(context.Context, int64, int64) (classroomPlaybackSource, error)
+	Playback(ctx context.Context, userID, contentID int64) (classroomPlaybackSource, error)
 }
 
 type classroomTicketClaims struct {
@@ -76,7 +77,10 @@ type classroomTicketClaims struct {
 	Nonce        string    `json:"nonce"`
 }
 
-var errClassroomTicket = errors.New("invalid classroom playback ticket")
+var (
+	errClassroomTicket          = errors.New("invalid classroom playback ticket")
+	errClassroomPlaybackBlocked = errors.New("classroom playback blocked")
+)
 
 func (s *Server) nowTime() time.Time {
 	if s.now != nil {
@@ -203,16 +207,17 @@ func (s *Server) classroomStandalonePublic(w http.ResponseWriter, r *http.Reques
 		httpx.Fail(w, 500, err.Error())
 		return
 	}
+	page := classroomPublicPage(r)
+	data := map[string]any{"items": items, "total": total, "limit": page.Limit, "offset": page.Offset}
+	if setClassroomCache(w, r, data) {
+		return
+	}
 	if u.ID == 0 {
 		for i := range items {
-			if src, e := s.classroomPublic.Playback(r.Context(), items[i].ID, 0); e == nil && items[i].EffectiveAccess == classroom.AccessPublic {
+			if src, e := s.classroomPublic.Playback(r.Context(), 0, items[i].ID); e == nil && items[i].EffectiveAccess == classroom.AccessPublic {
 				items[i].PlaybackTicket, _, _ = s.signClassroomTicket(items[i].ID, src.Media.ETag)
 			}
 		}
-	}
-	data := map[string]any{"items": items, "total": total}
-	if setClassroomCache(w, r, data) {
-		return
 	}
 	httpx.OK(w, data)
 }
@@ -227,17 +232,17 @@ func (s *Server) classroomSeriesDetailPublic(w http.ResponseWriter, r *http.Requ
 		httpx.Fail(w, 404, "Not Found")
 		return
 	}
+	if setClassroomCache(w, r, d) {
+		return
+	}
 	if u.ID == 0 {
 		for i := range d.Contents {
 			if d.Contents[i].EffectiveAccess == classroom.AccessPublic {
-				if src, e := s.classroomPublic.Playback(r.Context(), d.Contents[i].ID, 0); e == nil {
+				if src, e := s.classroomPublic.Playback(r.Context(), 0, d.Contents[i].ID); e == nil {
 					d.Contents[i].PlaybackTicket, _, _ = s.signClassroomTicket(d.Contents[i].ID, src.Media.ETag)
 				}
 			}
 		}
-	}
-	if setClassroomCache(w, r, d) {
-		return
 	}
 	httpx.OK(w, d)
 }
@@ -252,13 +257,13 @@ func (s *Server) classroomContentPublic(w http.ResponseWriter, r *http.Request) 
 		httpx.Fail(w, 404, "Not Found")
 		return
 	}
-	if u.ID == 0 && d.EffectiveAccess == classroom.AccessPublic {
-		if src, e := s.classroomPublic.Playback(r.Context(), id, 0); e == nil {
-			d.PlaybackTicket, _, _ = s.signClassroomTicket(id, src.Media.ETag)
-		}
-	}
 	if setClassroomCache(w, r, d) {
 		return
+	}
+	if u.ID == 0 && d.EffectiveAccess == classroom.AccessPublic {
+		if src, e := s.classroomPublic.Playback(r.Context(), 0, id); e == nil {
+			d.PlaybackTicket, _, _ = s.signClassroomTicket(id, src.Media.ETag)
+		}
 	}
 	httpx.OK(w, d)
 }
@@ -272,8 +277,12 @@ func (s *Server) classroomPlaybackPublic(w http.ResponseWriter, r *http.Request)
 	if !valid {
 		return
 	}
-	src, err := s.classroomPublic.Playback(r.Context(), id, u.ID)
+	src, err := s.classroomPublic.Playback(r.Context(), u.ID, id)
 	if err != nil {
+		if errors.Is(err, errClassroomPlaybackBlocked) {
+			httpx.Fail(w, http.StatusLocked, "Playback Blocked")
+			return
+		}
 		httpx.Fail(w, 404, "Not Found")
 		return
 	}
@@ -357,18 +366,37 @@ func accessFor(a classroom.AccessLevel, parent *classroom.Series) classroom.Acce
 	}
 	return a
 }
-func canAccess(ctx context.Context, d *classroomPublicDB, a classroom.AccessLevel, uid int64, c classroom.Content, parent *classroom.Series) bool {
-	switch a {
+func classroomPurchaseState(access classroom.AccessLevel, canPlay bool) string {
+	if access != classroom.AccessPaid {
+		return "available"
+	}
+	if canPlay {
+		return "owned"
+	}
+	return "purchase_required"
+}
+func classroomAccessAllowed(access classroom.AccessLevel, loggedIn, member, entitled bool) bool {
+	switch access {
 	case classroom.AccessPublic:
 		return true
 	case classroom.AccessLogin:
-		return uid > 0
+		return loggedIn
 	case classroom.AccessMember:
-		return d.member(ctx, uid)
+		return member
 	case classroom.AccessPaid:
-		return d.entitled(ctx, uid, c.ID, c.SeriesID)
+		return entitled
 	}
 	return false
+}
+func canAccess(ctx context.Context, d *classroomPublicDB, a classroom.AccessLevel, uid int64, c classroom.Content, parent *classroom.Series) bool {
+	member, entitled := false, false
+	if a == classroom.AccessMember {
+		member = d.member(ctx, uid)
+	}
+	if a == classroom.AccessPaid {
+		entitled = d.entitled(ctx, uid, c.ID, c.SeriesID)
+	}
+	return classroomAccessAllowed(a, uid > 0, member, entitled)
 }
 func (d *classroomPublicDB) contentView(ctx context.Context, c classroom.Content, uid int64, parent *classroom.Series) (classroomPublicContent, error) {
 	if c.Status != classroom.ContentPublished || c.MediaAssetID == nil {
@@ -378,6 +406,9 @@ func (d *classroomPublicDB) contentView(ctx context.Context, c classroom.Content
 	if e != nil || m.StorageStatus != classroom.MediaReady {
 		return classroomPublicContent{}, classroom.ErrNotFound
 	}
+	return d.contentViewReady(ctx, c, uid, parent), nil
+}
+func (d *classroomPublicDB) contentViewReady(ctx context.Context, c classroom.Content, uid int64, parent *classroom.Series) classroomPublicContent {
 	a := accessFor(c.AccessLevel, parent)
 	ok := canAccess(ctx, d, a, uid, c, parent)
 	pstate := "available"
@@ -390,62 +421,75 @@ func (d *classroomPublicDB) contentView(ctx context.Context, c classroom.Content
 	if c.AccessLevel == classroom.AccessInherit && parent != nil {
 		price = parent.PriceCents
 	}
-	v := classroomPublicContent{ID: c.ID, SeriesID: c.SeriesID, Title: c.Title, Description: c.Description, CoverURL: c.CoverURL, TeacherName: c.TeacherNameSnapshot, ContentType: c.ContentType, DurationSeconds: c.DurationSeconds, EffectiveAccess: a, PriceCents: price, CanPlay: ok && !c.PlaybackBlocked && (parent == nil || !parent.PlaybackBlocked), PurchaseState: pstate, PlaybackBlocked: c.PlaybackBlocked}
-	return v, nil
+	blocked := c.PlaybackBlocked || (parent != nil && parent.PlaybackBlocked)
+	v := classroomPublicContent{ID: c.ID, SeriesID: c.SeriesID, Title: c.Title, Description: c.Description, CoverURL: c.CoverURL, TeacherName: c.TeacherNameSnapshot, ContentType: c.ContentType, DurationSeconds: c.DurationSeconds, EffectiveAccess: a, PriceCents: price, CanPlay: ok && !blocked, PurchaseState: pstate, PlaybackBlocked: blocked}
+	return v
 }
 func (d *classroomPublicDB) ListSeries(ctx context.Context, q classroomPublicQuery, uid int64) ([]classroomPublicSeries, int, error) {
-	xs, e := d.store.ListSeries(ctx, classroom.SeriesFilter{Status: classroom.SeriesPublished, Limit: q.Limit, Offset: q.Offset})
-	if e != nil {
-		return nil, 0, e
+	const eligible = `s.status=$1 AND EXISTS (SELECT 1 FROM classroom_contents c JOIN classroom_media_assets m ON m.id=c.media_asset_id WHERE c.series_id=s.id AND c.status=$2 AND m.storage_status=$3 AND ($4='' OR c.content_type=$4))`
+	args := []any{classroom.SeriesPublished, classroom.ContentPublished, classroom.MediaReady, q.ContentType}
+	var total int
+	if err := d.db.QueryRowContext(ctx, `SELECT count(*) FROM classroom_series s WHERE `+eligible, args...).Scan(&total); err != nil {
+		return nil, 0, err
 	}
-	out := make([]classroomPublicSeries, 0, len(xs))
-	for _, x := range xs {
-		a := x.AccessLevel
-		ok := false
-		switch a {
+	rows, err := d.db.QueryContext(ctx, `SELECT s.id,s.title,s.summary,s.cover_url,s.teacher_name_snapshot,s.access_level,s.price_cents,s.playback_blocked FROM classroom_series s WHERE `+eligible+` ORDER BY s.sort_order,s.id LIMIT $5 OFFSET $6`, append(args, q.Limit, q.Offset)...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := make([]classroomPublicSeries, 0, q.Limit)
+	for rows.Next() {
+		var v classroomPublicSeries
+		if err = rows.Scan(&v.ID, &v.Title, &v.Summary, &v.CoverURL, &v.TeacherName, &v.EffectiveAccess, &v.PriceCents, &v.PlaybackBlocked); err != nil {
+			return nil, 0, err
+		}
+		allowed := false
+		switch v.EffectiveAccess {
 		case classroom.AccessPublic:
-			ok = true
+			allowed = true
 		case classroom.AccessLogin:
-			ok = uid > 0
+			allowed = uid > 0
 		case classroom.AccessMember:
-			ok = d.member(ctx, uid)
+			allowed = d.member(ctx, uid)
 		case classroom.AccessPaid:
-			ok = d.seriesEntitled(ctx, uid, x.ID)
+			allowed = d.seriesEntitled(ctx, uid, v.ID)
 		}
-		lessons, _ := d.store.ListContents(ctx, classroom.ContentFilter{SeriesID: &x.ID, Status: classroom.ContentPublished, Limit: 1})
-		if len(lessons) == 0 {
-			continue
-		}
-		if _, err := d.contentView(ctx, lessons[0], uid, &x); err != nil {
-			continue
-		}
-		out = append(out, classroomPublicSeries{ID: x.ID, Title: x.Title, Summary: x.Summary, CoverURL: x.CoverURL, TeacherName: x.TeacherNameSnapshot, EffectiveAccess: a, PriceCents: x.PriceCents, CanPlay: ok && !x.PlaybackBlocked, PlaybackBlocked: x.PlaybackBlocked})
+		v.CanPlay = allowed && !v.PlaybackBlocked
+		v.PurchaseState = classroomPurchaseState(v.EffectiveAccess, allowed)
+		out = append(out, v)
 	}
-	return out, len(out), nil
+	return out, total, rows.Err()
 }
 func (d *classroomPublicDB) ListStandalone(ctx context.Context, q classroomPublicQuery, uid int64) ([]classroomPublicContent, int, error) {
-	xs, e := d.store.ListContents(ctx, classroom.ContentFilter{Status: classroom.ContentPublished, ContentType: q.ContentType, StandaloneOnly: true, Limit: q.Limit, Offset: q.Offset})
-	if e != nil {
-		return nil, 0, e
+	const eligible = `c.status=$1 AND m.storage_status=$2 AND (c.series_id IS NULL OR c.show_as_standalone=true) AND ($3='' OR c.content_type=$3)`
+	args := []any{classroom.ContentPublished, classroom.MediaReady, q.ContentType}
+	var total int
+	if err := d.db.QueryRowContext(ctx, `SELECT count(*) FROM classroom_contents c JOIN classroom_media_assets m ON m.id=c.media_asset_id LEFT JOIN classroom_series s ON s.id=c.series_id WHERE `+eligible, args...).Scan(&total); err != nil {
+		return nil, 0, err
 	}
-	out := make([]classroomPublicContent, 0, len(xs))
-	for _, c := range xs {
+	rows, err := d.db.QueryContext(ctx, `SELECT c.id,c.series_id,c.show_as_standalone,c.title,c.description,c.content_type,c.media_asset_id,c.cover_url,c.duration_seconds,c.teacher_name_snapshot,c.access_level,c.price_cents,c.playback_blocked,s.id,s.status,s.access_level,s.price_cents,s.playback_blocked FROM classroom_contents c JOIN classroom_media_assets m ON m.id=c.media_asset_id LEFT JOIN classroom_series s ON s.id=c.series_id WHERE `+eligible+` ORDER BY c.sort_order,c.id LIMIT $4 OFFSET $5`, append(args, q.Limit, q.Offset)...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := make([]classroomPublicContent, 0, q.Limit)
+	for rows.Next() {
+		var c classroom.Content
+		var parentID sql.NullInt64
+		var parentStatus, parentAccess sql.NullString
+		var parentPrice sql.NullInt64
+		var parentBlocked sql.NullBool
+		if err = rows.Scan(&c.ID, &c.SeriesID, &c.ShowAsStandalone, &c.Title, &c.Description, &c.ContentType, &c.MediaAssetID, &c.CoverURL, &c.DurationSeconds, &c.TeacherNameSnapshot, &c.AccessLevel, &c.PriceCents, &c.PlaybackBlocked, &parentID, &parentStatus, &parentAccess, &parentPrice, &parentBlocked); err != nil {
+			return nil, 0, err
+		}
+		c.Status = classroom.ContentPublished
 		var p *classroom.Series
-		if c.SeriesID != nil {
-			v, er := d.store.GetSeries(ctx, *c.SeriesID)
-			if er == nil {
-				p = &v
-			}
+		if parentID.Valid {
+			p = &classroom.Series{ID: parentID.Int64, Status: classroom.SeriesStatus(parentStatus.String), AccessLevel: classroom.AccessLevel(parentAccess.String), PriceCents: int(parentPrice.Int64), PlaybackBlocked: parentBlocked.Bool}
 		}
-		if p != nil && p.Status != classroom.SeriesPublished && !(c.ShowAsStandalone && c.Status == classroom.ContentPublished) {
-			continue
-		}
-		v, er := d.contentView(ctx, c, uid, p)
-		if er == nil {
-			out = append(out, v)
-		}
+		out = append(out, d.contentViewReady(ctx, c, uid, p))
 	}
-	return out, len(out), nil
+	return out, total, rows.Err()
 }
 func (d *classroomPublicDB) GetSeries(ctx context.Context, id, uid int64) (classroomPublicSeriesDetail, error) {
 	s, e := d.store.GetSeries(ctx, id)
@@ -457,17 +501,24 @@ func (d *classroomPublicDB) GetSeries(ctx context.Context, id, uid int64) (class
 	if a == classroom.AccessPaid {
 		ok = d.seriesEntitled(ctx, uid, s.ID)
 	}
-	xs, e := d.store.ListContents(ctx, classroom.ContentFilter{SeriesID: &id, Status: classroom.ContentPublished, Limit: 100})
+	rows, e := d.db.QueryContext(ctx, `SELECT c.id,c.series_id,c.title,c.description,c.content_type,c.cover_url,c.duration_seconds,c.teacher_name_snapshot,c.access_level,c.price_cents,c.playback_blocked FROM classroom_contents c JOIN classroom_media_assets m ON m.id=c.media_asset_id WHERE c.series_id=$1 AND c.status=$2 AND m.storage_status=$3 ORDER BY c.sort_order,c.id`, id, classroom.ContentPublished, classroom.MediaReady)
 	if e != nil {
 		return classroomPublicSeriesDetail{}, e
 	}
-	out := make([]classroomPublicContent, 0, len(xs))
-	for _, c := range xs {
-		if v, er := d.contentView(ctx, c, uid, &s); er == nil {
-			out = append(out, v)
+	defer rows.Close()
+	out := make([]classroomPublicContent, 0)
+	for rows.Next() {
+		var c classroom.Content
+		if e = rows.Scan(&c.ID, &c.SeriesID, &c.Title, &c.Description, &c.ContentType, &c.CoverURL, &c.DurationSeconds, &c.TeacherNameSnapshot, &c.AccessLevel, &c.PriceCents, &c.PlaybackBlocked); e != nil {
+			return classroomPublicSeriesDetail{}, e
 		}
+		out = append(out, d.contentViewReady(ctx, c, uid, &s))
 	}
-	return classroomPublicSeriesDetail{Series: classroomPublicSeries{ID: s.ID, Title: s.Title, Summary: s.Summary, CoverURL: s.CoverURL, TeacherName: s.TeacherNameSnapshot, EffectiveAccess: a, PriceCents: s.PriceCents, CanPlay: ok, PlaybackBlocked: s.PlaybackBlocked}, Contents: out}, nil
+	if e = rows.Err(); e != nil {
+		return classroomPublicSeriesDetail{}, e
+	}
+	canPlay := ok && !s.PlaybackBlocked
+	return classroomPublicSeriesDetail{Series: classroomPublicSeries{ID: s.ID, Title: s.Title, Summary: s.Summary, CoverURL: s.CoverURL, TeacherName: s.TeacherNameSnapshot, EffectiveAccess: a, PriceCents: s.PriceCents, CanPlay: canPlay, PurchaseState: classroomPurchaseState(a, ok), PlaybackBlocked: s.PlaybackBlocked}, Contents: out}, nil
 }
 func (d *classroomPublicDB) GetContent(ctx context.Context, id, uid int64) (classroomPublicContent, error) {
 	c, e := d.store.GetContent(ctx, id)
@@ -500,6 +551,9 @@ func (d *classroomPublicDB) Playback(ctx context.Context, uid, id int64) (classr
 	}
 	if c.MediaAssetID == nil {
 		return classroomPlaybackSource{}, classroom.ErrNotFound
+	}
+	if c.PlaybackBlocked || (p != nil && p.PlaybackBlocked) {
+		return classroomPlaybackSource{}, errClassroomPlaybackBlocked
 	}
 	m, e := d.store.GetMediaAsset(ctx, *c.MediaAssetID)
 	if e != nil || m.StorageStatus != classroom.MediaReady {
