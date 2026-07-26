@@ -71,6 +71,7 @@
 
 - `id`
 - `series_id`（可空）
+- `show_as_standalone`（属于系列时是否也进入独立内容入口）
 - `title`, `description`
 - `content_type`: `video | audio`
 - `media_asset_id` / object key
@@ -81,7 +82,7 @@
 - `badge`, `tags`
 - `episode_no`, `sort_order`
 - `status`: `draft | processing | ready | published | offline | failed`
-- `access_level`（可覆盖系列）
+- `access_level`: `inherit | public | login | member | paid`
 - `price_cents`
 - `published_at`
 - `created_by`, `updated_by`, timestamps
@@ -90,13 +91,38 @@
 
 记录分片上传任务、媒体校验、封面抽取、时长读取、失败原因、重试次数和最终资产引用。大文件不写入数据库 BYTEA。
 
+#### `classroom_media_assets`
+
+独立保存媒体元数据，不复用 `upload_assets.data BYTEA`：
+
+- `id`, `bucket`, `object_key`, `etag`, `checksum`
+- `content_type`, `size_bytes`, `duration_seconds`
+- `width`, `height`, `cover_object_key`
+- `storage_status`: `pending | uploaded | processing | ready | failed | deleted`
+- `created_by`, timestamps
+
+视频/音频对象统一放在服务端生成的前缀下，客户端不能自行指定 bucket、目录或 object key。
+
 #### `classroom_entitlements`
 
-记录用户对系列或单课的购买、会员授权和有效期，用于播放鉴权。
+记录用户对系列或单课的购买、人工补发、撤销和有效期，用于播放鉴权。课堂会员状态直接读取现有用户会员等级和到期时间，不复制到课堂权益表，避免双写。
 
 #### `classroom_progress`
 
 记录用户最近播放、播放秒数、完成比例和最近访问时间。第一阶段提供继续学习能力，收藏与统计可在后续扩展。
+
+#### 订单与权益
+
+复用现有 `orders` 支付回调体系，不引入第二套订单表：
+
+- `product_type`: `classroom_series | classroom_content`
+- `ref_id` 指向系列或课件
+- 保存金额快照、支付状态、退款状态和幂等键
+- 支付成功回调在同一事务内发放 `classroom_entitlements`
+- 权益约束保证 series/content 恰好命中一个目标；记录订单来源、有效期、撤销时间
+- 退款、人工补发、重复回调和已购保留策略必须显式处理
+
+购买流程复用现有微信支付订单能力：创建订单时保存商品、目标、金额和标题快照；支付回调按订单幂等更新状态并事务性发放权益；取消、支付失败、退款和人工补发均保留审计记录。不新建并行支付回调体系。
 
 ### 3.2 上传流程
 
@@ -111,7 +137,18 @@
 → 填写元数据并保存草稿/发布
 ```
 
-支持断点续传、进度显示、失败重试、孤儿文件清理。视频首版至少支持 MP4/MOV，音频至少支持 MP3/M4A/AAC；具体白名单和大小由环境配置控制。
+支持断点续传、进度显示、失败重试、孤儿文件清理。第一阶段只接受可直接在微信小程序稳定播放的媒体：视频为 MP4（H.264 + AAC），音频为 MP3 或 M4A（AAC）。服务端验证容器和编码，`ready` 必须代表可播放。MOV、裸 AAC 和其他格式在转码能力上线后再开放；具体大小由环境配置控制。
+
+上传使用独立的课堂媒体 Multipart API，不改造通用 `/api/upload`：
+
+```text
+POST /api/admin/classroom/uploads/initiate
+POST /api/admin/classroom/uploads/:id/parts/:part/sign
+POST /api/admin/classroom/uploads/:id/complete
+POST /api/admin/classroom/uploads/:id/abort
+```
+
+服务端负责校验任务所属管理员、object key 前缀、分片数量、大小、ETag/Checksum 和 OSS HeadObject；complete 必须幂等。任务包含凭证过期时间、最大分片数、重试次数和清理状态，过期任务执行 Abort/孤儿对象清理。浏览器直传需要显式配置 OSS endpoint、bucket、region、CORS、part size 和凭证 TTL。
 
 ### 3.3 播放流程
 
@@ -123,9 +160,68 @@ POST /api/miniapp/classroom/content/:id/play
 
 服务端依次检查发布状态、登录状态、会员有效期、系列购买或单课购买，再返回短时播放 URL。URL 过期时小程序自动刷新；播放失败保留错误状态和重试操作。
 
+公开内容也统一经过播放票据/签名接口：未登录用户使用短时匿名票据并限流，登录用户使用小程序 JWT。列表和详情接口只返回元数据，不返回永久 `object_url`。播放对象必须支持 HTTP Range/206；不经过现有 BYTEA 公共资源响应。
+
+第一阶段音频采用页面内播放器，支持播放、暂停、拖动、续播和地址刷新；离开详情页后暂停。锁屏控制、系统后台持续播放和播放队列放到第二阶段。
+
 ### 3.4 后台权限
 
 独立拆分查看、编辑、上传媒体、发布/下线、设置价格与权限等权限。上传权限不能继续复用任意 RAG/阅读/视频/语音权限 OR 逻辑。发布、改价、下线记录操作者、时间和变更原因。
+
+权限码与菜单种子至少包含：`Miniapp:Classroom:List`、`Write`、`Upload`、`Publish`、`Price`，并覆盖路由、按钮级权限、角色绑定、缓存刷新和审计测试。
+
+## 3.5 状态、列表与归属约束
+
+- 课件状态：`draft → processing → ready → published → offline`；失败状态只能重试或回到草稿，未 `ready` 不得发布；
+- 系列状态：`draft → published → offline`；属于系列的课件发布前要求系列已发布；系列下线后默认隐藏系列及其课时，但已购用户仍可按权益规则播放；
+- `series_id` 可空；系列内容通过 `show_as_standalone=true` 才额外进入独立内容入口，两个入口分别排序且单个列表内不重复；删除系列默认 `RESTRICT`，先迁移或解除课时归属；
+- 系列/课件排序使用稳定的 `sort_order + id`，列表接口分页、过滤权限后再返回；公开列表只查 `published` 且有效媒体；
+- API 定义 ETag/缓存失效规则；发布、下线、改价、系列排序会清理相关缓存；
+- 进度写入校验用户与课件归属，服务端限制频率并使用幂等 upsert，不接受任意客户端 completed 百分比；
+- 老师信息采用 `teacher_id`（如已有老师实体）+ 发布时名称快照；若当前老师仍来自站点配置，先提供明确的兼容映射，不让 `teacher_name` 出现两套无规则来源；
+- 权限过滤在查询层或明确的服务层统一完成，避免先返回付费内容元数据再由前端隐藏。
+
+### 3.5.1 权限解析规则
+
+1. 无系列内容必须设置具体权限，不允许 `inherit`；
+2. 系列内容为 `inherit` 时使用系列权限；设置具体值时单课覆盖系列权限，允许升级或降级；
+3. 播放鉴权先判断硬下线/媒体状态，再计算 `effective_access`；
+4. 系列购买解锁仍属于该系列的当前和未来课时；课时移出系列后不再由系列权益覆盖；
+5. 单课购买只解锁该课；先单买后买系列，第一阶段不做金额抵扣；
+6. `paid` 发布时必须有大于 0 的人民币分值价格；非付费权限价格必须为空或 0；改价不影响已有订单金额快照；
+7. 系列下线默认从公开列表移除、停止新购买，但已购用户仍可从“我的学习”播放；管理员可使用紧急停播开关阻止所有播放；
+8. 公开内容无需登录，登录内容要求 JWT，会员内容读取现有会员权威状态，付费内容检查系列或单课权益。
+
+### 3.5.2 公开与小程序 API
+
+```text
+GET  /api/public/classroom/series
+GET  /api/public/classroom/standalone
+GET  /api/public/classroom/series/:id
+GET  /api/public/classroom/content/:id
+POST /api/miniapp/classroom/content/:id/play
+POST /api/miniapp/classroom/orders
+GET  /api/miniapp/classroom/orders/:id
+PUT  /api/miniapp/classroom/content/:id/progress
+GET  /api/miniapp/classroom/continue-learning
+```
+
+列表和详情返回 `effectiveAccess`、`canPlay`、`purchaseState`、`priceCents` 等展示字段，但不返回媒体 object key/永久 URL。公开匿名请求不返回用户状态；登录请求可附带用户态字段。
+
+### 3.5.3 进度与匿名行为
+
+- 登录用户使用服务端进度，每 10–15 秒或暂停/离页时限频 upsert；
+- 完成状态由服务端根据时长和播放位置计算，默认达到 90%；
+- 匿名公开内容只保存在本机，不跨设备同步，登录后可选择合并最新进度；
+- 第一阶段的“继续学习”属于 MVP；第二阶段扩展收藏、详细学习记录和统计分析。
+
+### 3.5.4 内容草稿与上传绑定
+
+先创建课件草稿，再为该草稿创建上传任务。上传任务只允许绑定一个课件草稿；完成上传后生成媒体资产并回写草稿。取消编辑的已完成资产进入短期孤儿保留期，由定时任务清理；重复 complete/回调保持幂等。
+
+### 3.5.5 老师数据来源
+
+第一阶段暂不新建复杂老师实体：先修复后台 `home.teacherTeaser` 与小程序 `teacher/teachers` 的兼容映射，并为课堂内容保存稳定 `teacher_key` 与发布时 `teacher_name_snapshot`。后续引入独立老师实体时再迁移引用。
 
 ## 4. 页面与交互
 
@@ -151,16 +247,26 @@ POST /api/miniapp/classroom/content/:id/play
 ### 第一阶段：内容发布与播放 MVP
 
 1. 修复老师配置字段断链；
-2. 新增课件/系列/上传任务数据模型与迁移；
-3. 后台课件管理、系列管理、分片上传、草稿/发布/下线；
-4. 公开列表、详情和播放鉴权 API；
-5. 小程序老师课堂双入口、详情页、视频/音频播放器；
-6. 四级权限、系列/单课购买、基础最近播放；
-7. 端到端上传、发布、鉴权、播放与失败重试测试。
+2. 新增课件/系列/媒体资产/上传任务/权益数据模型与迁移；
+3. 独立 Multipart 上传服务、媒体校验和过期清理；
+4. 后台课件管理、系列管理、草稿/发布/下线；
+5. 公开列表、详情、匿名/JWT 播放鉴权 API；
+6. 小程序老师课堂双入口、详情页、视频/音频播放器；
+7. 扩展现有订单回调实现系列/单课购买和权益幂等发放；
+8. 四级权限、基础最近播放；
+9. 端到端上传、发布、鉴权、支付、播放与失败重试测试。
+
+第一阶段按可独立验收的里程碑交付：
+
+- A：数据模型、老师字段兼容、媒体分片上传；
+- B：后台内容/系列管理与小程序双入口播放；
+- C：公开、登录、会员权限；
+- D：系列/单课支付、回调与权益；
+- E：进度、继续学习与发布审计。
 
 ### 第二阶段：学习体验
 
-- 观看进度同步、收藏、搜索、筛选、标签；
+- 收藏、搜索、筛选、标签和更完整的学习历史；
 - 字幕、倍速、多清晰度、转码状态；
 - 配套 PDF/PPT、章节与期次；
 - 定时发布、批量管理和内容推荐。
@@ -183,6 +289,8 @@ POST /api/miniapp/classroom/content/:id/play
 - 后台可完成上传、预览、草稿、发布、下线、排序、改价；
 - 老师配置修改能正确同步到小程序；
 - 上传、媒体校验、权限、支付、播放、发布审计均可追踪。
+- 分片 complete/abort 幂等，重复回调、过期任务、孤儿对象和 OSS 故障均有覆盖；
+- 非法 MIME、损坏媒体、Range/206、签名过期、越权播放、退款与人工补发均有测试。
 
 ## 7. 非目标
 
