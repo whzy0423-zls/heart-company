@@ -168,7 +168,9 @@ func (s *UploadService) Initiate(ctx context.Context, input InitiateUploadInput)
 		switch previous.Status {
 		case UploadInitiated, UploadUploading:
 			return InitiateUploadResult{}, ErrUploadConflict
-		case UploadFailed, UploadExpired, UploadAborted, UploadCompleting:
+		case UploadCompleting:
+			return InitiateUploadResult{}, ErrUploadConflict
+		case UploadFailed, UploadExpired, UploadAborted:
 			if previous.CleanupStatus != "cleaned" {
 				if err := s.cleanupTask(ctx, &previous, previous.Status); err != nil {
 					return InitiateUploadResult{}, fmt.Errorf("cleanup previous upload: %w", err)
@@ -314,7 +316,11 @@ func (s *UploadService) Complete(ctx context.Context, taskID, creatorID int64, p
 		media.CoverObjectKey = probe.CoverObjectKey
 		media, err = s.repo.UpdateMediaAsset(ctx, media)
 		if err != nil {
-			return CompleteUploadResult{}, s.fail(ctx, task, err)
+			cause := err
+			if deleteErr := s.store.DeleteObject(ctx, probe.CoverObjectKey); deleteErr != nil && !storage.IsAlreadyGone(deleteErr) {
+				cause = fmt.Errorf("%w; cover_object_key=%s; cover cleanup: %v", err, probe.CoverObjectKey, deleteErr)
+			}
+			return CompleteUploadResult{}, s.fail(ctx, task, cause)
 		}
 	}
 	media.ETag = head.ETag
@@ -413,6 +419,18 @@ func (s *UploadService) fail(ctx context.Context, task UploadTask, cause error) 
 	_, _ = s.repo.SaveUploadTask(ctx, task)
 	return cause
 }
+func coverKeyFromFailure(reason string) string {
+	const marker = "cover_object_key="
+	index := strings.Index(reason, marker)
+	if index < 0 {
+		return ""
+	}
+	value := reason[index+len(marker):]
+	if end := strings.IndexAny(value, "; \n\r\t"); end >= 0 {
+		value = value[:end]
+	}
+	return strings.TrimSpace(value)
+}
 func validCRC64(value string) bool {
 	value = strings.TrimSpace(strings.ToLower(value))
 	if !strings.HasPrefix(value, "crc64:") || len(value) == 6 {
@@ -446,6 +464,11 @@ func (s *UploadService) cleanupTask(ctx context.Context, task *UploadTask, statu
 			if err := s.store.DeleteObject(ctx, media.CoverObjectKey); cleanupErr == nil && err != nil && !storage.IsAlreadyGone(err) {
 				cleanupErr = err
 			}
+		}
+	}
+	if traced := coverKeyFromFailure(task.FailureReason); traced != "" {
+		if err := s.store.DeleteObject(ctx, traced); cleanupErr == nil && err != nil && !storage.IsAlreadyGone(err) {
+			cleanupErr = err
 		}
 	}
 	task.Status = status
