@@ -88,10 +88,10 @@ type UploadRepository interface {
 	ListExpiredUploadTasks(context.Context, int) ([]UploadTask, error)
 	FinalizeUpload(context.Context, UploadTask, MediaAsset) (UploadTask, MediaAsset, Content, error)
 	ClaimUploadCompletion(context.Context, int64) (UploadTask, bool, error)
-	ClaimUploadAbort(context.Context, int64) (UploadTask, bool, error)
 	AcquireUploadLock(context.Context, int64) (func(), error)
 	MarkUploadUploading(context.Context, int64) (UploadTask, error)
 	ClaimUploadCleanup(context.Context, UploadTask, UploadStatus) (UploadTask, bool, error)
+	FinishUploadCleanup(context.Context, UploadTask, UploadStatus, string, string) (UploadTask, bool, error)
 }
 
 type UploadService struct {
@@ -174,11 +174,12 @@ func (s *UploadService) Initiate(ctx context.Context, input InitiateUploadInput)
 		switch previous.Status {
 		case UploadInitiated, UploadUploading:
 			return InitiateUploadResult{}, ErrUploadConflict
-		case UploadCompleting:
+		case UploadCompleting, UploadCleaning:
 			return InitiateUploadResult{}, ErrUploadConflict
 		case UploadFailed, UploadExpired, UploadAborted:
 			if previous.CleanupStatus != "cleaned" {
-				claimed, ok, claimErr := s.repo.ClaimUploadCleanup(ctx, previous, previous.Status)
+				terminalStatus := previous.Status
+				claimed, ok, claimErr := s.repo.ClaimUploadCleanup(ctx, previous, terminalStatus)
 				if claimErr != nil {
 					return InitiateUploadResult{}, claimErr
 				}
@@ -186,7 +187,7 @@ func (s *UploadService) Initiate(ctx context.Context, input InitiateUploadInput)
 					return InitiateUploadResult{}, ErrUploadConflict
 				}
 				previous = claimed
-				if err := s.cleanupTask(ctx, &previous, previous.Status); err != nil {
+				if err := s.cleanupTask(ctx, &previous, terminalStatus); err != nil {
 					return InitiateUploadResult{}, fmt.Errorf("cleanup previous upload: %w", err)
 				}
 			}
@@ -370,7 +371,13 @@ func (s *UploadService) Abort(ctx context.Context, taskID, creatorID int64) (Upl
 	if task.Status == UploadAborted && task.CleanupStatus == "cleaned" {
 		return task, nil
 	}
-	claimed, ok, err := s.repo.ClaimUploadAbort(ctx, task.ID)
+	if task.Status == UploadCleaning {
+		return s.waitForCleaned(ctx, task.ID)
+	}
+	if task.Status == UploadCompleting {
+		return UploadTask{}, ErrUploadConflict
+	}
+	claimed, ok, err := s.repo.ClaimUploadCleanup(ctx, task, UploadAborted)
 	if err != nil {
 		return UploadTask{}, err
 	}
@@ -412,6 +419,7 @@ func (s *UploadService) ensureActive(ctx context.Context, task UploadTask) error
 func (s *UploadService) fail(ctx context.Context, task UploadTask, cause error) error {
 	var errs []error
 	task.Status = UploadFailed
+	task.CleanupStatus = "pending"
 	task.FailureReason = cause.Error()
 	content, contentErr := s.repo.GetContent(ctx, task.ContentID)
 	if contentErr != nil {
@@ -510,19 +518,26 @@ func (s *UploadService) cleanupTask(ctx context.Context, task *UploadTask, statu
 			cleanupErr = err
 		}
 	}
-	task.Status = status
+	cleanupStatus := "cleaned"
+	failureReason := ""
 	if cleanupErr != nil {
-		task.CleanupStatus = "failed"
-		task.FailureReason = cleanupErr.Error()
-	} else {
-		task.CleanupStatus = "cleaned"
-		task.FailureReason = ""
+		cleanupStatus = "failed"
+		failureReason = cleanupErr.Error()
 	}
-	_, saveErr := s.repo.SaveUploadTask(ctx, *task)
+	finished, ok, finishErr := s.repo.FinishUploadCleanup(ctx, *task, status, cleanupStatus, failureReason)
+	if ok {
+		*task = finished
+	}
 	if cleanupErr != nil {
 		return cleanupErr
 	}
-	return saveErr
+	if finishErr != nil {
+		return finishErr
+	}
+	if !ok {
+		return ErrUploadConflict
+	}
+	return nil
 }
 func (s *UploadService) CleanupPending(ctx context.Context, limit int) (int, error) {
 	tasks, err := s.repo.ListExpiredUploadTasks(ctx, limit)
@@ -878,7 +893,16 @@ func (s *Store) claimUploadStatus(ctx context.Context, id int64, from []UploadSt
 
 func (s *Store) ClaimUploadCleanup(ctx context.Context, expected UploadTask, status UploadStatus) (UploadTask, bool, error) {
 	var item UploadTask
-	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET status=$1,cleanup_status='pending',updated_at=now() WHERE id=$2 AND status=$3 AND updated_at=$4 RETURNING id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, status, expected.ID, expected.Status, expected.UpdatedAt).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET status='cleaning',cleanup_status='pending',updated_at=now() WHERE id=$1 AND status=$2 AND updated_at=$3 AND status<>'cleaning' RETURNING id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, expected.ID, expected.Status, expected.UpdatedAt).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadTask{}, false, nil
+	}
+	return item, err == nil, err
+}
+
+func (s *Store) FinishUploadCleanup(ctx context.Context, expected UploadTask, status UploadStatus, cleanupStatus, failureReason string) (UploadTask, bool, error) {
+	var item UploadTask
+	err := s.db.QueryRowContext(ctx, `UPDATE classroom_upload_tasks SET status=$1,cleanup_status=$2,failure_reason=$3,updated_at=now() WHERE id=$4 AND status='cleaning' AND updated_at=$5 RETURNING id,content_id,creator_id,oss_upload_id,object_key,expected_size,checksum,part_size,max_parts,status,expires_at,attempt_count,cleanup_status,media_asset_id,failure_reason,created_at,updated_at`, status, cleanupStatus, failureReason, expected.ID, expected.UpdatedAt).Scan(&item.ID, &item.ContentID, &item.CreatorID, &item.OSSUploadID, &item.ObjectKey, &item.ExpectedSize, &item.Checksum, &item.PartSize, &item.MaxParts, &item.Status, &item.ExpiresAt, &item.AttemptCount, &item.CleanupStatus, &item.MediaAssetID, &item.FailureReason, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UploadTask{}, false, nil
 	}

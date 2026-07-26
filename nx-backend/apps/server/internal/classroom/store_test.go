@@ -228,6 +228,23 @@ func TestStoreOptimisticUpdateSucceedsWithMatchingVersion(t *testing.T) {
 	}
 }
 
+func TestStoreFinishUploadCleanupUsesCleaningVersionCAS(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	db := openClassroomQueryDB(t, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		if !strings.Contains(query, "status='cleaning' AND updated_at=$5") {
+			t.Fatalf("cleanup finish is not guarded by cleaning version: %s", query)
+		}
+		if len(args) != 5 || args[4].Value != now {
+			t.Fatalf("cleanup finish CAS args = %+v", args)
+		}
+		return classroomRows([]string{"id", "content_id", "creator_id", "oss_upload_id", "object_key", "expected_size", "checksum", "part_size", "max_parts", "status", "expires_at", "attempt_count", "cleanup_status", "media_asset_id", "failure_reason", "created_at", "updated_at"}, nil), nil
+	})
+	_, ok, err := NewStore(db).FinishUploadCleanup(context.Background(), UploadTask{ID: 1, UpdatedAt: now}, UploadExpired, "cleaned", "")
+	if err != nil || ok {
+		t.Fatalf("stale cleanup finish ok=%v err=%v", ok, err)
+	}
+}
+
 var classroomDriverSequence atomic.Int64
 
 func openClassroomQueryDB(t *testing.T, query func(context.Context, string, []driver.NamedValue) (driver.Rows, error)) *sql.DB {

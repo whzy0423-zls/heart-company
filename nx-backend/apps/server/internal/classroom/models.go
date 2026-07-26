@@ -47,6 +47,7 @@ const (
 	UploadUploading  UploadStatus = "uploading"
 	UploadCompleted  UploadStatus = "completed"
 	UploadCompleting UploadStatus = "completing"
+	UploadCleaning   UploadStatus = "cleaning"
 	UploadAborted    UploadStatus = "aborted"
 	UploadExpired    UploadStatus = "expired"
 	UploadFailed     UploadStatus = "failed"
@@ -270,7 +271,7 @@ func (u UploadTask) Validate() error {
 	if u.ExpectedSize <= 0 || u.PartSize <= 0 || u.MaxParts <= 0 || u.AttemptCount < 0 {
 		return errors.New("invalid upload task size or attempts")
 	}
-	if !oneOf(string(u.Status), string(UploadInitiated), string(UploadUploading), string(UploadCompleting), string(UploadCompleted), string(UploadAborted), string(UploadExpired), string(UploadFailed)) {
+	if !oneOf(string(u.Status), string(UploadInitiated), string(UploadUploading), string(UploadCompleting), string(UploadCleaning), string(UploadCompleted), string(UploadAborted), string(UploadExpired), string(UploadFailed)) {
 		return fmt.Errorf("invalid upload status %q", u.Status)
 	}
 	if u.ExpiresAt.IsZero() {
