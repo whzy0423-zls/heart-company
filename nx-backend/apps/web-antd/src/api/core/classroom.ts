@@ -79,10 +79,9 @@ export interface ClassroomContent {
   updatedAt: string;
 }
 
-export interface ClassroomSeriesPayload {
+export interface ClassroomSeriesCreatePayload {
   coverAssetId?: number;
   coverUrl?: string;
-  expectedUpdatedAt?: string;
   sortOrder?: number;
   summary?: string;
   teacherKey?: string;
@@ -90,14 +89,18 @@ export interface ClassroomSeriesPayload {
   title: string;
 }
 
-export interface ClassroomContentPayload {
+export interface ClassroomSeriesUpdatePayload
+  extends ClassroomSeriesCreatePayload {
+  expectedUpdatedAt: string;
+}
+
+export interface ClassroomContentCreatePayload {
   badge?: string;
   contentType: ClassroomContentType;
   coverUrl?: string;
   description?: string;
   durationSeconds?: number;
   episodeNo?: number;
-  expectedUpdatedAt?: string;
   recordedAt?: string;
   seriesId?: number;
   showAsStandalone?: boolean;
@@ -106,6 +109,11 @@ export interface ClassroomContentPayload {
   teacherKey?: string;
   teacherName?: string;
   title: string;
+}
+
+export interface ClassroomContentUpdatePayload
+  extends ClassroomContentCreatePayload {
+  expectedUpdatedAt: string;
 }
 
 export interface ClassroomUploadTask {
@@ -243,7 +251,7 @@ export function getClassroomSeriesDetailApi(id: number) {
   );
 }
 
-export function createClassroomSeriesApi(data: ClassroomSeriesPayload) {
+export function createClassroomSeriesApi(data: ClassroomSeriesCreatePayload) {
   return classroomRequest(
     requestClient.post<ClassroomSeries>('/admin/classroom/series', data),
   );
@@ -251,7 +259,7 @@ export function createClassroomSeriesApi(data: ClassroomSeriesPayload) {
 
 export function updateClassroomSeriesApi(
   id: number,
-  data: ClassroomSeriesPayload,
+  data: ClassroomSeriesUpdatePayload,
 ) {
   return classroomRequest(
     requestClient.put<ClassroomSeries>(`/admin/classroom/series/${id}`, data),
@@ -330,7 +338,7 @@ export function getClassroomContentDetailApi(id: number) {
   );
 }
 
-export function createClassroomContentApi(data: ClassroomContentPayload) {
+export function createClassroomContentApi(data: ClassroomContentCreatePayload) {
   return classroomRequest(
     requestClient.post<ClassroomContent>('/admin/classroom/contents', data),
   );
@@ -338,7 +346,7 @@ export function createClassroomContentApi(data: ClassroomContentPayload) {
 
 export function updateClassroomContentApi(
   id: number,
-  data: ClassroomContentPayload,
+  data: ClassroomContentUpdatePayload,
 ) {
   return classroomRequest(
     requestClient.put<ClassroomContent>(

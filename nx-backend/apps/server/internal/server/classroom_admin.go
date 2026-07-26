@@ -538,10 +538,6 @@ func (s *Server) mutateSeries(w http.ResponseWriter, r *http.Request, current cl
 		next.Status = classroom.SeriesOffline
 		reason = classroomAuditSummary("下线课程系列", actionBody.Reason)
 	case "price":
-		if current.Status != classroom.SeriesDraft {
-			httpx.Fail(w, http.StatusConflict, "price can only change on draft series")
-			return
-		}
 		var in priceInput
 		in = priceInput{AccessLevel: actionBody.AccessLevel, PriceCents: actionBody.PriceCents, ExpectedUpdatedAt: expected}
 		if !validClassroomPrice(w, in.AccessLevel, in.PriceCents) {
@@ -669,10 +665,6 @@ func (s *Server) mutateContent(w http.ResponseWriter, r *http.Request, current c
 		next.Status = classroom.ContentOffline
 		reason = classroomAuditSummary("下线课件", actionBody.Reason)
 	case "price":
-		if current.Status != classroom.ContentDraft {
-			httpx.Fail(w, http.StatusConflict, "price can only change on draft content")
-			return
-		}
 		var in priceInput
 		in = priceInput{AccessLevel: actionBody.AccessLevel, PriceCents: actionBody.PriceCents, ExpectedUpdatedAt: expected}
 		if !validClassroomPriceForContent(w, current.SeriesID, in.AccessLevel, in.PriceCents) {

@@ -252,3 +252,34 @@ func TestClassroomEffectiveAccessParentFailureAndPurchaseTarget(t *testing.T) {
 		t.Fatalf("public content must not set purchase target: %s", rr.Body.String())
 	}
 }
+
+func TestClassroomPriceActionAllowsPublishedAndOfflineRecords(t *testing.T) {
+	for _, status := range []classroom.SeriesStatus{classroom.SeriesPublished, classroom.SeriesOffline} {
+		f := &fakeClassroomAdminService{series: classroom.Series{ID: 12, Title: "series", Status: status, AccessLevel: classroom.AccessPaid, PriceCents: 1000, UpdatedAt: time.Now()}}
+		audit := &capturingClassroomAudit{}
+		s := &Server{classroomAdmin: f, classroomAudit: audit}
+		mux := http.NewServeMux()
+		registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/series/12/price", strings.NewReader(`{"expectedUpdatedAt":"2026-07-26T10:00:00Z","accessLevel":"paid","priceCents":2999,"reason":"新一期定价"}`))))
+		if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"priceCents":2999`) {
+			t.Fatalf("status=%s code=%d body=%s", status, rr.Code, rr.Body.String())
+		}
+		if audit.entry.Action != "price" || !strings.Contains(audit.entry.Summary, "新一期定价") {
+			t.Fatalf("status=%s audit=%+v", status, audit.entry)
+		}
+	}
+}
+
+func TestClassroomContentPriceActionAllowsPublishedRecord(t *testing.T) {
+	f := &fakeClassroomAdminService{content: classroom.Content{ID: 13, Title: "lesson", ContentType: classroom.ContentAudio, Status: classroom.ContentPublished, AccessLevel: classroom.AccessPaid, PriceCents: 800, UpdatedAt: time.Now()}}
+	audit := &capturingClassroomAudit{}
+	s := &Server{classroomAdmin: f, classroomAudit: audit}
+	mux := http.NewServeMux()
+	registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/contents/13/price", strings.NewReader(`{"expectedUpdatedAt":"2026-07-26T10:00:00Z","accessLevel":"paid","priceCents":1599,"reason":"单课调价"}`))))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"priceCents":1599`) {
+		t.Fatalf("code=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
