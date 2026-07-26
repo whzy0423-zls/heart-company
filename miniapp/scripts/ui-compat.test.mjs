@@ -117,7 +117,7 @@ const indexPage = readFileSync('src/pages/index/index.vue', 'utf8')
 const homeTemplate = indexPage.match(/<template>([\s\S]*?)<\/template>/)?.[1] || ''
 const homeRoot = homeTemplate.match(/<view\s+class=["']wrap home page-stack ios-page ios-safe-bottom["']>([\s\S]*?)<\/view>/)?.[1] || ''
 const carouselStart = homeRoot.indexOf('<swiper')
-const homeNavStart = homeRoot.indexOf('<view class="home-nav">')
+const homeNavStart = homeRoot.search(/<view\b[^>]*\bclass=["']home-nav["']/)
 
 assert.ok(carouselStart >= 0, 'home root should render a carousel before its navigation')
 assert.ok(homeNavStart >= 0, 'home root should render the home navigation')
@@ -137,6 +137,37 @@ assert.match(indexPage, /refreshSiteConfig/, 'home page should refresh carousel 
 assert.match(indexPage, /filterFailedCarouselItems/, 'home page should preserve failed-image filtering when applying cached and refreshed configuration')
 assert.match(indexPage, /failedCarouselImages\s*=\s*new Set\(\)/, 'home page should retain failed image URLs across configuration refreshes')
 assert.match(indexPage, /failedCarouselImages\.add\(image\)/, 'home page should remember each failed carousel image URL')
+assert.match(indexPage, /import\s*\{[^}]*\bnormalizeMiniappHome\b[^}]*\}\s*from\s*['"]\.\.\/\.\.\/utils\/homeMenu['"]/, 'home page should import the normalized miniapp home contract')
+assert.match(indexPage, /const\s+miniappHome\s*=\s*ref\(normalizeMiniappHome\(\)\)/, 'home page should start from backward-compatible purple home defaults')
+const applyHomeConfigBody = bracedBody(/function\s+applyHomeConfig\s*\(\s*config\s*\)\s*\{/.exec(indexPage)) || ''
+assert.match(applyHomeConfigBody, /normalizeHomeCarousel\(config\)/, 'one site-config application should update the carousel')
+assert.match(applyHomeConfigBody, /miniappHome\.value\s*=\s*normalizeMiniappHome\(config\)/, 'one site-config application should update the configured home sections')
+assert.match(indexPage, /if\s*\(cached\)\s*applyHomeConfig\(cached\)/, 'cached site configuration should update carousel and home copy together')
+assert.match(indexPage, /refreshSiteConfig\(\)[\s\S]*?\.then\(applyHomeConfig\)/, 'refreshed site configuration should update carousel and home copy together')
+assert.match(homeTemplate, /<view\b(?=[^>]*\bclass=["']home-nav["'])(?=[^>]*\bv-if=["']miniappHome\.brand\.enabled["'])[^>]*>/, 'brand navigation should follow configured visibility')
+assert.match(homeTemplate, /<text\s+class=["']home-nav__brand["']>\{\{ miniappHome\.brand\.name \}\}<\/text>/, 'brand name should render normalized configuration')
+assert.match(homeTemplate, /<text\s+class=["']home-nav__tagline["']>\{\{ miniappHome\.brand\.tagline \}\}<\/text>/, 'brand tagline should render normalized configuration')
+assert.match(homeTemplate, /<view\b(?=[^>]*\bclass=["']hero card ios-card["'])(?=[^>]*\bv-if=["']miniappHome\.hero\.enabled["'])[^>]*>/, 'hero should follow configured visibility')
+for (const [className, field] of [
+  ['hero__kicker', 'kicker'],
+  ['hero__title', 'title'],
+  ['hero__lead', 'description'],
+]) {
+  assert.match(homeTemplate, new RegExp(`<text\\s+class=["']${className}["']>\\{\\{ miniappHome\\.hero\\.${field} \\}\\}<\\/text>`), `.${className} should render normalized hero copy`)
+}
+assert.match(homeTemplate, /<button\b[^>]*\bclass=["']hero__cta ios-button["'][^>]*>[\s\S]*?\{\{ miniappHome\.hero\.buttonText \}\}[\s\S]*?<\/button>/, 'hero CTA should render normalized button copy')
+assert.match(homeTemplate, /<view\b(?=[^>]*\bclass=["']section-head ios-section["'])(?=[^>]*\bv-if=["']miniappHome\.entriesSection\.enabled["'])[^>]*>/, 'entry section heading should follow configured visibility')
+assert.match(homeTemplate, /<text\s+class=["']section-title["']>\{\{ miniappHome\.entriesSection\.title \}\}<\/text>/, 'entry section title should render normalized configuration')
+assert.match(homeTemplate, /<text\s+class=["']section-lead["']>\{\{ miniappHome\.entriesSection\.description \}\}<\/text>/, 'entry section description should render normalized configuration')
+assert.match(homeTemplate, /<view\b(?=[^>]*\bclass=["']energy-grid["'])(?=[^>]*\bv-if=["']miniappHome\.entriesSection\.enabled["'])[^>]*>/, 'entry grid should follow configured section visibility')
+assert.match(homeTemplate, /<view\b(?=[^>]*\bclass=["']growth-card["'])(?=[^>]*\bv-if=["']miniappHome\.growth\.enabled["'])[^>]*>/, 'growth section should follow configured visibility')
+for (const [className, field] of [
+  ['growth-card__eyebrow', 'eyebrow'],
+  ['growth-card__title', 'title'],
+  ['growth-card__desc', 'description'],
+]) {
+  assert.match(homeTemplate, new RegExp(`<text\\s+class=["']${className}["']>\\{\\{ miniappHome\\.growth\\.${field} \\}\\}<\\/text>`), `.${className} should render normalized growth copy`)
+}
 const pauseControl = homeRoot.match(/<button\b[\s\S]*?\bclass=["']home-carousel__toggle["'][\s\S]*?<\/button>/)?.[0] || ''
 assert.ok(pauseControl, 'home carousel should expose a pause or resume control')
 assert.match(pauseControl, /\bv-if=["']carousel\.items\.length\s*>\s*1\s*&&\s*carousel\.autoplay["']/, 'home carousel pause or resume control should only render for multiple autoplay slides')
@@ -204,43 +235,50 @@ function assertVisibleFocusStyle(className) {
   assert.match(focusRule[2], /\b(?:outline|box-shadow)\s*:/, `.${className} focus state should use an outline or box shadow`)
 }
 
-const energyCards = homeOpeningViews.filter((tag) => staticClassTokens(tag).includes('energy-card'))
-assert.equal(energyCards.length, 4, 'home page should render exactly four energy dashboard cards')
-for (const card of energyCards) {
-  const ariaLabel = card.match(/\saria-label=["']([^"']*)["']/)?.[1]
-  assert.ok(ariaLabel?.trim(), `energy card should expose a non-empty accessibility label: ${card}`)
-  assert.match(card, /\srole=["']button["']/, `energy card should use button semantics: ${card}`)
-  assert.match(card, /\shover-class=["']energy-card--pressed["']/, `energy card should expose the shared pressed state: ${card}`)
+assert.match(indexPage, /import\s*\{[^}]*\bMINIAPP_HOME_ENTRY_BEHAVIORS\b[^}]*\}\s*from\s*['"]\.\.\/\.\.\/utils\/homeMenu['"]/, 'home page should import the fixed entry behavior map')
+const energyCards = homeOpeningViews.filter((tag) => staticClassTokens(tag).includes('energy-card') || (tag.includes(':class=') && tag.includes("'energy-card'")))
+assert.equal(energyCards.length, 1, 'home page should use one ordered entry template instead of four hard-coded cards')
+const energyCard = energyCards[0] || ''
+assert.match(indexPage, /const\s+enabledHomeEntries\s*=\s*computed\(\(\)\s*=>\s*miniappHome\.value\.entriesSection\.items\.filter\(\(item\)\s*=>\s*item\.enabled\)\)/, 'enabled entry state should preserve normalized order while filtering hidden cards')
+assert.match(energyCard, /\sv-for=["']entry in enabledHomeEntries["']/, 'energy cards should render the normalized enabled entry list')
+assert.match(energyCard, /\s:key=["']entry\.key["']/, 'energy cards should use the fixed entry key as stable identity')
+assert.match(energyCard, /:class=["'][^\n>]*energy-card--\$\{entry\.theme\}[^\n>]*["']/, 'energy cards should apply only normalized theme modifier classes')
+assert.match(energyCard, /:aria-label=["']MINIAPP_HOME_ENTRY_BEHAVIORS\[entry\.key\]\.ariaLabel["']/, 'energy cards should use the fixed accessible destination label')
+assert.match(energyCard, /\srole=["']button["']/, 'energy card template should use button semantics')
+assert.match(energyCard, /\shover-class=["']energy-card--pressed["']/, 'energy card template should retain pressed feedback')
+assert.match(energyCard, /\s@click=["']activateHomeEntry\(entry\.key\)["']/, 'energy card template should use the fixed entry dispatcher')
+assertKeyboardViewControl(energyCard, 'energy card template', 'activateHomeEntry\\(entry\\.key\\)')
+assert.match(homeTemplate, /<view\b(?=[^>]*:class=["'][^>]*energy-icon--\$\{entry\.icon\}[^>]*["'])(?=[^>]*aria-hidden=["']true["'])[^>]*>/, 'energy icons should apply only normalized icon modifier classes')
+assert.match(homeTemplate, /<text\s+class=["']energy-card__title["']>\{\{ entry\.title \}\}<\/text>/, 'energy cards should render configured titles')
+assert.match(homeTemplate, /<text\s+class=["']energy-card__desc["']>\{\{ entry\.description \}\}<\/text>/, 'energy cards should render configured descriptions')
+assert.doesNotMatch(indexPage, /entry\.(?:url|path|href|route)/, 'configured entry data must never supply navigation URLs')
+
+const activateHomeEntryBody = bracedBody(/function\s+activateHomeEntry\s*\(\s*key\s*\)\s*\{/.exec(indexPage)) || ''
+assert.match(activateHomeEntryBody, /const\s+behavior\s*=\s*MINIAPP_HOME_ENTRY_BEHAVIORS\[key\]/, 'entry activation should resolve only fixed behavior metadata')
+assert.match(activateHomeEntryBody, /if\s*\(!behavior\)\s*return/, 'entry activation should ignore unknown keys')
+assert.match(activateHomeEntryBody, /uni\[behavior\.method\]\(\{\s*url:\s*behavior\.url\s*\}\)/, 'entry activation should invoke the fixed navigation method and URL')
+for (const [handler, key] of [['startTest', 'test'], ['goRelation', 'relation'], ['goLearn', 'learn'], ['goProfile', 'profile']]) {
+  assert.match(functionBody(handler) || '', new RegExp(`activateHomeEntry\\(["']${key}["']\\)`), `${handler} should reuse the fixed ${key} entry mapping`)
 }
 
-const energyCardContracts = [
-  { modifier: 'energy-card--test', label: '开始九型人格测试', handler: 'startTest' },
-  { modifier: 'energy-card--relation', label: '打开九型关系合盘', handler: 'goRelation' },
-  { modifier: 'energy-card--learn', label: '打开老师课程与课件', handler: 'goLearn' },
-  { modifier: 'energy-card--profile', label: '打开我的成长档案', handler: 'goProfile' },
-]
-for (const { modifier, label, handler } of energyCardContracts) {
-  const card = energyCards.find((tag) => staticClassTokens(tag).includes(modifier))
-  assert.ok(card, `home page should render the ${modifier} energy card`)
-  assert.match(card, new RegExp(`\\saria-label=["']${label}["']`), `${modifier} should expose its exact accessible label`)
-  assert.match(card, new RegExp(`\\s@click=["']${handler}["']`), `${modifier} should invoke ${handler}`)
-  assertKeyboardViewControl(card, modifier, handler)
+for (const theme of ['blue', 'purple', 'orange', 'pink', 'cyan']) {
+  const declarations = standaloneStyleDeclarations(`energy-card--${theme}`)
+  assert.ok(declarations, `.energy-card--${theme} should define a curated theme preset`)
+  assert.match(declarations, /\bbackground\s*:/, `.energy-card--${theme} should provide its curated background`)
 }
-
-function assertHomeRoute(handler, navigationMethod, url, description) {
-  const body = functionBody(handler)
-  assert.ok(body !== undefined, `home page should define ${handler}()`)
+for (const icon of ['compass', 'relation', 'book', 'growth', 'spark', 'heart']) {
+  const declarations = standaloneStyleDeclarations(`energy-icon--${icon}`)
+  assert.ok(declarations, `.energy-icon--${icon} should define a CSS-only icon preset`)
+  const shapeDeclarations = [...indexPage.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter(([, selector]) => new RegExp(`\\.energy-icon--${icon}\\s+\\.energy-icon__shape`).test(selector))
+    .map(([, , body]) => body)
+    .join('\n')
   assert.match(
-    body,
-    new RegExp(`uni\\.${navigationMethod}\\s*\\(\\s*\\{\\s*url:\\s*["']${url}["']\\s*\\}\\s*\\)`),
-    description,
+    shapeDeclarations,
+    /\b(?:width|height|border|background|border-radius)\s*:/,
+    `.energy-icon--${icon} should include a concrete CSS shape rule with visible geometry`,
   )
 }
-
-assertHomeRoute('startTest', 'navigateTo', '/pages/test/test', 'home test action should navigate to the test page')
-assertHomeRoute('goRelation', 'navigateTo', '/pages/relation/relation', 'home relation action should navigate to the relation page')
-assertHomeRoute('goLearn', 'switchTab', '/pages/learn/learn', 'home learn action should switch to the learn tab')
-assertHomeRoute('goProfile', 'switchTab', '/pages/profile/profile', 'home profile action should switch to the profile tab')
 
 const homeProfileAction = findHomeView('home-nav__profile')
 assert.ok(homeProfileAction, 'home page should render a profile action in the top navigation')

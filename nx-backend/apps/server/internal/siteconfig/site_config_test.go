@@ -1,6 +1,89 @@
 package siteconfig
 
-import "testing"
+import (
+	"encoding/json"
+	"path/filepath"
+	"reflect"
+	"testing"
+)
+
+func TestWriteReadPreservesMiniappHomeAndExistingOSSCarousel(t *testing.T) {
+	config := validConfig()
+	carousel := map[string]any{
+		"autoplay": true,
+		"interval": 4000,
+		"items": []any{map[string]any{
+			"enabled": true,
+			"image":   "https://nine-xing.oss-cn-hangzhou.aliyuncs.com/miniapp/carousel-1.webp",
+		}},
+	}
+	miniappHome := map[string]any{
+		"brand": map[string]any{
+			"enabled": true,
+			"name":    "九型芯之力",
+			"tagline": "看见动机，找到成长方向",
+		},
+		"hero": map[string]any{
+			"enabled":     true,
+			"kicker":      "老师导学",
+			"title":       "读懂自己",
+			"description": "从核心动机出发",
+			"buttonText":  "开始人格测试",
+		},
+		"entriesSection": map[string]any{
+			"enabled": true,
+			"items": []any{map[string]any{
+				"key": "test", "enabled": true, "title": "人格测试",
+				"description": "找到你的核心动机", "icon": "compass", "theme": "blue",
+			}},
+		},
+		"growth": map[string]any{
+			"enabled":     true,
+			"eyebrow":     "老师陪伴",
+			"title":       "把测试发现带进课程练习",
+			"description": "让理解沉淀为行动",
+		},
+	}
+	config.Home["miniappCarousel"] = carousel
+	config.Home["miniappHome"] = miniappHome
+
+	path := filepath.Join(t.TempDir(), "site-config.json")
+	if err := Write(path, config); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, key := range []string{"miniappCarousel", "miniappHome"} {
+		wantJSON, err := json.Marshal(config.Home[key])
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotJSON, err := json.Marshal(got.Home[key])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wantValue, gotValue any
+		if err := json.Unmarshal(wantJSON, &wantValue); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(gotJSON, &gotValue); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(gotValue, wantValue) {
+			t.Fatalf("expected home.%s to survive write/read: got=%s want=%s", key, gotJSON, wantJSON)
+		}
+	}
+
+	gotCarousel := got.Home["miniappCarousel"].(map[string]any)
+	gotItems := gotCarousel["items"].([]any)
+	gotImage := gotItems[0].(map[string]any)["image"]
+	if gotImage != "https://nine-xing.oss-cn-hangzhou.aliyuncs.com/miniapp/carousel-1.webp" {
+		t.Fatalf("expected OSS carousel URL to remain unchanged, got %v", gotImage)
+	}
+}
 
 func TestValidateRejectsUnsafeURLFields(t *testing.T) {
 	tests := []struct {
