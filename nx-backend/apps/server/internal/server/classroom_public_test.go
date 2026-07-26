@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,7 +50,7 @@ func (r *classroomRows) Next(dst []driver.Value) error {
 }
 func openClassroomTestDB(t *testing.T, fn func(string, []driver.NamedValue) (driver.Rows, error)) *sql.DB {
 	t.Helper()
-	name := "classroom-public-" + strings.ReplaceAll(t.Name(), "/", "-")
+	name := fmt.Sprintf("classroom-public-%d", classroomDriverSequence.Add(1))
 	sql.Register(name, &classroomSQLDriver{query: fn})
 	db, err := sql.Open(name, "")
 	if err != nil {
@@ -58,12 +60,15 @@ func openClassroomTestDB(t *testing.T, fn func(string, []driver.NamedValue) (dri
 	return db
 }
 
+var classroomDriverSequence atomic.Uint64
+
 type fakeClassroomPublicService struct {
 	series                    []classroomPublicSeries
 	content                   classroomPublicContent
 	play                      classroomPlaybackSource
 	playUserID, playContentID int64
 	playCalls                 int
+	viewerAware               bool
 }
 type fakeClassroomSigner struct{ key string }
 
@@ -74,8 +79,17 @@ func (f fakeClassroomSigner) PresignGetURL(context.Context, string, time.Duratio
 func (f *fakeClassroomPublicService) ListSeries(context.Context, classroomPublicQuery, int64) ([]classroomPublicSeries, int, error) {
 	return f.series, len(f.series), nil
 }
-func (f *fakeClassroomPublicService) ListStandalone(context.Context, classroomPublicQuery, int64) ([]classroomPublicContent, int, error) {
-	return []classroomPublicContent{f.content}, 1, nil
+func (f *fakeClassroomPublicService) ListStandalone(_ context.Context, _ classroomPublicQuery, userID int64) ([]classroomPublicContent, int, error) {
+	v := f.content
+	if f.viewerAware {
+		v.CanPlay = userID > 0
+		if v.CanPlay {
+			v.PurchaseState = "owned"
+		} else {
+			v.PurchaseState = "purchase_required"
+		}
+	}
+	return []classroomPublicContent{v}, 1, nil
 }
 func (f *fakeClassroomPublicService) GetSeries(context.Context, int64, int64) (classroomPublicSeriesDetail, error) {
 	return classroomPublicSeriesDetail{Series: f.series[0], Contents: []classroomPublicContent{f.content}}, nil
@@ -182,30 +196,70 @@ func TestClassroomPlaybackAcceptsMiniappJWTWithoutAnonymousTicket(t *testing.T) 
 	}
 }
 
-func TestClassroomPublicContentETagIsStableAnd304SkipsTicketSigning(t *testing.T) {
+func TestClassroomPublicContentMetadataETagIsStableAndContainsNoTicket(t *testing.T) {
 	f := &fakeClassroomPublicService{content: classroomPublicContent{ID: 5, Title: "Public", EffectiveAccess: classroom.AccessPublic, CanPlay: true}, play: classroomPlaybackSource{Content: classroom.Content{ID: 5, Status: classroom.ContentPublished, AccessLevel: classroom.AccessPublic}, Media: classroom.MediaAsset{ETag: "media-v2", StorageStatus: classroom.MediaReady}}}
 	s := &Server{classroomPublic: f, env: config.Env{JWTSecret: "secret"}}
 	mux := http.NewServeMux()
 	registerClassroomPublicRoutes(mux, s)
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/public/classroom/content/5", nil))
-	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "playbackTicket") {
+	if rr.Code != 200 || strings.Contains(rr.Body.String(), "playbackTicket") {
 		t.Fatalf("first response=%d %s", rr.Code, rr.Body.String())
 	}
 	etag := rr.Header().Get("ETag")
-	if f.playCalls != 1 {
-		t.Fatalf("ticket source calls=%d", f.playCalls)
+	if f.playCalls != 0 {
+		t.Fatalf("metadata must not fetch ticket source, calls=%d", f.playCalls)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/public/classroom/content/5", nil)
 	req.Header.Set("If-None-Match", etag)
 	cached := httptest.NewRecorder()
 	mux.ServeHTTP(cached, req)
-	if cached.Code != http.StatusNotModified || f.playCalls != 1 {
+	if cached.Code != http.StatusNotModified || f.playCalls != 0 {
 		t.Fatalf("304=%d source calls=%d", cached.Code, f.playCalls)
 	}
 }
 
-func TestClassroomEffectiveAccessAndPurchaseStates(t *testing.T) {
+func TestClassroomAnonymousTicketExpiresAndRefreshesThroughNoStoreEndpoint(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	f := &fakeClassroomPublicService{content: classroomPublicContent{ID: 5, EffectiveAccess: classroom.AccessPublic, CanPlay: true}, play: classroomPlaybackSource{Content: classroom.Content{ID: 5, Status: classroom.ContentPublished, AccessLevel: classroom.AccessPublic}, Media: classroom.MediaAsset{ETag: "media-v1", ObjectKey: "private/v.mp4", StorageStatus: classroom.MediaReady}}}
+	s := &Server{classroomPublic: f, classroomPlaybackSigner: fakeClassroomSigner{key: "fresh"}, now: func() time.Time { return now }, env: config.Env{JWTSecret: "secret"}}
+	mux := http.NewServeMux()
+	registerClassroomPublicRoutes(mux, s)
+	issue := func() string {
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/public/classroom/content/5/ticket", nil))
+		if rr.Code != 200 || rr.Header().Get("Cache-Control") != "no-store" || rr.Header().Get("ETag") != "" {
+			t.Fatalf("ticket response=%d headers=%v body=%s", rr.Code, rr.Header(), rr.Body.String())
+		}
+		var body struct {
+			Data struct {
+				Ticket string `json:"ticket"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(rr.Body.Bytes(), &body) != nil || body.Data.Ticket == "" {
+			t.Fatalf("ticket body=%s", rr.Body.String())
+		}
+		return body.Data.Ticket
+	}
+	old := issue()
+	now = now.Add(5*time.Minute + time.Second)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/miniapp/classroom/content/5/play", strings.NewReader(`{"ticket":"`+old+`"}`)))
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expired status=%d", rr.Code)
+	}
+	fresh := issue()
+	if fresh == old {
+		t.Fatal("refresh must issue a fresh ticket")
+	}
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/miniapp/classroom/content/5/play", strings.NewReader(`{"ticket":"`+fresh+`"}`)))
+	if rr.Code != 200 {
+		t.Fatalf("fresh status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestClassroomPublicEffectiveAccessAndPurchaseStates(t *testing.T) {
 	series := classroom.Series{AccessLevel: classroom.AccessPaid}
 	if got := accessFor(classroom.AccessInherit, &series); got != classroom.AccessPaid {
 		t.Fatalf("inherit=%s", got)
@@ -252,7 +306,7 @@ func TestClassroomDBBackedStandaloneFiltersBeforePaginationAndReturnsTrueTotal(t
 	}
 }
 
-func TestClassroomDBBackedSeriesUsesAnyReadyLessonAndStablePagination(t *testing.T) {
+func TestClassroomPublicDBBackedSeriesUsesAnyReadyLessonAndStablePagination(t *testing.T) {
 	var eligible, stable bool
 	db := openClassroomTestDB(t, func(q string, args []driver.NamedValue) (driver.Rows, error) {
 		if strings.Contains(q, "classroom_entitlements") {
@@ -273,6 +327,13 @@ func TestClassroomDBBackedSeriesUsesAnyReadyLessonAndStablePagination(t *testing
 	if !eligible || !stable || items[0].PurchaseState != "purchase_required" || items[0].CanPlay {
 		t.Fatalf("eligible=%v stable=%v item=%+v", eligible, stable, items[0])
 	}
+	s := &Server{classroomPublic: d, mux: http.NewServeMux()}
+	registerClassroomPublicRoutes(s.mux, s)
+	rr := httptest.NewRecorder()
+	s.mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/public/classroom/series?limit=1&offset=3", nil))
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"total":4`) || !strings.Contains(rr.Body.String(), `"purchaseState":"purchase_required"`) {
+		t.Fatalf("HTTP=%d %s", rr.Code, rr.Body.String())
+	}
 }
 
 func TestClassroomPlaybackRejectsParentHardBlock(t *testing.T) {
@@ -288,7 +349,7 @@ func TestClassroomPlaybackRejectsParentHardBlock(t *testing.T) {
 	}
 }
 
-func TestClassroomContentMergesParentAccessPriceAndHardBlock(t *testing.T) {
+func TestClassroomPublicContentMergesParentAccessPriceAndHardBlock(t *testing.T) {
 	sid := int64(2)
 	d := &classroomPublicDB{}
 	c := classroom.Content{ID: 3, SeriesID: &sid, AccessLevel: classroom.AccessInherit, ContentType: classroom.ContentVideo}
@@ -343,4 +404,114 @@ func TestClassroomDBBackedPlaybackHandlerAnonymousAndJWTPaths(t *testing.T) {
 			t.Fatalf("response=%d %s", rr.Code, rr.Body.String())
 		}
 	})
+}
+
+func TestClassroomPublicSeriesDetailHTTPFiltersToPublishedReadyLessons(t *testing.T) {
+	var readyFilter bool
+	now := time.Now()
+	db := openClassroomTestDB(t, func(q string, args []driver.NamedValue) (driver.Rows, error) {
+		if strings.Contains(q, "FROM classroom_series WHERE id") {
+			return &classroomRows{cols: make([]string, 17), values: [][]driver.Value{{int64(2), "Series", "summary", "cover", nil, "teacher", "Teacher", int64(1), "published", false, "public", int64(0), now, nil, nil, now, now}}}, nil
+		}
+		if strings.Contains(q, "JOIN classroom_media_assets") {
+			readyFilter = strings.Contains(q, "c.status=$2") && strings.Contains(q, "m.storage_status=$3") && strings.Contains(q, "ORDER BY c.sort_order,c.id")
+			return &classroomRows{cols: make([]string, 11), values: [][]driver.Value{{int64(11), int64(2), "Ready lesson", "desc", "video", "cover", int64(60), "Teacher", "inherit", int64(0), false}}}, nil
+		}
+		return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{int64(0)}}}, nil
+	})
+	s := &Server{classroomPublic: newClassroomPublicDB(db), mux: http.NewServeMux()}
+	registerClassroomPublicRoutes(s.mux, s)
+	rr := httptest.NewRecorder()
+	s.mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/public/classroom/series/2", nil))
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "Ready lesson") || !readyFilter {
+		t.Fatalf("HTTP=%d filter=%v body=%s", rr.Code, readyFilter, rr.Body.String())
+	}
+}
+
+func TestClassroomPublicSeriesOfflineHiddenStandaloneVisibleAndPurchasedPlaybackAllowed(t *testing.T) {
+	now := time.Now()
+	db := openClassroomTestDB(t, func(q string, args []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(q, "SELECT count(*) FROM classroom_series s"):
+			return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{int64(0)}}}, nil
+		case strings.Contains(q, "SELECT s.id,s.title"):
+			return &classroomRows{cols: make([]string, 8)}, nil
+		case strings.Contains(q, "SELECT count(*) FROM classroom_contents c JOIN"):
+			return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{int64(1)}}}, nil
+		case strings.Contains(q, "SELECT c.id,c.series_id,c.show_as_standalone"):
+			return &classroomRows{cols: make([]string, 18), values: [][]driver.Value{{int64(7), int64(2), true, "Standalone", "desc", "video", int64(3), "cover", int64(60), "Teacher", "inherit", int64(0), false, int64(2), "offline", "paid", int64(9900), false}}}, nil
+		case strings.Contains(q, "FROM classroom_contents WHERE id"):
+			return &classroomRows{cols: make([]string, 25), values: [][]driver.Value{{int64(7), int64(2), true, "Standalone", "desc", "video", int64(3), "cover", int64(60), "teacher", "Teacher", nil, "", []byte(`[]`), int64(0), int64(0), "published", false, "inherit", int64(0), now, nil, nil, now, now}}}, nil
+		case strings.Contains(q, "FROM classroom_series WHERE id"):
+			return &classroomRows{cols: make([]string, 17), values: [][]driver.Value{{int64(2), "Series", "summary", "cover", nil, "teacher", "Teacher", int64(0), "offline", false, "paid", int64(9900), now, nil, nil, now, now}}}, nil
+		case strings.Contains(q, "FROM classroom_media_assets WHERE id"):
+			return &classroomRows{cols: make([]string, 15), values: [][]driver.Value{{int64(3), "bucket", "private/media.mp4", "v1", "crc", "video", int64(100), int64(60), int64(1), int64(1), "", "ready", nil, now, now}}}, nil
+		case strings.Contains(q, "classroom_entitlements"):
+			return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{int64(1)}}}, nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", q)
+		}
+	})
+	s := &Server{classroomPublic: newClassroomPublicDB(db), classroomPlaybackSigner: fakeClassroomSigner{key: "owned"}, mux: http.NewServeMux(), env: config.Env{JWTSecret: "secret"}}
+	registerClassroomPublicRoutes(s.mux, s)
+	series := httptest.NewRecorder()
+	s.mux.ServeHTTP(series, httptest.NewRequest(http.MethodGet, "/api/public/classroom/series", nil))
+	if series.Code != 200 || !strings.Contains(series.Body.String(), `"total":0`) {
+		t.Fatalf("series=%d %s", series.Code, series.Body.String())
+	}
+	standalone := httptest.NewRecorder()
+	s.mux.ServeHTTP(standalone, httptest.NewRequest(http.MethodGet, "/api/public/classroom/standalone", nil))
+	if standalone.Code != 200 || !strings.Contains(standalone.Body.String(), "Standalone") || !strings.Contains(standalone.Body.String(), `"purchaseState":"purchase_required"`) {
+		t.Fatalf("standalone=%d %s", standalone.Code, standalone.Body.String())
+	}
+	token, _ := auth.Sign(auth.UserInfo{ID: 42, Roles: []string{miniappRole}, TokenKind: auth.TokenKindMiniapp}, "secret")
+	req := httptest.NewRequest(http.MethodPost, "/api/miniapp/classroom/content/7/play", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	play := httptest.NewRecorder()
+	s.mux.ServeHTTP(play, req)
+	if play.Code != 200 {
+		t.Fatalf("play=%d %s", play.Code, play.Body.String())
+	}
+}
+
+func TestClassroomPlaybackContentOfflinePurchasedPlaybackIsRetained(t *testing.T) {
+	now := time.Now()
+	db := openClassroomTestDB(t, func(q string, args []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(q, "FROM classroom_contents WHERE id"):
+			return &classroomRows{cols: make([]string, 25), values: [][]driver.Value{{int64(7), nil, false, "Offline", "desc", "audio", int64(3), "cover", int64(60), "teacher", "Teacher", nil, "", []byte(`[]`), int64(0), int64(0), "offline", false, "paid", int64(1900), now, nil, nil, now, now}}}, nil
+		case strings.Contains(q, "FROM classroom_media_assets WHERE id"):
+			return &classroomRows{cols: make([]string, 15), values: [][]driver.Value{{int64(3), "bucket", "private/media.m4a", "v1", "crc", "audio", int64(100), int64(60), int64(0), int64(0), "", "ready", nil, now, now}}}, nil
+		case strings.Contains(q, "classroom_entitlements"):
+			return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{int64(1)}}}, nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", q)
+		}
+	})
+	s := &Server{classroomPublic: newClassroomPublicDB(db), classroomPlaybackSigner: fakeClassroomSigner{key: "offline-owned"}, mux: http.NewServeMux(), env: config.Env{JWTSecret: "secret"}}
+	registerClassroomPublicRoutes(s.mux, s)
+	token, _ := auth.Sign(auth.UserInfo{ID: 42, Roles: []string{miniappRole}, TokenKind: auth.TokenKindMiniapp}, "secret")
+	req := httptest.NewRequest(http.MethodPost, "/api/miniapp/classroom/content/7/play", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+	s.mux.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("play=%d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestClassroomPublicAnonymousAndJWTMetadataAreIsolatedByVaryAndETag(t *testing.T) {
+	f := &fakeClassroomPublicService{viewerAware: true, content: classroomPublicContent{ID: 8, Title: "Paid", EffectiveAccess: classroom.AccessPaid, PurchaseState: "purchase_required"}}
+	s := &Server{classroomPublic: f, mux: http.NewServeMux(), env: config.Env{JWTSecret: "secret"}}
+	registerClassroomPublicRoutes(s.mux, s)
+	anon := httptest.NewRecorder()
+	s.mux.ServeHTTP(anon, httptest.NewRequest(http.MethodGet, "/api/public/classroom/standalone", nil))
+	token, _ := auth.Sign(auth.UserInfo{ID: 42, Roles: []string{miniappRole}, TokenKind: auth.TokenKindMiniapp}, "secret")
+	req := httptest.NewRequest(http.MethodGet, "/api/public/classroom/standalone", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	logged := httptest.NewRecorder()
+	s.mux.ServeHTTP(logged, req)
+	if anon.Header().Get("Vary") != "Authorization" || logged.Header().Get("Vary") != "Authorization" || anon.Header().Get("ETag") == logged.Header().Get("ETag") || !strings.Contains(anon.Body.String(), `"canPlay":false`) || !strings.Contains(logged.Body.String(), `"canPlay":true`) {
+		t.Fatalf("anon headers=%v body=%s logged headers=%v body=%s", anon.Header(), anon.Body.String(), logged.Header(), logged.Body.String())
+	}
 }

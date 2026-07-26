@@ -51,7 +51,6 @@ type classroomPublicContent struct {
 	CanPlay         bool                  `json:"canPlay"`
 	PurchaseState   string                `json:"purchaseState"`
 	PlaybackBlocked bool                  `json:"playbackBlocked"`
-	PlaybackTicket  string                `json:"playbackTicket,omitempty"`
 }
 type classroomPublicSeriesDetail struct {
 	Series   classroomPublicSeries    `json:"series"`
@@ -127,8 +126,23 @@ func registerClassroomPublicRoutes(mux *http.ServeMux, s *Server) {
 	mux.HandleFunc("/api/public/classroom/series", s.method(http.MethodGet, s.classroomSeriesPublic))
 	mux.HandleFunc("/api/public/classroom/standalone", s.method(http.MethodGet, s.classroomStandalonePublic))
 	mux.HandleFunc("/api/public/classroom/series/", s.method(http.MethodGet, s.classroomSeriesDetailPublic))
-	mux.HandleFunc("/api/public/classroom/content/", s.method(http.MethodGet, s.classroomContentPublic))
+	mux.HandleFunc("/api/public/classroom/content/", s.classroomContentPublicRouter)
 	mux.HandleFunc("/api/miniapp/classroom/content/", s.classroomPlaybackPublic)
+}
+func (s *Server) classroomContentPublicRouter(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/ticket") {
+		if r.Method != http.MethodPost {
+			httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+			return
+		}
+		s.classroomAnonymousTicket(w, r)
+		return
+	}
+	if r.Method != http.MethodGet {
+		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+		return
+	}
+	s.classroomContentPublic(w, r)
 }
 
 func (s *Server) optionalMiniapp(r *http.Request) (auth.UserInfo, bool) {
@@ -212,13 +226,6 @@ func (s *Server) classroomStandalonePublic(w http.ResponseWriter, r *http.Reques
 	if setClassroomCache(w, r, data) {
 		return
 	}
-	if u.ID == 0 {
-		for i := range items {
-			if src, e := s.classroomPublic.Playback(r.Context(), 0, items[i].ID); e == nil && items[i].EffectiveAccess == classroom.AccessPublic {
-				items[i].PlaybackTicket, _, _ = s.signClassroomTicket(items[i].ID, src.Media.ETag)
-			}
-		}
-	}
 	httpx.OK(w, data)
 }
 func (s *Server) classroomSeriesDetailPublic(w http.ResponseWriter, r *http.Request) {
@@ -234,15 +241,6 @@ func (s *Server) classroomSeriesDetailPublic(w http.ResponseWriter, r *http.Requ
 	}
 	if setClassroomCache(w, r, d) {
 		return
-	}
-	if u.ID == 0 {
-		for i := range d.Contents {
-			if d.Contents[i].EffectiveAccess == classroom.AccessPublic {
-				if src, e := s.classroomPublic.Playback(r.Context(), 0, d.Contents[i].ID); e == nil {
-					d.Contents[i].PlaybackTicket, _, _ = s.signClassroomTicket(d.Contents[i].ID, src.Media.ETag)
-				}
-			}
-		}
 	}
 	httpx.OK(w, d)
 }
@@ -260,14 +258,47 @@ func (s *Server) classroomContentPublic(w http.ResponseWriter, r *http.Request) 
 	if setClassroomCache(w, r, d) {
 		return
 	}
-	if u.ID == 0 && d.EffectiveAccess == classroom.AccessPublic {
-		if src, e := s.classroomPublic.Playback(r.Context(), 0, id); e == nil {
-			d.PlaybackTicket, _, _ = s.signClassroomTicket(id, src.Media.ETag)
-		}
-	}
 	httpx.OK(w, d)
 }
+func (s *Server) classroomAnonymousTicket(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	idPath := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/public/classroom/content/"), "/")
+	idPath = strings.TrimSuffix(idPath, "/ticket")
+	id, _ := strconv.ParseInt(idPath, 10, 64)
+	if _, logged, valid := s.classroomViewer(w, r); !valid {
+		return
+	} else if logged {
+		httpx.Fail(w, http.StatusBadRequest, "JWT playback does not require an anonymous ticket")
+		return
+	}
+	d, err := s.classroomPublic.GetContent(r.Context(), id, 0)
+	if err != nil || d.EffectiveAccess != classroom.AccessPublic || !d.CanPlay {
+		httpx.Fail(w, http.StatusNotFound, "Not Found")
+		return
+	}
+	key := "ticket:" + s.clientIP(r) + ":" + r.Header.Get("X-Device-ID") + ":" + strconv.FormatInt(id, 10)
+	if s.classroomPlaybackLimiter != nil && !s.classroomPlaybackLimiter.Allow(key, s.nowTime()) {
+		httpx.Fail(w, http.StatusTooManyRequests, "Too Many Requests")
+		return
+	}
+	src, err := s.classroomPublic.Playback(r.Context(), 0, id)
+	if err != nil {
+		if errors.Is(err, errClassroomPlaybackBlocked) {
+			httpx.Fail(w, http.StatusLocked, "Playback Blocked")
+			return
+		}
+		httpx.Fail(w, http.StatusNotFound, "Not Found")
+		return
+	}
+	ticket, _, err := s.signClassroomTicket(id, src.Media.ETag)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "Ticket unavailable")
+		return
+	}
+	httpx.OK(w, map[string]any{"ticket": ticket, "expiresIn": 300})
+}
 func (s *Server) classroomPlaybackPublic(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != "POST" {
 		httpx.Fail(w, 405, "Method Not Allowed")
 		return
