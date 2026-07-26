@@ -33,7 +33,7 @@ func TestMiniappMembershipValidity(t *testing.T) {
 		{name: "legacy lifetime member", level: 1, want: true},
 		{name: "dated active member", level: 1, expires: &future, want: true},
 		{name: "expired member", level: 1, expires: &past, want: false},
-		{name: "refund or revoke wins over remaining date", level: 0, expires: &future, want: false},
+		{name: "administrator full revoke wins over remaining date", level: 0, expires: &future, want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -60,16 +60,18 @@ func TestPayNotifyMemberContract(t *testing.T) {
 	for _, tt := range []struct {
 		name           string
 		durationDays   int64
+		initialStatus  string
 		wantCode       int
 		wantReply      string
 		wantPaid       bool
 		wantMembership bool
 	}{
-		{name: "success commits order and membership", durationDays: 30, wantCode: http.StatusOK, wantReply: `"code":"SUCCESS"`, wantPaid: true, wantMembership: true},
-		{name: "missing duration fails and rolls back", durationDays: 0, wantCode: http.StatusInternalServerError, wantReply: `"code":"FAIL"`},
+		{name: "success commits order and membership", durationDays: 30, initialStatus: "pending", wantCode: http.StatusOK, wantReply: `"code":"SUCCESS"`, wantPaid: true, wantMembership: true},
+		{name: "missing duration fails and rolls back", durationDays: 0, initialStatus: "pending", wantCode: http.StatusInternalServerError, wantReply: `"code":"FAIL"`},
+		{name: "refunded order rejects delayed callback", durationDays: 30, initialStatus: "refunded", wantCode: http.StatusInternalServerError, wantReply: `"code":"FAIL"`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			state := &memberNotifyDBState{durationDays: tt.durationDays, status: "pending"}
+			state := &memberNotifyDBState{durationDays: tt.durationDays, status: tt.initialStatus}
 			db := newMemberNotifyDB(t, state)
 			s := &Server{
 				env:     config.Env{WxPay: config.WxPayConfig{MchID: "merchant", AppID: "miniapp"}},
@@ -86,6 +88,9 @@ func TestPayNotifyMemberContract(t *testing.T) {
 			}
 			if (state.status == "paid") != tt.wantPaid || state.membershipGranted != tt.wantMembership {
 				t.Fatalf("unexpected persisted state: status=%s membership=%v", state.status, state.membershipGranted)
+			}
+			if tt.initialStatus == "refunded" && state.status != "refunded" {
+				t.Fatalf("refunded terminal order changed to %s", state.status)
 			}
 		})
 	}

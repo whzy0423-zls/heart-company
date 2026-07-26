@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"io"
 	"strconv"
 	"strings"
@@ -109,6 +110,22 @@ func TestMarkOrderPaidDuplicateCallbackIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestMarkOrderPaidRejectsTerminalUnpaidOrders(t *testing.T) {
+	for _, status := range []string{"refunded", "closed"} {
+		t.Run(status, func(t *testing.T) {
+			state := &orderTestState{paidProduct: "member", paidRefID: 30, paidStatus: status}
+			store := newOrderTestStore(t, state)
+			changed, err := store.MarkOrderPaid(context.Background(), "member-order", "late-wx-transaction")
+			if err == nil || changed {
+				t.Fatalf("terminal %s order must reject delayed callback, changed=%v err=%v", status, changed, err)
+			}
+			if state.orderPaidCount != 0 || state.membershipGrantCount != 0 || state.commitCount != 0 {
+				t.Fatalf("terminal order changed state: paid=%d grants=%d commits=%d", state.orderPaidCount, state.membershipGrantCount, state.commitCount)
+			}
+		})
+	}
+}
+
 func TestMarkOrderPaidRejectsMembershipWithoutDuration(t *testing.T) {
 	state := &orderTestState{paidProduct: "member"}
 	store := newOrderTestStore(t, state)
@@ -122,13 +139,21 @@ func TestMarkOrderPaidRejectsMembershipWithoutDuration(t *testing.T) {
 }
 
 func TestRevokeAllMembershipClearsAuthoritativeFields(t *testing.T) {
-	state := &orderTestState{}
+	state := &orderTestState{revokeRowsAffected: 1}
 	store := newOrderTestStore(t, state)
 	if err := store.RevokeAllMembership(context.Background(), 7); err != nil {
 		t.Fatal(err)
 	}
 	if !state.membershipRevoked {
 		t.Fatal("expected revoke to clear wx_users membership fields")
+	}
+}
+
+func TestRevokeAllMembershipRejectsUnknownUser(t *testing.T) {
+	state := &orderTestState{}
+	store := newOrderTestStore(t, state)
+	if err := store.RevokeAllMembership(context.Background(), 404); !errors.Is(err, ErrMembershipUserNotFound) {
+		t.Fatalf("expected ErrMembershipUserNotFound, got %v", err)
 	}
 }
 
@@ -175,6 +200,7 @@ type orderTestState struct {
 	membershipDurationDays            int
 	membershipRenewsFromCurrentExpiry bool
 	membershipRevoked                 bool
+	revokeRowsAffected                int64
 	commitCount                       int
 	rollbackCount                     int
 }
@@ -220,6 +246,7 @@ func (c *orderTestConn) ExecContext(_ context.Context, query string, args []driv
 	}
 	if strings.Contains(query, "member_level=0") && strings.Contains(query, "member_started_at=NULL") {
 		c.state.membershipRevoked = true
+		return driver.RowsAffected(c.state.revokeRowsAffected), nil
 	}
 	return driver.RowsAffected(1), nil
 }

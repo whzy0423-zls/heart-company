@@ -29,6 +29,11 @@ type PaymentOrderSnapshot struct {
 	Status     string
 }
 
+var (
+	ErrOrderNotPayable        = errors.New("miniapp: order is not payable")
+	ErrMembershipUserNotFound = errors.New("miniapp: membership user not found")
+)
+
 // CreateOrder 新建一个待支付订单。out_trade_no 由调用方生成（保证唯一）。
 func (s *Store) CreateOrder(ctx context.Context, userID int64, outTradeNo, product string, refID int64, title string, amountCents int) (Order, error) {
 	c, cancel := s.ctx(ctx)
@@ -204,6 +209,9 @@ func (s *Store) MarkOrderPaid(ctx context.Context, outTradeNo, transactionID str
 	if status == "paid" {
 		return false, nil // 已处理过，幂等返回
 	}
+	if status != "pending" {
+		return false, fmt.Errorf("%w: status=%s", ErrOrderNotPayable, status)
+	}
 
 	if _, err := tx.ExecContext(c,
 		`UPDATE orders SET status='paid', transaction_id=$1, paid_at=now(), update_time=now() WHERE id=$2`,
@@ -264,11 +272,21 @@ func (s *Store) RevokeAllMembership(ctx context.Context, userID int64) error {
 	if userID <= 0 {
 		return fmt.Errorf("invalid miniapp user id")
 	}
-	_, err := s.db.ExecContext(c,
+	result, err := s.db.ExecContext(c,
 		`UPDATE wx_users
 		 SET member_level=0, member_started_at=NULL, member_expires_at=NULL
 		 WHERE id=$1`, userID)
-	return err
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrMembershipUserNotFound
+	}
+	return nil
 }
 
 // IsReportUnlocked 查询某用户对某测试记录是否已解锁深度报告。
