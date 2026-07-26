@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 	"nine-xing/nx-backend/apps/server/internal/video"
@@ -40,7 +41,11 @@ func NewGenerator(store *Store, videoStore *video.Store, uploads *uploadasset.St
 
 // GenerateShot 提交分镜视频生成任务，立即返回 video.Generation（异步生成）。
 // 后台监控完成后自动提取尾帧。
-func (g *Generator) GenerateShot(ctx context.Context, shotID string) (video.Generation, error) {
+func (g *Generator) GenerateShot(ctx context.Context, shotID string, requestKeys ...string) (video.Generation, error) {
+	requestKey := ""
+	if len(requestKeys) > 0 {
+		requestKey = strings.TrimSpace(requestKeys[0])
+	}
 	// 1. 构建预览（提示词+参考素材）
 	preview, err := g.promptBuilder.BuildPreview(ctx, shotID)
 	if err != nil {
@@ -51,8 +56,10 @@ func (g *Generator) GenerateShot(ctx context.Context, shotID string) (video.Gene
 	if !preview.Validation.IsValid {
 		return video.Generation{}, fmt.Errorf("提示词验证失败：%s", strings.Join(preview.Validation.Errors, "; "))
 	}
-	if err := validateGatewayReferenceURLs(preview.Images, preview.Videos, preview.Audios); err != nil {
-		return video.Generation{}, err
+	if g.videoStore.GenerationMode() == config.VideoGenerationModePaid {
+		if err := validateGatewayReferenceURLs(preview.Images, preview.Videos, preview.Audios); err != nil {
+			return video.Generation{}, err
+		}
 	}
 
 	// 3. 获取 Shot 信息
@@ -63,13 +70,16 @@ func (g *Generator) GenerateShot(ctx context.Context, shotID string) (video.Gene
 
 	// 4. 调用现有的视频生成 API（复用现有逻辑，不改动）
 	input := video.GenerateInput{
-		AspectRatio: shot.AspectRatio,
-		Audios:      preview.Audios,
-		Images:      preview.Images,
-		Model:       shot.VideoModel,
-		Prompt:      preview.Prompt,
-		Seconds:     shot.Duration,
-		Videos:      preview.Videos,
+		AspectRatio:  shot.AspectRatio,
+		Audios:       preview.Audios,
+		Images:       preview.Images,
+		Model:        shot.VideoModel,
+		Prompt:       preview.Prompt,
+		RequestKey:   requestKey,
+		Seconds:      shot.Duration,
+		ShotID:       shot.ID,
+		ShotRevision: shot.GenerationRevision,
+		Videos:       preview.Videos,
 	}
 
 	generation, err := g.videoStore.Generate(ctx, input)

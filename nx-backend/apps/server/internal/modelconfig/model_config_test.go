@@ -86,6 +86,20 @@ func TestApplyAnalysisUsesVoiceMiniMaxCredentialsAndDefaultM3(t *testing.T) {
 	}
 }
 
+func TestApplyVideoPreservesServerGenerationMode(t *testing.T) {
+	base := config.VideoConfig{APIBase: "https://base.example", APIKey: "base-key", Mode: "demo", Model: "base-model"}
+	cfg := Config{Video: VideoConfig{APIBase: "https://stored.example", APIKey: "stored-key", Model: "stored-model"}}
+
+	got := cfg.ApplyVideo(base)
+
+	if got.Mode != "demo" {
+		t.Fatalf("stored model config changed generation mode to %q", got.Mode)
+	}
+	if got.APIBase != "https://stored.example" || got.APIKey != "stored-key" || got.Model != "stored-model" {
+		t.Fatalf("expected provider fields to remain configurable, got %+v", got)
+	}
+}
+
 func TestApplyAnalysisAllowsModelOverrideOnly(t *testing.T) {
 	voiceBase := config.MiniMaxConfig{
 		APIBase: "https://api.minimaxi.com",

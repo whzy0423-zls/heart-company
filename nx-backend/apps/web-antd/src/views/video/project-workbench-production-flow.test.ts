@@ -853,6 +853,20 @@ describe('project workbench production flow migration', () => {
     expect(generate).toContain('startShotGenerationPolling(shot.id)');
   });
 
+  it('keeps paid request keys stable and tracks compose jobs separately', () => {
+    const source = workbench();
+
+    expect(source).toContain('const generationRequestKeys = ref(new Map<string, string>())');
+    expect(source).toContain('function getGenerationRequestKey(shotId: string, forceNew = false)');
+    expect(source).toContain('generationRequestKeys.value.delete(shotId)');
+    expect(source).toContain('await generateShotApi(shot.id, { requestKey })');
+    expect(source).toContain('getGenerationRequestKey(shot.id, true)');
+    expect(source).toContain('items: validShots.map((shot) => ({');
+    expect(source).toContain('requestKey: getGenerationRequestKey(shot.id)');
+    expect(source).toContain('const composeJobId = ref(\'\')');
+    expect(source).toContain('getComposeJobApi(projectId.value, composeJobId.value)');
+  });
+
   it('refreshes submitted shot version lists immediately after batch generation', () => {
     const source = workbench();
     const batchGenerate = sectionBetween(

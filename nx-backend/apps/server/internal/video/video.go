@@ -17,6 +17,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -35,11 +37,14 @@ var terminalStatuses = map[string]bool{
 }
 
 type Store struct {
-	client       *Client
-	db           *sql.DB
-	uploads      *uploadasset.Store
-	uploader     storage.ObjectUploader
-	defaultModel string
+	client         *Client
+	db             *sql.DB
+	uploads        *uploadasset.Store
+	uploader       storage.ObjectUploader
+	submissions    *SubmissionStore
+	defaultModel   string
+	demoRenderer   DemoRenderer
+	generationMode string
 }
 
 type Generation struct {
@@ -54,8 +59,12 @@ type Generation struct {
 	Model        string  `json:"model"`
 	Prompt       string  `json:"prompt"`
 	Provider     string  `json:"provider"`
+	RequestKey   string  `json:"requestKey,omitempty"`
 	Seconds      int     `json:"seconds"`
+	ShotID       string  `json:"shotId,omitempty"`
+	ShotRevision int     `json:"shotRevision,omitempty"`
 	Status       string  `json:"status"`
+	SubmissionID int64   `json:"submissionId,omitempty"`
 	TaskID       string  `json:"taskId"`
 	UpdateTime   string  `json:"updateTime"`
 	VideoAssetID string  `json:"videoAssetId"`
@@ -69,14 +78,29 @@ type PageResult[T any] struct {
 }
 
 type GenerateInput struct {
-	AspectRatio string   `json:"aspectRatio"`
-	Audios      []string `json:"audios"`   // 参考音频 URL
-	ImageURL    string   `json:"imageUrl"` // 兼容旧字段：单张参考图地址
-	Images      []string `json:"images"`   // 参考图片地址（上传到文件桶后的可公网访问 URL）
-	Videos      []string `json:"videos"`   // 参考视频地址（上传到文件桶后的可公网访问 URL）
-	Model       string   `json:"model"`
-	Prompt      string   `json:"prompt"`
-	Seconds     int      `json:"seconds"`
+	AspectRatio  string   `json:"aspectRatio"`
+	Audios       []string `json:"audios"`   // 参考音频 URL
+	ImageURL     string   `json:"imageUrl"` // 兼容旧字段：单张参考图地址
+	Images       []string `json:"images"`   // 参考图片地址（上传到文件桶后的可公网访问 URL）
+	Videos       []string `json:"videos"`   // 参考视频地址（上传到文件桶后的可公网访问 URL）
+	Model        string   `json:"model"`
+	Prompt       string   `json:"prompt"`
+	RequestKey   string   `json:"requestKey"`
+	Seconds      int      `json:"seconds"`
+	ShotID       string   `json:"shotId"`
+	ShotRevision int      `json:"shotRevision"`
+}
+
+type generationRequestSnapshot struct {
+	AspectRatio    string   `json:"aspectRatio"`
+	Audios         []string `json:"audios"`
+	GenerationMode string   `json:"generationMode"`
+	Images         []string `json:"images"`
+	Model          string   `json:"model"`
+	Prompt         string   `json:"prompt"`
+	Seconds        int      `json:"seconds"`
+	ShotRevision   int      `json:"shotRevision"`
+	Videos         []string `json:"videos"`
 }
 
 // 网关支持的视频时长（秒），默认 15s。
@@ -122,19 +146,43 @@ func NewStore(database *sql.DB, uploads *uploadasset.Store, cfg config.VideoConf
 	if len(uploaders) > 0 {
 		uploader = uploaders[0]
 	}
-	return &Store{
-		client:       NewClient(cfg),
-		db:           database,
-		uploads:      uploads,
-		uploader:     uploader,
-		defaultModel: model,
+	mode := config.VideoGenerationModeDemo
+	if strings.TrimSpace(cfg.Mode) == config.VideoGenerationModePaid {
+		mode = config.VideoGenerationModePaid
 	}
+	return &Store{
+		client:         NewClient(cfg),
+		db:             database,
+		uploads:        uploads,
+		uploader:       uploader,
+		submissions:    NewSubmissionStore(database),
+		defaultModel:   model,
+		demoRenderer:   NewFFmpegDemoRenderer(""),
+		generationMode: mode,
+	}
+}
+
+func (s *Store) GenerationMode() string {
+	if s == nil || s.generationMode != config.VideoGenerationModePaid {
+		return config.VideoGenerationModeDemo
+	}
+	return config.VideoGenerationModePaid
+}
+
+// RecoverInterruptedSubmissions makes locally interrupted demos retryable and
+// moves ambiguous provider requests into manual recovery without another POST.
+func (s *Store) RecoverInterruptedSubmissions(ctx context.Context, unknownReason, demoReason string) (int64, error) {
+	if s == nil || s.submissions == nil {
+		return 0, nil
+	}
+	return s.submissions.RecoverInterrupted(ctx, unknownReason, demoReason)
 }
 
 // Generate 创建一个视频生成任务：调用网关拿到 task_id 后落库 'queued' 行。
 // 不在此阻塞等待结果——前端按返回的 id 调 Refresh 轮询。
 func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, error) {
 	prompt := strings.TrimSpace(input.Prompt)
+	var err error
 
 	// 收集参考图片：兼容旧的单字段 ImageURL，并入 images 数组后去重去空。
 	images := cleanURLs(append([]string{input.ImageURL}, input.Images...))
@@ -173,8 +221,76 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 		imageURL = images[0]
 	}
 
-	task, err := s.client.CreateTask(ctx, model, prompt, images, videos, audios, seconds, aspectRatio)
+	var submission Submission
+	paidProjectCall := strings.TrimSpace(input.RequestKey) != "" || strings.TrimSpace(input.ShotID) != ""
+	if paidProjectCall {
+		if strings.TrimSpace(input.RequestKey) == "" || strings.TrimSpace(input.ShotID) == "" {
+			return Generation{}, ErrInvalidSubmissionRequest
+		}
+		snapshot, err := json.Marshal(generationRequestSnapshot{
+			AspectRatio:    aspectRatio,
+			Audios:         audios,
+			GenerationMode: s.GenerationMode(),
+			Images:         images,
+			Model:          model,
+			Prompt:         prompt,
+			Seconds:        seconds,
+			ShotRevision:   input.ShotRevision,
+			Videos:         videos,
+		})
+		if err != nil {
+			return Generation{}, err
+		}
+		submission, err = s.submissions.Prepare(ctx, PrepareSubmissionInput{
+			RequestKey:      input.RequestKey,
+			ShotID:          input.ShotID,
+			RequestSnapshot: snapshot,
+		})
+		if err != nil {
+			return Generation{}, err
+		}
+		if submission.GenerationID != "" {
+			item, err := s.Generation(ctx, submission.GenerationID)
+			if err != nil {
+				return Generation{}, err
+			}
+			return attachSubmission(item, submission, input.ShotRevision), nil
+		}
+		if submission.Status != SubmissionPrepared {
+			return attachSubmission(Generation{Status: string(submission.Status)}, submission, input.ShotRevision), nil
+		}
+		submission, err = s.submissions.Transition(
+			ctx,
+			submission.RequestKey,
+			SubmissionPrepared,
+			SubmissionSubmitting,
+		)
+		if err != nil {
+			current, getErr := s.submissions.GetByRequestKey(ctx, input.RequestKey)
+			if getErr == nil {
+				return attachSubmission(Generation{Status: string(current.Status)}, current, input.ShotRevision), nil
+			}
+			return Generation{}, err
+		}
+	}
+	if s.GenerationMode() == config.VideoGenerationModeDemo {
+		return s.generateDemo(ctx, input, submission, model, prompt, imageURL, seconds, aspectRatio, paidProjectCall)
+	}
+
+	var task TaskResult
+	if paidProjectCall {
+		task, err = s.client.CreateTaskOnce(ctx, model, prompt, images, videos, audios, seconds, aspectRatio)
+	} else {
+		task, err = s.client.CreateTask(ctx, model, prompt, images, videos, audios, seconds, aspectRatio)
+	}
 	if err != nil {
+		if paidProjectCall {
+			_, markErr := s.submissions.MarkUnknownOutcome(ctx, submission.RequestKey, "")
+			if markErr != nil {
+				return Generation{}, markErr
+			}
+			return Generation{}, &UnknownOutcomeError{RequestKey: submission.RequestKey, Cause: err}
+		}
 		var id string
 		_ = s.db.QueryRowContext(ctx,
 			`INSERT INTO video_generations (provider, model, prompt, image_url, seconds, aspect_ratio, status, error_message)
@@ -185,20 +301,386 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 		return Generation{}, err
 	}
 	if strings.TrimSpace(task.TaskID) == "" {
+		if paidProjectCall {
+			_, markErr := s.submissions.MarkUnknownOutcome(ctx, submission.RequestKey, "")
+			if markErr != nil {
+				return Generation{}, markErr
+			}
+			return Generation{}, &UnknownOutcomeError{RequestKey: submission.RequestKey}
+		}
 		return Generation{}, fmt.Errorf("视频网关创建成功但未返回 task_id，请检查上游响应")
 	}
 
 	status := normalizeStatus(task.Status)
 	var id string
-	if err := s.db.QueryRowContext(ctx,
-		`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status)
+	var insertErr error
+	if paidProjectCall {
+		if _, ok := s.submissions.repo.(*sqlSubmissionRepository); ok {
+			id, submission, insertErr = s.persistAcceptedGenerationSQL(
+				ctx,
+				submission,
+				task.TaskID,
+				generationRequestSnapshot{
+					AspectRatio:  aspectRatio,
+					Audios:       audios,
+					Images:       images,
+					Model:        model,
+					Prompt:       prompt,
+					Seconds:      seconds,
+					ShotRevision: input.ShotRevision,
+					Videos:       videos,
+				},
+				status,
+			)
+		} else {
+			insertErr = s.db.QueryRowContext(ctx,
+				`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status, shot_id, shot_revision)
+				 VALUES ('newapi',$1,$2,$3,$4,$5,$6,$7,$8::bigint,$9)
+				 RETURNING id::text`,
+				model, prompt, imageURL, task.TaskID, seconds, aspectRatio, status, input.ShotID, input.ShotRevision,
+			).Scan(&id)
+			if insertErr == nil {
+				submission, insertErr = s.submissions.AttachAccepted(ctx, submission.RequestKey, task.TaskID, id)
+			}
+		}
+	} else {
+		insertErr = s.db.QueryRowContext(ctx,
+			`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status)
 			 VALUES ('newapi',$1,$2,$3,$4,$5,$6,$7)
 			 RETURNING id::text`,
-		model, prompt, imageURL, task.TaskID, seconds, aspectRatio, status,
-	).Scan(&id); err != nil {
+			model, prompt, imageURL, task.TaskID, seconds, aspectRatio, status,
+		).Scan(&id)
+	}
+	if insertErr != nil {
+		if paidProjectCall {
+			_, markErr := s.submissions.MarkUnknownOutcome(ctx, submission.RequestKey, task.TaskID)
+			if markErr != nil {
+				return Generation{}, markErr
+			}
+			return Generation{}, &UnknownOutcomeError{
+				RequestKey: submission.RequestKey,
+				TaskID:     task.TaskID,
+				Cause:      insertErr,
+			}
+		}
+		return Generation{}, insertErr
+	}
+	item, err := s.Generation(ctx, id)
+	if err != nil {
 		return Generation{}, err
 	}
-	return s.Generation(ctx, id)
+	if paidProjectCall {
+		item = attachSubmission(item, submission, input.ShotRevision)
+	}
+	return item, nil
+}
+
+func (s *Store) generateDemo(
+	ctx context.Context,
+	input GenerateInput,
+	submission Submission,
+	model string,
+	prompt string,
+	imageURL string,
+	seconds int,
+	aspectRatio string,
+	projectCall bool,
+) (Generation, error) {
+	fail := func(err error) (Generation, error) {
+		if projectCall {
+			if _, cancelErr := s.submissions.CancelDemoFailure(ctx, submission.RequestKey, err); cancelErr != nil {
+				return Generation{}, cancelErr
+			}
+		}
+		return Generation{}, err
+	}
+	if s.demoRenderer == nil {
+		return fail(fmt.Errorf("demo video renderer is not configured"))
+	}
+	if s.uploader == nil {
+		return fail(fmt.Errorf("demo video uploader is not configured"))
+	}
+
+	rendered, err := s.demoRenderer.Render(ctx, DemoRenderInput{AspectRatio: aspectRatio, Seconds: seconds})
+	if err != nil {
+		return fail(err)
+	}
+	defer os.Remove(rendered.Path)
+	data, err := os.ReadFile(rendered.Path)
+	if err != nil {
+		return fail(err)
+	}
+	uploaded, err := s.uploader.Upload(ctx, storage.UploadInput{
+		ContentType: "video/mp4",
+		Dir:         "video/generated",
+		Filename:    filepath.Base(rendered.Path),
+		Reader:      bytes.NewReader(data),
+		Size:        int64(len(data)),
+	})
+	if err != nil {
+		return fail(err)
+	}
+	videoURL := strings.TrimSpace(uploaded.URL)
+	if videoURL == "" {
+		videoURL = strings.TrimSpace(uploaded.ObjectURL)
+	}
+	if videoURL == "" {
+		return fail(fmt.Errorf("demo video upload did not return a URL"))
+	}
+	taskID := "demo-" + strings.TrimSpace(input.RequestKey)
+	if taskID == "demo-" {
+		taskID = fmt.Sprintf("demo-%d", time.Now().UnixNano())
+	}
+
+	var id string
+	err = s.db.QueryRowContext(ctx,
+		`INSERT INTO video_generations
+		    (provider, model, prompt, image_url, task_id, seconds, aspect_ratio,
+		     video_url, duration, fps, width, height, status, shot_id, shot_revision)
+		 VALUES ('demo',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'completed',NULLIF($12,'')::bigint,$13)
+		 RETURNING id::text`,
+		model, prompt, imageURL, taskID, seconds, aspectRatio, videoURL,
+		rendered.Duration, rendered.FPS, rendered.Width, rendered.Height,
+		strings.TrimSpace(input.ShotID), input.ShotRevision,
+	).Scan(&id)
+	if err != nil {
+		return fail(err)
+	}
+	if projectCall {
+		submission, err = s.submissions.AttachAccepted(ctx, submission.RequestKey, taskID, id)
+		if err != nil {
+			return fail(err)
+		}
+		submission, err = s.submissions.SynchronizeTerminal(ctx, id, "completed")
+		if err != nil {
+			return Generation{}, err
+		}
+	}
+	item, err := s.Generation(ctx, id)
+	if err != nil {
+		return Generation{}, err
+	}
+	if projectCall {
+		item = attachSubmission(item, submission, input.ShotRevision)
+	}
+	return item, nil
+}
+
+func (s *Store) persistAcceptedGenerationSQL(
+	ctx context.Context,
+	submission Submission,
+	taskID string,
+	snapshot generationRequestSnapshot,
+	status string,
+) (generationID string, updated Submission, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", Submission{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	imageURL := ""
+	if len(snapshot.Images) > 0 {
+		imageURL = snapshot.Images[0]
+	}
+	if err := tx.QueryRowContext(ctx,
+		`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status, shot_id, shot_revision)
+		 VALUES ('newapi',$1,$2,$3,$4,$5,$6,$7,$8::bigint,$9)
+		 RETURNING id::text`,
+		snapshot.Model,
+		snapshot.Prompt,
+		imageURL,
+		taskID,
+		snapshot.Seconds,
+		snapshot.AspectRatio,
+		status,
+		submission.ShotID,
+		snapshot.ShotRevision,
+	).Scan(&generationID); err != nil {
+		return "", Submission{}, err
+	}
+	updated, err = scanSubmission(tx.QueryRowContext(ctx, `
+		UPDATE video_generation_submissions
+		SET status='accepted', task_id=$2, generation_id=$3::bigint,
+		    error_message='', update_time=now()
+		WHERE request_key=$1::uuid AND status='submitting'
+		RETURNING `+submissionColumns,
+		submission.RequestKey,
+		taskID,
+		generationID,
+	))
+	if err != nil {
+		return "", Submission{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", Submission{}, err
+	}
+	return generationID, updated, nil
+}
+
+// ReconcileSubmission links an ambiguous paid request to a known upstream task.
+// It never calls the create-task endpoint.
+func (s *Store) ReconcileSubmission(ctx context.Context, requestKey, taskID string) (Generation, error) {
+	requestKey = strings.TrimSpace(requestKey)
+	taskID = strings.TrimSpace(taskID)
+	if requestKey == "" || taskID == "" {
+		return Generation{}, ErrInvalidSubmissionRequest
+	}
+	if _, ok := s.submissions.repo.(*sqlSubmissionRepository); ok {
+		return s.reconcileSubmissionSQL(ctx, requestKey, taskID)
+	}
+	submission, err := s.submissions.GetByRequestKey(ctx, requestKey)
+	if err != nil {
+		return Generation{}, err
+	}
+	if submission.TaskID != "" && submission.TaskID != taskID {
+		return Generation{}, &ReconciliationTaskConflictError{
+			RequestKey: requestKey,
+			Existing:   submission.TaskID,
+			Received:   taskID,
+		}
+	}
+	var snapshot generationRequestSnapshot
+	if err := json.Unmarshal(submission.RequestSnapshot, &snapshot); err != nil {
+		return Generation{}, fmt.Errorf("decode generation submission snapshot: %w", err)
+	}
+	if submission.GenerationID != "" {
+		item, err := s.Generation(ctx, submission.GenerationID)
+		if err != nil {
+			return Generation{}, err
+		}
+		return attachSubmission(item, submission, snapshot.ShotRevision), nil
+	}
+	if submission.Status != SubmissionUnknownOutcome {
+		return Generation{}, &InvalidSubmissionTransitionError{
+			RequestKey: requestKey,
+			From:       submission.Status,
+			To:         SubmissionReconciled,
+		}
+	}
+
+	imageURL := ""
+	if len(snapshot.Images) > 0 {
+		imageURL = snapshot.Images[0]
+	}
+	var generationID string
+	if err := s.db.QueryRowContext(ctx,
+		`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status, shot_id, shot_revision)
+		 VALUES ('newapi',$1,$2,$3,$4,$5,$6,'queued',$7::bigint,$8)
+		 RETURNING id::text`,
+		snapshot.Model,
+		snapshot.Prompt,
+		imageURL,
+		taskID,
+		snapshot.Seconds,
+		snapshot.AspectRatio,
+		submission.ShotID,
+		snapshot.ShotRevision,
+	).Scan(&generationID); err != nil {
+		return Generation{}, err
+	}
+	submission, err = s.submissions.Reconcile(ctx, requestKey, taskID, generationID)
+	if err != nil {
+		return Generation{}, err
+	}
+	item, err := s.Generation(ctx, generationID)
+	if err != nil {
+		return Generation{}, err
+	}
+	return attachSubmission(item, submission, snapshot.ShotRevision), nil
+}
+
+func (s *Store) reconcileSubmissionSQL(ctx context.Context, requestKey, taskID string) (Generation, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Generation{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	submission, err := scanSubmission(tx.QueryRowContext(ctx, `
+		SELECT `+submissionColumns+`
+		FROM video_generation_submissions
+		WHERE request_key=$1::uuid
+		FOR UPDATE`, requestKey))
+	if err != nil {
+		return Generation{}, err
+	}
+	if submission.TaskID != "" && submission.TaskID != taskID {
+		return Generation{}, &ReconciliationTaskConflictError{
+			RequestKey: requestKey,
+			Existing:   submission.TaskID,
+			Received:   taskID,
+		}
+	}
+	var snapshot generationRequestSnapshot
+	if err := json.Unmarshal(submission.RequestSnapshot, &snapshot); err != nil {
+		return Generation{}, fmt.Errorf("decode generation submission snapshot: %w", err)
+	}
+	generationID := submission.GenerationID
+	if generationID == "" {
+		if submission.Status != SubmissionUnknownOutcome {
+			return Generation{}, &InvalidSubmissionTransitionError{
+				RequestKey: requestKey,
+				From:       submission.Status,
+				To:         SubmissionReconciled,
+			}
+		}
+		imageURL := ""
+		if len(snapshot.Images) > 0 {
+			imageURL = snapshot.Images[0]
+		}
+		if err := tx.QueryRowContext(ctx,
+			`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status, shot_id, shot_revision)
+			 VALUES ('newapi',$1,$2,$3,$4,$5,$6,'queued',$7::bigint,$8)
+			 RETURNING id::text`,
+			snapshot.Model,
+			snapshot.Prompt,
+			imageURL,
+			taskID,
+			snapshot.Seconds,
+			snapshot.AspectRatio,
+			submission.ShotID,
+			snapshot.ShotRevision,
+		).Scan(&generationID); err != nil {
+			return Generation{}, err
+		}
+		submission, err = scanSubmission(tx.QueryRowContext(ctx, `
+			UPDATE video_generation_submissions
+			SET status='reconciled', task_id=$2, generation_id=$3::bigint,
+			    error_message='', update_time=now()
+			WHERE request_key=$1::uuid AND status='unknown_outcome'
+			RETURNING `+submissionColumns,
+			requestKey,
+			taskID,
+			generationID,
+		))
+		if err != nil {
+			return Generation{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Generation{}, err
+	}
+	item, err := s.Generation(ctx, generationID)
+	if err != nil {
+		return Generation{}, err
+	}
+	return attachSubmission(item, submission, snapshot.ShotRevision), nil
+}
+
+func attachSubmission(item Generation, submission Submission, shotRevision int) Generation {
+	item.SubmissionID = submission.ID
+	item.RequestKey = submission.RequestKey
+	item.ShotID = submission.ShotID
+	item.ShotRevision = shotRevision
+	return item
+}
+
+func (s *Store) SubmissionByID(ctx context.Context, id string) (Submission, error) {
+	return s.submissions.GetByID(ctx, id)
+}
+
+func (s *Store) SubmissionByRequestKey(ctx context.Context, requestKey string) (Submission, error) {
+	return s.submissions.GetByRequestKey(ctx, requestKey)
 }
 
 // Refresh 轮询单条记录的网关状态。终态直接返回；进行中则查询网关，
@@ -209,6 +691,11 @@ func (s *Store) Refresh(ctx context.Context, id string) (Generation, error) {
 		return Generation{}, err
 	}
 	if shouldSkipRefresh(item) {
+		if terminalStatuses[item.Status] {
+			if err := s.syncSubmissionTerminal(ctx, id, item.Status); err != nil {
+				return Generation{}, err
+			}
+		}
 		return item, nil
 	}
 
@@ -246,6 +733,9 @@ func (s *Store) Refresh(ctx context.Context, id string) (Generation, error) {
 			  WHERE id=$7`,
 			asset.ID, asset.ObjectURL, task.Duration, task.FPS, task.Width, task.Height, id,
 		); err != nil {
+			return Generation{}, err
+		}
+		if err := s.syncSubmissionTerminal(ctx, id, "completed"); err != nil {
 			return Generation{}, err
 		}
 	case "failed":
@@ -303,6 +793,17 @@ func (s *Store) markFailed(ctx context.Context, id string, message string) error
 		`UPDATE video_generations SET status='failed', error_message=$1, update_time=now() WHERE id=$2`,
 		message, id,
 	)
+	if err != nil {
+		return err
+	}
+	return s.syncSubmissionTerminal(ctx, id, "failed")
+}
+
+func (s *Store) syncSubmissionTerminal(ctx context.Context, generationID, status string) error {
+	_, err := s.submissions.SynchronizeTerminal(ctx, generationID, status)
+	if errors.Is(err, ErrSubmissionNotFound) {
+		return nil
+	}
 	return err
 }
 
@@ -597,6 +1098,16 @@ func (c *Client) auth(req *http.Request) {
 // CreateTask 调用 POST /v1/videos 创建任务。
 // images/videos 为已上传到文件桶、可公网访问的参考素材地址。
 func (c *Client) CreateTask(ctx context.Context, model, prompt string, images, videos, audios []string, seconds int, aspectRatio string) (TaskResult, error) {
+	return c.createTask(ctx, model, prompt, images, videos, audios, seconds, aspectRatio, true)
+}
+
+// CreateTaskOnce is used for paid project submissions. Ambiguous responses must
+// be reconciled with the same request key instead of issuing another POST.
+func (c *Client) CreateTaskOnce(ctx context.Context, model, prompt string, images, videos, audios []string, seconds int, aspectRatio string) (TaskResult, error) {
+	return c.createTask(ctx, model, prompt, images, videos, audios, seconds, aspectRatio, false)
+}
+
+func (c *Client) createTask(ctx context.Context, model, prompt string, images, videos, audios []string, seconds int, aspectRatio string, retry bool) (TaskResult, error) {
 	if err := c.ensureReady(); err != nil {
 		return TaskResult{}, err
 	}
@@ -629,7 +1140,12 @@ func (c *Client) CreateTask(ctx context.Context, model, prompt string, images, v
 	req.Header.Set("Content-Type", "application/json")
 	c.auth(req)
 
-	payload, err := c.doJSON(req)
+	var payload map[string]any
+	if retry {
+		payload, err = c.doJSON(req)
+	} else {
+		payload, err = c.doJSONOnce(req)
+	}
 	if err != nil {
 		return TaskResult{}, err
 	}

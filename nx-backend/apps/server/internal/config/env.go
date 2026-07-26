@@ -124,8 +124,23 @@ type MiniMaxConfig struct {
 type VideoConfig struct {
 	APIBase        string
 	APIKey         string
+	Mode           string
 	Model          string
 	TimeoutSeconds int
+}
+
+const (
+	VideoGenerationModeDemo = "demo"
+	VideoGenerationModePaid = "paid"
+	paidVideoGenerationAck  = "ALLOW_PAID_VIDEO_GENERATION"
+)
+
+func videoGenerationMode(mode, acknowledgement string) string {
+	if strings.EqualFold(strings.TrimSpace(mode), VideoGenerationModePaid) &&
+		strings.TrimSpace(acknowledgement) == paidVideoGenerationAck {
+		return VideoGenerationModePaid
+	}
+	return VideoGenerationModeDemo
 }
 
 // ImageConfig 文生图网关配置（gpt-image-2，OpenAI 兼容 / 中转代理）。
@@ -350,6 +365,7 @@ func Load() Env {
 		Video: VideoConfig{
 			APIBase:        getenv("VIDEO_API_BASE", ""),
 			APIKey:         getenv("VIDEO_API_KEY", ""),
+			Mode:           videoGenerationMode(getenv("VIDEO_GENERATION_MODE", ""), getenv("VIDEO_PAID_GENERATION_ACK", "")),
 			Model:          getenv("VIDEO_MODEL", "video-ds-2.0-fast"),
 			TimeoutSeconds: videoTimeout,
 		},

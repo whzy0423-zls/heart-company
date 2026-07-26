@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/analytics"
@@ -56,6 +57,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/video"
 	"nine-xing/nx-backend/apps/server/internal/videoanalysis"
 	"nine-xing/nx-backend/apps/server/internal/videoasset"
+	"nine-xing/nx-backend/apps/server/internal/videoproject"
 	"nine-xing/nx-backend/apps/server/internal/videostoryboard"
 	"nine-xing/nx-backend/apps/server/internal/voice"
 	"nine-xing/nx-backend/apps/server/internal/wechat"
@@ -137,6 +139,9 @@ type Server struct {
 	videoAnalysisSlots             chan struct{}
 	videoStoryboardSlots           chan struct{}
 	trustedProxyCIDRs              []netip.Prefix
+	videoSubmissionRecovery        func(context.Context) (int64, error)
+	videoSubmissionRecoveryMu      sync.Mutex
+	videoSubmissionRecoveryReady   atomic.Bool
 
 	signupMu          sync.Mutex
 	signupSubscribers map[chan signup.Lead]struct{}
@@ -222,6 +227,13 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	}
 	s.voices = voice.NewStore(database, s.uploads, env.MiniMax)
 	s.videos = video.NewStore(database, s.uploads, env.Video, s.uploader)
+	s.videoSubmissionRecovery = func(ctx context.Context) (int64, error) {
+		return s.videoStore().RecoverInterruptedSubmissions(
+			ctx,
+			"服务重启时付费视频提交仍在处理中，上游请求结果不确定；请核对供应商任务后人工对账，禁止重复提交",
+			"服务重启导致本地演练视频生成中断，请重新生成",
+		)
+	}
 	s.videoAnalysis = videoanalysis.NewStore(database)
 	s.videoAssets = videoasset.NewStore(database, s.uploads)
 	s.storyboards = videostoryboard.NewStore(database)
@@ -296,6 +308,22 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.pushSendSlots = make(chan struct{}, 2)
 	// 启动时应用 DB 中保存的模型配置覆盖（若存在），重建对话/视频客户端。
 	s.applyStoredModelConfig()
+	if database != nil {
+		if err := s.ensureVideoSubmissionRecovery(context.Background()); err != nil {
+			log.Printf("video submission recovery failed: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		recovered, err := videoproject.NewStore(database).RecoverInterruptedComposeJobs(ctx, "服务重启导致合成中断，请重试")
+		cancel()
+		if err != nil {
+			log.Printf("video compose recovery failed: %v", err)
+		} else if recovered > 0 {
+			log.Printf("video compose recovered %d interrupted job(s) as failed", recovered)
+		}
+	} else {
+		s.videoSubmissionRecoveryReady.Store(true)
+	}
 	s.routes()
 	if database != nil {
 		go s.recoverVideoAsyncTasks()
@@ -439,6 +467,35 @@ func (s *Server) videoStore() *video.Store {
 	s.modelMu.RLock()
 	defer s.modelMu.RUnlock()
 	return s.videos
+}
+
+func (s *Server) ensureVideoSubmissionRecovery(ctx context.Context) error {
+	if s.videoSubmissionRecoveryReady.Load() {
+		return nil
+	}
+	s.videoSubmissionRecoveryMu.Lock()
+	defer s.videoSubmissionRecoveryMu.Unlock()
+	if s.videoSubmissionRecoveryReady.Load() {
+		return nil
+	}
+	if s.videoSubmissionRecovery == nil {
+		if s.db == nil {
+			s.videoSubmissionRecoveryReady.Store(true)
+			return nil
+		}
+		return fmt.Errorf("video submission recovery is not configured")
+	}
+	recoveryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	recovered, err := s.videoSubmissionRecovery(recoveryCtx)
+	if err != nil {
+		return err
+	}
+	s.videoSubmissionRecoveryReady.Store(true)
+	if recovered > 0 {
+		log.Printf("video submission recovery handled %d interrupted submission(s)", recovered)
+	}
+	return nil
 }
 
 // imageStore 返回当前生效的文生图存储；持读锁以兼容运行时重建。
@@ -615,7 +672,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/video/projects-characters/", s.requirePermission("Video:Project:Manage", s.videoProjectCharacters))
 	s.mux.HandleFunc("/api/video/projects-scenes/", s.requirePermission("Video:Project:Manage", s.videoProjectScenes))
 	s.mux.HandleFunc("/api/video/projects-shots/list/", s.requirePermission("Video:Project:Manage", s.videoProjectShotsList))
+	s.mux.HandleFunc("/api/video/projects-shots/from-script/", s.method(http.MethodPost, s.requirePermission("Video:Project:Manage", s.videoWorkflowImport)))
 	s.mux.HandleFunc("/api/video/projects-shots/", s.requirePermission("Video:Project:Manage", s.videoProjectShots))
+	s.mux.HandleFunc("/api/video/projects-workflow/", s.method(http.MethodGet, s.requirePermission("Video:Project:Manage", s.videoWorkflowGet)))
 	s.mux.HandleFunc("/api/video/shots/", s.requirePermission("Video:Project:Manage", s.videoShotByID))
 	s.mux.HandleFunc("/api/video/shots-assets/list/", s.method(http.MethodGet, s.requirePermission("Video:Project:Manage", s.videoShotAssetsList)))
 	s.mux.HandleFunc("/api/video/shots-assets/", s.requirePermission("Video:Project:Manage", s.videoShotAssets))
@@ -632,10 +691,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/video/shots-video-versions/", s.requirePermission("Video:Project:Manage", s.videoShotVideoVersions))
 	s.mux.HandleFunc("/api/video/shots-preview/", s.method(http.MethodGet, s.requirePermission("Video:Project:Manage", s.videoShotPreview)))
 	s.mux.HandleFunc("/api/video/shots-generate/", s.method(http.MethodPost, s.requirePermission("Video:Project:Manage", s.generateVideoShot)))
+	s.mux.HandleFunc("/api/video/shots-generate-safe/", s.method(http.MethodPost, s.requirePermission("Video:Project:Manage", s.videoWorkflowGenerate)))
+	s.mux.HandleFunc("/api/video/generation-submissions/reconcile/", s.method(http.MethodPost, s.requirePermission("Video:Project:Manage", s.videoWorkflowReconcile)))
+	s.mux.HandleFunc("/api/video/generation-submissions/", s.method(http.MethodGet, s.requirePermission("Video:Project:Manage", s.videoWorkflowSubmissionStatus)))
 	// 批量生成和视频合成
 	s.mux.HandleFunc("/api/video/projects-batch-generate/", s.method(http.MethodPost, s.requirePermission("Video:Project:Manage", s.batchGenerateShots)))
+	s.mux.HandleFunc("/api/video/projects-batch-generate-safe/", s.method(http.MethodPost, s.requirePermission("Video:Project:Manage", s.videoWorkflowBatchGenerate)))
 	s.mux.HandleFunc("/api/video/projects-batch-progress/", s.method(http.MethodGet, s.requirePermission("Video:Project:Manage", s.batchGenerateProgress)))
 	s.mux.HandleFunc("/api/video/projects-compose/", s.method(http.MethodPost, s.requirePermission("Video:Project:Manage", s.composeProjectVideo)))
+	s.mux.HandleFunc("/api/video/projects-compose-safe/", s.method(http.MethodPost, s.requirePermission("Video:Project:Manage", s.videoWorkflowCompose)))
+	s.mux.HandleFunc("/api/video/projects-compose-safe-status/", s.method(http.MethodGet, s.requirePermission("Video:Project:Manage", s.videoWorkflowComposeStatus)))
 	s.mux.HandleFunc("/api/video/projects-compose-status/", s.method(http.MethodGet, s.requirePermission("Video:Project:Manage", s.composeStatus)))
 	s.mux.HandleFunc("/api/rag/documents", s.requirePermission("RAG:Knowledge:Manage", s.ragDocuments))
 	s.mux.HandleFunc("/api/rag/documents/", s.requirePermission("RAG:Knowledge:Manage", s.ragDocumentByID))
@@ -1573,6 +1638,9 @@ func (s *Server) generateVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.normalizeVideoReferenceURLs(r.Context(), &body); err != nil {
 		httpx.Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if (strings.TrimSpace(body.RequestKey) != "" || strings.TrimSpace(body.ShotID) != "") && !s.videoSubmissionRecoveryAvailable(w, r) {
 		return
 	}
 	result, err := s.videoStore().Generate(r.Context(), body)

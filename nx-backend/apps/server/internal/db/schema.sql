@@ -238,6 +238,7 @@ CREATE TABLE IF NOT EXISTS video_generations (
   fps             DOUBLE PRECISION NOT NULL DEFAULT 0,
   width           INT NOT NULL DEFAULT 0,
   height          INT NOT NULL DEFAULT 0,
+  shot_revision   INT NOT NULL DEFAULT 0,
   status          TEXT NOT NULL DEFAULT 'queued',
   error_message   TEXT NOT NULL DEFAULT '',
   viewed_flag     BOOLEAN NOT NULL DEFAULT false,
@@ -326,14 +327,21 @@ CREATE TABLE IF NOT EXISTS video_projects (
   name            TEXT NOT NULL DEFAULT '',
   description     TEXT NOT NULL DEFAULT '',
   theme           TEXT NOT NULL DEFAULT '',          -- 创作主题（AI 剧本生成的输入）
+  script_content  TEXT NOT NULL DEFAULT '',
+  script_revision INT NOT NULL DEFAULT 0,
   style_guide     TEXT NOT NULL DEFAULT '',          -- 全局风格英文描述，注入每个分镜提示词
   status          TEXT NOT NULL DEFAULT 'active',    -- active/archived
   compose_status  TEXT NOT NULL DEFAULT 'pending',   -- pending/composing/completed/failed
   final_video_asset_id BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
   final_video_url TEXT NOT NULL DEFAULT '',
+  final_video_input_hash TEXT NOT NULL DEFAULT '',
   create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS script_content TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS script_revision INT NOT NULL DEFAULT 0;
+ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS final_video_input_hash TEXT NOT NULL DEFAULT '';
 
 -- 项目角色：引用全局资产库（video_assets），可被项目级配置覆盖。
 -- description 为详细英文外貌描述（提示词素材），reference_image_url 为角色标准照（一致性关键）。
@@ -386,6 +394,10 @@ CREATE TABLE IF NOT EXISTS video_shots (
   video_reference_mode  TEXT NOT NULL DEFAULT 'none', -- none/prev_video/scene_demo
   camera_movement       TEXT NOT NULL DEFAULT '',
   generation_id         BIGINT REFERENCES video_generations(id) ON DELETE SET NULL,
+  generation_revision   INT NOT NULL DEFAULT 0,
+  selected_generation_id BIGINT REFERENCES video_generations(id) ON DELETE SET NULL,
+  source_key            TEXT NOT NULL DEFAULT '',
+  source_script_revision INT NOT NULL DEFAULT 0,
   generated_prompt      TEXT NOT NULL DEFAULT '',
   used_images           JSONB NOT NULL DEFAULT '[]'::jsonb,
   used_videos           JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -405,6 +417,32 @@ ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS video_model TEXT NOT NULL DEFAU
 ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS video_resolution TEXT NOT NULL DEFAULT '';
 ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS sound_and_picture_together TEXT NOT NULL DEFAULT '';
 ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS used_audios JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS generation_revision INT NOT NULL DEFAULT 0;
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS source_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS source_script_revision INT NOT NULL DEFAULT 0;
+
+-- Existing projects select only a successful, usable terminal generation.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+      FROM information_schema.columns
+     WHERE table_name = 'video_shots'
+       AND column_name = 'selected_generation_id'
+  ) THEN
+    ALTER TABLE video_shots ADD COLUMN IF NOT EXISTS selected_generation_id BIGINT REFERENCES video_generations(id) ON DELETE SET NULL;
+
+    UPDATE video_shots AS shots
+       SET selected_generation_id = generations.id
+      FROM video_generations AS generations
+     WHERE generations.id = shots.generation_id
+       AND generations.status IN ('completed','succeeded')
+       AND generations.video_url <> '';
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_video_shots_project_source_key
+ON video_shots(project_id, source_key) WHERE source_key <> '';
 
 -- 分镜级参考素材：图片/视频/音频统一上传到 OSS 后关联到具体分镜。
 CREATE TABLE IF NOT EXISTS video_shot_assets (
@@ -415,6 +453,7 @@ CREATE TABLE IF NOT EXISTS video_shot_assets (
   name          TEXT NOT NULL DEFAULT '',
   mime_type     TEXT NOT NULL DEFAULT '',
   size_bytes    BIGINT NOT NULL DEFAULT 0,
+  sort_order    INT NOT NULL DEFAULT 0,
   create_time   TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -426,6 +465,26 @@ ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS mime_type TEXT NOT NULL D
 ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS size_bytes BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS create_time TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS update_time TIMESTAMPTZ NOT NULL DEFAULT now();
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+      FROM information_schema.columns
+     WHERE table_name = 'video_shot_assets'
+       AND column_name = 'sort_order'
+  ) THEN
+    ALTER TABLE video_shot_assets ADD COLUMN IF NOT EXISTS sort_order INT NOT NULL DEFAULT 0;
+
+    WITH ranked AS (
+      SELECT id, ROW_NUMBER() OVER (PARTITION BY shot_id ORDER BY create_time, id) - 1 AS sort_order
+        FROM video_shot_assets
+    )
+    UPDATE video_shot_assets AS assets
+       SET sort_order = ranked.sort_order
+      FROM ranked
+     WHERE ranked.id = assets.id;
+  END IF;
+END $$;
 DO $$
 BEGIN
   IF EXISTS (
@@ -442,6 +501,7 @@ END $$;
 -- 关联生成记录到项目/分镜，便于统计资产成功率。
 ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES video_projects(id) ON DELETE SET NULL;
 ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS shot_id BIGINT REFERENCES video_shots(id) ON DELETE SET NULL;
+ALTER TABLE video_generations ADD COLUMN IF NOT EXISTS shot_revision INT NOT NULL DEFAULT 0;
 
 -- 资产质量追踪：跨项目统计使用次数与成功率，用于推荐高质量资产。
 ALTER TABLE video_assets ADD COLUMN IF NOT EXISTS usage_count INT NOT NULL DEFAULT 0;
@@ -456,10 +516,38 @@ CREATE TABLE IF NOT EXISTS video_compose_jobs (
   music_url       TEXT NOT NULL DEFAULT '',
   final_video_asset_id BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
   final_video_url TEXT NOT NULL DEFAULT '',
+  compose_input_hash TEXT NOT NULL DEFAULT '',
+  compose_input_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  progress        INT NOT NULL DEFAULT 0,
   error_message   TEXT NOT NULL DEFAULT '',
   create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE video_compose_jobs ADD COLUMN IF NOT EXISTS compose_input_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE video_compose_jobs ADD COLUMN IF NOT EXISTS compose_input_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE video_compose_jobs ADD COLUMN IF NOT EXISTS progress INT NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS video_generation_submissions (
+  id BIGSERIAL PRIMARY KEY,
+  request_key UUID NOT NULL UNIQUE,
+  shot_id BIGINT NOT NULL REFERENCES video_shots(id) ON DELETE CASCADE,
+  generation_id BIGINT REFERENCES video_generations(id) ON DELETE SET NULL,
+  task_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'prepared',
+  request_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  error_message TEXT NOT NULL DEFAULT '',
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (status IN ('prepared','submitting','accepted','unknown_outcome','reconciled','completed','failed','cancelled'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_video_generation_submissions_active_shot
+ON video_generation_submissions(shot_id)
+WHERE status IN ('prepared','submitting','accepted','unknown_outcome','reconciled');
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_video_compose_jobs_active_project
+ON video_compose_jobs(project_id) WHERE status IN ('queued','processing');
 
 CREATE TABLE IF NOT EXISTS rag_documents (
   id          BIGSERIAL PRIMARY KEY,

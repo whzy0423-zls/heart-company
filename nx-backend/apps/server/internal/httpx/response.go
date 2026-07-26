@@ -6,10 +6,10 @@ import (
 )
 
 type Response struct {
-	Code    int         `json:"code"`
-	Data    any         `json:"data"`
-	Error   any         `json:"error"`
-	Message string      `json:"message"`
+	Code    int    `json:"code"`
+	Data    any    `json:"data"`
+	Error   any    `json:"error"`
+	Message string `json:"message"`
 }
 
 func OK(w http.ResponseWriter, data any) {

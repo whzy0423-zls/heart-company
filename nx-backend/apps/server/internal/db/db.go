@@ -176,8 +176,8 @@ var defaultMenus = []seedMenu{
 	{ID: 1005, PID: 1000, Name: "VideoOverview", Path: "/video/overview", Component: "/video/overview", AuthCode: "Video:Generation:Overview", Type: "menu", Sort: 5, Icon: "lucide:bar-chart-2", Title: "生成概览"},
 	{ID: 1008, PID: 1000, Name: "VideoProduction", Path: "/video/production", Component: "/video/production/index", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 6, Icon: "lucide:clapperboard", Title: "制片工作台"},
 	{ID: 1006, PID: 1000, Name: "VideoProjects", Path: "/video/projects", Component: "/video/projects", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 7, Icon: "lucide:folder-kanban", Title: "项目列表"},
-	{ID: 1009, PID: 1000, Name: "VideoProductionShort", Path: "/video/production/short", Component: "/video/production/short", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 8, Icon: "lucide:badge-play", Title: "短片制工作台", HideInMenu: true, ActivePath: "/video/production"},
-	{ID: 1007, PID: 1000, Name: "VideoProjectWorkbench", Path: "/video/projects/:id/workbench", Component: "/video/projects/workbench", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 9, Icon: "lucide:panel-top", Title: "项目工作台详情", HideInMenu: true, ActivePath: "/video/projects"},
+	{ID: 1007, PID: 1000, Name: "VideoProjectWorkbench", Path: "/video/projects/:id/workbench", Component: "/video/projects/workflow", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 8, Icon: "lucide:panel-top", Title: "项目工作台详情", HideInMenu: true, ActivePath: "/video/projects"},
+	{ID: 1010, PID: 1000, Name: "VideoProjectAdvancedWorkbench", Path: "/video/projects/:id/workbench/advanced", Component: "/video/projects/workbench", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 9, Icon: "lucide:sliders-horizontal", Title: "高级项目工作台", HideInMenu: true, ActivePath: "/video/projects"},
 	{ID: 1100, PID: 0, Name: "ModelSettings", Path: "/settings", Type: "catalog", Sort: 21, Icon: "lucide:cpu", Title: "模型配置"},
 	{ID: 1101, PID: 1100, Name: "ModelPairing", Path: "/settings/model", Component: "/settings/model", AuthCode: "System:Model:Config", Type: "menu", Sort: 1, Icon: "lucide:plug-zap", Title: "模型配对"},
 	{ID: 1102, PID: 1100, Name: "AdminModelConfig", Path: "/settings/admin-model", Component: "/settings/model", AuthCode: "System:Model:Config", Type: "menu", Sort: 2, Icon: "lucide:bot", Title: "管理端大模型配置"},
@@ -249,6 +249,7 @@ func seedMenus(ctx context.Context, database *sql.DB) error {
 const deprecatedMenusSQL = `DELETE FROM menus
  WHERE id = 303
     OR id = 313
+	OR id = 1009
     OR name = 'WebsiteNavigation'
     OR name = 'WebsiteSignupLeads'
     OR name = 'CustomerAppPrivateRule'

@@ -11,6 +11,8 @@ dist.war
 *-dist.tar
 *-dist.war
 coverage
+playwright-report
+test-results
 *.local
 **/.vitepress/cache
 .cache
