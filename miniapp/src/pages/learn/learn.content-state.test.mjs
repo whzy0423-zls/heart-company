@@ -19,6 +19,11 @@ assert.match(
   /<button[^>]*class="refresh-retry"[^>]*:disabled="refreshing"[^>]*@click="retryContentRefresh"/,
   "the refresh notice should offer a retry action that is disabled while refreshing",
 );
+assert.match(
+  source,
+  /\.refresh-retry\s*\{[^}]*min-height:\s*88rpx/s,
+  "the refresh retry action should keep the project's 88rpx minimum touch target",
+);
 
 const executableScript = script.replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\s*$/gm, "");
 const dir = await mkdtemp(join(tmpdir(), "nx-learn-content-state-"));
@@ -164,6 +169,36 @@ try {
     assert.deepEqual(page.teachers.value, ["默认老师"]);
     assert.deepEqual(page.coursewareItems.value, ["默认课程"]);
     assert.deepEqual(page.quotes.value, []);
+  }
+
+  {
+    const { page, state } = await createHarness();
+    state.cached = {
+      hasLearning: false,
+      home: { hero: { title: "只有首页配置" } },
+    };
+    state.refreshSiteConfig = async () => {
+      throw new Error("学习内容首次加载失败");
+    };
+
+    const hasCachedContent = page.showStoredContent();
+    assert.equal(
+      hasCachedContent,
+      false,
+      "an unrelated site-config cache must not count as cached learning content",
+    );
+    await page.loadContent({ silent: hasCachedContent });
+
+    assert.equal(
+      page.loadError.value,
+      "学习内容首次加载失败",
+      "an unrelated cache must keep refresh failure blocking",
+    );
+    assert.equal(
+      page.refreshError.value,
+      "",
+      "an unrelated cache must not expose stale-learning refresh feedback",
+    );
   }
 
   console.log("miniapp learn content state tests passed");

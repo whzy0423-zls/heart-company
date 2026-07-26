@@ -28,7 +28,7 @@ function applyContent(cfg) {
 
 function showStoredContent() {
   const cached = getStoredSiteConfig()
-  if (!cached) return false
+  if (!cached || !hasSiteConfigLearningSection(cached)) return false
   applyContent(cached)
   loading.value = false
   loadError.value = ''
@@ -263,7 +263,7 @@ function goTest() {
 .content-refresh-notice__text { flex: 1; font-size: 24rpx; line-height: 1.55; }
 .refresh-retry {
   flex-shrink: 0;
-  min-height: 72rpx;
+  min-height: 88rpx;
   padding: 0 22rpx;
   color: #0f6b4f;
   font-size: 24rpx;
@@ -271,7 +271,7 @@ function goTest() {
   background: #ffffff;
   border: 2rpx solid #86efac;
   border-radius: 16rpx;
-  line-height: 72rpx;
+  line-height: 88rpx;
 }
 .refresh-retry::after { border: none; }
 .refresh-retry[disabled] { opacity: .6; }
