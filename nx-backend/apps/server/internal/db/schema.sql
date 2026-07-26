@@ -2518,7 +2518,7 @@ CREATE TABLE IF NOT EXISTS classroom_upload_tasks (
   checksum TEXT NOT NULL DEFAULT '',
   part_size BIGINT NOT NULL CHECK (part_size > 0),
   max_parts INTEGER NOT NULL CHECK (max_parts > 0),
-  status TEXT NOT NULL DEFAULT 'initiated' CHECK (status IN ('initiated','uploading','completing','cleaning','completed','aborted','expired','failed')),
+  status TEXT NOT NULL DEFAULT 'initiated' CHECK (status IN ('initiating','initiated','uploading','completing','cleaning','completed','aborted','expired','failed')),
   expires_at TIMESTAMPTZ NOT NULL,
   attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
   cleanup_status TEXT NOT NULL DEFAULT 'pending' CHECK (cleanup_status IN ('pending','retained','cleaned','failed')),
@@ -2537,7 +2537,7 @@ BEGIN
     ALTER TABLE classroom_upload_tasks DROP CONSTRAINT IF EXISTS classroom_upload_tasks_status_check;
   END IF;
   ALTER TABLE classroom_upload_tasks
-    ADD CONSTRAINT classroom_upload_tasks_status_check CHECK (status IN ('initiated','uploading','completing','cleaning','completed','aborted','expired','failed'));
+    ADD CONSTRAINT classroom_upload_tasks_status_check CHECK (status IN ('initiating','initiated','uploading','completing','cleaning','completed','aborted','expired','failed'));
 END $$;
 
 CREATE TABLE IF NOT EXISTS classroom_entitlements (

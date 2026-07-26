@@ -15,6 +15,7 @@ import (
 )
 
 type fakeMultipartStorage struct {
+	mu                                       sync.Mutex
 	initiated                                storage.InitiateMultipartInput
 	signed                                   storage.SignPartInput
 	completed                                storage.CompleteMultipartInput
@@ -25,13 +26,21 @@ type fakeMultipartStorage struct {
 	completeDelay                            time.Duration
 	deleteCalls                              []string
 	abortErr                                 error
+	initiateErr                              error
+	initiateHook                             func()
 	deleteErr                                error
 }
 
 func (f *fakeMultipartStorage) InitiateMultipart(_ context.Context, in storage.InitiateMultipartInput) (storage.InitiateMultipartResult, error) {
+	f.mu.Lock()
 	f.initiated = in
 	f.initiateCalls++
-	return storage.InitiateMultipartResult{UploadID: "oss-upload-1"}, nil
+	hook, err := f.initiateHook, f.initiateErr
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return storage.InitiateMultipartResult{UploadID: "oss-upload-1"}, err
 }
 func (f *fakeMultipartStorage) SignMultipartPart(_ context.Context, in storage.SignPartInput) (storage.SignPartResult, error) {
 	f.signed = in
@@ -46,6 +55,8 @@ func (f *fakeMultipartStorage) CompleteMultipart(_ context.Context, in storage.C
 	return storage.CompleteMultipartResult{ETag: "final-etag"}, nil
 }
 func (f *fakeMultipartStorage) AbortMultipart(_ context.Context, in storage.AbortMultipartInput) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.aborted = in
 	f.abortCalls++
 	return f.abortErr
@@ -72,7 +83,9 @@ type fakeUploadRepo struct {
 	expired         []UploadTask
 	finalizeCalls   int
 	updateErr       error
-	initMu          sync.Mutex
+	confirmErr      error
+	reserveCalls    int
+	confirmCalls    int
 }
 
 func (r *fakeUploadRepo) GetContent(context.Context, int64) (Content, error) {
@@ -111,9 +124,59 @@ func (r *fakeUploadRepo) SaveUploadTask(_ context.Context, v UploadTask) (Upload
 	r.task = v
 	return v, nil
 }
-func (r *fakeUploadRepo) AcquireUploadLock(context.Context, int64) (func(), error) {
-	r.initMu.Lock()
-	return func() { r.initMu.Unlock() }, nil
+func (r *fakeUploadRepo) ReserveUploadInitiation(_ context.Context, v UploadTask, expected *UploadTask) (UploadTask, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reserveCalls++
+	if expected == nil {
+		if r.task.ID != 0 {
+			return r.task, false, nil
+		}
+		r.nextID++
+		v.ID = r.nextID
+		v.CreatedAt = time.Now()
+		v.UpdatedAt = v.CreatedAt
+		r.task = v
+		return v, true, nil
+	}
+	if r.task.ID != expected.ID || r.task.Status != expected.Status || !r.task.UpdatedAt.Equal(expected.UpdatedAt) {
+		return r.task, false, nil
+	}
+	v.ID = expected.ID
+	v.CreatedAt = expected.CreatedAt
+	v.UpdatedAt = time.Now()
+	r.task = v
+	return v, true, nil
+}
+func (r *fakeUploadRepo) ConfirmUploadInitiation(_ context.Context, expected UploadTask, uploadID string) (UploadTask, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.confirmCalls++
+	if r.confirmErr != nil {
+		return UploadTask{}, false, r.confirmErr
+	}
+	if r.task.ID != expected.ID || r.task.Status != UploadInitiating || !r.task.UpdatedAt.Equal(expected.UpdatedAt) {
+		return r.task, false, nil
+	}
+	r.task.OSSUploadID = uploadID
+	r.task.Status = UploadInitiated
+	r.task.UpdatedAt = time.Now()
+	return r.task, true, nil
+}
+func (r *fakeUploadRepo) FailUploadInitiation(_ context.Context, expected UploadTask, uploadID, cleanupStatus, reason string) (UploadTask, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.task.ID != expected.ID || r.task.Status != UploadInitiating || !r.task.UpdatedAt.Equal(expected.UpdatedAt) {
+		return r.task, false, nil
+	}
+	if uploadID != "" {
+		r.task.OSSUploadID = uploadID
+	}
+	r.task.Status = UploadFailed
+	r.task.CleanupStatus = cleanupStatus
+	r.task.FailureReason = reason
+	r.task.UpdatedAt = time.Now()
+	return r.task, true, nil
 }
 func (r *fakeUploadRepo) MarkUploadUploading(_ context.Context, id int64) (UploadTask, error) {
 	r.mu.Lock()
@@ -254,6 +317,97 @@ func TestClassroomUploadInitiateGeneratesPrivateObjectKeyAndBindsDraft(t *testin
 	}
 	if got.Task.ObjectKey != store.initiated.ObjectKey || store.initiated.ContentType != "video/mp4" || store.initiated.Checksum != "crc64:123" {
 		t.Fatalf("storage initiate mismatch: %+v", store.initiated)
+	}
+}
+
+func TestClassroomUploadConcurrentInitiateReservesBeforeOSS(t *testing.T) {
+	now := time.Now()
+	repo := &fakeUploadRepo{content: Content{ID: 7, Title: "lesson", ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}}
+	entered, release := make(chan struct{}), make(chan struct{})
+	store := &fakeMultipartStorage{initiateHook: func() {
+		close(entered)
+		<-release
+	}}
+	svc := newUploadService(repo, store, now)
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := svc.Initiate(context.Background(), InitiateUploadInput{ContentID: 7, CreatorID: 42, Filename: "a.mp4", ContentType: "video/mp4", SizeBytes: 10, Checksum: "crc64:123"})
+		firstDone <- err
+	}()
+	<-entered
+	_, secondErr := svc.Initiate(context.Background(), InitiateUploadInput{ContentID: 7, CreatorID: 42, Filename: "b.mp4", ContentType: "video/mp4", SizeBytes: 10, Checksum: "crc64:123"})
+	if !errors.Is(secondErr, ErrUploadConflict) {
+		t.Fatalf("second initiate err=%v", secondErr)
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	calls := store.initiateCalls
+	store.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("OSS initiate calls=%d", calls)
+	}
+}
+
+func TestClassroomUploadStaleConfirmDoesNotOverwriteAndAbortsOSS(t *testing.T) {
+	now := time.Now()
+	repo := &fakeUploadRepo{content: Content{ID: 7, Title: "lesson", ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}}
+	store := &fakeMultipartStorage{}
+	store.initiateHook = func() {
+		repo.mu.Lock()
+		repo.task.Status = UploadCleaning
+		repo.task.UpdatedAt = repo.task.UpdatedAt.Add(time.Second)
+		repo.mu.Unlock()
+	}
+	_, err := newUploadService(repo, store, now).Initiate(context.Background(), InitiateUploadInput{ContentID: 7, CreatorID: 42, Filename: "a.mp4", ContentType: "video/mp4", SizeBytes: 10, Checksum: "crc64:123"})
+	if !errors.Is(err, ErrUploadConflict) {
+		t.Fatalf("initiate err=%v", err)
+	}
+	repo.mu.Lock()
+	status, uploadID := repo.task.Status, repo.task.OSSUploadID
+	repo.mu.Unlock()
+	if status != UploadCleaning || uploadID == "oss-upload-1" {
+		t.Fatalf("stale confirm overwrote task: %+v", repo.task)
+	}
+	store.mu.Lock()
+	abortCalls := store.abortCalls
+	store.mu.Unlock()
+	if abortCalls != 1 {
+		t.Fatalf("abort calls=%d", abortCalls)
+	}
+}
+
+func TestClassroomUploadInitiateFailureReleasesReservationByCAS(t *testing.T) {
+	now := time.Now()
+	repo := &fakeUploadRepo{content: Content{ID: 7, Title: "lesson", ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}}
+	store := &fakeMultipartStorage{initiateErr: errors.New("oss down")}
+	_, err := newUploadService(repo, store, now).Initiate(context.Background(), InitiateUploadInput{ContentID: 7, CreatorID: 42, Filename: "a.mp4", ContentType: "video/mp4", SizeBytes: 10, Checksum: "crc64:123"})
+	if err == nil {
+		t.Fatal("expected initiate failure")
+	}
+	repo.mu.Lock()
+	task := repo.task
+	repo.mu.Unlock()
+	if task.Status != UploadFailed || task.CleanupStatus != "cleaned" {
+		t.Fatalf("reservation not compensated: %+v", task)
+	}
+}
+
+func TestClassroomUploadConfirmFailurePersistsRealUploadForMaintenanceWhenAbortFails(t *testing.T) {
+	now := time.Now()
+	repo := &fakeUploadRepo{content: Content{ID: 7, Title: "lesson", ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}, confirmErr: errors.New("db unavailable")}
+	store := &fakeMultipartStorage{abortErr: errors.New("oss abort unavailable")}
+	_, err := newUploadService(repo, store, now).Initiate(context.Background(), InitiateUploadInput{ContentID: 7, CreatorID: 42, Filename: "a.mp4", ContentType: "video/mp4", SizeBytes: 10, Checksum: "crc64:123"})
+	if err == nil {
+		t.Fatal("expected confirm failure")
+	}
+	repo.mu.Lock()
+	task := repo.task
+	repo.mu.Unlock()
+	if task.Status != UploadFailed || task.CleanupStatus != "pending" || task.OSSUploadID != "oss-upload-1" {
+		t.Fatalf("multipart cleanup reference lost: %+v", task)
 	}
 }
 

@@ -139,13 +139,24 @@ func TestSchemaClassroomUploadSupportsCleanupClaimState(t *testing.T) {
 	}
 }
 
+func TestSchemaClassroomUploadSupportsInitiatingReservationState(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fragment := extractClassroomCreateTable(string(raw), "classroom_upload_tasks")
+	if !strings.Contains(fragment, "'initiating'") {
+		t.Fatalf("missing initiating reservation state: %s", fragment)
+	}
+}
+
 func TestSchemaMigratesExistingClassroomUploadStatusConstraint(t *testing.T) {
 	raw, err := os.ReadFile("schema.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	sql := string(raw)
-	for _, fragment := range []string{"DROP CONSTRAINT IF EXISTS classroom_upload_tasks_status_check", "ADD CONSTRAINT classroom_upload_tasks_status_check", "'completing'", "'cleaning'"} {
+	for _, fragment := range []string{"DROP CONSTRAINT IF EXISTS classroom_upload_tasks_status_check", "ADD CONSTRAINT classroom_upload_tasks_status_check", "'initiating'", "'completing'", "'cleaning'"} {
 		if !strings.Contains(sql, fragment) {
 			t.Errorf("missing migration fragment %q", fragment)
 		}
