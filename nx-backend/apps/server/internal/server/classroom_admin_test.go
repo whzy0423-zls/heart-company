@@ -197,7 +197,7 @@ func TestClassroomDeleteDraftRoutes(t *testing.T) {
 	}
 }
 
-func TestClassroomAuditFailureIsReturned(t *testing.T) {
+func TestClassroomAuditFailureIsBestEffort(t *testing.T) {
 	f := &fakeClassroomAdminService{series: classroom.Series{ID: 2, Title: "draft", Status: classroom.SeriesDraft, AccessLevel: classroom.AccessPublic, UpdatedAt: time.Now()}}
 	audit := &failingClassroomAudit{}
 	s := &Server{classroomAdmin: f, classroomAudit: audit}
@@ -205,7 +205,7 @@ func TestClassroomAuditFailureIsReturned(t *testing.T) {
 	registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodDelete, "/api/admin/classroom/series/2?expectedUpdatedAt=2026-07-26T10:00:00Z", nil)))
-	if rr.Code != http.StatusInternalServerError || audit.calls != 1 {
+	if rr.Code != http.StatusOK || audit.calls != 1 {
 		t.Fatalf("status=%d audit=%d body=%s", rr.Code, audit.calls, rr.Body.String())
 	}
 }
@@ -281,5 +281,61 @@ func TestClassroomContentPriceActionAllowsPublishedRecord(t *testing.T) {
 	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/contents/13/price", strings.NewReader(`{"expectedUpdatedAt":"2026-07-26T10:00:00Z","accessLevel":"paid","priceCents":1599,"reason":"单课调价"}`))))
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"priceCents":1599`) {
 		t.Fatalf("code=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestClassroomAuditFailureDoesNotReportBusinessFailure(t *testing.T) {
+	f := &fakeClassroomAdminService{series: classroom.Series{ID: 22, Title: "draft", Status: classroom.SeriesDraft, AccessLevel: classroom.AccessPublic, UpdatedAt: time.Now()}}
+	audit := &failingClassroomAudit{}
+	s := &Server{classroomAdmin: f, classroomAudit: audit}
+	mux := http.NewServeMux()
+	registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodDelete, "/api/admin/classroom/series/22?expectedUpdatedAt=2026-07-26T10:00:00Z", nil)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("business operation must remain successful after best-effort audit failure: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestClassroomAdminUnknownErrorDoesNotLeakDriverDetails(t *testing.T) {
+	secretErr := errors.New("pq: password=super-secret host=internal-db")
+	f := &fakeClassroomAdminService{getSeriesErr: secretErr}
+	s := &Server{classroomAdmin: f}
+	mux := http.NewServeMux()
+	registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodGet, "/api/admin/classroom/series/99", nil)))
+	if rr.Code != http.StatusInternalServerError || strings.Contains(rr.Body.String(), "super-secret") || strings.Contains(rr.Body.String(), "internal-db") {
+		t.Fatalf("unknown error leaked: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestClassroomAdminRejectsOverflowingPagination(t *testing.T) {
+	f := &fakeClassroomAdminService{}
+	s := &Server{classroomAdmin: f}
+	mux := http.NewServeMux()
+	registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodGet, "/api/admin/classroom/series?page=1000001&pageSize=200", nil)))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("overflow page status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(f.calls) != 0 {
+		t.Fatalf("service called for invalid pagination: %v", f.calls)
+	}
+}
+
+func TestClassroomAuditUsesNormalizedClientIP(t *testing.T) {
+	f := &fakeClassroomAdminService{series: classroom.Series{ID: 31, Title: "draft", Status: classroom.SeriesDraft, AccessLevel: classroom.AccessPublic, UpdatedAt: time.Now()}}
+	audit := &capturingClassroomAudit{}
+	s := &Server{classroomAdmin: f, classroomAudit: audit}
+	mux := http.NewServeMux()
+	registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
+	req := classroomUser(httptest.NewRequest(http.MethodDelete, "/api/admin/classroom/series/31?expectedUpdatedAt=2026-07-26T10:00:00Z", nil))
+	req.RemoteAddr = "203.0.113.9:54321"
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || audit.entry.IP != "203.0.113.9" {
+		t.Fatalf("status=%d auditIP=%q body=%s", rr.Code, audit.entry.IP, rr.Body.String())
 	}
 }

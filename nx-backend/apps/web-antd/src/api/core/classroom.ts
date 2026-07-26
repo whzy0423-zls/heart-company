@@ -25,6 +25,13 @@ export type ClassroomUploadStatus =
   | 'initiated'
   | 'initiating'
   | 'uploading';
+export type ClassroomMediaStatus =
+  | 'deleted'
+  | 'failed'
+  | 'pending'
+  | 'processing'
+  | 'ready'
+  | 'uploaded';
 
 export interface ClassroomPage<T> {
   items: T[];
@@ -164,7 +171,7 @@ export interface ClassroomUploadCompleteResult {
     height: number;
     id: number;
     sizeBytes: number;
-    status: string;
+    status: ClassroomMediaStatus;
     width: number;
   };
   task: ClassroomUploadTask;

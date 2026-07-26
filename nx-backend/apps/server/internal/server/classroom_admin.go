@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -346,6 +347,9 @@ func (s *Server) classroomReady(w http.ResponseWriter) bool {
 }
 func adminClassroomPage(r *http.Request) (int, int, error) {
 	p, err := parseAdminPage(r, "page", "pageSize")
+	if err == nil && (p.Page > 1_000_000 || p.PageSize > 200) {
+		return 0, 0, errors.New("pagination exceeds safe bounds")
+	}
 	return p.Page, p.PageSize, err
 }
 func classroomAdminLimit(v int) int {
@@ -881,22 +885,30 @@ func writeClassroomAdminError(w http.ResponseWriter, err error) {
 	case errors.Is(err, classroom.ErrConflict):
 		httpx.Fail(w, 409, "classroom record was modified")
 	case strings.Contains(err.Error(), "only draft"), strings.Contains(err.Error(), "dependent"), strings.Contains(err.Error(), "dependencies"):
-		httpx.Fail(w, http.StatusConflict, err.Error())
+		httpx.Fail(w, http.StatusConflict, "classroom record has conflicting state or dependencies")
 	default:
-		var status = 500
-		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "must") || strings.Contains(err.Error(), "price") {
-			status = 400
+		message := strings.ToLower(err.Error())
+		if strings.Contains(message, "invalid") || strings.Contains(message, "required") || strings.Contains(message, "must") || strings.Contains(message, "price") || strings.Contains(message, "negative") || strings.Contains(message, "access") || strings.Contains(message, "media type") {
+			httpx.Fail(w, http.StatusBadRequest, "invalid classroom request")
+			return
 		}
-		httpx.Fail(w, status, err.Error())
+		log.Printf("classroom admin internal error: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, "classroom admin request failed")
 	}
 }
 func (s *Server) recordClassroomAudit(r *http.Request, action, target string, id int64, before, after any, summary string) error {
-	if s.classroomAudit == nil {
-		if s.auditLogs == nil {
-			return nil
-		}
-		s.classroomAudit = s.auditLogs
+	recorder := s.classroomAudit
+	if recorder == nil {
+		recorder = s.auditLogs
+	}
+	if recorder == nil {
+		log.Printf("classroom audit unavailable action=%s target=%s/%d", action, target, id)
+		return nil
 	}
 	u := userFromRequest(r)
-	return s.classroomAudit.Record(r.Context(), auditlog.Entry{OperatorID: u.ID, OperatorName: firstNonEmpty(strings.TrimSpace(u.RealName), strings.TrimSpace(u.Username), strconv.FormatInt(u.ID, 10)), Action: action, TargetType: target, TargetID: strconv.FormatInt(id, 10), IP: r.RemoteAddr, UserAgent: r.UserAgent(), Before: before, After: after, Summary: summary})
+	entry := auditlog.Entry{OperatorID: u.ID, OperatorName: firstNonEmpty(strings.TrimSpace(u.RealName), strings.TrimSpace(u.Username), strconv.FormatInt(u.ID, 10)), Action: action, TargetType: target, TargetID: strconv.FormatInt(id, 10), IP: s.clientIP(r), UserAgent: r.UserAgent(), Before: before, After: after, Summary: summary}
+	if err := recorder.Record(r.Context(), entry); err != nil {
+		log.Printf("classroom audit log failed action=%s target=%s/%d: %v", action, target, id, err)
+	}
+	return nil
 }
