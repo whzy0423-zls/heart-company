@@ -32,6 +32,11 @@ export type ClassroomMediaStatus =
   | 'processing'
   | 'ready'
   | 'uploaded';
+export type ClassroomUploadMimeType =
+  | 'audio/mp4'
+  | 'audio/mpeg'
+  | 'audio/x-m4a'
+  | 'video/mp4';
 
 export interface ClassroomPage<T> {
   items: T[];
@@ -149,7 +154,7 @@ export interface ClassroomUploadProgress extends ClassroomUploadTask {
 export interface ClassroomUploadInitiatePayload {
   checksum: string;
   contentId: number;
-  contentType: string;
+  contentType: ClassroomUploadMimeType;
   filename: string;
   sizeBytes: number;
 }
