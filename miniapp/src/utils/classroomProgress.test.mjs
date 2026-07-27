@@ -71,6 +71,92 @@ try {
   assert.deepEqual(sent.at(-1), { contentId: '22', positionSeconds: 50 })
   assert.equal(loggedIn.pending(), null)
 
+  function deferred() {
+    let resolve
+    let reject
+    const promise = new Promise((yes, no) => { resolve = yes; reject = no })
+    return { promise, resolve, reject }
+  }
+
+  const firstSend = deferred()
+  const concurrentSent = []
+  const concurrent = createClassroomProgressTracker({
+    contentId: 23,
+    durationSeconds: 100,
+    loggedIn: true,
+    now: () => now,
+    send: async (_contentId, positionSeconds) => {
+      concurrentSent.push(positionSeconds)
+      if (positionSeconds === 10) await firstSend.promise
+    },
+  })
+  const firstRecord = concurrent.record(10)
+  await Promise.resolve()
+  await concurrent.record(20)
+  await concurrent.record(30)
+  assert.deepEqual(concurrentSent, [10], 'records during an in-flight write must not start concurrent requests')
+  assert.deepEqual(concurrent.pending(), { positionSeconds: 30, completed: false }, 'only the latest throttled snapshot should remain queued')
+  firstSend.resolve()
+  await firstRecord
+  assert.deepEqual(concurrentSent, [10])
+  assert.deepEqual(concurrent.pending(), { positionSeconds: 30, completed: false })
+
+  const flushFirst = deferred()
+  const flushSecond = deferred()
+  const flushSent = []
+  const flushing = createClassroomProgressTracker({
+    contentId: 24,
+    durationSeconds: 100,
+    loggedIn: true,
+    now: () => now,
+    send: async (_contentId, positionSeconds) => {
+      flushSent.push(positionSeconds)
+      if (positionSeconds === 10) await flushFirst.promise
+      if (positionSeconds === 40) await flushSecond.promise
+    },
+  })
+  const activeRecord = flushing.record(10)
+  await Promise.resolve()
+  await flushing.record(40)
+  let firstFlushDone = false
+  let secondFlushDone = false
+  const flushPromise = flushing.flush().then(() => { firstFlushDone = true })
+  const simultaneousFlush = flushing.flush().then(() => { secondFlushDone = true })
+  await Promise.resolve()
+  assert.deepEqual(flushSent, [10], 'flush must serialize behind the active request')
+  flushFirst.resolve()
+  await activeRecord
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.deepEqual(flushSent, [10, 40], 'flush must send the newest queued snapshot after the active request')
+  assert.equal(firstFlushDone || secondFlushDone, false, 'all simultaneous flush callers must wait for the serialized latest write')
+  flushSecond.resolve()
+  await Promise.all([flushPromise, simultaneousFlush])
+  assert.equal(flushing.pending(), null)
+
+  const failingSend = deferred()
+  const retrySent = []
+  let attempt = 0
+  const retrying = createClassroomProgressTracker({
+    contentId: 25,
+    durationSeconds: 100,
+    loggedIn: true,
+    now: () => now,
+    send: async (_contentId, positionSeconds) => {
+      retrySent.push(positionSeconds)
+      attempt += 1
+      if (attempt === 1) await failingSend.promise
+    },
+  })
+  const failedRecord = retrying.record(10)
+  await Promise.resolve()
+  await retrying.record(60)
+  failingSend.reject(new Error('offline'))
+  await assert.rejects(failedRecord, /offline/)
+  assert.deepEqual(retrying.pending(), { positionSeconds: 60, completed: false }, 'a failed older request must not replace the newest queued snapshot')
+  await retrying.retry()
+  assert.deepEqual(retrySent, [10, 60])
+  assert.equal(retrying.pending(), null)
+
   console.log('classroom progress tests passed')
 } finally {
   await rm(dir, { force: true, recursive: true })

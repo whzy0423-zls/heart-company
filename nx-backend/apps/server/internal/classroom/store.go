@@ -303,7 +303,14 @@ func (s *Store) UpsertProgress(ctx context.Context, item Progress) (Progress, er
 	if item.LastPlayedAt.IsZero() {
 		item.LastPlayedAt = time.Now()
 	}
-	err := s.db.QueryRowContext(ctx, `INSERT INTO classroom_progress (wx_user_id,content_id,position_seconds,completed,last_played_at) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (wx_user_id,content_id) DO UPDATE SET position_seconds=EXCLUDED.position_seconds,completed=EXCLUDED.completed,last_played_at=EXCLUDED.last_played_at,updated_at=now() RETURNING created_at,updated_at`, item.WXUserID, item.ContentID, item.PositionSeconds, item.Completed, item.LastPlayedAt).Scan(&item.CreatedAt, &item.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `INSERT INTO classroom_progress (wx_user_id,content_id,position_seconds,completed,last_played_at)
+		VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (wx_user_id,content_id) DO UPDATE SET
+			position_seconds=GREATEST(classroom_progress.position_seconds,EXCLUDED.position_seconds),
+			completed=classroom_progress.completed OR EXCLUDED.completed,
+			last_played_at=CASE WHEN EXCLUDED.position_seconds > classroom_progress.position_seconds OR (EXCLUDED.completed AND NOT classroom_progress.completed) THEN EXCLUDED.last_played_at ELSE classroom_progress.last_played_at END,
+			updated_at=CASE WHEN EXCLUDED.position_seconds > classroom_progress.position_seconds OR (EXCLUDED.completed AND NOT classroom_progress.completed) THEN now() ELSE classroom_progress.updated_at END
+		RETURNING position_seconds,completed,last_played_at,created_at,updated_at`, item.WXUserID, item.ContentID, item.PositionSeconds, item.Completed, item.LastPlayedAt).Scan(&item.PositionSeconds, &item.Completed, &item.LastPlayedAt, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		return Progress{}, fmt.Errorf("upsert classroom progress: %w", err)
 	}

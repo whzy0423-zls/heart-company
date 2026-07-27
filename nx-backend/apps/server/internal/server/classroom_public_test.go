@@ -369,7 +369,7 @@ func playbackDB(t *testing.T, access classroom.AccessLevel) *sql.DB {
 	return openClassroomTestDB(t, func(q string, args []driver.NamedValue) (driver.Rows, error) {
 		now := time.Now()
 		if strings.Contains(q, "JOIN classroom_media_assets m") {
-			return &classroomRows{cols: make([]string, 21), values: [][]driver.Value{{int64(7), nil, false, "Lesson", "video", "published", false, string(access), int64(0), int64(3), int64(3), "bucket", "private/media.mp4", "media-v1", "video", "ready", nil, nil, nil, nil, nil}}}, nil
+			return &classroomRows{cols: make([]string, 22), values: [][]driver.Value{{int64(7), nil, false, "Lesson", "video", "published", false, string(access), int64(0), int64(3), int64(3), "bucket", "private/media.mp4", "media-v1", "video", "ready", int64(60), nil, nil, nil, nil, nil}}}, nil
 		}
 		if strings.Contains(q, "SELECT member_level,member_expires_at") {
 			return &classroomRows{cols: []string{"level", "expires"}, values: [][]driver.Value{{int64(0), nil}}}, nil
@@ -446,7 +446,7 @@ func TestClassroomPublicSeriesOfflineHiddenStandaloneVisibleAndPurchasedPlayback
 	db := openClassroomTestDB(t, func(q string, args []driver.NamedValue) (driver.Rows, error) {
 		switch {
 		case strings.Contains(q, "WHERE c.id=$1 AND m.storage_status=$2"):
-			return &classroomRows{cols: make([]string, 21), values: [][]driver.Value{{int64(7), int64(2), true, "Standalone", "video", "published", false, "inherit", int64(0), int64(3), int64(3), "bucket", "private/media.mp4", "v1", "video", "ready", int64(2), "offline", false, "paid", int64(9900)}}}, nil
+			return &classroomRows{cols: make([]string, 22), values: [][]driver.Value{{int64(7), int64(2), true, "Standalone", "video", "published", false, "inherit", int64(0), int64(3), int64(3), "bucket", "private/media.mp4", "v1", "video", "ready", int64(60), int64(2), "offline", false, "paid", int64(9900)}}}, nil
 		case strings.Contains(q, "SELECT member_level,member_expires_at"):
 			return &classroomRows{cols: []string{"level", "expires"}, values: [][]driver.Value{{int64(0), nil}}}, nil
 		case strings.Contains(q, "SELECT series_id,content_id FROM classroom_entitlements"):
@@ -498,7 +498,7 @@ func TestClassroomPlaybackContentOfflinePurchasedPlaybackIsRetained(t *testing.T
 	db := openClassroomTestDB(t, func(q string, args []driver.NamedValue) (driver.Rows, error) {
 		switch {
 		case strings.Contains(q, "WHERE c.id=$1 AND m.storage_status=$2"):
-			return &classroomRows{cols: make([]string, 21), values: [][]driver.Value{{int64(7), nil, false, "Offline", "audio", "offline", false, "paid", int64(1900), int64(3), int64(3), "bucket", "private/media.m4a", "v1", "audio", "ready", nil, nil, nil, nil, nil}}}, nil
+			return &classroomRows{cols: make([]string, 22), values: [][]driver.Value{{int64(7), nil, false, "Offline", "audio", "offline", false, "paid", int64(1900), int64(3), int64(3), "bucket", "private/media.m4a", "v1", "audio", "ready", int64(60), nil, nil, nil, nil, nil}}}, nil
 		case strings.Contains(q, "SELECT member_level,member_expires_at"):
 			return &classroomRows{cols: []string{"level", "expires"}, values: [][]driver.Value{{int64(0), nil}}}, nil
 		case strings.Contains(q, "SELECT series_id,content_id FROM classroom_entitlements"):
@@ -655,7 +655,7 @@ func TestClassroomPlaybackAuthorizationUsesConstantThreeQueries(t *testing.T) {
 		queries.Add(1)
 		switch {
 		case strings.Contains(q, "WHERE c.id=$1 AND m.storage_status=$2"):
-			return &classroomRows{cols: make([]string, 21), values: [][]driver.Value{{int64(7), nil, false, "Lesson", "audio", "published", false, "login", int64(0), int64(3), int64(3), "bucket", "private/a.m4a", "v1", "audio", "ready", nil, nil, nil, nil, nil}}}, nil
+			return &classroomRows{cols: make([]string, 22), values: [][]driver.Value{{int64(7), nil, false, "Lesson", "audio", "published", false, "login", int64(0), int64(3), int64(3), "bucket", "private/a.m4a", "v1", "audio", "ready", int64(60), nil, nil, nil, nil, nil}}}, nil
 		case strings.Contains(q, "SELECT member_level,member_expires_at"):
 			return &classroomRows{cols: []string{"level", "expires"}, values: [][]driver.Value{{int64(0), nil}}}, nil
 		case strings.Contains(q, "SELECT series_id,content_id FROM classroom_entitlements"):

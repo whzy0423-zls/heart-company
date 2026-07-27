@@ -114,6 +114,8 @@ type Server struct {
 	classroomAdmin             classroomAdminService
 	classroomPublic            classroomPublicService
 	classroomOrders            classroomOrderService
+	classroomProgress          classroomProgressService
+	classroomProgressLimiter   *strRateLimiter
 	classroomPlaybackSigner    storage.ObjectSigner
 	classroomPlaybackLimiter   *strRateLimiter
 	classroomPlaybackIPLimiter *strRateLimiter
@@ -206,6 +208,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	if database != nil {
 		s.classroomPlaybackLimiter = newStrRateLimiter(30, time.Minute)
 		s.classroomPlaybackIPLimiter = newBoundedStrRateLimiter(120, time.Minute, 20_000)
+		s.classroomProgressLimiter = newBoundedStrRateLimiter(30, time.Minute, 20_000)
 		files, fileErr := apprelease.NewFileStore(filepath.Join(env.UploadDir, "app-releases"), apprelease.MaxAPKBytes)
 		if fileErr != nil {
 			panic("app release file store: " + fileErr.Error())
@@ -248,6 +251,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.classroomAdmin = newClassroomAdminStore(database)
 	if database != nil {
 		s.classroomPublic = newClassroomPublicDB(database)
+		s.classroomProgress = newClassroomProgressDB(database)
 	}
 	s.classroomAudit = s.auditLogs
 	miniappService := miniapp.NewService(
@@ -504,6 +508,7 @@ func (s *Server) routes() {
 	registerClassroomAdminRoutes(s.mux, s.requirePermission, s)
 	registerClassroomPublicRoutes(s.mux, s)
 	registerClassroomOrderRoutes(s.mux, s.requireMiniapp, s)
+	registerClassroomProgressRoutes(s.mux, s.requireMiniapp, s)
 	// 付费解锁：下单（鉴权）→ 微信回调（公开）→ 解锁状态/报告正文（鉴权）
 	s.mux.HandleFunc("/api/miniapp/report/order", s.method(http.MethodPost, s.requireMiniapp(s.createReportOrder)))
 	s.mux.HandleFunc("/api/miniapp/report/dev-pay", s.method(http.MethodPost, s.requireMiniapp(s.devPayReportOrder)))

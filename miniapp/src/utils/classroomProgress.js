@@ -47,20 +47,40 @@ export function createClassroomProgressTracker(options = {}) {
   const throttleMs = Math.min(15_000, Math.max(10_000, Number(options.throttleMs) || CLASSROOM_PROGRESS_THROTTLE_MS))
   let queued = null
   let lastSentAt = null
+  let inFlight = null
 
   function snapshot(value) {
     const positionSeconds = position(value, durationSeconds)
     return { positionSeconds, completed: classroomCompletion(positionSeconds, durationSeconds).completed }
   }
 
-  async function transmit() {
+  async function transmit({ flush = false } = {}) {
+    if (inFlight) {
+      await inFlight
+      return flush && (inFlight || queued) ? transmit({ flush: true }) : null
+    }
     if (!queued) return null
     if (typeof send !== 'function') throw new Error('学习进度同步方法未配置')
     const current = queued
-    await send(id, current.positionSeconds)
-    if (queued === current) queued = null
-    lastSentAt = now()
-    return current
+    queued = null
+    const operation = (async () => {
+      try {
+        await send(id, current.positionSeconds)
+        lastSentAt = now()
+        return current
+      } catch (error) {
+        if (!queued) queued = current
+        throw error
+      }
+    })()
+    let tracked
+    tracked = operation.finally(() => {
+      if (inFlight === tracked) inFlight = null
+    })
+    inFlight = tracked
+    const result = await tracked
+    if (flush && (inFlight || queued)) return transmit({ flush: true })
+    return result
   }
 
   return {
@@ -72,11 +92,12 @@ export function createClassroomProgressTracker(options = {}) {
         return { ...current, local: true }
       }
       queued = current
-      if (force || lastSentAt === null || now() - lastSentAt >= throttleMs) await transmit()
+      if (force) await transmit({ flush: true })
+      else if (!inFlight && (lastSentAt === null || now() - lastSentAt >= throttleMs)) await transmit()
       return current
     },
-    flush() { return transmit() },
-    retry() { return transmit() },
+    flush() { return transmit({ flush: true }) },
+    retry() { return transmit({ flush: true }) },
     pending() { return queued ? { ...queued } : null },
   }
 }

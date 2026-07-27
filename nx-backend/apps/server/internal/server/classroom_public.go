@@ -137,7 +137,23 @@ func registerClassroomPublicRoutes(mux *http.ServeMux, s *Server) {
 	mux.HandleFunc("/api/public/classroom/standalone", s.method(http.MethodGet, s.classroomStandalonePublic))
 	mux.HandleFunc("/api/public/classroom/series/", s.method(http.MethodGet, s.classroomSeriesDetailPublic))
 	mux.HandleFunc("/api/public/classroom/content/", s.classroomContentPublicRouter)
-	mux.HandleFunc("/api/miniapp/classroom/content/", s.classroomPlaybackPublic)
+	mux.HandleFunc("/api/miniapp/classroom/content/", s.classroomMiniappContentRouter)
+}
+
+func (s *Server) classroomMiniappContentRouter(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	switch {
+	case strings.HasSuffix(path, "/play"):
+		s.classroomPlaybackPublic(w, r)
+	case strings.HasSuffix(path, "/progress"):
+		if r.Method != http.MethodPut {
+			httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+			return
+		}
+		s.requireMiniapp(s.classroomProgressUpdate)(w, r)
+	default:
+		httpx.Fail(w, http.StatusNotFound, "Not Found")
+	}
 }
 func (s *Server) classroomContentPublicRouter(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/ticket") {
@@ -767,14 +783,14 @@ func (d *classroomPublicDB) GetContent(ctx context.Context, id, uid int64) (clas
 	return contentViewResolved(c, p, access, snapshot.allows(access, c.ID, c.SeriesID)), nil
 }
 func (d *classroomPublicDB) Playback(ctx context.Context, uid, id int64) (classroomPlaybackSource, error) {
-	const query = `SELECT c.id,c.series_id,c.show_as_standalone,c.title,c.content_type,c.status,c.playback_blocked,c.access_level,c.price_cents,c.media_asset_id,m.id,m.bucket,m.object_key,m.etag,m.content_type,m.storage_status,s.id,s.status,s.playback_blocked,s.access_level,s.price_cents FROM classroom_contents c JOIN classroom_media_assets m ON m.id=c.media_asset_id LEFT JOIN classroom_series s ON s.id=c.series_id WHERE c.id=$1 AND m.storage_status=$2`
+	const query = `SELECT c.id,c.series_id,c.show_as_standalone,c.title,c.content_type,c.status,c.playback_blocked,c.access_level,c.price_cents,c.media_asset_id,m.id,m.bucket,m.object_key,m.etag,m.content_type,m.storage_status,m.duration_seconds,s.id,s.status,s.playback_blocked,s.access_level,s.price_cents FROM classroom_contents c JOIN classroom_media_assets m ON m.id=c.media_asset_id LEFT JOIN classroom_series s ON s.id=c.series_id WHERE c.id=$1 AND m.storage_status=$2`
 	var c classroom.Content
 	var m classroom.MediaAsset
 	var parentID sql.NullInt64
 	var parentStatus, parentAccess sql.NullString
 	var parentBlocked sql.NullBool
 	var parentPrice sql.NullInt64
-	err := d.db.QueryRowContext(ctx, query, id, classroom.MediaReady).Scan(&c.ID, &c.SeriesID, &c.ShowAsStandalone, &c.Title, &c.ContentType, &c.Status, &c.PlaybackBlocked, &c.AccessLevel, &c.PriceCents, &c.MediaAssetID, &m.ID, &m.Bucket, &m.ObjectKey, &m.ETag, &m.ContentType, &m.StorageStatus, &parentID, &parentStatus, &parentBlocked, &parentAccess, &parentPrice)
+	err := d.db.QueryRowContext(ctx, query, id, classroom.MediaReady).Scan(&c.ID, &c.SeriesID, &c.ShowAsStandalone, &c.Title, &c.ContentType, &c.Status, &c.PlaybackBlocked, &c.AccessLevel, &c.PriceCents, &c.MediaAssetID, &m.ID, &m.Bucket, &m.ObjectKey, &m.ETag, &m.ContentType, &m.StorageStatus, &m.DurationSeconds, &parentID, &parentStatus, &parentBlocked, &parentAccess, &parentPrice)
 	if errors.Is(err, sql.ErrNoRows) {
 		return classroomPlaybackSource{}, classroom.ErrNotFound
 	}
@@ -792,13 +808,26 @@ func (d *classroomPublicDB) Playback(ctx context.Context, uid, id int64) (classr
 	if err != nil {
 		return classroomPlaybackSource{}, err
 	}
-	access := accessFor(c.AccessLevel, p)
+	if !classroomPlaybackAccessible(c, p, snapshot) {
+		return classroomPlaybackSource{}, classroom.ErrNotFound
+	}
+	return classroomPlaybackSource{Content: c, Media: m, Series: p}, nil
+}
+
+func classroomPlaybackAccessible(c classroom.Content, parent *classroom.Series, snapshot classroomAccessSnapshot) bool {
+	if c.PlaybackBlocked || (parent != nil && parent.PlaybackBlocked) {
+		return false
+	}
+	access := accessFor(c.AccessLevel, parent)
 	acquired := snapshot.contentOwned[c.ID]
 	if c.SeriesID != nil {
 		acquired = acquired || snapshot.seriesOwned[*c.SeriesID]
 	}
-	if (c.Status != classroom.ContentPublished && !acquired) || (p != nil && p.Status != classroom.SeriesPublished && !c.ShowAsStandalone && !acquired) || (!snapshot.allows(access, c.ID, c.SeriesID) && !acquired) {
-		return classroomPlaybackSource{}, classroom.ErrNotFound
+	if c.Status != classroom.ContentPublished && (c.Status != classroom.ContentOffline || !acquired) {
+		return false
 	}
-	return classroomPlaybackSource{Content: c, Media: m, Series: p}, nil
+	if parent != nil && parent.Status != classroom.SeriesPublished && !c.ShowAsStandalone && (parent.Status != classroom.SeriesOffline || !acquired) {
+		return false
+	}
+	return snapshot.allows(access, c.ID, c.SeriesID) || acquired
 }
