@@ -12,6 +12,17 @@ import (
 	"time"
 )
 
+type HTTPError struct {
+	Method     string
+	Path       string
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("wxpay %s %s: status %d: %s", e.Method, e.Path, e.StatusCode, e.Body)
+}
+
 // doSigned 发起带 v3 签名的请求。Authorization 头格式：
 // WECHATPAY2-SHA256-RSA2048 mchid="..",nonce_str="..",signature="..",timestamp="..",serial_no=".."
 func (c *Client) doSigned(ctx context.Context, method, path string, reqBody any, out any) error {
@@ -37,7 +48,11 @@ func (c *Client) doSigned(ctx context.Context, method, path string, reqBody any,
 		c.cfg.MchID, nonce, signature, ts, c.cfg.SerialNo,
 	)
 
-	req, err := http.NewRequestWithContext(ctx, method, apiBase+path, bytes.NewReader(bodyBytes))
+	baseURL := c.baseURL
+	if baseURL == "" {
+		baseURL = apiBase
+	}
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return err
 	}
@@ -52,7 +67,7 @@ func (c *Client) doSigned(ctx context.Context, method, path string, reqBody any,
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("wxpay %s %s: status %d: %s", method, path, resp.StatusCode, string(data))
+		return &HTTPError{Method: method, Path: path, StatusCode: resp.StatusCode, Body: string(data)}
 	}
 	if out != nil && len(data) > 0 {
 		return json.Unmarshal(data, out)

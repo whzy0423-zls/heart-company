@@ -12,6 +12,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/classroom"
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/miniapp"
 	"nine-xing/nx-backend/apps/server/internal/wxpay"
 )
 
@@ -21,6 +22,32 @@ type fakeClassroomOrderService struct {
 	err     error
 	uid     int64
 	target  classroomOrderTarget
+}
+
+type fakeClassroomPaymentGateway struct {
+	closeErr error
+	closed   []string
+	dev      bool
+}
+
+func (f *fakeClassroomPaymentGateway) Prepay(context.Context, string, string, string, int) (wxpay.PrepayResult, error) {
+	return wxpay.PrepayResult{Dev: true, Package: "prepay_id=dev", SignType: "RSA", PaySign: "dev"}, nil
+}
+func (f *fakeClassroomPaymentGateway) CloseOrder(_ context.Context, outTradeNo string) error {
+	f.closed = append(f.closed, outTradeNo)
+	return f.closeErr
+}
+func (f *fakeClassroomPaymentGateway) DevMode() bool { return f.dev }
+
+type fakePendingOrderReplacer struct {
+	calls int
+	err   error
+	order miniapp.Order
+}
+
+func (f *fakePendingOrderReplacer) ReplacePendingOrder(context.Context, int64, string, string, int64, string, int, string) (miniapp.Order, error) {
+	f.calls++
+	return f.order, f.err
 }
 
 func (f *fakeClassroomOrderService) Create(_ context.Context, uid int64, target classroomOrderTarget) (classroomOrderCheckout, error) {
@@ -101,6 +128,48 @@ func TestClassroomPaymentParamsBoundary(t *testing.T) {
 func TestClassroomOrderServiceStaysDisabledWithoutPaymentClient(t *testing.T) {
 	if service := newClassroomOrderDB(nil, nil, nil, config.Env{AppEnv: "production"}); service != nil {
 		t.Fatal("incomplete production payment configuration must leave classroom checkout disabled")
+	}
+}
+
+func TestClassroomPriceChangeClosesWeChatBeforeReplacingPendingOrder(t *testing.T) {
+	existing := miniapp.Order{OutTradeNo: "old-order", Product: miniapp.ProductClassroomSeries, RefID: "41", Status: "pending"}
+	replacer := &fakePendingOrderReplacer{order: miniapp.Order{OutTradeNo: "new-order"}}
+	gateway := &fakeClassroomPaymentGateway{}
+	order, err := replacePendingAfterRemoteClose(context.Background(), gateway, replacer, 7, "new-order", miniapp.ProductClassroomSeries, 41, "基础系列", 3990, existing)
+	if err != nil || order.OutTradeNo != "new-order" || replacer.calls != 1 || strings.Join(gateway.closed, ",") != "old-order" {
+		t.Fatalf("unexpected replacement order=%+v err=%v gateway=%+v replacer=%+v", order, err, gateway, replacer)
+	}
+}
+
+func TestClassroomPriceChangeKeepsOldPendingWhenWeChatCloseFails(t *testing.T) {
+	existing := miniapp.Order{OutTradeNo: "old-order", Product: miniapp.ProductClassroomSeries, RefID: "41", Status: "pending"}
+	replacer := &fakePendingOrderReplacer{}
+	gateway := &fakeClassroomPaymentGateway{closeErr: errors.New("wechat close failed")}
+	if _, err := replacePendingAfterRemoteClose(context.Background(), gateway, replacer, 7, "new-order", miniapp.ProductClassroomSeries, 41, "基础系列", 3990, existing); err == nil {
+		t.Fatal("remote close failure must abort replacement")
+	}
+	if replacer.calls != 0 {
+		t.Fatalf("database replacement ran despite close failure: %d", replacer.calls)
+	}
+}
+
+func TestClassroomPriceChangePaymentRaceReturnsAlreadyOwned(t *testing.T) {
+	existing := miniapp.Order{OutTradeNo: "old-order", Product: miniapp.ProductClassroomSeries, RefID: "41", Status: "pending"}
+	replacer := &fakePendingOrderReplacer{err: miniapp.ErrOrderAlreadyOwned}
+	gateway := &fakeClassroomPaymentGateway{}
+	_, err := replacePendingAfterRemoteClose(context.Background(), gateway, replacer, 7, "new-order", miniapp.ProductClassroomSeries, 41, "基础系列", 3990, existing)
+	if !errors.Is(err, miniapp.ErrOrderAlreadyOwned) || replacer.calls != 1 {
+		t.Fatalf("payment race must stop replacement after remote close: err=%v calls=%d", err, replacer.calls)
+	}
+}
+
+func TestLateCallbackRetriesCompetingWeChatCloseFailure(t *testing.T) {
+	gateway := &fakeClassroomPaymentGateway{closeErr: errors.New("temporary")}
+	if err := closeCompetingPendingOrders(context.Background(), gateway, []string{"new-order"}); err == nil {
+		t.Fatal("callback must fail so WeChat retries competing order close")
+	}
+	if strings.Join(gateway.closed, ",") != "new-order" {
+		t.Fatalf("unexpected close attempts: %v", gateway.closed)
 	}
 }
 

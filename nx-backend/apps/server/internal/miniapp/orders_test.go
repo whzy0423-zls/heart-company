@@ -52,7 +52,7 @@ func TestCreateOrReusePendingOrderCreatesWhenNoPendingOrder(t *testing.T) {
 	}
 }
 
-func TestCreateOrReusePendingOrderClosesMismatchedPendingOrderAndCreatesNew(t *testing.T) {
+func TestCreateOrReusePendingOrderReturnsSnapshotConflictWithoutLocalClose(t *testing.T) {
 	state := &orderTestState{
 		existing:       true,
 		existingAmount: 1,
@@ -61,20 +61,50 @@ func TestCreateOrReusePendingOrderClosesMismatchedPendingOrderAndCreatesNew(t *t
 	store := newOrderTestStore(t, state)
 
 	order, err := store.CreateOrReusePendingOrder(context.Background(), 7, "new-order", "report", 42, "报告", 990)
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, ErrPendingOrderSnapshotChanged) || order.OutTradeNo != "existing-order" {
+		t.Fatalf("expected existing order snapshot conflict, order=%+v err=%v", order, err)
 	}
-	if order.OutTradeNo != "new-order" {
-		t.Fatalf("expected mismatched pending order to be replaced, got %q", order.OutTradeNo)
-	}
-	if state.closeCount != 1 {
-		t.Fatalf("expected mismatched pending order to be closed, got %d", state.closeCount)
-	}
-	if state.insertCount != 1 {
-		t.Fatalf("expected one replacement insert, got %d", state.insertCount)
+	if state.closeCount != 0 || state.insertCount != 0 {
+		t.Fatalf("database must not close before remote WeChat close succeeds: closes=%d inserts=%d", state.closeCount, state.insertCount)
 	}
 	if state.lockCount != 1 {
 		t.Fatalf("expected advisory lock before lookup, got %d", state.lockCount)
+	}
+}
+
+func TestReplacePendingOrderRechecksEntitlementUnderTargetLock(t *testing.T) {
+	state := &orderTestState{existing: true, existingAmount: 2990, existingTitle: "基础系列", targetOwned: true}
+	store := newOrderTestStore(t, state)
+	_, err := store.ReplacePendingOrder(context.Background(), 7, "replacement", ProductClassroomSeries, 41, "基础系列", 3990, "existing-order")
+	if !errors.Is(err, ErrOrderAlreadyOwned) {
+		t.Fatalf("payment race must stop replacement after entitlement appears: %v", err)
+	}
+	if state.closeCount != 0 || state.insertCount != 0 || state.lockCount != 1 {
+		t.Fatalf("replacement changed state after entitlement grant: %+v", state)
+	}
+}
+
+func TestReplacePendingOrderClosesLocalOldOrderAfterRemoteSuccess(t *testing.T) {
+	state := &orderTestState{paidProduct: ProductReport, paidRefID: 42, paidStatus: "pending"}
+	store := newOrderTestStore(t, state)
+	order, err := store.ReplacePendingOrder(context.Background(), 7, "replacement", ProductReport, 42, "报告", 1990, "existing-order")
+	if err != nil || order.OutTradeNo != "replacement" {
+		t.Fatalf("replacement failed: order=%+v err=%v", order, err)
+	}
+	if state.closeCount != 1 || state.insertCount != 1 || state.lockCount != 1 {
+		t.Fatalf("local replacement did not commit expected transition: %+v", state)
+	}
+}
+
+func TestCreatePendingClassroomOrderRechecksEntitlementUnderTargetLock(t *testing.T) {
+	state := &orderTestState{targetOwned: true}
+	store := newOrderTestStore(t, state)
+	_, err := store.CreateOrReusePendingOrder(context.Background(), 7, "new-order", ProductClassroomContent, 52, "第一课", 990)
+	if !errors.Is(err, ErrOrderAlreadyOwned) {
+		t.Fatalf("creation must stop when payment granted access before target lock: %v", err)
+	}
+	if state.lockCount != 1 || state.insertCount != 0 {
+		t.Fatalf("owned target created another payable order: %+v", state)
 	}
 }
 
@@ -169,6 +199,35 @@ func TestMarkOrderPaidDuplicateClassroomCallbackIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestMarkOrderPaidAcceptsLateSuccessForLocallyClosedClassroomOrder(t *testing.T) {
+	state := &orderTestState{paidProduct: ProductClassroomSeries, paidRefID: 41, paidStatus: "closed", siblingPending: "replacement-order"}
+	store := newOrderTestStore(t, state)
+	result, err := store.MarkOrderPaidDetailed(context.Background(), "old-order", "late-wx-transaction")
+	if err != nil || !result.Changed || !result.LateSuccess {
+		t.Fatalf("late real payment must be compensated, result=%+v err=%v", result, err)
+	}
+	if state.classroomGrantCount != 1 || state.siblingCloseCount != 0 || len(result.PendingToClose) != 1 || result.PendingToClose[0] != "replacement-order" {
+		t.Fatalf("late payment must grant and return replacement for remote close: result=%+v state=%+v", result, state)
+	}
+	if err := store.ClosePendingOrders(context.Background(), result.PendingToClose); err != nil {
+		t.Fatal(err)
+	}
+	if state.siblingCloseCount != 1 {
+		t.Fatalf("local pending must close only after remote success: %+v", state)
+	}
+}
+
+func TestMarkOrderPaidTakesTargetLockBeforeOrderRowLock(t *testing.T) {
+	state := &orderTestState{paidProduct: ProductClassroomContent, paidRefID: 52}
+	store := newOrderTestStore(t, state)
+	if _, err := store.MarkOrderPaid(context.Background(), "classroom-order", "wx"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(state.operationOrder, ",") != "target-lock,order-row-lock" {
+		t.Fatalf("unexpected lock order: %v", state.operationOrder)
+	}
+}
+
 func TestRefundClassroomOrderRevokesOnlyItsEntitlementAndWritesAudit(t *testing.T) {
 	state := &orderTestState{paidProduct: ProductClassroomSeries, paidRefID: 41, paidStatus: "paid"}
 	store := newOrderTestStore(t, state)
@@ -189,8 +248,8 @@ func TestCreateOrReusePendingClassroomOrderKeepsSnapshotUntilPriceChanges(t *tes
 		t.Fatalf("same snapshot should reuse pending order: order=%+v state=%+v err=%v", order, state, err)
 	}
 	order, err = store.CreateOrReusePendingOrder(context.Background(), 7, "replacement", ProductClassroomSeries, 41, "基础系列", 3990)
-	if err != nil || order.OutTradeNo != "replacement" || state.closeCount != 1 {
-		t.Fatalf("price change should close old snapshot: order=%+v state=%+v err=%v", order, state, err)
+	if !errors.Is(err, ErrPendingOrderSnapshotChanged) || order.OutTradeNo != "existing-order" || state.closeCount != 0 {
+		t.Fatalf("price change must await remote close: order=%+v state=%+v err=%v", order, state, err)
 	}
 }
 
@@ -265,6 +324,10 @@ type orderTestState struct {
 	refundCount                       int
 	classroomRevokeCount              int
 	auditCount                        int
+	targetOwned                       bool
+	siblingPending                    string
+	siblingCloseCount                 int
+	operationOrder                    []string
 }
 
 type orderTestDriver struct{}
@@ -289,10 +352,15 @@ func (c *orderTestConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, e
 func (c *orderTestConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	if strings.Contains(query, "pg_advisory_xact_lock") {
 		c.state.lockCount++
+		c.state.operationOrder = append(c.state.operationOrder, "target-lock")
 	}
 	if strings.Contains(query, "UPDATE orders SET status='closed'") {
-		c.state.closeCount++
-		c.state.existing = false
+		if strings.Contains(query, "out_trade_no IN") {
+			c.state.siblingCloseCount++
+		} else {
+			c.state.closeCount++
+			c.state.existing = false
+		}
 	}
 	if strings.Contains(query, "UPDATE orders SET status='paid'") {
 		c.state.orderPaidCount++
@@ -335,7 +403,14 @@ func (c *orderTestConn) ExecContext(_ context.Context, query string, args []driv
 
 func (c *orderTestConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	switch {
+	case strings.Contains(query, "SELECT wx_user_id,ref_id,product FROM orders"):
+		product := c.state.paidProduct
+		if product == "" {
+			product = ProductReport
+		}
+		return &orderTestRows{columns: []string{"wx_user_id", "ref_id", "product"}, values: [][]driver.Value{{int64(7), c.state.paidRefID, product}}}, nil
 	case strings.Contains(query, "FROM orders WHERE out_trade_no=$1 FOR UPDATE"):
+		c.state.operationOrder = append(c.state.operationOrder, "order-row-lock")
 		status := c.state.paidStatus
 		if status == "" {
 			status = "pending"
@@ -348,6 +423,13 @@ func (c *orderTestConn) QueryContext(_ context.Context, query string, args []dri
 			columns: []string{"id", "wx_user_id", "ref_id", "product", "status"},
 			values:  [][]driver.Value{{int64(21), int64(7), c.state.paidRefID, product, status}},
 		}, nil
+	case strings.Contains(query, "SELECT EXISTS") && strings.Contains(query, "classroom_entitlements"):
+		return &orderTestRows{columns: []string{"exists"}, values: [][]driver.Value{{c.state.targetOwned}}}, nil
+	case strings.Contains(query, "SELECT out_trade_no FROM orders") && strings.Contains(query, "id<>$4"):
+		if c.state.siblingPending == "" {
+			return &orderTestRows{columns: []string{"out_trade_no"}}, nil
+		}
+		return &orderTestRows{columns: []string{"out_trade_no"}, values: [][]driver.Value{{c.state.siblingPending}}}, nil
 	case strings.Contains(query, "WHERE wx_user_id=$1") && strings.Contains(query, "status='pending'"):
 		if !c.state.existing {
 			return &orderTestRows{columns: []string{"id", "out_trade_no", "product", "ref_id", "title", "amount", "status", "transaction_id", "create_time"}}, nil

@@ -55,6 +55,16 @@ type classroomOrderService interface {
 	DevPay(context.Context, int64, string, string) (bool, error)
 }
 
+type classroomPaymentGateway interface {
+	Prepay(context.Context, string, string, string, int) (wxpay.PrepayResult, error)
+	CloseOrder(context.Context, string) error
+	DevMode() bool
+}
+
+type pendingOrderReplacer interface {
+	ReplacePendingOrder(context.Context, int64, string, string, int64, string, int, string) (miniapp.Order, error)
+}
+
 func registerClassroomOrderRoutes(mux *http.ServeMux, authn func(http.HandlerFunc) http.HandlerFunc, s *Server) {
 	mux.HandleFunc("/api/miniapp/classroom/orders", s.method(http.MethodPost, authn(s.classroomOrderCreate)))
 	mux.HandleFunc("/api/miniapp/classroom/orders/status", s.method(http.MethodGet, authn(s.classroomOrderStatus)))
@@ -169,7 +179,7 @@ type classroomOrderDB struct {
 	db        *sql.DB
 	classroom *classroom.Store
 	orders    *miniapp.Store
-	pay       *wxpay.Client
+	pay       classroomPaymentGateway
 	env       config.Env
 }
 
@@ -269,6 +279,12 @@ func (d *classroomOrderDB) Create(ctx context.Context, uid int64, target classro
 		return classroomOrderCheckout{}, err
 	}
 	order, err := d.orders.CreateOrReusePendingOrder(ctx, uid, outTradeNo, product, target.RefID, title, amount)
+	if errors.Is(err, miniapp.ErrPendingOrderSnapshotChanged) {
+		order, err = replacePendingAfterRemoteClose(ctx, d.pay, d.orders, uid, outTradeNo, product, target.RefID, title, amount, order)
+	}
+	if errors.Is(err, miniapp.ErrOrderAlreadyOwned) {
+		return classroomOrderCheckout{}, ErrClassroomAlreadyOwned
+	}
 	if err != nil {
 		return classroomOrderCheckout{}, err
 	}
@@ -348,6 +364,33 @@ func (d *classroomOrderDB) DevPay(ctx context.Context, uid int64, outTradeNo, tr
 	if strings.TrimSpace(transactionID) == "" {
 		transactionID = "dev-" + outTradeNo
 	}
-	_, err = d.orders.MarkOrderPaid(ctx, outTradeNo, transactionID)
-	return err == nil, err
+	result, err := d.orders.MarkOrderPaidDetailed(ctx, outTradeNo, transactionID)
+	if err != nil {
+		return false, err
+	}
+	if err = closeCompetingPendingOrders(ctx, d.pay, result.PendingToClose); err != nil {
+		return false, err
+	}
+	if err = d.orders.ClosePendingOrders(ctx, result.PendingToClose); err != nil {
+		return false, err
+	}
+	return result.Changed || status == "paid", nil
+}
+
+func replacePendingAfterRemoteClose(ctx context.Context, pay classroomPaymentGateway, orders pendingOrderReplacer, userID int64, outTradeNo, product string, refID int64, title string, amount int, existing miniapp.Order) (miniapp.Order, error) {
+	if err := pay.CloseOrder(ctx, existing.OutTradeNo); err != nil {
+		return miniapp.Order{}, fmt.Errorf("close previous WeChat order: %w", err)
+	}
+	return orders.ReplacePendingOrder(ctx, userID, outTradeNo, product, refID, title, amount, existing.OutTradeNo)
+}
+
+func closeCompetingPendingOrders(ctx context.Context, pay interface {
+	CloseOrder(context.Context, string) error
+}, outTradeNos []string) error {
+	for _, outTradeNo := range outTradeNos {
+		if err := pay.CloseOrder(ctx, outTradeNo); err != nil {
+			return fmt.Errorf("close competing WeChat order %s: %w", outTradeNo, err)
+		}
+	}
+	return nil
 }

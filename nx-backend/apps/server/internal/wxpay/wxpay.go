@@ -33,6 +33,7 @@ type Client struct {
 	platformCert *x509.Certificate
 	http         *http.Client
 	devMode      bool
+	baseURL      string
 }
 
 // PrepayResult 下单结果 + 小程序 wx.requestPayment 所需参数。
@@ -63,6 +64,7 @@ func NewClient(cfg Config) (*Client, error) {
 		cfg:     cfg,
 		http:    &http.Client{Timeout: 12 * time.Second},
 		devMode: devMode,
+		baseURL: apiBase,
 	}
 	if devMode {
 		return c, nil

@@ -148,8 +148,12 @@ func (c *memberNotifyConn) QueryContext(_ context.Context, query string, _ []dri
 	switch {
 	case strings.Contains(query, "SELECT out_trade_no, product, amount, status"):
 		return &memberNotifyRows{columns: []string{"out_trade_no", "product", "amount", "status"}, values: [][]driver.Value{{"member-order", "member", int64(9900), c.state.status}}}, nil
+	case strings.Contains(query, "SELECT wx_user_id,ref_id,product FROM orders"):
+		return &memberNotifyRows{columns: []string{"wx_user_id", "ref_id", "product"}, values: [][]driver.Value{{int64(7), c.state.durationDays, "member"}}}, nil
 	case strings.Contains(query, "FROM orders WHERE out_trade_no=$1 FOR UPDATE"):
 		return &memberNotifyRows{columns: []string{"id", "wx_user_id", "ref_id", "product", "status"}, values: [][]driver.Value{{int64(1), int64(7), c.state.durationDays, "member", c.state.status}}}, nil
+	case strings.Contains(query, "SELECT out_trade_no FROM orders") && strings.Contains(query, "id<>$4"):
+		return &memberNotifyRows{columns: []string{"out_trade_no"}}, nil
 	default:
 		return &memberNotifyRows{}, nil
 	}
