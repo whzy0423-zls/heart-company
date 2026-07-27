@@ -201,6 +201,24 @@ func TestClassroomPlaybackAcceptsMiniappJWTWithoutAnonymousTicket(t *testing.T) 
 	}
 }
 
+func TestClassroomPublicMetadataRejectsExpiredMiniappJWT(t *testing.T) {
+	f := &fakeClassroomPublicService{content: classroomPublicContent{ID: 9, EffectiveAccess: classroom.AccessPublic}}
+	s := &Server{classroomPublic: f, env: config.Env{JWTSecret: "jwt-secret"}}
+	token, err := auth.SignWithExpiry(auth.UserInfo{ID: 42, Roles: []string{miniappRole}, TokenKind: auth.TokenKindMiniapp}, "jwt-secret", -time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	registerClassroomPublicRoutes(mux, s)
+	req := httptest.NewRequest(http.MethodGet, "/api/public/classroom/content/9", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, req)
+	if response.Code != http.StatusUnauthorized || f.playCalls != 0 {
+		t.Fatalf("expired JWT metadata status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestClassroomPublicContentMetadataETagIsStableAndContainsNoTicket(t *testing.T) {
 	f := &fakeClassroomPublicService{content: classroomPublicContent{ID: 5, Title: "Public", EffectiveAccess: classroom.AccessPublic, CanPlay: true}, play: classroomPlaybackSource{Content: classroom.Content{ID: 5, Status: classroom.ContentPublished, AccessLevel: classroom.AccessPublic}, Media: classroom.MediaAsset{ETag: "media-v2", StorageStatus: classroom.MediaReady}}}
 	s := &Server{classroomPublic: f, env: config.Env{JWTSecret: "secret"}}
@@ -221,6 +239,77 @@ func TestClassroomPublicContentMetadataETagIsStableAndContainsNoTicket(t *testin
 	mux.ServeHTTP(cached, req)
 	if cached.Code != http.StatusNotModified || f.playCalls != 0 {
 		t.Fatalf("304=%d source calls=%d", cached.Code, f.playCalls)
+	}
+}
+
+func TestClassroomPublicContentCacheInvalidatesOnHiddenMediaVersion(t *testing.T) {
+	f := &fakeClassroomPublicService{content: classroomPublicContent{
+		ID:              5,
+		Title:           "Public",
+		EffectiveAccess: classroom.AccessPublic,
+		CanPlay:         true,
+		cacheVersion:    "media-v1",
+	}}
+	s := &Server{classroomPublic: f, env: config.Env{JWTSecret: "secret"}}
+	mux := http.NewServeMux()
+	registerClassroomPublicRoutes(mux, s)
+
+	first := httptest.NewRecorder()
+	mux.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/api/public/classroom/content/5", nil))
+	oldETag := first.Header().Get("ETag")
+	if first.Code != http.StatusOK || oldETag == "" || strings.Contains(first.Body.String(), "media-v1") {
+		t.Fatalf("first response=%d headers=%v body=%s", first.Code, first.Header(), first.Body.String())
+	}
+
+	f.content.cacheVersion = "media-v2"
+	revalidate := httptest.NewRequest(http.MethodGet, "/api/public/classroom/content/5", nil)
+	revalidate.Header.Set("If-None-Match", oldETag)
+	refreshed := httptest.NewRecorder()
+	mux.ServeHTTP(refreshed, revalidate)
+	if refreshed.Code != http.StatusOK || refreshed.Header().Get("ETag") == oldETag || strings.Contains(refreshed.Body.String(), "media-v2") {
+		t.Fatalf("media mutation did not invalidate safely: status=%d headers=%v body=%s", refreshed.Code, refreshed.Header(), refreshed.Body.String())
+	}
+}
+
+func TestClassroomPublicListCacheInvalidatesOnPriceAndOfflineVisibilityChanges(t *testing.T) {
+	f := &fakeClassroomPublicService{series: []classroomPublicSeries{{
+		ID:              12,
+		Title:           "Series",
+		EffectiveAccess: classroom.AccessPaid,
+		PriceCents:      2990,
+	}}}
+	s := &Server{classroomPublic: f, env: config.Env{JWTSecret: "secret"}}
+	mux := http.NewServeMux()
+	registerClassroomPublicRoutes(mux, s)
+
+	request := func(ifNoneMatch string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/public/classroom/series", nil)
+		if ifNoneMatch != "" {
+			req.Header.Set("If-None-Match", ifNoneMatch)
+		}
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, req)
+		return response
+	}
+
+	published := request("")
+	publishedETag := published.Header().Get("ETag")
+	if published.Code != http.StatusOK || publishedETag == "" || !strings.Contains(published.Body.String(), `"priceCents":2990`) {
+		t.Fatalf("published response=%d headers=%v body=%s", published.Code, published.Header(), published.Body.String())
+	}
+
+	f.series[0].PriceCents = 3990
+	repriced := request(publishedETag)
+	repricedETag := repriced.Header().Get("ETag")
+	if repriced.Code != http.StatusOK || repricedETag == publishedETag || !strings.Contains(repriced.Body.String(), `"priceCents":3990`) {
+		t.Fatalf("repriced response=%d headers=%v body=%s", repriced.Code, repriced.Header(), repriced.Body.String())
+	}
+
+	f.series = nil
+	offline := request(repricedETag)
+	if offline.Code != http.StatusOK || offline.Header().Get("ETag") == repricedETag || !strings.Contains(offline.Body.String(), `"total":0`) {
+		t.Fatalf("offline response=%d headers=%v body=%s", offline.Code, offline.Header(), offline.Body.String())
 	}
 }
 

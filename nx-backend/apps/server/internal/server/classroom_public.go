@@ -54,6 +54,7 @@ type classroomPublicContent struct {
 	CanPlay         bool                  `json:"canPlay"`
 	PurchaseState   string                `json:"purchaseState"`
 	PlaybackBlocked bool                  `json:"playbackBlocked"`
+	cacheVersion    string
 }
 type classroomPublicSeriesDetail struct {
 	Series   classroomPublicSeries    `json:"series"`
@@ -285,7 +286,14 @@ func decodeClassroomPublicJSON(w http.ResponseWriter, r *http.Request, dst any, 
 	return nil
 }
 func setClassroomCache(w http.ResponseWriter, r *http.Request, body any) bool {
-	b, _ := json.Marshal(body)
+	cacheBody := body
+	if content, ok := body.(classroomPublicContent); ok {
+		cacheBody = struct {
+			Body         classroomPublicContent `json:"body"`
+			CacheVersion string                 `json:"cacheVersion"`
+		}{Body: content, CacheVersion: content.cacheVersion}
+	}
+	b, _ := json.Marshal(cacheBody)
 	h := sha256.Sum256(b)
 	etag := `"` + fmt.Sprintf("%x", h[:8]) + `"`
 	w.Header().Set("ETag", etag)
@@ -781,7 +789,9 @@ func (d *classroomPublicDB) GetContent(ctx context.Context, id, uid int64) (clas
 		return classroomPublicContent{}, e
 	}
 	access := accessFor(c.AccessLevel, p)
-	return contentViewResolved(c, p, access, snapshot.allows(access, c.ID, c.SeriesID)), nil
+	view := contentViewResolved(c, p, access, snapshot.allows(access, c.ID, c.SeriesID))
+	view.cacheVersion = media.ETag
+	return view, nil
 }
 func (d *classroomPublicDB) Playback(ctx context.Context, uid, id int64) (classroomPlaybackSource, error) {
 	const query = `SELECT c.id,c.series_id,c.show_as_standalone,c.title,c.content_type,c.status,c.playback_blocked,c.access_level,c.price_cents,c.media_asset_id,m.id,m.bucket,m.object_key,m.etag,m.content_type,m.storage_status,m.duration_seconds,s.id,s.status,s.playback_blocked,s.access_level,s.price_cents FROM classroom_contents c JOIN classroom_media_assets m ON m.id=c.media_asset_id LEFT JOIN classroom_series s ON s.id=c.series_id WHERE c.id=$1 AND m.storage_status=$2`

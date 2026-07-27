@@ -110,6 +110,34 @@ func TestClassroomAdminRoutesUseDedicatedPermissions(t *testing.T) {
 	}
 }
 
+func TestClassroomAdminListPublishAndPriceRoutesStopAtPermissionDenial(t *testing.T) {
+	s := &Server{}
+	mux := http.NewServeMux()
+	seen := ""
+	permission := func(code string, _ http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			seen = code
+			http.Error(w, "Forbidden", http.StatusForbidden)
+		}
+	}
+	registerClassroomAdminRoutes(mux, permission, s)
+	cases := []struct {
+		method, path, permission string
+	}{
+		{http.MethodGet, "/api/admin/classroom/series", "Miniapp:Classroom:List"},
+		{http.MethodPost, "/api/admin/classroom/series/12/publish", "Miniapp:Classroom:Publish"},
+		{http.MethodPost, "/api/admin/classroom/contents/21/price", "Miniapp:Classroom:Price"},
+	}
+	for _, test := range cases {
+		seen = ""
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, httptest.NewRequest(test.method, test.path, nil))
+		if response.Code != http.StatusForbidden || seen != test.permission {
+			t.Errorf("%s %s status=%d permission=%q body=%s", test.method, test.path, response.Code, seen, response.Body.String())
+		}
+	}
+}
+
 func TestClassroomAdminPaidMetadataDoesNotExposeMediaObjectKey(t *testing.T) {
 	mediaKey := "private/classroom/secret.mp4"
 	f := &fakeClassroomAdminService{content: classroom.Content{ID: 3, Title: "Paid", Status: classroom.ContentPublished, ContentType: classroom.ContentVideo, AccessLevel: classroom.AccessPaid, PriceCents: 1999, MediaAssetID: ptrI64(8)}}
