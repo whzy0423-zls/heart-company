@@ -130,15 +130,15 @@ func TestMediaUploadEntitlementAndProgressValidation(t *testing.T) {
 	}
 }
 
-func TestStoreUpsertProgressKeepsNewestPositionAndServerCompletion(t *testing.T) {
+func TestStoreUpsertProgressKeepsMonotonicStateAndRefreshesRecentPlayback(t *testing.T) {
 	now := time.Date(2026, 7, 27, 9, 30, 0, 0, time.UTC)
 	created := now.Add(-time.Hour)
-	updated := now.Add(-time.Minute)
 	db := openClassroomQueryDB(t, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 		for _, fragment := range []string{
 			"GREATEST(classroom_progress.position_seconds,EXCLUDED.position_seconds)",
 			"classroom_progress.completed OR EXCLUDED.completed",
-			"EXCLUDED.position_seconds > classroom_progress.position_seconds",
+			"GREATEST(classroom_progress.last_played_at,EXCLUDED.last_played_at)",
+			"EXCLUDED.last_played_at > classroom_progress.last_played_at",
 		} {
 			if !strings.Contains(query, fragment) {
 				t.Fatalf("progress upsert is missing monotonic guard %q: %s", fragment, query)
@@ -149,7 +149,7 @@ func TestStoreUpsertProgressKeepsNewestPositionAndServerCompletion(t *testing.T)
 		}
 		return classroomRows(
 			[]string{"position_seconds", "completed", "last_played_at", "created_at", "updated_at"},
-			[][]driver.Value{{int64(80), true, updated, created, updated}},
+			[][]driver.Value{{int64(80), true, now, created, now}},
 		), nil
 	})
 
@@ -159,7 +159,7 @@ func TestStoreUpsertProgressKeepsNewestPositionAndServerCompletion(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.PositionSeconds != 80 || !got.Completed || !got.LastPlayedAt.Equal(updated) || !got.CreatedAt.Equal(created) || !got.UpdatedAt.Equal(updated) {
+	if got.PositionSeconds != 80 || !got.Completed || !got.LastPlayedAt.Equal(now) || !got.CreatedAt.Equal(created) || !got.UpdatedAt.Equal(now) {
 		t.Fatalf("upsert must return persisted monotonic progress, got %+v", got)
 	}
 }

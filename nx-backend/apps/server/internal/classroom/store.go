@@ -308,8 +308,8 @@ func (s *Store) UpsertProgress(ctx context.Context, item Progress) (Progress, er
 		ON CONFLICT (wx_user_id,content_id) DO UPDATE SET
 			position_seconds=GREATEST(classroom_progress.position_seconds,EXCLUDED.position_seconds),
 			completed=classroom_progress.completed OR EXCLUDED.completed,
-			last_played_at=CASE WHEN EXCLUDED.position_seconds > classroom_progress.position_seconds OR (EXCLUDED.completed AND NOT classroom_progress.completed) THEN EXCLUDED.last_played_at ELSE classroom_progress.last_played_at END,
-			updated_at=CASE WHEN EXCLUDED.position_seconds > classroom_progress.position_seconds OR (EXCLUDED.completed AND NOT classroom_progress.completed) THEN now() ELSE classroom_progress.updated_at END
+			last_played_at=GREATEST(classroom_progress.last_played_at,EXCLUDED.last_played_at),
+			updated_at=CASE WHEN EXCLUDED.last_played_at > classroom_progress.last_played_at OR EXCLUDED.position_seconds > classroom_progress.position_seconds OR (EXCLUDED.completed AND NOT classroom_progress.completed) THEN now() ELSE classroom_progress.updated_at END
 		RETURNING position_seconds,completed,last_played_at,created_at,updated_at`, item.WXUserID, item.ContentID, item.PositionSeconds, item.Completed, item.LastPlayedAt).Scan(&item.PositionSeconds, &item.Completed, &item.LastPlayedAt, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		return Progress{}, fmt.Errorf("upsert classroom progress: %w", err)
