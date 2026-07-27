@@ -125,9 +125,9 @@ func TestEnvelopeSessionIDLifecycle(t *testing.T) {
 	}
 }
 
-func TestDecodeEnvelopeRequiresNonNullPublicFields(t *testing.T) {
+func TestDecodeEnvelopeKeepsSafetyCriticalFieldsRequired(t *testing.T) {
 	base := []byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.ping","sessionId":"session-1","generation":0,"turnId":null,"sessionSeq":0,"turnSeq":null,"configVersion":0,"timestampMs":1,"payload":{}}`)
-	required := []string{"protocolVersion", "type", "generation", "sessionSeq", "configVersion", "timestampMs", "payload"}
+	required := []string{"protocolVersion", "type", "timestampMs"}
 	for _, field := range required {
 		for _, variant := range []string{"omitted", "null"} {
 			t.Run(field+"_"+variant, func(t *testing.T) {
@@ -152,15 +152,46 @@ func TestDecodeEnvelopeRequiresNonNullPublicFields(t *testing.T) {
 				if !errors.As(err, &protocolErr) {
 					t.Fatalf("err=%T %v", err, err)
 				}
-				wantCode := ProtocolErrorInvalidEnvelope
-				if field == "payload" {
-					wantCode = ProtocolErrorInvalidPayload
-				}
-				if protocolErr.Code != wantCode {
-					t.Fatalf("code=%q want=%q", protocolErr.Code, wantCode)
+				if protocolErr.Code != ProtocolErrorInvalidEnvelope {
+					t.Fatalf("code=%q want=%q", protocolErr.Code, ProtocolErrorInvalidEnvelope)
 				}
 			})
 		}
+	}
+}
+
+func TestDecodeEnvelopeAcceptsLegacyV1DefaultsAndUnknownOptionalFields(t *testing.T) {
+	data := []byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.ping","sessionId":"session-1","turnId":null,"turnSeq":null,"timestampMs":1,"futureOptional":"ignored"}`)
+	decoded, err := DecodeEnvelope(data, DirectionClient, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Generation != 0 || decoded.SessionSeq == nil || *decoded.SessionSeq != 0 || decoded.ConfigVersion != 0 {
+		t.Fatalf("legacy defaults not applied: %+v", decoded)
+	}
+	if string(decoded.Payload) != "{}" {
+		t.Fatalf("payload=%s want={}", decoded.Payload)
+	}
+}
+
+func TestDecodeEnvelopeKeepsSafetyChecksForLegacyV1(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		code string
+	}{
+		{"wrong version", `{"protocolVersion":"xinzhili.voice.v2","type":"session.ping","sessionId":"session-1","timestampMs":1}`, ProtocolErrorUnsupportedVersion},
+		{"wrong direction", `{"protocolVersion":"xinzhili.voice.v1","type":"session.ready","sessionId":"session-1","timestampMs":1}`, ProtocolErrorInvalidEventDirection},
+		{"array payload", `{"protocolVersion":"xinzhili.voice.v1","type":"session.ping","sessionId":"session-1","timestampMs":1,"payload":[]}`, ProtocolErrorInvalidPayload},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := DecodeEnvelope([]byte(tt.data), DirectionClient, true)
+			var protocolErr *ProtocolError
+			if !errors.As(err, &protocolErr) || protocolErr.Code != tt.code {
+				t.Fatalf("err=%T %v wantCode=%q", err, err, tt.code)
+			}
+		})
 	}
 }
 
