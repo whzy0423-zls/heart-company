@@ -57,3 +57,31 @@ func TestEnterpriseSolutionValidateForReview(t *testing.T) {
 		t.Fatalf("got %v, want trainer required", err)
 	}
 }
+
+func TestConsentLinkSupportsMediaAssetWithoutCase(t *testing.T) {
+	link := ConsentLink{
+		ConsentID:    3,
+		MediaAssetID: 9,
+		SubjectType:  ConsentMediaAsset,
+		SubjectID:    9,
+		UseScope:     "public_playback",
+	}
+	if err := link.Validate(); err != nil {
+		t.Fatalf("media-only consent link rejected: %v", err)
+	}
+	if link.CaseID != 0 {
+		t.Fatalf("media-only consent link unexpectedly requires case %d", link.CaseID)
+	}
+}
+
+func TestConsentLinkRequiresTypedSubjectAndScope(t *testing.T) {
+	for _, link := range []ConsentLink{
+		{ConsentID: 1, MediaAssetID: 2, SubjectID: 2, UseScope: "public_playback"},
+		{ConsentID: 1, MediaAssetID: 2, SubjectType: ConsentMediaAsset, UseScope: "public_playback"},
+		{ConsentID: 1, MediaAssetID: 2, SubjectType: ConsentMediaAsset, SubjectID: 2},
+	} {
+		if err := link.Validate(); !errors.Is(err, ErrInvalidConsentLink) {
+			t.Fatalf("invalid link accepted: %+v, err=%v", link, err)
+		}
+	}
+}

@@ -10,9 +10,10 @@ import (
 )
 
 var (
-	ErrInvalidCase     = errors.New("enterprise promotion case is invalid")
-	ErrInvalidSolution = errors.New("enterprise promotion solution is invalid")
-	ErrTrainerRequired = errors.New("enterprise promotion trainer is required")
+	ErrInvalidCase        = errors.New("enterprise promotion case is invalid")
+	ErrInvalidSolution    = errors.New("enterprise promotion solution is invalid")
+	ErrTrainerRequired    = errors.New("enterprise promotion trainer is required")
+	ErrInvalidConsentLink = errors.New("enterprise promotion consent link is invalid")
 )
 
 type CaseStatus string
@@ -23,6 +24,15 @@ const (
 	CasePublished CaseStatus = "published"
 	CaseOffline   CaseStatus = "offline"
 )
+
+func (t ConsentSubjectType) Valid() bool {
+	switch t {
+	case ConsentCompany, ConsentPerson, ConsentMediaAsset, ConsentTestimonial, ConsentDocumentScreen:
+		return true
+	default:
+		return false
+	}
+}
 
 func (s CaseStatus) Valid() bool {
 	switch s {
@@ -222,6 +232,35 @@ type PublicationConsent struct {
 	EffectiveAt      *time.Time
 	ExpiresAt        *time.Time
 	Version          int64
+}
+
+// ConsentLink associates a consent with its independently reviewable subject.
+// CaseID is optional so media authorization can be completed before an asset is
+// selected for a training case.
+type ConsentLink struct {
+	ID             int64
+	ConsentID      int64
+	CaseID         int64
+	MediaAssetID   int64
+	TestimonialID  int64
+	SubjectType    ConsentSubjectType
+	SubjectID      int64
+	UseScope       string
+	RequirementKey string
+	Required       bool
+}
+
+func (l ConsentLink) Validate() error {
+	if l.ConsentID <= 0 || !l.SubjectType.Valid() || l.SubjectID <= 0 || strings.TrimSpace(l.UseScope) == "" {
+		return ErrInvalidConsentLink
+	}
+	if l.CaseID <= 0 && l.MediaAssetID <= 0 && l.TestimonialID <= 0 {
+		return ErrInvalidConsentLink
+	}
+	if l.SubjectType == ConsentMediaAsset && l.MediaAssetID != l.SubjectID {
+		return ErrInvalidConsentLink
+	}
+	return nil
 }
 
 type EnterpriseConsultation struct {

@@ -16,7 +16,7 @@ func TestSchemaContainsEnterprisePromotionTables(t *testing.T) {
 		"promotion_share_tokens", "consultation_privacy_requests",
 		"enterprise_promotion_audit_logs",
 		"promotion_media_assets", "promotion_media_upload_tasks",
-		"promotion_media_processing_attempts",
+		"promotion_media_processing_attempts", "promotion_media_qa_reviews",
 	} {
 		if !strings.Contains(schemaSQL, "CREATE TABLE IF NOT EXISTS "+table) {
 			t.Errorf("schema missing table %s", table)
@@ -35,13 +35,22 @@ func TestEnterprisePromotionSchemaContainsBusinessConstraints(t *testing.T) {
 		"version BIGINT NOT NULL DEFAULT 1 CHECK (version > 0)",
 		"consultation_reference_hash TEXT NOT NULL UNIQUE",
 		"request_idempotency_hash TEXT NOT NULL UNIQUE",
-		"UNIQUE(session_id, idempotency_key)",
+		"idempotency_key TEXT NOT NULL UNIQUE",
 		"source_asset_id BIGINT REFERENCES promotion_media_assets(id) ON DELETE RESTRICT",
 		"UNIQUE(asset_id, attempt_number)",
 		"qa_result TEXT NOT NULL DEFAULT 'pending'",
 		"qa_approved_by BIGINT REFERENCES users(id) ON DELETE RESTRICT",
 		"qa_approved_at TIMESTAMPTZ",
 		"qa_note TEXT NOT NULL DEFAULT ''",
+		"subject_type TEXT NOT NULL",
+		"subject_id BIGINT NOT NULL",
+		"use_scope TEXT NOT NULL",
+		"case_id BIGINT REFERENCES training_cases(id) ON DELETE RESTRICT",
+		"approval_txid BIGINT NOT NULL DEFAULT txid_current()",
+		"CREATE TRIGGER trg_promotion_media_ready_requires_current_qa",
+		"CREATE TRIGGER trg_promotion_media_qa_reviews_append_only",
+		"ALTER TABLE training_case_consent_links ALTER COLUMN case_id DROP NOT NULL",
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_promotion_events_idempotency_key",
 	} {
 		if !strings.Contains(schemaSQL, snippet) {
 			t.Errorf("schema missing constraint/column %q", snippet)

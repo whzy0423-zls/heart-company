@@ -2616,6 +2616,58 @@ CREATE TABLE IF NOT EXISTS promotion_media_processing_attempts (
 );
 CREATE INDEX IF NOT EXISTS idx_promotion_media_attempts_lease ON promotion_media_processing_attempts(state, lease_expires_at, id);
 
+CREATE TABLE IF NOT EXISTS promotion_media_qa_reviews (
+  id BIGSERIAL PRIMARY KEY,
+  asset_id BIGINT NOT NULL REFERENCES promotion_media_assets(id) ON DELETE RESTRICT,
+  qa_result TEXT NOT NULL CHECK (qa_result IN ('passed','failed')),
+  approved_by BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  approved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  qa_note TEXT NOT NULL DEFAULT '',
+  approval_txid BIGINT NOT NULL DEFAULT txid_current()
+);
+CREATE INDEX IF NOT EXISTS idx_promotion_media_qa_reviews_asset ON promotion_media_qa_reviews(asset_id, id DESC);
+
+CREATE OR REPLACE FUNCTION promotion_media_qa_reviews_append_only()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'promotion media QA reviews are append-only';
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_promotion_media_qa_reviews_append_only ON promotion_media_qa_reviews;
+CREATE TRIGGER trg_promotion_media_qa_reviews_append_only
+BEFORE UPDATE OR DELETE ON promotion_media_qa_reviews
+FOR EACH ROW EXECUTE FUNCTION promotion_media_qa_reviews_append_only();
+
+CREATE OR REPLACE FUNCTION promotion_media_ready_requires_current_qa()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.state = 'ready' AND (
+    TG_OP = 'INSERT'
+    OR OLD.state IS DISTINCT FROM NEW.state
+    OR OLD.qa_result IS DISTINCT FROM NEW.qa_result
+    OR OLD.qa_approved_by IS DISTINCT FROM NEW.qa_approved_by
+    OR OLD.qa_approved_at IS DISTINCT FROM NEW.qa_approved_at
+    OR OLD.qa_note IS DISTINCT FROM NEW.qa_note
+  ) THEN
+    IF NOT EXISTS (
+      SELECT 1
+      FROM promotion_media_qa_reviews review
+      WHERE review.asset_id = NEW.id
+        AND review.qa_result = 'passed'
+        AND review.approved_by = NEW.qa_approved_by
+        AND review.approval_txid = txid_current()
+    ) THEN
+      RAISE EXCEPTION 'ready transition requires a passing QA review in the current transaction';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_promotion_media_ready_requires_current_qa ON promotion_media_assets;
+CREATE TRIGGER trg_promotion_media_ready_requires_current_qa
+BEFORE INSERT OR UPDATE OF state, qa_result, qa_approved_by, qa_approved_at, qa_note ON promotion_media_assets
+FOR EACH ROW EXECUTE FUNCTION promotion_media_ready_requires_current_qa();
+
 CREATE TABLE IF NOT EXISTS enterprise_trainers (
   id BIGSERIAL PRIMARY KEY,
   key TEXT NOT NULL UNIQUE,
@@ -2782,15 +2834,40 @@ CREATE TABLE IF NOT EXISTS training_case_claims (
 
 CREATE TABLE IF NOT EXISTS training_case_consent_links (
   id BIGSERIAL PRIMARY KEY,
-  case_id BIGINT NOT NULL REFERENCES training_cases(id) ON DELETE RESTRICT,
+  case_id BIGINT REFERENCES training_cases(id) ON DELETE RESTRICT,
   consent_id BIGINT NOT NULL REFERENCES publication_consents(id) ON DELETE RESTRICT,
   media_asset_id BIGINT REFERENCES promotion_media_assets(id) ON DELETE RESTRICT,
   testimonial_id BIGINT REFERENCES training_case_testimonials(id) ON DELETE RESTRICT,
+  subject_type TEXT NOT NULL CHECK (subject_type IN ('company','person','media_asset','testimonial','document_screen')),
+  subject_id BIGINT NOT NULL,
+  use_scope TEXT NOT NULL,
   requirement_key TEXT NOT NULL,
   required BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE(case_id, consent_id, requirement_key)
+  UNIQUE(consent_id, subject_type, subject_id, use_scope),
+  CHECK (case_id IS NOT NULL OR media_asset_id IS NOT NULL OR testimonial_id IS NOT NULL),
+  CHECK (subject_type <> 'media_asset' OR media_asset_id = subject_id)
 );
+ALTER TABLE training_case_consent_links ALTER COLUMN case_id DROP NOT NULL;
+ALTER TABLE training_case_consent_links ADD COLUMN IF NOT EXISTS subject_type TEXT;
+ALTER TABLE training_case_consent_links ADD COLUMN IF NOT EXISTS subject_id BIGINT;
+ALTER TABLE training_case_consent_links ADD COLUMN IF NOT EXISTS use_scope TEXT;
+UPDATE training_case_consent_links link
+SET subject_type = consent.subject_type,
+    subject_id = CASE
+      WHEN consent.subject_type = 'media_asset' AND link.media_asset_id IS NOT NULL THEN link.media_asset_id
+      WHEN consent.subject_type = 'testimonial' AND link.testimonial_id IS NOT NULL THEN link.testimonial_id
+      ELSE link.consent_id
+    END,
+    use_scope = COALESCE(NULLIF(link.requirement_key, ''), 'publication')
+FROM publication_consents consent
+WHERE consent.id = link.consent_id
+  AND (link.subject_type IS NULL OR link.subject_id IS NULL OR link.use_scope IS NULL);
+ALTER TABLE training_case_consent_links ALTER COLUMN subject_type SET NOT NULL;
+ALTER TABLE training_case_consent_links ALTER COLUMN subject_id SET NOT NULL;
+ALTER TABLE training_case_consent_links ALTER COLUMN use_scope SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_training_case_consent_links_subject
+  ON training_case_consent_links(consent_id, subject_type, subject_id, use_scope);
 
 CREATE TABLE IF NOT EXISTS enterprise_promotion_settings (
   key TEXT PRIMARY KEY,
@@ -2836,11 +2913,13 @@ CREATE TABLE IF NOT EXISTS promotion_events (
   media_asset_id BIGINT REFERENCES promotion_media_assets(id) ON DELETE RESTRICT,
   page_path TEXT NOT NULL DEFAULT '',
   event_data JSONB NOT NULL DEFAULT '{}'::jsonb,
-  idempotency_key TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL UNIQUE,
   occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(session_id, idempotency_key)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_promotion_events_idempotency_key
+  ON promotion_events(idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_promotion_events_funnel ON promotion_events(event_type, occurred_at DESC);
 
 CREATE TABLE IF NOT EXISTS enterprise_consultations (
