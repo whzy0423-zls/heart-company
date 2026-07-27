@@ -1198,16 +1198,19 @@ func successfulAppChatGenerator(answer string) rag.Generator {
 
 type fakeAppChatStreamStore struct {
 	appChatStore
-	mu               sync.Mutex
-	messages         []chat.Message
-	messageID        int64
-	saveCalls        int
-	saveErr          error
-	onSave           func()
-	beforeSaveReturn func(context.Context)
-	contextStarted   chan struct{}
-	contextRelease   chan struct{}
-	cardID           int64
+	mu                 sync.Mutex
+	messages           []chat.Message
+	messageID          int64
+	saveErrorMessageID int64
+	saveCalls          int
+	contextCalls       int
+	lastSources        json.RawMessage
+	saveErr            error
+	onSave             func()
+	beforeSaveReturn   func(context.Context)
+	contextStarted     chan struct{}
+	contextRelease     chan struct{}
+	cardID             int64
 }
 
 func newFakeAppChatStreamStore() *fakeAppChatStreamStore {
@@ -1219,6 +1222,9 @@ func (s *fakeAppChatStreamStore) GetSession(context.Context, int64, int64) (chat
 }
 
 func (s *fakeAppChatStreamStore) GetConversationState(ctx context.Context, _ int64) (chat.ConversationState, error) {
+	s.mu.Lock()
+	s.contextCalls++
+	s.mu.Unlock()
 	if s.contextStarted != nil {
 		close(s.contextStarted)
 		select {
@@ -1242,10 +1248,11 @@ func (s *fakeAppChatStreamStore) UpdateConversationSummary(context.Context, int6
 	return true, nil
 }
 
-func (s *fakeAppChatStreamStore) SavePair(ctx context.Context, sessionID int64, question, answer string, _ json.RawMessage) (int64, error) {
+func (s *fakeAppChatStreamStore) SavePair(ctx context.Context, sessionID int64, question, answer string, sources json.RawMessage) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.saveCalls++
+	s.lastSources = append(json.RawMessage(nil), sources...)
 	if s.onSave != nil {
 		s.onSave()
 	}
@@ -1253,7 +1260,7 @@ func (s *fakeAppChatStreamStore) SavePair(ctx context.Context, sessionID int64, 
 		if s.beforeSaveReturn != nil {
 			s.beforeSaveReturn(ctx)
 		}
-		return 0, s.saveErr
+		return s.saveErrorMessageID, s.saveErr
 	}
 	if s.beforeSaveReturn != nil {
 		s.beforeSaveReturn(ctx)
@@ -1275,6 +1282,18 @@ func (s *fakeAppChatStreamStore) saveCallCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.saveCalls
+}
+
+func (s *fakeAppChatStreamStore) contextCallCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.contextCalls
+}
+
+func (s *fakeAppChatStreamStore) savedMessagesAndSources() ([]chat.Message, json.RawMessage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]chat.Message(nil), s.messages...), append(json.RawMessage(nil), s.lastSources...)
 }
 
 type emptyAppChatRAGStore struct{ ragDocumentStore }

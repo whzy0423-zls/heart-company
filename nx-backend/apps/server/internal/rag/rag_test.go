@@ -250,10 +250,60 @@ func TestAskFallsBackWhenGeneratorFails(t *testing.T) {
 	}
 }
 
+func TestAskModelIdentityReturnsFixedReplyWithoutRetrievalOrGeneration(t *testing.T) {
+	generator := &countingIdentityGenerator{answer: "不应调用模型"}
+	service := NewService([]Document{
+		{
+			ID:      "model-identity-leak",
+			Title:   "当前模型与技术实现",
+			Content: "这里包含模型厂商、模型 ID、中转站和 Codex CLI 等技术说明。",
+			Tags:    []string{"模型", "Codex CLI"},
+		},
+	}, WithGenerator(generator))
+
+	answer, err := service.Ask(context.Background(), AskInput{Question: "你是什么模型？"})
+	if err != nil {
+		t.Fatalf("Ask returned error: %v", err)
+	}
+	if answer.Answer != ModelIdentityReply {
+		t.Fatalf("answer = %q, want %q", answer.Answer, ModelIdentityReply)
+	}
+	if len(answer.Sources) != 0 {
+		t.Fatalf("identity answer sources = %+v, want empty", answer.Sources)
+	}
+	if len(answer.Suggestions) != 0 {
+		t.Fatalf("identity answer suggestions = %+v, want empty", answer.Suggestions)
+	}
+	if generator.generateCalls != 0 || generator.streamCalls != 0 {
+		t.Fatalf("identity answer called generator: generate=%d stream=%d", generator.generateCalls, generator.streamCalls)
+	}
+}
+
 type fakeGenerator struct {
 	answer string
 	err    error
 	input  GenerateInput
+}
+
+type countingIdentityGenerator struct {
+	answer        string
+	generateCalls int
+	streamCalls   int
+}
+
+func (g *countingIdentityGenerator) Generate(_ context.Context, _ GenerateInput) (string, error) {
+	g.generateCalls++
+	return g.answer, nil
+}
+
+func (g *countingIdentityGenerator) GenerateStream(_ context.Context, _ GenerateInput, emit StreamEmitter) (string, error) {
+	g.streamCalls++
+	if emit != nil {
+		if err := emit(g.answer); err != nil {
+			return "", err
+		}
+	}
+	return g.answer, nil
 }
 
 func (f *fakeGenerator) Generate(_ context.Context, input GenerateInput) (string, error) {
@@ -392,5 +442,41 @@ func TestAskStreamPropagatesPreferencesAndCurrentDirectives(t *testing.T) {
 	}
 	if strings.Join(generator.input.CurrentDirectives, "|") != "表达直接，少说教" {
 		t.Fatalf("stream current directives not propagated: %+v", generator.input)
+	}
+}
+
+func TestAskStreamModelIdentityEmitsOnlyFixedReplyWithoutRetrievalOrGeneration(t *testing.T) {
+	generator := &countingIdentityGenerator{answer: "不应调用流式模型"}
+	service := NewService([]Document{
+		{
+			ID:      "model-identity-leak",
+			Title:   "当前模型与技术实现",
+			Content: "这里包含模型厂商、模型 ID、中转站和 Codex CLI 等技术说明。",
+			Tags:    []string{"模型", "Codex CLI"},
+		},
+	}, WithGenerator(generator))
+
+	var chunks []string
+	answer, err := service.AskStream(context.Background(), AskInput{Question: "你通过 Codex CLI 回答吗？"}, func(delta string) error {
+		chunks = append(chunks, delta)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("AskStream returned error: %v", err)
+	}
+	if answer.Answer != ModelIdentityReply {
+		t.Fatalf("answer = %q, want %q", answer.Answer, ModelIdentityReply)
+	}
+	if got := strings.Join(chunks, ""); got != ModelIdentityReply {
+		t.Fatalf("streamed content = %q, want %q", got, ModelIdentityReply)
+	}
+	if len(answer.Sources) != 0 {
+		t.Fatalf("identity stream sources = %+v, want empty", answer.Sources)
+	}
+	if len(answer.Suggestions) != 0 {
+		t.Fatalf("identity stream suggestions = %+v, want empty", answer.Suggestions)
+	}
+	if generator.generateCalls != 0 || generator.streamCalls != 0 {
+		t.Fatalf("identity stream called generator: generate=%d stream=%d", generator.generateCalls, generator.streamCalls)
 	}
 }
