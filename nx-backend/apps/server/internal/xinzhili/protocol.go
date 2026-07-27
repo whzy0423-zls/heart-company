@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 const (
@@ -27,8 +28,10 @@ const (
 )
 
 type ProtocolError struct {
-	Code string
-	Err  error
+	Code   string
+	Field  string
+	Reason string
+	Err    error
 }
 
 func (err *ProtocolError) Error() string {
@@ -292,7 +295,32 @@ func newProtocolError(code string, err error) error {
 	if errors.As(err, &protocolErr) {
 		return err
 	}
-	return &ProtocolError{Code: code, Err: err}
+	return &ProtocolError{
+		Code:   code,
+		Field:  inferProtocolField(err.Error()),
+		Reason: err.Error(),
+		Err:    err,
+	}
+}
+
+func inferProtocolField(reason string) string {
+	for _, field := range []string{
+		"protocolVersion",
+		"timestampMs",
+		"sessionSeq",
+		"configVersion",
+		"generation",
+		"sessionId",
+		"turnId",
+		"turnSeq",
+		"payload",
+		"type",
+	} {
+		if strings.Contains(reason, field) {
+			return field
+		}
+	}
+	return ""
 }
 
 type eventLevel uint8

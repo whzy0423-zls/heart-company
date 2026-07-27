@@ -1,17 +1,50 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
+
+func TestXinzhiliProtocolFailureIsSanitized(t *testing.T) {
+	originalWriter, originalFlags := log.Writer(), log.Flags()
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+	})
+
+	data := []byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.ready","timestampMs":1,"accessToken":"TOKEN_SECRET","payload":{"appBuild":106,"clientCapabilities":["generation"],"transcript":"PRIVATE_TEXT"}}`)
+	_, protocolErr := xinzhili.DecodeEnvelope(data, xinzhili.DirectionClient, false)
+	logXinzhiliProtocolError(data, protocolErr)
+
+	got := logs.String()
+	for _, required := range []string{"protocol_version=\"xinzhili.voice.v1\"", "event_type=\"session.ready\"", "error_code=\"invalid_event_direction\"", "app_build=106", "client_capabilities=\"generation\""} {
+		if !strings.Contains(got, required) {
+			t.Errorf("log missing %q: %s", required, got)
+		}
+	}
+	for _, secret := range []string{"TOKEN_SECRET", "PRIVATE_TEXT"} {
+		if strings.Contains(got, secret) {
+			t.Errorf("log leaked %q: %s", secret, got)
+		}
+	}
+	if xinzhiliProtocolUpdateMessage != "语音服务正在更新，请稍后重试" {
+		t.Fatalf("unexpected user message %q", xinzhiliProtocolUpdateMessage)
+	}
+}
 
 type fakeXinzhiliModeStore struct {
 	preference xinzhili.ModePreference

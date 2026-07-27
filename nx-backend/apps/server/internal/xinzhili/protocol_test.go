@@ -220,6 +220,21 @@ func TestEnvelopeTimestampMustBePositive(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorDiagnosticIdentifiesFailingField(t *testing.T) {
+	data := []byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.ping","sessionId":"session-1","timestampMs":0}`)
+	_, err := DecodeEnvelope(data, DirectionClient, true)
+	var protocolErr *ProtocolError
+	if !errors.As(err, &protocolErr) {
+		t.Fatalf("err=%T %v", err, err)
+	}
+	if protocolErr.Code != ProtocolErrorInvalidEnvelope || protocolErr.Field != "timestampMs" {
+		t.Fatalf("protocolErr=%+v", protocolErr)
+	}
+	if protocolErr.Reason == "" {
+		t.Fatal("diagnostic reason is empty")
+	}
+}
+
 func TestEnvelopePayloadMustBeJSONObject(t *testing.T) {
 	tests := []struct {
 		name    string

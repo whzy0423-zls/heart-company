@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -16,8 +17,9 @@ import (
 )
 
 const (
-	xinzhiliMaxMessageBytes = 1 << 20
-	xinzhiliIdleTimeout     = 2 * time.Minute
+	xinzhiliMaxMessageBytes       = 1 << 20
+	xinzhiliIdleTimeout           = 2 * time.Minute
+	xinzhiliProtocolUpdateMessage = "语音服务正在更新，请稍后重试"
 )
 
 var xinzhiliUpgrader = websocket.Upgrader{
@@ -149,7 +151,8 @@ func (c *xinzhiliRealtimeConn) handleEnvelope(ctx context.Context, data []byte) 
 		if errors.As(err, &pe) {
 			code = pe.Code
 		}
-		c.sendError(ctx, code, "协议消息无效", true, false)
+		logXinzhiliProtocolError(data, err)
+		c.sendError(ctx, code, xinzhiliProtocolUpdateMessage, true, false)
 		return
 	}
 	switch e.Type {
@@ -181,6 +184,40 @@ func (c *xinzhiliRealtimeConn) handleEnvelope(ctx context.Context, data []byte) 
 			}
 		}
 	}
+}
+
+func logXinzhiliProtocolError(data []byte, err error) {
+	var wire struct {
+		ProtocolVersion string          `json:"protocolVersion"`
+		Type            string          `json:"type"`
+		Payload         json.RawMessage `json:"payload"`
+	}
+	_ = json.Unmarshal(data, &wire)
+	var client struct {
+		AppBuild           int      `json:"appBuild"`
+		ClientCapabilities []string `json:"clientCapabilities"`
+	}
+	if len(wire.Payload) > 0 {
+		_ = json.Unmarshal(wire.Payload, &client)
+	}
+	code, field, reason := "invalid_envelope", "", "invalid protocol envelope"
+	var protocolErr *xinzhili.ProtocolError
+	if errors.As(err, &protocolErr) {
+		code, field = protocolErr.Code, protocolErr.Field
+		if protocolErr.Reason != "" {
+			reason = protocolErr.Reason
+		}
+	}
+	log.Printf(
+		"xinzhili_protocol_error protocol_version=%q event_type=%q error_code=%q failing_field=%q reason=%q app_build=%d client_capabilities=%q",
+		wire.ProtocolVersion,
+		wire.Type,
+		code,
+		field,
+		reason,
+		client.AppBuild,
+		strings.Join(client.ClientCapabilities, ","),
+	)
 }
 
 func (c *xinzhiliRealtimeConn) startSession(ctx context.Context, e xinzhili.Envelope) {
