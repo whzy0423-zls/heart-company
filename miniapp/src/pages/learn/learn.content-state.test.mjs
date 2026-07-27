@@ -35,7 +35,7 @@ assert.match(
   "the refresh retry action should keep the project's 88rpx minimum touch target",
 );
 
-const executableScript = script.replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\s*$/gm, "");
+const executableScript = script.replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\s*;?\s*$/gm, "");
 const dir = await mkdtemp(join(tmpdir(), "nx-learn-content-state-"));
 const modulePath = join(dir, "learn-content-state.mjs");
 
@@ -130,7 +130,9 @@ try {
 
   {
     const { page, state } = await createHarness();
-    state.listSeries = async () => { throw new Error("系列暂时失败"); };
+    state.listSeries = async () => {
+      throw new Error("系列暂时失败");
+    };
     state.listStandalone = async () => ({ items: [] });
     await page.loadClassroomPreview();
     assert.deepEqual(page.classroomPreview.value, []);
@@ -140,7 +142,9 @@ try {
   {
     const { page, state } = await createHarness();
     state.listSeries = async () => ({ items: [] });
-    state.listStandalone = async () => { throw new Error("独立课件暂时失败"); };
+    state.listStandalone = async () => {
+      throw new Error("独立课件暂时失败");
+    };
     await page.loadClassroomPreview();
     assert.deepEqual(page.classroomPreview.value, []);
     assert.match(page.classroomWarning.value, /独立课件暂时失败/);
@@ -155,20 +159,45 @@ try {
     };
     page.showStoredContent();
     state.listSeries = async () => ({ items: [{ id: 12, title: "可用系列" }] });
-    state.listStandalone = async () => { throw new Error("独立课件失败"); };
+    state.listStandalone = async () => {
+      throw new Error("独立课件失败");
+    };
     await page.loadClassroomPreview();
-    assert.equal(page.classroomPreview.value[0].title, "可用系列", "successful partial data should remain visible");
-    assert.match(page.classroomWarning.value, /独立课件失败/, "partial failure should remain retryable beside successful data");
+    assert.equal(
+      page.classroomPreview.value[0].title,
+      "可用系列",
+      "successful partial data should remain visible",
+    );
+    assert.match(
+      page.classroomWarning.value,
+      /独立课件失败/,
+      "partial failure should remain retryable beside successful data",
+    );
     assert.deepEqual(page.teachers.value, ["缓存老师"]);
-    assert.deepEqual(page.coursewareItems.value, ["缓存课程"], "classroom failure must preserve legacy home courses");
+    assert.deepEqual(
+      page.coursewareItems.value,
+      ["缓存课程"],
+      "classroom failure must preserve legacy home courses",
+    );
     assert.deepEqual(page.quotes.value, ["缓存语录"]);
 
     state.listSeries = async () => ({ items: [{ id: 13, title: "恢复系列" }] });
     state.listStandalone = async () => ({ items: [{ id: 23, title: "恢复课件" }] });
     await page.retryClassroomPreview();
-    assert.equal(page.classroomWarning.value, "", "successful retry should clear partial failure feedback");
-    assert.deepEqual(page.classroomPreview.value.map((item) => item.title), ["恢复系列", "恢复课件"]);
-    assert.deepEqual(page.coursewareItems.value, ["缓存课程"], "classroom retry must not replace legacy fallback courses");
+    assert.equal(
+      page.classroomWarning.value,
+      "",
+      "successful retry should clear partial failure feedback",
+    );
+    assert.deepEqual(
+      page.classroomPreview.value.map((item) => item.title),
+      ["恢复系列", "恢复课件"],
+    );
+    assert.deepEqual(
+      page.coursewareItems.value,
+      ["缓存课程"],
+      "classroom retry must not replace legacy fallback courses",
+    );
   }
 
   {

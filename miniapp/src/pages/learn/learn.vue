@@ -1,152 +1,164 @@
 <script setup>
-import { ref, onMounted } from 'vue'
-import { TYPES_INFO } from '../../data/enneagramGame'
-import { getStoredSiteConfig, hasSiteConfigLearningSection, refreshSiteConfig } from '../../utils/siteConfig'
-import { userErrorMessage } from '../../utils/userMessage'
-import { normalizeCoursewareItems, normalizeTeachers } from '../../utils/teacherCourseware'
-import { listClassroomSeriesApi, listClassroomStandaloneApi } from '../../api'
-import { normalizeClassroomContent, normalizeClassroomSeries } from '../../utils/classroomDisplay'
+import { ref, onMounted } from "vue";
+import { TYPES_INFO } from "../../data/enneagramGame";
+import {
+  getStoredSiteConfig,
+  hasSiteConfigLearningSection,
+  refreshSiteConfig,
+} from "../../utils/siteConfig";
+import { userErrorMessage } from "../../utils/userMessage";
+import { normalizeCoursewareItems, normalizeTeachers } from "../../utils/teacherCourseware";
+import { listClassroomSeriesApi, listClassroomStandaloneApi } from "../../api";
+import { normalizeClassroomContent, normalizeClassroomSeries } from "../../utils/classroomDisplay";
 
-const teachers = ref([])
-const coursewareItems = ref([])
-const quotes = ref([])
-const types = ref(Object.keys(TYPES_INFO).map((id) => ({ id: Number(id), ...TYPES_INFO[id] })))
-const teacherImageErrors = ref({})
-const courseImageErrors = ref({})
-const typeImageErrors = ref({})
-const loading = ref(true)
-const loadError = ref('')
-const refreshError = ref('')
-const refreshing = ref(false)
-const classroomPreview = ref([])
-const classroomLoading = ref(true)
-const classroomWarning = ref('')
-let loadTicket = 0
-let classroomTicket = 0
+const teachers = ref([]);
+const coursewareItems = ref([]);
+const quotes = ref([]);
+const types = ref(Object.keys(TYPES_INFO).map((id) => ({ id: Number(id), ...TYPES_INFO[id] })));
+const teacherImageErrors = ref({});
+const courseImageErrors = ref({});
+const typeImageErrors = ref({});
+const loading = ref(true);
+const loadError = ref("");
+const refreshError = ref("");
+const refreshing = ref(false);
+const classroomPreview = ref([]);
+const classroomLoading = ref(true);
+const classroomWarning = ref("");
+let loadTicket = 0;
+let classroomTicket = 0;
 
 function applyContent(cfg) {
-  teachers.value = normalizeTeachers(cfg)
-  coursewareItems.value = normalizeCoursewareItems(cfg)
-  quotes.value = cfg?.home?.quotes?.items || []
-  teacherImageErrors.value = {}
-  courseImageErrors.value = {}
+  teachers.value = normalizeTeachers(cfg);
+  coursewareItems.value = normalizeCoursewareItems(cfg);
+  quotes.value = cfg?.home?.quotes?.items || [];
+  teacherImageErrors.value = {};
+  courseImageErrors.value = {};
 }
 
 function showStoredContent() {
-  const cached = getStoredSiteConfig()
-  if (!cached || !hasSiteConfigLearningSection(cached)) return false
-  applyContent(cached)
-  loading.value = false
-  loadError.value = ''
-  return true
+  const cached = getStoredSiteConfig();
+  if (!cached || !hasSiteConfigLearningSection(cached)) return false;
+  applyContent(cached);
+  loading.value = false;
+  loadError.value = "";
+  return true;
 }
 
 async function loadContent(options = {}) {
-  const silent = !!options.silent
-  const ticket = ++loadTicket
+  const silent = !!options.silent;
+  const ticket = ++loadTicket;
   if (silent) {
-    refreshing.value = true
+    refreshing.value = true;
   } else {
-    refreshing.value = false
-    loading.value = true
-    loadError.value = ''
-    refreshError.value = ''
+    refreshing.value = false;
+    loading.value = true;
+    loadError.value = "";
+    refreshError.value = "";
   }
   try {
-    const cfg = await refreshSiteConfig()
-    if (ticket !== loadTicket) return
-    if (silent && !hasSiteConfigLearningSection(cfg)) return
-    applyContent(cfg)
-    loadError.value = ''
-    refreshError.value = ''
+    const cfg = await refreshSiteConfig();
+    if (ticket !== loadTicket) return;
+    if (silent && !hasSiteConfigLearningSection(cfg)) return;
+    applyContent(cfg);
+    loadError.value = "";
+    refreshError.value = "";
   } catch (e) {
-    if (ticket !== loadTicket) return
+    if (ticket !== loadTicket) return;
     if (silent) {
-      refreshError.value = userErrorMessage(e, '内容更新失败，请稍后重试')
+      refreshError.value = userErrorMessage(e, "内容更新失败，请稍后重试");
     }
     if (!silent) {
-      teachers.value = normalizeTeachers()
-      coursewareItems.value = normalizeCoursewareItems()
-      quotes.value = []
-      loadError.value = userErrorMessage(e, '内容加载失败，请稍后重试')
+      teachers.value = normalizeTeachers();
+      coursewareItems.value = normalizeCoursewareItems();
+      quotes.value = [];
+      loadError.value = userErrorMessage(e, "内容加载失败，请稍后重试");
     }
   } finally {
     if (ticket === loadTicket) {
-      if (silent) refreshing.value = false
-      loading.value = false
+      if (silent) refreshing.value = false;
+      loading.value = false;
     }
   }
 }
 
 function retryContentRefresh() {
-  return loadContent({ silent: true })
+  return loadContent({ silent: true });
 }
 
 function teacherMediaKey(teacher, index) {
-  return `${teacher.name || ''}::${teacher.avatar || ''}::${index}`
+  return `${teacher.name || ""}::${teacher.avatar || ""}::${index}`;
 }
 
 function courseMediaKey(course, index) {
-  return `${course.title || ''}::${course.cover || ''}::${index}`
+  return `${course.title || ""}::${course.cover || ""}::${index}`;
 }
 
 function markTeacherImageError(key) {
-  teacherImageErrors.value = { ...teacherImageErrors.value, [key]: true }
+  teacherImageErrors.value = { ...teacherImageErrors.value, [key]: true };
 }
 
 function markCourseImageError(key) {
-  courseImageErrors.value = { ...courseImageErrors.value, [key]: true }
+  courseImageErrors.value = { ...courseImageErrors.value, [key]: true };
 }
 
 function markTypeImageError(id) {
-  typeImageErrors.value = { ...typeImageErrors.value, [id]: true }
+  typeImageErrors.value = { ...typeImageErrors.value, [id]: true };
 }
 
 async function loadClassroomPreview() {
-  const ticket = ++classroomTicket
-  classroomLoading.value = true
-  classroomWarning.value = ''
+  const ticket = ++classroomTicket;
+  classroomLoading.value = true;
+  classroomWarning.value = "";
   try {
     const [seriesResult, standaloneResult] = await Promise.allSettled([
       listClassroomSeriesApi({ limit: 2, offset: 0 }),
       listClassroomStandaloneApi({ limit: 2, offset: 0 }),
-    ])
-    if (ticket !== classroomTicket) return
-    const series = seriesResult.status === 'fulfilled'
-      ? (seriesResult.value?.items || []).map(normalizeClassroomSeries).filter((item) => item.id)
-      : []
-    const standalone = standaloneResult.status === 'fulfilled'
-      ? (standaloneResult.value?.items || []).map(normalizeClassroomContent).filter((item) => item.id)
-      : []
-    classroomPreview.value = [...series, ...standalone].slice(0, 3)
-    const failures = [seriesResult, standaloneResult].filter((result) => result.status === 'rejected')
+    ]);
+    if (ticket !== classroomTicket) return;
+    const series =
+      seriesResult.status === "fulfilled"
+        ? (seriesResult.value?.items || []).map(normalizeClassroomSeries).filter((item) => item.id)
+        : [];
+    const standalone =
+      standaloneResult.status === "fulfilled"
+        ? (standaloneResult.value?.items || [])
+            .map(normalizeClassroomContent)
+            .filter((item) => item.id)
+        : [];
+    classroomPreview.value = [...series, ...standalone].slice(0, 3);
+    const failures = [seriesResult, standaloneResult].filter(
+      (result) => result.status === "rejected",
+    );
     if (failures.length) {
-      const fallback = failures.length === 2 ? '老师课堂加载失败，请稍后重试' : '部分课堂内容加载失败，请稍后重试'
-      classroomWarning.value = userErrorMessage(failures[0].reason, fallback)
+      const fallback =
+        failures.length === 2 ? "老师课堂加载失败，请稍后重试" : "部分课堂内容加载失败，请稍后重试";
+      classroomWarning.value = userErrorMessage(failures[0].reason, fallback);
     }
   } catch (error) {
-    if (ticket === classroomTicket) classroomWarning.value = userErrorMessage(error, '老师课堂加载失败，请稍后重试')
+    if (ticket === classroomTicket)
+      classroomWarning.value = userErrorMessage(error, "老师课堂加载失败，请稍后重试");
   } finally {
-    if (ticket === classroomTicket) classroomLoading.value = false
+    if (ticket === classroomTicket) classroomLoading.value = false;
   }
 }
 
 function retryClassroomPreview() {
-  return loadClassroomPreview()
+  return loadClassroomPreview();
 }
 
-function openClassroom(tab = 'series') {
-  uni.navigateTo({ url: `/pages/classroom/classroom?tab=${tab}` })
+function openClassroom(tab = "series") {
+  uni.navigateTo({ url: `/pages/classroom/classroom?tab=${tab}` });
 }
 
 onMounted(() => {
-  const hasCachedContent = showStoredContent()
-  loadContent({ silent: hasCachedContent })
-  loadClassroomPreview()
-})
+  const hasCachedContent = showStoredContent();
+  loadContent({ silent: hasCachedContent });
+  loadClassroomPreview();
+});
 
 function goTest() {
-  uni.switchTab({ url: '/pages/index/index' })
+  uni.switchTab({ url: "/pages/index/index" });
 }
 </script>
 
@@ -160,11 +172,9 @@ function goTest() {
 
     <view v-if="refreshError" class="content-refresh-notice" aria-live="polite">
       <text class="content-refresh-notice__text">{{ refreshError }}，当前仍展示上次内容。</text>
-      <button
-        class="refresh-retry"
-        :disabled="refreshing"
-        @click="retryContentRefresh"
-      >{{ refreshing ? '更新中…' : '重试' }}</button>
+      <button class="refresh-retry" :disabled="refreshing" @click="retryContentRefresh">
+        {{ refreshing ? "更新中…" : "重试" }}
+      </button>
     </view>
 
     <view class="learn-sections">
@@ -181,19 +191,44 @@ function goTest() {
             <text>{{ classroomWarning }}</text>
             <text class="classroom-entry__fallback">已加载的课堂和下方精选课程仍可继续浏览。</text>
           </view>
-          <button class="retry" :disabled="classroomLoading" @click="retryClassroomPreview">重试课堂内容</button>
+          <button class="retry" :disabled="classroomLoading" @click="retryClassroomPreview">
+            重试课堂内容
+          </button>
         </view>
         <view v-if="classroomLoading" class="empty" aria-live="polite">课堂内容加载中…</view>
         <view v-else-if="classroomPreview.length === 0" class="classroom-entry__empty">
-          <text>{{ classroomWarning ? '部分课堂内容暂未加载，可重试或继续浏览下方精选课程。' : '老师课堂正在准备中，下方精选课程仍可继续浏览。' }}</text>
-          <button class="classroom-entry__browse" @click="openClassroom('standalone')">进入课堂</button>
+          <text>{{
+            classroomWarning
+              ? "部分课堂内容暂未加载，可重试或继续浏览下方精选课程。"
+              : "老师课堂正在准备中，下方精选课程仍可继续浏览。"
+          }}</text>
+          <button class="classroom-entry__browse" @click="openClassroom('standalone')">
+            进入课堂
+          </button>
         </view>
         <view v-else class="classroom-entry__grid">
-          <view v-for="item in classroomPreview" :key="`${item.contentType || 'series'}:${item.id}`" class="classroom-entry__item">
-            <image v-if="item.coverUrl" class="classroom-entry__cover" :src="item.coverUrl" mode="aspectFill" lazy-load />
-            <view v-else class="classroom-entry__cover classroom-entry__cover--fallback" aria-hidden="true">课</view>
+          <view
+            v-for="item in classroomPreview"
+            :key="`${item.contentType || 'series'}:${item.id}`"
+            class="classroom-entry__item"
+          >
+            <image
+              v-if="item.coverUrl"
+              class="classroom-entry__cover"
+              :src="item.coverUrl"
+              mode="aspectFill"
+              lazy-load
+            />
+            <view
+              v-else
+              class="classroom-entry__cover classroom-entry__cover--fallback"
+              aria-hidden="true"
+              >课</view
+            >
             <view class="classroom-entry__body">
-              <text class="classroom-entry__kind">{{ item.contentType ? (item.contentType === 'audio' ? '音频' : '视频') : '系列' }}</text>
+              <text class="classroom-entry__kind">{{
+                item.contentType ? (item.contentType === "audio" ? "音频" : "视频") : "系列"
+              }}</text>
               <text class="classroom-entry__title">{{ item.title }}</text>
             </view>
           </view>
@@ -212,7 +247,11 @@ function goTest() {
           <text>{{ loadError }}</text>
           <button class="retry" hover-class="retry--hover" @click="loadContent">重新加载</button>
         </view>
-        <view v-for="(teacher, teacherIndex) in teachers" :key="teacherMediaKey(teacher, teacherIndex)" class="teacher-card">
+        <view
+          v-for="(teacher, teacherIndex) in teachers"
+          :key="teacherMediaKey(teacher, teacherIndex)"
+          class="teacher-card"
+        >
           <image
             v-if="teacher.avatar && !teacherImageErrors[teacherMediaKey(teacher, teacherIndex)]"
             class="teacher-media teacher-card__avatar"
@@ -222,14 +261,16 @@ function goTest() {
             @error="markTeacherImageError(teacherMediaKey(teacher, teacherIndex))"
           />
           <view v-else class="teacher-media__fallback" aria-hidden="true">
-            {{ teacher.name ? teacher.name.slice(0, 1) : '师' }}
+            {{ teacher.name ? teacher.name.slice(0, 1) : "师" }}
           </view>
           <view class="teacher-card__body">
             <text class="teacher-card__name">{{ teacher.name }}</text>
             <text class="teacher-card__title">{{ teacher.title }}</text>
             <text class="teacher-card__bio">{{ teacher.bio }}</text>
             <view v-if="teacher.tags.length" class="teacher-card__tags">
-              <text v-for="tag in teacher.tags" :key="tag" class="nx-tag teacher-card__tag">{{ tag }}</text>
+              <text v-for="tag in teacher.tags" :key="tag" class="nx-tag teacher-card__tag">{{
+                tag
+              }}</text>
             </view>
           </view>
         </view>
@@ -244,7 +285,11 @@ function goTest() {
         </view>
         <view v-if="loading" class="empty">课程内容加载中…</view>
         <block v-else>
-          <view v-for="(c, i) in coursewareItems" :key="courseMediaKey(c, i)" class="courseware-card">
+          <view
+            v-for="(c, i) in coursewareItems"
+            :key="courseMediaKey(c, i)"
+            class="courseware-card"
+          >
             <image
               v-if="c.cover && !courseImageErrors[courseMediaKey(c, i)]"
               class="course-media courseware-card__cover"
@@ -253,7 +298,9 @@ function goTest() {
               lazy-load
               @error="markCourseImageError(courseMediaKey(c, i))"
             />
-            <view v-else class="course-media__fallback" aria-hidden="true">{{ c.badge || (i + 1) }}</view>
+            <view v-else class="course-media__fallback" aria-hidden="true">{{
+              c.badge || i + 1
+            }}</view>
             <view class="courseware-card__body">
               <view class="courseware-card__meta">
                 <text class="nx-tag courseware-card__badge">{{ c.badge || `第 ${i + 1} 课` }}</text>
@@ -309,22 +356,48 @@ function goTest() {
       </view>
     </view>
 
-    <button class="btn-primary ios-button learn-cta" hover-class="learn-cta--pressed" @click="goTest">先完成测试，建立你的学习地图</button>
+    <button
+      class="btn-primary ios-button learn-cta"
+      hover-class="learn-cta--pressed"
+      @click="goTest"
+    >
+      先完成测试，建立你的学习地图
+    </button>
   </view>
 </template>
 
 <style scoped>
-.learn { background: #f4f8f6; }
+.learn {
+  background: #f4f8f6;
+}
 .learn-hero {
   padding: 38rpx 34rpx 40rpx;
   border-radius: 38rpx;
   background: linear-gradient(135deg, #0f766e 0%, #15803d 100%);
   color: #ffffff;
-  box-shadow: 0 24rpx 54rpx -34rpx rgba(15, 118, 110, .7);
+  box-shadow: 0 24rpx 54rpx -34rpx rgba(15, 118, 110, 0.7);
 }
-.learn-hero__eyebrow { display: block; color: #ffffff; font-size: 24rpx; font-weight: 800; }
-.learn-hero__title { display: block; margin-top: 14rpx; color: #ffffff; font-size: 44rpx; font-weight: 900; line-height: 1.28; }
-.learn-hero__lead { display: block; margin-top: 16rpx; color: #ffffff; font-size: 26rpx; line-height: 1.65; }
+.learn-hero__eyebrow {
+  display: block;
+  color: #ffffff;
+  font-size: 24rpx;
+  font-weight: 800;
+}
+.learn-hero__title {
+  display: block;
+  margin-top: 14rpx;
+  color: #ffffff;
+  font-size: 44rpx;
+  font-weight: 900;
+  line-height: 1.28;
+}
+.learn-hero__lead {
+  display: block;
+  margin-top: 16rpx;
+  color: #ffffff;
+  font-size: 26rpx;
+  line-height: 1.65;
+}
 .content-refresh-notice {
   display: flex;
   align-items: center;
@@ -336,7 +409,11 @@ function goTest() {
   border: 2rpx solid #bbf7d0;
   border-radius: 24rpx;
 }
-.content-refresh-notice__text { flex: 1; font-size: 24rpx; line-height: 1.55; }
+.content-refresh-notice__text {
+  flex: 1;
+  font-size: 24rpx;
+  line-height: 1.55;
+}
 .refresh-retry {
   flex-shrink: 0;
   min-height: 88rpx;
@@ -349,9 +426,14 @@ function goTest() {
   border-radius: 16rpx;
   line-height: 88rpx;
 }
-.refresh-retry::after { border: none; }
-.refresh-retry[disabled] { opacity: .6; }
-.classroom-entry__more, .classroom-entry__browse {
+.refresh-retry::after {
+  border: none;
+}
+.refresh-retry[disabled] {
+  opacity: 0.6;
+}
+.classroom-entry__more,
+.classroom-entry__browse {
   min-height: 88rpx;
   padding: 0 24rpx;
   color: #0f6b4f;
@@ -361,24 +443,119 @@ function goTest() {
   background: #ecfdf5;
   border-radius: 18rpx;
 }
-.classroom-entry__more::after, .classroom-entry__browse::after { border: 0; }
-.classroom-entry__warning { display: flex; align-items: center; justify-content: space-between; gap: 18rpx; margin-bottom: 18rpx; padding: 18rpx 22rpx; color: #8a4b16; font-size: 24rpx; line-height: 1.55; background: #fff7ed; border: 2rpx solid #fed7aa; border-radius: 20rpx; }
-.classroom-entry__fallback { display: block; margin-top: 10rpx; color: #66766f; }
-.classroom-entry__empty { color: #66766f; font-size: 25rpx; line-height: 1.6; text-align: center; }
-.classroom-entry__browse { display: block; margin: 20rpx auto 0; }
-.classroom-entry__grid { display: grid; gap: 18rpx; }
-.classroom-entry__item { display: flex; overflow: hidden; background: #f3f8f5; border-radius: 22rpx; }
-.classroom-entry__cover { flex-shrink: 0; width: 156rpx; height: 126rpx; background: #dbeee6; }
-.classroom-entry__cover--fallback { display: flex; align-items: center; justify-content: center; color: #0f766e; font-size: 40rpx; font-weight: 900; }
-.classroom-entry__body { display: flex; flex: 1; flex-direction: column; justify-content: center; min-width: 0; padding: 16rpx 20rpx; }
-.classroom-entry__kind { color: #0f766e; font-size: 21rpx; font-weight: 800; }
-.classroom-entry__title { margin-top: 8rpx; color: #1c2923; font-size: 26rpx; font-weight: 800; line-height: 1.4; }
-.learn-sections { display: flex; flex-direction: column; gap: 22rpx; }
-.learn-section { display: flex; flex-direction: column; padding: 30rpx; }
-.section-kicker { display: block; color: #0f766e; font-size: 24rpx; font-weight: 800; }
-.sec-title { display: block; margin-top: 8rpx; color: #17211d; font-size: 34rpx; font-weight: 900; line-height: 1.35; }
-.empty { color: #475569; font-size: 26rpx; line-height: 1.6; padding: 24rpx 0; }
-.empty--error { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; }
+.classroom-entry__more::after,
+.classroom-entry__browse::after {
+  border: 0;
+}
+.classroom-entry__warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  margin-bottom: 18rpx;
+  padding: 18rpx 22rpx;
+  color: #8a4b16;
+  font-size: 24rpx;
+  line-height: 1.55;
+  background: #fff7ed;
+  border: 2rpx solid #fed7aa;
+  border-radius: 20rpx;
+}
+.classroom-entry__fallback {
+  display: block;
+  margin-top: 10rpx;
+  color: #66766f;
+}
+.classroom-entry__empty {
+  color: #66766f;
+  font-size: 25rpx;
+  line-height: 1.6;
+  text-align: center;
+}
+.classroom-entry__browse {
+  display: block;
+  margin: 20rpx auto 0;
+}
+.classroom-entry__grid {
+  display: grid;
+  gap: 18rpx;
+}
+.classroom-entry__item {
+  display: flex;
+  overflow: hidden;
+  background: #f3f8f5;
+  border-radius: 22rpx;
+}
+.classroom-entry__cover {
+  flex-shrink: 0;
+  width: 156rpx;
+  height: 126rpx;
+  background: #dbeee6;
+}
+.classroom-entry__cover--fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #0f766e;
+  font-size: 40rpx;
+  font-weight: 900;
+}
+.classroom-entry__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  padding: 16rpx 20rpx;
+}
+.classroom-entry__kind {
+  color: #0f766e;
+  font-size: 21rpx;
+  font-weight: 800;
+}
+.classroom-entry__title {
+  margin-top: 8rpx;
+  color: #1c2923;
+  font-size: 26rpx;
+  font-weight: 800;
+  line-height: 1.4;
+}
+.learn-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 22rpx;
+}
+.learn-section {
+  display: flex;
+  flex-direction: column;
+  padding: 30rpx;
+}
+.section-kicker {
+  display: block;
+  color: #0f766e;
+  font-size: 24rpx;
+  font-weight: 800;
+}
+.sec-title {
+  display: block;
+  margin-top: 8rpx;
+  color: #17211d;
+  font-size: 34rpx;
+  font-weight: 900;
+  line-height: 1.35;
+}
+.empty {
+  color: #475569;
+  font-size: 26rpx;
+  line-height: 1.6;
+  padding: 24rpx 0;
+}
+.empty--error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20rpx;
+}
 .retry {
   flex-shrink: 0;
   display: inline-flex;
@@ -396,9 +573,19 @@ function goTest() {
   border-radius: 18rpx;
   line-height: 1;
 }
-.retry::after { border: none; }
-.retry--hover { opacity: .82; transform: scale(.985); }
-.teacher-card { display: flex; align-items: flex-start; gap: 22rpx; margin-top: 24rpx; }
+.retry::after {
+  border: none;
+}
+.retry--hover {
+  opacity: 0.82;
+  transform: scale(0.985);
+}
+.teacher-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 22rpx;
+  margin-top: 24rpx;
+}
 .teacher-media,
 .teacher-media__fallback {
   flex-shrink: 0;
@@ -407,16 +594,67 @@ function goTest() {
   border-radius: 28rpx;
   box-sizing: border-box;
 }
-.teacher-media { width: 112rpx; height: 112rpx; background: #dbeee8; }
-.teacher-media__fallback { display: flex; align-items: center; justify-content: center; width: 112rpx; height: 112rpx; color: #ffffff; background: #0f766e; font-size: 40rpx; font-weight: 900; }
-.teacher-card__body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 8rpx; }
-.teacher-card__name { color: #17211d; font-size: 32rpx; font-weight: 900; line-height: 1.3; }
-.teacher-card__title { color: #0f6b4f; font-size: 24rpx; font-weight: 800; }
-.teacher-card__bio { color: #334155; font-size: 25rpx; line-height: 1.65; }
-.teacher-card__tags { display: flex; flex-wrap: wrap; gap: 10rpx; margin-top: 4rpx; }
-.teacher-card__tag { color: #0f6b4f; background: #ecfdf5; font-size: 24rpx; }
-.courseware-card { display: flex; align-items: flex-start; gap: 18rpx; padding: 24rpx 0; border-bottom: 2rpx solid #e2e8f0; }
-.courseware-card:last-child { padding-bottom: 0; border-bottom: none; }
+.teacher-media {
+  width: 112rpx;
+  height: 112rpx;
+  background: #dbeee8;
+}
+.teacher-media__fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 112rpx;
+  height: 112rpx;
+  color: #ffffff;
+  background: #0f766e;
+  font-size: 40rpx;
+  font-weight: 900;
+}
+.teacher-card__body {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8rpx;
+}
+.teacher-card__name {
+  color: #17211d;
+  font-size: 32rpx;
+  font-weight: 900;
+  line-height: 1.3;
+}
+.teacher-card__title {
+  color: #0f6b4f;
+  font-size: 24rpx;
+  font-weight: 800;
+}
+.teacher-card__bio {
+  color: #334155;
+  font-size: 25rpx;
+  line-height: 1.65;
+}
+.teacher-card__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+  margin-top: 4rpx;
+}
+.teacher-card__tag {
+  color: #0f6b4f;
+  background: #ecfdf5;
+  font-size: 24rpx;
+}
+.courseware-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 18rpx;
+  padding: 24rpx 0;
+  border-bottom: 2rpx solid #e2e8f0;
+}
+.courseware-card:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
 .course-media,
 .course-media__fallback {
   flex-shrink: 0;
@@ -425,34 +663,179 @@ function goTest() {
   border-radius: 20rpx;
   box-sizing: border-box;
 }
-.course-media { width: 220rpx; height: 150rpx; background: #dbeee8; }
-.course-media__fallback { display: flex; align-items: center; justify-content: center; width: 220rpx; height: 150rpx; padding: 16rpx; color: #ffffff; background: #15803d; font-size: 28rpx; font-weight: 900; text-align: center; }
-.courseware-card__body { min-width: 0; flex: 1; }
-.courseware-card__meta { display: flex; align-items: center; flex-wrap: wrap; gap: 10rpx; margin-bottom: 8rpx; }
-.courseware-card__badge { color: #0f6b4f; background: #ecfdf5; font-size: 24rpx; }
-.courseware-card__duration { color: #475569; font-size: 24rpx; font-weight: 700; }
-.courseware-card__title { display: block; color: #17211d; font-size: 30rpx; font-weight: 900; line-height: 1.35; }
-.courseware-card__desc { display: block; margin-top: 8rpx; color: #334155; font-size: 24rpx; line-height: 1.6; }
-.quote-editorial { position: relative; margin-top: 20rpx; padding: 30rpx; border-radius: 22rpx; background: #ecfdf5; overflow: hidden; }
-.quote-editorial__mark { display: block; color: #0f766e; font-family: Georgia, serif; font-size: 54rpx; font-weight: 900; line-height: 1; }
-.quote-editorial__text { position: relative; display: block; margin-top: 8rpx; color: #1f3a31; font-size: 28rpx; font-weight: 700; line-height: 1.7; }
-.type-badge-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16rpx; margin-top: 24rpx; }
-.type-badge { min-width: 0; min-height: 190rpx; padding: 20rpx 14rpx; border: 2rpx solid #dbe7e2; border-radius: 20rpx; background: #f8fbfa; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-.type-badge__media { position: relative; }
+.course-media {
+  width: 220rpx;
+  height: 150rpx;
+  background: #dbeee8;
+}
+.course-media__fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 220rpx;
+  height: 150rpx;
+  padding: 16rpx;
+  color: #ffffff;
+  background: #15803d;
+  font-size: 28rpx;
+  font-weight: 900;
+  text-align: center;
+}
+.courseware-card__body {
+  min-width: 0;
+  flex: 1;
+}
+.courseware-card__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10rpx;
+  margin-bottom: 8rpx;
+}
+.courseware-card__badge {
+  color: #0f6b4f;
+  background: #ecfdf5;
+  font-size: 24rpx;
+}
+.courseware-card__duration {
+  color: #475569;
+  font-size: 24rpx;
+  font-weight: 700;
+}
+.courseware-card__title {
+  display: block;
+  color: #17211d;
+  font-size: 30rpx;
+  font-weight: 900;
+  line-height: 1.35;
+}
+.courseware-card__desc {
+  display: block;
+  margin-top: 8rpx;
+  color: #334155;
+  font-size: 24rpx;
+  line-height: 1.6;
+}
+.quote-editorial {
+  position: relative;
+  margin-top: 20rpx;
+  padding: 30rpx;
+  border-radius: 22rpx;
+  background: #ecfdf5;
+  overflow: hidden;
+}
+.quote-editorial__mark {
+  display: block;
+  color: #0f766e;
+  font-family: Georgia, serif;
+  font-size: 54rpx;
+  font-weight: 900;
+  line-height: 1;
+}
+.quote-editorial__text {
+  position: relative;
+  display: block;
+  margin-top: 8rpx;
+  color: #1f3a31;
+  font-size: 28rpx;
+  font-weight: 700;
+  line-height: 1.7;
+}
+.type-badge-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16rpx;
+  margin-top: 24rpx;
+}
+.type-badge {
+  min-width: 0;
+  min-height: 190rpx;
+  padding: 20rpx 14rpx;
+  border: 2rpx solid #dbe7e2;
+  border-radius: 20rpx;
+  background: #f8fbfa;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.type-badge__media {
+  position: relative;
+}
 .type-badge__avatar,
-.type-badge__fallback { width: 78rpx; height: 78rpx; border-radius: 50%; box-sizing: border-box; }
-.type-badge__avatar { width: 78rpx; height: 78rpx; background: #dbeee8; }
-.type-badge__fallback { display: flex; align-items: center; justify-content: center; width: 78rpx; height: 78rpx; color: #ffffff; background: #0f766e; font-size: 28rpx; font-weight: 900; }
-.type-badge__num { position: absolute; right: -12rpx; bottom: -4rpx; display: flex; align-items: center; justify-content: center; width: 36rpx; height: 36rpx; border-radius: 12rpx; color: #ffffff; background: #0f766e; font-size: 24rpx; font-weight: 900; }
-.type-badge--blue .type-badge__num { background: #2563eb; }
-.type-badge--red .type-badge__num { background: #dc2626; }
-.type-badge__name { margin-top: 14rpx; color: #17211d; font-size: 27rpx; font-weight: 900; text-align: center; }
-.type-badge__keywords { margin-top: 6rpx; color: #475569; font-size: 24rpx; line-height: 1.45; text-align: center; overflow-wrap: anywhere; }
-.learn-cta { min-height: 88rpx; margin-top: 4rpx; font-size: 28rpx; touch-action: manipulation; }
-.learn-cta--pressed { opacity: .86; transform: scale(.99); }
-
-@media (min-width: 768px) {
-  .type-badge-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.type-badge__fallback {
+  width: 78rpx;
+  height: 78rpx;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+.type-badge__avatar {
+  width: 78rpx;
+  height: 78rpx;
+  background: #dbeee8;
+}
+.type-badge__fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 78rpx;
+  height: 78rpx;
+  color: #ffffff;
+  background: #0f766e;
+  font-size: 28rpx;
+  font-weight: 900;
+}
+.type-badge__num {
+  position: absolute;
+  right: -12rpx;
+  bottom: -4rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36rpx;
+  height: 36rpx;
+  border-radius: 12rpx;
+  color: #ffffff;
+  background: #0f766e;
+  font-size: 24rpx;
+  font-weight: 900;
+}
+.type-badge--blue .type-badge__num {
+  background: #2563eb;
+}
+.type-badge--red .type-badge__num {
+  background: #dc2626;
+}
+.type-badge__name {
+  margin-top: 14rpx;
+  color: #17211d;
+  font-size: 27rpx;
+  font-weight: 900;
+  text-align: center;
+}
+.type-badge__keywords {
+  margin-top: 6rpx;
+  color: #475569;
+  font-size: 24rpx;
+  line-height: 1.45;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.learn-cta {
+  min-height: 88rpx;
+  margin-top: 4rpx;
+  font-size: 28rpx;
+  touch-action: manipulation;
+}
+.learn-cta--pressed {
+  opacity: 0.86;
+  transform: scale(0.99);
 }
 
+@media (min-width: 768px) {
+  .type-badge-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
 </style>
