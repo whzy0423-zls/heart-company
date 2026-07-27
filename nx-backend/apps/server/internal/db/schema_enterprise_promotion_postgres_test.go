@@ -64,9 +64,32 @@ func TestEnterprisePromotionPostgres(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `INSERT INTO users(username,password_hash) VALUES ('promotion-reviewer','hash') RETURNING id`).Scan(&reviewerID); err != nil {
 		t.Fatal(err)
 	}
-	var attemptID int64
 	const assetSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	if err := db.QueryRowContext(ctx, `INSERT INTO promotion_media_processing_attempts(asset_id,attempt_number,state,output_sha256) VALUES ($1,1,'succeeded',$2) RETURNING id`, assetID, assetSHA).Scan(&attemptID); err != nil {
+	invalidAttempts := []struct {
+		number int
+		state  string
+		object string
+		sha    any
+		finish any
+	}{
+		{number: 10, state: "queued", object: "promotion/derived/queued.mp4", sha: assetSHA, finish: time.Now()},
+		{number: 11, state: "failed", object: "promotion/derived/failed.mp4", sha: assetSHA, finish: time.Now()},
+		{number: 12, state: "cancelled", object: "promotion/derived/cancelled.mp4", sha: assetSHA, finish: time.Now()},
+		{number: 13, state: "succeeded", object: "promotion/derived/unfinished.mp4", sha: assetSHA, finish: nil},
+		{number: 14, state: "succeeded", object: "", sha: assetSHA, finish: time.Now()},
+		{number: 15, state: "succeeded", object: "promotion/derived/missing-hash.mp4", sha: nil, finish: time.Now()},
+	}
+	for _, invalid := range invalidAttempts {
+		var invalidAttemptID int64
+		if err := db.QueryRowContext(ctx, `INSERT INTO promotion_media_processing_attempts(asset_id,attempt_number,state,output_object_key,output_sha256,finished_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, assetID, invalid.number, invalid.state, invalid.object, invalid.sha, invalid.finish).Scan(&invalidAttemptID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO promotion_media_qa_reviews(asset_id,attempt_id,qa_result,approved_by,qa_note) VALUES ($1,$2,'passed',$3,'invalid attempt')`, assetID, invalidAttemptID, reviewerID); err == nil {
+			t.Fatalf("passed QA accepted invalid attempt: number=%d state=%s object=%q sha=%v finish=%v", invalid.number, invalid.state, invalid.object, invalid.sha, invalid.finish)
+		}
+	}
+	var attemptID int64
+	if err := db.QueryRowContext(ctx, `INSERT INTO promotion_media_processing_attempts(asset_id,attempt_number,state,output_object_key,output_sha256,finished_at) VALUES ($1,1,'succeeded','promotion/derived/asset-one.mp4',$2,now()) RETURNING id`, assetID, assetSHA).Scan(&attemptID); err != nil {
 		t.Fatal(err)
 	}
 	stampTx, err := db.BeginTx(ctx, nil)
@@ -120,6 +143,29 @@ func TestEnterprisePromotionPostgres(t *testing.T) {
 	}
 	_ = mismatchTx.Rollback()
 
+	var uploadedAssetID, uploadedAttemptID int64
+	if err := db.QueryRowContext(ctx, `INSERT INTO promotion_media_assets(asset_key,kind,object_key,sha256,state) VALUES ('asset-uploaded','video','promotion/source/asset-uploaded',$1,'uploaded') RETURNING id`, assetSHA).Scan(&uploadedAssetID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `INSERT INTO promotion_media_processing_attempts(asset_id,attempt_number,state,output_object_key,output_sha256,finished_at) VALUES ($1,1,'succeeded','promotion/derived/asset-uploaded.mp4',$2,now()) RETURNING id`, uploadedAssetID, assetSHA).Scan(&uploadedAttemptID); err != nil {
+		t.Fatal(err)
+	}
+	nonPendingTx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var uploadedReviewID int64
+	var uploadedApprovedAt time.Time
+	if err := nonPendingTx.QueryRowContext(ctx, `INSERT INTO promotion_media_qa_reviews(asset_id,attempt_id,qa_result,approved_by,qa_note) VALUES ($1,$2,'passed',$3,'uploaded asset') RETURNING id,approved_at`, uploadedAssetID, uploadedAttemptID, reviewerID).Scan(&uploadedReviewID, &uploadedApprovedAt); err != nil {
+		_ = nonPendingTx.Rollback()
+		t.Fatal(err)
+	}
+	if _, err := nonPendingTx.ExecContext(ctx, `UPDATE promotion_media_assets SET state='ready',ready_qa_review_id=$2,ready_attempt_id=$3,qa_result='passed',qa_approved_by=$4,qa_approved_at=$5,qa_note='uploaded asset' WHERE id=$1`, uploadedAssetID, uploadedReviewID, uploadedAttemptID, reviewerID, uploadedApprovedAt); err == nil {
+		_ = nonPendingTx.Rollback()
+		t.Fatal("ready gate accepted transition from non-qa_pending asset")
+	}
+	_ = nonPendingTx.Rollback()
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -148,6 +194,9 @@ func TestEnterprisePromotionPostgres(t *testing.T) {
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE promotion_media_processing_attempts SET output_sha256=$2 WHERE id=$1`, attemptID, strings.Repeat("c", 64)); err == nil {
 		t.Fatal("QA-bound processing attempt identity was mutable")
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE promotion_media_processing_attempts SET state='failed' WHERE id=$1`, attemptID); err == nil {
+		t.Fatal("QA-bound succeeded attempt state was mutable")
 	}
 	var snapshotReviewID, snapshotAttemptID, snapshotVersion int64
 	var snapshotSHA, snapshotNote string
@@ -322,6 +371,9 @@ func assertEnterprisePromotionCatalog(t *testing.T, ctx context.Context, db *sql
 	assertConstraintDefinitionExcludes(t, ctx, db, "training_case_media", "review")
 	assertConstraintDefinitionContains(t, ctx, db, "training_case_consent_links", "FOREIGN KEY (consent_id, subject_type) REFERENCES publication_consents(id, subject_type)")
 	assertConstraintDefinitionContains(t, ctx, db, "training_case_consent_links", "testimonial_id = subject_id")
+	assertFunctionDefinitionContains(t, ctx, db, "promotion_media_qa_reviews_stamp", "attempt.state = 'succeeded'")
+	assertFunctionDefinitionContains(t, ctx, db, "promotion_media_ready_requires_current_qa", "attempt.state = 'succeeded'")
+	assertFunctionDefinitionContains(t, ctx, db, "promotion_media_ready_requires_current_qa", "OLD.state IS DISTINCT FROM 'qa_pending'")
 
 	rows, err := db.QueryContext(ctx, `SELECT indexdef FROM pg_indexes WHERE schemaname=current_schema() AND tablename='promotion_events'`)
 	if err != nil {
@@ -346,6 +398,21 @@ func assertEnterprisePromotionCatalog(t *testing.T, ctx context.Context, db *sql
 	}
 	if uniqueIdempotency != 1 || !sessionLookup {
 		t.Fatalf("promotion_events indexes: global idempotency unique=%d session lookup=%v", uniqueIdempotency, sessionLookup)
+	}
+}
+
+func assertFunctionDefinitionContains(t *testing.T, ctx context.Context, db *sql.DB, function, fragment string) {
+	t.Helper()
+	var definition string
+	if err := db.QueryRowContext(ctx, `
+		SELECT pg_get_functiondef(p.oid)
+		FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+		WHERE n.nspname=current_schema() AND p.proname=$1
+	`, function).Scan(&definition); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(definition, fragment) {
+		t.Errorf("function %s missing %q", function, fragment)
 	}
 }
 

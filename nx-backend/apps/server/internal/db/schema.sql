@@ -2678,7 +2678,7 @@ END;
 $$;
 DROP TRIGGER IF EXISTS trg_promotion_media_attempt_identity_guard ON promotion_media_processing_attempts;
 CREATE TRIGGER trg_promotion_media_attempt_identity_guard
-BEFORE UPDATE OF asset_id, output_sha256 ON promotion_media_processing_attempts
+BEFORE UPDATE OF asset_id, state, output_object_key, output_sha256, finished_at ON promotion_media_processing_attempts
 FOR EACH ROW EXECUTE FUNCTION promotion_media_attempt_identity_guard();
 
 CREATE OR REPLACE FUNCTION promotion_media_qa_reviews_stamp()
@@ -2695,6 +2695,10 @@ BEGIN
     SELECT 1 FROM promotion_media_processing_attempts attempt
     WHERE attempt.id = NEW.attempt_id
       AND attempt.asset_id = NEW.asset_id
+      AND attempt.state = 'succeeded'
+      AND attempt.finished_at IS NOT NULL
+      AND btrim(attempt.output_object_key) <> ''
+      AND attempt.output_sha256 IS NOT NULL
       AND attempt.output_sha256 = NEW.output_sha256
   ) THEN
     RAISE EXCEPTION 'QA review attempt does not match the current asset content';
@@ -2775,17 +2779,25 @@ FOR EACH ROW EXECUTE FUNCTION promotion_media_asset_identity_guard();
 CREATE OR REPLACE FUNCTION promotion_media_ready_requires_current_qa()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
+  IF NEW.state = 'ready' THEN
+    IF TG_OP = 'INSERT' THEN
+      RAISE EXCEPTION 'promotion media must enter ready from qa_pending';
+    ELSIF OLD.state IS DISTINCT FROM 'ready' AND OLD.state IS DISTINCT FROM 'qa_pending' THEN
+      RAISE EXCEPTION 'promotion media must enter ready from qa_pending';
+    END IF;
+  END IF;
   IF NEW.state = 'ready' AND (
-    TG_OP = 'INSERT'
-    OR OLD.state IS DISTINCT FROM NEW.state
-    OR OLD.qa_result IS DISTINCT FROM NEW.qa_result
-    OR OLD.qa_approved_by IS DISTINCT FROM NEW.qa_approved_by
-    OR OLD.qa_approved_at IS DISTINCT FROM NEW.qa_approved_at
-    OR OLD.qa_note IS DISTINCT FROM NEW.qa_note
-  ) THEN
+      TG_OP = 'INSERT'
+      OR OLD.state IS DISTINCT FROM NEW.state
+      OR OLD.qa_result IS DISTINCT FROM NEW.qa_result
+      OR OLD.qa_approved_by IS DISTINCT FROM NEW.qa_approved_by
+      OR OLD.qa_approved_at IS DISTINCT FROM NEW.qa_approved_at
+      OR OLD.qa_note IS DISTINCT FROM NEW.qa_note
+    ) THEN
     IF NOT EXISTS (
       SELECT 1
       FROM promotion_media_qa_reviews review
+      JOIN promotion_media_processing_attempts attempt ON attempt.id=review.attempt_id
       WHERE review.asset_id = NEW.id
         AND review.id = NEW.ready_qa_review_id
         AND review.asset_version = NEW.version
@@ -2796,6 +2808,11 @@ BEGIN
         AND review.approved_at = NEW.qa_approved_at
         AND review.qa_note = NEW.qa_note
         AND review.approval_txid = txid_current()
+        AND attempt.asset_id = NEW.id
+        AND attempt.state = 'succeeded'
+        AND attempt.finished_at IS NOT NULL
+        AND btrim(attempt.output_object_key) <> ''
+        AND attempt.output_sha256 = NEW.sha256
     ) THEN
       RAISE EXCEPTION 'ready transition requires a passing QA review in the current transaction';
     END IF;
