@@ -79,10 +79,13 @@ func (s *Server) xinzhiliModelConfigHandler(w http.ResponseWriter, r *http.Reque
 	}
 
 	if r.Method == http.MethodGet {
-		cfg, _, err := s.xinzhiliModelConfig.Read(r.Context())
+		cfg, found, err := s.xinzhiliModelConfig.Read(r.Context())
 		if err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, err.Error())
 			return
+		}
+		if !found {
+			cfg = xinzhili.DefaultConfig()
 		}
 		httpx.OK(w, buildXinzhiliModelConfigView(cfg))
 		return

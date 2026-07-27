@@ -28,6 +28,7 @@ import {
 } from '#/api';
 
 import EditorShell from '../site-config/components/editor-shell.vue';
+import { normalizeXinzhiliModelConfigView } from './xinzhili-model-normalize';
 
 const modes: Array<{ description: string; label: string; value: XinzhiliMode }> = [
   { description: '基础实时语音交流', label: '正常模式', value: 'normal' },
@@ -104,35 +105,34 @@ async function load() {
 }
 
 function applyView(data: XinzhiliModelConfigView) {
-  version.value = data.version;
-  asrKeySet.value = data.realtimeAsr.apiKeySet;
-  asrKeySuffix.value = data.realtimeAsr.apiKeySuffix;
-  ttsKeySet.value = data.tts.apiKeySet;
-  ttsKeySuffix.value = data.tts.apiKeySuffix;
+  const normalized = normalizeXinzhiliModelConfigView(data);
+  version.value = normalized.version;
+  asrKeySet.value = normalized.realtimeAsr.apiKeySet;
+  asrKeySuffix.value = normalized.realtimeAsr.apiKeySuffix;
+  ttsKeySet.value = normalized.tts.apiKeySet;
+  ttsKeySuffix.value = normalized.tts.apiKeySuffix;
   form.value = {
-    commonPrompt: data.commonPrompt ?? '',
-    enabled: data.enabled,
-    enabledModes: data.enabledModes.includes('normal')
-      ? [...data.enabledModes]
-      : ['normal', ...data.enabledModes],
-    expectedVersion: data.version,
-    modePrompts: { ...data.modePrompts },
+    commonPrompt: normalized.commonPrompt ?? '',
+    enabled: normalized.enabled,
+    enabledModes: normalized.enabledModes,
+    expectedVersion: normalized.version,
+    modePrompts: normalized.modePrompts,
     realtimeAsr: {
       apiKey: '',
-      endpoint: data.realtimeAsr.endpoint,
+      endpoint: normalized.realtimeAsr.endpoint,
       model: 'paraformer-realtime-v2',
       provider: 'aliyun-bailian',
-      region: data.realtimeAsr.region,
+      region: normalized.realtimeAsr.region,
     },
-    timing: { ...data.timing },
+    timing: { ...normalized.timing },
     tts: {
       apiKey: '',
-      endpoint: data.tts.endpoint,
+      endpoint: normalized.tts.endpoint,
       format: 'mp3',
-      groupId: data.tts.groupId ?? '',
-      model: data.tts.model,
-      provider: data.tts.provider,
-      voice: data.tts.voice,
+      groupId: normalized.tts.groupId ?? '',
+      model: normalized.tts.model,
+      provider: normalized.tts.provider,
+      voice: normalized.tts.voice,
     },
   };
 }

@@ -20,6 +20,7 @@ type fakeXinzhiliModelConfigStore struct {
 	updateErr       error
 	updated         xinzhili.Config
 	expectedVersion int64
+	updateCalls     int
 }
 
 func (f *fakeXinzhiliModelConfigStore) Read(context.Context) (xinzhili.Config, bool, error) {
@@ -27,6 +28,7 @@ func (f *fakeXinzhiliModelConfigStore) Read(context.Context) (xinzhili.Config, b
 }
 
 func (f *fakeXinzhiliModelConfigStore) Update(_ context.Context, cfg xinzhili.Config, expectedVersion int64) (xinzhili.Config, error) {
+	f.updateCalls++
 	f.updated = cfg
 	f.expectedVersion = expectedVersion
 	if f.updateErr != nil {
@@ -75,6 +77,48 @@ func TestXinzhiliModelConfigGETRedactsSecrets(t *testing.T) {
 	}
 	if body.Data.TTS.APIKey != "" || !body.Data.TTS.APIKeySet || body.Data.TTS.APIKeySuffix != "" {
 		t.Fatalf("unexpected TTS view: %+v", body.Data.TTS)
+	}
+}
+
+func TestXinzhiliModelConfigGETReturnsDefaultsWhenConfigDoesNotExist(t *testing.T) {
+	store := &fakeXinzhiliModelConfigStore{found: false}
+	s := &Server{xinzhiliModelConfig: store}
+	res := httptest.NewRecorder()
+	s.xinzhiliModelConfigHandler(res, httptest.NewRequest(http.MethodGet, "/api/xinzhili-model-config", nil))
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Data xinzhiliModelConfigView `json:"data"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	view := body.Data
+	if view.Version != 0 || view.Enabled {
+		t.Fatalf("unexpected initial state: version=%d enabled=%t", view.Version, view.Enabled)
+	}
+	if len(view.EnabledModes) != 1 || view.EnabledModes[0] != xinzhili.ModeNormal {
+		t.Fatalf("enabledModes=%v want=[normal]", view.EnabledModes)
+	}
+	if view.ModePrompts == nil || len(view.ModePrompts) != 0 {
+		t.Fatalf("modePrompts=%v want non-nil empty map", view.ModePrompts)
+	}
+	if view.Timing.PartialStableMs != 150 || view.Timing.MaxProactivePrompts != 2 {
+		t.Fatalf("unexpected timing defaults: %+v", view.Timing)
+	}
+	if view.RealtimeASR.Provider != xinzhili.RealtimeASRProvider ||
+		view.RealtimeASR.Model != xinzhili.RealtimeASRModel ||
+		view.RealtimeASR.Endpoint != "wss://dashscope.aliyuncs.com/api-ws/v1/inference" ||
+		view.RealtimeASR.Region != "cn-beijing" {
+		t.Fatalf("unexpected ASR defaults: %+v", view.RealtimeASR)
+	}
+	if view.TTS.Provider != xinzhili.TTSProviderOpenAICompatible || view.TTS.Format != "mp3" || view.TTS.APIKeySet {
+		t.Fatalf("unexpected TTS defaults: %+v", view.TTS)
+	}
+	if store.updateCalls != 0 {
+		t.Fatalf("GET persisted a default configuration: updateCalls=%d", store.updateCalls)
 	}
 }
 

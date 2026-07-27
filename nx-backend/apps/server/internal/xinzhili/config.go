@@ -81,6 +81,27 @@ type Config struct {
 	ClearTTSKey  bool              `json:"clearTtsKey,omitempty"`
 }
 
+// DefaultConfig returns the editable, disabled configuration shown before the
+// first configuration row is saved.
+func DefaultConfig() Config {
+	cfg := Config{
+		RealtimeASR: RealtimeASRConfig{
+			Provider: RealtimeASRProvider,
+			Endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
+			Region:   "cn-beijing",
+			Model:    RealtimeASRModel,
+		},
+		TTS: TTSConfig{
+			Provider: TTSProviderOpenAICompatible,
+			Format:   "mp3",
+		},
+		EnabledModes: []Mode{ModeNormal},
+		ModePrompts:  map[Mode]string{},
+	}
+	applyTimingDefaults(&cfg.Timing)
+	return cfg
+}
+
 func (c Config) Validate() error {
 	_, err := c.WithDefaults()
 	return err
