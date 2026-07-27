@@ -2558,7 +2558,10 @@ CREATE TABLE IF NOT EXISTS promotion_media_assets (
   content_type TEXT NOT NULL DEFAULT '',
   probe_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   derived_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-  state TEXT NOT NULL DEFAULT 'reserved' CHECK (state IN ('reserved','uploading','uploaded','probing','transcoding','validating','ready','quarantined','rejected','failed')),
+  state TEXT NOT NULL DEFAULT 'reserved' CONSTRAINT promotion_media_assets_state_check CHECK (state IN ('reserved','uploading','uploaded','probing','transcoding','validating','qa_pending','ready','quarantined','rejected','failed')),
+  version BIGINT NOT NULL DEFAULT 1 CHECK (version > 0),
+  ready_qa_review_id BIGINT,
+  ready_attempt_id BIGINT,
   qa_result TEXT NOT NULL DEFAULT 'pending' CHECK (qa_result IN ('pending','passed','failed')),
   qa_approved_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
   qa_approved_at TIMESTAMPTZ,
@@ -2568,8 +2571,17 @@ CREATE TABLE IF NOT EXISTS promotion_media_assets (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (source_asset_id IS NULL OR source_asset_id <> id),
-  CHECK (state <> 'ready' OR (qa_result = 'passed' AND qa_approved_by IS NOT NULL AND qa_approved_at IS NOT NULL))
+  CONSTRAINT promotion_media_assets_ready_snapshot_check CHECK (state <> 'ready' OR (qa_result = 'passed' AND ready_qa_review_id IS NOT NULL AND ready_attempt_id IS NOT NULL AND qa_approved_by IS NOT NULL AND qa_approved_at IS NOT NULL))
 );
+ALTER TABLE promotion_media_assets ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE promotion_media_assets ADD COLUMN IF NOT EXISTS ready_qa_review_id BIGINT;
+ALTER TABLE promotion_media_assets ADD COLUMN IF NOT EXISTS ready_attempt_id BIGINT;
+ALTER TABLE promotion_media_assets DROP CONSTRAINT IF EXISTS promotion_media_assets_state_check;
+ALTER TABLE promotion_media_assets ADD CONSTRAINT promotion_media_assets_state_check
+  CHECK (state IN ('reserved','uploading','uploaded','probing','transcoding','validating','qa_pending','ready','quarantined','rejected','failed'));
+ALTER TABLE promotion_media_assets DROP CONSTRAINT IF EXISTS promotion_media_assets_ready_snapshot_check;
+ALTER TABLE promotion_media_assets ADD CONSTRAINT promotion_media_assets_ready_snapshot_check
+  CHECK (state <> 'ready' OR (qa_result = 'passed' AND ready_qa_review_id IS NOT NULL AND ready_attempt_id IS NOT NULL AND qa_approved_by IS NOT NULL AND qa_approved_at IS NOT NULL));
 CREATE INDEX IF NOT EXISTS idx_promotion_media_assets_source ON promotion_media_assets(source_asset_id);
 CREATE INDEX IF NOT EXISTS idx_promotion_media_assets_state ON promotion_media_assets(state, id);
 
@@ -2619,17 +2631,74 @@ CREATE INDEX IF NOT EXISTS idx_promotion_media_attempts_lease ON promotion_media
 CREATE TABLE IF NOT EXISTS promotion_media_qa_reviews (
   id BIGSERIAL PRIMARY KEY,
   asset_id BIGINT NOT NULL REFERENCES promotion_media_assets(id) ON DELETE RESTRICT,
+  asset_version BIGINT NOT NULL CHECK (asset_version > 0),
+  attempt_id BIGINT NOT NULL REFERENCES promotion_media_processing_attempts(id) ON DELETE RESTRICT,
+  output_sha256 TEXT NOT NULL CHECK (length(output_sha256) = 64),
   qa_result TEXT NOT NULL CHECK (qa_result IN ('passed','failed')),
   approved_by BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   approved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   qa_note TEXT NOT NULL DEFAULT '',
   approval_txid BIGINT NOT NULL DEFAULT txid_current()
 );
+ALTER TABLE promotion_media_qa_reviews ADD COLUMN IF NOT EXISTS asset_version BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE promotion_media_qa_reviews ADD COLUMN IF NOT EXISTS attempt_id BIGINT;
+ALTER TABLE promotion_media_qa_reviews ADD COLUMN IF NOT EXISTS output_sha256 TEXT;
+DROP TRIGGER IF EXISTS trg_promotion_media_qa_reviews_append_only ON promotion_media_qa_reviews;
+UPDATE promotion_media_qa_reviews review
+SET asset_version = asset.version,
+    output_sha256 = asset.sha256,
+    attempt_id = COALESCE(review.attempt_id, (
+      SELECT attempt.id FROM promotion_media_processing_attempts attempt
+      WHERE attempt.asset_id=review.asset_id
+      ORDER BY attempt.attempt_number DESC LIMIT 1
+    ))
+FROM promotion_media_assets asset
+WHERE asset.id=review.asset_id
+  AND (review.output_sha256 IS NULL OR review.attempt_id IS NULL);
+ALTER TABLE promotion_media_qa_reviews ALTER COLUMN asset_version SET NOT NULL;
+ALTER TABLE promotion_media_qa_reviews ALTER COLUMN attempt_id SET NOT NULL;
+ALTER TABLE promotion_media_qa_reviews ALTER COLUMN output_sha256 SET NOT NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_promotion_media_qa_attempt' AND conrelid='promotion_media_qa_reviews'::regclass) THEN
+    ALTER TABLE promotion_media_qa_reviews ADD CONSTRAINT fk_promotion_media_qa_attempt
+      FOREIGN KEY (attempt_id) REFERENCES promotion_media_processing_attempts(id) ON DELETE RESTRICT;
+  END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_promotion_media_qa_reviews_asset ON promotion_media_qa_reviews(asset_id, id DESC);
+
+CREATE OR REPLACE FUNCTION promotion_media_attempt_identity_guard()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM promotion_media_qa_reviews review WHERE review.attempt_id=OLD.id) THEN
+    RAISE EXCEPTION 'QA-bound promotion media processing attempt identity is immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_promotion_media_attempt_identity_guard ON promotion_media_processing_attempts;
+CREATE TRIGGER trg_promotion_media_attempt_identity_guard
+BEFORE UPDATE OF asset_id, output_sha256 ON promotion_media_processing_attempts
+FOR EACH ROW EXECUTE FUNCTION promotion_media_attempt_identity_guard();
 
 CREATE OR REPLACE FUNCTION promotion_media_qa_reviews_stamp()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
+  SELECT asset.version, asset.sha256
+  INTO NEW.asset_version, NEW.output_sha256
+  FROM promotion_media_assets asset
+  WHERE asset.id = NEW.asset_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'QA review asset does not exist';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM promotion_media_processing_attempts attempt
+    WHERE attempt.id = NEW.attempt_id
+      AND attempt.asset_id = NEW.asset_id
+      AND attempt.output_sha256 = NEW.output_sha256
+  ) THEN
+    RAISE EXCEPTION 'QA review attempt does not match the current asset content';
+  END IF;
   NEW.approval_txid := txid_current();
   NEW.approved_at := now();
   RETURN NEW;
@@ -2651,6 +2720,58 @@ CREATE TRIGGER trg_promotion_media_qa_reviews_append_only
 BEFORE UPDATE OR DELETE ON promotion_media_qa_reviews
 FOR EACH ROW EXECUTE FUNCTION promotion_media_qa_reviews_append_only();
 
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_promotion_media_ready_review' AND conrelid='promotion_media_assets'::regclass) THEN
+    ALTER TABLE promotion_media_assets
+      ADD CONSTRAINT fk_promotion_media_ready_review FOREIGN KEY (ready_qa_review_id) REFERENCES promotion_media_qa_reviews(id) ON DELETE RESTRICT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_promotion_media_ready_attempt' AND conrelid='promotion_media_assets'::regclass) THEN
+    ALTER TABLE promotion_media_assets
+      ADD CONSTRAINT fk_promotion_media_ready_attempt FOREIGN KEY (ready_attempt_id) REFERENCES promotion_media_processing_attempts(id) ON DELETE RESTRICT;
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION promotion_media_asset_identity_guard()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+  identity_changed BOOLEAN;
+BEGIN
+  identity_changed := OLD.asset_key IS DISTINCT FROM NEW.asset_key
+    OR OLD.kind IS DISTINCT FROM NEW.kind
+    OR OLD.object_key IS DISTINCT FROM NEW.object_key
+    OR OLD.sha256 IS DISTINCT FROM NEW.sha256
+    OR OLD.byte_size IS DISTINCT FROM NEW.byte_size
+    OR OLD.source_asset_id IS DISTINCT FROM NEW.source_asset_id
+    OR OLD.original_filename IS DISTINCT FROM NEW.original_filename
+    OR OLD.content_type IS DISTINCT FROM NEW.content_type
+    OR OLD.probe_metadata IS DISTINCT FROM NEW.probe_metadata
+    OR OLD.derived_metadata IS DISTINCT FROM NEW.derived_metadata;
+  IF identity_changed THEN
+    IF OLD.state = 'ready' THEN
+      RAISE EXCEPTION 'ready promotion media identity is immutable';
+    END IF;
+    NEW.version := OLD.version + 1;
+    NEW.qa_result := 'pending';
+    NEW.ready_qa_review_id := NULL;
+    NEW.ready_attempt_id := NULL;
+    NEW.qa_approved_by := NULL;
+    NEW.qa_approved_at := NULL;
+    NEW.qa_note := '';
+    IF NEW.state IN ('qa_pending','ready') THEN
+      NEW.state := 'uploaded';
+    END IF;
+  ELSIF NEW.version IS DISTINCT FROM OLD.version THEN
+    RAISE EXCEPTION 'promotion media version is database managed';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_promotion_media_asset_identity_guard ON promotion_media_assets;
+CREATE TRIGGER trg_promotion_media_asset_identity_guard
+BEFORE UPDATE OF asset_key, kind, object_key, sha256, byte_size, source_asset_id, original_filename, content_type, probe_metadata, derived_metadata, version ON promotion_media_assets
+FOR EACH ROW EXECUTE FUNCTION promotion_media_asset_identity_guard();
+
 CREATE OR REPLACE FUNCTION promotion_media_ready_requires_current_qa()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
@@ -2666,8 +2787,14 @@ BEGIN
       SELECT 1
       FROM promotion_media_qa_reviews review
       WHERE review.asset_id = NEW.id
+        AND review.id = NEW.ready_qa_review_id
+        AND review.asset_version = NEW.version
+        AND review.attempt_id = NEW.ready_attempt_id
+        AND review.output_sha256 = NEW.sha256
         AND review.qa_result = 'passed'
         AND review.approved_by = NEW.qa_approved_by
+        AND review.approved_at = NEW.qa_approved_at
+        AND review.qa_note = NEW.qa_note
         AND review.approval_txid = txid_current()
     ) THEN
       RAISE EXCEPTION 'ready transition requires a passing QA review in the current transaction';
@@ -2678,7 +2805,7 @@ END;
 $$;
 DROP TRIGGER IF EXISTS trg_promotion_media_ready_requires_current_qa ON promotion_media_assets;
 CREATE TRIGGER trg_promotion_media_ready_requires_current_qa
-BEFORE INSERT OR UPDATE OF state, qa_result, qa_approved_by, qa_approved_at, qa_note ON promotion_media_assets
+BEFORE INSERT OR UPDATE OF state, ready_qa_review_id, ready_attempt_id, qa_result, qa_approved_by, qa_approved_at, qa_note ON promotion_media_assets
 FOR EACH ROW EXECUTE FUNCTION promotion_media_ready_requires_current_qa();
 
 CREATE TABLE IF NOT EXISTS enterprise_trainers (
@@ -2789,6 +2916,7 @@ CREATE TABLE IF NOT EXISTS publication_consents (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(subject_type, subject_reference, version),
+  CONSTRAINT uq_publication_consents_id_subject UNIQUE(id, subject_type),
   CHECK (expires_at IS NULL OR effective_at IS NULL OR expires_at > effective_at)
 );
 
@@ -2858,8 +2986,10 @@ CREATE TABLE IF NOT EXISTS training_case_consent_links (
   required BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(consent_id, subject_type, subject_id, use_scope),
+  CONSTRAINT fk_training_case_consent_subject FOREIGN KEY (consent_id, subject_type) REFERENCES publication_consents(id, subject_type) ON DELETE RESTRICT,
   CHECK (case_id IS NOT NULL OR media_asset_id IS NOT NULL OR testimonial_id IS NOT NULL),
-  CHECK (subject_type <> 'media_asset' OR media_asset_id = subject_id)
+  CHECK (subject_type <> 'media_asset' OR media_asset_id = subject_id),
+  CONSTRAINT chk_training_case_consent_testimonial_subject CHECK (subject_type <> 'testimonial' OR testimonial_id = subject_id)
 );
 ALTER TABLE training_case_consent_links ALTER COLUMN case_id DROP NOT NULL;
 ALTER TABLE training_case_consent_links ADD COLUMN IF NOT EXISTS subject_type TEXT;
@@ -2881,6 +3011,20 @@ ALTER TABLE training_case_consent_links ALTER COLUMN subject_id SET NOT NULL;
 ALTER TABLE training_case_consent_links ALTER COLUMN use_scope SET NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_training_case_consent_links_subject
   ON training_case_consent_links(consent_id, subject_type, subject_id, use_scope);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_publication_consents_id_subject' AND conrelid='publication_consents'::regclass) THEN
+    ALTER TABLE publication_consents ADD CONSTRAINT uq_publication_consents_id_subject UNIQUE(id, subject_type);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_training_case_consent_subject' AND conrelid='training_case_consent_links'::regclass) THEN
+    ALTER TABLE training_case_consent_links ADD CONSTRAINT fk_training_case_consent_subject
+      FOREIGN KEY (consent_id, subject_type) REFERENCES publication_consents(id, subject_type) ON DELETE RESTRICT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_training_case_consent_testimonial_subject' AND conrelid='training_case_consent_links'::regclass) THEN
+    ALTER TABLE training_case_consent_links ADD CONSTRAINT chk_training_case_consent_testimonial_subject
+      CHECK (subject_type <> 'testimonial' OR testimonial_id = subject_id);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS enterprise_promotion_settings (
   key TEXT PRIMARY KEY,
@@ -2926,13 +3070,16 @@ CREATE TABLE IF NOT EXISTS promotion_events (
   media_asset_id BIGINT REFERENCES promotion_media_assets(id) ON DELETE RESTRICT,
   page_path TEXT NOT NULL DEFAULT '',
   event_data JSONB NOT NULL DEFAULT '{}'::jsonb,
-  idempotency_key TEXT NOT NULL UNIQUE,
+  idempotency_key TEXT NOT NULL,
   occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE(session_id, idempotency_key)
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE promotion_events DROP CONSTRAINT IF EXISTS promotion_events_idempotency_key_key;
+ALTER TABLE promotion_events DROP CONSTRAINT IF EXISTS promotion_events_session_id_idempotency_key_key;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_promotion_events_idempotency_key
   ON promotion_events(idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_promotion_events_session
+  ON promotion_events(session_id, occurred_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_promotion_events_funnel ON promotion_events(event_type, occurred_at DESC);
 
 CREATE TABLE IF NOT EXISTS enterprise_consultations (

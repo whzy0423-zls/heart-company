@@ -98,6 +98,49 @@ func (r MediaRole) Valid() bool {
 	}
 }
 
+type CaseMediaStatus string
+
+const (
+	CaseMediaDraft     CaseMediaStatus = "draft"
+	CaseMediaPublished CaseMediaStatus = "published"
+	CaseMediaOffline   CaseMediaStatus = "offline"
+)
+
+func (s CaseMediaStatus) Valid() bool {
+	switch s {
+	case CaseMediaDraft, CaseMediaPublished, CaseMediaOffline:
+		return true
+	default:
+		return false
+	}
+}
+
+type PromotionMediaState string
+
+const (
+	MediaReserved    PromotionMediaState = "reserved"
+	MediaUploading   PromotionMediaState = "uploading"
+	MediaUploaded    PromotionMediaState = "uploaded"
+	MediaProbing     PromotionMediaState = "probing"
+	MediaTranscoding PromotionMediaState = "transcoding"
+	MediaValidating  PromotionMediaState = "validating"
+	MediaQAPending   PromotionMediaState = "qa_pending"
+	MediaReady       PromotionMediaState = "ready"
+	MediaQuarantined PromotionMediaState = "quarantined"
+	MediaRejected    PromotionMediaState = "rejected"
+	MediaFailed      PromotionMediaState = "failed"
+)
+
+func (s PromotionMediaState) Valid() bool {
+	switch s {
+	case MediaReserved, MediaUploading, MediaUploaded, MediaProbing, MediaTranscoding, MediaValidating,
+		MediaQAPending, MediaReady, MediaQuarantined, MediaRejected, MediaFailed:
+		return true
+	default:
+		return false
+	}
+}
+
 type ConsentSubjectType string
 
 const (
@@ -129,27 +172,32 @@ const (
 )
 
 type TrainingCase struct {
-	ID                  int64
-	Slug                string
-	Title               string
-	Summary             string
-	CoverAssetID        int64
-	CompanyDisplayName  string
-	Industry            string
-	City                string
-	ParticipantRange    string
-	TrainingDate        *time.Time
-	DurationLabel       string
-	TrainerID           int64
-	TrainerNameSnapshot string
-	Status              CaseStatus
-	AuthorizationStatus AuthorizationStatus
-	Featured            bool
-	SortOrder           int
-	Version             int64
-	PublishedAt         *time.Time
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                           int64
+	Slug                         string
+	Title                        string
+	Summary                      string
+	CoverAssetID                 int64
+	CompanyDisplayName           string
+	CompanyInternalNameEncrypted []byte
+	Industry                     string
+	City                         string
+	ParticipantRange             string
+	TrainingDate                 *time.Time
+	DurationLabel                string
+	BusinessChallenges           []string
+	TrainingGoals                []string
+	TrainingModules              []string
+	TrainingMethods              []string
+	TrainerID                    int64
+	TrainerNameSnapshot          string
+	Status                       CaseStatus
+	AuthorizationStatus          AuthorizationStatus
+	Featured                     bool
+	SortOrder                    int
+	Version                      int64
+	PublishedAt                  *time.Time
+	CreatedAt                    time.Time
+	UpdatedAt                    time.Time
 }
 
 func (c TrainingCase) ValidateForReview() error {
@@ -163,20 +211,28 @@ func (c TrainingCase) ValidateForReview() error {
 }
 
 type EnterpriseSolution struct {
-	ID                  int64
-	Slug                string
-	Title               string
-	Summary             string
-	CoverAssetID        int64
-	TrainerID           int64
-	TrainerNameSnapshot string
-	Status              CaseStatus
-	Featured            bool
-	SortOrder           int
-	Version             int64
-	PublishedAt         *time.Time
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                      int64
+	Slug                    string
+	Title                   string
+	Summary                 string
+	CoverAssetID            int64
+	Audiences               []string
+	Problems                []string
+	Goals                   []string
+	Modules                 []string
+	DeliveryMethods         []string
+	RecommendedParticipants string
+	RecommendedDuration     string
+	CustomizableItems       []string
+	TrainerID               int64
+	TrainerNameSnapshot     string
+	Status                  CaseStatus
+	Featured                bool
+	SortOrder               int
+	Version                 int64
+	PublishedAt             *time.Time
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
 }
 
 func (s EnterpriseSolution) ValidateForReview() error {
@@ -198,6 +254,9 @@ type EnterpriseTrainer struct {
 	ShortBio          string
 	FullBio           string
 	ExperienceSummary string
+	Specialties       []string
+	Credentials       []string
+	ServiceIndustries []string
 	Status            CaseStatus
 	SortOrder         int
 	Version           int64
@@ -220,18 +279,27 @@ type CaseMedia struct {
 	Role         MediaRole
 	Position     int
 	Caption      string
-	Status       CaseStatus
+	Status       CaseMediaStatus
 }
 
 type PublicationConsent struct {
-	ID               int64
-	SubjectType      ConsentSubjectType
-	SubjectReference string
-	DisplayAlias     string
-	Status           AuthorizationStatus
-	EffectiveAt      *time.Time
-	ExpiresAt        *time.Time
-	Version          int64
+	ID                int64
+	SubjectType       ConsentSubjectType
+	SubjectReference  string
+	DisplayAlias      string
+	Channels          []string
+	UsageScopes       []string
+	EvidenceAssetID   int64
+	ContractReference string
+	Status            AuthorizationStatus
+	EffectiveAt       *time.Time
+	ExpiresAt         *time.Time
+	ReviewedBy        int64
+	ReviewedAt        *time.Time
+	RevocationReason  string
+	Version           int64
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // ConsentLink associates a consent with its independently reviewable subject.
@@ -260,17 +328,43 @@ func (l ConsentLink) Validate() error {
 	if l.SubjectType == ConsentMediaAsset && l.MediaAssetID != l.SubjectID {
 		return ErrInvalidConsentLink
 	}
+	if l.SubjectType == ConsentTestimonial && l.TestimonialID != l.SubjectID {
+		return ErrInvalidConsentLink
+	}
+	return nil
+}
+
+func (l ConsentLink) ValidateForConsent(consent PublicationConsent) error {
+	if err := l.Validate(); err != nil {
+		return err
+	}
+	if consent.ID != l.ConsentID || consent.SubjectType != l.SubjectType {
+		return ErrInvalidConsentLink
+	}
 	return nil
 }
 
 type EnterpriseConsultation struct {
 	ID                        int64
 	ConsultationReferenceHash string
+	RequestIdempotencyHash    string
+	CompanyNameEncrypted      []byte
+	Industry                  string
+	City                      string
+	ParticipantRange          string
+	RequirementsEncrypted     []byte
+	PreferredTrainingTime     string
+	ContactNameEncrypted      []byte
+	PhoneEncrypted            []byte
+	PhoneLookupHash           string
+	WechatEncrypted           []byte
+	NoteEncrypted             []byte
 	SourcePage                string
 	CaseID                    int64
 	SolutionID                int64
 	FirstTouchSessionID       int64
 	LastTouchSessionID        int64
+	ShareTokenID              int64
 	Channel                   string
 	Status                    ConsultationStatus
 	AssigneeID                int64
@@ -278,6 +372,8 @@ type EnterpriseConsultation struct {
 	PrivacyNoticeVersion      string
 	ConsentedAt               time.Time
 	ConsentSource             string
+	ConsentIPHash             string
+	ConsentUserAgentHash      string
 	CreatedAt                 time.Time
 	UpdatedAt                 time.Time
 }

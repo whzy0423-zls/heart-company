@@ -3,117 +3,18 @@ package db
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"fmt"
-	"net/url"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/stdlib"
+	"nine-xing/nx-backend/apps/server/internal/testdb"
 )
-
-func TestEnterprisePromotionTestDSNRejectsRoutingOverrides(t *testing.T) {
-	tests := []string{
-		"postgres://postgres:secret@127.0.0.1/nx_test?host=remote.example",
-		"postgres://postgres:secret@127.0.0.1/nx_test?hostaddr=203.0.113.10",
-		"postgres://postgres:secret@127.0.0.1/nx_test?service=production",
-		"host=127.0.0.1 dbname=nx_test service=production",
-		"postgres://postgres:secret@127.0.0.1:5432,remote.example:5432/nx_test",
-		"host=127.0.0.1,remote.example port=5432,5432 user=postgres password=secret dbname=nx_test",
-	}
-	for _, dsn := range tests {
-		if _, err := validateEnterprisePromotionTestDSN(dsn); err == nil {
-			t.Errorf("routing override accepted: %q", dsn)
-		}
-	}
-}
-
-func TestEnterprisePromotionTestDSNAcceptsFinalLoopbackTestTarget(t *testing.T) {
-	config, err := validateEnterprisePromotionTestDSN("postgres://postgres:secret@127.0.0.1:5432/nx_enterprise_test?sslmode=disable")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if config.Host != "127.0.0.1" || config.Database != "nx_enterprise_test" {
-		t.Fatalf("final target host=%q database=%q", config.Host, config.Database)
-	}
-}
-
-func TestEnterprisePromotionTestDSNRejectsAmbiguousDatabaseNames(t *testing.T) {
-	for _, database := range []string{"latest", "contest"} {
-		dsn := "postgres://postgres:secret@127.0.0.1:5432/" + database
-		if _, err := validateEnterprisePromotionTestDSN(dsn); err == nil {
-			t.Errorf("ambiguous non-test database accepted: %q", database)
-		}
-	}
-}
-
-func validateEnterprisePromotionTestDSN(dsn string) (*pgx.ConnConfig, error) {
-	lower := strings.ToLower(dsn)
-	if strings.HasPrefix(lower, "postgres://") || strings.HasPrefix(lower, "postgresql://") {
-		parsed, err := url.Parse(dsn)
-		if err != nil {
-			return nil, fmt.Errorf("parse TEST_DATABASE_URL: %w", err)
-		}
-		for _, key := range []string{"host", "hostaddr", "service", "servicefile"} {
-			if _, exists := parsed.Query()[key]; exists {
-				return nil, fmt.Errorf("TEST_DATABASE_URL must not use %s routing override", key)
-			}
-		}
-	} else {
-		for _, field := range strings.Fields(lower) {
-			for _, key := range []string{"hostaddr=", "service=", "servicefile="} {
-				if strings.HasPrefix(field, key) {
-					return nil, fmt.Errorf("TEST_DATABASE_URL must not use %s routing override", strings.TrimSuffix(key, "="))
-				}
-			}
-		}
-	}
-	config, err := pgx.ParseConfig(dsn)
-	if err != nil {
-		return nil, fmt.Errorf("parse final TEST_DATABASE_URL config: %w", err)
-	}
-	if !isEnterprisePromotionLoopbackHost(config.Host) {
-		return nil, fmt.Errorf("TEST_DATABASE_URL final host must be loopback, got %q", config.Host)
-	}
-	for _, fallback := range config.Fallbacks {
-		if fallback == nil || !isEnterprisePromotionLoopbackHost(fallback.Host) {
-			var host string
-			if fallback != nil {
-				host = fallback.Host
-			}
-			return nil, fmt.Errorf("TEST_DATABASE_URL fallback host must be loopback, got %q", host)
-		}
-	}
-	if config.Database == "" {
-		return nil, errors.New("TEST_DATABASE_URL final database is empty")
-	}
-	if !isEnterprisePromotionTestDatabase(config.Database) {
-		return nil, fmt.Errorf("TEST_DATABASE_URL final database must follow the isolated test naming convention, got %q", config.Database)
-	}
-	return config, nil
-}
-
-func isEnterprisePromotionLoopbackHost(host string) bool {
-	switch strings.ToLower(strings.TrimSpace(host)) {
-	case "localhost", "127.0.0.1", "::1":
-		return true
-	default:
-		return false
-	}
-}
-
-func isEnterprisePromotionTestDatabase(database string) bool {
-	name := strings.ToLower(strings.TrimSpace(database))
-	return name == "test" || strings.HasPrefix(name, "test_") || strings.HasSuffix(name, "_test") || strings.Contains(name, "_test_")
-}
 
 func TestEnterprisePromotionPostgres(t *testing.T) {
 	db, schemaName := openEnterprisePromotionSchema(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	assertEnterprisePromotionCatalog(t, ctx, db)
 
 	var trainerID int64
 	if err := db.QueryRowContext(ctx, `INSERT INTO enterprise_trainers(key,name,status) VALUES ('trainer-one','Trainer','published') RETURNING id`).Scan(&trainerID); err != nil {
@@ -136,15 +37,36 @@ func TestEnterprisePromotionPostgres(t *testing.T) {
 		t.Fatal("case status CHECK accepted unknown state")
 	}
 
-	var assetID int64
-	if err := db.QueryRowContext(ctx, `INSERT INTO promotion_media_assets(asset_key,kind,object_key,sha256,state) VALUES ('asset-one','video','promotion/source/asset-one','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','uploaded') RETURNING id`).Scan(&assetID); err != nil {
+	var assetID, assetVersion int64
+	if err := db.QueryRowContext(ctx, `INSERT INTO promotion_media_assets(asset_key,kind,object_key,sha256,state) VALUES ('asset-one','video','promotion/source/asset-one','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','uploaded') RETURNING id,version`).Scan(&assetID, &assetVersion); err != nil {
 		t.Fatal(err)
+	}
+	if assetVersion != 1 {
+		t.Fatalf("initial asset version=%d", assetVersion)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE promotion_media_assets SET state='qa_pending',qa_result='failed',qa_note='stale review' WHERE id=$1`, assetID); err != nil {
+		t.Fatal(err)
+	}
+	var assetState, assetQAResult, assetQANote string
+	if err := db.QueryRowContext(ctx, `UPDATE promotion_media_assets SET probe_metadata='{"duration":10}' WHERE id=$1 RETURNING version,state,qa_result,qa_note`, assetID).Scan(&assetVersion, &assetState, &assetQAResult, &assetQANote); err != nil {
+		t.Fatal(err)
+	}
+	if assetVersion != 2 || assetState != "uploaded" || assetQAResult != "pending" || assetQANote != "" {
+		t.Fatalf("identity mutation snapshot: version=%d state=%q qa=%q note=%q", assetVersion, assetState, assetQAResult, assetQANote)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE promotion_media_assets SET state='qa_pending' WHERE id=$1`, assetID); err != nil {
+		t.Fatalf("qa_pending state rejected: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE promotion_media_assets SET state='ready' WHERE id=$1`, assetID); err == nil {
 		t.Fatal("ready gate accepted an asset without passing QA")
 	}
 	var reviewerID int64
 	if err := db.QueryRowContext(ctx, `INSERT INTO users(username,password_hash) VALUES ('promotion-reviewer','hash') RETURNING id`).Scan(&reviewerID); err != nil {
+		t.Fatal(err)
+	}
+	var attemptID int64
+	const assetSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := db.QueryRowContext(ctx, `INSERT INTO promotion_media_processing_attempts(asset_id,attempt_number,state,output_sha256) VALUES ($1,1,'succeeded',$2) RETURNING id`, assetID, assetSHA).Scan(&attemptID); err != nil {
 		t.Fatal(err)
 	}
 	stampTx, err := db.BeginTx(ctx, nil)
@@ -156,39 +78,59 @@ func TestEnterprisePromotionPostgres(t *testing.T) {
 		_ = stampTx.Rollback()
 		t.Fatal(err)
 	}
-	if err := stampTx.QueryRowContext(ctx, `INSERT INTO promotion_media_qa_reviews(asset_id,qa_result,approved_by,qa_note,approval_txid) VALUES ($1,'failed',$2,'tamper check',1) RETURNING id`, assetID, reviewerID).Scan(&stampedReviewID); err != nil {
+	if err := stampTx.QueryRowContext(ctx, `INSERT INTO promotion_media_qa_reviews(asset_id,attempt_id,qa_result,approved_by,qa_note,approval_txid,asset_version,output_sha256) VALUES ($1,$2,'failed',$3,'tamper check',1,999,$4) RETURNING id`, assetID, attemptID, reviewerID, strings.Repeat("b", 64)).Scan(&stampedReviewID); err != nil {
 		_ = stampTx.Rollback()
 		t.Fatal(err)
 	}
 	if err := stampTx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	var storedApprovalTxID int64
-	if err := db.QueryRowContext(ctx, `SELECT approval_txid FROM promotion_media_qa_reviews WHERE id=$1`, stampedReviewID).Scan(&storedApprovalTxID); err != nil {
+	var storedApprovalTxID, storedAssetVersion int64
+	var storedOutputSHA string
+	if err := db.QueryRowContext(ctx, `SELECT approval_txid,asset_version,output_sha256 FROM promotion_media_qa_reviews WHERE id=$1`, stampedReviewID).Scan(&storedApprovalTxID, &storedAssetVersion, &storedOutputSHA); err != nil {
 		t.Fatal(err)
 	}
-	if storedApprovalTxID != expectedApprovalTxID {
-		t.Fatalf("QA approval transaction stamp was caller-controlled: got %d want %d", storedApprovalTxID, expectedApprovalTxID)
+	if storedApprovalTxID != expectedApprovalTxID || storedAssetVersion != assetVersion || storedOutputSHA != assetSHA {
+		t.Fatalf("QA snapshot was caller-controlled: tx=%d version=%d sha=%q", storedApprovalTxID, storedAssetVersion, storedOutputSHA)
 	}
 	var oldReviewID int64
-	if err := db.QueryRowContext(ctx, `INSERT INTO promotion_media_qa_reviews(asset_id,qa_result,approved_by,qa_note) VALUES ($1,'passed',$2,'first review') RETURNING id`, assetID, reviewerID).Scan(&oldReviewID); err != nil {
+	var oldApprovedAt time.Time
+	if err := db.QueryRowContext(ctx, `INSERT INTO promotion_media_qa_reviews(asset_id,attempt_id,qa_result,approved_by,qa_note) VALUES ($1,$2,'passed',$3,'first review') RETURNING id,approved_at`, assetID, attemptID, reviewerID).Scan(&oldReviewID, &oldApprovedAt); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE promotion_media_assets SET state='ready', qa_result='passed', qa_approved_by=$2, qa_approved_at=now() WHERE id=$1`, assetID, reviewerID); err == nil {
+	if _, err := db.ExecContext(ctx, `UPDATE promotion_media_assets SET state='ready', ready_qa_review_id=$2, ready_attempt_id=$3, qa_result='passed', qa_approved_by=$4, qa_approved_at=$5, qa_note='first review' WHERE id=$1`, assetID, oldReviewID, attemptID, reviewerID, oldApprovedAt); err == nil {
 		t.Fatal("ready gate accepted a QA review committed by an earlier transaction")
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE promotion_media_qa_reviews SET qa_note='rewritten' WHERE id=$1`, oldReviewID); err == nil {
 		t.Fatal("append-only QA review was mutable")
 	}
+	mismatchTx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mismatchReviewID int64
+	var mismatchApprovedAt time.Time
+	if err := mismatchTx.QueryRowContext(ctx, `INSERT INTO promotion_media_qa_reviews(asset_id,attempt_id,qa_result,approved_by,qa_note) VALUES ($1,$2,'passed',$3,'exact note') RETURNING id,approved_at`, assetID, attemptID, reviewerID).Scan(&mismatchReviewID, &mismatchApprovedAt); err != nil {
+		_ = mismatchTx.Rollback()
+		t.Fatal(err)
+	}
+	if _, err := mismatchTx.ExecContext(ctx, `UPDATE promotion_media_assets SET state='ready', ready_qa_review_id=$2, ready_attempt_id=$3, qa_result='passed', qa_approved_by=$4, qa_approved_at=$5, qa_note='wrong note' WHERE id=$1`, assetID, mismatchReviewID, attemptID, reviewerID, mismatchApprovedAt); err == nil {
+		_ = mismatchTx.Rollback()
+		t.Fatal("ready gate accepted QA snapshot fields that did not exactly match review")
+	}
+	_ = mismatchTx.Rollback()
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO promotion_media_qa_reviews(asset_id,qa_result,approved_by,qa_note) VALUES ($1,'passed',$2,'release approval')`, assetID, reviewerID); err != nil {
+	var readyReviewID int64
+	var readyApprovedAt time.Time
+	if err := tx.QueryRowContext(ctx, `INSERT INTO promotion_media_qa_reviews(asset_id,attempt_id,qa_result,approved_by,qa_note) VALUES ($1,$2,'passed',$3,'release approval') RETURNING id,approved_at`, assetID, attemptID, reviewerID).Scan(&readyReviewID, &readyApprovedAt); err != nil {
 		_ = tx.Rollback()
 		t.Fatal(err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE promotion_media_assets SET state='ready', qa_result='passed', qa_approved_by=$2, qa_approved_at=now(), qa_note='release approval' WHERE id=$1`, assetID, reviewerID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE promotion_media_assets SET state='ready', ready_qa_review_id=$2, ready_attempt_id=$3, qa_result='passed', qa_approved_by=$4, qa_approved_at=$5, qa_note='release approval' WHERE id=$1`, assetID, readyReviewID, attemptID, reviewerID, readyApprovedAt); err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("same-transaction ready + QA review rejected: %v", err)
 	}
@@ -197,6 +139,24 @@ func TestEnterprisePromotionPostgres(t *testing.T) {
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE promotion_media_assets SET qa_note='rewritten snapshot' WHERE id=$1`, assetID); err == nil {
 		t.Fatal("ready asset QA snapshot was mutable without a current-transaction review")
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE promotion_media_assets SET object_key='promotion/source/replaced' WHERE id=$1`, assetID); err == nil {
+		t.Fatal("ready asset identity was mutable")
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE promotion_media_assets SET kind='audio' WHERE id=$1`, assetID); err == nil {
+		t.Fatal("ready asset kind was mutable")
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE promotion_media_processing_attempts SET output_sha256=$2 WHERE id=$1`, attemptID, strings.Repeat("c", 64)); err == nil {
+		t.Fatal("QA-bound processing attempt identity was mutable")
+	}
+	var snapshotReviewID, snapshotAttemptID, snapshotVersion int64
+	var snapshotSHA, snapshotNote string
+	var snapshotApprovedAt time.Time
+	if err := db.QueryRowContext(ctx, `SELECT ready_qa_review_id,ready_attempt_id,version,sha256,qa_note,qa_approved_at FROM promotion_media_assets WHERE id=$1`, assetID).Scan(&snapshotReviewID, &snapshotAttemptID, &snapshotVersion, &snapshotSHA, &snapshotNote, &snapshotApprovedAt); err != nil {
+		t.Fatal(err)
+	}
+	if snapshotReviewID != readyReviewID || snapshotAttemptID != attemptID || snapshotVersion != assetVersion || snapshotSHA != assetSHA || snapshotNote != "release approval" || !snapshotApprovedAt.Equal(readyApprovedAt) {
+		t.Fatal("ready asset QA snapshot does not exactly match approved content version")
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO promotion_media_processing_attempts(asset_id,attempt_number,state) VALUES ($1,1,'queued'),($1,1,'queued')`, assetID); err == nil {
 		t.Fatal("processing attempt uniqueness did not reject duplicate")
@@ -208,6 +168,19 @@ func TestEnterprisePromotionPostgres(t *testing.T) {
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO training_case_consent_links(consent_id,media_asset_id,subject_type,subject_id,use_scope,requirement_key) VALUES ($1,$2,'media_asset',$2,'public_playback','media-publication')`, consentID, assetID); err != nil {
 		t.Fatalf("media-only consent link rejected: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO training_case_consent_links(consent_id,media_asset_id,subject_type,subject_id,use_scope,requirement_key) VALUES ($1,$2,'person',99,'public_playback','wrong-type')`, consentID, assetID); err == nil {
+		t.Fatal("consent/link subject type mismatch accepted")
+	}
+	var testimonialConsentID, testimonialID int64
+	if err := db.QueryRowContext(ctx, `INSERT INTO publication_consents(subject_type,subject_reference,status) VALUES ('testimonial','quote-one','approved') RETURNING id`).Scan(&testimonialConsentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `INSERT INTO training_case_testimonials(case_id,quote,provenance,consent_id,position) VALUES ($1,'Quote','recording',$2,0) RETURNING id`, caseID, testimonialConsentID).Scan(&testimonialID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO training_case_consent_links(case_id,consent_id,testimonial_id,subject_type,subject_id,use_scope,requirement_key) VALUES ($1,$2,$3,'testimonial',$4,'public_quote','quote')`, caseID, testimonialConsentID, testimonialID, testimonialID+1); err == nil {
+		t.Fatal("testimonial consent link subject_id mismatch accepted")
 	}
 
 	var sessionID int64
@@ -223,6 +196,9 @@ func TestEnterprisePromotionPostgres(t *testing.T) {
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO promotion_events(session_id,event_type,page_path,idempotency_key) VALUES ($1,'page_view','/cases','global-event'),($2,'page_view','/cases','global-event')`, sessionID, secondSessionID); err == nil {
 		t.Fatal("event idempotency key was not globally unique")
+	}
+	if _, err := db.ExecContext(ctx, enterprisePromotionMigrationSQL(t)); err != nil {
+		t.Fatalf("idempotent forward migration with persisted QA/consent/event data: %v", err)
 	}
 
 	var gotSchema string
@@ -275,38 +251,9 @@ func TestEnterprisePromotionRollbackPostgres(t *testing.T) {
 
 func openEnterprisePromotionSchema(t *testing.T) (*sql.DB, string) {
 	t.Helper()
-	dsn := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
-	if dsn == "" {
-		t.Skip("TEST_DATABASE_URL is absent; PostgreSQL enterprise promotion tests skipped without connecting to any development database")
-	}
-	config, err := validateEnterprisePromotionTestDSN(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	adminDB := stdlib.OpenDB(*config)
+	database, schemaName := testdb.OpenEnvIsolatedSchema(t, "enterprise_promotion")
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	t.Cleanup(cancel)
-	if err := adminDB.PingContext(ctx); err != nil {
-		_ = adminDB.Close()
-		t.Fatalf("connect to isolated test database: %v", err)
-	}
-	schemaName := fmt.Sprintf("enterprise_promotion_%d", time.Now().UnixNano())
-	if _, err := adminDB.ExecContext(ctx, `CREATE SCHEMA `+schemaName); err != nil {
-		_ = adminDB.Close()
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = adminDB.Exec(`DROP SCHEMA IF EXISTS ` + schemaName + ` CASCADE`)
-		_ = adminDB.Close()
-	})
-
-	scoped := config.Copy()
-	if scoped.RuntimeParams == nil {
-		scoped.RuntimeParams = make(map[string]string)
-	}
-	scoped.RuntimeParams["search_path"] = schemaName + ",public"
-	database := stdlib.OpenDB(*scoped)
-	t.Cleanup(func() { _ = database.Close() })
+	defer cancel()
 	if _, err := database.ExecContext(ctx, `
 		CREATE TABLE users (
 			id BIGSERIAL PRIMARY KEY,
@@ -333,4 +280,137 @@ func enterprisePromotionMigrationSQL(t *testing.T) string {
 		t.Fatal("enterprise promotion migration section not found in schema.sql")
 	}
 	return schemaSQL[start:]
+}
+
+func assertEnterprisePromotionCatalog(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	columns := map[string][]string{
+		"promotion_media_assets":     {"version", "ready_qa_review_id", "ready_attempt_id", "object_key", "sha256", "byte_size", "source_asset_id", "probe_metadata", "derived_metadata"},
+		"promotion_media_qa_reviews": {"asset_version", "attempt_id", "output_sha256", "qa_result", "approved_by", "approved_at", "qa_note", "approval_txid"},
+		"training_cases":             {"business_challenges", "training_goals", "training_modules", "training_methods", "trainer_id", "version"},
+		"enterprise_solutions":       {"audiences", "problems", "goals", "modules", "delivery_methods", "recommended_participants", "recommended_duration", "customizable_items"},
+		"enterprise_trainers":        {"specialties", "credentials", "service_industries"},
+		"publication_consents":       {"channels", "usage_scopes", "evidence_asset_id", "reviewed_by", "reviewed_at", "revocation_reason"},
+		"enterprise_consultations":   {"request_idempotency_hash", "company_name_encrypted", "requirements_encrypted", "contact_name_encrypted", "phone_encrypted", "phone_lookup_hash", "wechat_encrypted", "note_encrypted"},
+	}
+	for table, names := range columns {
+		for _, name := range names {
+			var count int
+			if err := db.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 AND column_name=$2`, table, name).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != 1 {
+				t.Errorf("catalog missing %s.%s", table, name)
+			}
+		}
+	}
+	assertColumnCatalog(t, ctx, db, "promotion_media_assets", "version", "bigint", "NO", "1")
+	assertColumnCatalog(t, ctx, db, "promotion_media_qa_reviews", "asset_version", "bigint", "NO", "")
+	assertColumnCatalog(t, ctx, db, "promotion_media_qa_reviews", "attempt_id", "bigint", "NO", "")
+	assertColumnCatalog(t, ctx, db, "promotion_media_qa_reviews", "output_sha256", "text", "NO", "")
+	assertColumnCatalog(t, ctx, db, "enterprise_consultations", "phone_encrypted", "bytea", "NO", "")
+	assertColumnCatalog(t, ctx, db, "training_case_media", "id", "bigint", "NO", "nextval")
+
+	assertConstraintDefinitionContains(t, ctx, db, "promotion_media_assets", "qa_pending")
+	assertConstraintDefinitionContains(t, ctx, db, "promotion_media_assets", "FOREIGN KEY (ready_qa_review_id) REFERENCES promotion_media_qa_reviews(id) ON DELETE RESTRICT")
+	assertConstraintDefinitionContains(t, ctx, db, "promotion_media_assets", "FOREIGN KEY (ready_attempt_id) REFERENCES promotion_media_processing_attempts(id) ON DELETE RESTRICT")
+	assertConstraintDefinitionContains(t, ctx, db, "training_cases", "FOREIGN KEY (trainer_id) REFERENCES enterprise_trainers(id) ON DELETE RESTRICT")
+	assertConstraintDefinitionContains(t, ctx, db, "training_cases", "UNIQUE (slug)")
+	assertConstraintDefinitionContains(t, ctx, db, "training_case_media", "draft")
+	assertConstraintDefinitionContains(t, ctx, db, "training_case_media", "published")
+	assertConstraintDefinitionContains(t, ctx, db, "training_case_media", "offline")
+	assertConstraintDefinitionExcludes(t, ctx, db, "training_case_media", "review")
+	assertConstraintDefinitionContains(t, ctx, db, "training_case_consent_links", "FOREIGN KEY (consent_id, subject_type) REFERENCES publication_consents(id, subject_type)")
+	assertConstraintDefinitionContains(t, ctx, db, "training_case_consent_links", "testimonial_id = subject_id")
+
+	rows, err := db.QueryContext(ctx, `SELECT indexdef FROM pg_indexes WHERE schemaname=current_schema() AND tablename='promotion_events'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	uniqueIdempotency, sessionLookup := 0, false
+	for rows.Next() {
+		var definition string
+		if err := rows.Scan(&definition); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(definition, "UNIQUE") && strings.Contains(definition, "(idempotency_key)") {
+			uniqueIdempotency++
+		}
+		if !strings.Contains(definition, "UNIQUE") && strings.Contains(definition, "(session_id") {
+			sessionLookup = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if uniqueIdempotency != 1 || !sessionLookup {
+		t.Fatalf("promotion_events indexes: global idempotency unique=%d session lookup=%v", uniqueIdempotency, sessionLookup)
+	}
+}
+
+func assertColumnCatalog(t *testing.T, ctx context.Context, db *sql.DB, table, column, dataType, nullable, defaultFragment string) {
+	t.Helper()
+	var gotType, gotNullable string
+	var gotDefault sql.NullString
+	if err := db.QueryRowContext(ctx, `
+		SELECT data_type,is_nullable,column_default
+		FROM information_schema.columns
+		WHERE table_schema=current_schema() AND table_name=$1 AND column_name=$2
+	`, table, column).Scan(&gotType, &gotNullable, &gotDefault); err != nil {
+		t.Fatal(err)
+	}
+	if gotType != dataType || gotNullable != nullable {
+		t.Errorf("catalog %s.%s type=%q nullable=%q", table, column, gotType, gotNullable)
+	}
+	if defaultFragment != "" && (!gotDefault.Valid || !strings.Contains(gotDefault.String, defaultFragment)) {
+		t.Errorf("catalog %s.%s default=%q missing %q", table, column, gotDefault.String, defaultFragment)
+	}
+}
+
+func assertConstraintDefinitionContains(t *testing.T, ctx context.Context, db *sql.DB, table, fragment string) {
+	t.Helper()
+	definitions := constraintDefinitions(t, ctx, db, table)
+	for _, definition := range definitions {
+		if strings.Contains(definition, fragment) {
+			return
+		}
+	}
+	t.Errorf("catalog constraints for %s missing %q: %v", table, fragment, definitions)
+}
+
+func assertConstraintDefinitionExcludes(t *testing.T, ctx context.Context, db *sql.DB, table, fragment string) {
+	t.Helper()
+	for _, definition := range constraintDefinitions(t, ctx, db, table) {
+		if strings.Contains(definition, fragment) {
+			t.Errorf("catalog constraint for %s unexpectedly contains %q: %s", table, fragment, definition)
+		}
+	}
+}
+
+func constraintDefinitions(t *testing.T, ctx context.Context, db *sql.DB, table string) []string {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, `
+		SELECT pg_get_constraintdef(c.oid)
+		FROM pg_constraint c
+		JOIN pg_class r ON r.oid=c.conrelid
+		JOIN pg_namespace n ON n.oid=r.relnamespace
+		WHERE n.nspname=current_schema() AND r.relname=$1
+	`, table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var definitions []string
+	for rows.Next() {
+		var definition string
+		if err := rows.Scan(&definition); err != nil {
+			t.Fatal(err)
+		}
+		definitions = append(definitions, definition)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return definitions
 }
