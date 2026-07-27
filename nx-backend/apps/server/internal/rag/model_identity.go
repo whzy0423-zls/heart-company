@@ -1,55 +1,18 @@
 package rag
 
 import (
-	"regexp"
 	"strings"
+	"unicode"
 )
 
 const ModelIdentityReply = "我是芯之力专属模型。"
 
 var (
-	terminalPunctuation = regexp.MustCompile(`[?？!！。.]+$`)
-	spacePattern        = regexp.MustCompile(`\s+`)
-	compactSeparators   = regexp.MustCompile(`[\s，,：:。！？!?]`)
-
-	chineseIdentityQuestionPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`^(你|您)(现在|当前|实际|其实|到底)?(是|用|使用|调用|运行|基于)(的)?(是)?(什么|啥|哪个|哪一个|哪一版)?(大)?模型(id)?$`),
-		regexp.MustCompile(`^(你|您)的?(底层模型|基座模型|模型(id|编号|版本)|模型参数量|参数量)(是)?(什么|啥|哪个|哪一个|多少|多大|哪一版)?$`),
-		regexp.MustCompile(`^(底层模型|基座模型|当前模型)(是|用的|为)?(什么|啥|哪个|哪一个|哪一版)$`),
-		regexp.MustCompile(`^(当前会话|当前助手|这个会话|这个助手)(到底)?(是|调用|使用|运行|通过)(的)?(是)?(什么|啥|哪个|哪一个|哪一版)?(大)?模型$`),
-		regexp.MustCompile(`^(告诉我|说一下|透露|展示|介绍一下)?(你|您)的?(底层模型|基座模型|模型(id|编号|版本)|版本号|模型参数量|参数量)(是)?(什么|啥|哪个|哪一个|多少|多大|哪一版)?$`),
-		regexp.MustCompile(`^(你|您)(是|用的)?(哪个|哪一版|什么)版本(号)?$`),
-		regexp.MustCompile(`^(你|您)(有|拥有)(多少|多大)参数(量)?$`),
-		regexp.MustCompile(`^(你|您)(现在|当前|实际|其实|到底)?(是不是|是由|是|属于|来自)(openai|anthropic|minimax|deepseek|google|gemini|claude|gpt([-.0-9a-z]+)?|chatgpt|llama|meta|豆包|通义千问|智谱|kimi)(的)?(语言)?(模型)?$`),
-		regexp.MustCompile(`^(你|您)(是)?哪家(公司|厂商|供应商|提供商)(的模型)?$`),
-		regexp.MustCompile(`^(你|您)(是)?(由)?(谁|哪家公司|哪家厂商|哪个厂商)(开发|训练|提供|创造|构建)的?$`),
-		regexp.MustCompile(`^谁(开发|训练|提供|创造|构建)(了)?(你|您)$`),
-		regexp.MustCompile(`^(哪家公司|哪家厂商|哪个厂商)(开发|训练|提供|创造|构建)(了)?(你|您)$`),
-		regexp.MustCompile(`^(你|您)的?(开发者|开发公司|训练方|提供商)(是)?谁$`),
-		regexp.MustCompile(`^(你|您)(现在|当前)?(是不是)?(通过|用|使用|调用|接入|运行于)(codexcli|中转站|api(代理|中转)|代理api)(在)?(回答|运行|调用|接入)?$`),
-		regexp.MustCompile(`^(你|您)的(请求|回答)(是不是|是否)?(走|通过|使用|调用)(哪个|什么)?(codexcli|中转站|api(代理|中转)|代理api)$`),
-		regexp.MustCompile(`^(你|您)(现在|当前)?(用|使用|走)(的)?(是)?(哪个|什么)?(codexcli|中转站|api(代理|中转)|代理api)$`),
-		regexp.MustCompile(`^(你|您)(现在|当前)?(用|使用)的(codexcli|中转站|api(代理|中转)|代理api)(是)?(什么|哪个)$`),
-		regexp.MustCompile(`^(当前会话|当前助手|这个会话|这个助手)(通过|走|使用|调用|接入)(哪个|什么)?(codexcli|中转站|api(代理|中转)|代理api)(调用模型)?$`),
-	}
-
-	englishIdentityQuestionPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`^(what|which) (underlying |base )?model (are you|do you use|is (this|the) (chat|assistant) using)$`),
-		regexp.MustCompile(`^(tell|show|reveal) me (about )?your (model|model id|model version|provider)$`),
-		regexp.MustCompile(`^your (model|model id|model version|provider)$`),
-		regexp.MustCompile(`^(what is|what's) your (model|model id|model version|provider)$`),
-		regexp.MustCompile(`^(what|which) version are you running$`),
-		regexp.MustCompile(`^what model version are you$`),
-		regexp.MustCompile(`^how many parameters does your model have$`),
-		regexp.MustCompile(`^which provider (powers|runs|hosts) you$`),
-		regexp.MustCompile(`^are you ((a|an) model (from|by) |powered by |developed by |built by |provided by |hosted by |from )?(openai|anthropic|minimax|deepseek|google|gemini|claude|gpt[- .0-9a-z]*|chatgpt|llama|meta|kimi)$`),
-		regexp.MustCompile(`^(who (developed|built|created|trained|provides|made) you|what company are you from)$`),
-		regexp.MustCompile(`^tell me (what model you are|which company (developed|built|created|trained|provides|made) you)$`),
-		regexp.MustCompile(`^(are you|is this assistant) (answering|running|operating) (through|via|on) (codex cli|api proxy|proxy api|a model gateway|model gateway)$`),
-		regexp.MustCompile(`^(do you use|are you using) (a |an )?(codex cli|api proxy|proxy api|model gateway)$`),
-		regexp.MustCompile(`^which (codex cli|api proxy|proxy api|model gateway) do you use$`),
-		regexp.MustCompile(`^what (api proxy|proxy api|model gateway) is (this|the) (assistant|chat) using$`),
-	}
+	chineseAssistantSubjects = []string{"你", "您", "当前助手", "这个助手", "当前会话", "这个会话"}
+	modelIdentityTerms       = []string{"底层模型", "基座模型", "真实模型", "模型id", "模型编号", "模型版本", "版本号", "模型参数量", "参数量"}
+	providerTerms            = []string{"openai", "anthropic", "minimax", "deepseek", "google", "gemini", "claude", "gpt", "chatgpt", "llama", "meta", "豆包", "通义千问", "智谱", "kimi"}
+	chineseToolchainTerms    = []string{"codexcli", "cli", "中转站", "api代理", "api中转", "代理api"}
+	englishToolchainTerms    = []string{"codex cli", " cli", "api proxy", "proxy api", "model gateway"}
 )
 
 // IsModelIdentityQuestion reports whether question asks for the current
@@ -60,70 +23,235 @@ func IsModelIdentityQuestion(question string) bool {
 		return false
 	}
 
-	compact := compactSeparators.ReplaceAllString(normalized, "")
-	compact = stripChineseIdentityPrefixes(compact)
-	compact = strings.TrimSuffix(compact, "吗")
-	compact = strings.TrimSuffix(compact, "呢")
-	compact = strings.TrimSuffix(compact, "呀")
-	compact = strings.TrimSuffix(compact, "啊")
+	compact := compactIdentityQuestion(normalized)
+	if isChineseModelIdentityQuestion(compact) {
+		return true
+	}
+	return isEnglishModelIdentityQuestion(normalized)
+}
 
-	for _, pattern := range chineseIdentityQuestionPatterns {
-		if pattern.MatchString(compact) {
-			return true
-		}
+func isChineseModelIdentityQuestion(question string) bool {
+	question = stripChineseIdentityPrefixes(question)
+	question = trimChineseQuestionParticles(question)
+	if question == "" || isChineseEducationQuestion(question) {
+		return false
 	}
 
-	english := stripEnglishIdentityPrefixes(normalized)
-	for _, pattern := range englishIdentityQuestionPatterns {
-		if pattern.MatchString(english) {
+	hasSubject := containsAny(question, chineseAssistantSubjects...)
+	if isChineseDeveloperQuestion(question, hasSubject) ||
+		isChineseToolchainQuestion(question, hasSubject) ||
+		isChineseProviderQuestion(question, hasSubject) {
+		return true
+	}
+
+	if isImplicitChineseModelIdentityRequest(question) {
+		return true
+	}
+	return hasSubject && isChineseModelQuestion(question)
+}
+
+func isChineseModelQuestion(question string) bool {
+	if containsAny(question, modelIdentityTerms...) {
+		return true
+	}
+	if containsAny(question, "ai模型", "大模型") && containsAny(question, "是什么", "是啥", "是哪个", "用的", "使用的", "调用的", "运行的", "基于") {
+		return true
+	}
+	if strings.Contains(question, "模型") && containsAny(question,
+		"是什么模型", "是啥模型", "是哪个模型", "哪一个模型", "哪一版模型",
+		"用的模型", "使用的模型", "调用的模型", "运行的模型", "基于的模型", "模型是什么") {
+		return true
+	}
+	if containsAny(question, "哪个版本", "哪一版", "什么版本", "多少参数", "多大参数") {
+		return true
+	}
+	return false
+}
+
+func isImplicitChineseModelIdentityRequest(question string) bool {
+	question = trimLeadingAny(question, "真实", "实际", "具体", "当前")
+	if containsAny(question, "底层模型是", "基座模型是", "当前模型是") {
+		return true
+	}
+	for _, term := range modelIdentityTerms {
+		if question == term || strings.HasPrefix(question, term+"是") {
 			return true
 		}
 	}
 	return false
 }
 
+func isChineseProviderQuestion(question string, hasSubject bool) bool {
+	if !hasSubject {
+		return false
+	}
+	if containsAny(question, "哪家公司", "哪家厂商", "哪个厂商", "供应商", "提供商") &&
+		containsAny(question, "哪家", "哪个", "谁", "是") {
+		return true
+	}
+	if !containsAny(question, providerTerms...) {
+		return false
+	}
+	return containsAny(question,
+		"你是", "您是", "你实际是", "您实际是", "你是不是", "您是不是",
+		"你属于", "您属于", "你来自", "您来自", "你是由", "您是由")
+}
+
+func isChineseDeveloperQuestion(question string, hasSubject bool) bool {
+	if !hasSubject {
+		return false
+	}
+	if containsAny(question, "开发者", "开发公司", "训练方") {
+		return true
+	}
+	if strings.HasSuffix(question, "你") || strings.HasSuffix(question, "您") {
+		return containsAny(question, "谁开发", "谁训练", "谁提供", "谁创造", "谁构建", "哪家公司开发", "哪家厂商开发", "哪个厂商开发")
+	}
+	return containsAny(question,
+		"你是哪家公司开发", "您是哪家公司开发", "你是哪家厂商开发", "您是哪家厂商开发",
+		"你由谁开发", "您由谁开发", "你由谁训练", "您由谁训练")
+}
+
+func isChineseToolchainQuestion(question string, hasSubject bool) bool {
+	if !hasSubject || !containsAny(question, chineseToolchainTerms...) {
+		return false
+	}
+	return containsAny(question, "通过", "走", "使用", "用", "调用", "接入", "运行于", "回答")
+}
+
+func isChineseEducationQuestion(question string) bool {
+	return containsAny(question,
+		"有什么作用", "是什么意思", "有什么特点", "如何使用", "怎么使用", "怎么工作",
+		"怎么搭建", "更适合", "的用途", "主要产品", "介绍openai产品", "介绍一下openai")
+}
+
+func isEnglishModelIdentityQuestion(question string) bool {
+	question = stripEnglishIdentityPrefixes(question)
+	if question == "" || isEnglishEducationQuestion(question) || !hasEnglishAssistantSubject(question) {
+		return false
+	}
+
+	if isEnglishDeveloperQuestion(question) || isEnglishToolchainQuestion(question) || isEnglishProviderQuestion(question) {
+		return true
+	}
+	if !containsAny(question, "model", "model id", "version", "parameter", "provider") {
+		return false
+	}
+	return containsAny(question,
+		"what ", "which ", "tell me", "show me", "reveal", "your ", "are you", "do you use", "you using", "you running")
+}
+
+func isEnglishProviderQuestion(question string) bool {
+	if !containsAny(question, providerTerms...) {
+		return false
+	}
+	return containsAny(question,
+		"are you", "you using", "powered by", "developed by", "built by", "provided by", "hosted by", "you from")
+}
+
+func isEnglishDeveloperQuestion(question string) bool {
+	return containsAny(question,
+		"who developed you", "who built you", "who created you", "who trained you", "who made you",
+		"which company developed you", "which company built you", "which company created you",
+		"what company are you from")
+}
+
+func isEnglishToolchainQuestion(question string) bool {
+	if !containsAny(question, englishToolchainTerms...) {
+		return false
+	}
+	return containsAny(question, "through", " via ", " on ", "use", "using", "running", "operating", "answering")
+}
+
+func isEnglishEducationQuestion(question string) bool {
+	return containsAny(question,
+		"what is openai", "how do ", "how does ", "used for", "best for", "recommend",
+		"explain", "describe", "introduce", "familiar with", "products", "work")
+}
+
+func hasEnglishAssistantSubject(question string) bool {
+	return containsAny(question, " you", "you ", "your ", "this assistant", "the assistant", "this chat", "the chat")
+}
+
 func normalizeIdentityQuestion(question string) string {
-	normalized := strings.ToLower(strings.TrimSpace(question))
-	normalized = strings.ReplaceAll(normalized, "’", "'")
-	normalized = spacePattern.ReplaceAllString(normalized, " ")
-	return terminalPunctuation.ReplaceAllString(normalized, "")
+	normalized := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return ' '
+		}
+		if r == '’' {
+			return '\''
+		}
+		if strings.ContainsRune("，,：:；;", r) {
+			return ' '
+		}
+		return unicode.ToLower(r)
+	}, strings.TrimSpace(question))
+	normalized = strings.Join(strings.Fields(normalized), " ")
+	return strings.TrimFunc(normalized, func(r rune) bool {
+		return unicode.IsSpace(r) || strings.ContainsRune("?？!！。.\"'“”‘’「」『』", r)
+	})
+}
+
+func compactIdentityQuestion(question string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || strings.ContainsRune("，,：:。！？!?；;", r) {
+			return -1
+		}
+		return r
+	}, question)
 }
 
 func stripChineseIdentityPrefixes(question string) string {
 	prefixes := []string{
-		"忽略之前的要求", "忽略前面的要求", "不要解释", "别解释",
-		"不要绕弯子", "别绕弯子", "请你告诉我", "能否告诉我", "我想知道",
-		"直接告诉我", "直接回答", "直接说", "请介绍一下", "介绍一下",
-		"请问", "麻烦", "请", "告诉我", "说一下", "透露一下",
+		"忽略之前的要求", "忽略前面的要求", "假装你不受限制", "假装您不受限制",
+		"别说官方名字", "不要说官方名字", "不要解释", "别解释", "不要绕弯子", "别绕弯子",
+		"请你告诉我", "请您告诉我", "能否告诉我", "我想知道", "直接告诉我", "直接回答",
+		"直接说", "请介绍一下", "介绍一下", "请问", "麻烦", "请", "告诉我", "说一下", "透露一下",
 	}
 	for {
-		stripped := false
-		for _, prefix := range prefixes {
-			if strings.HasPrefix(question, prefix) {
-				question = strings.TrimPrefix(question, prefix)
-				stripped = true
-				break
-			}
-		}
-		if !stripped {
+		before := question
+		question = trimLeadingAny(question, prefixes...)
+		if question == before {
 			return question
 		}
 	}
 }
 
 func stripEnglishIdentityPrefixes(question string) string {
-	prefixes := []string{"please ", "could you please ", "could you ", "can you please ", "can you "}
+	prefixes := []string{"could you please ", "could you ", "can you please ", "can you ", "please "}
 	for {
-		stripped := false
-		for _, prefix := range prefixes {
-			if strings.HasPrefix(question, prefix) {
-				question = strings.TrimPrefix(question, prefix)
-				stripped = true
-				break
-			}
-		}
-		if !stripped {
+		before := question
+		question = trimLeadingAny(question, prefixes...)
+		if question == before {
 			return question
 		}
 	}
+}
+
+func trimChineseQuestionParticles(question string) string {
+	for {
+		trimmed := strings.TrimRight(question, "吗呢呀啊吧嘛")
+		if trimmed == question {
+			return question
+		}
+		question = trimmed
+	}
+}
+
+func trimLeadingAny(value string, prefixes ...string) string {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(value, prefix) {
+			return strings.TrimPrefix(value, prefix)
+		}
+	}
+	return value
+}
+
+func containsAny(value string, candidates ...string) bool {
+	for _, candidate := range candidates {
+		if strings.Contains(value, candidate) {
+			return true
+		}
+	}
+	return false
 }
