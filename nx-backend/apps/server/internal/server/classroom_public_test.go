@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -69,6 +70,7 @@ type fakeClassroomPublicService struct {
 	playUserID, playContentID int64
 	playCalls                 int
 	viewerAware               bool
+	listErr, getErr, playErr  error
 }
 type fakeClassroomSigner struct{ key string }
 
@@ -77,7 +79,7 @@ func (f fakeClassroomSigner) PresignGetURL(context.Context, string, time.Duratio
 }
 
 func (f *fakeClassroomPublicService) ListSeries(context.Context, classroomPublicQuery, int64) ([]classroomPublicSeries, int, error) {
-	return f.series, len(f.series), nil
+	return f.series, len(f.series), f.listErr
 }
 func (f *fakeClassroomPublicService) ListStandalone(_ context.Context, _ classroomPublicQuery, userID int64) ([]classroomPublicContent, int, error) {
 	v := f.content
@@ -89,19 +91,22 @@ func (f *fakeClassroomPublicService) ListStandalone(_ context.Context, _ classro
 			v.PurchaseState = "purchase_required"
 		}
 	}
-	return []classroomPublicContent{v}, 1, nil
+	return []classroomPublicContent{v}, 1, f.listErr
 }
 func (f *fakeClassroomPublicService) GetSeries(context.Context, int64, int64) (classroomPublicSeriesDetail, error) {
+	if f.getErr != nil {
+		return classroomPublicSeriesDetail{}, f.getErr
+	}
 	return classroomPublicSeriesDetail{Series: f.series[0], Contents: []classroomPublicContent{f.content}}, nil
 }
 func (f *fakeClassroomPublicService) GetContent(context.Context, int64, int64) (classroomPublicContent, error) {
-	return f.content, nil
+	return f.content, f.getErr
 }
 
 func (f *fakeClassroomPublicService) Playback(_ context.Context, userID, contentID int64) (classroomPlaybackSource, error) {
 	f.playUserID, f.playContentID = userID, contentID
 	f.playCalls++
-	return f.play, nil
+	return f.play, f.playErr
 }
 
 func TestClassroomPublicRoutesExposeSafePaidCardsAndCacheIsolation(t *testing.T) {
@@ -351,10 +356,9 @@ func TestClassroomPlaybackRejectsParentHardBlock(t *testing.T) {
 
 func TestClassroomPublicContentMergesParentAccessPriceAndHardBlock(t *testing.T) {
 	sid := int64(2)
-	d := &classroomPublicDB{}
 	c := classroom.Content{ID: 3, SeriesID: &sid, AccessLevel: classroom.AccessInherit, ContentType: classroom.ContentVideo}
 	p := &classroom.Series{ID: sid, AccessLevel: classroom.AccessPublic, PriceCents: 0, PlaybackBlocked: true}
-	v := d.contentViewReady(context.Background(), c, 0, p)
+	v := contentViewResolved(c, p, classroom.AccessPublic, true)
 	if v.EffectiveAccess != classroom.AccessPublic || v.CanPlay || !v.PlaybackBlocked {
 		t.Fatalf("view=%+v", v)
 	}
@@ -364,6 +368,15 @@ func playbackDB(t *testing.T, access classroom.AccessLevel) *sql.DB {
 	t.Helper()
 	return openClassroomTestDB(t, func(q string, args []driver.NamedValue) (driver.Rows, error) {
 		now := time.Now()
+		if strings.Contains(q, "JOIN classroom_media_assets m") {
+			return &classroomRows{cols: make([]string, 21), values: [][]driver.Value{{int64(7), nil, false, "Lesson", "video", "published", false, string(access), int64(0), int64(3), int64(3), "bucket", "private/media.mp4", "media-v1", "video", "ready", nil, nil, nil, nil, nil}}}, nil
+		}
+		if strings.Contains(q, "SELECT member_level,member_expires_at") {
+			return &classroomRows{cols: []string{"level", "expires"}, values: [][]driver.Value{{int64(0), nil}}}, nil
+		}
+		if strings.Contains(q, "SELECT series_id,content_id FROM classroom_entitlements") {
+			return &classroomRows{cols: []string{"series_id", "content_id"}}, nil
+		}
 		if strings.Contains(q, "FROM classroom_contents WHERE id") {
 			if len(args) != 1 || args[0].Value != int64(7) {
 				t.Fatalf("content args=%v", args)
@@ -432,6 +445,12 @@ func TestClassroomPublicSeriesOfflineHiddenStandaloneVisibleAndPurchasedPlayback
 	now := time.Now()
 	db := openClassroomTestDB(t, func(q string, args []driver.NamedValue) (driver.Rows, error) {
 		switch {
+		case strings.Contains(q, "WHERE c.id=$1 AND m.storage_status=$2"):
+			return &classroomRows{cols: make([]string, 21), values: [][]driver.Value{{int64(7), int64(2), true, "Standalone", "video", "published", false, "inherit", int64(0), int64(3), int64(3), "bucket", "private/media.mp4", "v1", "video", "ready", int64(2), "offline", false, "paid", int64(9900)}}}, nil
+		case strings.Contains(q, "SELECT member_level,member_expires_at"):
+			return &classroomRows{cols: []string{"level", "expires"}, values: [][]driver.Value{{int64(0), nil}}}, nil
+		case strings.Contains(q, "SELECT series_id,content_id FROM classroom_entitlements"):
+			return &classroomRows{cols: []string{"series_id", "content_id"}, values: [][]driver.Value{{int64(2), nil}}}, nil
 		case strings.Contains(q, "SELECT count(*) FROM classroom_series s"):
 			return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{int64(0)}}}, nil
 		case strings.Contains(q, "SELECT s.id,s.title"):
@@ -478,6 +497,12 @@ func TestClassroomPlaybackContentOfflinePurchasedPlaybackIsRetained(t *testing.T
 	now := time.Now()
 	db := openClassroomTestDB(t, func(q string, args []driver.NamedValue) (driver.Rows, error) {
 		switch {
+		case strings.Contains(q, "WHERE c.id=$1 AND m.storage_status=$2"):
+			return &classroomRows{cols: make([]string, 21), values: [][]driver.Value{{int64(7), nil, false, "Offline", "audio", "offline", false, "paid", int64(1900), int64(3), int64(3), "bucket", "private/media.m4a", "v1", "audio", "ready", nil, nil, nil, nil, nil}}}, nil
+		case strings.Contains(q, "SELECT member_level,member_expires_at"):
+			return &classroomRows{cols: []string{"level", "expires"}, values: [][]driver.Value{{int64(0), nil}}}, nil
+		case strings.Contains(q, "SELECT series_id,content_id FROM classroom_entitlements"):
+			return &classroomRows{cols: []string{"series_id", "content_id"}, values: [][]driver.Value{{nil, int64(7)}}}, nil
 		case strings.Contains(q, "FROM classroom_contents WHERE id"):
 			return &classroomRows{cols: make([]string, 25), values: [][]driver.Value{{int64(7), nil, false, "Offline", "desc", "audio", int64(3), "cover", int64(60), "teacher", "Teacher", nil, "", []byte(`[]`), int64(0), int64(0), "offline", false, "paid", int64(1900), now, nil, nil, now, now}}}, nil
 		case strings.Contains(q, "FROM classroom_media_assets WHERE id"):
@@ -513,5 +538,134 @@ func TestClassroomPublicAnonymousAndJWTMetadataAreIsolatedByVaryAndETag(t *testi
 	s.mux.ServeHTTP(logged, req)
 	if anon.Header().Get("Vary") != "Authorization" || logged.Header().Get("Vary") != "Authorization" || anon.Header().Get("ETag") == logged.Header().Get("ETag") || !strings.Contains(anon.Body.String(), `"canPlay":false`) || !strings.Contains(logged.Body.String(), `"canPlay":true`) {
 		t.Fatalf("anon headers=%v body=%s logged headers=%v body=%s", anon.Header(), anon.Body.String(), logged.Header(), logged.Body.String())
+	}
+}
+
+func TestClassroomPublicListQueryCountIsConstantForAuthenticatedViewer(t *testing.T) {
+	var queries atomic.Int64
+	db := openClassroomTestDB(t, func(q string, args []driver.NamedValue) (driver.Rows, error) {
+		queries.Add(1)
+		switch {
+		case strings.Contains(q, "SELECT count(*) FROM classroom_series"):
+			return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{int64(1)}}}, nil
+		case strings.Contains(q, "SELECT s.id,s.title"):
+			return &classroomRows{cols: make([]string, 8), values: [][]driver.Value{{int64(1), "S", "summary", "cover", "Teacher", "public", int64(0), false}}}, nil
+		case strings.Contains(q, "SELECT member_level,member_expires_at"):
+			return &classroomRows{cols: []string{"level", "expires"}, values: [][]driver.Value{{int64(1), nil}}}, nil
+		case strings.Contains(q, "SELECT series_id,content_id FROM classroom_entitlements"):
+			return &classroomRows{cols: []string{"series", "content"}}, nil
+		default:
+			return nil, fmt.Errorf("unexpected query %s", q)
+		}
+	})
+	items, total, err := newClassroomPublicDB(db).ListSeries(context.Background(), classroomPublicQuery{Limit: 20}, 42)
+	if err != nil || len(items) != 1 || total != 1 || queries.Load() != 4 {
+		t.Fatalf("items=%+v total=%d queries=%d err=%v", items, total, queries.Load(), err)
+	}
+}
+
+func TestClassroomPublicCacheMergesOuterCORSVary(t *testing.T) {
+	f := &fakeClassroomPublicService{content: classroomPublicContent{ID: 1, Title: "x"}}
+	s := &Server{classroomPublic: f, mux: http.NewServeMux(), env: config.Env{CORSAllowedOrigins: []string{"https://mini.example"}}}
+	registerClassroomPublicRoutes(s.mux, s)
+	req := httptest.NewRequest(http.MethodGet, "/api/public/classroom/standalone", nil)
+	req.Header.Set("Origin", "https://mini.example")
+	rr := httptest.NewRecorder()
+	s.ServeHTTP(rr, req)
+	vary := strings.Join(rr.Header().Values("Vary"), ",")
+	if rr.Code != 200 || !strings.Contains(vary, "Origin") || !strings.Contains(vary, "Authorization") {
+		t.Fatalf("status=%d vary=%q headers=%v", rr.Code, vary, rr.Header())
+	}
+}
+
+func TestClassroomPublicAnonymousRateLimitCannotBeBypassedByDeviceRotation(t *testing.T) {
+	f := &fakeClassroomPublicService{content: classroomPublicContent{ID: 5, EffectiveAccess: classroom.AccessPublic, CanPlay: true}, play: classroomPlaybackSource{Content: classroom.Content{ID: 5}, Media: classroom.MediaAsset{ETag: "v1"}}}
+	s := &Server{classroomPublic: f, mux: http.NewServeMux(), classroomPlaybackIPLimiter: newBoundedStrRateLimiter(1, time.Minute, 10), classroomPlaybackLimiter: newBoundedStrRateLimiter(10, time.Minute, 10), env: config.Env{JWTSecret: "secret"}}
+	registerClassroomPublicRoutes(s.mux, s)
+	for i, device := range []string{" Device-A ", "device-b"} {
+		req := httptest.NewRequest(http.MethodPost, "/api/public/classroom/content/5/ticket", nil)
+		req.Header.Set("X-Device-ID", device)
+		rr := httptest.NewRecorder()
+		s.mux.ServeHTTP(rr, req)
+		want := 200
+		if i == 1 {
+			want = 429
+		}
+		if rr.Code != want {
+			t.Fatalf("request %d status=%d body=%s", i, rr.Code, rr.Body.String())
+		}
+	}
+	if normalizedClassroomDevice(" Device-A ") != normalizedClassroomDevice("device-a") || len(normalizedClassroomDevice(strings.Repeat("x", 500))) != 24 {
+		t.Fatal("device normalization/hash")
+	}
+}
+
+func TestBoundedStringRateLimiterCapsHighCardinalityKeys(t *testing.T) {
+	now := time.Now()
+	l := newBoundedStrRateLimiter(1, time.Minute, 2)
+	if !l.Allow("a", now) || !l.Allow("b", now) || l.Allow("c", now) {
+		t.Fatal("capacity contract")
+	}
+	if !l.Allow("c", now.Add(time.Minute)) {
+		t.Fatal("expired keys should be pruned")
+	}
+}
+
+func TestClassroomPublicRejectsInvalidParametersAndStrictJSON(t *testing.T) {
+	f := &fakeClassroomPublicService{content: classroomPublicContent{ID: 5, EffectiveAccess: classroom.AccessPublic, CanPlay: true}, play: classroomPlaybackSource{Content: classroom.Content{ID: 5}, Media: classroom.MediaAsset{ETag: "v1"}}}
+	s := &Server{classroomPublic: f, mux: http.NewServeMux(), env: config.Env{JWTSecret: "secret"}}
+	registerClassroomPublicRoutes(s.mux, s)
+	cases := []struct{ method, path, body string }{{"GET", "/api/public/classroom/series?offset=10001", ""}, {"GET", "/api/public/classroom/standalone?limit=nope", ""}, {"GET", "/api/public/classroom/content/not-an-id", ""}, {"POST", "/api/public/classroom/content/5/ticket", `{"unknown":1}`}, {"POST", "/api/miniapp/classroom/content/5/play", `{"ticket":"x"} trailing`}, {"POST", "/api/miniapp/classroom/content/5/play", `{"unknown":"x"}`}}
+	for _, tc := range cases {
+		rr := httptest.NewRecorder()
+		s.mux.ServeHTTP(rr, httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body)))
+		if rr.Code != 400 {
+			t.Errorf("%s status=%d body=%s", tc.path, rr.Code, rr.Body.String())
+		}
+	}
+	huge := httptest.NewRecorder()
+	s.mux.ServeHTTP(huge, httptest.NewRequest(http.MethodPost, "/api/public/classroom/content/5/ticket", strings.NewReader(`{"padding":"`+strings.Repeat("x", 5000)+`"}`)))
+	if huge.Code != 400 {
+		t.Fatalf("oversize status=%d", huge.Code)
+	}
+}
+
+func TestClassroomPublicInternalErrorsAreGeneric(t *testing.T) {
+	secret := errors.New("pq: password=super-secret host=internal")
+	f := &fakeClassroomPublicService{listErr: secret, getErr: secret, playErr: secret}
+	s := &Server{classroomPublic: f, mux: http.NewServeMux(), env: config.Env{JWTSecret: "secret"}}
+	registerClassroomPublicRoutes(s.mux, s)
+	for _, tc := range []struct{ method, path string }{{"GET", "/api/public/classroom/series"}, {"GET", "/api/public/classroom/content/5"}, {"POST", "/api/miniapp/classroom/content/5/play"}} {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		if tc.method == "POST" {
+			token, _ := auth.Sign(auth.UserInfo{ID: 1, Roles: []string{miniappRole}, TokenKind: auth.TokenKindMiniapp}, "secret")
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		s.mux.ServeHTTP(rr, req)
+		if rr.Code != 500 || strings.Contains(rr.Body.String(), "super-secret") || !strings.Contains(rr.Body.String(), "Internal Server Error") {
+			t.Errorf("%s status=%d body=%s", tc.path, rr.Code, rr.Body.String())
+		}
+	}
+}
+
+func TestClassroomPlaybackAuthorizationUsesConstantThreeQueries(t *testing.T) {
+	var queries atomic.Int64
+	db := openClassroomTestDB(t, func(q string, args []driver.NamedValue) (driver.Rows, error) {
+		queries.Add(1)
+		switch {
+		case strings.Contains(q, "WHERE c.id=$1 AND m.storage_status=$2"):
+			return &classroomRows{cols: make([]string, 21), values: [][]driver.Value{{int64(7), nil, false, "Lesson", "audio", "published", false, "login", int64(0), int64(3), int64(3), "bucket", "private/a.m4a", "v1", "audio", "ready", nil, nil, nil, nil, nil}}}, nil
+		case strings.Contains(q, "SELECT member_level,member_expires_at"):
+			return &classroomRows{cols: []string{"level", "expires"}, values: [][]driver.Value{{int64(0), nil}}}, nil
+		case strings.Contains(q, "SELECT series_id,content_id FROM classroom_entitlements"):
+			return &classroomRows{cols: []string{"series", "content"}}, nil
+		default:
+			return nil, fmt.Errorf("unexpected query %s", q)
+		}
+	})
+	_, err := newClassroomPublicDB(db).Playback(context.Background(), 42, 7)
+	if err != nil || queries.Load() != 3 {
+		t.Fatalf("queries=%d err=%v", queries.Load(), err)
 	}
 }

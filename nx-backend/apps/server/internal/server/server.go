@@ -64,61 +64,62 @@ import (
 )
 
 type Server struct {
-	env                      config.Env
-	mux                      *http.ServeMux
-	db                       *sql.DB
-	system                   *system.Store
-	analytics                *analytics.Store
-	auditLogs                *auditlog.Store
-	builder                  *siteconfig.Builder
-	engagement               *engagement.Store
-	signups                  *signup.Store
-	signupService            websiteSignupCreator
-	uploads                  *uploadasset.Store
-	appReleases              appReleaseService
-	voiceAssetCreate         func(context.Context, uploadasset.CreateInput) (uploadasset.Asset, error)
-	voiceAssetFind           func(context.Context, int64) (uploadasset.Asset, error)
-	uploader                 storage.ObjectUploader
-	voices                   *voice.Store
-	videos                   *video.Store
-	videoAnalysis            *videoanalysis.Store
-	videoAssets              *videoasset.Store
-	storyboards              *videostoryboard.Store
-	images                   *image.Store
-	miniapp                  *miniapp.Store
-	miniappService           miniappUserUpserter
-	miniappTestService       miniappTestRecorder
-	miniappBookingService    miniappBookingCreator
-	miniappAdmin             miniappAdminReader
-	wx                       *wechat.Client
-	pay                      *wxpay.Client
-	payNotifyParser          func(http.Header, []byte) (wxpay.CallbackResult, error)
-	ragGen                   rag.Generator
-	analysisGen              *llm.MiniMaxGenerator
-	ragDocs                  ragDocumentStore
-	ragVec                   *ragstore.Store
-	embedder                 *embedding.Client
-	ragCache                 *miniappRAGCache
-	articles                 *articlestore.Store
-	mindquotes               *mindquote.Store
-	quiz                     *quiz.Store
-	appDailyQuiz             appDailyQuizService
-	appReassessment          appReassessmentService
-	appDailyQuizReminders    appDailyQuizReminderService
-	appDailyQuizPushAdmin    appDailyQuizPushAdminService
-	appDailyQuizBankAdmin    appDailyQuizBankAdminService
-	chatLimiter              *fixedWindowRateLimiter
-	chatTimeout              time.Duration
-	chatHeartbeatInterval    time.Duration
-	classroomUploads         classroomUploadHandlerService
-	classroomAdmin           classroomAdminService
-	classroomPublic          classroomPublicService
-	classroomPlaybackSigner  storage.ObjectSigner
-	classroomPlaybackLimiter *strRateLimiter
-	now                      func() time.Time
-	classroomAudit           classroomAuditRecorder
-	classroomMaintenance     classroomUploadMaintenance
-	maintenanceCancel        context.CancelFunc
+	env                        config.Env
+	mux                        *http.ServeMux
+	db                         *sql.DB
+	system                     *system.Store
+	analytics                  *analytics.Store
+	auditLogs                  *auditlog.Store
+	builder                    *siteconfig.Builder
+	engagement                 *engagement.Store
+	signups                    *signup.Store
+	signupService              websiteSignupCreator
+	uploads                    *uploadasset.Store
+	appReleases                appReleaseService
+	voiceAssetCreate           func(context.Context, uploadasset.CreateInput) (uploadasset.Asset, error)
+	voiceAssetFind             func(context.Context, int64) (uploadasset.Asset, error)
+	uploader                   storage.ObjectUploader
+	voices                     *voice.Store
+	videos                     *video.Store
+	videoAnalysis              *videoanalysis.Store
+	videoAssets                *videoasset.Store
+	storyboards                *videostoryboard.Store
+	images                     *image.Store
+	miniapp                    *miniapp.Store
+	miniappService             miniappUserUpserter
+	miniappTestService         miniappTestRecorder
+	miniappBookingService      miniappBookingCreator
+	miniappAdmin               miniappAdminReader
+	wx                         *wechat.Client
+	pay                        *wxpay.Client
+	payNotifyParser            func(http.Header, []byte) (wxpay.CallbackResult, error)
+	ragGen                     rag.Generator
+	analysisGen                *llm.MiniMaxGenerator
+	ragDocs                    ragDocumentStore
+	ragVec                     *ragstore.Store
+	embedder                   *embedding.Client
+	ragCache                   *miniappRAGCache
+	articles                   *articlestore.Store
+	mindquotes                 *mindquote.Store
+	quiz                       *quiz.Store
+	appDailyQuiz               appDailyQuizService
+	appReassessment            appReassessmentService
+	appDailyQuizReminders      appDailyQuizReminderService
+	appDailyQuizPushAdmin      appDailyQuizPushAdminService
+	appDailyQuizBankAdmin      appDailyQuizBankAdminService
+	chatLimiter                *fixedWindowRateLimiter
+	chatTimeout                time.Duration
+	chatHeartbeatInterval      time.Duration
+	classroomUploads           classroomUploadHandlerService
+	classroomAdmin             classroomAdminService
+	classroomPublic            classroomPublicService
+	classroomPlaybackSigner    storage.ObjectSigner
+	classroomPlaybackLimiter   *strRateLimiter
+	classroomPlaybackIPLimiter *strRateLimiter
+	now                        func() time.Time
+	classroomAudit             classroomAuditRecorder
+	classroomMaintenance       classroomUploadMaintenance
+	maintenanceCancel          context.CancelFunc
 
 	appUsers                       *appuser.Store
 	appChat                        appChatStore
@@ -203,6 +204,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	}
 	if database != nil {
 		s.classroomPlaybackLimiter = newStrRateLimiter(30, time.Minute)
+		s.classroomPlaybackIPLimiter = newBoundedStrRateLimiter(120, time.Minute, 20_000)
 		files, fileErr := apprelease.NewFileStore(filepath.Join(env.UploadDir, "app-releases"), apprelease.MaxAPKBytes)
 		if fileErr != nil {
 			panic("app release file store: " + fileErr.Error())
