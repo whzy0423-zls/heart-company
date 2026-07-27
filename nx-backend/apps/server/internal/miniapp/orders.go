@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -28,6 +29,13 @@ type PaymentOrderSnapshot struct {
 	Product    string
 	Status     string
 }
+
+const (
+	ProductReport           = "report"
+	ProductMember           = "member"
+	ProductClassroomSeries  = "classroom_series"
+	ProductClassroomContent = "classroom_content"
+)
 
 var (
 	ErrOrderNotPayable        = errors.New("miniapp: order is not payable")
@@ -221,7 +229,7 @@ func (s *Store) MarkOrderPaid(ctx context.Context, outTradeNo, transactionID str
 	}
 
 	switch product {
-	case "report":
+	case ProductReport:
 		if refID > 0 {
 			if _, err := tx.ExecContext(c,
 				`INSERT INTO report_unlocks (wx_user_id, test_record_id, order_id)
@@ -231,7 +239,7 @@ func (s *Store) MarkOrderPaid(ctx context.Context, outTradeNo, transactionID str
 				return false, err
 			}
 		}
-	case "member":
+	case ProductMember:
 		// ref_id stores the purchased membership duration in days. Requiring an
 		// explicit positive duration prevents new periodic memberships from
 		// accidentally becoming lifetime memberships.
@@ -254,9 +262,107 @@ func (s *Store) MarkOrderPaid(ctx context.Context, outTradeNo, transactionID str
 		); err != nil {
 			return false, err
 		}
+	case ProductClassroomSeries:
+		if refID <= 0 {
+			return false, errors.New("classroom series order missing target")
+		}
+		if _, err := tx.ExecContext(c,
+			`INSERT INTO classroom_entitlements (wx_user_id,series_id,order_id,source)
+			 VALUES ($1,$2,$3,'purchase') ON CONFLICT (order_id) WHERE order_id IS NOT NULL DO NOTHING`,
+			wxUserID, refID, orderID,
+		); err != nil {
+			return false, err
+		}
+	case ProductClassroomContent:
+		if refID <= 0 {
+			return false, errors.New("classroom content order missing target")
+		}
+		if _, err := tx.ExecContext(c,
+			`INSERT INTO classroom_entitlements (wx_user_id,content_id,order_id,source)
+			 VALUES ($1,$2,$3,'purchase') ON CONFLICT (order_id) WHERE order_id IS NOT NULL DO NOTHING`,
+			wxUserID, refID, orderID,
+		); err != nil {
+			return false, err
+		}
+	default:
+		return false, fmt.Errorf("unsupported payment product: %s", product)
 	}
 
 	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// LatestOrderForTarget returns the most recent immutable order snapshot for a
+// classroom target owned by the user.
+func (s *Store) LatestOrderForTarget(ctx context.Context, userID int64, product string, refID int64) (Order, error) {
+	c, cancel := s.ctx(ctx)
+	defer cancel()
+	var order Order
+	var id int64
+	var createTime time.Time
+	err := s.db.QueryRowContext(c,
+		`SELECT id,out_trade_no,product,ref_id::text,title,amount,status,transaction_id,create_time
+		 FROM orders WHERE wx_user_id=$1 AND product=$2 AND ref_id=$3
+		 ORDER BY create_time DESC,id DESC LIMIT 1`, userID, product, refID,
+	).Scan(&id, &order.OutTradeNo, &order.Product, &order.RefID, &order.Title, &order.Amount, &order.Status, &order.TransactionID, &createTime)
+	if err != nil {
+		return Order{}, err
+	}
+	order.ID = strconv.FormatInt(id, 10)
+	order.CreateTime = fmtTime(createTime)
+	return order, nil
+}
+
+// RefundClassroomOrder atomically marks one paid classroom order refunded,
+// revokes only the entitlement issued by that order, and writes an audit row.
+func (s *Store) RefundClassroomOrder(ctx context.Context, outTradeNo, reason string) (bool, error) {
+	c, cancel := s.ctx(ctx)
+	defer cancel()
+	tx, err := s.db.BeginTx(c, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var orderID, wxUserID, refID int64
+	var product, status string
+	err = tx.QueryRowContext(c,
+		`SELECT id,wx_user_id,ref_id,product,status FROM orders WHERE out_trade_no=$1 FOR UPDATE`, outTradeNo,
+	).Scan(&orderID, &wxUserID, &refID, &product, &status)
+	if err != nil {
+		return false, err
+	}
+	if product != ProductClassroomSeries && product != ProductClassroomContent {
+		return false, fmt.Errorf("not a classroom order: %s", product)
+	}
+	if status == "refunded" {
+		return false, nil
+	}
+	if status != "paid" {
+		return false, fmt.Errorf("%w: status=%s", ErrOrderNotPayable, status)
+	}
+	if _, err = tx.ExecContext(c, `UPDATE orders SET status='refunded',update_time=now() WHERE id=$1 AND status='paid'`, orderID); err != nil {
+		return false, err
+	}
+	if _, err = tx.ExecContext(c, `UPDATE classroom_entitlements SET revoked_at=COALESCE(revoked_at,now()),updated_at=now() WHERE order_id=$1`, orderID); err != nil {
+		return false, err
+	}
+	summary := strings.TrimSpace(reason)
+	if summary == "" {
+		summary = "classroom order refunded"
+	}
+	if _, err = tx.ExecContext(c, `INSERT INTO admin_operation_logs
+		(operator_id,operator_name,action,target_type,target_id,before_data,after_data,summary)
+		VALUES (0,'system','classroom_entitlement_refund','order',$1,$2::jsonb,$3::jsonb,$4)`,
+		strconv.FormatInt(orderID, 10),
+		fmt.Sprintf(`{"status":%q,"product":%q,"refId":%d,"wxUserId":%d}`, status, product, refID, wxUserID),
+		fmt.Sprintf(`{"status":"refunded","entitlementRevoked":true}`), summary,
+	); err != nil {
+		return false, err
+	}
+	if err = tx.Commit(); err != nil {
 		return false, err
 	}
 	return true, nil

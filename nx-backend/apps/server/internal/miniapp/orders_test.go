@@ -138,6 +138,62 @@ func TestMarkOrderPaidRejectsMembershipWithoutDuration(t *testing.T) {
 	}
 }
 
+func TestMarkOrderPaidIssuesClassroomTargetEntitlementExactlyOnce(t *testing.T) {
+	for _, tt := range []struct {
+		product string
+		refID   int64
+	}{
+		{product: ProductClassroomSeries, refID: 41},
+		{product: ProductClassroomContent, refID: 52},
+	} {
+		t.Run(tt.product, func(t *testing.T) {
+			state := &orderTestState{paidProduct: tt.product, paidRefID: tt.refID}
+			store := newOrderTestStore(t, state)
+			changed, err := store.MarkOrderPaid(context.Background(), "classroom-order", "wx-transaction")
+			if err != nil || !changed {
+				t.Fatalf("first callback changed=%v err=%v", changed, err)
+			}
+			if state.classroomGrantCount != 1 || state.classroomGrantProduct != tt.product || state.classroomGrantRefID != tt.refID {
+				t.Fatalf("unexpected grant state: %+v", state)
+			}
+		})
+	}
+}
+
+func TestMarkOrderPaidDuplicateClassroomCallbackIsIdempotent(t *testing.T) {
+	state := &orderTestState{paidProduct: ProductClassroomContent, paidRefID: 52, paidStatus: "paid"}
+	store := newOrderTestStore(t, state)
+	changed, err := store.MarkOrderPaid(context.Background(), "classroom-order", "duplicate-wx-transaction")
+	if err != nil || changed || state.classroomGrantCount != 0 || state.orderPaidCount != 0 {
+		t.Fatalf("duplicate callback changed entitlement: changed=%v state=%+v err=%v", changed, state, err)
+	}
+}
+
+func TestRefundClassroomOrderRevokesOnlyItsEntitlementAndWritesAudit(t *testing.T) {
+	state := &orderTestState{paidProduct: ProductClassroomSeries, paidRefID: 41, paidStatus: "paid"}
+	store := newOrderTestStore(t, state)
+	changed, err := store.RefundClassroomOrder(context.Background(), "classroom-order", "user refund")
+	if err != nil || !changed {
+		t.Fatalf("refund changed=%v err=%v", changed, err)
+	}
+	if state.refundCount != 1 || state.classroomRevokeCount != 1 || state.auditCount != 1 {
+		t.Fatalf("refund must revoke and audit in the transaction: %+v", state)
+	}
+}
+
+func TestCreateOrReusePendingClassroomOrderKeepsSnapshotUntilPriceChanges(t *testing.T) {
+	state := &orderTestState{existing: true, existingAmount: 2990, existingTitle: "基础系列"}
+	store := newOrderTestStore(t, state)
+	order, err := store.CreateOrReusePendingOrder(context.Background(), 7, "new", ProductClassroomSeries, 41, "基础系列", 2990)
+	if err != nil || order.OutTradeNo != "existing-order" || state.closeCount != 0 {
+		t.Fatalf("same snapshot should reuse pending order: order=%+v state=%+v err=%v", order, state, err)
+	}
+	order, err = store.CreateOrReusePendingOrder(context.Background(), 7, "replacement", ProductClassroomSeries, 41, "基础系列", 3990)
+	if err != nil || order.OutTradeNo != "replacement" || state.closeCount != 1 {
+		t.Fatalf("price change should close old snapshot: order=%+v state=%+v err=%v", order, state, err)
+	}
+}
+
 func TestRevokeAllMembershipClearsAuthoritativeFields(t *testing.T) {
 	state := &orderTestState{revokeRowsAffected: 1}
 	store := newOrderTestStore(t, state)
@@ -203,6 +259,12 @@ type orderTestState struct {
 	revokeRowsAffected                int64
 	commitCount                       int
 	rollbackCount                     int
+	classroomGrantCount               int
+	classroomGrantProduct             string
+	classroomGrantRefID               int64
+	refundCount                       int
+	classroomRevokeCount              int
+	auditCount                        int
 }
 
 type orderTestDriver struct{}
@@ -234,6 +296,26 @@ func (c *orderTestConn) ExecContext(_ context.Context, query string, args []driv
 	}
 	if strings.Contains(query, "UPDATE orders SET status='paid'") {
 		c.state.orderPaidCount++
+	}
+	if strings.Contains(query, "INSERT INTO classroom_entitlements") {
+		c.state.classroomGrantCount++
+		if strings.Contains(query, "series_id") {
+			c.state.classroomGrantProduct = ProductClassroomSeries
+		} else {
+			c.state.classroomGrantProduct = ProductClassroomContent
+		}
+		if len(args) > 1 {
+			c.state.classroomGrantRefID, _ = args[1].Value.(int64)
+		}
+	}
+	if strings.Contains(query, "UPDATE orders SET status='refunded'") {
+		c.state.refundCount++
+	}
+	if strings.Contains(query, "UPDATE classroom_entitlements") && strings.Contains(query, "revoked_at") {
+		c.state.classroomRevokeCount++
+	}
+	if strings.Contains(query, "INSERT INTO admin_operation_logs") {
+		c.state.auditCount++
 	}
 	if strings.Contains(query, "UPDATE wx_users") && strings.Contains(query, "member_expires_at") {
 		c.state.membershipGrantCount++
