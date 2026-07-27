@@ -12,7 +12,7 @@ var (
 	modelIdentityTerms       = []string{"底层模型", "基座模型", "真实模型", "模型id", "模型编号", "模型版本", "版本号", "模型参数量", "参数量"}
 	providerTerms            = []string{"openai", "anthropic", "minimax", "deepseek", "google", "gemini", "claude", "gpt", "chatgpt", "llama", "meta", "豆包", "通义千问", "智谱", "kimi"}
 	chineseToolchainTerms    = []string{"codexcli", "cli", "中转站", "api代理", "api中转", "代理api"}
-	englishToolchainTerms    = []string{"codex cli", " cli", "api proxy", "proxy api", "model gateway"}
+	englishToolchainTerms    = []string{"codex cli", "cli", "api proxy", "proxy api", "model gateway"}
 )
 
 // IsModelIdentityQuestion reports whether question asks for the current
@@ -52,7 +52,9 @@ func isChineseModelIdentityQuestion(question string) bool {
 
 func isChineseModelQuestion(question string) bool {
 	if containsAny(question, modelIdentityTerms...) {
-		return true
+		return containsAny(question,
+			"你的", "您的", "当前助手", "这个助手", "当前会话", "这个会话",
+			"你是", "您是", "你有", "您有", "你用", "您用", "你使用", "您使用")
 	}
 	if containsAny(question, "ai模型", "大模型") && containsAny(question, "是什么", "是啥", "是哪个", "用的", "使用的", "调用的", "运行的", "基于") {
 		return true
@@ -85,8 +87,10 @@ func isChineseProviderQuestion(question string, hasSubject bool) bool {
 	if !hasSubject {
 		return false
 	}
-	if containsAny(question, "哪家公司", "哪家厂商", "哪个厂商", "供应商", "提供商") &&
-		containsAny(question, "哪家", "哪个", "谁", "是") {
+	if containsAny(question,
+		"你是哪家公司", "您是哪家公司", "你是哪家厂商", "您是哪家厂商",
+		"你是哪个厂商", "您是哪个厂商", "你的供应商", "您的供应商",
+		"你的提供商", "您的提供商", "当前助手的提供商", "这个助手的提供商") {
 		return true
 	}
 	if !containsAny(question, providerTerms...) {
@@ -101,7 +105,9 @@ func isChineseDeveloperQuestion(question string, hasSubject bool) bool {
 	if !hasSubject {
 		return false
 	}
-	if containsAny(question, "开发者", "开发公司", "训练方") {
+	if containsAny(question,
+		"你的开发者", "您的开发者", "当前助手的开发者", "这个助手的开发者",
+		"你的开发公司", "您的开发公司", "你的训练方", "您的训练方") {
 		return true
 	}
 	if strings.HasSuffix(question, "你") || strings.HasSuffix(question, "您") {
@@ -142,7 +148,7 @@ func isEnglishModelIdentityQuestion(question string) bool {
 }
 
 func isEnglishProviderQuestion(question string) bool {
-	if !containsAny(question, providerTerms...) {
+	if !containsEnglishTerm(question, providerTerms...) {
 		return false
 	}
 	return containsAny(question,
@@ -157,7 +163,7 @@ func isEnglishDeveloperQuestion(question string) bool {
 }
 
 func isEnglishToolchainQuestion(question string) bool {
-	if !containsAny(question, englishToolchainTerms...) {
+	if !containsEnglishTerm(question, englishToolchainTerms...) {
 		return false
 	}
 	return containsAny(question, "through", " via ", " on ", "use", "using", "running", "operating", "answering")
@@ -166,7 +172,7 @@ func isEnglishToolchainQuestion(question string) bool {
 func isEnglishEducationQuestion(question string) bool {
 	return containsAny(question,
 		"what is openai", "how do ", "how does ", "used for", "best for", "recommend",
-		"explain", "describe", "introduce", "familiar with", "products", "work")
+		"explain", "describe", "introduce", "familiar with", "products")
 }
 
 func hasEnglishAssistantSubject(question string) bool {
@@ -245,6 +251,31 @@ func trimLeadingAny(value string, prefixes ...string) string {
 		}
 	}
 	return value
+}
+
+func containsEnglishTerm(value string, terms ...string) bool {
+	for _, term := range terms {
+		searchFrom := 0
+		for searchFrom <= len(value)-len(term) {
+			relative := strings.Index(value[searchFrom:], term)
+			if relative < 0 {
+				break
+			}
+			start := searchFrom + relative
+			end := start + len(term)
+			leftBoundary := start == 0 || !isEnglishTokenByte(value[start-1])
+			rightBoundary := end == len(value) || !isEnglishTokenByte(value[end])
+			if leftBoundary && rightBoundary {
+				return true
+			}
+			searchFrom = start + 1
+		}
+	}
+	return false
+}
+
+func isEnglishTokenByte(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= '0' && value <= '9' || value == '_'
 }
 
 func containsAny(value string, candidates ...string) bool {

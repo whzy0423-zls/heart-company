@@ -73,6 +73,7 @@ func TestIsModelIdentityQuestion(t *testing.T) {
 		{name: "英文底层模型所有格", question: "What's your underlying model?", want: true},
 		{name: "英文正在使用模型", question: "What model are you using?", want: true},
 		{name: "英文正在使用具体模型", question: "Are you using GPT-5.6?", want: true},
+		{name: "英文工作场景当前模型", question: "What model are you using for work?", want: true},
 
 		{name: "空白", question: "   ", want: false},
 		{name: "普通公司科普", question: "OpenAI 是什么公司？", want: false},
@@ -92,6 +93,12 @@ func TestIsModelIdentityQuestion(t *testing.T) {
 		{name: "中文公司介绍命令", question: "介绍一下 OpenAI 是什么公司。", want: false},
 		{name: "中文参数量含义", question: "请解释模型参数量是什么意思。", want: false},
 		{name: "中文CodexCLI用途", question: "能否介绍 Codex CLI 的用途？", want: false},
+		{name: "英文客户端证书非工具链", question: "Are you using a client certificate?", want: false},
+		{name: "英文metadata非厂商", question: "Are you using metadata to store context?", want: false},
+		{name: "中文开发者工具科普", question: "你能介绍开发者工具吗？", want: false},
+		{name: "中文云服务提供商科普", question: "你知道云服务提供商是谁吗？", want: false},
+		{name: "中文模型ID格式", question: "你能告诉我模型 ID 的格式吗？", want: false},
+		{name: "中文参数量计算", question: "你了解模型参数量如何计算吗？", want: false},
 	}
 
 	for _, tt := range tests {
