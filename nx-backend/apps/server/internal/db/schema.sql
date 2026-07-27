@@ -2627,6 +2627,19 @@ CREATE TABLE IF NOT EXISTS promotion_media_qa_reviews (
 );
 CREATE INDEX IF NOT EXISTS idx_promotion_media_qa_reviews_asset ON promotion_media_qa_reviews(asset_id, id DESC);
 
+CREATE OR REPLACE FUNCTION promotion_media_qa_reviews_stamp()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.approval_txid := txid_current();
+  NEW.approved_at := now();
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_promotion_media_qa_reviews_stamp ON promotion_media_qa_reviews;
+CREATE TRIGGER trg_promotion_media_qa_reviews_stamp
+BEFORE INSERT ON promotion_media_qa_reviews
+FOR EACH ROW EXECUTE FUNCTION promotion_media_qa_reviews_stamp();
+
 CREATE OR REPLACE FUNCTION promotion_media_qa_reviews_append_only()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN

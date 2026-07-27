@@ -49,6 +49,7 @@ func TestEnterprisePromotionSchemaContainsBusinessConstraints(t *testing.T) {
 		"approval_txid BIGINT NOT NULL DEFAULT txid_current()",
 		"CREATE TRIGGER trg_promotion_media_ready_requires_current_qa",
 		"CREATE TRIGGER trg_promotion_media_qa_reviews_append_only",
+		"CREATE TRIGGER trg_promotion_media_qa_reviews_stamp",
 		"ALTER TABLE training_case_consent_links ALTER COLUMN case_id DROP NOT NULL",
 		"CREATE UNIQUE INDEX IF NOT EXISTS idx_promotion_events_idempotency_key",
 	} {

@@ -114,6 +114,29 @@ func TestEnterprisePromotionPostgres(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `INSERT INTO users(username,password_hash) VALUES ('promotion-reviewer','hash') RETURNING id`).Scan(&reviewerID); err != nil {
 		t.Fatal(err)
 	}
+	stampTx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expectedApprovalTxID, stampedReviewID int64
+	if err := stampTx.QueryRowContext(ctx, `SELECT txid_current()`).Scan(&expectedApprovalTxID); err != nil {
+		_ = stampTx.Rollback()
+		t.Fatal(err)
+	}
+	if err := stampTx.QueryRowContext(ctx, `INSERT INTO promotion_media_qa_reviews(asset_id,qa_result,approved_by,qa_note,approval_txid) VALUES ($1,'failed',$2,'tamper check',1) RETURNING id`, assetID, reviewerID).Scan(&stampedReviewID); err != nil {
+		_ = stampTx.Rollback()
+		t.Fatal(err)
+	}
+	if err := stampTx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var storedApprovalTxID int64
+	if err := db.QueryRowContext(ctx, `SELECT approval_txid FROM promotion_media_qa_reviews WHERE id=$1`, stampedReviewID).Scan(&storedApprovalTxID); err != nil {
+		t.Fatal(err)
+	}
+	if storedApprovalTxID != expectedApprovalTxID {
+		t.Fatalf("QA approval transaction stamp was caller-controlled: got %d want %d", storedApprovalTxID, expectedApprovalTxID)
+	}
 	var oldReviewID int64
 	if err := db.QueryRowContext(ctx, `INSERT INTO promotion_media_qa_reviews(asset_id,qa_result,approved_by,qa_note) VALUES ($1,'passed',$2,'first review') RETURNING id`, assetID, reviewerID).Scan(&oldReviewID); err != nil {
 		t.Fatal(err)
