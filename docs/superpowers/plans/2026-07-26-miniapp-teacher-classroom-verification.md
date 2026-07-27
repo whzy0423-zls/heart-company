@@ -70,7 +70,7 @@ pages/classroom-detail/classroom-detail
 | callback duplicate | `TestMarkOrderPaidDuplicateClassroomCallbackIsIdempotent` | 通过 |
 | refund | `TestRefundClassroomOrderRevokesOnlyItsEntitlementAndWritesAudit` | 通过 |
 | signed URL expiry | `TestClassroomAnonymousTicketExpiresAndRefreshesThroughNoStoreEndpoint`、跨内容/媒体版本 replay 测试 | 通过 |
-| Range/seek | `TestOSSPlaybackPresignLeavesRangeHeaderUnsignedForMediaSeeking`；小程序播放器 seek/timeupdate 合同 | Range 不参与 OSS 签名，微信播放器可发起 byte range |
+| Range/seek | `TestOSSPlaybackPresignLeavesRangeHeaderUnsignedForMediaSeeking`、`TestOSSClassroomPlaybackPresignedURLServesByteRange`；小程序播放器 seek/timeupdate 合同 | Range 不参与 OSS 签名；真实请求命中课堂对象路径并返回 206、`Content-Range` 与正确切片正文 |
 | progress throttle/flush | `classroomProgress.test.mjs`、`classroom-progress-order.test.mjs`、详情页 hide/unload 测试、服务端限流测试 | 通过 |
 | cache invalidation | `TestClassroomPublicContentCacheInvalidatesOnHiddenMediaVersion`、`TestClassroomPublicListCacheInvalidatesOnPriceAndOfflineVisibilityChanges` | 旧 ETag 在媒体版本、价格或可见性变化后返回新 200；内部版本不泄漏 |
 | permission denial | `TestClassroomUploadRoutesRequireDedicatedPermission`、`TestClassroomAdminListPublishAndPriceRoutesStopAtPermissionDenial` | list/publish/price/upload 均在业务 handler 前 403 |
@@ -82,6 +82,16 @@ pages/classroom-detail/classroom-detail
 - 媒体版本改变会生成新 HTTP ETag；
 - 旧 `If-None-Match` 得到 200；
 - 响应仍不包含 media ETag、object key 或永久 URL。
+
+### Range/206 TDD
+
+`TestOSSClassroomPlaybackPresignedURLServesByteRange` 使用生产 `OSSUploader.PresignGetURL` 和课堂纵向合同中的对象路径 `classroom/private/content-21.mp4` 生成短时签名地址，再向可重复 OSS-compatible HTTP origin 发出 `Range: bytes=4-8`：
+
+- RED：origin 忽略 Range 时返回 200 和完整正文，测试按预期失败；
+- GREEN：origin 按对象存储 HTTP Range 合同响应后，状态为 206；
+- `Content-Range` 精确为 `bytes 4-8/16`；
+- 响应正文精确为 `45678`；
+- origin 同时断言课堂 bucket/object path、OSS 签名查询参数和 Range 请求头，避免退化为与课堂播放链路无关的独立 toy server。
 
 ## 4. 既有功能回归
 
