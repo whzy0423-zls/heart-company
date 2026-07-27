@@ -64,9 +64,14 @@ async function loadActiveList({ force = false } = {}) {
 
 function selectTab(tab) {
   if (tab !== 'series' && tab !== 'standalone') return
+  if (tab !== activeTab.value) {
+    seriesTicket += 1
+    expandedSeries.value = null
+    selectedSeries.value = null
+    seriesLoading.value = false
+    seriesError.value = ''
+  }
   activeTab.value = tab
-  expandedSeries.value = null
-  seriesError.value = ''
   loadError.value = ''
   loadActiveList()
 }
@@ -83,7 +88,7 @@ async function openSeries(item) {
   seriesError.value = ''
   try {
     const response = await getClassroomSeriesApi(item.id)
-    if (ticket !== seriesTicket) return
+    if (ticket !== seriesTicket || activeTab.value !== 'series') return
     expandedSeries.value = {
       series: normalizeClassroomSeries(response?.series || item),
       contents: (Array.isArray(response?.contents) ? response.contents : [])
@@ -91,9 +96,11 @@ async function openSeries(item) {
         .filter((content) => content.id),
     }
   } catch (error) {
-    if (ticket === seriesTicket) seriesError.value = userErrorMessage(error, '系列课件加载失败，请稍后重试')
+    if (ticket === seriesTicket && activeTab.value === 'series') {
+      seriesError.value = userErrorMessage(error, '系列课件加载失败，请稍后重试')
+    }
   } finally {
-    if (ticket === seriesTicket) seriesLoading.value = false
+    if (ticket === seriesTicket && activeTab.value === 'series') seriesLoading.value = false
   }
 }
 

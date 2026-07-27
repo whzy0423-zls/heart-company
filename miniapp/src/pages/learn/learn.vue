@@ -20,7 +20,7 @@ const refreshError = ref('')
 const refreshing = ref(false)
 const classroomPreview = ref([])
 const classroomLoading = ref(true)
-const classroomError = ref('')
+const classroomWarning = ref('')
 let loadTicket = 0
 let classroomTicket = 0
 
@@ -105,7 +105,7 @@ function markTypeImageError(id) {
 async function loadClassroomPreview() {
   const ticket = ++classroomTicket
   classroomLoading.value = true
-  classroomError.value = ''
+  classroomWarning.value = ''
   try {
     const [seriesResult, standaloneResult] = await Promise.allSettled([
       listClassroomSeriesApi({ limit: 2, offset: 0 }),
@@ -119,11 +119,13 @@ async function loadClassroomPreview() {
       ? (standaloneResult.value?.items || []).map(normalizeClassroomContent).filter((item) => item.id)
       : []
     classroomPreview.value = [...series, ...standalone].slice(0, 3)
-    if (seriesResult.status === 'rejected' && standaloneResult.status === 'rejected') {
-      classroomError.value = userErrorMessage(seriesResult.reason, '老师课堂加载失败，请稍后重试')
+    const failures = [seriesResult, standaloneResult].filter((result) => result.status === 'rejected')
+    if (failures.length) {
+      const fallback = failures.length === 2 ? '老师课堂加载失败，请稍后重试' : '部分课堂内容加载失败，请稍后重试'
+      classroomWarning.value = userErrorMessage(failures[0].reason, fallback)
     }
   } catch (error) {
-    if (ticket === classroomTicket) classroomError.value = userErrorMessage(error, '老师课堂加载失败，请稍后重试')
+    if (ticket === classroomTicket) classroomWarning.value = userErrorMessage(error, '老师课堂加载失败，请稍后重试')
   } finally {
     if (ticket === classroomTicket) classroomLoading.value = false
   }
@@ -174,16 +176,16 @@ function goTest() {
           </view>
           <button class="classroom-entry__more" @click="openClassroom('series')">查看全部</button>
         </view>
-        <view v-if="classroomLoading" class="empty" aria-live="polite">课堂内容加载中…</view>
-        <view v-else-if="classroomError" class="empty empty--error" aria-live="polite">
+        <view v-if="classroomWarning" class="classroom-entry__warning" aria-live="polite">
           <view>
-            <text>{{ classroomError }}</text>
-            <text class="classroom-entry__fallback">下方精选课程仍可继续浏览。</text>
+            <text>{{ classroomWarning }}</text>
+            <text class="classroom-entry__fallback">已加载的课堂和下方精选课程仍可继续浏览。</text>
           </view>
-          <button class="retry" @click="retryClassroomPreview">重试课堂内容</button>
+          <button class="retry" :disabled="classroomLoading" @click="retryClassroomPreview">重试课堂内容</button>
         </view>
+        <view v-if="classroomLoading" class="empty" aria-live="polite">课堂内容加载中…</view>
         <view v-else-if="classroomPreview.length === 0" class="classroom-entry__empty">
-          <text>老师课堂正在准备中，下方精选课程仍可继续浏览。</text>
+          <text>{{ classroomWarning ? '部分课堂内容暂未加载，可重试或继续浏览下方精选课程。' : '老师课堂正在准备中，下方精选课程仍可继续浏览。' }}</text>
           <button class="classroom-entry__browse" @click="openClassroom('standalone')">进入课堂</button>
         </view>
         <view v-else class="classroom-entry__grid">
@@ -360,6 +362,7 @@ function goTest() {
   border-radius: 18rpx;
 }
 .classroom-entry__more::after, .classroom-entry__browse::after { border: 0; }
+.classroom-entry__warning { display: flex; align-items: center; justify-content: space-between; gap: 18rpx; margin-bottom: 18rpx; padding: 18rpx 22rpx; color: #8a4b16; font-size: 24rpx; line-height: 1.55; background: #fff7ed; border: 2rpx solid #fed7aa; border-radius: 20rpx; }
 .classroom-entry__fallback { display: block; margin-top: 10rpx; color: #66766f; }
 .classroom-entry__empty { color: #66766f; font-size: 25rpx; line-height: 1.6; text-align: center; }
 .classroom-entry__browse { display: block; margin: 20rpx auto 0; }
