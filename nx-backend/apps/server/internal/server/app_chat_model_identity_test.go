@@ -58,6 +58,42 @@ func TestAppChatAskModelIdentitySkipsPromptDependenciesAndPersistsFixedPair(t *t
 	assertIdentityDependenciesSkipped(t, preferences, documents, queries, store, generator)
 }
 
+func TestAppChatAskModelIdentitySaveFailureReturnsServerErrorWithoutPostSaveEffects(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	store.cardID = 77
+	store.saveErr = errors.New("database unavailable")
+	store.saveErrorMessageID = 99
+	generator := &identityDependencyGenerator{}
+	preferences := &identityDependencyPreferenceStore{}
+	documents := &identityDependencyRAGStore{}
+	database, queries := openIdentityDependencyDB(t)
+	s := newAppChatStreamServer(store, generator)
+	s.chatLimiter = newFixedWindowRateLimiter(100, time.Minute)
+	s.userPreferences = preferences
+	s.ragDocs = documents
+	s.db = database
+
+	response := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/ask", strings.NewReader(fmt.Sprintf(`{"question":%q}`, appChatIdentityQuestion)))
+	req = req.WithContext(context.WithValue(req.Context(), appContextKey{}, auth.UserInfo{ID: 7}))
+
+	s.appChatRouter(response, req)
+
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "回答保存失败，请重试") {
+		t.Errorf("save failure response = %d %s", response.Code, response.Body.String())
+	}
+	if store.saveCallCount() != 1 {
+		t.Fatalf("SavePair called %d times, want 1", store.saveCallCount())
+	}
+	if messages, _ := store.savedMessagesAndSources(); len(messages) != 0 {
+		t.Fatalf("failed identity pair unexpectedly persisted messages: %+v", messages)
+	}
+	if query := queries.waitForEvidenceQuery(100 * time.Millisecond); query != "" {
+		t.Fatalf("save failure triggered profile evidence query: %s", query)
+	}
+	assertIdentityDependenciesSkipped(t, preferences, documents, queries, store, generator)
+}
+
 func TestAppChatAskStreamModelIdentitySkipsPromptDependenciesAndUsesNormalSSEPersistence(t *testing.T) {
 	store := newFakeAppChatStreamStore()
 	store.cardID = 77
@@ -230,12 +266,17 @@ func (g *identityDependencyGenerator) GenerateStream(context.Context, rag.Genera
 type identityDependencyQueryRecorder struct {
 	mu      sync.Mutex
 	queries []string
+	queryCh chan string
 }
 
 func (r *identityDependencyQueryRecorder) add(query string) {
 	r.mu.Lock()
 	r.queries = append(r.queries, query)
 	r.mu.Unlock()
+	select {
+	case r.queryCh <- query:
+	default:
+	}
 }
 
 func (r *identityDependencyQueryRecorder) promptDependencyQueries() []string {
@@ -250,9 +291,24 @@ func (r *identityDependencyQueryRecorder) promptDependencyQueries() []string {
 	return result
 }
 
+func (r *identityDependencyQueryRecorder) waitForEvidenceQuery(timeout time.Duration) string {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case query := <-r.queryCh:
+			if strings.Contains(query, "app_user_cards") || strings.Contains(query, "app_profile_evidence") {
+				return query
+			}
+		case <-timer.C:
+			return ""
+		}
+	}
+}
+
 func openIdentityDependencyDB(t *testing.T) (*sql.DB, *identityDependencyQueryRecorder) {
 	t.Helper()
-	recorder := &identityDependencyQueryRecorder{}
+	recorder := &identityDependencyQueryRecorder{queryCh: make(chan string, 16)}
 	database := sql.OpenDB(identityDependencyConnector{recorder: recorder})
 	t.Cleanup(func() { _ = database.Close() })
 	return database, recorder

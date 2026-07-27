@@ -1198,18 +1198,19 @@ func successfulAppChatGenerator(answer string) rag.Generator {
 
 type fakeAppChatStreamStore struct {
 	appChatStore
-	mu               sync.Mutex
-	messages         []chat.Message
-	messageID        int64
-	saveCalls        int
-	contextCalls     int
-	lastSources      json.RawMessage
-	saveErr          error
-	onSave           func()
-	beforeSaveReturn func(context.Context)
-	contextStarted   chan struct{}
-	contextRelease   chan struct{}
-	cardID           int64
+	mu                 sync.Mutex
+	messages           []chat.Message
+	messageID          int64
+	saveErrorMessageID int64
+	saveCalls          int
+	contextCalls       int
+	lastSources        json.RawMessage
+	saveErr            error
+	onSave             func()
+	beforeSaveReturn   func(context.Context)
+	contextStarted     chan struct{}
+	contextRelease     chan struct{}
+	cardID             int64
 }
 
 func newFakeAppChatStreamStore() *fakeAppChatStreamStore {
@@ -1259,7 +1260,7 @@ func (s *fakeAppChatStreamStore) SavePair(ctx context.Context, sessionID int64, 
 		if s.beforeSaveReturn != nil {
 			s.beforeSaveReturn(ctx)
 		}
-		return 0, s.saveErr
+		return s.saveErrorMessageID, s.saveErr
 	}
 	if s.beforeSaveReturn != nil {
 		s.beforeSaveReturn(ctx)

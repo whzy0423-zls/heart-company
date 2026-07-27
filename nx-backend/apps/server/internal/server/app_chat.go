@@ -389,7 +389,11 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 		defer cancel()
 		sourcesJSON, _ := json.Marshal(answer.Sources)
-		messageID, _ := s.appChat.SavePair(ctx, sessionID, body.Question, answer.Answer, sourcesJSON)
+		messageID, saveErr := s.appChat.SavePair(ctx, sessionID, body.Question, answer.Answer, sourcesJSON)
+		if saveErr != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "回答保存失败，请重试")
+			return
+		}
 		s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, body.Question, answer.Answer)
 		if messageID > 0 {
 			s.recordAppProfileEvidenceAsync(userInfo.ID, sess.CardID, "chat", messageID, body.Question)
