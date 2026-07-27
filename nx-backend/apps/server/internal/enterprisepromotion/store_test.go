@@ -2,7 +2,9 @@ package enterprisepromotion
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +49,31 @@ func TestPublicProjectionDoesNotLeakPersistenceFields(t *testing.T) {
 	}
 	if _, ok := mediaType.FieldByName("CaseID"); ok {
 		t.Fatal("public media exposes persistence case id")
+	}
+	topicField, ok := typ.FieldByName("Topics")
+	if !ok {
+		t.Fatal("public topics missing")
+	}
+	if topicField.Type.Elem().Name() == "TrainingTopic" {
+		t.Fatal("public DTO reuses persistence topic model")
+	}
+	topicJSON, err := json.Marshal(PublicTopic{Key: TopicLeadership, Title: "领导力"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(topicJSON) != `{"key":"leadership","title":"领导力"}` {
+		t.Fatalf("topic JSON=%s", topicJSON)
+	}
+}
+
+func TestPublicStoreUsesBatchQueries(t *testing.T) {
+	raw, err := os.ReadFile("store.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(raw)
+	if !strings.Contains(src, "ANY($1)") {
+		t.Fatal("public associations are not batch loaded")
 	}
 }
 

@@ -12,10 +12,11 @@ import (
 )
 
 var (
-	ErrNotFound        = errors.New("enterprise promotion record not found")
-	ErrVersionConflict = errors.New("enterprise promotion version conflict")
-	ErrConflict        = errors.New("enterprise promotion record conflicts with existing data")
-	ErrRestricted      = errors.New("enterprise promotion record is still referenced")
+	ErrNotFound         = errors.New("enterprise promotion record not found")
+	ErrVersionConflict  = errors.New("enterprise promotion version conflict")
+	ErrConflict         = errors.New("enterprise promotion record conflicts with existing data")
+	ErrRestricted       = errors.New("enterprise promotion record is still referenced")
+	ErrInvalidReference = errors.New("enterprise promotion reference is invalid")
 )
 
 type CaseAggregate struct {
@@ -51,7 +52,7 @@ type PublicCase struct {
 	TrainerName        string            `json:"trainerName"`
 	Featured           bool              `json:"featured"`
 	Media              []PublicCaseMedia `json:"media"`
-	Topics             []TrainingTopic   `json:"topics"`
+	Topics             []PublicTopic     `json:"topics"`
 }
 
 type PublicCaseMedia struct {
@@ -59,6 +60,11 @@ type PublicCaseMedia struct {
 	Role         MediaRole `json:"role"`
 	Position     int       `json:"position"`
 	Caption      string    `json:"caption"`
+}
+
+type PublicTopic struct {
+	Key   TopicKey `json:"key"`
+	Title string   `json:"title"`
 }
 
 type PublicCaseQuery struct {
@@ -75,9 +81,18 @@ type Store interface {
 	ReplaceCaseMedia(context.Context, int64, int64, []CaseMedia) (CaseAggregate, error)
 }
 
-type SQLStore struct{ db *sql.DB }
+type SQLStore struct {
+	db            *sql.DB
+	queryObserver func()
+}
 
 func NewStore(db *sql.DB) *SQLStore { return &SQLStore{db: db} }
+
+func (s *SQLStore) observeQuery() {
+	if s.queryObserver != nil {
+		s.queryObserver()
+	}
+}
 
 func FixedTopics() []TrainingTopic {
 	keys := []TopicKey{TopicTeamCommunication, TopicLeadership, TopicCohesion, TopicCulture, TopicEmployeeGrowth}
@@ -108,6 +123,9 @@ func mapDBError(err error) error {
 	if errors.As(err, &pg) {
 		switch pg.Code {
 		case "23503":
+			if strings.Contains(pg.Detail, "is not present in table") {
+				return fmt.Errorf("%w: %s", ErrInvalidReference, pg.ConstraintName)
+			}
 			return fmt.Errorf("%w: %s", ErrRestricted, pg.ConstraintName)
 		case "23505":
 			return fmt.Errorf("%w: %s", ErrConflict, pg.ConstraintName)
@@ -305,6 +323,15 @@ func placeholders(n int) string {
 	return strings.Join(v, ",")
 }
 
+func recordExists(ctx context.Context, tx *sql.Tx, table string, id int64) (bool, error) {
+	if table != "training_cases" && table != "enterprise_solutions" {
+		return false, fmt.Errorf("unsupported existence table %q", table)
+	}
+	var exists bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM `+table+` WHERE id=$1)`, id).Scan(&exists)
+	return exists, err
+}
+
 func replaceCaseRelations(ctx context.Context, tx *sql.Tx, a CaseAggregate) error {
 	for _, q := range []string{`DELETE FROM training_case_media WHERE case_id=$1`, `DELETE FROM training_case_topics WHERE case_id=$1`, `DELETE FROM training_case_solutions WHERE case_id=$1`} {
 		if _, e := tx.ExecContext(ctx, q, a.Case.ID); e != nil {
@@ -347,8 +374,16 @@ func (s *SQLStore) GetCase(ctx context.Context, id int64) (CaseAggregate, error)
 		}
 		a.Media = append(a.Media, m)
 	}
+	if e = rows.Err(); e != nil {
+		rows.Close()
+		return a, e
+	}
 	rows.Close()
-	for q, dst := range map[string]*[]int64{`SELECT topic_id FROM training_case_topics WHERE case_id=$1 ORDER BY position,topic_id`: &a.TopicIDs, `SELECT solution_id FROM training_case_solutions WHERE case_id=$1 ORDER BY position,solution_id`: &a.SolutionIDs} {
+	for _, relation := range []struct {
+		q   string
+		dst *[]int64
+	}{{`SELECT topic_id FROM training_case_topics WHERE case_id=$1 ORDER BY position,topic_id`, &a.TopicIDs}, {`SELECT solution_id FROM training_case_solutions WHERE case_id=$1 ORDER BY position,solution_id`, &a.SolutionIDs}} {
+		q, dst := relation.q, relation.dst
 		r, e := s.db.QueryContext(ctx, q, id)
 		if e != nil {
 			return a, e
@@ -361,12 +396,16 @@ func (s *SQLStore) GetCase(ctx context.Context, id int64) (CaseAggregate, error)
 			}
 			*dst = append(*dst, x)
 		}
+		if e = r.Err(); e != nil {
+			r.Close()
+			return a, e
+		}
 		r.Close()
 	}
 	return a, nil
 }
 func (s *SQLStore) UpdateCase(ctx context.Context, a CaseAggregate, expected int64) (CaseAggregate, error) {
-	tx, e := s.db.BeginTx(ctx, nil)
+	tx, e := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if e != nil {
 		return CaseAggregate{}, e
 	}
@@ -375,6 +414,13 @@ func (s *SQLStore) UpdateCase(ctx context.Context, a CaseAggregate, expected int
 	args = append(args, a.Case.ID, expected)
 	e = tx.QueryRowContext(ctx, `UPDATE training_cases SET slug=$1,title=$2,summary=$3,cover_asset_id=$4,company_display_name=$5,company_internal_name_encrypted=$6,industry=$7,city=$8,participant_range=$9,training_date=$10,duration_label=$11,business_challenges=$12,training_goals=$13,training_modules=$14,training_methods=$15,trainer_id=$16,trainer_name_snapshot=$17,status=$18,authorization_status=$19,featured=$20,sort_order=$21,published_at=$22,version=version+1,updated_at=now() WHERE id=$23 AND version=$24 RETURNING version,created_at,updated_at`, args...).Scan(&a.Case.Version, &a.Case.CreatedAt, &a.Case.UpdatedAt)
 	if errors.Is(e, sql.ErrNoRows) {
+		exists, checkErr := recordExists(ctx, tx, "training_cases", a.Case.ID)
+		if checkErr != nil {
+			return CaseAggregate{}, checkErr
+		}
+		if !exists {
+			return CaseAggregate{}, ErrNotFound
+		}
 		return CaseAggregate{}, ErrVersionConflict
 	}
 	if e != nil {
@@ -506,7 +552,7 @@ func (s *SQLStore) ListSolutions(ctx context.Context) ([]EnterpriseSolution, err
 	return out, r.Err()
 }
 func (s *SQLStore) UpdateSolution(ctx context.Context, a SolutionAggregate, expected int64) (SolutionAggregate, error) {
-	tx, e := s.db.BeginTx(ctx, nil)
+	tx, e := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if e != nil {
 		return a, e
 	}
@@ -515,6 +561,13 @@ func (s *SQLStore) UpdateSolution(ctx context.Context, a SolutionAggregate, expe
 	args = append(args, a.Solution.ID, expected)
 	e = tx.QueryRowContext(ctx, `UPDATE enterprise_solutions SET slug=$1,title=$2,summary=$3,cover_asset_id=$4,audiences=$5,problems=$6,goals=$7,modules=$8,delivery_methods=$9,recommended_participants=$10,recommended_duration=$11,customizable_items=$12,trainer_id=$13,trainer_name_snapshot=$14,status=$15,featured=$16,sort_order=$17,published_at=$18,version=version+1,updated_at=now() WHERE id=$19 AND version=$20 RETURNING version,created_at,updated_at`, args...).Scan(&a.Solution.Version, &a.Solution.CreatedAt, &a.Solution.UpdatedAt)
 	if errors.Is(e, sql.ErrNoRows) {
+		exists, checkErr := recordExists(ctx, tx, "enterprise_solutions", a.Solution.ID)
+		if checkErr != nil {
+			return a, checkErr
+		}
+		if !exists {
+			return a, ErrNotFound
+		}
 		return a, ErrVersionConflict
 	}
 	if e != nil {
@@ -534,15 +587,7 @@ func (s *SQLStore) UpdateSolution(ctx context.Context, a SolutionAggregate, expe
 	return a, nil
 }
 func (s *SQLStore) DeleteSolution(ctx context.Context, id int64) error {
-	tx, e := s.db.BeginTx(ctx, nil)
-	if e != nil {
-		return e
-	}
-	defer tx.Rollback()
-	if _, e = tx.ExecContext(ctx, `DELETE FROM training_case_solutions WHERE solution_id=$1`, id); e != nil {
-		return mapDBError(e)
-	}
-	r, e := tx.ExecContext(ctx, `DELETE FROM enterprise_solutions WHERE id=$1`, id)
+	r, e := s.db.ExecContext(ctx, `DELETE FROM enterprise_solutions WHERE id=$1`, id)
 	if e != nil {
 		return mapDBError(e)
 	}
@@ -550,115 +595,157 @@ func (s *SQLStore) DeleteSolution(ctx context.Context, id int64) error {
 	if n == 0 {
 		return ErrNotFound
 	}
-	return tx.Commit()
+	return nil
 }
 
-func projectPublicCase(c TrainingCase, media []CaseMedia, topics []TrainingTopic) PublicCase {
+func projectPublicCase(c TrainingCase, media []CaseMedia, topics []PublicTopic) PublicCase {
 	publicMedia := make([]PublicCaseMedia, len(media))
 	for i, m := range media {
 		publicMedia[i] = PublicCaseMedia{MediaAssetID: m.MediaAssetID, Role: m.Role, Position: m.Position, Caption: m.Caption}
 	}
 	return PublicCase{ID: c.ID, Slug: c.Slug, Title: c.Title, Summary: c.Summary, CoverAssetID: c.CoverAssetID, CompanyDisplayName: c.CompanyDisplayName, Industry: c.Industry, City: c.City, ParticipantRange: c.ParticipantRange, DurationLabel: c.DurationLabel, BusinessChallenges: c.BusinessChallenges, TrainingGoals: c.TrainingGoals, TrainingModules: c.TrainingModules, TrainingMethods: c.TrainingMethods, TrainerID: c.TrainerID, TrainerName: c.TrainerNameSnapshot, Featured: c.Featured, Media: publicMedia, Topics: topics}
 }
+
+const publicEligibility = `c.status='published' AND c.authorization_status='approved'
+	AND c.cover_asset_id IS NOT NULL
+	AND EXISTS (SELECT 1 FROM promotion_media_assets cover WHERE cover.id=c.cover_asset_id AND cover.state='ready' AND cover.kind='image')
+	AND EXISTS (SELECT 1 FROM training_case_media hero JOIN promotion_media_assets hero_asset ON hero_asset.id=hero.media_asset_id WHERE hero.case_id=c.id AND hero.status='published' AND hero.role IN ('promo','highlight') AND hero_asset.state='ready' AND hero_asset.kind='video')`
+
 func (s *SQLStore) ListPublicCases(ctx context.Context, q PublicCaseQuery) ([]PublicCase, error) {
 	limit := q.Limit
-	if limit <= 0 || limit > 100 {
+	if limit <= 0 {
 		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
 	}
 	if q.Offset < 0 {
 		q.Offset = 0
 	}
 	args := []any{limit, q.Offset}
-	where := `c.status='published' AND c.authorization_status='approved'
-		AND c.cover_asset_id IS NOT NULL
-		AND EXISTS (SELECT 1 FROM promotion_media_assets cover WHERE cover.id=c.cover_asset_id AND cover.state='ready' AND cover.kind='image')
-		AND EXISTS (SELECT 1 FROM training_case_media hero JOIN promotion_media_assets hero_asset ON hero_asset.id=hero.media_asset_id WHERE hero.case_id=c.id AND hero.status='published' AND hero.role IN ('promo','highlight') AND hero_asset.state='ready' AND hero_asset.kind='video')`
+	where := publicEligibility
 	if q.Topic.Valid() {
 		args = append(args, q.Topic)
 		where += ` AND EXISTS (SELECT 1 FROM training_case_topics ct JOIN training_topics t ON t.id=ct.topic_id WHERE ct.case_id=c.id AND t.key=$3 AND t.enabled=true)`
 	}
-	r, e := s.db.QueryContext(ctx, `SELECT `+caseColumns+` FROM training_cases c WHERE `+where+` ORDER BY c.featured DESC,c.sort_order,c.id DESC LIMIT $1 OFFSET $2`, args...)
-	if e != nil {
-		return nil, e
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	s.observeQuery()
+	rows, err := tx.QueryContext(ctx, `SELECT `+caseColumns+` FROM training_cases c WHERE `+where+` ORDER BY c.featured DESC,c.sort_order,c.id DESC LIMIT $1 OFFSET $2`, args...)
+	if err != nil {
+		return nil, err
 	}
 	var records []TrainingCase
-	for r.Next() {
-		c, e := scanCase(r)
-		if e != nil {
-			r.Close()
-			return nil, e
+	for rows.Next() {
+		c, scanErr := scanCase(rows)
+		if scanErr != nil {
+			rows.Close()
+			return nil, scanErr
 		}
 		records = append(records, c)
 	}
-	if e = r.Err(); e != nil {
-		r.Close()
-		return nil, e
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
 	}
-	r.Close()
-	var out []PublicCase
+	rows.Close()
+	ids := make([]int64, len(records))
+	for i, c := range records {
+		ids[i] = c.ID
+	}
+	topics, err := publicTopicsBatch(ctx, tx, ids, s.observeQuery)
+	if err != nil {
+		return nil, err
+	}
+	media, err := publicMediaBatch(ctx, tx, ids, s.observeQuery)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PublicCase, 0, len(records))
 	for _, c := range records {
-		topics, e := s.publicTopics(ctx, c.ID)
-		if e != nil {
-			return nil, e
-		}
-		media, e := s.publicMedia(ctx, c.ID)
-		if e != nil {
-			return nil, e
-		}
-		out = append(out, projectPublicCase(c, media, topics))
+		out = append(out, projectPublicCase(c, media[c.ID], topics[c.ID]))
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
-func (s *SQLStore) publicMedia(ctx context.Context, id int64) ([]CaseMedia, error) {
-	r, e := s.db.QueryContext(ctx, `SELECT m.id,m.case_id,m.media_asset_id,m.role,m.position,m.caption,m.status
+
+func publicMediaBatch(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, ids []int64, observe func()) (map[int64][]CaseMedia, error) {
+	out := make(map[int64][]CaseMedia)
+	if len(ids) == 0 {
+		return out, nil
+	}
+	observe()
+	rows, err := q.QueryContext(ctx, `SELECT m.id,m.case_id,m.media_asset_id,m.role,m.position,m.caption,m.status
 		FROM training_case_media m JOIN promotion_media_assets asset ON asset.id=m.media_asset_id
-		WHERE m.case_id=$1 AND m.status='published' AND asset.state='ready'
-		ORDER BY m.position,m.id`, id)
-	if e != nil {
-		return nil, e
+		WHERE m.case_id=ANY($1) AND m.status='published' AND asset.state='ready'
+		ORDER BY m.case_id,m.position,m.id`, ids)
+	if err != nil {
+		return nil, err
 	}
-	defer r.Close()
-	var out []CaseMedia
-	for r.Next() {
+	defer rows.Close()
+	for rows.Next() {
 		var m CaseMedia
-		if e = r.Scan(&m.ID, &m.CaseID, &m.MediaAssetID, &m.Role, &m.Position, &m.Caption, &m.Status); e != nil {
-			return nil, e
+		if err = rows.Scan(&m.ID, &m.CaseID, &m.MediaAssetID, &m.Role, &m.Position, &m.Caption, &m.Status); err != nil {
+			return nil, err
 		}
-		out = append(out, m)
+		out[m.CaseID] = append(out[m.CaseID], m)
 	}
-	return out, r.Err()
+	return out, rows.Err()
 }
-func (s *SQLStore) publicTopics(ctx context.Context, id int64) ([]TrainingTopic, error) {
-	r, e := s.db.QueryContext(ctx, `SELECT t.id,t.key,t.title,t.sort_order,t.enabled FROM training_case_topics ct JOIN training_topics t ON t.id=ct.topic_id WHERE ct.case_id=$1 AND t.enabled=true ORDER BY ct.position,t.id`, id)
-	if e != nil {
-		return nil, e
+
+func publicTopicsBatch(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, ids []int64, observe func()) (map[int64][]PublicTopic, error) {
+	out := make(map[int64][]PublicTopic)
+	if len(ids) == 0 {
+		return out, nil
 	}
-	defer r.Close()
-	var out []TrainingTopic
-	for r.Next() {
-		var v TrainingTopic
-		if e = r.Scan(&v.ID, &v.Key, &v.Title, &v.SortOrder, &v.Enabled); e != nil {
-			return nil, e
+	observe()
+	rows, err := q.QueryContext(ctx, `SELECT ct.case_id,t.key,t.title FROM training_case_topics ct JOIN training_topics t ON t.id=ct.topic_id WHERE ct.case_id=ANY($1) AND t.enabled=true ORDER BY ct.case_id,ct.position,t.id`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var caseID int64
+		var topic PublicTopic
+		if err = rows.Scan(&caseID, &topic.Key, &topic.Title); err != nil {
+			return nil, err
 		}
-		out = append(out, v)
+		out[caseID] = append(out[caseID], topic)
 	}
-	return out, r.Err()
+	return out, rows.Err()
 }
+
 func (s *SQLStore) GetPublicCaseBySlug(ctx context.Context, slug string) (PublicCase, error) {
-	c, e := scanCase(s.db.QueryRowContext(ctx, `SELECT `+caseColumns+` FROM training_cases c WHERE slug=$1 AND status='published' AND authorization_status='approved'
-		AND c.cover_asset_id IS NOT NULL
-		AND EXISTS (SELECT 1 FROM promotion_media_assets cover WHERE cover.id=c.cover_asset_id AND cover.state='ready' AND cover.kind='image')
-		AND EXISTS (SELECT 1 FROM training_case_media hero JOIN promotion_media_assets hero_asset ON hero_asset.id=hero.media_asset_id WHERE hero.case_id=c.id AND hero.status='published' AND hero.role IN ('promo','highlight') AND hero_asset.state='ready' AND hero_asset.kind='video')`, slug))
-	if e != nil {
-		return PublicCase{}, e
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	if err != nil {
+		return PublicCase{}, err
 	}
-	topics, e := s.publicTopics(ctx, c.ID)
-	if e != nil {
-		return PublicCase{}, e
+	defer tx.Rollback()
+	s.observeQuery()
+	c, err := scanCase(tx.QueryRowContext(ctx, `SELECT `+caseColumns+` FROM training_cases c WHERE slug=$1 AND `+publicEligibility, slug))
+	if err != nil {
+		return PublicCase{}, err
 	}
-	media, e := s.publicMedia(ctx, c.ID)
-	if e != nil {
-		return PublicCase{}, e
+	topics, err := publicTopicsBatch(ctx, tx, []int64{c.ID}, s.observeQuery)
+	if err != nil {
+		return PublicCase{}, err
 	}
-	return projectPublicCase(c, media, topics), nil
+	media, err := publicMediaBatch(ctx, tx, []int64{c.ID}, s.observeQuery)
+	if err != nil {
+		return PublicCase{}, err
+	}
+	out := projectPublicCase(c, media[c.ID], topics[c.ID])
+	if err = tx.Commit(); err != nil {
+		return PublicCase{}, err
+	}
+	return out, nil
 }

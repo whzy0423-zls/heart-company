@@ -221,8 +221,72 @@ func TestPostgresSolutionStoreCRUDOrderingConflict(t *testing.T) {
 	if updated.Solution.Version != 2 {
 		t.Fatalf("version=%d", updated.Solution.Version)
 	}
-	if err = s.DeleteSolution(ctx, a.Solution.ID); err != nil {
+	if err = s.DeleteSolution(ctx, a.Solution.ID); !errors.Is(err, ErrRestricted) {
+		t.Fatalf("referenced solution delete=%v", err)
+	}
+	unreferenced, err := s.CreateSolution(ctx, SolutionAggregate{Solution: EnterpriseSolution{Slug: "unreferenced", Title: "未引用", TrainerID: trainer.ID, TrainerNameSnapshot: trainer.Name, Status: CaseDraft, Audiences: []string{}, Problems: []string{}, Goals: []string{}, Modules: []string{}, DeliveryMethods: []string{}, CustomizableItems: []string{}}})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if err = s.DeleteSolution(ctx, unreferenced.Solution.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresStoreMapsInvalidReferencesAndMissingVersionsPrecisely(t *testing.T) {
+	s, ctx := openPostgresStore(t)
+	trainer := seedTrainer(t, s, ctx, "precise-errors")
+	bad := baseCase(trainer, "bad-trainer")
+	bad.TrainerID = 99999999
+	if _, err := s.CreateCase(ctx, CaseAggregate{Case: bad}); !errors.Is(err, ErrInvalidReference) || errors.Is(err, ErrRestricted) {
+		t.Fatalf("invalid trainer err=%v", err)
+	}
+	valid, err := s.CreateCase(ctx, CaseAggregate{Case: baseCase(trainer, "invalid-update-ref")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidUpdate := valid
+	invalidUpdate.Case.TrainerID = 99999998
+	if _, err = s.UpdateCase(ctx, invalidUpdate, valid.Case.Version); !errors.Is(err, ErrInvalidReference) || errors.Is(err, ErrRestricted) {
+		t.Fatalf("invalid update reference=%v", err)
+	}
+	a, err := s.CreateCase(ctx, CaseAggregate{Case: baseCase(trainer, "missing-update")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.DeleteCase(ctx, a.Case.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.UpdateCase(ctx, a, a.Case.Version); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing case update=%v", err)
+	}
+	v := EnterpriseSolution{Slug: "missing-solution", Title: "方案", TrainerID: trainer.ID, TrainerNameSnapshot: trainer.Name, Status: CaseDraft, Audiences: []string{}, Problems: []string{}, Goals: []string{}, Modules: []string{}, DeliveryMethods: []string{}, CustomizableItems: []string{}}
+	badSolution := v
+	badSolution.Slug = "bad-solution-ref"
+	badSolution.TrainerID = 99999997
+	if _, err = s.CreateSolution(ctx, SolutionAggregate{Solution: badSolution}); !errors.Is(err, ErrInvalidReference) || errors.Is(err, ErrRestricted) {
+		t.Fatalf("invalid solution reference=%v", err)
+	}
+	sol, err := s.CreateSolution(ctx, SolutionAggregate{Solution: v})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.DeleteSolution(ctx, sol.Solution.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.UpdateSolution(ctx, sol, sol.Solution.Version); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing solution update=%v", err)
+	}
+}
+
+func TestPostgresGetCaseHonorsCanceledContext(t *testing.T) {
+	s, ctx := openPostgresStore(t)
+	trainer := seedTrainer(t, s, ctx, "cancelled")
+	a, _ := s.CreateCase(ctx, CaseAggregate{Case: baseCase(trainer, "cancelled-case")})
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := s.GetCase(cancelled, a.Case.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled GetCase=%v", err)
 	}
 }
 
@@ -358,5 +422,105 @@ func TestPostgresPublicProjectionRequiresReadyCoverAndPromoVideo(t *testing.T) {
 	}
 	if len(detail.Media) != 1 {
 		t.Fatalf("detail media=%+v", detail.Media)
+	}
+}
+
+func TestPostgresPublicPaginationCapsAtFiftyAndIsStable(t *testing.T) {
+	s, ctx := openPostgresStore(t)
+	trainer := seedTrainer(t, s, ctx, "pagination")
+	cover := seedMediaAsset(t, s, ctx, "pagination-cover", "image", true)
+	video := seedMediaAsset(t, s, ctx, "pagination-video", "video", true)
+	for i := 0; i < 52; i++ {
+		c := baseCase(trainer, fmt.Sprintf("page-%02d", i))
+		c.Status = CasePublished
+		c.AuthorizationStatus = AuthorizationApproved
+		c.CoverAssetID = cover
+		c.SortOrder = 7
+		if _, err := s.CreateCase(ctx, CaseAggregate{Case: c, Media: []CaseMedia{{MediaAssetID: video, Role: MediaPromo, Status: CaseMediaPublished}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page50, err := s.ListPublicCases(ctx, PublicCaseQuery{Limit: 50, Offset: -4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page50) != 50 {
+		t.Fatalf("limit50=%d", len(page50))
+	}
+	capped, err := s.ListPublicCases(ctx, PublicCaseQuery{Limit: 51})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capped) != 50 {
+		t.Fatalf("limit51=%d", len(capped))
+	}
+	page1, _ := s.ListPublicCases(ctx, PublicCaseQuery{Limit: 10})
+	page2, _ := s.ListPublicCases(ctx, PublicCaseQuery{Limit: 10, Offset: 10})
+	if page1[9].ID == page2[0].ID {
+		t.Fatal("pages overlap")
+	}
+	for i := 1; i < len(page1); i++ {
+		if page1[i-1].ID <= page1[i].ID {
+			t.Fatalf("unstable id order: %d then %d", page1[i-1].ID, page1[i].ID)
+		}
+	}
+}
+
+func TestPostgresPublicListUsesThreeQueriesAndOneSnapshot(t *testing.T) {
+	s, ctx := openPostgresStore(t)
+	trainer := seedTrainer(t, s, ctx, "snapshot")
+	cover := seedMediaAsset(t, s, ctx, "snapshot-cover", "image", true)
+	video := seedMediaAsset(t, s, ctx, "snapshot-video", "video", true)
+	c := baseCase(trainer, "snapshot-case")
+	c.Status = CasePublished
+	c.AuthorizationStatus = AuthorizationApproved
+	c.CoverAssetID = cover
+	created, err := s.CreateCase(ctx, CaseAggregate{Case: c, Media: []CaseMedia{{MediaAssetID: video, Role: MediaPromo, Status: CaseMediaPublished}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queries := 0
+	s.queryObserver = func() { queries++ }
+	items, err := s.ListPublicCases(ctx, PublicCaseQuery{Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || queries != 3 {
+		t.Fatalf("items=%d queries=%d", len(items), queries)
+	}
+
+	lockTx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = lockTx.ExecContext(ctx, `LOCK TABLE training_case_topics IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		items []PublicCase
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		v, e := s.ListPublicCases(context.Background(), PublicCaseQuery{Limit: 5})
+		done <- result{v, e}
+	}()
+	time.Sleep(150 * time.Millisecond)
+	if _, err = s.db.ExecContext(ctx, `UPDATE training_case_media SET status='offline' WHERE case_id=$1`, created.Case.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = lockTx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if len(got.items) != 1 || len(got.items[0].Media) != 1 {
+			t.Fatalf("mixed public snapshot: %+v", got.items)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("public list did not finish")
 	}
 }
