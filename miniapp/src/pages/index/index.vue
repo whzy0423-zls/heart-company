@@ -216,7 +216,7 @@ function hideWheel() {
 }
 .home-carousel__toggle {
   align-self: flex-end;
-  min-height: 64rpx;
+  min-height: 88rpx;
   margin-top: -16rpx;
   padding: 0 24rpx;
   border: 1rpx solid rgba(53, 73, 115, .12);
@@ -225,7 +225,7 @@ function hideWheel() {
   color: #475569;
   font-size: 22rpx;
   font-weight: 700;
-  line-height: 64rpx;
+  line-height: 88rpx;
   box-shadow: 0 10rpx 24rpx rgba(30, 47, 81, .08);
 }
 .home-carousel__toggle::after {

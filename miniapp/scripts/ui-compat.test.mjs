@@ -174,6 +174,10 @@ assert.match(pauseControl, /\bv-if=["']carousel\.items\.length\s*>\s*1\s*&&\s*ca
 assert.match(pauseControl, /@click=["']toggleCarouselPaused["']/, 'home carousel pause control should toggle autoplay')
 assert.match(pauseControl, /:aria-label=["'][^"]*carouselPaused[^"]*["']/, 'home carousel pause control should expose a state-aware accessible label')
 assert.match(homeRoot, /\{\{ carouselPaused \? ['"]继续轮播['"] : ['"]暂停轮播['"] \}\}/, 'home carousel pause control should show clear pause and resume text')
+assert.match(indexPage, /\.home-carousel__toggle\s*\{[^}]*min-height:\s*88rpx\s*;[^}]*line-height:\s*88rpx\s*;/, 'home carousel control source should define an 88rpx touch target and line box')
+const homeCarouselToggleStyle = pageStyleDeclarations(vueSection(indexPage, 'style') || '', '.home-carousel__toggle')
+assert.match(homeCarouselToggleStyle, /min-height:\s*88rpx\s*;/, 'home carousel control should keep an 88rpx minimum touch target')
+assert.match(homeCarouselToggleStyle, /line-height:\s*88rpx\s*;/, 'home carousel control should keep its label centered in the enlarged target')
 
 const homeOpeningViews = indexPage.match(/<view\b[^>]*>/g) || []
 
@@ -424,10 +428,12 @@ assert.match(bookingPage, /onUnload\(flushDraftSave\)/, 'booking should flush it
 const bookingSubmitBody = sourceBracedBody(bookingPage, /async\s+function\s+submit\s*\(\s*\)\s*\{/.exec(bookingPage)) || ''
 assert.match(bookingSubmitBody, /cancelPendingDraftSave\(\)[\s\S]*clearBookingDraft\(\)/, 'successful booking should cancel delayed persistence before clearing its draft')
 const clearRestoredDraftBody = sourceBracedBody(bookingPage, /function\s+clearRestoredDraft\s*\(\s*\)\s*\{/.exec(bookingPage)) || ''
+assert.match(clearRestoredDraftBody, /^\s*if \(submitting\.value\) return/, 'booking should keep restored draft controls inert while a submission is pending')
 assert.match(clearRestoredDraftBody, /cancelPendingDraftSave\(\)[\s\S]*clearBookingDraft\(\)[\s\S]*kindIndex\.value\s*=\s*0[\s\S]*form\.value\s*=\s*emptyForm\(\)[\s\S]*fieldErrors\.value\s*=\s*\{\s*contactName:\s*['"]['"],\s*phone:\s*['"]['"]\s*\}[\s\S]*restoredDraftNotice\.value\s*=\s*false/, 'clearing a restored draft should cancel autosave, clear storage, reset kind, form and errors, then hide the notice')
 assert.match(bookingTemplate, /class=["'][^"']*draft-restored[^"']*["'][^>]*aria-live=["']polite["']/, 'restored booking drafts should be announced in a lightweight notice')
 assert.match(bookingTemplate, /v-if=["']restoredDraftNotice["']/, 'booking should only render the recovery notice for a restored draft')
 assert.match(bookingTemplate, /<button\s+class=["'][^"']*draft-restored__clear[^"']*["'][^>]*@click=["']clearRestoredDraft["'][^>]*>清空草稿<\/button>/, 'booking recovery notice should expose an explicit native clear action')
+assert.match(bookingTemplate, /<button\s+class=["'][^"']*draft-restored__clear[^"']*["'][^>]*:disabled=["']submitting["'][^>]*@click=["']clearRestoredDraft["']/, 'booking should disable draft clearing while a submission is pending')
 assert.match(pageStyleDeclarations(bookingStyle, '.draft-restored__clear'), /min-height:\s*88rpx\s*;/, 'booking draft clear action should keep an accessible touch target')
 assert.match(bookingTemplate, /class=["'][^"']*booking-hero[^"']*nx-page-hero[^"']*["']/, 'booking should open with the shared themed hero')
 assert.match(bookingTemplate, />预约咨询<\//, 'booking hero should keep the appointment eyebrow')

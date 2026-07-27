@@ -22,6 +22,12 @@ assert.deepEqual(loadBookingDraft(), null, 'empty storage should not return a dr
 storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: 'consult' } }
 assert.equal(loadBookingDraft(), null, 'the untouched default form should not be restored as a draft')
 
+storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: '   ' } }
+assert.equal(loadBookingDraft(), null, 'a whitespace-only booking kind should normalize to the default kind')
+
+storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: ' consult ' } }
+assert.equal(loadBookingDraft(), null, 'a padded default kind should not make an untouched form meaningful')
+
 storage[BOOKING_DRAFT_KEY] = {
   ts: 1,
   data: { kind: 'consult', contactName: '  ', phone: '\n', intent: '', preferredTime: '', message: '\t' },
@@ -84,6 +90,9 @@ assert.equal(loadBookingDraft(), null, 'corrupt serialized storage should be ign
 
 storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: 'future-kind', contactName: '未来类型' } }
 assert.equal(loadBookingDraft().kind, 'future-kind', 'unknown kinds should remain data-safe for the page fallback guard')
+
+storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: ' future-kind ' } }
+assert.equal(loadBookingDraft().kind, 'future-kind', 'meaningful unknown kinds should remain forward-compatible after trimming')
 
 globalThis.uni = {
   getStorageSync() { throw new Error('storage unavailable') },

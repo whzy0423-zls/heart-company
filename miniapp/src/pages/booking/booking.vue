@@ -70,6 +70,7 @@ function clearFieldError(field) {
 }
 
 function clearRestoredDraft() {
+  if (submitting.value) return
   cancelPendingDraftSave()
   clearBookingDraft()
   kindIndex.value = 0
@@ -123,7 +124,7 @@ async function submit() {
         <text class="draft-restored__title">已恢复上次填写的草稿</text>
         <text class="draft-restored__hint">你可以继续填写，或清空后重新开始。</text>
       </view>
-      <button class="draft-restored__clear" @click="clearRestoredDraft">清空草稿</button>
+      <button class="draft-restored__clear" :disabled="submitting" @click="clearRestoredDraft">清空草稿</button>
     </view>
 
     <view class="form-section nx-panel">
