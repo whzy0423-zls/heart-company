@@ -13,8 +13,11 @@ import (
 )
 
 const (
-	maxClassroomProgressPositionSeconds = 30 * 24 * 60 * 60
-	maxClassroomContinueLearningItems   = 20
+	maxClassroomProgressPositionSeconds    = 30 * 24 * 60 * 60
+	maxClassroomContinueLearningItems      = 20
+	classroomContinueLearningBatchSize     = 40
+	classroomContinueLearningMaxBatches    = 5
+	classroomContinueLearningMaxCandidates = classroomContinueLearningBatchSize * classroomContinueLearningMaxBatches
 )
 
 type classroomProgressView struct {
@@ -107,7 +110,12 @@ func (s *Server) classroomContinueLearning(w http.ResponseWriter, r *http.Reques
 		httpx.Fail(w, http.StatusServiceUnavailable, "Classroom progress unavailable")
 		return
 	}
-	items, err := s.classroomProgress.ContinueLearning(r.Context(), userFromRequest(r).ID)
+	uid := userFromRequest(r).ID
+	if s.classroomContinueLimiter != nil && !s.classroomContinueLimiter.Allow(fmt.Sprintf("%d", uid), s.nowTime()) {
+		httpx.Fail(w, http.StatusTooManyRequests, "Too Many Requests")
+		return
+	}
+	items, err := s.classroomProgress.ContinueLearning(r.Context(), uid)
 	if err != nil {
 		writeClassroomProgressError(w, err)
 		return
@@ -160,55 +168,80 @@ func (d *classroomProgressDB) ContinueLearning(ctx context.Context, uid int64) (
 	if err != nil {
 		return nil, err
 	}
-	rows, err := d.db.QueryContext(ctx, `SELECT
-		p.content_id,p.position_seconds,p.completed,p.last_played_at,
-		c.title,c.description,c.cover_url,c.content_type,c.duration_seconds,c.series_id,c.show_as_standalone,c.status,c.playback_blocked,c.access_level,c.price_cents,
-		s.id,s.status,s.playback_blocked,s.access_level,s.price_cents,c.teacher_name_snapshot
-		FROM classroom_progress p
-		JOIN classroom_contents c ON c.id=p.content_id
-		JOIN classroom_media_assets m ON m.id=c.media_asset_id AND m.storage_status=$2
-		LEFT JOIN classroom_series s ON s.id=c.series_id
-		WHERE p.wx_user_id=$1
-		ORDER BY p.last_played_at DESC,c.id DESC`, uid, classroom.MediaReady)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	items := make([]classroomContinueLearningItem, 0, maxClassroomContinueLearningItems)
-	for rows.Next() {
-		var (
-			content                    classroom.Content
-			position                   int
-			completed                  bool
-			lastPlayedAt               time.Time
-			parentID, parentPrice      sql.NullInt64
-			parentStatus, parentAccess sql.NullString
-			parentBlocked              sql.NullBool
-		)
-		if err = rows.Scan(
-			&content.ID, &position, &completed, &lastPlayedAt,
-			&content.Title, &content.Description, &content.CoverURL, &content.ContentType, &content.DurationSeconds, &content.SeriesID, &content.ShowAsStandalone, &content.Status, &content.PlaybackBlocked, &content.AccessLevel, &content.PriceCents,
-			&parentID, &parentStatus, &parentBlocked, &parentAccess, &parentPrice, &content.TeacherNameSnapshot,
-		); err != nil {
+	var cursorAt *time.Time
+	var cursorID int64
+	candidates := 0
+	for batch := 0; batch < classroomContinueLearningMaxBatches && candidates < classroomContinueLearningMaxCandidates && len(items) < maxClassroomContinueLearningItems; batch++ {
+		limit := min(classroomContinueLearningBatchSize, classroomContinueLearningMaxCandidates-candidates)
+		rows, queryErr := d.db.QueryContext(ctx, `SELECT
+			p.content_id,p.position_seconds,p.completed,p.last_played_at,
+			c.title,c.description,c.cover_url,c.content_type,c.duration_seconds,c.series_id,c.show_as_standalone,c.status,c.playback_blocked,c.access_level,c.price_cents,
+			s.id,s.status,s.playback_blocked,s.access_level,s.price_cents,c.teacher_name_snapshot
+			FROM classroom_progress p
+			JOIN classroom_contents c ON c.id=p.content_id
+			JOIN classroom_media_assets m ON m.id=c.media_asset_id
+			LEFT JOIN classroom_series s ON s.id=c.series_id
+			WHERE p.wx_user_id=$1
+			AND m.storage_status=$2
+			AND c.status IN ($3,$4)
+			AND c.playback_blocked=false
+			AND (s.id IS NULL OR s.playback_blocked=false)
+			AND (s.id IS NULL OR c.show_as_standalone=true OR s.status IN ($5,$6))
+			AND ($7::timestamptz IS NULL OR p.last_played_at < $7 OR (p.last_played_at=$7 AND c.id < $8))
+			ORDER BY p.last_played_at DESC,c.id DESC
+			LIMIT $9`, uid, classroom.MediaReady, classroom.ContentPublished, classroom.ContentOffline, classroom.SeriesPublished, classroom.SeriesOffline, cursorAt, cursorID, limit)
+		if queryErr != nil {
+			return nil, queryErr
+		}
+
+		batchCandidates := 0
+		for rows.Next() {
+			var (
+				content                    classroom.Content
+				position                   int
+				completed                  bool
+				lastPlayedAt               time.Time
+				parentID, parentPrice      sql.NullInt64
+				parentStatus, parentAccess sql.NullString
+				parentBlocked              sql.NullBool
+			)
+			if err = rows.Scan(
+				&content.ID, &position, &completed, &lastPlayedAt,
+				&content.Title, &content.Description, &content.CoverURL, &content.ContentType, &content.DurationSeconds, &content.SeriesID, &content.ShowAsStandalone, &content.Status, &content.PlaybackBlocked, &content.AccessLevel, &content.PriceCents,
+				&parentID, &parentStatus, &parentBlocked, &parentAccess, &parentPrice, &content.TeacherNameSnapshot,
+			); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			batchCandidates++
+			candidates++
+			cursorAt, cursorID = &lastPlayedAt, content.ID
+
+			var parent *classroom.Series
+			if parentID.Valid {
+				parent = &classroom.Series{ID: parentID.Int64, Status: classroom.SeriesStatus(parentStatus.String), PlaybackBlocked: parentBlocked.Bool, AccessLevel: classroom.AccessLevel(parentAccess.String), PriceCents: int(parentPrice.Int64)}
+			}
+			if !classroomPlaybackAccessible(content, parent, snapshot) {
+				continue
+			}
+			access := accessFor(content.AccessLevel, parent)
+			view := contentViewResolved(content, parent, access, true)
+			items = append(items, classroomContinueLearningItem{classroomPublicContent: view, PositionSeconds: position, Completed: completed, LastPlayedAt: lastPlayedAt})
+			if len(items) == maxClassroomContinueLearningItems {
+				break
+			}
+		}
+		if err = rows.Err(); err != nil {
+			_ = rows.Close()
 			return nil, err
 		}
-		var parent *classroom.Series
-		if parentID.Valid {
-			parent = &classroom.Series{ID: parentID.Int64, Status: classroom.SeriesStatus(parentStatus.String), PlaybackBlocked: parentBlocked.Bool, AccessLevel: classroom.AccessLevel(parentAccess.String), PriceCents: int(parentPrice.Int64)}
+		if err = rows.Close(); err != nil {
+			return nil, err
 		}
-		if !classroomPlaybackAccessible(content, parent, snapshot) {
-			continue
-		}
-		access := accessFor(content.AccessLevel, parent)
-		view := contentViewResolved(content, parent, access, true)
-		items = append(items, classroomContinueLearningItem{classroomPublicContent: view, PositionSeconds: position, Completed: completed, LastPlayedAt: lastPlayedAt})
-		if len(items) == maxClassroomContinueLearningItems {
+		if batchCandidates < limit {
 			break
 		}
-	}
-	if err = rows.Err(); err != nil {
-		return nil, err
 	}
 	return items, nil
 }

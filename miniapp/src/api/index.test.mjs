@@ -35,7 +35,7 @@ assert.doesNotMatch(
 const dir = await mkdtemp(join(tmpdir(), 'nx-miniapp-classroom-api-'))
 try {
   const executableSource = source
-    .replace(/import\s+\{[^}]+\}\s+from\s+['"]\.\/request['"]/, "import { request, getToken } from './request.mjs'")
+    .replace(/import\s+\{[^}]+\}\s+from\s+['"]\.\/request['"]/, "import { clearToken, request, getToken } from './request.mjs'")
     .replace(/import\s+\{\s*APP_CHANNEL\s*\}\s+from\s+['"]\.\.\/config['"]/, "const APP_CHANNEL = 'test'")
     .replace(/import\s+\{\s*userErrorMessage\s*\}\s+from\s+['"]\.\.\/utils\/userMessage['"]/, "import { userErrorMessage } from './userMessage.mjs'")
   await writeFile(join(dir, 'index.mjs'), executableSource)
@@ -46,6 +46,7 @@ try {
     export let responder = async (options) => ({ options })
     export function getToken() { return token }
     export function setTestToken(value) { token = value }
+    export function clearToken() { token = '' }
     export function setResponder(value) { responder = value }
     export function request(options) { calls.push(options); return responder(options) }
   `)
@@ -112,6 +113,76 @@ try {
 
   requestStub.setResponder(async () => { throw new Error(' 后端错误 ') })
   await assert.rejects(() => api.getClassroomContentApi(21), { message: '后端错误' })
+
+  requestStub.setTestToken('stale-jwt')
+  let staleMetadataCalls = 0
+  requestStub.setResponder(async (options) => {
+    staleMetadataCalls += 1
+    if (options.auth) throw Object.assign(new Error('Unauthorized'), { statusCode: 401, authExpired: true })
+    return { id: 21, effectiveAccess: 'public', canPlay: true }
+  })
+  const publicAfterStaleJWT = await api.getClassroomContentApi(21)
+  assert.equal(publicAfterStaleJWT.canPlay, true)
+  assert.equal(staleMetadataCalls, 2, 'optional-auth metadata should retry anonymously exactly once')
+  assert.equal(requestStub.token, '', 'stale classroom JWT should clear the local session')
+  assert.deepEqual(requestStub.calls.slice(-2).map(({ auth }) => auth), [true, false])
+
+  requestStub.setTestToken('corrupt-jwt')
+  let protectedMetadataCalls = 0
+  requestStub.setResponder(async (options) => {
+    protectedMetadataCalls += 1
+    if (options.auth) throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
+    return { id: 22, effectiveAccess: 'login', canPlay: false, purchaseState: 'available' }
+  })
+  const protectedAfterFallback = await api.getClassroomContentApi(22)
+  assert.equal(protectedAfterFallback.canPlay, false, 'anonymous fallback must preserve server access decisions')
+  assert.equal(protectedMetadataCalls, 2)
+  assert.equal(requestStub.token, '')
+
+  requestStub.setTestToken('jwt')
+  let nonAuthFailureCalls = 0
+  requestStub.setResponder(async () => {
+    nonAuthFailureCalls += 1
+    throw Object.assign(new Error('Server Error'), { statusCode: 500 })
+  })
+  await assert.rejects(() => api.listClassroomSeriesApi(), { message: 'Server Error' })
+  assert.equal(nonAuthFailureCalls, 1, 'non-auth errors must not trigger anonymous retry')
+
+  requestStub.setTestToken('jwt')
+  let repeatedAuthFailures = 0
+  requestStub.setResponder(async () => {
+    repeatedAuthFailures += 1
+    throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
+  })
+  await assert.rejects(() => api.listClassroomStandaloneApi(), { message: 'Unauthorized' })
+  assert.equal(repeatedAuthFailures, 2, 'auth fallback must stop after one anonymous retry')
+
+  requestStub.setTestToken('expired-jwt')
+  const stalePlaybackCalls = []
+  requestStub.setResponder(async (options) => {
+    stalePlaybackCalls.push(options)
+    if (options.url.endsWith('/play') && options.auth) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
+    if (options.url.endsWith('/ticket')) return { ticket: 'fresh-anonymous-ticket', expiresIn: 300 }
+    return { url: 'https://signed.example/anonymous-retry.mp4', expiresIn: 300, contentType: 'video' }
+  })
+  const playbackAfterStaleJWT = await api.getClassroomPlaybackApi(23)
+  assert.equal(playbackAfterStaleJWT.url, 'https://signed.example/anonymous-retry.mp4')
+  assert.equal(requestStub.token, '')
+  assert.deepEqual(stalePlaybackCalls.map(({ url, auth, data }) => ({ url, auth, data })), [
+    { url: '/miniapp/classroom/content/23/play', auth: true, data: {} },
+    { url: '/public/classroom/content/23/ticket', auth: undefined, data: {} },
+    { url: '/miniapp/classroom/content/23/play', auth: false, data: { ticket: 'fresh-anonymous-ticket' } },
+  ])
+
+  requestStub.setTestToken('expired-jwt')
+  let protectedPlaybackCalls = 0
+  requestStub.setResponder(async (options) => {
+    protectedPlaybackCalls += 1
+    if (options.auth) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
+    throw Object.assign(new Error('Not Found'), { statusCode: 404 })
+  })
+  await assert.rejects(() => api.getClassroomPlaybackApi(24), { message: 'Not Found' })
+  assert.equal(protectedPlaybackCalls, 2, 'protected content fallback should stop when anonymous ticket is denied')
 
   assert.equal(fixture.series.items[0].objectKey, undefined)
   assert.equal(fixture.content.url, undefined)

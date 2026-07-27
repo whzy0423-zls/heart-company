@@ -1,4 +1,4 @@
-import { getToken, request } from './request'
+import { clearToken, getToken, request } from './request'
 import { APP_CHANNEL } from '../config'
 import { userErrorMessage } from '../utils/userMessage'
 
@@ -20,6 +20,21 @@ async function classroomRequest(options, fallback) {
     if (error && typeof error === 'object') Object.assign(normalized, error)
     normalized.message = userErrorMessage(error, fallback)
     throw normalized
+  }
+}
+
+function isClassroomAuthError(error) {
+  return error?.authExpired === true || error?.statusCode === 401 || error?.statusCode === 403
+}
+
+async function optionalClassroomRequest(options, fallback) {
+  const auth = classroomAuth()
+  try {
+    return await classroomRequest({ ...options, auth }, fallback)
+  } catch (error) {
+    if (!auth || !isClassroomAuthError(error)) throw error
+    clearToken()
+    return classroomRequest({ ...options, auth: false }, fallback)
   }
 }
 
@@ -119,35 +134,47 @@ export function reportContentApi(testRecordId) {
 }
 
 export function listClassroomSeriesApi(query = {}) {
-  return classroomRequest({ url: '/public/classroom/series', method: 'GET', query, auth: classroomAuth() }, '系列课程加载失败，请重试')
+  return optionalClassroomRequest({ url: '/public/classroom/series', method: 'GET', query }, '系列课程加载失败，请重试')
 }
 
 export function listClassroomStandaloneApi(query = {}) {
-  return classroomRequest({ url: '/public/classroom/standalone', method: 'GET', query, auth: classroomAuth() }, '课件列表加载失败，请重试')
+  return optionalClassroomRequest({ url: '/public/classroom/standalone', method: 'GET', query }, '课件列表加载失败，请重试')
 }
 
 export function getClassroomSeriesApi(id) {
-  return classroomRequest({ url: `/public/classroom/series/${classroomID(id)}`, method: 'GET', auth: classroomAuth() }, '系列课程加载失败，请重试')
+  return optionalClassroomRequest({ url: `/public/classroom/series/${classroomID(id)}`, method: 'GET' }, '系列课程加载失败，请重试')
 }
 
 export function getClassroomContentApi(id) {
-  return classroomRequest({ url: `/public/classroom/content/${classroomID(id)}`, method: 'GET', auth: classroomAuth() }, '课件详情加载失败，请重试')
+  return optionalClassroomRequest({ url: `/public/classroom/content/${classroomID(id)}`, method: 'GET' }, '课件详情加载失败，请重试')
 }
 
 export async function getClassroomPlaybackApi(id) {
   const contentId = classroomID(id)
   const auth = classroomAuth()
-  let ticket = ''
-  if (!auth) {
+  const anonymousPlayback = async () => {
     const result = await classroomRequest({ url: `/public/classroom/content/${contentId}/ticket`, method: 'POST', data: {} }, '播放凭证获取失败，请重试')
-    ticket = String(result?.ticket || '')
+    const ticket = String(result?.ticket || '')
+    return classroomRequest({
+      url: `/miniapp/classroom/content/${contentId}/play`,
+      method: 'POST',
+      data: { ticket },
+      auth: false,
+    }, '播放地址获取失败，请重试')
   }
-  return classroomRequest({
-    url: `/miniapp/classroom/content/${contentId}/play`,
-    method: 'POST',
-    data: ticket ? { ticket } : {},
-    auth,
-  }, '播放地址获取失败，请重试')
+  if (!auth) return anonymousPlayback()
+  try {
+    return await classroomRequest({
+      url: `/miniapp/classroom/content/${contentId}/play`,
+      method: 'POST',
+      data: {},
+      auth: true,
+    }, '播放地址获取失败，请重试')
+  } catch (error) {
+    if (!isClassroomAuthError(error)) throw error
+    clearToken()
+    return anonymousPlayback()
+  }
 }
 
 function isExpiredPlaybackError(error) {

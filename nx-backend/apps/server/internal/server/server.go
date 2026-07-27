@@ -116,6 +116,7 @@ type Server struct {
 	classroomOrders            classroomOrderService
 	classroomProgress          classroomProgressService
 	classroomProgressLimiter   *strRateLimiter
+	classroomContinueLimiter   *strRateLimiter
 	classroomPlaybackSigner    storage.ObjectSigner
 	classroomPlaybackLimiter   *strRateLimiter
 	classroomPlaybackIPLimiter *strRateLimiter
@@ -209,6 +210,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 		s.classroomPlaybackLimiter = newStrRateLimiter(30, time.Minute)
 		s.classroomPlaybackIPLimiter = newBoundedStrRateLimiter(120, time.Minute, 20_000)
 		s.classroomProgressLimiter = newBoundedStrRateLimiter(30, time.Minute, 20_000)
+		s.classroomContinueLimiter = newBoundedStrRateLimiter(30, time.Minute, 20_000)
 		files, fileErr := apprelease.NewFileStore(filepath.Join(env.UploadDir, "app-releases"), apprelease.MaxAPKBytes)
 		if fileErr != nil {
 			panic("app release file store: " + fileErr.Error())

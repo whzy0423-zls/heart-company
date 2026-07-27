@@ -155,6 +155,38 @@ func TestClassroomProgressRouteRateLimitsPerUserAndContent(t *testing.T) {
 	}
 }
 
+func TestClassroomContinueLearningRouteRateLimitsPerUserWithBoundedKeys(t *testing.T) {
+	svc := &fakeClassroomProgressService{items: []classroomContinueLearningItem{}}
+	s := &Server{
+		env:                      config.Env{JWTSecret: "secret"},
+		classroomProgress:        svc,
+		classroomContinueLimiter: newBoundedStrRateLimiter(1, time.Minute, 1),
+		now:                      func() time.Time { return time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC) },
+	}
+	mux := progressTestMux(s)
+
+	request := func(uid int64) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/miniapp/classroom/continue-learning", nil)
+		req.Header.Set("Authorization", "Bearer "+miniappClassroomToken(t, "secret", uid))
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		return rr
+	}
+
+	if rr := request(7); rr.Code != http.StatusOK {
+		t.Fatalf("first request status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if rr := request(7); rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("repeated request status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if rr := request(8); rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("new key beyond bounded capacity status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if got := len(s.classroomContinueLimiter.keys); got != 1 {
+		t.Fatalf("continue-learning limiter keys=%d want=1", got)
+	}
+}
+
 type fakeClassroomProgressAccess struct {
 	source classroomPlaybackSource
 	err    error
@@ -268,7 +300,141 @@ func TestClassroomContinueLearningFiltersAccessAndSortsNewestFirst(t *testing.T)
 	if len(items) != 2 || items[0].ID != 30 || items[1].ID != 29 || items[0].Title != "Owned offline" || items[1].Title != "Public" {
 		t.Fatalf("unexpected continue-learning items: %+v", items)
 	}
-	if !items[0].CanPlay || !strings.Contains(candidateQuery, "ORDER BY p.last_played_at DESC,c.id DESC") || strings.Contains(candidateQuery, "LIMIT") {
+	if !items[0].CanPlay || !strings.Contains(candidateQuery, "ORDER BY p.last_played_at DESC,c.id DESC") || !strings.Contains(candidateQuery, "LIMIT") {
 		t.Fatalf("missing access/sort contract: query=%s items=%+v", candidateQuery, items)
+	}
+}
+
+func classroomContinueRow(id int64, playedAt time.Time, title, contentStatus string, contentAccess string, seriesID any, standalone bool, seriesStatus any, seriesAccess any) []driver.Value {
+	return []driver.Value{
+		id, int64(10), false, playedAt,
+		title, "desc", "cover", "video", int64(100), seriesID, standalone, contentStatus, false, contentAccess, int64(0),
+		seriesID, seriesStatus, false, seriesAccess, int64(2990), "Teacher",
+	}
+}
+
+func TestClassroomContinueLearningScansKeysetBatchesUntilTwentyAccessibleItems(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	progressQueries := 0
+	var cursors []struct {
+		at time.Time
+		id int64
+	}
+	db := openClassroomTestDB(t, func(q string, args []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(q, "SELECT member_level,member_expires_at"):
+			return &classroomRows{cols: []string{"level", "expires"}, values: [][]driver.Value{{int64(0), nil}}}, nil
+		case strings.Contains(q, "SELECT series_id,content_id FROM classroom_entitlements"):
+			return &classroomRows{cols: []string{"series_id", "content_id"}}, nil
+		case strings.Contains(q, "FROM classroom_progress p"):
+			progressQueries++
+			if !strings.Contains(q, "p.last_played_at <") || !strings.Contains(q, "p.last_played_at=") || !strings.Contains(q, "c.id <") {
+				t.Fatalf("missing stable keyset cursor: %s", q)
+			}
+			if !strings.Contains(q, "c.playback_blocked=false") || !strings.Contains(q, "s.playback_blocked=false") || !strings.Contains(q, "c.status IN") || !strings.Contains(q, "m.storage_status") {
+				t.Fatalf("missing SQL lifecycle/media/hard-stop filters: %s", q)
+			}
+			if len(args) != 9 || args[8].Value != int64(40) {
+				t.Fatalf("batch args=%+v", args)
+			}
+			if progressQueries > 1 {
+				cursors = append(cursors, struct {
+					at time.Time
+					id int64
+				}{at: args[6].Value.(time.Time), id: args[7].Value.(int64)})
+			}
+			values := make([][]driver.Value, 0, 40)
+			baseID := int64(1000 - (progressQueries-1)*40)
+			for i := 0; i < 40; i++ {
+				id := baseID - int64(i)
+				title, access := fmt.Sprintf("Denied %d", id), "paid"
+				if progressQueries == 2 && i < 25 {
+					title, access = fmt.Sprintf("Allowed %02d", i), "public"
+				}
+				values = append(values, classroomContinueRow(id, now.Add(-time.Duration(progressQueries-1)*time.Minute), title, "published", access, nil, false, nil, nil))
+			}
+			return &classroomRows{cols: make([]string, 21), values: values}, nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", q)
+		}
+	})
+
+	items, err := newClassroomProgressDB(db).ContinueLearning(context.Background(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progressQueries != 2 || len(items) != 20 {
+		t.Fatalf("queries=%d items=%d", progressQueries, len(items))
+	}
+	if items[0].Title != "Allowed 00" || items[19].Title != "Allowed 19" {
+		t.Fatalf("unexpected bounded result order: first=%q last=%q", items[0].Title, items[19].Title)
+	}
+	if len(cursors) != 1 || !cursors[0].at.Equal(now) || cursors[0].id != 961 {
+		t.Fatalf("second batch cursor=%+v", cursors)
+	}
+}
+
+func TestClassroomContinueLearningStopsAfterBoundedCandidateBudget(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	progressQueries := 0
+	db := openClassroomTestDB(t, func(q string, args []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(q, "SELECT member_level,member_expires_at"):
+			return &classroomRows{cols: []string{"level", "expires"}, values: [][]driver.Value{{int64(0), nil}}}, nil
+		case strings.Contains(q, "SELECT series_id,content_id FROM classroom_entitlements"):
+			return &classroomRows{cols: []string{"series_id", "content_id"}}, nil
+		case strings.Contains(q, "FROM classroom_progress p"):
+			progressQueries++
+			if len(args) != 9 || args[8].Value != int64(40) {
+				t.Fatalf("batch args=%+v", args)
+			}
+			values := make([][]driver.Value, 0, 40)
+			baseID := int64(1000 - (progressQueries-1)*40)
+			for i := 0; i < 40; i++ {
+				id := baseID - int64(i)
+				values = append(values, classroomContinueRow(id, now.Add(-time.Duration(progressQueries-1)*time.Minute), fmt.Sprintf("Denied %d", id), "published", "paid", nil, false, nil, nil))
+			}
+			return &classroomRows{cols: make([]string, 21), values: values}, nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", q)
+		}
+	})
+
+	items, err := newClassroomProgressDB(db).ContinueLearning(context.Background(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 || progressQueries != 5 {
+		t.Fatalf("items=%d progress queries=%d want bounded 5", len(items), progressQueries)
+	}
+}
+
+func TestClassroomContinueLearningPreservesStandaloneAndOfflineOwnedSemantics(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	db := openClassroomTestDB(t, func(q string, _ []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(q, "SELECT member_level,member_expires_at"):
+			return &classroomRows{cols: []string{"level", "expires"}, values: [][]driver.Value{{int64(0), nil}}}, nil
+		case strings.Contains(q, "SELECT series_id,content_id FROM classroom_entitlements"):
+			return &classroomRows{cols: []string{"series_id", "content_id"}, values: [][]driver.Value{{int64(8), nil}, {nil, int64(77)}}}, nil
+		case strings.Contains(q, "FROM classroom_progress p"):
+			return &classroomRows{cols: make([]string, 21), values: [][]driver.Value{
+				classroomContinueRow(80, now, "Standalone under draft series", "published", "public", int64(9), true, "draft", "paid"),
+				classroomContinueRow(79, now.Add(-time.Minute), "Owned offline series lesson", "published", "inherit", int64(8), false, "offline", "paid"),
+				classroomContinueRow(78, now.Add(-2*time.Minute), "Unowned offline series lesson", "published", "inherit", int64(7), false, "offline", "paid"),
+				classroomContinueRow(77, now.Add(-3*time.Minute), "Owned offline content", "offline", "paid", nil, false, nil, nil),
+				classroomContinueRow(76, now.Add(-4*time.Minute), "Unowned offline content", "offline", "public", nil, false, nil, nil),
+			}}, nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", q)
+		}
+	})
+
+	items, err := newClassroomProgressDB(db).ContinueLearning(context.Background(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 3 || items[0].ID != 80 || items[1].ID != 79 || items[2].ID != 77 {
+		t.Fatalf("unexpected lifecycle/access items: %+v", items)
 	}
 }
