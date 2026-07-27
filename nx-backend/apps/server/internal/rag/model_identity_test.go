@@ -31,6 +31,19 @@ func TestIsModelIdentityQuestion(t *testing.T) {
 		{name: "中文中转站", question: "你的请求走哪个中转站", want: true},
 		{name: "中文API代理", question: "你当前用的 API 代理是什么？", want: true},
 		{name: "中文API中转", question: "当前助手通过哪个 API 中转调用模型", want: true},
+		{name: "中文当前助手自然问法", question: "当前助手是什么模型？", want: true},
+		{name: "中文这个助手强调问法", question: "这个助手到底是什么模型？", want: true},
+		{name: "中文请你告诉我", question: "请你告诉我你是什么模型？", want: true},
+		{name: "中文能否告诉我", question: "能否告诉我你用的是什么模型？", want: true},
+		{name: "中文想知道", question: "我想知道你是什么模型。", want: true},
+		{name: "中文介绍模型ID", question: "请介绍一下你的模型 ID。", want: true},
+		{name: "中文助手版本", question: "你是哪个版本？", want: true},
+		{name: "中文助手版本号", question: "你的版本号是多少？", want: true},
+		{name: "中文助手参数数量", question: "你有多少参数？", want: true},
+		{name: "中文公司开发助手", question: "哪家公司开发了你？", want: true},
+		{name: "中文助手开发者", question: "你的开发者是谁？", want: true},
+		{name: "中文回答通过中转站", question: "你的回答是不是通过中转站？", want: true},
+		{name: "中文当前API代理", question: "你现在走的是哪个 API 代理？", want: true},
 
 		{name: "英文当前模型", question: "What model are you?", want: true},
 		{name: "英文底层模型", question: "Which underlying model do you use?", want: true},
@@ -44,6 +57,10 @@ func TestIsModelIdentityQuestion(t *testing.T) {
 		{name: "英文CodexCLI", question: "Is this assistant running through Codex CLI?", want: true},
 		{name: "英文API代理", question: "Which API proxy do you use?", want: true},
 		{name: "英文模型网关", question: "Are you operating via a model gateway?", want: true},
+		{name: "英文礼貌询问当前模型", question: "Could you tell me what model you are?", want: true},
+		{name: "英文礼貌询问开发公司", question: "Please tell me which company developed you.", want: true},
+		{name: "英文模型版本自然问法", question: "What model version are you?", want: true},
+		{name: "英文当前助手API代理", question: "What API proxy is this assistant using?", want: true},
 
 		{name: "空白", question: "   ", want: false},
 		{name: "普通公司科普", question: "OpenAI 是什么公司？", want: false},
@@ -60,6 +77,9 @@ func TestIsModelIdentityQuestion(t *testing.T) {
 		{name: "英文CodexCLI用法", question: "How do I use Codex CLI?", want: false},
 		{name: "英文API代理原理", question: "How does an API proxy work?", want: false},
 		{name: "英文模型选择", question: "Which model is best for coding?", want: false},
+		{name: "中文公司介绍命令", question: "介绍一下 OpenAI 是什么公司。", want: false},
+		{name: "中文参数量含义", question: "请解释模型参数量是什么意思。", want: false},
+		{name: "中文CodexCLI用途", question: "能否介绍 Codex CLI 的用途？", want: false},
 	}
 
 	for _, tt := range tests {
