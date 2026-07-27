@@ -10,10 +10,10 @@ const { config, loading, saveConfig, saving } = useSiteConfigEditor();
 
 <template>
   <EditorShell
-    description="当前先管理首页老师简介 teaser；老师详情页字段后续可继续抽取。"
+    description="配置官网与小程序展示的老师简介；课堂音视频内容及其老师快照请前往「老师课堂」管理。"
     :loading="loading"
     :saving="saving"
-    title="老师管理"
+    title="老师资料管理"
     @save="saveConfig"
   >
     <Form v-if="config" layout="vertical">

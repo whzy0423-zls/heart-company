@@ -61,23 +61,31 @@ func (l *fixedWindowRateLimiter) pruneLocked(now time.Time) {
 }
 
 type strRateLimiter struct {
-	limit  int
-	mu     sync.Mutex
-	keys   map[string]rateWindow
-	window time.Duration
+	limit, maxKeys int
+	mu             sync.Mutex
+	keys           map[string]rateWindow
+	window         time.Duration
+	nextPrune      time.Time
 }
 
 func newStrRateLimiter(limit int, window time.Duration) *strRateLimiter {
+	return newBoundedStrRateLimiter(limit, window, 10_000)
+}
+func newBoundedStrRateLimiter(limit int, window time.Duration, maxKeys int) *strRateLimiter {
 	if limit <= 0 {
 		limit = 1
 	}
 	if window <= 0 {
 		window = time.Minute
 	}
+	if maxKeys <= 0 {
+		maxKeys = 10_000
+	}
 	return &strRateLimiter{
-		limit:  limit,
-		keys:   map[string]rateWindow{},
-		window: window,
+		limit:   limit,
+		maxKeys: maxKeys,
+		keys:    map[string]rateWindow{},
+		window:  window,
 	}
 }
 
@@ -90,8 +98,14 @@ func (l *strRateLimiter) Allow(key string, now time.Time) bool {
 
 	current := l.keys[key]
 	if current.expiresAt.IsZero() || !now.Before(current.expiresAt) {
+		if current.expiresAt.IsZero() && (l.nextPrune.IsZero() || !now.Before(l.nextPrune)) {
+			l.pruneStrLocked(now)
+			l.nextPrune = now.Add(min(l.window, time.Minute))
+		}
+		if current.expiresAt.IsZero() && len(l.keys) >= l.maxKeys {
+			return false
+		}
 		l.keys[key] = rateWindow{count: 1, expiresAt: now.Add(l.window)}
-		l.pruneStrLocked(now)
 		return true
 	}
 	if current.count >= l.limit {

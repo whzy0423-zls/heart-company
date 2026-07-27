@@ -40,6 +40,7 @@ type Env struct {
 	// ObjectUploader 允许测试或特殊部署注入自定义对象存储实现；为空时按 OSS_* 环境变量创建。
 	ObjectUploader storage.ObjectUploader
 	OSS            storage.OSSConfig
+	ClassroomMedia ClassroomMediaConfig
 	// UploadMaxBytes 单文件上传大小上限，单位 bytes；<=0 时默认 20 MiB。
 	UploadDir       string
 	UploadMaxBytes  int64
@@ -60,6 +61,18 @@ type Env struct {
 	Image             ImageConfig
 	ASR               ASRConfig
 	JPush             JPushConfig
+}
+
+// ClassroomMediaConfig controls private multipart uploads for teacher classroom media.
+type ClassroomMediaConfig struct {
+	Endpoint             string
+	Bucket               string
+	Region               string
+	PartSizeBytes        int64
+	MaxParts             int
+	CredentialTTLSeconds int
+	MaxVideoBytes        int64
+	MaxAudioBytes        int64
 }
 
 // SMSConfig 短信发送配置。Provider 为空时非生产环境为 dev 模式；生产环境会 fail closed。
@@ -199,6 +212,40 @@ func (c AppReleaseConfig) ExpectedCertificateSHA256() (string, error) {
 	return normalized, nil
 }
 
+func positiveIntEnv(key string, fallback int) int {
+	v, err := strconv.Atoi(getenv(key, ""))
+	if err != nil || v <= 0 {
+		return fallback
+	}
+	max := 1000000
+	if key == "CLASSROOM_MEDIA_PART_SIZE_MB" {
+		max = 1024
+	}
+	if key == "CLASSROOM_MEDIA_MAX_PARTS" {
+		max = 10000
+	}
+	if key == "CLASSROOM_MEDIA_CREDENTIAL_TTL_SECONDS" {
+		max = 86400
+	}
+	if v > max {
+		return fallback
+	}
+	return v
+}
+func positiveInt64Env(key string, fallback int64) int64 {
+	v, err := strconv.ParseInt(getenv(key, ""), 10, 64)
+	if err != nil || v <= 0 {
+		return fallback
+	}
+	if key == "CLASSROOM_MEDIA_MAX_VIDEO_MB" && v > 4*1024*1024 {
+		return fallback
+	}
+	if key == "CLASSROOM_MEDIA_MAX_AUDIO_MB" && v > 1024*1024 {
+		return fallback
+	}
+	return v
+}
+
 func Load() Env {
 	loadDotEnv()
 
@@ -300,6 +347,13 @@ func Load() Env {
 
 	appEnv := NormalizeAppEnv(getenv("APP_ENV", ""))
 
+	classroomPartMB := positiveIntEnv("CLASSROOM_MEDIA_PART_SIZE_MB", 8)
+	classroomMaxParts := positiveIntEnv("CLASSROOM_MEDIA_MAX_PARTS", 10000)
+	classroomTTL := positiveIntEnv("CLASSROOM_MEDIA_CREDENTIAL_TTL_SECONDS", 900)
+	classroomVideoMB := positiveInt64Env("CLASSROOM_MEDIA_MAX_VIDEO_MB", 4096)
+	classroomAudioMB := positiveInt64Env("CLASSROOM_MEDIA_MAX_AUDIO_MB", 512)
+	classroomMedia := ClassroomMediaConfig{Endpoint: getenv("CLASSROOM_MEDIA_ENDPOINT", getenv("OSS_ENDPOINT", "")), Bucket: getenv("CLASSROOM_MEDIA_BUCKET", getenv("OSS_BUCKET", "")), Region: getenv("CLASSROOM_MEDIA_REGION", getenv("OSS_REGION", "")), PartSizeBytes: int64(classroomPartMB) * 1024 * 1024, MaxParts: classroomMaxParts, CredentialTTLSeconds: classroomTTL, MaxVideoBytes: classroomVideoMB * 1024 * 1024, MaxAudioBytes: classroomAudioMB * 1024 * 1024}
+
 	return Env{
 		AdminPassword: getenv("ADMIN_PASSWORD", "123456"),
 		AdminUsername: getenv("ADMIN_USERNAME", "admin"),
@@ -317,6 +371,7 @@ func Load() Env {
 		BuildScript:        buildScript,
 		BuildTimeout:       buildTimeout,
 		DatabaseURL:        getenv("DATABASE_URL", "postgres://nx:nx@localhost:5432/nx_admin?sslmode=disable"),
+		ClassroomMedia:     classroomMedia,
 		OSS: storage.OSSConfig{
 			AccessKeyID:     getenv("OSS_ACCESS_KEY_ID", ""),
 			AccessKeySecret: getenv("OSS_ACCESS_KEY_SECRET", ""),

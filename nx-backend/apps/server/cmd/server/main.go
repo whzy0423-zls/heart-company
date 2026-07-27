@@ -28,9 +28,13 @@ func main() {
 
 	address := fmt.Sprintf(":%d", env.Port)
 	log.Printf("Nine Xing Go server listening on http://localhost%s", address)
+	handler := server.New(env, database)
+	if shutdowner, ok := handler.(interface{ Shutdown() }); ok {
+		defer shutdowner.Shutdown()
+	}
 	httpServer := &http.Server{
 		Addr:              address,
-		Handler:           server.New(env, database),
+		Handler:           handler,
 		IdleTimeout:       60 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       20 * time.Second,

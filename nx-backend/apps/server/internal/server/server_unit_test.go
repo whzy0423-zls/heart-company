@@ -36,6 +36,15 @@ func TestNewPanicsForUnknownSMSProvider(t *testing.T) {
 	mustSMSSender(config.SMSConfig{Provider: "unknown"})
 }
 
+func TestNewReturnsShutdownCapableHandler(t *testing.T) {
+	handler := New(config.Env{JWTSecret: "test-secret"}, nil)
+	shutdowner, ok := handler.(interface{ Shutdown() })
+	if !ok {
+		t.Fatalf("server.New returned %T without Shutdown capability", handler)
+	}
+	shutdowner.Shutdown()
+}
+
 func TestMustSMSSenderSupportsSpugProvider(t *testing.T) {
 	sender := mustSMSSender(config.SMSConfig{
 		Provider:           "spug",

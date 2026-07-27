@@ -256,6 +256,59 @@ func TestWxLoginReturnsBadRequestForInvalidChannelOrScene(t *testing.T) {
 	}
 }
 
+type wxProfileUpdateState struct {
+	nickname string
+	avatar   string
+	userID   int64
+}
+
+type wxProfileUpdateDriver struct{ state *wxProfileUpdateState }
+type wxProfileUpdateConn struct{ state *wxProfileUpdateState }
+
+func (d wxProfileUpdateDriver) Open(string) (driver.Conn, error) {
+	return &wxProfileUpdateConn{state: d.state}, nil
+}
+func (*wxProfileUpdateConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
+func (*wxProfileUpdateConn) Close() error                        { return nil }
+func (*wxProfileUpdateConn) Begin() (driver.Tx, error)           { return nil, driver.ErrSkip }
+func (c *wxProfileUpdateConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	if !strings.Contains(query, "UPDATE wx_users SET nickname=$1, avatar=$2 WHERE id=$3") || len(args) != 3 {
+		return nil, fmt.Errorf("unexpected profile update: %s %+v", query, args)
+	}
+	c.state.nickname = fmt.Sprint(args[0].Value)
+	c.state.avatar = fmt.Sprint(args[1].Value)
+	c.state.userID, _ = args[2].Value.(int64)
+	return driver.RowsAffected(1), nil
+}
+func (c *wxProfileUpdateConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	if !strings.Contains(query, "SELECT id, nickname, avatar") {
+		return nil, fmt.Errorf("unexpected profile query: %s", query)
+	}
+	return &classroomRows{cols: []string{"id", "nickname", "avatar", "phone", "gender", "main_type", "member_level", "create_time"}, values: [][]driver.Value{{int64(42), c.state.nickname, c.state.avatar, "", "", int64(1), int64(0), time.Unix(1_700_000_000, 0)}}}, nil
+}
+
+func TestWxUserInfoPutPersistsProfileAndReturnsUpdatedDTO(t *testing.T) {
+	state := &wxProfileUpdateState{nickname: "旧昵称"}
+	driverName := fmt.Sprintf("wx-profile-update-%d", time.Now().UnixNano())
+	sql.Register(driverName, wxProfileUpdateDriver{state: state})
+	database, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	s := &Server{miniapp: miniapp.NewStore(database)}
+	request := httptest.NewRequest(http.MethodPut, "/api/wx/userinfo", strings.NewReader(`{"nickname":"新昵称","avatar":"https://avatar.example/new.png"}`))
+	request = request.WithContext(withUser(request.Context(), auth.UserInfo{ID: 42, Roles: []string{miniappRole}}))
+	response := httptest.NewRecorder()
+	s.wxUserInfo(response, request)
+	if response.Code != http.StatusOK || state.userID != 42 || state.nickname != "新昵称" || state.avatar != "https://avatar.example/new.png" {
+		t.Fatalf("profile update status=%d state=%+v body=%s", response.Code, state, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"nickname":"新昵称"`) || !strings.Contains(response.Body.String(), `"avatar":"https://avatar.example/new.png"`) {
+		t.Fatalf("updated profile DTO missing: %s", response.Body.String())
+	}
+}
+
 type miniappTestRecorderFake struct {
 	record miniapp.TestRecord
 	err    error

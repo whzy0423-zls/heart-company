@@ -16,6 +16,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/miniapp"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 	"nine-xing/nx-backend/apps/server/internal/wxpay"
 )
@@ -80,7 +81,8 @@ func validateWxPayCallbackAgainstOrder(env config.Env, result wxpay.CallbackResu
 	if result.AmountTotal <= 0 || result.AmountTotal != order.Amount {
 		return fmt.Errorf("wxpay amount mismatch: callback=%d order=%d", result.AmountTotal, order.Amount)
 	}
-	if order.Product != "report" {
+	if order.Product != "report" && order.Product != "member" &&
+		order.Product != "classroom_series" && order.Product != "classroom_content" {
 		return fmt.Errorf("unsupported payment product: %s", order.Product)
 	}
 	return nil
@@ -144,6 +146,13 @@ func (s *Server) createReportOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	order, err := s.miniapp.CreateOrReusePendingOrder(ctx, uid, outTradeNo, "report", recordID, "九型深度报告", price)
+	if errors.Is(err, miniapp.ErrPendingOrderSnapshotChanged) {
+		if closeErr := s.pay.CloseOrder(ctx, order.OutTradeNo); closeErr != nil {
+			httpx.Fail(w, http.StatusBadGateway, "关闭旧支付单失败")
+			return
+		}
+		order, err = s.miniapp.ReplacePendingOrder(ctx, uid, outTradeNo, miniapp.ProductReport, recordID, "九型深度报告", price, order.OutTradeNo)
+	}
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -205,8 +214,17 @@ func (s *Server) devPayReportOrder(w http.ResponseWriter, r *http.Request) {
 	if transactionID == "" {
 		transactionID = "dev-" + result.OutTradeNo
 	}
-	if _, err := s.miniapp.MarkOrderPaid(r.Context(), result.OutTradeNo, transactionID); err != nil {
+	apply, err := s.miniapp.MarkOrderPaidDetailed(r.Context(), result.OutTradeNo, transactionID)
+	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err = closeCompetingPendingOrders(r.Context(), s.pay, apply.PendingToClose); err != nil {
+		httpx.Fail(w, http.StatusBadGateway, "close competing order failed")
+		return
+	}
+	if err = s.miniapp.ClosePendingOrders(r.Context(), apply.PendingToClose); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "finalize competing order failed")
 		return
 	}
 	httpx.OK(w, map[string]any{"paid": true})
@@ -223,7 +241,11 @@ func (s *Server) payNotify(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "read body failed")
 		return
 	}
-	result, err := s.pay.ParseCallbackWithHeaders(r.Header, raw)
+	parseCallback := s.pay.ParseCallbackWithHeaders
+	if s.payNotifyParser != nil {
+		parseCallback = s.payNotifyParser
+	}
+	result, err := parseCallback(r.Header, raw)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"code": "FAIL", "message": err.Error()})
@@ -249,8 +271,19 @@ func (s *Server) payNotify(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"code": "FAIL", "message": err.Error()})
 		return
 	}
-	if _, err := s.miniapp.MarkOrderPaid(r.Context(), result.OutTradeNo, result.TransactionID); err != nil {
+	apply, err := s.miniapp.MarkOrderPaidDetailed(r.Context(), result.OutTradeNo, result.TransactionID)
+	if err != nil {
 		// 落账失败要返回非 SUCCESS，微信会重试
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"code": "FAIL", "message": err.Error()})
+		return
+	}
+	if err = closeCompetingPendingOrders(r.Context(), s.pay, apply.PendingToClose); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"code": "FAIL", "message": err.Error()})
+		return
+	}
+	if err = s.miniapp.ClosePendingOrders(r.Context(), apply.PendingToClose); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"code": "FAIL", "message": err.Error()})
 		return

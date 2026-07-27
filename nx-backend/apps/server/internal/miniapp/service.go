@@ -20,6 +20,19 @@ const miniappUserTimeout = 10 * time.Second
 
 var ErrServiceNotConfigured = errors.New("miniapp: service is not configured")
 
+// IsMembershipActive is the single membership entitlement rule shared by
+// miniapp and classroom features. Historical non-free members with no expiry
+// are lifetime members; all dated memberships require an expiry in the future.
+func IsMembershipActive(level int, expiresAt *time.Time, now time.Time) bool {
+	if level <= 0 {
+		return false
+	}
+	if expiresAt == nil {
+		return true
+	}
+	return expiresAt.After(now)
+}
+
 type userWriter interface {
 	UpsertByOpenIDWithDBTX(context.Context, dbtx.DBTX, string, string, string, string) (int64, bool, error)
 	GetUserWithDBTX(context.Context, dbtx.DBTX, int64) (User, error)

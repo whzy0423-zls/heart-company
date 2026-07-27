@@ -193,11 +193,7 @@ export function ensureCarousel(config: { home?: unknown }) {
 </script>
 
 <script setup lang="ts">
-import type {
-  MiniappCarouselItem,
-  MiniappHomeIconKey,
-  MiniappHomeThemeKey,
-} from '#/api';
+import type { MiniappCarouselItem } from '#/api';
 
 import { computed, watch } from 'vue';
 

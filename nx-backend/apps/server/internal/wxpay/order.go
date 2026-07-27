@@ -7,11 +7,38 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// CloseOrder closes an unpaid merchant order before a changed local snapshot
+// can be replaced. WeChat returns success only after the remote order is no
+// longer payable; PAYERROR/order-paid races are surfaced to the caller.
+func (c *Client) CloseOrder(ctx context.Context, outTradeNo string) error {
+	outTradeNo = strings.TrimSpace(outTradeNo)
+	if outTradeNo == "" {
+		return fmt.Errorf("wxpay close order requires out_trade_no")
+	}
+	if c.devMode {
+		return nil
+	}
+	path := "/v3/pay/transactions/out-trade-no/" + outTradeNo + "/close"
+	err := c.doSigned(ctx, "POST", path, map[string]string{"mchid": c.cfg.MchID}, nil)
+	var httpErr *HTTPError
+	if errors.As(err, &httpErr) {
+		var payload struct {
+			Code string `json:"code"`
+		}
+		if json.Unmarshal([]byte(httpErr.Body), &payload) == nil && payload.Code == "ORDER_CLOSED" {
+			return nil
+		}
+	}
+	return err
+}
 
 // Prepay 调用 JSAPI 下单，返回小程序拉起支付所需参数。
 // dev 模式下不请求微信，直接返回伪 prepay_id（paySign 为占位）。
