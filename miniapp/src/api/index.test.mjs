@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const source = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
 
@@ -28,5 +31,93 @@ assert.doesNotMatch(
   /url:\s*['"]\/api\/app\/auth/,
   'API paths must not include /api because API_BASE already ends with /api',
 )
+
+const dir = await mkdtemp(join(tmpdir(), 'nx-miniapp-classroom-api-'))
+try {
+  const executableSource = source
+    .replace(/import\s+\{[^}]+\}\s+from\s+['"]\.\/request['"]/, "import { request, getToken } from './request.mjs'")
+    .replace(/import\s+\{\s*APP_CHANNEL\s*\}\s+from\s+['"]\.\.\/config['"]/, "const APP_CHANNEL = 'test'")
+    .replace(/import\s+\{\s*userErrorMessage\s*\}\s+from\s+['"]\.\.\/utils\/userMessage['"]/, "import { userErrorMessage } from './userMessage.mjs'")
+  await writeFile(join(dir, 'index.mjs'), executableSource)
+  await writeFile(join(dir, 'userMessage.mjs'), readFileSync(new URL('../utils/userMessage.js', import.meta.url), 'utf8'))
+  await writeFile(join(dir, 'request.mjs'), `
+    export const calls = []
+    export let token = ''
+    export let responder = async (options) => ({ options })
+    export function getToken() { return token }
+    export function setTestToken(value) { token = value }
+    export function setResponder(value) { responder = value }
+    export function request(options) { calls.push(options); return responder(options) }
+  `)
+
+  const api = await import(`file://${join(dir, 'index.mjs')}`)
+  const requestStub = await import(`file://${join(dir, 'request.mjs')}`)
+  const fixture = JSON.parse(readFileSync(new URL('../../../docs/superpowers/fixtures/classroom-public-response.json', import.meta.url), 'utf8'))
+
+  requestStub.setTestToken('')
+  await api.listClassroomSeriesApi({ limit: 10, offset: 20, contentType: 'video' })
+  await api.listClassroomStandaloneApi({ limit: 5 })
+  await api.getClassroomSeriesApi('12')
+  await api.getClassroomContentApi(21)
+  assert.deepEqual(requestStub.calls.slice(-4), [
+    { url: '/public/classroom/series', method: 'GET', query: { limit: 10, offset: 20, contentType: 'video' }, auth: false },
+    { url: '/public/classroom/standalone', method: 'GET', query: { limit: 5 }, auth: false },
+    { url: '/public/classroom/series/12', method: 'GET', auth: false },
+    { url: '/public/classroom/content/21', method: 'GET', auth: false },
+  ])
+
+  requestStub.setTestToken('jwt')
+  await api.getClassroomContentApi(21)
+  assert.equal(requestStub.calls.at(-1).auth, true, 'metadata requests should use JWT when one is present')
+
+  requestStub.setTestToken('')
+  requestStub.setResponder(async (options) => {
+    if (options.url.endsWith('/ticket')) return { ticket: 'anon-ticket', expiresIn: 300 }
+    return { url: 'https://signed.example/lesson.mp4', expiresIn: 300, contentType: 'video' }
+  })
+  const anonymousPlayback = await api.getClassroomPlaybackApi(21)
+  assert.equal(anonymousPlayback.url, 'https://signed.example/lesson.mp4')
+  assert.deepEqual(requestStub.calls.slice(-2), [
+    { url: '/public/classroom/content/21/ticket', method: 'POST', data: {} },
+    { url: '/miniapp/classroom/content/21/play', method: 'POST', data: { ticket: 'anon-ticket' }, auth: false },
+  ])
+
+  requestStub.setTestToken('jwt')
+  await api.getClassroomPlaybackApi(22)
+  assert.deepEqual(requestStub.calls.at(-1), {
+    url: '/miniapp/classroom/content/22/play', method: 'POST', data: {}, auth: true,
+  })
+
+  await api.createClassroomOrderApi('series', 12)
+  await api.getClassroomOrderStatusApi('content', 21)
+  await api.updateClassroomProgressApi(21, 91)
+  await api.getClassroomContinueLearningApi()
+  assert.deepEqual(requestStub.calls.slice(-4), [
+    { url: '/miniapp/classroom/orders', method: 'POST', data: { targetType: 'series', refId: '12' }, auth: true },
+    { url: '/miniapp/classroom/orders/status', method: 'GET', query: { targetType: 'content', refId: '21' }, auth: true },
+    { url: '/miniapp/classroom/content/21/progress', method: 'PUT', data: { positionSeconds: 91 }, auth: true },
+    { url: '/miniapp/classroom/continue-learning', method: 'GET', auth: true },
+  ])
+
+  let playbackVersion = 0
+  requestStub.setResponder(async (options) => {
+    if (options.url.endsWith('/play')) return { url: `https://signed.example/v${++playbackVersion}`, expiresIn: 300, contentType: 'audio' }
+    return {}
+  })
+  const consumed = await api.withClassroomPlaybackRetry(21, async (playback) => {
+    if (playbackVersion === 1) throw Object.assign(new Error('ExpiredToken'), { statusCode: 403, code: 'ExpiredToken' })
+    return playback.url
+  })
+  assert.equal(consumed, 'https://signed.example/v2', 'expired signed URLs should refresh exactly once')
+
+  requestStub.setResponder(async () => { throw new Error(' 后端错误 ') })
+  await assert.rejects(() => api.getClassroomContentApi(21), { message: '后端错误' })
+
+  assert.equal(fixture.series.items[0].objectKey, undefined)
+  assert.equal(fixture.content.url, undefined)
+  assert.equal(fixture.playback.expiresIn, 300)
+} finally {
+  await rm(dir, { force: true, recursive: true })
+}
 
 console.log('api index tests passed')

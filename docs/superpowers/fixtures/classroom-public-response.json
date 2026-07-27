@@ -1,0 +1,45 @@
+{
+  "series": {
+    "items": [
+      {
+        "id": 12,
+        "title": "九型人格入门",
+        "summary": "建立基础地图",
+        "coverUrl": "https://cdn.example/covers/series-12.jpg",
+        "teacherName": "韩老师",
+        "effectiveAccess": "paid",
+        "priceCents": 2990,
+        "canPlay": false,
+        "purchaseState": "purchase_required",
+        "playbackBlocked": false
+      }
+    ],
+    "total": 1,
+    "limit": 20,
+    "offset": 0
+  },
+  "content": {
+    "id": 21,
+    "seriesId": 12,
+    "title": "第一课：认识三中心",
+    "description": "视频课程",
+    "coverUrl": "https://cdn.example/covers/content-21.jpg",
+    "teacherName": "韩老师",
+    "contentType": "video",
+    "durationSeconds": 1200,
+    "effectiveAccess": "paid",
+    "priceCents": 2990,
+    "canPlay": false,
+    "purchaseState": "purchase_required",
+    "playbackBlocked": false
+  },
+  "anonymousTicket": {
+    "ticket": "fixture-ticket",
+    "expiresIn": 300
+  },
+  "playback": {
+    "url": "https://signed.example/temporary/content-21",
+    "expiresIn": 300,
+    "contentType": "video"
+  }
+}
