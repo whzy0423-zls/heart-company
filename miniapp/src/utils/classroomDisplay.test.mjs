@@ -16,6 +16,19 @@ try {
     normalizeClassroomSeries,
   } = await import(`file://${modulePath}`)
 
+  const contractFixture = JSON.parse(
+    await readFile(new URL('../../../docs/superpowers/fixtures/classroom-public-response.json', import.meta.url), 'utf8'),
+  )
+  const fixtureContent = normalizeClassroomContent(contractFixture.content)
+  assert.equal(fixtureContent.id, '21')
+  assert.equal(fixtureContent.title, '第一课：认识三中心')
+  assert.equal(fixtureContent.contentType, 'video')
+  assert.equal('url' in fixtureContent, false, 'public metadata fixture must not normalize a playback URL')
+  assert.equal('objectKey' in fixtureContent, false, 'public metadata fixture must not expose an object key')
+  const fixtureSeries = normalizeClassroomSeries(contractFixture.series.items[0])
+  assert.equal(fixtureSeries.id, '12')
+  assert.equal(fixtureSeries.title, '九型人格入门')
+
   const content = normalizeClassroomContent({
     id: 21,
     seriesId: 12,

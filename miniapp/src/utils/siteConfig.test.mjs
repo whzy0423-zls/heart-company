@@ -45,11 +45,21 @@ assert.equal(hasSiteConfigLearningContent(refreshed), true, 'site config with co
 assert.equal(hasSiteConfigLearningContent({ home: {} }), false, 'empty site config should not replace cached learning content')
 assert.equal(hasSiteConfigLearningContent({ teacher: { name: '韩老师' } }), true, 'root teacher profile should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ home: { teachers: [{ name: '韩老师' }] } }), true, 'home teachers should count as learning content')
+assert.equal(
+  hasSiteConfigLearningContent({ home: { teacherTeaser: { title: '韩老师', lead: '课程导学' } } }),
+  true,
+  'legacy home teacher teaser should count as learning content',
+)
 assert.equal(hasSiteConfigLearningContent({ materials: [{ title: '课件' }] }), true, 'root materials should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ home: { courseware: { items: [{ title: '课件' }] } } }), true, 'home courseware should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ home: { courses: { items: [] }, quotes: { items: [] } } }), false, 'empty learning arrays should not count as visible learning content')
 assert.equal(hasSiteConfigLearningSection({ home: {} }), false, 'missing learning section should be treated as incomplete')
 assert.equal(hasSiteConfigLearningSection({ home: { teacher: {} } }), true, 'explicit teacher section should be treated as intentional content')
+assert.equal(
+  hasSiteConfigLearningSection({ home: { teacherTeaser: {} } }),
+  true,
+  'explicit legacy teacher teaser should be treated as intentional content',
+)
 assert.equal(hasSiteConfigLearningSection({ courses: { list: [] } }), true, 'courses.list should be treated as an intentional learning section')
 assert.equal(hasSiteConfigLearningSection({ home: { courses: { items: [] }, quotes: { items: [] } } }), true, 'explicit empty learning arrays should be treated as intentional content')
 

@@ -25,10 +25,10 @@ function removeAt<T>(list: T[], index: number | string) {
 
 <template>
   <EditorShell
-    description="配置首页课程方向卡片，后续可扩展为课程产品库。"
+    description="配置课程方向与报名产品，不管理课堂音视频内容；视频、音频课件请前往「老师课堂」。"
     :loading="loading"
     :saving="saving"
-    title="课程管理"
+    title="课程产品管理"
     @save="saveConfig"
   >
     <Form v-if="config" layout="vertical">
@@ -45,8 +45,8 @@ function removeAt<T>(list: T[], index: number | string) {
         </Col>
       </Row>
       <div class="section-head">
-        <h3>课程卡片</h3>
-        <Button @click="addCourse">新增课程</Button>
+        <h3>课程产品卡片</h3>
+        <Button @click="addCourse">新增课程产品</Button>
       </div>
       <Card
         v-for="(item, index) in config.home.courses.items"
@@ -80,7 +80,7 @@ function removeAt<T>(list: T[], index: number | string) {
           </Col>
           <Col :xs="24">
             <Button danger @click="removeAt(config.home.courses.items, index)">
-              删除课程
+              删除课程产品
             </Button>
           </Col>
         </Row>

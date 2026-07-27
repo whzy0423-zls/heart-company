@@ -77,6 +77,7 @@ function learningSources(config) {
     config?.courses,
     config?.home?.teacher,
     config?.home?.teachers,
+    config?.home?.teacherTeaser,
     config?.home?.courseware,
     config?.home?.materials,
     config?.home?.lessons,

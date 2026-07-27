@@ -35,6 +35,46 @@ assert.equal(
 )
 assert.deepEqual(normalizeTeachers({ home: {} }), DEFAULT_TEACHERS, 'missing teachers should use stable defaults')
 
+assert.deepEqual(
+  normalizeTeachers({
+    home: {
+      teacherTeaser: {
+        eyebrow: '九型人格导师',
+        title: '韩老师',
+        image: '/teacher-main.png',
+        fallbackImage: '/teacher-fallback.png',
+        lead: '带你把课程练习落到生活。',
+      },
+    },
+  })[0],
+  {
+    name: '韩老师',
+    title: '九型人格导师',
+    avatar: '/teacher-main.png',
+    bio: '带你把课程练习落到生活。',
+    tags: [],
+  },
+  'legacy home.teacherTeaser should map into the structured teacher view model',
+)
+assert.equal(
+  normalizeTeachers({ home: { teacherTeaser: { fallbackImage: '/fallback.png', lead: '简介' } } })[0].name,
+  '九型老师',
+  'legacy teaser without a title should use the teacher-name fallback',
+)
+assert.equal(
+  normalizeTeachers({ home: { teacherTeaser: { fallbackImage: '/fallback.png', lead: '简介' } } })[0].avatar,
+  '/fallback.png',
+  'legacy fallbackImage should supply the avatar when image is absent',
+)
+assert.deepEqual(
+  normalizeTeachers({
+    teacher: { name: '结构化老师', title: '结构化职称', avatar: '/structured.png', bio: '结构化简介' },
+    home: { teacherTeaser: { title: '旧老师', eyebrow: '旧职称', image: '/legacy.png', lead: '旧简介' } },
+  }),
+  [{ name: '结构化老师', title: '结构化职称', avatar: '/structured.png', bio: '结构化简介', tags: [] }],
+  'structured teacher data should be authoritative when legacy teaser data also exists',
+)
+
 const courseware = normalizeCoursewareItems({
   courseware: { items: [{ name: '九型入门课件', desc: '认识九种核心动机', image: '/cover.png', tag: 'PDF', minutes: '18分钟', link: '/pages/learn/detail' }] },
 })[0]
@@ -59,6 +99,19 @@ assert.equal(
   normalizeCoursewareItems({ home: { courses: { items: [{ title: '首页课程' }] } } })[0].title,
   '首页课程',
   'existing home.courses.items should remain compatible',
+)
+assert.equal(
+  normalizeCoursewareItems({
+    home: { courses: { items: [{ title: '课程产品' }] } },
+    classroom: { contents: [{ title: '独立视频课件', contentType: 'video' }] },
+  })[0].title,
+  '课程产品',
+  'independent classroom media must not overwrite legacy course products',
+)
+assert.deepEqual(
+  normalizeCoursewareItems({ classroom: { contents: [{ title: '独立音频课件', contentType: 'audio' }] } }),
+  DEFAULT_COURSEWARE_ITEMS,
+  'classroom media alone should not be normalized as legacy course products',
 )
 assert.equal(
   normalizeCoursewareItems({ courses: { list: [{ title: '课程列表' }] } })[0].title,

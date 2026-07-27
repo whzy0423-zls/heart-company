@@ -61,14 +61,14 @@ function uniqueByTitle(items) {
 }
 
 export function normalizeTeachers(config) {
-  const candidates = [
+  const structuredCandidates = [
     ...asArray(config?.teacher),
     ...asArray(config?.teachers),
     ...asArray(config?.home?.teacher),
     ...asArray(config?.home?.teachers),
   ]
 
-  const teachers = candidates.map((item) => {
+  const teachers = structuredCandidates.map((item) => {
     const source = item || {}
     return {
       name: firstText(source, ['name', 'teacherName', 'nickname', 'title']) || '九型老师',
@@ -79,7 +79,20 @@ export function normalizeTeachers(config) {
     }
   }).filter((item) => item.name || item.bio)
 
-  return teachers.length > 0 ? teachers : DEFAULT_TEACHERS
+  if (teachers.length > 0) return teachers
+
+  const teaser = config?.home?.teacherTeaser
+  if (teaser && typeof teaser === 'object' && !Array.isArray(teaser)) {
+    return [{
+      name: firstText(teaser, ['title']) || '九型老师',
+      title: firstText(teaser, ['eyebrow']) || '九型人格导师',
+      avatar: firstText(teaser, ['image', 'fallbackImage']) || '/static/avatars/9.png',
+      bio: firstText(teaser, ['lead']) || '带你用九型人格看见真实动机，把课程内容落到每天可练习的沟通与成长里。',
+      tags: normalizeTags(teaser.tags || teaser.badges),
+    }]
+  }
+
+  return DEFAULT_TEACHERS
 }
 
 function normalizeCoursewareSource(item) {
