@@ -52,6 +52,7 @@ type xinzhiliRealtimeConn struct {
 	closed         bool
 	sessionID      string
 	configVersion  int64
+	generation     uint32
 	cardID         int64
 	conversationID int64
 	requestedMode  xinzhili.Mode
@@ -195,6 +196,7 @@ func (c *xinzhiliRealtimeConn) startSession(ctx context.Context, e xinzhili.Enve
 		return
 	}
 	c.sessionID = randomSessionID()
+	c.generation = e.Generation
 	c.cardID = p.CardID
 	c.conversationID = p.ConversationID
 	c.mu.Unlock()
@@ -400,6 +402,9 @@ func (c *xinzhiliRealtimeConn) close(code int, text string) {
 }
 
 func (s *xinzhiliWSSink) SendControl(ctx context.Context, event xinzhili.Envelope) error {
+	if event.Generation == 0 {
+		event.Generation = s.conn.generation
+	}
 	if event.SessionID == nil {
 		sid := s.conn.sessionID
 		event.SessionID = &sid
@@ -427,7 +432,7 @@ func (s *xinzhiliWSSink) SendAudio(ctx context.Context, seg xinzhili.AudioSegmen
 		s.conn.mu.Lock()
 		turnKey := s.conn.turnKey
 		s.conn.mu.Unlock()
-		b, err := xinzhili.EncodeBinaryFrame(xinzhili.BinaryFrame{FrameType: xinzhili.FrameTypeAssistantMP3, Flags: xinzhili.FlagStart | xinzhili.FlagEnd, TurnKey: turnKey, SegmentSeq: seg.Seq, Payload: seg.Audio})
+		b, err := xinzhili.EncodeBinaryFrame(xinzhili.BinaryFrame{FrameType: xinzhili.FrameTypeAssistantMP3, Flags: xinzhili.FlagStart | xinzhili.FlagEnd, Generation: s.conn.generation, TurnKey: turnKey, SegmentSeq: seg.Seq, Payload: seg.Audio})
 		if err != nil {
 			return err
 		}
