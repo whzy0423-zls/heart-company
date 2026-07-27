@@ -324,6 +324,77 @@ func TestPostgresConcurrentCaseUpdatesHaveOneWinner(t *testing.T) {
 	}
 }
 
+func TestPostgresBlockedCaseUpdateMapsCommittedOverlapToVersionConflict(t *testing.T) {
+	s, ctx := openPostgresStore(t)
+	trainer := seedTrainer(t, s, ctx, "blocked-case")
+	a, err := s.CreateCase(ctx, CaseAggregate{Case: baseCase(trainer, "blocked-case")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	locker, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = locker.ExecContext(ctx, `UPDATE training_cases SET title='external winner',version=version+1 WHERE id=$1`, a.Case.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		v := a
+		v.Case.Title = "store loser"
+		_, e := s.UpdateCase(context.Background(), v, a.Case.Version)
+		done <- e
+	}()
+	time.Sleep(150 * time.Millisecond)
+	if err = locker.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-done:
+		if !errors.Is(err, ErrVersionConflict) {
+			t.Fatalf("blocked case update=%v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("blocked case update did not finish")
+	}
+}
+
+func TestPostgresBlockedSolutionUpdateMapsCommittedOverlapToVersionConflict(t *testing.T) {
+	s, ctx := openPostgresStore(t)
+	trainer := seedTrainer(t, s, ctx, "blocked-solution")
+	v := EnterpriseSolution{Slug: "blocked-solution", Title: "方案", TrainerID: trainer.ID, TrainerNameSnapshot: trainer.Name, Status: CaseDraft, Audiences: []string{}, Problems: []string{}, Goals: []string{}, Modules: []string{}, DeliveryMethods: []string{}, CustomizableItems: []string{}}
+	a, err := s.CreateSolution(ctx, SolutionAggregate{Solution: v})
+	if err != nil {
+		t.Fatal(err)
+	}
+	locker, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = locker.ExecContext(ctx, `UPDATE enterprise_solutions SET title='external winner',version=version+1 WHERE id=$1`, a.Solution.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		candidate := a
+		candidate.Solution.Title = "store loser"
+		_, e := s.UpdateSolution(context.Background(), candidate, a.Solution.Version)
+		done <- e
+	}()
+	time.Sleep(150 * time.Millisecond)
+	if err = locker.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-done:
+		if !errors.Is(err, ErrVersionConflict) {
+			t.Fatalf("blocked solution update=%v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("blocked solution update did not finish")
+	}
+}
+
 func TestPostgresPublicProjectionPublishedOnlyStableTopicFilter(t *testing.T) {
 	s, ctx := openPostgresStore(t)
 	_ = s.UpsertFixedTopics(ctx)

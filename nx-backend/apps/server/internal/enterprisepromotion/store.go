@@ -122,6 +122,8 @@ func mapDBError(err error) error {
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) {
 		switch pg.Code {
+		case "40001", "40P01":
+			return fmt.Errorf("%w: %s", ErrVersionConflict, pg.Code)
 		case "23503":
 			if strings.Contains(pg.Detail, "is not present in table") {
 				return fmt.Errorf("%w: %s", ErrInvalidReference, pg.ConstraintName)
@@ -405,7 +407,7 @@ func (s *SQLStore) GetCase(ctx context.Context, id int64) (CaseAggregate, error)
 	return a, nil
 }
 func (s *SQLStore) UpdateCase(ctx context.Context, a CaseAggregate, expected int64) (CaseAggregate, error) {
-	tx, e := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	tx, e := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if e != nil {
 		return CaseAggregate{}, e
 	}
@@ -552,7 +554,7 @@ func (s *SQLStore) ListSolutions(ctx context.Context) ([]EnterpriseSolution, err
 	return out, r.Err()
 }
 func (s *SQLStore) UpdateSolution(ctx context.Context, a SolutionAggregate, expected int64) (SolutionAggregate, error) {
-	tx, e := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	tx, e := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if e != nil {
 		return a, e
 	}
