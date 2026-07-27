@@ -164,17 +164,46 @@ const listClassroomSeriesApi = (...args) => globalThis.__classroomHarness.listSe
 const listClassroomStandaloneApi = (...args) => globalThis.__classroomHarness.listStandalone(...args)
 const getClassroomSeriesApi = (...args) => globalThis.__classroomHarness.getSeries(...args)
 const getClassroomContinueLearningApi = (...args) => globalThis.__classroomHarness.getContinue(...args)
+const createClassroomOrderApi = (...args) => globalThis.__classroomHarness.createOrder(...args)
+const getClassroomOrderStatusApi = (...args) => globalThis.__classroomHarness.getOrderStatus(...args)
+const devPayClassroomOrderApi = (...args) => globalThis.__classroomHarness.devPay(...args)
 const getToken = () => globalThis.__classroomHarness.token
 const normalizeClassroomSeries = (value = {}) => ({ ...value, id: String(value.id || '') })
 const normalizeClassroomContent = (value = {}) => ({ ...value, id: String(value.id || '') })
 const classroomAccessLabel = (value) => value
 const classroomContentRoute = (item) => item?.id ? '/detail/' + item.id : ''
-const classroomPurchaseAction = () => ({ type: 'play', label: '立即学习' })
+const classroomPurchaseAction = (item = {}) => item.purchaseState === 'purchase_required'
+  ? { type: 'purchase', label: '立即购买' }
+  : { type: 'play', label: '立即学习' }
+const createClassroomPurchaseController = (options) => {
+  let stopped = false
+  const controller = {
+    async purchase() {
+      options.onChange?.({ state: 'creating', message: 'creating' })
+      const order = await options.create()
+      if (stopped) return
+      options.onChange?.({ state: 'pending', message: 'pending' })
+      await options.pay(order)
+      if (stopped) return
+      const status = await options.status(order)
+      if (stopped) return
+      if (status?.owned || status?.status === 'paid') {
+        options.onChange?.({ state: 'success', message: 'success' })
+        await options.onSuccess?.(status)
+      }
+    },
+    retry() { return this.purchase() },
+    stop() { stopped = true; globalThis.__classroomHarness.stopCalls += 1 },
+    reset() { stopped = true; options.onChange?.({ state: 'idle', message: '' }) },
+  }
+  globalThis.__classroomHarness.controllers.push(controller)
+  return controller
+}
 const userErrorMessage = (error, fallback) => error?.message || fallback
 `;
 await writeFile(
   modulePath,
-  `${prelude}\n${executableScript}\nexport { activeTab, expandedSeries, selectedSeries, seriesLoading, seriesError, seriesDetails, selectTab, openSeries, retrySelectedSeries }\n`,
+  `${prelude}\n${executableScript}\nexport { activeTab, seriesItems, expandedSeries, selectedSeries, seriesLoading, seriesError, seriesDetails, seriesPaymentTargetId, seriesPaymentState, selectTab, openSeries, retrySelectedSeries, startSeriesPurchase }\n`,
 );
 
 function deferred() {
@@ -195,9 +224,22 @@ async function createHarness() {
     getSeries: async () => ({ series: { id: 1 }, contents: [] }),
     getContinue: async () => ({ items: [] }),
     token: "",
+    orderCalls: [],
+    statusCalls: [],
+    stopCalls: 0,
+    controllers: [],
+    createOrder(targetType, refId) {
+      this.orderCalls.push({ targetType, refId });
+      return { outTradeNo: `series-${refId}`, payParams: { devMode: true } };
+    },
+    getOrderStatus(targetType, refId) {
+      this.statusCalls.push({ targetType, refId });
+      return { status: "paid", owned: true };
+    },
+    devPay: async () => ({ paid: true }),
   };
   globalThis.__classroomHarness = state;
-  globalThis.uni = { navigateTo() {} };
+  globalThis.uni = { navigateTo() {}, switchTab() {}, requestPayment() {} };
   harnessCounter += 1;
   const page = await import(`${pathToFileURL(modulePath).href}?case=${harnessCounter}`);
   return { page, state };
@@ -333,6 +375,82 @@ try {
     );
     assert.equal(page.seriesLoading.value, false, `late B ${outcome} must not revive loading`);
     assert.equal(page.seriesError.value, "", `late B ${outcome} must not publish stale feedback`);
+  }
+
+  {
+    const { page, state } = await createHarness();
+    state.token = "jwt";
+    const payment = deferred();
+    state.devPay = () => payment.promise;
+    const seriesA = { id: "12", purchaseState: "purchase_required" };
+    const seriesB = { id: "13", purchaseState: "purchase_required" };
+    const first = page.startSeriesPurchase(seriesA);
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(page.seriesPaymentState.value, "pending");
+    const second = page.startSeriesPurchase(seriesB);
+    assert.equal(
+      second,
+      undefined,
+      "a different series click must be ignored while payment is active",
+    );
+    assert.deepEqual(state.orderCalls, [{ targetType: "series", refId: "12" }]);
+    assert.equal(
+      state.stopCalls,
+      0,
+      "a different series click must not interrupt the active checkout",
+    );
+    payment.resolve({ paid: true });
+    await first;
+  }
+
+  {
+    const { page, state } = await createHarness();
+    state.token = "jwt";
+    let detailCalls = 0;
+    state.getSeries = async () => {
+      detailCalls += 1;
+      return {
+        series: { id: 12, title: detailCalls === 1 ? "购买前" : "购买后" },
+        contents: [],
+      };
+    };
+    await page.openSeries({ id: "12", title: "购买前" });
+    state.listSeries = async () => ({ items: [{ id: 12, title: "购买后" }] });
+    await page.startSeriesPurchase({ id: "12", purchaseState: "purchase_required" });
+    assert.equal(page.seriesItems.value[0].title, "购买后");
+    assert.equal(page.expandedSeries.value.series.title, "购买后");
+    assert.equal(detailCalls, 2, "successful payment should refresh the expanded series detail");
+  }
+
+  {
+    const { page, state } = await createHarness();
+    state.token = "jwt";
+    page.seriesItems.value = [{ id: "12", title: "购买前" }];
+    let detailCalls = 0;
+    state.getSeries = async () => {
+      detailCalls += 1;
+      return { series: { id: 12, title: "购买前" }, contents: [] };
+    };
+    await page.openSeries({ id: "12", title: "购买前" });
+    const list = deferred();
+    let listCalls = 0;
+    state.listSeries = () => {
+      listCalls += 1;
+      return list.promise;
+    };
+    const purchase = page.startSeriesPurchase({ id: "12", purchaseState: "purchase_required" });
+    for (let count = 0; count < 10 && listCalls === 0; count += 1) await Promise.resolve();
+    assert.equal(listCalls, 1, "successful payment should begin one list refresh");
+    state.onUnload();
+    list.resolve({ items: [{ id: 12, title: "卸载后迟到" }] });
+    await purchase;
+    assert.deepEqual(page.seriesItems.value, [{ id: "12", title: "购买前" }]);
+    assert.equal(
+      detailCalls,
+      1,
+      "unload must prevent a late success callback from reopening series detail",
+    );
   }
 } finally {
   await rm(dir, { force: true, recursive: true });

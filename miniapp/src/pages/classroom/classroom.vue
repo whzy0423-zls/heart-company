@@ -43,12 +43,17 @@ let seriesTicket = 0;
 let continueTicket = 0;
 let skipNextShowRefresh = false;
 let seriesPurchaseController = null;
+let seriesPurchaseTicket = 0;
+let disposed = false;
 
 const activeItems = computed(() =>
   activeTab.value === "series" ? seriesItems.value : standaloneItems.value,
 );
 const emptyCopy = computed(() =>
   activeTab.value === "series" ? "系列课程正在准备中" : "独立课件正在准备中",
+);
+const seriesPaymentBusy = computed(
+  () => seriesPaymentState.value === "creating" || seriesPaymentState.value === "pending",
 );
 
 function responseItems(response) {
@@ -251,6 +256,7 @@ function requestSeriesPayment(pay = {}) {
 
 function createSeriesPurchase(item) {
   seriesPurchaseController?.stop();
+  const purchaseTicket = ++seriesPurchaseTicket;
   seriesPaymentTargetId.value = item.id;
   seriesPurchaseController = createClassroomPurchaseController({
     create: () => createClassroomOrderApi("series", item.id),
@@ -260,13 +266,19 @@ function createSeriesPurchase(item) {
     },
     status: () => getClassroomOrderStatusApi("series", item.id),
     onChange: (snapshot) => {
+      if (disposed || purchaseTicket !== seriesPurchaseTicket) return;
       seriesPaymentState.value = snapshot.state;
       seriesPaymentMessage.value = snapshot.message;
     },
     onSuccess: async () => {
+      if (disposed || purchaseTicket !== seriesPurchaseTicket) return;
       loadedTabs.value = { ...loadedTabs.value, series: false };
       await loadActiveList({ force: true });
-      if (selectedSeries.value?.id === item.id) await openSeries(item, { force: true });
+      if (disposed || purchaseTicket !== seriesPurchaseTicket) return;
+      if (selectedSeries.value?.id === item.id) {
+        await openSeries(item, { force: true });
+        if (disposed || purchaseTicket !== seriesPurchaseTicket) return;
+      }
     },
   });
   return seriesPurchaseController;
@@ -274,15 +286,11 @@ function createSeriesPurchase(item) {
 
 function startSeriesPurchase(item) {
   if (!item?.id || itemAction(item).type !== "purchase") return;
+  if (seriesPaymentBusy.value) return;
   if (!getToken()) {
     uni.switchTab({ url: "/pages/profile/profile" });
     return;
   }
-  if (
-    seriesPaymentTargetId.value === item.id &&
-    (seriesPaymentState.value === "creating" || seriesPaymentState.value === "pending")
-  )
-    return;
   return createSeriesPurchase(item).purchase();
 }
 
@@ -306,6 +314,7 @@ function formatDuration(seconds) {
 }
 
 onLoad((options = {}) => {
+  disposed = false;
   skipNextShowRefresh = true;
   if (options.tab === "standalone") activeTab.value = "standalone";
   loadActiveList();
@@ -321,6 +330,11 @@ onShow(() => {
 });
 
 onUnload(() => {
+  disposed = true;
+  listTicket += 1;
+  seriesTicket += 1;
+  continueTicket += 1;
+  seriesPurchaseTicket += 1;
   seriesPurchaseController?.stop();
   seriesPurchaseController = null;
 });
@@ -458,10 +472,7 @@ onUnload(() => {
               <button
                 v-if="activeTab === 'series' && itemAction(item).type === 'purchase'"
                 class="series-buy"
-                :disabled="
-                  seriesPaymentTargetId === item.id &&
-                  (seriesPaymentState === 'creating' || seriesPaymentState === 'pending')
-                "
+                :disabled="seriesPaymentBusy"
                 @click.stop="startSeriesPurchase(item)"
               >
                 {{
