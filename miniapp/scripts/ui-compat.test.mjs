@@ -14,6 +14,12 @@ const classroomDetailPage = statSync("src/pages/classroom-detail/classroom-detai
   : "";
 
 assert.match(
+  packageJson.scripts["test:config"],
+  /src\/utils\/classroom-progress-order\.test\.mjs/,
+  "default config tests should cover classroom progress and purchase states",
+);
+
+assert.match(
   learnClassroomSource,
   /class="classroom-entry/,
   "learning page should expose the teacher classroom section",
@@ -42,6 +48,16 @@ assert.match(
   classroomDetailPage,
   /min-height:\s*88rpx/,
   "classroom detail actions should keep accessible touch targets",
+);
+assert.match(
+  classroomPage,
+  /role="progressbar"[\s\S]*aria-valuenow/,
+  "continue-learning should expose accessible progress semantics",
+);
+assert.match(
+  classroomDetailPage,
+  /payment-panel[\s\S]*aria-live="polite"/,
+  "payment state changes should be announced",
 );
 
 assert.equal(packageJson.scripts["dev:h5"], "uni -p h5");

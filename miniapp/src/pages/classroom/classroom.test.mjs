@@ -102,6 +102,28 @@ assert.match(
   /classroomPurchaseAction/,
   "list cards should expose the effective access action",
 );
+assert.match(
+  source,
+  /getClassroomContinueLearningApi/,
+  "classroom list should load the signed-in learner's recent progress",
+);
+assert.match(
+  source,
+  /class="continue-learning/,
+  "classroom list should render a continue-learning card",
+);
+assert.match(
+  source,
+  /positionSeconds/,
+  "continue-learning should expose the saved resume position",
+);
+assert.match(
+  source,
+  /openContinueLearning/,
+  "continue-learning should preserve its resume position when opening detail",
+);
+assert.match(source, /completed/, "continue-learning should expose completion state");
+assert.match(source, /role="progressbar"/, "continue-learning progress should be accessible");
 for (const forbidden of [/objectKey/i, /mediaUrl/i, /aliyuncs\.com/i, /oss-[a-z0-9-]+\./i]) {
   assert.doesNotMatch(
     source,
@@ -119,9 +141,12 @@ const prelude = `
 const ref = (value) => ({ value })
 const computed = (getter) => ({ get value() { return getter() } })
 const onLoad = (handler) => { globalThis.__classroomHarness.onLoad = handler }
+const onShow = (handler) => { globalThis.__classroomHarness.onShow = handler }
 const listClassroomSeriesApi = (...args) => globalThis.__classroomHarness.listSeries(...args)
 const listClassroomStandaloneApi = (...args) => globalThis.__classroomHarness.listStandalone(...args)
 const getClassroomSeriesApi = (...args) => globalThis.__classroomHarness.getSeries(...args)
+const getClassroomContinueLearningApi = (...args) => globalThis.__classroomHarness.getContinue(...args)
+const getToken = () => globalThis.__classroomHarness.token
 const normalizeClassroomSeries = (value = {}) => ({ ...value, id: String(value.id || '') })
 const normalizeClassroomContent = (value = {}) => ({ ...value, id: String(value.id || '') })
 const classroomAccessLabel = (value) => value
@@ -150,6 +175,8 @@ async function createHarness() {
     listSeries: async () => ({ items: [] }),
     listStandalone: async () => ({ items: [] }),
     getSeries: async () => ({ series: { id: 1 }, contents: [] }),
+    getContinue: async () => ({ items: [] }),
+    token: "",
   };
   globalThis.__classroomHarness = state;
   globalThis.uni = { navigateTo() {} };

@@ -1,12 +1,26 @@
 <script setup>
 import { computed, ref } from "vue";
 import { onHide, onLoad, onShow, onUnload } from "@dcloudio/uni-app";
-import { getClassroomContentApi, withClassroomPlaybackRetry } from "../../api";
+import {
+  createClassroomOrderApi,
+  devPayClassroomOrderApi,
+  getClassroomContentApi,
+  getClassroomOrderStatusApi,
+  updateClassroomProgressApi,
+  withClassroomPlaybackRetry,
+} from "../../api";
 import {
   classroomAccessLabel,
   classroomPurchaseAction,
   normalizeClassroomContent,
 } from "../../utils/classroomDisplay";
+import {
+  classroomCompletion,
+  createClassroomProgressTracker,
+  createClassroomPurchaseController,
+  readAnonymousClassroomProgress,
+} from "../../utils/classroomProgress";
+import { getToken } from "../../utils/auth";
 import { userErrorMessage } from "../../utils/userMessage";
 
 const contentId = ref("");
@@ -20,6 +34,11 @@ const playbackRetryLabel = ref("重试播放");
 const audioPlaying = ref(false);
 const audioPosition = ref(0);
 const audioDuration = ref(0);
+const progressPosition = ref(0);
+const progressCompleted = ref(false);
+const progressSyncError = ref("");
+const paymentState = ref("idle");
+const paymentMessage = ref("");
 let detailTicket = 0;
 let playbackTicket = 0;
 let audioContext = null;
@@ -28,8 +47,87 @@ let videoContext = null;
 let playbackRecoveryUsed = false;
 let disposed = false;
 let pageVisible = true;
+let progressTracker = null;
+let purchaseController = null;
+let requestedResumePosition = 0;
 
 const accessAction = computed(() => classroomPurchaseAction(content.value));
+const progressPercent = computed(() => {
+  if (progressCompleted.value) return 100;
+  return Math.min(
+    89,
+    Math.floor(
+      classroomCompletion(progressPosition.value, content.value.durationSeconds).ratio * 100,
+    ),
+  );
+});
+const paymentBusy = computed(
+  () => paymentState.value === "creating" || paymentState.value === "pending",
+);
+
+const progressStorage = {
+  getItem(key) {
+    return uni.getStorageSync(key);
+  },
+  setItem(key, value) {
+    uni.setStorageSync(key, value);
+  },
+};
+
+function applyProgress(position, completed = false) {
+  progressPosition.value = Math.max(0, Math.floor(Number(position) || 0));
+  progressCompleted.value = progressCompleted.value || completed === true;
+}
+
+function setupProgress() {
+  progressTracker = null;
+  progressSyncError.value = "";
+  progressPosition.value = 0;
+  progressCompleted.value = false;
+  const loggedIn = Boolean(getToken());
+  if (loggedIn && requestedResumePosition > 0) {
+    const duration = Math.max(0, Number(content.value.durationSeconds) || 0);
+    applyProgress(duration ? Math.min(requestedResumePosition, duration) : requestedResumePosition);
+  } else if (!loggedIn) {
+    const local = readAnonymousClassroomProgress(progressStorage, contentId.value);
+    if (local) applyProgress(local.positionSeconds, local.completed);
+  }
+  progressTracker = createClassroomProgressTracker({
+    contentId: contentId.value,
+    durationSeconds: content.value.durationSeconds,
+    loggedIn,
+    storage: progressStorage,
+    completed: progressCompleted.value,
+    send: async (id, positionSeconds) => {
+      const result = await updateClassroomProgressApi(id, positionSeconds);
+      if (!disposed) applyProgress(result?.positionSeconds ?? positionSeconds, result?.completed);
+      return result;
+    },
+  });
+}
+
+async function recordProgress(position, { force = false } = {}) {
+  if (!progressTracker) return;
+  try {
+    const snapshot = await progressTracker.record(position, { force });
+    if (!disposed) {
+      applyProgress(snapshot.positionSeconds, snapshot.completed);
+      progressSyncError.value = "";
+    }
+  } catch (error) {
+    if (!disposed) progressSyncError.value = userErrorMessage(error, "学习进度将在网络恢复后重试");
+  }
+}
+
+async function flushProgress() {
+  if (!progressTracker) return;
+  try {
+    await progressTracker.flush();
+    if (!disposed) progressSyncError.value = "";
+  } catch (error) {
+    if (!disposed) progressSyncError.value = userErrorMessage(error, "学习进度将在网络恢复后重试");
+  }
+}
 
 function validPlaybackUrl(value) {
   const url = String(value || "").trim();
@@ -61,12 +159,15 @@ function prepareAudio(url) {
   destroyAudio();
   const context = uni.createInnerAudioContext();
   const active = () => !disposed && pageVisible && audioContext === context;
+  let resumed = false;
   const bindings = {
     Play: () => {
       if (active()) audioPlaying.value = true;
     },
     Pause: () => {
-      if (active()) audioPlaying.value = false;
+      if (!active()) return;
+      audioPlaying.value = false;
+      void recordProgress(context.currentTime, { force: true });
     },
     Stop: () => {
       if (active()) audioPlaying.value = false;
@@ -75,17 +176,23 @@ function prepareAudio(url) {
       if (!active()) return;
       audioPlaying.value = false;
       audioPosition.value = audioDuration.value;
+      void recordProgress(audioDuration.value || context.duration, { force: true });
     },
     Canplay: () => {
       if (!active()) return;
       const duration = Number(context.duration);
       if (Number.isFinite(duration) && duration > 0) audioDuration.value = Math.floor(duration);
+      if (!resumed && progressPosition.value > 0) {
+        resumed = true;
+        context.seek(progressPosition.value);
+      }
     },
     TimeUpdate: () => {
       if (!active()) return;
       audioPosition.value = Math.max(0, Math.floor(Number(context.currentTime) || 0));
       const duration = Number(context.duration);
       if (Number.isFinite(duration) && duration > 0) audioDuration.value = Math.floor(duration);
+      void recordProgress(audioPosition.value);
     },
     Error: (error) => {
       if (active()) handlePlaybackError(error);
@@ -163,6 +270,7 @@ async function loadDetail() {
     const normalized = normalizeClassroomContent(response);
     if (!normalized.id) throw new Error("课件内容不存在");
     content.value = normalized;
+    setupProgress();
     if (normalized.canPlay && pageVisible) await refreshPlayback();
   } catch (error) {
     if (!disposed && ticket === detailTicket) {
@@ -203,11 +311,86 @@ function seekAudio(event) {
   const seconds = Math.max(0, Number(event?.detail?.value) || 0);
   audioContext.seek(seconds);
   audioPosition.value = Math.floor(seconds);
+  void recordProgress(seconds);
+}
+
+function handleVideoTimeUpdate(event) {
+  const current = Math.max(0, Number(event?.detail?.currentTime) || 0);
+  applyProgress(current);
+  void recordProgress(current);
+}
+
+function handleVideoPause(event) {
+  const current = Math.max(0, Number(event?.detail?.currentTime) || progressPosition.value);
+  applyProgress(current);
+  void recordProgress(current, { force: true });
+}
+
+function handleVideoEnded() {
+  const duration = Math.max(0, Number(content.value.durationSeconds) || progressPosition.value);
+  applyProgress(duration, true);
+  void recordProgress(duration, { force: true });
 }
 
 function formatTime(seconds) {
   const value = Math.max(0, Math.floor(Number(seconds) || 0));
   return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, "0")}`;
+}
+
+function requestWechatPayment(pay = {}) {
+  return new Promise((resolve, reject) => {
+    uni.requestPayment({
+      provider: "wxpay",
+      timeStamp: pay.timeStamp,
+      nonceStr: pay.nonceStr,
+      package: pay.package,
+      signType: pay.signType || "RSA",
+      paySign: pay.paySign,
+      success: resolve,
+      fail: reject,
+    });
+  });
+}
+
+function ensurePurchaseController() {
+  if (purchaseController) return purchaseController;
+  purchaseController = createClassroomPurchaseController({
+    create: () => createClassroomOrderApi("content", contentId.value),
+    pay: async (order) => {
+      if (order?.payParams?.devMode) return devPayClassroomOrderApi(order.outTradeNo);
+      return requestWechatPayment(order?.payParams);
+    },
+    status: () => getClassroomOrderStatusApi("content", contentId.value),
+    onChange: (snapshot) => {
+      if (disposed) return;
+      paymentState.value = snapshot.state;
+      paymentMessage.value = snapshot.message;
+    },
+    onSuccess: async () => {
+      if (!disposed) await loadDetail();
+    },
+  });
+  return purchaseController;
+}
+
+function startPurchase() {
+  if (disposed || paymentBusy.value) return;
+  if (!getToken()) {
+    uni.switchTab({ url: "/pages/profile/profile" });
+    return;
+  }
+  return ensurePurchaseController().purchase();
+}
+
+function retryPurchase() {
+  if (disposed || paymentBusy.value) return;
+  return ensurePurchaseController().retry();
+}
+
+function cancelPurchase() {
+  purchaseController?.reset();
+  paymentState.value = "idle";
+  paymentMessage.value = "";
 }
 
 function handleAccessAction() {
@@ -217,7 +400,7 @@ function handleAccessAction() {
     return;
   }
   if (accessAction.value.type === "purchase") {
-    uni.showToast({ title: "购买功能准备中", icon: "none" });
+    startPurchase();
   }
 }
 
@@ -225,11 +408,13 @@ onLoad((options = {}) => {
   disposed = false;
   pageVisible = true;
   contentId.value = String(options.id || "").trim();
+  requestedResumePosition = Math.max(0, Math.floor(Number(options.position) || 0));
   loadDetail();
 });
 
 onHide(() => {
   if (disposed) return;
+  void flushProgress();
   pageVisible = false;
   playbackTicket += 1;
   playbackLoading.value = false;
@@ -243,6 +428,10 @@ onShow(() => {
 onUnload(() => {
   if (disposed) return;
   disposed = true;
+  void flushProgress();
+  purchaseController?.stop();
+  purchaseController = null;
+  progressTracker = null;
   pageVisible = false;
   detailTicket += 1;
   playbackTicket += 1;
@@ -313,8 +502,12 @@ onUnload(() => {
             id="classroom-video"
             class="video-player"
             :src="playbackUrl"
+            :initial-time="progressPosition"
             controls
             object-fit="contain"
+            @timeupdate="handleVideoTimeUpdate"
+            @pause="handleVideoPause"
+            @ended="handleVideoEnded"
             @error="handlePlaybackError"
           />
           <view v-else class="audio-player">
@@ -347,6 +540,67 @@ onUnload(() => {
           </view>
         </block>
         <button v-else class="detail-action" @click="refreshPlayback">加载播放内容</button>
+      </view>
+
+      <view v-if="content.canPlay" class="progress-panel ios-card">
+        <view class="progress-panel__head">
+          <text class="progress-panel__title">学习进度</text>
+          <text>{{ progressCompleted ? "已完成" : `${progressPercent}%` }}</text>
+        </view>
+        <view
+          class="progress-panel__bar"
+          role="progressbar"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-valuenow="progressPercent"
+          :aria-label="progressCompleted ? '课件已完成' : `课件学习进度 ${progressPercent}%`"
+        >
+          <view class="progress-panel__fill" :style="{ width: `${progressPercent}%` }" />
+        </view>
+        <text class="progress-panel__copy">
+          {{
+            progressCompleted ? "已达到 90% 完成标准" : `已学习至 ${formatTime(progressPosition)}`
+          }}
+        </text>
+        <text v-if="progressSyncError" class="progress-panel__error" aria-live="polite">{{
+          progressSyncError
+        }}</text>
+      </view>
+
+      <view
+        v-if="!content.canPlay && accessAction.type === 'purchase' && paymentState !== 'idle'"
+        class="payment-panel ios-card"
+        aria-live="polite"
+      >
+        <text class="payment-panel__title">
+          {{
+            paymentState === "success"
+              ? "购买成功"
+              : paymentState === "pending"
+                ? "等待支付确认"
+                : paymentState === "creating"
+                  ? "正在创建订单"
+                  : paymentState === "cancelled"
+                    ? "支付已取消"
+                    : "支付未完成"
+          }}
+        </text>
+        <text class="payment-panel__copy">{{ paymentMessage }}</text>
+        <button
+          v-if="paymentState === 'failure' || paymentState === 'cancelled'"
+          class="primary-action"
+          :disabled="paymentBusy"
+          @click="retryPurchase"
+        >
+          重新支付
+        </button>
+        <button
+          v-if="paymentState !== 'success' && !paymentBusy"
+          class="detail-action"
+          @click="cancelPurchase"
+        >
+          暂不购买
+        </button>
       </view>
 
       <view class="description-panel ios-card">
@@ -390,6 +644,49 @@ onUnload(() => {
   font-weight: 800;
   line-height: 88rpx;
   border-radius: 20rpx;
+}
+.progress-panel,
+.payment-panel {
+  padding: 30rpx;
+  background: #fff;
+  border-radius: 30rpx;
+}
+.progress-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #385349;
+  font-size: 24rpx;
+}
+.progress-panel__title,
+.payment-panel__title {
+  color: #19342b;
+  font-size: 29rpx;
+  font-weight: 900;
+}
+.progress-panel__bar {
+  height: 14rpx;
+  margin-top: 20rpx;
+  overflow: hidden;
+  background: #dcebe5;
+  border-radius: 999rpx;
+}
+.progress-panel__fill {
+  height: 100%;
+  background: #0f766e;
+  border-radius: inherit;
+}
+.progress-panel__copy,
+.progress-panel__error,
+.payment-panel__copy {
+  display: block;
+  margin-top: 14rpx;
+  color: #667970;
+  font-size: 24rpx;
+  line-height: 1.55;
+}
+.progress-panel__error {
+  color: #9f3a38;
 }
 .detail-action {
   color: #0f6b4f;

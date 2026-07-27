@@ -91,11 +91,13 @@ try {
 
   await api.createClassroomOrderApi('series', 12)
   await api.getClassroomOrderStatusApi('content', 21)
+  await api.devPayClassroomOrderApi('cls-21')
   await api.updateClassroomProgressApi(21, 91)
   await api.getClassroomContinueLearningApi()
-  assert.deepEqual(requestStub.calls.slice(-4), [
+  assert.deepEqual(requestStub.calls.slice(-5), [
     { url: '/miniapp/classroom/orders', method: 'POST', data: { targetType: 'series', refId: '12' }, auth: true },
     { url: '/miniapp/classroom/orders/status', method: 'GET', query: { targetType: 'content', refId: '21' }, auth: true },
+    { url: '/miniapp/classroom/orders/dev-pay', method: 'POST', data: { outTradeNo: 'cls-21' }, auth: true },
     { url: '/miniapp/classroom/content/21/progress', method: 'PUT', data: { positionSeconds: 91 }, auth: true },
     { url: '/miniapp/classroom/continue-learning', method: 'GET', auth: true },
   ])

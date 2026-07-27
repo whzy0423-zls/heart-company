@@ -1,7 +1,8 @@
 <script setup>
 import { computed, ref } from "vue";
-import { onLoad } from "@dcloudio/uni-app";
+import { onLoad, onShow } from "@dcloudio/uni-app";
 import {
+  getClassroomContinueLearningApi,
   getClassroomSeriesApi,
   listClassroomSeriesApi,
   listClassroomStandaloneApi,
@@ -13,6 +14,7 @@ import {
   normalizeClassroomContent,
   normalizeClassroomSeries,
 } from "../../utils/classroomDisplay";
+import { getToken } from "../../utils/auth";
 import { userErrorMessage } from "../../utils/userMessage";
 
 const activeTab = ref("series");
@@ -26,8 +28,13 @@ const selectedSeries = ref(null);
 const seriesDetails = ref({});
 const seriesLoading = ref(false);
 const seriesError = ref("");
+const continueItem = ref(null);
+const continueLoading = ref(false);
+const continueError = ref("");
 let listTicket = 0;
 let seriesTicket = 0;
+let continueTicket = 0;
+let skipNextShowRefresh = false;
 
 const activeItems = computed(() =>
   activeTab.value === "series" ? seriesItems.value : standaloneItems.value,
@@ -38,6 +45,57 @@ const emptyCopy = computed(() =>
 
 function responseItems(response) {
   return Array.isArray(response?.items) ? response.items : [];
+}
+
+function normalizeContinueItem(value = {}) {
+  const item = normalizeClassroomContent(value);
+  if (!item.id) return null;
+  return {
+    ...item,
+    positionSeconds: Math.max(0, Math.floor(Number(value.positionSeconds) || 0)),
+    completed: value.completed === true,
+    lastPlayedAt: String(value.lastPlayedAt || ""),
+  };
+}
+
+async function loadContinueLearning() {
+  const ticket = ++continueTicket;
+  if (!getToken()) {
+    continueItem.value = null;
+    continueLoading.value = false;
+    continueError.value = "";
+    return;
+  }
+  continueLoading.value = true;
+  continueError.value = "";
+  try {
+    const response = await getClassroomContinueLearningApi();
+    if (ticket !== continueTicket) return;
+    continueItem.value = responseItems(response).map(normalizeContinueItem).find(Boolean) || null;
+  } catch (error) {
+    if (ticket === continueTicket) {
+      continueItem.value = null;
+      continueError.value = userErrorMessage(error, "学习记录加载失败，请稍后重试");
+    }
+  } finally {
+    if (ticket === continueTicket) continueLoading.value = false;
+  }
+}
+
+function continuePercent(item) {
+  if (item?.completed) return 100;
+  const duration = Math.max(0, Number(item?.durationSeconds) || 0);
+  if (!duration) return 0;
+  return Math.min(
+    89,
+    Math.max(0, Math.floor(((Number(item?.positionSeconds) || 0) / duration) * 100)),
+  );
+}
+
+function continueLabel(item) {
+  if (item?.completed) return "已完成，可再次学习";
+  const position = formatDuration(item?.positionSeconds);
+  return position ? `已学习至 ${position}` : "从头开始学习";
 }
 
 async function loadActiveList({ force = false } = {}) {
@@ -157,6 +215,13 @@ function openContent(item) {
   if (url) uni.navigateTo({ url });
 }
 
+function openContinueLearning(item) {
+  const url = classroomContentRoute(item);
+  if (!url) return;
+  const position = Math.max(0, Math.floor(Number(item?.positionSeconds) || 0));
+  uni.navigateTo({ url: `${url}&position=${position}` });
+}
+
 function itemAction(item) {
   return classroomPurchaseAction(item);
 }
@@ -170,8 +235,18 @@ function formatDuration(seconds) {
 }
 
 onLoad((options = {}) => {
+  skipNextShowRefresh = true;
   if (options.tab === "standalone") activeTab.value = "standalone";
   loadActiveList();
+  loadContinueLearning();
+});
+
+onShow(() => {
+  if (skipNextShowRefresh) {
+    skipNextShowRefresh = false;
+    return;
+  }
+  loadContinueLearning();
 });
 </script>
 
@@ -182,6 +257,52 @@ onLoad((options = {}) => {
       <text class="classroom-hero__title">用声音与影像，陪你把觉察带进生活</text>
       <text class="classroom-hero__lead">既可以按系列循序学习，也可以从一节独立课件开始。</text>
     </view>
+
+    <view
+      v-if="continueLoading"
+      class="continue-learning continue-learning--loading ios-card"
+      aria-live="polite"
+    >
+      正在读取学习进度…
+    </view>
+    <view
+      v-else-if="continueError"
+      class="continue-learning continue-learning--error ios-card"
+      aria-live="polite"
+    >
+      <text>{{ continueError }}</text>
+      <button class="state-action" @click="loadContinueLearning">重试学习记录</button>
+    </view>
+    <button
+      v-else-if="continueItem"
+      class="continue-learning ios-card"
+      :aria-label="`继续学习${continueItem.title}，${continueLabel(continueItem)}`"
+      @click="openContinueLearning(continueItem)"
+    >
+      <view class="continue-learning__head">
+        <view>
+          <text class="continue-learning__eyebrow">继续学习</text>
+          <text class="continue-learning__title">{{ continueItem.title }}</text>
+        </view>
+        <text class="continue-learning__action">继续 ›</text>
+      </view>
+      <view
+        class="continue-learning__progress"
+        role="progressbar"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        :aria-valuenow="continuePercent(continueItem)"
+        :aria-label="
+          continueItem.completed ? '课程已完成' : `课程进度 ${continuePercent(continueItem)}%`
+        "
+      >
+        <view
+          class="continue-learning__progress-fill"
+          :style="{ width: `${continuePercent(continueItem)}%` }"
+        />
+      </view>
+      <text class="continue-learning__copy">{{ continueLabel(continueItem) }}</text>
+    </button>
 
     <view class="classroom-tabs" role="tablist" aria-label="课堂内容分类">
       <button
@@ -351,6 +472,69 @@ onLoad((options = {}) => {
   padding: 8rpx;
   background: #e7f3ee;
   border-radius: 24rpx;
+}
+.continue-learning {
+  display: block;
+  width: 100%;
+  min-height: 176rpx;
+  padding: 28rpx;
+  color: #173e32;
+  text-align: left;
+  background: linear-gradient(135deg, #ecfdf5, #eff6ff);
+  border-radius: 28rpx;
+}
+.continue-learning::after {
+  border: 0;
+}
+.continue-learning--loading,
+.continue-learning--error {
+  color: #64756e;
+  font-size: 25rpx;
+  text-align: center;
+}
+.continue-learning--error {
+  color: #9f3a38;
+}
+.continue-learning__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20rpx;
+}
+.continue-learning__eyebrow,
+.continue-learning__title,
+.continue-learning__copy {
+  display: block;
+}
+.continue-learning__eyebrow,
+.continue-learning__action {
+  color: #0f766e;
+  font-size: 23rpx;
+  font-weight: 800;
+}
+.continue-learning__title {
+  margin-top: 6rpx;
+  color: #173e32;
+  font-size: 30rpx;
+  font-weight: 900;
+  line-height: 1.4;
+}
+.continue-learning__progress {
+  height: 12rpx;
+  margin-top: 22rpx;
+  overflow: hidden;
+  background: #cfe7dc;
+  border-radius: 999rpx;
+}
+.continue-learning__progress-fill {
+  height: 100%;
+  background: #0f766e;
+  border-radius: inherit;
+}
+.continue-learning__copy {
+  margin-top: 12rpx;
+  color: #587167;
+  font-size: 23rpx;
 }
 .classroom-tab {
   flex: 1;

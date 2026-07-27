@@ -202,6 +202,12 @@ export function getClassroomOrderStatusApi(targetType, refId) {
   return classroomRequest({ url: '/miniapp/classroom/orders/status', method: 'GET', query: { targetType, refId: classroomID(refId) }, auth: true }, '订单状态查询失败，请重试')
 }
 
+export function devPayClassroomOrderApi(outTradeNo) {
+  const normalized = String(outTradeNo || '').trim()
+  if (!normalized) throw new Error('订单参数无效')
+  return classroomRequest({ url: '/miniapp/classroom/orders/dev-pay', method: 'POST', data: { outTradeNo: normalized }, auth: true }, '本地支付确认失败，请重试')
+}
+
 export function updateClassroomProgressApi(contentId, positionSeconds) {
   return classroomRequest({
     url: `/miniapp/classroom/content/${classroomID(contentId)}/progress`,

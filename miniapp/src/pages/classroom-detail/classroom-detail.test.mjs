@@ -17,15 +17,51 @@ assert.match(
   /v-if="!content\.canPlay"[^>]*class="access-panel/,
   "locked content should render its effective permission CTA",
 );
-assert.doesNotMatch(
+assert.match(
   source,
   /createClassroomOrderApi|requestPayment|getClassroomOrderStatusApi/,
-  "purchase state machine belongs to Task 10",
+  "detail should expose classroom purchase and payment status behavior",
+);
+assert.match(
+  source,
+  /createClassroomProgressTracker/,
+  "detail should track classroom learning progress",
+);
+assert.match(
+  source,
+  /updateClassroomProgressApi/,
+  "logged-in progress should use the server endpoint",
+);
+assert.match(
+  source,
+  /@timeupdate="handleVideoTimeUpdate"/,
+  "video playback should report progress",
+);
+assert.match(source, /@pause="handleVideoPause"/, "video pause should flush progress");
+assert.match(source, /@ended="handleVideoEnded"/, "video completion should flush progress");
+assert.match(
+  source,
+  /void flushProgress\(\)/,
+  "page hide/unload should safely flush queued progress",
 );
 assert.doesNotMatch(
   source,
-  /createClassroomProgressTracker|updateClassroomProgressApi|continue-learning/i,
-  "full progress UX belongs to Task 10",
+  /void progressTracker\?\.flush\(\)/,
+  "lifecycle flush failures must not become unhandled rejections",
+);
+assert.match(source, /paymentState/, "detail should render explicit payment states");
+assert.match(source, /retryPurchase/, "failed or cancelled payment should expose retry");
+assert.match(source, /cancelPurchase/, "pending payment feedback should be dismissible");
+assert.match(
+  source,
+  /createClassroomPurchaseController/,
+  "purchase polling should use the bounded controller",
+);
+assert.match(source, /role="progressbar"/, "learning progress should be exposed accessibly");
+assert.match(
+  source,
+  /options\.position/,
+  "detail should accept the server-provided continue-learning resume position",
 );
 assert.doesNotMatch(
   source,

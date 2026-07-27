@@ -1,4 +1,5 @@
 export const CLASSROOM_PROGRESS_THROTTLE_MS = 12_000
+export const CLASSROOM_ORDER_POLL_MAX_ATTEMPTS = 6
 const LOCAL_PREFIX = 'nx_classroom_progress:'
 
 function contentID(value) {
@@ -48,10 +49,12 @@ export function createClassroomProgressTracker(options = {}) {
   let queued = null
   let lastSentAt = null
   let inFlight = null
+  let completed = options.completed === true
 
   function snapshot(value) {
     const positionSeconds = position(value, durationSeconds)
-    return { positionSeconds, completed: classroomCompletion(positionSeconds, durationSeconds).completed }
+    completed = completed || classroomCompletion(positionSeconds, durationSeconds).completed
+    return { positionSeconds, completed }
   }
 
   async function transmit({ flush = false } = {}) {
@@ -99,5 +102,96 @@ export function createClassroomProgressTracker(options = {}) {
     flush() { return transmit({ flush: true }) },
     retry() { return transmit({ flush: true }) },
     pending() { return queued ? { ...queued } : null },
+  }
+}
+
+function paymentCancelled(error) {
+  const message = String(error?.errMsg || error?.message || '').toLowerCase()
+  return message.includes('cancel') || message.includes('取消')
+}
+
+function orderPaid(status) {
+  return status?.owned === true || status?.status === 'paid'
+}
+
+function orderTerminal(status) {
+  return ['closed', 'cancelled', 'canceled', 'failed', 'refunded'].includes(String(status?.status || '').toLowerCase())
+}
+
+export function createClassroomPurchaseController(options = {}) {
+  const maxAttempts = Math.max(1, Math.min(CLASSROOM_ORDER_POLL_MAX_ATTEMPTS, Math.floor(Number(options.maxAttempts) || CLASSROOM_ORDER_POLL_MAX_ATTEMPTS)))
+  const wait = typeof options.wait === 'function' ? options.wait : (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  const intervalMs = Math.max(0, Number(options.intervalMs) || 1_200)
+  let generation = 0
+  let currentOperation = null
+  let current = { state: 'idle', message: '', order: null, status: null }
+
+  function publish(state, message = '', extra = {}) {
+    current = { ...current, ...extra, state, message }
+    options.onChange?.({ ...current })
+  }
+
+  function active(run) {
+    return generation === run
+  }
+
+  function purchase() {
+    if (currentOperation) return currentOperation
+    const run = ++generation
+    const operation = (async () => {
+      try {
+        publish('creating', '正在创建安全订单…')
+        const order = await options.create()
+        if (!active(run)) return current
+        publish('pending', '订单已创建，请完成微信支付', { order })
+        await options.pay(order)
+        if (!active(run)) return current
+        publish('pending', '支付已提交，正在确认结果…', { order })
+        for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+          if (attempt > 0) await wait(intervalMs)
+          if (!active(run)) return current
+          const status = await options.status(order)
+          if (!active(run)) return current
+          if (orderPaid(status)) {
+            publish('success', '购买成功，正在刷新课件权限', { status })
+            await options.onSuccess?.(status)
+            return current
+          }
+          if (orderTerminal(status)) {
+            publish('failure', '订单未完成，可重新发起支付', { status })
+            return current
+          }
+        }
+        if (active(run)) publish('failure', '支付结果确认超时，请重试查询或重新支付')
+      } catch (error) {
+        if (!active(run)) return current
+        publish(
+          paymentCancelled(error) ? 'cancelled' : 'failure',
+          paymentCancelled(error) ? '已取消支付，可稍后继续' : String(error?.message || '支付失败，请重试'),
+        )
+      }
+      return current
+    })()
+    let tracked
+    tracked = operation.finally(() => {
+      if (currentOperation === tracked) currentOperation = null
+    })
+    currentOperation = tracked
+    return tracked
+  }
+
+  return {
+    purchase,
+    retry: purchase,
+    stop() {
+      generation += 1
+      currentOperation = null
+    },
+    reset() {
+      generation += 1
+      currentOperation = null
+      publish('idle')
+    },
+    snapshot() { return { ...current } },
   }
 }

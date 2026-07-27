@@ -29,9 +29,11 @@ try {
   }
   const anonymous = createClassroomProgressTracker({ contentId: 21, durationSeconds: 100, storage })
   assert.deepEqual(await anonymous.record(25), { positionSeconds: 25, completed: false, local: true })
+  assert.deepEqual(await anonymous.record(90), { positionSeconds: 90, completed: true, local: true })
+  assert.deepEqual(await anonymous.record(40), { positionSeconds: 40, completed: true, local: true }, 'completed progress must not regress after seeking backward')
   const localProgress = readAnonymousClassroomProgress(storage, 21)
-  assert.equal(localProgress.positionSeconds, 25)
-  assert.equal(localProgress.completed, false)
+  assert.equal(localProgress.positionSeconds, 40)
+  assert.equal(localProgress.completed, true)
   assert.equal(typeof localProgress.updatedAt, 'number')
   assert.equal(anonymous.pending(), null, 'anonymous progress must never queue a server write')
 
