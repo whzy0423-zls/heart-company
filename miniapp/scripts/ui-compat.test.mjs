@@ -3,6 +3,20 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
+const learnClassroomSource = readFileSync('src/pages/learn/learn.vue', 'utf8')
+const classroomPage = statSync('src/pages/classroom/classroom.vue', { throwIfNoEntry: false })
+  ? readFileSync('src/pages/classroom/classroom.vue', 'utf8')
+  : ''
+const classroomDetailPage = statSync('src/pages/classroom-detail/classroom-detail.vue', { throwIfNoEntry: false })
+  ? readFileSync('src/pages/classroom-detail/classroom-detail.vue', 'utf8')
+  : ''
+
+assert.match(learnClassroomSource, /class="classroom-entry/, 'learning page should expose the teacher classroom section')
+assert.match(learnClassroomSource, /loadClassroomPreview/, 'classroom preview should load independently from cached learning content')
+assert.match(learnClassroomSource, /retryClassroomPreview/, 'classroom preview failure should expose a separate retry')
+assert.match(learnClassroomSource, /coursewareItems/, 'classroom preview must preserve legacy home course fallback')
+assert.match(classroomPage, /min-height:\s*88rpx/, 'classroom actions should keep accessible touch targets')
+assert.match(classroomDetailPage, /min-height:\s*88rpx/, 'classroom detail actions should keep accessible touch targets')
 
 assert.equal(packageJson.scripts['dev:h5'], 'uni -p h5')
 assert.equal(packageJson.scripts['build:h5'], 'uni build -p h5')

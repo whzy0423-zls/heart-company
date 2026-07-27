@@ -97,6 +97,8 @@ const expectedSubpackagePages = [
   'pages/profile-edit/profile-edit',
   'pages/booking-records/booking-records',
   'pages/booking-detail/booking-detail',
+  'pages/classroom/classroom',
+  'pages/classroom-detail/classroom-detail',
 ]
 assert.deepEqual(
   [...subpackagePagePaths].sort(),
@@ -115,5 +117,14 @@ for (const tab of pagesConfig.tabBar.list) {
     `tabBar page ${tab.pagePath} must stay in the main package`,
   )
 }
+
+const classroomRoute = (pagesConfig.subPackages || []).find((subpackage) =>
+  subpackage.pages.some((page) => `${subpackage.root}/${page.path}`.replace(/\/+/g, '/') === 'pages/classroom/classroom'),
+)
+const classroomDetailRoute = (pagesConfig.subPackages || []).find((subpackage) =>
+  subpackage.pages.some((page) => `${subpackage.root}/${page.path}`.replace(/\/+/g, '/') === 'pages/classroom-detail/classroom-detail'),
+)
+assert.equal(classroomRoute?.root, 'pages/classroom', 'classroom list must use the exact classroom subpackage root')
+assert.equal(classroomDetailRoute?.root, 'pages/classroom-detail', 'classroom detail must use the exact classroom-detail subpackage root')
 
 console.log('project config tests passed')

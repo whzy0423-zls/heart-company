@@ -4,6 +4,8 @@ import { TYPES_INFO } from '../../data/enneagramGame'
 import { getStoredSiteConfig, hasSiteConfigLearningSection, refreshSiteConfig } from '../../utils/siteConfig'
 import { userErrorMessage } from '../../utils/userMessage'
 import { normalizeCoursewareItems, normalizeTeachers } from '../../utils/teacherCourseware'
+import { listClassroomSeriesApi, listClassroomStandaloneApi } from '../../api'
+import { normalizeClassroomContent, normalizeClassroomSeries } from '../../utils/classroomDisplay'
 
 const teachers = ref([])
 const coursewareItems = ref([])
@@ -16,7 +18,11 @@ const loading = ref(true)
 const loadError = ref('')
 const refreshError = ref('')
 const refreshing = ref(false)
+const classroomPreview = ref([])
+const classroomLoading = ref(true)
+const classroomError = ref('')
 let loadTicket = 0
+let classroomTicket = 0
 
 function applyContent(cfg) {
   teachers.value = normalizeTeachers(cfg)
@@ -96,9 +102,45 @@ function markTypeImageError(id) {
   typeImageErrors.value = { ...typeImageErrors.value, [id]: true }
 }
 
+async function loadClassroomPreview() {
+  const ticket = ++classroomTicket
+  classroomLoading.value = true
+  classroomError.value = ''
+  try {
+    const [seriesResult, standaloneResult] = await Promise.allSettled([
+      listClassroomSeriesApi({ limit: 2, offset: 0 }),
+      listClassroomStandaloneApi({ limit: 2, offset: 0 }),
+    ])
+    if (ticket !== classroomTicket) return
+    const series = seriesResult.status === 'fulfilled'
+      ? (seriesResult.value?.items || []).map(normalizeClassroomSeries).filter((item) => item.id)
+      : []
+    const standalone = standaloneResult.status === 'fulfilled'
+      ? (standaloneResult.value?.items || []).map(normalizeClassroomContent).filter((item) => item.id)
+      : []
+    classroomPreview.value = [...series, ...standalone].slice(0, 3)
+    if (seriesResult.status === 'rejected' && standaloneResult.status === 'rejected') {
+      classroomError.value = userErrorMessage(seriesResult.reason, '老师课堂加载失败，请稍后重试')
+    }
+  } catch (error) {
+    if (ticket === classroomTicket) classroomError.value = userErrorMessage(error, '老师课堂加载失败，请稍后重试')
+  } finally {
+    if (ticket === classroomTicket) classroomLoading.value = false
+  }
+}
+
+function retryClassroomPreview() {
+  return loadClassroomPreview()
+}
+
+function openClassroom(tab = 'series') {
+  uni.navigateTo({ url: `/pages/classroom/classroom?tab=${tab}` })
+}
+
 onMounted(() => {
   const hasCachedContent = showStoredContent()
   loadContent({ silent: hasCachedContent })
+  loadClassroomPreview()
 })
 
 function goTest() {
@@ -124,6 +166,38 @@ function goTest() {
     </view>
 
     <view class="learn-sections">
+      <view class="classroom-entry card ios-card learn-section nx-panel section">
+        <view class="nx-section-head">
+          <view>
+            <text class="section-kicker">老师课堂</text>
+            <text class="sec-title">视频与音频课件</text>
+          </view>
+          <button class="classroom-entry__more" @click="openClassroom('series')">查看全部</button>
+        </view>
+        <view v-if="classroomLoading" class="empty" aria-live="polite">课堂内容加载中…</view>
+        <view v-else-if="classroomError" class="empty empty--error" aria-live="polite">
+          <view>
+            <text>{{ classroomError }}</text>
+            <text class="classroom-entry__fallback">下方精选课程仍可继续浏览。</text>
+          </view>
+          <button class="retry" @click="retryClassroomPreview">重试课堂内容</button>
+        </view>
+        <view v-else-if="classroomPreview.length === 0" class="classroom-entry__empty">
+          <text>老师课堂正在准备中，下方精选课程仍可继续浏览。</text>
+          <button class="classroom-entry__browse" @click="openClassroom('standalone')">进入课堂</button>
+        </view>
+        <view v-else class="classroom-entry__grid">
+          <view v-for="item in classroomPreview" :key="`${item.contentType || 'series'}:${item.id}`" class="classroom-entry__item">
+            <image v-if="item.coverUrl" class="classroom-entry__cover" :src="item.coverUrl" mode="aspectFill" lazy-load />
+            <view v-else class="classroom-entry__cover classroom-entry__cover--fallback" aria-hidden="true">课</view>
+            <view class="classroom-entry__body">
+              <text class="classroom-entry__kind">{{ item.contentType ? (item.contentType === 'audio' ? '音频' : '视频') : '系列' }}</text>
+              <text class="classroom-entry__title">{{ item.title }}</text>
+            </view>
+          </view>
+        </view>
+      </view>
+
       <view class="card ios-card learn-section nx-panel section teacher-section">
         <view class="nx-section-head">
           <view>
@@ -275,6 +349,27 @@ function goTest() {
 }
 .refresh-retry::after { border: none; }
 .refresh-retry[disabled] { opacity: .6; }
+.classroom-entry__more, .classroom-entry__browse {
+  min-height: 88rpx;
+  padding: 0 24rpx;
+  color: #0f6b4f;
+  font-size: 24rpx;
+  font-weight: 800;
+  line-height: 88rpx;
+  background: #ecfdf5;
+  border-radius: 18rpx;
+}
+.classroom-entry__more::after, .classroom-entry__browse::after { border: 0; }
+.classroom-entry__fallback { display: block; margin-top: 10rpx; color: #66766f; }
+.classroom-entry__empty { color: #66766f; font-size: 25rpx; line-height: 1.6; text-align: center; }
+.classroom-entry__browse { display: block; margin: 20rpx auto 0; }
+.classroom-entry__grid { display: grid; gap: 18rpx; }
+.classroom-entry__item { display: flex; overflow: hidden; background: #f3f8f5; border-radius: 22rpx; }
+.classroom-entry__cover { flex-shrink: 0; width: 156rpx; height: 126rpx; background: #dbeee6; }
+.classroom-entry__cover--fallback { display: flex; align-items: center; justify-content: center; color: #0f766e; font-size: 40rpx; font-weight: 900; }
+.classroom-entry__body { display: flex; flex: 1; flex-direction: column; justify-content: center; min-width: 0; padding: 16rpx 20rpx; }
+.classroom-entry__kind { color: #0f766e; font-size: 21rpx; font-weight: 800; }
+.classroom-entry__title { margin-top: 8rpx; color: #1c2923; font-size: 26rpx; font-weight: 800; line-height: 1.4; }
 .learn-sections { display: flex; flex-direction: column; gap: 22rpx; }
 .learn-section { display: flex; flex-direction: column; padding: 30rpx; }
 .section-kicker { display: block; color: #0f766e; font-size: 24rpx; font-weight: 800; }
