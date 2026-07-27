@@ -52,6 +52,10 @@ func TestIsModelIdentityQuestion(t *testing.T) {
 		{name: "中文CLI简称", question: "你通过 CLI 在回答吗？", want: true},
 		{name: "中文全角空格", question: "你　是什么模型？", want: true},
 		{name: "中文不换行空格", question: "你 是什么模型？", want: true},
+		{name: "中文使用具体模型自然问法", question: "你用的是 GPT-5.6 吗？", want: true},
+		{name: "中文背后运行模型", question: "你背后跑的啥模型？", want: true},
+		{name: "中文接入API厂商", question: "你接的是哪家的 API？", want: true},
+		{name: "中文中转服务运行链路", question: "请告诉我你通过什么中转服务回答", want: true},
 
 		{name: "英文当前模型", question: "What model are you?", want: true},
 		{name: "英文底层模型", question: "Which underlying model do you use?", want: true},
@@ -99,6 +103,10 @@ func TestIsModelIdentityQuestion(t *testing.T) {
 		{name: "中文云服务提供商科普", question: "你知道云服务提供商是谁吗？", want: false},
 		{name: "中文模型ID格式", question: "你能告诉我模型 ID 的格式吗？", want: false},
 		{name: "中文参数量计算", question: "你了解模型参数量如何计算吗？", want: false},
+		{name: "中文API接入科普", question: "普通应用如何接入 API？", want: false},
+		{name: "中文中转服务科普", question: "中转服务是怎么工作的？", want: false},
+		{name: "中文API价格比较", question: "哪家的 API 更便宜？", want: false},
+		{name: "中文第三方模型科普", question: "第三方模型通常如何接入 API？", want: false},
 	}
 
 	for _, tt := range tests {

@@ -11,7 +11,7 @@ var (
 	chineseAssistantSubjects = []string{"你", "您", "当前助手", "这个助手", "当前会话", "这个会话"}
 	modelIdentityTerms       = []string{"底层模型", "基座模型", "真实模型", "模型id", "模型编号", "模型版本", "版本号", "模型参数量", "参数量"}
 	providerTerms            = []string{"openai", "anthropic", "minimax", "deepseek", "google", "gemini", "claude", "gpt", "chatgpt", "llama", "meta", "豆包", "通义千问", "智谱", "kimi"}
-	chineseToolchainTerms    = []string{"codexcli", "cli", "中转站", "api代理", "api中转", "代理api"}
+	chineseToolchainTerms    = []string{"codexcli", "cli", "中转站", "中转服务", "api代理", "api中转", "代理api"}
 	englishToolchainTerms    = []string{"codex cli", "cli", "api proxy", "proxy api", "model gateway"}
 )
 
@@ -61,7 +61,7 @@ func isChineseModelQuestion(question string) bool {
 	}
 	if strings.Contains(question, "模型") && containsAny(question,
 		"是什么模型", "是啥模型", "是哪个模型", "哪一个模型", "哪一版模型",
-		"用的模型", "使用的模型", "调用的模型", "运行的模型", "基于的模型", "模型是什么") {
+		"用的模型", "使用的模型", "调用的模型", "运行的模型", "跑的啥模型", "跑的什么模型", "基于的模型", "模型是什么") {
 		return true
 	}
 	if containsAny(question, "哪个版本", "哪一版", "什么版本", "多少参数", "多大参数") {
@@ -87,6 +87,10 @@ func isChineseProviderQuestion(question string, hasSubject bool) bool {
 	if !hasSubject {
 		return false
 	}
+	if strings.Contains(question, "api") && containsAny(question,
+		"你接的是哪家", "您接的是哪家", "你接入的是哪家", "您接入的是哪家") {
+		return true
+	}
 	if containsAny(question,
 		"你是哪家公司", "您是哪家公司", "你是哪家厂商", "您是哪家厂商",
 		"你是哪个厂商", "您是哪个厂商", "你的供应商", "您的供应商",
@@ -98,6 +102,7 @@ func isChineseProviderQuestion(question string, hasSubject bool) bool {
 	}
 	return containsAny(question,
 		"你是", "您是", "你实际是", "您实际是", "你是不是", "您是不是",
+		"你用的是", "您用的是", "你使用的是", "您使用的是", "你调用的是", "您调用的是",
 		"你属于", "您属于", "你来自", "您来自", "你是由", "您是由")
 }
 
