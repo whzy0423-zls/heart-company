@@ -69,6 +69,7 @@ type fakeClassroomPublicService struct {
 	play                      classroomPlaybackSource
 	playUserID, playContentID int64
 	playCalls                 int
+	contentCalls              int
 	viewerAware               bool
 	listErr, getErr, playErr  error
 }
@@ -100,6 +101,7 @@ func (f *fakeClassroomPublicService) GetSeries(context.Context, int64, int64) (c
 	return classroomPublicSeriesDetail{Series: f.series[0], Contents: []classroomPublicContent{f.content}}, nil
 }
 func (f *fakeClassroomPublicService) GetContent(context.Context, int64, int64) (classroomPublicContent, error) {
+	f.contentCalls++
 	return f.content, f.getErr
 }
 
@@ -214,8 +216,8 @@ func TestClassroomPublicMetadataRejectsExpiredMiniappJWT(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	response := httptest.NewRecorder()
 	mux.ServeHTTP(response, req)
-	if response.Code != http.StatusUnauthorized || f.playCalls != 0 {
-		t.Fatalf("expired JWT metadata status=%d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusUnauthorized || f.contentCalls != 0 {
+		t.Fatalf("expired JWT metadata status=%d getContentCalls=%d body=%s", response.Code, f.contentCalls, response.Body.String())
 	}
 }
 

@@ -36,13 +36,13 @@ pages/classroom-detail/classroom-detail
 | --- | --- | --- |
 | 指定后台测试 | `pnpm exec vitest run apps/web-antd/src/views/miniapp/home.test.ts apps/web-antd/src/views/classroom/classroom.test.ts apps/web-antd/src/views/site-config/teacher.test.ts apps/web-antd/src/views/site-config/courses.test.ts` | 4 files、37 tests 通过 |
 | Web 类型检查 | `pnpm run check:type --filter=@vben/web-antd` | 1/1 task 通过 |
-| Web 生产构建 | `pnpm run build:antd` | 11/11 tasks 通过；fresh 构建生成 `apps/web-antd/dist.zip`（1,575,441 bytes） |
+| Web 生产构建 | `pnpm run build:antd` | 11/11 tasks 通过；质量修复后的 fresh 构建生成 `apps/web-antd/dist.zip`（1,575,614 bytes） |
 | Go 全仓 | `cd apps/server && go test -count=1 ./...` | 全部通过 |
 | 课堂纵向合同 | `go test ./internal/server -run ClassroomVerticalContract -count=1 -v` | `TestClassroomVerticalContractAdminPublishToPublicPlayback` 通过 |
 | Race | `go test -race ./internal/classroom ./internal/server ./internal/storage` | 全部通过 |
 | Vet | `go vet ./...` | 通过，无输出 |
 | Go 格式 | `gofmt` 后 `gofmt -l` 检查本次 Go 文件 | 无输出 |
-| 前端格式 | `oxfmt --check` 检查本次 JSON/MJS/Vue 文件 | 通过 |
+| 前端格式 | `oxfmt --check` 检查本次 JSON/MJS loader 与 regression 文件；Vue 以原始格式保留并检查最小语义 diff | 通过 |
 | 空白错误 | `git diff --check` | 通过 |
 
 ### Typecheck RED → GREEN
@@ -53,6 +53,8 @@ pages/classroom-detail/classroom-detail
 - `miniapp/home.vue`：同一 SFC 两个 script block 重复导入 `MiniappHomeIconKey/MiniappHomeThemeKey`。
 
 完成最小类型修复后，`vue-tsc --noEmit --skipLibCheck` 退出码为 0，生产构建也通过。
+
+质量复审时已撤回 `miniapp-users.vue` 的整文件格式化；相对原文件只保留删除未使用导入，以及 `unknown` record ID 校验后从 typed source list 重新取值的最小语义 diff，不再使用 `Record<string, any>` 和强制类型断言。
 
 ## 3. 场景矩阵
 
@@ -70,7 +72,7 @@ pages/classroom-detail/classroom-detail
 | callback duplicate | `TestMarkOrderPaidDuplicateClassroomCallbackIsIdempotent` | 通过 |
 | refund | `TestRefundClassroomOrderRevokesOnlyItsEntitlementAndWritesAudit` | 通过 |
 | signed URL expiry | `TestClassroomAnonymousTicketExpiresAndRefreshesThroughNoStoreEndpoint`、跨内容/媒体版本 replay 测试 | 通过 |
-| Range/seek | `TestOSSPlaybackPresignLeavesRangeHeaderUnsignedForMediaSeeking`、`TestOSSClassroomPlaybackPresignedURLServesByteRange`；小程序播放器 seek/timeupdate 合同 | Range 不参与 OSS 签名；真实请求命中课堂对象路径并返回 206、`Content-Range` 与正确切片正文 |
+| Range/seek | `TestOSSPlaybackPresignLeavesRangeHeaderUnsignedForMediaSeeking`、`TestOSSClassroomPlaybackPresignedURLServesByteRange`；小程序播放器 seek/timeupdate 合同 | 独立 OSS V4 verifier 接受生产签名和动态 Range，返回 206；篡改签名及错误 Range 约束均被拒绝 |
 | progress throttle/flush | `classroomProgress.test.mjs`、`classroom-progress-order.test.mjs`、详情页 hide/unload 测试、服务端限流测试 | 通过 |
 | cache invalidation | `TestClassroomPublicContentCacheInvalidatesOnHiddenMediaVersion`、`TestClassroomPublicListCacheInvalidatesOnPriceAndOfflineVisibilityChanges` | 旧 ETag 在媒体版本、价格或可见性变化后返回新 200；内部版本不泄漏 |
 | permission denial | `TestClassroomUploadRoutesRequireDedicatedPermission`、`TestClassroomAdminListPublishAndPriceRoutesStopAtPermissionDenial` | list/publish/price/upload 均在业务 handler 前 403 |
@@ -85,21 +87,25 @@ pages/classroom-detail/classroom-detail
 
 ### Range/206 TDD
 
-`TestOSSClassroomPlaybackPresignedURLServesByteRange` 使用生产 `OSSUploader.PresignGetURL` 和课堂纵向合同中的对象路径 `classroom/private/content-21.mp4` 生成短时签名地址，再向可重复 OSS-compatible HTTP origin 发出 `Range: bytes=4-8`：
+`TestOSSClassroomPlaybackPresignedURLServesByteRange` 使用生产 `OSSUploader.PresignGetURL` 和课堂纵向合同中的对象路径 `classroom/private/content-21.mp4` 生成短时签名地址，再向本地可重复的 OSS-compatible integration fixture 发出 Range GET。Fixture 独立解析 credential/scope/date/expiry/additional headers，重建 canonical URI、canonical query、canonical request、string-to-sign 和 `aliyun_v4_request` HMAC signing key，并以常量时序比较签名：
 
-- RED：origin 忽略 Range 时返回 200 和完整正文，测试按预期失败；
-- GREEN：origin 按对象存储 HTTP Range 合同响应后，状态为 206；
+- RED 1：origin 忽略 Range 时返回 200 和完整正文，测试按预期失败；
+- RED 2：切换到独立签名 verifier 前，测试因缺少 `verifyOSSQueryV4` 编译失败；
+- GREEN：原始生产签名通过验证，`Range: bytes=4-8` 返回 206；
 - `Content-Range` 精确为 `bytes 4-8/16`；
 - 响应正文精确为 `45678`；
-- origin 同时断言课堂 bucket/object path、OSS 签名查询参数和 Range 请求头，避免退化为与课堂播放链路无关的独立 toy server。
+- 同一生产签名改发 `bytes=9-11` 仍返回 206、`bytes 9-11/16` 和 `9ab`，证明 Range 保持动态；
+- 篡改 `x-oss-signature` 返回 403；控制组故意把 Range 纳入 `x-oss-additional-headers` 并重签后，原 Range 可用但改变 Range 返回 403，证明错误签名约束会被测试捕获。
+
+该 fixture 验证本仓库 OSS SDK 签名和 HTTP Range 契约，不声称替代真实阿里云 Bucket 验证；上线环境仍需执行文末 lifecycle/CORS/实际对象抽查。
 
 ## 4. 既有功能回归
 
 | 流程 | 可执行证据 |
 | --- | --- |
 | 微信登录 | `TestWxLoginUsesMiniappUserServiceAndKeepsResponseCompatible`；小程序 auth/request 测试 |
-| expired token | `TestClassroomPublicMetadataRejectsExpiredMiniappJWT`；API stale JWT 自动清理并匿名重试测试 |
-| test → result → report | `release-regression-flow.test.mjs` 执行答题结束、结果缓存、匿名上报、存档、报告状态和正文加载；服务端 test-record/report tests |
+| expired token | `TestClassroomPublicMetadataRejectsExpiredMiniappJWT` 明确断言 401 且 `GetContent` 调用数为 0；API stale JWT 自动清理并匿名重试测试 |
+| test → result → report | `release-regression-flow.test.mjs` 通过 compiler-sfc loader mount 真实生产 `test.vue/result.vue`：测试页实际写 session/storage，结果页消费同一数据，并经共享有状态 request mock 完成匿名上报、存档、报告状态和正文加载；断言生产 import 身份、session schema 与 report DTO；服务端 test-record/report tests |
 | relation | `release-regression-flow.test.mjs` 执行选择、分析、结果和 reset；`TestAppCompatibilityCreateReturnsReportWithCompatibleFieldNames` 与 list/detail scope 测试 |
 | booking draft/submit | `release-regression-flow.test.mjs` 执行草稿恢复、登录、提交、清草稿和表单复位；`TestMiniappBookingsPostUsesTransactionalServiceBroadcastsAfterSuccessAndReturnsBooking` |
 | booking records/detail | `booking-records.session.test.mjs`、`booking-detail.session.test.mjs`、booking display/session tests |

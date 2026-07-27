@@ -1,199 +1,288 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { createRenderer } from "vue";
 
-const root = new URL("../src/pages/", import.meta.url);
-const directory = await mkdtemp(join(tmpdir(), "nine-xing-release-flow-"));
-let sequence = 0;
+import TestPage from "../src/pages/test/test.vue";
+import ResultPage from "../src/pages/result/result.vue";
+import ProfileEditPage from "../src/pages/profile-edit/profile-edit.vue";
+import BookingPage from "../src/pages/booking/booking.vue";
+import RelationPage from "../src/pages/relation/relation.vue";
+import { QUESTIONS } from "../src/data/enneagramGame.js";
+import { calcType } from "../src/utils/enneagram.js";
+import { getLastResult, setLastResult } from "../src/utils/session.js";
+import { BOOKING_DRAFT_KEY } from "../src/utils/bookingDraft.js";
+import {
+  reportContentApi,
+  reportGameResultApi,
+  reportStatusApi,
+  saveTestRecordApi,
+} from "../src/api/index.js";
 
-async function loadPage(relativePath, prelude, exports) {
-  const source = await readFile(new URL(relativePath, root), "utf8");
-  const script = source.match(/<script setup>([\s\S]*?)<\/script>/)?.[1];
-  assert.ok(script, `${relativePath} must expose script setup`);
-  const executable = script.replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\s*$/gm, "");
-  const modulePath = join(directory, `page-${++sequence}.mjs`);
-  await writeFile(modulePath, `${prelude}\n${executable}\nexport { ${exports.join(", ")} };\n`);
-  return import(`${pathToFileURL(modulePath).href}?case=${sequence}`);
+const storage = new Map([["nx_token", "miniapp-token"]]);
+const hooks = {
+  onHide: [],
+  onLoad: [],
+  onShareAppMessage: [],
+  onShareTimeline: [],
+  onShow: [],
+  onUnload: [],
+};
+const state = {
+  bookings: [],
+  gameReports: [],
+  profileUpdates: [],
+  redirects: [],
+  reportContentRequests: [],
+  reportStatusRequests: [],
+  savedRecords: [],
+  toasts: [],
+};
+const snapshot = (value) => JSON.parse(JSON.stringify(value));
+globalThis.__releaseUniHooks = hooks;
+
+globalThis.uni = {
+  getStorageSync: (key) => storage.get(key),
+  setStorageSync: (key, value) => storage.set(key, snapshot(value)),
+  removeStorageSync: (key) => storage.delete(key),
+  redirectTo: (value) => state.redirects.push(value),
+  navigateTo: () => {},
+  switchTab: () => {},
+  showToast: (value) => state.toasts.push(value),
+  request(options) {
+    const url = new URL(options.url);
+    const respond = (data, statusCode = 200) =>
+      queueMicrotask(() =>
+        options.success({ statusCode, data: { code: statusCode < 300 ? 0 : 1, data } }),
+      );
+    if (options.method === "POST" && url.pathname.endsWith("/public/game-results")) {
+      state.gameReports.push(snapshot(options.data));
+      respond({ accepted: true });
+      return;
+    }
+    if (options.method === "POST" && url.pathname.endsWith("/miniapp/test-records")) {
+      const record = { id: "record-77", ...snapshot(options.data) };
+      state.savedRecords.push(record);
+      respond(record);
+      return;
+    }
+    if (options.method === "GET" && url.pathname.endsWith("/miniapp/report/status")) {
+      const id = url.searchParams.get("testRecordId");
+      state.reportStatusRequests.push(id);
+      respond({ unlocked: state.savedRecords.some((item) => item.id === id), priceCents: 1990 });
+      return;
+    }
+    if (options.method === "GET" && url.pathname.endsWith("/miniapp/report/content")) {
+      const id = url.searchParams.get("testRecordId");
+      state.reportContentRequests.push(id);
+      respond({ answer: id === "record-77" ? "纵向报告正文" : "" });
+      return;
+    }
+    if (options.method === "GET" && url.pathname.endsWith("/wx/userinfo")) {
+      respond({ id: "user-7", nickname: "旧昵称", avatar: "" });
+      return;
+    }
+    if (options.method === "PUT" && url.pathname.endsWith("/wx/userinfo")) {
+      state.profileUpdates.push(snapshot(options.data));
+      respond({ id: "user-7", ...snapshot(options.data) });
+      return;
+    }
+    if (options.method === "POST" && url.pathname.endsWith("/miniapp/bookings")) {
+      state.bookings.push(snapshot(options.data));
+      respond({ id: "booking-9", ...snapshot(options.data) });
+      return;
+    }
+    queueMicrotask(() =>
+      options.fail({ errMsg: `unhandled release request ${options.method} ${url.pathname}` }),
+    );
+  },
+};
+
+const renderer = createRenderer({
+  createComment: (text) => ({ text, type: "comment" }),
+  createElement: (type) => ({ children: [], props: {}, type }),
+  createText: (text) => ({ text, type: "text" }),
+  insert(child, parent) {
+    parent.children ||= [];
+    parent.children.push(child);
+    child.parent = parent;
+  },
+  nextSibling: () => null,
+  parentNode: (node) => node.parent || null,
+  patchProp(node, key, _previous, value) {
+    node.props[key] = value;
+  },
+  remove(node) {
+    if (node.parent) node.parent.children = node.parent.children.filter((item) => item !== node);
+  },
+  setElementText(node, text) {
+    node.text = text;
+  },
+  setText(node, text) {
+    node.text = text;
+  },
+});
+
+function mount(component) {
+  const root = { children: [], type: "root" };
+  const app = renderer.createApp(component);
+  app.mount(root);
+  return { app, state: app._instance.setupState };
+}
+
+function resetHooks() {
+  for (const callbacks of Object.values(hooks)) callbacks.length = 0;
+}
+
+async function settle(predicate, label) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (predicate()) return;
+  }
+  assert.fail(`timed out waiting for ${label}`);
 }
 
 try {
-  {
-    const state = { reports: [], results: [], redirects: [] };
-    globalThis.__releaseTestFlow = state;
-    globalThis.uni = { redirectTo: (value) => state.redirects.push(value) };
-    const page = await loadPage(
-      "test/test.vue",
-      `
-const ref = (value) => ({ value });
-const computed = (getter) => ({ get value() { return getter(); } });
-const onUnload = () => {};
-const QUESTIONS = [{ q: 'fixture', options: [{ t: 'A' }] }];
-const calcType = () => ({ type: 1, second: 2, score: { 1: 9 }, centers: [{ key: 'gut', score: 9 }] });
-const setLastResult = (result, gender) => globalThis.__releaseTestFlow.results.push({ result, gender });
-const reportGameResultApi = async (payload) => { globalThis.__releaseTestFlow.reports.push(payload); };
-`,
-      ["start", "choose"],
-    );
-    page.start("female");
-    page.choose({ t: "A" });
-    await Promise.resolve();
-    assert.equal(state.results[0].gender, "female");
-    assert.equal(state.reports[0].resultType, 1);
-    assert.deepEqual(state.redirects, [{ url: "/pages/result/result" }]);
-  }
+  resetHooks();
+  const testPage = mount(TestPage);
+  assert.equal(
+    testPage.state.setLastResult,
+    setLastResult,
+    "test.vue must import the production session writer",
+  );
+  assert.equal(
+    testPage.state.reportGameResultApi,
+    reportGameResultApi,
+    "test.vue must import the production API wrapper",
+  );
+  testPage.state.start("female");
+  testPage.state.answers = QUESTIONS.map((question) => question.options[0]);
+  const expectedResult = calcType(testPage.state.answers, "female");
+  testPage.state.finish();
+  await settle(() => state.gameReports.length === 1, "anonymous result report");
 
-  {
-    const state = { saved: [], statuses: [], contents: [], toasts: [] };
-    globalThis.__releaseResultFlow = state;
-    globalThis.uni = { showToast: (value) => state.toasts.push(value) };
-    const page = await loadPage(
-      "result/result.vue",
-      `
-const ref = (value) => ({ value });
-const computed = (getter) => ({ get value() { return getter(); } });
-const getCurrentInstance = () => ({});
-const onMounted = (handler) => handler();
-const onShareAppMessage = () => {};
-const onShareTimeline = () => {};
-const TYPES_INFO = {
-  1: { center: 'gut', growth: 2, stress: 2, name: '一号' },
-  2: { center: 'heart', growth: 1, stress: 1, name: '二号' },
-};
-const CENTERS = { gut: { name: '本能' }, heart: { name: '情感' } };
-const RESULTS = { 1: { title: '一号', summary: 'summary' } };
-const isWing = () => true;
-const resultPersonaText = () => 'persona';
-const getLastResult = () => ({ gender: 'female', result: { type: 1, second: 2, score: { 1: 9 }, centers: [{ key: 'gut', score: 9 }] } });
-const normalizeLastResult = (value) => value;
-const ensureLogin = async () => {};
-const saveTestRecordApi = async (payload) => { globalThis.__releaseResultFlow.saved.push(payload); return { id: 'record-77' }; };
-const reportStatusApi = async (id) => { globalThis.__releaseResultFlow.statuses.push(id); return { unlocked: true }; };
-const reportContentApi = async (id) => { globalThis.__releaseResultFlow.contents.push(id); return { answer: '纵向报告正文' }; };
-const payForReport = async () => {};
-const userErrorMessage = (error, fallback) => error?.message || fallback;
-const reportDisplayState = () => ({ key: 'ready' });
-const createResultPoster = async () => '';
-`,
-      ["saveRecord", "recordId", "saved", "reportUnlocked", "reportContent"],
-    );
-    await page.saveRecord();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(page.recordId.value, "record-77");
-    assert.equal(page.saved.value, true);
-    assert.equal(state.saved[0].resultType, 1);
-    assert.deepEqual(state.statuses, ["record-77"]);
-    assert.deepEqual(state.contents, ["record-77"]);
-    assert.equal(page.reportUnlocked.value, true);
-    assert.equal(page.reportContent.value, "纵向报告正文");
-  }
+  const cached = storage.get("nx_last_test_result");
+  assert.deepEqual(
+    Object.keys(cached).sort(),
+    ["gender", "result"],
+    "session envelope schema changed",
+  );
+  assert.deepEqual(
+    Object.keys(cached.result).sort(),
+    ["centers", "score", "second", "type"],
+    "session result schema changed",
+  );
+  assert.deepEqual(cached, { gender: "female", result: expectedResult });
+  assert.deepEqual(
+    getLastResult(),
+    cached,
+    "result page session reader must consume the test page write",
+  );
+  assert.deepEqual(state.gameReports[0], {
+    gender: "female",
+    resultType: expectedResult.type,
+    secondType: expectedResult.second || 0,
+    score: expectedResult.score,
+    centers: expectedResult.centers,
+  });
+  assert.deepEqual(state.redirects, [{ url: "/pages/result/result" }]);
+  testPage.app.unmount();
 
-  {
-    const state = { token: "miniapp-token", updates: [], toasts: [], show: null };
-    globalThis.__releaseProfileFlow = state;
-    globalThis.uni = {
-      showToast: (value) => state.toasts.push(value),
-      switchTab: () => {},
-    };
-    const page = await loadPage(
-      "profile-edit/profile-edit.vue",
-      `
-const ref = (value) => ({ value });
-const onShow = (handler) => { globalThis.__releaseProfileFlow.show = handler; };
-const onHide = () => {};
-const onUnload = () => {};
-const getToken = () => globalThis.__releaseProfileFlow.token;
-const clearToken = () => { globalThis.__releaseProfileFlow.token = ''; };
-const normalizeWechatProfile = (value) => ({ nickname: String(value.nickname || '').trim(), avatar: String(value.avatar || '').trim() });
-const hasProfilePayload = (value) => Boolean(value.nickname || value.avatar);
-const getWechatProfilePayload = async () => ({});
-const userErrorMessage = (error, fallback) => error?.message || fallback;
-const getUserInfoApi = async () => ({ nickname: '旧昵称', avatar: '' });
-const updateUserInfoApi = async (payload) => { globalThis.__releaseProfileFlow.updates.push(payload); return { ...payload, id: 'user-7' }; };
-`,
-      ["nicknameDraft", "avatarDraft", "user", "saveProfile"],
-    );
-    state.show();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    page.nicknameDraft.value = " 新昵称 ";
-    page.avatarDraft.value = "https://avatar.example/new.png";
-    await page.saveProfile();
-    assert.deepEqual(state.updates, [
-      { nickname: "新昵称", avatar: "https://avatar.example/new.png" },
-    ]);
-    assert.equal(page.user.value.nickname, "新昵称");
-    assert.ok(state.toasts.some((item) => item.title === "资料已保存" && item.icon === "success"));
-  }
+  resetHooks();
+  const resultPage = mount(ResultPage);
+  assert.equal(
+    resultPage.state.getLastResult,
+    getLastResult,
+    "result.vue must import the production session reader",
+  );
+  assert.equal(
+    resultPage.state.saveTestRecordApi,
+    saveTestRecordApi,
+    "result.vue must import the production save API",
+  );
+  assert.equal(
+    resultPage.state.reportStatusApi,
+    reportStatusApi,
+    "result.vue must import the production status API",
+  );
+  assert.equal(
+    resultPage.state.reportContentApi,
+    reportContentApi,
+    "result.vue must import the production report API",
+  );
+  assert.deepEqual(
+    resultPage.state.result,
+    expectedResult,
+    "result.vue did not consume test.vue's stored result",
+  );
+  await resultPage.state.saveRecord();
+  await settle(
+    () => resultPage.state.reportContent === "纵向报告正文",
+    "report content DTO consumption",
+  );
+  assert.deepEqual(state.savedRecords[0], {
+    id: "record-77",
+    gender: "female",
+    resultType: expectedResult.type,
+    secondType: expectedResult.second || 0,
+    score: expectedResult.score,
+    centers: expectedResult.centers,
+  });
+  assert.deepEqual(state.reportStatusRequests, ["record-77"], "report status query DTO changed");
+  assert.deepEqual(state.reportContentRequests, ["record-77"], "report content query DTO changed");
+  assert.equal(resultPage.state.recordId, "record-77");
+  assert.equal(resultPage.state.saved, true);
+  assert.equal(resultPage.state.reportUnlocked, true);
+  assert.equal(resultPage.state.reportContent, "纵向报告正文");
+  resultPage.app.unmount();
 
-  {
-    const state = { created: [], cleared: 0, toasts: [] };
-    globalThis.__releaseBookingFlow = state;
-    globalThis.uni = { showToast: (value) => state.toasts.push(value) };
-    const page = await loadPage(
-      "booking/booking.vue",
-      `
-const ref = (value) => ({ value });
-const watch = () => {};
-const onHide = () => {};
-const onUnload = () => {};
-const ensureLogin = async () => {};
-const createBookingApi = async (payload) => { globalThis.__releaseBookingFlow.created.push(payload); return { id: 'booking-9' }; };
-const userErrorMessage = (error, fallback) => error?.message || fallback;
-const clearBookingDraft = () => { globalThis.__releaseBookingFlow.cleared += 1; };
-const loadBookingDraft = () => ({ kind: 'course', contactName: '草稿用户', phone: '13812345678', intent: '课程' });
-const saveBookingDraft = () => {};
-`,
-      ["form", "kindIndex", "restoredDraftNotice", "submit"],
-    );
-    assert.equal(page.restoredDraftNotice.value, true);
-    await page.submit();
-    assert.equal(state.created[0].kind, "course");
-    assert.equal(state.created[0].contactName, "草稿用户");
-    assert.equal(state.cleared, 1);
-    assert.equal(page.form.value.contactName, "");
-    assert.ok(state.toasts.some((item) => item.title === "预约已提交"));
-  }
+  storage.set(BOOKING_DRAFT_KEY, {
+    ts: 1,
+    data: {
+      kind: "course",
+      contactName: "草稿用户",
+      phone: "13812345678",
+      intent: "课程",
+      preferredTime: "",
+      message: "",
+    },
+  });
+  resetHooks();
+  const bookingPage = mount(BookingPage);
+  assert.equal(bookingPage.state.restoredDraftNotice, true);
+  await bookingPage.state.submit();
+  assert.equal(state.bookings[0].kind, "course");
+  assert.equal(state.bookings[0].contactName, "草稿用户");
+  assert.equal(storage.has(BOOKING_DRAFT_KEY), false);
+  assert.equal(bookingPage.state.form.contactName, "");
+  bookingPage.app.unmount();
 
-  {
-    const state = { loads: [], toasts: [] };
-    globalThis.__releaseRelationFlow = state;
-    globalThis.uni = {
-      showToast: (value) => state.toasts.push(value),
-      redirectTo: () => {},
-    };
-    const page = await loadPage(
-      "relation/relation.vue",
-      `
-const ref = (value) => ({ value });
-const onLoad = (handler) => { globalThis.__releaseRelationFlow.loads.push(handler); };
-const TYPES_INFO = {
-  1: { center: 'gut', name: '一号', desire: '正确' },
-  2: { center: 'heart', name: '二号', desire: '被需要' },
-};
-const CENTERS = { gut: { name: '本能中心' }, heart: { name: '情感中心' } };
-const isValidTypeId = (value) => Number(value) === 1 || Number(value) === 2;
-const normalizeTypeId = (value) => isValidTypeId(value) ? Number(value) : 0;
-`,
-      ["myType", "taType", "analysis", "stage", "pickMy", "pickTa", "analyze", "reset"],
-    );
-    state.loads[0]({ type: "1" });
-    page.pickTa(2);
-    page.analyze();
-    assert.equal(page.stage.value, "result");
-    assert.equal(page.analysis.value.score, 82);
-    assert.match(page.analysis.value.myDrive, /一号/);
-    page.reset();
-    assert.equal(page.stage.value, "pick");
-  }
+  resetHooks();
+  const profilePage = mount(ProfileEditPage);
+  assert.equal(hooks.onShow.length, 1);
+  hooks.onShow[0]();
+  await settle(() => profilePage.state.user?.nickname === "旧昵称", "profile load");
+  profilePage.state.nicknameDraft = " 新昵称 ";
+  profilePage.state.avatarDraft = "https://avatar.example/new.png";
+  await profilePage.state.saveProfile();
+  assert.deepEqual(state.profileUpdates, [
+    { nickname: "新昵称", avatar: "https://avatar.example/new.png" },
+  ]);
+  assert.equal(profilePage.state.user.nickname, "新昵称");
+  profilePage.app.unmount();
 
-  console.log("release regression flow tests passed");
+  resetHooks();
+  const relationPage = mount(RelationPage);
+  assert.equal(hooks.onLoad.length, 1);
+  hooks.onLoad[0]({ type: "1" });
+  relationPage.state.pickTa(2);
+  relationPage.state.analyze();
+  assert.equal(relationPage.state.stage, "result");
+  assert.equal(relationPage.state.analysis.score, 82);
+  relationPage.state.reset();
+  assert.equal(relationPage.state.stage, "pick");
+  relationPage.app.unmount();
+
+  console.log("release production SFC regression flow tests passed");
 } finally {
-  delete globalThis.__releaseTestFlow;
-  delete globalThis.__releaseResultFlow;
-  delete globalThis.__releaseProfileFlow;
-  delete globalThis.__releaseBookingFlow;
-  delete globalThis.__releaseRelationFlow;
+  delete globalThis.__releaseUniHooks;
   delete globalThis.uni;
-  await rm(directory, { force: true, recursive: true });
 }
