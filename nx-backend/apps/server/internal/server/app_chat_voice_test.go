@@ -100,6 +100,63 @@ func TestVoiceChatPersistsAudioAndHidesTranscriptFromResponse(t *testing.T) {
 	}
 }
 
+func TestVoiceChatModelIdentityPersistsFixedReplyWithoutGeneration(t *testing.T) {
+	const identityQuestion = "你用的是什么模型？"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"text": identityQuestion})
+	}))
+	defer upstream.Close()
+	previousClientFactory := newASRHTTPClient
+	newASRHTTPClient = func(timeout time.Duration) *http.Client {
+		client := upstream.Client()
+		client.Timeout = timeout
+		return client
+	}
+	t.Cleanup(func() { newASRHTTPClient = previousClientFactory })
+
+	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	generator := &voiceChatGenerator{answer: "我是某个模型，通过 Codex CLI 提供帮助。"}
+	s := newVoiceChatTestServer(store, generator)
+	s.env.ASR = config.ASRConfig{APIBase: upstream.URL, APIKey: "test-key", Model: "whisper-1", TimeoutSeconds: 3}
+	s.voiceAssetCreate = func(_ context.Context, _ uploadasset.CreateInput) (uploadasset.Asset, error) {
+		return uploadasset.Asset{ID: 88}, nil
+	}
+	body, contentType := voiceChatMultipartBody(t, "voice.aac", "audio/aac", "audio", "2100")
+	req := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/voice", body)
+	req.Header.Set("Content-Type", contentType)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	response := httptest.NewRecorder()
+
+	s.appChatRouter(response, req)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("voice chat failed: %d %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Data struct {
+			Answer rag.Answer `json:"answer"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Data.Answer.Answer != rag.ModelIdentityReply {
+		t.Fatalf("voice identity answer = %q, want %q", payload.Data.Answer.Answer, rag.ModelIdentityReply)
+	}
+	if len(payload.Data.Answer.Sources) != 0 || len(payload.Data.Answer.Suggestions) != 0 {
+		t.Fatalf("voice identity metadata must be empty: %+v", payload.Data.Answer)
+	}
+	if store.transcript != identityQuestion || store.assistantAnswer != rag.ModelIdentityReply {
+		t.Fatalf("persisted voice pair mismatch: transcript=%q answer=%q", store.transcript, store.assistantAnswer)
+	}
+	if string(store.assistantSources) != "[]" {
+		t.Fatalf("persisted identity sources = %s, want []", store.assistantSources)
+	}
+	if generator.calls != 0 {
+		t.Fatalf("voice identity called generator %d times", generator.calls)
+	}
+}
+
 func TestVoiceChatPassesSecondaryCardContextToGenerator(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"text": "她最近为什么总是迎合别人？"})
@@ -347,11 +404,15 @@ type fakeVoiceChatStore struct {
 	transcriptLookupMessageID int64
 	transcriptLookupCalls     int
 	silentVoiceSaves          int
+	assistantAnswer           string
+	assistantSources          json.RawMessage
 }
 
-func (s *fakeVoiceChatStore) SaveVoicePair(_ context.Context, _ int64, audioAssetID int64, _ int, transcript, _ string, _ json.RawMessage) (int64, int64, error) {
+func (s *fakeVoiceChatStore) SaveVoicePair(_ context.Context, _ int64, audioAssetID int64, _ int, transcript, answer string, sources json.RawMessage) (int64, int64, error) {
 	s.audioAssetID = audioAssetID
 	s.transcript = transcript
+	s.assistantAnswer = answer
+	s.assistantSources = append(json.RawMessage(nil), sources...)
 	return 11, 12, nil
 }
 

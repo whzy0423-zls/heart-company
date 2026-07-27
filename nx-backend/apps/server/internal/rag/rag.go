@@ -129,6 +129,13 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 	if utf8.RuneCountInString(question) > 300 {
 		return Answer{}, errors.New("问题太长，请控制在 300 字以内")
 	}
+	if IsModelIdentityQuestion(question) {
+		return Answer{
+			Answer:      ModelIdentityReply,
+			Sources:     []Source{},
+			Suggestions: []string{},
+		}, nil
+	}
 
 	matches := s.search(question, relevantMainType(input), 4)
 	if len(matches) == 0 {
@@ -214,6 +221,16 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 	}
 	if utf8.RuneCountInString(question) > 300 {
 		return Answer{}, errors.New("问题太长，请控制在 300 字以内")
+	}
+	if IsModelIdentityQuestion(question) {
+		if err := emitTextChunks(ModelIdentityReply, emit); err != nil {
+			return Answer{}, err
+		}
+		return Answer{
+			Answer:      ModelIdentityReply,
+			Sources:     []Source{},
+			Suggestions: []string{},
+		}, nil
 	}
 	streamStarted := false
 	trackedEmit := func(delta string) error {
