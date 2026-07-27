@@ -3,6 +3,7 @@ package enterprisepromotion
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -44,6 +45,47 @@ func seedTrainer(t *testing.T, s *SQLStore, ctx context.Context, key string) Ent
 	return v
 }
 
+func seedMediaAsset(t *testing.T, s *SQLStore, ctx context.Context, key, kind string, ready bool) int64 {
+	t.Helper()
+	sha := strings.Repeat("a", 64)
+	state := "reserved"
+	if ready {
+		state = "qa_pending"
+	}
+	var id int64
+	if err := s.db.QueryRowContext(ctx, `INSERT INTO promotion_media_assets(asset_key,kind,object_key,sha256,state) VALUES($1,$2,$3,$4,$5) RETURNING id`, key, kind, "promotion/"+key, sha, state).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if !ready {
+		return id
+	}
+	var reviewer, attempt int64
+	if err := s.db.QueryRowContext(ctx, `INSERT INTO users(username,password_hash) VALUES($1,'x') RETURNING id`, "reviewer-"+key).Scan(&reviewer); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRowContext(ctx, `INSERT INTO promotion_media_processing_attempts(asset_id,attempt_number,state,output_object_key,output_sha256,finished_at) VALUES($1,1,'succeeded',$2,$3,now()) RETURNING id`, id, "promotion/derived/"+key, sha).Scan(&attempt); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var review int64
+	var approved time.Time
+	if err = tx.QueryRowContext(ctx, `INSERT INTO promotion_media_qa_reviews(asset_id,attempt_id,qa_result,approved_by,qa_note) VALUES($1,$2,'passed',$3,'public release') RETURNING id,approved_at`, id, attempt, reviewer).Scan(&review, &approved); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE promotion_media_assets SET state='ready',ready_qa_review_id=$2,ready_attempt_id=$3,qa_result='passed',qa_approved_by=$4,qa_approved_at=$5,qa_note='public release' WHERE id=$1`, id, review, attempt, reviewer, approved); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 func TestPostgresTrainerTopicCRUDStableSortAndRestrict(t *testing.T) {
 	s, ctx := openPostgresStore(t)
 	if err := s.UpsertFixedTopics(ctx); err != nil {
@@ -76,11 +118,15 @@ func TestPostgresTrainerTopicCRUDStableSortAndRestrict(t *testing.T) {
 	if err = s.DeleteTrainer(ctx, trainer.ID); !errors.Is(err, ErrRestricted) {
 		t.Fatalf("trainer delete=%v", err)
 	}
-	if err = s.DeleteCase(ctx, caseAgg.Case.ID); err != nil {
+	if err = s.DeleteCase(ctx, caseAgg.Case.ID); !errors.Is(err, ErrRestricted) {
+		t.Fatalf("referenced case delete=%v", err)
+	}
+	unreferenced, err := s.CreateCase(ctx, CaseAggregate{Case: baseCase(trainer, "unreferenced-draft")})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.DeleteTrainer(ctx, trainer.ID); err != nil {
-		t.Fatal(err)
+	if err = s.DeleteCase(ctx, unreferenced.Case.ID); err != nil {
+		t.Fatalf("unreferenced draft delete=%v", err)
 	}
 }
 
@@ -219,13 +265,16 @@ func TestPostgresPublicProjectionPublishedOnlyStableTopicFilter(t *testing.T) {
 	_ = s.UpsertFixedTopics(ctx)
 	topics, _ := s.ListTopics(ctx, true)
 	trainer := seedTrainer(t, s, ctx, "public")
+	cover := seedMediaAsset(t, s, ctx, "public-cover", "image", true)
 	for i, status := range []CaseStatus{CasePublished, CasePublished, CaseDraft} {
 		c := baseCase(trainer, []string{"pub-b", "pub-a", "draft"}[i])
 		c.Status = status
 		c.AuthorizationStatus = AuthorizationApproved
 		c.SortOrder = []int{2, 1, 0}[i]
 		c.CompanyInternalNameEncrypted = []byte("classified")
-		if _, e := s.CreateCase(ctx, CaseAggregate{Case: c, TopicIDs: []int64{topics[0].ID}}); e != nil {
+		c.CoverAssetID = cover
+		video := seedMediaAsset(t, s, ctx, fmt.Sprintf("public-video-%d", i), "video", true)
+		if _, e := s.CreateCase(ctx, CaseAggregate{Case: c, TopicIDs: []int64{topics[0].ID}, Media: []CaseMedia{{MediaAssetID: video, Role: MediaPromo, Status: CaseMediaPublished}}}); e != nil {
 			t.Fatal(e)
 		}
 	}
@@ -244,7 +293,9 @@ func TestPostgresPublicProjectionWorksWithSingleConnection(t *testing.T) {
 	c := baseCase(trainer, "single-public")
 	c.Status = CasePublished
 	c.AuthorizationStatus = AuthorizationApproved
-	if _, err := s.CreateCase(ctx, CaseAggregate{Case: c}); err != nil {
+	c.CoverAssetID = seedMediaAsset(t, s, ctx, "single-cover", "image", true)
+	video := seedMediaAsset(t, s, ctx, "single-video", "video", true)
+	if _, err := s.CreateCase(ctx, CaseAggregate{Case: c, Media: []CaseMedia{{MediaAssetID: video, Role: MediaPromo, Status: CaseMediaPublished}}}); err != nil {
 		t.Fatal(err)
 	}
 	s.db.SetMaxOpenConns(1)
@@ -256,5 +307,56 @@ func TestPostgresPublicProjectionWorksWithSingleConnection(t *testing.T) {
 	}
 	if len(items) != 1 {
 		t.Fatalf("items=%d", len(items))
+	}
+}
+
+func TestPostgresPublicProjectionRequiresReadyCoverAndPromoVideo(t *testing.T) {
+	s, ctx := openPostgresStore(t)
+	trainer := seedTrainer(t, s, ctx, "eligibility")
+	readyCover := seedMediaAsset(t, s, ctx, "eligible-cover", "image", true)
+	readyVideo := seedMediaAsset(t, s, ctx, "eligible-video", "video", true)
+	notReadyVideo := seedMediaAsset(t, s, ctx, "not-ready-video", "video", false)
+	readyImage := seedMediaAsset(t, s, ctx, "ready-image", "image", true)
+	cases := []struct {
+		slug    string
+		cover   int64
+		media   []CaseMedia
+		visible bool
+	}{
+		{slug: "no-cover", media: []CaseMedia{{MediaAssetID: readyVideo, Role: MediaPromo, Status: CaseMediaPublished}}},
+		{slug: "no-hero-video", cover: readyCover, media: []CaseMedia{{MediaAssetID: readyVideo, Role: MediaGallery, Status: CaseMediaPublished}}},
+		{slug: "video-not-ready", cover: readyCover, media: []CaseMedia{{MediaAssetID: notReadyVideo, Role: MediaPromo, Status: CaseMediaPublished}}},
+		{slug: "wrong-cover-kind", cover: readyVideo, media: []CaseMedia{{MediaAssetID: readyVideo, Role: MediaPromo, Status: CaseMediaPublished}}},
+		{slug: "wrong-video-kind", cover: readyCover, media: []CaseMedia{{MediaAssetID: readyImage, Role: MediaPromo, Status: CaseMediaPublished}}},
+		{slug: "eligible", cover: readyCover, visible: true, media: []CaseMedia{{MediaAssetID: readyVideo, Role: MediaPromo, Status: CaseMediaPublished}, {MediaAssetID: notReadyVideo, Role: MediaHighlight, Status: CaseMediaPublished}, {MediaAssetID: readyVideo, Role: MediaGallery, Status: CaseMediaDraft}}},
+	}
+	for _, tt := range cases {
+		c := baseCase(trainer, tt.slug)
+		c.Status = CasePublished
+		c.AuthorizationStatus = AuthorizationApproved
+		c.CoverAssetID = tt.cover
+		if _, err := s.CreateCase(ctx, CaseAggregate{Case: c, Media: tt.media}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := s.ListPublicCases(ctx, PublicCaseQuery{Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Slug != "eligible" {
+		t.Fatalf("visible cases=%+v", items)
+	}
+	if len(items[0].Media) != 1 || items[0].Media[0].MediaAssetID != readyVideo {
+		t.Fatalf("public media leaked ineligible assets: %+v", items[0].Media)
+	}
+	if _, err = s.GetPublicCaseBySlug(ctx, "no-cover"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ineligible detail err=%v", err)
+	}
+	detail, err := s.GetPublicCaseBySlug(ctx, "eligible")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Media) != 1 {
+		t.Fatalf("detail media=%+v", detail.Media)
 	}
 }

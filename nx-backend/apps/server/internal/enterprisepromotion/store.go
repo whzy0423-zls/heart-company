@@ -398,17 +398,7 @@ func (s *SQLStore) ReplaceCaseMedia(ctx context.Context, id, expected int64, med
 	return s.UpdateCase(ctx, a, expected)
 }
 func (s *SQLStore) DeleteCase(ctx context.Context, id int64) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for _, q := range []string{`DELETE FROM training_case_media WHERE case_id=$1`, `DELETE FROM training_case_topics WHERE case_id=$1`, `DELETE FROM training_case_solutions WHERE case_id=$1`} {
-		if _, err = tx.ExecContext(ctx, q, id); err != nil {
-			return mapDBError(err)
-		}
-	}
-	r, err := tx.ExecContext(ctx, `DELETE FROM training_cases WHERE id=$1`, id)
+	r, err := s.db.ExecContext(ctx, `DELETE FROM training_cases WHERE id=$1`, id)
 	if err != nil {
 		return mapDBError(err)
 	}
@@ -416,7 +406,7 @@ func (s *SQLStore) DeleteCase(ctx context.Context, id int64) error {
 	if n == 0 {
 		return ErrNotFound
 	}
-	return tx.Commit()
+	return nil
 }
 
 func solutionArgs(v EnterpriseSolution) ([]any, error) {
@@ -579,7 +569,10 @@ func (s *SQLStore) ListPublicCases(ctx context.Context, q PublicCaseQuery) ([]Pu
 		q.Offset = 0
 	}
 	args := []any{limit, q.Offset}
-	where := `c.status='published' AND c.authorization_status='approved'`
+	where := `c.status='published' AND c.authorization_status='approved'
+		AND c.cover_asset_id IS NOT NULL
+		AND EXISTS (SELECT 1 FROM promotion_media_assets cover WHERE cover.id=c.cover_asset_id AND cover.state='ready' AND cover.kind='image')
+		AND EXISTS (SELECT 1 FROM training_case_media hero JOIN promotion_media_assets hero_asset ON hero_asset.id=hero.media_asset_id WHERE hero.case_id=c.id AND hero.status='published' AND hero.role IN ('promo','highlight') AND hero_asset.state='ready' AND hero_asset.kind='video')`
 	if q.Topic.Valid() {
 		args = append(args, q.Topic)
 		where += ` AND EXISTS (SELECT 1 FROM training_case_topics ct JOIN training_topics t ON t.id=ct.topic_id WHERE ct.case_id=c.id AND t.key=$3 AND t.enabled=true)`
@@ -604,23 +597,36 @@ func (s *SQLStore) ListPublicCases(ctx context.Context, q PublicCaseQuery) ([]Pu
 	r.Close()
 	var out []PublicCase
 	for _, c := range records {
-		a, e := s.GetCase(ctx, c.ID)
-		if e != nil {
-			return nil, e
-		}
 		topics, e := s.publicTopics(ctx, c.ID)
 		if e != nil {
 			return nil, e
 		}
-		var media []CaseMedia
-		for _, m := range a.Media {
-			if m.Status == CaseMediaPublished {
-				media = append(media, m)
-			}
+		media, e := s.publicMedia(ctx, c.ID)
+		if e != nil {
+			return nil, e
 		}
 		out = append(out, projectPublicCase(c, media, topics))
 	}
 	return out, nil
+}
+func (s *SQLStore) publicMedia(ctx context.Context, id int64) ([]CaseMedia, error) {
+	r, e := s.db.QueryContext(ctx, `SELECT m.id,m.case_id,m.media_asset_id,m.role,m.position,m.caption,m.status
+		FROM training_case_media m JOIN promotion_media_assets asset ON asset.id=m.media_asset_id
+		WHERE m.case_id=$1 AND m.status='published' AND asset.state='ready'
+		ORDER BY m.position,m.id`, id)
+	if e != nil {
+		return nil, e
+	}
+	defer r.Close()
+	var out []CaseMedia
+	for r.Next() {
+		var m CaseMedia
+		if e = r.Scan(&m.ID, &m.CaseID, &m.MediaAssetID, &m.Role, &m.Position, &m.Caption, &m.Status); e != nil {
+			return nil, e
+		}
+		out = append(out, m)
+	}
+	return out, r.Err()
 }
 func (s *SQLStore) publicTopics(ctx context.Context, id int64) ([]TrainingTopic, error) {
 	r, e := s.db.QueryContext(ctx, `SELECT t.id,t.key,t.title,t.sort_order,t.enabled FROM training_case_topics ct JOIN training_topics t ON t.id=ct.topic_id WHERE ct.case_id=$1 AND t.enabled=true ORDER BY ct.position,t.id`, id)
@@ -639,11 +645,10 @@ func (s *SQLStore) publicTopics(ctx context.Context, id int64) ([]TrainingTopic,
 	return out, r.Err()
 }
 func (s *SQLStore) GetPublicCaseBySlug(ctx context.Context, slug string) (PublicCase, error) {
-	c, e := scanCase(s.db.QueryRowContext(ctx, `SELECT `+caseColumns+` FROM training_cases WHERE slug=$1 AND status='published' AND authorization_status='approved'`, slug))
-	if e != nil {
-		return PublicCase{}, e
-	}
-	a, e := s.GetCase(ctx, c.ID)
+	c, e := scanCase(s.db.QueryRowContext(ctx, `SELECT `+caseColumns+` FROM training_cases c WHERE slug=$1 AND status='published' AND authorization_status='approved'
+		AND c.cover_asset_id IS NOT NULL
+		AND EXISTS (SELECT 1 FROM promotion_media_assets cover WHERE cover.id=c.cover_asset_id AND cover.state='ready' AND cover.kind='image')
+		AND EXISTS (SELECT 1 FROM training_case_media hero JOIN promotion_media_assets hero_asset ON hero_asset.id=hero.media_asset_id WHERE hero.case_id=c.id AND hero.status='published' AND hero.role IN ('promo','highlight') AND hero_asset.state='ready' AND hero_asset.kind='video')`, slug))
 	if e != nil {
 		return PublicCase{}, e
 	}
@@ -651,11 +656,9 @@ func (s *SQLStore) GetPublicCaseBySlug(ctx context.Context, slug string) (Public
 	if e != nil {
 		return PublicCase{}, e
 	}
-	var media []CaseMedia
-	for _, m := range a.Media {
-		if m.Status == CaseMediaPublished {
-			media = append(media, m)
-		}
+	media, e := s.publicMedia(ctx, c.ID)
+	if e != nil {
+		return PublicCase{}, e
 	}
 	return projectPublicCase(c, media, topics), nil
 }
