@@ -21,6 +21,8 @@ func TestEnterprisePromotionTestDSNRejectsRoutingOverrides(t *testing.T) {
 		"postgres://postgres:secret@127.0.0.1/nx_test?hostaddr=203.0.113.10",
 		"postgres://postgres:secret@127.0.0.1/nx_test?service=production",
 		"host=127.0.0.1 dbname=nx_test service=production",
+		"postgres://postgres:secret@127.0.0.1:5432,remote.example:5432/nx_test",
+		"host=127.0.0.1,remote.example port=5432,5432 user=postgres password=secret dbname=nx_test",
 	}
 	for _, dsn := range tests {
 		if _, err := validateEnterprisePromotionTestDSN(dsn); err == nil {
@@ -36,6 +38,15 @@ func TestEnterprisePromotionTestDSNAcceptsFinalLoopbackTestTarget(t *testing.T) 
 	}
 	if config.Host != "127.0.0.1" || config.Database != "nx_enterprise_test" {
 		t.Fatalf("final target host=%q database=%q", config.Host, config.Database)
+	}
+}
+
+func TestEnterprisePromotionTestDSNRejectsAmbiguousDatabaseNames(t *testing.T) {
+	for _, database := range []string{"latest", "contest"} {
+		dsn := "postgres://postgres:secret@127.0.0.1:5432/" + database
+		if _, err := validateEnterprisePromotionTestDSN(dsn); err == nil {
+			t.Errorf("ambiguous non-test database accepted: %q", database)
+		}
 	}
 }
 
@@ -64,17 +75,39 @@ func validateEnterprisePromotionTestDSN(dsn string) (*pgx.ConnConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse final TEST_DATABASE_URL config: %w", err)
 	}
-	host := strings.ToLower(strings.TrimSpace(config.Host))
-	if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-		return nil, fmt.Errorf("TEST_DATABASE_URL final host must be loopback, got %q", host)
+	if !isEnterprisePromotionLoopbackHost(config.Host) {
+		return nil, fmt.Errorf("TEST_DATABASE_URL final host must be loopback, got %q", config.Host)
 	}
-	if !strings.Contains(strings.ToLower(config.Database), "test") {
-		return nil, fmt.Errorf("TEST_DATABASE_URL final database must be isolated test database, got %q", config.Database)
+	for _, fallback := range config.Fallbacks {
+		if fallback == nil || !isEnterprisePromotionLoopbackHost(fallback.Host) {
+			var host string
+			if fallback != nil {
+				host = fallback.Host
+			}
+			return nil, fmt.Errorf("TEST_DATABASE_URL fallback host must be loopback, got %q", host)
+		}
 	}
 	if config.Database == "" {
 		return nil, errors.New("TEST_DATABASE_URL final database is empty")
 	}
+	if !isEnterprisePromotionTestDatabase(config.Database) {
+		return nil, fmt.Errorf("TEST_DATABASE_URL final database must follow the isolated test naming convention, got %q", config.Database)
+	}
 	return config, nil
+}
+
+func isEnterprisePromotionLoopbackHost(host string) bool {
+	switch strings.ToLower(strings.TrimSpace(host)) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return false
+	}
+}
+
+func isEnterprisePromotionTestDatabase(database string) bool {
+	name := strings.ToLower(strings.TrimSpace(database))
+	return name == "test" || strings.HasPrefix(name, "test_") || strings.HasSuffix(name, "_test") || strings.Contains(name, "_test_")
 }
 
 func TestEnterprisePromotionPostgres(t *testing.T) {
