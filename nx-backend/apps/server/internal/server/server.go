@@ -625,6 +625,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/push/unregister", s.method(http.MethodPost, s.requireAppAuth(s.appPushUnregister)))
 	// 语音识别
 	s.mux.HandleFunc("/api/app/voice/recognize", s.method(http.MethodPost, s.requireAppAuth(s.appVoiceRecognize)))
+	s.mux.HandleFunc("/api/app/xinzhili/realtime/capabilities", s.method(http.MethodGet, s.requireAppAuth(s.appXinzhiliRealtimeCapabilities)))
 	s.mux.HandleFunc("/api/app/xinzhili/realtime", s.requireAppAuth(s.xinzhiliRealtime))
 
 	// ===== 小程序（微信）=====
