@@ -16,6 +16,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
+	"nine-xing/nx-backend/apps/server/internal/userpreference"
 )
 
 const (
@@ -147,31 +148,36 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	preferences, directives, extraction, err := s.prepareAppChatPreferencesLegacy(ctx, userInfo.ID, transcript)
-	if err != nil {
-		httpx.Fail(w, http.StatusInternalServerError, "偏好读取失败，请重试")
-		return
-	}
-	docs, _ := s.retrieveAppDocsForQuery(ctx, transcript, 6)
-	profile, conversationCard := s.appChatProfilesForCard(ctx, userInfo.ID, sess.CardID)
-	if memories, memoryErr := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); memoryErr == nil {
-		profile.Memories = memories
-	}
-	generator := s.generator()
-	promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
-	answer, err := rag.NewService(docs, rag.WithGenerator(generator)).Ask(ctx, rag.AskInput{
-		History:             promptContext.History,
-		ConversationSummary: promptContext.Summary,
-		Question:            transcript,
-		UserProfile:         profile,
-		ConversationCard:    conversationCard,
-		UserPreferences:     preferences,
-		CurrentDirectives:   directives,
-		Tier:                tier,
-	})
-	if err != nil {
-		httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
-		return
+	answer, isModelIdentity := appChatModelIdentityAnswer(transcript)
+	extraction := userpreference.Extraction{}
+	if !isModelIdentity {
+		preferences, directives, preparedExtraction, err := s.prepareAppChatPreferencesLegacy(ctx, userInfo.ID, transcript)
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "偏好读取失败，请重试")
+			return
+		}
+		extraction = preparedExtraction
+		docs, _ := s.retrieveAppDocsForQuery(ctx, transcript, 6)
+		profile, conversationCard := s.appChatProfilesForCard(ctx, userInfo.ID, sess.CardID)
+		if memories, memoryErr := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); memoryErr == nil {
+			profile.Memories = memories
+		}
+		generator := s.generator()
+		promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
+		answer, err = rag.NewService(docs, rag.WithGenerator(generator)).Ask(ctx, rag.AskInput{
+			History:             promptContext.History,
+			ConversationSummary: promptContext.Summary,
+			Question:            transcript,
+			UserProfile:         profile,
+			ConversationCard:    conversationCard,
+			UserPreferences:     preferences,
+			CurrentDirectives:   directives,
+			Tier:                tier,
+		})
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
+			return
+		}
 	}
 
 	contentType := strings.TrimSpace(header.Header.Get("Content-Type"))
@@ -200,9 +206,11 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "回答保存失败，请重试")
 		return
 	}
-	if err := s.persistAppChatPreferences(ctx, userInfo.ID, extraction); err != nil {
-		httpx.Fail(w, http.StatusInternalServerError, "偏好保存失败，请重试")
-		return
+	if !isModelIdentity {
+		if err := s.persistAppChatPreferences(ctx, userInfo.ID, extraction); err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "偏好保存失败，请重试")
+			return
+		}
 	}
 	s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, transcript, answer.Answer)
 	if assistantMessageID > 0 {
