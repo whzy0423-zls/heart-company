@@ -251,6 +251,44 @@ try {
     assert.equal(page.expandedSeries.value.series.title, "恢复系列");
     assert.equal(requests, 2, "retry should issue exactly one replacement request");
   }
+
+  for (const outcome of ["resolve", "reject"]) {
+    const { page, state } = await createHarness();
+    state.getSeries = async () => ({
+      series: { id: 12, title: "缓存 A" },
+      contents: [{ id: 21, title: "A 第一课" }],
+    });
+    await page.openSeries({ id: "12", title: "缓存 A" });
+    await page.openSeries({ id: "12", title: "缓存 A" });
+
+    const pendingB = deferred();
+    state.getSeries = () => pendingB.promise;
+    const oldB = page.openSeries({ id: "13", title: "未缓存 B" });
+    assert.equal(page.seriesLoading.value, true);
+    await page.openSeries({ id: "12", title: "缓存 A" });
+    assert.equal(page.selectedSeries.value.id, "12");
+    assert.equal(page.expandedSeries.value.series.title, "缓存 A");
+    assert.equal(page.seriesLoading.value, false);
+
+    if (outcome === "resolve") {
+      pendingB.resolve({ series: { id: 13, title: "迟到 B" }, contents: [] });
+    } else {
+      pendingB.reject(new Error("迟到 B 失败"));
+    }
+    await oldB;
+    assert.equal(
+      page.selectedSeries.value.id,
+      "12",
+      `late B ${outcome} must keep cached A selected`,
+    );
+    assert.equal(
+      page.expandedSeries.value.series.title,
+      "缓存 A",
+      `late B ${outcome} must not replace cached A detail`,
+    );
+    assert.equal(page.seriesLoading.value, false, `late B ${outcome} must not revive loading`);
+    assert.equal(page.seriesError.value, "", `late B ${outcome} must not publish stale feedback`);
+  }
 } finally {
   await rm(dir, { force: true, recursive: true });
 }

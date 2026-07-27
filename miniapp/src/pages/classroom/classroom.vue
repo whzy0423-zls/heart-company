@@ -102,6 +102,7 @@ async function openSeries(item, { force = false } = {}) {
     seriesError.value = "";
     return;
   }
+  const ticket = ++seriesTicket;
   selectedSeries.value = item;
   const cached = seriesDetails.value[item.id];
   if (!force && cached) {
@@ -110,12 +111,16 @@ async function openSeries(item, { force = false } = {}) {
     seriesError.value = "";
     return;
   }
-  const ticket = ++seriesTicket;
   seriesLoading.value = true;
   seriesError.value = "";
   try {
     const response = await getClassroomSeriesApi(item.id);
-    if (ticket !== seriesTicket || activeTab.value !== "series") return;
+    if (
+      ticket !== seriesTicket ||
+      activeTab.value !== "series" ||
+      selectedSeries.value?.id !== item.id
+    )
+      return;
     const detail = {
       series: normalizeClassroomSeries(response?.series || item),
       contents: (Array.isArray(response?.contents) ? response.contents : [])
@@ -125,11 +130,20 @@ async function openSeries(item, { force = false } = {}) {
     seriesDetails.value = { ...seriesDetails.value, [item.id]: detail };
     expandedSeries.value = detail;
   } catch (error) {
-    if (ticket === seriesTicket && activeTab.value === "series") {
+    if (
+      ticket === seriesTicket &&
+      activeTab.value === "series" &&
+      selectedSeries.value?.id === item.id
+    ) {
       seriesError.value = userErrorMessage(error, "系列课件加载失败，请稍后重试");
     }
   } finally {
-    if (ticket === seriesTicket && activeTab.value === "series") seriesLoading.value = false;
+    if (
+      ticket === seriesTicket &&
+      activeTab.value === "series" &&
+      selectedSeries.value?.id === item.id
+    )
+      seriesLoading.value = false;
   }
 }
 
