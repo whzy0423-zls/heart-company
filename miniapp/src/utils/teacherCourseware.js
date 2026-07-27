@@ -60,6 +60,16 @@ function uniqueByTitle(items) {
   })
 }
 
+function hasStructuredTeacherData(source) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return false
+  return !!(
+    firstText(source, ['name', 'teacherName', 'nickname', 'title', 'role', 'position', 'subtitle']) ||
+    firstText(source, ['avatar', 'photo', 'image', 'cover']) ||
+    firstText(source, ['bio', 'description', 'desc', 'intro', 'summary']) ||
+    normalizeTags(source.tags || source.badges || source.specialties || source.skills).length
+  )
+}
+
 export function normalizeTeachers(config) {
   const structuredCandidates = [
     ...asArray(config?.teacher),
@@ -68,7 +78,7 @@ export function normalizeTeachers(config) {
     ...asArray(config?.home?.teachers),
   ]
 
-  const teachers = structuredCandidates.map((item) => {
+  const teachers = structuredCandidates.filter(hasStructuredTeacherData).map((item) => {
     const source = item || {}
     return {
       name: firstText(source, ['name', 'teacherName', 'nickname', 'title']) || '九型老师',

@@ -74,6 +74,29 @@ assert.deepEqual(
   [{ name: '结构化老师', title: '结构化职称', avatar: '/structured.png', bio: '结构化简介', tags: [] }],
   'structured teacher data should be authoritative when legacy teaser data also exists',
 )
+for (const structured of [
+  { teacher: {} },
+  { teacher: { name: '  ', title: '\n', avatar: '', bio: ' ' } },
+  { teachers: [] },
+  { teachers: [{}] },
+]) {
+  assert.equal(
+    normalizeTeachers({
+      ...structured,
+      home: { teacherTeaser: { title: '有效 teaser 老师', eyebrow: '导师', image: '/teaser.png', lead: '有效简介' } },
+    })[0].name,
+    '有效 teaser 老师',
+    'empty or blank structured teacher entries must not hide a valid legacy teaser',
+  )
+}
+assert.deepEqual(
+  normalizeTeachers({
+    teachers: [{}, { name: '  ' }, { teacherName: '有效结构化老师', desc: '结构化简介' }],
+    home: { teacherTeaser: { title: '旧 teaser 老师', lead: '旧简介' } },
+  }).map((teacher) => teacher.name),
+  ['有效结构化老师'],
+  'empty structured entries should be filtered while a real structured teacher remains authoritative',
+)
 
 const courseware = normalizeCoursewareItems({
   courseware: { items: [{ name: '九型入门课件', desc: '认识九种核心动机', image: '/cover.png', tag: 'PDF', minutes: '18分钟', link: '/pages/learn/detail' }] },
