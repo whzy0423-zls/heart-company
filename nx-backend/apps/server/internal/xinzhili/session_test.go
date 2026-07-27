@@ -12,6 +12,58 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
+func TestModelIdentityRealtimeBypassesGeneratorAndCompletesVoiceDelivery(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		configured := configured
+		name := "without_generator"
+		if configured {
+			name = "with_generator"
+		}
+		t.Run(name, func(t *testing.T) {
+			fixture := newSessionFixture(t)
+			fixture.synth.segments = nil
+			if !configured {
+				fixture.session.Close()
+				fixture.deps.Generator = nil
+				fixture.session = NewSession(fixture.deps)
+			}
+
+			const question = "你是什么模型？"
+			if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-model-identity")); err != nil {
+				t.Fatal(err)
+			}
+			fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: question, Stable: true})
+
+			segment := fixture.sink.waitAudio(t)
+			if segment.DeliveryText() != rag.ModelIdentityReply {
+				t.Fatalf("TTS delivery text=%q", segment.DeliveryText())
+			}
+			fixture.store.waitAssistantCount(t, 1)
+			if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-model-identity", SegmentSeq: segment.Seq}); err != nil {
+				t.Fatal(err)
+			}
+			fixture.store.waitCompleted(t)
+			fixture.store.waitDelivered(t, rag.ModelIdentityReply)
+			fixture.store.waitCompleteAck(t)
+
+			users, assistants, completed := fixture.store.contents()
+			if len(users) != 1 || users[0] != question {
+				t.Fatalf("hidden user persistence=%q", users)
+			}
+			if len(assistants) != 1 || assistants[0] != rag.ModelIdentityReply || completed != rag.ModelIdentityReply {
+				t.Fatalf("assistant drafts=%q completed=%q", assistants, completed)
+			}
+			if got := fixture.synth.synthesizedTexts(); len(got) != 1 || got[0] != rag.ModelIdentityReply {
+				t.Fatalf("synthesized texts=%q", got)
+			}
+			if fixture.generator.calls() != 0 {
+				t.Fatalf("generator calls=%d", fixture.generator.calls())
+			}
+			fixture.sink.assertNoControl(t)
+		})
+	}
+}
+
 func TestConversationBlankASRDoesNotCallModelOrPersist(t *testing.T) {
 	fixture := newSessionFixture(t)
 	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-blank")); err != nil {
@@ -325,6 +377,11 @@ func (s *fakeConversationStore) assistantCount() int {
 	defer s.mu.Unlock()
 	return len(s.assistants)
 }
+func (s *fakeConversationStore) contents() (users, assistants []string, completed string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.users...), append([]string(nil), s.assistants...), s.completedContent
+}
 func (s *fakeConversationStore) waitAssistantCount(t *testing.T, want int) {
 	t.Helper()
 	deadline := time.After(time.Second)
@@ -479,6 +536,7 @@ func (g *fakeChatGenerator) waitCalled(t *testing.T) {
 type fakeSynthesizer struct {
 	mu       sync.Mutex
 	calls    int
+	texts    []string
 	segments []AudioSegment
 	block    chan struct{}
 	failAt   int
@@ -495,6 +553,7 @@ func (s *fakeSynthesizer) Synthesize(ctx context.Context, _ TTSConfig, text stri
 	s.mu.Lock()
 	index := s.calls
 	s.calls++
+	s.texts = append(s.texts, text)
 	segments := append([]AudioSegment(nil), s.segments...)
 	s.mu.Unlock()
 	if s.failAt > 0 && index == s.failAt {
@@ -511,6 +570,11 @@ func (s *fakeSynthesizer) Synthesize(ctx context.Context, _ TTSConfig, text stri
 		return err
 	}
 	return nil
+}
+func (s *fakeSynthesizer) synthesizedTexts() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.texts...)
 }
 
 type fakeSessionSink struct {
@@ -551,6 +615,14 @@ func (s *fakeSessionSink) waitAudio(t *testing.T) AudioSegment {
 	case <-time.After(time.Second):
 		t.Fatal("audio not received")
 		return AudioSegment{}
+	}
+}
+func (s *fakeSessionSink) assertNoControl(t *testing.T) {
+	t.Helper()
+	select {
+	case event := <-s.controls:
+		t.Fatalf("unexpected control event: type=%s payload=%s", event.Type, event.Payload)
+	default:
 	}
 }
 

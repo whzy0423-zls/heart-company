@@ -497,7 +497,7 @@ func (s *session) handleASREvent(turn *activeTurn, event ASREvent) {
 	if turn.engine != nil {
 		turn.engine.Apply(Signal{Kind: SignalStableText, Transcript: text, Stable: true})
 	}
-	if s.deps.Generator == nil {
+	if s.deps.Generator == nil && !rag.IsModelIdentityQuestion(text) {
 		s.sendError(turn, "chat_model_not_configured", "请配置好会话模型后再重试", false)
 		return
 	}
@@ -512,6 +512,15 @@ func (s *session) handleASREvent(turn *activeTurn, event ASREvent) {
 }
 
 func (s *session) startGeneration(turn *activeTurn, question string) {
+	if rag.IsModelIdentityQuestion(question) {
+		go func() {
+			if !s.postEvent(sessionEvent{kind: eventGenerationDelta, turnID: turn.input.TurnID, answer: rag.ModelIdentityReply}) {
+				return
+			}
+			s.postEvent(sessionEvent{kind: eventGenerationDone, turnID: turn.input.TurnID, answer: rag.ModelIdentityReply})
+		}()
+		return
+	}
 	go func() {
 		history, summary, _ := s.deps.Conversations.History(turn.ctx, turn.conversation, 20)
 		preferences := []string(nil)
