@@ -268,7 +268,7 @@ func TestClassroomVerticalContractAdminPublishToPublicPlayback(t *testing.T) {
 	s.mux.ServeHTTP(detailResponse, httptest.NewRequest(http.MethodGet, "/api/public/classroom/content/21", nil))
 	detailData := contractData(t, detailResponse)
 	assertExactJSON(t, "public content detail", detailData, fixture.Content)
-	assertJSONKeys(t, "public content detail", detailData, "canPlay", "contentType", "coverUrl", "description", "durationSeconds", "effectiveAccess", "id", "playbackBlocked", "priceCents", "purchaseState", "seriesId", "teacherName", "title")
+	assertJSONKeys(t, "public content detail", detailData, "accessLevel", "canPlay", "contentType", "coverUrl", "description", "durationSeconds", "effectiveAccess", "id", "playbackBlocked", "priceCents", "purchaseState", "seriesId", "teacherName", "title")
 
 	denied := httptest.NewRecorder()
 	s.mux.ServeHTTP(denied, httptest.NewRequest(http.MethodPost, "/api/miniapp/classroom/content/21/play", nil))

@@ -102,6 +102,23 @@ assert.match(
   /classroomPurchaseAction/,
   "list cards should expose the effective access action",
 );
+assert.match(source, /startSeriesPurchase/, "paid series cards should expose direct purchase");
+assert.match(
+  source,
+  /createClassroomOrderApi\("series",\s*item\.id\)/,
+  "series checkout must create a series order",
+);
+assert.match(
+  source,
+  /getClassroomOrderStatusApi\("series"/,
+  "series payment polling must query series status",
+);
+assert.match(
+  source,
+  /@click\.stop="startSeriesPurchase\(item\)"/,
+  "series purchase CTA must not toggle the card",
+);
+assert.match(source, /seriesPaymentState/, "series cards should render payment state feedback");
 assert.match(
   source,
   /getClassroomContinueLearningApi/,
@@ -142,6 +159,7 @@ const ref = (value) => ({ value })
 const computed = (getter) => ({ get value() { return getter() } })
 const onLoad = (handler) => { globalThis.__classroomHarness.onLoad = handler }
 const onShow = (handler) => { globalThis.__classroomHarness.onShow = handler }
+const onUnload = (handler) => { globalThis.__classroomHarness.onUnload = handler }
 const listClassroomSeriesApi = (...args) => globalThis.__classroomHarness.listSeries(...args)
 const listClassroomStandaloneApi = (...args) => globalThis.__classroomHarness.listStandalone(...args)
 const getClassroomSeriesApi = (...args) => globalThis.__classroomHarness.getSeries(...args)

@@ -39,6 +39,11 @@ assert.match(
 );
 assert.match(source, /@pause="handleVideoPause"/, "video pause should flush progress");
 assert.match(source, /@ended="handleVideoEnded"/, "video completion should flush progress");
+assert.doesNotMatch(
+  source,
+  /applyProgress\(duration,\s*true\)/,
+  "video ended must not mark logged-in completion before the server responds",
+);
 assert.match(
   source,
   /void flushProgress\(\)/,
@@ -56,6 +61,21 @@ assert.match(
   source,
   /createClassroomPurchaseController/,
   "purchase polling should use the bounded controller",
+);
+assert.match(
+  source,
+  /getClassroomSeriesApi/,
+  "series lessons should resolve their parent purchase target",
+);
+assert.match(
+  source,
+  /createClassroomOrderApi\(target\.type,\s*target\.id\)/,
+  "detail checkout should use the resolved purchase target type",
+);
+assert.doesNotMatch(
+  source,
+  /createClassroomOrderApi\("content",\s*contentId\.value\)/,
+  "detail must not hard-code inherit lessons to content orders",
 );
 assert.match(source, /role="progressbar"/, "learning progress should be exposed accessibly");
 assert.match(
@@ -87,24 +107,44 @@ const onHide = (handler) => { globalThis.__detailHarness.lifecycle.hide = handle
 const onShow = (handler) => { globalThis.__detailHarness.lifecycle.show = handler }
 const onUnload = (handler) => { globalThis.__detailHarness.lifecycle.unload = handler }
 const getClassroomContentApi = (...args) => globalThis.__detailHarness.getContent(...args)
+const getClassroomSeriesApi = (...args) => globalThis.__detailHarness.getSeries(...args)
+const createClassroomOrderApi = (...args) => globalThis.__detailHarness.createOrder(...args)
+const getClassroomOrderStatusApi = (...args) => globalThis.__detailHarness.getOrderStatus(...args)
+const devPayClassroomOrderApi = (...args) => globalThis.__detailHarness.devPay(...args)
+const updateClassroomProgressApi = async (_id, positionSeconds) => ({ positionSeconds, completed: false })
 const withClassroomPlaybackRetry = async (id, consume) => {
   globalThis.__detailHarness.playbackCalls += 1
   return consume(await globalThis.__detailHarness.playback(id))
 }
 const normalizeClassroomContent = (value = {}) => ({
-  id: String(value.id || ''), title: value.title || '', description: value.description || '',
+  id: String(value.id || ''), seriesId: String(value.seriesId || ''), title: value.title || '', description: value.description || '',
   teacherName: value.teacherName || '', coverUrl: value.coverUrl || '',
   contentType: value.contentType === 'audio' ? 'audio' : 'video',
-  durationSeconds: Number(value.durationSeconds) || 0, canPlay: value.canPlay === true,
-  effectiveAccess: value.effectiveAccess || 'public', purchaseState: value.purchaseState || 'available',
+  durationSeconds: Number(value.durationSeconds) || 0, accessLevel: value.accessLevel || '', canPlay: value.canPlay === true,
+  effectiveAccess: value.effectiveAccess || 'public', priceCents: Number(value.priceCents) || 0, purchaseState: value.purchaseState || 'available',
 })
+const normalizeClassroomSeries = (value = {}) => ({ ...value, id: String(value.id || ''), priceCents: Number(value.priceCents) || 0 })
 const classroomAccessLabel = (value) => value
 const classroomPurchaseAction = (item) => item.canPlay ? { type: 'play', label: '立即学习' } : { type: 'login', label: '登录后学习' }
+const classroomCompletion = (position, duration) => ({ ratio: duration > 0 ? Math.min(1, position / duration) : 0, completed: duration > 0 && position / duration >= 0.9 })
+const getToken = () => globalThis.__detailHarness.token
+const readAnonymousClassroomProgress = () => null
+const createClassroomProgressTracker = () => ({ record: async (positionSeconds) => ({ positionSeconds, completed: false }), flush: async () => {} })
+const createClassroomPurchaseController = (options) => {
+  const purchase = async () => {
+    options.onChange?.({ state: 'creating', message: 'creating' })
+    const order = await options.create()
+    options.onChange?.({ state: 'pending', message: 'pending' })
+    await options.pay(order)
+    return options.status(order)
+  }
+  return { purchase, retry: purchase, stop() {}, reset() { options.onChange?.({ state: 'idle', message: '' }) } }
+}
 const userErrorMessage = (error, fallback) => error?.message || fallback
 `;
 await writeFile(
   modulePath,
-  `${prelude}\n${executableScript}\nexport { contentId, content, loading, loadError, playbackUrl, playbackLoading, playbackError, playbackRetryLabel, audioPlaying, audioPosition, loadDetail, refreshPlayback, handlePlaybackError, toggleAudio, seekAudio }\n`,
+  `${prelude}\n${executableScript}\nexport { contentId, content, loading, loadError, playbackUrl, playbackLoading, playbackError, playbackRetryLabel, audioPlaying, audioPosition, purchaseTarget, purchaseTargetError, loadDetail, refreshPlayback, handlePlaybackError, toggleAudio, seekAudio, startPurchase }\n`,
 );
 
 function deferred() {
@@ -171,7 +211,20 @@ async function createHarness({ type = "audio" } = {}) {
     lifecycle: {},
     playbackCalls: 0,
     audios: [],
+    token: "jwt",
     getContent: async () => ({ id: 21, title: "课件", contentType: type, canPlay: true }),
+    getSeries: async () => ({ series: {}, contents: [] }),
+    orderCalls: [],
+    statusCalls: [],
+    createOrder(targetType, refId) {
+      this.orderCalls.push({ targetType, refId });
+      return { outTradeNo: "cls", payParams: { devMode: true } };
+    },
+    getOrderStatus(targetType, refId) {
+      this.statusCalls.push({ targetType, refId });
+      return { status: "pending", owned: false };
+    },
+    devPay: async () => ({ paid: true }),
     playback: async () => ({ url: `https://signed.example/${type}` }),
     video: {
       pauseCalls: 0,
@@ -182,6 +235,10 @@ async function createHarness({ type = "audio" } = {}) {
   };
   globalThis.__detailHarness = state;
   globalThis.uni = {
+    getStorageSync() {
+      return "";
+    },
+    setStorageSync() {},
     createInnerAudioContext() {
       const audio = createAudioMock();
       state.audios.push(audio);
@@ -404,6 +461,90 @@ try {
       state.playbackCalls,
       0,
       "detail resolved after unload must not start playback acquisition",
+    );
+  }
+
+  {
+    const { page, state } = await createHarness();
+    state.getContent = async () => ({
+      id: 21,
+      seriesId: 12,
+      contentType: "audio",
+      accessLevel: "inherit",
+      effectiveAccess: "paid",
+      priceCents: 2990,
+      purchaseState: "purchase_required",
+      canPlay: false,
+    });
+    state.getSeries = async () => ({
+      series: {
+        id: 12,
+        effectiveAccess: "paid",
+        priceCents: 2990,
+        purchaseState: "purchase_required",
+        canPlay: false,
+      },
+      contents: [{ id: 21, seriesId: 12, accessLevel: "inherit" }],
+    });
+    await page.loadDetail();
+    assert.deepEqual(page.purchaseTarget.value, { type: "series", id: "12", ready: true });
+    await page.startPurchase();
+    assert.deepEqual(state.orderCalls, [{ targetType: "series", refId: "12" }]);
+    assert.equal(
+      state.orderCalls.some((call) => call.targetType === "content"),
+      false,
+      "inherit lesson checkout must never create a content order",
+    );
+  }
+
+  {
+    const { page, state } = await createHarness();
+    let seriesCalls = 0;
+    state.getContent = async () => ({
+      id: 22,
+      seriesId: 12,
+      contentType: "audio",
+      accessLevel: "paid",
+      effectiveAccess: "paid",
+      priceCents: 990,
+      purchaseState: "purchase_required",
+      canPlay: false,
+    });
+    state.getSeries = async () => {
+      seriesCalls += 1;
+      return { series: {}, contents: [] };
+    };
+    page.contentId.value = "22";
+    await page.loadDetail();
+    assert.deepEqual(page.purchaseTarget.value, { type: "content", id: "22", ready: true });
+    assert.equal(seriesCalls, 0, "explicit paid content must not resolve a parent purchase target");
+    await page.startPurchase();
+    assert.deepEqual(state.orderCalls, [{ targetType: "content", refId: "22" }]);
+  }
+
+  {
+    const { page, state } = await createHarness();
+    state.getContent = async () => ({
+      id: 23,
+      seriesId: 13,
+      contentType: "audio",
+      accessLevel: "inherit",
+      effectiveAccess: "paid",
+      purchaseState: "purchase_required",
+      canPlay: false,
+    });
+    state.getSeries = async () => {
+      throw new Error("系列加载失败");
+    };
+    page.contentId.value = "23";
+    await page.loadDetail();
+    assert.deepEqual(page.purchaseTarget.value, { type: "series", id: "13", ready: false });
+    assert.match(page.purchaseTargetError.value, /系列加载失败/);
+    await page.startPurchase();
+    assert.deepEqual(
+      state.orderCalls,
+      [],
+      "failed parent resolution must never fall back to a content order",
     );
   }
 

@@ -48,6 +48,7 @@ type classroomPublicContent struct {
 	TeacherName     string                `json:"teacherName,omitempty"`
 	ContentType     classroom.ContentType `json:"contentType"`
 	DurationSeconds int                   `json:"durationSeconds"`
+	AccessLevel     classroom.AccessLevel `json:"accessLevel"`
 	EffectiveAccess classroom.AccessLevel `json:"effectiveAccess"`
 	PriceCents      int                   `json:"priceCents"`
 	CanPlay         bool                  `json:"canPlay"`
@@ -618,7 +619,7 @@ func contentViewResolved(c classroom.Content, parent *classroom.Series, a classr
 		price = parent.PriceCents
 	}
 	blocked := c.PlaybackBlocked || (parent != nil && parent.PlaybackBlocked)
-	v := classroomPublicContent{ID: c.ID, SeriesID: c.SeriesID, Title: c.Title, Description: c.Description, CoverURL: c.CoverURL, TeacherName: c.TeacherNameSnapshot, ContentType: c.ContentType, DurationSeconds: c.DurationSeconds, EffectiveAccess: a, PriceCents: price, CanPlay: ok && !blocked, PurchaseState: pstate, PlaybackBlocked: blocked}
+	v := classroomPublicContent{ID: c.ID, SeriesID: c.SeriesID, Title: c.Title, Description: c.Description, CoverURL: c.CoverURL, TeacherName: c.TeacherNameSnapshot, ContentType: c.ContentType, DurationSeconds: c.DurationSeconds, AccessLevel: c.AccessLevel, EffectiveAccess: a, PriceCents: price, CanPlay: ok && !blocked, PurchaseState: pstate, PlaybackBlocked: blocked}
 	return v
 }
 func (d *classroomPublicDB) ListSeries(ctx context.Context, q classroomPublicQuery, uid int64) ([]classroomPublicSeries, int, error) {

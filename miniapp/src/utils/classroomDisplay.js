@@ -1,4 +1,5 @@
 const ACCESS_LEVELS = new Set(['public', 'login', 'member', 'paid'])
+const CONTENT_ACCESS_LEVELS = new Set(['inherit', 'public', 'login', 'member', 'paid'])
 const PURCHASE_STATES = new Set(['available', 'owned', 'purchase_required'])
 
 function text(value) {
@@ -41,7 +42,7 @@ export function normalizeClassroomContent(source = {}) {
   return {
     id: id(source.id), seriesId: id(source.seriesId), title: text(source.title), description: text(source.description),
     teacherName: text(source.teacherName), coverUrl: text(source.coverUrl), contentType: source.contentType === 'audio' ? 'audio' : 'video',
-    durationSeconds: nonNegativeInteger(source.durationSeconds), effectiveAccess, priceCents: nonNegativeInteger(source.priceCents), canPlay,
+    durationSeconds: nonNegativeInteger(source.durationSeconds), accessLevel: CONTENT_ACCESS_LEVELS.has(source.accessLevel) ? source.accessLevel : '', effectiveAccess, priceCents: nonNegativeInteger(source.priceCents), canPlay,
     purchaseState: purchaseState(source.purchaseState, effectiveAccess, canPlay), playbackBlocked: source.playbackBlocked === true,
   }
 }

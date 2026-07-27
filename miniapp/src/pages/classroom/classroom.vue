@@ -1,8 +1,11 @@
 <script setup>
 import { computed, ref } from "vue";
-import { onLoad, onShow } from "@dcloudio/uni-app";
+import { onLoad, onShow, onUnload } from "@dcloudio/uni-app";
 import {
+  createClassroomOrderApi,
+  devPayClassroomOrderApi,
   getClassroomContinueLearningApi,
+  getClassroomOrderStatusApi,
   getClassroomSeriesApi,
   listClassroomSeriesApi,
   listClassroomStandaloneApi,
@@ -14,6 +17,7 @@ import {
   normalizeClassroomContent,
   normalizeClassroomSeries,
 } from "../../utils/classroomDisplay";
+import { createClassroomPurchaseController } from "../../utils/classroomProgress";
 import { getToken } from "../../utils/auth";
 import { userErrorMessage } from "../../utils/userMessage";
 
@@ -31,10 +35,14 @@ const seriesError = ref("");
 const continueItem = ref(null);
 const continueLoading = ref(false);
 const continueError = ref("");
+const seriesPaymentTargetId = ref("");
+const seriesPaymentState = ref("idle");
+const seriesPaymentMessage = ref("");
 let listTicket = 0;
 let seriesTicket = 0;
 let continueTicket = 0;
 let skipNextShowRefresh = false;
+let seriesPurchaseController = null;
 
 const activeItems = computed(() =>
   activeTab.value === "series" ? seriesItems.value : standaloneItems.value,
@@ -226,6 +234,69 @@ function itemAction(item) {
   return classroomPurchaseAction(item);
 }
 
+function requestSeriesPayment(pay = {}) {
+  return new Promise((resolve, reject) => {
+    uni.requestPayment({
+      provider: "wxpay",
+      timeStamp: pay.timeStamp,
+      nonceStr: pay.nonceStr,
+      package: pay.package,
+      signType: pay.signType || "RSA",
+      paySign: pay.paySign,
+      success: resolve,
+      fail: reject,
+    });
+  });
+}
+
+function createSeriesPurchase(item) {
+  seriesPurchaseController?.stop();
+  seriesPaymentTargetId.value = item.id;
+  seriesPurchaseController = createClassroomPurchaseController({
+    create: () => createClassroomOrderApi("series", item.id),
+    pay: async (order) => {
+      if (order?.payParams?.devMode) return devPayClassroomOrderApi(order.outTradeNo);
+      return requestSeriesPayment(order?.payParams);
+    },
+    status: () => getClassroomOrderStatusApi("series", item.id),
+    onChange: (snapshot) => {
+      seriesPaymentState.value = snapshot.state;
+      seriesPaymentMessage.value = snapshot.message;
+    },
+    onSuccess: async () => {
+      loadedTabs.value = { ...loadedTabs.value, series: false };
+      await loadActiveList({ force: true });
+      if (selectedSeries.value?.id === item.id) await openSeries(item, { force: true });
+    },
+  });
+  return seriesPurchaseController;
+}
+
+function startSeriesPurchase(item) {
+  if (!item?.id || itemAction(item).type !== "purchase") return;
+  if (!getToken()) {
+    uni.switchTab({ url: "/pages/profile/profile" });
+    return;
+  }
+  if (
+    seriesPaymentTargetId.value === item.id &&
+    (seriesPaymentState.value === "creating" || seriesPaymentState.value === "pending")
+  )
+    return;
+  return createSeriesPurchase(item).purchase();
+}
+
+function retrySeriesPurchase(item) {
+  if (seriesPaymentTargetId.value !== item?.id) return startSeriesPurchase(item);
+  return seriesPurchaseController?.retry();
+}
+
+function cancelSeriesPurchase() {
+  seriesPurchaseController?.reset();
+  seriesPaymentState.value = "idle";
+  seriesPaymentMessage.value = "";
+}
+
 function formatDuration(seconds) {
   const value = Math.max(0, Math.floor(Number(seconds) || 0));
   if (!value) return "";
@@ -247,6 +318,11 @@ onShow(() => {
     return;
   }
   loadContinueLearning();
+});
+
+onUnload(() => {
+  seriesPurchaseController?.stop();
+  seriesPurchaseController = null;
 });
 </script>
 
@@ -379,7 +455,22 @@ onShow(() => {
               <text v-if="formatDuration(item.durationSeconds)">{{
                 formatDuration(item.durationSeconds)
               }}</text>
-              <text class="classroom-card__action">{{
+              <button
+                v-if="activeTab === 'series' && itemAction(item).type === 'purchase'"
+                class="series-buy"
+                :disabled="
+                  seriesPaymentTargetId === item.id &&
+                  (seriesPaymentState === 'creating' || seriesPaymentState === 'pending')
+                "
+                @click.stop="startSeriesPurchase(item)"
+              >
+                {{
+                  seriesPaymentTargetId === item.id && seriesPaymentState === "creating"
+                    ? "创建订单中…"
+                    : itemAction(item).label
+                }}
+              </button>
+              <text v-else class="classroom-card__action">{{
                 activeTab === "series"
                   ? selectedSeries?.id === item.id
                     ? "收起课件"
@@ -387,6 +478,26 @@ onShow(() => {
                   : itemAction(item).label
               }}</text>
             </view>
+          </view>
+        </view>
+
+        <view
+          v-if="
+            activeTab === 'series' &&
+            seriesPaymentTargetId === item.id &&
+            seriesPaymentState !== 'idle' &&
+            seriesPaymentState !== 'success'
+          "
+          class="series-payment ios-card"
+          aria-live="polite"
+        >
+          <text>{{ seriesPaymentMessage }}</text>
+          <view
+            v-if="seriesPaymentState === 'failure' || seriesPaymentState === 'cancelled'"
+            class="series-payment__actions"
+          >
+            <button class="state-action" @click="retrySeriesPurchase(item)">重新支付</button>
+            <button class="state-action" @click="cancelSeriesPurchase">暂不购买</button>
           </view>
         </view>
 
@@ -548,8 +659,30 @@ onShow(() => {
 }
 .classroom-tab::after,
 .state-action::after,
-.lesson-row::after {
+.lesson-row::after,
+.series-buy::after {
   border: 0;
+}
+.series-buy {
+  min-height: 64rpx;
+  padding: 0 18rpx;
+  color: #fff;
+  font-size: 22rpx;
+  font-weight: 800;
+  line-height: 64rpx;
+  background: #0f766e;
+  border-radius: 16rpx;
+}
+.series-payment {
+  padding: 24rpx;
+  color: #52685f;
+  font-size: 24rpx;
+  background: #fff;
+  border-radius: 24rpx;
+}
+.series-payment__actions {
+  display: flex;
+  gap: 12rpx;
 }
 .classroom-tab--active {
   color: #0f6b4f;

@@ -53,7 +53,7 @@ export function createClassroomProgressTracker(options = {}) {
 
   function snapshot(value) {
     const positionSeconds = position(value, durationSeconds)
-    completed = completed || classroomCompletion(positionSeconds, durationSeconds).completed
+    if (!loggedIn) completed = completed || classroomCompletion(positionSeconds, durationSeconds).completed
     return { positionSeconds, completed }
   }
 
@@ -68,9 +68,16 @@ export function createClassroomProgressTracker(options = {}) {
     queued = null
     const operation = (async () => {
       try {
-        await send(id, current.positionSeconds)
+        const response = await send(id, current.positionSeconds)
+        if (response?.completed === true) completed = true
+        const confirmed = {
+          positionSeconds: response && Object.prototype.hasOwnProperty.call(response, 'positionSeconds')
+            ? position(response.positionSeconds, durationSeconds)
+            : current.positionSeconds,
+          completed,
+        }
         lastSentAt = now()
-        return current
+        return confirmed
       } catch (error) {
         if (!queued) queued = current
         throw error
@@ -95,9 +102,10 @@ export function createClassroomProgressTracker(options = {}) {
         return { ...current, local: true }
       }
       queued = current
-      if (force) await transmit({ flush: true })
-      else if (!inFlight && (lastSentAt === null || now() - lastSentAt >= throttleMs)) await transmit()
-      return current
+      let confirmed = null
+      if (force) confirmed = await transmit({ flush: true })
+      else if (!inFlight && (lastSentAt === null || now() - lastSentAt >= throttleMs)) confirmed = await transmit()
+      return confirmed || current
     },
     flush() { return transmit({ flush: true }) },
     retry() { return transmit({ flush: true }) },

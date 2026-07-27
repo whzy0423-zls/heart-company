@@ -27,6 +27,7 @@
     "teacherName": "韩老师",
     "contentType": "video",
     "durationSeconds": 1200,
+    "accessLevel": "inherit",
     "effectiveAccess": "paid",
     "priceCents": 2990,
     "canPlay": false,

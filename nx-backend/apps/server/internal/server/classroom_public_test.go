@@ -359,7 +359,7 @@ func TestClassroomPublicContentMergesParentAccessPriceAndHardBlock(t *testing.T)
 	c := classroom.Content{ID: 3, SeriesID: &sid, AccessLevel: classroom.AccessInherit, ContentType: classroom.ContentVideo}
 	p := &classroom.Series{ID: sid, AccessLevel: classroom.AccessPublic, PriceCents: 0, PlaybackBlocked: true}
 	v := contentViewResolved(c, p, classroom.AccessPublic, true)
-	if v.EffectiveAccess != classroom.AccessPublic || v.CanPlay || !v.PlaybackBlocked {
+	if v.AccessLevel != classroom.AccessInherit || v.EffectiveAccess != classroom.AccessPublic || v.CanPlay || !v.PlaybackBlocked {
 		t.Fatalf("view=%+v", v)
 	}
 }

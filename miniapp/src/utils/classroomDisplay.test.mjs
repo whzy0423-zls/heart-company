@@ -23,6 +23,7 @@ try {
   assert.equal(fixtureContent.id, '21')
   assert.equal(fixtureContent.title, '第一课：认识三中心')
   assert.equal(fixtureContent.contentType, 'video')
+  assert.equal(fixtureContent.accessLevel, 'inherit')
   assert.equal('url' in fixtureContent, false, 'public metadata fixture must not normalize a playback URL')
   assert.equal('objectKey' in fixtureContent, false, 'public metadata fixture must not expose an object key')
   const fixtureSeries = normalizeClassroomSeries(contractFixture.series.items[0])
@@ -38,6 +39,7 @@ try {
     coverUrl: 'https://img.example/cover.jpg',
     contentType: 'audio',
     durationSeconds: 125,
+    accessLevel: 'paid',
     effectiveAccess: 'paid',
     priceCents: 990,
     canPlay: false,
@@ -50,7 +52,7 @@ try {
   assert.deepEqual(content, {
     id: '21', seriesId: '12', title: '声音练习', description: '复盘', teacherName: '韩老师',
     coverUrl: 'https://img.example/cover.jpg', contentType: 'audio', durationSeconds: 125,
-    effectiveAccess: 'paid', priceCents: 990, canPlay: false,
+    accessLevel: 'paid', effectiveAccess: 'paid', priceCents: 990, canPlay: false,
     purchaseState: 'purchase_required', playbackBlocked: false,
   })
   assert.equal('objectKey' in content, false)

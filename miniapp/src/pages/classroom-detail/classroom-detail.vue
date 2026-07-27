@@ -6,6 +6,7 @@ import {
   devPayClassroomOrderApi,
   getClassroomContentApi,
   getClassroomOrderStatusApi,
+  getClassroomSeriesApi,
   updateClassroomProgressApi,
   withClassroomPlaybackRetry,
 } from "../../api";
@@ -13,6 +14,7 @@ import {
   classroomAccessLabel,
   classroomPurchaseAction,
   normalizeClassroomContent,
+  normalizeClassroomSeries,
 } from "../../utils/classroomDisplay";
 import {
   classroomCompletion,
@@ -39,6 +41,9 @@ const progressCompleted = ref(false);
 const progressSyncError = ref("");
 const paymentState = ref("idle");
 const paymentMessage = ref("");
+const purchaseTarget = ref({ type: "content", id: "", ready: true });
+const purchaseOffer = ref(null);
+const purchaseTargetError = ref("");
 let detailTicket = 0;
 let playbackTicket = 0;
 let audioContext = null;
@@ -51,7 +56,7 @@ let progressTracker = null;
 let purchaseController = null;
 let requestedResumePosition = 0;
 
-const accessAction = computed(() => classroomPurchaseAction(content.value));
+const accessAction = computed(() => classroomPurchaseAction(purchaseOffer.value || content.value));
 const progressPercent = computed(() => {
   if (progressCompleted.value) return 100;
   return Math.min(
@@ -270,6 +275,41 @@ async function loadDetail() {
     const normalized = normalizeClassroomContent(response);
     if (!normalized.id) throw new Error("课件内容不存在");
     content.value = normalized;
+    purchaseController?.stop();
+    purchaseController = null;
+    paymentState.value = "idle";
+    paymentMessage.value = "";
+    purchaseOffer.value = null;
+    purchaseTargetError.value = "";
+    purchaseTarget.value = { type: "content", id: normalized.id, ready: true };
+    if (
+      !normalized.canPlay &&
+      normalized.effectiveAccess === "paid" &&
+      normalized.accessLevel === "inherit"
+    ) {
+      purchaseTarget.value = { type: "series", id: normalized.seriesId, ready: false };
+      try {
+        if (!normalized.seriesId) throw new Error("系列购买信息缺失");
+        const response = await getClassroomSeriesApi(normalized.seriesId);
+        if (disposed || ticket !== detailTicket) return;
+        const series = normalizeClassroomSeries(response?.series);
+        const inheritedLesson = (Array.isArray(response?.contents) ? response.contents : [])
+          .map(normalizeClassroomContent)
+          .find((item) => item.id === normalized.id && item.accessLevel === "inherit");
+        if (
+          !series.id ||
+          !inheritedLesson ||
+          series.effectiveAccess !== "paid" ||
+          series.purchaseState !== "purchase_required"
+        )
+          throw new Error("系列当前不可购买");
+        purchaseOffer.value = series;
+        purchaseTarget.value = { type: "series", id: series.id, ready: true };
+      } catch (error) {
+        if (disposed || ticket !== detailTicket) return;
+        purchaseTargetError.value = userErrorMessage(error, "系列购买信息加载失败，请重试");
+      }
+    }
     setupProgress();
     if (normalized.canPlay && pageVisible) await refreshPlayback();
   } catch (error) {
@@ -328,7 +368,7 @@ function handleVideoPause(event) {
 
 function handleVideoEnded() {
   const duration = Math.max(0, Number(content.value.durationSeconds) || progressPosition.value);
-  applyProgress(duration, true);
+  applyProgress(duration);
   void recordProgress(duration, { force: true });
 }
 
@@ -354,13 +394,15 @@ function requestWechatPayment(pay = {}) {
 
 function ensurePurchaseController() {
   if (purchaseController) return purchaseController;
+  const target = { ...purchaseTarget.value };
+  if (!target.ready || !target.id) return null;
   purchaseController = createClassroomPurchaseController({
-    create: () => createClassroomOrderApi("content", contentId.value),
+    create: () => createClassroomOrderApi(target.type, target.id),
     pay: async (order) => {
       if (order?.payParams?.devMode) return devPayClassroomOrderApi(order.outTradeNo);
       return requestWechatPayment(order?.payParams);
     },
-    status: () => getClassroomOrderStatusApi("content", contentId.value),
+    status: () => getClassroomOrderStatusApi(target.type, target.id),
     onChange: (snapshot) => {
       if (disposed) return;
       paymentState.value = snapshot.state;
@@ -379,12 +421,13 @@ function startPurchase() {
     uni.switchTab({ url: "/pages/profile/profile" });
     return;
   }
-  return ensurePurchaseController().purchase();
+  if (!purchaseTarget.value.ready) return;
+  return ensurePurchaseController()?.purchase();
 }
 
 function retryPurchase() {
   if (disposed || paymentBusy.value) return;
-  return ensurePurchaseController().retry();
+  return ensurePurchaseController()?.retry();
 }
 
 function cancelPurchase() {
@@ -477,8 +520,18 @@ onUnload(() => {
       <view v-if="!content.canPlay" class="access-panel ios-card" aria-live="polite">
         <text class="access-panel__title">{{ accessAction.label }}</text>
         <text class="access-panel__copy">完成对应权限后，即可播放本课件。</text>
+        <text v-if="purchaseTargetError" class="access-panel__error">{{
+          purchaseTargetError
+        }}</text>
+        <button v-if="purchaseTargetError" class="detail-action" @click="loadDetail">
+          重新加载购买信息
+        </button>
         <button
-          v-if="accessAction.type !== 'blocked' && accessAction.type !== 'unavailable'"
+          v-if="
+            !purchaseTargetError &&
+            accessAction.type !== 'blocked' &&
+            accessAction.type !== 'unavailable'
+          "
           class="primary-action"
           @click="handleAccessAction"
         >

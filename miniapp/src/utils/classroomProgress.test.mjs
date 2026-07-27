@@ -159,6 +159,22 @@ try {
   assert.deepEqual(retrySent, [10, 60])
   assert.equal(retrying.pending(), null)
 
+  const authoritativeSent = []
+  const authoritative = createClassroomProgressTracker({
+    contentId: 26,
+    durationSeconds: 100,
+    loggedIn: true,
+    send: async (_contentId, positionSeconds) => {
+      authoritativeSent.push(positionSeconds)
+      return authoritativeSent.length === 1
+        ? { positionSeconds, completed: false }
+        : { positionSeconds, completed: true }
+    },
+  })
+  assert.deepEqual(await authoritative.record(95), { positionSeconds: 95, completed: false }, 'logged-in completion must wait for the server')
+  assert.deepEqual(await authoritative.record(96, { force: true }), { positionSeconds: 96, completed: true }, 'server completion should update the tracker snapshot')
+  assert.deepEqual(await authoritative.record(20), { positionSeconds: 20, completed: true }, 'server-confirmed completion must stay monotonic')
+
   console.log('classroom progress tests passed')
 } finally {
   await rm(dir, { force: true, recursive: true })
