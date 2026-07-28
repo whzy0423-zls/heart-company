@@ -277,6 +277,12 @@ func TestDeprecatedMenusRemoveStaleCustomerPrivateRuleRoute(t *testing.T) {
 		"name = 'CustomerAppPrivateRule'",
 		"path = '/customer/app-private-rules'",
 		"component = '/customer/app-private-rules'",
+		"name = 'TheoryLibrary'",
+		"path = '/theory/library'",
+		"component = '/theory/library'",
+		"name = 'XinzhiliModelConfig'",
+		"path = '/settings/xinzhili-model'",
+		"component = '/settings/xinzhili-model'",
 	} {
 		if !strings.Contains(deprecatedMenusSQL, token) {
 			t.Fatalf("expected deprecated menu cleanup SQL to include %q", token)
