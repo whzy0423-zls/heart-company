@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type {
+  VoiceOption,
   XinzhiliMode,
   XinzhiliModelConfigPayload,
   XinzhiliModelConfigView,
@@ -24,6 +25,7 @@ import {
 
 import {
   getXinzhiliModelConfigApi,
+  getXinzhiliVoiceOptionsApi,
   updateXinzhiliModelConfigApi,
 } from '#/api';
 
@@ -50,6 +52,9 @@ const asrKeySet = ref(false);
 const asrKeySuffix = ref('');
 const ttsKeySet = ref(false);
 const ttsKeySuffix = ref('');
+const voiceOptions = ref<VoiceOption[]>([]);
+const voiceOptionsLoading = ref(false);
+const voiceOptionsError = ref('');
 
 const form = ref<XinzhiliModelConfigPayload>(createEmptyForm());
 
@@ -90,7 +95,9 @@ function createEmptyForm(): XinzhiliModelConfigPayload {
   };
 }
 
-onMounted(load);
+onMounted(() => {
+  void Promise.all([load(), loadVoiceOptions()]);
+});
 
 async function load() {
   loading.value = true;
@@ -103,6 +110,18 @@ async function load() {
     loading.value = false;
   }
 }
+async function loadVoiceOptions() {
+  voiceOptionsLoading.value = true;
+  voiceOptionsError.value = '';
+  try {
+    voiceOptions.value = await getXinzhiliVoiceOptionsApi();
+  } catch {
+    voiceOptionsError.value = '音色选项读取失败，可手动填写音色 ID';
+  } finally {
+    voiceOptionsLoading.value = false;
+  }
+}
+
 
 function applyView(data: XinzhiliModelConfigView) {
   const normalized = normalizeXinzhiliModelConfigView(data);
@@ -163,6 +182,15 @@ function applyFreeTtsPreset() {
     voice: 'FunAudioLLM/CosyVoice2-0.5B:alex',
   };
   message.success('已填充硅基流动免费额度 TTS 预设，请确认 API Key 后保存');
+}
+
+function applyVoiceOption(option?: VoiceOption) {
+  if (!option) return;
+  if (option.source === 'clone') {
+    form.value.tts.provider = 'minimax';
+  }
+  form.value.tts.voice = option.voiceId;
+  message.success(`已选择${option.source === 'clone' ? '克隆' : '官方'}音色：${option.voiceName}`);
 }
 
 async function save() {
@@ -280,6 +308,21 @@ async function save() {
         <Col :md="12" :xs="24">
           <Form.Item label="模型">
             <Input v-model:value="form.tts.model" />
+          </Form.Item>
+          <Form.Item v-if="form.tts.provider === 'minimax'" label="选择已有音色">
+            <Select
+              :loading="voiceOptionsLoading"
+              :options="voiceOptions.map((option) => ({
+                label: option.source === 'clone' ? `${option.label}` : option.label,
+                value: option.id,
+              }))"
+              placeholder="可直接复用声音管理里的已克隆音色"
+              show-search
+              :filter-option="(input, option) => String(option?.label ?? option?.value ?? '').toLowerCase().includes(input.toLowerCase())"
+              @change="(value) => applyVoiceOption(voiceOptions.find((option) => option.id === value))"
+            />
+            <span class="mt-1 block text-xs text-gray-400">可直接复用声音管理里的已克隆音色，也可以手动填写平台音色 ID</span>
+            <span v-if="voiceOptionsError" class="mt-1 block text-xs text-amber-500">{{ voiceOptionsError }}</span>
           </Form.Item>
           <Form.Item label="音色">
             <Input v-model:value="form.tts.voice" />
