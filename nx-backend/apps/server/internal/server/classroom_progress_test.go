@@ -74,7 +74,7 @@ func TestClassroomProgressRoutesRequireMiniappJWTAndExposeUpdateAndContinue(t *t
 	updateReq.Header.Set("Authorization", "Bearer "+token)
 	update := httptest.NewRecorder()
 	mux.ServeHTTP(update, updateReq)
-	if update.Code != http.StatusOK || update.Header().Get("Cache-Control") != "no-store" || svc.uid != 42 || svc.content != 21 || svc.position != 90 || !strings.Contains(update.Body.String(), `"completed":true`) {
+	if update.Code != http.StatusOK || update.Header().Get("Cache-Control") != "private, no-store" || svc.uid != 42 || svc.content != 21 || svc.position != 90 || !strings.Contains(update.Body.String(), `"completed":true`) {
 		t.Fatalf("update status=%d body=%s call=(%d,%d,%d)", update.Code, update.Body.String(), svc.uid, svc.content, svc.position)
 	}
 
@@ -82,7 +82,7 @@ func TestClassroomProgressRoutesRequireMiniappJWTAndExposeUpdateAndContinue(t *t
 	continueReq.Header.Set("Authorization", "Bearer "+token)
 	continued := httptest.NewRecorder()
 	mux.ServeHTTP(continued, continueReq)
-	if continued.Code != http.StatusOK || continued.Header().Get("Cache-Control") != "no-store" || !strings.Contains(continued.Body.String(), `"title":"第一课"`) || !strings.Contains(continued.Body.String(), `"positionSeconds":90`) {
+	if continued.Code != http.StatusOK || continued.Header().Get("Cache-Control") != "private, no-store" || !strings.Contains(continued.Body.String(), `"title":"第一课"`) || !strings.Contains(continued.Body.String(), `"positionSeconds":90`) {
 		t.Fatalf("continue status=%d body=%s", continued.Code, continued.Body.String())
 	}
 }
@@ -283,10 +283,10 @@ func TestClassroomContinueLearningFiltersAccessAndSortsNewestFirst(t *testing.T)
 			return &classroomRows{cols: []string{"series_id", "content_id"}, values: [][]driver.Value{{int64(8), nil}}}, nil
 		case strings.Contains(q, "FROM classroom_progress p"):
 			candidateQuery = q
-			return &classroomRows{cols: make([]string, 21), values: [][]driver.Value{
-				{int64(31), int64(20), false, now, "Newest denied", "", "", "video", int64(100), int64(9), false, "offline", false, "inherit", int64(0), int64(9), "offline", false, "paid", int64(2990), "Teacher"},
-				{int64(30), int64(50), false, now.Add(-time.Minute), "Owned offline", "desc", "cover", "audio", int64(100), int64(8), false, "offline", false, "inherit", int64(0), int64(8), "offline", false, "paid", int64(2990), "Teacher"},
-				{int64(29), int64(10), false, now.Add(-2 * time.Minute), "Public", "desc", "cover", "video", int64(100), nil, false, "published", false, "public", int64(0), nil, nil, nil, nil, nil, "Teacher"},
+			return &classroomRows{cols: make([]string, 24), values: [][]driver.Value{
+				{int64(31), int64(20), false, now, "Newest denied", "", "", "video", int64(100), int64(9), false, "offline", false, "inherit", int64(0), "", "16:9", "", int64(9), "offline", false, "paid", int64(2990), "Teacher"},
+				{int64(30), int64(50), false, now.Add(-time.Minute), "Owned offline", "desc", "cover", "audio", int64(100), int64(8), false, "offline", false, "inherit", int64(0), "", "16:9", "", int64(8), "offline", false, "paid", int64(2990), "Teacher"},
+				{int64(29), int64(10), false, now.Add(-2 * time.Minute), "Public", "desc", "cover", "video", int64(100), nil, false, "published", false, "public", int64(0), "", "16:9", "", nil, nil, nil, nil, nil, "Teacher"},
 			}}, nil
 		default:
 			return nil, fmt.Errorf("unexpected query: %s", q)
@@ -305,10 +305,42 @@ func TestClassroomContinueLearningFiltersAccessAndSortsNewestFirst(t *testing.T)
 	}
 }
 
+func TestClassroomContinueLearningResolvesEffectiveCover(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	db := openClassroomTestDB(t, func(q string, _ []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(q, "SELECT member_level,member_expires_at"):
+			return &classroomRows{cols: []string{"level", "expires"}, values: [][]driver.Value{{int64(0), nil}}}, nil
+		case strings.Contains(q, "SELECT series_id,content_id FROM classroom_entitlements"):
+			return &classroomRows{cols: []string{"series_id", "content_id"}}, nil
+		case strings.Contains(q, "FROM classroom_progress p"):
+			return &classroomRows{cols: make([]string, 24), values: [][]driver.Value{{
+				int64(29), int64(10), false, now, "Public", "desc", "https://legacy.example/cover.jpg", "video", int64(100), nil, false, "published", false, "public", int64(0),
+				"", "9:16", "classroom/covers/generated/29.jpg",
+				nil, nil, nil, nil, nil, "Teacher",
+			}}}, nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", q)
+		}
+	})
+	signer := &recordingClassroomCoverSigner{}
+	items, err := newClassroomProgressDBWithCovers(db, signer, 30*time.Minute).ContinueLearning(context.Background(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].CoverURL != "https://signed.example/classroom-cover" || items[0].CoverAspectRatio != classroom.CoverAspectRatio9x16 {
+		t.Fatalf("items=%+v", items)
+	}
+	if signer.key != "classroom/covers/generated/29.jpg" || signer.ttl != 30*time.Minute {
+		t.Fatalf("sign key=%q ttl=%s", signer.key, signer.ttl)
+	}
+}
+
 func classroomContinueRow(id int64, playedAt time.Time, title, contentStatus string, contentAccess string, seriesID any, standalone bool, seriesStatus any, seriesAccess any) []driver.Value {
 	return []driver.Value{
 		id, int64(10), false, playedAt,
 		title, "desc", "cover", "video", int64(100), seriesID, standalone, contentStatus, false, contentAccess, int64(0),
+		"", "16:9", "",
 		seriesID, seriesStatus, false, seriesAccess, int64(2990), "Teacher",
 	}
 }
@@ -353,7 +385,7 @@ func TestClassroomContinueLearningScansKeysetBatchesUntilTwentyAccessibleItems(t
 				}
 				values = append(values, classroomContinueRow(id, now.Add(-time.Duration(progressQueries-1)*time.Minute), title, "published", access, nil, false, nil, nil))
 			}
-			return &classroomRows{cols: make([]string, 21), values: values}, nil
+			return &classroomRows{cols: make([]string, 24), values: values}, nil
 		default:
 			return nil, fmt.Errorf("unexpected query: %s", q)
 		}
@@ -394,7 +426,7 @@ func TestClassroomContinueLearningStopsAfterBoundedCandidateBudget(t *testing.T)
 				id := baseID - int64(i)
 				values = append(values, classroomContinueRow(id, now.Add(-time.Duration(progressQueries-1)*time.Minute), fmt.Sprintf("Denied %d", id), "published", "paid", nil, false, nil, nil))
 			}
-			return &classroomRows{cols: make([]string, 21), values: values}, nil
+			return &classroomRows{cols: make([]string, 24), values: values}, nil
 		default:
 			return nil, fmt.Errorf("unexpected query: %s", q)
 		}
@@ -418,7 +450,7 @@ func TestClassroomContinueLearningPreservesStandaloneAndOfflineOwnedSemantics(t 
 		case strings.Contains(q, "SELECT series_id,content_id FROM classroom_entitlements"):
 			return &classroomRows{cols: []string{"series_id", "content_id"}, values: [][]driver.Value{{int64(8), nil}, {nil, int64(77)}}}, nil
 		case strings.Contains(q, "FROM classroom_progress p"):
-			return &classroomRows{cols: make([]string, 21), values: [][]driver.Value{
+			return &classroomRows{cols: make([]string, 24), values: [][]driver.Value{
 				classroomContinueRow(80, now, "Standalone under draft series", "published", "public", int64(9), true, "draft", "paid"),
 				classroomContinueRow(79, now.Add(-time.Minute), "Owned offline series lesson", "published", "inherit", int64(8), false, "offline", "paid"),
 				classroomContinueRow(78, now.Add(-2*time.Minute), "Unowned offline series lesson", "published", "inherit", int64(7), false, "offline", "paid"),

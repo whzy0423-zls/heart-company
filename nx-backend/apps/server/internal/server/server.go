@@ -252,8 +252,8 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.miniappAdmin = miniapp.NewAdminStore(database)
 	s.classroomAdmin = newClassroomAdminStore(database)
 	if database != nil {
-		s.classroomPublic = newClassroomPublicDB(database)
-		s.classroomProgress = newClassroomProgressDB(database)
+		s.classroomPublic = newClassroomPublicDBWithCovers(database, s.classroomPlaybackSigner, s.classroomCoverTTL())
+		s.classroomProgress = newClassroomProgressDBWithCovers(database, s.classroomPlaybackSigner, s.classroomCoverTTL())
 	}
 	s.classroomAudit = s.auditLogs
 	miniappService := miniapp.NewService(

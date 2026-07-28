@@ -79,6 +79,20 @@ func (f fakeClassroomSigner) PresignGetURL(context.Context, string, time.Duratio
 	return "https://cdn.example/" + f.key, nil
 }
 
+type recordingClassroomCoverSigner struct {
+	key string
+	ttl time.Duration
+	err error
+}
+
+func (s *recordingClassroomCoverSigner) PresignGetURL(_ context.Context, key string, ttl time.Duration) (string, error) {
+	s.key, s.ttl = key, ttl
+	if s.err != nil {
+		return "", s.err
+	}
+	return "https://signed.example/classroom-cover", nil
+}
+
 func (f *fakeClassroomPublicService) ListSeries(context.Context, classroomPublicQuery, int64) ([]classroomPublicSeries, int, error) {
 	return f.series, len(f.series), f.listErr
 }
@@ -134,6 +148,66 @@ func TestClassroomPublicRoutesExposeSafePaidCardsAndCacheIsolation(t *testing.T)
 	mux.ServeHTTP(cached, req)
 	if cached.Code != http.StatusNotModified || cached.Body.Len() != 0 {
 		t.Fatalf("expected 304 revalidation, got %d %s", cached.Code, cached.Body.String())
+	}
+}
+
+func TestClassroomPublicStandaloneResolvesGeneratedCoverAndAspectRatio(t *testing.T) {
+	var listQuery string
+	db := openClassroomTestDB(t, func(q string, _ []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(q, "SELECT count(*)"):
+			return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{int64(1)}}}, nil
+		case strings.Contains(q, "FROM classroom_contents c JOIN classroom_media_assets m"):
+			listQuery = q
+			return &classroomRows{cols: make([]string, 21), values: [][]driver.Value{{
+				int64(12), nil, false, "Video", "desc", "video", int64(8), "https://legacy.example/cover.jpg", int64(90), "Teacher", "public", int64(0), false,
+				"", "1:1", "classroom/covers/generated/12.jpg",
+				nil, nil, nil, nil, nil,
+			}}}, nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", q)
+		}
+	})
+	signer := &recordingClassroomCoverSigner{}
+	items, total, err := newClassroomPublicDBWithCovers(db, signer, 30*time.Minute).ListStandalone(context.Background(), classroomPublicQuery{Limit: 20}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(items) != 1 || items[0].CoverURL != "https://signed.example/classroom-cover" || items[0].CoverAspectRatio != classroom.CoverAspectRatio1x1 {
+		t.Fatalf("total=%d items=%+v", total, items)
+	}
+	if signer.key != "classroom/covers/generated/12.jpg" || signer.ttl != 30*time.Minute {
+		t.Fatalf("sign key=%q ttl=%s", signer.key, signer.ttl)
+	}
+	if !strings.Contains(listQuery, "c.manual_cover_object_key") || !strings.Contains(listQuery, "c.cover_aspect_ratio") || !strings.Contains(listQuery, "m.cover_object_key") {
+		t.Fatalf("cover context not selected in joined query: %s", listQuery)
+	}
+}
+
+func TestClassroomPublicSignedCoverMetadataDisablesConditionalCaching(t *testing.T) {
+	f := &fakeClassroomPublicService{content: classroomPublicContent{ID: 2, Title: "Signed", CoverURL: "https://signed.example/cover", signedCover: true}}
+	s := &Server{classroomPublic: f}
+	mux := http.NewServeMux()
+	registerClassroomPublicRoutes(mux, s)
+	req := httptest.NewRequest(http.MethodGet, "/api/public/classroom/standalone", nil)
+	req.Header.Set("If-None-Match", `"stale"`)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || rr.Header().Get("Cache-Control") != "private, no-store" || rr.Header().Get("ETag") != "" {
+		t.Fatalf("status=%d headers=%v body=%s", rr.Code, rr.Header(), rr.Body.String())
+	}
+}
+
+func TestClassroomAudioDefaultCoverIsServedFromStablePublicPath(t *testing.T) {
+	mux := http.NewServeMux()
+	registerClassroomPublicRoutes(mux, &Server{})
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, classroomAudioCoverPath, nil))
+	if rr.Code != http.StatusOK || rr.Header().Get("Content-Type") != "image/svg+xml; charset=utf-8" || !strings.Contains(rr.Body.String(), "<svg") {
+		t.Fatalf("status=%d headers=%v body=%s", rr.Code, rr.Header(), rr.Body.String())
+	}
+	if rr.Header().Get("Cache-Control") != "public, max-age=86400, immutable" {
+		t.Fatalf("cache-control=%q", rr.Header().Get("Cache-Control"))
 	}
 }
 
@@ -387,8 +461,8 @@ func TestClassroomDBBackedStandaloneFiltersBeforePaginationAndReturnsTrueTotal(t
 		if strings.Contains(q, "ORDER BY c.sort_order,c.id") {
 			sawPage = strings.Contains(q, "LIMIT $4 OFFSET $5") && len(args) == 5 && fmt.Sprint(args[3].Value) == "1" && fmt.Sprint(args[4].Value) == "2"
 		}
-		cols := []string{"id", "series_id", "show_as_standalone", "title", "description", "content_type", "media_asset_id", "cover_url", "duration_seconds", "teacher_name_snapshot", "access_level", "price_cents", "playback_blocked", "parent_id", "parent_status", "parent_access", "parent_price", "parent_blocked"}
-		return &classroomRows{cols: cols, values: [][]driver.Value{{int64(12), nil, false, "Audio", "desc", "audio", int64(8), "cover", int64(90), "Teacher", "public", int64(0), false, nil, nil, nil, nil, nil}}}, nil
+		cols := []string{"id", "series_id", "show_as_standalone", "title", "description", "content_type", "media_asset_id", "cover_url", "duration_seconds", "teacher_name_snapshot", "access_level", "price_cents", "playback_blocked", "manual_cover_object_key", "cover_aspect_ratio", "generated_cover_object_key", "parent_id", "parent_status", "parent_access", "parent_price", "parent_blocked"}
+		return &classroomRows{cols: cols, values: [][]driver.Value{{int64(12), nil, false, "Audio", "desc", "audio", int64(8), "cover", int64(90), "Teacher", "public", int64(0), false, "", "16:9", "", nil, nil, nil, nil, nil}}}, nil
 	})
 	s := &Server{classroomPublic: newClassroomPublicDB(db), mux: http.NewServeMux()}
 	registerClassroomPublicRoutes(s.mux, s)
@@ -519,7 +593,7 @@ func TestClassroomPublicSeriesDetailHTTPFiltersToPublishedReadyLessons(t *testin
 		}
 		if strings.Contains(q, "JOIN classroom_media_assets") {
 			readyFilter = strings.Contains(q, "c.status=$2") && strings.Contains(q, "m.storage_status=$3") && strings.Contains(q, "ORDER BY c.sort_order,c.id")
-			return &classroomRows{cols: make([]string, 11), values: [][]driver.Value{{int64(11), int64(2), "Ready lesson", "desc", "video", "cover", int64(60), "Teacher", "inherit", int64(0), false}}}, nil
+			return &classroomRows{cols: make([]string, 14), values: [][]driver.Value{{int64(11), int64(2), "Ready lesson", "desc", "video", "cover", int64(60), "Teacher", "inherit", int64(0), false, "", "16:9", ""}}}, nil
 		}
 		return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{int64(0)}}}, nil
 	})
@@ -549,7 +623,7 @@ func TestClassroomPublicSeriesOfflineHiddenStandaloneVisibleAndPurchasedPlayback
 		case strings.Contains(q, "SELECT count(*) FROM classroom_contents c JOIN"):
 			return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{int64(1)}}}, nil
 		case strings.Contains(q, "SELECT c.id,c.series_id,c.show_as_standalone"):
-			return &classroomRows{cols: make([]string, 18), values: [][]driver.Value{{int64(7), int64(2), true, "Standalone", "desc", "video", int64(3), "cover", int64(60), "Teacher", "inherit", int64(0), false, int64(2), "offline", "paid", int64(9900), false}}}, nil
+			return &classroomRows{cols: make([]string, 21), values: [][]driver.Value{{int64(7), int64(2), true, "Standalone", "desc", "video", int64(3), "cover", int64(60), "Teacher", "inherit", int64(0), false, "", "16:9", "", int64(2), "offline", "paid", int64(9900), false}}}, nil
 		case strings.Contains(q, "FROM classroom_contents WHERE id"):
 			return &classroomRows{cols: make([]string, 25), values: [][]driver.Value{{int64(7), int64(2), true, "Standalone", "desc", "video", int64(3), "cover", int64(60), "teacher", "Teacher", nil, "", []byte(`[]`), int64(0), int64(0), "published", false, "inherit", int64(0), now, nil, nil, now, now}}}, nil
 		case strings.Contains(q, "FROM classroom_series WHERE id"):

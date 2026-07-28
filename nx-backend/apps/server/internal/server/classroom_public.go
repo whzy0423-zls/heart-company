@@ -21,6 +21,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/classroom"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/miniapp"
+	"nine-xing/nx-backend/apps/server/internal/storage"
 )
 
 type classroomPublicQuery struct {
@@ -40,21 +41,23 @@ type classroomPublicSeries struct {
 	PlaybackBlocked bool                  `json:"playbackBlocked"`
 }
 type classroomPublicContent struct {
-	ID              int64                 `json:"id"`
-	SeriesID        *int64                `json:"seriesId,omitempty"`
-	Title           string                `json:"title"`
-	Description     string                `json:"description,omitempty"`
-	CoverURL        string                `json:"coverUrl,omitempty"`
-	TeacherName     string                `json:"teacherName,omitempty"`
-	ContentType     classroom.ContentType `json:"contentType"`
-	DurationSeconds int                   `json:"durationSeconds"`
-	AccessLevel     classroom.AccessLevel `json:"accessLevel"`
-	EffectiveAccess classroom.AccessLevel `json:"effectiveAccess"`
-	PriceCents      int                   `json:"priceCents"`
-	CanPlay         bool                  `json:"canPlay"`
-	PurchaseState   string                `json:"purchaseState"`
-	PlaybackBlocked bool                  `json:"playbackBlocked"`
-	cacheVersion    string
+	ID               int64                      `json:"id"`
+	SeriesID         *int64                     `json:"seriesId,omitempty"`
+	Title            string                     `json:"title"`
+	Description      string                     `json:"description,omitempty"`
+	CoverURL         string                     `json:"coverUrl,omitempty"`
+	CoverAspectRatio classroom.CoverAspectRatio `json:"coverAspectRatio"`
+	TeacherName      string                     `json:"teacherName,omitempty"`
+	ContentType      classroom.ContentType      `json:"contentType"`
+	DurationSeconds  int                        `json:"durationSeconds"`
+	AccessLevel      classroom.AccessLevel      `json:"accessLevel"`
+	EffectiveAccess  classroom.AccessLevel      `json:"effectiveAccess"`
+	PriceCents       int                        `json:"priceCents"`
+	CanPlay          bool                       `json:"canPlay"`
+	PurchaseState    string                     `json:"purchaseState"`
+	PlaybackBlocked  bool                       `json:"playbackBlocked"`
+	cacheVersion     string
+	signedCover      bool
 }
 type classroomPublicSeriesDetail struct {
 	Series   classroomPublicSeries    `json:"series"`
@@ -135,6 +138,7 @@ func (s *Server) verifyClassroomTicket(token string, contentID int64, mediaVersi
 }
 
 func registerClassroomPublicRoutes(mux *http.ServeMux, s *Server) {
+	mux.HandleFunc(classroomAudioCoverPath, s.method(http.MethodGet, classroomAudioCover))
 	mux.HandleFunc("/api/public/classroom/series", s.method(http.MethodGet, s.classroomSeriesPublic))
 	mux.HandleFunc("/api/public/classroom/standalone", s.method(http.MethodGet, s.classroomStandalonePublic))
 	mux.HandleFunc("/api/public/classroom/series/", s.method(http.MethodGet, s.classroomSeriesDetailPublic))
@@ -349,6 +353,11 @@ func (s *Server) classroomStandalonePublic(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	data := map[string]any{"items": items, "total": total, "limit": page.Limit, "offset": page.Offset}
+	if classroomContentsHaveSignedCover(items) {
+		w.Header().Set("Cache-Control", "private, no-store")
+		httpx.OK(w, data)
+		return
+	}
 	if setClassroomCache(w, r, data) {
 		return
 	}
@@ -377,7 +386,9 @@ func (s *Server) classroomSeriesDetailPublic(w http.ResponseWriter, r *http.Requ
 		}
 		return
 	}
-	if setClassroomCache(w, r, d) {
+	if classroomContentsHaveSignedCover(d.Contents) {
+		w.Header().Set("Cache-Control", "private, no-store")
+	} else if setClassroomCache(w, r, d) {
 		return
 	}
 	httpx.OK(w, d)
@@ -405,7 +416,9 @@ func (s *Server) classroomContentPublic(w http.ResponseWriter, r *http.Request) 
 		}
 		return
 	}
-	if setClassroomCache(w, r, d) {
+	if d.signedCover {
+		w.Header().Set("Cache-Control", "private, no-store")
+	} else if setClassroomCache(w, r, d) {
 		return
 	}
 	httpx.OK(w, d)
@@ -537,12 +550,39 @@ func (s *Server) classroomPlaybackPublic(w http.ResponseWriter, r *http.Request)
 
 // db-backed implementation is installed by New when classroom tables are available.
 type classroomPublicDB struct {
-	store *classroom.Store
-	db    *sql.DB
+	store       *classroom.Store
+	db          *sql.DB
+	coverSigner storage.ObjectSigner
+	coverTTL    time.Duration
 }
 
 func newClassroomPublicDB(db *sql.DB) classroomPublicService {
 	return &classroomPublicDB{store: classroom.NewStore(db), db: db}
+}
+
+func newClassroomPublicDBWithCovers(db *sql.DB, signer storage.ObjectSigner, ttl time.Duration) classroomPublicService {
+	return &classroomPublicDB{store: classroom.NewStore(db), db: db, coverSigner: signer, coverTTL: ttl}
+}
+
+func classroomContentsHaveSignedCover(items []classroomPublicContent) bool {
+	for _, item := range items {
+		if item.signedCover {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *classroomPublicDB) resolveContentCover(ctx context.Context, content *classroom.Content, generatedObjectKey string) (bool, error) {
+	resolved, err := classroom.ResolveEffectiveCover(ctx, classroom.CoverInput{
+		ContentType: content.ContentType, ManualObjectKey: content.ManualCoverObjectKey,
+		GeneratedObjectKey: generatedObjectKey, LegacyURL: content.CoverURL,
+	}, d.coverSigner, d.coverTTL, classroomAudioCoverPath)
+	if err != nil {
+		return false, err
+	}
+	content.CoverURL = resolved.URL
+	return resolved.Signed, nil
 }
 
 type classroomAccessSnapshot struct {
@@ -615,7 +655,11 @@ func classroomAccessAllowed(access classroom.AccessLevel, loggedIn, member, enti
 	}
 	return false
 }
-func contentViewResolved(c classroom.Content, parent *classroom.Series, a classroom.AccessLevel, ok bool) classroomPublicContent {
+func contentViewResolved(c classroom.Content, parent *classroom.Series, a classroom.AccessLevel, ok bool, signedCover ...bool) classroomPublicContent {
+	ratio, err := classroom.NormalizeCoverAspectRatio(c.CoverAspectRatio)
+	if err != nil {
+		ratio = classroom.CoverAspectRatio16x9
+	}
 	pstate := "available"
 	if a == classroom.AccessPaid && !ok {
 		pstate = "purchase_required"
@@ -627,7 +671,10 @@ func contentViewResolved(c classroom.Content, parent *classroom.Series, a classr
 		price = parent.PriceCents
 	}
 	blocked := c.PlaybackBlocked || (parent != nil && parent.PlaybackBlocked)
-	v := classroomPublicContent{ID: c.ID, SeriesID: c.SeriesID, Title: c.Title, Description: c.Description, CoverURL: c.CoverURL, TeacherName: c.TeacherNameSnapshot, ContentType: c.ContentType, DurationSeconds: c.DurationSeconds, AccessLevel: c.AccessLevel, EffectiveAccess: a, PriceCents: price, CanPlay: ok && !blocked, PurchaseState: pstate, PlaybackBlocked: blocked}
+	v := classroomPublicContent{ID: c.ID, SeriesID: c.SeriesID, Title: c.Title, Description: c.Description, CoverURL: c.CoverURL, CoverAspectRatio: ratio, TeacherName: c.TeacherNameSnapshot, ContentType: c.ContentType, DurationSeconds: c.DurationSeconds, AccessLevel: c.AccessLevel, EffectiveAccess: a, PriceCents: price, CanPlay: ok && !blocked, PurchaseState: pstate, PlaybackBlocked: blocked}
+	if len(signedCover) > 0 {
+		v.signedCover = signedCover[0]
+	}
 	return v
 }
 func (d *classroomPublicDB) ListSeries(ctx context.Context, q classroomPublicQuery, uid int64) ([]classroomPublicSeries, int, error) {
@@ -674,13 +721,14 @@ func (d *classroomPublicDB) ListStandalone(ctx context.Context, q classroomPubli
 	if err := d.db.QueryRowContext(ctx, `SELECT count(*) FROM classroom_contents c JOIN classroom_media_assets m ON m.id=c.media_asset_id LEFT JOIN classroom_series s ON s.id=c.series_id WHERE `+eligible, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := d.db.QueryContext(ctx, `SELECT c.id,c.series_id,c.show_as_standalone,c.title,c.description,c.content_type,c.media_asset_id,c.cover_url,c.duration_seconds,c.teacher_name_snapshot,c.access_level,c.price_cents,c.playback_blocked,s.id,s.status,s.access_level,s.price_cents,s.playback_blocked FROM classroom_contents c JOIN classroom_media_assets m ON m.id=c.media_asset_id LEFT JOIN classroom_series s ON s.id=c.series_id WHERE `+eligible+` ORDER BY c.sort_order,c.id LIMIT $4 OFFSET $5`, append(args, q.Limit, q.Offset)...)
+	rows, err := d.db.QueryContext(ctx, `SELECT c.id,c.series_id,c.show_as_standalone,c.title,c.description,c.content_type,c.media_asset_id,c.cover_url,c.duration_seconds,c.teacher_name_snapshot,c.access_level,c.price_cents,c.playback_blocked,c.manual_cover_object_key,c.cover_aspect_ratio,m.cover_object_key,s.id,s.status,s.access_level,s.price_cents,s.playback_blocked FROM classroom_contents c JOIN classroom_media_assets m ON m.id=c.media_asset_id LEFT JOIN classroom_series s ON s.id=c.series_id WHERE `+eligible+` ORDER BY c.sort_order,c.id LIMIT $4 OFFSET $5`, append(args, q.Limit, q.Offset)...)
 	if err != nil {
 		return nil, 0, err
 	}
 	type rowItem struct {
-		content classroom.Content
-		parent  *classroom.Series
+		content     classroom.Content
+		parent      *classroom.Series
+		signedCover bool
 	}
 	raw := make([]rowItem, 0, q.Limit)
 	for rows.Next() {
@@ -689,15 +737,20 @@ func (d *classroomPublicDB) ListStandalone(ctx context.Context, q classroomPubli
 		var parentStatus, parentAccess sql.NullString
 		var parentPrice sql.NullInt64
 		var parentBlocked sql.NullBool
-		if err = rows.Scan(&c.ID, &c.SeriesID, &c.ShowAsStandalone, &c.Title, &c.Description, &c.ContentType, &c.MediaAssetID, &c.CoverURL, &c.DurationSeconds, &c.TeacherNameSnapshot, &c.AccessLevel, &c.PriceCents, &c.PlaybackBlocked, &parentID, &parentStatus, &parentAccess, &parentPrice, &parentBlocked); err != nil {
+		var generatedCover string
+		if err = rows.Scan(&c.ID, &c.SeriesID, &c.ShowAsStandalone, &c.Title, &c.Description, &c.ContentType, &c.MediaAssetID, &c.CoverURL, &c.DurationSeconds, &c.TeacherNameSnapshot, &c.AccessLevel, &c.PriceCents, &c.PlaybackBlocked, &c.ManualCoverObjectKey, &c.CoverAspectRatio, &generatedCover, &parentID, &parentStatus, &parentAccess, &parentPrice, &parentBlocked); err != nil {
 			return nil, 0, err
+		}
+		signedCover, resolveErr := d.resolveContentCover(ctx, &c, generatedCover)
+		if resolveErr != nil {
+			return nil, 0, resolveErr
 		}
 		c.Status = classroom.ContentPublished
 		var p *classroom.Series
 		if parentID.Valid {
 			p = &classroom.Series{ID: parentID.Int64, Status: classroom.SeriesStatus(parentStatus.String), AccessLevel: classroom.AccessLevel(parentAccess.String), PriceCents: int(parentPrice.Int64), PlaybackBlocked: parentBlocked.Bool}
 		}
-		raw = append(raw, rowItem{c, p})
+		raw = append(raw, rowItem{content: c, parent: p, signedCover: signedCover})
 	}
 	if err = rows.Err(); err != nil {
 		_ = rows.Close()
@@ -713,7 +766,7 @@ func (d *classroomPublicDB) ListStandalone(ctx context.Context, q classroomPubli
 	out := make([]classroomPublicContent, 0, len(raw))
 	for _, item := range raw {
 		a := accessFor(item.content.AccessLevel, item.parent)
-		out = append(out, contentViewResolved(item.content, item.parent, a, snapshot.allows(a, item.content.ID, item.content.SeriesID)))
+		out = append(out, contentViewResolved(item.content, item.parent, a, snapshot.allows(a, item.content.ID, item.content.SeriesID), item.signedCover))
 	}
 	return out, total, nil
 }
@@ -726,17 +779,26 @@ func (d *classroomPublicDB) GetSeries(ctx context.Context, id, uid int64) (class
 		return classroomPublicSeriesDetail{}, classroom.ErrNotFound
 	}
 	a := s.AccessLevel
-	rows, e := d.db.QueryContext(ctx, `SELECT c.id,c.series_id,c.title,c.description,c.content_type,c.cover_url,c.duration_seconds,c.teacher_name_snapshot,c.access_level,c.price_cents,c.playback_blocked FROM classroom_contents c JOIN classroom_media_assets m ON m.id=c.media_asset_id WHERE c.series_id=$1 AND c.status=$2 AND m.storage_status=$3 ORDER BY c.sort_order,c.id`, id, classroom.ContentPublished, classroom.MediaReady)
+	rows, e := d.db.QueryContext(ctx, `SELECT c.id,c.series_id,c.title,c.description,c.content_type,c.cover_url,c.duration_seconds,c.teacher_name_snapshot,c.access_level,c.price_cents,c.playback_blocked,c.manual_cover_object_key,c.cover_aspect_ratio,m.cover_object_key FROM classroom_contents c JOIN classroom_media_assets m ON m.id=c.media_asset_id WHERE c.series_id=$1 AND c.status=$2 AND m.storage_status=$3 ORDER BY c.sort_order,c.id`, id, classroom.ContentPublished, classroom.MediaReady)
 	if e != nil {
 		return classroomPublicSeriesDetail{}, e
 	}
-	raw := make([]classroom.Content, 0)
+	type seriesContent struct {
+		content     classroom.Content
+		signedCover bool
+	}
+	raw := make([]seriesContent, 0)
 	for rows.Next() {
 		var c classroom.Content
-		if e = rows.Scan(&c.ID, &c.SeriesID, &c.Title, &c.Description, &c.ContentType, &c.CoverURL, &c.DurationSeconds, &c.TeacherNameSnapshot, &c.AccessLevel, &c.PriceCents, &c.PlaybackBlocked); e != nil {
+		var generatedCover string
+		if e = rows.Scan(&c.ID, &c.SeriesID, &c.Title, &c.Description, &c.ContentType, &c.CoverURL, &c.DurationSeconds, &c.TeacherNameSnapshot, &c.AccessLevel, &c.PriceCents, &c.PlaybackBlocked, &c.ManualCoverObjectKey, &c.CoverAspectRatio, &generatedCover); e != nil {
 			return classroomPublicSeriesDetail{}, e
 		}
-		raw = append(raw, c)
+		signedCover, resolveErr := d.resolveContentCover(ctx, &c, generatedCover)
+		if resolveErr != nil {
+			return classroomPublicSeriesDetail{}, resolveErr
+		}
+		raw = append(raw, seriesContent{content: c, signedCover: signedCover})
 	}
 	if e = rows.Err(); e != nil {
 		_ = rows.Close()
@@ -751,46 +813,48 @@ func (d *classroomPublicDB) GetSeries(ctx context.Context, id, uid int64) (class
 	}
 	ok := snapshot.allows(a, 0, &s.ID)
 	out := make([]classroomPublicContent, 0, len(raw))
-	for _, c := range raw {
+	for _, item := range raw {
+		c := item.content
 		effective := accessFor(c.AccessLevel, &s)
-		out = append(out, contentViewResolved(c, &s, effective, snapshot.allows(effective, c.ID, c.SeriesID)))
+		out = append(out, contentViewResolved(c, &s, effective, snapshot.allows(effective, c.ID, c.SeriesID), item.signedCover))
 	}
 	canPlay := ok && !s.PlaybackBlocked
 	return classroomPublicSeriesDetail{Series: classroomPublicSeries{ID: s.ID, Title: s.Title, Summary: s.Summary, CoverURL: s.CoverURL, TeacherName: s.TeacherNameSnapshot, EffectiveAccess: a, PriceCents: s.PriceCents, CanPlay: canPlay, PurchaseState: classroomPurchaseState(a, ok), PlaybackBlocked: s.PlaybackBlocked}, Contents: out}, nil
 }
 func (d *classroomPublicDB) GetContent(ctx context.Context, id, uid int64) (classroomPublicContent, error) {
-	c, e := d.store.GetContent(ctx, id)
+	const query = `SELECT c.id,c.series_id,c.show_as_standalone,c.title,c.description,c.content_type,c.media_asset_id,c.cover_url,c.duration_seconds,c.teacher_name_snapshot,c.access_level,c.price_cents,c.playback_blocked,c.status,c.manual_cover_object_key,c.cover_aspect_ratio,m.cover_object_key,m.etag,s.id,s.status,s.access_level,s.price_cents,s.playback_blocked
+		FROM classroom_contents c JOIN classroom_media_assets m ON m.id=c.media_asset_id LEFT JOIN classroom_series s ON s.id=c.series_id
+		WHERE c.id=$1 AND c.status=$2 AND m.storage_status=$3`
+	var c classroom.Content
+	var generatedCover, mediaETag string
+	var parentID, parentPrice sql.NullInt64
+	var parentStatus, parentAccess sql.NullString
+	var parentBlocked sql.NullBool
+	e := d.db.QueryRowContext(ctx, query, id, classroom.ContentPublished, classroom.MediaReady).Scan(&c.ID, &c.SeriesID, &c.ShowAsStandalone, &c.Title, &c.Description, &c.ContentType, &c.MediaAssetID, &c.CoverURL, &c.DurationSeconds, &c.TeacherNameSnapshot, &c.AccessLevel, &c.PriceCents, &c.PlaybackBlocked, &c.Status, &c.ManualCoverObjectKey, &c.CoverAspectRatio, &generatedCover, &mediaETag, &parentID, &parentStatus, &parentAccess, &parentPrice, &parentBlocked)
+	if errors.Is(e, sql.ErrNoRows) {
+		return classroomPublicContent{}, classroom.ErrNotFound
+	}
 	if e != nil {
 		return classroomPublicContent{}, e
 	}
 	var p *classroom.Series
-	if c.SeriesID != nil {
-		v, er := d.store.GetSeries(ctx, *c.SeriesID)
-		if er != nil {
-			return classroomPublicContent{}, er
-		}
-		p = &v
+	if parentID.Valid {
+		p = &classroom.Series{ID: parentID.Int64, Status: classroom.SeriesStatus(parentStatus.String), AccessLevel: classroom.AccessLevel(parentAccess.String), PriceCents: int(parentPrice.Int64), PlaybackBlocked: parentBlocked.Bool}
 	}
 	if p != nil && p.Status != classroom.SeriesPublished && !c.ShowAsStandalone {
 		return classroomPublicContent{}, classroom.ErrNotFound
 	}
-	if c.Status != classroom.ContentPublished || c.MediaAssetID == nil {
-		return classroomPublicContent{}, classroom.ErrNotFound
-	}
-	media, e := d.store.GetMediaAsset(ctx, *c.MediaAssetID)
+	signedCover, e := d.resolveContentCover(ctx, &c, generatedCover)
 	if e != nil {
 		return classroomPublicContent{}, e
-	}
-	if media.StorageStatus != classroom.MediaReady {
-		return classroomPublicContent{}, classroom.ErrNotFound
 	}
 	snapshot, e := d.loadAccessSnapshot(ctx, uid)
 	if e != nil {
 		return classroomPublicContent{}, e
 	}
 	access := accessFor(c.AccessLevel, p)
-	view := contentViewResolved(c, p, access, snapshot.allows(access, c.ID, c.SeriesID))
-	view.cacheVersion = media.ETag
+	view := contentViewResolved(c, p, access, snapshot.allows(access, c.ID, c.SeriesID), signedCover)
+	view.cacheVersion = mediaETag
 	return view, nil
 }
 func (d *classroomPublicDB) Playback(ctx context.Context, uid, id int64) (classroomPlaybackSource, error) {

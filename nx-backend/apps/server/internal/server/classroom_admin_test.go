@@ -13,6 +13,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/auditlog"
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/classroom"
+	"nine-xing/nx-backend/apps/server/internal/config"
 )
 
 type fakeClassroomAdminService struct {
@@ -22,6 +23,23 @@ type fakeClassroomAdminService struct {
 	calls          []string
 	getSeriesErr   error
 	uploadTasks    []classroom.UploadTask
+}
+
+func (f *fakeClassroomAdminService) ListContentContexts(_ context.Context, ids []int64) (map[int64]classroomContentContext, error) {
+	f.calls = append(f.calls, "list-content-contexts")
+	if f.getSeriesErr != nil && f.content.SeriesID != nil {
+		return nil, f.getSeriesErr
+	}
+	result := make(map[int64]classroomContentContext, len(ids))
+	for _, id := range ids {
+		var parent *classroom.Series
+		if f.content.SeriesID != nil {
+			copy := f.series
+			parent = &copy
+		}
+		result[id] = classroomContentContext{Parent: parent}
+	}
+	return result, nil
 }
 
 func (f *fakeClassroomAdminService) ListSeries(context.Context, classroom.SeriesFilter) ([]classroom.Series, int, error) {
@@ -161,6 +179,36 @@ func TestClassroomAdminPaidMetadataDoesNotExposeMediaObjectKey(t *testing.T) {
 	}
 }
 
+func TestClassroomAdminContentListResolvesManualCoverAndExposesCoverMetadataWithoutNPlusOne(t *testing.T) {
+	f := &fakeClassroomAdminService{
+		series: classroom.Series{ID: 7, AccessLevel: classroom.AccessPaid, PriceCents: 2990},
+		content: classroom.Content{
+			ID: 3, SeriesID: ptrI64(7), Title: "Covered", ContentType: classroom.ContentVideo,
+			ManualCoverObjectKey: "classroom/covers/manual/3/cover.webp",
+			CoverAspectRatio:     classroom.CoverAspectRatio9x16,
+			AccessLevel:          classroom.AccessInherit,
+		},
+	}
+	s := &Server{classroomAdmin: f, classroomPlaybackSigner: fakeClassroomSigner{key: "manual-cover"}, env: config.Env{ClassroomMedia: config.ClassroomMediaConfig{CoverURLTTLSeconds: 1800}}}
+	rr := httptest.NewRecorder()
+	s.classroomContentList(rr, classroomUser(httptest.NewRequest(http.MethodGet, "/api/admin/classroom/contents", nil)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	raw := rr.Body.String()
+	for _, want := range []string{`"coverUrl":"https://cdn.example/manual-cover"`, `"manualCoverObjectKey":"classroom/covers/manual/3/cover.webp"`, `"coverAspectRatio":"9:16"`, `"coverSource":"manual"`, `"effectiveAccessLevel":"paid"`} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("missing %s in %s", want, raw)
+		}
+	}
+	if strings.Count(strings.Join(f.calls, ","), "get-series") != 0 {
+		t.Fatalf("content list performed per-row series lookup: calls=%v", f.calls)
+	}
+	if rr.Header().Get("Cache-Control") != "private, no-store" {
+		t.Fatalf("cache-control=%q", rr.Header().Get("Cache-Control"))
+	}
+}
+
 func TestClassroomAdminPriceEndpointRejectsInvalidCNY(t *testing.T) {
 	f := &fakeClassroomAdminService{}
 	s := &Server{classroomAdmin: f}
@@ -233,7 +281,7 @@ func TestClassroomContentMetadataUpdatePreservesCoverSettings(t *testing.T) {
 		CoverAspectRatio:     classroom.CoverAspectRatio9x16,
 		Status:               classroom.ContentDraft, AccessLevel: classroom.AccessPublic, UpdatedAt: updatedAt,
 	}}
-	s := &Server{classroomAdmin: f}
+	s := &Server{classroomAdmin: f, classroomPlaybackSigner: fakeClassroomSigner{key: "preserved-cover"}}
 	mux := http.NewServeMux()
 	registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
 
