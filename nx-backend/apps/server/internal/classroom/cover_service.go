@@ -29,6 +29,12 @@ var (
 
 const DefaultCoverImageMaxBytes int64 = 10 << 20
 
+const (
+	maxCoverImageDimension = 16_384
+	maxCoverImagePixels    = 40_000_000
+	coverCleanupTimeout    = 3 * time.Second
+)
+
 type classroomCoverStorage interface {
 	storage.ObjectUploader
 	storage.ObjectSigner
@@ -96,16 +102,12 @@ func (s *CoverService) Upload(ctx context.Context, contentID int64, expected tim
 	}
 	updated, err := s.store.SetContentManualCover(ctx, contentID, newKey, expected, updatedBy)
 	if err != nil {
-		if cleanupErr := s.objects.DeleteObject(ctx, newKey); cleanupErr != nil && !storage.IsAlreadyGone(cleanupErr) {
-			log.Printf("classroom manual cover orphan cleanup failed key=%s: %v", newKey, cleanupErr)
-		}
+		s.cleanupObject(ctx, contentID, "upload_rollback", newKey)
 		return Content{}, err
 	}
 	oldKey := strings.TrimSpace(current.ManualCoverObjectKey)
 	if oldKey != "" && oldKey != newKey {
-		if cleanupErr := s.objects.DeleteObject(ctx, oldKey); cleanupErr != nil && !storage.IsAlreadyGone(cleanupErr) {
-			log.Printf("classroom replaced cover cleanup failed key=%s: %v", oldKey, cleanupErr)
-		}
+		s.cleanupObject(ctx, contentID, "replace_old", oldKey)
 	}
 	return updated, nil
 }
@@ -122,35 +124,51 @@ func (s *CoverService) Delete(ctx context.Context, contentID int64, expected tim
 		return Content{}, ErrConflict
 	}
 	oldKey := strings.TrimSpace(current.ManualCoverObjectKey)
-	if oldKey == "" {
-		return current, nil
-	}
 	updated, err := s.store.SetContentManualCover(ctx, contentID, "", expected, updatedBy)
 	if err != nil {
 		return Content{}, err
 	}
-	if s.objects != nil {
-		if cleanupErr := s.objects.DeleteObject(ctx, oldKey); cleanupErr != nil && !storage.IsAlreadyGone(cleanupErr) {
-			log.Printf("classroom deleted cover cleanup failed key=%s: %v", oldKey, cleanupErr)
-		}
+	if oldKey != "" {
+		s.cleanupObject(ctx, contentID, "delete_manual", oldKey)
 	}
 	return updated, nil
+}
+
+func (s *CoverService) cleanupObject(ctx context.Context, contentID int64, stage, key string) {
+	if s.objects == nil {
+		log.Printf("classroom cover cleanup skipped content_id=%d stage=%s: deleter unavailable", contentID, stage)
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), coverCleanupTimeout)
+	defer cancel()
+	if err := s.objects.DeleteObject(cleanupCtx, key); err != nil && !storage.IsAlreadyGone(err) {
+		log.Printf("classroom cover cleanup failed content_id=%d stage=%s: %v", contentID, stage, err)
+	}
 }
 
 func coverImageType(data []byte) (string, string) {
 	switch http.DetectContentType(data) {
 	case "image/jpeg":
-		if _, _, err := image.DecodeConfig(bytes.NewReader(data)); err != nil {
+		config, _, err := image.DecodeConfig(bytes.NewReader(data))
+		if err != nil || !validCoverDimensions(config.Width, config.Height) {
+			return "", ""
+		}
+		if _, _, err = image.Decode(bytes.NewReader(data)); err != nil {
 			return "", ""
 		}
 		return "image/jpeg", ".jpg"
 	case "image/png":
-		if _, _, err := image.DecodeConfig(bytes.NewReader(data)); err != nil {
+		config, _, err := image.DecodeConfig(bytes.NewReader(data))
+		if err != nil || !validCoverDimensions(config.Width, config.Height) {
+			return "", ""
+		}
+		if _, _, err = image.Decode(bytes.NewReader(data)); err != nil {
 			return "", ""
 		}
 		return "image/png", ".png"
 	case "image/webp":
-		if _, err := webp.DecodeConfig(bytes.NewReader(data)); err != nil {
+		config, err := webp.DecodeConfig(bytes.NewReader(data))
+		if err != nil || !validCoverDimensions(config.Width, config.Height) {
 			return "", ""
 		}
 		if _, err := webp.Decode(bytes.NewReader(data)); err != nil {
@@ -161,6 +179,11 @@ func coverImageType(data []byte) (string, string) {
 		return "", ""
 	}
 }
+
+func validCoverDimensions(width, height int) bool {
+	return width > 0 && height > 0 && width <= maxCoverImageDimension && height <= maxCoverImageDimension && int64(width)*int64(height) <= maxCoverImagePixels
+}
+
 func randomCoverName(ext string) (string, error) {
 	var raw [12]byte
 	if _, err := rand.Read(raw[:]); err != nil {

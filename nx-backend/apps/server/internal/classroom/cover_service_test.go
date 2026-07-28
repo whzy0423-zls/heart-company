@@ -6,7 +6,12 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"hash/crc32"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"io"
+	"log"
 	"strings"
 	"testing"
 	"time"
@@ -44,10 +49,11 @@ func (f *fakeCoverStore) SetContentManualCover(_ context.Context, _ int64, key s
 }
 
 type fakeCoverStorage struct {
-	uploadErr error
-	deleteErr error
-	uploads   []storage.UploadInput
-	deleted   []string
+	uploadErr     error
+	deleteErr     error
+	uploads       []storage.UploadInput
+	deleted       []string
+	deleteCtxErrs []error
 }
 
 func (f *fakeCoverStorage) Upload(_ context.Context, in storage.UploadInput) (storage.UploadResult, error) {
@@ -62,8 +68,9 @@ func (f *fakeCoverStorage) Upload(_ context.Context, in storage.UploadInput) (st
 func (*fakeCoverStorage) PresignGetURL(context.Context, string, time.Duration) (string, error) {
 	return "signed", nil
 }
-func (f *fakeCoverStorage) DeleteObject(_ context.Context, key string) error {
+func (f *fakeCoverStorage) DeleteObject(ctx context.Context, key string) error {
 	f.deleted = append(f.deleted, key)
+	f.deleteCtxErrs = append(f.deleteCtxErrs, ctx.Err())
 	return f.deleteErr
 }
 
@@ -109,7 +116,7 @@ func TestCoverServiceDeleteIsIdempotentAndNeverDeletesGeneratedCover(t *testing.
 	if err != nil || got.ID != 5 {
 		t.Fatalf("got=%+v err=%v", got, err)
 	}
-	if len(store.sets) != 0 || len(objects.deleted) != 0 {
+	if len(store.sets) != 1 || store.sets[0] != "" || len(objects.deleted) != 0 || !got.UpdatedAt.Equal(now.Add(time.Second)) {
 		t.Fatalf("sets=%v deleted=%v", store.sets, objects.deleted)
 	}
 	store.content.ManualCoverObjectKey = "classroom/covers/manual/5/x.webp"
@@ -120,6 +127,15 @@ func TestCoverServiceDeleteIsIdempotentAndNeverDeletesGeneratedCover(t *testing.
 	}
 	if len(objects.deleted) != 1 || objects.deleted[0] != "classroom/covers/manual/5/x.webp" {
 		t.Fatalf("deleted=%v", objects.deleted)
+	}
+}
+
+func TestCoverServiceEmptyDeleteStillUsesCAS(t *testing.T) {
+	now := time.Now().UTC()
+	store := &fakeCoverStore{content: Content{ID: 9, UpdatedAt: now}, setErr: ErrConflict}
+	_, err := NewCoverService(store, &fakeCoverStorage{}, 1024).Delete(context.Background(), 9, now, nil)
+	if !errors.Is(err, ErrConflict) || len(store.sets) != 1 || store.sets[0] != "" {
+		t.Fatalf("err=%v sets=%v", err, store.sets)
 	}
 }
 
@@ -182,5 +198,95 @@ func TestCoverServiceUsesFullWebPDecodeInsteadOfTrustingVP8XHeader(t *testing.T)
 	got, err := NewCoverService(goodStore, goodObjects, 1024).Upload(context.Background(), 13, now, nil, "real.webp", bytes.NewReader(testWebP))
 	if err != nil || !strings.HasSuffix(got.ManualCoverObjectKey, ".webp") || len(goodObjects.uploads) != 1 || goodObjects.uploads[0].ContentType != "image/webp" {
 		t.Fatalf("real WebP rejected: got=%+v err=%v uploads=%+v", got, err, goodObjects.uploads)
+	}
+}
+
+func TestCoverServiceRejectsTruncatedAndOversizedDimensionImagesBeforeUpload(t *testing.T) {
+	now := time.Now().UTC()
+	validJPEG := encodeTestJPEG(t)
+	oversizedPNG := append([]byte(nil), testPNG...)
+	binary.BigEndian.PutUint32(oversizedPNG[16:20], 10_000)
+	binary.BigEndian.PutUint32(oversizedPNG[20:24], 5_000)
+	binary.BigEndian.PutUint32(oversizedPNG[29:33], crc32.ChecksumIEEE(oversizedPNG[12:29]))
+
+	for name, body := range map[string][]byte{
+		"truncated-png":   testPNG[:len(testPNG)-20],
+		"truncated-jpeg":  validJPEG[:len(validJPEG)/2],
+		"too-many-pixels": oversizedPNG,
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := &fakeCoverStore{content: Content{ID: 21, UpdatedAt: now}}
+			objects := &fakeCoverStorage{}
+			_, err := NewCoverService(store, objects, 2048).Upload(context.Background(), 21, now, nil, name, bytes.NewReader(body))
+			if !errors.Is(err, ErrInvalidCoverImage) || len(objects.uploads) != 0 {
+				t.Fatalf("err=%v uploads=%d", err, len(objects.uploads))
+			}
+		})
+	}
+
+	for name, body := range map[string][]byte{"png": testPNG, "jpeg": validJPEG, "webp": testWebP} {
+		t.Run("valid-"+name, func(t *testing.T) {
+			store := &fakeCoverStore{content: Content{ID: 22, UpdatedAt: now}}
+			objects := &fakeCoverStorage{}
+			if _, err := NewCoverService(store, objects, 4096).Upload(context.Background(), 22, now, nil, name, bytes.NewReader(body)); err != nil || len(objects.uploads) != 1 {
+				t.Fatalf("err=%v uploads=%d", err, len(objects.uploads))
+			}
+		})
+	}
+}
+
+func encodeTestJPEG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	img.Set(0, 0, color.White)
+	var out bytes.Buffer
+	if err := jpeg.Encode(&out, img, nil); err != nil {
+		t.Fatal(err)
+	}
+	return out.Bytes()
+}
+
+func TestCoverServiceCleanupSurvivesCanceledRequestContext(t *testing.T) {
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name  string
+		store *fakeCoverStore
+		run   func(*CoverService, context.Context) error
+	}{
+		{"upload-cas-rollback", &fakeCoverStore{content: Content{ID: 31, UpdatedAt: now}, setErr: ErrConflict}, func(s *CoverService, ctx context.Context) error {
+			_, err := s.Upload(ctx, 31, now, nil, "x.png", bytes.NewReader(testPNG))
+			return err
+		}},
+		{"replace-old-cover", &fakeCoverStore{content: Content{ID: 32, UpdatedAt: now, ManualCoverObjectKey: "old"}}, func(s *CoverService, ctx context.Context) error {
+			_, err := s.Upload(ctx, 32, now, nil, "x.png", bytes.NewReader(testPNG))
+			return err
+		}},
+		{"delete-manual-cover", &fakeCoverStore{content: Content{ID: 33, UpdatedAt: now, ManualCoverObjectKey: "old"}}, func(s *CoverService, ctx context.Context) error { _, err := s.Delete(ctx, 33, now, nil); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			objects := &fakeCoverStorage{}
+			_ = tc.run(NewCoverService(tc.store, objects, 4096), ctx)
+			if len(objects.deleteCtxErrs) != 1 || objects.deleteCtxErrs[0] != nil {
+				t.Fatalf("cleanup contexts=%v deleted=%v", objects.deleteCtxErrs, objects.deleted)
+			}
+		})
+	}
+}
+
+func TestCoverServiceCleanupLogsDoNotExposeObjectKeys(t *testing.T) {
+	key := "classroom/covers/manual/34/private.png"
+	oldOutput := log.Writer()
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldOutput) })
+
+	NewCoverService(&fakeCoverStore{}, nil, 1024).cleanupObject(context.Background(), 34, "delete_manual", key)
+	NewCoverService(&fakeCoverStore{}, &fakeCoverStorage{deleteErr: errors.New("storage unavailable")}, 1024).cleanupObject(context.Background(), 34, "delete_manual", key)
+
+	got := logs.String()
+	if !strings.Contains(got, "deleter unavailable") || !strings.Contains(got, "cleanup failed") || strings.Contains(got, key) {
+		t.Fatalf("unexpected cleanup logs: %s", got)
 	}
 }

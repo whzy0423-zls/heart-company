@@ -21,6 +21,8 @@ import (
 
 const maxClassroomPriceCents = 99_999_900
 
+const classroomCoverCleanupTimeout = 3 * time.Second
+
 type classroomAuditRecorder interface {
 	Record(context.Context, auditlog.Entry) error
 }
@@ -700,10 +702,8 @@ func (s *Server) classroomContentItem(w http.ResponseWriter, r *http.Request) {
 			writeClassroomAdminError(w, err)
 			return
 		}
-		if key := strings.TrimSpace(current.ManualCoverObjectKey); key != "" && s.classroomCoverObjects != nil {
-			if cleanupErr := s.classroomCoverObjects.DeleteObject(r.Context(), key); cleanupErr != nil && !storage.IsAlreadyGone(cleanupErr) {
-				log.Printf("classroom content deleted with orphan manual cover key=%s: %v", key, cleanupErr)
-			}
+		if key := strings.TrimSpace(current.ManualCoverObjectKey); key != "" {
+			s.cleanupClassroomCoverObject(r.Context(), id, "delete_content_manual", key)
 		}
 		if err := s.recordClassroomAudit(r, "delete", "classroom_content", id, current, nil, classroomAuditSummary("删除课件草稿", r.URL.Query().Get("reason"))); err != nil {
 			httpx.Fail(w, 500, "record classroom audit failed")
@@ -765,13 +765,25 @@ func (s *Server) classroomContentCover(w http.ResponseWriter, r *http.Request, b
 		httpx.Fail(w, http.StatusInternalServerError, "record classroom audit failed")
 		return
 	}
-	dto, err := s.toContentDTO(r.Context(), updated)
+	dto, err := s.toContentMutationDTO(r.Context(), updated)
 	if err != nil {
 		writeClassroomAdminError(w, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "private, no-store")
 	httpx.OK(w, dto)
+}
+
+func (s *Server) cleanupClassroomCoverObject(ctx context.Context, contentID int64, stage, key string) {
+	if s.classroomCoverObjects == nil {
+		log.Printf("classroom cover cleanup skipped content_id=%d stage=%s: deleter unavailable", contentID, stage)
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), classroomCoverCleanupTimeout)
+	defer cancel()
+	if err := s.classroomCoverObjects.DeleteObject(cleanupCtx, key); err != nil && !storage.IsAlreadyGone(err) {
+		log.Printf("classroom cover cleanup failed content_id=%d stage=%s: %v", contentID, stage, err)
+	}
 }
 
 func parseExpectedUpdatedAt(raw string) (time.Time, bool) {
@@ -1010,6 +1022,21 @@ func (s *Server) toContentDTO(ctx context.Context, v classroom.Content) (classro
 	return items[0], nil
 }
 
+func (s *Server) toContentMutationDTO(ctx context.Context, v classroom.Content) (classroomContentDTO, error) {
+	contexts, err := s.classroomAdmin.ListContentContexts(ctx, []int64{v.ID})
+	if err != nil {
+		log.Printf("classroom cover preview unavailable content_id=%d stage=context", v.ID)
+		return s.toContentDTOFallback(v, classroomContentContext{})
+	}
+	coverContext := contexts[v.ID]
+	dto, err := s.toContentDTOWithContext(ctx, v, coverContext)
+	if errors.Is(err, classroom.ErrCoverSigningUnavailable) {
+		log.Printf("classroom cover preview unavailable content_id=%d stage=sign", v.ID)
+		return s.toContentDTOFallback(v, coverContext)
+	}
+	return dto, err
+}
+
 func (s *Server) toContentDTOs(ctx context.Context, contents []classroom.Content) ([]classroomContentDTO, error) {
 	ids := make([]int64, 0, len(contents))
 	for _, content := range contents {
@@ -1055,6 +1082,46 @@ func (s *Server) toContentDTOWithContext(ctx context.Context, v classroom.Conten
 		ID: v.ID, SeriesID: v.SeriesID, ShowAsStandalone: v.ShowAsStandalone, Title: v.Title, Description: v.Description,
 		ContentType: v.ContentType, MediaAssetID: v.MediaAssetID, CoverURL: resolved.URL, ManualCoverObjectKey: v.ManualCoverObjectKey,
 		CoverAspectRatio: ratio, CoverSource: resolved.Source, DurationSeconds: v.DurationSeconds, TeacherKey: v.TeacherKey,
+		TeacherName: v.TeacherNameSnapshot, RecordedAt: v.RecordedAt, Badge: v.Badge, Tags: v.Tags, EpisodeNo: v.EpisodeNo,
+		SortOrder: v.SortOrder, Status: v.Status, PlaybackBlocked: v.PlaybackBlocked, AccessLevel: v.AccessLevel,
+		EffectiveAccessLevel: effective, PriceCents: v.PriceCents, EffectivePriceCents: price, PurchaseTarget: target,
+		PublishedAt: v.PublishedAt, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt,
+	}, nil
+}
+
+func (s *Server) toContentDTOFallback(v classroom.Content, coverContext classroomContentContext) (classroomContentDTO, error) {
+	ratio, err := classroom.NormalizeCoverAspectRatio(v.CoverAspectRatio)
+	if err != nil {
+		return classroomContentDTO{}, err
+	}
+	effective, price, target := v.AccessLevel, v.PriceCents, ""
+	if v.AccessLevel == classroom.AccessInherit && coverContext.Parent != nil {
+		effective = coverContext.Parent.AccessLevel
+		price = coverContext.Parent.PriceCents
+	}
+	if effective == classroom.AccessPaid {
+		if v.AccessLevel == classroom.AccessInherit {
+			target = "series"
+		} else {
+			target = "content"
+		}
+	}
+	coverURL := ""
+	coverSource := classroom.CoverSourceNone
+	switch {
+	case strings.TrimSpace(v.ManualCoverObjectKey) != "":
+		coverSource = classroom.CoverSourceManual
+	case v.ContentType == classroom.ContentVideo && strings.TrimSpace(coverContext.GeneratedCoverObjectKey) != "":
+		coverSource = classroom.CoverSourceGenerated
+	case strings.TrimSpace(v.CoverURL) != "":
+		coverURL, coverSource = strings.TrimSpace(v.CoverURL), classroom.CoverSourceLegacy
+	case v.ContentType == classroom.ContentAudio:
+		coverURL, coverSource = classroomAudioCoverPath, classroom.CoverSourceAudioDefault
+	}
+	return classroomContentDTO{
+		ID: v.ID, SeriesID: v.SeriesID, ShowAsStandalone: v.ShowAsStandalone, Title: v.Title, Description: v.Description,
+		ContentType: v.ContentType, MediaAssetID: v.MediaAssetID, CoverURL: coverURL, ManualCoverObjectKey: v.ManualCoverObjectKey,
+		CoverAspectRatio: ratio, CoverSource: coverSource, DurationSeconds: v.DurationSeconds, TeacherKey: v.TeacherKey,
 		TeacherName: v.TeacherNameSnapshot, RecordedAt: v.RecordedAt, Badge: v.Badge, Tags: v.Tags, EpisodeNo: v.EpisodeNo,
 		SortOrder: v.SortOrder, Status: v.Status, PlaybackBlocked: v.PlaybackBlocked, AccessLevel: v.AccessLevel,
 		EffectiveAccessLevel: effective, PriceCents: v.PriceCents, EffectivePriceCents: price, PurchaseTarget: target,
