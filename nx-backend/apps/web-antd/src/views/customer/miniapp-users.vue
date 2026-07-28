@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import type { MiniappBooking, MiniappCustomer, MiniappCustomerDetail, MiniappTestRecord } from '#/api';
+import type { MiniappCustomer, MiniappCustomerDetail, MiniappTestRecord } from '#/api';
 
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Alert, Button, Card, Descriptions, Drawer, Input, Select, Space, Table, Tag } from 'ant-design-vue';
+import { Alert, Button, Card, Descriptions, Drawer, Input, Select, Table, Tag } from 'ant-design-vue';
 import { getMiniappCustomerDetailApi, getMiniappCustomerListApi } from '#/api';
 import PageShell from '../system/components/page-shell.vue';
 import { bookingSignupTarget, miniappOpenIntent } from './miniapp-user';
@@ -68,9 +68,10 @@ async function openDetailByID(userId: string, testRecordId?: string) {
   } finally { if (current === detailRequestId) detailLoading.value = false; }
 }
 
-function openUser(record: MiniappCustomer) { Object.assign(detailPage, { testPage: 1, bookingPage: 1 }); void openDetailByID(record.id); }
-function openTest(record: MiniappTestRecord) { selectedTest.value = record; testOpen.value = true; }
-function openSignup(record: MiniappBooking) { const target = bookingSignupTarget(record.signupId); if (target) void router.push(target); }
+function recordID(record: unknown) { return typeof record === 'object' && record !== null && 'id' in record && typeof record.id === 'string' ? record.id : ''; }
+function openUser(record: unknown) { const user = users.value.find((item) => item.id === recordID(record)); if (!user) return; Object.assign(detailPage, { testPage: 1, bookingPage: 1 }); void openDetailByID(user.id); }
+function openTest(record: unknown) { const test = detail.value?.testRecords.items.find((item) => item.id === recordID(record)); if (!test) return; selectedTest.value = test; testOpen.value = true; }
+function openSignup(record: unknown) { const booking = detail.value?.bookings.items.find((item) => item.id === recordID(record)); if (!booking) return; const target = bookingSignupTarget(booking.signupId); if (target) void router.push(target); }
 function search() { query.page = 1; void load(); }
 function listChange(p: { current?: number; pageSize?: number }) { query.page = p.current ?? 1; query.pageSize = p.pageSize ?? 20; void load(); }
 function testChange(p: { current?: number; pageSize?: number }) { detailPage.testPage = p.current ?? 1; detailPage.testPageSize = p.pageSize ?? 20; if (detail.value) void openDetailByID(detail.value.user.id); }

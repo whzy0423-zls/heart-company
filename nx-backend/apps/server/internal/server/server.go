@@ -29,6 +29,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/branding"
 	"nine-xing/nx-backend/apps/server/internal/businessmessage"
 	"nine-xing/nx-backend/apps/server/internal/chat"
+	"nine-xing/nx-backend/apps/server/internal/classroom"
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/dbtx"
 	"nine-xing/nx-backend/apps/server/internal/embedding"
@@ -63,51 +64,66 @@ import (
 )
 
 type Server struct {
-	env                   config.Env
-	mux                   *http.ServeMux
-	db                    *sql.DB
-	system                *system.Store
-	analytics             *analytics.Store
-	auditLogs             *auditlog.Store
-	builder               *siteconfig.Builder
-	engagement            *engagement.Store
-	signups               *signup.Store
-	signupService         websiteSignupCreator
-	uploads               *uploadasset.Store
-	appReleases           appReleaseService
-	voiceAssetCreate      func(context.Context, uploadasset.CreateInput) (uploadasset.Asset, error)
-	voiceAssetFind        func(context.Context, int64) (uploadasset.Asset, error)
-	uploader              storage.ObjectUploader
-	voices                *voice.Store
-	videos                *video.Store
-	videoAnalysis         *videoanalysis.Store
-	videoAssets           *videoasset.Store
-	storyboards           *videostoryboard.Store
-	images                *image.Store
-	miniapp               *miniapp.Store
-	miniappService        miniappUserUpserter
-	miniappTestService    miniappTestRecorder
-	miniappBookingService miniappBookingCreator
-	miniappAdmin          miniappAdminReader
-	wx                    *wechat.Client
-	pay                   *wxpay.Client
-	ragGen                rag.Generator
-	analysisGen           *llm.MiniMaxGenerator
-	ragDocs               ragDocumentStore
-	ragVec                *ragstore.Store
-	embedder              *embedding.Client
-	ragCache              *miniappRAGCache
-	articles              *articlestore.Store
-	mindquotes            *mindquote.Store
-	quiz                  *quiz.Store
-	appDailyQuiz          appDailyQuizService
-	appReassessment       appReassessmentService
-	appDailyQuizReminders appDailyQuizReminderService
-	appDailyQuizPushAdmin appDailyQuizPushAdminService
-	appDailyQuizBankAdmin appDailyQuizBankAdminService
-	chatLimiter           *fixedWindowRateLimiter
-	chatTimeout           time.Duration
-	chatHeartbeatInterval time.Duration
+	env                        config.Env
+	mux                        *http.ServeMux
+	db                         *sql.DB
+	system                     *system.Store
+	analytics                  *analytics.Store
+	auditLogs                  *auditlog.Store
+	builder                    *siteconfig.Builder
+	engagement                 *engagement.Store
+	signups                    *signup.Store
+	signupService              websiteSignupCreator
+	uploads                    *uploadasset.Store
+	appReleases                appReleaseService
+	voiceAssetCreate           func(context.Context, uploadasset.CreateInput) (uploadasset.Asset, error)
+	voiceAssetFind             func(context.Context, int64) (uploadasset.Asset, error)
+	uploader                   storage.ObjectUploader
+	voices                     *voice.Store
+	videos                     *video.Store
+	videoAnalysis              *videoanalysis.Store
+	videoAssets                *videoasset.Store
+	storyboards                *videostoryboard.Store
+	images                     *image.Store
+	miniapp                    *miniapp.Store
+	miniappService             miniappUserUpserter
+	miniappTestService         miniappTestRecorder
+	miniappBookingService      miniappBookingCreator
+	miniappAdmin               miniappAdminReader
+	wx                         *wechat.Client
+	pay                        *wxpay.Client
+	payNotifyParser            func(http.Header, []byte) (wxpay.CallbackResult, error)
+	ragGen                     rag.Generator
+	analysisGen                *llm.MiniMaxGenerator
+	ragDocs                    ragDocumentStore
+	ragVec                     *ragstore.Store
+	embedder                   *embedding.Client
+	ragCache                   *miniappRAGCache
+	articles                   *articlestore.Store
+	mindquotes                 *mindquote.Store
+	quiz                       *quiz.Store
+	appDailyQuiz               appDailyQuizService
+	appReassessment            appReassessmentService
+	appDailyQuizReminders      appDailyQuizReminderService
+	appDailyQuizPushAdmin      appDailyQuizPushAdminService
+	appDailyQuizBankAdmin      appDailyQuizBankAdminService
+	chatLimiter                *fixedWindowRateLimiter
+	chatTimeout                time.Duration
+	chatHeartbeatInterval      time.Duration
+	classroomUploads           classroomUploadHandlerService
+	classroomAdmin             classroomAdminService
+	classroomPublic            classroomPublicService
+	classroomOrders            classroomOrderService
+	classroomProgress          classroomProgressService
+	classroomProgressLimiter   *strRateLimiter
+	classroomContinueLimiter   *strRateLimiter
+	classroomPlaybackSigner    storage.ObjectSigner
+	classroomPlaybackLimiter   *strRateLimiter
+	classroomPlaybackIPLimiter *strRateLimiter
+	now                        func() time.Time
+	classroomAudit             classroomAuditRecorder
+	classroomMaintenance       classroomUploadMaintenance
+	maintenanceCancel          context.CancelFunc
 
 	appUsers                       *appuser.Store
 	appChat                        appChatStore
@@ -191,6 +207,10 @@ func New(env config.Env, database *sql.DB) http.Handler {
 		signupSubscribers: map[chan signup.Lead]struct{}{},
 	}
 	if database != nil {
+		s.classroomPlaybackLimiter = newStrRateLimiter(30, time.Minute)
+		s.classroomPlaybackIPLimiter = newBoundedStrRateLimiter(120, time.Minute, 20_000)
+		s.classroomProgressLimiter = newBoundedStrRateLimiter(30, time.Minute, 20_000)
+		s.classroomContinueLimiter = newBoundedStrRateLimiter(30, time.Minute, 20_000)
 		files, fileErr := apprelease.NewFileStore(filepath.Join(env.UploadDir, "app-releases"), apprelease.MaxAPKBytes)
 		if fileErr != nil {
 			panic("app release file store: " + fileErr.Error())
@@ -203,6 +223,25 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	if uploader, err := s.objectUploader(); err == nil {
 		s.uploader = uploader
 	}
+	if database != nil && strings.TrimSpace(env.ClassroomMedia.Bucket) != "" {
+		mediaOSS := env.OSS
+		mediaOSS.Bucket = env.ClassroomMedia.Bucket
+		mediaOSS.Endpoint = env.ClassroomMedia.Endpoint
+		mediaOSS.Region = env.ClassroomMedia.Region
+		mediaOSS.Prefix = ""
+		if multipartStore, mediaErr := storage.NewOSSUploader(mediaOSS); mediaErr == nil {
+			s.classroomPlaybackSigner = multipartStore
+			probe := classroom.FFProbe{Signer: multipartStore}
+			classroomService := classroom.NewUploadService(classroom.NewStore(database), multipartStore, probe, classroom.UploadConfig{Bucket: env.ClassroomMedia.Bucket, Prefix: "classroom", PartSize: env.ClassroomMedia.PartSizeBytes, MaxParts: env.ClassroomMedia.MaxParts, CredentialTTL: time.Duration(env.ClassroomMedia.CredentialTTLSeconds) * time.Second, TaskTTL: 24 * time.Hour, MaxVideoBytes: env.ClassroomMedia.MaxVideoBytes, MaxAudioBytes: env.ClassroomMedia.MaxAudioBytes, MaxAttempts: 3}, time.Now).WithCoverExtractor(classroom.FFmpegCoverExtractor{Signer: multipartStore, Uploader: multipartStore})
+			s.classroomUploads = classroomService
+			s.classroomMaintenance = classroomService
+			maintenanceCtx, maintenanceCancel := context.WithCancel(context.Background())
+			s.maintenanceCancel = maintenanceCancel
+			go startClassroomUploadMaintenance(maintenanceCtx, classroomService, 15*time.Minute)
+		} else {
+			log.Printf("classroom multipart storage disabled: %v", mediaErr)
+		}
+	}
 	s.voices = voice.NewStore(database, s.uploads, env.MiniMax)
 	s.videos = video.NewStore(database, s.uploads, env.Video, s.uploader)
 	s.videoAnalysis = videoanalysis.NewStore(database)
@@ -211,6 +250,12 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.images = image.NewStore(s.uploads, env.Image, s.uploader)
 	s.miniapp = miniapp.NewStore(database)
 	s.miniappAdmin = miniapp.NewAdminStore(database)
+	s.classroomAdmin = newClassroomAdminStore(database)
+	if database != nil {
+		s.classroomPublic = newClassroomPublicDB(database)
+		s.classroomProgress = newClassroomProgressDB(database)
+	}
+	s.classroomAudit = s.auditLogs
 	miniappService := miniapp.NewService(
 		dbtx.SQLBeginner{DB: database},
 		s.miniapp,
@@ -224,6 +269,9 @@ func New(env config.Env, database *sql.DB) http.Handler {
 	s.miniappBookingService = miniappService
 	s.wx = newWeChatClient(env)
 	s.pay = mustWxPayClient(env)
+	if database != nil {
+		s.classroomOrders = newClassroomOrderDB(database, s.miniapp, s.pay, env)
+	}
 	s.ragGen = newChatGenerator(modelconfig.Config{}.ApplyChat(env.MiniMax))
 	s.analysisGen = llm.NewMiniMaxGenerator(modelconfig.Config{}.ApplyAnalysis(env.MiniMax))
 	s.ragDocs = ragstore.NewStore(database)
@@ -281,7 +329,13 @@ func New(env config.Env, database *sql.DB) http.Handler {
 		go s.runPushAsyncRecoveryLoop(context.Background())
 		go s.runProfileCalibrationPushLoop(context.Background())
 	}
-	return s.withCORS(s.mux)
+	return s
+}
+
+// ServeHTTP keeps Server itself as the public handler so lifecycle methods such
+// as Shutdown remain reachable while preserving the existing CORS middleware.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.withCORS(s.mux).ServeHTTP(w, r)
 }
 
 func newWeChatClient(env config.Env) *wechat.Client {
@@ -452,6 +506,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/miniapp/users", s.method(http.MethodGet, s.requirePermission("Customer:Miniapp:List", s.miniappUsers)))
 	s.mux.HandleFunc("/api/miniapp/users/", s.method(http.MethodGet, s.requirePermission("Customer:Miniapp:List", s.miniappUserByID)))
 	s.mux.HandleFunc("/api/miniapp/chat", s.method(http.MethodPost, s.requireMiniapp(s.miniappChat)))
+	registerClassroomUploadRoutes(s.mux, s.requirePermission, s.classroomUploadInit, s.classroomUploadPart, s.classroomUploadComplete, s.classroomUploadAbort, s.classroomUploadProgress)
+	registerClassroomAdminRoutes(s.mux, s.requirePermission, s)
+	registerClassroomPublicRoutes(s.mux, s)
+	registerClassroomOrderRoutes(s.mux, s.requireMiniapp, s)
+	registerClassroomProgressRoutes(s.mux, s.requireMiniapp, s)
 	// 付费解锁：下单（鉴权）→ 微信回调（公开）→ 解锁状态/报告正文（鉴权）
 	s.mux.HandleFunc("/api/miniapp/report/order", s.method(http.MethodPost, s.requireMiniapp(s.createReportOrder)))
 	s.mux.HandleFunc("/api/miniapp/report/dev-pay", s.method(http.MethodPost, s.requireMiniapp(s.devPayReportOrder)))
@@ -585,6 +644,12 @@ func (s *Server) routes() {
 		http.MethodDelete: "System:Menu:Delete",
 		http.MethodPut:    "System:Menu:Update",
 	}, s.system.HandleMenuByID))
+}
+
+func (s *Server) Shutdown() {
+	if s.maintenanceCancel != nil {
+		s.maintenanceCancel()
+	}
 }
 
 func (s *Server) status(w http.ResponseWriter, _ *http.Request) {

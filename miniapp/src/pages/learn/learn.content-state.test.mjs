@@ -16,6 +16,16 @@ assert.match(
 );
 assert.match(
   source,
+  /v-if="classroomWarning"[\s\S]*?@click="retryClassroomPreview"/,
+  "a partial classroom failure should expose a non-blocking retry warning",
+);
+assert.match(
+  source,
+  /v-else-if="classroomPreview\.length === 0"/,
+  "an empty successful classroom result should remain distinct from partial failure feedback",
+);
+assert.match(
+  source,
   /<button[^>]*class="refresh-retry"[^>]*:disabled="refreshing"[^>]*@click="retryContentRefresh"/,
   "the refresh notice should offer a retry action that is disabled while refreshing",
 );
@@ -25,7 +35,7 @@ assert.match(
   "the refresh retry action should keep the project's 88rpx minimum touch target",
 );
 
-const executableScript = script.replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\s*$/gm, "");
+const executableScript = script.replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\s*;?\s*$/gm, "");
 const dir = await mkdtemp(join(tmpdir(), "nx-learn-content-state-"));
 const modulePath = join(dir, "learn-content-state.mjs");
 
@@ -39,11 +49,15 @@ const refreshSiteConfig = () => globalThis.__learnHarness.refreshSiteConfig()
 const userErrorMessage = (error, fallback) => error?.message || fallback
 const normalizeTeachers = (cfg) => cfg?.teachers ? [...cfg.teachers] : ['默认老师']
 const normalizeCoursewareItems = (cfg) => cfg?.courses ? [...cfg.courses] : ['默认课程']
+const listClassroomSeriesApi = (...args) => globalThis.__learnHarness.listSeries(...args)
+const listClassroomStandaloneApi = (...args) => globalThis.__learnHarness.listStandalone(...args)
+const normalizeClassroomSeries = (value = {}) => ({ ...value, id: String(value.id || '') })
+const normalizeClassroomContent = (value = {}) => ({ ...value, id: String(value.id || '') })
 `;
 
 await writeFile(
   modulePath,
-  `${harnessPrelude}\n${executableScript}\nexport { teachers, coursewareItems, quotes, loading, loadError, refreshError, refreshing, showStoredContent, loadContent, retryContentRefresh }\n`,
+  `${harnessPrelude}\n${executableScript}\nexport { teachers, coursewareItems, quotes, loading, loadError, refreshError, refreshing, classroomPreview, classroomLoading, classroomWarning, showStoredContent, loadContent, retryContentRefresh, loadClassroomPreview, retryClassroomPreview }\n`,
 );
 
 let moduleCounter = 0;
@@ -62,9 +76,11 @@ async function createHarness() {
   const state = {
     cached: null,
     refreshSiteConfig: async () => ({ teachers: [], courses: [], home: { quotes: { items: [] } } }),
+    listSeries: async () => ({ items: [] }),
+    listStandalone: async () => ({ items: [] }),
   };
   globalThis.__learnHarness = state;
-  globalThis.uni = { switchTab() {} };
+  globalThis.uni = { switchTab() {}, navigateTo() {} };
   moduleCounter += 1;
   const page = await import(`${pathToFileURL(modulePath).href}?case=${moduleCounter}`);
   return { page, state };
@@ -109,6 +125,78 @@ try {
       page.refreshError.value,
       "暂时无法更新",
       "a silent refresh failure should expose lightweight feedback",
+    );
+  }
+
+  {
+    const { page, state } = await createHarness();
+    state.listSeries = async () => {
+      throw new Error("系列暂时失败");
+    };
+    state.listStandalone = async () => ({ items: [] });
+    await page.loadClassroomPreview();
+    assert.deepEqual(page.classroomPreview.value, []);
+    assert.match(page.classroomWarning.value, /系列暂时失败/);
+  }
+
+  {
+    const { page, state } = await createHarness();
+    state.listSeries = async () => ({ items: [] });
+    state.listStandalone = async () => {
+      throw new Error("独立课件暂时失败");
+    };
+    await page.loadClassroomPreview();
+    assert.deepEqual(page.classroomPreview.value, []);
+    assert.match(page.classroomWarning.value, /独立课件暂时失败/);
+  }
+
+  {
+    const { page, state } = await createHarness();
+    state.cached = {
+      teachers: ["缓存老师"],
+      courses: ["缓存课程"],
+      home: { quotes: { items: ["缓存语录"] } },
+    };
+    page.showStoredContent();
+    state.listSeries = async () => ({ items: [{ id: 12, title: "可用系列" }] });
+    state.listStandalone = async () => {
+      throw new Error("独立课件失败");
+    };
+    await page.loadClassroomPreview();
+    assert.equal(
+      page.classroomPreview.value[0].title,
+      "可用系列",
+      "successful partial data should remain visible",
+    );
+    assert.match(
+      page.classroomWarning.value,
+      /独立课件失败/,
+      "partial failure should remain retryable beside successful data",
+    );
+    assert.deepEqual(page.teachers.value, ["缓存老师"]);
+    assert.deepEqual(
+      page.coursewareItems.value,
+      ["缓存课程"],
+      "classroom failure must preserve legacy home courses",
+    );
+    assert.deepEqual(page.quotes.value, ["缓存语录"]);
+
+    state.listSeries = async () => ({ items: [{ id: 13, title: "恢复系列" }] });
+    state.listStandalone = async () => ({ items: [{ id: 23, title: "恢复课件" }] });
+    await page.retryClassroomPreview();
+    assert.equal(
+      page.classroomWarning.value,
+      "",
+      "successful retry should clear partial failure feedback",
+    );
+    assert.deepEqual(
+      page.classroomPreview.value.map((item) => item.title),
+      ["恢复系列", "恢复课件"],
+    );
+    assert.deepEqual(
+      page.coursewareItems.value,
+      ["缓存课程"],
+      "classroom retry must not replace legacy fallback courses",
     );
   }
 

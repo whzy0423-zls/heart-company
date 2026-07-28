@@ -91,6 +91,28 @@
           }
         }
       ]
+    },
+    {
+      "root": "pages/classroom",
+      "pages": [
+        {
+          "path": "classroom",
+          "style": {
+            "navigationBarTitleText": "老师课堂"
+          }
+        }
+      ]
+    },
+    {
+      "root": "pages/classroom-detail",
+      "pages": [
+        {
+          "path": "classroom-detail",
+          "style": {
+            "navigationBarTitleText": "课件详情"
+          }
+        }
+      ]
     }
   ],
   "tabBar": {

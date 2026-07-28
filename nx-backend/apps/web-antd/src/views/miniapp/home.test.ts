@@ -259,6 +259,45 @@ describe('miniapp home carousel management', () => {
     vi.mocked(updateSiteConfigApi).mockReset();
   });
 
+  it('preserves legacy teacher, course product, classroom, and unknown fields through normalization and JSON round-trip', () => {
+    const config: Record<string, any> = createConfig({
+      courses: {
+        eyebrow: '课程产品',
+        items: [{ title: '线下报名课', vendorExtension: { sku: 'COURSE-1' } }],
+        title: '课程方向',
+      },
+      experimentalSection: { enabled: true, payload: ['keep-me'] },
+      teacherTeaser: {
+        eyebrow: '九型导师',
+        lead: '老师简介',
+        title: '韩老师',
+        vendorExtension: { source: 'legacy-cms' },
+      },
+    });
+    config.classroom = {
+      contents: [{ contentType: 'video', id: 21, title: '独立课件' }],
+    };
+    const originalProtectedFields = JSON.parse(
+      JSON.stringify({
+        classroom: config.classroom,
+        courses: config.home.courses,
+        experimentalSection: config.home.experimentalSection,
+        teacherTeaser: config.home.teacherTeaser,
+      }),
+    );
+
+    ensureCarousel?.(config);
+    ensureMiniappHome?.(config);
+    const roundTripped = JSON.parse(JSON.stringify(config));
+
+    expect({
+      classroom: roundTripped.classroom,
+      courses: roundTripped.home.courses,
+      experimentalSection: roundTripped.home.experimentalSection,
+      teacherTeaser: roundTripped.home.teacherTeaser,
+    }).toEqual(originalProtectedFields);
+  });
+
   it('declares the configurable miniapp home contract', () => {
     expect(literalUnion('MiniappHomeEntryKey')).toEqual([
       'learn',
