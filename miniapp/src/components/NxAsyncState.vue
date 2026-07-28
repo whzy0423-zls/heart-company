@@ -4,7 +4,6 @@
     :class="`nx-async-state--${state}`"
     role="status"
     aria-live="polite"
-    :aria-busy="state === 'loading' || busy"
   >
     <view v-if="state === 'loading'" class="nx-async-state__loading" aria-label="加载中">
       <view class="nx-async-state__spinner" aria-hidden="true" />
@@ -55,7 +54,7 @@ const props = defineProps({
 const emit = defineEmits(['action'])
 
 function handleAction() {
-  if (props.busy) return
+  if (props.busy || !props.actionText) return
   emit('action')
 }
 </script>
@@ -109,6 +108,12 @@ function handleAction() {
 .nx-async-state__action {
   min-height: 88rpx;
   margin-top: 8rpx;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-async-state__spinner {
+    animation: none;
+  }
 }
 
 @keyframes nx-async-state-spin {
