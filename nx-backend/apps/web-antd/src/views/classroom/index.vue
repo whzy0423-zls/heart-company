@@ -23,6 +23,7 @@ import {
   publishClassroomContentApi,
   setClassroomContentPlaybackBlockedApi,
 } from '#/api/core/classroom';
+import ContentCoverEditor from './components/content-cover-editor.vue';
 import ContentEditor from './components/content-editor.vue';
 import SeriesView from './series.vue';
 import UploadTasks from './upload-tasks.vue';
@@ -48,6 +49,8 @@ const contents = ref<ClassroomContent[]>([]);
 const series = ref<ClassroomSeries[]>([]);
 const editorOpen = ref(false);
 const editing = ref<ClassroomContent>();
+const contentCoverOpen = ref(false);
+const coverEditing = ref<ClassroomContent>();
 const actionLoadingId = ref<number>();
 const columns = [
   { dataIndex: 'title', title: '课件' },
@@ -158,6 +161,17 @@ function openCreate() {
   editing.value = undefined;
   editorOpen.value = true;
 }
+function openCoverEditor(record: ClassroomContent) {
+  coverEditing.value = record;
+  contentCoverOpen.value = true;
+}
+function replaceContentRow(value: ClassroomContent) {
+  contents.value = contents.value.map((item) =>
+    item.id === value.id ? value : item,
+  );
+  if (editing.value?.id === value.id) editing.value = value;
+  if (coverEditing.value?.id === value.id) coverEditing.value = value;
+}
 function openUploads() {
   activeTab.value = 'uploads';
 }
@@ -250,6 +264,11 @@ onMounted(load);
               >
               <Button
                 v-if="canWrite"
+                @click="openCoverEditor(record as ClassroomContent)"
+                >封面管理</Button
+              >
+              <Button
+                v-if="canWrite"
                 :disabled="record.status !== 'draft'"
                 :title="record.status !== 'draft' ? '仅草稿可编辑' : '编辑课件'"
                 @click="
@@ -309,6 +328,18 @@ onMounted(load);
           editorOpen = false;
           load();
         "
+    /></Modal>
+    <Modal
+      v-model:open="contentCoverOpen"
+      title="封面管理"
+      :width="680"
+      :footer="null"
+      destroy-on-close
+      ><ContentCoverEditor
+        v-if="coverEditing"
+        :content="coverEditing"
+        @cancel="contentCoverOpen = false"
+        @saved="replaceContentRow"
     /></Modal>
   </Page>
 </template>

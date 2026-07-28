@@ -1,7 +1,7 @@
 /** @vitest-environment happy-dom */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineComponent } from 'vue';
+import { defineComponent, h, reactive } from 'vue';
 import { flushVuePromises, mountVueComponent } from '#/test-utils/vue-mount';
 
 const mocks = vi.hoisted(() => ({
@@ -70,6 +70,9 @@ vi.mock('#/api/core/classroom', () => ({
   publishClassroomSeriesApi: vi.fn(),
   setClassroomContentPlaybackBlockedApi: vi.fn(),
   setClassroomContentPriceApi: vi.fn(),
+  deleteClassroomContentCoverApi: vi.fn(),
+  setClassroomContentCoverSettingsApi: vi.fn(),
+  uploadClassroomContentCoverApi: vi.fn(),
   setClassroomSeriesPlaybackBlockedApi: vi.fn(),
   setClassroomSeriesPriceApi: vi.fn(),
   signClassroomUploadPartApi: vi.fn(),
@@ -294,5 +297,139 @@ describe('classroom upload retry identity and persisted progress integration', (
     expect(wrapper.text()).toContain('progress:76');
     wrapper.unmount();
     vi.useRealTimers();
+  });
+});
+
+describe('classroom cover editor workflow', () => {
+  const baseContent = {
+    badge: '',
+    contentType: 'video',
+    coverAspectRatio: '16:9',
+    coverSource: 'video',
+    coverUrl: 'https://cdn.example/video-cover.jpg',
+    createdAt: '2026-01-01T00:00:00Z',
+    description: '企业培训',
+    durationSeconds: 120,
+    effectiveAccessLevel: 'public',
+    effectivePriceCents: 0,
+    episodeNo: 1,
+    id: 88,
+    manualCoverObjectKey: '',
+    playbackBlocked: false,
+    priceCents: 0,
+    recordedAt: '2026-01-01T00:00:00Z',
+    seriesId: undefined,
+    showAsStandalone: false,
+    sortOrder: 1,
+    status: 'draft',
+    tags: [],
+    teacherKey: 'teacher-1',
+    teacherName: '韩老师',
+    title: '封面课件',
+    updatedAt: 'v1',
+  } as any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows the unsaved cover reminder in the content editor', async () => {
+    const { default: ContentEditor } = await import(
+      './components/content-editor.vue'
+    );
+    const Host = defineComponent({
+      setup: () => () =>
+        h(ContentEditor, {
+          canPrice: true,
+          canWrite: true,
+          content: undefined,
+          series: [],
+        }),
+    });
+    const wrapper = mountVueComponent(Host);
+    await flushVuePromises();
+    expect(wrapper.text()).toContain('请先保存课件，再管理封面');
+    wrapper.unmount();
+  });
+
+  it('refreshes the cover version after upload, ratio update, and delete', async () => {
+    const api = await import('#/api/core/classroom');
+    const {
+      deleteClassroomContentCoverApi,
+      setClassroomContentCoverSettingsApi,
+      uploadClassroomContentCoverApi,
+    } = api;
+    vi.mocked(uploadClassroomContentCoverApi).mockResolvedValue({
+      ...baseContent,
+      coverAspectRatio: '16:9',
+      coverSource: 'manual',
+      coverUrl: 'https://cdn.example/manual-cover.jpg',
+      manualCoverObjectKey: 'classroom/covers/manual/88/cover.jpg',
+      updatedAt: 'v2',
+    } as any);
+    vi.mocked(setClassroomContentCoverSettingsApi).mockResolvedValue({
+      ...baseContent,
+      coverAspectRatio: '9:16',
+      coverSource: 'manual',
+      coverUrl: 'https://cdn.example/manual-cover-portrait.jpg',
+      manualCoverObjectKey: 'classroom/covers/manual/88/cover.jpg',
+      updatedAt: 'v3',
+    } as any);
+    vi.mocked(deleteClassroomContentCoverApi).mockResolvedValue({
+      ...baseContent,
+      coverAspectRatio: '9:16',
+      coverSource: 'video',
+      coverUrl: 'https://cdn.example/video-cover-portrait.jpg',
+      manualCoverObjectKey: '',
+      updatedAt: 'v4',
+    } as any);
+    const content = reactive({ ...baseContent });
+    const { default: ContentCoverEditor } = await import(
+      './components/content-cover-editor.vue'
+    );
+    const Host = defineComponent({
+      setup: () => () =>
+        h(ContentCoverEditor, {
+          content,
+          onSaved: (value: any) => Object.assign(content, value),
+        }),
+    });
+    const wrapper = mountVueComponent(Host);
+    await flushVuePromises();
+
+    const input = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [new File(['cover'], 'cover.png', { type: 'image/png' })],
+    });
+    input.dispatchEvent(new Event('change'));
+    await flushVuePromises();
+    wrapper.button('上传封面')?.click();
+    await flushVuePromises();
+    expect(vi.mocked(uploadClassroomContentCoverApi)).toHaveBeenCalledWith(
+      88,
+      expect.any(File),
+      'v1',
+    );
+
+    wrapper.button('9:16')?.click();
+    await flushVuePromises();
+    wrapper.button('保存比例')?.click();
+    await flushVuePromises();
+    expect(vi.mocked(setClassroomContentCoverSettingsApi)).toHaveBeenCalledWith(
+      88,
+      '9:16',
+      'v2',
+    );
+
+    wrapper.button('删除封面')?.click();
+    await flushVuePromises();
+    expect(vi.mocked(deleteClassroomContentCoverApi)).toHaveBeenCalledWith(
+      88,
+      'v3',
+    );
+    wrapper.unmount();
   });
 });

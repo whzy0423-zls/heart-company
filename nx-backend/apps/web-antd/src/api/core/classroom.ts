@@ -14,6 +14,13 @@ export type ClassroomContentStatus =
   | 'published'
   | 'ready';
 export type ClassroomContentType = 'audio' | 'video';
+export type ClassroomCoverAspectRatio = '1:1' | '16:9' | '9:16';
+export type ClassroomCoverSource =
+  | 'audio-default'
+  | 'generated'
+  | 'legacy'
+  | 'manual'
+  | 'none';
 export type ClassroomSeriesStatus = 'draft' | 'offline' | 'published';
 export type ClassroomUploadStatus =
   | 'aborted'
@@ -67,6 +74,8 @@ export interface ClassroomContent {
   badge: string;
   contentType: ClassroomContentType;
   coverUrl: string;
+  coverAspectRatio: ClassroomCoverAspectRatio;
+  coverSource: ClassroomCoverSource;
   createdAt: string;
   description: string;
   durationSeconds: number;
@@ -75,6 +84,7 @@ export interface ClassroomContent {
   episodeNo: number;
   id: number;
   mediaAssetId?: number;
+  manualCoverObjectKey: string;
   playbackBlocked: boolean;
   priceCents: number;
   publishedAt?: string;
@@ -109,6 +119,7 @@ export interface ClassroomContentCreatePayload {
   badge?: string;
   contentType: ClassroomContentType;
   coverUrl?: string;
+  coverAspectRatio?: ClassroomCoverAspectRatio;
   description?: string;
   durationSeconds?: number;
   episodeNo?: number;
@@ -418,6 +429,47 @@ export function setClassroomContentPlaybackBlockedApi(
     requestClient.post<ClassroomContent>(
       `/admin/classroom/contents/${id}/playback-blocked`,
       { blocked, expectedUpdatedAt, reason },
+    ),
+  );
+}
+
+export function uploadClassroomContentCoverApi(
+  id: number,
+  file: File,
+  expectedUpdatedAt: string,
+) {
+  const formData = new FormData();
+  formData.set('file', file);
+  formData.set('expectedUpdatedAt', expectedUpdatedAt);
+  return classroomRequest(
+    requestClient.post<ClassroomContent>(
+      `/admin/classroom/contents/${id}/cover`,
+      formData,
+    ),
+  );
+}
+
+export function deleteClassroomContentCoverApi(
+  id: number,
+  expectedUpdatedAt: string,
+) {
+  return classroomRequest(
+    requestClient.delete<ClassroomContent>(
+      `/admin/classroom/contents/${id}/cover`,
+      { params: { expectedUpdatedAt } },
+    ),
+  );
+}
+
+export function setClassroomContentCoverSettingsApi(
+  id: number,
+  coverAspectRatio: ClassroomCoverAspectRatio,
+  expectedUpdatedAt: string,
+) {
+  return classroomRequest(
+    requestClient.put<ClassroomContent>(
+      `/admin/classroom/contents/${id}/cover-settings`,
+      { coverAspectRatio, expectedUpdatedAt },
     ),
   );
 }

@@ -2,6 +2,7 @@ import type {
   ClassroomAccessLevel,
   ClassroomContent,
   ClassroomContentCreatePayload,
+  ClassroomCoverAspectRatio,
   ClassroomSeries,
 } from '#/api/core/classroom';
 
@@ -32,11 +33,13 @@ export async function saveContentWorkflow(args: {
 
 export function createContentDraftDefaults(): ClassroomContentCreatePayload & {
   accessLevel: ClassroomAccessLevel;
+  coverAspectRatio: ClassroomCoverAspectRatio;
   priceCents: number;
 } {
   return {
     accessLevel: 'public',
     contentType: 'video',
+    coverAspectRatio: '16:9',
     priceCents: 0,
     showAsStandalone: false,
     title: '',
