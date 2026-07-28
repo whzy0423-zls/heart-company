@@ -44,6 +44,16 @@ assert.deepEqual(loadBookingDraft(), {
   message: '',
 }, 'a non-default booking kind should remain a meaningful draft')
 
+storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: 'enterprise' } }
+assert.deepEqual(loadBookingDraft(), {
+  kind: 'enterprise',
+  contactName: '',
+  phone: '',
+  intent: '',
+  preferredTime: '',
+  message: '',
+}, 'the enterprise booking kind should remain a meaningful draft for service preselection')
+
 storage[BOOKING_DRAFT_KEY] = { ts: 1, data: { kind: 'consult', message: ' 需要回电 ' } }
 assert.equal(loadBookingDraft().message, ' 需要回电 ', 'any non-blank field should keep the default-kind draft meaningful')
 
