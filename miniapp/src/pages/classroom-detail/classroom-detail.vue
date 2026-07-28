@@ -45,6 +45,7 @@ const paymentMessage = ref("");
 const purchaseTarget = ref({ type: "content", id: "", ready: true });
 const purchaseOffer = ref(null);
 const purchaseTargetError = ref("");
+const coverImageFailed = ref(false);
 let detailTicket = 0;
 let playbackTicket = 0;
 let audioContext = null;
@@ -276,6 +277,7 @@ async function loadDetail() {
     const normalized = normalizeClassroomContent(response);
     if (!normalized.id) throw new Error("课件内容不存在");
     content.value = normalized;
+    coverImageFailed.value = false;
     purchaseController?.stop();
     purchaseController = null;
     paymentState.value = "idle";
@@ -320,6 +322,10 @@ async function loadDetail() {
   } finally {
     if (!disposed && ticket === detailTicket) loading.value = false;
   }
+}
+
+function markCoverImageError() {
+  coverImageFailed.value = true;
 }
 
 function handlePlaybackError(error) {
@@ -499,12 +505,13 @@ onUnload(() => {
     <block v-else>
       <view class="detail-head ios-card">
         <image
-          v-if="content.coverUrl"
+          v-if="content.coverUrl && !coverImageFailed"
           class="detail-head__cover"
           :class="classroomCoverRatioClass(content)"
           :src="content.coverUrl"
           mode="aspectFill"
           lazy-load
+          @error="markCoverImageError"
         />
         <view
           v-else

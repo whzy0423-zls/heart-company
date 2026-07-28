@@ -29,6 +29,7 @@ const refreshing = ref(false);
 const classroomPreview = ref([]);
 const classroomLoading = ref(true);
 const classroomWarning = ref("");
+const classroomPreviewCoverErrors = ref({});
 let loadTicket = 0;
 let classroomTicket = 0;
 
@@ -110,6 +111,17 @@ function markTypeImageError(id) {
   typeImageErrors.value = { ...typeImageErrors.value, [id]: true };
 }
 
+function classroomPreviewMediaKey(item) {
+  return `${item?.contentType || "series"}:${item?.id || ""}`;
+}
+
+function markClassroomPreviewCoverError(key) {
+  classroomPreviewCoverErrors.value = {
+    ...classroomPreviewCoverErrors.value,
+    [key]: true,
+  };
+}
+
 async function loadClassroomPreview() {
   const ticket = ++classroomTicket;
   classroomLoading.value = true;
@@ -131,6 +143,7 @@ async function loadClassroomPreview() {
             .filter((item) => item.id)
         : [];
     classroomPreview.value = [...series, ...standalone].slice(0, 3);
+    classroomPreviewCoverErrors.value = {};
     const failures = [seriesResult, standaloneResult].filter(
       (result) => result.status === "rejected",
     );
@@ -217,12 +230,13 @@ function goTest() {
             class="classroom-entry__item"
           >
             <image
-              v-if="item.coverUrl"
+              v-if="item.coverUrl && !classroomPreviewCoverErrors[classroomPreviewMediaKey(item)]"
               class="classroom-entry__cover"
               :class="classroomCoverRatioClass(item)"
               :src="item.coverUrl"
               mode="aspectFill"
               lazy-load
+              @error="markClassroomPreviewCoverError(classroomPreviewMediaKey(item))"
             />
             <view
               v-else

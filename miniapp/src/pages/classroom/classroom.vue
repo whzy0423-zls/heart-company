@@ -39,6 +39,7 @@ const continueError = ref("");
 const seriesPaymentTargetId = ref("");
 const seriesPaymentState = ref("idle");
 const seriesPaymentMessage = ref("");
+const coverImageErrors = ref({});
 let listTicket = 0;
 let seriesTicket = 0;
 let continueTicket = 0;
@@ -238,6 +239,14 @@ function openContinueLearning(item) {
 
 function itemAction(item) {
   return classroomPurchaseAction(item);
+}
+
+function coverMediaKey(item) {
+  return `${item?.contentType || "series"}:${item?.id || ""}`;
+}
+
+function markCoverImageError(key) {
+  coverImageErrors.value = { ...coverImageErrors.value, [key]: true };
 }
 
 function requestSeriesPayment(pay = {}) {
@@ -442,12 +451,13 @@ onUnload(() => {
           @keydown.space.prevent="activeTab === 'series' ? openSeries(item) : openContent(item)"
         >
           <image
-            v-if="item.coverUrl"
+            v-if="item.coverUrl && !coverImageErrors[coverMediaKey(item)]"
             class="classroom-card__cover"
             :class="classroomCoverRatioClass(item)"
             :src="item.coverUrl"
             mode="aspectFill"
             lazy-load
+            @error="markCoverImageError(coverMediaKey(item))"
           />
           <view
             v-else

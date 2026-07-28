@@ -26,6 +26,11 @@ assert.match(
 );
 assert.match(
   source,
+  /@error="markClassroomPreviewCoverError\(classroomPreviewMediaKey\(item\)\)"/,
+  "learning classroom cover images should fall back when loading fails",
+);
+assert.match(
+  source,
   /class="classroom-entry__cover classroom-entry__cover--fallback"[\s\S]*:class="classroomCoverRatioClass\(item\)"/,
   "learning empty-cover placeholder should keep the same ratio container",
 );

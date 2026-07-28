@@ -23,6 +23,11 @@ assert.match(
 );
 assert.match(
   source,
+  /@error="markCoverImageError"/,
+  "detail cover image should fall back when loading fails",
+);
+assert.match(
+  source,
   /class="detail-head__cover detail-head__cover--fallback"[\s\S]*:class="classroomCoverRatioClass\(content\)"/,
   "detail empty-cover placeholder should keep the same ratio container",
 );
