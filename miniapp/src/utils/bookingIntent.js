@@ -10,7 +10,7 @@ function normalizeIntent(input) {
   if (!ALLOWED_KINDS.has(kind)) return null
 
   const intentText = typeof input.intentText === 'string'
-    ? input.intentText.trim().slice(0, MAX_INTENT_TEXT_LENGTH)
+    ? Array.from(input.intentText.trim()).slice(0, MAX_INTENT_TEXT_LENGTH).join('')
     : ''
 
   return { kind, intentText }
@@ -32,12 +32,10 @@ export function setBookingIntent(input) {
   }
 
   try {
-    uni.setStorageSync(BOOKING_INTENT_KEY, {
-      ...intent,
-      timestamp: Date.now(),
-    })
+    uni.setStorageSync(BOOKING_INTENT_KEY, intent)
     return true
   } catch {
+    clearBookingIntent()
     return false
   }
 }
