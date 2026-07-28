@@ -321,18 +321,22 @@ func (c *xinzhiliRealtimeConn) handleBinary(ctx context.Context, data []byte) {
 func (c *xinzhiliRealtimeConn) changeMode(ctx context.Context, e xinzhili.Envelope) {
 	var p struct {
 		Mode             xinzhili.Mode `json:"mode"`
-		ExpectedRevision int64         `json:"expectedRevision"`
+		ExpectedRevision *int64        `json:"expectedRevision"`
 	}
-	if json.Unmarshal(e.Payload, &p) != nil || !knownXinzhiliMode(p.Mode) || p.ExpectedRevision < 0 {
+	if json.Unmarshal(e.Payload, &p) != nil || !knownXinzhiliMode(p.Mode) || (p.ExpectedRevision != nil && *p.ExpectedRevision < 0) {
 		c.sendError(ctx, "invalid_mode", "模式无效", false, false)
 		return
+	}
+	expectedRevision := c.currentModeRevision()
+	if p.ExpectedRevision != nil {
+		expectedRevision = *p.ExpectedRevision
 	}
 	cfg, found, err := c.currentConfig(ctx)
 	if err != nil || !found || !cfg.Enabled {
 		c.sendError(ctx, "xinzhili_not_configured", "请先配置芯之力会话模型后重试", false, false)
 		return
 	}
-	snapshot, err := c.persistModeChange(ctx, cfg, p.Mode, p.ExpectedRevision)
+	snapshot, err := c.persistModeChange(ctx, cfg, p.Mode, expectedRevision)
 	if errors.Is(err, errXinzhiliModeDisabled) {
 		c.sendError(ctx, "mode_not_enabled", "当前模式尚未启用", false, false)
 		return
@@ -351,6 +355,12 @@ func (c *xinzhiliRealtimeConn) changeMode(ctx context.Context, e xinzhili.Envelo
 		return
 	}
 	c.sendControl(ctx, xinzhili.EventModeChanged, snapshot, nil, nil)
+}
+
+func (c *xinzhiliRealtimeConn) currentModeRevision() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.modeRevision
 }
 
 func (c *xinzhiliRealtimeConn) currentConfig(ctx context.Context) (xinzhili.Config, bool, error) {
@@ -399,16 +409,11 @@ func (c *xinzhiliRealtimeConn) refreshModeSnapshot(ctx context.Context, cfg xinz
 	if err != nil {
 		return xinzhiliModeSnapshot{}, err
 	}
-	mode, revision := xinzhili.ModeNormal, int64(0)
+	revision := int64(0)
 	if found {
-		mode, revision = preference.Requested, preference.Revision
-	}
-	if !modeEnabled(cfg.EnabledModes, mode) {
-		mode = xinzhili.ModeNormal
+		revision = preference.Revision
 	}
 	c.mu.Lock()
-	c.requestedMode = mode
-	c.pendingMode = mode
 	c.modeRevision = revision
 	c.mu.Unlock()
 	return c.modeSnapshot(cfg), nil

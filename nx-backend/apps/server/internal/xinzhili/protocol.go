@@ -425,6 +425,29 @@ func validateErrorPayload(raw json.RawMessage) error {
 	if payload.Code == "" || payload.Message == "" || payload.Retryable == nil || payload.Fatal == nil {
 		return errors.New("error payload requires code, message, retryable and fatal")
 	}
+	if payload.ModeSnapshot != nil {
+		if err := validateModeSnapshot(*payload.ModeSnapshot); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateModeSnapshot(snapshot ModeSnapshot) error {
+	if snapshot.Revision < 0 {
+		return errors.New("modeSnapshot revision must be non-negative")
+	}
+	if !knownMode(snapshot.RequestedMode) || !knownMode(snapshot.PendingMode) || !knownMode(snapshot.EffectiveMode) {
+		return errors.New("modeSnapshot contains unknown current mode")
+	}
+	for _, mode := range snapshot.EnabledModes {
+		if !knownMode(mode) {
+			return errors.New("modeSnapshot enabledModes contains unknown mode")
+		}
+	}
+	if !containsMode(snapshot.EnabledModes, ModeNormal) {
+		return errors.New("modeSnapshot enabledModes must contain normal")
+	}
 	return nil
 }
 
