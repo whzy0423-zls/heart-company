@@ -105,6 +105,7 @@ try {
     })
     state.onMounted()
     await page.loadClassroomRecommendations()
+    assert.equal(state.classroomCalls.length, 1, 'result page should single-flight recommendation loading')
     assert.deepEqual(state.classroomCalls[0], { limit: 2, offset: 0 }, 'result page should request the first two standalone classroom items')
     assert.deepEqual(page.classroomRecommendations.value.map((item) => item.id), ['2', '3'], 'recommendations should preserve API order and cap at two')
     page.openClassroomRecommendation(page.classroomRecommendations.value[1])
