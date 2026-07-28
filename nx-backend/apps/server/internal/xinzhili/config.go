@@ -17,6 +17,7 @@ const (
 
 	TTSProviderOpenAICompatible = "openai-compatible"
 	TTSProviderMiniMax          = "minimax"
+	TTSProviderAliyunCosyVoice  = "aliyun-cosyvoice"
 
 	maxEndpointRunes = 2048
 	maxAPIKeyRunes   = 4096
@@ -210,8 +211,8 @@ func validateNormalized(c Config) error {
 	if err := validateEndpoint(c.RealtimeASR.Endpoint, "wss", "https"); err != nil {
 		return fmt.Errorf("实时 ASR endpoint: %w", err)
 	}
-	if c.TTS.Provider != TTSProviderOpenAICompatible && c.TTS.Provider != TTSProviderMiniMax {
-		return errors.New("TTS provider 仅支持 openai-compatible 或 minimax")
+	if c.TTS.Provider != TTSProviderOpenAICompatible && c.TTS.Provider != TTSProviderMiniMax && c.TTS.Provider != TTSProviderAliyunCosyVoice {
+		return errors.New("TTS provider 仅支持 openai-compatible、minimax 或 aliyun-cosyvoice")
 	}
 	if c.TTS.APIKey == "" || c.TTS.Model == "" || c.TTS.Voice == "" {
 		return errors.New("TTS API Key、模型和音色不能为空")
@@ -219,8 +220,17 @@ func validateNormalized(c Config) error {
 	if c.TTS.Provider == TTSProviderMiniMax && c.TTS.GroupID == "" {
 		return errors.New("MiniMax TTS 必须配置 GroupID")
 	}
+	if c.TTS.Provider == TTSProviderAliyunCosyVoice && c.TTS.GroupID == "" {
+		return errors.New("阿里 CosyVoice TTS 必须配置业务空间")
+	}
 	if c.TTS.Format != "mp3" {
 		return errors.New("TTS format 必须为 mp3")
+	}
+	if c.TTS.Provider == TTSProviderAliyunCosyVoice {
+		if err := validateEndpoint(c.TTS.Endpoint, "wss", "https", "ws"); err != nil {
+			return fmt.Errorf("TTS endpoint: %w", err)
+		}
+		return nil
 	}
 	if err := validateEndpoint(c.TTS.Endpoint, "https"); err != nil {
 		return fmt.Errorf("TTS endpoint: %w", err)

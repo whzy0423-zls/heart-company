@@ -92,6 +92,8 @@ func (f TTSProviderFactory) New(cfg TTSConfig) (TTSProvider, error) {
 			})
 		}
 		return miniMaxTTSAdapter{client: client}, nil
+	case TTSProviderAliyunCosyVoice:
+		return newAliyunCosyVoiceTTS(cfg)
 	default:
 		return nil, errors.New("不支持的 TTS provider")
 	}

@@ -119,6 +119,16 @@ func TestConfigValidateTTSProviderDiscriminatedUnion(t *testing.T) {
 	}
 
 	cfg = validConfig()
+	cfg.TTS = TTSConfig{Provider: TTSProviderAliyunCosyVoice, Endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/inference", APIKey: "tts-secret", GroupID: "workspace-1", Model: "cosyvoice-v3.5-plus", Voice: "voice-id", Format: "mp3"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid aliyun cosyvoice config: %v", err)
+	}
+	cfg.TTS.GroupID = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("aliyun cosyvoice should require workspace groupId")
+	}
+
+	cfg = validConfig()
 	cfg.TTS.Provider = "anthropic-compatible"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("unsupported TTS provider should fail")
