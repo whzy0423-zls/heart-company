@@ -620,6 +620,8 @@ func (s *Server) classroomContentItem(w http.ResponseWriter, r *http.Request) {
 		next.ID = id
 		next.Status = current.Status
 		next.MediaAssetID = current.MediaAssetID
+		next.ManualCoverObjectKey = current.ManualCoverObjectKey
+		next.CoverAspectRatio = current.CoverAspectRatio
 		next.AccessLevel = current.AccessLevel
 		next.PriceCents = current.PriceCents
 		next.PlaybackBlocked = current.PlaybackBlocked

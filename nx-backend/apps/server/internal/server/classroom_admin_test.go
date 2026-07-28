@@ -16,11 +16,12 @@ import (
 )
 
 type fakeClassroomAdminService struct {
-	series       classroom.Series
-	content      classroom.Content
-	calls        []string
-	getSeriesErr error
-	uploadTasks  []classroom.UploadTask
+	series         classroom.Series
+	content        classroom.Content
+	updatedContent classroom.Content
+	calls          []string
+	getSeriesErr   error
+	uploadTasks    []classroom.UploadTask
 }
 
 func (f *fakeClassroomAdminService) ListSeries(context.Context, classroom.SeriesFilter) ([]classroom.Series, int, error) {
@@ -53,6 +54,7 @@ func (f *fakeClassroomAdminService) CreateContent(context.Context, classroom.Con
 }
 func (f *fakeClassroomAdminService) UpdateContent(_ context.Context, value classroom.Content, _ time.Time) (classroom.Content, error) {
 	f.calls = append(f.calls, "update-content")
+	f.updatedContent = value
 	return value, nil
 }
 func (f *fakeClassroomAdminService) DeleteSeries(context.Context, int64, time.Time) error {
@@ -220,6 +222,30 @@ func TestClassroomWriteRejectsSensitiveFieldsAndPublishedEdits(t *testing.T) {
 	mux.ServeHTTP(update, classroomUser(httptest.NewRequest(http.MethodPut, "/api/admin/classroom/series/8", strings.NewReader(`{"title":"changed","expectedUpdatedAt":"2026-07-26T10:00:00Z"}`))))
 	if update.Code != http.StatusConflict {
 		t.Fatalf("published update status=%d body=%s", update.Code, update.Body.String())
+	}
+}
+
+func TestClassroomContentMetadataUpdatePreservesCoverSettings(t *testing.T) {
+	updatedAt := time.Date(2026, 7, 28, 11, 0, 0, 0, time.UTC)
+	f := &fakeClassroomAdminService{content: classroom.Content{
+		ID: 18, Title: "原课件", ContentType: classroom.ContentVideo,
+		ManualCoverObjectKey: "classroom/covers/manual/18/portrait.webp",
+		CoverAspectRatio:     classroom.CoverAspectRatio9x16,
+		Status:               classroom.ContentDraft, AccessLevel: classroom.AccessPublic, UpdatedAt: updatedAt,
+	}}
+	s := &Server{classroomAdmin: f}
+	mux := http.NewServeMux()
+	registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
+
+	rr := httptest.NewRecorder()
+	body := `{"title":"新标题","contentType":"video","expectedUpdatedAt":"2026-07-28T11:00:00Z"}`
+	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodPut, "/api/admin/classroom/contents/18", strings.NewReader(body))))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("metadata update status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if f.updatedContent.ManualCoverObjectKey != f.content.ManualCoverObjectKey || f.updatedContent.CoverAspectRatio != f.content.CoverAspectRatio {
+		t.Fatalf("metadata update changed cover settings: got key=%q ratio=%q, want key=%q ratio=%q", f.updatedContent.ManualCoverObjectKey, f.updatedContent.CoverAspectRatio, f.content.ManualCoverObjectKey, f.content.CoverAspectRatio)
 	}
 }
 

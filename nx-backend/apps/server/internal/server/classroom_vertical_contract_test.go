@@ -84,7 +84,7 @@ func (c *classroomVerticalConn) QueryContext(_ context.Context, query string, ar
 	contentValues := func() []driver.Value {
 		return []driver.Value{
 			int64(21), int64(12), false, "第一课：认识三中心", "视频课程", "video", int64(31),
-			"https://cdn.example/covers/content-21.jpg", int64(1200), "teacher-han", "韩老师", nil,
+			"https://cdn.example/covers/content-21.jpg", "", "16:9", int64(1200), "teacher-han", "韩老师", nil,
 			"课程回放", `["九型入门"]`, int64(1), int64(1), string(c.state.contentStatus), false, "inherit", int64(0),
 			c.state.contentAt, int64(7), int64(7), c.state.contentAt.Add(-time.Hour), c.state.contentAt,
 		}
@@ -101,13 +101,13 @@ func (c *classroomVerticalConn) QueryContext(_ context.Context, query string, ar
 		c.state.seriesAt = c.state.seriesAt.Add(time.Second)
 		return &classroomRows{cols: []string{"created_at", "updated_at"}, values: [][]driver.Value{{c.state.seriesAt.Add(-time.Hour), c.state.seriesAt}}}, nil
 	case strings.Contains(query, "UPDATE classroom_contents"):
-		c.state.contentStatus = classroom.ContentStatus(fmt.Sprint(args[15].Value))
+		c.state.contentStatus = classroom.ContentStatus(fmt.Sprint(args[17].Value))
 		c.state.contentAt = c.state.contentAt.Add(time.Second)
 		return &classroomRows{cols: []string{"created_at", "updated_at"}, values: [][]driver.Value{{c.state.contentAt.Add(-time.Hour), c.state.contentAt}}}, nil
 	case strings.Contains(query, "FROM classroom_series WHERE id=$1"):
 		return &classroomRows{cols: make([]string, 17), values: [][]driver.Value{seriesValues()}}, nil
 	case strings.Contains(query, "FROM classroom_contents WHERE id=$1"):
-		return &classroomRows{cols: make([]string, 25), values: [][]driver.Value{contentValues()}}, nil
+		return &classroomRows{cols: make([]string, 27), values: [][]driver.Value{contentValues()}}, nil
 	case strings.Contains(query, "FROM classroom_media_assets WHERE id=$1"):
 		return &classroomRows{cols: make([]string, 15), values: [][]driver.Value{mediaValues}}, nil
 	case strings.Contains(query, "SELECT count(*) FROM classroom_series s"):
