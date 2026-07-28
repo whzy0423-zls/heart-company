@@ -39,6 +39,32 @@ func TestSchemaDefinesClassroomPersistenceBoundaries(t *testing.T) {
 	}
 }
 
+func TestSchemaClassroomContentsPersistCoverOwnershipAndAspectRatio(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(raw)
+	contents := extractClassroomCreateTable(sql, "classroom_contents")
+	for _, fragment := range []string{
+		"manual_cover_object_key TEXT NOT NULL DEFAULT ''",
+		"cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9'",
+		"CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'))",
+	} {
+		if !strings.Contains(contents, fragment) {
+			t.Errorf("classroom_contents is missing cover setting %q", fragment)
+		}
+	}
+	for _, migration := range []string{
+		"ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS manual_cover_object_key TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9'",
+	} {
+		if !strings.Contains(sql, migration) {
+			t.Errorf("schema is missing idempotent cover migration %q", migration)
+		}
+	}
+}
+
 func TestSchemaOrdersClassroomForeignKeysAfterDependencies(t *testing.T) {
 	raw, err := os.ReadFile("schema.sql")
 	if err != nil {

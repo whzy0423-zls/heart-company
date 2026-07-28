@@ -115,6 +115,11 @@ func (s *Store) CreateContent(ctx context.Context, item Content) (Content, error
 	if item.Status != ContentDraft {
 		return Content{}, errors.New("new content must start as draft")
 	}
+	var err error
+	item.CoverAspectRatio, err = NormalizeCoverAspectRatio(item.CoverAspectRatio)
+	if err != nil {
+		return Content{}, err
+	}
 	if err := item.Validate(); err != nil {
 		return Content{}, err
 	}
@@ -126,9 +131,9 @@ func (s *Store) CreateContent(ctx context.Context, item Content) (Content, error
 		return Content{}, err
 	}
 	err = s.db.QueryRowContext(ctx, `INSERT INTO classroom_contents
-		(series_id,show_as_standalone,title,description,content_type,media_asset_id,cover_url,duration_seconds,teacher_key,teacher_name_snapshot,recorded_at,badge,tags,episode_no,sort_order,status,playback_blocked,access_level,price_cents,published_at,created_by,updated_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16,$17,$18,$19,$20,$21,$21)
-		RETURNING id,created_at,updated_at`, item.SeriesID, item.ShowAsStandalone, item.Title, item.Description, item.ContentType, item.MediaAssetID, item.CoverURL, item.DurationSeconds, item.TeacherKey, item.TeacherNameSnapshot, item.RecordedAt, item.Badge, string(tags), item.EpisodeNo, item.SortOrder, item.Status, item.PlaybackBlocked, item.AccessLevel, item.PriceCents, item.PublishedAt, item.CreatedBy).Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+		(series_id,show_as_standalone,title,description,content_type,media_asset_id,cover_url,manual_cover_object_key,cover_aspect_ratio,duration_seconds,teacher_key,teacher_name_snapshot,recorded_at,badge,tags,episode_no,sort_order,status,playback_blocked,access_level,price_cents,published_at,created_by,updated_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17,$18,$19,$20,$21,$22,$23,$23)
+		RETURNING id,created_at,updated_at`, item.SeriesID, item.ShowAsStandalone, item.Title, item.Description, item.ContentType, item.MediaAssetID, item.CoverURL, item.ManualCoverObjectKey, item.CoverAspectRatio, item.DurationSeconds, item.TeacherKey, item.TeacherNameSnapshot, item.RecordedAt, item.Badge, string(tags), item.EpisodeNo, item.SortOrder, item.Status, item.PlaybackBlocked, item.AccessLevel, item.PriceCents, item.PublishedAt, item.CreatedBy).Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		return Content{}, fmt.Errorf("create classroom content: %w", err)
 	}
@@ -146,6 +151,11 @@ func (s *Store) GetContent(ctx context.Context, id int64) (Content, error) {
 func (s *Store) UpdateContent(ctx context.Context, item Content, expectedUpdatedAt time.Time) (Content, error) {
 	if expectedUpdatedAt.IsZero() {
 		return Content{}, ErrConflict
+	}
+	var err error
+	item.CoverAspectRatio, err = NormalizeCoverAspectRatio(item.CoverAspectRatio)
+	if err != nil {
+		return Content{}, err
 	}
 	if err := item.Validate(); err != nil {
 		return Content{}, err
@@ -192,7 +202,7 @@ func (s *Store) UpdateContent(ctx context.Context, item Content, expectedUpdated
 	if err != nil {
 		return Content{}, err
 	}
-	err = tx.QueryRowContext(ctx, `UPDATE classroom_contents SET series_id=$1,show_as_standalone=$2,title=$3,description=$4,content_type=$5,media_asset_id=$6,cover_url=$7,duration_seconds=$8,teacher_key=$9,teacher_name_snapshot=$10,recorded_at=$11,badge=$12,tags=$13::jsonb,episode_no=$14,sort_order=$15,status=$16,playback_blocked=$17,access_level=$18,price_cents=$19,published_at=$20,updated_by=$21,updated_at=now() WHERE id=$22 AND updated_at=$23 RETURNING created_at,updated_at`, item.SeriesID, item.ShowAsStandalone, item.Title, item.Description, item.ContentType, item.MediaAssetID, item.CoverURL, item.DurationSeconds, item.TeacherKey, item.TeacherNameSnapshot, item.RecordedAt, item.Badge, string(tags), item.EpisodeNo, item.SortOrder, item.Status, item.PlaybackBlocked, item.AccessLevel, item.PriceCents, item.PublishedAt, item.UpdatedBy, item.ID, expectedUpdatedAt).Scan(&item.CreatedAt, &item.UpdatedAt)
+	err = tx.QueryRowContext(ctx, `UPDATE classroom_contents SET series_id=$1,show_as_standalone=$2,title=$3,description=$4,content_type=$5,media_asset_id=$6,cover_url=$7,manual_cover_object_key=$8,cover_aspect_ratio=$9,duration_seconds=$10,teacher_key=$11,teacher_name_snapshot=$12,recorded_at=$13,badge=$14,tags=$15::jsonb,episode_no=$16,sort_order=$17,status=$18,playback_blocked=$19,access_level=$20,price_cents=$21,published_at=$22,updated_by=$23,updated_at=now() WHERE id=$24 AND updated_at=$25 RETURNING created_at,updated_at`, item.SeriesID, item.ShowAsStandalone, item.Title, item.Description, item.ContentType, item.MediaAssetID, item.CoverURL, item.ManualCoverObjectKey, item.CoverAspectRatio, item.DurationSeconds, item.TeacherKey, item.TeacherNameSnapshot, item.RecordedAt, item.Badge, string(tags), item.EpisodeNo, item.SortOrder, item.Status, item.PlaybackBlocked, item.AccessLevel, item.PriceCents, item.PublishedAt, item.UpdatedBy, item.ID, expectedUpdatedAt).Scan(&item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Content{}, ErrConflict
 	}
@@ -222,7 +232,7 @@ func (s *Store) ListContents(ctx context.Context, filter ContentFilter) ([]Conte
 		clauses = append(clauses, "(series_id IS NULL OR show_as_standalone=true)")
 	}
 	args = append(args, boundedLimit(filter.Limit), max(filter.Offset, 0))
-	query := `SELECT id,series_id,show_as_standalone,title,description,content_type,media_asset_id,cover_url,duration_seconds,teacher_key,teacher_name_snapshot,recorded_at,badge,tags,episode_no,sort_order,status,playback_blocked,access_level,price_cents,published_at,created_by,updated_by,created_at,updated_at FROM classroom_contents WHERE ` + strings.Join(clauses, " AND ") + fmt.Sprintf(" ORDER BY sort_order,id LIMIT $%d OFFSET $%d", len(args)-1, len(args))
+	query := `SELECT id,series_id,show_as_standalone,title,description,content_type,media_asset_id,cover_url,manual_cover_object_key,cover_aspect_ratio,duration_seconds,teacher_key,teacher_name_snapshot,recorded_at,badge,tags,episode_no,sort_order,status,playback_blocked,access_level,price_cents,published_at,created_by,updated_by,created_at,updated_at FROM classroom_contents WHERE ` + strings.Join(clauses, " AND ") + fmt.Sprintf(" ORDER BY sort_order,id LIMIT $%d OFFSET $%d", len(args)-1, len(args))
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list classroom contents: %w", err)
@@ -328,7 +338,7 @@ type queryRower interface {
 }
 
 const seriesSelect = `SELECT id,title,summary,cover_url,cover_asset_id,teacher_key,teacher_name_snapshot,sort_order,status,playback_blocked,access_level,price_cents,published_at,created_by,updated_by,created_at,updated_at FROM classroom_series WHERE id=$1`
-const contentSelect = `SELECT id,series_id,show_as_standalone,title,description,content_type,media_asset_id,cover_url,duration_seconds,teacher_key,teacher_name_snapshot,recorded_at,badge,tags,episode_no,sort_order,status,playback_blocked,access_level,price_cents,published_at,created_by,updated_by,created_at,updated_at FROM classroom_contents WHERE id=$1`
+const contentSelect = `SELECT id,series_id,show_as_standalone,title,description,content_type,media_asset_id,cover_url,manual_cover_object_key,cover_aspect_ratio,duration_seconds,teacher_key,teacher_name_snapshot,recorded_at,badge,tags,episode_no,sort_order,status,playback_blocked,access_level,price_cents,published_at,created_by,updated_by,created_at,updated_at FROM classroom_contents WHERE id=$1`
 const mediaAssetSelect = `SELECT id,bucket,object_key,etag,checksum,content_type,size_bytes,duration_seconds,width,height,cover_object_key,storage_status,created_by,created_at,updated_at FROM classroom_media_assets WHERE id=$1`
 
 func getSeries(ctx context.Context, q queryRower, id int64, forUpdate bool) (Series, error) {
@@ -372,7 +382,7 @@ func scanSeries(row scanner) (Series, error) {
 func scanContent(row scanner) (Content, error) {
 	var item Content
 	var tags []byte
-	err := row.Scan(&item.ID, &item.SeriesID, &item.ShowAsStandalone, &item.Title, &item.Description, &item.ContentType, &item.MediaAssetID, &item.CoverURL, &item.DurationSeconds, &item.TeacherKey, &item.TeacherNameSnapshot, &item.RecordedAt, &item.Badge, &tags, &item.EpisodeNo, &item.SortOrder, &item.Status, &item.PlaybackBlocked, &item.AccessLevel, &item.PriceCents, &item.PublishedAt, &item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt)
+	err := row.Scan(&item.ID, &item.SeriesID, &item.ShowAsStandalone, &item.Title, &item.Description, &item.ContentType, &item.MediaAssetID, &item.CoverURL, &item.ManualCoverObjectKey, &item.CoverAspectRatio, &item.DurationSeconds, &item.TeacherKey, &item.TeacherNameSnapshot, &item.RecordedAt, &item.Badge, &tags, &item.EpisodeNo, &item.SortOrder, &item.Status, &item.PlaybackBlocked, &item.AccessLevel, &item.PriceCents, &item.PublishedAt, &item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Content{}, ErrNotFound
 	}
@@ -383,6 +393,10 @@ func scanContent(row scanner) (Content, error) {
 		if err := json.Unmarshal(tags, &item.Tags); err != nil {
 			return Content{}, err
 		}
+	}
+	item.CoverAspectRatio, err = NormalizeCoverAspectRatio(item.CoverAspectRatio)
+	if err != nil {
+		return Content{}, err
 	}
 	return item, nil
 }
