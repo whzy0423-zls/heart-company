@@ -22,7 +22,7 @@ import { createClassroomPurchaseController } from "../../utils/classroomProgress
 import { getToken } from "../../utils/auth";
 import { userErrorMessage } from "../../utils/userMessage";
 
-const activeTab = ref("series");
+const activeTab = ref("standalone");
 const seriesItems = ref([]);
 const standaloneItems = ref([]);
 const loadedTabs = ref({ series: false, standalone: false });
@@ -52,7 +52,7 @@ const activeItems = computed(() =>
   activeTab.value === "series" ? seriesItems.value : standaloneItems.value,
 );
 const emptyCopy = computed(() =>
-  activeTab.value === "series" ? "系列课程正在准备中" : "独立课件正在准备中",
+  activeTab.value === "series" ? "系列课程正在准备中" : "课件正在准备中",
 );
 const seriesPaymentBusy = computed(
   () => seriesPaymentState.value === "creating" || seriesPaymentState.value === "pending",
@@ -326,6 +326,7 @@ function formatDuration(seconds) {
 onLoad((options = {}) => {
   disposed = false;
   skipNextShowRefresh = true;
+  if (options.tab === "series") activeTab.value = "series";
   if (options.tab === "standalone") activeTab.value = "standalone";
   loadActiveList();
   loadContinueLearning();
@@ -430,9 +431,28 @@ onUnload(() => {
       <text>{{ loadError }}</text>
       <button class="state-action" :disabled="loading" @click="retryActiveList">重新加载</button>
     </view>
-    <view v-else-if="activeItems.length === 0" class="classroom-state" aria-live="polite">{{
-      emptyCopy
-    }}</view>
+    <view
+      v-else-if="activeItems.length === 0"
+      class="classroom-state classroom-empty"
+      aria-live="polite"
+    >
+      <view class="classroom-empty__mark" aria-hidden="true">
+        <view class="classroom-empty__play"></view>
+      </view>
+      <text class="classroom-empty__title">{{ emptyCopy }}</text>
+      <text class="classroom-empty__copy">{{
+        activeTab === "series"
+          ? "你发布的视频和音频课件会优先展示在“独立课件”里，也可以在后台把课件加入系列。"
+          : "后台发布后会自动同步到这里，请确认课件状态为已发布。"
+      }}</text>
+      <button
+        v-if="activeTab === 'series'"
+        class="classroom-empty__action"
+        @click="selectTab('standalone')"
+      >
+        查看独立课件
+      </button>
+    </view>
 
     <view v-else class="classroom-list">
       <view v-for="item in activeItems" :key="item.id" class="classroom-list__item">
@@ -596,13 +616,19 @@ onUnload(() => {
 <style scoped>
 .classroom {
   min-height: 100vh;
-  background: #f4f8f6;
+  background:
+    radial-gradient(circle at 0 0, rgba(79, 70, 229, 0.10), transparent 30%),
+    radial-gradient(circle at 100% 16%, rgba(245, 158, 11, 0.10), transparent 28%),
+    #f8fafc;
 }
 .classroom-hero {
   padding: 38rpx 34rpx 40rpx;
   border-radius: 38rpx;
   color: #fff;
-  background: linear-gradient(135deg, #0f766e, #15803d);
+  background:
+    radial-gradient(circle at 88% 12%, rgba(255, 255, 255, 0.20), transparent 24%),
+    linear-gradient(135deg, #0f172a 0%, #4338ca 56%, #7c3aed 100%);
+  box-shadow: 0 24rpx 54rpx -34rpx rgba(67, 56, 202, 0.66);
 }
 .classroom-hero__eyebrow,
 .classroom-hero__title,
@@ -629,7 +655,8 @@ onUnload(() => {
   display: flex;
   gap: 12rpx;
   padding: 8rpx;
-  background: #e7f3ee;
+  background: rgba(238, 242, 255, 0.92);
+  border: 2rpx solid #e0e7ff;
   border-radius: 24rpx;
 }
 .continue-learning {
@@ -637,9 +664,9 @@ onUnload(() => {
   width: 100%;
   min-height: 176rpx;
   padding: 28rpx;
-  color: #173e32;
+  color: #0f172a;
   text-align: left;
-  background: linear-gradient(135deg, #ecfdf5, #eff6ff);
+  background: linear-gradient(135deg, #eef2ff, #fff7ed);
   border-radius: 28rpx;
 }
 .continue-learning::after {
@@ -647,12 +674,12 @@ onUnload(() => {
 }
 .continue-learning--loading,
 .continue-learning--error {
-  color: #64756e;
+  color: #64748b;
   font-size: 25rpx;
   text-align: center;
 }
 .continue-learning--error {
-  color: #9f3a38;
+  color: #dc2626;
 }
 .continue-learning__head {
   display: flex;
@@ -667,13 +694,13 @@ onUnload(() => {
 }
 .continue-learning__eyebrow,
 .continue-learning__action {
-  color: #0f766e;
+  color: #4338ca;
   font-size: 23rpx;
   font-weight: 800;
 }
 .continue-learning__title {
   margin-top: 6rpx;
-  color: #173e32;
+  color: #0f172a;
   font-size: 30rpx;
   font-weight: 900;
   line-height: 1.4;
@@ -682,23 +709,23 @@ onUnload(() => {
   height: 12rpx;
   margin-top: 22rpx;
   overflow: hidden;
-  background: #cfe7dc;
+  background: #c7d2fe;
   border-radius: 999rpx;
 }
 .continue-learning__progress-fill {
   height: 100%;
-  background: #0f766e;
+  background: #4338ca;
   border-radius: inherit;
 }
 .continue-learning__copy {
   margin-top: 12rpx;
-  color: #587167;
+  color: #64748b;
   font-size: 23rpx;
 }
 .classroom-tab {
   flex: 1;
   min-height: 88rpx;
-  color: #527066;
+  color: #64748b;
   font-size: 27rpx;
   font-weight: 800;
   line-height: 88rpx;
@@ -718,12 +745,12 @@ onUnload(() => {
   font-size: 22rpx;
   font-weight: 800;
   line-height: 64rpx;
-  background: #0f766e;
+  background: #4338ca;
   border-radius: 16rpx;
 }
 .series-payment {
   padding: 24rpx;
-  color: #52685f;
+  color: #475569;
   font-size: 24rpx;
   background: #fff;
   border-radius: 24rpx;
@@ -733,13 +760,13 @@ onUnload(() => {
   gap: 12rpx;
 }
 .classroom-tab--active {
-  color: #0f6b4f;
+  color: #4338ca;
   background: #fff;
-  box-shadow: 0 10rpx 26rpx rgba(15, 107, 79, 0.12);
+  box-shadow: 0 10rpx 26rpx rgba(67, 56, 202, 0.14);
 }
 .classroom-state {
   padding: 48rpx 30rpx;
-  color: #64756e;
+  color: #64748b;
   font-size: 27rpx;
   line-height: 1.6;
   text-align: center;
@@ -747,16 +774,73 @@ onUnload(() => {
   border-radius: 28rpx;
 }
 .classroom-state--error {
-  color: #9f3a38;
+  color: #dc2626;
+}
+.classroom-empty {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  padding: 56rpx 38rpx;
+  border: 2rpx solid #e0e7ff;
+  box-shadow: 0 18rpx 36rpx -30rpx rgba(67, 56, 202, 0.38);
+}
+.classroom-empty__mark {
+  position: relative;
+  width: 104rpx;
+  height: 104rpx;
+  border-radius: 32rpx;
+  background: linear-gradient(135deg, #4338ca, #7c3aed);
+  box-shadow: 0 18rpx 34rpx -22rpx rgba(67, 56, 202, 0.62);
+}
+.classroom-empty__play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-top: 17rpx solid transparent;
+  border-bottom: 17rpx solid transparent;
+  border-left: 28rpx solid #ffffff;
+  transform: translate(-35%, -50%);
+}
+.classroom-empty__title,
+.classroom-empty__copy {
+  display: block;
+}
+.classroom-empty__title {
+  margin-top: 24rpx;
+  color: #0f172a;
+  font-size: 30rpx;
+  font-weight: 900;
+}
+.classroom-empty__copy {
+  margin-top: 12rpx;
+  color: #64748b;
+  font-size: 24rpx;
+  line-height: 1.6;
+}
+.classroom-empty__action {
+  min-height: 88rpx;
+  margin-top: 24rpx;
+  padding: 0 34rpx;
+  color: #ffffff;
+  font-size: 25rpx;
+  font-weight: 900;
+  line-height: 88rpx;
+  background: #4338ca;
+  border-radius: 999rpx;
+}
+.classroom-empty__action::after {
+  border: 0;
 }
 .state-action {
   min-height: 88rpx;
   margin-top: 20rpx;
   padding: 0 32rpx;
-  color: #0f6b4f;
+  color: #4338ca;
   font-weight: 800;
   line-height: 88rpx;
-  background: #ecfdf5;
+  background: #eef2ff;
   border-radius: 18rpx;
 }
 .classroom-list {
@@ -778,8 +862,8 @@ onUnload(() => {
 }
 .classroom-card--selected {
   box-shadow:
-    0 0 0 4rpx #34d399,
-    0 16rpx 32rpx rgba(15, 118, 110, 0.12);
+    0 0 0 4rpx #f59e0b,
+    0 16rpx 32rpx rgba(67, 56, 202, 0.14);
 }
 .classroom-card--loading {
   opacity: 0.82;
@@ -791,7 +875,7 @@ onUnload(() => {
   display: block;
   width: 100%;
   height: 100%;
-  background: #dbeee6;
+  background: #e0e7ff;
 }
 .classroom-card__media {
   width: 100%;
@@ -800,14 +884,14 @@ onUnload(() => {
   position: relative;
   width: 100%;
   overflow: hidden;
-  background: linear-gradient(180deg, #dff2eb, #c9e7db);
+  background: linear-gradient(135deg, #eef2ff, #fff7ed);
 }
 .classroom-card__cover-shell::after {
   content: "";
   position: absolute;
   inset: auto 0 0;
   height: 30%;
-  background: linear-gradient(180deg, rgba(9, 20, 16, 0), rgba(9, 20, 16, 0.36));
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0), rgba(15, 23, 42, 0.36));
   pointer-events: none;
 }
 .classroom-card__cover.classroom-cover--16x9 {
@@ -823,7 +907,7 @@ onUnload(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #0f766e;
+  color: #4338ca;
   font-size: 58rpx;
   font-weight: 900;
 }
@@ -836,7 +920,7 @@ onUnload(() => {
   justify-content: space-between;
   padding: 22rpx;
   color: #fff;
-  background: linear-gradient(180deg, rgba(9, 20, 16, 0.06), rgba(9, 20, 16, 0.56));
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.08), rgba(15, 23, 42, 0.58));
 }
 .classroom-card__overlay-tags {
   display: flex;
@@ -860,7 +944,7 @@ onUnload(() => {
   gap: 10rpx;
   min-height: 60rpx;
   padding: 0 18rpx;
-  color: #173e32;
+  color: #0f172a;
   font-size: 22rpx;
   font-weight: 900;
   background: rgba(255, 255, 255, 0.96);
@@ -885,19 +969,19 @@ onUnload(() => {
 }
 .classroom-card__kind,
 .classroom-card__footer {
-  color: #708078;
+  color: #64748b;
   font-size: 22rpx;
 }
 .classroom-card__title {
   margin-top: 14rpx;
-  color: #16221d;
+  color: #111827;
   font-size: 30rpx;
   font-weight: 900;
   line-height: 1.4;
 }
 .classroom-card__summary {
   margin-top: 8rpx;
-  color: #68776f;
+  color: #64748b;
   font-size: 23rpx;
   line-height: 1.5;
 }
@@ -906,7 +990,7 @@ onUnload(() => {
   padding-top: 18rpx;
 }
 .classroom-card__action {
-  color: #0f766e;
+  color: #4338ca;
   font-weight: 800;
 }
 .series-panel__chapters {
@@ -924,13 +1008,13 @@ onUnload(() => {
   display: block;
 }
 .series-panel__eyebrow {
-  color: #0f766e;
+  color: #4338ca;
   font-size: 23rpx;
   font-weight: 800;
 }
 .series-panel__title {
   margin-top: 8rpx;
-  color: #17241e;
+  color: #0f172a;
   font-size: 34rpx;
   font-weight: 900;
 }
@@ -941,7 +1025,7 @@ onUnload(() => {
   min-height: 104rpx;
   padding: 16rpx 10rpx;
   text-align: left;
-  background: #f5faf7;
+  background: #f8fafc;
   border-radius: 18rpx;
 }
 .lesson-row__index {
@@ -951,7 +1035,7 @@ onUnload(() => {
   width: 52rpx;
   height: 52rpx;
   color: #fff;
-  background: #0f766e;
+  background: #4338ca;
   border-radius: 50%;
 }
 .lesson-row__body {
@@ -964,17 +1048,17 @@ onUnload(() => {
   display: block;
 }
 .lesson-row__title {
-  color: #1b2822;
+  color: #111827;
   font-size: 26rpx;
   font-weight: 800;
 }
 .lesson-row__meta {
   margin-top: 6rpx;
-  color: #718078;
+  color: #64748b;
   font-size: 22rpx;
 }
 .lesson-row__arrow {
-  color: #90a09a;
+  color: #94a3b8;
   font-size: 32rpx;
   font-weight: 700;
 }

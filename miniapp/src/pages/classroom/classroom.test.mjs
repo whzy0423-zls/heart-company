@@ -33,6 +33,35 @@ assert.match(
   /classroomCoverRatioClass/,
   "classroom cover cards should apply the returned cover aspect ratio",
 );
+for (const forbidden of [
+  /#0f766e/i,
+  /#15803d/i,
+  /#0f6b4f/i,
+  /#ecfdf5/i,
+  /#e7f3ee/i,
+  /rgba\(\s*15,\s*118,\s*110/i,
+]) {
+  assert.doesNotMatch(
+    source,
+    forbidden,
+    "classroom page should not keep the old dominant green palette",
+  );
+}
+assert.match(
+  source,
+  /#4338ca|#4f46e5|#7c3aed|#f59e0b/i,
+  "classroom page should use the refreshed blue-violet warm-accent palette",
+);
+assert.match(
+  source,
+  /const\s+activeTab\s*=\s*ref\("standalone"\)/,
+  "classroom should default to standalone courseware so newly published videos are visible first",
+);
+assert.match(
+  source,
+  /class="classroom-empty__action"[\s\S]*@click="selectTab\('standalone'\)"/,
+  "empty series state should guide users to standalone courseware",
+);
 assert.match(
   source,
   /class="classroom-card__media"/,
@@ -304,6 +333,7 @@ try {
   for (const outcome of ["resolve", "reject"]) {
     const { page, state } = await createHarness();
     const staleSeries = deferred();
+    page.activeTab.value = "series";
     state.getSeries = () => staleSeries.promise;
     const oldRequest = page.openSeries({ id: "12", title: "旧系列" });
     assert.equal(page.seriesLoading.value, true);
@@ -351,6 +381,7 @@ try {
 
   {
     const { page, state } = await createHarness();
+    page.activeTab.value = "series";
     let requests = 0;
     state.getSeries = async () => {
       requests += 1;
@@ -375,6 +406,7 @@ try {
 
   {
     const { page, state } = await createHarness();
+    page.activeTab.value = "series";
     let requests = 0;
     state.getSeries = async () => {
       requests += 1;
@@ -396,6 +428,7 @@ try {
 
   for (const outcome of ["resolve", "reject"]) {
     const { page, state } = await createHarness();
+    page.activeTab.value = "series";
     state.getSeries = async () => ({
       series: { id: 12, title: "缓存 A" },
       contents: [{ id: 21, title: "A 第一课" }],
@@ -434,6 +467,7 @@ try {
 
   {
     const { page, state } = await createHarness();
+    page.activeTab.value = "series";
     state.token = "jwt";
     const payment = deferred();
     state.devPay = () => payment.promise;
@@ -461,6 +495,7 @@ try {
 
   {
     const { page, state } = await createHarness();
+    page.activeTab.value = "series";
     state.token = "jwt";
     let detailCalls = 0;
     state.getSeries = async () => {
@@ -480,6 +515,7 @@ try {
 
   {
     const { page, state } = await createHarness();
+    page.activeTab.value = "series";
     state.token = "jwt";
     page.seriesItems.value = [{ id: "12", title: "购买前" }];
     let detailCalls = 0;

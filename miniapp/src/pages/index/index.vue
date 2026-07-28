@@ -55,7 +55,7 @@ function goProfile() {
   activateHomeEntry('profile')
 }
 function goClassroom() {
-  uni.navigateTo({ url: '/pages/classroom/classroom?tab=series' })
+  uni.navigateTo({ url: '/pages/classroom/classroom?tab=standalone' })
 }
 function hideWheel() {
   wheelVisible.value = false

@@ -11,8 +11,8 @@ assert.match(
 );
 assert.match(
   source,
-  /\/pages\/classroom\/classroom\?tab=series/,
-  "home classroom entry should open the teacher classroom series tab",
+  /\/pages\/classroom\/classroom\?tab=standalone/,
+  "home classroom entry should open standalone courseware first so published videos are visible",
 );
 assert.match(
   source,

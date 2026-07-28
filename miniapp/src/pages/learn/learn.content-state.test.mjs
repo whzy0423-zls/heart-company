@@ -41,6 +41,16 @@ assert.match(
 );
 assert.match(
   source,
+  /function\s+openClassroom\s*\(tab\s*=\s*"standalone"\)/,
+  "learning page classroom entry should default to standalone courseware first",
+);
+assert.match(
+  source,
+  /@click="openClassroom\('standalone'\)"/,
+  "learning page classroom hero should open standalone courseware first",
+);
+assert.match(
+  source,
   /class="classroom-entry__hero"/,
   "learning page classroom area should begin with a content-platform hero banner",
 );

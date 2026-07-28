@@ -164,7 +164,7 @@ function retryClassroomPreview() {
   return loadClassroomPreview();
 }
 
-function openClassroom(tab = "series") {
+function openClassroom(tab = "standalone") {
   uni.navigateTo({ url: `/pages/classroom/classroom?tab=${tab}` });
 }
 
@@ -201,7 +201,7 @@ function goTest() {
             <text class="section-kicker">老师课堂</text>
             <text class="sec-title">视频与音频课件</text>
           </view>
-          <button class="classroom-entry__more" @click="openClassroom('series')">查看全部</button>
+          <button class="classroom-entry__more" @click="openClassroom('standalone')">查看全部</button>
         </view>
 
         <view
@@ -211,9 +211,9 @@ function goTest() {
           tabindex="0"
           aria-label="进入老师课堂查看视频和音频课件"
           hover-class="classroom-entry__hero--pressed"
-          @click="openClassroom('series')"
-          @keydown.enter="openClassroom('series')"
-          @keydown.space.prevent="openClassroom('series')"
+          @click="openClassroom('standalone')"
+          @keydown.enter="openClassroom('standalone')"
+          @keydown.space.prevent="openClassroom('standalone')"
         >
           <view class="classroom-entry__hero-copy">
             <text class="classroom-entry__hero-eyebrow">课堂精选</text>
@@ -222,7 +222,7 @@ function goTest() {
             <button
               class="classroom-entry__hero-cta"
               hover-class="classroom-entry__hero-cta--pressed"
-              @click.stop="openClassroom('series')"
+              @click.stop="openClassroom('standalone')"
             >
               进入老师课堂
             </button>
