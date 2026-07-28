@@ -401,7 +401,7 @@ onMounted(retryLoad);
             <Select
               v-model:value="form.targetType"
               :options="targetTypeOptions"
-            />
+             placeholder="请选择推送目标"/>
             <Select
               v-if="form.targetType === 'level'"
               v-model:value="form.targetValue"
@@ -427,7 +427,7 @@ onMounted(retryLoad);
             v-model:value="form.deepLink"
             :options="deepLinkOptions"
             class="deep-link-select"
-          />
+           placeholder="请选择点击跳转"/>
         </Form.Item>
       </Form>
     </Modal>

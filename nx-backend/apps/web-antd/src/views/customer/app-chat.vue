@@ -86,7 +86,7 @@ onMounted(() => {
           <Button size="small" type="link" @click="load">重试</Button>
         </template>
       </Alert>
-      <div class="toolbar"><Input v-model:value="query.keyword" allow-clear class="keyword" placeholder="搜索内容 / 手机号 / 昵称" @press-enter="search"/><Select v-model:value="query.role" :options="roleOptions" class="filter" @change="search"/><Select v-model:value="query.feedback" :options="feedbackOptions" class="filter" @change="search"/><Space><Button type="primary" @click="search">查询</Button><Button :loading="loading" @click="load">刷新</Button></Space></div>
+      <div class="toolbar"><Input v-model:value="query.keyword" allow-clear class="keyword" placeholder="搜索内容 / 手机号 / 昵称" @press-enter="search"/><Select v-model:value="query.role" :options="roleOptions" class="filter" @change="search" placeholder="请选择角色"/><Select v-model:value="query.feedback" :options="feedbackOptions" class="filter" @change="search" placeholder="请选择反馈状态"/><Space><Button type="primary" @click="search">查询</Button><Button :loading="loading" @click="load">刷新</Button></Space></div>
       <Table :columns="columns" :data-source="items" :loading="loading" :pagination="{ current: query.page, pageSize: query.pageSize, showSizeChanger: true, total }" row-key="id" :scroll="{ x: 1180 }" @change="change">
         <template #bodyCell="{ column, record }"><template v-if="column.dataIndex === 'role'"><Tag>{{ roleLabel(record.role) }}</Tag></template><template v-if="column.dataIndex === 'favorite'">{{ record.favorite ? '是' : '否' }}</template><template v-if="column.key === 'action'"><Button size="small" type="link" @click="open(row(record))">详情</Button></template></template>
       </Table>

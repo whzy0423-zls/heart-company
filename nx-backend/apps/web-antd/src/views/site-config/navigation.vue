@@ -59,7 +59,7 @@ function removeAt<T>(list: T[], index: number) {
               <Input v-model:value="item.to" placeholder="链接" />
             </Col>
             <Col :md="5" :xs="24">
-              <Select v-model:value="item.type" :options="typeOptions" />
+              <Select v-model:value="item.type" :options="typeOptions"  placeholder="请选择类型"/>
             </Col>
             <Col :md="3" :xs="24">
               <Button
@@ -92,7 +92,7 @@ function removeAt<T>(list: T[], index: number) {
               <Input v-model:value="item.to" placeholder="链接" />
             </Col>
             <Col :md="5" :xs="24">
-              <Select v-model:value="item.type" :options="typeOptions" />
+              <Select v-model:value="item.type" :options="typeOptions"  placeholder="请选择类型"/>
             </Col>
             <Col :md="3" :xs="24">
               <Button

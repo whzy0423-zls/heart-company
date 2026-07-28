@@ -20,17 +20,17 @@ const { config, linesToArray, loading, saveConfig, saving } =
       <Row :gutter="16">
         <Col :md="8" :xs="24">
           <Form.Item label="Eyebrow">
-            <Input v-model:value="config.home.signup.eyebrow" />
+            <Input v-model:value="config.home.signup.eyebrow"  placeholder="请输入Eyebrow"/>
           </Form.Item>
         </Col>
         <Col :md="16" :xs="24">
           <Form.Item label="标题">
-            <Input v-model:value="config.home.signup.title" />
+            <Input v-model:value="config.home.signup.title"  placeholder="请输入标题"/>
           </Form.Item>
         </Col>
         <Col :xs="24">
           <Form.Item label="说明">
-            <Textarea v-model:value="config.home.signup.lead" :rows="3" />
+            <Textarea v-model:value="config.home.signup.lead" :rows="3"  placeholder="请输入说明"/>
           </Form.Item>
         </Col>
         <Col :xs="24">
@@ -39,7 +39,7 @@ const { config, linesToArray, loading, saveConfig, saving } =
               :rows="4"
               :value="config.home.signup.bullets.join('\n')"
               @update:value="config.home.signup.bullets = linesToArray($event)"
-            />
+             placeholder="请输入卖点，每行一条"/>
           </Form.Item>
         </Col>
         <Col :xs="24">
@@ -50,12 +50,12 @@ const { config, linesToArray, loading, saveConfig, saving } =
               @update:value="
                 config.home.signup.interestOptions = linesToArray($event)
               "
-            />
+             placeholder="请输入兴趣方向，每行一条"/>
           </Form.Item>
         </Col>
         <Col :xs="24">
           <Form.Item label="提交成功文案">
-            <Input v-model:value="config.home.signup.successText" />
+            <Input v-model:value="config.home.signup.successText"  placeholder="请输入提交成功文案"/>
           </Form.Item>
         </Col>
       </Row>

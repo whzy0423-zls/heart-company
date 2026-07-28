@@ -170,7 +170,7 @@ onMounted(async () => {
               </div>
             </Form.Item>
             <Form.Item label="模型">
-              <Select v-model:value="form.model" :options="modelOptions" />
+              <Select v-model:value="form.model" :options="modelOptions"  placeholder="请选择模型"/>
             </Form.Item>
             <Form.Item label="测试文本" required>
               <Input.TextArea

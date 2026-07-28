@@ -218,13 +218,13 @@ onMounted(load);
         </Form.Item>
         <Space align="start" wrap>
           <Form.Item label="排序">
-            <InputNumber v-model:value="form.sort" :min="0" class="number-input" />
+            <InputNumber v-model:value="form.sort" :min="0" class="number-input"  placeholder="请输入排序"/>
           </Form.Item>
           <Form.Item label="维度">
             <Input v-model:value="form.dimension" class="dimension-input" placeholder="如 core" />
           </Form.Item>
           <Form.Item label="状态">
-            <Select v-model:value="form.status" :options="statusOptions" class="status-input" />
+            <Select v-model:value="form.status" :options="statusOptions" class="status-input"  placeholder="请选择状态"/>
           </Form.Item>
         </Space>
         <Form.Item label="选项 JSON" required>

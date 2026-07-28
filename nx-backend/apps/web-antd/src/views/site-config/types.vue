@@ -41,17 +41,17 @@ function removeAt<T>(list: T[], index: number) {
           <Row :gutter="12">
             <Col :md="3" :xs="24">
               <Form.Item label="编号">
-                <Input v-model:value="item.id" />
+                <Input v-model:value="item.id"  placeholder="请输入编号"/>
               </Form.Item>
             </Col>
             <Col :md="5" :xs="24">
               <Form.Item label="名称">
-                <Input v-model:value="item.name" />
+                <Input v-model:value="item.name"  placeholder="请输入名称"/>
               </Form.Item>
             </Col>
             <Col :md="8" :xs="24">
               <Form.Item label="关键词">
-                <Input v-model:value="item.keywords" />
+                <Input v-model:value="item.keywords"  placeholder="请输入关键词"/>
               </Form.Item>
             </Col>
             <Col :md="8" :xs="24">
@@ -66,7 +66,7 @@ function removeAt<T>(list: T[], index: number) {
             </Col>
             <Col :xs="24">
               <Form.Item label="描述">
-                <Textarea v-model:value="item.description" :rows="2" />
+                <Textarea v-model:value="item.description" :rows="2"  placeholder="请输入描述"/>
               </Form.Item>
             </Col>
             <Col :xs="24">

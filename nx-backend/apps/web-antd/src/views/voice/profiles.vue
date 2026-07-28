@@ -319,7 +319,7 @@ onMounted(load);
                 v-model:value="query.status"
                 :options="statusOptions"
                 class="status-select"
-              />
+               placeholder="请选择备注"/>
               <Input
                 v-model:value="query.keyword"
                 allow-clear

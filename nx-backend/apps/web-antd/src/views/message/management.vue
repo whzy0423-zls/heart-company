@@ -160,12 +160,12 @@ onMounted(() => {
             v-model:value="query.type"
             :options="messageTypeOptions"
             class="type-select"
-          />
+           placeholder="请选择消息类型"/>
           <Select
             v-model:value="query.read"
             :options="readOptions"
             class="read-select"
-          />
+           placeholder="请选择阅读状态"/>
           <Input
             v-model:value="query.keyword"
             allow-clear

@@ -335,7 +335,7 @@ onMounted(() => {
             v-model:value="query.status"
             :options="statusOptions"
             class="status-select"
-          />
+           placeholder="请选择状态"/>
           <Input
             v-model:value="query.keyword"
             allow-clear
@@ -522,14 +522,14 @@ onMounted(() => {
               v-model:value="form.status"
               :options="editStatusOptions"
               class="drawer-select"
-            />
+             placeholder="请选择状态"/>
           </Form.Item>
           <Form.Item label="排序">
             <InputNumber
               v-model:value="form.sort"
               :min="0"
               class="sort-input"
-            />
+             placeholder="请输入排序"/>
           </Form.Item>
         </Space>
         <Form.Item label="听书音色">

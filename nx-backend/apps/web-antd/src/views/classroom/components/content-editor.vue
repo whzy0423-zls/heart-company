@@ -252,7 +252,7 @@ watch(
           { label: '会员', value: 'member' },
           { label: '单课付费', value: 'paid' },
         ]"
-      />
+       placeholder="请选择访问权限"/>
       <span v-if="!priceEditable" class="field-hint"
         >当前账号没有定价权限，权限与价格仅可查看。</span
       >
@@ -264,7 +264,7 @@ watch(
         :min="1"
         :precision="0"
         addon-after="分"
-      />
+       placeholder="请输入单课价格（分）"/>
     </Form.Item>
     <Alert
       v-if="
@@ -296,19 +296,19 @@ watch(
     </p>
     <Form.Item label="老师名称"
       ><Input v-model:value="form.teacherName" :disabled="!metadataEditable"
-    /></Form.Item>
+     placeholder="请输入老师名称"/></Form.Item>
     <Form.Item label="简介"
       ><Input.TextArea
         v-model:value="form.description"
         :disabled="!metadataEditable"
         :rows="4"
-    /></Form.Item>
+     placeholder="请输入简介"/></Form.Item>
     <Form.Item label="排序"
       ><InputNumber
         v-model:value="form.sortOrder"
         :disabled="!metadataEditable"
         :min="0"
-    /></Form.Item>
+     placeholder="请输入排序"/></Form.Item>
     <div class="editor-actions">
       <Space
         ><Button @click="emit('cancel')">取消</Button

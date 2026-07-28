@@ -229,7 +229,7 @@ onMounted(load);
     >
       <Form layout="vertical">
         <Form.Item label="账号">
-          <Input v-model:value="form.username" />
+          <Input v-model:value="form.username"  placeholder="请输入账号"/>
         </Form.Item>
         <Form.Item :label="form.id ? '密码（留空则不修改）' : '密码'">
           <Input.Password
@@ -247,15 +247,15 @@ onMounted(load);
           />
         </Form.Item>
         <Form.Item label="昵称">
-          <Input v-model:value="form.nickname" />
+          <Input v-model:value="form.nickname"  placeholder="请输入昵称"/>
         </Form.Item>
-        <Form.Item label="邮箱"><Input v-model:value="form.email" /></Form.Item>
+        <Form.Item label="邮箱"><Input v-model:value="form.email"  placeholder="请输入邮箱"/></Form.Item>
         <Form.Item label="角色">
           <Select
             v-model:value="form.roleIds"
             mode="multiple"
             :options="roleOptions"
-          />
+           placeholder="请选择角色"/>
         </Form.Item>
         <Form.Item label="启用">
           <Switch
@@ -264,7 +264,7 @@ onMounted(load);
           />
         </Form.Item>
         <Form.Item label="备注">
-          <Input v-model:value="form.remark" />
+          <Input v-model:value="form.remark"  placeholder="请输入备注"/>
         </Form.Item>
       </Form>
     </Modal>

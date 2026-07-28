@@ -352,7 +352,7 @@ async function removeQuote(q: MindQuote) {
           />
         </Form.Item>
         <Form.Item label="排序">
-          <InputNumber v-model:value="groupForm.sort" :min="0" />
+          <InputNumber v-model:value="groupForm.sort" :min="0"  placeholder="请输入排序"/>
         </Form.Item>
         <Form.Item label="启用">
           <Switch
@@ -373,7 +373,7 @@ async function removeQuote(q: MindQuote) {
     >
       <Form layout="vertical">
         <Form.Item label="所属分组">
-          <Select v-model:value="quoteForm.groupId" :options="groupOptions" />
+          <Select v-model:value="quoteForm.groupId" :options="groupOptions"  placeholder="请选择所属分组"/>
         </Form.Item>
         <Form.Item label="简短文案（官网卡片展示）" required>
           <Input.TextArea
@@ -402,7 +402,7 @@ async function removeQuote(q: MindQuote) {
                 v-model:value="quoteForm.sort"
                 :min="0"
                 style="width: 100%"
-              />
+               placeholder="请输入排序"/>
             </Form.Item>
           </Col>
           <Col :span="12">

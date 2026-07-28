@@ -245,7 +245,7 @@ async function testChat() {
               <Select
                 v-model:value="form.chat.provider"
                 :options="chatProviderOptions"
-              />
+               placeholder="请选择协议"/>
             </Form.Item>
             <Form.Item label="接口地址 (API Base)">
               <Input
@@ -409,7 +409,7 @@ async function testChat() {
             <Select
               v-model:value="form.admin.provider"
               :options="providerOptions"
-            />
+             placeholder="请选择协议"/>
           </Form.Item>
           <Form.Item label="接口地址 (API Base)">
             <Input
@@ -467,7 +467,7 @@ async function testChat() {
             <Select
               v-model:value="form.dailyQuiz.provider"
               :options="dailyQuizProviderOptions"
-            />
+             placeholder="请选择协议"/>
           </Form.Item>
           <Form.Item label="接口地址 (API Base)">
             <Input

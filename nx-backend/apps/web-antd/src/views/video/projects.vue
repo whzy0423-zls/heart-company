@@ -92,7 +92,7 @@
               v-for="preset in themePresets"
               :key="preset.label"
               :value="preset.value"
-            >
+             placeholder="请选择主题预设">
               {{ preset.label }}
             </Select.Option>
           </Select>
@@ -134,7 +134,7 @@
               v-for="preset in stylePresets"
               :key="preset.label"
               :value="preset.value"
-            >
+             placeholder="请选择风格预设">
               {{ preset.label }}
             </Select.Option>
           </Select>

@@ -30,7 +30,7 @@ const customerServiceQrHelp = '点击官网右下角「联系客服」后弹窗�
       <Row :gutter="16">
         <Col :md="12" :xs="24">
           <Form.Item label="品牌名称">
-            <Input v-model:value="config.site.brandName" />
+            <Input v-model:value="config.site.brandName"  placeholder="请输入品牌名称"/>
           </Form.Item>
         </Col>
         <Col :md="12" :xs="24">
@@ -59,12 +59,12 @@ const customerServiceQrHelp = '点击官网右下角「联系客服」后弹窗�
         </Col>
         <Col :md="12" :xs="24">
           <Form.Item label="页脚短语">
-            <Input v-model:value="config.site.footerTagline" />
+            <Input v-model:value="config.site.footerTagline"  placeholder="请输入页脚短语"/>
           </Form.Item>
         </Col>
         <Col :md="12" :xs="24">
           <Form.Item label="版权信息">
-            <Input v-model:value="config.site.copyright" />
+            <Input v-model:value="config.site.copyright"  placeholder="请输入版权信息"/>
           </Form.Item>
         </Col>
       </Row>

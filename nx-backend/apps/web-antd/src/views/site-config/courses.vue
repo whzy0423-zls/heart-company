@@ -35,12 +35,12 @@ function removeAt<T>(list: T[], index: number | string) {
       <Row :gutter="16">
         <Col :md="8" :xs="24">
           <Form.Item label="Eyebrow">
-            <Input v-model:value="config.home.courses.eyebrow" />
+            <Input v-model:value="config.home.courses.eyebrow"  placeholder="请输入Eyebrow"/>
           </Form.Item>
         </Col>
         <Col :md="16" :xs="24">
           <Form.Item label="区块标题">
-            <Input v-model:value="config.home.courses.title" />
+            <Input v-model:value="config.home.courses.title"  placeholder="请输入区块标题"/>
           </Form.Item>
         </Col>
       </Row>
@@ -56,17 +56,17 @@ function removeAt<T>(list: T[], index: number | string) {
         <Row :gutter="12">
           <Col :md="4" :xs="24">
             <Form.Item label="徽标">
-              <Input v-model:value="item.badge" />
+              <Input v-model:value="item.badge"  placeholder="请输入徽标"/>
             </Form.Item>
           </Col>
           <Col :md="20" :xs="24">
             <Form.Item label="标题">
-              <Input v-model:value="item.title" />
+              <Input v-model:value="item.title"  placeholder="请输入标题"/>
             </Form.Item>
           </Col>
           <Col :xs="24">
             <Form.Item label="描述">
-              <Textarea v-model:value="item.description" :rows="2" />
+              <Textarea v-model:value="item.description" :rows="2"  placeholder="请输入描述"/>
             </Form.Item>
           </Col>
           <Col :xs="24">
@@ -75,7 +75,7 @@ function removeAt<T>(list: T[], index: number | string) {
                 :rows="4"
                 :value="item.bullets.join('\n')"
                 @update:value="item.bullets = linesToArray($event)"
-              />
+               placeholder="请输入要点，每行一条"/>
             </Form.Item>
           </Col>
           <Col :xs="24">

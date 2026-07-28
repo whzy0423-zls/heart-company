@@ -20,17 +20,17 @@ const { config, linesToArray, loading, saveConfig, saving } =
       <Row :gutter="16">
         <Col :md="8" :xs="24">
           <Form.Item label="Eyebrow">
-            <Input v-model:value="config.home.quotes.eyebrow" />
+            <Input v-model:value="config.home.quotes.eyebrow"  placeholder="请输入Eyebrow"/>
           </Form.Item>
         </Col>
         <Col :md="16" :xs="24">
           <Form.Item label="标题">
-            <Input v-model:value="config.home.quotes.title" />
+            <Input v-model:value="config.home.quotes.title"  placeholder="请输入标题"/>
           </Form.Item>
         </Col>
         <Col :xs="24">
           <Form.Item label="说明">
-            <Textarea v-model:value="config.home.quotes.lead" :rows="3" />
+            <Textarea v-model:value="config.home.quotes.lead" :rows="3"  placeholder="请输入说明"/>
           </Form.Item>
         </Col>
         <Col :xs="24">
@@ -39,7 +39,7 @@ const { config, linesToArray, loading, saveConfig, saving } =
               :rows="8"
               :value="config.home.quotes.items.join('\n')"
               @update:value="config.home.quotes.items = linesToArray($event)"
-            />
+             placeholder="请输入语录，每行一条"/>
           </Form.Item>
         </Col>
       </Row>

@@ -549,12 +549,12 @@ onMounted(async () => {
         <Row :gutter="12">
           <Col :md="12" :xs="24">
             <Form.Item label="标题" required>
-              <Input v-model:value="editor.title" />
+              <Input v-model:value="editor.title"  placeholder="请输入标题"/>
             </Form.Item>
           </Col>
           <Col :md="12" :xs="24">
             <Form.Item label="主题" required>
-              <Input v-model:value="editor.theme" />
+              <Input v-model:value="editor.theme"  placeholder="请输入主题"/>
             </Form.Item>
           </Col>
         </Row>
@@ -569,7 +569,7 @@ onMounted(async () => {
           <Input.TextArea
             v-model:value="editor.globalPrompt"
             :auto-size="{ minRows: 2, maxRows: 5 }"
-          />
+           placeholder="请输入全局 Seedance 提示词"/>
           <Button
             v-if="editor.globalPrompt"
             class="copy-button"
@@ -608,16 +608,16 @@ onMounted(async () => {
               :precision="1"
               :step="0.5"
               class="duration-input"
-            />
+             placeholder="请输入时长"/>
           </template>
           <template v-else-if="column.dataIndex === 'title'">
-            <Input v-model:value="shotRecord(record).title" />
+            <Input v-model:value="shotRecord(record).title"  placeholder="请输入标题"/>
           </template>
           <template v-else-if="column.dataIndex === 'scene'">
             <Input.TextArea
               v-model:value="shotRecord(record).scene"
               :auto-size="{ minRows: 2, maxRows: 4 }"
-            />
+             placeholder="请输入场景描述"/>
           </template>
           <template v-else-if="column.dataIndex === 'characters'">
             <Input.TextArea
@@ -639,43 +639,43 @@ onMounted(async () => {
             <Input.TextArea
               v-model:value="shotRecord(record).action"
               :auto-size="{ minRows: 2, maxRows: 4 }"
-            />
+             placeholder="请输入操作类型"/>
           </template>
           <template v-else-if="column.dataIndex === 'camera'">
             <Input.TextArea
               v-model:value="shotRecord(record).camera"
               :auto-size="{ minRows: 2, maxRows: 4 }"
-            />
+             placeholder="请输入镜头描述"/>
           </template>
           <template v-else-if="column.dataIndex === 'composition'">
             <Input.TextArea
               v-model:value="shotRecord(record).composition"
               :auto-size="{ minRows: 2, maxRows: 4 }"
-            />
+             placeholder="请输入构图描述"/>
           </template>
           <template v-else-if="column.dataIndex === 'lighting'">
             <Input.TextArea
               v-model:value="shotRecord(record).lighting"
               :auto-size="{ minRows: 2, maxRows: 4 }"
-            />
+             placeholder="请输入光线描述"/>
           </template>
           <template v-else-if="column.dataIndex === 'audio'">
             <Input.TextArea
               v-model:value="shotRecord(record).audio"
               :auto-size="{ minRows: 2, maxRows: 4 }"
-            />
+             placeholder="请输入声音描述"/>
           </template>
           <template v-else-if="column.dataIndex === 'dialogue'">
             <Input.TextArea
               v-model:value="shotRecord(record).dialogue"
               :auto-size="{ minRows: 2, maxRows: 4 }"
-            />
+             placeholder="请输入对白内容"/>
           </template>
           <template v-else-if="column.dataIndex === 'seedancePrompt'">
             <Input.TextArea
               v-model:value="shotRecord(record).seedancePrompt"
               :auto-size="{ minRows: 3, maxRows: 6 }"
-            />
+             placeholder="请输入视频生成提示词"/>
             <Button
               v-if="shotRecord(record).seedancePrompt"
               class="copy-button"

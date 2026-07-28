@@ -432,7 +432,7 @@ onMounted(retryLoad);
             <Select
               v-model:value="testPushForm.targetType"
               :options="targetTypeOptions"
-            />
+             placeholder="请选择推送目标"/>
             <Select
               v-if="testPushForm.targetType === 'level'"
               v-model:value="testPushForm.targetValue"

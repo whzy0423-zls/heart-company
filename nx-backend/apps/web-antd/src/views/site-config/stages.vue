@@ -35,17 +35,17 @@ function removeAt<T>(list: T[], index: number | string) {
       <Row :gutter="16">
         <Col :md="8" :xs="24">
           <Form.Item label="Eyebrow">
-            <Input v-model:value="config.home.stages.eyebrow" />
+            <Input v-model:value="config.home.stages.eyebrow"  placeholder="请输入Eyebrow"/>
           </Form.Item>
         </Col>
         <Col :md="16" :xs="24">
           <Form.Item label="标题">
-            <Input v-model:value="config.home.stages.title" />
+            <Input v-model:value="config.home.stages.title"  placeholder="请输入标题"/>
           </Form.Item>
         </Col>
         <Col :xs="24">
           <Form.Item label="说明">
-            <Textarea v-model:value="config.home.stages.lead" :rows="3" />
+            <Textarea v-model:value="config.home.stages.lead" :rows="3"  placeholder="请输入说明"/>
           </Form.Item>
         </Col>
       </Row>
@@ -61,27 +61,27 @@ function removeAt<T>(list: T[], index: number | string) {
         <Row :gutter="12">
           <Col :md="6" :xs="24">
             <Form.Item label="阶段标识">
-              <Input v-model:value="item.kicker" />
+              <Input v-model:value="item.kicker"  placeholder="请输入阶段标识"/>
             </Form.Item>
           </Col>
           <Col :md="10" :xs="24">
             <Form.Item label="标题">
-              <Input v-model:value="item.title" />
+              <Input v-model:value="item.title"  placeholder="请输入标题"/>
             </Form.Item>
           </Col>
           <Col :md="8" :xs="24">
             <Form.Item label="链接">
-              <Input v-model:value="item.to" />
+              <Input v-model:value="item.to"  placeholder="请输入链接"/>
             </Form.Item>
           </Col>
           <Col :xs="24">
             <Form.Item label="副标题">
-              <Input v-model:value="item.subtitle" />
+              <Input v-model:value="item.subtitle"  placeholder="请输入副标题"/>
             </Form.Item>
           </Col>
           <Col :xs="24">
             <Form.Item label="描述">
-              <Textarea v-model:value="item.description" :rows="3" />
+              <Textarea v-model:value="item.description" :rows="3"  placeholder="请输入描述"/>
             </Form.Item>
           </Col>
           <Col :xs="24">

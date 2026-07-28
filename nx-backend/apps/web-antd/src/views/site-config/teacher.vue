@@ -20,12 +20,12 @@ const { config, loading, saveConfig, saving } = useSiteConfigEditor();
       <Row :gutter="16">
         <Col :md="8" :xs="24">
           <Form.Item label="Eyebrow">
-            <Input v-model:value="config.home.teacherTeaser.eyebrow" />
+            <Input v-model:value="config.home.teacherTeaser.eyebrow"  placeholder="请输入Eyebrow"/>
           </Form.Item>
         </Col>
         <Col :md="16" :xs="24">
           <Form.Item label="标题">
-            <Input v-model:value="config.home.teacherTeaser.title" />
+            <Input v-model:value="config.home.teacherTeaser.title"  placeholder="请输入标题"/>
           </Form.Item>
         </Col>
         <Col :md="12" :xs="24">
@@ -53,17 +53,17 @@ const { config, loading, saveConfig, saving } = useSiteConfigEditor();
             <Textarea
               v-model:value="config.home.teacherTeaser.lead"
               :rows="5"
-            />
+             placeholder="请输入简介摘要"/>
           </Form.Item>
         </Col>
         <Col :md="12" :xs="24">
           <Form.Item label="按钮文字">
-            <Input v-model:value="config.home.teacherTeaser.buttonText" />
+            <Input v-model:value="config.home.teacherTeaser.buttonText"  placeholder="请输入按钮文字"/>
           </Form.Item>
         </Col>
         <Col :md="12" :xs="24">
           <Form.Item label="按钮链接">
-            <Input v-model:value="config.home.teacherTeaser.buttonTo" />
+            <Input v-model:value="config.home.teacherTeaser.buttonTo"  placeholder="请输入按钮链接"/>
           </Form.Item>
         </Col>
       </Row>

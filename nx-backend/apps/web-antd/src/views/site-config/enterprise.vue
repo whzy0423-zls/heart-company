@@ -20,32 +20,32 @@ const { config, linesToArray, loading, saveConfig, saving } =
       <Row :gutter="16">
         <Col :md="8" :xs="24">
           <Form.Item label="Eyebrow">
-            <Input v-model:value="config.home.enterprise.eyebrow" />
+            <Input v-model:value="config.home.enterprise.eyebrow"  placeholder="请输入Eyebrow"/>
           </Form.Item>
         </Col>
         <Col :md="16" :xs="24">
           <Form.Item label="标题">
-            <Input v-model:value="config.home.enterprise.title" />
+            <Input v-model:value="config.home.enterprise.title"  placeholder="请输入标题"/>
           </Form.Item>
         </Col>
         <Col :xs="24">
           <Form.Item label="描述">
-            <Textarea v-model:value="config.home.enterprise.lead" :rows="4" />
+            <Textarea v-model:value="config.home.enterprise.lead" :rows="4"  placeholder="请输入描述"/>
           </Form.Item>
         </Col>
         <Col :md="12" :xs="24">
           <Form.Item label="按钮文字">
-            <Input v-model:value="config.home.enterprise.buttonText" />
+            <Input v-model:value="config.home.enterprise.buttonText"  placeholder="请输入按钮文字"/>
           </Form.Item>
         </Col>
         <Col :md="12" :xs="24">
           <Form.Item label="按钮链接">
-            <Input v-model:value="config.home.enterprise.buttonHref" />
+            <Input v-model:value="config.home.enterprise.buttonHref"  placeholder="请输入按钮链接"/>
           </Form.Item>
         </Col>
         <Col :md="12" :xs="24">
           <Form.Item label="模块标题">
-            <Input v-model:value="config.home.enterprise.moduleTitle" />
+            <Input v-model:value="config.home.enterprise.moduleTitle"  placeholder="请输入模块标题"/>
           </Form.Item>
         </Col>
         <Col :xs="24">
@@ -56,7 +56,7 @@ const { config, linesToArray, loading, saveConfig, saving } =
               @update:value="
                 config.home.enterprise.modules = linesToArray($event)
               "
-            />
+             placeholder="请输入工作坊模块，每行一条"/>
           </Form.Item>
         </Col>
       </Row>

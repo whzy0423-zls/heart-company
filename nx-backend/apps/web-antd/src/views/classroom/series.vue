@@ -287,11 +287,11 @@ onMounted(load);
   >
     <Form layout="vertical"
       ><Form.Item label="系列名称" required
-        ><Input v-model:value="form.title" :disabled="!canWrite" /></Form.Item
+        ><Input v-model:value="form.title" :disabled="!canWrite"  placeholder="请输入系列名称"/></Form.Item
       ><Form.Item label="老师"
         ><Input
           v-model:value="form.teacherName"
-          :disabled="!canWrite" /></Form.Item
+          :disabled="!canWrite"  placeholder="请输入老师"/></Form.Item
       ><Form.Item label="权限"
         ><Select
           v-model:value="form.accessLevel"
@@ -301,16 +301,16 @@ onMounted(load);
             { label: '登录后', value: 'login' },
             { label: '会员', value: 'member' },
             { label: '付费', value: 'paid' },
-          ]" /></Form.Item
+          ]"  placeholder="请选择权限"/></Form.Item
       ><Form.Item v-if="form.accessLevel === 'paid'" label="价格（分）"
         ><InputNumber
           v-model:value="form.priceCents"
           :disabled="!canPrice"
-          :min="1" /></Form.Item
+          :min="1"  placeholder="请输入价格（分）"/></Form.Item
       ><Form.Item label="简介"
         ><Input.TextArea
           v-model:value="form.summary"
-          :disabled="!canWrite" /></Form.Item
+          :disabled="!canWrite"  placeholder="请输入简介"/></Form.Item
     ></Form>
   </Modal>
 </template>
