@@ -54,6 +54,9 @@ function goRelation() {
 function goProfile() {
   activateHomeEntry('profile')
 }
+function goClassroom() {
+  uni.navigateTo({ url: '/pages/classroom/classroom?tab=series' })
+}
 function hideWheel() {
   wheelVisible.value = false
 }
@@ -136,6 +139,33 @@ function hideWheel() {
           @error="hideWheel"
         />
         <view v-else class="hero__wheel-fallback" aria-hidden="true">9</view>
+      </view>
+    </view>
+
+    <view
+      class="classroom-spotlight ios-card"
+      role="button"
+      aria-role="button"
+      tabindex="0"
+      aria-label="进入老师课堂，查看视频和音频课件"
+      hover-class="classroom-spotlight--pressed"
+      @click="goClassroom"
+      @keydown.enter="goClassroom"
+      @keydown.space.prevent="goClassroom"
+    >
+      <view class="classroom-spotlight__copy">
+        <text class="classroom-spotlight__eyebrow">老师课堂 · 视频 / 音频课件</text>
+        <text class="classroom-spotlight__title">老师以往开课内容，沉淀成可反复学习的课件</text>
+        <text class="classroom-spotlight__desc">按系列循序学，也可以从一节独立课件开始。</text>
+        <button class="classroom-spotlight__cta ios-button" hover-class="classroom-spotlight__cta--pressed" @click.stop="goClassroom">进入老师课堂</button>
+      </view>
+      <view class="classroom-spotlight__media" aria-hidden="true">
+        <view class="classroom-spotlight__screen">
+          <view class="classroom-spotlight__ring"></view>
+          <view class="classroom-spotlight__pulse classroom-spotlight__pulse--one"></view>
+          <view class="classroom-spotlight__pulse classroom-spotlight__pulse--two"></view>
+          <view class="classroom-spotlight__play"></view>
+        </view>
       </view>
     </view>
 
@@ -405,6 +435,131 @@ function hideWheel() {
   font-size: 116rpx;
   font-weight: 300;
   box-shadow: inset 0 0 0 4rpx rgba(255, 255, 255, .28), 0 26rpx 32rpx rgba(19, 17, 82, .22);
+}
+.classroom-spotlight {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 26rpx;
+  padding: 30rpx;
+  overflow: hidden;
+  color: #fff;
+  border: 1rpx solid rgba(15, 118, 110, .18);
+  border-radius: 34rpx;
+  background:
+    radial-gradient(circle at 8% 10%, rgba(255, 255, 255, .18), transparent 28%),
+    linear-gradient(135deg, #0f172a 0%, #0f766e 56%, #f97316 126%);
+  box-shadow: 0 28rpx 54rpx -30rpx rgba(15, 23, 42, .5);
+}
+.classroom-spotlight--pressed {
+  opacity: .88;
+  transform: scale(.988);
+}
+.classroom-spotlight__copy {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10rpx;
+}
+.classroom-spotlight__eyebrow,
+.classroom-spotlight__title,
+.classroom-spotlight__desc {
+  display: block;
+}
+.classroom-spotlight__eyebrow {
+  color: rgba(255, 255, 255, .86);
+  font-size: 22rpx;
+  font-weight: 800;
+}
+.classroom-spotlight__title {
+  color: #fff;
+  font-size: 34rpx;
+  font-weight: 900;
+  line-height: 1.35;
+}
+.classroom-spotlight__desc {
+  color: rgba(255, 255, 255, .82);
+  font-size: 24rpx;
+  line-height: 1.55;
+}
+.classroom-spotlight__cta {
+  align-self: flex-start;
+  min-height: 88rpx;
+  margin-top: 8rpx;
+  padding: 0 26rpx;
+  color: #0f172a;
+  font-size: 24rpx;
+  font-weight: 900;
+  line-height: 88rpx;
+  background: rgba(255, 255, 255, .96);
+  border-radius: 999rpx;
+  box-shadow: 0 18rpx 32rpx -18rpx rgba(15, 23, 42, .48);
+}
+.classroom-spotlight__cta::after {
+  border: 0;
+}
+.classroom-spotlight__cta--pressed {
+  opacity: .84;
+}
+.classroom-spotlight__media {
+  position: relative;
+  flex: 0 0 206rpx;
+  width: 206rpx;
+  min-height: 180rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.classroom-spotlight__screen {
+  position: relative;
+  width: 188rpx;
+  height: 188rpx;
+  border-radius: 34rpx;
+  background:
+    radial-gradient(circle at 72% 28%, rgba(255, 255, 255, .46), transparent 18%),
+    linear-gradient(145deg, rgba(255, 255, 255, .12), rgba(255, 255, 255, .04));
+  box-shadow:
+    inset 0 1rpx 0 rgba(255, 255, 255, .18),
+    0 24rpx 40rpx -24rpx rgba(15, 23, 42, .6);
+}
+.classroom-spotlight__ring {
+  position: absolute;
+  inset: 22rpx;
+  border: 2rpx solid rgba(255, 255, 255, .18);
+  border-radius: 28rpx;
+}
+.classroom-spotlight__pulse {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .16);
+}
+.classroom-spotlight__pulse--one {
+  top: 26rpx;
+  left: 24rpx;
+  width: 38rpx;
+  height: 38rpx;
+}
+.classroom-spotlight__pulse--two {
+  right: 26rpx;
+  bottom: 26rpx;
+  width: 54rpx;
+  height: 54rpx;
+}
+.classroom-spotlight__play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-top: 20rpx solid transparent;
+  border-bottom: 20rpx solid transparent;
+  border-left: 32rpx solid #fff;
+  transform: translate(-35%, -50%);
+  filter: drop-shadow(0 8rpx 16rpx rgba(15, 23, 42, .3));
 }
 .section-head {
   display: flex;
@@ -735,6 +890,9 @@ function hideWheel() {
   .hero {
     padding: 56rpx 48rpx;
   }
+  .classroom-spotlight {
+    padding: 34rpx;
+  }
   .energy-card {
     padding: 34rpx;
   }
@@ -759,6 +917,14 @@ function hideWheel() {
     right: -68rpx;
     bottom: 8rpx;
   }
+  .classroom-spotlight {
+    flex-direction: column;
+  }
+  .classroom-spotlight__media {
+    align-self: center;
+    flex-basis: auto;
+    width: 188rpx;
+  }
   .growth-card {
     gap: 20rpx;
   }
@@ -770,6 +936,7 @@ function hideWheel() {
   }
   .energy-card,
   .growth-card,
+  .classroom-spotlight,
   .home-nav__profile,
   .hero__cta {
     transition: none;

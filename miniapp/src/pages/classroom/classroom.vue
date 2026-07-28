@@ -450,28 +450,50 @@ onUnload(() => {
           @keydown.enter="activeTab === 'series' ? openSeries(item) : openContent(item)"
           @keydown.space.prevent="activeTab === 'series' ? openSeries(item) : openContent(item)"
         >
-          <image
-            v-if="item.coverUrl && !coverImageErrors[coverMediaKey(item)]"
-            class="classroom-card__cover"
-            :class="classroomCoverRatioClass(item)"
-            :src="item.coverUrl"
-            mode="aspectFill"
-            lazy-load
-            @error="markCoverImageError(coverMediaKey(item))"
-          />
-          <view
-            v-else
-            class="classroom-card__cover classroom-card__cover--fallback"
-            :class="classroomCoverRatioClass(item)"
-            aria-hidden="true"
-            >课</view
-          >
+          <view class="classroom-card__media">
+            <view class="classroom-card__cover-shell" :class="classroomCoverRatioClass(item)">
+              <image
+                v-if="item.coverUrl && !coverImageErrors[coverMediaKey(item)]"
+                class="classroom-card__cover"
+                :class="classroomCoverRatioClass(item)"
+                :src="item.coverUrl"
+                mode="aspectFill"
+                lazy-load
+                @error="markCoverImageError(coverMediaKey(item))"
+              />
+              <view
+                v-else
+                class="classroom-card__cover classroom-card__cover--fallback"
+                :class="classroomCoverRatioClass(item)"
+                aria-hidden="true"
+                >课</view
+              >
+              <view class="classroom-card__cover-overlay">
+                <view class="classroom-card__overlay-tags">
+                  <text class="nx-tag">{{ classroomAccessLabel(item.effectiveAccess) }}</text>
+                  <text class="classroom-card__kind">{{
+                    activeTab === "series" ? "系列" : item.contentType === "audio" ? "音频" : "视频"
+                  }}</text>
+                </view>
+                <view class="classroom-card__play" aria-hidden="true">
+                  <text class="classroom-card__play-icon">{{
+                    activeTab === "series" && selectedSeries?.id === item.id ? "⌃" : "▶"
+                  }}</text>
+                  <text class="classroom-card__play-text">{{
+                    activeTab === "series"
+                      ? selectedSeries?.id === item.id
+                        ? "收起"
+                        : "展开"
+                      : itemAction(item).label
+                  }}</text>
+                </view>
+              </view>
+            </view>
+          </view>
           <view class="classroom-card__body">
             <view class="classroom-card__meta">
-              <text class="nx-tag">{{ classroomAccessLabel(item.effectiveAccess) }}</text>
-              <text v-if="item.contentType" class="classroom-card__kind">{{
-                item.contentType === "audio" ? "音频" : "视频"
-              }}</text>
+              <text>{{ activeTab === "series" ? "系列沉淀" : "独立学习" }}</text>
+              <text>{{ classroomAccessLabel(item.effectiveAccess) }}</text>
             </view>
             <text class="classroom-card__title">{{ item.title || "未命名课件" }}</text>
             <text v-if="item.summary || item.description" class="classroom-card__summary">{{
@@ -546,22 +568,24 @@ onUnload(() => {
             <view v-if="expandedSeries.contents.length === 0" class="classroom-state"
               >这个系列暂时没有可学习的课件</view
             >
-            <button
-              v-for="(lesson, index) in expandedSeries.contents"
-              :key="lesson.id"
-              class="lesson-row"
-              @click="openContent(lesson)"
-            >
-              <text class="lesson-row__index">{{ index + 1 }}</text>
-              <view class="lesson-row__body">
-                <text class="lesson-row__title">{{ lesson.title }}</text>
-                <text class="lesson-row__meta"
-                  >{{ lesson.contentType === "audio" ? "音频" : "视频" }} ·
-                  {{ itemAction(lesson).label }}</text
-                >
-              </view>
-              <text aria-hidden="true">›</text>
-            </button>
+            <view v-else class="series-panel__chapters">
+              <button
+                v-for="(lesson, index) in expandedSeries.contents"
+                :key="lesson.id"
+                class="lesson-row"
+                @click="openContent(lesson)"
+              >
+                <text class="lesson-row__index">{{ index + 1 }}</text>
+                <view class="lesson-row__body">
+                  <text class="lesson-row__title">{{ lesson.title }}</text>
+                  <text class="lesson-row__meta"
+                    >{{ lesson.contentType === "audio" ? "音频" : "视频" }} ·
+                    {{ itemAction(lesson).label }}</text
+                  >
+                </view>
+                <text class="lesson-row__arrow" aria-hidden="true">›</text>
+              </button>
+            </view>
           </block>
         </view>
       </view>
@@ -746,6 +770,7 @@ onUnload(() => {
 .classroom-card {
   display: flex;
   align-items: flex-start;
+  flex-direction: column;
   min-height: 220rpx;
   overflow: hidden;
   background: #fff;
@@ -763,33 +788,93 @@ onUnload(() => {
   outline: 4rpx solid #2b7fff;
 }
 .classroom-card__cover {
-  flex: 0 0 210rpx;
-  width: 210rpx;
+  display: block;
+  width: 100%;
+  height: 100%;
   background: #dbeee6;
 }
+.classroom-card__media {
+  width: 100%;
+}
+.classroom-card__cover-shell {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  background: linear-gradient(180deg, #dff2eb, #c9e7db);
+}
+.classroom-card__cover-shell::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 30%;
+  background: linear-gradient(180deg, rgba(9, 20, 16, 0), rgba(9, 20, 16, 0.36));
+  pointer-events: none;
+}
 .classroom-card__cover.classroom-cover--16x9 {
-  height: 118rpx;
+  height: 376rpx;
 }
 .classroom-card__cover.classroom-cover--9x16 {
-  height: 373rpx;
+  height: 472rpx;
 }
 .classroom-card__cover.classroom-cover--1x1 {
-  height: 210rpx;
+  height: 360rpx;
 }
 .classroom-card__cover--fallback {
   display: flex;
   align-items: center;
   justify-content: center;
   color: #0f766e;
-  font-size: 54rpx;
+  font-size: 58rpx;
   font-weight: 900;
+}
+.classroom-card__cover-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 22rpx;
+  color: #fff;
+  background: linear-gradient(180deg, rgba(9, 20, 16, 0.06), rgba(9, 20, 16, 0.56));
+}
+.classroom-card__overlay-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+}
+.classroom-card__overlay-tags .nx-tag,
+.classroom-card__overlay-tags .classroom-card__kind {
+  color: #fff;
+}
+.classroom-card__kind {
+  padding: 0 14rpx;
+  line-height: 42rpx;
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 999rpx;
+}
+.classroom-card__play {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-end;
+  gap: 10rpx;
+  min-height: 60rpx;
+  padding: 0 18rpx;
+  color: #173e32;
+  font-size: 22rpx;
+  font-weight: 900;
+  background: rgba(255, 255, 255, 0.96);
+  border-radius: 999rpx;
+}
+.classroom-card__play-icon {
+  font-size: 20rpx;
 }
 .classroom-card__body {
   display: flex;
-  flex: 1;
   flex-direction: column;
   min-width: 0;
-  padding: 24rpx;
+  width: 100%;
+  padding: 24rpx 24rpx 26rpx;
 }
 .classroom-card__meta,
 .classroom-card__footer {
@@ -824,6 +909,11 @@ onUnload(() => {
   color: #0f766e;
   font-weight: 800;
 }
+.series-panel__chapters {
+  display: grid;
+  gap: 14rpx;
+  margin-top: 16rpx;
+}
 .series-panel {
   padding: 30rpx;
   background: #fff;
@@ -849,7 +939,6 @@ onUnload(() => {
   align-items: center;
   width: 100%;
   min-height: 104rpx;
-  margin-top: 18rpx;
   padding: 16rpx 10rpx;
   text-align: left;
   background: #f5faf7;
@@ -883,5 +972,10 @@ onUnload(() => {
   margin-top: 6rpx;
   color: #718078;
   font-size: 22rpx;
+}
+.lesson-row__arrow {
+  color: #90a09a;
+  font-size: 32rpx;
+  font-weight: 700;
 }
 </style>

@@ -35,6 +35,31 @@ assert.match(
 );
 assert.match(
   source,
+  /class="classroom-card__media"/,
+  "classroom cards should use a media-first content platform shell",
+);
+assert.match(
+  source,
+  /class="classroom-card__cover-shell"[\s\S]*:class="classroomCoverRatioClass\(item\)"/,
+  "classroom cards should apply aspect ratio on a full-width cover shell",
+);
+assert.match(
+  source,
+  /class="classroom-card__cover-overlay"/,
+  "classroom cards should overlay concise metadata on the cover",
+);
+assert.match(
+  source,
+  /class="classroom-card__play"/,
+  "classroom cards should expose an obvious play or expand affordance",
+);
+assert.match(
+  source,
+  /\.classroom-card\s*\{[^}]*flex-direction:\s*column/s,
+  "classroom cards should render as vertical content cards",
+);
+assert.match(
+  source,
   /<image[\s\S]*class="classroom-card__cover"[\s\S]*:class="classroomCoverRatioClass\(item\)"[\s\S]*mode="aspectFill"/,
   "classroom cover images should use aspectFill inside a ratio-aware container",
 );
@@ -89,6 +114,11 @@ assert.match(
   source,
   /v-if="activeTab === 'series' && selectedSeries\?\.id === item\.id"[^>]*class="series-panel/,
   "series lessons should render immediately after the selected card",
+);
+assert.match(
+  source,
+  /class="series-panel__chapters"/,
+  "expanded series lessons should be grouped as readable chapters",
 );
 assert.match(
   source,

@@ -21,6 +21,21 @@ assert.match(
 );
 assert.match(
   source,
+  /class="classroom-entry__hero"/,
+  "learning page classroom area should begin with a content-platform hero banner",
+);
+assert.match(
+  source,
+  /class="classroom-entry__hero-cta"/,
+  "learning page classroom hero should expose a primary classroom CTA",
+);
+assert.match(
+  source,
+  /class="classroom-entry__item"[\s\S]*role="button"[\s\S]*@click="openClassroom/,
+  "learning classroom preview cards should be tappable entry points",
+);
+assert.match(
+  source,
   /<image[\s\S]*class="classroom-entry__cover"[\s\S]*:class="classroomCoverRatioClass\(item\)"[\s\S]*mode="aspectFill"/,
   "learning classroom cover image should use aspectFill inside a ratio-aware container",
 );

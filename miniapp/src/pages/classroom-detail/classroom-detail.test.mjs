@@ -18,6 +18,26 @@ assert.match(
 );
 assert.match(
   source,
+  /class="detail-head__media"/,
+  "detail page should use a media-first hero shell",
+);
+assert.match(
+  source,
+  /class="detail-head__cover-shell"[\s\S]*:class="classroomCoverRatioClass\(content\)"/,
+  "detail cover should apply aspect ratio on the same full-width shell as list cards",
+);
+assert.match(
+  source,
+  /class="detail-head__play"/,
+  "detail head should expose a clear media type/play affordance",
+);
+assert.match(
+  source,
+  /class="player-panel__body"/,
+  "detail player panel should share the refreshed platform-card content body",
+);
+assert.match(
+  source,
   /<image[\s\S]*class="detail-head__cover"[\s\S]*:class="classroomCoverRatioClass\(content\)"[\s\S]*mode="aspectFill"/,
   "detail cover image should use aspectFill inside a ratio-aware container",
 );

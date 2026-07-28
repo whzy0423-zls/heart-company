@@ -203,6 +203,39 @@ function goTest() {
           </view>
           <button class="classroom-entry__more" @click="openClassroom('series')">查看全部</button>
         </view>
+
+        <view
+          class="classroom-entry__hero"
+          role="button"
+          aria-role="button"
+          tabindex="0"
+          aria-label="进入老师课堂查看视频和音频课件"
+          hover-class="classroom-entry__hero--pressed"
+          @click="openClassroom('series')"
+          @keydown.enter="openClassroom('series')"
+          @keydown.space.prevent="openClassroom('series')"
+        >
+          <view class="classroom-entry__hero-copy">
+            <text class="classroom-entry__hero-eyebrow">课堂精选</text>
+            <text class="classroom-entry__hero-title">老师以往开课内容，已经整理成可反复学习的课件</text>
+            <text class="classroom-entry__hero-lead">支持视频和音频，按系列学习，也可以从独立课件开始。</text>
+            <button
+              class="classroom-entry__hero-cta"
+              hover-class="classroom-entry__hero-cta--pressed"
+              @click.stop="openClassroom('series')"
+            >
+              进入老师课堂
+            </button>
+          </view>
+          <view class="classroom-entry__hero-media" aria-hidden="true">
+            <view class="classroom-entry__hero-screen">
+              <view class="classroom-entry__hero-play"></view>
+            </view>
+            <view class="classroom-entry__hero-wave classroom-entry__hero-wave--one"></view>
+            <view class="classroom-entry__hero-wave classroom-entry__hero-wave--two"></view>
+          </view>
+        </view>
+
         <view v-if="classroomWarning" class="classroom-entry__warning" aria-live="polite">
           <view>
             <text>{{ classroomWarning }}</text>
@@ -228,6 +261,14 @@ function goTest() {
             v-for="item in classroomPreview"
             :key="`${item.contentType || 'series'}:${item.id}`"
             class="classroom-entry__item"
+            role="button"
+            aria-role="button"
+            tabindex="0"
+            :aria-label="`查看${item.title || '老师课堂课件'}`"
+            hover-class="classroom-entry__item--pressed"
+            @click="openClassroom(item.contentType ? 'standalone' : 'series')"
+            @keydown.enter="openClassroom(item.contentType ? 'standalone' : 'series')"
+            @keydown.space.prevent="openClassroom(item.contentType ? 'standalone' : 'series')"
           >
             <image
               v-if="item.coverUrl && !classroomPreviewCoverErrors[classroomPreviewMediaKey(item)]"
@@ -464,8 +505,118 @@ function goTest() {
   border-radius: 18rpx;
 }
 .classroom-entry__more::after,
-.classroom-entry__browse::after {
+.classroom-entry__browse::after,
+.classroom-entry__hero-cta::after {
   border: 0;
+}
+.classroom-entry__hero {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 22rpx;
+  margin: 24rpx 0 22rpx;
+  padding: 26rpx;
+  overflow: hidden;
+  color: #ffffff;
+  background:
+    radial-gradient(circle at 14% 8%, rgba(255, 255, 255, 0.18), transparent 28%),
+    linear-gradient(135deg, #0f172a 0%, #0f766e 58%, #f97316 132%);
+  border-radius: 26rpx;
+  box-shadow: 0 22rpx 42rpx -28rpx rgba(15, 23, 42, 0.56);
+}
+.classroom-entry__hero--pressed {
+  opacity: 0.88;
+}
+.classroom-entry__hero-copy {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 9rpx;
+}
+.classroom-entry__hero-eyebrow,
+.classroom-entry__hero-title,
+.classroom-entry__hero-lead {
+  display: block;
+}
+.classroom-entry__hero-eyebrow {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 22rpx;
+  font-weight: 900;
+}
+.classroom-entry__hero-title {
+  color: #ffffff;
+  font-size: 30rpx;
+  font-weight: 900;
+  line-height: 1.36;
+}
+.classroom-entry__hero-lead {
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 23rpx;
+  line-height: 1.55;
+}
+.classroom-entry__hero-cta {
+  align-self: flex-start;
+  min-height: 88rpx;
+  margin-top: 8rpx;
+  padding: 0 24rpx;
+  color: #0f172a;
+  font-size: 24rpx;
+  font-weight: 900;
+  line-height: 88rpx;
+  background: rgba(255, 255, 255, 0.96);
+  border-radius: 999rpx;
+}
+.classroom-entry__hero-cta--pressed {
+  opacity: 0.82;
+}
+.classroom-entry__hero-media {
+  position: relative;
+  flex: 0 0 150rpx;
+  width: 150rpx;
+  min-height: 158rpx;
+}
+.classroom-entry__hero-screen {
+  position: absolute;
+  top: 18rpx;
+  right: 0;
+  width: 140rpx;
+  height: 104rpx;
+  border: 2rpx solid rgba(255, 255, 255, 0.2);
+  border-radius: 24rpx;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.06));
+  box-shadow: 0 20rpx 34rpx -24rpx rgba(15, 23, 42, 0.5);
+}
+.classroom-entry__hero-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-top: 16rpx solid transparent;
+  border-bottom: 16rpx solid transparent;
+  border-left: 26rpx solid #ffffff;
+  transform: translate(-35%, -50%);
+}
+.classroom-entry__hero-wave {
+  position: absolute;
+  height: 10rpx;
+  border-radius: 999rpx;
+  background: rgba(255, 255, 255, 0.56);
+}
+.classroom-entry__hero-wave--one {
+  right: 18rpx;
+  bottom: 28rpx;
+  width: 94rpx;
+}
+.classroom-entry__hero-wave--two {
+  right: 46rpx;
+  bottom: 50rpx;
+  width: 58rpx;
+  opacity: 0.55;
 }
 .classroom-entry__warning {
   display: flex;
@@ -506,6 +657,11 @@ function goTest() {
   overflow: hidden;
   background: #f3f8f5;
   border-radius: 22rpx;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.classroom-entry__item--pressed {
+  opacity: 0.82;
+  transform: scale(0.988);
 }
 .classroom-entry__cover {
   flex-shrink: 0;
