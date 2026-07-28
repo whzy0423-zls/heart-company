@@ -305,7 +305,7 @@ func (c Config) ApplyDailyQuiz() CompatibleModelConfig {
 // ApplyTTS 把芯之力 TTS 覆盖值叠加到 MiniMax 环境基线上。
 func (c Config) ApplyTTS(base config.MiniMaxConfig) TTSConfig {
 	out := TTSConfig{
-		Provider: "minimax",
+		Provider: normalizeTTSProvider(base.Provider),
 		Endpoint: strings.TrimRight(strings.TrimSpace(base.APIBase), "/"),
 		APIKey:   strings.TrimSpace(base.APIKey),
 		GroupID:  strings.TrimSpace(base.GroupID),

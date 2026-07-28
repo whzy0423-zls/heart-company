@@ -24,9 +24,11 @@ import (
 )
 
 type Store struct {
-	client  *MiniMaxClient
-	db      *sql.DB
-	uploads *uploadasset.Store
+	bailian  *BailianClient
+	client   *MiniMaxClient
+	db       *sql.DB
+	provider string
+	uploads  *uploadasset.Store
 }
 
 type Profile struct {
@@ -61,6 +63,7 @@ type Generation struct {
 type VoiceOption struct {
 	ID        string `json:"id"`
 	Label     string `json:"label"`
+	Provider  string `json:"provider"`
 	Source    string `json:"source"`
 	VoiceID   string `json:"voiceId"`
 	VoiceName string `json:"voiceName"`
@@ -124,10 +127,27 @@ type ContentGenerateInput struct {
 
 func NewStore(database *sql.DB, uploads *uploadasset.Store, cfg config.MiniMaxConfig) *Store {
 	return &Store{
-		client:  NewMiniMaxClient(cfg),
-		db:      database,
-		uploads: uploads,
+		bailian: NewBailianClient(BailianConfig{
+			APIBase:     cfg.APIBase,
+			APIKey:      cfg.APIKey,
+			TargetModel: cfg.Model,
+		}),
+		client:   NewMiniMaxClient(cfg),
+		db:       database,
+		provider: normalizeStoreProvider(cfg),
+		uploads:  uploads,
 	}
+}
+
+func normalizeStoreProvider(cfg config.MiniMaxConfig) string {
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	if provider == ProviderBailian || provider == "aliyun-bailian" || provider == "dashscope" {
+		return ProviderBailian
+	}
+	if provider == "openai-compatible" && strings.Contains(strings.ToLower(cfg.APIBase), "dashscope") && isBailianHostedMiniMaxModel(cfg.Model) {
+		return ProviderBailian
+	}
+	return ProviderMiniMax
 }
 
 func formatTime(t time.Time) string {
@@ -189,10 +209,7 @@ func (s *Store) CreateProfile(ctx context.Context, input CreateProfileInput) (Pr
 	if name == "" {
 		return Profile{}, fmt.Errorf("请输入人声名称")
 	}
-	provider := strings.TrimSpace(input.Provider)
-	if provider == "" {
-		provider = "minimax"
-	}
+	provider := normalizeProfileProvider(input.Provider)
 	sampleID, err := parseOptionalID(input.SampleAssetID)
 	if err != nil || sampleID == 0 {
 		return Profile{}, fmt.Errorf("请先上传音频样本")
@@ -200,6 +217,11 @@ func (s *Store) CreateProfile(ctx context.Context, input CreateProfileInput) (Pr
 	voiceID := strings.TrimSpace(input.VoiceID)
 	if voiceID == "" {
 		voiceID = "nx_voice_" + randomID(10)
+	}
+	if provider == ProviderBailian {
+		if preferred := normalizedBailianPreferredName(voiceID); preferred != "" {
+			voiceID = preferred
+		}
 	}
 
 	var id string
@@ -239,16 +261,39 @@ func (s *Store) CloneProfile(ctx context.Context, id string) (Profile, error) {
 	if err := s.setProfileStatus(ctx, id, "cloning", ""); err != nil {
 		return Profile{}, err
 	}
-	fileID, err := s.client.UploadCloneAudio(ctx, asset.Name, asset.ContentType, asset.Data)
-	if err != nil {
-		_ = s.setProfileStatus(ctx, id, "failed", err.Error())
-		return Profile{}, err
-	}
 	voiceID := strings.TrimSpace(profile.VoiceID)
 	if voiceID == "" {
 		voiceID = "nx_voice_" + randomID(10)
 	}
-	if err := s.client.CloneVoice(ctx, fileID, voiceID); err != nil {
+	switch normalizeProfileProvider(profile.Provider) {
+	case ProviderMiniMax:
+		fileID, err := s.client.UploadCloneAudio(ctx, asset.Name, asset.ContentType, asset.Data)
+		if err != nil {
+			_ = s.setProfileStatus(ctx, id, "failed", err.Error())
+			return Profile{}, err
+		}
+		if err := s.client.CloneVoice(ctx, fileID, voiceID); err != nil {
+			_ = s.setProfileStatus(ctx, id, "failed", err.Error())
+			return Profile{}, err
+		}
+	case ProviderBailian:
+		if s.bailian == nil {
+			return Profile{}, fmt.Errorf("阿里百炼声音复刻未配置")
+		}
+		finalVoiceID, err := s.bailian.CloneVoice(ctx, BailianCloneInput{
+			AudioURL:    asset.ObjectURL,
+			ContentType: asset.ContentType,
+			Data:        asset.Data,
+			Filename:    asset.Name,
+			VoiceID:     voiceID,
+		})
+		if err != nil {
+			_ = s.setProfileStatus(ctx, id, "failed", err.Error())
+			return Profile{}, err
+		}
+		voiceID = finalVoiceID
+	default:
+		err := fmt.Errorf("不支持的人声克隆 provider: %s", profile.Provider)
 		_ = s.setProfileStatus(ctx, id, "failed", err.Error())
 		return Profile{}, err
 	}
@@ -290,7 +335,21 @@ func (s *Store) DeleteProfile(ctx context.Context, id string) error {
 // article 听书 pipeline) can reuse the configured client without importing it
 // directly.
 func (s *Store) TextToAudio(ctx context.Context, model string, voiceID string, text string) ([]byte, string, error) {
-	return s.client.TextToAudio(ctx, model, voiceID, text)
+	return s.textToAudio(ctx, s.provider, model, voiceID, text)
+}
+
+func (s *Store) textToAudio(ctx context.Context, provider string, model string, voiceID string, text string) ([]byte, string, error) {
+	switch normalizeProfileProvider(provider) {
+	case ProviderBailian:
+		if s.bailian == nil {
+			return nil, "", errors.New("阿里百炼 TTS 未配置")
+		}
+		return s.bailian.TextToAudio(ctx, model, voiceID, text)
+	case ProviderMiniMax:
+		return s.client.TextToAudio(ctx, model, voiceID, text)
+	default:
+		return nil, "", fmt.Errorf("不支持的 TTS provider: %s", provider)
+	}
 }
 
 // ResolveVoice maps a composite voice key to the MiniMax voice id used for
@@ -349,7 +408,7 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 	if model == "" {
 		model = "speech-02-hd"
 	}
-	audio, contentType, err := s.client.TextToAudio(ctx, model, voiceID, text)
+	audio, contentType, err := s.textToAudio(ctx, profile.Provider, model, voiceID, text)
 	if err != nil {
 		_, _ = s.db.ExecContext(ctx,
 			`INSERT INTO voice_generations (profile_id, provider, voice_id, text, model, status, error_message)
@@ -395,16 +454,7 @@ func (s *Store) VoiceOptions(ctx context.Context) ([]VoiceOption, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, profile := range profiles.Items {
-		options = append(options, VoiceOption{
-			ID:        "clone:" + profile.ID,
-			Label:     profile.Name + "（克隆）",
-			Source:    "clone",
-			VoiceID:   profile.VoiceID,
-			VoiceName: profile.Name,
-		})
-	}
-	return options, nil
+	return appendCloneVoiceOptions(options, profiles.Items), nil
 }
 
 func (s *Store) GenerateContent(ctx context.Context, input ContentGenerateInput) (ContentJob, error) {
@@ -429,6 +479,7 @@ func (s *Store) GenerateContent(ctx context.Context, input ContentGenerateInput)
 	}
 	voiceID := strings.TrimSpace(input.VoiceID)
 	voiceName := strings.TrimSpace(input.VoiceName)
+	synthesisProvider := ProviderMiniMax
 	profileID, _ := parseOptionalID(input.ProfileID)
 	if voiceSource == "clone" {
 		profile, err := s.Profile(ctx, input.ProfileID)
@@ -440,6 +491,7 @@ func (s *Store) GenerateContent(ctx context.Context, input ContentGenerateInput)
 		}
 		voiceID = profile.VoiceID
 		voiceName = profile.Name
+		synthesisProvider = profile.Provider
 	} else if voiceID == "" {
 		return ContentJob{}, fmt.Errorf("请选择 MiniMax 官方音色")
 	}
@@ -450,7 +502,7 @@ func (s *Store) GenerateContent(ctx context.Context, input ContentGenerateInput)
 	sourceAssetID, _ := parseOptionalID(input.SourceAssetID)
 	sourceAsset := nullInt64(sourceAssetID)
 	profileRef := nullInt64(profileID)
-	audio, contentType, err := s.client.TextToAudio(ctx, model, voiceID, text)
+	audio, contentType, err := s.textToAudio(ctx, synthesisProvider, model, voiceID, text)
 	if err != nil {
 		var id string
 		_ = s.db.QueryRowContext(ctx,
@@ -670,6 +722,7 @@ func fallbackOfficialVoiceOptions() []VoiceOption {
 		options = append(options, VoiceOption{
 			ID:        "official:" + item.id,
 			Label:     item.name + "（官方）",
+			Provider:  "minimax",
 			Source:    "official",
 			VoiceID:   item.id,
 			VoiceName: item.name,
@@ -824,6 +877,17 @@ func (c *MiniMaxClient) TextToAudio(ctx context.Context, model string, voiceID s
 	return nil, "", fmt.Errorf("MiniMax 音频格式无法识别")
 }
 
+func (c *MiniMaxClient) TextToAudioLimited(ctx context.Context, model string, voiceID string, text string, maxBytes int64) ([]byte, string, error) {
+	audio, contentType, err := c.TextToAudio(ctx, model, voiceID, text)
+	if err != nil {
+		return nil, "", err
+	}
+	if maxBytes > 0 && int64(len(audio)) > maxBytes {
+		return nil, "", fmt.Errorf("MiniMax 音频超过 %d 字节", maxBytes)
+	}
+	return audio, contentType, nil
+}
+
 func (c *MiniMaxClient) OfficialVoices(ctx context.Context) ([]VoiceOption, error) {
 	if err := c.ensureReady(); err != nil {
 		return nil, err
@@ -955,6 +1019,7 @@ func collectOfficialVoices(payload map[string]any) []VoiceOption {
 		options = append(options, VoiceOption{
 			ID:        "official:" + voiceID,
 			Label:     name + "（官方）",
+			Provider:  "minimax",
 			Source:    "official",
 			VoiceID:   voiceID,
 			VoiceName: name,

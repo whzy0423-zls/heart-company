@@ -144,13 +144,33 @@ func appChatStreamTestRepoRoot(t *testing.T) string {
 
 func appChatNginxLocationBlock(t *testing.T, config string) string {
 	t.Helper()
+	config = appChatNginxStripComments(config)
 	open := strings.IndexByte(config, '{')
 	if open < 0 {
 		t.Fatal("nginx location missing opening brace")
 	}
 	depth := 0
+	var quote byte
+	escaped := false
 	for index := open; index < len(config); index++ {
-		switch config[index] {
+		char := config[index]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			if char == '\\' {
+				escaped = true
+			} else if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		if char == '\'' || char == '"' {
+			quote = char
+			continue
+		}
+		switch char {
 		case '{':
 			depth++
 		case '}':

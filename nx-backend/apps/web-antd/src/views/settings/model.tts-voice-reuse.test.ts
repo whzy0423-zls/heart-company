@@ -35,13 +35,31 @@ describe('xinzhili TTS voice reuse configuration', () => {
     expect(viewSource).toContain('选择已有音色');
     expect(viewSource).toContain('可直接复用声音管理里的已克隆音色');
     expect(viewSource).toContain('音色选项读取失败，可手动填写音色 ID');
-    expect(viewSource).toContain('v-if="form.tts.provider === \'minimax\'"');
+    expect(viewSource).toContain('v-if="canSelectExistingTtsVoice"');
     expect(viewSource).toContain('v-model:value="form.tts.voice"');
     expect(viewSource).toContain('@change="handleTtsVoiceOptionChange"');
   });
 
+  it('supports Aliyun Bailian Bailian TTS with same-provider cloned voices', () => {
+    expect(viewSource).toContain("{ label: '阿里百炼', value: 'bailian' }");
+    expect(viewSource).toContain('filteredTtsVoiceOptions');
+    expect(viewSource).toContain('voiceOptionProvider(item) === currentTtsVoiceProvider.value');
+    expect(viewSource).toContain('applyTtsProviderPreset');
+    expect(viewSource).toContain('https://dashscope.aliyuncs.com/api/v1');
+    expect(viewSource).toContain('MiniMax/speech-2.8-turbo');
+    expect(viewSource).toContain("if (voiceOptionProvider(option) === 'bailian')");
+  });
+
+  it('normalizes legacy TTS OpenAI-compatible provider to Bailian before display and save', () => {
+    expect(viewSource).toContain('function normalizeTtsProvider');
+    expect(viewSource).toContain("provider === 'openai-compatible' ? 'bailian' : provider");
+    expect(viewSource).toContain('const provider = normalizeTtsProvider(data.tts?.provider);');
+    expect(viewSource).toContain('legacyAliyunBailianTtsPreset');
+  });
+
   it('documents voice options as clone or official sources', () => {
     expect(voiceApiSource).toContain("source: 'clone' | 'official'");
+    expect(voiceApiSource).toContain('provider: string');
     expect(voiceApiSource).toContain('voiceId: string');
     expect(voiceApiSource).toContain('voiceName: string');
   });

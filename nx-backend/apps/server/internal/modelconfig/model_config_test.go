@@ -218,3 +218,15 @@ func TestTTSConfigAcceptsOfficialAndCloneDerivedVoiceIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyTTSKeepsBailianEnvironmentProvider(t *testing.T) {
+	got := (Config{}).ApplyTTS(config.MiniMaxConfig{
+		Provider: "bailian",
+		APIBase:  "https://dashscope.aliyuncs.com/api/v1",
+		APIKey:   "bailian-key",
+		Model:    "MiniMax/speech-2.8-turbo",
+	})
+	if got.Provider != "bailian" {
+		t.Fatalf("provider=%q", got.Provider)
+	}
+}

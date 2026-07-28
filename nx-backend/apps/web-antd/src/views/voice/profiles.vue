@@ -10,6 +10,7 @@ import { IconifyIcon } from '@vben/icons';
 import { useAccessStore } from '@vben/stores';
 
 import {
+  Alert,
   Button,
   Card,
   Col,
@@ -62,12 +63,18 @@ const query = reactive({
 
 const form = reactive({
   name: '',
+  provider: 'bailian',
   remark: '',
   sampleAssetId: '',
   sampleName: '',
   sampleUrl: '',
   voiceId: '',
 });
+
+const voiceProviderOptions = [
+  { label: '阿里百炼（推荐）', value: 'bailian' },
+  { label: 'MiniMax（旧流程）', value: 'minimax' },
+];
 
 const statusOptions = [
   { label: '全部状态', value: '' },
@@ -80,6 +87,7 @@ const statusOptions = [
 const columns = [
   { dataIndex: 'name', title: '人声名称', width: 180 },
   { dataIndex: 'voiceId', title: 'Voice ID', width: 240 },
+  { dataIndex: 'provider', title: '平台', width: 140 },
   { dataIndex: 'status', title: '状态', width: 110 },
   { dataIndex: 'sampleUrl', title: '样本预览', width: 260 },
   ellipsisColumn('remark', '备注', { lines: 2 }),
@@ -165,6 +173,7 @@ async function submit() {
   try {
     await createVoiceProfileApi({
       name: form.name,
+      provider: form.provider,
       remark: form.remark,
       sampleAssetId: form.sampleAssetId,
       sampleName: form.sampleName,
@@ -208,6 +217,7 @@ function removeProfile(record: VoiceProfile) {
 
 function resetForm() {
   form.name = '';
+  form.provider = 'bailian';
   form.remark = '';
   form.sampleAssetId = '';
   form.sampleName = '';
@@ -246,12 +256,24 @@ function statusLabel(status: string) {
   return status || '-';
 }
 
+function platformLabel(provider: string) {
+  if (provider === 'bailian') return '阿里百炼';
+  if (provider === 'minimax') return 'MiniMax';
+  return provider || '-';
+}
+
+function platformColor(provider: string) {
+  if (provider === 'bailian') return 'blue';
+  if (provider === 'minimax') return 'green';
+  return 'default';
+}
+
 onMounted(load);
 </script>
 
 <template>
   <Page
-    description="上传授权音频样本，调用 MiniMax 中文版克隆音色，并保存可复用的人声档案。"
+    description="上传授权音频样本，优先走阿里百炼复刻音色，也保留 MiniMax 旧流程，并保存可复用的人声档案。"
     title="人声管理"
   >
     <Row :gutter="[16, 16]">
@@ -265,6 +287,20 @@ onMounted(load);
                 placeholder="例如：课程老师女声"
               />
             </Form.Item>
+            <Form.Item label="复刻平台" required>
+              <Select
+                v-model:value="form.provider"
+                :options="voiceProviderOptions"
+                placeholder="请选择复刻平台"
+              />
+            </Form.Item>
+            <Alert
+              class="mb-4"
+              type="info"
+              show-icon
+              message="百炼复刻需上传后的对象存储公网 URL"
+              description="先在芯之力模型配置中保存百炼 API Key"
+            />
             <Form.Item label="Voice ID">
               <Input
                 v-model:value="form.voiceId"
@@ -363,6 +399,11 @@ onMounted(load);
                   controls
                 ></audio>
                 <span v-else>-</span>
+              </template>
+              <template v-else-if="column.dataIndex === 'provider'">
+                <Tag :color="platformColor(record.provider)">
+                  {{ platformLabel(record.provider) }}
+                </Tag>
               </template>
               <template v-else-if="column.key === 'action'">
                 <Space>

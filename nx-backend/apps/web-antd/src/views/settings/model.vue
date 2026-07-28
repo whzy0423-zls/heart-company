@@ -45,16 +45,16 @@ const isXinzhiliModelOnly = computed(() =>
 const pageTitle = computed(() =>
   isXinzhiliModelOnly.value
     ? '芯之力模型配置'
-    : isAdminModelOnly.value
+    : (isAdminModelOnly.value
       ? '管理端大模型配置'
-      : '模型配置',
+      : '模型配置'),
 );
 const pageDescription = computed(() =>
   isXinzhiliModelOnly.value
     ? '配置芯之力 AI 语音合成能力，可直接复用声音管理里已经克隆完成的音色。'
-    : isAdminModelOnly.value
+    : (isAdminModelOnly.value
     ? '单独配置后台运营任务所用的大模型，包括每日 5 道画像校准题生成。'
-    : '配置对话、视频生成、文生图与视频分析模型。视频分析固定复用语音生成的 MiniMax 地址与密钥，默认使用 MiniMax-M3 多模态模型。',
+    : '配置对话、视频生成、文生图与视频分析模型。视频分析固定复用语音生成的 MiniMax 地址与密钥，默认使用 MiniMax-M3 多模态模型。'),
 );
 
 // apiKey 留空表示不修改；apiKeySet 用于提示是否已配置过密钥
@@ -86,11 +86,11 @@ const form = ref<ModelConfigPayload & XinzhiliModelConfigPayload>({
   },
   tts: {
     apiKey: '',
-    endpoint: '',
+    endpoint: 'https://dashscope.aliyuncs.com/api/v1',
     format: 'mp3',
     groupId: '',
-    model: 'speech-02-hd',
-    provider: 'minimax',
+    model: 'MiniMax/speech-2.8-turbo',
+    provider: 'bailian',
     voice: '',
   },
   assist: { enabled: true, systemPrompt: '' },
@@ -120,22 +120,49 @@ const dailyQuizProviderOptions = [
   { label: '继承管理端', value: '' },
   ...providerOptions,
 ];
-const ttsProviderOptions = [{ label: 'MiniMax', value: 'minimax' }];
+const ttsProviderOptions = [
+  { label: '阿里百炼', value: 'bailian' },
+  { label: 'MiniMax', value: 'minimax' },
+];
 const ttsFormatOptions = [{ label: 'MP3', value: 'mp3' }];
-const groupedTtsVoiceOptions = computed(() => [
-  {
-    label: 'MiniMax 官方音色',
-    options: ttsVoiceOptions.value
-      .filter((item) => item.source === 'official')
-      .map((item) => ({ label: item.label, value: item.id })),
-  },
-  {
-    label: '声音管理 · 已克隆音色',
-    options: ttsVoiceOptions.value
-      .filter((item) => item.source === 'clone')
-      .map((item) => ({ label: item.label, value: item.id })),
-  },
-]);
+const aliyunBailianTtsPreset = {
+  endpoint: 'https://dashscope.aliyuncs.com/api/v1',
+  model: 'MiniMax/speech-2.8-turbo',
+};
+const legacyAliyunBailianTtsPreset = {
+  endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  model: 'qwen-audio-tts-latest',
+};
+const canSelectExistingTtsVoice = computed(() =>
+  ['bailian', 'minimax'].includes(form.value.tts.provider),
+);
+const currentTtsVoiceProvider = computed(() =>
+  form.value.tts.provider === 'minimax' ? 'minimax' : 'bailian',
+);
+const filteredTtsVoiceOptions = computed(() =>
+  ttsVoiceOptions.value.filter(
+    (item) => voiceOptionProvider(item) === currentTtsVoiceProvider.value,
+  ),
+);
+const groupedTtsVoiceOptions = computed(() =>
+  [
+    {
+      label: 'MiniMax 官方音色',
+      options: filteredTtsVoiceOptions.value
+        .filter((item) => item.source === 'official')
+        .map((item) => ({ label: item.label, value: item.id })),
+    },
+    {
+      label:
+        currentTtsVoiceProvider.value === 'bailian'
+          ? '阿里百炼 · 已复刻音色'
+          : '声音管理 · 已克隆音色',
+      options: filteredTtsVoiceOptions.value
+        .filter((item) => item.source === 'clone')
+        .map((item) => ({ label: item.label, value: item.id })),
+    },
+  ].filter((group) => group.options.length > 0),
+);
 const chatEndpointHint = computed(() => {
   const base = (form.value.chat.apiBase || 'https://coding-play.codes').replace(
     /\/$/,
@@ -156,6 +183,13 @@ watch(
 watch(
   () => form.value.tts.voice,
   () => {
+    syncSelectedTtsVoiceOption();
+  },
+);
+watch(
+  () => form.value.tts.provider,
+  (provider) => {
+    applyTtsProviderPreset(provider);
     syncSelectedTtsVoiceOption();
   },
 );
@@ -299,15 +333,21 @@ async function save() {
 }
 
 function applyXinzhiliConfig(data: XinzhiliModelConfigView) {
+  const provider = normalizeTtsProvider(data.tts?.provider);
   form.value.tts = {
     apiKey: '',
-    endpoint: data.tts?.endpoint ?? '',
+    endpoint:
+      data.tts?.endpoint ||
+      (provider === 'bailian' ? aliyunBailianTtsPreset.endpoint : ''),
     format: data.tts?.format || 'mp3',
-    groupId: data.tts?.groupId ?? '',
-    model: data.tts?.model || 'speech-02-hd',
-    provider: data.tts?.provider || 'minimax',
+    groupId: provider === 'bailian' ? '' : data.tts?.groupId ?? '',
+    model:
+      data.tts?.model ||
+      (provider === 'bailian' ? aliyunBailianTtsPreset.model : 'speech-02-hd'),
+    provider,
     voice: data.tts?.voice ?? '',
   };
+  applyTtsProviderPreset(form.value.tts.provider);
   ttsKeySet.value = data.tts?.apiKeySet ?? false;
   syncSelectedTtsVoiceOption();
 }
@@ -338,17 +378,67 @@ function handleTtsVoiceOptionChange(optionId?: any) {
   if (!option) {
     return;
   }
-  form.value.tts.voice = option.voiceId;
-  if (option.source === 'clone') {
+  if (voiceOptionProvider(option) === 'bailian') {
+    form.value.tts.provider = 'bailian';
+    applyTtsProviderPreset('bailian', true);
+  } else if (voiceOptionProvider(option) === 'minimax') {
     form.value.tts.provider = 'minimax';
+    applyTtsProviderPreset('minimax');
   }
+  form.value.tts.voice = option.voiceId;
 }
 
 function syncSelectedTtsVoiceOption() {
-  const matched = ttsVoiceOptions.value.find(
+  const matched = filteredTtsVoiceOptions.value.find(
     (item) => item.voiceId === form.value.tts.voice,
   );
   selectedTtsVoiceOptionId.value = matched?.id ?? '';
+}
+
+function voiceOptionProvider(item: VoiceOption) {
+  return item.provider || 'minimax';
+}
+
+function normalizeTtsProvider(provider?: string) {
+  provider = (provider || '').trim();
+  return provider === 'openai-compatible' ? 'bailian' : provider || 'bailian';
+}
+
+function applyTtsProviderPreset(provider = form.value.tts.provider, force = false) {
+  if (provider === 'bailian') {
+    form.value.tts.endpoint =
+      force ||
+      !form.value.tts.endpoint ||
+      form.value.tts.endpoint === legacyAliyunBailianTtsPreset.endpoint
+        ? aliyunBailianTtsPreset.endpoint
+        : form.value.tts.endpoint;
+    form.value.tts.model =
+      force ||
+      !form.value.tts.model ||
+      form.value.tts.model === 'speech-02-hd' ||
+      form.value.tts.model === legacyAliyunBailianTtsPreset.model
+        ? aliyunBailianTtsPreset.model
+        : form.value.tts.model;
+    form.value.tts.groupId = '';
+    form.value.tts.format = 'mp3';
+    return;
+  }
+  if (provider === 'minimax') {
+    if (
+      form.value.tts.endpoint === aliyunBailianTtsPreset.endpoint ||
+      form.value.tts.endpoint === legacyAliyunBailianTtsPreset.endpoint
+    ) {
+      form.value.tts.endpoint = '';
+    }
+    if (
+      !form.value.tts.model ||
+      form.value.tts.model === aliyunBailianTtsPreset.model ||
+      form.value.tts.model === legacyAliyunBailianTtsPreset.model
+    ) {
+      form.value.tts.model = 'speech-02-hd';
+    }
+    form.value.tts.format = 'mp3';
+  }
 }
 
 const testing = ref(false);
@@ -382,7 +472,7 @@ async function testChat() {
           type="info"
           show-icon
           message="可直接复用声音管理里的已克隆音色，也可以手动填写平台音色 ID"
-          description="选择已有音色后会把最终 voiceId 写入 TTS 配置；克隆音色不会保存 clone:<profileId>，运行时可直接用于语音合成。"
+          description="选择已有音色后会按当前 TTS provider 只展示同平台 ready 音色，并把最终 voiceId 写入配置；阿里百炼音色会自动填充百炼 endpoint 与模型。"
         />
         <Row :gutter="24">
           <Col :md="12" :xs="24">
@@ -394,7 +484,7 @@ async function testChat() {
               />
             </Form.Item>
             <Form.Item
-              v-if="form.tts.provider === 'minimax'"
+              v-if="canSelectExistingTtsVoice"
               label="选择已有音色"
             >
               <Select
@@ -403,7 +493,7 @@ async function testChat() {
                 :loading="ttsVoiceOptionsLoading"
                 :options="groupedTtsVoiceOptions"
                 option-filter-prop="label"
-                placeholder="可直接复用声音管理里的已克隆音色"
+                placeholder="可直接复用声音管理里的同平台已克隆音色"
                 show-search
                 @change="handleTtsVoiceOptionChange"
               />
@@ -417,7 +507,11 @@ async function testChat() {
             <Form.Item label="手动音色 ID">
               <Input
                 v-model:value="form.tts.voice"
-                placeholder="可直接复用声音管理里的已克隆音色，也可以手动填写平台音色 ID"
+                :placeholder="
+                  form.tts.provider === 'bailian'
+                    ? '阿里百炼复刻音色 ID'
+                    : '可直接复用声音管理里的已克隆音色，也可以手动填写平台音色 ID'
+                "
               />
             </Form.Item>
           </Col>
@@ -425,10 +519,14 @@ async function testChat() {
             <Form.Item label="接口地址 (Endpoint)">
               <Input
                 v-model:value="form.tts.endpoint"
-                placeholder="MiniMax API 地址，留空则使用服务端默认值"
+                :placeholder="
+                  form.tts.provider === 'bailian'
+                    ? 'https://dashscope.aliyuncs.com/api/v1'
+                    : 'MiniMax API 地址，留空则使用服务端默认值'
+                "
               />
             </Form.Item>
-            <Form.Item label="Group ID">
+            <Form.Item v-if="form.tts.provider === 'minimax'" label="Group ID">
               <Input
                 v-model:value="form.tts.groupId"
                 placeholder="MiniMax Group ID，留空则使用服务端默认值"
@@ -437,7 +535,11 @@ async function testChat() {
             <Form.Item label="模型名 (Model)">
               <Input
                 v-model:value="form.tts.model"
-                placeholder="speech-02-hd"
+                :placeholder="
+                  form.tts.provider === 'bailian'
+                    ? 'MiniMax/speech-2.8-turbo'
+                    : 'speech-02-hd'
+                "
               />
             </Form.Item>
             <Form.Item label="音频格式">
@@ -451,7 +553,7 @@ async function testChat() {
               <Input.Password
                 v-model:value="form.tts.apiKey"
                 :placeholder="
-                  ttsKeySet ? '已配置，留空表示不修改' : '请输入 MiniMax API Key'
+                  ttsKeySet ? '已配置，留空表示不修改' : '请输入 TTS API Key'
                 "
                 autocomplete="new-password"
               />
@@ -468,7 +570,7 @@ async function testChat() {
               <Select
                 v-model:value="form.chat.provider"
                 :options="chatProviderOptions"
-               placeholder="请选择协议"/>
+               placeholder="请选择协议" />
             </Form.Item>
             <Form.Item label="接口地址 (API Base)">
               <Input
@@ -633,7 +735,7 @@ async function testChat() {
             <Select
               v-model:value="form.admin.provider"
               :options="providerOptions"
-             placeholder="请选择协议"/>
+             placeholder="请选择协议" />
           </Form.Item>
           <Form.Item label="接口地址 (API Base)">
             <Input
@@ -691,7 +793,7 @@ async function testChat() {
             <Select
               v-model:value="form.dailyQuiz.provider"
               :options="dailyQuizProviderOptions"
-             placeholder="请选择协议"/>
+             placeholder="请选择协议" />
           </Form.Item>
           <Form.Item label="接口地址 (API Base)">
             <Input

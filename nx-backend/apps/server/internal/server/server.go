@@ -153,7 +153,9 @@ type Server struct {
 	signupSubscribers map[chan signup.Lead]struct{}
 
 	// modelMu 保护可在运行时被"模型配置"页面重建的 ragGen / analysisGen / videos。
-	modelMu sync.RWMutex
+	modelMu         sync.RWMutex
+	xinzhiliLeaseMu sync.Mutex
+	xinzhiliLeases  map[int64]*xinzhiliRealtimeConn
 }
 
 type websiteSignupCreator interface {
@@ -207,6 +209,7 @@ func New(env config.Env, database *sql.DB) http.Handler {
 		trustedProxyCIDRs: trustedProxyCIDRs,
 
 		signupSubscribers: map[chan signup.Lead]struct{}{},
+		xinzhiliLeases:    map[int64]*xinzhiliRealtimeConn{},
 	}
 	if database != nil {
 		s.classroomPlaybackLimiter = newStrRateLimiter(30, time.Minute)
@@ -514,6 +517,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/push/unregister", s.method(http.MethodPost, s.requireAppAuth(s.appPushUnregister)))
 	// 语音识别
 	s.mux.HandleFunc("/api/app/voice/recognize", s.method(http.MethodPost, s.requireAppAuth(s.appVoiceRecognize)))
+	// 芯之力实时语音 WebSocket：恢复旧版手机端实时语音协议入口。
+	s.mux.HandleFunc("/api/app/xinzhili/realtime", s.requireAppAuth(s.xinzhiliRealtime))
 
 	// ===== 小程序（微信）=====
 	s.mux.HandleFunc("/api/wx/login", s.method(http.MethodPost, s.wxLogin))
