@@ -3,11 +3,14 @@ package classroom
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/storage"
 )
+
+var ErrCoverSigningUnavailable = errors.New("classroom cover signing unavailable")
 
 type CoverSource string
 
@@ -39,11 +42,11 @@ func ResolveEffectiveCover(ctx context.Context, input CoverInput, signer storage
 	}
 	if key != "" {
 		if signer == nil {
-			return ResolvedCover{}, errors.New("classroom cover signer unavailable")
+			return ResolvedCover{}, fmt.Errorf("%w: signer is not configured", ErrCoverSigningUnavailable)
 		}
 		url, err := signer.PresignGetURL(ctx, key, ttl)
 		if err != nil {
-			return ResolvedCover{}, errors.New("sign classroom cover: signer unavailable")
+			return ResolvedCover{}, fmt.Errorf("%w: %w", ErrCoverSigningUnavailable, err)
 		}
 		return ResolvedCover{URL: url, Source: source, Signed: true}, nil
 	}

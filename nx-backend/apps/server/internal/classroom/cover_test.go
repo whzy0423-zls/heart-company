@@ -80,6 +80,9 @@ func TestResolveEffectiveCoverReturnsSigningFailureWithoutLeakingKey(t *testing.
 	if err == nil {
 		t.Fatal("expected signing error")
 	}
+	if !errors.Is(err, ErrCoverSigningUnavailable) || !errors.Is(err, signer.err) {
+		t.Fatalf("signing error must preserve sentinel and cause: %v", err)
+	}
 	if got.URL != "" || strings.Contains(err.Error(), key) {
 		t.Fatalf("key leaked on signing failure: got=%+v err=%v", got, err)
 	}

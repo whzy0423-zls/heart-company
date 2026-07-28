@@ -209,6 +209,17 @@ func TestClassroomAdminContentListResolvesManualCoverAndExposesCoverMetadataWith
 	}
 }
 
+func TestClassroomAdminCoverSigningFailureReturns503WithoutObjectKey(t *testing.T) {
+	key := "classroom/covers/manual/3/private.webp"
+	f := &fakeClassroomAdminService{content: classroom.Content{ID: 3, ContentType: classroom.ContentVideo, ManualCoverObjectKey: key, AccessLevel: classroom.AccessPublic}}
+	s := &Server{classroomAdmin: f, classroomPlaybackSigner: &recordingClassroomCoverSigner{err: errors.New("signer unavailable")}}
+	rr := httptest.NewRecorder()
+	s.classroomContentList(rr, classroomUser(httptest.NewRequest(http.MethodGet, "/api/admin/classroom/contents", nil)))
+	if rr.Code != http.StatusServiceUnavailable || strings.Contains(rr.Body.String(), key) {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestClassroomAdminPriceEndpointRejectsInvalidCNY(t *testing.T) {
 	f := &fakeClassroomAdminService{}
 	s := &Server{classroomAdmin: f}

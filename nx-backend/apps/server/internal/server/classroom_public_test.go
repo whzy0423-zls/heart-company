@@ -34,13 +34,20 @@ func (c *classroomSQLConn) QueryContext(_ context.Context, q string, args []driv
 }
 
 type classroomRows struct {
-	cols   []string
-	values [][]driver.Value
-	i      int
+	cols    []string
+	values  [][]driver.Value
+	i       int
+	onClose func()
 }
 
 func (r *classroomRows) Columns() []string { return r.cols }
-func (r *classroomRows) Close() error      { return nil }
+func (r *classroomRows) Close() error {
+	if r.onClose != nil {
+		r.onClose()
+		r.onClose = nil
+	}
+	return nil
+}
 func (r *classroomRows) Next(dst []driver.Value) error {
 	if r.i >= len(r.values) {
 		return io.EOF
@@ -184,6 +191,51 @@ func TestClassroomPublicStandaloneResolvesGeneratedCoverAndAspectRatio(t *testin
 	}
 }
 
+func TestClassroomPublicCoverSigningFailureClosesRows(t *testing.T) {
+	cause := errors.New("cover signer offline")
+	tests := []struct {
+		name string
+		run  func(classroomPublicService) error
+	}{
+		{"standalone", func(service classroomPublicService) error {
+			_, _, err := service.ListStandalone(context.Background(), classroomPublicQuery{Limit: 20}, 0)
+			return err
+		}},
+		{"series detail", func(service classroomPublicService) error {
+			_, err := service.GetSeries(context.Background(), 7, 0)
+			return err
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			closed := false
+			db := openClassroomTestDB(t, func(q string, _ []driver.NamedValue) (driver.Rows, error) {
+				switch {
+				case strings.Contains(q, "SELECT count(*)"):
+					return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{int64(1)}}}, nil
+				case strings.Contains(q, "FROM classroom_series WHERE id"):
+					now := time.Now()
+					return &classroomRows{cols: make([]string, 17), values: [][]driver.Value{{int64(7), "Series", "summary", "cover", nil, "teacher", "Teacher", int64(1), "published", false, "public", int64(0), now, nil, nil, now, now}}}, nil
+				case strings.Contains(q, "c.series_id=$1"):
+					return &classroomRows{cols: make([]string, 14), values: [][]driver.Value{{int64(12), int64(7), "Video", "desc", "video", "legacy", int64(90), "Teacher", "inherit", int64(0), false, "private/manual.jpg", "16:9", ""}}, onClose: func() { closed = true }}, nil
+				case strings.Contains(q, "FROM classroom_contents c JOIN classroom_media_assets m"):
+					return &classroomRows{cols: make([]string, 21), values: [][]driver.Value{{int64(12), nil, false, "Video", "desc", "video", int64(8), "legacy", int64(90), "Teacher", "public", int64(0), false, "private/manual.jpg", "16:9", "", nil, nil, nil, nil, nil}}, onClose: func() { closed = true }}, nil
+				default:
+					return nil, fmt.Errorf("unexpected query: %s", q)
+				}
+			})
+			signer := &recordingClassroomCoverSigner{err: cause}
+			err := test.run(newClassroomPublicDBWithCovers(db, signer, 30*time.Minute))
+			if !errors.Is(err, classroom.ErrCoverSigningUnavailable) || !errors.Is(err, cause) {
+				t.Fatalf("error=%v", err)
+			}
+			if !closed {
+				t.Fatal("content rows were not closed after cover signing failure")
+			}
+		})
+	}
+}
+
 func TestClassroomPublicSignedCoverMetadataDisablesConditionalCaching(t *testing.T) {
 	f := &fakeClassroomPublicService{content: classroomPublicContent{ID: 2, Title: "Signed", CoverURL: "https://signed.example/cover", signedCover: true}}
 	s := &Server{classroomPublic: f}
@@ -195,6 +247,17 @@ func TestClassroomPublicSignedCoverMetadataDisablesConditionalCaching(t *testing
 	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK || rr.Header().Get("Cache-Control") != "private, no-store" || rr.Header().Get("ETag") != "" {
 		t.Fatalf("status=%d headers=%v body=%s", rr.Code, rr.Header(), rr.Body.String())
+	}
+}
+
+func TestClassroomPublicCoverSigningFailureReturns503WithoutObjectKey(t *testing.T) {
+	key := "private/generated/secret.jpg"
+	f := &fakeClassroomPublicService{listErr: fmt.Errorf("%w: signer failed for %s", classroom.ErrCoverSigningUnavailable, key)}
+	s := &Server{classroomPublic: f}
+	rr := httptest.NewRecorder()
+	s.classroomStandalonePublic(rr, httptest.NewRequest(http.MethodGet, "/api/public/classroom/standalone", nil))
+	if rr.Code != http.StatusServiceUnavailable || strings.Contains(rr.Body.String(), key) {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
 }
 

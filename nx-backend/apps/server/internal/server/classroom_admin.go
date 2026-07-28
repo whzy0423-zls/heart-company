@@ -976,6 +976,8 @@ func (s *Server) toContentDTOWithContext(ctx context.Context, v classroom.Conten
 }
 func writeClassroomAdminError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, classroom.ErrCoverSigningUnavailable):
+		httpx.Fail(w, http.StatusServiceUnavailable, "classroom cover unavailable")
 	case errors.Is(err, classroom.ErrNotFound):
 		httpx.Fail(w, 404, "classroom record not found")
 	case errors.Is(err, classroom.ErrConflict):

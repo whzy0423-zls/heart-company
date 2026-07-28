@@ -232,6 +232,10 @@ func (s *Server) allowAnonymousClassroom(w http.ResponseWriter, r *http.Request,
 }
 func failClassroomInternal(w http.ResponseWriter, op string, err error) {
 	slog.Error("classroom public request failed", "operation", op, "error", err)
+	if errors.Is(err, classroom.ErrCoverSigningUnavailable) {
+		httpx.Fail(w, http.StatusServiceUnavailable, "Classroom cover unavailable")
+		return
+	}
 	httpx.Fail(w, http.StatusInternalServerError, "Internal Server Error")
 }
 func classroomPublicPage(r *http.Request) (classroomPublicQuery, error) {
@@ -725,6 +729,7 @@ func (d *classroomPublicDB) ListStandalone(ctx context.Context, q classroomPubli
 	if err != nil {
 		return nil, 0, err
 	}
+	defer rows.Close()
 	type rowItem struct {
 		content     classroom.Content
 		parent      *classroom.Series
@@ -783,6 +788,7 @@ func (d *classroomPublicDB) GetSeries(ctx context.Context, id, uid int64) (class
 	if e != nil {
 		return classroomPublicSeriesDetail{}, e
 	}
+	defer rows.Close()
 	type seriesContent struct {
 		content     classroom.Content
 		signedCover bool

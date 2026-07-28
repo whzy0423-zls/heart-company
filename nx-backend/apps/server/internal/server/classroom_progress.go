@@ -132,6 +132,8 @@ func (s *Server) classroomContinueLearning(w http.ResponseWriter, r *http.Reques
 
 func writeClassroomProgressError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, classroom.ErrCoverSigningUnavailable):
+		httpx.Fail(w, http.StatusServiceUnavailable, "Classroom cover unavailable")
 	case errors.Is(err, errClassroomPlaybackBlocked):
 		httpx.Fail(w, http.StatusLocked, "Playback Blocked")
 	case errors.Is(err, classroom.ErrNotFound), errors.Is(err, sql.ErrNoRows):

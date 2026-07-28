@@ -87,6 +87,17 @@ func TestClassroomProgressRoutesRequireMiniappJWTAndExposeUpdateAndContinue(t *t
 	}
 }
 
+func TestClassroomProgressCoverSigningFailureReturns503WithoutObjectKey(t *testing.T) {
+	key := "private/generated/progress-secret.jpg"
+	svc := &fakeClassroomProgressService{err: fmt.Errorf("%w: signer failed for %s", classroom.ErrCoverSigningUnavailable, key)}
+	s := &Server{classroomProgress: svc}
+	rr := httptest.NewRecorder()
+	s.classroomContinueLearning(rr, classroomUser(httptest.NewRequest(http.MethodGet, "/api/miniapp/classroom/continue-learning", nil)))
+	if rr.Code != http.StatusServiceUnavailable || strings.Contains(rr.Body.String(), key) {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestClassroomProgressRouteStrictInputBoundaries(t *testing.T) {
 	svc := &fakeClassroomProgressService{}
 	s := &Server{env: config.Env{JWTSecret: "secret"}, classroomProgress: svc}
