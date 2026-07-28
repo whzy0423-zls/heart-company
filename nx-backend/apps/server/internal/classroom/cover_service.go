@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -17,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/image/webp"
 
 	"nine-xing/nx-backend/apps/server/internal/storage"
 )
@@ -149,7 +150,10 @@ func coverImageType(data []byte) (string, string) {
 		}
 		return "image/png", ".png"
 	case "image/webp":
-		if !validWebP(data) {
+		if _, err := webp.DecodeConfig(bytes.NewReader(data)); err != nil {
+			return "", ""
+		}
+		if _, err := webp.Decode(bytes.NewReader(data)); err != nil {
 			return "", ""
 		}
 		return "image/webp", ".webp"
@@ -157,23 +161,6 @@ func coverImageType(data []byte) (string, string) {
 		return "", ""
 	}
 }
-
-func validWebP(data []byte) bool {
-	if len(data) < 20 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WEBP" || int(binary.LittleEndian.Uint32(data[4:8]))+8 > len(data) {
-		return false
-	}
-	switch string(data[12:16]) {
-	case "VP8X":
-		return len(data) >= 30 && (data[24] != 0 || data[25] != 0 || data[26] != 0) && (data[27] != 0 || data[28] != 0 || data[29] != 0)
-	case "VP8L":
-		return len(data) >= 25 && data[20] == 0x2f
-	case "VP8 ":
-		return len(data) >= 30 && data[23] == 0x9d && data[24] == 0x01 && data[25] == 0x2a
-	default:
-		return false
-	}
-}
-
 func randomCoverName(ext string) (string, error) {
 	var raw [12]byte
 	if _, err := rand.Read(raw[:]); err != nil {

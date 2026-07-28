@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"io"
 	"strings"
@@ -14,6 +15,7 @@ import (
 )
 
 var testPNG, _ = base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+var testWebP, _ = base64.StdEncoding.DecodeString("UklGRjwAAABXRUJQVlA4IDAAAADQAQCdASoBAAEAAUAmJaACdLoB+AADsAD+8ut//NgVzXPv9//S4P0uD9Lg/9KQAAA=")
 
 type fakeCoverStore struct {
 	content Content
@@ -155,5 +157,30 @@ func TestCoverServiceStorageUploadFailureIsTyped(t *testing.T) {
 	_, err := NewCoverService(store, objects, 1024).Upload(context.Background(), 2, now, nil, "cover.png", bytes.NewReader(testPNG))
 	if !errors.Is(err, ErrCoverStorageUnavailable) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestCoverServiceUsesFullWebPDecodeInsteadOfTrustingVP8XHeader(t *testing.T) {
+	now := time.Now().UTC()
+	forged := make([]byte, 30)
+	copy(forged[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(forged[4:8], uint32(len(forged)-8))
+	copy(forged[8:12], "WEBP")
+	copy(forged[12:16], "VP8X")
+	binary.LittleEndian.PutUint32(forged[16:20], 10)
+	forged[24], forged[27] = 1, 1
+
+	badStore := &fakeCoverStore{content: Content{ID: 12, Status: ContentReady, UpdatedAt: now}}
+	badObjects := &fakeCoverStorage{}
+	_, err := NewCoverService(badStore, badObjects, 1024).Upload(context.Background(), 12, now, nil, "forged.webp", bytes.NewReader(forged))
+	if !errors.Is(err, ErrInvalidCoverImage) || len(badObjects.uploads) != 0 {
+		t.Fatalf("forged VP8X accepted: err=%v uploads=%d", err, len(badObjects.uploads))
+	}
+
+	goodStore := &fakeCoverStore{content: Content{ID: 13, Status: ContentReady, UpdatedAt: now}}
+	goodObjects := &fakeCoverStorage{}
+	got, err := NewCoverService(goodStore, goodObjects, 1024).Upload(context.Background(), 13, now, nil, "real.webp", bytes.NewReader(testWebP))
+	if err != nil || !strings.HasSuffix(got.ManualCoverObjectKey, ".webp") || len(goodObjects.uploads) != 1 || goodObjects.uploads[0].ContentType != "image/webp" {
+		t.Fatalf("real WebP rejected: got=%+v err=%v uploads=%+v", got, err, goodObjects.uploads)
 	}
 }
