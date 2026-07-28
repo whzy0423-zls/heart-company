@@ -2131,8 +2131,13 @@ for (const selector of [".type-badge__avatar", ".type-badge__fallback"]) {
 }
 assert.match(
   pageStyleDeclarations(learnStyle, ".learn-hero"),
-  /background:\s*linear-gradient\([^;]*#0f766e[^;]*#15803d[^;]*\)\s*;/i,
-  "learn hero should use the approved teal-to-green gradient",
+  /background:[\s\S]*linear-gradient\([^;]*#4338ca[^;]*#7c3aed[^;]*\)\s*;/i,
+  "learn hero should use the refreshed blue-violet gradient",
+);
+assert.doesNotMatch(
+  pageStyleDeclarations(learnStyle, ".learn-hero"),
+  /#0f766e|#15803d|rgba\(\s*15,\s*118,\s*110/i,
+  "learn hero should not keep the old green palette",
 );
 assert.match(
   pageStyleDeclarations(learnStyle, ".learn-hero"),

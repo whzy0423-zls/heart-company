@@ -32,8 +32,8 @@ assert.match(
 
 assert.match(
   learnSource,
-  /\.quote-editorial\s*\{[^}]*background:\s*#ecfdf5/s,
-  '编辑式语录需要保留批准的浅绿色阅读底色',
+  /\.quote-editorial\s*\{[^}]*background:\s*#eef2ff/s,
+  '编辑式语录需要使用新的浅蓝紫阅读底色',
 )
 
 console.log('miniapp learn quote card tests passed')

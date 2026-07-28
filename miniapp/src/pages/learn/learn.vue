@@ -429,14 +429,19 @@ function goTest() {
 
 <style scoped>
 .learn {
-  background: #f4f8f6;
+  background:
+    radial-gradient(circle at 0 0, rgba(79, 70, 229, 0.10), transparent 30%),
+    radial-gradient(circle at 100% 14%, rgba(245, 158, 11, 0.10), transparent 28%),
+    #f8fafc;
 }
 .learn-hero {
   padding: 38rpx 34rpx 40rpx;
   border-radius: 38rpx;
-  background: linear-gradient(135deg, #0f766e 0%, #15803d 100%);
+  background:
+    radial-gradient(circle at 86% 10%, rgba(255, 255, 255, 0.18), transparent 24%),
+    linear-gradient(135deg, #4338ca 0%, #7c3aed 100%);
   color: #ffffff;
-  box-shadow: 0 24rpx 54rpx -34rpx rgba(15, 118, 110, 0.7);
+  box-shadow: 0 24rpx 54rpx -34rpx rgba(67, 56, 202, 0.66);
 }
 .learn-hero__eyebrow {
   display: block;
@@ -465,9 +470,9 @@ function goTest() {
   justify-content: space-between;
   gap: 18rpx;
   padding: 20rpx 24rpx;
-  color: #52625b;
-  background: #f0fdf4;
-  border: 2rpx solid #bbf7d0;
+  color: #475569;
+  background: #eef2ff;
+  border: 2rpx solid #c7d2fe;
   border-radius: 24rpx;
 }
 .content-refresh-notice__text {
@@ -479,11 +484,11 @@ function goTest() {
   flex-shrink: 0;
   min-height: 88rpx;
   padding: 0 22rpx;
-  color: #0f6b4f;
+  color: #4338ca;
   font-size: 24rpx;
   font-weight: 900;
   background: #ffffff;
-  border: 2rpx solid #86efac;
+  border: 2rpx solid #a5b4fc;
   border-radius: 16rpx;
   line-height: 88rpx;
 }
@@ -497,11 +502,11 @@ function goTest() {
 .classroom-entry__browse {
   min-height: 88rpx;
   padding: 0 24rpx;
-  color: #0f6b4f;
+  color: #4338ca;
   font-size: 24rpx;
   font-weight: 800;
   line-height: 88rpx;
-  background: #ecfdf5;
+  background: #eef2ff;
   border-radius: 18rpx;
 }
 .classroom-entry__more::after,
@@ -520,7 +525,7 @@ function goTest() {
   color: #ffffff;
   background:
     radial-gradient(circle at 14% 8%, rgba(255, 255, 255, 0.18), transparent 28%),
-    linear-gradient(135deg, #0f172a 0%, #0f766e 58%, #f97316 132%);
+    linear-gradient(135deg, #0f172a 0%, #4338ca 58%, #f59e0b 132%);
   border-radius: 26rpx;
   box-shadow: 0 22rpx 42rpx -28rpx rgba(15, 23, 42, 0.56);
 }
@@ -625,7 +630,7 @@ function goTest() {
   gap: 18rpx;
   margin-bottom: 18rpx;
   padding: 18rpx 22rpx;
-  color: #8a4b16;
+  color: #c2410c;
   font-size: 24rpx;
   line-height: 1.55;
   background: #fff7ed;
@@ -635,10 +640,10 @@ function goTest() {
 .classroom-entry__fallback {
   display: block;
   margin-top: 10rpx;
-  color: #66766f;
+  color: #64748b;
 }
 .classroom-entry__empty {
-  color: #66766f;
+  color: #64748b;
   font-size: 25rpx;
   line-height: 1.6;
   text-align: center;
@@ -655,8 +660,10 @@ function goTest() {
   display: flex;
   align-items: flex-start;
   overflow: hidden;
-  background: #f3f8f5;
+  background: #f8fafc;
+  border: 2rpx solid #e0e7ff;
   border-radius: 22rpx;
+  box-shadow: 0 14rpx 28rpx -24rpx rgba(67, 56, 202, 0.42);
   transition: opacity 0.18s ease, transform 0.18s ease;
 }
 .classroom-entry__item--pressed {
@@ -666,7 +673,7 @@ function goTest() {
 .classroom-entry__cover {
   flex-shrink: 0;
   width: 156rpx;
-  background: #dbeee6;
+  background: #e0e7ff;
 }
 .classroom-entry__cover.classroom-cover--16x9 {
   height: 88rpx;
@@ -681,7 +688,7 @@ function goTest() {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #0f766e;
+  color: #4338ca;
   font-size: 40rpx;
   font-weight: 900;
 }
@@ -694,13 +701,13 @@ function goTest() {
   padding: 16rpx 20rpx;
 }
 .classroom-entry__kind {
-  color: #0f766e;
+  color: #4338ca;
   font-size: 21rpx;
   font-weight: 800;
 }
 .classroom-entry__title {
   margin-top: 8rpx;
-  color: #1c2923;
+  color: #111827;
   font-size: 26rpx;
   font-weight: 800;
   line-height: 1.4;
@@ -717,14 +724,14 @@ function goTest() {
 }
 .section-kicker {
   display: block;
-  color: #0f766e;
+  color: #4338ca;
   font-size: 24rpx;
   font-weight: 800;
 }
 .sec-title {
   display: block;
   margin-top: 8rpx;
-  color: #17211d;
+  color: #0f172a;
   font-size: 34rpx;
   font-weight: 900;
   line-height: 1.35;
@@ -749,12 +756,12 @@ function goTest() {
   min-width: 88rpx;
   min-height: 88rpx;
   padding: 0 20rpx;
-  color: #0f6b4f;
+  color: #4338ca;
   font-size: 24rpx;
   font-weight: 900;
   touch-action: manipulation;
-  background: #ecfdf5;
-  border: 2rpx solid #a7f3d0;
+  background: #eef2ff;
+  border: 2rpx solid #c4b5fd;
   border-radius: 18rpx;
   line-height: 1;
 }
@@ -782,7 +789,7 @@ function goTest() {
 .teacher-media {
   width: 112rpx;
   height: 112rpx;
-  background: #dbeee8;
+  background: #e0e7ff;
 }
 .teacher-media__fallback {
   display: flex;
@@ -791,7 +798,7 @@ function goTest() {
   width: 112rpx;
   height: 112rpx;
   color: #ffffff;
-  background: #0f766e;
+  background: #4338ca;
   font-size: 40rpx;
   font-weight: 900;
 }
@@ -803,13 +810,13 @@ function goTest() {
   gap: 8rpx;
 }
 .teacher-card__name {
-  color: #17211d;
+  color: #0f172a;
   font-size: 32rpx;
   font-weight: 900;
   line-height: 1.3;
 }
 .teacher-card__title {
-  color: #0f6b4f;
+  color: #4338ca;
   font-size: 24rpx;
   font-weight: 800;
 }
@@ -825,8 +832,8 @@ function goTest() {
   margin-top: 4rpx;
 }
 .teacher-card__tag {
-  color: #0f6b4f;
-  background: #ecfdf5;
+  color: #4338ca;
+  background: #eef2ff;
   font-size: 24rpx;
 }
 .courseware-card {
@@ -851,7 +858,7 @@ function goTest() {
 .course-media {
   width: 220rpx;
   height: 150rpx;
-  background: #dbeee8;
+  background: #e0e7ff;
 }
 .course-media__fallback {
   display: flex;
@@ -861,7 +868,7 @@ function goTest() {
   height: 150rpx;
   padding: 16rpx;
   color: #ffffff;
-  background: #15803d;
+  background: #7c3aed;
   font-size: 28rpx;
   font-weight: 900;
   text-align: center;
@@ -878,8 +885,8 @@ function goTest() {
   margin-bottom: 8rpx;
 }
 .courseware-card__badge {
-  color: #0f6b4f;
-  background: #ecfdf5;
+  color: #4338ca;
+  background: #eef2ff;
   font-size: 24rpx;
 }
 .courseware-card__duration {
@@ -889,7 +896,7 @@ function goTest() {
 }
 .courseware-card__title {
   display: block;
-  color: #17211d;
+  color: #0f172a;
   font-size: 30rpx;
   font-weight: 900;
   line-height: 1.35;
@@ -906,12 +913,12 @@ function goTest() {
   margin-top: 20rpx;
   padding: 30rpx;
   border-radius: 22rpx;
-  background: #ecfdf5;
+  background: #eef2ff;
   overflow: hidden;
 }
 .quote-editorial__mark {
   display: block;
-  color: #0f766e;
+  color: #4338ca;
   font-family: Georgia, serif;
   font-size: 54rpx;
   font-weight: 900;
@@ -921,7 +928,7 @@ function goTest() {
   position: relative;
   display: block;
   margin-top: 8rpx;
-  color: #1f3a31;
+  color: #334155;
   font-size: 28rpx;
   font-weight: 700;
   line-height: 1.7;
@@ -936,9 +943,9 @@ function goTest() {
   min-width: 0;
   min-height: 190rpx;
   padding: 20rpx 14rpx;
-  border: 2rpx solid #dbe7e2;
+  border: 2rpx solid #e2e8f0;
   border-radius: 20rpx;
-  background: #f8fbfa;
+  background: #ffffff;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -958,7 +965,7 @@ function goTest() {
 .type-badge__avatar {
   width: 78rpx;
   height: 78rpx;
-  background: #dbeee8;
+  background: #e0e7ff;
 }
 .type-badge__fallback {
   display: flex;
@@ -967,7 +974,7 @@ function goTest() {
   width: 78rpx;
   height: 78rpx;
   color: #ffffff;
-  background: #0f766e;
+  background: #4338ca;
   font-size: 28rpx;
   font-weight: 900;
 }
@@ -982,7 +989,7 @@ function goTest() {
   height: 36rpx;
   border-radius: 12rpx;
   color: #ffffff;
-  background: #0f766e;
+  background: #4338ca;
   font-size: 24rpx;
   font-weight: 900;
 }
@@ -994,7 +1001,7 @@ function goTest() {
 }
 .type-badge__name {
   margin-top: 14rpx;
-  color: #17211d;
+  color: #0f172a;
   font-size: 27rpx;
   font-weight: 900;
   text-align: center;

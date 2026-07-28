@@ -19,6 +19,26 @@ assert.match(
   /classroomCoverRatioClass/,
   "learning classroom preview should apply the returned cover aspect ratio",
 );
+for (const forbidden of [
+  /#0f766e/i,
+  /#15803d/i,
+  /#0f6b4f/i,
+  /#ecfdf5/i,
+  /#bbf7d0/i,
+  /#86efac/i,
+  /rgba\(\s*15,\s*118,\s*110/i,
+]) {
+  assert.doesNotMatch(
+    source,
+    forbidden,
+    "learning page should not keep the old dominant green classroom palette",
+  );
+}
+assert.match(
+  source,
+  /#4338ca|#4f46e5|#7c3aed|#f59e0b/i,
+  "learning page should introduce the refreshed blue-violet warm-accent palette",
+);
 assert.match(
   source,
   /class="classroom-entry__hero"/,
