@@ -10,9 +10,11 @@ try {
   await writeFile(modulePath, source);
   const {
     classroomAccessLabel,
+    classroomCoverRatioClass,
     classroomContentRoute,
     classroomPurchaseAction,
     normalizeClassroomContent,
+    normalizeClassroomCoverAspectRatio,
     normalizeClassroomSeries,
   } = await import(`file://${modulePath}`);
 
@@ -27,6 +29,7 @@ try {
   assert.equal(fixtureContent.title, "第一课：认识三中心");
   assert.equal(fixtureContent.contentType, "video");
   assert.equal(fixtureContent.accessLevel, "inherit");
+  assert.equal(fixtureContent.coverAspectRatio, "16:9");
   assert.equal(
     "url" in fixtureContent,
     false,
@@ -48,6 +51,7 @@ try {
     description: " 复盘 ",
     teacherName: " 韩老师 ",
     coverUrl: "https://img.example/cover.jpg",
+    coverAspectRatio: "9:16",
     contentType: "audio",
     durationSeconds: 125,
     accessLevel: "paid",
@@ -67,6 +71,7 @@ try {
     description: "复盘",
     teacherName: "韩老师",
     coverUrl: "https://img.example/cover.jpg",
+    coverAspectRatio: "9:16",
     contentType: "audio",
     durationSeconds: 125,
     accessLevel: "paid",
@@ -82,12 +87,23 @@ try {
   const series = normalizeClassroomSeries({
     id: 12,
     title: " 入门系列 ",
+    coverAspectRatio: "4:3",
     effectiveAccess: "member",
     canPlay: true,
   });
   assert.equal(series.id, "12");
   assert.equal(series.title, "入门系列");
+  assert.equal(series.coverAspectRatio, "16:9");
   assert.equal(series.effectiveAccess, "member");
+
+  assert.equal(normalizeClassroomCoverAspectRatio("16:9"), "16:9");
+  assert.equal(normalizeClassroomCoverAspectRatio("9:16"), "9:16");
+  assert.equal(normalizeClassroomCoverAspectRatio("1:1"), "1:1");
+  assert.equal(normalizeClassroomCoverAspectRatio("4:3"), "16:9");
+  assert.equal(classroomCoverRatioClass({ coverAspectRatio: "16:9" }), "classroom-cover--16x9");
+  assert.equal(classroomCoverRatioClass({ coverAspectRatio: "9:16" }), "classroom-cover--9x16");
+  assert.equal(classroomCoverRatioClass({ coverAspectRatio: "1:1" }), "classroom-cover--1x1");
+  assert.equal(classroomCoverRatioClass({ coverAspectRatio: "bad" }), "classroom-cover--16x9");
 
   assert.equal(classroomAccessLabel("public"), "免费");
   assert.equal(classroomAccessLabel("login"), "登录可学");

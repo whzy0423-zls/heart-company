@@ -9,7 +9,11 @@ import {
 import { userErrorMessage } from "../../utils/userMessage";
 import { normalizeCoursewareItems, normalizeTeachers } from "../../utils/teacherCourseware";
 import { listClassroomSeriesApi, listClassroomStandaloneApi } from "../../api";
-import { normalizeClassroomContent, normalizeClassroomSeries } from "../../utils/classroomDisplay";
+import {
+  classroomCoverRatioClass,
+  normalizeClassroomContent,
+  normalizeClassroomSeries,
+} from "../../utils/classroomDisplay";
 
 const teachers = ref([]);
 const coursewareItems = ref([]);
@@ -215,6 +219,7 @@ function goTest() {
             <image
               v-if="item.coverUrl"
               class="classroom-entry__cover"
+              :class="classroomCoverRatioClass(item)"
               :src="item.coverUrl"
               mode="aspectFill"
               lazy-load
@@ -222,6 +227,7 @@ function goTest() {
             <view
               v-else
               class="classroom-entry__cover classroom-entry__cover--fallback"
+              :class="classroomCoverRatioClass(item)"
               aria-hidden="true"
               >课</view
             >
@@ -482,6 +488,7 @@ function goTest() {
 }
 .classroom-entry__item {
   display: flex;
+  align-items: flex-start;
   overflow: hidden;
   background: #f3f8f5;
   border-radius: 22rpx;
@@ -489,8 +496,16 @@ function goTest() {
 .classroom-entry__cover {
   flex-shrink: 0;
   width: 156rpx;
-  height: 126rpx;
   background: #dbeee6;
+}
+.classroom-entry__cover.classroom-cover--16x9 {
+  height: 88rpx;
+}
+.classroom-entry__cover.classroom-cover--9x16 {
+  height: 277rpx;
+}
+.classroom-entry__cover.classroom-cover--1x1 {
+  height: 156rpx;
 }
 .classroom-entry__cover--fallback {
   display: flex;

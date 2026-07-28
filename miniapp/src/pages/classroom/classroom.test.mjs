@@ -30,6 +30,26 @@ assert.match(
 );
 assert.match(
   source,
+  /classroomCoverRatioClass/,
+  "classroom cover cards should apply the returned cover aspect ratio",
+);
+assert.match(
+  source,
+  /<image[\s\S]*class="classroom-card__cover"[\s\S]*:class="classroomCoverRatioClass\(item\)"[\s\S]*mode="aspectFill"/,
+  "classroom cover images should use aspectFill inside a ratio-aware container",
+);
+assert.match(
+  source,
+  /class="classroom-card__cover classroom-card__cover--fallback"[\s\S]*:class="classroomCoverRatioClass\(item\)"/,
+  "classroom empty-cover placeholder should keep the same ratio container",
+);
+assert.match(
+  source,
+  /\.classroom-card__cover\.classroom-cover--9x16/s,
+  "classroom cards should define the portrait cover ratio",
+);
+assert.match(
+  source,
   /class="classroom-tabs"[^>]*role="tablist"/,
   "classroom should expose a two-entry tab list",
 );

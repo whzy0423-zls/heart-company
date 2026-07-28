@@ -1,6 +1,7 @@
 const ACCESS_LEVELS = new Set(["public", "login", "member", "paid"]);
 const CONTENT_ACCESS_LEVELS = new Set(["inherit", "public", "login", "member", "paid"]);
 const PURCHASE_STATES = new Set(["available", "owned", "purchase_required"]);
+const COVER_ASPECT_RATIOS = new Set(["16:9", "9:16", "1:1"]);
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -26,6 +27,16 @@ function purchaseState(value, effectiveAccess, canPlay) {
   return canPlay ? "owned" : "purchase_required";
 }
 
+export function normalizeClassroomCoverAspectRatio(value) {
+  const ratio = text(value);
+  return COVER_ASPECT_RATIOS.has(ratio) ? ratio : "16:9";
+}
+
+export function classroomCoverRatioClass(item = {}) {
+  const ratio = normalizeClassroomCoverAspectRatio(item.coverAspectRatio);
+  return `classroom-cover--${ratio.replace(":", "x")}`;
+}
+
 export function normalizeClassroomSeries(source = {}) {
   const effectiveAccess = access(source.effectiveAccess);
   const canPlay = source.canPlay === true;
@@ -35,6 +46,7 @@ export function normalizeClassroomSeries(source = {}) {
     summary: text(source.summary),
     coverUrl: text(source.coverUrl),
     teacherName: text(source.teacherName),
+    coverAspectRatio: normalizeClassroomCoverAspectRatio(source.coverAspectRatio),
     effectiveAccess,
     priceCents: nonNegativeInteger(source.priceCents),
     canPlay,
@@ -54,6 +66,7 @@ export function normalizeClassroomContent(source = {}) {
     teacherName: text(source.teacherName),
     coverUrl: text(source.coverUrl),
     contentType: source.contentType === "audio" ? "audio" : "video",
+    coverAspectRatio: normalizeClassroomCoverAspectRatio(source.coverAspectRatio),
     durationSeconds: nonNegativeInteger(source.durationSeconds),
     accessLevel: CONTENT_ACCESS_LEVELS.has(source.accessLevel) ? source.accessLevel : "",
     effectiveAccess,

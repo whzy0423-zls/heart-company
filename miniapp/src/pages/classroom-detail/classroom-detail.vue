@@ -12,6 +12,7 @@ import {
 } from "../../api";
 import {
   classroomAccessLabel,
+  classroomCoverRatioClass,
   classroomPurchaseAction,
   normalizeClassroomContent,
   normalizeClassroomSeries,
@@ -500,11 +501,17 @@ onUnload(() => {
         <image
           v-if="content.coverUrl"
           class="detail-head__cover"
+          :class="classroomCoverRatioClass(content)"
           :src="content.coverUrl"
           mode="aspectFill"
           lazy-load
         />
-        <view v-else class="detail-head__cover detail-head__cover--fallback" aria-hidden="true">{{
+        <view
+          v-else
+          class="detail-head__cover detail-head__cover--fallback"
+          :class="classroomCoverRatioClass(content)"
+          aria-hidden="true"
+          >{{
           content.contentType === "audio" ? "音" : "课"
         }}</view>
         <view class="detail-head__body">
@@ -756,14 +763,23 @@ onUnload(() => {
 }
 .detail-head {
   display: flex;
+  align-items: flex-start;
   overflow: hidden;
   background: #fff;
   border-radius: 30rpx;
 }
 .detail-head__cover {
   width: 240rpx;
-  min-height: 240rpx;
   background: #dbeee6;
+}
+.detail-head__cover.classroom-cover--16x9 {
+  height: 135rpx;
+}
+.detail-head__cover.classroom-cover--9x16 {
+  height: 427rpx;
+}
+.detail-head__cover.classroom-cover--1x1 {
+  height: 240rpx;
 }
 .detail-head__cover--fallback {
   display: flex;

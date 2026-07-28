@@ -11,6 +11,26 @@ assert.ok(script, "classroom detail should expose executable page state");
 assert.match(source, /onHide/, "detail should pause page media when hidden");
 assert.match(source, /onShow/, "detail should restore visibility without autoplay");
 assert.match(source, /id="classroom-video"/, "video should have a stable page context id");
+assert.match(
+  source,
+  /classroomCoverRatioClass/,
+  "detail cover should apply the returned cover aspect ratio",
+);
+assert.match(
+  source,
+  /<image[\s\S]*class="detail-head__cover"[\s\S]*:class="classroomCoverRatioClass\(content\)"[\s\S]*mode="aspectFill"/,
+  "detail cover image should use aspectFill inside a ratio-aware container",
+);
+assert.match(
+  source,
+  /class="detail-head__cover detail-head__cover--fallback"[\s\S]*:class="classroomCoverRatioClass\(content\)"/,
+  "detail empty-cover placeholder should keep the same ratio container",
+);
+assert.match(
+  source,
+  /\.detail-head__cover\.classroom-cover--1x1/s,
+  "detail cover should define the square cover ratio",
+);
 assert.match(source, /<slider\b[^>]*@change="seekAudio"/, "audio player should expose seeking");
 assert.match(
   source,

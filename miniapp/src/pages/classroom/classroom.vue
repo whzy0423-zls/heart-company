@@ -12,6 +12,7 @@ import {
 } from "../../api";
 import {
   classroomAccessLabel,
+  classroomCoverRatioClass,
   classroomContentRoute,
   classroomPurchaseAction,
   normalizeClassroomContent,
@@ -443,6 +444,7 @@ onUnload(() => {
           <image
             v-if="item.coverUrl"
             class="classroom-card__cover"
+            :class="classroomCoverRatioClass(item)"
             :src="item.coverUrl"
             mode="aspectFill"
             lazy-load
@@ -450,6 +452,7 @@ onUnload(() => {
           <view
             v-else
             class="classroom-card__cover classroom-card__cover--fallback"
+            :class="classroomCoverRatioClass(item)"
             aria-hidden="true"
             >课</view
           >
@@ -732,6 +735,7 @@ onUnload(() => {
 }
 .classroom-card {
   display: flex;
+  align-items: flex-start;
   min-height: 220rpx;
   overflow: hidden;
   background: #fff;
@@ -751,8 +755,16 @@ onUnload(() => {
 .classroom-card__cover {
   flex: 0 0 210rpx;
   width: 210rpx;
-  min-height: 220rpx;
   background: #dbeee6;
+}
+.classroom-card__cover.classroom-cover--16x9 {
+  height: 118rpx;
+}
+.classroom-card__cover.classroom-cover--9x16 {
+  height: 373rpx;
+}
+.classroom-card__cover.classroom-cover--1x1 {
+  height: 210rpx;
 }
 .classroom-card__cover--fallback {
   display: flex;

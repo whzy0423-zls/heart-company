@@ -16,6 +16,26 @@ assert.match(
 );
 assert.match(
   source,
+  /classroomCoverRatioClass/,
+  "learning classroom preview should apply the returned cover aspect ratio",
+);
+assert.match(
+  source,
+  /<image[\s\S]*class="classroom-entry__cover"[\s\S]*:class="classroomCoverRatioClass\(item\)"[\s\S]*mode="aspectFill"/,
+  "learning classroom cover image should use aspectFill inside a ratio-aware container",
+);
+assert.match(
+  source,
+  /class="classroom-entry__cover classroom-entry__cover--fallback"[\s\S]*:class="classroomCoverRatioClass\(item\)"/,
+  "learning empty-cover placeholder should keep the same ratio container",
+);
+assert.match(
+  source,
+  /\.classroom-entry__cover\.classroom-cover--9x16/s,
+  "learning classroom cards should define the portrait cover ratio",
+);
+assert.match(
+  source,
   /v-if="classroomWarning"[\s\S]*?@click="retryClassroomPreview"/,
   "a partial classroom failure should expose a non-blocking retry warning",
 );
