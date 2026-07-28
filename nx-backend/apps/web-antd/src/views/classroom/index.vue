@@ -29,6 +29,7 @@ import UploadTasks from './upload-tasks.vue';
 import {
   classroomOperationError,
   classroomPermissions,
+  contentPublishGuard,
   visibleClassroomTabs,
 } from './classroom-view-model';
 
@@ -75,6 +76,9 @@ const statusText: Record<string, string> = {
   ready: '待发布',
   processing: '处理中',
 };
+function publishGuard(record: ClassroomContent) {
+  return contentPublishGuard(record, series.value);
+}
 async function load() {
   loading.value = true;
   error.value = '';
@@ -95,6 +99,14 @@ function confirmLifecycle(
   record: ClassroomContent,
   action: 'publish' | 'offline' | 'block' | 'unblock' | 'delete',
 ) {
+  if (action === 'publish') {
+    const guard = publishGuard(record);
+    if (!guard.allowed) {
+      message.info(guard.reason);
+      if (guard.label === '先发布所属系列') activeTab.value = 'series';
+      return;
+    }
+  }
   Modal.confirm({
     title:
       action === 'publish'
@@ -136,7 +148,6 @@ function confirmLifecycle(
         await load();
       } catch (cause) {
         message.error(classroomOperationError(cause, '操作失败'));
-        throw cause;
       } finally {
         actionLoadingId.value = undefined;
       }
@@ -206,14 +217,22 @@ onMounted(load);
               <Button
                 v-if="canPublish && record.status !== 'published'"
                 :loading="actionLoadingId === record.id"
-                :disabled="record.status !== 'ready'"
-                :title="
-                  record.status !== 'ready'
-                    ? '媒体处理完成后才可发布'
-                    : '发布课件'
+                :disabled="
+                  !publishGuard(record as ClassroomContent).allowed &&
+                  publishGuard(record as ClassroomContent).label !==
+                    '先发布所属系列'
                 "
-                @click="confirmLifecycle(record as ClassroomContent, 'publish')"
-                >发布</Button
+                :title="publishGuard(record as ClassroomContent).reason"
+                @click="
+                  publishGuard(record as ClassroomContent).label ===
+                  '先发布所属系列'
+                    ? (activeTab = 'series')
+                    : confirmLifecycle(
+                        record as ClassroomContent,
+                        'publish',
+                      )
+                "
+                >{{ publishGuard(record as ClassroomContent).label }}</Button
               >
               <Button
                 v-if="canPublish && record.status === 'published'"
@@ -277,7 +296,7 @@ onMounted(load);
     </Card>
     <Modal
       v-model:open="editorOpen"
-      title="编辑课件"
+      :title="editing ? '编辑课件' : '新建课件'"
       :width="760"
       :footer="null"
       ><ContentEditor

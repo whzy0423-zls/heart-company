@@ -13,12 +13,14 @@ import { seriesMetadataPayload } from './series-model';
 import {
   classroomOperationError,
   classroomPermissions,
+  contentPublishGuard,
   playbackControl,
   uploadStatusLabel,
   visibleClassroomTabs,
 } from './classroom-view-model';
 import {
   classroomUploadMime,
+  matchesClassroomContentType,
   matchesUploadIdentity,
   mergeUploadProgress,
   putSignedUploadPart,
@@ -86,12 +88,28 @@ describe('teacher classroom admin UI contract', () => {
     expect(editor).toContain('保存课件');
   });
 
+  it('explains that an empty series list still allows standalone content', () => {
+    const editor = read('views/classroom/components/content-editor.vue');
+    const index = read('views/classroom/index.vue');
+    expect(editor).toContain('暂无课程系列，可直接保存为独立课件');
+    expect(editor).toContain('不加入系列，课件会独立展示');
+    expect(index).toContain("editing ? '编辑课件' : '新建课件'");
+  });
+
   it('provides series create/edit and pricing controls', () => {
     const series = read('views/classroom/series.vue');
     expect(series).toContain('createClassroomSeriesApi');
     expect(series).toContain('updateClassroomSeriesApi');
     expect(series).toContain('setClassroomSeriesPriceApi');
     expect(series).toContain('保存系列');
+  });
+
+  it('resolves series permissions when opened as a standalone menu page', () => {
+    const series = read('views/classroom/series.vue');
+    expect(series).toContain('useAccessStore');
+    expect(series).toContain('props.canWrite ?? permissions.value.canWrite');
+    expect(series).toContain('props.canPublish ?? permissions.value.canPublish');
+    expect(series).toContain('props.canPrice ?? permissions.value.canPrice');
   });
 
   it('uploads selected media through the multipart API chain', () => {
@@ -105,6 +123,16 @@ describe('teacher classroom admin UI contract', () => {
     }
     expect(upload).toContain(
       'accept="video/mp4,audio/mpeg,audio/mp4,audio/x-m4a"',
+    );
+  });
+
+  it('makes the two upload prerequisites explicit before enabling upload', () => {
+    const upload = read('views/classroom/upload-tasks.vue');
+    expect(upload).toContain('1. 选择草稿课件');
+    expect(upload).toContain('2. 选择媒体文件');
+    expect(upload).toContain("return message.warning('请选择媒体文件')");
+    expect(upload).toContain(
+      ':disabled="!selectedContentId || !selectedFile || uploading"',
     );
   });
 
@@ -195,6 +223,31 @@ describe('teacher classroom admin UI contract', () => {
       action: 'unblock',
       label: '恢复播放',
     });
+  });
+
+  it('requires the parent series to be published before publishing its content', () => {
+    const content = { id: 11, seriesId: 2, status: 'ready' } as any;
+    expect(
+      contentPublishGuard(content, [
+        { id: 2, status: 'draft', title: '韩老师测试课程' },
+      ] as any),
+    ).toEqual({
+      allowed: false,
+      label: '先发布所属系列',
+      reason: '请先到“课程系列”发布《韩老师测试课程》',
+    });
+    expect(
+      contentPublishGuard(content, [
+        { id: 2, status: 'published', title: '韩老师测试课程' },
+      ] as any),
+    ).toMatchObject({ allowed: true, label: '发布' });
+  });
+
+  it('shows the parent-series action instead of sending an invalid publish request', () => {
+    const source = read('views/classroom/index.vue');
+    expect(source).toContain('先发布所属系列');
+    expect(source).toContain("activeTab = 'series'");
+    expect(source).not.toContain('throw cause');
   });
 
   it('wires block and unblock controls for both content and series', () => {
@@ -329,6 +382,13 @@ describe('teacher classroom admin UI contract', () => {
     expect(classroomUploadMime({ name: 'lesson.mp3', type: '' } as File)).toBe(
       'audio/mpeg',
     );
+  });
+
+  it('rejects audio files for video lessons and video files for audio lessons', () => {
+    expect(matchesClassroomContentType('video', 'video/mp4')).toBe(true);
+    expect(matchesClassroomContentType('audio', 'audio/x-m4a')).toBe(true);
+    expect(matchesClassroomContentType('video', 'audio/x-m4a')).toBe(false);
+    expect(matchesClassroomContentType('audio', 'video/mp4')).toBe(false);
   });
 
   it('aborts only the original active task controller', () => {

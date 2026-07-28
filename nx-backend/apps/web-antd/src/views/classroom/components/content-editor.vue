@@ -199,9 +199,15 @@ watch(
         v-model:value="form.seriesId"
         :disabled="!canWrite"
         allow-clear
-        placeholder="不选择则为独立课件"
+        :placeholder="
+          series.length
+            ? '可选：选择已有课程系列'
+            : '暂无课程系列，可直接保存为独立课件'
+        "
+        not-found-content="暂无课程系列，可直接保存为独立课件"
         :options="series.map((item) => ({ label: item.title, value: item.id }))"
       />
+      <span class="field-hint">不加入系列，课件会独立展示；以后也可以再编辑归入系列。</span>
     </Form.Item>
     <Form.Item v-if="form.seriesId" label="展示入口">
       <Checkbox v-model:checked="form.showAsStandalone" :disabled="!canWrite"

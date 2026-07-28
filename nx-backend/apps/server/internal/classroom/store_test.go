@@ -195,6 +195,68 @@ func TestStoreCreateContentRejectsPublishedTarget(t *testing.T) {
 	}
 }
 
+func TestStoreCreateContentPersistsNilTagsAsJSONArray(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	db := openClassroomQueryDB(t, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		if !strings.Contains(query, "INSERT INTO classroom_contents") {
+			return nil, fmt.Errorf("unexpected query: %s", query)
+		}
+		if len(args) < 13 || args[12].Value != "[]" {
+			t.Fatalf("nil tags encoded as %v, want []", args[12].Value)
+		}
+		return classroomRows(
+			[]string{"id", "created_at", "updated_at"},
+			[][]driver.Value{{int64(1), now, now}},
+		), nil
+	})
+
+	created, err := NewStore(db).CreateContent(context.Background(), Content{
+		Title:       "企业培训案例",
+		ContentType: ContentVideo,
+		Status:      ContentDraft,
+		AccessLevel: AccessPublic,
+	})
+	if err != nil {
+		t.Fatalf("create content: %v", err)
+	}
+	if created.ID != 1 {
+		t.Fatalf("created id = %d, want 1", created.ID)
+	}
+}
+
+func TestStoreUpdateContentPersistsNilTagsAsJSONArray(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	current := Content{
+		ID:          1,
+		Title:       "企业培训案例",
+		ContentType: ContentVideo,
+		Status:      ContentDraft,
+		AccessLevel: AccessPublic,
+		UpdatedAt:   now,
+	}
+	state := &classroomTxState{}
+	db := openClassroomTxDB(t, state, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "FROM classroom_contents WHERE id"):
+			return classroomRows(contentColumns, [][]driver.Value{contentValues(current)}), nil
+		case strings.Contains(query, "UPDATE classroom_contents"):
+			if len(args) < 13 || args[12].Value != "[]" {
+				t.Fatalf("nil tags encoded as %v, want []", args[12].Value)
+			}
+			return classroomRows(
+				[]string{"created_at", "updated_at"},
+				[][]driver.Value{{now.Add(-time.Hour), now.Add(time.Second)}},
+			), nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", query)
+		}
+	})
+
+	if _, err := NewStore(db).UpdateContent(context.Background(), current, now); err != nil {
+		t.Fatalf("update content: %v", err)
+	}
+}
+
 func TestStoreUpdatePublishedContentRevalidatesInvariant(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	current := Content{ID: 7, Title: "已发布", ContentType: ContentVideo, Status: ContentPublished, AccessLevel: AccessPublic, UpdatedAt: now}

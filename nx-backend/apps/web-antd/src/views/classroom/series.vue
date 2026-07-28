@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ClassroomSeries } from '#/api/core/classroom';
-import { onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useAccessStore } from '@vben/stores';
 import {
   Alert,
   Button,
@@ -26,13 +27,34 @@ import {
   setClassroomSeriesPriceApi,
   updateClassroomSeriesApi,
 } from '#/api/core/classroom';
+import { classroomPermissions } from './classroom-view-model';
 import { seriesMetadataPayload } from './series-model';
 
-const props = defineProps<{
-  canPrice?: boolean;
-  canPublish: boolean;
-  canWrite: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    canPrice?: boolean;
+    canPublish?: boolean;
+    canWrite?: boolean;
+  }>(),
+  {
+    canPrice: undefined,
+    canPublish: undefined,
+    canWrite: undefined,
+  },
+);
+const accessStore = useAccessStore();
+const permissions = computed(() =>
+  classroomPermissions(accessStore.accessCodes),
+);
+const canWrite = computed(
+  () => props.canWrite ?? permissions.value.canWrite,
+);
+const canPublish = computed(
+  () => props.canPublish ?? permissions.value.canPublish,
+);
+const canPrice = computed(
+  () => props.canPrice ?? permissions.value.canPrice,
+);
 const loading = ref(false);
 const error = ref('');
 const rows = ref<ClassroomSeries[]>([]);
@@ -95,11 +117,11 @@ function openEditor(record?: ClassroomSeries) {
 }
 async function save() {
   if (!form.title.trim()) return message.warning('请填写系列名称');
-  if (!props.canWrite && !editing.value) return;
+  if (!canWrite.value && !editing.value) return;
   saving.value = true;
   try {
     let saved = persistedSeries.value as ClassroomSeries;
-    if (props.canWrite && (!metadataCommitted.value || !saved)) {
+    if (canWrite.value && (!metadataCommitted.value || !saved)) {
       saved = persistedSeries.value
         ? await updateClassroomSeriesApi(persistedSeries.value.id, {
             ...seriesMetadataPayload(form),
@@ -110,7 +132,7 @@ async function save() {
       metadataCommitted.value = true;
     }
     if (
-      props.canPrice &&
+      canPrice.value &&
       (saved.accessLevel !== form.accessLevel ||
         saved.priceCents !== form.priceCents)
     )
@@ -132,7 +154,7 @@ async function save() {
 watch(
   form,
   () => {
-    if (props.canWrite) metadataCommitted.value = false;
+    if (canWrite.value) metadataCommitted.value = false;
   },
   { deep: true },
 );

@@ -31,6 +31,9 @@ vi.mock('ant-design-vue', async () => {
   });
   return {
     ...stubs,
+    Card: defineComponent({
+      template: '<section><slot name="extra" /><slot /></section>',
+    }),
     Checkbox: simple('Checkbox'),
     Input,
     InputNumber: simple('InputNumber'),
@@ -98,6 +101,18 @@ describe('classroom management permission integration', () => {
     expect(mocks.uploadTasks).not.toHaveBeenCalled();
     wrapper.unmount();
   });
+
+  it('shows create series when the standalone menu has Write permission', async () => {
+    mocks.accessCodes = [
+      'Miniapp:Classroom:List',
+      'Miniapp:Classroom:Write',
+    ];
+    const { default: SeriesView } = await import('./series.vue');
+    const wrapper = mountVueComponent(SeriesView);
+    await flushVuePromises();
+    expect(wrapper.text()).toContain('新建系列');
+    wrapper.unmount();
+  });
 });
 
 describe('classroom upload retry identity and persisted progress integration', () => {
@@ -140,7 +155,9 @@ describe('classroom upload retry identity and persisted progress integration', (
       setup: () => () =>
         h(UploadTasks, {
           canUpload: true,
-          contents: [{ id: 7, title: '课件', status: 'draft' }] as any,
+          contents: [
+            { id: 7, title: '课件', status: 'draft', contentType: 'video' },
+          ] as any,
         }),
     });
     const wrapper = mountVueComponent(Host);
@@ -159,12 +176,32 @@ describe('classroom upload retry identity and persisted progress integration', (
     input.dispatchEvent(new Event('change'));
   }
 
+  it('shows the selected filename from component state', async () => {
+    const wrapper = await mountUploadTasks();
+    const file = new File(['xxxx'], 'teacher-training.mp4', {
+      type: 'video/mp4',
+    });
+
+    wrapper.button('重试')?.click();
+    await flushVuePromises();
+    choose(file);
+    await flushVuePromises();
+
+    const text = wrapper.text();
+    const uploadDisabled = wrapper.button('开始上传')?.disabled;
+    wrapper.unmount();
+
+    expect(text).toContain('teacher-training.mp4');
+    expect(uploadDisabled).toBe(false);
+  });
+
   it('forces a replacement file and rejects retry when filename/checksum identity mismatches', async () => {
     const identitySpy = vi.spyOn(uploadFlow, 'matchesUploadIdentity');
     const wrapper = await mountUploadTasks();
     wrapper.button('重试')?.click();
     await flushVuePromises();
     choose(new File(['xxxx'], 'other.mp4', { type: 'video/mp4' }));
+    await flushVuePromises();
     wrapper.button('开始上传')?.click();
     await vi.waitFor(() => expect(identitySpy).toHaveBeenCalled());
     const { initiateClassroomUploadApi } = await import('#/api/core/classroom');
@@ -181,11 +218,48 @@ describe('classroom upload retry identity and persisted progress integration', (
     wrapper.button('重试')?.click();
     await flushVuePromises();
     choose(file);
+    await flushVuePromises();
     wrapper.button('开始上传')?.click();
     await vi.waitFor(() => expect(identitySpy).toHaveBeenCalled());
     await flushVuePromises();
     const { initiateClassroomUploadApi } = await import('#/api/core/classroom');
     expect(vi.mocked(initiateClassroomUploadApi)).toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('aborts and cleans the reserved task when multipart upload fails', async () => {
+    const file = new File(['xxxx'], 'lesson.mp4', { type: 'video/mp4' });
+    const expectedChecksum = await crc64File(file);
+    const reserved = {
+      ...task,
+      id: 92,
+      expectedChecksum,
+      partSize: 4,
+      status: 'initiated',
+    } as any;
+    const {
+      abortClassroomUploadApi,
+      initiateClassroomUploadApi,
+      signClassroomUploadPartApi,
+    } = await import('#/api/core/classroom');
+    vi.mocked(initiateClassroomUploadApi).mockResolvedValue({ task: reserved });
+    vi.mocked(signClassroomUploadPartApi).mockRejectedValue(
+      new Error('part upload failed'),
+    );
+    vi.mocked(abortClassroomUploadApi).mockResolvedValue({
+      ...reserved,
+      status: 'aborted',
+    });
+
+    const wrapper = await mountUploadTasks({ ...task, expectedChecksum });
+    wrapper.button('重试')?.click();
+    await flushVuePromises();
+    choose(file);
+    await flushVuePromises();
+    wrapper.button('开始上传')?.click();
+    await vi.waitFor(() =>
+      expect(vi.mocked(abortClassroomUploadApi)).toHaveBeenCalledWith(92),
+    );
     wrapper.unmount();
   });
 

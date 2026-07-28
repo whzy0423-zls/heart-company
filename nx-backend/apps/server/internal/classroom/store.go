@@ -118,6 +118,9 @@ func (s *Store) CreateContent(ctx context.Context, item Content) (Content, error
 	if err := item.Validate(); err != nil {
 		return Content{}, err
 	}
+	if item.Tags == nil {
+		item.Tags = []string{}
+	}
 	tags, err := json.Marshal(item.Tags)
 	if err != nil {
 		return Content{}, err
@@ -181,6 +184,9 @@ func (s *Store) UpdateContent(ctx context.Context, item Content, expectedUpdated
 		if err := ValidateContentPublish(ready, media, parent); err != nil {
 			return Content{}, err
 		}
+	}
+	if item.Tags == nil {
+		item.Tags = []string{}
 	}
 	tags, err := json.Marshal(item.Tags)
 	if err != nil {
