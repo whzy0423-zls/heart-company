@@ -8,8 +8,9 @@ const pageUrl = new URL("./index.vue", import.meta.url);
 const source = await readFile(pageUrl, "utf8");
 const template = source.match(/<template>([\s\S]*?)<\/template>/)?.[1] || "";
 const script = source.match(/<script setup>([\s\S]*?)<\/script>/)?.[1] || "";
+const style = source.match(/<style scoped>([\s\S]*?)<\/style>/)?.[1] || "";
 
-assert.ok(template && script, "home page should expose template and executable page state");
+assert.ok(template && script && style, "home page should expose template, executable page state, and scoped styles");
 
 const requiredOrder = [
   "home-nav",
@@ -43,6 +44,19 @@ assert.match(
 assert.match(template, /:autoplay="carousel\.items\.length > 1 && carousel\.autoplay && !carouselPaused"/, "carousel autoplay should respect pause state");
 assert.match(template, /class="carousel__image"[\s\S]{0,240}lazy-load[\s\S]{0,240}:aria-label=[\s\S]{0,180}@error="removeCarouselItem\(item\.image\)"/, "carousel images should keep lazy loading, accessible labels, and failure isolation");
 assert.match(template, /class="carousel__toggle"[\s\S]{0,260}@click="toggleCarouselPaused"/, "carousel should expose an accessible pause control");
+assert.match(template, /老师正在整理更多视频与音频内容，稍后再来看看。/, "empty classroom preview should use visitor-facing copy");
+const secondaryTemplate = template.slice(
+  template.indexOf('class="secondary-entries"'),
+  template.indexOf('class="enterprise-final-cta"'),
+);
+assert.equal(
+  (secondaryTemplate.match(/class="section-heading"/g) || []).length,
+  1,
+  "secondary entries should have one section heading rather than a nested duplicate",
+);
+const styleWithoutSemanticColorDefinitions = style.replace(/--nx-home-[\w-]+:\s*rgba\([^;]+\);/g, "");
+assert.match(style, /--nx-home-gold-halo:\s*rgba\(/, "home should centralize translucent brand colors in semantic CSS variables");
+assert.doesNotMatch(styleWithoutSemanticColorDefinitions, /rgba\(/, "home style rules should consume semantic variables instead of scattered rgba literals");
 
 for (const state of ["loading", "stale", "empty", "error"]) {
   assert.match(source, new RegExp(`NxAsyncState[\\s\\S]{0,360}state=["']${state}["']`), `home should connect NxAsyncState ${state}`);
@@ -246,6 +260,14 @@ try {
     state.listStandalone = async () => ({ items: [] });
     await page.retryClassroomPreview();
     assert.equal(page.classroomState.value, "empty");
+  }
+
+  {
+    const { page, state } = await createHarness();
+    state.cached = { home: { miniappHome: { entriesSection: { enabled: false } } } };
+    state.refreshSiteConfig = async () => { throw new Error("刷新失败"); };
+    await page.initializeHome();
+    assert.deepEqual(page.secondaryEntries.value, [], "disabled miniapp home entry sections should suppress every secondary entry");
   }
 
   {

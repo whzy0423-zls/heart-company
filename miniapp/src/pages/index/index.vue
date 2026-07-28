@@ -29,15 +29,17 @@ const classroomLoading = ref(true);
 const classroomError = ref("");
 const courseCoverErrors = ref({});
 let classroomRequestPromise = null;
+const secondaryEntriesEnabled = ref(true);
 
-const secondaryEntries = computed(() =>
-  view.value.secondaryEntries.filter(
+const secondaryEntries = computed(() => {
+  if (!secondaryEntriesEnabled.value) return [];
+  return view.value.secondaryEntries.filter(
     (entry) =>
       entry.enabled &&
       ["relation", "learn", "profile"].includes(entry.key) &&
       MINIAPP_HOME_ENTRY_BEHAVIORS[entry.key],
-  ),
-);
+  );
+});
 
 const classroomState = computed(() => {
   if (classroomLoading.value) return "loading";
@@ -46,6 +48,7 @@ const classroomState = computed(() => {
 });
 
 function applyHomeConfig(config) {
+  secondaryEntriesEnabled.value = config?.home?.miniappHome?.entriesSection?.enabled !== false;
   view.value = normalizePersonalExpertHome(config);
   carousel.value = filterFailedCarouselItems(
     normalizeHomeCarousel(config),
@@ -333,7 +336,7 @@ onMounted(() => {
         v-else-if="classroomState === 'empty'"
         state="empty"
         title="课堂内容正在准备"
-        description="发布后的独立视频与音频课件会展示在这里。"
+        description="老师正在整理更多视频与音频内容，稍后再来看看。"
         action-text="刷新课堂"
         :busy="classroomLoading"
         @action="retryClassroomPreview"
@@ -423,9 +426,23 @@ onMounted(() => {
 
 <style scoped>
 .home {
+  --nx-home-gold-halo: rgba(223, 188, 127, 0.2);
+  --nx-home-gold-border: rgba(223, 188, 127, 0.34);
+  --nx-home-elevated-shadow: rgba(32, 42, 55, 0.7);
+  --nx-home-gold-outline: rgba(223, 188, 127, 0.28);
+  --nx-home-on-brand-muted: rgba(255, 255, 255, 0.8);
+  --nx-home-on-brand-border: rgba(255, 255, 255, 0.42);
+  --nx-home-gold-portrait-border: rgba(223, 188, 127, 0.42);
+  --nx-home-on-brand-subtle: rgba(255, 255, 255, 0.08);
+  --nx-home-gold-monogram: rgba(223, 188, 127, 0.18);
+  --nx-home-gold-test-border: rgba(223, 188, 127, 0.46);
+  --nx-home-gold-test-wash: rgba(223, 188, 127, 0.13);
+  --nx-home-on-brand-soft: rgba(255, 255, 255, 0.5);
+  --nx-home-mark-border: rgba(49, 64, 82, 0.18);
+  --nx-home-gold-final-wash: rgba(223, 188, 127, 0.16);
   gap: 32rpx;
   background:
-    radial-gradient(circle at 94% 3%, rgba(223, 188, 127, 0.2), transparent 24%),
+    radial-gradient(circle at 94% 3%, var(--nx-home-gold-halo), transparent 24%),
     linear-gradient(180deg, var(--nx-surface-soft), var(--nx-page-bg));
   color: var(--nx-text);
 }
@@ -527,10 +544,10 @@ button::after {
   align-items: stretch;
   overflow: hidden;
   padding: 44rpx 36rpx;
-  border: 2rpx solid rgba(223, 188, 127, 0.34);
+  border: 2rpx solid var(--nx-home-gold-border);
   border-radius: 40rpx;
   background: linear-gradient(138deg, var(--nx-brand-900), var(--nx-brand-700));
-  box-shadow: 0 30rpx 64rpx -34rpx rgba(32, 42, 55, 0.7);
+  box-shadow: 0 30rpx 64rpx -34rpx var(--nx-home-elevated-shadow);
 }
 
 .expert-hero::before {
@@ -539,7 +556,7 @@ button::after {
   right: -90rpx;
   width: 350rpx;
   height: 350rpx;
-  border: 2rpx solid rgba(223, 188, 127, 0.28);
+  border: 2rpx solid var(--nx-home-gold-outline);
   border-radius: 50%;
   content: "";
 }
@@ -573,7 +590,7 @@ button::after {
 }
 
 .expert-hero__lead {
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--nx-home-on-brand-muted);
   font-size: 25rpx;
   line-height: 1.68;
 }
@@ -608,7 +625,7 @@ button::after {
 
 .expert-hero__secondary {
   min-height: 88rpx;
-  border: 2rpx solid rgba(255, 255, 255, 0.42);
+  border: 2rpx solid var(--nx-home-on-brand-border);
   background: transparent;
   color: var(--nx-surface);
 }
@@ -621,10 +638,10 @@ button::after {
   width: 270rpx;
   height: 430rpx;
   overflow: hidden;
-  border: 2rpx solid rgba(223, 188, 127, 0.42);
+  border: 2rpx solid var(--nx-home-gold-portrait-border);
   border-bottom: 0;
   border-radius: 150rpx 150rpx 0 0;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--nx-home-on-brand-subtle);
 }
 
 .expert-hero__image,
@@ -641,7 +658,7 @@ button::after {
   font-size: 112rpx;
   font-weight: 300;
   background:
-    linear-gradient(155deg, transparent 30%, rgba(223, 188, 127, 0.18)),
+    linear-gradient(155deg, transparent 30%, var(--nx-home-gold-monogram)),
     var(--nx-brand-700);
 }
 
@@ -794,7 +811,7 @@ button::after {
   height: 22rpx;
   border: 6rpx solid var(--nx-accent-gold);
   border-radius: 50%;
-  box-shadow: 0 0 0 5rpx rgba(223, 188, 127, 0.2);
+  box-shadow: 0 0 0 5rpx var(--nx-home-gold-halo);
 }
 
 .enterprise-service__copy {
@@ -832,10 +849,10 @@ button::after {
   justify-content: space-between;
   gap: 24rpx;
   padding: 34rpx;
-  border: 2rpx solid rgba(223, 188, 127, 0.46);
+  border: 2rpx solid var(--nx-home-gold-test-border);
   border-radius: 32rpx;
   background:
-    linear-gradient(110deg, rgba(223, 188, 127, 0.13), transparent 56%),
+    linear-gradient(110deg, var(--nx-home-gold-test-wash), transparent 56%),
     var(--nx-surface);
 }
 
@@ -923,7 +940,7 @@ button::after {
   box-sizing: border-box;
   padding: 28rpx;
   background:
-    linear-gradient(145deg, rgba(223, 188, 127, 0.34), transparent 50%),
+    linear-gradient(145deg, var(--nx-home-gold-border), transparent 50%),
     var(--nx-brand-700);
 }
 
@@ -931,7 +948,7 @@ button::after {
   width: 48%;
   height: 8rpx;
   border-radius: 999rpx;
-  background: rgba(255, 255, 255, 0.5);
+  background: var(--nx-home-on-brand-soft);
 }
 
 .classroom-card__fallback-line--long {
@@ -1005,7 +1022,7 @@ button::after {
   width: 56rpx;
   height: 56rpx;
   margin-bottom: 12rpx;
-  border: 2rpx solid rgba(49, 64, 82, 0.18);
+  border: 2rpx solid var(--nx-home-mark-border);
   border-radius: 18rpx;
   background: var(--nx-surface-soft);
 }
@@ -1057,7 +1074,7 @@ button::after {
   padding: 42rpx 36rpx;
   border-radius: 34rpx;
   background:
-    linear-gradient(130deg, transparent 42%, rgba(223, 188, 127, 0.16)),
+    linear-gradient(130deg, transparent 42%, var(--nx-home-gold-final-wash)),
     var(--nx-brand-900);
 }
 
