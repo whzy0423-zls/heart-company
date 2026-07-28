@@ -660,6 +660,32 @@ func TestStoreContentOptimisticUpdateDetectsStaleVersion(t *testing.T) {
 	}
 }
 
+func TestStoreSetContentManualCoverUsesTimestampCASAndReturnsLatestContent(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	want := Content{ID: 44, Title: "封面课件", ContentType: ContentVideo, Status: ContentPublished, AccessLevel: AccessPublic, ManualCoverObjectKey: "classroom/covers/manual/44/new.png", CoverAspectRatio: CoverAspectRatio16x9, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(time.Second)}
+	db := openClassroomQueryDB(t, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		if !strings.Contains(query, "UPDATE classroom_contents SET manual_cover_object_key") || len(args) != 4 || args[0].Value != want.ManualCoverObjectKey || args[2].Value != int64(44) || args[3].Value != now {
+			t.Fatalf("query=%s args=%+v", query, args)
+		}
+		return classroomRows(contentColumns, [][]driver.Value{contentValues(want)}), nil
+	})
+	got, err := NewStore(db).SetContentManualCover(context.Background(), 44, want.ManualCoverObjectKey, now, ptrInt64(7))
+	if err != nil || got.ManualCoverObjectKey != want.ManualCoverObjectKey || !got.UpdatedAt.Equal(want.UpdatedAt) {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+}
+
+func TestStoreSetContentManualCoverMapsNoRowsToConflict(t *testing.T) {
+	now := time.Now().UTC()
+	db := openClassroomQueryDB(t, func(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+		return classroomRows(contentColumns, nil), nil
+	})
+	_, err := NewStore(db).SetContentManualCover(context.Background(), 1, "x", now, nil)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestStoreSaveUploadTaskPersistsSchemaCleanupValueCleaned(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	db := openClassroomQueryDB(t, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {

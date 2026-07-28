@@ -1,9 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,15 +17,17 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/classroom"
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/storage"
 )
 
 type fakeClassroomAdminService struct {
-	series         classroom.Series
-	content        classroom.Content
-	updatedContent classroom.Content
-	calls          []string
-	getSeriesErr   error
-	uploadTasks    []classroom.UploadTask
+	series           classroom.Series
+	content          classroom.Content
+	updatedContent   classroom.Content
+	calls            []string
+	getSeriesErr     error
+	deleteContentErr error
+	uploadTasks      []classroom.UploadTask
 }
 
 func (f *fakeClassroomAdminService) ListContentContexts(_ context.Context, ids []int64) (map[int64]classroomContentContext, error) {
@@ -81,7 +86,38 @@ func (f *fakeClassroomAdminService) DeleteSeries(context.Context, int64, time.Ti
 }
 func (f *fakeClassroomAdminService) DeleteContent(context.Context, int64, time.Time) error {
 	f.calls = append(f.calls, "delete-content")
-	return nil
+	return f.deleteContentErr
+}
+
+type fakeClassroomCoverManager struct {
+	updated              classroom.Content
+	uploadErr, deleteErr error
+	uploads, deletes     int
+}
+
+func (f *fakeClassroomCoverManager) Upload(context.Context, int64, time.Time, *int64, string, io.Reader) (classroom.Content, error) {
+	f.uploads++
+	return f.updated, f.uploadErr
+}
+func (f *fakeClassroomCoverManager) Delete(context.Context, int64, time.Time, *int64) (classroom.Content, error) {
+	f.deletes++
+	return f.updated, f.deleteErr
+}
+
+type fakeClassroomCoverObjects struct {
+	deleted []string
+	err     error
+}
+
+func (*fakeClassroomCoverObjects) Upload(context.Context, storage.UploadInput) (storage.UploadResult, error) {
+	return storage.UploadResult{}, nil
+}
+func (*fakeClassroomCoverObjects) PresignGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
+	return "https://signed/" + key, nil
+}
+func (f *fakeClassroomCoverObjects) DeleteObject(_ context.Context, key string) error {
+	f.deleted = append(f.deleted, key)
+	return f.err
 }
 func (f *fakeClassroomAdminService) ListUploadTasks(context.Context, int, int) ([]classroom.UploadTask, int, error) {
 	f.calls = append(f.calls, "list-tasks")
@@ -329,6 +365,116 @@ func TestClassroomDeleteDraftRoutes(t *testing.T) {
 	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodDelete, "/api/admin/classroom/series/2?expectedUpdatedAt=2026-07-26T10:00:00Z", nil)))
 	if rr.Code != http.StatusOK || !containsString(f.calls, "delete-series") {
 		t.Fatalf("status=%d calls=%v body=%s", rr.Code, f.calls, rr.Body.String())
+	}
+}
+
+func classroomCoverMultipart(t *testing.T, expected string, data []byte) (*bytes.Buffer, string) {
+	t.Helper()
+	body := &bytes.Buffer{}
+	w := multipart.NewWriter(body)
+	part, err := w.CreateFormFile("file", "cover.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if expected != "" {
+		_ = w.WriteField("expectedUpdatedAt", expected)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return body, w.FormDataContentType()
+}
+
+func TestClassroomContentCoverUploadAndDeleteReturnLatestDTO(t *testing.T) {
+	now := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
+	current := classroom.Content{ID: 11, Title: "课件", ContentType: classroom.ContentVideo, Status: classroom.ContentPublished, AccessLevel: classroom.AccessPublic, CoverAspectRatio: classroom.CoverAspectRatio16x9, UpdatedAt: now}
+	updated := current
+	updated.ManualCoverObjectKey = "classroom/covers/manual/11/new.png"
+	updated.UpdatedAt = now.Add(time.Second)
+	admin := &fakeClassroomAdminService{content: current}
+	manager := &fakeClassroomCoverManager{updated: updated}
+	objects := &fakeClassroomCoverObjects{}
+	s := &Server{classroomAdmin: admin, classroomCovers: manager, classroomPlaybackSigner: objects}
+	mux := http.NewServeMux()
+	registerClassroomAdminRoutes(mux, func(_ string, h http.HandlerFunc) http.HandlerFunc { return h }, s)
+	body, contentType := classroomCoverMultipart(t, now.Format(time.RFC3339Nano), []byte("png"))
+	req := classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/contents/11/cover", body))
+	req.Header.Set("Content-Type", contentType)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || manager.uploads != 1 || !strings.Contains(rr.Body.String(), `"coverSource":"manual"`) || strings.Contains(rr.Body.String(), "objectKey") {
+		t.Fatalf("status=%d uploads=%d body=%s", rr.Code, manager.uploads, rr.Body.String())
+	}
+
+	manager.updated = current
+	manager.updated.UpdatedAt = updated.UpdatedAt.Add(time.Second)
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodDelete, "/api/admin/classroom/contents/11/cover?expectedUpdatedAt="+updated.UpdatedAt.Format(time.RFC3339Nano), nil)))
+	if rr.Code != http.StatusOK || manager.deletes != 1 || !strings.Contains(rr.Body.String(), `"coverSource":"none"`) {
+		t.Fatalf("status=%d deletes=%d body=%s", rr.Code, manager.deletes, rr.Body.String())
+	}
+}
+
+func TestClassroomContentCoverRequiresVersionUsesWritePermissionAndMapsErrors(t *testing.T) {
+	now := time.Now().UTC()
+	current := classroom.Content{ID: 6, Title: "课件", ContentType: classroom.ContentVideo, Status: classroom.ContentReady, AccessLevel: classroom.AccessPublic, UpdatedAt: now}
+	admin := &fakeClassroomAdminService{content: current}
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+	}{{"invalid", classroom.ErrInvalidCoverImage, 400}, {"missing", classroom.ErrNotFound, 404}, {"conflict", classroom.ErrConflict, 409}, {"storage", classroom.ErrCoverStorageUnavailable, 503}} {
+		t.Run(tc.name, func(t *testing.T) {
+			manager := &fakeClassroomCoverManager{uploadErr: tc.err}
+			s := &Server{classroomAdmin: admin, classroomCovers: manager}
+			mux := http.NewServeMux()
+			seen := ""
+			registerClassroomAdminRoutes(mux, func(code string, h http.HandlerFunc) http.HandlerFunc { seen = code; return h }, s)
+			body, typ := classroomCoverMultipart(t, now.Format(time.RFC3339Nano), []byte("png"))
+			req := classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/contents/6/cover", body))
+			req.Header.Set("Content-Type", typ)
+			rr := httptest.NewRecorder()
+			mux.ServeHTTP(rr, req)
+			if rr.Code != tc.status || seen != "Miniapp:Classroom:Write" {
+				t.Fatalf("status=%d permission=%s body=%s", rr.Code, seen, rr.Body.String())
+			}
+			if strings.Contains(rr.Body.String(), "secret") || strings.Contains(rr.Body.String(), "classroom/covers") {
+				t.Fatalf("leaked detail: %s", rr.Body.String())
+			}
+		})
+	}
+	body, typ := classroomCoverMultipart(t, "", []byte("png"))
+	req := classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/contents/6/cover", body))
+	req.Header.Set("Content-Type", typ)
+	rr := httptest.NewRecorder()
+	(&Server{classroomAdmin: admin, classroomCovers: &fakeClassroomCoverManager{}}).classroomContentItem(rr, req)
+	if rr.Code != 400 {
+		t.Fatalf("missing version status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestClassroomContentDeleteCleansManualCoverOnlyAfterDatabaseCommit(t *testing.T) {
+	now := time.Now().UTC()
+	content := classroom.Content{ID: 19, Title: "草稿", ContentType: classroom.ContentVideo, Status: classroom.ContentDraft, AccessLevel: classroom.AccessPublic, UpdatedAt: now, ManualCoverObjectKey: "classroom/covers/manual/19/x.jpg"}
+	for _, tc := range []struct {
+		name             string
+		dbErr, deleteErr error
+		wantStatus       int
+		wantDeletes      int
+	}{{"success", nil, nil, 200, 1}, {"database failure", errors.New("db down"), nil, 500, 0}, {"already gone", nil, storage.ErrAlreadyGone, 200, 1}, {"cleanup failure", nil, errors.New("oss down"), 200, 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			admin := &fakeClassroomAdminService{content: content, deleteContentErr: tc.dbErr}
+			objects := &fakeClassroomCoverObjects{err: tc.deleteErr}
+			s := &Server{classroomAdmin: admin, classroomCoverObjects: objects}
+			rr := httptest.NewRecorder()
+			s.classroomContentItem(rr, classroomUser(httptest.NewRequest(http.MethodDelete, "/api/admin/classroom/contents/19?expectedUpdatedAt="+now.Format(time.RFC3339Nano), nil)))
+			if rr.Code != tc.wantStatus || len(objects.deleted) != tc.wantDeletes {
+				t.Fatalf("status=%d deleted=%v body=%s", rr.Code, objects.deleted, rr.Body.String())
+			}
+		})
 	}
 }
 

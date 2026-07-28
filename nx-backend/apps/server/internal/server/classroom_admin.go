@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -15,12 +16,22 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/auditlog"
 	"nine-xing/nx-backend/apps/server/internal/classroom"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/storage"
 )
 
 const maxClassroomPriceCents = 99_999_900
 
 type classroomAuditRecorder interface {
 	Record(context.Context, auditlog.Entry) error
+}
+
+type classroomCoverManager interface {
+	Upload(context.Context, int64, time.Time, *int64, string, io.Reader) (classroom.Content, error)
+	Delete(context.Context, int64, time.Time, *int64) (classroom.Content, error)
+}
+
+type classroomCoverObjectDeleter interface {
+	DeleteObject(context.Context, string) error
 }
 
 type classroomAdminService interface {
@@ -641,6 +652,10 @@ func (s *Server) classroomContentItem(w http.ResponseWriter, r *http.Request) {
 		writeClassroomAdminError(w, err)
 		return
 	}
+	if action == "cover" {
+		s.classroomContentCover(w, r, current)
+		return
+	}
 	if action == "" && r.Method == http.MethodGet {
 		dto, err := s.toContentDTO(r.Context(), current)
 		if err != nil {
@@ -685,6 +700,11 @@ func (s *Server) classroomContentItem(w http.ResponseWriter, r *http.Request) {
 			writeClassroomAdminError(w, err)
 			return
 		}
+		if key := strings.TrimSpace(current.ManualCoverObjectKey); key != "" && s.classroomCoverObjects != nil {
+			if cleanupErr := s.classroomCoverObjects.DeleteObject(r.Context(), key); cleanupErr != nil && !storage.IsAlreadyGone(cleanupErr) {
+				log.Printf("classroom content deleted with orphan manual cover key=%s: %v", key, cleanupErr)
+			}
+		}
 		if err := s.recordClassroomAudit(r, "delete", "classroom_content", id, current, nil, classroomAuditSummary("删除课件草稿", r.URL.Query().Get("reason"))); err != nil {
 			httpx.Fail(w, 500, "record classroom audit failed")
 			return
@@ -693,6 +713,73 @@ func (s *Server) classroomContentItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mutateContent(w, r, current, action)
+}
+
+func (s *Server) classroomContentCover(w http.ResponseWriter, r *http.Request, before classroom.Content) {
+	if s.classroomCovers == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "classroom cover unavailable")
+		return
+	}
+	user := userFromRequest(r)
+	var updated classroom.Content
+	var err error
+	switch r.Method {
+	case http.MethodPost:
+		r.Body = http.MaxBytesReader(w, r.Body, classroom.DefaultCoverImageMaxBytes+(1<<20))
+		if parseErr := r.ParseMultipartForm(classroom.DefaultCoverImageMaxBytes + (1 << 20)); parseErr != nil {
+			httpx.Fail(w, http.StatusBadRequest, "invalid classroom cover image")
+			return
+		}
+		expected, ok := parseExpectedUpdatedAt(strings.TrimSpace(r.FormValue("expectedUpdatedAt")))
+		if !ok {
+			httpx.Fail(w, http.StatusBadRequest, "expectedUpdatedAt is required")
+			return
+		}
+		file, header, openErr := r.FormFile("file")
+		if openErr != nil {
+			httpx.Fail(w, http.StatusBadRequest, "cover file is required")
+			return
+		}
+		defer file.Close()
+		updated, err = s.classroomCovers.Upload(r.Context(), before.ID, expected, &user.ID, header.Filename, file)
+	case http.MethodDelete:
+		expected, ok := expectedUpdatedAtFromQuery(r)
+		if !ok {
+			httpx.Fail(w, http.StatusBadRequest, "expectedUpdatedAt is required")
+			return
+		}
+		updated, err = s.classroomCovers.Delete(r.Context(), before.ID, expected, &user.ID)
+	default:
+		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+		return
+	}
+	if err != nil {
+		writeClassroomAdminError(w, err)
+		return
+	}
+	action, summary := "update_cover", "更新课件手动封面"
+	if r.Method == http.MethodDelete {
+		action, summary = "delete_cover", "删除课件手动封面"
+	}
+	if err := s.recordClassroomAudit(r, action, "classroom_content", before.ID, before, updated, summary); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "record classroom audit failed")
+		return
+	}
+	dto, err := s.toContentDTO(r.Context(), updated)
+	if err != nil {
+		writeClassroomAdminError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	httpx.OK(w, dto)
+}
+
+func parseExpectedUpdatedAt(raw string) (time.Time, bool) {
+	if raw == "" {
+		return time.Time{}, false
+	}
+	v, err := time.Parse(time.RFC3339Nano, raw)
+	return v, err == nil && !v.IsZero()
 }
 func (s *Server) mutateContent(w http.ResponseWriter, r *http.Request, current classroom.Content, action string) {
 	if r.Method != http.MethodPost {
@@ -976,6 +1063,10 @@ func (s *Server) toContentDTOWithContext(ctx context.Context, v classroom.Conten
 }
 func writeClassroomAdminError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, classroom.ErrCoverStorageUnavailable):
+		httpx.Fail(w, http.StatusServiceUnavailable, "classroom cover unavailable")
+	case errors.Is(err, classroom.ErrInvalidCoverImage):
+		httpx.Fail(w, http.StatusBadRequest, "invalid classroom cover image")
 	case errors.Is(err, classroom.ErrCoverSigningUnavailable):
 		httpx.Fail(w, http.StatusServiceUnavailable, "classroom cover unavailable")
 	case errors.Is(err, classroom.ErrNotFound):

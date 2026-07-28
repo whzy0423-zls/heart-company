@@ -148,6 +148,21 @@ func (s *Store) GetContent(ctx context.Context, id int64) (Content, error) {
 	return item, nil
 }
 
+func (s *Store) SetContentManualCover(ctx context.Context, id int64, objectKey string, expectedUpdatedAt time.Time, updatedBy *int64) (Content, error) {
+	if expectedUpdatedAt.IsZero() {
+		return Content{}, ErrConflict
+	}
+	row := s.db.QueryRowContext(ctx, `UPDATE classroom_contents SET manual_cover_object_key=$1,updated_by=$2,updated_at=now() WHERE id=$3 AND updated_at=$4 RETURNING id,series_id,show_as_standalone,title,description,content_type,media_asset_id,cover_url,manual_cover_object_key,cover_aspect_ratio,duration_seconds,teacher_key,teacher_name_snapshot,recorded_at,badge,tags,episode_no,sort_order,status,playback_blocked,access_level,price_cents,published_at,created_by,updated_by,created_at,updated_at`, strings.TrimSpace(objectKey), updatedBy, id, expectedUpdatedAt)
+	item, err := scanContent(row)
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrNotFound) {
+		return Content{}, ErrConflict
+	}
+	if err != nil {
+		return Content{}, fmt.Errorf("set classroom content manual cover: %w", err)
+	}
+	return item, nil
+}
+
 func (s *Store) UpdateContent(ctx context.Context, item Content, expectedUpdatedAt time.Time) (Content, error) {
 	if expectedUpdatedAt.IsZero() {
 		return Content{}, ErrConflict
