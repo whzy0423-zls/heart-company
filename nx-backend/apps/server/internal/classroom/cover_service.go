@@ -46,17 +46,27 @@ type coverContentStore interface {
 	SetContentManualCover(context.Context, int64, string, time.Time, *int64) (Content, error)
 }
 
+type coverSettingsStore interface {
+	GetMediaAsset(context.Context, int64) (MediaAsset, error)
+	SetContentCoverSettings(context.Context, int64, CoverAspectRatio, time.Time, *int64, *int64, string, string) (Content, error)
+}
+
 type CoverService struct {
-	store    coverContentStore
-	objects  classroomCoverStorage
-	maxBytes int64
+	store     coverContentStore
+	objects   classroomCoverStorage
+	extractor CoverExtractor
+	maxBytes  int64
 }
 
 func NewCoverService(store coverContentStore, objects classroomCoverStorage, maxBytes int64) *CoverService {
 	if maxBytes <= 0 {
 		maxBytes = DefaultCoverImageMaxBytes
 	}
-	return &CoverService{store: store, objects: objects, maxBytes: maxBytes}
+	svc := &CoverService{store: store, objects: objects, maxBytes: maxBytes}
+	if objects != nil {
+		svc.extractor = FFmpegCoverExtractor{Signer: objects, Uploader: objects}
+	}
+	return svc
 }
 
 func (s *CoverService) Upload(ctx context.Context, contentID int64, expected time.Time, updatedBy *int64, _ string, reader io.Reader) (Content, error) {
@@ -108,6 +118,54 @@ func (s *CoverService) Upload(ctx context.Context, contentID int64, expected tim
 	oldKey := strings.TrimSpace(current.ManualCoverObjectKey)
 	if oldKey != "" && oldKey != newKey {
 		s.cleanupObject(ctx, contentID, "replace_old", oldKey)
+	}
+	return updated, nil
+}
+
+func (s *CoverService) UpdateSettings(ctx context.Context, contentID int64, ratio CoverAspectRatio, expected time.Time, updatedBy *int64) (Content, error) {
+	if s == nil || s.store == nil {
+		return Content{}, errors.New("classroom cover service unavailable")
+	}
+	normalized, err := NormalizeCoverAspectRatio(ratio)
+	if err != nil {
+		return Content{}, err
+	}
+	current, err := s.store.GetContent(ctx, contentID)
+	if err != nil {
+		return Content{}, err
+	}
+	if expected.IsZero() || !current.UpdatedAt.Equal(expected) {
+		return Content{}, ErrConflict
+	}
+	settings, ok := s.store.(coverSettingsStore)
+	if !ok {
+		return Content{}, errors.New("classroom cover settings unavailable")
+	}
+	if current.ContentType != ContentVideo || current.MediaAssetID == nil {
+		return settings.SetContentCoverSettings(ctx, contentID, normalized, expected, updatedBy, nil, "", "")
+	}
+	if s.extractor == nil {
+		return Content{}, ErrCoverStorageUnavailable
+	}
+	media, err := settings.GetMediaAsset(ctx, *current.MediaAssetID)
+	if err != nil {
+		return Content{}, err
+	}
+	newKey, err := s.extractor.Extract(ctx, media.ObjectKey, contentID, normalized)
+	if err != nil {
+		return Content{}, err
+	}
+	newKey = strings.TrimSpace(newKey)
+	if newKey == "" {
+		return Content{}, ErrCoverStorageUnavailable
+	}
+	updated, err := settings.SetContentCoverSettings(ctx, contentID, normalized, expected, updatedBy, current.MediaAssetID, media.CoverObjectKey, newKey)
+	if err != nil {
+		s.cleanupObject(ctx, contentID, "settings_rollback", newKey)
+		return Content{}, err
+	}
+	if oldKey := strings.TrimSpace(media.CoverObjectKey); oldKey != "" && oldKey != newKey {
+		s.cleanupObject(ctx, contentID, "settings_replace_old", oldKey)
 	}
 	return updated, nil
 }

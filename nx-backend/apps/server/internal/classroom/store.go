@@ -163,6 +163,60 @@ func (s *Store) SetContentManualCover(ctx context.Context, id int64, objectKey s
 	return item, nil
 }
 
+func (s *Store) SetContentCoverSettings(ctx context.Context, id int64, ratio CoverAspectRatio, expectedUpdatedAt time.Time, updatedBy *int64, mediaID *int64, expectedGeneratedKey, generatedKey string) (Content, error) {
+	if expectedUpdatedAt.IsZero() {
+		return Content{}, ErrConflict
+	}
+	normalized, err := NormalizeCoverAspectRatio(ratio)
+	if err != nil {
+		return Content{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Content{}, fmt.Errorf("begin classroom cover settings update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	current, err := getContent(ctx, tx, id, true)
+	if err != nil {
+		return Content{}, err
+	}
+	if !current.UpdatedAt.Equal(expectedUpdatedAt) {
+		return Content{}, ErrConflict
+	}
+	if mediaID != nil {
+		if current.MediaAssetID == nil || *current.MediaAssetID != *mediaID {
+			return Content{}, ErrConflict
+		}
+		media, err := getMediaAsset(ctx, tx, *mediaID, true)
+		if err != nil {
+			return Content{}, err
+		}
+		if media.CoverObjectKey != expectedGeneratedKey {
+			return Content{}, ErrConflict
+		}
+		var updatedMediaID int64
+		err = tx.QueryRowContext(ctx, `UPDATE classroom_media_assets SET cover_object_key=$1,updated_at=now() WHERE id=$2 AND cover_object_key=$3 RETURNING id`, strings.TrimSpace(generatedKey), *mediaID, expectedGeneratedKey).Scan(&updatedMediaID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return Content{}, ErrConflict
+		}
+		if err != nil {
+			return Content{}, fmt.Errorf("set classroom generated cover: %w", err)
+		}
+	}
+	row := tx.QueryRowContext(ctx, `UPDATE classroom_contents SET cover_aspect_ratio=$1,updated_by=$2,updated_at=now() WHERE id=$3 AND updated_at=$4 RETURNING id,series_id,show_as_standalone,title,description,content_type,media_asset_id,cover_url,manual_cover_object_key,cover_aspect_ratio,duration_seconds,teacher_key,teacher_name_snapshot,recorded_at,badge,tags,episode_no,sort_order,status,playback_blocked,access_level,price_cents,published_at,created_by,updated_by,created_at,updated_at`, normalized, updatedBy, id, expectedUpdatedAt)
+	updated, err := scanContent(row)
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrNotFound) {
+		return Content{}, ErrConflict
+	}
+	if err != nil {
+		return Content{}, fmt.Errorf("set classroom cover settings: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return Content{}, fmt.Errorf("commit classroom cover settings: %w", err)
+	}
+	return updated, nil
+}
+
 func (s *Store) UpdateContent(ctx context.Context, item Content, expectedUpdatedAt time.Time) (Content, error) {
 	if expectedUpdatedAt.IsZero() {
 		return Content{}, ErrConflict

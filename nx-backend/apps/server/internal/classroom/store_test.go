@@ -725,3 +725,35 @@ func TestStoreSaveUploadTaskRejectsCleanupOutsideSchemaConstraint(t *testing.T) 
 		t.Fatal("expected store validation before SQL")
 	}
 }
+
+func TestStoreCoverSettingsCASesGeneratedMediaKeyAndPreservesContentLifecycle(t *testing.T) {
+	now := time.Date(2026, 7, 28, 13, 0, 0, 0, time.UTC)
+	mediaID := int64(9)
+	content := Content{ID: 7, Title: "课件", ContentType: ContentVideo, MediaAssetID: &mediaID, Status: ContentPublished, AccessLevel: AccessPublic, ManualCoverObjectKey: "manual.webp", CoverAspectRatio: CoverAspectRatio16x9, UpdatedAt: now}
+	media := MediaAsset{ID: mediaID, ObjectKey: "video.mp4", CoverObjectKey: "old.jpg", ContentType: ContentVideo, StorageStatus: MediaReady}
+	updated := content
+	updated.CoverAspectRatio = CoverAspectRatio9x16
+	updated.UpdatedAt = now.Add(time.Second)
+	state := &classroomTxState{}
+	db := openClassroomTxDB(t, state, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "FROM classroom_contents WHERE id"):
+			return classroomRows(contentColumns, [][]driver.Value{contentValues(content)}), nil
+		case strings.Contains(query, "FROM classroom_media_assets"):
+			return classroomRows(mediaColumns, [][]driver.Value{mediaValues(media)}), nil
+		case strings.Contains(query, "UPDATE classroom_media_assets"):
+			if !strings.Contains(query, "WHERE id=$2 AND cover_object_key=$3") || len(args) != 3 || args[2].Value != "old.jpg" {
+				t.Fatalf("generated cover CAS query=%s args=%+v", query, args)
+			}
+			return classroomRows([]string{"id"}, [][]driver.Value{{mediaID}}), nil
+		case strings.Contains(query, "UPDATE classroom_contents"):
+			return classroomRows(contentColumns, [][]driver.Value{contentValues(updated)}), nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", query)
+		}
+	})
+	got, err := NewStore(db).SetContentCoverSettings(context.Background(), content.ID, CoverAspectRatio9x16, now, nil, &mediaID, "old.jpg", "new.jpg")
+	if err != nil || got.Status != ContentPublished || got.ManualCoverObjectKey != "manual.webp" || got.CoverAspectRatio != CoverAspectRatio9x16 || !state.committed {
+		t.Fatalf("got=%+v err=%v tx=%+v", got, err, state)
+	}
+}

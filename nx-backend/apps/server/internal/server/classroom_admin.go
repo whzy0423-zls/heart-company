@@ -30,6 +30,7 @@ type classroomAuditRecorder interface {
 type classroomCoverManager interface {
 	Upload(context.Context, int64, time.Time, *int64, string, io.Reader) (classroom.Content, error)
 	Delete(context.Context, int64, time.Time, *int64) (classroom.Content, error)
+	UpdateSettings(context.Context, int64, classroom.CoverAspectRatio, time.Time, *int64) (classroom.Content, error)
 }
 
 type classroomCoverObjectDeleter interface {
@@ -658,6 +659,10 @@ func (s *Server) classroomContentItem(w http.ResponseWriter, r *http.Request) {
 		s.classroomContentCover(w, r, current)
 		return
 	}
+	if action == "cover-settings" {
+		s.classroomContentCoverSettings(w, r, current)
+		return
+	}
 	if action == "" && r.Method == http.MethodGet {
 		dto, err := s.toContentDTO(r.Context(), current)
 		if err != nil {
@@ -713,6 +718,52 @@ func (s *Server) classroomContentItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mutateContent(w, r, current, action)
+}
+
+type coverSettingsInput struct {
+	CoverAspectRatio  classroom.CoverAspectRatio `json:"coverAspectRatio"`
+	ExpectedUpdatedAt time.Time                  `json:"expectedUpdatedAt"`
+}
+
+func (s *Server) classroomContentCoverSettings(w http.ResponseWriter, r *http.Request, before classroom.Content) {
+	if r.Method != http.MethodPut {
+		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+		return
+	}
+	if s.classroomCovers == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "classroom cover unavailable")
+		return
+	}
+	var in coverSettingsInput
+	if !decodeClassroomJSON(w, r, &in) {
+		return
+	}
+	ratio, err := classroom.NormalizeCoverAspectRatio(in.CoverAspectRatio)
+	if err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "invalid classroom cover aspect ratio")
+		return
+	}
+	if in.ExpectedUpdatedAt.IsZero() {
+		httpx.Fail(w, http.StatusBadRequest, "expectedUpdatedAt is required")
+		return
+	}
+	user := userFromRequest(r)
+	updated, err := s.classroomCovers.UpdateSettings(r.Context(), before.ID, ratio, in.ExpectedUpdatedAt, &user.ID)
+	if err != nil {
+		writeClassroomAdminError(w, err)
+		return
+	}
+	if err := s.recordClassroomAudit(r, "update_cover_settings", "classroom_content", before.ID, before, updated, "更新课件封面比例"); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "record classroom audit failed")
+		return
+	}
+	dto, err := s.toContentMutationDTO(r.Context(), updated)
+	if err != nil {
+		writeClassroomAdminError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	httpx.OK(w, dto)
 }
 
 func (s *Server) classroomContentCover(w http.ResponseWriter, r *http.Request, before classroom.Content) {

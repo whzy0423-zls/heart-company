@@ -76,7 +76,7 @@ type MediaProbe interface {
 	Probe(context.Context, ProbeInput) (MediaProbeResult, error)
 }
 type CoverExtractor interface {
-	Extract(context.Context, string, int64) (string, error)
+	Extract(context.Context, string, int64, CoverAspectRatio) (string, error)
 }
 
 type UploadRepository interface {
@@ -344,7 +344,11 @@ func (s *UploadService) Complete(ctx context.Context, taskID, creatorID int64, p
 		if s.cover == nil {
 			return CompleteUploadResult{}, s.fail(ctx, task, errors.New("cover extractor is unavailable"))
 		}
-		probe.CoverObjectKey, err = s.cover.Extract(ctx, task.ObjectKey, task.ContentID)
+		ratio, ratioErr := NormalizeCoverAspectRatio(content.CoverAspectRatio)
+		if ratioErr != nil {
+			return CompleteUploadResult{}, s.fail(ctx, task, ratioErr)
+		}
+		probe.CoverObjectKey, err = s.cover.Extract(ctx, task.ObjectKey, task.ContentID, ratio)
 		if err != nil {
 			return CompleteUploadResult{}, s.fail(ctx, task, err)
 		}
@@ -1033,14 +1037,14 @@ func (s *UploadService) repoMedia(ctx context.Context, id int64) (MediaAsset, er
 	return MediaAsset{ID: id, StorageStatus: MediaReady}, nil
 }
 
-// FFmpegCoverExtractor extracts a one-second JPEG snapshot and persists it through ObjectUploader.
+// FFmpegCoverExtractor extracts the first decodable video frame and persists it through ObjectUploader.
 type FFmpegCoverExtractor struct {
 	Signer   storage.ObjectSigner
 	Uploader storage.ObjectUploader
 	Binary   string
 }
 
-func (e FFmpegCoverExtractor) Extract(ctx context.Context, objectKey string, contentID int64) (string, error) {
+func (e FFmpegCoverExtractor) Extract(ctx context.Context, objectKey string, contentID int64, ratio CoverAspectRatio) (string, error) {
 	if e.Signer == nil || e.Uploader == nil {
 		return "", errors.New("cover extractor storage is unavailable")
 	}
@@ -1055,11 +1059,16 @@ func (e FFmpegCoverExtractor) Extract(ctx context.Context, objectKey string, con
 	path := file.Name()
 	_ = file.Close()
 	defer os.Remove(path)
+	width, height, err := coverDimensions(ratio)
+	if err != nil {
+		return "", err
+	}
 	binary := e.Binary
 	if binary == "" {
 		binary = "ffmpeg"
 	}
-	if output, runErr := exec.CommandContext(ctx, binary, "-y", "-ss", "00:00:01", "-i", url, "-frames:v", "1", path).CombinedOutput(); runErr != nil {
+	filter := fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d", width, height, width, height)
+	if output, runErr := exec.CommandContext(ctx, binary, "-y", "-i", url, "-map", "0:v:0", "-vf", filter, "-frames:v", "1", path).CombinedOutput(); runErr != nil {
 		return "", fmt.Errorf("ffmpeg snapshot: %w: %s", runErr, strings.TrimSpace(string(output)))
 	}
 	stat, err := os.Stat(path)
@@ -1071,7 +1080,11 @@ func (e FFmpegCoverExtractor) Extract(ctx context.Context, objectKey string, con
 		return "", err
 	}
 	defer reader.Close()
-	result, err := e.Uploader.Upload(ctx, storage.UploadInput{ContentType: "image/jpeg", Dir: fmt.Sprintf("classroom/covers/content-%d", contentID), Filename: "cover.jpg", Reader: reader, Size: stat.Size()})
+	filename, err := randomCoverName(".jpg")
+	if err != nil {
+		return "", fmt.Errorf("create generated classroom cover name: %w", err)
+	}
+	result, err := e.Uploader.Upload(ctx, storage.UploadInput{ContentType: "image/jpeg", Dir: fmt.Sprintf("classroom/covers/generated/%d", contentID), Filename: filename, Reader: reader, Size: stat.Size()})
 	if err != nil {
 		return "", err
 	}
@@ -1079,4 +1092,21 @@ func (e FFmpegCoverExtractor) Extract(ctx context.Context, objectKey string, con
 		return result.Key, nil
 	}
 	return result.ObjectKey, nil
+}
+
+func coverDimensions(ratio CoverAspectRatio) (int, int, error) {
+	normalized, err := NormalizeCoverAspectRatio(ratio)
+	if err != nil {
+		return 0, 0, err
+	}
+	switch normalized {
+	case CoverAspectRatio16x9:
+		return 1280, 720, nil
+	case CoverAspectRatio9x16:
+		return 720, 1280, nil
+	case CoverAspectRatio1x1:
+		return 1080, 1080, nil
+	default:
+		return 0, 0, fmt.Errorf("invalid cover aspect ratio %q", ratio)
+	}
 }

@@ -95,9 +95,10 @@ func (f *fakeClassroomAdminService) DeleteContent(context.Context, int64, time.T
 }
 
 type fakeClassroomCoverManager struct {
-	updated              classroom.Content
-	uploadErr, deleteErr error
-	uploads, deletes     int
+	updated                           classroom.Content
+	uploadErr, deleteErr, settingsErr error
+	expected                          time.Time
+	uploads, deletes, settings        int
 }
 
 func (f *fakeClassroomCoverManager) Upload(context.Context, int64, time.Time, *int64, string, io.Reader) (classroom.Content, error) {
@@ -107,6 +108,17 @@ func (f *fakeClassroomCoverManager) Upload(context.Context, int64, time.Time, *i
 func (f *fakeClassroomCoverManager) Delete(context.Context, int64, time.Time, *int64) (classroom.Content, error) {
 	f.deletes++
 	return f.updated, f.deleteErr
+}
+func (f *fakeClassroomCoverManager) UpdateSettings(_ context.Context, _ int64, ratio classroom.CoverAspectRatio, expected time.Time, _ *int64) (classroom.Content, error) {
+	f.settings++
+	if f.settingsErr != nil {
+		return classroom.Content{}, f.settingsErr
+	}
+	if !f.expected.IsZero() && !f.expected.Equal(expected) {
+		return classroom.Content{}, classroom.ErrConflict
+	}
+	f.updated.CoverAspectRatio = ratio
+	return f.updated, nil
 }
 
 type fakeClassroomCoverObjects struct {
@@ -680,5 +692,45 @@ func TestClassroomAuditUsesNormalizedClientIP(t *testing.T) {
 	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK || audit.entry.IP != "203.0.113.9" {
 		t.Fatalf("status=%d auditIP=%q body=%s", rr.Code, audit.entry.IP, rr.Body.String())
+	}
+}
+
+func TestClassroomContentCoverSettingsUsesDedicatedCASWithoutChangingLifecycle(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	for _, status := range []classroom.ContentStatus{classroom.ContentReady, classroom.ContentPublished, classroom.ContentOffline} {
+		t.Run(string(status), func(t *testing.T) {
+			before := classroom.Content{ID: 52, ContentType: classroom.ContentVideo, Status: status, AccessLevel: classroom.AccessPublic, ManualCoverObjectKey: "classroom/covers/manual/52/keep.webp", CoverAspectRatio: classroom.CoverAspectRatio16x9, UpdatedAt: now}
+			admin := &fakeClassroomAdminService{content: before}
+			manager := &fakeClassroomCoverManager{expected: now, updated: classroom.Content{ID: before.ID, ContentType: before.ContentType, Status: before.Status, AccessLevel: before.AccessLevel, ManualCoverObjectKey: before.ManualCoverObjectKey, CoverAspectRatio: classroom.CoverAspectRatio9x16, UpdatedAt: now.Add(time.Second)}}
+			s := &Server{classroomAdmin: admin, classroomCovers: manager, classroomPlaybackSigner: fakeClassroomSigner{key: "manual"}}
+			mux := http.NewServeMux()
+			registerClassroomAdminRoutes(mux, func(_ string, h http.HandlerFunc) http.HandlerFunc { return h }, s)
+			body := strings.NewReader(`{"coverAspectRatio":"9:16","expectedUpdatedAt":"` + now.Format(time.RFC3339Nano) + `"}`)
+			rr := httptest.NewRecorder()
+			mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodPut, "/api/admin/classroom/contents/52/cover-settings", body)))
+			if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"coverAspectRatio":"9:16"`) || !strings.Contains(rr.Body.String(), `"coverSource":"manual"`) || strings.Contains(rr.Body.String(), `"status":"draft"`) {
+				t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name, body string
+		want       int
+	}{
+		{"invalid-ratio", `{"coverAspectRatio":"4:3","expectedUpdatedAt":"` + now.Format(time.RFC3339Nano) + `"}`, http.StatusBadRequest},
+		{"stale-version", `{"coverAspectRatio":"1:1","expectedUpdatedAt":"` + now.Add(-time.Second).Format(time.RFC3339Nano) + `"}`, http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := classroom.Content{ID: 53, ContentType: classroom.ContentAudio, Status: classroom.ContentReady, AccessLevel: classroom.AccessPublic, UpdatedAt: now}
+			admin := &fakeClassroomAdminService{content: before}
+			manager := &fakeClassroomCoverManager{expected: now, updated: before}
+			s := &Server{classroomAdmin: admin, classroomCovers: manager}
+			rr := httptest.NewRecorder()
+			s.classroomContentItem(rr, classroomUser(httptest.NewRequest(http.MethodPut, "/api/admin/classroom/contents/53/cover-settings", strings.NewReader(tc.body))))
+			if rr.Code != tc.want {
+				t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+			}
+		})
 	}
 }

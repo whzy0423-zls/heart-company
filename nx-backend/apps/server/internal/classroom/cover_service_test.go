@@ -23,9 +23,11 @@ var testPNG, _ = base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAA
 var testWebP, _ = base64.StdEncoding.DecodeString("UklGRjwAAABXRUJQVlA4IDAAAADQAQCdASoBAAEAAUAmJaACdLoB+AADsAD+8ut//NgVzXPv9//S4P0uD9Lg/9KQAAA=")
 
 type fakeCoverStore struct {
-	content Content
-	setErr  error
-	sets    []string
+	content     Content
+	media       MediaAsset
+	setErr      error
+	settingsErr error
+	sets        []string
 }
 
 func (f *fakeCoverStore) GetContent(context.Context, int64) (Content, error) {
@@ -47,6 +49,29 @@ func (f *fakeCoverStore) SetContentManualCover(_ context.Context, _ int64, key s
 	f.content.UpdatedAt = expected.Add(time.Second)
 	return f.content, nil
 }
+func (f *fakeCoverStore) GetMediaAsset(context.Context, int64) (MediaAsset, error) {
+	if f.media.ID == 0 {
+		return MediaAsset{}, ErrNotFound
+	}
+	return f.media, nil
+}
+func (f *fakeCoverStore) SetContentCoverSettings(_ context.Context, _ int64, ratio CoverAspectRatio, expected time.Time, updatedBy *int64, mediaID *int64, expectedGeneratedKey, generatedKey string) (Content, error) {
+	if f.settingsErr != nil {
+		return Content{}, f.settingsErr
+	}
+	if !f.content.UpdatedAt.Equal(expected) || (mediaID != nil && (f.media.ID != *mediaID || f.media.CoverObjectKey != expectedGeneratedKey)) {
+		return Content{}, ErrConflict
+	}
+	if mediaID != nil {
+		f.media.CoverObjectKey = generatedKey
+	}
+	f.content.CoverAspectRatio = ratio
+	f.content.UpdatedBy = updatedBy
+	f.content.UpdatedAt = expected.Add(time.Second)
+	return f.content, nil
+}
+
+func classroomTestPtrI64(v int64) *int64 { return &v }
 
 type fakeCoverStorage struct {
 	uploadErr     error
@@ -288,5 +313,64 @@ func TestCoverServiceCleanupLogsDoNotExposeObjectKeys(t *testing.T) {
 	got := logs.String()
 	if !strings.Contains(got, "deleter unavailable") || !strings.Contains(got, "cleanup failed") || strings.Contains(got, key) {
 		t.Fatalf("unexpected cleanup logs: %s", got)
+	}
+}
+
+type fakeGeneratedCoverExtractor struct {
+	key    string
+	err    error
+	calls  int
+	ratio  CoverAspectRatio
+	object string
+}
+
+func (f *fakeGeneratedCoverExtractor) Extract(_ context.Context, objectKey string, _ int64, ratio CoverAspectRatio) (string, error) {
+	f.calls++
+	f.object, f.ratio = objectKey, ratio
+	return f.key, f.err
+}
+
+func TestCoverServiceChangesAspectRatioByReplacingGeneratedCoverAfterCAS(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	actor := int64(42)
+	store := &fakeCoverStore{content: Content{ID: 40, ContentType: ContentVideo, Status: ContentPublished, MediaAssetID: classroomTestPtrI64(90), ManualCoverObjectKey: "classroom/covers/manual/40/keep.webp", CoverAspectRatio: CoverAspectRatio16x9, UpdatedAt: now}, media: MediaAsset{ID: 90, ObjectKey: "classroom/media/40/video.mp4", CoverObjectKey: "classroom/covers/generated/40/old.jpg"}}
+	objects := &fakeCoverStorage{}
+	extractor := &fakeGeneratedCoverExtractor{key: "classroom/covers/generated/40/new.jpg"}
+	svc := NewCoverService(store, objects, 1024)
+	svc.extractor = extractor
+	got, err := svc.UpdateSettings(context.Background(), 40, CoverAspectRatio9x16, now, &actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != ContentPublished || got.ManualCoverObjectKey != "classroom/covers/manual/40/keep.webp" || got.CoverAspectRatio != CoverAspectRatio9x16 {
+		t.Fatalf("updated=%+v", got)
+	}
+	if extractor.calls != 1 || extractor.object != "classroom/media/40/video.mp4" || extractor.ratio != CoverAspectRatio9x16 {
+		t.Fatalf("extractor=%+v", extractor)
+	}
+	if store.media.CoverObjectKey != extractor.key || len(objects.deleted) != 1 || objects.deleted[0] != "classroom/covers/generated/40/old.jpg" {
+		t.Fatalf("media=%+v deleted=%v", store.media, objects.deleted)
+	}
+}
+
+func TestCoverServiceCleansNewGeneratedCoverWhenSettingsCASFails(t *testing.T) {
+	now := time.Now().UTC()
+	store := &fakeCoverStore{content: Content{ID: 41, ContentType: ContentVideo, MediaAssetID: classroomTestPtrI64(91), CoverAspectRatio: CoverAspectRatio16x9, UpdatedAt: now}, media: MediaAsset{ID: 91, ObjectKey: "video.mp4"}, settingsErr: ErrConflict}
+	objects := &fakeCoverStorage{}
+	svc := NewCoverService(store, objects, 1024)
+	svc.extractor = &fakeGeneratedCoverExtractor{key: "classroom/covers/generated/41/new.jpg"}
+	_, err := svc.UpdateSettings(context.Background(), 41, CoverAspectRatio1x1, now, nil)
+	if !errors.Is(err, ErrConflict) || len(objects.deleted) != 1 || objects.deleted[0] != "classroom/covers/generated/41/new.jpg" {
+		t.Fatalf("err=%v cleanup=%v", err, objects.deleted)
+	}
+}
+
+func TestCoverServiceChangesAudioAspectRatioWithoutGeneratedMedia(t *testing.T) {
+	now := time.Now().UTC()
+	store := &fakeCoverStore{content: Content{ID: 42, ContentType: ContentAudio, Status: ContentOffline, CoverAspectRatio: CoverAspectRatio16x9, UpdatedAt: now}}
+	svc := NewCoverService(store, &fakeCoverStorage{}, 1024)
+	got, err := svc.UpdateSettings(context.Background(), 42, CoverAspectRatio1x1, now, nil)
+	if err != nil || got.Status != ContentOffline || got.CoverAspectRatio != CoverAspectRatio1x1 {
+		t.Fatalf("got=%+v err=%v", got, err)
 	}
 }
