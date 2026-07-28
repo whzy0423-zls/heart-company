@@ -303,6 +303,15 @@ func TestNormalizeStoreProviderRecognizesBailianRuntime(t *testing.T) {
 	}
 }
 
+func TestDefaultSynthesisModelFollowsVoiceProvider(t *testing.T) {
+	if got := defaultSynthesisModel(ProviderBailian); got != "MiniMax/speech-2.8-turbo" {
+		t.Fatalf("bailian model=%q", got)
+	}
+	if got := defaultSynthesisModel(ProviderMiniMax); got != "speech-02-hd" {
+		t.Fatalf("minimax model=%q", got)
+	}
+}
+
 func TestAppendCloneVoiceOptionsIncludesBailianReadyProfiles(t *testing.T) {
 	options := appendCloneVoiceOptions(nil, []Profile{
 		{ID: "7", Name: "韩老师", Provider: "bailian", Status: "ready", VoiceID: "aliyun-voice-7"},

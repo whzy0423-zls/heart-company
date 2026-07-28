@@ -8,6 +8,11 @@ const apiSource = readFileSync(
   resolve(__dirname, '../../api/core/voice.ts'),
   'utf8',
 );
+const testPageSource = readFileSync(resolve(__dirname, 'test.vue'), 'utf8');
+const contentPageSource = readFileSync(
+  resolve(__dirname, 'content.vue'),
+  'utf8',
+);
 
 describe('voice profile clone provider platform', () => {
   it('defaults new voice profiles to Aliyun Bailian while retaining MiniMax', () => {
@@ -33,5 +38,14 @@ describe('voice profile clone provider platform', () => {
       apiSource.indexOf('}', apiSource.indexOf('export interface VoiceOption')),
     );
     expect(optionType).toContain('provider: string');
+  });
+
+  it('switches synthesis models when a Bailian voice is selected', () => {
+    for (const pageSource of [testPageSource, contentPageSource]) {
+      expect(pageSource).toContain("provider === 'bailian'");
+      expect(pageSource).toContain('MiniMax/speech-2.8-turbo');
+      expect(pageSource).toContain("'speech-02-hd'");
+      expect(pageSource).toContain('watch(');
+    }
   });
 });

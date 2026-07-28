@@ -150,6 +150,13 @@ func normalizeStoreProvider(cfg config.MiniMaxConfig) string {
 	return ProviderMiniMax
 }
 
+func defaultSynthesisModel(provider string) string {
+	if normalizeProfileProvider(provider) == ProviderBailian {
+		return defaultBailianTargetModel
+	}
+	return "speech-02-hd"
+}
+
 func formatTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -406,7 +413,7 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 	}
 	model := strings.TrimSpace(input.Model)
 	if model == "" {
-		model = "speech-02-hd"
+		model = defaultSynthesisModel(profile.Provider)
 	}
 	audio, contentType, err := s.textToAudio(ctx, profile.Provider, model, voiceID, text)
 	if err != nil {
@@ -470,9 +477,6 @@ func (s *Store) GenerateContent(ctx context.Context, input ContentGenerateInput)
 		return ContentJob{}, fmt.Errorf("当前单次最多支持 5000 个字，请先拆分内容")
 	}
 	model := strings.TrimSpace(input.Model)
-	if model == "" {
-		model = "speech-02-hd"
-	}
 	voiceSource := strings.TrimSpace(input.VoiceSource)
 	if voiceSource == "" {
 		voiceSource = "official"
@@ -497,6 +501,9 @@ func (s *Store) GenerateContent(ctx context.Context, input ContentGenerateInput)
 	}
 	if voiceName == "" {
 		voiceName = voiceID
+	}
+	if model == "" {
+		model = defaultSynthesisModel(synthesisProvider)
 	}
 
 	sourceAssetID, _ := parseOptionalID(input.SourceAssetID)

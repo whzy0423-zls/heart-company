@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { VoiceGeneration, VoiceProfile } from '#/api';
 
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import { Page } from '@vben/common-ui';
 import { IconifyIcon } from '@vben/icons';
@@ -50,11 +50,18 @@ const form = reactive({
   text: '你好，欢迎来到九型人格成长课程。这里是一段人声克隆测试音频。',
 });
 
-const modelOptions = [
+const miniMaxModelOptions = [
   { label: 'speech-02-hd（高清）', value: 'speech-02-hd' },
   { label: 'speech-02-turbo（快速）', value: 'speech-02-turbo' },
   { label: 'speech-01-hd', value: 'speech-01-hd' },
   { label: 'speech-01-turbo', value: 'speech-01-turbo' },
+];
+
+const bailianModelOptions = [
+  {
+    label: '百炼托管 MiniMax speech-2.8-turbo',
+    value: 'MiniMax/speech-2.8-turbo',
+  },
 ];
 
 const profileOptions = computed(() =>
@@ -68,6 +75,21 @@ const profileOptions = computed(() =>
 
 const currentProfile = computed(() =>
   profiles.value.find((item) => item.id === form.profileId),
+);
+const modelOptions = computed(() =>
+  currentProfile.value?.provider === 'bailian'
+    ? bailianModelOptions
+    : miniMaxModelOptions,
+);
+
+watch(
+  () => form.profileId,
+  () => {
+    form.model =
+      currentProfile.value?.provider === 'bailian'
+        ? 'MiniMax/speech-2.8-turbo'
+        : 'speech-02-hd';
+  },
 );
 
 const columns = [
@@ -166,6 +188,9 @@ onMounted(async () => {
               />
               <div v-if="currentProfile" class="voice-meta">
                 <Tag color="success">可使用</Tag>
+                <Tag :color="currentProfile.provider === 'bailian' ? 'blue' : 'green'">
+                  {{ currentProfile.provider === 'bailian' ? '阿里百炼' : 'MiniMax' }}
+                </Tag>
                 <span>{{ currentProfile.voiceId }}</span>
               </div>
             </Form.Item>
