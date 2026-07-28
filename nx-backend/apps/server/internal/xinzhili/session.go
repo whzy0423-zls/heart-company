@@ -12,7 +12,11 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
-const SceneXinzhiliVoice = "xinzhili_voice"
+const (
+	SceneXinzhiliVoice         = "xinzhili_voice"
+	strategyTickInterval       = 50 * time.Millisecond
+	pcmInactivitySilenceWindow = strategyTickInterval
+)
 
 var ErrSessionClosed = errors.New("xinzhili: session closed")
 
@@ -177,6 +181,7 @@ type sessionEventKind uint8
 const (
 	eventASR sessionEventKind = iota
 	eventASRClosed
+	eventStrategyTick
 	eventGenerationDelta
 	eventGenerationDone
 	eventTTSSegment
@@ -184,26 +189,29 @@ const (
 )
 
 type activeTurn struct {
-	input          StartTurnInput
-	conversation   Conversation
-	card           Card
-	asr            ASRSession
-	engine         StrategyEngine
-	ctx            context.Context
-	cancel         context.CancelFunc
-	hasSpeech      bool
-	processing     bool
-	draft          string
-	answer         string
-	sources        []rag.Source
-	assistantID    int64
-	segments       map[uint32]string
-	lastAck        int64
-	completionDone bool
-	generationErr  error
-	chunker        streamSentenceChunker
-	ttsJobs        chan ttsStreamJob
-	nextTTSSeq     uint32
+	input             StartTurnInput
+	conversation      Conversation
+	card              Card
+	asr               ASRSession
+	engine            StrategyEngine
+	ctx               context.Context
+	cancel            context.CancelFunc
+	hasSpeech         bool
+	processing        bool
+	endpointRequested bool
+	lastPCMAt         time.Time
+	silenceSignaled   bool
+	draft             string
+	answer            string
+	sources           []rag.Source
+	assistantID       int64
+	segments          map[uint32]string
+	lastAck           int64
+	completionDone    bool
+	generationErr     error
+	chunker           streamSentenceChunker
+	ttsJobs           chan ttsStreamJob
+	nextTTSSeq        uint32
 }
 
 type ttsStreamJob struct {
@@ -344,6 +352,7 @@ func (s *session) startTurn(ctx context.Context, input StartTurnInput) (*activeT
 		turn.engine = s.deps.EngineFactory(input.Mode, input.Timing, s.deps.Clock)
 	}
 	s.watchASR(turn.input.TurnID, asr)
+	s.watchStrategy(turn.input.TurnID, turn)
 	return turn, nil
 }
 
@@ -354,7 +363,12 @@ func (s *session) pushPCM(ctx context.Context, turn *activeTurn, frame PCMFrame)
 	if len(frame.Data) == 0 {
 		return ErrASREmptyPCM
 	}
-	return turn.asr.WritePCM(ctx, frame.Data)
+	err := turn.asr.WritePCM(ctx, frame.Data)
+	if err == nil && s.deps.Clock != nil {
+		turn.lastPCMAt = s.deps.Clock.Now()
+		turn.silenceSignaled = false
+	}
+	return err
 }
 
 func (s *session) cancelTurn(turn *activeTurn, turnID string) error {
@@ -416,11 +430,61 @@ func (s *session) postEvent(event sessionEvent) bool {
 	}
 }
 
+func (s *session) watchStrategy(turnID string, turn *activeTurn) {
+	go func() {
+		ticker := time.NewTicker(strategyTickInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-turn.ctx.Done():
+				return
+			case <-ticker.C:
+				if !s.postEvent(sessionEvent{kind: eventStrategyTick, turnID: turnID}) {
+					return
+				}
+			}
+		}
+	}()
+}
+
+func (s *session) handleStrategyTick(turn *activeTurn) {
+	if turn == nil || turn.engine == nil || turn.processing || turn.endpointRequested || s.deps.Clock == nil || turn.lastPCMAt.IsZero() {
+		return
+	}
+	now := s.deps.Clock.Now()
+	if !turn.silenceSignaled && now.Sub(turn.lastPCMAt) >= pcmInactivitySilenceWindow {
+		turn.engine.Apply(Signal{Kind: SignalSilence})
+		turn.silenceSignaled = true
+	}
+	if actions := turn.engine.Tick(); len(actions) > 0 {
+		s.handleStrategyActions(turn, actions)
+	}
+}
+
+func (s *session) handleStrategyActions(turn *activeTurn, actions []Action) {
+	for _, action := range actions {
+		switch action.Kind {
+		case ActionEndpoint:
+			if turn.endpointRequested || turn.processing {
+				continue
+			}
+			turn.endpointRequested = true
+			if err := turn.asr.FinishInput(turn.ctx); err != nil && !errors.Is(err, ErrASRInputFinished) {
+				s.sendError(turn, "asr_finish_failed", "语音结束失败，请重试", true)
+			}
+		case ActionCancelPending:
+			turn.endpointRequested = false
+		}
+	}
+}
+
 func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 	current := *turn
 	switch event.kind {
 	case eventASR:
 		s.handleASREvent(current, event.asr)
+	case eventStrategyTick:
+		s.handleStrategyTick(current)
 	case eventASRClosed:
 		if event.err == nil || errors.Is(event.err, context.Canceled) {
 			return
@@ -482,9 +546,19 @@ func (s *session) confirmCompletedPlayback(turn *activeTurn) {
 func (s *session) handleASREvent(turn *activeTurn, event ASREvent) {
 	if event.Kind == ASREventSpeechStarted {
 		turn.hasSpeech = true
+		turn.silenceSignaled = false
 		if turn.engine != nil {
 			turn.engine.Apply(Signal{Kind: SignalSpeechStarted})
 		}
+	}
+	if event.Kind == ASREventPartial {
+		if turn.engine != nil {
+			turn.engine.Apply(Signal{Kind: SignalPartial, Transcript: event.Partial, Stable: event.Stable})
+			if event.Stable {
+				turn.engine.Apply(Signal{Kind: SignalStableText, Transcript: event.Partial, Stable: true})
+			}
+		}
+		return
 	}
 	if event.Kind != ASREventFinal || !event.Stable || turn.processing {
 		return

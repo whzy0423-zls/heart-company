@@ -235,6 +235,42 @@ func TestDeliveryGenerationFailureKeepsPlayedPrefixAndExcludesDraft(t *testing.T
 	}
 }
 
+func TestStrategyTickFinishesASRInputOnceAndDuplicateFinalGeneratesOnce(t *testing.T) {
+	fixture := newSessionFixture(t)
+	_ = fixture.session.Close()
+	clock := &mutableSessionClock{now: time.Unix(100, 0)}
+	fixture.deps.Clock = clock
+	fixture.session = NewSession(fixture.deps)
+
+	input := fixture.input("turn-final-idempotent")
+	input.Timing = TimingConfig{
+		PartialStableMs: 150, ArgumentCandidateSilenceMs: 350, NormalEndSilenceMs: 700,
+		ComfortEndSilenceMs: 1200, DeepListeningEndSilenceMs: 1500,
+		ComfortFirstPromptMs: 5000, ComfortSecondPromptMs: 12000, DeepListeningPromptMs: 12000, MaxProactivePrompts: 2,
+	}
+	if err := fixture.session.StartTurn(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.session.PushPCM(context.Background(), PCMFrame{TurnID: input.TurnID, Data: []byte{1, 2, 3}}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventSpeechStarted})
+	fixture.asr.emit(ASREvent{Kind: ASREventPartial, Partial: "我最近很累", Stable: true})
+	clock.advance(100 * time.Millisecond)
+	time.Sleep(80 * time.Millisecond)
+	clock.advance(800 * time.Millisecond)
+	fixture.asr.waitFinishInputCount(t, 1)
+
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "我最近很累", Stable: true})
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "我最近很累", Stable: true})
+	fixture.sink.waitAudio(t)
+	fixture.generator.waitCalls(t, 1)
+	if got := fixture.store.userCount(); got != 1 {
+		t.Fatalf("users=%d want=1", got)
+	}
+	fixture.asr.assertFinishInputCount(t, 1)
+}
+
 func TestConversationASRDisconnectReopensOnlyBeforeSpeech(t *testing.T) {
 	fixture := newSessionFixture(t)
 	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-reopen")); err != nil {
@@ -516,20 +552,24 @@ func (g *fakeChatGenerator) lastInput() rag.GenerateInput {
 }
 func (g *fakeChatGenerator) waitCalled(t *testing.T) {
 	t.Helper()
-	g.mu.Lock()
-	if g.count > 0 {
+	g.waitCalls(t, 1)
+}
+func (g *fakeChatGenerator) waitCalls(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		g.mu.Lock()
+		got := g.count
 		g.mu.Unlock()
-		return
-	}
-	if g.called == nil {
-		g.called = make(chan struct{})
-	}
-	ch := g.called
-	g.mu.Unlock()
-	select {
-	case <-ch:
-	case <-time.After(time.Second):
-		t.Fatal("generator not called")
+		if got == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("generator calls=%d want=%d", got, want)
+		default:
+			time.Sleep(time.Millisecond)
+		}
 	}
 }
 
@@ -664,24 +704,73 @@ func (f *fakeASRFactory) waitOpens(t *testing.T, want int) {
 }
 
 type fakeASRSession struct {
-	events chan ASREvent
-	done   chan struct{}
-	mu     sync.Mutex
-	err    error
-	once   sync.Once
+	events       chan ASREvent
+	done         chan struct{}
+	mu           sync.Mutex
+	err          error
+	finishInputs int
+	once         sync.Once
 }
 
 func newFakeASRSession() *fakeASRSession {
 	return &fakeASRSession{events: make(chan ASREvent, 16), done: make(chan struct{})}
 }
 func (s *fakeASRSession) WritePCM(context.Context, []byte) error { return nil }
-func (s *fakeASRSession) FinishInput(context.Context) error      { return nil }
-func (s *fakeASRSession) Events() <-chan ASREvent                { return s.events }
-func (s *fakeASRSession) Err() error                             { s.mu.Lock(); defer s.mu.Unlock(); return s.err }
-func (s *fakeASRSession) Close() error                           { s.once.Do(func() { close(s.done) }); return nil }
-func (s *fakeASRSession) emit(event ASREvent)                    { s.events <- event }
-func (s *fakeASRSession) fail(err error)                         { s.mu.Lock(); s.err = err; s.mu.Unlock(); close(s.events) }
+func (s *fakeASRSession) FinishInput(context.Context) error {
+	s.mu.Lock()
+	s.finishInputs++
+	s.mu.Unlock()
+	return nil
+}
+func (s *fakeASRSession) Events() <-chan ASREvent { return s.events }
+func (s *fakeASRSession) Err() error              { s.mu.Lock(); defer s.mu.Unlock(); return s.err }
+func (s *fakeASRSession) Close() error            { s.once.Do(func() { close(s.done) }); return nil }
+func (s *fakeASRSession) emit(event ASREvent)     { s.events <- event }
+func (s *fakeASRSession) fail(err error)          { s.mu.Lock(); s.err = err; s.mu.Unlock(); close(s.events) }
+func (s *fakeASRSession) finishInputCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.finishInputs
+}
+func (s *fakeASRSession) waitFinishInputCount(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		if got := s.finishInputCount(); got == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("FinishInput calls=%d want=%d", s.finishInputCount(), want)
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+func (s *fakeASRSession) assertFinishInputCount(t *testing.T, want int) {
+	t.Helper()
+	if got := s.finishInputCount(); got != want {
+		t.Fatalf("FinishInput calls=%d want=%d", got, want)
+	}
+}
 
 type fixedSessionClock struct{ now time.Time }
 
 func (c fixedSessionClock) Now() time.Time { return c.now }
+
+type mutableSessionClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *mutableSessionClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *mutableSessionClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+}
