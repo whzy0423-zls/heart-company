@@ -136,6 +136,37 @@ for (const tab of pagesConfig.tabBar.list) {
   );
 }
 
+assert.deepEqual(
+  pagesConfig.tabBar.list.map((tab) => tab.text),
+  ["首页", "老师课堂", "企业服务", "我的"],
+  "tab bar labels must align with the expert brand navigation",
+);
+assert.equal(pagesConfig.tabBar.selectedColor, "#202a37");
+assert.match(pagesConfig.tabBar.backgroundColor, /^#(?:fff[0-9a-f]{3}|f[ef][f8f9][f8f9])$/i, "tab bar background must be warm white");
+assert.equal(
+  pagesConfig.pages.find((page) => page.path === "pages/learn/learn")?.style?.navigationBarTitleText,
+  "老师课堂",
+);
+assert.equal(
+  pagesConfig.pages.find((page) => page.path === "pages/booking/booking")?.style?.navigationBarTitleText,
+  "企业服务",
+);
+
+const expectedTabIcons = [
+  "home.png", "home-active.png", "classroom.png", "classroom-active.png",
+  "enterprise.png", "enterprise-active.png", "profile.png", "profile-active.png",
+];
+const tabIconPaths = pagesConfig.tabBar.list.flatMap((tab) => [tab.iconPath, tab.selectedIconPath]);
+assert.deepEqual(tabIconPaths, expectedTabIcons.map((name) => `static/tabbar/${name}`));
+for (const icon of expectedTabIcons) {
+  const iconPath = resolve("src/static/tabbar", icon);
+  assert.equal(existsSync(iconPath), true, `tab icon ${icon} must exist`);
+  const png = readFileSync(iconPath);
+  assert.equal(png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])), true, `${icon} must be PNG`);
+  assert.equal(png.readUInt32BE(16), 81, `${icon} must be 81px wide`);
+  assert.equal(png.readUInt32BE(20), 81, `${icon} must be 81px high`);
+}
+
 const classroomRoute = (pagesConfig.subPackages || []).find((subpackage) =>
   subpackage.pages.some(
     (page) =>
