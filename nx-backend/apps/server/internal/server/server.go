@@ -63,6 +63,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/voice"
 	"nine-xing/nx-backend/apps/server/internal/wechat"
 	"nine-xing/nx-backend/apps/server/internal/wxpay"
+	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
 
 type Server struct {
@@ -177,6 +178,7 @@ type Server struct {
 	xinzhiliLeaseMu     sync.Mutex
 	xinzhiliLeases      map[int64]*xinzhiliRealtimeConn
 	xinzhiliModelConfig xinzhiliModelConfigStore
+	xinzhiliVoiceConfig xinzhiliVoiceConfigStore
 }
 
 type websiteSignupCreator interface {
@@ -359,6 +361,15 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	)
 	s.xinzhiliLeases = make(map[int64]*xinzhiliRealtimeConn)
 	s.xinzhiliModelConfig = databaseXinzhiliModelConfigStore{db: database}
+	var xinzhiliVoiceCodec *xinzhili.VoiceSecretCodec
+	if strings.TrimSpace(env.XinzhiliSecretKey) != "" {
+		if codec, err := xinzhili.NewVoiceSecretCodec(env.XinzhiliSecretKey); err == nil {
+			xinzhiliVoiceCodec = codec
+		} else {
+			log.Printf("xinzhili voice secret key invalid: %v", err)
+		}
+	}
+	s.xinzhiliVoiceConfig = xinzhili.NewVoiceConfigStore(database, xinzhiliVoiceCodec)
 	s.loginLimiter = newStrRateLimiter(10, time.Minute)
 	s.loginDBLimiter = newDBRateLimiter(database, "admin_login", 10, time.Minute)
 	s.smsPhoneLimiter = newStrRateLimiter(1, time.Minute)
@@ -625,6 +636,7 @@ func (s *Server) routes() {
 	// 模型配置：读取/保存兼容协议对话模型及视频、图片、分析模型配置，均需登录。
 	s.mux.HandleFunc("/api/model-config", s.requirePermission("System:Model:Config", s.modelConfig))
 	s.mux.HandleFunc("/api/xinzhili-model-config", s.requirePermission("System:XinzhiliModel:Config", s.xinzhiliModelConfigHandler))
+	s.mux.HandleFunc("/api/xinzhili-voice-config", s.requirePermission("System:XinzhiliModel:Config", s.xinzhiliVoiceConfigHandler))
 	// 对话模型连通性测试：对 MiniMax 网关做一次轻量探活，需登录。
 	s.mux.HandleFunc("/api/model-config/test-chat", s.requirePermission("System:Model:Config", s.method(http.MethodPost, s.testChatModel)))
 	// ===== App API =====

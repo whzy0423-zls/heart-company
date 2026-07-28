@@ -465,3 +465,14 @@ func TestLoadClassroomMediaConfigUsesBoundedDefaults(t *testing.T) {
 		t.Fatalf("defaults must be positive: %+v", env.ClassroomMedia)
 	}
 }
+
+func TestLoadReadsXinzhiliSecretKey(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("XINZHILI_SECRET_KEY", "  test-secret-key  ")
+
+	env := Load()
+
+	if env.XinzhiliSecretKey != "test-secret-key" {
+		t.Fatalf("XinzhiliSecretKey=%q", env.XinzhiliSecretKey)
+	}
+}
