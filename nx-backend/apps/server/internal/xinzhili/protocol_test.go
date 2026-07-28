@@ -369,6 +369,7 @@ func TestProtocolErrorPayloadShape(t *testing.T) {
 	}{
 		{"required fields", `{"code":"control_sequence_gap","message":"序号存在缺口","retryable":true,"fatal":false}`, false},
 		{"optional retry", `{"code":"busy","message":"稍后重试","retryable":true,"fatal":false,"retryAfterMs":250}`, false},
+		{"optional turn and mode snapshot", `{"code":"mode_revision_conflict","message":"请同步后重试","retryable":true,"fatal":false,"turnId":"turn-1","modeSnapshot":{"enabledModes":["normal","argument"],"requestedMode":"normal","pendingMode":"normal","effectiveMode":"normal","revision":1,"configVersion":9}}`, false},
 		{"missing code", `{"message":"x","retryable":false,"fatal":true}`, true},
 		{"unknown field", `{"code":"x","message":"x","retryable":false,"fatal":true,"details":"secret"}`, true},
 		{"immediate retry", `{"code":"x","message":"x","retryable":true,"fatal":false,"retryAfterMs":0}`, false},

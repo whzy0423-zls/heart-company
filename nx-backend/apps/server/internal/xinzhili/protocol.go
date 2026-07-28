@@ -87,11 +87,22 @@ type Envelope struct {
 }
 
 type ErrorPayload struct {
-	Code         string `json:"code"`
-	Message      string `json:"message"`
-	Retryable    bool   `json:"retryable"`
-	Fatal        bool   `json:"fatal"`
-	RetryAfterMs *int64 `json:"retryAfterMs,omitempty"`
+	Code         string        `json:"code"`
+	Message      string        `json:"message"`
+	Retryable    bool          `json:"retryable"`
+	Fatal        bool          `json:"fatal"`
+	RetryAfterMs *int64        `json:"retryAfterMs,omitempty"`
+	TurnID       *string       `json:"turnId,omitempty"`
+	ModeSnapshot *ModeSnapshot `json:"modeSnapshot,omitempty"`
+}
+
+type ModeSnapshot struct {
+	EnabledModes  []Mode `json:"enabledModes"`
+	RequestedMode Mode   `json:"requestedMode"`
+	PendingMode   Mode   `json:"pendingMode"`
+	EffectiveMode Mode   `json:"effectiveMode"`
+	Revision      int64  `json:"revision"`
+	ConfigVersion int64  `json:"configVersion"`
 }
 
 func EncodeEnvelope(envelope Envelope, direction Direction, sessionReady bool) ([]byte, error) {
@@ -395,11 +406,13 @@ func validateTurnStartPayload(envelope Envelope) error {
 
 func validateErrorPayload(raw json.RawMessage) error {
 	var payload struct {
-		Code         string `json:"code"`
-		Message      string `json:"message"`
-		Retryable    *bool  `json:"retryable"`
-		Fatal        *bool  `json:"fatal"`
-		RetryAfterMs *int64 `json:"retryAfterMs,omitempty"`
+		Code         string        `json:"code"`
+		Message      string        `json:"message"`
+		Retryable    *bool         `json:"retryable"`
+		Fatal        *bool         `json:"fatal"`
+		RetryAfterMs *int64        `json:"retryAfterMs,omitempty"`
+		TurnID       *string       `json:"turnId,omitempty"`
+		ModeSnapshot *ModeSnapshot `json:"modeSnapshot,omitempty"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
