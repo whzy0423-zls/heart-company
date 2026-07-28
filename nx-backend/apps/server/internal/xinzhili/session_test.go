@@ -34,10 +34,12 @@ func TestModelIdentityRealtimeBypassesGeneratorAndCompletesVoiceDelivery(t *test
 			}
 			fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: question, Stable: true})
 
+			fixture.sink.waitControl(t, EventAssistantAudioStart)
 			segment := fixture.sink.waitAudio(t)
 			if segment.DeliveryText() != rag.ModelIdentityReply {
 				t.Fatalf("TTS delivery text=%q", segment.DeliveryText())
 			}
+			fixture.sink.waitControl(t, EventAssistantAudioEnd)
 			fixture.store.waitAssistantCount(t, 1)
 			if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-model-identity", SegmentSeq: segment.Seq}); err != nil {
 				t.Fatal(err)
@@ -45,6 +47,7 @@ func TestModelIdentityRealtimeBypassesGeneratorAndCompletesVoiceDelivery(t *test
 			fixture.store.waitCompleted(t)
 			fixture.store.waitDelivered(t, rag.ModelIdentityReply)
 			fixture.store.waitCompleteAck(t)
+			fixture.sink.waitControl(t, EventAssistantDone)
 
 			users, assistants, completed := fixture.store.contents()
 			if len(users) != 1 || users[0] != question {
@@ -120,6 +123,50 @@ func TestConversationIsolationAndRelevanceUseIndependentRetrievers(t *testing.T)
 	generated := fixture.generator.lastInput()
 	if len(generated.Sources) != 2 || fixture.store.resolved.Scene != SceneXinzhiliVoice || fixture.store.resolved.CardID != 22 {
 		t.Fatalf("input=%+v conversation=%+v", generated, fixture.store.resolved)
+	}
+}
+
+func TestDeliveryRetriesTTSOnceBeforeFirstAudio(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.generator.answer = "先呼吸。"
+	fixture.synth.failNext = true
+	fixture.synth.segments = []AudioSegment{{Seq: 0, Audio: testMP3(), MIME: "audio/mpeg", deliveryText: "先呼吸。"}}
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-tts-retry")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "我很累", Stable: true})
+	fixture.sink.waitControl(t, EventAssistantAudioStart)
+	fixture.sink.waitAudio(t)
+	fixture.sink.waitControl(t, EventAssistantAudioEnd)
+	fixture.sink.waitControl(t, EventAssistantDone)
+	if got := fixture.synth.callCount(); got != 2 {
+		t.Fatalf("synthesize calls=%d want=2", got)
+	}
+	fixture.sink.assertNoControl(t)
+}
+
+func TestDeliveryEmitsAudioStartEndAndDone(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.synth.segments = []AudioSegment{{Seq: 0, Audio: testMP3(), MIME: "audio/mpeg", deliveryText: "先呼吸。"}}
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-audio-meta")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "我很难受", Stable: true})
+	start := fixture.sink.waitControl(t, EventAssistantAudioStart)
+	if start.TurnID == nil || start.TurnSeq == nil || start.Payload == nil {
+		t.Fatalf("start=%+v", start)
+	}
+	segment := fixture.sink.waitAudio(t)
+	if segment.Seq != 0 {
+		t.Fatalf("segment=%+v", segment)
+	}
+	end := fixture.sink.waitControl(t, EventAssistantAudioEnd)
+	if end.TurnID == nil || end.TurnSeq == nil {
+		t.Fatalf("end=%+v", end)
+	}
+	done := fixture.sink.waitControl(t, EventAssistantDone)
+	if done.TurnID == nil || done.TurnSeq == nil {
+		t.Fatalf("done=%+v", done)
 	}
 }
 
@@ -580,6 +627,7 @@ type fakeSynthesizer struct {
 	segments []AudioSegment
 	block    chan struct{}
 	failAt   int
+	failNext bool
 }
 
 func (s *fakeSynthesizer) Synthesize(ctx context.Context, _ TTSConfig, text string, emit func(AudioSegment) error) error {
@@ -595,8 +643,16 @@ func (s *fakeSynthesizer) Synthesize(ctx context.Context, _ TTSConfig, text stri
 	s.calls++
 	s.texts = append(s.texts, text)
 	segments := append([]AudioSegment(nil), s.segments...)
+	failNext := s.failNext
+	if s.failNext {
+		s.failNext = false
+	}
+	failAt := s.failAt
 	s.mu.Unlock()
-	if s.failAt > 0 && index == s.failAt {
+	if failNext {
+		return errors.New("tts temporary failed")
+	}
+	if failAt > 0 && index == failAt {
 		return errors.New("tts failed")
 	}
 	segment := AudioSegment{Audio: []byte{1}, MIME: "audio/mpeg", deliveryText: text}
@@ -610,6 +666,11 @@ func (s *fakeSynthesizer) Synthesize(ctx context.Context, _ TTSConfig, text stri
 		return err
 	}
 	return nil
+}
+func (s *fakeSynthesizer) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
 }
 func (s *fakeSynthesizer) synthesizedTexts() []string {
 	s.mu.Lock()

@@ -2,8 +2,10 @@ package xinzhili
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -207,7 +209,9 @@ type activeTurn struct {
 	assistantID       int64
 	segments          map[uint32]string
 	lastAck           int64
+	nextTurnSeq       uint64
 	completionDone    bool
+	doneSent          bool
 	generationErr     error
 	chunker           streamSentenceChunker
 	ttsJobs           chan ttsStreamJob
@@ -521,8 +525,10 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 		}
 		if event.err != nil && !errors.Is(event.err, context.Canceled) {
 			s.sendError(current, "tts_failed", "语音回复生成失败，请重试", true)
+			s.sendAssistantDone(current, false, "tts_failed")
 			return
 		}
+		s.sendAssistantDone(current, true, "")
 	}
 }
 
@@ -651,25 +657,33 @@ func (s *session) startSynthesisWorker(turn *activeTurn) {
 	go func() {
 		var workerErr error
 		for job := range turn.ttsJobs {
-			emitted := false
-			workerErr = s.deps.Synthesizer.Synthesize(turn.ctx, turn.input.TTSConfig, job.text, func(segment AudioSegment) error {
-				if emitted {
-					return errors.New("xinzhili: streamed TTS chunk produced multiple segments")
+			for attempt := 0; attempt < 2; attempt++ {
+				emitted := false
+				workerErr = s.deps.Synthesizer.Synthesize(turn.ctx, turn.input.TTSConfig, job.text, func(segment AudioSegment) error {
+					if emitted {
+						return errors.New("xinzhili: streamed TTS chunk produced multiple segments")
+					}
+					emitted = true
+					segment.Seq = job.seq
+					segment.deliveryText = job.text
+					response := make(chan error, 1)
+					if !s.postEvent(sessionEvent{kind: eventTTSSegment, turnID: turn.input.TurnID, segment: segment, segmentAck: response}) {
+						return ErrSessionClosed
+					}
+					select {
+					case err := <-response:
+						return err
+					case <-turn.ctx.Done():
+						return turn.ctx.Err()
+					}
+				})
+				if workerErr == nil {
+					break
 				}
-				emitted = true
-				segment.Seq = job.seq
-				segment.deliveryText = job.text
-				response := make(chan error, 1)
-				if !s.postEvent(sessionEvent{kind: eventTTSSegment, turnID: turn.input.TurnID, segment: segment, segmentAck: response}) {
-					return ErrSessionClosed
+				if emitted || job.seq != 0 || attempt > 0 || turn.ctx.Err() != nil {
+					break
 				}
-				select {
-				case err := <-response:
-					return err
-				case <-turn.ctx.Done():
-					return turn.ctx.Err()
-				}
-			})
+			}
 			if workerErr != nil {
 				break
 			}
@@ -722,7 +736,14 @@ func (s *session) acceptAudioSegment(turn *activeTurn, segment AudioSegment) err
 	if _, exists := turn.segments[segment.Seq]; exists {
 		return errors.New("xinzhili: duplicate TTS segment")
 	}
+	segment = normalizeAudioSegmentMetadata(segment)
+	if err := s.sendAudioStart(turn, segment); err != nil {
+		return err
+	}
 	if err := s.deps.Sink.SendAudio(turn.ctx, segment); err != nil {
+		return err
+	}
+	if err := s.sendAudioEnd(turn, segment); err != nil {
 		return err
 	}
 	turn.segments[segment.Seq] = text
@@ -740,14 +761,69 @@ func (s *session) acceptAudioSegment(turn *activeTurn, segment AudioSegment) err
 	return nil
 }
 
-func (s *session) sendError(turn *activeTurn, code, message string, retryable bool) {
-	payload, _ := json.Marshal(ErrorPayload{Code: code, Message: message, Retryable: retryable, Fatal: false})
+func (s *session) sendAudioStart(turn *activeTurn, segment AudioSegment) error {
+	return s.sendTurnControl(turn, EventAssistantAudioStart, map[string]any{
+		"segmentSeq": segment.Seq, "mimeType": segment.MIME, "byteLength": segment.ByteLength, "sha256": fmt.Sprintf("%x", segment.SHA256[:]),
+	})
+}
+
+func (s *session) sendAudioEnd(turn *activeTurn, segment AudioSegment) error {
+	return s.sendTurnControl(turn, EventAssistantAudioEnd, map[string]any{"segmentSeq": segment.Seq})
+}
+
+func (s *session) sendAssistantDone(turn *activeTurn, complete bool, errorCode string) {
+	if turn.doneSent {
+		return
+	}
+	turn.doneSent = true
+	payload := map[string]any{"complete": complete}
+	if errorCode != "" {
+		payload["errorCode"] = errorCode
+	}
+	_ = s.sendTurnControl(turn, EventAssistantDone, payload)
+}
+
+func (s *session) sendTurnControl(turn *activeTurn, typ EventType, payload any) error {
+	b, _ := json.Marshal(payloadOrEmptyPayload(payload))
 	turnID := turn.input.TurnID
-	seq := uint64(1)
-	turnSeq := uint64(1)
+	seq := uint64(time.Now().UnixNano())
+	turnSeq := turn.nextServerTurnSeq()
+	return s.deps.Sink.SendControl(turn.ctx, Envelope{
+		ProtocolVersion: ProtocolVersion, Type: typ, TurnID: &turnID,
+		SessionSeq: &seq, TurnSeq: &turnSeq, TimestampMs: time.Now().UnixMilli(), Payload: b,
+	})
+}
+
+func (turn *activeTurn) nextServerTurnSeq() uint64 {
+	turn.nextTurnSeq++
+	return turn.nextTurnSeq
+}
+
+func payloadOrEmptyPayload(v any) any {
+	if v == nil {
+		return map[string]any{}
+	}
+	return v
+}
+
+func normalizeAudioSegmentMetadata(segment AudioSegment) AudioSegment {
+	if segment.MIME == "" {
+		segment.MIME = "audio/mpeg"
+	}
+	if segment.ByteLength == 0 {
+		segment.ByteLength = len(segment.Audio)
+	}
+	if segment.SHA256 == ([32]byte{}) && len(segment.Audio) > 0 {
+		segment.SHA256 = sha256.Sum256(segment.Audio)
+	}
+	return segment
+}
+
+func (s *session) sendError(turn *activeTurn, code, message string, retryable bool) {
+	payload, _ := json.Marshal(ErrorPayload{Code: code, Message: message, Retryable: retryable, Fatal: false, TurnID: &turn.input.TurnID})
+	seq := uint64(time.Now().UnixNano())
 	_ = s.deps.Sink.SendControl(turn.ctx, Envelope{
-		ProtocolVersion: ProtocolVersion, Type: EventError, TurnID: &turnID,
-		SessionSeq: &seq, TurnSeq: &turnSeq, TimestampMs: time.Now().UnixMilli(), Payload: payload,
+		ProtocolVersion: ProtocolVersion, Type: EventError, SessionSeq: &seq, TimestampMs: time.Now().UnixMilli(), Payload: payload,
 	})
 }
 
