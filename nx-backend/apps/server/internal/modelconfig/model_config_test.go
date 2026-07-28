@@ -175,3 +175,46 @@ func TestMergeIncomingPreservesAdminAndDailyQuizAPIKeys(t *testing.T) {
 		t.Fatalf("expected non-secret fields to update, got %+v", got)
 	}
 }
+
+func TestMergeIncomingPreservesTTSAPIKeyAndTrimsVoiceConfig(t *testing.T) {
+	current := Config{
+		TTS: TTSConfig{
+			APIKey: "tts-secret",
+			Voice:  "old-voice",
+		},
+	}
+	incoming := Config{
+		TTS: TTSConfig{
+			Provider: " MiniMax ",
+			Endpoint: " https://api.minimaxi.com/ ",
+			GroupID:  " group-1 ",
+			Model:    " speech-02-hd ",
+			Voice:    " cloned-voice-123 ",
+			Format:   " mp3 ",
+		},
+	}
+
+	got := current.MergeIncoming(incoming)
+
+	if got.TTS.APIKey != "tts-secret" {
+		t.Fatalf("expected empty incoming TTS key to preserve stored secret, got %q", got.TTS.APIKey)
+	}
+	if got.TTS.Provider != "minimax" || got.TTS.Endpoint != "https://api.minimaxi.com" || got.TTS.GroupID != "group-1" {
+		t.Fatalf("expected normalized TTS provider/endpoint/group, got %+v", got.TTS)
+	}
+	if got.TTS.Model != "speech-02-hd" || got.TTS.Voice != "cloned-voice-123" || got.TTS.Format != "mp3" {
+		t.Fatalf("expected trimmed TTS model/voice/format, got %+v", got.TTS)
+	}
+}
+
+func TestTTSConfigAcceptsOfficialAndCloneDerivedVoiceIDs(t *testing.T) {
+	for _, voiceID := range []string{"male-qn-qingse", "cloned-voice-123"} {
+		cfg := Config{TTS: TTSConfig{Provider: "minimax", Voice: " " + voiceID + " "}}
+
+		got := cfg.trimmed()
+
+		if got.TTS.Voice != voiceID {
+			t.Fatalf("expected TTS voice %q to be stored as final voice id, got %q", voiceID, got.TTS.Voice)
+		}
+	}
+}

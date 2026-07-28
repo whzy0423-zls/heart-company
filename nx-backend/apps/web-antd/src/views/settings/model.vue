@@ -3,9 +3,12 @@ import type {
   ChatPingResult,
   ModelConfigPayload,
   ModelConfigView,
+  VoiceOption,
+  XinzhiliModelConfigPayload,
+  XinzhiliModelConfigView,
 } from '#/api';
 
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 
 import {
@@ -23,8 +26,11 @@ import {
 
 import {
   getModelConfigApi,
+  getVoiceOptionsApi,
+  getXinzhiliModelConfigApi,
   testChatModelApi,
   updateModelConfigApi,
+  updateXinzhiliModelConfigApi,
 } from '#/api';
 
 import EditorShell from '../site-config/components/editor-shell.vue';
@@ -33,17 +39,26 @@ const loading = ref(true);
 const saving = ref(false);
 const route = useRoute();
 const isAdminModelOnly = computed(() => route.path.includes('/settings/admin-model'));
+const isXinzhiliModelOnly = computed(() =>
+  route.path.includes('/settings/xinzhili-model'),
+);
 const pageTitle = computed(() =>
-  isAdminModelOnly.value ? '管理端大模型配置' : '模型配置',
+  isXinzhiliModelOnly.value
+    ? '芯之力模型配置'
+    : isAdminModelOnly.value
+      ? '管理端大模型配置'
+      : '模型配置',
 );
 const pageDescription = computed(() =>
-  isAdminModelOnly.value
+  isXinzhiliModelOnly.value
+    ? '配置芯之力 AI 语音合成能力，可直接复用声音管理里已经克隆完成的音色。'
+    : isAdminModelOnly.value
     ? '单独配置后台运营任务所用的大模型，包括每日 5 道画像校准题生成。'
     : '配置对话、视频生成、文生图与视频分析模型。视频分析固定复用语音生成的 MiniMax 地址与密钥，默认使用 MiniMax-M3 多模态模型。',
 );
 
 // apiKey 留空表示不修改；apiKeySet 用于提示是否已配置过密钥
-const form = ref<ModelConfigPayload>({
+const form = ref<ModelConfigPayload & XinzhiliModelConfigPayload>({
   chat: {
     provider: 'openai-compatible',
     apiBase: 'https://coding-play.codes',
@@ -69,6 +84,15 @@ const form = ref<ModelConfigPayload>({
     provider: '',
     timeoutSeconds: 30,
   },
+  tts: {
+    apiKey: '',
+    endpoint: '',
+    format: 'mp3',
+    groupId: '',
+    model: 'speech-02-hd',
+    provider: 'minimax',
+    voice: '',
+  },
   assist: { enabled: true, systemPrompt: '' },
 });
 const chatKeySet = ref(false);
@@ -77,6 +101,11 @@ const imageKeySet = ref(false);
 const analysisKeySet = ref(false);
 const adminKeySet = ref(false);
 const dailyQuizKeySet = ref(false);
+const ttsKeySet = ref(false);
+const ttsVoiceOptions = ref<VoiceOption[]>([]);
+const ttsVoiceOptionsLoading = ref(false);
+const ttsVoiceOptionsError = ref('');
+const selectedTtsVoiceOptionId = ref('');
 
 const providerOptions = [
   { label: 'OpenAI 协议', value: 'openai-compatible' },
@@ -91,6 +120,22 @@ const dailyQuizProviderOptions = [
   { label: '继承管理端', value: '' },
   ...providerOptions,
 ];
+const ttsProviderOptions = [{ label: 'MiniMax', value: 'minimax' }];
+const ttsFormatOptions = [{ label: 'MP3', value: 'mp3' }];
+const groupedTtsVoiceOptions = computed(() => [
+  {
+    label: 'MiniMax 官方音色',
+    options: ttsVoiceOptions.value
+      .filter((item) => item.source === 'official')
+      .map((item) => ({ label: item.label, value: item.id })),
+  },
+  {
+    label: '声音管理 · 已克隆音色',
+    options: ttsVoiceOptions.value
+      .filter((item) => item.source === 'clone')
+      .map((item) => ({ label: item.label, value: item.id })),
+  },
+]);
 const chatEndpointHint = computed(() => {
   const base = (form.value.chat.apiBase || 'https://coding-play.codes').replace(
     /\/$/,
@@ -102,13 +147,31 @@ const chatEndpointHint = computed(() => {
 });
 
 onMounted(load);
+watch(
+  () => route.path,
+  () => {
+    load();
+  },
+);
+watch(
+  () => form.value.tts.voice,
+  () => {
+    syncSelectedTtsVoiceOption();
+  },
+);
 
 async function load() {
   loading.value = true;
   try {
+    if (isXinzhiliModelOnly.value) {
+      const data: XinzhiliModelConfigView = await getXinzhiliModelConfigApi();
+      applyXinzhiliConfig(data);
+      await loadTtsVoiceOptions();
+      return;
+    }
     const data: ModelConfigView = await getModelConfigApi();
     if (data) {
-      const nextForm: ModelConfigPayload = {
+      const nextForm: ModelConfigPayload & XinzhiliModelConfigPayload = {
         chat: {
           provider: data.chat?.provider ?? 'openai-compatible',
           apiBase: data.chat?.apiBase || 'https://coding-play.codes',
@@ -147,6 +210,7 @@ async function load() {
           provider: data.dailyQuiz?.provider ?? '',
           timeoutSeconds: data.dailyQuiz?.timeoutSeconds ?? 30,
         },
+        tts: form.value.tts,
         assist: {
           enabled: data.assist?.enabled ?? true,
           systemPrompt: data.assist?.systemPrompt ?? '',
@@ -168,8 +232,28 @@ async function load() {
 async function save() {
   saving.value = true;
   try {
+    if (isXinzhiliModelOnly.value) {
+      const saved = await updateXinzhiliModelConfigApi({
+        tts: {
+          apiKey: form.value.tts.apiKey,
+          endpoint: form.value.tts.endpoint,
+          format: form.value.tts.format,
+          groupId: form.value.tts.groupId,
+          model: form.value.tts.model,
+          provider: form.value.tts.provider,
+          voice: form.value.tts.voice,
+        },
+      });
+      form.value.tts.apiKey = '';
+      ttsKeySet.value = saved.tts?.apiKeySet ?? false;
+      applyXinzhiliConfig(saved);
+      message.success('芯之力模型配置已保存并即时生效');
+      return;
+    }
     const payload: ModelConfigPayload = {
-      ...form.value,
+      chat: form.value.chat,
+      video: form.value.video,
+      image: form.value.image,
       analysis: {
         apiBase: '',
         apiKey: '',
@@ -192,6 +276,7 @@ async function save() {
         provider: form.value.dailyQuiz.provider,
         timeoutSeconds: Number(form.value.dailyQuiz.timeoutSeconds || 30),
       },
+      assist: form.value.assist,
     };
     const saved = await updateModelConfigApi(payload);
     // 保存后清空密钥输入，刷新「已配置」状态
@@ -211,6 +296,59 @@ async function save() {
   } finally {
     saving.value = false;
   }
+}
+
+function applyXinzhiliConfig(data: XinzhiliModelConfigView) {
+  form.value.tts = {
+    apiKey: '',
+    endpoint: data.tts?.endpoint ?? '',
+    format: data.tts?.format || 'mp3',
+    groupId: data.tts?.groupId ?? '',
+    model: data.tts?.model || 'speech-02-hd',
+    provider: data.tts?.provider || 'minimax',
+    voice: data.tts?.voice ?? '',
+  };
+  ttsKeySet.value = data.tts?.apiKeySet ?? false;
+  syncSelectedTtsVoiceOption();
+}
+
+async function loadTtsVoiceOptions() {
+  ttsVoiceOptionsLoading.value = true;
+  ttsVoiceOptionsError.value = '';
+  try {
+    ttsVoiceOptions.value = await getVoiceOptionsApi();
+    syncSelectedTtsVoiceOption();
+  } catch {
+    ttsVoiceOptions.value = [];
+    selectedTtsVoiceOptionId.value = '';
+    ttsVoiceOptionsError.value = '音色选项读取失败，可手动填写音色 ID';
+  } finally {
+    ttsVoiceOptionsLoading.value = false;
+  }
+}
+
+function handleTtsVoiceOptionChange(optionId?: any) {
+  const selected = Array.isArray(optionId) ? optionId[0] : optionId;
+  const selectedId =
+    typeof selected === 'number' || typeof selected === 'string'
+      ? String(selected)
+      : '';
+  selectedTtsVoiceOptionId.value = selectedId;
+  const option = ttsVoiceOptions.value.find((item) => item.id === selectedId);
+  if (!option) {
+    return;
+  }
+  form.value.tts.voice = option.voiceId;
+  if (option.source === 'clone') {
+    form.value.tts.provider = 'minimax';
+  }
+}
+
+function syncSelectedTtsVoiceOption() {
+  const matched = ttsVoiceOptions.value.find(
+    (item) => item.voiceId === form.value.tts.voice,
+  );
+  selectedTtsVoiceOptionId.value = matched?.id ?? '';
 }
 
 const testing = ref(false);
@@ -237,7 +375,92 @@ async function testChat() {
     @save="save"
   >
     <Form v-if="form" layout="vertical">
-      <template v-if="!isAdminModelOnly">
+      <template v-if="isXinzhiliModelOnly">
+        <Divider orientation="left">AI 语音合成 / TTS 配置</Divider>
+        <Alert
+          class="mb-4"
+          type="info"
+          show-icon
+          message="可直接复用声音管理里的已克隆音色，也可以手动填写平台音色 ID"
+          description="选择已有音色后会把最终 voiceId 写入 TTS 配置；克隆音色不会保存 clone:<profileId>，运行时可直接用于语音合成。"
+        />
+        <Row :gutter="24">
+          <Col :md="12" :xs="24">
+            <Form.Item label="TTS provider">
+              <Select
+                v-model:value="form.tts.provider"
+                :options="ttsProviderOptions"
+                placeholder="请选择 TTS provider"
+              />
+            </Form.Item>
+            <Form.Item
+              v-if="form.tts.provider === 'minimax'"
+              label="选择已有音色"
+            >
+              <Select
+                v-model:value="selectedTtsVoiceOptionId"
+                allow-clear
+                :loading="ttsVoiceOptionsLoading"
+                :options="groupedTtsVoiceOptions"
+                option-filter-prop="label"
+                placeholder="可直接复用声音管理里的已克隆音色"
+                show-search
+                @change="handleTtsVoiceOptionChange"
+              />
+              <span
+                v-if="ttsVoiceOptionsError"
+                class="mt-1 block text-xs text-red-500"
+              >
+                音色选项读取失败，可手动填写音色 ID
+              </span>
+            </Form.Item>
+            <Form.Item label="手动音色 ID">
+              <Input
+                v-model:value="form.tts.voice"
+                placeholder="可直接复用声音管理里的已克隆音色，也可以手动填写平台音色 ID"
+              />
+            </Form.Item>
+          </Col>
+          <Col :md="12" :xs="24">
+            <Form.Item label="接口地址 (Endpoint)">
+              <Input
+                v-model:value="form.tts.endpoint"
+                placeholder="MiniMax API 地址，留空则使用服务端默认值"
+              />
+            </Form.Item>
+            <Form.Item label="Group ID">
+              <Input
+                v-model:value="form.tts.groupId"
+                placeholder="MiniMax Group ID，留空则使用服务端默认值"
+              />
+            </Form.Item>
+            <Form.Item label="模型名 (Model)">
+              <Input
+                v-model:value="form.tts.model"
+                placeholder="speech-02-hd"
+              />
+            </Form.Item>
+            <Form.Item label="音频格式">
+              <Select
+                v-model:value="form.tts.format"
+                :options="ttsFormatOptions"
+                placeholder="请选择音频格式"
+              />
+            </Form.Item>
+            <Form.Item label="新密钥 (API Key)">
+              <Input.Password
+                v-model:value="form.tts.apiKey"
+                :placeholder="
+                  ttsKeySet ? '已配置，留空表示不修改' : '请输入 MiniMax API Key'
+                "
+                autocomplete="new-password"
+              />
+            </Form.Item>
+          </Col>
+        </Row>
+      </template>
+
+      <template v-else-if="!isAdminModelOnly">
         <Divider orientation="left">对话模型（手机端聊天窗口作答所用）</Divider>
         <Row :gutter="24">
           <Col :md="12" :xs="24">
@@ -395,7 +618,8 @@ async function testChat() {
         </Row>
       </template>
 
-      <Divider orientation="left">管理端大模型（后台每日题生成）</Divider>
+      <template v-if="!isXinzhiliModelOnly">
+        <Divider orientation="left">管理端大模型（后台每日题生成）</Divider>
       <Alert
         class="mb-4"
         type="info"
@@ -513,8 +737,9 @@ async function testChat() {
           </Form.Item>
         </Col>
       </Row>
+      </template>
 
-      <template v-if="!isAdminModelOnly">
+      <template v-if="!isAdminModelOnly && !isXinzhiliModelOnly">
         <Divider orientation="left">智能辅助作答</Divider>
         <Row :gutter="24">
           <Col :xs="24">

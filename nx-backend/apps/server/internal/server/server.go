@@ -369,6 +369,17 @@ func (s *Server) applyStoredModelConfig() {
 	s.analysisGen = llm.NewMiniMaxGenerator(cfg.ApplyAnalysis(s.env.MiniMax))
 	s.videos = video.NewStore(s.db, s.uploads, cfg.ApplyVideo(s.env.Video), s.uploader)
 	s.images = image.NewStore(s.uploads, cfg.ApplyImage(s.env.Image), s.uploader)
+	tts := cfg.ApplyTTS(s.env.MiniMax)
+	voiceBase := s.env.MiniMax
+	voiceBase.Provider = tts.Provider
+	voiceBase.APIBase = tts.Endpoint
+	voiceBase.APIKey = tts.APIKey
+	voiceBase.GroupID = tts.GroupID
+	voiceBase.Model = tts.Model
+	s.voices = voice.NewStore(s.db, s.uploads, voiceBase)
+	if s.articles != nil {
+		s.articles.AttachAudioDeps(s.voices, s.uploads, s.voices, tts.Model)
+	}
 }
 
 // generator 返回当前生效的对话生成器；持读锁以兼容"模型配置"页面运行时重建。
@@ -449,6 +460,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/model-config", s.requirePermission("System:Model:Config", s.modelConfig))
 	// 对话模型连通性测试：对 MiniMax 网关做一次轻量探活，需登录。
 	s.mux.HandleFunc("/api/model-config/test-chat", s.requirePermission("System:Model:Config", s.method(http.MethodPost, s.testChatModel)))
+	// 芯之力 TTS 配置：复用声音管理音色列表，需独立权限。
+	s.mux.HandleFunc("/api/xinzhili-model-config", s.requirePermission("System:XinzhiliModel:Config", s.xinzhiliModelConfig))
 	// ===== App API =====
 	s.mux.HandleFunc("/api/app/health", s.method(http.MethodGet, s.appHealth))
 	s.mux.HandleFunc("/api/app/auth/send-sms", s.method(http.MethodPost, s.appSendSMS))
@@ -545,7 +558,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/voice/profiles/list", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage"}, s.voiceProfiles)))
 	s.mux.HandleFunc("/api/voice/profiles", s.method(http.MethodPost, s.requirePermission("Voice:Profile:Manage", s.createVoiceProfile)))
 	s.mux.HandleFunc("/api/voice/profiles/", s.requirePermission("Voice:Profile:Manage", s.voiceProfileByID))
-	s.mux.HandleFunc("/api/voice/options", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage", "Voice:Content:Manage", "Reading:Article:Manage"}, s.voiceOptions)))
+	s.mux.HandleFunc("/api/voice/options", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage", "Voice:Content:Manage", "Reading:Article:Manage", "System:XinzhiliModel:Config"}, s.voiceOptions)))
 	s.mux.HandleFunc("/api/voice/generate", s.method(http.MethodPost, s.requirePermission("Voice:Test:Manage", s.generateVoice)))
 	s.mux.HandleFunc("/api/voice/generations/list", s.method(http.MethodGet, s.requirePermission("Voice:Test:Manage", s.voiceGenerations)))
 	s.mux.HandleFunc("/api/voice/content/generate", s.method(http.MethodPost, s.requirePermission("Voice:Content:Manage", s.generateVoiceContent)))
@@ -2455,6 +2468,18 @@ type modelConfigView struct {
 	} `json:"assist"`
 }
 
+type xinzhiliModelConfigView struct {
+	TTS struct {
+		Provider  string `json:"provider"`
+		Endpoint  string `json:"endpoint"`
+		GroupID   string `json:"groupId"`
+		Model     string `json:"model"`
+		Voice     string `json:"voice"`
+		Format    string `json:"format"`
+		APIKeySet bool   `json:"apiKeySet"`
+	} `json:"tts"`
+}
+
 func modelConfigAuditSnapshot(cfg modelconfig.Config) map[string]any {
 	return map[string]any{
 		"assistEnabled": cfg.AssistEnabled(),
@@ -2479,6 +2504,15 @@ func modelConfigAuditSnapshot(cfg modelconfig.Config) map[string]any {
 			"apiKeySet": cfg.Analysis.APIKey != "",
 			"groupId":   cfg.Analysis.GroupID,
 			"model":     cfg.Analysis.Model,
+		},
+		"tts": map[string]any{
+			"provider":  cfg.TTS.Provider,
+			"endpoint":  cfg.TTS.Endpoint,
+			"apiKeySet": cfg.TTS.APIKey != "",
+			"groupId":   cfg.TTS.GroupID,
+			"model":     cfg.TTS.Model,
+			"voice":     cfg.TTS.Voice,
+			"format":    cfg.TTS.Format,
 		},
 		"admin": map[string]any{
 			"provider":       cfg.Admin.Provider,
@@ -2532,6 +2566,18 @@ func buildModelConfigView(chat config.MiniMaxConfig, vid config.VideoConfig, img
 	view.DailyQuiz.APIKeySet = strings.TrimSpace(dailyQuiz.APIKey) != ""
 	view.Assist.Enabled = stored.AssistEnabled()
 	view.Assist.SystemPrompt = stored.Assist.SystemPrompt
+	return view
+}
+
+func buildXinzhiliModelConfigView(tts modelconfig.TTSConfig) xinzhiliModelConfigView {
+	var view xinzhiliModelConfigView
+	view.TTS.Provider = tts.Provider
+	view.TTS.Endpoint = tts.Endpoint
+	view.TTS.GroupID = tts.GroupID
+	view.TTS.Model = tts.Model
+	view.TTS.Voice = tts.Voice
+	view.TTS.Format = tts.Format
+	view.TTS.APIKeySet = strings.TrimSpace(tts.APIKey) != ""
 	return view
 }
 
@@ -2638,6 +2684,72 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 		s.modelMu.Unlock()
 
 		httpx.OK(w, buildModelConfigView(chat, vid, img, analysis, admin, merged.DailyQuiz, merged))
+	}
+}
+
+func (s *Server) xinzhiliModelConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPut {
+		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		stored, _, err := modelconfig.ReadStore(r.Context(), s.db)
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		httpx.OK(w, buildXinzhiliModelConfigView(stored.ApplyTTS(s.env.MiniMax)))
+
+	case http.MethodPut:
+		var incoming struct {
+			TTS modelconfig.TTSConfig `json:"tts"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
+			return
+		}
+		stored, _, err := modelconfig.ReadStore(r.Context(), s.db)
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		merged := stored
+		merged.TTS = stored.MergeIncoming(modelconfig.Config{TTS: incoming.TTS}).TTS
+		if err := validateExternalAPIBase("tts.endpoint", merged.TTS.Endpoint); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := modelconfig.UpsertStore(r.Context(), s.db, merged); err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.recordAdminAudit(r, auditlog.Entry{
+			Action:     "xinzhili_model_config.update",
+			TargetType: "model_config",
+			TargetID:   "xinzhili_tts",
+			Before:     map[string]any{"tts": stored.TTS},
+			After:      map[string]any{"tts": merged.TTS},
+			Summary:    "更新芯之力 TTS 配置",
+		})
+
+		tts := merged.ApplyTTS(s.env.MiniMax)
+		voiceBase := s.env.MiniMax
+		voiceBase.Provider = tts.Provider
+		voiceBase.APIBase = tts.Endpoint
+		voiceBase.APIKey = tts.APIKey
+		voiceBase.GroupID = tts.GroupID
+		voiceBase.Model = tts.Model
+
+		s.modelMu.Lock()
+		s.voices = voice.NewStore(s.db, s.uploads, voiceBase)
+		if s.articles != nil {
+			s.articles.AttachAudioDeps(s.voices, s.uploads, s.voices, tts.Model)
+		}
+		s.modelMu.Unlock()
+
+		httpx.OK(w, buildXinzhiliModelConfigView(tts))
 	}
 }
 

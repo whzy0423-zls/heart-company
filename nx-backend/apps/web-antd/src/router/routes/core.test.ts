@@ -3,14 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { coreRoutes } from './core';
 
 describe('legacy backend menu redirects', () => {
-  it('redirects removed Xinzhili model menu path to the consolidated model page', () => {
+  it('does not hijack the restored Xinzhili model menu path', () => {
     const route = coreRoutes.find(
       (item) => item.name === 'LegacyXinzhiliModelConfig',
     );
 
-    expect(route?.path).toBe('/settings/xinzhili-model');
-    expect(route?.redirect).toBe('/settings/model');
-    expect(route?.meta?.hideInMenu).toBe(true);
+    expect(route).toBeUndefined();
   });
 
   it('redirects removed theory library menu path to the current RAG knowledge page', () => {

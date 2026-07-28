@@ -51,6 +51,18 @@ export interface ModelConfigView {
   };
 }
 
+export interface XinzhiliModelConfigView {
+  tts: {
+    apiKeySet: boolean;
+    endpoint: string;
+    format: string;
+    groupId: string;
+    model: string;
+    provider: string;
+    voice: string;
+  };
+}
+
 /** 模型配置提交（保存）：apiKey 留空表示不修改既有密钥。 */
 export interface ModelConfigPayload {
   chat: {
@@ -110,6 +122,29 @@ export function getModelConfigApi() {
 /** 保存模型配置（对话 / 视频），返回脱敏后的最新视图。需登录。 */
 export function updateModelConfigApi(data: ModelConfigPayload) {
   return requestClient.put<ModelConfigView>('/model-config', data);
+}
+
+export interface XinzhiliModelConfigPayload {
+  tts: {
+    apiKey: string;
+    endpoint: string;
+    format: string;
+    groupId: string;
+    model: string;
+    provider: string;
+    voice: string;
+  };
+}
+
+export function getXinzhiliModelConfigApi() {
+  return requestClient.get<XinzhiliModelConfigView>('/xinzhili-model-config');
+}
+
+export function updateXinzhiliModelConfigApi(data: XinzhiliModelConfigPayload) {
+  return requestClient.put<XinzhiliModelConfigView>(
+    '/xinzhili-model-config',
+    data,
+  );
 }
 
 /** 对话模型连通性测试结果：仅返回探活信息，不含密钥。 */

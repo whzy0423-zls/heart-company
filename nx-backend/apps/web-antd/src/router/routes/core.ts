@@ -119,17 +119,6 @@ const coreRoutes: RouteRecordRaw[] = [
       hideInBreadcrumb: true,
       hideInMenu: true,
       hideInTab: true,
-      title: 'LegacyXinzhiliModelConfig',
-    },
-    name: 'LegacyXinzhiliModelConfig',
-    path: '/settings/xinzhili-model',
-    redirect: '/settings/model',
-  },
-  {
-    meta: {
-      hideInBreadcrumb: true,
-      hideInMenu: true,
-      hideInTab: true,
       title: 'LegacyTheoryLibrary',
     },
     name: 'LegacyTheoryLibrary',

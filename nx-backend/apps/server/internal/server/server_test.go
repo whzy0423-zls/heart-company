@@ -303,6 +303,36 @@ func testVbenCompatibleAPI(t *testing.T) {
 		}
 	})
 
+	t.Run("xinzhili model config stores final tts voice id without exposing key", func(t *testing.T) {
+		payload := map[string]any{
+			"tts": map[string]any{
+				"provider": "minimax",
+				"endpoint": "https://api.minimaxi.com",
+				"groupId":  "group-1",
+				"model":    "speech-02-hd",
+				"voice":    "cloned-voice-123",
+				"format":   "mp3",
+				"apiKey":   "tts-secret",
+			},
+		}
+		saveResponse := perform(handler, http.MethodPut, "/api/xinzhili-model-config", adminToken, payload)
+		saveBody := decodeBody(t, saveResponse)
+		if saveResponse.Code != http.StatusOK || saveBody.Code != 0 {
+			t.Fatalf("expected xinzhili model config save success, got status=%d body=%+v", saveResponse.Code, saveBody)
+		}
+		data := saveBody.Data.(map[string]any)
+		tts := data["tts"].(map[string]any)
+		if tts["voice"] != "cloned-voice-123" || tts["apiKeySet"] != true {
+			t.Fatalf("expected saved final voice id and key status, got %+v", tts)
+		}
+		if _, leaked := tts["apiKey"]; leaked {
+			t.Fatalf("xinzhili model config response must not expose apiKey: %+v", tts)
+		}
+		if fmt.Sprint(tts["voice"]) == "clone:1" {
+			t.Fatalf("xinzhili model config must store final voiceId, got %+v", tts)
+		}
+	})
+
 	t.Run("lists app user insights for admins only", func(t *testing.T) {
 		response := perform(handler, http.MethodGet, "/api/app-users/insights", adminToken, nil)
 		body := decodeBody(t, response)
@@ -331,6 +361,11 @@ func testVbenCompatibleAPI(t *testing.T) {
 				menuIDs: []int{901},
 				name:    "reading",
 				paths:   []string{"/api/reading/settings", "/api/voice/options"},
+			},
+			{
+				menuIDs: []int{1103},
+				name:    "xinzhili_model",
+				paths:   []string{"/api/xinzhili-model-config", "/api/voice/options"},
 			},
 			{
 				menuIDs: []int{702},

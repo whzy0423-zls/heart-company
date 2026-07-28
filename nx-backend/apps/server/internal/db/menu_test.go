@@ -146,6 +146,25 @@ func TestDefaultMenusIncludeAdminModelConfig(t *testing.T) {
 	}
 }
 
+func TestDefaultMenusIncludeXinzhiliModelConfig(t *testing.T) {
+	var found bool
+	for _, menu := range defaultMenus {
+		if menu.Name != "XinzhiliModelConfig" {
+			continue
+		}
+		found = true
+		if menu.PID != 1100 || menu.Path != "/settings/xinzhili-model" || menu.Component != "/settings/model" {
+			t.Fatalf("unexpected xinzhili model config route: %+v", menu)
+		}
+		if menu.AuthCode != "System:XinzhiliModel:Config" || menu.Title != "芯之力模型配置" {
+			t.Fatalf("unexpected xinzhili model config metadata: %+v", menu)
+		}
+	}
+	if !found {
+		t.Fatal("expected default menu XinzhiliModelConfig")
+	}
+}
+
 func TestDefaultMenusIncludeVideoAnalysis(t *testing.T) {
 	var found bool
 	for _, menu := range defaultMenus {
@@ -280,12 +299,18 @@ func TestDeprecatedMenusRemoveStaleCustomerPrivateRuleRoute(t *testing.T) {
 		"name = 'TheoryLibrary'",
 		"path = '/theory/library'",
 		"component = '/theory/library'",
-		"name = 'XinzhiliModelConfig'",
-		"path = '/settings/xinzhili-model'",
 		"component = '/settings/xinzhili-model'",
 	} {
 		if !strings.Contains(deprecatedMenusSQL, token) {
 			t.Fatalf("expected deprecated menu cleanup SQL to include %q", token)
+		}
+	}
+	for _, token := range []string{
+		"name = 'XinzhiliModelConfig'",
+		"path = '/settings/xinzhili-model'",
+	} {
+		if strings.Contains(deprecatedMenusSQL, token) {
+			t.Fatalf("expected deprecated menu cleanup SQL not to delete restored route by %q", token)
 		}
 	}
 }
