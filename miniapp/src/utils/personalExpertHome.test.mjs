@@ -104,6 +104,53 @@ try {
   assert.deepEqual(first.cases, [])
   assert.notStrictEqual(first, second, 'errors should return fresh safe defaults')
 
+  const boundedServices = personalExpertServices({
+    home: {
+      enterprise: {
+        modules: [' 模块一 ', '模块二', '模块三', '模块四', '模块五'],
+        items: [
+          { title: '服务一', description: '说明一' }, { title: '服务二', description: '说明二' },
+          { title: '服务三', description: '说明三' }, { title: '服务四', description: '说明四' },
+        ],
+      },
+      courses: { items: [
+        { title: '个人入门课', tags: ['enterprise'], summary: '普通标题但由企业标签标记' },
+        { title: '团队协作', description: '团队课程' }, { title: '领导力', category: 'leadership' },
+        { title: '企业工作坊', badge: 'workshop' }, { title: '组织沟通', type: 'organization' },
+      ] },
+    },
+  })
+  assert.deepEqual(boundedServices.modules, ['模块一', '模块二', '模块三', '模块四'], 'enterprise modules should cap at four in backend order')
+  assert.deepEqual(
+    boundedServices.services,
+    [
+      { title: '服务一', description: '说明一' }, { title: '服务二', description: '说明二' }, { title: '服务三', description: '说明三' },
+    ],
+    'configured enterprise service items should cap at three before courses',
+  )
+
+  const metadataMatchedCourses = personalExpertServices({
+    home: { courses: { items: [
+      { title: '个人入门课', tags: ['enterprise'], summary: '普通标题但由企业标签标记' },
+      { title: '团队协作', description: '团队课程' }, { title: '领导力', category: 'leadership' },
+      { title: '企业工作坊', badge: 'workshop' },
+    ] } },
+  })
+  assert.deepEqual(
+    metadataMatchedCourses.services,
+    [
+      { title: '个人入门课', description: '普通标题但由企业标签标记' },
+      { title: '团队协作', description: '团队课程' },
+      { title: '领导力', description: '围绕团队协作、沟通与领导力的九型共学。' },
+    ],
+    'metadata-tagged courses should be selected in order and capped at three',
+  )
+  assert.deepEqual(
+    personalExpertServices({ home: { courses: { items: [{ title: '九型入门', description: '个人学习' }] } } }).services,
+    [{ title: '企业团队共学', description: '用九型语言帮助团队看见协作中的动机与沟通方式。' }],
+    'unmatched personal courses should not be presented as enterprise services',
+  )
+
   console.log('personal expert home normalization tests passed')
 } finally {
   await rm(dir, { force: true, recursive: true })

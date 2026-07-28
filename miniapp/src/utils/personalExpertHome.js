@@ -108,19 +108,34 @@ function normalizeService(item) {
   }
 }
 
+function enterpriseCourseText(source) {
+  const fields = ['title', 'description', 'summary', 'tag', 'tags', 'type', 'category', 'label', 'badge']
+  return fields.flatMap((field) => {
+    const value = source?.[field]
+    return Array.isArray(value) ? value : [value]
+  }).filter((value) => typeof value === 'string').join(' ').toLowerCase()
+}
+
+function isEnterpriseCourse(source) {
+  return /企业|团队|组织|领导|工作坊|enterprise|corporate|team|leadership|organization|workshop/i.test(enterpriseCourseText(source))
+}
+
 export function personalExpertServices(config) {
   try {
     const enterprise = isRecord(config?.home?.enterprise) ? config.home.enterprise : {}
-    const configured = asItems(enterprise.items).map(normalizeService).filter(Boolean)
-    const courses = asItems(config?.home?.courses?.items).map(normalizeService).filter(Boolean)
-    const relevant = courses.filter((item) => /企业|团队|领导|管理|组织/.test(`${item.title} ${item.description}`))
-    const services = [...configured, ...(relevant.length ? relevant : configured.length ? [] : courses)]
+    const configured = asItems(enterprise.items).map(normalizeService).filter(Boolean).slice(0, 3)
+    const relevantCourses = asItems(config?.home?.courses?.items)
+      .filter(isEnterpriseCourse)
+      .map(normalizeService)
+      .filter(Boolean)
+      .slice(0, 3)
+    const services = [...configured, ...relevantCourses].slice(0, 3)
     return {
       eyebrow: text(enterprise.eyebrow, DEFAULT_ENTERPRISE.eyebrow),
       title: text(enterprise.title, DEFAULT_ENTERPRISE.title),
       lead: text(enterprise.lead, DEFAULT_ENTERPRISE.lead),
       buttonText: text(enterprise.buttonText, DEFAULT_ENTERPRISE.buttonText),
-      modules: Array.isArray(enterprise.modules) ? enterprise.modules.map((item) => text(item)).filter(Boolean) : [],
+      modules: Array.isArray(enterprise.modules) ? enterprise.modules.map((item) => text(item)).filter(Boolean).slice(0, 4) : [],
       services: (services.length ? services : DEFAULT_ENTERPRISE.services).map((item) => ({ ...item })),
     }
   } catch {
