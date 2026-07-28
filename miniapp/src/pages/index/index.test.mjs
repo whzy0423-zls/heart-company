@@ -65,6 +65,7 @@ assert.match(source, /@action="retrySiteConfig"/, "stale config should expose a 
 assert.match(source, /@action="retryClassroomPreview"/, "classroom async states should expose retry");
 assert.match(source, /:busy="siteRefreshing"/, "site retry should disable duplicate work while busy");
 assert.match(source, /:busy="classroomLoading"/, "classroom retry should disable duplicate work while busy");
+assert.doesNotMatch(source, /发布后的独立视频与音频课件/, "classroom empty copy should speak to visitors instead of backend publishing workflow");
 
 assert.match(source, /listClassroomStandaloneApi\(\{\s*limit:\s*2,\s*offset:\s*0\s*\}\)/, "home should request two standalone classroom items");
 assert.match(source, /\.map\(normalizeClassroomContent\)[\s\S]*?\.filter\(\(item\)\s*=>\s*item\.id\)[\s\S]*?\.slice\(0,\s*2\)/, "classroom preview should normalize, reject missing ids, preserve order, and cap at two");
@@ -113,6 +114,11 @@ for (const token of ["--nx-brand-900", "--nx-brand-700", "--nx-accent-gold", "--
   assert.match(source, new RegExp(`var\\(${token}\\)`), `home should use semantic token ${token}`);
 }
 assert.doesNotMatch(source, /purple|#7229ad|#6338c7|#7b3bc7/i, "home should not retain the old purple entertainment palette");
+const nonSemanticRgbaLines = source
+  .split("\n")
+  .map((line, index) => ({ index: index + 1, line: line.trim() }))
+  .filter(({ line }) => line.includes("rgba(") && !/^--nx-home-[a-z0-9-]+:\s*[^;]*rgba\(/.test(line));
+assert.deepEqual(nonSemanticRgbaLines, [], "home rgba values should be centralized as --nx-home-* semantic CSS variables");
 
 const executableScript = script.replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\s*;?\s*$/gm, "");
 const dir = await mkdtemp(join(tmpdir(), "nx-home-page-state-"));
@@ -272,6 +278,22 @@ try {
 
   {
     const { page, state } = await createHarness();
+    const malformedConfig = Object.defineProperty({ name: "异常配置品牌" }, "home", {
+      get() {
+        throw new Error("bad home getter");
+      },
+    });
+    state.cached = malformedConfig;
+    state.refreshSiteConfig = async () => ({});
+    await assert.doesNotReject(
+      () => page.initializeHome(),
+      "malformed entriesSection access should not crash the home page",
+    );
+    assert.deepEqual(page.secondaryEntries.value.map((entry) => entry.key), ["relation", "profile"]);
+  }
+
+  {
+    const { page, state } = await createHarness();
     assert.deepEqual(page.secondaryEntries.value.map((entry) => entry.key), ["relation", "profile"], "secondary navigation should include enabled relation/learn/profile entries only");
     page.bookEnterprise();
     page.bookEnterpriseService({ title: "领导力工作坊" });
@@ -292,6 +314,21 @@ try {
       { method: "navigateTo", url: "/pages/classroom/classroom?tab=standalone" },
     ], "home actions should use fixed booking, test, secondary, and classroom routes");
     assert.equal(page.formatDuration(185), "03:05");
+  }
+
+  {
+    const { page, state } = await createHarness();
+    const disabledEntriesConfig = {
+      home: {
+        miniappHome: {
+          entriesSection: { enabled: false },
+        },
+      },
+    };
+    state.cached = disabledEntriesConfig;
+    state.refreshSiteConfig = async () => disabledEntriesConfig;
+    await page.initializeHome();
+    assert.deepEqual(page.secondaryEntries.value, [], "disabled miniappHome entriesSection should hide secondary navigation even when entries are enabled");
   }
 
   console.log("personal expert home page tests passed");

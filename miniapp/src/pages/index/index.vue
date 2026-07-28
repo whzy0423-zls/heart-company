@@ -47,8 +47,16 @@ const classroomState = computed(() => {
   return classroomItems.value.length ? "ready" : "empty";
 });
 
+function isSecondaryEntriesEnabled(config) {
+  try {
+    return config?.home?.miniappHome?.entriesSection?.enabled !== false;
+  } catch {
+    return true;
+  }
+}
+
 function applyHomeConfig(config) {
-  secondaryEntriesEnabled.value = config?.home?.miniappHome?.entriesSection?.enabled !== false;
+  secondaryEntriesEnabled.value = isSecondaryEntriesEnabled(config);
   view.value = normalizePersonalExpertHome(config);
   carousel.value = filterFailedCarouselItems(
     normalizeHomeCarousel(config),
