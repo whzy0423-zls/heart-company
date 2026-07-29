@@ -14,7 +14,6 @@ const theme = await readFile(new URL("../../styles/apple-mobile.css", import.met
 assert.ok(template && script && style, "home page should expose template, executable page state, and scoped styles");
 
 const requiredOrder = [
-  "home-nav",
   "expert-hero",
   "proof-stats",
   "carousel",
@@ -30,6 +29,8 @@ for (const className of requiredOrder) {
   assert.ok(index > previousIndex, `${className} should appear in the required home information order`);
   previousIndex = index;
 }
+assert.doesNotMatch(template, /class="home-nav(?:__[^"\s]*)?/, "home should begin with the expert poster instead of rendering the brand strip");
+assert.doesNotMatch(template, /activateSecondaryEntry\(\{ key: 'profile' \}\)/, "home hero should not expose a profile activation button");
 assert.ok(
   template.indexOf('class="carousel') > template.indexOf('class="proof-stats'),
   "carousel should support the expert story instead of leading the home page",
@@ -136,13 +137,13 @@ assert.match(
 );
 assert.match(
   style,
-  /\.expert-hero\s*\{[^}]*width:\s*560rpx;[^}]*max-width:\s*100%;[^}]*margin:\s*0 auto;[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s,
-  "the complete detail-poster hero should be a centered 560rpx vertical stack",
+  /\.expert-hero\s*\{[^}]*width:\s*640rpx;[^}]*max-width:\s*100%;[^}]*margin:\s*0 auto;[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s,
+  "the complete detail-poster hero should be a centered 640rpx vertical stack",
 );
 assert.match(
   style,
-  /\.expert-hero__portrait\s*\{[^}]*position:\s*relative;[^}]*width:\s*100%;[^}]*height:\s*998rpx;[^}]*border:\s*2rpx solid var\(--nx-home-gold-portrait-border\)/s,
-  "the poster preview should keep the complete 560 by 998rpx artwork ratio and gold border",
+  /\.expert-hero__portrait\s*\{[^}]*position:\s*relative;[^}]*width:\s*100%;[^}]*height:\s*1140rpx;[^}]*border:\s*2rpx solid var\(--nx-home-gold-portrait-border\)/s,
+  "the poster preview should keep the complete 640 by 1140rpx artwork ratio and gold border",
 );
 assert.match(
   expertHeroTemplate,
@@ -156,8 +157,8 @@ assert.doesNotMatch(
 );
 assert.match(
   style,
-  /@media\s*\(max-width:\s*380px\)\s*\{[\s\S]*?\.expert-hero\s*\{[^}]*width:\s*494rpx;[\s\S]*?\.expert-hero__portrait\s*\{[^}]*height:\s*880rpx;[^}]*min-height:\s*880rpx;[\s\S]*?\.expert-hero__secondary\s*\{[^}]*min-height:\s*88rpx;/,
-  "narrow screens should proportionally shorten the complete poster while preserving the 88rpx classroom action",
+  /@media\s*\(max-width:\s*380px\)\s*\{[\s\S]*?\.expert-hero\s*\{[^}]*width:\s*600rpx;[\s\S]*?\.expert-hero__portrait\s*\{[^}]*height:\s*1069rpx;[^}]*min-height:\s*1069rpx;[\s\S]*?\.expert-hero__secondary\s*\{[^}]*min-height:\s*88rpx;/,
+  "narrow screens should proportionally shorten the complete poster to approximately 600 by 1069rpx while preserving the 88rpx classroom action",
 );
 assert.match(source, /failedCarouselImages/, "carousel images should keep an isolated failed-image Set");
 assert.match(source, /courseCoverErrors/, "course covers should keep isolated fallback state");
@@ -182,7 +183,6 @@ for (const tag of template.match(/<[^>]+@click[^>]*>/g) || []) {
   assert.match(tag, /^<button\b/, `click interaction should have one native button region: ${tag}`);
 }
 for (const className of [
-  "home-nav__profile",
   "expert-hero__portrait",
   "expert-hero__secondary",
   "enterprise-service",

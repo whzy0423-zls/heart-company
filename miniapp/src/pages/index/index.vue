@@ -212,24 +212,6 @@ onMounted(() => {
 
 <template>
   <view class="wrap home page-stack ios-page ios-safe-bottom">
-    <view v-if="view.brand.enabled" class="home-nav">
-      <view class="home-nav__copy">
-        <text class="home-nav__brand">{{ view.brand.name }}</text>
-        <text class="home-nav__tagline">{{ view.brand.tagline }}</text>
-      </view>
-      <button
-        class="home-nav__profile"
-        aria-label="打开我的成长档案"
-        hover-class="home-nav__profile--pressed"
-        @click="activateSecondaryEntry({ key: 'profile' })"
-      >
-        <view class="profile-mark" aria-hidden="true">
-          <view class="profile-mark__head" />
-          <view class="profile-mark__body" />
-        </view>
-      </button>
-    </view>
-
     <view class="expert-hero nx-card">
       <button
         class="expert-hero__portrait"
@@ -463,47 +445,6 @@ button::after {
   border: 0;
 }
 
-.home-nav {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24rpx;
-  padding: 4rpx 0;
-}
-
-.home-nav__copy {
-  display: flex;
-  flex-direction: column;
-  gap: 6rpx;
-}
-
-.home-nav__brand {
-  color: var(--nx-brand-900);
-  font-size: 36rpx;
-  font-weight: 800;
-  letter-spacing: 1rpx;
-}
-
-.home-nav__tagline {
-  color: var(--nx-text-muted);
-  font-size: 23rpx;
-  line-height: 1.5;
-}
-
-.home-nav__profile {
-  min-width: 88rpx;
-  min-height: 88rpx;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 2rpx solid var(--nx-border);
-  border-radius: 50%;
-  background: var(--nx-surface);
-  transition: opacity 180ms ease-out, transform 180ms ease-out;
-}
-
-.home-nav__profile--pressed,
 .expert-hero__portrait--pressed,
 .expert-hero__secondary--pressed,
 .enterprise-service--pressed,
@@ -516,37 +457,9 @@ button::after {
   transform: scale(0.98);
 }
 
-.profile-mark {
-  position: relative;
-  width: 40rpx;
-  height: 42rpx;
-}
-
-.profile-mark__head {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  width: 16rpx;
-  height: 16rpx;
-  border: 4rpx solid var(--nx-brand-700);
-  border-radius: 50%;
-  transform: translateX(-50%);
-}
-
-.profile-mark__body {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: 20rpx;
-  border: 4rpx solid var(--nx-brand-700);
-  border-bottom: 0;
-  border-radius: 22rpx 22rpx 0 0;
-}
-
 .expert-hero {
   position: relative;
-  width: 560rpx;
+  width: 640rpx;
   max-width: 100%;
   margin: 0 auto;
   display: flex;
@@ -591,7 +504,7 @@ button::after {
   position: relative;
   width: 100%;
   min-height: 88rpx;
-  height: 998rpx;
+  height: 1140rpx;
   overflow: hidden;
   margin: 0;
   padding: 0;
@@ -1066,12 +979,12 @@ button::after {
 
 @media (max-width: 380px) {
   .expert-hero {
-    width: 494rpx;
+    width: 600rpx;
   }
 
   .expert-hero__portrait {
-    height: 880rpx;
-    min-height: 880rpx;
+    height: 1069rpx;
+    min-height: 1069rpx;
   }
 
   .expert-hero__secondary {

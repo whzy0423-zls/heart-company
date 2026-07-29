@@ -307,7 +307,6 @@ function cssDeclarationsForSelector(source, selector) {
 assertTemplateOrder(
   homeTemplate,
   [
-    'class="home-nav"',
     'class="expert-hero nx-card"',
     'class="enterprise-services"',
     'class="test-game nx-card"',
@@ -316,6 +315,11 @@ assertTemplateOrder(
     'class="enterprise-final-cta"',
   ],
   "personal-expert home",
+);
+assert.doesNotMatch(
+  homeTemplate,
+  /class=["']home-nav(?:__[^"'\s]*)?["']/,
+  "personal-expert home should not render the profile-only brand strip",
 );
 assert.match(
   indexPage,
@@ -399,7 +403,6 @@ assert.match(
 );
 
 for (const className of [
-  "home-nav__profile",
   "expert-hero__secondary",
   "carousel__toggle",
   "enterprise-service",
