@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the homepage cropped full-width hero with a centered portrait-format card that shows the complete teacher image within the first screen.
+**Goal:** Replace the homepage standalone portrait with the complete teacher detail poster, including its left-side introduction text, person, and bottom slogan, within the first screen.
 
-**Architecture:** Keep the existing `expertHero` view-model and preview handler unchanged. Refactor only the homepage template and scoped styles so the portrait uses `aspectFit` inside an approximately `600 × 1040rpx` centered card, all large identity/lead overlay copy is removed, and the classroom/detail actions remain discoverable in a thin bottom action layer.
+**Architecture:** Keep the existing `expertHero` view-model and preview handler unchanged. Refactor only the homepage template and scoped styles so `detailImage` uses `aspectFit` inside an approximately `560 × 998rpx` centered poster card with no custom overlay. The poster itself opens the full-screen preview and the classroom action sits below it as a sibling native button.
 
 **Tech Stack:** uni-app, Vue 3, WeChat mini-program native buttons/images, Node source-contract tests, scoped CSS/WXSS compatibility pipeline.
 
@@ -12,7 +12,7 @@
 
 ## Chunk 1: Full-bleed hero contract and implementation
 
-### Task 1: Show the complete teacher portrait in a vertical first-screen card
+### Task 1: Show the complete teacher detail poster in the first screen
 
 **Files:**
 - Modify: `src/pages/index/index.test.mjs`
@@ -22,11 +22,11 @@
 
 Assert that:
 
-- `.expert-hero` is a centered portrait-format card near `600 × 1040rpx` that fits within a common phone first screen after the home header.
-- The former `.expert-hero__copy`, `view.expertHero.lead`, `view.expertHero.eyebrow`, and `view.expertHero.title` are absent from the hero template.
-- The portrait binds `portraitImage` identity with `mode="aspectFit"` so the complete image remains visible.
-- The preview handler still uses `detailImage`; “进入老师课堂” remains a separate native button.
-- The thin bottom action layer keeps gold/navy styling, narrow-screen rules, and native 88rpx touch targets without covering the teacher face/body.
+- `.expert-hero` is a centered poster-format card near `560 × 998rpx` that fits within a common phone first screen after the home header.
+- The hero image binds `detailImage` for src/key/data-image with `mode="aspectFit"`; it does not bind `portraitImage`.
+- The hero contains no custom eyebrow/title/lead/detail overlay, so the original poster text is unobstructed.
+- The poster preview handler still uses `detailImage`; “进入老师课堂” is a separate native button below the poster.
+- Gold/navy styling, narrow-screen rules, image-error isolation, and native 88rpx touch targets remain intact.
 
 - [ ] **Step 2: Run the focused test and confirm RED.**
 
@@ -36,15 +36,15 @@ Run:
 node src/pages/index/index.test.mjs
 ```
 
-Expected: FAIL because the current hero uses `aspectFill`, a wide 600rpx card, and large identity text inside the overlay.
+Expected: FAIL because the current hero still binds `portraitImage`, renders a detail affordance overlay, and keeps the classroom button inside the poster card.
 
 - [ ] **Step 3: Implement the minimal template refactor.**
 
-Keep the preview button and classroom button as sibling native buttons. Remove the eyebrow/title overlay, change the image to `aspectFit`, and keep only a compact “查看完整导师介绍” affordance plus the classroom action at the bottom.
+Bind the visible hero image to `detailImage`; remove the custom overlay entirely. Keep the poster preview button and classroom button as sibling native buttons, with the classroom button below the poster card.
 
 - [ ] **Step 4: Implement the scoped styles.**
 
-Center the card at approximately `600rpx` wide and `1040rpx` high (bounded by `max-width: 100%`), preserve rounded corners/gold border, use `aspectFit`, and keep a thin deep-blue bottom action gradient. On ≤380px screens retain the complete image and keep both actions clear without exceeding the first screen.
+Center the poster at approximately `560rpx` wide and `998rpx` high (bounded by `max-width: 100%`), preserve rounded corners/gold border, use `aspectFit`, and remove the bottom overlay gradient. Place the 88rpx classroom button below the poster; on ≤380px screens reduce the poster height proportionally so the complete image and button remain first-screen friendly.
 
 - [ ] **Step 5: Run focused and compatibility tests.**
 
