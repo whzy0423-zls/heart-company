@@ -1534,9 +1534,28 @@ func (s *Server) createVoiceProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) voiceProfileByID(w http.ResponseWriter, r *http.Request) {
-	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/voice/profiles/"), "/")
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/voice/profiles/"), "/")
+	parts := strings.Split(path, "/")
+	id := strings.TrimSpace(parts[0])
 	if id == "" {
 		httpx.Fail(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	if len(parts) == 2 && parts[1] == "copy-to-bailian" {
+		if r.Method != http.MethodPost {
+			httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+			return
+		}
+		result, err := s.voices.CopyProfileToBailian(r.Context(), id)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		httpx.OK(w, result)
+		return
+	}
+	if len(parts) != 1 {
+		httpx.Fail(w, http.StatusNotFound, "Not Found")
 		return
 	}
 	switch r.Method {

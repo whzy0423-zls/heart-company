@@ -263,6 +263,7 @@ func (s *Store) CloneProfile(ctx context.Context, id string) (Profile, error) {
 	}
 	asset, err := s.uploads.Find(ctx, assetID)
 	if err != nil {
+		_ = s.setProfileStatus(ctx, id, "failed", "读取音频样本失败: "+err.Error())
 		return Profile{}, fmt.Errorf("读取音频样本失败: %w", err)
 	}
 	if err := s.setProfileStatus(ctx, id, "cloning", ""); err != nil {
@@ -313,6 +314,111 @@ func (s *Store) CloneProfile(ctx context.Context, id string) (Profile, error) {
 		return Profile{}, err
 	}
 	return s.Profile(ctx, id)
+}
+
+// CopyProfileToBailian creates (or resumes) the one Bailian clone associated
+// with a MiniMax profile's sample asset. The source profile remains untouched.
+func (s *Store) CopyProfileToBailian(ctx context.Context, sourceID string) (Profile, error) {
+	source, err := s.Profile(ctx, sourceID)
+	if err != nil {
+		return Profile{}, err
+	}
+	if normalizeProfileProvider(source.Provider) != ProviderMiniMax {
+		return Profile{}, fmt.Errorf("仅支持复制 MiniMax 人声档案到阿里百炼")
+	}
+	assetID, err := parseOptionalID(source.SampleAssetID)
+	if err != nil || assetID == 0 {
+		return Profile{}, fmt.Errorf("音频样本不存在")
+	}
+	if s.uploads == nil {
+		return Profile{}, fmt.Errorf("读取音频样本失败")
+	}
+	if _, err := s.uploads.Find(ctx, assetID); err != nil {
+		return Profile{}, fmt.Errorf("读取音频样本失败: %w", err)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Profile{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx,
+		`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+		"voice-profile-copy-to-bailian:"+source.SampleAssetID,
+	); err != nil {
+		return Profile{}, err
+	}
+
+	var existingID string
+	err = tx.QueryRowContext(ctx,
+		`SELECT id::text
+		   FROM voice_profiles
+		  WHERE provider=$1 AND sample_asset_id=$2
+		  ORDER BY create_time ASC
+		  LIMIT 1`,
+		ProviderBailian, assetID,
+	).Scan(&existingID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return Profile{}, err
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		if err := tx.QueryRowContext(ctx,
+			`INSERT INTO voice_profiles (name, provider, voice_id, sample_asset_id, sample_url, sample_name, status, remark)
+			 VALUES ($1,$2,$3,$4,$5,$6,'draft',$7)
+			 RETURNING id::text`,
+			source.Name+"（百炼）", ProviderBailian, "nx_voice_"+randomID(10), assetID, source.SampleURL, source.SampleName, source.Remark,
+		).Scan(&existingID); err != nil {
+			return Profile{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Profile{}, err
+	}
+
+	profile, err := s.Profile(ctx, existingID)
+	if err != nil {
+		return Profile{}, err
+	}
+	if profile.Status == "ready" || profile.Status == "cloning" {
+		return profile, nil
+	}
+	if profile.Status != "draft" && profile.Status != "failed" {
+		return profile, nil
+	}
+	claimed, err := s.claimProfileClone(ctx, existingID)
+	if err != nil {
+		return Profile{}, err
+	}
+	if !claimed {
+		return s.Profile(ctx, existingID)
+	}
+	profile, err = s.CloneProfile(ctx, existingID)
+	if err == nil {
+		return profile, nil
+	}
+	// Keep a failed copy visible so the caller can retry it after correcting
+	// the underlying provider or object-storage configuration.
+	if saved, findErr := s.Profile(ctx, existingID); findErr == nil {
+		return saved, nil
+	}
+	return Profile{}, err
+}
+
+func (s *Store) claimProfileClone(ctx context.Context, id string) (bool, error) {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE voice_profiles
+		    SET status='cloning', last_error='', update_time=now()
+		  WHERE id=$1 AND status IN ('draft','failed')`,
+		id,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected == 1, nil
 }
 
 func (s *Store) Profile(ctx context.Context, id string) (Profile, error) {
