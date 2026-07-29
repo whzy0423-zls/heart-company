@@ -194,6 +194,11 @@ assert.match(
   /function\s+applyContent\s*\(cfg\)\s*\{[\s\S]*?learnCopy\.value\s*=\s*normalizeMiniappLearn\(cfg\)/,
   "cached and refreshed learning content should both normalize configured copy",
 );
+assert.match(
+  source,
+  /v-for="\(item, index\) in learnCopy\.hero\.meta"[^>]*:key="`\$\{item\}-\$\{index\}`"/,
+  "learning hero meta should use value plus index keys when configured labels repeat",
+);
 for (const binding of [
   "learnCopy.hero.eyebrow",
   "learnCopy.hero.title",
@@ -206,6 +211,9 @@ for (const binding of [
   "learnCopy.classroom.heroTitle",
   "learnCopy.classroom.heroLead",
   "learnCopy.classroom.ctaText",
+  "learnCopy.classroom.emptyTitle",
+  "learnCopy.classroom.emptyDescription",
+  "learnCopy.classroom.emptyActionText",
   "learnCopy.sections.teacher.eyebrow",
   "learnCopy.sections.teacher.title",
   "learnCopy.sections.courses.eyebrow",
@@ -254,6 +262,20 @@ await writeFile(
 
 let moduleCounter = 0;
 
+function defaultLearnCopy() {
+  return {
+    hero: { eyebrow: '老师课堂', title: '跟着老师，把九型真正用进工作与生活', lead: '从视频与音频课件开始，理解自己、改善关系，也为团队协作建立更清晰的共同语言。', meta: ['视频课程', '音频精讲', '九型实践'] },
+    classroom: { eyebrow: '课堂精选', title: '视频与音频课件', moreText: '查看全部', heroEyebrow: '随时回看 · 反复练习', heroTitle: '把老师以往开课内容，整理成可以持续学习的专业课件', heroLead: '支持视频和音频；先看独立课件，也可以进入系列课程循序学习。', ctaText: '进入老师课堂', emptyTitle: '老师课堂正在准备中', emptyDescription: '可以先浏览老师介绍和课程方向，新的视频与音频课件会在这里持续更新。', emptyActionText: '进入课堂看看' },
+    sections: {
+      teacher: { eyebrow: '老师简介', title: '认识你的学习向导' },
+      courses: { eyebrow: '课程方向', title: '循序建立九型视角', emptyTitle: '课程方向正在整理中', emptyDescription: '更多面向个人成长、关系沟通与企业团队的学习主题会持续补充。' },
+      types: { eyebrow: '九型内容', title: '九种性格，九条成长路径' },
+      quotes: { eyebrow: '课堂一念', title: '把觉察带回当下', emptyTitle: '课堂语录即将上线' },
+    },
+    bottomCtaText: '先完成测试，建立你的学习地图',
+  };
+}
+
 function deferred() {
   let resolve;
   let reject;
@@ -267,7 +289,7 @@ function deferred() {
 async function createHarness() {
   const state = {
     cached: null,
-    normalizeMiniappLearn: (cfg) => cfg?.home?.miniappLearn || { hero: { eyebrow: '老师课堂' } },
+    normalizeMiniappLearn: (cfg) => cfg?.home?.miniappLearn || defaultLearnCopy(),
     refreshSiteConfig: async () => ({ teachers: [], courses: [], home: { quotes: { items: [] } } }),
     listSeries: async () => ({ items: [] }),
     listStandalone: async () => ({ items: [] }),
@@ -552,6 +574,11 @@ try {
     assert.deepEqual(page.teachers.value, ["默认老师"]);
     assert.deepEqual(page.coursewareItems.value, ["默认课程"]);
     assert.deepEqual(page.quotes.value, []);
+    assert.deepEqual(
+      page.learnCopy.value,
+      defaultLearnCopy(),
+      'an initial failure should retain the complete normalized learning-page fallback copy',
+    );
   }
 
   {

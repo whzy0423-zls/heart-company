@@ -69,6 +69,11 @@ assert.equal(
   true,
   'an explicitly empty learning-page copy object should preserve the intentional learning section',
 )
+assert.equal(
+  hasSiteConfigLearningSection({ home: { miniappLearn: [] } }),
+  false,
+  'an array is not a valid learning-page configuration section',
+)
 assert.equal(hasSiteConfigLearningSection({ home: { teacher: {} } }), true, 'explicit teacher section should be treated as intentional content')
 assert.equal(
   hasSiteConfigLearningSection({ home: { teacherTeaser: {} } }),
@@ -109,6 +114,24 @@ assert.notDeepEqual(third, first)
 clearSiteConfigCache()
 await getCachedSiteConfig({ api, now: () => now, ttlMs: 60000 })
 assert.equal(calls, 4, 'manual cache clear should refetch')
+
+clearSiteConfigCache()
+const configuredLearn = { home: { miniappLearn: { hero: { title: '已缓存的学习页' } } } }
+await refreshSiteConfig({ api: async () => configuredLearn, now: () => now + 1000 })
+const malformedLearnRefresh = await refreshSiteConfig({
+  api: async () => ({ home: { miniappLearn: [] } }),
+  now: () => now + 2000,
+})
+assert.deepEqual(
+  malformedLearnRefresh,
+  { home: { miniappLearn: [] } },
+  'malformed learning-page responses should still be returned to the caller',
+)
+assert.deepEqual(
+  getStoredSiteConfig(),
+  configuredLearn,
+  'a malformed learning-page array must not overwrite an existing valid learning cache',
+)
 
 console.log('site config cache tests passed')
 await rm(dir, { force: true, recursive: true })

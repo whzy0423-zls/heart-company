@@ -67,6 +67,11 @@ function hasSection(value) {
   return Array.isArray(value) || Array.isArray(value?.items) || Array.isArray(value?.list) || !!(value && typeof value === 'object')
 }
 
+function miniappLearnSource(config) {
+  const value = config?.home?.miniappLearn
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null
+}
+
 function learningSources(config) {
   return [
     config?.teacher,
@@ -83,16 +88,15 @@ function learningSources(config) {
     config?.home?.lessons,
     config?.home?.courses,
     config?.home?.quotes,
-    config?.home?.miniappLearn,
   ]
 }
 
 export function hasSiteConfigLearningContent(config) {
-  return learningSources(config).some(hasItems)
+  return learningSources(config).some(hasItems) || hasItems(miniappLearnSource(config))
 }
 
 export function hasSiteConfigLearningSection(config) {
-  return learningSources(config).some(hasSection)
+  return learningSources(config).some(hasSection) || hasSection(miniappLearnSource(config))
 }
 
 export async function getCachedSiteConfig(options = {}) {

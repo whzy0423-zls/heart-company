@@ -204,7 +204,7 @@ function goTest() {
       <text class="learn-hero__title">{{ learnCopy.hero.title }}</text>
       <text class="learn-hero__lead">{{ learnCopy.hero.lead }}</text>
       <view class="learn-hero__meta" aria-hidden="true">
-        <text v-for="item in learnCopy.hero.meta" :key="item">{{ item }}</text>
+        <text v-for="(item, index) in learnCopy.hero.meta" :key="`${item}-${index}`">{{ item }}</text>
       </view>
     </view>
 
