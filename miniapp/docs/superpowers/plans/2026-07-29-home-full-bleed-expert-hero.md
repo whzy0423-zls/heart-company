@@ -4,7 +4,7 @@
 
 **Goal:** Replace the homepage standalone portrait with the complete teacher detail poster, including its left-side introduction text, person, and bottom slogan, within the first screen.
 
-**Architecture:** Keep the existing `expertHero` view-model and preview handler unchanged. Refactor only the homepage template and scoped styles so `detailImage` uses `aspectFit` inside an approximately `560 × 998rpx` centered poster card with no custom overlay. The poster itself opens the full-screen preview and the classroom action sits below it as a sibling native button.
+**Architecture:** Keep the existing `expertHero` view-model and preview handler unchanged. Refactor only the homepage template and scoped styles so `detailImage` uses `aspectFit` inside an approximately `640 × 1140rpx` centered poster card after removing the homepage brand strip with no custom overlay. The poster itself opens the full-screen preview and the classroom action sits below it as a sibling native button.
 
 **Tech Stack:** uni-app, Vue 3, WeChat mini-program native buttons/images, Node source-contract tests, scoped CSS/WXSS compatibility pipeline.
 
@@ -22,7 +22,8 @@
 
 Assert that:
 
-- `.expert-hero` is a centered poster-format card near `560 × 998rpx` that fits within a common phone first screen after the home header.
+- The homepage no longer renders `.home-nav`; brand/profile framing remains on the profile page only.
+- `.expert-hero` is a centered poster-format card near `640 × 1140rpx`, using most of the available page width with narrow side margins.
 - The hero image binds `detailImage` for src/key/data-image with `mode="aspectFit"`; it does not bind `portraitImage`.
 - The hero contains no custom eyebrow/title/lead/detail overlay, so the original poster text is unobstructed.
 - The poster preview handler still uses `detailImage`; “进入老师课堂” is a separate native button below the poster.
@@ -44,7 +45,7 @@ Bind the visible hero image to `detailImage`; remove the custom overlay entirely
 
 - [ ] **Step 4: Implement the scoped styles.**
 
-Center the poster at approximately `560rpx` wide and `998rpx` high (bounded by `max-width: 100%`), preserve rounded corners/gold border, use `aspectFit`, and remove the bottom overlay gradient. Place the 88rpx classroom button below the poster; on ≤380px screens reduce the poster height proportionally so the complete image and button remain first-screen friendly.
+Center the poster at approximately `640rpx` wide and `1140rpx` high (bounded by `max-width: 100%`), preserve rounded corners/gold border, use `aspectFit`, and remove the bottom overlay gradient. Place the 88rpx classroom button below the poster; on ≤380px screens reduce the poster height proportionally so the complete image and button remain first-screen friendly.
 
 - [ ] **Step 5: Run focused and compatibility tests.**
 
