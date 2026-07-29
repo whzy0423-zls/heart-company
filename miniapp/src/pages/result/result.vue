@@ -218,16 +218,25 @@ function goRelation() {
   uni.navigateTo({ url: `/pages/relation/relation?type=${result.value.type}` })
 }
 
+function resultShareImage(type) {
+  const normalizedType = Number(type)
+  if (!Number.isInteger(normalizedType) || normalizedType < 1 || normalizedType > 9) {
+    return '/static/share/result-default.jpg'
+  }
+  return `/static/share/result-${normalizedType}.jpg`
+}
+
 // 微信好友转发
 onShareAppMessage(() => ({
-  title: `我是${result.value?.type}号「${r.value?.title}」，来测测你的性格芯片`,
+  title: `我是 ${result.value?.type} 号「${r.value?.title}」｜你是哪一型？`,
   path: '/pages/index/index',
-  imageUrl: posterUrl.value || `/static/avatars/${result.value?.type}.png`,
+  imageUrl: resultShareImage(result.value?.type),
 }))
 // 朋友圈分享
 onShareTimeline(() => ({
-  title: `九型芯之力 · 我是${result.value?.type}号「${r.value?.title}」`,
+  title: `九型芯之力｜我是 ${result.value?.type} 号「${r.value?.title}」`,
   query: '',
+  imageUrl: resultShareImage(result.value?.type),
 }))
 
 // 生成分享海报（canvas 2d）
