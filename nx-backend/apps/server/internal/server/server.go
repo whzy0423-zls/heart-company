@@ -82,6 +82,7 @@ type Server struct {
 	voiceAssetFind             func(context.Context, int64) (uploadasset.Asset, error)
 	uploader                   storage.ObjectUploader
 	voices                     *voice.Store
+	setBailianCopyConfig       func(voice.BailianConfig)
 	videos                     *video.Store
 	videoAnalysis              *videoanalysis.Store
 	videoAssets                *videoasset.Store
@@ -280,6 +281,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		}
 	}
 	s.voices = voice.NewStore(database, s.uploads, env.MiniMax)
+	s.setBailianCopyConfig = s.voices.ConfigureBailianCopy
 	s.videos = video.NewStore(database, s.uploads, env.Video, s.uploader)
 	s.videoSubmissionRecovery = func(ctx context.Context) (int64, error) {
 		return s.videoStore().RecoverInterruptedSubmissions(
@@ -380,6 +382,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.pushSendSlots = make(chan struct{}, 2)
 	// 启动时应用 DB 中保存的模型配置覆盖（若存在），重建对话/视频客户端。
 	s.applyStoredModelConfig()
+	s.applyStoredXinzhiliBailianCopyConfig()
 	if database != nil {
 		if err := s.ensureVideoSubmissionRecovery(context.Background()); err != nil {
 			log.Printf("video submission recovery failed: %v", err)
@@ -445,17 +448,6 @@ func (s *Server) applyStoredModelConfig() {
 	s.videos = videoStore
 	s.images = imageStore
 	s.modelMu.Unlock()
-	tts := cfg.ApplyTTS(s.env.MiniMax)
-	voiceBase := s.env.MiniMax
-	voiceBase.Provider = tts.Provider
-	voiceBase.APIBase = tts.Endpoint
-	voiceBase.APIKey = tts.APIKey
-	voiceBase.GroupID = tts.GroupID
-	voiceBase.Model = tts.Model
-	s.voices = voice.NewStore(s.db, s.uploads, voiceBase)
-	if s.articles != nil {
-		s.articles.AttachAudioDeps(s.voices, s.uploads, s.voices, tts.Model)
-	}
 }
 
 // generator 返回当前生效的对话生成器；持读锁以兼容"模型配置"页面运行时重建。

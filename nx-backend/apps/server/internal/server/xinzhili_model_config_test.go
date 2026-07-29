@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"nine-xing/nx-backend/apps/server/internal/voice"
 	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
 
@@ -148,6 +149,51 @@ func TestXinzhiliModelConfigPUTPassesExpectedVersionAndEmptyKeys(t *testing.T) {
 	}
 	if store.updated.RealtimeASR.APIKey != "" || store.updated.TTS.APIKey != "" {
 		t.Fatalf("handler must preserve empty-key semantics: %+v", store.updated)
+	}
+}
+
+func TestXinzhiliModelConfigPUTRefreshesBailianCopyCredentialsFromSavedTTS(t *testing.T) {
+	saved := validXinzhiliModelConfigForHandler()
+	saved.TTS = xinzhili.TTSConfig{
+		Provider: xinzhili.TTSProviderBailian,
+		Endpoint: "https://dashscope.example.com/compatible-mode/v1",
+		APIKey:   "saved-bailian-key",
+		Model:    "MiniMax/speech-2.8-turbo",
+		Voice:    "saved-voice",
+		Format:   "mp3",
+	}
+	store := &fakeXinzhiliModelConfigStore{config: saved, found: true}
+	var got voice.BailianConfig
+	s := &Server{
+		xinzhiliModelConfig: store,
+		setBailianCopyConfig: func(cfg voice.BailianConfig) {
+			got = cfg
+		},
+	}
+	body, err := json.Marshal(map[string]any{
+		"expectedVersion": 0,
+		"enabled":         true,
+		"realtimeAsr": map[string]any{
+			"provider": saved.RealtimeASR.Provider, "endpoint": saved.RealtimeASR.Endpoint,
+			"apiKey": saved.RealtimeASR.APIKey, "region": saved.RealtimeASR.Region, "model": saved.RealtimeASR.Model,
+		},
+		"tts": map[string]any{
+			"provider": saved.TTS.Provider, "endpoint": saved.TTS.Endpoint, "apiKey": saved.TTS.APIKey,
+			"model": saved.TTS.Model, "voice": saved.TTS.Voice, "format": saved.TTS.Format,
+		},
+		"enabledModes": []string{"normal"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := httptest.NewRecorder()
+	s.xinzhiliModelConfigHandler(res, httptest.NewRequest(http.MethodPut, "/api/xinzhili-model-config", strings.NewReader(string(body))))
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if got.APIBase != saved.TTS.Endpoint || got.APIKey != saved.TTS.APIKey || got.TargetModel != saved.TTS.Model {
+		t.Fatalf("Bailian copy config = %+v, want saved Xinzhili TTS credentials", got)
 	}
 }
 

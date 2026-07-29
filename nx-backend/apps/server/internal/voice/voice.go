@@ -169,17 +169,29 @@ type ContentGenerateInput struct {
 }
 
 func NewStore(database *sql.DB, uploads *uploadasset.Store, cfg config.MiniMaxConfig) *Store {
+	return NewStoreWithBailian(database, uploads, cfg, BailianConfig{})
+}
+
+// NewStoreWithBailian keeps the MiniMax voice runtime and the Bailian copy
+// runtime independent. MiniMax remains responsible for its existing clone and
+// synthesis flows; Bailian is used only for Bailian profiles.
+func NewStoreWithBailian(database *sql.DB, uploads *uploadasset.Store, minimax config.MiniMaxConfig, bailian BailianConfig) *Store {
 	return &Store{
-		bailian: NewBailianClient(BailianConfig{
-			APIBase:     cfg.APIBase,
-			APIKey:      cfg.APIKey,
-			TargetModel: cfg.Model,
-		}),
-		client:   NewMiniMaxClient(cfg),
+		bailian:  NewBailianClient(bailian),
+		client:   NewMiniMaxClient(minimax),
 		db:       database,
-		provider: normalizeStoreProvider(cfg),
+		provider: normalizeStoreProvider(minimax),
 		uploads:  uploads,
 	}
+}
+
+// ConfigureBailianCopy refreshes only the credentials used by Bailian profile
+// copies. It deliberately leaves the MiniMax client untouched.
+func (s *Store) ConfigureBailianCopy(cfg BailianConfig) {
+	if s == nil {
+		return
+	}
+	s.bailian = NewBailianClient(cfg)
 }
 
 func normalizeStoreProvider(cfg config.MiniMaxConfig) string {

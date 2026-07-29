@@ -10,6 +10,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/auditlog"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/voice"
 	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
 
@@ -124,6 +125,7 @@ func (s *Server) xinzhiliModelConfigHandler(w http.ResponseWriter, r *http.Reque
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.applyXinzhiliBailianCopyConfig(saved.TTS)
 	s.recordAdminAudit(r, auditlog.Entry{
 		Action:     "xinzhili_model_config.update",
 		TargetType: "xinzhili_model_config",
@@ -133,6 +135,37 @@ func (s *Server) xinzhiliModelConfigHandler(w http.ResponseWriter, r *http.Reque
 		Summary:    "更新芯之力模型配置",
 	})
 	httpx.OK(w, buildXinzhiliModelConfigView(saved))
+}
+
+func (s *Server) applyStoredXinzhiliBailianCopyConfig() {
+	if s.xinzhiliModelConfig == nil {
+		return
+	}
+	cfg, found, err := s.xinzhiliModelConfig.Read(context.Background())
+	if err != nil {
+		return
+	}
+	if found {
+		s.applyXinzhiliBailianCopyConfig(cfg.TTS)
+	}
+}
+
+func (s *Server) applyXinzhiliBailianCopyConfig(tts xinzhili.TTSConfig) {
+	if s.setBailianCopyConfig == nil {
+		return
+	}
+	s.setBailianCopyConfig(bailianCopyConfigFromXinzhiliTTS(tts))
+}
+
+func bailianCopyConfigFromXinzhiliTTS(tts xinzhili.TTSConfig) voice.BailianConfig {
+	if tts.Provider != xinzhili.TTSProviderBailian {
+		return voice.BailianConfig{}
+	}
+	return voice.BailianConfig{
+		APIBase:     tts.Endpoint,
+		APIKey:      tts.APIKey,
+		TargetModel: tts.Model,
+	}
 }
 
 func buildXinzhiliModelConfigView(cfg xinzhili.Config) xinzhiliModelConfigView {

@@ -384,6 +384,28 @@ func TestNormalizeStoreProviderRecognizesBailianRuntime(t *testing.T) {
 	}
 }
 
+func TestNewStoreWithBailianKeepsMiniMaxAndBailianCredentialsSeparate(t *testing.T) {
+	store := NewStoreWithBailian(nil, nil,
+		config.MiniMaxConfig{
+			APIBase: "https://minimax.example.com",
+			APIKey:  "minimax-key",
+			GroupID: "minimax-group",
+		},
+		BailianConfig{
+			APIBase:     "https://dashscope.example.com/api/v1",
+			APIKey:      "bailian-key",
+			TargetModel: "MiniMax/speech-2.8-turbo",
+		},
+	)
+
+	if store.client.apiBase != "https://minimax.example.com" || store.client.apiKey != "minimax-key" || store.client.groupID != "minimax-group" {
+		t.Fatalf("MiniMax client credentials = %+v, want dedicated MiniMax config", store.client)
+	}
+	if store.bailian.apiBase != "https://dashscope.example.com/api/v1" || store.bailian.apiKey != "bailian-key" || store.bailian.targetModel != "MiniMax/speech-2.8-turbo" {
+		t.Fatalf("Bailian client credentials = %+v, want dedicated Bailian config", store.bailian)
+	}
+}
+
 func TestDefaultSynthesisModelFollowsVoiceProvider(t *testing.T) {
 	if got := defaultSynthesisModel(ProviderBailian); got != "MiniMax/speech-2.8-turbo" {
 		t.Fatalf("bailian model=%q", got)
