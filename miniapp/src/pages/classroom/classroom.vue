@@ -40,12 +40,14 @@ const continueError = ref("");
 const seriesPaymentTargetId = ref("");
 const seriesPaymentState = ref("idle");
 const seriesPaymentMessage = ref("");
+const seriesPurchaseInFlight = ref(false);
 const coverImageErrors = ref({});
 let listTicket = 0;
 let seriesTicket = 0;
 let continueTicket = 0;
 let skipNextShowRefresh = false;
 let seriesPurchaseController = null;
+let seriesPurchaseOperation = null;
 let seriesPurchaseTicket = 0;
 let disposed = false;
 
@@ -60,9 +62,7 @@ const emptyDescription = computed(() =>
     ? "系列课程会把相关主题串成完整路径；也可以先从独立课件开始学习。"
     : "老师的公开视频和音频课件会持续整理到这里，欢迎先浏览现有内容。",
 );
-const seriesPaymentBusy = computed(
-  () => seriesPaymentState.value === "creating" || seriesPaymentState.value === "pending",
-);
+const seriesPaymentBusy = computed(() => seriesPurchaseInFlight.value);
 
 function responseItems(response) {
   return Array.isArray(response?.items) ? response.items : [];
@@ -300,19 +300,41 @@ function createSeriesPurchase(item) {
   return seriesPurchaseController;
 }
 
+function trackSeriesPurchase(run) {
+  if (seriesPurchaseOperation) return;
+  seriesPurchaseInFlight.value = true;
+  let operation;
+  try {
+    operation = Promise.resolve(run());
+  } catch (error) {
+    seriesPurchaseInFlight.value = false;
+    throw error;
+  }
+  let tracked;
+  tracked = operation.finally(() => {
+    if (seriesPurchaseOperation !== tracked) return;
+    seriesPurchaseOperation = null;
+    seriesPurchaseInFlight.value = false;
+  });
+  seriesPurchaseOperation = tracked;
+  return tracked;
+}
+
 function startSeriesPurchase(item) {
   if (!item?.id || itemAction(item).type !== "purchase") return;
-  if (seriesPaymentBusy.value) return;
+  if (seriesPurchaseOperation) return;
   if (!getToken()) {
     uni.switchTab({ url: "/pages/profile/profile" });
     return;
   }
-  return createSeriesPurchase(item).purchase();
+  return trackSeriesPurchase(() => createSeriesPurchase(item).purchase());
 }
 
 function retrySeriesPurchase(item) {
+  if (seriesPurchaseOperation) return;
   if (seriesPaymentTargetId.value !== item?.id) return startSeriesPurchase(item);
-  return seriesPurchaseController?.retry();
+  if (!seriesPurchaseController) return;
+  return trackSeriesPurchase(() => seriesPurchaseController.retry());
 }
 
 function cancelSeriesPurchase() {
@@ -352,6 +374,8 @@ onUnload(() => {
   seriesTicket += 1;
   continueTicket += 1;
   seriesPurchaseTicket += 1;
+  seriesPurchaseOperation = null;
+  seriesPurchaseInFlight.value = false;
   seriesPurchaseController?.stop();
   seriesPurchaseController = null;
 });

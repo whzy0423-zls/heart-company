@@ -512,6 +512,34 @@ try {
     const { page, state } = await createHarness();
     page.activeTab.value = "series";
     state.token = "jwt";
+    const list = deferred();
+    let listCalls = 0;
+    state.listSeries = () => {
+      listCalls += 1;
+      return list.promise;
+    };
+    const first = page.startSeriesPurchase({ id: "12", purchaseState: "purchase_required" });
+    for (let count = 0; count < 10 && listCalls === 0; count += 1) await Promise.resolve();
+    assert.equal(listCalls, 1, "successful payment should enter its permission refresh");
+    assert.equal(page.seriesPaymentState.value, "success");
+
+    const duplicate = page.startSeriesPurchase({ id: "13", purchaseState: "purchase_required" });
+    assert.equal(
+      duplicate,
+      undefined,
+      "a second purchase must be ignored until the successful permission refresh settles",
+    );
+    assert.deepEqual(state.orderCalls, [{ targetType: "series", refId: "12" }]);
+    assert.equal(state.stopCalls, 0, "the duplicate click must not stop the successful refresh");
+
+    list.resolve({ items: [{ id: 12, title: "权限已刷新" }] });
+    await first;
+  }
+
+  {
+    const { page, state } = await createHarness();
+    page.activeTab.value = "series";
+    state.token = "jwt";
     let detailCalls = 0;
     state.getSeries = async () => {
       detailCalls += 1;
