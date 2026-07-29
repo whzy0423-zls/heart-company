@@ -221,34 +221,25 @@ function goTest() {
 
     <view class="learn-sections">
       <view class="classroom-entry card ios-card learn-section nx-panel section">
-        <view class="nx-section-head">
+        <view class="nx-section-head classroom-entry__head">
           <view>
             <text class="section-kicker">{{ learnCopy.classroom.eyebrow }}</text>
             <text class="sec-title">{{ learnCopy.classroom.title }}</text>
           </view>
-          <button class="classroom-entry__more" @click="openClassroom('standalone')">{{ learnCopy.classroom.moreText }}</button>
+          <button
+            class="classroom-entry__more"
+            :aria-label="learnCopy.classroom.ctaText"
+            @click="openClassroom('standalone')"
+          >
+            {{ learnCopy.classroom.moreText }}
+            <text aria-hidden="true">›</text>
+          </button>
         </view>
 
-        <view class="classroom-entry__hero">
-          <view class="classroom-entry__hero-copy">
-            <text class="classroom-entry__hero-eyebrow">{{ learnCopy.classroom.heroEyebrow }}</text>
-            <text class="classroom-entry__hero-title">{{ learnCopy.classroom.heroTitle }}</text>
-            <text class="classroom-entry__hero-lead">{{ learnCopy.classroom.heroLead }}</text>
-            <button
-              class="classroom-entry__hero-cta"
-              hover-class="classroom-entry__hero-cta--pressed"
-              @click="openClassroom('standalone')"
-            >
-              {{ learnCopy.classroom.ctaText }}
-            </button>
-          </view>
-          <view class="classroom-entry__hero-media" aria-hidden="true">
-            <view class="classroom-entry__hero-screen">
-              <view class="classroom-entry__hero-play"></view>
-            </view>
-            <view class="classroom-entry__hero-wave classroom-entry__hero-wave--one"></view>
-            <view class="classroom-entry__hero-wave classroom-entry__hero-wave--two"></view>
-          </view>
+        <view class="classroom-entry__intro">
+          <text class="classroom-entry__intro-eyebrow">{{ learnCopy.classroom.heroEyebrow }}</text>
+          <text class="classroom-entry__intro-title">{{ learnCopy.classroom.heroTitle }}</text>
+          <text class="classroom-entry__intro-lead">{{ learnCopy.classroom.heroLead }}</text>
         </view>
 
         <view
@@ -288,7 +279,6 @@ function goTest() {
             :key="`${item.contentType || 'series'}:${item.id}`"
             class="classroom-entry__item"
             role="button"
-            aria-role="button"
             tabindex="0"
             :aria-label="`查看${classroomPreviewPresentation(item).kind}课件：${classroomPreviewPresentation(item).title}`"
             hover-class="classroom-entry__item--pressed"
@@ -313,11 +303,12 @@ function goTest() {
                 aria-hidden="true"
                 >{{ classroomPreviewPresentation(item).fallback }}</view
               >
-              <text class="classroom-entry__kind">
-                {{ classroomPreviewPresentation(item).kind }}
-              </text>
             </view>
             <view class="classroom-entry__body">
+              <view class="classroom-entry__meta">
+                <text class="classroom-entry__kind">{{ classroomPreviewPresentation(item).kind }}课件</text>
+                <text v-if="item.teacherName" class="classroom-entry__teacher">{{ item.teacherName }}</text>
+              </view>
               <text class="classroom-entry__title">{{ classroomPreviewPresentation(item).title }}</text>
               <text class="classroom-entry__action">
                 {{ classroomPreviewPresentation(item).action }}
@@ -561,110 +552,45 @@ function goTest() {
   font-weight: 900;
   line-height: 1.35;
 }
-.classroom-entry__more,
-.classroom-entry__hero-cta {
+.classroom-entry__head {
+  align-items: flex-start;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 16rpx;
+}
+.classroom-entry__head > view {
+  flex: 1;
+  min-width: 0;
+}
+.classroom-entry__more {
+  flex-shrink: 0;
+  width: auto;
   min-height: 88rpx;
-  padding: 0 24rpx;
+  margin: 0;
+  padding: 0 10rpx 0 18rpx;
+  color: var(--nx-brand-900);
   font-size: 24rpx;
   font-weight: 900;
   line-height: 88rpx;
   border-radius: 18rpx;
+  background: transparent;
 }
-.classroom-entry__more {
-  color: var(--nx-brand-900);
-  background: var(--nx-surface-soft);
-  border: 2rpx solid var(--nx-border);
-}
+.classroom-entry__more text { margin-left: 4rpx; font-size: 30rpx; }
 .classroom-entry__more::after,
-.classroom-entry__hero-cta::after,
 .retry::after { border: 0; }
-.classroom-entry__hero {
-  position: relative;
-  display: flex;
-  align-items: stretch;
-  gap: 22rpx;
-  margin: 24rpx 0 22rpx;
-  padding: 28rpx;
-  overflow: hidden;
-  color: var(--nx-surface);
-  background:
-    radial-gradient(circle at 14% 8%, rgba(223, 188, 127, 0.22), transparent 30%),
-    linear-gradient(135deg, var(--nx-brand-900), var(--nx-brand-700));
-  border-radius: 28rpx;
-  box-shadow: 0 22rpx 42rpx -30rpx rgba(32, 42, 55, 0.58);
+.classroom-entry__intro {
+  margin: 10rpx 0 18rpx;
+  padding: 18rpx 20rpx;
+  background: var(--nx-surface-soft);
+  border-left: 6rpx solid var(--nx-accent-gold);
+  border-radius: 0 18rpx 18rpx 0;
 }
-.classroom-entry__hero-copy {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  justify-content: center;
-  min-width: 0;
-  gap: 9rpx;
-}
-.classroom-entry__hero-eyebrow,
-.classroom-entry__hero-title,
-.classroom-entry__hero-lead { display: block; }
-.classroom-entry__hero-eyebrow {
-  color: var(--nx-accent-gold);
-  font-size: 22rpx;
-  font-weight: 900;
-}
-.classroom-entry__hero-title {
-  color: var(--nx-surface);
-  font-size: 30rpx;
-  font-weight: 900;
-  line-height: 1.4;
-}
-.classroom-entry__hero-lead {
-  color: rgba(255, 255, 255, 0.76);
-  font-size: 23rpx;
-  line-height: 1.58;
-}
-.classroom-entry__hero-cta {
-  align-self: flex-start;
-  margin-top: 10rpx;
-  color: var(--nx-brand-900);
-  background: var(--nx-accent-gold);
-  border-radius: 999rpx;
-}
-.classroom-entry__hero-cta--pressed { opacity: 0.84; }
-.classroom-entry__hero-media {
-  position: relative;
-  flex: 0 0 150rpx;
-  width: 150rpx;
-  min-height: 176rpx;
-}
-.classroom-entry__hero-screen {
-  position: absolute;
-  top: 18rpx;
-  right: 0;
-  width: 140rpx;
-  height: 104rpx;
-  background: rgba(255, 255, 255, 0.1);
-  border: 2rpx solid rgba(255, 255, 255, 0.2);
-  border-radius: 24rpx;
-}
-.classroom-entry__hero-play {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 0;
-  height: 0;
-  border-top: 16rpx solid transparent;
-  border-bottom: 16rpx solid transparent;
-  border-left: 26rpx solid var(--nx-accent-gold);
-  transform: translate(-35%, -50%);
-}
-.classroom-entry__hero-wave {
-  position: absolute;
-  height: 10rpx;
-  background: var(--nx-accent-gold);
-  border-radius: 999rpx;
-}
-.classroom-entry__hero-wave--one { right: 18rpx; bottom: 30rpx; width: 94rpx; }
-.classroom-entry__hero-wave--two { right: 46rpx; bottom: 52rpx; width: 58rpx; opacity: 0.55; }
+.classroom-entry__intro-eyebrow,
+.classroom-entry__intro-title,
+.classroom-entry__intro-lead { display: block; }
+.classroom-entry__intro-eyebrow { color: var(--nx-brand-700); font-size: 21rpx; font-weight: 900; }
+.classroom-entry__intro-title { margin-top: 6rpx; color: var(--nx-text); font-size: 27rpx; font-weight: 900; line-height: 1.45; }
+.classroom-entry__intro-lead { margin-top: 6rpx; color: var(--nx-text-muted); font-size: 22rpx; line-height: 1.55; }
 .classroom-entry__warning {
   display: flex;
   align-items: center;
@@ -701,35 +627,36 @@ function goTest() {
 }
 .classroom-entry__grid {
   display: grid;
-  gap: 16rpx;
+  gap: 0;
 }
 .classroom-entry__item {
   display: flex;
   align-items: center;
-  min-height: 154rpx;
+  min-height: 144rpx;
   box-sizing: border-box;
-  gap: 20rpx;
-  padding: 14rpx;
+  gap: 18rpx;
+  padding: 16rpx 0;
   overflow: hidden;
-  background: var(--nx-surface);
-  border: 2rpx solid var(--nx-border);
-  border-radius: 24rpx;
+  background: transparent;
+  border-bottom: 2rpx solid var(--nx-border);
+  border-radius: 0;
   box-shadow: none;
 }
+.classroom-entry__item:last-child { border-bottom: 0; }
 .classroom-entry__item--pressed { opacity: 0.84; transform: scale(0.988); }
 .classroom-entry__media {
   position: relative;
   flex-shrink: 0;
-  width: 224rpx;
-  height: 126rpx;
+  width: 200rpx;
+  height: 112rpx;
   overflow: hidden;
   background: var(--nx-border);
-  border-radius: 18rpx;
+  border-radius: 16rpx;
 }
 .classroom-entry__cover {
   display: block;
-  width: 224rpx;
-  height: 126rpx;
+  width: 200rpx;
+  height: 112rpx;
   background: var(--nx-border);
 }
 .classroom-entry__cover--fallback {
@@ -737,21 +664,9 @@ function goTest() {
   align-items: center;
   justify-content: center;
   color: var(--nx-brand-900);
-  font-size: 40rpx;
+  font-size: 36rpx;
   font-weight: 900;
   background: linear-gradient(135deg, var(--nx-surface-soft), var(--nx-accent-gold));
-}
-.classroom-entry__media .classroom-entry__kind {
-  position: absolute;
-  top: 10rpx;
-  left: 10rpx;
-  padding: 5rpx 10rpx;
-  color: var(--nx-brand-900);
-  font-size: 24rpx;
-  font-weight: 900;
-  line-height: 1.2;
-  background: rgba(250, 241, 215, 0.94);
-  border-radius: 10rpx;
 }
 .classroom-entry__body {
   display: flex;
@@ -760,14 +675,18 @@ function goTest() {
   justify-content: flex-start;
   align-self: stretch;
   min-width: 0;
-  min-height: 126rpx;
+  min-height: 112rpx;
 }
+.classroom-entry__meta { display: flex; align-items: center; gap: 10rpx; color: var(--nx-text-muted); font-size: 20rpx; }
+.classroom-entry__kind { color: var(--nx-brand-700); font-weight: 900; }
+.classroom-entry__teacher { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .classroom-entry__title {
   display: -webkit-box;
   overflow: hidden;
   max-height: 2.8em;
   color: var(--nx-text);
-  font-size: 28rpx;
+  margin-top: 4rpx;
+  font-size: 27rpx;
   font-weight: 900;
   line-height: 1.4;
   text-overflow: ellipsis;
@@ -777,9 +696,9 @@ function goTest() {
 .classroom-entry__action {
   flex-shrink: 0;
   margin-top: auto;
-  padding-top: 10rpx;
+  padding-top: 6rpx;
   color: var(--nx-brand-900);
-  font-size: 24rpx;
+  font-size: 22rpx;
   font-weight: 900;
 }
 .teacher-card {

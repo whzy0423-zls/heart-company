@@ -513,7 +513,6 @@ onUnload(() => {
               >
               <view class="classroom-card__cover-overlay">
                 <view class="classroom-card__overlay-tags">
-                  <text class="nx-tag">{{ classroomAccessLabel(item.effectiveAccess) }}</text>
                   <text class="classroom-card__kind">{{
                     activeTab === "series" ? "系列" : item.contentType === "audio" ? "音频" : "视频"
                   }}</text>
@@ -527,21 +526,20 @@ onUnload(() => {
             </view>
           </view>
           <view class="classroom-card__body">
-            <view class="classroom-card__meta">
-              <text>{{ activeTab === "series" ? "系列沉淀" : "独立学习" }}</text>
-              <text>{{ classroomAccessLabel(item.effectiveAccess) }}</text>
+            <view class="classroom-card__eyebrow">
+              <text class="classroom-card__access">{{
+                classroomAccessLabel(item.effectiveAccess)
+              }}</text>
+              <text v-if="formatDuration(item.durationSeconds)" class="classroom-card__duration">{{
+                formatDuration(item.durationSeconds)
+              }}</text>
             </view>
             <text class="classroom-card__title">{{ item.title || "未命名课件" }}</text>
             <text v-if="item.summary || item.description" class="classroom-card__summary">{{
               item.summary || item.description
             }}</text>
             <view class="classroom-card__footer">
-              <view class="classroom-card__facts">
-                <text>{{ item.teacherName || "九型老师" }}</text>
-                <text v-if="formatDuration(item.durationSeconds)">{{
-                  formatDuration(item.durationSeconds)
-                }}</text>
-              </view>
+              <text class="classroom-card__teacher">{{ item.teacherName || "九型老师" }}</text>
               <button
                 v-if="activeTab === 'series' && itemAction(item).type === 'purchase'"
                 class="series-buy"
@@ -706,29 +704,26 @@ onUnload(() => {
 .classroom-card--loading { opacity: 0.82; }
 .classroom-card__media { width: 100%; }
 .classroom-card__cover-shell { position: relative; width: 100%; overflow: hidden; background: linear-gradient(135deg, var(--nx-surface-soft), var(--nx-accent-gold)); }
-.classroom-card__cover-shell::after { content: ""; position: absolute; inset: auto 0 0; height: 30%; background: linear-gradient(180deg, rgba(32, 42, 55, 0), rgba(32, 42, 55, 0.42)); pointer-events: none; }
+.classroom-card__cover-shell::after { content: ""; position: absolute; inset: auto 0 0; height: 24%; background: linear-gradient(180deg, rgba(32, 42, 55, 0), rgba(32, 42, 55, 0.24)); pointer-events: none; }
 .classroom-card__cover { display: block; width: 100%; height: 100%; background: var(--nx-border); }
-.classroom-card__cover.classroom-cover--16x9 { height: 320rpx; }
-.classroom-card__cover.classroom-cover--9x16 { height: 420rpx; }
-.classroom-card__cover.classroom-cover--1x1 { height: 340rpx; }
+.classroom-card__cover.classroom-cover--16x9 { height: 300rpx; }
+.classroom-card__cover.classroom-cover--9x16 { height: 360rpx; }
+.classroom-card__cover.classroom-cover--1x1 { height: 320rpx; }
 .classroom-card__cover--fallback { display: flex; align-items: center; justify-content: center; color: var(--nx-brand-900); font-size: 58rpx; font-weight: 900; }
-.classroom-card__cover-overlay { position: absolute; inset: 0; z-index: 1; padding: 16rpx; color: var(--nx-surface); background: linear-gradient(180deg, rgba(32, 42, 55, 0.08), rgba(32, 42, 55, 0.58)); }
+.classroom-card__cover-overlay { position: absolute; inset: 0; z-index: 1; padding: 16rpx; color: var(--nx-surface); background: linear-gradient(180deg, rgba(32, 42, 55, 0.04), rgba(32, 42, 55, 0.34)); }
 .classroom-card__overlay-tags { display: flex; flex-wrap: wrap; gap: 8rpx; }
-.classroom-card__overlay-tags .nx-tag,
 .classroom-card__overlay-tags .classroom-card__kind { color: var(--nx-surface); }
-.classroom-card__kind { padding: 0 12rpx; line-height: 38rpx; background: rgba(255, 255, 255, 0.18); border-radius: 999rpx; }
-.classroom-card__play { position: absolute; top: 50%; left: 50%; display: inline-flex; align-items: center; justify-content: center; width: 64rpx; height: 64rpx; color: var(--nx-brand-900); font-weight: 900; background: rgba(255, 255, 255, 0.94); border-radius: 50%; transform: translate(-50%, -50%); }
-.classroom-card__play-icon { font-size: 24rpx; }
+.classroom-card__kind { padding: 0 12rpx; line-height: 36rpx; background: rgba(32, 42, 55, 0.58); border: 1rpx solid rgba(255, 255, 255, 0.32); border-radius: 999rpx; }
+.classroom-card__play { position: absolute; top: 50%; left: 50%; display: inline-flex; align-items: center; justify-content: center; width: 52rpx; height: 52rpx; color: var(--nx-brand-900); font-weight: 900; background: rgba(255, 255, 255, 0.9); border-radius: 50%; transform: translate(-50%, -50%); }
+.classroom-card__play-icon { font-size: 22rpx; }
 .classroom-card__body { display: flex; flex-direction: column; min-width: 0; width: 100%; padding: 20rpx 22rpx 22rpx; box-sizing: border-box; }
-.classroom-card__meta,
-.classroom-card__footer,
-.classroom-card__facts { display: flex; align-items: center; justify-content: space-between; gap: 12rpx; }
-.classroom-card__meta,
-.classroom-card__facts { color: var(--nx-text-muted); font-size: 22rpx; }
+.classroom-card__eyebrow { display: flex; align-items: center; flex-wrap: wrap; gap: 10rpx; color: var(--nx-text-muted); font-size: 22rpx; font-weight: 800; }
+.classroom-card__access { padding: 4rpx 12rpx; color: var(--nx-brand-900); line-height: 1.4; background: var(--nx-surface-soft); border: 1rpx solid var(--nx-border); border-radius: 999rpx; }
+.classroom-card__duration { color: var(--nx-text-muted); }
+.classroom-card__footer { display: flex; align-items: flex-end; justify-content: space-between; gap: 12rpx; margin-top: 14rpx; padding-top: 14rpx; border-top: 2rpx solid var(--nx-border); }
+.classroom-card__teacher { flex: 1; min-width: 0; color: var(--nx-text-muted); font-size: 22rpx; line-height: 1.45; }
 .classroom-card__title { margin-top: 10rpx; color: var(--nx-text); font-size: 30rpx; font-weight: 900; line-height: 1.4; }
 .classroom-card__summary { margin-top: 6rpx; color: var(--nx-text-muted); font-size: 23rpx; line-height: 1.5; }
-.classroom-card__footer { align-items: flex-end; margin-top: 14rpx; padding-top: 14rpx; border-top: 2rpx solid var(--nx-border); }
-.classroom-card__facts { align-items: flex-start; flex-direction: column; min-width: 0; }
 .classroom-card__action { flex-shrink: 0; min-height: 88rpx; padding: 0 24rpx; color: var(--nx-surface); font-size: 23rpx; font-weight: 900; line-height: 88rpx; background: var(--nx-brand-700); border-radius: 999rpx; }
 .series-buy { flex-shrink: 0; min-height: 88rpx; padding: 0 24rpx; color: var(--nx-brand-900); font-size: 23rpx; font-weight: 900; line-height: 88rpx; background: var(--nx-accent-gold); border-radius: 999rpx; }
 .series-payment { padding: 24rpx; color: var(--nx-text-muted); font-size: 24rpx; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 30rpx; }
@@ -750,7 +745,7 @@ onUnload(() => {
 
 @media (max-width: 380px) {
   .classroom-card__footer { flex-direction: column; align-items: stretch; }
-  .classroom-card__facts { flex-direction: row; align-items: center; }
+  .classroom-card__teacher { width: 100%; }
   .classroom-card__action,
   .series-buy { width: 100%; }
 }

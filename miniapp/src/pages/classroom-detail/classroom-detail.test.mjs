@@ -31,10 +31,11 @@ for (const forbidden of [
 ]) {
   assert.doesNotMatch(source, forbidden, "detail should remove the legacy green palette");
 }
-assert.match(
+assert.match(source, /class="detail-shell__context"[\s\S]*老师课堂/, "detail should retain a compact classroom context");
+assert.doesNotMatch(
   source,
-  /class="detail-shell__header"[\s\S]*老师课堂[\s\S]*课件详情/,
-  "detail should provide a consistent classroom detail header",
+  /detail-shell__title|detail-shell__lead|>课件详情<|统一的学习空间/,
+  "detail should avoid a repeated title-and-description header",
 );
 assert.match(
   source,
@@ -80,30 +81,33 @@ assert.match(
   /class="detail-head__cover-shell"[\s\S]*:class="classroomCoverRatioClass\(content\)"/,
   "detail cover should apply aspect ratio on the same full-width shell as list cards",
 );
-assert.match(
-  source,
-  /class="detail-head__play"/,
-  "detail head should expose a clear media type/play affordance",
-);
-assert.match(
-  source,
-  /class="detail-head__play-icon"[\s\S]*class="detail-head__play-glyph"/,
-  "detail cover should use a concise CSS play glyph",
-);
 assert.doesNotMatch(
   source,
-  /detail-head__play-copy|已准备学习内容|完成访问后开始学习/,
-  "detail cover should not repeat playback copy over cover artwork",
+  /detail-head__play|detail-head__play-icon|detail-head__play-glyph/,
+  "detail cover should avoid a misleading playback control",
 );
 assert.match(
   source,
-  /\.detail-head__play\s*\{[^}]*top:\s*50%[^}]*left:\s*50%[^}]*transform:\s*translate\(-50%,\s*-50%\)/s,
-  "detail play mark should sit in the visual center instead of covering bottom captions",
+  /class="detail-head__pill detail-head__pill--access"/,
+  "detail cover should retain one access badge",
+);
+assert.equal(
+  (source.match(/class="detail-head__pill/g) || []).length,
+  1,
+  "detail cover should render only one badge",
 );
 assert.match(
   source,
-  /\.detail-head__play-icon\s*\{[^}]*width:\s*80rpx[^}]*height:\s*80rpx[^}]*background:\s*rgba\(32,\s*42,\s*55,\s*0\.78\)[^}]*border:\s*2rpx\s+solid\s+rgba\(223,\s*188,\s*127,\s*0\.88\)/s,
-  "detail play mark should use the restrained graphite and champagne treatment",
+  /class="detail-head__meta"[\s\S]*content\.contentType === "audio"/,
+  "detail content type should move into the summary metadata",
+);
+assert.match(source, /classroom-cover--16x9 \{ height: 340rpx; \}/, "wide detail covers should be compact");
+assert.match(source, /classroom-cover--9x16 \{ height: 720rpx; max-height: 64vh; \}/, "portrait detail covers should be capped");
+assert.match(source, /classroom-cover--1x1 \{ height: 560rpx; \}/, "square detail covers should be compact");
+assert.match(
+  source,
+  /\.player-panel__head[^}]*color:\s*var\(--nx-text\)[^}]*background:\s*var\(--nx-surface\)/s,
+  "player heading should use a quiet light surface",
 );
 assert.match(
   source,

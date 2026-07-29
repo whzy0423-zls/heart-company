@@ -522,10 +522,10 @@ onUnload(() => {
 
 <template>
   <view class="classroom-detail ios-page ios-safe-bottom">
-    <view class="detail-shell__header">
-      <text class="detail-shell__eyebrow">老师课堂</text>
-      <text class="detail-shell__title">课件详情</text>
-      <text class="detail-shell__lead">在统一的学习空间中查看视频、音频与课程进度。</text>
+    <view class="detail-shell__context">
+      <text class="detail-shell__context-label">老师课堂</text>
+      <text class="detail-shell__context-separator">·</text>
+      <text>视频 / 音频课件</text>
     </view>
 
     <view v-if="loading" class="detail-state" aria-live="polite">
@@ -562,25 +562,17 @@ onUnload(() => {
             >
             <view class="detail-head__shade" aria-hidden="true" />
             <view class="detail-head__media-meta">
-              <text class="detail-head__pill">{{
-                content.contentType === "audio" ? "音频课件" : "视频课件"
-              }}</text>
               <text class="detail-head__pill detail-head__pill--access">{{
                 classroomAccessLabel(content.effectiveAccess)
               }}</text>
-            </view>
-            <view class="detail-head__play" aria-hidden="true">
-              <view class="detail-head__play-icon">
-                <view class="detail-head__play-glyph" />
-              </view>
             </view>
           </view>
         </view>
         <view class="detail-head__body">
           <view class="content-summary">
             <view class="detail-head__meta">
-              <text>老师课堂</text>
-              <text v-if="content.durationSeconds">{{ formatTime(content.durationSeconds) }}</text>
+              <text>{{ content.contentType === "audio" ? "音频课件" : "视频课件" }}</text>
+              <text v-if="content.durationSeconds">时长 {{ formatTime(content.durationSeconds) }}</text>
             </view>
             <text class="detail-head__title">{{ content.title }}</text>
             <view class="content-summary__teacher">
@@ -779,17 +771,21 @@ onUnload(() => {
     linear-gradient(180deg, var(--nx-surface-soft), var(--nx-page-bg));
   box-sizing: border-box;
 }
-.detail-shell__header { padding: 12rpx 8rpx 10rpx; }
-.detail-shell__eyebrow,
-.detail-shell__title,
-.detail-shell__lead,
+.detail-shell__context {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+  padding: 2rpx 8rpx 4rpx;
+  color: var(--nx-text-muted);
+  font-size: 22rpx;
+  font-weight: 700;
+}
+.detail-shell__context-label { color: var(--nx-brand-700); font-weight: 900; letter-spacing: 2rpx; }
+.detail-shell__context-separator { color: var(--nx-accent-gold); }
 .detail-state__title,
 .detail-state__copy,
 .panel-eyebrow { display: block; }
-.detail-shell__eyebrow,
 .panel-eyebrow { color: var(--nx-brand-700); font-size: 22rpx; font-weight: 900; letter-spacing: 3rpx; }
-.detail-shell__title { margin-top: 10rpx; color: var(--nx-text); font-size: 42rpx; font-weight: 900; line-height: 1.25; }
-.detail-shell__lead { margin-top: 10rpx; color: var(--nx-text-muted); font-size: 24rpx; line-height: 1.6; }
 .detail-state {
   padding: 48rpx 30rpx;
   color: var(--nx-text-muted);
@@ -837,9 +833,9 @@ onUnload(() => {
 }
 .detail-head__media { width: 100%; background: var(--nx-brand-900); }
 .detail-head__cover-shell { position: relative; width: 100%; overflow: hidden; background: linear-gradient(145deg, var(--nx-brand-700), var(--nx-brand-900)); }
-.detail-head__cover-shell.classroom-cover--16x9 { height: 376rpx; }
-.detail-head__cover-shell.classroom-cover--9x16 { height: 920rpx; max-height: 76vh; }
-.detail-head__cover-shell.classroom-cover--1x1 { height: 668rpx; }
+.detail-head__cover-shell.classroom-cover--16x9 { height: 340rpx; }
+.detail-head__cover-shell.classroom-cover--9x16 { height: 720rpx; max-height: 64vh; }
+.detail-head__cover-shell.classroom-cover--1x1 { height: 560rpx; }
 .detail-head__cover { position: absolute; inset: 0; width: 100%; height: 100%; background: var(--nx-brand-700); }
 .detail-head__cover.classroom-cover--16x9,
 .detail-head__cover.classroom-cover--9x16,
@@ -860,7 +856,7 @@ onUnload(() => {
   inset: 0;
   background: linear-gradient(180deg, rgba(32, 42, 55, 0.12) 0%, rgba(32, 42, 55, 0.06) 38%, rgba(32, 42, 55, 0.86) 100%);
 }
-.detail-head__media-meta { position: absolute; top: 24rpx; right: 24rpx; left: 24rpx; display: flex; align-items: center; justify-content: space-between; gap: 16rpx; }
+.detail-head__media-meta { position: absolute; top: 24rpx; right: 24rpx; left: 24rpx; display: flex; align-items: center; justify-content: flex-end; gap: 16rpx; }
 .detail-head__pill {
   padding: 10rpx 18rpx;
   color: var(--nx-surface);
@@ -872,20 +868,6 @@ onUnload(() => {
   border-radius: 999rpx;
 }
 .detail-head__pill--access { color: var(--nx-brand-900); background: rgba(223, 188, 127, 0.94); border-color: rgba(223, 188, 127, 0.7); }
-.detail-head__play { position: absolute; top: 50%; left: 50%; display: flex; align-items: center; justify-content: center; width: 88rpx; height: 88rpx; transform: translate(-50%, -50%); }
-.detail-head__play-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 80rpx;
-  height: 80rpx;
-  background: rgba(32, 42, 55, 0.78);
-  border: 2rpx solid rgba(223, 188, 127, 0.88);
-  border-radius: 50%;
-  box-shadow: 0 12rpx 30rpx rgba(32, 42, 55, 0.34);
-  box-sizing: border-box;
-}
-.detail-head__play-glyph { width: 0; height: 0; margin-left: 6rpx; border-top: 14rpx solid transparent; border-bottom: 14rpx solid transparent; border-left: 21rpx solid var(--nx-accent-gold); }
 .detail-head__body { display: flex; width: 100%; flex-direction: column; padding: 30rpx; box-sizing: border-box; }
 .content-summary { display: flex; flex-direction: column; }
 .detail-head__meta { display: flex; align-items: center; justify-content: space-between; color: var(--nx-brand-700); font-size: 22rpx; font-weight: 900; }
@@ -898,12 +880,12 @@ onUnload(() => {
 .progress-panel,
 .payment-panel { padding: 30rpx; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 30rpx; }
 .player-panel { overflow: hidden; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 32rpx; box-shadow: 0 16rpx 40rpx rgba(32, 42, 55, 0.11); }
-.player-panel__head { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; padding: 28rpx 30rpx; color: var(--nx-surface); background: linear-gradient(135deg, var(--nx-brand-900), var(--nx-brand-700)); }
+.player-panel__head { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; padding: 24rpx 30rpx; color: var(--nx-text); background: var(--nx-surface); border-bottom: 2rpx solid var(--nx-border); }
 .player-panel__eyebrow,
 .player-panel__title { display: block; }
-.player-panel__eyebrow { color: var(--nx-accent-gold); font-size: 21rpx; font-weight: 900; letter-spacing: 2rpx; }
+.player-panel__eyebrow { color: var(--nx-brand-700); font-size: 21rpx; font-weight: 900; letter-spacing: 2rpx; }
 .player-panel__title { margin-top: 6rpx; font-size: 31rpx; font-weight: 900; }
-.player-panel__badge { flex: 0 0 auto; padding: 10rpx 16rpx; color: var(--nx-brand-900); font-size: 21rpx; font-weight: 900; background: var(--nx-accent-gold); border: 2rpx solid rgba(255, 255, 255, 0.3); border-radius: 999rpx; }
+.player-panel__badge { flex: 0 0 auto; padding: 10rpx 16rpx; color: var(--nx-brand-700); font-size: 21rpx; font-weight: 900; background: var(--nx-surface-soft); border: 2rpx solid var(--nx-border); border-radius: 999rpx; }
 .player-panel__body { padding: 24rpx; background: var(--nx-surface-soft); }
 .access-panel__title,
 .access-panel__copy,

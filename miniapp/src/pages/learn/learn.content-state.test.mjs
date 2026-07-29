@@ -96,24 +96,22 @@ assert.match(
 assert.match(
   source,
   /@click="openClassroom\('standalone'\)"/,
-  "learning page classroom hero should open standalone courseware first",
+  "learning page classroom entry should open standalone courseware first",
 );
 assert.match(
   source,
-  /class="classroom-entry__hero"/,
-  "learning page classroom area should begin with a content-platform hero banner",
+  /class="classroom-entry__intro"/,
+  "learning page classroom area should use a compact editorial introduction",
 );
 assert.match(
   source,
-  /class="classroom-entry__hero-cta"/,
-  "learning page classroom hero should expose a primary classroom CTA",
+  /class="classroom-entry__more"[\s\S]*:aria-label="learnCopy\.classroom\.ctaText"/,
+  "learning page classroom section should expose one clear header action",
 );
-const heroOpeningTag = source.match(/<view\s+class="classroom-entry__hero"[^>]*>/)?.[0] || "";
-assert.ok(heroOpeningTag, "learning classroom hero should exist");
 assert.doesNotMatch(
-  heroOpeningTag,
-  /role="button"|@click=|@keydown/,
-  "learning classroom hero should not compete with its dedicated CTA",
+  source,
+  /class="classroom-entry__hero"|class="classroom-entry__hero-cta"|classroom-entry__hero-wave/,
+  "learning classroom section should remove the nested promotional hero and decorative waves",
 );
 const classroomIndex = source.indexOf('class="classroom-entry card ios-card learn-section nx-panel section"');
 const teacherIndex = source.indexOf('class="card ios-card learn-section nx-panel section teacher-section"');
@@ -132,6 +130,11 @@ assert.match(
   /class="classroom-entry__item"[\s\S]*role="button"[\s\S]*@click="openClassroom/,
   "learning classroom preview cards should be tappable entry points",
 );
+assert.doesNotMatch(
+  source,
+  /aria-role="button"/,
+  "learning classroom cards should not emit the invalid aria-role attribute",
+);
 assert.match(
   source,
   /<image[\s\S]*class="classroom-entry__cover"[\s\S]*:class="classroomCoverRatioClass\(item\)"[\s\S]*mode="aspectFill"/,
@@ -149,8 +152,8 @@ assert.match(
 );
 assert.match(
   source,
-  /\.classroom-entry__cover\s*\{[^}]*width:\s*224rpx[^}]*height:\s*126rpx/s,
-  "learning classroom cards should use a stable 224x126 thumbnail window",
+  /\.classroom-entry__cover\s*\{[^}]*width:\s*200rpx[^}]*height:\s*112rpx/s,
+  "learning classroom cards should use a compact stable 200x112 thumbnail window",
 );
 assert.doesNotMatch(
   source,
@@ -159,7 +162,7 @@ assert.doesNotMatch(
 );
 assert.match(
   source,
-  /\.classroom-entry__body\s*\{[^}]*align-self:\s*stretch[^}]*min-height:\s*126rpx/s,
+  /\.classroom-entry__body\s*\{[^}]*align-self:\s*stretch[^}]*min-height:\s*112rpx/s,
   "classroom card content should stretch to the thumbnail height for aligned actions",
 );
 assert.match(
@@ -174,8 +177,13 @@ assert.match(
 );
 assert.match(
   source,
-  /\.classroom-entry__hero-cta\s*\{[^}]*min-height:\s*88rpx/s,
-  "the classroom hero CTA should keep the project's 88rpx minimum touch target",
+  /\.classroom-entry__more\s*\{[^}]*min-height:\s*88rpx/s,
+  "the classroom header action should keep the project's 88rpx minimum touch target",
+);
+assert.match(
+  source,
+  /\.classroom-entry__intro\s*\{[^}]*border-left:\s*6rpx\s+solid\s+var\(--nx-accent-gold\)/s,
+  "the classroom introduction should use one restrained gold editorial accent",
 );
 
 

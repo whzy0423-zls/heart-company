@@ -797,7 +797,6 @@ assert.match(
 );
 for (const selector of [
   ".classroom-entry__more",
-  ".classroom-entry__hero-cta",
   ".retry",
   ".classroom-entry__item",
   ".learn-cta",

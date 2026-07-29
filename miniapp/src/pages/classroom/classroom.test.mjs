@@ -136,9 +136,9 @@ assert.match(
   "continue-learning title should truncate instead of forcing a second heading row",
 );
 for (const [ratio, height] of [
-  ["16x9", "320rpx"],
-  ["9x16", "420rpx"],
-  ["1x1", "340rpx"],
+  ["16x9", "300rpx"],
+  ["9x16", "360rpx"],
+  ["1x1", "320rpx"],
 ]) {
   assert.match(
     source,
@@ -146,14 +146,43 @@ for (const [ratio, height] of [
     `${ratio} covers should use the tightened ${height} height`,
   );
 }
-assert.doesNotMatch(
+for (const [ratio, forbiddenHeights] of [
+  ["16x9", ["320", "376"]],
+  ["9x16", ["420", "472"]],
+  ["1x1", ["340", "360"]],
+]) {
+  assert.doesNotMatch(
+    source,
+    new RegExp(
+      `classroom-cover--${ratio}\\s*\\{[^}]*height:\\s*(?:${forbiddenHeights.join("|")})rpx`,
+    ),
+    `${ratio} covers should not retain oversized legacy heights`,
+  );
+}
+assert.match(
   source,
-  /classroom-cover--(?:16x9|9x16|1x1)\s*\{[^}]*height:\s*(?:376|472|360)rpx/s,
-  "classroom covers should not retain the oversized heights",
+  /\.classroom-card__cover-shell::after\s*\{[^}]*height:\s*24%[^}]*rgba\(\s*32,\s*42,\s*55,\s*0\.24\s*\)/s,
+  "cover bottom scrim should be lighter and shorter than the old full-image shade",
+);
+assert.match(
+  source,
+  /\.classroom-card__cover-overlay\s*\{[^}]*rgba\(\s*32,\s*42,\s*55,\s*0\.34\s*\)/s,
+  "cover overlay should use a lighter dark gradient",
+);
+assert.match(
+  source,
+  /\.classroom-card__play\s*\{[^}]*width:\s*52rpx[^}]*height:\s*52rpx/s,
+  "cover play affordance should be visually lighter than the old large badge",
 );
 const coverOverlay = source.match(/<view class="classroom-card__cover-overlay">[\s\S]*?<\/view>\s*<\/view>\s*<\/view>/)?.[0] || "";
 assert.match(coverOverlay, /class="classroom-card__overlay-tags"/, "cover overlay should keep tags");
+assert.match(coverOverlay, /class="classroom-card__kind"/, "cover overlay should keep a single content-type tag");
 assert.match(coverOverlay, /class="classroom-card__play-icon"/, "cover overlay should keep its glyph");
+assert.doesNotMatch(
+  coverOverlay,
+  /class="nx-tag"/,
+  "cover overlay should not repeat access metadata on top of the cover",
+);
 assert.doesNotMatch(
   coverOverlay,
   /class="classroom-card__play-text"/,
@@ -163,6 +192,26 @@ assert.doesNotMatch(
   source,
   /classroom-card__play-text/,
   "duplicate cover action-label markup and styles should be removed",
+);
+assert.match(
+  source,
+  /class="classroom-card__eyebrow"/,
+  "card body should start with a lightweight permission/duration eyebrow",
+);
+assert.match(
+  source,
+  /class="classroom-card__teacher"/,
+  "card body should keep the teacher line above the only CTA",
+);
+assert.doesNotMatch(
+  source,
+  /class="classroom-card__meta"/,
+  "card body should remove the duplicated access row",
+);
+assert.doesNotMatch(
+  source,
+  /class="classroom-card__facts"/,
+  "card body should remove the duplicated facts row",
 );
 const cardFooter = source.match(/<view class="classroom-card__footer">[\s\S]*?<\/view>\s*<\/view>\s*<\/view>/)?.[0] || "";
 assert.match(cardFooter, /v-if="activeTab === 'series' && itemAction\(item\)\.type === 'purchase'"/, "paid series should retain their purchase action");
