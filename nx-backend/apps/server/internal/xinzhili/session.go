@@ -216,8 +216,8 @@ type activeTurn struct {
 	generationErr     error
 	question          string
 	rawDraft          string
+	hygieneBuffer     answerSentenceBuffer
 	chunker           streamSentenceChunker
-	droppingMeta      bool
 	ttsJobs           chan ttsStreamJob
 	nextTTSSeq        uint32
 }
@@ -512,8 +512,8 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 		s.handleGenerationDone(current, event)
 	case eventGenerationDelta:
 		current.rawDraft += event.answer
-		for _, chunk := range current.chunker.Push(event.answer) {
-			s.queueTTSChunk(current, chunk)
+		for _, sentence := range current.hygieneBuffer.Push(event.answer) {
+			s.queueAnswerSentence(current, sentence)
 		}
 	case eventTTSSegment:
 		err := s.acceptAudioSegment(current, event.segment)
@@ -703,13 +703,16 @@ func (s *session) handleGenerationDone(turn *activeTurn, event sessionEvent) {
 	if rawAnswer != "" && strings.HasPrefix(rawAnswer, turn.rawDraft) && len(rawAnswer) > len(turn.rawDraft) {
 		suffix := rawAnswer[len(turn.rawDraft):]
 		turn.rawDraft += suffix
-		for _, chunk := range turn.chunker.Push(suffix) {
-			s.queueTTSChunk(turn, chunk)
+		for _, sentence := range turn.hygieneBuffer.Push(suffix) {
+			s.queueAnswerSentence(turn, sentence)
 		}
 	}
 	turn.sources = event.sources
 	turn.generationErr = event.err
 	if event.err == nil {
+		for _, sentence := range turn.hygieneBuffer.Flush() {
+			s.queueAnswerSentence(turn, sentence)
+		}
 		for _, chunk := range turn.chunker.Flush() {
 			s.queueTTSChunk(turn, chunk)
 		}
@@ -724,20 +727,20 @@ func (s *session) handleGenerationDone(turn *activeTurn, event sessionEvent) {
 	}
 }
 
+func (s *session) queueAnswerSentence(turn *activeTurn, sentence string) {
+	sentence = strings.TrimSpace(sentence)
+	if sentence == "" || (!isExplicitTechnicalQuestion(turn.question) && isProductMetaSentence(sentence)) {
+		return
+	}
+	for _, chunk := range turn.chunker.Push(sentence) {
+		s.queueTTSChunk(turn, chunk)
+	}
+}
+
 func (s *session) queueTTSChunk(turn *activeTurn, chunk string) {
 	chunk = strings.TrimSpace(chunk)
 	if chunk == "" {
 		return
-	}
-	if !isExplicitTechnicalQuestion(turn.question) {
-		if turn.droppingMeta {
-			turn.droppingMeta = !endsStrongSentence(chunk)
-			return
-		}
-		if isProductMetaSentence(chunk) {
-			turn.droppingMeta = !endsStrongSentence(chunk)
-			return
-		}
 	}
 	turn.draft += chunk
 	turn.ttsJobs <- ttsStreamJob{seq: turn.nextTTSSeq, text: chunk}

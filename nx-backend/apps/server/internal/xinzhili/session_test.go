@@ -251,6 +251,78 @@ func TestConversationPreservesImplementationAnswerForExplicitTechnicalQuestion(t
 	}
 }
 
+func TestConversationFiltersNaturalProductMetaPhrasesWithFormatting(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.generator.answer = ""
+	fixture.generator.deltas = []string{
+		"### 针对当前 aPp 端，需要先统一状态。",
+		"* 对于客户端来说，建议刷新会话。",
+		"> 在后台需要补充接口。",
+		"1. 整体技术实现上应使用基础框架。",
+		"推荐三道菜：番茄炒蛋、青椒肉丝、可乐鸡翅。",
+	}
+	fixture.synth.segments = nil
+	const want = "推荐三道菜：番茄炒蛋、青椒肉丝、可乐鸡翅。"
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-natural-meta-phrases")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "这个页面很好看，推荐几道菜", Stable: true})
+	segment := fixture.sink.waitAudio(t)
+	fixture.sink.waitControl(t, EventAssistantDone)
+	if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-natural-meta-phrases", SegmentSeq: segment.Seq}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.store.waitCompleted(t)
+	fixture.store.waitDelivered(t, want)
+
+	assertSanitizedVoicePersistence(t, fixture, []AudioSegment{segment}, want)
+}
+
+func TestConversationBuffersLongMetaSentenceAndKeepsFollowingAnswer(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.generator.answer = ""
+	longMeta := []rune("App 端需要" + strings.Repeat("统一内部状态和接口逻辑", 10))
+	fixture.generator.deltas = []string{
+		string(longMeta[:len(longMeta)/2]),
+		string(longMeta[len(longMeta)/2:]) + "。有效回答：番茄炒蛋。",
+	}
+	fixture.synth.segments = nil
+	const want = "有效回答：番茄炒蛋。"
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-long-meta-sentence")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "推荐一道菜", Stable: true})
+	segment := fixture.sink.waitAudio(t)
+	fixture.sink.waitControl(t, EventAssistantDone)
+	if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-long-meta-sentence", SegmentSeq: segment.Seq}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.store.waitCompleted(t)
+	fixture.store.waitDelivered(t, want)
+
+	assertSanitizedVoicePersistence(t, fixture, []AudioSegment{segment}, want)
+}
+
+func assertSanitizedVoicePersistence(t *testing.T, fixture *sessionFixture, segments []AudioSegment, want string) {
+	t.Helper()
+	if got := strings.Join(fixture.synth.synthesizedTexts(), ""); got != want {
+		t.Fatalf("TTS text=%q want=%q", got, want)
+	}
+	var delivered strings.Builder
+	for _, segment := range segments {
+		delivered.WriteString(segment.DeliveryText())
+	}
+	if got := delivered.String(); got != want {
+		t.Fatalf("delivery text=%q want=%q", got, want)
+	}
+	_, assistants, completed := fixture.store.contents()
+	if len(assistants) != 1 || assistants[0] != want || completed != want {
+		t.Fatalf("assistant drafts=%q completed=%q want=%q", assistants, completed, want)
+	}
+}
+
 func TestDeliveryRetriesTTSOnceBeforeFirstAudio(t *testing.T) {
 	fixture := newSessionFixture(t)
 	fixture.generator.answer = "先呼吸。"
