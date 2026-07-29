@@ -17,7 +17,7 @@ const view = ref(normalizePersonalExpertHome());
 const carousel = ref(normalizeHomeCarousel());
 const carouselPaused = ref(false);
 const failedCarouselImages = new Set();
-const teacherImageFailed = ref(false);
+const teacherPortraitFailed = ref(false);
 
 const siteStale = ref(false);
 const siteRefreshing = ref(false);
@@ -62,7 +62,7 @@ function applyHomeConfig(config) {
     normalizeHomeCarousel(config),
     failedCarouselImages,
   );
-  teacherImageFailed.value = false;
+  teacherPortraitFailed.value = false;
   if (carousel.value.items.length <= 1) carouselPaused.value = false;
 }
 
@@ -108,13 +108,26 @@ function removeCarouselItem(image) {
   if (carousel.value.items.length <= 1) carouselPaused.value = false;
 }
 
-function markTeacherImageError(source) {
+function markTeacherPortraitError(source) {
   const failedImage =
     typeof source === "string"
       ? source
       : source?.currentTarget?.dataset?.image || source?.target?.dataset?.image || "";
-  if (failedImage && failedImage !== view.value.expertHero.image) return;
-  teacherImageFailed.value = true;
+  if (failedImage && failedImage !== view.value.expertHero.portraitImage) return;
+  teacherPortraitFailed.value = true;
+}
+
+function markTeacherImageError(source) {
+  markTeacherPortraitError(source);
+}
+
+function previewTeacherDetail() {
+  const detailImage = view.value.expertHero.detailImage;
+  if (!detailImage) return;
+  uni.previewImage({
+    current: detailImage,
+    urls: [detailImage],
+  });
 }
 
 function courseCoverKey(item) {
@@ -235,13 +248,18 @@ onMounted(() => {
           >进入老师课堂</button>
         </view>
       </view>
-      <view class="expert-hero__portrait">
+      <button
+        class="expert-hero__portrait"
+        aria-label="查看完整导师介绍"
+        hover-class="expert-hero__portrait--pressed"
+        @click="previewTeacherDetail"
+      >
         <image
-          v-if="view.expertHero.image && !teacherImageFailed"
+          v-if="view.expertHero.portraitImage && !teacherPortraitFailed"
           class="expert-hero__image"
-          :key="view.expertHero.image"
-          :src="view.expertHero.image"
-          :data-image="view.expertHero.image"
+          :key="view.expertHero.portraitImage"
+          :src="view.expertHero.portraitImage"
+          :data-image="view.expertHero.portraitImage"
           mode="aspectFill"
           aria-label="导师形象"
           @error="markTeacherImageError"
@@ -249,7 +267,11 @@ onMounted(() => {
         <view v-else class="expert-hero__monogram" aria-label="导师形象占位">
           {{ view.expertHero.monogram || '九' }}
         </view>
-      </view>
+        <view class="expert-hero__portrait-overlay" aria-hidden="true">
+          <text class="expert-hero__portrait-label">查看完整导师介绍</text>
+          <text class="expert-hero__portrait-arrow">↗</text>
+        </view>
+      </button>
     </view>
 
     <view v-if="view.proofStats.length" class="proof-stats" aria-label="导师资历数据">
@@ -498,6 +520,7 @@ button::after {
 }
 
 .home-nav__profile--pressed,
+.expert-hero__portrait--pressed,
 .expert-hero__primary--pressed,
 .expert-hero__secondary--pressed,
 .enterprise-service--pressed,
@@ -637,12 +660,17 @@ button::after {
   bottom: 0;
   z-index: 1;
   width: 270rpx;
+  min-height: 88rpx;
   height: 430rpx;
   overflow: hidden;
+  margin: 0;
+  padding: 0;
   border: 2rpx solid var(--nx-home-gold-portrait-border);
   border-bottom: 0;
   border-radius: 150rpx 150rpx 0 0;
   background: var(--nx-home-on-brand-subtle);
+  line-height: normal;
+  transition: opacity 180ms ease-out, transform 180ms ease-out;
 }
 
 .expert-hero__image,
@@ -661,6 +689,37 @@ button::after {
   background:
     linear-gradient(155deg, transparent 30%, var(--nx-home-gold-monogram)),
     var(--nx-brand-700);
+}
+
+.expert-hero__portrait-overlay {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  min-height: 92rpx;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 8rpx;
+  box-sizing: border-box;
+  padding: 34rpx 18rpx 16rpx;
+  border-top: 2rpx solid var(--nx-home-gold-portrait-border);
+  background: linear-gradient(180deg, transparent, var(--nx-brand-900));
+}
+
+.expert-hero__portrait-label {
+  color: var(--nx-surface);
+  font-size: 20rpx;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.expert-hero__portrait-arrow {
+  color: var(--nx-accent-gold);
+  font-size: 22rpx;
+  font-weight: 800;
+  line-height: 1.2;
 }
 
 .proof-stats {

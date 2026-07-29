@@ -74,13 +74,28 @@ assert.match(source, /\/pages\/classroom\/classroom\?tab=standalone/, "view-all 
 assert.match(source, /classroomAccessLabel/, "classroom cards should explain access permission");
 assert.match(source, /formatDuration\(item\.durationSeconds\)/, "classroom cards should expose useful duration metadata");
 
-assert.match(source, /expertHero\.image/, "expert hero should render the configured teacher image");
+assert.match(source, /expertHero\.portraitImage/, "expert hero should render the configured teacher portrait");
 assert.match(
   template,
-  /<image\b(?=[^>]*class="expert-hero__image")(?=[^>]*:src="view\.expertHero\.image")(?=[^>]*:key="view\.expertHero\.image")(?=[^>]*:data-image="view\.expertHero\.image")[^>]*>/,
-  "teacher portrait should bind its source, render key, and error dataset to the current image identity",
+  /<image\b(?=[^>]*class="expert-hero__image")(?=[^>]*:src="view\.expertHero\.portraitImage")(?=[^>]*:key="view\.expertHero\.portraitImage")(?=[^>]*:data-image="view\.expertHero\.portraitImage")[^>]*>/,
+  "teacher portrait should bind its source, render key, and error dataset to the current portrait identity",
 );
-assert.match(source, /teacherImageFailed/, "teacher image should own an isolated failure state");
+assert.match(source, /teacherPortraitFailed/, "teacher portrait should own an isolated failure state");
+assert.match(
+  template,
+  /<button\b(?=[^>]*class="expert-hero__portrait")(?=[^>]*hover-class="expert-hero__portrait--pressed")(?=[^>]*@click="previewTeacherDetail")[^>]*>[\s\S]*?查看完整导师介绍[\s\S]*?<\/button>/,
+  "teacher portrait should be one native preview button with a readable detail prompt",
+);
+assert.match(
+  template,
+  /v-else class="expert-hero__monogram"[^>]*>[\s\S]*?view\.expertHero\.monogram \|\| '九'/,
+  "failed teacher portraits should preserve the configured Nine-Type monogram fallback",
+);
+assert.match(
+  source,
+  /function previewTeacherDetail\(\)\s*\{\s*const detailImage = view\.value\.expertHero\.detailImage;\s*if \(!detailImage\) return;\s*uni\.previewImage\(\{\s*current: detailImage,\s*urls: \[detailImage\],?\s*\}\);\s*\}/,
+  "teacher detail preview should open only the configured full poster when it exists",
+);
 assert.match(source, /failedCarouselImages/, "carousel images should keep an isolated failed-image Set");
 assert.match(source, /courseCoverErrors/, "course covers should keep isolated fallback state");
 assert.match(template, /class="classroom-card__cover-fallback"/, "missing classroom covers should use a CSS-only placeholder");
@@ -105,6 +120,7 @@ for (const tag of template.match(/<[^>]+@click[^>]*>/g) || []) {
 }
 for (const className of [
   "home-nav__profile",
+  "expert-hero__portrait",
   "expert-hero__primary",
   "expert-hero__secondary",
   "enterprise-service",
@@ -139,7 +155,15 @@ const refreshSiteConfig = () => {
 }
 const normalizePersonalExpertHome = (cfg = {}) => ({
   brand: { enabled: true, name: cfg.name || '默认品牌', tagline: '默认标语' },
-  expertHero: { eyebrow: '导师', title: cfg.teacher || '默认老师', lead: '默认介绍', image: cfg.teacherImage || '', monogram: '九' },
+  expertHero: {
+    eyebrow: '导师',
+    title: cfg.teacher || '默认老师',
+    lead: '默认介绍',
+    portraitImage: cfg.teacherPortraitImage || '',
+    detailImage: cfg.teacherDetailImage || '',
+    image: cfg.teacherDetailImage || '',
+    monogram: '九',
+  },
   proofStats: cfg.stats || [],
   enterprise: { eyebrow: '企业', title: '团队服务', lead: '服务介绍', buttonText: '预约沟通', modules: [], services: cfg.services || [{ title: '团队共学', description: '共学介绍' }] },
   game: { enabled: cfg.gameEnabled !== false, eyebrow: '探索', title: '人格测试', lead: '了解自己', buttonText: '开始测试' },
@@ -170,7 +194,7 @@ const classroomAccessLabel = (value) => value === 'paid' ? '付费课件' : '免
 
 await writeFile(
   modulePath,
-  `${prelude}\n${executableScript}\nexport { view, carousel, secondaryEntries, siteStale, siteRefreshing, teacherImageFailed, failedCarouselImages, classroomItems, classroomLoading, classroomError, classroomState, courseCoverErrors, initializeHome, retrySiteConfig, loadClassroomPreview, retryClassroomPreview, markTeacherImageError, removeCarouselItem, markCourseCoverError, bookEnterprise, bookEnterpriseService, startTest, activateSecondaryEntry, openClassroomItem, goClassroom, formatDuration }\n`,
+  `${prelude}\n${executableScript}\nexport { view, carousel, secondaryEntries, siteStale, siteRefreshing, teacherPortraitFailed, failedCarouselImages, classroomItems, classroomLoading, classroomError, classroomState, courseCoverErrors, initializeHome, retrySiteConfig, loadClassroomPreview, retryClassroomPreview, markTeacherPortraitError, previewTeacherDetail, removeCarouselItem, markCourseCoverError, bookEnterprise, bookEnterpriseService, startTest, activateSecondaryEntry, openClassroomItem, goClassroom, formatDuration }\n`,
 );
 
 let caseId = 0;
@@ -191,6 +215,7 @@ async function createHarness() {
     classroomCalls: [],
     intents: [],
     navigation: [],
+    previews: [],
     refreshSiteConfig: async () => ({}),
     listStandalone: async () => ({ items: [] }),
   };
@@ -198,6 +223,7 @@ async function createHarness() {
   globalThis.uni = {
     navigateTo(options) { state.navigation.push({ method: "navigateTo", ...options }); },
     switchTab(options) { state.navigation.push({ method: "switchTab", ...options }); },
+    previewImage(options) { state.previews.push(options); },
   };
   caseId += 1;
   const page = await import(`${pathToFileURL(modulePath).href}?case=${caseId}`);
@@ -207,7 +233,13 @@ async function createHarness() {
 try {
   {
     const { page, state } = await createHarness();
-    state.cached = { name: "缓存品牌", teacher: "缓存老师", teacherImage: "/teacher-a.png", images: ["/bad.png", "/good.png"] };
+    state.cached = {
+      name: "缓存品牌",
+      teacher: "缓存老师",
+      teacherPortraitImage: "/teacher-a.png",
+      teacherDetailImage: "/teacher-detail-a.png",
+      images: ["/bad.png", "/good.png"],
+    };
     state.refreshSiteConfig = async () => { throw new Error("刷新失败"); };
     await page.initializeHome();
     assert.equal(page.view.value.brand.name, "缓存品牌", "cached expert content should render immediately and survive refresh failure");
@@ -223,7 +255,11 @@ try {
     const second = page.retrySiteConfig();
     assert.equal(page.siteRefreshing.value, true, "site retry should expose busy state");
     assert.equal(state.siteCalls, 1, "busy site retry should suppress duplicate refresh calls");
-    pending.resolve({ teacher: "新老师", teacherImage: "/teacher-b.png" });
+    pending.resolve({
+      teacher: "新老师",
+      teacherPortraitImage: "/teacher-b.png",
+      teacherDetailImage: "/teacher-detail-b.png",
+    });
     await Promise.all([first, second]);
     assert.equal(page.siteRefreshing.value, false);
     assert.equal(page.siteStale.value, false);
@@ -231,22 +267,43 @@ try {
 
   {
     const { page, state } = await createHarness();
-    state.cached = { teacher: "缓存老师", teacherImage: "/teacher-a.png", images: ["/bad.png", "/good.png"] };
-    state.refreshSiteConfig = async () => ({ teacher: "刷新老师", teacherImage: "/teacher-b.png", images: ["/bad.png", "/good.png"] });
-    page.markTeacherImageError();
+    state.cached = {
+      teacher: "缓存老师",
+      teacherPortraitImage: "/teacher-a.png",
+      teacherDetailImage: "/teacher-detail-a.png",
+      images: ["/bad.png", "/good.png"],
+    };
+    state.refreshSiteConfig = async () => ({
+      teacher: "刷新老师",
+      teacherPortraitImage: "/teacher-b.png",
+      teacherDetailImage: "/teacher-detail-b.png",
+      images: ["/bad.png", "/good.png"],
+    });
+    page.markTeacherPortraitError();
     page.markCourseCoverError("course:1");
     page.removeCarouselItem("/bad.png");
-    assert.equal(page.teacherImageFailed.value, true);
+    assert.equal(page.teacherPortraitFailed.value, true);
     assert.equal(page.courseCoverErrors.value["course:1"], true);
     assert.deepEqual(page.carousel.value.items, [], "carousel failure should not depend on teacher or course cover state before config is applied");
     await page.initializeHome();
-    assert.equal(page.teacherImageFailed.value, false, "fresh config should reset teacher image failure");
+    assert.equal(page.teacherPortraitFailed.value, false, "fresh config should reset teacher portrait failure");
     assert.deepEqual(page.carousel.value.items.map((item) => item.image), ["/good.png"], "failed carousel URLs should stay filtered after refresh");
     assert.equal(page.courseCoverErrors.value["course:1"], true, "site refresh should not mutate independent course cover failures");
-    page.markTeacherImageError({ currentTarget: { dataset: { image: "/teacher-a.png" } } });
-    assert.equal(page.teacherImageFailed.value, false, "a late error from the replaced teacher image must not hide the refreshed image");
-    page.markTeacherImageError({ currentTarget: { dataset: { image: "/teacher-b.png" } } });
-    assert.equal(page.teacherImageFailed.value, true, "the current teacher image should still fall back after its own error");
+    page.markTeacherPortraitError({ currentTarget: { dataset: { image: "/teacher-a.png" } } });
+    assert.equal(page.teacherPortraitFailed.value, false, "a late error from the replaced teacher portrait must not hide the refreshed portrait");
+    page.markTeacherPortraitError({ currentTarget: { dataset: { image: "/teacher-b.png" } } });
+    assert.equal(page.teacherPortraitFailed.value, true, "the current teacher portrait should still fall back after its own error");
+    page.previewTeacherDetail();
+    assert.deepEqual(state.previews, [{
+      current: "/teacher-detail-b.png",
+      urls: ["/teacher-detail-b.png"],
+    }], "teacher portrait should preview the full detail poster rather than the compact portrait");
+  }
+
+  {
+    const { page, state } = await createHarness();
+    page.previewTeacherDetail();
+    assert.deepEqual(state.previews, [], "missing teacher detail posters should not start an empty image preview");
   }
 
   {
