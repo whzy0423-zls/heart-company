@@ -224,10 +224,15 @@ function viewBlockForClass(markup, className) {
 const teacherCardTemplate = viewBlockForClass(source, "teacher-card");
 const teacherCardHeader = viewBlockForClass(teacherCardTemplate, "teacher-card__header");
 const teacherCardDetails = viewBlockForClass(teacherCardTemplate, "teacher-card__details");
+const teacherAvatarAction =
+  teacherCardHeader.match(
+    /<button\b(?=[^>]*class="teacher-card__avatar-action")(?=[^>]*v-if="teacher\.avatar && !teacherImageErrors\[teacherMediaKey\(teacher, teacherIndex\)\]")(?=[^>]*:aria-label="`预览\$\{teacher\.name \|\| '老师'\}头像`")(?=[^>]*@click="previewTeacherAvatar\(teacher\.avatar\)")[^>]*>[\s\S]*?<\/button>/,
+  )?.[0] || "";
+assert.ok(teacherAvatarAction, "teacher avatar should be an accessible native preview button");
 assert.match(
-  teacherCardHeader,
-  /class="teacher-media teacher-card__avatar"/,
-  "teacher-card header should contain the avatar image",
+  teacherAvatarAction,
+  /<image\b(?=[^>]*class="teacher-media teacher-card__avatar")(?=[^>]*:src="teacher\.avatar")(?=[^>]*mode="aspectFill")(?=[^>]*@error="markTeacherImageError\(teacherMediaKey\(teacher, teacherIndex\)\)")[^>]*\/>/,
+  "teacher preview button should contain the configured aspect-fill avatar and error fallback hook",
 );
 assert.match(
   teacherCardHeader,
@@ -268,6 +273,11 @@ assert.match(
   source,
   /\.teacher-card__header\s*\{[^}]*flex-direction:\s*row[^}]*\}/s,
   "teacher card header should explicitly keep avatar and identity in a horizontal row",
+);
+assert.match(
+  source,
+  /function\s+previewTeacherAvatar\s*\(source\)[\s\S]*uni\.previewImage\s*\(\s*\{[\s\S]*current:\s*avatar[\s\S]*urls:\s*\[avatar\]/,
+  "teacher avatar preview should call the native image preview with the selected avatar",
 );
 
 
@@ -349,7 +359,7 @@ const normalizeClassroomContent = (value = {}) => ({ ...value, id: String(value.
 
 await writeFile(
   modulePath,
-  `${harnessPrelude}\n${executableScript}\nexport { teachers, coursewareItems, quotes, learnCopy, loading, loadError, refreshError, refreshing, classroomPreview, classroomLoading, classroomWarning, showStoredContent, loadContent, retryContentRefresh, loadClassroomPreview, retryClassroomPreview, classroomPreviewPresentation }\n`,
+  `${harnessPrelude}\n${executableScript}\nexport { teachers, coursewareItems, quotes, learnCopy, loading, loadError, refreshError, refreshing, classroomPreview, classroomLoading, classroomWarning, showStoredContent, loadContent, retryContentRefresh, loadClassroomPreview, retryClassroomPreview, classroomPreviewPresentation, previewTeacherAvatar }\n`,
 );
 
 let moduleCounter = 0;
@@ -385,15 +395,35 @@ async function createHarness() {
     refreshSiteConfig: async () => ({ teachers: [], courses: [], home: { quotes: { items: [] } } }),
     listSeries: async () => ({ items: [] }),
     listStandalone: async () => ({ items: [] }),
+    previews: [],
   };
   globalThis.__learnHarness = state;
-  globalThis.uni = { switchTab() {}, navigateTo() {} };
+  globalThis.uni = {
+    switchTab() {},
+    navigateTo() {},
+    previewImage(options) { state.previews.push(options); },
+  };
   moduleCounter += 1;
   const page = await import(`${pathToFileURL(modulePath).href}?case=${moduleCounter}`);
   return { page, state };
 }
 
 try {
+  {
+    const { page, state } = await createHarness();
+    page.previewTeacherAvatar("  https://cdn.example.com/teacher.jpg  ");
+    assert.deepEqual(
+      state.previews,
+      [{
+        current: "https://cdn.example.com/teacher.jpg",
+        urls: ["https://cdn.example.com/teacher.jpg"],
+      }],
+      "teacher avatar preview should trim and open only the selected image",
+    );
+    page.previewTeacherAvatar("   ");
+    assert.equal(state.previews.length, 1, "blank teacher avatars should not open a preview");
+  }
+
   {
     const { page } = await createHarness();
     for (const [item, expected] of [

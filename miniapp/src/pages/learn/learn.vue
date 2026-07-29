@@ -102,6 +102,15 @@ function markTeacherImageError(key) {
   teacherImageErrors.value = { ...teacherImageErrors.value, [key]: true };
 }
 
+function previewTeacherAvatar(source) {
+  const avatar = String(source || "").trim();
+  if (!avatar) return;
+  uni.previewImage({
+    current: avatar,
+    urls: [avatar],
+  });
+}
+
 function markTypeImageError(id) {
   typeImageErrors.value = { ...typeImageErrors.value, [id]: true };
 }
@@ -331,14 +340,21 @@ function goTest() {
             class="teacher-card"
           >
             <view class="teacher-card__header">
-              <image
+              <button
                 v-if="teacher.avatar && !teacherImageErrors[teacherMediaKey(teacher, teacherIndex)]"
-                class="teacher-media teacher-card__avatar"
-                :src="teacher.avatar"
-                mode="aspectFill"
-                lazy-load
-                @error="markTeacherImageError(teacherMediaKey(teacher, teacherIndex))"
-              />
+                class="teacher-card__avatar-action"
+                :aria-label="`预览${teacher.name || '老师'}头像`"
+                hover-class="teacher-card__avatar-action--pressed"
+                @click="previewTeacherAvatar(teacher.avatar)"
+              >
+                <image
+                  class="teacher-media teacher-card__avatar"
+                  :src="teacher.avatar"
+                  mode="aspectFill"
+                  lazy-load
+                  @error="markTeacherImageError(teacherMediaKey(teacher, teacherIndex))"
+                />
+              </button>
               <view v-else class="teacher-media__fallback" aria-hidden="true">
                 {{ teacher.name ? teacher.name.slice(0, 1) : "师" }}
               </view>
@@ -699,6 +715,21 @@ function goTest() {
   gap: 20rpx;
   width: 100%;
 }
+.teacher-card__avatar-action {
+  display: block;
+  flex-shrink: 0;
+  width: 116rpx;
+  height: 116rpx;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  border: 0;
+  border-radius: 28rpx;
+  line-height: 1;
+}
+.teacher-card__avatar-action::after { border: 0; }
+.teacher-card__avatar-action--pressed { opacity: .82; }
 .teacher-media,
 .teacher-media__fallback {
   flex-shrink: 0;

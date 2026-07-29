@@ -1209,8 +1209,8 @@ assert.match(
 );
 assert.match(
   learnTemplate,
-  /<image\b(?=[^>]*class=["']teacher-media teacher-card__avatar["'])(?=[^>]*v-if=["']teacher\.avatar && !teacherImageErrors\[teacherMediaKey\(teacher, teacherIndex\)\]["'])(?=[^>]*@error=["']markTeacherImageError\(teacherMediaKey\(teacher, teacherIndex\)\)["'])[^>]*\/>/,
-  "teacher avatars should read and write failure state through the same composite key",
+  /<button\b(?=[^>]*class=["']teacher-card__avatar-action["'])(?=[^>]*v-if=["']teacher\.avatar && !teacherImageErrors\[teacherMediaKey\(teacher, teacherIndex\)\]["'])(?=[^>]*@click=["']previewTeacherAvatar\(teacher\.avatar\)["'])[^>]*>[\s\S]*?<image\b(?=[^>]*class=["']teacher-media teacher-card__avatar["'])(?=[^>]*@error=["']markTeacherImageError\(teacherMediaKey\(teacher, teacherIndex\)\)["'])[^>]*\/>[\s\S]*?<\/button>/,
+  "teacher avatars should use one native preview button while retaining keyed image fallback state",
 );
 function viewBlockForClass(markup, className) {
   const classIndex = markup.indexOf(`class="${className}"`);
@@ -1237,8 +1237,8 @@ const teacherCardHeader = viewBlockForClass(teacherCardTemplate, "teacher-card__
 const teacherCardDetails = viewBlockForClass(teacherCardTemplate, "teacher-card__details");
 assert.match(
   teacherCardHeader,
-  /class=["']teacher-media teacher-card__avatar["']/,
-  "teacher-card header should contain the avatar image",
+  /<button\b(?=[^>]*class=["']teacher-card__avatar-action["'])(?=[^>]*:aria-label=["']`预览\$\{teacher\.name \|\| '老师'\}头像`["'])(?=[^>]*hover-class=["']teacher-card__avatar-action--pressed["'])[^>]*>/,
+  "teacher-card header should expose an accessible avatar preview action",
 );
 assert.match(
   teacherCardHeader,
@@ -1270,9 +1270,15 @@ for (const [selector, declaration, message] of [
   [".teacher-card__header", /display:\s*flex\s*;/, "teacher identity should remain a compact row"],
   [".teacher-card__header", /flex-direction:\s*row\s*;/, "teacher identity should explicitly remain horizontal"],
   [".teacher-card__details", /width:\s*100%\s*;/, "teacher details should span the card width"],
+  [".teacher-card__avatar-action", /padding:\s*0\s*;/, "teacher avatar preview should reset native button spacing"],
 ]) {
   assert.match(cssDeclarationsForSelector(learnStyle, selector), declaration, message);
 }
+assert.match(
+  learnPage,
+  /function\s+previewTeacherAvatar\s*\(source\)[\s\S]*uni\.previewImage\s*\(\s*\{[\s\S]*current:\s*avatar[\s\S]*urls:\s*\[avatar\]/,
+  "teacher avatar preview should open only the selected configured image",
+);
 assert.match(
   learnTemplate,
   /<view\s+v-else\s+class=["']courseware-list["']>[\s\S]*<view\b(?=[^>]*v-for=["']\(c, i\) in coursewareItems["'])(?=[^>]*:key=["']`\$\{c\.title \|\| ''\}:\$\{i\}`["'])(?![^>]*@click)[^>]*>/,
