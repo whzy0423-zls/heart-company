@@ -52,6 +52,11 @@ assert.match(script, /classroomContentRoute/, 'result page should share classroo
 assert.match(script, /setBookingIntent\(\{\s*kind:\s*['"]enterprise['"],\s*intentText:\s*['"]企业九型工作坊['"]\s*\}\)/, 'result enterprise CTA should store an enterprise booking intent')
 assert.match(script, /function\s+resultShareImage\s*\(type\)/, 'result sharing should resolve a stable local cover')
 assert.doesNotMatch(script, /imageUrl:\s*posterUrl\.value\s*\|\|/, 'native sharing should not reuse a portrait temp poster or tiny avatar')
+assert.match(
+  script,
+  /createResultPoster\(\{[\s\S]*?runtime:\s*uni[\s\S]*?\}\)/,
+  'result poster generation should inject the uni runtime explicitly into the utility module',
+)
 assert.match(template, /class="result-recommendations/, 'result page should render a classroom recommendation panel')
 assert.match(template, /继续浏览老师课堂/, 'result page should keep a classroom entrance')
 assert.match(template, /企业九型工作坊/, 'result page should expose enterprise workshop CTA copy')

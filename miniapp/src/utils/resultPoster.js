@@ -64,17 +64,30 @@ function exportCanvas(runtime, canvas, instance) {
   });
 }
 
+function resolvePosterRuntime(runtime) {
+  const resolvedRuntime = runtime || globalThis.uni;
+  if (
+    !resolvedRuntime ||
+    typeof resolvedRuntime.createSelectorQuery !== "function" ||
+    typeof resolvedRuntime.canvasToTempFilePath !== "function"
+  ) {
+    throw new Error("海报运行环境不可用");
+  }
+  return resolvedRuntime;
+}
+
 export async function createResultPoster({
   instance,
   result,
   info,
   summary,
   title,
-  runtime = uni,
+  runtime,
 }) {
-  const canvas = await findPosterCanvas(runtime, instance);
+  const activeRuntime = resolvePosterRuntime(runtime);
+  const canvas = await findPosterCanvas(activeRuntime, instance);
   const ctx = canvas.getContext("2d");
-  const dpr = runtime.getSystemInfoSync?.().pixelRatio || 2;
+  const dpr = activeRuntime.getSystemInfoSync?.().pixelRatio || 2;
   canvas.width = POSTER_WIDTH * dpr;
   canvas.height = POSTER_HEIGHT * dpr;
   ctx.scale(dpr, dpr);
@@ -127,5 +140,5 @@ export async function createResultPoster({
   ctx.font = "12px sans-serif";
   ctx.fillText("微信搜索「九型芯之力」小程序", POSTER_WIDTH / 2, POSTER_HEIGHT - 24);
 
-  return exportCanvas(runtime, canvas, instance);
+  return exportCanvas(activeRuntime, canvas, instance);
 }

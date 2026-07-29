@@ -253,6 +253,7 @@ async function makePoster() {
       info: info.value,
       summary: r.value.summary,
       title: r.value.title,
+      runtime: uni,
     })
   } catch (e) {
     posterError.value = userErrorMessage(e, '海报生成失败，请重试')

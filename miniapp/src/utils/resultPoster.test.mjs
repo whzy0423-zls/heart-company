@@ -5,7 +5,13 @@ import { join } from "node:path";
 
 const dir = await mkdtemp(join(tmpdir(), "nx-miniapp-result-poster-"));
 const modulePath = join(dir, "resultPoster.mjs");
-await writeFile(modulePath, await readFile(new URL("./resultPoster.js", import.meta.url), "utf8"));
+const moduleSource = await readFile(new URL("./resultPoster.js", import.meta.url), "utf8");
+assert.doesNotMatch(
+  moduleSource,
+  /runtime\s*=\s*uni/,
+  "poster utility should not retain an unbound uni default parameter after WeChat compilation",
+);
+await writeFile(modulePath, moduleSource);
 
 const { createResultPoster, wrapCanvasText } = await import(`file://${modulePath}`);
 
@@ -87,6 +93,23 @@ const poster = await createResultPoster({
 });
 assert.equal(poster, "/tmp/poster.png", "poster generation should resolve the exported temp path");
 
+const previousUni = globalThis.uni;
+delete globalThis.uni;
+await assert.rejects(
+  () =>
+    createResultPoster({
+      instance: {},
+      result: { type: 4 },
+      info: { color: "blue", en: "", keywords: "" },
+      summary: "",
+      title: "",
+    }),
+  /海报运行环境不可用/,
+  "missing poster runtime should reject with a stable message instead of leaking a uni ReferenceError",
+);
+if (previousUni === undefined) delete globalThis.uni;
+else globalThis.uni = previousUni;
+
 for (const [name, canvasToTempFilePath, message] of [
   [
     "export callback failure",
@@ -161,6 +184,7 @@ await assert.rejects(
       summary: "",
       title: "",
       runtime: {
+        canvasToTempFilePath() {},
         createSelectorQuery() {
           return {
             select() {
