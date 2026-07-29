@@ -29,3 +29,14 @@ func TestAppReleaseDeploymentConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestClassroomProductionImageIncludesMediaProbeTools(t *testing.T) {
+	raw, err := os.ReadFile("../../Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerfile := string(raw)
+	if !strings.Contains(dockerfile, "apk add --no-cache ca-certificates tzdata ffmpeg") {
+		t.Fatal("production server image must install the ffmpeg package for ffmpeg and ffprobe")
+	}
+}
