@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the homepage split text/portrait hero with a full-width teacher portrait card that keeps only compact identity and conversion actions.
+**Goal:** Replace the homepage cropped full-width hero with a centered portrait-format card that shows the complete teacher image within the first screen.
 
-**Architecture:** Keep the existing `expertHero` view-model and preview handler unchanged. Refactor only the homepage template and scoped styles so the native portrait button becomes the full hero background, the long `lead` copy is not rendered, and the classroom/detail actions remain discoverable in a bottom gradient overlay.
+**Architecture:** Keep the existing `expertHero` view-model and preview handler unchanged. Refactor only the homepage template and scoped styles so the portrait uses `aspectFit` inside an approximately `600 × 1040rpx` centered card, all large identity/lead overlay copy is removed, and the classroom/detail actions remain discoverable in a thin bottom action layer.
 
 **Tech Stack:** uni-app, Vue 3, WeChat mini-program native buttons/images, Node source-contract tests, scoped CSS/WXSS compatibility pipeline.
 
@@ -12,7 +12,7 @@
 
 ## Chunk 1: Full-bleed hero contract and implementation
 
-### Task 1: Replace the split hero with a full-bleed portrait card
+### Task 1: Show the complete teacher portrait in a vertical first-screen card
 
 **Files:**
 - Modify: `src/pages/index/index.test.mjs`
@@ -22,11 +22,11 @@
 
 Assert that:
 
-- `.expert-hero` contains the native portrait preview button as its full visual surface.
-- The former `.expert-hero__copy` and `view.expertHero.lead` are absent from the hero template.
-- The bottom overlay still renders `view.expertHero.eyebrow`, `view.expertHero.title`, an “进入老师课堂” action, and the “查看完整导师介绍” affordance.
-- The portrait still binds `portraitImage` identity and the preview handler still uses `detailImage`.
-- The full-bleed card has a stable height, `aspectFill`, gold border, deep-blue gradient overlay, narrow-screen rules, and native 88rpx touch targets.
+- `.expert-hero` is a centered portrait-format card near `600 × 1040rpx` that fits within a common phone first screen after the home header.
+- The former `.expert-hero__copy`, `view.expertHero.lead`, `view.expertHero.eyebrow`, and `view.expertHero.title` are absent from the hero template.
+- The portrait binds `portraitImage` identity with `mode="aspectFit"` so the complete image remains visible.
+- The preview handler still uses `detailImage`; “进入老师课堂” remains a separate native button.
+- The thin bottom action layer keeps gold/navy styling, narrow-screen rules, and native 88rpx touch targets without covering the teacher face/body.
 
 - [ ] **Step 2: Run the focused test and confirm RED.**
 
@@ -36,15 +36,15 @@ Run:
 node src/pages/index/index.test.mjs
 ```
 
-Expected: FAIL because the current hero still renders `.expert-hero__copy` and uses a narrow portrait.
+Expected: FAIL because the current hero uses `aspectFill`, a wide 600rpx card, and large identity text inside the overlay.
 
 - [ ] **Step 3: Implement the minimal template refactor.**
 
-Use one full-width `expert-hero__portrait` button for image/detail preview. Move compact identity into its bottom overlay. Keep “进入老师课堂” as a separate native button positioned in the overlay without nesting it inside the preview button; use sibling overlay/action structure or a wrapper so the template has no nested interactive controls.
+Keep the preview button and classroom button as sibling native buttons. Remove the eyebrow/title overlay, change the image to `aspectFit`, and keep only a compact “查看完整导师介绍” affordance plus the classroom action at the bottom.
 
 - [ ] **Step 4: Implement the scoped styles.**
 
-Make the portrait fill the card (`width: 100%`, approximately `600rpx` high), preserve rounded corners/gold border, use `aspectFill`, and add a deep-blue bottom gradient for readable identity/actions. Remove obsolete split-layout rules and keep the ≤380px layout usable.
+Center the card at approximately `600rpx` wide and `1040rpx` high (bounded by `max-width: 100%`), preserve rounded corners/gold border, use `aspectFit`, and keep a thin deep-blue bottom action gradient. On ≤380px screens retain the complete image and keep both actions clear without exceeding the first screen.
 
 - [ ] **Step 5: Run focused and compatibility tests.**
 
