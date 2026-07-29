@@ -251,7 +251,7 @@ for (const file of [
 
 const indexPage = readFileSync("src/pages/index/index.vue", "utf8");
 const homeTemplate = stripMarkupAndCssComments(
-  indexPage.match(/<template>([\s\S]*?)<\/template>/)?.[1] || "",
+  topLevelVueSection(indexPage, "template") || "",
 );
 const homeStyle = vueSection(indexPage, "style") || "";
 
@@ -477,9 +477,14 @@ const pageVueTemplates = collectVueFiles("src/pages").map((file) => {
   const source = readFileSync(file, "utf8");
   return {
     file,
-    template: stripMarkupAndCssComments(vueSection(source, "template") || ""),
+    template: stripMarkupAndCssComments(topLevelVueSection(source, "template") || ""),
   };
 });
+assert.match(
+  pageVueTemplates.find(({ file }) => file.endsWith("/result/result.vue"))?.template || "",
+  /@click=["']unlockReport["']/,
+  "global page scans should reach controls after internal template branches",
+);
 
 for (const { file, template } of pageVueTemplates) {
   const buttons = openingTagsFor(template, "button");
@@ -878,7 +883,67 @@ assert.doesNotMatch(
 const testPage = readFileSync("src/pages/test/test.vue", "utf8");
 
 function vueSection(source, tagName) {
+  if (tagName === "template") return topLevelVueSection(source, tagName);
   return source.match(new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`))?.[1];
+}
+
+function quoteAwareTagEnd(source, startIndex) {
+  let quote = null;
+  for (let index = startIndex; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote && character === "\\") {
+      index += 1;
+      continue;
+    }
+    if ((character === '"' || character === "'") && (!quote || quote === character)) {
+      quote = quote ? null : character;
+      continue;
+    }
+    if (character === ">" && !quote) return index;
+  }
+  return -1;
+}
+
+function topLevelVueSection(source, tagName) {
+  const escapedTagName = tagName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const opening = new RegExp(`^[ \\t]*<${escapedTagName}\\b`, "im").exec(source);
+  if (!opening) return undefined;
+  const openingEnd = quoteAwareTagEnd(source, opening.index);
+  if (openingEnd < 0) return undefined;
+
+  const openingPattern = new RegExp(`^<${escapedTagName}\\b`, "i");
+  const closingPattern = new RegExp(`^<\\/${escapedTagName}\\s*>`, "i");
+  let depth = 1;
+  let cursor = openingEnd + 1;
+  while (cursor < source.length) {
+    if (source.startsWith("<!--", cursor)) {
+      const commentEnd = source.indexOf("-->", cursor + 4);
+      if (commentEnd < 0) return undefined;
+      cursor = commentEnd + 3;
+      continue;
+    }
+    if (source[cursor] !== "<") {
+      cursor += 1;
+      continue;
+    }
+    const remainder = source.slice(cursor);
+    const closing = closingPattern.exec(remainder);
+    if (closing) {
+      depth -= 1;
+      if (depth === 0) return source.slice(openingEnd + 1, cursor);
+      cursor += closing[0].length;
+      continue;
+    }
+    if (openingPattern.test(remainder)) {
+      const nestedEnd = quoteAwareTagEnd(source, cursor);
+      if (nestedEnd < 0) return undefined;
+      if (!/\/\s*>$/.test(source.slice(cursor, nestedEnd + 1))) depth += 1;
+      cursor = nestedEnd + 1;
+      continue;
+    }
+    cursor += 1;
+  }
+  return undefined;
 }
 
 function stripMarkupAndCssComments(source) {
@@ -892,16 +957,8 @@ function openingTagsFor(source, tagName) {
   const tags = [];
   const opening = new RegExp(`<${tagName}\\b`, "g");
   for (const match of source.matchAll(opening)) {
-    let quote = null;
-    for (let index = match.index; index < source.length; index += 1) {
-      const character = source[index];
-      if ((character === '"' || character === "'") && (!quote || quote === character)) {
-        quote = quote ? null : character;
-      }
-      if (character !== ">" || quote) continue;
-      tags.push(source.slice(match.index, index + 1));
-      break;
-    }
+    const end = quoteAwareTagEnd(source, match.index);
+    if (end >= 0) tags.push(source.slice(match.index, end + 1));
   }
   return tags;
 }
@@ -910,6 +967,47 @@ function tagAttribute(tag, attribute) {
   const escapedAttribute = attribute.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return tag.match(new RegExp(`\\s${escapedAttribute}=(["'])(.*?)\\1`))?.[2];
 }
+
+const nestedTemplateFixture = `
+<script setup>
+const ready = true;
+</script>
+<template data-condition="score > 0">
+  <!-- <button class="commented" :loading="ignored">不应计入</button> -->
+  <template v-if="ready">
+    <button class="inside" :loading="insideBusy" :disabled="insideBusy">内部按钮</button>
+  </template>
+  <button
+    class="after"
+    data-condition="score > 0"
+    :loading="afterBusy"
+    :disabled="afterBusy"
+  >内部 template 后的按钮</button>
+</template>
+`;
+const nestedTemplateSource = stripMarkupAndCssComments(
+  topLevelVueSection(nestedTemplateFixture, "template") || "",
+);
+const nestedTemplateButtons = openingTagsFor(nestedTemplateSource, "button");
+assert.equal(
+  nestedTemplateButtons.length,
+  2,
+  "top-level SFC template extraction should include nested-template content and ignore comments",
+);
+assert.ok(
+  nestedTemplateButtons.some((button) => tagAttribute(button, "class") === "after"),
+  "buttons after an internal template block should remain visible to global scans",
+);
+assert.match(
+  nestedTemplateButtons.find((button) => tagAttribute(button, "class") === "after") || "",
+  /data-condition=["']score > 0["']/,
+  "quote-aware tag scanning should preserve greater-than signs inside attributes",
+);
+assert.doesNotMatch(
+  nestedTemplateSource,
+  /class=["']commented["']/,
+  "commented buttons should not participate in global scans",
+);
 
 function pageStyleDeclarationBlocks(source, selector) {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
