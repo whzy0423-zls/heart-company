@@ -279,6 +279,55 @@ func TestConversationFiltersNaturalProductMetaPhrasesWithFormatting(t *testing.T
 	assertSanitizedVoicePersistence(t, fixture, []AudioSegment{segment}, want)
 }
 
+func TestConversationFiltersProductMetaBySentenceFeaturesInsteadOfPrefix(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.generator.answer = ""
+	fixture.generator.deltas = []string{
+		"建议从 App 端处理状态。",
+		"对于 App 端而言，需要刷新页面。",
+		"建议通过后台接口处理。",
+		"这部分在客户端完成。",
+		"推荐三道菜：番茄炒蛋、青椒肉丝、可乐鸡翅。",
+	}
+	fixture.synth.segments = nil
+	const want = "推荐三道菜：番茄炒蛋、青椒肉丝、可乐鸡翅。"
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-feature-meta-phrases")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "推荐几道菜", Stable: true})
+	segment := fixture.sink.waitAudio(t)
+	fixture.sink.waitControl(t, EventAssistantDone)
+	if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-feature-meta-phrases", SegmentSeq: segment.Seq}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.store.waitCompleted(t)
+	fixture.store.waitDelivered(t, want)
+
+	assertSanitizedVoicePersistence(t, fixture, []AudioSegment{segment}, want)
+}
+
+func TestConversationPreservesMetaLikeAnswerForEnglishTechnicalQuestion(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.generator.answer = "后台接口需要配置鉴权。"
+	fixture.synth.segments = nil
+	const want = "后台接口需要配置鉴权。"
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-english-technical-question")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "How to configure this API?", Stable: true})
+	segment := fixture.sink.waitAudio(t)
+	fixture.sink.waitControl(t, EventAssistantDone)
+	if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-english-technical-question", SegmentSeq: segment.Seq}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.store.waitCompleted(t)
+	fixture.store.waitDelivered(t, want)
+
+	assertSanitizedVoicePersistence(t, fixture, []AudioSegment{segment}, want)
+}
+
 func TestConversationBuffersLongMetaSentenceAndKeepsFollowingAnswer(t *testing.T) {
 	fixture := newSessionFixture(t)
 	fixture.generator.answer = ""

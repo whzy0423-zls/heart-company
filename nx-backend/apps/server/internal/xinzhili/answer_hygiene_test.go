@@ -7,29 +7,36 @@ import (
 )
 
 func TestAnswerHygieneRecognizesExplicitProductImplementationQuestions(t *testing.T) {
-	for _, question := range []string{
-		"后台页面怎么配置",
-		"内部实现是什么",
-		"APP 的缓存怎么处理",
-		"这个 API 怎么调用",
-		"网站怎么开发",
-		"服务器怎么部署",
-	} {
-		if !isExplicitTechnicalQuestion(question) {
-			t.Errorf("question %q must preserve its technical answer", question)
-		}
+	tests := []struct {
+		question string
+		want     bool
+	}{
+		{question: "后台页面怎么配置", want: true},
+		{question: "APP 的缓存怎么处理", want: true},
+		{question: "这个 API 怎么调用", want: true},
+		{question: "网站怎么开发", want: true},
+		{question: "服务器怎么部署", want: true},
+		{question: "How to configure this API?", want: true},
+		{question: "How do I deploy this server?", want: true},
+		{question: "How can we integrate this SDK?", want: true},
+		{question: "How should I debug this Android app?", want: true},
+		{question: "How to implement this API?", want: true},
+		{question: "How can I build this Android app?", want: true},
+		{question: "How should we develop this website?", want: true},
+		{question: "How do I fix this client?", want: true},
+		{question: "How to call this API?", want: true},
+		{question: "How should I cache this request?", want: true},
+		{question: "How do I request this API?", want: true},
+		{question: "这个页面是什么颜色，推荐几道菜", want: false},
+		{question: "这个网站怎么这么好看，推荐几个菜", want: false},
+		{question: "我喜欢这个软件，推荐几道菜", want: false},
+		{question: "缓存的照片很好看，推荐几道菜", want: false},
+		{question: "推荐几个开胃菜 appetizer", want: false},
+		{question: "How beautiful is this website? Recommend some dishes.", want: false},
 	}
-	if isExplicitTechnicalQuestion("推荐几个开胃菜 appetizer") {
-		t.Fatal("an English word containing app must not be treated as a technical question")
-	}
-	for _, question := range []string{
-		"这个页面很好看，推荐几道菜",
-		"我喜欢这个网站，推荐几道菜",
-		"这个软件挺好用，推荐几道菜",
-		"缓存的照片很好看，推荐几道菜",
-	} {
-		if isExplicitTechnicalQuestion(question) {
-			t.Errorf("question %q mentions a technical entity without asking a technical question", question)
+	for _, test := range tests {
+		if got := isExplicitTechnicalQuestion(test.question); got != test.want {
+			t.Errorf("isExplicitTechnicalQuestion(%q)=%v want=%v", test.question, got, test.want)
 		}
 	}
 }
@@ -40,9 +47,18 @@ func TestAnswerHygieneRecognizesMarkdownProductMetaPrefixes(t *testing.T) {
 		"1. 接口建议统一返回格式。",
 		"> 内部实现可以采用缓存。",
 		"- 程序侧需要增加判断。",
+		"建议从 App 端处理状态。",
+		"对于 App 端而言，需要刷新页面。",
+		"建议通过后台接口处理。",
+		"这部分在客户端完成。",
 	} {
 		if !isProductMetaSentence(sentence) {
 			t.Errorf("sentence %q must be filtered for a non-technical question", sentence)
+		}
+	}
+	for _, sentence := range []string{"这个页面很好看。", "我在后台等你。", "这个 App 很漂亮。"} {
+		if isProductMetaSentence(sentence) {
+			t.Errorf("sentence %q has no implementation semantics", sentence)
 		}
 	}
 }

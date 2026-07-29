@@ -8,21 +8,29 @@ import (
 
 const neutralDirectAnswerFallback = "请再具体说一点，我会直接回答。"
 
-var englishTechnicalQuestionPattern = regexp.MustCompile(`(?i)(^|[^a-z0-9_])(app|flutter|android|ios|sdk|api)([^a-z0-9_]|$)`)
+var (
+	englishTechnicalEntityPattern = regexp.MustCompile(`(?i)\b(app|client|backend|api|interface|page|website|server|sdk|flutter|android|ios|software|code|framework|request|cache)\b`)
+	englishTechnicalActionPattern = regexp.MustCompile(`(?i)\b(configure|deploy|implement|build|develop|debug|fix|integrate|call|cache|request)\b`)
+	englishTechnicalCuePattern    = regexp.MustCompile(`(?i)\bhow\s+(to|do|can|should)\b`)
+)
 
-var chineseTechnicalEntities = []string{
-	"客户端", "后台", "页面", "网站", "小程序", "软件", "服务器", "算法", "接口", "代码", "框架", "网络请求", "缓存",
+var technicalQuestionEntities = []string{
+	"app", "flutter", "android", "ios", "sdk", "api", "客户端", "后台", "页面", "网站", "小程序", "软件", "服务器", "算法", "接口", "代码", "框架", "网络请求", "缓存",
 	"技术实现", "内部实现", "系统实现", "模型配置",
 }
 
 var technicalQuestionActions = []string{
-	"开发", "实现", "设计", "部署", "接入", "调用", "配置", "调试", "修复", "优化", "编写", "架构", "怎么", "如何", "报错", "是什么",
+	"开发", "实现", "设计", "部署", "接入", "调用", "配置", "调试", "修复", "优化", "编写", "架构", "报错", "错误", "网络请求", "缓存",
 }
 
-var productMetaSentencePrefixes = []string{
-	"app端", "客户端", "后台", "从后台", "接口", "从接口", "技术实现", "从技术实现", "内部实现", "系统实现",
-	"页面", "从页面", "程序侧", "从程序侧", "基础框架", "从基础框架", "模型配置", "对app端", "对客户端", "在app端", "在客户端",
-	"针对当前app端", "针对app端", "对于客户端", "在后台", "整体技术实现",
+var technicalQuestionCues = []string{"怎么", "如何", "怎样", "为何", "请", "帮我"}
+
+var productImplementationEntities = []string{
+	"app端", "客户端", "后台", "接口", "页面", "技术实现", "基础框架", "模型配置", "内部实现", "程序侧", "系统实现",
+}
+
+var productImplementationSemantics = []string{
+	"处理", "实现", "方案", "配置", "刷新", "状态", "完成", "接入", "调用", "部署", "框架", "需要", "建议",
 }
 
 func isExplicitTechnicalQuestion(question string) bool {
@@ -30,20 +38,56 @@ func isExplicitTechnicalQuestion(question string) bool {
 	if question == "" {
 		return false
 	}
-	hasEntity := englishTechnicalQuestionPattern.MatchString(question)
-	if !hasEntity {
-		for _, entity := range chineseTechnicalEntities {
-			if strings.Contains(question, entity) {
-				hasEntity = true
-				break
+	if englishTechnicalCuePattern.MatchString(question) && englishTechnicalEntityPattern.MatchString(question) && englishTechnicalActionPattern.MatchString(question) {
+		return true
+	}
+	normalized := compactAnswerPrefix(question)
+	entityPositions := termPositions(normalized, technicalQuestionEntities)
+	actionPositions := termPositions(normalized, technicalQuestionActions)
+	if len(entityPositions) == 0 || len(actionPositions) == 0 {
+		return false
+	}
+	cuePositions := termPositions(normalized, technicalQuestionCues)
+	for _, entity := range entityPositions {
+		for _, action := range actionPositions {
+			if absInt(entity-action) > 18 {
+				continue
+			}
+			if hasTermAt(normalized, action, []string{"报错", "错误"}) {
+				return true
+			}
+			for _, cue := range cuePositions {
+				if absInt(cue-action) <= 18 || absInt(cue-entity) <= 18 {
+					return true
+				}
 			}
 		}
 	}
-	if !hasEntity {
-		return false
+	return false
+}
+
+func termPositions(value string, terms []string) []int {
+	runes := []rune(value)
+	positions := make([]int, 0, len(terms))
+	for _, term := range terms {
+		termRunes := []rune(term)
+		if len(termRunes) == 0 || len(termRunes) > len(runes) {
+			continue
+		}
+		for index := 0; index+len(termRunes) <= len(runes); index++ {
+			if string(runes[index:index+len(termRunes)]) == term {
+				positions = append(positions, index)
+			}
+		}
 	}
-	for _, action := range technicalQuestionActions {
-		if strings.Contains(question, action) {
+	return positions
+}
+
+func hasTermAt(value string, position int, terms []string) bool {
+	runes := []rune(value)
+	for _, term := range terms {
+		termRunes := []rune(term)
+		if position >= 0 && position+len(termRunes) <= len(runes) && string(runes[position:position+len(termRunes)]) == term {
 			return true
 		}
 	}
@@ -52,12 +96,23 @@ func isExplicitTechnicalQuestion(question string) bool {
 
 func isProductMetaSentence(sentence string) bool {
 	normalized := compactAnswerPrefix(stripAnswerListPrefix(sentence))
-	for _, prefix := range productMetaSentencePrefixes {
-		if strings.HasPrefix(normalized, prefix) {
+	return containsAnyTerm(normalized, productImplementationEntities) && containsAnyTerm(normalized, productImplementationSemantics)
+}
+
+func containsAnyTerm(value string, terms []string) bool {
+	for _, term := range terms {
+		if strings.Contains(value, term) {
 			return true
 		}
 	}
 	return false
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func compactAnswerPrefix(value string) string {
