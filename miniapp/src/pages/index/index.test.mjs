@@ -77,8 +77,8 @@ assert.match(source, /formatDuration\(item\.durationSeconds\)/, "classroom cards
 assert.match(source, /expertHero\.image/, "expert hero should render the configured teacher image");
 assert.match(
   template,
-  /<image\b(?=[^>]*class="expert-hero__image")(?=[^>]*:key="view\.expertHero\.image")(?=[^>]*:data-image="view\.expertHero\.image")[^>]*>/,
-  "teacher portrait should bind its render key and error dataset to the current image identity",
+  /<image\b(?=[^>]*class="expert-hero__image")(?=[^>]*:src="view\.expertHero\.image")(?=[^>]*:key="view\.expertHero\.image")(?=[^>]*:data-image="view\.expertHero\.image")[^>]*>/,
+  "teacher portrait should bind its source, render key, and error dataset to the current image identity",
 );
 assert.match(source, /teacherImageFailed/, "teacher image should own an isolated failure state");
 assert.match(source, /failedCarouselImages/, "carousel images should keep an isolated failed-image Set");
