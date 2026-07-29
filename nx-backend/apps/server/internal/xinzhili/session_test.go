@@ -126,6 +126,35 @@ func TestConversationIsolationAndRelevanceUseIndependentRetrievers(t *testing.T)
 	}
 }
 
+func TestConversationAppendsDirectAnswerDirectiveAfterConfiguredPrompts(t *testing.T) {
+	fixture := newSessionFixture(t)
+	input := fixture.input("turn-direct-answer")
+	input.CommonPrompt = "通用提示词"
+	input.ModePrompt = "模式提示词"
+	if err := fixture.session.StartTurn(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "你在干嘛", Stable: true})
+	fixture.sink.waitAudio(t)
+
+	directives := fixture.generator.lastInput().CurrentDirectives
+	if len(directives) != 3 {
+		t.Fatalf("directives=%q, want configured prompts followed by fixed direct-answer rule", directives)
+	}
+	if directives[0] != input.CommonPrompt || directives[1] != input.ModePrompt {
+		t.Fatalf("configured prompt order changed: directives=%q", directives)
+	}
+	fixed := directives[len(directives)-1]
+	if !strings.Contains(fixed, "只回答用户当前问题") {
+		t.Fatalf("fixed directive missing direct-answer rule: %q", fixed)
+	}
+	for _, forbidden := range []string{"App 端", "客户端", "页面", "后台", "接口", "模型配置", "基础框架", "内部实现"} {
+		if !strings.Contains(fixed, forbidden) {
+			t.Fatalf("fixed directive missing forbidden topic %q: %q", forbidden, fixed)
+		}
+	}
+}
+
 func TestDeliveryRetriesTTSOnceBeforeFirstAudio(t *testing.T) {
 	fixture := newSessionFixture(t)
 	fixture.generator.answer = "先呼吸。"

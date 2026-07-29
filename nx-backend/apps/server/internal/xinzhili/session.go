@@ -18,6 +18,7 @@ const (
 	SceneXinzhiliVoice         = "xinzhili_voice"
 	strategyTickInterval       = 50 * time.Millisecond
 	pcmInactivitySilenceWindow = strategyTickInterval
+	directAnswerDirective      = "只回答用户当前问题；除非用户明确询问相关内容，否则不要主动提及 App 端、客户端、页面、后台、接口、模型配置、基础框架或内部实现，不要添加产品实现或技术元说明。"
 )
 
 var ErrSessionClosed = errors.New("xinzhili: session closed")
@@ -623,13 +624,14 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 			}
 		}
 		sources := documentsToSources(documents)
-		directives := make([]string, 0, 2)
+		directives := make([]string, 0, 3)
 		if value := strings.TrimSpace(turn.input.CommonPrompt); value != "" {
 			directives = append(directives, value)
 		}
 		if value := strings.TrimSpace(turn.input.ModePrompt); value != "" {
 			directives = append(directives, value)
 		}
+		directives = append(directives, directAnswerDirective)
 		input := rag.GenerateInput{
 			History: history, ConversationSummary: summary, Question: question, Sources: sources,
 			UserProfile:      rag.UserProfile{Memories: memories},
