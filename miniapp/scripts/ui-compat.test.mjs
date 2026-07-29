@@ -75,6 +75,7 @@ for (const requiredTest of [
   "src/pages/classroom/classroom.test.mjs",
   "src/pages/classroom-detail/classroom-detail.test.mjs",
   "src/pages/result/result.recommendation.test.mjs",
+  "src/pages/index/index.test.mjs",
 ]) {
   assert.match(
     packageJson.scripts["test:config"],
@@ -249,7 +250,9 @@ for (const file of [
 }
 
 const indexPage = readFileSync("src/pages/index/index.vue", "utf8");
-const homeTemplate = indexPage.match(/<template>([\s\S]*?)<\/template>/)?.[1] || "";
+const homeTemplate = stripMarkupAndCssComments(
+  indexPage.match(/<template>([\s\S]*?)<\/template>/)?.[1] || "",
+);
 const homeStyle = vueSection(indexPage, "style") || "";
 
 function staticClassTokens(tag) {
@@ -291,11 +294,14 @@ function assertTemplateOrder(source, selectors, description) {
   }
 }
 
-function cssDeclarationsForSelector(source, selector) {
+function cssDeclarationBlocksForSelector(source, selector) {
   return [...source.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
     .filter(([, selectors]) => selectors.split(",").some((item) => item.trim() === selector))
-    .map(([, , declarations]) => declarations)
-    .join("\n");
+    .map(([, , declarations]) => declarations);
+}
+
+function cssDeclarationsForSelector(source, selector) {
+  return cssDeclarationBlocksForSelector(source, selector).join("\n");
 }
 
 assertTemplateOrder(
@@ -403,11 +409,18 @@ for (const className of [
   "secondary-entry",
   "enterprise-final-cta__button",
 ]) {
-  const touchDeclarations = cssDeclarationsForSelector(homeStyle, `.${className}`);
-  assert.match(
-    touchDeclarations,
-    /min-(?:height|width):\s*(?:8[8-9]|9\d|[1-9]\d{2,})rpx\s*;/,
-    `.${className} should keep at least one 88rpx touch dimension`,
+  const touchBlocks = cssDeclarationBlocksForSelector(homeStyle, `.${className}`);
+  assert.ok(touchBlocks.length > 0, `.${className} should define a CSS rule`);
+  const minHeights = touchBlocks.flatMap((declarations) =>
+    [...declarations.matchAll(/min-height:\s*(\d+)rpx\s*;/g)].map((match) => Number(match[1])),
+  );
+  assert.ok(
+    minHeights.length > 0,
+    `.${className} should define an explicit minimum touch height`,
+  );
+  assert.ok(
+    minHeights.every((height) => height >= 88),
+    `.${className} should keep every minimum touch height at or above 88rpx; got ${minHeights.join(", ")}`,
   );
 }
 assert.match(
@@ -460,9 +473,16 @@ function collectVueFiles(dir) {
   });
 }
 
-for (const file of collectVueFiles("src/pages")) {
+const pageVueTemplates = collectVueFiles("src/pages").map((file) => {
   const source = readFileSync(file, "utf8");
-  const buttons = source.match(/<button\b[\s\S]*?>/g) || [];
+  return {
+    file,
+    template: stripMarkupAndCssComments(vueSection(source, "template") || ""),
+  };
+});
+
+for (const { file, template } of pageVueTemplates) {
+  const buttons = openingTagsFor(template, "button");
   for (const button of buttons) {
     if (!button.includes(":loading=")) continue;
     assert.match(
@@ -471,11 +491,7 @@ for (const file of collectVueFiles("src/pages")) {
       `${file} has a loading button without disabled state: ${button}`,
     );
   }
-}
-
-for (const file of collectVueFiles("src/pages")) {
-  const source = readFileSync(file, "utf8");
-  const images = source.match(/<image\b[\s\S]*?>/g) || [];
+  const images = openingTagsFor(template, "image");
   for (const image of images) {
     if (image.includes("poster-img")) continue;
     if (/\slazy-load(?:=|\s|>|$)/.test(image)) continue;
