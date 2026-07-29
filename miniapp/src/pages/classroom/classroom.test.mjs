@@ -75,8 +75,43 @@ assert.match(
 );
 assert.match(
   source,
-  /\.classroom-tab--active\s*\{[^}]*color:\s*var\(--nx-surface\)[^}]*background:\s*var\(--nx-brand-700\)/s,
-  "active tab should have a clear selected state",
+  /\.classroom-tab--active\s*\{[^}]*color:\s*var\(--nx-brand-900\)[^}]*background:\s*var\(--nx-surface\)[^}]*box-shadow:[^}]*var\(--nx-accent-gold\)/s,
+  "active tab should use deep-blue text, warm-white fill, and gold emphasis",
+);
+const continueHead =
+  source.match(
+    /<view class="continue-learning__head">[\s\S]*?(?=<view\s+class="continue-learning__progress")/,
+  )?.[0] || "";
+assert.match(
+  continueHead,
+  /class="continue-learning__info"[\s\S]*class="continue-learning__eyebrow"[\s\S]*class="continue-learning__title"[\s\S]*class="continue-learning__action"/,
+  "continue-learning heading, title, and action should share one row",
+);
+assert.match(
+  source,
+  /\.continue-learning__info\s*\{[^}]*display:\s*flex[^}]*align-items:\s*center/s,
+  "continue-learning title group should be a compact inline row",
+);
+assert.match(
+  source,
+  /\.continue-learning__title\s*\{[^}]*margin-top:\s*0[^}]*overflow:\s*hidden[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/s,
+  "continue-learning title should truncate instead of forcing a second heading row",
+);
+for (const [ratio, height] of [
+  ["16x9", "320rpx"],
+  ["9x16", "420rpx"],
+  ["1x1", "340rpx"],
+]) {
+  assert.match(
+    source,
+    new RegExp(`\\.classroom-card__cover\\.classroom-cover--${ratio}\\s*\\{[^}]*height:\\s*${height}`),
+    `${ratio} covers should use the tightened ${height} height`,
+  );
+}
+assert.doesNotMatch(
+  source,
+  /classroom-cover--(?:16x9|9x16|1x1)\s*\{[^}]*height:\s*(?:376|472|360)rpx/s,
+  "classroom covers should not retain the oversized heights",
 );
 const coverOverlay = source.match(/<view class="classroom-card__cover-overlay">[\s\S]*?<\/view>\s*<\/view>\s*<\/view>/)?.[0] || "";
 assert.match(coverOverlay, /class="classroom-card__overlay-tags"/, "cover overlay should keep tags");

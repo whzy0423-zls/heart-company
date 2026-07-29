@@ -415,7 +415,7 @@ onUnload(() => {
       @click="openContinueLearning(continueItem)"
     >
       <view class="continue-learning__head">
-        <view>
+        <view class="continue-learning__info">
           <text class="continue-learning__eyebrow">继续学习</text>
           <text class="continue-learning__title">{{ continueItem.title }}</text>
         </view>
@@ -675,18 +675,21 @@ onUnload(() => {
 .series-buy::after,
 .classroom-card__action::after,
 .continue-learning::after { border: 0; }
-.classroom-tab--active { color: var(--nx-surface); background: var(--nx-brand-700); box-shadow: 0 8rpx 18rpx rgba(32, 42, 55, 0.16); }
+.classroom-tab--active { color: var(--nx-brand-900); background: var(--nx-surface); box-shadow: 0 0 0 2rpx var(--nx-accent-gold), 0 8rpx 18rpx rgba(32, 42, 55, 0.16); }
 .continue-learning { display: block; width: 100%; min-height: 152rpx; padding: 20rpx; color: var(--nx-text); text-align: left; background: linear-gradient(135deg, var(--nx-surface-soft), var(--nx-accent-gold)); border-radius: 24rpx; box-sizing: border-box; }
 .continue-learning--loading,
 .continue-learning--error { color: var(--nx-text-muted); font-size: 25rpx; text-align: center; }
 .continue-learning--error { color: #a23b32; }
 .continue-learning__head { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; }
+.continue-learning__info { display: flex; align-items: center; flex: 1; min-width: 0; gap: 12rpx; }
 .continue-learning__eyebrow,
 .continue-learning__title,
 .continue-learning__copy { display: block; }
 .continue-learning__eyebrow,
 .continue-learning__action { color: var(--nx-brand-700); font-size: 23rpx; font-weight: 900; }
-.continue-learning__title { margin-top: 4rpx; color: var(--nx-text); font-size: 28rpx; font-weight: 900; line-height: 1.35; }
+.continue-learning__eyebrow,
+.continue-learning__action { flex-shrink: 0; }
+.continue-learning__title { flex: 1; min-width: 0; margin-top: 0; overflow: hidden; color: var(--nx-text); font-size: 28rpx; font-weight: 900; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .continue-learning__progress { height: 10rpx; margin-top: 14rpx; overflow: hidden; background: var(--nx-border); border-radius: 999rpx; }
 .continue-learning__progress-fill { height: 100%; background: var(--nx-brand-700); border-radius: inherit; }
 .continue-learning__copy { margin-top: 8rpx; color: var(--nx-text-muted); font-size: 22rpx; }
@@ -700,9 +703,9 @@ onUnload(() => {
 .classroom-card__cover-shell { position: relative; width: 100%; overflow: hidden; background: linear-gradient(135deg, var(--nx-surface-soft), var(--nx-accent-gold)); }
 .classroom-card__cover-shell::after { content: ""; position: absolute; inset: auto 0 0; height: 30%; background: linear-gradient(180deg, rgba(32, 42, 55, 0), rgba(32, 42, 55, 0.42)); pointer-events: none; }
 .classroom-card__cover { display: block; width: 100%; height: 100%; background: var(--nx-border); }
-.classroom-card__cover.classroom-cover--16x9 { height: 376rpx; }
-.classroom-card__cover.classroom-cover--9x16 { height: 472rpx; }
-.classroom-card__cover.classroom-cover--1x1 { height: 360rpx; }
+.classroom-card__cover.classroom-cover--16x9 { height: 320rpx; }
+.classroom-card__cover.classroom-cover--9x16 { height: 420rpx; }
+.classroom-card__cover.classroom-cover--1x1 { height: 340rpx; }
 .classroom-card__cover--fallback { display: flex; align-items: center; justify-content: center; color: var(--nx-brand-900); font-size: 58rpx; font-weight: 900; }
 .classroom-card__cover-overlay { position: absolute; inset: 0; z-index: 1; padding: 16rpx; color: var(--nx-surface); background: linear-gradient(180deg, rgba(32, 42, 55, 0.08), rgba(32, 42, 55, 0.58)); }
 .classroom-card__overlay-tags { display: flex; flex-wrap: wrap; gap: 8rpx; }
