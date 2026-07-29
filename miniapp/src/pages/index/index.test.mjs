@@ -84,6 +84,16 @@ assert.doesNotMatch(
   /class="expert-hero__copy"|view\.expertHero\.lead/,
   "the full-bleed teacher hero should omit the former copy column and long introduction",
 );
+assert.doesNotMatch(
+  expertHeroTemplate,
+  /expert-hero__primary/,
+  "the full-bleed teacher hero should not render the obsolete primary CTA",
+);
+assert.doesNotMatch(
+  style,
+  /\.expert-hero__primary(?:--pressed)?\b/,
+  "the full-bleed teacher hero should not retain obsolete primary CTA styles",
+);
 assert.match(
   expertHeroTemplate,
   /<button\b(?=[^>]*class="expert-hero__portrait")(?=[^>]*@click="previewTeacherDetail")[^>]*>[\s\S]*?class="expert-hero__portrait-overlay"[\s\S]*?view\.expertHero\.eyebrow[\s\S]*?view\.expertHero\.title[\s\S]*?查看完整导师介绍[\s\S]*?<\/button>[\s\S]*?<button\b(?=[^>]*class="expert-hero__secondary")(?=[^>]*@click="goClassroom")[^>]*>[\s\S]*?进入老师课堂[\s\S]*?<\/button>/,
@@ -169,7 +179,6 @@ for (const tag of template.match(/<[^>]+@click[^>]*>/g) || []) {
 for (const className of [
   "home-nav__profile",
   "expert-hero__portrait",
-  "expert-hero__primary",
   "expert-hero__secondary",
   "enterprise-service",
   "test-game__cta",

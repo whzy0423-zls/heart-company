@@ -400,7 +400,6 @@ assert.match(
 
 for (const className of [
   "home-nav__profile",
-  "expert-hero__primary",
   "expert-hero__secondary",
   "carousel__toggle",
   "enterprise-service",

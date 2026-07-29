@@ -513,7 +513,6 @@ button::after {
 
 .home-nav__profile--pressed,
 .expert-hero__portrait--pressed,
-.expert-hero__primary--pressed,
 .expert-hero__secondary--pressed,
 .enterprise-service--pressed,
 .test-game__cta--pressed,
@@ -582,7 +581,6 @@ button::after {
   line-height: 1.24;
 }
 
-.expert-hero__primary,
 .expert-hero__secondary {
   min-height: 88rpx;
   display: flex;
@@ -594,12 +592,6 @@ button::after {
   font-weight: 800;
   line-height: 1.2;
   transition: opacity 180ms ease-out, transform 180ms ease-out;
-}
-
-.expert-hero__primary {
-  min-height: 88rpx;
-  background: var(--nx-accent-gold);
-  color: var(--nx-brand-900);
 }
 
 .expert-hero__secondary {
