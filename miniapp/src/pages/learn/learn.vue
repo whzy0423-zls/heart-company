@@ -23,7 +23,6 @@ const quotes = ref([]);
 const learnCopy = ref(normalizeMiniappLearn());
 const types = ref(Object.keys(TYPES_INFO).map((id) => ({ id: Number(id), ...TYPES_INFO[id] })));
 const teacherImageErrors = ref({});
-const courseImageErrors = ref({});
 const typeImageErrors = ref({});
 const loading = ref(true);
 const loadError = ref("");
@@ -42,7 +41,6 @@ function applyContent(cfg) {
   coursewareItems.value = normalizeCoursewareItems(cfg);
   quotes.value = cfg?.home?.quotes?.items || [];
   teacherImageErrors.value = {};
-  courseImageErrors.value = {};
 }
 
 function showStoredContent() {
@@ -100,16 +98,8 @@ function teacherMediaKey(teacher, index) {
   return `${teacher.name || ""}::${teacher.avatar || ""}::${index}`;
 }
 
-function courseMediaKey(course, index) {
-  return `${course.title || ""}::${course.cover || ""}::${index}`;
-}
-
 function markTeacherImageError(key) {
   teacherImageErrors.value = { ...teacherImageErrors.value, [key]: true };
-}
-
-function markCourseImageError(key) {
-  courseImageErrors.value = { ...courseImageErrors.value, [key]: true };
 }
 
 function markTypeImageError(id) {
@@ -379,33 +369,20 @@ function goTest() {
           :title="learnCopy.sections.courses.emptyTitle"
           :description="learnCopy.sections.courses.emptyDescription"
         />
-        <block v-else>
+        <view v-else class="courseware-list">
           <view
             v-for="(c, i) in coursewareItems"
-            :key="courseMediaKey(c, i)"
+            :key="`${c.title || ''}:${i}`"
             class="courseware-card"
           >
-            <image
-              v-if="c.cover && !courseImageErrors[courseMediaKey(c, i)]"
-              class="course-media courseware-card__cover"
-              :src="c.cover"
-              mode="aspectFill"
-              lazy-load
-              @error="markCourseImageError(courseMediaKey(c, i))"
-            />
-            <view v-else class="course-media__fallback" aria-hidden="true">{{
-              c.badge || i + 1
-            }}</view>
+            <view class="courseware-card__mark" aria-hidden="true">{{ c.badge || i + 1 }}</view>
             <view class="courseware-card__body">
-              <view class="courseware-card__meta">
-                <text class="nx-tag courseware-card__badge">{{ c.badge || `第 ${i + 1} 课` }}</text>
-                <text v-if="c.duration" class="courseware-card__duration">{{ c.duration }}</text>
-              </view>
+              <text v-if="c.duration" class="courseware-card__duration">{{ c.duration }}</text>
               <text class="courseware-card__title">{{ c.title }}</text>
               <text class="courseware-card__desc">{{ c.description }}</text>
             </view>
           </view>
-        </block>
+        </view>
       </view>
 
       <view class="card ios-card learn-section nx-panel section type-section">
@@ -740,41 +717,44 @@ function goTest() {
 .teacher-card__title { color: var(--nx-brand-700); font-size: 24rpx; font-weight: 900; }
 .teacher-card__bio { color: var(--nx-text-muted); font-size: 25rpx; line-height: 1.65; }
 .teacher-card__tags { display: flex; flex-wrap: wrap; gap: 10rpx; margin-top: 4rpx; }
-.teacher-card__tag,
-.courseware-card__badge { color: var(--nx-brand-900); background: var(--nx-surface); font-size: 23rpx; }
+.teacher-card__tag { color: var(--nx-brand-900); background: var(--nx-surface); font-size: 23rpx; }
+.courseware-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14rpx;
+  width: 100%;
+  margin-top: 22rpx;
+}
 .courseware-card {
   display: flex;
   align-items: flex-start;
   gap: 18rpx;
-  padding: 24rpx 0;
-  border-bottom: 2rpx solid var(--nx-border);
-}
-.courseware-card:last-child { padding-bottom: 0; border-bottom: 0; }
-.course-media,
-.course-media__fallback {
-  flex-shrink: 0;
-  width: 220rpx;
-  height: 150rpx;
-  border-radius: 20rpx;
+  min-height: 144rpx;
+  padding: 20rpx;
+  background: var(--nx-surface-soft);
+  border: 2rpx solid var(--nx-border);
+  border-radius: 22rpx;
   box-sizing: border-box;
 }
-.course-media { background: var(--nx-border); }
-.course-media__fallback {
+.courseware-card__mark {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16rpx;
+  flex-shrink: 0;
+  width: 72rpx;
+  height: 72rpx;
   color: var(--nx-brand-900);
-  background: linear-gradient(135deg, var(--nx-accent-gold), var(--nx-surface-soft));
+  background: linear-gradient(135deg, var(--nx-accent-gold), var(--nx-surface));
+  border: 2rpx solid rgba(223, 188, 127, 0.52);
+  border-radius: 20rpx;
   font-size: 28rpx;
   font-weight: 900;
-  text-align: center;
+  box-sizing: border-box;
 }
 .courseware-card__body { flex: 1; min-width: 0; }
-.courseware-card__meta { display: flex; align-items: center; flex-wrap: wrap; gap: 10rpx; margin-bottom: 8rpx; }
-.courseware-card__duration { color: var(--nx-text-muted); font-size: 23rpx; font-weight: 700; }
+.courseware-card__duration { display: block; margin-bottom: 4rpx; color: var(--nx-brand-700); font-size: 21rpx; font-weight: 800; }
 .courseware-card__title { display: block; color: var(--nx-text); font-size: 30rpx; font-weight: 900; line-height: 1.35; }
-.courseware-card__desc { display: block; margin-top: 8rpx; color: var(--nx-text-muted); font-size: 24rpx; line-height: 1.6; }
+.courseware-card__desc { display: block; margin-top: 6rpx; color: var(--nx-text-muted); font-size: 23rpx; line-height: 1.55; }
 .type-badge-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

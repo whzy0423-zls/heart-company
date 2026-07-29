@@ -185,6 +185,21 @@ assert.match(
   /\.classroom-entry__intro\s*\{[^}]*border-left:\s*6rpx\s+solid\s+var\(--nx-accent-gold\)/s,
   "the classroom introduction should use one restrained gold editorial accent",
 );
+assert.match(
+  source,
+  /<view\s+v-else\s+class="courseware-list">[\s\S]*v-for="\(c, i\) in coursewareItems"/,
+  "course directions should render inside an explicit WeChat-stable list container",
+);
+assert.match(
+  source,
+  /class="courseware-card__mark"[^>]*>[\s\S]*c\.badge\s*\|\|\s*i\s*\+\s*1/,
+  "course directions should use lightweight text marks instead of native image layers",
+);
+assert.doesNotMatch(
+  source,
+  /courseware-card__cover|course-media__fallback|courseImageErrors|markCourseImageError/,
+  "course direction cards should not keep image layers that create blank WeChat scroll regions",
+);
 
 
 assert.match(

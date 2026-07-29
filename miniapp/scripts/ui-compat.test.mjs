@@ -774,11 +774,6 @@ for (const { imageClass, errorHandler, fallbackClass } of [
     fallbackClass: "teacher-media__fallback",
   },
   {
-    imageClass: "courseware-card__cover",
-    errorHandler: "markCourseImageError",
-    fallbackClass: "course-media__fallback",
-  },
-  {
     imageClass: "type-badge__avatar",
     errorHandler: "markTypeImageError",
     fallbackClass: "type-badge__fallback",
@@ -1185,7 +1180,7 @@ assert.match(
   /if\s*\(silent\)[\s\S]*refreshError\.value = userErrorMessage/,
   "a background refresh failure should become a stale-content notice",
 );
-for (const stateName of ["teacherImageErrors", "courseImageErrors", "typeImageErrors"]) {
+for (const stateName of ["teacherImageErrors", "typeImageErrors"]) {
   assert.match(
     learnPage,
     new RegExp(`const\\s+${stateName}\\s*=\\s*ref\\(\\{\\}\\)`),
@@ -1199,18 +1194,8 @@ assert.match(
 );
 assert.match(
   learnPage,
-  /function\s+courseMediaKey\s*\(course,\s*index\)[\s\S]*course\.title[\s\S]*course\.cover[\s\S]*index/,
-  "course image fallback identity should include content and list position",
-);
-assert.match(
-  learnPage,
   /teacherImageErrors\.value\s*=\s*\{\s*\.\.\.teacherImageErrors\.value,\s*\[key\]:\s*true\s*\}/,
   "teacher image failures should update their keyed fallback state immutably",
-);
-assert.match(
-  learnPage,
-  /courseImageErrors\.value\s*=\s*\{\s*\.\.\.courseImageErrors\.value,\s*\[key\]:\s*true\s*\}/,
-  "course image failures should update their keyed fallback state immutably",
 );
 assert.match(
   learnPage,
@@ -1229,13 +1214,18 @@ assert.match(
 );
 assert.match(
   learnTemplate,
-  /<view\b(?=[^>]*v-for=["']\(c, i\) in coursewareItems["'])(?=[^>]*:key=["']courseMediaKey\(c, i\)["'])(?![^>]*@click)[^>]*>/,
-  "configured course direction cards should remain display-only and share image fallback identity",
+  /<view\s+v-else\s+class=["']courseware-list["']>[\s\S]*<view\b(?=[^>]*v-for=["']\(c, i\) in coursewareItems["'])(?=[^>]*:key=["']`\$\{c\.title \|\| ''\}:\$\{i\}`["'])(?![^>]*@click)[^>]*>/,
+  "configured course direction cards should remain display-only inside an explicit list container",
 );
 assert.match(
   learnTemplate,
-  /<image\b(?=[^>]*class=["']course-media courseware-card__cover["'])(?=[^>]*v-if=["']c\.cover && !courseImageErrors\[courseMediaKey\(c, i\)\]["'])(?=[^>]*@error=["']markCourseImageError\(courseMediaKey\(c, i\)\)["'])[^>]*\/>/,
-  "course covers should read and write failure state through the same composite key",
+  /class=["']courseware-card__mark["'][^>]*aria-hidden=["']true["'][^>]*>\{\{\s*c\.badge\s*\|\|\s*i\s*\+\s*1\s*\}\}/,
+  "course directions should use lightweight text marks instead of image layers",
+);
+assert.doesNotMatch(
+  learnTemplate,
+  /courseware-card__cover|course-media__fallback|markCourseImageError/,
+  "course direction cards should avoid native image layers that can leave blank WeChat scroll regions",
 );
 assert.match(
   learnTemplate,
