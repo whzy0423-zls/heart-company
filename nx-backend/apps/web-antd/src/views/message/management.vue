@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { MessageManagementFilters } from './management-query';
+
 import type { SystemMessage } from '#/api';
 
 import { onMounted, reactive, ref } from 'vue';
@@ -23,6 +25,8 @@ import { getMessageListApi, markMessagesApi } from '#/api';
 import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
 import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 
+import { buildMessageListParams } from './management-query';
+
 const router = useRouter();
 
 const loading = ref(false);
@@ -30,12 +34,12 @@ const messages = ref<SystemMessage[]>([]);
 const total = ref(0);
 const detailOpen = ref(false);
 const current = ref<SystemMessage>();
-const query = reactive({
+const query = reactive<MessageManagementFilters>({
+  category: 'signup',
   keyword: '',
   page: 1,
   pageSize: 20,
   read: '',
-  type: 'signup',
 });
 
 const messageTypeOptions = [
@@ -62,13 +66,7 @@ const columns = [
 async function load() {
   loading.value = true;
   try {
-    const result = await getMessageListApi({
-      keyword: query.keyword,
-      page: query.page,
-      pageSize: query.pageSize,
-      read: query.read || undefined,
-      type: query.type || undefined,
-    });
+    const result = await getMessageListApi(buildMessageListParams(query));
     messages.value = result.items;
     total.value = result.total;
   } finally {
@@ -157,15 +155,17 @@ onMounted(() => {
 
         <div class="toolbar">
           <Select
-            v-model:value="query.type"
+            v-model:value="query.category"
             :options="messageTypeOptions"
             class="type-select"
-           placeholder="请选择消息类型"/>
+            placeholder="请选择消息类型"
+          />
           <Select
             v-model:value="query.read"
             :options="readOptions"
             class="read-select"
-           placeholder="请选择阅读状态"/>
+            placeholder="请选择阅读状态"
+          />
           <Input
             v-model:value="query.keyword"
             allow-clear

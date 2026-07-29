@@ -192,6 +192,8 @@ func CanTransitionContent(from, to ContentStatus) bool {
 		return to == ContentPublished || to == ContentProcessing
 	case ContentPublished:
 		return to == ContentOffline
+	case ContentOffline:
+		return to == ContentPublished
 	case ContentFailed:
 		return to == ContentDraft || to == ContentProcessing
 	default:

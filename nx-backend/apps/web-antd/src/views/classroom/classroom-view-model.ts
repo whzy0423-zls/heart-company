@@ -14,14 +14,17 @@ export function contentPublishGuard(
   content: Pick<ClassroomContent, 'seriesId' | 'status'>,
   series: Array<Pick<ClassroomSeries, 'id' | 'status' | 'title'>>,
 ) {
-  if (content.status !== 'ready')
+  const republishing = content.status === 'offline';
+  if (content.status !== 'ready' && !republishing)
     return {
       allowed: false,
       label: '等待媒体处理',
       reason: '媒体处理完成后才可发布',
     };
   if (!content.seriesId)
-    return { allowed: true, label: '发布', reason: '发布课件' };
+    return republishing
+      ? { allowed: true, label: '重新发布', reason: '重新发布已下线课件' }
+      : { allowed: true, label: '发布', reason: '发布课件' };
   const parent = series.find((item) => item.id === content.seriesId);
   if (!parent)
     return {
@@ -35,7 +38,9 @@ export function contentPublishGuard(
       label: '先发布所属系列',
       reason: `请先到“课程系列”发布《${parent.title}》`,
     };
-  return { allowed: true, label: '发布', reason: '发布课件' };
+  return republishing
+    ? { allowed: true, label: '重新发布', reason: '重新发布已下线课件' }
+    : { allowed: true, label: '发布', reason: '发布课件' };
 }
 
 export function playbackControl(blocked: boolean) {

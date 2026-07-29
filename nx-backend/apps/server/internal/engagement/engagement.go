@@ -100,18 +100,20 @@ func NewStore(database *sql.DB) *Store {
 	return &Store{db: database}
 }
 
-func (s *Store) Messages(ctx context.Context, values url.Values) (PageResult[Message], error) {
-	c, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+func buildMessageWhere(values url.Values) (string, []any, error) {
 	where := []string{"1=1"}
 	args := []any{}
 	if typ := strings.TrimSpace(values.Get("type")); typ != "" {
 		args = append(args, typ)
 		where = append(where, "type=$"+strconv.Itoa(len(args)))
 	}
+	if businessType := strings.TrimSpace(values.Get("businessType")); businessType != "" {
+		args = append(args, businessType)
+		where = append(where, "business_type=$"+strconv.Itoa(len(args)))
+	}
 	if platform := strings.TrimSpace(values.Get("platform")); platform != "" {
 		if platform != "website" && platform != "miniapp" && platform != "system" {
-			return PageResult[Message]{}, fmt.Errorf("invalid platform")
+			return "", nil, fmt.Errorf("invalid platform")
 		}
 		args = append(args, platform)
 		where = append(where, "platform=$"+strconv.Itoa(len(args)))
@@ -125,7 +127,16 @@ func (s *Store) Messages(ctx context.Context, values url.Values) (PageResult[Mes
 		index := strconv.Itoa(len(args))
 		where = append(where, "(lower(title) LIKE $"+index+" OR lower(content) LIKE $"+index+")")
 	}
-	cond := strings.Join(where, " AND ")
+	return strings.Join(where, " AND "), args, nil
+}
+
+func (s *Store) Messages(ctx context.Context, values url.Values) (PageResult[Message], error) {
+	c, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cond, args, err := buildMessageWhere(values)
+	if err != nil {
+		return PageResult[Message]{}, err
+	}
 	var total int
 	if err := s.db.QueryRowContext(c, "SELECT count(*) FROM messages WHERE "+cond, args...).Scan(&total); err != nil {
 		return PageResult[Message]{}, err

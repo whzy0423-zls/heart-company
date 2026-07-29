@@ -15,6 +15,7 @@ export interface SystemMessage {
 }
 
 export interface MessageQuery {
+  businessType?: string;
   keyword?: string;
   page?: number;
   pageSize?: number;

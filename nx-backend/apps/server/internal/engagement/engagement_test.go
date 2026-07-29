@@ -3,6 +3,7 @@ package engagement
 import (
 	"context"
 	"database/sql"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -27,6 +28,22 @@ func TestParsePositiveMessageIDRejectsUnsafeValues(t *testing.T) {
 		if _, err := parsePositiveDecimalID(value); err == nil {
 			t.Fatalf("expected %q to be rejected", value)
 		}
+	}
+}
+
+func TestBuildMessageWhereFiltersByBusinessTypeWithoutReplacingType(t *testing.T) {
+	condition, args, err := buildMessageWhere(url.Values{
+		"businessType": {"signup"},
+		"type":         {"miniapp"},
+	})
+	if err != nil {
+		t.Fatalf("buildMessageWhere returned error: %v", err)
+	}
+	if condition != "1=1 AND type=$1 AND business_type=$2" {
+		t.Fatalf("condition = %q", condition)
+	}
+	if len(args) != 2 || args[0] != "miniapp" || args[1] != "signup" {
+		t.Fatalf("args = %#v", args)
 	}
 }
 

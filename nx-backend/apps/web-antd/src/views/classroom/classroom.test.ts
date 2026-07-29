@@ -5,12 +5,6 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  contentMetadataPayload,
-  createContentDraftDefaults,
-  purchaseStrategyRequired,
-} from './editor-model';
-import { seriesMetadataPayload } from './series-model';
-import {
   classroomOperationError,
   classroomPermissions,
   contentPublishGuard,
@@ -18,6 +12,14 @@ import {
   uploadStatusLabel,
   visibleClassroomTabs,
 } from './classroom-view-model';
+import {
+  contentMetadataPayload,
+  createContentDraftDefaults,
+  purchaseStrategyRequired,
+  saveContentWorkflow,
+} from './editor-model';
+import { seriesMetadataPayload } from './series-model';
+import { crc64File } from './upload-checksum';
 import {
   classroomUploadMime,
   matchesClassroomContentType,
@@ -27,8 +29,6 @@ import {
   resolveUploadRetryContext,
   shouldAbortController,
 } from './upload-flow';
-import { saveContentWorkflow } from './editor-model';
-import { crc64File } from './upload-checksum';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (path: string) => readFileSync(resolve(root, path), 'utf8');
@@ -264,6 +264,19 @@ describe('teacher classroom admin UI contract', () => {
         { id: 2, status: 'published', title: '韩老师测试课程' },
       ] as any),
     ).toMatchObject({ allowed: true, label: '发布' });
+  });
+
+  it('allows offline content with retained media to be published again', () => {
+    expect(
+      contentPublishGuard(
+        { id: 11, status: 'offline' } as any,
+        [] as any,
+      ),
+    ).toEqual({
+      allowed: true,
+      label: '重新发布',
+      reason: '重新发布已下线课件',
+    });
   });
 
   it('shows the parent-series action instead of sending an invalid publish request', () => {

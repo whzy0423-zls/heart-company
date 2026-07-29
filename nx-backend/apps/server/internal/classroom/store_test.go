@@ -50,7 +50,7 @@ func TestContentValidationAndTransitions(t *testing.T) {
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid series content rejected: %v", err)
 	}
-	if !CanTransitionContent(ContentDraft, ContentProcessing) || !CanTransitionContent(ContentProcessing, ContentReady) || !CanTransitionContent(ContentReady, ContentPublished) || !CanTransitionContent(ContentPublished, ContentOffline) || !CanTransitionContent(ContentFailed, ContentDraft) {
+	if !CanTransitionContent(ContentDraft, ContentProcessing) || !CanTransitionContent(ContentProcessing, ContentReady) || !CanTransitionContent(ContentReady, ContentPublished) || !CanTransitionContent(ContentPublished, ContentOffline) || !CanTransitionContent(ContentOffline, ContentPublished) || !CanTransitionContent(ContentFailed, ContentDraft) {
 		t.Fatal("expected documented content transitions to be allowed")
 	}
 	if CanTransitionContent(ContentDraft, ContentPublished) || CanTransitionContent(ContentFailed, ContentPublished) {
