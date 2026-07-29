@@ -108,7 +108,12 @@ function removeCarouselItem(image) {
   if (carousel.value.items.length <= 1) carouselPaused.value = false;
 }
 
-function markTeacherImageError() {
+function markTeacherImageError(source) {
+  const failedImage =
+    typeof source === "string"
+      ? source
+      : source?.currentTarget?.dataset?.image || source?.target?.dataset?.image || "";
+  if (failedImage && failedImage !== view.value.expertHero.image) return;
   teacherImageFailed.value = true;
 }
 
@@ -235,6 +240,7 @@ onMounted(() => {
           v-if="view.expertHero.image && !teacherImageFailed"
           class="expert-hero__image"
           :src="view.expertHero.image"
+          :data-image="view.expertHero.image"
           mode="aspectFill"
           aria-label="导师形象"
           @error="markTeacherImageError"

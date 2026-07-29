@@ -238,6 +238,10 @@ try {
     assert.equal(page.teacherImageFailed.value, false, "fresh config should reset teacher image failure");
     assert.deepEqual(page.carousel.value.items.map((item) => item.image), ["/good.png"], "failed carousel URLs should stay filtered after refresh");
     assert.equal(page.courseCoverErrors.value["course:1"], true, "site refresh should not mutate independent course cover failures");
+    page.markTeacherImageError("/teacher-a.png");
+    assert.equal(page.teacherImageFailed.value, false, "a late error from the replaced teacher image must not hide the refreshed image");
+    page.markTeacherImageError("/teacher-b.png");
+    assert.equal(page.teacherImageFailed.value, true, "the current teacher image should still fall back after its own error");
   }
 
   {
