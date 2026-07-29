@@ -694,6 +694,7 @@ function goTest() {
 }
 .teacher-card__header {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 20rpx;
   width: 100%;

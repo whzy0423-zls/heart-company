@@ -201,15 +201,53 @@ assert.doesNotMatch(
   "course direction cards should not keep image layers that create blank WeChat scroll regions",
 );
 
+function viewBlockForClass(markup, className) {
+  const classIndex = markup.indexOf(`class="${className}"`);
+  assert.ok(classIndex >= 0, `expected a ${className} view`);
+  const openingIndex = markup.lastIndexOf("<view", classIndex);
+  assert.ok(openingIndex >= 0, `${className} should be a view`);
+
+  const viewTag = /<\/?view\b[^>]*>/g;
+  viewTag.lastIndex = openingIndex;
+  let depth = 0;
+  for (let match = viewTag.exec(markup); match; match = viewTag.exec(markup)) {
+    if (match[0].startsWith("</")) {
+      depth -= 1;
+      if (depth === 0) return markup.slice(openingIndex, viewTag.lastIndex);
+    } else {
+      depth += 1;
+    }
+  }
+  assert.fail(`${className} should have a closing view tag`);
+}
+
+const teacherCardTemplate = viewBlockForClass(source, "teacher-card");
+const teacherCardHeader = viewBlockForClass(teacherCardTemplate, "teacher-card__header");
+const teacherCardDetails = viewBlockForClass(teacherCardTemplate, "teacher-card__details");
 assert.match(
-  source,
-  /class="teacher-card"[\s\S]*class="teacher-card__header"[\s\S]*teacher-card__identity[\s\S]*teacher-card__details/,
-  "teacher cards should separate the compact identity header from the full-width details area",
+  teacherCardHeader,
+  /class="teacher-media teacher-card__avatar"/,
+  "teacher-card header should contain the avatar image",
 );
 assert.match(
-  source,
-  /class="teacher-card__details"[\s\S]*class="teacher-card__bio"[\s\S]*class="teacher-card__tags"/,
-  "teacher biography and tags should render in the full-width details area",
+  teacherCardHeader,
+  /class="teacher-media__fallback"/,
+  "teacher-card header should retain the avatar fallback",
+);
+assert.match(
+  teacherCardHeader,
+  /class="teacher-card__identity"/,
+  "teacher-card header should contain the compact identity",
+);
+assert.match(
+  teacherCardDetails,
+  /class="teacher-card__bio"/,
+  "teacher-card details should contain the biography",
+);
+assert.match(
+  teacherCardDetails,
+  /class="teacher-card__tags"/,
+  "teacher-card details should contain the tags",
 );
 assert.doesNotMatch(
   source,
@@ -225,6 +263,11 @@ assert.match(
   source,
   /\.teacher-card__details\s*\{[^}]*width:\s*100%[^}]*\}/s,
   "teacher details should span the card width below the avatar header",
+);
+assert.match(
+  source,
+  /\.teacher-card__header\s*\{[^}]*flex-direction:\s*row[^}]*\}/s,
+  "teacher card header should explicitly keep avatar and identity in a horizontal row",
 );
 
 

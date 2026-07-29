@@ -1212,15 +1212,53 @@ assert.match(
   /<image\b(?=[^>]*class=["']teacher-media teacher-card__avatar["'])(?=[^>]*v-if=["']teacher\.avatar && !teacherImageErrors\[teacherMediaKey\(teacher, teacherIndex\)\]["'])(?=[^>]*@error=["']markTeacherImageError\(teacherMediaKey\(teacher, teacherIndex\)\)["'])[^>]*\/>/,
   "teacher avatars should read and write failure state through the same composite key",
 );
+function viewBlockForClass(markup, className) {
+  const classIndex = markup.indexOf(`class="${className}"`);
+  assert.ok(classIndex >= 0, `expected a ${className} view`);
+  const openingIndex = markup.lastIndexOf("<view", classIndex);
+  assert.ok(openingIndex >= 0, `${className} should be a view`);
+
+  const viewTag = /<\/?view\b[^>]*>/g;
+  viewTag.lastIndex = openingIndex;
+  let depth = 0;
+  for (let match = viewTag.exec(markup); match; match = viewTag.exec(markup)) {
+    if (match[0].startsWith("</")) {
+      depth -= 1;
+      if (depth === 0) return markup.slice(openingIndex, viewTag.lastIndex);
+    } else {
+      depth += 1;
+    }
+  }
+  assert.fail(`${className} should have a closing view tag`);
+}
+
+const teacherCardTemplate = viewBlockForClass(learnTemplate, "teacher-card");
+const teacherCardHeader = viewBlockForClass(teacherCardTemplate, "teacher-card__header");
+const teacherCardDetails = viewBlockForClass(teacherCardTemplate, "teacher-card__details");
 assert.match(
-  learnTemplate,
-  /class=["']teacher-card["'][\s\S]*class=["']teacher-card__header["'][\s\S]*class=["']teacher-card__identity["'][\s\S]*class=["']teacher-card__details["']/,
-  "teacher cards should use a header row and a full-width details section",
+  teacherCardHeader,
+  /class=["']teacher-media teacher-card__avatar["']/,
+  "teacher-card header should contain the avatar image",
 );
 assert.match(
-  learnTemplate,
-  /class=["']teacher-card__details["'][\s\S]*class=["']teacher-card__bio["'][\s\S]*class=["']teacher-card__tags["']/,
-  "teacher biography and tags should stay together in the details section",
+  teacherCardHeader,
+  /class=["']teacher-media__fallback["']/,
+  "teacher-card header should retain the avatar fallback",
+);
+assert.match(
+  teacherCardHeader,
+  /class=["']teacher-card__identity["']/,
+  "teacher-card header should contain the compact identity",
+);
+assert.match(
+  teacherCardDetails,
+  /class=["']teacher-card__bio["']/,
+  "teacher-card details should contain the biography",
+);
+assert.match(
+  teacherCardDetails,
+  /class=["']teacher-card__tags["']/,
+  "teacher-card details should contain the tags",
 );
 assert.doesNotMatch(
   learnTemplate,
@@ -1230,6 +1268,7 @@ assert.doesNotMatch(
 for (const [selector, declaration, message] of [
   [".teacher-card", /flex-direction:\s*column\s*;/, "teacher cards should stack vertically"],
   [".teacher-card__header", /display:\s*flex\s*;/, "teacher identity should remain a compact row"],
+  [".teacher-card__header", /flex-direction:\s*row\s*;/, "teacher identity should explicitly remain horizontal"],
   [".teacher-card__details", /width:\s*100%\s*;/, "teacher details should span the card width"],
 ]) {
   assert.match(cssDeclarationsForSelector(learnStyle, selector), declaration, message);
