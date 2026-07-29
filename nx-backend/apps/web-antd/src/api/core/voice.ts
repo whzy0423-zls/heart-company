@@ -86,6 +86,14 @@ export function cloneVoiceProfileApi(id: string) {
   });
 }
 
+export function copyVoiceProfileToBailianApi(id: string) {
+  return requestClient.post<VoiceProfile>(
+    `/voice/profiles/${id}/copy-to-bailian`,
+    undefined,
+    { timeout: 180_000 },
+  );
+}
+
 export function deleteVoiceProfileApi(id: string) {
   return requestClient.delete<boolean>(`/voice/profiles/${id}`);
 }

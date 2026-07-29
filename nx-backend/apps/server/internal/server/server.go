@@ -82,6 +82,10 @@ type Server struct {
 	voiceAssetFind             func(context.Context, int64) (uploadasset.Asset, error)
 	uploader                   storage.ObjectUploader
 	voices                     *voice.Store
+	setBailianCopyConfig       func(voice.BailianConfig)
+	xinzhiliBailianConfigMu    sync.Mutex
+	xinzhiliBailianConfigSet   bool
+	xinzhiliBailianConfigVer   int64
 	videos                     *video.Store
 	videoAnalysis              *videoanalysis.Store
 	videoAssets                *videoasset.Store
@@ -280,6 +284,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		}
 	}
 	s.voices = voice.NewStore(database, s.uploads, env.MiniMax)
+	s.setBailianCopyConfig = s.voices.ConfigureBailianCopy
 	s.videos = video.NewStore(database, s.uploads, env.Video, s.uploader)
 	s.videoSubmissionRecovery = func(ctx context.Context) (int64, error) {
 		return s.videoStore().RecoverInterruptedSubmissions(
@@ -380,6 +385,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.pushSendSlots = make(chan struct{}, 2)
 	// 启动时应用 DB 中保存的模型配置覆盖（若存在），重建对话/视频客户端。
 	s.applyStoredModelConfig()
+	s.applyStoredXinzhiliBailianCopyConfig()
 	if database != nil {
 		if err := s.ensureVideoSubmissionRecovery(context.Background()); err != nil {
 			log.Printf("video submission recovery failed: %v", err)
@@ -445,16 +451,26 @@ func (s *Server) applyStoredModelConfig() {
 	s.videos = videoStore
 	s.images = imageStore
 	s.modelMu.Unlock()
+	// The legacy model-config TTS section may still update the original
+	// MiniMax voice runtime. It must never provide credentials for Bailian
+	// copies, which are owned by the independent Xinzhili configuration.
 	tts := cfg.ApplyTTS(s.env.MiniMax)
-	voiceBase := s.env.MiniMax
-	voiceBase.Provider = tts.Provider
-	voiceBase.APIBase = tts.Endpoint
-	voiceBase.APIKey = tts.APIKey
-	voiceBase.GroupID = tts.GroupID
-	voiceBase.Model = tts.Model
-	s.voices = voice.NewStore(s.db, s.uploads, voiceBase)
-	if s.articles != nil {
-		s.articles.AttachAudioDeps(s.voices, s.uploads, s.voices, tts.Model)
+	if tts.Provider == voice.ProviderMiniMax {
+		voiceBase := s.env.MiniMax
+		voiceBase.Provider = tts.Provider
+		voiceBase.APIBase = tts.Endpoint
+		voiceBase.APIKey = tts.APIKey
+		voiceBase.GroupID = tts.GroupID
+		voiceBase.Model = tts.Model
+		if s.voices == nil {
+			s.voices = voice.NewStore(s.db, s.uploads, voiceBase)
+			s.setBailianCopyConfig = s.voices.ConfigureBailianCopy
+		} else {
+			s.voices.ConfigureMiniMax(voiceBase)
+		}
+		if s.articles != nil {
+			s.articles.AttachAudioDeps(s.voices, s.uploads, s.voices, tts.Model)
+		}
 	}
 }
 
@@ -1534,9 +1550,28 @@ func (s *Server) createVoiceProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) voiceProfileByID(w http.ResponseWriter, r *http.Request) {
-	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/voice/profiles/"), "/")
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/voice/profiles/"), "/")
+	parts := strings.Split(path, "/")
+	id := strings.TrimSpace(parts[0])
 	if id == "" {
 		httpx.Fail(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	if len(parts) == 2 && parts[1] == "copy-to-bailian" {
+		if r.Method != http.MethodPost {
+			httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+			return
+		}
+		result, err := s.voices.CopyProfileToBailian(r.Context(), id)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		httpx.OK(w, result)
+		return
+	}
+	if len(parts) != 1 {
+		httpx.Fail(w, http.StatusNotFound, "Not Found")
 		return
 	}
 	switch r.Method {

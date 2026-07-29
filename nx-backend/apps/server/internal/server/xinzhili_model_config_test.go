@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
+	"nine-xing/nx-backend/apps/server/internal/voice"
 	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
 
@@ -148,6 +151,106 @@ func TestXinzhiliModelConfigPUTPassesExpectedVersionAndEmptyKeys(t *testing.T) {
 	}
 	if store.updated.RealtimeASR.APIKey != "" || store.updated.TTS.APIKey != "" {
 		t.Fatalf("handler must preserve empty-key semantics: %+v", store.updated)
+	}
+}
+
+func TestXinzhiliModelConfigPUTRefreshesBailianCopyCredentialsFromSavedTTS(t *testing.T) {
+	saved := validXinzhiliModelConfigForHandler()
+	saved.TTS = xinzhili.TTSConfig{
+		Provider: xinzhili.TTSProviderBailian,
+		Endpoint: "https://dashscope.example.com/compatible-mode/v1",
+		APIKey:   "saved-bailian-key",
+		Model:    "MiniMax/speech-2.8-turbo",
+		Voice:    "saved-voice",
+		Format:   "mp3",
+	}
+	store := &fakeXinzhiliModelConfigStore{config: saved, found: true}
+	var got voice.BailianConfig
+	s := &Server{
+		xinzhiliModelConfig: store,
+		setBailianCopyConfig: func(cfg voice.BailianConfig) {
+			got = cfg
+		},
+	}
+	body, err := json.Marshal(map[string]any{
+		"expectedVersion": 0,
+		"enabled":         true,
+		"realtimeAsr": map[string]any{
+			"provider": saved.RealtimeASR.Provider, "endpoint": saved.RealtimeASR.Endpoint,
+			"apiKey": saved.RealtimeASR.APIKey, "region": saved.RealtimeASR.Region, "model": saved.RealtimeASR.Model,
+		},
+		"tts": map[string]any{
+			"provider": saved.TTS.Provider, "endpoint": saved.TTS.Endpoint, "apiKey": saved.TTS.APIKey,
+			"model": saved.TTS.Model, "voice": saved.TTS.Voice, "format": saved.TTS.Format,
+		},
+		"enabledModes": []string{"normal"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := httptest.NewRecorder()
+	s.xinzhiliModelConfigHandler(res, httptest.NewRequest(http.MethodPut, "/api/xinzhili-model-config", strings.NewReader(string(body))))
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if got.APIBase != saved.TTS.Endpoint || got.APIKey != saved.TTS.APIKey || got.TargetModel != saved.TTS.Model {
+		t.Fatalf("Bailian copy config = %+v, want saved Xinzhili TTS credentials", got)
+	}
+}
+
+func TestApplyXinzhiliBailianCopyConfigIgnoresOlderSavedVersion(t *testing.T) {
+	var got voice.BailianConfig
+	s := &Server{setBailianCopyConfig: func(cfg voice.BailianConfig) { got = cfg }}
+	newest := validXinzhiliModelConfigForHandler()
+	newest.Version = 3
+	newest.TTS = xinzhili.TTSConfig{
+		Provider: xinzhili.TTSProviderBailian,
+		Endpoint: "https://dashscope.example.com",
+		APIKey:   "newest-key",
+		Model:    "model-v3",
+		Voice:    "voice-v3",
+		Format:   "mp3",
+	}
+	stale := newest
+	stale.Version = 2
+	stale.TTS.APIKey = "stale-key"
+	stale.TTS.Model = "model-v2"
+
+	s.applyXinzhiliBailianCopyConfig(newest)
+	s.applyXinzhiliBailianCopyConfig(stale)
+
+	if got.APIKey != "newest-key" || got.TargetModel != "model-v3" {
+		t.Fatalf("runtime Bailian copy config = %+v, want latest persisted config", got)
+	}
+}
+
+func TestApplyXinzhiliBailianCopyConfigConcurrentVersionsKeepLatestRuntime(t *testing.T) {
+	var got voice.BailianConfig
+	s := &Server{setBailianCopyConfig: func(cfg voice.BailianConfig) { got = cfg }}
+	const versions = 32
+	var group sync.WaitGroup
+	for version := 1; version <= versions; version++ {
+		cfg := validXinzhiliModelConfigForHandler()
+		cfg.Version = int64(version)
+		cfg.TTS = xinzhili.TTSConfig{
+			Provider: xinzhili.TTSProviderBailian,
+			Endpoint: "https://dashscope.example.com",
+			APIKey:   fmt.Sprintf("key-v%d", version),
+			Model:    fmt.Sprintf("model-v%d", version),
+			Voice:    "voice",
+			Format:   "mp3",
+		}
+		group.Add(1)
+		go func(cfg xinzhili.Config) {
+			defer group.Done()
+			s.applyXinzhiliBailianCopyConfig(cfg)
+		}(cfg)
+	}
+	group.Wait()
+
+	if got.APIKey != "key-v32" || got.TargetModel != "model-v32" {
+		t.Fatalf("runtime Bailian copy config = %+v, want latest persisted version", got)
 	}
 }
 

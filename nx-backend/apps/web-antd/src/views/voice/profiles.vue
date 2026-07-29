@@ -28,6 +28,7 @@ import {
 
 import {
   cloneVoiceProfileApi,
+  copyVoiceProfileToBailianApi,
   createVoiceProfileApi,
   deleteVoiceProfileApi,
   getVoiceProfilesApi,
@@ -39,12 +40,18 @@ import {
   useUploadAssetPreviewUrl,
 } from '#/utils/upload-asset-preview';
 
+import {
+  getBailianCopyFeedback,
+  updateCopyingProfileIds,
+} from './profiles-copy-feedback';
+
 const accessStore = useAccessStore();
 const audioPreview = useUploadAssetPreviewResolver(
   () => accessStore.accessToken,
 );
 const loading = ref(false);
 const saving = ref(false);
+const copyingProfileIds = ref(new Set<string>());
 const profiles = ref<VoiceProfile[]>([]);
 const total = ref(0);
 const uploadedAudioUrl = ref('');
@@ -197,6 +204,42 @@ async function retryClone(record: VoiceProfile) {
   } finally {
     saving.value = false;
   }
+}
+
+function isCopyingProfile(profileId: string) {
+  return copyingProfileIds.value.has(profileId);
+}
+
+function setCopyingProfile(profileId: string, isCopying: boolean) {
+  copyingProfileIds.value = updateCopyingProfileIds(
+    copyingProfileIds.value,
+    profileId,
+    isCopying,
+  );
+}
+
+function showBailianCopyFeedback(result: VoiceProfile) {
+  const feedback = getBailianCopyFeedback(result);
+  message[feedback.type](feedback.content);
+}
+
+function copyProfileToBailian(record: VoiceProfile) {
+  Modal.confirm({
+    content: `将保留原 MiniMax 音色，并复用原音频样本创建「${record.name}」的百炼人声。确认继续吗？`,
+    onOk: async () => {
+      setCopyingProfile(record.id, true);
+      try {
+        const result = await copyVoiceProfileToBailianApi(record.id);
+        showBailianCopyFeedback(result);
+        await load();
+      } catch {
+        // requestClient's shared interceptor displays the backend error once.
+      } finally {
+        setCopyingProfile(record.id, false);
+      }
+    },
+    title: '复制到百炼',
+  });
 }
 
 function profileRecord(record: Record<string, any>): VoiceProfile {
@@ -355,7 +398,8 @@ onMounted(load);
                 v-model:value="query.status"
                 :options="statusOptions"
                 class="status-select"
-               placeholder="请选择备注"/>
+                placeholder="请选择备注"
+              />
               <Input
                 v-model:value="query.keyword"
                 allow-clear
@@ -414,6 +458,15 @@ onMounted(load);
                     @click="retryClone(profileRecord(record))"
                   >
                     重新克隆
+                  </Button>
+                  <Button
+                    v-if="record.provider === 'minimax' && record.sampleAssetId"
+                    :loading="isCopyingProfile(record.id)"
+                    size="small"
+                    type="link"
+                    @click="copyProfileToBailian(profileRecord(record))"
+                  >
+                    复制到百炼
                   </Button>
                   <Button
                     danger

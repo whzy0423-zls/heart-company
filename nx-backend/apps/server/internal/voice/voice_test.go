@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
@@ -382,6 +383,68 @@ func TestNormalizeStoreProviderRecognizesBailianRuntime(t *testing.T) {
 	if got := normalizeStoreProvider(config.MiniMaxConfig{}); got != ProviderMiniMax {
 		t.Fatalf("default provider=%q", got)
 	}
+}
+
+func TestNewStoreWithBailianKeepsMiniMaxAndBailianCredentialsSeparate(t *testing.T) {
+	store := NewStoreWithBailian(nil, nil,
+		config.MiniMaxConfig{
+			APIBase: "https://minimax.example.com",
+			APIKey:  "minimax-key",
+			GroupID: "minimax-group",
+		},
+		BailianConfig{
+			APIBase:     "https://dashscope.example.com/api/v1",
+			APIKey:      "bailian-key",
+			TargetModel: "MiniMax/speech-2.8-turbo",
+		},
+	)
+
+	if store.client.apiBase != "https://minimax.example.com" || store.client.apiKey != "minimax-key" || store.client.groupID != "minimax-group" {
+		t.Fatalf("MiniMax client credentials = %+v, want dedicated MiniMax config", store.client)
+	}
+	if store.bailian.apiBase != "https://dashscope.example.com/api/v1" || store.bailian.apiKey != "bailian-key" || store.bailian.targetModel != "MiniMax/speech-2.8-turbo" {
+		t.Fatalf("Bailian client credentials = %+v, want dedicated Bailian config", store.bailian)
+	}
+}
+
+func TestConfigureBailianCopyIsSafeDuringBailianSynthesis(t *testing.T) {
+	store := NewStore(nil, nil, config.MiniMaxConfig{})
+	const iterations = 500
+	var group sync.WaitGroup
+	group.Add(2)
+	go func() {
+		defer group.Done()
+		for i := 0; i < iterations; i++ {
+			store.ConfigureBailianCopy(BailianConfig{})
+		}
+	}()
+	go func() {
+		defer group.Done()
+		for i := 0; i < iterations; i++ {
+			_, _, _ = store.textToAudio(context.Background(), ProviderBailian, "", "voice", "text")
+		}
+	}()
+	group.Wait()
+}
+
+func TestConfigureMiniMaxIsSafeDuringSynthesis(t *testing.T) {
+	store := NewStore(nil, nil, config.MiniMaxConfig{})
+	const iterations = 500
+	var group sync.WaitGroup
+	group.Add(2)
+	go func() {
+		defer group.Done()
+		for i := 0; i < iterations; i++ {
+			store.ConfigureMiniMax(config.MiniMaxConfig{})
+		}
+	}()
+	go func() {
+		defer group.Done()
+		for i := 0; i < iterations; i++ {
+			_, _, _ = store.TextToAudio(context.Background(), "", "voice", "text")
+		}
+	}()
+	group.Wait()
 }
 
 func TestDefaultSynthesisModelFollowsVoiceProvider(t *testing.T) {

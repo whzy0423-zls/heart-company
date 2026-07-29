@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
@@ -24,11 +25,13 @@ import (
 )
 
 type Store struct {
-	bailian  *BailianClient
-	client   *MiniMaxClient
-	db       *sql.DB
-	provider string
-	uploads  *uploadasset.Store
+	bailianMu sync.RWMutex
+	bailian   *BailianClient
+	minimaxMu sync.RWMutex
+	client    *MiniMaxClient
+	db        *sql.DB
+	provider  string
+	uploads   *uploadasset.Store
 }
 
 type Profile struct {
@@ -104,6 +107,49 @@ type CreateProfileInput struct {
 	VoiceID       string `json:"voiceId"`
 }
 
+type bailianCopyAction uint8
+
+const (
+	returnExistingBailianCopy bailianCopyAction = iota
+	cloneExistingBailianCopy
+)
+
+func bailianCopyActionForStatus(status string) bailianCopyAction {
+	switch status {
+	case "draft", "failed":
+		return cloneExistingBailianCopy
+	default:
+		return returnExistingBailianCopy
+	}
+}
+
+type bailianCopyPlan struct {
+	Name          string
+	Provider      string
+	Remark        string
+	SampleAssetID int64
+	SampleName    string
+	SampleURL     string
+}
+
+func buildBailianCopyPlan(source Profile) (bailianCopyPlan, error) {
+	if normalizeProfileProvider(source.Provider) != ProviderMiniMax {
+		return bailianCopyPlan{}, fmt.Errorf("仅支持复制 MiniMax 人声档案到阿里百炼")
+	}
+	assetID, err := parseOptionalID(source.SampleAssetID)
+	if err != nil || assetID == 0 {
+		return bailianCopyPlan{}, fmt.Errorf("音频样本不存在")
+	}
+	return bailianCopyPlan{
+		Name:          source.Name + "（百炼）",
+		Provider:      ProviderBailian,
+		Remark:        source.Remark,
+		SampleAssetID: assetID,
+		SampleName:    source.SampleName,
+		SampleURL:     source.SampleURL,
+	}, nil
+}
+
 type GenerateInput struct {
 	Model     string `json:"model"`
 	ProfileID string `json:"profileId"`
@@ -126,17 +172,57 @@ type ContentGenerateInput struct {
 }
 
 func NewStore(database *sql.DB, uploads *uploadasset.Store, cfg config.MiniMaxConfig) *Store {
+	return NewStoreWithBailian(database, uploads, cfg, BailianConfig{})
+}
+
+// NewStoreWithBailian keeps the MiniMax voice runtime and the Bailian copy
+// runtime independent. MiniMax remains responsible for its existing clone and
+// synthesis flows; Bailian is used only for Bailian profiles.
+func NewStoreWithBailian(database *sql.DB, uploads *uploadasset.Store, minimax config.MiniMaxConfig, bailian BailianConfig) *Store {
 	return &Store{
-		bailian: NewBailianClient(BailianConfig{
-			APIBase:     cfg.APIBase,
-			APIKey:      cfg.APIKey,
-			TargetModel: cfg.Model,
-		}),
-		client:   NewMiniMaxClient(cfg),
+		bailian:  NewBailianClient(bailian),
+		client:   NewMiniMaxClient(minimax),
 		db:       database,
-		provider: normalizeStoreProvider(cfg),
+		provider: normalizeStoreProvider(minimax),
 		uploads:  uploads,
 	}
+}
+
+// ConfigureBailianCopy refreshes only the credentials used by Bailian profile
+// copies. It deliberately leaves the MiniMax client untouched.
+func (s *Store) ConfigureBailianCopy(cfg BailianConfig) {
+	if s == nil {
+		return
+	}
+	s.bailianMu.Lock()
+	defer s.bailianMu.Unlock()
+	s.bailian = NewBailianClient(cfg)
+}
+
+func (s *Store) bailianClient() *BailianClient {
+	s.bailianMu.RLock()
+	defer s.bailianMu.RUnlock()
+	return s.bailian
+}
+
+// ConfigureMiniMax refreshes the original MiniMax voice runtime while
+// preserving the independently configured Bailian copy client.
+func (s *Store) ConfigureMiniMax(cfg config.MiniMaxConfig) {
+	if s == nil {
+		return
+	}
+	client := NewMiniMaxClient(cfg)
+	provider := normalizeStoreProvider(cfg)
+	s.minimaxMu.Lock()
+	defer s.minimaxMu.Unlock()
+	s.client = client
+	s.provider = provider
+}
+
+func (s *Store) minimaxRuntime() (*MiniMaxClient, string) {
+	s.minimaxMu.RLock()
+	defer s.minimaxMu.RUnlock()
+	return s.client, s.provider
 }
 
 func normalizeStoreProvider(cfg config.MiniMaxConfig) string {
@@ -263,6 +349,7 @@ func (s *Store) CloneProfile(ctx context.Context, id string) (Profile, error) {
 	}
 	asset, err := s.uploads.Find(ctx, assetID)
 	if err != nil {
+		_ = s.setProfileStatus(ctx, id, "failed", "读取音频样本失败: "+err.Error())
 		return Profile{}, fmt.Errorf("读取音频样本失败: %w", err)
 	}
 	if err := s.setProfileStatus(ctx, id, "cloning", ""); err != nil {
@@ -274,20 +361,22 @@ func (s *Store) CloneProfile(ctx context.Context, id string) (Profile, error) {
 	}
 	switch normalizeProfileProvider(profile.Provider) {
 	case ProviderMiniMax:
-		fileID, err := s.client.UploadCloneAudio(ctx, asset.Name, asset.ContentType, asset.Data)
+		client, _ := s.minimaxRuntime()
+		fileID, err := client.UploadCloneAudio(ctx, asset.Name, asset.ContentType, asset.Data)
 		if err != nil {
 			_ = s.setProfileStatus(ctx, id, "failed", err.Error())
 			return Profile{}, err
 		}
-		if err := s.client.CloneVoice(ctx, fileID, voiceID); err != nil {
+		if err := client.CloneVoice(ctx, fileID, voiceID); err != nil {
 			_ = s.setProfileStatus(ctx, id, "failed", err.Error())
 			return Profile{}, err
 		}
 	case ProviderBailian:
-		if s.bailian == nil {
+		bailian := s.bailianClient()
+		if bailian == nil {
 			return Profile{}, fmt.Errorf("阿里百炼声音复刻未配置")
 		}
-		finalVoiceID, err := s.bailian.CloneVoice(ctx, BailianCloneInput{
+		finalVoiceID, err := bailian.CloneVoice(ctx, BailianCloneInput{
 			AudioURL:    asset.ObjectURL,
 			ContentType: asset.ContentType,
 			Data:        asset.Data,
@@ -313,6 +402,105 @@ func (s *Store) CloneProfile(ctx context.Context, id string) (Profile, error) {
 		return Profile{}, err
 	}
 	return s.Profile(ctx, id)
+}
+
+// CopyProfileToBailian creates (or resumes) the one Bailian clone associated
+// with a MiniMax profile's sample asset. The source profile remains untouched.
+func (s *Store) CopyProfileToBailian(ctx context.Context, sourceID string) (Profile, error) {
+	source, err := s.Profile(ctx, sourceID)
+	if err != nil {
+		return Profile{}, err
+	}
+	plan, err := buildBailianCopyPlan(source)
+	if err != nil {
+		return Profile{}, err
+	}
+	if s.uploads == nil {
+		return Profile{}, fmt.Errorf("读取音频样本失败")
+	}
+	if _, err := s.uploads.Find(ctx, plan.SampleAssetID); err != nil {
+		return Profile{}, fmt.Errorf("读取音频样本失败: %w", err)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Profile{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx,
+		`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+		"voice-profile-copy-to-bailian:"+fmt.Sprint(plan.SampleAssetID),
+	); err != nil {
+		return Profile{}, err
+	}
+
+	var existingID string
+	err = tx.QueryRowContext(ctx,
+		`SELECT id::text
+		   FROM voice_profiles
+		  WHERE provider=$1 AND sample_asset_id=$2
+		  ORDER BY create_time ASC
+		  LIMIT 1`,
+		ProviderBailian, plan.SampleAssetID,
+	).Scan(&existingID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return Profile{}, err
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		if err := tx.QueryRowContext(ctx,
+			`INSERT INTO voice_profiles (name, provider, voice_id, sample_asset_id, sample_url, sample_name, status, remark)
+			 VALUES ($1,$2,$3,$4,$5,$6,'draft',$7)
+			 RETURNING id::text`,
+			plan.Name, plan.Provider, "nx_voice_"+randomID(10), plan.SampleAssetID, plan.SampleURL, plan.SampleName, plan.Remark,
+		).Scan(&existingID); err != nil {
+			return Profile{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Profile{}, err
+	}
+
+	profile, err := s.Profile(ctx, existingID)
+	if err != nil {
+		return Profile{}, err
+	}
+	if bailianCopyActionForStatus(profile.Status) == returnExistingBailianCopy {
+		return profile, nil
+	}
+	claimed, err := s.claimProfileClone(ctx, existingID)
+	if err != nil {
+		return Profile{}, err
+	}
+	if !claimed {
+		return s.Profile(ctx, existingID)
+	}
+	profile, err = s.CloneProfile(ctx, existingID)
+	if err == nil {
+		return profile, nil
+	}
+	// Keep a failed copy visible so the caller can retry it after correcting
+	// the underlying provider or object-storage configuration.
+	if saved, findErr := s.Profile(ctx, existingID); findErr == nil {
+		return saved, nil
+	}
+	return Profile{}, err
+}
+
+func (s *Store) claimProfileClone(ctx context.Context, id string) (bool, error) {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE voice_profiles
+		    SET status='cloning', last_error='', update_time=now()
+		  WHERE id=$1 AND status IN ('draft','failed')`,
+		id,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected == 1, nil
 }
 
 func (s *Store) Profile(ctx context.Context, id string) (Profile, error) {
@@ -342,18 +530,21 @@ func (s *Store) DeleteProfile(ctx context.Context, id string) error {
 // article 听书 pipeline) can reuse the configured client without importing it
 // directly.
 func (s *Store) TextToAudio(ctx context.Context, model string, voiceID string, text string) ([]byte, string, error) {
-	return s.textToAudio(ctx, s.provider, model, voiceID, text)
+	_, provider := s.minimaxRuntime()
+	return s.textToAudio(ctx, provider, model, voiceID, text)
 }
 
 func (s *Store) textToAudio(ctx context.Context, provider string, model string, voiceID string, text string) ([]byte, string, error) {
 	switch normalizeProfileProvider(provider) {
 	case ProviderBailian:
-		if s.bailian == nil {
+		bailian := s.bailianClient()
+		if bailian == nil {
 			return nil, "", errors.New("阿里百炼 TTS 未配置")
 		}
-		return s.bailian.TextToAudio(ctx, model, voiceID, text)
+		return bailian.TextToAudio(ctx, model, voiceID, text)
 	case ProviderMiniMax:
-		return s.client.TextToAudio(ctx, model, voiceID, text)
+		client, _ := s.minimaxRuntime()
+		return client.TextToAudio(ctx, model, voiceID, text)
 	default:
 		return nil, "", fmt.Errorf("不支持的 TTS provider: %s", provider)
 	}
@@ -448,7 +639,8 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 }
 
 func (s *Store) VoiceOptions(ctx context.Context) ([]VoiceOption, error) {
-	options, err := s.client.OfficialVoices(ctx)
+	client, _ := s.minimaxRuntime()
+	options, err := client.OfficialVoices(ctx)
 	if err != nil || len(options) == 0 {
 		options = fallbackOfficialVoiceOptions()
 	}
