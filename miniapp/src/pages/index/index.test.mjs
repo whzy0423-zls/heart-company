@@ -126,7 +126,7 @@ assert.match(
 );
 assert.match(
   style,
-  /\.expert-hero__portrait\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;[^}]*width:\s*100%;[^}]*height:\s*100%;/s,
+  /\.expert-hero__portrait\s*\{[^}]*position:\s*absolute;[^}]*top:\s*0;[^}]*right:\s*0;[^}]*bottom:\s*0;[^}]*left:\s*0;[^}]*width:\s*100%;[^}]*height:\s*100%;/s,
   "the portrait preview button should fill the complete hero surface",
 );
 assert.match(
