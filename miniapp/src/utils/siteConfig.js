@@ -83,6 +83,7 @@ function learningSources(config) {
     config?.home?.lessons,
     config?.home?.courses,
     config?.home?.quotes,
+    config?.home?.miniappLearn,
   ]
 }
 

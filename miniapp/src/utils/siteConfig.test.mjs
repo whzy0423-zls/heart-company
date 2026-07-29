@@ -43,6 +43,16 @@ assert.notDeepEqual(refreshed, first)
 assert.deepEqual(getStoredSiteConfig(), refreshed, 'explicit refresh should update stored cache')
 assert.equal(hasSiteConfigLearningContent(refreshed), true, 'site config with courses/quotes should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ home: {} }), false, 'empty site config should not replace cached learning content')
+assert.equal(
+  hasSiteConfigLearningContent({ home: { miniappLearn: { hero: { title: '可配置学习页' } } } }),
+  true,
+  'configured learning-page copy should count as learning content',
+)
+assert.equal(
+  hasSiteConfigLearningContent({ home: { miniappLearn: {} } }),
+  false,
+  'an explicitly empty learning-page copy object should not count as visible learning content',
+)
 assert.equal(hasSiteConfigLearningContent({ teacher: { name: '韩老师' } }), true, 'root teacher profile should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ home: { teachers: [{ name: '韩老师' }] } }), true, 'home teachers should count as learning content')
 assert.equal(
@@ -54,6 +64,11 @@ assert.equal(hasSiteConfigLearningContent({ materials: [{ title: '课件' }] }),
 assert.equal(hasSiteConfigLearningContent({ home: { courseware: { items: [{ title: '课件' }] } } }), true, 'home courseware should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ home: { courses: { items: [] }, quotes: { items: [] } } }), false, 'empty learning arrays should not count as visible learning content')
 assert.equal(hasSiteConfigLearningSection({ home: {} }), false, 'missing learning section should be treated as incomplete')
+assert.equal(
+  hasSiteConfigLearningSection({ home: { miniappLearn: {} } }),
+  true,
+  'an explicitly empty learning-page copy object should preserve the intentional learning section',
+)
 assert.equal(hasSiteConfigLearningSection({ home: { teacher: {} } }), true, 'explicit teacher section should be treated as intentional content')
 assert.equal(
   hasSiteConfigLearningSection({ home: { teacherTeaser: {} } }),

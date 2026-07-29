@@ -13,12 +13,24 @@ export const DEFAULT_MINIAPP_LEARN = Object.freeze({
     heroTitle: '把老师以往开课内容，整理成可以持续学习的专业课件',
     heroLead: '支持视频和音频；先看独立课件，也可以进入系列课程循序学习。',
     ctaText: '进入老师课堂',
+    emptyTitle: '老师课堂正在准备中',
+    emptyDescription: '可以先浏览老师介绍和课程方向，新的视频与音频课件会在这里持续更新。',
+    emptyActionText: '进入课堂看看',
   }),
   sections: Object.freeze({
     teacher: Object.freeze({ eyebrow: '老师简介', title: '认识你的学习向导' }),
-    courses: Object.freeze({ eyebrow: '课程方向', title: '循序建立九型视角' }),
+    courses: Object.freeze({
+      eyebrow: '课程方向',
+      title: '循序建立九型视角',
+      emptyTitle: '课程方向正在整理中',
+      emptyDescription: '更多面向个人成长、关系沟通与企业团队的学习主题会持续补充。',
+    }),
     types: Object.freeze({ eyebrow: '九型内容', title: '九种性格，九条成长路径' }),
-    quotes: Object.freeze({ eyebrow: '课堂一念', title: '把觉察带回当下' }),
+    quotes: Object.freeze({
+      eyebrow: '课堂一念',
+      title: '把觉察带回当下',
+      emptyTitle: '课堂语录即将上线',
+    }),
   }),
   bottomCtaText: '先完成测试，建立你的学习地图',
 })
@@ -40,12 +52,15 @@ function normalizeMeta(value) {
   return items.length ? items : [...DEFAULT_MINIAPP_LEARN.hero.meta]
 }
 
-function normalizeSection(value, fallback) {
+function normalizeSection(value, fallback, optionalTextFields = []) {
   const source = isRecord(value) ? value : {}
-  return {
-    eyebrow: text(source.eyebrow, fallback.eyebrow),
-    title: text(source.title, fallback.title),
-  }
+  return optionalTextFields.reduce(
+    (section, field) => ({ ...section, [field]: text(source[field], fallback[field]) }),
+    {
+      eyebrow: text(source.eyebrow, fallback.eyebrow),
+      title: text(source.title, fallback.title),
+    },
+  )
 }
 
 function createDefaults() {
@@ -84,12 +99,18 @@ export function normalizeMiniappLearn(config) {
         heroTitle: text(classroom.heroTitle, DEFAULT_MINIAPP_LEARN.classroom.heroTitle),
         heroLead: text(classroom.heroLead, DEFAULT_MINIAPP_LEARN.classroom.heroLead),
         ctaText: text(classroom.ctaText, DEFAULT_MINIAPP_LEARN.classroom.ctaText),
+        emptyTitle: text(classroom.emptyTitle, DEFAULT_MINIAPP_LEARN.classroom.emptyTitle),
+        emptyDescription: text(classroom.emptyDescription, DEFAULT_MINIAPP_LEARN.classroom.emptyDescription),
+        emptyActionText: text(classroom.emptyActionText, DEFAULT_MINIAPP_LEARN.classroom.emptyActionText),
       },
       sections: {
         teacher: normalizeSection(sections.teacher, DEFAULT_MINIAPP_LEARN.sections.teacher),
-        courses: normalizeSection(sections.courses, DEFAULT_MINIAPP_LEARN.sections.courses),
+        courses: normalizeSection(sections.courses, DEFAULT_MINIAPP_LEARN.sections.courses, [
+          'emptyTitle',
+          'emptyDescription',
+        ]),
         types: normalizeSection(sections.types, DEFAULT_MINIAPP_LEARN.sections.types),
-        quotes: normalizeSection(sections.quotes, DEFAULT_MINIAPP_LEARN.sections.quotes),
+        quotes: normalizeSection(sections.quotes, DEFAULT_MINIAPP_LEARN.sections.quotes, ['emptyTitle']),
       },
       bottomCtaText: text(source.bottomCtaText, DEFAULT_MINIAPP_LEARN.bottomCtaText),
     }

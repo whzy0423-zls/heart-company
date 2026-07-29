@@ -9,6 +9,7 @@ import {
 } from "../../utils/siteConfig";
 import { userErrorMessage } from "../../utils/userMessage";
 import { normalizeCoursewareItems, normalizeTeachers } from "../../utils/teacherCourseware";
+import { normalizeMiniappLearn } from "../../utils/miniappPages";
 import { listClassroomSeriesApi, listClassroomStandaloneApi } from "../../api";
 import {
   classroomCoverRatioClass,
@@ -19,6 +20,7 @@ import {
 const teachers = ref([]);
 const coursewareItems = ref([]);
 const quotes = ref([]);
+const learnCopy = ref(normalizeMiniappLearn());
 const types = ref(Object.keys(TYPES_INFO).map((id) => ({ id: Number(id), ...TYPES_INFO[id] })));
 const teacherImageErrors = ref({});
 const courseImageErrors = ref({});
@@ -35,6 +37,7 @@ let loadTicket = 0;
 let classroomTicket = 0;
 
 function applyContent(cfg) {
+  learnCopy.value = normalizeMiniappLearn(cfg);
   teachers.value = normalizeTeachers(cfg);
   coursewareItems.value = normalizeCoursewareItems(cfg);
   quotes.value = cfg?.home?.quotes?.items || [];
@@ -78,6 +81,7 @@ async function loadContent(options = {}) {
       teachers.value = normalizeTeachers();
       coursewareItems.value = normalizeCoursewareItems();
       quotes.value = [];
+      learnCopy.value = normalizeMiniappLearn();
       loadError.value = userErrorMessage(e, "内容加载失败，请稍后重试");
     }
   } finally {
@@ -196,13 +200,11 @@ function goTest() {
 <template>
   <view class="wrap learn page-stack ios-page ios-safe-bottom">
     <view class="learn-hero nx-page-hero">
-      <text class="learn-hero__eyebrow">老师课堂</text>
-      <text class="learn-hero__title">跟着老师，把九型真正用进工作与生活</text>
-      <text class="learn-hero__lead">从视频与音频课件开始，理解自己、改善关系，也为团队协作建立更清晰的共同语言。</text>
+      <text class="learn-hero__eyebrow">{{ learnCopy.hero.eyebrow }}</text>
+      <text class="learn-hero__title">{{ learnCopy.hero.title }}</text>
+      <text class="learn-hero__lead">{{ learnCopy.hero.lead }}</text>
       <view class="learn-hero__meta" aria-hidden="true">
-        <text>视频课程</text>
-        <text>音频精讲</text>
-        <text>九型实践</text>
+        <text v-for="item in learnCopy.hero.meta" :key="item">{{ item }}</text>
       </view>
     </view>
 
@@ -221,23 +223,23 @@ function goTest() {
       <view class="classroom-entry card ios-card learn-section nx-panel section">
         <view class="nx-section-head">
           <view>
-            <text class="section-kicker">课堂精选</text>
-            <text class="sec-title">视频与音频课件</text>
+            <text class="section-kicker">{{ learnCopy.classroom.eyebrow }}</text>
+            <text class="sec-title">{{ learnCopy.classroom.title }}</text>
           </view>
-          <button class="classroom-entry__more" @click="openClassroom('standalone')">查看全部</button>
+          <button class="classroom-entry__more" @click="openClassroom('standalone')">{{ learnCopy.classroom.moreText }}</button>
         </view>
 
         <view class="classroom-entry__hero">
           <view class="classroom-entry__hero-copy">
-            <text class="classroom-entry__hero-eyebrow">随时回看 · 反复练习</text>
-            <text class="classroom-entry__hero-title">把老师以往开课内容，整理成可以持续学习的专业课件</text>
-            <text class="classroom-entry__hero-lead">支持视频和音频；先看独立课件，也可以进入系列课程循序学习。</text>
+            <text class="classroom-entry__hero-eyebrow">{{ learnCopy.classroom.heroEyebrow }}</text>
+            <text class="classroom-entry__hero-title">{{ learnCopy.classroom.heroTitle }}</text>
+            <text class="classroom-entry__hero-lead">{{ learnCopy.classroom.heroLead }}</text>
             <button
               class="classroom-entry__hero-cta"
               hover-class="classroom-entry__hero-cta--pressed"
               @click="openClassroom('standalone')"
             >
-              进入老师课堂
+              {{ learnCopy.classroom.ctaText }}
             </button>
           </view>
           <view class="classroom-entry__hero-media" aria-hidden="true">
@@ -275,9 +277,9 @@ function goTest() {
         <NxAsyncState
           v-else-if="classroomPreview.length === 0"
           state="empty"
-          title="老师课堂正在准备中"
-          description="可以先浏览老师介绍和课程方向，新的视频与音频课件会在这里持续更新。"
-          action-text="进入课堂看看"
+          :title="learnCopy.classroom.emptyTitle"
+          :description="learnCopy.classroom.emptyDescription"
+          :action-text="learnCopy.classroom.emptyActionText"
           @action="openClassroom('standalone')"
         />
         <view v-else class="classroom-entry__grid">
@@ -328,8 +330,8 @@ function goTest() {
       <view class="card ios-card learn-section nx-panel section teacher-section">
         <view class="nx-section-head">
           <view>
-            <text class="section-kicker">老师简介</text>
-            <text class="sec-title">认识你的学习向导</text>
+            <text class="section-kicker">{{ learnCopy.sections.teacher.eyebrow }}</text>
+            <text class="sec-title">{{ learnCopy.sections.teacher.title }}</text>
           </view>
         </view>
         <NxAsyncState v-if="loading" state="loading" />
@@ -375,16 +377,16 @@ function goTest() {
       <view class="card ios-card learn-section nx-panel section courseware-section">
         <view class="nx-section-head">
           <view>
-            <text class="section-kicker">课程方向</text>
-            <text class="sec-title">循序建立九型视角</text>
+            <text class="section-kicker">{{ learnCopy.sections.courses.eyebrow }}</text>
+            <text class="sec-title">{{ learnCopy.sections.courses.title }}</text>
           </view>
         </view>
         <NxAsyncState v-if="loading" state="loading" />
         <NxAsyncState
           v-else-if="coursewareItems.length === 0"
           state="empty"
-          title="课程方向正在整理中"
-          description="更多面向个人成长、关系沟通与企业团队的学习主题会持续补充。"
+          :title="learnCopy.sections.courses.emptyTitle"
+          :description="learnCopy.sections.courses.emptyDescription"
         />
         <block v-else>
           <view
@@ -418,8 +420,8 @@ function goTest() {
       <view class="card ios-card learn-section nx-panel section type-section">
         <view class="nx-section-head">
           <view>
-            <text class="section-kicker">九型内容</text>
-            <text class="sec-title">九种性格，九条成长路径</text>
+            <text class="section-kicker">{{ learnCopy.sections.types.eyebrow }}</text>
+            <text class="sec-title">{{ learnCopy.sections.types.title }}</text>
           </view>
         </view>
         <view class="type-badge-grid">
@@ -445,15 +447,15 @@ function goTest() {
       <view class="card ios-card learn-section nx-panel section quote-section">
         <view class="nx-section-head">
           <view>
-            <text class="section-kicker">课堂一念</text>
-            <text class="sec-title">把觉察带回当下</text>
+            <text class="section-kicker">{{ learnCopy.sections.quotes.eyebrow }}</text>
+            <text class="sec-title">{{ learnCopy.sections.quotes.title }}</text>
           </view>
         </view>
         <NxAsyncState v-if="loading" state="loading" />
         <NxAsyncState
           v-else-if="!loadError && quotes.length === 0"
           state="empty"
-          title="课堂语录即将上线"
+          :title="learnCopy.sections.quotes.emptyTitle"
         />
         <view v-for="quote in quotes" :key="quote" class="quote-editorial">
           <text class="quote-editorial__mark" aria-hidden="true">“</text>
@@ -467,7 +469,7 @@ function goTest() {
       hover-class="learn-cta--pressed"
       @click="goTest"
     >
-      先完成测试，建立你的学习地图
+      {{ learnCopy.bottomCtaText }}
     </button>
   </view>
 </template>

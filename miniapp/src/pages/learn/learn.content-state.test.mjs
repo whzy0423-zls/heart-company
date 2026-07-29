@@ -87,7 +87,7 @@ assert.doesNotMatch(
   /#4338ca|#4f46e5|#7c3aed|#f59e0b|rgba\(\s*67,\s*56,\s*202/i,
   "learning page should remove the old purple and orange visual tokens",
 );
-assert.match(source, />老师课堂<\//, "learning page should expose 老师课堂 as its external title");
+assert.match(source, /learnCopy\.hero\.eyebrow/, "learning page should expose its normalized classroom title");
 assert.match(
   source,
   /function\s+openClassroom\s*\(tab\s*=\s*"standalone"\)/,
@@ -178,6 +178,54 @@ assert.match(
   "the classroom hero CTA should keep the project's 88rpx minimum touch target",
 );
 
+
+assert.match(
+  source,
+  /import\s*\{\s*normalizeMiniappLearn\s*\}\s*from\s*["']\.\.\/\.\.\/utils\/miniappPages["']/,
+  "learning page should import the dedicated learn-copy view model",
+);
+assert.match(
+  script,
+  /const\s+learnCopy\s*=\s*ref\(normalizeMiniappLearn\(\)\)/,
+  "learning page should keep a default-backed learn-copy view model",
+);
+assert.match(
+  script,
+  /function\s+applyContent\s*\(cfg\)\s*\{[\s\S]*?learnCopy\.value\s*=\s*normalizeMiniappLearn\(cfg\)/,
+  "cached and refreshed learning content should both normalize configured copy",
+);
+for (const binding of [
+  "learnCopy.hero.eyebrow",
+  "learnCopy.hero.title",
+  "learnCopy.hero.lead",
+  "learnCopy.hero.meta",
+  "learnCopy.classroom.eyebrow",
+  "learnCopy.classroom.title",
+  "learnCopy.classroom.moreText",
+  "learnCopy.classroom.heroEyebrow",
+  "learnCopy.classroom.heroTitle",
+  "learnCopy.classroom.heroLead",
+  "learnCopy.classroom.ctaText",
+  "learnCopy.sections.teacher.eyebrow",
+  "learnCopy.sections.teacher.title",
+  "learnCopy.sections.courses.eyebrow",
+  "learnCopy.sections.courses.title",
+  "learnCopy.sections.types.eyebrow",
+  "learnCopy.sections.types.title",
+  "learnCopy.sections.quotes.eyebrow",
+  "learnCopy.sections.quotes.title",
+  "learnCopy.sections.courses.emptyTitle",
+  "learnCopy.sections.courses.emptyDescription",
+  "learnCopy.sections.quotes.emptyTitle",
+  "learnCopy.bottomCtaText",
+]) {
+  assert.match(
+    source,
+    new RegExp(binding.replaceAll(".", "\\.")),
+    `learning page should render ${binding} from normalized configuration`,
+  );
+}
+
 const executableScript = script.replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\s*;?\s*$/gm, "");
 const dir = await mkdtemp(join(tmpdir(), "nx-learn-content-state-"));
 const modulePath = join(dir, "learn-content-state.mjs");
@@ -192,6 +240,7 @@ const refreshSiteConfig = () => globalThis.__learnHarness.refreshSiteConfig()
 const userErrorMessage = (error, fallback) => error?.message || fallback
 const normalizeTeachers = (cfg) => cfg?.teachers ? [...cfg.teachers] : ['默认老师']
 const normalizeCoursewareItems = (cfg) => cfg?.courses ? [...cfg.courses] : ['默认课程']
+const normalizeMiniappLearn = (cfg) => globalThis.__learnHarness.normalizeMiniappLearn(cfg)
 const listClassroomSeriesApi = (...args) => globalThis.__learnHarness.listSeries(...args)
 const listClassroomStandaloneApi = (...args) => globalThis.__learnHarness.listStandalone(...args)
 const normalizeClassroomSeries = (value = {}) => ({ ...value, id: String(value.id || '') })
@@ -200,7 +249,7 @@ const normalizeClassroomContent = (value = {}) => ({ ...value, id: String(value.
 
 await writeFile(
   modulePath,
-  `${harnessPrelude}\n${executableScript}\nexport { teachers, coursewareItems, quotes, loading, loadError, refreshError, refreshing, classroomPreview, classroomLoading, classroomWarning, showStoredContent, loadContent, retryContentRefresh, loadClassroomPreview, retryClassroomPreview, classroomPreviewPresentation }\n`,
+  `${harnessPrelude}\n${executableScript}\nexport { teachers, coursewareItems, quotes, learnCopy, loading, loadError, refreshError, refreshing, classroomPreview, classroomLoading, classroomWarning, showStoredContent, loadContent, retryContentRefresh, loadClassroomPreview, retryClassroomPreview, classroomPreviewPresentation }\n`,
 );
 
 let moduleCounter = 0;
@@ -218,6 +267,7 @@ function deferred() {
 async function createHarness() {
   const state = {
     cached: null,
+    normalizeMiniappLearn: (cfg) => cfg?.home?.miniappLearn || { hero: { eyebrow: '老师课堂' } },
     refreshSiteConfig: async () => ({ teachers: [], courses: [], home: { quotes: { items: [] } } }),
     listSeries: async () => ({ items: [] }),
     listStandalone: async () => ({ items: [] }),
@@ -266,6 +316,27 @@ try {
     ]) {
       assert.deepEqual(page.classroomPreviewPresentation(item), expected);
     }
+  }
+
+  {
+    const { page, state } = await createHarness();
+    state.cached = { home: { miniappLearn: { hero: { title: "缓存课堂标题" } } } };
+    assert.equal(page.showStoredContent(), true);
+    assert.equal(
+      page.learnCopy.value.hero.title,
+      "缓存课堂标题",
+      "cached learning-page configuration should be applied through the normalized copy view model",
+    );
+
+    state.refreshSiteConfig = async () => ({
+      home: { miniappLearn: { hero: { title: "更新后的课堂标题" } } },
+    });
+    await page.loadContent({ silent: true });
+    assert.equal(
+      page.learnCopy.value.hero.title,
+      "更新后的课堂标题",
+      "network refresh should replace cached learning-page copy through the same view model",
+    );
   }
 
   {
@@ -333,6 +404,27 @@ try {
 
   {
     const { page, state } = await createHarness();
+    state.cached = { home: { miniappLearn: { hero: { title: "缓存课堂标题" } } } };
+    assert.equal(page.showStoredContent(), true);
+    assert.equal(
+      page.learnCopy.value.hero.title,
+      "缓存课堂标题",
+      "cached learning-page configuration should be applied through the normalized copy view model",
+    );
+
+    state.refreshSiteConfig = async () => ({
+      home: { miniappLearn: { hero: { title: "更新后的课堂标题" } } },
+    });
+    await page.loadContent({ silent: true });
+    assert.equal(
+      page.learnCopy.value.hero.title,
+      "更新后的课堂标题",
+      "network refresh should replace cached learning-page copy through the same view model",
+    );
+  }
+
+  {
+    const { page, state } = await createHarness();
     state.cached = {
       teachers: ["缓存老师"],
       courses: ["缓存课程"],
@@ -379,6 +471,27 @@ try {
       page.coursewareItems.value,
       ["缓存课程"],
       "classroom retry must not replace legacy fallback courses",
+    );
+  }
+
+  {
+    const { page, state } = await createHarness();
+    state.cached = { home: { miniappLearn: { hero: { title: "缓存课堂标题" } } } };
+    assert.equal(page.showStoredContent(), true);
+    assert.equal(
+      page.learnCopy.value.hero.title,
+      "缓存课堂标题",
+      "cached learning-page configuration should be applied through the normalized copy view model",
+    );
+
+    state.refreshSiteConfig = async () => ({
+      home: { miniappLearn: { hero: { title: "更新后的课堂标题" } } },
+    });
+    await page.loadContent({ silent: true });
+    assert.equal(
+      page.learnCopy.value.hero.title,
+      "更新后的课堂标题",
+      "network refresh should replace cached learning-page copy through the same view model",
     );
   }
 

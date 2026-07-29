@@ -25,12 +25,20 @@ try {
       heroTitle: '把老师以往开课内容，整理成可以持续学习的专业课件',
       heroLead: '支持视频和音频；先看独立课件，也可以进入系列课程循序学习。',
       ctaText: '进入老师课堂',
+      emptyTitle: '老师课堂正在准备中',
+      emptyDescription: '可以先浏览老师介绍和课程方向，新的视频与音频课件会在这里持续更新。',
+      emptyActionText: '进入课堂看看',
     },
     sections: {
       teacher: { eyebrow: '老师简介', title: '认识你的学习向导' },
-      courses: { eyebrow: '课程方向', title: '循序建立九型视角' },
+      courses: {
+        eyebrow: '课程方向',
+        title: '循序建立九型视角',
+        emptyTitle: '课程方向正在整理中',
+        emptyDescription: '更多面向个人成长、关系沟通与企业团队的学习主题会持续补充。',
+      },
       types: { eyebrow: '九型内容', title: '九种性格，九条成长路径' },
-      quotes: { eyebrow: '课堂一念', title: '把觉察带回当下' },
+      quotes: { eyebrow: '课堂一念', title: '把觉察带回当下', emptyTitle: '课堂语录即将上线' },
     },
     bottomCtaText: '先完成测试，建立你的学习地图',
   }
@@ -45,8 +53,12 @@ try {
     home: {
       miniappLearn: {
         hero: { title: '  从一节课开始  ', meta: ['  视频课  ', '', 3, ' 音频课 ', '练习', '额外'] },
-        classroom: { ctaText: '  去学习  ' },
-        sections: { teacher: { title: '  认识导师  ' }, quotes: { eyebrow: '  今日一念  ' } },
+        classroom: { ctaText: '  去学习  ', emptyTitle: '  新课准备中  ' },
+        sections: {
+          teacher: { title: '  认识导师  ' },
+          courses: { emptyDescription: '  课程将持续补充  ' },
+          quotes: { eyebrow: '  今日一念  ', emptyTitle: '  正在精选语录  ' },
+        },
         bottomCtaText: '  开始探索  ',
       },
     },
@@ -56,12 +68,12 @@ try {
     normalizeMiniappLearn(source),
     {
       hero: { ...DEFAULT_LEARN.hero, title: '从一节课开始', meta: ['视频课', '音频课', '练习'] },
-      classroom: { ...DEFAULT_LEARN.classroom, ctaText: '去学习' },
+      classroom: { ...DEFAULT_LEARN.classroom, ctaText: '去学习', emptyTitle: '新课准备中' },
       sections: {
         teacher: { ...DEFAULT_LEARN.sections.teacher, title: '认识导师' },
-        courses: { ...DEFAULT_LEARN.sections.courses },
+        courses: { ...DEFAULT_LEARN.sections.courses, emptyDescription: '课程将持续补充' },
         types: { ...DEFAULT_LEARN.sections.types },
-        quotes: { ...DEFAULT_LEARN.sections.quotes, eyebrow: '今日一念' },
+        quotes: { ...DEFAULT_LEARN.sections.quotes, eyebrow: '今日一念', emptyTitle: '正在精选语录' },
       },
       bottomCtaText: '开始探索',
     },

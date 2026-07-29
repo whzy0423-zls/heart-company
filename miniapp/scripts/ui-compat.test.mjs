@@ -730,7 +730,7 @@ assertTemplateOrder(
   ],
   "teacher classroom learning page",
 );
-assert.match(learnTemplate, /class=["']learn-hero__eyebrow["']>老师课堂<\//, "learn hero should use the external classroom name");
+assert.match(learnTemplate, /class=["']learn-hero__eyebrow["']>\s*\{\{ learnCopy\.hero\.eyebrow \}\}/, "learn hero should render the configured external classroom name");
 assert.match(
   learnTemplate,
   /<NxAsyncState\b(?=[^>]*state=["']stale["'])(?=[^>]*@action=["']retryContentRefresh["'])[^>]*>/,
