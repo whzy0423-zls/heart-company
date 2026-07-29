@@ -48,5 +48,11 @@ assert.match(
   /\.profile-logo\s*\{[^}]*box-sizing:\s*border-box;[^}]*background:\s*var\(--nx-brand-900\);/,
   'logo fallbacks should remain contained on the deep-blue brand background',
 )
+const profileLogoStyleStart = source.indexOf('.profile-logo')
+const avatarPlaceholderStyleStart = source.indexOf('.user__avatar--ph')
+assert.ok(
+  profileLogoStyleStart > avatarPlaceholderStyleStart,
+  'the logo fallback background should be declared after the legacy placeholder background',
+)
 
 console.log('profile logo tests passed')

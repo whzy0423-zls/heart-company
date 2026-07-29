@@ -356,12 +356,6 @@ function openBookingRecords() {
   align-items: center;
   justify-content: center;
 }
-.profile-logo {
-  box-sizing: border-box;
-  padding: 12rpx;
-  background: var(--nx-brand-900);
-  object-fit: contain;
-}
 .profile-hero__eyebrow { color: var(--nx-accent-gold); font-size: 24rpx; font-weight: 800; line-height: 1.45; }
 .profile-hero__title { display: block; margin-top: 10rpx; color: var(--nx-surface); font-size: 42rpx; font-weight: 900; line-height: 1.25; }
 .profile-hero__lead { display: block; margin-top: 14rpx; color: rgba(255, 255, 255, .80); font-size: 25rpx; line-height: 1.65; }
@@ -378,6 +372,12 @@ function openBookingRecords() {
 .profile-stat__label { display: block; margin-top: 8rpx; color: rgba(255, 255, 255, .72); font-size: 24rpx; line-height: 1.35; }
 .user__avatar { width: 104rpx; height: 104rpx; flex: 0 0 104rpx; border-radius: 34rpx; border: 3rpx solid rgba(223, 188, 127, .72); box-sizing: border-box; }
 .user__avatar--ph { background: rgba(255, 255, 255, .10); color: var(--nx-accent-gold); font-size: 44rpx; font-weight: 900; display: flex; align-items: center; justify-content: center; }
+.profile-logo {
+  box-sizing: border-box;
+  padding: 12rpx;
+  background: var(--nx-brand-900);
+  object-fit: contain;
+}
 .user__info { flex: 1; min-width: 0; }
 .user__name { color: var(--nx-surface); font-size: 35rpx; font-weight: 900; display: block; line-height: 1.28; }
 .user__type { color: rgba(255, 255, 255, .72); font-size: 25rpx; display: block; margin-top: 7rpx; }
