@@ -93,6 +93,24 @@ const poster = await createResultPoster({
 });
 assert.equal(poster, "/tmp/poster.png", "poster generation should resolve the exported temp path");
 
+const modernPoster = await createResultPoster({
+  instance: {},
+  result: { type: 4 },
+  info: { color: "blue", en: "The Individualist", keywords: "理想主义" },
+  summary: "优先使用新版窗口信息接口",
+  title: "艺术型",
+  runtime: {
+    ...runtime,
+    getWindowInfo() {
+      return { pixelRatio: 3 };
+    },
+    getSystemInfoSync() {
+      throw new Error("legacy system info should not be called");
+    },
+  },
+});
+assert.equal(modernPoster, "/tmp/poster.png", "poster generation should prefer getWindowInfo when available");
+
 const previousUni = globalThis.uni;
 delete globalThis.uni;
 await assert.rejects(

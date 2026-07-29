@@ -76,6 +76,14 @@ function resolvePosterRuntime(runtime) {
   return resolvedRuntime;
 }
 
+function resolvePosterPixelRatio(runtime) {
+  const windowPixelRatio = runtime.getWindowInfo?.().pixelRatio;
+  if (Number.isFinite(windowPixelRatio) && windowPixelRatio > 0) return windowPixelRatio;
+
+  const legacyPixelRatio = runtime.getSystemInfoSync?.().pixelRatio;
+  return Number.isFinite(legacyPixelRatio) && legacyPixelRatio > 0 ? legacyPixelRatio : 2;
+}
+
 export async function createResultPoster({
   instance,
   result,
@@ -87,7 +95,7 @@ export async function createResultPoster({
   const activeRuntime = resolvePosterRuntime(runtime);
   const canvas = await findPosterCanvas(activeRuntime, instance);
   const ctx = canvas.getContext("2d");
-  const dpr = activeRuntime.getSystemInfoSync?.().pixelRatio || 2;
+  const dpr = resolvePosterPixelRatio(activeRuntime);
   canvas.width = POSTER_WIDTH * dpr;
   canvas.height = POSTER_HEIGHT * dpr;
   ctx.scale(dpr, dpr);
