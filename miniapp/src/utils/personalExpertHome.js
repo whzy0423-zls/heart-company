@@ -1,11 +1,12 @@
 import { normalizeMiniappHome } from './homeMenu.js'
 import { resolveContentAsset } from './contentAsset.js'
 
+const DEFAULT_EXPERT_PORTRAIT_IMAGE = '/assets/teacher.jpg'
+const DEFAULT_EXPERT_DETAIL_IMAGE = '/assets/teacher-poster.jpg'
 const DEFAULT_EXPERT = Object.freeze({
   eyebrow: '九型人格导师',
   title: '九型老师',
   lead: '用九型人格看见真实动机，把理解带进关系与成长。',
-  image: '',
   monogram: '九',
 })
 const DEFAULT_GAME = Object.freeze({
@@ -71,12 +72,16 @@ function teacherSource(config) {
 
 function normalizeExpert(config) {
   const { source, teaser } = teacherSource(config)
+  const portraitImage = firstAsset(source, ['portraitImage', 'avatar', 'photo'], resolveContentAsset(DEFAULT_EXPERT_PORTRAIT_IMAGE))
+  const detailImage = firstAsset(source, ['detailImage', 'poster', 'image'], resolveContentAsset(DEFAULT_EXPERT_DETAIL_IMAGE))
   if (teaser) {
     return {
       eyebrow: firstText(source, ['eyebrow'], DEFAULT_EXPERT.eyebrow),
       title: firstText(source, ['title'], DEFAULT_EXPERT.title),
       lead: firstText(source, ['lead'], DEFAULT_EXPERT.lead),
-      image: firstAsset(source, ['image', 'fallbackImage']),
+      portraitImage,
+      detailImage,
+      image: detailImage,
       monogram: '九',
     }
   }
@@ -84,7 +89,9 @@ function normalizeExpert(config) {
     eyebrow: firstText(source, ['eyebrow', 'title', 'role', 'position', 'subtitle'], DEFAULT_EXPERT.eyebrow),
     title: firstText(source, ['name', 'teacherName', 'nickname', 'title'], DEFAULT_EXPERT.title),
     lead: firstText(source, ['lead', 'bio', 'description', 'desc', 'intro', 'summary'], DEFAULT_EXPERT.lead),
-    image: firstAsset(source, ['image', 'avatar', 'photo', 'cover', 'fallbackImage']),
+    portraitImage,
+    detailImage,
+    image: detailImage,
     monogram: '九',
   }
 }
@@ -182,9 +189,11 @@ export function normalizePersonalExpertHome(config) {
       cases: [],
     }
   } catch {
+    const portraitImage = resolveContentAsset(DEFAULT_EXPERT_PORTRAIT_IMAGE)
+    const detailImage = resolveContentAsset(DEFAULT_EXPERT_DETAIL_IMAGE)
     return {
       brand: { ...normalizeMiniappHome().brand },
-      expertHero: { ...DEFAULT_EXPERT },
+      expertHero: { ...DEFAULT_EXPERT, portraitImage, detailImage, image: detailImage },
       proofStats: [],
       enterprise: personalExpertServices(),
       game: { enabled: true, ...DEFAULT_GAME },

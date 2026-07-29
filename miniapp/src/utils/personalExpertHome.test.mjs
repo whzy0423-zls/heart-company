@@ -44,7 +44,9 @@ try {
         ] },
       },
       teacherTeaser: {
-        eyebrow: '  创始导师  ', title: '  韩老师  ', lead: '  用九型看见真实动机  ', image: '  /assets/teacher-poster.jpg  ', fallbackImage: ' /assets/teacher.svg ',
+        eyebrow: '  创始导师  ', title: '  韩老师  ', lead: '  用九型看见真实动机  ',
+        portraitImage: '  /assets/teacher.jpg  ', avatar: ' /static/avatar.png ',
+        detailImage: '  /assets/teacher-poster.jpg  ', poster: ' /static/poster.png ', image: ' /static/legacy-poster.png ',
       },
       hero: { stats: [
         { value: ' 96 ', suffix: ' % ', label: ' 学员好评 ' },
@@ -70,8 +72,11 @@ try {
 
   assert.deepEqual(view.brand, { enabled: true, name: '九型·韩老师', tagline: '看见动机，找到成长方向' })
   assert.deepEqual(view.expertHero, {
-    eyebrow: '创始导师', title: '韩老师', lead: '用九型看见真实动机', image: 'https://api.example.test/assets/teacher-poster.jpg', monogram: '九',
-  }, 'teacherTeaser should take priority and resolve website-root image fields')
+    eyebrow: '创始导师', title: '韩老师', lead: '用九型看见真实动机',
+    portraitImage: 'https://api.example.test/assets/teacher.jpg',
+    detailImage: 'https://api.example.test/assets/teacher-poster.jpg',
+    image: 'https://api.example.test/assets/teacher-poster.jpg', monogram: '九',
+  }, 'teacherTeaser should prioritize and resolve separate portrait and detail image fields')
   assert.deepEqual(view.proofStats, [
     { value: '96', suffix: '%', label: '学员好评' },
     { value: '80+', suffix: '', label: '课程交付' },
@@ -93,21 +98,36 @@ try {
   assert.deepEqual(view.cases, [], 'no structured cases field means no fabricated social proof')
   assert.deepEqual(config, before, 'normalization must not mutate its input')
 
-  const fallbackImage = normalizePersonalExpertHome({ home: { teacherTeaser: { title: '老师', fallbackImage: ' /assets/teacher.svg ' } } })
-  assert.equal(fallbackImage.expertHero.image, 'https://api.example.test/assets/teacher.svg', 'teacher image should resolve the configured fallback asset')
-  assert.equal(fallbackImage.expertHero.monogram, '九')
+  const defaultImages = normalizePersonalExpertHome({ home: { teacherTeaser: { title: '老师' } } })
+  assert.equal(defaultImages.expertHero.portraitImage, 'https://api.example.test/assets/teacher.jpg')
+  assert.equal(defaultImages.expertHero.detailImage, 'https://api.example.test/assets/teacher-poster.jpg')
+  assert.equal(defaultImages.expertHero.image, defaultImages.expertHero.detailImage, 'legacy image should alias the detail image')
+  assert.equal(defaultImages.expertHero.monogram, '九')
 
-  const invalidPrimaryImage = normalizePersonalExpertHome({
-    home: { teacherTeaser: { title: '老师', image: '/legacy.png', fallbackImage: '/assets/teacher.svg' } },
+  const invalidPrimaryImages = normalizePersonalExpertHome({
+    home: { teacherTeaser: {
+      title: '老师', portraitImage: '/legacy-portrait.png', avatar: '/static/avatar.png', photo: '/static/photo.png',
+      detailImage: '/legacy-detail.png', poster: '/static/poster.png', image: '/static/legacy-poster.png',
+    } },
   })
   assert.equal(
-    invalidPrimaryImage.expertHero.image,
-    'https://api.example.test/assets/teacher.svg',
-    'an unsupported primary image must not block a valid configured fallback image',
+    invalidPrimaryImages.expertHero.portraitImage,
+    '/static/avatar.png',
+    'an unsupported portraitImage must not block a valid avatar candidate',
   )
+  assert.equal(
+    invalidPrimaryImages.expertHero.detailImage,
+    '/static/poster.png',
+    'an unsupported detailImage must not block a valid poster candidate',
+  )
+  assert.equal(invalidPrimaryImages.expertHero.image, invalidPrimaryImages.expertHero.detailImage)
 
   const rawTeacher = normalizePersonalExpertHome({ teacher: [{ name: '  林老师 ', title: ' 导师 ', image: ' /static/raw.png ', bio: ' 简介 ' }] })
-  assert.deepEqual(rawTeacher.expertHero, { eyebrow: '导师', title: '林老师', lead: '简介', image: '/static/raw.png', monogram: '九' }, 'raw teacher is used when teaser is absent')
+  assert.deepEqual(rawTeacher.expertHero, {
+    eyebrow: '导师', title: '林老师', lead: '简介',
+    portraitImage: 'https://api.example.test/assets/teacher.jpg',
+    detailImage: '/static/raw.png', image: '/static/raw.png', monogram: '九',
+  }, 'raw teacher is used when teaser is absent and legacy image remains the detail source')
 
   const disabledGame = personalExpertGameSection({ home: { miniappHome: { entriesSection: { items: [{ key: 'test', enabled: false }] } } } })
   assert.equal(disabledGame.enabled, false, 'disabled test entry should disable the game')
