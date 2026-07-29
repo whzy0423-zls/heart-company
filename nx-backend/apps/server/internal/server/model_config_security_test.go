@@ -20,6 +20,8 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/llm"
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
 	"nine-xing/nx-backend/apps/server/internal/rag"
+	"nine-xing/nx-backend/apps/server/internal/voice"
+	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
 
 const modelConfigViewTestDriverName = "nine_xing_model_config_view"
@@ -288,14 +290,16 @@ func TestApplyStoredModelConfigRetainsStoredMiniMaxVoiceCredentials(t *testing.T
 			"model": "speech-02-hd"
 		}
 	}`)
-	s := &Server{db: db, env: config.Env{MiniMax: config.MiniMaxConfig{
+	initial := voice.NewStore(nil, nil, config.MiniMaxConfig{APIKey: "env-key"})
+	s := &Server{db: db, voices: initial, env: config.Env{MiniMax: config.MiniMaxConfig{
 		APIBase: "https://env-minimax.example.com", APIKey: "env-key", GroupID: "env-group", Model: "env-model",
 	}}}
+	s.setBailianCopyConfig = initial.ConfigureBailianCopy
 
 	s.applyStoredModelConfig()
 
-	if s.voices == nil {
-		t.Fatal("stored MiniMax TTS config did not rebuild the MiniMax voice runtime")
+	if s.voices != initial {
+		t.Fatal("stored MiniMax TTS config replaced the voice store and detached the Bailian credential binding")
 	}
 	client := reflect.ValueOf(s.voices).Elem().FieldByName("client").Elem()
 	if apiBase := client.FieldByName("apiBase").String(); apiBase != "https://stored-minimax.example.com" {
@@ -306,6 +310,19 @@ func TestApplyStoredModelConfigRetainsStoredMiniMaxVoiceCredentials(t *testing.T
 	}
 	if groupID := client.FieldByName("groupID").String(); groupID != "stored-minimax-group" {
 		t.Fatalf("MiniMax GroupID = %q", groupID)
+	}
+
+	s.applyXinzhiliBailianCopyConfig(xinzhili.Config{Version: 1, TTS: xinzhili.TTSConfig{
+		Provider: xinzhili.TTSProviderBailian,
+		Endpoint: "https://dashscope.example.com",
+		APIKey:   "bailian-key",
+		Model:    "MiniMax/speech-2.8-turbo",
+		Voice:    "voice",
+		Format:   "mp3",
+	}})
+	bailian := reflect.ValueOf(s.voices).Elem().FieldByName("bailian").Elem()
+	if apiKey := bailian.FieldByName("apiKey").String(); apiKey != "bailian-key" {
+		t.Fatalf("Bailian API key = %q after MiniMax runtime update", apiKey)
 	}
 }
 

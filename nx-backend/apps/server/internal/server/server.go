@@ -462,7 +462,12 @@ func (s *Server) applyStoredModelConfig() {
 		voiceBase.APIKey = tts.APIKey
 		voiceBase.GroupID = tts.GroupID
 		voiceBase.Model = tts.Model
-		s.voices = voice.NewStore(s.db, s.uploads, voiceBase)
+		if s.voices == nil {
+			s.voices = voice.NewStore(s.db, s.uploads, voiceBase)
+			s.setBailianCopyConfig = s.voices.ConfigureBailianCopy
+		} else {
+			s.voices.ConfigureMiniMax(voiceBase)
+		}
 		if s.articles != nil {
 			s.articles.AttachAudioDeps(s.voices, s.uploads, s.voices, tts.Model)
 		}

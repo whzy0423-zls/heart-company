@@ -427,6 +427,26 @@ func TestConfigureBailianCopyIsSafeDuringBailianSynthesis(t *testing.T) {
 	group.Wait()
 }
 
+func TestConfigureMiniMaxIsSafeDuringSynthesis(t *testing.T) {
+	store := NewStore(nil, nil, config.MiniMaxConfig{})
+	const iterations = 500
+	var group sync.WaitGroup
+	group.Add(2)
+	go func() {
+		defer group.Done()
+		for i := 0; i < iterations; i++ {
+			store.ConfigureMiniMax(config.MiniMaxConfig{})
+		}
+	}()
+	go func() {
+		defer group.Done()
+		for i := 0; i < iterations; i++ {
+			_, _, _ = store.TextToAudio(context.Background(), "", "voice", "text")
+		}
+	}()
+	group.Wait()
+}
+
 func TestDefaultSynthesisModelFollowsVoiceProvider(t *testing.T) {
 	if got := defaultSynthesisModel(ProviderBailian); got != "MiniMax/speech-2.8-turbo" {
 		t.Fatalf("bailian model=%q", got)

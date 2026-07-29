@@ -27,6 +27,7 @@ import (
 type Store struct {
 	bailianMu sync.RWMutex
 	bailian   *BailianClient
+	minimaxMu sync.RWMutex
 	client    *MiniMaxClient
 	db        *sql.DB
 	provider  string
@@ -204,6 +205,26 @@ func (s *Store) bailianClient() *BailianClient {
 	return s.bailian
 }
 
+// ConfigureMiniMax refreshes the original MiniMax voice runtime while
+// preserving the independently configured Bailian copy client.
+func (s *Store) ConfigureMiniMax(cfg config.MiniMaxConfig) {
+	if s == nil {
+		return
+	}
+	client := NewMiniMaxClient(cfg)
+	provider := normalizeStoreProvider(cfg)
+	s.minimaxMu.Lock()
+	defer s.minimaxMu.Unlock()
+	s.client = client
+	s.provider = provider
+}
+
+func (s *Store) minimaxRuntime() (*MiniMaxClient, string) {
+	s.minimaxMu.RLock()
+	defer s.minimaxMu.RUnlock()
+	return s.client, s.provider
+}
+
 func normalizeStoreProvider(cfg config.MiniMaxConfig) string {
 	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
 	if provider == ProviderBailian || provider == "aliyun-bailian" || provider == "dashscope" {
@@ -340,12 +361,13 @@ func (s *Store) CloneProfile(ctx context.Context, id string) (Profile, error) {
 	}
 	switch normalizeProfileProvider(profile.Provider) {
 	case ProviderMiniMax:
-		fileID, err := s.client.UploadCloneAudio(ctx, asset.Name, asset.ContentType, asset.Data)
+		client, _ := s.minimaxRuntime()
+		fileID, err := client.UploadCloneAudio(ctx, asset.Name, asset.ContentType, asset.Data)
 		if err != nil {
 			_ = s.setProfileStatus(ctx, id, "failed", err.Error())
 			return Profile{}, err
 		}
-		if err := s.client.CloneVoice(ctx, fileID, voiceID); err != nil {
+		if err := client.CloneVoice(ctx, fileID, voiceID); err != nil {
 			_ = s.setProfileStatus(ctx, id, "failed", err.Error())
 			return Profile{}, err
 		}
@@ -508,7 +530,8 @@ func (s *Store) DeleteProfile(ctx context.Context, id string) error {
 // article 听书 pipeline) can reuse the configured client without importing it
 // directly.
 func (s *Store) TextToAudio(ctx context.Context, model string, voiceID string, text string) ([]byte, string, error) {
-	return s.textToAudio(ctx, s.provider, model, voiceID, text)
+	_, provider := s.minimaxRuntime()
+	return s.textToAudio(ctx, provider, model, voiceID, text)
 }
 
 func (s *Store) textToAudio(ctx context.Context, provider string, model string, voiceID string, text string) ([]byte, string, error) {
@@ -520,7 +543,8 @@ func (s *Store) textToAudio(ctx context.Context, provider string, model string, 
 		}
 		return bailian.TextToAudio(ctx, model, voiceID, text)
 	case ProviderMiniMax:
-		return s.client.TextToAudio(ctx, model, voiceID, text)
+		client, _ := s.minimaxRuntime()
+		return client.TextToAudio(ctx, model, voiceID, text)
 	default:
 		return nil, "", fmt.Errorf("不支持的 TTS provider: %s", provider)
 	}
@@ -615,7 +639,8 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 }
 
 func (s *Store) VoiceOptions(ctx context.Context) ([]VoiceOption, error) {
-	options, err := s.client.OfficialVoices(ctx)
+	client, _ := s.minimaxRuntime()
+	options, err := client.OfficialVoices(ctx)
 	if err != nil || len(options) == 0 {
 		options = fallbackOfficialVoiceOptions()
 	}
