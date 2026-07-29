@@ -17,7 +17,7 @@ const view = ref(normalizePersonalExpertHome());
 const carousel = ref(normalizeHomeCarousel());
 const carouselPaused = ref(false);
 const failedCarouselImages = new Set();
-const teacherPortraitFailed = ref(false);
+const teacherDetailFailed = ref(false);
 
 const siteStale = ref(false);
 const siteRefreshing = ref(false);
@@ -62,7 +62,7 @@ function applyHomeConfig(config) {
     normalizeHomeCarousel(config),
     failedCarouselImages,
   );
-  teacherPortraitFailed.value = false;
+  teacherDetailFailed.value = false;
   if (carousel.value.items.length <= 1) carouselPaused.value = false;
 }
 
@@ -108,17 +108,17 @@ function removeCarouselItem(image) {
   if (carousel.value.items.length <= 1) carouselPaused.value = false;
 }
 
-function markTeacherPortraitError(source) {
+function markTeacherDetailError(source) {
   const failedImage =
     typeof source === "string"
       ? source
       : source?.currentTarget?.dataset?.image || source?.target?.dataset?.image || "";
-  if (failedImage && failedImage !== view.value.expertHero.portraitImage) return;
-  teacherPortraitFailed.value = true;
+  if (failedImage && failedImage !== view.value.expertHero.detailImage) return;
+  teacherDetailFailed.value = true;
 }
 
 function markTeacherImageError(source) {
-  markTeacherPortraitError(source);
+  markTeacherDetailError(source);
 }
 
 function previewTeacherDetail() {
@@ -233,26 +233,22 @@ onMounted(() => {
     <view class="expert-hero nx-card">
       <button
         class="expert-hero__portrait"
-        aria-label="查看完整导师介绍"
+        aria-label="预览完整导师介绍海报"
         hover-class="expert-hero__portrait--pressed"
         @click="previewTeacherDetail"
       >
         <image
-          v-if="view.expertHero.portraitImage && !teacherPortraitFailed"
+          v-if="view.expertHero.detailImage && !teacherDetailFailed"
           class="expert-hero__image"
-          :key="view.expertHero.portraitImage"
-          :src="view.expertHero.portraitImage"
-          :data-image="view.expertHero.portraitImage"
+          :key="view.expertHero.detailImage"
+          :src="view.expertHero.detailImage"
+          :data-image="view.expertHero.detailImage"
           mode="aspectFit"
-          aria-label="导师形象"
+          aria-label="完整导师介绍海报"
           @error="markTeacherImageError"
         />
-        <view v-else class="expert-hero__monogram" aria-label="导师形象占位">
+        <view v-else class="expert-hero__monogram" aria-label="导师介绍海报占位">
           {{ view.expertHero.monogram || '九' }}
-        </view>
-        <view class="expert-hero__portrait-overlay" aria-hidden="true">
-          <text class="expert-hero__portrait-label">查看完整导师介绍</text>
-          <text class="expert-hero__portrait-arrow">↗</text>
         </view>
       </button>
       <button
@@ -550,17 +546,18 @@ button::after {
 
 .expert-hero {
   position: relative;
-  width: 600rpx;
+  width: 560rpx;
   max-width: 100%;
-  height: 1040rpx;
-  min-height: 1040rpx;
   margin: 0 auto;
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 18rpx;
+  overflow: visible;
   padding: 0;
-  border: 2rpx solid var(--nx-home-gold-portrait-border);
-  border-radius: 40rpx;
-  background: linear-gradient(138deg, var(--nx-brand-900), var(--nx-brand-700));
-  box-shadow: 0 30rpx 64rpx -34rpx var(--nx-home-elevated-shadow);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .section-heading__eyebrow,
@@ -574,17 +571,15 @@ button::after {
 
 .expert-hero__secondary {
   min-height: 88rpx;
-  position: absolute;
-  right: 28rpx;
-  bottom: 28rpx;
-  z-index: 4;
+  position: relative;
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0 26rpx;
-  border: 2rpx solid var(--nx-home-on-brand-border);
+  border: 2rpx solid var(--nx-home-gold-portrait-border);
   border-radius: 999rpx;
-  background: transparent;
+  background: var(--nx-brand-900);
   color: var(--nx-surface);
   font-size: 24rpx;
   font-weight: 800;
@@ -593,21 +588,17 @@ button::after {
 }
 
 .expert-hero__portrait {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 1;
+  position: relative;
   width: 100%;
   min-height: 88rpx;
-  height: 100%;
+  height: 998rpx;
   overflow: hidden;
   margin: 0;
   padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: var(--nx-home-on-brand-subtle);
+  border: 2rpx solid var(--nx-home-gold-portrait-border);
+  border-radius: 40rpx;
+  background: var(--nx-brand-900);
+  box-shadow: 0 30rpx 64rpx -34rpx var(--nx-home-elevated-shadow);
   line-height: normal;
   transition: opacity 180ms ease-out, transform 180ms ease-out;
 }
@@ -628,36 +619,6 @@ button::after {
   background:
     linear-gradient(155deg, transparent 30%, var(--nx-home-gold-monogram)),
     var(--nx-brand-700);
-}
-
-.expert-hero__portrait-overlay {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 2;
-  min-height: 160rpx;
-  display: flex;
-  align-items: flex-end;
-  justify-content: flex-start;
-  gap: 8rpx;
-  box-sizing: border-box;
-  padding: 52rpx 250rpx 20rpx 28rpx;
-  background: linear-gradient(180deg, transparent, var(--nx-brand-900));
-}
-
-.expert-hero__portrait-label {
-  color: var(--nx-surface);
-  font-size: 20rpx;
-  font-weight: 700;
-  line-height: 1.3;
-}
-
-.expert-hero__portrait-arrow {
-  color: var(--nx-accent-gold);
-  font-size: 22rpx;
-  font-weight: 800;
-  line-height: 1.2;
 }
 
 .proof-stats {
@@ -1105,18 +1066,15 @@ button::after {
 
 @media (max-width: 380px) {
   .expert-hero {
-    height: 920rpx;
-    min-height: 920rpx;
+    width: 494rpx;
   }
 
-  .expert-hero__portrait-overlay {
-    padding: 52rpx 24rpx 128rpx;
+  .expert-hero__portrait {
+    height: 880rpx;
+    min-height: 880rpx;
   }
 
   .expert-hero__secondary {
-    right: 24rpx;
-    bottom: 24rpx;
-    left: 24rpx;
     min-height: 88rpx;
   }
 

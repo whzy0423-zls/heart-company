@@ -74,15 +74,15 @@ assert.match(source, /\/pages\/classroom\/classroom\?tab=standalone/, "view-all 
 assert.match(source, /classroomAccessLabel/, "classroom cards should explain access permission");
 assert.match(source, /formatDuration\(item\.durationSeconds\)/, "classroom cards should expose useful duration metadata");
 
-assert.match(source, /expertHero\.portraitImage/, "expert hero should render the configured teacher portrait");
+assert.match(source, /expertHero\.detailImage/, "expert hero should render the configured teacher detail poster");
 const expertHeroTemplate = template.slice(
   template.indexOf('class="expert-hero nx-card"'),
   template.indexOf('class="proof-stats"'),
 );
 assert.doesNotMatch(
   expertHeroTemplate,
-  /class="expert-hero__(?:copy|eyebrow|title|lead)"|view\.expertHero\.(?:eyebrow|title|lead)/,
-  "the complete portrait hero should omit the former copy column and large identity overlay",
+  /class="expert-hero__(?:copy|eyebrow|title|lead|portrait-overlay|portrait-label|portrait-arrow)"|view\.expertHero\.(?:eyebrow|title|lead)/,
+  "the complete detail poster should render without custom identity or affordance overlays",
 );
 assert.doesNotMatch(
   expertHeroTemplate,
@@ -96,8 +96,8 @@ assert.doesNotMatch(
 );
 assert.match(
   expertHeroTemplate,
-  /<button\b(?=[^>]*class="expert-hero__portrait")(?=[^>]*@click="previewTeacherDetail")[^>]*>[\s\S]*?class="expert-hero__portrait-overlay"[\s\S]*?查看完整导师介绍[\s\S]*?<\/button>[\s\S]*?<button\b(?=[^>]*class="expert-hero__secondary")(?=[^>]*@click="goClassroom")[^>]*>[\s\S]*?进入老师课堂[\s\S]*?<\/button>/,
-  "the thin detail affordance should remain a sibling of the native classroom action",
+  /<button\b(?=[^>]*class="expert-hero__portrait")(?=[^>]*@click="previewTeacherDetail")[^>]*>[\s\S]*?<\/button>\s*<button\b(?=[^>]*class="expert-hero__secondary")(?=[^>]*@click="goClassroom")[^>]*>[\s\S]*?进入老师课堂[\s\S]*?<\/button>/,
+  "the classroom action should sit directly below the detail-poster preview as a sibling native button",
 );
 const portraitPreviewTemplate = expertHeroTemplate.match(
   /<button\b[^>]*class="expert-hero__portrait"[^>]*>[\s\S]*?<\/button>/,
@@ -109,20 +109,25 @@ assert.equal(
   "the classroom action must not be nested inside the portrait preview button",
 );
 assert.match(
-  template,
-  /<image\b(?=[^>]*class="expert-hero__image")(?=[^>]*:src="view\.expertHero\.portraitImage")(?=[^>]*:key="view\.expertHero\.portraitImage")(?=[^>]*:data-image="view\.expertHero\.portraitImage")[^>]*>/,
-  "teacher portrait should bind its source, render key, and error dataset to the current portrait identity",
+  expertHeroTemplate,
+  /<image\b(?=[^>]*class="expert-hero__image")(?=[^>]*:src="view\.expertHero\.detailImage")(?=[^>]*:key="view\.expertHero\.detailImage")(?=[^>]*:data-image="view\.expertHero\.detailImage")(?=[^>]*mode="aspectFit")[^>]*>/,
+  "teacher poster should bind source, render key, error identity, and aspectFit to detailImage",
 );
-assert.match(source, /teacherPortraitFailed/, "teacher portrait should own an isolated failure state");
+assert.doesNotMatch(
+  expertHeroTemplate,
+  /view\.expertHero\.portraitImage/,
+  "the detail-poster hero should not fall back to the compact portrait source",
+);
+assert.match(source, /teacherDetailFailed/, "teacher detail poster should own an isolated failure state");
 assert.match(
   template,
-  /<button\b(?=[^>]*class="expert-hero__portrait")(?=[^>]*hover-class="expert-hero__portrait--pressed")(?=[^>]*@click="previewTeacherDetail")[^>]*>[\s\S]*?查看完整导师介绍[\s\S]*?<\/button>/,
-  "teacher portrait should be one native preview button with a readable detail prompt",
+  /<button\b(?=[^>]*class="expert-hero__portrait")(?=[^>]*aria-label="预览完整导师介绍海报")(?=[^>]*hover-class="expert-hero__portrait--pressed")(?=[^>]*@click="previewTeacherDetail")[^>]*>/,
+  "teacher detail poster should be one accessible native preview button",
 );
 assert.match(
   template,
   /v-else class="expert-hero__monogram"[^>]*>[\s\S]*?view\.expertHero\.monogram \|\| '九'/,
-  "failed teacher portraits should preserve the configured Nine-Type monogram fallback",
+  "failed teacher detail posters should preserve the configured Nine-Type monogram fallback",
 );
 assert.match(
   source,
@@ -131,28 +136,28 @@ assert.match(
 );
 assert.match(
   style,
-  /\.expert-hero\s*\{[^}]*width:\s*600rpx;[^}]*max-width:\s*100%;[^}]*height:\s*1040rpx;[^}]*margin:\s*0 auto;[^}]*border:\s*2rpx solid var\(--nx-home-gold-portrait-border\)/s,
-  "the complete portrait hero should be a centered 600 by 1040rpx champagne-gold card",
+  /\.expert-hero\s*\{[^}]*width:\s*560rpx;[^}]*max-width:\s*100%;[^}]*margin:\s*0 auto;[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s,
+  "the complete detail-poster hero should be a centered 560rpx vertical stack",
 );
 assert.match(
   style,
-  /\.expert-hero__portrait\s*\{[^}]*position:\s*absolute;[^}]*top:\s*0;[^}]*right:\s*0;[^}]*bottom:\s*0;[^}]*left:\s*0;[^}]*width:\s*100%;[^}]*height:\s*100%;/s,
-  "the portrait preview button should fill the complete hero surface",
+  /\.expert-hero__portrait\s*\{[^}]*position:\s*relative;[^}]*width:\s*100%;[^}]*height:\s*998rpx;[^}]*border:\s*2rpx solid var\(--nx-home-gold-portrait-border\)/s,
+  "the poster preview should keep the complete 560 by 998rpx artwork ratio and gold border",
 );
 assert.match(
   expertHeroTemplate,
   /class="expert-hero__image"[\s\S]{0,320}mode="aspectFit"/,
-  "the portrait should use aspectFit so the complete teacher image remains visible",
+  "the detail poster should use aspectFit so its introduction, person, and slogan remain visible",
+);
+assert.doesNotMatch(
+  style,
+  /\.expert-hero__portrait-(?:overlay|label|arrow)\b/,
+  "the complete poster should not retain custom overlay styling",
 );
 assert.match(
   style,
-  /\.expert-hero__portrait-overlay\s*\{[^}]*min-height:\s*160rpx;[^}]*padding:\s*52rpx 250rpx 20rpx 28rpx;[^}]*background:\s*linear-gradient\([^;]*var\(--nx-brand-900\)[^;]*\);/s,
-  "the bottom detail affordance should stay in a thin navy action layer",
-);
-assert.match(
-  style,
-  /@media\s*\(max-width:\s*380px\)\s*\{[\s\S]*?\.expert-hero\s*\{[^}]*height:\s*920rpx;[^}]*min-height:\s*920rpx;[\s\S]*?\.expert-hero__portrait-overlay\s*\{[^}]*padding:\s*52rpx 24rpx 128rpx;[\s\S]*?\.expert-hero__secondary\s*\{[^}]*left:\s*24rpx;[^}]*min-height:\s*88rpx;/,
-  "narrow screens should keep the complete portrait first-screen friendly and stack the 88rpx classroom action",
+  /@media\s*\(max-width:\s*380px\)\s*\{[\s\S]*?\.expert-hero\s*\{[^}]*width:\s*494rpx;[\s\S]*?\.expert-hero__portrait\s*\{[^}]*height:\s*880rpx;[^}]*min-height:\s*880rpx;[\s\S]*?\.expert-hero__secondary\s*\{[^}]*min-height:\s*88rpx;/,
+  "narrow screens should proportionally shorten the complete poster while preserving the 88rpx classroom action",
 );
 assert.match(source, /failedCarouselImages/, "carousel images should keep an isolated failed-image Set");
 assert.match(source, /courseCoverErrors/, "course covers should keep isolated fallback state");
@@ -251,7 +256,7 @@ const classroomAccessLabel = (value) => value === 'paid' ? '付费课件' : '免
 
 await writeFile(
   modulePath,
-  `${prelude}\n${executableScript}\nexport { view, carousel, secondaryEntries, siteStale, siteRefreshing, teacherPortraitFailed, failedCarouselImages, classroomItems, classroomLoading, classroomError, classroomState, courseCoverErrors, initializeHome, retrySiteConfig, loadClassroomPreview, retryClassroomPreview, markTeacherPortraitError, previewTeacherDetail, removeCarouselItem, markCourseCoverError, bookEnterprise, bookEnterpriseService, startTest, activateSecondaryEntry, openClassroomItem, goClassroom, formatDuration }\n`,
+  `${prelude}\n${executableScript}\nexport { view, carousel, secondaryEntries, siteStale, siteRefreshing, teacherDetailFailed, failedCarouselImages, classroomItems, classroomLoading, classroomError, classroomState, courseCoverErrors, initializeHome, retrySiteConfig, loadClassroomPreview, retryClassroomPreview, markTeacherDetailError, previewTeacherDetail, removeCarouselItem, markCourseCoverError, bookEnterprise, bookEnterpriseService, startTest, activateSecondaryEntry, openClassroomItem, goClassroom, formatDuration }\n`,
 );
 
 let caseId = 0;
@@ -336,25 +341,25 @@ try {
       teacherDetailImage: "/teacher-detail-b.png",
       images: ["/bad.png", "/good.png"],
     });
-    page.markTeacherPortraitError();
+    page.markTeacherDetailError();
     page.markCourseCoverError("course:1");
     page.removeCarouselItem("/bad.png");
-    assert.equal(page.teacherPortraitFailed.value, true);
+    assert.equal(page.teacherDetailFailed.value, true);
     assert.equal(page.courseCoverErrors.value["course:1"], true);
     assert.deepEqual(page.carousel.value.items, [], "carousel failure should not depend on teacher or course cover state before config is applied");
     await page.initializeHome();
-    assert.equal(page.teacherPortraitFailed.value, false, "fresh config should reset teacher portrait failure");
+    assert.equal(page.teacherDetailFailed.value, false, "fresh config should reset teacher detail-poster failure");
     assert.deepEqual(page.carousel.value.items.map((item) => item.image), ["/good.png"], "failed carousel URLs should stay filtered after refresh");
     assert.equal(page.courseCoverErrors.value["course:1"], true, "site refresh should not mutate independent course cover failures");
-    page.markTeacherPortraitError({ currentTarget: { dataset: { image: "/teacher-a.png" } } });
-    assert.equal(page.teacherPortraitFailed.value, false, "a late error from the replaced teacher portrait must not hide the refreshed portrait");
-    page.markTeacherPortraitError({ currentTarget: { dataset: { image: "/teacher-b.png" } } });
-    assert.equal(page.teacherPortraitFailed.value, true, "the current teacher portrait should still fall back after its own error");
+    page.markTeacherDetailError({ currentTarget: { dataset: { image: "/teacher-detail-a.png" } } });
+    assert.equal(page.teacherDetailFailed.value, false, "a late error from the replaced detail poster must not hide the refreshed poster");
+    page.markTeacherDetailError({ currentTarget: { dataset: { image: "/teacher-detail-b.png" } } });
+    assert.equal(page.teacherDetailFailed.value, true, "the current teacher detail poster should still fall back after its own error");
     page.previewTeacherDetail();
     assert.deepEqual(state.previews, [{
       current: "/teacher-detail-b.png",
       urls: ["/teacher-detail-b.png"],
-    }], "teacher portrait should preview the full detail poster rather than the compact portrait");
+    }], "teacher detail poster should preview that same complete poster");
   }
 
   {
