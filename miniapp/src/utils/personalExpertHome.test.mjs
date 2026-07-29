@@ -122,6 +122,37 @@ try {
   )
   assert.equal(invalidPrimaryImages.expertHero.image, invalidPrimaryImages.expertHero.detailImage)
 
+  const legacyDetailImage = normalizePersonalExpertHome({
+    home: { teacherTeaser: { title: '老师', detailImage: '/bad-detail.png', poster: '/bad-poster.png', image: '/static/legacy-poster.png' } },
+  })
+  assert.equal(legacyDetailImage.expertHero.detailImage, '/static/legacy-poster.png', 'legacy image should remain a detail-image candidate')
+
+  const coverDetailImage = normalizePersonalExpertHome({
+    home: { teacherTeaser: {
+      title: '老师', detailImage: '/bad-detail.png', poster: '/bad-poster.png', image: '/bad-image.png', cover: '/static/cover.png', fallbackImage: '/static/fallback.png',
+    } },
+  })
+  assert.equal(coverDetailImage.expertHero.detailImage, '/static/cover.png', 'cover should be tried after legacy image')
+
+  const fallbackDetailImage = normalizePersonalExpertHome({
+    home: { teacherTeaser: {
+      title: '老师', detailImage: '/bad-detail.png', poster: '/bad-poster.png', image: '/bad-image.png', cover: '/bad-cover.png', fallbackImage: '/static/fallback.png',
+    } },
+  })
+  assert.equal(fallbackDetailImage.expertHero.detailImage, '/static/fallback.png', 'fallbackImage should remain a compatible detail candidate')
+  assert.equal(fallbackDetailImage.expertHero.image, fallbackDetailImage.expertHero.detailImage)
+
+  const rawPortrait = normalizePersonalExpertHome({ teacher: [{ name: '老师', portraitImage: '/static/portrait.png', avatar: '/static/avatar.png', photo: '/static/photo.png', cover: '/static/cover.png' }] })
+  assert.equal(rawPortrait.expertHero.portraitImage, '/static/portrait.png', 'raw teacher portraitImage should have highest priority')
+  const rawAvatar = normalizePersonalExpertHome({ teacher: [{ name: '老师', portraitImage: '/bad-portrait.png', avatar: '/static/avatar.png', photo: '/static/photo.png', cover: '/static/cover.png' }] })
+  assert.equal(rawAvatar.expertHero.portraitImage, '/static/avatar.png', 'raw teacher avatar should follow portraitImage')
+  const rawPhoto = normalizePersonalExpertHome({ teacher: [{ name: '老师', avatar: '/bad-avatar.png', photo: '/static/photo.png', cover: '/static/cover.png' }] })
+  assert.equal(rawPhoto.expertHero.portraitImage, '/static/photo.png', 'raw teacher photo should follow avatar')
+  const rawCover = normalizePersonalExpertHome({ teacher: [{ name: '老师', avatar: '/bad-avatar.png', photo: '/bad-photo.png', cover: '/static/cover.png' }] })
+  assert.equal(rawCover.expertHero.portraitImage, '/static/cover.png', 'raw teacher cover should follow photo')
+  const rawDefault = normalizePersonalExpertHome({ teacher: [{ name: '老师', avatar: '/bad-avatar.png', photo: '/bad-photo.png', cover: '/bad-cover.png' }] })
+  assert.equal(rawDefault.expertHero.portraitImage, 'https://api.example.test/assets/teacher.jpg', 'raw teacher should use the default portrait when candidates are invalid')
+
   const rawTeacher = normalizePersonalExpertHome({ teacher: [{ name: '  林老师 ', title: ' 导师 ', image: ' /static/raw.png ', bio: ' 简介 ' }] })
   assert.deepEqual(rawTeacher.expertHero, {
     eyebrow: '导师', title: '林老师', lead: '简介',
