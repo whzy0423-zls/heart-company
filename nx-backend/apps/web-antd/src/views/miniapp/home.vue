@@ -300,7 +300,7 @@ function itemKey(item: MiniappCarouselItem) {
 
 <template>
   <EditorShell
-    description="配置小程序首页轮播、品牌、主视觉、功能入口与成长内容。页面目标、图标和配色均使用固定安全选项。"
+    description="配置小程序首页轮播、品牌、主视觉、九型测试小游戏独立模块、其他功能入口与成长内容。页面目标、图标和配色均使用固定安全选项。"
     :loading="loading"
     :saving="saving"
     title="首页管理"
@@ -433,12 +433,21 @@ function itemKey(item: MiniappCarouselItem) {
           </p>
         </Collapse.Panel>
 
-        <Collapse.Panel key="entries" header="功能入口">
+        <Collapse.Panel key="entries" header="小游戏与功能入口">
+          <p
+            class="fixed-destination"
+            data-testid="test-game-config-note"
+          >
+            <strong>九型测试小游戏独立模块：</strong>
+            test
+            开关控制首页独立小游戏区；test
+            配置项所在顺序不影响独立模块位置，其他功能入口仍按下方顺序展示并支持排序。
+          </p>
           <div class="section-toggle">
-            <span>显示功能入口</span>
+            <span>显示其他功能入口</span>
             <Switch
               v-model:checked="miniappHome.entriesSection.enabled"
-              aria-label="功能入口区显示状态"
+              aria-label="其他功能入口区显示状态"
               data-testid="entries-enabled"
             />
           </div>
@@ -461,10 +470,20 @@ function itemKey(item: MiniappCarouselItem) {
             size="small"
           >
             <div class="home-entry__head">
-              <strong>{{ entry.title }}</strong>
+              <strong :data-testid="`entry-label-${entry.key}`">
+                {{
+                  entry.key === 'test'
+                    ? '九型测试小游戏（首页独立模块）'
+                    : entry.title
+                }}
+              </strong>
               <Switch
                 v-model:checked="entry.enabled"
-                :aria-label="`${entry.title}入口显示状态`"
+                :aria-label="
+                  entry.key === 'test'
+                    ? '九型测试小游戏独立模块显示状态'
+                    : `${entry.title}入口显示状态`
+                "
                 :data-testid="`entry-enabled-${entry.key}`"
               />
             </div>
