@@ -28,6 +28,7 @@ import {
 
 import {
   cloneVoiceProfileApi,
+  copyVoiceProfileToBailianApi,
   createVoiceProfileApi,
   deleteVoiceProfileApi,
   getVoiceProfilesApi,
@@ -45,6 +46,7 @@ const audioPreview = useUploadAssetPreviewResolver(
 );
 const loading = ref(false);
 const saving = ref(false);
+const copyingProfileId = ref<null | string>(null);
 const profiles = ref<VoiceProfile[]>([]);
 const total = ref(0);
 const uploadedAudioUrl = ref('');
@@ -197,6 +199,30 @@ async function retryClone(record: VoiceProfile) {
   } finally {
     saving.value = false;
   }
+}
+
+function copyProfileToBailian(record: VoiceProfile) {
+  Modal.confirm({
+    content: `将保留原 MiniMax 音色，并复用原音频样本创建「${record.name}」的百炼人声。确认继续吗？`,
+    onOk: async () => {
+      copyingProfileId.value = record.id;
+      try {
+        await copyVoiceProfileToBailianApi(record.id);
+        message.success('已复制到百炼，可到芯之力模型配置选择');
+        await load();
+      } catch (error: any) {
+        const errorMessage =
+          error?.response?.data?.error ||
+          error?.response?.data?.message ||
+          error?.message ||
+          '复制到百炼失败，请稍后重试';
+        message.error(errorMessage);
+      } finally {
+        copyingProfileId.value = null;
+      }
+    },
+    title: '复制到百炼',
+  });
 }
 
 function profileRecord(record: Record<string, any>): VoiceProfile {
@@ -355,7 +381,8 @@ onMounted(load);
                 v-model:value="query.status"
                 :options="statusOptions"
                 class="status-select"
-               placeholder="请选择备注"/>
+                placeholder="请选择备注"
+              />
               <Input
                 v-model:value="query.keyword"
                 allow-clear
@@ -414,6 +441,15 @@ onMounted(load);
                     @click="retryClone(profileRecord(record))"
                   >
                     重新克隆
+                  </Button>
+                  <Button
+                    v-if="record.provider === 'minimax' && record.sampleAssetId"
+                    :loading="copyingProfileId === record.id"
+                    size="small"
+                    type="link"
+                    @click="copyProfileToBailian(profileRecord(record))"
+                  >
+                    复制到百炼
                   </Button>
                   <Button
                     danger
