@@ -517,6 +517,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/push/unregister", s.method(http.MethodPost, s.requireAppAuth(s.appPushUnregister)))
 	// 语音识别
 	s.mux.HandleFunc("/api/app/voice/recognize", s.method(http.MethodPost, s.requireAppAuth(s.appVoiceRecognize)))
+	s.mux.HandleFunc("/api/app/xinzhili/realtime/capabilities", s.method(http.MethodGet, s.requireAppAuth(s.appXinzhiliRealtimeCapabilities)))
 	// 芯之力实时语音 WebSocket：恢复旧版手机端实时语音协议入口。
 	s.mux.HandleFunc("/api/app/xinzhili/realtime", s.requireAppAuth(s.xinzhiliRealtime))
 
