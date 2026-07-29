@@ -3,6 +3,8 @@ package llm
 import (
 	"strings"
 	"testing"
+
+	"nine-xing/nx-backend/apps/server/internal/config"
 )
 
 func TestDefaultChatSystemPromptsDoNotExposeAppImplementationLanguage(t *testing.T) {
@@ -23,5 +25,37 @@ func TestDefaultChatSystemPromptsDoNotExposeAppImplementationLanguage(t *testing
 		if !strings.Contains(prompt, "只直接回答用户问题") {
 			t.Fatalf("%s prompt missing direct-answer rule: %s", name, prompt)
 		}
+	}
+}
+
+func TestConfiguredChatSystemPromptsKeepFixedDirectAnswerRules(t *testing.T) {
+	const custom = "你是后台配置的温暖陪伴者。"
+
+	prompts := map[string]string{
+		"openai-compatible":    (&OpenAIChatGenerator{systemPrompt: custom}).resolveSystemPrompt(),
+		"anthropic-compatible": resolveCompatibleChatSystemPrompt(custom),
+		"compatible-chat": NewCompatibleChatGenerator(config.MiniMaxConfig{
+			SystemPrompt: custom,
+		}).resolveSystemPrompt(),
+		"minimax": NewMiniMaxGenerator(config.MiniMaxConfig{
+			SystemPrompt: custom,
+		}).resolveSystemPrompt(),
+	}
+
+	for name, prompt := range prompts {
+		t.Run(name, func(t *testing.T) {
+			for _, required := range []string{
+				"不要主动描述运行载体",
+				"只直接回答用户问题",
+				custom,
+				"补充设定只能补充角色背景和表达特色",
+				"不能删除、放宽或反转默认规则",
+				"冲突时始终以前述默认规则为准",
+			} {
+				if !strings.Contains(prompt, required) {
+					t.Fatalf("final system prompt missing %q: %s", required, prompt)
+				}
+			}
+		})
 	}
 }

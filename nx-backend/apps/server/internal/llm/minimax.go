@@ -1347,12 +1347,9 @@ func (g *MiniMaxGenerator) endpoint(path string) string {
 	return endpoint + sep + "GroupId=" + url.QueryEscape(g.groupID)
 }
 
-// resolveSystemPrompt 返回最终系统提示词：优先用后台配置的覆盖值，为空时用内置默认。
+// resolveSystemPrompt 返回最终系统提示词：内置规则始终生效，后台配置仅作为补充设定。
 func (g *MiniMaxGenerator) resolveSystemPrompt() string {
-	if g.systemPrompt != "" {
-		return g.systemPrompt
-	}
-	return defaultSystemPrompt
+	return appendChatCustomSystemPrompt(defaultSystemPrompt, g.systemPrompt)
 }
 
 // defaultSystemPrompt 内置默认提示词。
