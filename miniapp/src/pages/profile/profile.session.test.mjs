@@ -42,6 +42,7 @@ assert.match(profileEditSource, /v-if="profileLoading"/, 'profile edit loading s
 assert.match(profileEditSource, /v-else-if="loadError"/, 'profile edit error state should remain available')
 assert.match(profileEditSource, /@click="loadProfile">重新加载/, 'profile edit errors should keep a retry action')
 assert.match(profileEditSource, /\.profile-save\s*\{[\s\S]*?min-height:\s*88rpx/, 'profile save should keep a full-size touch target')
+assert.match(profileEditSource, /\.nickname-field__input\s*\{[^}]*min-height:\s*88rpx/, 'nickname input should expose an 88rpx native touch target')
 const script = source.match(/<script setup>([\s\S]*?)<\/script>/)?.[1]
 assert.ok(script, 'profile page should expose a script setup block')
 

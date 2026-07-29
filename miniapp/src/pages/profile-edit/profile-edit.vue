@@ -335,14 +335,14 @@ onUnload(invalidateProfileSession)
 .wechat-note__title { display: block; color: var(--nx-brand-700); font-size: 25rpx; font-weight: 900; line-height: 1.4; }
 .wechat-note__desc { display: block; margin-top: 8rpx; color: var(--nx-text-muted); font-size: 24rpx; line-height: 1.6; }
 .profile-fields { display: flex; align-items: center; gap: 20rpx; margin-top: 24rpx; }
-.avatar-picker { width: 120rpx; height: 120rpx; min-height: 120rpx; flex: 0 0 120rpx; padding: 0; border-radius: 38rpx; background: var(--nx-surface-soft); border: 2rpx solid var(--nx-accent-gold); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.avatar-picker { width: 128rpx; height: 128rpx; min-height: 128rpx; flex: 0 0 128rpx; padding: 0; border-radius: 38rpx; background: var(--nx-surface-soft); border: 2rpx solid var(--nx-accent-gold); overflow: hidden; display: flex; align-items: center; justify-content: center; }
 .avatar-picker::after { border: none; }
 .avatar-picker--disabled { border-color: var(--nx-border); background: var(--nx-page-bg); }
-.avatar-picker__image { width: 120rpx; height: 120rpx; display: block; }
+.avatar-picker__image { width: 128rpx; height: 128rpx; display: block; }
 .avatar-picker__fallback { padding: 0 12rpx; color: var(--nx-brand-700); font-size: 24rpx; font-weight: 900; line-height: 1.3; }
-.nickname-field { flex: 1; min-width: 0; min-height: 120rpx; box-sizing: border-box; padding: 18rpx 22rpx; border-radius: 26rpx; border: 2rpx solid var(--nx-border); background: var(--nx-surface); }
-.nickname-field__label { display: block; color: var(--nx-text-muted); font-size: 24rpx; font-weight: 900; }
-.nickname-field__input { width: 100%; min-height: 52rpx; margin-top: 6rpx; color: var(--nx-text); font-size: 30rpx; font-weight: 800; }
+.nickname-field { flex: 1; min-width: 0; min-height: 128rpx; box-sizing: border-box; padding: 4rpx 22rpx; border-radius: 26rpx; border: 2rpx solid var(--nx-border); background: var(--nx-surface); display: flex; flex-direction: column; justify-content: center; }
+.nickname-field__label { display: block; color: var(--nx-text-muted); font-size: 24rpx; font-weight: 900; line-height: 32rpx; }
+.nickname-field__input { width: 100%; min-height: 88rpx; margin-top: 0; color: var(--nx-text); font-size: 30rpx; font-weight: 800; }
 .profile-save { width: 100%; min-height: 88rpx; margin-top: 26rpx; border-radius: 24rpx; background: linear-gradient(135deg, var(--nx-brand-900), var(--nx-brand-700)); color: var(--nx-surface); }
 .profile-edit-panel__hint { display: block; margin-top: 14rpx; color: var(--nx-text-muted); font-size: 24rpx; line-height: 1.55; text-align: center; }
 @media (max-width: 360px) {
