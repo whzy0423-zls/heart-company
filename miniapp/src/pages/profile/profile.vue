@@ -17,6 +17,7 @@ const bookingsError = ref('')
 const logging = ref(false)
 const profileLoading = ref(false)
 const userAvatarFailed = ref(false)
+const profileLogoFailed = ref(false)
 const visibleRecords = computed(() => previewItems(records.value))
 const hiddenRecordCount = computed(() => hiddenCount(records.value))
 const latestBooking = computed(() => bookings.value[0] || null)
@@ -181,6 +182,10 @@ function onUserAvatarError() {
   userAvatarFailed.value = true
 }
 
+function onProfileLogoError() {
+  profileLogoFailed.value = true
+}
+
 function openProfileEdit() {
   uni.navigateTo({ url: '/pages/profile-edit/profile-edit' })
 }
@@ -193,7 +198,8 @@ function openBookingRecords() {
 <template>
   <view class="wrap profile page-stack ios-page ios-safe-bottom">
     <view v-if="!logged" class="profile-hero nx-page-hero login">
-      <view class="profile-hero__mark">九</view>
+      <image v-if="!profileLogoFailed" src="/static/wheel.png" mode="aspectFit" aria-label="九型 Logo" class="profile-hero__mark profile-logo" @error="onProfileLogoError" />
+      <view v-else class="profile-hero__mark profile-hero__mark--ph">九</view>
       <text class="profile-hero__eyebrow">个人档案</text>
       <text class="profile-hero__title">记录每一次自我看见</text>
       <text class="profile-hero__lead">登录后沉淀你的九型档案、测试历史和预约记录。</text>
@@ -220,7 +226,8 @@ function openBookingRecords() {
           @keydown.space.prevent="openProfileEdit"
         >
           <image v-if="user && user.avatar && !userAvatarFailed" class="user__avatar" :src="user.avatar" mode="aspectFill" lazy-load @error="onUserAvatarError" />
-          <view v-else class="user__avatar user__avatar--ph">{{ (user && user.mainType) || '九' }}</view>
+          <image v-else-if="!profileLogoFailed" src="/static/wheel.png" mode="aspectFit" aria-label="九型 Logo" class="user__avatar user__avatar--ph profile-logo" @error="onProfileLogoError" />
+          <view v-else class="user__avatar user__avatar--ph">九</view>
           <view class="user__info">
             <text class="profile-hero__eyebrow">个人档案</text>
             <text class="user__name">{{ (user && user.nickname) || '九型用户' }}</text>
@@ -372,6 +379,12 @@ function openBookingRecords() {
 .profile-stat__label { display: block; margin-top: 8rpx; color: rgba(255, 255, 255, .72); font-size: 24rpx; line-height: 1.35; }
 .user__avatar { width: 104rpx; height: 104rpx; flex: 0 0 104rpx; border-radius: 34rpx; border: 3rpx solid rgba(223, 188, 127, .72); box-sizing: border-box; }
 .user__avatar--ph { background: rgba(255, 255, 255, .10); color: var(--nx-accent-gold); font-size: 44rpx; font-weight: 900; display: flex; align-items: center; justify-content: center; }
+.profile-logo {
+  box-sizing: border-box;
+  padding: 12rpx;
+  background: var(--nx-brand-900);
+  object-fit: contain;
+}
 .user__info { flex: 1; min-width: 0; }
 .user__name { color: var(--nx-surface); font-size: 35rpx; font-weight: 900; display: block; line-height: 1.28; }
 .user__type { color: rgba(255, 255, 255, .72); font-size: 25rpx; display: block; margin-top: 7rpx; }

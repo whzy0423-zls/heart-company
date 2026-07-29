@@ -72,8 +72,11 @@ function teacherSource(config) {
 
 function normalizeExpert(config) {
   const { source, teaser } = teacherSource(config)
-  const portraitImage = firstAsset(source, ['portraitImage', 'avatar', 'photo'], resolveContentAsset(DEFAULT_EXPERT_PORTRAIT_IMAGE))
-  const detailImage = firstAsset(source, ['detailImage', 'poster', 'image'], resolveContentAsset(DEFAULT_EXPERT_DETAIL_IMAGE))
+  const portraitKeys = teaser
+    ? ['portraitImage', 'avatar', 'photo']
+    : ['portraitImage', 'avatar', 'photo', 'cover']
+  const portraitImage = firstAsset(source, portraitKeys, resolveContentAsset(DEFAULT_EXPERT_PORTRAIT_IMAGE))
+  const detailImage = firstAsset(source, ['detailImage', 'poster', 'image', 'cover', 'fallbackImage'], resolveContentAsset(DEFAULT_EXPERT_DETAIL_IMAGE))
   if (teaser) {
     return {
       eyebrow: firstText(source, ['eyebrow'], DEFAULT_EXPERT.eyebrow),
