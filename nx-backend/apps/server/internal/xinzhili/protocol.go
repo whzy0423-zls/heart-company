@@ -101,7 +101,6 @@ func EncodeEnvelope(envelope Envelope, direction Direction, sessionReady bool) (
 func DecodeEnvelope(data []byte, direction Direction, sessionReady bool) (Envelope, error) {
 	var wire wireEnvelope
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&wire); err != nil {
 		return Envelope{}, newProtocolError(ProtocolErrorInvalidEnvelope, fmt.Errorf("decode envelope: %w", err))
 	}
@@ -200,29 +199,51 @@ func (wire wireEnvelope) envelope() (Envelope, error) {
 	if err := decodeOptional(wire.SessionID, "sessionId", &envelope.SessionID); err != nil {
 		return Envelope{}, err
 	}
-	if err := decodeRequired(wire.Generation, "generation", &envelope.Generation); err != nil {
+	if err := decodeDefault(wire.Generation, "generation", &envelope.Generation); err != nil {
 		return Envelope{}, err
 	}
 	if err := decodeOptional(wire.TurnID, "turnId", &envelope.TurnID); err != nil {
 		return Envelope{}, err
 	}
-	if err := decodeRequiredPointer(wire.SessionSeq, "sessionSeq", &envelope.SessionSeq); err != nil {
+	if err := decodeDefaultPointer(wire.SessionSeq, "sessionSeq", &envelope.SessionSeq); err != nil {
 		return Envelope{}, err
 	}
 	if err := decodeOptional(wire.TurnSeq, "turnSeq", &envelope.TurnSeq); err != nil {
 		return Envelope{}, err
 	}
-	if err := decodeRequired(wire.ConfigVersion, "configVersion", &envelope.ConfigVersion); err != nil {
+	if err := decodeDefault(wire.ConfigVersion, "configVersion", &envelope.ConfigVersion); err != nil {
 		return Envelope{}, err
 	}
 	if err := decodeRequired(wire.TimestampMs, "timestampMs", &envelope.TimestampMs); err != nil {
 		return Envelope{}, err
 	}
 	if len(wire.Payload) == 0 || isJSONNull(wire.Payload) {
-		return Envelope{}, newProtocolError(ProtocolErrorInvalidPayload, errors.New("payload is required and cannot be null"))
+		envelope.Payload = json.RawMessage(`{}`)
+	} else {
+		envelope.Payload = bytes.Clone(wire.Payload)
 	}
-	envelope.Payload = bytes.Clone(wire.Payload)
 	return envelope, nil
+}
+
+func decodeDefault[T any](raw json.RawMessage, name string, destination *T) error {
+	if len(raw) == 0 || isJSONNull(raw) {
+		var zero T
+		*destination = zero
+		return nil
+	}
+	if err := json.Unmarshal(raw, destination); err != nil {
+		return newProtocolError(ProtocolErrorInvalidEnvelope, fmt.Errorf("decode %s: %w", name, err))
+	}
+	return nil
+}
+
+func decodeDefaultPointer[T any](raw json.RawMessage, name string, destination **T) error {
+	var value T
+	if err := decodeDefault(raw, name, &value); err != nil {
+		return err
+	}
+	*destination = &value
+	return nil
 }
 
 func decodeRequired[T any](raw json.RawMessage, name string, destination *T) error {

@@ -125,9 +125,9 @@ func TestEnvelopeSessionIDLifecycle(t *testing.T) {
 	}
 }
 
-func TestDecodeEnvelopeRequiresNonNullPublicFields(t *testing.T) {
+func TestDecodeEnvelopeKeepsSafetyCriticalFieldsRequired(t *testing.T) {
 	base := []byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.ping","sessionId":"session-1","generation":0,"turnId":null,"sessionSeq":0,"turnSeq":null,"configVersion":0,"timestampMs":1,"payload":{}}`)
-	required := []string{"protocolVersion", "type", "generation", "sessionSeq", "configVersion", "timestampMs", "payload"}
+	required := []string{"protocolVersion", "type", "timestampMs"}
 	for _, field := range required {
 		for _, variant := range []string{"omitted", "null"} {
 			t.Run(field+"_"+variant, func(t *testing.T) {
@@ -152,12 +152,8 @@ func TestDecodeEnvelopeRequiresNonNullPublicFields(t *testing.T) {
 				if !errors.As(err, &protocolErr) {
 					t.Fatalf("err=%T %v", err, err)
 				}
-				wantCode := ProtocolErrorInvalidEnvelope
-				if field == "payload" {
-					wantCode = ProtocolErrorInvalidPayload
-				}
-				if protocolErr.Code != wantCode {
-					t.Fatalf("code=%q want=%q", protocolErr.Code, wantCode)
+				if protocolErr.Code != ProtocolErrorInvalidEnvelope {
+					t.Fatalf("code=%q want=%q", protocolErr.Code, ProtocolErrorInvalidEnvelope)
 				}
 			})
 		}
@@ -442,6 +438,24 @@ func TestBinaryHeaderValidatesFrameSpecificFlagsAndSegments(t *testing.T) {
 func TestBinaryWirePayloadLengthUsesUint32Contract(t *testing.T) {
 	if MaxBinaryPayloadLength != int64(^uint32(0)) {
 		t.Fatalf("MaxBinaryPayloadLength=%d", MaxBinaryPayloadLength)
+	}
+}
+
+func TestDecodeEnvelopeAcceptsPublishedV1DefaultsAndUnknownFields(t *testing.T) {
+	for _, data := range [][]byte{
+		[]byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.start","sessionId":null,"timestampMs":1,"payload":{},"clientExtra":"kept-by-client"}`),
+		[]byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.start","sessionId":null,"timestampMs":1}`),
+	} {
+		got, err := DecodeEnvelope(data, DirectionClient, false)
+		if err != nil {
+			t.Fatalf("DecodeEnvelope(%s): %v", data, err)
+		}
+		if got.Generation != 0 || got.SessionSeq == nil || *got.SessionSeq != 0 || got.ConfigVersion != 0 {
+			t.Fatalf("defaults = generation %d sessionSeq %v configVersion %d", got.Generation, got.SessionSeq, got.ConfigVersion)
+		}
+		if string(got.Payload) != "{}" {
+			t.Fatalf("payload = %s", got.Payload)
+		}
 	}
 }
 
