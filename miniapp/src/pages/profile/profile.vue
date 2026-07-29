@@ -193,7 +193,7 @@ function openBookingRecords() {
 <template>
   <view class="wrap profile page-stack ios-page ios-safe-bottom">
     <view v-if="!logged" class="profile-hero nx-page-hero login">
-      <view class="profile-hero__mark">九</view>
+      <image src="/static/wheel.png" mode="aspectFit" aria-label="九型 Logo" class="profile-hero__mark profile-logo" />
       <text class="profile-hero__eyebrow">个人档案</text>
       <text class="profile-hero__title">记录每一次自我看见</text>
       <text class="profile-hero__lead">登录后沉淀你的九型档案、测试历史和预约记录。</text>
@@ -220,7 +220,7 @@ function openBookingRecords() {
           @keydown.space.prevent="openProfileEdit"
         >
           <image v-if="user && user.avatar && !userAvatarFailed" class="user__avatar" :src="user.avatar" mode="aspectFill" lazy-load @error="onUserAvatarError" />
-          <view v-else class="user__avatar user__avatar--ph">{{ (user && user.mainType) || '九' }}</view>
+          <image v-else src="/static/wheel.png" mode="aspectFit" aria-label="九型 Logo" class="user__avatar user__avatar--ph profile-logo" />
           <view class="user__info">
             <text class="profile-hero__eyebrow">个人档案</text>
             <text class="user__name">{{ (user && user.nickname) || '九型用户' }}</text>
@@ -355,6 +355,12 @@ function openBookingRecords() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.profile-logo {
+  box-sizing: border-box;
+  padding: 12rpx;
+  background: var(--nx-brand-900);
+  object-fit: contain;
 }
 .profile-hero__eyebrow { color: var(--nx-accent-gold); font-size: 24rpx; font-weight: 800; line-height: 1.45; }
 .profile-hero__title { display: block; margin-top: 10rpx; color: var(--nx-surface); font-size: 42rpx; font-weight: 900; line-height: 1.25; }
