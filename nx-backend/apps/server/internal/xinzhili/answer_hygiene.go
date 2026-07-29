@@ -9,13 +9,14 @@ import (
 const neutralDirectAnswerFallback = "请再具体说一点，我会直接回答。"
 
 var (
-	englishTechnicalEntityPattern = regexp.MustCompile(`(?i)\b(app|client|backend|api|interface|page|website|server|sdk|flutter|android|ios|software|code|framework|request|cache)\b`)
+	englishTechnicalEntityPattern = regexp.MustCompile(`(?i)\b(apps?|clients?|backends?|apis?|interfaces?|pages?|websites?|servers?|sdks?|flutter|android|ios|software|codes?|frameworks?|requests?|caches?)\b`)
 	englishTechnicalActionPattern = regexp.MustCompile(`(?i)\b(configure|deploy|implement|build|develop|debug|fix|integrate|call|cache|request)\b`)
 	englishTechnicalCuePattern    = regexp.MustCompile(`(?i)\bhow\s+(to|do|can|should)\b`)
+	englishDefinitionCuePattern   = regexp.MustCompile(`(?i)\bwhat\s+(is|are)\b`)
 )
 
 var technicalQuestionEntities = []string{
-	"app", "flutter", "android", "ios", "sdk", "api", "客户端", "后台", "页面", "网站", "小程序", "软件", "服务器", "算法", "接口", "代码", "框架", "网络请求", "缓存",
+	"app端", "app", "flutter", "android", "ios", "sdk", "api", "客户端", "后台", "页面", "网站", "小程序", "软件", "服务器", "算法", "接口", "代码", "框架", "网络请求", "缓存",
 	"技术实现", "内部实现", "系统实现", "模型配置",
 }
 
@@ -41,7 +42,13 @@ func isExplicitTechnicalQuestion(question string) bool {
 	if englishTechnicalCuePattern.MatchString(question) && englishTechnicalEntityPattern.MatchString(question) && englishTechnicalActionPattern.MatchString(question) {
 		return true
 	}
+	if englishDefinitionCuePattern.MatchString(question) && englishTechnicalEntityPattern.MatchString(question) {
+		return true
+	}
 	normalized := compactAnswerPrefix(question)
+	if isChineseTechnicalDefinitionQuestion(normalized) {
+		return true
+	}
 	entityPositions := termPositions(normalized, technicalQuestionEntities)
 	actionPositions := termPositions(normalized, technicalQuestionActions)
 	if len(entityPositions) == 0 || len(actionPositions) == 0 {
@@ -64,6 +71,47 @@ func isExplicitTechnicalQuestion(question string) bool {
 		}
 	}
 	return false
+}
+
+func isChineseTechnicalDefinitionQuestion(value string) bool {
+	value = strings.TrimRight(value, "?？。！!；;")
+	for _, entity := range technicalQuestionEntities {
+		searchFrom := 0
+		for searchFrom < len(value) {
+			relative := strings.Index(value[searchFrom:], entity)
+			if relative < 0 {
+				break
+			}
+			start := searchFrom + relative
+			end := start + len(entity)
+			prefix, suffix := value[:start], value[end:]
+			if (definitionCueNearEntity(prefix, "什么是") || definitionCueNearEntity(prefix, "何为")) && isDefinitionQuestionTail(suffix) {
+				return true
+			}
+			if strings.HasPrefix(suffix, "是什么") && isDefinitionQuestionTail(strings.TrimPrefix(suffix, "是什么")) {
+				return true
+			}
+			searchFrom = end
+		}
+	}
+	return false
+}
+
+func definitionCueNearEntity(prefix, cue string) bool {
+	index := strings.LastIndex(prefix, cue)
+	if index < 0 {
+		return false
+	}
+	return len([]rune(prefix[index+len(cue):])) <= 8
+}
+
+func isDefinitionQuestionTail(value string) bool {
+	switch value {
+	case "", "呢", "吗", "呀", "啊":
+		return true
+	default:
+		return false
+	}
 }
 
 func termPositions(value string, terms []string) []int {
