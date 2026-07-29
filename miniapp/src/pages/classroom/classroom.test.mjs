@@ -7,6 +7,93 @@ import { pathToFileURL } from "node:url";
 const source = await readFile(new URL("./classroom.vue", import.meta.url), "utf8").catch(() => "");
 
 assert.ok(source, "classroom list page should exist");
+
+// Layout contract: keep the classroom hierarchy compact while preserving its
+// established navigation, progress, and purchase branches below.
+assert.match(
+  source,
+  /class="classroom-hero__title">视频与音频课件<\/text>/,
+  "hero should lead with the concise courseware title",
+);
+assert.match(
+  source,
+  /class="classroom-hero__lead">按自己的节奏学习，也可以跟随系列课程持续进阶。<\/text>/,
+  "hero should use the concise learning-path lead",
+);
+const heroMeta = source.match(/<view class="classroom-hero__meta"[\s\S]*?<\/view>/)?.[0] || "";
+assert.deepEqual(
+  [...heroMeta.matchAll(/<text>([^<]+)<\/text>/g)].map((match) => match[1]),
+  ["独立课件", "系列课程"],
+  "hero should expose only the two course formats",
+);
+assert.match(
+  source,
+  /\.classroom-hero\s*\{[^}]*padding:\s*28rpx\s+28rpx\s+26rpx/s,
+  "hero padding should be compact",
+);
+assert.match(
+  source,
+  /\.classroom-hero__title\s*\{[^}]*font-size:\s*36rpx[^}]*line-height:\s*1\.28/s,
+  "hero title scale should be compact",
+);
+assert.match(
+  source,
+  /\.classroom-hero__lead\s*\{[^}]*margin-top:\s*10rpx[^}]*font-size:\s*24rpx/s,
+  "hero lead spacing should be compact",
+);
+assert.match(
+  source,
+  /\.classroom-hero__meta\s*\{[^}]*gap:\s*8rpx[^}]*margin-top:\s*16rpx/s,
+  "hero tags should use compact spacing",
+);
+assert.match(
+  source,
+  /\.continue-learning\s*\{[^}]*min-height:\s*152rpx[^}]*padding:\s*20rpx/s,
+  "continue-learning card should be compact while retaining a generous touch target",
+);
+assert.match(
+  source,
+  /\.continue-learning__head\s*\{[^}]*align-items:\s*center/s,
+  "continue-learning heading and action should remain in one readable row",
+);
+assert.match(
+  source,
+  /\.continue-learning__progress\s*\{[^}]*margin-top:\s*14rpx/s,
+  "continue-learning progress should use compact spacing",
+);
+assert.match(
+  source,
+  /\.classroom-tabs\s*\{[^}]*gap:\s*8rpx[^}]*padding:\s*6rpx[^}]*border-radius:\s*20rpx/s,
+  "tab shell should be compact",
+);
+const tabButtons = source.match(/<view class="classroom-tabs"[\s\S]*?<\/view>/)?.[0] || "";
+assert.equal((tabButtons.match(/<button\b/g) || []).length, 2, "tabs should render two native buttons");
+assert.match(
+  source,
+  /\.classroom-tab\s*\{[^}]*min-height:\s*88rpx/s,
+  "each tab should preserve the 88rpx touch target",
+);
+assert.match(
+  source,
+  /\.classroom-tab--active\s*\{[^}]*color:\s*var\(--nx-surface\)[^}]*background:\s*var\(--nx-brand-700\)/s,
+  "active tab should have a clear selected state",
+);
+const coverOverlay = source.match(/<view class="classroom-card__cover-overlay">[\s\S]*?<\/view>\s*<\/view>\s*<\/view>/)?.[0] || "";
+assert.match(coverOverlay, /class="classroom-card__overlay-tags"/, "cover overlay should keep tags");
+assert.match(coverOverlay, /class="classroom-card__play-icon"/, "cover overlay should keep its glyph");
+assert.doesNotMatch(
+  coverOverlay,
+  /class="classroom-card__play-text"/,
+  "cover overlay should not repeat the card action label",
+);
+assert.doesNotMatch(
+  source,
+  /classroom-card__play-text/,
+  "duplicate cover action-label markup and styles should be removed",
+);
+const cardFooter = source.match(/<view class="classroom-card__footer">[\s\S]*?<\/view>\s*<\/view>\s*<\/view>/)?.[0] || "";
+assert.match(cardFooter, /v-if="activeTab === 'series' && itemAction\(item\)\.type === 'purchase'"/, "paid series should retain their purchase action");
+assert.match(cardFooter, /v-else\s*class="classroom-card__action"/, "all other cards should retain their single primary action");
 assert.match(source, /import NxAsyncState/, "classroom list should share the async-state component");
 for (const state of ["loading", "error", "empty"]) {
   assert.match(
