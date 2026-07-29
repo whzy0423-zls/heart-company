@@ -1235,6 +1235,13 @@ function viewBlockForClass(markup, className) {
 const teacherCardTemplate = viewBlockForClass(learnTemplate, "teacher-card");
 const teacherCardHeader = viewBlockForClass(teacherCardTemplate, "teacher-card__header");
 const teacherCardDetails = viewBlockForClass(teacherCardTemplate, "teacher-card__details");
+const classroomItemTemplate = viewBlockForClass(learnTemplate, "classroom-entry__item");
+const classroomBodyTemplate = viewBlockForClass(classroomItemTemplate, "classroom-entry__body");
+assert.match(
+  classroomBodyTemplate,
+  /class=["']classroom-entry__content["'][\s\S]*class=["']classroom-entry__action["']/,
+  "classroom preview rows should reserve their right edge for the action label",
+);
 assert.match(
   teacherCardHeader,
   /<button\b(?=[^>]*class=["']teacher-card__avatar-action["'])(?=[^>]*:aria-label=["']`预览\$\{teacher\.name \|\| '老师'\}头像`["'])(?=[^>]*hover-class=["']teacher-card__avatar-action--pressed["'])[^>]*>/,
@@ -1266,6 +1273,8 @@ assert.doesNotMatch(
   "teacher cards should not use the old side-by-side body wrapper",
 );
 for (const [selector, declaration, message] of [
+  [".classroom-entry__body", /grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s*;/, "classroom content and action should fill the row"],
+  [".classroom-entry__action", /border-radius:\s*999rpx\s*;/, "classroom action should use a compact pill anchor"],
   [".teacher-card", /flex-direction:\s*column\s*;/, "teacher cards should stack vertically"],
   [".teacher-card__header", /display:\s*flex\s*;/, "teacher identity should remain a compact row"],
   [".teacher-card__header", /flex-direction:\s*row\s*;/, "teacher identity should explicitly remain horizontal"],

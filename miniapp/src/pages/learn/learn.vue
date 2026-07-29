@@ -304,11 +304,13 @@ function goTest() {
               >
             </view>
             <view class="classroom-entry__body">
-              <view class="classroom-entry__meta">
-                <text class="classroom-entry__kind">{{ classroomPreviewPresentation(item).kind }}课件</text>
-                <text v-if="item.teacherName" class="classroom-entry__teacher">{{ item.teacherName }}</text>
+              <view class="classroom-entry__content">
+                <view class="classroom-entry__meta">
+                  <text class="classroom-entry__kind">{{ classroomPreviewPresentation(item).kind }}课件</text>
+                  <text v-if="item.teacherName" class="classroom-entry__teacher">{{ item.teacherName }}</text>
+                </view>
+                <text class="classroom-entry__title">{{ classroomPreviewPresentation(item).title }}</text>
               </view>
-              <text class="classroom-entry__title">{{ classroomPreviewPresentation(item).title }}</text>
               <text class="classroom-entry__action">
                 {{ classroomPreviewPresentation(item).action }}
               </text>
@@ -666,13 +668,20 @@ function goTest() {
   background: linear-gradient(135deg, var(--nx-surface-soft), var(--nx-accent-gold));
 }
 .classroom-entry__body {
-  display: flex;
+  display: grid;
   flex: 1;
-  flex-direction: column;
-  justify-content: flex-start;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   align-self: stretch;
+  gap: 16rpx;
   min-width: 0;
   min-height: 112rpx;
+}
+.classroom-entry__content {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
 }
 .classroom-entry__meta { display: flex; align-items: center; gap: 10rpx; color: var(--nx-text-muted); font-size: 20rpx; }
 .classroom-entry__kind { color: var(--nx-brand-700); font-weight: 900; }
@@ -691,12 +700,20 @@ function goTest() {
   -webkit-line-clamp: 2;
 }
 .classroom-entry__action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  margin-top: auto;
-  padding-top: 6rpx;
+  min-height: 64rpx;
+  margin-left: auto;
+  padding: 0 16rpx;
   color: var(--nx-brand-900);
-  font-size: 22rpx;
+  background: var(--nx-surface-soft);
+  border: 2rpx solid var(--nx-border);
+  border-radius: 999rpx;
+  font-size: 21rpx;
   font-weight: 900;
+  white-space: nowrap;
 }
 .teacher-card {
   display: flex;

@@ -221,6 +221,30 @@ function viewBlockForClass(markup, className) {
   assert.fail(`${className} should have a closing view tag`);
 }
 
+const classroomItemTemplate = viewBlockForClass(source, "classroom-entry__item");
+const classroomBodyTemplate = viewBlockForClass(classroomItemTemplate, "classroom-entry__body");
+const classroomContentTemplate = viewBlockForClass(classroomBodyTemplate, "classroom-entry__content");
+assert.match(
+  classroomContentTemplate,
+  /class="classroom-entry__meta"[\s\S]*class="classroom-entry__title"/,
+  "classroom preview content should group metadata and title in the flexible middle column",
+);
+assert.match(
+  classroomBodyTemplate,
+  /class="classroom-entry__content"[\s\S]*class="classroom-entry__action"/,
+  "classroom preview action should sit after the content as a right-side visual anchor",
+);
+assert.match(
+  source,
+  /\.classroom-entry__body\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto[^}]*align-items:\s*center/s,
+  "classroom preview body should distribute content and action across the available row width",
+);
+assert.match(
+  source,
+  /\.classroom-entry__action\s*\{(?=[^}]*display:\s*flex)(?=[^}]*margin-left:\s*auto)(?=[^}]*min-height:\s*64rpx)(?=[^}]*border-radius:\s*999rpx)[^}]*\}/s,
+  "classroom preview action should use a compact right-aligned pill instead of leaving the edge empty",
+);
+
 const teacherCardTemplate = viewBlockForClass(source, "teacher-card");
 const teacherCardHeader = viewBlockForClass(teacherCardTemplate, "teacher-card__header");
 const teacherCardDetails = viewBlockForClass(teacherCardTemplate, "teacher-card__details");
