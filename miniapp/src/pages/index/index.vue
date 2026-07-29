@@ -441,20 +441,6 @@ onMounted(() => {
 
 <style scoped>
 .home {
-  --nx-home-gold-halo: rgba(223, 188, 127, 0.2);
-  --nx-home-gold-border: rgba(223, 188, 127, 0.34);
-  --nx-home-elevated-shadow: rgba(32, 42, 55, 0.7);
-  --nx-home-gold-outline: rgba(223, 188, 127, 0.28);
-  --nx-home-on-brand-muted: rgba(255, 255, 255, 0.8);
-  --nx-home-on-brand-border: rgba(255, 255, 255, 0.42);
-  --nx-home-gold-portrait-border: rgba(223, 188, 127, 0.42);
-  --nx-home-on-brand-subtle: rgba(255, 255, 255, 0.08);
-  --nx-home-gold-monogram: rgba(223, 188, 127, 0.18);
-  --nx-home-gold-test-border: rgba(223, 188, 127, 0.46);
-  --nx-home-gold-test-wash: rgba(223, 188, 127, 0.13);
-  --nx-home-on-brand-soft: rgba(255, 255, 255, 0.5);
-  --nx-home-mark-border: rgba(49, 64, 82, 0.18);
-  --nx-home-gold-final-wash: rgba(223, 188, 127, 0.16);
   gap: 32rpx;
   background:
     radial-gradient(circle at 94% 3%, var(--nx-home-gold-halo), transparent 24%),

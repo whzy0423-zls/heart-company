@@ -1,4 +1,5 @@
 import { normalizeMiniappHome } from './homeMenu.js'
+import { resolveContentAsset } from './contentAsset.js'
 
 const DEFAULT_EXPERT = Object.freeze({
   eyebrow: '九型人格导师',
@@ -38,6 +39,14 @@ function firstText(source, keys, fallback = '') {
   return fallback
 }
 
+function firstAsset(source, keys, fallback = '') {
+  for (const key of keys) {
+    const resolved = resolveContentAsset(text(source?.[key]))
+    if (resolved) return resolved
+  }
+  return fallback
+}
+
 function asItems(value) {
   if (Array.isArray(value)) return value
   if (isRecord(value) && Array.isArray(value.items)) return value.items
@@ -67,7 +76,7 @@ function normalizeExpert(config) {
       eyebrow: firstText(source, ['eyebrow'], DEFAULT_EXPERT.eyebrow),
       title: firstText(source, ['title'], DEFAULT_EXPERT.title),
       lead: firstText(source, ['lead'], DEFAULT_EXPERT.lead),
-      image: firstText(source, ['image', 'fallbackImage']),
+      image: firstAsset(source, ['image', 'fallbackImage']),
       monogram: '九',
     }
   }
@@ -75,7 +84,7 @@ function normalizeExpert(config) {
     eyebrow: firstText(source, ['eyebrow', 'title', 'role', 'position', 'subtitle'], DEFAULT_EXPERT.eyebrow),
     title: firstText(source, ['name', 'teacherName', 'nickname', 'title'], DEFAULT_EXPERT.title),
     lead: firstText(source, ['lead', 'bio', 'description', 'desc', 'intro', 'summary'], DEFAULT_EXPERT.lead),
-    image: firstText(source, ['image', 'avatar', 'photo', 'cover', 'fallbackImage']),
+    image: firstAsset(source, ['image', 'avatar', 'photo', 'cover', 'fallbackImage']),
     monogram: '九',
   }
 }

@@ -9,6 +9,7 @@ const source = await readFile(pageUrl, "utf8");
 const template = source.match(/<template>([\s\S]*?)<\/template>/)?.[1] || "";
 const script = source.match(/<script setup>([\s\S]*?)<\/script>/)?.[1] || "";
 const style = source.match(/<style scoped>([\s\S]*?)<\/style>/)?.[1] || "";
+const theme = await readFile(new URL("../../styles/apple-mobile.css", import.meta.url), "utf8");
 
 assert.ok(template && script && style, "home page should expose template, executable page state, and scoped styles");
 
@@ -54,9 +55,8 @@ assert.equal(
   1,
   "secondary entries should have one section heading rather than a nested duplicate",
 );
-const styleWithoutSemanticColorDefinitions = style.replace(/--nx-home-[\w-]+:\s*rgba\([^;]+\);/g, "");
-assert.match(style, /--nx-home-gold-halo:\s*rgba\(/, "home should centralize translucent brand colors in semantic CSS variables");
-assert.doesNotMatch(styleWithoutSemanticColorDefinitions, /rgba\(/, "home style rules should consume semantic variables instead of scattered rgba literals");
+assert.match(theme, /--nx-home-gold-halo:\s*rgba\(/, "the root theme should centralize translucent home colors in semantic CSS variables");
+assert.doesNotMatch(style, /rgba\(/, "home style rules should consume root semantic variables instead of scattered rgba literals");
 
 for (const state of ["loading", "stale", "empty", "error"]) {
   assert.match(source, new RegExp(`NxAsyncState[\\s\\S]{0,360}state=["']${state}["']`), `home should connect NxAsyncState ${state}`);

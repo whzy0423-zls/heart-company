@@ -368,10 +368,6 @@ function submitAnother() {
 
 <style scoped>
 .booking {
-  --booking-gold-soft: rgba(223, 188, 127, 0.18);
-  --booking-gold-border: rgba(223, 188, 127, 0.34);
-  --booking-on-brand-muted: rgba(255, 255, 255, 0.82);
-  --booking-brand-shadow: rgba(32, 42, 55, 0.28);
   gap: 32rpx;
   overflow-x: hidden;
   color: var(--nx-text);

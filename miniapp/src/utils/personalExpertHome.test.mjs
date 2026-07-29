@@ -7,9 +7,23 @@ import { pathToFileURL } from 'node:url'
 const dir = await mkdtemp(join(tmpdir(), 'nx-personal-expert-home-'))
 try {
   const homeMenuPath = join(dir, 'homeMenu.mjs')
+  const contentAssetPath = join(dir, 'contentAsset.mjs')
   const modulePath = join(dir, 'personalExpertHome.mjs')
   await writeFile(homeMenuPath, await readFile(new URL('./homeMenu.js', import.meta.url), 'utf8'))
-  await writeFile(modulePath, (await readFile(new URL('./personalExpertHome.js', import.meta.url), 'utf8')).replace("'./homeMenu.js'", "'./homeMenu.mjs'"))
+  await writeFile(
+    contentAssetPath,
+    (await readFile(new URL('./contentAsset.js', import.meta.url), 'utf8'))
+      .replace(
+        /import \{ API_BASE(?:, DEFAULT_API_BASE)? \} from '\.\.\/config'/,
+        "const API_BASE = 'https://api.example.test/api'; const DEFAULT_API_BASE = API_BASE",
+      ),
+  )
+  await writeFile(
+    modulePath,
+    (await readFile(new URL('./personalExpertHome.js', import.meta.url), 'utf8'))
+      .replace("'./homeMenu.js'", "'./homeMenu.mjs'")
+      .replace("'./contentAsset.js'", "'./contentAsset.mjs'"),
+  )
 
   const {
     normalizePersonalExpertHome,
@@ -30,7 +44,7 @@ try {
         ] },
       },
       teacherTeaser: {
-        eyebrow: '  创始导师  ', title: '  韩老师  ', lead: '  用九型看见真实动机  ', image: '  /teacher.png  ', fallbackImage: ' /fallback.png ',
+        eyebrow: '  创始导师  ', title: '  韩老师  ', lead: '  用九型看见真实动机  ', image: '  /assets/teacher-poster.jpg  ', fallbackImage: ' /assets/teacher.svg ',
       },
       hero: { stats: [
         { value: ' 96 ', suffix: ' % ', label: ' 学员好评 ' },
@@ -56,8 +70,8 @@ try {
 
   assert.deepEqual(view.brand, { enabled: true, name: '九型·韩老师', tagline: '看见动机，找到成长方向' })
   assert.deepEqual(view.expertHero, {
-    eyebrow: '创始导师', title: '韩老师', lead: '用九型看见真实动机', image: '/teacher.png', monogram: '九',
-  }, 'teacherTeaser should take priority and trim image fields')
+    eyebrow: '创始导师', title: '韩老师', lead: '用九型看见真实动机', image: 'https://api.example.test/assets/teacher-poster.jpg', monogram: '九',
+  }, 'teacherTeaser should take priority and resolve website-root image fields')
   assert.deepEqual(view.proofStats, [
     { value: '96', suffix: '%', label: '学员好评' },
     { value: '80+', suffix: '', label: '课程交付' },
@@ -79,12 +93,21 @@ try {
   assert.deepEqual(view.cases, [], 'no structured cases field means no fabricated social proof')
   assert.deepEqual(config, before, 'normalization must not mutate its input')
 
-  const fallbackImage = normalizePersonalExpertHome({ home: { teacherTeaser: { title: '老师', fallbackImage: ' /fallback.png ' } } })
-  assert.equal(fallbackImage.expertHero.image, '/fallback.png', 'teacher image should fall back without inventing a URL')
+  const fallbackImage = normalizePersonalExpertHome({ home: { teacherTeaser: { title: '老师', fallbackImage: ' /assets/teacher.svg ' } } })
+  assert.equal(fallbackImage.expertHero.image, 'https://api.example.test/assets/teacher.svg', 'teacher image should resolve the configured fallback asset')
   assert.equal(fallbackImage.expertHero.monogram, '九')
 
-  const rawTeacher = normalizePersonalExpertHome({ teacher: [{ name: '  林老师 ', title: ' 导师 ', image: ' /raw.png ', bio: ' 简介 ' }] })
-  assert.deepEqual(rawTeacher.expertHero, { eyebrow: '导师', title: '林老师', lead: '简介', image: '/raw.png', monogram: '九' }, 'raw teacher is used when teaser is absent')
+  const invalidPrimaryImage = normalizePersonalExpertHome({
+    home: { teacherTeaser: { title: '老师', image: '/legacy.png', fallbackImage: '/assets/teacher.svg' } },
+  })
+  assert.equal(
+    invalidPrimaryImage.expertHero.image,
+    'https://api.example.test/assets/teacher.svg',
+    'an unsupported primary image must not block a valid configured fallback image',
+  )
+
+  const rawTeacher = normalizePersonalExpertHome({ teacher: [{ name: '  林老师 ', title: ' 导师 ', image: ' /static/raw.png ', bio: ' 简介 ' }] })
+  assert.deepEqual(rawTeacher.expertHero, { eyebrow: '导师', title: '林老师', lead: '简介', image: '/static/raw.png', monogram: '九' }, 'raw teacher is used when teaser is absent')
 
   const disabledGame = personalExpertGameSection({ home: { miniappHome: { entriesSection: { items: [{ key: 'test', enabled: false }] } } } })
   assert.equal(disabledGame.enabled, false, 'disabled test entry should disable the game')

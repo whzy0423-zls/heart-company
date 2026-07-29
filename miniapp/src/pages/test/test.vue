@@ -174,10 +174,6 @@ onUnload(() => {
 
 <style scoped>
 .test {
-  --test-gold-soft: rgba(223, 188, 127, 0.18);
-  --test-gold-border: rgba(223, 188, 127, 0.34);
-  --test-brand-shadow: rgba(32, 42, 55, 0.28);
-  --test-on-brand-muted: rgba(255, 255, 255, 0.82);
   position: relative;
   overflow: hidden;
   background:

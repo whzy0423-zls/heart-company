@@ -1,6 +1,6 @@
 import { validateProductionApiBase } from './apiBaseValidation.mjs'
 
-const DEFAULT_API_BASE = 'https://xn--9iq9az5uo8fz16d.com/api'
+export const DEFAULT_API_BASE = 'https://xn--9iq9az5uo8fz16d.com/api'
 
 function cleanBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '')
