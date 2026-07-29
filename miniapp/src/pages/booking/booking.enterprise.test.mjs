@@ -270,6 +270,24 @@ try {
 
   {
     const { page, state } = await createHarness({
+      draft: { kind: 'enterprise', contactName: '赵总', phone: '13600136000', intent: '旧服务方向', preferredTime: '本周', message: '保留草稿' },
+      siteConfig: { home: { enterprise: {
+        items: [
+          { title: '企业内训', description: '组织议题共学' },
+          { title: '团队工作坊', description: '协作共识' },
+        ],
+      } } },
+    })
+    await state.onShow()
+    page.selectServiceMode(1)
+    assert.equal(page.form.value.intent, '团队工作坊', 'explicitly selecting a configured mode should replace an existing draft intent')
+    await page.submit()
+    assert.equal(state.bookings.at(-1).kind, 'enterprise', 'selected configured mode should submit as enterprise')
+    assert.equal(state.bookings.at(-1).intent, '团队工作坊', 'selected configured mode should submit its title instead of the prior draft intent')
+  }
+
+  {
+    const { page, state } = await createHarness({
       draft: { kind: 'enterprise', contactName: '王总', phone: '13700137000', intent: '团队工作坊', preferredTime: '下周', message: '保留草稿' },
       intents: [{ kind: 'enterprise', intentText: '企业内训' }],
       siteConfig: { home: { enterprise: {

@@ -154,9 +154,7 @@ function selectServiceMode(index) {
   if (!mode) return
   selectedServiceModeIndex.value = index
   kindIndex.value = ENTERPRISE_KIND_INDEX
-  if (!form.value.intent.trim()) {
-    form.value = { ...form.value, intent: mode.title }
-  }
+  form.value = { ...form.value, intent: mode.title }
 }
 
 function clearFieldError(field) {
