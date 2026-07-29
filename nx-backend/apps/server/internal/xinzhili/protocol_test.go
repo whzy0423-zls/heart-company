@@ -459,6 +459,18 @@ func TestDecodeEnvelopeAcceptsPublishedV1DefaultsAndUnknownFields(t *testing.T) 
 	}
 }
 
+func TestDecodeEnvelopeRejectsExplicitNullPayload(t *testing.T) {
+	data := []byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.start","sessionId":null,"timestampMs":1,"payload":null}`)
+	_, err := DecodeEnvelope(data, DirectionClient, false)
+	var protocolErr *ProtocolError
+	if !errors.As(err, &protocolErr) {
+		t.Fatalf("err = %T %v", err, err)
+	}
+	if protocolErr.Code != ProtocolErrorInvalidPayload {
+		t.Fatalf("code = %q, want %q", protocolErr.Code, ProtocolErrorInvalidPayload)
+	}
+}
+
 func FuzzDecodeEnvelope(f *testing.F) {
 	f.Add([]byte{})
 	f.Add([]byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.ping","sessionId":"s","generation":0,"turnId":null,"sessionSeq":0,"turnSeq":null,"configVersion":0,"timestampMs":1,"payload":{}}`))

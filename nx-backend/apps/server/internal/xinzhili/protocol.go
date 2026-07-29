@@ -217,8 +217,10 @@ func (wire wireEnvelope) envelope() (Envelope, error) {
 	if err := decodeRequired(wire.TimestampMs, "timestampMs", &envelope.TimestampMs); err != nil {
 		return Envelope{}, err
 	}
-	if len(wire.Payload) == 0 || isJSONNull(wire.Payload) {
+	if len(wire.Payload) == 0 {
 		envelope.Payload = json.RawMessage(`{}`)
+	} else if isJSONNull(wire.Payload) {
+		return Envelope{}, newProtocolError(ProtocolErrorInvalidPayload, errors.New("payload cannot be null"))
 	} else {
 		envelope.Payload = bytes.Clone(wire.Payload)
 	}
