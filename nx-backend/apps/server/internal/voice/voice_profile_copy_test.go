@@ -18,6 +18,26 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+func TestCopyProfileToBailianStatusDecision(t *testing.T) {
+	tests := []struct {
+		status string
+		want   bailianCopyAction
+	}{
+		{status: "ready", want: returnExistingBailianCopy},
+		{status: "cloning", want: returnExistingBailianCopy},
+		{status: "draft", want: cloneExistingBailianCopy},
+		{status: "failed", want: cloneExistingBailianCopy},
+		{status: "unexpected", want: returnExistingBailianCopy},
+	}
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			if got := bailianCopyActionForStatus(tt.status); got != tt.want {
+				t.Fatalf("status %q action = %v, want %v", tt.status, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCopyProfileToBailianReusesMiniMaxSampleAndPreservesSource(t *testing.T) {
 	store, database, cleanup := newVoiceProfileCopyTestStore(t)
 	defer cleanup()

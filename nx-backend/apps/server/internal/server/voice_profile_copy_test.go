@@ -1,27 +1,27 @@
 package server
 
 import (
-	"os"
-	"strings"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
-func TestVoiceProfileCopyToBailianRouteRequiresProfileManagePermission(t *testing.T) {
-	source, err := os.ReadFile("server.go")
-	if err != nil {
-		t.Fatal(err)
+func TestCopyProfileToBailianRouteRequiresProfileManagePermission(t *testing.T) {
+	server := newRouteOnlyServer()
+	req := httptest.NewRequest(http.MethodPost, "/api/voice/profiles/42/copy-to-bailian", nil)
+	res := httptest.NewRecorder()
+	server.mux.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("copy route must stop unauthenticated requests at the profile permission guard: status=%d body=%s", res.Code, res.Body.String())
 	}
-	want := `s.mux.HandleFunc("/api/voice/profiles/", s.requirePermission("Voice:Profile:Manage", s.voiceProfileByID))`
-	if !strings.Contains(string(source), want) {
-		t.Fatalf("copy-to-bailian must be routed through the voice profile manager permission: %s", want)
-	}
+}
 
-	bodyStart := strings.Index(string(source), "func (s *Server) voiceProfileByID")
-	if bodyStart < 0 {
-		t.Fatal("voiceProfileByID handler not found")
-	}
-	body := string(source)[bodyStart:]
-	if !strings.Contains(body, `"copy-to-bailian"`) || !strings.Contains(body, "CopyProfileToBailian") {
-		t.Fatal("POST /api/voice/profiles/{id}/copy-to-bailian must call CopyProfileToBailian")
+func TestCopyProfileToBailianRouteOnlyAcceptsPost(t *testing.T) {
+	server := &Server{}
+	req := httptest.NewRequest(http.MethodGet, "/api/voice/profiles/42/copy-to-bailian", nil)
+	res := httptest.NewRecorder()
+	server.voiceProfileByID(res, req)
+	if res.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET copy route status=%d body=%s", res.Code, res.Body.String())
 	}
 }

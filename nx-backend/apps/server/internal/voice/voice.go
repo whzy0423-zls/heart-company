@@ -104,6 +104,22 @@ type CreateProfileInput struct {
 	VoiceID       string `json:"voiceId"`
 }
 
+type bailianCopyAction uint8
+
+const (
+	returnExistingBailianCopy bailianCopyAction = iota
+	cloneExistingBailianCopy
+)
+
+func bailianCopyActionForStatus(status string) bailianCopyAction {
+	switch status {
+	case "draft", "failed":
+		return cloneExistingBailianCopy
+	default:
+		return returnExistingBailianCopy
+	}
+}
+
 type GenerateInput struct {
 	Model     string `json:"model"`
 	ProfileID string `json:"profileId"`
@@ -379,10 +395,7 @@ func (s *Store) CopyProfileToBailian(ctx context.Context, sourceID string) (Prof
 	if err != nil {
 		return Profile{}, err
 	}
-	if profile.Status == "ready" || profile.Status == "cloning" {
-		return profile, nil
-	}
-	if profile.Status != "draft" && profile.Status != "failed" {
+	if bailianCopyActionForStatus(profile.Status) == returnExistingBailianCopy {
 		return profile, nil
 	}
 	claimed, err := s.claimProfileClone(ctx, existingID)
