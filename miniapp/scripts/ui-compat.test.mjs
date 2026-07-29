@@ -71,6 +71,10 @@ for (const requiredTest of [
   "src/pages/booking-records/booking-records.session.test.mjs",
   "src/utils/bookingDisplay.test.mjs",
   "src/utils/bookingSession.test.mjs",
+  "src/pages/learn/learn.content-state.test.mjs",
+  "src/pages/classroom/classroom.test.mjs",
+  "src/pages/classroom-detail/classroom-detail.test.mjs",
+  "src/pages/result/result.recommendation.test.mjs",
 ]) {
   assert.match(
     packageJson.scripts["test:config"],
@@ -556,11 +560,18 @@ assert.match(
   /await createBookingApi\(currentDraft\(\)\)[\s\S]*cancelPendingDraftSave\(\)[\s\S]*clearBookingDraft\(\)/,
   "successful booking should cancel delayed persistence before clearing its draft",
 );
+const resetFormBody =
+  sourceBracedBody(bookingPage, /function\s+resetForm\s*\(\s*\)\s*\{/.exec(bookingPage)) || "";
+assert.match(
+  resetFormBody,
+  /^\s*cancelPendingDraftSave\(\)[\s\S]*kindIndex\.value\s*=\s*ENTERPRISE_KIND_INDEX[\s\S]*selectedServiceModeIndex\.value\s*=\s*-1[\s\S]*form\.value\s*=\s*emptyForm\(\)[\s\S]*fieldErrors\.value\s*=\s*\{\s*contactName:\s*['"]["'],\s*phone:\s*['"]["']\s*\}[\s\S]*restoredDraftNotice\.value\s*=\s*false\s*$/,
+  "booking form reset should cancel pending persistence and clear kind, service, fields, errors, and recovery notice",
+);
 const clearRestoredDraftBody =
   sourceBracedBody(bookingPage, /function\s+clearRestoredDraft\s*\(\s*\)\s*\{/.exec(bookingPage)) || "";
 assert.match(
   clearRestoredDraftBody,
-  /if \(submitting\.value\) return[\s\S]*clearBookingDraft\(\)[\s\S]*resetForm\(\)/,
+  /^\s*if \(submitting\.value\) return\s*clearBookingDraft\(\)\s*resetForm\(\)\s*$/,
   "restored draft clearing should stay inert during submit, clear storage, and reset the form",
 );
 
@@ -1093,13 +1104,43 @@ assert.match(
 );
 assert.match(
   learnTemplate,
+  /<view\b(?=[^>]*v-for=["']\(teacher, teacherIndex\) in teachers["'])(?=[^>]*:key=["']teacherMediaKey\(teacher, teacherIndex\)["'])[^>]*>/,
+  "teacher cards should share the exact composite key used by avatar fallback state",
+);
+assert.match(
+  learnTemplate,
+  /<image\b(?=[^>]*class=["']teacher-media teacher-card__avatar["'])(?=[^>]*v-if=["']teacher\.avatar && !teacherImageErrors\[teacherMediaKey\(teacher, teacherIndex\)\]["'])(?=[^>]*@error=["']markTeacherImageError\(teacherMediaKey\(teacher, teacherIndex\)\)["'])[^>]*\/>/,
+  "teacher avatars should read and write failure state through the same composite key",
+);
+assert.match(
+  learnTemplate,
   /<view\b(?=[^>]*v-for=["']\(c, i\) in coursewareItems["'])(?=[^>]*:key=["']courseMediaKey\(c, i\)["'])(?![^>]*@click)[^>]*>/,
   "configured course direction cards should remain display-only and share image fallback identity",
 );
 assert.match(
   learnTemplate,
+  /<image\b(?=[^>]*class=["']course-media courseware-card__cover["'])(?=[^>]*v-if=["']c\.cover && !courseImageErrors\[courseMediaKey\(c, i\)\]["'])(?=[^>]*@error=["']markCourseImageError\(courseMediaKey\(c, i\)\)["'])[^>]*\/>/,
+  "course covers should read and write failure state through the same composite key",
+);
+assert.match(
+  learnTemplate,
+  /<view\b(?=[^>]*v-for=["']t in types["'])(?=[^>]*:key=["']t\.id["'])[^>]*>/,
+  "type cards should use the same stable type id as their image fallback state",
+);
+assert.match(
+  learnTemplate,
+  /<image\b(?=[^>]*class=["']type-badge__avatar["'])(?=[^>]*v-if=["']!typeImageErrors\[t\.id\]["'])(?=[^>]*@error=["']markTypeImageError\(t\.id\)["'])[^>]*\/>/,
+  "type avatars should read and write failure state through t.id",
+);
+assert.match(
+  learnTemplate,
   /<button\b(?=[^>]*class=["'][^"']*learn-cta[^"']*["'])(?=[^>]*@click=["']goTest["'])[^>]*>/,
   "learn CTA should preserve its test navigation behavior",
+);
+assert.match(
+  sourceBracedBody(learnPage, /function\s+goTest\s*\(\s*\)\s*\{/.exec(learnPage)) || "",
+  /^\s*uni\.switchTab\(\{\s*url:\s*["']\/pages\/index\/index["']\s*\}\)\s*;?\s*$/,
+  "learn test CTA should keep its fixed tab navigation target",
 );
 assert.match(
   learnTemplate,
@@ -2604,6 +2645,14 @@ assert.ok(
   resultMpBlocks.some((block) => /@click=["']unlockReport["']/.test(block)),
   "WeChat should preserve report payment",
 );
+assert.ok(
+  resultMpBlocks.some((block) =>
+    /<button\b(?=[^>]*:loading=["']paying["'])(?=[^>]*:disabled=["']paying["'])(?=[^>]*@click=["']unlockReport["'])[^>]*>/.test(
+      block,
+    ),
+  ),
+  "WeChat report unlock should bind both loading and disabled state to the payment guard",
+);
 
 const refreshStatusBody = sourceBracedBody(
   resultPage,
@@ -2698,8 +2747,18 @@ const unlockReportBody = sourceBracedBody(
 );
 assert.match(
   unlockReportBody,
+  /^\s*if\s*\(paying\.value\)\s*return\s*paying\.value\s*=\s*true/,
+  "report unlock should reject duplicate payment attempts before entering its loading state",
+);
+assert.match(
+  unlockReportBody,
   /reportUnlocked\.value\s*=\s*true[\s\S]*loadReportContent\(\)/,
   "successful unlock should still load report content",
+);
+assert.match(
+  unlockReportBody,
+  /finally\s*\{\s*paying\.value\s*=\s*false\s*\}\s*$/,
+  "report unlock should always release its payment guard",
 );
 
 const reportStyle = pageStyleDeclarations(resultStyle, ".report-panel");
