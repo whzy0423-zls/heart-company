@@ -8,6 +8,33 @@ const pageUrl = new URL('./booking-detail.vue', import.meta.url)
 assert.ok((await stat(pageUrl, { throwIfNoEntry: false }))?.isFile(), 'booking detail page should exist before its session behavior can run')
 
 const source = await readFile(pageUrl, 'utf8')
+const profileEditSource = await readFile(new URL('../profile-edit/profile-edit.vue', import.meta.url), 'utf8')
+
+for (const token of [
+  '--nx-brand-900',
+  '--nx-brand-700',
+  '--nx-accent-gold',
+  '--nx-page-bg',
+  '--nx-surface',
+  '--nx-surface-soft',
+  '--nx-text',
+  '--nx-text-muted',
+  '--nx-border',
+]) {
+  assert.ok(source.includes(`var(${token})`), `booking detail page should use ${token}`)
+}
+assert.match(source, /<view class="wrap booking-detail page-stack ios-page ios-safe-bottom">/, 'booking detail should use the shared page shell')
+assert.match(profileEditSource, /<view class="wrap profile-edit-page page-stack ios-page ios-safe-bottom">/, 'booking detail and profile edit should share horizontal page padding')
+assert.doesNotMatch(
+  source,
+  /#(?:172554|4338ca|7c3aed|60a5fa|2b7fff|6d5dfc|4f46e5|ddd6fe|ede9fe|295fbd)/i,
+  'booking detail should not keep the old violet or orange-blue theme',
+)
+assert.match(source, /v-if="loading"/, 'booking detail loading state should remain available')
+assert.match(source, /v-else-if="loadError"/, 'booking detail error state should remain available')
+assert.match(source, /v-else-if="notFound"/, 'booking detail empty state should remain available')
+assert.match(source, /@click="retryLoad">重试/, 'booking detail errors should keep a retry action')
+assert.match(source, /\.detail-action\s*\{[\s\S]*?min-height:\s*88rpx/, 'booking detail actions should keep full-size touch targets')
 const script = source.match(/<script setup>([\s\S]*?)<\/script>/)?.[1]
 assert.ok(script, 'booking detail page should expose a script setup block')
 

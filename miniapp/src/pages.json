@@ -9,13 +9,13 @@
     {
       "path": "pages/learn/learn",
       "style": {
-        "navigationBarTitleText": "学一学"
+        "navigationBarTitleText": "老师课堂"
       }
     },
     {
       "path": "pages/booking/booking",
       "style": {
-        "navigationBarTitleText": "预约咨询"
+        "navigationBarTitleText": "企业服务"
       }
     },
     {
@@ -117,27 +117,27 @@
   ],
   "tabBar": {
     "color": "#9aa7b5",
-    "selectedColor": "#2b7fff",
-    "backgroundColor": "#fbfcff",
+    "selectedColor": "#202a37",
+    "backgroundColor": "#fffaf5",
     "borderStyle": "white",
     "list": [
       {
         "pagePath": "pages/index/index",
-        "text": "测一测",
-        "iconPath": "static/tabbar/test.png",
-        "selectedIconPath": "static/tabbar/test-active.png"
+        "text": "首页",
+        "iconPath": "static/tabbar/home.png",
+        "selectedIconPath": "static/tabbar/home-active.png"
       },
       {
         "pagePath": "pages/learn/learn",
-        "text": "学一学",
-        "iconPath": "static/tabbar/learn.png",
-        "selectedIconPath": "static/tabbar/learn-active.png"
+        "text": "老师课堂",
+        "iconPath": "static/tabbar/classroom.png",
+        "selectedIconPath": "static/tabbar/classroom-active.png"
       },
       {
         "pagePath": "pages/booking/booking",
-        "text": "约课程",
-        "iconPath": "static/tabbar/booking.png",
-        "selectedIconPath": "static/tabbar/booking-active.png"
+        "text": "企业服务",
+        "iconPath": "static/tabbar/enterprise.png",
+        "selectedIconPath": "static/tabbar/enterprise-active.png"
       },
       {
         "pagePath": "pages/profile/profile",

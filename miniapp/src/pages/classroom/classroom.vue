@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from "vue";
+import NxAsyncState from "../../components/NxAsyncState.vue";
 import { onLoad, onShow, onUnload } from "@dcloudio/uni-app";
 import {
   createClassroomOrderApi,
@@ -12,6 +13,7 @@ import {
 } from "../../api";
 import {
   classroomAccessLabel,
+  classroomCoverRatioClass,
   classroomContentRoute,
   classroomPurchaseAction,
   normalizeClassroomContent,
@@ -21,7 +23,7 @@ import { createClassroomPurchaseController } from "../../utils/classroomProgress
 import { getToken } from "../../utils/auth";
 import { userErrorMessage } from "../../utils/userMessage";
 
-const activeTab = ref("series");
+const activeTab = ref("standalone");
 const seriesItems = ref([]);
 const standaloneItems = ref([]);
 const loadedTabs = ref({ series: false, standalone: false });
@@ -38,11 +40,14 @@ const continueError = ref("");
 const seriesPaymentTargetId = ref("");
 const seriesPaymentState = ref("idle");
 const seriesPaymentMessage = ref("");
+const seriesPurchaseInFlight = ref(false);
+const coverImageErrors = ref({});
 let listTicket = 0;
 let seriesTicket = 0;
 let continueTicket = 0;
 let skipNextShowRefresh = false;
 let seriesPurchaseController = null;
+let seriesPurchaseOperation = null;
 let seriesPurchaseTicket = 0;
 let disposed = false;
 
@@ -52,9 +57,12 @@ const activeItems = computed(() =>
 const emptyCopy = computed(() =>
   activeTab.value === "series" ? "系列课程正在准备中" : "独立课件正在准备中",
 );
-const seriesPaymentBusy = computed(
-  () => seriesPaymentState.value === "creating" || seriesPaymentState.value === "pending",
+const emptyDescription = computed(() =>
+  activeTab.value === "series"
+    ? "系列课程会把相关主题串成完整路径；也可以先从独立课件开始学习。"
+    : "老师的公开视频和音频课件会持续整理到这里，欢迎先浏览现有内容。",
 );
+const seriesPaymentBusy = computed(() => seriesPurchaseInFlight.value);
 
 function responseItems(response) {
   return Array.isArray(response?.items) ? response.items : [];
@@ -239,6 +247,14 @@ function itemAction(item) {
   return classroomPurchaseAction(item);
 }
 
+function coverMediaKey(item) {
+  return `${item?.contentType || "series"}:${item?.id || ""}`;
+}
+
+function markCoverImageError(key) {
+  coverImageErrors.value = { ...coverImageErrors.value, [key]: true };
+}
+
 function requestSeriesPayment(pay = {}) {
   return new Promise((resolve, reject) => {
     uni.requestPayment({
@@ -284,19 +300,41 @@ function createSeriesPurchase(item) {
   return seriesPurchaseController;
 }
 
+function trackSeriesPurchase(run) {
+  if (seriesPurchaseOperation) return;
+  seriesPurchaseInFlight.value = true;
+  let operation;
+  try {
+    operation = Promise.resolve(run());
+  } catch (error) {
+    seriesPurchaseInFlight.value = false;
+    throw error;
+  }
+  let tracked;
+  tracked = operation.finally(() => {
+    if (seriesPurchaseOperation !== tracked) return;
+    seriesPurchaseOperation = null;
+    seriesPurchaseInFlight.value = false;
+  });
+  seriesPurchaseOperation = tracked;
+  return tracked;
+}
+
 function startSeriesPurchase(item) {
   if (!item?.id || itemAction(item).type !== "purchase") return;
-  if (seriesPaymentBusy.value) return;
+  if (seriesPurchaseOperation) return;
   if (!getToken()) {
     uni.switchTab({ url: "/pages/profile/profile" });
     return;
   }
-  return createSeriesPurchase(item).purchase();
+  return trackSeriesPurchase(() => createSeriesPurchase(item).purchase());
 }
 
 function retrySeriesPurchase(item) {
+  if (seriesPurchaseOperation) return;
   if (seriesPaymentTargetId.value !== item?.id) return startSeriesPurchase(item);
-  return seriesPurchaseController?.retry();
+  if (!seriesPurchaseController) return;
+  return trackSeriesPurchase(() => seriesPurchaseController.retry());
 }
 
 function cancelSeriesPurchase() {
@@ -316,6 +354,7 @@ function formatDuration(seconds) {
 onLoad((options = {}) => {
   disposed = false;
   skipNextShowRefresh = true;
+  if (options.tab === "series") activeTab.value = "series";
   if (options.tab === "standalone") activeTab.value = "standalone";
   loadActiveList();
   loadContinueLearning();
@@ -335,6 +374,8 @@ onUnload(() => {
   seriesTicket += 1;
   continueTicket += 1;
   seriesPurchaseTicket += 1;
+  seriesPurchaseOperation = null;
+  seriesPurchaseInFlight.value = false;
   seriesPurchaseController?.stop();
   seriesPurchaseController = null;
 });
@@ -344,8 +385,13 @@ onUnload(() => {
   <view class="classroom page-stack ios-page ios-safe-bottom">
     <view class="classroom-hero nx-page-hero">
       <text class="classroom-hero__eyebrow">老师课堂</text>
-      <text class="classroom-hero__title">用声音与影像，陪你把觉察带进生活</text>
-      <text class="classroom-hero__lead">既可以按系列循序学习，也可以从一节独立课件开始。</text>
+      <text class="classroom-hero__title">用声音与影像，陪你把觉察带进工作与生活</text>
+      <text class="classroom-hero__lead">独立课件先行，系列课程随后；视频和音频都可以按自己的节奏反复学习。</text>
+      <view class="classroom-hero__meta" aria-hidden="true">
+        <text>视频课件</text>
+        <text>音频精讲</text>
+        <text>按需学习</text>
+      </view>
     </view>
 
     <view
@@ -397,15 +443,6 @@ onUnload(() => {
     <view class="classroom-tabs" role="tablist" aria-label="课堂内容分类">
       <button
         class="classroom-tab"
-        :class="{ 'classroom-tab--active': activeTab === 'series' }"
-        role="tab"
-        :aria-selected="activeTab === 'series'"
-        @click="selectTab('series')"
-      >
-        系列课程
-      </button>
-      <button
-        class="classroom-tab"
         :class="{ 'classroom-tab--active': activeTab === 'standalone' }"
         role="tab"
         :aria-selected="activeTab === 'standalone'"
@@ -413,16 +450,39 @@ onUnload(() => {
       >
         独立课件
       </button>
+      <button
+        class="classroom-tab"
+        :class="{ 'classroom-tab--active': activeTab === 'series' }"
+        role="tab"
+        :aria-selected="activeTab === 'series'"
+        @click="selectTab('series')"
+      >
+        系列课程
+      </button>
     </view>
 
-    <view v-if="loading" class="classroom-state" aria-live="polite">课堂内容加载中…</view>
-    <view v-else-if="loadError" class="classroom-state classroom-state--error" aria-live="polite">
-      <text>{{ loadError }}</text>
-      <button class="state-action" :disabled="loading" @click="retryActiveList">重新加载</button>
-    </view>
-    <view v-else-if="activeItems.length === 0" class="classroom-state" aria-live="polite">{{
-      emptyCopy
-    }}</view>
+    <NxAsyncState
+      v-if="loading"
+      state="loading"
+      title="课堂内容加载中"
+      description="正在整理最新的视频与音频课件。"
+    />
+    <NxAsyncState
+      v-else-if="loadError"
+      state="error"
+      title="课堂内容暂未加载"
+      :description="loadError"
+      action-text="重新加载"
+      @action="retryActiveList"
+    />
+    <NxAsyncState
+      v-else-if="activeItems.length === 0"
+      state="empty"
+      :title="emptyCopy"
+      :description="emptyDescription"
+      :action-text="activeTab === 'series' ? '查看独立课件' : ''"
+      @action="selectTab('standalone')"
+    />
 
     <view v-else class="classroom-list">
       <view v-for="item in activeItems" :key="item.id" class="classroom-list__item">
@@ -433,42 +493,63 @@ onUnload(() => {
             'classroom-card--loading':
               activeTab === 'series' && selectedSeries?.id === item.id && seriesLoading,
           }"
-          role="button"
-          aria-role="button"
-          tabindex="0"
-          @click="activeTab === 'series' ? openSeries(item) : openContent(item)"
-          @keydown.enter="activeTab === 'series' ? openSeries(item) : openContent(item)"
-          @keydown.space.prevent="activeTab === 'series' ? openSeries(item) : openContent(item)"
         >
-          <image
-            v-if="item.coverUrl"
-            class="classroom-card__cover"
-            :src="item.coverUrl"
-            mode="aspectFill"
-            lazy-load
-          />
-          <view
-            v-else
-            class="classroom-card__cover classroom-card__cover--fallback"
-            aria-hidden="true"
-            >课</view
-          >
+          <view class="classroom-card__media">
+            <view class="classroom-card__cover-shell" :class="classroomCoverRatioClass(item)">
+              <image
+                v-if="item.coverUrl && !coverImageErrors[coverMediaKey(item)]"
+                class="classroom-card__cover"
+                :class="classroomCoverRatioClass(item)"
+                :src="item.coverUrl"
+                mode="aspectFill"
+                lazy-load
+                @error="markCoverImageError(coverMediaKey(item))"
+              />
+              <view
+                v-else
+                class="classroom-card__cover classroom-card__cover--fallback"
+                :class="classroomCoverRatioClass(item)"
+                aria-hidden="true"
+                >课</view
+              >
+              <view class="classroom-card__cover-overlay">
+                <view class="classroom-card__overlay-tags">
+                  <text class="nx-tag">{{ classroomAccessLabel(item.effectiveAccess) }}</text>
+                  <text class="classroom-card__kind">{{
+                    activeTab === "series" ? "系列" : item.contentType === "audio" ? "音频" : "视频"
+                  }}</text>
+                </view>
+                <view class="classroom-card__play" aria-hidden="true">
+                  <text class="classroom-card__play-icon">{{
+                    activeTab === "series" && selectedSeries?.id === item.id ? "⌃" : "▶"
+                  }}</text>
+                  <text class="classroom-card__play-text">{{
+                    activeTab === "series"
+                      ? selectedSeries?.id === item.id
+                        ? "收起"
+                        : "展开"
+                      : itemAction(item).label
+                  }}</text>
+                </view>
+              </view>
+            </view>
+          </view>
           <view class="classroom-card__body">
             <view class="classroom-card__meta">
-              <text class="nx-tag">{{ classroomAccessLabel(item.effectiveAccess) }}</text>
-              <text v-if="item.contentType" class="classroom-card__kind">{{
-                item.contentType === "audio" ? "音频" : "视频"
-              }}</text>
+              <text>{{ activeTab === "series" ? "系列沉淀" : "独立学习" }}</text>
+              <text>{{ classroomAccessLabel(item.effectiveAccess) }}</text>
             </view>
             <text class="classroom-card__title">{{ item.title || "未命名课件" }}</text>
             <text v-if="item.summary || item.description" class="classroom-card__summary">{{
               item.summary || item.description
             }}</text>
             <view class="classroom-card__footer">
-              <text>{{ item.teacherName || "九型老师" }}</text>
-              <text v-if="formatDuration(item.durationSeconds)">{{
-                formatDuration(item.durationSeconds)
-              }}</text>
+              <view class="classroom-card__facts">
+                <text>{{ item.teacherName || "九型老师" }}</text>
+                <text v-if="formatDuration(item.durationSeconds)">{{
+                  formatDuration(item.durationSeconds)
+                }}</text>
+              </view>
               <button
                 v-if="activeTab === 'series' && itemAction(item).type === 'purchase'"
                 class="series-buy"
@@ -481,13 +562,19 @@ onUnload(() => {
                     : itemAction(item).label
                 }}
               </button>
-              <text v-else class="classroom-card__action">{{
-                activeTab === "series"
-                  ? selectedSeries?.id === item.id
-                    ? "收起课件"
-                    : "查看课件"
-                  : itemAction(item).label
-              }}</text>
+              <button
+                v-else
+                class="classroom-card__action"
+                @click="activeTab === 'series' ? openSeries(item) : openContent(item)"
+              >
+                {{
+                  activeTab === "series"
+                    ? selectedSeries?.id === item.id
+                      ? "收起课件"
+                      : "查看课件"
+                    : itemAction(item).label
+                }}
+              </button>
             </view>
           </view>
         </view>
@@ -516,39 +603,47 @@ onUnload(() => {
           v-if="activeTab === 'series' && selectedSeries?.id === item.id"
           class="series-panel ios-card"
         >
-          <view v-if="seriesLoading" class="classroom-state" aria-live="polite"
-            >系列课件加载中…</view
-          >
-          <view
+          <NxAsyncState
+            v-if="seriesLoading"
+            state="loading"
+            title="系列课件加载中"
+            description="正在整理本系列的章节。"
+          />
+          <NxAsyncState
             v-else-if="seriesError"
-            class="classroom-state classroom-state--error"
-            aria-live="polite"
-          >
-            <text>{{ seriesError }}</text>
-            <button class="state-action" @click="retrySelectedSeries">重试</button>
-          </view>
+            state="error"
+            title="系列课件暂未加载"
+            :description="seriesError"
+            action-text="重新加载"
+            @action="retrySelectedSeries"
+          />
           <block v-else-if="expandedSeries">
             <text class="series-panel__eyebrow">系列课件</text>
             <text class="series-panel__title">{{ expandedSeries.series.title }}</text>
-            <view v-if="expandedSeries.contents.length === 0" class="classroom-state"
-              >这个系列暂时没有可学习的课件</view
-            >
-            <button
-              v-for="(lesson, index) in expandedSeries.contents"
-              :key="lesson.id"
-              class="lesson-row"
-              @click="openContent(lesson)"
-            >
-              <text class="lesson-row__index">{{ index + 1 }}</text>
-              <view class="lesson-row__body">
-                <text class="lesson-row__title">{{ lesson.title }}</text>
-                <text class="lesson-row__meta"
-                  >{{ lesson.contentType === "audio" ? "音频" : "视频" }} ·
-                  {{ itemAction(lesson).label }}</text
-                >
-              </view>
-              <text aria-hidden="true">›</text>
-            </button>
+            <NxAsyncState
+              v-if="expandedSeries.contents.length === 0"
+              state="empty"
+              title="这个系列正在补充课件"
+              description="可以先返回独立课件，选择一节视频或音频开始学习。"
+            />
+            <view v-else class="series-panel__chapters">
+              <button
+                v-for="(lesson, index) in expandedSeries.contents"
+                :key="lesson.id"
+                class="lesson-row"
+                @click="openContent(lesson)"
+              >
+                <text class="lesson-row__index">{{ index + 1 }}</text>
+                <view class="lesson-row__body">
+                  <text class="lesson-row__title">{{ lesson.title }}</text>
+                  <text class="lesson-row__meta"
+                    >{{ lesson.contentType === "audio" ? "音频" : "视频" }} ·
+                    {{ itemAction(lesson).label }}</text
+                  >
+                </view>
+                <text class="lesson-row__arrow" aria-hidden="true">›</text>
+              </button>
+            </view>
           </block>
         </view>
       </view>
@@ -559,307 +654,97 @@ onUnload(() => {
 <style scoped>
 .classroom {
   min-height: 100vh;
-  background: #f4f8f6;
+  background:
+    radial-gradient(circle at 0 0, rgba(223, 188, 127, 0.16), transparent 30%),
+    linear-gradient(180deg, var(--nx-surface-soft), var(--nx-page-bg));
 }
 .classroom-hero {
-  padding: 38rpx 34rpx 40rpx;
+  padding: 40rpx 34rpx 36rpx;
+  color: var(--nx-surface);
+  background:
+    radial-gradient(circle at 88% 12%, rgba(223, 188, 127, 0.32), transparent 28%),
+    linear-gradient(135deg, var(--nx-brand-900), var(--nx-brand-700));
   border-radius: 38rpx;
-  color: #fff;
-  background: linear-gradient(135deg, #0f766e, #15803d);
+  box-shadow: 0 24rpx 54rpx -34rpx rgba(32, 42, 55, 0.64);
 }
 .classroom-hero__eyebrow,
 .classroom-hero__title,
-.classroom-hero__lead {
-  display: block;
-  color: #fff;
-}
-.classroom-hero__eyebrow {
-  font-size: 24rpx;
-  font-weight: 800;
-}
-.classroom-hero__title {
-  margin-top: 14rpx;
-  font-size: 42rpx;
-  font-weight: 900;
-  line-height: 1.3;
-}
-.classroom-hero__lead {
-  margin-top: 16rpx;
-  font-size: 26rpx;
-  line-height: 1.65;
-}
-.classroom-tabs {
-  display: flex;
-  gap: 12rpx;
-  padding: 8rpx;
-  background: #e7f3ee;
-  border-radius: 24rpx;
-}
-.continue-learning {
-  display: block;
-  width: 100%;
-  min-height: 176rpx;
-  padding: 28rpx;
-  color: #173e32;
-  text-align: left;
-  background: linear-gradient(135deg, #ecfdf5, #eff6ff);
-  border-radius: 28rpx;
-}
-.continue-learning::after {
-  border: 0;
-}
-.continue-learning--loading,
-.continue-learning--error {
-  color: #64756e;
-  font-size: 25rpx;
-  text-align: center;
-}
-.continue-learning--error {
-  color: #9f3a38;
-}
-.continue-learning__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 20rpx;
-}
-.continue-learning__eyebrow,
-.continue-learning__title,
-.continue-learning__copy {
-  display: block;
-}
-.continue-learning__eyebrow,
-.continue-learning__action {
-  color: #0f766e;
-  font-size: 23rpx;
-  font-weight: 800;
-}
-.continue-learning__title {
-  margin-top: 6rpx;
-  color: #173e32;
-  font-size: 30rpx;
-  font-weight: 900;
-  line-height: 1.4;
-}
-.continue-learning__progress {
-  height: 12rpx;
-  margin-top: 22rpx;
-  overflow: hidden;
-  background: #cfe7dc;
-  border-radius: 999rpx;
-}
-.continue-learning__progress-fill {
-  height: 100%;
-  background: #0f766e;
-  border-radius: inherit;
-}
-.continue-learning__copy {
-  margin-top: 12rpx;
-  color: #587167;
-  font-size: 23rpx;
-}
-.classroom-tab {
-  flex: 1;
-  min-height: 88rpx;
-  color: #527066;
-  font-size: 27rpx;
-  font-weight: 800;
-  line-height: 88rpx;
-  background: transparent;
-  border-radius: 18rpx;
-}
+.classroom-hero__lead { display: block; }
+.classroom-hero__eyebrow { color: var(--nx-accent-gold); font-size: 24rpx; font-weight: 900; letter-spacing: 4rpx; }
+.classroom-hero__title { margin-top: 14rpx; color: var(--nx-surface); font-size: 42rpx; font-weight: 900; line-height: 1.3; }
+.classroom-hero__lead { margin-top: 16rpx; color: rgba(255, 255, 255, 0.82); font-size: 25rpx; line-height: 1.65; }
+.classroom-hero__meta { display: flex; flex-wrap: wrap; gap: 12rpx; margin-top: 24rpx; }
+.classroom-hero__meta text { padding: 8rpx 16rpx; color: var(--nx-surface); font-size: 21rpx; font-weight: 800; background: rgba(255, 255, 255, 0.12); border: 2rpx solid rgba(255, 255, 255, 0.18); border-radius: 999rpx; }
+.classroom-tabs { display: flex; gap: 12rpx; padding: 8rpx; background: var(--nx-surface-soft); border: 2rpx solid var(--nx-border); border-radius: 24rpx; }
+.classroom-tab { flex: 1; min-height: 88rpx; color: var(--nx-text-muted); font-size: 27rpx; font-weight: 900; line-height: 88rpx; background: transparent; border-radius: 18rpx; }
 .classroom-tab::after,
 .state-action::after,
 .lesson-row::after,
-.series-buy::after {
-  border: 0;
-}
-.series-buy {
-  min-height: 64rpx;
-  padding: 0 18rpx;
-  color: #fff;
-  font-size: 22rpx;
-  font-weight: 800;
-  line-height: 64rpx;
-  background: #0f766e;
-  border-radius: 16rpx;
-}
-.series-payment {
-  padding: 24rpx;
-  color: #52685f;
-  font-size: 24rpx;
-  background: #fff;
-  border-radius: 24rpx;
-}
-.series-payment__actions {
-  display: flex;
-  gap: 12rpx;
-}
-.classroom-tab--active {
-  color: #0f6b4f;
-  background: #fff;
-  box-shadow: 0 10rpx 26rpx rgba(15, 107, 79, 0.12);
-}
-.classroom-state {
-  padding: 48rpx 30rpx;
-  color: #64756e;
-  font-size: 27rpx;
-  line-height: 1.6;
-  text-align: center;
-  background: #fff;
-  border-radius: 28rpx;
-}
-.classroom-state--error {
-  color: #9f3a38;
-}
-.state-action {
-  min-height: 88rpx;
-  margin-top: 20rpx;
-  padding: 0 32rpx;
-  color: #0f6b4f;
-  font-weight: 800;
-  line-height: 88rpx;
-  background: #ecfdf5;
-  border-radius: 18rpx;
-}
-.classroom-list {
-  display: grid;
-  gap: 22rpx;
-}
-.classroom-list__item {
-  display: grid;
-  gap: 14rpx;
-}
-.classroom-card {
-  display: flex;
-  min-height: 220rpx;
-  overflow: hidden;
-  background: #fff;
-  border-radius: 30rpx;
-}
-.classroom-card--selected {
-  box-shadow:
-    0 0 0 4rpx #34d399,
-    0 16rpx 32rpx rgba(15, 118, 110, 0.12);
-}
-.classroom-card--loading {
-  opacity: 0.82;
-}
-.classroom-card:focus {
-  outline: 4rpx solid #2b7fff;
-}
-.classroom-card__cover {
-  flex: 0 0 210rpx;
-  width: 210rpx;
-  min-height: 220rpx;
-  background: #dbeee6;
-}
-.classroom-card__cover--fallback {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #0f766e;
-  font-size: 54rpx;
-  font-weight: 900;
-}
-.classroom-card__body {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  padding: 24rpx;
-}
+.series-buy::after,
+.classroom-card__action::after,
+.continue-learning::after { border: 0; }
+.classroom-tab--active { color: var(--nx-brand-900); background: var(--nx-surface); box-shadow: 0 10rpx 26rpx rgba(32, 42, 55, 0.12); }
+.continue-learning { display: block; width: 100%; min-height: 176rpx; padding: 28rpx; color: var(--nx-text); text-align: left; background: linear-gradient(135deg, var(--nx-surface-soft), var(--nx-accent-gold)); border-radius: 28rpx; box-sizing: border-box; }
+.continue-learning--loading,
+.continue-learning--error { color: var(--nx-text-muted); font-size: 25rpx; text-align: center; }
+.continue-learning--error { color: #a23b32; }
+.continue-learning__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20rpx; }
+.continue-learning__eyebrow,
+.continue-learning__title,
+.continue-learning__copy { display: block; }
+.continue-learning__eyebrow,
+.continue-learning__action { color: var(--nx-brand-700); font-size: 23rpx; font-weight: 900; }
+.continue-learning__title { margin-top: 6rpx; color: var(--nx-text); font-size: 30rpx; font-weight: 900; line-height: 1.4; }
+.continue-learning__progress { height: 12rpx; margin-top: 22rpx; overflow: hidden; background: var(--nx-border); border-radius: 999rpx; }
+.continue-learning__progress-fill { height: 100%; background: var(--nx-brand-700); border-radius: inherit; }
+.continue-learning__copy { margin-top: 12rpx; color: var(--nx-text-muted); font-size: 23rpx; }
+.state-action { min-height: 88rpx; margin-top: 20rpx; padding: 0 32rpx; color: var(--nx-brand-900); font-weight: 900; line-height: 88rpx; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 18rpx; }
+.classroom-list { display: grid; gap: 22rpx; }
+.classroom-list__item { display: grid; gap: 14rpx; }
+.classroom-card { display: flex; align-items: flex-start; flex-direction: column; min-height: 220rpx; overflow: hidden; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 30rpx; }
+.classroom-card--selected { box-shadow: 0 0 0 4rpx var(--nx-accent-gold), 0 16rpx 32rpx rgba(32, 42, 55, 0.14); }
+.classroom-card--loading { opacity: 0.82; }
+.classroom-card__media { width: 100%; }
+.classroom-card__cover-shell { position: relative; width: 100%; overflow: hidden; background: linear-gradient(135deg, var(--nx-surface-soft), var(--nx-accent-gold)); }
+.classroom-card__cover-shell::after { content: ""; position: absolute; inset: auto 0 0; height: 30%; background: linear-gradient(180deg, rgba(32, 42, 55, 0), rgba(32, 42, 55, 0.42)); pointer-events: none; }
+.classroom-card__cover { display: block; width: 100%; height: 100%; background: var(--nx-border); }
+.classroom-card__cover.classroom-cover--16x9 { height: 376rpx; }
+.classroom-card__cover.classroom-cover--9x16 { height: 472rpx; }
+.classroom-card__cover.classroom-cover--1x1 { height: 360rpx; }
+.classroom-card__cover--fallback { display: flex; align-items: center; justify-content: center; color: var(--nx-brand-900); font-size: 58rpx; font-weight: 900; }
+.classroom-card__cover-overlay { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; justify-content: space-between; padding: 22rpx; color: var(--nx-surface); background: linear-gradient(180deg, rgba(32, 42, 55, 0.08), rgba(32, 42, 55, 0.58)); }
+.classroom-card__overlay-tags { display: flex; flex-wrap: wrap; gap: 10rpx; }
+.classroom-card__overlay-tags .nx-tag,
+.classroom-card__overlay-tags .classroom-card__kind { color: var(--nx-surface); }
+.classroom-card__kind { padding: 0 14rpx; line-height: 42rpx; background: rgba(255, 255, 255, 0.18); border-radius: 999rpx; }
+.classroom-card__play { display: inline-flex; align-items: center; align-self: flex-end; gap: 10rpx; min-height: 60rpx; padding: 0 18rpx; color: var(--nx-brand-900); font-size: 22rpx; font-weight: 900; background: rgba(255, 255, 255, 0.94); border-radius: 999rpx; }
+.classroom-card__play-icon { font-size: 20rpx; }
+.classroom-card__body { display: flex; flex-direction: column; min-width: 0; width: 100%; padding: 24rpx 24rpx 26rpx; box-sizing: border-box; }
 .classroom-card__meta,
-.classroom-card__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12rpx;
-}
-.classroom-card__kind,
-.classroom-card__footer {
-  color: #708078;
-  font-size: 22rpx;
-}
-.classroom-card__title {
-  margin-top: 14rpx;
-  color: #16221d;
-  font-size: 30rpx;
-  font-weight: 900;
-  line-height: 1.4;
-}
-.classroom-card__summary {
-  margin-top: 8rpx;
-  color: #68776f;
-  font-size: 23rpx;
-  line-height: 1.5;
-}
-.classroom-card__footer {
-  margin-top: auto;
-  padding-top: 18rpx;
-}
-.classroom-card__action {
-  color: #0f766e;
-  font-weight: 800;
-}
-.series-panel {
-  padding: 30rpx;
-  background: #fff;
-  border-radius: 30rpx;
-}
+.classroom-card__footer,
+.classroom-card__facts { display: flex; align-items: center; justify-content: space-between; gap: 12rpx; }
+.classroom-card__meta,
+.classroom-card__facts { color: var(--nx-text-muted); font-size: 22rpx; }
+.classroom-card__title { margin-top: 14rpx; color: var(--nx-text); font-size: 30rpx; font-weight: 900; line-height: 1.4; }
+.classroom-card__summary { margin-top: 8rpx; color: var(--nx-text-muted); font-size: 23rpx; line-height: 1.5; }
+.classroom-card__footer { align-items: flex-end; margin-top: 18rpx; padding-top: 18rpx; border-top: 2rpx solid var(--nx-border); }
+.classroom-card__facts { align-items: flex-start; flex-direction: column; min-width: 0; }
+.classroom-card__action { flex-shrink: 0; min-height: 88rpx; padding: 0 24rpx; color: var(--nx-surface); font-size: 23rpx; font-weight: 900; line-height: 88rpx; background: var(--nx-brand-700); border-radius: 999rpx; }
+.series-buy { flex-shrink: 0; min-height: 88rpx; padding: 0 24rpx; color: var(--nx-brand-900); font-size: 23rpx; font-weight: 900; line-height: 88rpx; background: var(--nx-accent-gold); border-radius: 999rpx; }
+.series-payment { padding: 24rpx; color: var(--nx-text-muted); font-size: 24rpx; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 24rpx; }
+.series-payment__actions { display: flex; gap: 12rpx; }
+.series-panel { padding: 30rpx; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 30rpx; }
+.series-panel__chapters { display: grid; gap: 14rpx; margin-top: 16rpx; }
 .series-panel__eyebrow,
-.series-panel__title {
-  display: block;
-}
-.series-panel__eyebrow {
-  color: #0f766e;
-  font-size: 23rpx;
-  font-weight: 800;
-}
-.series-panel__title {
-  margin-top: 8rpx;
-  color: #17241e;
-  font-size: 34rpx;
-  font-weight: 900;
-}
-.lesson-row {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  min-height: 104rpx;
-  margin-top: 18rpx;
-  padding: 16rpx 10rpx;
-  text-align: left;
-  background: #f5faf7;
-  border-radius: 18rpx;
-}
-.lesson-row__index {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 52rpx;
-  height: 52rpx;
-  color: #fff;
-  background: #0f766e;
-  border-radius: 50%;
-}
-.lesson-row__body {
-  flex: 1;
-  min-width: 0;
-  margin: 0 18rpx;
-}
+.series-panel__title { display: block; }
+.series-panel__eyebrow { color: var(--nx-brand-700); font-size: 23rpx; font-weight: 900; }
+.series-panel__title { margin-top: 8rpx; color: var(--nx-text); font-size: 34rpx; font-weight: 900; }
+.lesson-row { display: flex; align-items: center; width: 100%; min-height: 104rpx; padding: 16rpx 10rpx; text-align: left; background: var(--nx-surface-soft); border: 2rpx solid var(--nx-border); border-radius: 18rpx; box-sizing: border-box; }
+.lesson-row__index { display: flex; align-items: center; justify-content: center; width: 52rpx; height: 52rpx; color: var(--nx-brand-900); background: var(--nx-accent-gold); border-radius: 50%; }
+.lesson-row__body { flex: 1; min-width: 0; margin: 0 18rpx; }
 .lesson-row__title,
-.lesson-row__meta {
-  display: block;
-}
-.lesson-row__title {
-  color: #1b2822;
-  font-size: 26rpx;
-  font-weight: 800;
-}
-.lesson-row__meta {
-  margin-top: 6rpx;
-  color: #718078;
-  font-size: 22rpx;
-}
+.lesson-row__meta { display: block; }
+.lesson-row__title { color: var(--nx-text); font-size: 26rpx; font-weight: 800; }
+.lesson-row__meta { margin-top: 6rpx; color: var(--nx-text-muted); font-size: 22rpx; }
+.lesson-row__arrow { color: var(--nx-text-muted); font-size: 32rpx; font-weight: 700; }
 </style>

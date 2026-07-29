@@ -300,7 +300,7 @@ function itemKey(item: MiniappCarouselItem) {
 
 <template>
   <EditorShell
-    description="配置小程序首页轮播、品牌、主视觉、功能入口与成长内容。页面目标、图标和配色均使用固定安全选项。"
+    description="配置小程序首页轮播、品牌、主视觉、九型测试小游戏独立模块、其他功能入口与成长内容。页面目标、图标和配色均使用固定安全选项。"
     :loading="loading"
     :saving="saving"
     title="首页管理"
@@ -326,7 +326,7 @@ function itemKey(item: MiniappCarouselItem) {
                 :max="10_000"
                 :min="2000"
                 :step="500"
-              />
+               placeholder="请输入轮播间隔（毫秒）"/>
             </Form.Item>
           </div>
 
@@ -391,10 +391,10 @@ function itemKey(item: MiniappCarouselItem) {
               <Input
                 v-model:value="miniappHome.brand.name"
                 data-testid="brand-name"
-              />
+               placeholder="请输入品牌名称"/>
             </Form.Item>
             <Form.Item label="品牌说明">
-              <Input v-model:value="miniappHome.brand.tagline" />
+              <Input v-model:value="miniappHome.brand.tagline"  placeholder="请输入品牌说明"/>
             </Form.Item>
           </div>
           <p class="fixed-destination" data-testid="brand-destination">
@@ -413,19 +413,19 @@ function itemKey(item: MiniappCarouselItem) {
           </div>
           <div class="field-grid">
             <Form.Item label="引导短语">
-              <Input v-model:value="miniappHome.hero.kicker" />
+              <Input v-model:value="miniappHome.hero.kicker"  placeholder="请输入引导短语"/>
             </Form.Item>
             <Form.Item label="标题">
               <Input
                 v-model:value="miniappHome.hero.title"
                 data-testid="hero-title"
-              />
+               placeholder="请输入标题"/>
             </Form.Item>
             <Form.Item class="field-grid__wide" label="说明">
-              <Input v-model:value="miniappHome.hero.description" />
+              <Input v-model:value="miniappHome.hero.description"  placeholder="请输入说明"/>
             </Form.Item>
             <Form.Item label="按钮文字">
-              <Input v-model:value="miniappHome.hero.buttonText" />
+              <Input v-model:value="miniappHome.hero.buttonText"  placeholder="请输入按钮文字"/>
             </Form.Item>
           </div>
           <p class="fixed-destination">
@@ -433,12 +433,21 @@ function itemKey(item: MiniappCarouselItem) {
           </p>
         </Collapse.Panel>
 
-        <Collapse.Panel key="entries" header="功能入口">
+        <Collapse.Panel key="entries" header="小游戏与功能入口">
+          <p
+            class="fixed-destination"
+            data-testid="test-game-config-note"
+          >
+            <strong>九型测试小游戏独立模块：</strong>
+            test
+            开关控制首页独立小游戏区；test
+            配置项所在顺序不影响独立模块位置，其他功能入口仍按下方顺序展示并支持排序。
+          </p>
           <div class="section-toggle">
-            <span>显示功能入口</span>
+            <span>显示其他功能入口</span>
             <Switch
               v-model:checked="miniappHome.entriesSection.enabled"
-              aria-label="功能入口区显示状态"
+              aria-label="其他功能入口区显示状态"
               data-testid="entries-enabled"
             />
           </div>
@@ -447,10 +456,10 @@ function itemKey(item: MiniappCarouselItem) {
               <Input
                 v-model:value="miniappHome.entriesSection.title"
                 data-testid="entries-title"
-              />
+               placeholder="请输入区块标题"/>
             </Form.Item>
             <Form.Item label="区块说明">
-              <Input v-model:value="miniappHome.entriesSection.description" />
+              <Input v-model:value="miniappHome.entriesSection.description"  placeholder="请输入区块说明"/>
             </Form.Item>
           </div>
 
@@ -461,10 +470,20 @@ function itemKey(item: MiniappCarouselItem) {
             size="small"
           >
             <div class="home-entry__head">
-              <strong>{{ entry.title }}</strong>
+              <strong :data-testid="`entry-label-${entry.key}`">
+                {{
+                  entry.key === 'test'
+                    ? '九型测试小游戏（首页独立模块）'
+                    : entry.title
+                }}
+              </strong>
               <Switch
                 v-model:checked="entry.enabled"
-                :aria-label="`${entry.title}入口显示状态`"
+                :aria-label="
+                  entry.key === 'test'
+                    ? '九型测试小游戏独立模块显示状态'
+                    : `${entry.title}入口显示状态`
+                "
                 :data-testid="`entry-enabled-${entry.key}`"
               />
             </div>
@@ -481,24 +500,24 @@ function itemKey(item: MiniappCarouselItem) {
             </p>
             <div class="field-grid field-grid--entry">
               <Form.Item label="标题">
-                <Input v-model:value="entry.title" />
+                <Input v-model:value="entry.title"  placeholder="请输入标题"/>
               </Form.Item>
               <Form.Item label="说明">
-                <Input v-model:value="entry.description" />
+                <Input v-model:value="entry.description"  placeholder="请输入说明"/>
               </Form.Item>
               <Form.Item label="预设图标">
                 <Select
                   v-model:value="entry.icon"
                   :data-testid="`entry-icon-${entry.key}`"
                   :options="iconOptions"
-                />
+                 placeholder="请选择预设图标"/>
               </Form.Item>
               <Form.Item label="预设主题色">
                 <Select
                   v-model:value="entry.theme"
                   :data-testid="`entry-theme-${entry.key}`"
                   :options="themeOptions"
-                />
+                 placeholder="请选择预设主题色"/>
               </Form.Item>
             </div>
             <div class="home-entry__actions">
@@ -533,16 +552,16 @@ function itemKey(item: MiniappCarouselItem) {
           </div>
           <div class="field-grid">
             <Form.Item label="引导短语">
-              <Input v-model:value="miniappHome.growth.eyebrow" />
+              <Input v-model:value="miniappHome.growth.eyebrow"  placeholder="请输入引导短语"/>
             </Form.Item>
             <Form.Item label="标题">
               <Input
                 v-model:value="miniappHome.growth.title"
                 data-testid="growth-title"
-              />
+               placeholder="请输入标题"/>
             </Form.Item>
             <Form.Item class="field-grid__wide" label="说明">
-              <Input v-model:value="miniappHome.growth.description" />
+              <Input v-model:value="miniappHome.growth.description"  placeholder="请输入说明"/>
             </Form.Item>
           </div>
           <p class="fixed-destination">

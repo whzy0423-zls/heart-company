@@ -13,12 +13,14 @@ import { seriesMetadataPayload } from './series-model';
 import {
   classroomOperationError,
   classroomPermissions,
+  contentPublishGuard,
   playbackControl,
   uploadStatusLabel,
   visibleClassroomTabs,
 } from './classroom-view-model';
 import {
   classroomUploadMime,
+  matchesClassroomContentType,
   matchesUploadIdentity,
   mergeUploadProgress,
   putSignedUploadPart,
@@ -67,7 +69,7 @@ describe('teacher classroom admin UI contract', () => {
     expect(source).toContain('canPrice');
     expect(editor).toContain('访问权限');
     expect(editor).toContain('单课价格');
-    expect(editor).toContain(':disabled="!canPrice"');
+    expect(editor).toContain('priceEditable');
   });
 
   it('makes paid standalone inheritance policy explicit before publish', () => {
@@ -86,12 +88,28 @@ describe('teacher classroom admin UI contract', () => {
     expect(editor).toContain('保存课件');
   });
 
+  it('explains that an empty series list still allows standalone content', () => {
+    const editor = read('views/classroom/components/content-editor.vue');
+    const index = read('views/classroom/index.vue');
+    expect(editor).toContain('暂无课程系列，可直接保存为独立课件');
+    expect(editor).toContain('不加入系列，课件会独立展示');
+    expect(index).toContain("editing ? '编辑课件' : '新建课件'");
+  });
+
   it('provides series create/edit and pricing controls', () => {
     const series = read('views/classroom/series.vue');
     expect(series).toContain('createClassroomSeriesApi');
     expect(series).toContain('updateClassroomSeriesApi');
     expect(series).toContain('setClassroomSeriesPriceApi');
     expect(series).toContain('保存系列');
+  });
+
+  it('resolves series permissions when opened as a standalone menu page', () => {
+    const series = read('views/classroom/series.vue');
+    expect(series).toContain('useAccessStore');
+    expect(series).toContain('props.canWrite ?? permissions.value.canWrite');
+    expect(series).toContain('props.canPublish ?? permissions.value.canPublish');
+    expect(series).toContain('props.canPrice ?? permissions.value.canPrice');
   });
 
   it('uploads selected media through the multipart API chain', () => {
@@ -108,14 +126,39 @@ describe('teacher classroom admin UI contract', () => {
     );
   });
 
+  it('makes the two upload prerequisites explicit before enabling upload', () => {
+    const upload = read('views/classroom/upload-tasks.vue');
+    expect(upload).toContain('1. 选择草稿课件');
+    expect(upload).toContain('2. 选择媒体文件');
+    expect(upload).toContain("return message.warning('请选择媒体文件')");
+    expect(upload).toContain(
+      ':disabled="!selectedContentId || !selectedFile || uploading"',
+    );
+  });
+
   it('builds legal defaults for a new standalone or series content draft', () => {
     const defaults = createContentDraftDefaults();
     expect(defaults).toMatchObject({
       accessLevel: 'public',
       contentType: 'video',
+      coverAspectRatio: '16:9',
       showAsStandalone: false,
     });
     expect(defaults.seriesId).toBeUndefined();
+  });
+
+  it('does not leak cover settings into the content metadata payload', () => {
+    const payload = contentMetadataPayload({
+      badge: '精选',
+      contentType: 'video',
+      coverAspectRatio: '9:16',
+      description: '企业培训',
+      seriesId: 7,
+      showAsStandalone: true,
+      title: '韩老师课堂',
+    } as any);
+    expect(payload).not.toHaveProperty('coverAspectRatio');
+    expect(payload.coverUrl).toBeUndefined();
   });
 
   it('does not leak access pricing controls into content metadata requests', () => {
@@ -197,6 +240,31 @@ describe('teacher classroom admin UI contract', () => {
     });
   });
 
+  it('requires the parent series to be published before publishing its content', () => {
+    const content = { id: 11, seriesId: 2, status: 'ready' } as any;
+    expect(
+      contentPublishGuard(content, [
+        { id: 2, status: 'draft', title: '韩老师测试课程' },
+      ] as any),
+    ).toEqual({
+      allowed: false,
+      label: '先发布所属系列',
+      reason: '请先到“课程系列”发布《韩老师测试课程》',
+    });
+    expect(
+      contentPublishGuard(content, [
+        { id: 2, status: 'published', title: '韩老师测试课程' },
+      ] as any),
+    ).toMatchObject({ allowed: true, label: '发布' });
+  });
+
+  it('shows the parent-series action instead of sending an invalid publish request', () => {
+    const source = read('views/classroom/index.vue');
+    expect(source).toContain('先发布所属系列');
+    expect(source).toContain("activeTab = 'series'");
+    expect(source).not.toContain('throw cause');
+  });
+
   it('wires block and unblock controls for both content and series', () => {
     const content = read('views/classroom/index.vue');
     const series = read('views/classroom/series.vue');
@@ -252,8 +320,10 @@ describe('teacher classroom admin UI contract', () => {
 
   it('keeps metadata controls read-only for Price-only operators', () => {
     const editor = read('views/classroom/components/content-editor.vue');
-    expect(editor).toContain(':disabled="!canWrite"');
-    expect(editor).toContain(':disabled="!canPrice"');
+    expect(editor).toContain('metadataEditable');
+    expect(editor).toContain('priceEditable');
+    expect(editor).toContain('仅草稿可编辑课件元数据');
+    expect(editor).toContain('当前课件不是草稿，普通元数据已锁定');
   });
 
   it('does not create twice when the second price step fails and is retried', async () => {
@@ -329,6 +399,13 @@ describe('teacher classroom admin UI contract', () => {
     expect(classroomUploadMime({ name: 'lesson.mp3', type: '' } as File)).toBe(
       'audio/mpeg',
     );
+  });
+
+  it('rejects audio files for video lessons and video files for audio lessons', () => {
+    expect(matchesClassroomContentType('video', 'video/mp4')).toBe(true);
+    expect(matchesClassroomContentType('audio', 'audio/x-m4a')).toBe(true);
+    expect(matchesClassroomContentType('video', 'audio/x-m4a')).toBe(false);
+    expect(matchesClassroomContentType('audio', 'video/mp4')).toBe(false);
   });
 
   it('aborts only the original active task controller', () => {
@@ -421,9 +498,34 @@ describe('teacher classroom admin UI contract', () => {
     const sources = [
       read('views/classroom/index.vue'),
       read('views/classroom/series.vue'),
+      read('views/classroom/components/content-editor.vue'),
+      read('views/classroom/components/content-cover-editor.vue'),
     ].join('\n');
     expect(sources).toContain('@media (max-width: 768px)');
     expect(sources).toContain(':focus-visible');
     expect(sources).toContain('Modal.confirm');
+    expect(sources).toContain('封面管理');
+    expect(sources).toContain('请先保存课件，再管理封面');
+    expect(sources).toContain('object-fit: cover');
+    expect(sources).toContain('coverAspectRatio');
+    expect(sources).toContain('coverSource');
+    expect(sources).toContain('Progress');
+    expect(sources).toContain('上传进度');
+  });
+
+  it('wires the classroom cover api endpoints and payload shapes', () => {
+    const api = read('api/core/classroom.ts');
+    for (const token of [
+      'classroom/contents/${id}/cover',
+      'classroom/contents/${id}/cover-settings',
+      'new FormData()',
+      "formData.set('file', file)",
+      "formData.set('expectedUpdatedAt', expectedUpdatedAt)",
+      'requestClient.delete',
+      'coverAspectRatio',
+      'manualCoverObjectKey',
+    ]) {
+      expect(api).toContain(token);
+    }
   });
 });

@@ -1,4 +1,8 @@
-import type { ClassroomUploadTask } from '#/api/core/classroom';
+import type {
+  ClassroomContentType,
+  ClassroomUploadMimeType,
+  ClassroomUploadTask,
+} from '#/api/core/classroom';
 
 export interface UploadRetryContext {
   checksum?: string;
@@ -64,6 +68,15 @@ export function classroomUploadMime(file: Pick<File, 'name' | 'type'>) {
   if (name.endsWith('.mp3')) return 'audio/mpeg';
   if (name.endsWith('.m4a')) return 'audio/x-m4a';
   return '';
+}
+
+export function matchesClassroomContentType(
+  contentType: ClassroomContentType,
+  mime: ClassroomUploadMimeType,
+) {
+  return contentType === 'video'
+    ? mime === 'video/mp4'
+    : mime.startsWith('audio/');
 }
 
 export async function putSignedUploadPart(

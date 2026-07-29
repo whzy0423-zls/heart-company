@@ -104,6 +104,18 @@ type AdminModelConfig struct {
 	TimeoutSeconds int    `json:"timeoutSeconds"`
 }
 
+// TTSConfig 控制芯之力语音合成配置。Voice 保存最终可用的 MiniMax voiceId，
+// 不保存 official:/clone: 前缀，避免运行时二次解析。
+type TTSConfig struct {
+	Provider string `json:"provider"`
+	Endpoint string `json:"endpoint"`
+	APIKey   string `json:"apiKey"`
+	GroupID  string `json:"groupId"`
+	Model    string `json:"model"`
+	Voice    string `json:"voice"`
+	Format   string `json:"format"`
+}
+
 // CompatibleModelConfig 是管理端/每日题等后台任务复用的兼容模型配置。
 type CompatibleModelConfig = AdminModelConfig
 
@@ -170,6 +182,7 @@ type Config struct {
 	Analysis      AnalysisConfig      `json:"analysis"`
 	Admin         AdminModelConfig    `json:"admin"`
 	DailyQuiz     AdminModelConfig    `json:"dailyQuiz"`
+	TTS           TTSConfig           `json:"tts"`
 	Assist        AssistConfig        `json:"assist"`
 	XinzhiliVoice XinzhiliVoiceConfig `json:"xinzhiliVoice"`
 	presence      map[string]bool
@@ -224,6 +237,8 @@ func (c Config) SectionPresent(section string) bool {
 		return c.Admin != (AdminModelConfig{})
 	case "dailyQuiz":
 		return c.DailyQuiz != (AdminModelConfig{})
+	case "tts":
+		return c.TTS != (TTSConfig{})
 	case "assist":
 		return c.Assist.Enabled != nil || strings.TrimSpace(c.Assist.SystemPrompt) != ""
 	case "xinzhiliVoice":
@@ -435,6 +450,47 @@ func (c Config) ApplyDailyQuiz() CompatibleModelConfig {
 	return out
 }
 
+// ApplyTTS 把芯之力 TTS 覆盖值叠加到 MiniMax 环境基线上。
+func (c Config) ApplyTTS(base config.MiniMaxConfig) TTSConfig {
+	out := TTSConfig{
+		Provider: normalizeTTSProvider(base.Provider),
+		Endpoint: strings.TrimRight(strings.TrimSpace(base.APIBase), "/"),
+		APIKey:   strings.TrimSpace(base.APIKey),
+		GroupID:  strings.TrimSpace(base.GroupID),
+		Model:    strings.TrimSpace(base.Model),
+		Format:   "mp3",
+	}
+	if v := strings.TrimSpace(c.TTS.Provider); v != "" {
+		out.Provider = normalizeTTSProvider(v)
+	}
+	if v := strings.TrimRight(strings.TrimSpace(c.TTS.Endpoint), "/"); v != "" {
+		out.Endpoint = v
+	}
+	if v := strings.TrimSpace(c.TTS.APIKey); v != "" {
+		out.APIKey = v
+	}
+	if v := strings.TrimSpace(c.TTS.GroupID); v != "" {
+		out.GroupID = v
+	}
+	if v := strings.TrimSpace(c.TTS.Model); v != "" {
+		out.Model = v
+	}
+	if v := strings.TrimSpace(c.TTS.Voice); v != "" {
+		out.Voice = v
+	}
+	if v := normalizeTTSFormat(c.TTS.Format); v != "" {
+		out.Format = v
+	}
+	if out.Model == "" {
+		if out.Provider == "bailian" {
+			out.Model = "MiniMax/speech-2.8-turbo"
+		} else {
+			out.Model = "speech-02-hd"
+		}
+	}
+	return out
+}
+
 func isMiniMaxAnalysisModel(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "minimax")
 }
@@ -469,6 +525,9 @@ func (c Config) MergeIncoming(in Config) Config {
 	out.Video.APIKey = keepStoredString(out.Video.APIKey, stored.Video.APIKey)
 	if !in.fieldPresent("video.model", out.Video.Model != "") {
 		out.Video.Model = stored.Video.Model
+	}
+	if out.TTS.APIKey == "" {
+		out.TTS.APIKey = stored.TTS.APIKey
 	}
 	if !in.fieldPresent("image.apiBase", out.Image.APIBase != "") {
 		out.Image.APIBase = stored.Image.APIBase
@@ -567,6 +626,15 @@ func (c Config) trimmed() Config {
 			TimeoutSeconds: c.Admin.TimeoutSeconds,
 		},
 		DailyQuiz: c.DailyQuiz.normalized(),
+		TTS: TTSConfig{
+			Provider: normalizeTTSProvider(c.TTS.Provider),
+			Endpoint: strings.TrimRight(strings.TrimSpace(c.TTS.Endpoint), "/"),
+			APIKey:   strings.TrimSpace(c.TTS.APIKey),
+			GroupID:  strings.TrimSpace(c.TTS.GroupID),
+			Model:    strings.TrimSpace(c.TTS.Model),
+			Voice:    strings.TrimSpace(c.TTS.Voice),
+			Format:   normalizeTTSFormat(c.TTS.Format),
+		},
 		Assist: AssistConfig{
 			Enabled:      c.Assist.Enabled,
 			SystemPrompt: strings.TrimSpace(c.Assist.SystemPrompt),
@@ -647,6 +715,22 @@ func normalizeProvider(provider string) string {
 	default:
 		return strings.ToLower(strings.TrimSpace(provider))
 	}
+}
+
+func normalizeTTSProvider(provider string) string {
+	value := strings.ToLower(strings.TrimSpace(provider))
+	if value == "" {
+		return "minimax"
+	}
+	return value
+}
+
+func normalizeTTSFormat(format string) string {
+	value := strings.ToLower(strings.TrimSpace(format))
+	if value == "" {
+		return "mp3"
+	}
+	return value
 }
 
 func ctxOrBackground(ctx context.Context) context.Context {

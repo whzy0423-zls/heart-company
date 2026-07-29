@@ -5,7 +5,17 @@ import { join } from 'node:path'
 
 const dir = await mkdtemp(join(tmpdir(), 'nx-teacher-courseware-'))
 const modulePath = join(dir, 'teacherCourseware.mjs')
-let source = await readFile(new URL('./teacherCourseware.js', import.meta.url), 'utf8')
+const contentAssetPath = join(dir, 'contentAsset.mjs')
+await writeFile(
+  contentAssetPath,
+  (await readFile(new URL('./contentAsset.js', import.meta.url), 'utf8'))
+    .replace(
+      /import \{ API_BASE(?:, DEFAULT_API_BASE)? \} from '\.\.\/config'/,
+      "const API_BASE = 'https://api.example.test/api'; const DEFAULT_API_BASE = API_BASE",
+    ),
+)
+let source = (await readFile(new URL('./teacherCourseware.js', import.meta.url), 'utf8'))
+  .replace("'./contentAsset.js'", "'./contentAsset.mjs'")
 await writeFile(modulePath, source)
 
 const {
@@ -19,8 +29,8 @@ assert.ok(DEFAULT_TEACHERS.length > 0, 'stable fallback teachers should be avail
 assert.ok(DEFAULT_COURSEWARE_ITEMS.length > 0, 'stable fallback courseware should be available')
 
 assert.deepEqual(
-  normalizeTeachers({ teacher: { name: '韩老师', title: '九型导师', avatar: '/a.png', bio: '十年咨询经验', tags: ['课程研发'] } })[0],
-  { name: '韩老师', title: '九型导师', avatar: '/a.png', bio: '十年咨询经验', tags: ['课程研发'] },
+  normalizeTeachers({ teacher: { name: '韩老师', title: '九型导师', avatar: '/static/a.png', bio: '十年咨询经验', tags: ['课程研发'] } })[0],
+  { name: '韩老师', title: '九型导师', avatar: '/static/a.png', bio: '十年咨询经验', tags: ['课程研发'] },
   'root teacher object should be normalized',
 )
 assert.equal(
@@ -41,8 +51,8 @@ assert.deepEqual(
       teacherTeaser: {
         eyebrow: '九型人格导师',
         title: '韩老师',
-        image: '/teacher-main.png',
-        fallbackImage: '/teacher-fallback.png',
+        image: '/assets/teacher-poster.jpg',
+        fallbackImage: '/assets/teacher.svg',
         lead: '带你把课程练习落到生活。',
       },
     },
@@ -50,28 +60,35 @@ assert.deepEqual(
   {
     name: '韩老师',
     title: '九型人格导师',
-    avatar: '/teacher-main.png',
+    avatar: 'https://api.example.test/assets/teacher-poster.jpg',
     bio: '带你把课程练习落到生活。',
     tags: [],
   },
   'legacy home.teacherTeaser should map into the structured teacher view model',
 )
 assert.equal(
-  normalizeTeachers({ home: { teacherTeaser: { fallbackImage: '/fallback.png', lead: '简介' } } })[0].name,
+  normalizeTeachers({ home: { teacherTeaser: { fallbackImage: '/assets/teacher.svg', lead: '简介' } } })[0].name,
   '九型老师',
   'legacy teaser without a title should use the teacher-name fallback',
 )
 assert.equal(
-  normalizeTeachers({ home: { teacherTeaser: { fallbackImage: '/fallback.png', lead: '简介' } } })[0].avatar,
-  '/fallback.png',
+  normalizeTeachers({ home: { teacherTeaser: { fallbackImage: '/assets/teacher.svg', lead: '简介' } } })[0].avatar,
+  'https://api.example.test/assets/teacher.svg',
   'legacy fallbackImage should supply the avatar when image is absent',
+)
+assert.equal(
+  normalizeTeachers({
+    home: { teacherTeaser: { image: '/legacy.png', fallbackImage: '/assets/teacher.svg', lead: '简介' } },
+  })[0].avatar,
+  'https://api.example.test/assets/teacher.svg',
+  'an unsupported teaser image should continue to the valid fallbackImage',
 )
 assert.deepEqual(
   normalizeTeachers({
-    teacher: { name: '结构化老师', title: '结构化职称', avatar: '/structured.png', bio: '结构化简介' },
+    teacher: { name: '结构化老师', title: '结构化职称', avatar: '/static/structured.png', bio: '结构化简介' },
     home: { teacherTeaser: { title: '旧老师', eyebrow: '旧职称', image: '/legacy.png', lead: '旧简介' } },
   }),
-  [{ name: '结构化老师', title: '结构化职称', avatar: '/structured.png', bio: '结构化简介', tags: [] }],
+  [{ name: '结构化老师', title: '结构化职称', avatar: '/static/structured.png', bio: '结构化简介', tags: [] }],
   'structured teacher data should be authoritative when legacy teaser data also exists',
 )
 for (const structured of [
@@ -99,14 +116,14 @@ assert.deepEqual(
 )
 
 const courseware = normalizeCoursewareItems({
-  courseware: { items: [{ name: '九型入门课件', desc: '认识九种核心动机', image: '/cover.png', tag: 'PDF', minutes: '18分钟', link: '/pages/learn/detail' }] },
+  courseware: { items: [{ name: '九型入门课件', desc: '认识九种核心动机', image: '/assets/course-cover.jpg', tag: 'PDF', minutes: '18分钟', link: '/pages/learn/detail' }] },
 })[0]
 assert.deepEqual(
   courseware,
   {
     title: '九型入门课件',
     description: '认识九种核心动机',
-    cover: '/cover.png',
+    cover: 'https://api.example.test/assets/course-cover.jpg',
     badge: 'PDF',
     duration: '18分钟',
     url: '/pages/learn/detail',

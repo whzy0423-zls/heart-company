@@ -132,13 +132,13 @@ onMounted(() => {
           :options="actionOptions"
           class="filter-select"
           @change="search"
-        />
+         placeholder="请选择操作类型"/>
         <Select
           v-model:value="query.targetType"
           :options="targetTypeOptions"
           class="filter-select"
           @change="search"
-        />
+         placeholder="请选择对象类型"/>
         <Input
           v-model:value="query.operator"
           allow-clear

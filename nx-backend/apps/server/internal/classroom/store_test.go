@@ -77,6 +77,37 @@ func TestContentValidationAndTransitions(t *testing.T) {
 	}
 }
 
+func TestNormalizeCoverAspectRatio(t *testing.T) {
+	for input, want := range map[CoverAspectRatio]CoverAspectRatio{
+		"":     CoverAspectRatio16x9,
+		"16:9": CoverAspectRatio16x9,
+		"9:16": CoverAspectRatio9x16,
+		"1:1":  CoverAspectRatio1x1,
+	} {
+		got, err := NormalizeCoverAspectRatio(input)
+		if err != nil {
+			t.Fatalf("NormalizeCoverAspectRatio(%q): %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("NormalizeCoverAspectRatio(%q) = %q, want %q", input, got, want)
+		}
+	}
+	if _, err := NormalizeCoverAspectRatio("4:3"); err == nil {
+		t.Fatal("unsupported cover aspect ratio accepted")
+	}
+}
+
+func TestContentValidationRejectsUnsupportedCoverAspectRatio(t *testing.T) {
+	content := Content{Title: "课件", ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic, CoverAspectRatio: "4:3"}
+	if err := content.Validate(); err == nil {
+		t.Fatal("content accepted unsupported cover aspect ratio")
+	}
+	content.CoverAspectRatio = ""
+	if err := content.Validate(); err != nil {
+		t.Fatalf("empty cover aspect ratio should normalize to default: %v", err)
+	}
+}
+
 func TestContentPublishRequiresReadyMediaAndPublishedParent(t *testing.T) {
 	seriesID := int64(3)
 	content := Content{SeriesID: &seriesID, Title: "第一课", ContentType: ContentVideo, Status: ContentReady, AccessLevel: AccessInherit, MediaAssetID: ptrInt64(9)}
@@ -192,6 +223,104 @@ func TestStoreCreateContentRejectsPublishedTarget(t *testing.T) {
 	_, err := store.CreateContent(context.Background(), Content{Title: "绕过发布", ContentType: ContentVideo, Status: ContentPublished, AccessLevel: AccessPublic})
 	if err == nil {
 		t.Fatal("CreateContent accepted published content without ready media")
+	}
+}
+
+func TestStoreCreateContentPersistsNilTagsAsJSONArray(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	db := openClassroomQueryDB(t, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		if !strings.Contains(query, "INSERT INTO classroom_contents") {
+			return nil, fmt.Errorf("unexpected query: %s", query)
+		}
+		if len(args) < 15 || args[7].Value != "covers/manual.jpg" || args[8].Value != string(CoverAspectRatio16x9) || args[14].Value != "[]" {
+			t.Fatalf("unexpected cover/tags args: %+v", args)
+		}
+		return classroomRows(
+			[]string{"id", "created_at", "updated_at"},
+			[][]driver.Value{{int64(1), now, now}},
+		), nil
+	})
+
+	created, err := NewStore(db).CreateContent(context.Background(), Content{
+		Title:                "企业培训案例",
+		ContentType:          ContentVideo,
+		ManualCoverObjectKey: "covers/manual.jpg",
+		Status:               ContentDraft,
+		AccessLevel:          AccessPublic,
+	})
+	if err != nil {
+		t.Fatalf("create content: %v", err)
+	}
+	if created.ID != 1 {
+		t.Fatalf("created id = %d, want 1", created.ID)
+	}
+	if created.CoverAspectRatio != CoverAspectRatio16x9 {
+		t.Fatalf("created cover ratio = %q, want default %q", created.CoverAspectRatio, CoverAspectRatio16x9)
+	}
+}
+
+func TestStoreGetAndListContentsScanCoverSettings(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	want := Content{
+		ID: 9, Title: "竖屏课件", ContentType: ContentVideo,
+		ManualCoverObjectKey: "covers/portrait.jpg", CoverAspectRatio: CoverAspectRatio9x16,
+		Status: ContentDraft, AccessLevel: AccessPublic, CreatedAt: now, UpdatedAt: now,
+	}
+	db := openClassroomQueryDB(t, func(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+		if !strings.Contains(query, "FROM classroom_contents") {
+			return nil, fmt.Errorf("unexpected query: %s", query)
+		}
+		return classroomRows(contentColumns, [][]driver.Value{contentValues(want)}), nil
+	})
+	store := NewStore(db)
+	got, err := store.GetContent(context.Background(), want.ID)
+	if err != nil {
+		t.Fatalf("get content: %v", err)
+	}
+	if got.ManualCoverObjectKey != want.ManualCoverObjectKey || got.CoverAspectRatio != want.CoverAspectRatio {
+		t.Fatalf("get cover settings = (%q, %q), want (%q, %q)", got.ManualCoverObjectKey, got.CoverAspectRatio, want.ManualCoverObjectKey, want.CoverAspectRatio)
+	}
+	items, err := store.ListContents(context.Background(), ContentFilter{})
+	if err != nil {
+		t.Fatalf("list contents: %v", err)
+	}
+	if len(items) != 1 || items[0].ManualCoverObjectKey != want.ManualCoverObjectKey || items[0].CoverAspectRatio != want.CoverAspectRatio {
+		t.Fatalf("list cover settings = %+v, want %+v", items, want)
+	}
+}
+
+func TestStoreUpdateContentPersistsNilTagsAsJSONArray(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	current := Content{
+		ID:                   1,
+		Title:                "企业培训案例",
+		ContentType:          ContentVideo,
+		ManualCoverObjectKey: "covers/square.jpg",
+		CoverAspectRatio:     CoverAspectRatio1x1,
+		Status:               ContentDraft,
+		AccessLevel:          AccessPublic,
+		UpdatedAt:            now,
+	}
+	state := &classroomTxState{}
+	db := openClassroomTxDB(t, state, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "FROM classroom_contents WHERE id"):
+			return classroomRows(contentColumns, [][]driver.Value{contentValues(current)}), nil
+		case strings.Contains(query, "UPDATE classroom_contents"):
+			if len(args) < 25 || args[7].Value != current.ManualCoverObjectKey || args[8].Value != string(CoverAspectRatio1x1) || args[14].Value != "[]" {
+				t.Fatalf("unexpected cover/tags args: %+v", args)
+			}
+			return classroomRows(
+				[]string{"created_at", "updated_at"},
+				[][]driver.Value{{now.Add(-time.Hour), now.Add(time.Second)}},
+			), nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", query)
+		}
+	})
+
+	if _, err := NewStore(db).UpdateContent(context.Background(), current, now); err != nil {
+		t.Fatalf("update content: %v", err)
 	}
 }
 
@@ -367,10 +496,10 @@ func seriesValues(s Series) []driver.Value {
 	return []driver.Value{s.ID, s.Title, s.Summary, s.CoverURL, nil, s.TeacherKey, s.TeacherNameSnapshot, int64(s.SortOrder), string(s.Status), s.PlaybackBlocked, string(s.AccessLevel), int64(s.PriceCents), nil, nil, nil, s.CreatedAt, s.UpdatedAt}
 }
 
-var contentColumns = []string{"id", "series_id", "show_as_standalone", "title", "description", "content_type", "media_asset_id", "cover_url", "duration_seconds", "teacher_key", "teacher_name_snapshot", "recorded_at", "badge", "tags", "episode_no", "sort_order", "status", "playback_blocked", "access_level", "price_cents", "published_at", "created_by", "updated_by", "created_at", "updated_at"}
+var contentColumns = []string{"id", "series_id", "show_as_standalone", "title", "description", "content_type", "media_asset_id", "cover_url", "manual_cover_object_key", "cover_aspect_ratio", "duration_seconds", "teacher_key", "teacher_name_snapshot", "recorded_at", "badge", "tags", "episode_no", "sort_order", "status", "playback_blocked", "access_level", "price_cents", "published_at", "created_by", "updated_by", "created_at", "updated_at"}
 
 func contentValues(c Content) []driver.Value {
-	return []driver.Value{c.ID, nullableInt64(c.SeriesID), c.ShowAsStandalone, c.Title, c.Description, string(c.ContentType), nullableInt64(c.MediaAssetID), c.CoverURL, int64(c.DurationSeconds), c.TeacherKey, c.TeacherNameSnapshot, nullableTime(c.RecordedAt), c.Badge, []byte(`[]`), int64(c.EpisodeNo), int64(c.SortOrder), string(c.Status), c.PlaybackBlocked, string(c.AccessLevel), int64(c.PriceCents), nullableTime(c.PublishedAt), nullableInt64(c.CreatedBy), nullableInt64(c.UpdatedBy), c.CreatedAt, c.UpdatedAt}
+	return []driver.Value{c.ID, nullableInt64(c.SeriesID), c.ShowAsStandalone, c.Title, c.Description, string(c.ContentType), nullableInt64(c.MediaAssetID), c.CoverURL, c.ManualCoverObjectKey, string(c.CoverAspectRatio), int64(c.DurationSeconds), c.TeacherKey, c.TeacherNameSnapshot, nullableTime(c.RecordedAt), c.Badge, []byte(`[]`), int64(c.EpisodeNo), int64(c.SortOrder), string(c.Status), c.PlaybackBlocked, string(c.AccessLevel), int64(c.PriceCents), nullableTime(c.PublishedAt), nullableInt64(c.CreatedBy), nullableInt64(c.UpdatedBy), c.CreatedAt, c.UpdatedAt}
 }
 func nullableInt64(value *int64) driver.Value {
 	if value == nil {
@@ -425,7 +554,7 @@ func TestStorePublishedContentUpdateLocksValidationRowsInTransaction(t *testing.
 			}
 			return classroomRows(seriesColumns, [][]driver.Value{seriesValues(parent)}), nil
 		case strings.Contains(query, "UPDATE classroom_contents"):
-			if len(args) != 23 || args[22].Value != now {
+			if len(args) != 25 || args[24].Value != now {
 				t.Fatalf("content CAS args = %+v", args)
 			}
 			return classroomRows([]string{"created_at", "updated_at"}, [][]driver.Value{{now.Add(-time.Hour), now.Add(time.Second)}}), nil
@@ -515,7 +644,7 @@ func TestStoreContentOptimisticUpdateDetectsStaleVersion(t *testing.T) {
 			return classroomRows(contentColumns, [][]driver.Value{contentValues(content)}), nil
 		}
 		if strings.Contains(query, "UPDATE classroom_contents") {
-			if len(args) != 23 || args[22].Value != now.Add(-time.Second) {
+			if len(args) != 25 || args[24].Value != now.Add(-time.Second) {
 				t.Fatalf("content stale CAS args = %+v", args)
 			}
 			return classroomRows([]string{"created_at", "updated_at"}, nil), nil
@@ -528,6 +657,32 @@ func TestStoreContentOptimisticUpdateDetectsStaleVersion(t *testing.T) {
 	}
 	if !state.began || !state.rolledBack || state.committed {
 		t.Fatalf("stale transaction state: %+v", state)
+	}
+}
+
+func TestStoreSetContentManualCoverUsesTimestampCASAndReturnsLatestContent(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	want := Content{ID: 44, Title: "封面课件", ContentType: ContentVideo, Status: ContentPublished, AccessLevel: AccessPublic, ManualCoverObjectKey: "classroom/covers/manual/44/new.png", CoverAspectRatio: CoverAspectRatio16x9, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(time.Second)}
+	db := openClassroomQueryDB(t, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		if !strings.Contains(query, "UPDATE classroom_contents SET manual_cover_object_key") || len(args) != 4 || args[0].Value != want.ManualCoverObjectKey || args[2].Value != int64(44) || args[3].Value != now {
+			t.Fatalf("query=%s args=%+v", query, args)
+		}
+		return classroomRows(contentColumns, [][]driver.Value{contentValues(want)}), nil
+	})
+	got, err := NewStore(db).SetContentManualCover(context.Background(), 44, want.ManualCoverObjectKey, now, ptrInt64(7))
+	if err != nil || got.ManualCoverObjectKey != want.ManualCoverObjectKey || !got.UpdatedAt.Equal(want.UpdatedAt) {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+}
+
+func TestStoreSetContentManualCoverMapsNoRowsToConflict(t *testing.T) {
+	now := time.Now().UTC()
+	db := openClassroomQueryDB(t, func(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+		return classroomRows(contentColumns, nil), nil
+	})
+	_, err := NewStore(db).SetContentManualCover(context.Background(), 1, "x", now, nil)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("err=%v", err)
 	}
 }
 
@@ -568,5 +723,37 @@ func TestStoreSaveUploadTaskRejectsCleanupOutsideSchemaConstraint(t *testing.T) 
 	task := UploadTask{ID: 1, ContentID: 1, CreatorID: 1, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 1, Checksum: "crc64:1", PartSize: 1, MaxParts: 1, Status: UploadAborted, ExpiresAt: time.Now().Add(time.Hour), AttemptCount: 1, CleanupStatus: "clean"}
 	if _, err := NewStore(nil).SaveUploadTask(context.Background(), task); err == nil {
 		t.Fatal("expected store validation before SQL")
+	}
+}
+
+func TestStoreCoverSettingsCASesGeneratedMediaKeyAndPreservesContentLifecycle(t *testing.T) {
+	now := time.Date(2026, 7, 28, 13, 0, 0, 0, time.UTC)
+	mediaID := int64(9)
+	content := Content{ID: 7, Title: "课件", ContentType: ContentVideo, MediaAssetID: &mediaID, Status: ContentPublished, AccessLevel: AccessPublic, ManualCoverObjectKey: "manual.webp", CoverAspectRatio: CoverAspectRatio16x9, UpdatedAt: now}
+	media := MediaAsset{ID: mediaID, ObjectKey: "video.mp4", CoverObjectKey: "old.jpg", ContentType: ContentVideo, StorageStatus: MediaReady}
+	updated := content
+	updated.CoverAspectRatio = CoverAspectRatio9x16
+	updated.UpdatedAt = now.Add(time.Second)
+	state := &classroomTxState{}
+	db := openClassroomTxDB(t, state, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "FROM classroom_contents WHERE id"):
+			return classroomRows(contentColumns, [][]driver.Value{contentValues(content)}), nil
+		case strings.Contains(query, "FROM classroom_media_assets"):
+			return classroomRows(mediaColumns, [][]driver.Value{mediaValues(media)}), nil
+		case strings.Contains(query, "UPDATE classroom_media_assets"):
+			if !strings.Contains(query, "WHERE id=$2 AND cover_object_key=$3") || len(args) != 3 || args[2].Value != "old.jpg" {
+				t.Fatalf("generated cover CAS query=%s args=%+v", query, args)
+			}
+			return classroomRows([]string{"id"}, [][]driver.Value{{mediaID}}), nil
+		case strings.Contains(query, "UPDATE classroom_contents"):
+			return classroomRows(contentColumns, [][]driver.Value{contentValues(updated)}), nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", query)
+		}
+	})
+	got, err := NewStore(db).SetContentCoverSettings(context.Background(), content.ID, CoverAspectRatio9x16, now, nil, &mediaID, "old.jpg", "new.jpg")
+	if err != nil || got.Status != ContentPublished || got.ManualCoverObjectKey != "manual.webp" || got.CoverAspectRatio != CoverAspectRatio9x16 || !state.committed {
+		t.Fatalf("got=%+v err=%v tx=%+v", got, err, state)
 	}
 }

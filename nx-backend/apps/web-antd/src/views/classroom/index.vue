@@ -23,12 +23,14 @@ import {
   publishClassroomContentApi,
   setClassroomContentPlaybackBlockedApi,
 } from '#/api/core/classroom';
+import ContentCoverEditor from './components/content-cover-editor.vue';
 import ContentEditor from './components/content-editor.vue';
 import SeriesView from './series.vue';
 import UploadTasks from './upload-tasks.vue';
 import {
   classroomOperationError,
   classroomPermissions,
+  contentPublishGuard,
   visibleClassroomTabs,
 } from './classroom-view-model';
 
@@ -47,6 +49,8 @@ const contents = ref<ClassroomContent[]>([]);
 const series = ref<ClassroomSeries[]>([]);
 const editorOpen = ref(false);
 const editing = ref<ClassroomContent>();
+const contentCoverOpen = ref(false);
+const coverEditing = ref<ClassroomContent>();
 const actionLoadingId = ref<number>();
 const columns = [
   { dataIndex: 'title', title: '课件' },
@@ -75,6 +79,9 @@ const statusText: Record<string, string> = {
   ready: '待发布',
   processing: '处理中',
 };
+function publishGuard(record: ClassroomContent) {
+  return contentPublishGuard(record, series.value);
+}
 async function load() {
   loading.value = true;
   error.value = '';
@@ -95,6 +102,14 @@ function confirmLifecycle(
   record: ClassroomContent,
   action: 'publish' | 'offline' | 'block' | 'unblock' | 'delete',
 ) {
+  if (action === 'publish') {
+    const guard = publishGuard(record);
+    if (!guard.allowed) {
+      message.info(guard.reason);
+      if (guard.label === '先发布所属系列') activeTab.value = 'series';
+      return;
+    }
+  }
   Modal.confirm({
     title:
       action === 'publish'
@@ -136,7 +151,6 @@ function confirmLifecycle(
         await load();
       } catch (cause) {
         message.error(classroomOperationError(cause, '操作失败'));
-        throw cause;
       } finally {
         actionLoadingId.value = undefined;
       }
@@ -146,6 +160,17 @@ function confirmLifecycle(
 function openCreate() {
   editing.value = undefined;
   editorOpen.value = true;
+}
+function openCoverEditor(record: ClassroomContent) {
+  coverEditing.value = record;
+  contentCoverOpen.value = true;
+}
+function replaceContentRow(value: ClassroomContent) {
+  contents.value = contents.value.map((item) =>
+    item.id === value.id ? value : item,
+  );
+  if (editing.value?.id === value.id) editing.value = value;
+  if (coverEditing.value?.id === value.id) coverEditing.value = value;
 }
 function openUploads() {
   activeTab.value = 'uploads';
@@ -206,14 +231,22 @@ onMounted(load);
               <Button
                 v-if="canPublish && record.status !== 'published'"
                 :loading="actionLoadingId === record.id"
-                :disabled="record.status !== 'ready'"
-                :title="
-                  record.status !== 'ready'
-                    ? '媒体处理完成后才可发布'
-                    : '发布课件'
+                :disabled="
+                  !publishGuard(record as ClassroomContent).allowed &&
+                  publishGuard(record as ClassroomContent).label !==
+                    '先发布所属系列'
                 "
-                @click="confirmLifecycle(record as ClassroomContent, 'publish')"
-                >发布</Button
+                :title="publishGuard(record as ClassroomContent).reason"
+                @click="
+                  publishGuard(record as ClassroomContent).label ===
+                  '先发布所属系列'
+                    ? (activeTab = 'series')
+                    : confirmLifecycle(
+                        record as ClassroomContent,
+                        'publish',
+                      )
+                "
+                >{{ publishGuard(record as ClassroomContent).label }}</Button
               >
               <Button
                 v-if="canPublish && record.status === 'published'"
@@ -228,6 +261,11 @@ onMounted(load);
                   editorOpen = true;
                 "
                 >定价</Button
+              >
+              <Button
+                v-if="canWrite"
+                @click="openCoverEditor(record as ClassroomContent)"
+                >封面管理</Button
               >
               <Button
                 v-if="canWrite"
@@ -277,7 +315,7 @@ onMounted(load);
     </Card>
     <Modal
       v-model:open="editorOpen"
-      title="编辑课件"
+      :title="editing ? '编辑课件' : '新建课件'"
       :width="760"
       :footer="null"
       ><ContentEditor
@@ -290,6 +328,18 @@ onMounted(load);
           editorOpen = false;
           load();
         "
+    /></Modal>
+    <Modal
+      v-model:open="contentCoverOpen"
+      title="封面管理"
+      :width="680"
+      :footer="null"
+      destroy-on-close
+      ><ContentCoverEditor
+        v-if="coverEditing"
+        :content="coverEditing"
+        @cancel="contentCoverOpen = false"
+        @saved="replaceContentRow"
     /></Modal>
   </Page>
 </template>

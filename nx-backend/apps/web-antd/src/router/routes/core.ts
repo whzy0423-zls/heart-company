@@ -114,6 +114,17 @@ const coreRoutes: RouteRecordRaw[] = [
     name: 'Offline',
     path: '/offline',
   },
+  {
+    meta: {
+      hideInBreadcrumb: true,
+      hideInMenu: true,
+      hideInTab: true,
+      title: 'LegacyTheoryLibrary',
+    },
+    name: 'LegacyTheoryLibrary',
+    path: '/theory/library',
+    redirect: '/rag/knowledge',
+  },
 ];
 
 export { coreRoutes, fallbackNotFoundRoute };

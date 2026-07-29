@@ -585,7 +585,7 @@ watch(
                 <Select
                   v-model:value="followForm.status"
                   :options="activeFollowStatusOptions"
-                />
+                 placeholder="请选择跟进状态"/>
               </Form.Item>
               <Form.Item label="负责人">
                 <Select

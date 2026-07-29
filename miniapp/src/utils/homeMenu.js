@@ -77,14 +77,17 @@ const THEME_KEYS = new Set(MINIAPP_HOME_THEME_KEYS)
 const ENTRY_DEFAULTS = new Map(DEFAULT_ENTRIES.map((entry) => [entry.key, entry]))
 
 function createDefaultHome() {
+  const items = DEFAULT_ENTRIES.map((entry) => ({ ...entry }))
   return {
     brand: { ...DEFAULTS.brand },
     hero: { ...DEFAULTS.hero },
     entriesSection: {
       ...DEFAULTS.entriesSection,
-      items: DEFAULT_ENTRIES.map((entry) => ({ ...entry })),
+      items,
     },
     growth: { ...DEFAULTS.growth },
+    testEntry: { ...items[0] },
+    navigationEntries: items.filter((item) => item.key !== 'test').map((item) => ({ ...item })),
   }
 }
 
@@ -165,6 +168,8 @@ export function normalizeMiniappHome(config) {
         title: normalizedText(growth.title, DEFAULTS.growth.title),
         description: normalizedText(growth.description, DEFAULTS.growth.description),
       },
+      testEntry: { ...(items.find((item) => item.key === 'test') || DEFAULT_ENTRIES[0]) },
+      navigationEntries: items.filter((item) => item.key !== 'test').map((item) => ({ ...item })),
     }
   } catch {
     return createDefaultHome()

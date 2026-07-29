@@ -5,6 +5,44 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const source = await readFile(new URL('./profile.vue', import.meta.url), 'utf8')
+const profileEditSource = await readFile(new URL('../profile-edit/profile-edit.vue', import.meta.url), 'utf8')
+
+for (const [pageName, pageSource] of [
+  ['profile', source],
+  ['profile edit', profileEditSource],
+]) {
+  for (const token of [
+    '--nx-brand-900',
+    '--nx-brand-700',
+    '--nx-accent-gold',
+    '--nx-page-bg',
+    '--nx-surface',
+    '--nx-surface-soft',
+    '--nx-text',
+    '--nx-text-muted',
+    '--nx-border',
+  ]) {
+    assert.ok(pageSource.includes(`var(${token})`), `${pageName} page should use ${token}`)
+  }
+  assert.doesNotMatch(
+    pageSource,
+    /#(?:172554|4338ca|7c3aed|4f46e5|3730a3|ddd6fe|ede9fe|f5f3ff|eef2ff)/i,
+    `${pageName} page should not keep the old full-page violet theme`,
+  )
+}
+
+assert.match(source, /<view class="wrap profile page-stack ios-page ios-safe-bottom">/, 'profile should use the shared page shell')
+assert.match(profileEditSource, /<view class="wrap profile-edit-page page-stack ios-page ios-safe-bottom">/, 'profile edit should use the same horizontal page shell')
+assert.match(source, /v-if="!logged"/, 'profile login state should remain available')
+assert.match(source, /v-if="profileLoading"/, 'profile record loading state should remain available')
+assert.match(source, /v-else-if="recordsError"/, 'profile record error state should remain available')
+assert.match(source, /v-else-if="records\.length === 0"/, 'profile record empty state should remain available')
+assert.match(source, /@click="loadAll">重试/, 'profile record errors should keep a retry action')
+assert.match(profileEditSource, /v-if="profileLoading"/, 'profile edit loading state should remain available')
+assert.match(profileEditSource, /v-else-if="loadError"/, 'profile edit error state should remain available')
+assert.match(profileEditSource, /@click="loadProfile">重新加载/, 'profile edit errors should keep a retry action')
+assert.match(profileEditSource, /\.profile-save\s*\{[\s\S]*?min-height:\s*88rpx/, 'profile save should keep a full-size touch target')
+assert.match(profileEditSource, /\.nickname-field__input\s*\{[^}]*min-height:\s*88rpx/, 'nickname input should expose an 88rpx native touch target')
 const script = source.match(/<script setup>([\s\S]*?)<\/script>/)?.[1]
 assert.ok(script, 'profile page should expose a script setup block')
 

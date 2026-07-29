@@ -1,9 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,14 +16,40 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/auditlog"
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/classroom"
+	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/storage"
 )
 
 type fakeClassroomAdminService struct {
-	series       classroom.Series
-	content      classroom.Content
-	calls        []string
-	getSeriesErr error
-	uploadTasks  []classroom.UploadTask
+	series            classroom.Series
+	content           classroom.Content
+	updatedContent    classroom.Content
+	calls             []string
+	getSeriesErr      error
+	contentContextErr error
+	generatedCoverKey string
+	deleteContentErr  error
+	uploadTasks       []classroom.UploadTask
+}
+
+func (f *fakeClassroomAdminService) ListContentContexts(_ context.Context, ids []int64) (map[int64]classroomContentContext, error) {
+	f.calls = append(f.calls, "list-content-contexts")
+	if f.contentContextErr != nil {
+		return nil, f.contentContextErr
+	}
+	if f.getSeriesErr != nil && f.content.SeriesID != nil {
+		return nil, f.getSeriesErr
+	}
+	result := make(map[int64]classroomContentContext, len(ids))
+	for _, id := range ids {
+		var parent *classroom.Series
+		if f.content.SeriesID != nil {
+			copy := f.series
+			parent = &copy
+		}
+		result[id] = classroomContentContext{Parent: parent, GeneratedCoverObjectKey: f.generatedCoverKey}
+	}
+	return result, nil
 }
 
 func (f *fakeClassroomAdminService) ListSeries(context.Context, classroom.SeriesFilter) ([]classroom.Series, int, error) {
@@ -53,6 +82,7 @@ func (f *fakeClassroomAdminService) CreateContent(context.Context, classroom.Con
 }
 func (f *fakeClassroomAdminService) UpdateContent(_ context.Context, value classroom.Content, _ time.Time) (classroom.Content, error) {
 	f.calls = append(f.calls, "update-content")
+	f.updatedContent = value
 	return value, nil
 }
 func (f *fakeClassroomAdminService) DeleteSeries(context.Context, int64, time.Time) error {
@@ -61,7 +91,52 @@ func (f *fakeClassroomAdminService) DeleteSeries(context.Context, int64, time.Ti
 }
 func (f *fakeClassroomAdminService) DeleteContent(context.Context, int64, time.Time) error {
 	f.calls = append(f.calls, "delete-content")
-	return nil
+	return f.deleteContentErr
+}
+
+type fakeClassroomCoverManager struct {
+	updated                           classroom.Content
+	uploadErr, deleteErr, settingsErr error
+	expected                          time.Time
+	uploads, deletes, settings        int
+}
+
+func (f *fakeClassroomCoverManager) Upload(context.Context, int64, time.Time, *int64, string, io.Reader) (classroom.Content, error) {
+	f.uploads++
+	return f.updated, f.uploadErr
+}
+func (f *fakeClassroomCoverManager) Delete(context.Context, int64, time.Time, *int64) (classroom.Content, error) {
+	f.deletes++
+	return f.updated, f.deleteErr
+}
+func (f *fakeClassroomCoverManager) UpdateSettings(_ context.Context, _ int64, ratio classroom.CoverAspectRatio, expected time.Time, _ *int64) (classroom.Content, error) {
+	f.settings++
+	if f.settingsErr != nil {
+		return classroom.Content{}, f.settingsErr
+	}
+	if !f.expected.IsZero() && !f.expected.Equal(expected) {
+		return classroom.Content{}, classroom.ErrConflict
+	}
+	f.updated.CoverAspectRatio = ratio
+	return f.updated, nil
+}
+
+type fakeClassroomCoverObjects struct {
+	deleted       []string
+	err           error
+	deleteCtxErrs []error
+}
+
+func (*fakeClassroomCoverObjects) Upload(context.Context, storage.UploadInput) (storage.UploadResult, error) {
+	return storage.UploadResult{}, nil
+}
+func (*fakeClassroomCoverObjects) PresignGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
+	return "https://signed/" + key, nil
+}
+func (f *fakeClassroomCoverObjects) DeleteObject(ctx context.Context, key string) error {
+	f.deleted = append(f.deleted, key)
+	f.deleteCtxErrs = append(f.deleteCtxErrs, ctx.Err())
+	return f.err
 }
 func (f *fakeClassroomAdminService) ListUploadTasks(context.Context, int, int) ([]classroom.UploadTask, int, error) {
 	f.calls = append(f.calls, "list-tasks")
@@ -159,6 +234,47 @@ func TestClassroomAdminPaidMetadataDoesNotExposeMediaObjectKey(t *testing.T) {
 	}
 }
 
+func TestClassroomAdminContentListResolvesManualCoverAndExposesCoverMetadataWithoutNPlusOne(t *testing.T) {
+	f := &fakeClassroomAdminService{
+		series: classroom.Series{ID: 7, AccessLevel: classroom.AccessPaid, PriceCents: 2990},
+		content: classroom.Content{
+			ID: 3, SeriesID: ptrI64(7), Title: "Covered", ContentType: classroom.ContentVideo,
+			ManualCoverObjectKey: "classroom/covers/manual/3/cover.webp",
+			CoverAspectRatio:     classroom.CoverAspectRatio9x16,
+			AccessLevel:          classroom.AccessInherit,
+		},
+	}
+	s := &Server{classroomAdmin: f, classroomPlaybackSigner: fakeClassroomSigner{key: "manual-cover"}, env: config.Env{ClassroomMedia: config.ClassroomMediaConfig{CoverURLTTLSeconds: 1800}}}
+	rr := httptest.NewRecorder()
+	s.classroomContentList(rr, classroomUser(httptest.NewRequest(http.MethodGet, "/api/admin/classroom/contents", nil)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	raw := rr.Body.String()
+	for _, want := range []string{`"coverUrl":"https://cdn.example/manual-cover"`, `"manualCoverObjectKey":"classroom/covers/manual/3/cover.webp"`, `"coverAspectRatio":"9:16"`, `"coverSource":"manual"`, `"effectiveAccessLevel":"paid"`} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("missing %s in %s", want, raw)
+		}
+	}
+	if strings.Count(strings.Join(f.calls, ","), "get-series") != 0 {
+		t.Fatalf("content list performed per-row series lookup: calls=%v", f.calls)
+	}
+	if rr.Header().Get("Cache-Control") != "private, no-store" {
+		t.Fatalf("cache-control=%q", rr.Header().Get("Cache-Control"))
+	}
+}
+
+func TestClassroomAdminCoverSigningFailureReturns503WithoutObjectKey(t *testing.T) {
+	key := "classroom/covers/manual/3/private.webp"
+	f := &fakeClassroomAdminService{content: classroom.Content{ID: 3, ContentType: classroom.ContentVideo, ManualCoverObjectKey: key, AccessLevel: classroom.AccessPublic}}
+	s := &Server{classroomAdmin: f, classroomPlaybackSigner: &recordingClassroomCoverSigner{err: errors.New("signer unavailable")}}
+	rr := httptest.NewRecorder()
+	s.classroomContentList(rr, classroomUser(httptest.NewRequest(http.MethodGet, "/api/admin/classroom/contents", nil)))
+	if rr.Code != http.StatusServiceUnavailable || strings.Contains(rr.Body.String(), key) {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestClassroomAdminPriceEndpointRejectsInvalidCNY(t *testing.T) {
 	f := &fakeClassroomAdminService{}
 	s := &Server{classroomAdmin: f}
@@ -223,6 +339,30 @@ func TestClassroomWriteRejectsSensitiveFieldsAndPublishedEdits(t *testing.T) {
 	}
 }
 
+func TestClassroomContentMetadataUpdatePreservesCoverSettings(t *testing.T) {
+	updatedAt := time.Date(2026, 7, 28, 11, 0, 0, 0, time.UTC)
+	f := &fakeClassroomAdminService{content: classroom.Content{
+		ID: 18, Title: "原课件", ContentType: classroom.ContentVideo,
+		ManualCoverObjectKey: "classroom/covers/manual/18/portrait.webp",
+		CoverAspectRatio:     classroom.CoverAspectRatio9x16,
+		Status:               classroom.ContentDraft, AccessLevel: classroom.AccessPublic, UpdatedAt: updatedAt,
+	}}
+	s := &Server{classroomAdmin: f, classroomPlaybackSigner: fakeClassroomSigner{key: "preserved-cover"}}
+	mux := http.NewServeMux()
+	registerClassroomAdminRoutes(mux, func(_ string, next http.HandlerFunc) http.HandlerFunc { return next }, s)
+
+	rr := httptest.NewRecorder()
+	body := `{"title":"新标题","contentType":"video","expectedUpdatedAt":"2026-07-28T11:00:00Z"}`
+	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodPut, "/api/admin/classroom/contents/18", strings.NewReader(body))))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("metadata update status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if f.updatedContent.ManualCoverObjectKey != f.content.ManualCoverObjectKey || f.updatedContent.CoverAspectRatio != f.content.CoverAspectRatio {
+		t.Fatalf("metadata update changed cover settings: got key=%q ratio=%q, want key=%q ratio=%q", f.updatedContent.ManualCoverObjectKey, f.updatedContent.CoverAspectRatio, f.content.ManualCoverObjectKey, f.content.CoverAspectRatio)
+	}
+}
+
 func TestClassroomActionsRequireExpectedUpdatedAt(t *testing.T) {
 	f := &fakeClassroomAdminService{series: classroom.Series{ID: 4, Title: "S", Status: classroom.SeriesDraft, AccessLevel: classroom.AccessPublic, UpdatedAt: time.Now()}}
 	s := &Server{classroomAdmin: f}
@@ -244,6 +384,171 @@ func TestClassroomDeleteDraftRoutes(t *testing.T) {
 	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodDelete, "/api/admin/classroom/series/2?expectedUpdatedAt=2026-07-26T10:00:00Z", nil)))
 	if rr.Code != http.StatusOK || !containsString(f.calls, "delete-series") {
 		t.Fatalf("status=%d calls=%v body=%s", rr.Code, f.calls, rr.Body.String())
+	}
+}
+
+func classroomCoverMultipart(t *testing.T, expected string, data []byte) (*bytes.Buffer, string) {
+	t.Helper()
+	body := &bytes.Buffer{}
+	w := multipart.NewWriter(body)
+	part, err := w.CreateFormFile("file", "cover.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if expected != "" {
+		_ = w.WriteField("expectedUpdatedAt", expected)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return body, w.FormDataContentType()
+}
+
+func TestClassroomContentCoverUploadAndDeleteReturnLatestDTO(t *testing.T) {
+	now := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
+	current := classroom.Content{ID: 11, Title: "课件", ContentType: classroom.ContentVideo, Status: classroom.ContentPublished, AccessLevel: classroom.AccessPublic, CoverAspectRatio: classroom.CoverAspectRatio16x9, UpdatedAt: now}
+	updated := current
+	updated.ManualCoverObjectKey = "classroom/covers/manual/11/new.png"
+	updated.UpdatedAt = now.Add(time.Second)
+	admin := &fakeClassroomAdminService{content: current}
+	manager := &fakeClassroomCoverManager{updated: updated}
+	objects := &fakeClassroomCoverObjects{}
+	s := &Server{classroomAdmin: admin, classroomCovers: manager, classroomPlaybackSigner: objects}
+	mux := http.NewServeMux()
+	registerClassroomAdminRoutes(mux, func(_ string, h http.HandlerFunc) http.HandlerFunc { return h }, s)
+	body, contentType := classroomCoverMultipart(t, now.Format(time.RFC3339Nano), []byte("png"))
+	req := classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/contents/11/cover", body))
+	req.Header.Set("Content-Type", contentType)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || manager.uploads != 1 || !strings.Contains(rr.Body.String(), `"coverSource":"manual"`) || strings.Contains(rr.Body.String(), "objectKey") {
+		t.Fatalf("status=%d uploads=%d body=%s", rr.Code, manager.uploads, rr.Body.String())
+	}
+
+	manager.updated = current
+	manager.updated.UpdatedAt = updated.UpdatedAt.Add(time.Second)
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodDelete, "/api/admin/classroom/contents/11/cover?expectedUpdatedAt="+updated.UpdatedAt.Format(time.RFC3339Nano), nil)))
+	if rr.Code != http.StatusOK || manager.deletes != 1 || !strings.Contains(rr.Body.String(), `"coverSource":"none"`) {
+		t.Fatalf("status=%d deletes=%d body=%s", rr.Code, manager.deletes, rr.Body.String())
+	}
+}
+
+func TestClassroomContentCoverMutationReturnsCommittedVersionWhenPreviewUnavailable(t *testing.T) {
+	now := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name         string
+		method       string
+		updated      classroom.Content
+		contextErr   error
+		generatedKey string
+		wantSource   string
+	}{
+		{"upload-signer-failure", http.MethodPost, classroom.Content{ID: 41, ContentType: classroom.ContentVideo, Status: classroom.ContentReady, AccessLevel: classroom.AccessPublic, ManualCoverObjectKey: "classroom/covers/manual/41/private.png", UpdatedAt: now.Add(time.Second)}, nil, "", `"coverSource":"manual"`},
+		{"delete-signer-failure", http.MethodDelete, classroom.Content{ID: 41, ContentType: classroom.ContentVideo, Status: classroom.ContentReady, AccessLevel: classroom.AccessPublic, UpdatedAt: now.Add(2 * time.Second)}, nil, "classroom/generated/41/private.jpg", `"coverSource":"generated"`},
+		{"upload-context-failure", http.MethodPost, classroom.Content{ID: 41, ContentType: classroom.ContentVideo, Status: classroom.ContentReady, AccessLevel: classroom.AccessPublic, ManualCoverObjectKey: "classroom/covers/manual/41/private.png", UpdatedAt: now.Add(3 * time.Second)}, errors.New("context db down"), "", `"coverSource":"manual"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := classroom.Content{ID: 41, ContentType: classroom.ContentVideo, Status: classroom.ContentReady, AccessLevel: classroom.AccessPublic, UpdatedAt: now}
+			admin := &fakeClassroomAdminService{content: current, contentContextErr: tc.contextErr, generatedCoverKey: tc.generatedKey}
+			manager := &fakeClassroomCoverManager{updated: tc.updated}
+			s := &Server{classroomAdmin: admin, classroomCovers: manager, classroomPlaybackSigner: &recordingClassroomCoverSigner{err: errors.New("signer unavailable")}}
+			var req *http.Request
+			if tc.method == http.MethodPost {
+				body, typ := classroomCoverMultipart(t, now.Format(time.RFC3339Nano), []byte("png"))
+				req = classroomUser(httptest.NewRequest(tc.method, "/api/admin/classroom/contents/41/cover", body))
+				req.Header.Set("Content-Type", typ)
+			} else {
+				req = classroomUser(httptest.NewRequest(tc.method, "/api/admin/classroom/contents/41/cover?expectedUpdatedAt="+now.Format(time.RFC3339Nano), nil))
+			}
+			rr := httptest.NewRecorder()
+			s.classroomContentItem(rr, req)
+			raw := rr.Body.String()
+			if rr.Code != http.StatusOK || !strings.Contains(raw, tc.wantSource) || !strings.Contains(raw, `"updatedAt":"`+tc.updated.UpdatedAt.Format(time.RFC3339Nano)+`"`) {
+				t.Fatalf("status=%d body=%s", rr.Code, raw)
+			}
+			if (tc.generatedKey != "" && strings.Contains(raw, tc.generatedKey)) || strings.Contains(raw, `"coverUrl":"https://`) {
+				t.Fatalf("preview secret leaked: %s", raw)
+			}
+		})
+	}
+}
+
+func TestClassroomContentCoverRequiresVersionUsesWritePermissionAndMapsErrors(t *testing.T) {
+	now := time.Now().UTC()
+	current := classroom.Content{ID: 6, Title: "课件", ContentType: classroom.ContentVideo, Status: classroom.ContentReady, AccessLevel: classroom.AccessPublic, UpdatedAt: now}
+	admin := &fakeClassroomAdminService{content: current}
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+	}{{"invalid", classroom.ErrInvalidCoverImage, 400}, {"missing", classroom.ErrNotFound, 404}, {"conflict", classroom.ErrConflict, 409}, {"storage", classroom.ErrCoverStorageUnavailable, 503}} {
+		t.Run(tc.name, func(t *testing.T) {
+			manager := &fakeClassroomCoverManager{uploadErr: tc.err}
+			s := &Server{classroomAdmin: admin, classroomCovers: manager}
+			mux := http.NewServeMux()
+			seen := ""
+			registerClassroomAdminRoutes(mux, func(code string, h http.HandlerFunc) http.HandlerFunc { seen = code; return h }, s)
+			body, typ := classroomCoverMultipart(t, now.Format(time.RFC3339Nano), []byte("png"))
+			req := classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/contents/6/cover", body))
+			req.Header.Set("Content-Type", typ)
+			rr := httptest.NewRecorder()
+			mux.ServeHTTP(rr, req)
+			if rr.Code != tc.status || seen != "Miniapp:Classroom:Write" {
+				t.Fatalf("status=%d permission=%s body=%s", rr.Code, seen, rr.Body.String())
+			}
+			if strings.Contains(rr.Body.String(), "secret") || strings.Contains(rr.Body.String(), "classroom/covers") {
+				t.Fatalf("leaked detail: %s", rr.Body.String())
+			}
+		})
+	}
+	body, typ := classroomCoverMultipart(t, "", []byte("png"))
+	req := classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/contents/6/cover", body))
+	req.Header.Set("Content-Type", typ)
+	rr := httptest.NewRecorder()
+	(&Server{classroomAdmin: admin, classroomCovers: &fakeClassroomCoverManager{}}).classroomContentItem(rr, req)
+	if rr.Code != 400 {
+		t.Fatalf("missing version status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestClassroomContentDeleteCleansManualCoverOnlyAfterDatabaseCommit(t *testing.T) {
+	now := time.Now().UTC()
+	content := classroom.Content{ID: 19, Title: "草稿", ContentType: classroom.ContentVideo, Status: classroom.ContentDraft, AccessLevel: classroom.AccessPublic, UpdatedAt: now, ManualCoverObjectKey: "classroom/covers/manual/19/x.jpg"}
+	for _, tc := range []struct {
+		name             string
+		dbErr, deleteErr error
+		wantStatus       int
+		wantDeletes      int
+	}{{"success", nil, nil, 200, 1}, {"database failure", errors.New("db down"), nil, 500, 0}, {"already gone", nil, storage.ErrAlreadyGone, 200, 1}, {"cleanup failure", nil, errors.New("oss down"), 200, 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			admin := &fakeClassroomAdminService{content: content, deleteContentErr: tc.dbErr}
+			objects := &fakeClassroomCoverObjects{err: tc.deleteErr}
+			s := &Server{classroomAdmin: admin, classroomCoverObjects: objects}
+			rr := httptest.NewRecorder()
+			s.classroomContentItem(rr, classroomUser(httptest.NewRequest(http.MethodDelete, "/api/admin/classroom/contents/19?expectedUpdatedAt="+now.Format(time.RFC3339Nano), nil)))
+			if rr.Code != tc.wantStatus || len(objects.deleted) != tc.wantDeletes {
+				t.Fatalf("status=%d deleted=%v body=%s", rr.Code, objects.deleted, rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestClassroomContentDeleteCleanupSurvivesCanceledRequestContext(t *testing.T) {
+	now := time.Now().UTC()
+	admin := &fakeClassroomAdminService{content: classroom.Content{ID: 29, Status: classroom.ContentDraft, UpdatedAt: now, ManualCoverObjectKey: "classroom/covers/manual/29/x.jpg"}}
+	objects := &fakeClassroomCoverObjects{}
+	s := &Server{classroomAdmin: admin, classroomCoverObjects: objects}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := classroomUser(httptest.NewRequest(http.MethodDelete, "/api/admin/classroom/contents/29?expectedUpdatedAt="+now.Format(time.RFC3339Nano), nil).WithContext(ctx))
+	rr := httptest.NewRecorder()
+	s.classroomContentItem(rr, req)
+	if rr.Code != http.StatusOK || len(objects.deleteCtxErrs) != 1 || objects.deleteCtxErrs[0] != nil {
+		t.Fatalf("status=%d contexts=%v body=%s", rr.Code, objects.deleteCtxErrs, rr.Body.String())
 	}
 }
 
@@ -387,5 +692,45 @@ func TestClassroomAuditUsesNormalizedClientIP(t *testing.T) {
 	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK || audit.entry.IP != "203.0.113.9" {
 		t.Fatalf("status=%d auditIP=%q body=%s", rr.Code, audit.entry.IP, rr.Body.String())
+	}
+}
+
+func TestClassroomContentCoverSettingsUsesDedicatedCASWithoutChangingLifecycle(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	for _, status := range []classroom.ContentStatus{classroom.ContentReady, classroom.ContentPublished, classroom.ContentOffline} {
+		t.Run(string(status), func(t *testing.T) {
+			before := classroom.Content{ID: 52, ContentType: classroom.ContentVideo, Status: status, AccessLevel: classroom.AccessPublic, ManualCoverObjectKey: "classroom/covers/manual/52/keep.webp", CoverAspectRatio: classroom.CoverAspectRatio16x9, UpdatedAt: now}
+			admin := &fakeClassroomAdminService{content: before}
+			manager := &fakeClassroomCoverManager{expected: now, updated: classroom.Content{ID: before.ID, ContentType: before.ContentType, Status: before.Status, AccessLevel: before.AccessLevel, ManualCoverObjectKey: before.ManualCoverObjectKey, CoverAspectRatio: classroom.CoverAspectRatio9x16, UpdatedAt: now.Add(time.Second)}}
+			s := &Server{classroomAdmin: admin, classroomCovers: manager, classroomPlaybackSigner: fakeClassroomSigner{key: "manual"}}
+			mux := http.NewServeMux()
+			registerClassroomAdminRoutes(mux, func(_ string, h http.HandlerFunc) http.HandlerFunc { return h }, s)
+			body := strings.NewReader(`{"coverAspectRatio":"9:16","expectedUpdatedAt":"` + now.Format(time.RFC3339Nano) + `"}`)
+			rr := httptest.NewRecorder()
+			mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodPut, "/api/admin/classroom/contents/52/cover-settings", body)))
+			if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"coverAspectRatio":"9:16"`) || !strings.Contains(rr.Body.String(), `"coverSource":"manual"`) || strings.Contains(rr.Body.String(), `"status":"draft"`) {
+				t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name, body string
+		want       int
+	}{
+		{"invalid-ratio", `{"coverAspectRatio":"4:3","expectedUpdatedAt":"` + now.Format(time.RFC3339Nano) + `"}`, http.StatusBadRequest},
+		{"stale-version", `{"coverAspectRatio":"1:1","expectedUpdatedAt":"` + now.Add(-time.Second).Format(time.RFC3339Nano) + `"}`, http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := classroom.Content{ID: 53, ContentType: classroom.ContentAudio, Status: classroom.ContentReady, AccessLevel: classroom.AccessPublic, UpdatedAt: now}
+			admin := &fakeClassroomAdminService{content: before}
+			manager := &fakeClassroomCoverManager{expected: now, updated: before}
+			s := &Server{classroomAdmin: admin, classroomCovers: manager}
+			rr := httptest.NewRecorder()
+			s.classroomContentItem(rr, classroomUser(httptest.NewRequest(http.MethodPut, "/api/admin/classroom/contents/53/cover-settings", strings.NewReader(tc.body))))
+			if rr.Code != tc.want {
+				t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+			}
+		})
 	}
 }

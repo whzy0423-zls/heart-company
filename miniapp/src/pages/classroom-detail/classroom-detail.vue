@@ -12,6 +12,7 @@ import {
 } from "../../api";
 import {
   classroomAccessLabel,
+  classroomCoverRatioClass,
   classroomPurchaseAction,
   normalizeClassroomContent,
   normalizeClassroomSeries,
@@ -41,9 +42,11 @@ const progressCompleted = ref(false);
 const progressSyncError = ref("");
 const paymentState = ref("idle");
 const paymentMessage = ref("");
+const purchaseInFlight = ref(false);
 const purchaseTarget = ref({ type: "content", id: "", ready: true });
 const purchaseOffer = ref(null);
 const purchaseTargetError = ref("");
+const coverImageFailed = ref(false);
 let detailTicket = 0;
 let playbackTicket = 0;
 let audioContext = null;
@@ -54,6 +57,7 @@ let disposed = false;
 let pageVisible = true;
 let progressTracker = null;
 let purchaseController = null;
+let purchaseOperation = null;
 let requestedResumePosition = 0;
 
 const accessAction = computed(() => classroomPurchaseAction(purchaseOffer.value || content.value));
@@ -66,9 +70,7 @@ const progressPercent = computed(() => {
     ),
   );
 });
-const paymentBusy = computed(
-  () => paymentState.value === "creating" || paymentState.value === "pending",
-);
+const paymentBusy = computed(() => purchaseInFlight.value);
 
 const progressStorage = {
   getItem(key) {
@@ -275,6 +277,7 @@ async function loadDetail() {
     const normalized = normalizeClassroomContent(response);
     if (!normalized.id) throw new Error("课件内容不存在");
     content.value = normalized;
+    coverImageFailed.value = false;
     purchaseController?.stop();
     purchaseController = null;
     paymentState.value = "idle";
@@ -319,6 +322,10 @@ async function loadDetail() {
   } finally {
     if (!disposed && ticket === detailTicket) loading.value = false;
   }
+}
+
+function markCoverImageError() {
+  coverImageFailed.value = true;
 }
 
 function handlePlaybackError(error) {
@@ -415,19 +422,43 @@ function ensurePurchaseController() {
   return purchaseController;
 }
 
+function trackPurchase(run) {
+  if (purchaseOperation) return;
+  purchaseInFlight.value = true;
+  let operation;
+  try {
+    operation = Promise.resolve(run());
+  } catch (error) {
+    purchaseInFlight.value = false;
+    throw error;
+  }
+  let tracked;
+  tracked = operation.finally(() => {
+    if (purchaseOperation !== tracked) return;
+    purchaseOperation = null;
+    purchaseInFlight.value = false;
+  });
+  purchaseOperation = tracked;
+  return tracked;
+}
+
 function startPurchase() {
-  if (disposed || paymentBusy.value) return;
+  if (disposed || purchaseOperation) return;
   if (!getToken()) {
     uni.switchTab({ url: "/pages/profile/profile" });
     return;
   }
   if (!purchaseTarget.value.ready) return;
-  return ensurePurchaseController()?.purchase();
+  const controller = ensurePurchaseController();
+  if (!controller) return;
+  return trackPurchase(() => controller.purchase());
 }
 
 function retryPurchase() {
-  if (disposed || paymentBusy.value) return;
-  return ensurePurchaseController()?.retry();
+  if (disposed || purchaseOperation) return;
+  const controller = ensurePurchaseController();
+  if (!controller) return;
+  return trackPurchase(() => controller.retry());
 }
 
 function cancelPurchase() {
@@ -478,6 +509,8 @@ onUnload(() => {
   pageVisible = false;
   detailTicket += 1;
   playbackTicket += 1;
+  purchaseOperation = null;
+  purchaseInFlight.value = false;
   loading.value = false;
   playbackLoading.value = false;
   playbackUrl.value = "";
@@ -489,116 +522,191 @@ onUnload(() => {
 
 <template>
   <view class="classroom-detail ios-page ios-safe-bottom">
-    <view v-if="loading" class="detail-state" aria-live="polite">课件详情加载中…</view>
+    <view class="detail-shell__header">
+      <text class="detail-shell__eyebrow">老师课堂</text>
+      <text class="detail-shell__title">课件详情</text>
+      <text class="detail-shell__lead">在统一的学习空间中查看视频、音频与课程进度。</text>
+    </view>
+
+    <view v-if="loading" class="detail-state" aria-live="polite">
+      <text class="detail-state__title">正在准备课件</text>
+      <text class="detail-state__copy">课程信息加载中，请稍候…</text>
+    </view>
     <view v-else-if="loadError" class="detail-state detail-state--error" aria-live="polite">
-      <text>{{ loadError }}</text>
-      <button class="detail-action" :disabled="loading" @click="loadDetail">重新加载</button>
+      <text class="detail-state__title">课件加载未完成</text>
+      <text class="detail-state__copy">{{ loadError }}</text>
+      <view class="detail-actions">
+        <button class="detail-action" :disabled="loading" @click="loadDetail">重新加载</button>
+      </view>
     </view>
 
     <block v-else>
-      <view class="detail-head ios-card">
-        <image
-          v-if="content.coverUrl"
-          class="detail-head__cover"
-          :src="content.coverUrl"
-          mode="aspectFill"
-          lazy-load
-        />
-        <view v-else class="detail-head__cover detail-head__cover--fallback" aria-hidden="true">{{
-          content.contentType === "audio" ? "音" : "课"
-        }}</view>
-        <view class="detail-head__body">
-          <view class="detail-head__meta">
-            <text class="nx-tag">{{ classroomAccessLabel(content.effectiveAccess) }}</text>
-            <text>{{ content.contentType === "audio" ? "音频课件" : "视频课件" }}</text>
+      <view class="media-hero ios-card">
+        <view class="detail-head__media">
+          <view class="detail-head__cover-shell" :class="classroomCoverRatioClass(content)">
+            <image
+              v-if="content.coverUrl && !coverImageFailed"
+              class="detail-head__cover"
+              :class="classroomCoverRatioClass(content)"
+              :src="content.coverUrl"
+              mode="aspectFill"
+              lazy-load
+              @error="markCoverImageError"
+            />
+            <view
+              v-else
+              class="detail-head__cover detail-head__cover--fallback"
+              :class="classroomCoverRatioClass(content)"
+              aria-hidden="true"
+              >{{ content.contentType === "audio" ? "音" : "课" }}</view
+            >
+            <view class="detail-head__shade" aria-hidden="true" />
+            <view class="detail-head__media-meta">
+              <text class="detail-head__pill">{{
+                content.contentType === "audio" ? "音频课件" : "视频课件"
+              }}</text>
+              <text class="detail-head__pill detail-head__pill--access">{{
+                classroomAccessLabel(content.effectiveAccess)
+              }}</text>
+            </view>
+            <view class="detail-head__play" aria-hidden="true">
+              <text class="detail-head__play-icon">{{
+                content.contentType === "audio" ? "音频" : "播放"
+              }}</text>
+              <text class="detail-head__play-copy">{{
+                content.canPlay ? "已准备学习内容" : "完成访问后开始学习"
+              }}</text>
+            </view>
           </view>
-          <text class="detail-head__title">{{ content.title }}</text>
-          <text class="detail-head__teacher">{{ content.teacherName || "九型老师" }}</text>
+        </view>
+        <view class="detail-head__body">
+          <view class="content-summary">
+            <view class="detail-head__meta">
+              <text>老师课堂</text>
+              <text v-if="content.durationSeconds">{{ formatTime(content.durationSeconds) }}</text>
+            </view>
+            <text class="detail-head__title">{{ content.title }}</text>
+            <view class="content-summary__teacher">
+              <text class="content-summary__teacher-label">授课老师</text>
+              <text class="detail-head__teacher">{{ content.teacherName || "九型老师" }}</text>
+            </view>
+          </view>
         </view>
       </view>
 
       <view v-if="!content.canPlay" class="access-panel ios-card" aria-live="polite">
+        <text class="panel-eyebrow">访问方式</text>
         <text class="access-panel__title">{{ accessAction.label }}</text>
-        <text class="access-panel__copy">完成对应权限后，即可播放本课件。</text>
-        <text v-if="purchaseTargetError" class="access-panel__error">{{
-          purchaseTargetError
-        }}</text>
-        <button v-if="purchaseTargetError" class="detail-action" @click="loadDetail">
-          重新加载购买信息
-        </button>
-        <button
-          v-if="
-            !purchaseTargetError &&
-            accessAction.type !== 'blocked' &&
-            accessAction.type !== 'unavailable'
-          "
-          class="primary-action"
-          @click="handleAccessAction"
-        >
-          {{ accessAction.label }}
-        </button>
+        <text class="access-panel__copy">完成对应访问步骤后，即可进入本课件学习。</text>
+        <text v-if="purchaseTargetError" class="access-panel__error">{{ purchaseTargetError }}</text>
+        <view class="detail-actions detail-actions--stacked">
+          <button v-if="purchaseTargetError" class="detail-action" @click="loadDetail">
+            重新加载购买信息
+          </button>
+          <button
+            v-if="
+              !purchaseTargetError &&
+              accessAction.type !== 'blocked' &&
+              accessAction.type !== 'unavailable'
+            "
+            class="primary-action"
+            :disabled="paymentBusy"
+            @click="handleAccessAction"
+          >
+            {{ paymentBusy ? "正在处理…" : accessAction.label }}
+          </button>
+        </view>
       </view>
 
       <view v-else class="player-panel ios-card">
-        <view v-if="playbackLoading" class="detail-state" aria-live="polite"
-          >正在获取安全播放地址…</view
-        >
-        <view v-else-if="playbackError" class="detail-state detail-state--error" aria-live="polite">
-          <text>{{ playbackError }}</text>
-          <button class="detail-action" :disabled="playbackLoading" @click="refreshPlayback">
-            {{ playbackRetryLabel }}
-          </button>
-        </view>
-        <block v-else-if="playbackUrl">
-          <video
-            v-if="content.contentType === 'video'"
-            id="classroom-video"
-            class="video-player"
-            :src="playbackUrl"
-            :initial-time="progressPosition"
-            controls
-            object-fit="contain"
-            @timeupdate="handleVideoTimeUpdate"
-            @pause="handleVideoPause"
-            @ended="handleVideoEnded"
-            @error="handlePlaybackError"
-          />
-          <view v-else class="audio-player">
-            <view
-              class="audio-player__disc"
-              :class="{ 'audio-player__disc--playing': audioPlaying }"
-              aria-hidden="true"
-              >♫</view
-            >
-            <text class="audio-player__title">{{ content.title }}</text>
-            <slider
-              class="audio-player__slider"
-              :value="audioPosition"
-              :max="audioDuration || content.durationSeconds || 1"
-              active-color="#0f766e"
-              block-size="18"
-              @change="seekAudio"
-            />
-            <view class="audio-player__time">
-              <text>{{ formatTime(audioPosition) }}</text>
-              <text>{{ formatTime(audioDuration || content.durationSeconds) }}</text>
-            </view>
-            <button
-              class="primary-action"
-              :aria-label="audioPlaying ? '暂停音频' : '播放音频'"
-              @click="toggleAudio"
-            >
-              {{ audioPlaying ? "暂停音频" : "播放音频" }}
-            </button>
+        <view class="player-panel__head">
+          <view>
+            <text class="player-panel__eyebrow">正在学习</text>
+            <text class="player-panel__title">{{
+              content.contentType === "audio" ? "音频播放" : "视频播放"
+            }}</text>
           </view>
-        </block>
-        <button v-else class="detail-action" @click="refreshPlayback">加载播放内容</button>
+          <text class="player-panel__badge">专属播放</text>
+        </view>
+        <view class="player-panel__body">
+          <view v-if="playbackLoading" class="detail-state detail-state--embedded" aria-live="polite">
+            <text class="detail-state__title">正在准备播放</text>
+            <text class="detail-state__copy">播放凭证获取中，请稍候…</text>
+          </view>
+          <view
+            v-else-if="playbackError"
+            class="detail-state detail-state--embedded detail-state--error"
+            aria-live="polite"
+          >
+            <text class="detail-state__title">播放内容加载未完成</text>
+            <text class="detail-state__copy">{{ playbackError }}</text>
+            <view class="detail-actions">
+              <button class="detail-action" :disabled="playbackLoading" @click="refreshPlayback">
+                {{ playbackRetryLabel }}
+              </button>
+            </view>
+          </view>
+          <block v-else-if="playbackUrl">
+            <video
+              v-if="content.contentType === 'video'"
+              id="classroom-video"
+              class="video-player"
+              :src="playbackUrl"
+              :initial-time="progressPosition"
+              controls
+              object-fit="contain"
+              @timeupdate="handleVideoTimeUpdate"
+              @pause="handleVideoPause"
+              @ended="handleVideoEnded"
+              @error="handlePlaybackError"
+            />
+            <view v-else class="audio-player">
+              <view
+                class="audio-player__disc"
+                :class="{ 'audio-player__disc--playing': audioPlaying }"
+                aria-hidden="true"
+              >
+                <text class="audio-player__disc-label">AUDIO</text>
+              </view>
+              <text class="audio-player__title">{{ content.title }}</text>
+              <slider
+                class="audio-player__slider"
+                :value="audioPosition"
+                :max="audioDuration || content.durationSeconds || 1"
+                active-color="#314052"
+                background-color="#dedad0"
+                block-color="#dfbc7f"
+                block-size="18"
+                @change="seekAudio"
+              />
+              <view class="audio-player__time">
+                <text>{{ formatTime(audioPosition) }}</text>
+                <text>{{ formatTime(audioDuration || content.durationSeconds) }}</text>
+              </view>
+              <view class="detail-actions detail-actions--audio">
+                <button
+                  class="primary-action"
+                  :aria-label="audioPlaying ? '暂停音频' : '播放音频'"
+                  @click="toggleAudio"
+                >
+                  {{ audioPlaying ? "暂停音频" : "播放音频" }}
+                </button>
+              </view>
+            </view>
+          </block>
+          <view v-else class="detail-actions">
+            <button class="detail-action" @click="refreshPlayback">加载播放内容</button>
+          </view>
+        </view>
       </view>
 
       <view v-if="content.canPlay" class="progress-panel ios-card">
         <view class="progress-panel__head">
-          <text class="progress-panel__title">学习进度</text>
-          <text>{{ progressCompleted ? "已完成" : `${progressPercent}%` }}</text>
+          <view>
+            <text class="panel-eyebrow">学习记录</text>
+            <text class="progress-panel__title">学习进度</text>
+          </view>
+          <text class="progress-panel__value">{{ progressCompleted ? "已完成" : `${progressPercent}%` }}</text>
         </view>
         <view
           class="progress-panel__bar"
@@ -610,14 +718,10 @@ onUnload(() => {
         >
           <view class="progress-panel__fill" :style="{ width: `${progressPercent}%` }" />
         </view>
-        <text class="progress-panel__copy">
-          {{
-            progressCompleted ? "已达到 90% 完成标准" : `已学习至 ${formatTime(progressPosition)}`
-          }}
-        </text>
-        <text v-if="progressSyncError" class="progress-panel__error" aria-live="polite">{{
-          progressSyncError
+        <text class="progress-panel__copy">{{
+          progressCompleted ? "已达到 90% 完成标准" : `已学习至 ${formatTime(progressPosition)}`
         }}</text>
+        <text v-if="progressSyncError" class="progress-panel__error" aria-live="polite">{{ progressSyncError }}</text>
       </view>
 
       <view
@@ -625,42 +729,42 @@ onUnload(() => {
         class="payment-panel ios-card"
         aria-live="polite"
       >
-        <text class="payment-panel__title">
-          {{
-            paymentState === "success"
-              ? "购买成功"
-              : paymentState === "pending"
-                ? "等待支付确认"
-                : paymentState === "creating"
-                  ? "正在创建订单"
-                  : paymentState === "cancelled"
-                    ? "支付已取消"
-                    : "支付未完成"
-          }}
-        </text>
+        <text class="panel-eyebrow">订单状态</text>
+        <text class="payment-panel__title">{{
+          paymentState === "success"
+            ? "购买成功"
+            : paymentState === "pending"
+              ? "等待支付确认"
+              : paymentState === "creating"
+                ? "正在创建订单"
+                : paymentState === "cancelled"
+                  ? "支付已取消"
+                  : "支付未完成"
+        }}</text>
         <text class="payment-panel__copy">{{ paymentMessage }}</text>
-        <button
-          v-if="paymentState === 'failure' || paymentState === 'cancelled'"
-          class="primary-action"
-          :disabled="paymentBusy"
-          @click="retryPurchase"
-        >
-          重新支付
-        </button>
-        <button
-          v-if="paymentState !== 'success' && !paymentBusy"
-          class="detail-action"
-          @click="cancelPurchase"
-        >
-          暂不购买
-        </button>
+        <view class="detail-actions detail-actions--stacked">
+          <button
+            v-if="paymentState === 'failure' || paymentState === 'cancelled'"
+            class="primary-action"
+            :disabled="paymentBusy"
+            @click="retryPurchase"
+          >
+            重新支付
+          </button>
+          <button
+            v-if="paymentState !== 'success' && !paymentBusy"
+            class="detail-action"
+            @click="cancelPurchase"
+          >
+            暂不购买
+          </button>
+        </view>
       </view>
 
       <view class="description-panel ios-card">
+        <text class="panel-eyebrow">内容信息</text>
         <text class="description-panel__title">课件介绍</text>
-        <text class="description-panel__copy">{{
-          content.description || "老师正在完善本课件介绍。"
-        }}</text>
+        <text class="description-panel__copy">{{ content.description || "老师正在完善本课件介绍。" }}</text>
       </view>
     </block>
   </view>
@@ -673,201 +777,179 @@ onUnload(() => {
   gap: 24rpx;
   min-height: 100vh;
   padding: 28rpx;
-  background: #f4f8f6;
+  background:
+    radial-gradient(circle at 100% 0, rgba(223, 188, 127, 0.18), transparent 32%),
+    linear-gradient(180deg, var(--nx-surface-soft), var(--nx-page-bg));
   box-sizing: border-box;
 }
+.detail-shell__header { padding: 12rpx 8rpx 10rpx; }
+.detail-shell__eyebrow,
+.detail-shell__title,
+.detail-shell__lead,
+.detail-state__title,
+.detail-state__copy,
+.panel-eyebrow { display: block; }
+.detail-shell__eyebrow,
+.panel-eyebrow { color: var(--nx-brand-700); font-size: 22rpx; font-weight: 900; letter-spacing: 3rpx; }
+.detail-shell__title { margin-top: 10rpx; color: var(--nx-text); font-size: 42rpx; font-weight: 900; line-height: 1.25; }
+.detail-shell__lead { margin-top: 10rpx; color: var(--nx-text-muted); font-size: 24rpx; line-height: 1.6; }
 .detail-state {
   padding: 48rpx 30rpx;
-  color: #64756e;
+  color: var(--nx-text-muted);
   font-size: 27rpx;
   line-height: 1.6;
   text-align: center;
-  background: #fff;
+  background: var(--nx-surface);
+  border: 2rpx solid var(--nx-border);
   border-radius: 28rpx;
 }
-.detail-state--error {
-  color: #9f3a38;
-}
+.detail-state--embedded { padding: 36rpx 24rpx; background: var(--nx-surface-soft); }
+.detail-state--error { color: #a23b32; }
+.detail-state__title { color: var(--nx-text); font-size: 29rpx; font-weight: 900; }
+.detail-state--error .detail-state__title { color: #8f302b; }
+.detail-state__copy { margin-top: 10rpx; color: inherit; font-size: 24rpx; }
+.detail-actions { display: grid; gap: 16rpx; width: 100%; margin-top: 24rpx; }
+.detail-actions--audio { margin-top: 28rpx; }
 .detail-action,
 .primary-action {
+  width: 100%;
   min-height: 88rpx;
-  margin-top: 22rpx;
+  margin: 0;
   padding: 0 32rpx;
   font-size: 27rpx;
-  font-weight: 800;
+  font-weight: 900;
   line-height: 88rpx;
   border-radius: 20rpx;
+  box-sizing: border-box;
+  touch-action: manipulation;
 }
-.progress-panel,
-.payment-panel {
-  padding: 30rpx;
-  background: #fff;
-  border-radius: 30rpx;
-}
-.progress-panel__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  color: #385349;
-  font-size: 24rpx;
-}
-.progress-panel__title,
-.payment-panel__title {
-  color: #19342b;
-  font-size: 29rpx;
-  font-weight: 900;
-}
-.progress-panel__bar {
-  height: 14rpx;
-  margin-top: 20rpx;
-  overflow: hidden;
-  background: #dcebe5;
-  border-radius: 999rpx;
-}
-.progress-panel__fill {
-  height: 100%;
-  background: #0f766e;
-  border-radius: inherit;
-}
-.progress-panel__copy,
-.progress-panel__error,
-.payment-panel__copy {
-  display: block;
-  margin-top: 14rpx;
-  color: #667970;
-  font-size: 24rpx;
-  line-height: 1.55;
-}
-.progress-panel__error {
-  color: #9f3a38;
-}
-.detail-action {
-  color: #0f6b4f;
-  background: #ecfdf5;
-}
-.primary-action {
-  width: 100%;
-  color: #fff;
-  background: #0f766e;
-}
+.detail-action { color: var(--nx-brand-900); background: var(--nx-surface-soft); border: 2rpx solid var(--nx-border); }
+.primary-action { color: var(--nx-surface); background: linear-gradient(135deg, var(--nx-brand-900), var(--nx-brand-700)); }
+.detail-action[disabled],
+.primary-action[disabled] { color: var(--nx-text-muted); background: var(--nx-border); opacity: 0.72; }
 .detail-action::after,
-.primary-action::after {
-  border: 0;
-}
-.detail-head {
+.primary-action::after { border: 0; }
+.media-hero {
   display: flex;
+  flex-direction: column;
   overflow: hidden;
-  background: #fff;
-  border-radius: 30rpx;
+  background: var(--nx-surface);
+  border: 2rpx solid var(--nx-border);
+  border-radius: 34rpx;
+  box-shadow: 0 18rpx 50rpx rgba(32, 42, 55, 0.14);
 }
-.detail-head__cover {
-  width: 240rpx;
-  min-height: 240rpx;
-  background: #dbeee6;
-}
+.detail-head__media { width: 100%; background: var(--nx-brand-900); }
+.detail-head__cover-shell { position: relative; width: 100%; overflow: hidden; background: linear-gradient(145deg, var(--nx-brand-700), var(--nx-brand-900)); }
+.detail-head__cover-shell.classroom-cover--16x9 { height: 376rpx; }
+.detail-head__cover-shell.classroom-cover--9x16 { height: 920rpx; max-height: 76vh; }
+.detail-head__cover-shell.classroom-cover--1x1 { height: 668rpx; }
+.detail-head__cover { position: absolute; inset: 0; width: 100%; height: 100%; background: var(--nx-brand-700); }
+.detail-head__cover.classroom-cover--16x9,
+.detail-head__cover.classroom-cover--9x16,
+.detail-head__cover.classroom-cover--1x1 { height: 100%; }
 .detail-head__cover--fallback {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #0f766e;
-  font-size: 58rpx;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 104rpx;
   font-weight: 900;
+  background:
+    radial-gradient(circle at 72% 18%, rgba(223, 188, 127, 0.42), transparent 30%),
+    linear-gradient(145deg, var(--nx-brand-700), var(--nx-brand-900));
 }
-.detail-head__body {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  padding: 28rpx 24rpx;
+.detail-head__shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(32, 42, 55, 0.12) 0%, rgba(32, 42, 55, 0.06) 38%, rgba(32, 42, 55, 0.86) 100%);
 }
-.detail-head__meta {
+.detail-head__media-meta { position: absolute; top: 24rpx; right: 24rpx; left: 24rpx; display: flex; align-items: center; justify-content: space-between; gap: 16rpx; }
+.detail-head__pill {
+  padding: 10rpx 18rpx;
+  color: var(--nx-surface);
+  font-size: 22rpx;
+  font-weight: 900;
+  line-height: 1;
+  background: rgba(32, 42, 55, 0.72);
+  border: 2rpx solid rgba(255, 255, 255, 0.26);
+  border-radius: 999rpx;
+}
+.detail-head__pill--access { color: var(--nx-brand-900); background: rgba(223, 188, 127, 0.94); border-color: rgba(223, 188, 127, 0.7); }
+.detail-head__play { position: absolute; right: 0; bottom: 32rpx; left: 0; display: flex; flex-direction: column; align-items: center; color: var(--nx-surface); }
+.detail-head__play-icon {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  color: #6b7b73;
-  font-size: 22rpx;
-}
-.detail-head__title {
-  margin-top: 22rpx;
-  color: #17241e;
-  font-size: 34rpx;
-  font-weight: 900;
-  line-height: 1.4;
-}
-.detail-head__teacher {
-  margin-top: auto;
-  padding-top: 18rpx;
-  color: #617169;
+  justify-content: center;
+  min-width: 112rpx;
+  height: 88rpx;
+  padding: 0 20rpx;
+  color: var(--nx-brand-900);
   font-size: 24rpx;
-}
-.access-panel,
-.player-panel,
-.description-panel {
-  padding: 30rpx;
-  background: #fff;
-  border-radius: 30rpx;
-}
-.access-panel__title,
-.access-panel__copy,
-.description-panel__title,
-.description-panel__copy {
-  display: block;
-}
-.access-panel__title,
-.description-panel__title {
-  color: #17241e;
-  font-size: 31rpx;
   font-weight: 900;
+  background: var(--nx-accent-gold);
+  border: 5rpx solid rgba(255, 255, 255, 0.86);
+  border-radius: 999rpx;
+  box-shadow: 0 12rpx 30rpx rgba(32, 42, 55, 0.34);
+  box-sizing: border-box;
 }
+.detail-head__play-copy { margin-top: 14rpx; font-size: 22rpx; font-weight: 800; text-shadow: 0 2rpx 10rpx rgba(0, 0, 0, 0.42); }
+.detail-head__body { display: flex; width: 100%; flex-direction: column; padding: 30rpx; box-sizing: border-box; }
+.content-summary { display: flex; flex-direction: column; }
+.detail-head__meta { display: flex; align-items: center; justify-content: space-between; color: var(--nx-brand-700); font-size: 22rpx; font-weight: 900; }
+.detail-head__title { margin-top: 14rpx; color: var(--nx-text); font-size: 40rpx; font-weight: 900; line-height: 1.32; }
+.content-summary__teacher { display: flex; align-items: center; gap: 12rpx; margin-top: 18rpx; }
+.content-summary__teacher-label { padding: 6rpx 12rpx; color: var(--nx-brand-900); font-size: 20rpx; font-weight: 900; background: var(--nx-accent-gold); border-radius: 999rpx; }
+.detail-head__teacher { color: var(--nx-text-muted); font-size: 24rpx; }
+.access-panel,
+.description-panel,
+.progress-panel,
+.payment-panel { padding: 30rpx; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 30rpx; }
+.player-panel { overflow: hidden; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 32rpx; box-shadow: 0 16rpx 40rpx rgba(32, 42, 55, 0.11); }
+.player-panel__head { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; padding: 28rpx 30rpx; color: var(--nx-surface); background: linear-gradient(135deg, var(--nx-brand-900), var(--nx-brand-700)); }
+.player-panel__eyebrow,
+.player-panel__title { display: block; }
+.player-panel__eyebrow { color: var(--nx-accent-gold); font-size: 21rpx; font-weight: 900; letter-spacing: 2rpx; }
+.player-panel__title { margin-top: 6rpx; font-size: 31rpx; font-weight: 900; }
+.player-panel__badge { flex: 0 0 auto; padding: 10rpx 16rpx; color: var(--nx-brand-900); font-size: 21rpx; font-weight: 900; background: var(--nx-accent-gold); border: 2rpx solid rgba(255, 255, 255, 0.3); border-radius: 999rpx; }
+.player-panel__body { padding: 24rpx; background: var(--nx-surface-soft); }
+.access-panel__title,
 .access-panel__copy,
-.description-panel__copy {
-  margin-top: 14rpx;
-  color: #68776f;
-  font-size: 25rpx;
-  line-height: 1.7;
-}
-.video-player {
-  width: 100%;
-  min-height: 390rpx;
-  background: #0b1511;
-  border-radius: 24rpx;
-}
+.access-panel__error,
+.description-panel__title,
+.description-panel__copy,
+.progress-panel__title,
+.progress-panel__copy,
+.progress-panel__error,
+.payment-panel__title,
+.payment-panel__copy { display: block; }
+.access-panel__title,
+.description-panel__title,
+.progress-panel__title,
+.payment-panel__title { margin-top: 8rpx; color: var(--nx-text); font-size: 31rpx; font-weight: 900; }
+.access-panel__copy,
+.description-panel__copy,
+.progress-panel__copy,
+.payment-panel__copy { margin-top: 14rpx; color: var(--nx-text-muted); font-size: 25rpx; line-height: 1.7; }
+.access-panel__error,
+.progress-panel__error { margin-top: 14rpx; color: #a23b32; font-size: 24rpx; line-height: 1.55; }
+.video-player { width: 100%; min-height: 390rpx; background: var(--nx-brand-900); border-radius: 22rpx; }
 .audio-player {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 24rpx 6rpx 4rpx;
+  padding: 34rpx 18rpx 18rpx;
+  background: radial-gradient(circle at 50% 16%, rgba(223, 188, 127, 0.2), transparent 38%), var(--nx-surface);
+  border: 2rpx solid var(--nx-border);
+  border-radius: 24rpx;
 }
-.audio-player__disc {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 160rpx;
-  height: 160rpx;
-  color: #fff;
-  font-size: 58rpx;
-  background: linear-gradient(135deg, #0f766e, #22c55e);
-  border: 16rpx solid #d9f3e7;
-  border-radius: 50%;
-}
-.audio-player__disc--playing {
-  box-shadow: 0 0 0 12rpx rgba(34, 197, 94, 0.12);
-}
-.audio-player__title {
-  margin-top: 26rpx;
-  color: #17241e;
-  font-size: 29rpx;
-  font-weight: 900;
-  text-align: center;
-}
-.audio-player__slider {
-  width: 100%;
-  margin-top: 24rpx;
-}
-.audio-player__time {
-  display: flex;
-  justify-content: space-between;
-  width: 100%;
-  color: #718078;
-  font-size: 22rpx;
-}
+.audio-player__disc { display: flex; align-items: center; justify-content: center; width: 164rpx; height: 164rpx; color: var(--nx-accent-gold); background: linear-gradient(135deg, var(--nx-brand-900), var(--nx-brand-700)); border: 16rpx solid rgba(223, 188, 127, 0.38); border-radius: 50%; box-sizing: border-box; }
+.audio-player__disc--playing { box-shadow: 0 0 0 12rpx rgba(223, 188, 127, 0.2), 0 16rpx 36rpx rgba(32, 42, 55, 0.24); }
+.audio-player__disc-label { font-size: 20rpx; font-weight: 900; letter-spacing: 2rpx; }
+.audio-player__title { margin-top: 26rpx; color: var(--nx-text); font-size: 29rpx; font-weight: 900; line-height: 1.45; text-align: center; }
+.audio-player__slider { width: 100%; margin-top: 24rpx; }
+.audio-player__time { display: flex; justify-content: space-between; width: 100%; color: var(--nx-text-muted); font-size: 22rpx; }
+.progress-panel__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20rpx; }
+.progress-panel__value { color: var(--nx-brand-700); font-size: 25rpx; font-weight: 900; }
+.progress-panel__bar { height: 14rpx; margin-top: 22rpx; overflow: hidden; background: var(--nx-border); border-radius: 999rpx; }
+.progress-panel__fill { height: 100%; background: linear-gradient(90deg, var(--nx-accent-gold), var(--nx-brand-700)); border-radius: inherit; }
 </style>

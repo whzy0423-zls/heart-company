@@ -5,6 +5,7 @@ import type {
 } from '#/api/core/classroom';
 import {
   classroomUploadMime,
+  matchesClassroomContentType,
   matchesUploadIdentity,
   mergeUploadProgress,
   putSignedUploadPart,
@@ -47,6 +48,7 @@ const error = ref('');
 const tasks = ref<ClassroomUploadTask[]>([]);
 const selectedContentId = ref<number>();
 const selectedFile = ref<File>();
+const fileInput = ref<HTMLInputElement>();
 const uploading = ref(false);
 const uploadPercent = ref(0);
 const activeTaskId = ref<number>();
@@ -153,6 +155,10 @@ function confirmAbort(task: ClassroomUploadTask) {
 function chooseFile(event: Event) {
   selectedFile.value = (event.target as HTMLInputElement).files?.[0];
   retryConfirmed.value = false;
+}
+function clearSelectedFile() {
+  selectedFile.value = undefined;
+  if (fileInput.value) fileInput.value.value = '';
 }
 async function cancelCurrentUpload() {
   const taskId = activeTaskId.value;
@@ -263,14 +269,30 @@ async function performUpload(
       totalBytes: file.size,
     });
     message.success('媒体上传完成，正在处理');
-    selectedFile.value = undefined;
+    clearSelectedFile();
     selectedContentId.value = undefined;
     pendingRetryTask.value = undefined;
     retryConfirmed.value = false;
     emit('uploaded');
     await load();
   } catch (cause) {
-    message.error(cause instanceof Error ? cause.message : '媒体上传失败');
+    const failedTaskId = activeTaskId.value;
+    if (failedTaskId) {
+      uploadContexts.delete(failedTaskId);
+      try {
+        await abortClassroomUploadApi(failedTaskId);
+      } catch (abortCause) {
+        if ((abortCause as { status?: number })?.status !== 409)
+          message.warning('上传任务清理失败，请在任务列表中手动终止');
+      }
+      await load();
+    }
+    const detail = cause instanceof Error ? cause.message : '';
+    message.error(
+      detail === 'upload conflict'
+        ? '该课件存在未结束的上传任务，请先终止后重试'
+        : detail || '媒体上传失败',
+    );
   } finally {
     uploading.value = false;
     activeTaskId.value = undefined;
@@ -278,8 +300,28 @@ async function performUpload(
   }
 }
 async function uploadFile() {
-  if (!props.canUpload || !selectedContentId.value || !selectedFile.value)
-    return message.warning('请选择草稿课件和媒体文件');
+  if (!props.canUpload) return message.warning('当前账号没有媒体上传权限');
+  if (!selectedContentId.value) return message.warning('请选择草稿课件');
+  if (!selectedFile.value) return message.warning('请选择媒体文件');
+  const selectedContent = props.contents?.find(
+    (item) => item.id === selectedContentId.value,
+  );
+  const selectedMime = classroomUploadMime(selectedFile.value) as
+    | 'audio/mp4'
+    | 'audio/mpeg'
+    | 'audio/x-m4a'
+    | 'video/mp4'
+    | '';
+  if (
+    selectedContent &&
+    selectedMime &&
+    !matchesClassroomContentType(selectedContent.contentType, selectedMime)
+  )
+    return message.error(
+      selectedContent.contentType === 'video'
+        ? '当前课件类型为视频，请选择 MP4 视频文件'
+        : '当前课件类型为音频，请选择 MP3 或 M4A 音频文件',
+    );
   if (
     pendingRetryTask.value &&
     selectedFile.value.size !== pendingRetryTask.value.expectedSize
@@ -306,7 +348,7 @@ async function retry(task: ClassroomUploadTask) {
   const context = resolveUploadRetryContext(task, uploadContexts);
   if (!context) {
     pendingRetryTask.value = task;
-    selectedFile.value = undefined;
+    clearSelectedFile();
     selectedContentId.value = task.contentId;
     return message.warning('请选择原媒体文件后重试，系统会重新发起分片上传');
   }
@@ -326,7 +368,7 @@ watch(selectedContentId, (value, previous) => {
     (!pendingRetryTask.value || value !== pendingRetryTask.value.contentId)
   ) {
     pendingRetryTask.value = undefined;
-    selectedFile.value = undefined;
+    clearSelectedFile();
     retryConfirmed.value = false;
   }
 });
@@ -354,24 +396,42 @@ onMounted(() => {
 <template>
   <Card :loading="loading" title="上传任务">
     <div class="upload-panel" v-if="canUpload">
-      <Select
-        v-model:value="selectedContentId"
-        placeholder="选择草稿课件"
-        :options="
-          (contents ?? [])
-            .filter(
-              (item) => item.status === 'draft' || item.status === 'failed',
-            )
-            .map((item) => ({ label: item.title, value: item.id }))
-        "
-      />
-      <input
-        type="file"
-        accept="video/mp4,audio/mpeg,audio/mp4,audio/x-m4a"
-        aria-label="选择视频或音频文件"
-        @change="chooseFile"
-      />
-      <Button type="primary" :loading="uploading" @click="uploadFile"
+      <div class="upload-field">
+        <span class="upload-label">1. 选择草稿课件</span>
+        <Select
+          v-model:value="selectedContentId"
+          placeholder="选择草稿课件"
+          :options="
+            (contents ?? [])
+              .filter(
+                (item) => item.status === 'draft' || item.status === 'failed',
+              )
+              .map((item) => ({ label: item.title, value: item.id }))
+          "
+        />
+      </div>
+      <div class="upload-field">
+        <span class="upload-label">2. 选择媒体文件</span>
+        <input
+          ref="fileInput"
+          class="native-file-input"
+          type="file"
+          accept="video/mp4,audio/mpeg,audio/mp4,audio/x-m4a"
+          aria-label="选择视频或音频文件"
+          @change="chooseFile"
+        />
+        <div class="file-picker">
+          <Button @click="fileInput?.click()">选择文件</Button>
+          <span class="selected-file-name" :title="selectedFile?.name">
+            {{ selectedFile?.name || '尚未选择文件' }}
+          </span>
+        </div>
+      </div>
+      <Button
+        type="primary"
+        :loading="uploading"
+        :disabled="!selectedContentId || !selectedFile || uploading"
+        @click="uploadFile"
         >开始上传</Button
       >
       <Progress v-if="uploading" :percent="uploadPercent" />
@@ -435,7 +495,35 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 16px;
 }
-input[type='file']:focus-visible {
+.upload-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.upload-label {
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+}
+.native-file-input {
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  width: 1px;
+  clip-path: inset(50%);
+}
+.file-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.selected-file-name {
+  overflow: hidden;
+  color: hsl(var(--foreground));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.native-file-input:focus-visible + .file-picker {
   outline: 2px solid hsl(var(--primary));
   outline-offset: 2px;
 }

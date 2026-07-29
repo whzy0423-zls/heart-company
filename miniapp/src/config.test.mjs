@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { copyFile, mkdtemp, rm } from 'node:fs/promises'
+import { copyFile, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -8,6 +8,13 @@ const modulePath = join(dir, 'config.mjs')
 await copyFile(new URL('./config.js', import.meta.url), modulePath)
 await copyFile(new URL('./apiBaseValidation.mjs', import.meta.url), join(dir, 'apiBaseValidation.mjs'))
 const { resolveApiBase } = await import(`file://${modulePath}`)
+
+const developmentEnv = await readFile(new URL('../.env.development', import.meta.url), 'utf8')
+assert.match(
+  developmentEnv,
+  /^VITE_API_BASE=http:\/\/127\.0\.0\.1:5320\/api\s*$/m,
+  'dev:mp-weixin should use the local test API so freshly published backend courseware is visible',
+)
 
 const originalURL = globalThis.URL
 try {

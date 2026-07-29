@@ -204,7 +204,7 @@ onMounted(loadProfile);
             name="username"
             :rules="[{ required: true, message: '请输入用户名' }]"
           >
-            <Input v-model:value="form.username" allow-clear />
+            <Input v-model:value="form.username" allow-clear  placeholder="请输入用户名"/>
           </Form.Item>
 
           <Form.Item
@@ -212,15 +212,15 @@ onMounted(loadProfile);
             name="realName"
             :rules="[{ required: true, message: '请输入姓名' }]"
           >
-            <Input v-model:value="form.realName" allow-clear />
+            <Input v-model:value="form.realName" allow-clear  placeholder="请输入姓名"/>
           </Form.Item>
 
           <Form.Item label="邮箱" name="email">
-            <Input v-model:value="form.email" allow-clear />
+            <Input v-model:value="form.email" allow-clear  placeholder="请输入邮箱"/>
           </Form.Item>
 
           <Form.Item label="手机号" name="phone">
-            <Input v-model:value="form.phone" allow-clear />
+            <Input v-model:value="form.phone" allow-clear  placeholder="请输入手机号"/>
           </Form.Item>
         </div>
 
@@ -229,7 +229,7 @@ onMounted(loadProfile);
             v-model:value="form.remark"
             :auto-size="{ minRows: 5, maxRows: 8 }"
             allow-clear
-          />
+           placeholder="请输入个人简介"/>
         </Form.Item>
 
         <div class="profile-actions">

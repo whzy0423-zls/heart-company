@@ -444,10 +444,10 @@ onMounted(() => {
           <Select
             v-model:value="editForm.memberLevel"
             :options="memberLevelOptions"
-          />
+           placeholder="请选择会员等级"/>
         </Form.Item>
         <Form.Item label="状态" name="status" required>
-          <Select v-model:value="editForm.status" :options="statusOptions" />
+          <Select v-model:value="editForm.status" :options="statusOptions"  placeholder="请选择状态"/>
         </Form.Item>
       </Form>
     </Modal>

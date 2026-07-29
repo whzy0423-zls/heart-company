@@ -643,16 +643,18 @@ func TestClassroomUploadRequiresChecksumAndAAC(t *testing.T) {
 type fakeCoverExtractor struct {
 	key   string
 	calls int
+	ratio CoverAspectRatio
 }
 
-func (f *fakeCoverExtractor) Extract(context.Context, string, int64) (string, error) {
+func (f *fakeCoverExtractor) Extract(_ context.Context, _ string, _ int64, ratio CoverAspectRatio) (string, error) {
 	f.calls++
+	f.ratio = ratio
 	return f.key, nil
 }
 
 func TestClassroomUploadTransitionsMediaProcessingThenReadyWithCover(t *testing.T) {
 	now := time.Now()
-	repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}, task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1, Status: UploadUploading, ExpiresAt: now.Add(time.Hour), AttemptCount: 1}}
+	repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic, CoverAspectRatio: CoverAspectRatio9x16}, task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "k", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1, Status: UploadUploading, ExpiresAt: now.Add(time.Hour), AttemptCount: 1}}
 	st := &fakeMultipartStorage{parts: []storage.MultipartPart{{PartNumber: 1, ETag: "e", Size: 10}}, head: storage.ObjectMetadata{ETag: "final-etag", Size: 10, Checksum: "crc64:123", ContentType: "video/mp4"}}
 	cover := &fakeCoverExtractor{key: "classroom/covers/7.jpg"}
 	svc := NewUploadService(repo, st, fakeProbe{result: MediaProbeResult{Container: "mp4", VideoCodec: "h264", AudioCodec: "aac", DurationSeconds: 2}}, UploadConfig{Bucket: "b", PartSize: 10, MaxParts: 1, TaskTTL: time.Hour, MaxVideoBytes: 100, MaxAudioBytes: 100}, func() time.Time { return now }).WithCoverExtractor(cover)
@@ -666,8 +668,8 @@ func TestClassroomUploadTransitionsMediaProcessingThenReadyWithCover(t *testing.
 	if len(repo.contentStatuses) < 2 || repo.contentStatuses[0] != ContentProcessing || repo.contentStatuses[len(repo.contentStatuses)-1] != ContentReady {
 		t.Fatalf("content states=%v", repo.contentStatuses)
 	}
-	if got.Media.CoverObjectKey != "classroom/covers/7.jpg" || cover.calls != 1 {
-		t.Fatalf("cover=%q calls=%d", got.Media.CoverObjectKey, cover.calls)
+	if got.Media.CoverObjectKey != "classroom/covers/7.jpg" || cover.calls != 1 || cover.ratio != CoverAspectRatio9x16 {
+		t.Fatalf("cover=%q calls=%d ratio=%q", got.Media.CoverObjectKey, cover.calls, cover.ratio)
 	}
 	if repo.finalizeCalls != 1 {
 		t.Fatalf("atomic finalize calls=%d", repo.finalizeCalls)
@@ -744,21 +746,34 @@ func (f *fakeCoverUploader) Upload(_ context.Context, in storage.UploadInput) (s
 	f.data, _ = io.ReadAll(in.Reader)
 	return storage.UploadResult{Key: "classroom/covers/generated.jpg"}, nil
 }
-func TestFFmpegCoverExtractorRunsSnapshotAndUploadsJPEG(t *testing.T) {
+func TestFFmpegCoverExtractorUsesFirstDecodableFrameAndLandscapeCrop(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "ffmpeg")
-	script := "#!/bin/sh\nprintf jpeg > \"$8\"\n"
+	script := "#!/bin/sh\nfor arg do output=$arg; done\nprintf '%s\\n' \"$@\" > \"$0.args\"\nprintf jpeg > \"$output\"\n"
 	if err := os.WriteFile(binary, []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
 	uploader := &fakeCoverUploader{}
 	extractor := FFmpegCoverExtractor{Signer: fakeCoverSigner{}, Uploader: uploader, Binary: binary}
-	key, err := extractor.Extract(context.Background(), "classroom/video/a.mp4", 7)
+	key, err := extractor.Extract(context.Background(), "classroom/video/a.mp4", 7, CoverAspectRatio16x9)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if key != "classroom/covers/generated.jpg" || string(uploader.data) != "jpeg" {
 		t.Fatalf("key=%q data=%q", key, uploader.data)
+	}
+	args, err := os.ReadFile(binary + ".args")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := string(args)
+	for _, want := range []string{"-map\n0:v:0", "scale=1280:720:force_original_aspect_ratio=increase", "crop=1280:720", "-frames:v\n1"} {
+		if !strings.Contains(command, want) {
+			t.Errorf("ffmpeg command missing %q: %s", want, command)
+		}
+	}
+	if strings.Contains(command, "-ss\n00:00:01") {
+		t.Fatalf("ffmpeg must use the first decodable frame: %s", command)
 	}
 }
 
@@ -1117,5 +1132,43 @@ func TestClassroomUploadMaintenanceCleansExpiredCompletingBeforeRetry(t *testing
 	}
 	if _, err := svc.Initiate(context.Background(), InitiateUploadInput{ContentID: 7, CreatorID: 42, Filename: "new.mp4", ContentType: "video/mp4", SizeBytes: 10, Checksum: "crc64:123"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFFmpegCoverExtractorCropsAllSupportedAspectRatios(t *testing.T) {
+	for _, tc := range []struct {
+		ratio CoverAspectRatio
+		scale string
+		crop  string
+	}{
+		{CoverAspectRatio16x9, "scale=1280:720:force_original_aspect_ratio=increase", "crop=1280:720"},
+		{CoverAspectRatio9x16, "scale=720:1280:force_original_aspect_ratio=increase", "crop=720:1280"},
+		{CoverAspectRatio1x1, "scale=1080:1080:force_original_aspect_ratio=increase", "crop=1080:1080"},
+	} {
+		t.Run(string(tc.ratio), func(t *testing.T) {
+			dir := t.TempDir()
+			binary := filepath.Join(dir, "ffmpeg")
+			script := "#!/bin/sh\nfor arg do output=$arg; done\nprintf '%s\\n' \"$@\" > \"$0.args\"\nprintf jpeg > \"$output\"\n"
+			if err := os.WriteFile(binary, []byte(script), 0755); err != nil {
+				t.Fatal(err)
+			}
+			_, err := (FFmpegCoverExtractor{Signer: fakeCoverSigner{}, Uploader: &fakeCoverUploader{}, Binary: binary}).Extract(context.Background(), "classroom/video/a.mp4", 7, tc.ratio)
+			if err != nil {
+				t.Fatal(err)
+			}
+			args, err := os.ReadFile(binary + ".args")
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := string(args)
+			for _, want := range []string{"-map\n0:v:0", tc.scale, tc.crop, "-frames:v\n1"} {
+				if !strings.Contains(command, want) {
+					t.Errorf("command missing %q: %s", want, command)
+				}
+			}
+			if strings.Contains(command, "-ss\n00:00:01") {
+				t.Fatalf("command unexpectedly seeks: %s", command)
+			}
+		})
 	}
 }

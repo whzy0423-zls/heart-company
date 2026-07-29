@@ -491,6 +491,61 @@ func TestBinaryWirePayloadLengthUsesUint32Contract(t *testing.T) {
 	}
 }
 
+func TestDecodeEnvelopeAcceptsPublishedV1DefaultsAndUnknownFields(t *testing.T) {
+	for _, data := range [][]byte{
+		[]byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.start","sessionId":null,"timestampMs":1,"payload":{},"clientExtra":"kept-by-client"}`),
+		[]byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.start","sessionId":null,"timestampMs":1}`),
+	} {
+		got, err := DecodeEnvelope(data, DirectionClient, false)
+		if err != nil {
+			t.Fatalf("DecodeEnvelope(%s): %v", data, err)
+		}
+		if got.Generation != 0 || got.SessionSeq == nil || *got.SessionSeq != 0 || got.ConfigVersion != 0 {
+			t.Fatalf("defaults = generation %d sessionSeq %v configVersion %d", got.Generation, got.SessionSeq, got.ConfigVersion)
+		}
+		if string(got.Payload) != "{}" {
+			t.Fatalf("payload = %s", got.Payload)
+		}
+	}
+}
+
+func TestDecodeEnvelopeRejectsExplicitNullPayload(t *testing.T) {
+	data := []byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.start","sessionId":null,"timestampMs":1,"payload":null}`)
+	_, err := DecodeEnvelope(data, DirectionClient, false)
+	var protocolErr *ProtocolError
+	if !errors.As(err, &protocolErr) {
+		t.Fatalf("err = %T %v", err, err)
+	}
+	if protocolErr.Code != ProtocolErrorInvalidPayload {
+		t.Fatalf("code = %q, want %q", protocolErr.Code, ProtocolErrorInvalidPayload)
+	}
+}
+
+func TestDecodeEnvelopeRejectsExplicitNullDefaultableFields(t *testing.T) {
+	base := []byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.start","sessionId":null,"generation":0,"sessionSeq":0,"configVersion":0,"timestampMs":1,"payload":{}}`)
+	for _, field := range []string{"generation", "sessionSeq", "configVersion"} {
+		t.Run(field, func(t *testing.T) {
+			var object map[string]json.RawMessage
+			if err := json.Unmarshal(base, &object); err != nil {
+				t.Fatal(err)
+			}
+			object[field] = json.RawMessage("null")
+			data, err := json.Marshal(object)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = DecodeEnvelope(data, DirectionClient, false)
+			var protocolErr *ProtocolError
+			if !errors.As(err, &protocolErr) {
+				t.Fatalf("err = %T %v", err, err)
+			}
+			if protocolErr.Code != ProtocolErrorInvalidEnvelope {
+				t.Fatalf("code = %q, want %q", protocolErr.Code, ProtocolErrorInvalidEnvelope)
+			}
+		})
+	}
+}
+
 func FuzzDecodeEnvelope(f *testing.F) {
 	f.Add([]byte{})
 	f.Add([]byte(`{"protocolVersion":"xinzhili.voice.v1","type":"session.ping","sessionId":"s","generation":0,"turnId":null,"sessionSeq":0,"turnSeq":null,"configVersion":0,"timestampMs":1,"payload":{}}`))

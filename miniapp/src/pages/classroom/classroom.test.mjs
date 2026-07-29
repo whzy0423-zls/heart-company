@@ -7,6 +7,14 @@ import { pathToFileURL } from "node:url";
 const source = await readFile(new URL("./classroom.vue", import.meta.url), "utf8").catch(() => "");
 
 assert.ok(source, "classroom list page should exist");
+assert.match(source, /import NxAsyncState/, "classroom list should share the async-state component");
+for (const state of ["loading", "error", "empty"]) {
+  assert.match(
+    source,
+    new RegExp(`NxAsyncState[\\s\\S]{0,420}state=["']${state}["']`),
+    `classroom list should render the shared ${state} state`,
+  );
+}
 assert.match(source, /listClassroomSeriesApi/, "classroom list should load published series");
 assert.match(
   source,
@@ -30,6 +38,95 @@ assert.match(
 );
 assert.match(
   source,
+  /classroomCoverRatioClass/,
+  "classroom cover cards should apply the returned cover aspect ratio",
+);
+for (const forbidden of [
+  /#0f766e/i,
+  /#15803d/i,
+  /#0f6b4f/i,
+  /#ecfdf5/i,
+  /#e7f3ee/i,
+  /rgba\(\s*15,\s*118,\s*110/i,
+]) {
+  assert.doesNotMatch(
+    source,
+    forbidden,
+    "classroom page should not keep the old dominant green palette",
+  );
+}
+assert.match(
+  source,
+  /var\(--nx-brand-900\)|var\(--nx-brand-700\)|var\(--nx-accent-gold\)/,
+  "classroom page should use the shared graphite-blue and champagne-gold tokens",
+);
+assert.doesNotMatch(
+  source,
+  /#4338ca|#4f46e5|#7c3aed|#f59e0b|rgba\(\s*67,\s*56,\s*202/i,
+  "classroom page should remove the old purple and orange visual tokens",
+);
+assert.doesNotMatch(
+  source,
+  /你发布的视频|后台发布/,
+  "classroom empty state should speak to visitors, not administrators",
+);
+assert.match(
+  source,
+  /const\s+activeTab\s*=\s*ref\("standalone"\)/,
+  "classroom should default to standalone courseware so newly published videos are visible first",
+);
+assert.match(
+  source,
+  /:action-text="activeTab === 'series' \? '查看独立课件' : ''"[\s\S]*@action="selectTab\('standalone'\)"/,
+  "empty series state should guide users to standalone courseware",
+);
+assert.match(
+  source,
+  /class="classroom-card__media"/,
+  "classroom cards should use a media-first content platform shell",
+);
+assert.match(
+  source,
+  /class="classroom-card__cover-shell"[\s\S]*:class="classroomCoverRatioClass\(item\)"/,
+  "classroom cards should apply aspect ratio on a full-width cover shell",
+);
+assert.match(
+  source,
+  /class="classroom-card__cover-overlay"/,
+  "classroom cards should overlay concise metadata on the cover",
+);
+assert.match(
+  source,
+  /class="classroom-card__play"/,
+  "classroom cards should expose an obvious play or expand affordance",
+);
+assert.match(
+  source,
+  /\.classroom-card\s*\{[^}]*flex-direction:\s*column/s,
+  "classroom cards should render as vertical content cards",
+);
+assert.match(
+  source,
+  /<image[\s\S]*class="classroom-card__cover"[\s\S]*:class="classroomCoverRatioClass\(item\)"[\s\S]*mode="aspectFill"/,
+  "classroom cover images should use aspectFill inside a ratio-aware container",
+);
+assert.match(
+  source,
+  /@error="markCoverImageError\(coverMediaKey\(item\)\)"/,
+  "classroom cover images should fall back when loading fails",
+);
+assert.match(
+  source,
+  /class="classroom-card__cover classroom-card__cover--fallback"[\s\S]*:class="classroomCoverRatioClass\(item\)"/,
+  "classroom empty-cover placeholder should keep the same ratio container",
+);
+assert.match(
+  source,
+  /\.classroom-card__cover\.classroom-cover--9x16/s,
+  "classroom cards should define the portrait cover ratio",
+);
+assert.match(
+  source,
   /class="classroom-tabs"[^>]*role="tablist"/,
   "classroom should expose a two-entry tab list",
 );
@@ -37,22 +134,7 @@ assert.match(source, /activeTab === 'series'/, "classroom should expose the seri
 assert.match(source, /activeTab === 'standalone'/, "classroom should expose the standalone entry");
 assert.match(source, />\s*系列课程\s*</, "series tab should have a clear label");
 assert.match(source, />\s*独立课件\s*</, "standalone tab should have a clear label");
-assert.match(
-  source,
-  /v-if="loading"[^>]*class="classroom-state/,
-  "classroom should render a safe loading state",
-);
-assert.match(
-  source,
-  /v-else-if="loadError"[^>]*class="classroom-state classroom-state--error/,
-  "classroom should render a safe error state",
-);
-assert.match(source, /@click="retryActiveList"/, "list errors should provide retry");
-assert.match(
-  source,
-  /v-else-if="activeItems\.length === 0"[^>]*class="classroom-state/,
-  "classroom should render an empty state",
-);
+assert.match(source, /@action="retryActiveList"/, "list errors should provide retry");
 assert.match(source, /aria-live="polite"/, "async classroom feedback should be announced politely");
 assert.match(source, /function\s+openSeries\s*\(/, "series cards should open their lesson list");
 assert.match(
@@ -64,6 +146,11 @@ assert.match(
   source,
   /v-if="activeTab === 'series' && selectedSeries\?\.id === item\.id"[^>]*class="series-panel/,
   "series lessons should render immediately after the selected card",
+);
+assert.match(
+  source,
+  /class="series-panel__chapters"/,
+  "expanded series lessons should be grouped as readable chapters",
 );
 assert.match(
   source,
@@ -82,7 +169,7 @@ assert.match(
 );
 assert.match(
   source,
-  /@click="retrySelectedSeries"/,
+  /@action="retrySelectedSeries"/,
   "series load retry should retry the selected series",
 );
 assert.match(
@@ -91,6 +178,18 @@ assert.match(
   "switching back to a loaded tab should settle an older loading state",
 );
 assert.match(source, /function\s+openContent\s*\(/, "courseware cards should open content detail");
+const classroomCardOpeningTag = source.match(/<view\s+class="classroom-card ios-card"[^>]*>/)?.[0] || "";
+assert.ok(classroomCardOpeningTag, "classroom media card should exist");
+assert.doesNotMatch(
+  classroomCardOpeningTag,
+  /role="button"|@click=|@keydown/,
+  "classroom cards should use dedicated actions instead of nesting buttons in a card-level button",
+);
+assert.match(
+  source,
+  /\.series-buy\s*\{[^}]*min-height:\s*88rpx/s,
+  "series purchase CTA should keep the project's 88rpx minimum touch target",
+);
 assert.match(
   source,
   /classroomContentRoute/,
@@ -249,6 +348,7 @@ try {
   for (const outcome of ["resolve", "reject"]) {
     const { page, state } = await createHarness();
     const staleSeries = deferred();
+    page.activeTab.value = "series";
     state.getSeries = () => staleSeries.promise;
     const oldRequest = page.openSeries({ id: "12", title: "旧系列" });
     assert.equal(page.seriesLoading.value, true);
@@ -296,6 +396,7 @@ try {
 
   {
     const { page, state } = await createHarness();
+    page.activeTab.value = "series";
     let requests = 0;
     state.getSeries = async () => {
       requests += 1;
@@ -320,6 +421,7 @@ try {
 
   {
     const { page, state } = await createHarness();
+    page.activeTab.value = "series";
     let requests = 0;
     state.getSeries = async () => {
       requests += 1;
@@ -341,6 +443,7 @@ try {
 
   for (const outcome of ["resolve", "reject"]) {
     const { page, state } = await createHarness();
+    page.activeTab.value = "series";
     state.getSeries = async () => ({
       series: { id: 12, title: "缓存 A" },
       contents: [{ id: 21, title: "A 第一课" }],
@@ -379,6 +482,7 @@ try {
 
   {
     const { page, state } = await createHarness();
+    page.activeTab.value = "series";
     state.token = "jwt";
     const payment = deferred();
     state.devPay = () => payment.promise;
@@ -406,6 +510,35 @@ try {
 
   {
     const { page, state } = await createHarness();
+    page.activeTab.value = "series";
+    state.token = "jwt";
+    const list = deferred();
+    let listCalls = 0;
+    state.listSeries = () => {
+      listCalls += 1;
+      return list.promise;
+    };
+    const first = page.startSeriesPurchase({ id: "12", purchaseState: "purchase_required" });
+    for (let count = 0; count < 10 && listCalls === 0; count += 1) await Promise.resolve();
+    assert.equal(listCalls, 1, "successful payment should enter its permission refresh");
+    assert.equal(page.seriesPaymentState.value, "success");
+
+    const duplicate = page.startSeriesPurchase({ id: "13", purchaseState: "purchase_required" });
+    assert.equal(
+      duplicate,
+      undefined,
+      "a second purchase must be ignored until the successful permission refresh settles",
+    );
+    assert.deepEqual(state.orderCalls, [{ targetType: "series", refId: "12" }]);
+    assert.equal(state.stopCalls, 0, "the duplicate click must not stop the successful refresh");
+
+    list.resolve({ items: [{ id: 12, title: "权限已刷新" }] });
+    await first;
+  }
+
+  {
+    const { page, state } = await createHarness();
+    page.activeTab.value = "series";
     state.token = "jwt";
     let detailCalls = 0;
     state.getSeries = async () => {
@@ -425,6 +558,7 @@ try {
 
   {
     const { page, state } = await createHarness();
+    page.activeTab.value = "series";
     state.token = "jwt";
     page.seriesItems.value = [{ id: "12", title: "购买前" }];
     let detailCalls = 0;

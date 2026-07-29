@@ -17,6 +17,7 @@ const (
 
 	TTSProviderOpenAICompatible = "openai-compatible"
 	TTSProviderMiniMax          = "minimax"
+	TTSProviderBailian          = "bailian"
 
 	maxEndpointRunes = 2048
 	maxAPIKeyRunes   = 4096
@@ -134,7 +135,7 @@ func (c Config) WithDefaults() (Config, error) {
 	c.ClearASRKey = false
 	c.ClearTTSKey = false
 
-	if c.TTS.Provider == TTSProviderOpenAICompatible {
+	if c.TTS.Provider == TTSProviderOpenAICompatible || c.TTS.Provider == TTSProviderBailian {
 		c.TTS.GroupID = ""
 	}
 
@@ -210,8 +211,8 @@ func validateNormalized(c Config) error {
 	if err := validateEndpoint(c.RealtimeASR.Endpoint, "wss", "https"); err != nil {
 		return fmt.Errorf("实时 ASR endpoint: %w", err)
 	}
-	if c.TTS.Provider != TTSProviderOpenAICompatible && c.TTS.Provider != TTSProviderMiniMax {
-		return errors.New("TTS provider 仅支持 openai-compatible 或 minimax")
+	if c.TTS.Provider != TTSProviderOpenAICompatible && c.TTS.Provider != TTSProviderMiniMax && c.TTS.Provider != TTSProviderBailian {
+		return errors.New("TTS provider 仅支持 openai-compatible、minimax 或 bailian")
 	}
 	if c.TTS.APIKey == "" || c.TTS.Model == "" || c.TTS.Voice == "" {
 		return errors.New("TTS API Key、模型和音色不能为空")

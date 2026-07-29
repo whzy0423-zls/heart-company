@@ -2,10 +2,11 @@
 import type {
   XinzhiliMode,
   XinzhiliModelConfigPayload,
+  VoiceOption,
   XinzhiliModelConfigView,
 } from '#/api';
 
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 
 import {
   Alert,
@@ -23,12 +24,15 @@ import {
 } from 'ant-design-vue';
 
 import {
+  getVoiceOptionsApi,
   getXinzhiliModelConfigApi,
   updateXinzhiliModelConfigApi,
 } from '#/api';
 
 import EditorShell from '../site-config/components/editor-shell.vue';
 import { normalizeXinzhiliModelConfigView } from './xinzhili-model-normalize';
+
+type XinzhiliTtsProvider = XinzhiliModelConfigPayload['tts']['provider'];
 
 const modes: Array<{ description: string; label: string; value: XinzhiliMode }> = [
   { description: '基础实时语音交流', label: '正常模式', value: 'normal' },
@@ -38,9 +42,18 @@ const modes: Array<{ description: string; label: string; value: XinzhiliMode }> 
 ];
 
 const ttsProviderOptions = [
-  { label: 'OpenAI 兼容协议', value: 'openai-compatible' },
+  { label: '阿里百炼', value: 'bailian' },
   { label: 'MiniMax', value: 'minimax' },
+  { label: 'OpenAI 兼容协议', value: 'openai-compatible' },
 ];
+const aliyunBailianTtsPreset = {
+  endpoint: 'https://dashscope.aliyuncs.com/api/v1',
+  model: 'MiniMax/speech-2.8-turbo',
+};
+const legacyAliyunBailianTtsPreset = {
+  endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  model: 'qwen-audio-tts-latest',
+};
 
 const loading = ref(true);
 const saving = ref(false);
@@ -50,6 +63,41 @@ const asrKeySet = ref(false);
 const asrKeySuffix = ref('');
 const ttsKeySet = ref(false);
 const ttsKeySuffix = ref('');
+const ttsVoiceOptions = ref<VoiceOption[]>([]);
+const ttsVoiceOptionsLoading = ref(false);
+const ttsVoiceOptionsError = ref('');
+const selectedTtsVoiceOptionId = ref('');
+
+const canSelectExistingTtsVoice = computed(() =>
+  ['bailian', 'minimax'].includes(form.value.tts.provider),
+);
+const currentTtsVoiceProvider = computed(() =>
+  form.value.tts.provider === 'minimax' ? 'minimax' : 'bailian',
+);
+const filteredTtsVoiceOptions = computed(() =>
+  ttsVoiceOptions.value.filter(
+    (item) => voiceOptionProvider(item) === currentTtsVoiceProvider.value,
+  ),
+);
+const groupedTtsVoiceOptions = computed(() =>
+  [
+    {
+      label: 'MiniMax 官方音色',
+      options: filteredTtsVoiceOptions.value
+        .filter((item) => item.source === 'official')
+        .map((item) => ({ label: item.label, value: item.id })),
+    },
+    {
+      label:
+        currentTtsVoiceProvider.value === 'bailian'
+          ? '阿里百炼 · 已复刻音色'
+          : '声音管理 · 已克隆音色',
+      options: filteredTtsVoiceOptions.value
+        .filter((item) => item.source === 'clone')
+        .map((item) => ({ label: item.label, value: item.id })),
+    },
+  ].filter((group) => group.options.length > 0),
+);
 
 const form = ref<XinzhiliModelConfigPayload>(createEmptyForm());
 
@@ -91,12 +139,24 @@ function createEmptyForm(): XinzhiliModelConfigPayload {
 }
 
 onMounted(load);
+watch(
+  () => form.value.tts.voice,
+  () => syncSelectedTtsVoiceOption(),
+);
+watch(
+  () => form.value.tts.provider,
+  (provider) => {
+    applyTtsProviderPreset(provider);
+    syncSelectedTtsVoiceOption();
+  },
+);
 
 async function load() {
   loading.value = true;
   loadError.value = '';
   try {
     applyView(await getXinzhiliModelConfigApi());
+    await loadTtsVoiceOptions();
   } catch {
     loadError.value = '芯之力模型配置加载失败，请重新加载';
   } finally {
@@ -106,6 +166,10 @@ async function load() {
 
 function applyView(data: XinzhiliModelConfigView) {
   const normalized = normalizeXinzhiliModelConfigView(data);
+  const provider = normalizeTtsProvider(
+    normalized.tts.provider,
+    normalized.tts.endpoint,
+  );
   version.value = normalized.version;
   asrKeySet.value = normalized.realtimeAsr.apiKeySet;
   asrKeySuffix.value = normalized.realtimeAsr.apiKeySuffix;
@@ -131,10 +195,117 @@ function applyView(data: XinzhiliModelConfigView) {
       format: 'mp3',
       groupId: normalized.tts.groupId ?? '',
       model: normalized.tts.model,
-      provider: normalized.tts.provider,
+      provider,
       voice: normalized.tts.voice,
     },
   };
+  applyTtsProviderPreset(provider);
+  syncSelectedTtsVoiceOption();
+}
+
+async function loadTtsVoiceOptions() {
+  ttsVoiceOptionsLoading.value = true;
+  ttsVoiceOptionsError.value = '';
+  try {
+    ttsVoiceOptions.value = await getVoiceOptionsApi();
+    syncSelectedTtsVoiceOption();
+  } catch {
+    ttsVoiceOptions.value = [];
+    selectedTtsVoiceOptionId.value = '';
+    ttsVoiceOptionsError.value = '音色选项读取失败，可手动填写音色 ID';
+  } finally {
+    ttsVoiceOptionsLoading.value = false;
+  }
+}
+
+function handleTtsVoiceOptionChange(optionId?: unknown) {
+  const selected = Array.isArray(optionId) ? optionId[0] : optionId;
+  const selectedId =
+    typeof selected === 'number' || typeof selected === 'string'
+      ? String(selected)
+      : '';
+  selectedTtsVoiceOptionId.value = selectedId;
+  const option = ttsVoiceOptions.value.find((item) => item.id === selectedId);
+  if (!option) return;
+
+  const provider = voiceOptionProvider(option);
+  if (provider === 'bailian') {
+    form.value.tts.provider = 'bailian';
+    applyTtsProviderPreset('bailian', true);
+  } else if (provider === 'minimax') {
+    form.value.tts.provider = 'minimax';
+    applyTtsProviderPreset('minimax');
+  }
+  form.value.tts.voice = option.voiceId;
+}
+
+function syncSelectedTtsVoiceOption() {
+  const matched = filteredTtsVoiceOptions.value.find(
+    (item) => item.voiceId === form.value.tts.voice,
+  );
+  selectedTtsVoiceOptionId.value = matched?.id ?? '';
+}
+
+function voiceOptionProvider(item: VoiceOption) {
+  return item.provider || 'minimax';
+}
+
+function normalizeTtsProvider(
+  provider?: string,
+  endpoint?: string,
+): XinzhiliTtsProvider {
+  const normalizedProvider = (provider || '').trim();
+  const normalizedEndpoint = (endpoint || '').trim().toLowerCase();
+  if (
+    normalizedProvider === 'openai-compatible' &&
+    normalizedEndpoint.includes('dashscope.aliyuncs.com/compatible-mode')
+  ) {
+    return 'bailian';
+  }
+  if (normalizedProvider === 'bailian' || normalizedProvider === 'minimax') {
+    return normalizedProvider;
+  }
+  return 'openai-compatible';
+}
+
+function applyTtsProviderPreset(
+  provider: XinzhiliTtsProvider = form.value.tts.provider,
+  force = false,
+) {
+  if (provider === 'bailian') {
+    form.value.tts.endpoint =
+      force ||
+      !form.value.tts.endpoint ||
+      form.value.tts.endpoint === legacyAliyunBailianTtsPreset.endpoint
+        ? aliyunBailianTtsPreset.endpoint
+        : form.value.tts.endpoint;
+    form.value.tts.model =
+      force ||
+      !form.value.tts.model ||
+      form.value.tts.model === 'speech-02-hd' ||
+      form.value.tts.model === legacyAliyunBailianTtsPreset.model
+        ? aliyunBailianTtsPreset.model
+        : form.value.tts.model;
+    form.value.tts.groupId = '';
+    form.value.tts.format = 'mp3';
+    return;
+  }
+  if (provider === 'minimax') {
+    if (
+      form.value.tts.endpoint === aliyunBailianTtsPreset.endpoint ||
+      form.value.tts.endpoint === legacyAliyunBailianTtsPreset.endpoint
+    ) {
+      form.value.tts.endpoint = '';
+    }
+    if (
+      !form.value.tts.model ||
+      form.value.tts.model === aliyunBailianTtsPreset.model ||
+      form.value.tts.model === legacyAliyunBailianTtsPreset.model
+    ) {
+      form.value.tts.model = 'speech-02-hd';
+    }
+    form.value.tts.format = 'mp3';
+  }
 }
 
 function isModeEnabled(mode: XinzhiliMode) {
@@ -248,7 +419,7 @@ async function save() {
         </Col>
       </Row>
 
-      <Divider orientation="left">AI 语音合成</Divider>
+      <Divider orientation="left">AI 语音合成 / TTS 配置</Divider>
       <Alert
         description="实时 ASR 继续使用阿里云百炼 Paraformer；语音合成可使用硅基流动免费额度。预设按钮只填写 TTS 协议、地址、模型、音色和格式，按钮不会覆盖已填写的 API Key。"
         message="免费额度配置说明"
@@ -268,7 +439,32 @@ async function save() {
             <Select
               v-model:value="form.tts.provider"
               :options="ttsProviderOptions"
+              placeholder="请选择 TTS provider"
             />
+          </Form.Item>
+          <Form.Item
+            v-if="canSelectExistingTtsVoice"
+            label="选择已有音色"
+          >
+            <Select
+              v-model:value="selectedTtsVoiceOptionId"
+              allow-clear
+              :loading="ttsVoiceOptionsLoading"
+              :options="groupedTtsVoiceOptions"
+              option-filter-prop="label"
+              placeholder="可直接复用声音管理里的已克隆音色"
+              show-search
+              @change="handleTtsVoiceOptionChange"
+            />
+            <span
+              v-if="ttsVoiceOptionsError"
+              class="mt-1 block text-xs text-red-500"
+            >
+              音色选项读取失败，可手动填写音色 ID
+            </span>
+            <span v-else class="mt-1 block text-xs text-gray-400">
+              可直接复用声音管理里的已克隆音色，也可以手动填写平台音色 ID
+            </span>
           </Form.Item>
           <Form.Item label="Endpoint">
             <Input v-model:value="form.tts.endpoint" />
@@ -281,8 +477,15 @@ async function save() {
           <Form.Item label="模型">
             <Input v-model:value="form.tts.model" />
           </Form.Item>
-          <Form.Item label="音色">
-            <Input v-model:value="form.tts.voice" />
+          <Form.Item label="手动音色 ID">
+            <Input
+              v-model:value="form.tts.voice"
+              :placeholder="
+                form.tts.provider === 'bailian'
+                  ? '阿里百炼复刻音色 ID'
+                  : '也可以手动填写平台音色 ID'
+              "
+            />
           </Form.Item>
           <Form.Item label="API Key">
             <Input.Password

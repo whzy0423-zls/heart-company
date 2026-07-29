@@ -26,7 +26,7 @@ func TestRealtimeCapabilitiesExposeStableV1Contract(t *testing.T) {
 			t.Errorf("missing feature %q in %v", feature, got.Features)
 		}
 	}
-	if got.MinimumAppBuild < 0 {
+	if got.MinimumAppBuild != 1 {
 		t.Fatalf("minimumAppBuild=%d", got.MinimumAppBuild)
 	}
 }

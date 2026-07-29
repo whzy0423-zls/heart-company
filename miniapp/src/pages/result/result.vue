@@ -6,11 +6,17 @@ import { isWing } from '../../utils/enneagram'
 import { resultPersonaText } from '../../utils/resultPersona'
 import { getLastResult, normalizeLastResult } from '../../utils/session'
 import { ensureLogin } from '../../utils/auth'
-import { saveTestRecordApi, reportStatusApi, reportContentApi } from '../../api'
+import { listClassroomStandaloneApi, saveTestRecordApi, reportStatusApi, reportContentApi } from '../../api'
 import { payForReport } from '../../utils/payment'
 import { userErrorMessage } from '../../utils/userMessage'
 import { reportDisplayState } from '../../utils/reportDisplayState'
 import { createResultPoster } from '../../utils/resultPoster'
+import {
+  classroomAccessLabel,
+  classroomContentRoute,
+  normalizeClassroomContent,
+} from '../../utils/classroomDisplay'
+import { setBookingIntent } from '../../utils/bookingIntent'
 
 const result = ref(null)
 const gender = ref(null)
@@ -40,6 +46,10 @@ const posterLoading = ref(false)
 const posterError = ref('')
 const avatarFailed = ref(false)
 const instance = getCurrentInstance()
+const classroomRecommendations = ref([])
+const classroomRecommendationLoading = ref(false)
+const classroomRecommendationError = ref('')
+let classroomRecommendationPromise = null
 
 const reportState = computed(() => reportDisplayState({
   recordId: recordId.value,
@@ -68,7 +78,33 @@ onMounted(() => {
   wing.value = isWing(t, cachedResult.second)
   growthInfo.value = TYPES_INFO[TYPES_INFO[t].growth]
   stressInfo.value = TYPES_INFO[TYPES_INFO[t].stress]
+  loadClassroomRecommendations()
 })
+
+function loadClassroomRecommendations() {
+  if (classroomRecommendationPromise) return classroomRecommendationPromise
+
+  classroomRecommendationLoading.value = true
+  classroomRecommendationError.value = ''
+  classroomRecommendationPromise = listClassroomStandaloneApi({ limit: 2, offset: 0 })
+    .then((response) => {
+      classroomRecommendations.value = (Array.isArray(response?.items) ? response.items : [])
+        .map(normalizeClassroomContent)
+        .filter((item) => item.id)
+        .slice(0, 2)
+      return classroomRecommendations.value
+    })
+    .catch((error) => {
+      classroomRecommendations.value = []
+      classroomRecommendationError.value = error?.message || '课堂推荐暂未加载'
+      return []
+    })
+    .finally(() => {
+      classroomRecommendationLoading.value = false
+      classroomRecommendationPromise = null
+    })
+  return classroomRecommendationPromise
+}
 
 async function saveRecord() {
   if (saving.value || saved.value) return
@@ -162,7 +198,17 @@ const reportPriceYuan = computed(() => {
 })
 
 function goBooking() {
+  setBookingIntent({ kind: 'enterprise', intentText: '企业九型工作坊' })
   uni.switchTab({ url: '/pages/booking/booking' })
+}
+
+function goClassroom() {
+  uni.switchTab({ url: '/pages/learn/learn' })
+}
+
+function openClassroomRecommendation(item) {
+  const url = classroomContentRoute(item)
+  if (url) uni.navigateTo({ url })
 }
 function restart() {
   uni.redirectTo({ url: '/pages/test/test' })
@@ -322,6 +368,38 @@ function savePoster() {
       </template>
     </view>
 
+    <view class="result-recommendations nx-panel ios-card">
+      <view class="result-recommendations__head">
+        <view>
+          <text class="result-recommendations__eyebrow">老师课堂</text>
+          <text class="result-recommendations__title">测完后继续学一学</text>
+        </view>
+        <button class="result-recommendations__more" @click="goClassroom">继续浏览老师课堂</button>
+      </view>
+      <view v-if="classroomRecommendationLoading" class="result-recommendations__state" aria-live="polite">
+        正在整理适合继续学习的课件…
+      </view>
+      <view v-else-if="classroomRecommendations.length" class="result-recommendations__list">
+        <button
+          v-for="item in classroomRecommendations"
+          :key="item.id"
+          class="result-recommendation-card"
+          :aria-label="`查看${item.title || '老师课堂课件'}`"
+          @click="openClassroomRecommendation(item)"
+        >
+          <view class="result-recommendation-card__meta">
+            <text>{{ item.contentType === 'audio' ? '音频' : '视频' }}</text>
+            <text>{{ classroomAccessLabel(item.effectiveAccess) }}</text>
+          </view>
+          <text class="result-recommendation-card__title">{{ item.title || '未命名课件' }}</text>
+          <text v-if="item.description" class="result-recommendation-card__description">{{ item.description }}</text>
+        </button>
+      </view>
+      <text v-else class="result-recommendations__state">
+        {{ classroomRecommendationError ? '推荐课件暂未同步，可以先进入老师课堂查看全部内容。' : '老师正在整理更多视频与音频内容，稍后再来看看。' }}
+      </text>
+    </view>
+
     <view class="result-actions">
       <!-- #ifdef MP-WEIXIN -->
       <view class="result-actions__share-row">
@@ -333,7 +411,7 @@ function savePoster() {
       <button class="result-actions__secondary" disabled>小程序内生成海报</button>
       <!-- #endif -->
       <button class="result-actions__relation" @click="goRelation">和 TA 合盘 · 看关系</button>
-      <button class="result-actions__booking" @click="goBooking">预约深入解读</button>
+      <button class="result-actions__booking" @click="goBooking">预约企业九型工作坊</button>
       <button class="restart-button" @click="restart">重新测试</button>
     </view>
     <text class="disclaimer">本测试基于九型人格体系简化设计，仅供趣味参考，不作专业诊断。</text>
@@ -595,6 +673,93 @@ function savePoster() {
   font-weight: 900;
 }
 .report__cta--disabled { color: #475569; opacity: .78; }
+.result-recommendations {
+  display: flex;
+  flex-direction: column;
+  gap: 20rpx;
+  padding: 30rpx;
+  border: 2rpx solid var(--nx-border);
+  border-radius: 30rpx;
+  background: var(--nx-surface);
+}
+.result-recommendations__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+}
+.result-recommendations__eyebrow {
+  display: block;
+  color: var(--nx-brand-700);
+  font-size: 23rpx;
+  font-weight: 900;
+  margin-bottom: 8rpx;
+}
+.result-recommendations__title {
+  display: block;
+  color: var(--nx-brand-900);
+  font-size: 31rpx;
+  font-weight: 900;
+  line-height: 1.35;
+}
+.result-recommendations__more {
+  flex: none;
+  min-height: 88rpx;
+  margin: 0;
+  padding: 0 22rpx;
+  border: 0;
+  background: transparent;
+  color: var(--nx-brand-700);
+  font-size: 23rpx;
+  font-weight: 900;
+  line-height: 88rpx;
+}
+.result-recommendations__more::after,
+.result-recommendation-card::after { border: none; }
+.result-recommendations__list {
+  display: flex;
+  flex-direction: column;
+  gap: 14rpx;
+}
+.result-recommendations__state {
+  color: var(--nx-text-muted);
+  font-size: 24rpx;
+  line-height: 1.6;
+}
+.result-recommendation-card {
+  width: 100%;
+  min-height: 112rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10rpx;
+  margin: 0;
+  padding: 24rpx;
+  border: 2rpx solid var(--nx-border);
+  border-radius: 24rpx;
+  background: var(--nx-surface-soft);
+  color: var(--nx-text);
+  text-align: left;
+}
+.result-recommendation-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+  color: var(--nx-brand-700);
+  font-size: 21rpx;
+  font-weight: 900;
+}
+.result-recommendation-card__title {
+  color: var(--nx-brand-900);
+  font-size: 27rpx;
+  font-weight: 900;
+  line-height: 1.4;
+}
+.result-recommendation-card__description {
+  color: var(--nx-text-muted);
+  font-size: 23rpx;
+  line-height: 1.5;
+}
 .result-actions { display: flex; flex-direction: column; gap: 16rpx; margin-top: 8rpx; }
 .result-actions button {
   min-height: 88rpx;
@@ -606,8 +771,8 @@ function savePoster() {
 .result-actions__share-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16rpx; }
 .result-actions__secondary,
 .result-actions__booking { background: #fff; color: #334155; border: 2rpx solid #cbd5e1; }
-.result-actions__relation { background: #4338ca; color: #fff; }
-.result-actions__booking { color: #1d4ed8; }
+.result-actions__relation { background: var(--nx-brand-900); color: var(--nx-surface); }
+.result-actions__booking { border-color: var(--nx-accent-gold); color: var(--nx-brand-900); background: var(--nx-accent-gold); }
 .restart-button {
   min-height: 88rpx;
   background: transparent;

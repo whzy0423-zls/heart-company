@@ -34,6 +34,7 @@ export interface VoiceGeneration {
 export interface VoiceOption {
   id: string;
   label: string;
+  provider: string;
   source: 'clone' | 'official';
   voiceId: string;
   voiceName: string;

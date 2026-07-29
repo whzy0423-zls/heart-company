@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +29,7 @@ const (
 	maxTTSTurnBytes     = 10 << 20
 	defaultTTSWorkers   = 2
 	defaultTTSTimeout   = 15 * time.Second
+	bailianTTSPath      = "/api/v1/services/aigc/multimodal-generation/generation"
 )
 
 var (
@@ -92,6 +95,16 @@ func (f TTSProviderFactory) New(cfg TTSConfig) (TTSProvider, error) {
 			})
 		}
 		return miniMaxTTSAdapter{client: client}, nil
+	case TTSProviderBailian:
+		client := f.HTTPClient
+		if client == nil {
+			client = &http.Client{Timeout: 30 * time.Second, Transport: netguard.NewGuardedTransport()}
+		}
+		endpoint, err := bailianTTSEndpoint(cfg.Endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("TTS endpoint 无效")
+		}
+		return &bailianHostedMiniMaxTTS{client: client, endpoint: endpoint}, nil
 	default:
 		return nil, errors.New("不支持的 TTS provider")
 	}
@@ -114,6 +127,168 @@ func (p miniMaxTTSAdapter) Synthesize(ctx context.Context, cfg TTSConfig, text s
 		return nil, "", errors.New("MiniMax 音频超过 1MiB")
 	}
 	return audio, mimeType, nil
+}
+
+type bailianHostedMiniMaxTTS struct {
+	client   *http.Client
+	endpoint string
+}
+
+func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig, text string) ([]byte, string, error) {
+	format := strings.TrimSpace(cfg.Format)
+	if format == "" {
+		format = "mp3"
+	}
+	payload, err := json.Marshal(map[string]any{
+		"model": cfg.Model,
+		"input": map[string]any{
+			"text": text,
+			"voice_setting": map[string]any{
+				"voice_id": cfg.Voice,
+				"speed":    1,
+				"vol":      1,
+				"pitch":    0,
+			},
+			"audio_setting": map[string]any{
+				"format":      format,
+				"sample_rate": 32000,
+				"bitrate":     128000,
+				"channel":     1,
+			},
+		},
+	})
+	if err != nil {
+		return nil, "", errors.New("TTS 请求编码失败")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, "", errors.New("TTS 请求创建失败")
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.APIKey))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, "", ErrTTSTimeout
+		}
+		if ctx.Err() != nil {
+			return nil, "", ctx.Err()
+		}
+		return nil, "", errors.New("TTS 请求失败")
+	}
+	defer resp.Body.Close()
+	// Hex may be 2x and Base64 about 4/3x the decoded MP3 size.
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 2*maxTTSSegmentBytes+64*1024))
+	if readErr != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(readErr, context.DeadlineExceeded) {
+			return nil, "", ErrTTSTimeout
+		}
+		if ctx.Err() != nil {
+			return nil, "", ctx.Err()
+		}
+		return nil, "", errors.New("TTS 响应读取失败")
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, "", fmt.Errorf("TTS 请求失败（状态码 %d）", resp.StatusCode)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, "", errors.New("TTS 响应解析失败")
+	}
+	if err := bailianResponseError(result); err != nil {
+		return nil, "", err
+	}
+	audioRef := firstNestedString(result,
+		"data.audio", "data.hex", "data.base64", "data.audio_url", "data.url",
+		"output.audio", "output.hex", "output.base64", "output.audio_url", "output.url",
+		"output.data.audio", "output.data.hex", "output.data.base64", "output.data.audio_url", "output.data.url",
+		"audio", "hex", "base64", "audio_url", "url",
+	)
+	if audioRef == "" {
+		return nil, "", errors.New("TTS 返回空音频")
+	}
+	audio, err := p.decodeOrFetchAudio(ctx, audioRef)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(audio) == 0 {
+		return nil, "", errors.New("TTS 返回空音频")
+	}
+	if len(audio) > maxTTSSegmentBytes {
+		return nil, "", errors.New("TTS 单片音频超过 1MiB")
+	}
+	if !validMP3(audio) {
+		return nil, "", errors.New("TTS 返回的音频格式无效")
+	}
+	return audio, "audio/mpeg", nil
+}
+
+func (p *bailianHostedMiniMaxTTS) decodeOrFetchAudio(ctx context.Context, raw string) ([]byte, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return nil, errors.New("TTS 返回空音频")
+	}
+	if strings.HasPrefix(strings.ToLower(value), "http://") || strings.HasPrefix(strings.ToLower(value), "https://") {
+		if !netguard.IsPublicHTTPURL(value) {
+			return nil, errors.New("TTS 返回了不安全的音频 URL")
+		}
+		return p.fetchAudioURL(ctx, value)
+	}
+	if decoded, ok := decodeDataURLBase64(value); ok {
+		return decoded, nil
+	}
+	compact := strings.Join(strings.Fields(value), "")
+	if isHexString(compact) {
+		decoded, err := hex.DecodeString(compact)
+		if err != nil {
+			return nil, errors.New("TTS hex 音频解析失败")
+		}
+		return decoded, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(compact)
+	if err != nil {
+		return nil, errors.New("TTS 音频解析失败")
+	}
+	return decoded, nil
+}
+
+func (p *bailianHostedMiniMaxTTS) fetchAudioURL(ctx context.Context, rawURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, errors.New("TTS 音频下载请求创建失败")
+	}
+	req.Header.Set("Accept", "audio/mpeg, audio/mp3")
+	resp, err := p.client.Do(req)
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, ErrTTSTimeout
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, errors.New("TTS 音频下载失败")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("TTS 音频下载失败（状态码 %d）", resp.StatusCode)
+	}
+	if _, err := normalizeMP3MIME(resp.Header.Get("Content-Type")); err != nil {
+		return nil, err
+	}
+	audio, err := io.ReadAll(io.LimitReader(resp.Body, maxTTSSegmentBytes+1))
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, ErrTTSTimeout
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, errors.New("TTS 音频读取失败")
+	}
+	return audio, nil
 }
 
 type openAICompatibleTTS struct {
@@ -178,6 +353,86 @@ func (p *openAICompatibleTTS) Synthesize(ctx context.Context, cfg TTSConfig, tex
 		return nil, "", errors.New("TTS 返回的音频格式无效")
 	}
 	return audio, normalizedMIME, nil
+}
+
+func bailianTTSEndpoint(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", errors.New("invalid endpoint")
+	}
+	pathValue := strings.TrimRight(u.Path, "/")
+	if strings.Contains(pathValue, "/api/v1/services/") {
+		pathValue = pathValue[:strings.Index(pathValue, "/api/v1/services/")]
+	}
+	if strings.HasSuffix(pathValue, "/api/v1") {
+		u.Path = pathValue + strings.TrimPrefix(bailianTTSPath, "/api/v1")
+	} else {
+		u.Path = strings.TrimRight(pathValue, "/") + bailianTTSPath
+	}
+	return u.String(), nil
+}
+
+func bailianResponseError(payload map[string]any) error {
+	code := firstNestedString(payload, "code", "Code", "output.base_resp.status_code", "data.base_resp.status_code")
+	if code == "" || strings.EqualFold(code, "Success") || code == "0" {
+		return nil
+	}
+	message := firstNestedString(payload, "message", "Message", "output.base_resp.status_msg", "data.base_resp.status_msg")
+	if message == "" {
+		message = "阿里百炼 TTS 调用失败"
+	}
+	return fmt.Errorf("%s: %s", code, message)
+}
+
+func firstNestedString(payload map[string]any, paths ...string) string {
+	for _, rawPath := range paths {
+		var current any = payload
+		for _, part := range strings.Split(rawPath, ".") {
+			object, ok := current.(map[string]any)
+			if !ok {
+				current = nil
+				break
+			}
+			current = object[part]
+		}
+		if value, ok := current.(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+		switch value := current.(type) {
+		case float64:
+			if value != 0 {
+				return fmt.Sprintf("%.0f", value)
+			}
+		case json.Number:
+			return value.String()
+		}
+	}
+	return ""
+}
+
+func decodeDataURLBase64(value string) ([]byte, bool) {
+	lower := strings.ToLower(value)
+	comma := strings.Index(value, ",")
+	if !strings.HasPrefix(lower, "data:audio/") || comma < 0 || !strings.Contains(lower[:comma], ";base64") {
+		return nil, false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(value[comma+1:]))
+	if err != nil {
+		return nil, false
+	}
+	return decoded, true
+}
+
+func isHexString(value string) bool {
+	if value == "" || len(value)%2 != 0 {
+		return false
+	}
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func openAISpeechEndpoint(raw string) (string, error) {

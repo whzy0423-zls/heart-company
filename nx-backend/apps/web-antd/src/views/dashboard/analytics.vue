@@ -280,7 +280,7 @@ onBeforeUnmount(() => {
             :disabled-date="
               (current) => current && current > dayjs().endOf('day')
             "
-          />
+           :placeholder="['开始日期', '结束日期']"/>
         </div>
         <Button :loading="loading" @click="loadOverview">刷新</Button>
       </Space>

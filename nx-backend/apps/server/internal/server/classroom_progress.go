@@ -10,6 +10,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/classroom"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/storage"
 )
 
 const (
@@ -52,19 +53,25 @@ type classroomProgressDB struct {
 	store        classroomProgressStore
 	access       classroomProgressAccess
 	loadSnapshot func(context.Context, int64) (classroomAccessSnapshot, error)
+	public       *classroomPublicDB
 	now          func() time.Time
 }
 
 func newClassroomProgressDB(db *sql.DB) classroomProgressService {
+	return newClassroomProgressDBWithCovers(db, nil, 0)
+}
+
+func newClassroomProgressDBWithCovers(db *sql.DB, signer storage.ObjectSigner, ttl time.Duration) classroomProgressService {
 	if db == nil {
 		return nil
 	}
-	public := newClassroomPublicDB(db).(*classroomPublicDB)
+	public := newClassroomPublicDBWithCovers(db, signer, ttl).(*classroomPublicDB)
 	return &classroomProgressDB{
 		db:           db,
 		store:        classroom.NewStore(db),
 		access:       public,
 		loadSnapshot: public.loadAccessSnapshot,
+		public:       public,
 		now:          time.Now,
 	}
 }
@@ -74,7 +81,7 @@ func registerClassroomProgressRoutes(mux *http.ServeMux, authn func(http.Handler
 }
 
 func (s *Server) classroomProgressUpdate(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Cache-Control", "private, no-store")
 	if s.classroomProgress == nil {
 		httpx.Fail(w, http.StatusServiceUnavailable, "Classroom progress unavailable")
 		return
@@ -105,7 +112,7 @@ func (s *Server) classroomProgressUpdate(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) classroomContinueLearning(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Cache-Control", "private, no-store")
 	if s.classroomProgress == nil {
 		httpx.Fail(w, http.StatusServiceUnavailable, "Classroom progress unavailable")
 		return
@@ -125,6 +132,8 @@ func (s *Server) classroomContinueLearning(w http.ResponseWriter, r *http.Reques
 
 func writeClassroomProgressError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, classroom.ErrCoverSigningUnavailable):
+		httpx.Fail(w, http.StatusServiceUnavailable, "Classroom cover unavailable")
 	case errors.Is(err, errClassroomPlaybackBlocked):
 		httpx.Fail(w, http.StatusLocked, "Playback Blocked")
 	case errors.Is(err, classroom.ErrNotFound), errors.Is(err, sql.ErrNoRows):
@@ -176,7 +185,7 @@ func (d *classroomProgressDB) ContinueLearning(ctx context.Context, uid int64) (
 		limit := min(classroomContinueLearningBatchSize, classroomContinueLearningMaxCandidates-candidates)
 		rows, queryErr := d.db.QueryContext(ctx, `SELECT
 			p.content_id,p.position_seconds,p.completed,p.last_played_at,
-			c.title,c.description,c.cover_url,c.content_type,c.duration_seconds,c.series_id,c.show_as_standalone,c.status,c.playback_blocked,c.access_level,c.price_cents,
+			c.title,c.description,c.cover_url,c.content_type,c.duration_seconds,c.series_id,c.show_as_standalone,c.status,c.playback_blocked,c.access_level,c.price_cents,c.manual_cover_object_key,c.cover_aspect_ratio,m.cover_object_key,
 			s.id,s.status,s.playback_blocked,s.access_level,s.price_cents,c.teacher_name_snapshot
 			FROM classroom_progress p
 			JOIN classroom_contents c ON c.id=p.content_id
@@ -205,10 +214,11 @@ func (d *classroomProgressDB) ContinueLearning(ctx context.Context, uid int64) (
 				parentID, parentPrice      sql.NullInt64
 				parentStatus, parentAccess sql.NullString
 				parentBlocked              sql.NullBool
+				generatedCover             string
 			)
 			if err = rows.Scan(
 				&content.ID, &position, &completed, &lastPlayedAt,
-				&content.Title, &content.Description, &content.CoverURL, &content.ContentType, &content.DurationSeconds, &content.SeriesID, &content.ShowAsStandalone, &content.Status, &content.PlaybackBlocked, &content.AccessLevel, &content.PriceCents,
+				&content.Title, &content.Description, &content.CoverURL, &content.ContentType, &content.DurationSeconds, &content.SeriesID, &content.ShowAsStandalone, &content.Status, &content.PlaybackBlocked, &content.AccessLevel, &content.PriceCents, &content.ManualCoverObjectKey, &content.CoverAspectRatio, &generatedCover,
 				&parentID, &parentStatus, &parentBlocked, &parentAccess, &parentPrice, &content.TeacherNameSnapshot,
 			); err != nil {
 				_ = rows.Close()
@@ -225,8 +235,13 @@ func (d *classroomProgressDB) ContinueLearning(ctx context.Context, uid int64) (
 			if !classroomPlaybackAccessible(content, parent, snapshot) {
 				continue
 			}
+			signedCover, resolveErr := d.public.resolveContentCover(ctx, &content, generatedCover)
+			if resolveErr != nil {
+				_ = rows.Close()
+				return nil, resolveErr
+			}
 			access := accessFor(content.AccessLevel, parent)
-			view := contentViewResolved(content, parent, access, true)
+			view := contentViewResolved(content, parent, access, true, signedCover)
 			items = append(items, classroomContinueLearningItem{classroomPublicContent: view, PositionSeconds: position, Completed: completed, LastPlayedAt: lastPlayedAt})
 			if len(items) == maxClassroomContinueLearningItems {
 				break

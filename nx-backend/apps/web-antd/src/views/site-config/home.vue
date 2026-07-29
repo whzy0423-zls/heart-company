@@ -54,17 +54,17 @@ function removeAt<T>(list: T[], index: number | string) {
       <Row :gutter="16">
         <Col :md="8" :xs="24">
           <Form.Item label="Hero Eyebrow">
-            <Input v-model:value="config.home.hero.eyebrow" />
+            <Input v-model:value="config.home.hero.eyebrow"  placeholder="请输入Hero Eyebrow"/>
           </Form.Item>
         </Col>
         <Col :md="16" :xs="24">
           <Form.Item label="Hero 标题">
-            <Input v-model:value="config.home.hero.title" />
+            <Input v-model:value="config.home.hero.title"  placeholder="请输入Hero 标题"/>
           </Form.Item>
         </Col>
         <Col :xs="24">
           <Form.Item label="Hero 文案">
-            <Textarea v-model:value="config.home.hero.lead" :rows="3" />
+            <Textarea v-model:value="config.home.hero.lead" :rows="3"  placeholder="请输入Hero 文案"/>
           </Form.Item>
         </Col>
       </Row>
@@ -86,10 +86,10 @@ function removeAt<T>(list: T[], index: number | string) {
             <Input v-model:value="item.to" placeholder="链接" />
           </Col>
           <Col :md="4" :xs="24">
-            <Select v-model:value="item.variant" :options="variantOptions" />
+            <Select v-model:value="item.variant" :options="variantOptions"  placeholder="请选择Hero 文案"/>
           </Col>
           <Col :md="4" :xs="24">
-            <Select v-model:value="item.type" :options="actionTypeOptions" />
+            <Select v-model:value="item.type" :options="actionTypeOptions"  placeholder="请选择Hero 文案"/>
           </Col>
           <Col :md="3" :xs="24">
             <Button
@@ -137,7 +137,7 @@ function removeAt<T>(list: T[], index: number | string) {
       <Row :gutter="16" class="form-block">
         <Col :md="12" :xs="24">
           <Form.Item label="老师简介标题">
-            <Input v-model:value="config.home.teacherTeaser.title" />
+            <Input v-model:value="config.home.teacherTeaser.title"  placeholder="请输入老师简介标题"/>
           </Form.Item>
         </Col>
         <Col :md="12" :xs="24">
@@ -155,17 +155,17 @@ function removeAt<T>(list: T[], index: number | string) {
             <Textarea
               v-model:value="config.home.teacherTeaser.lead"
               :rows="3"
-            />
+             placeholder="请输入老师简介摘要"/>
           </Form.Item>
         </Col>
         <Col :md="12" :xs="24">
           <Form.Item label="小游戏标题">
-            <Input v-model:value="config.home.game.title" />
+            <Input v-model:value="config.home.game.title"  placeholder="请输入小游戏标题"/>
           </Form.Item>
         </Col>
         <Col :md="12" :xs="24">
           <Form.Item label="九型概览标题">
-            <Input v-model:value="config.home.typesSection.title" />
+            <Input v-model:value="config.home.typesSection.title"  placeholder="请输入九型概览标题"/>
           </Form.Item>
         </Col>
       </Row>

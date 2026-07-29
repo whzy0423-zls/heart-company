@@ -1,3 +1,5 @@
+import type { ClassroomContent, ClassroomSeries } from '#/api/core/classroom';
+
 export function classroomPermissions(accessCodes: string[]) {
   const has = (code: string) => accessCodes.includes(code);
   return {
@@ -6,6 +8,34 @@ export function classroomPermissions(accessCodes: string[]) {
     canUpload: has('Miniapp:Classroom:Upload'),
     canWrite: has('Miniapp:Classroom:Write'),
   };
+}
+
+export function contentPublishGuard(
+  content: Pick<ClassroomContent, 'seriesId' | 'status'>,
+  series: Array<Pick<ClassroomSeries, 'id' | 'status' | 'title'>>,
+) {
+  if (content.status !== 'ready')
+    return {
+      allowed: false,
+      label: '等待媒体处理',
+      reason: '媒体处理完成后才可发布',
+    };
+  if (!content.seriesId)
+    return { allowed: true, label: '发布', reason: '发布课件' };
+  const parent = series.find((item) => item.id === content.seriesId);
+  if (!parent)
+    return {
+      allowed: false,
+      label: '系列数据未加载',
+      reason: '请刷新课程系列数据后再发布',
+    };
+  if (parent.status !== 'published')
+    return {
+      allowed: false,
+      label: '先发布所属系列',
+      reason: `请先到“课程系列”发布《${parent.title}》`,
+    };
+  return { allowed: true, label: '发布', reason: '发布课件' };
 }
 
 export function playbackControl(blocked: boolean) {

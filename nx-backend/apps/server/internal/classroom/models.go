@@ -11,6 +11,7 @@ type SeriesStatus string
 type ContentStatus string
 type AccessLevel string
 type ContentType string
+type CoverAspectRatio string
 type MediaStatus string
 type UploadStatus string
 type EntitlementSource string
@@ -35,6 +36,10 @@ const (
 
 	ContentVideo ContentType = "video"
 	ContentAudio ContentType = "audio"
+
+	CoverAspectRatio16x9 CoverAspectRatio = "16:9"
+	CoverAspectRatio9x16 CoverAspectRatio = "9:16"
+	CoverAspectRatio1x1  CoverAspectRatio = "1:1"
 
 	MediaPending    MediaStatus = "pending"
 	MediaUploaded   MediaStatus = "uploaded"
@@ -106,31 +111,33 @@ func CanTransitionSeries(from, to SeriesStatus) bool {
 }
 
 type Content struct {
-	ID                  int64
-	SeriesID            *int64
-	ShowAsStandalone    bool
-	Title               string
-	Description         string
-	ContentType         ContentType
-	MediaAssetID        *int64
-	CoverURL            string
-	DurationSeconds     int
-	TeacherKey          string
-	TeacherNameSnapshot string
-	RecordedAt          *time.Time
-	Badge               string
-	Tags                []string
-	EpisodeNo           int
-	SortOrder           int
-	Status              ContentStatus
-	PlaybackBlocked     bool
-	AccessLevel         AccessLevel
-	PriceCents          int
-	PublishedAt         *time.Time
-	CreatedBy           *int64
-	UpdatedBy           *int64
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                   int64
+	SeriesID             *int64
+	ShowAsStandalone     bool
+	Title                string
+	Description          string
+	ContentType          ContentType
+	MediaAssetID         *int64
+	CoverURL             string
+	ManualCoverObjectKey string
+	CoverAspectRatio     CoverAspectRatio
+	DurationSeconds      int
+	TeacherKey           string
+	TeacherNameSnapshot  string
+	RecordedAt           *time.Time
+	Badge                string
+	Tags                 []string
+	EpisodeNo            int
+	SortOrder            int
+	Status               ContentStatus
+	PlaybackBlocked      bool
+	AccessLevel          AccessLevel
+	PriceCents           int
+	PublishedAt          *time.Time
+	CreatedBy            *int64
+	UpdatedBy            *int64
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 func (c Content) Validate() error {
@@ -146,6 +153,9 @@ func (c Content) Validate() error {
 	if !oneOf(string(c.AccessLevel), string(AccessInherit), string(AccessPublic), string(AccessLogin), string(AccessMember), string(AccessPaid)) {
 		return fmt.Errorf("invalid content access %q", c.AccessLevel)
 	}
+	if _, err := NormalizeCoverAspectRatio(c.CoverAspectRatio); err != nil {
+		return err
+	}
 	if c.SeriesID == nil && c.AccessLevel == AccessInherit {
 		return errors.New("standalone content cannot inherit access")
 	}
@@ -156,6 +166,17 @@ func (c Content) Validate() error {
 		return errors.New("numeric metadata must not be negative")
 	}
 	return validatePrice(c.AccessLevel, c.PriceCents)
+}
+
+func NormalizeCoverAspectRatio(value CoverAspectRatio) (CoverAspectRatio, error) {
+	normalized := CoverAspectRatio(strings.TrimSpace(string(value)))
+	if normalized == "" {
+		return CoverAspectRatio16x9, nil
+	}
+	if !oneOf(string(normalized), string(CoverAspectRatio16x9), string(CoverAspectRatio9x16), string(CoverAspectRatio1x1)) {
+		return "", fmt.Errorf("invalid cover aspect ratio %q", value)
+	}
+	return normalized, nil
 }
 
 func CanTransitionContent(from, to ContentStatus) bool {

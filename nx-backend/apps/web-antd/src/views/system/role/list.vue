@@ -216,10 +216,10 @@ onMounted(load);
     >
       <Form layout="vertical">
         <Form.Item label="角色名称">
-          <Input v-model:value="form.name" />
+          <Input v-model:value="form.name"  placeholder="请输入角色名称"/>
         </Form.Item>
         <Form.Item label="角色编码">
-          <Input v-model:value="form.code" />
+          <Input v-model:value="form.code"  placeholder="请输入角色编码"/>
         </Form.Item>
         <Form.Item label="启用">
           <Switch
@@ -235,7 +235,7 @@ onMounted(load);
           />
         </Form.Item>
         <Form.Item label="备注">
-          <Input v-model:value="form.remark" />
+          <Input v-model:value="form.remark"  placeholder="请输入备注"/>
         </Form.Item>
       </Form>
     </Modal>

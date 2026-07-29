@@ -130,6 +130,8 @@ type Server struct {
 	classroomProgressLimiter   *strRateLimiter
 	classroomContinueLimiter   *strRateLimiter
 	classroomPlaybackSigner    storage.ObjectSigner
+	classroomCovers            classroomCoverManager
+	classroomCoverObjects      classroomCoverObjectDeleter
 	classroomPlaybackLimiter   *strRateLimiter
 	classroomPlaybackIPLimiter *strRateLimiter
 	now                        func() time.Time
@@ -237,6 +239,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		trustedProxyCIDRs: trustedProxyCIDRs,
 
 		signupSubscribers: map[chan signup.Lead]struct{}{},
+		xinzhiliLeases:    map[int64]*xinzhiliRealtimeConn{},
 	}
 	if database != nil {
 		s.classroomPlaybackLimiter = newStrRateLimiter(30, time.Minute)
@@ -263,6 +266,8 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		mediaOSS.Prefix = ""
 		if multipartStore, mediaErr := storage.NewOSSUploader(mediaOSS); mediaErr == nil {
 			s.classroomPlaybackSigner = multipartStore
+			s.classroomCoverObjects = multipartStore
+			s.classroomCovers = classroom.NewCoverService(classroom.NewStore(database), multipartStore, classroom.DefaultCoverImageMaxBytes)
 			probe := classroom.FFProbe{Signer: multipartStore}
 			classroomService := classroom.NewUploadService(classroom.NewStore(database), multipartStore, probe, classroom.UploadConfig{Bucket: env.ClassroomMedia.Bucket, Prefix: "classroom", PartSize: env.ClassroomMedia.PartSizeBytes, MaxParts: env.ClassroomMedia.MaxParts, CredentialTTL: time.Duration(env.ClassroomMedia.CredentialTTLSeconds) * time.Second, TaskTTL: 24 * time.Hour, MaxVideoBytes: env.ClassroomMedia.MaxVideoBytes, MaxAudioBytes: env.ClassroomMedia.MaxAudioBytes, MaxAttempts: 3}, time.Now).WithCoverExtractor(classroom.FFmpegCoverExtractor{Signer: multipartStore, Uploader: multipartStore})
 			s.classroomUploads = classroomService
@@ -291,8 +296,8 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.miniappAdmin = miniapp.NewAdminStore(database)
 	s.classroomAdmin = newClassroomAdminStore(database)
 	if database != nil {
-		s.classroomPublic = newClassroomPublicDB(database)
-		s.classroomProgress = newClassroomProgressDB(database)
+		s.classroomPublic = newClassroomPublicDBWithCovers(database, s.classroomPlaybackSigner, s.classroomCoverTTL())
+		s.classroomProgress = newClassroomProgressDBWithCovers(database, s.classroomPlaybackSigner, s.classroomCoverTTL())
 	}
 	s.classroomAudit = s.auditLogs
 	miniappService := miniapp.NewService(
@@ -440,6 +445,17 @@ func (s *Server) applyStoredModelConfig() {
 	s.videos = videoStore
 	s.images = imageStore
 	s.modelMu.Unlock()
+	tts := cfg.ApplyTTS(s.env.MiniMax)
+	voiceBase := s.env.MiniMax
+	voiceBase.Provider = tts.Provider
+	voiceBase.APIBase = tts.Endpoint
+	voiceBase.APIKey = tts.APIKey
+	voiceBase.GroupID = tts.GroupID
+	voiceBase.Model = tts.Model
+	s.voices = voice.NewStore(s.db, s.uploads, voiceBase)
+	if s.articles != nil {
+		s.articles.AttachAudioDeps(s.voices, s.uploads, s.voices, tts.Model)
+	}
 }
 
 // generator 返回当前生效的对话生成器；持读锁以兼容"模型配置"页面运行时重建。
@@ -725,7 +741,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/voice/profiles/list", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage"}, s.voiceProfiles)))
 	s.mux.HandleFunc("/api/voice/profiles", s.method(http.MethodPost, s.requirePermission("Voice:Profile:Manage", s.createVoiceProfile)))
 	s.mux.HandleFunc("/api/voice/profiles/", s.requirePermission("Voice:Profile:Manage", s.voiceProfileByID))
-	s.mux.HandleFunc("/api/voice/options", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage", "Voice:Content:Manage", "Reading:Article:Manage"}, s.voiceOptions)))
+	s.mux.HandleFunc("/api/voice/options", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage", "Voice:Content:Manage", "Reading:Article:Manage", "System:XinzhiliModel:Config"}, s.voiceOptions)))
 	s.mux.HandleFunc("/api/voice/generate", s.method(http.MethodPost, s.requirePermission("Voice:Test:Manage", s.generateVoice)))
 	s.mux.HandleFunc("/api/voice/generations/list", s.method(http.MethodGet, s.requirePermission("Voice:Test:Manage", s.voiceGenerations)))
 	s.mux.HandleFunc("/api/voice/content/generate", s.method(http.MethodPost, s.requirePermission("Voice:Content:Manage", s.generateVoiceContent)))
@@ -2697,6 +2713,15 @@ func modelConfigAuditSnapshot(cfg modelconfig.Config) map[string]any {
 			"apiKeySet": cfg.Analysis.APIKey != "",
 			"groupId":   cfg.Analysis.GroupID,
 			"model":     cfg.Analysis.Model,
+		},
+		"tts": map[string]any{
+			"provider":  cfg.TTS.Provider,
+			"endpoint":  cfg.TTS.Endpoint,
+			"apiKeySet": cfg.TTS.APIKey != "",
+			"groupId":   cfg.TTS.GroupID,
+			"model":     cfg.TTS.Model,
+			"voice":     cfg.TTS.Voice,
+			"format":    cfg.TTS.Format,
 		},
 		"admin": map[string]any{
 			"provider":       cfg.Admin.Provider,

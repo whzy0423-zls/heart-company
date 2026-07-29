@@ -119,6 +119,15 @@ func TestConfigValidateTTSProviderDiscriminatedUnion(t *testing.T) {
 	}
 
 	cfg = validConfig()
+	cfg.TTS.Provider = "bailian"
+	cfg.TTS.Endpoint = "https://dashscope.aliyuncs.com/api/v1"
+	cfg.TTS.Model = "MiniMax/speech-2.8-turbo"
+	cfg.TTS.GroupID = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid bailian config: %v", err)
+	}
+
+	cfg = validConfig()
 	cfg.TTS.Provider = "anthropic-compatible"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("unsupported TTS provider should fail")

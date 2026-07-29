@@ -84,7 +84,7 @@ func (c *classroomVerticalConn) QueryContext(_ context.Context, query string, ar
 	contentValues := func() []driver.Value {
 		return []driver.Value{
 			int64(21), int64(12), false, "第一课：认识三中心", "视频课程", "video", int64(31),
-			"https://cdn.example/covers/content-21.jpg", int64(1200), "teacher-han", "韩老师", nil,
+			"https://cdn.example/covers/content-21.jpg", "", "16:9", int64(1200), "teacher-han", "韩老师", nil,
 			"课程回放", `["九型入门"]`, int64(1), int64(1), string(c.state.contentStatus), false, "inherit", int64(0),
 			c.state.contentAt, int64(7), int64(7), c.state.contentAt.Add(-time.Hour), c.state.contentAt,
 		}
@@ -101,13 +101,15 @@ func (c *classroomVerticalConn) QueryContext(_ context.Context, query string, ar
 		c.state.seriesAt = c.state.seriesAt.Add(time.Second)
 		return &classroomRows{cols: []string{"created_at", "updated_at"}, values: [][]driver.Value{{c.state.seriesAt.Add(-time.Hour), c.state.seriesAt}}}, nil
 	case strings.Contains(query, "UPDATE classroom_contents"):
-		c.state.contentStatus = classroom.ContentStatus(fmt.Sprint(args[15].Value))
+		c.state.contentStatus = classroom.ContentStatus(fmt.Sprint(args[17].Value))
 		c.state.contentAt = c.state.contentAt.Add(time.Second)
 		return &classroomRows{cols: []string{"created_at", "updated_at"}, values: [][]driver.Value{{c.state.contentAt.Add(-time.Hour), c.state.contentAt}}}, nil
 	case strings.Contains(query, "FROM classroom_series WHERE id=$1"):
 		return &classroomRows{cols: make([]string, 17), values: [][]driver.Value{seriesValues()}}, nil
 	case strings.Contains(query, "FROM classroom_contents WHERE id=$1"):
-		return &classroomRows{cols: make([]string, 25), values: [][]driver.Value{contentValues()}}, nil
+		return &classroomRows{cols: make([]string, 27), values: [][]driver.Value{contentValues()}}, nil
+	case strings.Contains(query, "SELECT c.id,m.cover_object_key"):
+		return &classroomRows{cols: make([]string, 5), values: [][]driver.Value{{int64(21), "classroom/covers/content-21.jpg", int64(12), "paid", int64(2990)}}}, nil
 	case strings.Contains(query, "FROM classroom_media_assets WHERE id=$1"):
 		return &classroomRows{cols: make([]string, 15), values: [][]driver.Value{mediaValues}}, nil
 	case strings.Contains(query, "SELECT count(*) FROM classroom_series s"):
@@ -119,6 +121,11 @@ func (c *classroomVerticalConn) QueryContext(_ context.Context, query string, ar
 	case strings.Contains(query, "SELECT s.id,s.title,s.summary"):
 		return &classroomRows{cols: make([]string, 8), values: [][]driver.Value{{
 			int64(12), "九型人格入门", "建立基础地图", "https://cdn.example/covers/series-12.jpg", "韩老师", "paid", int64(2990), false,
+		}}}, nil
+	case strings.Contains(query, "WHERE c.id=$1 AND c.status=$2 AND m.storage_status=$3"):
+		return &classroomRows{cols: make([]string, 23), values: [][]driver.Value{{
+			int64(21), int64(12), false, "第一课：认识三中心", "视频课程", "video", int64(31), "https://cdn.example/covers/content-21.jpg", int64(1200), "韩老师", "inherit", int64(0), false, string(c.state.contentStatus), "", "16:9", "classroom/covers/content-21.jpg", "media-v1",
+			int64(12), string(c.state.seriesStatus), "paid", int64(2990), false,
 		}}}, nil
 	case strings.Contains(query, "WHERE c.id=$1 AND m.storage_status=$2"):
 		return &classroomRows{cols: make([]string, 22), values: [][]driver.Value{{
@@ -163,6 +170,9 @@ type classroomContractSigner struct {
 
 func (s *classroomContractSigner) PresignGetURL(_ context.Context, key string, ttl time.Duration) (string, error) {
 	s.t.Helper()
+	if key == "classroom/covers/content-21.jpg" && ttl == 30*time.Minute {
+		return "https://cdn.example/covers/content-21.jpg", nil
+	}
 	if key != s.expectedKey || ttl != s.expectedTTL {
 		s.t.Fatalf("playback signing key=%q ttl=%s", key, ttl)
 	}
@@ -231,7 +241,7 @@ func TestClassroomVerticalContractAdminPublishToPublicPlayback(t *testing.T) {
 	signer := &classroomContractSigner{t: t, expectedKey: "classroom/private/content-21.mp4", expectedTTL: 5 * time.Minute, fixtureURL: fixture.Playback.URL}
 	s := &Server{
 		classroomAdmin:          newClassroomAdminStore(db),
-		classroomPublic:         newClassroomPublicDB(db),
+		classroomPublic:         newClassroomPublicDBWithCovers(db, signer, 30*time.Minute),
 		classroomPlaybackSigner: signer,
 		env:                     config.Env{JWTSecret: "vertical-secret"},
 		mux:                     http.NewServeMux(),
@@ -267,8 +277,14 @@ func TestClassroomVerticalContractAdminPublishToPublicPlayback(t *testing.T) {
 	detailResponse := httptest.NewRecorder()
 	s.mux.ServeHTTP(detailResponse, httptest.NewRequest(http.MethodGet, "/api/public/classroom/content/21", nil))
 	detailData := contractData(t, detailResponse)
-	assertExactJSON(t, "public content detail", detailData, fixture.Content)
-	assertJSONKeys(t, "public content detail", detailData, "accessLevel", "canPlay", "contentType", "coverUrl", "description", "durationSeconds", "effectiveAccess", "id", "playbackBlocked", "priceCents", "purchaseState", "seriesId", "teacherName", "title")
+	var expectedContent map[string]any
+	if err := json.Unmarshal(fixture.Content, &expectedContent); err != nil {
+		t.Fatal(err)
+	}
+	expectedContent["coverAspectRatio"] = "16:9"
+	expectedContentRaw, _ := json.Marshal(expectedContent)
+	assertExactJSON(t, "public content detail", detailData, expectedContentRaw)
+	assertJSONKeys(t, "public content detail", detailData, "accessLevel", "canPlay", "contentType", "coverAspectRatio", "coverUrl", "description", "durationSeconds", "effectiveAccess", "id", "playbackBlocked", "priceCents", "purchaseState", "seriesId", "teacherName", "title")
 
 	denied := httptest.NewRecorder()
 	s.mux.ServeHTTP(denied, httptest.NewRequest(http.MethodPost, "/api/miniapp/classroom/content/21/play", nil))

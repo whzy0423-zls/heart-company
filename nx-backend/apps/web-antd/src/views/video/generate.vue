@@ -500,16 +500,16 @@ onMounted(() => {
           <div class="card-title">创建生成任务</div>
           <Form layout="vertical">
             <Form.Item label="模型">
-              <Select v-model:value="form.model" :options="modelOptions" />
+              <Select v-model:value="form.model" :options="modelOptions"  placeholder="请选择模型"/>
             </Form.Item>
             <Form.Item label="视频时长">
-              <Select v-model:value="form.seconds" :options="secondsOptions" />
+              <Select v-model:value="form.seconds" :options="secondsOptions"  placeholder="请选择视频时长"/>
             </Form.Item>
             <Form.Item label="画幅比例">
               <Select
                 v-model:value="form.aspectRatio"
                 :options="aspectRatioOptions"
-              />
+               placeholder="请选择画幅比例"/>
             </Form.Item>
             <Form.Item :label="`参考图片（可选，最多 ${MAX_IMAGES} 张）`">
               <div class="ref-actions">

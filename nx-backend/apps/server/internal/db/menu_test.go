@@ -296,9 +296,20 @@ func TestDeprecatedMenusRemoveStaleCustomerPrivateRuleRoute(t *testing.T) {
 		"name = 'CustomerAppPrivateRule'",
 		"path = '/customer/app-private-rules'",
 		"component = '/customer/app-private-rules'",
+		"name = 'TheoryLibrary'",
+		"path = '/theory/library'",
+		"component = '/theory/library'",
 	} {
 		if !strings.Contains(deprecatedMenusSQL, token) {
 			t.Fatalf("expected deprecated menu cleanup SQL to include %q", token)
+		}
+	}
+	for _, token := range []string{
+		"name = 'XinzhiliModelConfig'",
+		"path = '/settings/xinzhili-model'",
+	} {
+		if strings.Contains(deprecatedMenusSQL, token) {
+			t.Fatalf("expected deprecated menu cleanup SQL not to delete restored route by %q", token)
 		}
 	}
 }

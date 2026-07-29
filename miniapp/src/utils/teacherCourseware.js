@@ -1,3 +1,5 @@
+import { resolveContentAsset } from './contentAsset.js'
+
 export const DEFAULT_TEACHERS = [
   {
     name: '韩老师',
@@ -44,6 +46,14 @@ function firstText(source, keys) {
   return ''
 }
 
+function firstAsset(source, keys, fallback) {
+  for (const key of keys) {
+    const resolved = resolveContentAsset(firstText(source, [key]))
+    if (resolved) return resolved
+  }
+  return fallback
+}
+
 function normalizeTags(value) {
   if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean).slice(0, 4)
   if (typeof value === 'string') return value.split(/[、,，/\s]+/).map((item) => item.trim()).filter(Boolean).slice(0, 4)
@@ -83,7 +93,7 @@ export function normalizeTeachers(config) {
     return {
       name: firstText(source, ['name', 'teacherName', 'nickname', 'title']) || '九型老师',
       title: firstText(source, ['title', 'role', 'position', 'subtitle']) || '九型人格导师',
-      avatar: firstText(source, ['avatar', 'photo', 'image', 'cover']) || '/static/avatars/9.png',
+      avatar: firstAsset(source, ['avatar', 'photo', 'image', 'cover'], '/static/avatars/9.png'),
       bio: firstText(source, ['bio', 'description', 'desc', 'intro', 'summary']) || '带你用九型人格看见真实动机，把课程内容落到每天可练习的沟通与成长里。',
       tags: normalizeTags(source.tags || source.badges || source.specialties || source.skills),
     }
@@ -96,7 +106,7 @@ export function normalizeTeachers(config) {
     return [{
       name: firstText(teaser, ['title']) || '九型老师',
       title: firstText(teaser, ['eyebrow']) || '九型人格导师',
-      avatar: firstText(teaser, ['image', 'fallbackImage']) || '/static/avatars/9.png',
+      avatar: firstAsset(teaser, ['image', 'fallbackImage'], '/static/avatars/9.png'),
       bio: firstText(teaser, ['lead']) || '带你用九型人格看见真实动机，把课程内容落到每天可练习的沟通与成长里。',
       tags: normalizeTags(teaser.tags || teaser.badges),
     }]
@@ -113,7 +123,7 @@ function normalizeCoursewareSource(item) {
   return {
     title: title || '课程资料',
     description: description || '老师整理的九型人格学习资料，适合课前预习和课后复盘。',
-    cover: firstText(source, ['cover', 'image', 'thumb', 'poster', 'avatar']) || '/static/wheel.png',
+    cover: firstAsset(source, ['cover', 'image', 'thumb', 'poster', 'avatar'], '/static/wheel.png'),
     badge: firstText(source, ['badge', 'tag', 'type', 'label']) || '课程',
     duration: firstText(source, ['duration', 'time', 'minutes', 'length']) || '',
     url: firstText(source, ['url', 'link', 'path', 'href']) || '',

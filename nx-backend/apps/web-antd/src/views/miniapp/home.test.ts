@@ -615,6 +615,45 @@ describe('miniapp home carousel management', () => {
     expect(homeSource).toContain(':key="itemKey(item)"');
   });
 
+  it('explains that test config controls an independent game while other entries remain sortable', async () => {
+    const config = createConfig();
+    vi.mocked(getSiteConfigApi).mockResolvedValue(config as any);
+
+    const wrapper = mountVueComponent(MiniappHome);
+    await flushVuePromises();
+
+    expect(wrapper.text()).toContain('九型测试小游戏独立模块');
+    expect(
+      document.body.querySelector('[data-testid="test-game-config-note"]')
+        ?.textContent,
+    ).toContain('test 开关控制首页独立小游戏区');
+    expect(
+      document.body.querySelector('[data-testid="test-game-config-note"]')
+        ?.textContent,
+    ).toContain('其他功能入口仍按下方顺序展示并支持排序');
+    expect(
+      document.body
+        .querySelector('[data-testid="entry-enabled-test"]')
+        ?.getAttribute('aria-label'),
+    ).toBe('九型测试小游戏独立模块显示状态');
+    expect(
+      document.body.querySelector('[data-testid="entry-label-test"]')
+        ?.textContent,
+    ).toContain('九型测试小游戏（首页独立模块）');
+    expect(homeSource).not.toMatch(/test[^\n]*通用宫格/);
+
+    for (const key of ['relation', 'learn', 'profile']) {
+      expect(
+        document.body.querySelector(`[data-testid="entry-move-up-${key}"]`),
+      ).not.toBeNull();
+      expect(
+        document.body.querySelector(`[data-testid="entry-move-down-${key}"]`),
+      ).not.toBeNull();
+    }
+
+    wrapper.unmount();
+  });
+
   it('initializes and saves the carousel through image upload and item controls', async () => {
     const config = createConfig({
       existingHomeSetting: { keep: true },
@@ -648,7 +687,13 @@ describe('miniapp home carousel management', () => {
       [...document.body.querySelectorAll('.collapse-panel-stub > h2')].map(
         (heading) => heading.textContent,
       ),
-    ).toEqual(['轮播图', '顶部品牌', '主视觉', '功能入口', '成长内容']);
+    ).toEqual([
+      '轮播图',
+      '顶部品牌',
+      '主视觉',
+      '小游戏与功能入口',
+      '成长内容',
+    ]);
     const switchLabels = [
       ...document.body.querySelectorAll('button[aria-label]'),
     ].map((button) => button.getAttribute('aria-label'));
@@ -657,8 +702,8 @@ describe('miniapp home carousel management', () => {
         '自动轮播',
         '顶部品牌显示状态',
         '主视觉显示状态',
-        '功能入口区显示状态',
-        '人格测试入口显示状态',
+        '其他功能入口区显示状态',
+        '九型测试小游戏独立模块显示状态',
         '关系合盘入口显示状态',
         '老师课程入口显示状态',
         '成长档案入口显示状态',

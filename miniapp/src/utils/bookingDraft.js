@@ -17,8 +17,10 @@ function normalizeDraft(input) {
 
 function hasMeaningfulDraft(data) {
   if (!data) return false
+  const hasMeaningfulField = FIELDS.some((field) => String(data[field] || '').trim())
+  if (data.kind === 'enterprise') return hasMeaningfulField
   if (data.kind && data.kind !== DEFAULT_KIND) return true
-  return FIELDS.some((field) => String(data[field] || '').trim())
+  return hasMeaningfulField
 }
 
 export function loadBookingDraft() {

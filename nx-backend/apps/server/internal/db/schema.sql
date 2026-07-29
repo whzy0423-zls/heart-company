@@ -2581,6 +2581,8 @@ CREATE TABLE IF NOT EXISTS classroom_contents (
   content_type TEXT NOT NULL CHECK (content_type IN ('video','audio')),
   media_asset_id BIGINT,
   cover_url TEXT NOT NULL DEFAULT '',
+  manual_cover_object_key TEXT NOT NULL DEFAULT '',
+  cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9' CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1')),
   duration_seconds INTEGER NOT NULL DEFAULT 0 CHECK (duration_seconds >= 0),
   teacher_key TEXT NOT NULL DEFAULT '',
   teacher_name_snapshot TEXT NOT NULL DEFAULT '',
@@ -2602,6 +2604,9 @@ CREATE TABLE IF NOT EXISTS classroom_contents (
   CHECK (series_id IS NOT NULL OR show_as_standalone = false),
   CHECK (access_level = 'paid' AND price_cents > 0 OR access_level <> 'paid' AND price_cents = 0)
 );
+
+ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS manual_cover_object_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9' CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'));
 
 CREATE TABLE IF NOT EXISTS classroom_media_assets (
   id BIGSERIAL PRIMARY KEY,

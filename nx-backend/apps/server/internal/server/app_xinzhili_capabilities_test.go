@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	"nine-xing/nx-backend/apps/server/internal/xinzhili"
@@ -41,5 +43,15 @@ func TestAppXinzhiliRealtimeCapabilitiesRejectsNonGet(t *testing.T) {
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestServerRegistersXinzhiliRealtimeCapabilitiesRoute(t *testing.T) {
+	raw, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `s.mux.HandleFunc("/api/app/xinzhili/realtime/capabilities"`) {
+		t.Fatal("capabilities route is not registered")
 	}
 }

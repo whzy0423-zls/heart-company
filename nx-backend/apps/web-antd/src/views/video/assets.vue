@@ -527,7 +527,7 @@ onMounted(() => {
                   <Select
                     v-model:value="imageForm.type"
                     :options="imageTypeOptions"
-                  />
+                   placeholder="请选择资产类型"/>
                 </Form.Item>
                 <Form.Item label="资产名称" required>
                   <Input
@@ -546,7 +546,7 @@ onMounted(() => {
                   <Select
                     v-model:value="imageForm.size"
                     :options="imageSizeOptions"
-                  />
+                   placeholder="请选择尺寸"/>
                 </Form.Item>
                 <Form.Item label="模型">
                   <Input
@@ -597,19 +597,19 @@ onMounted(() => {
                   <Select
                     v-model:value="videoForm.model"
                     :options="videoModelOptions"
-                  />
+                   placeholder="请选择模型"/>
                 </Form.Item>
                 <Form.Item label="时长">
                   <Select
                     v-model:value="videoForm.seconds"
                     :options="videoSecondsOptions"
-                  />
+                   placeholder="请选择时长"/>
                 </Form.Item>
                 <Form.Item label="画面比例">
                   <Select
                     v-model:value="videoForm.aspectRatio"
                     :options="videoAspectRatioOptions"
-                  />
+                   placeholder="请选择画面比例"/>
                 </Form.Item>
                 <Form.Item label="备注">
                   <Input.TextArea
@@ -641,7 +641,7 @@ onMounted(() => {
             <TabPane key="upload" tab="自行上传">
               <Form layout="vertical">
                 <Form.Item label="资产类型" required>
-                  <Select v-model:value="form.type" :options="typeOptions" />
+                  <Select v-model:value="form.type" :options="typeOptions"  placeholder="请选择资产类型"/>
                 </Form.Item>
                 <Form.Item label="资产名称" required>
                   <Input
@@ -714,7 +714,7 @@ onMounted(() => {
                 v-model:value="query.type"
                 :options="filterTypeOptions"
                 class="type-select"
-              />
+               placeholder="请选择类型"/>
               <Input
                 v-model:value="query.keyword"
                 allow-clear

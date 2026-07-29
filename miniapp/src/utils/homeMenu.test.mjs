@@ -48,14 +48,32 @@ try {
     },
   }
 
+  const legacyHome = (value) => {
+    const home = normalizeMiniappHome(value)
+    return { brand: home.brand, hero: home.hero, entriesSection: home.entriesSection, growth: home.growth }
+  }
+
+  const defaultNormalizedHome = normalizeMiniappHome()
+  assert.deepEqual({ brand: defaultNormalizedHome.brand, hero: defaultNormalizedHome.hero, entriesSection: defaultNormalizedHome.entriesSection, growth: defaultNormalizedHome.growth }, DEFAULT_HOME,
+    'missing configuration should preserve every current purple-home default',
+  )
   assert.deepEqual(
-    normalizeMiniappHome(),
+    { testEntry: defaultNormalizedHome.testEntry, navigationEntries: defaultNormalizedHome.navigationEntries },
+    {
+      testEntry: DEFAULT_HOME.entriesSection.items[0],
+      navigationEntries: DEFAULT_HOME.entriesSection.items.slice(1),
+    },
+    'test should be available separately while normal navigation omits it',
+  )
+
+  assert.deepEqual(
+    { brand: normalizeMiniappHome().brand, hero: normalizeMiniappHome().hero, entriesSection: normalizeMiniappHome().entriesSection, growth: normalizeMiniappHome().growth },
     DEFAULT_HOME,
     'missing configuration should preserve every current purple-home default',
   )
 
   assert.deepEqual(
-    normalizeMiniappHome({ home: { miniappHome: { brand: null, hero: [], entriesSection: 'bad', growth: 7 } } }),
+    legacyHome({ home: { miniappHome: { brand: null, hero: [], entriesSection: 'bad', growth: 7 } } }),
     DEFAULT_HOME,
     'missing or malformed sections should recover independently to complete defaults',
   )
@@ -71,7 +89,7 @@ try {
     },
   })
   assert.deepEqual(
-    emptyAndInvalid,
+    { brand: emptyAndInvalid.brand, hero: emptyAndInvalid.hero, entriesSection: emptyAndInvalid.entriesSection, growth: emptyAndInvalid.growth },
     DEFAULT_HOME,
     'empty copy and non-boolean enabled values should use defaults rather than coercion',
   )
@@ -178,7 +196,7 @@ try {
   assert.deepEqual(input, before, 'normalization and returned-object edits should never mutate the API response')
 
   const afterResultMutation = normalizeMiniappHome()
-  assert.deepEqual(afterResultMutation, DEFAULT_HOME, 'mutating one normalized result should not pollute later defaults')
+  assert.deepEqual(legacyHome(), DEFAULT_HOME, 'mutating one normalized result should not pollute later defaults')
   assert.notStrictEqual(first.brand, afterResultMutation.brand, 'each normalization should return an independent brand object')
   assert.notStrictEqual(first.entriesSection.items, afterResultMutation.entriesSection.items, 'each normalization should return an independent item array')
   assert.notStrictEqual(first.entriesSection.items[0], afterResultMutation.entriesSection.items[0], 'entry objects should not share nested references')
@@ -189,9 +207,14 @@ try {
     },
   })
   assert.deepEqual(
-    normalizeMiniappHome(throwingConfig),
+    legacyHome(throwingConfig),
     DEFAULT_HOME,
     'unexpected response access errors should return a fresh safe default',
+  )
+  assert.deepEqual(
+    { testEntry: normalizeMiniappHome(throwingConfig).testEntry, navigationEntries: normalizeMiniappHome(throwingConfig).navigationEntries },
+    { testEntry: DEFAULT_HOME.entriesSection.items[0], navigationEntries: DEFAULT_HOME.entriesSection.items.slice(1) },
+    'error defaults should retain independently cloned test and navigation entries',
   )
 
   console.log('home menu normalization tests passed')

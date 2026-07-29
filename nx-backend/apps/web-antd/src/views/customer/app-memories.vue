@@ -150,7 +150,7 @@ onMounted(() => {
           :options="statusOptions"
           class="filter"
           @change="search"
-        />
+         placeholder="请选择状态"/>
         <Space>
           <Button type="primary" @click="search">查询</Button>
           <Button :loading="loading" @click="load">刷新</Button>

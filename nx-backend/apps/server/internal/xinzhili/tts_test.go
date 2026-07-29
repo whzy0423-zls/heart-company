@@ -3,6 +3,8 @@ package xinzhili
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,6 +44,120 @@ func TestSplitSentences(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBailianHostedMiniMaxTTSRequestParsesHexAudio(t *testing.T) {
+	var gotPath, gotAuth string
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"audio": hex.EncodeToString(testMP3())},
+		})
+	}))
+	defer server.Close()
+
+	cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL + "/api/v1", APIKey: "dashscope-key", Model: "MiniMax/speech-2.8-turbo", Voice: "teacher-voice", Format: "mp3"}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio, mime, err := provider.Synthesize(context.Background(), cfg, "你好")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if gotPath != "/api/v1/services/aigc/multimodal-generation/generation" || gotAuth != "Bearer dashscope-key" {
+		t.Fatalf("path=%q auth=%q", gotPath, gotAuth)
+	}
+	if gotBody["model"] != "MiniMax/speech-2.8-turbo" {
+		t.Fatalf("model=%v", gotBody["model"])
+	}
+	input := gotBody["input"].(map[string]any)
+	if input["text"] != "你好" {
+		t.Fatalf("input text=%v", input["text"])
+	}
+	voiceSetting := input["voice_setting"].(map[string]any)
+	if voiceSetting["voice_id"] != "teacher-voice" || voiceSetting["speed"].(float64) != 1 || voiceSetting["vol"].(float64) != 1 || voiceSetting["pitch"].(float64) != 0 {
+		t.Fatalf("voice_setting=%#v", voiceSetting)
+	}
+	audioSetting := input["audio_setting"].(map[string]any)
+	if audioSetting["format"] != "mp3" || audioSetting["sample_rate"].(float64) != 32000 || audioSetting["bitrate"].(float64) != 128000 || audioSetting["channel"].(float64) != 1 {
+		t.Fatalf("audio_setting=%#v", audioSetting)
+	}
+	if string(audio) != string(testMP3()) || mime != "audio/mpeg" {
+		t.Fatalf("audio=%x mime=%q", audio, mime)
+	}
+}
+
+func TestBailianHostedMiniMaxTTSParsesOutputAudio(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": map[string]any{"audio": hex.EncodeToString(testMP3())},
+		})
+	}))
+	defer server.Close()
+
+	cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL + "/api/v1/services/aigc/multimodal-generation/generation", APIKey: "key", Model: "MiniMax/speech-2.8-turbo", Voice: "voice"}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio, mime, err := provider.Synthesize(context.Background(), cfg, "短句")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(audio) != string(testMP3()) || mime != "audio/mpeg" {
+		t.Fatalf("audio/mime mismatch")
+	}
+}
+
+func TestBailianHostedMiniMaxTTSParsesBase64AndRejectsPrivateURL(t *testing.T) {
+	t.Run("base64", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{"audio": base64.StdEncoding.EncodeToString(testMP3())},
+			})
+		}))
+		defer server.Close()
+		cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL, APIKey: "key", Model: "MiniMax/speech-2.8-turbo", Voice: "voice"}
+		provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		audio, mime, err := provider.Synthesize(context.Background(), cfg, "短句")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(audio) != string(testMP3()) || mime != "audio/mpeg" {
+			t.Fatalf("audio/mime mismatch")
+		}
+	})
+
+	t.Run("private url", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{"audio_url": "http://127.0.0.1/audio.mp3"},
+			})
+		}))
+		defer server.Close()
+		cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL, APIKey: "key", Model: "MiniMax/speech-2.8-turbo", Voice: "voice"}
+		provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = provider.Synthesize(context.Background(), cfg, "短句")
+		if err == nil || !strings.Contains(err.Error(), "不安全") {
+			t.Fatalf("err=%v", err)
+		}
+	})
 }
 
 func TestOpenAICompatibleTTSRequest(t *testing.T) {

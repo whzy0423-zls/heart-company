@@ -5,6 +5,31 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const source = await readFile(new URL('./booking-records.vue', import.meta.url), 'utf8')
+
+for (const token of [
+  '--nx-brand-900',
+  '--nx-brand-700',
+  '--nx-accent-gold',
+  '--nx-page-bg',
+  '--nx-surface',
+  '--nx-surface-soft',
+  '--nx-text',
+  '--nx-text-muted',
+  '--nx-border',
+]) {
+  assert.ok(source.includes(`var(${token})`), `booking records page should use ${token}`)
+}
+assert.match(source, /<view class="wrap booking-records page-stack ios-page ios-safe-bottom">/, 'booking records should use the shared page shell')
+assert.doesNotMatch(
+  source,
+  /#(?:60a5fa|7c3aed|2b7fff|6d5dfc|2563eb|295fbd|e8f1ff)/i,
+  'booking records should not keep the old orange-blue or violet theme',
+)
+assert.match(source, /v-if="loading"/, 'booking records loading state should remain available')
+assert.match(source, /v-else-if="loadError"/, 'booking records error state should remain available')
+assert.match(source, /v-else-if="bookings\.length === 0"/, 'booking records empty state should remain available')
+assert.match(source, /@click\.stop="retryLoad">重试/, 'booking records errors should keep a retry action')
+assert.match(source, /\.retry-button,[\s\S]*?min-height:\s*88rpx/, 'booking records actions should keep full-size touch targets')
 const script = source.match(/<script setup>([\s\S]*?)<\/script>/)?.[1]
 assert.ok(script, 'booking records page should expose a script setup block')
 

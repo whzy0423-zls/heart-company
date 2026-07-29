@@ -3,7 +3,7 @@ import type { UploadRequestOption } from 'ant-design-vue/es/vc-upload/interface'
 
 import type { VoiceContentJob, VoiceOption } from '#/api';
 
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import { Page } from '@vben/common-ui';
 import { IconifyIcon } from '@vben/icons';
@@ -62,11 +62,18 @@ const form = reactive({
   voiceKey: '',
 });
 
-const modelOptions = [
+const miniMaxModelOptions = [
   { label: 'speech-02-hd（高清）', value: 'speech-02-hd' },
   { label: 'speech-02-turbo（快速）', value: 'speech-02-turbo' },
   { label: 'speech-01-hd', value: 'speech-01-hd' },
   { label: 'speech-01-turbo', value: 'speech-01-turbo' },
+];
+
+const bailianModelOptions = [
+  {
+    label: '百炼托管 MiniMax speech-2.8-turbo',
+    value: 'MiniMax/speech-2.8-turbo',
+  },
 ];
 
 const sourceTypeOptions = [
@@ -92,6 +99,21 @@ const groupedVoiceOptions = computed(() => [
 
 const selectedVoice = computed(() =>
   voiceOptions.value.find((item) => item.id === form.voiceKey),
+);
+const modelOptions = computed(() =>
+  selectedVoice.value?.provider === 'bailian'
+    ? bailianModelOptions
+    : miniMaxModelOptions,
+);
+
+watch(
+  () => form.voiceKey,
+  () => {
+    form.model =
+      selectedVoice.value?.provider === 'bailian'
+        ? 'MiniMax/speech-2.8-turbo'
+        : 'speech-02-hd';
+  },
 );
 
 const columns = [
@@ -288,7 +310,7 @@ onMounted(async () => {
               </div>
             </Form.Item>
             <Form.Item label="模型">
-              <Select v-model:value="form.model" :options="modelOptions" />
+              <Select v-model:value="form.model" :options="modelOptions"  placeholder="请选择模型"/>
             </Form.Item>
             <Form.Item label="朗读正文" required>
               <Input.TextArea

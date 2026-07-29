@@ -261,11 +261,14 @@ const deprecatedMenusSQL = `DELETE FROM menus
     OR name = 'WebsiteNavigation'
     OR name = 'WebsiteSignupLeads'
     OR name = 'CustomerAppPrivateRule'
+    OR name = 'TheoryLibrary'
     OR path = '/website/navigation'
     OR path = '/website/signup-leads'
     OR path = '/customer/app-private-rules'
+    OR path = '/theory/library'
     OR component = '/site-config/navigation'
-    OR component = '/customer/app-private-rules'`
+    OR component = '/customer/app-private-rules'
+    OR component = '/theory/library'`
 
 func removeDeprecatedMenus(ctx context.Context, database *sql.DB) error {
 	_, err := database.ExecContext(ctx, deprecatedMenusSQL)

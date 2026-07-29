@@ -8,9 +8,108 @@ const source = await readFile(new URL("./classroom-detail.vue", import.meta.url)
 const script = source.match(/<script setup>([\s\S]*?)<\/script>/)?.[1];
 assert.ok(script, "classroom detail should expose executable page state");
 
+for (const token of [
+  "--nx-brand-900",
+  "--nx-brand-700",
+  "--nx-accent-gold",
+  "--nx-page-bg",
+  "--nx-surface",
+  "--nx-surface-soft",
+  "--nx-text",
+  "--nx-text-muted",
+  "--nx-border",
+]) {
+  assert.match(source, new RegExp(`var\\(${token}\\)`), `detail should use ${token}`);
+}
+for (const forbidden of [
+  /#0f766e/i,
+  /#0f6b4f/i,
+  /#ecfdf5/i,
+  /rgba?\(\s*15\s*,\s*118\s*,\s*110/i,
+  /rgba?\(\s*15\s*,\s*107\s*,\s*79/i,
+  /rgba?\(\s*236\s*,\s*253\s*,\s*245/i,
+]) {
+  assert.doesNotMatch(source, forbidden, "detail should remove the legacy green palette");
+}
+assert.match(
+  source,
+  /class="detail-shell__header"[\s\S]*老师课堂[\s\S]*课件详情/,
+  "detail should provide a consistent classroom detail header",
+);
+assert.match(
+  source,
+  /class="media-hero ios-card"[\s\S]*content\.contentType === "audio"[\s\S]*class="content-summary"/,
+  "video and audio should share one media hero and content summary",
+);
+assert.equal(
+  (source.match(/class="media-hero ios-card"/g) || []).length,
+  1,
+  "detail should render one shared media hero instead of separate video/audio headers",
+);
+assert.match(source, /class="detail-actions/, "detail actions should share a bottom action zone");
+assert.match(
+  source,
+  /\.detail-action,\s*\n\.primary-action\s*\{[\s\S]*min-height:\s*88rpx/,
+  "loading, retry, purchase, and playback actions should keep the 88rpx touch target",
+);
+assert.match(source, /@click="loadDetail">重新加载/, "load failures should retain retry");
+assert.match(source, /@click="handleAccessAction"/, "locked lessons should retain access action");
+assert.match(source, /@click="toggleAudio"/, "audio lessons should retain playback control");
+assert.match(source, /@click="refreshPlayback"/, "playback loading failures should retain retry");
+assert.doesNotMatch(
+  source,
+  /role="button"[\s\S]{0,500}<button/,
+  "detail should avoid nested interactive regions",
+);
+
 assert.match(source, /onHide/, "detail should pause page media when hidden");
 assert.match(source, /onShow/, "detail should restore visibility without autoplay");
 assert.match(source, /id="classroom-video"/, "video should have a stable page context id");
+assert.match(
+  source,
+  /classroomCoverRatioClass/,
+  "detail cover should apply the returned cover aspect ratio",
+);
+assert.match(
+  source,
+  /class="detail-head__media"/,
+  "detail page should use a media-first hero shell",
+);
+assert.match(
+  source,
+  /class="detail-head__cover-shell"[\s\S]*:class="classroomCoverRatioClass\(content\)"/,
+  "detail cover should apply aspect ratio on the same full-width shell as list cards",
+);
+assert.match(
+  source,
+  /class="detail-head__play"/,
+  "detail head should expose a clear media type/play affordance",
+);
+assert.match(
+  source,
+  /class="player-panel__body"/,
+  "detail player panel should share the refreshed platform-card content body",
+);
+assert.match(
+  source,
+  /<image[\s\S]*class="detail-head__cover"[\s\S]*:class="classroomCoverRatioClass\(content\)"[\s\S]*mode="aspectFill"/,
+  "detail cover image should use aspectFill inside a ratio-aware container",
+);
+assert.match(
+  source,
+  /@error="markCoverImageError"/,
+  "detail cover image should fall back when loading fails",
+);
+assert.match(
+  source,
+  /class="detail-head__cover detail-head__cover--fallback"[\s\S]*:class="classroomCoverRatioClass\(content\)"/,
+  "detail empty-cover placeholder should keep the same ratio container",
+);
+assert.match(
+  source,
+  /\.detail-head__cover\.classroom-cover--1x1/s,
+  "detail cover should define the square cover ratio",
+);
 assert.match(source, /<slider\b[^>]*@change="seekAudio"/, "audio player should expose seeking");
 assert.match(
   source,
@@ -132,11 +231,24 @@ const readAnonymousClassroomProgress = () => null
 const createClassroomProgressTracker = () => ({ record: async (positionSeconds) => ({ positionSeconds, completed: false }), flush: async () => {} })
 const createClassroomPurchaseController = (options) => {
   const purchase = async () => {
-    options.onChange?.({ state: 'creating', message: 'creating' })
-    const order = await options.create()
-    options.onChange?.({ state: 'pending', message: 'pending' })
-    await options.pay(order)
-    return options.status(order)
+    try {
+      options.onChange?.({ state: 'creating', message: 'creating' })
+      const order = await options.create()
+      options.onChange?.({ state: 'pending', message: 'pending' })
+      await options.pay(order)
+      const status = await options.status(order)
+      if (status?.owned === true || status?.status === 'paid') {
+        options.onChange?.({ state: 'success', message: 'success' })
+        await options.onSuccess?.(status)
+      } else if (['closed', 'cancelled', 'canceled', 'failed'].includes(String(status?.status || '').toLowerCase())) {
+        options.onChange?.({ state: 'failure', message: 'failure' })
+      }
+      return status
+    } catch (error) {
+      const cancelled = /cancel|取消/i.test(String(error?.errMsg || error?.message || ''))
+      options.onChange?.({ state: cancelled ? 'cancelled' : 'failure', message: error?.message || 'failure' })
+      return { status: cancelled ? 'cancelled' : 'failed' }
+    }
   }
   return { purchase, retry: purchase, stop() {}, reset() { options.onChange?.({ state: 'idle', message: '' }) } }
 }
@@ -144,7 +256,7 @@ const userErrorMessage = (error, fallback) => error?.message || fallback
 `;
 await writeFile(
   modulePath,
-  `${prelude}\n${executableScript}\nexport { contentId, content, loading, loadError, playbackUrl, playbackLoading, playbackError, playbackRetryLabel, audioPlaying, audioPosition, purchaseTarget, purchaseTargetError, loadDetail, refreshPlayback, handlePlaybackError, toggleAudio, seekAudio, startPurchase }\n`,
+  `${prelude}\n${executableScript}\nexport { contentId, content, loading, loadError, playbackUrl, playbackLoading, playbackError, playbackRetryLabel, audioPlaying, audioPosition, paymentState, purchaseInFlight, purchaseTarget, purchaseTargetError, loadDetail, refreshPlayback, handlePlaybackError, toggleAudio, seekAudio, startPurchase, retryPurchase }\n`,
 );
 
 function deferred() {
@@ -546,6 +658,92 @@ try {
       [],
       "failed parent resolution must never fall back to a content order",
     );
+  }
+
+  {
+    const { page, state } = await createHarness();
+    const permissionRefresh = deferred();
+    let refreshCalls = 0;
+    state.getOrderStatus = () => ({ status: "paid", owned: true });
+    state.getContent = () => {
+      refreshCalls += 1;
+      return permissionRefresh.promise;
+    };
+    page.content.value = normalizeContent({ id: 21, contentType: "audio", canPlay: false });
+    page.purchaseTarget.value = { type: "content", id: "21", ready: true };
+
+    const first = page.startPurchase();
+    for (let count = 0; count < 10 && refreshCalls === 0; count += 1) await Promise.resolve();
+    assert.equal(refreshCalls, 1, "successful payment should enter its permission refresh");
+    assert.equal(page.paymentState.value, "success");
+    assert.equal(page.purchaseInFlight.value, true);
+
+    const duplicate = page.startPurchase();
+    assert.equal(
+      duplicate,
+      undefined,
+      "a second purchase must be ignored until the successful permission refresh settles",
+    );
+    assert.deepEqual(state.orderCalls, [{ targetType: "content", refId: "21" }]);
+
+    permissionRefresh.resolve({
+      id: 21,
+      contentType: "audio",
+      canPlay: true,
+      effectiveAccess: "paid",
+      purchaseState: "owned",
+    });
+    await first;
+    assert.equal(page.purchaseInFlight.value, false);
+  }
+
+  {
+    const { page, state } = await createHarness();
+    state.getOrderStatus = () => ({ status: "failed", owned: false });
+    page.purchaseTarget.value = { type: "content", id: "21", ready: true };
+    await page.startPurchase();
+    assert.equal(page.paymentState.value, "failure");
+    state.getOrderStatus = () => ({ status: "pending", owned: false });
+    await page.retryPurchase();
+    assert.equal(state.orderCalls.length, 2, "failed purchases should unlock one explicit retry");
+  }
+
+  {
+    const { page, state } = await createHarness();
+    let cancelled = true;
+    state.devPay = async () => {
+      if (cancelled) throw new Error("requestPayment:fail cancel");
+      return { paid: true };
+    };
+    page.purchaseTarget.value = { type: "content", id: "21", ready: true };
+    await page.startPurchase();
+    assert.equal(page.paymentState.value, "cancelled");
+    cancelled = false;
+    await page.retryPurchase();
+    assert.equal(state.orderCalls.length, 2, "cancelled purchases should unlock one explicit retry");
+  }
+
+  {
+    const { page, state } = await createHarness();
+    const payment = deferred();
+    let refreshCalls = 0;
+    state.devPay = () => payment.promise;
+    state.getOrderStatus = () => ({ status: "paid", owned: true });
+    state.getContent = async () => {
+      refreshCalls += 1;
+      return { id: 21, contentType: "audio", canPlay: true };
+    };
+    page.purchaseTarget.value = { type: "content", id: "21", ready: true };
+    const operation = page.startPurchase();
+    await flush();
+    assert.equal(page.purchaseInFlight.value, true);
+    state.lifecycle.unload();
+    assert.equal(page.purchaseInFlight.value, false, "unload should release page purchase state");
+    assert.equal(page.startPurchase(), undefined, "unloaded detail must ignore later purchase actions");
+    payment.resolve({ paid: true });
+    await operation;
+    assert.equal(refreshCalls, 0, "a payment settling after unload must not refresh detail state");
+    assert.equal(state.orderCalls.length, 1);
   }
 
   console.log("miniapp classroom detail state tests passed");

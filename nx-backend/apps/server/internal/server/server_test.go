@@ -333,6 +333,11 @@ func testVbenCompatibleAPI(t *testing.T) {
 				paths:   []string{"/api/reading/settings", "/api/voice/options"},
 			},
 			{
+				menuIDs: []int{1103},
+				name:    "xinzhili_model",
+				paths:   []string{"/api/xinzhili-model-config", "/api/voice/options"},
+			},
+			{
 				menuIDs: []int{702},
 				name:    "voice_test",
 				paths:   []string{"/api/voice/generations/list?page=1&pageSize=1", "/api/voice/profiles/list?page=1&pageSize=1"},

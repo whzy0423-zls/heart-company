@@ -199,13 +199,13 @@ onMounted(() => {
           :options="statusOptions"
           class="filter-select"
           @change="search"
-        />
+         placeholder="请选择状态"/>
         <Select
           v-model:value="query.productId"
           :options="productOptions"
           class="filter-select"
           @change="search"
-        />
+         placeholder="请选择商品"/>
         <Space>
           <Button type="primary" @click="search">查询</Button>
           <Button :loading="loading" @click="load">刷新</Button>
@@ -301,7 +301,7 @@ onMounted(() => {
           show-time
           class="activation-picker"
           format="YYYY-MM-DD HH:mm:ss"
-        />
+         placeholder="请选择生效时间"/>
         <div class="activation-help">仍在有效期内的会员会从原到期时间继续顺延。</div>
       </div>
     </Modal>

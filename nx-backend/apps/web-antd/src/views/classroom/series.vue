@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ClassroomSeries } from '#/api/core/classroom';
-import { onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useAccessStore } from '@vben/stores';
 import {
   Alert,
   Button,
@@ -26,13 +27,34 @@ import {
   setClassroomSeriesPriceApi,
   updateClassroomSeriesApi,
 } from '#/api/core/classroom';
+import { classroomPermissions } from './classroom-view-model';
 import { seriesMetadataPayload } from './series-model';
 
-const props = defineProps<{
-  canPrice?: boolean;
-  canPublish: boolean;
-  canWrite: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    canPrice?: boolean;
+    canPublish?: boolean;
+    canWrite?: boolean;
+  }>(),
+  {
+    canPrice: undefined,
+    canPublish: undefined,
+    canWrite: undefined,
+  },
+);
+const accessStore = useAccessStore();
+const permissions = computed(() =>
+  classroomPermissions(accessStore.accessCodes),
+);
+const canWrite = computed(
+  () => props.canWrite ?? permissions.value.canWrite,
+);
+const canPublish = computed(
+  () => props.canPublish ?? permissions.value.canPublish,
+);
+const canPrice = computed(
+  () => props.canPrice ?? permissions.value.canPrice,
+);
 const loading = ref(false);
 const error = ref('');
 const rows = ref<ClassroomSeries[]>([]);
@@ -95,11 +117,11 @@ function openEditor(record?: ClassroomSeries) {
 }
 async function save() {
   if (!form.title.trim()) return message.warning('请填写系列名称');
-  if (!props.canWrite && !editing.value) return;
+  if (!canWrite.value && !editing.value) return;
   saving.value = true;
   try {
     let saved = persistedSeries.value as ClassroomSeries;
-    if (props.canWrite && (!metadataCommitted.value || !saved)) {
+    if (canWrite.value && (!metadataCommitted.value || !saved)) {
       saved = persistedSeries.value
         ? await updateClassroomSeriesApi(persistedSeries.value.id, {
             ...seriesMetadataPayload(form),
@@ -110,7 +132,7 @@ async function save() {
       metadataCommitted.value = true;
     }
     if (
-      props.canPrice &&
+      canPrice.value &&
       (saved.accessLevel !== form.accessLevel ||
         saved.priceCents !== form.priceCents)
     )
@@ -132,7 +154,7 @@ async function save() {
 watch(
   form,
   () => {
-    if (props.canWrite) metadataCommitted.value = false;
+    if (canWrite.value) metadataCommitted.value = false;
   },
   { deep: true },
 );
@@ -265,11 +287,11 @@ onMounted(load);
   >
     <Form layout="vertical"
       ><Form.Item label="系列名称" required
-        ><Input v-model:value="form.title" :disabled="!canWrite" /></Form.Item
+        ><Input v-model:value="form.title" :disabled="!canWrite"  placeholder="请输入系列名称"/></Form.Item
       ><Form.Item label="老师"
         ><Input
           v-model:value="form.teacherName"
-          :disabled="!canWrite" /></Form.Item
+          :disabled="!canWrite"  placeholder="请输入老师"/></Form.Item
       ><Form.Item label="权限"
         ><Select
           v-model:value="form.accessLevel"
@@ -279,16 +301,16 @@ onMounted(load);
             { label: '登录后', value: 'login' },
             { label: '会员', value: 'member' },
             { label: '付费', value: 'paid' },
-          ]" /></Form.Item
+          ]"  placeholder="请选择权限"/></Form.Item
       ><Form.Item v-if="form.accessLevel === 'paid'" label="价格（分）"
         ><InputNumber
           v-model:value="form.priceCents"
           :disabled="!canPrice"
-          :min="1" /></Form.Item
+          :min="1"  placeholder="请输入价格（分）"/></Form.Item
       ><Form.Item label="简介"
         ><Input.TextArea
           v-model:value="form.summary"
-          :disabled="!canWrite" /></Form.Item
+          :disabled="!canWrite"  placeholder="请输入简介"/></Form.Item
     ></Form>
   </Modal>
 </template>

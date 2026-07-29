@@ -249,10 +249,10 @@ onMounted(load);
     >
       <Form layout="vertical">
         <Form.Item label="上级菜单">
-          <Select v-model:value="form.pid" :options="parentOptions" />
+          <Select v-model:value="form.pid" :options="parentOptions"  placeholder="请选择上级菜单"/>
         </Form.Item>
         <Form.Item label="类型">
-          <Select v-model:value="form.type" :options="typeOptions" />
+          <Select v-model:value="form.type" :options="typeOptions"  placeholder="请选择类型"/>
         </Form.Item>
         <Form.Item label="菜单名称（显示）">
           <Input v-model:value="form.title" placeholder="如：用户管理" />
@@ -279,7 +279,7 @@ onMounted(load);
           />
         </Form.Item>
         <Form.Item label="排序">
-          <InputNumber v-model:value="form.sort" :min="0" />
+          <InputNumber v-model:value="form.sort" :min="0"  placeholder="请输入排序"/>
         </Form.Item>
         <Form.Item label="启用">
           <Switch

@@ -71,6 +71,7 @@ type ClassroomMediaConfig struct {
 	PartSizeBytes        int64
 	MaxParts             int
 	CredentialTTLSeconds int
+	CoverURLTTLSeconds   int
 	MaxVideoBytes        int64
 	MaxAudioBytes        int64
 }
@@ -224,7 +225,7 @@ func positiveIntEnv(key string, fallback int) int {
 	if key == "CLASSROOM_MEDIA_MAX_PARTS" {
 		max = 10000
 	}
-	if key == "CLASSROOM_MEDIA_CREDENTIAL_TTL_SECONDS" {
+	if key == "CLASSROOM_MEDIA_CREDENTIAL_TTL_SECONDS" || key == "CLASSROOM_COVER_URL_TTL_SECONDS" {
 		max = 86400
 	}
 	if v > max {
@@ -350,9 +351,10 @@ func Load() Env {
 	classroomPartMB := positiveIntEnv("CLASSROOM_MEDIA_PART_SIZE_MB", 8)
 	classroomMaxParts := positiveIntEnv("CLASSROOM_MEDIA_MAX_PARTS", 10000)
 	classroomTTL := positiveIntEnv("CLASSROOM_MEDIA_CREDENTIAL_TTL_SECONDS", 900)
+	classroomCoverTTL := positiveIntEnv("CLASSROOM_COVER_URL_TTL_SECONDS", 1800)
 	classroomVideoMB := positiveInt64Env("CLASSROOM_MEDIA_MAX_VIDEO_MB", 4096)
 	classroomAudioMB := positiveInt64Env("CLASSROOM_MEDIA_MAX_AUDIO_MB", 512)
-	classroomMedia := ClassroomMediaConfig{Endpoint: getenv("CLASSROOM_MEDIA_ENDPOINT", getenv("OSS_ENDPOINT", "")), Bucket: getenv("CLASSROOM_MEDIA_BUCKET", getenv("OSS_BUCKET", "")), Region: getenv("CLASSROOM_MEDIA_REGION", getenv("OSS_REGION", "")), PartSizeBytes: int64(classroomPartMB) * 1024 * 1024, MaxParts: classroomMaxParts, CredentialTTLSeconds: classroomTTL, MaxVideoBytes: classroomVideoMB * 1024 * 1024, MaxAudioBytes: classroomAudioMB * 1024 * 1024}
+	classroomMedia := ClassroomMediaConfig{Endpoint: getenv("CLASSROOM_MEDIA_ENDPOINT", getenv("OSS_ENDPOINT", "")), Bucket: getenv("CLASSROOM_MEDIA_BUCKET", getenv("OSS_BUCKET", "")), Region: getenv("CLASSROOM_MEDIA_REGION", getenv("OSS_REGION", "")), PartSizeBytes: int64(classroomPartMB) * 1024 * 1024, MaxParts: classroomMaxParts, CredentialTTLSeconds: classroomTTL, CoverURLTTLSeconds: classroomCoverTTL, MaxVideoBytes: classroomVideoMB * 1024 * 1024, MaxAudioBytes: classroomAudioMB * 1024 * 1024}
 
 	return Env{
 		AdminPassword: getenv("ADMIN_PASSWORD", "123456"),
