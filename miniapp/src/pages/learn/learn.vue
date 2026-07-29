@@ -116,6 +116,19 @@ function classroomPreviewMediaKey(item) {
   return `${item?.contentType || "series"}:${item?.id || ""}`;
 }
 
+function classroomPreviewPresentation(item = {}) {
+  const isSeries = !item.contentType;
+  const isAudio = item.contentType === "audio";
+  return {
+    kind: isSeries ? "系列" : isAudio ? "音频" : "视频",
+    fallback: isSeries ? "系" : isAudio ? "音" : "视",
+    action: isSeries ? "查看系列 ›" : "查看课件 ›",
+    tab: isSeries ? "series" : "standalone",
+    title:
+      String(item.title || "").trim() || (isSeries ? "未命名系列" : "未命名课件"),
+  };
+}
+
 function markClassroomPreviewCoverError(key) {
   classroomPreviewCoverErrors.value = {
     ...classroomPreviewCoverErrors.value,
@@ -275,34 +288,38 @@ function goTest() {
             role="button"
             aria-role="button"
             tabindex="0"
-            :aria-label="`查看${item.title || '老师课堂课件'}`"
+            :aria-label="`查看${classroomPreviewPresentation(item).kind}课件：${classroomPreviewPresentation(item).title}`"
             hover-class="classroom-entry__item--pressed"
-            @click="openClassroom(item.contentType ? 'standalone' : 'series')"
-            @keydown.enter="openClassroom(item.contentType ? 'standalone' : 'series')"
-            @keydown.space.prevent="openClassroom(item.contentType ? 'standalone' : 'series')"
+            @click="openClassroom(classroomPreviewPresentation(item).tab)"
+            @keydown.enter="openClassroom(classroomPreviewPresentation(item).tab)"
+            @keydown.space.prevent="openClassroom(classroomPreviewPresentation(item).tab)"
           >
-            <image
-              v-if="item.coverUrl && !classroomPreviewCoverErrors[classroomPreviewMediaKey(item)]"
-              class="classroom-entry__cover"
-              :class="classroomCoverRatioClass(item)"
-              :src="item.coverUrl"
-              mode="aspectFill"
-              lazy-load
-              @error="markClassroomPreviewCoverError(classroomPreviewMediaKey(item))"
-            />
-            <view
-              v-else
-              class="classroom-entry__cover classroom-entry__cover--fallback"
-              :class="classroomCoverRatioClass(item)"
-              aria-hidden="true"
-              >课</view
-            >
+            <view class="classroom-entry__media">
+              <image
+                v-if="item.coverUrl && !classroomPreviewCoverErrors[classroomPreviewMediaKey(item)]"
+                class="classroom-entry__cover"
+                :class="classroomCoverRatioClass(item)"
+                :src="item.coverUrl"
+                mode="aspectFill"
+                lazy-load
+                @error="markClassroomPreviewCoverError(classroomPreviewMediaKey(item))"
+              />
+              <view
+                v-else
+                class="classroom-entry__cover classroom-entry__cover--fallback"
+                :class="classroomCoverRatioClass(item)"
+                aria-hidden="true"
+                >{{ classroomPreviewPresentation(item).fallback }}</view
+              >
+              <text class="classroom-entry__kind">
+                {{ classroomPreviewPresentation(item).kind }}
+              </text>
+            </view>
             <view class="classroom-entry__body">
-              <text class="classroom-entry__kind">{{
-                item.contentType ? (item.contentType === "audio" ? "音频" : "视频") : "系列"
-              }}</text>
-              <text class="classroom-entry__title">{{ item.title }}</text>
-              <text class="classroom-entry__action">开始学习 ›</text>
+              <text class="classroom-entry__title">{{ classroomPreviewPresentation(item).title }}</text>
+              <text class="classroom-entry__action">
+                {{ classroomPreviewPresentation(item).action }}
+              </text>
             </view>
           </view>
         </view>
@@ -682,27 +699,37 @@ function goTest() {
 }
 .classroom-entry__grid {
   display: grid;
-  gap: 18rpx;
+  gap: 16rpx;
 }
 .classroom-entry__item {
   display: flex;
-  align-items: stretch;
-  min-height: 156rpx;
+  align-items: center;
+  min-height: 154rpx;
+  box-sizing: border-box;
+  gap: 20rpx;
+  padding: 14rpx;
   overflow: hidden;
-  background: var(--nx-surface-soft);
+  background: var(--nx-surface);
   border: 2rpx solid var(--nx-border);
-  border-radius: 22rpx;
-  box-shadow: 0 14rpx 28rpx -26rpx rgba(32, 42, 55, 0.46);
+  border-radius: 24rpx;
+  box-shadow: none;
 }
 .classroom-entry__item--pressed { opacity: 0.84; transform: scale(0.988); }
-.classroom-entry__cover {
+.classroom-entry__media {
+  position: relative;
   flex-shrink: 0;
-  width: 156rpx;
+  width: 224rpx;
+  height: 126rpx;
+  overflow: hidden;
+  background: var(--nx-border);
+  border-radius: 18rpx;
+}
+.classroom-entry__cover {
+  display: block;
+  width: 224rpx;
+  height: 126rpx;
   background: var(--nx-border);
 }
-.classroom-entry__cover.classroom-cover--16x9 { height: 88rpx; }
-.classroom-entry__cover.classroom-cover--9x16 { height: 277rpx; }
-.classroom-entry__cover.classroom-cover--1x1 { height: 156rpx; }
 .classroom-entry__cover--fallback {
   display: flex;
   align-items: center;
@@ -712,28 +739,47 @@ function goTest() {
   font-weight: 900;
   background: linear-gradient(135deg, var(--nx-surface-soft), var(--nx-accent-gold));
 }
+.classroom-entry__media .classroom-entry__kind {
+  position: absolute;
+  top: 10rpx;
+  left: 10rpx;
+  padding: 5rpx 10rpx;
+  color: var(--nx-brand-900);
+  font-size: 24rpx;
+  font-weight: 900;
+  line-height: 1.2;
+  background: rgba(250, 241, 215, 0.94);
+  border-radius: 10rpx;
+}
 .classroom-entry__body {
   display: flex;
   flex: 1;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
+  align-self: stretch;
   min-width: 0;
-  padding: 18rpx 20rpx;
-}
-.classroom-entry__kind,
-.classroom-entry__action {
-  color: var(--nx-brand-700);
-  font-size: 21rpx;
-  font-weight: 900;
+  min-height: 126rpx;
 }
 .classroom-entry__title {
-  margin-top: 8rpx;
+  display: -webkit-box;
+  overflow: hidden;
+  max-height: 2.8em;
   color: var(--nx-text);
-  font-size: 26rpx;
+  font-size: 28rpx;
   font-weight: 900;
   line-height: 1.4;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
-.classroom-entry__action { margin-top: 12rpx; color: var(--nx-brand-900); }
+.classroom-entry__action {
+  flex-shrink: 0;
+  margin-top: auto;
+  padding-top: 10rpx;
+  color: var(--nx-brand-900);
+  font-size: 24rpx;
+  font-weight: 900;
+}
 .teacher-card {
   display: flex;
   align-items: flex-start;

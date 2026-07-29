@@ -35,6 +35,33 @@ assert.match(
   /classroomCoverRatioClass/,
   "learning classroom preview should apply the returned cover aspect ratio",
 );
+assert.match(
+  source,
+  /function\s+classroomPreviewPresentation\s*\(/,
+  "classroom preview should derive type-specific presentation from one helper",
+);
+assert.match(
+  source,
+  /v-for="item in classroomPreview"/,
+  "classroom preview template should render the stable source list directly",
+);
+assert.doesNotMatch(
+  source,
+  /const\s+classroomPreviewCards\s*=\s*computed\s*\(/,
+  "classroom preview should avoid the derived card wrapper that blanks the WeChat page runtime",
+);
+assert.match(
+  source,
+  /openClassroom\(classroomPreviewPresentation\(item\)\.tab\)/,
+  "classroom preview navigation should use the shared presentation tab",
+);
+for (const field of ["title", "kind", "fallback", "action"]) {
+  assert.match(
+    source,
+    new RegExp(`classroomPreviewPresentation\\(item\\)\\.${field}`),
+    `classroom preview should render its ${field} presentation`,
+  );
+}
 for (const forbidden of [
   /#0f766e/i,
   /#15803d/i,
@@ -122,8 +149,18 @@ assert.match(
 );
 assert.match(
   source,
-  /\.classroom-entry__cover\.classroom-cover--9x16/s,
-  "learning classroom cards should define the portrait cover ratio",
+  /\.classroom-entry__cover\s*\{[^}]*width:\s*224rpx[^}]*height:\s*126rpx/s,
+  "learning classroom cards should use a stable 224x126 thumbnail window",
+);
+assert.doesNotMatch(
+  source,
+  /\.classroom-entry__cover\.classroom-cover--(?:16x9|9x16|1x1)\s*\{[^}]*height:/s,
+  "source cover ratios should not override the stable classroom thumbnail height",
+);
+assert.match(
+  source,
+  /\.classroom-entry__body\s*\{[^}]*align-self:\s*stretch[^}]*min-height:\s*126rpx/s,
+  "classroom card content should stretch to the thumbnail height for aligned actions",
 );
 assert.match(
   source,
@@ -163,7 +200,7 @@ const normalizeClassroomContent = (value = {}) => ({ ...value, id: String(value.
 
 await writeFile(
   modulePath,
-  `${harnessPrelude}\n${executableScript}\nexport { teachers, coursewareItems, quotes, loading, loadError, refreshError, refreshing, classroomPreview, classroomLoading, classroomWarning, showStoredContent, loadContent, retryContentRefresh, loadClassroomPreview, retryClassroomPreview }\n`,
+  `${harnessPrelude}\n${executableScript}\nexport { teachers, coursewareItems, quotes, loading, loadError, refreshError, refreshing, classroomPreview, classroomLoading, classroomWarning, showStoredContent, loadContent, retryContentRefresh, loadClassroomPreview, retryClassroomPreview, classroomPreviewPresentation }\n`,
 );
 
 let moduleCounter = 0;
@@ -193,6 +230,44 @@ async function createHarness() {
 }
 
 try {
+  {
+    const { page } = await createHarness();
+    for (const [item, expected] of [
+      [
+        { contentType: "video", title: "" },
+        {
+          kind: "视频",
+          fallback: "视",
+          action: "查看课件 ›",
+          tab: "standalone",
+          title: "未命名课件",
+        },
+      ],
+      [
+        { contentType: "audio", title: "音频课" },
+        {
+          kind: "音频",
+          fallback: "音",
+          action: "查看课件 ›",
+          tab: "standalone",
+          title: "音频课",
+        },
+      ],
+      [
+        { title: "" },
+        {
+          kind: "系列",
+          fallback: "系",
+          action: "查看系列 ›",
+          tab: "series",
+          title: "未命名系列",
+        },
+      ],
+    ]) {
+      assert.deepEqual(page.classroomPreviewPresentation(item), expected);
+    }
+  }
+
   {
     const { page, state } = await createHarness();
     state.cached = {
