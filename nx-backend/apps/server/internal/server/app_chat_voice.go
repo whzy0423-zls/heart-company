@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	"nine-xing/nx-backend/apps/server/internal/answerhygiene"
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/rag"
@@ -178,6 +179,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
 			return
 		}
+		answer.Answer = answerhygiene.Clean(transcript, answer.Answer)
 	}
 
 	contentType := strings.TrimSpace(header.Header.Get("Content-Type"))

@@ -100,6 +100,58 @@ func TestVoiceChatPersistsAudioAndHidesTranscriptFromResponse(t *testing.T) {
 	}
 }
 
+func TestVoiceChatCleansProductImplementationMetaBeforePersistingAndReturning(t *testing.T) {
+	const transcript = "推荐三道菜"
+	store, response := runVoiceChatAnswerTest(t, transcript, "针对当前 App 端，页面实现方案要先统一。推荐：番茄炒蛋、青椒肉丝、可乐鸡翅。")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("voice chat failed: %d %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Data voiceChatResponse `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	want := "推荐：番茄炒蛋、青椒肉丝、可乐鸡翅。"
+	if payload.Data.Answer.Answer != want {
+		t.Fatalf("HTTP answer = %q, want %q", payload.Data.Answer.Answer, want)
+	}
+	if store.assistantAnswer != want {
+		t.Fatalf("persisted assistant answer = %q, want %q", store.assistantAnswer, want)
+	}
+	if payload.Data.UserMessage.Content != "" {
+		t.Fatalf("response leaked ASR transcript through user message: %q", payload.Data.UserMessage.Content)
+	}
+	if strings.Contains(response.Body.String(), transcript) || strings.Contains(response.Body.String(), "App 端") {
+		t.Fatalf("response leaked transcript or product meta: %s", response.Body.String())
+	}
+}
+
+func TestVoiceChatUsesNeutralFallbackWhenAnswerIsOnlyProductImplementationMeta(t *testing.T) {
+	store, response := runVoiceChatAnswerTest(t, "推荐三道菜", "App 端需要先处理页面状态。基础框架建议统一走后台接口。")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("voice chat failed: %d %s", response.Code, response.Body.String())
+	}
+	const want = "请再具体说一点，我会直接回答。"
+	if store.assistantAnswer != want || !strings.Contains(response.Body.String(), want) {
+		t.Fatalf("neutral fallback mismatch: persisted=%q response=%s", store.assistantAnswer, response.Body.String())
+	}
+}
+
+func TestVoiceChatPreservesImplementationAnswerForExplicitTechnicalQuestion(t *testing.T) {
+	const answer = "服务器可以通过容器部署，并由接口暴露健康检查。"
+	store, response := runVoiceChatAnswerTest(t, "服务器怎么部署？", answer)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("voice chat failed: %d %s", response.Code, response.Body.String())
+	}
+	if store.assistantAnswer != answer || !strings.Contains(response.Body.String(), answer) {
+		t.Fatalf("technical answer was altered: persisted=%q response=%s", store.assistantAnswer, response.Body.String())
+	}
+}
+
 func TestVoiceChatModelIdentityPersistsFixedReplyWithoutGeneration(t *testing.T) {
 	const identityQuestion = "你用的是什么模型？"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -462,6 +514,36 @@ func newVoiceChatTestServer(store appChatStore, generator rag.Generator) *Server
 		chatTimeout: 5 * time.Second,
 		db:          (*sql.DB)(nil),
 	}
+}
+
+func runVoiceChatAnswerTest(t *testing.T, transcript, generatedAnswer string) (*fakeVoiceChatStore, *httptest.ResponseRecorder) {
+	t.Helper()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"text": transcript})
+	}))
+	t.Cleanup(upstream.Close)
+	previousClientFactory := newASRHTTPClient
+	newASRHTTPClient = func(timeout time.Duration) *http.Client {
+		client := upstream.Client()
+		client.Timeout = timeout
+		return client
+	}
+	t.Cleanup(func() { newASRHTTPClient = previousClientFactory })
+
+	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	s := newVoiceChatTestServer(store, &voiceChatGenerator{answer: generatedAnswer})
+	s.env.ASR = config.ASRConfig{APIBase: upstream.URL, APIKey: "test-key", Model: "whisper-1", TimeoutSeconds: 3}
+	s.voiceAssetCreate = func(_ context.Context, _ uploadasset.CreateInput) (uploadasset.Asset, error) {
+		return uploadasset.Asset{ID: 88}, nil
+	}
+	body, contentType := voiceChatMultipartBody(t, "voice.aac", "audio/aac", "audio", "2200")
+	req := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/voice", body)
+	req.Header.Set("Content-Type", contentType)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	response := httptest.NewRecorder()
+
+	s.appChatRouter(response, req)
+	return store, response
 }
 
 func voiceChatMultipartBody(t *testing.T, filename, contentType, content, duration string) (*bytes.Buffer, string) {
