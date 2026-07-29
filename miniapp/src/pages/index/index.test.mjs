@@ -75,6 +75,29 @@ assert.match(source, /classroomAccessLabel/, "classroom cards should explain acc
 assert.match(source, /formatDuration\(item\.durationSeconds\)/, "classroom cards should expose useful duration metadata");
 
 assert.match(source, /expertHero\.portraitImage/, "expert hero should render the configured teacher portrait");
+const expertHeroTemplate = template.slice(
+  template.indexOf('class="expert-hero nx-card"'),
+  template.indexOf('class="proof-stats"'),
+);
+assert.doesNotMatch(
+  expertHeroTemplate,
+  /class="expert-hero__copy"|view\.expertHero\.lead/,
+  "the full-bleed teacher hero should omit the former copy column and long introduction",
+);
+assert.match(
+  expertHeroTemplate,
+  /<button\b(?=[^>]*class="expert-hero__portrait")(?=[^>]*@click="previewTeacherDetail")[^>]*>[\s\S]*?class="expert-hero__portrait-overlay"[\s\S]*?view\.expertHero\.eyebrow[\s\S]*?view\.expertHero\.title[\s\S]*?查看完整导师介绍[\s\S]*?<\/button>[\s\S]*?<button\b(?=[^>]*class="expert-hero__secondary")(?=[^>]*@click="goClassroom")[^>]*>[\s\S]*?进入老师课堂[\s\S]*?<\/button>/,
+  "the portrait preview surface should carry compact identity and remain a sibling of the classroom action",
+);
+const portraitPreviewTemplate = expertHeroTemplate.match(
+  /<button\b[^>]*class="expert-hero__portrait"[^>]*>[\s\S]*?<\/button>/,
+)?.[0] || "";
+assert.ok(portraitPreviewTemplate, "the hero should expose one native portrait preview button");
+assert.equal(
+  (portraitPreviewTemplate.match(/<button\b/g) || []).length,
+  1,
+  "the classroom action must not be nested inside the portrait preview button",
+);
 assert.match(
   template,
   /<image\b(?=[^>]*class="expert-hero__image")(?=[^>]*:src="view\.expertHero\.portraitImage")(?=[^>]*:key="view\.expertHero\.portraitImage")(?=[^>]*:data-image="view\.expertHero\.portraitImage")[^>]*>/,
@@ -95,6 +118,31 @@ assert.match(
   source,
   /function previewTeacherDetail\(\)\s*\{\s*const detailImage = view\.value\.expertHero\.detailImage;\s*if \(!detailImage\) return;\s*uni\.previewImage\(\{\s*current: detailImage,\s*urls: \[detailImage\],?\s*\}\);\s*\}/,
   "teacher detail preview should open only the configured full poster when it exists",
+);
+assert.match(
+  style,
+  /\.expert-hero\s*\{[^}]*height:\s*600rpx;[^}]*border:\s*2rpx solid var\(--nx-home-gold-portrait-border\)/s,
+  "the full-bleed hero should keep a stable 600rpx card height and champagne-gold border",
+);
+assert.match(
+  style,
+  /\.expert-hero__portrait\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;[^}]*width:\s*100%;[^}]*height:\s*100%;/s,
+  "the portrait preview button should fill the complete hero surface",
+);
+assert.match(
+  expertHeroTemplate,
+  /class="expert-hero__image"[\s\S]{0,320}mode="aspectFill"/,
+  "the full-bleed portrait should crop with aspectFill",
+);
+assert.match(
+  style,
+  /\.expert-hero__portrait-overlay\s*\{[^}]*background:\s*linear-gradient\([^;]*var\(--nx-brand-700\)[^;]*var\(--nx-brand-900\)[^;]*\);/s,
+  "the compact identity overlay should use a deep-blue readability gradient",
+);
+assert.match(
+  style,
+  /@media\s*\(max-width:\s*380px\)\s*\{[\s\S]*?\.expert-hero\s*\{[^}]*height:\s*620rpx;[\s\S]*?\.expert-hero__secondary\s*\{[^}]*left:\s*24rpx;[^}]*min-height:\s*88rpx;/,
+  "narrow screens should stack the classroom action across an accessible 88rpx target",
 );
 assert.match(source, /failedCarouselImages/, "carousel images should keep an isolated failed-image Set");
 assert.match(source, /courseCoverErrors/, "course covers should keep isolated fallback state");
