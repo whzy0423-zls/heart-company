@@ -160,14 +160,19 @@ func isProductMetaSentence(sentence string) bool {
 }
 
 func isProductMetaTitle(sentence string) bool {
-	normalized := compactAnswerPrefix(stripAnswerListPrefix(sentence))
-	normalized = strings.Trim(normalized, ":：-—–")
-	for _, entity := range productImplementationEntities {
-		if normalized == entity {
-			return true
-		}
+	raw := strings.TrimSpace(sentence)
+	markdownCandidate := strings.TrimSpace(strings.TrimLeft(raw, ">"))
+	isMarkdownHeading := strings.HasPrefix(markdownCandidate, "#")
+	isColonHeading := strings.HasSuffix(raw, ":") || strings.HasSuffix(raw, "：")
+	if !isMarkdownHeading && !isColonHeading {
+		return false
 	}
-	return false
+	normalized := compactAnswerPrefix(stripAnswerListPrefix(raw))
+	normalized = strings.Trim(normalized, ":：-—–")
+	if isColonHeading && len([]rune(normalized)) > 24 {
+		return false
+	}
+	return containsAnyTerm(normalized, productImplementationEntities)
 }
 
 func isPureImplementationSentence(sentence string) bool {

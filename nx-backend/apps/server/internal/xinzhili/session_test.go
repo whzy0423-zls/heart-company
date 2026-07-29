@@ -336,6 +336,9 @@ func TestConversationFiltersMultilineProductMetaContext(t *testing.T) {
 	}{
 		{name: "markdown_heading", deltas: []string{"### App 端\n需要刷新状态。", "推荐三道菜：番茄炒蛋、青椒肉丝、可乐鸡翅。"}},
 		{name: "list_after_heading", deltas: []string{"App 端：\n- 建议统一状态。\n有效回答。"}},
+		{name: "qualified_app_heading", deltas: []string{"### 针对当前 App 端\n需要刷新状态。有效回答。"}},
+		{name: "client_implementation_heading", deltas: []string{"### 关于客户端的实现\n建议统一状态。有效回答。"}},
+		{name: "backend_colon_heading", deltas: []string{"后台相关说明：\n需要配置接口。有效回答。"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -344,7 +347,7 @@ func TestConversationFiltersMultilineProductMetaContext(t *testing.T) {
 			fixture.generator.deltas = test.deltas
 			fixture.synth.segments = nil
 			want := "推荐三道菜：番茄炒蛋、青椒肉丝、可乐鸡翅。"
-			if test.name == "list_after_heading" {
+			if test.name != "markdown_heading" {
 				want = "有效回答。"
 			}
 

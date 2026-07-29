@@ -52,10 +52,20 @@ func TestAnswerHygieneRecognizesExplicitProductImplementationQuestions(t *testin
 }
 
 func TestAnswerHygieneRecognizesProductEntityTitlesAndContextSentences(t *testing.T) {
-	for _, title := range []string{"### App 端\n", "App 端：\n", "> 客户端："} {
+	for _, title := range []string{
+		"### App 端\n",
+		"App 端：\n",
+		"> 客户端：",
+		"### 针对当前 App 端\n",
+		"### 关于客户端的实现\n",
+		"后台相关说明：\n",
+	} {
 		if !isProductMetaTitle(title) {
 			t.Errorf("title %q must start product meta context", title)
 		}
+	}
+	if isProductMetaTitle("这是一段很长的普通说明，其中顺便提到了后台和页面，但不是标题：") {
+		t.Fatal("a long ordinary sentence ending with a colon must not start product meta context")
 	}
 	for _, sentence := range []string{"需要刷新状态。", "- 建议统一状态。", "需要处理配置。"} {
 		if !isPureImplementationSentence(sentence) {
