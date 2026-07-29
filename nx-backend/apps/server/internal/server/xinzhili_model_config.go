@@ -125,7 +125,7 @@ func (s *Server) xinzhiliModelConfigHandler(w http.ResponseWriter, r *http.Reque
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.applyXinzhiliBailianCopyConfig(saved.TTS)
+	s.applyXinzhiliBailianCopyConfig(saved)
 	s.recordAdminAudit(r, auditlog.Entry{
 		Action:     "xinzhili_model_config.update",
 		TargetType: "xinzhili_model_config",
@@ -146,15 +146,22 @@ func (s *Server) applyStoredXinzhiliBailianCopyConfig() {
 		return
 	}
 	if found {
-		s.applyXinzhiliBailianCopyConfig(cfg.TTS)
+		s.applyXinzhiliBailianCopyConfig(cfg)
 	}
 }
 
-func (s *Server) applyXinzhiliBailianCopyConfig(tts xinzhili.TTSConfig) {
+func (s *Server) applyXinzhiliBailianCopyConfig(cfg xinzhili.Config) {
+	s.xinzhiliBailianConfigMu.Lock()
+	defer s.xinzhiliBailianConfigMu.Unlock()
+	if s.xinzhiliBailianConfigSet && cfg.Version <= s.xinzhiliBailianConfigVer {
+		return
+	}
 	if s.setBailianCopyConfig == nil {
 		return
 	}
-	s.setBailianCopyConfig(bailianCopyConfigFromXinzhiliTTS(tts))
+	s.setBailianCopyConfig(bailianCopyConfigFromXinzhiliTTS(cfg.TTS))
+	s.xinzhiliBailianConfigSet = true
+	s.xinzhiliBailianConfigVer = cfg.Version
 }
 
 func bailianCopyConfigFromXinzhiliTTS(tts xinzhili.TTSConfig) voice.BailianConfig {

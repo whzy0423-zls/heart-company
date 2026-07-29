@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -274,6 +275,37 @@ func TestApplyStoredModelConfigLeavesLegacyChatUnconfigured(t *testing.T) {
 	}
 	if s.videoStore() == nil {
 		t.Fatal("unsafe unconfigured legacy chat blocked valid non-chat startup config")
+	}
+}
+
+func TestApplyStoredModelConfigRetainsStoredMiniMaxVoiceCredentials(t *testing.T) {
+	db := openModelConfigViewTestDB(t, `{
+		"tts": {
+			"provider": "minimax",
+			"endpoint": "https://stored-minimax.example.com",
+			"apiKey": "stored-minimax-key",
+			"groupId": "stored-minimax-group",
+			"model": "speech-02-hd"
+		}
+	}`)
+	s := &Server{db: db, env: config.Env{MiniMax: config.MiniMaxConfig{
+		APIBase: "https://env-minimax.example.com", APIKey: "env-key", GroupID: "env-group", Model: "env-model",
+	}}}
+
+	s.applyStoredModelConfig()
+
+	if s.voices == nil {
+		t.Fatal("stored MiniMax TTS config did not rebuild the MiniMax voice runtime")
+	}
+	client := reflect.ValueOf(s.voices).Elem().FieldByName("client").Elem()
+	if apiBase := client.FieldByName("apiBase").String(); apiBase != "https://stored-minimax.example.com" {
+		t.Fatalf("MiniMax API base = %q", apiBase)
+	}
+	if apiKey := client.FieldByName("apiKey").String(); apiKey != "stored-minimax-key" {
+		t.Fatalf("MiniMax API key = %q", apiKey)
+	}
+	if groupID := client.FieldByName("groupID").String(); groupID != "stored-minimax-group" {
+		t.Fatalf("MiniMax GroupID = %q", groupID)
 	}
 }
 

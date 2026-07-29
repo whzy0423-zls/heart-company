@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
@@ -24,11 +25,12 @@ import (
 )
 
 type Store struct {
-	bailian  *BailianClient
-	client   *MiniMaxClient
-	db       *sql.DB
-	provider string
-	uploads  *uploadasset.Store
+	bailianMu sync.RWMutex
+	bailian   *BailianClient
+	client    *MiniMaxClient
+	db        *sql.DB
+	provider  string
+	uploads   *uploadasset.Store
 }
 
 type Profile struct {
@@ -191,7 +193,15 @@ func (s *Store) ConfigureBailianCopy(cfg BailianConfig) {
 	if s == nil {
 		return
 	}
+	s.bailianMu.Lock()
+	defer s.bailianMu.Unlock()
 	s.bailian = NewBailianClient(cfg)
+}
+
+func (s *Store) bailianClient() *BailianClient {
+	s.bailianMu.RLock()
+	defer s.bailianMu.RUnlock()
+	return s.bailian
 }
 
 func normalizeStoreProvider(cfg config.MiniMaxConfig) string {
@@ -340,10 +350,11 @@ func (s *Store) CloneProfile(ctx context.Context, id string) (Profile, error) {
 			return Profile{}, err
 		}
 	case ProviderBailian:
-		if s.bailian == nil {
+		bailian := s.bailianClient()
+		if bailian == nil {
 			return Profile{}, fmt.Errorf("阿里百炼声音复刻未配置")
 		}
-		finalVoiceID, err := s.bailian.CloneVoice(ctx, BailianCloneInput{
+		finalVoiceID, err := bailian.CloneVoice(ctx, BailianCloneInput{
 			AudioURL:    asset.ObjectURL,
 			ContentType: asset.ContentType,
 			Data:        asset.Data,
@@ -503,10 +514,11 @@ func (s *Store) TextToAudio(ctx context.Context, model string, voiceID string, t
 func (s *Store) textToAudio(ctx context.Context, provider string, model string, voiceID string, text string) ([]byte, string, error) {
 	switch normalizeProfileProvider(provider) {
 	case ProviderBailian:
-		if s.bailian == nil {
+		bailian := s.bailianClient()
+		if bailian == nil {
 			return nil, "", errors.New("阿里百炼 TTS 未配置")
 		}
-		return s.bailian.TextToAudio(ctx, model, voiceID, text)
+		return bailian.TextToAudio(ctx, model, voiceID, text)
 	case ProviderMiniMax:
 		return s.client.TextToAudio(ctx, model, voiceID, text)
 	default:

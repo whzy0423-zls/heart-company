@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"nine-xing/nx-backend/apps/server/internal/voice"
@@ -194,6 +196,61 @@ func TestXinzhiliModelConfigPUTRefreshesBailianCopyCredentialsFromSavedTTS(t *te
 	}
 	if got.APIBase != saved.TTS.Endpoint || got.APIKey != saved.TTS.APIKey || got.TargetModel != saved.TTS.Model {
 		t.Fatalf("Bailian copy config = %+v, want saved Xinzhili TTS credentials", got)
+	}
+}
+
+func TestApplyXinzhiliBailianCopyConfigIgnoresOlderSavedVersion(t *testing.T) {
+	var got voice.BailianConfig
+	s := &Server{setBailianCopyConfig: func(cfg voice.BailianConfig) { got = cfg }}
+	newest := validXinzhiliModelConfigForHandler()
+	newest.Version = 3
+	newest.TTS = xinzhili.TTSConfig{
+		Provider: xinzhili.TTSProviderBailian,
+		Endpoint: "https://dashscope.example.com",
+		APIKey:   "newest-key",
+		Model:    "model-v3",
+		Voice:    "voice-v3",
+		Format:   "mp3",
+	}
+	stale := newest
+	stale.Version = 2
+	stale.TTS.APIKey = "stale-key"
+	stale.TTS.Model = "model-v2"
+
+	s.applyXinzhiliBailianCopyConfig(newest)
+	s.applyXinzhiliBailianCopyConfig(stale)
+
+	if got.APIKey != "newest-key" || got.TargetModel != "model-v3" {
+		t.Fatalf("runtime Bailian copy config = %+v, want latest persisted config", got)
+	}
+}
+
+func TestApplyXinzhiliBailianCopyConfigConcurrentVersionsKeepLatestRuntime(t *testing.T) {
+	var got voice.BailianConfig
+	s := &Server{setBailianCopyConfig: func(cfg voice.BailianConfig) { got = cfg }}
+	const versions = 32
+	var group sync.WaitGroup
+	for version := 1; version <= versions; version++ {
+		cfg := validXinzhiliModelConfigForHandler()
+		cfg.Version = int64(version)
+		cfg.TTS = xinzhili.TTSConfig{
+			Provider: xinzhili.TTSProviderBailian,
+			Endpoint: "https://dashscope.example.com",
+			APIKey:   fmt.Sprintf("key-v%d", version),
+			Model:    fmt.Sprintf("model-v%d", version),
+			Voice:    "voice",
+			Format:   "mp3",
+		}
+		group.Add(1)
+		go func(cfg xinzhili.Config) {
+			defer group.Done()
+			s.applyXinzhiliBailianCopyConfig(cfg)
+		}(cfg)
+	}
+	group.Wait()
+
+	if got.APIKey != "key-v32" || got.TargetModel != "model-v32" {
+		t.Fatalf("runtime Bailian copy config = %+v, want latest persisted version", got)
 	}
 }
 

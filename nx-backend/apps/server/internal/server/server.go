@@ -83,6 +83,9 @@ type Server struct {
 	uploader                   storage.ObjectUploader
 	voices                     *voice.Store
 	setBailianCopyConfig       func(voice.BailianConfig)
+	xinzhiliBailianConfigMu    sync.Mutex
+	xinzhiliBailianConfigSet   bool
+	xinzhiliBailianConfigVer   int64
 	videos                     *video.Store
 	videoAnalysis              *videoanalysis.Store
 	videoAssets                *videoasset.Store
@@ -448,6 +451,22 @@ func (s *Server) applyStoredModelConfig() {
 	s.videos = videoStore
 	s.images = imageStore
 	s.modelMu.Unlock()
+	// The legacy model-config TTS section may still update the original
+	// MiniMax voice runtime. It must never provide credentials for Bailian
+	// copies, which are owned by the independent Xinzhili configuration.
+	tts := cfg.ApplyTTS(s.env.MiniMax)
+	if tts.Provider == voice.ProviderMiniMax {
+		voiceBase := s.env.MiniMax
+		voiceBase.Provider = tts.Provider
+		voiceBase.APIBase = tts.Endpoint
+		voiceBase.APIKey = tts.APIKey
+		voiceBase.GroupID = tts.GroupID
+		voiceBase.Model = tts.Model
+		s.voices = voice.NewStore(s.db, s.uploads, voiceBase)
+		if s.articles != nil {
+			s.articles.AttachAudioDeps(s.voices, s.uploads, s.voices, tts.Model)
+		}
+	}
 }
 
 // generator 返回当前生效的对话生成器；持读锁以兼容"模型配置"页面运行时重建。
