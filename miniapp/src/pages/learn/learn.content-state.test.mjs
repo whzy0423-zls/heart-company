@@ -201,6 +201,32 @@ assert.doesNotMatch(
   "course direction cards should not keep image layers that create blank WeChat scroll regions",
 );
 
+assert.match(
+  source,
+  /class="teacher-card"[\s\S]*class="teacher-card__header"[\s\S]*teacher-card__identity[\s\S]*teacher-card__details/,
+  "teacher cards should separate the compact identity header from the full-width details area",
+);
+assert.match(
+  source,
+  /class="teacher-card__details"[\s\S]*class="teacher-card__bio"[\s\S]*class="teacher-card__tags"/,
+  "teacher biography and tags should render in the full-width details area",
+);
+assert.doesNotMatch(
+  source,
+  /class="teacher-card__body"/,
+  "teacher cards should not keep a two-column body that traps biography beside the avatar",
+);
+assert.match(
+  source,
+  /\.teacher-card\s*\{[^}]*flex-direction:\s*column[^}]*\}/s,
+  "teacher cards should stack the identity header and details vertically",
+);
+assert.match(
+  source,
+  /\.teacher-card__details\s*\{[^}]*width:\s*100%[^}]*\}/s,
+  "teacher details should span the card width below the avatar header",
+);
+
 
 assert.match(
   source,

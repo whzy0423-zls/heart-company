@@ -1214,6 +1214,28 @@ assert.match(
 );
 assert.match(
   learnTemplate,
+  /class=["']teacher-card["'][\s\S]*class=["']teacher-card__header["'][\s\S]*class=["']teacher-card__identity["'][\s\S]*class=["']teacher-card__details["']/,
+  "teacher cards should use a header row and a full-width details section",
+);
+assert.match(
+  learnTemplate,
+  /class=["']teacher-card__details["'][\s\S]*class=["']teacher-card__bio["'][\s\S]*class=["']teacher-card__tags["']/,
+  "teacher biography and tags should stay together in the details section",
+);
+assert.doesNotMatch(
+  learnTemplate,
+  /class=["']teacher-card__body["']/,
+  "teacher cards should not use the old side-by-side body wrapper",
+);
+for (const [selector, declaration, message] of [
+  [".teacher-card", /flex-direction:\s*column\s*;/, "teacher cards should stack vertically"],
+  [".teacher-card__header", /display:\s*flex\s*;/, "teacher identity should remain a compact row"],
+  [".teacher-card__details", /width:\s*100%\s*;/, "teacher details should span the card width"],
+]) {
+  assert.match(cssDeclarationsForSelector(learnStyle, selector), declaration, message);
+}
+assert.match(
+  learnTemplate,
   /<view\s+v-else\s+class=["']courseware-list["']>[\s\S]*<view\b(?=[^>]*v-for=["']\(c, i\) in coursewareItems["'])(?=[^>]*:key=["']`\$\{c\.title \|\| ''\}:\$\{i\}`["'])(?![^>]*@click)[^>]*>/,
   "configured course direction cards should remain display-only inside an explicit list container",
 );

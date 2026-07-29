@@ -330,20 +330,24 @@ function goTest() {
             :key="teacherMediaKey(teacher, teacherIndex)"
             class="teacher-card"
           >
-            <image
-              v-if="teacher.avatar && !teacherImageErrors[teacherMediaKey(teacher, teacherIndex)]"
-              class="teacher-media teacher-card__avatar"
-              :src="teacher.avatar"
-              mode="aspectFill"
-              lazy-load
-              @error="markTeacherImageError(teacherMediaKey(teacher, teacherIndex))"
-            />
-            <view v-else class="teacher-media__fallback" aria-hidden="true">
-              {{ teacher.name ? teacher.name.slice(0, 1) : "师" }}
+            <view class="teacher-card__header">
+              <image
+                v-if="teacher.avatar && !teacherImageErrors[teacherMediaKey(teacher, teacherIndex)]"
+                class="teacher-media teacher-card__avatar"
+                :src="teacher.avatar"
+                mode="aspectFill"
+                lazy-load
+                @error="markTeacherImageError(teacherMediaKey(teacher, teacherIndex))"
+              />
+              <view v-else class="teacher-media__fallback" aria-hidden="true">
+                {{ teacher.name ? teacher.name.slice(0, 1) : "师" }}
+              </view>
+              <view class="teacher-card__identity">
+                <text class="teacher-card__name">{{ teacher.name }}</text>
+                <text class="teacher-card__title">{{ teacher.title }}</text>
+              </view>
             </view>
-            <view class="teacher-card__body">
-              <text class="teacher-card__name">{{ teacher.name }}</text>
-              <text class="teacher-card__title">{{ teacher.title }}</text>
+            <view class="teacher-card__details">
               <text class="teacher-card__bio">{{ teacher.bio }}</text>
               <view v-if="teacher.tags.length" class="teacher-card__tags">
                 <text v-for="tag in teacher.tags" :key="tag" class="nx-tag teacher-card__tag">{{
@@ -680,13 +684,19 @@ function goTest() {
 }
 .teacher-card {
   display: flex;
-  align-items: flex-start;
-  gap: 22rpx;
+  flex-direction: column;
+  gap: 18rpx;
   margin-top: 24rpx;
   padding: 22rpx;
   background: var(--nx-surface-soft);
   border: 2rpx solid var(--nx-border);
   border-radius: 24rpx;
+}
+.teacher-card__header {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  width: 100%;
 }
 .teacher-media,
 .teacher-media__fallback {
@@ -706,13 +716,15 @@ function goTest() {
   font-size: 40rpx;
   font-weight: 900;
 }
-.teacher-card__body {
+.teacher-card__identity,
+.teacher-card__details {
   display: flex;
-  flex: 1;
   flex-direction: column;
   min-width: 0;
   gap: 8rpx;
 }
+.teacher-card__identity { flex: 1; }
+.teacher-card__details { width: 100%; }
 .teacher-card__name { color: var(--nx-text); font-size: 32rpx; font-weight: 900; line-height: 1.3; }
 .teacher-card__title { color: var(--nx-brand-700); font-size: 24rpx; font-weight: 900; }
 .teacher-card__bio { color: var(--nx-text-muted); font-size: 25rpx; line-height: 1.65; }
