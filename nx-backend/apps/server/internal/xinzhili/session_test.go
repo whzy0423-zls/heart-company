@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -326,6 +327,107 @@ func TestConversationPreservesMetaLikeAnswerForEnglishTechnicalQuestion(t *testi
 	fixture.store.waitDelivered(t, want)
 
 	assertSanitizedVoicePersistence(t, fixture, []AudioSegment{segment}, want)
+}
+
+func TestConversationFiltersMultilineProductMetaContext(t *testing.T) {
+	tests := []struct {
+		name   string
+		deltas []string
+	}{
+		{name: "markdown_heading", deltas: []string{"### App 端\n需要刷新状态。", "推荐三道菜：番茄炒蛋、青椒肉丝、可乐鸡翅。"}},
+		{name: "list_after_heading", deltas: []string{"App 端：\n- 建议统一状态。\n有效回答。"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSessionFixture(t)
+			fixture.generator.answer = ""
+			fixture.generator.deltas = test.deltas
+			fixture.synth.segments = nil
+			want := "推荐三道菜：番茄炒蛋、青椒肉丝、可乐鸡翅。"
+			if test.name == "list_after_heading" {
+				want = "有效回答。"
+			}
+
+			turnID := "turn-multiline-meta-" + test.name
+			if err := fixture.session.StartTurn(context.Background(), fixture.input(turnID)); err != nil {
+				t.Fatal(err)
+			}
+			fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "推荐几道菜", Stable: true})
+			segment := fixture.sink.waitAudio(t)
+			fixture.sink.waitControl(t, EventAssistantDone)
+			if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: turnID, SegmentSeq: segment.Seq}); err != nil {
+				t.Fatal(err)
+			}
+			fixture.store.waitCompleted(t)
+			fixture.store.waitDelivered(t, want)
+			assertSanitizedVoicePersistence(t, fixture, []AudioSegment{segment}, want)
+		})
+	}
+}
+
+func TestConversationCanCancelAfterSingleDeltaQueuesMoreThan128TTSJobs(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.generator.answer = ""
+	var answer strings.Builder
+	for index := 0; index < 130; index++ {
+		answer.WriteString(fmt.Sprintf("第%d句。", index))
+	}
+	fixture.generator.deltas = []string{answer.String()}
+	fixture.synth.segments = nil
+	fixture.synth.block = make(chan struct{})
+	defer close(fixture.synth.block)
+
+	const turnID = "turn-tts-job-pressure"
+	if err := fixture.session.StartTurn(context.Background(), fixture.input(turnID)); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "连续说很多句", Stable: true})
+	fixture.generator.waitCalled(t)
+	time.Sleep(30 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if err := fixture.session.Cancel(ctx, turnID); err != nil {
+		t.Fatalf("cancel after 130 queued TTS jobs: %v", err)
+	}
+}
+
+func TestConversationCompletesMoreThan128TTSJobsInOrder(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.sink.controls = make(chan Envelope, 512)
+	fixture.sink.audio = make(chan AudioSegment, 256)
+	fixture.generator.answer = ""
+	fixture.synth.segments = nil
+	want := make([]string, 130)
+	var answer strings.Builder
+	for index := range want {
+		want[index] = fmt.Sprintf("第%d句。", index)
+		answer.WriteString(want[index])
+	}
+	fixture.generator.deltas = []string{answer.String()}
+
+	const turnID = "turn-tts-job-completion-pressure"
+	if err := fixture.session.StartTurn(context.Background(), fixture.input(turnID)); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "连续说很多句", Stable: true})
+	fixture.sink.waitControl(t, EventAssistantDone)
+
+	if got := fixture.synth.synthesizedTexts(); len(got) != len(want) {
+		t.Fatalf("synthesized jobs=%d want=%d", len(got), len(want))
+	} else {
+		for index := range want {
+			if got[index] != want[index] {
+				t.Fatalf("synthesized job %d=%q want=%q", index, got[index], want[index])
+			}
+		}
+	}
+	for index := range want {
+		segment := fixture.sink.waitAudio(t)
+		if segment.Seq != uint32(index) || segment.DeliveryText() != want[index] {
+			t.Fatalf("audio segment %d: seq=%d text=%q want=%q", index, segment.Seq, segment.DeliveryText(), want[index])
+		}
+	}
 }
 
 func TestConversationBuffersLongMetaSentenceAndKeepsFollowingAnswer(t *testing.T) {

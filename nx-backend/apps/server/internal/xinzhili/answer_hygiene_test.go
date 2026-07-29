@@ -16,6 +16,10 @@ func TestAnswerHygieneRecognizesExplicitProductImplementationQuestions(t *testin
 		{question: "这个 API 怎么调用", want: true},
 		{question: "网站怎么开发", want: true},
 		{question: "服务器怎么部署", want: true},
+		{question: "APP 端怎么改主题？", want: true},
+		{question: "后台为什么会刷新页面？", want: true},
+		{question: "APP 是什么，和网站有什么区别？", want: true},
+		{question: "能否添加一个接口？", want: true},
 		{question: "内部实现是什么？", want: true},
 		{question: "什么是 App 端？", want: true},
 		{question: "这个接口是什么？", want: true},
@@ -44,6 +48,22 @@ func TestAnswerHygieneRecognizesExplicitProductImplementationQuestions(t *testin
 		if got := isExplicitTechnicalQuestion(test.question); got != test.want {
 			t.Errorf("isExplicitTechnicalQuestion(%q)=%v want=%v", test.question, got, test.want)
 		}
+	}
+}
+
+func TestAnswerHygieneRecognizesProductEntityTitlesAndContextSentences(t *testing.T) {
+	for _, title := range []string{"### App 端\n", "App 端：\n", "> 客户端："} {
+		if !isProductMetaTitle(title) {
+			t.Errorf("title %q must start product meta context", title)
+		}
+	}
+	for _, sentence := range []string{"需要刷新状态。", "- 建议统一状态。", "需要处理配置。"} {
+		if !isPureImplementationSentence(sentence) {
+			t.Errorf("sentence %q must remain inside product meta context", sentence)
+		}
+	}
+	if isPureImplementationSentence("建议番茄炒蛋。") {
+		t.Fatal("a normal recommendation must release product meta context")
 	}
 }
 

@@ -22,9 +22,10 @@ var technicalQuestionEntities = []string{
 
 var technicalQuestionActions = []string{
 	"开发", "实现", "设计", "部署", "接入", "调用", "配置", "调试", "修复", "优化", "编写", "架构", "报错", "错误", "网络请求", "缓存",
+	"改", "修改", "调整", "加", "添加", "删除", "升级", "刷新",
 }
 
-var technicalQuestionCues = []string{"怎么", "如何", "怎样", "为何", "请", "帮我"}
+var technicalQuestionCues = []string{"怎么", "如何", "怎样", "为何", "为什么", "能否", "请", "帮我"}
 
 var productImplementationEntities = []string{
 	"app端", "客户端", "后台", "接口", "页面", "技术实现", "基础框架", "模型配置", "内部实现", "程序侧", "系统实现",
@@ -75,6 +76,17 @@ func isExplicitTechnicalQuestion(question string) bool {
 
 func isChineseTechnicalDefinitionQuestion(value string) bool {
 	value = strings.TrimRight(value, "?？。！!；;")
+	for _, clause := range strings.FieldsFunc(value, func(r rune) bool {
+		return r == '，' || r == ',' || r == '；' || r == ';'
+	}) {
+		if isChineseTechnicalDefinitionClause(clause) {
+			return true
+		}
+	}
+	return false
+}
+
+func isChineseTechnicalDefinitionClause(value string) bool {
 	for _, entity := range technicalQuestionEntities {
 		searchFrom := 0
 		for searchFrom < len(value) {
@@ -145,6 +157,28 @@ func hasTermAt(value string, position int, terms []string) bool {
 func isProductMetaSentence(sentence string) bool {
 	normalized := compactAnswerPrefix(stripAnswerListPrefix(sentence))
 	return containsAnyTerm(normalized, productImplementationEntities) && containsAnyTerm(normalized, productImplementationSemantics)
+}
+
+func isProductMetaTitle(sentence string) bool {
+	normalized := compactAnswerPrefix(stripAnswerListPrefix(sentence))
+	normalized = strings.Trim(normalized, ":：-—–")
+	for _, entity := range productImplementationEntities {
+		if normalized == entity {
+			return true
+		}
+	}
+	return false
+}
+
+func isPureImplementationSentence(sentence string) bool {
+	normalized := compactAnswerPrefix(stripAnswerListPrefix(sentence))
+	matched := 0
+	for _, semantic := range productImplementationSemantics {
+		if strings.Contains(normalized, semantic) {
+			matched++
+		}
+	}
+	return matched >= 2
 }
 
 func containsAnyTerm(value string, terms []string) bool {

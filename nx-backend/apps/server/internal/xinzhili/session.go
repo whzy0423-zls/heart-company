@@ -192,34 +192,38 @@ const (
 )
 
 type activeTurn struct {
-	input             StartTurnInput
-	conversation      Conversation
-	card              Card
-	asr               ASRSession
-	engine            StrategyEngine
-	ctx               context.Context
-	cancel            context.CancelFunc
-	hasSpeech         bool
-	processing        bool
-	endpointRequested bool
-	lastPCMAt         time.Time
-	silenceSignaled   bool
-	draft             string
-	answer            string
-	sources           []rag.Source
-	assistantID       int64
-	segments          map[uint32]string
-	lastAck           int64
-	nextTurnSeq       uint64
-	completionDone    bool
-	doneSent          bool
-	generationErr     error
-	question          string
-	rawDraft          string
-	hygieneBuffer     answerSentenceBuffer
-	chunker           streamSentenceChunker
-	ttsJobs           chan ttsStreamJob
-	nextTTSSeq        uint32
+	input              StartTurnInput
+	conversation       Conversation
+	card               Card
+	asr                ASRSession
+	engine             StrategyEngine
+	ctx                context.Context
+	cancel             context.CancelFunc
+	hasSpeech          bool
+	processing         bool
+	endpointRequested  bool
+	lastPCMAt          time.Time
+	silenceSignaled    bool
+	draft              string
+	answer             string
+	sources            []rag.Source
+	assistantID        int64
+	segments           map[uint32]string
+	lastAck            int64
+	nextTurnSeq        uint64
+	completionDone     bool
+	doneSent           bool
+	generationErr      error
+	technicalQuestion  bool
+	rawDraft           string
+	hygieneBuffer      answerSentenceBuffer
+	productMetaContext bool
+	chunker            streamSentenceChunker
+	ttsJobs            chan ttsStreamJob
+	pendingTTSJobs     []ttsStreamJob
+	ttsClosePending    bool
+	ttsJobsClosed      bool
+	nextTTSSeq         uint32
 }
 
 type ttsStreamJob struct {
@@ -289,6 +293,15 @@ func (s *session) loop() {
 	var turn *activeTurn
 	defer close(s.done)
 	for {
+		var ttsOut chan ttsStreamJob
+		var nextTTSJob ttsStreamJob
+		if turn != nil {
+			s.closeTTSJobsIfReady(turn)
+			if turn.ttsJobs != nil && !turn.ttsJobsClosed && len(turn.pendingTTSJobs) > 0 {
+				ttsOut = turn.ttsJobs
+				nextTTSJob = turn.pendingTTSJobs[0]
+			}
+		}
 		select {
 		case command := <-s.commands:
 			var err error
@@ -323,6 +336,10 @@ func (s *session) loop() {
 				continue
 			}
 			s.handleEvent(&turn, event)
+		case ttsOut <- nextTTSJob:
+			turn.pendingTTSJobs[0] = ttsStreamJob{}
+			turn.pendingTTSJobs = turn.pendingTTSJobs[1:]
+			s.closeTTSJobsIfReady(turn)
 		}
 	}
 }
@@ -389,6 +406,9 @@ func (s *session) cancelTurn(turn *activeTurn, turnID string) error {
 
 func (s *session) stopTurn(turn *activeTurn) {
 	turn.cancel()
+	turn.pendingTTSJobs = nil
+	turn.ttsClosePending = true
+	s.closeTTSJobsIfReady(turn)
 	if turn.asr != nil {
 		_ = turn.asr.Close()
 	}
@@ -521,6 +541,11 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 			event.segmentAck <- err
 		}
 	case eventTTSDone:
+		if event.err != nil {
+			current.pendingTTSJobs = nil
+			current.ttsClosePending = true
+			s.closeTTSJobsIfReady(current)
+		}
 		current.completionDone = true
 		if current.assistantID > 0 && current.generationErr == nil && current.answer != "" {
 			sources, _ := json.Marshal(current.sources)
@@ -590,8 +615,8 @@ func (s *session) handleASREvent(turn *activeTurn, event ASREvent) {
 		return
 	}
 	turn.processing = true
-	turn.question = text
-	turn.ttsJobs = make(chan ttsStreamJob, 128)
+	turn.technicalQuestion = isExplicitTechnicalQuestion(text)
+	turn.ttsJobs = make(chan ttsStreamJob)
 	s.startSynthesisWorker(turn)
 	s.startGeneration(turn, text)
 }
@@ -721,7 +746,8 @@ func (s *session) handleGenerationDone(turn *activeTurn, event sessionEvent) {
 		}
 	}
 	turn.answer = normalizeGeneratedContent(turn.draft)
-	close(turn.ttsJobs)
+	turn.ttsClosePending = true
+	s.closeTTSJobsIfReady(turn)
 	if event.err != nil || turn.answer == "" {
 		s.sendError(turn, "generation_failed", "回答生成失败，请重试", true)
 	}
@@ -729,8 +755,23 @@ func (s *session) handleGenerationDone(turn *activeTurn, event sessionEvent) {
 
 func (s *session) queueAnswerSentence(turn *activeTurn, sentence string) {
 	sentence = strings.TrimSpace(sentence)
-	if sentence == "" || (!isExplicitTechnicalQuestion(turn.question) && isProductMetaSentence(sentence)) {
+	if sentence == "" {
 		return
+	}
+	if !turn.technicalQuestion {
+		if isProductMetaTitle(sentence) {
+			turn.productMetaContext = true
+			return
+		}
+		if turn.productMetaContext {
+			if isPureImplementationSentence(sentence) || isProductMetaSentence(sentence) {
+				return
+			}
+			turn.productMetaContext = false
+		}
+		if isProductMetaSentence(sentence) {
+			return
+		}
 	}
 	for _, chunk := range turn.chunker.Push(sentence) {
 		s.queueTTSChunk(turn, chunk)
@@ -743,8 +784,16 @@ func (s *session) queueTTSChunk(turn *activeTurn, chunk string) {
 		return
 	}
 	turn.draft += chunk
-	turn.ttsJobs <- ttsStreamJob{seq: turn.nextTTSSeq, text: chunk}
+	turn.pendingTTSJobs = append(turn.pendingTTSJobs, ttsStreamJob{seq: turn.nextTTSSeq, text: chunk})
 	turn.nextTTSSeq++
+}
+
+func (s *session) closeTTSJobsIfReady(turn *activeTurn) {
+	if turn == nil || turn.ttsJobs == nil || turn.ttsJobsClosed || !turn.ttsClosePending || len(turn.pendingTTSJobs) > 0 {
+		return
+	}
+	close(turn.ttsJobs)
+	turn.ttsJobsClosed = true
 }
 
 func (s *session) acceptAudioSegment(turn *activeTurn, segment AudioSegment) error {
