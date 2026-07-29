@@ -125,7 +125,7 @@ func TestXinzhiliWSSinkSendAudioUsesBinaryFrame(t *testing.T) {
 	defer client.Close()
 	conn := <-serverConn
 	defer conn.Close()
-	rc := &xinzhiliRealtimeConn{ws: conn, sessionID: "xz-test", turnKey: xinzhili.TurnKey("turn-1")}
+	rc := &xinzhiliRealtimeConn{ws: conn, sessionID: "xz-test", generation: 7, turnKey: xinzhili.TurnKey("turn-1")}
 	sink := &xinzhiliWSSink{conn: rc}
 	if err := sink.SendAudio(context.Background(), xinzhili.AudioSegment{Seq: 3, Audio: []byte("mp3")}); err != nil {
 		t.Fatalf("SendAudio: %v", err)
@@ -142,8 +142,53 @@ func TestXinzhiliWSSinkSendAudioUsesBinaryFrame(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if frame.FrameType != xinzhili.FrameTypeAssistantMP3 || frame.TurnKey != rc.turnKey || frame.SegmentSeq != 3 || string(frame.Payload) != "mp3" {
+	if frame.Generation != 7 || frame.FrameType != xinzhili.FrameTypeAssistantMP3 || frame.TurnKey != rc.turnKey || frame.SegmentSeq != 3 || string(frame.Payload) != "mp3" {
 		t.Fatalf("unexpected frame: %+v", frame)
+	}
+}
+
+func TestXinzhiliWSSinkSendControlUsesConnectionGeneration(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	serverConn := make(chan *websocket.Conn, 1)
+	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		serverConn <- conn
+	}))
+	defer h.Close()
+	client, _, err := websocket.DefaultDialer.Dial("ws"+h.URL[len("http"):], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	conn := <-serverConn
+	defer conn.Close()
+	rc := &xinzhiliRealtimeConn{ws: conn, sessionID: "xz-test", generation: 9}
+	sink := &xinzhiliWSSink{conn: rc}
+	if err := sink.SendControl(context.Background(), xinzhili.Envelope{
+		ProtocolVersion: xinzhili.ProtocolVersion,
+		Type:            xinzhili.EventSessionReady,
+		Payload:         json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("SendControl: %v", err)
+	}
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	kind, data, err := client.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind != websocket.TextMessage {
+		t.Fatalf("frame kind = %d, want text", kind)
+	}
+	envelope, err := xinzhili.DecodeEnvelope(data, xinzhili.DirectionServer, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Generation != 9 {
+		t.Fatalf("generation = %d, want 9", envelope.Generation)
 	}
 }
 
