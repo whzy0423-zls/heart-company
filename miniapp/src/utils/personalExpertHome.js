@@ -15,13 +15,28 @@ const DEFAULT_GAME = Object.freeze({
   lead: '找到你的核心动机，开始一段更了解自己的旅程。',
   buttonText: '开始人格测试',
 })
+const DEFAULT_ENTERPRISE_SERVICES = Object.freeze([
+  { title: '企业团队共学', description: '用九型语言帮助团队看见协作中的动机与沟通方式。' },
+])
+const DEFAULT_ENTERPRISE_SERVICE_MODES = Object.freeze([
+  { title: '企业内训', description: '围绕企业当下议题设计半天或全天共学。' },
+  { title: '团队工作坊', description: '用互动练习帮助团队建立沟通和协作共识。' },
+  { title: '管理者培训', description: '支持管理者识别不同类型成员的动机与压力反应。' },
+])
+const DEFAULT_ENTERPRISE_PROCESS_STEPS = Object.freeze([
+  { title: '需求沟通', description: '先了解团队背景、参与对象和希望解决的问题。' },
+  { title: '方案共创', description: '结合九型主题、课件内容和企业节奏设计服务方式。' },
+  { title: '落地交付', description: '完成课程或工作坊后，沉淀可复盘的团队语言。' },
+])
 const DEFAULT_ENTERPRISE = Object.freeze({
   eyebrow: '企业共学',
   title: '让团队更懂彼此',
   lead: '以九型人格为共同语言，支持团队协作与领导力成长。',
   buttonText: '预约沟通',
   modules: Object.freeze([]),
-  services: Object.freeze([{ title: '企业团队共学', description: '用九型语言帮助团队看见协作中的动机与沟通方式。' }]),
+  services: DEFAULT_ENTERPRISE_SERVICES,
+  serviceModes: DEFAULT_ENTERPRISE_SERVICE_MODES,
+  processSteps: DEFAULT_ENTERPRISE_PROCESS_STEPS,
 })
 
 function isRecord(value) {
@@ -127,6 +142,21 @@ function normalizeService(item) {
   }
 }
 
+function normalizeEnterpriseBookingItems(value, defaults) {
+  const items = asItems(value).map(normalizeService).filter(Boolean).slice(0, 4)
+  return (items.length ? items : defaults).map((item) => ({ ...item }))
+}
+
+function freshEnterpriseDefaults() {
+  return {
+    ...DEFAULT_ENTERPRISE,
+    modules: [],
+    services: DEFAULT_ENTERPRISE.services.map((item) => ({ ...item })),
+    serviceModes: DEFAULT_ENTERPRISE.serviceModes.map((item) => ({ ...item })),
+    processSteps: DEFAULT_ENTERPRISE.processSteps.map((item) => ({ ...item })),
+  }
+}
+
 function enterpriseCourseText(source) {
   const fields = ['title', 'description', 'summary', 'tag', 'tags', 'type', 'category', 'label', 'badge']
   return fields.flatMap((field) => {
@@ -156,9 +186,11 @@ export function personalExpertServices(config) {
       buttonText: text(enterprise.buttonText, DEFAULT_ENTERPRISE.buttonText),
       modules: Array.isArray(enterprise.modules) ? enterprise.modules.map((item) => text(item)).filter(Boolean).slice(0, 4) : [],
       services: (services.length ? services : DEFAULT_ENTERPRISE.services).map((item) => ({ ...item })),
+      serviceModes: normalizeEnterpriseBookingItems(enterprise.items, DEFAULT_ENTERPRISE.serviceModes),
+      processSteps: normalizeEnterpriseBookingItems(enterprise.processSteps, DEFAULT_ENTERPRISE.processSteps),
     }
   } catch {
-    return { ...DEFAULT_ENTERPRISE, modules: [], services: DEFAULT_ENTERPRISE.services.map((item) => ({ ...item })) }
+    return freshEnterpriseDefaults()
   }
 }
 

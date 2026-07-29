@@ -30,6 +30,8 @@ for (const text of ['查看预约记录', '继续浏览老师课堂', '再提交
 }
 assert.match(template, /v-if="submitted"[\s\S]{0,180}class="booking-success/, 'submitted should render an in-page success state')
 assert.doesNotMatch(source, /80\+|96\s*%|满意度|客户案例|成功案例/, 'booking defaults must not invent numeric proof or customer case claims')
+assert.doesNotMatch(script, /const serviceModes = Object\.freeze/, 'booking page should not retain local service mode defaults')
+assert.doesNotMatch(script, /const processSteps = computed\(\(\) => \[/, 'booking page should not retain local process step defaults')
 
 const executableScript = script.replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\s*;?\s*$/gm, '')
 const dir = await mkdtemp(join(tmpdir(), 'nx-booking-enterprise-page-'))
@@ -56,6 +58,12 @@ const consumeBookingIntent = () => {
   return globalThis.__bookingEnterpriseHarness.intents.shift() || null
 }
 const getStoredSiteConfig = () => globalThis.__bookingEnterpriseHarness.siteConfig
+const getCachedSiteConfig = () => {
+  const state = globalThis.__bookingEnterpriseHarness
+  state.cachedConfigCalls += 1
+  const nextConfig = state.cachedConfigs.shift()
+  return Promise.resolve(nextConfig === undefined ? state.siteConfig : nextConfig)
+}
 const normalizePersonalExpertHome = (config = {}) => {
   globalThis.__bookingEnterpriseHarness.normalizedConfigs.push(config)
   const enterprise = config?.home?.enterprise || {}
@@ -67,6 +75,16 @@ const normalizePersonalExpertHome = (config = {}) => {
       title: String(item.title || '团队共学服务').trim(),
       description: String(item.description || item.summary || '围绕团队协作、沟通与领导力的九型共学。').trim(),
     }))
+  const normalizeBookingItems = (items, defaults) => {
+    const normalized = (Array.isArray(items) ? items : [])
+      .filter((item) => item && (item.title || item.description))
+      .map((item) => ({
+        title: String(item.title || '团队共学服务').trim(),
+        description: String(item.description || item.summary || '围绕团队协作、沟通与领导力的九型共学。').trim(),
+      }))
+      .slice(0, 4)
+    return normalized.length ? normalized : defaults.map((item) => ({ ...item }))
+  }
   return {
     enterprise: {
       eyebrow: enterprise.eyebrow || '企业共学',
@@ -77,6 +95,16 @@ const normalizePersonalExpertHome = (config = {}) => {
       services: services.length ? services.slice(0, 3) : [
         { title: '企业团队共学', description: '用九型语言帮助团队看见协作中的动机与沟通方式。' },
       ],
+      serviceModes: normalizeBookingItems(enterprise.items, [
+        { title: '企业内训', description: '围绕企业当下议题设计半天或全天共学。' },
+        { title: '团队工作坊', description: '用互动练习帮助团队建立沟通和协作共识。' },
+        { title: '管理者培训', description: '支持管理者识别不同类型成员的动机与压力反应。' },
+      ]),
+      processSteps: normalizeBookingItems(enterprise.processSteps, [
+        { title: '需求沟通', description: '先了解团队背景、参与对象和希望解决的问题。' },
+        { title: '方案共创', description: '结合九型主题、课件内容和企业节奏设计服务方式。' },
+        { title: '落地交付', description: '完成课程或工作坊后，沉淀可复盘的团队语言。' },
+      ]),
     },
   }
 }
@@ -101,6 +129,8 @@ async function createHarness(overrides = {}) {
     switches: [],
     loginCalls: 0,
     normalizedConfigs: [],
+    cachedConfigCalls: 0,
+    cachedConfigs: [],
     siteConfig: {
       home: {
         enterprise: {
@@ -140,7 +170,8 @@ try {
       'service cards should combine home.enterprise.items and home.courses.items',
     )
     assert.ok(page.scenarioItems.value.length >= 2, 'configured enterprise modules should feed applicable scenarios')
-    assert.ok(page.processSteps.value.length >= 3, 'booking page should explain the cooperation process')
+    assert.deepEqual(page.serviceModes.value.map((item) => item.title), ['企业沟通工作坊'], 'service modes should read from enterpriseView')
+    assert.deepEqual(page.processSteps.value.map((item) => item.title), ['需求沟通', '方案共创', '落地交付'], 'process steps should read from enterpriseView defaults')
   }
 
   {
@@ -148,7 +179,7 @@ try {
       draft: { kind: 'course', contactName: '张经理', phone: '13800138000', intent: '', preferredTime: '周五上午', message: '保留备注' },
       intents: [{ kind: 'enterprise', intentText: '团队工作坊' }],
     })
-    state.onShow()
+    await state.onShow()
     assert.equal(state.intentConsumes, 1, 'onShow should consume the one-time booking intent')
     assert.equal(state.intents.length, 0, 'the one-time intent should be empty after first onShow')
     assert.equal(page.kinds[page.kindIndex.value].value, 'enterprise', 'enterprise intent should select the enterprise booking kind')
@@ -158,7 +189,7 @@ try {
     assert.equal(page.form.value.preferredTime, '周五上午', 'restored preferred time must survive intent consumption')
 
     state.intents.push({ kind: 'enterprise', intentText: '企业内训' })
-    state.onShow()
+    await state.onShow()
     assert.equal(page.form.value.intent, '团队工作坊', 'subsequent intentText should not overwrite a filled intent field')
   }
 
@@ -167,7 +198,7 @@ try {
       draft: { kind: 'enterprise', contactName: '李总', phone: '13900139000', intent: '已有企业需求', preferredTime: '', message: '' },
       intents: [{ kind: 'enterprise', intentText: '管理者培训' }],
     })
-    state.onShow()
+    await state.onShow()
     assert.equal(page.form.value.intent, '已有企业需求', 'intentText should only prefill when form.intent is empty')
     assert.equal(page.form.value.contactName, '李总', 'restored contact info should be preserved when intent text is ignored')
     assert.equal(page.form.value.phone, '13900139000', 'restored phone should be preserved when intent text is ignored')
@@ -178,20 +209,35 @@ try {
       intents: [{ kind: 'enterprise', intentText: '企业内训' }],
     })
     page.submitted.value = true
-    state.onShow()
+    await state.onShow()
     assert.equal(page.submitted.value, false, 'a new one-time intent should reopen the form from the submitted state')
     assert.equal(page.form.value.intent, '企业内训', 'a new one-time intent should still prefill the reopened form')
   }
 
   {
-    const { page, state } = await createHarness()
+    const { page, state } = await createHarness({
+      siteConfig: { home: { enterprise: {
+        items: [
+          { title: ' 企业内训 ', description: ' 组织议题共学 ' },
+          { title: ' 团队工作坊 ', description: ' 协作共识 ' },
+          { title: ' 管理者培训 ', description: ' 带队觉察 ' },
+        ],
+        processSteps: [
+          { title: ' 需求澄清 ', description: ' 了解背景 ' },
+          { title: ' 方案共创 ', description: ' 匹配节奏 ' },
+          { title: ' 现场交付 ', description: ' 沉淀语言 ' },
+        ],
+      } } },
+    })
+    await state.onShow()
     assert.deepEqual(
-      page.serviceModes.map((item) => item.title),
+      page.serviceModes.value.map((item) => item.title),
       ['企业内训', '团队工作坊', '管理者培训'],
-      'enterprise service modes should cover the three required enterprise intents',
+      'enterprise service modes should read the configured enterprise view in backend order',
     )
+    assert.deepEqual(page.processSteps.value.map((item) => item.title), ['需求澄清', '方案共创', '现场交付'])
 
-    for (const [index, mode] of page.serviceModes.entries()) {
+    for (const [index, mode] of page.serviceModes.value.entries()) {
       page.selectServiceMode(index)
       page.form.value = {
         contactName: `联系人${index}`,
@@ -220,6 +266,62 @@ try {
     page.submitAnother()
     assert.equal(page.submitted.value, false, '再提交一个需求 should return to the form state')
     assert.deepEqual(page.form.value, { contactName: '', phone: '', intent: '', preferredTime: '', message: '' }, '再提交一个需求 should reset the form')
+  }
+
+  {
+    const { page, state } = await createHarness({
+      draft: { kind: 'enterprise', contactName: '王总', phone: '13700137000', intent: '团队工作坊', preferredTime: '下周', message: '保留草稿' },
+      intents: [{ kind: 'enterprise', intentText: '企业内训' }],
+      siteConfig: { home: { enterprise: {
+        items: [
+          { title: '企业内训', description: '组织议题共学' },
+          { title: '团队工作坊', description: '协作共识' },
+        ],
+      } } },
+      cachedConfigs: [{ home: { enterprise: {
+        items: [
+          { title: '团队工作坊', description: '刷新后排第一' },
+          { title: '企业内训', description: '刷新后排第二' },
+        ],
+        processSteps: [{ title: '先沟通', description: '刷新流程' }],
+      } } }],
+    })
+    await state.onShow()
+    assert.equal(state.cachedConfigCalls, 1, 'onShow should load cached site config without forcing a refresh')
+    assert.equal(state.intentConsumes, 1, 'onShow should preserve one-time booking intent handling')
+    assert.equal(page.form.value.intent, '团队工作坊', 'one-time booking intent must not overwrite restored draft intent')
+    assert.equal(page.form.value.contactName, '王总', 'site config refresh must not overwrite draft contact fields')
+    assert.equal(page.form.value.message, '保留草稿', 'site config refresh must not overwrite draft message')
+    assert.equal(page.selectedServiceModeIndex.value, 0, 'selected mode should rematch form.intent after configured modes reorder')
+    assert.deepEqual(page.processSteps.value.map((item) => item.title), ['先沟通'], 'refreshed enterprise view should provide configured process steps')
+
+    state.cachedConfigs.push({ home: { enterprise: {} } })
+    await state.onShow()
+    assert.deepEqual(page.serviceModes.value.map((item) => item.title), ['企业内训', '团队工作坊', '管理者培训'], 'legacy config should still render the three service mode defaults')
+    assert.deepEqual(page.processSteps.value.map((item) => item.title), ['需求沟通', '方案共创', '落地交付'], 'legacy config should still render the three process step defaults')
+    assert.equal(page.selectedServiceModeIndex.value, 1, 'selected mode should rematch by intent after legacy defaults replace configured modes')
+  }
+
+  {
+    let resolveFirstConfig
+    let resolveSecondConfig
+    const firstConfig = new Promise((resolve) => { resolveFirstConfig = resolve })
+    const secondConfig = new Promise((resolve) => { resolveSecondConfig = resolve })
+    const { page, state } = await createHarness({
+      cachedConfigs: [firstConfig, secondConfig],
+    })
+    const firstShow = state.onShow()
+    const secondShow = state.onShow()
+    resolveSecondConfig({ home: { enterprise: {
+      items: [{ title: '新配置', description: '应保留' }],
+    } } })
+    await secondShow
+    resolveFirstConfig({ home: { enterprise: {
+      items: [{ title: '旧配置', description: '不得覆盖' }],
+    } } })
+    await firstShow
+    assert.deepEqual(page.serviceModes.value.map((item) => item.title), ['新配置'], 'an older async config result must not overwrite the latest enterprise view')
+    assert.equal(page.selectedServiceModeIndex.value, -1, 'stale config completion must not rematch selection after the latest view')
   }
 
   console.log('booking enterprise page tests passed')

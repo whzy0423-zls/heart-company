@@ -89,6 +89,14 @@ try {
       { title: '企业沟通工作坊', description: '从冲突中建立理解' },
       { title: '领导力与团队协作', description: '团队课程' },
     ],
+    serviceModes: [
+      { title: '企业沟通工作坊', description: '从冲突中建立理解' },
+    ],
+    processSteps: [
+      { title: '需求沟通', description: '先了解团队背景、参与对象和希望解决的问题。' },
+      { title: '方案共创', description: '结合九型主题、课件内容和企业节奏设计服务方式。' },
+      { title: '落地交付', description: '完成课程或工作坊后，沉淀可复盘的团队语言。' },
+    ],
   }, 'enterprise items lead, then team-related courses preserve backend order')
   assert.deepEqual(view.game, {
     enabled: true, eyebrow: '开始探索', title: '你的专属测试', lead: '读懂你的核心动力', buttonText: '立即开始',
@@ -171,12 +179,69 @@ try {
   ], 'absent enterprise/course data should use stable non-numeric service copy')
   assert.equal(defaults.services.some((item) => /\d|客户|满意度/.test(`${item.title}${item.description}`)), false)
 
+  const enterpriseBookingConfig = {
+    home: {
+      enterprise: {
+        items: [
+          { title: ' 企业内训 ', description: ' 围绕组织议题共学 ' },
+          {},
+          { title: ' 团队工作坊 ', description: ' 建立协作共识 ' },
+          { title: ' 管理者培训 ', description: ' 识别成员动机 ' },
+          { title: ' 领导力共学 ', description: ' 支持管理升级 ' },
+          { title: ' 应被截断 ', description: ' 第五项 ' },
+        ],
+        processSteps: [
+          { title: ' 需求澄清 ', description: ' 了解团队背景 ' },
+          {},
+          { title: ' 共创方案 ', description: ' 匹配主题与节奏 ' },
+          { title: ' 现场交付 ', description: ' 沉淀团队语言 ' },
+          { title: ' 复盘跟进 ', description: ' 形成下一步 ' },
+          { title: ' 应被截断 ', description: ' 第五步 ' },
+        ],
+      },
+    },
+  }
+  const enterpriseBookingBefore = structuredClone(enterpriseBookingConfig)
+  const enterpriseBooking = personalExpertServices(enterpriseBookingConfig)
+  assert.deepEqual(enterpriseBooking.serviceModes, [
+    { title: '企业内训', description: '围绕组织议题共学' },
+    { title: '团队工作坊', description: '建立协作共识' },
+    { title: '管理者培训', description: '识别成员动机' },
+    { title: '领导力共学', description: '支持管理升级' },
+  ], 'enterprise items should provide ordered, trimmed service modes capped at four')
+  assert.deepEqual(enterpriseBooking.processSteps, [
+    { title: '需求澄清', description: '了解团队背景' },
+    { title: '共创方案', description: '匹配主题与节奏' },
+    { title: '现场交付', description: '沉淀团队语言' },
+    { title: '复盘跟进', description: '形成下一步' },
+  ], 'configured process steps should be ordered, trimmed, filtered, and capped at four')
+  assert.deepEqual(enterpriseBookingConfig, enterpriseBookingBefore, 'enterprise booking normalization must not mutate its input')
+
+  const enterpriseBookingDefaults = personalExpertServices({ home: { enterprise: { items: [{}, { title: ' ', description: ' ' }], processSteps: [{}] } } })
+  assert.deepEqual(enterpriseBookingDefaults.serviceModes, [
+    { title: '企业内训', description: '围绕企业当下议题设计半天或全天共学。' },
+    { title: '团队工作坊', description: '用互动练习帮助团队建立沟通和协作共识。' },
+    { title: '管理者培训', description: '支持管理者识别不同类型成员的动机与压力反应。' },
+  ], 'missing or invalid enterprise items should use the stable booking service mode defaults')
+  assert.deepEqual(enterpriseBookingDefaults.processSteps, [
+    { title: '需求沟通', description: '先了解团队背景、参与对象和希望解决的问题。' },
+    { title: '方案共创', description: '结合九型主题、课件内容和企业节奏设计服务方式。' },
+    { title: '落地交付', description: '完成课程或工作坊后，沉淀可复盘的团队语言。' },
+  ], 'missing or invalid process steps should use the stable booking process defaults')
+
   const throwing = Object.defineProperty({}, 'home', { get() { throw new Error('bad getter') } })
   const first = normalizePersonalExpertHome(throwing)
   const second = normalizePersonalExpertHome(throwing)
   assert.deepEqual(first.proofStats, [])
   assert.deepEqual(first.cases, [])
+  assert.deepEqual(first.enterprise.serviceModes, [
+    { title: '企业内训', description: '围绕企业当下议题设计半天或全天共学。' },
+    { title: '团队工作坊', description: '用互动练习帮助团队建立沟通和协作共识。' },
+    { title: '管理者培训', description: '支持管理者识别不同类型成员的动机与压力反应。' },
+  ], 'error getters should return booking service mode defaults')
   assert.notStrictEqual(first, second, 'errors should return fresh safe defaults')
+  assert.notStrictEqual(first.enterprise.serviceModes, second.enterprise.serviceModes, 'error getters should create fresh mode defaults')
+  assert.notStrictEqual(first.enterprise.processSteps, second.enterprise.processSteps, 'error getters should create fresh process defaults')
 
   const boundedServices = personalExpertServices({
     home: {

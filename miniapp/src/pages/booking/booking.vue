@@ -6,7 +6,7 @@ import { createBookingApi } from '../../api'
 import { userErrorMessage } from '../../utils/userMessage'
 import { clearBookingDraft, loadBookingDraft, saveBookingDraft } from '../../utils/bookingDraft'
 import { consumeBookingIntent } from '../../utils/bookingIntent'
-import { getStoredSiteConfig } from '../../utils/siteConfig'
+import { getCachedSiteConfig, getStoredSiteConfig } from '../../utils/siteConfig'
 import { normalizePersonalExpertHome } from '../../utils/personalExpertHome'
 
 const kinds = [
@@ -49,17 +49,10 @@ const scenarioItems = computed(() => {
   }))
 })
 
-const serviceModes = Object.freeze([
-  { title: '企业内训', description: '围绕企业当下议题设计半天或全天共学。' },
-  { title: '团队工作坊', description: '用互动练习帮助团队建立沟通和协作共识。' },
-  { title: '管理者培训', description: '支持管理者识别不同类型成员的动机与压力反应。' },
-])
+const serviceModes = computed(() => enterpriseView.value.serviceModes || [])
 const selectedServiceModeIndex = ref(-1)
-const processSteps = computed(() => [
-  { title: '需求沟通', description: '先了解团队背景、参与对象和希望解决的问题。' },
-  { title: '方案共创', description: '结合九型主题、课件内容和企业节奏设计服务方式。' },
-  { title: '落地交付', description: '完成课程或工作坊后，沉淀可复盘的团队语言。' },
-])
+const processSteps = computed(() => enterpriseView.value.processSteps || [])
+let enterpriseConfigLoadId = 0
 
 const draft = loadBookingDraft()
 const restoredDraftNotice = ref(!!draft)
@@ -114,25 +107,40 @@ onShow(applyBookingIntent)
 onHide(flushDraftSave)
 onUnload(flushDraftSave)
 
+async function refreshEnterpriseView() {
+  const loadId = ++enterpriseConfigLoadId
+  try {
+    const config = await getCachedSiteConfig()
+    if (loadId === enterpriseConfigLoadId) {
+      enterpriseView.value = normalizePersonalExpertHome(config || {}).enterprise
+    }
+  } catch {
+    // 保留已渲染的配置，预约表单仍可继续填写。
+  } finally {
+    if (loadId === enterpriseConfigLoadId) matchSelectedServiceMode()
+  }
+}
+
+function matchSelectedServiceMode() {
+  selectedServiceModeIndex.value = currentKind() === 'enterprise'
+    ? serviceModes.value.findIndex((item) => item.title === form.value.intent.trim())
+    : -1
+}
+
 function applyBookingIntent() {
   const intent = consumeBookingIntent()
-  if (!intent) return null
+  if (intent) {
+    if (submitted.value) submitted.value = false
 
-  if (submitted.value) submitted.value = false
+    const nextKindIndex = kindIndexFor(intent.kind)
+    if (nextKindIndex >= 0) kindIndex.value = nextKindIndex
 
-  const nextKindIndex = kindIndexFor(intent.kind)
-  if (nextKindIndex >= 0) kindIndex.value = nextKindIndex
-
-  if (intent.kind === 'enterprise') {
-    const modeIndex = serviceModes.findIndex((item) => item.title === intent.intentText)
-    if (modeIndex >= 0) selectedServiceModeIndex.value = modeIndex
+    if (intent.intentText && !form.value.intent.trim()) {
+      form.value = { ...form.value, intent: intent.intentText }
+    }
   }
 
-  if (intent.intentText && !form.value.intent.trim()) {
-    form.value = { ...form.value, intent: intent.intentText }
-  }
-
-  return intent
+  return refreshEnterpriseView()
 }
 
 function onKindChange(e) {
@@ -142,11 +150,12 @@ function onKindChange(e) {
 }
 
 function selectServiceMode(index) {
-  if (!serviceModes[index]) return
+  const mode = serviceModes.value[index]
+  if (!mode) return
   selectedServiceModeIndex.value = index
   kindIndex.value = ENTERPRISE_KIND_INDEX
   if (!form.value.intent.trim()) {
-    form.value = { ...form.value, intent: serviceModes[index].title }
+    form.value = { ...form.value, intent: mode.title }
   }
 }
 
