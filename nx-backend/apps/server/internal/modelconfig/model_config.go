@@ -312,9 +312,6 @@ func (c Config) ApplyTTS(base config.MiniMaxConfig) TTSConfig {
 		Model:    strings.TrimSpace(base.Model),
 		Format:   "mp3",
 	}
-	if out.Model == "" {
-		out.Model = "speech-02-hd"
-	}
 	if v := strings.TrimSpace(c.TTS.Provider); v != "" {
 		out.Provider = normalizeTTSProvider(v)
 	}
@@ -335,6 +332,13 @@ func (c Config) ApplyTTS(base config.MiniMaxConfig) TTSConfig {
 	}
 	if v := normalizeTTSFormat(c.TTS.Format); v != "" {
 		out.Format = v
+	}
+	if out.Model == "" {
+		if out.Provider == "bailian" {
+			out.Model = "MiniMax/speech-2.8-turbo"
+		} else {
+			out.Model = "speech-02-hd"
+		}
 	}
 	return out
 }

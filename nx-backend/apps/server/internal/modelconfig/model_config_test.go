@@ -230,3 +230,20 @@ func TestApplyTTSKeepsBailianEnvironmentProvider(t *testing.T) {
 		t.Fatalf("provider=%q", got.Provider)
 	}
 }
+
+func TestApplyTTSUsesProviderSpecificDefaultModel(t *testing.T) {
+	for _, tt := range []struct {
+		provider string
+		want     string
+	}{
+		{provider: "bailian", want: "MiniMax/speech-2.8-turbo"},
+		{provider: "minimax", want: "speech-02-hd"},
+	} {
+		t.Run(tt.provider, func(t *testing.T) {
+			got := (Config{}).ApplyTTS(config.MiniMaxConfig{Provider: tt.provider})
+			if got.Model != tt.want {
+				t.Fatalf("model = %q, want %q", got.Model, tt.want)
+			}
+		})
+	}
+}
