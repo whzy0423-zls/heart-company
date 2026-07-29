@@ -71,10 +71,82 @@ export interface MiniappHomeConfig {
   hero: MiniappHomeHero;
 }
 
+export interface MiniappLearnHero {
+  eyebrow: string;
+  lead: string;
+  meta: string[];
+  title: string;
+}
+
+export interface MiniappLearnClassroom {
+  ctaText: string;
+  emptyActionText: string;
+  emptyDescription: string;
+  emptyTitle: string;
+  eyebrow: string;
+  heroEyebrow: string;
+  heroLead: string;
+  heroTitle: string;
+  moreText: string;
+  title: string;
+}
+
+export interface MiniappLearnSection {
+  eyebrow: string;
+  title: string;
+}
+
+export interface MiniappLearnCoursesSection extends MiniappLearnSection {
+  emptyDescription: string;
+  emptyTitle: string;
+}
+
+export interface MiniappLearnQuotesSection extends MiniappLearnSection {
+  emptyTitle: string;
+}
+
+export interface MiniappLearnSections {
+  courses: MiniappLearnCoursesSection;
+  quotes: MiniappLearnQuotesSection;
+  teacher: MiniappLearnSection;
+  types: MiniappLearnSection;
+}
+
+export interface MiniappLearnConfig {
+  bottomCtaText: string;
+  classroom: MiniappLearnClassroom;
+  hero: MiniappLearnHero;
+  sections: MiniappLearnSections;
+}
+
+export interface EnterpriseServiceItem {
+  description: string;
+  title: string;
+}
+
+export interface EnterpriseProcessStep {
+  description: string;
+  title: string;
+}
+
+export interface EnterpriseConfig {
+  buttonHref: string;
+  buttonText: string;
+  eyebrow: string;
+  items: EnterpriseServiceItem[];
+  lead: string;
+  moduleTitle: string;
+  modules: string[];
+  processSteps: EnterpriseProcessStep[];
+  title: string;
+}
+
 export interface SiteConfig {
   home: {
+    enterprise?: EnterpriseConfig;
     miniappCarousel?: MiniappCarouselConfig;
     miniappHome?: MiniappHomeConfig;
+    miniappLearn?: MiniappLearnConfig;
   } & Record<string, any>;
   navigation: {
     drawer: NavItem[];

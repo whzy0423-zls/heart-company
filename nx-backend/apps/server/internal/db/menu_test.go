@@ -8,6 +8,7 @@ import (
 func TestDefaultMenusIncludeMiniappHomeManagement(t *testing.T) {
 	var foundCatalog bool
 	var foundHome bool
+	var foundLearn bool
 	for _, menu := range defaultMenus {
 		switch menu.Name {
 		case "MiniappManage":
@@ -20,6 +21,11 @@ func TestDefaultMenusIncludeMiniappHomeManagement(t *testing.T) {
 			if menu.ID != 1301 || menu.PID != 1300 || menu.Path != "/miniapp/home" || menu.Component != "/miniapp/home" || menu.AuthCode != "Website:Write" || menu.Type != "menu" || menu.Sort != 1 || menu.Icon != "lucide:images" || menu.Title != "首页管理" {
 				t.Fatalf("unexpected miniapp home management menu: %+v", menu)
 			}
+		case "MiniappLearn":
+			foundLearn = true
+			if menu.ID != 1302 || menu.PID != 1300 || menu.Path != "/miniapp/learn" || menu.Component != "/miniapp/learn" || menu.AuthCode != "Website:Write" || menu.Type != "menu" || menu.Sort != 2 || menu.Icon != "lucide:book-open" || menu.Title != "学习页管理" {
+				t.Fatalf("unexpected miniapp learn management menu: %+v", menu)
+			}
 		}
 	}
 	if !foundCatalog {
@@ -27,6 +33,9 @@ func TestDefaultMenusIncludeMiniappHomeManagement(t *testing.T) {
 	}
 	if !foundHome {
 		t.Fatal("expected default menu MiniappHome")
+	}
+	if !foundLearn {
+		t.Fatal("expected default menu MiniappLearn")
 	}
 }
 

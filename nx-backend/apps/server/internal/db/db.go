@@ -141,6 +141,7 @@ var defaultMenus = []seedMenu{
 	{ID: 316, PID: 315, Name: "WebsiteAppReleasesWrite", AuthCode: "Website:AppReleases:Write", Type: "button", Sort: 1, Icon: "lucide:pencil", Title: "管理 App 版本"},
 	{ID: 1300, PID: 0, Name: "MiniappManage", Path: "/miniapp", Type: "catalog", Sort: 12, Icon: "lucide:smartphone", Title: "小程序管理"},
 	{ID: 1301, PID: 1300, Name: "MiniappHome", Path: "/miniapp/home", Component: "/miniapp/home", AuthCode: "Website:Write", Type: "menu", Sort: 1, Icon: "lucide:images", Title: "首页管理"},
+	{ID: 1302, PID: 1300, Name: "MiniappLearn", Path: "/miniapp/learn", Component: "/miniapp/learn", AuthCode: "Website:Write", Type: "menu", Sort: 2, Icon: "lucide:book-open", Title: "学习页管理"},
 	{ID: 1400, PID: 0, Name: "MiniappClassroom", Path: "/miniapp/classroom", Type: "catalog", Sort: 13, Icon: "lucide:graduation-cap", Title: "老师课堂"},
 	{ID: 1401, PID: 1400, Name: "MiniappClassroomContent", Path: "/miniapp/classroom/content", Component: "/classroom/index", AuthCode: "Miniapp:Classroom:List", Type: "menu", Sort: 1, Icon: "lucide:play-square", Title: "课件管理"},
 	{ID: 1402, PID: 1400, Name: "MiniappClassroomSeries", Path: "/miniapp/classroom/series", Component: "/classroom/series", AuthCode: "Miniapp:Classroom:List", Type: "menu", Sort: 2, Icon: "lucide:layers", Title: "课程系列"},
