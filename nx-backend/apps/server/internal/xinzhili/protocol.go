@@ -228,10 +228,13 @@ func (wire wireEnvelope) envelope() (Envelope, error) {
 }
 
 func decodeDefault[T any](raw json.RawMessage, name string, destination *T) error {
-	if len(raw) == 0 || isJSONNull(raw) {
+	if len(raw) == 0 {
 		var zero T
 		*destination = zero
 		return nil
+	}
+	if isJSONNull(raw) {
+		return newProtocolError(ProtocolErrorInvalidEnvelope, fmt.Errorf("%s cannot be null", name))
 	}
 	if err := json.Unmarshal(raw, destination); err != nil {
 		return newProtocolError(ProtocolErrorInvalidEnvelope, fmt.Errorf("decode %s: %w", name, err))
