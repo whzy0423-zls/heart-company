@@ -979,12 +979,13 @@ button::after {
 
 @media (max-width: 380px) {
   .expert-hero {
-    width: 600rpx;
+    width: 100%;
   }
 
   .expert-hero__portrait {
-    height: 1069rpx;
-    min-height: 1069rpx;
+    height: auto;
+    min-height: 0;
+    aspect-ratio: 1024 / 1824;
   }
 
   .expert-hero__secondary {

@@ -157,8 +157,16 @@ assert.doesNotMatch(
 );
 assert.match(
   style,
-  /@media\s*\(max-width:\s*380px\)\s*\{[\s\S]*?\.expert-hero\s*\{[^}]*width:\s*600rpx;[\s\S]*?\.expert-hero__portrait\s*\{[^}]*height:\s*1069rpx;[^}]*min-height:\s*1069rpx;[\s\S]*?\.expert-hero__secondary\s*\{[^}]*min-height:\s*88rpx;/,
-  "narrow screens should proportionally shorten the complete poster to approximately 600 by 1069rpx while preserving the 88rpx classroom action",
+  /@media\s*\(max-width:\s*380px\)\s*\{[\s\S]*?\.expert-hero\s*\{[^}]*width:\s*100%;[\s\S]*?\.expert-hero__portrait\s*\{[^}]*height:\s*auto;[^}]*min-height:\s*0;[^}]*aspect-ratio:\s*1024\s*\/\s*1824;[\s\S]*?\.expert-hero__secondary\s*\{[^}]*min-height:\s*88rpx;/,
+  "narrow screens should derive poster height from the full 1024 by 1824 artwork ratio while preserving the 88rpx classroom action",
+);
+const narrowPosterRules = style.match(
+  /@media\s*\(max-width:\s*380px\)[\s\S]*?\.expert-hero__portrait\s*\{([^}]*)\}/,
+)?.[1] || "";
+assert.doesNotMatch(
+  narrowPosterRules,
+  /(?:height|min-height):\s*\d+rpx/,
+  "narrow poster rules should not retain a fixed rpx height that can distort clamped viewports",
 );
 assert.match(source, /failedCarouselImages/, "carousel images should keep an isolated failed-image Set");
 assert.match(source, /courseCoverErrors/, "course covers should keep isolated fallback state");
