@@ -120,6 +120,33 @@ func bailianCopyActionForStatus(status string) bailianCopyAction {
 	}
 }
 
+type bailianCopyPlan struct {
+	Name          string
+	Provider      string
+	Remark        string
+	SampleAssetID int64
+	SampleName    string
+	SampleURL     string
+}
+
+func buildBailianCopyPlan(source Profile) (bailianCopyPlan, error) {
+	if normalizeProfileProvider(source.Provider) != ProviderMiniMax {
+		return bailianCopyPlan{}, fmt.Errorf("仅支持复制 MiniMax 人声档案到阿里百炼")
+	}
+	assetID, err := parseOptionalID(source.SampleAssetID)
+	if err != nil || assetID == 0 {
+		return bailianCopyPlan{}, fmt.Errorf("音频样本不存在")
+	}
+	return bailianCopyPlan{
+		Name:          source.Name + "（百炼）",
+		Provider:      ProviderBailian,
+		Remark:        source.Remark,
+		SampleAssetID: assetID,
+		SampleName:    source.SampleName,
+		SampleURL:     source.SampleURL,
+	}, nil
+}
+
 type GenerateInput struct {
 	Model     string `json:"model"`
 	ProfileID string `json:"profileId"`
@@ -339,17 +366,14 @@ func (s *Store) CopyProfileToBailian(ctx context.Context, sourceID string) (Prof
 	if err != nil {
 		return Profile{}, err
 	}
-	if normalizeProfileProvider(source.Provider) != ProviderMiniMax {
-		return Profile{}, fmt.Errorf("仅支持复制 MiniMax 人声档案到阿里百炼")
-	}
-	assetID, err := parseOptionalID(source.SampleAssetID)
-	if err != nil || assetID == 0 {
-		return Profile{}, fmt.Errorf("音频样本不存在")
+	plan, err := buildBailianCopyPlan(source)
+	if err != nil {
+		return Profile{}, err
 	}
 	if s.uploads == nil {
 		return Profile{}, fmt.Errorf("读取音频样本失败")
 	}
-	if _, err := s.uploads.Find(ctx, assetID); err != nil {
+	if _, err := s.uploads.Find(ctx, plan.SampleAssetID); err != nil {
 		return Profile{}, fmt.Errorf("读取音频样本失败: %w", err)
 	}
 
@@ -360,7 +384,7 @@ func (s *Store) CopyProfileToBailian(ctx context.Context, sourceID string) (Prof
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx,
 		`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
-		"voice-profile-copy-to-bailian:"+source.SampleAssetID,
+		"voice-profile-copy-to-bailian:"+fmt.Sprint(plan.SampleAssetID),
 	); err != nil {
 		return Profile{}, err
 	}
@@ -372,7 +396,7 @@ func (s *Store) CopyProfileToBailian(ctx context.Context, sourceID string) (Prof
 		  WHERE provider=$1 AND sample_asset_id=$2
 		  ORDER BY create_time ASC
 		  LIMIT 1`,
-		ProviderBailian, assetID,
+		ProviderBailian, plan.SampleAssetID,
 	).Scan(&existingID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Profile{}, err
@@ -382,7 +406,7 @@ func (s *Store) CopyProfileToBailian(ctx context.Context, sourceID string) (Prof
 			`INSERT INTO voice_profiles (name, provider, voice_id, sample_asset_id, sample_url, sample_name, status, remark)
 			 VALUES ($1,$2,$3,$4,$5,$6,'draft',$7)
 			 RETURNING id::text`,
-			source.Name+"（百炼）", ProviderBailian, "nx_voice_"+randomID(10), assetID, source.SampleURL, source.SampleName, source.Remark,
+			plan.Name, plan.Provider, "nx_voice_"+randomID(10), plan.SampleAssetID, plan.SampleURL, plan.SampleName, plan.Remark,
 		).Scan(&existingID); err != nil {
 			return Profile{}, err
 		}

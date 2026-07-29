@@ -38,6 +38,37 @@ func TestCopyProfileToBailianStatusDecision(t *testing.T) {
 	}
 }
 
+func TestCopyProfileToBailianPlanRejectsNonMiniMaxSource(t *testing.T) {
+	_, err := buildBailianCopyPlan(Profile{Provider: ProviderBailian, SampleAssetID: "9"})
+	if err == nil || !strings.Contains(err.Error(), "MiniMax") {
+		t.Fatalf("err=%v, want MiniMax source validation error", err)
+	}
+}
+
+func TestCopyProfileToBailianPlanRejectsMissingSample(t *testing.T) {
+	_, err := buildBailianCopyPlan(Profile{Provider: ProviderMiniMax})
+	if err == nil || !strings.Contains(err.Error(), "音频样本") {
+		t.Fatalf("err=%v, want missing sample validation error", err)
+	}
+}
+
+func TestCopyProfileToBailianPlanCopiesBailianFields(t *testing.T) {
+	plan, err := buildBailianCopyPlan(Profile{
+		Name:          "韩老师",
+		Provider:      ProviderMiniMax,
+		Remark:        "原始备注",
+		SampleAssetID: "42",
+		SampleName:    "teacher.mp3",
+		SampleURL:     "/api/upload-assets/42",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Name != "韩老师（百炼）" || plan.Provider != ProviderBailian || plan.SampleAssetID != 42 || plan.SampleName != "teacher.mp3" || plan.SampleURL != "/api/upload-assets/42" || plan.Remark != "原始备注" {
+		t.Fatalf("unexpected copy plan: %+v", plan)
+	}
+}
+
 func TestCopyProfileToBailianReusesMiniMaxSampleAndPreservesSource(t *testing.T) {
 	store, database, cleanup := newVoiceProfileCopyTestStore(t)
 	defer cleanup()
