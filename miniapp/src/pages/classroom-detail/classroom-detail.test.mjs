@@ -87,6 +87,26 @@ assert.match(
 );
 assert.match(
   source,
+  /class="detail-head__play-icon"[\s\S]*class="detail-head__play-glyph"/,
+  "detail cover should use a concise CSS play glyph",
+);
+assert.doesNotMatch(
+  source,
+  /detail-head__play-copy|已准备学习内容|完成访问后开始学习/,
+  "detail cover should not repeat playback copy over cover artwork",
+);
+assert.match(
+  source,
+  /\.detail-head__play\s*\{[^}]*top:\s*50%[^}]*left:\s*50%[^}]*transform:\s*translate\(-50%,\s*-50%\)/s,
+  "detail play mark should sit in the visual center instead of covering bottom captions",
+);
+assert.match(
+  source,
+  /\.detail-head__play-icon\s*\{[^}]*width:\s*80rpx[^}]*height:\s*80rpx[^}]*background:\s*rgba\(32,\s*42,\s*55,\s*0\.78\)[^}]*border:\s*2rpx\s+solid\s+rgba\(223,\s*188,\s*127,\s*0\.88\)/s,
+  "detail play mark should use the restrained graphite and champagne treatment",
+);
+assert.match(
+  source,
   /class="player-panel__body"/,
   "detail player panel should share the refreshed platform-card content body",
 );

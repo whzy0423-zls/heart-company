@@ -570,12 +570,9 @@ onUnload(() => {
               }}</text>
             </view>
             <view class="detail-head__play" aria-hidden="true">
-              <text class="detail-head__play-icon">{{
-                content.contentType === "audio" ? "音频" : "播放"
-              }}</text>
-              <text class="detail-head__play-copy">{{
-                content.canPlay ? "已准备学习内容" : "完成访问后开始学习"
-              }}</text>
+              <view class="detail-head__play-icon">
+                <view class="detail-head__play-glyph" />
+              </view>
             </view>
           </view>
         </view>
@@ -875,24 +872,20 @@ onUnload(() => {
   border-radius: 999rpx;
 }
 .detail-head__pill--access { color: var(--nx-brand-900); background: rgba(223, 188, 127, 0.94); border-color: rgba(223, 188, 127, 0.7); }
-.detail-head__play { position: absolute; right: 0; bottom: 32rpx; left: 0; display: flex; flex-direction: column; align-items: center; color: var(--nx-surface); }
+.detail-head__play { position: absolute; top: 50%; left: 50%; display: flex; align-items: center; justify-content: center; width: 88rpx; height: 88rpx; transform: translate(-50%, -50%); }
 .detail-head__play-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 112rpx;
-  height: 88rpx;
-  padding: 0 20rpx;
-  color: var(--nx-brand-900);
-  font-size: 24rpx;
-  font-weight: 900;
-  background: var(--nx-accent-gold);
-  border: 5rpx solid rgba(255, 255, 255, 0.86);
-  border-radius: 999rpx;
+  width: 80rpx;
+  height: 80rpx;
+  background: rgba(32, 42, 55, 0.78);
+  border: 2rpx solid rgba(223, 188, 127, 0.88);
+  border-radius: 50%;
   box-shadow: 0 12rpx 30rpx rgba(32, 42, 55, 0.34);
   box-sizing: border-box;
 }
-.detail-head__play-copy { margin-top: 14rpx; font-size: 22rpx; font-weight: 800; text-shadow: 0 2rpx 10rpx rgba(0, 0, 0, 0.42); }
+.detail-head__play-glyph { width: 0; height: 0; margin-left: 6rpx; border-top: 14rpx solid transparent; border-bottom: 14rpx solid transparent; border-left: 21rpx solid var(--nx-accent-gold); }
 .detail-head__body { display: flex; width: 100%; flex-direction: column; padding: 30rpx; box-sizing: border-box; }
 .content-summary { display: flex; flex-direction: column; }
 .detail-head__meta { display: flex; align-items: center; justify-content: space-between; color: var(--nx-brand-700); font-size: 22rpx; font-weight: 900; }
