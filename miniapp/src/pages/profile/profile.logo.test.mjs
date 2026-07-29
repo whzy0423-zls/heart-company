@@ -13,8 +13,8 @@ const signedInProfile = source.slice(signedInStart)
 
 assert.match(
   anonymousHero,
-  /<image\s+src="\/static\/wheel\.png"\s+mode="aspectFit"\s+aria-label="九型 Logo"[^>]*\/>/,
-  'the logged-out hero should use the complete Nine-Type logo',
+  /<image\s+v-if="!profileLogoFailed"\s+src="\/static\/wheel\.png"\s+mode="aspectFit"\s+aria-label="九型 Logo"[^>]*@error="onProfileLogoError"[^>]*\/>[\s\S]*?<view\s+v-else\s+class="profile-hero__mark profile-hero__mark--ph">九<\/view>/,
+  'the logged-out hero should use the complete Nine-Type logo and fall back to the brand mark on error',
 )
 assert.doesNotMatch(
   anonymousHero,
@@ -29,13 +29,28 @@ assert.match(
 )
 assert.match(
   signedInProfile,
-  /<image\s+v-else\s+src="\/static\/wheel\.png"\s+mode="aspectFit"\s+aria-label="九型 Logo"[^>]*\/>/,
-  'a missing or failed signed-in avatar should fall back to the same Nine-Type logo',
+  /<image\s+v-else-if="!profileLogoFailed"\s+src="\/static\/wheel\.png"\s+mode="aspectFit"\s+aria-label="九型 Logo"[^>]*@error="onProfileLogoError"[^>]*\/>[\s\S]*?<view\s+v-else\s+class="user__avatar user__avatar--ph">九<\/view>/,
+  'a missing or failed signed-in avatar should use the same logo and fall back to the brand mark on error',
 )
 assert.equal(
   source.match(/src="\/static\/wheel\.png"/g)?.length,
   2,
   'the logged-out and signed-in fallback states should share the same logo asset',
+)
+const profileLogoImages = [...source.matchAll(/<image\b[^>]*src="\/static\/wheel\.png"[^>]*\/>/g)]
+assert.equal(profileLogoImages.length, 2, 'profile should render the logo in both avatar fallback locations')
+for (const [index, logoImage] of profileLogoImages.entries()) {
+  assert.match(
+    logoImage[0],
+    /@error="onProfileLogoError"/,
+    `profile logo image ${index + 1} should expose an image-error fallback`,
+  )
+}
+assert.match(source, /const\s+profileLogoFailed\s*=\s*ref\(false\)/, 'profile should track logo loading failures')
+assert.match(
+  source,
+  /function\s+onProfileLogoError\s*\(\s*\)\s*\{\s*profileLogoFailed\.value\s*=\s*true\s*\}/,
+  'profile should switch both logo locations to their brand-mark fallback after an image error',
 )
 
 assert.match(
