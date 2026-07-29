@@ -155,6 +155,102 @@ func TestConversationAppendsDirectAnswerDirectiveAfterConfiguredPrompts(t *testi
 	}
 }
 
+func TestConversationFiltersProductImplementationMetaBeforeVoiceDeliveryAndPersistence(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.generator.answer = ""
+	fixture.generator.deltas = []string{
+		"从后台实现来看，",
+		"接口层方案要先统一。推荐三道菜：",
+		"番茄炒蛋、青椒肉丝、可乐鸡翅。",
+	}
+	fixture.synth.segments = nil
+	const want = "推荐三道菜：番茄炒蛋、青椒肉丝、可乐鸡翅。"
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-answer-hygiene")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "推荐几道菜", Stable: true})
+	segment := fixture.sink.waitAudio(t)
+	fixture.sink.waitControl(t, EventAssistantDone)
+	if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-answer-hygiene", SegmentSeq: segment.Seq}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.store.waitCompleted(t)
+	fixture.store.waitDelivered(t, want)
+
+	if got := strings.Join(fixture.synth.synthesizedTexts(), ""); got != want {
+		t.Fatalf("TTS text=%q want=%q", got, want)
+	}
+	if got := segment.DeliveryText(); got != want {
+		t.Fatalf("delivery text=%q want=%q", got, want)
+	}
+	_, assistants, completed := fixture.store.contents()
+	if len(assistants) != 1 || assistants[0] != want || completed != want {
+		t.Fatalf("assistant drafts=%q completed=%q want=%q", assistants, completed, want)
+	}
+	for _, forbidden := range []string{"后台", "接口", "方案"} {
+		if strings.Contains(strings.Join(fixture.synth.synthesizedTexts(), "")+segment.DeliveryText()+strings.Join(assistants, "")+completed, forbidden) {
+			t.Fatalf("filtered product meta %q leaked into delivery or persistence", forbidden)
+		}
+	}
+}
+
+func TestConversationUsesNeutralFallbackWhenGenerationIsOnlyProductMeta(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.generator.answer = ""
+	fixture.generator.deltas = []string{"- App 端需要先处理页面状态。", "基础框架建议统一走后台接口。"}
+	fixture.synth.segments = nil
+	const want = "请再具体说一点，我会直接回答。"
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-answer-hygiene-fallback")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "给我推荐点东西", Stable: true})
+	segment := fixture.sink.waitAudio(t)
+	fixture.sink.waitControl(t, EventAssistantDone)
+	if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-answer-hygiene-fallback", SegmentSeq: segment.Seq}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.store.waitCompleted(t)
+	fixture.store.waitDelivered(t, want)
+
+	if got := strings.Join(fixture.synth.synthesizedTexts(), ""); got != want {
+		t.Fatalf("TTS text=%q want=%q", got, want)
+	}
+	_, assistants, completed := fixture.store.contents()
+	if len(assistants) != 1 || assistants[0] != want || completed != want {
+		t.Fatalf("assistant drafts=%q completed=%q want=%q", assistants, completed, want)
+	}
+}
+
+func TestConversationPreservesImplementationAnswerForExplicitTechnicalQuestion(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.generator.answer = ""
+	fixture.generator.deltas = []string{"后台接口先部署服务，", "再配置客户端网络请求。"}
+	fixture.synth.segments = nil
+	const want = "后台接口先部署服务，再配置客户端网络请求。"
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-technical-answer")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "服务器怎么部署", Stable: true})
+	segment := fixture.sink.waitAudio(t)
+	fixture.sink.waitControl(t, EventAssistantDone)
+	if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-technical-answer", SegmentSeq: segment.Seq}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.store.waitCompleted(t)
+	fixture.store.waitDelivered(t, want)
+
+	if got := strings.Join(fixture.synth.synthesizedTexts(), ""); got != want {
+		t.Fatalf("TTS text=%q want=%q", got, want)
+	}
+	_, assistants, completed := fixture.store.contents()
+	if len(assistants) != 1 || assistants[0] != want || completed != want {
+		t.Fatalf("assistant drafts=%q completed=%q want=%q", assistants, completed, want)
+	}
+}
+
 func TestDeliveryRetriesTTSOnceBeforeFirstAudio(t *testing.T) {
 	fixture := newSessionFixture(t)
 	fixture.generator.answer = "先呼吸。"

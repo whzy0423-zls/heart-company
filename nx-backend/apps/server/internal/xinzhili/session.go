@@ -214,7 +214,10 @@ type activeTurn struct {
 	completionDone    bool
 	doneSent          bool
 	generationErr     error
+	question          string
+	rawDraft          string
 	chunker           streamSentenceChunker
+	droppingMeta      bool
 	ttsJobs           chan ttsStreamJob
 	nextTTSSeq        uint32
 }
@@ -508,7 +511,7 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 	case eventGenerationDone:
 		s.handleGenerationDone(current, event)
 	case eventGenerationDelta:
-		current.draft += event.answer
+		current.rawDraft += event.answer
 		for _, chunk := range current.chunker.Push(event.answer) {
 			s.queueTTSChunk(current, chunk)
 		}
@@ -587,6 +590,7 @@ func (s *session) handleASREvent(turn *activeTurn, event ASREvent) {
 		return
 	}
 	turn.processing = true
+	turn.question = text
 	turn.ttsJobs = make(chan ttsStreamJob, 128)
 	s.startSynthesisWorker(turn)
 	s.startGeneration(turn, text)
@@ -696,17 +700,12 @@ func (s *session) startSynthesisWorker(turn *activeTurn) {
 
 func (s *session) handleGenerationDone(turn *activeTurn, event sessionEvent) {
 	rawAnswer := strings.TrimSpace(event.answer)
-	if rawAnswer != "" && strings.HasPrefix(rawAnswer, turn.draft) && len(rawAnswer) > len(turn.draft) {
-		suffix := rawAnswer[len(turn.draft):]
-		turn.draft += suffix
+	if rawAnswer != "" && strings.HasPrefix(rawAnswer, turn.rawDraft) && len(rawAnswer) > len(turn.rawDraft) {
+		suffix := rawAnswer[len(turn.rawDraft):]
+		turn.rawDraft += suffix
 		for _, chunk := range turn.chunker.Push(suffix) {
 			s.queueTTSChunk(turn, chunk)
 		}
-	}
-	answer := normalizeGeneratedContent(rawAnswer)
-	turn.answer = normalizeGeneratedContent(turn.draft)
-	if turn.answer == "" || strings.HasPrefix(answer, turn.answer) {
-		turn.answer = answer
 	}
 	turn.sources = event.sources
 	turn.generationErr = event.err
@@ -714,7 +713,11 @@ func (s *session) handleGenerationDone(turn *activeTurn, event sessionEvent) {
 		for _, chunk := range turn.chunker.Flush() {
 			s.queueTTSChunk(turn, chunk)
 		}
+		if normalizeGeneratedContent(turn.draft) == "" {
+			s.queueTTSChunk(turn, neutralDirectAnswerFallback)
+		}
 	}
+	turn.answer = normalizeGeneratedContent(turn.draft)
 	close(turn.ttsJobs)
 	if event.err != nil || turn.answer == "" {
 		s.sendError(turn, "generation_failed", "回答生成失败，请重试", true)
@@ -726,6 +729,17 @@ func (s *session) queueTTSChunk(turn *activeTurn, chunk string) {
 	if chunk == "" {
 		return
 	}
+	if !isExplicitTechnicalQuestion(turn.question) {
+		if turn.droppingMeta {
+			turn.droppingMeta = !endsStrongSentence(chunk)
+			return
+		}
+		if isProductMetaSentence(chunk) {
+			turn.droppingMeta = !endsStrongSentence(chunk)
+			return
+		}
+	}
+	turn.draft += chunk
 	turn.ttsJobs <- ttsStreamJob{seq: turn.nextTTSSeq, text: chunk}
 	turn.nextTTSSeq++
 }
