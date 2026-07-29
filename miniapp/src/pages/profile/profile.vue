@@ -324,60 +324,91 @@ function openBookingRecords() {
 </template>
 
 <style scoped>
-.profile { gap: 24rpx; overflow-x: hidden; }
-.profile-hero { box-sizing: border-box; width: 100%; padding: 36rpx; border-radius: 38rpx; background: linear-gradient(145deg, #172554, #4338ca 56%, #7c3aed); color: #ffffff; box-shadow: 0 26rpx 54rpx -34rpx rgba(49, 46, 129, .78); overflow: hidden; }
-.login { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 18rpx; padding-top: 54rpx; padding-bottom: 50rpx; }
-.profile-hero__mark { width: 116rpx; height: 116rpx; border-radius: 34rpx; background: rgba(255, 255, 255, .16); border: 2rpx solid rgba(255, 255, 255, .32); color: #ffffff; font-size: 50rpx; font-weight: 900; display: flex; align-items: center; justify-content: center; }
-.profile-hero__eyebrow { color: #ddd6fe; font-size: 24rpx; font-weight: 800; line-height: 1.45; }
-.profile-hero__title { display: block; margin-top: 10rpx; color: #ffffff; font-size: 42rpx; font-weight: 900; line-height: 1.25; }
-.profile-hero__lead { display: block; margin-top: 14rpx; color: #ede9fe; font-size: 25rpx; line-height: 1.65; }
-.profile-login { width: 100%; min-height: 88rpx; margin-top: 16rpx; border-radius: 24rpx; background: #ffffff; color: #312e81; font-size: 28rpx; font-weight: 900; }
+.profile {
+  gap: 24rpx;
+  overflow-x: hidden;
+  background: var(--nx-page-bg);
+}
+.profile-hero {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 38rpx 34rpx;
+  border: 2rpx solid rgba(223, 188, 127, .34);
+  border-radius: 38rpx;
+  background:
+    radial-gradient(circle at 94% 4%, rgba(223, 188, 127, .24), transparent 34%),
+    linear-gradient(145deg, var(--nx-brand-900), var(--nx-brand-700));
+  color: var(--nx-surface);
+  box-shadow: 0 26rpx 54rpx -34rpx rgba(32, 42, 55, .72);
+  overflow: hidden;
+}
+.login { display: flex; flex-direction: column; gap: 14rpx; }
+.profile-hero__mark {
+  width: 116rpx;
+  height: 116rpx;
+  border-radius: 34rpx;
+  background: rgba(255, 255, 255, .10);
+  border: 2rpx solid rgba(223, 188, 127, .58);
+  color: var(--nx-accent-gold);
+  font-size: 50rpx;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.profile-hero__eyebrow { color: var(--nx-accent-gold); font-size: 24rpx; font-weight: 800; line-height: 1.45; }
+.profile-hero__title { display: block; margin-top: 10rpx; color: var(--nx-surface); font-size: 42rpx; font-weight: 900; line-height: 1.25; }
+.profile-hero__lead { display: block; margin-top: 14rpx; color: rgba(255, 255, 255, .80); font-size: 25rpx; line-height: 1.65; }
+.profile-login { width: 100%; min-height: 88rpx; margin-top: 16rpx; border-radius: 24rpx; background: var(--nx-surface); color: var(--nx-brand-900); font-size: 28rpx; font-weight: 900; }
 .profile-login::after { border: none; }
-.login__hint { color: #ddd6fe; font-size: 24rpx; line-height: 1.55; }
+.login__hint { color: rgba(255, 255, 255, .72); font-size: 24rpx; line-height: 1.55; }
 .profile-hero__identity-action { min-height: 88rpx; display: flex; align-items: center; gap: 22rpx; border-radius: 24rpx; cursor: pointer; }
 .profile-hero__identity-action--pressed { opacity: .76; transform: scale(.992); }
-.profile-hero__identity-action:focus-visible { outline: 4rpx solid rgba(255, 255, 255, .82); outline-offset: 6rpx; }
-.profile-hero__identity-arrow { flex: none; color: #ddd6fe; font-size: 40rpx; line-height: 1; }
+.profile-hero__identity-action:focus-visible { outline: 4rpx solid var(--nx-accent-gold); outline-offset: 6rpx; }
+.profile-hero__identity-arrow { flex: none; color: var(--nx-accent-gold); font-size: 40rpx; line-height: 1; }
 .profile-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12rpx; margin-top: 30rpx; }
-.profile-stat { min-width: 0; padding: 20rpx 10rpx; border-radius: 22rpx; background: rgba(255, 255, 255, .14); border: 2rpx solid rgba(255, 255, 255, .16); text-align: center; }
-.profile-stat__value { display: block; color: #ffffff; font-size: 34rpx; font-weight: 900; line-height: 1.2; font-variant-numeric: tabular-nums; }
-.profile-stat__label { display: block; margin-top: 8rpx; color: #ddd6fe; font-size: 24rpx; line-height: 1.35; }
+.profile-stat { min-width: 0; padding: 20rpx 10rpx; border-radius: 22rpx; background: rgba(255, 255, 255, .10); border: 2rpx solid rgba(255, 255, 255, .14); text-align: center; }
+.profile-stat__value { display: block; color: var(--nx-surface); font-size: 34rpx; font-weight: 900; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.profile-stat__label { display: block; margin-top: 8rpx; color: rgba(255, 255, 255, .72); font-size: 24rpx; line-height: 1.35; }
+.user__avatar { width: 104rpx; height: 104rpx; flex: 0 0 104rpx; border-radius: 34rpx; border: 3rpx solid rgba(223, 188, 127, .72); box-sizing: border-box; }
+.user__avatar--ph { background: rgba(255, 255, 255, .10); color: var(--nx-accent-gold); font-size: 44rpx; font-weight: 900; display: flex; align-items: center; justify-content: center; }
 .user__info { flex: 1; min-width: 0; }
-.user__avatar { width: 116rpx; height: 116rpx; flex: 0 0 116rpx; border-radius: 50%; border: 4rpx solid rgba(255, 255, 255, .72); box-sizing: border-box; box-shadow: 0 16rpx 34rpx -26rpx rgba(15, 23, 42, .62); }
-.user__avatar--ph { background: rgba(255, 255, 255, .16); color: #ffffff; font-size: 44rpx; font-weight: 900; display: flex; align-items: center; justify-content: center; }
-.user__name { color: #ffffff; font-size: 35rpx; font-weight: 900; display: block; line-height: 1.28; }
-.user__type { color: #ddd6fe; font-size: 25rpx; display: block; margin-top: 7rpx; }
-.history-section, .booking-summary { box-sizing: border-box; width: 100%; padding: 30rpx; }
-.section-kicker { display: block; margin-bottom: 6rpx; color: #4f46e5; font-size: 24rpx; font-weight: 800; line-height: 1.35; }
-.sec-title { display: block; color: #0f172a; font-size: 32rpx; font-weight: 900; line-height: 1.3; }
-.section-head { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; margin-bottom: 22rpx; }
-.section-count { min-width: 64rpx; color: #4338ca; font-size: 30rpx; font-weight: 900; text-align: right; font-variant-numeric: tabular-nums; }
-.empty { color: #475569; font-size: 25rpx; padding: 28rpx 20rpx; text-align: center; border-radius: 22rpx; background: #f8fafc; }
-.empty--error { display: flex; align-items: center; justify-content: space-between; gap: 18rpx; padding: 18rpx 20rpx; text-align: left; }
-.sync-retry { flex-shrink: 0; min-width: 112rpx; min-height: 88rpx; padding: 0 20rpx; border-radius: 999rpx; background: #eef2ff; color: #3730a3; font-size: 24rpx; font-weight: 900; display: flex; align-items: center; justify-content: center; }
+.user__name { color: var(--nx-surface); font-size: 35rpx; font-weight: 900; display: block; line-height: 1.28; }
+.user__type { color: rgba(255, 255, 255, .72); font-size: 25rpx; display: block; margin-top: 7rpx; }
+.history-section,
+.booking-summary { box-sizing: border-box; width: 100%; padding: 30rpx; background: var(--nx-surface); border-color: var(--nx-border); }
+.section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20rpx; margin-bottom: 22rpx; }
+.section-kicker { display: block; margin-bottom: 6rpx; color: var(--nx-brand-700); font-size: 24rpx; font-weight: 800; line-height: 1.35; }
+.sec-title { display: block; color: var(--nx-text); font-size: 32rpx; font-weight: 900; line-height: 1.3; }
+.section-count { min-width: 64rpx; color: var(--nx-brand-900); font-size: 30rpx; font-weight: 900; text-align: right; font-variant-numeric: tabular-nums; }
+.empty { color: var(--nx-text-muted); font-size: 25rpx; padding: 28rpx 20rpx; text-align: center; border-radius: 22rpx; background: var(--nx-surface-soft); }
+.empty--error { display: flex; align-items: center; justify-content: space-between; gap: 18rpx; text-align: left; border: 2rpx solid rgba(180, 35, 24, .22); }
+.sync-retry { flex-shrink: 0; min-width: 112rpx; min-height: 88rpx; padding: 0 20rpx; border-radius: 999rpx; background: var(--nx-surface); border: 2rpx solid var(--nx-border); color: var(--nx-brand-900); font-size: 24rpx; font-weight: 900; display: flex; align-items: center; justify-content: center; }
 .sync-retry::after { border: none; }
 .history-timeline { width: 100%; }
-.history-item { display: flex; align-items: stretch; gap: 20rpx; min-height: 88rpx; border-bottom: 2rpx solid #e2e8f0; }
+.history-item { display: flex; align-items: stretch; gap: 20rpx; min-height: 88rpx; border-bottom: 2rpx solid var(--nx-border); }
 .history-item:last-of-type { border-bottom: none; }
 .history-item__rail { width: 20rpx; flex: 0 0 20rpx; display: flex; justify-content: center; padding-top: 30rpx; }
-.history-item__dot { width: 16rpx; height: 16rpx; border-radius: 50%; background: #6366f1; box-shadow: 0 0 0 7rpx #eef2ff; }
+.history-item__dot { width: 16rpx; height: 16rpx; border-radius: 50%; background: var(--nx-accent-gold); box-shadow: 0 0 0 7rpx rgba(223, 188, 127, .18); }
 .history-item__body { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 18rpx 0; }
-.history-item__main { color: #0f172a; font-size: 28rpx; font-weight: 900; line-height: 1.35; }
-.history-item__meta { display: block; margin-top: 7rpx; color: #475569; font-size: 24rpx; line-height: 1.45; }
-.more-tip { display: block; margin-top: 16rpx; color: #475569; font-size: 24rpx; line-height: 1.5; }
-.booking-summary__open { min-height: 88rpx; padding: 24rpx; border-radius: 24rpx; background: #f8fafc; box-sizing: border-box; cursor: pointer; }
+.history-item__main { color: var(--nx-text); font-size: 28rpx; font-weight: 900; line-height: 1.35; }
+.history-item__meta { display: block; margin-top: 7rpx; color: var(--nx-text-muted); font-size: 24rpx; line-height: 1.45; }
+.more-tip { display: block; margin-top: 16rpx; color: var(--nx-text-muted); font-size: 24rpx; line-height: 1.5; }
+.booking-summary__open { min-height: 88rpx; padding: 24rpx; border-radius: 24rpx; background: var(--nx-surface-soft); border: 2rpx solid var(--nx-border); box-sizing: border-box; cursor: pointer; }
 .booking-summary__open--pressed { opacity: .76; transform: scale(.992); }
-.booking-summary__open:focus-visible { outline: 4rpx solid rgba(79, 70, 229, .62); outline-offset: 4rpx; }
+.booking-summary__open:focus-visible { outline: 4rpx solid var(--nx-accent-gold); outline-offset: 4rpx; }
 .booking-summary__state { min-height: 90rpx; display: flex; flex-direction: column; justify-content: center; }
-.booking-summary__main { color: #0f172a; font-size: 28rpx; font-weight: 900; line-height: 1.4; }
-.booking-summary__meta { display: block; margin-top: 8rpx; color: #475569; font-size: 24rpx; line-height: 1.5; }
-.booking-summary__footer { min-height: 56rpx; margin-top: 20rpx; padding-top: 18rpx; border-top: 2rpx solid #e2e8f0; color: #4338ca; font-size: 24rpx; font-weight: 900; display: flex; align-items: center; justify-content: space-between; gap: 20rpx; }
+.booking-summary__main { color: var(--nx-text); font-size: 28rpx; font-weight: 900; line-height: 1.4; }
+.booking-summary__meta { display: block; margin-top: 8rpx; color: var(--nx-text-muted); font-size: 24rpx; line-height: 1.5; }
+.booking-summary__footer { min-height: 56rpx; margin-top: 20rpx; padding-top: 18rpx; border-top: 2rpx solid var(--nx-border); color: var(--nx-brand-700); font-size: 24rpx; font-weight: 900; display: flex; align-items: center; justify-content: space-between; gap: 20rpx; }
 .booking-summary__arrow { font-size: 38rpx; line-height: 1; }
-.booking-summary__retry { width: 100%; min-height: 88rpx; margin-top: 16rpx; border-radius: 22rpx; background: #eef2ff; color: #3730a3; font-size: 24rpx; font-weight: 900; }
+.booking-summary__retry { width: 100%; min-height: 88rpx; margin-top: 16rpx; border-radius: 22rpx; background: var(--nx-surface-soft); border: 2rpx solid var(--nx-border); color: var(--nx-brand-900); font-size: 24rpx; font-weight: 900; }
 .booking-summary__retry::after { border: none; }
-.logout { width: 100%; min-height: 88rpx; border-radius: 24rpx; background: transparent; border: 2rpx solid #fecaca; color: #b91c1c; font-size: 26rpx; font-weight: 800; }
+.logout { width: 100%; min-height: 88rpx; border-radius: 24rpx; background: transparent; border: 2rpx solid rgba(180, 35, 24, .30); color: var(--nx-danger); font-size: 26rpx; font-weight: 800; }
 .logout::after { border: none; }
 @media (max-width: 360px) {
-  .profile-hero, .history-section, .booking-summary { padding-left: 26rpx; padding-right: 26rpx; }
+  .profile-hero,
+  .history-section,
+  .booking-summary { padding-left: 26rpx; padding-right: 26rpx; }
 }
 </style>

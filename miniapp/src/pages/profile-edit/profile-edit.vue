@@ -201,7 +201,7 @@ onUnload(invalidateProfileSession)
 </script>
 
 <template>
-  <view class="profile-edit-page page-stack ios-page ios-safe-bottom">
+  <view class="wrap profile-edit-page page-stack ios-page ios-safe-bottom">
     <view class="profile-edit-hero nx-page-hero">
       <text class="profile-edit-hero__eyebrow">个人档案</text>
       <text class="profile-edit-hero__title">让资料更像现在的你</text>
@@ -291,46 +291,63 @@ onUnload(invalidateProfileSession)
 </template>
 
 <style scoped>
-.profile-edit-page { gap: 24rpx; overflow-x: hidden; }
-.profile-edit-hero { box-sizing: border-box; width: 100%; padding: 38rpx 34rpx; border-radius: 38rpx; background: linear-gradient(145deg, #172554, #4338ca 56%, #7c3aed); color: #ffffff; box-shadow: 0 26rpx 54rpx -34rpx rgba(49, 46, 129, .78); overflow: hidden; }
-.profile-edit-hero__eyebrow { display: block; color: #ddd6fe; font-size: 24rpx; font-weight: 800; line-height: 1.4; }
-.profile-edit-hero__title { display: block; margin-top: 10rpx; color: #ffffff; font-size: 42rpx; font-weight: 900; line-height: 1.25; }
-.profile-edit-hero__lead { display: block; margin-top: 14rpx; color: #ede9fe; font-size: 25rpx; line-height: 1.65; }
-.profile-edit-hero__identity { display: flex; align-items: center; gap: 22rpx; margin-top: 30rpx; padding: 22rpx; border-radius: 28rpx; background: rgba(255, 255, 255, .13); border: 2rpx solid rgba(255, 255, 255, .18); }
-.profile-edit-hero__avatar { box-sizing: border-box; width: 104rpx; height: 104rpx; flex: 0 0 104rpx; border-radius: 34rpx; border: 3rpx solid rgba(255, 255, 255, .68); }
-.profile-edit-hero__avatar--fallback { display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, .16); color: #ffffff; font-size: 42rpx; font-weight: 900; }
+.profile-edit-page {
+  gap: 24rpx;
+  overflow-x: hidden;
+  background: var(--nx-page-bg);
+}
+.profile-edit-hero {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 38rpx 34rpx;
+  border: 2rpx solid rgba(223, 188, 127, .34);
+  border-radius: 38rpx;
+  background:
+    radial-gradient(circle at 94% 4%, rgba(223, 188, 127, .24), transparent 34%),
+    linear-gradient(145deg, var(--nx-brand-900), var(--nx-brand-700));
+  color: var(--nx-surface);
+  box-shadow: 0 26rpx 54rpx -34rpx rgba(32, 42, 55, .72);
+  overflow: hidden;
+}
+.profile-edit-hero__eyebrow { display: block; color: var(--nx-accent-gold); font-size: 24rpx; font-weight: 800; line-height: 1.4; }
+.profile-edit-hero__title { display: block; margin-top: 10rpx; color: var(--nx-surface); font-size: 42rpx; font-weight: 900; line-height: 1.25; }
+.profile-edit-hero__lead { display: block; margin-top: 14rpx; color: rgba(255, 255, 255, .80); font-size: 25rpx; line-height: 1.65; }
+.profile-edit-hero__identity { display: flex; align-items: center; gap: 22rpx; margin-top: 30rpx; padding: 22rpx; border-radius: 28rpx; background: rgba(255, 255, 255, .10); border: 2rpx solid rgba(223, 188, 127, .34); }
+.profile-edit-hero__avatar { box-sizing: border-box; width: 104rpx; height: 104rpx; flex: 0 0 104rpx; border-radius: 34rpx; border: 3rpx solid rgba(223, 188, 127, .72); }
+.profile-edit-hero__avatar--fallback { display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, .10); color: var(--nx-accent-gold); font-size: 42rpx; font-weight: 900; }
 .profile-edit-hero__copy { flex: 1; min-width: 0; }
-.profile-edit-hero__name { display: block; color: #ffffff; font-size: 34rpx; font-weight: 900; line-height: 1.3; }
-.profile-edit-hero__status { display: block; margin-top: 7rpx; color: #ddd6fe; font-size: 24rpx; line-height: 1.45; }
-.profile-state { box-sizing: border-box; width: 100%; padding: 34rpx 28rpx; text-align: center; }
-.profile-state--error { border: 2rpx solid #fecaca; background: #fff7f7; }
-.profile-state__title { display: block; color: #0f172a; font-size: 30rpx; font-weight: 900; line-height: 1.4; }
-.profile-state__desc { display: block; margin-top: 10rpx; color: #475569; font-size: 24rpx; line-height: 1.6; }
-.profile-retry { width: 100%; min-height: 88rpx; margin-top: 22rpx; border-radius: 24rpx; background: #eef2ff; color: #3730a3; font-size: 26rpx; font-weight: 900; }
+.profile-edit-hero__name { display: block; color: var(--nx-surface); font-size: 34rpx; font-weight: 900; line-height: 1.3; }
+.profile-edit-hero__status { display: block; margin-top: 7rpx; color: rgba(255, 255, 255, .72); font-size: 24rpx; line-height: 1.45; }
+.profile-state { box-sizing: border-box; width: 100%; padding: 34rpx 28rpx; text-align: center; background: var(--nx-surface); border-color: var(--nx-border); }
+.profile-state--error { border: 2rpx solid rgba(180, 35, 24, .24); background: var(--nx-surface); }
+.profile-state__title { display: block; color: var(--nx-text); font-size: 30rpx; font-weight: 900; line-height: 1.4; }
+.profile-state__desc { display: block; margin-top: 10rpx; color: var(--nx-text-muted); font-size: 24rpx; line-height: 1.6; }
+.profile-retry { width: 100%; min-height: 88rpx; margin-top: 22rpx; border-radius: 24rpx; background: var(--nx-surface-soft); border: 2rpx solid var(--nx-border); color: var(--nx-brand-900); font-size: 26rpx; font-weight: 900; }
 .profile-retry::after { border: none; }
-.profile-edit-panel { box-sizing: border-box; width: 100%; padding: 30rpx; }
+.profile-edit-panel { box-sizing: border-box; width: 100%; padding: 30rpx; background: var(--nx-surface); border-color: var(--nx-border); }
 .profile-edit-panel__head { display: flex; align-items: center; justify-content: space-between; gap: 18rpx; }
-.profile-edit-panel__kicker { display: block; color: #4f46e5; font-size: 24rpx; font-weight: 800; line-height: 1.35; }
-.profile-edit-panel__title { display: block; margin-top: 6rpx; color: #0f172a; font-size: 32rpx; font-weight: 900; line-height: 1.3; }
-.profile-sync { min-width: 146rpx; min-height: 88rpx; padding: 0 20rpx; border-radius: 22rpx; background: #eef2ff; color: #3730a3; font-size: 24rpx; font-weight: 900; display: flex; align-items: center; justify-content: center; }
+.profile-edit-panel__kicker { display: block; color: var(--nx-brand-700); font-size: 24rpx; font-weight: 800; line-height: 1.35; }
+.profile-edit-panel__title { display: block; margin-top: 6rpx; color: var(--nx-text); font-size: 32rpx; font-weight: 900; line-height: 1.3; }
+.profile-sync { min-width: 146rpx; min-height: 88rpx; padding: 0 20rpx; border-radius: 22rpx; background: var(--nx-surface-soft); border: 2rpx solid var(--nx-border); color: var(--nx-brand-900); font-size: 24rpx; font-weight: 900; display: flex; align-items: center; justify-content: center; }
 .profile-sync::after { border: none; }
-.profile-sync--disabled { max-width: 236rpx; color: #64748b; background: #f1f5f9; }
-.wechat-note { margin-top: 22rpx; padding: 22rpx; border-radius: 22rpx; background: #f5f3ff; border: 2rpx solid #ede9fe; }
-.wechat-note__title { display: block; color: #3730a3; font-size: 25rpx; font-weight: 900; line-height: 1.4; }
-.wechat-note__desc { display: block; margin-top: 8rpx; color: #475569; font-size: 24rpx; line-height: 1.6; }
+.profile-sync--disabled { max-width: 236rpx; color: var(--nx-text-muted); background: var(--nx-page-bg); }
+.wechat-note { margin-top: 22rpx; padding: 22rpx; border-radius: 22rpx; background: var(--nx-surface-soft); border: 2rpx solid var(--nx-border); }
+.wechat-note__title { display: block; color: var(--nx-brand-700); font-size: 25rpx; font-weight: 900; line-height: 1.4; }
+.wechat-note__desc { display: block; margin-top: 8rpx; color: var(--nx-text-muted); font-size: 24rpx; line-height: 1.6; }
 .profile-fields { display: flex; align-items: center; gap: 20rpx; margin-top: 24rpx; }
-.avatar-picker { width: 120rpx; height: 120rpx; flex: 0 0 120rpx; padding: 0; border-radius: 38rpx; background: #eef2ff; border: 2rpx solid #c7d2fe; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.avatar-picker { width: 120rpx; height: 120rpx; min-height: 120rpx; flex: 0 0 120rpx; padding: 0; border-radius: 38rpx; background: var(--nx-surface-soft); border: 2rpx solid var(--nx-accent-gold); overflow: hidden; display: flex; align-items: center; justify-content: center; }
 .avatar-picker::after { border: none; }
-.avatar-picker--disabled { border-color: #e2e8f0; background: #f8fafc; }
+.avatar-picker--disabled { border-color: var(--nx-border); background: var(--nx-page-bg); }
 .avatar-picker__image { width: 120rpx; height: 120rpx; display: block; }
-.avatar-picker__fallback { padding: 0 12rpx; color: #3730a3; font-size: 24rpx; font-weight: 900; line-height: 1.3; }
-.nickname-field { flex: 1; min-width: 0; min-height: 120rpx; box-sizing: border-box; padding: 18rpx 22rpx; border-radius: 26rpx; border: 2rpx solid #e2e8f0; background: #ffffff; }
-.nickname-field__label { display: block; color: #475569; font-size: 24rpx; font-weight: 900; }
-.nickname-field__input { width: 100%; min-height: 52rpx; margin-top: 6rpx; color: #0f172a; font-size: 30rpx; font-weight: 800; }
-.profile-save { width: 100%; min-height: 88rpx; margin-top: 26rpx; border-radius: 24rpx; }
-.profile-edit-panel__hint { display: block; margin-top: 14rpx; color: #475569; font-size: 24rpx; line-height: 1.55; text-align: center; }
+.avatar-picker__fallback { padding: 0 12rpx; color: var(--nx-brand-700); font-size: 24rpx; font-weight: 900; line-height: 1.3; }
+.nickname-field { flex: 1; min-width: 0; min-height: 120rpx; box-sizing: border-box; padding: 18rpx 22rpx; border-radius: 26rpx; border: 2rpx solid var(--nx-border); background: var(--nx-surface); }
+.nickname-field__label { display: block; color: var(--nx-text-muted); font-size: 24rpx; font-weight: 900; }
+.nickname-field__input { width: 100%; min-height: 52rpx; margin-top: 6rpx; color: var(--nx-text); font-size: 30rpx; font-weight: 800; }
+.profile-save { width: 100%; min-height: 88rpx; margin-top: 26rpx; border-radius: 24rpx; background: linear-gradient(135deg, var(--nx-brand-900), var(--nx-brand-700)); color: var(--nx-surface); }
+.profile-edit-panel__hint { display: block; margin-top: 14rpx; color: var(--nx-text-muted); font-size: 24rpx; line-height: 1.55; text-align: center; }
 @media (max-width: 360px) {
-  .profile-edit-hero, .profile-edit-panel { padding-left: 26rpx; padding-right: 26rpx; }
+  .profile-edit-hero,
+  .profile-edit-panel { padding-left: 26rpx; padding-right: 26rpx; }
   .profile-edit-panel__head { align-items: flex-start; }
   .profile-sync { min-width: 132rpx; }
 }
