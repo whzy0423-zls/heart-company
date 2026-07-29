@@ -231,23 +231,6 @@ onMounted(() => {
     </view>
 
     <view class="expert-hero nx-card">
-      <view class="expert-hero__copy">
-        <text class="expert-hero__eyebrow">{{ view.expertHero.eyebrow }}</text>
-        <text class="expert-hero__title">{{ view.expertHero.title }}</text>
-        <text class="expert-hero__lead">{{ view.expertHero.lead }}</text>
-        <view class="expert-hero__actions">
-          <button
-            class="expert-hero__primary"
-            hover-class="expert-hero__primary--pressed"
-            @click="bookEnterprise"
-          >{{ view.enterprise.buttonText }}</button>
-          <button
-            class="expert-hero__secondary"
-            hover-class="expert-hero__secondary--pressed"
-            @click="goClassroom"
-          >进入老师课堂</button>
-        </view>
-      </view>
       <button
         class="expert-hero__portrait"
         aria-label="查看完整导师介绍"
@@ -268,10 +251,19 @@ onMounted(() => {
           {{ view.expertHero.monogram || '九' }}
         </view>
         <view class="expert-hero__portrait-overlay" aria-hidden="true">
-          <text class="expert-hero__portrait-label">查看完整导师介绍</text>
-          <text class="expert-hero__portrait-arrow">↗</text>
+          <text class="expert-hero__eyebrow">{{ view.expertHero.eyebrow }}</text>
+          <text class="expert-hero__title">{{ view.expertHero.title }}</text>
+          <view class="expert-hero__portrait-affordance">
+            <text class="expert-hero__portrait-label">查看完整导师介绍</text>
+            <text class="expert-hero__portrait-arrow">↗</text>
+          </view>
         </view>
       </button>
+      <button
+        class="expert-hero__secondary"
+        hover-class="expert-hero__secondary--pressed"
+        @click="goClassroom"
+      >进入老师课堂</button>
     </view>
 
     <view v-if="view.proofStats.length" class="proof-stats" aria-label="导师资历数据">
@@ -563,37 +555,14 @@ button::after {
 
 .expert-hero {
   position: relative;
-  min-height: 540rpx;
-  display: flex;
-  align-items: stretch;
+  height: 600rpx;
+  min-height: 600rpx;
   overflow: hidden;
-  padding: 44rpx 36rpx;
-  border: 2rpx solid var(--nx-home-gold-border);
+  padding: 0;
+  border: 2rpx solid var(--nx-home-gold-portrait-border);
   border-radius: 40rpx;
   background: linear-gradient(138deg, var(--nx-brand-900), var(--nx-brand-700));
   box-shadow: 0 30rpx 64rpx -34rpx var(--nx-home-elevated-shadow);
-}
-
-.expert-hero::before {
-  position: absolute;
-  top: -120rpx;
-  right: -90rpx;
-  width: 350rpx;
-  height: 350rpx;
-  border: 2rpx solid var(--nx-home-gold-outline);
-  border-radius: 50%;
-  content: "";
-}
-
-.expert-hero__copy {
-  position: relative;
-  z-index: 2;
-  width: 58%;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 16rpx;
 }
 
 .expert-hero__eyebrow,
@@ -608,23 +577,9 @@ button::after {
 
 .expert-hero__title {
   color: var(--nx-surface);
-  font-size: 54rpx;
+  font-size: 42rpx;
   font-weight: 800;
-  line-height: 1.16;
-}
-
-.expert-hero__lead {
-  color: var(--nx-home-on-brand-muted);
-  font-size: 25rpx;
-  line-height: 1.68;
-}
-
-.expert-hero__actions {
-  width: 100%;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14rpx;
-  margin-top: 8rpx;
+  line-height: 1.24;
 }
 
 .expert-hero__primary,
@@ -649,6 +604,10 @@ button::after {
 
 .expert-hero__secondary {
   min-height: 88rpx;
+  position: absolute;
+  right: 28rpx;
+  bottom: 28rpx;
+  z-index: 4;
   border: 2rpx solid var(--nx-home-on-brand-border);
   background: transparent;
   color: var(--nx-surface);
@@ -656,18 +615,16 @@ button::after {
 
 .expert-hero__portrait {
   position: absolute;
-  right: 24rpx;
-  bottom: 0;
+  inset: 0;
   z-index: 1;
-  width: 270rpx;
+  width: 100%;
   min-height: 88rpx;
-  height: 430rpx;
+  height: 100%;
   overflow: hidden;
   margin: 0;
   padding: 0;
-  border: 2rpx solid var(--nx-home-gold-portrait-border);
-  border-bottom: 0;
-  border-radius: 150rpx 150rpx 0 0;
+  border: 0;
+  border-radius: 0;
   background: var(--nx-home-on-brand-subtle);
   line-height: normal;
   transition: opacity 180ms ease-out, transform 180ms ease-out;
@@ -697,15 +654,22 @@ button::after {
   bottom: 0;
   left: 0;
   z-index: 2;
-  min-height: 92rpx;
+  min-height: 250rpx;
   display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  gap: 8rpx;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 10rpx;
   box-sizing: border-box;
-  padding: 34rpx 18rpx 16rpx;
+  padding: 120rpx 300rpx 30rpx 32rpx;
   border-top: 2rpx solid var(--nx-home-gold-portrait-border);
-  background: linear-gradient(180deg, transparent, var(--nx-brand-900));
+  background: linear-gradient(180deg, transparent, var(--nx-brand-700) 48%, var(--nx-brand-900));
+}
+
+.expert-hero__portrait-affordance {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
 }
 
 .expert-hero__portrait-label {
@@ -1167,16 +1131,19 @@ button::after {
 
 @media (max-width: 380px) {
   .expert-hero {
-    min-height: 600rpx;
+    height: 620rpx;
+    min-height: 620rpx;
   }
 
-  .expert-hero__copy {
-    width: 66%;
+  .expert-hero__portrait-overlay {
+    padding: 120rpx 24rpx 132rpx;
   }
 
-  .expert-hero__portrait {
-    right: -30rpx;
-    width: 250rpx;
+  .expert-hero__secondary {
+    right: 24rpx;
+    bottom: 24rpx;
+    left: 24rpx;
+    min-height: 88rpx;
   }
 
   .test-game {
