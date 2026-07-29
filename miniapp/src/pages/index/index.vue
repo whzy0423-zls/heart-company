@@ -239,6 +239,7 @@ onMounted(() => {
         <image
           v-if="view.expertHero.image && !teacherImageFailed"
           class="expert-hero__image"
+          :key="view.expertHero.image"
           :src="view.expertHero.image"
           :data-image="view.expertHero.image"
           mode="aspectFill"

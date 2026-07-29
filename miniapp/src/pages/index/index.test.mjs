@@ -75,6 +75,11 @@ assert.match(source, /classroomAccessLabel/, "classroom cards should explain acc
 assert.match(source, /formatDuration\(item\.durationSeconds\)/, "classroom cards should expose useful duration metadata");
 
 assert.match(source, /expertHero\.image/, "expert hero should render the configured teacher image");
+assert.match(
+  template,
+  /<image\b(?=[^>]*class="expert-hero__image")(?=[^>]*:key="view\.expertHero\.image")(?=[^>]*:data-image="view\.expertHero\.image")[^>]*>/,
+  "teacher portrait should bind its render key and error dataset to the current image identity",
+);
 assert.match(source, /teacherImageFailed/, "teacher image should own an isolated failure state");
 assert.match(source, /failedCarouselImages/, "carousel images should keep an isolated failed-image Set");
 assert.match(source, /courseCoverErrors/, "course covers should keep isolated fallback state");
@@ -238,9 +243,9 @@ try {
     assert.equal(page.teacherImageFailed.value, false, "fresh config should reset teacher image failure");
     assert.deepEqual(page.carousel.value.items.map((item) => item.image), ["/good.png"], "failed carousel URLs should stay filtered after refresh");
     assert.equal(page.courseCoverErrors.value["course:1"], true, "site refresh should not mutate independent course cover failures");
-    page.markTeacherImageError("/teacher-a.png");
+    page.markTeacherImageError({ currentTarget: { dataset: { image: "/teacher-a.png" } } });
     assert.equal(page.teacherImageFailed.value, false, "a late error from the replaced teacher image must not hide the refreshed image");
-    page.markTeacherImageError("/teacher-b.png");
+    page.markTeacherImageError({ currentTarget: { dataset: { image: "/teacher-b.png" } } });
     assert.equal(page.teacherImageFailed.value, true, "the current teacher image should still fall back after its own error");
   }
 
