@@ -8,6 +8,22 @@ const pageUrl = new URL("./learn.vue", import.meta.url);
 const source = await readFile(pageUrl, "utf8");
 const script = source.match(/<script setup>([\s\S]*?)<\/script>/)?.[1];
 assert.ok(script, "learning page should expose a script setup block");
+assert.match(source, /import NxAsyncState/, "learning page should share the async-state component");
+assert.match(
+  source,
+  /<NxAsyncState[^>]*state="stale"[\s\S]*?@action="retryContentRefresh"/,
+  "cached content refresh failures should use the shared stale state",
+);
+assert.match(
+  source,
+  /<NxAsyncState[^>]*state="loading"/,
+  "classroom preview should use the shared loading state",
+);
+assert.match(
+  source,
+  /<NxAsyncState[^>]*state="empty"[\s\S]*?@action="openClassroom\('standalone'\)"/,
+  "an empty classroom preview should keep a visitor-facing shared empty state",
+);
 
 assert.match(
   source,
@@ -36,9 +52,15 @@ for (const forbidden of [
 }
 assert.match(
   source,
-  /#4338ca|#4f46e5|#7c3aed|#f59e0b/i,
-  "learning page should introduce the refreshed blue-violet warm-accent palette",
+  /var\(--nx-brand-900\)|var\(--nx-brand-700\)|var\(--nx-accent-gold\)/,
+  "learning page should use the shared graphite-blue and champagne-gold tokens",
 );
+assert.doesNotMatch(
+  source,
+  /#4338ca|#4f46e5|#7c3aed|#f59e0b|rgba\(\s*67,\s*56,\s*202/i,
+  "learning page should remove the old purple and orange visual tokens",
+);
+assert.match(source, />老师课堂<\//, "learning page should expose 老师课堂 as its external title");
 assert.match(
   source,
   /function\s+openClassroom\s*\(tab\s*=\s*"standalone"\)/,
@@ -58,6 +80,25 @@ assert.match(
   source,
   /class="classroom-entry__hero-cta"/,
   "learning page classroom hero should expose a primary classroom CTA",
+);
+const heroOpeningTag = source.match(/<view\s+class="classroom-entry__hero"[^>]*>/)?.[0] || "";
+assert.ok(heroOpeningTag, "learning classroom hero should exist");
+assert.doesNotMatch(
+  heroOpeningTag,
+  /role="button"|@click=|@keydown/,
+  "learning classroom hero should not compete with its dedicated CTA",
+);
+const classroomIndex = source.indexOf('class="classroom-entry card ios-card learn-section nx-panel section"');
+const teacherIndex = source.indexOf('class="card ios-card learn-section nx-panel section teacher-section"');
+const coursewareIndex = source.indexOf('class="card ios-card learn-section nx-panel section courseware-section"');
+const typeIndex = source.indexOf('class="card ios-card learn-section nx-panel section type-section"');
+const quoteIndex = source.indexOf('class="card ios-card learn-section nx-panel section quote-section"');
+assert.ok(
+  classroomIndex < teacherIndex &&
+    teacherIndex < coursewareIndex &&
+    coursewareIndex < typeIndex &&
+    typeIndex < quoteIndex,
+  "learning page should order classroom, teacher, course direction, enneagram content, then quote",
 );
 assert.match(
   source,
@@ -86,23 +127,18 @@ assert.match(
 );
 assert.match(
   source,
-  /v-if="classroomWarning"[\s\S]*?@click="retryClassroomPreview"/,
+  /v-if="classroomWarning && classroomPreview\.length > 0"[\s\S]*?@click="retryClassroomPreview"/,
   "a partial classroom failure should expose a non-blocking retry warning",
 );
 assert.match(
   source,
-  /v-else-if="classroomPreview\.length === 0"/,
-  "an empty successful classroom result should remain distinct from partial failure feedback",
+  /v-else-if="classroomWarning && classroomPreview\.length === 0"[\s\S]*?state="error"/,
+  "an empty classroom result with a failed request should use a blocking error state",
 );
 assert.match(
   source,
-  /<button[^>]*class="refresh-retry"[^>]*:disabled="refreshing"[^>]*@click="retryContentRefresh"/,
-  "the refresh notice should offer a retry action that is disabled while refreshing",
-);
-assert.match(
-  source,
-  /\.refresh-retry\s*\{[^}]*min-height:\s*88rpx/s,
-  "the refresh retry action should keep the project's 88rpx minimum touch target",
+  /\.classroom-entry__hero-cta\s*\{[^}]*min-height:\s*88rpx/s,
+  "the classroom hero CTA should keep the project's 88rpx minimum touch target",
 );
 
 const executableScript = script.replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\s*;?\s*$/gm, "");
@@ -261,7 +297,8 @@ try {
     );
     assert.deepEqual(
       page.classroomPreview.value.map((item) => item.title),
-      ["恢复系列", "恢复课件"],
+      ["恢复课件", "恢复系列"],
+      "standalone video and audio courseware should appear before series",
     );
     assert.deepEqual(
       page.coursewareItems.value,

@@ -32,8 +32,15 @@ assert.match(
 
 assert.match(
   learnSource,
-  /\.quote-editorial\s*\{[^}]*background:\s*#eef2ff/s,
-  '编辑式语录需要使用新的浅蓝紫阅读底色',
+  /\.quote-editorial\s*\{[^}]*background:\s*var\(--nx-surface-soft\)/s,
+  '编辑式语录需要使用统一的暖白阅读底色',
+)
+
+assert.match(learnSource, /老师课堂/, '学习页需要把课堂入口作为页面主标题')
+assert.doesNotMatch(
+  learnSource,
+  /#4338ca|#4f46e5|#7c3aed|#f59e0b/i,
+  '学习页语录样式不应携带旧紫色或橙色主视觉',
 )
 
 console.log('miniapp learn quote card tests passed')

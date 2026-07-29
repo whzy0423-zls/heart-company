@@ -7,6 +7,14 @@ import { pathToFileURL } from "node:url";
 const source = await readFile(new URL("./classroom.vue", import.meta.url), "utf8").catch(() => "");
 
 assert.ok(source, "classroom list page should exist");
+assert.match(source, /import NxAsyncState/, "classroom list should share the async-state component");
+for (const state of ["loading", "error", "empty"]) {
+  assert.match(
+    source,
+    new RegExp(`NxAsyncState[\\s\\S]{0,420}state=["']${state}["']`),
+    `classroom list should render the shared ${state} state`,
+  );
+}
 assert.match(source, /listClassroomSeriesApi/, "classroom list should load published series");
 assert.match(
   source,
@@ -49,8 +57,18 @@ for (const forbidden of [
 }
 assert.match(
   source,
-  /#4338ca|#4f46e5|#7c3aed|#f59e0b/i,
-  "classroom page should use the refreshed blue-violet warm-accent palette",
+  /var\(--nx-brand-900\)|var\(--nx-brand-700\)|var\(--nx-accent-gold\)/,
+  "classroom page should use the shared graphite-blue and champagne-gold tokens",
+);
+assert.doesNotMatch(
+  source,
+  /#4338ca|#4f46e5|#7c3aed|#f59e0b|rgba\(\s*67,\s*56,\s*202/i,
+  "classroom page should remove the old purple and orange visual tokens",
+);
+assert.doesNotMatch(
+  source,
+  /你发布的视频|后台发布/,
+  "classroom empty state should speak to visitors, not administrators",
 );
 assert.match(
   source,
@@ -59,7 +77,7 @@ assert.match(
 );
 assert.match(
   source,
-  /class="classroom-empty__action"[\s\S]*@click="selectTab\('standalone'\)"/,
+  /:action-text="activeTab === 'series' \? '查看独立课件' : ''"[\s\S]*@action="selectTab\('standalone'\)"/,
   "empty series state should guide users to standalone courseware",
 );
 assert.match(
@@ -116,22 +134,7 @@ assert.match(source, /activeTab === 'series'/, "classroom should expose the seri
 assert.match(source, /activeTab === 'standalone'/, "classroom should expose the standalone entry");
 assert.match(source, />\s*系列课程\s*</, "series tab should have a clear label");
 assert.match(source, />\s*独立课件\s*</, "standalone tab should have a clear label");
-assert.match(
-  source,
-  /v-if="loading"[^>]*class="classroom-state/,
-  "classroom should render a safe loading state",
-);
-assert.match(
-  source,
-  /v-else-if="loadError"[^>]*class="classroom-state classroom-state--error/,
-  "classroom should render a safe error state",
-);
-assert.match(source, /@click="retryActiveList"/, "list errors should provide retry");
-assert.match(
-  source,
-  /v-else-if="activeItems\.length === 0"[^>]*class="classroom-state/,
-  "classroom should render an empty state",
-);
+assert.match(source, /@action="retryActiveList"/, "list errors should provide retry");
 assert.match(source, /aria-live="polite"/, "async classroom feedback should be announced politely");
 assert.match(source, /function\s+openSeries\s*\(/, "series cards should open their lesson list");
 assert.match(
@@ -166,7 +169,7 @@ assert.match(
 );
 assert.match(
   source,
-  /@click="retrySelectedSeries"/,
+  /@action="retrySelectedSeries"/,
   "series load retry should retry the selected series",
 );
 assert.match(
@@ -175,6 +178,18 @@ assert.match(
   "switching back to a loaded tab should settle an older loading state",
 );
 assert.match(source, /function\s+openContent\s*\(/, "courseware cards should open content detail");
+const classroomCardOpeningTag = source.match(/<view\s+class="classroom-card ios-card"[^>]*>/)?.[0] || "";
+assert.ok(classroomCardOpeningTag, "classroom media card should exist");
+assert.doesNotMatch(
+  classroomCardOpeningTag,
+  /role="button"|@click=|@keydown/,
+  "classroom cards should use dedicated actions instead of nesting buttons in a card-level button",
+);
+assert.match(
+  source,
+  /\.series-buy\s*\{[^}]*min-height:\s*88rpx/s,
+  "series purchase CTA should keep the project's 88rpx minimum touch target",
+);
 assert.match(
   source,
   /classroomContentRoute/,

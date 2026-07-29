@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from "vue";
+import NxAsyncState from "../../components/NxAsyncState.vue";
 import { onLoad, onShow, onUnload } from "@dcloudio/uni-app";
 import {
   createClassroomOrderApi,
@@ -52,7 +53,12 @@ const activeItems = computed(() =>
   activeTab.value === "series" ? seriesItems.value : standaloneItems.value,
 );
 const emptyCopy = computed(() =>
-  activeTab.value === "series" ? "系列课程正在准备中" : "课件正在准备中",
+  activeTab.value === "series" ? "系列课程正在准备中" : "独立课件正在准备中",
+);
+const emptyDescription = computed(() =>
+  activeTab.value === "series"
+    ? "系列课程会把相关主题串成完整路径；也可以先从独立课件开始学习。"
+    : "老师的公开视频和音频课件会持续整理到这里，欢迎先浏览现有内容。",
 );
 const seriesPaymentBusy = computed(
   () => seriesPaymentState.value === "creating" || seriesPaymentState.value === "pending",
@@ -355,8 +361,13 @@ onUnload(() => {
   <view class="classroom page-stack ios-page ios-safe-bottom">
     <view class="classroom-hero nx-page-hero">
       <text class="classroom-hero__eyebrow">老师课堂</text>
-      <text class="classroom-hero__title">用声音与影像，陪你把觉察带进生活</text>
-      <text class="classroom-hero__lead">既可以按系列循序学习，也可以从一节独立课件开始。</text>
+      <text class="classroom-hero__title">用声音与影像，陪你把觉察带进工作与生活</text>
+      <text class="classroom-hero__lead">独立课件先行，系列课程随后；视频和音频都可以按自己的节奏反复学习。</text>
+      <view class="classroom-hero__meta" aria-hidden="true">
+        <text>视频课件</text>
+        <text>音频精讲</text>
+        <text>按需学习</text>
+      </view>
     </view>
 
     <view
@@ -408,15 +419,6 @@ onUnload(() => {
     <view class="classroom-tabs" role="tablist" aria-label="课堂内容分类">
       <button
         class="classroom-tab"
-        :class="{ 'classroom-tab--active': activeTab === 'series' }"
-        role="tab"
-        :aria-selected="activeTab === 'series'"
-        @click="selectTab('series')"
-      >
-        系列课程
-      </button>
-      <button
-        class="classroom-tab"
         :class="{ 'classroom-tab--active': activeTab === 'standalone' }"
         role="tab"
         :aria-selected="activeTab === 'standalone'"
@@ -424,35 +426,39 @@ onUnload(() => {
       >
         独立课件
       </button>
-    </view>
-
-    <view v-if="loading" class="classroom-state" aria-live="polite">课堂内容加载中…</view>
-    <view v-else-if="loadError" class="classroom-state classroom-state--error" aria-live="polite">
-      <text>{{ loadError }}</text>
-      <button class="state-action" :disabled="loading" @click="retryActiveList">重新加载</button>
-    </view>
-    <view
-      v-else-if="activeItems.length === 0"
-      class="classroom-state classroom-empty"
-      aria-live="polite"
-    >
-      <view class="classroom-empty__mark" aria-hidden="true">
-        <view class="classroom-empty__play"></view>
-      </view>
-      <text class="classroom-empty__title">{{ emptyCopy }}</text>
-      <text class="classroom-empty__copy">{{
-        activeTab === "series"
-          ? "你发布的视频和音频课件会优先展示在“独立课件”里，也可以在后台把课件加入系列。"
-          : "后台发布后会自动同步到这里，请确认课件状态为已发布。"
-      }}</text>
       <button
-        v-if="activeTab === 'series'"
-        class="classroom-empty__action"
-        @click="selectTab('standalone')"
+        class="classroom-tab"
+        :class="{ 'classroom-tab--active': activeTab === 'series' }"
+        role="tab"
+        :aria-selected="activeTab === 'series'"
+        @click="selectTab('series')"
       >
-        查看独立课件
+        系列课程
       </button>
     </view>
+
+    <NxAsyncState
+      v-if="loading"
+      state="loading"
+      title="课堂内容加载中"
+      description="正在整理最新的视频与音频课件。"
+    />
+    <NxAsyncState
+      v-else-if="loadError"
+      state="error"
+      title="课堂内容暂未加载"
+      :description="loadError"
+      action-text="重新加载"
+      @action="retryActiveList"
+    />
+    <NxAsyncState
+      v-else-if="activeItems.length === 0"
+      state="empty"
+      :title="emptyCopy"
+      :description="emptyDescription"
+      :action-text="activeTab === 'series' ? '查看独立课件' : ''"
+      @action="selectTab('standalone')"
+    />
 
     <view v-else class="classroom-list">
       <view v-for="item in activeItems" :key="item.id" class="classroom-list__item">
@@ -463,12 +469,6 @@ onUnload(() => {
             'classroom-card--loading':
               activeTab === 'series' && selectedSeries?.id === item.id && seriesLoading,
           }"
-          role="button"
-          aria-role="button"
-          tabindex="0"
-          @click="activeTab === 'series' ? openSeries(item) : openContent(item)"
-          @keydown.enter="activeTab === 'series' ? openSeries(item) : openContent(item)"
-          @keydown.space.prevent="activeTab === 'series' ? openSeries(item) : openContent(item)"
         >
           <view class="classroom-card__media">
             <view class="classroom-card__cover-shell" :class="classroomCoverRatioClass(item)">
@@ -520,10 +520,12 @@ onUnload(() => {
               item.summary || item.description
             }}</text>
             <view class="classroom-card__footer">
-              <text>{{ item.teacherName || "九型老师" }}</text>
-              <text v-if="formatDuration(item.durationSeconds)">{{
-                formatDuration(item.durationSeconds)
-              }}</text>
+              <view class="classroom-card__facts">
+                <text>{{ item.teacherName || "九型老师" }}</text>
+                <text v-if="formatDuration(item.durationSeconds)">{{
+                  formatDuration(item.durationSeconds)
+                }}</text>
+              </view>
               <button
                 v-if="activeTab === 'series' && itemAction(item).type === 'purchase'"
                 class="series-buy"
@@ -536,13 +538,19 @@ onUnload(() => {
                     : itemAction(item).label
                 }}
               </button>
-              <text v-else class="classroom-card__action">{{
-                activeTab === "series"
-                  ? selectedSeries?.id === item.id
-                    ? "收起课件"
-                    : "查看课件"
-                  : itemAction(item).label
-              }}</text>
+              <button
+                v-else
+                class="classroom-card__action"
+                @click="activeTab === 'series' ? openSeries(item) : openContent(item)"
+              >
+                {{
+                  activeTab === "series"
+                    ? selectedSeries?.id === item.id
+                      ? "收起课件"
+                      : "查看课件"
+                    : itemAction(item).label
+                }}
+              </button>
             </view>
           </view>
         </view>
@@ -571,23 +579,29 @@ onUnload(() => {
           v-if="activeTab === 'series' && selectedSeries?.id === item.id"
           class="series-panel ios-card"
         >
-          <view v-if="seriesLoading" class="classroom-state" aria-live="polite"
-            >系列课件加载中…</view
-          >
-          <view
+          <NxAsyncState
+            v-if="seriesLoading"
+            state="loading"
+            title="系列课件加载中"
+            description="正在整理本系列的章节。"
+          />
+          <NxAsyncState
             v-else-if="seriesError"
-            class="classroom-state classroom-state--error"
-            aria-live="polite"
-          >
-            <text>{{ seriesError }}</text>
-            <button class="state-action" @click="retrySelectedSeries">重试</button>
-          </view>
+            state="error"
+            title="系列课件暂未加载"
+            :description="seriesError"
+            action-text="重新加载"
+            @action="retrySelectedSeries"
+          />
           <block v-else-if="expandedSeries">
             <text class="series-panel__eyebrow">系列课件</text>
             <text class="series-panel__title">{{ expandedSeries.series.title }}</text>
-            <view v-if="expandedSeries.contents.length === 0" class="classroom-state"
-              >这个系列暂时没有可学习的课件</view
-            >
+            <NxAsyncState
+              v-if="expandedSeries.contents.length === 0"
+              state="empty"
+              title="这个系列正在补充课件"
+              description="可以先返回独立课件，选择一节视频或音频开始学习。"
+            />
             <view v-else class="series-panel__chapters">
               <button
                 v-for="(lesson, index) in expandedSeries.contents"
@@ -617,449 +631,96 @@ onUnload(() => {
 .classroom {
   min-height: 100vh;
   background:
-    radial-gradient(circle at 0 0, rgba(79, 70, 229, 0.10), transparent 30%),
-    radial-gradient(circle at 100% 16%, rgba(245, 158, 11, 0.10), transparent 28%),
-    #f8fafc;
+    radial-gradient(circle at 0 0, rgba(223, 188, 127, 0.16), transparent 30%),
+    linear-gradient(180deg, var(--nx-surface-soft), var(--nx-page-bg));
 }
 .classroom-hero {
-  padding: 38rpx 34rpx 40rpx;
-  border-radius: 38rpx;
-  color: #fff;
+  padding: 40rpx 34rpx 36rpx;
+  color: var(--nx-surface);
   background:
-    radial-gradient(circle at 88% 12%, rgba(255, 255, 255, 0.20), transparent 24%),
-    linear-gradient(135deg, #0f172a 0%, #4338ca 56%, #7c3aed 100%);
-  box-shadow: 0 24rpx 54rpx -34rpx rgba(67, 56, 202, 0.66);
+    radial-gradient(circle at 88% 12%, rgba(223, 188, 127, 0.32), transparent 28%),
+    linear-gradient(135deg, var(--nx-brand-900), var(--nx-brand-700));
+  border-radius: 38rpx;
+  box-shadow: 0 24rpx 54rpx -34rpx rgba(32, 42, 55, 0.64);
 }
 .classroom-hero__eyebrow,
 .classroom-hero__title,
-.classroom-hero__lead {
-  display: block;
-  color: #fff;
-}
-.classroom-hero__eyebrow {
-  font-size: 24rpx;
-  font-weight: 800;
-}
-.classroom-hero__title {
-  margin-top: 14rpx;
-  font-size: 42rpx;
-  font-weight: 900;
-  line-height: 1.3;
-}
-.classroom-hero__lead {
-  margin-top: 16rpx;
-  font-size: 26rpx;
-  line-height: 1.65;
-}
-.classroom-tabs {
-  display: flex;
-  gap: 12rpx;
-  padding: 8rpx;
-  background: rgba(238, 242, 255, 0.92);
-  border: 2rpx solid #e0e7ff;
-  border-radius: 24rpx;
-}
-.continue-learning {
-  display: block;
-  width: 100%;
-  min-height: 176rpx;
-  padding: 28rpx;
-  color: #0f172a;
-  text-align: left;
-  background: linear-gradient(135deg, #eef2ff, #fff7ed);
-  border-radius: 28rpx;
-}
-.continue-learning::after {
-  border: 0;
-}
-.continue-learning--loading,
-.continue-learning--error {
-  color: #64748b;
-  font-size: 25rpx;
-  text-align: center;
-}
-.continue-learning--error {
-  color: #dc2626;
-}
-.continue-learning__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 20rpx;
-}
-.continue-learning__eyebrow,
-.continue-learning__title,
-.continue-learning__copy {
-  display: block;
-}
-.continue-learning__eyebrow,
-.continue-learning__action {
-  color: #4338ca;
-  font-size: 23rpx;
-  font-weight: 800;
-}
-.continue-learning__title {
-  margin-top: 6rpx;
-  color: #0f172a;
-  font-size: 30rpx;
-  font-weight: 900;
-  line-height: 1.4;
-}
-.continue-learning__progress {
-  height: 12rpx;
-  margin-top: 22rpx;
-  overflow: hidden;
-  background: #c7d2fe;
-  border-radius: 999rpx;
-}
-.continue-learning__progress-fill {
-  height: 100%;
-  background: #4338ca;
-  border-radius: inherit;
-}
-.continue-learning__copy {
-  margin-top: 12rpx;
-  color: #64748b;
-  font-size: 23rpx;
-}
-.classroom-tab {
-  flex: 1;
-  min-height: 88rpx;
-  color: #64748b;
-  font-size: 27rpx;
-  font-weight: 800;
-  line-height: 88rpx;
-  background: transparent;
-  border-radius: 18rpx;
-}
+.classroom-hero__lead { display: block; }
+.classroom-hero__eyebrow { color: var(--nx-accent-gold); font-size: 24rpx; font-weight: 900; letter-spacing: 4rpx; }
+.classroom-hero__title { margin-top: 14rpx; color: var(--nx-surface); font-size: 42rpx; font-weight: 900; line-height: 1.3; }
+.classroom-hero__lead { margin-top: 16rpx; color: rgba(255, 255, 255, 0.82); font-size: 25rpx; line-height: 1.65; }
+.classroom-hero__meta { display: flex; flex-wrap: wrap; gap: 12rpx; margin-top: 24rpx; }
+.classroom-hero__meta text { padding: 8rpx 16rpx; color: var(--nx-surface); font-size: 21rpx; font-weight: 800; background: rgba(255, 255, 255, 0.12); border: 2rpx solid rgba(255, 255, 255, 0.18); border-radius: 999rpx; }
+.classroom-tabs { display: flex; gap: 12rpx; padding: 8rpx; background: var(--nx-surface-soft); border: 2rpx solid var(--nx-border); border-radius: 24rpx; }
+.classroom-tab { flex: 1; min-height: 88rpx; color: var(--nx-text-muted); font-size: 27rpx; font-weight: 900; line-height: 88rpx; background: transparent; border-radius: 18rpx; }
 .classroom-tab::after,
 .state-action::after,
 .lesson-row::after,
-.series-buy::after {
-  border: 0;
-}
-.series-buy {
-  min-height: 64rpx;
-  padding: 0 18rpx;
-  color: #fff;
-  font-size: 22rpx;
-  font-weight: 800;
-  line-height: 64rpx;
-  background: #4338ca;
-  border-radius: 16rpx;
-}
-.series-payment {
-  padding: 24rpx;
-  color: #475569;
-  font-size: 24rpx;
-  background: #fff;
-  border-radius: 24rpx;
-}
-.series-payment__actions {
-  display: flex;
-  gap: 12rpx;
-}
-.classroom-tab--active {
-  color: #4338ca;
-  background: #fff;
-  box-shadow: 0 10rpx 26rpx rgba(67, 56, 202, 0.14);
-}
-.classroom-state {
-  padding: 48rpx 30rpx;
-  color: #64748b;
-  font-size: 27rpx;
-  line-height: 1.6;
-  text-align: center;
-  background: #fff;
-  border-radius: 28rpx;
-}
-.classroom-state--error {
-  color: #dc2626;
-}
-.classroom-empty {
-  display: flex;
-  align-items: center;
-  flex-direction: column;
-  padding: 56rpx 38rpx;
-  border: 2rpx solid #e0e7ff;
-  box-shadow: 0 18rpx 36rpx -30rpx rgba(67, 56, 202, 0.38);
-}
-.classroom-empty__mark {
-  position: relative;
-  width: 104rpx;
-  height: 104rpx;
-  border-radius: 32rpx;
-  background: linear-gradient(135deg, #4338ca, #7c3aed);
-  box-shadow: 0 18rpx 34rpx -22rpx rgba(67, 56, 202, 0.62);
-}
-.classroom-empty__play {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 0;
-  height: 0;
-  border-top: 17rpx solid transparent;
-  border-bottom: 17rpx solid transparent;
-  border-left: 28rpx solid #ffffff;
-  transform: translate(-35%, -50%);
-}
-.classroom-empty__title,
-.classroom-empty__copy {
-  display: block;
-}
-.classroom-empty__title {
-  margin-top: 24rpx;
-  color: #0f172a;
-  font-size: 30rpx;
-  font-weight: 900;
-}
-.classroom-empty__copy {
-  margin-top: 12rpx;
-  color: #64748b;
-  font-size: 24rpx;
-  line-height: 1.6;
-}
-.classroom-empty__action {
-  min-height: 88rpx;
-  margin-top: 24rpx;
-  padding: 0 34rpx;
-  color: #ffffff;
-  font-size: 25rpx;
-  font-weight: 900;
-  line-height: 88rpx;
-  background: #4338ca;
-  border-radius: 999rpx;
-}
-.classroom-empty__action::after {
-  border: 0;
-}
-.state-action {
-  min-height: 88rpx;
-  margin-top: 20rpx;
-  padding: 0 32rpx;
-  color: #4338ca;
-  font-weight: 800;
-  line-height: 88rpx;
-  background: #eef2ff;
-  border-radius: 18rpx;
-}
-.classroom-list {
-  display: grid;
-  gap: 22rpx;
-}
-.classroom-list__item {
-  display: grid;
-  gap: 14rpx;
-}
-.classroom-card {
-  display: flex;
-  align-items: flex-start;
-  flex-direction: column;
-  min-height: 220rpx;
-  overflow: hidden;
-  background: #fff;
-  border-radius: 30rpx;
-}
-.classroom-card--selected {
-  box-shadow:
-    0 0 0 4rpx #f59e0b,
-    0 16rpx 32rpx rgba(67, 56, 202, 0.14);
-}
-.classroom-card--loading {
-  opacity: 0.82;
-}
-.classroom-card:focus {
-  outline: 4rpx solid #2b7fff;
-}
-.classroom-card__cover {
-  display: block;
-  width: 100%;
-  height: 100%;
-  background: #e0e7ff;
-}
-.classroom-card__media {
-  width: 100%;
-}
-.classroom-card__cover-shell {
-  position: relative;
-  width: 100%;
-  overflow: hidden;
-  background: linear-gradient(135deg, #eef2ff, #fff7ed);
-}
-.classroom-card__cover-shell::after {
-  content: "";
-  position: absolute;
-  inset: auto 0 0;
-  height: 30%;
-  background: linear-gradient(180deg, rgba(15, 23, 42, 0), rgba(15, 23, 42, 0.36));
-  pointer-events: none;
-}
-.classroom-card__cover.classroom-cover--16x9 {
-  height: 376rpx;
-}
-.classroom-card__cover.classroom-cover--9x16 {
-  height: 472rpx;
-}
-.classroom-card__cover.classroom-cover--1x1 {
-  height: 360rpx;
-}
-.classroom-card__cover--fallback {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #4338ca;
-  font-size: 58rpx;
-  font-weight: 900;
-}
-.classroom-card__cover-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  padding: 22rpx;
-  color: #fff;
-  background: linear-gradient(180deg, rgba(15, 23, 42, 0.08), rgba(15, 23, 42, 0.58));
-}
-.classroom-card__overlay-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10rpx;
-}
+.series-buy::after,
+.classroom-card__action::after,
+.continue-learning::after { border: 0; }
+.classroom-tab--active { color: var(--nx-brand-900); background: var(--nx-surface); box-shadow: 0 10rpx 26rpx rgba(32, 42, 55, 0.12); }
+.continue-learning { display: block; width: 100%; min-height: 176rpx; padding: 28rpx; color: var(--nx-text); text-align: left; background: linear-gradient(135deg, var(--nx-surface-soft), var(--nx-accent-gold)); border-radius: 28rpx; box-sizing: border-box; }
+.continue-learning--loading,
+.continue-learning--error { color: var(--nx-text-muted); font-size: 25rpx; text-align: center; }
+.continue-learning--error { color: #a23b32; }
+.continue-learning__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20rpx; }
+.continue-learning__eyebrow,
+.continue-learning__title,
+.continue-learning__copy { display: block; }
+.continue-learning__eyebrow,
+.continue-learning__action { color: var(--nx-brand-700); font-size: 23rpx; font-weight: 900; }
+.continue-learning__title { margin-top: 6rpx; color: var(--nx-text); font-size: 30rpx; font-weight: 900; line-height: 1.4; }
+.continue-learning__progress { height: 12rpx; margin-top: 22rpx; overflow: hidden; background: var(--nx-border); border-radius: 999rpx; }
+.continue-learning__progress-fill { height: 100%; background: var(--nx-brand-700); border-radius: inherit; }
+.continue-learning__copy { margin-top: 12rpx; color: var(--nx-text-muted); font-size: 23rpx; }
+.state-action { min-height: 88rpx; margin-top: 20rpx; padding: 0 32rpx; color: var(--nx-brand-900); font-weight: 900; line-height: 88rpx; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 18rpx; }
+.classroom-list { display: grid; gap: 22rpx; }
+.classroom-list__item { display: grid; gap: 14rpx; }
+.classroom-card { display: flex; align-items: flex-start; flex-direction: column; min-height: 220rpx; overflow: hidden; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 30rpx; }
+.classroom-card--selected { box-shadow: 0 0 0 4rpx var(--nx-accent-gold), 0 16rpx 32rpx rgba(32, 42, 55, 0.14); }
+.classroom-card--loading { opacity: 0.82; }
+.classroom-card__media { width: 100%; }
+.classroom-card__cover-shell { position: relative; width: 100%; overflow: hidden; background: linear-gradient(135deg, var(--nx-surface-soft), var(--nx-accent-gold)); }
+.classroom-card__cover-shell::after { content: ""; position: absolute; inset: auto 0 0; height: 30%; background: linear-gradient(180deg, rgba(32, 42, 55, 0), rgba(32, 42, 55, 0.42)); pointer-events: none; }
+.classroom-card__cover { display: block; width: 100%; height: 100%; background: var(--nx-border); }
+.classroom-card__cover.classroom-cover--16x9 { height: 376rpx; }
+.classroom-card__cover.classroom-cover--9x16 { height: 472rpx; }
+.classroom-card__cover.classroom-cover--1x1 { height: 360rpx; }
+.classroom-card__cover--fallback { display: flex; align-items: center; justify-content: center; color: var(--nx-brand-900); font-size: 58rpx; font-weight: 900; }
+.classroom-card__cover-overlay { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; justify-content: space-between; padding: 22rpx; color: var(--nx-surface); background: linear-gradient(180deg, rgba(32, 42, 55, 0.08), rgba(32, 42, 55, 0.58)); }
+.classroom-card__overlay-tags { display: flex; flex-wrap: wrap; gap: 10rpx; }
 .classroom-card__overlay-tags .nx-tag,
-.classroom-card__overlay-tags .classroom-card__kind {
-  color: #fff;
-}
-.classroom-card__kind {
-  padding: 0 14rpx;
-  line-height: 42rpx;
-  background: rgba(255, 255, 255, 0.18);
-  border-radius: 999rpx;
-}
-.classroom-card__play {
-  display: inline-flex;
-  align-items: center;
-  align-self: flex-end;
-  gap: 10rpx;
-  min-height: 60rpx;
-  padding: 0 18rpx;
-  color: #0f172a;
-  font-size: 22rpx;
-  font-weight: 900;
-  background: rgba(255, 255, 255, 0.96);
-  border-radius: 999rpx;
-}
-.classroom-card__play-icon {
-  font-size: 20rpx;
-}
-.classroom-card__body {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  width: 100%;
-  padding: 24rpx 24rpx 26rpx;
-}
+.classroom-card__overlay-tags .classroom-card__kind { color: var(--nx-surface); }
+.classroom-card__kind { padding: 0 14rpx; line-height: 42rpx; background: rgba(255, 255, 255, 0.18); border-radius: 999rpx; }
+.classroom-card__play { display: inline-flex; align-items: center; align-self: flex-end; gap: 10rpx; min-height: 60rpx; padding: 0 18rpx; color: var(--nx-brand-900); font-size: 22rpx; font-weight: 900; background: rgba(255, 255, 255, 0.94); border-radius: 999rpx; }
+.classroom-card__play-icon { font-size: 20rpx; }
+.classroom-card__body { display: flex; flex-direction: column; min-width: 0; width: 100%; padding: 24rpx 24rpx 26rpx; box-sizing: border-box; }
 .classroom-card__meta,
-.classroom-card__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12rpx;
-}
-.classroom-card__kind,
-.classroom-card__footer {
-  color: #64748b;
-  font-size: 22rpx;
-}
-.classroom-card__title {
-  margin-top: 14rpx;
-  color: #111827;
-  font-size: 30rpx;
-  font-weight: 900;
-  line-height: 1.4;
-}
-.classroom-card__summary {
-  margin-top: 8rpx;
-  color: #64748b;
-  font-size: 23rpx;
-  line-height: 1.5;
-}
-.classroom-card__footer {
-  margin-top: auto;
-  padding-top: 18rpx;
-}
-.classroom-card__action {
-  color: #4338ca;
-  font-weight: 800;
-}
-.series-panel__chapters {
-  display: grid;
-  gap: 14rpx;
-  margin-top: 16rpx;
-}
-.series-panel {
-  padding: 30rpx;
-  background: #fff;
-  border-radius: 30rpx;
-}
+.classroom-card__footer,
+.classroom-card__facts { display: flex; align-items: center; justify-content: space-between; gap: 12rpx; }
+.classroom-card__meta,
+.classroom-card__facts { color: var(--nx-text-muted); font-size: 22rpx; }
+.classroom-card__title { margin-top: 14rpx; color: var(--nx-text); font-size: 30rpx; font-weight: 900; line-height: 1.4; }
+.classroom-card__summary { margin-top: 8rpx; color: var(--nx-text-muted); font-size: 23rpx; line-height: 1.5; }
+.classroom-card__footer { align-items: flex-end; margin-top: 18rpx; padding-top: 18rpx; border-top: 2rpx solid var(--nx-border); }
+.classroom-card__facts { align-items: flex-start; flex-direction: column; min-width: 0; }
+.classroom-card__action { flex-shrink: 0; min-height: 88rpx; padding: 0 24rpx; color: var(--nx-surface); font-size: 23rpx; font-weight: 900; line-height: 88rpx; background: var(--nx-brand-700); border-radius: 999rpx; }
+.series-buy { flex-shrink: 0; min-height: 88rpx; padding: 0 24rpx; color: var(--nx-brand-900); font-size: 23rpx; font-weight: 900; line-height: 88rpx; background: var(--nx-accent-gold); border-radius: 999rpx; }
+.series-payment { padding: 24rpx; color: var(--nx-text-muted); font-size: 24rpx; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 24rpx; }
+.series-payment__actions { display: flex; gap: 12rpx; }
+.series-panel { padding: 30rpx; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 30rpx; }
+.series-panel__chapters { display: grid; gap: 14rpx; margin-top: 16rpx; }
 .series-panel__eyebrow,
-.series-panel__title {
-  display: block;
-}
-.series-panel__eyebrow {
-  color: #4338ca;
-  font-size: 23rpx;
-  font-weight: 800;
-}
-.series-panel__title {
-  margin-top: 8rpx;
-  color: #0f172a;
-  font-size: 34rpx;
-  font-weight: 900;
-}
-.lesson-row {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  min-height: 104rpx;
-  padding: 16rpx 10rpx;
-  text-align: left;
-  background: #f8fafc;
-  border-radius: 18rpx;
-}
-.lesson-row__index {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 52rpx;
-  height: 52rpx;
-  color: #fff;
-  background: #4338ca;
-  border-radius: 50%;
-}
-.lesson-row__body {
-  flex: 1;
-  min-width: 0;
-  margin: 0 18rpx;
-}
+.series-panel__title { display: block; }
+.series-panel__eyebrow { color: var(--nx-brand-700); font-size: 23rpx; font-weight: 900; }
+.series-panel__title { margin-top: 8rpx; color: var(--nx-text); font-size: 34rpx; font-weight: 900; }
+.lesson-row { display: flex; align-items: center; width: 100%; min-height: 104rpx; padding: 16rpx 10rpx; text-align: left; background: var(--nx-surface-soft); border: 2rpx solid var(--nx-border); border-radius: 18rpx; box-sizing: border-box; }
+.lesson-row__index { display: flex; align-items: center; justify-content: center; width: 52rpx; height: 52rpx; color: var(--nx-brand-900); background: var(--nx-accent-gold); border-radius: 50%; }
+.lesson-row__body { flex: 1; min-width: 0; margin: 0 18rpx; }
 .lesson-row__title,
-.lesson-row__meta {
-  display: block;
-}
-.lesson-row__title {
-  color: #111827;
-  font-size: 26rpx;
-  font-weight: 800;
-}
-.lesson-row__meta {
-  margin-top: 6rpx;
-  color: #64748b;
-  font-size: 22rpx;
-}
-.lesson-row__arrow {
-  color: #94a3b8;
-  font-size: 32rpx;
-  font-weight: 700;
-}
+.lesson-row__meta { display: block; }
+.lesson-row__title { color: var(--nx-text); font-size: 26rpx; font-weight: 800; }
+.lesson-row__meta { margin-top: 6rpx; color: var(--nx-text-muted); font-size: 22rpx; }
+.lesson-row__arrow { color: var(--nx-text-muted); font-size: 32rpx; font-weight: 700; }
 </style>
