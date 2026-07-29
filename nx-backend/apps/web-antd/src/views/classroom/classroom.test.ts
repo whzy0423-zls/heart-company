@@ -104,6 +104,14 @@ describe('teacher classroom admin UI contract', () => {
     expect(series).toContain('保存系列');
   });
 
+  it('keeps the standalone series route on one native root for transitions', () => {
+    const series = read('views/classroom/series.vue');
+    expect(series).toContain(
+      '<template>\n  <div class="classroom-series-page">',
+    );
+    expect(series).toContain('</div>\n</template>');
+  });
+
   it('resolves series permissions when opened as a standalone menu page', () => {
     const series = read('views/classroom/series.vue');
     expect(series).toContain('useAccessStore');

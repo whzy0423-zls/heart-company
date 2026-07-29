@@ -213,6 +213,7 @@ function confirmAction(
 onMounted(load);
 </script>
 <template>
+  <div class="classroom-series-page">
   <Card title="课程系列" :loading="loading">
     <template #extra
       ><Button v-if="canWrite" type="primary" @click="openEditor()"
@@ -313,8 +314,13 @@ onMounted(load);
           :disabled="!canWrite"  placeholder="请输入简介"/></Form.Item
     ></Form>
   </Modal>
+  </div>
 </template>
 <style scoped>
+.classroom-series-page {
+  width: 100%;
+}
+
 :deep(button:focus-visible) {
   outline: 2px solid hsl(var(--primary));
   outline-offset: 2px;
