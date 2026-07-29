@@ -382,7 +382,7 @@ onUnload(() => {
 </script>
 
 <template>
-  <view class="classroom page-stack ios-page ios-safe-bottom">
+  <view class="wrap classroom page-stack ios-page ios-safe-bottom">
     <view class="classroom-hero nx-page-hero">
       <text class="classroom-hero__eyebrow">老师课堂</text>
       <text class="classroom-hero__title">视频与音频课件</text>
@@ -645,6 +645,11 @@ onUnload(() => {
 
 <style scoped>
 .classroom {
+  width: 100%;
+  max-width: 900rpx;
+  margin: 0 auto;
+  box-sizing: border-box;
+  gap: 32rpx;
   min-height: 100vh;
   background:
     radial-gradient(circle at 0 0, rgba(223, 188, 127, 0.16), transparent 30%),
@@ -676,7 +681,7 @@ onUnload(() => {
 .classroom-card__action::after,
 .continue-learning::after { border: 0; }
 .classroom-tab--active { color: var(--nx-brand-900); background: var(--nx-surface); box-shadow: 0 0 0 2rpx var(--nx-accent-gold), 0 8rpx 18rpx rgba(32, 42, 55, 0.16); }
-.continue-learning { display: block; width: 100%; min-height: 152rpx; padding: 20rpx; color: var(--nx-text); text-align: left; background: linear-gradient(135deg, var(--nx-surface-soft), var(--nx-accent-gold)); border-radius: 24rpx; box-sizing: border-box; }
+.continue-learning { display: block; width: 100%; min-height: 152rpx; padding: 20rpx; color: var(--nx-text); text-align: left; background: linear-gradient(135deg, var(--nx-surface), var(--nx-surface-soft)); border-left: 6rpx solid var(--nx-accent-gold); border-radius: 24rpx; box-sizing: border-box; }
 .continue-learning--loading,
 .continue-learning--error { color: var(--nx-text-muted); font-size: 25rpx; text-align: center; }
 .continue-learning--error { color: #a23b32; }
@@ -695,8 +700,8 @@ onUnload(() => {
 .continue-learning__copy { margin-top: 8rpx; color: var(--nx-text-muted); font-size: 22rpx; }
 .state-action { min-height: 88rpx; margin-top: 20rpx; padding: 0 32rpx; color: var(--nx-brand-900); font-weight: 900; line-height: 88rpx; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 18rpx; }
 .classroom-list { display: grid; gap: 22rpx; }
-.classroom-list__item { display: grid; gap: 14rpx; }
-.classroom-card { display: flex; align-items: flex-start; flex-direction: column; min-height: 220rpx; overflow: hidden; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 30rpx; }
+.classroom-list__item { display: grid; gap: 10rpx; }
+.classroom-card { display: flex; align-items: flex-start; flex-direction: column; min-height: 220rpx; padding: 0; overflow: hidden; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 30rpx; }
 .classroom-card--selected { box-shadow: 0 0 0 4rpx var(--nx-accent-gold), 0 16rpx 32rpx rgba(32, 42, 55, 0.14); }
 .classroom-card--loading { opacity: 0.82; }
 .classroom-card__media { width: 100%; }
@@ -726,7 +731,7 @@ onUnload(() => {
 .classroom-card__facts { align-items: flex-start; flex-direction: column; min-width: 0; }
 .classroom-card__action { flex-shrink: 0; min-height: 88rpx; padding: 0 24rpx; color: var(--nx-surface); font-size: 23rpx; font-weight: 900; line-height: 88rpx; background: var(--nx-brand-700); border-radius: 999rpx; }
 .series-buy { flex-shrink: 0; min-height: 88rpx; padding: 0 24rpx; color: var(--nx-brand-900); font-size: 23rpx; font-weight: 900; line-height: 88rpx; background: var(--nx-accent-gold); border-radius: 999rpx; }
-.series-payment { padding: 24rpx; color: var(--nx-text-muted); font-size: 24rpx; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 24rpx; }
+.series-payment { padding: 24rpx; color: var(--nx-text-muted); font-size: 24rpx; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 30rpx; }
 .series-payment__actions { display: flex; gap: 12rpx; }
 .series-panel { padding: 30rpx; background: var(--nx-surface); border: 2rpx solid var(--nx-border); border-radius: 30rpx; }
 .series-panel__chapters { display: grid; gap: 14rpx; margin-top: 16rpx; }
@@ -742,4 +747,11 @@ onUnload(() => {
 .lesson-row__title { color: var(--nx-text); font-size: 26rpx; font-weight: 800; }
 .lesson-row__meta { margin-top: 6rpx; color: var(--nx-text-muted); font-size: 22rpx; }
 .lesson-row__arrow { color: var(--nx-text-muted); font-size: 32rpx; font-weight: 700; }
+
+@media (max-width: 380px) {
+  .classroom-card__footer { flex-direction: column; align-items: stretch; }
+  .classroom-card__facts { flex-direction: row; align-items: center; }
+  .classroom-card__action,
+  .series-buy { width: 100%; }
+}
 </style>

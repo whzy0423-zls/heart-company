@@ -8,6 +8,44 @@ const source = await readFile(new URL("./classroom.vue", import.meta.url), "utf8
 
 assert.ok(source, "classroom list page should exist");
 
+// Container contract: classroom sections should share the same safe-area-aware
+// horizontal gutter as the rest of the app instead of running edge-to-edge.
+assert.match(
+  source,
+  /<view class="(?=[^"]*\bwrap\b)(?=[^"]*\bclassroom\b)(?=[^"]*\bpage-stack\b)(?=[^"]*\bios-page\b)(?=[^"]*\bios-safe-bottom\b)[^"]*">/,
+  "classroom should use the shared wrap container",
+);
+assert.match(
+  source,
+  /\.classroom\s*\{[^}]*gap:\s*32rpx/s,
+  "classroom should keep the app-wide section rhythm",
+);
+
+// Card hierarchy contract: media-first cards must be full-bleed while their
+// supporting panels stay visually connected and do not inherit hidden padding.
+const classroomCardRule = source.match(/\.classroom-card\s*\{([^}]*)\}/s)?.[1] || "";
+assert.match(classroomCardRule, /padding:\s*0/, "classroom cards should reset ios-card padding");
+assert.match(
+  classroomCardRule,
+  /border-radius:\s*30rpx/,
+  "classroom cards should preserve their media-card radius",
+);
+assert.match(
+  source,
+  /\.classroom-list__item\s*\{[^}]*gap:\s*10rpx/s,
+  "expanded card panels should sit close enough to read as one unit",
+);
+assert.match(
+  source,
+  /\.continue-learning\s*\{[^}]*background:\s*linear-gradient\(135deg,\s*var\(--nx-surface\),\s*var\(--nx-surface-soft\)\)/s,
+  "continue learning should remain a secondary light surface",
+);
+assert.match(
+  source,
+  /@media\s*\(max-width:\s*380px\)[\s\S]*\.classroom-card__footer\s*\{[^}]*flex-direction:\s*column/s,
+  "narrow screens should stack card actions instead of squeezing them",
+);
+
 // Layout contract: keep the classroom hierarchy compact while preserving its
 // established navigation, progress, and purchase branches below.
 assert.match(
