@@ -243,7 +243,7 @@ onMounted(() => {
           :key="view.expertHero.portraitImage"
           :src="view.expertHero.portraitImage"
           :data-image="view.expertHero.portraitImage"
-          mode="aspectFill"
+          mode="aspectFit"
           aria-label="导师形象"
           @error="markTeacherImageError"
         />
@@ -251,12 +251,8 @@ onMounted(() => {
           {{ view.expertHero.monogram || '九' }}
         </view>
         <view class="expert-hero__portrait-overlay" aria-hidden="true">
-          <text class="expert-hero__eyebrow">{{ view.expertHero.eyebrow }}</text>
-          <text class="expert-hero__title">{{ view.expertHero.title }}</text>
-          <view class="expert-hero__portrait-affordance">
-            <text class="expert-hero__portrait-label">查看完整导师介绍</text>
-            <text class="expert-hero__portrait-arrow">↗</text>
-          </view>
+          <text class="expert-hero__portrait-label">查看完整导师介绍</text>
+          <text class="expert-hero__portrait-arrow">↗</text>
         </view>
       </button>
       <button
@@ -554,8 +550,11 @@ button::after {
 
 .expert-hero {
   position: relative;
-  height: 600rpx;
-  min-height: 600rpx;
+  width: 600rpx;
+  max-width: 100%;
+  height: 1040rpx;
+  min-height: 1040rpx;
+  margin: 0 auto;
   overflow: hidden;
   padding: 0;
   border: 2rpx solid var(--nx-home-gold-portrait-border);
@@ -564,7 +563,6 @@ button::after {
   box-shadow: 0 30rpx 64rpx -34rpx var(--nx-home-elevated-shadow);
 }
 
-.expert-hero__eyebrow,
 .section-heading__eyebrow,
 .test-game__eyebrow,
 .enterprise-final-cta__eyebrow {
@@ -574,35 +572,24 @@ button::after {
   letter-spacing: 2rpx;
 }
 
-.expert-hero__title {
-  color: var(--nx-surface);
-  font-size: 42rpx;
-  font-weight: 800;
-  line-height: 1.24;
-}
-
-.expert-hero__secondary {
-  min-height: 88rpx;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 26rpx;
-  border-radius: 999rpx;
-  font-size: 24rpx;
-  font-weight: 800;
-  line-height: 1.2;
-  transition: opacity 180ms ease-out, transform 180ms ease-out;
-}
-
 .expert-hero__secondary {
   min-height: 88rpx;
   position: absolute;
   right: 28rpx;
   bottom: 28rpx;
   z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 26rpx;
   border: 2rpx solid var(--nx-home-on-brand-border);
+  border-radius: 999rpx;
   background: transparent;
   color: var(--nx-surface);
+  font-size: 24rpx;
+  font-weight: 800;
+  line-height: 1.2;
+  transition: opacity 180ms ease-out, transform 180ms ease-out;
 }
 
 .expert-hero__portrait {
@@ -649,22 +636,14 @@ button::after {
   bottom: 0;
   left: 0;
   z-index: 2;
-  min-height: 250rpx;
+  min-height: 160rpx;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: flex-end;
-  gap: 10rpx;
-  box-sizing: border-box;
-  padding: 120rpx 300rpx 30rpx 32rpx;
-  border-top: 2rpx solid var(--nx-home-gold-portrait-border);
-  background: linear-gradient(180deg, transparent, var(--nx-brand-700) 48%, var(--nx-brand-900));
-}
-
-.expert-hero__portrait-affordance {
-  display: flex;
-  align-items: center;
+  align-items: flex-end;
+  justify-content: flex-start;
   gap: 8rpx;
+  box-sizing: border-box;
+  padding: 52rpx 250rpx 20rpx 28rpx;
+  background: linear-gradient(180deg, transparent, var(--nx-brand-900));
 }
 
 .expert-hero__portrait-label {
@@ -1126,12 +1105,12 @@ button::after {
 
 @media (max-width: 380px) {
   .expert-hero {
-    height: 620rpx;
-    min-height: 620rpx;
+    height: 920rpx;
+    min-height: 920rpx;
   }
 
   .expert-hero__portrait-overlay {
-    padding: 120rpx 24rpx 132rpx;
+    padding: 52rpx 24rpx 128rpx;
   }
 
   .expert-hero__secondary {

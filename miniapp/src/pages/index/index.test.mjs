@@ -81,8 +81,8 @@ const expertHeroTemplate = template.slice(
 );
 assert.doesNotMatch(
   expertHeroTemplate,
-  /class="expert-hero__copy"|view\.expertHero\.lead/,
-  "the full-bleed teacher hero should omit the former copy column and long introduction",
+  /class="expert-hero__(?:copy|eyebrow|title|lead)"|view\.expertHero\.(?:eyebrow|title|lead)/,
+  "the complete portrait hero should omit the former copy column and large identity overlay",
 );
 assert.doesNotMatch(
   expertHeroTemplate,
@@ -96,8 +96,8 @@ assert.doesNotMatch(
 );
 assert.match(
   expertHeroTemplate,
-  /<button\b(?=[^>]*class="expert-hero__portrait")(?=[^>]*@click="previewTeacherDetail")[^>]*>[\s\S]*?class="expert-hero__portrait-overlay"[\s\S]*?view\.expertHero\.eyebrow[\s\S]*?view\.expertHero\.title[\s\S]*?查看完整导师介绍[\s\S]*?<\/button>[\s\S]*?<button\b(?=[^>]*class="expert-hero__secondary")(?=[^>]*@click="goClassroom")[^>]*>[\s\S]*?进入老师课堂[\s\S]*?<\/button>/,
-  "the portrait preview surface should carry compact identity and remain a sibling of the classroom action",
+  /<button\b(?=[^>]*class="expert-hero__portrait")(?=[^>]*@click="previewTeacherDetail")[^>]*>[\s\S]*?class="expert-hero__portrait-overlay"[\s\S]*?查看完整导师介绍[\s\S]*?<\/button>[\s\S]*?<button\b(?=[^>]*class="expert-hero__secondary")(?=[^>]*@click="goClassroom")[^>]*>[\s\S]*?进入老师课堂[\s\S]*?<\/button>/,
+  "the thin detail affordance should remain a sibling of the native classroom action",
 );
 const portraitPreviewTemplate = expertHeroTemplate.match(
   /<button\b[^>]*class="expert-hero__portrait"[^>]*>[\s\S]*?<\/button>/,
@@ -131,8 +131,8 @@ assert.match(
 );
 assert.match(
   style,
-  /\.expert-hero\s*\{[^}]*height:\s*600rpx;[^}]*border:\s*2rpx solid var\(--nx-home-gold-portrait-border\)/s,
-  "the full-bleed hero should keep a stable 600rpx card height and champagne-gold border",
+  /\.expert-hero\s*\{[^}]*width:\s*600rpx;[^}]*max-width:\s*100%;[^}]*height:\s*1040rpx;[^}]*margin:\s*0 auto;[^}]*border:\s*2rpx solid var\(--nx-home-gold-portrait-border\)/s,
+  "the complete portrait hero should be a centered 600 by 1040rpx champagne-gold card",
 );
 assert.match(
   style,
@@ -141,18 +141,18 @@ assert.match(
 );
 assert.match(
   expertHeroTemplate,
-  /class="expert-hero__image"[\s\S]{0,320}mode="aspectFill"/,
-  "the full-bleed portrait should crop with aspectFill",
+  /class="expert-hero__image"[\s\S]{0,320}mode="aspectFit"/,
+  "the portrait should use aspectFit so the complete teacher image remains visible",
 );
 assert.match(
   style,
-  /\.expert-hero__portrait-overlay\s*\{[^}]*background:\s*linear-gradient\([^;]*var\(--nx-brand-700\)[^;]*var\(--nx-brand-900\)[^;]*\);/s,
-  "the compact identity overlay should use a deep-blue readability gradient",
+  /\.expert-hero__portrait-overlay\s*\{[^}]*min-height:\s*160rpx;[^}]*padding:\s*52rpx 250rpx 20rpx 28rpx;[^}]*background:\s*linear-gradient\([^;]*var\(--nx-brand-900\)[^;]*\);/s,
+  "the bottom detail affordance should stay in a thin navy action layer",
 );
 assert.match(
   style,
-  /@media\s*\(max-width:\s*380px\)\s*\{[\s\S]*?\.expert-hero\s*\{[^}]*height:\s*620rpx;[\s\S]*?\.expert-hero__secondary\s*\{[^}]*left:\s*24rpx;[^}]*min-height:\s*88rpx;/,
-  "narrow screens should stack the classroom action across an accessible 88rpx target",
+  /@media\s*\(max-width:\s*380px\)\s*\{[\s\S]*?\.expert-hero\s*\{[^}]*height:\s*920rpx;[^}]*min-height:\s*920rpx;[\s\S]*?\.expert-hero__portrait-overlay\s*\{[^}]*padding:\s*52rpx 24rpx 128rpx;[\s\S]*?\.expert-hero__secondary\s*\{[^}]*left:\s*24rpx;[^}]*min-height:\s*88rpx;/,
+  "narrow screens should keep the complete portrait first-screen friendly and stack the 88rpx classroom action",
 );
 assert.match(source, /failedCarouselImages/, "carousel images should keep an isolated failed-image Set");
 assert.match(source, /courseCoverErrors/, "course covers should keep isolated fallback state");
