@@ -135,7 +135,7 @@ defineExpose({ save: async () => undefined });
     </section>
     <p v-if="itemError" role="alert" class="item-error">{{ itemError }} <a-button type="link" @click="saveItem">重试</a-button></p>
     <a-modal v-model:open="modalOpen" :title="editingId ? '编辑' : '新增'" @ok="saveItem">
-      <div class="editor-form"><label>名称<a-input v-model:value="form.name" /></label><label>描述<a-textarea v-model:value="form.description" /></label><label>参考图 URL<a-input v-model:value="form.referenceImageUrl" /></label><label v-if="editorType === 'scene'">参考视频 URL<a-input v-model:value="form.referenceVideoUrl" /></label></div>
+      <div class="editor-form"><label>名称<a-input v-model:value="form.name" placeholder="请输入素材名称" /></label><label>描述<a-textarea v-model:value="form.description" placeholder="请输入素材描述" /></label><label>参考图 URL<a-input v-model:value="form.referenceImageUrl" placeholder="请输入参考图 URL" /></label><label v-if="editorType === 'scene'">参考视频 URL<a-input v-model:value="form.referenceVideoUrl" placeholder="请输入参考视频 URL" /></label></div>
     </a-modal>
   </div>
 </template>

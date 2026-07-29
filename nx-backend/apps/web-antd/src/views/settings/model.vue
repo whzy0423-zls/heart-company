@@ -589,6 +589,7 @@ async function testChat() {
             <Select
               v-model:value="form.admin.provider"
               :options="adminProviderOptions"
+              placeholder="请选择管理端模型协议"
             />
           </Form.Item>
           <Form.Item label="接口地址 (API Base)">
@@ -647,6 +648,7 @@ async function testChat() {
             <Select
               v-model:value="form.dailyQuiz.provider"
               :options="dailyQuizProviderOptions"
+              placeholder="继承管理端或选择协议"
             />
           </Form.Item>
           <Form.Item label="接口地址 (API Base)">
@@ -755,6 +757,7 @@ async function testChat() {
               <Input
                 v-model:value="form.xinzhiliVoice.asr.timeoutSeconds"
                 type="number"
+                placeholder="默认 30 秒"
               />
             </Form.Item>
           </Col>
@@ -798,6 +801,7 @@ async function testChat() {
                   <Input
                     v-model:value="form.xinzhiliVoice.tts.speed"
                     type="number"
+                    placeholder="如 1"
                   />
                 </Form.Item>
               </Col>
@@ -814,6 +818,7 @@ async function testChat() {
                   <Input
                     v-model:value="form.xinzhiliVoice.tts.timeoutSeconds"
                     type="number"
+                    placeholder="默认 45 秒"
                   />
                 </Form.Item>
               </Col>
@@ -827,6 +832,7 @@ async function testChat() {
               <Input
                 v-model:value="form.xinzhiliVoice.interaction.endSilenceMs"
                 type="number"
+                placeholder="如 700"
               />
             </Form.Item>
           </Col>
@@ -835,6 +841,7 @@ async function testChat() {
               <Input
                 v-model:value="form.xinzhiliVoice.interaction.minSpeechMs"
                 type="number"
+                placeholder="如 300"
               />
             </Form.Item>
           </Col>
@@ -843,6 +850,7 @@ async function testChat() {
               <Input
                 v-model:value="form.xinzhiliVoice.interaction.maxTurnSeconds"
                 type="number"
+                placeholder="如 60"
               />
             </Form.Item>
           </Col>

@@ -392,7 +392,7 @@ async function save() {
       <Row :gutter="24">
         <Col :md="12" :xs="24">
           <Form.Item label="WebSocket Endpoint">
-            <Input v-model:value="form.realtimeAsr.endpoint" />
+            <Input v-model:value="form.realtimeAsr.endpoint" placeholder="wss://dashscope.aliyuncs.com/api-ws/v1/inference" />
           </Form.Item>
           <Form.Item label="区域">
             <Input
@@ -467,15 +467,15 @@ async function save() {
             </span>
           </Form.Item>
           <Form.Item label="Endpoint">
-            <Input v-model:value="form.tts.endpoint" />
+            <Input v-model:value="form.tts.endpoint" placeholder="https://dashscope.aliyuncs.com/api/v1" />
           </Form.Item>
           <Form.Item v-if="form.tts.provider === 'minimax'" label="Group ID">
-            <Input v-model:value="form.tts.groupId" />
+            <Input v-model:value="form.tts.groupId" placeholder="MiniMax Group ID" />
           </Form.Item>
         </Col>
         <Col :md="12" :xs="24">
           <Form.Item label="模型">
-            <Input v-model:value="form.tts.model" />
+            <Input v-model:value="form.tts.model" placeholder="如 MiniMax/speech-2.8-turbo" />
           </Form.Item>
           <Form.Item label="手动音色 ID">
             <Input
@@ -513,60 +513,60 @@ async function save() {
             <span class="ml-3 text-xs text-gray-400">{{ mode.description }}</span>
           </Form.Item>
           <Form.Item :label="`${mode.label}提示词`">
-            <Textarea v-model:value="form.modePrompts[mode.value]" :rows="3" />
+            <Textarea v-model:value="form.modePrompts[mode.value]" :rows="3" placeholder="可选：填写该模式的专属提示词" />
           </Form.Item>
         </Col>
       </Row>
 
       <Form.Item label="公共提示词">
-        <Textarea v-model:value="form.commonPrompt" :rows="4" />
+        <Textarea v-model:value="form.commonPrompt" :rows="4" placeholder="可选：填写所有模式共用的系统提示词" />
       </Form.Item>
 
       <Divider orientation="left">时序参数（毫秒）</Divider>
       <Row :gutter="16">
         <Col :md="8" :xs="12">
           <Form.Item label="识别文本稳定">
-            <InputNumber v-model:value="form.timing.partialStableMs" :min="100" :max="1000" />
+            <InputNumber v-model:value="form.timing.partialStableMs" :min="100" :max="1000" placeholder="如 150" />
           </Form.Item>
         </Col>
         <Col :md="8" :xs="12">
           <Form.Item label="抬杠候选静默">
-            <InputNumber v-model:value="form.timing.argumentCandidateSilenceMs" :min="250" :max="600" />
+            <InputNumber v-model:value="form.timing.argumentCandidateSilenceMs" :min="250" :max="600" placeholder="如 350" />
           </Form.Item>
         </Col>
         <Col :md="8" :xs="12">
           <Form.Item label="正常结束静默">
-            <InputNumber v-model:value="form.timing.normalEndSilenceMs" :min="350" :max="2000" />
+            <InputNumber v-model:value="form.timing.normalEndSilenceMs" :min="350" :max="2000" placeholder="如 700" />
           </Form.Item>
         </Col>
         <Col :md="8" :xs="12">
           <Form.Item label="安慰结束静默">
-            <InputNumber v-model:value="form.timing.comfortEndSilenceMs" :min="700" :max="3000" />
+            <InputNumber v-model:value="form.timing.comfortEndSilenceMs" :min="700" :max="3000" placeholder="如 1200" />
           </Form.Item>
         </Col>
         <Col :md="8" :xs="12">
           <Form.Item label="深度倾听结束静默">
-            <InputNumber v-model:value="form.timing.deepListeningEndSilenceMs" :min="1000" :max="5000" />
+            <InputNumber v-model:value="form.timing.deepListeningEndSilenceMs" :min="1000" :max="5000" placeholder="如 1500" />
           </Form.Item>
         </Col>
         <Col :md="8" :xs="12">
           <Form.Item label="首次安慰提示">
-            <InputNumber v-model:value="form.timing.comfortFirstPromptMs" :min="3000" :max="30000" />
+            <InputNumber v-model:value="form.timing.comfortFirstPromptMs" :min="3000" :max="30000" placeholder="如 5000" />
           </Form.Item>
         </Col>
         <Col :md="8" :xs="12">
           <Form.Item label="二次安慰提示">
-            <InputNumber v-model:value="form.timing.comfortSecondPromptMs" :min="3001" :max="60000" />
+            <InputNumber v-model:value="form.timing.comfortSecondPromptMs" :min="3001" :max="60000" placeholder="如 12000" />
           </Form.Item>
         </Col>
         <Col :md="8" :xs="12">
           <Form.Item label="深度倾听提示">
-            <InputNumber v-model:value="form.timing.deepListeningPromptMs" :min="5000" :max="60000" />
+            <InputNumber v-model:value="form.timing.deepListeningPromptMs" :min="5000" :max="60000" placeholder="如 12000" />
           </Form.Item>
         </Col>
         <Col :md="8" :xs="12">
           <Form.Item label="最多主动提示次数">
-            <InputNumber v-model:value="form.timing.maxProactivePrompts" :min="0" :max="5" />
+            <InputNumber v-model:value="form.timing.maxProactivePrompts" :min="0" :max="5" placeholder="如 2" />
           </Form.Item>
         </Col>
       </Row>

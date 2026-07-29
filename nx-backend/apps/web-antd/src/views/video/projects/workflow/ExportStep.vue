@@ -94,8 +94,8 @@ onBeforeUnmount(stopPolling);
       <label v-if="excludedShotIds.length" class="ack"><a-checkbox v-model:checked="partialAcknowledged" />我确认本次排除：{{ excludedShotIds.join('、') }}</label>
     </section>
     <section class="compose-options">
-      <label>转场<a-select v-model:value="options.transition" :options="[{value:'none',label:'无'},{value:'fade',label:'淡入淡出'}]" /></label>
-      <label>背景音乐 URL<a-input v-model:value="options.musicUrl" /></label>
+      <label>转场<a-select v-model:value="options.transition" :options="[{value:'none',label:'无'},{value:'fade',label:'淡入淡出'}]" placeholder="请选择转场效果" /></label>
+      <label>背景音乐 URL<a-input v-model:value="options.musicUrl" placeholder="可选：请输入背景音乐 URL" /></label>
       <label><a-switch v-model:checked="options.enableSubtitles" /> 添加字幕</label>
     </section>
     <section v-if="job" class="job-status" aria-live="polite">

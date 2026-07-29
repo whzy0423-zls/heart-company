@@ -112,13 +112,13 @@ defineExpose({ save });
           </button>
         </nav>
         <section v-if="selected" class="shot-editor">
-          <label>名称<a-input v-model:value="form.name" @change="markDirty" /></label>
-          <label>动作描述<a-textarea v-model:value="form.actionDescription" :rows="5" @change="markDirty" /></label>
+          <label>名称<a-input v-model:value="form.name" placeholder="请输入分镜名称" @change="markDirty" /></label>
+          <label>动作描述<a-textarea v-model:value="form.actionDescription" :rows="5" placeholder="请描述镜头动作、人物行为和画面变化" @change="markDirty" /></label>
           <div class="editor-grid">
-            <label>角色<a-select v-model:value="form.characterIds" mode="tags" @change="markDirty" /></label>
-            <label>场景<a-input v-model:value="form.sceneId" @change="markDirty" /></label>
-            <label>时长<a-select v-model:value="form.duration" :options="[{value:5,label:'5 秒'},{value:10,label:'10 秒'},{value:15,label:'15 秒'}]" @change="markDirty" /></label>
-            <label>画幅<a-select v-model:value="form.aspectRatio" :options="[{value:'16:9',label:'16:9'},{value:'9:16',label:'9:16'},{value:'1:1',label:'1:1'}]" @change="markDirty" /></label>
+            <label>角色<a-select v-model:value="form.characterIds" mode="tags" placeholder="请选择或输入角色" @change="markDirty" /></label>
+            <label>场景<a-input v-model:value="form.sceneId" placeholder="请输入场景 ID" @change="markDirty" /></label>
+            <label>时长<a-select v-model:value="form.duration" :options="[{value:5,label:'5 秒'},{value:10,label:'10 秒'},{value:15,label:'15 秒'}]" placeholder="请选择时长" @change="markDirty" /></label>
+            <label>画幅<a-select v-model:value="form.aspectRatio" :options="[{value:'16:9',label:'16:9'},{value:'9:16',label:'9:16'},{value:'1:1',label:'1:1'}]" placeholder="请选择画幅" @change="markDirty" /></label>
           </div>
           <p v-if="!form.actionDescription.trim()" role="alert" class="field-error">请填写动作描述</p>
         </section>

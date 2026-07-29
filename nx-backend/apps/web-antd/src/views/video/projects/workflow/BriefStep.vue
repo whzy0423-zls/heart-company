@@ -53,19 +53,19 @@ defineExpose({ save });
 <template>
   <div class="brief-step">
     <div class="field-grid">
-      <label>项目名称<a-input v-model:value="form.name" @change="markDirty" /></label>
-      <label>主题<a-input v-model:value="form.theme" @change="markDirty" /></label>
+      <label>项目名称<a-input v-model:value="form.name" placeholder="请输入项目名称" @change="markDirty" /></label>
+      <label>主题<a-input v-model:value="form.theme" placeholder="请输入项目主题" @change="markDirty" /></label>
     </div>
     <label>
       完整剧本
-      <a-textarea v-model:value="form.scriptContent" :rows="14" @change="markDirty" />
+      <a-textarea v-model:value="form.scriptContent" :rows="14" placeholder="请粘贴或输入完整剧本" @change="markDirty" />
     </label>
     <p v-if="error.scriptContent" role="alert" class="field-error">{{ error.scriptContent }}</p>
     <div class="script-summary">
       <span>{{ scriptCharacterCount }} 字</span>
       <span>预计 {{ estimatedParagraphCount }} 个分镜段落</span>
     </div>
-    <label>视觉风格<a-textarea v-model:value="form.styleGuide" :rows="3" @change="markDirty" /></label>
+    <label>视觉风格<a-textarea v-model:value="form.styleGuide" :rows="3" placeholder="请输入视觉风格与画面要求" @change="markDirty" /></label>
   </div>
 </template>
 
