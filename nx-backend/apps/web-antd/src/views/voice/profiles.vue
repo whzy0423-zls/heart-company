@@ -40,13 +40,18 @@ import {
   useUploadAssetPreviewUrl,
 } from '#/utils/upload-asset-preview';
 
+import {
+  getBailianCopyFeedback,
+  updateCopyingProfileIds,
+} from './profiles-copy-feedback';
+
 const accessStore = useAccessStore();
 const audioPreview = useUploadAssetPreviewResolver(
   () => accessStore.accessToken,
 );
 const loading = ref(false);
 const saving = ref(false);
-const copyingProfileId = ref<null | string>(null);
+const copyingProfileIds = ref(new Set<string>());
 const profiles = ref<VoiceProfile[]>([]);
 const total = ref(0);
 const uploadedAudioUrl = ref('');
@@ -201,24 +206,36 @@ async function retryClone(record: VoiceProfile) {
   }
 }
 
+function isCopyingProfile(profileId: string) {
+  return copyingProfileIds.value.has(profileId);
+}
+
+function setCopyingProfile(profileId: string, isCopying: boolean) {
+  copyingProfileIds.value = updateCopyingProfileIds(
+    copyingProfileIds.value,
+    profileId,
+    isCopying,
+  );
+}
+
+function showBailianCopyFeedback(result: VoiceProfile) {
+  const feedback = getBailianCopyFeedback(result);
+  message[feedback.type](feedback.content);
+}
+
 function copyProfileToBailian(record: VoiceProfile) {
   Modal.confirm({
     content: `将保留原 MiniMax 音色，并复用原音频样本创建「${record.name}」的百炼人声。确认继续吗？`,
     onOk: async () => {
-      copyingProfileId.value = record.id;
+      setCopyingProfile(record.id, true);
       try {
-        await copyVoiceProfileToBailianApi(record.id);
-        message.success('已复制到百炼，可到芯之力模型配置选择');
+        const result = await copyVoiceProfileToBailianApi(record.id);
+        showBailianCopyFeedback(result);
         await load();
-      } catch (error: any) {
-        const errorMessage =
-          error?.response?.data?.error ||
-          error?.response?.data?.message ||
-          error?.message ||
-          '复制到百炼失败，请稍后重试';
-        message.error(errorMessage);
+      } catch {
+        // requestClient's shared interceptor displays the backend error once.
       } finally {
-        copyingProfileId.value = null;
+        setCopyingProfile(record.id, false);
       }
     },
     title: '复制到百炼',
@@ -444,7 +461,7 @@ onMounted(load);
                   </Button>
                   <Button
                     v-if="record.provider === 'minimax' && record.sampleAssetId"
-                    :loading="copyingProfileId === record.id"
+                    :loading="isCopyingProfile(record.id)"
                     size="small"
                     type="link"
                     @click="copyProfileToBailian(profileRecord(record))"
