@@ -74,16 +74,20 @@ func (c *BailianClient) CloneVoice(ctx context.Context, input BailianCloneInput)
 	if c == nil || c.apiKey == "" {
 		return "", errors.New("请先配置阿里百炼 API Key")
 	}
-	preferredName := normalizedBailianPreferredName(input.VoiceID)
-	if preferredName == "" {
-		preferredName = "nx_voice_" + randomID(10)
-	}
 	targetModel := strings.TrimSpace(input.TargetModel)
 	if targetModel == "" {
 		targetModel = c.targetModel
 	}
 	if isBailianHostedMiniMaxModel(targetModel) {
-		return c.cloneMiniMaxVoice(ctx, targetModel, preferredName, input.AudioURL)
+		voiceID := normalizedBailianHostedMiniMaxVoiceID(input.VoiceID)
+		if voiceID == "" {
+			voiceID = "nx_voice_" + randomID(10)
+		}
+		return c.cloneMiniMaxVoice(ctx, targetModel, voiceID, input.AudioURL)
+	}
+	preferredName := normalizedBailianPreferredName(input.VoiceID)
+	if preferredName == "" {
+		preferredName = normalizedBailianPreferredName("nxvoice" + randomID(8))
 	}
 	return c.cloneQwenVoice(ctx, targetModel, preferredName, input)
 }
@@ -372,13 +376,28 @@ func normalizeProfileProvider(provider string) string {
 	}
 }
 
-var bailianPreferredNameInvalid = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
+var bailianPreferredNameInvalid = regexp.MustCompile(`[^a-z0-9_]+`)
+var bailianHostedMiniMaxVoiceIDInvalid = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
 
 func normalizedBailianPreferredName(raw string) string {
-	value := strings.Trim(bailianPreferredNameInvalid.ReplaceAllString(strings.TrimSpace(raw), "_"), "_-")
+	value := strings.Trim(
+		bailianPreferredNameInvalid.ReplaceAllString(strings.ToLower(strings.TrimSpace(raw)), "_"),
+		"_",
+	)
 	if value == "" {
 		return ""
 	}
+	if value[0] < 'a' || value[0] > 'z' {
+		value = "v" + value
+	}
+	if len(value) > 20 {
+		return value[:20]
+	}
+	return value
+}
+
+func normalizedBailianHostedMiniMaxVoiceID(raw string) string {
+	value := strings.Trim(bailianHostedMiniMaxVoiceIDInvalid.ReplaceAllString(strings.TrimSpace(raw), "_"), "_-")
 	if len(value) > 40 {
 		return value[:40]
 	}

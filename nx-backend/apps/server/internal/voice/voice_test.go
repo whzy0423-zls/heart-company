@@ -151,7 +151,7 @@ func TestBailianCloneVoicePostsSampleDataAndReturnsFinalVoiceID(t *testing.T) {
 			t.Fatalf("model = %v, want qwen-voice-enrollment", payload["model"])
 		}
 		input := payload["input"].(map[string]any)
-		if input["action"] != "create" || input["target_model"] != "qwen3-tts-vc-realtime-2026-01-15" || input["preferred_name"] != "teacher-voice" {
+		if input["action"] != "create" || input["target_model"] != "qwen3-tts-vc-realtime-2026-01-15" || input["preferred_name"] != "teacher_voice" {
 			t.Fatalf("unexpected input payload: %+v", input)
 		}
 		audio := input["audio"].(map[string]any)
@@ -195,6 +195,38 @@ func TestBailianCloneVoicePostsSampleDataAndReturnsFinalVoiceID(t *testing.T) {
 	}
 	if gotPath != "/api/v1/services/audio/tts/customization" {
 		t.Fatalf("clone path = %q", gotPath)
+	}
+}
+
+func TestNormalizedBailianPreferredNameMatchesQwenEnrollmentContract(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "current generated id is capped at twenty characters",
+			raw:  "nx_voice_6c5d7fa19e761d485dd5",
+			want: "nx_voice_6c5d7fa19e7",
+		},
+		{
+			name: "uppercase and hyphen are normalized",
+			raw:  "Teacher-Voice",
+			want: "teacher_voice",
+		},
+		{
+			name: "identifier beginning with a digit gains a letter prefix",
+			raw:  "123456",
+			want: "v123456",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizedBailianPreferredName(tt.raw); got != tt.want {
+				t.Fatalf("normalizedBailianPreferredName(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
 	}
 }
 
