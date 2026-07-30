@@ -54,9 +54,11 @@ export interface ClassroomPage<T> {
 
 export interface ClassroomSeries {
   accessLevel: Exclude<ClassroomAccessLevel, 'inherit'>;
+  coverAspectRatio: ClassroomCoverAspectRatio;
   coverUrl: string;
   createdAt: string;
   id: number;
+  manualCoverObjectKey: string;
   playbackBlocked: boolean;
   priceCents: number;
   publishedAt?: string;
@@ -339,6 +341,47 @@ export function setClassroomSeriesPlaybackBlockedApi(
     requestClient.post<ClassroomSeries>(
       `/admin/classroom/series/${id}/playback-blocked`,
       { blocked, expectedUpdatedAt, reason },
+    ),
+  );
+}
+
+export function uploadClassroomSeriesCoverApi(
+  id: number,
+  file: File,
+  expectedUpdatedAt: string,
+) {
+  const formData = new FormData();
+  formData.set('file', file);
+  formData.set('expectedUpdatedAt', expectedUpdatedAt);
+  return classroomRequest(
+    requestClient.post<ClassroomSeries>(
+      `/admin/classroom/series/${id}/cover`,
+      formData,
+    ),
+  );
+}
+
+export function deleteClassroomSeriesCoverApi(
+  id: number,
+  expectedUpdatedAt: string,
+) {
+  return classroomRequest(
+    requestClient.delete<ClassroomSeries>(
+      `/admin/classroom/series/${id}/cover`,
+      { params: { expectedUpdatedAt } },
+    ),
+  );
+}
+
+export function setClassroomSeriesCoverSettingsApi(
+  id: number,
+  coverAspectRatio: ClassroomCoverAspectRatio,
+  expectedUpdatedAt: string,
+) {
+  return classroomRequest(
+    requestClient.put<ClassroomSeries>(
+      `/admin/classroom/series/${id}/cover-settings`,
+      { coverAspectRatio, expectedUpdatedAt },
     ),
   );
 }
