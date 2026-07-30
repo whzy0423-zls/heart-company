@@ -168,7 +168,9 @@ func (s *Server) resolveBailianCredentials(ctx context.Context) (resolvedBailian
 	}
 
 	asrKey := strings.TrimSpace(legacy.RealtimeASR.APIKey)
-	if asrKey != "" && strings.EqualFold(strings.TrimSpace(legacy.RealtimeASR.Provider), xinzhili.RealtimeASRProvider) {
+	if asrKey != "" && strings.TrimSpace(legacy.RealtimeASR.Provider) == xinzhili.RealtimeASRProvider &&
+		strings.TrimSpace(legacy.RealtimeASR.Model) == xinzhili.RealtimeASRModel &&
+		isOfficialDashScopeRealtimeASREndpoint(legacy.RealtimeASR.Endpoint) {
 		return resolvedBailianCredential{
 			Config: bailianconfig.Config{APIKey: asrKey},
 			Source: bailianCredentialSourceLegacyASR,
@@ -178,25 +180,52 @@ func (s *Server) resolveBailianCredentials(ctx context.Context) (resolvedBailian
 }
 
 func isOfficialDashScopeTTSEndpoint(raw string) bool {
-	parsed, err := url.ParseRequestURI(strings.TrimSpace(raw))
-	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.User != nil {
-		return false
-	}
-	if !strings.EqualFold(parsed.Hostname(), "dashscope.aliyuncs.com") {
-		return false
-	}
-	if port := parsed.Port(); port != "" && port != "443" {
-		return false
-	}
-	if parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" {
+	parsed, ok := parseOfficialDashScopeEndpoint(raw, "https")
+	if !ok {
 		return false
 	}
 	endpointPath := strings.TrimSuffix(parsed.Path, "/")
 	if pathpkg.Clean(endpointPath) != endpointPath {
 		return false
 	}
-	return endpointPath == "/api/v1" || strings.HasPrefix(endpointPath, "/api/v1/") ||
-		endpointPath == "/compatible-mode/v1" || strings.HasPrefix(endpointPath, "/compatible-mode/v1/")
+	switch endpointPath {
+	case "/api/v1", "/compatible-mode/v1", "/api/v1/services/aigc/multimodal-generation/generation":
+		return true
+	default:
+		return false
+	}
+}
+
+func isOfficialDashScopeRealtimeASREndpoint(raw string) bool {
+	parsed, ok := parseOfficialDashScopeEndpoint(raw, "wss", "https")
+	if !ok || pathpkg.Clean(parsed.Path) != parsed.Path {
+		return false
+	}
+	return parsed.Path == "/api-ws/v1/inference"
+}
+
+func parseOfficialDashScopeEndpoint(raw string, schemes ...string) (*url.URL, bool) {
+	parsed, err := url.ParseRequestURI(strings.TrimSpace(raw))
+	if err != nil || parsed.User != nil {
+		return nil, false
+	}
+	schemeAllowed := false
+	for _, scheme := range schemes {
+		if strings.EqualFold(parsed.Scheme, scheme) {
+			schemeAllowed = true
+			break
+		}
+	}
+	if !schemeAllowed || !strings.EqualFold(parsed.Hostname(), "dashscope.aliyuncs.com") {
+		return nil, false
+	}
+	if port := parsed.Port(); port != "" && port != "443" {
+		return nil, false
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" {
+		return nil, false
+	}
+	return parsed, true
 }
 
 func (s *Server) refreshBailianCopyCredentials(ctx context.Context) (resolvedBailianCredential, error) {

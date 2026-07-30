@@ -122,6 +122,8 @@ func TestBailianCredentialsLegacyTTSFallbackOnlyAcceptsBailianOrOfficialDashScop
 		{name: "http scheme", provider: xinzhili.TTSProviderOpenAICompatible, endpoint: "http://dashscope.aliyuncs.com/api/v1"},
 		{name: "unexpected port", provider: xinzhili.TTSProviderOpenAICompatible, endpoint: "https://dashscope.aliyuncs.com:444/api/v1"},
 		{name: "unsupported path", provider: xinzhili.TTSProviderOpenAICompatible, endpoint: "https://dashscope.aliyuncs.com/evil/v1"},
+		{name: "native prefix is not enough", provider: xinzhili.TTSProviderOpenAICompatible, endpoint: "https://dashscope.aliyuncs.com/api/v1/not-a-tts-endpoint"},
+		{name: "compatible prefix is not enough", provider: xinzhili.TTSProviderOpenAICompatible, endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/not-a-tts-endpoint"},
 		{name: "parent traversal path", provider: xinzhili.TTSProviderOpenAICompatible, endpoint: "https://dashscope.aliyuncs.com/api/v1/../../evil"},
 		{name: "current traversal path", provider: xinzhili.TTSProviderOpenAICompatible, endpoint: "https://dashscope.aliyuncs.com/api/v1/./generation"},
 		{name: "encoded parent traversal path", provider: xinzhili.TTSProviderOpenAICompatible, endpoint: "https://dashscope.aliyuncs.com/api/v1/%2e%2e/evil"},
@@ -151,26 +153,54 @@ func TestBailianCredentialsLegacyTTSFallbackOnlyAcceptsBailianOrOfficialDashScop
 	}
 }
 
-func TestBailianCredentialsFallsBackToLegacyParaformerASRKey(t *testing.T) {
-	s := &Server{
-		bailianCredentials: &memoryBailianCredentialStore{},
-		xinzhiliModelConfig: staticXinzhiliConfigStore{found: true, cfg: xinzhili.Config{
-			TTS: xinzhili.TTSConfig{Provider: xinzhili.TTSProviderMiniMax, APIKey: "minimax-secret"},
-			RealtimeASR: xinzhili.RealtimeASRConfig{
-				Provider: xinzhili.RealtimeASRProvider,
-				Endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
-				Model:    xinzhili.RealtimeASRModel,
-				APIKey:   "sk-legacy-asr",
-			},
-		}},
+func TestBailianCredentialsLegacyASRFallbackRequiresOfficialParaformerConfiguration(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+		endpoint string
+		wantKey  bool
+	}{
+		{name: "official wss", provider: xinzhili.RealtimeASRProvider, model: xinzhili.RealtimeASRModel, endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/inference", wantKey: true},
+		{name: "official https compatibility", provider: xinzhili.RealtimeASRProvider, model: xinzhili.RealtimeASRModel, endpoint: "https://dashscope.aliyuncs.com/api-ws/v1/inference", wantKey: true},
+		{name: "official explicit default port", provider: xinzhili.RealtimeASRProvider, model: xinzhili.RealtimeASRModel, endpoint: "wss://dashscope.aliyuncs.com:443/api-ws/v1/inference", wantKey: true},
+		{name: "wrong provider", provider: "other-asr", model: xinzhili.RealtimeASRModel, endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/inference"},
+		{name: "wrong model", provider: xinzhili.RealtimeASRProvider, model: "paraformer-v1", endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/inference"},
+		{name: "similar domain", provider: xinzhili.RealtimeASRProvider, model: xinzhili.RealtimeASRModel, endpoint: "wss://dashscope.aliyuncs.com.example/api-ws/v1/inference"},
+		{name: "userinfo deception", provider: xinzhili.RealtimeASRProvider, model: xinzhili.RealtimeASRModel, endpoint: "wss://dashscope.aliyuncs.com@evil.test/api-ws/v1/inference"},
+		{name: "wrong path", provider: xinzhili.RealtimeASRProvider, model: xinzhili.RealtimeASRModel, endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/other"},
+		{name: "trailing slash is not exact", provider: xinzhili.RealtimeASRProvider, model: xinzhili.RealtimeASRModel, endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/inference/"},
+		{name: "dot segment", provider: xinzhili.RealtimeASRProvider, model: xinzhili.RealtimeASRModel, endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/./inference"},
+		{name: "encoded dot segment", provider: xinzhili.RealtimeASRProvider, model: xinzhili.RealtimeASRModel, endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/%2e%2e/inference"},
+		{name: "http scheme", provider: xinzhili.RealtimeASRProvider, model: xinzhili.RealtimeASRModel, endpoint: "http://dashscope.aliyuncs.com/api-ws/v1/inference"},
+		{name: "unexpected port", provider: xinzhili.RealtimeASRProvider, model: xinzhili.RealtimeASRModel, endpoint: "wss://dashscope.aliyuncs.com:444/api-ws/v1/inference"},
+		{name: "query is not exact", provider: xinzhili.RealtimeASRProvider, model: xinzhili.RealtimeASRModel, endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/inference?token=x"},
 	}
-
-	got, err := s.resolveBailianCredentials(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.APIKey != "sk-legacy-asr" || got.Source != bailianCredentialSourceLegacyASR {
-		t.Fatalf("resolved=%#v want legacy ASR", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Server{
+				bailianCredentials: &memoryBailianCredentialStore{},
+				xinzhiliModelConfig: staticXinzhiliConfigStore{found: true, cfg: xinzhili.Config{
+					TTS: xinzhili.TTSConfig{Provider: xinzhili.TTSProviderMiniMax, APIKey: "minimax-secret"},
+					RealtimeASR: xinzhili.RealtimeASRConfig{
+						Provider: tt.provider,
+						Endpoint: tt.endpoint,
+						Model:    tt.model,
+						APIKey:   "sk-legacy-asr",
+					},
+				}},
+			}
+			got, err := s.resolveBailianCredentials(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (got.APIKey != "") != tt.wantKey {
+				t.Fatalf("resolved=%#v wantKey=%v", got, tt.wantKey)
+			}
+			if tt.wantKey && got.Source != bailianCredentialSourceLegacyASR {
+				t.Fatalf("source=%q want legacy ASR", got.Source)
+			}
+		})
 	}
 }
 
