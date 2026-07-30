@@ -136,6 +136,7 @@ type Server struct {
 	classroomContinueLimiter   *strRateLimiter
 	classroomPlaybackSigner    storage.ObjectSigner
 	classroomCovers            classroomCoverManager
+	classroomSeriesCovers      classroomSeriesCoverManager
 	classroomCoverObjects      classroomCoverObjectDeleter
 	classroomPlaybackLimiter   *strRateLimiter
 	classroomPlaybackIPLimiter *strRateLimiter
@@ -273,6 +274,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 			s.classroomPlaybackSigner = multipartStore
 			s.classroomCoverObjects = multipartStore
 			s.classroomCovers = classroom.NewCoverService(classroom.NewStore(database), multipartStore, classroom.DefaultCoverImageMaxBytes)
+			s.classroomSeriesCovers = classroom.NewSeriesCoverService(classroom.NewStore(database), multipartStore, classroom.DefaultCoverImageMaxBytes)
 			probe := classroom.FFProbe{Signer: multipartStore}
 			classroomService := classroom.NewUploadService(classroom.NewStore(database), multipartStore, probe, classroom.UploadConfig{Bucket: env.ClassroomMedia.Bucket, Prefix: "classroom", PartSize: env.ClassroomMedia.PartSizeBytes, MaxParts: env.ClassroomMedia.MaxParts, CredentialTTL: time.Duration(env.ClassroomMedia.CredentialTTLSeconds) * time.Second, TaskTTL: 24 * time.Hour, MaxVideoBytes: env.ClassroomMedia.MaxVideoBytes, MaxAudioBytes: env.ClassroomMedia.MaxAudioBytes, MaxAttempts: 3}, time.Now).WithCoverExtractor(classroom.FFmpegCoverExtractor{Signer: multipartStore, Uploader: multipartStore})
 			s.classroomUploads = classroomService

@@ -7,6 +7,7 @@ export type ClassroomAccessLevel =
   | 'paid'
   | 'public';
 export type ClassroomContentStatus =
+  | 'archived'
   | 'draft'
   | 'failed'
   | 'offline'
@@ -202,6 +203,13 @@ export interface ClassroomUploadCompleteResult {
 export interface ClassroomActionPayload {
   expectedUpdatedAt: string;
   reason?: string;
+}
+
+export interface ClassroomBatchPublishPayload {
+  items: Array<{
+    expectedUpdatedAt: string;
+    id: number;
+  }>;
 }
 
 export interface ClassroomPricePayload extends ClassroomActionPayload {
@@ -438,6 +446,17 @@ export function publishClassroomContentApi(
   );
 }
 
+export function batchPublishClassroomContentsApi(
+  data: ClassroomBatchPublishPayload,
+) {
+  return classroomRequest(
+    requestClient.post<{ items: ClassroomContent[] }>(
+      '/admin/classroom/contents/batch-publish',
+      data,
+    ),
+  );
+}
+
 export function offlineClassroomContentApi(
   id: number,
   data: ClassroomActionPayload,
@@ -593,7 +612,7 @@ export function deleteClassroomContentApi(
   reason?: string,
 ) {
   return classroomRequest(
-    requestClient.delete<{ deleted: boolean }>(
+    requestClient.delete<{ archived?: boolean; deleted?: boolean }>(
       `/admin/classroom/contents/${id}`,
       { params: { expectedUpdatedAt, reason } },
     ),

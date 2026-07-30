@@ -29,16 +29,18 @@ type classroomPublicQuery struct {
 	ContentType   classroom.ContentType
 }
 type classroomPublicSeries struct {
-	ID              int64                 `json:"id"`
-	Title           string                `json:"title"`
-	Summary         string                `json:"summary,omitempty"`
-	CoverURL        string                `json:"coverUrl,omitempty"`
-	TeacherName     string                `json:"teacherName,omitempty"`
-	EffectiveAccess classroom.AccessLevel `json:"effectiveAccess"`
-	PriceCents      int                   `json:"priceCents"`
-	CanPlay         bool                  `json:"canPlay"`
-	PurchaseState   string                `json:"purchaseState"`
-	PlaybackBlocked bool                  `json:"playbackBlocked"`
+	ID               int64                      `json:"id"`
+	Title            string                     `json:"title"`
+	Summary          string                     `json:"summary,omitempty"`
+	CoverURL         string                     `json:"coverUrl,omitempty"`
+	CoverAspectRatio classroom.CoverAspectRatio `json:"coverAspectRatio"`
+	TeacherName      string                     `json:"teacherName,omitempty"`
+	EffectiveAccess  classroom.AccessLevel      `json:"effectiveAccess"`
+	PriceCents       int                        `json:"priceCents"`
+	CanPlay          bool                       `json:"canPlay"`
+	PurchaseState    string                     `json:"purchaseState"`
+	PlaybackBlocked  bool                       `json:"playbackBlocked"`
+	signedCover      bool
 }
 type classroomPublicContent struct {
 	ID               int64                      `json:"id"`
@@ -63,6 +65,28 @@ type classroomPublicSeriesDetail struct {
 	Series   classroomPublicSeries    `json:"series"`
 	Contents []classroomPublicContent `json:"contents"`
 }
+type classroomPublicRecentItem struct {
+	ItemType          string                     `json:"itemType"`
+	ID                int64                      `json:"id"`
+	SeriesID          *int64                     `json:"seriesId,omitempty"`
+	Title             string                     `json:"title"`
+	Summary           string                     `json:"summary,omitempty"`
+	Description       string                     `json:"description,omitempty"`
+	CoverURL          string                     `json:"coverUrl,omitempty"`
+	CoverAspectRatio  classroom.CoverAspectRatio `json:"coverAspectRatio"`
+	TeacherName       string                     `json:"teacherName,omitempty"`
+	ContentType       classroom.ContentType      `json:"contentType,omitempty"`
+	DurationSeconds   int                        `json:"durationSeconds,omitempty"`
+	AccessLevel       classroom.AccessLevel      `json:"accessLevel,omitempty"`
+	EffectiveAccess   classroom.AccessLevel      `json:"effectiveAccess"`
+	PriceCents        int                        `json:"priceCents"`
+	CanPlay           bool                       `json:"canPlay"`
+	PurchaseState     string                     `json:"purchaseState"`
+	PlaybackBlocked   bool                       `json:"playbackBlocked"`
+	LessonCount       int                        `json:"lessonCount,omitempty"`
+	LatestPublishedAt time.Time                  `json:"latestPublishedAt"`
+	signedCover       bool
+}
 type classroomPlaybackSource struct {
 	Content classroom.Content
 	Media   classroom.MediaAsset
@@ -70,6 +94,7 @@ type classroomPlaybackSource struct {
 }
 type classroomPublicService interface {
 	ListSeries(context.Context, classroomPublicQuery, int64) ([]classroomPublicSeries, int, error)
+	ListRecent(context.Context, classroomPublicQuery, int64) ([]classroomPublicRecentItem, error)
 	ListStandalone(context.Context, classroomPublicQuery, int64) ([]classroomPublicContent, int, error)
 	GetSeries(context.Context, int64, int64) (classroomPublicSeriesDetail, error)
 	GetContent(context.Context, int64, int64) (classroomPublicContent, error)
@@ -141,9 +166,43 @@ func registerClassroomPublicRoutes(mux *http.ServeMux, s *Server) {
 	mux.HandleFunc(classroomAudioCoverPath, s.method(http.MethodGet, classroomAudioCover))
 	mux.HandleFunc("/api/public/classroom/series", s.method(http.MethodGet, s.classroomSeriesPublic))
 	mux.HandleFunc("/api/public/classroom/standalone", s.method(http.MethodGet, s.classroomStandalonePublic))
+	mux.HandleFunc("/api/public/classroom/recent", s.method(http.MethodGet, s.classroomRecentPublic))
 	mux.HandleFunc("/api/public/classroom/series/", s.method(http.MethodGet, s.classroomSeriesDetailPublic))
 	mux.HandleFunc("/api/public/classroom/content/", s.classroomContentPublicRouter)
 	mux.HandleFunc("/api/miniapp/classroom/content/", s.classroomMiniappContentRouter)
+}
+
+func (s *Server) classroomRecentPublic(w http.ResponseWriter, r *http.Request) {
+	if s.classroomPublic == nil {
+		failClassroomInternal(w, "list_recent", errors.New("classroom service unavailable"))
+		return
+	}
+	u, _, valid := s.classroomViewer(w, r)
+	if !valid {
+		return
+	}
+	page, err := classroomPublicPage(r)
+	if err != nil {
+		httpx.Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	items, err := s.classroomPublic.ListRecent(r.Context(), page, u.ID)
+	if err != nil {
+		failClassroomInternal(w, "list_recent", err)
+		return
+	}
+	data := map[string]any{"items": items, "limit": page.Limit, "offset": page.Offset}
+	for _, item := range items {
+		if item.signedCover {
+			w.Header().Set("Cache-Control", "private, no-store")
+			httpx.OK(w, data)
+			return
+		}
+	}
+	if setClassroomCache(w, r, data) {
+		return
+	}
+	httpx.OK(w, data)
 }
 
 func (s *Server) classroomMiniappContentRouter(w http.ResponseWriter, r *http.Request) {
@@ -332,6 +391,13 @@ func (s *Server) classroomSeriesPublic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := map[string]any{"items": items, "total": total, "limit": page.Limit, "offset": page.Offset}
+	for _, item := range items {
+		if item.signedCover {
+			w.Header().Set("Cache-Control", "private, no-store")
+			httpx.OK(w, data)
+			return
+		}
+	}
 	if setClassroomCache(w, r, data) {
 		return
 	}
@@ -390,7 +456,7 @@ func (s *Server) classroomSeriesDetailPublic(w http.ResponseWriter, r *http.Requ
 		}
 		return
 	}
-	if classroomContentsHaveSignedCover(d.Contents) {
+	if d.Series.signedCover || classroomContentsHaveSignedCover(d.Contents) {
 		w.Header().Set("Cache-Control", "private, no-store")
 	} else if setClassroomCache(w, r, d) {
 		return
@@ -589,6 +655,34 @@ func (d *classroomPublicDB) resolveContentCover(ctx context.Context, content *cl
 	return resolved.Signed, nil
 }
 
+func (d *classroomPublicDB) resolveSeriesCover(ctx context.Context, series *classroom.Series, fallback classroom.CoverInput) (bool, error) {
+	ratio, err := classroom.NormalizeCoverAspectRatio(series.CoverAspectRatio)
+	if err != nil {
+		return false, err
+	}
+	series.CoverAspectRatio = ratio
+	if key := strings.TrimSpace(series.ManualCoverObjectKey); key != "" {
+		if d.coverSigner == nil {
+			return false, classroom.ErrCoverSigningUnavailable
+		}
+		url, err := d.coverSigner.PresignGetURL(ctx, key, d.coverTTL)
+		if err != nil {
+			return false, fmt.Errorf("%w: %v", classroom.ErrCoverSigningUnavailable, err)
+		}
+		series.CoverURL = url
+		return true, nil
+	}
+	if strings.TrimSpace(series.CoverURL) != "" {
+		return false, nil
+	}
+	resolved, err := classroom.ResolveEffectiveCover(ctx, fallback, d.coverSigner, d.coverTTL, classroomAudioCoverPath)
+	if err != nil {
+		return false, err
+	}
+	series.CoverURL = resolved.URL
+	return resolved.Signed, nil
+}
+
 type classroomAccessSnapshot struct {
 	loggedIn, member          bool
 	seriesOwned, contentOwned map[int64]bool
@@ -688,16 +782,32 @@ func (d *classroomPublicDB) ListSeries(ctx context.Context, q classroomPublicQue
 	if err := d.db.QueryRowContext(ctx, `SELECT count(*) FROM classroom_series s WHERE `+eligible, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := d.db.QueryContext(ctx, `SELECT s.id,s.title,s.summary,s.cover_url,s.teacher_name_snapshot,s.access_level,s.price_cents,s.playback_blocked FROM classroom_series s WHERE `+eligible+` ORDER BY s.sort_order,s.id LIMIT $5 OFFSET $6`, append(args, q.Limit, q.Offset)...)
+	rows, err := d.db.QueryContext(ctx, `SELECT s.id,s.title,s.summary,s.cover_url,s.manual_cover_object_key,s.cover_aspect_ratio,s.teacher_name_snapshot,s.access_level,s.price_cents,s.playback_blocked,
+		fallback.content_type,fallback.cover_url,fallback.manual_cover_object_key,fallback.generated_cover_object_key
+		FROM classroom_series s
+		LEFT JOIN LATERAL (
+			SELECT c.content_type,c.cover_url,c.manual_cover_object_key,m.cover_object_key AS generated_cover_object_key
+			FROM classroom_contents c JOIN classroom_media_assets m ON m.id=c.media_asset_id
+			WHERE c.series_id=s.id AND c.status=$2 AND m.storage_status=$3 AND ($4='' OR c.content_type=$4)
+			ORDER BY c.sort_order,c.id LIMIT 1
+		) fallback ON true
+		WHERE `+eligible+` ORDER BY s.sort_order,s.id LIMIT $5 OFFSET $6`, append(args, q.Limit, q.Offset)...)
 	if err != nil {
 		return nil, 0, err
 	}
 	out := make([]classroomPublicSeries, 0, q.Limit)
 	for rows.Next() {
 		var v classroomPublicSeries
-		if err = rows.Scan(&v.ID, &v.Title, &v.Summary, &v.CoverURL, &v.TeacherName, &v.EffectiveAccess, &v.PriceCents, &v.PlaybackBlocked); err != nil {
+		var manualKey, fallbackType, fallbackURL, fallbackManual, fallbackGenerated sql.NullString
+		if err = rows.Scan(&v.ID, &v.Title, &v.Summary, &v.CoverURL, &manualKey, &v.CoverAspectRatio, &v.TeacherName, &v.EffectiveAccess, &v.PriceCents, &v.PlaybackBlocked, &fallbackType, &fallbackURL, &fallbackManual, &fallbackGenerated); err != nil {
 			return nil, 0, err
 		}
+		series := classroom.Series{ID: v.ID, CoverURL: v.CoverURL, ManualCoverObjectKey: manualKey.String, CoverAspectRatio: v.CoverAspectRatio}
+		v.signedCover, err = d.resolveSeriesCover(ctx, &series, classroom.CoverInput{ContentType: classroom.ContentType(fallbackType.String), ManualObjectKey: fallbackManual.String, GeneratedObjectKey: fallbackGenerated.String, LegacyURL: fallbackURL.String})
+		if err != nil {
+			return nil, 0, err
+		}
+		v.CoverURL, v.CoverAspectRatio = series.CoverURL, series.CoverAspectRatio
 		out = append(out, v)
 	}
 	if err = rows.Err(); err != nil {
@@ -718,6 +828,93 @@ func (d *classroomPublicDB) ListSeries(ctx context.Context, q classroomPublicQue
 	}
 	return out, total, nil
 }
+
+func (d *classroomPublicDB) ListRecent(ctx context.Context, q classroomPublicQuery, uid int64) ([]classroomPublicRecentItem, error) {
+	const query = `WITH recent_items AS (
+		SELECT 'series' AS item_type,s.id,
+			GREATEST(COALESCE(s.published_at,s.updated_at),MAX(COALESCE(c.published_at,c.updated_at))) AS latest_published_at
+		FROM classroom_series s
+		JOIN classroom_contents c ON c.series_id=s.id
+		JOIN classroom_media_assets m ON m.id=c.media_asset_id
+		WHERE s.status=$1 AND c.status=$2 AND m.storage_status=$3 AND ($4='' OR c.content_type=$4)
+		GROUP BY s.id,s.published_at,s.updated_at
+		UNION ALL
+		SELECT 'content' AS item_type,c.id,COALESCE(c.published_at,c.updated_at) AS latest_published_at
+		FROM classroom_contents c
+		JOIN classroom_media_assets m ON m.id=c.media_asset_id
+		WHERE c.status=$2 AND m.storage_status=$3
+			AND (c.series_id IS NULL OR c.show_as_standalone=true)
+			AND ($4='' OR c.content_type=$4)
+	)
+	SELECT item_type,id,latest_published_at FROM recent_items
+	ORDER BY latest_published_at DESC,item_type,id DESC LIMIT $5 OFFSET $6`
+	rows, err := d.db.QueryContext(ctx, query, classroom.SeriesPublished, classroom.ContentPublished, classroom.MediaReady, q.ContentType, q.Limit, q.Offset)
+	if err != nil {
+		return nil, err
+	}
+	type recentRef struct {
+		itemType string
+		id       int64
+		latest   time.Time
+	}
+	refs := make([]recentRef, 0, q.Limit)
+	for rows.Next() {
+		var ref recentRef
+		if err := rows.Scan(&ref.itemType, &ref.id, &ref.latest); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		refs = append(refs, ref)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	out := make([]classroomPublicRecentItem, 0, len(refs))
+	for _, ref := range refs {
+		switch ref.itemType {
+		case "series":
+			detail, err := d.GetSeries(ctx, ref.id, uid)
+			if err != nil {
+				return nil, err
+			}
+			v := detail.Series
+			item := classroomPublicRecentItem{
+				ItemType: "series", ID: v.ID, Title: v.Title, Summary: v.Summary,
+				CoverURL: v.CoverURL, CoverAspectRatio: v.CoverAspectRatio,
+				TeacherName: v.TeacherName, EffectiveAccess: v.EffectiveAccess,
+				PriceCents: v.PriceCents, CanPlay: v.CanPlay, PurchaseState: v.PurchaseState,
+				PlaybackBlocked: v.PlaybackBlocked, LessonCount: len(detail.Contents),
+				LatestPublishedAt: ref.latest,
+			}
+			item.signedCover = v.signedCover
+			for _, content := range detail.Contents {
+				item.signedCover = item.signedCover || content.signedCover
+			}
+			out = append(out, item)
+		case "content":
+			v, err := d.GetContent(ctx, ref.id, uid)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, classroomPublicRecentItem{
+				ItemType: "content", ID: v.ID, SeriesID: v.SeriesID, Title: v.Title,
+				Description: v.Description, CoverURL: v.CoverURL, CoverAspectRatio: v.CoverAspectRatio,
+				TeacherName: v.TeacherName, ContentType: v.ContentType, DurationSeconds: v.DurationSeconds,
+				AccessLevel: v.AccessLevel, EffectiveAccess: v.EffectiveAccess, PriceCents: v.PriceCents,
+				CanPlay: v.CanPlay, PurchaseState: v.PurchaseState, PlaybackBlocked: v.PlaybackBlocked,
+				LatestPublishedAt: ref.latest, signedCover: v.signedCover,
+			})
+		default:
+			return nil, fmt.Errorf("unknown recent classroom item type %q", ref.itemType)
+		}
+	}
+	return out, nil
+}
+
 func (d *classroomPublicDB) ListStandalone(ctx context.Context, q classroomPublicQuery, uid int64) ([]classroomPublicContent, int, error) {
 	const eligible = `c.status=$1 AND m.storage_status=$2 AND (c.series_id IS NULL OR c.show_as_standalone=true) AND ($3='' OR c.content_type=$3)`
 	args := []any{classroom.ContentPublished, classroom.MediaReady, q.ContentType}
@@ -824,8 +1021,20 @@ func (d *classroomPublicDB) GetSeries(ctx context.Context, id, uid int64) (class
 		effective := accessFor(c.AccessLevel, &s)
 		out = append(out, contentViewResolved(c, &s, effective, snapshot.allows(effective, c.ID, c.SeriesID), item.signedCover))
 	}
+	hadSeriesCover := strings.TrimSpace(s.ManualCoverObjectKey) != "" || strings.TrimSpace(s.CoverURL) != ""
+	fallback := classroom.CoverInput{}
+	if len(raw) > 0 && len(out) > 0 {
+		fallback = classroom.CoverInput{ContentType: raw[0].content.ContentType, LegacyURL: out[0].CoverURL}
+	}
+	seriesSigned, e := d.resolveSeriesCover(ctx, &s, fallback)
+	if e != nil {
+		return classroomPublicSeriesDetail{}, e
+	}
+	if !hadSeriesCover && len(raw) > 0 {
+		seriesSigned = raw[0].signedCover
+	}
 	canPlay := ok && !s.PlaybackBlocked
-	return classroomPublicSeriesDetail{Series: classroomPublicSeries{ID: s.ID, Title: s.Title, Summary: s.Summary, CoverURL: s.CoverURL, TeacherName: s.TeacherNameSnapshot, EffectiveAccess: a, PriceCents: s.PriceCents, CanPlay: canPlay, PurchaseState: classroomPurchaseState(a, ok), PlaybackBlocked: s.PlaybackBlocked}, Contents: out}, nil
+	return classroomPublicSeriesDetail{Series: classroomPublicSeries{ID: s.ID, Title: s.Title, Summary: s.Summary, CoverURL: s.CoverURL, CoverAspectRatio: s.CoverAspectRatio, TeacherName: s.TeacherNameSnapshot, EffectiveAccess: a, PriceCents: s.PriceCents, CanPlay: canPlay, PurchaseState: classroomPurchaseState(a, ok), PlaybackBlocked: s.PlaybackBlocked, signedCover: seriesSigned}, Contents: out}, nil
 }
 func (d *classroomPublicDB) GetContent(ctx context.Context, id, uid int64) (classroomPublicContent, error) {
 	const query = `SELECT c.id,c.series_id,c.show_as_standalone,c.title,c.description,c.content_type,c.media_asset_id,c.cover_url,c.duration_seconds,c.teacher_name_snapshot,c.access_level,c.price_cents,c.playback_blocked,c.status,c.manual_cover_object_key,c.cover_aspect_ratio,m.cover_object_key,m.etag,s.id,s.status,s.access_level,s.price_cents,s.playback_blocked

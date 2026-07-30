@@ -2567,6 +2567,8 @@ CREATE TABLE IF NOT EXISTS classroom_series (
   summary TEXT NOT NULL DEFAULT '',
   cover_url TEXT NOT NULL DEFAULT '',
   cover_asset_id BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
+  manual_cover_object_key TEXT NOT NULL DEFAULT '',
+  cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9' CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1')),
   teacher_key TEXT NOT NULL DEFAULT '',
   teacher_name_snapshot TEXT NOT NULL DEFAULT '',
   sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0),
@@ -2581,6 +2583,9 @@ CREATE TABLE IF NOT EXISTS classroom_series (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (access_level = 'paid' AND price_cents > 0 OR access_level <> 'paid' AND price_cents = 0)
 );
+
+ALTER TABLE classroom_series ADD COLUMN IF NOT EXISTS manual_cover_object_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE classroom_series ADD COLUMN IF NOT EXISTS cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9' CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'));
 
 CREATE TABLE IF NOT EXISTS classroom_contents (
   id BIGSERIAL PRIMARY KEY,

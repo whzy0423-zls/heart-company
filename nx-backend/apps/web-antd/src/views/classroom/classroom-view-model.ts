@@ -43,6 +43,15 @@ export function contentPublishGuard(
     : { allowed: true, label: '发布', reason: '发布课件' };
 }
 
+export function batchPublishableContentIds(
+  contents: Array<Pick<ClassroomContent, 'id' | 'seriesId' | 'status'>>,
+  series: Array<Pick<ClassroomSeries, 'id' | 'status' | 'title'>>,
+) {
+  return contents
+    .filter((content) => contentPublishGuard(content, series).allowed)
+    .map((content) => content.id);
+}
+
 export function playbackControl(blocked: boolean) {
   return blocked
     ? { action: 'unblock' as const, label: '恢复播放' }

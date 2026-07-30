@@ -16,9 +16,10 @@ import {
 } from 'ant-design-vue';
 import { useAccessStore } from '@vben/stores';
 import {
+  batchPublishClassroomContentsApi,
+  deleteClassroomContentApi,
   getClassroomContentsApi,
   getClassroomSeriesApi,
-  deleteClassroomContentApi,
   offlineClassroomContentApi,
   publishClassroomContentApi,
   setClassroomContentPlaybackBlockedApi,
@@ -28,6 +29,7 @@ import ContentEditor from './components/content-editor.vue';
 import SeriesView from './series.vue';
 import UploadTasks from './upload-tasks.vue';
 import {
+  batchPublishableContentIds,
   classroomOperationError,
   classroomPermissions,
   contentPublishGuard,
@@ -58,6 +60,8 @@ const editorInstanceKey = computed(() =>
 const contentCoverOpen = ref(false);
 const coverEditing = ref<ClassroomContent>();
 const actionLoadingId = ref<number>();
+const batchPublishing = ref(false);
+const selectedContentIds = ref<number[]>([]);
 const columns = [
   { dataIndex: 'title', title: '课件' },
   { dataIndex: 'contentType', title: '类型' },
@@ -84,10 +88,24 @@ const statusText: Record<string, string> = {
   failed: '失败',
   ready: '待发布',
   processing: '处理中',
+  archived: '已归档',
 };
 function publishGuard(record: ClassroomContent) {
   return contentPublishGuard(record, series.value);
 }
+const batchPublishableIdSet = computed(
+  () => new Set(batchPublishableContentIds(contents.value, series.value)),
+);
+const contentRowSelection = computed(() => ({
+  getCheckboxProps: (record: ClassroomContent) => ({
+    disabled: !batchPublishableIdSet.value.has(record.id),
+    title: publishGuard(record).reason,
+  }),
+  onChange: (keys: Array<number | string>) => {
+    selectedContentIds.value = keys.map(Number);
+  },
+  selectedRowKeys: selectedContentIds.value,
+}));
 async function load() {
   loading.value = true;
   error.value = '';
@@ -98,11 +116,42 @@ async function load() {
     ]);
     contents.value = c.items;
     series.value = s.items;
+    selectedContentIds.value = [];
   } catch {
     error.value = '课件加载失败，请重试。';
   } finally {
     loading.value = false;
   }
+}
+function confirmBatchPublish() {
+  const selected = contents.value.filter((item) =>
+    selectedContentIds.value.includes(item.id),
+  );
+  if (!selected.length) {
+    message.info('请先选择待发布或已下线的课件');
+    return;
+  }
+  Modal.confirm({
+    title: `批量发布 ${selected.length} 个课件？`,
+    content: '系统会原子发布所选课件；任意一条校验失败时，本次全部不发布。',
+    async onOk() {
+      batchPublishing.value = true;
+      try {
+        await batchPublishClassroomContentsApi({
+          items: selected.map((item) => ({
+            expectedUpdatedAt: item.updatedAt,
+            id: item.id,
+          })),
+        });
+        message.success(`已发布 ${selected.length} 个课件`);
+        await load();
+      } catch (cause) {
+        message.error(classroomOperationError(cause, '批量发布失败'));
+      } finally {
+        batchPublishing.value = false;
+      }
+    },
+  });
 }
 function confirmLifecycle(
   record: ClassroomContent,
@@ -127,7 +176,10 @@ function confirmLifecycle(
             : action === 'unblock'
               ? '恢复播放？'
               : '删除课件？',
-    content: '请确认该操作及其对用户的影响。',
+    content:
+      action === 'delete' && record.status === 'offline'
+        ? '下架课件将从管理列表移除，但会保留媒体、购买权益和学习记录。'
+        : '请确认该操作及其对用户的影响。',
     async onOk() {
       actionLoadingId.value = record.id;
       try {
@@ -208,6 +260,14 @@ onMounted(load);
             ><Button v-if="canWrite" type="primary" @click="openCreate"
               >新建课件</Button
             ><Button v-if="canUpload" @click="openUploads">上传媒体</Button
+            ><Button
+              v-if="canPublish"
+              :disabled="!selectedContentIds.length"
+              :loading="batchPublishing"
+              @click="confirmBatchPublish"
+              >批量发布<span v-if="selectedContentIds.length"
+                >（{{ selectedContentIds.length }}）</span
+              ></Button
             ><Button @click="load">刷新</Button></Space
           >
         </div>
@@ -220,6 +280,7 @@ onMounted(load);
           :loading="loading"
           :columns="columns"
           :data-source="contents"
+          :row-selection="contentRowSelection"
           row-key="id"
           :scroll="{ x: 900 }"
         >
@@ -305,7 +366,10 @@ onMounted(load);
                 >{{ record.playbackBlocked ? '恢复播放' : '阻断播放' }}</Button
               >
               <Button
-                v-if="canWrite && record.status === 'draft'"
+                v-if="
+                  canWrite &&
+                  (record.status === 'draft' || record.status === 'offline')
+                "
                 danger
                 :loading="actionLoadingId === record.id"
                 @click="confirmLifecycle(record as ClassroomContent, 'delete')"

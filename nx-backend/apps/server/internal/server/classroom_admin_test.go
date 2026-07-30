@@ -30,6 +30,8 @@ type fakeClassroomAdminService struct {
 	generatedCoverKey string
 	deleteContentErr  error
 	uploadTasks       []classroom.UploadTask
+	batchChanges      []classroom.PublishedContentChange
+	batchErr          error
 }
 
 func (f *fakeClassroomAdminService) ListContentContexts(_ context.Context, ids []int64) (map[int64]classroomContentContext, error) {
@@ -93,12 +95,35 @@ func (f *fakeClassroomAdminService) DeleteContent(context.Context, int64, time.T
 	f.calls = append(f.calls, "delete-content")
 	return f.deleteContentErr
 }
+func (f *fakeClassroomAdminService) BatchPublishContents(_ context.Context, _ []classroom.PublishExpectation, _ *int64, _ time.Time) ([]classroom.PublishedContentChange, error) {
+	f.calls = append(f.calls, "batch-publish")
+	return f.batchChanges, f.batchErr
+}
 
 type fakeClassroomCoverManager struct {
 	updated                           classroom.Content
 	uploadErr, deleteErr, settingsErr error
 	expected                          time.Time
 	uploads, deletes, settings        int
+}
+
+type fakeClassroomSeriesCoverManager struct {
+	updated                    classroom.Series
+	uploads, deletes, settings int
+}
+
+func (f *fakeClassroomSeriesCoverManager) Upload(context.Context, int64, time.Time, *int64, string, io.Reader) (classroom.Series, error) {
+	f.uploads++
+	return f.updated, nil
+}
+func (f *fakeClassroomSeriesCoverManager) Delete(context.Context, int64, time.Time, *int64) (classroom.Series, error) {
+	f.deletes++
+	return f.updated, nil
+}
+func (f *fakeClassroomSeriesCoverManager) UpdateSettings(_ context.Context, _ int64, ratio classroom.CoverAspectRatio, _ time.Time, _ *int64) (classroom.Series, error) {
+	f.settings++
+	f.updated.CoverAspectRatio = ratio
+	return f.updated, nil
 }
 
 func (f *fakeClassroomCoverManager) Upload(context.Context, int64, time.Time, *int64, string, io.Reader) (classroom.Content, error) {
@@ -182,6 +207,32 @@ func TestClassroomAdminRoutesUseDedicatedPermissions(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), `"title":"S"`) {
 		t.Fatalf("missing series: %s", rr.Body.String())
+	}
+}
+
+func TestClassroomBatchPublishUsesDedicatedRouteAndPublishPermission(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	ready := classroom.Content{ID: 7, Title: "待发布课件", ContentType: classroom.ContentVideo, Status: classroom.ContentReady, AccessLevel: classroom.AccessPublic, UpdatedAt: now}
+	published := ready
+	published.Status = classroom.ContentPublished
+	admin := &fakeClassroomAdminService{content: published, batchChanges: []classroom.PublishedContentChange{{Before: ready, After: published}}}
+	s := &Server{classroomAdmin: admin}
+	mux := http.NewServeMux()
+	seen := ""
+	registerClassroomAdminRoutes(mux, func(code string, next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			seen = code
+			next(w, r)
+		}
+	}, s)
+	body := `{"items":[{"id":7,"expectedUpdatedAt":"` + now.Format(time.RFC3339Nano) + `"}]}`
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/contents/batch-publish", strings.NewReader(body))))
+	if rr.Code != http.StatusOK || seen != "Miniapp:Classroom:Publish" || !containsString(admin.calls, "batch-publish") {
+		t.Fatalf("status=%d permission=%q calls=%v body=%s", rr.Code, seen, admin.calls, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"status":"published"`) {
+		t.Fatalf("missing published result: %s", rr.Body.String())
 	}
 }
 
@@ -537,6 +588,30 @@ func TestClassroomContentDeleteCleansManualCoverOnlyAfterDatabaseCommit(t *testi
 	}
 }
 
+func TestClassroomSeriesCoverEndpointsReturnVersionedCoverSettings(t *testing.T) {
+	now := time.Now().UTC()
+	series := classroom.Series{ID: 6, Title: "系列", Status: classroom.SeriesDraft, AccessLevel: classroom.AccessPublic, CoverAspectRatio: classroom.CoverAspectRatio16x9, UpdatedAt: now}
+	manager := &fakeClassroomSeriesCoverManager{updated: series}
+	s := &Server{classroomAdmin: &fakeClassroomAdminService{series: series}, classroomSeriesCovers: manager, classroomPlaybackSigner: fakeClassroomSigner{key: "series-cover"}}
+	rr := httptest.NewRecorder()
+	body := `{"coverAspectRatio":"9:16","expectedUpdatedAt":"` + now.Format(time.RFC3339Nano) + `"}`
+	s.classroomSeriesItem(rr, classroomUser(httptest.NewRequest(http.MethodPut, "/api/admin/classroom/series/6/cover-settings", strings.NewReader(body))))
+	if rr.Code != http.StatusOK || manager.settings != 1 || !strings.Contains(rr.Body.String(), `"coverAspectRatio":"9:16"`) {
+		t.Fatalf("status=%d settings=%d body=%s", rr.Code, manager.settings, rr.Body.String())
+	}
+
+	manager.updated.ManualCoverObjectKey = "classroom/covers/series/6/cover.png"
+	manager.updated.UpdatedAt = now.Add(time.Second)
+	mp, contentType := classroomCoverMultipart(t, now.Format(time.RFC3339Nano), []byte("png"))
+	req := classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/series/6/cover", mp))
+	req.Header.Set("Content-Type", contentType)
+	rr = httptest.NewRecorder()
+	s.classroomSeriesItem(rr, req)
+	if rr.Code != http.StatusOK || manager.uploads != 1 || !strings.Contains(rr.Body.String(), "https://cdn.example/series-cover") {
+		t.Fatalf("status=%d uploads=%d body=%s", rr.Code, manager.uploads, rr.Body.String())
+	}
+}
+
 func TestClassroomContentDeleteCleanupSurvivesCanceledRequestContext(t *testing.T) {
 	now := time.Now().UTC()
 	admin := &fakeClassroomAdminService{content: classroom.Content{ID: 29, Status: classroom.ContentDraft, UpdatedAt: now, ManualCoverObjectKey: "classroom/covers/manual/29/x.jpg"}}
@@ -549,6 +624,31 @@ func TestClassroomContentDeleteCleanupSurvivesCanceledRequestContext(t *testing.
 	s.classroomContentItem(rr, req)
 	if rr.Code != http.StatusOK || len(objects.deleteCtxErrs) != 1 || objects.deleteCtxErrs[0] != nil {
 		t.Fatalf("status=%d contexts=%v body=%s", rr.Code, objects.deleteCtxErrs, rr.Body.String())
+	}
+}
+
+func TestClassroomOfflineContentDeleteArchivesWithoutDeletingAssets(t *testing.T) {
+	now := time.Now().UTC()
+	admin := &fakeClassroomAdminService{content: classroom.Content{
+		ID: 39, Title: "已下架课件", ContentType: classroom.ContentVideo,
+		Status: classroom.ContentOffline, AccessLevel: classroom.AccessPublic,
+		UpdatedAt: now, ManualCoverObjectKey: "classroom/covers/manual/39/x.jpg",
+	}}
+	objects := &fakeClassroomCoverObjects{}
+	s := &Server{classroomAdmin: admin, classroomCoverObjects: objects}
+	rr := httptest.NewRecorder()
+	req := classroomUser(httptest.NewRequest(http.MethodDelete, "/api/admin/classroom/contents/39?expectedUpdatedAt="+now.Format(time.RFC3339Nano), nil))
+
+	s.classroomContentItem(rr, req)
+
+	if rr.Code != http.StatusOK || admin.updatedContent.Status != classroom.ContentArchived {
+		t.Fatalf("status=%d updated=%+v body=%s", rr.Code, admin.updatedContent, rr.Body.String())
+	}
+	if containsString(admin.calls, "delete-content") || len(objects.deleted) != 0 {
+		t.Fatalf("archive must preserve database/media dependencies: calls=%v deleted=%v", admin.calls, objects.deleted)
+	}
+	if !strings.Contains(rr.Body.String(), `"archived":true`) {
+		t.Fatalf("archive response missing marker: %s", rr.Body.String())
 	}
 }
 

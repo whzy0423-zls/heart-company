@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -34,13 +35,18 @@ func (s *Store) CreateSeries(ctx context.Context, item Series) (Series, error) {
 	if item.Status != SeriesDraft {
 		return Series{}, errors.New("new series must start as draft")
 	}
+	var err error
+	item.CoverAspectRatio, err = NormalizeCoverAspectRatio(item.CoverAspectRatio)
+	if err != nil {
+		return Series{}, err
+	}
 	if err := item.Validate(); err != nil {
 		return Series{}, err
 	}
-	err := s.db.QueryRowContext(ctx, `INSERT INTO classroom_series
-		(title,summary,cover_url,cover_asset_id,teacher_key,teacher_name_snapshot,sort_order,status,playback_blocked,access_level,price_cents,published_at,created_by,updated_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
-		RETURNING id,created_at,updated_at`, item.Title, item.Summary, item.CoverURL, item.CoverAssetID, item.TeacherKey, item.TeacherNameSnapshot, item.SortOrder, item.Status, item.PlaybackBlocked, item.AccessLevel, item.PriceCents, item.PublishedAt, item.CreatedBy).Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	err = s.db.QueryRowContext(ctx, `INSERT INTO classroom_series
+		(title,summary,cover_url,cover_asset_id,manual_cover_object_key,cover_aspect_ratio,teacher_key,teacher_name_snapshot,sort_order,status,playback_blocked,access_level,price_cents,published_at,created_by,updated_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)
+		RETURNING id,created_at,updated_at`, item.Title, item.Summary, item.CoverURL, item.CoverAssetID, item.ManualCoverObjectKey, item.CoverAspectRatio, item.TeacherKey, item.TeacherNameSnapshot, item.SortOrder, item.Status, item.PlaybackBlocked, item.AccessLevel, item.PriceCents, item.PublishedAt, item.CreatedBy).Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		return Series{}, fmt.Errorf("create classroom series: %w", err)
 	}
@@ -59,6 +65,11 @@ func (s *Store) UpdateSeries(ctx context.Context, item Series, expectedUpdatedAt
 	if expectedUpdatedAt.IsZero() {
 		return Series{}, ErrConflict
 	}
+	var err error
+	item.CoverAspectRatio, err = NormalizeCoverAspectRatio(item.CoverAspectRatio)
+	if err != nil {
+		return Series{}, err
+	}
 	if err := item.Validate(); err != nil {
 		return Series{}, err
 	}
@@ -69,7 +80,7 @@ func (s *Store) UpdateSeries(ctx context.Context, item Series, expectedUpdatedAt
 	if !CanTransitionSeries(current.Status, item.Status) {
 		return Series{}, fmt.Errorf("invalid series transition %s -> %s", current.Status, item.Status)
 	}
-	err = s.db.QueryRowContext(ctx, `UPDATE classroom_series SET title=$1,summary=$2,cover_url=$3,cover_asset_id=$4,teacher_key=$5,teacher_name_snapshot=$6,sort_order=$7,status=$8,playback_blocked=$9,access_level=$10,price_cents=$11,published_at=$12,updated_by=$13,updated_at=now() WHERE id=$14 AND updated_at=$15 RETURNING created_at,updated_at`, item.Title, item.Summary, item.CoverURL, item.CoverAssetID, item.TeacherKey, item.TeacherNameSnapshot, item.SortOrder, item.Status, item.PlaybackBlocked, item.AccessLevel, item.PriceCents, item.PublishedAt, item.UpdatedBy, item.ID, expectedUpdatedAt).Scan(&item.CreatedAt, &item.UpdatedAt)
+	err = s.db.QueryRowContext(ctx, `UPDATE classroom_series SET title=$1,summary=$2,cover_url=$3,cover_asset_id=$4,manual_cover_object_key=$5,cover_aspect_ratio=$6,teacher_key=$7,teacher_name_snapshot=$8,sort_order=$9,status=$10,playback_blocked=$11,access_level=$12,price_cents=$13,published_at=$14,updated_by=$15,updated_at=now() WHERE id=$16 AND updated_at=$17 RETURNING created_at,updated_at`, item.Title, item.Summary, item.CoverURL, item.CoverAssetID, item.ManualCoverObjectKey, item.CoverAspectRatio, item.TeacherKey, item.TeacherNameSnapshot, item.SortOrder, item.Status, item.PlaybackBlocked, item.AccessLevel, item.PriceCents, item.PublishedAt, item.UpdatedBy, item.ID, expectedUpdatedAt).Scan(&item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Series{}, ErrConflict
 	}
@@ -91,7 +102,7 @@ func (s *Store) ListSeries(ctx context.Context, filter SeriesFilter) ([]Series, 
 	}
 	limit := boundedLimit(filter.Limit)
 	args = append(args, limit, max(filter.Offset, 0))
-	query := `SELECT id,title,summary,cover_url,cover_asset_id,teacher_key,teacher_name_snapshot,sort_order,status,playback_blocked,access_level,price_cents,published_at,created_by,updated_by,created_at,updated_at FROM classroom_series WHERE ` + strings.Join(clauses, " AND ") + fmt.Sprintf(" ORDER BY sort_order,id LIMIT $%d OFFSET $%d", len(args)-1, len(args))
+	query := `SELECT ` + seriesColumnsSQL + ` FROM classroom_series WHERE ` + strings.Join(clauses, " AND ") + fmt.Sprintf(" ORDER BY sort_order,id LIMIT $%d OFFSET $%d", len(args)-1, len(args))
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list classroom series: %w", err)
@@ -109,6 +120,38 @@ func (s *Store) ListSeries(ctx context.Context, filter SeriesFilter) ([]Series, 
 		return nil, fmt.Errorf("iterate classroom series: %w", err)
 	}
 	return items, nil
+}
+
+func (s *Store) SetSeriesManualCover(ctx context.Context, id int64, objectKey string, expected time.Time, updatedBy *int64) (Series, error) {
+	if expected.IsZero() {
+		return Series{}, ErrConflict
+	}
+	item, err := scanSeries(s.db.QueryRowContext(ctx, `UPDATE classroom_series SET manual_cover_object_key=$1,updated_by=$2,updated_at=now() WHERE id=$3 AND updated_at=$4 RETURNING `+seriesColumnsSQL, strings.TrimSpace(objectKey), updatedBy, id, expected))
+	if errors.Is(err, ErrNotFound) {
+		return Series{}, ErrConflict
+	}
+	if err != nil {
+		return Series{}, fmt.Errorf("set classroom series manual cover: %w", err)
+	}
+	return item, nil
+}
+
+func (s *Store) SetSeriesCoverSettings(ctx context.Context, id int64, ratio CoverAspectRatio, expected time.Time, updatedBy *int64) (Series, error) {
+	if expected.IsZero() {
+		return Series{}, ErrConflict
+	}
+	normalized, err := NormalizeCoverAspectRatio(ratio)
+	if err != nil {
+		return Series{}, err
+	}
+	item, err := scanSeries(s.db.QueryRowContext(ctx, `UPDATE classroom_series SET cover_aspect_ratio=$1,updated_by=$2,updated_at=now() WHERE id=$3 AND updated_at=$4 RETURNING `+seriesColumnsSQL, normalized, updatedBy, id, expected))
+	if errors.Is(err, ErrNotFound) {
+		return Series{}, ErrConflict
+	}
+	if err != nil {
+		return Series{}, fmt.Errorf("set classroom series cover settings: %w", err)
+	}
+	return item, nil
 }
 
 func (s *Store) CreateContent(ctx context.Context, item Content) (Content, error) {
@@ -283,6 +326,84 @@ func (s *Store) UpdateContent(ctx context.Context, item Content, expectedUpdated
 	}
 	return item, nil
 }
+
+func (s *Store) BatchPublishContents(ctx context.Context, requested []PublishExpectation, updatedBy *int64, publishedAt time.Time) ([]PublishedContentChange, error) {
+	if len(requested) == 0 || len(requested) > 100 {
+		return nil, errors.New("batch publish requires between 1 and 100 contents")
+	}
+	byID := make(map[int64]PublishExpectation, len(requested))
+	for _, item := range requested {
+		if item.ID <= 0 || item.ExpectedUpdatedAt.IsZero() {
+			return nil, errors.New("invalid batch publish item")
+		}
+		if previous, exists := byID[item.ID]; exists && !previous.ExpectedUpdatedAt.Equal(item.ExpectedUpdatedAt) {
+			return nil, ErrConflict
+		}
+		byID[item.ID] = item
+	}
+	items := make([]PublishExpectation, 0, len(byID))
+	for _, item := range byID {
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	if publishedAt.IsZero() {
+		publishedAt = time.Now().UTC()
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin classroom batch publish: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	changes := make([]PublishedContentChange, 0, len(items))
+	for _, requestedItem := range items {
+		current, err := getContent(ctx, tx, requestedItem.ID, true)
+		if err != nil {
+			return nil, fmt.Errorf("lock classroom content %d: %w", requestedItem.ID, err)
+		}
+		if !current.UpdatedAt.Equal(requestedItem.ExpectedUpdatedAt) {
+			return nil, ErrConflict
+		}
+		if current.Status != ContentReady && current.Status != ContentOffline {
+			return nil, fmt.Errorf("content %d must be ready or offline before publication", current.ID)
+		}
+		if current.MediaAssetID == nil {
+			return nil, fmt.Errorf("content %d requires media", current.ID)
+		}
+		media, err := getMediaAsset(ctx, tx, *current.MediaAssetID, true)
+		if err != nil {
+			return nil, fmt.Errorf("lock classroom media asset for content %d: %w", current.ID, err)
+		}
+		var parent *Series
+		if current.SeriesID != nil {
+			value, err := getSeries(ctx, tx, *current.SeriesID, true)
+			if err != nil {
+				return nil, fmt.Errorf("lock classroom parent series for content %d: %w", current.ID, err)
+			}
+			parent = &value
+		}
+		ready := current
+		ready.Status = ContentReady
+		if err := ValidateContentPublish(ready, media, parent); err != nil {
+			return nil, fmt.Errorf("content %d is not publishable: %w", current.ID, err)
+		}
+		if !CanTransitionContent(current.Status, ContentPublished) {
+			return nil, fmt.Errorf("invalid content transition %s -> %s", current.Status, ContentPublished)
+		}
+		updated, err := scanContent(tx.QueryRowContext(ctx, `UPDATE classroom_contents SET status='published',published_at=$1,updated_by=$2,updated_at=now() WHERE id=$3 AND updated_at=$4 RETURNING `+contentColumnsSQL, publishedAt, updatedBy, current.ID, requestedItem.ExpectedUpdatedAt))
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrConflict
+		}
+		if err != nil {
+			return nil, fmt.Errorf("publish classroom content %d: %w", current.ID, err)
+		}
+		changes = append(changes, PublishedContentChange{Before: current, After: updated})
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit classroom batch publish: %w", err)
+	}
+	return changes, nil
+}
+
 func (s *Store) ListContents(ctx context.Context, filter ContentFilter) ([]Content, error) {
 	clauses, args := []string{"1=1"}, []any{}
 	if filter.SeriesID != nil {
@@ -292,6 +413,8 @@ func (s *Store) ListContents(ctx context.Context, filter ContentFilter) ([]Conte
 	if filter.Status != "" {
 		args = append(args, filter.Status)
 		clauses = append(clauses, fmt.Sprintf("status=$%d", len(args)))
+	} else {
+		clauses = append(clauses, "status<>'archived'")
 	}
 	if filter.ContentType != "" {
 		args = append(args, filter.ContentType)
@@ -406,8 +529,10 @@ type queryRower interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-const seriesSelect = `SELECT id,title,summary,cover_url,cover_asset_id,teacher_key,teacher_name_snapshot,sort_order,status,playback_blocked,access_level,price_cents,published_at,created_by,updated_by,created_at,updated_at FROM classroom_series WHERE id=$1`
-const contentSelect = `SELECT id,series_id,show_as_standalone,title,description,content_type,media_asset_id,cover_url,manual_cover_object_key,cover_aspect_ratio,duration_seconds,teacher_key,teacher_name_snapshot,recorded_at,badge,tags,episode_no,sort_order,status,playback_blocked,access_level,price_cents,published_at,created_by,updated_by,created_at,updated_at FROM classroom_contents WHERE id=$1`
+const seriesColumnsSQL = `id,title,summary,cover_url,cover_asset_id,manual_cover_object_key,cover_aspect_ratio,teacher_key,teacher_name_snapshot,sort_order,status,playback_blocked,access_level,price_cents,published_at,created_by,updated_by,created_at,updated_at`
+const seriesSelect = `SELECT ` + seriesColumnsSQL + ` FROM classroom_series WHERE id=$1`
+const contentColumnsSQL = `id,series_id,show_as_standalone,title,description,content_type,media_asset_id,cover_url,manual_cover_object_key,cover_aspect_ratio,duration_seconds,teacher_key,teacher_name_snapshot,recorded_at,badge,tags,episode_no,sort_order,status,playback_blocked,access_level,price_cents,published_at,created_by,updated_by,created_at,updated_at`
+const contentSelect = `SELECT ` + contentColumnsSQL + ` FROM classroom_contents WHERE id=$1`
 const mediaAssetSelect = `SELECT id,bucket,object_key,etag,checksum,content_type,size_bytes,duration_seconds,width,height,cover_object_key,storage_status,created_by,created_at,updated_at FROM classroom_media_assets WHERE id=$1`
 
 func getSeries(ctx context.Context, q queryRower, id int64, forUpdate bool) (Series, error) {
@@ -441,9 +566,12 @@ type scanner interface{ Scan(...any) error }
 
 func scanSeries(row scanner) (Series, error) {
 	var item Series
-	err := row.Scan(&item.ID, &item.Title, &item.Summary, &item.CoverURL, &item.CoverAssetID, &item.TeacherKey, &item.TeacherNameSnapshot, &item.SortOrder, &item.Status, &item.PlaybackBlocked, &item.AccessLevel, &item.PriceCents, &item.PublishedAt, &item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt)
+	err := row.Scan(&item.ID, &item.Title, &item.Summary, &item.CoverURL, &item.CoverAssetID, &item.ManualCoverObjectKey, &item.CoverAspectRatio, &item.TeacherKey, &item.TeacherNameSnapshot, &item.SortOrder, &item.Status, &item.PlaybackBlocked, &item.AccessLevel, &item.PriceCents, &item.PublishedAt, &item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrNotFound
+	}
+	if err == nil {
+		item.CoverAspectRatio, err = NormalizeCoverAspectRatio(item.CoverAspectRatio)
 	}
 	return item, err
 }

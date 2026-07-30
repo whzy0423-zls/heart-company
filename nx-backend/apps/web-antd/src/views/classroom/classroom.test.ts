@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  batchPublishableContentIds,
   classroomOperationError,
   classroomPermissions,
   contentPublishGuard,
@@ -289,6 +290,36 @@ describe('teacher classroom admin UI contract', () => {
       label: '重新发布',
       reason: '重新发布已下线课件',
     });
+  });
+
+  it('selects only ready or offline contents whose parent series can publish', () => {
+    expect(
+      batchPublishableContentIds(
+        [
+          { id: 1, status: 'ready' },
+          { id: 2, status: 'offline', seriesId: 8 },
+          { id: 3, status: 'ready', seriesId: 9 },
+          { id: 4, status: 'processing' },
+          { id: 5, status: 'published' },
+        ] as any,
+        [
+          { id: 8, status: 'published', title: '已发布系列' },
+          { id: 9, status: 'draft', title: '草稿系列' },
+        ] as any,
+      ),
+    ).toEqual([1, 2]);
+  });
+
+  it('supports atomic batch publishing and deleting offline content', () => {
+    const source = read('views/classroom/index.vue');
+    const api = read('api/core/classroom.ts');
+    expect(source).toContain('batchPublishClassroomContentsApi');
+    expect(source).toContain('selectedContentIds');
+    expect(source).toContain(':row-selection="contentRowSelection"');
+    expect(source).toContain('批量发布');
+    expect(source).toContain("record.status === 'offline'");
+    expect(api).toContain('/admin/classroom/contents/batch-publish');
+    expect(api).toContain('expectedUpdatedAt');
   });
 
   it('shows the parent-series action instead of sending an invalid publish request', () => {
