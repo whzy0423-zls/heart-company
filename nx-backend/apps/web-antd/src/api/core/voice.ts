@@ -145,3 +145,36 @@ export function getVoiceContentJobsApi(params?: Record<string, any>) {
     params,
   });
 }
+
+export type BailianCredentialSource =
+  | 'legacy-asr'
+  | 'legacy-tts'
+  | 'none'
+  | 'shared';
+
+/** Safe credential status returned by the backend; the API key is never returned. */
+export interface BailianCredentialView {
+  apiKeySet: boolean;
+  apiKeySuffix: string;
+  source: BailianCredentialSource;
+  version: number;
+}
+
+export interface UpdateBailianCredentialsPayload {
+  apiKey: string;
+  clearApiKey: boolean;
+  expectedVersion: number;
+}
+
+export function getBailianCredentialsApi() {
+  return requestClient.get<BailianCredentialView>('/voice/bailian-credentials');
+}
+
+export function updateBailianCredentialsApi(
+  data: UpdateBailianCredentialsPayload,
+) {
+  return requestClient.put<BailianCredentialView>(
+    '/voice/bailian-credentials',
+    data,
+  );
+}
