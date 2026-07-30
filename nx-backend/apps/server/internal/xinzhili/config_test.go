@@ -134,6 +134,16 @@ func TestConfigValidateRequiresPrivateCredentialForNonBailianTTS(t *testing.T) {
 				Format:   "mp3",
 			},
 		},
+		{
+			name: "native bailian custom proxy",
+			tts: TTSConfig{
+				Provider: TTSProviderBailian,
+				Endpoint: "https://bailian-proxy.example/api/v1",
+				Model:    "qwen3-tts-vc-2026-01-22",
+				Voice:    "teacher-voice",
+				Format:   "mp3",
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -160,8 +170,11 @@ func TestConfigValidateDisabledStillChecksProvidedStructureAndAllowsEmptyVoice(t
 	for _, mutate := range []func(*Config){
 		func(c *Config) { c.RealtimeASR.Provider = "unsupported" },
 		func(c *Config) { c.RealtimeASR.Endpoint = "ftp://asr.example.com" },
+		func(c *Config) { c.RealtimeASR.Endpoint = "wss://user:pass@asr.example.com/realtime" },
 		func(c *Config) { c.TTS.Provider = "unsupported" },
 		func(c *Config) { c.TTS.Endpoint = "http://tts.example.com" },
+		func(c *Config) { c.TTS.Endpoint = "https://tts.example.com/v1#secret" },
+		func(c *Config) { c.TTS.Endpoint = "https://[::1" },
 	} {
 		invalid := cfg
 		mutate(&invalid)
@@ -179,6 +192,7 @@ func TestConfigValidateFixesRealtimeProviderAndModel(t *testing.T) {
 		{"provider", func(c *Config) { c.RealtimeASR.Provider = "other" }},
 		{"model", func(c *Config) { c.RealtimeASR.Model = "paraformer-v1" }},
 		{"endpoint scheme", func(c *Config) { c.RealtimeASR.Endpoint = "ws://localhost/asr" }},
+		{"non-official endpoint", func(c *Config) { c.RealtimeASR.Endpoint = "wss://asr.example.com/api-ws/v1/inference" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -194,6 +208,55 @@ func TestConfigValidateFixesRealtimeProviderAndModel(t *testing.T) {
 	cfg.RealtimeASR.Endpoint = "https://dashscope.aliyuncs.com/api-ws/v1/inference"
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("https ASR endpoint should be accepted: %v", err)
+	}
+}
+
+func TestTTSUsesBailianCredentialsRequiresOfficialDashScopeEndpoint(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  TTSConfig
+		want bool
+	}{
+		{name: "native official", cfg: TTSConfig{Provider: TTSProviderBailian, Endpoint: "https://dashscope.aliyuncs.com/api/v1"}, want: true},
+		{name: "compatible official", cfg: TTSConfig{Provider: TTSProviderOpenAICompatible, Endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1"}, want: true},
+		{name: "native custom proxy", cfg: TTSConfig{Provider: TTSProviderBailian, Endpoint: "https://bailian-proxy.example/api/v1"}},
+		{name: "native lookalike", cfg: TTSConfig{Provider: TTSProviderBailian, Endpoint: "https://dashscope.aliyuncs.com.evil.test/api/v1"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := TTSUsesBailianCredentials(tt.cfg); got != tt.want {
+				t.Fatalf("TTSUsesBailianCredentials=%t want=%t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsOfficialDashScopeRealtimeASREndpointStrict(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		want     bool
+	}{
+		{name: "official wss", endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/inference", want: true},
+		{name: "official https", endpoint: "https://dashscope.aliyuncs.com/api-ws/v1/inference", want: true},
+		{name: "numeric default port", endpoint: "wss://dashscope.aliyuncs.com:0443/api-ws/v1/inference", want: true},
+		{name: "arbitrary host", endpoint: "wss://asr.example.com/api-ws/v1/inference"},
+		{name: "userinfo", endpoint: "wss://dashscope.aliyuncs.com@evil.test/api-ws/v1/inference"},
+		{name: "non default port", endpoint: "wss://dashscope.aliyuncs.com:8443/api-ws/v1/inference"},
+		{name: "similar domain", endpoint: "wss://dashscope.aliyuncs.com.evil.test/api-ws/v1/inference"},
+		{name: "wrong path", endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/other"},
+		{name: "trailing slash", endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/inference/"},
+		{name: "query", endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/inference?token=x"},
+		{name: "fragment", endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/inference#secret"},
+		{name: "raw path", endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/%69nference"},
+		{name: "dot segment", endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/../v1/inference"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsOfficialDashScopeRealtimeASREndpoint(tt.endpoint); got != tt.want {
+				t.Fatalf("IsOfficialDashScopeRealtimeASREndpoint=%t want=%t", got, tt.want)
+			}
+		})
 	}
 }
 

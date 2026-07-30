@@ -8,8 +8,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
-	pathpkg "path"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -238,35 +236,7 @@ func isOfficialDashScopeTTSEndpoint(raw string) bool {
 }
 
 func isOfficialDashScopeRealtimeASREndpoint(raw string) bool {
-	parsed, ok := parseOfficialDashScopeEndpoint(raw, "wss", "https")
-	if !ok || pathpkg.Clean(parsed.Path) != parsed.Path {
-		return false
-	}
-	return parsed.Path == "/api-ws/v1/inference"
-}
-
-func parseOfficialDashScopeEndpoint(raw string, schemes ...string) (*url.URL, bool) {
-	parsed, err := url.ParseRequestURI(strings.TrimSpace(raw))
-	if err != nil || parsed.User != nil {
-		return nil, false
-	}
-	schemeAllowed := false
-	for _, scheme := range schemes {
-		if strings.EqualFold(parsed.Scheme, scheme) {
-			schemeAllowed = true
-			break
-		}
-	}
-	if !schemeAllowed || !strings.EqualFold(parsed.Hostname(), "dashscope.aliyuncs.com") {
-		return nil, false
-	}
-	if port := parsed.Port(); port != "" && port != "443" {
-		return nil, false
-	}
-	if parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" {
-		return nil, false
-	}
-	return parsed, true
+	return xinzhili.IsOfficialDashScopeRealtimeASREndpoint(raw)
 }
 
 func (s *Server) refreshBailianCopyCredentials(ctx context.Context) (resolvedBailianCredential, error) {

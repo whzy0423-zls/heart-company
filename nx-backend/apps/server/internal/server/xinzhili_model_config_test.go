@@ -408,6 +408,33 @@ func TestXinzhiliCredentialSavePreservesPrivateKeyAcrossSameOriginPathChange(t *
 	}
 }
 
+func TestXinzhiliCredentialSaveNormalizesEquivalentEndpointOrigin(t *testing.T) {
+	stored := validXinzhiliModelConfigForHandler()
+	stored.Version = 13
+	stored.RealtimeASR.APIKey = "sk-legacy-asr"
+	stored.TTS = xinzhili.TTSConfig{
+		Provider: xinzhili.TTSProviderOpenAICompatible,
+		Endpoint: "https://provider-a.example:0443/v1",
+		APIKey:   "provider-a-private",
+		Model:    "tts-1",
+		Voice:    "voice-a",
+		Format:   "mp3",
+	}
+	store := &fakeXinzhiliModelConfigStore{config: stored, found: true}
+	incoming := stored
+	incoming.RealtimeASR.APIKey = ""
+	incoming.TTS.Endpoint = "https://provider-a.example./v1/audio/speech"
+	incoming.TTS.APIKey = ""
+	s := &Server{xinzhiliModelConfig: store, bailianCredentials: &memoryBailianCredentialStore{}}
+	res := putXinzhiliModelConfig(t, s, incoming, 13)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if store.config.TTS.APIKey != "provider-a-private" {
+		t.Fatalf("equivalent origin lost private key: %+v", store.config.TTS)
+	}
+}
+
 func TestXinzhiliCredentialSaveBailianEndpointPathStillUsesSharedKey(t *testing.T) {
 	stored := validBailianXinzhiliModelConfigForHandler()
 	stored.Version = 12
@@ -458,6 +485,7 @@ func TestXinzhiliCredentialSaveLegacyNativeBailianProviderChangeRequiresNewKey(t
 
 func TestXinzhiliCredentialSaveLegacyNativeBailianSameOriginPathChangePreservesKey(t *testing.T) {
 	stored := legacyNativeBailianConfigForHandler(22, "https://legacy-bailian.example/api/v1", "legacy-bailian-private")
+	stored.RealtimeASR.APIKey = "official-asr-key"
 	store := &fakeXinzhiliModelConfigStore{config: stored, found: true}
 	incoming := stored
 	incoming.TTS.Endpoint = "https://legacy-bailian.example/compatible-mode/v1/"
@@ -472,36 +500,60 @@ func TestXinzhiliCredentialSaveLegacyNativeBailianSameOriginPathChangePreservesK
 	}
 }
 
-func TestXinzhiliCredentialSaveSharedRecordAllowsNativeBailianScopeChanges(t *testing.T) {
-	for _, tt := range []struct {
-		name     string
-		provider string
-		endpoint string
-	}{
-		{name: "origin change", provider: xinzhili.TTSProviderBailian, endpoint: "https://bailian-b.example/api/v1"},
-		{name: "provider change", provider: xinzhili.TTSProviderOpenAICompatible, endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			stored := legacyNativeBailianConfigForHandler(23, "https://dashscope.aliyuncs.com/api/v1", "legacy-bailian-private")
-			store := &fakeXinzhiliModelConfigStore{config: stored, found: true}
-			incoming := stored
-			incoming.TTS.Provider = tt.provider
-			incoming.TTS.Endpoint = tt.endpoint
-			incoming.TTS.APIKey = ""
-			s := &Server{
-				xinzhiliModelConfig: store,
-				bailianCredentials: &memoryBailianCredentialStore{
-					cfg: bailianconfig.Config{Version: 6, APIKey: "sk-shared"}, found: true,
-				},
-			}
-			res := putXinzhiliModelConfig(t, s, incoming, 23)
-			if res.Code != http.StatusOK {
-				t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
-			}
-			if store.config.RealtimeASR.APIKey != "" || store.config.TTS.APIKey != "" {
-				t.Fatalf("shared credential scope change retained legacy keys: %+v", store.config)
-			}
-		})
+func TestXinzhiliCredentialSaveSharedRecordAllowsOfficialBailianProviderChange(t *testing.T) {
+	stored := legacyNativeBailianConfigForHandler(23, "https://dashscope.aliyuncs.com/api/v1", "legacy-bailian-private")
+	store := &fakeXinzhiliModelConfigStore{config: stored, found: true}
+	incoming := stored
+	incoming.TTS.Provider = xinzhili.TTSProviderOpenAICompatible
+	incoming.TTS.Endpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	incoming.TTS.APIKey = ""
+	s := &Server{
+		xinzhiliModelConfig: store,
+		bailianCredentials: &memoryBailianCredentialStore{
+			cfg: bailianconfig.Config{Version: 6, APIKey: "sk-shared"}, found: true,
+		},
+	}
+	res := putXinzhiliModelConfig(t, s, incoming, 23)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if store.config.RealtimeASR.APIKey != "" || store.config.TTS.APIKey != "" {
+		t.Fatalf("official shared provider change retained legacy keys: %+v", store.config)
+	}
+}
+
+func TestXinzhiliCredentialSaveSharedRecordRequiresCustomNativeBailianPrivateKey(t *testing.T) {
+	cfg := legacyNativeBailianConfigForHandler(0, "https://bailian-proxy.example/api/v1", "")
+	store := &fakeXinzhiliModelConfigStore{}
+	s := &Server{
+		xinzhiliModelConfig: store,
+		bailianCredentials: &memoryBailianCredentialStore{
+			cfg: bailianconfig.Config{Version: 7, APIKey: "sk-shared"}, found: true,
+		},
+	}
+	res := putXinzhiliModelConfig(t, s, cfg, 0)
+	if res.Code != http.StatusBadRequest || store.updateCalls != 0 {
+		t.Fatalf("status=%d updateCalls=%d body=%s", res.Code, store.updateCalls, res.Body.String())
+	}
+}
+
+func TestXinzhiliCredentialSaveSharedRecordPreservesCustomNativeBailianPrivateKey(t *testing.T) {
+	stored := legacyNativeBailianConfigForHandler(24, "https://bailian-proxy.example/api/v1", "proxy-private-key")
+	store := &fakeXinzhiliModelConfigStore{config: stored, found: true}
+	incoming := stored
+	incoming.TTS.APIKey = ""
+	s := &Server{
+		xinzhiliModelConfig: store,
+		bailianCredentials: &memoryBailianCredentialStore{
+			cfg: bailianconfig.Config{Version: 8, APIKey: "sk-shared"}, found: true,
+		},
+	}
+	res := putXinzhiliModelConfig(t, s, incoming, 24)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if store.config.RealtimeASR.APIKey != "" || store.config.TTS.APIKey != "proxy-private-key" {
+		t.Fatalf("custom native private key separation failed: %+v", store.config)
 	}
 }
 

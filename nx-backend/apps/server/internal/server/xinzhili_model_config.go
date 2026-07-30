@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -186,10 +187,17 @@ func ttsCredentialScope(cfg xinzhili.TTSConfig) string {
 		return provider + "|" + strings.ToLower(endpoint)
 	}
 	scheme := strings.ToLower(parsed.Scheme)
-	hostname := strings.ToLower(parsed.Hostname())
-	port := parsed.Port()
-	if scheme == "https" && port == "443" {
-		port = ""
+	hostname := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	rawPort := parsed.Port()
+	port := rawPort
+	if rawPort != "" {
+		if numericPort, parseErr := strconv.Atoi(rawPort); parseErr == nil {
+			if scheme == "https" && numericPort == 443 {
+				port = ""
+			} else {
+				port = strconv.Itoa(numericPort)
+			}
+		}
 	}
 	return provider + "|" + scheme + "|" + hostname + "|" + port
 }

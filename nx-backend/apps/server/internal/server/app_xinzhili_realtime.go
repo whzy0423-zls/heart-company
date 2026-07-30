@@ -486,9 +486,16 @@ func (s *Server) readXinzhiliRealtimeConfig(ctx context.Context) (xinzhili.Confi
 }
 
 // withXinzhiliRuntimeCredentials returns a per-turn copy. Shared credentials
-// are never written back to xinzhili_model_config, and private non-Bailian TTS
-// credentials are deliberately left untouched.
+// are never written back to xinzhili_model_config, and private TTS credentials
+// are deliberately left untouched.
 func (s *Server) withXinzhiliRuntimeCredentials(ctx context.Context, cfg xinzhili.Config) (xinzhili.Config, error) {
+	if !xinzhili.IsOfficialDashScopeRealtimeASREndpoint(cfg.RealtimeASR.Endpoint) {
+		return xinzhili.Config{}, errors.New("realtime ASR endpoint is not official DashScope")
+	}
+	usesSharedTTS := xinzhili.TTSUsesBailianCredentials(cfg.TTS)
+	if !usesSharedTTS && strings.TrimSpace(cfg.TTS.APIKey) == "" {
+		return xinzhili.Config{}, errors.New("private TTS credential is empty")
+	}
 	resolved, err := s.resolveBailianCredentialsForConfig(ctx, cfg, true)
 	if err != nil {
 		return xinzhili.Config{}, err
@@ -499,7 +506,7 @@ func (s *Server) withXinzhiliRuntimeCredentials(ctx context.Context, cfg xinzhil
 	}
 	runtime := cfg
 	runtime.RealtimeASR.APIKey = key
-	if xinzhili.TTSUsesBailianCredentials(runtime.TTS) {
+	if usesSharedTTS {
 		runtime.TTS.APIKey = key
 	}
 	return runtime, nil

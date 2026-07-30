@@ -191,6 +191,51 @@ func TestXinzhiliRuntimeCredentialNeverOverwritesMiniMaxPrivateTTSKey(t *testing
 	}
 }
 
+func TestXinzhiliRuntimeCredentialRejectsNonOfficialASREndpoint(t *testing.T) {
+	for _, endpoint := range []string{
+		"wss://asr.example.com/api-ws/v1/inference",
+		"wss://dashscope.aliyuncs.com@evil.test/api-ws/v1/inference",
+		"wss://dashscope.aliyuncs.com:8443/api-ws/v1/inference",
+		"wss://dashscope.aliyuncs.com.evil.test/api-ws/v1/inference",
+		"wss://dashscope.aliyuncs.com/api-ws/v1/other",
+	} {
+		cfg := validBailianXinzhiliModelConfigForHandler()
+		cfg.RealtimeASR.Endpoint = endpoint
+		s := &Server{bailianCredentials: &memoryBailianCredentialStore{
+			cfg: bailianconfig.Config{Version: 4, APIKey: "sk-shared"}, found: true,
+		}}
+		runtime, err := s.withXinzhiliRuntimeCredentials(context.Background(), cfg)
+		if err == nil {
+			t.Fatalf("endpoint %q received shared runtime credentials: %+v", endpoint, runtime)
+		}
+		if runtime.RealtimeASR.APIKey != "" || runtime.TTS.APIKey != "" {
+			t.Fatalf("endpoint %q leaked shared credential: %+v", endpoint, runtime)
+		}
+	}
+}
+
+func TestXinzhiliRuntimeCredentialTreatsCustomNativeBailianAsPrivateTTS(t *testing.T) {
+	cfg := validBailianXinzhiliModelConfigForHandler()
+	cfg.TTS.Provider = xinzhili.TTSProviderBailian
+	cfg.TTS.Endpoint = "https://bailian-proxy.example/api/v1"
+	cfg.TTS.APIKey = ""
+	s := &Server{bailianCredentials: &memoryBailianCredentialStore{
+		cfg: bailianconfig.Config{Version: 5, APIKey: "sk-shared"}, found: true,
+	}}
+	if runtime, err := s.withXinzhiliRuntimeCredentials(context.Background(), cfg); err == nil {
+		t.Fatalf("custom native Bailian without private key received shared credential: %+v", runtime)
+	}
+
+	cfg.TTS.APIKey = "proxy-private-key"
+	runtime, err := s.withXinzhiliRuntimeCredentials(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.RealtimeASR.APIKey != "sk-shared" || runtime.TTS.APIKey != "proxy-private-key" {
+		t.Fatalf("runtime credentials ASR=%q TTS=%q", runtime.RealtimeASR.APIKey, runtime.TTS.APIKey)
+	}
+}
+
 func startXinzhiliRuntimeCredentialTurn(t *testing.T, c *xinzhiliRealtimeConn, turnID string, turnKey uint64) {
 	t.Helper()
 	c.startTurn(context.Background(), xinzhili.Envelope{

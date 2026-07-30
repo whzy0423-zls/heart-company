@@ -122,7 +122,8 @@ func TestBailianCredentialsLegacyTTSFallbackOnlyAcceptsBailianOrOfficialDashScop
 		endpoint string
 		wantKey  bool
 	}{
-		{name: "native bailian provider", provider: xinzhili.TTSProviderBailian, endpoint: "https://custom.example.invalid/api/v1", wantKey: true},
+		{name: "native bailian official endpoint", provider: xinzhili.TTSProviderBailian, endpoint: "https://dashscope.aliyuncs.com/api/v1", wantKey: true},
+		{name: "native bailian custom proxy", provider: xinzhili.TTSProviderBailian, endpoint: "https://custom.example.invalid/api/v1"},
 		{name: "official native endpoint", provider: xinzhili.TTSProviderOpenAICompatible, endpoint: "https://dashscope.aliyuncs.com/api/v1", wantKey: true},
 		{name: "official compatible endpoint", provider: xinzhili.TTSProviderOpenAICompatible, endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1", wantKey: true},
 		{name: "official generation endpoint", provider: xinzhili.TTSProviderOpenAICompatible, endpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation", wantKey: true},
@@ -163,6 +164,32 @@ func TestBailianCredentialsLegacyTTSFallbackOnlyAcceptsBailianOrOfficialDashScop
 				t.Fatalf("runtime order=(%d,%d) want legacy epoch/version 9", got.runtimeEpoch, got.runtimeVersion)
 			}
 		})
+	}
+}
+
+func TestBailianCredentialsLegacyCustomNativeTTSFallsBackToOfficialASR(t *testing.T) {
+	s := &Server{
+		bailianCredentials: &memoryBailianCredentialStore{},
+		xinzhiliModelConfig: staticXinzhiliConfigStore{found: true, cfg: xinzhili.Config{Version: 10,
+			TTS: xinzhili.TTSConfig{
+				Provider: xinzhili.TTSProviderBailian,
+				Endpoint: "https://bailian-proxy.example/api/v1",
+				APIKey:   "proxy-private-key",
+			},
+			RealtimeASR: xinzhili.RealtimeASRConfig{
+				Provider: xinzhili.RealtimeASRProvider,
+				Endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
+				Model:    xinzhili.RealtimeASRModel,
+				APIKey:   "official-asr-key",
+			},
+		}},
+	}
+	got, err := s.resolveBailianCredentials(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Source != bailianCredentialSourceLegacyASR || got.APIKey != "official-asr-key" {
+		t.Fatalf("resolved=%#v want official ASR fallback", got)
 	}
 }
 
@@ -363,7 +390,7 @@ func TestBailianCredentialsFirstEmptyPUTIsNoOpAndKeepsLegacyFallback(t *testing.
 	s := &Server{
 		bailianCredentials: store,
 		xinzhiliModelConfig: staticXinzhiliConfigStore{found: true, cfg: xinzhili.Config{TTS: xinzhili.TTSConfig{
-			Provider: xinzhili.TTSProviderBailian, APIKey: "sk-legacy-WXYZ",
+			Provider: xinzhili.TTSProviderBailian, Endpoint: "https://dashscope.aliyuncs.com/api/v1", APIKey: "sk-legacy-WXYZ",
 		}}},
 		setBailianCopyConfig: func(cfg voice.BailianConfig) { configured = cfg },
 	}
