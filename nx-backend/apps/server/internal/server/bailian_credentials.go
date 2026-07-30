@@ -151,16 +151,12 @@ func (s *Server) resolveBailianCredentials(ctx context.Context) (resolvedBailian
 	if s.bailianCredentials == nil {
 		return resolvedBailianCredential{}, errors.New("bailian credential store is not initialized")
 	}
-	shared, found, err := s.bailianCredentials.Read(ctx)
+	shared, found, err := s.readSharedBailianCredentials(ctx)
 	if err != nil {
 		return resolvedBailianCredential{}, err
 	}
 	if found {
-		shared.APIKey = strings.TrimSpace(shared.APIKey)
-		return resolvedBailianCredential{
-			Config: shared, Source: bailianCredentialSourceShared,
-			runtimeEpoch: bailianCredentialRuntimeEpochShared, runtimeVersion: shared.Version,
-		}, nil
+		return resolvedSharedBailianCredential(shared), nil
 	}
 
 	if s.xinzhiliModelConfig == nil {
@@ -173,17 +169,52 @@ func (s *Server) resolveBailianCredentials(ctx context.Context) (resolvedBailian
 	if !legacyFound {
 		return resolvedBailianCredential{Source: bailianCredentialSourceNone, runtimeEpoch: bailianCredentialRuntimeEpochNone}, nil
 	}
+	return resolveLegacyBailianCredential(legacy, true), nil
+}
+
+// resolveBailianCredentialsForConfig resolves the shared credential against a
+// specific Xinzhili snapshot. The shared record is still read fresh for every
+// call, while the legacy fallback remains tied to the same model snapshot that
+// will be validated or used for the current turn.
+func (s *Server) resolveBailianCredentialsForConfig(ctx context.Context, legacy xinzhili.Config, legacyFound bool) (resolvedBailianCredential, error) {
+	shared, found, err := s.readSharedBailianCredentials(ctx)
+	if err != nil {
+		return resolvedBailianCredential{}, err
+	}
+	if found {
+		return resolvedSharedBailianCredential(shared), nil
+	}
+	return resolveLegacyBailianCredential(legacy, legacyFound), nil
+}
+
+func (s *Server) readSharedBailianCredentials(ctx context.Context) (bailianconfig.Config, bool, error) {
+	if s.bailianCredentials == nil {
+		return bailianconfig.Config{}, false, nil
+	}
+	return s.bailianCredentials.Read(ctx)
+}
+
+func resolvedSharedBailianCredential(shared bailianconfig.Config) resolvedBailianCredential {
+	shared.APIKey = strings.TrimSpace(shared.APIKey)
+	return resolvedBailianCredential{
+		Config: shared, Source: bailianCredentialSourceShared,
+		runtimeEpoch: bailianCredentialRuntimeEpochShared, runtimeVersion: shared.Version,
+	}
+}
+
+func resolveLegacyBailianCredential(legacy xinzhili.Config, found bool) resolvedBailianCredential {
+	if !found {
+		return resolvedBailianCredential{Source: bailianCredentialSourceNone, runtimeEpoch: bailianCredentialRuntimeEpochNone}
+	}
 	legacyRuntimeVersion := legacy.Version
 
 	ttsKey := strings.TrimSpace(legacy.TTS.APIKey)
-	ttsProvider := strings.ToLower(strings.TrimSpace(legacy.TTS.Provider))
-	if ttsKey != "" && (ttsProvider == xinzhili.TTSProviderBailian ||
-		(ttsProvider == xinzhili.TTSProviderOpenAICompatible && isOfficialDashScopeTTSEndpoint(legacy.TTS.Endpoint))) {
+	if ttsKey != "" && xinzhili.TTSUsesBailianCredentials(legacy.TTS) {
 		return resolvedBailianCredential{
 			Config:       bailianconfig.Config{APIKey: ttsKey},
 			Source:       bailianCredentialSourceLegacyTTS,
 			runtimeEpoch: bailianCredentialRuntimeEpochLegacy, runtimeVersion: legacyRuntimeVersion,
-		}, nil
+		}
 	}
 
 	asrKey := strings.TrimSpace(legacy.RealtimeASR.APIKey)
@@ -194,29 +225,16 @@ func (s *Server) resolveBailianCredentials(ctx context.Context) (resolvedBailian
 			Config:       bailianconfig.Config{APIKey: asrKey},
 			Source:       bailianCredentialSourceLegacyASR,
 			runtimeEpoch: bailianCredentialRuntimeEpochLegacy, runtimeVersion: legacyRuntimeVersion,
-		}, nil
+		}
 	}
 	return resolvedBailianCredential{
 		Source:       bailianCredentialSourceNone,
 		runtimeEpoch: bailianCredentialRuntimeEpochLegacy, runtimeVersion: legacyRuntimeVersion,
-	}, nil
+	}
 }
 
 func isOfficialDashScopeTTSEndpoint(raw string) bool {
-	parsed, ok := parseOfficialDashScopeEndpoint(raw, "https")
-	if !ok {
-		return false
-	}
-	endpointPath := strings.TrimSuffix(parsed.Path, "/")
-	if pathpkg.Clean(endpointPath) != endpointPath {
-		return false
-	}
-	switch endpointPath {
-	case "/api/v1", "/compatible-mode/v1", "/api/v1/services/aigc/multimodal-generation/generation":
-		return true
-	default:
-		return false
-	}
+	return xinzhili.IsOfficialDashScopeTTSEndpoint(raw)
 }
 
 func isOfficialDashScopeRealtimeASREndpoint(raw string) bool {

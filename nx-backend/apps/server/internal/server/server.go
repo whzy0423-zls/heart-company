@@ -85,9 +85,6 @@ type Server struct {
 	setBailianCopyConfig       func(voice.BailianConfig)
 	bailianCredentials         bailianCredentialStore
 	bailianRuntime             bailianCredentialRuntimeState
-	xinzhiliBailianConfigMu    sync.Mutex
-	xinzhiliBailianConfigSet   bool
-	xinzhiliBailianConfigVer   int64
 	videos                     *video.Store
 	videoAnalysis              *videoanalysis.Store
 	videoAssets                *videoasset.Store
@@ -391,7 +388,9 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.pushSendSlots = make(chan struct{}, 2)
 	// 启动时应用 DB 中保存的模型配置覆盖（若存在），重建对话/视频客户端。
 	s.applyStoredModelConfig()
-	s.applyStoredXinzhiliBailianCopyConfig()
+	if _, err := s.refreshBailianCopyCredentials(context.Background()); err != nil {
+		log.Printf("Bailian shared credential startup refresh failed: %v", err)
+	}
 	if database != nil {
 		if err := s.ensureVideoSubmissionRecovery(context.Background()); err != nil {
 			log.Printf("video submission recovery failed: %v", err)

@@ -284,7 +284,7 @@ func (c *xinzhiliRealtimeConn) startSession(ctx context.Context, e xinzhili.Enve
 	c.cardID = p.CardID
 	c.conversationID = p.ConversationID
 	c.mu.Unlock()
-	cfg, found, err := xinzhili.ReadConfig(ctx, c.server.db)
+	cfg, found, err := c.server.readXinzhiliRealtimeConfig(ctx)
 	if err != nil || !found || !cfg.Enabled {
 		c.sendError(ctx, "xinzhili_not_configured", "请先配置芯之力会话模型后重试", false, true)
 		return
@@ -318,9 +318,14 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 		c.sendError(ctx, "invalid_turn", "轮次参数无效", false, false)
 		return
 	}
-	cfg, found, err := xinzhili.ReadConfig(ctx, c.server.db)
+	cfg, found, err := c.server.readXinzhiliRealtimeConfig(ctx)
 	if err != nil || !found || !cfg.Enabled {
 		c.sendError(ctx, "xinzhili_not_configured", "请先配置芯之力会话模型后重试", false, true)
+		return
+	}
+	cfg, err = c.server.withXinzhiliRuntimeCredentials(ctx, cfg)
+	if err != nil {
+		c.sendError(ctx, "xinzhili_credentials_unavailable", "芯之力语音凭证暂不可用", true, false)
 		return
 	}
 	c.mu.Lock()
@@ -452,7 +457,7 @@ func (c *xinzhiliRealtimeConn) changeMode(ctx context.Context, e xinzhili.Envelo
 		c.sendError(ctx, "invalid_mode", "模式无效", false, false)
 		return
 	}
-	cfg, found, err := xinzhili.ReadConfig(ctx, c.server.db)
+	cfg, found, err := c.server.readXinzhiliRealtimeConfig(ctx)
 	if err != nil || !found || !cfg.Enabled {
 		c.sendError(ctx, "xinzhili_not_configured", "请先配置芯之力会话模型后重试", false, false)
 		return
@@ -471,6 +476,33 @@ func (c *xinzhiliRealtimeConn) changeMode(ctx context.Context, e xinzhili.Envelo
 		return
 	}
 	c.sendControl(ctx, xinzhili.EventModeChanged, snapshot, nil, nil)
+}
+
+func (s *Server) readXinzhiliRealtimeConfig(ctx context.Context) (xinzhili.Config, bool, error) {
+	if s.xinzhiliModelConfig != nil {
+		return s.xinzhiliModelConfig.Read(ctx)
+	}
+	return xinzhili.ReadConfig(ctx, s.db)
+}
+
+// withXinzhiliRuntimeCredentials returns a per-turn copy. Shared credentials
+// are never written back to xinzhili_model_config, and private non-Bailian TTS
+// credentials are deliberately left untouched.
+func (s *Server) withXinzhiliRuntimeCredentials(ctx context.Context, cfg xinzhili.Config) (xinzhili.Config, error) {
+	resolved, err := s.resolveBailianCredentialsForConfig(ctx, cfg, true)
+	if err != nil {
+		return xinzhili.Config{}, err
+	}
+	key := strings.TrimSpace(resolved.APIKey)
+	if key == "" {
+		return xinzhili.Config{}, errors.New("shared Bailian credential is empty")
+	}
+	runtime := cfg
+	runtime.RealtimeASR.APIKey = key
+	if xinzhili.TTSUsesBailianCredentials(runtime.TTS) {
+		runtime.TTS.APIKey = key
+	}
+	return runtime, nil
 }
 
 func (c *xinzhiliRealtimeConn) loadModeSnapshot(ctx context.Context, cfg xinzhili.Config) (xinzhiliModeSnapshot, error) {

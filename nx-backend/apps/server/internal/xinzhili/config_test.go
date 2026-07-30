@@ -50,7 +50,6 @@ func TestConfigValidateRequiresCompleteASRAndTTSWhenEnabled(t *testing.T) {
 	}{
 		{"asr provider", func(c *Config) { c.RealtimeASR.Provider = "" }},
 		{"asr endpoint", func(c *Config) { c.RealtimeASR.Endpoint = "" }},
-		{"asr api key", func(c *Config) { c.RealtimeASR.APIKey = "" }},
 		{"asr region", func(c *Config) { c.RealtimeASR.Region = "" }},
 		{"asr model", func(c *Config) { c.RealtimeASR.Model = "" }},
 		{"tts provider", func(c *Config) { c.TTS.Provider = "" }},
@@ -68,6 +67,107 @@ func TestConfigValidateRequiresCompleteASRAndTTSWhenEnabled(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+func TestConfigValidateUsesRuntimeBailianCredentialsOutsidePersistedJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		tts  TTSConfig
+	}{
+		{
+			name: "native bailian provider",
+			tts: TTSConfig{
+				Provider: TTSProviderBailian,
+				Endpoint: "https://dashscope.aliyuncs.com/api/v1",
+				Model:    "qwen3-tts-vc-2026-01-22",
+				Voice:    "teacher-voice",
+				Format:   "mp3",
+			},
+		},
+		{
+			name: "official dashscope compatible provider",
+			tts: TTSConfig{
+				Provider: TTSProviderOpenAICompatible,
+				Endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+				Model:    "qwen3-tts-vc-2026-01-22",
+				Voice:    "teacher-voice",
+				Format:   "mp3",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.RealtimeASR.APIKey = ""
+			cfg.TTS = tt.tts
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("shared Bailian credentials should be injected at runtime: %v", err)
+			}
+		})
+	}
+}
+
+func TestConfigValidateRequiresPrivateCredentialForNonBailianTTS(t *testing.T) {
+	tests := []struct {
+		name string
+		tts  TTSConfig
+	}{
+		{
+			name: "minimax",
+			tts: TTSConfig{
+				Provider: TTSProviderMiniMax,
+				Endpoint: "https://api.minimax.chat/v1/t2a_v2",
+				GroupID:  "group",
+				Model:    "speech-02-hd",
+				Voice:    "teacher-voice",
+				Format:   "mp3",
+			},
+		},
+		{
+			name: "generic openai compatible",
+			tts: TTSConfig{
+				Provider: TTSProviderOpenAICompatible,
+				Endpoint: "https://tts.example.com/v1",
+				Model:    "tts-1",
+				Voice:    "teacher-voice",
+				Format:   "mp3",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.RealtimeASR.APIKey = ""
+			cfg.TTS = tt.tts
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("non-Bailian TTS must keep its own private API key")
+			}
+		})
+	}
+}
+
+func TestConfigValidateDisabledStillChecksProvidedStructureAndAllowsEmptyVoice(t *testing.T) {
+	cfg := validConfig()
+	cfg.Enabled = false
+	cfg.RealtimeASR.APIKey = ""
+	cfg.TTS.APIKey = ""
+	cfg.TTS.Voice = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("disabled config should allow incomplete runtime fields: %v", err)
+	}
+
+	for _, mutate := range []func(*Config){
+		func(c *Config) { c.RealtimeASR.Provider = "unsupported" },
+		func(c *Config) { c.RealtimeASR.Endpoint = "ftp://asr.example.com" },
+		func(c *Config) { c.TTS.Provider = "unsupported" },
+		func(c *Config) { c.TTS.Endpoint = "http://tts.example.com" },
+	} {
+		invalid := cfg
+		mutate(&invalid)
+		if err := invalid.Validate(); err == nil {
+			t.Fatal("disabled config accepted an invalid provided field")
+		}
 	}
 }
 

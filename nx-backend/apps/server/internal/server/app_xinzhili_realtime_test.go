@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"nine-xing/nx-backend/apps/server/internal/bailianconfig"
 	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
 
@@ -56,10 +57,12 @@ type fakeXinzhiliModeStore struct {
 }
 
 type recordingXinzhiliTurnSession struct {
-	pcm []xinzhili.PCMFrame
+	pcm    []xinzhili.PCMFrame
+	starts []xinzhili.StartTurnInput
 }
 
-func (s *recordingXinzhiliTurnSession) StartTurn(context.Context, xinzhili.StartTurnInput) error {
+func (s *recordingXinzhiliTurnSession) StartTurn(_ context.Context, input xinzhili.StartTurnInput) error {
+	s.starts = append(s.starts, input)
 	return nil
 }
 func (s *recordingXinzhiliTurnSession) PushPCM(_ context.Context, frame xinzhili.PCMFrame) error {
@@ -109,6 +112,91 @@ func (s *fakeXinzhiliModeStore) UpdateMode(_ context.Context, userID int64, mode
 	p := xinzhili.ModePreference{UserID: userID, Requested: mode, Revision: expectedRevision + 1}
 	s.updates = append(s.updates, p)
 	return p, nil
+}
+
+func TestXinzhiliRuntimeCredentialRefreshesSharedBailianKeyForEveryTurn(t *testing.T) {
+	serverWS, _ := newXinzhiliWebsocketPair(t)
+	cfg := validBailianXinzhiliModelConfigForHandler()
+	cfg.Version = 8
+	configStore := &fakeXinzhiliModelConfigStore{config: cfg, found: true}
+	credentials := &memoryBailianCredentialStore{
+		cfg: bailianconfig.Config{Version: 1, APIKey: "sk-shared-turn-1"}, found: true,
+	}
+	session := &recordingXinzhiliTurnSession{}
+	c := &xinzhiliRealtimeConn{
+		server: &Server{
+			xinzhiliModelConfig: configStore,
+			bailianCredentials:  credentials,
+		},
+		ws: serverWS, sess: session, userID: 17, sessionID: "xz-runtime",
+		pendingMode: xinzhili.ModeNormal, turns: make(map[uint64]string), audioSeq: make(map[uint64]uint32),
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+
+	startXinzhiliRuntimeCredentialTurn(t, c, "turn-1", 101)
+	credentials.mu.Lock()
+	credentials.cfg = bailianconfig.Config{Version: 2, APIKey: "sk-shared-turn-2"}
+	credentials.mu.Unlock()
+	startXinzhiliRuntimeCredentialTurn(t, c, "turn-2", 102)
+
+	if len(session.starts) != 2 {
+		t.Fatalf("started turns=%d want=2", len(session.starts))
+	}
+	for i, want := range []string{"sk-shared-turn-1", "sk-shared-turn-2"} {
+		got := session.starts[i]
+		if got.ASRConfig.APIKey != want || got.TTSConfig.APIKey != want {
+			t.Fatalf("turn %d runtime keys ASR=%q TTS=%q want=%q", i+1, got.ASRConfig.APIKey, got.TTSConfig.APIKey, want)
+		}
+	}
+	if configStore.config.RealtimeASR.APIKey != "" || configStore.config.TTS.APIKey != "" {
+		t.Fatalf("runtime key was written back to persisted config: %+v", configStore.config)
+	}
+}
+
+func TestXinzhiliRuntimeCredentialNeverOverwritesMiniMaxPrivateTTSKey(t *testing.T) {
+	serverWS, _ := newXinzhiliWebsocketPair(t)
+	cfg := validXinzhiliModelConfigForHandler()
+	cfg.Version = 9
+	cfg.RealtimeASR.APIKey = ""
+	cfg.TTS = xinzhili.TTSConfig{
+		Provider: xinzhili.TTSProviderMiniMax,
+		Endpoint: "https://api.minimax.chat/v1/t2a_v2",
+		APIKey:   "minimax-private",
+		GroupID:  "minimax-group",
+		Model:    "speech-02-hd",
+		Voice:    "minimax-voice",
+		Format:   "mp3",
+	}
+	configStore := &fakeXinzhiliModelConfigStore{config: cfg, found: true}
+	session := &recordingXinzhiliTurnSession{}
+	c := &xinzhiliRealtimeConn{
+		server: &Server{
+			xinzhiliModelConfig: configStore,
+			bailianCredentials: &memoryBailianCredentialStore{
+				cfg: bailianconfig.Config{Version: 6, APIKey: "sk-shared-asr"}, found: true,
+			},
+		},
+		ws: serverWS, sess: session, userID: 18, sessionID: "xz-minimax",
+		pendingMode: xinzhili.ModeNormal, turns: make(map[uint64]string), audioSeq: make(map[uint64]uint32),
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+
+	startXinzhiliRuntimeCredentialTurn(t, c, "turn-minimax", 201)
+	if len(session.starts) != 1 {
+		t.Fatalf("started turns=%d want=1", len(session.starts))
+	}
+	got := session.starts[0]
+	if got.ASRConfig.APIKey != "sk-shared-asr" || got.TTSConfig.APIKey != "minimax-private" {
+		t.Fatalf("runtime credential separation failed: ASR=%q TTS=%q", got.ASRConfig.APIKey, got.TTSConfig.APIKey)
+	}
+}
+
+func startXinzhiliRuntimeCredentialTurn(t *testing.T, c *xinzhiliRealtimeConn, turnID string, turnKey uint64) {
+	t.Helper()
+	c.startTurn(context.Background(), xinzhili.Envelope{
+		TurnID:  &turnID,
+		Payload: json.RawMessage(fmt.Sprintf(`{"turnKey":%d}`, turnKey)),
+	})
 }
 
 func TestXinzhiliModeSnapshotFallsBackWhenStoredModeIsDisabled(t *testing.T) {

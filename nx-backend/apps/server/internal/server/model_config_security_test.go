@@ -16,12 +16,12 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/auditlog"
+	"nine-xing/nx-backend/apps/server/internal/bailianconfig"
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/llm"
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 	"nine-xing/nx-backend/apps/server/internal/voice"
-	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
 
 const modelConfigViewTestDriverName = "nine_xing_model_config_view"
@@ -312,14 +312,12 @@ func TestApplyStoredModelConfigRetainsStoredMiniMaxVoiceCredentials(t *testing.T
 		t.Fatalf("MiniMax GroupID = %q", groupID)
 	}
 
-	s.applyXinzhiliBailianCopyConfig(xinzhili.Config{Version: 1, TTS: xinzhili.TTSConfig{
-		Provider: xinzhili.TTSProviderBailian,
-		Endpoint: "https://dashscope.example.com",
-		APIKey:   "bailian-key",
-		Model:    "MiniMax/speech-2.8-turbo",
-		Voice:    "voice",
-		Format:   "mp3",
-	}})
+	s.applyBailianCredentialRuntime(resolvedBailianCredential{
+		Config:         bailianconfig.Config{Version: 1, APIKey: "bailian-key"},
+		Source:         bailianCredentialSourceShared,
+		runtimeEpoch:   bailianCredentialRuntimeEpochShared,
+		runtimeVersion: 1,
+	})
 	bailian := reflect.ValueOf(s.voices).Elem().FieldByName("bailian").Elem()
 	if apiKey := bailian.FieldByName("apiKey").String(); apiKey != "bailian-key" {
 		t.Fatalf("Bailian API key = %q after MiniMax runtime update", apiKey)

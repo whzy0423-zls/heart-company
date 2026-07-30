@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	pathpkg "path"
 	"strings"
 	"unicode/utf8"
 )
@@ -193,6 +194,9 @@ func validateNormalized(c Config) error {
 			return fmt.Errorf("模式 %s 的提示词不能超过 %d 个字符", mode, maxPromptRunes)
 		}
 	}
+	if err := validateProvidedStructure(c); err != nil {
+		return err
+	}
 	if !c.Enabled {
 		return nil
 	}
@@ -205,17 +209,20 @@ func validateNormalized(c Config) error {
 	if c.RealtimeASR.Model != RealtimeASRModel {
 		return fmt.Errorf("实时 ASR model 必须为 %s", RealtimeASRModel)
 	}
-	if c.RealtimeASR.APIKey == "" || c.RealtimeASR.Region == "" {
-		return errors.New("实时 ASR API Key 和区域不能为空")
+	if c.RealtimeASR.Region == "" {
+		return errors.New("实时 ASR 区域不能为空")
 	}
-	if err := validateEndpoint(c.RealtimeASR.Endpoint, "wss", "https"); err != nil {
-		return fmt.Errorf("实时 ASR endpoint: %w", err)
+	if c.RealtimeASR.Endpoint == "" {
+		return errors.New("实时 ASR endpoint 不能为空")
 	}
 	if c.TTS.Provider != TTSProviderOpenAICompatible && c.TTS.Provider != TTSProviderMiniMax && c.TTS.Provider != TTSProviderBailian {
 		return errors.New("TTS provider 仅支持 openai-compatible、minimax 或 bailian")
 	}
-	if c.TTS.APIKey == "" || c.TTS.Model == "" || c.TTS.Voice == "" {
-		return errors.New("TTS API Key、模型和音色不能为空")
+	if c.TTS.Model == "" || c.TTS.Voice == "" {
+		return errors.New("TTS 模型和音色不能为空")
+	}
+	if !TTSUsesBailianCredentials(c.TTS) && c.TTS.APIKey == "" {
+		return errors.New("非百炼 TTS API Key 不能为空")
 	}
 	if c.TTS.Provider == TTSProviderMiniMax && c.TTS.GroupID == "" {
 		return errors.New("MiniMax TTS 必须配置 GroupID")
@@ -223,10 +230,71 @@ func validateNormalized(c Config) error {
 	if c.TTS.Format != "mp3" {
 		return errors.New("TTS format 必须为 mp3")
 	}
-	if err := validateEndpoint(c.TTS.Endpoint, "https"); err != nil {
-		return fmt.Errorf("TTS endpoint: %w", err)
+	if c.TTS.Endpoint == "" {
+		return errors.New("TTS endpoint 不能为空")
 	}
 	return nil
+}
+
+func validateProvidedStructure(c Config) error {
+	if c.RealtimeASR.Provider != "" && c.RealtimeASR.Provider != RealtimeASRProvider {
+		return fmt.Errorf("实时 ASR provider 必须为 %s", RealtimeASRProvider)
+	}
+	if c.RealtimeASR.Model != "" && c.RealtimeASR.Model != RealtimeASRModel {
+		return fmt.Errorf("实时 ASR model 必须为 %s", RealtimeASRModel)
+	}
+	if c.RealtimeASR.Endpoint != "" {
+		if err := validateEndpoint(c.RealtimeASR.Endpoint, "wss", "https"); err != nil {
+			return fmt.Errorf("实时 ASR endpoint: %w", err)
+		}
+	}
+	if c.TTS.Provider != "" && c.TTS.Provider != TTSProviderOpenAICompatible && c.TTS.Provider != TTSProviderMiniMax && c.TTS.Provider != TTSProviderBailian {
+		return errors.New("TTS provider 仅支持 openai-compatible、minimax 或 bailian")
+	}
+	if c.TTS.Endpoint != "" {
+		if err := validateEndpoint(c.TTS.Endpoint, "https"); err != nil {
+			return fmt.Errorf("TTS endpoint: %w", err)
+		}
+	}
+	if c.TTS.Format != "" && c.TTS.Format != "mp3" {
+		return errors.New("TTS format 必须为 mp3")
+	}
+	return nil
+}
+
+// TTSUsesBailianCredentials reports whether this TTS configuration is served
+// by Bailian and therefore receives the shared credential only at runtime.
+func TTSUsesBailianCredentials(cfg TTSConfig) bool {
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	return provider == TTSProviderBailian ||
+		(provider == TTSProviderOpenAICompatible && IsOfficialDashScopeTTSEndpoint(cfg.Endpoint))
+}
+
+// IsOfficialDashScopeTTSEndpoint accepts only the official DashScope HTTPS
+// host and supported TTS API roots. It deliberately rejects lookalike hosts,
+// userinfo, non-default ports, query strings and path traversal.
+func IsOfficialDashScopeTTSEndpoint(raw string) bool {
+	parsed, err := url.ParseRequestURI(strings.TrimSpace(raw))
+	if err != nil || parsed.User != nil || !strings.EqualFold(parsed.Scheme, "https") ||
+		!strings.EqualFold(parsed.Hostname(), "dashscope.aliyuncs.com") {
+		return false
+	}
+	if port := parsed.Port(); port != "" && port != "443" {
+		return false
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" {
+		return false
+	}
+	endpointPath := strings.TrimSuffix(parsed.Path, "/")
+	if pathpkg.Clean(endpointPath) != endpointPath {
+		return false
+	}
+	switch endpointPath {
+	case "/api/v1", "/compatible-mode/v1", "/api/v1/services/aigc/multimodal-generation/generation":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateLengths(c Config) error {
