@@ -3,6 +3,7 @@ package voice
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -87,7 +88,7 @@ func (c *BailianClient) CloneVoice(ctx context.Context, input BailianCloneInput)
 	}
 	preferredName := normalizedBailianPreferredName(input.VoiceID)
 	if preferredName == "" {
-		preferredName = normalizedBailianPreferredName("nxvoice" + randomID(8))
+		preferredName = "v" + randomID(4)
 	}
 	return c.cloneQwenVoice(ctx, targetModel, preferredName, input)
 }
@@ -376,22 +377,20 @@ func normalizeProfileProvider(provider string) string {
 	}
 }
 
-var bailianPreferredNameInvalid = regexp.MustCompile(`[^a-z0-9_]+`)
+var bailianPreferredNameInvalid = regexp.MustCompile(`[^a-z0-9]+`)
 var bailianHostedMiniMaxVoiceIDInvalid = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
 
 func normalizedBailianPreferredName(raw string) string {
-	value := strings.Trim(
-		bailianPreferredNameInvalid.ReplaceAllString(strings.ToLower(strings.TrimSpace(raw)), "_"),
-		"_",
-	)
+	value := bailianPreferredNameInvalid.ReplaceAllString(strings.ToLower(strings.TrimSpace(raw)), "")
 	if value == "" {
 		return ""
 	}
 	if value[0] < 'a' || value[0] > 'z' {
 		value = "v" + value
 	}
-	if len(value) > 20 {
-		return value[:20]
+	if len(value) > 9 {
+		digest := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(raw))))
+		return "v" + hex.EncodeToString(digest[:4])
 	}
 	return value
 }

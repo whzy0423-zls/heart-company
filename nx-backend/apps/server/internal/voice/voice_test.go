@@ -151,7 +151,7 @@ func TestBailianCloneVoicePostsSampleDataAndReturnsFinalVoiceID(t *testing.T) {
 			t.Fatalf("model = %v, want qwen-voice-enrollment", payload["model"])
 		}
 		input := payload["input"].(map[string]any)
-		if input["action"] != "create" || input["target_model"] != "qwen3-tts-vc-realtime-2026-01-15" || input["preferred_name"] != "teacher_voice" {
+		if input["action"] != "create" || input["target_model"] != "qwen3-tts-vc-realtime-2026-01-15" || input["preferred_name"] != "vc54a51a1" {
 			t.Fatalf("unexpected input payload: %+v", input)
 		}
 		audio := input["audio"].(map[string]any)
@@ -205,14 +205,14 @@ func TestNormalizedBailianPreferredNameMatchesQwenEnrollmentContract(t *testing.
 		want string
 	}{
 		{
-			name: "current generated id is capped at twenty characters",
+			name: "current generated id becomes a stable short hash",
 			raw:  "nx_voice_6c5d7fa19e761d485dd5",
-			want: "nx_voice_6c5d7fa19e7",
+			want: "v82065399",
 		},
 		{
-			name: "uppercase and hyphen are normalized",
+			name: "long mixed-case name becomes a stable short hash",
 			raw:  "Teacher-Voice",
-			want: "teacher_voice",
+			want: "vc54a51a1",
 		},
 		{
 			name: "identifier beginning with a digit gains a letter prefix",
@@ -227,6 +227,14 @@ func TestNormalizedBailianPreferredNameMatchesQwenEnrollmentContract(t *testing.
 				t.Fatalf("normalizedBailianPreferredName(%q) = %q, want %q", tt.raw, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNormalizedBailianPreferredNameKeepsEntropyForSimilarGeneratedIDs(t *testing.T) {
+	first := normalizedBailianPreferredName("nx_voice_6c5d7fa19e761d485dd5")
+	second := normalizedBailianPreferredName("nx_voice_6c5d7fa19e761d485dd6")
+	if first == second {
+		t.Fatalf("similar generated IDs collapsed to the same preferred_name %q", first)
 	}
 }
 
