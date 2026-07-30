@@ -119,6 +119,7 @@ type Server struct {
 	chatProviderIdleTimeout    time.Duration
 	modelConfigProbeTimeout    time.Duration
 	newChatGenerator           func(llm.ChatGeneratorConfig) (llm.ChatGenerator, error)
+	appChatASRConfigLoader     func(context.Context) (modelconfig.SpeechModelConfig, bool, error)
 	xinzhiliConfigLoader       func(context.Context) (modelconfig.XinzhiliVoiceConfig, error)
 	xinzhiliMemberCheck        func(context.Context, int64) error
 	xinzhiliTranscribe         func(context.Context, []byte, string) (string, error)

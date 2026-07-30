@@ -16,6 +16,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/modelconfig"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 )
@@ -455,10 +456,13 @@ func (g *voiceChatGenerator) Generate(_ context.Context, input rag.GenerateInput
 
 func newVoiceChatTestServer(store appChatStore, generator rag.Generator) *Server {
 	return &Server{
-		env:         config.Env{},
-		appChat:     store,
-		ragGen:      generator,
-		ragDocs:     &emptyAppChatRAGStore{},
+		env:     config.Env{},
+		appChat: store,
+		ragGen:  generator,
+		ragDocs: &emptyAppChatRAGStore{},
+		appChatASRConfigLoader: func(context.Context) (modelconfig.SpeechModelConfig, bool, error) {
+			return modelconfig.SpeechModelConfig{}, false, nil
+		},
 		chatTimeout: 5 * time.Second,
 		db:          (*sql.DB)(nil),
 	}

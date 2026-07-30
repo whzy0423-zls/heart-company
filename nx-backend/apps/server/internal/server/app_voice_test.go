@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/modelconfig"
 )
 
 func TestRecognizeSpeechRequiresASRConfig(t *testing.T) {
@@ -23,6 +25,121 @@ func TestRecognizeSpeechRequiresASRConfig(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ASR_API_BASE") || !strings.Contains(err.Error(), "ASR_API_KEY") {
 		t.Fatalf("expected actionable config error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "模型配置") || !strings.Contains(err.Error(), "芯之力语音配置") {
+		t.Fatalf("expected admin configuration path, got %v", err)
+	}
+}
+
+func TestRecognizeSpeechPrefersStoredXinzhiliVoiceASRConfig(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer stored-key" {
+			t.Errorf("expected stored authorization, got %q", got)
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("parse multipart form: %v", err)
+		}
+		if got := r.FormValue("model"); got != "stored-model" {
+			t.Errorf("expected stored model, got %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"text": "后台配置已生效"})
+	}))
+	defer upstream.Close()
+
+	stored := modelconfig.Config{XinzhiliVoice: modelconfig.XinzhiliVoiceConfig{
+		ASR: modelconfig.SpeechModelConfig{
+			Provider:       modelconfig.ProviderOpenAICompatible,
+			APIBase:        upstream.URL,
+			APIKey:         "stored-key",
+			Model:          "stored-model",
+			TimeoutSeconds: 17,
+		},
+	}}
+	raw, err := json.Marshal(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := openModelConfigViewTestDB(t, string(raw))
+
+	previousClientFactory := newASRHTTPClient
+	newASRHTTPClient = func(timeout time.Duration) *http.Client {
+		if timeout != 17*time.Second {
+			t.Errorf("expected stored timeout 17s, got %s", timeout)
+		}
+		client := upstream.Client()
+		client.Timeout = timeout
+		return client
+	}
+	t.Cleanup(func() { newASRHTTPClient = previousClientFactory })
+
+	s := &Server{
+		db: db,
+		env: config.Env{ASR: config.ASRConfig{
+			APIBase:        upstream.URL,
+			APIKey:         "env-key",
+			Model:          "env-model",
+			TimeoutSeconds: 3,
+		}},
+	}
+
+	text, err := s.recognizeSpeech(context.Background(), []byte("audio-bytes"), "recording.wav")
+	if err != nil {
+		t.Fatalf("recognize speech: %v", err)
+	}
+	if text != "后台配置已生效" {
+		t.Fatalf("unexpected transcription text: %q", text)
+	}
+}
+
+func TestResolveAppChatASRConfigFallsBackToEnvironment(t *testing.T) {
+	envConfig := config.ASRConfig{
+		APIBase:        "https://env-asr.example.com",
+		APIKey:         "env-key",
+		Model:          "env-model",
+		TimeoutSeconds: 23,
+	}
+	tests := []struct {
+		name   string
+		stored modelconfig.SpeechModelConfig
+		found  bool
+		err    error
+	}{
+		{name: "missing", found: false},
+		{name: "read failure", found: false, err: errors.New("database unavailable")},
+		{
+			name: "incomplete",
+			stored: modelconfig.SpeechModelConfig{
+				Provider: modelconfig.ProviderOpenAICompatible,
+				APIBase:  "https://stored-asr.example.com",
+				APIKey:   "stored-key",
+			},
+			found: true,
+		},
+		{
+			name: "unsupported provider",
+			stored: modelconfig.SpeechModelConfig{
+				Provider: "minimax",
+				APIBase:  "https://stored-asr.example.com",
+				APIKey:   "stored-key",
+				Model:    "stored-model",
+			},
+			found: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Server{
+				env: config.Env{ASR: envConfig},
+				appChatASRConfigLoader: func(context.Context) (modelconfig.SpeechModelConfig, bool, error) {
+					return tt.stored, tt.found, tt.err
+				},
+			}
+
+			if got := s.resolveAppChatASRConfig(context.Background()); got != envConfig {
+				t.Fatalf("expected environment fallback %+v, got %+v", envConfig, got)
+			}
+		})
 	}
 }
 

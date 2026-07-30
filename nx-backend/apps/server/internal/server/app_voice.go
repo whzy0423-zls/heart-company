@@ -15,11 +15,13 @@ import (
 	"strings"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/modelconfig"
 	"nine-xing/nx-backend/apps/server/internal/netguard"
 )
 
-var errASRNotConfigured = errors.New("语音识别未配置 ASR_API_BASE/ASR_API_KEY")
+var errASRNotConfigured = errors.New("语音识别未配置 ASR_API_BASE/ASR_API_KEY；请在后台“模型配置 → 芯之力语音配置 → ASR 语音识别”配置，或检查服务器环境变量")
 
 var newASRHTTPClient = func(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout, Transport: netguard.NewGuardedTransport()}
@@ -83,7 +85,7 @@ func (s *Server) appVoiceRecognize(w http.ResponseWriter, r *http.Request) {
 
 // recognizeSpeech 调用 OpenAI 兼容 ASR 网关，将音频转写为文本。
 func (s *Server) recognizeSpeech(ctx context.Context, audioData []byte, filename string) (string, error) {
-	cfg := s.env.ASR
+	cfg := s.resolveAppChatASRConfig(ctx)
 	apiBase := strings.TrimRight(strings.TrimSpace(cfg.APIBase), "/")
 	apiKey := strings.TrimSpace(cfg.APIKey)
 	if apiBase == "" || apiKey == "" {
@@ -152,6 +154,37 @@ func (s *Server) recognizeSpeech(ctx context.Context, audioData []byte, filename
 		return "", err
 	}
 	return text, nil
+}
+
+func (s *Server) resolveAppChatASRConfig(ctx context.Context) config.ASRConfig {
+	fallback := s.env.ASR
+	stored, found, err := s.loadStoredAppChatASRConfig(ctx)
+	if err != nil || !found {
+		return fallback
+	}
+	if stored.Provider != modelconfig.ProviderOpenAICompatible ||
+		strings.TrimSpace(stored.APIBase) == "" ||
+		strings.TrimSpace(stored.APIKey) == "" ||
+		strings.TrimSpace(stored.Model) == "" {
+		return fallback
+	}
+	return config.ASRConfig{
+		APIBase:        stored.APIBase,
+		APIKey:         stored.APIKey,
+		Model:          stored.Model,
+		TimeoutSeconds: stored.TimeoutSeconds,
+	}
+}
+
+func (s *Server) loadStoredAppChatASRConfig(ctx context.Context) (modelconfig.SpeechModelConfig, bool, error) {
+	if s.appChatASRConfigLoader != nil {
+		return s.appChatASRConfigLoader(ctx)
+	}
+	stored, found, err := modelconfig.ReadStore(ctx, s.db)
+	if err != nil || !found {
+		return modelconfig.SpeechModelConfig{}, found, err
+	}
+	return stored.XinzhiliVoice.ASR, true, nil
 }
 
 func safeASRFilename(filename string) string {
