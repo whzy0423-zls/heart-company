@@ -88,6 +88,16 @@ describe('teacher classroom admin UI contract', () => {
     expect(editor).toContain('保存课件');
   });
 
+  it('creates a fresh editor instance for every new content operation', () => {
+    const source = read('views/classroom/index.vue');
+    expect(source).toContain('const createEditorGeneration = ref(0)');
+    expect(source).toContain('createEditorGeneration.value += 1');
+    expect(source).toContain(':key="editorInstanceKey"');
+    expect(source).toMatch(/<Modal[\s\S]*?destroy-on-close[\s\S]*?<ContentEditor/);
+    expect(source).toContain('function closeEditor()');
+    expect(source).toContain('editing.value = undefined');
+  });
+
   it('explains that an empty series list still allows standalone content', () => {
     const editor = read('views/classroom/components/content-editor.vue');
     const index = read('views/classroom/index.vue');

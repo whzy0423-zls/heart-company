@@ -49,6 +49,12 @@ const contents = ref<ClassroomContent[]>([]);
 const series = ref<ClassroomSeries[]>([]);
 const editorOpen = ref(false);
 const editing = ref<ClassroomContent>();
+const createEditorGeneration = ref(0);
+const editorInstanceKey = computed(() =>
+  editing.value
+    ? `edit-${editing.value.id}`
+    : `create-${createEditorGeneration.value}`,
+);
 const contentCoverOpen = ref(false);
 const coverEditing = ref<ClassroomContent>();
 const actionLoadingId = ref<number>();
@@ -159,7 +165,16 @@ function confirmLifecycle(
 }
 function openCreate() {
   editing.value = undefined;
+  createEditorGeneration.value += 1;
   editorOpen.value = true;
+}
+function closeEditor() {
+  editorOpen.value = false;
+  editing.value = undefined;
+}
+async function handleEditorSaved() {
+  closeEditor();
+  await load();
 }
 function openCoverEditor(record: ClassroomContent) {
   coverEditing.value = record;
@@ -318,16 +333,15 @@ onMounted(load);
       :title="editing ? '编辑课件' : '新建课件'"
       :width="760"
       :footer="null"
+      destroy-on-close
       ><ContentEditor
+        :key="editorInstanceKey"
         :content="editing"
         :series="series"
         :can-price="canPrice"
         :can-write="canWrite"
-        @cancel="editorOpen = false"
-        @saved="
-          editorOpen = false;
-          load();
-        "
+        @cancel="closeEditor"
+        @saved="handleEditorSaved"
     /></Modal>
     <Modal
       v-model:open="contentCoverOpen"
