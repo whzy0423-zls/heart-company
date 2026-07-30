@@ -69,9 +69,7 @@ describe('xinzhili TTS voice reuse configuration', () => {
 
   it('normalizes legacy TTS OpenAI-compatible provider to Bailian before display and save', () => {
     expect(viewSource).toContain('function normalizeTtsProvider');
-    expect(viewSource).toContain(
-      "normalizedEndpoint.includes('dashscope.aliyuncs.com/compatible-mode')",
-    );
+    expect(viewSource).toContain('isOfficialDashScopeTtsEndpoint(endpoint)');
     expect(viewSource).toContain('const provider = normalizeTtsProvider(');
     expect(viewSource).toContain('legacyAliyunBailianTtsPreset');
   });

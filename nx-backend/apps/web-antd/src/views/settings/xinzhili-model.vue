@@ -8,7 +8,7 @@ import type {
   XinzhiliModelConfigView,
 } from '#/api';
 
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import { useAccessStore } from '@vben/stores';
 
@@ -75,6 +75,10 @@ const legacyAliyunBailianTtsPreset = {
   endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   model: 'qwen-audio-tts-latest',
 };
+const miniMaxTtsPreset = {
+  endpoint: 'https://api.minimax.chat/v1/t2a_v2',
+  model: 'speech-02-hd',
+};
 
 const accessStore = useAccessStore();
 const loading = ref(true);
@@ -95,12 +99,16 @@ const ttsVoiceOptions = ref<VoiceOption[]>([]);
 const ttsVoiceOptionsLoading = ref(false);
 const ttsVoiceOptionsError = ref('');
 const selectedTtsVoiceOptionId = ref('');
+let loadSequence = 0;
+let unmounted = false;
 
 const canManageVoiceProfiles = computed(() =>
   accessStore.accessCodes.includes('Voice:Profile:Manage'),
 );
 const usesSharedBailianTts = computed(
-  () => form.value.tts.provider === 'bailian',
+  () =>
+    ['bailian', 'openai-compatible'].includes(form.value.tts.provider) &&
+    isOfficialDashScopeTtsEndpoint(form.value.tts.endpoint),
 );
 const sharedCredentialGateMessage = computed(() => {
   if (credentialStatus.value.error) {
@@ -198,28 +206,42 @@ function createEmptyForm(): XinzhiliModelConfigPayload {
 }
 
 onMounted(load);
+onBeforeUnmount(() => {
+  unmounted = true;
+  loadSequence += 1;
+});
 watch(
   () => form.value.tts.voice,
   () => syncSelectedTtsVoiceOption(),
 );
 watch(
-  () => form.value.tts.provider,
-  (provider) => {
-    applyTtsProviderPreset(provider);
-    syncSelectedTtsVoiceOption();
+  () => form.value.tts.endpoint,
+  (endpoint) => {
+    const nextOrigin = ttsEndpointOrigin(endpoint);
+    if (nextOrigin !== currentTtsEndpointOrigin) resetTtsPrivateSecret();
+    currentTtsEndpointOrigin = nextOrigin;
   },
 );
 
+let currentTtsEndpointOrigin = '';
+
 async function load() {
+  if (unmounted) return;
+  const currentSequence = ++loadSequence;
   loading.value = true;
   loadError.value = '';
   try {
-    applyView(await getXinzhiliModelConfigApi());
-    await loadTtsVoiceOptions();
+    const next = await getXinzhiliModelConfigApi();
+    if (unmounted || currentSequence !== loadSequence) return;
+    applyView(next);
+    await loadTtsVoiceOptions(currentSequence);
   } catch {
+    if (unmounted || currentSequence !== loadSequence) return;
     loadError.value = '芯之力模型配置加载失败，请重新加载';
   } finally {
-    loading.value = false;
+    if (!unmounted && currentSequence === loadSequence) {
+      loading.value = false;
+    }
   }
 }
 
@@ -258,21 +280,28 @@ function applyView(data: XinzhiliModelConfigView) {
     },
   };
   applyTtsProviderPreset(provider);
+  currentTtsEndpointOrigin = ttsEndpointOrigin(form.value.tts.endpoint);
   syncSelectedTtsVoiceOption();
 }
 
-async function loadTtsVoiceOptions() {
+async function loadTtsVoiceOptions(currentSequence = loadSequence) {
+  if (unmounted || currentSequence !== loadSequence) return;
   ttsVoiceOptionsLoading.value = true;
   ttsVoiceOptionsError.value = '';
   try {
-    ttsVoiceOptions.value = await getVoiceOptionsApi();
+    const options = await getVoiceOptionsApi();
+    if (unmounted || currentSequence !== loadSequence) return;
+    ttsVoiceOptions.value = options;
     syncSelectedTtsVoiceOption();
   } catch {
+    if (unmounted || currentSequence !== loadSequence) return;
     ttsVoiceOptions.value = [];
     selectedTtsVoiceOptionId.value = '';
     ttsVoiceOptionsError.value = '音色选项读取失败，可手动填写音色 ID';
   } finally {
-    ttsVoiceOptionsLoading.value = false;
+    if (!unmounted && currentSequence === loadSequence) {
+      ttsVoiceOptionsLoading.value = false;
+    }
   }
 }
 
@@ -288,14 +317,73 @@ function handleTtsVoiceOptionChange(optionId?: unknown) {
 
   const provider = voiceOptionProvider(option);
   if (provider === 'bailian') {
-    form.value.tts.provider = 'bailian';
+    changeTtsProvider('bailian');
     applyTtsProviderPreset('bailian', true);
     form.value.tts.model = option.model || aliyunBailianTtsPreset.model;
   } else if (provider === 'minimax') {
-    form.value.tts.provider = 'minimax';
-    applyTtsProviderPreset('minimax');
+    changeTtsProvider('minimax');
+    applyTtsProviderPreset('minimax', true);
   }
   form.value.tts.voice = option.voiceId;
+}
+
+function handleTtsProviderChange(providerValue?: unknown) {
+  const selected = Array.isArray(providerValue)
+    ? providerValue[0]
+    : providerValue;
+  if (
+    selected !== 'bailian' &&
+    selected !== 'minimax' &&
+    selected !== 'openai-compatible'
+  ) {
+    return;
+  }
+  changeTtsProvider(selected, true);
+}
+
+function changeTtsProvider(provider: XinzhiliTtsProvider, force = false) {
+  if (!force && provider === form.value.tts.provider) return;
+  form.value.tts.provider = provider;
+  resetTtsPrivateSecret();
+  form.value.tts.voice = '';
+  selectedTtsVoiceOptionId.value = '';
+  applyTtsProviderPreset(provider, true);
+  currentTtsEndpointOrigin = ttsEndpointOrigin(form.value.tts.endpoint);
+}
+
+function resetTtsPrivateSecret() {
+  form.value.tts.apiKey = '';
+  ttsKeySet.value = false;
+  ttsKeySuffix.value = '';
+}
+
+function ttsEndpointOrigin(endpoint?: string) {
+  const value = (endpoint || '').trim();
+  if (!value) return '';
+  try {
+    return new URL(value).origin.toLowerCase();
+  } catch {
+    return `invalid:${value.toLowerCase()}`;
+  }
+}
+
+function isOfficialDashScopeTtsEndpoint(endpoint?: string) {
+  const value = (endpoint || '').trim();
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' &&
+      url.hostname.toLowerCase() === 'dashscope.aliyuncs.com' &&
+      url.port === '' &&
+      url.username === '' &&
+      url.password === '' &&
+      url.search === '' &&
+      url.hash === ''
+    );
+  } catch {
+    return false;
+  }
 }
 
 function syncSelectedTtsVoiceOption() {
@@ -319,8 +407,7 @@ function normalizeTtsProvider(
   const normalizedModel = (model || '').trim();
   if (
     normalizedProvider === 'openai-compatible' &&
-    (normalizedEndpoint.includes('dashscope.aliyuncs.com/compatible-mode') ||
-      normalizedEndpoint === aliyunBailianTtsPreset.endpoint.toLowerCase() ||
+    (isOfficialDashScopeTtsEndpoint(endpoint) ||
       (!normalizedEndpoint && !normalizedModel))
   ) {
     return 'bailian';
@@ -354,19 +441,27 @@ function applyTtsProviderPreset(
     return;
   }
   if (provider === 'minimax') {
-    if (
+    form.value.tts.endpoint =
+      force ||
       form.value.tts.endpoint === aliyunBailianTtsPreset.endpoint ||
       form.value.tts.endpoint === legacyAliyunBailianTtsPreset.endpoint
-    ) {
-      form.value.tts.endpoint = '';
-    }
+        ? miniMaxTtsPreset.endpoint
+        : form.value.tts.endpoint;
     if (
+      force ||
       !form.value.tts.model ||
       form.value.tts.model === aliyunBailianTtsPreset.model ||
       form.value.tts.model === legacyAliyunBailianTtsPreset.model
     ) {
-      form.value.tts.model = 'speech-02-hd';
+      form.value.tts.model = miniMaxTtsPreset.model;
     }
+    form.value.tts.format = 'mp3';
+    return;
+  }
+  if (provider === 'openai-compatible' && force) {
+    form.value.tts.endpoint = '';
+    form.value.tts.model = '';
+    form.value.tts.groupId = '';
     form.value.tts.format = 'mp3';
   }
 }
@@ -428,6 +523,7 @@ function isConfigVersionConflict(errorValue: unknown) {
 }
 
 async function save() {
+  if (saving.value) return;
   if (loadError.value) {
     message.warning('请先重新加载芯之力模型配置');
     return;
@@ -442,17 +538,21 @@ async function save() {
   }
   saving.value = true;
   try {
-    form.value.enabledModes = [
+    const enabledModes = [
       'normal',
       ...form.value.enabledModes.filter((mode) => mode !== 'normal'),
-    ];
-    form.value.expectedVersion = version.value;
+    ] as XinzhiliMode[];
     const payload: XinzhiliModelConfigPayload = {
-      ...form.value,
+      commonPrompt: form.value.commonPrompt,
+      enabled: form.value.enabled,
+      enabledModes,
+      expectedVersion: version.value,
+      modePrompts: { ...form.value.modePrompts },
       realtimeAsr: {
         ...form.value.realtimeAsr,
         apiKey: '',
       },
+      timing: { ...form.value.timing },
       tts: {
         ...form.value.tts,
         apiKey: usesSharedBailianTts.value ? '' : form.value.tts.apiKey,
@@ -522,6 +622,7 @@ async function save() {
       <Form.Item label="启用芯之力实时语音">
         <Switch v-model:checked="form.enabled" />
         <span class="ml-3 text-xs text-gray-400">配置版本：{{ version }}</span>
+        <Button class="ml-3" size="small" @click="load"> 重新加载配置 </Button>
       </Form.Item>
 
       <Divider orientation="left">实时语音识别（阿里云百炼）</Divider>
@@ -530,6 +631,7 @@ async function save() {
           <Form.Item label="WebSocket Endpoint">
             <Input
               v-model:value="form.realtimeAsr.endpoint"
+              data-testid="realtime-asr-endpoint"
               placeholder="wss://dashscope.aliyuncs.com/api-ws/v1/inference"
             />
           </Form.Item>
@@ -552,9 +654,10 @@ async function save() {
         <Col :md="12" :xs="24">
           <Form.Item label="协议">
             <Select
-              v-model:value="form.tts.provider"
+              :value="form.tts.provider"
               :options="ttsProviderOptions"
               placeholder="请选择 TTS provider"
+              @change="handleTtsProviderChange"
             />
           </Form.Item>
           <Form.Item v-if="canSelectExistingTtsVoice" label="选择已有音色">
@@ -581,6 +684,7 @@ async function save() {
           <Form.Item label="Endpoint">
             <Input
               v-model:value="form.tts.endpoint"
+              data-testid="tts-endpoint"
               placeholder="https://dashscope.aliyuncs.com/api/v1"
             />
           </Form.Item>
@@ -595,12 +699,14 @@ async function save() {
           <Form.Item label="模型">
             <Input
               v-model:value="form.tts.model"
+              data-testid="tts-model"
               placeholder="如 qwen3-tts-vc-2026-01-22"
             />
           </Form.Item>
           <Form.Item label="手动音色 ID">
             <Input
               v-model:value="form.tts.voice"
+              data-testid="tts-voice"
               :placeholder="
                 form.tts.provider === 'bailian'
                   ? '阿里百炼复刻音色 ID'
@@ -639,6 +745,7 @@ async function save() {
           <Form.Item :label="`${mode.label}提示词`">
             <Textarea
               v-model:value="form.modePrompts[mode.value]"
+              :data-testid="`mode-prompt-${mode.value}`"
               :rows="3"
               placeholder="可选：填写该模式的专属提示词"
             />
@@ -649,6 +756,7 @@ async function save() {
       <Form.Item label="公共提示词">
         <Textarea
           v-model:value="form.commonPrompt"
+          data-testid="common-prompt"
           :rows="4"
           placeholder="可选：填写所有模式共用的系统提示词"
         />
@@ -660,6 +768,7 @@ async function save() {
           <Form.Item label="识别文本稳定">
             <InputNumber
               v-model:value="form.timing.partialStableMs"
+              data-testid="partial-stable-ms"
               :min="100"
               :max="1000"
               placeholder="如 150"

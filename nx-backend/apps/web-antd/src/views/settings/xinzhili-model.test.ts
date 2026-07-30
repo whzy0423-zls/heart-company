@@ -113,7 +113,18 @@ vi.mock('ant-design-vue', () => {
     Input,
     InputNumber: Input,
     Row: passthrough('Row'),
-    Select: passthrough('Select'),
+    Select: defineComponent({
+      name: 'AntSelectMock',
+      inheritAttrs: false,
+      props: {
+        options: { default: () => [], type: Array },
+        placeholder: { default: '', type: String },
+      },
+      setup(props, { attrs }) {
+        return () =>
+          h('div', attrs, [props.placeholder, JSON.stringify(props.options)]);
+      },
+    }),
     Switch: passthrough('Switch', 'button'),
     Textarea: Input,
     message: { success: vi.fn(), warning: vi.fn() },
@@ -270,6 +281,27 @@ function saveButton() {
   return document.body.querySelector(
     '[data-testid="save-model"]',
   ) as HTMLButtonElement;
+}
+
+function inputByTestId(testId: string) {
+  return document.body.querySelector(
+    `[data-testid="${testId}"]`,
+  ) as HTMLInputElement;
+}
+
+function setInput(input: HTMLInputElement, value: string) {
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function deferred<T>() {
+  let rejectPromise: (reason?: unknown) => void = () => {};
+  let resolvePromise: (value: T) => void = () => {};
+  const promise = new Promise<T>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  return { promise, reject: rejectPromise, resolve: resolvePromise };
 }
 
 describe('xinzhili model configuration page contract', () => {
@@ -477,5 +509,158 @@ describe('xinzhili shared Bailian credential behavior', () => {
       '配置已被其他管理员修改，请重新加载',
     );
     wrapper.unmount();
+  });
+
+  it('takes a deep save snapshot and preserves later edits when the request fails', async () => {
+    mocks.credentialStatus = credentialStatus();
+    const pending = deferred<XinzhiliModelConfigView>();
+    vi.mocked(updateXinzhiliModelConfigApi).mockReturnValueOnce(
+      pending.promise,
+    );
+    const view = {
+      ...config('openai-compatible', false),
+      commonPrompt: 'before-common',
+      enabledModes: ['argument', 'normal'] as const,
+      modePrompts: { normal: 'before-mode' },
+      tts: {
+        ...config('openai-compatible', false).tts,
+        endpoint: 'https://custom.example.com/v1',
+        model: 'before-model',
+        voice: 'before-voice',
+      },
+    } as XinzhiliModelConfigView;
+    const wrapper = await mountSettings(view);
+
+    saveButton().click();
+    await flushVuePromises();
+    const payload = vi.mocked(updateXinzhiliModelConfigApi).mock.calls[0]![0];
+    setInput(inputByTestId('common-prompt'), 'after-common');
+    setInput(inputByTestId('mode-prompt-normal'), 'after-mode');
+    setInput(inputByTestId('partial-stable-ms'), '260');
+    setInput(inputByTestId('realtime-asr-endpoint'), 'wss://after.example/ws');
+    setInput(inputByTestId('tts-endpoint'), 'https://after.example/v1');
+    setInput(inputByTestId('tts-model'), 'after-model');
+    setInput(inputByTestId('tts-voice'), 'after-voice');
+    await flushVuePromises();
+
+    expect(payload).toMatchObject({
+      commonPrompt: 'before-common',
+      enabledModes: ['normal', 'argument'],
+      modePrompts: { normal: 'before-mode' },
+      realtimeAsr: {
+        endpoint: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference',
+      },
+      timing: { partialStableMs: 150 },
+      tts: {
+        endpoint: 'https://custom.example.com/v1',
+        model: 'before-model',
+        voice: 'before-voice',
+      },
+    });
+
+    pending.reject(new Error('save failed'));
+    await flushVuePromises();
+    expect(inputByTestId('common-prompt').value).toBe('after-common');
+    expect(inputByTestId('mode-prompt-normal').value).toBe('after-mode');
+    expect(inputByTestId('tts-model').value).toBe('after-model');
+    wrapper.unmount();
+  });
+
+  it('ignores duplicate main-config saves while the first request is pending', async () => {
+    mocks.credentialStatus = credentialStatus();
+    const pending = deferred<XinzhiliModelConfigView>();
+    vi.mocked(updateXinzhiliModelConfigApi).mockReturnValue(pending.promise);
+    const wrapper = await mountSettings(config('bailian', false));
+
+    saveButton().click();
+    saveButton().click();
+    await flushVuePromises();
+
+    expect(updateXinzhiliModelConfigApi).toHaveBeenCalledOnce();
+    pending.resolve(config('bailian', false));
+    await flushVuePromises();
+    wrapper.unmount();
+  });
+
+  it('keeps the newest config response when reloads resolve out of order', async () => {
+    const first = deferred<XinzhiliModelConfigView>();
+    const second = deferred<XinzhiliModelConfigView>();
+    vi.mocked(getXinzhiliModelConfigApi)
+      .mockReset()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    vi.mocked(getVoiceOptionsApi).mockResolvedValue([]);
+    const wrapper = mountVueComponent(XinzhiliModelSettings);
+    await flushVuePromises();
+
+    (wrapper.button('重新加载配置') as HTMLButtonElement).click();
+    second.resolve({ ...config('bailian', false), version: 9 });
+    await flushVuePromises();
+    expect(wrapper.text()).toContain('配置版本：9');
+
+    first.resolve({ ...config('bailian', false), version: 4 });
+    await flushVuePromises();
+    expect(wrapper.text()).toContain('配置版本：9');
+    expect(wrapper.text()).not.toContain('配置版本：4');
+    expect(getVoiceOptionsApi).toHaveBeenCalledOnce();
+    wrapper.unmount();
+  });
+
+  it('keeps the newest voice options when reloads resolve out of order', async () => {
+    const oldOptions =
+      deferred<Awaited<ReturnType<typeof getVoiceOptionsApi>>>();
+    vi.mocked(getXinzhiliModelConfigApi).mockResolvedValue(
+      config('bailian', false),
+    );
+    vi.mocked(getVoiceOptionsApi)
+      .mockReset()
+      .mockReturnValueOnce(oldOptions.promise)
+      .mockResolvedValueOnce([
+        {
+          id: 'clone:new',
+          label: '最新音色',
+          model: 'qwen3-tts-vc-2026-01-22',
+          provider: 'bailian',
+          source: 'clone',
+          voiceId: 'new-voice',
+          voiceName: '最新音色',
+        },
+      ]);
+    const wrapper = mountVueComponent(XinzhiliModelSettings);
+    await flushVuePromises();
+    (wrapper.button('重新加载配置') as HTMLButtonElement).click();
+    await flushVuePromises();
+    expect(wrapper.text()).toContain('最新音色');
+
+    oldOptions.resolve([
+      {
+        id: 'clone:old',
+        label: '过期音色',
+        model: 'qwen3-tts-vc-2026-01-22',
+        provider: 'bailian',
+        source: 'clone',
+        voiceId: 'old-voice',
+        voiceName: '过期音色',
+      },
+    ]);
+    await flushVuePromises();
+    expect(wrapper.text()).toContain('最新音色');
+    expect(wrapper.text()).not.toContain('过期音色');
+    wrapper.unmount();
+  });
+
+  it('stops the load chain when the page unmounts before config resolves', async () => {
+    const configLoad = deferred<XinzhiliModelConfigView>();
+    vi.mocked(getXinzhiliModelConfigApi)
+      .mockReset()
+      .mockReturnValue(configLoad.promise);
+    vi.mocked(getVoiceOptionsApi).mockReset();
+    const wrapper = mountVueComponent(XinzhiliModelSettings);
+    await flushVuePromises();
+    wrapper.unmount();
+
+    configLoad.resolve(config('bailian', false));
+    await flushVuePromises();
+    expect(getVoiceOptionsApi).not.toHaveBeenCalled();
   });
 });
