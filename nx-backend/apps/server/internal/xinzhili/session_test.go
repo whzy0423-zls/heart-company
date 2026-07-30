@@ -2,8 +2,11 @@ package xinzhili
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -59,7 +62,7 @@ func TestModelIdentityRealtimeBypassesGeneratorAndCompletesVoiceDelivery(t *test
 			if fixture.generator.calls() != 0 {
 				t.Fatalf("generator calls=%d", fixture.generator.calls())
 			}
-			fixture.sink.assertNoControl(t)
+			fixture.sink.assertNoErrorControl(t)
 		})
 	}
 }
@@ -73,6 +76,41 @@ func TestConversationBlankASRDoesNotCallModelOrPersist(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	if fixture.generator.calls() != 0 || fixture.store.userCount() != 0 {
 		t.Fatalf("blank transcript generated=%d users=%d", fixture.generator.calls(), fixture.store.userCount())
+	}
+}
+
+func TestSpeechStartedEmitsASRActivity(t *testing.T) {
+	fixture := newSessionFixture(t)
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-asr-activity")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventSpeechStarted})
+	event := fixture.sink.waitControl(t, EventASRActivity)
+	if event.TurnID == nil || *event.TurnID != "turn-asr-activity" {
+		t.Fatalf("asr.activity turnId = %v", event.TurnID)
+	}
+}
+
+func TestSpeechStartedDoesNotRegressProcessingState(t *testing.T) {
+	sink := newFakeSessionSink()
+	s := &session{deps: SessionDependencies{Sink: sink}}
+	turn := &activeTurn{
+		input: StartTurnInput{TurnID: "turn-already-processing"},
+		ctx:   context.Background(), processing: true,
+	}
+	s.handleASREvent(turn, ASREvent{Kind: ASREventSpeechStarted})
+	sink.assertNoControl(t)
+}
+
+func TestStableTranscriptEmitsTurnProcessing(t *testing.T) {
+	fixture := newSessionFixture(t)
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-processing")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "我想聊一聊", Stable: true})
+	event := fixture.sink.waitControl(t, EventTurnProcessing)
+	if event.TurnID == nil || *event.TurnID != "turn-processing" {
+		t.Fatalf("turn.processing turnId = %v", event.TurnID)
 	}
 }
 
@@ -92,6 +130,31 @@ func TestConversationWithoutChatModelReturnsStableError(t *testing.T) {
 	}
 	if payload.Code != "chat_model_not_configured" {
 		t.Fatalf("code=%q", payload.Code)
+	}
+	if payload.TurnID == nil || *payload.TurnID != "turn-model-missing" {
+		t.Fatalf("payload turnId=%v", payload.TurnID)
+	}
+	if event.TurnID != nil || event.TurnSeq != nil {
+		t.Fatalf("session-level error carried turn fields: turnId=%v turnSeq=%v", event.TurnID, event.TurnSeq)
+	}
+	done := fixture.sink.waitControl(t, EventAssistantDone)
+	if done.TurnID == nil || *done.TurnID != "turn-model-missing" {
+		t.Fatalf("assistant.done turnId=%v", done.TurnID)
+	}
+	var donePayload struct {
+		SegmentCount int `json:"segmentCount"`
+	}
+	if err := json.Unmarshal(done.Payload, &donePayload); err != nil {
+		t.Fatal(err)
+	}
+	if donePayload.SegmentCount != 0 {
+		t.Fatalf("assistant.done segmentCount=%d want=0", donePayload.SegmentCount)
+	}
+	sessionID, sessionSeq := "session-test", uint64(0)
+	event.SessionID = &sessionID
+	event.SessionSeq = &sessionSeq
+	if _, err := EncodeEnvelope(event, DirectionServer, true); err != nil {
+		t.Fatalf("error envelope cannot be encoded: %v", err)
 	}
 	if fixture.store.userCount() != 0 {
 		t.Fatal("model missing must not persist a user turn")
@@ -150,6 +213,126 @@ func TestDeliveryCreatesAssistantAfterFirstAudioAndAcknowledgesExactPrefixes(t *
 	fixture.store.waitCompleteAck(t)
 }
 
+func TestDeliveryWrapsAudioWithStartAndEndControls(t *testing.T) {
+	fixture := newSessionFixture(t)
+	audio := []byte("complete-mp3-segment")
+	digest := sha256.Sum256(audio)
+	fixture.synth.segments = []AudioSegment{{
+		Seq: 0, Audio: audio, MIME: "audio/mpeg", SHA256: digest, ByteLength: len(audio), deliveryText: "先慢慢呼吸。",
+	}}
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-audio-envelope")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "我有点紧张", Stable: true})
+
+	var start fakeSessionWireEvent
+	for start.control == nil || start.control.Type != EventAssistantAudioStart {
+		start = <-fixture.sink.wire
+		if start.audio != nil {
+			t.Fatalf("audio arrived before assistant.audio_start: %+v", start)
+		}
+	}
+	var metadata struct {
+		SegmentSeq uint32 `json:"segmentSeq"`
+		MIMEType   string `json:"mimeType"`
+		ByteLength int    `json:"byteLength"`
+		SHA256     string `json:"sha256"`
+	}
+	if err := json.Unmarshal(start.control.Payload, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata.SegmentSeq != 0 || metadata.MIMEType != "audio/mpeg" || metadata.ByteLength != len(audio) || metadata.SHA256 != fmt.Sprintf("%x", digest) {
+		t.Fatalf("audio metadata = %+v", metadata)
+	}
+
+	binary := <-fixture.sink.wire
+	if binary.audio == nil || binary.audio.Seq != 0 || string(binary.audio.Audio) != string(audio) {
+		t.Fatalf("second wire event = %+v, want MP3 segment", binary)
+	}
+
+	end := <-fixture.sink.wire
+	if end.control == nil || end.control.Type != EventAssistantAudioEnd {
+		t.Fatalf("third wire event = %+v, want assistant.audio_end", end)
+	}
+	var ended struct {
+		SegmentSeq uint32 `json:"segmentSeq"`
+	}
+	if err := json.Unmarshal(end.control.Payload, &ended); err != nil {
+		t.Fatal(err)
+	}
+	if ended.SegmentSeq != 0 {
+		t.Fatalf("audio end segmentSeq = %d", ended.SegmentSeq)
+	}
+}
+
+func TestDeliverySignalsAssistantDoneAfterFinalAudioSegment(t *testing.T) {
+	fixture := newSessionFixture(t)
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-assistant-done")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "请回答我", Stable: true})
+	fixture.sink.waitAudio(t)
+	done := fixture.sink.waitControl(t, EventAssistantDone)
+	if done.TurnID == nil || *done.TurnID != "turn-assistant-done" {
+		t.Fatalf("assistant.done turnId = %v", done.TurnID)
+	}
+}
+
+func TestDeliveryOrdersMultipleAudioSegmentsBeforeAssistantDone(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.synth.segments = []AudioSegment{
+		{Seq: 0, Audio: []byte{1}, MIME: "audio/mpeg", deliveryText: "先呼吸。"},
+		{Seq: 1, Audio: []byte{2}, MIME: "audio/mpeg", deliveryText: "再感受脚底。"},
+	}
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-multi-segment")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "请分两段回答", Stable: true})
+
+	got := make([]string, 0, 7)
+	turnSeqs := make([]uint64, 0, 5)
+	deadline := time.After(time.Second)
+	for len(got) < 7 {
+		select {
+		case event := <-fixture.sink.wire:
+			if event.audio != nil {
+				got = append(got, fmt.Sprintf("binary:%d", event.audio.Seq))
+				continue
+			}
+			if event.control == nil {
+				continue
+			}
+			var payload struct {
+				SegmentSeq   uint32 `json:"segmentSeq"`
+				SegmentCount int    `json:"segmentCount"`
+			}
+			_ = json.Unmarshal(event.control.Payload, &payload)
+			switch event.control.Type {
+			case EventAssistantAudioStart:
+				got = append(got, fmt.Sprintf("start:%d", payload.SegmentSeq))
+			case EventAssistantAudioEnd:
+				got = append(got, fmt.Sprintf("end:%d", payload.SegmentSeq))
+			case EventAssistantDone:
+				got = append(got, fmt.Sprintf("done:%d", payload.SegmentCount))
+			default:
+				continue
+			}
+			if event.control.TurnSeq == nil {
+				t.Fatalf("%s missing turnSeq", event.control.Type)
+			}
+			turnSeqs = append(turnSeqs, *event.control.TurnSeq)
+		case <-deadline:
+			t.Fatalf("wire order incomplete: %v", got)
+		}
+	}
+	if want := []string{"start:0", "binary:0", "end:0", "start:1", "binary:1", "end:1", "done:2"}; !slices.Equal(got, want) {
+		t.Fatalf("wire order=%v want=%v", got, want)
+	}
+	if want := []uint64{1, 2, 3, 4, 5}; !slices.Equal(turnSeqs, want) {
+		t.Fatalf("turnSeqs=%v want=%v", turnSeqs, want)
+	}
+}
+
 func TestDeliveryCompletesAuditWhenLaterTTSChunkFails(t *testing.T) {
 	fixture := newSessionFixture(t)
 	fixture.generator.answer = "第一段。第二段。"
@@ -163,7 +346,27 @@ func TestDeliveryCompletesAuditWhenLaterTTSChunkFails(t *testing.T) {
 	if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-tts-fail", SegmentSeq: first.Seq}); err != nil {
 		t.Fatal(err)
 	}
-	fixture.sink.waitControl(t, EventError)
+	errorEvent := fixture.sink.waitControl(t, EventError)
+	var errorPayload ErrorPayload
+	if err := json.Unmarshal(errorEvent.Payload, &errorPayload); err != nil {
+		t.Fatal(err)
+	}
+	if errorPayload.TurnID == nil || *errorPayload.TurnID != "turn-tts-fail" {
+		t.Fatalf("tts error payload turnId=%v", errorPayload.TurnID)
+	}
+	done := fixture.sink.waitControl(t, EventAssistantDone)
+	if done.TurnID == nil || *done.TurnID != "turn-tts-fail" {
+		t.Fatalf("assistant.done turnId=%v", done.TurnID)
+	}
+	var donePayload struct {
+		SegmentCount int `json:"segmentCount"`
+	}
+	if err := json.Unmarshal(done.Payload, &donePayload); err != nil {
+		t.Fatal(err)
+	}
+	if donePayload.SegmentCount != 1 {
+		t.Fatalf("assistant.done segmentCount=%d want=1", donePayload.SegmentCount)
+	}
 	fixture.store.waitCompleted(t)
 	fixture.store.mu.Lock()
 	content, delivered := fixture.store.completedContent, fixture.store.delivered[len(fixture.store.delivered)-1]
@@ -580,17 +783,31 @@ func (s *fakeSynthesizer) synthesizedTexts() []string {
 type fakeSessionSink struct {
 	controls chan Envelope
 	audio    chan AudioSegment
+	wire     chan fakeSessionWireEvent
+}
+
+type fakeSessionWireEvent struct {
+	control *Envelope
+	audio   *AudioSegment
 }
 
 func newFakeSessionSink() *fakeSessionSink {
-	return &fakeSessionSink{controls: make(chan Envelope, 16), audio: make(chan AudioSegment, 16)}
+	return &fakeSessionSink{
+		controls: make(chan Envelope, 16),
+		audio:    make(chan AudioSegment, 16),
+		wire:     make(chan fakeSessionWireEvent, 64),
+	}
 }
 func (s *fakeSessionSink) SendControl(_ context.Context, event Envelope) error {
 	s.controls <- event
+	copy := event
+	s.wire <- fakeSessionWireEvent{control: &copy}
 	return nil
 }
 func (s *fakeSessionSink) SendAudio(_ context.Context, segment AudioSegment) error {
 	s.audio <- segment
+	copy := segment
+	s.wire <- fakeSessionWireEvent{audio: &copy}
 	return nil
 }
 func (s *fakeSessionSink) waitControl(t *testing.T, kind EventType) Envelope {
@@ -623,6 +840,20 @@ func (s *fakeSessionSink) assertNoControl(t *testing.T) {
 	case event := <-s.controls:
 		t.Fatalf("unexpected control event: type=%s payload=%s", event.Type, event.Payload)
 	default:
+	}
+}
+
+func (s *fakeSessionSink) assertNoErrorControl(t *testing.T) {
+	t.Helper()
+	for {
+		select {
+		case event := <-s.controls:
+			if event.Type == EventError {
+				t.Fatalf("unexpected error control: payload=%s", event.Payload)
+			}
+		default:
+			return
+		}
 	}
 }
 

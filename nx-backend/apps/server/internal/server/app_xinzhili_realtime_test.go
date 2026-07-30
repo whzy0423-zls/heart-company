@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -52,6 +53,49 @@ type fakeXinzhiliModeStore struct {
 	readErr    error
 	updateErr  error
 	updates    []xinzhili.ModePreference
+}
+
+type recordingXinzhiliTurnSession struct {
+	pcm []xinzhili.PCMFrame
+}
+
+func (s *recordingXinzhiliTurnSession) StartTurn(context.Context, xinzhili.StartTurnInput) error {
+	return nil
+}
+func (s *recordingXinzhiliTurnSession) PushPCM(_ context.Context, frame xinzhili.PCMFrame) error {
+	s.pcm = append(s.pcm, frame)
+	return nil
+}
+func (s *recordingXinzhiliTurnSession) HandlePlaybackAck(context.Context, xinzhili.PlaybackAck) error {
+	return nil
+}
+func (s *recordingXinzhiliTurnSession) Interrupt(context.Context, string) error { return nil }
+func (s *recordingXinzhiliTurnSession) Cancel(context.Context, string) error    { return nil }
+func (s *recordingXinzhiliTurnSession) Close() error                            { return nil }
+
+func newXinzhiliWebsocketPair(t *testing.T) (*websocket.Conn, *websocket.Conn) {
+	t.Helper()
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	serverConn := make(chan *websocket.Conn, 1)
+	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		serverConn <- conn
+	}))
+	t.Cleanup(h.Close)
+	client, _, err := websocket.DefaultDialer.Dial("ws"+h.URL[len("http"):], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := <-serverConn
+	t.Cleanup(func() {
+		_ = client.Close()
+		_ = server.Close()
+	})
+	return server, client
 }
 
 func (s *fakeXinzhiliModeStore) ReadMode(context.Context, int64) (xinzhili.ModePreference, bool, error) {
@@ -180,7 +224,7 @@ func TestXinzhiliWSSinkSendAudioUsesConnectionGeneration(t *testing.T) {
 	}
 }
 
-func TestXinzhiliWSSinkSendControlUsesConnectionGeneration(t *testing.T) {
+func TestXinzhiliWSSinkSendControlUsesConnectionGenerationAndMonotonicSequence(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	serverConn := make(chan *websocket.Conn, 1)
 	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -201,27 +245,31 @@ func TestXinzhiliWSSinkSendControlUsesConnectionGeneration(t *testing.T) {
 	defer conn.Close()
 	rc := &xinzhiliRealtimeConn{ws: conn, sessionID: "xz-test", generation: 9}
 	sink := &xinzhiliWSSink{conn: rc}
-	if err := sink.SendControl(context.Background(), xinzhili.Envelope{
-		ProtocolVersion: xinzhili.ProtocolVersion,
-		Type:            xinzhili.EventSessionReady,
-		Payload:         json.RawMessage(`{}`),
-	}); err != nil {
-		t.Fatalf("SendControl: %v", err)
+	for _, kind := range []xinzhili.EventType{xinzhili.EventSessionReady, xinzhili.EventConfigChanged} {
+		if err := sink.SendControl(context.Background(), xinzhili.Envelope{
+			ProtocolVersion: xinzhili.ProtocolVersion,
+			Type:            kind,
+			Payload:         json.RawMessage(`{}`),
+		}); err != nil {
+			t.Fatalf("SendControl(%s): %v", kind, err)
+		}
 	}
 	_ = client.SetReadDeadline(time.Now().Add(time.Second))
-	kind, data, err := client.ReadMessage()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if kind != websocket.TextMessage {
-		t.Fatalf("frame kind = %d, want text", kind)
-	}
-	envelope, err := xinzhili.DecodeEnvelope(data, xinzhili.DirectionServer, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if envelope.Generation != 9 {
-		t.Fatalf("generation = %d, want 9", envelope.Generation)
+	for wantSeq := uint64(0); wantSeq < 2; wantSeq++ {
+		kind, data, err := client.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if kind != websocket.TextMessage {
+			t.Fatalf("frame kind = %d, want text", kind)
+		}
+		envelope, err := xinzhili.DecodeEnvelope(data, xinzhili.DirectionServer, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if envelope.Generation != 9 || envelope.SessionSeq == nil || *envelope.SessionSeq != wantSeq {
+			t.Fatalf("envelope generation=%d sessionSeq=%v, want generation=9 sessionSeq=%d", envelope.Generation, envelope.SessionSeq, wantSeq)
+		}
 	}
 }
 
@@ -246,3 +294,226 @@ func TestXinzhiliWSSinkReturnsWriteError(t *testing.T) {
 		t.Fatal("SendAudio returned nil after connection close")
 	}
 }
+
+func TestXinzhiliBinaryRejectsMismatchedGeneration(t *testing.T) {
+	serverWS, _ := newXinzhiliWebsocketPair(t)
+	session := &recordingXinzhiliTurnSession{}
+	c := &xinzhiliRealtimeConn{
+		ws: serverWS, sess: session, generation: 7, sessionID: "xz-test",
+		turns: map[uint64]string{42: "turn-1"},
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+	data, err := xinzhili.EncodeBinaryFrame(xinzhili.BinaryFrame{
+		FrameType: xinzhili.FrameTypeInputPCM, Flags: xinzhili.FlagStart,
+		Generation: 6, TurnKey: 42, AudioSeq: 0, Payload: []byte{1, 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.handleBinary(context.Background(), data)
+	if len(session.pcm) != 0 {
+		t.Fatalf("mismatched generation forwarded %d PCM frames", len(session.pcm))
+	}
+}
+
+func TestXinzhiliBinaryDropsDuplicateAudioSequence(t *testing.T) {
+	serverWS, _ := newXinzhiliWebsocketPair(t)
+	session := &recordingXinzhiliTurnSession{}
+	c := &xinzhiliRealtimeConn{
+		ws: serverWS, sess: session, generation: 7, sessionID: "xz-test",
+		turns: map[uint64]string{42: "turn-1"},
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+	data, err := xinzhili.EncodeBinaryFrame(xinzhili.BinaryFrame{
+		FrameType: xinzhili.FrameTypeInputPCM, Flags: xinzhili.FlagStart,
+		Generation: 7, TurnKey: 42, AudioSeq: 0, Payload: []byte{1, 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.handleBinary(context.Background(), data)
+	c.handleBinary(context.Background(), data)
+	if len(session.pcm) != 1 {
+		t.Fatalf("duplicate audio sequence forwarded %d PCM frames", len(session.pcm))
+	}
+}
+
+func TestXinzhiliControlDropsDuplicateClientSequence(t *testing.T) {
+	serverWS, clientWS := newXinzhiliWebsocketPair(t)
+	c := &xinzhiliRealtimeConn{
+		ws: serverWS, sess: &recordingXinzhiliTurnSession{}, generation: 7,
+		sessionID: "xz-test", turns: make(map[uint64]string),
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+	sessionSeq := uint64(0)
+	envelope := xinzhili.Envelope{
+		ProtocolVersion: xinzhili.ProtocolVersion,
+		Type:            xinzhili.EventSessionPing,
+		SessionID:       &c.sessionID,
+		Generation:      7,
+		SessionSeq:      &sessionSeq,
+		TimestampMs:     time.Now().UnixMilli(),
+		Payload:         json.RawMessage(`{}`),
+	}
+	data, err := xinzhili.EncodeEnvelope(envelope, xinzhili.DirectionClient, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.handleEnvelope(context.Background(), data)
+	c.handleEnvelope(context.Background(), data)
+
+	_ = clientWS.SetReadDeadline(time.Now().Add(time.Second))
+	if _, _, err := clientWS.ReadMessage(); err != nil {
+		t.Fatalf("first pong: %v", err)
+	}
+	_ = clientWS.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	if _, _, err := clientWS.ReadMessage(); err == nil {
+		t.Fatal("duplicate client sessionSeq produced a second pong")
+	}
+}
+
+func TestXinzhiliPreReadySequenceErrorUsesClientGeneration(t *testing.T) {
+	serverWS, clientWS := newXinzhiliWebsocketPair(t)
+	c := &xinzhiliRealtimeConn{ws: serverWS, turns: make(map[uint64]string)}
+	c.sink = &xinzhiliWSSink{conn: c}
+	sessionSeq := uint64(1)
+	start := xinzhili.Envelope{
+		ProtocolVersion: xinzhili.ProtocolVersion,
+		Type:            xinzhili.EventSessionStart, Generation: 7, SessionSeq: &sessionSeq,
+		TimestampMs: 1, Payload: json.RawMessage(`{"cardId":1,"conversationId":0}`),
+	}
+	data, err := xinzhili.EncodeEnvelope(start, xinzhili.DirectionClient, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.handleEnvelope(context.Background(), data)
+
+	_ = clientWS.SetReadDeadline(time.Now().Add(time.Second))
+	_, response, err := clientWS.ReadMessage()
+	if err != nil {
+		t.Fatalf("read protocol error: %v", err)
+	}
+	envelope, err := xinzhili.DecodeEnvelope(response, xinzhili.DirectionServer, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Generation != 7 {
+		t.Fatalf("error generation=%d want=7", envelope.Generation)
+	}
+	var payload xinzhili.ErrorPayload
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Code != "control_sequence_gap" {
+		t.Fatalf("error code=%q", payload.Code)
+	}
+}
+
+func TestXinzhiliPreReadyDecodeErrorsReturnEncodableSessionErrors(t *testing.T) {
+	tests := []struct {
+		name           string
+		request        string
+		wantCode       string
+		wantGeneration uint32
+	}{
+		{
+			name:           "malformed json",
+			request:        `{`,
+			wantCode:       xinzhili.ProtocolErrorInvalidEnvelope,
+			wantGeneration: 0,
+		},
+		{
+			name:           "unsupported version",
+			request:        `{"protocolVersion":"xinzhili.voice.v0","type":"session.start","sessionId":null,"generation":7,"turnId":null,"sessionSeq":0,"turnSeq":null,"configVersion":0,"timestampMs":1,"payload":{"cardId":1,"conversationId":0}}`,
+			wantCode:       xinzhili.ProtocolErrorUnsupportedVersion,
+			wantGeneration: 7,
+		},
+		{
+			name:           "invalid event direction",
+			request:        `{"protocolVersion":"xinzhili.voice.v1","type":"session.ready","sessionId":"client-session","generation":8,"turnId":null,"sessionSeq":0,"turnSeq":null,"configVersion":0,"timestampMs":1,"payload":{}}`,
+			wantCode:       xinzhili.ProtocolErrorInvalidEventDirection,
+			wantGeneration: 8,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			serverWS, clientWS := newXinzhiliWebsocketPair(t)
+			c := &xinzhiliRealtimeConn{ws: serverWS, turns: make(map[uint64]string)}
+			c.sink = &xinzhiliWSSink{conn: c}
+
+			c.handleEnvelope(context.Background(), []byte(tt.request))
+
+			_ = clientWS.SetReadDeadline(time.Now().Add(time.Second))
+			kind, response, err := clientWS.ReadMessage()
+			if err != nil {
+				t.Fatalf("read pre-ready protocol error: %v", err)
+			}
+			if kind != websocket.TextMessage {
+				t.Fatalf("frame kind=%d want text", kind)
+			}
+			envelope, err := xinzhili.DecodeEnvelope(response, xinzhili.DirectionServer, false)
+			if err != nil {
+				t.Fatalf("decode pre-ready protocol error: %v; response=%s", err, response)
+			}
+			if envelope.Type != xinzhili.EventError || envelope.TurnID != nil || envelope.TurnSeq != nil {
+				t.Fatalf("pre-ready error is not session-level: %+v", envelope)
+			}
+			if envelope.SessionID == nil || *envelope.SessionID == "" {
+				t.Fatalf("pre-ready error has invalid sessionId: %+v", envelope.SessionID)
+			}
+			if envelope.Generation != tt.wantGeneration {
+				t.Fatalf("generation=%d want=%d", envelope.Generation, tt.wantGeneration)
+			}
+			var payload xinzhili.ErrorPayload
+			if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Code != tt.wantCode {
+				t.Fatalf("error code=%q want=%q", payload.Code, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestXinzhiliTurnCancelReleasesTurnSequenceState(t *testing.T) {
+	turnID := "turn-cancel"
+	turnKey := xinzhili.TurnKey(turnID)
+	guard := xinzhili.NewSequenceGuard(7)
+	startSessionSeq, startTurnSeq := uint64(0), uint64(0)
+	start := xinzhili.Envelope{
+		ProtocolVersion: xinzhili.ProtocolVersion,
+		Type:            xinzhili.EventTurnStart, SessionID: stringPtr("xz-test"), Generation: 7,
+		TurnID: &turnID, SessionSeq: &startSessionSeq, TurnSeq: &startTurnSeq,
+		TimestampMs: 1, Payload: json.RawMessage(fmt.Sprintf(`{"turnKey":%d}`, turnKey)),
+	}
+	if disposition, err := guard.Observe(xinzhili.DirectionClient, start); err != nil || disposition != xinzhili.SequenceAccept {
+		t.Fatalf("prime sequence guard: disposition=%v err=%v", disposition, err)
+	}
+	if err := guard.RegisterActiveTurn(turnID, turnKey); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &xinzhiliRealtimeConn{
+		sess: &recordingXinzhiliTurnSession{}, generation: 7, sessionID: "xz-test",
+		sequence: guard, turnKey: turnKey,
+		turns: map[uint64]string{turnKey: turnID}, audioSeq: map[uint64]uint32{turnKey: 3},
+	}
+	cancelSessionSeq, cancelTurnSeq := uint64(1), uint64(1)
+	cancel := xinzhili.Envelope{
+		ProtocolVersion: xinzhili.ProtocolVersion,
+		Type:            xinzhili.EventTurnCancel, SessionID: &c.sessionID, Generation: 7,
+		TurnID: &turnID, SessionSeq: &cancelSessionSeq, TurnSeq: &cancelTurnSeq,
+		TimestampMs: 2, Payload: json.RawMessage(`{}`),
+	}
+	data, err := xinzhili.EncodeEnvelope(cancel, xinzhili.DirectionClient, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.handleEnvelope(context.Background(), data)
+	if len(c.turns) != 0 || len(c.audioSeq) != 0 || c.turnKey != 0 {
+		t.Fatalf("cancel retained turn state: turns=%v audioSeq=%v turnKey=%d", c.turns, c.audioSeq, c.turnKey)
+	}
+}
+
+func stringPtr(value string) *string { return &value }
