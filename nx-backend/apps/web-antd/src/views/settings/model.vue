@@ -284,26 +284,6 @@ function currentChatPayload(): ModelConfigPayload['chat'] | null {
   };
 }
 
-function applySiliconFlowVoicePreset() {
-  Object.assign(form.value.xinzhiliVoice.asr, {
-    provider: 'openai-compatible',
-    apiBase: 'https://api.siliconflow.cn/v1',
-    model: 'FunAudioLLM/SenseVoiceSmall',
-    language: 'zh',
-    timeoutSeconds: 30,
-  });
-  Object.assign(form.value.xinzhiliVoice.tts, {
-    provider: 'openai-compatible',
-    apiBase: 'https://api.siliconflow.cn/v1',
-    model: 'FunAudioLLM/CosyVoice2-0.5B',
-    voice: 'FunAudioLLM/CosyVoice2-0.5B:alex',
-    speed: 1,
-    responseFormat: 'mp3',
-    timeoutSeconds: 45,
-  });
-  message.success('已填充硅基流动免费语音预设，已输入的 API Key 保持不变');
-}
-
 async function save() {
   saving.value = true;
   try {
@@ -709,14 +689,6 @@ async function testChat() {
         />
         <Form.Item label="启用芯之力语音">
           <Switch v-model:checked="form.xinzhiliVoice.enabled" />
-        </Form.Item>
-        <Form.Item label="快捷预设">
-          <Button @click="applySiliconFlowVoicePreset">
-            使用硅基流动免费预设
-          </Button>
-          <span class="ml-2 text-xs text-gray-400">
-            只填充模型、地址与音色，不会修改 ASR / TTS API Key
-          </span>
         </Form.Item>
         <Row :gutter="24">
           <Col :md="12" :xs="24">
