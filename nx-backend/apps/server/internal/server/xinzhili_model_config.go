@@ -179,9 +179,6 @@ func shouldClearChangedTTSSecret(before, after xinzhili.TTSConfig, incoming xinz
 }
 
 func ttsCredentialScope(cfg xinzhili.TTSConfig) string {
-	if xinzhili.TTSUsesBailianCredentials(cfg) {
-		return "bailian-shared"
-	}
 	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
 	endpoint := strings.TrimSpace(cfg.Endpoint)
 	parsed, err := url.Parse(endpoint)

@@ -429,6 +429,92 @@ func TestXinzhiliCredentialSaveBailianEndpointPathStillUsesSharedKey(t *testing.
 	}
 }
 
+func TestXinzhiliCredentialSaveLegacyNativeBailianOriginChangeRequiresNewKey(t *testing.T) {
+	stored := legacyNativeBailianConfigForHandler(20, "https://bailian-a.example/api/v1", "legacy-bailian-private")
+	store := &fakeXinzhiliModelConfigStore{config: stored, found: true}
+	incoming := stored
+	incoming.TTS.Endpoint = "https://bailian-b.example/api/v1"
+	incoming.TTS.APIKey = ""
+	s := &Server{xinzhiliModelConfig: store, bailianCredentials: &memoryBailianCredentialStore{}}
+	res := putXinzhiliModelConfig(t, s, incoming, 20)
+	if res.Code != http.StatusBadRequest || store.updateCalls != 0 {
+		t.Fatalf("status=%d updateCalls=%d body=%s", res.Code, store.updateCalls, res.Body.String())
+	}
+}
+
+func TestXinzhiliCredentialSaveLegacyNativeBailianProviderChangeRequiresNewKey(t *testing.T) {
+	stored := legacyNativeBailianConfigForHandler(21, "https://dashscope.aliyuncs.com/api/v1", "legacy-bailian-private")
+	store := &fakeXinzhiliModelConfigStore{config: stored, found: true}
+	incoming := stored
+	incoming.TTS.Provider = xinzhili.TTSProviderOpenAICompatible
+	incoming.TTS.Endpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	incoming.TTS.APIKey = ""
+	s := &Server{xinzhiliModelConfig: store, bailianCredentials: &memoryBailianCredentialStore{}}
+	res := putXinzhiliModelConfig(t, s, incoming, 21)
+	if res.Code != http.StatusBadRequest || store.updateCalls != 0 {
+		t.Fatalf("status=%d updateCalls=%d body=%s", res.Code, store.updateCalls, res.Body.String())
+	}
+}
+
+func TestXinzhiliCredentialSaveLegacyNativeBailianSameOriginPathChangePreservesKey(t *testing.T) {
+	stored := legacyNativeBailianConfigForHandler(22, "https://legacy-bailian.example/api/v1", "legacy-bailian-private")
+	store := &fakeXinzhiliModelConfigStore{config: stored, found: true}
+	incoming := stored
+	incoming.TTS.Endpoint = "https://legacy-bailian.example/compatible-mode/v1/"
+	incoming.TTS.APIKey = ""
+	s := &Server{xinzhiliModelConfig: store, bailianCredentials: &memoryBailianCredentialStore{}}
+	res := putXinzhiliModelConfig(t, s, incoming, 22)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if store.config.TTS.APIKey != "legacy-bailian-private" {
+		t.Fatalf("same-origin legacy Bailian key was lost: %+v", store.config.TTS)
+	}
+}
+
+func TestXinzhiliCredentialSaveSharedRecordAllowsNativeBailianScopeChanges(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		provider string
+		endpoint string
+	}{
+		{name: "origin change", provider: xinzhili.TTSProviderBailian, endpoint: "https://bailian-b.example/api/v1"},
+		{name: "provider change", provider: xinzhili.TTSProviderOpenAICompatible, endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stored := legacyNativeBailianConfigForHandler(23, "https://dashscope.aliyuncs.com/api/v1", "legacy-bailian-private")
+			store := &fakeXinzhiliModelConfigStore{config: stored, found: true}
+			incoming := stored
+			incoming.TTS.Provider = tt.provider
+			incoming.TTS.Endpoint = tt.endpoint
+			incoming.TTS.APIKey = ""
+			s := &Server{
+				xinzhiliModelConfig: store,
+				bailianCredentials: &memoryBailianCredentialStore{
+					cfg: bailianconfig.Config{Version: 6, APIKey: "sk-shared"}, found: true,
+				},
+			}
+			res := putXinzhiliModelConfig(t, s, incoming, 23)
+			if res.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+			}
+			if store.config.RealtimeASR.APIKey != "" || store.config.TTS.APIKey != "" {
+				t.Fatalf("shared credential scope change retained legacy keys: %+v", store.config)
+			}
+		})
+	}
+}
+
+func legacyNativeBailianConfigForHandler(version int64, endpoint, apiKey string) xinzhili.Config {
+	cfg := validBailianXinzhiliModelConfigForHandler()
+	cfg.Version = version
+	cfg.RealtimeASR.APIKey = ""
+	cfg.TTS.Provider = xinzhili.TTSProviderBailian
+	cfg.TTS.Endpoint = endpoint
+	cfg.TTS.APIKey = apiKey
+	return cfg
+}
+
 func TestXinzhiliCredentialSaveDisabledAllowsEmptyVoiceAndCredentials(t *testing.T) {
 	cfg := validBailianXinzhiliModelConfigForHandler()
 	cfg.Enabled = false
