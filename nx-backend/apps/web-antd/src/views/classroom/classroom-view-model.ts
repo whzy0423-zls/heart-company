@@ -64,7 +64,7 @@ export function uploadStatusLabel(taskStatus: string, contentStatus?: string) {
   if (taskStatus === 'initiated' || taskStatus === 'initiating')
     return '等待上传';
   if (taskStatus === 'uploading') return '上传中';
-  if (taskStatus === 'completing') return '正在合并';
+  if (taskStatus === 'completing') return '媒体处理中';
   if (taskStatus === 'completed') return '上传完成';
   if (taskStatus === 'failed') return '失败';
   if (taskStatus === 'expired') return '已过期';

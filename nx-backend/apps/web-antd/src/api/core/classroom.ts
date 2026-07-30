@@ -526,6 +526,7 @@ export function completeClassroomUploadApi(
     requestClient.post<ClassroomUploadCompleteResult>(
       `/admin/classroom/uploads/${id}/complete`,
       { parts },
+      { timeout: 180_000 },
     ),
   );
 }

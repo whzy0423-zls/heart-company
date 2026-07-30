@@ -22,6 +22,8 @@ import { seriesMetadataPayload } from './series-model';
 import { crc64File } from './upload-checksum';
 import {
   classroomUploadMime,
+  canAbortUploadTask,
+  completeUploadWithStatusReconciliation,
   matchesClassroomContentType,
   matchesUploadIdentity,
   mergeUploadProgress,
@@ -343,10 +345,46 @@ describe('teacher classroom admin UI contract', () => {
   it('merges upload task and content media statuses for operator-visible state', () => {
     expect(uploadStatusLabel('initiated')).toBe('等待上传');
     expect(uploadStatusLabel('uploading')).toBe('上传中');
-    expect(uploadStatusLabel('completing')).toBe('正在合并');
+    expect(uploadStatusLabel('completing')).toBe('媒体处理中');
     expect(uploadStatusLabel('completed', 'processing')).toBe('媒体处理中');
     expect(uploadStatusLabel('completed', 'ready')).toBe('可发布');
     expect(uploadStatusLabel('failed')).toBe('失败');
+  });
+
+  it('reconciles an upload completion timeout without aborting server processing', async () => {
+    const completeError = new Error('timeout of 10000ms exceeded');
+    await expect(
+      completeUploadWithStatusReconciliation({
+        complete: async () => Promise.reject(completeError),
+        readTask: async () => ({ status: 'completing' }) as any,
+      }),
+    ).resolves.toBe('processing');
+    await expect(
+      completeUploadWithStatusReconciliation({
+        complete: async () => Promise.reject(completeError),
+        readTask: async () => ({ status: 'completed' }) as any,
+      }),
+    ).resolves.toBe('completed');
+    expect(canAbortUploadTask('completing')).toBe(false);
+    expect(canAbortUploadTask('completed')).toBe(false);
+    expect(canAbortUploadTask('uploading')).toBe(true);
+  });
+
+  it('gives the media completion request a dedicated long timeout', () => {
+    const source = read('api/core/classroom.ts');
+    expect(source).toMatch(
+      /uploads\/\$\{id\}\/complete[\s\S]*?timeout:\s*180_000/,
+    );
+  });
+
+  it('keeps upload rows visible during background polling and rejects stale responses', () => {
+    const source = read('views/classroom/upload-tasks.vue');
+    expect(source).toContain('const initialLoading = ref(true)');
+    expect(source).toContain('const requestTicket = ++latestRequestTicket');
+    expect(source).toContain('if (requestTicket !== latestRequestTicket) return');
+    expect(source).toContain(':loading="initialLoading && tasks.length === 0"');
+    expect(source).toContain('setTimeout');
+    expect(source).not.toContain('setInterval(() => void load(), 5000)');
   });
 
   it('keeps metadata controls read-only for Price-only operators', () => {
