@@ -56,6 +56,7 @@ export interface ClassroomPage<T> {
 export interface ClassroomSeries {
   accessLevel: Exclude<ClassroomAccessLevel, 'inherit'>;
   coverAspectRatio: ClassroomCoverAspectRatio;
+  coverPreviewUnavailable?: boolean;
   coverUrl: string;
   createdAt: string;
   id: number;

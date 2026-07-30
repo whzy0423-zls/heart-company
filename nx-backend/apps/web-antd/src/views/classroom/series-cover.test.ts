@@ -71,6 +71,14 @@ describe('classroom series cover API contract', () => {
     expect(source).toContain('请先保存系列，再管理封面');
     expect(source).toContain('@saved="replacePersistedSeries"');
   });
+
+  it('surfaces preview outages and resets the native file input after upload', () => {
+    const source = read('views/classroom/components/series-cover-editor.vue');
+    expect(source).toContain('coverPreviewUnavailable');
+    expect(source).toContain('封面已保存，但预览暂时不可用');
+    expect(source).toContain('ref="fileInput"');
+    expect(source).toContain("fileInput.value.value = ''");
+  });
 });
 
 describe('classroom series cover editor', () => {
@@ -95,6 +103,23 @@ describe('classroom series cover editor', () => {
     expect(document.querySelector('img')?.getAttribute('src')).toBe(
       baseSeries.coverUrl,
     );
+    wrapper.unmount();
+  });
+
+  it('shows an explicit warning when the signed preview is unavailable', async () => {
+    const { default: SeriesCoverEditor } =
+      await import('./components/series-cover-editor.vue');
+    const wrapper = mountVueComponent(
+      defineComponent({
+        setup: () => () =>
+          h(SeriesCoverEditor, {
+            series: { ...baseSeries, coverPreviewUnavailable: true },
+          }),
+      }),
+    );
+    await flushVuePromises();
+
+    expect(wrapper.text()).toContain('封面已保存，但预览暂时不可用');
     wrapper.unmount();
   });
 
@@ -134,8 +159,8 @@ describe('classroom series cover editor', () => {
     );
     await flushVuePromises();
 
-    const input = document.querySelector(
-      'input[type="file"]',
+    const input = [...document.querySelectorAll('input[type="file"]')].at(
+      -1,
     ) as HTMLInputElement;
     const file = new File(['cover'], 'series-cover.webp', {
       type: 'image/webp',

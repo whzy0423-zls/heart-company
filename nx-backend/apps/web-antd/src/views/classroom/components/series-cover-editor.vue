@@ -35,6 +35,7 @@ const emit = defineEmits<{
 }>();
 
 const current = ref(props.series);
+const fileInput = ref<HTMLInputElement>();
 const selectedFile = ref<File>();
 const selectedRatio = ref<ClassroomCoverAspectRatio>('16:9');
 const busyAction = ref<'' | 'delete' | 'ratio' | 'upload'>('');
@@ -64,10 +65,15 @@ function ratioStyle(value: ClassroomCoverAspectRatio) {
   return value.replace(':', ' / ');
 }
 
+function resetFileInput() {
+  selectedFile.value = undefined;
+  if (fileInput.value) fileInput.value.value = '';
+}
+
 function replaceSeries(value: ClassroomSeries) {
   current.value = value;
   selectedRatio.value = value.coverAspectRatio || '16:9';
-  selectedFile.value = undefined;
+  resetFileInput();
   emit('saved', value);
 }
 
@@ -91,7 +97,11 @@ async function upload() {
     );
     uploadProgress.value = 100;
     replaceSeries(updated);
-    message.success('系列封面已上传');
+    if (updated.coverPreviewUnavailable) {
+      message.warning('封面已保存，但预览暂时不可用');
+    } else {
+      message.success('系列封面已上传');
+    }
   } catch (error) {
     message.error(error instanceof Error ? error.message : '系列封面上传失败');
   } finally {
@@ -153,6 +163,13 @@ function removeCover() {
       message="系列封面管理"
       description="无手动封面时，自动回退到第一节课封面；默认比例为 16:9。"
     />
+    <Alert
+      v-if="current.coverPreviewUnavailable"
+      type="warning"
+      show-icon
+      message="封面已保存，但预览暂时不可用"
+      description="请稍后刷新重试；封面文件和比例配置已保留。"
+    />
     <p class="cover-fallback-hint">
       无手动封面时，自动回退到第一节课封面；默认比例为 16:9。
     </p>
@@ -185,6 +202,7 @@ function removeCover() {
     </Form.Item>
     <Form.Item label="上传或替换封面">
       <input
+        ref="fileInput"
         accept="image/jpeg,image/png,image/webp"
         class="cover-input"
         type="file"

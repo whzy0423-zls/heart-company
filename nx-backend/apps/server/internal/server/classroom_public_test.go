@@ -143,7 +143,7 @@ func TestClassroomRecentPublicReturnsSeriesAndStandaloneContent(t *testing.T) {
 
 func TestClassroomRecentDBUsesUnifiedLatestPublicationOrdering(t *testing.T) {
 	db := openClassroomTestDB(t, func(query string, _ []driver.NamedValue) (driver.Rows, error) {
-		for _, want := range []string{"UNION ALL", "latest_published_at DESC", "c.show_as_standalone=true"} {
+		for _, want := range []string{"UNION ALL", "latest_published_at DESC", "c.show_as_standalone=true", "GREATEST(s.updated_at", "GREATEST(c.updated_at"} {
 			if !strings.Contains(query, want) {
 				t.Fatalf("recent query missing %q: %s", want, query)
 			}
@@ -151,6 +151,26 @@ func TestClassroomRecentDBUsesUnifiedLatestPublicationOrdering(t *testing.T) {
 		return &classroomRows{cols: []string{"item_type", "id", "latest_published_at"}}, nil
 	})
 	items, err := (&classroomPublicDB{store: classroom.NewStore(db), db: db}).ListRecent(context.Background(), classroomPublicQuery{Limit: 2}, 0)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("items=%v err=%v", items, err)
+	}
+}
+
+func TestClassroomRecentSkipsItemsUnpublishedDuringHydration(t *testing.T) {
+	now := time.Now().UTC()
+	db := openClassroomTestDB(t, func(query string, _ []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "WITH recent_items AS"):
+			return &classroomRows{cols: []string{"item_type", "id", "latest_published_at"}, values: [][]driver.Value{{"content", int64(9), now}}}, nil
+		case strings.Contains(query, "FROM classroom_contents c JOIN classroom_media_assets m"):
+			return &classroomRows{cols: make([]string, 23)}, nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", query)
+		}
+	})
+
+	items, err := (&classroomPublicDB{store: classroom.NewStore(db), db: db}).ListRecent(context.Background(), classroomPublicQuery{Limit: 2}, 0)
+
 	if err != nil || len(items) != 0 {
 		t.Fatalf("items=%v err=%v", items, err)
 	}

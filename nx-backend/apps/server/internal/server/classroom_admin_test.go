@@ -54,6 +54,19 @@ func (f *fakeClassroomAdminService) ListContentContexts(_ context.Context, ids [
 	return result, nil
 }
 
+func (f *fakeClassroomAdminService) ListSeriesCoverFallbacks(_ context.Context, ids []int64) (map[int64]classroomSeriesCoverFallback, error) {
+	f.calls = append(f.calls, "list-series-cover-fallbacks")
+	result := make(map[int64]classroomSeriesCoverFallback, len(ids))
+	if f.content.SeriesID != nil {
+		for _, id := range ids {
+			if id == *f.content.SeriesID {
+				result[id] = classroomSeriesCoverFallback{ContentType: f.content.ContentType, CoverURL: f.content.CoverURL, ManualObjectKey: f.content.ManualCoverObjectKey, GeneratedObjectKey: f.generatedCoverKey}
+			}
+		}
+	}
+	return result, nil
+}
+
 func (f *fakeClassroomAdminService) ListSeries(context.Context, classroom.SeriesFilter) ([]classroom.Series, int, error) {
 	f.calls = append(f.calls, "list-series")
 	return []classroom.Series{f.series}, 1, nil
@@ -485,6 +498,45 @@ func TestClassroomContentCoverUploadAndDeleteReturnLatestDTO(t *testing.T) {
 	mux.ServeHTTP(rr, classroomUser(httptest.NewRequest(http.MethodDelete, "/api/admin/classroom/contents/11/cover?expectedUpdatedAt="+updated.UpdatedAt.Format(time.RFC3339Nano), nil)))
 	if rr.Code != http.StatusOK || manager.deletes != 1 || !strings.Contains(rr.Body.String(), `"coverSource":"none"`) {
 		t.Fatalf("status=%d deletes=%d body=%s", rr.Code, manager.deletes, rr.Body.String())
+	}
+}
+
+func TestClassroomSeriesListUsesBatchFallbackAndDisablesCaching(t *testing.T) {
+	now := time.Now().UTC()
+	seriesID := int64(12)
+	admin := &fakeClassroomAdminService{
+		series:  classroom.Series{ID: seriesID, Title: "系列", Status: classroom.SeriesPublished, AccessLevel: classroom.AccessPublic, CoverAspectRatio: classroom.CoverAspectRatio16x9, UpdatedAt: now},
+		content: classroom.Content{ID: 21, SeriesID: &seriesID, Title: "第一课", ContentType: classroom.ContentVideo, Status: classroom.ContentPublished, AccessLevel: classroom.AccessInherit, CoverURL: "https://cdn.example/fallback.jpg"},
+	}
+	s := &Server{classroomAdmin: admin}
+	rr := httptest.NewRecorder()
+	s.classroomSeriesList(rr, classroomUser(httptest.NewRequest(http.MethodGet, "/api/admin/classroom/series?page=1&pageSize=50", nil)))
+
+	if rr.Code != http.StatusOK || rr.Header().Get("Cache-Control") != "private, no-store" || !strings.Contains(rr.Body.String(), "https://cdn.example/fallback.jpg") {
+		t.Fatalf("status=%d headers=%v body=%s", rr.Code, rr.Header(), rr.Body.String())
+	}
+	if containsString(admin.calls, "list-content") || !containsString(admin.calls, "list-series-cover-fallbacks") {
+		t.Fatalf("series fallbacks must be loaded in one batch: calls=%v", admin.calls)
+	}
+}
+
+func TestClassroomSeriesCoverMutationMarksPreviewUnavailable(t *testing.T) {
+	now := time.Now().UTC()
+	current := classroom.Series{ID: 12, Title: "系列", Status: classroom.SeriesPublished, AccessLevel: classroom.AccessPublic, CoverAspectRatio: classroom.CoverAspectRatio16x9, UpdatedAt: now}
+	updated := current
+	updated.ManualCoverObjectKey = "classroom/covers/series/12/private.png"
+	updated.UpdatedAt = now.Add(time.Second)
+	admin := &fakeClassroomAdminService{series: current}
+	manager := &fakeClassroomSeriesCoverManager{updated: updated}
+	s := &Server{classroomAdmin: admin, classroomSeriesCovers: manager, classroomPlaybackSigner: &recordingClassroomCoverSigner{err: errors.New("signer unavailable")}}
+	body, contentType := classroomCoverMultipart(t, now.Format(time.RFC3339Nano), []byte("png"))
+	req := classroomUser(httptest.NewRequest(http.MethodPost, "/api/admin/classroom/series/12/cover", body))
+	req.Header.Set("Content-Type", contentType)
+	rr := httptest.NewRecorder()
+	s.classroomSeriesItem(rr, req)
+
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"coverPreviewUnavailable":true`) || !strings.Contains(rr.Body.String(), `"updatedAt":"`+updated.UpdatedAt.Format(time.RFC3339Nano)+`"`) {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
 }
 

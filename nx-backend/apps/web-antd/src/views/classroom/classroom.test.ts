@@ -358,6 +358,12 @@ describe('teacher classroom admin UI contract', () => {
     expect(upload).toContain('performUpload(context.file, context.contentId)');
   });
 
+  it('keeps silent upload polling from changing the card layout', () => {
+    const upload = read('views/classroom/upload-tasks.vue');
+    expect(upload).not.toContain('v-if="refreshing"');
+    expect(upload).not.toContain('状态更新中');
+  });
+
   it('uses API error detail and fallback messages', () => {
     expect(classroomOperationError(new Error('价格冲突'), '保存失败')).toBe(
       '价格冲突',

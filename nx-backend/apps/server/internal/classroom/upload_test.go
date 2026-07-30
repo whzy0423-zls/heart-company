@@ -87,9 +87,20 @@ type fakeUploadRepo struct {
 	finishErr       error
 	reserveCalls    int
 	confirmCalls    int
+	rejectCanceled  bool
 }
 
-func (r *fakeUploadRepo) GetContent(context.Context, int64) (Content, error) {
+func (r *fakeUploadRepo) rejectCanceledContext(ctx context.Context) error {
+	if r.rejectCanceled {
+		return ctx.Err()
+	}
+	return nil
+}
+
+func (r *fakeUploadRepo) GetContent(ctx context.Context, _ int64) (Content, error) {
+	if err := r.rejectCanceledContext(ctx); err != nil {
+		return Content{}, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.content.ID == 0 {
@@ -119,7 +130,10 @@ func (r *fakeUploadRepo) GetUploadTask(context.Context, int64) (UploadTask, erro
 	}
 	return r.task, nil
 }
-func (r *fakeUploadRepo) SaveUploadTask(_ context.Context, v UploadTask) (UploadTask, error) {
+func (r *fakeUploadRepo) SaveUploadTask(ctx context.Context, v UploadTask) (UploadTask, error) {
+	if err := r.rejectCanceledContext(ctx); err != nil {
+		return UploadTask{}, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.task = v
@@ -258,12 +272,18 @@ func (r *fakeUploadRepo) ClaimUploadAbort(_ context.Context, id int64) (UploadTa
 	return r.task, true, nil
 }
 
-func (r *fakeUploadRepo) GetMediaAsset(context.Context, int64) (MediaAsset, error) {
+func (r *fakeUploadRepo) GetMediaAsset(ctx context.Context, _ int64) (MediaAsset, error) {
+	if err := r.rejectCanceledContext(ctx); err != nil {
+		return MediaAsset{}, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.media, nil
 }
-func (r *fakeUploadRepo) CreateMediaAsset(_ context.Context, v MediaAsset) (MediaAsset, error) {
+func (r *fakeUploadRepo) CreateMediaAsset(ctx context.Context, v MediaAsset) (MediaAsset, error) {
+	if err := r.rejectCanceledContext(ctx); err != nil {
+		return MediaAsset{}, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	v.ID = 91
@@ -271,7 +291,10 @@ func (r *fakeUploadRepo) CreateMediaAsset(_ context.Context, v MediaAsset) (Medi
 	r.mediaStatuses = append(r.mediaStatuses, v.StorageStatus)
 	return v, nil
 }
-func (r *fakeUploadRepo) UpdateMediaAsset(_ context.Context, v MediaAsset) (MediaAsset, error) {
+func (r *fakeUploadRepo) UpdateMediaAsset(ctx context.Context, v MediaAsset) (MediaAsset, error) {
+	if err := r.rejectCanceledContext(ctx); err != nil {
+		return MediaAsset{}, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.updateErr != nil {
@@ -281,7 +304,10 @@ func (r *fakeUploadRepo) UpdateMediaAsset(_ context.Context, v MediaAsset) (Medi
 	r.mediaStatuses = append(r.mediaStatuses, v.StorageStatus)
 	return v, nil
 }
-func (r *fakeUploadRepo) SetContentMediaState(_ context.Context, _ int64, mediaID *int64, status ContentStatus, duration int) (Content, error) {
+func (r *fakeUploadRepo) SetContentMediaState(ctx context.Context, _ int64, mediaID *int64, status ContentStatus, duration int) (Content, error) {
+	if err := r.rejectCanceledContext(ctx); err != nil {
+		return Content{}, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.content.MediaAssetID = mediaID
@@ -1061,6 +1087,30 @@ func TestClassroomUploadCoverPersistenceFailureDeletesLocalCover(t *testing.T) {
 		}
 	}
 	t.Fatalf("cover not deleted: %v", st.deleteCalls)
+}
+
+func TestClassroomUploadFailurePersistsAfterCompletionContextExpires(t *testing.T) {
+	now := time.Now()
+	mediaID := int64(91)
+	repo := &fakeUploadRepo{
+		rejectCanceled: true,
+		content:        Content{ID: 7, ContentType: ContentVideo, Status: ContentProcessing, AccessLevel: AccessPublic, MediaAssetID: &mediaID},
+		media:          MediaAsset{ID: mediaID, ContentType: ContentVideo, StorageStatus: MediaProcessing},
+		task:           UploadTask{ID: 1, ContentID: 7, CreatorID: 42, MediaAssetID: &mediaID, Status: UploadCompleting, ExpiresAt: now.Add(time.Hour)},
+	}
+	svc := newUploadService(repo, &fakeMultipartStorage{}, now)
+	completionCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cause := context.DeadlineExceeded
+
+	err := svc.fail(completionCtx, repo.task, cause)
+
+	if !errors.Is(err, cause) {
+		t.Fatalf("err=%v, want deadline cause", err)
+	}
+	if repo.task.Status != UploadFailed || repo.media.StorageStatus != MediaFailed || repo.content.Status != ContentFailed {
+		t.Fatalf("failure state was not persisted task=%+v media=%+v content=%+v", repo.task, repo.media, repo.content)
+	}
 }
 
 func TestClassroomUploadCoverDeleteFailureLeavesTraceForMaintenance(t *testing.T) {

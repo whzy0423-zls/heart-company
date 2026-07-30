@@ -28,6 +28,8 @@ var (
 	ErrInvalidUploadProgress = errors.New("invalid classroom upload progress")
 )
 
+const uploadFailurePersistenceTimeout = 30 * time.Second
+
 type UploadConfig struct {
 	Bucket         string
 	Prefix         string
@@ -462,6 +464,9 @@ func (s *UploadService) ensureActive(ctx context.Context, task UploadTask) error
 	return nil
 }
 func (s *UploadService) fail(ctx context.Context, task UploadTask, cause error) error {
+	failureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), uploadFailurePersistenceTimeout)
+	defer cancel()
+	ctx = failureCtx
 	var errs []error
 	task.Status = UploadFailed
 	task.CleanupStatus = "pending"

@@ -832,14 +832,14 @@ func (d *classroomPublicDB) ListSeries(ctx context.Context, q classroomPublicQue
 func (d *classroomPublicDB) ListRecent(ctx context.Context, q classroomPublicQuery, uid int64) ([]classroomPublicRecentItem, error) {
 	const query = `WITH recent_items AS (
 		SELECT 'series' AS item_type,s.id,
-			GREATEST(COALESCE(s.published_at,s.updated_at),MAX(COALESCE(c.published_at,c.updated_at))) AS latest_published_at
+			GREATEST(s.updated_at,COALESCE(s.published_at,s.updated_at),MAX(GREATEST(c.updated_at,COALESCE(c.published_at,c.updated_at)))) AS latest_published_at
 		FROM classroom_series s
 		JOIN classroom_contents c ON c.series_id=s.id
 		JOIN classroom_media_assets m ON m.id=c.media_asset_id
 		WHERE s.status=$1 AND c.status=$2 AND m.storage_status=$3 AND ($4='' OR c.content_type=$4)
 		GROUP BY s.id,s.published_at,s.updated_at
 		UNION ALL
-		SELECT 'content' AS item_type,c.id,COALESCE(c.published_at,c.updated_at) AS latest_published_at
+		SELECT 'content' AS item_type,c.id,GREATEST(c.updated_at,COALESCE(c.published_at,c.updated_at)) AS latest_published_at
 		FROM classroom_contents c
 		JOIN classroom_media_assets m ON m.id=c.media_asset_id
 		WHERE c.status=$2 AND m.storage_status=$3
@@ -879,6 +879,9 @@ func (d *classroomPublicDB) ListRecent(ctx context.Context, q classroomPublicQue
 		case "series":
 			detail, err := d.GetSeries(ctx, ref.id, uid)
 			if err != nil {
+				if errors.Is(err, classroom.ErrNotFound) {
+					continue
+				}
 				return nil, err
 			}
 			v := detail.Series
@@ -898,6 +901,9 @@ func (d *classroomPublicDB) ListRecent(ctx context.Context, q classroomPublicQue
 		case "content":
 			v, err := d.GetContent(ctx, ref.id, uid)
 			if err != nil {
+				if errors.Is(err, classroom.ErrNotFound) {
+					continue
+				}
 				return nil, err
 			}
 			out = append(out, classroomPublicRecentItem{

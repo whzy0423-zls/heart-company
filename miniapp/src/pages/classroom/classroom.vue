@@ -207,6 +207,15 @@ async function openSeries(item, { force = false } = {}) {
         .filter((content) => content.id),
     };
     seriesDetails.value = { ...seriesDetails.value, [item.id]: detail };
+    const existingIndex = seriesItems.value.findIndex((series) => series.id === item.id);
+    if (existingIndex >= 0) {
+      seriesItems.value = seriesItems.value.map((series, index) =>
+        index === existingIndex ? detail.series : series,
+      );
+    } else {
+      seriesItems.value = [detail.series, ...seriesItems.value];
+    }
+    selectedSeries.value = detail.series;
     expandedSeries.value = detail;
   } catch (error) {
     if (

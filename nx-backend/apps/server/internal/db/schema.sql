@@ -2606,7 +2606,7 @@ CREATE TABLE IF NOT EXISTS classroom_contents (
   tags JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(tags) = 'array'),
   episode_no INTEGER NOT NULL DEFAULT 0 CHECK (episode_no >= 0),
   sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0),
-  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','processing','ready','published','offline','failed')),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','processing','ready','published','offline','archived','failed')),
   playback_blocked BOOLEAN NOT NULL DEFAULT false,
   access_level TEXT NOT NULL DEFAULT 'inherit' CHECK (access_level IN ('inherit','public','login','member','paid')),
   price_cents INTEGER NOT NULL DEFAULT 0 CHECK (price_cents >= 0),
@@ -2622,6 +2622,8 @@ CREATE TABLE IF NOT EXISTS classroom_contents (
 
 ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS manual_cover_object_key TEXT NOT NULL DEFAULT '';
 ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9' CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'));
+ALTER TABLE classroom_contents DROP CONSTRAINT IF EXISTS classroom_contents_status_check;
+ALTER TABLE classroom_contents ADD CONSTRAINT classroom_contents_status_check CHECK (status IN ('draft','processing','ready','published','offline','archived','failed'));
 
 CREATE TABLE IF NOT EXISTS classroom_media_assets (
   id BIGSERIAL PRIMARY KEY,

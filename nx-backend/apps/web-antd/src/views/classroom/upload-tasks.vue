@@ -46,7 +46,6 @@ const props = defineProps<{
 const emit = defineEmits<{ uploaded: [] }>();
 
 const initialLoading = ref(true);
-const refreshing = ref(false);
 const error = ref('');
 const tasks = ref<ClassroomUploadTask[]>([]);
 const selectedContentId = ref<number>();
@@ -113,8 +112,7 @@ function progress(task: ClassroomUploadTask) {
 }
 async function load(options: { silent?: boolean } = {}) {
   const requestTicket = ++latestRequestTicket;
-  if (options.silent) refreshing.value = true;
-  else if (tasks.value.length === 0) initialLoading.value = true;
+  if (!options.silent && tasks.value.length === 0) initialLoading.value = true;
   try {
     const nextTasks = (
       await getClassroomUploadTasksApi({ page: 1, pageSize: 50 })
@@ -140,7 +138,6 @@ async function load(options: { silent?: boolean } = {}) {
   } finally {
     if (requestTicket === latestRequestTicket) {
       initialLoading.value = false;
-      refreshing.value = false;
     }
   }
 }
@@ -466,7 +463,6 @@ onMounted(() => {
 
 <template>
   <Card :loading="initialLoading && tasks.length === 0" title="上传任务">
-    <template #extra><Tag v-if="refreshing">状态更新中</Tag></template>
     <div class="upload-panel" v-if="canUpload">
       <div class="upload-field">
         <span class="upload-label">1. 选择草稿课件</span>
