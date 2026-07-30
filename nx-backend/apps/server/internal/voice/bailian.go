@@ -150,7 +150,7 @@ func (c *BailianClient) cloneQwenVoice(ctx context.Context, targetModel string, 
 	}
 	voiceID := findString(result, "output.voice", "output.voice_id", "voice", "voice_id")
 	if voiceID == "" {
-		return preferredName, nil
+		return "", errors.New("阿里百炼未返回最终音色 ID")
 	}
 	return voiceID, nil
 }

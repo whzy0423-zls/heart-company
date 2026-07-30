@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"unicode/utf8"
 
 	"nine-xing/nx-backend/apps/server/internal/auditlog"
@@ -165,13 +166,25 @@ func (s *Server) applyXinzhiliBailianCopyConfig(cfg xinzhili.Config) {
 }
 
 func bailianCopyConfigFromXinzhiliTTS(tts xinzhili.TTSConfig) voice.BailianConfig {
-	if tts.Provider != xinzhili.TTSProviderBailian {
+	if tts.Provider == xinzhili.TTSProviderBailian {
+		return voice.BailianConfig{
+			APIBase:     tts.Endpoint,
+			APIKey:      tts.APIKey,
+			TargetModel: tts.Model,
+		}
+	}
+	endpoint := strings.ToLower(strings.TrimSpace(tts.Endpoint))
+	if tts.Provider != xinzhili.TTSProviderOpenAICompatible || !strings.Contains(endpoint, "dashscope.aliyuncs.com") {
 		return voice.BailianConfig{}
+	}
+	targetModel := strings.TrimSpace(tts.Model)
+	if !strings.HasPrefix(strings.ToLower(targetModel), "qwen3-tts-vc-") {
+		targetModel = "qwen3-tts-vc-2026-01-22"
 	}
 	return voice.BailianConfig{
 		APIBase:     tts.Endpoint,
 		APIKey:      tts.APIKey,
-		TargetModel: tts.Model,
+		TargetModel: targetModel,
 	}
 }
 

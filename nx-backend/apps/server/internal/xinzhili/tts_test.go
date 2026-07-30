@@ -188,6 +188,24 @@ func TestBailianQwenTTSParsesOfficialNestedAudioData(t *testing.T) {
 	}
 }
 
+func TestBailianFetchAudioURLAcceptsOfficialWAVForMP3Normalization(t *testing.T) {
+	wav := []byte("RIFF\x04\x00\x00\x00WAVE")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "audio/wav")
+		_, _ = w.Write(wav)
+	}))
+	defer server.Close()
+
+	provider := &bailianHostedMiniMaxTTS{client: server.Client()}
+	got, err := provider.fetchAudioURL(context.Background(), server.URL+"/qwen.wav")
+	if err != nil {
+		t.Fatalf("fetchAudioURL returned error: %v", err)
+	}
+	if !bytes.Equal(got, wav) {
+		t.Fatalf("downloaded WAV = %q", got)
+	}
+}
+
 func TestBailianHostedMiniMaxTTSParsesBase64AndRejectsPrivateURL(t *testing.T) {
 	t.Run("base64", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -392,6 +410,53 @@ func TestMiniMaxTTSAdapterUsesTextToAudioOnly(t *testing.T) {
 	}
 	if client.model != "speech-02" || client.voice != "voice-1" || client.text != "短句" || client.maxBytes != maxTTSSegmentBytes || mime != "audio/mpeg" {
 		t.Fatalf("client=%#v mime=%q", client, mime)
+	}
+}
+
+func TestDynamicTTSProviderResolvesProviderFromEachTurnConfig(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != bailianTTSPath {
+			t.Fatalf("path=%q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": map[string]any{"audio": hex.EncodeToString(testMP3())},
+		})
+	}))
+	defer server.Close()
+
+	minimax := &fakeMiniMaxTTS{}
+	provider := (TTSProviderFactory{HTTPClient: server.Client(), MiniMax: minimax}).Dynamic()
+	miniCfg := TTSConfig{
+		Provider: TTSProviderMiniMax,
+		Endpoint: server.URL,
+		APIKey:   "minimax-key",
+		GroupID:  "group-1",
+		Model:    "speech-02-hd",
+		Voice:    "legacy-voice",
+		Format:   "mp3",
+	}
+	if _, _, err := provider.Synthesize(context.Background(), miniCfg, "旧配置"); err != nil {
+		t.Fatal(err)
+	}
+	if minimax.voice != "legacy-voice" {
+		t.Fatalf("MiniMax voice=%q", minimax.voice)
+	}
+
+	bailianCfg := TTSConfig{
+		Provider: TTSProviderBailian,
+		Endpoint: server.URL,
+		APIKey:   "bailian-key",
+		Model:    "qwen3-tts-vc-2026-01-22",
+		Voice:    "qwen-cloned-voice",
+		Format:   "mp3",
+	}
+	audio, mimeType, err := provider.Synthesize(context.Background(), bailianCfg, "新配置")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(audio) != string(testMP3()) || mimeType != "audio/mpeg" {
+		t.Fatalf("audio=%x mime=%q", audio, mimeType)
 	}
 }
 

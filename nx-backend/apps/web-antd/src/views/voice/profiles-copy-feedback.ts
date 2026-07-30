@@ -33,6 +33,29 @@ export function getBailianCopyFeedback(
   };
 }
 
+export function getBailianCloneFeedback(
+  result: BailianCopyResult,
+): BailianCopyFeedback {
+  if (result.status === 'ready') {
+    return {
+      content: '百炼 Qwen 音色克隆成功，可到芯之力模型配置选择',
+      type: 'success',
+    };
+  }
+
+  if (result.status === 'failed') {
+    return {
+      content: result.lastError || '百炼 Qwen 音色克隆失败，请检查模型配置后重试',
+      type: 'error',
+    };
+  }
+
+  return {
+    content: '百炼 Qwen 音色正在克隆，请稍后刷新查看状态',
+    type: 'info',
+  };
+}
+
 export function updateCopyingProfileIds(
   currentIds: ReadonlySet<string>,
   profileId: string,

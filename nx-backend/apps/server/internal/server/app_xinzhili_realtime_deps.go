@@ -18,10 +18,7 @@ func (s *Server) newXinzhiliRealtimeDependencies(cfg xinzhili.Config, sink xinzh
 	if !ok || chatStore == nil {
 		return xinzhili.SessionDependencies{}, errors.New("xinzhili chat store unavailable")
 	}
-	provider, err := (xinzhili.TTSProviderFactory{}).New(cfg.TTS)
-	if err != nil {
-		return xinzhili.SessionDependencies{}, err
-	}
+	provider := (xinzhili.TTSProviderFactory{}).Dynamic()
 	var generator xinzhili.ChatGenerator
 	if current := s.generator(); current != nil {
 		generator = serverXinzhiliGenerator{generator: current}

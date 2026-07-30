@@ -199,6 +199,31 @@ func TestXinzhiliModelConfigPUTRefreshesBailianCopyCredentialsFromSavedTTS(t *te
 	}
 }
 
+func TestBailianCopyConfigRecognizesLegacyDashScopeQwenSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		endpoint string
+		model    string
+	}{
+		{name: "native endpoint", endpoint: "https://dashscope.aliyuncs.com/api/v1", model: "qwen3-tts-vc-2026-01-22"},
+		{name: "legacy compatible endpoint", endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-audio-tts-latest"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := bailianCopyConfigFromXinzhiliTTS(xinzhili.TTSConfig{
+				Provider: xinzhili.TTSProviderOpenAICompatible,
+				Endpoint: tc.endpoint,
+				APIKey:   "legacy-dashscope-key",
+				Model:    tc.model,
+				Format:   "mp3",
+			})
+
+			if got.APIBase != tc.endpoint || got.APIKey != "legacy-dashscope-key" || got.TargetModel != "qwen3-tts-vc-2026-01-22" {
+				t.Fatalf("Bailian copy config = %+v", got)
+			}
+		})
+	}
+}
+
 func TestApplyXinzhiliBailianCopyConfigIgnoresOlderSavedVersion(t *testing.T) {
 	var got voice.BailianConfig
 	s := &Server{setBailianCopyConfig: func(cfg voice.BailianConfig) { got = cfg }}

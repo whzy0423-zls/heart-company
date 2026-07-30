@@ -182,6 +182,42 @@ func TestCopyProfileToBailianRetriesExistingFailedProfile(t *testing.T) {
 	}
 }
 
+func TestCloneProfilePersistsFailedStatusAfterRequestCancellation(t *testing.T) {
+	store, database, cleanup := newVoiceProfileCopyTestStore(t)
+	defer cleanup()
+	asset := createVoiceProfileCopySample(t, store)
+	profileID := insertVoiceProfileCopyBailian(t, database, asset.ID, "failed")
+
+	started := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer upstream.Close()
+	store.bailian = NewBailianClient(BailianConfig{APIBase: upstream.URL, APIKey: "test-key", TargetModel: defaultBailianTargetModel})
+	store.bailian.client = upstream.Client()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.CloneProfile(ctx, profileID)
+		done <- err
+	}()
+	<-started
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("CloneProfile returned nil error after cancellation")
+	}
+
+	var status, lastError string
+	if err := database.QueryRow(`SELECT status, last_error FROM voice_profiles WHERE id=$1`, profileID).Scan(&status, &lastError); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || lastError == "" {
+		t.Fatalf("status=%q lastError=%q", status, lastError)
+	}
+}
+
 func newVoiceProfileCopyTestStore(t *testing.T) (*Store, *sql.DB, func()) {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")

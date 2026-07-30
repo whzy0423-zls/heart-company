@@ -72,6 +72,37 @@ type TTSProviderFactory struct {
 	MiniMax    MiniMaxTextToAudio
 }
 
+type dynamicTTSProvider struct {
+	factory  TTSProviderFactory
+	mu       sync.Mutex
+	config   TTSConfig
+	provider TTSProvider
+}
+
+// Dynamic resolves and caches the concrete provider from the configuration
+// supplied by each turn. This lets an already-connected realtime session use
+// the latest provider, endpoint, model and voice saved in the admin console.
+func (f TTSProviderFactory) Dynamic() TTSProvider {
+	return &dynamicTTSProvider{factory: f}
+}
+
+func (p *dynamicTTSProvider) Synthesize(ctx context.Context, cfg TTSConfig, text string) ([]byte, string, error) {
+	p.mu.Lock()
+	provider := p.provider
+	if provider == nil || p.config != cfg {
+		var err error
+		provider, err = p.factory.New(cfg)
+		if err != nil {
+			p.mu.Unlock()
+			return nil, "", err
+		}
+		p.config = cfg
+		p.provider = provider
+	}
+	p.mu.Unlock()
+	return provider.Synthesize(ctx, cfg, text)
+}
+
 func (f TTSProviderFactory) New(cfg TTSConfig) (TTSProvider, error) {
 	switch strings.TrimSpace(cfg.Provider) {
 	case TTSProviderOpenAICompatible:
@@ -273,7 +304,7 @@ func (p *bailianHostedMiniMaxTTS) fetchAudioURL(ctx context.Context, rawURL stri
 	if err != nil {
 		return nil, errors.New("TTS 音频下载请求创建失败")
 	}
-	req.Header.Set("Accept", "audio/mpeg, audio/mp3")
+	req.Header.Set("Accept", "audio/mpeg, audio/mp3, audio/wav, audio/x-wav")
 	resp, err := p.client.Do(req)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
@@ -289,10 +320,10 @@ func (p *bailianHostedMiniMaxTTS) fetchAudioURL(ctx context.Context, rawURL stri
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("TTS 音频下载失败（状态码 %d）", resp.StatusCode)
 	}
-	if _, err := normalizeMP3MIME(resp.Header.Get("Content-Type")); err != nil {
+	if err := validateBailianDownloadedAudioMIME(resp.Header.Get("Content-Type")); err != nil {
 		return nil, err
 	}
-	audio, err := io.ReadAll(io.LimitReader(resp.Body, maxTTSSegmentBytes+1))
+	audio, err := io.ReadAll(io.LimitReader(resp.Body, 4*maxTTSSegmentBytes+1))
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, ErrTTSTimeout
@@ -303,6 +334,19 @@ func (p *bailianHostedMiniMaxTTS) fetchAudioURL(ctx context.Context, rawURL stri
 		return nil, errors.New("TTS 音频读取失败")
 	}
 	return audio, nil
+}
+
+func validateBailianDownloadedAudioMIME(raw string) error {
+	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(raw))
+	if err != nil {
+		return errors.New("TTS Content-Type 无效")
+	}
+	switch strings.ToLower(mediaType) {
+	case "application/octet-stream", "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav":
+		return nil
+	default:
+		return errors.New("TTS Content-Type 必须为音频格式")
+	}
 }
 
 type openAICompatibleTTS struct {

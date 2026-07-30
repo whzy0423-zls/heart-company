@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getBailianCopyFeedback,
+  getBailianCloneFeedback,
   updateCopyingProfileIds,
 } from './profiles-copy-feedback';
 
@@ -131,5 +132,32 @@ describe('Bailian copy feedback', () => {
     expect(
       updateCopyingProfileIds(concurrentCopying, 'minimax-1', false),
     ).toEqual(new Set(['minimax-2']));
+  });
+});
+
+describe('Bailian clone feedback', () => {
+  it.each([
+    ['ready', '', 'success', '百炼 Qwen 音色克隆成功，可到芯之力模型配置选择'],
+    ['cloning', '', 'info', '百炼 Qwen 音色正在克隆，请稍后刷新查看状态'],
+    ['draft', '', 'info', '百炼 Qwen 音色正在克隆，请稍后刷新查看状态'],
+    ['failed', 'API Key 无效', 'error', 'API Key 无效'],
+  ])(
+    'maps %s responses to accurate clone feedback',
+    (status, lastError, type, content) => {
+      expect(getBailianCloneFeedback({ lastError, status })).toEqual({
+        content,
+        type,
+      });
+    },
+  );
+
+  it('uses the returned clone status for create and retry actions', () => {
+    expect(source).toContain(
+      'const result = await createVoiceProfileApi({',
+    );
+    expect(source).toContain('showBailianCloneFeedback(result);');
+    expect(source).toContain(
+      'const result = await cloneVoiceProfileApi(record.id);',
+    );
   });
 });

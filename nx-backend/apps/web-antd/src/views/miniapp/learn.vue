@@ -238,6 +238,7 @@ async function saveLearnConfig() {
                 :rows="4"
                 :value="miniappLearn.hero.meta.join('\n')"
                 data-testid="learn-hero-tags"
+                placeholder="每行填写一个标签，例如：关系成长"
                 @update:value="updateTags"
               />
             </Form.Item>

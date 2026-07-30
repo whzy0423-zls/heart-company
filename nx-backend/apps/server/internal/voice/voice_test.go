@@ -198,6 +198,29 @@ func TestBailianCloneVoicePostsSampleDataAndReturnsFinalVoiceID(t *testing.T) {
 	}
 }
 
+func TestBailianQwenCloneRejectsSuccessfulResponseWithoutFinalVoiceID(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"output": map[string]any{}})
+	}))
+	defer upstream.Close()
+
+	client := NewBailianClient(BailianConfig{
+		APIBase: upstream.URL,
+		APIKey:  "dashscope-key",
+	})
+	client.client = upstream.Client()
+
+	_, err := client.CloneVoice(context.Background(), BailianCloneInput{
+		ContentType: "audio/wav",
+		Data:        []byte("wav-bytes"),
+		VoiceID:     "teacher-voice",
+	})
+	if err == nil || !strings.Contains(err.Error(), "音色 ID") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestBailianCloneVoiceUsesMiniMaxAudioURLBranch(t *testing.T) {
 	var gotPath string
 	var gotBody map[string]any

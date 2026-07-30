@@ -364,7 +364,7 @@ func (s *Store) CloneProfile(ctx context.Context, id string) (Profile, error) {
 	}
 	asset, err := s.uploads.Find(ctx, assetID)
 	if err != nil {
-		_ = s.setProfileStatus(ctx, id, "failed", "读取音频样本失败: "+err.Error())
+		s.persistProfileFailure(ctx, id, "读取音频样本失败: "+err.Error())
 		return Profile{}, fmt.Errorf("读取音频样本失败: %w", err)
 	}
 	if err := s.setProfileStatus(ctx, id, "cloning", ""); err != nil {
@@ -379,17 +379,19 @@ func (s *Store) CloneProfile(ctx context.Context, id string) (Profile, error) {
 		client, _ := s.minimaxRuntime()
 		fileID, err := client.UploadCloneAudio(ctx, asset.Name, asset.ContentType, asset.Data)
 		if err != nil {
-			_ = s.setProfileStatus(ctx, id, "failed", err.Error())
+			s.persistProfileFailure(ctx, id, err.Error())
 			return Profile{}, err
 		}
 		if err := client.CloneVoice(ctx, fileID, voiceID); err != nil {
-			_ = s.setProfileStatus(ctx, id, "failed", err.Error())
+			s.persistProfileFailure(ctx, id, err.Error())
 			return Profile{}, err
 		}
 	case ProviderBailian:
 		bailian := s.bailianClient()
 		if bailian == nil {
-			return Profile{}, fmt.Errorf("阿里百炼声音复刻未配置")
+			err := fmt.Errorf("阿里百炼声音复刻未配置")
+			s.persistProfileFailure(ctx, id, err.Error())
+			return Profile{}, err
 		}
 		finalVoiceID, err := bailian.CloneVoice(ctx, BailianCloneInput{
 			AudioURL:    asset.ObjectURL,
@@ -400,13 +402,13 @@ func (s *Store) CloneProfile(ctx context.Context, id string) (Profile, error) {
 			VoiceID:     voiceID,
 		})
 		if err != nil {
-			_ = s.setProfileStatus(ctx, id, "failed", err.Error())
+			s.persistProfileFailure(ctx, id, err.Error())
 			return Profile{}, err
 		}
 		voiceID = finalVoiceID
 	default:
 		err := fmt.Errorf("不支持的人声克隆 provider: %s", profile.Provider)
-		_ = s.setProfileStatus(ctx, id, "failed", err.Error())
+		s.persistProfileFailure(ctx, id, err.Error())
 		return Profile{}, err
 	}
 	if _, err := s.db.ExecContext(ctx,
@@ -898,6 +900,19 @@ func (s *Store) setProfileStatus(ctx context.Context, id string, status string, 
 		status, lastError, id,
 	)
 	return err
+}
+
+func profileStatusContext(requestCtx context.Context) (context.Context, context.CancelFunc) {
+	if requestCtx == nil {
+		requestCtx = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(requestCtx), 5*time.Second)
+}
+
+func (s *Store) persistProfileFailure(requestCtx context.Context, id string, lastError string) {
+	ctx, cancel := profileStatusContext(requestCtx)
+	defer cancel()
+	_ = s.setProfileStatus(ctx, id, "failed", lastError)
 }
 
 func pagination(query url.Values) (int, int) {

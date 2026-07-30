@@ -42,6 +42,7 @@ import {
 
 import {
   getBailianCopyFeedback,
+  getBailianCloneFeedback,
   updateCopyingProfileIds,
 } from './profiles-copy-feedback';
 
@@ -175,7 +176,7 @@ async function submit() {
   }
   saving.value = true;
   try {
-    await createVoiceProfileApi({
+    const result = await createVoiceProfileApi({
       name: form.name,
       provider: form.provider,
       remark: form.remark,
@@ -184,7 +185,7 @@ async function submit() {
       sampleUrl: form.sampleUrl,
       voiceId: form.voiceId,
     });
-    message.success('人声已提交克隆');
+    showBailianCloneFeedback(result);
     resetForm();
     await load();
   } finally {
@@ -195,8 +196,8 @@ async function submit() {
 async function retryClone(record: VoiceProfile) {
   saving.value = true;
   try {
-    await cloneVoiceProfileApi(record.id);
-    message.success('已重新提交克隆');
+    const result = await cloneVoiceProfileApi(record.id);
+    showBailianCloneFeedback(result);
     await load();
   } finally {
     saving.value = false;
@@ -217,6 +218,11 @@ function setCopyingProfile(profileId: string, isCopying: boolean) {
 
 function showBailianCopyFeedback(result: VoiceProfile) {
   const feedback = getBailianCopyFeedback(result);
+  message[feedback.type](feedback.content);
+}
+
+function showBailianCloneFeedback(result: VoiceProfile) {
+  const feedback = getBailianCloneFeedback(result);
   message[feedback.type](feedback.content);
 }
 
