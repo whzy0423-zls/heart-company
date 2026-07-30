@@ -24,16 +24,14 @@ const bailianCopyApiSource = apiSource.slice(
 );
 
 describe('voice profile clone provider platform', () => {
-  it('defaults new voice profiles to Aliyun Bailian while retaining MiniMax', () => {
-    expect(source).toContain('const voiceProviderOptions');
+  it('creates all new voice profiles with Aliyun Bailian Qwen', () => {
     expect(source).toContain("provider: 'bailian'");
-    expect(source).toContain("{ label: '阿里百炼（推荐）', value: 'bailian' }");
-    expect(source).toContain(
-      "{ label: 'MiniMax（旧流程）', value: 'minimax' }",
-    );
-    expect(source).toContain('v-model:value="form.provider"');
+    expect(source).not.toContain('const voiceProviderOptions');
+    expect(source).not.toContain("value: 'minimax'");
+    expect(source).not.toContain('v-model:value="form.provider"');
     expect(source).toContain('provider: form.provider');
-    expect(source).toContain('百炼复刻需上传后的对象存储公网 URL');
+    expect(source).toContain('阿里百炼 Qwen 声音复刻');
+    expect(source).toContain('qwen3-tts-vc-2026-01-22');
     expect(source).toContain('先在芯之力模型配置中保存百炼 API Key');
   });
 
@@ -51,10 +49,10 @@ describe('voice profile clone provider platform', () => {
     expect(optionType).toContain('provider: string');
   });
 
-  it('switches synthesis models when a Bailian voice is selected', () => {
+  it('switches synthesis models when a Bailian Qwen voice is selected', () => {
     for (const pageSource of [testPageSource, contentPageSource]) {
       expect(pageSource).toContain("provider === 'bailian'");
-      expect(pageSource).toContain('MiniMax/speech-2.8-turbo');
+      expect(pageSource).toContain('qwen3-tts-vc-2026-01-22');
       expect(pageSource).toContain("'speech-02-hd'");
       expect(pageSource).toContain('watch(');
     }
@@ -76,13 +74,15 @@ describe('copy MiniMax profile to Bailian', () => {
     expect(source).toContain(
       "record.provider === 'minimax' && record.sampleAssetId",
     );
-    expect(source).toContain('复制到百炼');
+    expect(source).toContain("record.status !== 'migrated'");
+    expect(source).toContain('迁移到百炼 Qwen');
   });
 
-  it('confirms that the MiniMax voice and original sample are retained before copying', () => {
-    expect(source).toContain("title: '复制到百炼'");
-    expect(source).toContain('保留原 MiniMax 音色');
+  it('confirms migration to Qwen and deactivation of the old MiniMax profile', () => {
+    expect(source).toContain("title: '迁移到百炼 Qwen'");
+    expect(source).toContain('迁移成功后停用原 MiniMax 音色');
     expect(source).toContain('复用原音频样本');
+    expect(source).toContain("['draft', 'failed'].includes(record.status)");
   });
 
   it('uses a per-profile Set for concurrent copy loading and refreshes after the API call', () => {
@@ -106,9 +106,9 @@ describe('copy MiniMax profile to Bailian', () => {
 
 describe('Bailian copy feedback', () => {
   it.each([
-    ['ready', '', 'success', '已复制到百炼，可到芯之力模型配置选择'],
-    ['cloning', '', 'info', '已复制到百炼，正在处理中，请稍后刷新查看状态'],
-    ['draft', '', 'info', '已复制到百炼，正在处理中，请稍后刷新查看状态'],
+    ['ready', '', 'success', '已迁移到百炼 Qwen，可到芯之力模型配置选择'],
+    ['cloning', '', 'info', '已提交百炼 Qwen 迁移，正在处理中，请稍后刷新查看状态'],
+    ['draft', '', 'info', '已提交百炼 Qwen 迁移，正在处理中，请稍后刷新查看状态'],
     ['failed', '百炼服务暂不可用', 'error', '百炼服务暂不可用'],
   ])(
     'maps %s responses to accurate user feedback',

@@ -139,24 +139,26 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 	if format == "" {
 		format = "mp3"
 	}
-	payload, err := json.Marshal(map[string]any{
-		"model": cfg.Model,
-		"input": map[string]any{
-			"text": text,
-			"voice_setting": map[string]any{
-				"voice_id": cfg.Voice,
-				"speed":    1,
-				"vol":      1,
-				"pitch":    0,
-			},
-			"audio_setting": map[string]any{
-				"format":      format,
-				"sample_rate": 32000,
-				"bitrate":     128000,
-				"channel":     1,
-			},
-		},
-	})
+	input := map[string]any{"text": text}
+	if isBailianHostedMiniMaxTTSModel(cfg.Model) {
+		input["voice_setting"] = map[string]any{
+			"voice_id": cfg.Voice,
+			"speed":    1,
+			"vol":      1,
+			"pitch":    0,
+		}
+		input["audio_setting"] = map[string]any{
+			"format":      format,
+			"sample_rate": 32000,
+			"bitrate":     128000,
+			"channel":     1,
+		}
+	} else if isBailianQwenVoiceCloneTTSModel(cfg.Model) {
+		input["voice"] = cfg.Voice
+	} else {
+		return nil, "", errors.New("阿里百炼 TTS 模型不支持")
+	}
+	payload, err := json.Marshal(map[string]any{"model": cfg.Model, "input": input})
 	if err != nil {
 		return nil, "", errors.New("TTS 请求编码失败")
 	}
@@ -202,7 +204,7 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 	}
 	audioRef := firstNestedString(result,
 		"data.audio", "data.hex", "data.base64", "data.audio_url", "data.url",
-		"output.audio", "output.hex", "output.base64", "output.audio_url", "output.url",
+		"output.audio", "output.audio.data", "output.audio.url", "output.hex", "output.base64", "output.audio_url", "output.url",
 		"output.data.audio", "output.data.hex", "output.data.base64", "output.data.audio_url", "output.data.url",
 		"audio", "hex", "base64", "audio_url", "url",
 	)
@@ -210,6 +212,10 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 		return nil, "", errors.New("TTS 返回空音频")
 	}
 	audio, err := p.decodeOrFetchAudio(ctx, audioRef)
+	if err != nil {
+		return nil, "", err
+	}
+	audio, _, err = voice.NormalizeTTSMP3(ctx, audio, "", maxTTSSegmentBytes)
 	if err != nil {
 		return nil, "", err
 	}
@@ -223,6 +229,14 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 		return nil, "", errors.New("TTS 返回的音频格式无效")
 	}
 	return audio, "audio/mpeg", nil
+}
+
+func isBailianHostedMiniMaxTTSModel(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "minimax/")
+}
+
+func isBailianQwenVoiceCloneTTSModel(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "qwen3-tts-vc-")
 }
 
 func (p *bailianHostedMiniMaxTTS) decodeOrFetchAudio(ctx context.Context, raw string) ([]byte, error) {

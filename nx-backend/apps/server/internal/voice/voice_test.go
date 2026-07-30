@@ -3,6 +3,7 @@ package voice
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -309,6 +310,112 @@ func TestBailianHostedMiniMaxTextToAudio(t *testing.T) {
 	}
 }
 
+func TestBailianQwenTextToAudioUsesClonedVoicePayload(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if r.Header.Get("Authorization") != "Bearer dashscope-key" {
+			t.Fatalf("Authorization header = %q", r.Header.Get("Authorization"))
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": map[string]any{"audio": hexMP3ForVoiceTest()},
+		})
+	}))
+	defer upstream.Close()
+
+	client := NewBailianClient(BailianConfig{
+		APIBase:     upstream.URL + "/api/v1",
+		APIKey:      "dashscope-key",
+		TargetModel: "qwen3-tts-vc-2026-01-22",
+	})
+	client.client = upstream.Client()
+
+	audio, contentType, err := client.TextToAudio(
+		context.Background(),
+		"qwen3-tts-vc-2026-01-22",
+		"qwen-cloned-voice",
+		"你好",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != bailianGenerationPath {
+		t.Fatalf("path=%q", gotPath)
+	}
+	if gotBody["model"] != "qwen3-tts-vc-2026-01-22" {
+		t.Fatalf("model=%v", gotBody["model"])
+	}
+	input := gotBody["input"].(map[string]any)
+	if input["text"] != "你好" || input["voice"] != "qwen-cloned-voice" {
+		t.Fatalf("input=%#v", input)
+	}
+	if _, exists := input["voice_setting"]; exists {
+		t.Fatalf("Qwen payload must not contain MiniMax voice_setting: %#v", input)
+	}
+	decoded, err := hex.DecodeString(hexMP3ForVoiceTest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(audio) != string(decoded) || contentType != "audio/mpeg" {
+		t.Fatalf("audio=%x contentType=%q", audio, contentType)
+	}
+}
+
+func TestBailianQwenTextToAudioParsesOfficialNestedAudioData(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": map[string]any{
+				"audio": map[string]any{
+					"data": base64.StdEncoding.EncodeToString(testVoiceWAV()),
+				},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	client := NewBailianClient(BailianConfig{
+		APIBase:     upstream.URL,
+		APIKey:      "dashscope-key",
+		TargetModel: defaultBailianTargetModel,
+	})
+	client.client = upstream.Client()
+
+	audio, contentType, err := client.TextToAudio(context.Background(), defaultBailianTargetModel, "voice", "你好")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(audio) == 0 || strings.HasPrefix(string(audio), "RIFF") || contentType != "audio/mpeg" {
+		t.Fatalf("audio=%x contentType=%q", audio, contentType)
+	}
+}
+
+func testVoiceWAV() []byte {
+	const sampleRate = 24000
+	pcm := make([]byte, 4800)
+	wav := make([]byte, 44+len(pcm))
+	copy(wav[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(wav[4:8], uint32(len(wav)-8))
+	copy(wav[8:12], "WAVE")
+	copy(wav[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(wav[16:20], 16)
+	binary.LittleEndian.PutUint16(wav[20:22], 1)
+	binary.LittleEndian.PutUint16(wav[22:24], 1)
+	binary.LittleEndian.PutUint32(wav[24:28], sampleRate)
+	binary.LittleEndian.PutUint32(wav[28:32], sampleRate*2)
+	binary.LittleEndian.PutUint16(wav[32:34], 2)
+	binary.LittleEndian.PutUint16(wav[34:36], 16)
+	copy(wav[36:40], "data")
+	binary.LittleEndian.PutUint32(wav[40:44], uint32(len(pcm)))
+	copy(wav[44:], pcm)
+	return wav
+}
+
 func TestBailianTextToAudioUsesHostedMiniMaxGeneration(t *testing.T) {
 	var gotPath string
 	var gotBody map[string]any
@@ -366,6 +473,26 @@ func TestProfileProviderDefaultsToMiniMaxButKeepsBailianAliases(t *testing.T) {
 	}
 	if got := normalizeProfileProvider(" MiniMax "); got != "minimax" {
 		t.Fatalf("MiniMax provider = %q, want minimax", got)
+	}
+}
+
+func TestNewProfileProviderDefaultsToBailianQwen(t *testing.T) {
+	if got := normalizeNewProfileProvider(""); got != ProviderBailian {
+		t.Fatalf("empty new-profile provider = %q", got)
+	}
+	if got := normalizeNewProfileProvider("minimax"); got != ProviderMiniMax {
+		t.Fatalf("explicit legacy provider = %q", got)
+	}
+}
+
+func TestMigratedMiniMaxProfileCannotBeRecloned(t *testing.T) {
+	if profileCloneAllowed("migrated") {
+		t.Fatal("migrated profile must stay deactivated")
+	}
+	for _, status := range []string{"draft", "failed", "ready"} {
+		if !profileCloneAllowed(status) {
+			t.Fatalf("status %q should retain legacy clone compatibility", status)
+		}
 	}
 }
 
@@ -448,7 +575,7 @@ func TestConfigureMiniMaxIsSafeDuringSynthesis(t *testing.T) {
 }
 
 func TestDefaultSynthesisModelFollowsVoiceProvider(t *testing.T) {
-	if got := defaultSynthesisModel(ProviderBailian); got != "MiniMax/speech-2.8-turbo" {
+	if got := defaultSynthesisModel(ProviderBailian); got != "qwen3-tts-vc-2026-01-22" {
 		t.Fatalf("bailian model=%q", got)
 	}
 	if got := defaultSynthesisModel(ProviderMiniMax); got != "speech-02-hd" {
@@ -458,14 +585,14 @@ func TestDefaultSynthesisModelFollowsVoiceProvider(t *testing.T) {
 
 func TestAppendCloneVoiceOptionsIncludesBailianReadyProfiles(t *testing.T) {
 	options := appendCloneVoiceOptions(nil, []Profile{
-		{ID: "7", Name: "韩老师", Provider: "bailian", Status: "ready", VoiceID: "aliyun-voice-7"},
+		{ID: "7", Model: "qwen3-tts-vc-2026-01-22", Name: "韩老师", Provider: "bailian", Status: "ready", VoiceID: "aliyun-voice-7"},
 	})
 
 	if len(options) != 1 {
 		t.Fatalf("options len = %d, want 1", len(options))
 	}
 	got := options[0]
-	if got.ID != "clone:7" || got.Provider != "bailian" || got.Source != "clone" || got.VoiceID != "aliyun-voice-7" || got.VoiceName != "韩老师" {
+	if got.ID != "clone:7" || got.Model != "qwen3-tts-vc-2026-01-22" || got.Provider != "bailian" || got.Source != "clone" || got.VoiceID != "aliyun-voice-7" || got.VoiceName != "韩老师" {
 		t.Fatalf("unexpected clone option: %+v", got)
 	}
 	if got.Label != "韩老师（克隆）" {

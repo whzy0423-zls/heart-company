@@ -173,6 +173,7 @@ CREATE TABLE IF NOT EXISTS voice_profiles (
   id              BIGSERIAL PRIMARY KEY,
   name            TEXT NOT NULL DEFAULT '',
   provider        TEXT NOT NULL DEFAULT 'minimax',
+  model           TEXT NOT NULL DEFAULT '',
   voice_id        TEXT NOT NULL DEFAULT '',
   sample_asset_id BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
   sample_url      TEXT NOT NULL DEFAULT '',
@@ -183,6 +184,15 @@ CREATE TABLE IF NOT EXISTS voice_profiles (
   create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE voice_profiles ADD COLUMN IF NOT EXISTS model TEXT NOT NULL DEFAULT '';
+UPDATE voice_profiles
+   SET model = CASE
+     WHEN provider = 'bailian' THEN 'MiniMax/speech-2.8-turbo'
+     WHEN provider = 'minimax' THEN 'speech-02-hd'
+     ELSE model
+   END
+ WHERE model = '';
 
 CREATE TABLE IF NOT EXISTS voice_generations (
   id              BIGSERIAL PRIMARY KEY,

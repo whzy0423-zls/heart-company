@@ -48,7 +48,7 @@ const ttsProviderOptions = [
 ];
 const aliyunBailianTtsPreset = {
   endpoint: 'https://dashscope.aliyuncs.com/api/v1',
-  model: 'MiniMax/speech-2.8-turbo',
+  model: 'qwen3-tts-vc-2026-01-22',
 };
 const legacyAliyunBailianTtsPreset = {
   endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -232,6 +232,7 @@ function handleTtsVoiceOptionChange(optionId?: unknown) {
   if (provider === 'bailian') {
     form.value.tts.provider = 'bailian';
     applyTtsProviderPreset('bailian', true);
+    form.value.tts.model = option.model || aliyunBailianTtsPreset.model;
   } else if (provider === 'minimax') {
     form.value.tts.provider = 'minimax';
     applyTtsProviderPreset('minimax');
@@ -475,7 +476,7 @@ async function save() {
         </Col>
         <Col :md="12" :xs="24">
           <Form.Item label="模型">
-            <Input v-model:value="form.tts.model" placeholder="如 MiniMax/speech-2.8-turbo" />
+            <Input v-model:value="form.tts.model" placeholder="如 qwen3-tts-vc-2026-01-22" />
           </Form.Item>
           <Form.Item label="手动音色 ID">
             <Input

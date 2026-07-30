@@ -38,6 +38,7 @@ type Profile struct {
 	CreateTime    string `json:"createTime"`
 	ID            string `json:"id"`
 	LastError     string `json:"lastError"`
+	Model         string `json:"model"`
 	Name          string `json:"name"`
 	Provider      string `json:"provider"`
 	Remark        string `json:"remark"`
@@ -66,6 +67,7 @@ type Generation struct {
 type VoiceOption struct {
 	ID        string `json:"id"`
 	Label     string `json:"label"`
+	Model     string `json:"model"`
 	Provider  string `json:"provider"`
 	Source    string `json:"source"`
 	VoiceID   string `json:"voiceId"`
@@ -124,6 +126,7 @@ func bailianCopyActionForStatus(status string) bailianCopyAction {
 }
 
 type bailianCopyPlan struct {
+	Model         string
 	Name          string
 	Provider      string
 	Remark        string
@@ -141,7 +144,8 @@ func buildBailianCopyPlan(source Profile) (bailianCopyPlan, error) {
 		return bailianCopyPlan{}, fmt.Errorf("音频样本不存在")
 	}
 	return bailianCopyPlan{
-		Name:          source.Name + "（百炼）",
+		Model:         defaultBailianTargetModel,
+		Name:          source.Name + "（百炼 Qwen）",
 		Provider:      ProviderBailian,
 		Remark:        source.Remark,
 		SampleAssetID: assetID,
@@ -270,7 +274,7 @@ func (s *Store) ListProfiles(ctx context.Context, query url.Values) (PageResult[
 	}
 	args = append(args, pageSize, (page-1)*pageSize)
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id::text, name, provider, voice_id, COALESCE(sample_asset_id::text,''), sample_url, sample_name,
+		`SELECT id::text, name, provider, model, voice_id, COALESCE(sample_asset_id::text,''), sample_url, sample_name,
 		        status, remark, last_error, create_time, update_time
 		   FROM voice_profiles
 		  WHERE `+condition+`
@@ -287,7 +291,7 @@ func (s *Store) ListProfiles(ctx context.Context, query url.Values) (PageResult[
 	for rows.Next() {
 		var item Profile
 		var createTime, updateTime time.Time
-		if err := rows.Scan(&item.ID, &item.Name, &item.Provider, &item.VoiceID, &item.SampleAssetID, &item.SampleURL, &item.SampleName, &item.Status, &item.Remark, &item.LastError, &createTime, &updateTime); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Provider, &item.Model, &item.VoiceID, &item.SampleAssetID, &item.SampleURL, &item.SampleName, &item.Status, &item.Remark, &item.LastError, &createTime, &updateTime); err != nil {
 			return PageResult[Profile]{}, err
 		}
 		item.CreateTime = formatTime(createTime)
@@ -302,7 +306,8 @@ func (s *Store) CreateProfile(ctx context.Context, input CreateProfileInput) (Pr
 	if name == "" {
 		return Profile{}, fmt.Errorf("请输入人声名称")
 	}
-	provider := normalizeProfileProvider(input.Provider)
+	provider := normalizeNewProfileProvider(input.Provider)
+	model := defaultSynthesisModel(provider)
 	sampleID, err := parseOptionalID(input.SampleAssetID)
 	if err != nil || sampleID == 0 {
 		return Profile{}, fmt.Errorf("请先上传音频样本")
@@ -319,10 +324,10 @@ func (s *Store) CreateProfile(ctx context.Context, input CreateProfileInput) (Pr
 
 	var id string
 	err = s.db.QueryRowContext(ctx,
-		`INSERT INTO voice_profiles (name, provider, voice_id, sample_asset_id, sample_url, sample_name, status, remark)
-		 VALUES ($1,$2,$3,$4,$5,$6,'draft',$7)
+		`INSERT INTO voice_profiles (name, provider, model, voice_id, sample_asset_id, sample_url, sample_name, status, remark)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8)
 		 RETURNING id::text`,
-		name, provider, voiceID, sampleID, strings.TrimSpace(input.SampleURL), strings.TrimSpace(input.SampleName), strings.TrimSpace(input.Remark),
+		name, provider, model, voiceID, sampleID, strings.TrimSpace(input.SampleURL), strings.TrimSpace(input.SampleName), strings.TrimSpace(input.Remark),
 	).Scan(&id)
 	if err != nil {
 		return Profile{}, err
@@ -338,10 +343,20 @@ func (s *Store) CreateProfile(ctx context.Context, input CreateProfileInput) (Pr
 	return profile, nil
 }
 
+func normalizeNewProfileProvider(provider string) string {
+	if strings.TrimSpace(provider) == "" {
+		return ProviderBailian
+	}
+	return normalizeProfileProvider(provider)
+}
+
 func (s *Store) CloneProfile(ctx context.Context, id string) (Profile, error) {
 	profile, err := s.Profile(ctx, id)
 	if err != nil {
 		return Profile{}, err
+	}
+	if !profileCloneAllowed(profile.Status) {
+		return Profile{}, fmt.Errorf("已迁移的 MiniMax 音色不可重新克隆")
 	}
 	assetID, err := parseOptionalID(profile.SampleAssetID)
 	if err != nil || assetID == 0 {
@@ -381,6 +396,7 @@ func (s *Store) CloneProfile(ctx context.Context, id string) (Profile, error) {
 			ContentType: asset.ContentType,
 			Data:        asset.Data,
 			Filename:    asset.Name,
+			TargetModel: profile.Model,
 			VoiceID:     voiceID,
 		})
 		if err != nil {
@@ -404,8 +420,13 @@ func (s *Store) CloneProfile(ctx context.Context, id string) (Profile, error) {
 	return s.Profile(ctx, id)
 }
 
-// CopyProfileToBailian creates (or resumes) the one Bailian clone associated
-// with a MiniMax profile's sample asset. The source profile remains untouched.
+func profileCloneAllowed(status string) bool {
+	return strings.TrimSpace(status) != "migrated"
+}
+
+// CopyProfileToBailian creates (or resumes) the Qwen clone associated with a
+// MiniMax profile's sample asset. The source profile is marked migrated only
+// after the Qwen profile reaches ready, so legacy runtime data remains intact.
 func (s *Store) CopyProfileToBailian(ctx context.Context, sourceID string) (Profile, error) {
 	source, err := s.Profile(ctx, sourceID)
 	if err != nil {
@@ -438,20 +459,20 @@ func (s *Store) CopyProfileToBailian(ctx context.Context, sourceID string) (Prof
 	err = tx.QueryRowContext(ctx,
 		`SELECT id::text
 		   FROM voice_profiles
-		  WHERE provider=$1 AND sample_asset_id=$2
+		  WHERE provider=$1 AND sample_asset_id=$2 AND model=$3
 		  ORDER BY create_time ASC
 		  LIMIT 1`,
-		ProviderBailian, plan.SampleAssetID,
+		ProviderBailian, plan.SampleAssetID, plan.Model,
 	).Scan(&existingID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Profile{}, err
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := tx.QueryRowContext(ctx,
-			`INSERT INTO voice_profiles (name, provider, voice_id, sample_asset_id, sample_url, sample_name, status, remark)
-			 VALUES ($1,$2,$3,$4,$5,$6,'draft',$7)
+			`INSERT INTO voice_profiles (name, provider, model, voice_id, sample_asset_id, sample_url, sample_name, status, remark)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8)
 			 RETURNING id::text`,
-			plan.Name, plan.Provider, "nx_voice_"+randomID(10), plan.SampleAssetID, plan.SampleURL, plan.SampleName, plan.Remark,
+			plan.Name, plan.Provider, plan.Model, "nx_voice_"+randomID(10), plan.SampleAssetID, plan.SampleURL, plan.SampleName, plan.Remark,
 		).Scan(&existingID); err != nil {
 			return Profile{}, err
 		}
@@ -465,6 +486,11 @@ func (s *Store) CopyProfileToBailian(ctx context.Context, sourceID string) (Prof
 		return Profile{}, err
 	}
 	if bailianCopyActionForStatus(profile.Status) == returnExistingBailianCopy {
+		if profile.Status == "ready" {
+			if err := s.markProfileMigrated(ctx, sourceID); err != nil {
+				return Profile{}, err
+			}
+		}
 		return profile, nil
 	}
 	claimed, err := s.claimProfileClone(ctx, existingID)
@@ -476,6 +502,9 @@ func (s *Store) CopyProfileToBailian(ctx context.Context, sourceID string) (Prof
 	}
 	profile, err = s.CloneProfile(ctx, existingID)
 	if err == nil {
+		if err := s.markProfileMigrated(ctx, sourceID); err != nil {
+			return Profile{}, err
+		}
 		return profile, nil
 	}
 	// Keep a failed copy visible so the caller can retry it after correcting
@@ -484,6 +513,16 @@ func (s *Store) CopyProfileToBailian(ctx context.Context, sourceID string) (Prof
 		return saved, nil
 	}
 	return Profile{}, err
+}
+
+func (s *Store) markProfileMigrated(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE voice_profiles
+		    SET status='migrated', last_error='', update_time=now()
+		  WHERE id=$1 AND provider=$2`,
+		id, ProviderMiniMax,
+	)
+	return err
 }
 
 func (s *Store) claimProfileClone(ctx context.Context, id string) (bool, error) {
@@ -507,12 +546,12 @@ func (s *Store) Profile(ctx context.Context, id string) (Profile, error) {
 	var item Profile
 	var createTime, updateTime time.Time
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id::text, name, provider, voice_id, COALESCE(sample_asset_id::text,''), sample_url, sample_name,
+		`SELECT id::text, name, provider, model, voice_id, COALESCE(sample_asset_id::text,''), sample_url, sample_name,
 		        status, remark, last_error, create_time, update_time
 		   FROM voice_profiles
 		  WHERE id=$1`,
 		id,
-	).Scan(&item.ID, &item.Name, &item.Provider, &item.VoiceID, &item.SampleAssetID, &item.SampleURL, &item.SampleName, &item.Status, &item.Remark, &item.LastError, &createTime, &updateTime)
+	).Scan(&item.ID, &item.Name, &item.Provider, &item.Model, &item.VoiceID, &item.SampleAssetID, &item.SampleURL, &item.SampleName, &item.Status, &item.Remark, &item.LastError, &createTime, &updateTime)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -603,8 +642,13 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 		voiceID = profile.VoiceID
 	}
 	model := strings.TrimSpace(input.Model)
-	if model == "" {
-		model = defaultSynthesisModel(profile.Provider)
+	if profile.Provider == ProviderBailian && strings.TrimSpace(profile.Model) != "" {
+		model = profile.Model
+	} else if model == "" {
+		model = profile.Model
+		if model == "" {
+			model = defaultSynthesisModel(profile.Provider)
+		}
 	}
 	audio, contentType, err := s.textToAudio(ctx, profile.Provider, model, voiceID, text)
 	if err != nil {
@@ -688,6 +732,9 @@ func (s *Store) GenerateContent(ctx context.Context, input ContentGenerateInput)
 		voiceID = profile.VoiceID
 		voiceName = profile.Name
 		synthesisProvider = profile.Provider
+		if profile.Provider == ProviderBailian && strings.TrimSpace(profile.Model) != "" {
+			model = profile.Model
+		}
 	} else if voiceID == "" {
 		return ContentJob{}, fmt.Errorf("请选择 MiniMax 官方音色")
 	}
@@ -921,6 +968,7 @@ func fallbackOfficialVoiceOptions() []VoiceOption {
 		options = append(options, VoiceOption{
 			ID:        "official:" + item.id,
 			Label:     item.name + "（官方）",
+			Model:     "speech-02-hd",
 			Provider:  "minimax",
 			Source:    "official",
 			VoiceID:   item.id,
@@ -1282,6 +1330,7 @@ func collectOfficialVoices(payload map[string]any) []VoiceOption {
 		options = append(options, VoiceOption{
 			ID:        "official:" + voiceID,
 			Label:     name + "（官方）",
+			Model:     "speech-02-hd",
 			Provider:  "minimax",
 			Source:    "official",
 			VoiceID:   voiceID,

@@ -46,7 +46,7 @@ describe('xinzhili TTS voice reuse configuration', () => {
     expect(viewSource).toContain('voiceOptionProvider(item) === currentTtsVoiceProvider.value');
     expect(viewSource).toContain('applyTtsProviderPreset');
     expect(viewSource).toContain('https://dashscope.aliyuncs.com/api/v1');
-    expect(viewSource).toContain('MiniMax/speech-2.8-turbo');
+    expect(viewSource).toContain('qwen3-tts-vc-2026-01-22');
     expect(viewSource).toContain("if (provider === 'bailian')");
   });
 
@@ -60,6 +60,7 @@ describe('xinzhili TTS voice reuse configuration', () => {
   it('documents voice options as clone or official sources', () => {
     expect(voiceApiSource).toContain("source: 'clone' | 'official'");
     expect(voiceApiSource).toContain('provider: string');
+    expect(voiceApiSource).toContain('model: string');
     expect(voiceApiSource).toContain('voiceId: string');
     expect(voiceApiSource).toContain('voiceName: string');
   });

@@ -78,23 +78,20 @@ const form = reactive({
   voiceId: '',
 });
 
-const voiceProviderOptions = [
-  { label: '阿里百炼（推荐）', value: 'bailian' },
-  { label: 'MiniMax（旧流程）', value: 'minimax' },
-];
-
 const statusOptions = [
   { label: '全部状态', value: '' },
   { label: '可使用', value: 'ready' },
   { label: '克隆中', value: 'cloning' },
   { label: '失败', value: 'failed' },
   { label: '草稿', value: 'draft' },
+  { label: '已迁移', value: 'migrated' },
 ];
 
 const columns = [
   { dataIndex: 'name', title: '人声名称', width: 180 },
   { dataIndex: 'voiceId', title: 'Voice ID', width: 240 },
   { dataIndex: 'provider', title: '平台', width: 140 },
+  { dataIndex: 'model', title: '模型', width: 220 },
   { dataIndex: 'status', title: '状态', width: 110 },
   { dataIndex: 'sampleUrl', title: '样本预览', width: 260 },
   ellipsisColumn('remark', '备注', { lines: 2 }),
@@ -225,7 +222,7 @@ function showBailianCopyFeedback(result: VoiceProfile) {
 
 function copyProfileToBailian(record: VoiceProfile) {
   Modal.confirm({
-    content: `将保留原 MiniMax 音色，并复用原音频样本创建「${record.name}」的百炼人声。确认继续吗？`,
+    content: `将复用原音频样本创建「${record.name}」的阿里百炼 Qwen 音色，迁移成功后停用原 MiniMax 音色。确认继续吗？`,
     onOk: async () => {
       setCopyingProfile(record.id, true);
       try {
@@ -238,7 +235,7 @@ function copyProfileToBailian(record: VoiceProfile) {
         setCopyingProfile(record.id, false);
       }
     },
-    title: '复制到百炼',
+    title: '迁移到百炼 Qwen',
   });
 }
 
@@ -296,6 +293,7 @@ function statusLabel(status: string) {
   if (status === 'failed') return '失败';
   if (status === 'cloning') return '克隆中';
   if (status === 'draft') return '草稿';
+  if (status === 'migrated') return '已迁移';
   return status || '-';
 }
 
@@ -316,7 +314,7 @@ onMounted(load);
 
 <template>
   <Page
-    description="上传授权音频样本，优先走阿里百炼复刻音色，也保留 MiniMax 旧流程，并保存可复用的人声档案。"
+    description="新音色统一使用阿里百炼 Qwen 声音复刻；历史 MiniMax 音色保留运行兼容并可迁移。"
     title="人声管理"
   >
     <Row :gutter="[16, 16]">
@@ -330,19 +328,12 @@ onMounted(load);
                 placeholder="例如：课程老师女声"
               />
             </Form.Item>
-            <Form.Item label="复刻平台" required>
-              <Select
-                v-model:value="form.provider"
-                :options="voiceProviderOptions"
-                placeholder="请选择复刻平台"
-              />
-            </Form.Item>
             <Alert
               class="mb-4"
               type="info"
               show-icon
-              message="百炼复刻需上传后的对象存储公网 URL"
-              description="先在芯之力模型配置中保存百炼 API Key"
+              message="阿里百炼 Qwen 声音复刻"
+              description="固定使用 qwen3-tts-vc-2026-01-22；请先在芯之力模型配置中保存百炼 API Key"
             />
             <Form.Item label="Voice ID">
               <Input
@@ -452,6 +443,7 @@ onMounted(load);
               <template v-else-if="column.key === 'action'">
                 <Space>
                   <Button
+                    v-if="['draft', 'failed'].includes(record.status)"
                     :loading="saving"
                     size="small"
                     type="link"
@@ -460,13 +452,13 @@ onMounted(load);
                     重新克隆
                   </Button>
                   <Button
-                    v-if="record.provider === 'minimax' && record.sampleAssetId"
+                    v-if="record.provider === 'minimax' && record.sampleAssetId && record.status !== 'migrated'"
                     :loading="isCopyingProfile(record.id)"
                     size="small"
                     type="link"
                     @click="copyProfileToBailian(profileRecord(record))"
                   >
-                    复制到百炼
+                    迁移到百炼 Qwen
                   </Button>
                   <Button
                     danger

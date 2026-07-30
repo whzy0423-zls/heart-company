@@ -117,6 +117,77 @@ func TestBailianHostedMiniMaxTTSParsesOutputAudio(t *testing.T) {
 	}
 }
 
+func TestBailianQwenTTSUsesClonedVoicePayload(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": map[string]any{"audio": hex.EncodeToString(testMP3())},
+		})
+	}))
+	defer server.Close()
+
+	cfg := TTSConfig{
+		Provider: TTSProviderBailian,
+		Endpoint: server.URL + "/api/v1",
+		APIKey:   "dashscope-key",
+		Model:    "qwen3-tts-vc-2026-01-22",
+		Voice:    "qwen-cloned-voice",
+		Format:   "mp3",
+	}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio, mime, err := provider.Synthesize(context.Background(), cfg, "你好")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotBody["model"] != cfg.Model {
+		t.Fatalf("model=%v", gotBody["model"])
+	}
+	input := gotBody["input"].(map[string]any)
+	if input["text"] != "你好" || input["voice"] != "qwen-cloned-voice" {
+		t.Fatalf("input=%#v", input)
+	}
+	if _, exists := input["voice_setting"]; exists {
+		t.Fatalf("Qwen payload must not contain MiniMax voice_setting: %#v", input)
+	}
+	if string(audio) != string(testMP3()) || mime != "audio/mpeg" {
+		t.Fatalf("audio/mime mismatch")
+	}
+}
+
+func TestBailianQwenTTSParsesOfficialNestedAudioData(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": map[string]any{
+				"audio": map[string]any{
+					"data": base64.StdEncoding.EncodeToString(testMP3()),
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL, APIKey: "key", Model: "qwen3-tts-vc-2026-01-22", Voice: "voice", Format: "mp3"}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio, mime, err := provider.Synthesize(context.Background(), cfg, "短句")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(audio) != string(testMP3()) || mime != "audio/mpeg" {
+		t.Fatalf("audio/mime mismatch")
+	}
+}
+
 func TestBailianHostedMiniMaxTTSParsesBase64AndRejectsPrivateURL(t *testing.T) {
 	t.Run("base64", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

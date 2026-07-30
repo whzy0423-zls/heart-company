@@ -125,6 +125,7 @@ import XinzhiliModelSettings from './xinzhili-model.vue';
 const bailianClone = {
   id: 'clone:bailian-profile',
   label: '百炼已复刻音色',
+  model: 'qwen3-tts-vc-2026-01-22',
   provider: 'bailian',
   source: 'clone' as const,
   voiceId: 'bailian-voice-id',
@@ -133,6 +134,7 @@ const bailianClone = {
 const minimaxClone = {
   id: 'clone:minimax-profile',
   label: 'MiniMax 已克隆音色',
+  model: 'speech-02-hd',
   provider: 'minimax',
   source: 'clone' as const,
   voiceId: 'minimax-voice-id',
@@ -238,6 +240,7 @@ describe('xinzhili Bailian TTS voice selection', () => {
       expect.objectContaining({
         tts: expect.objectContaining({
           apiKey: '',
+          model: bailianClone.model,
           provider: 'bailian',
           voice: bailianClone.voiceId,
         }),

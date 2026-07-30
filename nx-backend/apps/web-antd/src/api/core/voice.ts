@@ -6,6 +6,7 @@ export interface VoiceProfile {
   createTime: string;
   id: string;
   lastError: string;
+  model: string;
   name: string;
   provider: string;
   remark: string;
@@ -34,6 +35,7 @@ export interface VoiceGeneration {
 export interface VoiceOption {
   id: string;
   label: string;
+  model: string;
   provider: string;
   source: 'clone' | 'official';
   voiceId: string;

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"path"
 	"regexp"
 	"strings"
@@ -25,7 +26,7 @@ const (
 
 	defaultBailianAPIBase     = "https://dashscope.aliyuncs.com"
 	defaultBailianEnrollModel = "qwen-voice-enrollment"
-	defaultBailianTargetModel = "MiniMax/speech-2.8-turbo"
+	defaultBailianTargetModel = "qwen3-tts-vc-2026-01-22"
 	bailianCustomizationPath  = "/api/v1/services/audio/tts/customization"
 	bailianGenerationPath     = "/api/v1/services/aigc/multimodal-generation/generation"
 )
@@ -162,27 +163,26 @@ func (c *BailianClient) TextToAudio(ctx context.Context, model string, voiceID s
 	if model == "" {
 		model = c.targetModel
 	}
-	if !isBailianHostedMiniMaxModel(model) {
-		return nil, "", fmt.Errorf("当前百炼声音测试仅支持 MiniMax 托管语音模型")
+	input := map[string]any{"text": text}
+	if isBailianHostedMiniMaxModel(model) {
+		input["voice_setting"] = map[string]any{
+			"voice_id": strings.TrimSpace(voiceID),
+			"speed":    1,
+			"vol":      1,
+			"pitch":    0,
+		}
+		input["audio_setting"] = map[string]any{
+			"sample_rate": 32000,
+			"bitrate":     128000,
+			"format":      "mp3",
+			"channel":     1,
+		}
+	} else if isBailianQwenVoiceCloneModel(model) {
+		input["voice"] = strings.TrimSpace(voiceID)
+	} else {
+		return nil, "", fmt.Errorf("当前百炼声音测试不支持模型 %s", model)
 	}
-	payload, _ := json.Marshal(map[string]any{
-		"model": model,
-		"input": map[string]any{
-			"text": text,
-			"voice_setting": map[string]any{
-				"voice_id": strings.TrimSpace(voiceID),
-				"speed":    1,
-				"vol":      1,
-				"pitch":    0,
-			},
-			"audio_setting": map[string]any{
-				"sample_rate": 32000,
-				"bitrate":     128000,
-				"format":      "mp3",
-				"channel":     1,
-			},
-		},
-	})
+	payload, _ := json.Marshal(map[string]any{"model": model, "input": input})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(bailianGenerationPath), bytes.NewReader(payload))
 	if err != nil {
 		return nil, "", err
@@ -195,7 +195,7 @@ func (c *BailianClient) TextToAudio(ctx context.Context, model string, voiceID s
 	}
 	audioValue := findString(result,
 		"data.audio", "data.audio_url", "data.url",
-		"output.audio", "output.audio_url", "output.url",
+		"output.audio", "output.audio.data", "output.audio.url", "output.audio_url", "output.url",
 		"output.data.audio", "output.data.audio_url", "output.data.url",
 		"audio", "audio_url", "url",
 	)
@@ -206,7 +206,44 @@ func (c *BailianClient) TextToAudio(ctx context.Context, model string, voiceID s
 	if err != nil {
 		return nil, "", err
 	}
-	return audio, contentType, nil
+	return NormalizeTTSMP3(ctx, audio, contentType, 20*1024*1024)
+}
+
+// NormalizeTTSMP3 keeps the existing WebSocket/audio-asset MP3 contract while
+// accepting Qwen's documented WAV result. MiniMax and already-MP3 responses
+// pass through unchanged.
+func NormalizeTTSMP3(ctx context.Context, audio []byte, contentType string, maxBytes int64) ([]byte, string, error) {
+	if len(audio) == 0 {
+		return nil, "", errors.New("阿里百炼未返回音频数据")
+	}
+	if !looksLikeWAV(audio) {
+		return audio, contentType, nil
+	}
+	command := exec.CommandContext(ctx,
+		"ffmpeg", "-hide_banner", "-loglevel", "error",
+		"-i", "pipe:0", "-vn", "-codec:a", "libmp3lame", "-b:a", "128k",
+		"-f", "mp3", "pipe:1",
+	)
+	command.Stdin = bytes.NewReader(audio)
+	var stdout bytes.Buffer
+	command.Stdout = &stdout
+	if err := command.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, "", ctx.Err()
+		}
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, "", errors.New("Qwen 音频转换需要服务端安装 ffmpeg")
+		}
+		return nil, "", errors.New("Qwen 音频转换失败")
+	}
+	if stdout.Len() == 0 || (maxBytes > 0 && int64(stdout.Len()) > maxBytes) {
+		return nil, "", errors.New("Qwen 音频转换结果大小无效")
+	}
+	return stdout.Bytes(), "audio/mpeg", nil
+}
+
+func looksLikeWAV(audio []byte) bool {
+	return len(audio) >= 12 && string(audio[:4]) == "RIFF" && string(audio[8:12]) == "WAVE"
 }
 
 func (c *BailianClient) decodeOrDownloadAudio(ctx context.Context, raw string) ([]byte, string, error) {
@@ -357,6 +394,10 @@ func isBailianHostedMiniMaxModel(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "minimax/")
 }
 
+func isBailianQwenVoiceCloneModel(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "qwen3-tts-vc-")
+}
+
 func appendCloneVoiceOptions(options []VoiceOption, profiles []Profile) []VoiceOption {
 	for _, profile := range profiles {
 		if strings.TrimSpace(profile.Status) != "ready" || strings.TrimSpace(profile.VoiceID) == "" {
@@ -365,6 +406,7 @@ func appendCloneVoiceOptions(options []VoiceOption, profiles []Profile) []VoiceO
 		options = append(options, VoiceOption{
 			ID:        "clone:" + profile.ID,
 			Label:     profile.Name + "（克隆）",
+			Model:     profile.Model,
 			Provider:  strings.TrimSpace(profile.Provider),
 			Source:    "clone",
 			VoiceID:   profile.VoiceID,
