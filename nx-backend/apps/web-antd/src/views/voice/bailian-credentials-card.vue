@@ -77,9 +77,9 @@ function isConflict(errorValue: unknown) {
   return status === 409;
 }
 
-async function load() {
+async function loadCredentials(preserveError = false) {
   loading.value = true;
-  error.value = null;
+  if (!preserveError) error.value = null;
   emitStatus();
   try {
     applyCredential(await getBailianCredentialsApi());
@@ -108,10 +108,15 @@ async function save(clearApiKey = false) {
       clearApiKey ? '百炼公共 API Key 已清空' : '百炼公共 API Key 已保存',
     );
   } catch (errorValue) {
-    error.value = isConflict(errorValue)
-      ? '配置已更新，请重新加载后再保存'
-      : '百炼凭证保存失败，请稍后重试';
-    emitStatus();
+    if (isConflict(errorValue)) {
+      apiKey.value = '';
+      error.value = '配置已被其他管理员更新，正在重新加载';
+      emitStatus();
+      await loadCredentials(true);
+    } else {
+      error.value = '百炼凭证保存失败，请稍后重试';
+      emitStatus();
+    }
   } finally {
     saving.value = false;
     emitStatus();
@@ -129,7 +134,7 @@ function confirmClear() {
   });
 }
 
-onMounted(load);
+onMounted(loadCredentials);
 </script>
 
 <template>
@@ -169,13 +174,19 @@ onMounted(load);
     </template>
 
     <Space class="actions" wrap>
-      <Button v-if="error" :loading="loading" @click="load"> 重新加载 </Button>
+      <Button v-if="error" :loading="loading" @click="loadCredentials()">
+        重新加载
+      </Button>
       <template v-else>
         <Button :loading="saving" type="primary" @click="save()">保存</Button>
         <Button :disabled="loading || saving" danger @click="confirmClear">
           清空 Key
         </Button>
-        <Button :loading="loading" :disabled="saving" @click="load">
+        <Button
+          :loading="loading"
+          :disabled="saving"
+          @click="loadCredentials()"
+        >
           重新加载
         </Button>
       </template>

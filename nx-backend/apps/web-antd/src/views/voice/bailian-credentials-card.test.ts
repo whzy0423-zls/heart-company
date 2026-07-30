@@ -99,6 +99,8 @@ async function mountCard() {
 
 describe('BailianCredentialsCard', () => {
   beforeEach(() => {
+    vi.mocked(getBailianCredentialsApi).mockReset();
+    vi.mocked(updateBailianCredentialsApi).mockReset();
     vi.mocked(getBailianCredentialsApi).mockResolvedValue(sharedConfigured);
     vi.mocked(updateBailianCredentialsApi).mockResolvedValue({
       ...sharedConfigured,
@@ -154,20 +156,66 @@ describe('BailianCredentialsCard', () => {
     wrapper.unmount();
   });
 
-  it('does not overwrite on a CAS conflict and lets the user reload the latest state', async () => {
+  it('reloads the latest credentials and clears the old input after a CAS conflict', async () => {
+    const latest = { ...sharedConfigured, version: 8 };
+    let finishReload: (value: typeof latest) => void = () => {};
+    vi.mocked(getBailianCredentialsApi)
+      .mockResolvedValueOnce(sharedConfigured)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishReload = resolve;
+          }),
+      );
     vi.mocked(updateBailianCredentialsApi).mockRejectedValue({
       response: { status: 409 },
     });
     const wrapper = await mountCard();
-    inputValue('new-key');
+    inputValue('old-key');
     (wrapper.button('保存') as HTMLButtonElement).click();
     await flushVuePromises();
 
-    expect(wrapper.text()).toContain('配置已更新，请重新加载后再保存');
+    expect(wrapper.text()).toContain('配置已被其他管理员更新，正在重新加载');
+    expect(getBailianCredentialsApi).toHaveBeenCalledTimes(2);
     expect(updateBailianCredentialsApi).toHaveBeenCalledOnce();
+
+    finishReload(latest);
+    await flushVuePromises();
+    expect(wrapper.text()).toContain('版本 8');
+    expect(
+      (
+        document.body.querySelector(
+          '[data-testid="bailian-api-key-input"]',
+        ) as HTMLInputElement
+      ).value,
+    ).toBe('');
+    wrapper.unmount();
+  });
+
+  it('keeps a clear unavailable state and manual reload when automatic conflict reload fails', async () => {
+    vi.mocked(getBailianCredentialsApi)
+      .mockResolvedValueOnce(sharedConfigured)
+      .mockRejectedValueOnce(new Error('reload down'));
+    vi.mocked(updateBailianCredentialsApi).mockRejectedValue({
+      response: { status: 409 },
+    });
+    const wrapper = await mountCard();
+    inputValue('old-key');
+    (wrapper.button('保存') as HTMLButtonElement).click();
+    await flushVuePromises();
+
+    expect(getBailianCredentialsApi).toHaveBeenCalledTimes(2);
+    expect(wrapper.text()).toContain('百炼凭证读取失败，请重新加载');
+    expect(wrapper.button('重新加载')).toBeTruthy();
     (wrapper.button('重新加载') as HTMLButtonElement).click();
     await flushVuePromises();
-    expect(getBailianCredentialsApi).toHaveBeenCalledTimes(2);
+    expect(
+      (
+        document.body.querySelector(
+          '[data-testid="bailian-api-key-input"]',
+        ) as HTMLInputElement
+      ).value,
+    ).toBe('');
     wrapper.unmount();
   });
 
