@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { defineComponent, h, reactive } from 'vue';
+import { defineComponent, h, reactive, ref } from 'vue';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -120,6 +120,33 @@ describe('classroom series cover editor', () => {
     await flushVuePromises();
 
     expect(wrapper.text()).toContain('封面已保存，但预览暂时不可用');
+    wrapper.unmount();
+  });
+
+  it('clears the native file selection when switching series', async () => {
+    const series = ref({ ...baseSeries });
+    const { default: SeriesCoverEditor } =
+      await import('./components/series-cover-editor.vue');
+    const wrapper = mountVueComponent(
+      defineComponent({
+        setup: () => () => h(SeriesCoverEditor, { series: series.value }),
+      }),
+    );
+    await flushVuePromises();
+
+    const input = [...document.querySelectorAll('input[type="file"]')].at(
+      -1,
+    ) as HTMLInputElement;
+    Object.defineProperty(input, 'value', {
+      configurable: true,
+      value: 'C:\\fakepath\\series-cover.webp',
+      writable: true,
+    });
+
+    series.value = { ...baseSeries, id: 29, title: '另一个系列' };
+    await flushVuePromises();
+
+    expect(input.value).toBe('');
     wrapper.unmount();
   });
 

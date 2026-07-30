@@ -28,6 +28,7 @@ type fakeMultipartStorage struct {
 	abortErr                                 error
 	initiateErr                              error
 	initiateHook                             func()
+	deleteHook                               func(context.Context, string) error
 	deleteErr                                error
 }
 
@@ -61,8 +62,11 @@ func (f *fakeMultipartStorage) AbortMultipart(_ context.Context, in storage.Abor
 	f.abortCalls++
 	return f.abortErr
 }
-func (f *fakeMultipartStorage) DeleteObject(_ context.Context, key string) error {
+func (f *fakeMultipartStorage) DeleteObject(ctx context.Context, key string) error {
 	f.deleteCalls = append(f.deleteCalls, key)
+	if f.deleteHook != nil {
+		return f.deleteHook(ctx, key)
+	}
 	return f.deleteErr
 }
 func (f *fakeMultipartStorage) ListMultipartParts(context.Context, storage.ListPartsInput) ([]storage.MultipartPart, error) {
@@ -927,6 +931,32 @@ func TestClassroomUploadCleanupRecoversStaleCleaningAfterFinishError(t *testing.
 	}
 }
 
+func TestClassroomUploadCleanupMarksInterruptedProcessingFailed(t *testing.T) {
+	now := time.Now()
+	mediaID := int64(91)
+	task := UploadTask{
+		ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "old-u", ObjectKey: "old.mp4",
+		ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1,
+		Status: UploadCompleting, ExpiresAt: now.Add(-time.Minute), AttemptCount: 1,
+		CleanupStatus: "pending", MediaAssetID: &mediaID, UpdatedAt: now.Add(-time.Hour),
+	}
+	repo := &fakeUploadRepo{
+		content: Content{ID: 7, ContentType: ContentVideo, Status: ContentProcessing, AccessLevel: AccessPublic, MediaAssetID: &mediaID},
+		media:   MediaAsset{ID: mediaID, ObjectKey: "old.mp4", ContentType: ContentVideo, StorageStatus: MediaProcessing},
+		task:    task,
+		expired: []UploadTask{task},
+	}
+
+	n, err := newUploadService(repo, &fakeMultipartStorage{}, now).CleanupPending(context.Background(), 1)
+
+	if err != nil || n != 1 {
+		t.Fatalf("cleanup n=%d err=%v", n, err)
+	}
+	if repo.media.StorageStatus != MediaFailed || repo.content.Status != ContentFailed {
+		t.Fatalf("interrupted processing state not failed media=%+v content=%+v", repo.media, repo.content)
+	}
+}
+
 func TestClassroomUploadRetryPreservesFailedReferenceWhenCleanupFails(t *testing.T) {
 	now := time.Now()
 	repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentFailed, AccessLevel: AccessPublic}, task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "old-u", ObjectKey: "old.mp4", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1, Status: UploadFailed, ExpiresAt: now.Add(time.Hour), AttemptCount: 1, CleanupStatus: "pending"}}
@@ -1113,6 +1143,30 @@ func TestClassroomUploadFailurePersistsAfterCompletionContextExpires(t *testing.
 	}
 }
 
+func TestClassroomUploadFailurePersistsBeforeRemoteCoverCleanup(t *testing.T) {
+	now := time.Now()
+	mediaID := int64(91)
+	repo := &fakeUploadRepo{
+		content: Content{ID: 7, ContentType: ContentVideo, Status: ContentProcessing, AccessLevel: AccessPublic, MediaAssetID: &mediaID},
+		media:   MediaAsset{ID: mediaID, ContentType: ContentVideo, CoverObjectKey: "cover.jpg", StorageStatus: MediaProcessing},
+		task:    UploadTask{ID: 1, ContentID: 7, CreatorID: 42, MediaAssetID: &mediaID, Status: UploadCompleting, ExpiresAt: now.Add(time.Hour)},
+	}
+	persistedBeforeCleanup := false
+	st := &fakeMultipartStorage{deleteHook: func(context.Context, string) error {
+		persistedBeforeCleanup = repo.task.Status == UploadFailed && repo.media.StorageStatus == MediaFailed && repo.content.Status == ContentFailed
+		return nil
+	}}
+
+	err := newUploadService(repo, st, now).fail(context.Background(), repo.task, errors.New("processing failed"))
+
+	if err == nil {
+		t.Fatal("expected original processing failure")
+	}
+	if !persistedBeforeCleanup {
+		t.Fatalf("remote cleanup ran before failure state persisted task=%+v media=%+v content=%+v", repo.task, repo.media, repo.content)
+	}
+}
+
 func TestClassroomUploadCoverDeleteFailureLeavesTraceForMaintenance(t *testing.T) {
 	now := time.Now()
 	repo := &fakeUploadRepo{content: Content{ID: 7, ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}, task: UploadTask{ID: 1, ContentID: 7, CreatorID: 42, OSSUploadID: "u", ObjectKey: "video", ExpectedSize: 10, Checksum: "crc64:123", PartSize: 10, MaxParts: 1, Status: UploadUploading, ExpiresAt: now.Add(time.Hour), AttemptCount: 1}, updateErr: errors.New("persist cover failed")}
@@ -1123,6 +1177,7 @@ func TestClassroomUploadCoverDeleteFailureLeavesTraceForMaintenance(t *testing.T
 		t.Fatalf("trace missing err=%v task=%+v", err, repo.task)
 	}
 	repo.expired = []UploadTask{repo.task}
+	repo.updateErr = nil
 	st.deleteErr = nil
 	if _, err := svc.CleanupPending(context.Background(), 1); err != nil {
 		t.Fatal(err)

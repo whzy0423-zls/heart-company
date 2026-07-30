@@ -464,10 +464,12 @@ func (s *UploadService) ensureActive(ctx context.Context, task UploadTask) error
 	return nil
 }
 func (s *UploadService) fail(ctx context.Context, task UploadTask, cause error) error {
-	failureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), uploadFailurePersistenceTimeout)
+	baseCtx := context.WithoutCancel(ctx)
+	failureCtx, cancel := context.WithTimeout(baseCtx, uploadFailurePersistenceTimeout)
 	defer cancel()
 	ctx = failureCtx
 	var errs []error
+	var coverObjectKey string
 	task.Status = UploadFailed
 	task.CleanupStatus = "pending"
 	task.FailureReason = cause.Error()
@@ -494,11 +496,7 @@ func (s *UploadService) fail(ctx context.Context, task UploadTask, cause error) 
 		if _, stateErr := s.repo.SetContentMediaState(ctx, task.ContentID, task.MediaAssetID, ContentProcessing, 0); stateErr != nil {
 			errs = append(errs, stateErr)
 		}
-		if media.CoverObjectKey != "" {
-			if deleteErr := s.store.DeleteObject(ctx, media.CoverObjectKey); deleteErr != nil && !storage.IsAlreadyGone(deleteErr) {
-				errs = append(errs, deleteErr)
-			}
-		}
+		coverObjectKey = media.CoverObjectKey
 		media.StorageStatus = MediaFailed
 		if _, updateErr := s.repo.UpdateMediaAsset(ctx, media); updateErr != nil {
 			errs = append(errs, updateErr)
@@ -509,6 +507,13 @@ func (s *UploadService) fail(ctx context.Context, task UploadTask, cause error) 
 	}
 	if _, saveErr := s.repo.SaveUploadTask(ctx, task); saveErr != nil {
 		errs = append(errs, saveErr)
+	}
+	if coverObjectKey != "" {
+		cleanupCtx, cleanupCancel := context.WithTimeout(baseCtx, uploadFailurePersistenceTimeout)
+		if deleteErr := s.store.DeleteObject(cleanupCtx, coverObjectKey); deleteErr != nil && !storage.IsAlreadyGone(deleteErr) {
+			errs = append(errs, deleteErr)
+		}
+		cleanupCancel()
 	}
 	if len(errs) > 0 {
 		return errors.Join(cause, errors.Join(errs...))
@@ -542,11 +547,26 @@ func validCRC64(value string) bool {
 }
 func (s *UploadService) cleanupTask(ctx context.Context, task *UploadTask, status UploadStatus) error {
 	var cleanupErr error
+	if task.MediaAssetID != nil {
+		stateCtx, stateCancel := context.WithTimeout(context.WithoutCancel(ctx), uploadFailurePersistenceTimeout)
+		media, mediaErr := s.repoMedia(stateCtx, *task.MediaAssetID)
+		if mediaErr != nil {
+			cleanupErr = mediaErr
+		} else {
+			media.StorageStatus = MediaFailed
+			if _, err := s.repo.UpdateMediaAsset(stateCtx, media); err != nil {
+				cleanupErr = err
+			}
+		}
+		if _, err := s.repo.SetContentMediaState(stateCtx, task.ContentID, task.MediaAssetID, ContentFailed, 0); cleanupErr == nil && err != nil {
+			cleanupErr = err
+		}
+		stateCancel()
+	}
 	head, headErr := s.store.HeadObject(ctx, task.ObjectKey)
 	if headErr == nil && (head.ObjectKey != "" || head.Size > 0) {
-		cleanupErr = s.store.DeleteObject(ctx, task.ObjectKey)
-		if storage.IsAlreadyGone(cleanupErr) {
-			cleanupErr = nil
+		if err := s.store.DeleteObject(ctx, task.ObjectKey); cleanupErr == nil && err != nil && !storage.IsAlreadyGone(err) {
+			cleanupErr = err
 		}
 	} else {
 		if err := s.store.AbortMultipart(ctx, storage.AbortMultipartInput{ObjectKey: task.ObjectKey, UploadID: task.OSSUploadID}); err != nil && !storage.IsAlreadyGone(err) {

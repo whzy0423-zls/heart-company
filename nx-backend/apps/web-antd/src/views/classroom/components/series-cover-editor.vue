@@ -55,7 +55,7 @@ watch(
   (series) => {
     current.value = series;
     selectedRatio.value = series.coverAspectRatio || '16:9';
-    selectedFile.value = undefined;
+    resetFileInput();
     uploadProgress.value = 0;
   },
   { immediate: true },

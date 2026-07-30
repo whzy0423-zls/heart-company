@@ -2586,6 +2586,8 @@ CREATE TABLE IF NOT EXISTS classroom_series (
 
 ALTER TABLE classroom_series ADD COLUMN IF NOT EXISTS manual_cover_object_key TEXT NOT NULL DEFAULT '';
 ALTER TABLE classroom_series ADD COLUMN IF NOT EXISTS cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9' CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'));
+ALTER TABLE classroom_series DROP CONSTRAINT IF EXISTS classroom_series_cover_aspect_ratio_check;
+ALTER TABLE classroom_series ADD CONSTRAINT classroom_series_cover_aspect_ratio_check CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'));
 
 CREATE TABLE IF NOT EXISTS classroom_contents (
   id BIGSERIAL PRIMARY KEY,
@@ -2622,6 +2624,8 @@ CREATE TABLE IF NOT EXISTS classroom_contents (
 
 ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS manual_cover_object_key TEXT NOT NULL DEFAULT '';
 ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9' CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'));
+ALTER TABLE classroom_contents DROP CONSTRAINT IF EXISTS classroom_contents_cover_aspect_ratio_check;
+ALTER TABLE classroom_contents ADD CONSTRAINT classroom_contents_cover_aspect_ratio_check CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'));
 ALTER TABLE classroom_contents DROP CONSTRAINT IF EXISTS classroom_contents_status_check;
 ALTER TABLE classroom_contents ADD CONSTRAINT classroom_contents_status_check CHECK (status IN ('draft','processing','ready','published','offline','archived','failed'));
 

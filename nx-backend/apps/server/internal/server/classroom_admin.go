@@ -1332,6 +1332,7 @@ func (s *Server) toSeriesDTOWithFallback(ctx context.Context, v classroom.Series
 			coverURL = ""
 		} else if signed, signErr := s.classroomPlaybackSigner.PresignGetURL(ctx, key, 5*time.Minute); signErr == nil {
 			coverURL = signed
+			previewUnavailable = false
 		} else {
 			previewUnavailable = true
 			coverURL = ""

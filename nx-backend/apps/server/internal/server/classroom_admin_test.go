@@ -27,6 +27,7 @@ type fakeClassroomAdminService struct {
 	calls             []string
 	getSeriesErr      error
 	contentContextErr error
+	seriesFallbackErr error
 	generatedCoverKey string
 	deleteContentErr  error
 	uploadTasks       []classroom.UploadTask
@@ -56,6 +57,9 @@ func (f *fakeClassroomAdminService) ListContentContexts(_ context.Context, ids [
 
 func (f *fakeClassroomAdminService) ListSeriesCoverFallbacks(_ context.Context, ids []int64) (map[int64]classroomSeriesCoverFallback, error) {
 	f.calls = append(f.calls, "list-series-cover-fallbacks")
+	if f.seriesFallbackErr != nil {
+		return nil, f.seriesFallbackErr
+	}
 	result := make(map[int64]classroomSeriesCoverFallback, len(ids))
 	if f.content.SeriesID != nil {
 		for _, id := range ids {
@@ -537,6 +541,28 @@ func TestClassroomSeriesCoverMutationMarksPreviewUnavailable(t *testing.T) {
 
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"coverPreviewUnavailable":true`) || !strings.Contains(rr.Body.String(), `"updatedAt":"`+updated.UpdatedAt.Format(time.RFC3339Nano)+`"`) {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestClassroomSeriesCoverMutationClearsFallbackErrorWhenManualCoverSigns(t *testing.T) {
+	series := classroom.Series{
+		ID:                   12,
+		Title:                "系列",
+		Status:               classroom.SeriesPublished,
+		AccessLevel:          classroom.AccessPublic,
+		ManualCoverObjectKey: "classroom/covers/series/12/private.png",
+		CoverAspectRatio:     classroom.CoverAspectRatio16x9,
+		UpdatedAt:            time.Now().UTC(),
+	}
+	s := &Server{
+		classroomAdmin:          &fakeClassroomAdminService{seriesFallbackErr: errors.New("fallback query unavailable")},
+		classroomPlaybackSigner: fakeClassroomSigner{key: "manual-series-cover"},
+	}
+
+	dto := s.toSeriesMutationDTO(context.Background(), series)
+
+	if dto.CoverPreviewUnavailable || dto.CoverURL != "https://cdn.example/manual-series-cover" {
+		t.Fatalf("dto=%+v", dto)
 	}
 }
 
