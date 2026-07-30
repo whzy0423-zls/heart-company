@@ -173,6 +173,7 @@ CREATE TABLE IF NOT EXISTS voice_profiles (
   id              BIGSERIAL PRIMARY KEY,
   name            TEXT NOT NULL DEFAULT '',
   provider        TEXT NOT NULL DEFAULT 'minimax',
+  model           TEXT NOT NULL DEFAULT '',
   voice_id        TEXT NOT NULL DEFAULT '',
   sample_asset_id BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
   sample_url      TEXT NOT NULL DEFAULT '',
@@ -183,6 +184,15 @@ CREATE TABLE IF NOT EXISTS voice_profiles (
   create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE voice_profiles ADD COLUMN IF NOT EXISTS model TEXT NOT NULL DEFAULT '';
+UPDATE voice_profiles
+   SET model = CASE
+     WHEN provider = 'bailian' THEN 'MiniMax/speech-2.8-turbo'
+     WHEN provider = 'minimax' THEN 'speech-02-hd'
+     ELSE model
+   END
+ WHERE model = '';
 
 CREATE TABLE IF NOT EXISTS voice_generations (
   id              BIGSERIAL PRIMARY KEY,
@@ -2557,6 +2567,8 @@ CREATE TABLE IF NOT EXISTS classroom_series (
   summary TEXT NOT NULL DEFAULT '',
   cover_url TEXT NOT NULL DEFAULT '',
   cover_asset_id BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
+  manual_cover_object_key TEXT NOT NULL DEFAULT '',
+  cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9' CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1')),
   teacher_key TEXT NOT NULL DEFAULT '',
   teacher_name_snapshot TEXT NOT NULL DEFAULT '',
   sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0),
@@ -2571,6 +2583,11 @@ CREATE TABLE IF NOT EXISTS classroom_series (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (access_level = 'paid' AND price_cents > 0 OR access_level <> 'paid' AND price_cents = 0)
 );
+
+ALTER TABLE classroom_series ADD COLUMN IF NOT EXISTS manual_cover_object_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE classroom_series ADD COLUMN IF NOT EXISTS cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9' CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'));
+ALTER TABLE classroom_series DROP CONSTRAINT IF EXISTS classroom_series_cover_aspect_ratio_check;
+ALTER TABLE classroom_series ADD CONSTRAINT classroom_series_cover_aspect_ratio_check CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'));
 
 CREATE TABLE IF NOT EXISTS classroom_contents (
   id BIGSERIAL PRIMARY KEY,
@@ -2591,7 +2608,7 @@ CREATE TABLE IF NOT EXISTS classroom_contents (
   tags JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(tags) = 'array'),
   episode_no INTEGER NOT NULL DEFAULT 0 CHECK (episode_no >= 0),
   sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0),
-  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','processing','ready','published','offline','failed')),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','processing','ready','published','offline','archived','failed')),
   playback_blocked BOOLEAN NOT NULL DEFAULT false,
   access_level TEXT NOT NULL DEFAULT 'inherit' CHECK (access_level IN ('inherit','public','login','member','paid')),
   price_cents INTEGER NOT NULL DEFAULT 0 CHECK (price_cents >= 0),
@@ -2607,6 +2624,10 @@ CREATE TABLE IF NOT EXISTS classroom_contents (
 
 ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS manual_cover_object_key TEXT NOT NULL DEFAULT '';
 ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9' CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'));
+ALTER TABLE classroom_contents DROP CONSTRAINT IF EXISTS classroom_contents_cover_aspect_ratio_check;
+ALTER TABLE classroom_contents ADD CONSTRAINT classroom_contents_cover_aspect_ratio_check CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'));
+ALTER TABLE classroom_contents DROP CONSTRAINT IF EXISTS classroom_contents_status_check;
+ALTER TABLE classroom_contents ADD CONSTRAINT classroom_contents_status_check CHECK (status IN ('draft','processing','ready','published','offline','archived','failed'));
 
 CREATE TABLE IF NOT EXISTS classroom_media_assets (
   id BIGSERIAL PRIMARY KEY,

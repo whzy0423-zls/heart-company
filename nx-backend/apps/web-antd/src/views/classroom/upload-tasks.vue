@@ -4,7 +4,9 @@ import type {
   ClassroomUploadTask,
 } from '#/api/core/classroom';
 import {
+  canAbortUploadTask,
   classroomUploadMime,
+  completeUploadWithStatusReconciliation,
   matchesClassroomContentType,
   matchesUploadIdentity,
   mergeUploadProgress,
@@ -14,7 +16,7 @@ import {
 } from './upload-flow';
 import { uploadStatusLabel } from './classroom-view-model';
 import { crc64File } from './upload-checksum';
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   Alert,
   Button,
@@ -43,7 +45,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ uploaded: [] }>();
 
-const loading = ref(false);
+const initialLoading = ref(true);
 const error = ref('');
 const tasks = ref<ClassroomUploadTask[]>([]);
 const selectedContentId = ref<number>();
@@ -69,7 +71,9 @@ const localProgress = new Map<
   number,
   { completedBytes: number; totalBytes: number }
 >();
-let pollTimer: ReturnType<typeof setInterval> | undefined;
+let latestRequestTicket = 0;
+let pollTimer: ReturnType<typeof setTimeout> | undefined;
+let stopped = false;
 const columns = [
   { dataIndex: 'id', title: '任务' },
   { dataIndex: 'contentId', title: '课件' },
@@ -83,6 +87,13 @@ function contentStatus(task: ClassroomUploadTask) {
 function displayStatus(task: ClassroomUploadTask) {
   return uploadStatusLabel(task.status, contentStatus(task));
 }
+const completingActiveUpload = computed(() => {
+  if (!activeTaskId.value) return false;
+  return tasks.value.some(
+    (task) =>
+      task.id === activeTaskId.value && task.status === 'completing',
+  );
+});
 
 function progress(task: ClassroomUploadTask) {
   if (task.id === activeTaskId.value) return uploadPercent.value;
@@ -99,13 +110,16 @@ function progress(task: ClassroomUploadTask) {
     );
   return task.status === 'completed' ? 100 : 0;
 }
-async function load() {
-  loading.value = true;
-  error.value = '';
+async function load(options: { silent?: boolean } = {}) {
+  const requestTicket = ++latestRequestTicket;
+  if (!options.silent && tasks.value.length === 0) initialLoading.value = true;
   try {
-    tasks.value = (
+    const nextTasks = (
       await getClassroomUploadTasksApi({ page: 1, pageSize: 50 })
     ).items;
+    if (requestTicket !== latestRequestTicket) return;
+    tasks.value = nextTasks;
+    error.value = '';
     for (const task of tasks.value)
       localProgress.set(
         task.id,
@@ -118,10 +132,37 @@ async function load() {
         ),
       );
   } catch {
-    error.value = '上传任务加载失败，请重试。';
+    if (requestTicket !== latestRequestTicket) return;
+    if (!options.silent || tasks.value.length === 0)
+      error.value = '上传任务加载失败，请重试。';
   } finally {
-    loading.value = false;
+    if (requestTicket === latestRequestTicket) {
+      initialLoading.value = false;
+    }
   }
+}
+function pollDelay() {
+  return tasks.value.some((task) =>
+    ['initiating', 'initiated', 'uploading', 'completing'].includes(task.status),
+  )
+    ? 5000
+    : 30_000;
+}
+function schedulePoll() {
+  if (pollTimer) clearTimeout(pollTimer);
+  if (stopped || document.hidden) return;
+  pollTimer = setTimeout(async () => {
+    await load({ silent: true });
+    schedulePoll();
+  }, pollDelay());
+}
+function handleVisibilityChange() {
+  if (document.hidden) {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = undefined;
+    return;
+  }
+  void load({ silent: true }).finally(schedulePoll);
 }
 function confirmAbort(task: ClassroomUploadTask) {
   Modal.confirm({
@@ -262,13 +303,29 @@ async function performUpload(
         20 + Math.round(((offset + task.partSize) / file.size) * 80),
       );
     }
-    await completeClassroomUploadApi(task.id, parts);
+    tasks.value = tasks.value.map((item) =>
+      item.id === task.id ? { ...item, status: 'completing' } : item,
+    );
+    const completionState = await completeUploadWithStatusReconciliation({
+      complete: () => completeClassroomUploadApi(task.id, parts),
+      readTask: async () => {
+        const page = await getClassroomUploadTasksApi({ page: 1, pageSize: 50 });
+        const latest = page.items.find((item) => item.id === task.id);
+        if (latest)
+          tasks.value = tasks.value.map((item) =>
+            item.id === latest.id ? latest : item,
+          );
+        return latest;
+      },
+    });
     uploadContexts.delete(task.id);
     localProgress.set(task.id, {
       completedBytes: file.size,
       totalBytes: file.size,
     });
-    message.success('媒体上传完成，正在处理');
+    if (completionState === 'processing')
+      message.info('文件已上传，服务器正在处理媒体，请稍后查看状态');
+    else message.success('媒体上传完成，正在处理');
     clearSelectedFile();
     selectedContentId.value = undefined;
     pendingRetryTask.value = undefined;
@@ -279,11 +336,16 @@ async function performUpload(
     const failedTaskId = activeTaskId.value;
     if (failedTaskId) {
       uploadContexts.delete(failedTaskId);
-      try {
-        await abortClassroomUploadApi(failedTaskId);
-      } catch (abortCause) {
-        if ((abortCause as { status?: number })?.status !== 409)
-          message.warning('上传任务清理失败，请在任务列表中手动终止');
+      const failedTask = tasks.value.find((item) => item.id === failedTaskId);
+      if (!failedTask || canAbortUploadTask(failedTask.status)) {
+        try {
+          await abortClassroomUploadApi(failedTaskId);
+        } catch (abortCause) {
+          if ((abortCause as { status?: number })?.status !== 409)
+            message.warning('上传任务清理失败，请在任务列表中手动终止');
+        }
+      } else if (failedTask.status === 'completing') {
+        message.info('文件已上传，服务器仍在处理媒体，请稍后刷新查看');
       }
       await load();
     }
@@ -379,22 +441,28 @@ function beforeUnload(event: BeforeUnloadEvent) {
   }
 }
 onBeforeUnmount(() => {
-  if (uploading.value) message.warning('离开上传页面，当前上传已取消');
+  stopped = true;
+  if (uploading.value && !completingActiveUpload.value)
+    message.warning('离开上传页面，当前上传已取消');
   uploadController.value?.abort();
-  if (activeTaskId.value)
-    void abortClassroomUploadApi(activeTaskId.value).catch(() => undefined);
+  if (activeTaskId.value) {
+    const task = tasks.value.find((item) => item.id === activeTaskId.value);
+    if (!task || canAbortUploadTask(task.status))
+      void abortClassroomUploadApi(activeTaskId.value).catch(() => undefined);
+  }
   window.removeEventListener('beforeunload', beforeUnload);
-  if (pollTimer) clearInterval(pollTimer);
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
+  if (pollTimer) clearTimeout(pollTimer);
 });
 onMounted(() => {
   window.addEventListener('beforeunload', beforeUnload);
-  void load();
-  pollTimer = setInterval(() => void load(), 5000);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  void load().finally(schedulePoll);
 });
 </script>
 
 <template>
-  <Card :loading="loading" title="上传任务">
+  <Card :loading="initialLoading && tasks.length === 0" title="上传任务">
     <div class="upload-panel" v-if="canUpload">
       <div class="upload-field">
         <span class="upload-label">1. 选择草稿课件</span>
@@ -435,15 +503,18 @@ onMounted(() => {
         >开始上传</Button
       >
       <Progress v-if="uploading" :percent="uploadPercent" />
-      <Button v-if="uploading" danger @click="cancelCurrentUpload"
+      <Button
+        v-if="uploading && !completingActiveUpload"
+        danger
+        @click="cancelCurrentUpload"
         >取消当前上传</Button
       >
     </div>
     <Alert v-if="error" type="error" show-icon :message="error"
-      ><template #action><Button @click="load">重试</Button></template></Alert
+      ><template #action><Button @click="load()">重试</Button></template></Alert
     >
     <Empty
-      v-else-if="!loading && tasks.length === 0"
+      v-else-if="!initialLoading && tasks.length === 0"
       description="暂无上传任务"
     />
     <Table
@@ -474,7 +545,7 @@ onMounted(() => {
               @click="retry(record as ClassroomUploadTask)"
               >重试</Button
             ><Button
-              v-if="!['completed', 'aborted'].includes(record.status)"
+              v-if="canAbortUploadTask(record.status)"
               danger
               :disabled="!canUpload"
               :loading="activeTaskId === record.id"

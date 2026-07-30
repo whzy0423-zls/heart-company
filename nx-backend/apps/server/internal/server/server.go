@@ -83,9 +83,8 @@ type Server struct {
 	uploader                   storage.ObjectUploader
 	voices                     *voice.Store
 	setBailianCopyConfig       func(voice.BailianConfig)
-	xinzhiliBailianConfigMu    sync.Mutex
-	xinzhiliBailianConfigSet   bool
-	xinzhiliBailianConfigVer   int64
+	bailianCredentials         bailianCredentialStore
+	bailianRuntime             bailianCredentialRuntimeState
 	videos                     *video.Store
 	videoAnalysis              *videoanalysis.Store
 	videoAssets                *videoasset.Store
@@ -136,6 +135,7 @@ type Server struct {
 	classroomContinueLimiter   *strRateLimiter
 	classroomPlaybackSigner    storage.ObjectSigner
 	classroomCovers            classroomCoverManager
+	classroomSeriesCovers      classroomSeriesCoverManager
 	classroomCoverObjects      classroomCoverObjectDeleter
 	classroomPlaybackLimiter   *strRateLimiter
 	classroomPlaybackIPLimiter *strRateLimiter
@@ -273,6 +273,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 			s.classroomPlaybackSigner = multipartStore
 			s.classroomCoverObjects = multipartStore
 			s.classroomCovers = classroom.NewCoverService(classroom.NewStore(database), multipartStore, classroom.DefaultCoverImageMaxBytes)
+			s.classroomSeriesCovers = classroom.NewSeriesCoverService(classroom.NewStore(database), multipartStore, classroom.DefaultCoverImageMaxBytes)
 			probe := classroom.FFProbe{Signer: multipartStore}
 			classroomService := classroom.NewUploadService(classroom.NewStore(database), multipartStore, probe, classroom.UploadConfig{Bucket: env.ClassroomMedia.Bucket, Prefix: "classroom", PartSize: env.ClassroomMedia.PartSizeBytes, MaxParts: env.ClassroomMedia.MaxParts, CredentialTTL: time.Duration(env.ClassroomMedia.CredentialTTLSeconds) * time.Second, TaskTTL: 24 * time.Hour, MaxVideoBytes: env.ClassroomMedia.MaxVideoBytes, MaxAudioBytes: env.ClassroomMedia.MaxAudioBytes, MaxAttempts: 3}, time.Now).WithCoverExtractor(classroom.FFmpegCoverExtractor{Signer: multipartStore, Uploader: multipartStore})
 			s.classroomUploads = classroomService
@@ -286,6 +287,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	}
 	s.voices = voice.NewStore(database, s.uploads, env.MiniMax)
 	s.setBailianCopyConfig = s.voices.ConfigureBailianCopy
+	s.bailianCredentials = databaseBailianCredentialStore{db: database}
 	s.videos = video.NewStore(database, s.uploads, env.Video, s.uploader)
 	s.videoSubmissionRecovery = func(ctx context.Context) (int64, error) {
 		return s.videoStore().RecoverInterruptedSubmissions(
@@ -386,7 +388,9 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.pushSendSlots = make(chan struct{}, 2)
 	// 启动时应用 DB 中保存的模型配置覆盖（若存在），重建对话/视频客户端。
 	s.applyStoredModelConfig()
-	s.applyStoredXinzhiliBailianCopyConfig()
+	if _, err := s.refreshBailianCopyCredentials(context.Background()); err != nil {
+		log.Printf("Bailian shared credential startup refresh failed: %v", err)
+	}
 	if database != nil {
 		if err := s.ensureVideoSubmissionRecovery(context.Background()); err != nil {
 			log.Printf("video submission recovery failed: %v", err)
@@ -756,6 +760,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/signups/follow", s.method(http.MethodPut, s.requirePermission("Customer:Signup:List", s.signupFollow)))
 	s.mux.HandleFunc("/api/signups/events", s.method(http.MethodGet, s.requirePermission("Customer:Signup:List", s.signupEvents)))
 	s.mux.HandleFunc("/api/voice/profiles/list", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage"}, s.voiceProfiles)))
+	s.mux.HandleFunc("/api/voice/bailian-credentials", s.requireAnyPermission([]string{"Voice:Profile:Manage", "System:XinzhiliModel:Config"}, s.bailianCredentialsHandler))
 	s.mux.HandleFunc("/api/voice/profiles", s.method(http.MethodPost, s.requirePermission("Voice:Profile:Manage", s.createVoiceProfile)))
 	s.mux.HandleFunc("/api/voice/profiles/", s.requirePermission("Voice:Profile:Manage", s.voiceProfileByID))
 	s.mux.HandleFunc("/api/voice/options", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage", "Voice:Content:Manage", "Reading:Article:Manage", "System:XinzhiliModel:Config"}, s.voiceOptions)))

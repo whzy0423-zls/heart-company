@@ -6,6 +6,7 @@ export interface VoiceProfile {
   createTime: string;
   id: string;
   lastError: string;
+  model: string;
   name: string;
   provider: string;
   remark: string;
@@ -34,6 +35,7 @@ export interface VoiceGeneration {
 export interface VoiceOption {
   id: string;
   label: string;
+  model: string;
   provider: string;
   source: 'clone' | 'official';
   voiceId: string;
@@ -142,4 +144,37 @@ export function getVoiceContentJobsApi(params?: Record<string, any>) {
   return requestClient.get<PageResult<VoiceContentJob>>('/voice/content/list', {
     params,
   });
+}
+
+export type BailianCredentialSource =
+  | 'legacy-asr'
+  | 'legacy-tts'
+  | 'none'
+  | 'shared';
+
+/** Safe credential status returned by the backend; the API key is never returned. */
+export interface BailianCredentialView {
+  apiKeySet: boolean;
+  apiKeySuffix: string;
+  source: BailianCredentialSource;
+  version: number;
+}
+
+export interface UpdateBailianCredentialsPayload {
+  apiKey: string;
+  clearApiKey: boolean;
+  expectedVersion: number;
+}
+
+export function getBailianCredentialsApi() {
+  return requestClient.get<BailianCredentialView>('/voice/bailian-credentials');
+}
+
+export function updateBailianCredentialsApi(
+  data: UpdateBailianCredentialsPayload,
+) {
+  return requestClient.put<BailianCredentialView>(
+    '/voice/bailian-credentials',
+    data,
+  );
 }

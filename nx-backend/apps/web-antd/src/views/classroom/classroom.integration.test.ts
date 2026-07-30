@@ -271,13 +271,27 @@ describe('classroom upload retry identity and persisted progress integration', (
     vi.useFakeTimers();
     mocks.uploadTasks
       .mockResolvedValueOnce({
-        items: [{ ...task, progressPercent: 42, completedBytes: 2 }],
+        items: [
+          {
+            ...task,
+            status: 'uploading',
+            progressPercent: 42,
+            completedBytes: 2,
+          },
+        ],
         page: 1,
         pageSize: 50,
         total: 1,
       })
       .mockResolvedValueOnce({
-        items: [{ ...task, progressPercent: 76, completedBytes: 3 }],
+        items: [
+          {
+            ...task,
+            status: 'uploading',
+            progressPercent: 76,
+            completedBytes: 3,
+          },
+        ],
         page: 1,
         pageSize: 50,
         total: 1,

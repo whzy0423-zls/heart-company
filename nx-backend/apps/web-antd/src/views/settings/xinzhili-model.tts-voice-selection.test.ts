@@ -1,25 +1,33 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineComponent, h } from 'vue';
-
 import type { XinzhiliModelConfigView } from '#/api';
+
+import { defineComponent, h, onMounted } from 'vue';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import { flushVuePromises, mountVueComponent } from '#/test-utils/vue-mount';
 
 function passthrough(name: string, tag = 'div') {
   return defineComponent({
-    inheritAttrs: false,
     name,
+    inheritAttrs: false,
     setup(_, { attrs, slots }) {
       return () => h(tag, attrs, slots.default?.());
     },
   });
 }
 
+vi.mock('@vben/stores', () => ({
+  useAccessStore: () => ({
+    accessCodes: ['System:XinzhiliModel:Config'],
+  }),
+}));
+
 vi.mock('ant-design-vue', () => {
   const Input = defineComponent({
-    emits: ['update:value'],
-    inheritAttrs: false,
     name: 'Input',
+    inheritAttrs: false,
     props: { value: { default: '', type: [Number, String] } },
+    emits: ['update:value'],
     setup(props, { attrs, emit }) {
       return () =>
         h('input', {
@@ -34,8 +42,8 @@ vi.mock('ant-design-vue', () => {
 
   const Form = passthrough('Form') as any;
   Form.Item = defineComponent({
-    inheritAttrs: false,
     name: 'FormItem',
+    inheritAttrs: false,
     props: { label: { default: '', type: String } },
     setup(props, { attrs, slots }) {
       return () => h('label', attrs, [props.label, slots.default?.()]);
@@ -52,14 +60,14 @@ vi.mock('ant-design-vue', () => {
     InputNumber: Input,
     Row: passthrough('Row'),
     Select: defineComponent({
-      emits: ['change', 'update:value'],
-      inheritAttrs: false,
       name: 'Select',
+      inheritAttrs: false,
       props: {
         options: { default: () => [], type: Array },
         placeholder: { default: '', type: String },
         value: { default: '', type: String },
       },
+      emits: ['change', 'update:value'],
       setup(props, { attrs, emit }) {
         const optionNodes = () =>
           (
@@ -108,6 +116,26 @@ vi.mock('../site-config/components/editor-shell.vue', () => ({
   },
 }));
 
+vi.mock('../voice/bailian-credentials-card.vue', () => ({
+  default: defineComponent({
+    name: 'BailianCredentialsCard',
+    emits: ['status-change'],
+    setup(_, { emit }) {
+      onMounted(() =>
+        emit('status-change', {
+          apiKeySet: true,
+          error: null,
+          loading: false,
+          saving: false,
+          source: 'shared',
+          version: 1,
+        }),
+      );
+      return () => h('div', { 'data-testid': 'credential-card' });
+    },
+  }),
+}));
+
 vi.mock('#/api', () => ({
   getVoiceOptionsApi: vi.fn(),
   getXinzhiliModelConfigApi: vi.fn(),
@@ -125,6 +153,7 @@ import XinzhiliModelSettings from './xinzhili-model.vue';
 const bailianClone = {
   id: 'clone:bailian-profile',
   label: '百炼已复刻音色',
+  model: 'qwen3-tts-vc-2026-01-22',
   provider: 'bailian',
   source: 'clone' as const,
   voiceId: 'bailian-voice-id',
@@ -133,6 +162,7 @@ const bailianClone = {
 const minimaxClone = {
   id: 'clone:minimax-profile',
   label: 'MiniMax 已克隆音色',
+  model: 'speech-02-hd',
   provider: 'minimax',
   source: 'clone' as const,
   voiceId: 'minimax-voice-id',
@@ -160,9 +190,9 @@ function config(
       argumentCandidateSilenceMs: 350,
       comfortEndSilenceMs: 1200,
       comfortFirstPromptMs: 5000,
-      comfortSecondPromptMs: 12000,
+      comfortSecondPromptMs: 12_000,
       deepListeningEndSilenceMs: 1500,
-      deepListeningPromptMs: 12000,
+      deepListeningPromptMs: 12_000,
       maxProactivePrompts: 2,
       normalEndSilenceMs: 700,
       partialStableMs: 150,
@@ -185,6 +215,17 @@ function config(
 function selectValue(select: HTMLSelectElement, value: string) {
   select.value = value;
   select.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function inputByTestId(testId: string) {
+  return document.body.querySelector(
+    `[data-testid="${testId}"]`,
+  ) as HTMLInputElement;
+}
+
+function setInput(input: HTMLInputElement, value: string) {
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 describe('xinzhili Bailian TTS voice selection', () => {
@@ -238,6 +279,7 @@ describe('xinzhili Bailian TTS voice selection', () => {
       expect.objectContaining({
         tts: expect.objectContaining({
           apiKey: '',
+          model: bailianClone.model,
           provider: 'bailian',
           voice: bailianClone.voiceId,
         }),
@@ -281,4 +323,244 @@ describe('xinzhili Bailian TTS voice selection', () => {
     expect(document.body.querySelectorAll('select')).toHaveLength(1);
     wrapper.unmount();
   });
+
+  it('restores the Bailian voice picker for the native DashScope endpoint saved under the legacy provider', async () => {
+    vi.mocked(getXinzhiliModelConfigApi).mockResolvedValue({
+      ...config('openai-compatible'),
+      tts: {
+        ...config('openai-compatible').tts,
+        endpoint: 'https://dashscope.aliyuncs.com/api/v1',
+        model: 'qwen3-tts-vc-2026-01-22',
+      },
+    });
+
+    const wrapper = await mountSettings();
+    const selects = document.body.querySelectorAll('select');
+
+    expect(selects).toHaveLength(2);
+    expect(selects[0]!.value).toBe('bailian');
+    expect(selects[1]!.textContent).toContain(bailianClone.label);
+    wrapper.unmount();
+  });
+
+  it('defaults an unconfigured legacy TTS record to Bailian voice reuse', async () => {
+    vi.mocked(getXinzhiliModelConfigApi).mockResolvedValue(
+      config('openai-compatible'),
+    );
+
+    const wrapper = await mountSettings();
+    const selects = document.body.querySelectorAll('select');
+
+    expect(selects).toHaveLength(2);
+    expect(selects[0]!.value).toBe('bailian');
+    expect(selects[1]!.textContent).toContain(bailianClone.label);
+    wrapper.unmount();
+  });
+
+  it('clears the MiniMax private key and provider-bound fields when switching to OpenAI-compatible', async () => {
+    vi.mocked(getXinzhiliModelConfigApi).mockResolvedValue({
+      ...config('minimax'),
+      tts: {
+        ...config('minimax').tts,
+        endpoint: 'https://api.minimax.chat/v1/t2a_v2',
+        model: 'speech-02-hd',
+        voice: 'minimax-old-voice',
+      },
+    });
+    const wrapper = await mountSettings();
+    setInput(inputByTestId('private-tts-api-key'), 'minimax-draft-key');
+
+    selectValue(document.body.querySelector('select')!, 'openai-compatible');
+    await flushVuePromises();
+
+    expect(inputByTestId('private-tts-api-key').value).toBe('');
+    expect(inputByTestId('private-tts-api-key').placeholder).toBe(
+      '请输入 API Key',
+    );
+    expect(inputByTestId('tts-endpoint').value).toBe('');
+    expect(inputByTestId('tts-model').value).toBe('');
+    expect(inputByTestId('tts-voice').value).toBe('');
+    wrapper.unmount();
+  });
+
+  it('forces the official Bailian preset when switching from a custom endpoint', async () => {
+    vi.mocked(getXinzhiliModelConfigApi).mockResolvedValue({
+      ...config('openai-compatible'),
+      tts: {
+        ...config('openai-compatible').tts,
+        endpoint: 'https://custom.example.com/tts',
+        model: 'custom-model',
+        voice: 'custom-voice',
+      },
+    });
+    const wrapper = await mountSettings();
+
+    selectValue(document.body.querySelector('select')!, 'bailian');
+    await flushVuePromises();
+
+    expect(inputByTestId('tts-endpoint').value).toBe(
+      'https://dashscope.aliyuncs.com/api/v1',
+    );
+    expect(inputByTestId('tts-model').value).toBe('qwen3-tts-vc-2026-01-22');
+    expect(inputByTestId('tts-voice').value).toBe('');
+    expect(inputByTestId('private-tts-api-key')).toBeNull();
+    wrapper.unmount();
+  });
+
+  it('clears the official Bailian preset when switching to OpenAI-compatible', async () => {
+    vi.mocked(getXinzhiliModelConfigApi).mockResolvedValue({
+      ...config('bailian'),
+      tts: {
+        ...config('bailian').tts,
+        endpoint: 'https://dashscope.aliyuncs.com/api/v1',
+        model: 'qwen3-tts-vc-2026-01-22',
+        voice: 'bailian-old-voice',
+      },
+    });
+    const wrapper = await mountSettings();
+
+    selectValue(document.body.querySelector('select')!, 'openai-compatible');
+    await flushVuePromises();
+
+    expect(inputByTestId('tts-endpoint').value).toBe('');
+    expect(inputByTestId('tts-model').value).toBe('');
+    expect(inputByTestId('tts-voice').value).toBe('');
+    expect(inputByTestId('private-tts-api-key').placeholder).toBe(
+      '请输入 API Key',
+    );
+    wrapper.unmount();
+  });
+
+  it('forces the MiniMax endpoint and model when switching providers', async () => {
+    vi.mocked(getXinzhiliModelConfigApi).mockResolvedValue({
+      ...config('openai-compatible'),
+      tts: {
+        ...config('openai-compatible').tts,
+        endpoint: 'https://custom.example.com/tts',
+        model: 'custom-model',
+      },
+    });
+    const wrapper = await mountSettings();
+
+    selectValue(document.body.querySelector('select')!, 'minimax');
+    await flushVuePromises();
+
+    expect(inputByTestId('tts-endpoint').value).toBe(
+      'https://api.minimax.chat/v1/t2a_v2',
+    );
+    expect(inputByTestId('tts-model').value).toBe('speech-02-hd');
+    wrapper.unmount();
+  });
+
+  it('preserves a private key for same-origin path edits and clears it across origins', async () => {
+    vi.mocked(getXinzhiliModelConfigApi).mockResolvedValue({
+      ...config('minimax'),
+      tts: {
+        ...config('minimax').tts,
+        endpoint: 'https://api.minimax.chat/v1/t2a_v2',
+        model: 'speech-02-hd',
+      },
+    });
+    const wrapper = await mountSettings();
+    setInput(inputByTestId('private-tts-api-key'), 'minimax-draft-key');
+
+    setInput(
+      inputByTestId('tts-endpoint'),
+      'https://api.minimax.chat/v1/t2a_v2/preview/',
+    );
+    await flushVuePromises();
+    expect(inputByTestId('private-tts-api-key').value).toBe(
+      'minimax-draft-key',
+    );
+    expect(inputByTestId('private-tts-api-key').placeholder).toContain('1234');
+
+    setInput(inputByTestId('tts-endpoint'), 'https://proxy.example.com/v1');
+    await flushVuePromises();
+    expect(inputByTestId('private-tts-api-key').value).toBe('');
+    expect(inputByTestId('private-tts-api-key').placeholder).toBe(
+      '请输入 API Key',
+    );
+    wrapper.unmount();
+  });
+
+  it.each([
+    'http://dashscope.aliyuncs.com/api/v1',
+    'https://dashscope.aliyuncs.com.evil.example/api/v1',
+    'https://user@dashscope.aliyuncs.com/api/v1',
+    'https://dashscope.aliyuncs.com:8443/api/v1',
+    'https://dashscope.aliyuncs.com/api/v1?token=bad',
+    'https://dashscope.aliyuncs.com/api/v1#fragment',
+    'https://proxy.example.com/v1',
+    'https://dashscope.aliyuncs.com/evil/v1',
+    'https://dashscope.aliyuncs.com/api/v1/not-a-tts-endpoint',
+    'https://dashscope.aliyuncs.com/compatible-mode/v1/not-a-tts-endpoint',
+    'https://dashscope.aliyuncs.com/evil/../api/v1',
+    'https://dashscope.aliyuncs.com/%61pi/v1',
+    'https://dashscope.aliyuncs.com/%2e%2e/api/v1',
+  ])(
+    'treats non-official native Bailian endpoint %s as private',
+    async (endpoint) => {
+      vi.mocked(getXinzhiliModelConfigApi).mockResolvedValue({
+        ...config('bailian'),
+        tts: {
+          ...config('bailian').tts,
+          endpoint,
+          model: 'qwen3-tts-vc-2026-01-22',
+        },
+      });
+      const wrapper = await mountSettings();
+      const input = inputByTestId('private-tts-api-key');
+      expect(input).toBeTruthy();
+      setInput(input, 'native-private-key');
+      (
+        document.body.querySelector(
+          '[data-testid="save-model"]',
+        ) as HTMLButtonElement
+      ).click();
+      await flushVuePromises();
+
+      expect(updateXinzhiliModelConfigApi).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tts: expect.objectContaining({
+            apiKey: 'native-private-key',
+            endpoint,
+            provider: 'bailian',
+          }),
+        }),
+      );
+      wrapper.unmount();
+    },
+  );
+
+  it.each([
+    'https://dashscope.aliyuncs.com/api/v1',
+    'https://dashscope.aliyuncs.com:443/compatible-mode/v1/',
+  ])(
+    'uses the shared key for official DashScope endpoint %s',
+    async (endpoint) => {
+      vi.mocked(getXinzhiliModelConfigApi).mockResolvedValue({
+        ...config('openai-compatible'),
+        tts: {
+          ...config('openai-compatible').tts,
+          endpoint,
+          model: 'qwen-audio-tts-latest',
+        },
+      });
+      const wrapper = await mountSettings();
+      expect(inputByTestId('private-tts-api-key')).toBeNull();
+      (
+        document.body.querySelector(
+          '[data-testid="save-model"]',
+        ) as HTMLButtonElement
+      ).click();
+      await flushVuePromises();
+
+      expect(updateXinzhiliModelConfigApi).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tts: expect.objectContaining({ apiKey: '', endpoint }),
+        }),
+      );
+      wrapper.unmount();
+    },
+  );
 });

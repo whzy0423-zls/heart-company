@@ -26,6 +26,7 @@ const (
 	ContentReady      ContentStatus = "ready"
 	ContentPublished  ContentStatus = "published"
 	ContentOffline    ContentStatus = "offline"
+	ContentArchived   ContentStatus = "archived"
 	ContentFailed     ContentStatus = "failed"
 
 	AccessInherit AccessLevel = "inherit"
@@ -68,23 +69,25 @@ var (
 )
 
 type Series struct {
-	ID                  int64
-	Title               string
-	Summary             string
-	CoverURL            string
-	CoverAssetID        *int64
-	TeacherKey          string
-	TeacherNameSnapshot string
-	SortOrder           int
-	Status              SeriesStatus
-	PlaybackBlocked     bool
-	AccessLevel         AccessLevel
-	PriceCents          int
-	PublishedAt         *time.Time
-	CreatedBy           *int64
-	UpdatedBy           *int64
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                   int64
+	Title                string
+	Summary              string
+	CoverURL             string
+	CoverAssetID         *int64
+	ManualCoverObjectKey string
+	CoverAspectRatio     CoverAspectRatio
+	TeacherKey           string
+	TeacherNameSnapshot  string
+	SortOrder            int
+	Status               SeriesStatus
+	PlaybackBlocked      bool
+	AccessLevel          AccessLevel
+	PriceCents           int
+	PublishedAt          *time.Time
+	CreatedBy            *int64
+	UpdatedBy            *int64
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 func (s Series) Validate() error {
@@ -99,6 +102,9 @@ func (s Series) Validate() error {
 	}
 	if s.SortOrder < 0 {
 		return errors.New("sort order must not be negative")
+	}
+	if _, err := NormalizeCoverAspectRatio(s.CoverAspectRatio); err != nil {
+		return err
 	}
 	return validatePrice(s.AccessLevel, s.PriceCents)
 }
@@ -147,7 +153,7 @@ func (c Content) Validate() error {
 	if !oneOf(string(c.ContentType), string(ContentVideo), string(ContentAudio)) {
 		return fmt.Errorf("invalid content type %q", c.ContentType)
 	}
-	if !oneOf(string(c.Status), string(ContentDraft), string(ContentProcessing), string(ContentReady), string(ContentPublished), string(ContentOffline), string(ContentFailed)) {
+	if !oneOf(string(c.Status), string(ContentDraft), string(ContentProcessing), string(ContentReady), string(ContentPublished), string(ContentOffline), string(ContentArchived), string(ContentFailed)) {
 		return fmt.Errorf("invalid content status %q", c.Status)
 	}
 	if !oneOf(string(c.AccessLevel), string(AccessInherit), string(AccessPublic), string(AccessLogin), string(AccessMember), string(AccessPaid)) {
@@ -193,7 +199,7 @@ func CanTransitionContent(from, to ContentStatus) bool {
 	case ContentPublished:
 		return to == ContentOffline
 	case ContentOffline:
-		return to == ContentPublished
+		return to == ContentPublished || to == ContentArchived
 	case ContentFailed:
 		return to == ContentDraft || to == ContentProcessing
 	default:
@@ -229,6 +235,16 @@ func ValidateContentPublish(content Content, media MediaAsset, parent *Series) e
 		}
 	}
 	return nil
+}
+
+type PublishExpectation struct {
+	ID                int64
+	ExpectedUpdatedAt time.Time
+}
+
+type PublishedContentChange struct {
+	Before Content
+	After  Content
 }
 
 type MediaAsset struct {

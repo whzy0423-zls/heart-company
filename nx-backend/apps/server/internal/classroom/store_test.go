@@ -50,11 +50,16 @@ func TestContentValidationAndTransitions(t *testing.T) {
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid series content rejected: %v", err)
 	}
-	if !CanTransitionContent(ContentDraft, ContentProcessing) || !CanTransitionContent(ContentProcessing, ContentReady) || !CanTransitionContent(ContentReady, ContentPublished) || !CanTransitionContent(ContentPublished, ContentOffline) || !CanTransitionContent(ContentOffline, ContentPublished) || !CanTransitionContent(ContentFailed, ContentDraft) {
+	if !CanTransitionContent(ContentDraft, ContentProcessing) || !CanTransitionContent(ContentProcessing, ContentReady) || !CanTransitionContent(ContentReady, ContentPublished) || !CanTransitionContent(ContentPublished, ContentOffline) || !CanTransitionContent(ContentOffline, ContentPublished) || !CanTransitionContent(ContentOffline, ContentArchived) || !CanTransitionContent(ContentFailed, ContentDraft) {
 		t.Fatal("expected documented content transitions to be allowed")
 	}
 	if CanTransitionContent(ContentDraft, ContentPublished) || CanTransitionContent(ContentFailed, ContentPublished) {
 		t.Fatal("unexpected content transition allowed")
+	}
+	archived := valid
+	archived.Status = ContentArchived
+	if err := archived.Validate(); err != nil {
+		t.Fatalf("archived content rejected: %v", err)
 	}
 	standalone := Content{Title: "独立音频", ContentType: ContentAudio, Status: ContentDraft, AccessLevel: AccessInherit}
 	if err := standalone.Validate(); err == nil {
@@ -270,6 +275,9 @@ func TestStoreGetAndListContentsScanCoverSettings(t *testing.T) {
 		if !strings.Contains(query, "FROM classroom_contents") {
 			return nil, fmt.Errorf("unexpected query: %s", query)
 		}
+		if strings.Contains(query, "ORDER BY") && !strings.Contains(query, "status<>'archived'") {
+			t.Fatalf("default content list must exclude archived rows: %s", query)
+		}
 		return classroomRows(contentColumns, [][]driver.Value{contentValues(want)}), nil
 	})
 	store := NewStore(db)
@@ -375,7 +383,7 @@ func TestStoreOptimisticUpdateSucceedsWithMatchingVersion(t *testing.T) {
 			return classroomRows(seriesColumns, [][]driver.Value{seriesValues(series)}), nil
 		}
 		if strings.Contains(query, "UPDATE classroom_series") {
-			if len(args) != 15 || args[14].Value != now {
+			if len(args) != 17 || args[16].Value != now {
 				t.Fatalf("series CAS args = %+v", args)
 			}
 			return classroomRows([]string{"created_at", "updated_at"}, [][]driver.Value{{now.Add(-time.Hour), now.Add(time.Second)}}), nil
@@ -490,10 +498,11 @@ func (r *classroomTestRows) Next(dest []driver.Value) error {
 	return nil
 }
 
-var seriesColumns = []string{"id", "title", "summary", "cover_url", "cover_asset_id", "teacher_key", "teacher_name_snapshot", "sort_order", "status", "playback_blocked", "access_level", "price_cents", "published_at", "created_by", "updated_by", "created_at", "updated_at"}
+var seriesColumns = []string{"id", "title", "summary", "cover_url", "cover_asset_id", "manual_cover_object_key", "cover_aspect_ratio", "teacher_key", "teacher_name_snapshot", "sort_order", "status", "playback_blocked", "access_level", "price_cents", "published_at", "created_by", "updated_by", "created_at", "updated_at"}
 
 func seriesValues(s Series) []driver.Value {
-	return []driver.Value{s.ID, s.Title, s.Summary, s.CoverURL, nil, s.TeacherKey, s.TeacherNameSnapshot, int64(s.SortOrder), string(s.Status), s.PlaybackBlocked, string(s.AccessLevel), int64(s.PriceCents), nil, nil, nil, s.CreatedAt, s.UpdatedAt}
+	ratio, _ := NormalizeCoverAspectRatio(s.CoverAspectRatio)
+	return []driver.Value{s.ID, s.Title, s.Summary, s.CoverURL, nullableInt64(s.CoverAssetID), s.ManualCoverObjectKey, string(ratio), s.TeacherKey, s.TeacherNameSnapshot, int64(s.SortOrder), string(s.Status), s.PlaybackBlocked, string(s.AccessLevel), int64(s.PriceCents), nullableTime(s.PublishedAt), nullableInt64(s.CreatedBy), nullableInt64(s.UpdatedBy), s.CreatedAt, s.UpdatedAt}
 }
 
 var contentColumns = []string{"id", "series_id", "show_as_standalone", "title", "description", "content_type", "media_asset_id", "cover_url", "manual_cover_object_key", "cover_aspect_ratio", "duration_seconds", "teacher_key", "teacher_name_snapshot", "recorded_at", "badge", "tags", "episode_no", "sort_order", "status", "playback_blocked", "access_level", "price_cents", "published_at", "created_by", "updated_by", "created_at", "updated_at"}
@@ -571,6 +580,91 @@ func TestStorePublishedContentUpdateLocksValidationRowsInTransaction(t *testing.
 	}
 	if !updated.UpdatedAt.Equal(now.Add(time.Second)) {
 		t.Fatalf("updated timestamp = %v", updated.UpdatedAt)
+	}
+}
+
+func TestStoreBatchPublishContentsUsesOneOrderedTransaction(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	media3, media9 := int64(103), int64(109)
+	contents := map[int64]Content{
+		3: {ID: 3, Title: "第三课", ContentType: ContentVideo, MediaAssetID: &media3, Status: ContentReady, AccessLevel: AccessPublic, UpdatedAt: now},
+		9: {ID: 9, Title: "第九课", ContentType: ContentVideo, MediaAssetID: &media9, Status: ContentReady, AccessLevel: AccessPublic, UpdatedAt: now},
+	}
+	medias := map[int64]MediaAsset{
+		103: {ID: 103, Bucket: "private", ObjectKey: "3.mp4", ETag: "e3", Checksum: "c3", ContentType: ContentVideo, SizeBytes: 10, DurationSeconds: 2, StorageStatus: MediaReady},
+		109: {ID: 109, Bucket: "private", ObjectKey: "9.mp4", ETag: "e9", Checksum: "c9", ContentType: ContentVideo, SizeBytes: 10, DurationSeconds: 2, StorageStatus: MediaReady},
+	}
+	lockedOrder := []int64{}
+	state := &classroomTxState{}
+	db := openClassroomTxDB(t, state, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "FROM classroom_contents WHERE id"):
+			id := args[0].Value.(int64)
+			lockedOrder = append(lockedOrder, id)
+			return classroomRows(contentColumns, [][]driver.Value{contentValues(contents[id])}), nil
+		case strings.Contains(query, "FROM classroom_media_assets WHERE id"):
+			id := args[0].Value.(int64)
+			return classroomRows(mediaColumns, [][]driver.Value{mediaValues(medias[id])}), nil
+		case strings.Contains(query, "UPDATE classroom_contents SET status='published'"):
+			id := args[2].Value.(int64)
+			updated := contents[id]
+			updated.Status = ContentPublished
+			updated.PublishedAt = &now
+			updated.UpdatedAt = now.Add(time.Second)
+			return classroomRows(contentColumns, [][]driver.Value{contentValues(updated)}), nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", query)
+		}
+	})
+	actor := int64(42)
+	changes, err := NewStore(db).BatchPublishContents(context.Background(), []PublishExpectation{
+		{ID: 9, ExpectedUpdatedAt: now},
+		{ID: 3, ExpectedUpdatedAt: now},
+	}, &actor, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(lockedOrder) != "[3 9]" || len(changes) != 2 || changes[0].After.ID != 3 || changes[1].After.ID != 9 {
+		t.Fatalf("order=%v changes=%+v", lockedOrder, changes)
+	}
+	if !state.began || !state.committed || state.rolledBack {
+		t.Fatalf("transaction state: %+v", state)
+	}
+}
+
+func TestStoreBatchPublishContentsRollsBackWhenAnyMediaIsNotReady(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	media1, media2 := int64(101), int64(102)
+	contents := map[int64]Content{
+		1: {ID: 1, Title: "第一课", ContentType: ContentVideo, MediaAssetID: &media1, Status: ContentReady, AccessLevel: AccessPublic, UpdatedAt: now},
+		2: {ID: 2, Title: "第二课", ContentType: ContentVideo, MediaAssetID: &media2, Status: ContentReady, AccessLevel: AccessPublic, UpdatedAt: now},
+	}
+	medias := map[int64]MediaAsset{
+		101: {ID: 101, Bucket: "private", ObjectKey: "1.mp4", ETag: "e1", Checksum: "c1", ContentType: ContentVideo, SizeBytes: 10, DurationSeconds: 2, StorageStatus: MediaReady},
+		102: {ID: 102, Bucket: "private", ObjectKey: "2.mp4", ETag: "e2", Checksum: "c2", ContentType: ContentVideo, SizeBytes: 10, DurationSeconds: 2, StorageStatus: MediaProcessing},
+	}
+	state := &classroomTxState{}
+	db := openClassroomTxDB(t, state, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "FROM classroom_contents WHERE id"):
+			id := args[0].Value.(int64)
+			return classroomRows(contentColumns, [][]driver.Value{contentValues(contents[id])}), nil
+		case strings.Contains(query, "FROM classroom_media_assets WHERE id"):
+			id := args[0].Value.(int64)
+			return classroomRows(mediaColumns, [][]driver.Value{mediaValues(medias[id])}), nil
+		case strings.Contains(query, "UPDATE classroom_contents SET status='published'"):
+			id := args[2].Value.(int64)
+			updated := contents[id]
+			updated.Status = ContentPublished
+			return classroomRows(contentColumns, [][]driver.Value{contentValues(updated)}), nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", query)
+		}
+	})
+	actor := int64(42)
+	_, err := NewStore(db).BatchPublishContents(context.Background(), []PublishExpectation{{ID: 1, ExpectedUpdatedAt: now}, {ID: 2, ExpectedUpdatedAt: now}}, &actor, now)
+	if err == nil || !state.began || !state.rolledBack || state.committed {
+		t.Fatalf("err=%v transaction=%+v", err, state)
 	}
 }
 

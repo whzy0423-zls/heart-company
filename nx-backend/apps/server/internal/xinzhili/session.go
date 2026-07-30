@@ -2,6 +2,8 @@ package xinzhili
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -204,6 +206,8 @@ type activeTurn struct {
 	chunker        streamSentenceChunker
 	ttsJobs        chan ttsStreamJob
 	nextTTSSeq     uint32
+	nextTurnSeq    uint64
+	doneSent       bool
 }
 
 type ttsStreamJob struct {
@@ -434,6 +438,7 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 			}
 		}
 		s.sendError(current, "asr_turn_lost", "语音连接中断，请重新说一次", true)
+		_ = s.sendAssistantDone(current)
 		s.stopTurn(current)
 		*turn = nil
 	case eventGenerationDone:
@@ -457,7 +462,11 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 		}
 		if event.err != nil && !errors.Is(event.err, context.Canceled) {
 			s.sendError(current, "tts_failed", "语音回复生成失败，请重试", true)
-			return
+		}
+		if event.err == nil || !errors.Is(event.err, context.Canceled) {
+			if err := s.sendAssistantDone(current); err != nil {
+				current.cancel()
+			}
 		}
 	}
 }
@@ -481,9 +490,15 @@ func (s *session) confirmCompletedPlayback(turn *activeTurn) {
 
 func (s *session) handleASREvent(turn *activeTurn, event ASREvent) {
 	if event.Kind == ASREventSpeechStarted {
+		firstSpeech := !turn.hasSpeech
 		turn.hasSpeech = true
-		if turn.engine != nil {
+		if firstSpeech && !turn.processing && turn.engine != nil {
 			turn.engine.Apply(Signal{Kind: SignalSpeechStarted})
+		}
+		if firstSpeech && !turn.processing {
+			if err := s.sendTurnControl(turn, EventASRActivity, map[string]any{"state": "speech_started"}); err != nil {
+				turn.cancel()
+			}
 		}
 	}
 	if event.Kind != ASREventFinal || !event.Stable || turn.processing {
@@ -499,10 +514,27 @@ func (s *session) handleASREvent(turn *activeTurn, event ASREvent) {
 	}
 	if s.deps.Generator == nil && !rag.IsModelIdentityQuestion(text) {
 		s.sendError(turn, "chat_model_not_configured", "请配置好会话模型后再重试", false)
+		_ = s.sendAssistantDone(turn)
+		turn.processing = true
+		turn.cancel()
 		return
 	}
 	if _, err := s.deps.Conversations.SaveUser(turn.ctx, turn.conversation, text, turn.input.Mode); err != nil {
 		s.sendError(turn, "conversation_save_failed", "会话保存失败，请重试", true)
+		_ = s.sendAssistantDone(turn)
+		turn.processing = true
+		turn.cancel()
+		return
+	}
+	if s.deps.Synthesizer == nil {
+		s.sendError(turn, "tts_not_configured", "请配置好语音模型后再重试", false)
+		_ = s.sendAssistantDone(turn)
+		turn.processing = true
+		turn.cancel()
+		return
+	}
+	if err := s.sendTurnControl(turn, EventTurnProcessing, map[string]any{}); err != nil {
+		turn.cancel()
 		return
 	}
 	turn.processing = true
@@ -570,10 +602,6 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 }
 
 func (s *session) startSynthesisWorker(turn *activeTurn) {
-	if s.deps.Synthesizer == nil {
-		s.sendError(turn, "tts_not_configured", "请配置好语音模型后再重试", false)
-		return
-	}
 	go func() {
 		var workerErr error
 		for job := range turn.ttsJobs {
@@ -648,7 +676,19 @@ func (s *session) acceptAudioSegment(turn *activeTurn, segment AudioSegment) err
 	if _, exists := turn.segments[segment.Seq]; exists {
 		return errors.New("xinzhili: duplicate TTS segment")
 	}
+	digest := sha256.Sum256(segment.Audio)
+	if err := s.sendTurnControl(turn, EventAssistantAudioStart, map[string]any{
+		"segmentSeq": segment.Seq,
+		"mimeType":   "audio/mpeg",
+		"byteLength": len(segment.Audio),
+		"sha256":     hex.EncodeToString(digest[:]),
+	}); err != nil {
+		return err
+	}
 	if err := s.deps.Sink.SendAudio(turn.ctx, segment); err != nil {
+		return err
+	}
+	if err := s.sendTurnControl(turn, EventAssistantAudioEnd, map[string]any{"segmentSeq": segment.Seq}); err != nil {
 		return err
 	}
 	turn.segments[segment.Seq] = text
@@ -666,15 +706,41 @@ func (s *session) acceptAudioSegment(turn *activeTurn, segment AudioSegment) err
 	return nil
 }
 
-func (s *session) sendError(turn *activeTurn, code, message string, retryable bool) {
-	payload, _ := json.Marshal(ErrorPayload{Code: code, Message: message, Retryable: retryable, Fatal: false})
+func (s *session) sendTurnControl(turn *activeTurn, kind EventType, payload any) error {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
 	turnID := turn.input.TurnID
-	seq := uint64(1)
-	turnSeq := uint64(1)
-	_ = s.deps.Sink.SendControl(turn.ctx, Envelope{
-		ProtocolVersion: ProtocolVersion, Type: EventError, TurnID: &turnID,
-		SessionSeq: &seq, TurnSeq: &turnSeq, TimestampMs: time.Now().UnixMilli(), Payload: payload,
+	turnSeq := turn.nextTurnSeq
+	turn.nextTurnSeq++
+	return s.deps.Sink.SendControl(turn.ctx, Envelope{
+		ProtocolVersion: ProtocolVersion,
+		Type:            kind,
+		TurnID:          &turnID,
+		TurnSeq:         &turnSeq,
+		TimestampMs:     time.Now().UnixMilli(),
+		Payload:         encoded,
 	})
+}
+
+func (s *session) sendError(turn *activeTurn, code, message string, retryable bool) {
+	turnID := turn.input.TurnID
+	payload, _ := json.Marshal(ErrorPayload{Code: code, Message: message, Retryable: retryable, Fatal: false, TurnID: &turnID})
+	if err := s.deps.Sink.SendControl(turn.ctx, Envelope{
+		ProtocolVersion: ProtocolVersion, Type: EventError,
+		TimestampMs: time.Now().UnixMilli(), Payload: payload,
+	}); err != nil {
+		turn.cancel()
+	}
+}
+
+func (s *session) sendAssistantDone(turn *activeTurn) error {
+	if turn.doneSent {
+		return nil
+	}
+	turn.doneSent = true
+	return s.sendTurnControl(turn, EventAssistantDone, map[string]any{"segmentCount": len(turn.segments)})
 }
 
 func appendUniqueDocuments(existing, incoming []rag.Document) []rag.Document {

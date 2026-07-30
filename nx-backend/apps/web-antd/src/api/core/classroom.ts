@@ -7,6 +7,7 @@ export type ClassroomAccessLevel =
   | 'paid'
   | 'public';
 export type ClassroomContentStatus =
+  | 'archived'
   | 'draft'
   | 'failed'
   | 'offline'
@@ -54,9 +55,12 @@ export interface ClassroomPage<T> {
 
 export interface ClassroomSeries {
   accessLevel: Exclude<ClassroomAccessLevel, 'inherit'>;
+  coverAspectRatio: ClassroomCoverAspectRatio;
+  coverPreviewUnavailable?: boolean;
   coverUrl: string;
   createdAt: string;
   id: number;
+  manualCoverObjectKey: string;
   playbackBlocked: boolean;
   priceCents: number;
   publishedAt?: string;
@@ -202,6 +206,13 @@ export interface ClassroomActionPayload {
   reason?: string;
 }
 
+export interface ClassroomBatchPublishPayload {
+  items: Array<{
+    expectedUpdatedAt: string;
+    id: number;
+  }>;
+}
+
 export interface ClassroomPricePayload extends ClassroomActionPayload {
   accessLevel: ClassroomAccessLevel;
   priceCents: number;
@@ -343,6 +354,47 @@ export function setClassroomSeriesPlaybackBlockedApi(
   );
 }
 
+export function uploadClassroomSeriesCoverApi(
+  id: number,
+  file: File,
+  expectedUpdatedAt: string,
+) {
+  const formData = new FormData();
+  formData.set('file', file);
+  formData.set('expectedUpdatedAt', expectedUpdatedAt);
+  return classroomRequest(
+    requestClient.post<ClassroomSeries>(
+      `/admin/classroom/series/${id}/cover`,
+      formData,
+    ),
+  );
+}
+
+export function deleteClassroomSeriesCoverApi(
+  id: number,
+  expectedUpdatedAt: string,
+) {
+  return classroomRequest(
+    requestClient.delete<ClassroomSeries>(
+      `/admin/classroom/series/${id}/cover`,
+      { params: { expectedUpdatedAt } },
+    ),
+  );
+}
+
+export function setClassroomSeriesCoverSettingsApi(
+  id: number,
+  coverAspectRatio: ClassroomCoverAspectRatio,
+  expectedUpdatedAt: string,
+) {
+  return classroomRequest(
+    requestClient.put<ClassroomSeries>(
+      `/admin/classroom/series/${id}/cover-settings`,
+      { coverAspectRatio, expectedUpdatedAt },
+    ),
+  );
+}
+
 export function getClassroomContentsApi(params?: {
   contentType?: ClassroomContentType;
   page?: number;
@@ -390,6 +442,17 @@ export function publishClassroomContentApi(
   return classroomRequest(
     requestClient.post<ClassroomContent>(
       `/admin/classroom/contents/${id}/publish`,
+      data,
+    ),
+  );
+}
+
+export function batchPublishClassroomContentsApi(
+  data: ClassroomBatchPublishPayload,
+) {
+  return classroomRequest(
+    requestClient.post<{ items: ClassroomContent[] }>(
+      '/admin/classroom/contents/batch-publish',
       data,
     ),
   );
@@ -526,6 +589,7 @@ export function completeClassroomUploadApi(
     requestClient.post<ClassroomUploadCompleteResult>(
       `/admin/classroom/uploads/${id}/complete`,
       { parts },
+      { timeout: 180_000 },
     ),
   );
 }
@@ -549,7 +613,7 @@ export function deleteClassroomContentApi(
   reason?: string,
 ) {
   return classroomRequest(
-    requestClient.delete<{ deleted: boolean }>(
+    requestClient.delete<{ archived?: boolean; deleted?: boolean }>(
       `/admin/classroom/contents/${id}`,
       { params: { expectedUpdatedAt, reason } },
     ),

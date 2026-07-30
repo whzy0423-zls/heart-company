@@ -15,20 +15,43 @@ export function getBailianCopyFeedback(
 ): BailianCopyFeedback {
   if (result.status === 'ready') {
     return {
-      content: '已复制到百炼，可到芯之力模型配置选择',
+      content: '已迁移到百炼 Qwen，可到芯之力模型配置选择',
       type: 'success',
     };
   }
 
   if (result.status === 'failed') {
     return {
-      content: result.lastError || '复制到百炼失败，请稍后重试',
+      content: result.lastError || '迁移到百炼 Qwen 失败，请稍后重试',
       type: 'error',
     };
   }
 
   return {
-    content: '已复制到百炼，正在处理中，请稍后刷新查看状态',
+    content: '已提交百炼 Qwen 迁移，正在处理中，请稍后刷新查看状态',
+    type: 'info',
+  };
+}
+
+export function getBailianCloneFeedback(
+  result: BailianCopyResult,
+): BailianCopyFeedback {
+  if (result.status === 'ready') {
+    return {
+      content: '百炼 Qwen 音色克隆成功，可到芯之力模型配置选择',
+      type: 'success',
+    };
+  }
+
+  if (result.status === 'failed') {
+    return {
+      content: result.lastError || '百炼 Qwen 音色克隆失败，请检查模型配置后重试',
+      type: 'error',
+    };
+  }
+
+  return {
+    content: '百炼 Qwen 音色正在克隆，请稍后刷新查看状态',
     type: 'info',
   };
 }

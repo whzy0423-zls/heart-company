@@ -87,11 +87,12 @@ type Envelope struct {
 }
 
 type ErrorPayload struct {
-	Code         string `json:"code"`
-	Message      string `json:"message"`
-	Retryable    bool   `json:"retryable"`
-	Fatal        bool   `json:"fatal"`
-	RetryAfterMs *int64 `json:"retryAfterMs,omitempty"`
+	Code         string  `json:"code"`
+	Message      string  `json:"message"`
+	Retryable    bool    `json:"retryable"`
+	Fatal        bool    `json:"fatal"`
+	RetryAfterMs *int64  `json:"retryAfterMs,omitempty"`
+	TurnID       *string `json:"turnId,omitempty"`
 }
 
 func EncodeEnvelope(envelope Envelope, direction Direction, sessionReady bool) ([]byte, error) {
@@ -400,11 +401,12 @@ func validateTurnStartPayload(envelope Envelope) error {
 
 func validateErrorPayload(raw json.RawMessage) error {
 	var payload struct {
-		Code         string `json:"code"`
-		Message      string `json:"message"`
-		Retryable    *bool  `json:"retryable"`
-		Fatal        *bool  `json:"fatal"`
-		RetryAfterMs *int64 `json:"retryAfterMs,omitempty"`
+		Code         string  `json:"code"`
+		Message      string  `json:"message"`
+		Retryable    *bool   `json:"retryable"`
+		Fatal        *bool   `json:"fatal"`
+		RetryAfterMs *int64  `json:"retryAfterMs,omitempty"`
+		TurnID       *string `json:"turnId,omitempty"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -416,6 +418,9 @@ func validateErrorPayload(raw json.RawMessage) error {
 	}
 	if payload.Code == "" || payload.Message == "" || payload.Retryable == nil || payload.Fatal == nil {
 		return errors.New("error payload requires code, message, retryable and fatal")
+	}
+	if payload.TurnID != nil && strings.TrimSpace(*payload.TurnID) == "" {
+		return errors.New("error payload turnId must not be blank")
 	}
 	return nil
 }

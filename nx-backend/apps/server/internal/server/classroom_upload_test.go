@@ -23,6 +23,8 @@ type fakeClassroomUploadHandlerService struct {
 	aborted     classroom.UploadTask
 	calls       []string
 	progress    classroom.UploadTask
+	completeCtx context.Context
+	completeCtxErr error
 }
 
 func (f *fakeClassroomUploadHandlerService) Initiate(context.Context, classroom.InitiateUploadInput) (classroom.InitiateUploadResult, error) {
@@ -33,8 +35,10 @@ func (f *fakeClassroomUploadHandlerService) SignPart(context.Context, int64, int
 	f.calls = append(f.calls, "sign")
 	return f.signed, nil
 }
-func (f *fakeClassroomUploadHandlerService) Complete(context.Context, int64, int64, []storage.CompletedPart) (classroom.CompleteUploadResult, error) {
+func (f *fakeClassroomUploadHandlerService) Complete(ctx context.Context, _ int64, _ int64, _ []storage.CompletedPart) (classroom.CompleteUploadResult, error) {
 	f.calls = append(f.calls, "complete")
+	f.completeCtx = ctx
+	f.completeCtxErr = ctx.Err()
 	return f.completed, f.completeErr
 }
 
@@ -136,6 +140,25 @@ func TestClassroomUploadCompleteAcceptsPartEtagsAndIsJSON(t *testing.T) {
 	}
 	if rr.Code != http.StatusOK || len(f.calls) != 1 || f.calls[0] != "complete" {
 		t.Fatalf("unexpected %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestClassroomUploadCompleteDetachesMediaProcessingFromRequestCancellation(t *testing.T) {
+	f := &fakeClassroomUploadHandlerService{completed: classroom.CompleteUploadResult{Task: classroom.UploadTask{ID: 3, Status: classroom.UploadCompleted}}}
+	s := &Server{classroomUploads: f}
+	base := httptest.NewRequest(http.MethodPost, "/api/admin/classroom/uploads/3/complete", strings.NewReader(`{"parts":[{"partNumber":1,"etag":"e1"}]}`))
+	ctx, cancel := context.WithCancel(base.Context())
+	req := base.WithContext(withUser(ctx, auth.UserInfo{ID: 42}))
+	cancel()
+	rr := httptest.NewRecorder()
+
+	s.classroomUploadComplete(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if f.completeCtx == nil || f.completeCtxErr != nil {
+		t.Fatalf("completion context inherited request cancellation: %v", f.completeCtx)
 	}
 }
 

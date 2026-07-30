@@ -28,6 +28,7 @@ import {
   updateClassroomSeriesApi,
 } from '#/api/core/classroom';
 import { classroomPermissions } from './classroom-view-model';
+import SeriesCoverEditor from './components/series-cover-editor.vue';
 import { seriesMetadataPayload } from './series-model';
 
 const props = withDefaults(
@@ -46,19 +47,17 @@ const accessStore = useAccessStore();
 const permissions = computed(() =>
   classroomPermissions(accessStore.accessCodes),
 );
-const canWrite = computed(
-  () => props.canWrite ?? permissions.value.canWrite,
-);
+const canWrite = computed(() => props.canWrite ?? permissions.value.canWrite);
 const canPublish = computed(
   () => props.canPublish ?? permissions.value.canPublish,
 );
-const canPrice = computed(
-  () => props.canPrice ?? permissions.value.canPrice,
-);
+const canPrice = computed(() => props.canPrice ?? permissions.value.canPrice);
 const loading = ref(false);
 const error = ref('');
 const rows = ref<ClassroomSeries[]>([]);
 const editorOpen = ref(false);
+const coverEditorOpen = ref(false);
+const coverSeries = ref<ClassroomSeries>();
 const editing = ref<ClassroomSeries>();
 const saving = ref(false);
 const actionLoadingId = ref<number>();
@@ -114,6 +113,21 @@ function openEditor(record?: ClassroomSeries) {
         },
   );
   editorOpen.value = true;
+}
+function replacePersistedSeries(value: ClassroomSeries) {
+  persistedSeries.value = value;
+  editing.value = value;
+  const index = rows.value.findIndex((row) => row.id === value.id);
+  if (index !== -1) rows.value[index] = value;
+}
+function openCoverEditor(record: ClassroomSeries) {
+  coverSeries.value = record;
+  coverEditorOpen.value = true;
+}
+function replaceCoverSeries(value: ClassroomSeries) {
+  coverSeries.value = value;
+  const index = rows.value.findIndex((row) => row.id === value.id);
+  if (index !== -1) rows.value[index] = value;
 }
 async function save() {
   if (!form.title.trim()) return message.warning('请填写系列名称');
@@ -214,106 +228,132 @@ onMounted(load);
 </script>
 <template>
   <div class="classroom-series-page">
-  <Card title="课程系列" :loading="loading">
-    <template #extra
-      ><Button v-if="canWrite" type="primary" @click="openEditor()"
-        >新建系列</Button
-      ></template
+    <Card title="课程系列" :loading="loading">
+      <template #extra
+        ><Button v-if="canWrite" type="primary" @click="openEditor()"
+          >新建系列</Button
+        ></template
+      >
+      <Alert v-if="error" type="error" :message="error" show-icon
+        ><template #action><Button @click="load">重试</Button></template></Alert
+      >
+      <Empty v-else-if="!loading && !rows.length" description="暂无课程系列" />
+      <Table
+        v-else
+        :columns="columns"
+        :data-source="rows"
+        row-key="id"
+        :scroll="{ x: 720 }"
+      >
+        <template #bodyCell="{ column, record }">
+          <Tag v-if="column.dataIndex === 'status'">{{ record.status }}</Tag>
+          <Space v-else-if="column.key === 'action'">
+            <Button
+              v-if="canWrite"
+              :disabled="record.status !== 'draft'"
+              :title="record.status !== 'draft' ? '仅草稿可编辑' : '编辑系列'"
+              @click="openEditor(record as ClassroomSeries)"
+              >编辑</Button
+            ><Button
+              v-if="canWrite"
+              @click="openCoverEditor(record as ClassroomSeries)"
+              >封面管理</Button
+            ><Button
+              v-if="canPrice"
+              @click="openEditor(record as ClassroomSeries)"
+              >定价</Button
+            ><Button
+              v-if="canPublish && record.status === 'draft'"
+              :loading="actionLoadingId === record.id"
+              @click="confirmAction(record as ClassroomSeries, 'publish')"
+              >发布</Button
+            >
+            <Button
+              v-if="canPublish && record.status === 'published'"
+              :loading="actionLoadingId === record.id"
+              @click="confirmAction(record as ClassroomSeries, 'offline')"
+              >下线</Button
+            >
+            <Button
+              v-if="canWrite && record.status === 'draft'"
+              danger
+              :loading="actionLoadingId === record.id"
+              @click="confirmAction(record as ClassroomSeries, 'delete')"
+              >删除</Button
+            >
+            <Button
+              v-if="canPublish"
+              :loading="actionLoadingId === record.id"
+              @click="
+                confirmAction(
+                  record as ClassroomSeries,
+                  record.playbackBlocked ? 'unblock' : 'block',
+                )
+              "
+              >{{ record.playbackBlocked ? '恢复播放' : '阻断播放' }}</Button
+            >
+          </Space>
+        </template>
+      </Table>
+    </Card>
+    <Modal
+      v-model:open="editorOpen"
+      title="课程系列"
+      ok-text="保存系列"
+      :confirm-loading="saving"
+      :ok-button-props="{ disabled: !canWrite && !canPrice }"
+      @ok="save"
     >
-    <Alert v-if="error" type="error" :message="error" show-icon
-      ><template #action><Button @click="load">重试</Button></template></Alert
-    >
-    <Empty v-else-if="!loading && !rows.length" description="暂无课程系列" />
-    <Table
-      v-else
-      :columns="columns"
-      :data-source="rows"
-      row-key="id"
-      :scroll="{ x: 720 }"
-    >
-      <template #bodyCell="{ column, record }">
-        <Tag v-if="column.dataIndex === 'status'">{{ record.status }}</Tag>
-        <Space v-else-if="column.key === 'action'">
-          <Button
-            v-if="canWrite"
-            :disabled="record.status !== 'draft'"
-            :title="record.status !== 'draft' ? '仅草稿可编辑' : '编辑系列'"
-            @click="openEditor(record as ClassroomSeries)"
-            >编辑</Button
-          ><Button
-            v-if="canPrice"
-            @click="openEditor(record as ClassroomSeries)"
-            >定价</Button
-          ><Button
-            v-if="canPublish && record.status === 'draft'"
-            :loading="actionLoadingId === record.id"
-            @click="confirmAction(record as ClassroomSeries, 'publish')"
-            >发布</Button
-          >
-          <Button
-            v-if="canPublish && record.status === 'published'"
-            :loading="actionLoadingId === record.id"
-            @click="confirmAction(record as ClassroomSeries, 'offline')"
-            >下线</Button
-          >
-          <Button
-            v-if="canWrite && record.status === 'draft'"
-            danger
-            :loading="actionLoadingId === record.id"
-            @click="confirmAction(record as ClassroomSeries, 'delete')"
-            >删除</Button
-          >
-          <Button
-            v-if="canPublish"
-            :loading="actionLoadingId === record.id"
-            @click="
-              confirmAction(
-                record as ClassroomSeries,
-                record.playbackBlocked ? 'unblock' : 'block',
-              )
-            "
-            >{{ record.playbackBlocked ? '恢复播放' : '阻断播放' }}</Button
-          >
-        </Space>
-      </template>
-    </Table>
-  </Card>
-  <Modal
-    v-model:open="editorOpen"
-    title="课程系列"
-    ok-text="保存系列"
-    :confirm-loading="saving"
-    :ok-button-props="{ disabled: !canWrite && !canPrice }"
-    @ok="save"
-  >
-    <Form layout="vertical"
-      ><Form.Item label="系列名称" required
-        ><Input v-model:value="form.title" :disabled="!canWrite"  placeholder="请输入系列名称"/></Form.Item
-      ><Form.Item label="老师"
-        ><Input
-          v-model:value="form.teacherName"
-          :disabled="!canWrite"  placeholder="请输入老师"/></Form.Item
-      ><Form.Item label="权限"
-        ><Select
-          v-model:value="form.accessLevel"
-          :disabled="!canPrice"
-          :options="[
-            { label: '公开', value: 'public' },
-            { label: '登录后', value: 'login' },
-            { label: '会员', value: 'member' },
-            { label: '付费', value: 'paid' },
-          ]"  placeholder="请选择权限"/></Form.Item
-      ><Form.Item v-if="form.accessLevel === 'paid'" label="价格（分）"
-        ><InputNumber
-          v-model:value="form.priceCents"
-          :disabled="!canPrice"
-          :min="1"  placeholder="请输入价格（分）"/></Form.Item
-      ><Form.Item label="简介"
-        ><Input.TextArea
-          v-model:value="form.summary"
-          :disabled="!canWrite"  placeholder="请输入简介"/></Form.Item
-    ></Form>
-  </Modal>
+      <Form layout="vertical"
+        ><Form.Item label="系列名称" required
+          ><Input
+            v-model:value="form.title"
+            :disabled="!canWrite"
+            placeholder="请输入系列名称" /></Form.Item
+        ><Form.Item label="老师"
+          ><Input
+            v-model:value="form.teacherName"
+            :disabled="!canWrite"
+            placeholder="请输入老师" /></Form.Item
+        ><Form.Item label="权限"
+          ><Select
+            v-model:value="form.accessLevel"
+            :disabled="!canPrice"
+            :options="[
+              { label: '公开', value: 'public' },
+              { label: '登录后', value: 'login' },
+              { label: '会员', value: 'member' },
+              { label: '付费', value: 'paid' },
+            ]"
+            placeholder="请选择权限" /></Form.Item
+        ><Form.Item v-if="form.accessLevel === 'paid'" label="价格（分）"
+          ><InputNumber
+            v-model:value="form.priceCents"
+            :disabled="!canPrice"
+            :min="1"
+            placeholder="请输入价格（分）" /></Form.Item
+        ><Form.Item label="简介"
+          ><Input.TextArea
+            v-model:value="form.summary"
+            :disabled="!canWrite"
+            placeholder="请输入简介" /></Form.Item
+      ></Form>
+      <SeriesCoverEditor
+        v-if="persistedSeries"
+        :series="persistedSeries"
+        :disabled="!canWrite"
+        @saved="replacePersistedSeries"
+      />
+      <Alert v-else type="info" show-icon message="请先保存系列，再管理封面" />
+    </Modal>
+    <Modal v-model:open="coverEditorOpen" title="系列封面管理" :footer="null">
+      <SeriesCoverEditor
+        v-if="coverSeries"
+        :series="coverSeries"
+        :disabled="!canWrite"
+        @saved="replaceCoverSeries"
+      />
+    </Modal>
   </div>
 </template>
 <style scoped>

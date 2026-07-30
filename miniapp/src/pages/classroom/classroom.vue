@@ -207,6 +207,15 @@ async function openSeries(item, { force = false } = {}) {
         .filter((content) => content.id),
     };
     seriesDetails.value = { ...seriesDetails.value, [item.id]: detail };
+    const existingIndex = seriesItems.value.findIndex((series) => series.id === item.id);
+    if (existingIndex >= 0) {
+      seriesItems.value = seriesItems.value.map((series, index) =>
+        index === existingIndex ? detail.series : series,
+      );
+    } else {
+      seriesItems.value = [detail.series, ...seriesItems.value];
+    }
+    selectedSeries.value = detail.series;
     expandedSeries.value = detail;
   } catch (error) {
     if (
@@ -351,13 +360,24 @@ function formatDuration(seconds) {
   return `${minutes}:${remainder}`;
 }
 
-onLoad((options = {}) => {
+onLoad(async (options = {}) => {
   disposed = false;
   skipNextShowRefresh = true;
   if (options.tab === "series") activeTab.value = "series";
   if (options.tab === "standalone") activeTab.value = "standalone";
-  loadActiveList();
+  const requestedSeriesId = /^\d+$/.test(String(options.seriesId || "").trim())
+    ? String(options.seriesId).trim()
+    : "";
   loadContinueLearning();
+  await loadActiveList();
+  if (!disposed && activeTab.value === "series" && requestedSeriesId) {
+    let item = seriesItems.value.find((series) => series.id === requestedSeriesId);
+    if (!item) {
+      item = normalizeClassroomSeries({ id: requestedSeriesId });
+      seriesItems.value = [item, ...seriesItems.value];
+    }
+    await openSeries(item);
+  }
 });
 
 onShow(() => {

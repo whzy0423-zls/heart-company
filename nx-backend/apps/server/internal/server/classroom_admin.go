@@ -33,6 +33,12 @@ type classroomCoverManager interface {
 	UpdateSettings(context.Context, int64, classroom.CoverAspectRatio, time.Time, *int64) (classroom.Content, error)
 }
 
+type classroomSeriesCoverManager interface {
+	Upload(context.Context, int64, time.Time, *int64, string, io.Reader) (classroom.Series, error)
+	Delete(context.Context, int64, time.Time, *int64) (classroom.Series, error)
+	UpdateSettings(context.Context, int64, classroom.CoverAspectRatio, time.Time, *int64) (classroom.Series, error)
+}
+
 type classroomCoverObjectDeleter interface {
 	DeleteObject(context.Context, string) error
 }
@@ -45,10 +51,12 @@ type classroomAdminService interface {
 	DeleteSeries(context.Context, int64, time.Time) error
 	ListContents(context.Context, classroom.ContentFilter) ([]classroom.Content, int, error)
 	ListContentContexts(context.Context, []int64) (map[int64]classroomContentContext, error)
+	ListSeriesCoverFallbacks(context.Context, []int64) (map[int64]classroomSeriesCoverFallback, error)
 	GetContent(context.Context, int64) (classroom.Content, error)
 	CreateContent(context.Context, classroom.Content) (classroom.Content, error)
 	UpdateContent(context.Context, classroom.Content, time.Time) (classroom.Content, error)
 	DeleteContent(context.Context, int64, time.Time) error
+	BatchPublishContents(context.Context, []classroom.PublishExpectation, *int64, time.Time) ([]classroom.PublishedContentChange, error)
 	ListUploadTasks(context.Context, int, int) ([]classroom.UploadTask, int, error)
 }
 
@@ -60,6 +68,13 @@ type classroomAdminStore struct {
 type classroomContentContext struct {
 	GeneratedCoverObjectKey string
 	Parent                  *classroom.Series
+}
+
+type classroomSeriesCoverFallback struct {
+	ContentType        classroom.ContentType
+	CoverURL           string
+	ManualObjectKey    string
+	GeneratedObjectKey string
 }
 
 func newClassroomAdminStore(db *sql.DB) classroomAdminService {
@@ -159,6 +174,9 @@ func (a *classroomAdminStore) DeleteContent(ctx context.Context, id int64, expec
 	}
 	return tx.Commit()
 }
+func (a *classroomAdminStore) BatchPublishContents(ctx context.Context, items []classroom.PublishExpectation, updatedBy *int64, publishedAt time.Time) ([]classroom.PublishedContentChange, error) {
+	return a.store.BatchPublishContents(ctx, items, updatedBy, publishedAt)
+}
 
 func (a *classroomAdminStore) ListSeries(ctx context.Context, f classroom.SeriesFilter) ([]classroom.Series, int, error) {
 	items, err := a.store.ListSeries(ctx, f)
@@ -191,6 +209,8 @@ func (a *classroomAdminStore) ListContents(ctx context.Context, f classroom.Cont
 	if f.Status != "" {
 		args = append(args, f.Status)
 		where = append(where, fmt.Sprintf("status=$%d", len(args)))
+	} else {
+		where = append(where, "status<>'archived'")
 	}
 	if f.ContentType != "" {
 		args = append(args, f.ContentType)
@@ -239,6 +259,41 @@ func (a *classroomAdminStore) ListContentContexts(ctx context.Context, ids []int
 	}
 	return result, rows.Err()
 }
+
+func (a *classroomAdminStore) ListSeriesCoverFallbacks(ctx context.Context, ids []int64) (map[int64]classroomSeriesCoverFallback, error) {
+	result := make(map[int64]classroomSeriesCoverFallback, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	args := make([]any, 0, len(ids)+1)
+	marks := make([]string, 0, len(ids))
+	for i, id := range ids {
+		args = append(args, id)
+		marks = append(marks, fmt.Sprintf("$%d", i+1))
+	}
+	args = append(args, classroom.ContentPublished)
+	rows, err := a.db.QueryContext(ctx, `SELECT DISTINCT ON (c.series_id)
+		c.series_id,c.content_type,c.cover_url,c.manual_cover_object_key,m.cover_object_key
+		FROM classroom_contents c
+		LEFT JOIN classroom_media_assets m ON m.id=c.media_asset_id
+		WHERE c.series_id IN (`+strings.Join(marks, ",")+`) AND c.status=$`+strconv.Itoa(len(args))+`
+		ORDER BY c.series_id,c.sort_order,c.id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var seriesID int64
+		var item classroomSeriesCoverFallback
+		var generated sql.NullString
+		if err = rows.Scan(&seriesID, &item.ContentType, &item.CoverURL, &item.ManualObjectKey, &generated); err != nil {
+			return nil, err
+		}
+		item.GeneratedObjectKey = generated.String
+		result[seriesID] = item
+	}
+	return result, rows.Err()
+}
 func (a *classroomAdminStore) ListUploadTasks(ctx context.Context, limit, offset int) ([]classroom.UploadTask, int, error) {
 	limit = classroomAdminLimit(limit)
 	if offset < 0 {
@@ -271,20 +326,23 @@ type classroomPage[T any] struct {
 	PageSize int `json:"pageSize"`
 }
 type classroomSeriesDTO struct {
-	ID              int64                  `json:"id"`
-	Title           string                 `json:"title"`
-	Summary         string                 `json:"summary"`
-	CoverURL        string                 `json:"coverUrl"`
-	TeacherKey      string                 `json:"teacherKey"`
-	TeacherName     string                 `json:"teacherName"`
-	SortOrder       int                    `json:"sortOrder"`
-	Status          classroom.SeriesStatus `json:"status"`
-	PlaybackBlocked bool                   `json:"playbackBlocked"`
-	AccessLevel     classroom.AccessLevel  `json:"accessLevel"`
-	PriceCents      int                    `json:"priceCents"`
-	PublishedAt     *time.Time             `json:"publishedAt,omitempty"`
-	CreatedAt       time.Time              `json:"createdAt"`
-	UpdatedAt       time.Time              `json:"updatedAt"`
+	ID                      int64                      `json:"id"`
+	Title                   string                     `json:"title"`
+	Summary                 string                     `json:"summary"`
+	CoverURL                string                     `json:"coverUrl"`
+	ManualCoverObjectKey    string                     `json:"manualCoverObjectKey"`
+	CoverAspectRatio        classroom.CoverAspectRatio `json:"coverAspectRatio"`
+	CoverPreviewUnavailable bool                       `json:"coverPreviewUnavailable,omitempty"`
+	TeacherKey              string                     `json:"teacherKey"`
+	TeacherName             string                     `json:"teacherName"`
+	SortOrder               int                        `json:"sortOrder"`
+	Status                  classroom.SeriesStatus     `json:"status"`
+	PlaybackBlocked         bool                       `json:"playbackBlocked"`
+	AccessLevel             classroom.AccessLevel      `json:"accessLevel"`
+	PriceCents              int                        `json:"priceCents"`
+	PublishedAt             *time.Time                 `json:"publishedAt,omitempty"`
+	CreatedAt               time.Time                  `json:"createdAt"`
+	UpdatedAt               time.Time                  `json:"updatedAt"`
 }
 type classroomContentDTO struct {
 	ID                   int64                      `json:"id"`
@@ -357,11 +415,66 @@ func registerClassroomAdminRoutes(mux *http.ServeMux, permission func(string, ht
 		}
 		permission(code, s.classroomContentCollection)(w, r)
 	})
+	mux.HandleFunc("/api/admin/classroom/contents/batch-publish", permission("Miniapp:Classroom:Publish", s.classroomContentBatchPublish))
 	mux.HandleFunc("/api/admin/classroom/contents/", func(w http.ResponseWriter, r *http.Request) {
 		permission(classroomActionPermission(r), s.classroomContentItem)(w, r)
 	})
 	mux.HandleFunc("/api/admin/classroom/upload-tasks", permission("Miniapp:Classroom:Upload", s.classroomUploadTasks))
 	mux.HandleFunc("/api/admin/classroom/uploads/tasks", permission("Miniapp:Classroom:Upload", s.classroomUploadTasks))
+}
+
+type classroomBatchPublishItemInput struct {
+	ID                int64     `json:"id"`
+	ExpectedUpdatedAt time.Time `json:"expectedUpdatedAt"`
+}
+
+func (s *Server) classroomContentBatchPublish(w http.ResponseWriter, r *http.Request) {
+	if !s.classroomReady(w) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+		return
+	}
+	var body struct {
+		Items []classroomBatchPublishItemInput `json:"items"`
+	}
+	if !decodeClassroomJSON(w, r, &body) {
+		return
+	}
+	if len(body.Items) == 0 || len(body.Items) > 100 {
+		httpx.Fail(w, http.StatusBadRequest, "items must contain between 1 and 100 contents")
+		return
+	}
+	items := make([]classroom.PublishExpectation, 0, len(body.Items))
+	for _, item := range body.Items {
+		if item.ID <= 0 || item.ExpectedUpdatedAt.IsZero() {
+			httpx.Fail(w, http.StatusBadRequest, "invalid batch publish item")
+			return
+		}
+		items = append(items, classroom.PublishExpectation{ID: item.ID, ExpectedUpdatedAt: item.ExpectedUpdatedAt})
+	}
+	user := userFromRequest(r)
+	changes, err := s.classroomAdmin.BatchPublishContents(r.Context(), items, &user.ID, time.Now().UTC())
+	if err != nil {
+		writeClassroomAdminError(w, err)
+		return
+	}
+	updated := make([]classroom.Content, 0, len(changes))
+	for _, change := range changes {
+		if err := s.recordClassroomAudit(r, "publish", "classroom_content", change.After.ID, change.Before, change.After, "批量发布课件"); err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "record classroom audit failed")
+			return
+		}
+		updated = append(updated, change.After)
+	}
+	out, err := s.toContentDTOs(r.Context(), updated)
+	if err != nil {
+		writeClassroomAdminError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	httpx.OK(w, map[string]any{"items": out})
 }
 func classroomActionPermission(r *http.Request) string {
 	p := strings.Trim(r.URL.Path, "/")
@@ -437,10 +550,12 @@ func (s *Server) classroomSeriesList(w http.ResponseWriter, r *http.Request) {
 		writeClassroomAdminError(w, err)
 		return
 	}
-	out := make([]classroomSeriesDTO, 0, len(items))
-	for _, v := range items {
-		out = append(out, toSeriesDTO(v))
+	out, err := s.toSeriesDTOs(r.Context(), items)
+	if err != nil {
+		writeClassroomAdminError(w, err)
+		return
 	}
+	w.Header().Set("Cache-Control", "private, no-store")
 	httpx.OK(w, classroomPage[classroomSeriesDTO]{out, total, page, size})
 }
 func (s *Server) classroomContentList(w http.ResponseWriter, r *http.Request) {
@@ -491,7 +606,8 @@ func (s *Server) classroomSeriesCreate(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "record classroom audit failed")
 		return
 	}
-	httpx.OK(w, toSeriesDTO(created))
+	w.Header().Set("Cache-Control", "private, no-store")
+	httpx.OK(w, s.toSeriesMutationDTO(r.Context(), created))
 }
 func (s *Server) classroomContentCreate(w http.ResponseWriter, r *http.Request) {
 	var in contentWriteInput
@@ -534,8 +650,22 @@ func (s *Server) classroomSeriesItem(w http.ResponseWriter, r *http.Request) {
 		writeClassroomAdminError(w, err)
 		return
 	}
+	if action == "cover" {
+		s.classroomSeriesCover(w, r, current)
+		return
+	}
+	if action == "cover-settings" {
+		s.classroomSeriesCoverSettings(w, r, current)
+		return
+	}
 	if action == "" && r.Method == http.MethodGet {
-		httpx.OK(w, toSeriesDTO(current))
+		items, err := s.toSeriesDTOs(r.Context(), []classroom.Series{current})
+		if err != nil {
+			writeClassroomAdminError(w, err)
+			return
+		}
+		w.Header().Set("Cache-Control", "private, no-store")
+		httpx.OK(w, items[0])
 		return
 	}
 	if action == "" && r.Method == http.MethodPut {
@@ -550,6 +680,8 @@ func (s *Server) classroomSeriesItem(w http.ResponseWriter, r *http.Request) {
 		next := in.series()
 		next.ID = id
 		next.Status = current.Status
+		next.ManualCoverObjectKey = current.ManualCoverObjectKey
+		next.CoverAspectRatio = current.CoverAspectRatio
 		next.AccessLevel = current.AccessLevel
 		next.PriceCents = current.PriceCents
 		next.PlaybackBlocked = current.PlaybackBlocked
@@ -578,6 +710,92 @@ func (s *Server) classroomSeriesItem(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mutateSeries(w, r, current, action)
 }
+
+func (s *Server) classroomSeriesCoverSettings(w http.ResponseWriter, r *http.Request, before classroom.Series) {
+	if r.Method != http.MethodPut {
+		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+		return
+	}
+	if s.classroomSeriesCovers == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "classroom series cover unavailable")
+		return
+	}
+	var in coverSettingsInput
+	if !decodeClassroomJSON(w, r, &in) {
+		return
+	}
+	if in.ExpectedUpdatedAt.IsZero() {
+		httpx.Fail(w, http.StatusBadRequest, "expectedUpdatedAt is required")
+		return
+	}
+	user := userFromRequest(r)
+	updated, err := s.classroomSeriesCovers.UpdateSettings(r.Context(), before.ID, in.CoverAspectRatio, in.ExpectedUpdatedAt, &user.ID)
+	if err != nil {
+		writeClassroomAdminError(w, err)
+		return
+	}
+	if err := s.recordClassroomAudit(r, "update_cover_settings", "classroom_series", before.ID, before, updated, "更新课程系列封面比例"); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "record classroom audit failed")
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	httpx.OK(w, s.toSeriesMutationDTO(r.Context(), updated))
+}
+
+func (s *Server) classroomSeriesCover(w http.ResponseWriter, r *http.Request, before classroom.Series) {
+	if s.classroomSeriesCovers == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "classroom series cover unavailable")
+		return
+	}
+	user := userFromRequest(r)
+	var updated classroom.Series
+	var err error
+	switch r.Method {
+	case http.MethodPost:
+		r.Body = http.MaxBytesReader(w, r.Body, classroom.DefaultCoverImageMaxBytes+(2<<20))
+		if err = r.ParseMultipartForm(classroom.DefaultCoverImageMaxBytes + (1 << 20)); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "invalid classroom cover upload")
+			return
+		}
+		expected, ok := parseExpectedUpdatedAt(strings.TrimSpace(r.FormValue("expectedUpdatedAt")))
+		if !ok {
+			httpx.Fail(w, http.StatusBadRequest, "expectedUpdatedAt is required")
+			return
+		}
+		file, header, fileErr := r.FormFile("file")
+		if fileErr != nil {
+			httpx.Fail(w, http.StatusBadRequest, "cover file is required")
+			return
+		}
+		defer file.Close()
+		updated, err = s.classroomSeriesCovers.Upload(r.Context(), before.ID, expected, &user.ID, header.Filename, file)
+	case http.MethodDelete:
+		expected, ok := expectedUpdatedAtFromQuery(r)
+		if !ok {
+			httpx.Fail(w, http.StatusBadRequest, "expectedUpdatedAt is required")
+			return
+		}
+		updated, err = s.classroomSeriesCovers.Delete(r.Context(), before.ID, expected, &user.ID)
+	default:
+		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+		return
+	}
+	if err != nil {
+		writeClassroomAdminError(w, err)
+		return
+	}
+	action, summary := "update_cover", "更新课程系列封面"
+	if r.Method == http.MethodDelete {
+		action, summary = "delete_cover", "删除课程系列封面"
+	}
+	if err := s.recordClassroomAudit(r, action, "classroom_series", before.ID, before, updated, summary); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "record classroom audit failed")
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	httpx.OK(w, s.toSeriesMutationDTO(r.Context(), updated))
+}
+
 func (s *Server) mutateSeries(w http.ResponseWriter, r *http.Request, current classroom.Series, action string) {
 	if r.Method != http.MethodPost {
 		httpx.Fail(w, 405, "Method Not Allowed")
@@ -638,7 +856,8 @@ func (s *Server) updateSeries(w http.ResponseWriter, r *http.Request, before, ne
 		httpx.Fail(w, http.StatusInternalServerError, "record classroom audit failed")
 		return
 	}
-	httpx.OK(w, toSeriesDTO(updated))
+	w.Header().Set("Cache-Control", "private, no-store")
+	httpx.OK(w, s.toSeriesMutationDTO(r.Context(), updated))
 }
 
 func (s *Server) classroomContentItem(w http.ResponseWriter, r *http.Request) {
@@ -701,6 +920,23 @@ func (s *Server) classroomContentItem(w http.ResponseWriter, r *http.Request) {
 		expected, ok := expectedUpdatedAtFromQuery(r)
 		if !ok {
 			httpx.Fail(w, http.StatusBadRequest, "expectedUpdatedAt is required")
+			return
+		}
+		if current.Status == classroom.ContentOffline {
+			next := current
+			next.Status = classroom.ContentArchived
+			uid := userFromRequest(r).ID
+			next.UpdatedBy = &uid
+			updated, err := s.classroomAdmin.UpdateContent(r.Context(), next, expected)
+			if err != nil {
+				writeClassroomAdminError(w, err)
+				return
+			}
+			if err := s.recordClassroomAudit(r, "archive", "classroom_content", id, current, updated, classroomAuditSummary("归档已下架课件", r.URL.Query().Get("reason"))); err != nil {
+				httpx.Fail(w, 500, "record classroom audit failed")
+				return
+			}
+			httpx.OK(w, map[string]any{"archived": true, "deleted": true, "updatedAt": updated.UpdatedAt})
 			return
 		}
 		if err := s.classroomAdmin.DeleteContent(r.Context(), id, expected); err != nil {
@@ -1059,8 +1295,70 @@ func classroomAuditSummary(action, reason string) string {
 	}
 	return action + "：" + reason
 }
-func toSeriesDTO(v classroom.Series) classroomSeriesDTO {
-	return classroomSeriesDTO{v.ID, v.Title, v.Summary, v.CoverURL, v.TeacherKey, v.TeacherNameSnapshot, v.SortOrder, v.Status, v.PlaybackBlocked, v.AccessLevel, v.PriceCents, v.PublishedAt, v.CreatedAt, v.UpdatedAt}
+func (s *Server) toSeriesDTOs(ctx context.Context, values []classroom.Series) ([]classroomSeriesDTO, error) {
+	ids := make([]int64, 0, len(values))
+	for _, value := range values {
+		ids = append(ids, value.ID)
+	}
+	fallbacks, err := s.classroomAdmin.ListSeriesCoverFallbacks(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]classroomSeriesDTO, 0, len(values))
+	for _, value := range values {
+		out = append(out, s.toSeriesDTOWithFallback(ctx, value, fallbacks[value.ID], false))
+	}
+	return out, nil
+}
+
+func (s *Server) toSeriesMutationDTO(ctx context.Context, value classroom.Series) classroomSeriesDTO {
+	fallbacks, err := s.classroomAdmin.ListSeriesCoverFallbacks(ctx, []int64{value.ID})
+	if err != nil {
+		log.Printf("classroom series cover preview unavailable series_id=%d stage=context", value.ID)
+		return s.toSeriesDTOWithFallback(ctx, value, classroomSeriesCoverFallback{}, true)
+	}
+	return s.toSeriesDTOWithFallback(ctx, value, fallbacks[value.ID], false)
+}
+
+func (s *Server) toSeriesDTOWithFallback(ctx context.Context, v classroom.Series, fallback classroomSeriesCoverFallback, previewUnavailable bool) classroomSeriesDTO {
+	ratio, err := classroom.NormalizeCoverAspectRatio(v.CoverAspectRatio)
+	if err != nil {
+		ratio = classroom.CoverAspectRatio16x9
+	}
+	coverURL := strings.TrimSpace(v.CoverURL)
+	if key := strings.TrimSpace(v.ManualCoverObjectKey); key != "" {
+		if s.classroomPlaybackSigner == nil {
+			previewUnavailable = true
+			coverURL = ""
+		} else if signed, signErr := s.classroomPlaybackSigner.PresignGetURL(ctx, key, 5*time.Minute); signErr == nil {
+			coverURL = signed
+			previewUnavailable = false
+		} else {
+			previewUnavailable = true
+			coverURL = ""
+		}
+	}
+	if strings.TrimSpace(v.ManualCoverObjectKey) == "" && coverURL == "" {
+		resolved, resolveErr := classroom.ResolveEffectiveCover(ctx, classroom.CoverInput{
+			ContentType: fallback.ContentType, ManualObjectKey: fallback.ManualObjectKey,
+			GeneratedObjectKey: fallback.GeneratedObjectKey, LegacyURL: fallback.CoverURL,
+		}, s.classroomPlaybackSigner, s.classroomCoverTTL(), classroomAudioCoverPath)
+		if resolveErr == nil {
+			coverURL = resolved.URL
+		} else if errors.Is(resolveErr, classroom.ErrCoverSigningUnavailable) {
+			previewUnavailable = true
+		} else {
+			previewUnavailable = true
+		}
+	}
+	return classroomSeriesDTO{
+		ID: v.ID, Title: v.Title, Summary: v.Summary, CoverURL: coverURL,
+		ManualCoverObjectKey: v.ManualCoverObjectKey, CoverAspectRatio: ratio, CoverPreviewUnavailable: previewUnavailable,
+		TeacherKey: v.TeacherKey, TeacherName: v.TeacherNameSnapshot,
+		SortOrder: v.SortOrder, Status: v.Status, PlaybackBlocked: v.PlaybackBlocked,
+		AccessLevel: v.AccessLevel, PriceCents: v.PriceCents, PublishedAt: v.PublishedAt,
+		CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt,
+	}
 }
 func (s *Server) toContentDTO(ctx context.Context, v classroom.Content) (classroomContentDTO, error) {
 	items, err := s.toContentDTOs(ctx, []classroom.Content{v})

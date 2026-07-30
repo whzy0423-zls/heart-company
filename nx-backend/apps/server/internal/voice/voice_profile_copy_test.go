@@ -64,19 +64,19 @@ func TestCopyProfileToBailianPlanCopiesBailianFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Name != "韩老师（百炼）" || plan.Provider != ProviderBailian || plan.SampleAssetID != 42 || plan.SampleName != "teacher.mp3" || plan.SampleURL != "/api/upload-assets/42" || plan.Remark != "原始备注" {
+	if plan.Name != "韩老师（百炼 Qwen）" || plan.Model != "qwen3-tts-vc-2026-01-22" || plan.Provider != ProviderBailian || plan.SampleAssetID != 42 || plan.SampleName != "teacher.mp3" || plan.SampleURL != "/api/upload-assets/42" || plan.Remark != "原始备注" {
 		t.Fatalf("unexpected copy plan: %+v", plan)
 	}
 }
 
-func TestCopyProfileToBailianReusesMiniMaxSampleAndPreservesSource(t *testing.T) {
+func TestCopyProfileToBailianReusesMiniMaxSampleAndDeactivatesSourceAfterQwenReady(t *testing.T) {
 	store, database, cleanup := newVoiceProfileCopyTestStore(t)
 	defer cleanup()
 
 	var cloneCalls int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cloneCalls++
-		if r.URL.Path != bailianGenerationPath {
+		if r.URL.Path != bailianCustomizationPath {
 			t.Fatalf("clone path = %q", r.URL.Path)
 		}
 		var payload map[string]any
@@ -84,10 +84,14 @@ func TestCopyProfileToBailianReusesMiniMaxSampleAndPreservesSource(t *testing.T)
 			t.Fatal(err)
 		}
 		input := payload["input"].(map[string]any)
-		if input["audio_url"] != "https://cdn.example.com/voice/sample.mp3" {
-			t.Fatalf("clone must reuse the source object URL, input=%+v", input)
+		if input["target_model"] != defaultBailianTargetModel {
+			t.Fatalf("target model = %v", input["target_model"])
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"voice_id": "bailian-voice"}})
+		audio := input["audio"].(map[string]any)
+		if !strings.HasPrefix(audio["data"].(string), "data:audio/mpeg;base64,") {
+			t.Fatalf("clone must reuse the source sample bytes, input=%+v", input)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"output": map[string]any{"voice": "bailian-qwen-voice"}})
 	}))
 	defer upstream.Close()
 	store.bailian = NewBailianClient(BailianConfig{APIBase: upstream.URL, APIKey: "test-key", TargetModel: defaultBailianTargetModel})
@@ -100,13 +104,13 @@ func TestCopyProfileToBailianReusesMiniMaxSampleAndPreservesSource(t *testing.T)
 	if err != nil {
 		t.Fatalf("CopyProfileToBailian: %v", err)
 	}
-	if copy.Provider != ProviderBailian || copy.Status != "ready" || copy.VoiceID != "bailian-voice" {
+	if copy.Provider != ProviderBailian || copy.Model != defaultBailianTargetModel || copy.Status != "ready" || copy.VoiceID != "bailian-qwen-voice" {
 		t.Fatalf("unexpected copied profile: %+v", copy)
 	}
 	if copy.SampleAssetID != stringInt(asset.ID) || copy.SampleURL != "/api/upload-assets/"+stringInt(asset.ID) || copy.SampleName != "sample.mp3" {
 		t.Fatalf("copied profile did not preserve sample fields: %+v", copy)
 	}
-	if !strings.Contains(copy.Name, "（百炼）") {
+	if !strings.Contains(copy.Name, "（百炼 Qwen）") {
 		t.Fatalf("copy name = %q", copy.Name)
 	}
 	if cloneCalls != 1 {
@@ -118,7 +122,7 @@ func TestCopyProfileToBailianReusesMiniMaxSampleAndPreservesSource(t *testing.T)
 	if err := database.QueryRow(`SELECT provider, status, sample_asset_id FROM voice_profiles WHERE id=$1`, sourceID).Scan(&sourceProvider, &sourceStatus, &sourceAssetID); err != nil {
 		t.Fatal(err)
 	}
-	if sourceProvider != ProviderMiniMax || sourceStatus != "ready" || sourceAssetID != asset.ID {
+	if sourceProvider != ProviderMiniMax || sourceStatus != "migrated" || sourceAssetID != asset.ID {
 		t.Fatalf("source profile was modified: provider=%q status=%q sample=%d", sourceProvider, sourceStatus, sourceAssetID)
 	}
 }
@@ -178,6 +182,42 @@ func TestCopyProfileToBailianRetriesExistingFailedProfile(t *testing.T) {
 	}
 }
 
+func TestCloneProfilePersistsFailedStatusAfterRequestCancellation(t *testing.T) {
+	store, database, cleanup := newVoiceProfileCopyTestStore(t)
+	defer cleanup()
+	asset := createVoiceProfileCopySample(t, store)
+	profileID := insertVoiceProfileCopyBailian(t, database, asset.ID, "failed")
+
+	started := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer upstream.Close()
+	store.bailian = NewBailianClient(BailianConfig{APIBase: upstream.URL, APIKey: "test-key", TargetModel: defaultBailianTargetModel})
+	store.bailian.client = upstream.Client()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.CloneProfile(ctx, profileID)
+		done <- err
+	}()
+	<-started
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("CloneProfile returned nil error after cancellation")
+	}
+
+	var status, lastError string
+	if err := database.QueryRow(`SELECT status, last_error FROM voice_profiles WHERE id=$1`, profileID).Scan(&status, &lastError); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || lastError == "" {
+		t.Fatalf("status=%q lastError=%q", status, lastError)
+	}
+}
+
 func newVoiceProfileCopyTestStore(t *testing.T) (*Store, *sql.DB, func()) {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -216,6 +256,7 @@ func bootstrapVoiceProfileCopyTables(database *sql.DB) error {
 			id BIGSERIAL PRIMARY KEY,
 			name TEXT NOT NULL DEFAULT '',
 			provider TEXT NOT NULL DEFAULT 'minimax',
+			model TEXT NOT NULL DEFAULT '',
 			voice_id TEXT NOT NULL DEFAULT '',
 			sample_asset_id BIGINT REFERENCES upload_assets(id) ON DELETE SET NULL,
 			sample_url TEXT NOT NULL DEFAULT '',
@@ -226,6 +267,7 @@ func bootstrapVoiceProfileCopyTables(database *sql.DB) error {
 			create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
 			update_time TIMESTAMPTZ NOT NULL DEFAULT now()
 		);
+		ALTER TABLE voice_profiles ADD COLUMN IF NOT EXISTS model TEXT NOT NULL DEFAULT '';
 	`)
 	return err
 }
@@ -254,8 +296,8 @@ func insertVoiceProfileCopySource(t *testing.T, database *sql.DB, assetID int64,
 	t.Helper()
 	var id string
 	err := database.QueryRow(
-		`INSERT INTO voice_profiles (name, provider, voice_id, sample_asset_id, sample_url, sample_name, status)
-		 VALUES ('原 MiniMax 音色',$1,'minimax-voice',$2,$3,'sample.mp3',$4)
+		`INSERT INTO voice_profiles (name, provider, model, voice_id, sample_asset_id, sample_url, sample_name, status)
+		 VALUES ('原 MiniMax 音色',$1,'speech-02-hd','minimax-voice',$2,$3,'sample.mp3',$4)
 		 RETURNING id::text`,
 		ProviderMiniMax, assetID, "/api/upload-assets/"+stringInt(assetID), status,
 	).Scan(&id)
@@ -269,10 +311,10 @@ func insertVoiceProfileCopyBailian(t *testing.T, database *sql.DB, assetID int64
 	t.Helper()
 	var id string
 	err := database.QueryRow(
-		`INSERT INTO voice_profiles (name, provider, voice_id, sample_asset_id, sample_url, sample_name, status)
-		 VALUES ('已有百炼音色',$1,'existing-bailian-voice',$2,$3,'sample.mp3',$4)
+		`INSERT INTO voice_profiles (name, provider, model, voice_id, sample_asset_id, sample_url, sample_name, status)
+		 VALUES ('已有百炼音色',$1,$2,'existing-bailian-voice',$3,$4,'sample.mp3',$5)
 		 RETURNING id::text`,
-		ProviderBailian, assetID, "/api/upload-assets/"+stringInt(assetID), status,
+		ProviderBailian, defaultBailianTargetModel, assetID, "/api/upload-assets/"+stringInt(assetID), status,
 	).Scan(&id)
 	if err != nil {
 		t.Fatal(err)

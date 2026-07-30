@@ -999,6 +999,7 @@ func TestCrossModuleHelperEndpointsAllowOwningPagePermissions(t *testing.T) {
 	}
 	text := string(source)
 	expectRoutes := []string{
+		`s.mux.HandleFunc("/api/voice/bailian-credentials", s.requireAnyPermission([]string{"Voice:Profile:Manage", "System:XinzhiliModel:Config"}, s.bailianCredentialsHandler))`,
 		`s.mux.HandleFunc("/api/voice/profiles/list", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage"}, s.voiceProfiles)))`,
 		`s.mux.HandleFunc("/api/voice/options", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage", "Voice:Content:Manage", "Reading:Article:Manage", "System:XinzhiliModel:Config"}, s.voiceOptions)))`,
 		`s.mux.HandleFunc("/api/xinzhili-model-config", s.requirePermission("System:XinzhiliModel:Config", s.xinzhiliModelConfigHandler))`,
@@ -1009,6 +1010,17 @@ func TestCrossModuleHelperEndpointsAllowOwningPagePermissions(t *testing.T) {
 		if !strings.Contains(text, route) {
 			t.Fatalf("expected helper route permission to include owning page permission: %s", route)
 		}
+	}
+}
+
+func TestBailianCredentialRouteAllowsEitherOwningPermission(t *testing.T) {
+	source, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `s.mux.HandleFunc("/api/voice/bailian-credentials", s.requireAnyPermission([]string{"Voice:Profile:Manage", "System:XinzhiliModel:Config"}, s.bailianCredentialsHandler))`
+	if !strings.Contains(string(source), want) {
+		t.Fatalf("shared Bailian credential route must allow either owning page permission: %s", want)
 	}
 }
 

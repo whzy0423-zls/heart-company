@@ -77,7 +77,7 @@ func (c *classroomVerticalConn) QueryContext(_ context.Context, query string, ar
 	seriesValues := func() []driver.Value {
 		return []driver.Value{
 			int64(12), "九型人格入门", "建立基础地图", "https://cdn.example/covers/series-12.jpg", nil,
-			"teacher-han", "韩老师", int64(1), string(c.state.seriesStatus), false, "paid", int64(2990),
+			"", "16:9", "teacher-han", "韩老师", int64(1), string(c.state.seriesStatus), false, "paid", int64(2990),
 			c.state.seriesAt, int64(7), int64(7), c.state.seriesAt.Add(-time.Hour), c.state.seriesAt,
 		}
 	}
@@ -97,7 +97,7 @@ func (c *classroomVerticalConn) QueryContext(_ context.Context, query string, ar
 
 	switch {
 	case strings.Contains(query, "UPDATE classroom_series"):
-		c.state.seriesStatus = classroom.SeriesStatus(fmt.Sprint(args[7].Value))
+		c.state.seriesStatus = classroom.SeriesStatus(fmt.Sprint(args[9].Value))
 		c.state.seriesAt = c.state.seriesAt.Add(time.Second)
 		return &classroomRows{cols: []string{"created_at", "updated_at"}, values: [][]driver.Value{{c.state.seriesAt.Add(-time.Hour), c.state.seriesAt}}}, nil
 	case strings.Contains(query, "UPDATE classroom_contents"):
@@ -105,7 +105,7 @@ func (c *classroomVerticalConn) QueryContext(_ context.Context, query string, ar
 		c.state.contentAt = c.state.contentAt.Add(time.Second)
 		return &classroomRows{cols: []string{"created_at", "updated_at"}, values: [][]driver.Value{{c.state.contentAt.Add(-time.Hour), c.state.contentAt}}}, nil
 	case strings.Contains(query, "FROM classroom_series WHERE id=$1"):
-		return &classroomRows{cols: make([]string, 17), values: [][]driver.Value{seriesValues()}}, nil
+		return &classroomRows{cols: make([]string, 19), values: [][]driver.Value{seriesValues()}}, nil
 	case strings.Contains(query, "FROM classroom_contents WHERE id=$1"):
 		return &classroomRows{cols: make([]string, 27), values: [][]driver.Value{contentValues()}}, nil
 	case strings.Contains(query, "SELECT c.id,m.cover_object_key"):
@@ -119,8 +119,9 @@ func (c *classroomVerticalConn) QueryContext(_ context.Context, query string, ar
 		}
 		return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{count}}}, nil
 	case strings.Contains(query, "SELECT s.id,s.title,s.summary"):
-		return &classroomRows{cols: make([]string, 8), values: [][]driver.Value{{
-			int64(12), "九型人格入门", "建立基础地图", "https://cdn.example/covers/series-12.jpg", "韩老师", "paid", int64(2990), false,
+		return &classroomRows{cols: make([]string, 14), values: [][]driver.Value{{
+			int64(12), "九型人格入门", "建立基础地图", "https://cdn.example/covers/series-12.jpg", "", "16:9", "韩老师", "paid", int64(2990), false,
+			"video", "https://cdn.example/covers/content-21.jpg", "", "classroom/covers/content-21.jpg",
 		}}}, nil
 	case strings.Contains(query, "WHERE c.id=$1 AND c.status=$2 AND m.storage_status=$3"):
 		return &classroomRows{cols: make([]string, 23), values: [][]driver.Value{{
@@ -272,7 +273,7 @@ func TestClassroomVerticalContractAdminPublishToPublicPlayback(t *testing.T) {
 	if err := json.Unmarshal(seriesData, &seriesPage); err != nil || len(seriesPage.Items) != 1 {
 		t.Fatalf("decode public series items: %v %s", err, seriesData)
 	}
-	assertJSONKeys(t, "public series item", seriesPage.Items[0], "canPlay", "coverUrl", "effectiveAccess", "id", "playbackBlocked", "priceCents", "purchaseState", "summary", "teacherName", "title")
+	assertJSONKeys(t, "public series item", seriesPage.Items[0], "canPlay", "coverAspectRatio", "coverUrl", "effectiveAccess", "id", "playbackBlocked", "priceCents", "purchaseState", "summary", "teacherName", "title")
 
 	detailResponse := httptest.NewRecorder()
 	s.mux.ServeHTTP(detailResponse, httptest.NewRequest(http.MethodGet, "/api/public/classroom/content/21", nil))

@@ -43,6 +43,15 @@ export function contentPublishGuard(
     : { allowed: true, label: '发布', reason: '发布课件' };
 }
 
+export function batchPublishableContentIds(
+  contents: Array<Pick<ClassroomContent, 'id' | 'seriesId' | 'status'>>,
+  series: Array<Pick<ClassroomSeries, 'id' | 'status' | 'title'>>,
+) {
+  return contents
+    .filter((content) => contentPublishGuard(content, series).allowed)
+    .map((content) => content.id);
+}
+
 export function playbackControl(blocked: boolean) {
   return blocked
     ? { action: 'unblock' as const, label: '恢复播放' }
@@ -64,7 +73,7 @@ export function uploadStatusLabel(taskStatus: string, contentStatus?: string) {
   if (taskStatus === 'initiated' || taskStatus === 'initiating')
     return '等待上传';
   if (taskStatus === 'uploading') return '上传中';
-  if (taskStatus === 'completing') return '正在合并';
+  if (taskStatus === 'completing') return '媒体处理中';
   if (taskStatus === 'completed') return '上传完成';
   if (taskStatus === 'failed') return '失败';
   if (taskStatus === 'expired') return '已过期';

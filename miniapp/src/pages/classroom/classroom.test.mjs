@@ -554,6 +554,26 @@ async function createHarness() {
 }
 
 try {
+  {
+    const { page, state } = await createHarness();
+    const detailCalls = [];
+    state.listSeries = async () => ({
+      items: [{ id: 11, title: "其他系列" }],
+    });
+    state.getSeries = async (id) => {
+      detailCalls.push(id);
+      return { series: { id, title: "首页最近更新系列" }, contents: [{ id: 21 }] };
+    };
+
+    await state.onLoad({ tab: "series", seriesId: "12" });
+
+    assert.equal(page.activeTab.value, "series", "series deep links should activate the series tab");
+    assert.equal(page.selectedSeries.value?.id, "12", "series deep links should select the requested series");
+    assert.equal(page.expandedSeries.value?.series?.id, "12", "series deep links should expand the requested series detail");
+    assert.equal(page.seriesItems.value[0]?.title, "首页最近更新系列", "series deep links outside the first page should hydrate the visible card from detail data");
+    assert.deepEqual(detailCalls, ["12"], "series deep links should fetch the requested series once");
+  }
+
   for (const outcome of ["resolve", "reject"]) {
     const { page, state } = await createHarness();
     const staleSeries = deferred();

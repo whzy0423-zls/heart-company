@@ -72,6 +72,7 @@ var classroomDriverSequence atomic.Uint64
 
 type fakeClassroomPublicService struct {
 	series                    []classroomPublicSeries
+	recent                    []classroomPublicRecentItem
 	content                   classroomPublicContent
 	play                      classroomPlaybackSource
 	playUserID, playContentID int64
@@ -103,6 +104,9 @@ func (s *recordingClassroomCoverSigner) PresignGetURL(_ context.Context, key str
 func (f *fakeClassroomPublicService) ListSeries(context.Context, classroomPublicQuery, int64) ([]classroomPublicSeries, int, error) {
 	return f.series, len(f.series), f.listErr
 }
+func (f *fakeClassroomPublicService) ListRecent(context.Context, classroomPublicQuery, int64) ([]classroomPublicRecentItem, error) {
+	return f.recent, f.listErr
+}
 func (f *fakeClassroomPublicService) ListStandalone(_ context.Context, _ classroomPublicQuery, userID int64) ([]classroomPublicContent, int, error) {
 	v := f.content
 	if f.viewerAware {
@@ -114,6 +118,62 @@ func (f *fakeClassroomPublicService) ListStandalone(_ context.Context, _ classro
 		}
 	}
 	return []classroomPublicContent{v}, 1, f.listErr
+}
+
+func TestClassroomRecentPublicReturnsSeriesAndStandaloneContent(t *testing.T) {
+	now := time.Now().UTC()
+	f := &fakeClassroomPublicService{recent: []classroomPublicRecentItem{
+		{ItemType: "series", ID: 8, Title: "企业培训系列", LessonCount: 6, LatestPublishedAt: now},
+		{ItemType: "content", ID: 9, Title: "独立案例", ContentType: classroom.ContentVideo, LatestPublishedAt: now.Add(-time.Hour)},
+	}}
+	s := &Server{classroomPublic: f}
+	mux := http.NewServeMux()
+	registerClassroomPublicRoutes(mux, s)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/public/classroom/recent?limit=2", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	for _, want := range []string{`"itemType":"series"`, `"lessonCount":6`, `"itemType":"content"`, `"latestPublishedAt"`} {
+		if !strings.Contains(rr.Body.String(), want) {
+			t.Fatalf("missing %s in %s", want, rr.Body.String())
+		}
+	}
+}
+
+func TestClassroomRecentDBUsesUnifiedLatestPublicationOrdering(t *testing.T) {
+	db := openClassroomTestDB(t, func(query string, _ []driver.NamedValue) (driver.Rows, error) {
+		for _, want := range []string{"UNION ALL", "latest_published_at DESC", "c.show_as_standalone=true", "GREATEST(s.updated_at", "GREATEST(c.updated_at"} {
+			if !strings.Contains(query, want) {
+				t.Fatalf("recent query missing %q: %s", want, query)
+			}
+		}
+		return &classroomRows{cols: []string{"item_type", "id", "latest_published_at"}}, nil
+	})
+	items, err := (&classroomPublicDB{store: classroom.NewStore(db), db: db}).ListRecent(context.Background(), classroomPublicQuery{Limit: 2}, 0)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("items=%v err=%v", items, err)
+	}
+}
+
+func TestClassroomRecentSkipsItemsUnpublishedDuringHydration(t *testing.T) {
+	now := time.Now().UTC()
+	db := openClassroomTestDB(t, func(query string, _ []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "WITH recent_items AS"):
+			return &classroomRows{cols: []string{"item_type", "id", "latest_published_at"}, values: [][]driver.Value{{"content", int64(9), now}}}, nil
+		case strings.Contains(query, "FROM classroom_contents c JOIN classroom_media_assets m"):
+			return &classroomRows{cols: make([]string, 23)}, nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", query)
+		}
+	})
+
+	items, err := (&classroomPublicDB{store: classroom.NewStore(db), db: db}).ListRecent(context.Background(), classroomPublicQuery{Limit: 2}, 0)
+
+	if err != nil || len(items) != 0 {
+		t.Fatalf("items=%v err=%v", items, err)
+	}
 }
 func (f *fakeClassroomPublicService) GetSeries(context.Context, int64, int64) (classroomPublicSeriesDetail, error) {
 	if f.getErr != nil {
@@ -215,7 +275,7 @@ func TestClassroomPublicCoverSigningFailureClosesRows(t *testing.T) {
 					return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{int64(1)}}}, nil
 				case strings.Contains(q, "FROM classroom_series WHERE id"):
 					now := time.Now()
-					return &classroomRows{cols: make([]string, 17), values: [][]driver.Value{{int64(7), "Series", "summary", "cover", nil, "teacher", "Teacher", int64(1), "published", false, "public", int64(0), now, nil, nil, now, now}}}, nil
+					return &classroomRows{cols: make([]string, 19), values: [][]driver.Value{{int64(7), "Series", "summary", "cover", nil, "", "16:9", "teacher", "Teacher", int64(1), "published", false, "public", int64(0), now, nil, nil, now, now}}}, nil
 				case strings.Contains(q, "c.series_id=$1"):
 					return &classroomRows{cols: make([]string, 14), values: [][]driver.Value{{int64(12), int64(7), "Video", "desc", "video", "legacy", int64(90), "Teacher", "inherit", int64(0), false, "private/manual.jpg", "16:9", ""}}, onClose: func() { closed = true }}, nil
 				case strings.Contains(q, "FROM classroom_contents c JOIN classroom_media_assets m"):
@@ -550,7 +610,7 @@ func TestClassroomPublicDBBackedSeriesUsesAnyReadyLessonAndStablePagination(t *t
 			return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{int64(4)}}}, nil
 		}
 		stable = strings.Contains(q, "ORDER BY s.sort_order,s.id LIMIT $5 OFFSET $6")
-		return &classroomRows{cols: []string{"id", "title", "summary", "cover", "teacher", "access", "price", "blocked"}, values: [][]driver.Value{{int64(6), "Series", "summary", "cover", "Teacher", "paid", int64(9900), false}}}, nil
+		return &classroomRows{cols: []string{"id", "title", "summary", "cover", "manual_cover", "ratio", "teacher", "access", "price", "blocked", "fallback_type", "fallback_cover", "fallback_manual", "fallback_generated"}, values: [][]driver.Value{{int64(6), "Series", "summary", "cover", "", "16:9", "Teacher", "paid", int64(9900), false, "video", "fallback", "", ""}}}, nil
 	})
 	d := newClassroomPublicDB(db)
 	items, total, err := d.ListSeries(context.Background(), classroomPublicQuery{Limit: 1, Offset: 3}, 0)
@@ -652,7 +712,7 @@ func TestClassroomPublicSeriesDetailHTTPFiltersToPublishedReadyLessons(t *testin
 	now := time.Now()
 	db := openClassroomTestDB(t, func(q string, args []driver.NamedValue) (driver.Rows, error) {
 		if strings.Contains(q, "FROM classroom_series WHERE id") {
-			return &classroomRows{cols: make([]string, 17), values: [][]driver.Value{{int64(2), "Series", "summary", "cover", nil, "teacher", "Teacher", int64(1), "published", false, "public", int64(0), now, nil, nil, now, now}}}, nil
+			return &classroomRows{cols: make([]string, 19), values: [][]driver.Value{{int64(2), "Series", "summary", "cover", nil, "", "16:9", "teacher", "Teacher", int64(1), "published", false, "public", int64(0), now, nil, nil, now, now}}}, nil
 		}
 		if strings.Contains(q, "JOIN classroom_media_assets") {
 			readyFilter = strings.Contains(q, "c.status=$2") && strings.Contains(q, "m.storage_status=$3") && strings.Contains(q, "ORDER BY c.sort_order,c.id")
@@ -682,7 +742,7 @@ func TestClassroomPublicSeriesOfflineHiddenStandaloneVisibleAndPurchasedPlayback
 		case strings.Contains(q, "SELECT count(*) FROM classroom_series s"):
 			return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{int64(0)}}}, nil
 		case strings.Contains(q, "SELECT s.id,s.title"):
-			return &classroomRows{cols: make([]string, 8)}, nil
+			return &classroomRows{cols: make([]string, 14)}, nil
 		case strings.Contains(q, "SELECT count(*) FROM classroom_contents c JOIN"):
 			return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{int64(1)}}}, nil
 		case strings.Contains(q, "SELECT c.id,c.series_id,c.show_as_standalone"):
@@ -690,7 +750,7 @@ func TestClassroomPublicSeriesOfflineHiddenStandaloneVisibleAndPurchasedPlayback
 		case strings.Contains(q, "FROM classroom_contents WHERE id"):
 			return &classroomRows{cols: make([]string, 25), values: [][]driver.Value{{int64(7), int64(2), true, "Standalone", "desc", "video", int64(3), "cover", int64(60), "teacher", "Teacher", nil, "", []byte(`[]`), int64(0), int64(0), "published", false, "inherit", int64(0), now, nil, nil, now, now}}}, nil
 		case strings.Contains(q, "FROM classroom_series WHERE id"):
-			return &classroomRows{cols: make([]string, 17), values: [][]driver.Value{{int64(2), "Series", "summary", "cover", nil, "teacher", "Teacher", int64(0), "offline", false, "paid", int64(9900), now, nil, nil, now, now}}}, nil
+			return &classroomRows{cols: make([]string, 19), values: [][]driver.Value{{int64(2), "Series", "summary", "cover", nil, "", "16:9", "teacher", "Teacher", int64(0), "offline", false, "paid", int64(9900), now, nil, nil, now, now}}}, nil
 		case strings.Contains(q, "FROM classroom_media_assets WHERE id"):
 			return &classroomRows{cols: make([]string, 15), values: [][]driver.Value{{int64(3), "bucket", "private/media.mp4", "v1", "crc", "video", int64(100), int64(60), int64(1), int64(1), "", "ready", nil, now, now}}}, nil
 		case strings.Contains(q, "classroom_entitlements"):
@@ -777,7 +837,7 @@ func TestClassroomPublicListQueryCountIsConstantForAuthenticatedViewer(t *testin
 		case strings.Contains(q, "SELECT count(*) FROM classroom_series"):
 			return &classroomRows{cols: []string{"count"}, values: [][]driver.Value{{int64(1)}}}, nil
 		case strings.Contains(q, "SELECT s.id,s.title"):
-			return &classroomRows{cols: make([]string, 8), values: [][]driver.Value{{int64(1), "S", "summary", "cover", "Teacher", "public", int64(0), false}}}, nil
+			return &classroomRows{cols: make([]string, 14), values: [][]driver.Value{{int64(1), "S", "summary", "cover", "", "16:9", "Teacher", "public", int64(0), false, "video", "fallback", "", ""}}}, nil
 		case strings.Contains(q, "SELECT member_level,member_expires_at"):
 			return &classroomRows{cols: []string{"level", "expires"}, values: [][]driver.Value{{int64(1), nil}}}, nil
 		case strings.Contains(q, "SELECT series_id,content_id FROM classroom_entitlements"):

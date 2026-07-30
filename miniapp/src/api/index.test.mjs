@@ -78,7 +78,7 @@ try {
   requestStub.setTestToken("");
   await api.listClassroomSeriesApi({ limit: 10, offset: 20, contentType: "video" });
   await api.listClassroomStandaloneApi({ limit: 5 });
-  await api.listClassroomStandaloneApi({ limit: 2, offset: 0 });
+  await api.listClassroomRecentApi({ limit: 2 });
   await api.getClassroomSeriesApi("12");
   await api.getClassroomContentApi(21);
   assert.deepEqual(requestStub.calls.slice(-5), [
@@ -89,7 +89,7 @@ try {
       auth: false,
     },
     { url: "/public/classroom/standalone", method: "GET", query: { limit: 5 }, auth: false },
-    { url: "/public/classroom/standalone", method: "GET", query: { limit: 2, offset: 0 }, auth: false },
+    { url: "/public/classroom/recent", method: "GET", query: { limit: 2 }, auth: false },
     { url: "/public/classroom/series/12", method: "GET", auth: false },
     { url: "/public/classroom/content/21", method: "GET", auth: false },
   ]);

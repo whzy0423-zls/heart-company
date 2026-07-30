@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	pathpkg "path"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -193,6 +195,9 @@ func validateNormalized(c Config) error {
 			return fmt.Errorf("模式 %s 的提示词不能超过 %d 个字符", mode, maxPromptRunes)
 		}
 	}
+	if err := validateProvidedStructure(c); err != nil {
+		return err
+	}
 	if !c.Enabled {
 		return nil
 	}
@@ -205,17 +210,23 @@ func validateNormalized(c Config) error {
 	if c.RealtimeASR.Model != RealtimeASRModel {
 		return fmt.Errorf("实时 ASR model 必须为 %s", RealtimeASRModel)
 	}
-	if c.RealtimeASR.APIKey == "" || c.RealtimeASR.Region == "" {
-		return errors.New("实时 ASR API Key 和区域不能为空")
+	if c.RealtimeASR.Region == "" {
+		return errors.New("实时 ASR 区域不能为空")
 	}
-	if err := validateEndpoint(c.RealtimeASR.Endpoint, "wss", "https"); err != nil {
-		return fmt.Errorf("实时 ASR endpoint: %w", err)
+	if c.RealtimeASR.Endpoint == "" {
+		return errors.New("实时 ASR endpoint 不能为空")
+	}
+	if !IsOfficialDashScopeRealtimeASREndpoint(c.RealtimeASR.Endpoint) {
+		return errors.New("实时 ASR endpoint 必须为官方 DashScope Paraformer 地址")
 	}
 	if c.TTS.Provider != TTSProviderOpenAICompatible && c.TTS.Provider != TTSProviderMiniMax && c.TTS.Provider != TTSProviderBailian {
 		return errors.New("TTS provider 仅支持 openai-compatible、minimax 或 bailian")
 	}
-	if c.TTS.APIKey == "" || c.TTS.Model == "" || c.TTS.Voice == "" {
-		return errors.New("TTS API Key、模型和音色不能为空")
+	if c.TTS.Model == "" || c.TTS.Voice == "" {
+		return errors.New("TTS 模型和音色不能为空")
+	}
+	if !TTSUsesBailianCredentials(c.TTS) && c.TTS.APIKey == "" {
+		return errors.New("私有 TTS API Key 不能为空")
 	}
 	if c.TTS.Provider == TTSProviderMiniMax && c.TTS.GroupID == "" {
 		return errors.New("MiniMax TTS 必须配置 GroupID")
@@ -223,10 +234,100 @@ func validateNormalized(c Config) error {
 	if c.TTS.Format != "mp3" {
 		return errors.New("TTS format 必须为 mp3")
 	}
-	if err := validateEndpoint(c.TTS.Endpoint, "https"); err != nil {
-		return fmt.Errorf("TTS endpoint: %w", err)
+	if c.TTS.Endpoint == "" {
+		return errors.New("TTS endpoint 不能为空")
 	}
 	return nil
+}
+
+func validateProvidedStructure(c Config) error {
+	if c.RealtimeASR.Provider != "" && c.RealtimeASR.Provider != RealtimeASRProvider {
+		return fmt.Errorf("实时 ASR provider 必须为 %s", RealtimeASRProvider)
+	}
+	if c.RealtimeASR.Model != "" && c.RealtimeASR.Model != RealtimeASRModel {
+		return fmt.Errorf("实时 ASR model 必须为 %s", RealtimeASRModel)
+	}
+	if c.RealtimeASR.Endpoint != "" {
+		if err := validateEndpoint(c.RealtimeASR.Endpoint, "wss", "https"); err != nil {
+			return fmt.Errorf("实时 ASR endpoint: %w", err)
+		}
+	}
+	if c.TTS.Provider != "" && c.TTS.Provider != TTSProviderOpenAICompatible && c.TTS.Provider != TTSProviderMiniMax && c.TTS.Provider != TTSProviderBailian {
+		return errors.New("TTS provider 仅支持 openai-compatible、minimax 或 bailian")
+	}
+	if c.TTS.Endpoint != "" {
+		if err := validateEndpoint(c.TTS.Endpoint, "https"); err != nil {
+			return fmt.Errorf("TTS endpoint: %w", err)
+		}
+	}
+	if c.TTS.Format != "" && c.TTS.Format != "mp3" {
+		return errors.New("TTS format 必须为 mp3")
+	}
+	return nil
+}
+
+// TTSUsesBailianCredentials reports whether this TTS configuration is served
+// by Bailian and therefore receives the shared credential only at runtime.
+func TTSUsesBailianCredentials(cfg TTSConfig) bool {
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	return (provider == TTSProviderBailian || provider == TTSProviderOpenAICompatible) &&
+		IsOfficialDashScopeTTSEndpoint(cfg.Endpoint)
+}
+
+// IsOfficialDashScopeTTSEndpoint accepts only the official DashScope HTTPS
+// host and supported TTS API roots. It deliberately rejects lookalike hosts,
+// userinfo, non-default ports, query strings and path traversal.
+func IsOfficialDashScopeTTSEndpoint(raw string) bool {
+	parsed, ok := parseOfficialDashScopeEndpoint(raw, "https")
+	if !ok || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" {
+		return false
+	}
+	endpointPath := strings.TrimSuffix(parsed.Path, "/")
+	if pathpkg.Clean(endpointPath) != endpointPath {
+		return false
+	}
+	switch endpointPath {
+	case "/api/v1", "/compatible-mode/v1", "/api/v1/services/aigc/multimodal-generation/generation":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsOfficialDashScopeRealtimeASREndpoint accepts only the official
+// Paraformer realtime inference endpoint. Shared Bailian credentials must
+// never be sent to custom proxies or lookalike hosts.
+func IsOfficialDashScopeRealtimeASREndpoint(raw string) bool {
+	parsed, ok := parseOfficialDashScopeEndpoint(raw, "wss", "https")
+	if !ok || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" {
+		return false
+	}
+	if pathpkg.Clean(parsed.Path) != parsed.Path {
+		return false
+	}
+	return parsed.Path == "/api-ws/v1/inference"
+}
+
+func parseOfficialDashScopeEndpoint(raw string, schemes ...string) (*url.URL, bool) {
+	parsed, err := parseEndpoint(raw)
+	if err != nil || !strings.EqualFold(parsed.Hostname(), "dashscope.aliyuncs.com") {
+		return nil, false
+	}
+	schemeAllowed := false
+	for _, scheme := range schemes {
+		if strings.EqualFold(parsed.Scheme, scheme) {
+			schemeAllowed = true
+			break
+		}
+	}
+	if !schemeAllowed {
+		return nil, false
+	}
+	port, err := endpointPort(parsed)
+	if err != nil || (port != 0 && port != 443) {
+		return nil, false
+	}
+	return parsed, true
 }
 
 func validateLengths(c Config) error {
@@ -257,8 +358,8 @@ func validateLengths(c Config) error {
 }
 
 func validateEndpoint(raw string, allowedSchemes ...string) error {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
+	u, err := parseEndpoint(raw)
+	if err != nil {
 		return errors.New("必须是完整 URL")
 	}
 	for _, scheme := range allowedSchemes {
@@ -267,6 +368,31 @@ func validateEndpoint(raw string, allowedSchemes ...string) error {
 		}
 	}
 	return fmt.Errorf("协议必须为 %s", strings.Join(allowedSchemes, " 或 "))
+}
+
+func parseEndpoint(raw string) (*url.URL, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" || u.Host == "" || u.Hostname() == "" || u.User != nil || u.Fragment != "" || u.Opaque != "" {
+		return nil, errors.New("invalid endpoint URL")
+	}
+	if _, err := endpointPort(u); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// endpointPort returns zero when the URL omits an explicit port. Numeric forms
+// such as 0443 normalize to 443, while malformed and out-of-range ports fail.
+func endpointPort(u *url.URL) (int, error) {
+	raw := u.Port()
+	if raw == "" {
+		return 0, nil
+	}
+	port, err := strconv.Atoi(raw)
+	if err != nil || port < 1 || port > 65535 {
+		return 0, errors.New("invalid endpoint port")
+	}
+	return port, nil
 }
 
 func applyTimingDefaults(v *TimingConfig) {

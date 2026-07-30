@@ -1,8 +1,33 @@
 import type {
   ClassroomContentType,
   ClassroomUploadMimeType,
+  ClassroomUploadStatus,
   ClassroomUploadTask,
 } from '#/api/core/classroom';
+
+export function canAbortUploadTask(status: ClassroomUploadStatus) {
+  return !['aborted', 'completed', 'completing'].includes(status);
+}
+
+export async function completeUploadWithStatusReconciliation(args: {
+  complete: () => Promise<unknown>;
+  readTask: () => Promise<Pick<ClassroomUploadTask, 'status'> | undefined>;
+}) {
+  try {
+    await args.complete();
+    return 'completed' as const;
+  } catch (cause) {
+    let task: Pick<ClassroomUploadTask, 'status'> | undefined;
+    try {
+      task = await args.readTask();
+    } catch {
+      // Preserve the original completion error when reconciliation is unavailable.
+    }
+    if (task?.status === 'completed') return 'completed' as const;
+    if (task?.status === 'completing') return 'processing' as const;
+    throw cause;
+  }
+}
 
 export interface UploadRetryContext {
   checksum?: string;

@@ -163,6 +163,13 @@ export function listClassroomStandaloneApi(query = {}) {
   );
 }
 
+export function listClassroomRecentApi(query = {}) {
+  return optionalClassroomRequest(
+    { url: "/public/classroom/recent", method: "GET", query },
+    "最近更新加载失败，请重试",
+  );
+}
+
 export function getClassroomSeriesApi(id) {
   return optionalClassroomRequest(
     { url: `/public/classroom/series/${classroomID(id)}`, method: "GET" },

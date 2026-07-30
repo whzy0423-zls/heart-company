@@ -58,9 +58,59 @@ func TestSchemaClassroomContentsPersistCoverOwnershipAndAspectRatio(t *testing.T
 	for _, migration := range []string{
 		"ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS manual_cover_object_key TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9'",
+		"ALTER TABLE classroom_contents DROP CONSTRAINT IF EXISTS classroom_contents_cover_aspect_ratio_check",
+		"ADD CONSTRAINT classroom_contents_cover_aspect_ratio_check CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'))",
 	} {
 		if !strings.Contains(sql, migration) {
 			t.Errorf("schema is missing idempotent cover migration %q", migration)
+		}
+	}
+}
+
+func TestSchemaClassroomSeriesPersistCoverOwnershipAndAspectRatio(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(raw)
+	series := extractClassroomCreateTable(sql, "classroom_series")
+	for _, fragment := range []string{
+		"manual_cover_object_key TEXT NOT NULL DEFAULT ''",
+		"cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9'",
+		"CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'))",
+	} {
+		if !strings.Contains(series, fragment) {
+			t.Errorf("classroom_series is missing cover setting %q", fragment)
+		}
+	}
+	for _, migration := range []string{
+		"ALTER TABLE classroom_series ADD COLUMN IF NOT EXISTS manual_cover_object_key TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE classroom_series ADD COLUMN IF NOT EXISTS cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9'",
+		"ALTER TABLE classroom_series DROP CONSTRAINT IF EXISTS classroom_series_cover_aspect_ratio_check",
+		"ADD CONSTRAINT classroom_series_cover_aspect_ratio_check CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'))",
+	} {
+		if !strings.Contains(sql, migration) {
+			t.Errorf("schema is missing idempotent series cover migration %q", migration)
+		}
+	}
+}
+
+func TestSchemaClassroomContentsAllowsArchivedStatusForOfflineDeletion(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(raw)
+	contents := extractClassroomCreateTable(sql, "classroom_contents")
+	if !strings.Contains(contents, "'offline','archived','failed'") {
+		t.Fatal("classroom_contents create constraint must allow archived status")
+	}
+	for _, migration := range []string{
+		"ALTER TABLE classroom_contents DROP CONSTRAINT IF EXISTS classroom_contents_status_check",
+		"ADD CONSTRAINT classroom_contents_status_check CHECK (status IN ('draft','processing','ready','published','offline','archived','failed'))",
+	} {
+		if !strings.Contains(sql, migration) {
+			t.Errorf("schema is missing archived status migration %q", migration)
 		}
 	}
 }

@@ -133,7 +133,9 @@ func (s *Server) classroomUploadComplete(w http.ResponseWriter, r *http.Request)
 		httpx.Fail(w, http.StatusBadRequest, "invalid parts")
 		return
 	}
-	result, err := s.classroomUploads.Complete(r.Context(), id, userFromRequest(r).ID, body.Parts)
+	completionCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Minute)
+	defer cancel()
+	result, err := s.classroomUploads.Complete(completionCtx, id, userFromRequest(r).ID, body.Parts)
 	if err != nil {
 		writeClassroomUploadError(w, err)
 		return

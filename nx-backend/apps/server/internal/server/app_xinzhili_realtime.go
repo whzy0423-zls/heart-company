@@ -62,14 +62,17 @@ type xinzhiliRealtimeConn struct {
 	effectiveMode  xinzhili.Mode
 	modeRevision   int64
 	modeStore      xinzhiliModePreferenceStore
+	sequence       *xinzhili.SequenceGuard
 	turnKey        uint64
 	turnMu         sync.Mutex
 	turns          map[uint64]string
+	audioSeq       map[uint64]uint32
 }
 
 type xinzhiliWSSink struct {
-	conn *xinzhiliRealtimeConn
-	mu   sync.Mutex
+	conn           *xinzhiliRealtimeConn
+	mu             sync.Mutex
+	nextSessionSeq uint64
 }
 
 func (s *Server) xinzhiliRealtime(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +100,7 @@ func (s *Server) xinzhiliRealtime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws.SetReadLimit(xinzhiliMaxMessageBytes)
-	c := &xinzhiliRealtimeConn{server: s, ws: ws, userID: user.ID, turns: make(map[uint64]string), modeStore: xinzhili.NewStore(s.db)}
+	c := &xinzhiliRealtimeConn{server: s, ws: ws, userID: user.ID, turns: make(map[uint64]string), audioSeq: make(map[uint64]uint32), modeStore: xinzhili.NewStore(s.db)}
 	c.sink = &xinzhiliWSSink{conn: c}
 	s.replaceXinzhiliLease(c)
 	defer s.releaseXinzhiliLease(c)
@@ -146,6 +149,7 @@ func (c *xinzhiliRealtimeConn) handleEnvelope(ctx context.Context, data []byte) 
 	ready := c.sess != nil
 	e, err := xinzhili.DecodeEnvelope(data, xinzhili.DirectionClient, ready)
 	if err != nil {
+		c.ensurePreReadyProtocolIdentity(data)
 		code := "invalid_envelope"
 		var pe *xinzhili.ProtocolError
 		if errors.As(err, &pe) {
@@ -153,6 +157,28 @@ func (c *xinzhiliRealtimeConn) handleEnvelope(ctx context.Context, data []byte) 
 		}
 		logXinzhiliProtocolError(data, err)
 		c.sendError(ctx, code, xinzhiliProtocolUpdateMessage, true, false)
+		return
+	}
+	c.mu.Lock()
+	if c.sequence == nil {
+		c.generation = e.Generation
+		if c.sessionID == "" {
+			c.sessionID = randomSessionID()
+		}
+		c.sequence = xinzhili.NewSequenceGuard(e.Generation)
+	}
+	sequence := c.sequence
+	c.mu.Unlock()
+	disposition, err := sequence.Observe(xinzhili.DirectionClient, e)
+	if err != nil {
+		code := "control_sequence_gap"
+		if errors.Is(err, xinzhili.ErrGenerationMismatch) {
+			code = "generation_mismatch"
+		}
+		c.sendError(ctx, code, xinzhiliProtocolUpdateMessage, true, false)
+		return
+	}
+	if disposition == xinzhili.SequenceDrop {
 		return
 	}
 	switch e.Type {
@@ -168,11 +194,15 @@ func (c *xinzhiliRealtimeConn) handleEnvelope(ctx context.Context, data []byte) 
 		c.startTurn(ctx, e)
 	case xinzhili.EventTurnCancel:
 		if c.sess != nil && e.TurnID != nil {
-			_ = c.sess.Cancel(ctx, *e.TurnID)
+			if err := c.sess.Cancel(ctx, *e.TurnID); err == nil {
+				c.releaseTurn(*e.TurnID, true)
+			}
 		}
 	case xinzhili.EventPlaybackInterrupt:
 		if c.sess != nil && e.TurnID != nil {
-			_ = c.sess.Interrupt(ctx, *e.TurnID)
+			if err := c.sess.Interrupt(ctx, *e.TurnID); err == nil {
+				c.releaseTurn(*e.TurnID, true)
+			}
 		}
 	case xinzhili.EventAssistantPlaybackAck:
 		if c.sess != nil && e.TurnID != nil {
@@ -183,6 +213,23 @@ func (c *xinzhiliRealtimeConn) handleEnvelope(ctx context.Context, data []byte) 
 				_ = c.sess.HandlePlaybackAck(ctx, xinzhili.PlaybackAck{TurnID: *e.TurnID, SegmentSeq: p.SegmentSeq})
 			}
 		}
+	}
+}
+
+func (c *xinzhiliRealtimeConn) ensurePreReadyProtocolIdentity(data []byte) {
+	var wire struct {
+		Generation uint32 `json:"generation"`
+	}
+	_ = json.Unmarshal(data, &wire)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sessionID == "" {
+		c.sessionID = randomSessionID()
+	}
+	if c.sequence == nil {
+		c.generation = wire.Generation
+		c.sequence = xinzhili.NewSequenceGuard(wire.Generation)
 	}
 }
 
@@ -237,7 +284,7 @@ func (c *xinzhiliRealtimeConn) startSession(ctx context.Context, e xinzhili.Enve
 	c.cardID = p.CardID
 	c.conversationID = p.ConversationID
 	c.mu.Unlock()
-	cfg, found, err := xinzhili.ReadConfig(ctx, c.server.db)
+	cfg, found, err := c.server.readXinzhiliRealtimeConfig(ctx)
 	if err != nil || !found || !cfg.Enabled {
 		c.sendError(ctx, "xinzhili_not_configured", "请先配置芯之力会话模型后重试", false, true)
 		return
@@ -271,20 +318,44 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 		c.sendError(ctx, "invalid_turn", "轮次参数无效", false, false)
 		return
 	}
-	cfg, found, err := xinzhili.ReadConfig(ctx, c.server.db)
+	cfg, found, err := c.server.readXinzhiliRealtimeConfig(ctx)
 	if err != nil || !found || !cfg.Enabled {
 		c.sendError(ctx, "xinzhili_not_configured", "请先配置芯之力会话模型后重试", false, true)
 		return
 	}
+	cfg, err = c.server.withXinzhiliRuntimeCredentials(ctx, cfg)
+	if err != nil {
+		c.sendError(ctx, "xinzhili_credentials_unavailable", "芯之力语音凭证暂不可用", true, false)
+		return
+	}
 	c.mu.Lock()
 	mode := c.pendingMode
+	previousTurnKey := c.turnKey
 	if !modeEnabled(cfg.EnabledModes, mode) {
 		mode = xinzhili.ModeNormal
 	}
 	cardID, conversationID := c.cardID, c.conversationID
 	c.mu.Unlock()
+	c.turnMu.Lock()
+	previousTurnID := c.turns[previousTurnKey]
+	c.turnMu.Unlock()
+	if previousTurnID != "" && previousTurnID != *e.TurnID {
+		c.releaseTurn(previousTurnID, true)
+	}
+	c.mu.Lock()
+	sequence := c.sequence
+	c.mu.Unlock()
+	if sequence != nil {
+		if err := sequence.RegisterActiveTurn(*e.TurnID, p.TurnKey); err != nil {
+			c.sendError(ctx, "turn_key_collision", "轮次标识冲突，请重新开始", true, false)
+			return
+		}
+	}
 	in := xinzhili.StartTurnInput{UserID: c.userID, CardID: cardID, ConversationID: conversationID, TurnID: *e.TurnID, Mode: mode, ASRConfig: cfg.RealtimeASR, TTSConfig: cfg.TTS, Timing: cfg.Timing, CommonPrompt: cfg.CommonPrompt, ModePrompt: cfg.ModePrompts[mode], KnowledgeTopK: 6, KnowledgeMinScore: 0.2, TheoryTopK: 6, TheoryMinScore: 0.2}
 	if err := c.sess.StartTurn(ctx, in); err != nil {
+		if sequence != nil {
+			sequence.ReleaseActiveTurn(*e.TurnID)
+		}
 		c.sendError(ctx, "turn_start_failed", "无法开始当前轮次", true, false)
 		return
 	}
@@ -295,10 +366,45 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 	c.mu.Unlock()
 	c.turnMu.Lock()
 	c.turns[p.TurnKey] = *e.TurnID
+	if c.audioSeq == nil {
+		c.audioSeq = make(map[uint64]uint32)
+	}
+	c.audioSeq[p.TurnKey] = 0
 	c.turnMu.Unlock()
 	c.mu.Lock()
 	c.turnKey = p.TurnKey
 	c.mu.Unlock()
+}
+
+func (c *xinzhiliRealtimeConn) releaseTurn(turnID string, terminal bool) {
+	var releasedKeys []uint64
+	c.turnMu.Lock()
+	for turnKey, activeTurnID := range c.turns {
+		if activeTurnID != turnID {
+			continue
+		}
+		delete(c.turns, turnKey)
+		delete(c.audioSeq, turnKey)
+		releasedKeys = append(releasedKeys, turnKey)
+	}
+	c.turnMu.Unlock()
+
+	c.mu.Lock()
+	for _, turnKey := range releasedKeys {
+		if c.turnKey == turnKey {
+			c.turnKey = 0
+		}
+	}
+	sequence := c.sequence
+	c.mu.Unlock()
+	if sequence == nil {
+		return
+	}
+	if terminal {
+		sequence.MarkTerminal(turnID)
+		return
+	}
+	sequence.ReleaseActiveTurn(turnID)
 }
 
 func (c *xinzhiliRealtimeConn) handleBinary(ctx context.Context, data []byte) {
@@ -311,16 +417,35 @@ func (c *xinzhiliRealtimeConn) handleBinary(ctx context.Context, data []byte) {
 		c.sendError(ctx, "invalid_audio_frame", "音频帧无效", true, false)
 		return
 	}
+	if f.Generation != c.generation {
+		c.sendError(ctx, "generation_mismatch", "音频连接版本不一致，请重新连接", true, false)
+		return
+	}
 	c.turnMu.Lock()
 	turnID := c.turns[f.TurnKey]
+	expectedAudioSeq := c.audioSeq[f.TurnKey]
 	c.turnMu.Unlock()
 	if turnID == "" {
 		c.sendError(ctx, "unknown_turn", "音频帧对应的轮次不存在", false, false)
 		return
 	}
+	if f.AudioSeq < expectedAudioSeq {
+		return
+	}
+	if f.AudioSeq > expectedAudioSeq {
+		c.sendError(ctx, "audio_sequence_gap", "音频帧序号不连续，请重新说一次", true, false)
+		return
+	}
 	if err := c.sess.PushPCM(ctx, xinzhili.PCMFrame{TurnID: turnID, Data: f.Payload}); err != nil {
 		c.sendError(ctx, "audio_frame_rejected", "音频帧未被接收", true, false)
+		return
 	}
+	c.turnMu.Lock()
+	if c.audioSeq == nil {
+		c.audioSeq = make(map[uint64]uint32)
+	}
+	c.audioSeq[f.TurnKey] = expectedAudioSeq + 1
+	c.turnMu.Unlock()
 }
 
 func (c *xinzhiliRealtimeConn) changeMode(ctx context.Context, e xinzhili.Envelope) {
@@ -332,7 +457,7 @@ func (c *xinzhiliRealtimeConn) changeMode(ctx context.Context, e xinzhili.Envelo
 		c.sendError(ctx, "invalid_mode", "模式无效", false, false)
 		return
 	}
-	cfg, found, err := xinzhili.ReadConfig(ctx, c.server.db)
+	cfg, found, err := c.server.readXinzhiliRealtimeConfig(ctx)
 	if err != nil || !found || !cfg.Enabled {
 		c.sendError(ctx, "xinzhili_not_configured", "请先配置芯之力会话模型后重试", false, false)
 		return
@@ -351,6 +476,40 @@ func (c *xinzhiliRealtimeConn) changeMode(ctx context.Context, e xinzhili.Envelo
 		return
 	}
 	c.sendControl(ctx, xinzhili.EventModeChanged, snapshot, nil, nil)
+}
+
+func (s *Server) readXinzhiliRealtimeConfig(ctx context.Context) (xinzhili.Config, bool, error) {
+	if s.xinzhiliModelConfig != nil {
+		return s.xinzhiliModelConfig.Read(ctx)
+	}
+	return xinzhili.ReadConfig(ctx, s.db)
+}
+
+// withXinzhiliRuntimeCredentials returns a per-turn copy. Shared credentials
+// are never written back to xinzhili_model_config, and private TTS credentials
+// are deliberately left untouched.
+func (s *Server) withXinzhiliRuntimeCredentials(ctx context.Context, cfg xinzhili.Config) (xinzhili.Config, error) {
+	if !xinzhili.IsOfficialDashScopeRealtimeASREndpoint(cfg.RealtimeASR.Endpoint) {
+		return xinzhili.Config{}, errors.New("realtime ASR endpoint is not official DashScope")
+	}
+	usesSharedTTS := xinzhili.TTSUsesBailianCredentials(cfg.TTS)
+	if !usesSharedTTS && strings.TrimSpace(cfg.TTS.APIKey) == "" {
+		return xinzhili.Config{}, errors.New("private TTS credential is empty")
+	}
+	resolved, err := s.resolveBailianCredentialsForConfig(ctx, cfg, true)
+	if err != nil {
+		return xinzhili.Config{}, err
+	}
+	key := strings.TrimSpace(resolved.APIKey)
+	if key == "" {
+		return xinzhili.Config{}, errors.New("shared Bailian credential is empty")
+	}
+	runtime := cfg
+	runtime.RealtimeASR.APIKey = key
+	if usesSharedTTS {
+		runtime.TTS.APIKey = key
+	}
+	return runtime, nil
 }
 
 func (c *xinzhiliRealtimeConn) loadModeSnapshot(ctx context.Context, cfg xinzhili.Config) (xinzhiliModeSnapshot, error) {
@@ -408,8 +567,7 @@ func mergeXinzhiliModeSnapshot(dst map[string]any, snapshot xinzhiliModeSnapshot
 func (c *xinzhiliRealtimeConn) sendControl(ctx context.Context, typ xinzhili.EventType, payload any, turnID *string, turnSeq *uint64) error {
 	b, _ := json.Marshal(payloadOrEmpty(payload))
 	sid := c.sessionID
-	seq := uint64(time.Now().UnixNano())
-	e := xinzhili.Envelope{ProtocolVersion: xinzhili.ProtocolVersion, Type: typ, SessionID: &sid, SessionSeq: &seq, TurnID: turnID, TurnSeq: turnSeq, ConfigVersion: c.configVersion, TimestampMs: time.Now().UnixMilli(), Payload: b}
+	e := xinzhili.Envelope{ProtocolVersion: xinzhili.ProtocolVersion, Type: typ, SessionID: &sid, TurnID: turnID, TurnSeq: turnSeq, ConfigVersion: c.configVersion, TimestampMs: time.Now().UnixMilli(), Payload: b}
 	return c.sink.SendControl(ctx, e)
 }
 func payloadOrEmpty(v any) any {
@@ -439,24 +597,35 @@ func (c *xinzhiliRealtimeConn) close(code int, text string) {
 }
 
 func (s *xinzhiliWSSink) SendControl(ctx context.Context, event xinzhili.Envelope) error {
-	if event.Generation == 0 {
-		event.Generation = s.conn.generation
-	}
-	if event.SessionID == nil {
-		sid := s.conn.sessionID
-		event.SessionID = &sid
-	}
-	if event.SessionSeq == nil {
-		seq := uint64(time.Now().UnixNano())
-		event.SessionSeq = &seq
-	}
-	if event.ConfigVersion == 0 {
-		event.ConfigVersion = s.conn.configVersion
-	}
-	if event.TimestampMs == 0 {
-		event.TimestampMs = time.Now().UnixMilli()
-	}
 	return s.write(ctx, func() error {
+		if event.Generation == 0 {
+			event.Generation = s.conn.generation
+		}
+		if event.SessionID == nil {
+			sid := s.conn.sessionID
+			event.SessionID = &sid
+		}
+		seq := s.nextSessionSeq
+		s.nextSessionSeq++
+		event.SessionSeq = &seq
+		if event.ConfigVersion == 0 {
+			event.ConfigVersion = s.conn.configVersion
+		}
+		if event.TimestampMs == 0 {
+			event.TimestampMs = time.Now().UnixMilli()
+		}
+		s.conn.mu.Lock()
+		sequence := s.conn.sequence
+		s.conn.mu.Unlock()
+		if sequence != nil {
+			disposition, err := sequence.Observe(xinzhili.DirectionServer, event)
+			if err != nil {
+				return err
+			}
+			if disposition == xinzhili.SequenceDrop {
+				return nil
+			}
+		}
 		b, err := xinzhili.EncodeEnvelope(event, xinzhili.DirectionServer, true)
 		if err != nil {
 			return err

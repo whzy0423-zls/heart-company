@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  batchPublishableContentIds,
   classroomOperationError,
   classroomPermissions,
   contentPublishGuard,
@@ -22,6 +23,8 @@ import { seriesMetadataPayload } from './series-model';
 import { crc64File } from './upload-checksum';
 import {
   classroomUploadMime,
+  canAbortUploadTask,
+  completeUploadWithStatusReconciliation,
   matchesClassroomContentType,
   matchesUploadIdentity,
   mergeUploadProgress,
@@ -86,6 +89,16 @@ describe('teacher classroom admin UI contract', () => {
     expect(editor).toContain('updateClassroomContentApi');
     expect(editor).toContain('setClassroomContentPriceApi');
     expect(editor).toContain('保存课件');
+  });
+
+  it('creates a fresh editor instance for every new content operation', () => {
+    const source = read('views/classroom/index.vue');
+    expect(source).toContain('const createEditorGeneration = ref(0)');
+    expect(source).toContain('createEditorGeneration.value += 1');
+    expect(source).toContain(':key="editorInstanceKey"');
+    expect(source).toMatch(/<Modal[\s\S]*?destroy-on-close[\s\S]*?<ContentEditor/);
+    expect(source).toContain('function closeEditor()');
+    expect(source).toContain('editing.value = undefined');
   });
 
   it('explains that an empty series list still allows standalone content', () => {
@@ -279,6 +292,36 @@ describe('teacher classroom admin UI contract', () => {
     });
   });
 
+  it('selects only ready or offline contents whose parent series can publish', () => {
+    expect(
+      batchPublishableContentIds(
+        [
+          { id: 1, status: 'ready' },
+          { id: 2, status: 'offline', seriesId: 8 },
+          { id: 3, status: 'ready', seriesId: 9 },
+          { id: 4, status: 'processing' },
+          { id: 5, status: 'published' },
+        ] as any,
+        [
+          { id: 8, status: 'published', title: '已发布系列' },
+          { id: 9, status: 'draft', title: '草稿系列' },
+        ] as any,
+      ),
+    ).toEqual([1, 2]);
+  });
+
+  it('supports atomic batch publishing and deleting offline content', () => {
+    const source = read('views/classroom/index.vue');
+    const api = read('api/core/classroom.ts');
+    expect(source).toContain('batchPublishClassroomContentsApi');
+    expect(source).toContain('selectedContentIds');
+    expect(source).toContain(':row-selection="contentRowSelection"');
+    expect(source).toContain('批量发布');
+    expect(source).toContain("record.status === 'offline'");
+    expect(api).toContain('/admin/classroom/contents/batch-publish');
+    expect(api).toContain('expectedUpdatedAt');
+  });
+
   it('shows the parent-series action instead of sending an invalid publish request', () => {
     const source = read('views/classroom/index.vue');
     expect(source).toContain('先发布所属系列');
@@ -315,6 +358,12 @@ describe('teacher classroom admin UI contract', () => {
     expect(upload).toContain('performUpload(context.file, context.contentId)');
   });
 
+  it('keeps silent upload polling from changing the card layout', () => {
+    const upload = read('views/classroom/upload-tasks.vue');
+    expect(upload).not.toContain('v-if="refreshing"');
+    expect(upload).not.toContain('状态更新中');
+  });
+
   it('uses API error detail and fallback messages', () => {
     expect(classroomOperationError(new Error('价格冲突'), '保存失败')).toBe(
       '价格冲突',
@@ -333,10 +382,46 @@ describe('teacher classroom admin UI contract', () => {
   it('merges upload task and content media statuses for operator-visible state', () => {
     expect(uploadStatusLabel('initiated')).toBe('等待上传');
     expect(uploadStatusLabel('uploading')).toBe('上传中');
-    expect(uploadStatusLabel('completing')).toBe('正在合并');
+    expect(uploadStatusLabel('completing')).toBe('媒体处理中');
     expect(uploadStatusLabel('completed', 'processing')).toBe('媒体处理中');
     expect(uploadStatusLabel('completed', 'ready')).toBe('可发布');
     expect(uploadStatusLabel('failed')).toBe('失败');
+  });
+
+  it('reconciles an upload completion timeout without aborting server processing', async () => {
+    const completeError = new Error('timeout of 10000ms exceeded');
+    await expect(
+      completeUploadWithStatusReconciliation({
+        complete: async () => Promise.reject(completeError),
+        readTask: async () => ({ status: 'completing' }) as any,
+      }),
+    ).resolves.toBe('processing');
+    await expect(
+      completeUploadWithStatusReconciliation({
+        complete: async () => Promise.reject(completeError),
+        readTask: async () => ({ status: 'completed' }) as any,
+      }),
+    ).resolves.toBe('completed');
+    expect(canAbortUploadTask('completing')).toBe(false);
+    expect(canAbortUploadTask('completed')).toBe(false);
+    expect(canAbortUploadTask('uploading')).toBe(true);
+  });
+
+  it('gives the media completion request a dedicated long timeout', () => {
+    const source = read('api/core/classroom.ts');
+    expect(source).toMatch(
+      /uploads\/\$\{id\}\/complete[\s\S]*?timeout:\s*180_000/,
+    );
+  });
+
+  it('keeps upload rows visible during background polling and rejects stale responses', () => {
+    const source = read('views/classroom/upload-tasks.vue');
+    expect(source).toContain('const initialLoading = ref(true)');
+    expect(source).toContain('const requestTicket = ++latestRequestTicket');
+    expect(source).toContain('if (requestTicket !== latestRequestTicket) return');
+    expect(source).toContain(':loading="initialLoading && tasks.length === 0"');
+    expect(source).toContain('setTimeout');
+    expect(source).not.toContain('setInterval(() => void load(), 5000)');
   });
 
   it('keeps metadata controls read-only for Price-only operators', () => {

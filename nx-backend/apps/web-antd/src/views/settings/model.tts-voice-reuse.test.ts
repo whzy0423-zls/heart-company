@@ -3,7 +3,10 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const viewSource = readFileSync(resolve(__dirname, 'xinzhili-model.vue'), 'utf8');
+const viewSource = readFileSync(
+  resolve(__dirname, 'xinzhili-model.vue'),
+  'utf8',
+);
 const apiSource = readFileSync(
   resolve(__dirname, '../../api/core/xinzhili-model-config.ts'),
   'utf8',
@@ -14,13 +17,25 @@ const voiceApiSource = readFileSync(
 );
 
 describe('xinzhili TTS voice reuse configuration', () => {
+  it('reuses the shared Bailian credential card without copying its secret into model fields', () => {
+    expect(viewSource).toContain('BailianCredentialsCard');
+    expect(viewSource).toContain(
+      '@status-change="handleCredentialStatusChange"',
+    );
+    expect(viewSource).toContain('const usesSharedBailianTts = computed(');
+    expect(viewSource).not.toContain('asrKeySet');
+    expect(viewSource).not.toContain('asrKeySuffix');
+  });
+
   it('adds a TTS config payload/view with a persisted voice id', () => {
     expect(apiSource).toContain('tts: {');
     const ttsApiSource = apiSource.slice(
       apiSource.indexOf('tts: {'),
       apiSource.indexOf('};', apiSource.indexOf('tts: {')),
     );
-    expect(ttsApiSource).toContain("provider: 'bailian' | 'minimax' | 'openai-compatible'");
+    expect(ttsApiSource).toContain(
+      "provider: 'bailian' | 'minimax' | 'openai-compatible'",
+    );
     expect(ttsApiSource).toContain('endpoint: string');
     expect(ttsApiSource).toContain('groupId?: string');
     expect(ttsApiSource).toContain('model: string');
@@ -43,16 +58,18 @@ describe('xinzhili TTS voice reuse configuration', () => {
   it('supports Aliyun Bailian Bailian TTS with same-provider cloned voices', () => {
     expect(viewSource).toContain("{ label: '阿里百炼', value: 'bailian' }");
     expect(viewSource).toContain('filteredTtsVoiceOptions');
-    expect(viewSource).toContain('voiceOptionProvider(item) === currentTtsVoiceProvider.value');
+    expect(viewSource).toContain(
+      'voiceOptionProvider(item) === currentTtsVoiceProvider.value',
+    );
     expect(viewSource).toContain('applyTtsProviderPreset');
     expect(viewSource).toContain('https://dashscope.aliyuncs.com/api/v1');
-    expect(viewSource).toContain('MiniMax/speech-2.8-turbo');
+    expect(viewSource).toContain('qwen3-tts-vc-2026-01-22');
     expect(viewSource).toContain("if (provider === 'bailian')");
   });
 
   it('normalizes legacy TTS OpenAI-compatible provider to Bailian before display and save', () => {
     expect(viewSource).toContain('function normalizeTtsProvider');
-    expect(viewSource).toContain("normalizedEndpoint.includes('dashscope.aliyuncs.com/compatible-mode')");
+    expect(viewSource).toContain('isOfficialDashScopeTtsEndpoint(endpoint)');
     expect(viewSource).toContain('const provider = normalizeTtsProvider(');
     expect(viewSource).toContain('legacyAliyunBailianTtsPreset');
   });
@@ -60,6 +77,7 @@ describe('xinzhili TTS voice reuse configuration', () => {
   it('documents voice options as clone or official sources', () => {
     expect(voiceApiSource).toContain("source: 'clone' | 'official'");
     expect(voiceApiSource).toContain('provider: string');
+    expect(voiceApiSource).toContain('model: string');
     expect(voiceApiSource).toContain('voiceId: string');
     expect(voiceApiSource).toContain('voiceName: string');
   });

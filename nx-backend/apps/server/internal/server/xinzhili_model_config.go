@@ -5,12 +5,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"nine-xing/nx-backend/apps/server/internal/auditlog"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
-	"nine-xing/nx-backend/apps/server/internal/voice"
 	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
 
@@ -108,11 +111,40 @@ func (s *Server) xinzhiliModelConfigHandler(w http.ResponseWriter, r *http.Reque
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if _, err := xinzhili.MergeIncoming(before, input.Config).WithDefaults(); err != nil {
+	candidate := xinzhili.MergeIncoming(before, input.Config)
+	clearChangedTTSSecret := shouldClearChangedTTSSecret(before.TTS, candidate.TTS, input.Config)
+	if clearChangedTTSSecret {
+		candidate.TTS.APIKey = ""
+	}
+	candidate.Version = before.Version
+	normalized, err := candidate.WithDefaults()
+	if err != nil {
 		httpx.Fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	saved, err := s.xinzhiliModelConfig.Update(r.Context(), input.Config, *input.ExpectedVersion)
+	resolved, err := s.resolveBailianCredentialsForConfig(r.Context(), normalized, true)
+	if err != nil {
+		log.Printf("xinzhili shared Bailian credential resolution failed: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, "百炼凭证读取失败")
+		return
+	}
+	if normalized.Enabled && strings.TrimSpace(resolved.APIKey) == "" {
+		httpx.Fail(w, http.StatusBadRequest, "请先配置百炼公共 API Key")
+		return
+	}
+
+	persisted := input.Config
+	if clearChangedTTSSecret {
+		persisted.ClearTTSKey = true
+	}
+	if resolved.Source == bailianCredentialSourceShared {
+		persisted.ClearASRKey = true
+		if xinzhili.TTSUsesBailianCredentials(normalized.TTS) {
+			persisted.ClearTTSKey = true
+		}
+	}
+
+	saved, err := s.xinzhiliModelConfig.Update(r.Context(), persisted, *input.ExpectedVersion)
 	if errors.Is(err, xinzhili.ErrConfigConflict) {
 		httpx.Fail(w, http.StatusConflict, "config_version_conflict")
 		return
@@ -125,7 +157,10 @@ func (s *Server) xinzhiliModelConfigHandler(w http.ResponseWriter, r *http.Reque
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.applyXinzhiliBailianCopyConfig(saved)
+	if resolved.Source != bailianCredentialSourceShared {
+		resolved = resolveLegacyBailianCredential(saved, true)
+	}
+	s.applyBailianCredentialRuntime(resolved)
 	s.recordAdminAudit(r, auditlog.Entry{
 		Action:     "xinzhili_model_config.update",
 		TargetType: "xinzhili_model_config",
@@ -137,42 +172,34 @@ func (s *Server) xinzhiliModelConfigHandler(w http.ResponseWriter, r *http.Reque
 	httpx.OK(w, buildXinzhiliModelConfigView(saved))
 }
 
-func (s *Server) applyStoredXinzhiliBailianCopyConfig() {
-	if s.xinzhiliModelConfig == nil {
-		return
+func shouldClearChangedTTSSecret(before, after xinzhili.TTSConfig, incoming xinzhili.Config) bool {
+	if incoming.ClearTTSKey || strings.TrimSpace(incoming.TTS.APIKey) != "" || strings.TrimSpace(before.APIKey) == "" {
+		return false
 	}
-	cfg, found, err := s.xinzhiliModelConfig.Read(context.Background())
-	if err != nil {
-		return
-	}
-	if found {
-		s.applyXinzhiliBailianCopyConfig(cfg)
-	}
+	return ttsCredentialScope(before) != ttsCredentialScope(after)
 }
 
-func (s *Server) applyXinzhiliBailianCopyConfig(cfg xinzhili.Config) {
-	s.xinzhiliBailianConfigMu.Lock()
-	defer s.xinzhiliBailianConfigMu.Unlock()
-	if s.xinzhiliBailianConfigSet && cfg.Version <= s.xinzhiliBailianConfigVer {
-		return
+func ttsCredentialScope(cfg xinzhili.TTSConfig) string {
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	endpoint := strings.TrimSpace(cfg.Endpoint)
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme == "" || parsed.Hostname() == "" {
+		return provider + "|" + strings.ToLower(endpoint)
 	}
-	if s.setBailianCopyConfig == nil {
-		return
+	scheme := strings.ToLower(parsed.Scheme)
+	hostname := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	rawPort := parsed.Port()
+	port := rawPort
+	if rawPort != "" {
+		if numericPort, parseErr := strconv.Atoi(rawPort); parseErr == nil {
+			if scheme == "https" && numericPort == 443 {
+				port = ""
+			} else {
+				port = strconv.Itoa(numericPort)
+			}
+		}
 	}
-	s.setBailianCopyConfig(bailianCopyConfigFromXinzhiliTTS(cfg.TTS))
-	s.xinzhiliBailianConfigSet = true
-	s.xinzhiliBailianConfigVer = cfg.Version
-}
-
-func bailianCopyConfigFromXinzhiliTTS(tts xinzhili.TTSConfig) voice.BailianConfig {
-	if tts.Provider != xinzhili.TTSProviderBailian {
-		return voice.BailianConfig{}
-	}
-	return voice.BailianConfig{
-		APIBase:     tts.Endpoint,
-		APIKey:      tts.APIKey,
-		TargetModel: tts.Model,
-	}
+	return provider + "|" + scheme + "|" + hostname + "|" + port
 }
 
 func buildXinzhiliModelConfigView(cfg xinzhili.Config) xinzhiliModelConfigView {

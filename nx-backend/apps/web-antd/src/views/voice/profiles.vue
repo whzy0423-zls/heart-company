@@ -3,6 +3,8 @@ import type { UploadChangeParam } from 'ant-design-vue';
 
 import type { VoiceProfile } from '#/api';
 
+import type { BailianCredentialsCardStatus } from './bailian-credentials-card.vue';
+
 import { computed, onMounted, reactive, ref } from 'vue';
 
 import { Page } from '@vben/common-ui';
@@ -40,8 +42,10 @@ import {
   useUploadAssetPreviewUrl,
 } from '#/utils/upload-asset-preview';
 
+import BailianCredentialsCard from './bailian-credentials-card.vue';
 import {
   getBailianCopyFeedback,
+  getBailianCloneFeedback,
   updateCopyingProfileIds,
 } from './profiles-copy-feedback';
 
@@ -50,8 +54,16 @@ const audioPreview = useUploadAssetPreviewResolver(
   () => accessStore.accessToken,
 );
 const loading = ref(false);
-const saving = ref(false);
-const copyingProfileIds = ref(new Set<string>());
+const formSaving = ref(false);
+const credentialStatus = ref<BailianCredentialsCardStatus>({
+  apiKeySet: false,
+  error: null,
+  loading: true,
+  saving: false,
+  source: 'none',
+  version: 0,
+});
+const busyProfileIds = ref(new Set<string>());
 const profiles = ref<VoiceProfile[]>([]);
 const total = ref(0);
 const uploadedAudioUrl = ref('');
@@ -78,23 +90,20 @@ const form = reactive({
   voiceId: '',
 });
 
-const voiceProviderOptions = [
-  { label: '阿里百炼（推荐）', value: 'bailian' },
-  { label: 'MiniMax（旧流程）', value: 'minimax' },
-];
-
 const statusOptions = [
   { label: '全部状态', value: '' },
   { label: '可使用', value: 'ready' },
   { label: '克隆中', value: 'cloning' },
   { label: '失败', value: 'failed' },
   { label: '草稿', value: 'draft' },
+  { label: '已迁移', value: 'migrated' },
 ];
 
 const columns = [
   { dataIndex: 'name', title: '人声名称', width: 180 },
   { dataIndex: 'voiceId', title: 'Voice ID', width: 240 },
   { dataIndex: 'provider', title: '平台', width: 140 },
+  { dataIndex: 'model', title: '模型', width: 220 },
   { dataIndex: 'status', title: '状态', width: 110 },
   { dataIndex: 'sampleUrl', title: '样本预览', width: 260 },
   ellipsisColumn('remark', '备注', { lines: 2 }),
@@ -102,7 +111,42 @@ const columns = [
   { fixed: 'right' as const, key: 'action', title: '操作', width: 190 },
 ];
 
-const canSubmit = computed(() => form.name.trim() && form.sampleAssetId);
+const canCloneVoice = computed(
+  () =>
+    credentialStatus.value.apiKeySet &&
+    !credentialStatus.value.loading &&
+    !credentialStatus.value.error &&
+    !credentialStatus.value.saving,
+);
+const canSubmit = computed(
+  () =>
+    canCloneVoice.value &&
+    Boolean(form.name.trim()) &&
+    Boolean(form.sampleAssetId) &&
+    !formSaving.value,
+);
+const cloneGateMessage = computed(() => {
+  if (credentialStatus.value.error) {
+    return '百炼凭证读取失败，可在上方重新加载';
+  }
+  if (credentialStatus.value.loading) {
+    return '正在读取百炼公共 API Key，请稍候';
+  }
+  if (credentialStatus.value.saving) {
+    return '百炼公共 API Key 正在保存，请稍候';
+  }
+  return '请先保存百炼公共 API Key';
+});
+
+function handleCredentialStatusChange(status: BailianCredentialsCardStatus) {
+  credentialStatus.value = status;
+}
+
+function ensureCanCloneVoice() {
+  if (canCloneVoice.value) return true;
+  message.warning(cloneGateMessage.value);
+  return false;
+}
 
 async function load() {
   loading.value = true;
@@ -121,6 +165,8 @@ async function load() {
 }
 
 async function uploadAudio({ file }: UploadChangeParam) {
+  if (formSaving.value) return;
+  if (!ensureCanCloneVoice()) return;
   const rawFile = getRawFile(file);
   if (!rawFile) {
     message.warning('没有读取到音频文件，请重新选择');
@@ -130,7 +176,7 @@ async function uploadAudio({ file }: UploadChangeParam) {
     message.warning('请上传 mp3、wav、m4a 等音频文件');
     return;
   }
-  saving.value = true;
+  formSaving.value = true;
   try {
     const result = await uploadFileApi(rawFile, 'voice/samples');
     form.sampleAssetId = String(result.assetId || '');
@@ -152,7 +198,7 @@ async function uploadAudio({ file }: UploadChangeParam) {
       '音频上传失败，请重新上传';
     message.error(errorMessage);
   } finally {
-    saving.value = false;
+    formSaving.value = false;
   }
 }
 
@@ -172,13 +218,14 @@ function previewAudioUrl(source?: string) {
 }
 
 async function submit() {
+  if (!ensureCanCloneVoice()) return;
   if (!canSubmit.value) {
     message.warning('请填写人声名称并上传音频样本');
     return;
   }
-  saving.value = true;
+  formSaving.value = true;
   try {
-    await createVoiceProfileApi({
+    const result = await createVoiceProfileApi({
       name: form.name,
       provider: form.provider,
       remark: form.remark,
@@ -187,35 +234,49 @@ async function submit() {
       sampleUrl: form.sampleUrl,
       voiceId: form.voiceId,
     });
-    message.success('人声已提交克隆');
+    showBailianCloneFeedback(result);
     resetForm();
     await load();
   } finally {
-    saving.value = false;
+    formSaving.value = false;
   }
 }
 
 async function retryClone(record: VoiceProfile) {
-  saving.value = true;
+  if (!ensureCanCloneVoice()) return;
+  if (!beginProfileOperation(record.id)) {
+    message.warning('该人声正在处理，请稍候');
+    return;
+  }
   try {
-    await cloneVoiceProfileApi(record.id);
-    message.success('已重新提交克隆');
+    const result = await cloneVoiceProfileApi(record.id);
+    showBailianCloneFeedback(result);
     await load();
   } finally {
-    saving.value = false;
+    endProfileOperation(record.id);
   }
 }
 
-function isCopyingProfile(profileId: string) {
-  return copyingProfileIds.value.has(profileId);
+function isProfileBusy(profileId: string) {
+  return busyProfileIds.value.has(profileId);
 }
 
-function setCopyingProfile(profileId: string, isCopying: boolean) {
-  copyingProfileIds.value = updateCopyingProfileIds(
-    copyingProfileIds.value,
+function setProfileBusy(profileId: string, isBusy: boolean) {
+  busyProfileIds.value = updateCopyingProfileIds(
+    busyProfileIds.value,
     profileId,
-    isCopying,
+    isBusy,
   );
+}
+
+function beginProfileOperation(profileId: string) {
+  if (isProfileBusy(profileId)) return false;
+  setProfileBusy(profileId, true);
+  return true;
+}
+
+function endProfileOperation(profileId: string) {
+  setProfileBusy(profileId, false);
 }
 
 function showBailianCopyFeedback(result: VoiceProfile) {
@@ -223,11 +284,27 @@ function showBailianCopyFeedback(result: VoiceProfile) {
   message[feedback.type](feedback.content);
 }
 
+function showBailianCloneFeedback(result: VoiceProfile) {
+  const feedback = getBailianCloneFeedback(result);
+  message[feedback.type](feedback.content);
+}
+
 function copyProfileToBailian(record: VoiceProfile) {
+  if (!ensureCanCloneVoice()) return;
+  if (isProfileBusy(record.id)) {
+    message.warning('该人声正在处理，请稍候');
+    return;
+  }
   Modal.confirm({
-    content: `将保留原 MiniMax 音色，并复用原音频样本创建「${record.name}」的百炼人声。确认继续吗？`,
+    content: `将复用原音频样本创建「${record.name}」的阿里百炼 Qwen 音色，迁移成功后停用原 MiniMax 音色。确认继续吗？`,
     onOk: async () => {
-      setCopyingProfile(record.id, true);
+      if (!ensureCanCloneVoice()) {
+        throw new Error('bailian_voice_clone_unavailable');
+      }
+      if (!beginProfileOperation(record.id)) {
+        message.warning('该人声正在处理，请稍候');
+        throw new Error('voice_profile_busy');
+      }
       try {
         const result = await copyVoiceProfileToBailianApi(record.id);
         showBailianCopyFeedback(result);
@@ -235,10 +312,10 @@ function copyProfileToBailian(record: VoiceProfile) {
       } catch {
         // requestClient's shared interceptor displays the backend error once.
       } finally {
-        setCopyingProfile(record.id, false);
+        endProfileOperation(record.id);
       }
     },
-    title: '复制到百炼',
+    title: '迁移到百炼 Qwen',
   });
 }
 
@@ -296,6 +373,7 @@ function statusLabel(status: string) {
   if (status === 'failed') return '失败';
   if (status === 'cloning') return '克隆中';
   if (status === 'draft') return '草稿';
+  if (status === 'migrated') return '已迁移';
   return status || '-';
 }
 
@@ -316,11 +394,15 @@ onMounted(load);
 
 <template>
   <Page
-    description="上传授权音频样本，优先走阿里百炼复刻音色，也保留 MiniMax 旧流程，并保存可复用的人声档案。"
+    description="新音色统一使用阿里百炼 Qwen 声音复刻；历史 MiniMax 音色保留运行兼容并可迁移。"
     title="人声管理"
   >
     <Row :gutter="[16, 16]">
       <Col :lg="8" :xs="24">
+        <BailianCredentialsCard
+          class="credential-card"
+          @status-change="handleCredentialStatusChange"
+        />
         <Card :bordered="false" class="voice-card">
           <div class="card-title">新增人声</div>
           <Form layout="vertical">
@@ -330,19 +412,19 @@ onMounted(load);
                 placeholder="例如：课程老师女声"
               />
             </Form.Item>
-            <Form.Item label="复刻平台" required>
-              <Select
-                v-model:value="form.provider"
-                :options="voiceProviderOptions"
-                placeholder="请选择复刻平台"
-              />
-            </Form.Item>
             <Alert
               class="mb-4"
               type="info"
               show-icon
-              message="百炼复刻需上传后的对象存储公网 URL"
-              description="先在芯之力模型配置中保存百炼 API Key"
+              message="阿里百炼 Qwen 声音复刻"
+              description="固定使用 qwen3-tts-vc-2026-01-22；保存公共 Key → 上传样本 → 克隆 → 芯之力选择"
+            />
+            <Alert
+              v-if="!canCloneVoice"
+              class="mb-4"
+              :message="cloneGateMessage"
+              show-icon
+              type="warning"
             />
             <Form.Item label="Voice ID">
               <Input
@@ -353,11 +435,15 @@ onMounted(load);
             <Form.Item label="音频样本" required>
               <Upload
                 :before-upload="() => false"
+                :disabled="!canCloneVoice || formSaving"
                 :max-count="1"
                 accept="audio/*"
                 @change="uploadAudio"
               >
-                <Button :loading="saving">
+                <Button
+                  :disabled="!canCloneVoice || formSaving"
+                  :loading="formSaving"
+                >
                   <IconifyIcon class="mr-1" icon="lucide:upload" />
                   上传音频
                 </Button>
@@ -375,7 +461,12 @@ onMounted(load);
               />
             </Form.Item>
             <Space>
-              <Button :loading="saving" type="primary" @click="submit">
+              <Button
+                :disabled="!canSubmit"
+                :loading="formSaving"
+                type="primary"
+                @click="submit"
+              >
                 保存并克隆
               </Button>
               <Button @click="resetForm">重置</Button>
@@ -452,7 +543,9 @@ onMounted(load);
               <template v-else-if="column.key === 'action'">
                 <Space>
                   <Button
-                    :loading="saving"
+                    v-if="['draft', 'failed'].includes(record.status)"
+                    :disabled="!canCloneVoice || isProfileBusy(record.id)"
+                    :loading="isProfileBusy(record.id)"
                     size="small"
                     type="link"
                     @click="retryClone(profileRecord(record))"
@@ -460,13 +553,18 @@ onMounted(load);
                     重新克隆
                   </Button>
                   <Button
-                    v-if="record.provider === 'minimax' && record.sampleAssetId"
-                    :loading="isCopyingProfile(record.id)"
+                    v-if="
+                      record.provider === 'minimax' &&
+                      record.sampleAssetId &&
+                      record.status !== 'migrated'
+                    "
+                    :disabled="!canCloneVoice || isProfileBusy(record.id)"
+                    :loading="isProfileBusy(record.id)"
                     size="small"
                     type="link"
                     @click="copyProfileToBailian(profileRecord(record))"
                   >
-                    复制到百炼
+                    迁移到百炼 Qwen
                   </Button>
                   <Button
                     danger
@@ -487,6 +585,11 @@ onMounted(load);
 </template>
 
 <style scoped>
+.credential-card {
+  display: block;
+  margin-bottom: 16px;
+}
+
 .voice-card {
   border-radius: 8px;
 }

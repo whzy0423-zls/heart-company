@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
 import NxAsyncState from "../../components/NxAsyncState.vue";
-import { listClassroomStandaloneApi } from "../../api";
+import { listClassroomRecentApi } from "../../api";
 import { getStoredSiteConfig, refreshSiteConfig } from "../../utils/siteConfig";
 import { filterFailedCarouselItems, normalizeHomeCarousel } from "../../utils/homeCarousel";
 import { MINIAPP_HOME_ENTRY_BEHAVIORS } from "../../utils/homeMenu";
@@ -11,6 +11,7 @@ import {
   classroomAccessLabel,
   classroomContentRoute,
   normalizeClassroomContent,
+  normalizeClassroomSeries,
 } from "../../utils/classroomDisplay";
 
 const view = ref(normalizePersonalExpertHome());
@@ -131,11 +132,31 @@ function previewTeacherDetail() {
 }
 
 function courseCoverKey(item) {
-  return `${item?.contentType || "video"}:${item?.id || ""}:${item?.coverUrl || ""}`;
+  return `${item?.itemType || "content"}:${item?.id || ""}:${item?.coverUrl || ""}`;
 }
 
 function markCourseCoverError(key) {
   courseCoverErrors.value = { ...courseCoverErrors.value, [key]: true };
+}
+
+function normalizeRecentClassroomItem(source = {}) {
+  if (source.itemType === "series") {
+    const item = normalizeClassroomSeries(source);
+    return {
+      ...item,
+      itemType: "series",
+      lessonCount: Math.max(0, Math.floor(Number(source.lessonCount) || 0)),
+      latestPublishedAt: String(source.latestPublishedAt || ""),
+    };
+  }
+  if (source.itemType === "content") {
+    return {
+      ...normalizeClassroomContent(source),
+      itemType: "content",
+      latestPublishedAt: String(source.latestPublishedAt || ""),
+    };
+  }
+  return null;
 }
 
 function loadClassroomPreview() {
@@ -143,11 +164,11 @@ function loadClassroomPreview() {
 
   classroomLoading.value = true;
   classroomError.value = "";
-  classroomRequestPromise = listClassroomStandaloneApi({ limit: 2, offset: 0 })
+  classroomRequestPromise = listClassroomRecentApi({ limit: 2 })
     .then((response) => {
       classroomItems.value = (Array.isArray(response?.items) ? response.items : [])
-        .map(normalizeClassroomContent)
-        .filter((item) => item.id)
+        .map(normalizeRecentClassroomItem)
+        .filter((item) => item?.id)
         .slice(0, 2);
       courseCoverErrors.value = {};
       return classroomItems.value;
@@ -196,6 +217,12 @@ function activateSecondaryEntry(entry) {
 }
 
 function openClassroomItem(item) {
+  if (item?.itemType === "series" && item.id) {
+    uni.navigateTo({
+      url: `/pages/classroom/classroom?tab=series&seriesId=${encodeURIComponent(item.id)}`,
+    });
+    return;
+  }
   const url = classroomContentRoute(item);
   if (url) uni.navigateTo({ url });
 }
@@ -347,7 +374,7 @@ onMounted(() => {
       <view v-else class="classroom-preview__list">
         <button
           v-for="item in classroomItems"
-          :key="item.id"
+          :key="`${item.itemType}:${item.id}`"
           class="classroom-card"
           :aria-label="`查看${item.title || '老师课堂课件'}`"
           hover-class="classroom-card--pressed"
@@ -371,12 +398,13 @@ onMounted(() => {
           </view>
           <view class="classroom-card__body">
             <view class="classroom-card__meta">
-              <text>{{ item.contentType === 'audio' ? '音频' : '视频' }}</text>
+              <text>{{ item.itemType === 'series' ? '系列课程' : item.contentType === 'audio' ? '音频' : '视频' }}</text>
               <text>{{ classroomAccessLabel(item.effectiveAccess) }}</text>
-              <text v-if="formatDuration(item.durationSeconds)">{{ formatDuration(item.durationSeconds) }}</text>
+              <text v-if="item.itemType === 'series' && item.lessonCount">{{ item.lessonCount }} 节</text>
+              <text v-else-if="formatDuration(item.durationSeconds)">{{ formatDuration(item.durationSeconds) }}</text>
             </view>
-            <text class="classroom-card__title">{{ item.title || '未命名课件' }}</text>
-            <text v-if="item.description" class="classroom-card__description">{{ item.description }}</text>
+            <text class="classroom-card__title">{{ item.title || (item.itemType === 'series' ? '未命名系列' : '未命名课件') }}</text>
+            <text v-if="item.summary || item.description" class="classroom-card__description">{{ item.summary || item.description }}</text>
           </view>
         </button>
       </view>

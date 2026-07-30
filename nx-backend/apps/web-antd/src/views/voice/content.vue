@@ -71,7 +71,11 @@ const miniMaxModelOptions = [
 
 const bailianModelOptions = [
   {
-    label: '百炼托管 MiniMax speech-2.8-turbo',
+    label: '百炼 Qwen3 TTS VC',
+    value: 'qwen3-tts-vc-2026-01-22',
+  },
+  {
+    label: '百炼托管 MiniMax（历史兼容）',
     value: 'MiniMax/speech-2.8-turbo',
   },
 ];
@@ -111,7 +115,7 @@ watch(
   () => {
     form.model =
       selectedVoice.value?.provider === 'bailian'
-        ? 'MiniMax/speech-2.8-turbo'
+        ? selectedVoice.value.model || 'qwen3-tts-vc-2026-01-22'
         : 'speech-02-hd';
   },
 );
