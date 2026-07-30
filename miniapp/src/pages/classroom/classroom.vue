@@ -351,13 +351,24 @@ function formatDuration(seconds) {
   return `${minutes}:${remainder}`;
 }
 
-onLoad((options = {}) => {
+onLoad(async (options = {}) => {
   disposed = false;
   skipNextShowRefresh = true;
   if (options.tab === "series") activeTab.value = "series";
   if (options.tab === "standalone") activeTab.value = "standalone";
-  loadActiveList();
+  const requestedSeriesId = /^\d+$/.test(String(options.seriesId || "").trim())
+    ? String(options.seriesId).trim()
+    : "";
   loadContinueLearning();
+  await loadActiveList();
+  if (!disposed && activeTab.value === "series" && requestedSeriesId) {
+    let item = seriesItems.value.find((series) => series.id === requestedSeriesId);
+    if (!item) {
+      item = normalizeClassroomSeries({ id: requestedSeriesId });
+      seriesItems.value = [item, ...seriesItems.value];
+    }
+    await openSeries(item);
+  }
 });
 
 onShow(() => {

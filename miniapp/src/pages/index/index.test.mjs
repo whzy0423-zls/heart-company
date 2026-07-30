@@ -68,9 +68,11 @@ assert.match(source, /:busy="siteRefreshing"/, "site retry should disable duplic
 assert.match(source, /:busy="classroomLoading"/, "classroom retry should disable duplicate work while busy");
 assert.doesNotMatch(source, /发布后的独立视频与音频课件/, "classroom empty copy should speak to visitors instead of backend publishing workflow");
 
-assert.match(source, /listClassroomStandaloneApi\(\{\s*limit:\s*2,\s*offset:\s*0\s*\}\)/, "home should request two standalone classroom items");
-assert.match(source, /\.map\(normalizeClassroomContent\)[\s\S]*?\.filter\(\(item\)\s*=>\s*item\.id\)[\s\S]*?\.slice\(0,\s*2\)/, "classroom preview should normalize, reject missing ids, preserve order, and cap at two");
+assert.match(source, /listClassroomRecentApi\(\{\s*limit:\s*2\s*\}\)/, "home should request the two most recently updated classroom entries");
+assert.match(source, /normalizeRecentClassroomItem/, "home should normalize the recent series/content union");
 assert.match(source, /classroomContentRoute\(item\)/, "classroom cards should use the shared detail route helper");
+assert.match(source, /item\.itemType\s*===\s*["']series["']/, "home cards should branch for series entries");
+assert.match(source, /\/pages\/classroom\/classroom\?tab=series&seriesId=/, "series cards should deep-link to their expanded series");
 assert.match(source, /\/pages\/classroom\/classroom\?tab=standalone/, "view-all should default to standalone classroom content");
 assert.match(source, /classroomAccessLabel/, "classroom cards should explain access permission");
 assert.match(source, /formatDuration\(item\.durationSeconds\)/, "classroom cards should expose useful duration metadata");
@@ -253,11 +255,12 @@ const MINIAPP_HOME_ENTRY_BEHAVIORS = {
   profile: { method: 'switchTab', url: '/pages/profile/profile', ariaLabel: '档案' },
 }
 const setBookingIntent = (intent) => { globalThis.__homeHarness.intents.push(intent); return true }
-const listClassroomStandaloneApi = (query) => {
+const listClassroomRecentApi = (query) => {
   globalThis.__homeHarness.classroomCalls.push(query)
-  return globalThis.__homeHarness.listStandalone(query)
+  return globalThis.__homeHarness.listRecent(query)
 }
 const normalizeClassroomContent = (item = {}) => ({ ...item, id: String(item.id || '') })
+const normalizeClassroomSeries = (item = {}) => ({ ...item, id: String(item.id || '') })
 const classroomContentRoute = (item) => item?.id ? '/detail/' + item.id : ''
 const classroomAccessLabel = (value) => value === 'paid' ? '付费课件' : '免费'
 `;
@@ -287,7 +290,7 @@ async function createHarness() {
     navigation: [],
     previews: [],
     refreshSiteConfig: async () => ({}),
-    listStandalone: async () => ({ items: [] }),
+    listRecent: async () => ({ items: [] }),
   };
   globalThis.__homeHarness = state;
   globalThis.uni = {
@@ -379,27 +382,32 @@ try {
   {
     const { page, state } = await createHarness();
     const pending = deferred();
-    state.listStandalone = () => pending.promise;
+    state.listRecent = () => pending.promise;
     const first = page.loadClassroomPreview();
     const second = page.retryClassroomPreview();
     assert.equal(page.classroomState.value, "loading");
     assert.equal(state.classroomCalls.length, 1, "busy classroom retry should suppress duplicate requests");
-    pending.resolve({ items: [{ id: 0 }, { id: 2, title: "第一项" }, { id: 3, title: "第二项" }, { id: 4, title: "第三项" }] });
+    pending.resolve({ items: [
+      { itemType: "series", id: 2, title: "第一项", lessonCount: 8 },
+      { itemType: "content", id: 3, title: "第二项", contentType: "audio" },
+      { itemType: "content", id: 4, title: "第三项" },
+    ] });
     await Promise.all([first, second]);
     assert.deepEqual(page.classroomItems.value.map((item) => item.id), ["2", "3"], "classroom preview should filter ids, preserve API order, and cap at two");
-    assert.deepEqual(state.classroomCalls[0], { limit: 2, offset: 0 });
+    assert.deepEqual(page.classroomItems.value.map((item) => item.itemType), ["series", "content"]);
+    assert.deepEqual(state.classroomCalls[0], { limit: 2 });
     assert.equal(page.classroomState.value, "ready");
   }
 
   {
     const { page, state } = await createHarness();
     const brandBefore = page.view.value.brand.name;
-    state.listStandalone = async () => { throw new Error("课堂失败"); };
+    state.listRecent = async () => { throw new Error("课堂失败"); };
     await page.loadClassroomPreview();
     assert.equal(page.classroomState.value, "error");
     assert.equal(page.classroomError.value, "课堂失败");
     assert.equal(page.view.value.brand.name, brandBefore, "classroom failure must not block or replace other home modules");
-    state.listStandalone = async () => ({ items: [] });
+    state.listRecent = async () => ({ items: [] });
     await page.retryClassroomPreview();
     assert.equal(page.classroomState.value, "empty");
   }
@@ -436,6 +444,7 @@ try {
     page.startTest();
     page.activateSecondaryEntry({ key: "relation", url: "/configured/evil" });
     page.openClassroomItem({ id: "9", contentType: "audio" });
+    page.openClassroomItem({ itemType: "series", id: "12" });
     page.goClassroom();
     assert.deepEqual(state.intents, [
       { kind: "enterprise", intentText: "" },
@@ -447,6 +456,7 @@ try {
       { method: "navigateTo", url: "/pages/test/test" },
       { method: "navigateTo", url: "/pages/relation/relation" },
       { method: "navigateTo", url: "/detail/9" },
+      { method: "navigateTo", url: "/pages/classroom/classroom?tab=series&seriesId=12" },
       { method: "navigateTo", url: "/pages/classroom/classroom?tab=standalone" },
     ], "home actions should use fixed booking, test, secondary, and classroom routes");
     assert.equal(page.formatDuration(185), "03:05");
