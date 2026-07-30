@@ -83,6 +83,8 @@ type Server struct {
 	uploader                   storage.ObjectUploader
 	voices                     *voice.Store
 	setBailianCopyConfig       func(voice.BailianConfig)
+	bailianCredentials         bailianCredentialStore
+	bailianRuntime             bailianCredentialRuntimeState
 	xinzhiliBailianConfigMu    sync.Mutex
 	xinzhiliBailianConfigSet   bool
 	xinzhiliBailianConfigVer   int64
@@ -288,6 +290,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	}
 	s.voices = voice.NewStore(database, s.uploads, env.MiniMax)
 	s.setBailianCopyConfig = s.voices.ConfigureBailianCopy
+	s.bailianCredentials = databaseBailianCredentialStore{db: database}
 	s.videos = video.NewStore(database, s.uploads, env.Video, s.uploader)
 	s.videoSubmissionRecovery = func(ctx context.Context) (int64, error) {
 		return s.videoStore().RecoverInterruptedSubmissions(
@@ -758,6 +761,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/signups/follow", s.method(http.MethodPut, s.requirePermission("Customer:Signup:List", s.signupFollow)))
 	s.mux.HandleFunc("/api/signups/events", s.method(http.MethodGet, s.requirePermission("Customer:Signup:List", s.signupEvents)))
 	s.mux.HandleFunc("/api/voice/profiles/list", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage"}, s.voiceProfiles)))
+	s.mux.HandleFunc("/api/voice/bailian-credentials", s.requireAnyPermission([]string{"Voice:Profile:Manage", "System:XinzhiliModel:Config"}, s.bailianCredentialsHandler))
 	s.mux.HandleFunc("/api/voice/profiles", s.method(http.MethodPost, s.requirePermission("Voice:Profile:Manage", s.createVoiceProfile)))
 	s.mux.HandleFunc("/api/voice/profiles/", s.requirePermission("Voice:Profile:Manage", s.voiceProfileByID))
 	s.mux.HandleFunc("/api/voice/options", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage", "Voice:Content:Manage", "Reading:Article:Manage", "System:XinzhiliModel:Config"}, s.voiceOptions)))
