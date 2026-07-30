@@ -1,25 +1,33 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineComponent, h } from 'vue';
-
 import type { XinzhiliModelConfigView } from '#/api';
+
+import { defineComponent, h, onMounted } from 'vue';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import { flushVuePromises, mountVueComponent } from '#/test-utils/vue-mount';
 
 function passthrough(name: string, tag = 'div') {
   return defineComponent({
-    inheritAttrs: false,
     name,
+    inheritAttrs: false,
     setup(_, { attrs, slots }) {
       return () => h(tag, attrs, slots.default?.());
     },
   });
 }
 
+vi.mock('@vben/stores', () => ({
+  useAccessStore: () => ({
+    accessCodes: ['System:XinzhiliModel:Config'],
+  }),
+}));
+
 vi.mock('ant-design-vue', () => {
   const Input = defineComponent({
-    emits: ['update:value'],
-    inheritAttrs: false,
     name: 'Input',
+    inheritAttrs: false,
     props: { value: { default: '', type: [Number, String] } },
+    emits: ['update:value'],
     setup(props, { attrs, emit }) {
       return () =>
         h('input', {
@@ -34,8 +42,8 @@ vi.mock('ant-design-vue', () => {
 
   const Form = passthrough('Form') as any;
   Form.Item = defineComponent({
-    inheritAttrs: false,
     name: 'FormItem',
+    inheritAttrs: false,
     props: { label: { default: '', type: String } },
     setup(props, { attrs, slots }) {
       return () => h('label', attrs, [props.label, slots.default?.()]);
@@ -52,14 +60,14 @@ vi.mock('ant-design-vue', () => {
     InputNumber: Input,
     Row: passthrough('Row'),
     Select: defineComponent({
-      emits: ['change', 'update:value'],
-      inheritAttrs: false,
       name: 'Select',
+      inheritAttrs: false,
       props: {
         options: { default: () => [], type: Array },
         placeholder: { default: '', type: String },
         value: { default: '', type: String },
       },
+      emits: ['change', 'update:value'],
       setup(props, { attrs, emit }) {
         const optionNodes = () =>
           (
@@ -106,6 +114,26 @@ vi.mock('../site-config/components/editor-shell.vue', () => ({
     template:
       '<main><slot /><button data-testid="save-model" @click="$emit(\'save\')">保存</button></main>',
   },
+}));
+
+vi.mock('../voice/bailian-credentials-card.vue', () => ({
+  default: defineComponent({
+    name: 'BailianCredentialsCard',
+    emits: ['status-change'],
+    setup(_, { emit }) {
+      onMounted(() =>
+        emit('status-change', {
+          apiKeySet: true,
+          error: null,
+          loading: false,
+          saving: false,
+          source: 'shared',
+          version: 1,
+        }),
+      );
+      return () => h('div', { 'data-testid': 'credential-card' });
+    },
+  }),
 }));
 
 vi.mock('#/api', () => ({
@@ -162,9 +190,9 @@ function config(
       argumentCandidateSilenceMs: 350,
       comfortEndSilenceMs: 1200,
       comfortFirstPromptMs: 5000,
-      comfortSecondPromptMs: 12000,
+      comfortSecondPromptMs: 12_000,
       deepListeningEndSilenceMs: 1500,
-      deepListeningPromptMs: 12000,
+      deepListeningPromptMs: 12_000,
       maxProactivePrompts: 2,
       normalEndSilenceMs: 700,
       partialStableMs: 150,

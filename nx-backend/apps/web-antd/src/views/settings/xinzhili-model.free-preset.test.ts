@@ -3,7 +3,10 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const viewSource = readFileSync(resolve(__dirname, 'xinzhili-model.vue'), 'utf8');
+const viewSource = readFileSync(
+  resolve(__dirname, 'xinzhili-model.vue'),
+  'utf8',
+);
 
 describe('xinzhili free voice preset contract', () => {
   it('keeps realtime ASR on the Paraformer WebSocket contract', () => {
@@ -16,27 +19,18 @@ describe('xinzhili free voice preset contract', () => {
     expect(viewSource).not.toContain('SenseVoiceSmall');
   });
 
-  it('offers a SiliconFlow TTS preset without replacing either API key', () => {
-    expect(viewSource).toContain('填充免费额度 TTS 预设');
-    expect(viewSource).toContain('function applyFreeTtsPreset()');
-    expect(viewSource).toContain("endpoint: 'https://api.siliconflow.cn/v1'");
-    expect(viewSource).toContain("model: 'FunAudioLLM/CosyVoice2-0.5B'");
-    expect(viewSource).toContain(
-      "voice: 'FunAudioLLM/CosyVoice2-0.5B:alex'",
-    );
-    expect(viewSource).toContain("format: 'mp3'");
-
-    const presetBody = viewSource.match(
-      /function applyFreeTtsPreset\(\) \{([\s\S]*?)\n\}/,
-    )?.[1];
-    expect(presetBody).toBeTruthy();
-    expect(presetBody).not.toContain('realtimeAsr');
-    expect(presetBody).not.toContain('apiKey');
+  it('removes the SiliconFlow free TTS preset from this page', () => {
+    expect(viewSource).not.toContain('api.siliconflow.cn');
+    expect(viewSource).not.toContain('applyFreeTtsPreset');
+    expect(viewSource).not.toContain('填充免费额度 TTS 预设');
+    expect(viewSource).not.toContain('硅基流动免费额度');
+    expect(viewSource).not.toContain('免费额度配置说明');
   });
 
-  it('explains the separate free-quota ASR and TTS setup', () => {
-    expect(viewSource).toContain('实时 ASR 继续使用阿里云百炼 Paraformer');
-    expect(viewSource).toContain('硅基流动免费额度');
-    expect(viewSource).toContain('按钮不会覆盖已填写的 API Key');
+  it('documents one Bailian key for the full realtime voice chain', () => {
+    expect(viewSource).toContain('BailianCredentialsCard');
+    expect(viewSource).toContain('Paraformer');
+    expect(viewSource).toContain('Qwen 克隆音色');
+    expect(viewSource).toContain('Qwen TTS');
   });
 });

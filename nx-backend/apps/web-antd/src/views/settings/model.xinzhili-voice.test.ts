@@ -4,6 +4,10 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const viewSource = readFileSync(resolve(__dirname, 'model.vue'), 'utf8');
+const xinzhiliModelSource = readFileSync(
+  resolve(__dirname, 'xinzhili-model.vue'),
+  'utf8',
+);
 const apiSource = readFileSync(
   resolve(__dirname, '../../api/core/model-config.ts'),
   'utf8',
@@ -18,6 +22,12 @@ const siliconFlowPreset = viewSource.slice(
 );
 
 describe('xinzhili voice model form', () => {
+  it('专用芯之力页不再提供硅基流动语音预设', () => {
+    expect(xinzhiliModelSource).not.toContain('api.siliconflow.cn');
+    expect(xinzhiliModelSource).not.toContain('applyFreeTtsPreset');
+    expect(xinzhiliModelSource).not.toContain('填充免费额度 TTS 预设');
+  });
+
   it('只声明一次对话协议选项，避免模型配置页构建失败', () => {
     expect(viewSource.match(/const chatProviderOptions\s*=/g)).toHaveLength(1);
     expect(
@@ -49,12 +59,12 @@ describe('xinzhili voice model form', () => {
     expect(section).toContain('使用硅基流动免费预设');
 
     expect(siliconFlowPreset).toContain("provider: 'openai-compatible'");
-    expect(siliconFlowPreset).toContain("apiBase: 'https://api.siliconflow.cn/v1'");
+    expect(siliconFlowPreset).toContain(
+      "apiBase: 'https://api.siliconflow.cn/v1'",
+    );
     expect(siliconFlowPreset).toContain("model: 'FunAudioLLM/SenseVoiceSmall'");
     expect(siliconFlowPreset).toContain("language: 'zh'");
-    expect(siliconFlowPreset).toContain(
-      "model: 'FunAudioLLM/CosyVoice2-0.5B'",
-    );
+    expect(siliconFlowPreset).toContain("model: 'FunAudioLLM/CosyVoice2-0.5B'");
     expect(siliconFlowPreset).toContain(
       "voice: 'FunAudioLLM/CosyVoice2-0.5B:alex'",
     );
