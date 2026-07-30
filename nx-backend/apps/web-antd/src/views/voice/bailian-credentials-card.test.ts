@@ -114,6 +114,10 @@ describe('BailianCredentialsCard', () => {
   });
 
   it('loads only the safe credential view and emits its state without exposing a key', async () => {
+    vi.mocked(getBailianCredentialsApi).mockResolvedValueOnce({
+      ...sharedConfigured,
+      apiKey: 'sk-plain-secret',
+    } as typeof sharedConfigured);
     const wrapper = await mountCard();
 
     expect(getBailianCredentialsApi).toHaveBeenCalledOnce();
@@ -125,6 +129,7 @@ describe('BailianCredentialsCard', () => {
     expect(wrapper.text()).toContain('…abcd');
     expect(document.body.querySelectorAll('input')).toHaveLength(1);
     expect(document.body.textContent).not.toContain('sk-plain-secret');
+    expect(JSON.stringify(wrapper.states)).not.toContain('sk-plain-secret');
     expect(wrapper.states.at(-1)).toMatchObject({
       apiKeySet: true,
       error: null,
@@ -168,7 +173,9 @@ describe('BailianCredentialsCard', () => {
           }),
       );
     vi.mocked(updateBailianCredentialsApi).mockRejectedValue({
-      response: { status: 409 },
+      code: -1,
+      error: 'bailian_credentials_version_conflict',
+      message: 'bailian_credentials_version_conflict',
     });
     const wrapper = await mountCard();
     inputValue('old-key');
@@ -219,6 +226,89 @@ describe('BailianCredentialsCard', () => {
     wrapper.unmount();
   });
 
+  it('keeps the newest reload result when an earlier reload resolves later', async () => {
+    const older = { ...sharedConfigured, version: 8 };
+    const latest = { ...sharedConfigured, apiKeySuffix: '…new9', version: 9 };
+    let finishOlder: (value: typeof older) => void = () => {};
+    let finishLatest: (value: typeof latest) => void = () => {};
+    vi.mocked(getBailianCredentialsApi)
+      .mockResolvedValueOnce(sharedConfigured)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishOlder = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishLatest = resolve;
+          }),
+      );
+    vi.mocked(updateBailianCredentialsApi).mockRejectedValue({
+      error: 'bailian_credentials_version_conflict',
+    });
+    const wrapper = await mountCard();
+    inputValue('old-key');
+    (wrapper.button('保存') as HTMLButtonElement).click();
+    await flushVuePromises();
+
+    (wrapper.button('重新加载') as HTMLButtonElement).click();
+    finishLatest(latest);
+    await flushVuePromises();
+    expect(wrapper.text()).toContain('版本 9');
+    expect(wrapper.text()).toContain('…new9');
+    const eventsBeforeOlderResolution = wrapper.states.length;
+
+    finishOlder(older);
+    await flushVuePromises();
+    expect(wrapper.text()).toContain('版本 9');
+    expect(wrapper.text()).toContain('…new9');
+    expect(wrapper.text()).not.toContain('版本 8');
+    expect(wrapper.states.at(-1)).toMatchObject({ version: 9 });
+    expect(wrapper.states).toHaveLength(eventsBeforeOlderResolution);
+    wrapper.unmount();
+  });
+
+  it('does not emit or update state after unmounting with a load in flight', async () => {
+    let finishLoad: (value: typeof sharedConfigured) => void = () => {};
+    vi.mocked(getBailianCredentialsApi).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishLoad = resolve;
+        }),
+    );
+    const wrapper = await mountCard();
+    const eventCountAtUnmount = wrapper.states.length;
+
+    wrapper.unmount();
+    finishLoad(sharedConfigured);
+    await flushVuePromises();
+
+    expect(wrapper.states).toHaveLength(eventCountAtUnmount);
+  });
+
+  it('prevents duplicate PUT requests while a save is already in flight', async () => {
+    let finishSave: (value: typeof sharedConfigured) => void = () => {};
+    vi.mocked(updateBailianCredentialsApi).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishSave = resolve;
+        }),
+    );
+    const wrapper = await mountCard();
+    inputValue('new-key');
+
+    (wrapper.button('保存') as HTMLButtonElement).click();
+    (wrapper.button('保存') as HTMLButtonElement).click();
+    await flushVuePromises();
+
+    expect(updateBailianCredentialsApi).toHaveBeenCalledOnce();
+    finishSave({ ...sharedConfigured, version: 5 });
+    await flushVuePromises();
+    wrapper.unmount();
+  });
+
   it('requires a second confirmation before explicitly clearing the shared key', async () => {
     const wrapper = await mountCard();
     (wrapper.button('清空 Key') as HTMLButtonElement).click();
@@ -233,6 +323,33 @@ describe('BailianCredentialsCard', () => {
       clearApiKey: true,
       expectedVersion: 4,
     });
+    wrapper.unmount();
+  });
+
+  it('rejects the clear confirmation promise when a normal save error occurs', async () => {
+    const saveError = new Error('save down');
+    vi.mocked(updateBailianCredentialsApi).mockRejectedValue(saveError);
+    const wrapper = await mountCard();
+    (wrapper.button('清空 Key') as HTMLButtonElement).click();
+
+    await expect(confirm.mock.calls[0]?.[0].onOk()).rejects.toBe(saveError);
+    expect(wrapper.text()).toContain('百炼凭证保存失败，请稍后重试');
+    wrapper.unmount();
+  });
+
+  it('reloads the latest status and rejects the clear confirmation after a conflict', async () => {
+    const conflict = { error: 'bailian_credentials_version_conflict' };
+    vi.mocked(getBailianCredentialsApi)
+      .mockResolvedValueOnce(sharedConfigured)
+      .mockResolvedValueOnce({ ...sharedConfigured, version: 8 });
+    vi.mocked(updateBailianCredentialsApi).mockRejectedValue(conflict);
+    const wrapper = await mountCard();
+    (wrapper.button('清空 Key') as HTMLButtonElement).click();
+
+    await expect(confirm.mock.calls[0]?.[0].onOk()).rejects.toBe(conflict);
+    await flushVuePromises();
+    expect(getBailianCredentialsApi).toHaveBeenCalledTimes(2);
+    expect(wrapper.text()).toContain('版本 8');
     wrapper.unmount();
   });
 

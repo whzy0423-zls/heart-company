@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { BailianCredentialSource, BailianCredentialView } from '#/api';
 
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 
 import {
   Alert,
@@ -37,6 +37,8 @@ const apiKey = ref('');
 const loading = ref(true);
 const saving = ref(false);
 const error = ref<null | string>(null);
+let loadSequence = 0;
+let unmounted = false;
 
 const sourceLabel = computed(() => {
   if (credential.value.source === 'shared') return '公共配置';
@@ -55,6 +57,7 @@ const statusLabel = computed(() => {
 });
 
 function emitStatus() {
+  if (unmounted) return;
   emit('status-change', {
     apiKeySet: credential.value.apiKeySet,
     error: error.value,
@@ -65,35 +68,77 @@ function emitStatus() {
 }
 
 function applyCredential(next: BailianCredentialView) {
-  credential.value = next;
+  if (unmounted) return;
+  credential.value = {
+    apiKeySet: next.apiKeySet,
+    apiKeySuffix: next.apiKeySuffix,
+    source: next.source,
+    version: next.version,
+  };
   error.value = null;
   emitStatus();
 }
 
-function isConflict(errorValue: unknown) {
-  const status =
-    (errorValue as { response?: { status?: number }; status?: number })
-      ?.response?.status ?? (errorValue as { status?: number })?.status;
-  return status === 409;
+function isCredentialVersionConflict(errorValue: unknown) {
+  const marker = 'bailian_credentials_version_conflict';
+  const root = errorValue as {
+    code?: number | string;
+    error?: string;
+    message?: string;
+    response?: {
+      data?: {
+        code?: number | string;
+        error?: string;
+        message?: string;
+      };
+      status?: number;
+    };
+    status?: number;
+  };
+  const responseBody = root?.response?.data;
+  const values = [
+    root?.error,
+    root?.message,
+    root?.code,
+    responseBody?.error,
+    responseBody?.message,
+    responseBody?.code,
+  ];
+
+  return (
+    root?.status === 409 ||
+    root?.response?.status === 409 ||
+    root?.code === 409 ||
+    root?.code === '409' ||
+    responseBody?.code === 409 ||
+    responseBody?.code === '409' ||
+    values.some((value) => typeof value === 'string' && value.includes(marker))
+  );
 }
 
 async function loadCredentials(preserveError = false) {
+  if (unmounted) return;
+  const currentSequence = ++loadSequence;
   loading.value = true;
   if (!preserveError) error.value = null;
   emitStatus();
   try {
-    applyCredential(await getBailianCredentialsApi());
+    const next = await getBailianCredentialsApi();
+    if (unmounted || currentSequence !== loadSequence) return;
+    applyCredential(next);
   } catch {
+    if (unmounted || currentSequence !== loadSequence) return;
     error.value = '百炼凭证读取失败，请重新加载';
     emitStatus();
   } finally {
+    if (unmounted || currentSequence !== loadSequence) return;
     loading.value = false;
     emitStatus();
   }
 }
 
-async function save(clearApiKey = false) {
-  if (loading.value || error.value) return;
+async function save(clearApiKey = false, rethrow = false) {
+  if (loading.value || error.value || saving.value || unmounted) return;
 
   saving.value = true;
   try {
@@ -102,24 +147,30 @@ async function save(clearApiKey = false) {
       clearApiKey,
       expectedVersion: credential.value.version,
     });
+    if (unmounted) return;
     apiKey.value = '';
     applyCredential(updated);
     message.success(
       clearApiKey ? '百炼公共 API Key 已清空' : '百炼公共 API Key 已保存',
     );
   } catch (errorValue) {
-    if (isConflict(errorValue)) {
+    if (isCredentialVersionConflict(errorValue)) {
       apiKey.value = '';
-      error.value = '配置已被其他管理员更新，正在重新加载';
-      emitStatus();
+      if (!unmounted) {
+        error.value = '配置已被其他管理员更新，正在重新加载';
+        emitStatus();
+      }
       await loadCredentials(true);
     } else {
-      error.value = '百炼凭证保存失败，请稍后重试';
-      emitStatus();
+      if (!unmounted) {
+        error.value = '百炼凭证保存失败，请稍后重试';
+        emitStatus();
+      }
     }
+    if (rethrow) throw errorValue;
   } finally {
+    if (unmounted) return;
     saving.value = false;
-    emitStatus();
   }
 }
 
@@ -129,12 +180,16 @@ function confirmClear() {
       '清空后将停止使用旧配置回退，Paraformer、Qwen 克隆音色和 Qwen TTS 都将不可用。',
     okButtonProps: { danger: true },
     okText: '确认清空',
-    onOk: () => save(true),
+    onOk: () => save(true, true),
     title: '清空百炼公共 API Key',
   });
 }
 
 onMounted(loadCredentials);
+onBeforeUnmount(() => {
+  unmounted = true;
+  loadSequence += 1;
+});
 </script>
 
 <template>
