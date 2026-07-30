@@ -491,6 +491,12 @@ describe('xinzhili Bailian TTS voice selection', () => {
     'https://dashscope.aliyuncs.com/api/v1?token=bad',
     'https://dashscope.aliyuncs.com/api/v1#fragment',
     'https://proxy.example.com/v1',
+    'https://dashscope.aliyuncs.com/evil/v1',
+    'https://dashscope.aliyuncs.com/api/v1/not-a-tts-endpoint',
+    'https://dashscope.aliyuncs.com/compatible-mode/v1/not-a-tts-endpoint',
+    'https://dashscope.aliyuncs.com/evil/../api/v1',
+    'https://dashscope.aliyuncs.com/%61pi/v1',
+    'https://dashscope.aliyuncs.com/%2e%2e/api/v1',
   ])(
     'treats non-official native Bailian endpoint %s as private',
     async (endpoint) => {

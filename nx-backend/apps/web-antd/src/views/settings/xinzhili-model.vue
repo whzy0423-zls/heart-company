@@ -226,7 +226,7 @@ watch(
 let currentTtsEndpointOrigin = '';
 
 async function load() {
-  if (unmounted) return;
+  if (unmounted || saving.value) return;
   const currentSequence = ++loadSequence;
   loading.value = true;
   loadError.value = '';
@@ -372,6 +372,11 @@ function isOfficialDashScopeTtsEndpoint(endpoint?: string) {
   if (!value) return false;
   try {
     const url = new URL(value);
+    const rawPath = rawEndpointPath(value);
+    if (rawPath.includes('%') || rawPath !== url.pathname) return false;
+    const endpointPath = url.pathname.endsWith('/')
+      ? url.pathname.slice(0, -1)
+      : url.pathname;
     return (
       url.protocol === 'https:' &&
       url.hostname.toLowerCase() === 'dashscope.aliyuncs.com' &&
@@ -379,11 +384,28 @@ function isOfficialDashScopeTtsEndpoint(endpoint?: string) {
       url.username === '' &&
       url.password === '' &&
       url.search === '' &&
-      url.hash === ''
+      url.hash === '' &&
+      [
+        '/api/v1',
+        '/compatible-mode/v1',
+        '/api/v1/services/aigc/multimodal-generation/generation',
+      ].includes(endpointPath)
     );
   } catch {
     return false;
   }
+}
+
+function rawEndpointPath(value: string) {
+  const authorityStart = value.indexOf('://') + 3;
+  const pathStart = value.indexOf('/', authorityStart);
+  if (authorityStart < 3 || pathStart < 0) return '';
+  const queryStart = value.indexOf('?', pathStart);
+  const fragmentStart = value.indexOf('#', pathStart);
+  const pathEnd = [queryStart, fragmentStart]
+    .filter((index) => index >= 0)
+    .reduce((current, index) => Math.min(current, index), value.length);
+  return value.slice(pathStart, pathEnd);
 }
 
 function syncSelectedTtsVoiceOption() {
@@ -622,7 +644,9 @@ async function save() {
       <Form.Item label="启用芯之力实时语音">
         <Switch v-model:checked="form.enabled" />
         <span class="ml-3 text-xs text-gray-400">配置版本：{{ version }}</span>
-        <Button class="ml-3" size="small" @click="load"> 重新加载配置 </Button>
+        <Button class="ml-3" :disabled="saving" size="small" @click="load">
+          重新加载配置
+        </Button>
       </Form.Item>
 
       <Divider orientation="left">实时语音识别（阿里云百炼）</Divider>

@@ -582,6 +582,24 @@ describe('xinzhili shared Bailian credential behavior', () => {
     wrapper.unmount();
   });
 
+  it('blocks reload while a save is pending so an old GET cannot overwrite the PUT', async () => {
+    mocks.credentialStatus = credentialStatus();
+    const pending = deferred<XinzhiliModelConfigView>();
+    vi.mocked(updateXinzhiliModelConfigApi).mockReturnValue(pending.promise);
+    const wrapper = await mountSettings(config('bailian', false));
+    expect(getXinzhiliModelConfigApi).toHaveBeenCalledOnce();
+
+    saveButton().click();
+    (wrapper.button('重新加载配置') as HTMLButtonElement).click();
+    await flushVuePromises();
+
+    expect(wrapper.button('重新加载配置')).toHaveProperty('disabled', true);
+    expect(getXinzhiliModelConfigApi).toHaveBeenCalledOnce();
+    pending.resolve(config('bailian', false));
+    await flushVuePromises();
+    wrapper.unmount();
+  });
+
   it('keeps the newest config response when reloads resolve out of order', async () => {
     const first = deferred<XinzhiliModelConfigView>();
     const second = deferred<XinzhiliModelConfigView>();
