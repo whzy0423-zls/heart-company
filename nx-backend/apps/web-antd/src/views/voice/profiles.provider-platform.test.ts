@@ -33,7 +33,8 @@ describe('voice profile clone provider platform', () => {
     expect(source).toContain('provider: form.provider');
     expect(source).toContain('阿里百炼 Qwen 声音复刻');
     expect(source).toContain('qwen3-tts-vc-2026-01-22');
-    expect(source).toContain('先在芯之力模型配置中保存百炼 API Key');
+    expect(source).not.toContain('请先在芯之力模型配置中保存百炼 API Key');
+    expect(source).toContain('保存公共 Key → 上传样本 → 克隆 → 芯之力选择');
   });
 
   it('shows the clone platform in the profile list', () => {
@@ -57,6 +58,46 @@ describe('voice profile clone provider platform', () => {
       expect(pageSource).toContain("'speech-02-hd'");
       expect(pageSource).toContain('watch(');
     }
+  });
+});
+
+describe('voice cloning requires the shared Bailian credential', () => {
+  it('shows the shared credential card before the new voice form', () => {
+    expect(source).toContain("import BailianCredentialsCard from './bailian-credentials-card.vue'");
+    expect(source.indexOf('<BailianCredentialsCard')).toBeLessThan(
+      source.indexOf('<div class="card-title">新增人声</div>'),
+    );
+  });
+
+  it('uses credential status as the single gate for cloning actions', () => {
+    expect(source).toContain('const credentialStatus = ref<BailianCredentialsCardStatus>');
+    expect(source).toContain('function handleCredentialStatusChange');
+    expect(source).toContain('const canCloneVoice = computed(');
+    expect(source).toContain('credentialStatus.value.apiKeySet &&');
+    expect(source).toContain('!credentialStatus.value.loading &&');
+    expect(source).toContain('!credentialStatus.value.error');
+    expect(source).toContain('function ensureCanCloneVoice()');
+    expect(source).toContain('请先保存百炼公共 API Key');
+    expect(source).toContain('百炼凭证读取失败，可在上方重新加载');
+  });
+
+  it('disables upload, create, retry, and migration while the credential gate is closed', () => {
+    expect(source).toContain(':disabled="!canCloneVoice"');
+    expect(source).toContain('if (!ensureCanCloneVoice()) return;');
+    expect(source).toContain('@status-change="handleCredentialStatusChange"');
+  });
+
+  it('keeps public credentials out of clone request bodies and form resets', () => {
+    const createRequestSource = source.slice(
+      source.indexOf('const result = await createVoiceProfileApi({'),
+      source.indexOf('showBailianCloneFeedback(result);'),
+    );
+    const resetFormSource = source.slice(
+      source.indexOf('function resetForm()'),
+      source.indexOf('function search()'),
+    );
+    expect(createRequestSource).not.toContain('apiKey');
+    expect(resetFormSource).not.toContain('credentialStatus');
   });
 });
 
