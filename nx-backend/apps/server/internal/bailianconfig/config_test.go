@@ -8,8 +8,11 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"nine-xing/nx-backend/apps/server/internal/testutil"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -168,14 +171,183 @@ func TestReadReportsFoundForExistingEmptySharedCredentialRecord(t *testing.T) {
 	}
 }
 
+func TestReadRejectsInvalidPersistedCredentialVersions(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "json null", body: `null`},
+		{name: "empty object", body: `{}`},
+		{name: "missing version", body: `{"apiKey":"sk-missing"}`},
+		{name: "zero version", body: `{"version":0,"apiKey":"sk-zero"}`},
+		{name: "negative version", body: `{"version":-1,"apiKey":"sk-negative"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database := openTestDB(t)
+			if _, err := database.Exec(`INSERT INTO site_configs (key, config, update_time) VALUES ($1, $2::jsonb, now())`, ConfigKey, tt.body); err != nil {
+				t.Fatal(err)
+			}
+
+			_, found, err := Read(context.Background(), database)
+			if err == nil {
+				t.Fatal("Read accepted invalid stored credential")
+			}
+			if found {
+				t.Fatalf("Read found=%v with invalid stored credential, want false", found)
+			}
+		})
+	}
+}
+
+func TestUpdateConcurrentFirstSaveHasOneWinner(t *testing.T) {
+	database := openTestDB(t)
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var group sync.WaitGroup
+	for _, apiKey := range []string{"sk-first-a", "sk-first-b"} {
+		group.Add(1)
+		go func(apiKey string) {
+			defer group.Done()
+			<-start
+			_, err := Update(context.Background(), database, apiKey, 0, false)
+			errs <- err
+		}(apiKey)
+	}
+	close(start)
+	group.Wait()
+	close(errs)
+
+	assertOneSuccessAndOneConflict(t, errs)
+	stored, found, err := Read(context.Background(), database)
+	if err != nil || !found {
+		t.Fatalf("Read found=%v err=%v", found, err)
+	}
+	if stored.Version != 1 || (stored.APIKey != "sk-first-a" && stored.APIKey != "sk-first-b") {
+		t.Fatalf("stored=%#v want one first-write winner at version 1", stored)
+	}
+}
+
+func TestUpdateConcurrentSameVersionHasOneWinner(t *testing.T) {
+	database := openTestDB(t)
+	created, err := Update(context.Background(), database, "sk-initial", 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var group sync.WaitGroup
+	for _, apiKey := range []string{"sk-update-a", "sk-update-b"} {
+		group.Add(1)
+		go func(apiKey string) {
+			defer group.Done()
+			<-start
+			_, err := Update(context.Background(), database, apiKey, created.Version, false)
+			errs <- err
+		}(apiKey)
+	}
+	close(start)
+	group.Wait()
+	close(errs)
+
+	assertOneSuccessAndOneConflict(t, errs)
+	stored, found, err := Read(context.Background(), database)
+	if err != nil || !found {
+		t.Fatalf("Read found=%v err=%v", found, err)
+	}
+	if stored.Version != 2 || (stored.APIKey != "sk-update-a" && stored.APIKey != "sk-update-b") {
+		t.Fatalf("stored=%#v want one version-2 update winner", stored)
+	}
+}
+
+func TestUpdateFirstEmptyNoOpReleasesCredentialLock(t *testing.T) {
+	database := openTestDB(t)
+
+	if _, err := Update(context.Background(), database, "", 0, false); err != nil {
+		t.Fatalf("empty first Update: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	created, err := Update(ctx, database, "sk-after-noop", 0, false)
+	if err != nil {
+		t.Fatalf("Update after no-op blocked instead of acquiring released lock: %v", err)
+	}
+	if want := (Config{Version: 1, APIKey: "sk-after-noop"}); created != want {
+		t.Fatalf("created=%#v want=%#v", created, want)
+	}
+}
+
+func assertOneSuccessAndOneConflict(t *testing.T, errs <-chan error) {
+	t.Helper()
+	var successes, conflicts int
+	for err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrConflict):
+			conflicts++
+		default:
+			t.Fatalf("unexpected concurrent update error: %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("successes=%d conflicts=%d, want one of each", successes, conflicts)
+	}
+}
+
 func testDSN(getenv func(string) string) (string, error) {
 	if dsn := strings.TrimSpace(getenv("TEST_DATABASE_URL")); dsn != "" {
+		if err := validateTestDSN(dsn); err != nil {
+			return "", err
+		}
 		return dsn, nil
 	}
 	if strings.TrimSpace(getenv("CI")) != "" {
 		return "", errTestDatabaseRequired
 	}
 	return "", errTestDatabaseUnavailable
+}
+
+func validateTestDSN(dsn string) error {
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		return err
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		return err
+	}
+	host := parsed.Hostname()
+	if host != "localhost" && !net.ParseIP(host).IsLoopback() {
+		return errors.New("test database URL must point to localhost")
+	}
+	return nil
+}
+
+func TestTestDSNRejectsNonSuffixTestNames(t *testing.T) {
+	tests := []struct {
+		name    string
+		dsn     string
+		wantErr bool
+	}{
+		{name: "isolated suffix accepted", dsn: "postgres://nx:nx@localhost:5432/bailian_credentials_test?sslmode=disable"},
+		{name: "remote isolated database is rejected", dsn: "postgres://nx:nx@db.example.com:5432/bailian_credentials_test?sslmode=disable", wantErr: true},
+		{name: "contest is not a test database", dsn: "postgres://nx:nx@localhost:5432/contest?sslmode=disable", wantErr: true},
+		{name: "latest data is not a test database", dsn: "postgres://nx:nx@localhost:5432/latest_data?sslmode=disable", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := testDSN(func(key string) string {
+				if key == "TEST_DATABASE_URL" {
+					return tt.dsn
+				}
+				return ""
+			})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("testDSN(%q) err=%v wantErr=%v", tt.dsn, err, tt.wantErr)
+			}
+		})
+	}
 }
 
 func openTestDB(t *testing.T) *sql.DB {
@@ -187,24 +359,6 @@ func openTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := url.Parse(dsn)
-	if err != nil {
-		t.Fatalf("parse TEST_DATABASE_URL: %v", err)
-	}
-	host := parsed.Hostname()
-	if host != "localhost" && !net.ParseIP(host).IsLoopback() {
-		t.Fatalf("TEST_DATABASE_URL must point to localhost, got host %q", host)
-	}
-	if parsed.Scheme != "postgres" && parsed.Scheme != "postgresql" {
-		t.Fatalf("TEST_DATABASE_URL must use PostgreSQL, got scheme %q", parsed.Scheme)
-	}
-	if databaseName := strings.TrimPrefix(parsed.Path, "/"); !strings.Contains(strings.ToLower(databaseName), "test") {
-		t.Fatalf("TEST_DATABASE_URL must name an isolated test database, got %q", databaseName)
-	}
-	if parsed.Query().Has("dbname") || parsed.Query().Has("database") {
-		t.Fatal("TEST_DATABASE_URL must not override the database name in query parameters")
-	}
-
 	database, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatalf("open test database: %v", err)

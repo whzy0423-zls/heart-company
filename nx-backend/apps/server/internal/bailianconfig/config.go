@@ -131,9 +131,22 @@ func readTx(ctx context.Context, tx *sql.Tx) (Config, bool, error) {
 }
 
 func decode(raw []byte) (Config, error) {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return Config{}, err
+	}
+	if object == nil {
+		return Config{}, errors.New("stored bailian credentials must be a JSON object")
+	}
+	if _, exists := object["version"]; !exists {
+		return Config{}, errors.New("stored bailian credentials version is required")
+	}
 	var config Config
 	if err := json.Unmarshal(raw, &config); err != nil {
 		return Config{}, err
+	}
+	if config.Version < 1 {
+		return Config{}, errors.New("stored bailian credentials version must be at least 1")
 	}
 	config.APIKey = strings.TrimSpace(config.APIKey)
 	return config, nil
