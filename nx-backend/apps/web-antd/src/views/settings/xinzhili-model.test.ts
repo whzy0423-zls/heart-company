@@ -388,19 +388,31 @@ describe('xinzhili shared Bailian credential behavior', () => {
     wrapper.unmount();
   });
 
-  it('allows disabled model structure to save during credential load/error but not during credential save', async () => {
-    const wrapper = await mountSettings(config('bailian', false));
-    expect(saveButton().disabled).toBe(false);
+  it.each([
+    credentialStatus({ apiKeySet: false, loading: true, source: 'none' }),
+    credentialStatus({ apiKeySet: false, error: '读取失败' }),
+    credentialStatus({ saving: true }),
+  ])(
+    'allows disabled model structure to save independently of credential state %#',
+    async (status) => {
+      const wrapper = await mountSettings(config('bailian', false));
+      expect(saveButton().disabled).toBe(false);
 
-    await emitCredentialStatus(
-      credentialStatus({ apiKeySet: false, error: '读取失败' }),
-    );
-    expect(saveButton().disabled).toBe(false);
+      await emitCredentialStatus(status);
+      expect(saveButton().disabled).toBe(false);
+      saveButton().click();
+      await flushVuePromises();
 
-    await emitCredentialStatus(credentialStatus({ saving: true }));
-    expect(saveButton().disabled).toBe(true);
-    wrapper.unmount();
-  });
+      expect(updateXinzhiliModelConfigApi).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enabled: false,
+          realtimeAsr: expect.objectContaining({ apiKey: '' }),
+          tts: expect.objectContaining({ apiKey: '', provider: 'bailian' }),
+        }),
+      );
+      wrapper.unmount();
+    },
+  );
 
   it('submits blank ASR and Bailian TTS keys without rendering duplicate secret inputs', async () => {
     mocks.credentialStatus = credentialStatus();

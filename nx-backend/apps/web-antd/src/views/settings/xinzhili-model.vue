@@ -123,8 +123,8 @@ const sharedCredentialUnavailable = computed(
 const saveDisabled = computed(
   () =>
     Boolean(loadError.value) ||
-    credentialStatus.value.saving ||
-    (form.value.enabled && sharedCredentialUnavailable.value),
+    (form.value.enabled &&
+      (credentialStatus.value.saving || sharedCredentialUnavailable.value)),
 );
 
 const canSelectExistingTtsVoice = computed(() =>
@@ -432,7 +432,7 @@ async function save() {
     message.warning('请先重新加载芯之力模型配置');
     return;
   }
-  if (credentialStatus.value.saving) {
+  if (form.value.enabled && credentialStatus.value.saving) {
     message.warning(sharedCredentialGateMessage.value);
     return;
   }
