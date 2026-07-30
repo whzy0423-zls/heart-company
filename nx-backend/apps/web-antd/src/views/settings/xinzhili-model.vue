@@ -169,6 +169,7 @@ function applyView(data: XinzhiliModelConfigView) {
   const provider = normalizeTtsProvider(
     normalized.tts.provider,
     normalized.tts.endpoint,
+    normalized.tts.model,
   );
   version.value = normalized.version;
   asrKeySet.value = normalized.realtimeAsr.apiKeySet;
@@ -254,12 +255,16 @@ function voiceOptionProvider(item: VoiceOption) {
 function normalizeTtsProvider(
   provider?: string,
   endpoint?: string,
+  model?: string,
 ): XinzhiliTtsProvider {
   const normalizedProvider = (provider || '').trim();
   const normalizedEndpoint = (endpoint || '').trim().toLowerCase();
+  const normalizedModel = (model || '').trim();
   if (
     normalizedProvider === 'openai-compatible' &&
-    normalizedEndpoint.includes('dashscope.aliyuncs.com/compatible-mode')
+    (normalizedEndpoint.includes('dashscope.aliyuncs.com/compatible-mode') ||
+      normalizedEndpoint === aliyunBailianTtsPreset.endpoint.toLowerCase() ||
+      (!normalizedEndpoint && !normalizedModel))
   ) {
     return 'bailian';
   }

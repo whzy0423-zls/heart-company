@@ -56,6 +56,8 @@ const loading = ref(false);
 const error = ref('');
 const rows = ref<ClassroomSeries[]>([]);
 const editorOpen = ref(false);
+const coverEditorOpen = ref(false);
+const coverSeries = ref<ClassroomSeries>();
 const editing = ref<ClassroomSeries>();
 const saving = ref(false);
 const actionLoadingId = ref<number>();
@@ -115,6 +117,15 @@ function openEditor(record?: ClassroomSeries) {
 function replacePersistedSeries(value: ClassroomSeries) {
   persistedSeries.value = value;
   editing.value = value;
+  const index = rows.value.findIndex((row) => row.id === value.id);
+  if (index !== -1) rows.value[index] = value;
+}
+function openCoverEditor(record: ClassroomSeries) {
+  coverSeries.value = record;
+  coverEditorOpen.value = true;
+}
+function replaceCoverSeries(value: ClassroomSeries) {
+  coverSeries.value = value;
   const index = rows.value.findIndex((row) => row.id === value.id);
   if (index !== -1) rows.value[index] = value;
 }
@@ -244,6 +255,10 @@ onMounted(load);
               @click="openEditor(record as ClassroomSeries)"
               >编辑</Button
             ><Button
+              v-if="canWrite"
+              @click="openCoverEditor(record as ClassroomSeries)"
+              >封面管理</Button
+            ><Button
               v-if="canPrice"
               @click="openEditor(record as ClassroomSeries)"
               >定价</Button
@@ -330,6 +345,14 @@ onMounted(load);
         @saved="replacePersistedSeries"
       />
       <Alert v-else type="info" show-icon message="请先保存系列，再管理封面" />
+    </Modal>
+    <Modal v-model:open="coverEditorOpen" title="系列封面管理" :footer="null">
+      <SeriesCoverEditor
+        v-if="coverSeries"
+        :series="coverSeries"
+        :disabled="!canWrite"
+        @saved="replaceCoverSeries"
+      />
     </Modal>
   </div>
 </template>

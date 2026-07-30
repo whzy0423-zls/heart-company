@@ -284,4 +284,37 @@ describe('xinzhili Bailian TTS voice selection', () => {
     expect(document.body.querySelectorAll('select')).toHaveLength(1);
     wrapper.unmount();
   });
+
+  it('restores the Bailian voice picker for the native DashScope endpoint saved under the legacy provider', async () => {
+    vi.mocked(getXinzhiliModelConfigApi).mockResolvedValue({
+      ...config('openai-compatible'),
+      tts: {
+        ...config('openai-compatible').tts,
+        endpoint: 'https://dashscope.aliyuncs.com/api/v1',
+        model: 'qwen3-tts-vc-2026-01-22',
+      },
+    });
+
+    const wrapper = await mountSettings();
+    const selects = document.body.querySelectorAll('select');
+
+    expect(selects).toHaveLength(2);
+    expect(selects[0]!.value).toBe('bailian');
+    expect(selects[1]!.textContent).toContain(bailianClone.label);
+    wrapper.unmount();
+  });
+
+  it('defaults an unconfigured legacy TTS record to Bailian voice reuse', async () => {
+    vi.mocked(getXinzhiliModelConfigApi).mockResolvedValue(
+      config('openai-compatible'),
+    );
+
+    const wrapper = await mountSettings();
+    const selects = document.body.querySelectorAll('select');
+
+    expect(selects).toHaveLength(2);
+    expect(selects[0]!.value).toBe('bailian');
+    expect(selects[1]!.textContent).toContain(bailianClone.label);
+    wrapper.unmount();
+  });
 });

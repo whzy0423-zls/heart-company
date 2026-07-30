@@ -72,6 +72,14 @@ describe('classroom series cover API contract', () => {
     expect(source).toContain('@saved="replacePersistedSeries"');
   });
 
+  it('offers cover management for published series without metadata editing', () => {
+    const source = read('views/classroom/series.vue');
+    expect(source).toContain('封面管理');
+    expect(source).toContain('coverEditorOpen');
+    expect(source).toContain('openCoverEditor(record as ClassroomSeries)');
+    expect(source).toContain('@saved="replaceCoverSeries"');
+  });
+
   it('surfaces preview outages and resets the native file input after upload', () => {
     const source = read('views/classroom/components/series-cover-editor.vue');
     expect(source).toContain('coverPreviewUnavailable');
