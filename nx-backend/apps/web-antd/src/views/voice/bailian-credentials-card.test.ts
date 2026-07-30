@@ -130,10 +130,16 @@ describe('BailianCredentialsCard', () => {
     expect(document.body.querySelectorAll('input')).toHaveLength(1);
     expect(document.body.textContent).not.toContain('sk-plain-secret');
     expect(JSON.stringify(wrapper.states)).not.toContain('sk-plain-secret');
+    expect(wrapper.states[0]).toMatchObject({
+      apiKeySet: false,
+      loading: true,
+      saving: false,
+    });
     expect(wrapper.states.at(-1)).toMatchObject({
       apiKeySet: true,
       error: null,
       loading: false,
+      saving: false,
       source: 'shared',
       version: 4,
     });
@@ -265,8 +271,8 @@ describe('BailianCredentialsCard', () => {
     expect(wrapper.text()).toContain('版本 9');
     expect(wrapper.text()).toContain('…new9');
     expect(wrapper.text()).not.toContain('版本 8');
-    expect(wrapper.states.at(-1)).toMatchObject({ version: 9 });
-    expect(wrapper.states).toHaveLength(eventsBeforeOlderResolution);
+    expect(wrapper.states.at(-1)).toMatchObject({ saving: false, version: 9 });
+    expect(wrapper.states).toHaveLength(eventsBeforeOlderResolution + 1);
     wrapper.unmount();
   });
 
@@ -306,6 +312,30 @@ describe('BailianCredentialsCard', () => {
     expect(updateBailianCredentialsApi).toHaveBeenCalledOnce();
     finishSave({ ...sharedConfigured, version: 5 });
     await flushVuePromises();
+    wrapper.unmount();
+  });
+
+  it('emits saving true for the full PUT and saving false after it settles', async () => {
+    let finishSave: (value: typeof sharedConfigured) => void = () => {};
+    vi.mocked(updateBailianCredentialsApi).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishSave = resolve;
+        }),
+    );
+    const wrapper = await mountCard();
+
+    (wrapper.button('保存') as HTMLButtonElement).click();
+    await flushVuePromises();
+    expect(wrapper.states.at(-1)).toMatchObject({ saving: true });
+
+    finishSave({ ...sharedConfigured, version: 5 });
+    await flushVuePromises();
+    expect(wrapper.states.at(-1)).toMatchObject({
+      apiKeySet: true,
+      saving: false,
+      version: 5,
+    });
     wrapper.unmount();
   });
 

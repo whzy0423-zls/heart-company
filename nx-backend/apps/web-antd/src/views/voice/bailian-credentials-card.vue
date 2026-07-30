@@ -19,6 +19,7 @@ export interface BailianCredentialsCardStatus {
   apiKeySet: boolean;
   error: null | string;
   loading: boolean;
+  saving: boolean;
   source: BailianCredentialSource;
   version: number;
 }
@@ -62,6 +63,7 @@ function emitStatus() {
     apiKeySet: credential.value.apiKeySet,
     error: error.value,
     loading: loading.value,
+    saving: saving.value,
     source: credential.value.source,
     version: credential.value.version,
   });
@@ -131,9 +133,10 @@ async function loadCredentials(preserveError = false) {
     error.value = '百炼凭证读取失败，请重新加载';
     emitStatus();
   } finally {
-    if (unmounted || currentSequence !== loadSequence) return;
-    loading.value = false;
-    emitStatus();
+    if (!unmounted && currentSequence === loadSequence) {
+      loading.value = false;
+      emitStatus();
+    }
   }
 }
 
@@ -141,6 +144,7 @@ async function save(clearApiKey = false, rethrow = false) {
   if (loading.value || error.value || saving.value || unmounted) return;
 
   saving.value = true;
+  emitStatus();
   try {
     const updated = await updateBailianCredentialsApi({
       apiKey: clearApiKey ? '' : apiKey.value,
@@ -169,8 +173,10 @@ async function save(clearApiKey = false, rethrow = false) {
     }
     if (rethrow) throw errorValue;
   } finally {
-    if (unmounted) return;
-    saving.value = false;
+    if (!unmounted) {
+      saving.value = false;
+      emitStatus();
+    }
   }
 }
 
