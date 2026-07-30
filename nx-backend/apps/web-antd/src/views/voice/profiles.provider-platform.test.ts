@@ -375,6 +375,54 @@ describe('voice profile shared credential behavior', () => {
     wrapper.unmount();
   });
 
+  it('serializes queued sample changes and keeps the form locked until the first upload settles', async () => {
+    let finishUpload: (value: Record<string, unknown>) => void = () => {};
+    vi.mocked(uploadFileApi).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishUpload = resolve;
+        }) as any,
+    );
+    const wrapper = await mountProfiles();
+    await emitCredentialStatus(credentialStatus());
+    const input = inputByPlaceholder('例如：课程老师女声');
+    input.value = '新老师人声';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    for (const trigger of uploadEmitters) {
+      trigger({
+        file: new File(['first'], 'first.wav', { type: 'audio/wav' }),
+      });
+      trigger({
+        file: new File(['second'], 'second.wav', { type: 'audio/wav' }),
+      });
+    }
+    await flushVuePromises();
+
+    expect(uploadFileApi).toHaveBeenCalledOnce();
+    expect(actionButton('上传音频').disabled).toBe(true);
+    expect(actionButton('保存并克隆').disabled).toBe(true);
+    const submitButton = actionButton('保存并克隆');
+    submitButton.disabled = false;
+    submitButton.click();
+    await flushVuePromises();
+    expect(createVoiceProfileApi).not.toHaveBeenCalled();
+
+    finishUpload({
+      assetId: 'asset-first',
+      name: 'first.wav',
+      url: '/first.wav',
+    });
+    await flushVuePromises();
+
+    expect(uploadFileApi).toHaveBeenCalledOnce();
+    expect(wrapper.text()).toContain('first.wav');
+    expect(wrapper.text()).not.toContain('second.wav');
+    expect(actionButton('上传音频').disabled).toBe(false);
+    expect(actionButton('保存并克隆').disabled).toBe(false);
+    wrapper.unmount();
+  });
+
   it('rechecks credentials after migration confirmation and keeps the modal open when they expire', async () => {
     const wrapper = await mountProfiles();
     await emitCredentialStatus(credentialStatus());

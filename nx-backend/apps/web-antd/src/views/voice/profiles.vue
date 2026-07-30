@@ -165,6 +165,7 @@ async function load() {
 }
 
 async function uploadAudio({ file }: UploadChangeParam) {
+  if (formSaving.value) return;
   if (!ensureCanCloneVoice()) return;
   const rawFile = getRawFile(file);
   if (!rawFile) {
