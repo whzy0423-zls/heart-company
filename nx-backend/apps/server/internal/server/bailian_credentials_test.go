@@ -16,10 +16,11 @@ import (
 )
 
 type memoryBailianCredentialStore struct {
-	mu      sync.Mutex
-	cfg     bailianconfig.Config
-	found   bool
-	readErr error
+	mu        sync.Mutex
+	cfg       bailianconfig.Config
+	found     bool
+	readErr   error
+	updateErr error
 }
 
 func (s *memoryBailianCredentialStore) Read(context.Context) (bailianconfig.Config, bool, error) {
@@ -34,6 +35,9 @@ func (s *memoryBailianCredentialStore) Read(context.Context) (bailianconfig.Conf
 func (s *memoryBailianCredentialStore) Update(_ context.Context, apiKey string, expectedVersion int64, clearAPIKey bool) (bailianconfig.Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.updateErr != nil {
+		return bailianconfig.Config{}, s.updateErr
+	}
 	if (!s.found && expectedVersion != 0) || (s.found && s.cfg.Version != expectedVersion) {
 		return bailianconfig.Config{}, bailianconfig.ErrConflict
 	}
@@ -85,6 +89,9 @@ func TestBailianCredentialsSharedRecordTakesPriorityOverLegacyConfiguration(t *t
 	if got.APIKey != "sk-shared-final" || got.Version != 3 || got.Source != bailianCredentialSourceShared {
 		t.Fatalf("resolved=%#v want shared version 3", got)
 	}
+	if got.runtimeEpoch != bailianCredentialRuntimeEpochShared || got.runtimeVersion != 3 {
+		t.Fatalf("runtime order=(%d,%d) want shared epoch/version 3", got.runtimeEpoch, got.runtimeVersion)
+	}
 }
 
 func TestBailianCredentialsEmptySharedRecordDisablesLegacyFallback(t *testing.T) {
@@ -102,6 +109,9 @@ func TestBailianCredentialsEmptySharedRecordDisablesLegacyFallback(t *testing.T)
 	}
 	if got.APIKey != "" || got.Version != 4 || got.Source != bailianCredentialSourceShared {
 		t.Fatalf("resolved=%#v want explicit empty shared credential", got)
+	}
+	if got.runtimeEpoch != bailianCredentialRuntimeEpochShared || got.runtimeVersion != 4 {
+		t.Fatalf("runtime order=(%d,%d) want shared epoch/version 4", got.runtimeEpoch, got.runtimeVersion)
 	}
 }
 
@@ -135,7 +145,7 @@ func TestBailianCredentialsLegacyTTSFallbackOnlyAcceptsBailianOrOfficialDashScop
 		t.Run(tt.name, func(t *testing.T) {
 			s := &Server{
 				bailianCredentials: &memoryBailianCredentialStore{},
-				xinzhiliModelConfig: staticXinzhiliConfigStore{found: true, cfg: xinzhili.Config{TTS: xinzhili.TTSConfig{
+				xinzhiliModelConfig: staticXinzhiliConfigStore{found: true, cfg: xinzhili.Config{Version: 9, TTS: xinzhili.TTSConfig{
 					Provider: tt.provider, Endpoint: tt.endpoint, APIKey: "sk-legacy-tts",
 				}}},
 			}
@@ -148,6 +158,9 @@ func TestBailianCredentialsLegacyTTSFallbackOnlyAcceptsBailianOrOfficialDashScop
 			}
 			if tt.wantKey && got.Source != bailianCredentialSourceLegacyTTS {
 				t.Fatalf("source=%q want legacy TTS", got.Source)
+			}
+			if got.runtimeEpoch != bailianCredentialRuntimeEpochLegacy || got.runtimeVersion != 9 {
+				t.Fatalf("runtime order=(%d,%d) want legacy epoch/version 9", got.runtimeEpoch, got.runtimeVersion)
 			}
 		})
 	}
@@ -180,7 +193,7 @@ func TestBailianCredentialsLegacyASRFallbackRequiresOfficialParaformerConfigurat
 		t.Run(tt.name, func(t *testing.T) {
 			s := &Server{
 				bailianCredentials: &memoryBailianCredentialStore{},
-				xinzhiliModelConfig: staticXinzhiliConfigStore{found: true, cfg: xinzhili.Config{
+				xinzhiliModelConfig: staticXinzhiliConfigStore{found: true, cfg: xinzhili.Config{Version: 11,
 					TTS: xinzhili.TTSConfig{Provider: xinzhili.TTSProviderMiniMax, APIKey: "minimax-secret"},
 					RealtimeASR: xinzhili.RealtimeASRConfig{
 						Provider: tt.provider,
@@ -200,7 +213,24 @@ func TestBailianCredentialsLegacyASRFallbackRequiresOfficialParaformerConfigurat
 			if tt.wantKey && got.Source != bailianCredentialSourceLegacyASR {
 				t.Fatalf("source=%q want legacy ASR", got.Source)
 			}
+			if got.runtimeEpoch != bailianCredentialRuntimeEpochLegacy || got.runtimeVersion != 11 {
+				t.Fatalf("runtime order=(%d,%d) want legacy epoch/version 11", got.runtimeEpoch, got.runtimeVersion)
+			}
 		})
+	}
+}
+
+func TestBailianCredentialsNoLegacyRecordUsesLowestRuntimeOrder(t *testing.T) {
+	s := &Server{
+		bailianCredentials:  &memoryBailianCredentialStore{},
+		xinzhiliModelConfig: staticXinzhiliConfigStore{},
+	}
+	got, err := s.resolveBailianCredentials(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Source != bailianCredentialSourceNone || got.Version != 0 || got.runtimeEpoch != bailianCredentialRuntimeEpochNone || got.runtimeVersion != 0 {
+		t.Fatalf("resolved=%#v want lowest no-record runtime order", got)
 	}
 }
 
@@ -226,6 +256,17 @@ func TestBailianCredentialsGETReturnsOnlySafeView(t *testing.T) {
 	}
 }
 
+func TestBailianCredentialsGETHidesInternalReadError(t *testing.T) {
+	s := &Server{bailianCredentials: &memoryBailianCredentialStore{readErr: errors.New("postgres read leaked sk-private-read")}}
+	rr := performBailianCredentialRequest(s, http.MethodGet, "")
+	if rr.Code != http.StatusInternalServerError || !strings.Contains(rr.Body.String(), "百炼凭证读取失败") {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "postgres") || strings.Contains(rr.Body.String(), "sk-private-read") {
+		t.Fatalf("GET leaked internal error details: %s", rr.Body.String())
+	}
+}
+
 func TestBailianCredentialsPUTRequiresExpectedVersionAndDoesNotOverwriteOnConflict(t *testing.T) {
 	store := &memoryBailianCredentialStore{cfg: bailianconfig.Config{Version: 2, APIKey: "sk-current-ABCD"}, found: true}
 	s := &Server{bailianCredentials: store, setBailianCopyConfig: func(voice.BailianConfig) {}}
@@ -245,6 +286,17 @@ func TestBailianCredentialsPUTRequiresExpectedVersionAndDoesNotOverwriteOnConfli
 	wrongMethod := performBailianCredentialRequest(s, http.MethodPost, `{}`)
 	if wrongMethod.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST status=%d body=%s", wrongMethod.Code, wrongMethod.Body.String())
+	}
+}
+
+func TestBailianCredentialsPUTHidesInternalUpdateError(t *testing.T) {
+	s := &Server{bailianCredentials: &memoryBailianCredentialStore{updateErr: errors.New("postgres update leaked sk-private-write")}}
+	rr := performBailianCredentialRequest(s, http.MethodPut, `{"expectedVersion":0,"apiKey":"sk-next"}`)
+	if rr.Code != http.StatusInternalServerError || !strings.Contains(rr.Body.String(), "百炼凭证保存失败") {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "postgres") || strings.Contains(rr.Body.String(), "sk-private-write") {
+		t.Fatalf("PUT leaked internal error details: %s", rr.Body.String())
 	}
 }
 
@@ -344,11 +396,69 @@ func TestBailianCredentialsRuntimeRefreshRejectsOlderCASResultAppliedLater(t *te
 
 	var configured []string
 	s := &Server{setBailianCopyConfig: func(cfg voice.BailianConfig) { configured = append(configured, cfg.APIKey) }}
-	s.applyBailianCredentialRuntime(resolvedBailianCredential{Config: second, Source: bailianCredentialSourceShared})
-	s.applyBailianCredentialRuntime(resolvedBailianCredential{Config: first, Source: bailianCredentialSourceShared})
+	s.applyBailianCredentialRuntime(resolvedBailianCredential{Config: second, Source: bailianCredentialSourceShared, runtimeEpoch: bailianCredentialRuntimeEpochShared, runtimeVersion: second.Version})
+	s.applyBailianCredentialRuntime(resolvedBailianCredential{Config: first, Source: bailianCredentialSourceShared, runtimeEpoch: bailianCredentialRuntimeEpochShared, runtimeVersion: first.Version})
 
 	if len(configured) != 1 || configured[0] != "sk-version-two" {
 		t.Fatalf("configured sequence=%v want only latest database version", configured)
+	}
+}
+
+func TestBailianCredentialsRuntimeRefreshRejectsOlderLegacyVersionAppliedLater(t *testing.T) {
+	var configured []string
+	s := &Server{setBailianCopyConfig: func(cfg voice.BailianConfig) { configured = append(configured, cfg.APIKey) }}
+	s.applyBailianCredentialRuntime(resolvedBailianCredential{
+		Config: bailianconfig.Config{APIKey: "sk-legacy-new"}, Source: bailianCredentialSourceLegacyTTS,
+		runtimeEpoch: bailianCredentialRuntimeEpochLegacy, runtimeVersion: 8,
+	})
+	s.applyBailianCredentialRuntime(resolvedBailianCredential{
+		Config: bailianconfig.Config{APIKey: "sk-legacy-old"}, Source: bailianCredentialSourceLegacyASR,
+		runtimeEpoch: bailianCredentialRuntimeEpochLegacy, runtimeVersion: 7,
+	})
+	if len(configured) != 1 || configured[0] != "sk-legacy-new" {
+		t.Fatalf("configured=%v want only newer legacy version", configured)
+	}
+}
+
+func TestBailianCredentialsRuntimeSharedAlwaysOutranksLegacyVersion(t *testing.T) {
+	var configured []string
+	s := &Server{setBailianCopyConfig: func(cfg voice.BailianConfig) { configured = append(configured, cfg.APIKey) }}
+	s.applyBailianCredentialRuntime(resolvedBailianCredential{
+		Config: bailianconfig.Config{Version: 1, APIKey: "sk-shared"}, Source: bailianCredentialSourceShared,
+		runtimeEpoch: bailianCredentialRuntimeEpochShared, runtimeVersion: 1,
+	})
+	s.applyBailianCredentialRuntime(resolvedBailianCredential{
+		Config: bailianconfig.Config{APIKey: "sk-legacy-high-version"}, Source: bailianCredentialSourceLegacyTTS,
+		runtimeEpoch: bailianCredentialRuntimeEpochLegacy, runtimeVersion: 999,
+	})
+	if len(configured) != 1 || configured[0] != "sk-shared" {
+		t.Fatalf("configured=%v want shared credential to remain active", configured)
+	}
+}
+
+func TestBailianCredentialsNewerLegacyNoneClearsOlderLegacyRuntime(t *testing.T) {
+	var configured []string
+	s := &Server{setBailianCopyConfig: func(cfg voice.BailianConfig) { configured = append(configured, cfg.APIKey) }}
+	s.applyBailianCredentialRuntime(resolvedBailianCredential{
+		Config: bailianconfig.Config{APIKey: "sk-legacy-old"}, Source: bailianCredentialSourceLegacyTTS,
+		runtimeEpoch: bailianCredentialRuntimeEpochLegacy, runtimeVersion: 4,
+	})
+	s.applyBailianCredentialRuntime(resolvedBailianCredential{
+		Source:       bailianCredentialSourceNone,
+		runtimeEpoch: bailianCredentialRuntimeEpochLegacy, runtimeVersion: 5,
+	})
+	if len(configured) != 2 || configured[0] != "sk-legacy-old" || configured[1] != "" {
+		t.Fatalf("configured=%v want newer legacy none to clear runtime", configured)
+	}
+}
+
+func TestBailianCredentialsLegacyRuntimeOrderingDoesNotChangePublicCASVersion(t *testing.T) {
+	view := buildBailianCredentialView(resolvedBailianCredential{
+		Config: bailianconfig.Config{APIKey: "sk-legacy"}, Source: bailianCredentialSourceLegacyTTS,
+		runtimeEpoch: bailianCredentialRuntimeEpochLegacy, runtimeVersion: 99,
+	})
+	if view.Version != 0 {
+		t.Fatalf("public version=%d want shared CAS version 0 for legacy fallback", view.Version)
 	}
 }
 

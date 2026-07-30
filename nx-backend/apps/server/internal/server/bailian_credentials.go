@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	pathpkg "path"
@@ -28,6 +29,10 @@ const (
 	bailianCredentialSourceLegacyASR = "legacy-asr"
 	bailianCredentialSourceNone      = "none"
 
+	bailianCredentialRuntimeEpochNone   = 0
+	bailianCredentialRuntimeEpochLegacy = 1
+	bailianCredentialRuntimeEpochShared = 2
+
 	maxSharedBailianAPIKeyRunes = 4096
 )
 
@@ -48,7 +53,9 @@ func (s databaseBailianCredentialStore) Update(ctx context.Context, apiKey strin
 
 type resolvedBailianCredential struct {
 	bailianconfig.Config
-	Source string
+	Source         string
+	runtimeEpoch   int
+	runtimeVersion int64
 }
 
 type bailianCredentialView struct {
@@ -67,6 +74,7 @@ type bailianCredentialUpdateRequest struct {
 type bailianCredentialRuntimeState struct {
 	sync.Mutex
 	set     bool
+	epoch   int
 	version int64
 }
 
@@ -83,7 +91,8 @@ func (s *Server) bailianCredentialsHandler(w http.ResponseWriter, r *http.Reques
 	if r.Method == http.MethodGet {
 		resolved, err := s.resolveBailianCredentials(r.Context())
 		if err != nil {
-			httpx.Fail(w, http.StatusInternalServerError, err.Error())
+			log.Printf("bailian credentials read failed: %v", err)
+			httpx.Fail(w, http.StatusInternalServerError, "百炼凭证读取失败")
 			return
 		}
 		httpx.OK(w, buildBailianCredentialView(resolved))
@@ -116,15 +125,20 @@ func (s *Server) bailianCredentialsHandler(w http.ResponseWriter, r *http.Reques
 			httpx.Fail(w, http.StatusConflict, "bailian_credentials_version_conflict")
 			return
 		}
-		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		log.Printf("bailian credentials update failed: %v", err)
+		httpx.Fail(w, http.StatusInternalServerError, "百炼凭证保存失败")
 		return
 	}
 
-	resolved := resolvedBailianCredential{Config: updated, Source: bailianCredentialSourceShared}
+	resolved := resolvedBailianCredential{
+		Config: updated, Source: bailianCredentialSourceShared,
+		runtimeEpoch: bailianCredentialRuntimeEpochShared, runtimeVersion: updated.Version,
+	}
 	if updated.Version == 0 {
 		resolved, err = s.refreshBailianCopyCredentials(r.Context())
 		if err != nil {
-			httpx.Fail(w, http.StatusInternalServerError, err.Error())
+			log.Printf("bailian credentials refresh after no-op failed: %v", err)
+			httpx.Fail(w, http.StatusInternalServerError, "百炼凭证读取失败")
 			return
 		}
 	} else {
@@ -143,27 +157,32 @@ func (s *Server) resolveBailianCredentials(ctx context.Context) (resolvedBailian
 	}
 	if found {
 		shared.APIKey = strings.TrimSpace(shared.APIKey)
-		return resolvedBailianCredential{Config: shared, Source: bailianCredentialSourceShared}, nil
+		return resolvedBailianCredential{
+			Config: shared, Source: bailianCredentialSourceShared,
+			runtimeEpoch: bailianCredentialRuntimeEpochShared, runtimeVersion: shared.Version,
+		}, nil
 	}
 
 	if s.xinzhiliModelConfig == nil {
-		return resolvedBailianCredential{Source: bailianCredentialSourceNone}, nil
+		return resolvedBailianCredential{Source: bailianCredentialSourceNone, runtimeEpoch: bailianCredentialRuntimeEpochNone}, nil
 	}
 	legacy, legacyFound, err := s.xinzhiliModelConfig.Read(ctx)
 	if err != nil {
 		return resolvedBailianCredential{}, err
 	}
 	if !legacyFound {
-		return resolvedBailianCredential{Source: bailianCredentialSourceNone}, nil
+		return resolvedBailianCredential{Source: bailianCredentialSourceNone, runtimeEpoch: bailianCredentialRuntimeEpochNone}, nil
 	}
+	legacyRuntimeVersion := legacy.Version
 
 	ttsKey := strings.TrimSpace(legacy.TTS.APIKey)
 	ttsProvider := strings.ToLower(strings.TrimSpace(legacy.TTS.Provider))
 	if ttsKey != "" && (ttsProvider == xinzhili.TTSProviderBailian ||
 		(ttsProvider == xinzhili.TTSProviderOpenAICompatible && isOfficialDashScopeTTSEndpoint(legacy.TTS.Endpoint))) {
 		return resolvedBailianCredential{
-			Config: bailianconfig.Config{APIKey: ttsKey},
-			Source: bailianCredentialSourceLegacyTTS,
+			Config:       bailianconfig.Config{APIKey: ttsKey},
+			Source:       bailianCredentialSourceLegacyTTS,
+			runtimeEpoch: bailianCredentialRuntimeEpochLegacy, runtimeVersion: legacyRuntimeVersion,
 		}, nil
 	}
 
@@ -172,11 +191,15 @@ func (s *Server) resolveBailianCredentials(ctx context.Context) (resolvedBailian
 		strings.TrimSpace(legacy.RealtimeASR.Model) == xinzhili.RealtimeASRModel &&
 		isOfficialDashScopeRealtimeASREndpoint(legacy.RealtimeASR.Endpoint) {
 		return resolvedBailianCredential{
-			Config: bailianconfig.Config{APIKey: asrKey},
-			Source: bailianCredentialSourceLegacyASR,
+			Config:       bailianconfig.Config{APIKey: asrKey},
+			Source:       bailianCredentialSourceLegacyASR,
+			runtimeEpoch: bailianCredentialRuntimeEpochLegacy, runtimeVersion: legacyRuntimeVersion,
 		}, nil
 	}
-	return resolvedBailianCredential{Source: bailianCredentialSourceNone}, nil
+	return resolvedBailianCredential{
+		Source:       bailianCredentialSourceNone,
+		runtimeEpoch: bailianCredentialRuntimeEpochLegacy, runtimeVersion: legacyRuntimeVersion,
+	}, nil
 }
 
 func isOfficialDashScopeTTSEndpoint(raw string) bool {
@@ -240,7 +263,8 @@ func (s *Server) refreshBailianCopyCredentials(ctx context.Context) (resolvedBai
 func (s *Server) applyBailianCredentialRuntime(resolved resolvedBailianCredential) {
 	s.bailianRuntime.Lock()
 	defer s.bailianRuntime.Unlock()
-	if s.bailianRuntime.set && resolved.Version < s.bailianRuntime.version {
+	if s.bailianRuntime.set && (resolved.runtimeEpoch < s.bailianRuntime.epoch ||
+		(resolved.runtimeEpoch == s.bailianRuntime.epoch && resolved.runtimeVersion < s.bailianRuntime.version)) {
 		return
 	}
 	if s.setBailianCopyConfig == nil {
@@ -252,7 +276,8 @@ func (s *Server) applyBailianCredentialRuntime(resolved resolvedBailianCredentia
 		TargetModel: defaultSharedBailianCloneModel,
 	})
 	s.bailianRuntime.set = true
-	s.bailianRuntime.version = resolved.Version
+	s.bailianRuntime.epoch = resolved.runtimeEpoch
+	s.bailianRuntime.version = resolved.runtimeVersion
 }
 
 func buildBailianCredentialView(resolved resolvedBailianCredential) bailianCredentialView {

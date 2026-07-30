@@ -25,6 +25,31 @@ func TestVbenCompatibleAPI(t *testing.T) {
 	}
 }
 
+func TestBailianCredentialRouteEnforcesEitherPermissionWithRealMux(t *testing.T) {
+	handler, _ := newTestServer(t)
+	adminToken := loginToken(t, handler)
+
+	tests := []struct {
+		name       string
+		token      func() string
+		method     string
+		wantStatus int
+	}{
+		{name: "voice profile permission", token: func() string { return tokenWithMenus(t, handler, adminToken, "bailian_voice_profile", []int{701}) }, method: http.MethodGet, wantStatus: http.StatusOK},
+		{name: "xinzhili model permission", token: func() string { return tokenWithMenus(t, handler, adminToken, "bailian_xinzhili", []int{1103}) }, method: http.MethodGet, wantStatus: http.StatusOK},
+		{name: "missing permission", token: func() string { return lowPermissionToken(t, handler, adminToken) }, method: http.MethodGet, wantStatus: http.StatusForbidden},
+		{name: "invalid method", token: func() string { return tokenWithMenus(t, handler, adminToken, "bailian_invalid_method", []int{701}) }, method: http.MethodPost, wantStatus: http.StatusMethodNotAllowed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := perform(handler, tt.method, "/api/voice/bailian-credentials", tt.token(), nil)
+			if response.Code != tt.wantStatus {
+				t.Fatalf("status=%d want=%d body=%s", response.Code, tt.wantStatus, response.Body.String())
+			}
+		})
+	}
+}
+
 func testVbenCompatibleAPI(t *testing.T) {
 	handler, configPath := newTestServer(t)
 	var adminToken string
