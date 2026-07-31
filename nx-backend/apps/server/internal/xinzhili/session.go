@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -189,30 +190,35 @@ const (
 )
 
 type activeTurn struct {
-	input          StartTurnInput
-	conversation   Conversation
-	card           Card
-	asr            ASRSession
-	engine         StrategyEngine
-	ctx            context.Context
-	cancel         context.CancelFunc
-	hasSpeech      bool
-	processing     bool
-	endpointing    bool
-	transcripts    []string
-	draft          string
-	answer         string
-	sources        []rag.Source
-	assistantID    int64
-	segments       map[uint32]string
-	lastAck        int64
-	completionDone bool
-	generationErr  error
-	chunker        streamSentenceChunker
-	ttsJobs        chan ttsStreamJob
-	nextTTSSeq     uint32
-	nextTurnSeq    uint64
-	doneSent       bool
+	input                    StartTurnInput
+	conversation             Conversation
+	card                     Card
+	asr                      ASRSession
+	engine                   StrategyEngine
+	ctx                      context.Context
+	cancel                   context.CancelFunc
+	hasSpeech                bool
+	processing               bool
+	endpointing              bool
+	finishReturned           bool
+	asrTaskFinished          bool
+	endpointCancelled        bool
+	pendingCancellationCount uint64
+	transcripts              []string
+	interruptionPrefix       string
+	draft                    string
+	answer                   string
+	sources                  []rag.Source
+	assistantID              int64
+	segments                 map[uint32]string
+	lastAck                  int64
+	completionDone           bool
+	generationErr            error
+	chunker                  streamSentenceChunker
+	ttsJobs                  chan ttsStreamJob
+	nextTTSSeq               uint32
+	nextTurnSeq              uint64
+	doneSent                 bool
 }
 
 type ttsStreamJob struct {
@@ -447,7 +453,8 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 			current.cancel()
 			return
 		}
-		s.beginProcessing(current, event.answer)
+		current.finishReturned = true
+		s.completeStrategyEndpoint(current)
 	case eventASRClosed:
 		if event.err == nil || errors.Is(event.err, context.Canceled) {
 			return
@@ -478,6 +485,9 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 		}
 	case eventTTSDone:
 		current.completionDone = true
+		if current.engine != nil {
+			s.executeStrategyActions(current, current.engine.Apply(Signal{Kind: SignalAssistantStopped}))
+		}
 		if current.assistantID > 0 && current.generationErr == nil && current.answer != "" {
 			sources, _ := json.Marshal(current.sources)
 			_ = s.deps.Conversations.CompleteAssistant(current.ctx, current.assistantID, current.answer, sources)
@@ -512,7 +522,7 @@ func (s *session) confirmCompletedPlayback(turn *activeTurn) {
 }
 
 func (s *session) handleASREvent(turn *activeTurn, event ASREvent) {
-	if turn.processing {
+	if turn.processing && event.Kind != ASREventSpeechStarted {
 		return
 	}
 	switch event.Kind {
@@ -522,7 +532,7 @@ func (s *session) handleASREvent(turn *activeTurn, event ASREvent) {
 		if turn.engine != nil {
 			s.executeStrategyActions(turn, turn.engine.Apply(Signal{Kind: SignalSpeechStarted}))
 		}
-		if firstSpeech {
+		if firstSpeech && !turn.processing {
 			if err := s.sendTurnControl(turn, EventASRActivity, map[string]any{"state": "speech_started"}); err != nil {
 				turn.cancel()
 			}
@@ -552,25 +562,104 @@ func (s *session) handleASREvent(turn *activeTurn, event ASREvent) {
 		}
 		s.executeStrategyActions(turn, turn.engine.Apply(Signal{Kind: SignalStableText, Transcript: text, Stable: true}))
 		s.executeStrategyActions(turn, turn.engine.Apply(Signal{Kind: SignalSilence}))
+	case ASREventTaskFinished:
+		turn.asrTaskFinished = true
+		s.completeStrategyEndpoint(turn)
 	}
 }
 
 func (s *session) executeStrategyActions(turn *activeTurn, actions []Action) {
 	for _, action := range actions {
+		var err error
 		switch action.Kind {
 		case ActionEndpoint:
 			s.beginStrategyEndpoint(turn)
 		case ActionCancelPending:
-			// The engine has cancelled its acoustic endpoint timer. Until an
-			// endpoint is committed there is no external work to cancel.
+			err = s.cancelPendingStrategyWork(turn)
 		case ActionStopAssistant:
-			// Playback interruption is owned by the surrounding realtime
-			// protocol session. The turn remains live for the new speech.
-		case ActionComfortPrompt, ActionQueueInterruptionPrefix:
-			// Prompt delivery is intentionally separate from user transcript
-			// endpointing; retaining the action boundary prevents it from being
-			// mistaken for recognized user text.
+			err = s.sendTurnControl(turn, EventPlaybackInterrupt, map[string]any{"reason": "speech_started"})
+		case ActionComfortPrompt:
+			err = s.startStrategyPrompt(turn, action.TextKey)
+		case ActionQueueInterruptionPrefix:
+			turn.interruptionPrefix, err = strategyActionText(action.TextKey)
+		default:
+			err = fmt.Errorf("xinzhili: unknown strategy action %d", action.Kind)
 		}
+		if err != nil {
+			s.failStrategyAction(turn)
+			return
+		}
+	}
+}
+
+func (s *session) failStrategyAction(turn *activeTurn) {
+	if turn == nil {
+		return
+	}
+	s.sendError(turn, "strategy_action_failed", "语音交互动作执行失败，请重试", true)
+	_ = s.sendAssistantDone(turn)
+	turn.processing = true
+	turn.cancel()
+}
+
+func (s *session) cancelPendingStrategyWork(turn *activeTurn) error {
+	if turn == nil {
+		return errors.New("xinzhili: strategy turn missing")
+	}
+	turn.pendingCancellationCount++
+	if !turn.endpointing && !turn.processing {
+		return nil
+	}
+	turn.endpointCancelled = true
+	if err := s.sendTurnControl(turn, EventTurnCancelled, map[string]any{"reason": "strategy_cancel_pending"}); err != nil {
+		return err
+	}
+	if err := s.sendAssistantDone(turn); err != nil {
+		return err
+	}
+	turn.processing = true
+	turn.cancel()
+	return nil
+}
+
+func (s *session) startStrategyPrompt(turn *activeTurn, textKey string) error {
+	if turn == nil || turn.processing || turn.endpointing {
+		return errors.New("xinzhili: strategy prompt conflicts with active work")
+	}
+	if s.deps.Synthesizer == nil {
+		return errors.New("xinzhili: strategy prompt synthesizer missing")
+	}
+	text, err := strategyActionText(textKey)
+	if err != nil {
+		return err
+	}
+	if err := s.sendTurnControl(turn, EventTurnProcessing, map[string]any{"proactive": true, "textKey": textKey}); err != nil {
+		return err
+	}
+	turn.processing = true
+	turn.draft = text
+	turn.answer = text
+	turn.ttsJobs = make(chan ttsStreamJob, 1)
+	s.startSynthesisWorker(turn)
+	s.queueTTSChunk(turn, text)
+	close(turn.ttsJobs)
+	return nil
+}
+
+func strategyActionText(textKey string) (string, error) {
+	switch strings.TrimSpace(textKey) {
+	case "comfort.first_silence":
+		return "我在这里，你可以慢慢说。", nil
+	case "comfort.second_silence":
+		return "不用着急，想到哪里就说到哪里。", nil
+	case "comfort.mid_sentence":
+		return "没关系，慢慢来，我在听。", nil
+	case "deep_listening.silence":
+		return "我会安静陪着你，准备好了再继续。", nil
+	case "argument.important_interruption":
+		return "我听到了，这一点很重要。", nil
+	default:
+		return "", fmt.Errorf("xinzhili: unknown strategy text key %q", textKey)
 	}
 }
 
@@ -578,15 +667,22 @@ func (s *session) beginStrategyEndpoint(turn *activeTurn) {
 	if turn == nil || turn.engine == nil || turn.processing || turn.endpointing {
 		return
 	}
-	question := turnTranscript(turn)
-	if !hasMeaningfulTranscript(question) {
+	if !hasMeaningfulTranscript(turnTranscript(turn)) {
 		return
 	}
 	turn.endpointing = true
-	go func(turnID string, asr ASRSession, ctx context.Context, text string) {
+	go func(turnID string, asr ASRSession, ctx context.Context) {
 		err := asr.FinishInput(ctx)
-		s.postEvent(sessionEvent{kind: eventASRInputFinished, turnID: turnID, answer: text, err: err})
-	}(turn.input.TurnID, turn.asr, turn.ctx, question)
+		s.postEvent(sessionEvent{kind: eventASRInputFinished, turnID: turnID, err: err})
+	}(turn.input.TurnID, turn.asr, turn.ctx)
+}
+
+func (s *session) completeStrategyEndpoint(turn *activeTurn) {
+	if turn == nil || !turn.endpointing || turn.processing || turn.endpointCancelled ||
+		!turn.finishReturned || !turn.asrTaskFinished {
+		return
+	}
+	s.beginProcessing(turn, turnTranscript(turn))
 }
 
 func (s *session) beginProcessing(turn *activeTurn, text string) {
@@ -654,8 +750,13 @@ func turnTranscript(turn *activeTurn) string {
 }
 
 func (s *session) startGeneration(turn *activeTurn, question string) {
+	prefix := turn.interruptionPrefix
+	turn.interruptionPrefix = ""
 	if rag.IsModelIdentityQuestion(question) {
 		go func() {
+			if prefix != "" && !s.postEvent(sessionEvent{kind: eventGenerationDelta, turnID: turn.input.TurnID, answer: prefix}) {
+				return
+			}
 			if !s.postEvent(sessionEvent{kind: eventGenerationDelta, turnID: turn.input.TurnID, answer: rag.ModelIdentityReply}) {
 				return
 			}
@@ -664,6 +765,9 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 		return
 	}
 	go func() {
+		if prefix != "" && !s.postEvent(sessionEvent{kind: eventGenerationDelta, turnID: turn.input.TurnID, answer: prefix}) {
+			return
+		}
 		history, summary, _ := s.deps.Conversations.History(turn.ctx, turn.conversation, 20)
 		preferences := []string(nil)
 		if s.deps.Preferences != nil {
@@ -800,6 +904,9 @@ func (s *session) acceptAudioSegment(turn *activeTurn, segment AudioSegment) err
 	}
 	if err := s.sendTurnControl(turn, EventAssistantAudioEnd, map[string]any{"segmentSeq": segment.Seq}); err != nil {
 		return err
+	}
+	if turn.engine != nil && len(turn.segments) == 0 {
+		s.executeStrategyActions(turn, turn.engine.Apply(Signal{Kind: SignalAssistantStarted}))
 	}
 	turn.segments[segment.Seq] = text
 	if turn.assistantID == 0 {

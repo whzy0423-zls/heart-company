@@ -219,6 +219,180 @@ func TestSessionStrategyFinishInputFailureConvergesToErrorAndDone(t *testing.T) 
 	}
 }
 
+func TestSessionStrategyDrainsTailFinalBeforeProcessing(t *testing.T) {
+	fixture := newSessionFixture(t)
+	engine := newScriptedStrategyEngine()
+	engine.applyActions = func(signal Signal) []Action {
+		if signal.Kind == SignalSilence {
+			return []Action{{Kind: ActionEndpoint}}
+		}
+		return nil
+	}
+	fixture.asr.finishHook = func(asr *fakeASRSession) {
+		asr.emit(ASREvent{Kind: ASREventFinal, Final: "尾部补充。", Stable: true})
+		asr.emit(ASREvent{Kind: ASREventTaskFinished})
+	}
+	fixture.session.Close()
+	fixture.deps.EngineFactory = func(Mode, TimingConfig, Clock) StrategyEngine { return engine }
+	fixture.session = NewSession(fixture.deps)
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-tail-final")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "主体内容。", Stable: true})
+	fixture.generator.waitCalled(t)
+	if got := fixture.generator.lastInput().Question; got != "主体内容。尾部补充。" {
+		t.Fatalf("drained question=%q", got)
+	}
+}
+
+func TestSessionStrategyStopAssistantEmitsPlaybackInterrupt(t *testing.T) {
+	fixture := newSessionFixture(t)
+	engine := newScriptedStrategyEngine()
+	engine.applyActions = func(signal Signal) []Action {
+		if signal.Kind == SignalSpeechStarted {
+			return []Action{{Kind: ActionStopAssistant}}
+		}
+		return nil
+	}
+	fixture.session.Close()
+	fixture.deps.EngineFactory = func(Mode, TimingConfig, Clock) StrategyEngine { return engine }
+	fixture.session = NewSession(fixture.deps)
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-stop-assistant")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventSpeechStarted})
+	event := fixture.sink.waitControl(t, EventPlaybackInterrupt)
+	if event.TurnID == nil || *event.TurnID != "turn-stop-assistant" {
+		t.Fatalf("playback.interrupt turnId=%v", event.TurnID)
+	}
+}
+
+func TestSessionStrategyCancelPendingCancelsEndpointBeforeGeneration(t *testing.T) {
+	fixture := newSessionFixture(t)
+	engine := newScriptedStrategyEngine()
+	var endpointStarted bool
+	engine.applyActions = func(signal Signal) []Action {
+		switch signal.Kind {
+		case SignalSilence:
+			endpointStarted = true
+			return []Action{{Kind: ActionEndpoint}}
+		case SignalSpeechStarted:
+			if endpointStarted {
+				return []Action{{Kind: ActionCancelPending}}
+			}
+		}
+		return nil
+	}
+	finishStarted := make(chan struct{})
+	releaseFinish := make(chan struct{})
+	fixture.asr.finishHook = func(asr *fakeASRSession) {
+		close(finishStarted)
+		<-releaseFinish
+		asr.emit(ASREvent{Kind: ASREventTaskFinished})
+	}
+	fixture.session.Close()
+	fixture.deps.EngineFactory = func(Mode, TimingConfig, Clock) StrategyEngine { return engine }
+	fixture.session = NewSession(fixture.deps)
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-cancel-pending")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "第一段", Stable: true})
+	select {
+	case <-finishStarted:
+	case <-time.After(time.Second):
+		t.Fatal("FinishInput did not start")
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventSpeechStarted})
+	fixture.sink.waitControl(t, EventTurnCancelled)
+	fixture.sink.waitControl(t, EventAssistantDone)
+	close(releaseFinish)
+	time.Sleep(30 * time.Millisecond)
+	if fixture.generator.calls() != 0 || fixture.store.userCount() != 0 {
+		t.Fatalf("cancelled endpoint generated=%d users=%d", fixture.generator.calls(), fixture.store.userCount())
+	}
+}
+
+func TestSessionStrategyComfortPromptUsesExistingTTSDelivery(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.synth.segments = nil
+	engine := newScriptedStrategyEngine()
+	fixture.session.Close()
+	fixture.deps.EngineFactory = func(Mode, TimingConfig, Clock) StrategyEngine { return engine }
+	fixture.session = NewSession(fixture.deps)
+
+	input := fixture.input("turn-comfort-prompt")
+	input.Mode = ModeComfort
+	if err := fixture.session.StartTurn(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	engine.setTickActions(Action{Kind: ActionComfortPrompt, TextKey: "comfort.first_silence"})
+	segment := fixture.sink.waitAudio(t)
+	if segment.DeliveryText() != "我在这里，你可以慢慢说。" {
+		t.Fatalf("comfort prompt=%q", segment.DeliveryText())
+	}
+	fixture.sink.waitControl(t, EventAssistantDone)
+}
+
+func TestSessionStrategyQueuesInterruptionPrefixForNextAnswer(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.synth.segments = nil
+	engine := newScriptedStrategyEngine()
+	engine.applyActions = func(signal Signal) []Action {
+		switch signal.Kind {
+		case SignalStableText:
+			return []Action{{Kind: ActionQueueInterruptionPrefix, TextKey: "argument.important_interruption"}}
+		case SignalSilence:
+			return []Action{{Kind: ActionEndpoint}}
+		default:
+			return nil
+		}
+	}
+	fixture.session.Close()
+	fixture.deps.EngineFactory = func(Mode, TimingConfig, Clock) StrategyEngine { return engine }
+	fixture.session = NewSession(fixture.deps)
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-prefix")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "这点对我很重要", Stable: true})
+	segment := fixture.sink.waitAudio(t)
+	if segment.DeliveryText() != "我听到了，这一点很重要。" {
+		t.Fatalf("interruption prefix=%q", segment.DeliveryText())
+	}
+}
+
+func TestSessionStrategyActionFailureConvergesToErrorAndDone(t *testing.T) {
+	fixture := newSessionFixture(t)
+	engine := newScriptedStrategyEngine()
+	engine.applyActions = func(signal Signal) []Action {
+		if signal.Kind == SignalSpeechStarted {
+			return []Action{{Kind: ActionStopAssistant}}
+		}
+		return nil
+	}
+	fixture.sink.failKind = EventPlaybackInterrupt
+	fixture.session.Close()
+	fixture.deps.EngineFactory = func(Mode, TimingConfig, Clock) StrategyEngine { return engine }
+	fixture.session = NewSession(fixture.deps)
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-action-failed")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventSpeechStarted})
+	event := fixture.sink.waitControl(t, EventError)
+	var payload ErrorPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Code != "strategy_action_failed" {
+		t.Fatalf("error code=%q", payload.Code)
+	}
+	fixture.sink.waitControl(t, EventAssistantDone)
+}
+
 func TestConversationWithoutChatModelReturnsStableError(t *testing.T) {
 	fixture := newSessionFixture(t)
 	fixture.session.Close()
@@ -889,6 +1063,7 @@ type fakeSessionSink struct {
 	controls chan Envelope
 	audio    chan AudioSegment
 	wire     chan fakeSessionWireEvent
+	failKind EventType
 }
 
 type fakeSessionWireEvent struct {
@@ -904,6 +1079,10 @@ func newFakeSessionSink() *fakeSessionSink {
 	}
 }
 func (s *fakeSessionSink) SendControl(_ context.Context, event Envelope) error {
+	if event.Type == s.failKind {
+		s.failKind = ""
+		return errors.New("control failed")
+	}
 	s.controls <- event
 	copy := event
 	s.wire <- fakeSessionWireEvent{control: &copy}
@@ -1006,6 +1185,7 @@ type fakeASRSession struct {
 	err         error
 	finishErr   error
 	finishCalls int
+	finishHook  func(*fakeASRSession)
 	once        sync.Once
 }
 
@@ -1015,9 +1195,15 @@ func newFakeASRSession() *fakeASRSession {
 func (s *fakeASRSession) WritePCM(context.Context, []byte) error { return nil }
 func (s *fakeASRSession) FinishInput(context.Context) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.finishCalls++
-	return s.finishErr
+	err, hook := s.finishErr, s.finishHook
+	s.mu.Unlock()
+	if hook != nil {
+		hook(s)
+	} else if err == nil {
+		s.emit(ASREvent{Kind: ASREventTaskFinished})
+	}
+	return err
 }
 func (s *fakeASRSession) Events() <-chan ASREvent { return s.events }
 func (s *fakeASRSession) Err() error              { s.mu.Lock(); defer s.mu.Unlock(); return s.err }
