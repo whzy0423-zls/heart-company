@@ -50,10 +50,12 @@ type xinzhiliRealtimeConn struct {
 	userID         int64
 	sink           *xinzhiliWSSink
 	sess           xinzhili.TurnSession
+	configStateMu  sync.Mutex
 	mu             sync.Mutex
 	closed         bool
 	sessionID      string
 	configVersion  int64
+	enabledModes   []xinzhili.Mode
 	generation     uint32
 	cardID         int64
 	conversationID int64
@@ -318,6 +320,7 @@ func (c *xinzhiliRealtimeConn) startSession(ctx context.Context, e xinzhili.Enve
 	c.mu.Lock()
 	c.sess = xinzhili.NewSession(deps)
 	c.configVersion = cfg.Version
+	c.enabledModes = append([]xinzhili.Mode(nil), cfg.EnabledModes...)
 	c.mu.Unlock()
 	readyPayload := map[string]any{"sessionId": c.sessionID, "cardId": p.CardID, "conversationId": p.ConversationID}
 	mergeXinzhiliModeSnapshot(readyPayload, modeSnapshot)
@@ -334,41 +337,57 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 		c.sendError(ctx, "invalid_turn", "轮次参数无效", false, false)
 		return
 	}
-	cfg, found, err := c.server.readXinzhiliRealtimeConfig(ctx)
-	if err != nil || !found || !cfg.Enabled {
-		c.sendError(ctx, "xinzhili_not_configured", "请先配置芯之力会话模型后重试", false, true)
-		return
-	}
-	c.mu.Lock()
-	currentConfigVersion := c.configVersion
-	c.mu.Unlock()
-	if cfg.Version > currentConfigVersion {
-		if err := c.applyXinzhiliConfigChanged(ctx, cfg); err != nil {
+	var cfg xinzhili.Config
+	for {
+		var found bool
+		cfg, found, err = c.server.readXinzhiliRealtimeConfig(ctx)
+		if err != nil || !found || !cfg.Enabled {
+			c.sendError(ctx, "xinzhili_not_configured", "请先配置芯之力会话模型后重试", false, true)
 			return
 		}
+		c.mu.Lock()
+		currentConfigVersion := c.configVersion
+		c.mu.Unlock()
+		if cfg.Version > currentConfigVersion {
+			if err := c.applyXinzhiliConfigChanged(ctx, cfg); err != nil {
+				return
+			}
+		}
+		cfg, err = c.server.withXinzhiliRuntimeCredentials(ctx, cfg)
+		if err != nil {
+			c.sendError(ctx, "xinzhili_credentials_unavailable", "芯之力语音凭证暂不可用", true, false)
+			return
+		}
+
+		c.configStateMu.Lock()
+		c.mu.Lock()
+		currentConfigVersion = c.configVersion
+		if currentConfigVersion <= cfg.Version {
+			mode := c.pendingMode
+			if !modeEnabled(cfg.EnabledModes, mode) {
+				mode = xinzhili.ModeNormal
+			}
+			cardID, conversationID := c.cardID, c.conversationID
+			previousTurnKey := c.turnKey
+			sequence := c.sequence
+			c.mu.Unlock()
+			c.configStateMu.Unlock()
+
+			c.startTurnWithConfig(ctx, e, turnKey, cfg, mode, cardID, conversationID, previousTurnKey, sequence)
+			return
+		}
+		c.mu.Unlock()
+		c.configStateMu.Unlock()
 	}
-	cfg, err = c.server.withXinzhiliRuntimeCredentials(ctx, cfg)
-	if err != nil {
-		c.sendError(ctx, "xinzhili_credentials_unavailable", "芯之力语音凭证暂不可用", true, false)
-		return
-	}
-	c.mu.Lock()
-	mode := c.pendingMode
-	previousTurnKey := c.turnKey
-	if !modeEnabled(cfg.EnabledModes, mode) {
-		mode = xinzhili.ModeNormal
-	}
-	cardID, conversationID := c.cardID, c.conversationID
-	c.mu.Unlock()
+}
+
+func (c *xinzhiliRealtimeConn) startTurnWithConfig(ctx context.Context, e xinzhili.Envelope, turnKey uint64, cfg xinzhili.Config, mode xinzhili.Mode, cardID, conversationID int64, previousTurnKey uint64, sequence *xinzhili.SequenceGuard) {
 	c.turnMu.Lock()
 	previousTurnID := c.turns[previousTurnKey]
 	c.turnMu.Unlock()
 	if previousTurnID != "" && previousTurnID != *e.TurnID {
 		c.releaseTurn(previousTurnID, true)
 	}
-	c.mu.Lock()
-	sequence := c.sequence
-	c.mu.Unlock()
 	if sequence != nil {
 		if err := sequence.RegisterActiveTurn(*e.TurnID, turnKey); err != nil {
 			c.sendError(ctx, "turn_key_collision", "轮次标识冲突，请重新开始", true, false)
@@ -383,13 +402,8 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 		c.sendError(ctx, "turn_start_failed", "无法开始当前轮次", true, false)
 		return
 	}
-	c.mu.Lock()
-	previousEffectiveMode := c.effectiveMode
-	c.effectiveMode = mode
-	c.pendingMode = mode
-	c.requestedMode = mode
-	modeTransitionCompleted := previousEffectiveMode != mode && !modeEnabled(cfg.EnabledModes, previousEffectiveMode)
-	c.mu.Unlock()
+
+	c.configStateMu.Lock()
 	c.turnMu.Lock()
 	c.turns[turnKey] = *e.TurnID
 	if c.audioSeq == nil {
@@ -400,11 +414,31 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 		delete(c.audioInputDone, turnKey)
 	}
 	c.turnMu.Unlock()
+
 	c.mu.Lock()
+	previousEffectiveMode := c.effectiveMode
+	c.effectiveMode = mode
+	if c.configVersion <= cfg.Version {
+		c.pendingMode = mode
+		c.requestedMode = mode
+		c.enabledModes = append([]xinzhili.Mode(nil), cfg.EnabledModes...)
+	}
+	authoritativeModes := c.enabledModes
+	if len(authoritativeModes) == 0 {
+		authoritativeModes = append([]xinzhili.Mode(nil), cfg.EnabledModes...)
+	}
 	c.turnKey = turnKey
+	modeTransitionCompleted := previousEffectiveMode != mode &&
+		(c.configVersion > cfg.Version || !modeEnabled(authoritativeModes, previousEffectiveMode))
+	snapshot := xinzhiliModeSnapshot{
+		EnabledModes:  append([]xinzhili.Mode(nil), authoritativeModes...),
+		RequestedMode: c.requestedMode, PendingMode: c.pendingMode,
+		EffectiveMode: c.effectiveMode, Revision: c.modeRevision, ConfigVersion: c.configVersion,
+	}
 	c.mu.Unlock()
+	c.configStateMu.Unlock()
 	if modeTransitionCompleted {
-		_ = c.sendControl(ctx, xinzhili.EventConfigChanged, c.modeSnapshot(cfg), nil, nil)
+		_ = c.sendControl(ctx, xinzhili.EventConfigChanged, snapshot, nil, nil)
 	}
 }
 
@@ -611,6 +645,7 @@ func (c *xinzhiliRealtimeConn) modeSnapshot(cfg xinzhili.Config) xinzhiliModeSna
 }
 
 func (c *xinzhiliRealtimeConn) applyXinzhiliConfigChanged(ctx context.Context, cfg xinzhili.Config) error {
+	c.configStateMu.Lock()
 	c.turnMu.Lock()
 	hasActiveTurn := len(c.turns) > 0
 	c.turnMu.Unlock()
@@ -618,6 +653,7 @@ func (c *xinzhiliRealtimeConn) applyXinzhiliConfigChanged(ctx context.Context, c
 	c.mu.Lock()
 	if cfg.Version <= c.configVersion {
 		c.mu.Unlock()
+		c.configStateMu.Unlock()
 		return nil
 	}
 	fallback := xinzhili.ModeNormal
@@ -634,12 +670,14 @@ func (c *xinzhiliRealtimeConn) applyXinzhiliConfigChanged(ctx context.Context, c
 		c.effectiveMode = fallback
 	}
 	c.configVersion = cfg.Version
+	c.enabledModes = append([]xinzhili.Mode(nil), cfg.EnabledModes...)
 	snapshot := xinzhiliModeSnapshot{
 		EnabledModes:  append([]xinzhili.Mode(nil), cfg.EnabledModes...),
 		RequestedMode: c.requestedMode, PendingMode: c.pendingMode,
 		EffectiveMode: c.effectiveMode, Revision: c.modeRevision, ConfigVersion: cfg.Version,
 	}
 	c.mu.Unlock()
+	c.configStateMu.Unlock()
 
 	return c.sendControl(ctx, xinzhili.EventConfigChanged, snapshot, nil, nil)
 }

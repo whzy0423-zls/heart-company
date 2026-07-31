@@ -57,14 +57,22 @@ type fakeXinzhiliModeStore struct {
 }
 
 type recordingXinzhiliTurnSession struct {
-	pcm      []xinzhili.PCMFrame
-	starts   []xinzhili.StartTurnInput
-	pushErr  error
-	pushErrs []error
+	pcm          []xinzhili.PCMFrame
+	starts       []xinzhili.StartTurnInput
+	pushErr      error
+	pushErrs     []error
+	startEntered chan struct{}
+	startRelease <-chan struct{}
 }
 
 func (s *recordingXinzhiliTurnSession) StartTurn(_ context.Context, input xinzhili.StartTurnInput) error {
 	s.starts = append(s.starts, input)
+	if s.startEntered != nil {
+		close(s.startEntered)
+	}
+	if s.startRelease != nil {
+		<-s.startRelease
+	}
 	return nil
 }
 func (s *recordingXinzhiliTurnSession) PushPCM(_ context.Context, frame xinzhili.PCMFrame) error {
@@ -411,6 +419,57 @@ func TestXinzhiliStartTurnRefreshesMissedHigherConfigVersionBeforeStarting(t *te
 	if c.configVersion != 22 || len(session.starts) != 1 || session.starts[0].Mode != xinzhili.ModeNormal {
 		t.Fatalf("version=%d starts=%+v", c.configVersion, session.starts)
 	}
+}
+
+func TestXinzhiliStartTurnDoesNotOverwriteNewConfigStateWhenSaveInterleaves(t *testing.T) {
+	serverWS, clientWS := newXinzhiliWebsocketPair(t)
+	oldConfig := validXinzhiliModelConfigForHandler()
+	oldConfig.Version = 31
+	oldConfig.EnabledModes = []xinzhili.Mode{xinzhili.ModeNormal, xinzhili.ModeArgument}
+	store := &fakeXinzhiliModelConfigStore{config: oldConfig, found: true}
+	startEntered := make(chan struct{})
+	startRelease := make(chan struct{})
+	session := &recordingXinzhiliTurnSession{startEntered: startEntered, startRelease: startRelease}
+	c := &xinzhiliRealtimeConn{
+		server: &Server{xinzhiliModelConfig: store}, ws: serverWS, sess: session,
+		userID: 10, sessionID: "xz-config-interleave", generation: 5, configVersion: 31,
+		requestedMode: xinzhili.ModeArgument, pendingMode: xinzhili.ModeArgument,
+		effectiveMode: xinzhili.ModeArgument, modeRevision: 4,
+		turns: map[uint64]string{}, audioSeq: map[uint64]uint32{},
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+
+	turnID := "turn-old-config"
+	startDone := make(chan struct{})
+	go func() {
+		defer close(startDone)
+		c.startTurn(context.Background(), xinzhili.Envelope{TurnID: &turnID, Payload: json.RawMessage(`{"turnKey":101}`)})
+	}()
+	<-startEntered
+
+	newConfig := oldConfig
+	newConfig.Version = 32
+	newConfig.EnabledModes = []xinzhili.Mode{xinzhili.ModeNormal}
+	applyDone := make(chan error, 1)
+	go func() { applyDone <- c.applyXinzhiliConfigChanged(context.Background(), newConfig) }()
+
+	// Force the newer config to finish applying while the old StartTurn is
+	// blocked, then let that stale StartTurn finish its state commit.
+	applyErr := <-applyDone
+	close(startRelease)
+	<-startDone
+	if applyErr != nil {
+		t.Fatal(applyErr)
+	}
+
+	if c.configVersion != 32 || c.requestedMode != xinzhili.ModeNormal || c.pendingMode != xinzhili.ModeNormal || c.effectiveMode != xinzhili.ModeArgument {
+		t.Fatalf("version=%d requested=%s pending=%s effective=%s", c.configVersion, c.requestedMode, c.pendingMode, c.effectiveMode)
+	}
+	if len(session.starts) != 1 || session.starts[0].Mode != xinzhili.ModeArgument {
+		t.Fatalf("active turn snapshot=%+v", session.starts)
+	}
+	readXinzhiliConfigChanged(t, clientWS, xinzhili.ModeNormal, 32)
+	readXinzhiliConfigChanged(t, clientWS, xinzhili.ModeArgument, 32)
 }
 
 func readXinzhiliConfigChanged(t *testing.T, client *websocket.Conn, effective xinzhili.Mode, version int64) {
