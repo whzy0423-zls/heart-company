@@ -574,7 +574,7 @@ func TestStrategyNewEngineAppliesZeroTimingDefaults(t *testing.T) {
 	engine := NewEngine(ModeNormal, TimingConfig{}, clock)
 	engine.Apply(Signal{Kind: SignalStableText, Transcript: "默认阈值"})
 	engine.Apply(Signal{Kind: SignalSilence})
-	clock.Advance(699 * time.Millisecond)
+	clock.Advance(499 * time.Millisecond)
 	assertStrategyActions(t, engine.Tick())
 	clock.Advance(time.Millisecond)
 	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})

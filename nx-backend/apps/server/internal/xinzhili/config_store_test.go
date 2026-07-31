@@ -69,7 +69,7 @@ func TestConfigStoreReadAppliesDefaultsToOlderStoredConfig(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("ReadConfig found=%v err=%v", found, err)
 	}
-	if got.Timing.PartialStableMs != 150 || got.Timing.NormalEndSilenceMs != 700 || got.Timing.MaxProactivePrompts != 2 {
+	if got.Timing.PartialStableMs != 120 || got.Timing.NormalEndSilenceMs != 500 || got.Timing.MaxProactivePrompts != 2 {
 		t.Fatalf("stored timing defaults not applied: %+v", got.Timing)
 	}
 }

@@ -354,6 +354,90 @@ func TestXinzhiliModeSnapshotJSONContract(t *testing.T) {
 	}
 }
 
+func TestXinzhiliConfigChangedKeepsActiveEffectiveModeUntilNextTurnStarts(t *testing.T) {
+	serverWS, clientWS := newXinzhiliWebsocketPair(t)
+	cfg := validXinzhiliModelConfigForHandler()
+	cfg.Version = 12
+	cfg.EnabledModes = []xinzhili.Mode{xinzhili.ModeNormal}
+	store := &fakeXinzhiliModelConfigStore{config: cfg, found: true}
+	session := &recordingXinzhiliTurnSession{}
+	c := &xinzhiliRealtimeConn{
+		server: &Server{xinzhiliModelConfig: store}, ws: serverWS, sess: session,
+		userID: 7, sessionID: "xz-transition", generation: 3, configVersion: 11,
+		requestedMode: xinzhili.ModeArgument, pendingMode: xinzhili.ModeArgument,
+		effectiveMode: xinzhili.ModeArgument, modeRevision: 5, turnKey: 71,
+		turns: map[uint64]string{71: "turn-old"}, audioSeq: map[uint64]uint32{},
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+
+	if err := c.applyXinzhiliConfigChanged(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if c.requestedMode != xinzhili.ModeNormal || c.pendingMode != xinzhili.ModeNormal || c.effectiveMode != xinzhili.ModeArgument {
+		t.Fatalf("active transition modes requested=%s pending=%s effective=%s", c.requestedMode, c.pendingMode, c.effectiveMode)
+	}
+	readXinzhiliConfigChanged(t, clientWS, xinzhili.ModeArgument, 12)
+
+	turnID := "turn-new"
+	c.startTurn(context.Background(), xinzhili.Envelope{TurnID: &turnID, Payload: json.RawMessage(`{"turnKey":72}`)})
+	if len(session.starts) != 1 || session.starts[0].Mode != xinzhili.ModeNormal {
+		t.Fatalf("starts=%+v", session.starts)
+	}
+	if c.effectiveMode != xinzhili.ModeNormal {
+		t.Fatalf("effective mode=%s want normal after successful next turn", c.effectiveMode)
+	}
+	readXinzhiliConfigChanged(t, clientWS, xinzhili.ModeNormal, 12)
+}
+
+func TestXinzhiliStartTurnRefreshesMissedHigherConfigVersionBeforeStarting(t *testing.T) {
+	serverWS, clientWS := newXinzhiliWebsocketPair(t)
+	cfg := validXinzhiliModelConfigForHandler()
+	cfg.Version = 22
+	cfg.EnabledModes = []xinzhili.Mode{xinzhili.ModeNormal}
+	store := &fakeXinzhiliModelConfigStore{config: cfg, found: true}
+	session := &recordingXinzhiliTurnSession{}
+	c := &xinzhiliRealtimeConn{
+		server: &Server{xinzhiliModelConfig: store}, ws: serverWS, sess: session,
+		userID: 8, sessionID: "xz-version-fallback", generation: 4, configVersion: 21,
+		requestedMode: xinzhili.ModeArgument, pendingMode: xinzhili.ModeArgument,
+		effectiveMode: xinzhili.ModeArgument, modeRevision: 2,
+		turns: map[uint64]string{}, audioSeq: map[uint64]uint32{},
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+	turnID := "turn-fallback"
+	c.startTurn(context.Background(), xinzhili.Envelope{TurnID: &turnID, Payload: json.RawMessage(`{"turnKey":91}`)})
+
+	readXinzhiliConfigChanged(t, clientWS, xinzhili.ModeNormal, 22)
+	if c.configVersion != 22 || len(session.starts) != 1 || session.starts[0].Mode != xinzhili.ModeNormal {
+		t.Fatalf("version=%d starts=%+v", c.configVersion, session.starts)
+	}
+}
+
+func readXinzhiliConfigChanged(t *testing.T, client *websocket.Conn, effective xinzhili.Mode, version int64) {
+	t.Helper()
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	kind, data, err := client.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind != websocket.TextMessage {
+		t.Fatalf("frame kind=%d want text", kind)
+	}
+	var envelope xinzhili.Envelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var snapshot xinzhiliModeSnapshot
+	if err := json.Unmarshal(envelope.Payload, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Type != xinzhili.EventConfigChanged || envelope.ConfigVersion != version ||
+		snapshot.ConfigVersion != version || snapshot.RequestedMode != xinzhili.ModeNormal ||
+		snapshot.PendingMode != xinzhili.ModeNormal || snapshot.EffectiveMode != effective {
+		t.Fatalf("event=%s envelopeVersion=%d snapshot=%+v body=%s", envelope.Type, envelope.ConfigVersion, snapshot, data)
+	}
+}
+
 func TestXinzhiliWSSinkSendAudioUsesSegmentTurnKeyWhenConnectionAdvances(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	serverConn := make(chan *websocket.Conn, 1)

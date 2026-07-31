@@ -172,7 +172,7 @@ function createEmptyForm(): XinzhiliModelConfigPayload {
   return {
     commonPrompt: '',
     enabled: false,
-    enabledModes: ['normal'],
+    enabledModes: ['normal', 'argument', 'comfort', 'deep_listening'],
     expectedVersion: 0,
     modePrompts: {},
     realtimeAsr: {
@@ -183,15 +183,15 @@ function createEmptyForm(): XinzhiliModelConfigPayload {
       region: 'cn-beijing',
     },
     timing: {
-      argumentCandidateSilenceMs: 350,
-      comfortEndSilenceMs: 1200,
+      argumentCandidateSilenceMs: 300,
+      comfortEndSilenceMs: 900,
       comfortFirstPromptMs: 5000,
       comfortSecondPromptMs: 12_000,
-      deepListeningEndSilenceMs: 1500,
+      deepListeningEndSilenceMs: 1200,
       deepListeningPromptMs: 12_000,
       maxProactivePrompts: 2,
-      normalEndSilenceMs: 700,
-      partialStableMs: 150,
+      normalEndSilenceMs: 500,
+      partialStableMs: 120,
     },
     tts: {
       apiKey: '',
