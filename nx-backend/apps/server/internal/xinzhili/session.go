@@ -706,6 +706,9 @@ func (s *session) beginStrategyEndpoint(turn *activeTurn) {
 	if turn == nil || turn.engine == nil || turn.processing || turn.endpointing {
 		return
 	}
+	if !hasMeaningfulTranscript(turnTranscript(turn)) && !qualifiedPartialFallback(turn.latestQualifiedPartial) {
+		return
+	}
 	turn.endpointing = true
 	go func(turnID string, asr ASRSession, ctx context.Context) {
 		err := asr.FinishInput(ctx)

@@ -313,53 +313,106 @@ func TestSessionStrategyPartialWaitsForFinishReturnAndTaskFinishedBarriers(t *te
 	fixture.generator.waitCalled(t)
 }
 
-func TestSessionStrategyEndpointWithoutTranscriptSendsRecoverablePromptAndDone(t *testing.T) {
+func TestSessionArgumentRepeatedFillerPartialDoesNotEnterEndpoint(t *testing.T) {
 	fixture := newSessionFixture(t)
-	fixture.synth.segments = nil
-	engine := newScriptedStrategyEngine()
+	clock := newStrategyFakeClock()
+	var engine *Engine
+	observed := make(chan Signal, 4)
 	fixture.session.Close()
-	fixture.deps.EngineFactory = func(Mode, TimingConfig, Clock) StrategyEngine { return engine }
+	fixture.deps.Clock = clock
+	fixture.deps.EngineFactory = func(mode Mode, timing TimingConfig, _ Clock) StrategyEngine {
+		engine = NewEngine(mode, timing, clock)
+		return &observedStrategyEngine{delegate: engine, applied: observed}
+	}
 	fixture.session = NewSession(fixture.deps)
 
-	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-no-transcript")); err != nil {
-		t.Fatal(err)
-	}
-	engine.setTickActions(Action{Kind: ActionEndpoint})
-	segment := fixture.sink.waitAudio(t)
-	if got := segment.DeliveryText(); got != "环境有些嘈杂，我没听清，请再说一次" {
-		t.Fatalf("recoverable prompt=%q", got)
-	}
-	fixture.sink.waitControl(t, EventAssistantDone)
-	if fixture.asr.finishCount() != 1 || fixture.generator.calls() != 0 || fixture.store.userCount() != 0 {
-		t.Fatalf("finish=%d generator=%d users=%d", fixture.asr.finishCount(), fixture.generator.calls(), fixture.store.userCount())
-	}
-}
-
-func TestSessionStrategyRepeatedCharacterPartialIsNotPromoted(t *testing.T) {
-	fixture := newSessionFixture(t)
-	fixture.synth.segments = nil
-	engine := newScriptedStrategyEngine()
-	engine.applyActions = func(signal Signal) []Action {
-		if signal.Kind == SignalPartial {
-			return []Action{{Kind: ActionEndpoint}}
-		}
-		return nil
-	}
-	fixture.session.Close()
-	fixture.deps.EngineFactory = func(Mode, TimingConfig, Clock) StrategyEngine { return engine }
-	fixture.session = NewSession(fixture.deps)
-
-	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-repeated-partial")); err != nil {
+	input := fixture.input("turn-repeated-partial")
+	input.Mode = ModeArgument
+	input.Timing = strategyTiming()
+	if err := fixture.session.StartTurn(context.Background(), input); err != nil {
 		t.Fatal(err)
 	}
 	fixture.asr.emit(ASREvent{Kind: ASREventPartial, Partial: "嗯嗯嗯"})
-	segment := fixture.sink.waitAudio(t)
+	waitObservedSignal(t, observed, SignalPartial)
+	engine.Apply(Signal{Kind: SignalSilence})
+	clock.Advance(5 * time.Second)
+	time.Sleep(50 * time.Millisecond)
+	if fixture.asr.finishCount() != 0 {
+		t.Fatalf("FinishInput calls=%d want=0", fixture.asr.finishCount())
+	}
+	fixture.sink.assertNoControl(t)
+	select {
+	case segment := <-fixture.sink.audio:
+		t.Fatalf("unexpected prompt audio=%q", segment.DeliveryText())
+	default:
+	}
+}
+
+func TestSessionArgumentQualifiedPartialEntersEndpointOnce(t *testing.T) {
+	fixture := newSessionFixture(t)
+	clock := newStrategyFakeClock()
+	var engine *Engine
+	observed := make(chan Signal, 4)
+	fixture.session.Close()
+	fixture.deps.Clock = clock
+	fixture.deps.EngineFactory = func(mode Mode, timing TimingConfig, _ Clock) StrategyEngine {
+		engine = NewEngine(mode, timing, clock)
+		return &observedStrategyEngine{delegate: engine, applied: observed}
+	}
+	fixture.session = NewSession(fixture.deps)
+
+	input := fixture.input("turn-qualified-partial")
+	input.Mode = ModeArgument
+	input.Timing = strategyTiming()
+	if err := fixture.session.StartTurn(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventPartial, Partial: "你在吗"})
+	waitObservedSignal(t, observed, SignalPartial)
+	engine.Apply(Signal{Kind: SignalSilence})
+	clock.Advance(700 * time.Millisecond)
+	fixture.generator.waitCalled(t)
+	if fixture.asr.finishCount() != 1 {
+		t.Fatalf("FinishInput calls=%d want=1", fixture.asr.finishCount())
+	}
+}
+
+func TestSessionCompletedEndpointWithoutAnyTranscriptUsesDefensivePrompt(t *testing.T) {
+	sink := newFakeSessionSink()
+	synth := &fakeSynthesizer{}
+	store := &fakeConversationStore{}
+	s := &session{
+		deps:   SessionDependencies{Sink: sink, Synthesizer: synth, Conversations: store},
+		events: make(chan sessionEvent, 4),
+		done:   make(chan struct{}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	turn := &activeTurn{
+		input:           StartTurnInput{TurnID: "turn-defensive-prompt"},
+		ctx:             ctx,
+		cancel:          cancel,
+		endpointing:     true,
+		finishReturned:  true,
+		asrTaskFinished: true,
+		segments:        map[uint32]string{},
+		lastAck:         -1,
+	}
+	s.completeStrategyEndpoint(turn)
+
+	current := turn
+	for i := 0; i < 2; i++ {
+		select {
+		case event := <-s.events:
+			s.handleEvent(&current, event)
+		case <-time.After(time.Second):
+			t.Fatal("defensive prompt did not finish")
+		}
+	}
+	segment := sink.waitAudio(t)
 	if segment.DeliveryText() != "环境有些嘈杂，我没听清，请再说一次" {
 		t.Fatalf("prompt=%q", segment.DeliveryText())
 	}
-	if fixture.generator.calls() != 0 || fixture.store.userCount() != 0 {
-		t.Fatal("repeated character partial was promoted")
-	}
+	sink.waitControl(t, EventAssistantDone)
 }
 
 func TestSessionStrategyStopAssistantEmitsPlaybackInterrupt(t *testing.T) {
@@ -1372,6 +1425,31 @@ type scriptedStrategyEngine struct {
 	mu           sync.Mutex
 	tickActions  []Action
 	applyActions func(Signal) []Action
+}
+
+type observedStrategyEngine struct {
+	delegate StrategyEngine
+	applied  chan Signal
+}
+
+func (e *observedStrategyEngine) Apply(signal Signal) []Action {
+	actions := e.delegate.Apply(signal)
+	e.applied <- signal
+	return actions
+}
+
+func (e *observedStrategyEngine) Tick() []Action { return e.delegate.Tick() }
+
+func waitObservedSignal(t *testing.T, signals <-chan Signal, kind SignalKind) {
+	t.Helper()
+	select {
+	case signal := <-signals:
+		if signal.Kind != kind {
+			t.Fatalf("signal kind=%v want=%v", signal.Kind, kind)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("signal %v not observed", kind)
+	}
 }
 
 type immediateEndpointStrategyEngine struct{}
