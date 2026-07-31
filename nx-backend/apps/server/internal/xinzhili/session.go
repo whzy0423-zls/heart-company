@@ -16,6 +16,8 @@ import (
 
 const SceneXinzhiliVoice = "xinzhili_voice"
 
+const strategyTickInterval = 20 * time.Millisecond
+
 var ErrSessionClosed = errors.New("xinzhili: session closed")
 
 type Card struct {
@@ -179,6 +181,7 @@ type sessionEventKind uint8
 const (
 	eventASR sessionEventKind = iota
 	eventASRClosed
+	eventASRInputFinished
 	eventGenerationDelta
 	eventGenerationDone
 	eventTTSSegment
@@ -195,6 +198,8 @@ type activeTurn struct {
 	cancel         context.CancelFunc
 	hasSpeech      bool
 	processing     bool
+	endpointing    bool
+	transcripts    []string
 	draft          string
 	answer         string
 	sources        []rag.Source
@@ -275,6 +280,8 @@ func (s *session) request(command sessionCommand) error {
 
 func (s *session) loop() {
 	var turn *activeTurn
+	ticker := time.NewTicker(strategyTickInterval)
+	defer ticker.Stop()
 	defer close(s.done)
 	for {
 		select {
@@ -311,6 +318,10 @@ func (s *session) loop() {
 				continue
 			}
 			s.handleEvent(&turn, event)
+		case <-ticker.C:
+			if turn != nil && turn.engine != nil && !turn.processing && !turn.endpointing {
+				s.executeStrategyActions(turn, turn.engine.Tick())
+			}
 		}
 	}
 }
@@ -425,6 +436,18 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 	switch event.kind {
 	case eventASR:
 		s.handleASREvent(current, event.asr)
+	case eventASRInputFinished:
+		if !current.endpointing || current.processing {
+			return
+		}
+		if event.err != nil {
+			s.sendError(current, "asr_finish_failed", "语音识别结束失败，请重新说一次", true)
+			_ = s.sendAssistantDone(current)
+			current.processing = true
+			current.cancel()
+			return
+		}
+		s.beginProcessing(current, event.answer)
 	case eventASRClosed:
 		if event.err == nil || errors.Is(event.err, context.Canceled) {
 			return
@@ -489,28 +512,90 @@ func (s *session) confirmCompletedPlayback(turn *activeTurn) {
 }
 
 func (s *session) handleASREvent(turn *activeTurn, event ASREvent) {
-	if event.Kind == ASREventSpeechStarted {
+	if turn.processing {
+		return
+	}
+	switch event.Kind {
+	case ASREventSpeechStarted:
 		firstSpeech := !turn.hasSpeech
 		turn.hasSpeech = true
-		if firstSpeech && !turn.processing && turn.engine != nil {
-			turn.engine.Apply(Signal{Kind: SignalSpeechStarted})
+		if turn.engine != nil {
+			s.executeStrategyActions(turn, turn.engine.Apply(Signal{Kind: SignalSpeechStarted}))
 		}
-		if firstSpeech && !turn.processing {
+		if firstSpeech {
 			if err := s.sendTurnControl(turn, EventASRActivity, map[string]any{"state": "speech_started"}); err != nil {
 				turn.cancel()
 			}
 		}
+	case ASREventPartial:
+		text := strings.TrimSpace(event.Partial)
+		if !hasMeaningfulTranscript(text) {
+			return
+		}
+		turn.hasSpeech = true
+		if turn.engine != nil {
+			s.executeStrategyActions(turn, turn.engine.Apply(Signal{Kind: SignalPartial, Transcript: text, Stable: event.Stable}))
+		}
+	case ASREventFinal:
+		if !event.Stable {
+			return
+		}
+		text := strings.TrimSpace(event.Final)
+		if !hasMeaningfulTranscript(text) {
+			return
+		}
+		turn.hasSpeech = true
+		s.appendStableTranscript(turn, text)
+		if turn.engine == nil {
+			s.beginProcessing(turn, turnTranscript(turn))
+			return
+		}
+		s.executeStrategyActions(turn, turn.engine.Apply(Signal{Kind: SignalStableText, Transcript: text, Stable: true}))
+		s.executeStrategyActions(turn, turn.engine.Apply(Signal{Kind: SignalSilence}))
 	}
-	if event.Kind != ASREventFinal || !event.Stable || turn.processing {
+}
+
+func (s *session) executeStrategyActions(turn *activeTurn, actions []Action) {
+	for _, action := range actions {
+		switch action.Kind {
+		case ActionEndpoint:
+			s.beginStrategyEndpoint(turn)
+		case ActionCancelPending:
+			// The engine has cancelled its acoustic endpoint timer. Until an
+			// endpoint is committed there is no external work to cancel.
+		case ActionStopAssistant:
+			// Playback interruption is owned by the surrounding realtime
+			// protocol session. The turn remains live for the new speech.
+		case ActionComfortPrompt, ActionQueueInterruptionPrefix:
+			// Prompt delivery is intentionally separate from user transcript
+			// endpointing; retaining the action boundary prevents it from being
+			// mistaken for recognized user text.
+		}
+	}
+}
+
+func (s *session) beginStrategyEndpoint(turn *activeTurn) {
+	if turn == nil || turn.engine == nil || turn.processing || turn.endpointing {
 		return
 	}
-	text := strings.TrimSpace(event.Final)
+	question := turnTranscript(turn)
+	if !hasMeaningfulTranscript(question) {
+		return
+	}
+	turn.endpointing = true
+	go func(turnID string, asr ASRSession, ctx context.Context, text string) {
+		err := asr.FinishInput(ctx)
+		s.postEvent(sessionEvent{kind: eventASRInputFinished, turnID: turnID, answer: text, err: err})
+	}(turn.input.TurnID, turn.asr, turn.ctx, question)
+}
+
+func (s *session) beginProcessing(turn *activeTurn, text string) {
+	if turn == nil || turn.processing {
+		return
+	}
+	text = strings.TrimSpace(text)
 	if !hasMeaningfulTranscript(text) {
 		return
-	}
-	turn.hasSpeech = true
-	if turn.engine != nil {
-		turn.engine.Apply(Signal{Kind: SignalStableText, Transcript: text, Stable: true})
 	}
 	if s.deps.Generator == nil && !rag.IsModelIdentityQuestion(text) {
 		s.sendError(turn, "chat_model_not_configured", "请配置好会话模型后再重试", false)
@@ -541,6 +626,31 @@ func (s *session) handleASREvent(turn *activeTurn, event ASREvent) {
 	turn.ttsJobs = make(chan ttsStreamJob, 128)
 	s.startSynthesisWorker(turn)
 	s.startGeneration(turn, text)
+}
+
+func (s *session) appendStableTranscript(turn *activeTurn, text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if count := len(turn.transcripts); count > 0 {
+		last := turn.transcripts[count-1]
+		switch {
+		case text == last, strings.HasPrefix(last, text):
+			return
+		case strings.HasPrefix(text, last):
+			turn.transcripts[count-1] = text
+			return
+		}
+	}
+	turn.transcripts = append(turn.transcripts, text)
+}
+
+func turnTranscript(turn *activeTurn) string {
+	if turn == nil {
+		return ""
+	}
+	return strings.Join(turn.transcripts, "")
 }
 
 func (s *session) startGeneration(turn *activeTurn, question string) {
