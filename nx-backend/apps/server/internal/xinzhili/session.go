@@ -984,7 +984,7 @@ func (s *session) acceptAudioSegment(turn *activeTurn, segment AudioSegment) err
 		s.executeStrategyActions(turn, turn.engine.Apply(Signal{Kind: SignalAssistantStarted}))
 	}
 	turn.segments[segment.Seq] = text
-	if turn.assistantID == 0 && !turn.proactivePrompt {
+	if turn.assistantID == 0 && !turn.proactivePrompt && !turn.terminalPrompt {
 		content := normalizeGeneratedContent(turn.answer)
 		if content == "" {
 			content = normalizeGeneratedContent(turn.draft)

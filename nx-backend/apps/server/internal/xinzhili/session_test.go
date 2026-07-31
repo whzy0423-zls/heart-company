@@ -315,14 +315,10 @@ func TestSessionStrategyPartialWaitsForFinishReturnAndTaskFinishedBarriers(t *te
 
 func TestSessionArgumentRepeatedFillerPartialDoesNotEnterEndpoint(t *testing.T) {
 	fixture := newSessionFixture(t)
-	clock := newStrategyFakeClock()
-	var engine *Engine
-	observed := make(chan Signal, 4)
 	fixture.session.Close()
-	fixture.deps.Clock = clock
-	fixture.deps.EngineFactory = func(mode Mode, timing TimingConfig, _ Clock) StrategyEngine {
-		engine = NewEngine(mode, timing, clock)
-		return &observedStrategyEngine{delegate: engine, applied: observed}
+	fixture.deps.Clock = wallSessionClock{}
+	fixture.deps.EngineFactory = func(mode Mode, timing TimingConfig, clock Clock) StrategyEngine {
+		return NewEngine(mode, timing, clock)
 	}
 	fixture.session = NewSession(fixture.deps)
 
@@ -333,10 +329,7 @@ func TestSessionArgumentRepeatedFillerPartialDoesNotEnterEndpoint(t *testing.T) 
 		t.Fatal(err)
 	}
 	fixture.asr.emit(ASREvent{Kind: ASREventPartial, Partial: "嗯嗯嗯"})
-	waitObservedSignal(t, observed, SignalPartial)
-	engine.Apply(Signal{Kind: SignalSilence})
-	clock.Advance(5 * time.Second)
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(1800 * time.Millisecond)
 	if fixture.asr.finishCount() != 0 {
 		t.Fatalf("FinishInput calls=%d want=0", fixture.asr.finishCount())
 	}
@@ -350,14 +343,10 @@ func TestSessionArgumentRepeatedFillerPartialDoesNotEnterEndpoint(t *testing.T) 
 
 func TestSessionArgumentQualifiedPartialEntersEndpointOnce(t *testing.T) {
 	fixture := newSessionFixture(t)
-	clock := newStrategyFakeClock()
-	var engine *Engine
-	observed := make(chan Signal, 4)
 	fixture.session.Close()
-	fixture.deps.Clock = clock
-	fixture.deps.EngineFactory = func(mode Mode, timing TimingConfig, _ Clock) StrategyEngine {
-		engine = NewEngine(mode, timing, clock)
-		return &observedStrategyEngine{delegate: engine, applied: observed}
+	fixture.deps.Clock = wallSessionClock{}
+	fixture.deps.EngineFactory = func(mode Mode, timing TimingConfig, clock Clock) StrategyEngine {
+		return NewEngine(mode, timing, clock)
 	}
 	fixture.session = NewSession(fixture.deps)
 
@@ -368,9 +357,11 @@ func TestSessionArgumentQualifiedPartialEntersEndpointOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.asr.emit(ASREvent{Kind: ASREventPartial, Partial: "你在吗"})
-	waitObservedSignal(t, observed, SignalPartial)
-	engine.Apply(Signal{Kind: SignalSilence})
-	clock.Advance(700 * time.Millisecond)
+	time.Sleep(1400 * time.Millisecond)
+	if fixture.asr.finishCount() != 0 {
+		t.Fatalf("FinishInput crossed 1600ms safe window early: calls=%d", fixture.asr.finishCount())
+	}
+	waitASRFinishCount(t, fixture.asr, 1, 2*time.Second)
 	fixture.generator.waitCalled(t)
 	if fixture.asr.finishCount() != 1 {
 		t.Fatalf("FinishInput calls=%d want=1", fixture.asr.finishCount())
@@ -413,6 +404,13 @@ func TestSessionCompletedEndpointWithoutAnyTranscriptUsesDefensivePrompt(t *test
 		t.Fatalf("prompt=%q", segment.DeliveryText())
 	}
 	sink.waitControl(t, EventAssistantDone)
+	if store.assistantCount() != 0 {
+		t.Fatalf("terminal prompt assistants=%d want=0", store.assistantCount())
+	}
+	_, _, completed := store.contents()
+	if completed != "" {
+		t.Fatalf("terminal prompt completed assistant=%q", completed)
+	}
 }
 
 func TestSessionStrategyStopAssistantEmitsPlaybackInterrupt(t *testing.T) {
@@ -1419,37 +1417,28 @@ func (s *fakeASRSession) finishCount() int {
 	return s.finishCalls
 }
 
+func waitASRFinishCount(t *testing.T, asr *fakeASRSession, want int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		if asr.finishCount() == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("FinishInput calls=%d want=%d", asr.finishCount(), want)
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
 type scriptedStrategyEngine struct {
 	applyCh      chan Signal
 	tickCh       chan struct{}
 	mu           sync.Mutex
 	tickActions  []Action
 	applyActions func(Signal) []Action
-}
-
-type observedStrategyEngine struct {
-	delegate StrategyEngine
-	applied  chan Signal
-}
-
-func (e *observedStrategyEngine) Apply(signal Signal) []Action {
-	actions := e.delegate.Apply(signal)
-	e.applied <- signal
-	return actions
-}
-
-func (e *observedStrategyEngine) Tick() []Action { return e.delegate.Tick() }
-
-func waitObservedSignal(t *testing.T, signals <-chan Signal, kind SignalKind) {
-	t.Helper()
-	select {
-	case signal := <-signals:
-		if signal.Kind != kind {
-			t.Fatalf("signal kind=%v want=%v", signal.Kind, kind)
-		}
-	case <-time.After(time.Second):
-		t.Fatalf("signal %v not observed", kind)
-	}
 }
 
 type immediateEndpointStrategyEngine struct{}
@@ -1513,3 +1502,7 @@ func (e *scriptedStrategyEngine) waitApply(t *testing.T, kind SignalKind) Signal
 type fixedSessionClock struct{ now time.Time }
 
 func (c fixedSessionClock) Now() time.Time { return c.now }
+
+type wallSessionClock struct{}
+
+func (wallSessionClock) Now() time.Time { return time.Now() }
