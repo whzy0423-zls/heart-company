@@ -67,6 +67,7 @@ type xinzhiliRealtimeConn struct {
 	turnMu         sync.Mutex
 	turns          map[uint64]string
 	audioSeq       map[uint64]uint32
+	audioInputDone map[uint64]bool
 }
 
 type xinzhiliWSSink struct {
@@ -368,6 +369,9 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 		c.audioSeq = make(map[uint64]uint32)
 	}
 	c.audioSeq[turnKey] = 0
+	if c.audioInputDone != nil {
+		delete(c.audioInputDone, turnKey)
+	}
 	c.turnMu.Unlock()
 	c.mu.Lock()
 	c.turnKey = turnKey
@@ -383,6 +387,7 @@ func (c *xinzhiliRealtimeConn) releaseTurn(turnID string, terminal bool) {
 		}
 		delete(c.turns, turnKey)
 		delete(c.audioSeq, turnKey)
+		delete(c.audioInputDone, turnKey)
 		releasedKeys = append(releasedKeys, turnKey)
 	}
 	c.turnMu.Unlock()
@@ -437,9 +442,12 @@ func (c *xinzhiliRealtimeConn) handleBinary(ctx context.Context, data []byte) {
 	if err := c.sess.PushPCM(ctx, xinzhili.PCMFrame{TurnID: turnID, Data: f.Payload}); err != nil {
 		// FinishInput closes Paraformer's audio input before the final
 		// task-finished event reaches the App. PCM already queued on the phone
-		// during that short window is an expected tail, not a broken turn.
+		// during that short window is an expected tail, not a broken turn. Once
+		// that barrier is observed, the ASR may close before the last queued PCM
+		// arrives, so ErrASRClosed remains an expected tail for the same turn.
 		// Consume its sequence so following queued frames remain monotonic.
-		if !errors.Is(err, xinzhili.ErrASRInputFinished) {
+		if !c.consumeASRTail(f.TurnKey, err) {
+			log.Printf("xinzhili pcm rejected turn=%q turn_key=%d audio_seq=%d payload_bytes=%d err=%T:%v", turnID, f.TurnKey, f.AudioSeq, len(f.Payload), err, err)
 			c.sendError(ctx, "audio_frame_rejected", "音频帧未被接收", true, false)
 			return
 		}
@@ -450,6 +458,19 @@ func (c *xinzhiliRealtimeConn) handleBinary(ctx context.Context, data []byte) {
 	}
 	c.audioSeq[f.TurnKey] = expectedAudioSeq + 1
 	c.turnMu.Unlock()
+}
+
+func (c *xinzhiliRealtimeConn) consumeASRTail(turnKey uint64, err error) bool {
+	c.turnMu.Lock()
+	defer c.turnMu.Unlock()
+	if errors.Is(err, xinzhili.ErrASRInputFinished) {
+		if c.audioInputDone == nil {
+			c.audioInputDone = make(map[uint64]bool)
+		}
+		c.audioInputDone[turnKey] = true
+		return true
+	}
+	return errors.Is(err, xinzhili.ErrASRClosed) && c.audioInputDone[turnKey]
 }
 
 func (c *xinzhiliRealtimeConn) changeMode(ctx context.Context, e xinzhili.Envelope) {

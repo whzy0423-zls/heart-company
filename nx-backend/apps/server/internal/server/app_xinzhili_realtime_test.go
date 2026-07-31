@@ -57,9 +57,10 @@ type fakeXinzhiliModeStore struct {
 }
 
 type recordingXinzhiliTurnSession struct {
-	pcm     []xinzhili.PCMFrame
-	starts  []xinzhili.StartTurnInput
-	pushErr error
+	pcm      []xinzhili.PCMFrame
+	starts   []xinzhili.StartTurnInput
+	pushErr  error
+	pushErrs []error
 }
 
 func (s *recordingXinzhiliTurnSession) StartTurn(_ context.Context, input xinzhili.StartTurnInput) error {
@@ -68,6 +69,11 @@ func (s *recordingXinzhiliTurnSession) StartTurn(_ context.Context, input xinzhi
 }
 func (s *recordingXinzhiliTurnSession) PushPCM(_ context.Context, frame xinzhili.PCMFrame) error {
 	s.pcm = append(s.pcm, frame)
+	if len(s.pushErrs) > 0 {
+		err := s.pushErrs[0]
+		s.pushErrs = s.pushErrs[1:]
+		return err
+	}
 	return s.pushErr
 }
 func (s *recordingXinzhiliTurnSession) HandlePlaybackAck(context.Context, xinzhili.PlaybackAck) error {
@@ -500,9 +506,9 @@ func TestXinzhiliBinaryDropsDuplicateAudioSequence(t *testing.T) {
 	}
 }
 
-func TestXinzhiliBinaryConsumesTailFrameAfterASRInputFinished(t *testing.T) {
+func TestXinzhiliBinaryConsumesTailFramesAfterASRInputFinishedThenClosed(t *testing.T) {
 	serverWS, clientWS := newXinzhiliWebsocketPair(t)
-	session := &recordingXinzhiliTurnSession{pushErr: xinzhili.ErrASRInputFinished}
+	session := &recordingXinzhiliTurnSession{pushErrs: []error{xinzhili.ErrASRInputFinished, xinzhili.ErrASRClosed}}
 	c := &xinzhiliRealtimeConn{
 		ws: serverWS, sess: session, generation: 7, sessionID: "xz-test",
 		turns: map[uint64]string{42: "turn-1"}, audioSeq: map[uint64]uint32{42: 0},
@@ -516,12 +522,20 @@ func TestXinzhiliBinaryConsumesTailFrameAfterASRInputFinished(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.handleBinary(context.Background(), data)
-	if got := c.audioSeq[42]; got != 1 {
-		t.Fatalf("audio sequence=%d want=1", got)
+	data, err = xinzhili.EncodeBinaryFrame(xinzhili.BinaryFrame{
+		FrameType:  xinzhili.FrameTypeInputPCM,
+		Generation: 7, TurnKey: 42, AudioSeq: 1, Payload: []byte{3, 4},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.handleBinary(context.Background(), data)
+	if got := c.audioSeq[42]; got != 2 {
+		t.Fatalf("audio sequence=%d want=2", got)
 	}
 	_ = clientWS.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 	if _, _, err := clientWS.ReadMessage(); err == nil {
-		t.Fatal("ASR input-finished tail frame emitted an error event")
+		t.Fatal("ASR finished/closed tail frames emitted an error event")
 	}
 }
 
