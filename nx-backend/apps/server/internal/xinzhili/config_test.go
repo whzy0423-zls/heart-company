@@ -314,10 +314,10 @@ func TestConfigWithDefaultsAppliesTimingDefaults(t *testing.T) {
 	}
 	want := TimingConfig{
 		PartialStableMs:            120,
-		ArgumentCandidateSilenceMs: 300,
-		NormalEndSilenceMs:         500,
-		ComfortEndSilenceMs:        900,
-		DeepListeningEndSilenceMs:  1200,
+		ArgumentCandidateSilenceMs: 250,
+		NormalEndSilenceMs:         350,
+		ComfortEndSilenceMs:        700,
+		DeepListeningEndSilenceMs:  1000,
 		ComfortFirstPromptMs:       5000,
 		ComfortSecondPromptMs:      12000,
 		DeepListeningPromptMs:      12000,
@@ -341,10 +341,10 @@ func TestDefaultConfigEnablesAllModesWithBalancedTiming(t *testing.T) {
 	}
 	wantTiming := TimingConfig{
 		PartialStableMs:            120,
-		ArgumentCandidateSilenceMs: 300,
-		NormalEndSilenceMs:         500,
-		ComfortEndSilenceMs:        900,
-		DeepListeningEndSilenceMs:  1200,
+		ArgumentCandidateSilenceMs: 250,
+		NormalEndSilenceMs:         350,
+		ComfortEndSilenceMs:        700,
+		DeepListeningEndSilenceMs:  1000,
 		ComfortFirstPromptMs:       5000,
 		ComfortSecondPromptMs:      12000,
 		DeepListeningPromptMs:      12000,

@@ -45,6 +45,62 @@ func TestStrategyNormalEndpointsAfterStableSpeechAnd700msSilence(t *testing.T) {
 	assertStrategyActions(t, engine.Tick())
 }
 
+func TestStrategyCompleteSentenceEndpointsOnSilenceInFastModes(t *testing.T) {
+	for _, mode := range []Mode{ModeNormal, ModeArgument} {
+		t.Run(string(mode), func(t *testing.T) {
+			clock := newStrategyFakeClock()
+			engine := NewEngine(mode, strategyTiming(), clock)
+			assertStrategyActions(t, engine.Apply(Signal{Kind: SignalStableText, Transcript: "这句话已经说完。"}))
+			assertStrategyActions(t, engine.Tick())
+			assertStrategyActions(t, engine.Apply(Signal{Kind: SignalSilence}))
+			assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
+		})
+	}
+}
+
+func TestStrategyCompleteSentenceAllowsClosingQuotes(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeNormal, strategyTiming(), clock)
+	engine.Apply(Signal{Kind: SignalStableText, Transcript: "他说：“我已经说完！”"})
+	engine.Apply(Signal{Kind: SignalSilence})
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
+}
+
+func TestStrategyCompleteSentenceKeepsReflectiveModeThresholds(t *testing.T) {
+	tests := []struct {
+		mode      Mode
+		threshold time.Duration
+	}{
+		{mode: ModeComfort, threshold: 1200 * time.Millisecond},
+		{mode: ModeDeepListening, threshold: 1500 * time.Millisecond},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.mode), func(t *testing.T) {
+			clock := newStrategyFakeClock()
+			engine := NewEngine(tt.mode, strategyTiming(), clock)
+			engine.Apply(Signal{Kind: SignalStableText, Transcript: "我暂时说完了。"})
+			engine.Apply(Signal{Kind: SignalSilence})
+			assertStrategyActions(t, engine.Tick())
+			clock.Advance(tt.threshold - time.Millisecond)
+			assertStrategyActions(t, engine.Tick())
+			clock.Advance(time.Millisecond)
+			assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
+		})
+	}
+}
+
+func TestStrategyTurnResetClearsCompleteSentenceState(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeNormal, strategyTiming(), clock)
+	engine.Apply(Signal{Kind: SignalStableText, Transcript: "上一轮结束。"})
+	engine.Apply(Signal{Kind: SignalTurnReset})
+	engine.Apply(Signal{Kind: SignalStableText, Transcript: "这一轮还没说完"})
+	engine.Apply(Signal{Kind: SignalSilence})
+	assertStrategyActions(t, engine.Tick())
+	clock.Advance(700 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
+}
+
 func TestStrategyNormalContinuedSpeechCancelsEndpointTimer(t *testing.T) {
 	clock := newStrategyFakeClock()
 	engine := NewEngine(ModeNormal, strategyTiming(), clock)
@@ -574,7 +630,7 @@ func TestStrategyNewEngineAppliesZeroTimingDefaults(t *testing.T) {
 	engine := NewEngine(ModeNormal, TimingConfig{}, clock)
 	engine.Apply(Signal{Kind: SignalStableText, Transcript: "默认阈值"})
 	engine.Apply(Signal{Kind: SignalSilence})
-	clock.Advance(499 * time.Millisecond)
+	clock.Advance(349 * time.Millisecond)
 	assertStrategyActions(t, engine.Tick())
 	clock.Advance(time.Millisecond)
 	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
