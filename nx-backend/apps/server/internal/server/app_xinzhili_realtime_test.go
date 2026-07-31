@@ -49,11 +49,13 @@ func TestXinzhiliProtocolFailureIsSanitized(t *testing.T) {
 }
 
 type fakeXinzhiliModeStore struct {
-	preference xinzhili.ModePreference
-	found      bool
-	readErr    error
-	updateErr  error
-	updates    []xinzhili.ModePreference
+	preference    xinzhili.ModePreference
+	found         bool
+	readErr       error
+	updateErr     error
+	updates       []xinzhili.ModePreference
+	updateEntered chan struct{}
+	updateRelease <-chan struct{}
 }
 
 type recordingXinzhiliTurnSession struct {
@@ -126,6 +128,12 @@ func (s *fakeXinzhiliModeStore) UpdateMode(_ context.Context, userID int64, mode
 	}
 	p := xinzhili.ModePreference{UserID: userID, Requested: mode, Revision: expectedRevision + 1}
 	s.updates = append(s.updates, p)
+	if s.updateEntered != nil && len(s.updates) == 1 {
+		close(s.updateEntered)
+	}
+	if s.updateRelease != nil && len(s.updates) == 1 {
+		<-s.updateRelease
+	}
 	return p, nil
 }
 
@@ -472,6 +480,100 @@ func TestXinzhiliStartTurnDoesNotOverwriteNewConfigStateWhenSaveInterleaves(t *t
 	readXinzhiliConfigChanged(t, clientWS, xinzhili.ModeArgument, 32)
 }
 
+func TestXinzhiliChangeModeDoesNotCommitDisabledModeWhenConfigSaveInterleaves(t *testing.T) {
+	serverWS, clientWS := newXinzhiliWebsocketPair(t)
+	oldConfig := validXinzhiliModelConfigForHandler()
+	oldConfig.Version = 41
+	oldConfig.EnabledModes = []xinzhili.Mode{xinzhili.ModeNormal, xinzhili.ModeArgument}
+	store := &fakeXinzhiliModelConfigStore{config: oldConfig, found: true}
+	updateEntered := make(chan struct{})
+	updateRelease := make(chan struct{})
+	modeStore := &fakeXinzhiliModeStore{updateEntered: updateEntered, updateRelease: updateRelease}
+	c := &xinzhiliRealtimeConn{
+		server: &Server{xinzhiliModelConfig: store}, ws: serverWS, sess: &recordingXinzhiliTurnSession{},
+		userID: 11, sessionID: "xz-mode-interleave", generation: 6, configVersion: 41,
+		enabledModes:  []xinzhili.Mode{xinzhili.ModeNormal, xinzhili.ModeArgument},
+		requestedMode: xinzhili.ModeNormal, pendingMode: xinzhili.ModeNormal,
+		effectiveMode: xinzhili.ModeNormal, modeRevision: 2, modeStore: modeStore,
+		turns: map[uint64]string{}, audioSeq: map[uint64]uint32{},
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+
+	changeDone := make(chan struct{})
+	go func() {
+		defer close(changeDone)
+		c.changeMode(context.Background(), xinzhili.Envelope{Payload: json.RawMessage(`{"mode":"argument","expectedRevision":2}`)})
+	}()
+	<-updateEntered
+
+	newConfig := oldConfig
+	newConfig.Version = 42
+	newConfig.EnabledModes = []xinzhili.Mode{xinzhili.ModeNormal}
+	store.config = newConfig
+	if err := c.applyXinzhiliConfigChanged(context.Background(), newConfig); err != nil {
+		t.Fatal(err)
+	}
+	close(updateRelease)
+	<-changeDone
+
+	if c.configVersion != 42 || c.requestedMode != xinzhili.ModeNormal || c.pendingMode != xinzhili.ModeNormal {
+		t.Fatalf("version=%d requested=%s pending=%s", c.configVersion, c.requestedMode, c.pendingMode)
+	}
+	if len(modeStore.updates) != 2 || modeStore.updates[1].Requested != xinzhili.ModeNormal || modeStore.updates[1].Revision != 4 {
+		t.Fatalf("persisted mode updates=%+v", modeStore.updates)
+	}
+	readXinzhiliConfigChanged(t, clientWS, xinzhili.ModeNormal, 42)
+	readXinzhiliError(t, clientWS, "mode_not_enabled", 42)
+}
+
+func TestXinzhiliStartSessionRetriesStaleInitializationAfterConfigSave(t *testing.T) {
+	serverWS, clientWS := newXinzhiliWebsocketPair(t)
+	oldConfig := validXinzhiliModelConfigForHandler()
+	oldConfig.Version = 51
+	oldConfig.EnabledModes = []xinzhili.Mode{xinzhili.ModeNormal, xinzhili.ModeArgument}
+	store := &fakeXinzhiliModelConfigStore{config: oldConfig, found: true}
+	factoryEntered := make(chan struct{})
+	factoryRelease := make(chan struct{})
+	factoryCalls := 0
+	c := &xinzhiliRealtimeConn{
+		server: &Server{xinzhiliModelConfig: store}, ws: serverWS, userID: 12,
+		modeStore: &fakeXinzhiliModeStore{found: true, preference: xinzhili.ModePreference{Requested: xinzhili.ModeArgument, Revision: 7}},
+		turns:     map[uint64]string{}, audioSeq: map[uint64]uint32{},
+		newSession: func(cfg xinzhili.Config, _ xinzhili.SessionSink) (xinzhili.TurnSession, error) {
+			factoryCalls++
+			if factoryCalls == 1 {
+				close(factoryEntered)
+				<-factoryRelease
+			}
+			return &recordingXinzhiliTurnSession{}, nil
+		},
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+
+	startDone := make(chan struct{})
+	go func() {
+		defer close(startDone)
+		c.startSession(context.Background(), xinzhili.Envelope{Generation: 8, Payload: json.RawMessage(`{"cardId":1,"conversationId":2}`)})
+	}()
+	<-factoryEntered
+
+	newConfig := oldConfig
+	newConfig.Version = 52
+	newConfig.EnabledModes = []xinzhili.Mode{xinzhili.ModeNormal}
+	store.config = newConfig
+	if err := c.applyXinzhiliConfigChanged(context.Background(), newConfig); err != nil {
+		t.Fatal(err)
+	}
+	close(factoryRelease)
+	<-startDone
+
+	if factoryCalls != 2 || c.configVersion != 52 || c.requestedMode != xinzhili.ModeNormal || c.pendingMode != xinzhili.ModeNormal || c.effectiveMode != xinzhili.ModeNormal {
+		t.Fatalf("factoryCalls=%d version=%d requested=%s pending=%s effective=%s", factoryCalls, c.configVersion, c.requestedMode, c.pendingMode, c.effectiveMode)
+	}
+	readXinzhiliConfigChanged(t, clientWS, xinzhili.ModeNormal, 52)
+	readXinzhiliReady(t, clientWS, 52, []xinzhili.Mode{xinzhili.ModeNormal})
+}
+
 func readXinzhiliConfigChanged(t *testing.T, client *websocket.Conn, effective xinzhili.Mode, version int64) {
 	t.Helper()
 	_ = client.SetReadDeadline(time.Now().Add(time.Second))
@@ -494,6 +596,47 @@ func readXinzhiliConfigChanged(t *testing.T, client *websocket.Conn, effective x
 		snapshot.ConfigVersion != version || snapshot.RequestedMode != xinzhili.ModeNormal ||
 		snapshot.PendingMode != xinzhili.ModeNormal || snapshot.EffectiveMode != effective {
 		t.Fatalf("event=%s envelopeVersion=%d snapshot=%+v body=%s", envelope.Type, envelope.ConfigVersion, snapshot, data)
+	}
+}
+
+func readXinzhiliError(t *testing.T, client *websocket.Conn, code string, version int64) {
+	t.Helper()
+	var envelope xinzhili.Envelope
+	readXinzhiliEnvelope(t, client, &envelope)
+	var payload xinzhili.ErrorPayload
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Type != xinzhili.EventError || envelope.ConfigVersion != version || payload.Code != code {
+		t.Fatalf("event=%s version=%d payload=%+v", envelope.Type, envelope.ConfigVersion, payload)
+	}
+}
+
+func readXinzhiliReady(t *testing.T, client *websocket.Conn, version int64, modes []xinzhili.Mode) {
+	t.Helper()
+	var envelope xinzhili.Envelope
+	readXinzhiliEnvelope(t, client, &envelope)
+	var payload xinzhiliModeSnapshot
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Type != xinzhili.EventSessionReady || envelope.ConfigVersion != version || payload.ConfigVersion != version || fmt.Sprint(payload.EnabledModes) != fmt.Sprint(modes) {
+		t.Fatalf("event=%s envelopeVersion=%d snapshot=%+v", envelope.Type, envelope.ConfigVersion, payload)
+	}
+}
+
+func readXinzhiliEnvelope(t *testing.T, client *websocket.Conn, envelope *xinzhili.Envelope) {
+	t.Helper()
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	kind, data, err := client.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind != websocket.TextMessage {
+		t.Fatalf("frame kind=%d want text", kind)
+	}
+	if err := json.Unmarshal(data, envelope); err != nil {
+		t.Fatal(err)
 	}
 }
 
