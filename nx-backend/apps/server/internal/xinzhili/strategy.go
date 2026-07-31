@@ -74,6 +74,7 @@ type Engine struct {
 	proactivePending         bool
 	hasValidText             bool
 	hasStableText            bool
+	stableSentenceComplete   bool
 	highRisk                 bool
 	acousticSilenceAt        *time.Time
 	deepSilenceAt            *time.Time
@@ -166,6 +167,7 @@ func (e *Engine) applySpeechStarted(signal Signal) []Action {
 	e.midSentencePrompted = false
 	e.pendingGeneration = false
 	e.proactivePending = false
+	e.stableSentenceComplete = false
 
 	var actions []Action
 	if e.assistantPlaying {
@@ -192,6 +194,7 @@ func (e *Engine) applyPartial(signal Signal) {
 	}
 	e.hasEverSpoken = true
 	e.hasValidText = true
+	e.stableSentenceComplete = false
 	e.highRisk = e.highRisk || signal.HighRisk
 	e.deepSilenceAt = nil
 	e.recordPartialFallback(text)
@@ -229,6 +232,7 @@ func (e *Engine) applyStableText(signal Signal) {
 	e.hasEverSpoken = true
 	e.hasValidText = true
 	e.hasStableText = true
+	e.stableSentenceComplete = endsWithStrongSentenceEnding(text)
 	e.clearPartialFallback()
 	e.highRisk = e.highRisk || signal.HighRisk
 	if e.acousticSilenceAt == nil {
@@ -261,6 +265,10 @@ func (e *Engine) endpointAction(now time.Time) []Action {
 		return nil
 	}
 	elapsed := now.Sub(*e.acousticSilenceAt)
+	if e.stableSentenceComplete && (e.mode == ModeNormal || e.mode == ModeArgument) {
+		e.endpointTurn()
+		return []Action{{Kind: ActionEndpoint}}
+	}
 
 	if e.mode == ModeArgument && !e.candidateEvaluated &&
 		elapsed >= time.Duration(e.timing.ArgumentCandidateSilenceMs)*time.Millisecond {
@@ -336,6 +344,7 @@ func (e *Engine) proactiveAction(now time.Time) []Action {
 func (e *Engine) clearTurnInput() {
 	e.hasValidText = false
 	e.hasStableText = false
+	e.stableSentenceComplete = false
 	e.highRisk = false
 	e.acousticSilenceAt = nil
 	e.partialPrefix = ""
@@ -401,6 +410,22 @@ func (e *Engine) clearPartialCandidate() {
 
 func normalizeStrategyText(value string) string {
 	return strings.Join(strings.Fields(value), " ")
+}
+
+func endsWithStrongSentenceEnding(value string) bool {
+	runes := []rune(strings.TrimSpace(value))
+	for len(runes) > 0 && isClosingQuote(runes[len(runes)-1]) {
+		runes = []rune(strings.TrimSpace(string(runes[:len(runes)-1])))
+	}
+	if len(runes) == 0 {
+		return false
+	}
+	switch runes[len(runes)-1] {
+	case '。', '！', '？', '!', '?', '.':
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *Engine) recordPartialFallback(text string) {

@@ -99,9 +99,9 @@ func TestStreamSentenceChunkerPrioritizesPlayableFirstChunk(t *testing.T) {
 		}
 	})
 
-	t.Run("weak punctuation cuts after fourteen runes", func(t *testing.T) {
+	t.Run("weak punctuation cuts after ten runes", func(t *testing.T) {
 		var chunker streamSentenceChunker
-		prefix := strings.Repeat("甲", 13) + "，"
+		prefix := strings.Repeat("甲", 9) + "，"
 		if got := chunker.Push(prefix + "后续"); !slices.Equal(got, []string{prefix}) {
 			t.Fatalf("chunks=%q", got)
 		}
@@ -110,23 +110,23 @@ func TestStreamSentenceChunkerPrioritizesPlayableFirstChunk(t *testing.T) {
 		}
 	})
 
-	t.Run("first chunk hard caps at twenty eight runes", func(t *testing.T) {
+	t.Run("first chunk hard caps at twenty runes", func(t *testing.T) {
 		var chunker streamSentenceChunker
-		first := strings.Repeat("甲", 28)
+		first := strings.Repeat("甲", 20)
 		if got := chunker.Push(first + "后续"); !slices.Equal(got, []string{first}) {
 			t.Fatalf("chunks=%q", got)
 		}
 	})
 
-	t.Run("later chunks keep forty two rune cap", func(t *testing.T) {
+	t.Run("later chunks hard cap at thirty six runes", func(t *testing.T) {
 		var chunker streamSentenceChunker
 		if got := chunker.Push("你好。"); !slices.Equal(got, []string{"你好。"}) {
 			t.Fatalf("first=%q", got)
 		}
-		if got := chunker.Push(strings.Repeat("乙", 41)); len(got) != 0 {
+		if got := chunker.Push(strings.Repeat("乙", 35)); len(got) != 0 {
 			t.Fatalf("early later chunk=%q", got)
 		}
-		later := strings.Repeat("乙", 42)
+		later := strings.Repeat("乙", 36)
 		if got := chunker.Push("乙"); !slices.Equal(got, []string{later}) {
 			t.Fatalf("later=%q", got)
 		}
@@ -721,6 +721,48 @@ func TestConversationIsolationAndRelevanceUseIndependentRetrievers(t *testing.T)
 	}
 }
 
+func TestGenerationLoadsContextInParallel(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.session.Close()
+	barrier := newContextLoadBarrier()
+	fixture.knowledge.docs = []rag.Document{{ID: "knowledge:1", Title: "知识", Content: "知识内容"}}
+	fixture.theory.docs = []rag.Document{{ID: "theory:1", Title: "理论", Content: "理论内容"}}
+	fixture.deps.Conversations = barrierConversationStore{ConversationStore: fixture.store, barrier: barrier}
+	fixture.deps.Preferences = barrierPreferenceProvider{barrier: barrier}
+	fixture.deps.Memories = barrierMemoryProvider{barrier: barrier}
+	fixture.deps.Knowledge = barrierRetriever{name: "knowledge", barrier: barrier, delegate: fixture.knowledge}
+	fixture.deps.Theory = barrierRetriever{name: "theory", barrier: barrier, delegate: fixture.theory}
+	fixture.session = NewSession(fixture.deps)
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-parallel-context")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "帮我分析一下", Stable: true})
+
+	started := make(map[string]bool, 5)
+	deadline := time.NewTimer(300 * time.Millisecond)
+	defer deadline.Stop()
+	for len(started) < 5 {
+		select {
+		case name := <-barrier.started:
+			started[name] = true
+		case <-deadline.C:
+			close(barrier.release)
+			t.Fatalf("context loads started=%v, want history/preferences/memories/knowledge/theory", started)
+		}
+	}
+	close(barrier.release)
+	fixture.generator.waitCalled(t)
+
+	input := fixture.generator.lastInput()
+	if input.ConversationSummary != "历史摘要" || !slices.Equal(input.UserPreferences, []string{"并行偏好"}) || !slices.Equal(input.UserProfile.Memories, []string{"并行记忆"}) {
+		t.Fatalf("generated context=%+v", input)
+	}
+	if len(input.Sources) != 2 || input.Sources[0].ID != "knowledge:1" || input.Sources[1].ID != "theory:1" {
+		t.Fatalf("sources=%+v", input.Sources)
+	}
+}
+
 func TestDeliveryCreatesAssistantAfterFirstAudioAndAcknowledgesExactPrefixes(t *testing.T) {
 	fixture := newSessionFixture(t)
 	const turnKey uint64 = 42
@@ -1304,6 +1346,68 @@ type fakeMemoryProvider struct{}
 
 func (fakeMemoryProvider) PromptMemories(context.Context, int64, int64) ([]string, error) {
 	return []string{"喜欢直接表达"}, nil
+}
+
+type contextLoadBarrier struct {
+	started chan string
+	release chan struct{}
+}
+
+func newContextLoadBarrier() *contextLoadBarrier {
+	return &contextLoadBarrier{started: make(chan string, 5), release: make(chan struct{})}
+}
+
+func (b *contextLoadBarrier) wait(ctx context.Context, name string) error {
+	b.started <- name
+	select {
+	case <-b.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+type barrierConversationStore struct {
+	ConversationStore
+	barrier *contextLoadBarrier
+}
+
+func (s barrierConversationStore) History(ctx context.Context, _ Conversation, _ int) ([]rag.Message, string, error) {
+	if err := s.barrier.wait(ctx, "history"); err != nil {
+		return nil, "", err
+	}
+	return []rag.Message{{Role: "user", Content: "历史消息"}}, "历史摘要", nil
+}
+
+type barrierPreferenceProvider struct{ barrier *contextLoadBarrier }
+
+func (p barrierPreferenceProvider) PromptPreferences(ctx context.Context, _ int64) ([]string, error) {
+	if err := p.barrier.wait(ctx, "preferences"); err != nil {
+		return nil, err
+	}
+	return []string{"并行偏好"}, nil
+}
+
+type barrierMemoryProvider struct{ barrier *contextLoadBarrier }
+
+func (p barrierMemoryProvider) PromptMemories(ctx context.Context, _, _ int64) ([]string, error) {
+	if err := p.barrier.wait(ctx, "memories"); err != nil {
+		return nil, err
+	}
+	return []string{"并行记忆"}, nil
+}
+
+type barrierRetriever struct {
+	name     string
+	barrier  *contextLoadBarrier
+	delegate *fakeRetriever
+}
+
+func (r barrierRetriever) Search(ctx context.Context, query string, topK int, minScore float64) ([]rag.Document, error) {
+	if err := r.barrier.wait(ctx, r.name); err != nil {
+		return nil, err
+	}
+	return r.delegate.Search(ctx, query, topK, minScore)
 }
 
 type fakeRetriever struct {

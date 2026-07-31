@@ -127,9 +127,9 @@ func TestXinzhiliModelConfigGETReturnsDefaultsWhenConfigDoesNotExist(t *testing.
 	if view.ModePrompts == nil || len(view.ModePrompts) != 0 {
 		t.Fatalf("modePrompts=%v want non-nil empty map", view.ModePrompts)
 	}
-	if view.Timing.PartialStableMs != 120 || view.Timing.ArgumentCandidateSilenceMs != 300 ||
-		view.Timing.NormalEndSilenceMs != 500 || view.Timing.ComfortEndSilenceMs != 900 ||
-		view.Timing.DeepListeningEndSilenceMs != 1200 || view.Timing.MaxProactivePrompts != 2 {
+	if view.Timing.PartialStableMs != 120 || view.Timing.ArgumentCandidateSilenceMs != 250 ||
+		view.Timing.NormalEndSilenceMs != 350 || view.Timing.ComfortEndSilenceMs != 700 ||
+		view.Timing.DeepListeningEndSilenceMs != 1000 || view.Timing.MaxProactivePrompts != 2 {
 		t.Fatalf("unexpected timing defaults: %+v", view.Timing)
 	}
 	if view.RealtimeASR.Provider != xinzhili.RealtimeASRProvider ||

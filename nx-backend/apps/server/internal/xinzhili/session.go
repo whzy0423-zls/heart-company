@@ -852,26 +852,49 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 		if prefix != "" && !s.postEvent(sessionEvent{kind: eventGenerationDelta, turnID: turn.input.TurnID, answer: prefix}) {
 			return
 		}
-		history, summary, _ := s.deps.Conversations.History(turn.ctx, turn.conversation, 20)
-		preferences := []string(nil)
-		if s.deps.Preferences != nil {
-			preferences, _ = s.deps.Preferences.PromptPreferences(turn.ctx, turn.input.UserID)
-		}
-		memories := []string(nil)
-		if s.deps.Memories != nil {
-			memories, _ = s.deps.Memories.PromptMemories(turn.ctx, turn.input.UserID, turn.input.CardID)
-		}
+		var (
+			history       []rag.Message
+			summary       string
+			preferences   []string
+			memories      []string
+			knowledgeDocs []rag.Document
+			theoryDocs    []rag.Document
+			contextLoads  sync.WaitGroup
+		)
+		contextLoads.Add(5)
+		go func() {
+			defer contextLoads.Done()
+			history, summary, _ = s.deps.Conversations.History(turn.ctx, turn.conversation, 20)
+		}()
+		go func() {
+			defer contextLoads.Done()
+			if s.deps.Preferences != nil {
+				preferences, _ = s.deps.Preferences.PromptPreferences(turn.ctx, turn.input.UserID)
+			}
+		}()
+		go func() {
+			defer contextLoads.Done()
+			if s.deps.Memories != nil {
+				memories, _ = s.deps.Memories.PromptMemories(turn.ctx, turn.input.UserID, turn.input.CardID)
+			}
+		}()
+		go func() {
+			defer contextLoads.Done()
+			if s.deps.Knowledge != nil {
+				knowledgeDocs, _ = s.deps.Knowledge.Search(turn.ctx, question, turn.input.KnowledgeTopK, turn.input.KnowledgeMinScore)
+			}
+		}()
+		go func() {
+			defer contextLoads.Done()
+			if s.deps.Theory != nil {
+				theoryDocs, _ = s.deps.Theory.Search(turn.ctx, question, turn.input.TheoryTopK, turn.input.TheoryMinScore)
+			}
+		}()
+		contextLoads.Wait()
+
 		documents := make([]rag.Document, 0, turn.input.KnowledgeTopK+turn.input.TheoryTopK)
-		if s.deps.Knowledge != nil {
-			if docs, err := s.deps.Knowledge.Search(turn.ctx, question, turn.input.KnowledgeTopK, turn.input.KnowledgeMinScore); err == nil {
-				documents = appendUniqueDocuments(documents, docs)
-			}
-		}
-		if s.deps.Theory != nil {
-			if docs, err := s.deps.Theory.Search(turn.ctx, question, turn.input.TheoryTopK, turn.input.TheoryMinScore); err == nil {
-				documents = appendUniqueDocuments(documents, docs)
-			}
-		}
+		documents = appendUniqueDocuments(documents, knowledgeDocs)
+		documents = appendUniqueDocuments(documents, theoryDocs)
 		sources := documentsToSources(documents)
 		directives := make([]string, 0, 2)
 		if value := strings.TrimSpace(turn.input.CommonPrompt); value != "" {
@@ -1197,8 +1220,9 @@ func normalizeGeneratedContent(text string) string {
 }
 
 const (
-	firstTTSChunkMinRunes = 14
-	firstTTSChunkMaxRunes = 28
+	firstTTSChunkMinRunes  = 10
+	firstTTSChunkMaxRunes  = 20
+	streamTTSChunkMaxRunes = 36
 )
 
 type streamSentenceChunker struct {
@@ -1217,7 +1241,7 @@ func (c *streamSentenceChunker) take(flush bool) []string {
 	var chunks []string
 	for len(c.buffer) > 0 {
 		cut := 0
-		chunkLimit := maxTTSSentenceRunes
+		chunkLimit := streamTTSChunkMaxRunes
 		if !c.emitted {
 			chunkLimit = firstTTSChunkMaxRunes
 		}

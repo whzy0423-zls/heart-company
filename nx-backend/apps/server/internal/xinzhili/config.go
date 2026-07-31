@@ -401,16 +401,16 @@ func applyTimingDefaults(v *TimingConfig) {
 		v.PartialStableMs = 120
 	}
 	if v.ArgumentCandidateSilenceMs == 0 {
-		v.ArgumentCandidateSilenceMs = 300
+		v.ArgumentCandidateSilenceMs = 250
 	}
 	if v.NormalEndSilenceMs == 0 {
-		v.NormalEndSilenceMs = 500
+		v.NormalEndSilenceMs = 350
 	}
 	if v.ComfortEndSilenceMs == 0 {
-		v.ComfortEndSilenceMs = 900
+		v.ComfortEndSilenceMs = 700
 	}
 	if v.DeepListeningEndSilenceMs == 0 {
-		v.DeepListeningEndSilenceMs = 1200
+		v.DeepListeningEndSilenceMs = 1000
 	}
 	if v.ComfortFirstPromptMs == 0 {
 		v.ComfortFirstPromptMs = 5000
