@@ -19,6 +19,8 @@ import (
 const (
 	xinzhiliMaxMessageBytes       = 1 << 20
 	xinzhiliIdleTimeout           = 2 * time.Minute
+	xinzhiliWriteTimeout          = 2 * time.Second
+	xinzhiliBroadcastTimeout      = 3 * time.Second
 	xinzhiliProtocolUpdateMessage = "语音服务正在更新，请稍后重试"
 )
 
@@ -51,6 +53,7 @@ type xinzhiliRealtimeConn struct {
 	userID         int64
 	sink           *xinzhiliWSSink
 	sess           xinzhili.TurnSession
+	sessionEpoch   uint64
 	configStateMu  sync.Mutex
 	mu             sync.Mutex
 	closed         bool
@@ -139,11 +142,26 @@ func (s *Server) broadcastXinzhiliConfigChanged(ctx context.Context, cfg xinzhil
 	}
 	s.xinzhiliLeaseMu.Unlock()
 
+	var wg sync.WaitGroup
 	for _, connection := range connections {
-		if err := connection.applyXinzhiliConfigChanged(ctx, cfg); err != nil {
-			log.Printf("xinzhili config_changed delivery failed user_id=%d config_version=%d err=%v", connection.userID, cfg.Version, err)
-		}
+		connection := connection
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := connection.applyXinzhiliConfigChanged(ctx, cfg); err != nil {
+				log.Printf("xinzhili config_changed delivery failed user_id=%d config_version=%d err=%v", connection.userID, cfg.Version, err)
+			}
+		}()
 	}
+	wg.Wait()
+}
+
+func (s *Server) scheduleXinzhiliConfigChanged(cfg xinzhili.Config) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), xinzhiliBroadcastTimeout)
+		defer cancel()
+		s.broadcastXinzhiliConfigChanged(ctx, cfg)
+	}()
 }
 
 func (c *xinzhiliRealtimeConn) readLoop(ctx context.Context) {
@@ -294,6 +312,10 @@ func (c *xinzhiliRealtimeConn) startSession(ctx context.Context, e xinzhili.Enve
 	}
 	_ = json.Unmarshal(e.Payload, &p)
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
 	if c.sess != nil {
 		c.mu.Unlock()
 		c.sendError(ctx, "session_already_started", "会话已经启动", false, true)
@@ -324,7 +346,11 @@ func (c *xinzhiliRealtimeConn) startSession(ctx context.Context, e xinzhili.Enve
 		c.configStateMu.Lock()
 		c.mu.Lock()
 		stale := c.configVersion > cfg.Version
-		if !stale {
+		closed := c.closed
+		var candidateEpoch uint64
+		if !stale && !closed {
+			c.sessionEpoch++
+			candidateEpoch = c.sessionEpoch
 			c.sess = candidate
 			c.configVersion = cfg.Version
 			c.enabledModes = append([]xinzhili.Mode(nil), cfg.EnabledModes...)
@@ -339,24 +365,37 @@ func (c *xinzhiliRealtimeConn) startSession(ctx context.Context, e xinzhili.Enve
 			_ = candidate.Close()
 			continue
 		}
+		if closed {
+			_ = candidate.Close()
+			return
+		}
 
 		readyPayload := map[string]any{"sessionId": c.sessionID, "cardId": p.CardID, "conversationId": p.ConversationID}
 		mergeXinzhiliModeSnapshot(readyPayload, modeSnapshot)
-		if err := c.sendControlAtConfigVersion(ctx, xinzhili.EventSessionReady, readyPayload, nil, nil, cfg.Version); errors.Is(err, errXinzhiliConfigSuperseded) {
-			c.configStateMu.Lock()
-			c.mu.Lock()
-			if c.configVersion > cfg.Version {
-				c.sess = nil
+		if err := c.sendControlAtConfigVersion(ctx, xinzhili.EventSessionReady, readyPayload, nil, nil, cfg.Version); err != nil {
+			if c.releaseCandidateSession(candidateEpoch) {
+				_ = candidate.Close()
 			}
-			c.mu.Unlock()
-			c.configStateMu.Unlock()
-			_ = candidate.Close()
-			continue
-		} else if err != nil {
+			if errors.Is(err, errXinzhiliConfigSuperseded) {
+				continue
+			}
 			return
 		}
 		return
 	}
+}
+
+func (c *xinzhiliRealtimeConn) releaseCandidateSession(epoch uint64) bool {
+	c.configStateMu.Lock()
+	defer c.configStateMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if epoch == 0 || c.sessionEpoch != epoch || c.sess == nil {
+		return false
+	}
+	c.sess = nil
+	c.sessionEpoch++
+	return true
 }
 
 func (c *xinzhiliRealtimeConn) createSession(cfg xinzhili.Config) (xinzhili.TurnSession, error) {
@@ -690,9 +729,9 @@ func (c *xinzhiliRealtimeConn) persistModeChangeAuthoritative(ctx context.Contex
 		currentVersion := c.configVersion
 		c.mu.Unlock()
 		if latest.Version > currentVersion {
-			if err := c.applyXinzhiliConfigChanged(ctx, latest); err != nil {
-				return xinzhiliModeSnapshot{}, err
-			}
+			// State application is authoritative even when the best-effort
+			// config_changed write fails on this connection.
+			_ = c.applyXinzhiliConfigChanged(ctx, latest)
 		}
 		if !modeEnabled(latest.EnabledModes, mode) {
 			fallback := fallbackXinzhiliMode(latest.EnabledModes)
@@ -847,6 +886,8 @@ func (c *xinzhiliRealtimeConn) close(code int, text string) {
 	}
 	c.closed = true
 	sess := c.sess
+	c.sess = nil
+	c.sessionEpoch++
 	c.mu.Unlock()
 	if sess != nil {
 		_ = sess.Close()
@@ -857,10 +898,13 @@ func (c *xinzhiliRealtimeConn) close(code int, text string) {
 
 func (s *xinzhiliWSSink) SendControl(ctx context.Context, event xinzhili.Envelope) error {
 	return s.write(ctx, func() error {
-		if event.Type == xinzhili.EventSessionReady || event.Type == xinzhili.EventModeChanged {
+		if event.Type == xinzhili.EventSessionReady || event.Type == xinzhili.EventModeChanged || event.Type == xinzhili.EventConfigChanged {
 			s.conn.mu.Lock()
 			currentConfigVersion := s.conn.configVersion
 			s.conn.mu.Unlock()
+			if event.ConfigVersion < currentConfigVersion && event.Type == xinzhili.EventConfigChanged {
+				return nil
+			}
 			if event.ConfigVersion < currentConfigVersion {
 				return errXinzhiliConfigSuperseded
 			}
@@ -915,12 +959,25 @@ func (s *xinzhiliWSSink) SendAudio(ctx context.Context, seg xinzhili.AudioSegmen
 	})
 }
 func (s *xinzhiliWSSink) write(ctx context.Context, fn func() error) error {
-	s.mu.Lock()
+	for !s.mu.TryLock() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
+	}
 	defer s.mu.Unlock()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
+	}
+	deadline := time.Now().Add(xinzhiliWriteTimeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	if err := s.conn.ws.SetWriteDeadline(deadline); err != nil {
+		return err
 	}
 	return fn()
 }

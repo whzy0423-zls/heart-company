@@ -65,6 +65,7 @@ type recordingXinzhiliTurnSession struct {
 	pushErrs     []error
 	startEntered chan struct{}
 	startRelease <-chan struct{}
+	closeCalls   int
 }
 
 func (s *recordingXinzhiliTurnSession) StartTurn(_ context.Context, input xinzhili.StartTurnInput) error {
@@ -91,7 +92,10 @@ func (s *recordingXinzhiliTurnSession) HandlePlaybackAck(context.Context, xinzhi
 }
 func (s *recordingXinzhiliTurnSession) Interrupt(context.Context, string) error { return nil }
 func (s *recordingXinzhiliTurnSession) Cancel(context.Context, string) error    { return nil }
-func (s *recordingXinzhiliTurnSession) Close() error                            { return nil }
+func (s *recordingXinzhiliTurnSession) Close() error {
+	s.closeCalls++
+	return nil
+}
 
 func newXinzhiliWebsocketPair(t *testing.T) (*websocket.Conn, *websocket.Conn) {
 	t.Helper()
@@ -572,6 +576,108 @@ func TestXinzhiliStartSessionRetriesStaleInitializationAfterConfigSave(t *testin
 	}
 	readXinzhiliConfigChanged(t, clientWS, xinzhili.ModeNormal, 52)
 	readXinzhiliReady(t, clientWS, 52, []xinzhili.Mode{xinzhili.ModeNormal})
+}
+
+func TestXinzhiliSinkDropsOutOfOrderConfigChangedBeforeSequenceAllocation(t *testing.T) {
+	serverWS, clientWS := newXinzhiliWebsocketPair(t)
+	c := &xinzhiliRealtimeConn{ws: serverWS, sessionID: "xz-config-order", generation: 9, configVersion: 62}
+	c.sink = &xinzhiliWSSink{conn: c}
+	stale := xinzhiliModeSnapshot{EnabledModes: []xinzhili.Mode{xinzhili.ModeNormal, xinzhili.ModeArgument}, ConfigVersion: 61}
+	if err := c.sendControlAtConfigVersion(context.Background(), xinzhili.EventConfigChanged, stale, nil, nil, 61); err != nil {
+		t.Fatal(err)
+	}
+	current := xinzhiliModeSnapshot{EnabledModes: []xinzhili.Mode{xinzhili.ModeNormal}, ConfigVersion: 62}
+	if err := c.sendControlAtConfigVersion(context.Background(), xinzhili.EventConfigChanged, current, nil, nil, 62); err != nil {
+		t.Fatal(err)
+	}
+	var envelope xinzhili.Envelope
+	readXinzhiliEnvelope(t, clientWS, &envelope)
+	if envelope.ConfigVersion != 62 || envelope.SessionSeq == nil || *envelope.SessionSeq != 0 {
+		t.Fatalf("version=%d sessionSeq=%v", envelope.ConfigVersion, envelope.SessionSeq)
+	}
+}
+
+func TestXinzhiliStartSessionClosesCandidateWhenConnectionClosesDuringFactory(t *testing.T) {
+	serverWS, _ := newXinzhiliWebsocketPair(t)
+	cfg := validXinzhiliModelConfigForHandler()
+	cfg.Version = 71
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	candidate := &recordingXinzhiliTurnSession{}
+	c := &xinzhiliRealtimeConn{
+		server: &Server{xinzhiliModelConfig: &fakeXinzhiliModelConfigStore{config: cfg, found: true}}, ws: serverWS,
+		modeStore: &fakeXinzhiliModeStore{}, turns: map[uint64]string{}, audioSeq: map[uint64]uint32{},
+		newSession: func(xinzhili.Config, xinzhili.SessionSink) (xinzhili.TurnSession, error) {
+			close(entered)
+			<-release
+			return candidate, nil
+		},
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.startSession(context.Background(), xinzhili.Envelope{Generation: 10, Payload: json.RawMessage(`{}`)})
+	}()
+	<-entered
+	c.close(websocket.CloseNormalClosure, "")
+	close(release)
+	<-done
+	if c.sess != nil || candidate.closeCalls != 1 {
+		t.Fatalf("sess=%v candidate closeCalls=%d", c.sess, candidate.closeCalls)
+	}
+}
+
+func TestXinzhiliStartSessionClearsCandidateAfterReadyWriteFailure(t *testing.T) {
+	serverWS, _ := newXinzhiliWebsocketPair(t)
+	cfg := validXinzhiliModelConfigForHandler()
+	cfg.Version = 72
+	candidate := &recordingXinzhiliTurnSession{}
+	c := &xinzhiliRealtimeConn{
+		server: &Server{xinzhiliModelConfig: &fakeXinzhiliModelConfigStore{config: cfg, found: true}}, ws: serverWS,
+		modeStore: &fakeXinzhiliModeStore{}, turns: map[uint64]string{}, audioSeq: map[uint64]uint32{},
+		newSession: func(xinzhili.Config, xinzhili.SessionSink) (xinzhili.TurnSession, error) { return candidate, nil },
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+	_ = serverWS.Close()
+	c.startSession(context.Background(), xinzhili.Envelope{Generation: 11, Payload: json.RawMessage(`{}`)})
+	if c.sess != nil || candidate.closeCalls != 1 {
+		t.Fatalf("sess=%v candidate closeCalls=%d", c.sess, candidate.closeCalls)
+	}
+}
+
+func TestXinzhiliModeCompensationContinuesAfterConfigChangedWriteFailure(t *testing.T) {
+	serverWS, _ := newXinzhiliWebsocketPair(t)
+	oldConfig := validXinzhiliModelConfigForHandler()
+	oldConfig.Version = 81
+	oldConfig.EnabledModes = []xinzhili.Mode{xinzhili.ModeNormal, xinzhili.ModeArgument}
+	configStore := &fakeXinzhiliModelConfigStore{config: oldConfig, found: true}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	modeStore := &fakeXinzhiliModeStore{updateEntered: entered, updateRelease: release}
+	c := &xinzhiliRealtimeConn{
+		server: &Server{xinzhiliModelConfig: configStore}, ws: serverWS, sess: &recordingXinzhiliTurnSession{},
+		configVersion: 81, enabledModes: oldConfig.EnabledModes, modeStore: modeStore,
+		requestedMode: xinzhili.ModeNormal, pendingMode: xinzhili.ModeNormal, effectiveMode: xinzhili.ModeNormal,
+		turns: map[uint64]string{}, audioSeq: map[uint64]uint32{},
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.changeMode(context.Background(), xinzhili.Envelope{Payload: json.RawMessage(`{"mode":"argument","expectedRevision":0}`)})
+	}()
+	<-entered
+	newConfig := oldConfig
+	newConfig.Version = 82
+	newConfig.EnabledModes = []xinzhili.Mode{xinzhili.ModeNormal}
+	configStore.config = newConfig
+	_ = serverWS.Close()
+	close(release)
+	<-done
+	if c.configVersion != 82 || c.requestedMode != xinzhili.ModeNormal || c.pendingMode != xinzhili.ModeNormal || len(modeStore.updates) != 2 || modeStore.updates[1].Requested != xinzhili.ModeNormal {
+		t.Fatalf("version=%d requested=%s pending=%s updates=%+v", c.configVersion, c.requestedMode, c.pendingMode, modeStore.updates)
+	}
 }
 
 func readXinzhiliConfigChanged(t *testing.T, client *websocket.Conn, effective xinzhili.Mode, version int64) {

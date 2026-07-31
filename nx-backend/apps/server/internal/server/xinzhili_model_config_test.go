@@ -742,6 +742,45 @@ func TestXinzhiliModelConfigPUTBroadcastsAuthoritativeSnapshotAfterPersistence(t
 	}
 }
 
+func TestXinzhiliModelConfigPUTReturnsWhileBlockedConnectionDoesNotDelayOthers(t *testing.T) {
+	stored := validXinzhiliModelConfigForHandler()
+	stored.Enabled = false
+	stored.Version = 3
+	stored.EnabledModes = []xinzhili.Mode{xinzhili.ModeNormal, xinzhili.ModeArgument}
+	store := &fakeXinzhiliModelConfigStore{config: stored, found: true}
+	blockedWS, _ := newXinzhiliWebsocketPair(t)
+	healthyWS, healthyClient := newXinzhiliWebsocketPair(t)
+	s := &Server{xinzhiliModelConfig: store, xinzhiliLeases: map[int64]*xinzhiliRealtimeConn{}}
+	blocked := &xinzhiliRealtimeConn{
+		server: s, ws: blockedWS, userID: 20, sessionID: "xz-blocked", configVersion: 3,
+		enabledModes: stored.EnabledModes, turns: map[uint64]string{}, audioSeq: map[uint64]uint32{},
+	}
+	blocked.sink = &xinzhiliWSSink{conn: blocked}
+	healthy := &xinzhiliRealtimeConn{
+		server: s, ws: healthyWS, userID: 21, sessionID: "xz-healthy", configVersion: 3,
+		enabledModes: stored.EnabledModes, turns: map[uint64]string{}, audioSeq: map[uint64]uint32{},
+	}
+	healthy.sink = &xinzhiliWSSink{conn: healthy}
+	s.xinzhiliLeases[20], s.xinzhiliLeases[21] = blocked, healthy
+	blocked.sink.mu.Lock()
+	defer blocked.sink.mu.Unlock()
+
+	res := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/xinzhili-model-config", strings.NewReader(`{"expectedVersion":3,"enabled":false,"enabledModes":["normal"]}`))
+	started := time.Now()
+	s.xinzhiliModelConfigHandler(res, request)
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("PUT blocked for %s", elapsed)
+	}
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	readXinzhiliConfigChanged(t, healthyClient, xinzhili.ModeNormal, 4)
+	if healthy.configVersion != 4 {
+		t.Fatalf("healthy config version=%d want=4", healthy.configVersion)
+	}
+}
+
 func TestXinzhiliModelConfigPUTDoesNotBroadcastFailedPersistence(t *testing.T) {
 	stored := validXinzhiliModelConfigForHandler()
 	stored.Enabled = false
