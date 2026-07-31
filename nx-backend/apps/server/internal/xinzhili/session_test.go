@@ -246,6 +246,122 @@ func TestSessionStrategyDrainsTailFinalBeforeProcessing(t *testing.T) {
 	}
 }
 
+func TestSessionStrategyPartialOnlyFinishesOnceAndPromotesAtTermination(t *testing.T) {
+	fixture := newSessionFixture(t)
+	engine := newScriptedStrategyEngine()
+	engine.applyActions = func(signal Signal) []Action {
+		if signal.Kind == SignalPartial {
+			return []Action{{Kind: ActionEndpoint}, {Kind: ActionEndpoint}}
+		}
+		return nil
+	}
+	fixture.session.Close()
+	fixture.deps.EngineFactory = func(Mode, TimingConfig, Clock) StrategyEngine { return engine }
+	fixture.session = NewSession(fixture.deps)
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-partial-only")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventPartial, Partial: "在吗在吗"})
+	fixture.generator.waitCalled(t)
+	if got := fixture.generator.lastInput().Question; got != "在吗在吗" {
+		t.Fatalf("promoted partial=%q", got)
+	}
+	if fixture.asr.finishCount() != 1 {
+		t.Fatalf("FinishInput calls=%d want=1", fixture.asr.finishCount())
+	}
+	users, _, _ := fixture.store.contents()
+	if len(users) != 1 || users[0] != "在吗在吗" {
+		t.Fatalf("persisted users=%q", users)
+	}
+}
+
+func TestSessionStrategyPartialWaitsForFinishReturnAndTaskFinishedBarriers(t *testing.T) {
+	fixture := newSessionFixture(t)
+	engine := newScriptedStrategyEngine()
+	engine.applyActions = func(signal Signal) []Action {
+		if signal.Kind == SignalPartial {
+			return []Action{{Kind: ActionEndpoint}}
+		}
+		return nil
+	}
+	finishStarted := make(chan struct{})
+	releaseFinish := make(chan struct{})
+	fixture.asr.finishHook = func(asr *fakeASRSession) {
+		close(finishStarted)
+		asr.emit(ASREvent{Kind: ASREventTaskFinished})
+		<-releaseFinish
+	}
+	fixture.session.Close()
+	fixture.deps.EngineFactory = func(Mode, TimingConfig, Clock) StrategyEngine { return engine }
+	fixture.session = NewSession(fixture.deps)
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-partial-barriers")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventPartial, Partial: "你在吗"})
+	select {
+	case <-finishStarted:
+	case <-time.After(time.Second):
+		t.Fatal("FinishInput did not start")
+	}
+	time.Sleep(30 * time.Millisecond)
+	if fixture.generator.calls() != 0 || fixture.store.userCount() != 0 {
+		t.Fatal("task-finished alone crossed the endpoint barrier")
+	}
+	close(releaseFinish)
+	fixture.generator.waitCalled(t)
+}
+
+func TestSessionStrategyEndpointWithoutTranscriptSendsRecoverablePromptAndDone(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.synth.segments = nil
+	engine := newScriptedStrategyEngine()
+	fixture.session.Close()
+	fixture.deps.EngineFactory = func(Mode, TimingConfig, Clock) StrategyEngine { return engine }
+	fixture.session = NewSession(fixture.deps)
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-no-transcript")); err != nil {
+		t.Fatal(err)
+	}
+	engine.setTickActions(Action{Kind: ActionEndpoint})
+	segment := fixture.sink.waitAudio(t)
+	if got := segment.DeliveryText(); got != "环境有些嘈杂，我没听清，请再说一次" {
+		t.Fatalf("recoverable prompt=%q", got)
+	}
+	fixture.sink.waitControl(t, EventAssistantDone)
+	if fixture.asr.finishCount() != 1 || fixture.generator.calls() != 0 || fixture.store.userCount() != 0 {
+		t.Fatalf("finish=%d generator=%d users=%d", fixture.asr.finishCount(), fixture.generator.calls(), fixture.store.userCount())
+	}
+}
+
+func TestSessionStrategyRepeatedCharacterPartialIsNotPromoted(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.synth.segments = nil
+	engine := newScriptedStrategyEngine()
+	engine.applyActions = func(signal Signal) []Action {
+		if signal.Kind == SignalPartial {
+			return []Action{{Kind: ActionEndpoint}}
+		}
+		return nil
+	}
+	fixture.session.Close()
+	fixture.deps.EngineFactory = func(Mode, TimingConfig, Clock) StrategyEngine { return engine }
+	fixture.session = NewSession(fixture.deps)
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-repeated-partial")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventPartial, Partial: "嗯嗯嗯"})
+	segment := fixture.sink.waitAudio(t)
+	if segment.DeliveryText() != "环境有些嘈杂，我没听清，请再说一次" {
+		t.Fatalf("prompt=%q", segment.DeliveryText())
+	}
+	if fixture.generator.calls() != 0 || fixture.store.userCount() != 0 {
+		t.Fatal("repeated character partial was promoted")
+	}
+}
+
 func TestSessionStrategyStopAssistantEmitsPlaybackInterrupt(t *testing.T) {
 	fixture := newSessionFixture(t)
 	engine := newScriptedStrategyEngine()

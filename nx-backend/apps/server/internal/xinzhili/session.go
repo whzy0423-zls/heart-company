@@ -205,8 +205,10 @@ type activeTurn struct {
 	endpointCancelled        bool
 	pendingCancellationCount uint64
 	transcripts              []string
+	latestQualifiedPartial   string
 	interruptionPrefix       string
 	proactivePrompt          bool
+	terminalPrompt           bool
 	responseStartSeq         uint32
 	draft                    string
 	answer                   string
@@ -493,6 +495,7 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 		}
 	case eventTTSDone:
 		proactivePrompt := current.proactivePrompt
+		terminalPrompt := current.terminalPrompt
 		current.completionDone = true
 		if current.engine != nil {
 			s.executeStrategyActions(current, current.engine.Apply(Signal{Kind: SignalAssistantStopped}))
@@ -512,6 +515,9 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 		}
 		if proactivePrompt {
 			s.resetProactivePromptDelivery(current)
+		}
+		if terminalPrompt {
+			current.cancel()
 		}
 	}
 }
@@ -555,6 +561,9 @@ func (s *session) handleASREvent(turn *activeTurn, event ASREvent) {
 			return
 		}
 		turn.hasSpeech = true
+		if qualifiedPartialFallback(text) {
+			turn.latestQualifiedPartial = text
+		}
 		if turn.engine != nil {
 			s.executeStrategyActions(turn, turn.engine.Apply(Signal{Kind: SignalPartial, Transcript: text, Stable: event.Stable}))
 		}
@@ -697,9 +706,6 @@ func (s *session) beginStrategyEndpoint(turn *activeTurn) {
 	if turn == nil || turn.engine == nil || turn.processing || turn.endpointing {
 		return
 	}
-	if !hasMeaningfulTranscript(turnTranscript(turn)) {
-		return
-	}
 	turn.endpointing = true
 	go func(turnID string, asr ASRSession, ctx context.Context) {
 		err := asr.FinishInput(ctx)
@@ -712,7 +718,43 @@ func (s *session) completeStrategyEndpoint(turn *activeTurn) {
 		!turn.finishReturned || !turn.asrTaskFinished {
 		return
 	}
-	s.beginProcessing(turn, turnTranscript(turn))
+	text := turnTranscript(turn)
+	if !hasMeaningfulTranscript(text) && qualifiedPartialFallback(turn.latestQualifiedPartial) {
+		s.appendStableTranscript(turn, turn.latestQualifiedPartial)
+		text = turnTranscript(turn)
+	}
+	if hasMeaningfulTranscript(text) {
+		s.beginProcessing(turn, text)
+		return
+	}
+	s.startUnclearEnvironmentPrompt(turn)
+}
+
+func (s *session) startUnclearEnvironmentPrompt(turn *activeTurn) {
+	if turn == nil || turn.processing {
+		return
+	}
+	const prompt = "环境有些嘈杂，我没听清，请再说一次"
+	if s.deps.Synthesizer == nil {
+		s.sendError(turn, "tts_not_configured", "请配置好语音模型后再重试", false)
+		_ = s.sendAssistantDone(turn)
+		turn.processing = true
+		turn.cancel()
+		return
+	}
+	if err := s.sendTurnControl(turn, EventTurnProcessing, map[string]any{"recoverable": true}); err != nil {
+		turn.processing = true
+		turn.cancel()
+		return
+	}
+	turn.processing = true
+	turn.terminalPrompt = true
+	turn.draft = prompt
+	turn.answer = prompt
+	turn.ttsJobs = make(chan ttsStreamJob, 1)
+	s.startSynthesisWorker(turn)
+	s.queueTTSChunk(turn, prompt)
+	close(turn.ttsJobs)
 }
 
 func (s *session) beginProcessing(turn *activeTurn, text string) {

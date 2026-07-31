@@ -66,6 +66,92 @@ func TestStrategyNormalIgnoresBlankAndNoise(t *testing.T) {
 	assertStrategyActions(t, engine.Tick())
 }
 
+func TestStrategyQualifiedPartialEndpointsAfterSafeStableWindow(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeNormal, strategyTiming(), clock)
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "在吗在吗"})
+	clock.Advance(1599 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick())
+	clock.Advance(time.Millisecond)
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
+	assertStrategyActions(t, engine.Tick())
+}
+
+func TestStrategyRepeatedQualifiedPartialDoesNotResetStableWindow(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeNormal, strategyTiming(), clock)
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "你在吗"})
+	clock.Advance(time.Second)
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "你在吗"})
+	clock.Advance(599 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick())
+	clock.Advance(time.Millisecond)
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
+}
+
+func TestStrategyGrowingPartialResetsStableWindow(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeNormal, strategyTiming(), clock)
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "我想说"})
+	clock.Advance(time.Second)
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "我想说一件事"})
+	clock.Advance(1599 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick())
+	clock.Advance(time.Millisecond)
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
+}
+
+func TestStrategyShortPauseBeforePartialGrowthDoesNotEndpoint(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeNormal, strategyTiming(), clock)
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "我想说"})
+	clock.Advance(1200 * time.Millisecond)
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "我想说一件事"})
+	clock.Advance(400 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick())
+}
+
+func TestStrategyPartialFallbackRejectsNoiseSingleAndRepeatedCharacters(t *testing.T) {
+	for _, signal := range []Signal{
+		{Kind: SignalPartial, Transcript: "在"},
+		{Kind: SignalPartial, Transcript: "嗯嗯嗯"},
+		{Kind: SignalPartial, Transcript: "在吗", Noise: true},
+	} {
+		clock := newStrategyFakeClock()
+		engine := NewEngine(ModeNormal, strategyTiming(), clock)
+		engine.Apply(signal)
+		clock.Advance(20 * time.Second)
+		assertStrategyActions(t, engine.Tick())
+	}
+}
+
+func TestStrategyContinuouslyChangingPartialHitsBoundedHardLimit(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeNormal, strategyTiming(), clock)
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "我想说"})
+	for _, text := range []string{"我想说一", "我想说一件", "我想说一件很", "我想说一件很长"} {
+		clock.Advance(time.Second)
+		engine.Apply(Signal{Kind: SignalPartial, Transcript: text})
+		assertStrategyActions(t, engine.Tick())
+	}
+	clock.Advance(time.Second)
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "我想说一件很长的事"})
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
+}
+
+func TestStrategyStableFinalUsesFinalSilenceAndDoesNotDuplicatePartialEndpoint(t *testing.T) {
+	clock := newStrategyFakeClock()
+	engine := NewEngine(ModeNormal, strategyTiming(), clock)
+	engine.Apply(Signal{Kind: SignalPartial, Transcript: "我想聊聊"})
+	clock.Advance(time.Second)
+	engine.Apply(Signal{Kind: SignalStableText, Transcript: "我想聊聊近况"})
+	engine.Apply(Signal{Kind: SignalSilence})
+	clock.Advance(700 * time.Millisecond)
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
+	clock.Advance(10 * time.Second)
+	assertStrategyActions(t, engine.Tick())
+}
+
 func TestStrategyNormalKeepsAcousticSilenceBeforeDelayedFinal(t *testing.T) {
 	clock := newStrategyFakeClock()
 	engine := NewEngine(ModeNormal, strategyTiming(), clock)
@@ -321,16 +407,16 @@ func TestStrategySpeechCancelsUnplayedComfortPromptWithoutFakeStop(t *testing.T)
 	assertStrategyActions(t, engine.Tick())
 }
 
-func TestStrategyComfortMidSentencePauseUsesGentlePrompt(t *testing.T) {
+func TestStrategyComfortQualifiedPartialEndpointsBeforeMidSentencePrompt(t *testing.T) {
 	clock := newStrategyFakeClock()
 	engine := NewEngine(ModeComfort, strategyTiming(), clock)
 	engine.Apply(Signal{Kind: SignalSpeechStarted})
 	engine.Apply(Signal{Kind: SignalPartial, Transcript: "我不知道该怎么", Stable: true})
 	engine.Apply(Signal{Kind: SignalSilence})
-	clock.Advance(2499 * time.Millisecond)
+	clock.Advance(1599 * time.Millisecond)
 	assertStrategyActions(t, engine.Tick())
 	clock.Advance(time.Millisecond)
-	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionComfortPrompt, TextKey: "comfort.mid_sentence"})
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
 	clock.Advance(time.Second)
 	assertStrategyActions(t, engine.Tick())
 }
@@ -369,21 +455,17 @@ func TestStrategyDeepListeningLongSilencePromptsOnlyOnceAndNeverInterrupts(t *te
 	assertStrategyActions(t, engine.Tick())
 }
 
-func TestStrategyDeepListeningDoesNotPromptDuringOngoingSpeech(t *testing.T) {
+func TestStrategyDeepListeningBoundsQualifiedOngoingPartial(t *testing.T) {
 	clock := newStrategyFakeClock()
 	engine := NewEngine(ModeDeepListening, strategyTiming(), clock)
 
 	clock.Advance(6 * time.Second)
 	engine.Apply(Signal{Kind: SignalSpeechStarted})
 	engine.Apply(Signal{Kind: SignalPartial, Transcript: "我还在慢慢讲", Stable: true})
-	clock.Advance(7 * time.Second)
-	assertStrategyActions(t, engine.Tick())
-
-	engine.Apply(Signal{Kind: SignalSilence})
-	clock.Advance(11999 * time.Millisecond)
+	clock.Advance(1599 * time.Millisecond)
 	assertStrategyActions(t, engine.Tick())
 	clock.Advance(time.Millisecond)
-	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionComfortPrompt, TextKey: "deep_listening.silence"})
+	assertStrategyActions(t, engine.Tick(), Action{Kind: ActionEndpoint})
 }
 
 func TestStrategyDeepListeningDoesNotPromptWhileAssistantIsPlaying(t *testing.T) {
