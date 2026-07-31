@@ -57,8 +57,9 @@ type fakeXinzhiliModeStore struct {
 }
 
 type recordingXinzhiliTurnSession struct {
-	pcm    []xinzhili.PCMFrame
-	starts []xinzhili.StartTurnInput
+	pcm     []xinzhili.PCMFrame
+	starts  []xinzhili.StartTurnInput
+	pushErr error
 }
 
 func (s *recordingXinzhiliTurnSession) StartTurn(_ context.Context, input xinzhili.StartTurnInput) error {
@@ -67,7 +68,7 @@ func (s *recordingXinzhiliTurnSession) StartTurn(_ context.Context, input xinzhi
 }
 func (s *recordingXinzhiliTurnSession) PushPCM(_ context.Context, frame xinzhili.PCMFrame) error {
 	s.pcm = append(s.pcm, frame)
-	return nil
+	return s.pushErr
 }
 func (s *recordingXinzhiliTurnSession) HandlePlaybackAck(context.Context, xinzhili.PlaybackAck) error {
 	return nil
@@ -468,6 +469,68 @@ func TestXinzhiliBinaryDropsDuplicateAudioSequence(t *testing.T) {
 	c.handleBinary(context.Background(), data)
 	if len(session.pcm) != 1 {
 		t.Fatalf("duplicate audio sequence forwarded %d PCM frames", len(session.pcm))
+	}
+}
+
+func TestXinzhiliBinaryConsumesTailFrameAfterASRInputFinished(t *testing.T) {
+	serverWS, clientWS := newXinzhiliWebsocketPair(t)
+	session := &recordingXinzhiliTurnSession{pushErr: xinzhili.ErrASRInputFinished}
+	c := &xinzhiliRealtimeConn{
+		ws: serverWS, sess: session, generation: 7, sessionID: "xz-test",
+		turns: map[uint64]string{42: "turn-1"}, audioSeq: map[uint64]uint32{42: 0},
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+	data, err := xinzhili.EncodeBinaryFrame(xinzhili.BinaryFrame{
+		FrameType: xinzhili.FrameTypeInputPCM, Flags: xinzhili.FlagStart,
+		Generation: 7, TurnKey: 42, AudioSeq: 0, Payload: []byte{1, 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.handleBinary(context.Background(), data)
+	if got := c.audioSeq[42]; got != 1 {
+		t.Fatalf("audio sequence=%d want=1", got)
+	}
+	_ = clientWS.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	if _, _, err := clientWS.ReadMessage(); err == nil {
+		t.Fatal("ASR input-finished tail frame emitted an error event")
+	}
+}
+
+func TestXinzhiliBinaryReportsUnexpectedPCMRejection(t *testing.T) {
+	serverWS, clientWS := newXinzhiliWebsocketPair(t)
+	session := &recordingXinzhiliTurnSession{pushErr: errors.New("write failed")}
+	c := &xinzhiliRealtimeConn{
+		ws: serverWS, sess: session, generation: 7, sessionID: "xz-test",
+		turns: map[uint64]string{42: "turn-1"}, audioSeq: map[uint64]uint32{42: 0},
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+	data, err := xinzhili.EncodeBinaryFrame(xinzhili.BinaryFrame{
+		FrameType: xinzhili.FrameTypeInputPCM, Flags: xinzhili.FlagStart,
+		Generation: 7, TurnKey: 42, AudioSeq: 0, Payload: []byte{1, 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.handleBinary(context.Background(), data)
+	_ = clientWS.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err := clientWS.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := xinzhili.DecodeEnvelope(raw, xinzhili.DirectionServer, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload xinzhili.ErrorPayload
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Code != "audio_frame_rejected" {
+		t.Fatalf("error code=%q", payload.Code)
+	}
+	if got := c.audioSeq[42]; got != 0 {
+		t.Fatalf("rejected audio sequence=%d want=0", got)
 	}
 }
 

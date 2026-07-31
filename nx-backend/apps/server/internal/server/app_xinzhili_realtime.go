@@ -437,8 +437,14 @@ func (c *xinzhiliRealtimeConn) handleBinary(ctx context.Context, data []byte) {
 		return
 	}
 	if err := c.sess.PushPCM(ctx, xinzhili.PCMFrame{TurnID: turnID, Data: f.Payload}); err != nil {
-		c.sendError(ctx, "audio_frame_rejected", "音频帧未被接收", true, false)
-		return
+		// FinishInput closes Paraformer's audio input before the final
+		// task-finished event reaches the App. PCM already queued on the phone
+		// during that short window is an expected tail, not a broken turn.
+		// Consume its sequence so following queued frames remain monotonic.
+		if !errors.Is(err, xinzhili.ErrASRInputFinished) {
+			c.sendError(ctx, "audio_frame_rejected", "音频帧未被接收", true, false)
+			return
+		}
 	}
 	c.turnMu.Lock()
 	if c.audioSeq == nil {
