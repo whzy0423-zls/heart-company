@@ -79,6 +79,15 @@ func TestConversationBlankASRDoesNotCallModelOrPersist(t *testing.T) {
 	}
 }
 
+func TestStartTurnRejectsZeroTurnKey(t *testing.T) {
+	fixture := newSessionFixture(t)
+	input := fixture.input("turn-zero-key")
+	input.TurnKey = 0
+	if err := fixture.session.StartTurn(context.Background(), input); err == nil {
+		t.Fatal("StartTurn accepted zero turn key")
+	}
+}
+
 func TestSpeechStartedEmitsASRActivity(t *testing.T) {
 	fixture := newSessionFixture(t)
 	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-asr-activity")); err != nil {
@@ -379,7 +388,8 @@ func TestSessionCompletedEndpointWithoutAnyTranscriptUsesDefensivePrompt(t *test
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	turn := &activeTurn{
-		input:           StartTurnInput{TurnID: "turn-defensive-prompt"},
+		input:           StartTurnInput{TurnID: "turn-defensive-prompt", TurnKey: TurnKey("turn-defensive-prompt")},
+		turnKey:         TurnKey("turn-defensive-prompt"),
 		ctx:             ctx,
 		cancel:          cancel,
 		endpointing:     true,
@@ -668,17 +678,20 @@ func TestConversationIsolationAndRelevanceUseIndependentRetrievers(t *testing.T)
 
 func TestDeliveryCreatesAssistantAfterFirstAudioAndAcknowledgesExactPrefixes(t *testing.T) {
 	fixture := newSessionFixture(t)
+	const turnKey uint64 = 42
 	fixture.synth.segments = []AudioSegment{
 		{Seq: 0, Audio: []byte{1}, MIME: "audio/mpeg", deliveryText: "先呼吸。"},
 		{Seq: 1, Audio: []byte{2}, MIME: "audio/mpeg", deliveryText: "再感受脚底。"},
 	}
-	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-delivery")); err != nil {
+	input := fixture.input("turn-delivery")
+	input.TurnKey = turnKey
+	if err := fixture.session.StartTurn(context.Background(), input); err != nil {
 		t.Fatal(err)
 	}
 	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "我很焦虑", Stable: true})
 	first := fixture.sink.waitAudio(t)
 	fixture.store.waitAssistantCount(t, 1)
-	if first.Seq != 0 {
+	if first.Seq != 0 || first.TurnKey != turnKey {
 		t.Fatalf("first=%+v", first)
 	}
 	fixture.sink.waitAudio(t)
@@ -977,7 +990,7 @@ func newSessionFixture(t *testing.T) *sessionFixture {
 }
 
 func (f *sessionFixture) input(turnID string) StartTurnInput {
-	return StartTurnInput{UserID: 11, CardID: 22, ConversationID: 33, TurnID: turnID, Mode: ModeNormal, ASRConfig: RealtimeASRConfig{}, TTSConfig: TTSConfig{}, KnowledgeTopK: 4, KnowledgeMinScore: 0.35, TheoryTopK: 4, TheoryMinScore: 0.35}
+	return StartTurnInput{UserID: 11, CardID: 22, ConversationID: 33, TurnID: turnID, TurnKey: TurnKey(turnID), Mode: ModeNormal, ASRConfig: RealtimeASRConfig{}, TTSConfig: TTSConfig{}, KnowledgeTopK: 4, KnowledgeMinScore: 0.35, TheoryTopK: 4, TheoryMinScore: 0.35}
 }
 
 type fakeCardProvider struct{}

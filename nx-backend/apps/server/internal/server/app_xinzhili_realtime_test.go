@@ -351,7 +351,7 @@ func TestXinzhiliModeSnapshotJSONContract(t *testing.T) {
 	}
 }
 
-func TestXinzhiliWSSinkSendAudioUsesConnectionGeneration(t *testing.T) {
+func TestXinzhiliWSSinkSendAudioUsesSegmentTurnKeyWhenConnectionAdvances(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	serverConn := make(chan *websocket.Conn, 1)
 	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -370,9 +370,10 @@ func TestXinzhiliWSSinkSendAudioUsesConnectionGeneration(t *testing.T) {
 	defer client.Close()
 	conn := <-serverConn
 	defer conn.Close()
-	rc := &xinzhiliRealtimeConn{ws: conn, sessionID: "xz-test", generation: 7, turnKey: xinzhili.TurnKey("turn-1")}
+	oldTurnKey := xinzhili.TurnKey("turn-1")
+	rc := &xinzhiliRealtimeConn{ws: conn, sessionID: "xz-test", generation: 7, turnKey: xinzhili.TurnKey("turn-2")}
 	sink := &xinzhiliWSSink{conn: rc}
-	if err := sink.SendAudio(context.Background(), xinzhili.AudioSegment{Seq: 3, Audio: []byte("mp3")}); err != nil {
+	if err := sink.SendAudio(context.Background(), xinzhili.AudioSegment{TurnKey: oldTurnKey, Seq: 3, Audio: []byte("mp3")}); err != nil {
 		t.Fatalf("SendAudio: %v", err)
 	}
 	_ = client.SetReadDeadline(time.Now().Add(time.Second))
@@ -387,7 +388,7 @@ func TestXinzhiliWSSinkSendAudioUsesConnectionGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if frame.Generation != 7 || frame.FrameType != xinzhili.FrameTypeAssistantMP3 || frame.TurnKey != rc.turnKey || frame.SegmentSeq != 3 || string(frame.Payload) != "mp3" {
+	if frame.Generation != 7 || frame.FrameType != xinzhili.FrameTypeAssistantMP3 || frame.TurnKey != oldTurnKey || frame.SegmentSeq != 3 || string(frame.Payload) != "mp3" {
 		t.Fatalf("unexpected frame: %+v", frame)
 	}
 }

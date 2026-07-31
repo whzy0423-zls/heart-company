@@ -40,6 +40,7 @@ var (
 // AudioSegment is one complete, independently playable MP3 sentence. Audio is
 // never split at the byte level and is never persisted by this package.
 type AudioSegment struct {
+	TurnKey    uint64   `json:"-"`
 	Seq        uint32   `json:"seq"`
 	Audio      []byte   `json:"audio"`
 	MIME       string   `json:"mime"`

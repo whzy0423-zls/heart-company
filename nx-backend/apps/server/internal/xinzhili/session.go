@@ -106,6 +106,7 @@ type StartTurnInput struct {
 	CardID            int64
 	ConversationID    int64
 	TurnID            string
+	TurnKey           uint64
 	Mode              Mode
 	ASRConfig         RealtimeASRConfig
 	TTSConfig         TTSConfig
@@ -191,6 +192,7 @@ const (
 
 type activeTurn struct {
 	input                    StartTurnInput
+	turnKey                  uint64
 	conversation             Conversation
 	card                     Card
 	asr                      ASRSession
@@ -338,7 +340,7 @@ func (s *session) loop() {
 
 func (s *session) startTurn(ctx context.Context, input StartTurnInput) (*activeTurn, error) {
 	input.TurnID = strings.TrimSpace(input.TurnID)
-	if input.UserID <= 0 || input.CardID <= 0 || input.ConversationID < 0 || input.TurnID == "" || !knownMode(input.Mode) {
+	if input.UserID <= 0 || input.CardID <= 0 || input.ConversationID < 0 || input.TurnID == "" || input.TurnKey == 0 || !knownMode(input.Mode) {
 		return nil, errors.New("xinzhili: invalid turn start")
 	}
 	if s.deps.Cards == nil || s.deps.Conversations == nil || s.deps.ASRFactory == nil || s.deps.Sink == nil {
@@ -364,7 +366,7 @@ func (s *session) startTurn(ctx context.Context, input StartTurnInput) (*activeT
 		cancel()
 		return nil, err
 	}
-	turn := &activeTurn{input: input, conversation: conversation, card: card, asr: asr, ctx: turnCtx, cancel: cancel, segments: map[uint32]string{}, lastAck: -1}
+	turn := &activeTurn{input: input, turnKey: input.TurnKey, conversation: conversation, card: card, asr: asr, ctx: turnCtx, cancel: cancel, segments: map[uint32]string{}, lastAck: -1}
 	if s.deps.EngineFactory != nil && s.deps.Clock != nil {
 		turn.engine = s.deps.EngineFactory(input.Mode, input.Timing, s.deps.Clock)
 	}
@@ -958,6 +960,10 @@ func (s *session) queueTTSChunk(turn *activeTurn, chunk string) {
 }
 
 func (s *session) acceptAudioSegment(turn *activeTurn, segment AudioSegment) error {
+	if turn.turnKey == 0 {
+		return errors.New("xinzhili: active turn key missing")
+	}
+	segment.TurnKey = turn.turnKey
 	text := segment.DeliveryText()
 	if text == "" {
 		return errors.New("xinzhili: TTS segment delivery text missing")

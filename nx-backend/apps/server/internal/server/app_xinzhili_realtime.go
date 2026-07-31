@@ -350,7 +350,7 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 			return
 		}
 	}
-	in := xinzhili.StartTurnInput{UserID: c.userID, CardID: cardID, ConversationID: conversationID, TurnID: *e.TurnID, Mode: mode, ASRConfig: cfg.RealtimeASR, TTSConfig: cfg.TTS, Timing: cfg.Timing, CommonPrompt: cfg.CommonPrompt, ModePrompt: cfg.ModePrompts[mode], KnowledgeTopK: 6, KnowledgeMinScore: 0.2, TheoryTopK: 6, TheoryMinScore: 0.2}
+	in := xinzhili.StartTurnInput{UserID: c.userID, CardID: cardID, ConversationID: conversationID, TurnID: *e.TurnID, TurnKey: turnKey, Mode: mode, ASRConfig: cfg.RealtimeASR, TTSConfig: cfg.TTS, Timing: cfg.Timing, CommonPrompt: cfg.CommonPrompt, ModePrompt: cfg.ModePrompts[mode], KnowledgeTopK: 6, KnowledgeMinScore: 0.2, TheoryTopK: 6, TheoryMinScore: 0.2}
 	if err := c.sess.StartTurn(ctx, in); err != nil {
 		if sequence != nil {
 			sequence.ReleaseActiveTurn(*e.TurnID)
@@ -660,10 +660,10 @@ func (s *xinzhiliWSSink) SendControl(ctx context.Context, event xinzhili.Envelop
 }
 func (s *xinzhiliWSSink) SendAudio(ctx context.Context, seg xinzhili.AudioSegment) error {
 	return s.write(ctx, func() error {
-		s.conn.mu.Lock()
-		turnKey := s.conn.turnKey
-		s.conn.mu.Unlock()
-		b, err := xinzhili.EncodeBinaryFrame(xinzhili.BinaryFrame{FrameType: xinzhili.FrameTypeAssistantMP3, Flags: xinzhili.FlagStart | xinzhili.FlagEnd, Generation: s.conn.generation, TurnKey: turnKey, SegmentSeq: seg.Seq, Payload: seg.Audio})
+		if seg.TurnKey == 0 {
+			return errors.New("xinzhili: audio segment turn key missing")
+		}
+		b, err := xinzhili.EncodeBinaryFrame(xinzhili.BinaryFrame{FrameType: xinzhili.FrameTypeAssistantMP3, Flags: xinzhili.FlagStart | xinzhili.FlagEnd, Generation: s.conn.generation, TurnKey: seg.TurnKey, SegmentSeq: seg.Seq, Payload: seg.Audio})
 		if err != nil {
 			return err
 		}
