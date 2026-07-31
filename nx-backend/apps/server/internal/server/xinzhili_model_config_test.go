@@ -9,7 +9,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/gorilla/websocket"
 	"nine-xing/nx-backend/apps/server/internal/bailianconfig"
 	"nine-xing/nx-backend/apps/server/internal/voice"
 	"nine-xing/nx-backend/apps/server/internal/xinzhili"
@@ -113,13 +115,21 @@ func TestXinzhiliModelConfigGETReturnsDefaultsWhenConfigDoesNotExist(t *testing.
 	if view.Version != 0 || view.Enabled {
 		t.Fatalf("unexpected initial state: version=%d enabled=%t", view.Version, view.Enabled)
 	}
-	if len(view.EnabledModes) != 1 || view.EnabledModes[0] != xinzhili.ModeNormal {
-		t.Fatalf("enabledModes=%v want=[normal]", view.EnabledModes)
+	wantModes := []xinzhili.Mode{xinzhili.ModeNormal, xinzhili.ModeArgument, xinzhili.ModeComfort, xinzhili.ModeDeepListening}
+	if len(view.EnabledModes) != len(wantModes) {
+		t.Fatalf("enabledModes=%v want=%v", view.EnabledModes, wantModes)
+	}
+	for i := range wantModes {
+		if view.EnabledModes[i] != wantModes[i] {
+			t.Fatalf("enabledModes=%v want=%v", view.EnabledModes, wantModes)
+		}
 	}
 	if view.ModePrompts == nil || len(view.ModePrompts) != 0 {
 		t.Fatalf("modePrompts=%v want non-nil empty map", view.ModePrompts)
 	}
-	if view.Timing.PartialStableMs != 150 || view.Timing.MaxProactivePrompts != 2 {
+	if view.Timing.PartialStableMs != 120 || view.Timing.ArgumentCandidateSilenceMs != 300 ||
+		view.Timing.NormalEndSilenceMs != 500 || view.Timing.ComfortEndSilenceMs != 900 ||
+		view.Timing.DeepListeningEndSilenceMs != 1200 || view.Timing.MaxProactivePrompts != 2 {
 		t.Fatalf("unexpected timing defaults: %+v", view.Timing)
 	}
 	if view.RealtimeASR.Provider != xinzhili.RealtimeASRProvider ||
@@ -680,6 +690,116 @@ func TestXinzhiliModelConfigPUTRequiresExpectedVersion(t *testing.T) {
 	s.xinzhiliModelConfigHandler(res, httptest.NewRequest(http.MethodPut, "/api/xinzhili-model-config", strings.NewReader(`{"enabled":false}`)))
 	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "expectedVersion") {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestXinzhiliModelConfigPUTBroadcastsAuthoritativeSnapshotAfterPersistence(t *testing.T) {
+	stored := validXinzhiliModelConfigForHandler()
+	stored.Enabled = false
+	stored.Version = 3
+	stored.EnabledModes = []xinzhili.Mode{xinzhili.ModeNormal, xinzhili.ModeArgument}
+	store := &fakeXinzhiliModelConfigStore{config: stored, found: true}
+	serverWS, clientWS := newXinzhiliWebsocketPair(t)
+	s := &Server{xinzhiliModelConfig: store, xinzhiliLeases: map[int64]*xinzhiliRealtimeConn{}}
+	c := &xinzhiliRealtimeConn{
+		server: s, ws: serverWS, userID: 9, sessionID: "xz-config-broadcast",
+		generation: 2, configVersion: 3, requestedMode: xinzhili.ModeArgument,
+		pendingMode: xinzhili.ModeArgument, effectiveMode: xinzhili.ModeArgument,
+		modeRevision: 7, turns: map[uint64]string{81: "turn-active"}, audioSeq: map[uint64]uint32{},
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+	s.xinzhiliLeases[9] = c
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/xinzhili-model-config", strings.NewReader(`{"expectedVersion":3,"enabled":false,"enabledModes":["normal"]}`))
+	s.xinzhiliModelConfigHandler(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	_ = clientWS.SetReadDeadline(time.Now().Add(time.Second))
+	kind, data, err := clientWS.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind != websocket.TextMessage {
+		t.Fatalf("frame kind=%d want text", kind)
+	}
+	var envelope xinzhili.Envelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Type != xinzhili.EventConfigChanged || envelope.ConfigVersion != 4 {
+		t.Fatalf("event=%s version=%d body=%s", envelope.Type, envelope.ConfigVersion, data)
+	}
+	var snapshot xinzhiliModeSnapshot
+	if err := json.Unmarshal(envelope.Payload, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.EnabledModes) != 1 || snapshot.EnabledModes[0] != xinzhili.ModeNormal ||
+		snapshot.RequestedMode != xinzhili.ModeNormal || snapshot.PendingMode != xinzhili.ModeNormal ||
+		snapshot.EffectiveMode != xinzhili.ModeArgument || snapshot.Revision != 7 || snapshot.ConfigVersion != 4 {
+		t.Fatalf("snapshot=%+v", snapshot)
+	}
+}
+
+func TestXinzhiliModelConfigPUTReturnsWhileBlockedConnectionDoesNotDelayOthers(t *testing.T) {
+	stored := validXinzhiliModelConfigForHandler()
+	stored.Enabled = false
+	stored.Version = 3
+	stored.EnabledModes = []xinzhili.Mode{xinzhili.ModeNormal, xinzhili.ModeArgument}
+	store := &fakeXinzhiliModelConfigStore{config: stored, found: true}
+	blockedWS, _ := newXinzhiliWebsocketPair(t)
+	healthyWS, healthyClient := newXinzhiliWebsocketPair(t)
+	s := &Server{xinzhiliModelConfig: store, xinzhiliLeases: map[int64]*xinzhiliRealtimeConn{}}
+	blocked := &xinzhiliRealtimeConn{
+		server: s, ws: blockedWS, userID: 20, sessionID: "xz-blocked", configVersion: 3,
+		enabledModes: stored.EnabledModes, turns: map[uint64]string{}, audioSeq: map[uint64]uint32{},
+	}
+	blocked.sink = &xinzhiliWSSink{conn: blocked}
+	healthy := &xinzhiliRealtimeConn{
+		server: s, ws: healthyWS, userID: 21, sessionID: "xz-healthy", configVersion: 3,
+		enabledModes: stored.EnabledModes, turns: map[uint64]string{}, audioSeq: map[uint64]uint32{},
+	}
+	healthy.sink = &xinzhiliWSSink{conn: healthy}
+	s.xinzhiliLeases[20], s.xinzhiliLeases[21] = blocked, healthy
+	blocked.sink.mu.Lock()
+	defer blocked.sink.mu.Unlock()
+
+	res := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/xinzhili-model-config", strings.NewReader(`{"expectedVersion":3,"enabled":false,"enabledModes":["normal"]}`))
+	started := time.Now()
+	s.xinzhiliModelConfigHandler(res, request)
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("PUT blocked for %s", elapsed)
+	}
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	readXinzhiliConfigChanged(t, healthyClient, xinzhili.ModeNormal, 4)
+	if healthy.configVersion != 4 {
+		t.Fatalf("healthy config version=%d want=4", healthy.configVersion)
+	}
+}
+
+func TestXinzhiliModelConfigPUTDoesNotBroadcastFailedPersistence(t *testing.T) {
+	stored := validXinzhiliModelConfigForHandler()
+	stored.Enabled = false
+	stored.Version = 3
+	store := &fakeXinzhiliModelConfigStore{config: stored, found: true, updateErr: errors.New("db down")}
+	serverWS, clientWS := newXinzhiliWebsocketPair(t)
+	s := &Server{xinzhiliModelConfig: store, xinzhiliLeases: map[int64]*xinzhiliRealtimeConn{}}
+	c := &xinzhiliRealtimeConn{server: s, ws: serverWS, userID: 9, sessionID: "xz-no-broadcast", turns: map[uint64]string{}, audioSeq: map[uint64]uint32{}}
+	c.sink = &xinzhiliWSSink{conn: c}
+	s.xinzhiliLeases[9] = c
+
+	res := httptest.NewRecorder()
+	s.xinzhiliModelConfigHandler(res, httptest.NewRequest(http.MethodPut, "/api/xinzhili-model-config", strings.NewReader(`{"expectedVersion":3,"enabled":false}`)))
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	_ = clientWS.SetReadDeadline(time.Now().Add(30 * time.Millisecond))
+	if _, _, err := clientWS.ReadMessage(); err == nil {
+		t.Fatal("failed persistence unexpectedly broadcast config_changed")
 	}
 }
 

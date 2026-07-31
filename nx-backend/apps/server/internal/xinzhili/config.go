@@ -98,7 +98,7 @@ func DefaultConfig() Config {
 			Provider: TTSProviderOpenAICompatible,
 			Format:   "mp3",
 		},
-		EnabledModes: []Mode{ModeNormal},
+		EnabledModes: []Mode{ModeNormal, ModeArgument, ModeComfort, ModeDeepListening},
 		ModePrompts:  map[Mode]string{},
 	}
 	applyTimingDefaults(&cfg.Timing)
@@ -398,19 +398,19 @@ func endpointPort(u *url.URL) (int, error) {
 func applyTimingDefaults(v *TimingConfig) {
 	allZero := *v == (TimingConfig{})
 	if v.PartialStableMs == 0 {
-		v.PartialStableMs = 150
+		v.PartialStableMs = 120
 	}
 	if v.ArgumentCandidateSilenceMs == 0 {
-		v.ArgumentCandidateSilenceMs = 350
+		v.ArgumentCandidateSilenceMs = 300
 	}
 	if v.NormalEndSilenceMs == 0 {
-		v.NormalEndSilenceMs = 700
+		v.NormalEndSilenceMs = 500
 	}
 	if v.ComfortEndSilenceMs == 0 {
-		v.ComfortEndSilenceMs = 1200
+		v.ComfortEndSilenceMs = 900
 	}
 	if v.DeepListeningEndSilenceMs == 0 {
-		v.DeepListeningEndSilenceMs = 1500
+		v.DeepListeningEndSilenceMs = 1200
 	}
 	if v.ComfortFirstPromptMs == 0 {
 		v.ComfortFirstPromptMs = 5000

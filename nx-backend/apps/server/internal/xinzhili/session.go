@@ -106,6 +106,7 @@ type StartTurnInput struct {
 	CardID            int64
 	ConversationID    int64
 	TurnID            string
+	TurnKey           uint64
 	Mode              Mode
 	ASRConfig         RealtimeASRConfig
 	TTSConfig         TTSConfig
@@ -191,6 +192,7 @@ const (
 
 type activeTurn struct {
 	input                    StartTurnInput
+	turnKey                  uint64
 	conversation             Conversation
 	card                     Card
 	asr                      ASRSession
@@ -221,6 +223,7 @@ type activeTurn struct {
 	chunker                  streamSentenceChunker
 	ttsJobs                  chan ttsStreamJob
 	nextTTSSeq               uint32
+	ttsAudioBytes            int
 	nextTurnSeq              uint64
 	doneSent                 bool
 }
@@ -228,6 +231,12 @@ type activeTurn struct {
 type ttsStreamJob struct {
 	seq  uint32
 	text string
+}
+
+type ttsStreamResult struct {
+	job     ttsStreamJob
+	segment AudioSegment
+	err     error
 }
 
 func NewSession(deps SessionDependencies) TurnSession {
@@ -338,7 +347,7 @@ func (s *session) loop() {
 
 func (s *session) startTurn(ctx context.Context, input StartTurnInput) (*activeTurn, error) {
 	input.TurnID = strings.TrimSpace(input.TurnID)
-	if input.UserID <= 0 || input.CardID <= 0 || input.ConversationID < 0 || input.TurnID == "" || !knownMode(input.Mode) {
+	if input.UserID <= 0 || input.CardID <= 0 || input.ConversationID < 0 || input.TurnID == "" || input.TurnKey == 0 || !knownMode(input.Mode) {
 		return nil, errors.New("xinzhili: invalid turn start")
 	}
 	if s.deps.Cards == nil || s.deps.Conversations == nil || s.deps.ASRFactory == nil || s.deps.Sink == nil {
@@ -364,7 +373,7 @@ func (s *session) startTurn(ctx context.Context, input StartTurnInput) (*activeT
 		cancel()
 		return nil, err
 	}
-	turn := &activeTurn{input: input, conversation: conversation, card: card, asr: asr, ctx: turnCtx, cancel: cancel, segments: map[uint32]string{}, lastAck: -1}
+	turn := &activeTurn{input: input, turnKey: input.TurnKey, conversation: conversation, card: card, asr: asr, ctx: turnCtx, cancel: cancel, segments: map[uint32]string{}, lastAck: -1}
 	if s.deps.EngineFactory != nil && s.deps.Clock != nil {
 		turn.engine = s.deps.EngineFactory(input.Mode, input.Timing, s.deps.Clock)
 	}
@@ -891,30 +900,134 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 }
 
 func (s *session) startSynthesisWorker(turn *activeTurn) {
+	const concurrency = 2
 	go func() {
+		ctx, cancel := context.WithCancel(turn.ctx)
+		defer cancel()
+		results := make(chan ttsStreamResult, concurrency)
+		pendingJobs := make([]ttsStreamJob, 0, concurrency)
+		pendingSegments := make(map[uint32]AudioSegment, concurrency)
+		jobCancels := make(map[uint32]context.CancelFunc, concurrency)
+		jobs := turn.ttsJobs
+		nextEmit := turn.responseStartSeq
+		inFlight := 0
 		var workerErr error
-		for job := range turn.ttsJobs {
-			emitted := false
-			workerErr = s.deps.Synthesizer.Synthesize(turn.ctx, turn.input.TTSConfig, job.text, func(segment AudioSegment) error {
-				if emitted {
-					return errors.New("xinzhili: streamed TTS chunk produced multiple segments")
+		failed := false
+		failedSeq := ^uint32(0)
+
+		startJob := func(job ttsStreamJob) {
+			jobCtx, jobCancel := context.WithCancel(ctx)
+			jobCancels[job.seq] = jobCancel
+			inFlight++
+			go func() {
+				result := ttsStreamResult{job: job}
+				emitted := false
+				result.err = s.deps.Synthesizer.Synthesize(jobCtx, turn.input.TTSConfig, job.text, func(segment AudioSegment) error {
+					if emitted {
+						return errors.New("xinzhili: streamed TTS chunk produced multiple segments")
+					}
+					emitted = true
+					segment.Seq = job.seq
+					segment.deliveryText = job.text
+					result.segment = segment
+					return nil
+				})
+				if result.err == nil && !emitted {
+					result.err = errors.New("xinzhili: streamed TTS chunk produced no segment")
 				}
-				emitted = true
-				segment.Seq = job.seq
-				segment.deliveryText = job.text
+				select {
+				case results <- result:
+				case <-turn.ctx.Done():
+				}
+			}()
+		}
+
+		fail := func(seq uint32, err error) {
+			if failed && seq >= failedSeq {
+				return
+			}
+			failed = true
+			failedSeq = seq
+			workerErr = err
+			pendingJobs = nil
+			for pendingSeq := range pendingSegments {
+				if pendingSeq >= failedSeq {
+					delete(pendingSegments, pendingSeq)
+				}
+			}
+			for runningSeq, stop := range jobCancels {
+				if runningSeq > failedSeq {
+					stop()
+				}
+			}
+		}
+
+		emitReady := func() {
+			for !failed || nextEmit < failedSeq {
+				segment, ok := pendingSegments[nextEmit]
+				if !ok {
+					return
+				}
 				response := make(chan error, 1)
 				if !s.postEvent(sessionEvent{kind: eventTTSSegment, turnID: turn.input.TurnID, segment: segment, segmentAck: response}) {
-					return ErrSessionClosed
+					fail(nextEmit, ErrSessionClosed)
+					return
 				}
 				select {
 				case err := <-response:
-					return err
+					if err != nil {
+						fail(nextEmit, err)
+						return
+					}
 				case <-turn.ctx.Done():
-					return turn.ctx.Err()
+					fail(nextEmit, turn.ctx.Err())
+					return
 				}
-			})
-			if workerErr != nil {
-				break
+				delete(pendingSegments, nextEmit)
+				nextEmit++
+			}
+		}
+
+		for jobs != nil || inFlight > 0 || len(pendingJobs) > 0 {
+			for !failed && inFlight < concurrency && len(pendingJobs) > 0 && pendingJobs[0].seq < nextEmit+concurrency {
+				job := pendingJobs[0]
+				pendingJobs = pendingJobs[1:]
+				startJob(job)
+			}
+			if jobs == nil && inFlight == 0 && len(pendingJobs) > 0 {
+				fail(nextEmit, errors.New("xinzhili: TTS chunk sequence gap"))
+			}
+			select {
+			case <-turn.ctx.Done():
+				return
+			case job, ok := <-jobs:
+				if !ok {
+					jobs = nil
+					continue
+				}
+				if !failed {
+					pendingJobs = append(pendingJobs, job)
+				}
+			case result := <-results:
+				inFlight--
+				if stop := jobCancels[result.job.seq]; stop != nil {
+					stop()
+					delete(jobCancels, result.job.seq)
+				}
+				if result.err != nil {
+					fail(result.job.seq, result.err)
+					continue
+				}
+				if failed && result.job.seq >= failedSeq {
+					continue
+				}
+				turn.ttsAudioBytes += len(result.segment.Audio)
+				if turn.ttsAudioBytes > maxTTSTurnBytes {
+					fail(result.job.seq, ErrTTSTurnTooLarge)
+					continue
+				}
+				pendingSegments[result.job.seq] = result.segment
+				emitReady()
 			}
 		}
 		s.postEvent(sessionEvent{kind: eventTTSDone, turnID: turn.input.TurnID, err: workerErr})
@@ -958,6 +1071,10 @@ func (s *session) queueTTSChunk(turn *activeTurn, chunk string) {
 }
 
 func (s *session) acceptAudioSegment(turn *activeTurn, segment AudioSegment) error {
+	if turn.turnKey == 0 {
+		return errors.New("xinzhili: active turn key missing")
+	}
+	segment.TurnKey = turn.turnKey
 	text := segment.DeliveryText()
 	if text == "" {
 		return errors.New("xinzhili: TTS segment delivery text missing")
@@ -1079,7 +1196,15 @@ func normalizeGeneratedContent(text string) string {
 	return strings.Join(SplitSentences(text), "")
 }
 
-type streamSentenceChunker struct{ buffer []rune }
+const (
+	firstTTSChunkMinRunes = 14
+	firstTTSChunkMaxRunes = 28
+)
+
+type streamSentenceChunker struct {
+	buffer  []rune
+	emitted bool
+}
 
 func (c *streamSentenceChunker) Push(delta string) []string {
 	c.buffer = append(c.buffer, []rune(delta)...)
@@ -1092,7 +1217,11 @@ func (c *streamSentenceChunker) take(flush bool) []string {
 	var chunks []string
 	for len(c.buffer) > 0 {
 		cut := 0
-		limit := min(len(c.buffer), maxTTSSentenceRunes)
+		chunkLimit := maxTTSSentenceRunes
+		if !c.emitted {
+			chunkLimit = firstTTSChunkMaxRunes
+		}
+		limit := min(len(c.buffer), chunkLimit)
 		for index := 0; index < limit; index++ {
 			if isStrongSentenceEndAt(c.buffer, index) {
 				cut = index + 1
@@ -1101,8 +1230,12 @@ func (c *streamSentenceChunker) take(flush bool) []string {
 				}
 				break
 			}
+			if !c.emitted && index+1 >= firstTTSChunkMinRunes && isSoftSentencePause(c.buffer[index]) {
+				cut = index + 1
+				break
+			}
 		}
-		if cut == 0 && len(c.buffer) >= maxTTSSentenceRunes {
+		if cut == 0 && len(c.buffer) >= chunkLimit {
 			cut = limit
 		}
 		if cut == 0 && flush {
@@ -1113,8 +1246,18 @@ func (c *streamSentenceChunker) take(flush bool) []string {
 		}
 		if chunk := strings.TrimSpace(string(c.buffer[:cut])); chunk != "" {
 			chunks = append(chunks, chunk)
+			c.emitted = true
 		}
 		c.buffer = trimLeftSpaceRunes(c.buffer[cut:])
 	}
 	return chunks
+}
+
+func isSoftSentencePause(r rune) bool {
+	switch r {
+	case '，', ',', '；', ';', '：', ':':
+		return true
+	default:
+		return false
+	}
 }

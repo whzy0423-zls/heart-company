@@ -79,6 +79,60 @@ func TestConversationBlankASRDoesNotCallModelOrPersist(t *testing.T) {
 	}
 }
 
+func TestStartTurnRejectsZeroTurnKey(t *testing.T) {
+	fixture := newSessionFixture(t)
+	input := fixture.input("turn-zero-key")
+	input.TurnKey = 0
+	if err := fixture.session.StartTurn(context.Background(), input); err == nil {
+		t.Fatal("StartTurn accepted zero turn key")
+	}
+}
+
+func TestStreamSentenceChunkerPrioritizesPlayableFirstChunk(t *testing.T) {
+	t.Run("short weak punctuation waits", func(t *testing.T) {
+		var chunker streamSentenceChunker
+		if got := chunker.Push("你好，"); len(got) != 0 {
+			t.Fatalf("chunks=%q", got)
+		}
+		if got := chunker.Flush(); !slices.Equal(got, []string{"你好，"}) {
+			t.Fatalf("flush=%q", got)
+		}
+	})
+
+	t.Run("weak punctuation cuts after fourteen runes", func(t *testing.T) {
+		var chunker streamSentenceChunker
+		prefix := strings.Repeat("甲", 13) + "，"
+		if got := chunker.Push(prefix + "后续"); !slices.Equal(got, []string{prefix}) {
+			t.Fatalf("chunks=%q", got)
+		}
+		if got := chunker.Flush(); !slices.Equal(got, []string{"后续"}) {
+			t.Fatalf("flush=%q", got)
+		}
+	})
+
+	t.Run("first chunk hard caps at twenty eight runes", func(t *testing.T) {
+		var chunker streamSentenceChunker
+		first := strings.Repeat("甲", 28)
+		if got := chunker.Push(first + "后续"); !slices.Equal(got, []string{first}) {
+			t.Fatalf("chunks=%q", got)
+		}
+	})
+
+	t.Run("later chunks keep forty two rune cap", func(t *testing.T) {
+		var chunker streamSentenceChunker
+		if got := chunker.Push("你好。"); !slices.Equal(got, []string{"你好。"}) {
+			t.Fatalf("first=%q", got)
+		}
+		if got := chunker.Push(strings.Repeat("乙", 41)); len(got) != 0 {
+			t.Fatalf("early later chunk=%q", got)
+		}
+		later := strings.Repeat("乙", 42)
+		if got := chunker.Push("乙"); !slices.Equal(got, []string{later}) {
+			t.Fatalf("later=%q", got)
+		}
+	})
+}
+
 func TestSpeechStartedEmitsASRActivity(t *testing.T) {
 	fixture := newSessionFixture(t)
 	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-asr-activity")); err != nil {
@@ -379,7 +433,8 @@ func TestSessionCompletedEndpointWithoutAnyTranscriptUsesDefensivePrompt(t *test
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	turn := &activeTurn{
-		input:           StartTurnInput{TurnID: "turn-defensive-prompt"},
+		input:           StartTurnInput{TurnID: "turn-defensive-prompt", TurnKey: TurnKey("turn-defensive-prompt")},
+		turnKey:         TurnKey("turn-defensive-prompt"),
 		ctx:             ctx,
 		cancel:          cancel,
 		endpointing:     true,
@@ -668,17 +723,20 @@ func TestConversationIsolationAndRelevanceUseIndependentRetrievers(t *testing.T)
 
 func TestDeliveryCreatesAssistantAfterFirstAudioAndAcknowledgesExactPrefixes(t *testing.T) {
 	fixture := newSessionFixture(t)
+	const turnKey uint64 = 42
 	fixture.synth.segments = []AudioSegment{
 		{Seq: 0, Audio: []byte{1}, MIME: "audio/mpeg", deliveryText: "先呼吸。"},
 		{Seq: 1, Audio: []byte{2}, MIME: "audio/mpeg", deliveryText: "再感受脚底。"},
 	}
-	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-delivery")); err != nil {
+	input := fixture.input("turn-delivery")
+	input.TurnKey = turnKey
+	if err := fixture.session.StartTurn(context.Background(), input); err != nil {
 		t.Fatal(err)
 	}
 	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "我很焦虑", Stable: true})
 	first := fixture.sink.waitAudio(t)
 	fixture.store.waitAssistantCount(t, 1)
-	if first.Seq != 0 {
+	if first.Seq != 0 || first.TurnKey != turnKey {
 		t.Fatalf("first=%+v", first)
 	}
 	fixture.sink.waitAudio(t)
@@ -813,11 +871,125 @@ func TestDeliveryOrdersMultipleAudioSegmentsBeforeAssistantDone(t *testing.T) {
 	}
 }
 
+func TestSessionTTSRunsTwoChunksConcurrentlyAndEmitsInOrder(t *testing.T) {
+	synth := newControlledSynthesizer("第一段", "第二段", "第三段")
+	s := &session{
+		deps:   SessionDependencies{Synthesizer: synth},
+		events: make(chan sessionEvent, 16),
+		done:   make(chan struct{}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	turn := &activeTurn{
+		input:   StartTurnInput{TurnID: "turn-tts-concurrent"},
+		ctx:     ctx,
+		cancel:  cancel,
+		ttsJobs: make(chan ttsStreamJob, 3),
+	}
+
+	s.startSynthesisWorker(turn)
+	turn.ttsJobs <- ttsStreamJob{seq: 0, text: "第一段"}
+	turn.ttsJobs <- ttsStreamJob{seq: 1, text: "第二段"}
+	turn.ttsJobs <- ttsStreamJob{seq: 2, text: "第三段"}
+	close(turn.ttsJobs)
+
+	started := map[string]bool{}
+	for len(started) < 2 {
+		select {
+		case text := <-synth.started:
+			started[text] = true
+		case <-time.After(time.Second):
+			t.Fatalf("initial starts=%v", started)
+		}
+	}
+	if !started["第一段"] || !started["第二段"] {
+		t.Fatalf("initial starts=%v want first two chunks", started)
+	}
+	if synth.maximumConcurrency() != 2 {
+		t.Fatalf("maximum concurrency=%d want=2", synth.maximumConcurrency())
+	}
+	synth.release("第二段")
+	select {
+	case text := <-synth.started:
+		t.Fatalf("chunk %q dispatched before the first window advanced", text)
+	case <-time.After(30 * time.Millisecond):
+	}
+	select {
+	case event := <-s.events:
+		t.Fatalf("out-of-order event before first chunk completed: %+v", event)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	synth.release("第一段")
+	for wantSeq := uint32(0); wantSeq < 3; wantSeq++ {
+		if wantSeq == 2 {
+			select {
+			case text := <-synth.started:
+				if text != "第三段" {
+					t.Fatalf("third start=%q", text)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("third chunk was not dispatched")
+			}
+			synth.release("第三段")
+		}
+		event := waitSessionEvent(t, s.events, eventTTSSegment)
+		if event.segment.Seq != wantSeq {
+			t.Fatalf("segment seq=%d want=%d", event.segment.Seq, wantSeq)
+		}
+		event.segmentAck <- nil
+	}
+	done := waitSessionEvent(t, s.events, eventTTSDone)
+	if done.err != nil {
+		t.Fatal(done.err)
+	}
+}
+
+func TestSessionTTSFailureDrainsQueuedGenerationAndStillCompletes(t *testing.T) {
+	fixture := newSessionFixture(t)
+	deltas := make([]string, 140)
+	for index := range deltas {
+		deltas[index] = fmt.Sprintf("第%d段。", index)
+	}
+	fixture.generator.deltas = deltas
+	fixture.generator.answer = strings.Join(deltas, "")
+	fixture.synth.failText = deltas[1]
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-tts-drain")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "请生成很多段", Stable: true})
+
+	errorEvent := fixture.sink.waitControl(t, EventError)
+	var errorPayload ErrorPayload
+	if err := json.Unmarshal(errorEvent.Payload, &errorPayload); err != nil {
+		t.Fatal(err)
+	}
+	if errorPayload.Code != "tts_failed" {
+		t.Fatalf("error code=%q", errorPayload.Code)
+	}
+	done := fixture.sink.waitControl(t, EventAssistantDone)
+	if done.TurnID == nil || *done.TurnID != "turn-tts-drain" {
+		t.Fatalf("assistant.done turnId=%v", done.TurnID)
+	}
+	time.Sleep(30 * time.Millisecond)
+	for {
+		select {
+		case event := <-fixture.sink.controls:
+			if event.Type == EventAssistantDone {
+				t.Fatal("assistant.done emitted more than once")
+			}
+		default:
+			return
+		}
+	}
+}
+
 func TestDeliveryCompletesAuditWhenLaterTTSChunkFails(t *testing.T) {
 	fixture := newSessionFixture(t)
 	fixture.generator.answer = "第一段。第二段。"
 	fixture.knowledge.docs = []rag.Document{{ID: "knowledge:audit", Title: "审计来源", Content: "支持回答的内容"}}
-	fixture.synth.failAt = 1
+	fixture.synth.failText = "第二段。"
 	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-tts-fail")); err != nil {
 		t.Fatal(err)
 	}
@@ -977,7 +1149,7 @@ func newSessionFixture(t *testing.T) *sessionFixture {
 }
 
 func (f *sessionFixture) input(turnID string) StartTurnInput {
-	return StartTurnInput{UserID: 11, CardID: 22, ConversationID: 33, TurnID: turnID, Mode: ModeNormal, ASRConfig: RealtimeASRConfig{}, TTSConfig: TTSConfig{}, KnowledgeTopK: 4, KnowledgeMinScore: 0.35, TheoryTopK: 4, TheoryMinScore: 0.35}
+	return StartTurnInput{UserID: 11, CardID: 22, ConversationID: 33, TurnID: turnID, TurnKey: TurnKey(turnID), Mode: ModeNormal, ASRConfig: RealtimeASRConfig{}, TTSConfig: TTSConfig{}, KnowledgeTopK: 4, KnowledgeMinScore: 0.35, TheoryTopK: 4, TheoryMinScore: 0.35}
 }
 
 type fakeCardProvider struct{}
@@ -1223,6 +1395,7 @@ type fakeSynthesizer struct {
 	segments []AudioSegment
 	block    chan struct{}
 	failAt   int
+	failText string
 }
 
 func (s *fakeSynthesizer) Synthesize(ctx context.Context, _ TTSConfig, text string, emit func(AudioSegment) error) error {
@@ -1239,7 +1412,7 @@ func (s *fakeSynthesizer) Synthesize(ctx context.Context, _ TTSConfig, text stri
 	s.texts = append(s.texts, text)
 	segments := append([]AudioSegment(nil), s.segments...)
 	s.mu.Unlock()
-	if s.failAt > 0 && index == s.failAt {
+	if (s.failAt > 0 && index == s.failAt) || (s.failText != "" && text == s.failText) {
 		return errors.New("tts failed")
 	}
 	segment := AudioSegment{Audio: []byte{1}, MIME: "audio/mpeg", deliveryText: text}
@@ -1253,6 +1426,68 @@ func (s *fakeSynthesizer) Synthesize(ctx context.Context, _ TTSConfig, text stri
 		return err
 	}
 	return nil
+}
+
+type controlledSynthesizer struct {
+	mu        sync.Mutex
+	active    int
+	maxActive int
+	gates     map[string]chan struct{}
+	started   chan string
+}
+
+func newControlledSynthesizer(blocked ...string) *controlledSynthesizer {
+	s := &controlledSynthesizer{gates: make(map[string]chan struct{}), started: make(chan string, len(blocked)+4)}
+	for _, text := range blocked {
+		s.gates[text] = make(chan struct{})
+	}
+	return s
+}
+
+func (s *controlledSynthesizer) Synthesize(ctx context.Context, _ TTSConfig, text string, emit func(AudioSegment) error) error {
+	s.mu.Lock()
+	s.active++
+	if s.active > s.maxActive {
+		s.maxActive = s.active
+	}
+	gate := s.gates[text]
+	s.mu.Unlock()
+	s.started <- text
+	defer func() {
+		s.mu.Lock()
+		s.active--
+		s.mu.Unlock()
+	}()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return emit(AudioSegment{Audio: []byte(text), MIME: "audio/mpeg", deliveryText: text})
+}
+
+func (s *controlledSynthesizer) release(text string) { close(s.gates[text]) }
+
+func (s *controlledSynthesizer) maximumConcurrency() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.maxActive
+}
+
+func waitSessionEvent(t *testing.T, events <-chan sessionEvent, kind sessionEventKind) sessionEvent {
+	t.Helper()
+	select {
+	case event := <-events:
+		if event.kind != kind {
+			t.Fatalf("event kind=%d want=%d", event.kind, kind)
+		}
+		return event
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for event kind=%d", kind)
+		return sessionEvent{}
+	}
 }
 func (s *fakeSynthesizer) synthesizedTexts() []string {
 	s.mu.Lock()

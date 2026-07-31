@@ -161,6 +161,7 @@ func (s *Server) xinzhiliModelConfigHandler(w http.ResponseWriter, r *http.Reque
 		resolved = resolveLegacyBailianCredential(saved, true)
 	}
 	s.applyBailianCredentialRuntime(resolved)
+	s.scheduleXinzhiliConfigChanged(saved)
 	s.recordAdminAudit(r, auditlog.Entry{
 		Action:     "xinzhili_model_config.update",
 		TargetType: "xinzhili_model_config",

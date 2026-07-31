@@ -305,6 +305,31 @@ function deferred<T>() {
 }
 
 describe('xinzhili model configuration page contract', () => {
+  it('starts a first-time form with all four modes and balanced timing', () => {
+    expect(viewSource).toContain(
+      "enabledModes: ['normal', 'argument', 'comfort', 'deep_listening']",
+    );
+    expect(viewSource).toContain('partialStableMs: 120');
+    expect(viewSource).toContain('argumentCandidateSilenceMs: 300');
+    expect(viewSource).toContain('normalEndSilenceMs: 500');
+    expect(viewSource).toContain('comfortEndSilenceMs: 900');
+    expect(viewSource).toContain('deepListeningEndSilenceMs: 1200');
+  });
+
+  it('preserves stored modes and timing while normalizing an existing view', () => {
+    const stored = config();
+    stored.enabledModes = ['normal', 'comfort'];
+    stored.timing = {
+      ...stored.timing,
+      partialStableMs: 260,
+      normalEndSilenceMs: 880,
+    };
+    const normalized = normalizeXinzhiliModelConfigView(stored);
+    expect(normalized.enabledModes).toEqual(['normal', 'comfort']);
+    expect(normalized.timing.partialStableMs).toBe(260);
+    expect(normalized.timing.normalEndSilenceMs).toBe(880);
+  });
+
   it('normalizes nullable collections from older backend responses', () => {
     const normalized = normalizeXinzhiliModelConfigView({
       ...config(),

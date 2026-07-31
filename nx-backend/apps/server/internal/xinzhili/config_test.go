@@ -313,11 +313,11 @@ func TestConfigWithDefaultsAppliesTimingDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := TimingConfig{
-		PartialStableMs:            150,
-		ArgumentCandidateSilenceMs: 350,
-		NormalEndSilenceMs:         700,
-		ComfortEndSilenceMs:        1200,
-		DeepListeningEndSilenceMs:  1500,
+		PartialStableMs:            120,
+		ArgumentCandidateSilenceMs: 300,
+		NormalEndSilenceMs:         500,
+		ComfortEndSilenceMs:        900,
+		DeepListeningEndSilenceMs:  1200,
 		ComfortFirstPromptMs:       5000,
 		ComfortSecondPromptMs:      12000,
 		DeepListeningPromptMs:      12000,
@@ -325,6 +325,55 @@ func TestConfigWithDefaultsAppliesTimingDefaults(t *testing.T) {
 	}
 	if cfg.Timing != want {
 		t.Fatalf("timing=%+v want=%+v", cfg.Timing, want)
+	}
+}
+
+func TestDefaultConfigEnablesAllModesWithBalancedTiming(t *testing.T) {
+	cfg := DefaultConfig()
+	wantModes := []Mode{ModeNormal, ModeArgument, ModeComfort, ModeDeepListening}
+	if len(cfg.EnabledModes) != len(wantModes) {
+		t.Fatalf("enabled modes=%v want=%v", cfg.EnabledModes, wantModes)
+	}
+	for i := range wantModes {
+		if cfg.EnabledModes[i] != wantModes[i] {
+			t.Fatalf("enabled modes=%v want=%v", cfg.EnabledModes, wantModes)
+		}
+	}
+	wantTiming := TimingConfig{
+		PartialStableMs:            120,
+		ArgumentCandidateSilenceMs: 300,
+		NormalEndSilenceMs:         500,
+		ComfortEndSilenceMs:        900,
+		DeepListeningEndSilenceMs:  1200,
+		ComfortFirstPromptMs:       5000,
+		ComfortSecondPromptMs:      12000,
+		DeepListeningPromptMs:      12000,
+		MaxProactivePrompts:        2,
+	}
+	if cfg.Timing != wantTiming {
+		t.Fatalf("timing=%+v want=%+v", cfg.Timing, wantTiming)
+	}
+}
+
+func TestConfigWithDefaultsPreservesStoredModesAndTiming(t *testing.T) {
+	cfg := validConfig()
+	cfg.EnabledModes = []Mode{ModeNormal, ModeComfort}
+	cfg.Timing = TimingConfig{
+		PartialStableMs: 240, ArgumentCandidateSilenceMs: 400,
+		NormalEndSilenceMs: 800, ComfortEndSilenceMs: 1400,
+		DeepListeningEndSilenceMs: 1800, ComfortFirstPromptMs: 6000,
+		ComfortSecondPromptMs: 13000, DeepListeningPromptMs: 14000,
+		MaxProactivePrompts: 1,
+	}
+	normalized, err := cfg.WithDefaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(normalized.EnabledModes) != 2 || normalized.EnabledModes[1] != ModeComfort {
+		t.Fatalf("stored modes overwritten: %v", normalized.EnabledModes)
+	}
+	if normalized.Timing != cfg.Timing {
+		t.Fatalf("stored timing overwritten: got=%+v want=%+v", normalized.Timing, cfg.Timing)
 	}
 }
 
