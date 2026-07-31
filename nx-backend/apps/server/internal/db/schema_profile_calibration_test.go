@@ -39,3 +39,21 @@ func TestSchemaIncludesProfileCalibrationTables(t *testing.T) {
 		}
 	}
 }
+
+func TestSchemaMigratesLegacyDailyQuizQuestionsTypeWeights(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := strings.Join(strings.Fields(string(raw)), " ")
+	for _, required := range []string{
+		"ALTER TABLE app_daily_quiz_questions ADD COLUMN IF NOT EXISTS type_weights JSONB",
+		"UPDATE app_daily_quiz_questions SET type_weights = '{}'::jsonb WHERE type_weights IS NULL",
+		"ALTER TABLE app_daily_quiz_questions ALTER COLUMN type_weights SET DEFAULT '{}'::jsonb",
+		"ALTER TABLE app_daily_quiz_questions ALTER COLUMN type_weights SET NOT NULL",
+	} {
+		if !strings.Contains(schema, required) {
+			t.Fatalf("legacy daily quiz migration missing %q", required)
+		}
+	}
+}
