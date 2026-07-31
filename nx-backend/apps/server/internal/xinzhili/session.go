@@ -1220,8 +1220,9 @@ func normalizeGeneratedContent(text string) string {
 }
 
 const (
-	firstTTSChunkMinRunes = 14
-	firstTTSChunkMaxRunes = 28
+	firstTTSChunkMinRunes  = 10
+	firstTTSChunkMaxRunes  = 20
+	streamTTSChunkMaxRunes = 36
 )
 
 type streamSentenceChunker struct {
@@ -1240,7 +1241,7 @@ func (c *streamSentenceChunker) take(flush bool) []string {
 	var chunks []string
 	for len(c.buffer) > 0 {
 		cut := 0
-		chunkLimit := maxTTSSentenceRunes
+		chunkLimit := streamTTSChunkMaxRunes
 		if !c.emitted {
 			chunkLimit = firstTTSChunkMaxRunes
 		}
