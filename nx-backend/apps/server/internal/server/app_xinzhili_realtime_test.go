@@ -224,6 +224,9 @@ func TestXinzhiliStartTurnAcceptsSignedDartTurnKey(t *testing.T) {
 	if c.turnKey != want || c.turns[want] != turnID {
 		t.Fatalf("turn state key=%d turns=%v want=%d", c.turnKey, c.turns, want)
 	}
+	if session.starts[0].TurnKey != want {
+		t.Fatalf("session turn key=%d want=%d", session.starts[0].TurnKey, want)
+	}
 }
 
 func TestXinzhiliRuntimeCredentialRejectsNonOfficialASREndpoint(t *testing.T) {
@@ -458,7 +461,7 @@ func TestXinzhiliWSSinkReturnsWriteError(t *testing.T) {
 	conn := client
 	_ = conn.Close()
 	rc := &xinzhiliRealtimeConn{ws: conn}
-	err = (&xinzhiliWSSink{conn: rc}).SendAudio(context.Background(), xinzhili.AudioSegment{Audio: []byte("x")})
+	err = (&xinzhiliWSSink{conn: rc}).SendAudio(context.Background(), xinzhili.AudioSegment{TurnKey: 1, Audio: []byte("x")})
 	if err == nil {
 		t.Fatal("SendAudio returned nil after connection close")
 	}
