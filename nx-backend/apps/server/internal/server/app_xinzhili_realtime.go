@@ -311,10 +311,8 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 		c.sendError(ctx, "session_not_ready", "会话尚未就绪", true, false)
 		return
 	}
-	var p struct {
-		TurnKey uint64 `json:"turnKey"`
-	}
-	if json.Unmarshal(e.Payload, &p) != nil {
+	turnKey, err := xinzhili.DecodeTurnStartKey(e.Payload)
+	if err != nil {
 		c.sendError(ctx, "invalid_turn", "轮次参数无效", false, false)
 		return
 	}
@@ -346,7 +344,7 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 	sequence := c.sequence
 	c.mu.Unlock()
 	if sequence != nil {
-		if err := sequence.RegisterActiveTurn(*e.TurnID, p.TurnKey); err != nil {
+		if err := sequence.RegisterActiveTurn(*e.TurnID, turnKey); err != nil {
 			c.sendError(ctx, "turn_key_collision", "轮次标识冲突，请重新开始", true, false)
 			return
 		}
@@ -365,14 +363,14 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 	c.requestedMode = mode
 	c.mu.Unlock()
 	c.turnMu.Lock()
-	c.turns[p.TurnKey] = *e.TurnID
+	c.turns[turnKey] = *e.TurnID
 	if c.audioSeq == nil {
 		c.audioSeq = make(map[uint64]uint32)
 	}
-	c.audioSeq[p.TurnKey] = 0
+	c.audioSeq[turnKey] = 0
 	c.turnMu.Unlock()
 	c.mu.Lock()
-	c.turnKey = p.TurnKey
+	c.turnKey = turnKey
 	c.mu.Unlock()
 }
 

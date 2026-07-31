@@ -192,6 +192,34 @@ func TestXinzhiliRuntimeCredentialNeverOverwritesMiniMaxPrivateTTSKey(t *testing
 	}
 }
 
+func TestXinzhiliStartTurnAcceptsSignedDartTurnKey(t *testing.T) {
+	serverWS, _ := newXinzhiliWebsocketPair(t)
+	cfg := validXinzhiliModelConfigForHandler()
+	cfg.Version = 9
+	configStore := &fakeXinzhiliModelConfigStore{config: cfg, found: true}
+	session := &recordingXinzhiliTurnSession{}
+	c := &xinzhiliRealtimeConn{
+		server: &Server{xinzhiliModelConfig: configStore},
+		ws:     serverWS, sess: session, userID: 18, sessionID: "xz-signed-turn-key",
+		pendingMode: xinzhili.ModeNormal, turns: make(map[uint64]string), audioSeq: make(map[uint64]uint32),
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+
+	turnID := "turn-negative-0"
+	c.startTurn(context.Background(), xinzhili.Envelope{
+		TurnID:  &turnID,
+		Payload: json.RawMessage(`{"turnKey":-907766470923855312}`),
+	})
+
+	if len(session.starts) != 1 {
+		t.Fatalf("started turns=%d want=1", len(session.starts))
+	}
+	want := xinzhili.TurnKey(turnID)
+	if c.turnKey != want || c.turns[want] != turnID {
+		t.Fatalf("turn state key=%d turns=%v want=%d", c.turnKey, c.turns, want)
+	}
+}
+
 func TestXinzhiliRuntimeCredentialRejectsNonOfficialASREndpoint(t *testing.T) {
 	for _, endpoint := range []string{
 		"wss://asr.example.com/api-ws/v1/inference",

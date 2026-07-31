@@ -309,21 +309,22 @@ func TestEnvelopeRequiresProtocolAndSessionSequence(t *testing.T) {
 }
 
 func TestEnvelopeTurnStartValidatesTurnKey(t *testing.T) {
-	turnID := "turn-123"
 	tests := []struct {
 		name      string
+		turnID    string
 		payload   string
 		wantError bool
 	}{
-		{"matching", `{"turnKey":6919734513873532354}`, false},
-		{"mismatch", `{"turnKey":1}`, true},
-		{"missing", `{}`, true},
-		{"unknown", `{"turnKey":6919734513873532354,"extra":true}`, true},
+		{"matching", "turn-123", `{"turnKey":6919734513873532354}`, false},
+		{"matching signed dart representation", "turn-negative-0", `{"turnKey":-907766470923855312}`, false},
+		{"mismatch", "turn-123", `{"turnKey":1}`, true},
+		{"missing", "turn-123", `{}`, true},
+		{"unknown", "turn-123", `{"turnKey":6919734513873532354,"extra":true}`, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			envelope := validEnvelope(EventTurnStart)
-			envelope.TurnID = &turnID
+			envelope.TurnID = &tt.turnID
 			envelope.TurnSeq = uint64ptr(0)
 			envelope.Payload = json.RawMessage(tt.payload)
 			err := ValidateEnvelope(envelope, DirectionClient, true)

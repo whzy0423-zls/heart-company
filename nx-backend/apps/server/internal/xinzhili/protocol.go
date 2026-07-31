@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -380,24 +381,48 @@ var serverEvents = map[EventType]eventLevel{
 }
 
 func validateTurnStartPayload(envelope Envelope) error {
-	var payload struct {
-		TurnKey *uint64 `json:"turnKey"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(envelope.Payload))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&payload); err != nil {
-		return fmt.Errorf("decode turn.start payload: %w", err)
-	}
-	if err := requireJSONEOF(decoder); err != nil {
+	turnKey, err := DecodeTurnStartKey(envelope.Payload)
+	if err != nil {
 		return err
 	}
-	if payload.TurnKey == nil {
-		return errors.New("turn.start payload requires turnKey")
-	}
-	if *payload.TurnKey != TurnKey(*envelope.TurnID) {
+	if turnKey != TurnKey(*envelope.TurnID) {
 		return errors.New("turn.start turnKey does not match turnId")
 	}
 	return nil
+}
+
+// DecodeTurnStartKey accepts both the unsigned uint64 wire value and Dart's
+// signed int64 representation of the same 64 bits. Native Dart integers wrap
+// hashes with the high bit set into negative JSON numbers, while binary PCM
+// frames still carry the original uint64 bit pattern.
+func DecodeTurnStartKey(raw json.RawMessage) (uint64, error) {
+	var payload struct {
+		TurnKey json.RawMessage `json:"turnKey"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		return 0, fmt.Errorf("decode turn.start payload: %w", err)
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		return 0, err
+	}
+	value := strings.TrimSpace(string(payload.TurnKey))
+	if value == "" || value == "null" {
+		return 0, errors.New("turn.start payload requires turnKey")
+	}
+	if strings.HasPrefix(value, "-") {
+		signed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("decode turn.start turnKey: %w", err)
+		}
+		return uint64(signed), nil
+	}
+	unsigned, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("decode turn.start turnKey: %w", err)
+	}
+	return unsigned, nil
 }
 
 func validateErrorPayload(raw json.RawMessage) error {
