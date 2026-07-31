@@ -2174,7 +2174,6 @@ CREATE TABLE IF NOT EXISTS app_chat_sessions (
   scene       TEXT NOT NULL DEFAULT 'chat',
   context_summary TEXT NOT NULL DEFAULT '',
   context_summary_through_message_id BIGINT NOT NULL DEFAULT 0,
-  scene       TEXT NOT NULL DEFAULT 'chat',
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   create_time TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -2322,6 +2321,11 @@ CREATE TABLE IF NOT EXISTS app_daily_quiz_questions (
   create_time  TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE app_daily_quiz_questions ADD COLUMN IF NOT EXISTS type_weights JSONB;
+UPDATE app_daily_quiz_questions SET type_weights = '{}'::jsonb WHERE type_weights IS NULL;
+ALTER TABLE app_daily_quiz_questions ALTER COLUMN type_weights SET DEFAULT '{}'::jsonb;
+ALTER TABLE app_daily_quiz_questions ALTER COLUMN type_weights SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_app_daily_quiz_questions_active_sort
   ON app_daily_quiz_questions(status, sort, id);

@@ -372,6 +372,7 @@ var serverEvents = map[EventType]eventLevel{
 	EventASRActivity:         eventLevelTurn,
 	EventTurnProcessing:      eventLevelTurn,
 	EventTurnCancelled:       eventLevelTurn,
+	EventPlaybackInterrupt:   eventLevelTurn,
 	EventAssistantAudioStart: eventLevelTurn,
 	EventAssistantAudioEnd:   eventLevelTurn,
 	EventAssistantDone:       eventLevelTurn,

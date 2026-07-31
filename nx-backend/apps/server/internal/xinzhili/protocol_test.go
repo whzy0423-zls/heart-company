@@ -272,6 +272,7 @@ func TestEnvelopeRequiresSessionOrTurnFieldsByEventLevel(t *testing.T) {
 		{"session event rejects turn seq", EventError, DirectionServer, nil, uint64ptr(0), true},
 		{"turn event requires turn id", EventASRActivity, DirectionServer, nil, uint64ptr(0), true},
 		{"turn event requires turn seq", EventPlaybackInterrupt, DirectionClient, stringptr("turn-1"), nil, true},
+		{"playback interrupt supports server control", EventPlaybackInterrupt, DirectionServer, stringptr("turn-1"), uint64ptr(0), false},
 		{"turn event accepts both", EventAssistantPlaybackAck, DirectionClient, stringptr("turn-1"), uint64ptr(0), false},
 	}
 	for _, tt := range tests {
