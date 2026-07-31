@@ -1085,7 +1085,15 @@ func normalizeGeneratedContent(text string) string {
 	return strings.Join(SplitSentences(text), "")
 }
 
-type streamSentenceChunker struct{ buffer []rune }
+const (
+	firstTTSChunkMinRunes = 14
+	firstTTSChunkMaxRunes = 28
+)
+
+type streamSentenceChunker struct {
+	buffer  []rune
+	emitted bool
+}
 
 func (c *streamSentenceChunker) Push(delta string) []string {
 	c.buffer = append(c.buffer, []rune(delta)...)
@@ -1098,7 +1106,11 @@ func (c *streamSentenceChunker) take(flush bool) []string {
 	var chunks []string
 	for len(c.buffer) > 0 {
 		cut := 0
-		limit := min(len(c.buffer), maxTTSSentenceRunes)
+		chunkLimit := maxTTSSentenceRunes
+		if !c.emitted {
+			chunkLimit = firstTTSChunkMaxRunes
+		}
+		limit := min(len(c.buffer), chunkLimit)
 		for index := 0; index < limit; index++ {
 			if isStrongSentenceEndAt(c.buffer, index) {
 				cut = index + 1
@@ -1107,8 +1119,12 @@ func (c *streamSentenceChunker) take(flush bool) []string {
 				}
 				break
 			}
+			if !c.emitted && index+1 >= firstTTSChunkMinRunes && isSoftSentencePause(c.buffer[index]) {
+				cut = index + 1
+				break
+			}
 		}
-		if cut == 0 && len(c.buffer) >= maxTTSSentenceRunes {
+		if cut == 0 && len(c.buffer) >= chunkLimit {
 			cut = limit
 		}
 		if cut == 0 && flush {
@@ -1119,8 +1135,18 @@ func (c *streamSentenceChunker) take(flush bool) []string {
 		}
 		if chunk := strings.TrimSpace(string(c.buffer[:cut])); chunk != "" {
 			chunks = append(chunks, chunk)
+			c.emitted = true
 		}
 		c.buffer = trimLeftSpaceRunes(c.buffer[cut:])
 	}
 	return chunks
+}
+
+func isSoftSentencePause(r rune) bool {
+	switch r {
+	case '，', ',', '；', ';', '：', ':':
+		return true
+	default:
+		return false
+	}
 }
