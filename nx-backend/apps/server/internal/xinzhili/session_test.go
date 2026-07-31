@@ -336,6 +336,40 @@ func TestSessionStrategyComfortPromptUsesExistingTTSDelivery(t *testing.T) {
 	fixture.sink.waitControl(t, EventAssistantDone)
 }
 
+func TestSessionStrategyMidSentencePromptResumesSameInputTurn(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.synth.segments = nil
+	engine := newScriptedStrategyEngine()
+	engine.applyActions = func(signal Signal) []Action {
+		if signal.Kind == SignalSilence {
+			return []Action{{Kind: ActionEndpoint}}
+		}
+		return nil
+	}
+	fixture.session.Close()
+	fixture.deps.EngineFactory = func(Mode, TimingConfig, Clock) StrategyEngine { return engine }
+	fixture.session = NewSession(fixture.deps)
+
+	input := fixture.input("turn-mid-sentence-resume")
+	input.Mode = ModeComfort
+	if err := fixture.session.StartTurn(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	engine.setTickActions(Action{Kind: ActionComfortPrompt, TextKey: "comfort.mid_sentence"})
+	fixture.sink.waitAudio(t)
+	fixture.sink.waitControl(t, EventAssistantDone)
+
+	fixture.asr.emit(ASREvent{Kind: ASREventPartial, Partial: "我还想继续", Stable: true})
+	engine.waitApply(t, SignalPartial)
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "我还想继续说完", Stable: true})
+	fixture.generator.waitCalled(t)
+	if got := fixture.generator.lastInput().Question; got != "我还想继续说完" {
+		t.Fatalf("resumed question=%q", got)
+	}
+	fixture.sink.waitAudio(t)
+	fixture.sink.waitControl(t, EventAssistantDone)
+}
+
 func TestSessionStrategyQueuesInterruptionPrefixForNextAnswer(t *testing.T) {
 	fixture := newSessionFixture(t)
 	fixture.synth.segments = nil

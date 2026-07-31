@@ -206,6 +206,8 @@ type activeTurn struct {
 	pendingCancellationCount uint64
 	transcripts              []string
 	interruptionPrefix       string
+	proactivePrompt          bool
+	responseStartSeq         uint32
 	draft                    string
 	answer                   string
 	sources                  []rag.Source
@@ -394,14 +396,20 @@ func (s *session) stopTurn(turn *activeTurn) {
 }
 
 func (s *session) playbackAck(ctx context.Context, turn *activeTurn, ack PlaybackAck) error {
-	if turn == nil || ack.TurnID != turn.input.TurnID || turn.assistantID == 0 {
+	if turn == nil || ack.TurnID != turn.input.TurnID {
+		return errors.New("xinzhili: assistant delivery not active")
+	}
+	if turn.assistantID == 0 {
+		if ack.SegmentSeq < turn.responseStartSeq {
+			return nil
+		}
 		return errors.New("xinzhili: assistant delivery not active")
 	}
 	if int64(ack.SegmentSeq) <= turn.lastAck {
 		return nil
 	}
 	var builder strings.Builder
-	for seq := uint32(0); seq <= ack.SegmentSeq; seq++ {
+	for seq := turn.responseStartSeq; seq <= ack.SegmentSeq; seq++ {
 		text, ok := turn.segments[seq]
 		if !ok {
 			return errors.New("xinzhili: playback ack references unsent segment")
@@ -484,6 +492,7 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 			event.segmentAck <- err
 		}
 	case eventTTSDone:
+		proactivePrompt := current.proactivePrompt
 		current.completionDone = true
 		if current.engine != nil {
 			s.executeStrategyActions(current, current.engine.Apply(Signal{Kind: SignalAssistantStopped}))
@@ -501,6 +510,9 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 				current.cancel()
 			}
 		}
+		if proactivePrompt {
+			s.resetProactivePromptDelivery(current)
+		}
 	}
 }
 
@@ -509,7 +521,7 @@ func (s *session) confirmCompletedPlayback(turn *activeTurn) {
 		return
 	}
 	var builder strings.Builder
-	for seq := uint32(0); seq <= uint32(turn.lastAck); seq++ {
+	for seq := turn.responseStartSeq; seq <= uint32(turn.lastAck); seq++ {
 		text, ok := turn.segments[seq]
 		if !ok {
 			return
@@ -637,6 +649,7 @@ func (s *session) startStrategyPrompt(turn *activeTurn, textKey string) error {
 		return err
 	}
 	turn.processing = true
+	turn.proactivePrompt = true
 	turn.draft = text
 	turn.answer = text
 	turn.ttsJobs = make(chan ttsStreamJob, 1)
@@ -644,6 +657,23 @@ func (s *session) startStrategyPrompt(turn *activeTurn, textKey string) error {
 	s.queueTTSChunk(turn, text)
 	close(turn.ttsJobs)
 	return nil
+}
+
+func (s *session) resetProactivePromptDelivery(turn *activeTurn) {
+	turn.processing = false
+	turn.proactivePrompt = false
+	turn.draft = ""
+	turn.answer = ""
+	turn.sources = nil
+	turn.assistantID = 0
+	turn.segments = make(map[uint32]string)
+	turn.responseStartSeq = turn.nextTTSSeq
+	turn.lastAck = int64(turn.responseStartSeq) - 1
+	turn.completionDone = false
+	turn.generationErr = nil
+	turn.chunker = streamSentenceChunker{}
+	turn.ttsJobs = nil
+	turn.doneSent = false
 }
 
 func strategyActionText(textKey string) (string, error) {
@@ -909,7 +939,7 @@ func (s *session) acceptAudioSegment(turn *activeTurn, segment AudioSegment) err
 		s.executeStrategyActions(turn, turn.engine.Apply(Signal{Kind: SignalAssistantStarted}))
 	}
 	turn.segments[segment.Seq] = text
-	if turn.assistantID == 0 {
+	if turn.assistantID == 0 && !turn.proactivePrompt {
 		content := normalizeGeneratedContent(turn.answer)
 		if content == "" {
 			content = normalizeGeneratedContent(turn.draft)
