@@ -8,7 +8,7 @@ const learnSource = readFileSync(resolve(__dirname, 'learn/learn.vue'), 'utf8')
 
 assert.match(
   learnSource,
-  /const\s+quotes\s*=\s*ref\(\[\]\)/,
+  /const\s+quotes\s*=\s*ref\(initialContent\.quotes\)/,
   '学习页需要读取官网语录配置，新增语录才能同步显示',
 )
 

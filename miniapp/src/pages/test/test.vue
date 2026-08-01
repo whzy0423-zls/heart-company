@@ -1,9 +1,10 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { onUnload } from '@dcloudio/uni-app'
 import { QUESTIONS } from '../../data/enneagramGame'
 import { calcType } from '../../utils/enneagram'
 import { setLastResult } from '../../utils/session'
+import { questionVisualCenter } from '../../utils/questionVisuals'
 import { reportGameResultApi } from '../../api'
 
 const stage = ref('gender') // gender | quiz
@@ -11,11 +12,13 @@ const gender = ref(null)
 const step = ref(0)
 const answers = ref([])
 const answerLocked = ref(false)
+const questionHeading = ref(null)
 let advanceTimer = null
 
-const total = QUESTIONS.length
 const q = computed(() => QUESTIONS[step.value])
-const progress = computed(() => ((step.value + (answers.value[step.value] ? 1 : 0)) / QUESTIONS.length) * 100)
+const progress = computed(() => ((step.value + 1) / QUESTIONS.length) * 100)
+const currentVisualCenter = computed(() => questionVisualCenter(step.value))
+const questionVisualSrc = computed(() => `/static/editorial/center-${currentVisualCenter.value}.webp`)
 
 function start(g) {
   clearAdvanceTimer()
@@ -24,12 +27,22 @@ function start(g) {
   step.value = 0
   answers.value = []
   answerLocked.value = false
+  focusQuestionHeading()
 }
 
 function clearAdvanceTimer() {
   if (!advanceTimer) return
   clearTimeout(advanceTimer)
   advanceTimer = null
+}
+
+function focusQuestionHeading() {
+  nextTick(() => {
+    // #ifdef H5
+    const heading = questionHeading.value?.$el || questionHeading.value
+    heading?.focus?.()
+    // #endif
+  })
 }
 
 function choose(opt) {
@@ -42,16 +55,24 @@ function choose(opt) {
       step.value += 1
       answerLocked.value = false
       advanceTimer = null
+      focusQuestionHeading()
     }, 160)
   } else {
-    finish()
+    clearAdvanceTimer()
+    advanceTimer = setTimeout(() => {
+      advanceTimer = null
+      finish()
+    }, 220)
   }
 }
 
 function back() {
   clearAdvanceTimer()
   answerLocked.value = false
-  if (step.value > 0) step.value -= 1
+  if (step.value > 0) {
+    step.value -= 1
+    focusQuestionHeading()
+  }
 }
 
 function letter(k) {
@@ -80,449 +101,484 @@ onUnload(() => {
 
 <template>
   <view class="wrap test page-stack ios-page ios-safe-bottom">
-    <view v-if="stage === 'gender'" class="gender">
-      <view class="test-hero nx-card">
-        <text class="test-hero__eyebrow">九型测试小游戏</text>
-        <text class="test-hero__title">用 18 道生活情境题看见你的核心动机</text>
-        <text class="test-hero__desc">约 3 分钟完成。性别只用于同分时微调判断，答题时选择更接近真实反应的一项。</text>
-        <view class="test-hero__meta" aria-label="测试说明">
-          <text>18 道生活情境题</text>
-          <text>约 3 分钟</text>
-          <text>趣味自测</text>
-        </view>
-      </view>
-
-      <view class="gender__intro">
-        <text class="gender__title">先选择答题身份</text>
-        <text class="gender__tip">选择后进入正式答题，系统会保留原有计分与结果逻辑。</text>
-      </view>
+    <!-- 选性别 -->
+    <view v-if="stage === 'gender'" class="gender nx-editorial-hero">
+      <text class="gender__eyebrow">开始之前 · 约 3 分钟</text>
+      <text class="gender__title">先选择你的性别</text>
+      <text class="gender__tip">用于微调同分情况下的决胜权重，让画像更贴近你。</text>
       <view class="gender__row">
         <button
-          class="gender__card nx-focusable"
-          aria-label="选择男生并开始九型测试小游戏"
+          class="gender__card gender__card--m"
+          aria-label="选择男生"
           hover-class="gender__card--hover"
           @click="start('male')"
         >
           <text class="gender__mark">M</text>
           <text class="gender__b">男生</text>
-          <text class="gender__d">进入 18 道生活情境题，选择更像你的真实反应。</text>
-          <text class="gender__go">开始测试</text>
+          <text class="gender__d">更偏行动、边界与掌控感</text>
         </button>
         <button
-          class="gender__card nx-focusable"
-          aria-label="选择女生并开始九型测试小游戏"
+          class="gender__card gender__card--f"
+          aria-label="选择女生"
           hover-class="gender__card--hover"
           @click="start('female')"
         >
           <text class="gender__mark">F</text>
           <text class="gender__b">女生</text>
-          <text class="gender__d">进入 18 道生活情境题，选择更像你的真实反应。</text>
-          <text class="gender__go">开始测试</text>
+          <text class="gender__d">更偏关系、细腻与安全感</text>
         </button>
       </view>
     </view>
 
-    <view v-else class="quiz-shell nx-card">
-      <view class="quiz__topline">
-        <view
-          class="quiz__progress-meta"
-          :aria-label="`第 ${step + 1} 题，共 ${total} 题`"
-        >
-          <text class="quiz__step">第 {{ step + 1 }} 题</text>
-          <text class="quiz__total">/ 共 {{ total }} 题</text>
-        </view>
-        <text class="quiz__percent">{{ Math.round(progress) }}%</text>
+    <!-- 答题 -->
+    <view v-else class="quiz nx-panel" :class="'quiz--' + currentVisualCenter">
+      <view class="quiz__progress-copy">
+        <text class="quiz__progress-label">测试进度</text>
+        <text class="quiz__progress-count">进度 {{ step + 1 }} / {{ QUESTIONS.length }}</text>
       </view>
-
-      <view class="quiz__bar" aria-hidden="true">
+      <view
+        class="quiz__bar"
+        role="progressbar"
+        aria-valuemin="0"
+        :aria-valuemax="QUESTIONS.length"
+        :aria-valuenow="step + 1"
+        :aria-valuetext="'当前第 ' + (step + 1) + ' / ' + QUESTIONS.length + ' 题'"
+      >
         <view class="quiz__bar-fill" :style="{ width: progress + '%' }" />
       </view>
 
-      <view class="quiz__question-block">
-        <text class="quiz__eyebrow">选择最符合你真实反应的一项</text>
-        <text class="quiz__q">{{ q.q }}</text>
-      </view>
+      <view class="quiz__body">
+        <view :key="'visual-' + step" class="quiz__media-column">
+          <view class="quiz__visual" aria-hidden="true">
+            <image
+              class="quiz__illustration"
+              :src="questionVisualSrc"
+              mode="aspectFill"
+              :alt="'第 ' + (step + 1) + ' 题抽象插画'"
+            />
+          </view>
+        </view>
 
-      <view class="quiz__options">
-        <button
-          v-for="(opt, k) in q.options"
-          :key="k"
-          class="quiz__opt nx-focusable"
-          :class="{ on: answers[step] === opt, disabled: answerLocked }"
-          :disabled="answerLocked"
-          :aria-label="'选择答案 ' + letter(k) + '：' + opt.t"
-          hover-class="quiz__opt--hover"
-          @click="choose(opt)"
-        >
-          <text class="quiz__idx">{{ letter(k) }}</text>
-          <text class="quiz__t">{{ opt.t }}</text>
-        </button>
-      </view>
+        <view class="quiz__content-column">
+          <view :key="'question-' + step" class="quiz__question-block">
+            <text class="quiz__number">第 {{ step + 1 }} 题</text>
+            <text
+              ref="questionHeading"
+              class="quiz__q"
+              tabindex="-1"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {{ q.q }}
+            </text>
+          </view>
 
-      <button
-        v-if="step > 0"
-        class="quiz__back nx-focusable"
-        aria-label="返回上一题"
-        hover-class="quiz__back--hover"
-        @click="back"
-      >
-        ← 上一题
-      </button>
+          <view :key="'options-' + step" class="quiz__options">
+            <button
+              v-for="(opt, k) in q.options"
+              :key="step + '-' + k"
+              class="quiz__opt"
+              :class="{
+                'quiz__opt--selected': answers[step] === opt,
+                'quiz__opt--locked': answerLocked,
+              }"
+              :disabled="answerLocked"
+              :aria-pressed="answers[step] === opt"
+              :aria-label="'选择答案 ' + letter(k) + '：' + opt.t"
+              hover-class="quiz__opt--hover"
+              @click="choose(opt)"
+            >
+              <view class="quiz__opt-accent" aria-hidden="true" />
+              <text class="quiz__idx">{{ letter(k) }}</text>
+              <text class="quiz__t">{{ opt.t }}</text>
+              <text class="quiz__check" aria-hidden="true">✓</text>
+            </button>
+          </view>
+
+          <view class="quiz__footer">
+            <button
+              class="nx-button--text quiz__back"
+              v-if="step > 0"
+              aria-label="返回上一题"
+              hover-class="quiz__back--hover"
+              @click="back"
+            >
+              ← 上一题
+            </button>
+          </view>
+        </view>
+      </view>
     </view>
   </view>
 </template>
 
 <style scoped>
-.test {
-  position: relative;
-  overflow: hidden;
-  background:
-    linear-gradient(180deg, var(--nx-surface-soft), var(--nx-page-bg));
-  color: var(--nx-text);
-}
-
-button {
-  box-sizing: border-box;
-  margin: 0;
-}
-
-button::after {
-  border: 0;
-}
-
 .gender {
-  display: flex;
-  flex-direction: column;
-  gap: 34rpx;
+  min-height: 680rpx;
 }
-
-.test-hero {
-  position: relative;
-  overflow: hidden;
-  min-height: 360rpx;
-  display: flex;
-  flex-direction: column;
-  gap: 18rpx;
-  padding: 48rpx 40rpx;
-  border: 2rpx solid var(--test-gold-border);
-  border-radius: 38rpx;
-  background: linear-gradient(135deg, var(--nx-brand-900), var(--nx-brand-700));
-  box-shadow: 0 28rpx 70rpx -38rpx var(--test-brand-shadow);
-}
-
-.test-hero::after {
-  position: absolute;
-  right: -94rpx;
-  bottom: -150rpx;
-  width: 330rpx;
-  height: 330rpx;
-  border: 2rpx solid var(--test-gold-border);
-  border-radius: 50%;
-  content: '';
-}
-
-.test-hero__eyebrow,
-.test-hero__title,
-.test-hero__desc,
-.test-hero__meta {
-  position: relative;
-  z-index: 1;
-  display: block;
-}
-
-.test-hero__eyebrow {
-  color: var(--nx-accent-gold);
-  font-size: 23rpx;
-  font-weight: 900;
+.gender__eyebrow {
+  color: var(--nx-coral);
+  font-size: 24rpx;
+  font-weight: 800;
   letter-spacing: 3rpx;
 }
-
-.test-hero__title {
-  color: var(--nx-surface);
-  font-size: 50rpx;
+.gender__title {
+  color: var(--nx-ink);
+  font-size: 52rpx;
   font-weight: 900;
   line-height: 1.2;
-  letter-spacing: -1rpx;
 }
-
-.test-hero__desc {
-  max-width: 580rpx;
-  color: var(--test-on-brand-muted);
-  font-size: 26rpx;
-  line-height: 1.68;
-}
-
-.test-hero__meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12rpx;
-}
-
-.test-hero__meta text {
-  padding: 10rpx 16rpx;
-  border: 2rpx solid var(--test-gold-border);
-  border-radius: 999rpx;
-  color: var(--nx-surface);
-  font-size: 22rpx;
-  font-weight: 800;
-}
-
-.gender__intro {
-  display: flex;
-  flex-direction: column;
-  gap: 10rpx;
-  padding: 0 8rpx;
-}
-
-.gender__title {
-  color: var(--nx-brand-900);
-  font-size: 38rpx;
-  font-weight: 900;
-  line-height: 1.3;
-}
-
 .gender__tip {
-  color: var(--nx-text-muted);
-  font-size: 25rpx;
-  line-height: 1.6;
+  max-width: 620rpx;
+  color: var(--nx-muted);
+  font-size: 27rpx;
+  line-height: 1.65;
 }
-
 .gender__row {
   display: flex;
-  gap: 20rpx;
+  gap: var(--nx-space-3);
+  margin-top: var(--nx-space-2);
 }
-
 .gender__card {
   flex: 1;
-  min-width: 0;
-  min-height: 286rpx;
+  min-height: 300rpx;
+  margin: 0;
+  border: 2rpx solid var(--nx-line);
+  border-radius: var(--nx-radius-md);
+  background: var(--nx-surface);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 12rpx;
-  padding: 30rpx 28rpx 28rpx;
-  border: 2rpx solid var(--nx-border);
-  border-radius: 32rpx;
-  background: var(--nx-surface);
+  justify-content: center;
+  gap: 14rpx;
+  padding: 28rpx;
+  box-shadow: var(--nx-shadow-sm);
+  box-sizing: border-box;
   line-height: 1.2;
   text-align: left;
   touch-action: manipulation;
-  transition: transform 180ms ease-out, opacity 180ms ease-out, border-color 180ms ease-out;
 }
-
-.gender__card--hover {
-  opacity: .86;
-  transform: scale(.985);
+.gender__card::after { border: none; }
+.gender__card--hover { opacity: .86; transform: scale(.985); }
+.gender__card--m {
+  border-top: 8rpx solid var(--nx-blue);
 }
-
+.gender__card--f {
+  border-top: 8rpx solid var(--nx-coral);
+}
 .gender__mark {
-  width: 70rpx;
-  height: 70rpx;
+  width: 76rpx;
+  height: 76rpx;
+  border-radius: 24rpx;
+  color: #FFFFFF;
+  font-weight: 900;
+  font-size: 34rpx;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 2rpx solid var(--test-gold-border);
-  border-radius: 22rpx;
-  background: var(--test-gold-soft);
-  color: var(--nx-brand-900);
-  font-size: 34rpx;
-  font-weight: 900;
 }
-
+.gender__card--m .gender__mark {
+  background: var(--nx-blue);
+}
+.gender__card--f .gender__mark {
+  background: var(--nx-coral);
+}
 .gender__b {
-  margin-top: 4rpx;
-  color: var(--nx-brand-900);
+  color: var(--nx-ink);
   font-size: 32rpx;
   font-weight: 900;
 }
-
 .gender__d {
-  color: var(--nx-text-muted);
-  font-size: 24rpx;
-  line-height: 1.5;
+  color: var(--nx-muted);
+  font-size: 22rpx;
+  line-height: 1.45;
 }
 
-.gender__go {
-  margin-top: auto;
-  color: var(--nx-brand-700);
-  font-size: 24rpx;
-  font-weight: 900;
+.quiz {
+  --quiz-accent: var(--nx-blue);
+  --quiz-selected-bg: #E4E9FC;
+  --quiz-atmosphere: rgba(49, 91, 234, .10);
+  width: 100%;
+  max-width: 720rpx;
+  margin: 0 auto;
+  padding: 36rpx;
+  overflow: hidden;
+  box-sizing: border-box;
+  background: linear-gradient(145deg, var(--quiz-atmosphere) 0, rgba(255, 253, 248, .96) 34%, #FFFDF8 100%);
 }
-
-.quiz-shell {
-  position: relative;
-  padding: 38rpx 32rpx 34rpx;
-  border: 2rpx solid var(--nx-border);
-  border-radius: 36rpx;
-  background: var(--nx-surface);
-  box-shadow: 0 28rpx 80rpx -54rpx var(--test-brand-shadow);
+.quiz--head {
+  --quiz-accent: #315BEA;
+  --quiz-selected-bg: #E4E9FC;
+  --quiz-atmosphere: rgba(49, 91, 234, .12);
 }
-
-.quiz__topline {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20rpx;
-  margin-bottom: 18rpx;
+.quiz--heart {
+  --quiz-accent: #C9472D;
+  --quiz-selected-bg: #F5DDD6;
+  --quiz-atmosphere: rgba(201, 71, 45, .12);
 }
-
-.quiz__progress-meta {
+.quiz--gut {
+  --quiz-accent: #347B62;
+  --quiz-selected-bg: #DDECE6;
+  --quiz-atmosphere: rgba(52, 123, 98, .13);
+}
+.quiz__progress-copy {
   display: flex;
   align-items: baseline;
-  gap: 8rpx;
+  justify-content: space-between;
+  gap: var(--nx-space-2);
+  margin-bottom: 16rpx;
 }
-
-.quiz__step {
-  color: var(--nx-brand-700);
-  font-size: 28rpx;
-  font-weight: 900;
+.quiz__progress-label {
+  color: var(--nx-ink);
+  font-size: 24rpx;
+  font-weight: 800;
 }
-
-.quiz__total,
-.quiz__percent {
-  color: var(--nx-text-muted);
-  font-size: 23rpx;
+.quiz__progress-count {
+  color: var(--nx-muted);
+  font-size: 24rpx;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
-
 .quiz__bar {
-  height: 14rpx;
+  height: 16rpx;
+  background: var(--nx-line);
+  border-radius: var(--nx-radius-pill);
   overflow: hidden;
-  border-radius: 999rpx;
-  background: var(--nx-border);
 }
-
 .quiz__bar-fill {
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--nx-accent-gold), var(--nx-brand-700));
-  transition: width 300ms ease-out;
+  background: var(--quiz-accent);
+  transition: width .24s ease;
 }
-
+.quiz__body {
+  min-width: 0;
+}
+.quiz__media-column {
+  animation: quiz-enter .22s ease-out backwards;
+}
+.quiz__visual {
+  width: 100%;
+  max-width: 260rpx;
+  aspect-ratio: 3 / 2;
+  margin: 24rpx auto 0;
+  overflow: hidden;
+  border-radius: var(--nx-radius-md);
+  border: 2rpx solid rgba(23, 33, 43, .10);
+  background: var(--quiz-selected-bg);
+  box-shadow: 0 14rpx 32rpx rgba(23, 33, 43, .10);
+  box-sizing: border-box;
+}
+.quiz__illustration {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 .quiz__question-block {
   display: flex;
   flex-direction: column;
-  gap: 16rpx;
-  margin-top: 46rpx;
+  gap: 14rpx;
+  margin-top: 36rpx;
+  animation: quiz-enter .22s ease-out backwards;
 }
-
-.quiz__eyebrow {
-  color: var(--nx-text-muted);
-  font-size: 23rpx;
-  font-weight: 700;
+.quiz__number {
+  color: var(--quiz-accent);
+  font-size: 24rpx;
+  font-weight: 800;
+  letter-spacing: 2rpx;
 }
-
 .quiz__q {
-  color: var(--nx-brand-900);
-  font-size: 40rpx;
+  color: var(--nx-ink);
+  font-size: 42rpx;
   font-weight: 900;
-  line-height: 1.48;
+  line-height: 1.38;
 }
-
+.quiz__q:focus-visible {
+  outline: 4rpx solid var(--nx-focus);
+  outline-offset: 6rpx;
+}
 .quiz__options {
   display: flex;
   flex-direction: column;
-  gap: 18rpx;
-  margin-top: 38rpx;
+  gap: 20rpx;
+  margin-top: 36rpx;
+  animation: quiz-enter .24s ease-out .04s backwards;
 }
-
 .quiz__opt {
-  width: 100%;
-  min-height: 112rpx;
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 18rpx;
-  padding: 24rpx;
-  border: 2rpx solid var(--nx-border);
-  border-radius: 24rpx;
-  background: var(--nx-surface-soft);
-  line-height: 1.2;
+  gap: 20rpx;
+  width: 100%;
+  min-height: 104rpx;
+  margin: 0;
+  border: 2rpx solid var(--nx-line);
+  border-radius: var(--nx-radius-sm);
+  background: var(--nx-surface);
+  padding: 24rpx 24rpx 24rpx 30rpx;
+  overflow: hidden;
+  box-sizing: border-box;
   text-align: left;
+  line-height: 1.2;
   touch-action: manipulation;
-  transition: transform 180ms ease-out, opacity 180ms ease-out, border-color 180ms ease-out;
+  transition: opacity .22s ease, transform .22s ease, border-color .22s ease, background-color .22s ease, box-shadow .22s ease;
 }
-
-.quiz__opt.disabled,
+.quiz__opt::after { border: none; }
 .quiz__opt[disabled] {
   pointer-events: none;
-  opacity: .72;
+  opacity: .5;
 }
-
-.quiz__opt--hover {
-  opacity: .86;
-  transform: scale(.992);
+.quiz__opt--hover { opacity: .84; transform: translateY(2rpx) scale(.992); }
+.quiz__opt--selected,
+.quiz__opt--selected[disabled] {
+  border-color: var(--quiz-accent);
+  background: var(--quiz-selected-bg);
+  box-shadow: inset 0 0 0 2rpx var(--quiz-accent), 0 8rpx 22rpx rgba(23, 33, 43, .12);
+  opacity: 1;
 }
-
-.quiz__opt.on {
-  border: 4rpx solid var(--nx-accent-gold);
-  background: linear-gradient(120deg, var(--test-gold-soft), var(--nx-surface));
+.quiz__opt-accent {
+  position: absolute;
+  top: 18rpx;
+  bottom: 18rpx;
+  left: 0;
+  width: 8rpx;
+  border-radius: 0 8rpx 8rpx 0;
+  background: var(--quiz-accent);
 }
-
 .quiz__idx {
-  width: 58rpx;
-  height: 58rpx;
+  width: 56rpx;
+  height: 56rpx;
   flex-shrink: 0;
+  border: 2rpx solid var(--nx-line);
+  border-radius: var(--nx-radius-sm);
+  background: var(--nx-bg);
+  color: var(--nx-ink);
+  font-weight: 900;
+  font-size: 25rpx;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 18rpx;
-  background: var(--nx-surface);
-  color: var(--nx-brand-700);
-  font-size: 25rpx;
-  font-weight: 900;
 }
-
-.quiz__opt.on .quiz__idx {
-  background: var(--nx-brand-900);
-  color: var(--nx-accent-gold);
+.quiz__opt--selected .quiz__idx {
+  border-color: var(--quiz-accent);
+  background: var(--quiz-accent);
+  color: #FFFFFF;
 }
-
 .quiz__t {
   flex: 1;
-  color: var(--nx-text);
-  font-size: 28rpx;
-  line-height: 1.55;
+  color: var(--nx-ink);
+  font-size: 29rpx;
+  font-weight: 600;
+  line-height: 1.5;
 }
-
-.quiz__back {
-  width: 100%;
-  min-height: 88rpx;
+.quiz__check {
+  width: 44rpx;
+  height: 44rpx;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--quiz-accent);
+  color: #FFFFFF;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: 28rpx 0 0;
-  padding: 0 24rpx;
-  border: 2rpx solid var(--nx-border);
-  border-radius: 999rpx;
-  background: var(--nx-surface);
-  color: var(--nx-brand-700);
-  font-size: 26rpx;
-  font-weight: 800;
-  line-height: 1.2;
-  touch-action: manipulation;
-  transition: transform 180ms ease-out, opacity 180ms ease-out;
+  font-size: 24rpx;
+  font-weight: 900;
+  opacity: 0;
+  transform: scale(.72);
+  transition: opacity .22s ease, transform .22s ease;
+}
+.quiz__opt--selected .quiz__check {
+  opacity: 1;
+  transform: scale(1);
+}
+.quiz__footer {
+  display: flex;
+  justify-content: flex-start;
+  min-height: 88rpx;
+  margin-top: 20rpx;
+}
+.quiz__back {
+  min-width: 144rpx;
+  min-height: 88rpx;
+  margin: 0;
+  padding: 0 12rpx;
+  color: var(--nx-muted);
+  font-size: 25rpx;
+  font-weight: 700;
+}
+.quiz__back::after { border: none; }
+.quiz__back--hover { color: var(--nx-blue); opacity: .78; }
+.quiz__opt:focus-visible,
+.quiz__back:focus-visible {
+  outline: 4rpx solid var(--nx-focus);
+  outline-offset: 4rpx;
 }
 
-.quiz__back--hover {
-  opacity: .82;
-  transform: scale(.985);
+@keyframes quiz-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12rpx);
+  }
 }
 
-@media (max-width: 360px) {
+@media (max-width: 420px) {
   .gender__row {
     flex-direction: column;
   }
-
+  .gender__card {
+    min-height: 220rpx;
+  }
+  .quiz {
+    padding: 28rpx 24rpx;
+  }
   .quiz__q {
-    font-size: 36rpx;
+    font-size: 38rpx;
+  }
+}
+
+@media screen and (min-width: 768px) {
+  .test.wrap {
+    max-width: 1400rpx;
+    padding-left: clamp(32rpx, 4vw, 56rpx);
+    padding-right: clamp(32rpx, 4vw, 56rpx);
+  }
+  .gender {
+    width: 100%;
+    max-width: 900rpx;
+    margin: 0 auto;
+    box-sizing: border-box;
+  }
+  .quiz {
+    max-width: 1280rpx;
+    padding: 48rpx;
+  }
+  .quiz__body {
+    display: grid;
+    grid-template-columns: minmax(0, .58fr) minmax(0, 1.42fr);
+    align-items: start;
+    gap: 40rpx;
+  }
+  .quiz__media-column {
+    min-width: 0;
+  }
+  .quiz__visual {
+    max-width: none;
+    margin-top: 38rpx;
+  }
+  .quiz__content-column {
+    min-width: 0;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .gender__card,
+  .quiz__media-column,
+  .quiz__question-block,
+  .quiz__options {
+    animation: none;
+  }
   .quiz__bar-fill,
   .quiz__opt,
-  .quiz__back {
+  .quiz__check {
     transition: none;
   }
 }

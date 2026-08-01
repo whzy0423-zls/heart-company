@@ -47,6 +47,26 @@ miniapp/
 3. 打开「微信开发者工具」→ 导入 `dist/dev/mp-weixin` 目录。
 4. 在工具「详情 → 本地设置」勾选 **不校验合法域名**（联调用）。
 
+## 视觉素材验证
+
+首次验证前安装固定版本的 Python 开发依赖：
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+```
+
+验证当前首批 7 张编辑风格素材：
+
+```bash
+python3 scripts/verify-editorial-assets.py --group initial
+```
+
+待 `result-1.webp` 至 `result-9.webp` 全部加入后，验证完整 16 张素材：
+
+```bash
+python3 scripts/verify-editorial-assets.py --group all
+```
+
 ## 后端联调
 - API 地址不再手改 `src/config.js`：
   - 开发默认读取 `.env.development`：`VITE_API_BASE=https://xn--9iq9az5uo8fz16d.com/api`

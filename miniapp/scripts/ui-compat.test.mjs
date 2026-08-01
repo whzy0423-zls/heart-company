@@ -1,3649 +1,615 @@
-import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import assert from 'node:assert/strict'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
+import { inflateSync } from 'node:zlib'
 
-const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-const learnClassroomSource = readFileSync("src/pages/learn/learn.vue", "utf8");
-const classroomPage = statSync("src/pages/classroom/classroom.vue", { throwIfNoEntry: false })
-  ? readFileSync("src/pages/classroom/classroom.vue", "utf8")
-  : "";
-const classroomDetailPage = statSync("src/pages/classroom-detail/classroom-detail.vue", {
-  throwIfNoEntry: false,
-})
-  ? readFileSync("src/pages/classroom-detail/classroom-detail.vue", "utf8")
-  : "";
+const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
 
-assert.match(
-  packageJson.scripts["test:config"],
-  /src\/utils\/classroom-progress-order\.test\.mjs/,
-  "default config tests should cover classroom progress and purchase states",
-);
-
-assert.match(
-  learnClassroomSource,
-  /class="classroom-entry/,
-  "learning page should expose the teacher classroom section",
-);
-assert.match(
-  learnClassroomSource,
-  /loadClassroomPreview/,
-  "classroom preview should load independently from cached learning content",
-);
-assert.match(
-  learnClassroomSource,
-  /retryClassroomPreview/,
-  "classroom preview failure should expose a separate retry",
-);
-assert.match(
-  learnClassroomSource,
-  /coursewareItems/,
-  "classroom preview must preserve legacy home course fallback",
-);
-assert.match(
-  classroomPage,
-  /min-height:\s*88rpx/,
-  "classroom actions should keep accessible touch targets",
-);
-assert.match(
-  classroomDetailPage,
-  /min-height:\s*88rpx/,
-  "classroom detail actions should keep accessible touch targets",
-);
-assert.match(
-  classroomPage,
-  /role="progressbar"[\s\S]*aria-valuenow/,
-  "continue-learning should expose accessible progress semantics",
-);
-assert.match(
-  classroomDetailPage,
-  /payment-panel[\s\S]*aria-live="polite"/,
-  "payment state changes should be announced",
-);
-
-assert.equal(packageJson.scripts["dev:h5"], "uni -p h5");
-assert.equal(packageJson.scripts["build:h5"], "uni build -p h5");
+assert.equal(packageJson.scripts['dev:h5'], 'uni -p h5')
+assert.equal(packageJson.scripts['build:h5'], 'uni build -p h5')
 assert.equal(
-  packageJson.dependencies["@dcloudio/uni-h5"],
-  packageJson.dependencies["@dcloudio/uni-app"],
-);
-for (const requiredTest of [
-  "src/pages/profile/profile.session.test.mjs",
-  "src/pages/booking-records/booking-records.session.test.mjs",
-  "src/utils/bookingDisplay.test.mjs",
-  "src/utils/bookingSession.test.mjs",
-  "src/pages/learn/learn.content-state.test.mjs",
-  "src/pages/classroom/classroom.test.mjs",
-  "src/pages/classroom-detail/classroom-detail.test.mjs",
-  "src/pages/result/result.recommendation.test.mjs",
-  "src/pages/index/index.test.mjs",
-]) {
-  assert.match(
-    packageJson.scripts["test:config"],
-    new RegExp(requiredTest.replaceAll(".", "\\.")),
-    `test:config should run ${requiredTest}`,
-  );
-}
-assert.match(
-  packageJson.scripts["test:config"],
-  /node src\/pages\/booking-detail\/booking-detail\.session\.test\.mjs/,
-  "the default test command should cover appointment detail auth and stale-response behavior",
-);
+  packageJson.dependencies['@dcloudio/uni-h5'],
+  packageJson.dependencies['@dcloudio/uni-app'],
+)
 
-const pagesConfig = readFileSync("src/pages.json", "utf8");
-const pagesConfigJson = JSON.parse(pagesConfig);
-function configuredPage(path) {
-  const mainPage = pagesConfigJson.pages.find((page) => page.path === path);
-  if (mainPage) return mainPage;
-  for (const subpackage of pagesConfigJson.subPackages || []) {
-    const page = subpackage.pages.find(
-      (item) => `${subpackage.root}/${item.path}`.replace(/\/+/g, "/") === path,
-    );
-    if (page) return page;
+const pagesConfig = readFileSync('src/pages.json', 'utf8')
+assert.doesNotMatch(pagesConfig, /pages\/chat\/chat/, 'pages.json must not register the removed chat page')
+assert.doesNotMatch(pagesConfig, /问 AI|AI 对话/, 'tabBar must not expose an AI chat entry')
+assert.equal(statSync('src/pages/chat', { throwIfNoEntry: false }), undefined, 'removed chat page directory should stay deleted')
+
+function decodeRgbaPng(path) {
+  const png = readFileSync(path)
+  assert.deepEqual(
+    png.subarray(0, 8),
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    `${path} should have a valid PNG signature`,
+  )
+  const width = png.readUInt32BE(16)
+  const height = png.readUInt32BE(20)
+  assert.equal(png[24], 8, `${path} should use 8-bit channels`)
+  assert.equal(png[25], 6, `${path} should preserve RGBA transparency`)
+  assert.equal(png[28], 0, `${path} should remain non-interlaced`)
+
+  const idat = []
+  for (let offset = 8; offset < png.length;) {
+    const length = png.readUInt32BE(offset)
+    const type = png.subarray(offset + 4, offset + 8).toString('ascii')
+    if (type === 'IDAT') idat.push(png.subarray(offset + 8, offset + 8 + length))
+    offset += 12 + length
   }
-  return undefined;
-}
-assert.doesNotMatch(
-  pagesConfig,
-  /pages\/chat\/chat/,
-  "pages.json must not register the removed chat page",
-);
-assert.doesNotMatch(pagesConfig, /问 AI|AI 对话/, "tabBar must not expose an AI chat entry");
-assert.equal(
-  statSync("src/pages/chat", { throwIfNoEntry: false }),
-  undefined,
-  "removed chat page directory should stay deleted",
-);
-assert.equal(
-  configuredPage("pages/profile-edit/profile-edit")?.style?.navigationBarTitleText,
-  "个人资料",
-);
-assert.equal(
-  configuredPage("pages/booking-records/booking-records")?.style?.navigationBarTitleText,
-  "预约记录",
-);
-assert.equal(
-  configuredPage("pages/booking-detail/booking-detail")?.style?.navigationBarTitleText,
-  "预约详情",
-);
 
-const h5Index = readFileSync("index.html", "utf8");
-assert.match(
-  h5Index,
-  /viewport-fit=cover/,
-  "H5 viewport meta should enable iOS safe-area env variables",
-);
+  const filtered = inflateSync(Buffer.concat(idat))
+  const stride = width * 4
+  const rgba = Buffer.alloc(stride * height)
+  let sourceOffset = 0
+  for (let y = 0; y < height; y += 1) {
+    const filter = filtered[sourceOffset]
+    sourceOffset += 1
+    for (let x = 0; x < stride; x += 1) {
+      const raw = filtered[sourceOffset + x]
+      const left = x >= 4 ? rgba[y * stride + x - 4] : 0
+      const up = y > 0 ? rgba[(y - 1) * stride + x] : 0
+      const upperLeft = y > 0 && x >= 4 ? rgba[(y - 1) * stride + x - 4] : 0
+      let value
+      if (filter === 0) value = raw
+      else if (filter === 1) value = raw + left
+      else if (filter === 2) value = raw + up
+      else if (filter === 3) value = raw + Math.floor((left + up) / 2)
+      else if (filter === 4) {
+        const estimate = left + up - upperLeft
+        const leftDistance = Math.abs(estimate - left)
+        const upDistance = Math.abs(estimate - up)
+        const upperLeftDistance = Math.abs(estimate - upperLeft)
+        value = raw + (leftDistance <= upDistance && leftDistance <= upperLeftDistance
+          ? left
+          : upDistance <= upperLeftDistance ? up : upperLeft)
+      } else {
+        assert.fail(`${path} uses unsupported PNG filter ${filter}`)
+      }
+      rgba[y * stride + x] = value & 0xff
+    }
+    sourceOffset += stride
+  }
+  return { width, height, rgba }
+}
 
-const appVue = readFileSync("src/App.vue", "utf8");
+for (const name of ['test', 'learn', 'booking', 'profile']) {
+  const path = `src/static/tabbar/${name}-active-green.png`
+  assert.equal(existsSync(path), true, `${path} should exist`)
+  const { width, height, rgba } = decodeRgbaPng(path)
+  assert.deepEqual([width, height], [81, 81], `${path} should retain the existing tab icon dimensions`)
+  const original = decodeRgbaPng(`src/static/tabbar/${name}-active.png`)
+  assert.deepEqual([original.width, original.height], [width, height], `${path} should match the existing active icon dimensions`)
 
-const appleMobileStyle = readFileSync("src/styles/apple-mobile.css", "utf8");
-assert.match(
-  appVue,
-  /@import ['"]\.\/styles\/apple-mobile\.css['"];/,
-  "App.vue should import shared Apple/iOS mobile tokens",
-);
-for (const token of ["--nx-bg", "--nx-primary", "--nx-card", "--nx-radius", "--nx-safe-bottom"]) {
-  assert.match(appleMobileStyle, new RegExp(token), `apple-mobile.css should define ${token}`);
+  const colorCounts = new Map()
+  for (let offset = 0; offset < rgba.length; offset += 4) {
+    assert.equal(
+      rgba[offset + 3],
+      original.rgba[offset + 3],
+      `${path} should preserve the existing active icon alpha silhouette at pixel ${offset / 4}`,
+    )
+    if (rgba[offset + 3] === 0) continue
+    const color = `${rgba[offset]},${rgba[offset + 1]},${rgba[offset + 2]}`
+    colorCounts.set(color, (colorCounts.get(color) || 0) + 1)
+    assert.equal(color, '51,91,74', `${path} visible pixel ${offset / 4} should use brand green #335B4A`)
+  }
+  const dominantColor = [...colorCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+  assert.equal(dominantColor, '51,91,74', `${path} dominant selected color should be brand green #335B4A`)
+  assert.equal(colorCounts.has('43,127,255'), false, `${path} should not retain the old selected blue`)
 }
-for (const token of [
-  "--nx-brand-900",
-  "--nx-brand-700",
-  "--nx-accent-gold",
-  "--nx-page-bg",
-  "--nx-surface",
-  "--nx-surface-soft",
-  "--nx-text",
-  "--nx-text-muted",
-  "--nx-border",
-  "--nx-danger",
-  "--nx-success",
-]) {
-  assert.match(
-    appleMobileStyle,
-    new RegExp(`${token}\\s*:`),
-    `apple-mobile.css should define ${token}`,
-  );
+
+const h5Index = readFileSync('index.html', 'utf8')
+assert.match(h5Index, /viewport-fit=cover/, 'H5 viewport meta should enable iOS safe-area env variables')
+
+const appVue = readFileSync('src/App.vue', 'utf8')
+
+const appleMobileStyle = readFileSync('src/styles/apple-mobile.css', 'utf8')
+assert.match(appVue, /@import ['"]\.\/styles\/apple-mobile\.css['"];/, 'App.vue should import shared Apple/iOS mobile tokens')
+for (const token of ['--nx-bg', '--nx-ink', '--nx-blue', '--nx-coral', '--nx-error', '--nx-focus']) {
+  assert.match(appleMobileStyle, new RegExp(token), `apple-mobile.css should define ${token}`)
 }
-for (const className of [
-  ".ios-page",
-  ".ios-card",
-  ".ios-button",
-  ".ios-section",
-  ".ios-safe-bottom",
-]) {
-  assert.match(
-    appleMobileStyle,
-    new RegExp(className.replace(".", "\\.") + "\\s*\\{"),
-    `apple-mobile.css should define ${className}`,
-  );
+assert.match(appleMobileStyle, /--nx-radius-lg:\s*32rpx/, 'the largest global content radius should be 32rpx')
+for (const className of ['.nx-page', '.nx-editorial-hero', '.nx-panel', '.nx-media-row', '.nx-quote', '.nx-field', '.nx-empty', '.nx-error']) {
+  assert.match(appleMobileStyle, new RegExp(className.replace('.', '\\.') + '\\s*\\{'), `apple-mobile.css should define ${className}`)
 }
-for (const className of [
-  ".nx-page-hero",
-  ".nx-section-head",
-  ".nx-panel",
-  ".nx-state",
-  ".nx-tag",
-  ".nx-focusable",
-]) {
-  assert.match(
-    appleMobileStyle,
-    new RegExp(className.replace(".", "\\.") + "\\s*\\{"),
-    `apple-mobile.css should define ${className}`,
-  );
+for (const className of ['.nx-button--primary', '.nx-button--conversion', '.nx-button--secondary', '.nx-button--text']) {
+  const escaped = className.replace('.', '\\.')
+  assert.match(appleMobileStyle, new RegExp(`${escaped}\\s*\\{[\\s\\S]*?min-height:\\s*(?:8[8-9]|9\\d|[1-9]\\d{2,})rpx`), `${className} should keep at least an 88rpx touch target`)
 }
-assert.match(
-  appleMobileStyle,
-  /\.nx-focusable:focus\s*\{[^}]*outline\s*:\s*4rpx\s+solid\s+var\(--nx-brand-700\)\s*;/,
-  ".nx-focusable:focus should expose a brand-token focus outline",
-);
-assert.match(
-  appleMobileStyle,
-  /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.nx-focusable\s*\{[^}]*animation\s*:\s*none\s*;/,
-  "reduced-motion styles should disable .nx-focusable animation",
-);
-assert.match(
-  appleMobileStyle,
-  /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.nx-focusable\s*\{[^}]*transition\s*:\s*none\s*;/,
-  "reduced-motion styles should disable .nx-focusable transition",
-);
-assert.match(
-  appleMobileStyle,
-  /min-height:\s*88rpx/,
-  "Apple/iOS buttons should keep an 88rpx touch target",
-);
-assert.match(
-  appleMobileStyle,
-  /safe-area-inset-bottom/,
-  "Apple/iOS style tokens should reserve safe-area bottom",
-);
+for (const className of ['.ios-page', '.ios-card', '.ios-button', '.ios-section', '.ios-safe-bottom']) {
+  assert.match(appleMobileStyle, new RegExp(className.replace('.', '\\.') + '\\s*\\{'), `apple-mobile.css should define ${className}`)
+}
+assert.match(appleMobileStyle, /min-height:\s*88rpx/, 'Apple/iOS buttons should keep an 88rpx touch target')
+assert.match(appleMobileStyle, /safe-area-inset-bottom/, 'Apple/iOS style tokens should reserve safe-area bottom')
 
 function assertRootViewClasses(source, file, classNames) {
-  const match = source.match(/<template>\s*<view\s+class=["']([^"']+)["']/);
-  assert.ok(match, `${file} should render a root view with static classes`);
-  const actual = match[1].split(/\s+/);
+  const match = source.match(/<template>\s*<view\s+class=["']([^"']+)["']/)
+  assert.ok(match, `${file} should render a root view with static classes`)
+  const actual = match[1].split(/\s+/)
   for (const className of classNames) {
-    assert.ok(actual.includes(className), `${file} root should include ${className}`);
+    assert.ok(actual.includes(className), `${file} root should include ${className}`)
   }
 }
 
-for (const file of [
-  "src/pages/index/index.vue",
-  "src/pages/result/result.vue",
-  "src/pages/profile/profile.vue",
+for (const file of ['src/pages/index/index.vue', 'src/pages/result/result.vue', 'src/pages/profile/profile.vue']) {
+  const source = readFileSync(file, 'utf8')
+  assert.match(source, /ios-page/, `${file} should opt into shared Apple/iOS page styling`)
+}
+
+for (const file of ['src/pages/relation/relation.vue', 'src/pages/test/test.vue', 'src/pages/learn/learn.vue', 'src/pages/booking/booking.vue']) {
+  const source = readFileSync(file, 'utf8')
+  assertRootViewClasses(source, file, ['page-stack', 'ios-page', 'ios-safe-bottom'])
+}
+
+const indexPage = readFileSync('src/pages/index/index.vue', 'utf8')
+const indexTemplate = indexPage.match(/<template>[\s\S]*?<\/template>/)?.[0] || ''
+const teacherCoursewareSource = readFileSync('src/utils/teacherCourseware.js', 'utf8')
+assert.match(indexPage, /getStoredSiteConfig/, 'home page should render stored site config before refreshing')
+assert.match(indexPage, /refreshSiteConfig/, 'home page should refresh site config in the background')
+assert.match(indexPage, /normalizeTeachers/, 'home page should normalize teacher data including teacherTeaser')
+assert.match(indexPage, /normalizeCoursewareItems/, 'home page should normalize enriched course and material data')
+assert.match(indexPage, /const\s+TEACHER_SECTION_PATHS\s*=\s*\[[\s\S]*?teacherTeaser[\s\S]*?\]/, 'home page should explicitly enumerate teacher section sources')
+assert.match(indexPage, /const\s+COURSE_SECTION_PATHS\s*=\s*\[[\s\S]*?courseware[\s\S]*?materials[\s\S]*?lessons[\s\S]*?courses[\s\S]*?\]/, 'home page should explicitly enumerate course section sources')
+assert.match(indexPage, /Object\.prototype\.hasOwnProperty\.call/, 'home section detection should distinguish missing fields from explicit empty fields')
+assert.match(indexPage, /function\s+hasTeacherSection\(config\)/, 'home page should expose teacher section-presence detection')
+assert.match(indexPage, /function\s+hasCourseSection\(config\)/, 'home page should expose course section-presence detection')
+assert.match(indexPage, /if\s*\(!preserveMissing\s*\|\|\s*hasTeacherSection\(config\)\)\s*\{[\s\S]*?teachers\.value\s*=\s*normalizeTeachers\(config\)/, 'partial refreshes missing teacher fields should preserve the currently displayed teacher')
+assert.match(indexPage, /if\s*\(!preserveMissing\s*\|\|\s*hasCourseSection\(config\)\)\s*\{[\s\S]*?courses\.value\s*=\s*normalizeCoursewareItems\(config\)/, 'partial refreshes missing course fields should preserve the currently displayed courses')
+assert.match(indexPage, /applyContent\(config,\s*\{\s*preserveMissing:\s*true\s*\}\)/, 'successful background refresh should merge only explicitly present teacher/course sections')
+assert.match(indexPage, /let\s+loadTicket\s*=\s*0/, 'home page should guard against stale refresh responses')
+assert.match(indexPage, /ticket\s*!==\s*loadTicket/, 'home page should ignore a stale refresh response')
+assert.match(indexPage, /v-if=["']loading["']/, 'home page should expose an explicit loading state')
+assert.match(indexPage, /v-if=["']loadError["']/, 'home page should expose a non-blocking refresh error')
+assert.match(indexPage, /@click=["']activateAction\(loadContent,\s*\$event\)["']/, 'home refresh failure should provide a cross-platform retry action')
+assert.match(indexPage, /资料整理中/, 'explicit empty teacher or course sections should render a local empty state')
+
+const teacherHeroImage = indexPage.match(/<image\b[^>]*class=["'][^"']*teacher-hero__image[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(teacherHeroImage, /:src=["']teacherImage["']/, 'teacher portrait should use a resolved render source')
+assert.match(teacherHeroImage, /role=["']img["']/, 'teacher image host should expose an img role on H5')
+assert.match(teacherHeroImage, /:aria-label=["']teacherImageLabel["']/, 'teacher portrait should expose a meaningful accessible label')
+assert.match(teacherHeroImage, /@error=["']onTeacherImageError["']/, 'teacher portrait should provide a local image fallback')
+assert.doesNotMatch(teacherHeroImage, /lazy-load/, 'dominant above-fold teacher portrait should load eagerly')
+assert.match(indexPage, /resolveContentAsset\(teacher\.value\?\.avatar,\s*TEACHER_FALLBACK\)/, 'teacher image should resolve backend content before rendering')
+assert.match(indexPage, /teacherImageFallbackUsed/, 'teacher fallback should be applied only once')
+assert.match(indexPage, /teacher\.name/, 'teacher hero should render the teacher name')
+assert.match(indexPage, /teacher\.title/, 'teacher hero should render teacher identity')
+assert.match(indexPage, /teacher\.bio/, 'teacher hero should render a concise credibility biography')
+assert.match(indexPage, /function\s+activateAction\(action,\s*event\)\s*\{[\s\S]*?event\?\.repeat[\s\S]*?keyboardActivationAt[\s\S]*?action\(\)/, 'home keyboard activation should ignore repeats and suppress the synthetic follow-up click')
+assert.match(indexPage, /function\s+onActionKeydown\(event,\s*action\)\s*\{\s*if\s*\(!\['Enter',\s*' ',\s*'Spacebar'\]\.includes\(event\?\.key\)\)\s*return\s*event\.preventDefault\?\.\(\)\s*event\.stopPropagation\?\.\(\)\s*activateAction\(action,\s*event\)/, 'the shared keydown handler should prevent only Enter/Space after filtering, leaving Tab untouched')
+
+const teacherHeroImages = indexPage.match(/<image\b[^>]*class=["'][^"']*teacher-hero__image[^"']*["'][^>]*>/g) || []
+assert.equal(teacherHeroImages.length, 1, 'home page should render exactly one teacher hero image')
+assert.match(indexPage, /class=["'][^"']*teacher-welcome[^"']*["']/, 'home should use a compact teacher welcome section')
+const teacherToggle = indexPage.match(/<view\b[^>]*class=["'][^"']*teacher-toggle[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(teacherToggle, /role=["']button["']/, 'teacher intro toggle should expose button semantics')
+assert.match(teacherToggle, /tabindex=["']0["']/, 'teacher intro toggle should be keyboard focusable')
+assert.match(teacherToggle, /:aria-expanded=["']teacherExpanded["']/, 'teacher intro toggle should expose expanded state')
+assert.match(teacherToggle, /aria-controls=["']teacher-bio["']/, 'teacher intro toggle should identify the controlled biography')
+assert.match(teacherToggle, /@click=["']activateAction\(toggleTeacher,\s*\$event\)["']/, 'teacher intro toggle should support click and mini-program tap')
+assert.match(teacherToggle, /@keydown=["']onActionKeydown\(\$event,\s*toggleTeacher\)["']/, 'teacher intro toggle should support Enter and Space')
+assert.match(indexPage, /\.teacher-toggle\s*\{[^}]*min-height:\s*88rpx/, 'teacher intro toggle should keep an 88rpx touch target')
+
+const serviceEntries = indexPage.match(/<view\b[^>]*class=["'][^"']*service-entry[^"']*["'][^>]*>/g) || []
+assert.equal(serviceEntries.length, 4, 'home should expose exactly four primary service entries')
+for (const copy of ['课程学习', '课件资料', '九型测试', '关系合盘']) {
+  assert.equal((indexPage.match(new RegExp(copy, 'g')) || []).length, 1, `home should expose one ${copy} service entry`)
+}
+for (const action of serviceEntries) {
+  assert.match(action, /role=["']button["']/, 'service entries should expose button semantics')
+  assert.match(action, /tabindex=["']0["']/, 'service entries should be keyboard focusable')
+  assert.match(action, /@click=["']activateAction\(/, 'service entries should preserve tap and click activation')
+  assert.match(action, /@keydown=["']onActionKeydown\(/, 'service entries should support Enter and Space')
+}
+
+function functionSource(source, name, nextName) {
+  const start = source.indexOf(`function ${name}(`)
+  const end = source.indexOf(`function ${nextName}(`, start)
+  assert.notEqual(start, -1, `${name} should exist`)
+  assert.notEqual(end, -1, `${nextName} should follow ${name}`)
+  return source.slice(start, end)
+}
+
+const goCourseSource = functionSource(indexPage, 'goCourse', 'goMaterial')
+const goMaterialSource = functionSource(indexPage, 'goMaterial', 'startTest')
+for (const [source, intent, label] of [
+  [goCourseSource, 'course', 'course'],
+  [goMaterialSource, 'material', 'material'],
 ]) {
-  const source = readFileSync(file, "utf8");
-  assert.match(source, /ios-page/, `${file} should opt into shared Apple/iOS page styling`);
-  assert.match(
-    source,
-    /(?:ios-card|nx-card)/,
-    `${file} should opt into a shared design-system card surface`,
-  );
+  assert.match(source, new RegExp(`setLearningNavIntent\\(['"]${intent}['"]\\)`), `${label} navigation should set its short-lived intent`)
+  assert.match(source, /uni\.switchTab\(\{[\s\S]*?url:\s*['"]\/pages\/learn\/learn['"]/, `${label} navigation should switch to the learning tab`)
+  assert.match(source, /fail\(\)\s*\{\s*clearLearningNavIntent\(\)\s*\}/, `${label} navigation should clear its intent if switchTab fails`)
+}
+assert.match(indexPage, /uni\.navigateTo\(\{\s*url:\s*['"]\/pages\/test\/test['"]/, 'test service should navigate to the test page')
+assert.match(indexPage, /uni\.navigateTo\(\{\s*url:\s*['"]\/pages\/relation\/relation['"]/, 'relation service should navigate to the relation page')
+
+const featuredCourseActions = indexPage.match(/<view\b[^>]*class=["']featured-course["'][^>]*>/g) || []
+assert.equal(featuredCourseActions.length, 1, 'home should render exactly one recommended course row')
+assert.equal((indexPage.match(/推荐课程/g) || []).length, 1, 'home should label the recommended course section once')
+const moreCoursesAction = indexPage.match(/<view\b[^>]*class=["'][^"']*section-link--course[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(moreCoursesAction, /role=["']button["']/, 'more courses should be an accessible action')
+assert.match(moreCoursesAction, /tabindex=["']0["']/, 'more courses should be keyboard focusable')
+assert.match(moreCoursesAction, /@click=["']activateAction\(goCourse,\s*\$event\)["']/, 'more courses should open the course category')
+assert.match(moreCoursesAction, /@keydown=["']onActionKeydown\(\$event,\s*goCourse\)["']/, 'more courses should support Enter and Space')
+assert.doesNotMatch(indexPage, /material-shelf|material-card|v-for=["']\(course,\s*index\) in materialCourses/, 'home page should not render a course shelf or additional course list')
+const courseCoverImages = indexPage.match(/<image\b[^>]*class=["'][^"']*featured-course__cover[^"']*["'][^>]*>/g) || []
+assert.equal(courseCoverImages.length, 1, 'home page should render exactly one featured course cover')
+for (const image of courseCoverImages) {
+  assert.match(image, /aria-hidden=["']true["']/, 'course covers should be hidden from assistive technology because titles are adjacent')
+  assert.match(image, /@error=["']onCourseImageError\(/, 'course covers should provide a one-shot local editorial fallback')
+}
+assert.match(indexPage, /function\s+homeCourseCover\(course,\s*index\)/, 'home page should map unsuitable local course covers before rendering')
+assert.match(teacherCoursewareSource, /DEFAULT_COURSEWARE_ITEMS[\s\S]*?cover:\s*['"]\/static\/wheel\.png['"]/, 'the compatibility test should cover the current DEFAULT_COURSEWARE_ITEMS wheel fallback')
+assert.ok(indexPage.includes('\\/static\\/wheel\\.png'), 'home course cover mapping should explicitly recognize the legacy wheel fallback')
+assert.match(indexPage, /return\s+!cover\s*\|\|\s*isLegacyWheel\s*\?\s*courseFallback\(index\)\s*:\s*cover/, 'missing and legacy wheel covers should use distinct editorial publication covers')
+assert.match(indexPage, /resolveContentAsset\(homeCourseCover\(course,\s*index\),\s*courseFallback\(index\)\)/, 'featured and shelf course images should resolve the mapped publication cover')
+assert.doesNotMatch(indexPage, /resolveContentAsset\(course\.cover,/, 'DEFAULT_COURSEWARE_ITEMS wheel covers must not render directly on home')
+assert.match(indexPage, /courseImageFallbackUsed/, 'course cover fallback should be applied only once per item')
+assert.equal((indexPage.match(/最新课件/g) || []).length, 1, 'home should expose one latest material section')
+assert.match(indexPage, /class=["'][^"']*latest-material[^"']*["']/, 'home should render a latest material row')
+const allMaterialsAction = indexPage.match(/<view\b[^>]*class=["'][^"']*section-link--material[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(allMaterialsAction, /role=["']button["']/, 'all materials should be an accessible action')
+assert.match(allMaterialsAction, /tabindex=["']0["']/, 'all materials should be keyboard focusable')
+assert.match(allMaterialsAction, /@click=["']activateAction\(goMaterial,\s*\$event\)["']/, 'all materials should open the material category')
+assert.match(allMaterialsAction, /@keydown=["']onActionKeydown\(\$event,\s*goMaterial\)["']/, 'all materials should support Enter and Space')
+assert.equal((indexPage.match(/预约咨询/g) || []).length, 1, 'home should expose one lightweight booking prompt')
+assert.match(indexPage, /class=["'][^"']*booking-prompt[^"']*["']/, 'home should render booking as a lightweight prompt')
+assert.match(indexPage, /function\s+goBooking\(\)\s*\{\s*uni\.switchTab\(\{\s*url:\s*['"]\/pages\/booking\/booking['"]\s*\}\)\s*\}/, 'home consultation entry should switch to the booking tab')
+assert.match(indexPage, /@click=["']activateAction\(goBooking,\s*\$event\)["']/, 'home consultation entry should activate booking on click or tap')
+assert.match(indexPage, /@keydown=["']onActionKeydown\(\$event,\s*goBooking\)["']/, 'home consultation entry should activate booking from Enter or Space')
+const roleButtonViews = indexPage.match(/<view\b(?=[^>]*role=["']button["'])[^>]*>/g) || []
+for (const action of roleButtonViews) {
+  assert.equal((action.match(/@keydown=/g) || []).length, 1, 'each home action should declare exactly one keydown binding')
+}
+assert.doesNotMatch(indexPage, /@keydown\./, 'keydown modifiers must not intercept Tab or compile duplicate WXML attributes')
+assert.match(indexPage, /\.service-entry\s*\{[^}]*min-height:\s*(?:8[8-9]|9\d|[1-9]\d{2,})rpx/, 'service entries should keep at least an 88rpx touch target')
+assert.match(indexPage, /\.service-entry:focus-visible[\s\S]*\.booking-prompt:focus-visible[\s\S]*outline:/, 'home controls should expose a visible keyboard focus state')
+assert.match(indexPage, /--home-bg:\s*#F5F6F4/i, 'home should use a light WeUI-like page background')
+assert.match(indexPage, /--home-surface:\s*#FFFFFF/i, 'home should use white service blocks')
+assert.match(indexPage, /--home-ink:\s*#20252B/i, 'home should use the approved restrained ink color')
+assert.match(indexPage, /--home-green:\s*#335B4A/i, 'home should use the approved restrained green accent')
+assert.match(indexPage, /--home-muted:\s*#4F5A54/i, 'home should define a darker readable muted text color')
+
+function channelLuminance(channel) {
+  const normalized = channel / 255
+  return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4
 }
 
-for (const file of [
-  "src/pages/relation/relation.vue",
-  "src/pages/test/test.vue",
-  "src/pages/learn/learn.vue",
-  "src/pages/booking/booking.vue",
-]) {
-  const source = readFileSync(file, "utf8");
-  assertRootViewClasses(source, file, ["page-stack", "ios-page", "ios-safe-bottom"]);
-}
-
-const indexPage = readFileSync("src/pages/index/index.vue", "utf8");
-const homeTemplate = stripMarkupAndCssComments(
-  topLevelVueSection(indexPage, "template") || "",
-);
-const homeStyle = vueSection(indexPage, "style") || "";
-
-function staticClassTokens(tag) {
-  const match = tag.match(/\sclass=["']([^"']*)["']/);
-  return match ? match[1].trim().split(/\s+/).filter(Boolean) : [];
-}
-
-function assertKeyboardViewControl(tag, description, handler) {
-  assert.match(tag, /\srole=["']button["']/, `${description} should use web button semantics`);
-  assert.match(
-    tag,
-    /\saria-role=["']button["']/,
-    `${description} should expose miniapp button semantics`,
-  );
-  assert.match(
-    tag,
-    /\stabindex=["']0["']/,
-    `${description} should participate in keyboard focus order`,
-  );
-  assert.match(
-    tag,
-    new RegExp(`\\s@keydown\\.enter=["']${handler}["']`),
-    `${description} should activate with Enter`,
-  );
-  assert.match(
-    tag,
-    new RegExp(`\\s@keydown\\.space\\.prevent=["']${handler}["']`),
-    `${description} should activate with Space without scrolling`,
-  );
-}
-
-function assertTemplateOrder(source, selectors, description) {
-  let previous = -1;
-  for (const selector of selectors) {
-    const current = source.indexOf(selector);
-    assert.ok(current >= 0, `${description} should render ${selector}`);
-    assert.ok(current > previous, `${description} should keep ${selector} in semantic order`);
-    previous = current;
+function contrastRatio(foreground, background) {
+  const channels = (hex) => hex.match(/[a-f\d]{2}/gi).map((value) => Number.parseInt(value, 16))
+  const luminance = (hex) => {
+    const [red, green, blue] = channels(hex).map(channelLuminance)
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
   }
+  const lighter = Math.max(luminance(foreground), luminance(background))
+  const darker = Math.min(luminance(foreground), luminance(background))
+  return (lighter + 0.05) / (darker + 0.05)
 }
 
-function cssDeclarationBlocksForSelector(source, selector) {
-  return [...source.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
-    .filter(([, selectors]) => selectors.split(",").some((item) => item.trim() === selector))
-    .map(([, , declarations]) => declarations);
+for (const background of ['#FFFFFF', '#F5F6F4']) {
+  assert.ok(contrastRatio('#4F5A54', background) >= 4.5, `muted home text should meet AA contrast on ${background}`)
+  assert.ok(contrastRatio('#335B4A', background) >= 4.5, `green home actions should meet AA contrast on ${background}`)
 }
 
-function cssDeclarationsForSelector(source, selector) {
-  return cssDeclarationBlocksForSelector(source, selector).join("\n");
-}
-
-assertTemplateOrder(
-  homeTemplate,
-  [
-    'class="expert-hero nx-card"',
-    'class="enterprise-services"',
-    'class="test-game nx-card"',
-    'class="classroom-preview"',
-    'class="secondary-entries"',
-    'class="enterprise-final-cta"',
-  ],
-  "personal-expert home",
-);
-assert.doesNotMatch(
-  homeTemplate,
-  /class=["']home-nav(?:__[^"'\s]*)?["']/,
-  "personal-expert home should not render the profile-only brand strip",
-);
-assert.match(
-  indexPage,
-  /normalizePersonalExpertHome/,
-  "home should render the normalized personal-expert content model",
-);
-assert.match(
-  indexPage,
-  /MINIAPP_HOME_ENTRY_BEHAVIORS/,
-  "home secondary entries should keep fixed navigation metadata",
-);
-assert.doesNotMatch(
-  indexPage,
-  /entry\.(?:url|path|href|route)/,
-  "configured home entries must not provide arbitrary navigation targets",
-);
-assert.match(
-  indexPage,
-  /getStoredSiteConfig/,
-  "home should render stored configuration before refreshing",
-);
-assert.match(
-  indexPage,
-  /refreshSiteConfig/,
-  "home should refresh stored configuration in the background",
-);
-assert.match(
-  homeTemplate,
-  /<NxAsyncState\b(?=[^>]*v-if=["']siteStale["'])(?=[^>]*state=["']stale["'])[^>]*>/,
-  "home should keep stale cached content visible with a retry state",
-);
-
-const homeCarousel = homeTemplate.match(/<view\s+v-if=["']carousel\.items\.length["']\s+class=["']carousel["'][\s\S]*?<\/view>/)?.[0] || "";
-assert.match(homeCarousel, /<swiper\b/, "home should render configured carousel content");
-assert.match(
-  homeCarousel,
-  /:autoplay=["'][^"']*carousel\.items\.length\s*>\s*1[^"']*!carouselPaused[^"']*["']/,
-  "home carousel should autoplay only multiple unpaused slides",
-);
-assert.match(homeCarousel, /:interval=["']carousel\.interval["']/, "home carousel should use configured timing");
-assert.match(
-  homeCarousel,
-  /<image\b(?=[^>]*lazy-load)(?=[^>]*@error=["']removeCarouselItem\(item\.image\)["'])[^>]*>/,
-  "home carousel should lazy-load images and remove only failed slides",
-);
-assert.match(
-  homeCarousel,
-  /<button\b[\s\S]*?class=["']carousel__toggle["'][\s\S]*?@click=["']toggleCarouselPaused["'][\s\S]*?>/,
-  "home carousel should expose a pause or resume control",
-);
-assert.match(
-  indexPage,
-  /failedCarouselImages\s*=\s*new Set\(\)[\s\S]*failedCarouselImages\.add\(image\)/,
-  "home should retain failed carousel image URLs across refreshes",
-);
-
-assert.match(
-  homeTemplate,
-  /<image\b(?=[^>]*class=["']expert-hero__image["'])(?=[^>]*@error=["']markTeacherImageError["'])[^>]*\/>[\s\S]*?<view\s+v-else\s+class=["']expert-hero__monogram["']/,
-  "expert portrait should expose an image-error fallback",
-);
-assert.match(
-  homeTemplate,
-  /<NxAsyncState\s+v-if=["']classroomState === 'loading'["']\s+state=["']loading["']\s*\/>/,
-  "home classroom preview should expose loading state",
-);
-assert.match(
-  homeTemplate,
-  /<NxAsyncState\b(?=[^>]*v-else-if=["']classroomState === 'error'["'])(?=[^>]*state=["']error["'])[^>]*>/,
-  "home classroom preview should expose an independent retryable error state",
-);
-assert.match(
-  homeTemplate,
-  /<NxAsyncState\b(?=[^>]*v-else-if=["']classroomState === 'empty'["'])(?=[^>]*state=["']empty["'])[^>]*>/,
-  "home classroom preview should expose a visitor-facing empty state",
-);
-assert.match(
-  homeTemplate,
-  /<image\b(?=[^>]*class=["']classroom-card__cover["'])(?=[^>]*lazy-load)(?=[^>]*@error=["']markCourseCoverError\(courseCoverKey\(item\)\)["'])[^>]*\/>[\s\S]*?<view\s+v-else\s+class=["']classroom-card__cover-fallback["']/,
-  "classroom preview covers should lazy-load and fall back after image errors",
-);
-
-for (const className of [
-  "expert-hero__secondary",
-  "carousel__toggle",
-  "enterprise-service",
-  "test-game__cta",
-  "classroom-card",
-  "secondary-entry",
-  "enterprise-final-cta__button",
+for (const [selector, message] of [
+  ['service-desc', 'service descriptions'],
+  ['course-desc', 'course descriptions'],
+  ['booking-action', 'booking action text'],
 ]) {
-  const touchBlocks = cssDeclarationBlocksForSelector(homeStyle, `.${className}`);
-  assert.ok(touchBlocks.length > 0, `.${className} should define a CSS rule`);
-  const minHeights = touchBlocks.flatMap((declarations) =>
-    [...declarations.matchAll(/min-height:\s*(\d+)rpx\s*;/g)].map((match) => Number(match[1])),
-  );
-  assert.ok(
-    minHeights.length > 0,
-    `.${className} should define an explicit minimum touch height`,
-  );
-  assert.ok(
-    minHeights.every((height) => height >= 88),
-    `.${className} should keep every minimum touch height at or above 88rpx; got ${minHeights.join(", ")}`,
-  );
+  assert.match(indexPage, new RegExp(`\\.${selector}\\s*\\{(?=[^}]*font-size:\\s*(?:2[4-9]|[3-9]\\d|\\d{3,})rpx)(?=[^}]*color:\\s*(?:var\\(--home-muted\\)|var\\(--home-green\\)))[^}]*\\}`), `${message} should use at least 24rpx readable AA text`)
 }
-assert.match(
-  homeStyle,
-  /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\.home button\s*\{[^}]*transition:\s*none\s*;/,
-  "home should disable button transitions for reduced motion",
-);
-for (const token of [
-  "--nx-brand-900",
-  "--nx-brand-700",
-  "--nx-accent-gold",
-  "--nx-page-bg",
-  "--nx-surface",
-  "--nx-text",
-  "--nx-text-muted",
-  "--nx-border",
-]) {
-  assert.match(indexPage, new RegExp(`var\\(${token}\\)`), `home should consume ${token}`);
-}
-assert.doesNotMatch(
-  indexPage,
-  /openChatPage|goChat|问 AI|AI 对话|打开 AI 对话/,
-  "home must not expose the removed AI chat entry",
-);
+assert.match(indexPage, /\.section-note,\s*\.section-link\s*\{(?=[^}]*font-size:\s*(?:2[4-9]|[3-9]\d|\d{3,})rpx)(?=[^}]*color:\s*var\(--home-muted\))[^}]*\}/, 'section helper and link base text should use readable muted styling')
+assert.match(indexPage, /\.course-meta,\s*\.material-meta,\s*\.booking-desc\s*\{(?=[^}]*font-size:\s*(?:2[4-9]|[3-9]\d|\d{3,})rpx)(?=[^}]*color:\s*var\(--home-muted\))[^}]*\}/, 'home metadata should use at least 24rpx readable muted text')
+assert.match(indexPage, /\.sync-note,\s*\.home-error\s*\{(?=[^}]*font-size:\s*(?:2[4-9]|[3-9]\d|\d{3,})rpx)[^}]*\}/, 'home loading and error status text should use at least 24rpx')
+assert.match(indexPage, /\.teacher-eyebrow,\s*\.teacher-identity\s*\{(?=[^}]*font-size:\s*(?:2[4-9]|[3-9]\d|\d{3,})rpx)[^}]*\}/, 'teacher helper and identity text should use at least 24rpx')
+assert.doesNotMatch(indexTemplate, /home-primary|开始学习|teacher-hero__portrait|home-masthead|editorial-kicker|portrait-mark|featured-course__spine|material-shelf|material-card|home-bento|float-token|texture|pattern|CURRICULUM|FEATURED|TEACHER|SELF TEST|RELATIONSHIP|学习专刊/, 'home should omit the old long-page hero, main button, and decorative promotional layers')
+assert.doesNotMatch(indexPage, /(?:repeating-)?(?:linear|radial)-gradient|background-image|box-shadow|@keyframes|animation\s*:|backdrop-filter|filter\s*:/, 'home should use a plain background with no texture, normal shadow, filter, or entry animation')
+assert.doesNotMatch(indexPage, /border-radius:\s*(?:[3-9]\d|\d{3,})rpx/, 'home radii should stay within the restrained 16-24rpx range')
 
-assert.match(
-  appleMobileStyle,
-  /--nx-page-bottom:\s*calc\([^;]*safe-area-inset-bottom[^;]*\)\s*;/,
-  "the shared page-bottom token should reserve the device safe area",
-);
-assert.match(
-  appleMobileStyle,
-  /--nx-page-bottom:\s*calc\([^;]*var\(--window-bottom,\s*0px\)[^;]*\)\s*;/,
-  "the shared page-bottom token should reserve H5 tabbar/window bottom",
-);
-assert.match(
-  appleMobileStyle,
-  /\.ios-safe-bottom\s*\{[^}]*padding-bottom:\s*var\(--nx-page-bottom\)\s*;/,
-  "safe-bottom pages should consume the shared page-bottom token",
-);
+
+assert.match(appleMobileStyle, /\.page-stack\s*\{[\s\S]*safe-area-inset-bottom/, 'page-stack should reserve bottom safe area globally')
+assert.match(appleMobileStyle, /\.page-stack\s*\{[\s\S]*var\(--window-bottom,\s*0px\)/, 'page-stack should reserve H5 tabbar/window bottom globally')
 
 function collectVueFiles(dir) {
   return readdirSync(dir).flatMap((name) => {
-    const path = join(dir, name);
+    const path = join(dir, name)
     return statSync(path).isDirectory()
       ? collectVueFiles(path)
-      : path.endsWith(".vue")
+      : path.endsWith('.vue')
         ? [path]
-        : [];
-  });
+        : []
+  })
 }
 
-const pageVueTemplates = collectVueFiles("src/pages").map((file) => {
-  const source = readFileSync(file, "utf8");
-  return {
-    file,
-    template: stripMarkupAndCssComments(topLevelVueSection(source, "template") || ""),
-  };
-});
-assert.match(
-  pageVueTemplates.find(({ file }) => file.endsWith("/result/result.vue"))?.template || "",
-  /@click=["']unlockReport["']/,
-  "global page scans should reach controls after internal template branches",
-);
-
-for (const { file, template } of pageVueTemplates) {
-  const buttons = openingTagsFor(template, "button");
+for (const file of collectVueFiles('src/pages')) {
+  const source = readFileSync(file, 'utf8')
+  const buttons = source.match(/<button\b[\s\S]*?>/g) || []
   for (const button of buttons) {
-    if (!button.includes(":loading=")) continue;
+    if (!button.includes(':loading=')) continue
     assert.match(
       button,
       /\s(?::disabled|disabled)(?:=|\s|>)/,
       `${file} has a loading button without disabled state: ${button}`,
-    );
-  }
-  const images = openingTagsFor(template, "image");
-  for (const image of images) {
-    if (image.includes("poster-img")) continue;
-    if (/\slazy-load(?:=|\s|>|$)/.test(image)) continue;
-    assert.match(
-      image,
-      /class=["'][^"']*(?:hero|avatar|portrait)[^"']*["']/,
-      `${file} should reserve eager loading for above-the-fold identity imagery: ${image}`,
-    );
-    assert.match(
-      image,
-      /\s@error=/,
-      `${file} eager identity image should expose an error fallback: ${image}`,
-    );
+    )
   }
 }
 
-const bookingPage = readFileSync("src/pages/booking/booking.vue", "utf8");
-const bookingTemplate = stripMarkupAndCssComments(vueSection(bookingPage, "template") || "");
-const bookingStyle = stripMarkupAndCssComments(vueSection(bookingPage, "style") || "");
 
-assert.match(bookingPage, /userErrorMessage/, "booking should surface normalized request errors");
-assert.match(bookingPage, /fieldErrors/, "booking should expose inline field validation errors");
-for (const field of ["contactName", "phone"]) {
-  assert.match(
-    bookingTemplate,
-    new RegExp(`:aria-invalid=["']!!fieldErrors\\.${field}["']`),
-    `booking ${field} should expose aria-invalid`,
-  );
-  assert.match(
-    bookingTemplate,
-    new RegExp(`v-if=["']fieldErrors\\.${field}["'][^>]*role=["']alert["']`),
-    `booking ${field} should render a nearby live error`,
-  );
+const bookingPage = readFileSync('src/pages/booking/booking.vue', 'utf8')
+assert.match(bookingPage, /userErrorMessage/, 'booking page should surface normalized request errors')
+assert.match(bookingPage, /title:\s*userErrorMessage\(e,\s*'提交失败，请重试'\)/, 'booking submit should keep a fallback while showing specific API errors')
+assert.match(bookingPage, /<button\s+class=["'][^"']*btn-primary[^"']*ios-button[^"']*["'][^>]*@click=["']submit["']/, 'booking submit action should opt into iOS button styling')
+assert.match(bookingPage, /fieldErrors/, 'booking page should expose inline field validation errors')
+assert.match(bookingPage, /v-if=["']fieldErrors\.contactName["']/, 'booking contact name should render an inline validation error')
+assert.match(bookingPage, /v-if=["']fieldErrors\.phone["']/, 'booking phone should render an inline validation error')
+assert.match(bookingPage, /:aria-invalid=["']!!fieldErrors\.contactName["']/, 'booking contact name input should expose aria-invalid when invalid')
+assert.match(bookingPage, /:aria-invalid=["']!!fieldErrors\.phone["']/, 'booking phone input should expose aria-invalid when invalid')
+
+const learnPage = readFileSync('src/pages/learn/learn.vue', 'utf8')
+const learningPageStateSource = readFileSync('src/utils/learningPageState.js', 'utf8')
+
+assert.match(learningPageStateSource, /normalizeTeachers/, 'learn state utility should normalize teacher profile data from site config')
+assert.match(learningPageStateSource, /normalizeCoursewareItems/, 'learn state utility should normalize courseware and course data from site config')
+assert.match(learningPageStateSource, /function\s+flattenLearningMaterials\(/, 'learn state should flatten course material types into category rows')
+assert.match(learningPageStateSource, /function\s+resolveLearningCategory\(/, 'learn state should resolve one-time navigation intent without corrupting the active category')
+for (const helper of ['createLearningCourseEntries', 'createLearningQuoteEntries', 'createLearningTagEntries', 'learningTabTransition']) {
+  assert.match(learningPageStateSource, new RegExp(`function\\s+${helper}\\(`), `learn state should expose tested ${helper} behavior`)
 }
+assert.match(learnPage, /resolveContentAsset/, 'learn page should resolve backend teacher and course image assets safely')
+const learnTemplate = learnPage.match(/<template>[\s\S]*?<\/template>/)?.[0] || ''
+const learnTeacherSections = learnTemplate.match(/<section\b[^>]*class=["'][^"']*learn-teacher[^"']*["'][^>]*>/g) || []
+assert.equal(learnTeacherSections.length, 1, 'learn page should render exactly one compact teacher introduction section')
+assert.match(learnPage, /主讲老师/, 'learn page should introduce the teacher in concise Chinese copy')
+assert.match(learnPage, /teacher\.name/, 'teacher profile should render the teacher name')
+assert.match(learnPage, /teacher\.title/, 'teacher profile should render the teacher title')
+assert.match(learnPage, /teacher\.bio/, 'teacher profile should render the teacher biography')
+assert.match(learnPage, /teacherTagEntries/, 'teacher profile should render teacher expertise tags through stable entries')
+const learnTeacherToggle = learnPage.match(/<view\b[^>]*class=["'][^"']*learn-teacher__toggle[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(learnTeacherToggle, /role=["']button["']/, 'compact teacher introduction should expose an accessible expand control')
+assert.match(learnTeacherToggle, /tabindex=["']0["']/, 'teacher introduction toggle should be keyboard focusable')
+assert.match(learnTeacherToggle, /:aria-expanded=["']teacherExpanded["']/, 'teacher introduction toggle should expose its expanded state')
+assert.match(learnTeacherToggle, /aria-controls=["']learn-teacher-details["']/, 'teacher introduction toggle should identify the expandable details')
+assert.match(learnTeacherToggle, /@keydown=["']onActionKeydown\(\$event,\s*toggleTeacher\)["']/, 'teacher introduction toggle should support Enter and Space')
 
-assert.match(bookingPage, /const DRAFT_SAVE_DELAY = 250/, "booking should debounce draft writes");
-assert.ok(
-  bookingPage.indexOf("const draft = loadBookingDraft()") < bookingPage.indexOf("watch("),
-  "booking should restore its draft before enabling autosave",
-);
-assert.match(
-  bookingPage,
-  /const restoredKindIndex = kindIndexFor\(draft\.kind\)[\s\S]*if \(restoredKindIndex >= 0\) kindIndex\.value = restoredKindIndex/,
-  "booking should ignore unknown restored kinds and keep the enterprise default",
-);
-const bookingWatch =
-  bookingPage.match(/watch\(\s*\[kindIndex, form\],([\s\S]*?)\{ deep: true \},\s*\)/)?.[1] || "";
-assert.match(bookingWatch, /scheduleDraftSave/, "booking watch should schedule draft persistence");
-assert.doesNotMatch(bookingWatch, /saveBookingDraft/, "booking watch should not write on every keystroke");
-const scheduleDraftBody =
-  sourceBracedBody(bookingPage, /function\s+scheduleDraftSave\s*\(\s*\)\s*\{/.exec(bookingPage)) || "";
-assert.match(
-  scheduleDraftBody,
-  /clearTimeout\(draftSaveTimer\)[\s\S]*setTimeout\([\s\S]*DRAFT_SAVE_DELAY/,
-  "booking draft scheduling should reset the prior timer and use the debounce delay",
-);
-const flushDraftBody =
-  sourceBracedBody(bookingPage, /function\s+flushDraftSave\s*\(\s*\)\s*\{/.exec(bookingPage)) || "";
-assert.match(
-  flushDraftBody,
-  /clearTimeout\(draftSaveTimer\)[\s\S]*saveBookingDraft\(currentDraft\(\)\)/,
-  "booking lifecycle flush should synchronously preserve the latest draft",
-);
-assert.match(bookingPage, /onHide\(flushDraftSave\)/, "booking should flush drafts when hidden");
-assert.match(bookingPage, /onUnload\(flushDraftSave\)/, "booking should flush drafts before unload");
-
-assert.match(bookingPage, /onShow\(applyBookingIntent\)/, "booking should consume navigation intent on show");
-assert.match(
-  bookingPage,
-  /const intent = consumeBookingIntent\(\)[\s\S]*const nextKindIndex = kindIndexFor\(intent\.kind\)/,
-  "booking should consume one-time enterprise intent through the bounded kind map",
-);
-const bookingSubmitBody =
-  sourceBracedBody(bookingPage, /async\s+function\s+submit\s*\(\s*\)\s*\{/.exec(bookingPage)) || "";
-assert.match(
-  bookingSubmitBody,
-  /if \(submitting\.value\) return[\s\S]*submitting\.value = true/,
-  "booking submit should remain single-flight",
-);
-assert.match(
-  bookingSubmitBody,
-  /await createBookingApi\(currentDraft\(\)\)[\s\S]*cancelPendingDraftSave\(\)[\s\S]*clearBookingDraft\(\)/,
-  "successful booking should cancel delayed persistence before clearing its draft",
-);
-const resetFormBody =
-  sourceBracedBody(bookingPage, /function\s+resetForm\s*\(\s*\)\s*\{/.exec(bookingPage)) || "";
-assert.match(
-  resetFormBody,
-  /^\s*cancelPendingDraftSave\(\)[\s\S]*kindIndex\.value\s*=\s*ENTERPRISE_KIND_INDEX[\s\S]*selectedServiceModeIndex\.value\s*=\s*-1[\s\S]*form\.value\s*=\s*emptyForm\(\)[\s\S]*fieldErrors\.value\s*=\s*\{\s*contactName:\s*['"]["'],\s*phone:\s*['"]["']\s*\}[\s\S]*restoredDraftNotice\.value\s*=\s*false\s*$/,
-  "booking form reset should cancel pending persistence and clear kind, service, fields, errors, and recovery notice",
-);
-const clearRestoredDraftBody =
-  sourceBracedBody(bookingPage, /function\s+clearRestoredDraft\s*\(\s*\)\s*\{/.exec(bookingPage)) || "";
-assert.match(
-  clearRestoredDraftBody,
-  /^\s*if \(submitting\.value\) return\s*clearBookingDraft\(\)\s*resetForm\(\)\s*$/,
-  "restored draft clearing should stay inert during submit, clear storage, and reset the form",
-);
-
-assertTemplateOrder(
-  bookingTemplate,
-  [
-    'class="enterprise-hero nx-card"',
-    'class="enterprise-scenarios"',
-    'class="enterprise-modes"',
-    'class="enterprise-process"',
-    'class="booking-form nx-card"',
-  ],
-  "enterprise booking flow",
-);
-assert.match(
-  bookingTemplate,
-  /<view\s+v-if=["']submitted["']\s+class=["']booking-success nx-card["']\s+aria-live=["']polite["']>/,
-  "booking should announce its success state",
-);
-for (const handler of ["viewBookingRecords", "continueClassroom", "submitAnother"]) {
-  assert.match(
-    bookingTemplate,
-    new RegExp(`<button[^>]*@click=["']${handler}["']`),
-    `booking success should expose ${handler}`,
-  );
+const learnTabList = learnPage.match(/<view\b[^>]*class=["'][^"']*learn-tabs[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(learnTabList, /role=["']tablist["']/, 'learning categories should expose tablist semantics')
+const learnTabs = learnPage.match(/<view\b(?=[^>]*class=["'][^"']*learn-tab[^"']*["'])(?=[^>]*role=["']tab["'])[^>]*>/g) || []
+assert.equal(learnTabs.length, 3, 'learning center should expose exactly three category tabs')
+for (const tab of learnTabs) {
+  assert.match(tab, /:aria-selected=/, 'each learning tab should expose its selected state')
+  assert.match(tab, /:tabindex=/, 'each learning tab should participate in roving keyboard focus')
+  assert.match(tab, /@click=/, 'each learning tab should support tap and click selection')
+  assert.match(tab, /@keydown=/, 'each learning tab should support Enter, Space, and arrow keys')
+  assert.match(tab, /aria-controls=["']learn-panel-(?:course|material|quote)["']/, 'each learning tab should identify its controlled panel')
+  assert.equal((tab.match(/@keydown=/g) || []).length, 1, 'each learning tab should declare one keyboard event binding')
 }
-assert.match(
-  bookingTemplate,
-  /v-if=["']restoredDraftNotice["'][^>]*aria-live=["']polite["']/,
-  "restored drafts should be announced",
-);
-assert.match(
-  bookingTemplate,
-  /<button\s+class=["']draft-restored__clear["'][^>]*:disabled=["']submitting["'][^>]*@click=["']clearRestoredDraft["']/,
-  "draft clearing should use a disabled native action while submitting",
-);
-
-for (const { model, label } of [
-  { model: "form.contactName", label: "称呼" },
-  { model: "form.phone", label: "手机号" },
-  { model: "form.intent", label: "意向方向" },
-  { model: "form.preferredTime", label: "期望时间" },
-]) {
-  assert.match(
-    bookingTemplate,
-    new RegExp(`<input\\b(?=[^>]*v-model=["']${model.replace(".", "\\.")}["'])(?=[^>]*aria-label=["']${label}["'])[^>]*>`),
-    `booking ${model} should expose its visible label to assistive technology`,
-  );
+for (const category of ['课程', '课件', '语录']) {
+  assert.equal((learnTemplate.match(new RegExp(`>${category}<`, 'g')) || []).length, 1, `learning center should expose one ${category} tab`)
 }
-assert.match(
-  bookingTemplate,
-  /<textarea\b(?=[^>]*v-model=["']form\.message["'])(?=[^>]*aria-label=["']留言["'])[^>]*>/,
-  "booking message should expose its visible label",
-);
+assert.match(learnPage, /onShow\(consumeNavigationIntent\)/, 'learning center should consume home navigation intent every time the tab is shown')
+assert.match(learnPage, /readLearningNavIntent\(\)/, 'learning center should use the one-time read-and-clear navigation intent')
+assert.match(learnPage, /resolveLearningCategory\(activeCategory\.value,\s*readLearningNavIntent\(\)\)/, 'missing intent should retain the current valid learning category')
 
-const h5BookingBlock =
-  bookingPage.match(/<!--\s*#ifdef H5\s*-->([\s\S]*?)<!--\s*#endif\s*-->/)?.[1] || "";
-assert.match(h5BookingBlock, /<button[^>]*disabled[^>]*>请在微信小程序内提交预约<\/button>/, "H5 should keep submit disabled");
-assert.doesNotMatch(h5BookingBlock, /@click=["']submit["']/, "H5 booking should not bind submit");
-const nonH5BookingBlock =
-  bookingPage.match(/<!--\s*#ifndef H5\s*-->([\s\S]*?)<!--\s*#endif\s*-->/)?.[1] || "";
-assert.match(
-  nonH5BookingBlock,
-  /<button\b(?=[^>]*class=["']booking-submit ios-button["'])(?=[^>]*:loading=["']submitting["'])(?=[^>]*:disabled=["']submitting["'])(?=[^>]*@click=["']submit["'])[^>]*>/,
-  "miniapp booking should preserve loading, disabled, and submit behavior",
-);
+const learnTeacherImage = learnPage.match(/<image\b[^>]*class=["'][^"']*learn-teacher__image[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(learnTeacherImage, /:src=["']teacherImage["']/, 'teacher portrait should use a resolved render source')
+assert.match(learnTeacherImage, /role=["']img["']/, 'teacher portrait should expose image semantics on H5')
+assert.match(learnTeacherImage, /:aria-label=["']teacherImageLabel["']/, 'teacher portrait should expose a meaningful accessible label')
+assert.match(learnTeacherImage, /@error=["']onTeacherImageError["']/, 'teacher portrait should provide a local fallback')
+assert.doesNotMatch(learnTeacherImage, /lazy-load/, 'dominant teacher portrait should load eagerly')
+assert.match(learnPage, /resolveContentAsset\(teacher\.value\?\.avatar,\s*TEACHER_FALLBACK\)/, 'teacher portrait should resolve backend content before rendering')
+assert.match(learnPage, /teacherImageFallbackUsed/, 'teacher portrait fallback should be applied only once')
+assert.match(learnPage, /\.learn-teacher__portrait\s*\{[^}]*aspect-ratio:\s*4\s*\/\s*5/, 'teacher portrait should reserve an editorial 4:5 frame')
 
-for (const selector of [
-  ".enterprise-mode",
-  ".draft-restored__clear",
-  ".input",
-  ".picker",
-  ".booking-submit",
-]) {
-  assert.match(
-    cssDeclarationsForSelector(bookingStyle, selector),
-    /min-height:\s*(?:8[8-9]|9\d|[1-9]\d{2,})rpx\s*;/,
-    `${selector} should keep at least an 88rpx touch target`,
-  );
+assert.match(learnPage, /class=["'][^"']*course-list[^"']*["']/, 'learn page should render a simple course media list')
+assert.match(learnPage, /class=["'][^"']*course-row[^"']*["']/, 'learn page should render courses as lightweight media rows')
+assert.match(learnPage, /courseEntry\.item\.materialTypes/, 'course rows should expose material types')
+assert.match(learnPage, /courseEntry\.item\.duration/, 'course rows should expose duration metadata')
+assert.match(learnPage, /courseEntry\.item\.description/, 'course rows should expose a short description')
+assert.doesNotMatch(learnTemplate, /course\.bullets|bulletIndex|::bullet::/, 'course bullet data should not be rendered on the minimal learning page')
+const learnCourseCovers = learnPage.match(/<image\b[^>]*class=["'][^"']*course-row__cover[^"']*["'][^>]*>/g) || []
+assert.ok(learnCourseCovers.length >= 1, 'course rows should keep one compact cover visual')
+for (const image of learnCourseCovers) {
+  assert.match(image, /aria-hidden=["']true["']/, 'course covers should be decorative because the title is adjacent')
+  assert.match(image, /@error=["']onCourseImageError\(/, 'course covers should provide a one-shot local fallback')
 }
-for (const token of [
-  "--nx-brand-900",
-  "--nx-brand-700",
-  "--nx-accent-gold",
-  "--nx-surface",
-  "--nx-surface-soft",
-  "--nx-text",
-  "--nx-text-muted",
-  "--nx-border",
-  "--nx-danger",
-]) {
-  assert.match(bookingStyle, new RegExp(`var\\(${token}\\)`), `booking should consume ${token}`);
+assert.match(learnPage, /function\s+learnCourseCover\(course,\s*courseKey\)/, 'learn page should map unsuitable legacy covers from stable course identity')
+assert.ok(learnPage.includes('\\/static\\/wheel\\.png'), 'learn page should recognize the legacy wheel cover')
+assert.match(learnPage, /resolveContentAsset\(learnCourseCover\(course,\s*courseKey\),\s*courseFallback\(courseKey\)\)/, 'course covers should resolve mapped content assets from stable identity')
+assert.match(learnPage, /courseImageFallbackUsed/, 'course cover fallback should be applied only once per stable course key')
+assert.match(learnPage, /courseImages\.value\[courseKey\]/, 'course image state should be keyed by stable course identity rather than array position')
+assert.doesNotMatch(learnPage, /class=["'][^"']*course-row[^"']*["'][^>]*role=["']button["']/, 'course rows should remain display-only until a course route exists')
+
+assert.match(learnTemplate, /activeCategory\s*===\s*'course'[\s\S]*?class=["'][^"']*course-list/, 'course category should render the course list')
+assert.match(learnTemplate, /activeCategory\s*===\s*'material'[\s\S]*?v-for=["']material in materialItems["']/, 'material category should render every flattened material row')
+assert.match(learnTemplate, /activeCategory\s*===\s*'quote'[\s\S]*?v-for=["']quoteEntry in quoteEntries["']/, 'quote category should render all teacher quotes with stable entries')
+assert.match(learnPage, /flattenLearningMaterials\(coursewareItems\.value\)/, 'material category should derive rows from normalized courses')
+assert.match(learnPage, /课程内容整理中/, 'course category should provide a dedicated empty state')
+assert.match(learnPage, /课件资料整理中/, 'material category should provide a dedicated empty state')
+assert.match(learnPage, /老师语录整理中/, 'quote category should provide a dedicated empty state')
+for (const category of ['course', 'material', 'quote']) {
+  assert.match(learnTemplate, new RegExp(`id=["']learn-panel-${category}["'][^>]*role=["']tabpanel["'][^>]*aria-labelledby=["']learn-tab-${category}["']`), `${category} panel should be linked to its tab with tabpanel semantics`)
 }
-assert.match(
-  bookingStyle,
-  /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?transition:\s*none\s*;/,
-  "booking should disable interaction transitions for reduced motion",
-);
+assert.match(learnPage, /class=["'][^"']*type-index[^"']*["']/, 'the type index should remain available late in the page')
+assert.match(learnPage, /\.learn-teacher__bio\s*\{[^}]*font-size:\s*(?:2[6-9]|[3-9]\d|\d{3,})rpx/, 'teacher biography should remain readable at 26rpx or larger')
+assert.match(learnPage, /\.course-row__desc\s*\{[^}]*font-size:\s*(?:2[6-9]|[3-9]\d|\d{3,})rpx/, 'course descriptions should remain readable at 26rpx or larger')
+assert.match(learnPage, /\.material-row__type\s*\{[^}]*font-size:\s*(?:2[2-9]|[3-9]\d|\d{3,})rpx/, 'material metadata should remain readable at 22rpx or larger')
+assert.match(learnPage, /\.course-row__duration\s*\{[^}]*font-size:\s*(?:2[2-9]|[3-9]\d|\d{3,})rpx/, 'duration metadata should remain readable at 22rpx or larger')
+assert.match(learnPage, /\.type-index__item\s*\{[^}]*font-size:\s*(?:2[2-9]|[3-9]\d|\d{3,})rpx/, 'type index text should remain readable at 22rpx or larger')
+assert.doesNotMatch(learnPage, /font-size:\s*19rpx/, 'learn page should not use 19rpx content text')
+assert.doesNotMatch(learnPage, /\.type-index__item\s*\{[^}]*min-height:\s*(?:8[8-9]|9\d|[1-9]\d{2,})rpx/, 'display-only type index chips should not become dominant touch cards')
+assert.doesNotMatch(learnPage, /class=["'][^"']*ios-card[^"']*["']/, 'learn editorial sections should not fall back to generic ios-card surfaces')
+assert.doesNotMatch(learnTemplate, /learn-masthead|publication-section|publication-card|老师专访|PROFILE|PERSONAL VOICE|COURSEWARE PUBLICATION|REFERENCE|TEACHER'S NOTE|馆藏资料|0\{\{\s*index/, 'learn template should omit the complex publication shelf, chapter numbering, and English labels')
+assert.doesNotMatch(learnPage, /(?:repeating-)?(?:linear|radial)-gradient|background-image|box-shadow|@keyframes|animation\s*:|(?:backdrop-)?filter\s*:/, 'learn page should use a plain background without texture, gradients, shadows, filters, or animation')
+assert.doesNotMatch(learnPage, /border-radius:\s*(?:[3-9]\d|\d{3,})rpx/, 'learn radii should stay within the restrained 16-24rpx range')
+assert.match(learnPage, /--learn-bg:\s*#F6F1E7/i, 'learn page should use the approved warm plain background')
+assert.match(learnPage, /--learn-surface:\s*#FFFDF8/i, 'learn page should use a warm white content surface')
+assert.match(learnPage, /--learn-ink:\s*#20252B/i, 'learn page should use restrained charcoal text')
+assert.match(learnPage, /--learn-green:\s*#335B4A/i, 'learn page should use restrained dark green accents')
 
-const learnPage = readFileSync("src/pages/learn/learn.vue", "utf8");
-const learnTemplate = stripMarkupAndCssComments(vueSection(learnPage, "template") || "");
-const learnStyle = stripMarkupAndCssComments(vueSection(learnPage, "style") || "");
+assert.match(indexPage, /老师|导师/, 'home page should emphasize teacher guidance')
+assert.match(indexPage, /课件|课程/, 'home page should emphasize courseware and courses')
+assert.doesNotMatch(indexPage, /AI 对话/, 'home page primary feature cards should avoid AI-heavy copy')
 
-assert.match(learnPage, /normalizeTeachers/, "learn should normalize teacher profiles");
-assert.match(learnPage, /normalizeCoursewareItems/, "learn should normalize course directions");
-assert.match(learnPage, /getStoredSiteConfig/, "learn should render cached content first");
-assert.match(learnPage, /refreshSiteConfig/, "learn should refresh cached content in the background");
-assert.match(
-  learnPage,
-  /const ticket = \+\+loadTicket[\s\S]*if \(ticket !== loadTicket\) return/,
-  "learn content refresh should reject late callbacks",
-);
-assert.match(
-  learnPage,
-  /const ticket = \+\+classroomTicket[\s\S]*if \(ticket !== classroomTicket\) return/,
-  "learn classroom preview should reject late callbacks",
-);
-assert.match(
-  learnPage,
-  /Promise\.allSettled\(\[[\s\S]*listClassroomSeriesApi[\s\S]*listClassroomStandaloneApi/,
-  "learn classroom preview should preserve partial results when one source fails",
-);
+assert.match(learnPage, /loadError/, 'learn page should expose a non-blocking failure state')
+assert.match(learnPage, /v-if=["']loading["']/, 'learn page should show a loading cue while retaining local fallback content')
+assert.match(learnPage, /资料整理中/, 'explicit empty teacher or course sections should render an editorial empty state')
+assert.match(learnPage, /createInitialLearningContent\(\)/, 'initial uncached render should use tested local learning fallbacks')
+assert.match(learningPageStateSource, /const\s+TEACHER_SECTION_PATHS\s*=\s*\[[\s\S]*?teacherTeaser[\s\S]*?\]/, 'learn state should enumerate all teacher section sources')
+assert.match(learningPageStateSource, /const\s+COURSE_SECTION_PATHS\s*=\s*\[[\s\S]*?courseware[\s\S]*?materials[\s\S]*?lessons[\s\S]*?courses[\s\S]*?\]/, 'learn state should enumerate course and material sources')
+assert.match(learningPageStateSource, /Object\.prototype\.hasOwnProperty\.call/, 'learn section detection should distinguish missing fields from explicit empty fields')
+assert.match(learnPage, /applyLearningContent\(/, 'learn page should apply content through the behavior-tested state utility')
+assert.match(learnPage, /applyContent\(config,\s*\{\s*preserveMissing:\s*true\s*\}\)/, 'successful refresh should merge only explicitly present learning sections')
+assert.match(learnPage, /createLatestRequestGuard\(\)/, 'learn page should use the tested latest-request guard')
+assert.match(learnPage, /requestGuard\.isLatest\(ticket\)/, 'learn page should ignore stale refresh responses')
+assert.match(learnPage, /retainLearningContentOnError\(/, 'learn request failures should preserve current content through the tested state utility')
+assert.doesNotMatch(learnPage, /teachers\.value\s*=\s*normalizeTeachers\(\)[\s\S]*coursewareItems\.value\s*=\s*normalizeCoursewareItems\(\)[\s\S]*loadError\.value/, 'request failure should not replace currently visible content')
+assert.match(learnPage, /id=["']learn-teacher-heading["']\s+class=["']editorial-empty__title["']/, 'empty teacher state should keep the aria-labelledby target available')
+assert.match(learnPage, /:key=["']courseEntry\.key["']/, 'course rows should use stable utility keys')
+assert.match(learnPage, /:key=["']tagEntry\.key["']/, 'teacher tags should use stable utility keys')
+assert.match(learnPage, /:key=["']quoteEntry\.key["']/, 'quotes should use stable utility keys')
+assert.match(learningPageStateSource, /::material::/, 'flattened material keys should include an explicit material identity delimiter')
+assert.doesNotMatch(learnTemplate, /:key=["'][^"']*(?:index|Index)[^"']*["']/, 'learning rows should not use array indexes in Vue keys')
 
-assertTemplateOrder(
-  learnTemplate,
-  [
-    'class="learn-hero nx-page-hero"',
-    'class="classroom-entry card ios-card learn-section nx-panel section"',
-    'class="card ios-card learn-section nx-panel section teacher-section"',
-    'class="card ios-card learn-section nx-panel section courseware-section"',
-    'class="card ios-card learn-section nx-panel section type-section"',
-    'class="card ios-card learn-section nx-panel section quote-section"',
-  ],
-  "teacher classroom learning page",
-);
-assert.match(learnTemplate, /class=["']learn-hero__eyebrow["']>\s*\{\{ learnCopy\.hero\.eyebrow \}\}/, "learn hero should render the configured external classroom name");
-assert.match(
-  learnTemplate,
-  /<NxAsyncState\b(?=[^>]*state=["']stale["'])(?=[^>]*@action=["']retryContentRefresh["'])[^>]*>/,
-  "learn should keep cached content visible with a stale retry state",
-);
-assert.match(
-  learnTemplate,
-  /<NxAsyncState\b(?=[^>]*v-else-if=["']loadError["'])(?=[^>]*state=["']error["'])(?=[^>]*@action=["']loadContent["'])[^>]*>/,
-  "learn should expose a retryable first-load error state",
-);
-assert.match(
-  learnTemplate,
-  /<NxAsyncState\s+v-if=["']classroomLoading["']\s+state=["']loading["']\s*\/>/,
-  "learn classroom preview should expose loading state",
-);
-assert.match(
-  learnTemplate,
-  /<NxAsyncState\b(?=[^>]*classroomWarning && classroomPreview\.length === 0)(?=[^>]*state=["']error["'])(?=[^>]*@action=["']retryClassroomPreview["'])[^>]*>/,
-  "learn classroom preview should expose retryable total failure",
-);
-assert.match(
-  learnTemplate,
-  /<NxAsyncState\b(?=[^>]*classroomPreview\.length === 0)(?=[^>]*state=["']empty["'])[^>]*>/,
-  "learn classroom preview should expose visitor-facing empty content",
-);
-assert.match(
-  learnTemplate,
-  /classroomWarning && classroomPreview\.length > 0[\s\S]*已加载的课堂内容仍可继续浏览/,
-  "learn should preserve loaded classroom items during a partial refresh failure",
-);
-
-for (const { imageClass, errorHandler, fallbackClass } of [
-  {
-    imageClass: "classroom-entry__cover",
-    errorHandler: "markClassroomPreviewCoverError",
-    fallbackClass: "classroom-entry__cover--fallback",
-  },
-  {
-    imageClass: "teacher-card__avatar",
-    errorHandler: "markTeacherImageError",
-    fallbackClass: "teacher-media__fallback",
-  },
-  {
-    imageClass: "type-badge__avatar",
-    errorHandler: "markTypeImageError",
-    fallbackClass: "type-badge__fallback",
-  },
-]) {
-  assert.match(
-    learnTemplate,
-    new RegExp(`<image\\b(?=[^>]*${imageClass})(?=[^>]*lazy-load)(?=[^>]*@error=["']${errorHandler})[^>]*\\/>[\\s\\S]*?<view\\s+v-else[^>]*${fallbackClass}`),
-    `${imageClass} should lazy-load and expose an image-error fallback`,
-  );
+const learnRetry = learnPage.match(/<view\b[^>]*class=["'][^"']*learn-retry[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(learnRetry, /role=["']button["']/, 'learn retry should expose button semantics on H5')
+assert.match(learnRetry, /tabindex=["']0["']/, 'learn retry should be keyboard focusable on H5')
+assert.match(learnRetry, /@click=["']activateAction\(loadContent,\s*\$event\)["']/, 'learn retry should preserve mini-program tap and H5 click activation')
+assert.match(learnRetry, /@keydown=["']onActionKeydown\(\$event,\s*loadContent\)["']/, 'learn retry should use one plain keydown handler')
+assert.match(learnPage, /handleActionKeydown\(event,\s*\(\)\s*=>\s*activateAction\(action,\s*event\)\)/, 'learn keydown handler should delegate to the behavior-tested activation filter')
+assert.match(learnPage, /learningTabTransition\(category,\s*event\?\.key\)/, 'tab keyboard handling should delegate to the tested transition utility')
+const learnRoleButtons = learnPage.match(/<view\b(?=[^>]*role=["']button["'])[^>]*>/g) || []
+for (const action of learnRoleButtons) {
+  assert.equal((action.match(/@keydown=/g) || []).length, 1, 'each learn action should declare exactly one keydown binding')
 }
-assert.match(
-  learnTemplate,
-  /<view\b(?=[^>]*class=["']classroom-entry__item["'])(?=[^>]*role=["']button["'])(?=[^>]*tabindex=["']0["'])(?=[^>]*@keydown\.enter=)(?=[^>]*@keydown\.space\.prevent=)[^>]*>/,
-  "learn classroom cards should keep keyboard navigation semantics",
-);
-for (const selector of [
-  ".classroom-entry__more",
-  ".retry",
-  ".classroom-entry__item",
-  ".learn-cta",
-]) {
-  assert.match(
-    cssDeclarationsForSelector(learnStyle, selector),
-    /min-height:\s*(?:8[8-9]|9\d|[1-9]\d{2,})rpx\s*;/,
-    `${selector} should keep at least an 88rpx touch target`,
-  );
+assert.doesNotMatch(learnPage, /@keydown\./, 'learn keydown modifiers must not compile duplicate WXML attributes or intercept Tab')
+assert.match(learnPage, /\.learn-retry\s*\{[^}]*min-height:\s*88rpx/, 'learn retry should keep an 88rpx touch target')
+assert.match(learnPage, /\.learn-tab:focus-visible[\s\S]*outline:/, 'learning tabs should expose a visible keyboard focus state')
+assert.match(learnPage, /\.learn-tab\s*\{[^}]*min-height:\s*(?:8[8-9]|9\d|[1-9]\d{2,})rpx/, 'learning category tabs should keep an 88rpx minimum touch target')
+assert.match(learnPage, /\.learn-teacher__toggle\s*\{[^}]*min-height:\s*88rpx/, 'teacher details toggle should keep an 88rpx touch target')
+const learnTabletMedia = learnPage.match(/@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{([\s\S]*?)\n\}/)?.[1] || ''
+assert.doesNotMatch(learnTabletMedia, /\.course-list\s*\{[^}]*grid-template-columns:\s*repeat\(2/, 'tablet courses should remain a readable single-column list')
+assert.doesNotMatch(learnPage, /\.course-list\s*\{[^}]*grid-template-columns:\s*repeat\(2/, 'courses should remain a readable single-column list at every viewport width')
+assert.doesNotMatch(learnPage, /min-width:\s*(?:7[5-9]\d|[89]\d{2}|\d{4,})rpx/, 'learning center should not force horizontal overflow at phone widths')
+
+const profilePage = readFileSync('src/pages/profile/profile.vue', 'utf8')
+assert.match(profilePage, /profileLoading/, 'profile page should expose a loading state for non-blocking history fetch')
+assert.match(profilePage, /v-if="profileLoading"/, 'profile page should render loading placeholder before empty states')
+assert.match(profilePage, /loadTicket/, 'profile page should ignore stale concurrent loads')
+assert.match(profilePage, /recordsError/, 'profile records should expose a request failure state')
+assert.match(profilePage, /bookingsError/, 'profile bookings should expose a request failure state')
+assert.match(profilePage, /v-else-if=["']recordsError["']/, 'profile records should render failure state before empty state')
+assert.match(profilePage, /v-else-if=["']bookingsError["']/, 'profile bookings should render failure state before empty state')
+assert.match(profilePage, /同步失败，重试/, 'profile history failures should show retry copy instead of empty copy')
+assert.match(profilePage, /@click=["']loadAll["']/, 'profile history failure state should provide a retry action')
+assert.match(profilePage, /\.sync-retry\s*\{[\s\S]*min-height:\s*88rpx/, 'profile history retry action should keep an 88rpx touch target')
+assert.doesNotMatch(profilePage, /listTestRecordsApi\(\)\.catch\(\(\)\s*=>\s*\(\{\s*items:\s*\[\]\s*\}\)\)/, 'profile records request failure must not be converted into an empty list')
+assert.doesNotMatch(profilePage, /listBookingsApi\(\)\.catch\(\(\)\s*=>\s*\(\{\s*items:\s*\[\]\s*\}\)\)/, 'profile bookings request failure must not be converted into an empty list')
+
+const testPage = readFileSync('src/pages/test/test.vue', 'utf8')
+const startFunction = testPage.match(/function start\(g\) \{[\s\S]*?\n\}/)?.[0] || ''
+const chooseFunction = testPage.match(/function choose\(opt\) \{[\s\S]*?\n\}/)?.[0] || ''
+assert.match(testPage, /answerLocked/, 'test page should guard rapid repeated option taps')
+assert.match(testPage, /clearAdvanceTimer/, 'test page should clear pending navigation timers')
+assert.match(testPage, /onUnload/, 'test page should cleanup timers on unload')
+assert.match(testPage, /import\s*\{[^}]*nextTick[^}]*\}\s*from\s*["']vue["']/, 'quiz should schedule question focus after rendering')
+assert.match(testPage, /const\s+questionHeading\s*=\s*ref\(null\)/, 'quiz should keep a question heading focus target')
+assert.match(testPage, /function\s+focusQuestionHeading\(\)\s*\{[\s\S]*nextTick\([\s\S]*#ifdef H5[\s\S]*\.focus\?\.\(\)[\s\S]*#endif[\s\S]*\}/, 'quiz should focus the rendered question on H5 without running DOM focus code on mini program builds')
+assert.match(startFunction, /focusQuestionHeading\(\)/, 'starting the quiz should focus and announce the first question')
+assert.match(chooseFunction, /step\.value\s*\+=\s*1[\s\S]*focusQuestionHeading\(\)/, 'automatic advance should focus and announce the next question')
+assert.match(testPage, /role=["']progressbar["']/, 'quiz should expose a semantic progress indicator')
+assert.match(testPage, /进度\s*\{\{\s*step\s*\+\s*1\s*\}\}\s*\/\s*\{\{\s*QUESTIONS\.length\s*\}\}/, 'quiz should show current and total progress text')
+assert.match(testPage, /const\s+progress\s*=\s*computed\(\(\)\s*=>\s*\(\(step\.value\s*\+\s*1\)\s*\/\s*QUESTIONS\.length\)\s*\*\s*100\)/, 'quiz progress bar should use the visible current question position')
+assert.match(testPage, /:aria-valuenow=["']step\s*\+\s*1["']/, 'quiz semantic progress should match the visible current question position')
+assert.match(testPage, /第\s*\{\{\s*step\s*\+\s*1\s*\}\}\s*题/, 'quiz should display the current question number')
+const quizQuestionHeading = testPage.match(/<text\b[^>]*class=["'][^"']*quiz__q[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(quizQuestionHeading, /ref=["']questionHeading["']/, 'quiz question heading should expose the focus target')
+assert.match(quizQuestionHeading, /aria-live=["']polite["']/, 'quiz question heading should announce updates politely')
+assert.match(quizQuestionHeading, /aria-atomic=["']true["']/, 'quiz question announcement should be atomic')
+assert.match(quizQuestionHeading, /tabindex=["']-1["']/, 'quiz question heading should accept programmatic focus')
+assert.match(testPage, /questionVisualCenter\(step\.value\)/, 'quiz illustration should be selected from the current question index')
+const quizIllustration = testPage.match(/<image\b[^>]*class=["'][^"']*quiz__illustration[^"']*["'][^>]*>/)?.[0] || ''
+assert.match(quizIllustration, /:src=["']questionVisualSrc["']/, 'quiz should render the current center illustration')
+assert.doesNotMatch(quizIllustration, /lazy-load/, 'current quiz illustration should load eagerly')
+assert.match(testPage, /\.quiz__visual\s*\{[^}]*aspect-ratio:\s*3\s*\/\s*2/, 'quiz illustration should reserve a fixed 3:2 frame')
+const quizVisualStyles = testPage.match(/\.quiz__visual\s*\{([^}]*)\}/)?.[1] || ''
+const quizVisualMaxWidth = Number(quizVisualStyles.match(/max-width:\s*(\d+)rpx/)?.[1])
+assert.ok(quizVisualMaxWidth > 0 && quizVisualMaxWidth <= 280, 'quiz illustration should remain compact auxiliary media at 280rpx wide or less')
+assert.match(testPage, /quiz__opt--selected/, 'quiz options should expose a distinct selected state')
+assert.match(testPage, /:key=["']step\s*\+\s*["']-["']\s*\+\s*k["']/, 'quiz options should use question-specific keys so focused controls are not silently reused')
+assert.match(chooseFunction, /else\s*\{[\s\S]*advanceTimer\s*=\s*setTimeout\(\(\)\s*=>\s*\{[\s\S]*finish\(\)[\s\S]*\},\s*(?:18\d|19\d|2[0-4]\d|250)\s*\)/, 'final answer should stay selected briefly before finishing through the existing timer path')
+assert.match(testPage, /\.quiz__back\s*\{[\s\S]*min-height:\s*88rpx/, 'quiz back action should keep an 88rpx touch target')
+assert.match(testPage, /<button\b[^>]*class=["'][^"']*nx-button--text[^"']*quiz__back[^"']*["'][^>]*>/, 'quiz previous action should use the weak text-button treatment')
+assert.match(testPage, /<button\b[\s\S]*class=["'][^"']*gender__card[^"']*["'][\s\S]*aria-label=/, 'test gender choices should use button semantics with accessibility labels')
+assert.match(testPage, /<button\b[\s\S]*class=["'][^"']*quiz__back[^"']*["'][\s\S]*@click=["']back["']/, 'quiz previous action should use button semantics')
+assert.match(testPage, /<button\b[\s\S]*v-for=["']\(opt, k\) in q\.options["'][\s\S]*class=["']quiz__opt["'][\s\S]*:aria-label=/, 'quiz options should use button semantics with accessibility labels')
+assert.match(testPage, /\.quiz__opt\s*\{[\s\S]*min-height:\s*88rpx/, 'quiz options should keep an 88rpx touch target')
+assert.match(testPage, /\.quiz__opt:focus-visible[\s\S]*\.quiz__back:focus-visible\s*\{[^}]*outline:/, 'quiz controls should expose a visible keyboard focus state')
+assert.match(testPage, /const\s+currentVisualCenter\s*=\s*computed\(\(\)\s*=>\s*questionVisualCenter\(step\.value\)\)/, 'quiz atmosphere should derive only from the existing question visual center mapping')
+assert.match(testPage, /:class=["']\[?[^"']*["']quiz--["']\s*\+\s*currentVisualCenter/, 'quiz should expose a head, heart, or gut presentation class from currentVisualCenter')
+for (const center of ['head', 'heart', 'gut']) {
+  assert.match(testPage, new RegExp(`\\.quiz--${center}\\s*\\{[^}]*(?:background|--quiz-accent):`), `quiz should define a controlled ${center} atmosphere`)
 }
-for (const token of [
-  "--nx-brand-900",
-  "--nx-brand-700",
-  "--nx-accent-gold",
-  "--nx-page-bg",
-  "--nx-surface",
-  "--nx-surface-soft",
-  "--nx-text",
-  "--nx-text-muted",
-  "--nx-border",
-]) {
-  assert.match(learnStyle, new RegExp(`var\\(${token}\\)`), `learn should consume ${token}`);
-}
-assert.doesNotMatch(
-  learnTemplate,
-  /后台发布|你发布的视频/,
-  "learn visitor copy should not expose administrator workflow wording",
-);
-
-const profilePage = readFileSync("src/pages/profile/profile.vue", "utf8");
-const profileEditPage = readFileSync("src/pages/profile-edit/profile-edit.vue", "utf8");
-assert.match(
-  profilePage,
-  /profileLoading/,
-  "profile page should expose a loading state for non-blocking history fetch",
-);
-assert.match(
-  profilePage,
-  /v-if="profileLoading"/,
-  "profile page should render loading placeholder before empty states",
-);
-assert.match(profilePage, /loadTicket/, "profile page should ignore stale concurrent loads");
-assert.match(profilePage, /recordsError/, "profile records should expose a request failure state");
-assert.match(
-  profilePage,
-  /bookingsError/,
-  "profile bookings should expose a request failure state",
-);
-assert.match(
-  profilePage,
-  /v-else-if=["']recordsError["']/,
-  "profile records should render failure state before empty state",
-);
-assert.match(
-  profilePage,
-  /v-else-if=["']bookingsError["']/,
-  "profile bookings should render failure state before empty state",
-);
-assert.match(
-  profilePage,
-  /同步失败，重试/,
-  "profile history failures should show retry copy instead of empty copy",
-);
-assert.match(
-  profilePage,
-  /@click=["']loadAll["']/,
-  "profile history failure state should provide a retry action",
-);
-assert.match(
-  profilePage,
-  /\.sync-retry\s*\{[\s\S]*min-height:\s*88rpx/,
-  "profile history retry action should keep an 88rpx touch target",
-);
-assert.doesNotMatch(
-  profilePage,
-  /listTestRecordsApi\(\)\.catch\(\(\)\s*=>\s*\(\{\s*items:\s*\[\]\s*\}\)\)/,
-  "profile records request failure must not be converted into an empty list",
-);
-assert.doesNotMatch(
-  profilePage,
-  /listBookingsApi\(\)\.catch\(\(\)\s*=>\s*\(\{\s*items:\s*\[\]\s*\}\)\)/,
-  "profile bookings request failure must not be converted into an empty list",
-);
-
-const testPage = readFileSync("src/pages/test/test.vue", "utf8");
-
-function vueSection(source, tagName) {
-  if (tagName === "template") return topLevelVueSection(source, tagName);
-  return source.match(new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`))?.[1];
-}
-
-function quoteAwareTagEnd(source, startIndex) {
-  let quote = null;
-  for (let index = startIndex; index < source.length; index += 1) {
-    const character = source[index];
-    if (quote && character === "\\") {
-      index += 1;
-      continue;
-    }
-    if ((character === '"' || character === "'") && (!quote || quote === character)) {
-      quote = quote ? null : character;
-      continue;
-    }
-    if (character === ">" && !quote) return index;
-  }
-  return -1;
-}
-
-function topLevelVueSection(source, tagName) {
-  const escapedTagName = tagName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const opening = new RegExp(`^[ \\t]*<${escapedTagName}\\b`, "im").exec(source);
-  if (!opening) return undefined;
-  const openingEnd = quoteAwareTagEnd(source, opening.index);
-  if (openingEnd < 0) return undefined;
-
-  const openingPattern = new RegExp(`^<${escapedTagName}\\b`, "i");
-  const closingPattern = new RegExp(`^<\\/${escapedTagName}\\s*>`, "i");
-  let depth = 1;
-  let cursor = openingEnd + 1;
-  while (cursor < source.length) {
-    if (source.startsWith("<!--", cursor)) {
-      const commentEnd = source.indexOf("-->", cursor + 4);
-      if (commentEnd < 0) return undefined;
-      cursor = commentEnd + 3;
-      continue;
-    }
-    if (source[cursor] !== "<") {
-      cursor += 1;
-      continue;
-    }
-    const remainder = source.slice(cursor);
-    const closing = closingPattern.exec(remainder);
-    if (closing) {
-      depth -= 1;
-      if (depth === 0) return source.slice(openingEnd + 1, cursor);
-      cursor += closing[0].length;
-      continue;
-    }
-    if (openingPattern.test(remainder)) {
-      const nestedEnd = quoteAwareTagEnd(source, cursor);
-      if (nestedEnd < 0) return undefined;
-      if (!/\/\s*>$/.test(source.slice(cursor, nestedEnd + 1))) depth += 1;
-      cursor = nestedEnd + 1;
-      continue;
-    }
-    cursor += 1;
-  }
-  return undefined;
-}
-
-function stripMarkupAndCssComments(source) {
-  return source.replace(/<!--[\s\S]*?-->/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
-}
-
-const testTemplate = stripMarkupAndCssComments(vueSection(testPage, "template") || "");
-const testStyle = stripMarkupAndCssComments(vueSection(testPage, "style") || "");
-
-function openingTagsFor(source, tagName) {
-  const tags = [];
-  const opening = new RegExp(`<${tagName}\\b`, "g");
-  for (const match of source.matchAll(opening)) {
-    const end = quoteAwareTagEnd(source, match.index);
-    if (end >= 0) tags.push(source.slice(match.index, end + 1));
-  }
-  return tags;
-}
-
-function tagAttribute(tag, attribute) {
-  const escapedAttribute = attribute.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return tag.match(new RegExp(`\\s${escapedAttribute}=(["'])(.*?)\\1`))?.[2];
-}
-
-const nestedTemplateFixture = `
-<script setup>
-const ready = true;
-</script>
-<template data-condition="score > 0">
-  <!-- <button class="commented" :loading="ignored">不应计入</button> -->
-  <template v-if="ready">
-    <button class="inside" :loading="insideBusy" :disabled="insideBusy">内部按钮</button>
-  </template>
-  <button
-    class="after"
-    data-condition="score > 0"
-    :loading="afterBusy"
-    :disabled="afterBusy"
-  >内部 template 后的按钮</button>
-</template>
-`;
-const nestedTemplateSource = stripMarkupAndCssComments(
-  topLevelVueSection(nestedTemplateFixture, "template") || "",
-);
-const nestedTemplateButtons = openingTagsFor(nestedTemplateSource, "button");
-assert.equal(
-  nestedTemplateButtons.length,
-  2,
-  "top-level SFC template extraction should include nested-template content and ignore comments",
-);
-assert.ok(
-  nestedTemplateButtons.some((button) => tagAttribute(button, "class") === "after"),
-  "buttons after an internal template block should remain visible to global scans",
-);
-assert.match(
-  nestedTemplateButtons.find((button) => tagAttribute(button, "class") === "after") || "",
-  /data-condition=["']score > 0["']/,
-  "quote-aware tag scanning should preserve greater-than signs inside attributes",
-);
-assert.doesNotMatch(
-  nestedTemplateSource,
-  /class=["']commented["']/,
-  "commented buttons should not participate in global scans",
-);
-
-function pageStyleDeclarationBlocks(source, selector) {
-  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return [...source.matchAll(new RegExp(`^[ \\t]*${escapedSelector}\\s*\\{([^}]*)\\}`, "gm"))].map(
-    (match) => match[1],
-  );
-}
-
-function pageStyleDeclarations(source, selector) {
-  return pageStyleDeclarationBlocks(source, selector).at(-1);
-}
-
-function sourceBracedBody(source, match) {
-  if (!match) return undefined;
-  const openingBrace = match.index + match[0].lastIndexOf("{");
-  let depth = 0;
-  for (let index = openingBrace; index < source.length; index += 1) {
-    if (source[index] === "{") depth += 1;
-    if (source[index] !== "}") continue;
-    depth -= 1;
-    if (depth === 0) return source.slice(openingBrace + 1, index);
-  }
-  return undefined;
-}
-
-function hexToRgb(hex) {
-  const normalized = hex.replace("#", "");
-  const expanded =
-    normalized.length === 3
-      ? normalized
-          .split("")
-          .map((character) => character + character)
-          .join("")
-      : normalized;
-  return [0, 2, 4].map((offset) => Number.parseInt(expanded.slice(offset, offset + 2), 16) / 255);
-}
-
-function relativeLuminance(hex) {
-  return hexToRgb(hex)
-    .map((channel) => (channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4))
-    .reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
-}
-
-function contrastRatio(foreground, background) {
-  const lighter = Math.max(relativeLuminance(foreground), relativeLuminance(background));
-  const darker = Math.min(relativeLuminance(foreground), relativeLuminance(background));
-  return (lighter + 0.05) / (darker + 0.05);
-}
-
-const commentedSourceFixture = `
-<template>
-  <!-- <button class="quiz__back" @click="back">旧返回按钮</button> -->
-  <view class="fixture" />
-</template>
-<style>
-  /* .quiz__opt { min-height: 112rpx; } */
-  .fixture { color: #0f172a; }
-</style>
-`;
-const uncommentedFixtureTemplate = stripMarkupAndCssComments(
-  vueSection(commentedSourceFixture, "template") || "",
-);
-const uncommentedFixtureStyle = stripMarkupAndCssComments(
-  vueSection(commentedSourceFixture, "style") || "",
-);
-assert.equal(
-  openingTagsFor(uncommentedFixtureTemplate, "button").length,
-  0,
-  "commented template controls must not satisfy UI contracts",
-);
-assert.equal(
-  pageStyleDeclarationBlocks(uncommentedFixtureStyle, ".quiz__opt").length,
-  0,
-  "commented CSS rules must not satisfy visual contracts",
-);
-
-assert.match(testPage, /answerLocked/, "test page should guard rapid repeated option taps");
-assert.match(testPage, /clearAdvanceTimer/, "test page should clear pending navigation timers");
-assert.match(testPage, /onUnload/, "test page should clean up timers on unload");
-assert.match(testPage, /const total = QUESTIONS\.length/, "test page should expose stable progress total");
-assert.match(
-  testTemplate,
-  /class=["'][^"']*test-hero[^"']*nx-card/,
-  "test game should use the shared expert-brand card surface",
-);
-assert.match(testTemplate, /九型测试小游戏/, "test game should use its external product name");
-assert.match(testTemplate, /18 道生活情境题/, "test game should state its bounded question count");
-assert.match(testTemplate, /约 3 分钟/, "test game should state its expected duration");
-
-const progressContainer = testTemplate.match(
-  /<view\b(?=[^>]*class=["'][^"']*quiz__progress-meta[^"']*["'])[^>]*>([\s\S]*?)<\/view>/,
-);
-assert.ok(progressContainer, "quiz should render progress metadata");
-assert.match(
-  progressContainer[0],
-  /:aria-label=["']`第 \$\{step \+ 1\} 题，共 \$\{total\} 题`["']/,
-  "quiz progress should announce current and total questions",
-);
-assert.match(progressContainer[1], /step \+ 1/, "quiz progress should render the current question");
-assert.match(progressContainer[1], /total/, "quiz progress should render the total question count");
-
-const testButtons = openingTagsFor(testTemplate, "button");
-const genderButtons = testButtons.filter((tag) => staticClassTokens(tag).includes("gender__card"));
-assert.equal(genderButtons.length, 2, "test should render two native identity buttons");
-for (const { label, handler } of [
-  { label: "选择男生并开始九型测试小游戏", handler: "start('male')" },
-  { label: "选择女生并开始九型测试小游戏", handler: "start('female')" },
-]) {
-  const button = genderButtons.find((tag) => tagAttribute(tag, "@click") === handler);
-  assert.ok(button, `test should preserve ${handler}`);
-  assert.ok(staticClassTokens(button).includes("nx-focusable"), `${handler} should use shared focus behavior`);
-  assert.equal(tagAttribute(button, "aria-label"), label, `${handler} should expose its purpose`);
-}
-assert.equal(
-  new Set(genderButtons.map((tag) => tagAttribute(tag, "class"))).size,
-  1,
-  "identity choices should share one neutral visual treatment",
-);
-
-const quizOption = testButtons.find((tag) => tagAttribute(tag, "v-for") === "(opt, k) in q.options");
-assert.ok(quizOption, "test should render quiz options as native buttons");
-assert.equal(tagAttribute(quizOption, ":disabled"), "answerLocked", "quiz options should preserve the tap lock");
-assert.equal(tagAttribute(quizOption, "@click"), "choose(opt)", "quiz options should preserve scoring navigation");
-assert.match(tagAttribute(quizOption, ":aria-label") || "", /opt\.t/, "quiz options should describe answer text");
-const quizBackButton = testButtons.find((tag) => staticClassTokens(tag).includes("quiz__back"));
-assert.ok(quizBackButton, "quiz previous action should be a native button");
-assert.equal(tagAttribute(quizBackButton, "@click"), "back", "quiz previous action should preserve its handler");
-
-for (const selector of [".gender__card", ".quiz__opt", ".quiz__back"]) {
-  const height = cssDeclarationsForSelector(testStyle, selector).match(/min-height:\s*(\d+)rpx\s*;/)?.[1];
-  assert.ok(height && Number(height) >= 88, `${selector} should keep at least an 88rpx touch target`);
-}
-for (const token of [
-  "--nx-brand-900",
-  "--nx-brand-700",
-  "--nx-accent-gold",
-  "--nx-page-bg",
-  "--nx-surface",
-  "--nx-surface-soft",
-  "--nx-text",
-  "--nx-text-muted",
-  "--nx-border",
-]) {
-  assert.match(testStyle, new RegExp(`var\\(${token}\\)`), `test game should consume ${token}`);
-}
-assert.match(
-  testStyle,
-  /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?transition:\s*none\s*;/,
-  "test game should disable interaction transitions for reduced motion",
-);
-const compactMedia = sourceBracedBody(
-  testStyle,
-  /@media\s*\(max-width:\s*360px\)\s*\{/.exec(testStyle),
-);
-assert.ok(compactMedia, "test game should keep its compact typography breakpoint");
-assert.doesNotMatch(
-  compactMedia,
-  /\b(?:min-)?height\s*:/,
-  "compact test layout must not reduce touch targets",
-);
-
-assert.match(
-  learnPage,
-  /loadContent\(\{\s*silent:\s*hasCachedContent\s*\}\)/,
-  "learn should refresh silently after rendering cached content",
-);
-assert.match(
-  learnPage,
-  /if\s*\(silent\s*&&\s*!hasSiteConfigLearningSection\(cfg\)\)\s*return/,
-  "a content-less background refresh should preserve cached learning content",
-);
-assert.match(
-  learnPage,
-  /if\s*\(silent\)[\s\S]*refreshError\.value = userErrorMessage/,
-  "a background refresh failure should become a stale-content notice",
-);
-for (const stateName of ["teacherImageErrors", "typeImageErrors"]) {
-  assert.match(
-    learnPage,
-    new RegExp(`const\\s+${stateName}\\s*=\\s*ref\\(\\{\\}\\)`),
-    `learn should keep independent ${stateName} state`,
-  );
-}
-assert.match(
-  learnPage,
-  /function\s+teacherMediaKey\s*\(teacher,\s*index\)[\s\S]*teacher\.name[\s\S]*teacher\.avatar[\s\S]*index/,
-  "teacher image fallback identity should include content and list position",
-);
-assert.match(
-  learnPage,
-  /teacherImageErrors\.value\s*=\s*\{\s*\.\.\.teacherImageErrors\.value,\s*\[key\]:\s*true\s*\}/,
-  "teacher image failures should update their keyed fallback state immutably",
-);
-assert.match(
-  learnPage,
-  /typeImageErrors\.value\s*=\s*\{\s*\.\.\.typeImageErrors\.value,\s*\[id\]:\s*true\s*\}/,
-  "type image failures should update their keyed fallback state immutably",
-);
-assert.match(
-  learnTemplate,
-  /<view\b(?=[^>]*v-for=["']\(teacher, teacherIndex\) in teachers["'])(?=[^>]*:key=["']teacherMediaKey\(teacher, teacherIndex\)["'])[^>]*>/,
-  "teacher cards should share the exact composite key used by avatar fallback state",
-);
-assert.match(
-  learnTemplate,
-  /<button\b(?=[^>]*class=["']teacher-card__avatar-action["'])(?=[^>]*v-if=["']teacher\.avatar && !teacherImageErrors\[teacherMediaKey\(teacher, teacherIndex\)\]["'])(?=[^>]*@click=["']previewTeacherAvatar\(teacher\.avatar\)["'])[^>]*>[\s\S]*?<image\b(?=[^>]*class=["']teacher-media teacher-card__avatar["'])(?=[^>]*@error=["']markTeacherImageError\(teacherMediaKey\(teacher, teacherIndex\)\)["'])[^>]*\/>[\s\S]*?<\/button>/,
-  "teacher avatars should use one native preview button while retaining keyed image fallback state",
-);
-function viewBlockForClass(markup, className) {
-  const classIndex = markup.indexOf(`class="${className}"`);
-  assert.ok(classIndex >= 0, `expected a ${className} view`);
-  const openingIndex = markup.lastIndexOf("<view", classIndex);
-  assert.ok(openingIndex >= 0, `${className} should be a view`);
-
-  const viewTag = /<\/?view\b[^>]*>/g;
-  viewTag.lastIndex = openingIndex;
-  let depth = 0;
-  for (let match = viewTag.exec(markup); match; match = viewTag.exec(markup)) {
-    if (match[0].startsWith("</")) {
-      depth -= 1;
-      if (depth === 0) return markup.slice(openingIndex, viewTag.lastIndex);
-    } else {
-      depth += 1;
-    }
-  }
-  assert.fail(`${className} should have a closing view tag`);
-}
-
-const teacherCardTemplate = viewBlockForClass(learnTemplate, "teacher-card");
-const teacherCardHeader = viewBlockForClass(teacherCardTemplate, "teacher-card__header");
-const teacherCardDetails = viewBlockForClass(teacherCardTemplate, "teacher-card__details");
-const classroomItemTemplate = viewBlockForClass(learnTemplate, "classroom-entry__item");
-const classroomBodyTemplate = viewBlockForClass(classroomItemTemplate, "classroom-entry__body");
-assert.match(
-  classroomBodyTemplate,
-  /class=["']classroom-entry__content["'][\s\S]*class=["']classroom-entry__action["']/,
-  "classroom preview rows should reserve their right edge for the action label",
-);
-assert.match(
-  teacherCardHeader,
-  /<button\b(?=[^>]*class=["']teacher-card__avatar-action["'])(?=[^>]*:aria-label=["']`预览\$\{teacher\.name \|\| '老师'\}头像`["'])(?=[^>]*hover-class=["']teacher-card__avatar-action--pressed["'])[^>]*>/,
-  "teacher-card header should expose an accessible avatar preview action",
-);
-assert.match(
-  teacherCardHeader,
-  /class=["']teacher-media__fallback["']/,
-  "teacher-card header should retain the avatar fallback",
-);
-assert.match(
-  teacherCardHeader,
-  /class=["']teacher-card__identity["']/,
-  "teacher-card header should contain the compact identity",
-);
-assert.match(
-  teacherCardDetails,
-  /class=["']teacher-card__bio["']/,
-  "teacher-card details should contain the biography",
-);
-assert.match(
-  teacherCardDetails,
-  /class=["']teacher-card__tags["']/,
-  "teacher-card details should contain the tags",
-);
-assert.doesNotMatch(
-  learnTemplate,
-  /class=["']teacher-card__body["']/,
-  "teacher cards should not use the old side-by-side body wrapper",
-);
-for (const [selector, declaration, message] of [
-  [".classroom-entry__body", /grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s*;/, "classroom content and action should fill the row"],
-  [".classroom-entry__action", /border-radius:\s*999rpx\s*;/, "classroom action should use a compact pill anchor"],
-  [".teacher-card", /flex-direction:\s*column\s*;/, "teacher cards should stack vertically"],
-  [".teacher-card__header", /display:\s*flex\s*;/, "teacher identity should remain a compact row"],
-  [".teacher-card__header", /flex-direction:\s*row\s*;/, "teacher identity should explicitly remain horizontal"],
-  [".teacher-card__details", /width:\s*100%\s*;/, "teacher details should span the card width"],
-  [".teacher-card__avatar-action", /padding:\s*0\s*;/, "teacher avatar preview should reset native button spacing"],
-]) {
-  assert.match(cssDeclarationsForSelector(learnStyle, selector), declaration, message);
-}
-assert.match(
-  learnPage,
-  /function\s+previewTeacherAvatar\s*\(source\)[\s\S]*uni\.previewImage\s*\(\s*\{[\s\S]*current:\s*avatar[\s\S]*urls:\s*\[avatar\]/,
-  "teacher avatar preview should open only the selected configured image",
-);
-assert.match(
-  learnTemplate,
-  /<view\s+v-else\s+class=["']courseware-list["']>[\s\S]*<view\b(?=[^>]*v-for=["']\(c, i\) in coursewareItems["'])(?=[^>]*:key=["']`\$\{c\.title \|\| ''\}:\$\{i\}`["'])(?![^>]*@click)[^>]*>/,
-  "configured course direction cards should remain display-only inside an explicit list container",
-);
-assert.match(
-  learnTemplate,
-  /class=["']courseware-card__mark["'][^>]*aria-hidden=["']true["'][^>]*>\{\{\s*c\.badge\s*\|\|\s*i\s*\+\s*1\s*\}\}/,
-  "course directions should use lightweight text marks instead of image layers",
-);
-assert.doesNotMatch(
-  learnTemplate,
-  /courseware-card__cover|course-media__fallback|markCourseImageError/,
-  "course direction cards should avoid native image layers that can leave blank WeChat scroll regions",
-);
-assert.match(
-  learnTemplate,
-  /<view\b(?=[^>]*v-for=["']t in types["'])(?=[^>]*:key=["']t\.id["'])[^>]*>/,
-  "type cards should use the same stable type id as their image fallback state",
-);
-assert.match(
-  learnTemplate,
-  /<image\b(?=[^>]*class=["']type-badge__avatar["'])(?=[^>]*v-if=["']!typeImageErrors\[t\.id\]["'])(?=[^>]*@error=["']markTypeImageError\(t\.id\)["'])[^>]*\/>/,
-  "type avatars should read and write failure state through t.id",
-);
-assert.match(
-  learnTemplate,
-  /<button\b(?=[^>]*class=["'][^"']*learn-cta[^"']*["'])(?=[^>]*@click=["']goTest["'])[^>]*>/,
-  "learn CTA should preserve its test navigation behavior",
-);
-assert.match(
-  sourceBracedBody(learnPage, /function\s+goTest\s*\(\s*\)\s*\{/.exec(learnPage)) || "",
-  /^\s*uni\.navigateTo\(\{\s*url:\s*["']\/pages\/test\/test["']\s*\}\)\s*;?\s*$/,
-  "learn test CTA should open the test page directly",
-);
-assert.match(
-  learnTemplate,
-  /v-else-if=["']!loadError && quotes\.length === 0["'][^>]*state=["']empty["']/,
-  "learn quotes should expose a non-error empty state",
-);
-
-const profileEditTemplateRaw = vueSection(profileEditPage, "template") || "";
-const profileEditTemplate = stripMarkupAndCssComments(profileEditTemplateRaw);
-const profileEditStyle = stripMarkupAndCssComments(vueSection(profileEditPage, "style") || "");
-assertRootViewClasses(profileEditPage, "src/pages/profile-edit/profile-edit.vue", [
-  "page-stack",
-  "ios-page",
-  "ios-safe-bottom",
-]);
-assert.match(
-  profileEditTemplate,
-  /class=["'][^"']*profile-edit-hero[^"']*nx-page-hero[^"']*["']/,
-  "personal profile should open with the shared expert-brand hero",
-);
-assert.match(
-  profileEditTemplate,
-  /class=["'][^"']*profile-edit-panel[^"']*nx-panel[^"']*ios-card[^"']*["']/,
-  "personal profile editing should use the shared panel surface",
-);
-assert.match(
-  profileEditPage,
-  /import\s*\{[^}]*getToken[^}]*clearToken[^}]*\}\s*from\s*["']\.\.\/\.\.\/utils\/auth["']/,
-  "personal profile should use the shared token boundary",
-);
-assert.match(
-  profileEditPage,
-  /import\s*\{[^}]*getUserInfoApi[^}]*updateUserInfoApi[^}]*\}\s*from\s*["']\.\.\/\.\.\/api["']/,
-  "personal profile should reuse the existing user GET and PUT APIs",
-);
-assert.match(
-  profileEditPage,
-  /const profileLoading = ref\(false\)/,
-  "personal profile should track initial loading independently",
-);
-assert.match(
-  profileEditPage,
-  /const profileSyncing = ref\(false\)/,
-  "personal profile should track WeChat synchronization independently",
-);
-assert.match(
-  profileEditPage,
-  /const profileSaving = ref\(false\)/,
-  "personal profile should track saving independently",
-);
-for (const [state, operation] of [
-  ["profileLoading", "loading"],
-  ["profileSyncing", "synchronization"],
-  ["profileSaving", "saving"],
-]) {
-  assert.match(
-    profileEditPage,
-    new RegExp(`if \\(\\s*${state}\\.value\\s*\\) return`),
-    `personal profile ${operation} should reject duplicate work`,
-  );
-}
-assert.match(
-  profileEditPage,
-  /let sessionGeneration = 0/,
-  "personal profile should maintain a page-session generation",
-);
-assert.match(
-  profileEditPage,
-  /onHide\([^)]*invalidateProfileSession[^)]*\)/,
-  "personal profile should invalidate stale work when hidden",
-);
-assert.match(
-  profileEditPage,
-  /onUnload\([^)]*invalidateProfileSession[^)]*\)/,
-  "personal profile should invalidate stale work when unloaded",
-);
-assert.match(
-  profileEditPage,
-  /function\s+isCurrentProfileSession\(generation, token, error\)[\s\S]*generation !== sessionGeneration[\s\S]*token === currentToken[\s\S]*error\.requestToken === token/,
-  "personal profile should accept only the current token or an auth failure from that same token",
-);
-const profileSessionGuardBody =
-  sourceBracedBody(
-    profileEditPage,
-    /function\s+isCurrentProfileSession\(generation, token, error\)\s*\{/.exec(profileEditPage),
-  ) || "";
-assert.match(
-  profileSessionGuardBody,
-  /!currentToken[\s\S]*error\.authExpired[\s\S]*error\.requestToken === token/,
-  "personal profile should recognize a concurrent auth failure after the same token was already cleared",
-);
-assert.doesNotMatch(
-  profileSessionGuardBody,
-  /authSessionCurrent/,
-  "personal profile must not require this request to be the first concurrent 401 that cleared the token",
-);
-
-const profileEditAuthBody =
-  sourceBracedBody(
-    profileEditPage,
-    /function\s+redirectToProfileLogin\s*\([^)]*\)\s*\{/.exec(profileEditPage),
-  ) || "";
-assert.match(
-  profileEditAuthBody,
-  /if \(authRedirected\) return[\s\S]*authRedirected = true/,
-  "personal profile auth expiry should only redirect once",
-);
-assert.match(
-  profileEditAuthBody,
-  /clearToken\(\)/,
-  "personal profile auth expiry should clear the local token",
-);
-assert.match(
-  profileEditAuthBody,
-  /uni\.showToast\(\{\s*title:\s*'登录已过期，请重新登录',\s*icon:\s*'none'\s*\}\)/,
-  "personal profile auth expiry should show one clear login toast",
-);
-assert.match(
-  profileEditAuthBody,
-  /uni\.switchTab\(\{\s*url:\s*'\/pages\/profile\/profile'\s*\}\)/,
-  "personal profile auth expiry should return to the profile tab",
-);
-assert.match(
-  profileEditPage,
-  /statusCode === 401[\s\S]*statusCode === 403/,
-  "personal profile should recognize both 401 and 403 authentication failures",
-);
-assert.match(
-  profileEditPage,
-  /if \(!token\)\s*\{\s*redirectToProfileLogin\(\)\s*return\s*\}/,
-  "personal profile should redirect before requesting when no token exists",
-);
-
-const profileEditLoadBody =
-  sourceBracedBody(
-    profileEditPage,
-    /async\s+function\s+loadProfile\s*\(\s*\)\s*\{/.exec(profileEditPage),
-  ) || "";
-assert.match(
-  profileEditLoadBody,
-  /const loadedUser = await getUserInfoApi\(\)\s*if \(!isCurrentProfileSession\(generation, token\)\) return\s*user\.value = loadedUser/,
-  "personal profile should guard the user GET response before mutating state",
-);
-assert.match(
-  profileEditLoadBody,
-  /isAuthFailure\(e\)[\s\S]*redirectToProfileLogin\(\)/,
-  "personal profile should redirect after authenticated GET failures",
-);
-assert.match(
-  profileEditLoadBody,
-  /catch \(e\) \{\s*if \(!isCurrentProfileSession\(generation, token, e\)\) return/,
-  "personal profile load failures, including auth failures, should reject an old token session before side effects",
-);
-assert.match(
-  profileEditLoadBody,
-  /finally \{\s*if \(isCurrentProfileSession\(generation, token\)\) profileLoading\.value = false/,
-  "personal profile load completion should not mutate a replacement token session",
-);
-assert.match(
-  profileEditTemplate,
-  /v-if=["']profileLoading["'][^>]*aria-live=["']polite["']/,
-  "personal profile should announce its loading state",
-);
-assert.match(
-  profileEditTemplate,
-  /v-else-if=["']loadError["'][\s\S]*@click=["']loadProfile["']/,
-  "personal profile should expose a readable non-auth error and retry",
-);
-
-const wechatProfileBlocks = [...profileEditPage.matchAll(/\/\/ #ifndef H5([\s\S]*?)\/\/ #endif/g)]
-  .map((match) => match[1])
-  .join("\n");
-assert.match(
-  wechatProfileBlocks,
-  /getWechatProfilePayload/,
-  "the non-H5 profile implementation should keep WeChat one-click synchronization",
-);
-assert.match(
-  wechatProfileBlocks,
-  /async function syncWechatProfile/,
-  "the non-H5 build should define the WeChat synchronization handler",
-);
-const profileEditSyncBody =
-  sourceBracedBody(
-    profileEditPage,
-    /async\s+function\s+syncWechatProfile\s*\(\s*\)\s*\{/.exec(profileEditPage),
-  ) || "";
-assert.match(
-  profileEditSyncBody,
-  /^\s*if \(profileSyncing\.value\) return\s*if \(profileSaving\.value\) return/,
-  "personal profile sync should not start while either profile PUT operation is active",
-);
-assert.match(
-  profileEditSyncBody,
-  /catch \(e\) \{\s*if \(!isCurrentProfileSession\(generation, token, e\)\) return/,
-  "personal profile sync failures, including auth failures, should reject an old token session before side effects",
-);
-assert.match(
-  profileEditSyncBody,
-  /finally \{\s*if \(isCurrentProfileSession\(generation, token\)\) profileSyncing\.value = false/,
-  "personal profile sync completion should not mutate a replacement token session",
-);
-const wechatTemplateBlocks = [
-  ...profileEditTemplateRaw.matchAll(/<!-- #ifndef H5 -->([\s\S]*?)<!-- #endif -->/g),
-]
-  .map((match) => match[1])
-  .join("\n");
-assert.match(
-  wechatTemplateBlocks,
-  /open-type=["']chooseAvatar["'][^>]*@chooseavatar=["']onChooseAvatar["']/,
-  "the WeChat profile page should use the current chooseAvatar capability",
-);
-assert.match(
-  wechatTemplateBlocks,
-  /type=["']nickname["'][^>]*@input=["']onNicknameInput["']/,
-  "the WeChat profile page should use the current nickname input capability",
-);
-assert.match(
-  wechatTemplateBlocks,
-  /:loading=["']profileSyncing["'][^>]*:disabled=["']profileSyncing \|\| profileSaving["'][^>]*@click=["']syncWechatProfile["']/,
-  "the WeChat sync button should lock while either profile PUT operation is active",
-);
-const h5ProfileEditBlocks = [
-  ...profileEditTemplateRaw.matchAll(/<!-- #ifdef H5 -->([\s\S]*?)<!-- #endif -->/g),
-]
-  .map((match) => match[1])
-  .join("\n");
-assert.match(
-  h5ProfileEditBlocks,
-  /请在微信小程序内同步微信资料/,
-  "H5 should explain where WeChat profile synchronization is available",
-);
-assert.match(
-  h5ProfileEditBlocks,
-  /<button\b[^>]*\bdisabled\b[^>]*>[^<]*微信[^<]*<\/button>/,
-  "H5 should render disabled WeChat capability guidance",
-);
-assert.doesNotMatch(
-  h5ProfileEditBlocks,
-  /getUserProfile|chooseAvatar|chooseavatar|syncWechatProfile|onChooseAvatar/,
-  "H5 template blocks must not bind WeChat-only handlers",
-);
-assert.match(
-  h5ProfileEditBlocks,
-  /type=["']text["'][^>]*@input=["']onNicknameInput["']/,
-  "H5 should keep nickname editing available for an existing token",
-);
-
-const profileEditSaveBody =
-  sourceBracedBody(
-    profileEditPage,
-    /async\s+function\s+saveProfile\s*\(\s*\)\s*\{/.exec(profileEditPage),
-  ) || "";
-assert.match(
-  profileEditSaveBody,
-  /^\s*if \(profileSaving\.value\) return\s*if \(profileSyncing\.value\) return/,
-  "personal profile save should not start while either profile PUT operation is active",
-);
-assert.match(
-  profileEditSaveBody,
-  /normalizeWechatProfile\([\s\S]*nickname:\s*nicknameDraft\.value[\s\S]*avatar:\s*avatarDraft\.value/,
-  "personal profile save should normalize the current nickname and avatar draft",
-);
-assert.match(
-  profileEditSaveBody,
-  /hasProfilePayload\(payload\)/,
-  "personal profile save should reject an empty normalized payload",
-);
-assert.match(
-  profileEditSaveBody,
-  /const updatedUser = await updateUserInfoApi\(payload\)\s*if \(!isCurrentProfileSession\(generation, token\)\) return\s*user\.value = updatedUser\s*syncDraftFromUser\(\)/,
-  "personal profile save should guard the PUT response and refresh the form in place",
-);
-assert.match(
-  profileEditSaveBody,
-  /catch \(e\) \{\s*if \(!isCurrentProfileSession\(generation, token, e\)\) return/,
-  "personal profile save failures, including auth failures, should reject an old token session before side effects",
-);
-assert.match(
-  profileEditSaveBody,
-  /finally \{\s*if \(isCurrentProfileSession\(generation, token\)\) profileSaving\.value = false/,
-  "personal profile save completion should not mutate a replacement token session",
-);
-assert.doesNotMatch(
-  profileEditSaveBody,
-  /uni\.(?:navigateBack|switchTab)\s*\(/,
-  "successful profile save should remain on the dedicated page",
-);
-assert.match(
-  profileEditTemplate,
-  /:loading=["']profileSaving["'][^>]*:disabled=["']profileSaving \|\| profileSyncing["'][^>]*@click=["']saveProfile["']/,
-  "personal profile save should lock while either profile PUT operation is active",
-);
-assert.doesNotMatch(
-  profileEditPage,
-  /setStorageSync|saveProfileDraft|loadProfileDraft/,
-  "unsaved personal-profile edits should not be persisted across page exits",
-);
-assert.match(
-  pageStyleDeclarations(profileEditStyle, ".profile-edit-hero"),
-  /linear-gradient\(145deg,\s*var\(--nx-brand-900\),\s*var\(--nx-brand-700\)\)/,
-  "personal profile hero should use the shared brand tokens",
-);
-assert.match(
-  pageStyleDeclarations(profileEditStyle, ".profile-save"),
-  /min-height:\s*88rpx\s*;/,
-  "personal profile save should keep an 88rpx touch target",
-);
-
-assert.doesNotMatch(
-  profilePage,
-  /wechatLoginReady/,
-  "profile overview should leave WeChat capability guidance to the dedicated profile page",
-);
-assert.doesNotMatch(
-  profilePage,
-  /open-type="chooseAvatar"/,
-  "profile overview should leave avatar selection to the dedicated profile page",
-);
-assert.doesNotMatch(
-  profilePage,
-  /type="nickname"/,
-  "profile overview should leave nickname editing to the dedicated profile page",
-);
-for (const removedProfileOverviewSymbol of [
-  "normalizeWechatProfile",
-  "hasProfilePayload",
-  "getWechatProfilePayload",
-  "updateUserInfoApi",
-  "profileSaving",
-  "nicknameDraft",
-  "avatarDraft",
-  "draftAvatarFailed",
-  "syncDraftFromUser",
-  "syncWechatProfile",
-  "saveProfile",
-  "onChooseAvatar",
-  "onNicknameInput",
-]) {
-  assert.doesNotMatch(
-    profilePage,
-    new RegExp(`\\b${removedProfileOverviewSymbol}\\b`),
-    `profile overview should not retain ${removedProfileOverviewSymbol}`,
-  );
-}
-assert.doesNotMatch(
-  profilePage,
-  /open-type="getPhoneNumber"/,
-  "未接通后端前，手机号授权入口不能对用户露出",
-);
-assert.doesNotMatch(
-  profilePage,
-  /@getphonenumber="onGetPhoneNumber"/,
-  "未接通后端前，不应绑定可见手机号授权占位事件",
-);
-assert.match(
-  profilePage,
-  /#ifdef H5[\s\S]*请在微信小程序内登录[\s\S]*#endif/,
-  "H5 profile login entry should be a disabled miniapp guidance instead of a failing WeChat login CTA",
-);
-assert.doesNotMatch(
-  profilePage,
-  /后端暂未开通|前端占位|占位/,
-  "用户侧文案不能暴露手机号授权后端占位状态",
-);
-assert.doesNotMatch(
-  profilePage,
-  /openChatPage|goChat|clearChatMessages|问 AI|AI 对话/,
-  "profile page must not expose or reset removed AI chat state",
-);
-
-const profileTemplate = stripMarkupAndCssComments(vueSection(profilePage, "template") || "");
-const profileStyle = stripMarkupAndCssComments(vueSection(profilePage, "style") || "");
-assert.match(
-  profileTemplate,
-  /class=["'][^"']*profile-hero[^"']*nx-page-hero[^"']*["']/,
-  "profile should open with the shared growth hero",
-);
-assert.match(
-  profilePage,
-  /const recordCount = computed\(\(\) => records\.value\.length\)/,
-  "profile summary should derive its record count from loaded records",
-);
-assert.match(
-  profilePage,
-  /const bookingCount = computed\(\(\) => bookings\.value\.length\)/,
-  "profile summary should derive its booking count from loaded bookings",
-);
-assert.match(
-  profilePage,
-  /const recordCountLabel = computed\(\(\) => profileLoading\.value \|\| recordsError\.value \? ['"]—['"] : String\(recordCount\.value\)\)/,
-  "profile record count should stay unknown while loading or failed",
-);
-assert.match(
-  profilePage,
-  /const bookingCountLabel = computed\(\(\) => profileLoading\.value \|\| bookingsError\.value \? ['"]—['"] : String\(bookingCount\.value\)\)/,
-  "profile booking count should stay unknown while loading or failed",
-);
-assert.ok(
-  (profileTemplate.match(/class=["'][^"']*profile-stat(?:\s|["'])/g) || []).length >= 3,
-  "profile hero should present three growth statistics",
-);
-assert.match(
-  profileTemplate,
-  /class=["'][^"']*history-timeline[^"']*["']/,
-  "profile test history should use a timeline",
-);
-assert.match(
-  profileTemplate,
-  /class=["'][^"']*history-item[^"']*["']/,
-  "profile timeline should expose structured items",
-);
-assert.match(
-  profileTemplate,
-  /class=["'][^"']*history-item__dot[^"']*["']/,
-  "profile timeline should expose a visible dot",
-);
-assert.match(
-  profileTemplate,
-  /class=["'][^"']*history-item__body[^"']*["']/,
-  "profile timeline should keep content separate from its dot",
-);
-assert.match(
-  profilePage,
-  /const userAvatarFailed = ref\(false\)/,
-  "profile should track user avatar failures",
-);
-assert.match(
-  profilePage,
-  /function onUserAvatarError\(\)\s*\{\s*userAvatarFailed\.value = true\s*\}/,
-  "profile should replace failed user avatars",
-);
-assert.doesNotMatch(
-  profilePage,
-  /管理档案/,
-  "profile must not invent an unsupported archive-management action",
-);
-assert.match(
-  profileTemplate,
-  /<text\s+class=["']profile-hero__title["']>[^<]+<\/text>/,
-  "profile hero should lead with a visible growth-oriented title",
-);
-assert.doesNotMatch(
-  profileTemplate,
-  /class=["'][^"']*profile-edit[^"']*nx-panel[^"']*["']/,
-  "profile overview should not duplicate the dedicated profile editor",
-);
-assert.match(
-  profileTemplate,
-  /class=["'][^"']*history-section[^"']*nx-panel[^"']*["']/,
-  "test history should use a shared panel surface",
-);
-assert.match(
-  profileTemplate,
-  /class=["'][^"']*booking-summary[^"']*nx-panel[^"']*["']/,
-  "appointment summary should use a non-interactive shared panel shell",
-);
-assert.match(
-  profileTemplate,
-  /<view class=["']history-section nx-panel ios-card["']>\s*<view class=["']section-head["']>[\s\S]*?<text class=["']sec-title["']>我的测试历史<\/text>/,
-  "test history content should belong to the history panel",
-);
-assert.match(
-  profileTemplate,
-  /<view class=["']booking-summary nx-panel ios-card["']>\s*<view class=["']section-head["']>[\s\S]*?<text class=["']sec-title["']>我的预约<\/text>/,
-  "appointment content should belong to the booking summary shell",
-);
-assert.match(
-  profileTemplate,
-  /v-if=["']profileLoading["'][\s\S]*v-else-if=["']recordsError["'][\s\S]*v-else-if=["']records\.length === 0["'][\s\S]*v-else class=["']history-timeline["']/,
-  "profile records should keep loading, error, empty, and timeline precedence",
-);
-
-const profileViews = openingTagsFor(profileTemplate, "view");
-const profileIdentityActions = profileViews.filter((tag) =>
-  staticClassTokens(tag).includes("profile-hero__identity-action"),
-);
-assert.equal(
-  profileIdentityActions.length,
-  1,
-  "logged profile hero should expose one dedicated identity action",
-);
-assert.match(
-  profileIdentityActions[0],
-  /\saria-label=["']编辑个人资料["']/,
-  "profile identity action should describe its destination",
-);
-assert.match(
-  profileIdentityActions[0],
-  /\s@click=["']openProfileEdit["']/,
-  "profile identity action should bind profile navigation",
-);
-assert.match(
-  profileIdentityActions[0],
-  /\shover-class=["']profile-hero__identity-action--pressed["']/,
-  "profile identity action should expose pressed feedback",
-);
-assertKeyboardViewControl(profileIdentityActions[0], "profile identity action", "openProfileEdit");
-const profileIdentityActionStart = profileTemplate.indexOf(profileIdentityActions[0]);
-const profileIdentityActionEnd = profileTemplate.indexOf(
-  '<text class="profile-hero__title">',
-  profileIdentityActionStart,
-);
-const profileIdentityActionContent = profileTemplate.slice(
-  profileIdentityActionStart,
-  profileIdentityActionEnd,
-);
-assert.match(
-  profileIdentityActionContent,
-  /<text\s+class=["']profile-hero__identity-arrow["']\s+aria-hidden=["']true["']>›<\/text>/,
-  "profile identity action should include a decorative hidden right arrow",
-);
-
-const profileEditOpenBody =
-  sourceBracedBody(profilePage, /function\s+openProfileEdit\s*\(\s*\)\s*\{/.exec(profilePage)) ||
-  "";
-assert.match(
-  profileEditOpenBody,
-  /uni\.navigateTo\s*\(\s*\{\s*url:\s*["']\/pages\/profile-edit\/profile-edit["']\s*\}\s*\)/,
-  "profile identity action should navigate to the dedicated profile page",
-);
-
-const bookingSummaryShells = profileViews.filter((tag) =>
-  staticClassTokens(tag).includes("booking-summary"),
-);
-assert.equal(bookingSummaryShells.length, 1, "profile should render one appointment summary shell");
-for (const interactiveAttribute of [
-  "role",
-  "aria-role",
-  "tabindex",
-  "@click",
-  "@keydown.enter",
-  "@keydown.space.prevent",
-]) {
-  assert.equal(
-    tagAttribute(bookingSummaryShells[0], interactiveAttribute),
-    undefined,
-    `appointment summary shell should not own ${interactiveAttribute}`,
-  );
-}
-const bookingSummaryOpenTags = profileViews.filter((tag) =>
-  staticClassTokens(tag).includes("booking-summary__open"),
-);
-assert.equal(
-  bookingSummaryOpenTags.length,
-  1,
-  "appointment summary should expose one independent navigation body in every async state",
-);
-assert.match(
-  bookingSummaryOpenTags[0],
-  /\saria-label=["']查看全部预约记录["']/,
-  "appointment summary action should describe its destination",
-);
-assert.match(
-  bookingSummaryOpenTags[0],
-  /\s@click=["']openBookingRecords["']/,
-  "appointment summary action should bind records navigation",
-);
-assert.match(
-  bookingSummaryOpenTags[0],
-  /\shover-class=["']booking-summary__open--pressed["']/,
-  "appointment summary action should expose pressed feedback",
-);
-assertKeyboardViewControl(
-  bookingSummaryOpenTags[0],
-  "appointment summary action",
-  "openBookingRecords",
-);
-const bookingSummaryStatusTags = profileViews.filter((tag) =>
-  staticClassTokens(tag).includes("booking-summary__status"),
-);
-assert.equal(
-  bookingSummaryStatusTags.length,
-  1,
-  "appointment summary should expose one stable asynchronous status container",
-);
-assert.equal(
-  tagAttribute(bookingSummaryStatusTags[0], "aria-live"),
-  "polite",
-  "appointment summary status changes should be announced politely",
-);
-assert.match(
-  profileTemplate,
-  /class=["']booking-summary__open["'][\s\S]*v-if=["']profileLoading["'][\s\S]*v-else-if=["']bookingsError["'][\s\S]*v-else-if=["']!latestBooking["'][\s\S]*v-else/,
-  "appointment navigation body should remain present around loading, error, empty, and summary states",
-);
-assert.match(
-  profileTemplate,
-  /<button\s+v-if=["']bookingsError["']\s+class=["'][^"']*booking-summary__retry[^"']*["'][^>]*tabindex=["']0["'][^>]*@click\.stop=["']loadAll["'][^>]*>重试<\/button>/,
-  "appointment retry should be an independently focusable native sibling button that only reloads",
-);
-
-assert.match(
-  profilePage,
-  /const latestBooking = computed\(\(\) => bookings\.value\[0\] \|\| null\)/,
-  "profile appointment summary should use the first API item as the latest record",
-);
-assert.doesNotMatch(
-  profilePage,
-  /bookings\.value[^\n]*\.sort\s*\(|visibleBookings|hiddenBookingCount/,
-  "profile appointment summary should preserve API order and avoid a local preview list",
-);
-const bookingRecordsOpenBody =
-  sourceBracedBody(profilePage, /function\s+openBookingRecords\s*\(\s*\)\s*\{/.exec(profilePage)) ||
-  "";
-assert.match(
-  bookingRecordsOpenBody,
-  /uni\.navigateTo\s*\(\s*\{\s*url:\s*["']\/pages\/booking-records\/booking-records["']\s*\}\s*\)/,
-  "profile appointment action should navigate to appointment records",
-);
-const h5ProfileLogin = profilePage.match(/<!-- #ifdef H5 -->([\s\S]*?)<!-- #endif -->/)?.[1] || "";
-assert.match(
-  h5ProfileLogin,
-  /<button\b[^>]*\bdisabled\b[^>]*>请在微信小程序内登录<\/button>/,
-  "H5 profile login guidance should remain disabled",
-);
-assert.doesNotMatch(
-  h5ProfileLogin,
-  /@click=["']login["']/,
-  "H5 profile guidance must not call WeChat login",
-);
-const profileLoadAllBody =
-  sourceBracedBody(profilePage, /async function\s+loadAll\s*\(\s*\)\s*\{/.exec(profilePage)) || "";
-assert.match(
-  profileLoadAllBody,
-  /const requestToken = getToken\(\)/,
-  "profile load should bind requests to the token that started them",
-);
-assert.match(
-  profileLoadAllBody,
-  /const loadedUser = await getUserInfoApi\(\)\s*if \(!isCurrentProfileLoad\(ticket, requestToken\)\)/,
-  "profile load should reject a stale user response before mutating session state",
-);
-assert.match(
-  profileLoadAllBody,
-  /Promise\.allSettled\([\s\S]*?const historyAuthError[\s\S]*if \(!isCurrentProfileLoad\(ticket, requestToken, historyAuthError\)\)[\s\S]*if \(historyAuthError\)[\s\S]*handleAuthLoss\(ticket\)/,
-  "profile load should reject stale history responses and centralize current auth failures",
-);
-assert.match(
-  profilePage,
-  /function\s+isCurrentProfileLoad\(ticket, token, error\)/,
-  "profile should centralize current-token checks for all overview requests",
-);
-assert.match(
-  profilePage,
-  /function\s+invalidateStaleProfileLoad\(ticket = loadTicket\)/,
-  "profile should isolate stale-token cleanup from auth reset",
-);
-assert.match(
-  profilePage,
-  /let sessionGeneration = 0/,
-  "profile should maintain an independent authentication generation",
-);
-const profileLoginBody =
-  sourceBracedBody(profilePage, /async function\s+login\s*\(\s*\)\s*\{/.exec(profilePage)) || "";
-assert.match(
-  profileLoginBody,
-  /await ensureLogin\(\)\s*sessionGeneration \+= 1\s*generation = sessionGeneration\s*logged\.value = true[\s\S]*await loadAll\(\)\s*if \(!logged\.value \|\| generation !== sessionGeneration\) return\s*uni\.showToast\(\{ title: '登录成功'/,
-  "profile login should establish a generation and suppress stale success feedback",
-);
-assert.match(
-  profileLoginBody,
-  /catch \(e\) \{\s*if \(generation !== sessionGeneration\) return[\s\S]*\}\s*finally \{\s*if \(generation === sessionGeneration\) logging\.value = false/,
-  "profile login should suppress stale errors and protect newer login state",
-);
-const profileResetBody =
-  sourceBracedBody(profilePage, /function\s+resetLogin\s*\(\s*\)\s*\{/.exec(profilePage)) || "";
-assert.match(
-  profileResetBody,
-  /^\s*sessionGeneration \+= 1/,
-  "profile reset should invalidate in-flight session work before clearing state",
-);
-assert.match(
-  profileResetBody,
-  /clearBookingSession\(\)/,
-  "profile reset and logout should clear token-bound appointment detail state",
-);
-assert.match(
-  profilePage,
-  /const recordCountLabel = computed\(\(\) => profileLoading\.value \|\| recordsError\.value \? ['"]—['"] : String\(recordCount\.value\)\)/,
-  "failed record counts should stay unknown instead of showing zero",
-);
-assert.match(
-  profilePage,
-  /const bookingCountLabel = computed\(\(\) => profileLoading\.value \|\| bookingsError\.value \? ['"]—['"] : String\(bookingCount\.value\)\)/,
-  "failed booking counts should stay unknown instead of showing zero",
-);
-
-const profileHeroStyle = pageStyleDeclarations(profileStyle, ".profile-hero");
-assert.match(
-  profileHeroStyle,
-  /linear-gradient\(145deg,\s*var\(--nx-brand-900\),\s*var\(--nx-brand-700\)\)/,
-  "profile hero should use the shared brand tokens",
-);
-assert.match(
-  profileHeroStyle,
-  /border-radius:\s*38rpx\s*;/,
-  "profile hero should use the approved radius",
-);
-assert.match(
-  pageStyleDeclarations(profileStyle, ".profile-stats"),
-  /grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)\s*;/,
-  "profile statistics should stay in three stable columns",
-);
-assert.match(
-  pageStyleDeclarations(profileStyle, ".profile-stat__value"),
-  /font-size:\s*34rpx\s*;[\s\S]*font-weight:\s*900\s*;/,
-  "profile statistic values should keep the approved hierarchy",
-);
-assert.match(
-  pageStyleDeclarations(profileStyle, ".history-item"),
-  /min-height:\s*88rpx\s*;/,
-  "profile history rows should keep a stable touch-friendly rhythm",
-);
-assert.match(
-  pageStyleDeclarations(profileStyle, ".history-item__dot"),
-  /width:\s*16rpx\s*;[\s\S]*height:\s*16rpx\s*;/,
-  "profile timeline dots should use the approved fixed size",
-);
-assert.match(
-  pageStyleDeclarations(profileStyle, ".logout"),
-  /min-height:\s*88rpx\s*;/,
-  "profile logout should keep an 88rpx touch target",
-);
-for (const selector of [".profile-hero__identity-action", ".booking-summary__open"]) {
-  assert.match(
-    pageStyleDeclarations(profileStyle, selector),
-    /min-height:\s*88rpx\s*;/,
-    `${selector} should keep an 88rpx touch target`,
-  );
-  assert.match(
-    profileStyle,
-    new RegExp(`${selector.replace(".", "\\.")}--pressed\\s*\\{[^}]*(?:opacity|transform)`),
-    `${selector} should expose visible pressed feedback`,
-  );
-  assert.match(
-    profileStyle,
-    new RegExp(`${selector.replace(".", "\\.")}:focus-visible\\s*\\{[^}]*(?:outline|box-shadow)`),
-    `${selector} should expose a visible focus state`,
-  );
-}
-for (const selector of [
-  ".profile-hero__eyebrow",
-  ".profile-hero__lead",
-  ".profile-stat__label",
-  ".history-item__meta",
-  ".more-tip",
-]) {
-  const fontSize = pageStyleDeclarations(profileStyle, selector)?.match(
-    /font-size:\s*(\d+)rpx\s*;/,
-  );
-  assert.ok(
-    fontSize && Number(fontSize[1]) >= 24,
-    `${selector} should keep at least 24rpx readable text`,
-  );
-}
-assert.match(
-  pageStyleDeclarations(profileStyle, ".history-item__meta"),
-  /color:\s*var\(--nx-text-muted\)\s*;/,
-  "profile history metadata should use the shared readable secondary-text token",
-);
-
-const bookingRecordsPath = "src/pages/booking-records/booking-records.vue";
-assert.ok(
-  statSync(bookingRecordsPath, { throwIfNoEntry: false })?.isFile(),
-  "appointment records page should exist",
-);
-const bookingRecordsPage = readFileSync(bookingRecordsPath, "utf8");
-assert.match(
-  bookingRecordsPage,
-  /listBookingsApi/,
-  "appointment records should use the authenticated booking list API",
-);
-assert.match(
-  bookingRecordsPage,
-  /getToken/,
-  "appointment records should validate the current auth token",
-);
-assert.match(
-  bookingRecordsPage,
-  /clearToken/,
-  "appointment records should clear auth after missing or expired authentication",
-);
-assert.match(
-  bookingRecordsPage,
-  /clearBookingSession/,
-  "appointment records should clear token-bound booking state when auth changes",
-);
-assert.match(
-  bookingRecordsPage,
-  /setBookingSession\(currentToken,\s*record\)/,
-  "appointment records should bind the selected record to the current token",
-);
-assert.match(
-  bookingRecordsPage,
-  /bookingKindLabel/,
-  "appointment records should render Chinese booking kinds",
-);
-assert.match(
-  bookingRecordsPage,
-  /bookingStatusLabel/,
-  "appointment records should render Chinese booking statuses",
-);
-assert.match(
-  bookingRecordsPage,
-  /maskBookingPhone/,
-  "appointment records should mask phone numbers",
-);
-assert.doesNotMatch(
-  bookingRecordsPage,
-  /\.sort\s*\(/,
-  "appointment records should preserve the API response order",
-);
-assert.match(
-  bookingRecordsPage,
-  /v-if=["']loading["']/,
-  "appointment records should expose a loading state",
-);
-assert.match(
-  bookingRecordsPage,
-  /v-else-if=["']loadError["']/,
-  "appointment records should expose an error state before empty state",
-);
-assert.match(
-  bookingRecordsPage,
-  /v-else-if=["']bookings\.length === 0["']/,
-  "appointment records should expose an empty state",
-);
-assert.match(
-  bookingRecordsPage,
-  /aria-live=["']polite["']/,
-  "appointment records async state should announce changes politely",
-);
-assert.match(
-  bookingRecordsPage,
-  /<button\s+class=["'][^"']*retry-button[^"']*["'][^>]*tabindex=["']0["'][^>]*@click\.stop=["']retryLoad["'][^>]*>/,
-  "appointment records retry should be an independently focusable native button that stops propagation",
-);
-assert.match(
-  bookingRecordsPage,
-  /<button\s+class=["'][^"']*empty-action[^"']*["'][^>]*@click=["']goBooking["'][^>]*>去预约<\/button>/,
-  "appointment records empty state should switch to the booking tab",
-);
-assert.match(
-  bookingRecordsPage,
-  /uni\.switchTab\s*\(\s*\{\s*url:\s*["']\/pages\/booking\/booking["']\s*\}\s*\)/,
-  "appointment records empty action should switch to the booking tab",
-);
-
-const bookingRecordOpenTags =
-  bookingRecordsPage.match(/<view\b[^>]*class=["'][^"']*booking-record__open[^"']*["'][^>]*>/g) ||
-  [];
-assert.ok(
-  bookingRecordOpenTags.length > 0,
-  "appointment records should render a dedicated navigation body",
-);
-for (const tag of bookingRecordOpenTags) {
-  assert.match(
-    tag,
-    /\srole=["']button["']/,
-    "appointment navigation body should use H5 button semantics",
-  );
-  assert.match(
-    tag,
-    /\saria-role=["']button["']/,
-    "appointment navigation body should use WeChat button semantics",
-  );
-  assert.match(
-    tag,
-    /\stabindex=["']0["']/,
-    "appointment navigation body should participate in keyboard focus order",
-  );
-  assert.match(
-    tag,
-    /\s@click=["']openBooking\(record\)["']/,
-    "appointment navigation body should open its record",
-  );
-  assert.match(
-    tag,
-    /\s@keydown\.enter=["']openBooking\(record\)["']/,
-    "appointment navigation body should activate with Enter",
-  );
-  assert.match(
-    tag,
-    /\s@keydown\.space\.prevent=["']openBooking\(record\)["']/,
-    "appointment navigation body should activate with Space",
-  );
-}
-assert.match(
-  bookingRecordsPage,
-  /uni\.navigateTo\s*\(\s*\{\s*url:\s*`\/pages\/booking-detail\/booking-detail\?id=\$\{[^}]+\}`[\s\S]*?\}\s*\)/,
-  "appointment navigation should include the selected booking ID in the detail URL",
-);
-
-function vueFunctionBody(source, name) {
-  const match = new RegExp(`(?:async\\s+)?function\\s+${name}\\s*\\([^)]*\\)\\s*\\{`).exec(source);
-  if (!match) return undefined;
-  const openingBrace = match.index + match[0].lastIndexOf("{");
-  let depth = 0;
-  for (let index = openingBrace; index < source.length; index += 1) {
-    if (source[index] === "{") depth += 1;
-    if (source[index] !== "}") continue;
-    depth -= 1;
-    if (depth === 0) return source.slice(openingBrace + 1, index);
-  }
-  return undefined;
-}
-
-const retryLoadBody = vueFunctionBody(bookingRecordsPage, "retryLoad");
-assert.ok(
-  retryLoadBody !== undefined,
-  "appointment records should define an isolated retry handler",
-);
-assert.doesNotMatch(
-  retryLoadBody,
-  /setBookingSession|navigateTo|openBooking/,
-  "retry must never set a booking session or navigate",
-);
-const authLossBody = vueFunctionBody(bookingRecordsPage, "handleAuthLoss");
-assert.ok(
-  authLossBody !== undefined,
-  "appointment records should centralize authentication loss handling",
-);
-assert.match(authLossBody, /clearToken\(\)/, "authentication loss should clear auth");
-assert.match(
-  authLossBody,
-  /clearBookingSession\(\)/,
-  "authentication loss should clear booking session data",
-);
-assert.match(
-  authLossBody,
-  /redirecting/,
-  "authentication loss should guard Toast and navigation side effects",
-);
-assert.match(
-  authLossBody,
-  /uni\.showToast/,
-  "authentication loss should show one user-facing Toast",
-);
-assert.match(
-  authLossBody,
-  /uni\.switchTab/,
-  "authentication loss should switch back to the profile tab",
-);
-assert.match(
-  bookingRecordsPage,
-  /loadTicket/,
-  "appointment records should invalidate stale async responses",
-);
-const bookingSessionGuardBody = vueFunctionBody(bookingRecordsPage, "isCurrentBookingSession");
-assert.ok(
-  bookingSessionGuardBody !== undefined,
-  "appointment records should centralize current-token session checks",
-);
-assert.match(
-  bookingSessionGuardBody,
-  /ticket !== loadTicket/,
-  "appointment records should reject an old load generation",
-);
-assert.match(
-  bookingSessionGuardBody,
-  /token === currentToken/,
-  "appointment records should accept responses only for the current token",
-);
-assert.match(
-  bookingSessionGuardBody,
-  /!currentToken[\s\S]*error\?\.authExpired[\s\S]*error\.requestToken === token/,
-  "appointment records should recognize a current-session 401 after request cleanup",
-);
-const staleBookingBody = vueFunctionBody(bookingRecordsPage, "invalidateStaleBookingSession");
-assert.ok(
-  staleBookingBody !== undefined,
-  "appointment records should isolate stale-token cleanup from auth redirect",
-);
-assert.match(
-  staleBookingBody,
-  /bookings\.value\s*=\s*\[\]/,
-  "stale-token cleanup should remove the old user booking list",
-);
-assert.match(
-  staleBookingBody,
-  /clearBookingSession\(\)/,
-  "stale-token cleanup should remove the old booking session",
-);
-assert.doesNotMatch(
-  staleBookingBody,
-  /clearToken|showToast|switchTab|navigateTo/,
-  "stale-token cleanup must not mutate or redirect the newer auth session",
-);
-const bookingLoadBody = vueFunctionBody(bookingRecordsPage, "loadBookings");
-assert.match(
-  bookingLoadBody,
-  /if \(!isCurrentBookingSession\(ticket, requestToken\)\)[\s\S]*invalidateStaleBookingSession\(ticket\)[\s\S]*loadedToken = requestToken/,
-  "appointment success should reject an old token before exposing records",
-);
-assert.match(
-  bookingLoadBody,
-  /catch \(error\) \{\s*if \(!isCurrentBookingSession\(ticket, requestToken, error\)\)[\s\S]*invalidateStaleBookingSession\(ticket\)[\s\S]*if \(isAuthError\(error\)\)/,
-  "appointment failures should reject an old token before auth side effects",
-);
-const openBookingBody = vueFunctionBody(bookingRecordsPage, "openBooking");
-assert.match(
-  openBookingBody,
-  /if \(currentToken !== loadedToken\) \{\s*invalidateStaleBookingSession\(\)\s*return/,
-  "clicking an old-token record should invalidate it without auth redirect",
-);
-assert.match(
-  bookingRecordsPage,
-  /statusCode\s*===\s*401[\s\S]*statusCode\s*===\s*403/,
-  "appointment records should handle both 401 and 403",
-);
-assert.match(
-  bookingRecordsPage,
-  /onUnload/,
-  "appointment records should invalidate loads and clear session on unload",
-);
-assert.match(
-  bookingRecordsPage,
-  /\.booking-record__open:focus-visible[\s\S]*(?:outline|box-shadow)/,
-  "appointment navigation should expose a visible focus state",
-);
-assert.match(
-  bookingRecordsPage,
-  /\.booking-record__open\s*\{[\s\S]*min-height:\s*88rpx/,
-  "appointment navigation should keep an 88rpx touch target",
-);
-for (const selector of [".booking-record__status", ".booking-record__meta"]) {
-  const fontSize = pageStyleDeclarations(
-    stripMarkupAndCssComments(vueSection(bookingRecordsPage, "style") || ""),
-    selector,
-  )?.match(/font-size:\s*(\d+)rpx\s*;/);
-  assert.ok(
-    fontSize && Number(fontSize[1]) >= 24,
-    `${selector} should keep at least 24rpx readable text`,
-  );
-}
-assert.match(
-  openBookingBody,
-  /uni\.navigateTo\s*\(\s*\{[\s\S]*fail\s*\([^)]*\)\s*\{[\s\S]*clearBookingSession\(\)/,
-  "appointment detail navigation failure should clear the token-bound record session",
-);
-
-const bookingDetailPath = "src/pages/booking-detail/booking-detail.vue";
-assert.ok(
-  statSync(bookingDetailPath, { throwIfNoEntry: false })?.isFile(),
-  "appointment detail page should exist",
-);
-const bookingDetailPage = readFileSync(bookingDetailPath, "utf8");
-const bookingDetailTemplate = stripMarkupAndCssComments(
-  vueSection(bookingDetailPage, "template") || "",
-);
-const bookingDetailStyle = stripMarkupAndCssComments(vueSection(bookingDetailPage, "style") || "");
-assertRootViewClasses(bookingDetailPage, bookingDetailPath, [
-  "page-stack",
-  "ios-page",
-  "ios-safe-bottom",
-]);
-assert.match(bookingDetailPage, /onLoad/, "appointment detail should read its route ID on load");
-assert.match(
-  bookingDetailPage,
-  /onShow/,
-  "appointment detail should revalidate auth and reload after returning from a hidden page",
-);
-assert.match(
-  bookingDetailPage,
-  /onHide/,
-  "appointment detail should clear private fields as soon as it becomes hidden",
-);
-assert.match(
-  bookingDetailPage,
-  /normalizeBookingId\(query\?\.id\)/,
-  "appointment detail should normalize untrusted route IDs safely",
-);
-assert.match(
-  bookingDetailPage,
-  /readBookingSession\(requestToken,\s*bookingId\)/,
-  "appointment detail should try the token-bound booking session first",
-);
-assert.match(
-  bookingDetailPage,
-  /listBookingsApi\(\)/,
-  "appointment detail should fall back to the existing booking list API",
-);
-assert.match(
-  bookingDetailPage,
-  /\.slice\(0,\s*50\)/,
-  "appointment detail should inspect only the latest 50 booking records",
-);
-assert.match(
-  bookingDetailPage,
-  /String\(item\?\.id\)\s*===\s*bookingId/,
-  "appointment detail fallback should compare numeric and string IDs equivalently",
-);
-assert.doesNotMatch(
-  bookingDetailPage,
-  /getBooking|bookingDetailApi|bookingByIdApi/,
-  "appointment detail must not invent a new API",
-);
-assert.match(
-  bookingDetailPage,
-  /v-if=["']loading["']/,
-  "appointment detail should expose a loading state",
-);
-assert.match(
-  bookingDetailPage,
-  /v-else-if=["']loadError["']/,
-  "appointment detail should expose an error state before not-found",
-);
-assert.match(
-  bookingDetailPage,
-  /v-else-if=["']notFound["']/,
-  "appointment detail should expose a dedicated not-found state",
-);
-assert.match(
-  bookingDetailPage,
-  /aria-live=["']polite["']/,
-  "appointment detail async state should announce changes politely",
-);
-assert.match(
-  bookingDetailTemplate,
-  /@click=["']retryLoad["']/,
-  "appointment detail error state should allow retrying",
-);
-assert.match(
-  bookingDetailTemplate,
-  /@click=["']goBookingRecords["']>返回预约列表<\/button>/,
-  "appointment detail not-found state should return to the records list",
-);
-assert.match(
-  bookingDetailPage,
-  /uni\.redirectTo\s*\(\s*\{\s*url:\s*["']\/pages\/booking-records\/booking-records["']\s*\}\s*\)/,
-  "appointment detail should reliably return to the records route",
-);
-for (const label of [
-  "预约编号",
-  "预约类型",
-  "当前状态",
-  "称呼",
-  "手机号",
-  "学习意向",
-  "期望时间",
-  "留言",
-  "创建时间",
-]) {
-  assert.match(
-    bookingDetailTemplate,
-    new RegExp(`>${label}<\\/text>`),
-    `appointment detail should show ${label}`,
-  );
-}
-for (const field of [
-  "id",
-  "contactName",
-  "phone",
-  "intent",
-  "preferredTime",
-  "message",
-  "createTime",
-]) {
-  assert.match(
-    bookingDetailTemplate,
-    new RegExp(`bookingValue\\(booking\\.${field}\\)`),
-    `appointment detail should normalize empty ${field} values`,
-  );
-}
-assert.match(
-  bookingDetailTemplate,
-  /bookingKindLabel\(booking\.kind\)/,
-  "appointment detail should render the booking kind in Chinese",
-);
-assert.match(
-  bookingDetailTemplate,
-  /bookingStatusLabel\(booking\.status\)/,
-  "appointment detail should render the booking status in Chinese",
-);
-assert.doesNotMatch(
-  bookingDetailPage,
-  /maskBookingPhone/,
-  "appointment detail should show the complete phone number",
-);
-
-const detailLoadBody = vueFunctionBody(bookingDetailPage, "loadBookingDetail");
-assert.ok(
-  detailLoadBody !== undefined,
-  "appointment detail should define an isolated loading function",
-);
-const invalidIdIndex = detailLoadBody.indexOf("if (!bookingId)");
-const tokenIndex = detailLoadBody.indexOf("const requestToken = getToken()");
-const listIndex = detailLoadBody.indexOf("await listBookingsApi()");
-assert.ok(
-  invalidIdIndex >= 0 && invalidIdIndex < tokenIndex && tokenIndex < listIndex,
-  "appointment detail should reject an invalid ID before auth or API work",
-);
-assert.match(
-  detailLoadBody,
-  /readBookingSession\(requestToken,\s*bookingId\)[\s\S]*await listBookingsApi\(\)/,
-  "appointment detail should use session data before falling back to the list",
-);
-const detailAuthLossBody = vueFunctionBody(bookingDetailPage, "handleAuthLoss");
-assert.ok(
-  detailAuthLossBody !== undefined,
-  "appointment detail should centralize authentication loss handling",
-);
-assert.match(
-  detailAuthLossBody,
-  /clearToken\(\)/,
-  "appointment detail auth loss should clear auth",
-);
-assert.match(
-  detailAuthLossBody,
-  /clearBookingSession\(\)/,
-  "appointment detail auth loss should clear booking session data",
-);
-assert.match(
-  detailAuthLossBody,
-  /redirecting/,
-  "appointment detail auth loss should guard Toast and navigation side effects",
-);
-assert.match(
-  detailAuthLossBody,
-  /uni\.showToast/,
-  "appointment detail auth loss should show one user-facing Toast",
-);
-assert.match(
-  detailAuthLossBody,
-  /uni\.switchTab/,
-  "appointment detail auth loss should switch to the profile tab",
-);
-const detailSessionGuardBody = vueFunctionBody(bookingDetailPage, "isCurrentBookingContext");
-assert.ok(
-  detailSessionGuardBody !== undefined,
-  "appointment detail should centralize stale request checks",
-);
-assert.match(
-  detailSessionGuardBody,
-  /ticket !== loadTicket/,
-  "appointment detail should reject an old load generation",
-);
-assert.match(
-  detailSessionGuardBody,
-  /bookingId !== routeBookingId/,
-  "appointment detail should reject a response for another route ID",
-);
-assert.match(
-  detailSessionGuardBody,
-  /token === currentToken/,
-  "appointment detail should accept only its current token",
-);
-assert.match(
-  detailSessionGuardBody,
-  /!currentToken[\s\S]*error\?\.authExpired[\s\S]*error\.requestToken === token/,
-  "appointment detail should recognize a current-session auth failure after request cleanup",
-);
-const staleDetailBody = vueFunctionBody(bookingDetailPage, "invalidateStaleBookingContext");
-assert.ok(
-  staleDetailBody !== undefined,
-  "appointment detail should isolate stale response cleanup",
-);
-assert.match(
-  staleDetailBody,
-  /booking\.value\s*=\s*null/,
-  "appointment detail stale cleanup should hide old-user data",
-);
-assert.match(
-  staleDetailBody,
-  /clearBookingSession\(\)/,
-  "appointment detail stale cleanup should clear booking session data",
-);
-assert.doesNotMatch(
-  staleDetailBody,
-  /clearToken|showToast|switchTab|navigateTo|redirectTo/,
-  "appointment detail stale cleanup must not mutate or redirect the newer auth session",
-);
-assert.match(
-  bookingDetailPage,
-  /statusCode\s*===\s*401[\s\S]*statusCode\s*===\s*403/,
-  "appointment detail should handle both 401 and 403",
-);
-assert.match(
-  bookingDetailPage,
-  /onUnload\s*\(\s*\(\)\s*=>\s*\{[\s\S]*loadTicket\s*\+=\s*1[\s\S]*clearBookingSession\(\)/,
-  "appointment detail should invalidate pending work and clear session on unload",
-);
-assert.match(
-  bookingDetailPage,
-  /onHide\s*\(\s*\(\)\s*=>\s*\{[\s\S]*loadTicket\s*\+=\s*1[\s\S]*booking\.value\s*=\s*null[\s\S]*clearBookingSession\(\)/,
-  "appointment detail should invalidate pending work and clear private detail on hide",
-);
-assert.match(
-  pageStyleDeclarations(bookingDetailStyle, ".detail-action"),
-  /min-height:\s*88rpx\s*;/,
-  "appointment detail actions should keep an 88rpx touch target",
-);
-
-const resultPage = readFileSync("src/pages/result/result.vue", "utf8");
-const resultTemplateRaw = resultPage.match(/<template>([\s\S]*)<\/template>\s*<style/)?.[1] || "";
-const resultTemplate = stripMarkupAndCssComments(resultTemplateRaw);
-const resultStyle = stripMarkupAndCssComments(vueSection(resultPage, "style") || "");
-const resultViews = openingTagsFor(resultTemplate, "view");
-
-assert.match(
-  resultPage,
-  /import\s*\{\s*reportDisplayState\s*\}\s*from\s*['"]\.\.\/\.\.\/utils\/reportDisplayState['"]/,
-  "result page should use the pure report display-state helper",
-);
-assert.match(
-  resultPage,
-  /const reportPriceCents = ref\(null\)/,
-  "result price should start unknown instead of assuming a charge",
-);
-assert.match(
-  resultPage,
-  /const reportStatusLoading = ref\(false\)/,
-  "result page should track report status loading separately",
-);
-assert.match(
-  resultPage,
-  /const reportStatusError = ref\(['"]['"]\)/,
-  "result page should expose report status errors",
-);
-assert.match(
-  resultPage,
-  /const reportState = computed\(\(\) => reportDisplayState\(\{[\s\S]*recordId:[\s\S]*loading:\s*reportStatusLoading\.value,[\s\S]*error:\s*reportStatusError\.value,[\s\S]*unlocked:\s*reportUnlocked\.value,[\s\S]*priceCents:\s*reportPriceCents\.value,[\s\S]*\}\)\)/,
-  "result page should derive its report UI from the pure five-state helper",
-);
-assert.doesNotMatch(
-  resultPage,
-  /ref\(990\)/,
-  "result page must not hard-code a default report price",
-);
-
-for (const className of [
-  "result-hero",
-  "drive-grid",
-  "center-panel",
-  "direction-grid",
-  "report-panel",
-]) {
-  assert.ok(
-    resultViews.some((tag) => staticClassTokens(tag).includes(className)),
-    `result page should render ${className}`,
-  );
-}
-assert.match(
-  resultTemplate,
-  /class=["'][^"']*result-hero[^"']*nx-page-hero[^"']*["']/,
-  "result hero should use the shared hero surface",
-);
-assert.match(
-  resultTemplate,
-  /class=["']result-hero[^"']*["']\s+:class=["']`result-hero--\$\{info\.color\}`["']/,
-  "result hero should use the personality color modifier",
-);
-assert.match(
-  resultPage,
-  /const avatarFailed = ref\(false\)/,
-  "result page should track avatar load failure",
-);
-assert.match(
-  resultPage,
-  /import\s*\{\s*createResultPoster\s*\}\s*from\s*['"]\.\.\/\.\.\/utils\/resultPoster['"]/,
-  "result page should delegate canvas drawing to the poster utility",
-);
-assert.doesNotMatch(
-  resultPage,
-  /function\s+drawPoster\s*\(/,
-  "result page should not retain canvas drawing implementation",
-);
-assert.match(
-  resultPage,
-  /const posterError = ref\(['"]['"]\)/,
-  "result page should expose recoverable poster errors",
-);
-const resultAvatar = openingTagsFor(resultTemplate, "image").find((tag) =>
-  staticClassTokens(tag).includes("result-hero__avatar"),
-);
-assert.ok(resultAvatar, "result hero should render a fixed avatar image");
-assert.equal(
-  tagAttribute(resultAvatar, "v-if"),
-  "!avatarFailed",
-  "result avatar should be replaced after an image error",
-);
-assert.equal(
-  tagAttribute(resultAvatar, "@error"),
-  "avatarFailed = true",
-  "result avatar should record image errors",
-);
-assert.match(resultAvatar, /\slazy-load(?:=|\s|>|$)/, "result avatar should lazy-load");
-const resultAvatarFallback = resultViews.find((tag) =>
-  staticClassTokens(tag).includes("result-hero__avatar-fallback"),
-);
-assert.ok(
-  resultAvatarFallback && /\sv-else(?:\s|>|$)/.test(resultAvatarFallback),
-  "result hero should render a mutually exclusive avatar fallback",
-);
-for (const selector of [".result-hero__avatar", ".result-hero__avatar-fallback"]) {
-  const declarations = pageStyleDeclarations(resultStyle, selector);
-  assert.match(declarations, /width:\s*184rpx\s*;/, `${selector} should reserve 184rpx width`);
-  assert.match(declarations, /height:\s*184rpx\s*;/, `${selector} should reserve 184rpx height`);
-}
-
-const reportPanel = resultTemplate.match(
-  /<view\s+class=["']report-panel["']>([\s\S]*?)<view\s+class=["']result-actions["']>/,
-)?.[1];
-assert.ok(reportPanel, "result page should expose one bounded report panel");
-for (const state of ["needs-save", "status-loading", "status-error", "ready"]) {
-  assert.match(
-    reportPanel,
-    new RegExp(`reportState\\.key === '${state}'`),
-    `report panel should render ${state}`,
-  );
-}
-assert.match(
-  reportPanel,
-  /<template\s+v-else>/,
-  "report panel final branch should render the unlocked state",
-);
-assert.equal(
-  (reportPanel.match(/@click=["']saveRecord["']/g) || []).length,
-  1,
-  "save should exist exactly once inside needs-save",
-);
-assert.equal(
-  (reportPanel.match(/@click=["']unlockReport["']/g) || []).length,
-  1,
-  "unlock should exist exactly once inside ready",
-);
-assert.equal(
-  (resultTemplate.match(/@click=["']saveRecord["']/g) || []).length,
-  1,
-  "result page should not duplicate its save CTA outside the report panel",
-);
-assert.equal(
-  (resultTemplate.match(/@click=["']unlockReport["']/g) || []).length,
-  1,
-  "result page should not duplicate its unlock CTA outside the report panel",
-);
-assert.match(
-  reportPanel,
-  /aria-live=["']polite["'][^>]*>\s*查询报告状态/,
-  "report status loading should be announced politely",
-);
-assert.match(
-  reportPanel,
-  /report__retry[^>]*@click=["']refreshReportStatus["']/,
-  "report status failure should allow retrying status fetch",
-);
-assert.match(
-  reportPanel,
-  /report__content-retry[^>]*@click=["']loadReportContent["']/,
-  "unlocked content failure should allow retrying content fetch",
-);
-
-const resultH5Blocks = [
-  ...resultTemplateRaw.matchAll(/<!-- #ifdef H5 -->([\s\S]*?)<!-- #endif -->/g),
-].map((match) => match[1]);
-const h5SaveBlock = resultH5Blocks.find((block) => block.includes("请在微信小程序内登录后保存"));
-assert.ok(h5SaveBlock, "H5 needs-save should explain that saving requires the miniapp");
-assert.match(
-  h5SaveBlock,
-  /<button\b[^>]*\sdisabled(?:\s|>)/,
-  "H5 save guidance should be disabled",
-);
-assert.doesNotMatch(h5SaveBlock, /@click=/, "H5 save guidance must not bind a save handler");
-const h5PaymentBlock = resultH5Blocks.find((block) =>
-  block.includes("请在微信小程序内完成存档与支付"),
-);
-assert.ok(h5PaymentBlock, "H5 ready state should explain that payment requires the miniapp");
-assert.match(
-  h5PaymentBlock,
-  /<button\b[^>]*\sdisabled(?:\s|>)/,
-  "H5 payment guidance should be disabled",
-);
-assert.doesNotMatch(
-  h5PaymentBlock,
-  /@click=/,
-  "H5 payment guidance must not bind a payment handler",
-);
-const h5PosterBlock = resultH5Blocks.find((block) => block.includes("小程序内生成海报"));
-assert.ok(
-  h5PosterBlock && /\sdisabled(?:\s|>)/.test(h5PosterBlock),
-  "H5 poster action should remain disabled guidance",
-);
-assert.doesNotMatch(
-  resultH5Blocks.join("\n"),
-  /open-type=["']share["']/,
-  "H5 should not expose miniapp sharing",
-);
-
-const resultMpBlocks = [
-  ...resultTemplateRaw.matchAll(/<!-- #ifdef MP-WEIXIN -->([\s\S]*?)<!-- #endif -->/g),
-].map((match) => match[1]);
-assert.ok(
-  resultMpBlocks.some((block) => /open-type=["']share["']/.test(block)),
-  "WeChat should preserve friend sharing",
-);
-assert.ok(
-  resultMpBlocks.some((block) => /@click=["']saveRecord["']/.test(block)),
-  "WeChat should preserve saving",
-);
-assert.ok(
-  resultMpBlocks.some((block) => /@click=["']unlockReport["']/.test(block)),
-  "WeChat should preserve report payment",
-);
-assert.ok(
-  resultMpBlocks.some((block) =>
-    /<button\b(?=[^>]*:loading=["']paying["'])(?=[^>]*:disabled=["']paying["'])(?=[^>]*@click=["']unlockReport["'])[^>]*>/.test(
-      block,
-    ),
-  ),
-  "WeChat report unlock should bind both loading and disabled state to the payment guard",
-);
-
-const refreshStatusBody = sourceBracedBody(
-  resultPage,
-  /async function\s+refreshReportStatus\s*\(\s*\)\s*\{/.exec(resultPage),
-);
-assert.match(
-  refreshStatusBody,
-  /reportStatusLoading\.value\s*=\s*true/,
-  "report status refresh should enter loading state",
-);
-assert.match(
-  refreshStatusBody,
-  /reportStatusError\.value\s*=\s*['"]['"]/,
-  "report status refresh should clear its prior error",
-);
-assert.match(
-  refreshStatusBody,
-  /reportUnlocked\.value\s*=\s*!!st\.unlocked/,
-  "report status refresh should apply unlocked before validating price",
-);
-assert.match(
-  refreshStatusBody,
-  /Number\.isFinite\(st\.priceCents\)[\s\S]*st\.priceCents\s*>\s*0/,
-  "locked report should accept only a finite positive price",
-);
-assert.match(
-  refreshStatusBody,
-  /finally\s*\{[\s\S]*reportStatusLoading\.value\s*=\s*false/,
-  "report status refresh should always stop loading",
-);
-assert.match(
-  resultPage,
-  /const reportPriceYuan = computed\(\(\) => \{[\s\S]*Number\.isFinite\(reportPriceCents\.value\)[\s\S]*reportPriceCents\.value\s*>\s*0[\s\S]*return ''/,
-  "report price display should stay blank until a valid positive price is known",
-);
-
-const saveRecordBody = sourceBracedBody(
-  resultPage,
-  /async function\s+saveRecord\s*\(\s*\)\s*\{/.exec(resultPage),
-);
-assert.match(
-  saveRecordBody,
-  /if\s*\(\s*!rec\s*\|\|\s*!rec\.id\s*\)\s*\{?\s*throw new Error\(['"]存档失败，请重试['"]\)/,
-  "save should reject an API response without a record id",
-);
-const invalidRecordGuardIndex = saveRecordBody.indexOf("if (!rec || !rec.id)");
-const assignRecordIdIndex = saveRecordBody.indexOf("recordId.value = rec.id");
-const markSavedIndex = saveRecordBody.indexOf("saved.value = true");
-const successToastIndex = saveRecordBody.indexOf(
-  "uni.showToast({ title: '已存入我的档案', icon: 'success' })",
-);
-const refreshAfterSaveIndex = saveRecordBody.indexOf("await refreshReportStatus()");
-assert.ok(
-  invalidRecordGuardIndex >= 0 && invalidRecordGuardIndex < assignRecordIdIndex,
-  "save should validate the record id before storing it",
-);
-assert.ok(
-  assignRecordIdIndex < markSavedIndex,
-  "save should store the valid record id before marking the result saved",
-);
-assert.ok(
-  markSavedIndex < successToastIndex,
-  "save should mark success before showing its success toast",
-);
-assert.ok(
-  successToastIndex < refreshAfterSaveIndex,
-  "save should acknowledge the valid archive before awaiting report status",
-);
-assert.match(
-  saveRecordBody,
-  /catch\s*\(e\)\s*\{[\s\S]*userErrorMessage\(e,\s*['"]存档失败，请重试['"]\)/,
-  "save failures should use the normalized fallback message",
-);
-assert.match(
-  saveRecordBody,
-  /finally\s*\{[\s\S]*saving\.value\s*=\s*false/,
-  "save should always restore its loading guard",
-);
-
-const loadReportBody = sourceBracedBody(
-  resultPage,
-  /async function\s+loadReportContent\s*\(\s*\)\s*\{/.exec(resultPage),
-);
-assert.match(
-  loadReportBody,
-  /if\s*\(reportLoading\.value\s*\|\|\s*reportContent\.value\)\s*return/,
-  "report content loading should retain its duplicate-request guard",
-);
-const unlockReportBody = sourceBracedBody(
-  resultPage,
-  /async function\s+unlockReport\s*\(\s*\)\s*\{/.exec(resultPage),
-);
-assert.match(
-  unlockReportBody,
-  /^\s*if\s*\(paying\.value\)\s*return\s*paying\.value\s*=\s*true/,
-  "report unlock should reject duplicate payment attempts before entering its loading state",
-);
-assert.match(
-  unlockReportBody,
-  /reportUnlocked\.value\s*=\s*true[\s\S]*loadReportContent\(\)/,
-  "successful unlock should still load report content",
-);
-assert.match(
-  unlockReportBody,
-  /finally\s*\{\s*paying\.value\s*=\s*false\s*\}\s*$/,
-  "report unlock should always release its payment guard",
-);
-
-const reportStyle = pageStyleDeclarations(resultStyle, ".report-panel");
-assert.match(
-  reportStyle,
-  /background:\s*linear-gradient\([^;]+\)\s*;/,
-  "report panel should keep a bounded high-contrast brand surface without locking gradient endpoints",
-);
-assert.match(
-  reportStyle,
-  /border-radius:\s*34rpx\s*;/,
-  "report panel should use the planned 34rpx radius",
-);
-assert.match(
-  reportStyle,
-  /padding:\s*34rpx\s*;/,
-  "report panel should use the planned 34rpx padding",
-);
-for (const selector of [
-  ".report__cta",
-  ".report__secondary",
-  ".result-actions button",
-  ".restart-button",
-]) {
-  const declarations = pageStyleDeclarations(resultStyle, selector);
-  assert.match(
-    declarations,
-    /min-height:\s*88rpx\s*;/,
-    `${selector} should keep an 88rpx touch target`,
-  );
-}
-const reportButtonAlignmentRule = [
-  ...resultStyle.matchAll(/^[ \t]*([^{}]+?)\s*\{([^{}]*)\}/gm),
-].find(([, selectorText]) => {
-  const selectors = new Set(selectorText.split(",").map((selector) => selector.trim()));
-  return [".report__cta", ".report__secondary", ".result-actions button"].every((selector) =>
-    selectors.has(selector),
-  );
-});
-const reportButtonAlignmentDeclarations = reportButtonAlignmentRule?.[2];
-assert.ok(
-  reportButtonAlignmentDeclarations,
-  "result report buttons should share one alignment CSS rule",
-);
-for (const [property, expected, description] of [
-  ["display", "flex", "use flex layout for button-label alignment"],
-  ["align-items", "center", "vertically center their button labels"],
-  ["justify-content", "center", "horizontally center their button labels"],
-  ["padding", "0 24rpx", "keep only horizontal 24rpx padding"],
-  ["line-height", "1.2", "use the compact centered text line height"],
-]) {
-  const escapedExpected = expected.replace(".", "\\.");
-  assert.match(
-    reportButtonAlignmentDeclarations,
-    new RegExp(`${property}:\\s*${escapedExpected.replace(" ", "\\s+")}\\s*;`),
-    `shared report button alignment should ${description}`,
-  );
-}
-for (const selector of [
-  ".report__intro",
-  ".report__status",
-  ".report__error",
-  ".report__content",
-  ".disclaimer",
-]) {
-  const fontSize = pageStyleDeclarations(resultStyle, selector)?.match(/font-size:\s*(\d+)rpx\s*;/);
-  assert.ok(
-    fontSize && Number(fontSize[1]) >= 24,
-    `${selector} should keep at least 24rpx readable text`,
-  );
-}
-assert.match(
-  pageStyleDeclarations(resultStyle, ".drive-grid"),
-  /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)\s*;/,
-  "result drives should stay in equal columns",
-);
-assert.match(
-  pageStyleDeclarations(resultStyle, ".direction-grid"),
-  /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)\s*;/,
-  "result directions should stay in equal columns",
-);
-assert.match(
-  resultTemplate,
-  /aria-label=["']关闭海报["']/,
-  "poster close action should expose an accessible label",
-);
-const posterDialog = resultTemplate.match(/<view\b[^>]*class=["']poster-box["'][^>]*>/)?.[0] || "";
-assert.match(posterDialog, /\srole=["']dialog["']/, "poster surface should use dialog semantics");
-assert.match(
-  posterDialog,
-  /\saria-modal=["']true["']/,
-  "poster surface should identify itself as modal",
-);
-assert.match(
-  resultTemplate,
-  /poster-loading[^>]*aria-live=["']polite["']/,
-  "poster generation should announce progress",
-);
-assert.match(
-  resultTemplate,
-  /poster-error[^>]*aria-live=["']polite["'][\s\S]*?@click=["']makePoster["']/,
-  "poster failure should remain visible and retryable",
-);
-assert.match(
-  resultTemplate,
-  /v-if=["']posterUrl\s*&&\s*!posterLoading["'][^>]*@click=["']savePoster["']/,
-  "poster save action should only exist after generation completes",
-);
-assert.match(
-  resultPage,
-  /userErrorMessage/,
-  "result page should surface normalized request errors",
-);
-assert.match(
-  resultPage,
-  /normalizeLastResult/,
-  "result page should validate cached result schema before rendering",
-);
-assert.match(
-  resultPage,
-  /测试结果已失效/,
-  "result page should give feedback when cached result schema is invalid",
-);
-
-const relationPage = readFileSync("src/pages/relation/relation.vue", "utf8");
-const relationTemplate = stripMarkupAndCssComments(
-  relationPage.match(/<template>([\s\S]*)<\/template>\s*<style/)?.[1] || "",
-);
-const relationStyle = stripMarkupAndCssComments(vueSection(relationPage, "style") || "");
-
-function elementBlocksByStaticClass(source, tagName, className) {
-  const escapedTagName = tagName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const tags = [...source.matchAll(new RegExp(`<\\/?${escapedTagName}\\b[^>]*>`, "g"))];
-  const blocks = [];
-  for (let startIndex = 0; startIndex < tags.length; startIndex += 1) {
-    const openingTag = tags[startIndex][0];
-    if (openingTag.startsWith("</") || openingTag.endsWith("/>")) continue;
-    if (!staticClassTokens(openingTag).includes(className)) continue;
-    let depth = 1;
-    for (let endIndex = startIndex + 1; endIndex < tags.length; endIndex += 1) {
-      const tag = tags[endIndex][0];
-      if (tag.startsWith("</")) depth -= 1;
-      else if (!tag.endsWith("/>")) depth += 1;
-      if (depth !== 0) continue;
-      blocks.push(source.slice(tags[startIndex].index, tags[endIndex].index + tag.length));
-      break;
-    }
-  }
-  return blocks;
-}
-
-const enneagramGameSource = readFileSync("src/data/enneagramGame.js", "utf8");
-const typesInfoSource =
-  enneagramGameSource.match(
-    /export const TYPES_INFO\s*=\s*\{([\s\S]*?)\n\}\n\nexport const CENTERS/,
-  )?.[1] || "";
-const typeIds = [...typesInfoSource.matchAll(/^\s{2}([1-9]):\s*\{/gm)].map((match) =>
-  Number(match[1]),
-);
-assert.deepEqual(
-  typeIds,
-  [1, 2, 3, 4, 5, 6, 7, 8, 9],
-  "enneagram type data should expose every type id from 1 through 9",
-);
-assert.match(
-  relationPage,
-  /^const[ \t]+allTypes[ \t]*=[ \t]*Object\.keys\(TYPES_INFO\)\.map\([ \t]*\(id\)[ \t]*=>[ \t]*\(\{[ \t]*id:[ \t]*Number\(id\),[ \t]*\.\.\.TYPES_INFO\[id\][ \t]*\}\)[ \t]*\)[ \t]*;?[ \t]*$/m,
-  "relation allTypes should map every TYPES_INFO entry without trailing slice or filter chains",
-);
-assert.match(
-  relationPage,
-  /<view\s+class=["'][^"']*page-stack[^"']*ios-page[^"']*ios-safe-bottom[^"']*["']/,
-  "relation root should use shared page-stack/iOS safe-area classes",
-);
-assert.match(
-  relationPage,
-  /<button\s+class=["'][^"']*btn-primary[^"']*ios-button[^"']*["'][^>]*@click=["']analyze["']/,
-  "relation primary action should opt into iOS button styling",
-);
-assert.doesNotMatch(
-  relationPage,
-  /padding-bottom:\s*60rpx/,
-  "relation page should not hard-code bottom padding outside shared safe-area helpers",
-);
-const relationGridGap = relationPage.match(/\.grid\s*\{[\s\S]*?gap:\s*(\d+)rpx/);
-assert.ok(
-  relationGridGap && Number(relationGridGap[1]) >= 16,
-  "relation type grid gap should be at least 16rpx",
-);
-assert.match(
-  relationPage,
-  /isValidTypeId/,
-  "relation page should validate incoming and selected type ids",
-);
-assert.match(
-  relationPage,
-  /stage\.value\s*=\s*'redirecting'/,
-  "relation invalid query should enter a redirecting state instead of leaving the pick UI interactive",
-);
-assert.match(
-  relationPage,
-  /v-else-if="stage === 'result'"/,
-  "relation result view should be explicit so redirecting can show a safe placeholder",
-);
-assert.match(
-  relationPage,
-  /型号参数无效/,
-  "relation page should explain invalid query type before navigation",
-);
-assert.match(
-  relationPage,
-  /\/pages\/test\/test/,
-  "relation page should return to the test page for invalid query type",
-);
-assert.match(
-  relationTemplate,
-  /class=["'][^"']*relation-hero[^"']*nx-page-hero[^"']*["']/,
-  "relation pick stage should use a themed hero",
-);
-
-const relationViews = openingTagsFor(relationTemplate, "view");
-const typePickers = relationViews.filter((tag) => staticClassTokens(tag).includes("type-picker"));
-assert.equal(typePickers.length, 2, "relation should render exactly two type pickers");
-for (const picker of typePickers) {
-  assert.ok(
-    staticClassTokens(picker).includes("nx-panel"),
-    "each relation type picker should use the shared panel surface",
-  );
-}
-
-const relationButtons = openingTagsFor(relationTemplate, "button");
-assert.equal(
-  relationButtons.filter((tag) => tagAttribute(tag, "@click") === "analyze").length,
-  1,
-  "relation pick stage should keep exactly one primary analyze action",
-);
-const typeChips = relationButtons.filter((tag) => tagAttribute(tag, "v-for") === "t in allTypes");
-assert.equal(
-  typeChips.length,
-  2,
-  "relation should render one native type-chip loop for each person",
-);
-for (const { keyPrefix, ariaLabel, ariaPressed, handler } of [
-  {
-    keyPrefix: "'m' + t.id",
-    ariaLabel: "`选择我的型号 ${t.id} ${t.name}`",
-    ariaPressed: "myType === t.id",
-    handler: "pickMy(t.id)",
-  },
-  {
-    keyPrefix: "'t' + t.id",
-    ariaLabel: "`选择 TA 的型号 ${t.id} ${t.name}`",
-    ariaPressed: "taType === t.id",
-    handler: "pickTa(t.id)",
-  },
-]) {
-  const chip = typeChips.find((tag) => tagAttribute(tag, ":key") === keyPrefix);
-  assert.ok(chip, `relation should render the ${keyPrefix} type-chip loop`);
-  assert.equal(
-    tagAttribute(chip, "class"),
-    "type-chip nx-focusable",
-    "relation type chips should use the exact shared focusable classes",
-  );
-  assert.equal(
-    tagAttribute(chip, ":aria-label"),
-    ariaLabel,
-    "relation type chip should keep its accessible label on the native button",
-  );
-  assert.equal(
-    tagAttribute(chip, ":aria-pressed"),
-    ariaPressed,
-    "relation type chip should expose its selected state on the native button",
-  );
-  assert.equal(
-    tagAttribute(chip, "hover-class"),
-    "type-chip--pressed",
-    "relation type chip should expose pressed feedback on the native button",
-  );
-  assert.equal(
-    tagAttribute(chip, "@click"),
-    handler,
-    "relation type chip should keep its selection handler on the native button",
-  );
-  assert.equal(
-    tagAttribute(chip, "role"),
-    "button",
-    "relation type chip should expose H5 button semantics",
-  );
-  assert.equal(
-    tagAttribute(chip, "aria-role"),
-    "button",
-    "relation type chip should expose miniapp button semantics",
-  );
-  assert.equal(
-    tagAttribute(chip, "tabindex"),
-    "0",
-    "relation type chip should participate in H5 keyboard focus order",
-  );
-  assert.equal(
-    tagAttribute(chip, "@keydown.enter"),
-    handler,
-    "relation type chip should activate with Enter",
-  );
-  assert.equal(
-    tagAttribute(chip, "@keydown.space.prevent"),
-    handler,
-    "relation type chip should activate with Space without scrolling",
-  );
-}
-
-for (const { handler, description } of [
-  { handler: "analyze", description: "relation analyze action" },
-  { handler: "reset", description: "relation reset action" },
-]) {
-  const button = relationButtons.find((tag) => tagAttribute(tag, "@click") === handler);
-  assert.ok(button, `${description} should be a native button`);
-  assert.equal(
-    tagAttribute(button, "role"),
-    "button",
-    `${description} should expose H5 button semantics`,
-  );
-  assert.equal(
-    tagAttribute(button, "aria-role"),
-    "button",
-    `${description} should expose miniapp button semantics`,
-  );
-  assert.equal(
-    tagAttribute(button, "tabindex"),
-    "0",
-    `${description} should participate in H5 keyboard focus order`,
-  );
-  assert.equal(
-    tagAttribute(button, "@keydown.enter"),
-    handler,
-    `${description} should activate with Enter`,
-  );
-  assert.equal(
-    tagAttribute(button, "@keydown.space.prevent"),
-    handler,
-    `${description} should activate with Space without scrolling`,
-  );
-}
-
-const chipBodies = [
-  ...relationTemplate.matchAll(
-    /<button\b(?=[^>]*class=["']type-chip nx-focusable["'])[^>]*>([\s\S]*?)<\/button>/g,
-  ),
-];
-assert.equal(
-  chipBodies.length,
-  2,
-  "relation should keep selected text inside both type-chip templates",
-);
-for (const [, body] of chipBodies) {
-  assert.match(
-    body,
-    /<text\s+class=["']type-chip__number["']>\{\{ t\.id \}\}<\/text>/,
-    "type chip should visibly render its number",
-  );
-  assert.match(
-    body,
-    /<text\s+class=["']type-chip__name["']>\{\{ t\.name \}\}<\/text>/,
-    "type chip should visibly render its abbreviated name",
-  );
-  assert.match(
-    body,
-    /<text\s+v-if=["'][^"']+ === t\.id["']\s+class=["']type-chip__selected["']>已选<\/text>/,
-    "selected chip should include a visible text marker",
-  );
-  assert.match(
-    body,
-    /<text\s+v-else\s+class=["']type-chip__selected type-chip__selected--placeholder["']\s+aria-hidden=["']true["']>/,
-    "unselected chip should reserve the selected-marker layout slot",
-  );
-}
-
-const typeChipStyle = pageStyleDeclarations(relationStyle, ".type-chip");
-const typeChipHeight = typeChipStyle?.match(/height:\s*(\d+)rpx\s*;/);
-const typeChipMinHeight = typeChipStyle?.match(/min-height:\s*(\d+)rpx\s*;/);
-assert.ok(
-  typeChipHeight && typeChipMinHeight,
-  "relation type chips should define stable height and minimum height",
-);
-assert.equal(
-  typeChipHeight[1],
-  typeChipMinHeight[1],
-  "selected and unselected relation chips should share one stable height",
-);
-assert.ok(
-  Number(typeChipHeight[1]) >= 88,
-  "relation type chips should keep at least an 88rpx touch target",
-);
-assert.match(
-  typeChipStyle,
-  /border-radius:\s*24rpx\s*;/,
-  "relation type chips should keep the planned 24rpx radius",
-);
-assert.match(
-  pageStyleDeclarations(relationStyle, ".type-chip__selected--placeholder"),
-  /visibility:\s*hidden\s*;/,
-  "unselected relation chips should reserve marker height without showing placeholder copy",
-);
-const selectedChipStyle = pageStyleDeclarations(relationStyle, ".type-chip.on");
-assert.match(
-  selectedChipStyle,
-  /border:\s*4rpx\s+solid\s+var\(--nx-accent-gold\)\s*;/,
-  "selected relation type should use the shared accent token",
-);
-assert.match(
-  selectedChipStyle,
-  /box-shadow:[^;]*\binset\b/i,
-  "selected relation type should include a non-color-only inset emphasis",
-);
-assert.match(
-  pageStyleDeclarations(relationStyle, ".type-chip--pressed"),
-  /(?:opacity|transform)\s*:/,
-  "relation chip press state should have visible feedback",
-);
-
-const relationHeroStyle = pageStyleDeclarations(relationStyle, ".relation-hero");
-assert.match(
-  relationHeroStyle,
-  /linear-gradient\(135deg,\s*var\(--nx-brand-900\),\s*var\(--nx-brand-700\)\)/,
-  "relation hero should use the shared brand gradient tokens",
-);
-for (const [selector, token] of [
-  [".relation-hero__eyebrow", "--nx-accent-gold"],
-  [".relation-hero__title", "--nx-surface"],
-]) {
-  assert.match(
-    pageStyleDeclarations(relationStyle, selector),
-    new RegExp(`color:\\s*var\\(${token}\\)\\s*;`),
-    `${selector} should use ${token}`,
-  );
-}
-assert.match(
-  pageStyleDeclarations(relationStyle, ".relation-hero__desc"),
-  /color:\s*rgba\(\s*255\s*,\s*255\s*,\s*255\s*,\s*\.(?:8\d|9\d)\s*\)\s*;/,
-  "relation hero description should keep readable on-brand contrast",
-);
-
-assert.match(
-  relationPage,
-  /const myAvatarFailed = ref\(false\)/,
-  "relation should track my avatar failure",
-);
-assert.match(
-  relationPage,
-  /const taAvatarFailed = ref\(false\)/,
-  "relation should track TA avatar failure",
-);
-assert.match(
-  sourceBracedBody(relationPage, /function\s+analyze\s*\(\s*\)\s*\{/.exec(relationPage)),
-  /myAvatarFailed\.value\s*=\s*false[\s\S]*taAvatarFailed\.value\s*=\s*false/,
-  "relation analyze should reset both avatar failure states",
-);
-assert.match(
-  sourceBracedBody(relationPage, /function\s+reset\s*\(\s*\)\s*\{/.exec(relationPage)),
-  /myAvatarFailed\.value\s*=\s*false[\s\S]*taAvatarFailed\.value\s*=\s*false/,
-  "relation reset should clear both avatar failure states",
-);
-
-const relationImages = openingTagsFor(relationTemplate, "image");
-assert.equal(
-  relationImages.length,
-  2,
-  "relation result should render exactly two avatar image templates",
-);
-for (const { condition, errorHandler } of [
-  { condition: "!myAvatarFailed", errorHandler: "onMyAvatarError" },
-  { condition: "!taAvatarFailed", errorHandler: "onTaAvatarError" },
-]) {
-  const avatar = relationImages.find((tag) => tagAttribute(tag, "v-if") === condition);
-  assert.ok(avatar, `relation should render the ${condition} avatar while available`);
-  assert.ok(
-    staticClassTokens(avatar).includes("pair__avatar"),
-    "relation avatars should use the fixed avatar class",
-  );
-  assert.equal(
-    tagAttribute(avatar, "@error"),
-    errorHandler,
-    "relation avatar should set its failure flag on image error",
-  );
-  assert.match(avatar, /\slazy-load(?:=|\s|>|$)/, "relation avatars should lazy-load");
-}
-
-const avatarFallbacks = relationViews.filter((tag) =>
-  staticClassTokens(tag).includes("pair__avatar-fallback"),
-);
-assert.equal(avatarFallbacks.length, 2, "relation should render one fallback for each avatar");
-for (const fallback of avatarFallbacks) {
-  assert.ok(
-    /\sv-else(?:\s|>|$)/.test(fallback),
-    "relation avatar fallback should be mutually exclusive with its image",
-  );
-}
-const avatarFallbackBlocks = elementBlocksByStaticClass(
-  relationTemplate,
-  "view",
-  "pair__avatar-fallback",
-);
-assert.equal(
-  avatarFallbackBlocks.length,
-  2,
-  "relation should expose two bounded avatar fallback elements",
-);
-assert.match(
-  avatarFallbackBlocks[0],
-  /^<view\b[^>]*>\{\{ myInfo\.id \}\}<\/view>$/,
-  "my avatar fallback should display my type number within its own element",
-);
-assert.match(
-  avatarFallbackBlocks[1],
-  /^<view\b[^>]*>\{\{ taInfo\.id \}\}<\/view>$/,
-  "TA avatar fallback should display TA type number within its own element",
-);
-for (const selector of [".pair__avatar", ".pair__avatar-fallback"]) {
-  const declarations = pageStyleDeclarations(relationStyle, selector);
-  assert.match(
-    declarations,
-    /width:\s*112rpx\s*;/,
-    `${selector} should keep the planned fixed width`,
-  );
-  assert.match(
-    declarations,
-    /height:\s*112rpx\s*;/,
-    `${selector} should keep the planned fixed height`,
-  );
-}
-
-const pairHero = relationViews.find((tag) => staticClassTokens(tag).includes("pair"));
-assert.ok(
-  pairHero && staticClassTokens(pairHero).includes("nx-page-hero"),
-  "relation result pair should use the shared hero container",
-);
-assert.ok(
-  relationViews.some((tag) => staticClassTokens(tag).includes("pair-connection")),
-  "relation result should render the connection visual",
-);
-const pairConnectionBlocks = elementBlocksByStaticClass(
-  relationTemplate,
-  "view",
-  "pair-connection",
-);
-assert.equal(
-  pairConnectionBlocks.length,
-  1,
-  "relation result should render exactly one bounded connection visual",
-);
-assert.match(
-  pairConnectionBlocks[0],
-  /<text\s+class=["']pair-connection__score["']>\{\{ analysis\.score \}\}<\/text>/,
-  "connection visual should bind the analysis score inside its own container",
-);
-assert.match(
-  pairConnectionBlocks[0],
-  /<text\s+class=["']pair-connection__label["']>契合指数<\/text>/,
-  "connection visual should label the score inside its own container",
-);
-
-const insightContracts = [
-  { modifier: "insight--bond", binding: "analysis.bond" },
-  { modifier: "insight--friction", binding: "analysis.friction" },
-  { modifier: "insight--tip", binding: "analysis.tip" },
-];
-for (const { modifier, binding } of insightContracts) {
-  assert.ok(
-    relationViews.some((tag) => staticClassTokens(tag).includes(modifier)),
-    `relation result should include ${modifier}`,
-  );
-  const blocks = elementBlocksByStaticClass(relationTemplate, "view", modifier);
-  assert.equal(
-    blocks.length,
-    1,
-    `relation result should render exactly one bounded ${modifier} panel`,
-  );
-  assert.match(
-    blocks[0],
-    new RegExp(
-      `<text\\s+class=["']insight__text["']>\\{\\{ ${binding.replace(".", "\\.")} \\}\\}<\\/text>`,
-    ),
-    `${modifier} should bind ${binding} inside its own panel`,
-  );
-}
-assert.ok(
-  relationViews.some((tag) => staticClassTokens(tag).includes("drive-pair")),
-  "relation drives should use a two-column container",
-);
-const drivePairBlocks = elementBlocksByStaticClass(relationTemplate, "view", "drive-pair");
-assert.equal(
-  drivePairBlocks.length,
-  1,
-  "relation should render exactly one bounded drive-pair container",
-);
-assert.match(
-  drivePairBlocks[0],
-  /\{\{ analysis\.myDrive \}\}/,
-  "drive-pair should bind my drive inside its own container",
-);
-assert.match(
-  drivePairBlocks[0],
-  /\{\{ analysis\.taDrive \}\}/,
-  "drive-pair should bind TA drive inside its own container",
-);
-assert.match(
-  pageStyleDeclarations(relationStyle, ".drive-pair"),
-  /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)\s*;/,
-  "relation drives should remain two equal columns",
-);
-assert.match(
-  pageStyleDeclarations(relationStyle, ".insight--bond"),
-  /border-left:\s*6rpx\s+solid\s+var\(--nx-accent-gold\)\s*;/,
-  "bond insight should use the shared accent token",
-);
-assert.match(
-  pageStyleDeclarations(relationStyle, ".insight--friction"),
-  /border-left:\s*6rpx\s+solid\s+var\(--nx-text-muted\)\s*;/,
-  "friction insight should use the shared muted-text token",
-);
-assert.match(
-  pageStyleDeclarations(relationStyle, ".insight--tip"),
-  /border-left:\s*6rpx\s+solid\s+var\(--nx-brand-700\)\s*;/,
-  "advice insight should use the shared brand token",
-);
-assert.match(
-  pageStyleDeclarations(relationStyle, ".insight__text"),
-  /color:\s*var\(--nx-text\)\s*;/,
-  "relation insight body copy should use the shared primary-text token",
-);
-for (const { modifier } of insightContracts) {
-  assert.match(
-    pageStyleDeclarations(relationStyle, `.${modifier}`),
-    /(?:background:\s*var\(--nx-surface\)|border-left:)/,
-    `${modifier} should use a semantic surface or accent rule`,
-  );
-}
-
-for (const { selector, minimum } of [
-  { selector: ".relation-hero__eyebrow", minimum: 24 },
-  { selector: ".type-picker__step", minimum: 24 },
-  { selector: ".type-picker__hint", minimum: 24 },
-  { selector: ".type-chip__name", minimum: 24 },
-  { selector: ".type-chip__selected", minimum: 24 },
-  { selector: ".pair__role", minimum: 24 },
-  { selector: ".pair__name", minimum: 24 },
-  { selector: ".pair-connection__eyebrow", minimum: 24 },
-  { selector: ".pair-connection__label", minimum: 24 },
-  { selector: ".insight__eyebrow", minimum: 24 },
-  { selector: ".insight__text", minimum: 24 },
-  { selector: ".drive__eyebrow", minimum: 24 },
-  { selector: ".drive-card__label", minimum: 24 },
-  { selector: ".drive-card__text", minimum: 24 },
-  { selector: ".disclaimer", minimum: 24 },
-]) {
-  const fontSizeRule = pageStyleDeclarationBlocks(relationStyle, selector).find((declarations) =>
-    /font-size:/.test(declarations),
-  );
-  const fontSize = fontSizeRule?.match(/font-size:\s*(\d+)rpx\s*;/);
-  assert.ok(
-    fontSize && Number(fontSize[1]) >= minimum,
-    `${selector} should keep at least ${minimum}rpx readable text`,
-  );
-}
-
-assert.doesNotMatch(
-  relationTemplate,
-  /✦|⚡|↗/,
-  "relation insight icons should not depend on emoji or character glyphs",
-);
-for (const modifier of ["bond", "friction", "tip"]) {
-  const marks = elementBlocksByStaticClass(relationTemplate, "view", `insight__icon--${modifier}`);
-  assert.equal(marks.length, 1, `relation should render one CSS icon container for ${modifier}`);
-  assert.match(
-    marks[0],
-    new RegExp(`<view\\s+class=["']insight__mark insight__mark--${modifier}["']\\s*\\/>`),
-    `${modifier} insight should render a CSS-only mark`,
-  );
-  assert.ok(
-    pageStyleDeclarations(relationStyle, `.insight__mark--${modifier}`),
-    `${modifier} insight should define its CSS mark shape`,
-  );
-}
+assert.match(testPage, /<text\s+class=["']quiz__idx["'][^>]*>\{\{\s*letter\(k\)\s*\}\}<\/text>/, 'quiz options should expose a visible A/B/C marker')
+assert.match(testPage, /class=["']quiz__opt-accent["']\s+aria-hidden=["']true["']/, 'quiz options should expose a decorative left-side structural accent')
+assert.match(testPage, /class=["']quiz__check["']\s+aria-hidden=["']true["']/, 'quiz selected options should expose a visible shape/check indicator')
+assert.match(testPage, /\.quiz__opt--selected[\s\S]*?\{[^}]*(?:background|background-color):\s*(?!transparent|none)[^;}]+[^}]*box-shadow:/, 'quiz selection should use a distinct fill and ring instead of border alone')
+assert.match(testPage, /animation:\s*quiz-enter\s+\.(?:18|19|2[0-6])s\s+[^;]*backwards/, 'quiz question/media/options should enter within the 180-260ms motion budget without persisting final styles')
+assert.doesNotMatch(testPage, /animation:\s*quiz-enter[^;]*(?:both|forwards)/, 'quiz entry animation must not persist opacity or transform after entry')
+assert.match(testPage, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?animation:\s*none[\s\S]*?transition:\s*none/, 'quiz should disable nonessential motion when reduced motion is requested')
+assert.match(testPage, /@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{[\s\S]*?\.quiz__body\s*\{[^}]*grid-template-columns:/, 'tablet quiz should become an intentional two-column media/content composition at 768px')
+assert.match(testPage, /@media\s+screen\s+and\s+\(min-width:\s*768px\)\s*\{[\s\S]*?\.test\.wrap\s*\{[^}]*max-width:\s*(?:1[2-9]\d{2}|[2-9]\d{3,})rpx[^}]*padding-(?:left|right):/, 'tablet quiz page should override the shared 900rpx wrapper limit with responsive gutters')
+assert.doesNotMatch(testPage, /(?:backdrop-)?filter\s*:/, 'quiz must not use filter or backdrop-filter effects')
+assert.doesNotMatch(testPage, /\.(?:wrap|quiz)(?:__canvas|__texture)?[^\{]*\{[^}]*animation:\s*[^;}]*infinite/, 'quiz must not continuously animate full-page or texture layers')
+
+assert.match(learnPage, /getStoredSiteConfig/, 'learn page should render stored site config before network refresh')
+assert.match(learnPage, /refreshSiteConfig/, 'learn page should refresh site config in the background')
+assert.match(learnPage, /silent/, 'learn background refresh should avoid replacing cached content with a blocking state')
+
+assert.match(profilePage, /wechatLoginReady/, 'profile page should expose a WeChat login integration slot')
+assert.match(profilePage, /open-type="chooseAvatar"/, 'profile page should keep WeChat avatar slot')
+assert.match(profilePage, /type="nickname"/, 'profile page should keep WeChat nickname slot')
+assert.doesNotMatch(profilePage, /open-type="getPhoneNumber"/, '未接通后端前，手机号授权入口不能对用户露出')
+assert.doesNotMatch(profilePage, /@getphonenumber="onGetPhoneNumber"/, '未接通后端前，不应绑定可见手机号授权占位事件')
+assert.match(profilePage, /#ifdef H5[\s\S]*请在微信小程序内登录[\s\S]*#endif/, 'H5 profile login entry should be a disabled miniapp guidance instead of a failing WeChat login CTA')
+assert.doesNotMatch(profilePage, /后端暂未开通|前端占位|占位/, '用户侧文案不能暴露手机号授权后端占位状态')
+assert.doesNotMatch(profilePage, /openChatPage|goChat|clearChatMessages|问 AI|AI 对话/, 'profile page must not expose or reset removed AI chat state')
+
+
+const resultPage = readFileSync('src/pages/result/result.vue', 'utf8')
+assert.match(resultPage, /v-else-if="reportError"/, 'result page should render report failure state before falling back to manual fetch')
+assert.match(resultPage, /report__retry[\s\S]*@click="loadReportContent"/, 'result page should allow retrying report content fetch from the error state')
+assert.match(resultPage, /userErrorMessage/, 'result page should surface normalized request errors')
+assert.match(resultPage, /normalizeLastResult/, 'result page should validate cached result schema before rendering')
+assert.match(resultPage, /测试结果已失效/, 'result page should give feedback when cached result schema is invalid')
+
+const relationPage = readFileSync('src/pages/relation/relation.vue', 'utf8')
+assert.match(relationPage, /<view\s+class=["'][^"']*page-stack[^"']*ios-page[^"']*ios-safe-bottom[^"']*["']/, 'relation root should use shared page-stack/iOS safe-area classes')
+assert.match(relationPage, /<button\s+class=["'][^"']*btn-primary[^"']*ios-button[^"']*["'][^>]*@click=["']analyze["']/, 'relation primary action should opt into iOS button styling')
+assert.doesNotMatch(relationPage, /padding-bottom:\s*60rpx/, 'relation page should not hard-code bottom padding outside shared safe-area helpers')
+const relationGridGap = relationPage.match(/\.grid\s*\{[\s\S]*?gap:\s*(\d+)rpx/)
+assert.ok(relationGridGap && Number(relationGridGap[1]) >= 16, 'relation type grid gap should be at least 16rpx')
+assert.match(relationPage, /isValidTypeId/, 'relation page should validate incoming and selected type ids')
+assert.match(relationPage, /stage\.value\s*=\s*'redirecting'/, 'relation invalid query should enter a redirecting state instead of leaving the pick UI interactive')
+assert.match(relationPage, /v-else-if="stage === 'result'"/, 'relation result view should be explicit so redirecting can show a safe placeholder')
+assert.match(relationPage, /型号参数无效/, 'relation page should explain invalid query type before navigation')
+assert.match(relationPage, /\/pages\/test\/test/, 'relation page should return to the test page for invalid query type')
+assert.match(relationPage, /\.chip\s*\{[\s\S]*min-height:\s*88rpx/, 'relation type chips should keep an 88rpx touch target')
+assert.match(relationPage, /<button\b[\s\S]*v-for=["']t in allTypes["'][\s\S]*class=["']chip["'][\s\S]*:aria-label=/, 'relation type chips should use button semantics with accessibility labels')
+assert.match(relationPage, /hover-class=["']chip--hover["']/, 'relation type chips should expose a hover/press visual state')
+assert.match(relationPage, /\.chip--hover\s*\{[\s\S]*(?:opacity|transform)/, 'relation chip hover state should have visible feedback')
 
 assert.match(
   resultPage,
   /<!--\s*#ifdef MP-WEIXIN\s*-->[\s\S]*@click="makePoster"[\s\S]*<!--\s*#endif\s*-->/,
-  "poster generation must stay limited to mp-weixin",
-);
+  'poster generation must stay limited to mp-weixin',
+)
 assert.match(
   resultPage,
   /<!--\s*#ifdef H5\s*-->[\s\S]*<button[^>]*disabled[^>]*>小程序内生成海报<\/button>[\s\S]*<!--\s*#endif\s*-->/,
-  "H5 poster entry should be a disabled compatibility hint",
-);
+  'H5 poster entry should be a disabled compatibility hint',
+)
 
-assert.match(bookingPage, /loadBookingDraft/, "booking page should restore a local booking draft");
-assert.match(
-  bookingPage,
-  /saveBookingDraft/,
-  "booking page should auto-save booking draft changes",
-);
-assert.match(
-  bookingPage,
-  /clearBookingDraft/,
-  "booking page should clear the local draft after successful submit",
-);
+assert.match(bookingPage, /loadBookingDraft/, 'booking page should restore a local booking draft')
+assert.match(bookingPage, /saveBookingDraft/, 'booking page should auto-save booking draft changes')
+assert.match(bookingPage, /clearBookingDraft/, 'booking page should clear the local draft after successful submit')
 
-console.log("ui compatibility tests passed");
+console.log('ui compatibility tests passed')

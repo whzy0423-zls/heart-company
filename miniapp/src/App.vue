@@ -12,4 +12,13 @@ export default {
 
 <style>
 @import './styles/apple-mobile.css';
+
+view,
+text,
+image,
+button,
+input,
+textarea {
+  box-sizing: border-box;
+}
 </style>

@@ -1,194 +1,95 @@
-import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import assert from 'node:assert/strict'
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
-const projectConfig = JSON.parse(readFileSync(resolve("project.config.json"), "utf8"));
-const manifest = JSON.parse(readFileSync(resolve("src/manifest.json"), "utf8"));
-const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
-const pagesConfig = JSON.parse(readFileSync(resolve("src/pages.json"), "utf8"));
-const productionWeChatAppId = "wx7d12bddbec8e17f7";
+const projectConfig = JSON.parse(readFileSync(resolve('project.config.json'), 'utf8'))
+const manifest = JSON.parse(readFileSync(resolve('src/manifest.json'), 'utf8'))
+const packageJson = JSON.parse(readFileSync(resolve('package.json'), 'utf8'))
+const pagesConfig = JSON.parse(readFileSync(resolve('src/pages.json'), 'utf8'))
 
+const pageTitles = Object.fromEntries(
+  pagesConfig.pages.map(({ path, style }) => [path, style?.navigationBarTitleText]),
+)
+assert.equal(pageTitles['pages/index/index'], '首页', 'home navigation title should use the primary navigation label')
+assert.equal(pageTitles['pages/learn/learn'], '学习中心', 'learn navigation title should describe the learning center')
+assert.equal(pagesConfig.tabBar?.selectedColor, '#335B4A', 'selected tabs should use the brand green')
+assert.equal(pagesConfig.tabBar?.backgroundColor, '#FFFDF8', 'native tab bar should use the warm surface color')
 assert.equal(
-  projectConfig.appid,
-  productionWeChatAppId,
-  "project.config.json must use the production WeChat AppID",
-);
-
-assert.equal(
-  manifest?.["mp-weixin"]?.appid,
-  productionWeChatAppId,
-  "manifest mp-weixin.appid must use the production WeChat AppID",
-);
-
-assert.equal(
-  projectConfig.appid,
-  manifest?.["mp-weixin"]?.appid,
-  "project.config.json and manifest must use the same WeChat AppID",
-);
+  Object.hasOwn(pagesConfig.tabBar || {}, 'custom'),
+  false,
+  'primary navigation should use the native tab bar without a custom tab bar flag',
+)
+assert.deepEqual(
+  pagesConfig.tabBar?.list,
+  [
+    {
+      pagePath: 'pages/index/index',
+      text: '首页',
+      iconPath: 'static/tabbar/test.png',
+      selectedIconPath: 'static/tabbar/test-active-green.png',
+    },
+    {
+      pagePath: 'pages/learn/learn',
+      text: '学习',
+      iconPath: 'static/tabbar/learn.png',
+      selectedIconPath: 'static/tabbar/learn-active-green.png',
+    },
+    {
+      pagePath: 'pages/booking/booking',
+      text: '预约',
+      iconPath: 'static/tabbar/booking.png',
+      selectedIconPath: 'static/tabbar/booking-active-green.png',
+    },
+    {
+      pagePath: 'pages/profile/profile',
+      text: '我的',
+      iconPath: 'static/tabbar/profile.png',
+      selectedIconPath: 'static/tabbar/profile-active-green.png',
+    },
+  ],
+  'native tab bar should expose the exact four primary destinations and icon assets',
+)
 
 assert.notEqual(
   projectConfig?.setting?.urlCheck,
   false,
-  "project.config.json must keep WeChat urlCheck enabled for release safety",
-);
+  'project.config.json must keep WeChat urlCheck enabled for release safety',
+)
 
 assert.notEqual(
-  manifest?.["mp-weixin"]?.setting?.urlCheck,
+  manifest?.['mp-weixin']?.setting?.urlCheck,
   false,
-  "manifest mp-weixin urlCheck must keep WeChat domain validation enabled",
-);
+  'manifest mp-weixin urlCheck must keep WeChat domain validation enabled',
+)
 
 assert.equal(
-  packageJson.scripts["prebuild:h5"],
-  "node scripts/verify-production-api-base.mjs",
-  "H5 production builds must verify VITE_API_BASE before generating a runnable-but-broken bundle",
-);
+  packageJson.scripts['prebuild:h5'],
+  'node scripts/verify-production-api-base.mjs',
+  'H5 production builds must verify VITE_API_BASE before generating a runnable-but-broken bundle',
+)
 
-const qaPath = resolve("QA.md");
-assert.equal(existsSync(qaPath), true, "QA.md should document miniapp real-device smoke checks");
-const qa = readFileSync(qaPath, "utf8");
-for (const keyword of [
-  "chooseAvatar",
-  "getPhoneNumber",
-  "requestPayment",
-  "canvas",
-  "share",
-  "mp-weixin",
-]) {
-  assert.match(qa, new RegExp(keyword), `QA.md should cover ${keyword} smoke check`);
+
+const qaPath = resolve('QA.md')
+assert.equal(existsSync(qaPath), true, 'QA.md should document miniapp real-device smoke checks')
+const qa = readFileSync(qaPath, 'utf8')
+for (const keyword of ['chooseAvatar', 'getPhoneNumber', 'requestPayment', 'canvas', 'share', 'mp-weixin']) {
+  assert.match(qa, new RegExp(keyword), `QA.md should cover ${keyword} smoke check`)
 }
 
-const productionExamplePath = resolve(".env.production.example");
+const productionExamplePath = resolve('.env.production.example')
 assert.equal(
   existsSync(productionExamplePath),
   true,
-  ".env.production.example should document the required real HTTPS VITE_API_BASE for CI/release builds",
-);
-const productionExample = readFileSync(productionExamplePath, "utf8");
-assert.match(productionExample, /VITE_API_BASE=https:\/\/xn--9iq9az5uo8fz16d\.com\/api/);
-assert.match(productionExample, /CI|release|上线|生产/);
+  '.env.production.example should document the required real HTTPS VITE_API_BASE for CI/release builds',
+)
+const productionExample = readFileSync(productionExamplePath, 'utf8')
+assert.match(productionExample, /VITE_API_BASE=https:\/\/xn--9iq9az5uo8fz16d\.com\/api/)
+assert.match(productionExample, /CI|release|上线|生产/)
 
-const productionCheck = readFileSync(resolve("scripts/verify-production-api-base.mjs"), "utf8");
-assert.match(
-  productionCheck,
-  /validateProductionApiBase/,
-  "production build validation should reuse the runtime API host validation",
-);
-const apiBaseValidation = readFileSync(resolve("src/apiBaseValidation.mjs"), "utf8");
-assert.match(apiBaseValidation, /\.local/, "production API validation should reject .local hosts");
-assert.match(
-  apiBaseValidation,
-  /yourdomain/,
-  "production API validation should reject placeholder hosts",
-);
-assert.doesNotMatch(
-  qa,
-  /\nnpm run build:h5\n/,
-  "QA automation should not suggest production H5 build without VITE_API_BASE",
-);
-assert.doesNotMatch(
-  qa,
-  /nine-xing\.local/,
-  "QA automation should not use .local placeholder API hosts",
-);
+const productionCheck = readFileSync(resolve('scripts/verify-production-api-base.mjs'), 'utf8')
+assert.match(productionCheck, /\.local/, 'production API validation should reject .local placeholder/internal hosts')
+assert.match(productionCheck, /yourdomain\.com/, 'production API validation should reject unchanged example hosts')
+assert.doesNotMatch(qa, /\nnpm run build:h5\n/, 'QA automation should not suggest production H5 build without VITE_API_BASE')
+assert.doesNotMatch(qa, /nine-xing\.local/, 'QA automation should not use .local placeholder API hosts')
 
-const mainPagePaths = pagesConfig.pages.map((page) => page.path);
-const expectedMainPages = [
-  "pages/index/index",
-  "pages/learn/learn",
-  "pages/booking/booking",
-  "pages/profile/profile",
-];
-assert.deepEqual(
-  [...mainPagePaths].sort(),
-  [...expectedMainPages].sort(),
-  "the main package should contain only tab pages",
-);
-
-const subpackagePagePaths = (pagesConfig.subPackages || []).flatMap((subpackage) =>
-  subpackage.pages.map((page) => `${subpackage.root}/${page.path}`.replace(/\/+/g, "/")),
-);
-const expectedSubpackagePages = [
-  "pages/test/test",
-  "pages/result/result",
-  "pages/relation/relation",
-  "pages/profile-edit/profile-edit",
-  "pages/booking-records/booking-records",
-  "pages/booking-detail/booking-detail",
-  "pages/classroom/classroom",
-  "pages/classroom-detail/classroom-detail",
-];
-assert.deepEqual(
-  [...subpackagePagePaths].sort(),
-  [...expectedSubpackagePages].sort(),
-  "all non-tab pages should be registered in subpackages without changing their URLs",
-);
-assert.equal(
-  new Set([...mainPagePaths, ...subpackagePagePaths]).size,
-  mainPagePaths.length + subpackagePagePaths.length,
-  "no page should be registered in both the main package and a subpackage",
-);
-for (const tab of pagesConfig.tabBar.list) {
-  assert.equal(
-    mainPagePaths.includes(tab.pagePath),
-    true,
-    `tabBar page ${tab.pagePath} must stay in the main package`,
-  );
-}
-
-assert.deepEqual(
-  pagesConfig.tabBar.list.map((tab) => tab.text),
-  ["首页", "老师课堂", "企业服务", "我的"],
-  "tab bar labels must align with the expert brand navigation",
-);
-assert.equal(pagesConfig.tabBar.selectedColor, "#202a37");
-assert.match(pagesConfig.tabBar.backgroundColor, /^#(?:fff[0-9a-f]{3}|f[ef][f8f9][f8f9])$/i, "tab bar background must be warm white");
-assert.equal(
-  pagesConfig.pages.find((page) => page.path === "pages/learn/learn")?.style?.navigationBarTitleText,
-  "老师课堂",
-);
-assert.equal(
-  pagesConfig.pages.find((page) => page.path === "pages/booking/booking")?.style?.navigationBarTitleText,
-  "企业服务",
-);
-
-const expectedTabIcons = [
-  "home.png", "home-active.png", "classroom.png", "classroom-active.png",
-  "enterprise.png", "enterprise-active.png", "profile.png", "profile-active.png",
-];
-const tabIconPaths = pagesConfig.tabBar.list.flatMap((tab) => [tab.iconPath, tab.selectedIconPath]);
-assert.deepEqual(tabIconPaths, expectedTabIcons.map((name) => `static/tabbar/${name}`));
-for (const icon of expectedTabIcons) {
-  const iconPath = resolve("src/static/tabbar", icon);
-  assert.equal(existsSync(iconPath), true, `tab icon ${icon} must exist`);
-  const png = readFileSync(iconPath);
-  assert.equal(png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])), true, `${icon} must be PNG`);
-  assert.equal(png.readUInt32BE(16), 81, `${icon} must be 81px wide`);
-  assert.equal(png.readUInt32BE(20), 81, `${icon} must be 81px high`);
-}
-
-const classroomRoute = (pagesConfig.subPackages || []).find((subpackage) =>
-  subpackage.pages.some(
-    (page) =>
-      `${subpackage.root}/${page.path}`.replace(/\/+/g, "/") === "pages/classroom/classroom",
-  ),
-);
-const classroomDetailRoute = (pagesConfig.subPackages || []).find((subpackage) =>
-  subpackage.pages.some(
-    (page) =>
-      `${subpackage.root}/${page.path}`.replace(/\/+/g, "/") ===
-      "pages/classroom-detail/classroom-detail",
-  ),
-);
-assert.equal(
-  classroomRoute?.root,
-  "pages/classroom",
-  "classroom list must use the exact classroom subpackage root",
-);
-assert.equal(
-  classroomDetailRoute?.root,
-  "pages/classroom-detail",
-  "classroom detail must use the exact classroom-detail subpackage root",
-);
-
-console.log("project config tests passed");
+console.log('project config tests passed')

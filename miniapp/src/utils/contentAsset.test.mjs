@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const dir = await mkdtemp(join(tmpdir(), 'nx-content-asset-'))
+<<<<<<< HEAD
 try {
   const modulePath = join(dir, 'contentAsset.mjs')
   const rawSource = await readFile(new URL('./contentAsset.js', import.meta.url), 'utf8')
@@ -88,3 +89,100 @@ try {
 } finally {
   await rm(dir, { force: true, recursive: true })
 }
+=======
+const modulePath = join(dir, 'contentAsset.mjs')
+let source = await readFile(new URL('./contentAsset.js', import.meta.url), 'utf8')
+source = source.replace("import { API_BASE } from '../config'", "const API_BASE = 'https://api.nine-xing.test/api'")
+await writeFile(modulePath, source)
+
+const { resolveContentAsset } = await import(`file://${modulePath}`)
+const fallback = '/static/editorial/home-hero.webp'
+const originalURL = globalThis.URL
+globalThis.URL = undefined
+
+assert.doesNotThrow(
+  () => resolveContentAsset('https://cdn.example.com/teacher.jpg', fallback),
+  'the resolver should not depend on a global WHATWG URL implementation',
+)
+
+assert.equal(
+  resolveContentAsset('https://cdn.example.com/teacher.jpg', fallback),
+  'https://cdn.example.com/teacher.jpg',
+  'absolute HTTPS assets should pass through unchanged',
+)
+assert.equal(resolveContentAsset('HTTPS://cdn.example.com/teacher.jpg', fallback), 'HTTPS://cdn.example.com/teacher.jpg', 'HTTPS matching should be case-insensitive')
+assert.equal(resolveContentAsset('https://cdn.example.com:8443/teacher.jpg', fallback), 'https://cdn.example.com:8443/teacher.jpg', 'HTTPS assets should support a valid optional port')
+assert.equal(resolveContentAsset('/static/editorial/course-intro.webp', fallback), '/static/editorial/course-intro.webp', '/static assets should stay local')
+assert.equal(resolveContentAsset('/assets/teacher-poster.jpg', fallback), 'https://api.nine-xing.test/assets/teacher-poster.jpg', '/assets should resolve against the HTTPS API origin')
+assert.equal(
+  resolveContentAsset('/api/public/site-uploads/teacher.jpg', fallback),
+  'https://api.nine-xing.test/api/public/site-uploads/teacher.jpg',
+  '/api/public/site-uploads should resolve against the HTTPS API origin without duplicating /api',
+)
+
+let excessivelyEncodedDot = '%2e'
+for (let index = 0; index < 8; index += 1) excessivelyEncodedDot = encodeURIComponent(excessivelyEncodedDot)
+const protectedPrefixes = ['/static/', '/assets/', '/api/public/site-uploads/']
+const encodedAttackPaths = protectedPrefixes.flatMap((prefix) => [
+  `${prefix}%2e%2e/private.jpg`,
+  `${prefix}%252e%252e/private.jpg`,
+  `${prefix}folder%5cprivate.jpg`,
+  `${prefix}folder%255cprivate.jpg`,
+])
+
+for (const unsafe of [
+  '',
+  '   ',
+  'http://cdn.example.com/teacher.jpg',
+  'javascript:alert(1)',
+  'data:image/png;base64,AAAA',
+  '//cdn.example.com/teacher.jpg',
+  'teacher.jpg',
+  'https://',
+  'https:///teacher.jpg',
+  'https://user:pass@cdn.example.com/teacher.jpg',
+  'https://user@cdn.example.com/teacher.jpg',
+  'https://cdn.example.com:0/teacher.jpg',
+  'https://cdn.example.com:65536/teacher.jpg',
+  'https://cdn.example.com:abc/teacher.jpg',
+  'https://bad..example/teacher.jpg',
+  'https://-bad.example/teacher.jpg',
+  'https://bad-.example/teacher.jpg',
+  'https://999.999.999.999/teacher.jpg',
+  'https://cdn .example.com/teacher.jpg',
+  '\nhttps://cdn.example.com/teacher.jpg',
+  'https://cdn.example.com/teacher.jpg\r',
+  'https://cdn.example.com\\@evil.test/teacher.jpg',
+  'https://cdn.example.com/%252e%252e/private.jpg',
+  'https://cdn.example.com/file%00.jpg',
+  'https://cdn.example.com/bad%encoding.jpg',
+  '/assets/../private.jpg',
+  '/api/public/site-uploads/folder%2f..%2fprivate.jpg',
+  '/api/public/site-uploads/file%00.jpg',
+  '/assets/file%250a.jpg',
+  '/static/file%C2%85.jpg',
+  '/assets/file%25C2%2585.jpg',
+  '/static/bad%encoding.jpg',
+  `/assets/${excessivelyEncodedDot}.jpg`,
+  ...encodedAttackPaths,
+]) {
+  assert.equal(resolveContentAsset(unsafe, fallback), fallback, `unsafe or malformed asset should use fallback: ${unsafe}`)
+}
+
+assert.equal(resolveContentAsset('/static/%E8%AF%BE%E7%A8%8B.webp', fallback), '/static/%E8%AF%BE%E7%A8%8B.webp', 'a valid encoded local filename should remain local')
+assert.equal(
+  resolveContentAsset('/assets/%E9%9F%A9%E8%80%81%E5%B8%88.jpg', fallback),
+  'https://api.nine-xing.test/assets/%E9%9F%A9%E8%80%81%E5%B8%88.jpg',
+  'a valid encoded asset filename should resolve normally',
+)
+assert.equal(
+  resolveContentAsset('/api/public/site-uploads/%E8%80%81%E5%B8%88.jpg', fallback),
+  'https://api.nine-xing.test/api/public/site-uploads/%E8%80%81%E5%B8%88.jpg',
+  'a valid encoded upload filename should resolve normally',
+)
+assert.equal(resolveContentAsset(null, ''), '', 'the caller-provided fallback should be deterministic even when empty')
+
+globalThis.URL = originalURL
+console.log('content asset resolver tests passed')
+await rm(dir, { force: true, recursive: true })
+>>>>>>> feature/miniapp-editorial-ui

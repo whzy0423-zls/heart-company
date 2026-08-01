@@ -43,43 +43,15 @@ assert.notDeepEqual(refreshed, first)
 assert.deepEqual(getStoredSiteConfig(), refreshed, 'explicit refresh should update stored cache')
 assert.equal(hasSiteConfigLearningContent(refreshed), true, 'site config with courses/quotes should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ home: {} }), false, 'empty site config should not replace cached learning content')
-assert.equal(
-  hasSiteConfigLearningContent({ home: { miniappLearn: { hero: { title: '可配置学习页' } } } }),
-  true,
-  'configured learning-page copy should count as learning content',
-)
-assert.equal(
-  hasSiteConfigLearningContent({ home: { miniappLearn: {} } }),
-  false,
-  'an explicitly empty learning-page copy object should not count as visible learning content',
-)
 assert.equal(hasSiteConfigLearningContent({ teacher: { name: '韩老师' } }), true, 'root teacher profile should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ home: { teachers: [{ name: '韩老师' }] } }), true, 'home teachers should count as learning content')
-assert.equal(
-  hasSiteConfigLearningContent({ home: { teacherTeaser: { title: '韩老师', lead: '课程导学' } } }),
-  true,
-  'legacy home teacher teaser should count as learning content',
-)
+assert.equal(hasSiteConfigLearningContent({ home: { teacherTeaser: { title: '韩常青（老韩）｜九型芯之力首席导师' } } }), true, 'home teacherTeaser should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ materials: [{ title: '课件' }] }), true, 'root materials should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ home: { courseware: { items: [{ title: '课件' }] } } }), true, 'home courseware should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ home: { courses: { items: [] }, quotes: { items: [] } } }), false, 'empty learning arrays should not count as visible learning content')
 assert.equal(hasSiteConfigLearningSection({ home: {} }), false, 'missing learning section should be treated as incomplete')
-assert.equal(
-  hasSiteConfigLearningSection({ home: { miniappLearn: {} } }),
-  true,
-  'an explicitly empty learning-page copy object should preserve the intentional learning section',
-)
-assert.equal(
-  hasSiteConfigLearningSection({ home: { miniappLearn: [] } }),
-  false,
-  'an array is not a valid learning-page configuration section',
-)
 assert.equal(hasSiteConfigLearningSection({ home: { teacher: {} } }), true, 'explicit teacher section should be treated as intentional content')
-assert.equal(
-  hasSiteConfigLearningSection({ home: { teacherTeaser: {} } }),
-  true,
-  'explicit legacy teacher teaser should be treated as intentional content',
-)
+assert.equal(hasSiteConfigLearningSection({ home: { teacherTeaser: {} } }), true, 'explicit teacherTeaser should be treated as an intentional learning section')
 assert.equal(hasSiteConfigLearningSection({ courses: { list: [] } }), true, 'courses.list should be treated as an intentional learning section')
 assert.equal(hasSiteConfigLearningSection({ home: { courses: { items: [] }, quotes: { items: [] } } }), true, 'explicit empty learning arrays should be treated as intentional content')
 
@@ -116,21 +88,81 @@ await getCachedSiteConfig({ api, now: () => now, ttlMs: 60000 })
 assert.equal(calls, 4, 'manual cache clear should refetch')
 
 clearSiteConfigCache()
-const configuredLearn = { home: { miniappLearn: { hero: { title: '已缓存的学习页' } } } }
-await refreshSiteConfig({ api: async () => configuredLearn, now: () => now + 1000 })
-const malformedLearnRefresh = await refreshSiteConfig({
-  api: async () => ({ home: { miniappLearn: [] } }),
-  now: () => now + 2000,
-})
-assert.deepEqual(
-  malformedLearnRefresh,
-  { home: { miniappLearn: [] } },
-  'malformed learning-page responses should still be returned to the caller',
-)
+const teacherTeaserOnly = {
+  home: {
+    teacherTeaser: {
+      eyebrow: '老师简介',
+      title: '韩常青（老韩）｜九型芯之力首席导师',
+      lead: '北京九型成长平台、芯之力创始人。',
+      image: '/assets/teacher-poster.jpg',
+    },
+  },
+}
+await getCachedSiteConfig({ api: async () => teacherTeaserOnly, now: () => now + 1, ttlMs: 60000 })
+await refreshSiteConfig({ api: async () => ({ home: {} }), now: () => now + 2 })
 assert.deepEqual(
   getStoredSiteConfig(),
-  configuredLearn,
-  'a malformed learning-page array must not overwrite an existing valid learning cache',
+  teacherTeaserOnly,
+  'a teacherTeaser-only cache should survive a later response that omits learning sections',
+)
+
+clearSiteConfigCache()
+const completeLearningConfig = {
+  home: {
+    teacherTeaser: { title: '缓存老师', lead: '缓存老师介绍' },
+    courses: { items: [{ title: '缓存课程' }] },
+    quotes: { items: ['缓存语录'] },
+  },
+  theme: { issue: 'spring' },
+}
+await refreshSiteConfig({ api: async () => completeLearningConfig, now: () => now + 10 })
+
+const teacherOnlyRefresh = { home: { teacherTeaser: { title: '更新老师' } } }
+const teacherOnlySnapshot = structuredClone(teacherOnlyRefresh)
+await refreshSiteConfig({ api: async () => teacherOnlyRefresh, now: () => now + 11 })
+assert.deepEqual(teacherOnlyRefresh, teacherOnlySnapshot, 'section-aware cache merge must not mutate a teacher-only response')
+assert.deepEqual(
+  getStoredSiteConfig(),
+  {
+    home: {
+      teacherTeaser: { title: '更新老师' },
+      courses: { items: [{ title: '缓存课程' }] },
+      quotes: { items: ['缓存语录'] },
+    },
+  },
+  'a teacher-only refresh should preserve cached course and quote sections for the next mount',
+)
+
+const courseOnlyRefresh = { home: { courses: { items: [{ title: '更新课程' }] } } }
+const courseOnlySnapshot = structuredClone(courseOnlyRefresh)
+await refreshSiteConfig({ api: async () => courseOnlyRefresh, now: () => now + 12 })
+assert.deepEqual(courseOnlyRefresh, courseOnlySnapshot, 'section-aware cache merge must not mutate a course-only response')
+assert.deepEqual(
+  getStoredSiteConfig(),
+  {
+    home: {
+      teacherTeaser: { title: '更新老师' },
+      courses: { items: [{ title: '更新课程' }] },
+      quotes: { items: ['缓存语录'] },
+    },
+  },
+  'a course-only refresh should preserve cached teacher and quote sections for the next mount',
+)
+
+const explicitEmptyRefresh = {
+  home: {
+    teacherTeaser: {},
+    courses: { items: [] },
+    quotes: { items: [] },
+  },
+}
+const explicitEmptySnapshot = structuredClone(explicitEmptyRefresh)
+await refreshSiteConfig({ api: async () => explicitEmptyRefresh, now: () => now + 13 })
+assert.deepEqual(explicitEmptyRefresh, explicitEmptySnapshot, 'explicit empty section caching must not mutate the response')
+assert.deepEqual(
+  getStoredSiteConfig(),
+  explicitEmptyRefresh,
+  'explicit empty teacher, course, and quote sections should clear their cached counterparts',
 )
 
 console.log('site config cache tests passed')

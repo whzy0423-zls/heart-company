@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { API_BASE, DEFAULT_API_BASE } from '../config'
 
 const MAX_DECODE_PASSES = 6
@@ -6,6 +7,11 @@ const REMOTE_ASSET_PREFIXES = [
   '/api/public/site-assets/',
   '/api/public/site-uploads/',
 ]
+=======
+import { API_BASE } from '../config'
+
+const MAX_DECODE_PASSES = 6
+>>>>>>> feature/miniapp-editorial-ui
 
 function hasUnsafePathContent(value) {
   return /[\u0000-\u001f\u007f-\u009f]/.test(value)
@@ -49,6 +55,7 @@ function validHostname(value) {
   return true
 }
 
+<<<<<<< HEAD
 function isPrivateDevelopmentHostname(hostname) {
   if (hostname === 'localhost') return true
   if (!/^\d+(?:\.\d+){3}$/.test(hostname)) return false
@@ -59,6 +66,8 @@ function isPrivateDevelopmentHostname(hostname) {
     || (octets[0] === 192 && octets[1] === 168)
 }
 
+=======
+>>>>>>> feature/miniapp-editorial-ui
 function httpsOrigin(value) {
   if (typeof value !== 'string' || /[\s\u0000-\u001f\u007f-\u009f\\]/.test(value)) return ''
   const match = /^https:\/\/([^/?#]+)(?=\/|\?|#|$)/i.exec(value)
@@ -73,6 +82,7 @@ function httpsOrigin(value) {
   return `https://${authority}`
 }
 
+<<<<<<< HEAD
 function requestOrigin(value) {
   const secureOrigin = httpsOrigin(value)
   if (secureOrigin) return secureOrigin
@@ -90,6 +100,8 @@ function requestOrigin(value) {
   return `http://${authority}`
 }
 
+=======
+>>>>>>> feature/miniapp-editorial-ui
 export function resolveContentAsset(value, fallback = '') {
   const safeFallback = typeof fallback === 'string' ? fallback : ''
   if (typeof value !== 'string') return safeFallback
@@ -102,6 +114,7 @@ export function resolveContentAsset(value, fallback = '') {
   }
 
   if (isSafeLocalPath(asset, '/static/')) return asset
+<<<<<<< HEAD
   if (!REMOTE_ASSET_PREFIXES.some((prefix) => isSafeLocalPath(asset, prefix))) {
     return safeFallback
   }
@@ -109,5 +122,10 @@ export function resolveContentAsset(value, fallback = '') {
   const origin = asset.startsWith('/assets/')
     ? httpsOrigin(API_BASE) || httpsOrigin(DEFAULT_API_BASE)
     : requestOrigin(API_BASE) || httpsOrigin(DEFAULT_API_BASE)
+=======
+  if (!isSafeLocalPath(asset, '/assets/') && !isSafeLocalPath(asset, '/api/public/site-uploads/')) return safeFallback
+
+  const origin = httpsOrigin(API_BASE)
+>>>>>>> feature/miniapp-editorial-ui
   return origin ? `${origin}${asset}` : safeFallback
 }

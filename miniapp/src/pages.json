@@ -3,19 +3,37 @@
     {
       "path": "pages/index/index",
       "style": {
-        "navigationBarTitleText": "九型芯之力"
+        "navigationBarTitleText": "首页"
+      }
+    },
+    {
+      "path": "pages/test/test",
+      "style": {
+        "navigationBarTitleText": "九型性格测试"
+      }
+    },
+    {
+      "path": "pages/result/result",
+      "style": {
+        "navigationBarTitleText": "你的性格芯片"
+      }
+    },
+    {
+      "path": "pages/relation/relation",
+      "style": {
+        "navigationBarTitleText": "九型关系合盘"
       }
     },
     {
       "path": "pages/learn/learn",
       "style": {
-        "navigationBarTitleText": "老师课堂"
+        "navigationBarTitleText": "学习中心"
       }
     },
     {
       "path": "pages/booking/booking",
       "style": {
-        "navigationBarTitleText": "企业服务"
+        "navigationBarTitleText": "预约咨询"
       }
     },
     {
@@ -25,125 +43,35 @@
       }
     }
   ],
-  "subPackages": [
-    {
-      "root": "pages/test",
-      "pages": [
-        {
-          "path": "test",
-          "style": {
-            "navigationBarTitleText": "九型性格测试"
-          }
-        }
-      ]
-    },
-    {
-      "root": "pages/result",
-      "pages": [
-        {
-          "path": "result",
-          "style": {
-            "navigationBarTitleText": "你的性格芯片"
-          }
-        }
-      ]
-    },
-    {
-      "root": "pages/relation",
-      "pages": [
-        {
-          "path": "relation",
-          "style": {
-            "navigationBarTitleText": "九型关系合盘"
-          }
-        }
-      ]
-    },
-    {
-      "root": "pages/profile-edit",
-      "pages": [
-        {
-          "path": "profile-edit",
-          "style": {
-            "navigationBarTitleText": "个人资料"
-          }
-        }
-      ]
-    },
-    {
-      "root": "pages/booking-records",
-      "pages": [
-        {
-          "path": "booking-records",
-          "style": {
-            "navigationBarTitleText": "预约记录"
-          }
-        }
-      ]
-    },
-    {
-      "root": "pages/booking-detail",
-      "pages": [
-        {
-          "path": "booking-detail",
-          "style": {
-            "navigationBarTitleText": "预约详情"
-          }
-        }
-      ]
-    },
-    {
-      "root": "pages/classroom",
-      "pages": [
-        {
-          "path": "classroom",
-          "style": {
-            "navigationBarTitleText": "老师课堂"
-          }
-        }
-      ]
-    },
-    {
-      "root": "pages/classroom-detail",
-      "pages": [
-        {
-          "path": "classroom-detail",
-          "style": {
-            "navigationBarTitleText": "课件详情"
-          }
-        }
-      ]
-    }
-  ],
   "tabBar": {
     "color": "#9aa7b5",
-    "selectedColor": "#202a37",
-    "backgroundColor": "#fffaf5",
+    "selectedColor": "#335B4A",
+    "backgroundColor": "#FFFDF8",
     "borderStyle": "white",
     "list": [
       {
         "pagePath": "pages/index/index",
         "text": "首页",
-        "iconPath": "static/tabbar/home.png",
-        "selectedIconPath": "static/tabbar/home-active.png"
+        "iconPath": "static/tabbar/test.png",
+        "selectedIconPath": "static/tabbar/test-active-green.png"
       },
       {
         "pagePath": "pages/learn/learn",
-        "text": "老师课堂",
-        "iconPath": "static/tabbar/classroom.png",
-        "selectedIconPath": "static/tabbar/classroom-active.png"
+        "text": "学习",
+        "iconPath": "static/tabbar/learn.png",
+        "selectedIconPath": "static/tabbar/learn-active-green.png"
       },
       {
         "pagePath": "pages/booking/booking",
-        "text": "企业服务",
-        "iconPath": "static/tabbar/enterprise.png",
-        "selectedIconPath": "static/tabbar/enterprise-active.png"
+        "text": "预约",
+        "iconPath": "static/tabbar/booking.png",
+        "selectedIconPath": "static/tabbar/booking-active-green.png"
       },
       {
         "pagePath": "pages/profile/profile",
         "text": "我的",
         "iconPath": "static/tabbar/profile.png",
-        "selectedIconPath": "static/tabbar/profile-active.png"
+        "selectedIconPath": "static/tabbar/profile-active-green.png"
       }
     ]
   },
