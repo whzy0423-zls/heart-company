@@ -1132,6 +1132,49 @@ func TestDeliveryGenerationFailureKeepsPlayedPrefixAndExcludesDraft(t *testing.T
 	}
 }
 
+func TestGenerationProviderFailureReportsSpecificError(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.generator.answer = ""
+	fixture.generator.err = errors.New("upstream returned html")
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-provider-fail")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "你在吗", Stable: true})
+
+	event := fixture.sink.waitControl(t, EventError)
+	var payload ErrorPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Code != "provider_generation_failed" {
+		t.Fatalf("error code=%q", payload.Code)
+	}
+	if payload.Message != "会话模型连接异常，请稍后重试" {
+		t.Fatalf("error message=%q", payload.Message)
+	}
+}
+
+func TestGenerationEmptyAnswerReportsSpecificError(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.generator.answer = ""
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-empty-answer")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "你在吗", Stable: true})
+
+	event := fixture.sink.waitControl(t, EventError)
+	var payload ErrorPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Code != "empty_generation" {
+		t.Fatalf("error code=%q", payload.Code)
+	}
+	if payload.Message != "会话模型没有返回有效回答，请重试" {
+		t.Fatalf("error message=%q", payload.Message)
+	}
+}
+
 func TestConversationASRDisconnectReopensOnlyBeforeSpeech(t *testing.T) {
 	fixture := newSessionFixture(t)
 	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-reopen")); err != nil {

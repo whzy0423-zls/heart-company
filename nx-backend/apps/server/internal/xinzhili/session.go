@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -1079,8 +1080,12 @@ func (s *session) handleGenerationDone(turn *activeTurn, event sessionEvent) {
 		}
 	}
 	close(turn.ttsJobs)
-	if event.err != nil || turn.answer == "" {
-		s.sendError(turn, "generation_failed", "回答生成失败，请重试", true)
+	if event.err != nil {
+		log.Printf("xinzhili generation failed user_id=%d turn_id=%q err=%v", turn.input.UserID, turn.input.TurnID, event.err)
+		s.sendError(turn, "provider_generation_failed", "会话模型连接异常，请稍后重试", true)
+	} else if turn.answer == "" {
+		log.Printf("xinzhili generation returned empty answer user_id=%d turn_id=%q", turn.input.UserID, turn.input.TurnID)
+		s.sendError(turn, "empty_generation", "会话模型没有返回有效回答，请重试", true)
 	}
 }
 
