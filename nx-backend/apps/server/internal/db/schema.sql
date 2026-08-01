@@ -740,6 +740,14 @@ CREATE TABLE IF NOT EXISTS video_generation_submissions (
   update_time        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 兼容已存在的旧版提交表：CREATE TABLE IF NOT EXISTS 不会为旧表补齐新增字段。
+ALTER TABLE video_generation_submissions
+  ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES video_projects(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS request_hash TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS prompt_hash TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS capability_version TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS upstream_task_id TEXT NOT NULL DEFAULT '';
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_video_generation_submissions_request_key
   ON video_generation_submissions(request_key);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_video_generation_submissions_active_shot
