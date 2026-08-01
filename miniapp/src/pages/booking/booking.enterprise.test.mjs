@@ -10,6 +10,7 @@ const script = source.match(/<script setup>([\s\S]*?)<\/script>/)?.[1] || ''
 const style = source.match(/<style scoped>([\s\S]*?)<\/style>/)?.[1] || ''
 
 assert.ok(template && script && style, 'booking page should expose template, executable page state, and scoped styles')
+assert.match(style, /@media \(max-width: 420px\)[\s\S]*\.enterprise-scenarios__grid[\s\S]*grid-template-columns:\s*1fr/, 'enterprise scenarios should stack on common phone widths')
 
 const requiredOrder = [
   'enterprise-hero',

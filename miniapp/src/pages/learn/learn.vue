@@ -12,6 +12,7 @@ import { normalizeCoursewareItems, normalizeTeachers } from "../../utils/teacher
 import { normalizeMiniappLearn } from "../../utils/miniappPages";
 import { listClassroomSeriesApi, listClassroomStandaloneApi } from "../../api";
 import {
+  classroomContentRoute,
   classroomCoverRatioClass,
   normalizeClassroomContent,
   normalizeClassroomSeries,
@@ -185,6 +186,21 @@ function openClassroom(tab = "standalone") {
   uni.navigateTo({ url: `/pages/classroom/classroom?tab=${tab}` });
 }
 
+function openClassroomPreview(item) {
+  if (item?.contentType) {
+    const url = classroomContentRoute(item);
+    if (url) uni.navigateTo({ url });
+    return;
+  }
+  if (item?.id) {
+    uni.navigateTo({
+      url: `/pages/classroom/classroom?tab=series&seriesId=${encodeURIComponent(item.id)}`,
+    });
+    return;
+  }
+  openClassroom("standalone");
+}
+
 onMounted(() => {
   const hasCachedContent = showStoredContent();
   loadContent({ silent: hasCachedContent });
@@ -192,7 +208,7 @@ onMounted(() => {
 });
 
 function goTest() {
-  uni.switchTab({ url: "/pages/index/index" });
+  uni.navigateTo({ url: "/pages/test/test" });
 }
 </script>
 
@@ -281,9 +297,9 @@ function goTest() {
             tabindex="0"
             :aria-label="`查看${classroomPreviewPresentation(item).kind}课件：${classroomPreviewPresentation(item).title}`"
             hover-class="classroom-entry__item--pressed"
-            @click="openClassroom(classroomPreviewPresentation(item).tab)"
-            @keydown.enter="openClassroom(classroomPreviewPresentation(item).tab)"
-            @keydown.space.prevent="openClassroom(classroomPreviewPresentation(item).tab)"
+            @click="openClassroomPreview(item)"
+            @keydown.enter="openClassroomPreview(item)"
+            @keydown.space.prevent="openClassroomPreview(item)"
           >
             <view class="classroom-entry__media">
               <image

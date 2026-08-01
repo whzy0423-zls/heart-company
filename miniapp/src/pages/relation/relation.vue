@@ -1,6 +1,6 @@
 <script setup>
 import { ref } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
+import { onLoad, onUnload } from '@dcloudio/uni-app'
 import { TYPES_INFO, CENTERS } from '../../data/enneagramGame'
 import { isValidTypeId, normalizeTypeId } from '../../utils/session'
 
@@ -13,6 +13,7 @@ const analysis = ref(null)
 const myAvatarFailed = ref(false)
 const taAvatarFailed = ref(false)
 const allTypes = Object.keys(TYPES_INFO).map((id) => ({ id: Number(id), ...TYPES_INFO[id] }))
+let redirectTimer = null
 
 onLoad((q) => {
   if (q && Object.prototype.hasOwnProperty.call(q, 'type')) {
@@ -60,12 +61,19 @@ function onTaAvatarError() {
 }
 
 function rejectInvalidType() {
+  if (redirectTimer) clearTimeout(redirectTimer)
   stage.value = 'redirecting'
   uni.showToast({ title: '型号参数无效，请重新测试', icon: 'none' })
-  setTimeout(() => {
+  redirectTimer = setTimeout(() => {
+    redirectTimer = null
     uni.redirectTo({ url: '/pages/test/test' })
   }, 600)
 }
+
+onUnload(() => {
+  if (redirectTimer) clearTimeout(redirectTimer)
+  redirectTimer = null
+})
 
 // 基于「中心异同 + 编号关系」生成关系解读
 function buildAnalysis(mId, tId, a, b) {

@@ -52,8 +52,18 @@ assert.doesNotMatch(
 );
 assert.match(
   source,
-  /openClassroom\(classroomPreviewPresentation\(item\)\.tab\)/,
-  "classroom preview navigation should use the shared presentation tab",
+  /openClassroomPreview\(item\)/,
+  "classroom preview navigation should preserve the selected item",
+);
+assert.match(
+  source,
+  /function goTest\(\)\s*\{\s*uni\.navigateTo\(\{ url: ["']\/pages\/test\/test["'] \}\);?\s*\}/,
+  "the learning CTA should open the test directly instead of returning to home",
+);
+assert.match(
+  source,
+  /function openClassroomPreview\(item\)[\s\S]*classroomContentRoute\(item\)[\s\S]*seriesId=/,
+  "classroom preview cards should preserve the selected content or series context",
 );
 for (const field of ["title", "kind", "fallback", "action"]) {
   assert.match(

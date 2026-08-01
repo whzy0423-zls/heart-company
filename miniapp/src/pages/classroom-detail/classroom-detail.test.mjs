@@ -57,6 +57,11 @@ assert.match(source, /@click="loadDetail">重新加载/, "load failures should r
 assert.match(source, /@click="handleAccessAction"/, "locked lessons should retain access action");
 assert.match(source, /@click="toggleAudio"/, "audio lessons should retain playback control");
 assert.match(source, /@click="refreshPlayback"/, "playback loading failures should retain retry");
+assert.match(
+  source,
+  /onShow\(\(\) => \{[\s\S]*!playbackUrl\.value[\s\S]*refreshPlayback\(\)/,
+  "returning to a playable lesson should resume an interrupted playback request",
+);
 assert.doesNotMatch(
   source,
   /role="button"[\s\S]{0,500}<button/,
@@ -466,7 +471,7 @@ try {
     assert.equal(
       page.playbackUrl.value,
       "",
-      "playback resolved after hide must wait for an explicit user retry",
+      "playback resolved after hide must not update the hidden page",
     );
     assert.equal(state.audios.length, 0);
     const calls = state.playbackCalls;
@@ -474,9 +479,11 @@ try {
     await flush();
     assert.equal(
       state.playbackCalls,
-      calls,
-      "showing the page must not autoplay or automatically reacquire playback",
+      calls + 1,
+      "showing the page should reacquire playback after an interrupted request",
     );
+    assert.equal(page.playbackUrl.value, "https://signed.example/hidden-late");
+    assert.equal(state.audios[0]?.playCalls || 0, 0, "restoring playback must not autoplay media");
   }
 
   {

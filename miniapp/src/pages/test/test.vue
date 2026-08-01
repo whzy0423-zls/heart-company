@@ -294,6 +294,7 @@ button::after {
 
 .gender__card {
   flex: 1;
+  min-width: 0;
   min-height: 286rpx;
   display: flex;
   flex-direction: column;
@@ -508,6 +509,10 @@ button::after {
 }
 
 @media (max-width: 360px) {
+  .gender__row {
+    flex-direction: column;
+  }
+
   .quiz__q {
     font-size: 36rpx;
   }

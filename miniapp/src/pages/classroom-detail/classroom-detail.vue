@@ -496,7 +496,11 @@ onHide(() => {
 });
 
 onShow(() => {
-  if (!disposed) pageVisible = true;
+  if (disposed) return;
+  pageVisible = true;
+  if (content.value.canPlay && !playbackUrl.value && !playbackLoading.value && !playbackError.value) {
+    refreshPlayback();
+  }
 });
 
 onUnload(() => {

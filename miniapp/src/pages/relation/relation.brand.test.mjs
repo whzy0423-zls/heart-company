@@ -38,5 +38,6 @@ assert.match(source, /v-if="stage === 'pick'"/, 'relation type picker state shou
 assert.match(source, /v-else-if="stage === 'result'"/, 'relation result state should remain available')
 assert.match(source, /@click="analyze"/, 'relation analysis action should remain available')
 assert.match(source, /@click="reset"/, 'relation reset action should remain available')
+assert.match(source, /onUnload\([\s\S]*clearTimeout\(redirectTimer\)/, 'invalid route redirects should be cancelled when the page unloads')
 
 console.log('relation brand tests passed')

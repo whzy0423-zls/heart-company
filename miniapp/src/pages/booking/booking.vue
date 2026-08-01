@@ -749,7 +749,7 @@ button::after {
   }
 }
 
-@media (max-width: 380px) {
+@media (max-width: 420px) {
   .enterprise-scenarios__grid {
     grid-template-columns: 1fr;
   }

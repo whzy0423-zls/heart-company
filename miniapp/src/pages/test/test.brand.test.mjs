@@ -35,5 +35,7 @@ for (const requiredLogic of [
 }
 assert.match(template, /:disabled="answerLocked"/, 'answer locking should still disable options while advancing')
 assert.match(template, /v-if="step > 0"[\s\S]{0,180}@click="back"/, 'quiz page should preserve previous-question navigation')
+assert.match(style, /@media \(max-width: 360px\)[\s\S]*\.gender__row[\s\S]*flex-direction:\s*column/, 'gender selection should stack on narrow screens')
+assert.match(style, /\.gender__card\s*\{[\s\S]*min-width:\s*0/, 'gender cards should be allowed to shrink without horizontal overflow')
 
 console.log('test page brand tests passed')

@@ -1320,8 +1320,8 @@ assert.match(
 );
 assert.match(
   sourceBracedBody(learnPage, /function\s+goTest\s*\(\s*\)\s*\{/.exec(learnPage)) || "",
-  /^\s*uni\.switchTab\(\{\s*url:\s*["']\/pages\/index\/index["']\s*\}\)\s*;?\s*$/,
-  "learn test CTA should keep its fixed tab navigation target",
+  /^\s*uni\.navigateTo\(\{\s*url:\s*["']\/pages\/test\/test["']\s*\}\)\s*;?\s*$/,
+  "learn test CTA should open the test page directly",
 );
 assert.match(
   learnTemplate,
