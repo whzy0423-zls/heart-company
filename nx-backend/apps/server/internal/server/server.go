@@ -184,6 +184,7 @@ type Server struct {
 	xinzhiliLeaseMu     sync.Mutex
 	xinzhiliLeases      map[int64]*xinzhiliRealtimeConn
 	xinzhiliModelConfig xinzhiliModelConfigStore
+	theoryAdmin         theoryLibraryAdminService
 }
 
 type websiteSignupCreator interface {
@@ -372,6 +373,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	)
 	s.xinzhiliLeases = make(map[int64]*xinzhiliRealtimeConn)
 	s.xinzhiliModelConfig = databaseXinzhiliModelConfigStore{db: database}
+	s.theoryAdmin = theoryLibraryAdminStore{db: database}
 	s.loginLimiter = newStrRateLimiter(10, time.Minute)
 	s.loginDBLimiter = newDBRateLimiter(database, "admin_login", 10, time.Minute)
 	s.smsPhoneLimiter = newStrRateLimiter(1, time.Minute)
@@ -662,6 +664,8 @@ func (s *Server) routes() {
 	// 模型配置：读取/保存兼容协议对话模型及视频、图片、分析模型配置，均需登录。
 	s.mux.HandleFunc("/api/model-config", s.requirePermission("System:Model:Config", s.modelConfig))
 	s.mux.HandleFunc("/api/xinzhili-model-config", s.requirePermission("System:XinzhiliModel:Config", s.xinzhiliModelConfigHandler))
+	s.mux.HandleFunc("/api/theory-libraries", s.requirePermission("System:TheoryLibrary:Manage", s.theoryLibrariesHandler))
+	s.mux.HandleFunc("/api/theory-libraries/", s.requirePermission("System:TheoryLibrary:Manage", s.theoryLibraryActionHandler))
 	// 对话模型连通性测试：对 MiniMax 网关做一次轻量探活，需登录。
 	s.mux.HandleFunc("/api/model-config/test-chat", s.requirePermission("System:Model:Config", s.method(http.MethodPost, s.testChatModel)))
 	// ===== App API =====
