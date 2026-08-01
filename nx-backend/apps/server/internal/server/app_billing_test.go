@@ -105,6 +105,23 @@ func TestAppBillingEntitlementsIncludesExistingPendingOrder(t *testing.T) {
 	}
 }
 
+func TestAppBillingEntitlementsHidesPendingOrderOlderThanPaidGrant(t *testing.T) {
+	s := newAppBillingEntitlementTestServer(t, "stale_pending|active:vip_year")
+	response := performAppBillingRequest(t, s.appBillingEntitlements, http.MethodGet, "/api/app/billing/entitlements", nil)
+	var body struct {
+		Data appEntitlementResp `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Data.IsMember || body.Data.PlanCode != "vip_year" {
+		t.Fatalf("expected active yearly membership, got %+v", body.Data)
+	}
+	if body.Data.PendingOrder != nil {
+		t.Fatalf("older pending order must not override a later paid grant: %+v", body.Data.PendingOrder)
+	}
+}
+
 func TestAppBillingEntitlementsReturnsActiveMembershipDates(t *testing.T) {
 	s := newAppBillingEntitlementTestServer(t, "active:vip_quarter")
 	response := performAppBillingRequest(t, s.appBillingEntitlements, http.MethodGet, "/api/app/billing/entitlements", nil)
@@ -369,6 +386,7 @@ func (c *appBillingTestConn) QueryContext(_ context.Context, query string, args 
 	if strings.Contains(query, "FROM app_users") {
 		level := c.memberLevel
 		level = strings.TrimPrefix(level, "pending|")
+		level = strings.TrimPrefix(level, "stale_pending|")
 		var startedAt driver.Value
 		var expiresAt driver.Value
 		now := time.Now()
@@ -393,7 +411,14 @@ func (c *appBillingTestConn) QueryContext(_ context.Context, query string, args 
 		}, nil
 	}
 	if strings.Contains(query, "FROM app_orders") {
-		if strings.Contains(query, "status='pending_confirmation'") && !strings.HasPrefix(c.memberLevel, "pending|") {
+		if strings.Contains(query, "status='pending_confirmation'") &&
+			strings.HasPrefix(c.memberLevel, "stale_pending|") &&
+			strings.Contains(query, "NOT EXISTS") {
+			return &appBillingTestRows{columns: []string{"out_trade_no", "product_id", "title", "amount", "status"}}, nil
+		}
+		if strings.Contains(query, "status='pending_confirmation'") &&
+			!strings.HasPrefix(c.memberLevel, "pending|") &&
+			!strings.HasPrefix(c.memberLevel, "stale_pending|") {
 			return &appBillingTestRows{columns: []string{"out_trade_no", "product_id", "title", "amount", "status"}}, nil
 		}
 		outTradeNo := "app7-vip_month-1"
