@@ -309,10 +309,15 @@ func (s *Server) appBillingOrderStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) findPendingAppOrder(ctx context.Context, appUserID int64) (appOrderResp, bool, error) {
 	var resp appOrderResp
 	err := s.db.QueryRowContext(ctx, `
-		SELECT out_trade_no, product_id, title, amount, status
-		FROM app_orders
-		WHERE app_user_id=$1 AND status='pending_confirmation'
-		ORDER BY create_time DESC, id DESC LIMIT 1`, appUserID).Scan(
+		SELECT p.out_trade_no, p.product_id, p.title, p.amount, p.status
+		FROM app_orders p
+		WHERE p.app_user_id=$1 AND p.status='pending_confirmation'
+		  AND NOT EXISTS (
+			SELECT 1 FROM app_orders resolved
+			WHERE resolved.app_user_id=p.app_user_id AND resolved.status='paid'
+			  AND (resolved.create_time>p.create_time OR (resolved.create_time=p.create_time AND resolved.id>p.id))
+		  )
+		ORDER BY p.create_time DESC, p.id DESC LIMIT 1`, appUserID).Scan(
 		&resp.OutTradeNo, &resp.ProductID, &resp.Title, &resp.Amount, &resp.Status,
 	)
 	if err == sql.ErrNoRows {
