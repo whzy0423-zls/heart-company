@@ -146,12 +146,12 @@ func TestRecoverInterruptedSubmissions(t *testing.T) {
 	}
 
 	interrupted := seeded[1]
-	_, err = store.submissions.Prepare(ctx, PrepareSubmissionInput{
+	_, _, err = store.submissions.Prepare(ctx, PrepareSubmissionInput{
 		RequestKey: "99999999-9999-4999-8999-999999999999",
 		ShotID:     interrupted.shotID,
 	})
 	var active *ActiveSubmissionError
-	if !errors.As(err, &active) || active.Status != SubmissionUnknownOutcome {
+	if !errors.As(err, &active) || active.Existing.Status != SubmissionUnknownOutcome {
 		t.Fatalf("recovered unknown outcome must retain the active lock, got %v", err)
 	}
 
@@ -159,15 +159,15 @@ func TestRecoverInterruptedSubmissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manual reconcile after empty-task recovery: %v", err)
 	}
-	generationIDs = append(generationIDs, generation.ID)
-	if generation.TaskID != "manual-provider-task" || generation.Status != "queued" {
+	generationIDs = append(generationIDs, generation.Generation.ID)
+	if generation.Generation.TaskID != "manual-provider-task" || generation.Generation.Status != "queued" {
 		t.Fatalf("manual reconcile returned unexpected generation: %+v", generation)
 	}
 	resolved, err := store.submissions.GetByRequestKey(ctx, interrupted.requestKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.Status != SubmissionReconciled || resolved.TaskID != "manual-provider-task" || resolved.GenerationID != generation.ID {
+	if resolved.Status != SubmissionReconciled || resolved.UpstreamTaskID != "manual-provider-task" || resolved.GenerationID != generation.Generation.ID {
 		t.Fatalf("manual reconcile did not resolve recovered submission: %+v", resolved)
 	}
 

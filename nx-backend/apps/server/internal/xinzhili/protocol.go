@@ -88,12 +88,22 @@ type Envelope struct {
 }
 
 type ErrorPayload struct {
-	Code         string  `json:"code"`
-	Message      string  `json:"message"`
-	Retryable    bool    `json:"retryable"`
-	Fatal        bool    `json:"fatal"`
-	RetryAfterMs *int64  `json:"retryAfterMs,omitempty"`
-	TurnID       *string `json:"turnId,omitempty"`
+	Code         string        `json:"code"`
+	Message      string        `json:"message"`
+	Retryable    bool          `json:"retryable"`
+	Fatal        bool          `json:"fatal"`
+	RetryAfterMs *int64        `json:"retryAfterMs,omitempty"`
+	TurnID       *string       `json:"turnId,omitempty"`
+	ModeSnapshot *ModeSnapshot `json:"modeSnapshot,omitempty"`
+}
+
+type ModeSnapshot struct {
+	EnabledModes  []Mode `json:"enabledModes"`
+	RequestedMode Mode   `json:"requestedMode"`
+	PendingMode   Mode   `json:"pendingMode"`
+	EffectiveMode Mode   `json:"effectiveMode"`
+	Revision      int64  `json:"revision"`
+	ConfigVersion int64  `json:"configVersion"`
 }
 
 func EncodeEnvelope(envelope Envelope, direction Direction, sessionReady bool) ([]byte, error) {
@@ -427,12 +437,13 @@ func DecodeTurnStartKey(raw json.RawMessage) (uint64, error) {
 
 func validateErrorPayload(raw json.RawMessage) error {
 	var payload struct {
-		Code         string  `json:"code"`
-		Message      string  `json:"message"`
-		Retryable    *bool   `json:"retryable"`
-		Fatal        *bool   `json:"fatal"`
-		RetryAfterMs *int64  `json:"retryAfterMs,omitempty"`
-		TurnID       *string `json:"turnId,omitempty"`
+		Code         string        `json:"code"`
+		Message      string        `json:"message"`
+		Retryable    *bool         `json:"retryable"`
+		Fatal        *bool         `json:"fatal"`
+		RetryAfterMs *int64        `json:"retryAfterMs,omitempty"`
+		TurnID       *string       `json:"turnId,omitempty"`
+		ModeSnapshot *ModeSnapshot `json:"modeSnapshot,omitempty"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -447,6 +458,22 @@ func validateErrorPayload(raw json.RawMessage) error {
 	}
 	if payload.TurnID != nil && strings.TrimSpace(*payload.TurnID) == "" {
 		return errors.New("error payload turnId must not be blank")
+	}
+	if payload.ModeSnapshot != nil {
+		if payload.ModeSnapshot.Revision < 0 {
+			return errors.New("modeSnapshot revision must be non-negative")
+		}
+		if !knownMode(payload.ModeSnapshot.RequestedMode) || !knownMode(payload.ModeSnapshot.PendingMode) || !knownMode(payload.ModeSnapshot.EffectiveMode) {
+			return errors.New("modeSnapshot contains unknown current mode")
+		}
+		for _, mode := range payload.ModeSnapshot.EnabledModes {
+			if !knownMode(mode) {
+				return errors.New("modeSnapshot enabledModes contains unknown mode")
+			}
+		}
+		if !containsMode(payload.ModeSnapshot.EnabledModes, ModeNormal) {
+			return errors.New("modeSnapshot enabledModes must contain normal")
+		}
 	}
 	return nil
 }

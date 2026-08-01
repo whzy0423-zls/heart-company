@@ -44,6 +44,7 @@ type Store struct {
 	uploader        storage.ObjectUploader
 	submissions     *SubmissionStore
 	defaultModel    string
+	generationMode  string
 	modelProfile    string
 	gatewayContract config.GatewayContractConfig
 }
@@ -155,6 +156,14 @@ func NewStore(database *sql.DB, uploads *uploadasset.Store, cfg config.VideoConf
 
 // Generate 创建一个视频生成任务：调用网关拿到 task_id 后落库 'queued' 行。
 // 不在此阻塞等待结果——前端按返回的 id 调 Refresh 轮询。
+// RecoverInterruptedSubmissions delegates restart recovery to the durable submission store.
+func (s *Store) RecoverInterruptedSubmissions(ctx context.Context, unknownReason, demoReason string) (int64, error) {
+	if s == nil || s.submissions == nil {
+		return 0, nil
+	}
+	return s.submissions.RecoverInterrupted(ctx, unknownReason, demoReason)
+}
+
 func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, error) {
 	prompt := strings.TrimSpace(input.Prompt)
 

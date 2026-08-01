@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -236,7 +237,7 @@ func (c Config) SectionPresent(section string) bool {
 	case "chat":
 		return c.Chat != (ChatConfig{})
 	case "video":
-		return c.Video != (VideoConfig{})
+		return !reflect.DeepEqual(c.Video, VideoConfig{})
 	case "image":
 		return c.Image != (ImageConfig{})
 	case "analysis":

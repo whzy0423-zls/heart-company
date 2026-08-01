@@ -158,6 +158,7 @@ func (e *SubmissionInProgressError) Error() string {
 }
 
 type UnknownOutcomeError struct {
+	TaskID       string
 	RequestKey   string
 	SubmissionID string
 	Persisted    bool
@@ -275,6 +276,23 @@ func (s *SubmissionStore) Prepare(ctx context.Context, input PrepareSubmissionIn
 		}
 	}
 	return Submission{}, false, err
+}
+
+// RecoverInterrupted marks submissions left in submitting state after a restart.
+func (s *SubmissionStore) RecoverInterrupted(ctx context.Context, unknownReason, demoReason string) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, nil
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE video_generation_submissions
+		   SET status = CASE WHEN request_snapshot->>'generationMode' = $3 THEN 'cancelled' ELSE 'unknown_outcome' END,
+		       error_message = CASE WHEN request_snapshot->>'generationMode' = $3 THEN $2 ELSE $1 END,
+		       update_time = now()
+		 WHERE status = 'submitting'`, strings.TrimSpace(unknownReason), strings.TrimSpace(demoReason), "demo")
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func (s *SubmissionStore) GetByRequestKey(ctx context.Context, requestKey string) (Submission, error) {

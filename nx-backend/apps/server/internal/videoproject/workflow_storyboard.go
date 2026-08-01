@@ -79,18 +79,19 @@ type StoryboardProjectDefaults struct {
 }
 
 type MaterializedStoryboardReference struct {
-	AssetKey  string
-	AssetType string
-	ObjectURL string
-	Role      string
-	SortOrder int
-	UsageNote string
-	SourceID  string
+	AssetKey   string
+	AssetType  string
+	ObjectURL  string
+	Role       string
+	SortOrder  int
+	UsageNote  string
+	SourceID   string
 	SourceType string
 }
 
 type StoryboardShotMaterialization struct {
-	ID                        string
+	ID   string
+	Shot StoryboardShot `json:"shot"`
 	StoryboardShot
 	SceneID                   string
 	CharacterIDs              []string
@@ -622,4 +623,21 @@ func nonNilStoryboardShots(shots []StoryboardShot) []StoryboardShot {
 		return []StoryboardShot{}
 	}
 	return shots
+}
+
+func buildStoryboardMaterializationPlan(draft StoryboardVersion, diffContext StoryboardDiffContext, input ConfirmStoryboardInput) (StoryboardMaterializationPlan, error) {
+	if input.ExpectedRevision != draft.Revision {
+		return StoryboardMaterializationPlan{}, &WorkflowConflictError{Code: "workflow_revision_conflict", Message: "分镜草稿版本已变化", CurrentRevision: draft.Revision}
+	}
+	if err := validateStoryboardDiffDependencies(draft, diffContext); err != nil {
+		return StoryboardMaterializationPlan{}, err
+	}
+	diff, err := previewStoryboardDiff(draft, diffContext)
+	if err != nil {
+		return StoryboardMaterializationPlan{}, err
+	}
+	if strings.TrimSpace(input.DiffToken) == "" || input.DiffToken != diff.DiffToken {
+		return StoryboardMaterializationPlan{}, &WorkflowConflictError{Code: "workflow_diff_conflict", Message: "分镜差异已变化", CurrentRevision: draft.Revision}
+	}
+	return StoryboardMaterializationPlan{}, nil
 }

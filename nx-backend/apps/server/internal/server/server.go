@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -2907,7 +2908,7 @@ func validateChangedIncomingNonChatModelConfigBases(incoming, stored, merged mod
 		{name: "admin", label: "admin.apiBase", apiBase: merged.Admin.APIBase, changed: stored.Admin != merged.Admin},
 		{name: "dailyQuiz", label: "dailyQuiz.apiBase", apiBase: merged.DailyQuiz.APIBase, changed: stored.DailyQuiz != merged.DailyQuiz},
 		{name: "image", label: "image.apiBase", apiBase: merged.Image.APIBase, changed: stored.Image != merged.Image},
-		{name: "video", label: "video.apiBase", apiBase: merged.Video.APIBase, changed: stored.Video != merged.Video},
+		{name: "video", label: "video.apiBase", apiBase: merged.Video.APIBase, changed: !reflect.DeepEqual(stored.Video, merged.Video)},
 	}
 	for _, section := range sections {
 		if !incoming.SectionPresent(section.name) || !section.changed {
@@ -2980,7 +2981,7 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 		assistWasEnabled := stored.AssistEnabled()
 		assistEnabled := merged.AssistEnabled()
 		assistChanged := assistWasEnabled != assistEnabled
-		videoChanged := stored.Video != merged.Video
+		videoChanged := !reflect.DeepEqual(stored.Video, merged.Video)
 		imageChanged := stored.Image != merged.Image
 		analysisChanged := stored.Analysis != merged.Analysis
 		needBuild := chatFieldsChanged || (!assistWasEnabled && assistEnabled) || (promptChanged && assistEnabled)
@@ -3351,4 +3352,13 @@ func (s *Server) corsOriginAllowed(origin string) bool {
 		}
 	}
 	return false
+}
+
+func (s *Server) replaceVideoRuntime(cfg config.VideoConfig) {
+	cfg = cloneVideoConfig(cfg)
+	next := video.NewStore(s.db, s.uploads, cfg, s.uploader)
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
+	s.videos = next
+	s.videoConfig = cfg
 }

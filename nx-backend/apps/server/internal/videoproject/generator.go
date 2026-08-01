@@ -62,8 +62,12 @@ func NewGenerator(store *Store, videoStore normalizedVideoStore, uploads *upload
 
 // GenerateShot 提交分镜视频生成任务，立即返回 video.Generation（异步生成）。
 // 后台监控完成后自动提取尾帧。
-func (g *Generator) GenerateShot(ctx context.Context, shotID string) (video.Generation, error) {
-	return g.GenerateShotWithInput(ctx, shotID, GenerateShotInput{})
+func (g *Generator) GenerateShot(ctx context.Context, shotID string, requestKeys ...string) (video.Generation, error) {
+	input := GenerateShotInput{}
+	if len(requestKeys) > 0 {
+		input.RequestKey = strings.TrimSpace(requestKeys[0])
+	}
+	return g.GenerateShotWithInput(ctx, shotID, input)
 }
 
 func (g *Generator) GenerateShotWithInput(ctx context.Context, shotID string, input GenerateShotInput) (video.Generation, error) {

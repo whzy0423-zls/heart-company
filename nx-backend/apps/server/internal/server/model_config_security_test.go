@@ -367,7 +367,7 @@ func TestStoredRuntimeSectionsFallbackIndependently(t *testing.T) {
 	videoCfg := safeStoredVideoConfig(cfg, env.Video)
 	imageCfg := safeStoredImageConfig(cfg, env.Image)
 	analysisCfg := safeStoredAnalysisConfig(cfg, env.MiniMax)
-	if videoCfg != env.Video {
+	if !reflect.DeepEqual(videoCfg, env.Video) {
 		t.Fatalf("unsafe video did not fall back to env: %+v", videoCfg)
 	}
 	if imageCfg.Model != "stored-image" || imageCfg.APIKey != "stored-image-key" {

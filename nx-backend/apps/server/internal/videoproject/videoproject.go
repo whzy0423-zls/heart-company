@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -24,17 +25,20 @@ func NewStore(database *sql.DB) *Store {
 // ---------- 数据模型 ----------
 
 type Project struct {
-	ComposeStatus     string `json:"composeStatus"`
-	CreateTime        string `json:"createTime"`
-	Description       string `json:"description"`
-	FinalVideoAssetID string `json:"finalVideoAssetId"`
-	FinalVideoURL     string `json:"finalVideoUrl"`
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	Status            string `json:"status"`
-	StyleGuide        string `json:"styleGuide"`
-	Theme             string `json:"theme"`
-	UpdateTime        string `json:"updateTime"`
+	ComposeStatus       string `json:"composeStatus"`
+	CreateTime          string `json:"createTime"`
+	Description         string `json:"description"`
+	FinalVideoAssetID   string `json:"finalVideoAssetId"`
+	FinalVideoInputHash string `json:"finalVideoInputHash"`
+	FinalVideoURL       string `json:"finalVideoUrl"`
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	ScriptContent       string `json:"scriptContent"`
+	ScriptRevision      int    `json:"scriptRevision"`
+	Status              string `json:"status"`
+	StyleGuide          string `json:"styleGuide"`
+	Theme               string `json:"theme"`
+	UpdateTime          string `json:"updateTime"`
 	// 统计字段（列表页展示）
 	CharacterCount int64 `json:"characterCount"`
 	CompletedShots int64 `json:"completedShots"`
@@ -65,36 +69,42 @@ type Scene struct {
 }
 
 type Shot struct {
-	ActionDescription       string      `json:"actionDescription"`
-	AspectRatio             string      `json:"aspectRatio"`
-	CameraMovement          string      `json:"cameraMovement"`
-	CharacterIDs            []string    `json:"characterIds"`
-	CreateTime              string      `json:"createTime"`
-	Duration                int         `json:"duration"`
-	DynamicDescription      string      `json:"dynamicDescription"`
-	EndFrameURL             string      `json:"endFrameUrl"`
-	ErrorMessage            string      `json:"errorMessage"`
-	GeneratedPrompt         string      `json:"generatedPrompt"`
-	GenerationID            string      `json:"generationId"`
-	GridStoryboardPrompt    string      `json:"gridStoryboardPrompt"`
-	ID                      string      `json:"id"`
-	ImageReferenceModes     []string    `json:"imageReferenceModes"`
-	Name                    string      `json:"name"`
-	OrderNum                int         `json:"orderNum"`
-	ProjectID               string      `json:"projectId"`
-	SceneID                 string      `json:"sceneId"`
-	ScriptOriginalContent   string      `json:"scriptOriginalContent"`
-	ShotAssets              []ShotAsset `json:"shotAssets"`
-	SoundAndPictureTogether string      `json:"soundAndPictureTogether"`
-	Status                  string      `json:"status"`
-	StoryboardURL           string      `json:"storyboardUrl"`
-	UpdateTime              string      `json:"updateTime"`
-	UsedAudios              []string    `json:"usedAudios"`
-	UsedImages              []string    `json:"usedImages"`
-	UsedVideos              []string    `json:"usedVideos"`
-	VideoModel              string      `json:"videoModel"`
-	VideoResolution         string      `json:"videoResolution"`
-	VideoReferenceMode      string      `json:"videoReferenceMode"`
+	ActionDescription          string      `json:"actionDescription"`
+	AspectRatio                string      `json:"aspectRatio"`
+	CameraMovement             string      `json:"cameraMovement"`
+	CharacterIDs               []string    `json:"characterIds"`
+	CreateTime                 string      `json:"createTime"`
+	Duration                   int         `json:"duration"`
+	DynamicDescription         string      `json:"dynamicDescription"`
+	EndFrameURL                string      `json:"endFrameUrl"`
+	ErrorMessage               string      `json:"errorMessage"`
+	GeneratedPrompt            string      `json:"generatedPrompt"`
+	GenerationID               string      `json:"generationId"`
+	GenerationRevision         int         `json:"generationRevision"`
+	GridStoryboardPrompt       string      `json:"gridStoryboardPrompt"`
+	ID                         string      `json:"id"`
+	ImageReferenceModes        []string    `json:"imageReferenceModes"`
+	Name                       string      `json:"name"`
+	OrderNum                   int         `json:"orderNum"`
+	ProjectID                  string      `json:"projectId"`
+	SceneID                    string      `json:"sceneId"`
+	SelectedGenerationID       string      `json:"selectedGenerationId"`
+	SelectedGenerationRevision int         `json:"selectedGenerationRevision"`
+	SelectedGenerationStatus   string      `json:"selectedGenerationStatus"`
+	SourceKey                  string      `json:"sourceKey"`
+	SourceScriptRevision       int         `json:"sourceScriptRevision"`
+	ScriptOriginalContent      string      `json:"scriptOriginalContent"`
+	ShotAssets                 []ShotAsset `json:"shotAssets"`
+	SoundAndPictureTogether    string      `json:"soundAndPictureTogether"`
+	Status                     string      `json:"status"`
+	StoryboardURL              string      `json:"storyboardUrl"`
+	UpdateTime                 string      `json:"updateTime"`
+	UsedAudios                 []string    `json:"usedAudios"`
+	UsedImages                 []string    `json:"usedImages"`
+	UsedVideos                 []string    `json:"usedVideos"`
+	VideoModel                 string      `json:"videoModel"`
+	VideoResolution            string      `json:"videoResolution"`
+	VideoReferenceMode         string      `json:"videoReferenceMode"`
 	// 联查生成记录的视频地址（前端预览）
 	VideoURL string `json:"videoUrl"`
 }
@@ -188,6 +198,55 @@ func toJSONArray(items []string) string {
 	}
 	data, _ := json.Marshal(items)
 	return string(data)
+}
+
+func normalizeRevisionText(raw string) string {
+	raw = strings.ReplaceAll(strings.ReplaceAll(raw, "\r\n", "\n"), "\r", "\n")
+	lines := strings.Split(raw, "\n")
+	for i, line := range lines {
+		lines[i] = strings.Join(strings.Fields(line), " ")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func normalizedStringSet(items []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func canSelectGeneration(shotID, ownerShotID, status, videoURL string) bool {
+	if strings.TrimSpace(shotID) == "" || strings.TrimSpace(shotID) != strings.TrimSpace(ownerShotID) || strings.TrimSpace(videoURL) == "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed", "succeeded", "success":
+		return true
+	default:
+		return false
+	}
+}
+
+func scriptContentChanged(before, after string) bool {
+	return normalizeRevisionText(before) != normalizeRevisionText(after)
+}
+
+func shotGenerationInputChanged(before, after ShotInput) bool {
+	b, _ := json.Marshal(before)
+	a, _ := json.Marshal(after)
+	return string(b) != string(a)
 }
 
 func fromJSONArray(raw []byte) []string {
