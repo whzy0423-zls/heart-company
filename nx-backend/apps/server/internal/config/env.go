@@ -60,6 +60,8 @@ type Env struct {
 	Video             VideoConfig
 	Image             ImageConfig
 	ASR               ASRConfig
+	// XinzhiliSecretKey 用于芯之力独立音色配置加密（base64 32 字节主密钥）。
+	XinzhiliSecretKey string
 	JPush             JPushConfig
 }
 
@@ -1184,6 +1186,7 @@ func Load() Env {
 			Model:          getenv("ASR_MODEL", "FunAudioLLM/SenseVoiceSmall"),
 			TimeoutSeconds: asrTimeout,
 		},
+		XinzhiliSecretKey: strings.TrimSpace(getenv("XINZHILI_SECRET_KEY", "")),
 		JPush: JPushConfig{
 			AppKey:       getenv("JPUSH_APP_KEY", ""),
 			MasterSecret: getenv("JPUSH_MASTER_SECRET", ""),

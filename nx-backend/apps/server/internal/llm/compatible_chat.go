@@ -200,10 +200,7 @@ func (g *CompatibleChatGenerator) validate() error {
 }
 
 func (g *CompatibleChatGenerator) resolveSystemPrompt() string {
-	if g.systemPrompt != "" {
-		return g.systemPrompt
-	}
-	return defaultSystemPrompt
+	return appendChatCustomSystemPrompt(defaultSystemPrompt, g.systemPrompt)
 }
 
 func (g *CompatibleChatGenerator) providerLabel() string {

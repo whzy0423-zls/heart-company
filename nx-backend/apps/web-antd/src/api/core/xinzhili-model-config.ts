@@ -1,3 +1,4 @@
+import type { VoiceOption } from './voice';
 import { requestClient } from '#/api/request';
 
 export type XinzhiliMode =
@@ -85,4 +86,8 @@ export function updateXinzhiliModelConfigApi(
     '/xinzhili-model-config',
     data,
   );
+}
+
+export function getXinzhiliVoiceOptionsApi() {
+  return requestClient.get<VoiceOption[]>('/voice/options');
 }

@@ -63,6 +63,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/voice"
 	"nine-xing/nx-backend/apps/server/internal/wechat"
 	"nine-xing/nx-backend/apps/server/internal/wxpay"
+	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
 
 type Server struct {
@@ -185,6 +186,7 @@ type Server struct {
 	xinzhiliLeaseMu     sync.Mutex
 	xinzhiliLeases      map[int64]*xinzhiliRealtimeConn
 	xinzhiliModelConfig xinzhiliModelConfigStore
+	xinzhiliVoiceConfig xinzhiliVoiceConfigStore
 	theoryAdmin         theoryLibraryAdminService
 }
 
@@ -375,6 +377,15 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	)
 	s.xinzhiliLeases = make(map[int64]*xinzhiliRealtimeConn)
 	s.xinzhiliModelConfig = databaseXinzhiliModelConfigStore{db: database}
+	var xinzhiliVoiceCodec *xinzhili.VoiceSecretCodec
+	if strings.TrimSpace(env.XinzhiliSecretKey) != "" {
+		if codec, codecErr := xinzhili.NewVoiceSecretCodec(env.XinzhiliSecretKey); codecErr == nil {
+			xinzhiliVoiceCodec = codec
+		} else {
+			log.Printf("xinzhili voice secret key invalid: %v", codecErr)
+		}
+	}
+	s.xinzhiliVoiceConfig = xinzhili.NewVoiceConfigStore(database, xinzhiliVoiceCodec)
 	s.theoryAdmin = theoryLibraryAdminStore{db: database}
 	s.loginLimiter = newStrRateLimiter(10, time.Minute)
 	s.loginDBLimiter = newDBRateLimiter(database, "admin_login", 10, time.Minute)
@@ -683,6 +694,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/model-config", s.requirePermission("System:Model:Config", s.modelConfig))
 	s.mux.HandleFunc("/api/video/capabilities", s.method(http.MethodGet, s.requirePermission("Video:Generate:Manage", s.videoCapabilities)))
 	s.mux.HandleFunc("/api/xinzhili-model-config", s.requirePermission("System:XinzhiliModel:Config", s.xinzhiliModelConfigHandler))
+	s.mux.HandleFunc("/api/xinzhili-voice-config", s.requirePermission("System:XinzhiliModel:Config", s.xinzhiliVoiceConfigHandler))
 	s.mux.HandleFunc("/api/theory-libraries", s.requirePermission("System:TheoryLibrary:Manage", s.theoryLibrariesHandler))
 	s.mux.HandleFunc("/api/theory-libraries/", s.requirePermission("System:TheoryLibrary:Manage", s.theoryLibraryActionHandler))
 	// 对话模型连通性测试：对 MiniMax 网关做一次轻量探活，需登录。

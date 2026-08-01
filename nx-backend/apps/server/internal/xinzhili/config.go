@@ -20,6 +20,7 @@ const (
 	TTSProviderOpenAICompatible = "openai-compatible"
 	TTSProviderMiniMax          = "minimax"
 	TTSProviderBailian          = "bailian"
+	TTSProviderAliyunCosyVoice  = "aliyun-cosyvoice"
 
 	maxEndpointRunes = 2048
 	maxAPIKeyRunes   = 4096
@@ -219,8 +220,8 @@ func validateNormalized(c Config) error {
 	if !IsOfficialDashScopeRealtimeASREndpoint(c.RealtimeASR.Endpoint) {
 		return errors.New("实时 ASR endpoint 必须为官方 DashScope Paraformer 地址")
 	}
-	if c.TTS.Provider != TTSProviderOpenAICompatible && c.TTS.Provider != TTSProviderMiniMax && c.TTS.Provider != TTSProviderBailian {
-		return errors.New("TTS provider 仅支持 openai-compatible、minimax 或 bailian")
+	if c.TTS.Provider != TTSProviderOpenAICompatible && c.TTS.Provider != TTSProviderMiniMax && c.TTS.Provider != TTSProviderBailian && c.TTS.Provider != TTSProviderAliyunCosyVoice {
+		return errors.New("TTS provider 仅支持 openai-compatible、minimax、bailian 或 aliyun-cosyvoice")
 	}
 	if c.TTS.Model == "" || c.TTS.Voice == "" {
 		return errors.New("TTS 模型和音色不能为空")
@@ -230,6 +231,9 @@ func validateNormalized(c Config) error {
 	}
 	if c.TTS.Provider == TTSProviderMiniMax && c.TTS.GroupID == "" {
 		return errors.New("MiniMax TTS 必须配置 GroupID")
+	}
+	if c.TTS.Provider == TTSProviderAliyunCosyVoice && c.TTS.GroupID == "" {
+		return errors.New("阿里 CosyVoice TTS 必须配置业务空间")
 	}
 	if c.TTS.Format != "mp3" {
 		return errors.New("TTS format 必须为 mp3")
@@ -252,11 +256,15 @@ func validateProvidedStructure(c Config) error {
 			return fmt.Errorf("实时 ASR endpoint: %w", err)
 		}
 	}
-	if c.TTS.Provider != "" && c.TTS.Provider != TTSProviderOpenAICompatible && c.TTS.Provider != TTSProviderMiniMax && c.TTS.Provider != TTSProviderBailian {
-		return errors.New("TTS provider 仅支持 openai-compatible、minimax 或 bailian")
+	if c.TTS.Provider != "" && c.TTS.Provider != TTSProviderOpenAICompatible && c.TTS.Provider != TTSProviderMiniMax && c.TTS.Provider != TTSProviderBailian && c.TTS.Provider != TTSProviderAliyunCosyVoice {
+		return errors.New("TTS provider 仅支持 openai-compatible、minimax、bailian 或 aliyun-cosyvoice")
 	}
 	if c.TTS.Endpoint != "" {
-		if err := validateEndpoint(c.TTS.Endpoint, "https"); err != nil {
+		schemes := []string{"https"}
+		if c.TTS.Provider == TTSProviderAliyunCosyVoice {
+			schemes = []string{"wss", "https", "ws"}
+		}
+		if err := validateEndpoint(c.TTS.Endpoint, schemes...); err != nil {
 			return fmt.Errorf("TTS endpoint: %w", err)
 		}
 	}

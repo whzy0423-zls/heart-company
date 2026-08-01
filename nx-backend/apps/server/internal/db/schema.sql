@@ -2544,6 +2544,50 @@ CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_user_card_scene
 CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_scene
   ON app_chat_sessions(app_user_id, card_id, scene, updated_at DESC);
 
+
+-- ----- 芯之力独立音色配置：加密、草稿/启用、版本历史 -----
+CREATE TABLE IF NOT EXISTS app_xinzhili_voice_configs (
+  id BIGSERIAL PRIMARY KEY,
+  version BIGINT NOT NULL CHECK (version > 0),
+  status TEXT NOT NULL CHECK (status IN ('draft', 'active', 'inactive', 'archived')),
+  provider TEXT NOT NULL DEFAULT '',
+  endpoint TEXT NOT NULL DEFAULT '',
+  group_id TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  voice TEXT NOT NULL DEFAULT '',
+  format TEXT NOT NULL DEFAULT 'mp3',
+  api_key_ciphertext TEXT NOT NULL DEFAULT '',
+  api_key_suffix TEXT NOT NULL DEFAULT '',
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_xinzhili_voice_configs_version
+  ON app_xinzhili_voice_configs(version);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_xinzhili_voice_configs_single_draft
+  ON app_xinzhili_voice_configs((true)) WHERE status='draft';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_xinzhili_voice_configs_single_active
+  ON app_xinzhili_voice_configs((true)) WHERE status='active';
+CREATE INDEX IF NOT EXISTS idx_app_xinzhili_voice_configs_status_version
+  ON app_xinzhili_voice_configs(status, version DESC);
+
+CREATE TABLE IF NOT EXISTS app_xinzhili_voice_cleanup_jobs (
+  id BIGSERIAL PRIMARY KEY,
+  config_version BIGINT NOT NULL DEFAULT 0,
+  remote_voice_id TEXT NOT NULL DEFAULT '',
+  provider TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'done', 'failed')) DEFAULT 'pending',
+  attempts INT NOT NULL DEFAULT 0,
+  last_error TEXT NOT NULL DEFAULT '',
+  scheduled_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_xinzhili_voice_cleanup_jobs_status_time
+  ON app_xinzhili_voice_cleanup_jobs(status, scheduled_at, id);
+
 CREATE TABLE IF NOT EXISTS app_xinzhili_mode_preferences (
   app_user_id BIGINT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
   requested_mode TEXT NOT NULL CHECK (requested_mode IN ('normal', 'argument', 'comfort', 'deep_listening')),

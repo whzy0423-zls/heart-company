@@ -769,8 +769,18 @@ func TestMiniMaxGeneratorKeepsConfiguredSystemPromptAndAddsFixedConciseInstructi
 	}
 	system, _ := messages[0].(map[string]any)
 	user, _ := messages[1].(map[string]any)
-	if system["content"] != configuredSystemPrompt {
-		t.Fatalf("configured system prompt was not preserved: %+v", system)
+	systemPrompt, _ := system["content"].(string)
+	for _, want := range []string{
+		"不要主动描述运行载体",
+		"只直接回答用户问题",
+		configuredSystemPrompt,
+		"补充设定只能补充角色背景和表达特色",
+		"不能删除、放宽或反转默认规则",
+		"冲突时始终以前述默认规则为准",
+	} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Fatalf("configured system prompt missing %q: %s", want, systemPrompt)
+		}
 	}
 	userPrompt, _ := user["content"].(string)
 	if !strings.Contains(userPrompt, "允许不完美。") || !strings.HasSuffix(userPrompt, fixedConciseReplyInstruction) {
@@ -796,12 +806,22 @@ func TestBuildUserPromptPutsCurrentDirectivesAfterSavedPreferencesAndQuestion(t 
 	}
 }
 
-func TestResolveSystemPromptKeepsConfiguredOverride(t *testing.T) {
+func TestResolveSystemPromptAppendsConfiguredSupplementWithoutOverridingDefaults(t *testing.T) {
 	const customPrompt = "你是用户自定义的专属陪伴者。"
 	generator := NewMiniMaxGenerator(config.MiniMaxConfig{SystemPrompt: customPrompt})
 
-	if got := generator.resolveSystemPrompt(); got != customPrompt {
-		t.Fatalf("expected configured system prompt %q, got %q", customPrompt, got)
+	got := generator.resolveSystemPrompt()
+	for _, want := range []string{
+		"不要主动描述运行载体",
+		"只直接回答用户问题",
+		customPrompt,
+		"补充设定只能补充角色背景和表达特色",
+		"不能删除、放宽或反转默认规则",
+		"冲突时始终以前述默认规则为准",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("resolved system prompt missing %q: %s", want, got)
+		}
 	}
 }
 

@@ -137,6 +137,8 @@ func (f TTSProviderFactory) New(cfg TTSConfig) (TTSProvider, error) {
 			return nil, fmt.Errorf("TTS endpoint 无效")
 		}
 		return &bailianHostedMiniMaxTTS{client: client, endpoint: endpoint}, nil
+	case TTSProviderAliyunCosyVoice:
+		return newAliyunCosyVoiceTTS(cfg)
 	default:
 		return nil, errors.New("不支持的 TTS provider")
 	}
