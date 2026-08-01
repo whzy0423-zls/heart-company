@@ -16,10 +16,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
-	"os"
-	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -37,39 +38,38 @@ var terminalStatuses = map[string]bool{
 }
 
 type Store struct {
-	client         *Client
-	db             *sql.DB
-	uploads        *uploadasset.Store
-	uploader       storage.ObjectUploader
-	submissions    *SubmissionStore
-	defaultModel   string
-	demoRenderer   DemoRenderer
-	generationMode string
+	client          *Client
+	db              *sql.DB
+	uploads         *uploadasset.Store
+	uploader        storage.ObjectUploader
+	submissions     *SubmissionStore
+	defaultModel    string
+	modelProfile    string
+	gatewayContract config.GatewayContractConfig
 }
 
 type Generation struct {
-	AspectRatio  string  `json:"aspectRatio"`
-	CreateTime   string  `json:"createTime"`
-	Duration     float64 `json:"duration"`
-	ErrorMessage string  `json:"errorMessage"`
-	FPS          float64 `json:"fps"`
-	Height       int     `json:"height"`
-	ID           string  `json:"id"`
-	ImageURL     string  `json:"imageUrl"`
-	Model        string  `json:"model"`
-	Prompt       string  `json:"prompt"`
-	Provider     string  `json:"provider"`
-	RequestKey   string  `json:"requestKey,omitempty"`
-	Seconds      int     `json:"seconds"`
-	ShotID       string  `json:"shotId,omitempty"`
-	ShotRevision int     `json:"shotRevision,omitempty"`
-	Status       string  `json:"status"`
-	SubmissionID int64   `json:"submissionId,omitempty"`
-	TaskID       string  `json:"taskId"`
-	UpdateTime   string  `json:"updateTime"`
-	VideoAssetID string  `json:"videoAssetId"`
-	VideoURL     string  `json:"videoUrl"`
-	Width        int     `json:"width"`
+	AspectRatio      string           `json:"aspectRatio"`
+	CreateTime       string           `json:"createTime"`
+	Duration         float64          `json:"duration"`
+	ErrorMessage     string           `json:"errorMessage"`
+	FPS              float64          `json:"fps"`
+	Height           int              `json:"height"`
+	ID               string           `json:"id"`
+	ImageURL         string           `json:"imageUrl"`
+	Model            string           `json:"model"`
+	Prompt           string           `json:"prompt"`
+	Provider         string           `json:"provider"`
+	Seconds          int              `json:"seconds"`
+	Status           string           `json:"status"`
+	TaskID           string           `json:"taskId"`
+	UpdateTime       string           `json:"updateTime"`
+	VideoAssetID     string           `json:"videoAssetId"`
+	VideoURL         string           `json:"videoUrl"`
+	Width            int              `json:"width"`
+	RequestKey       string           `json:"requestKey,omitempty"`
+	SubmissionID     string           `json:"submissionId,omitempty"`
+	SubmissionStatus SubmissionStatus `json:"submissionStatus,omitempty"`
 }
 
 type PageResult[T any] struct {
@@ -78,29 +78,24 @@ type PageResult[T any] struct {
 }
 
 type GenerateInput struct {
-	AspectRatio  string   `json:"aspectRatio"`
-	Audios       []string `json:"audios"`   // 参考音频 URL
-	ImageURL     string   `json:"imageUrl"` // 兼容旧字段：单张参考图地址
-	Images       []string `json:"images"`   // 参考图片地址（上传到文件桶后的可公网访问 URL）
-	Videos       []string `json:"videos"`   // 参考视频地址（上传到文件桶后的可公网访问 URL）
-	Model        string   `json:"model"`
-	Prompt       string   `json:"prompt"`
-	RequestKey   string   `json:"requestKey"`
-	Seconds      int      `json:"seconds"`
-	ShotID       string   `json:"shotId"`
-	ShotRevision int      `json:"shotRevision"`
-}
-
-type generationRequestSnapshot struct {
-	AspectRatio    string   `json:"aspectRatio"`
-	Audios         []string `json:"audios"`
-	GenerationMode string   `json:"generationMode"`
-	Images         []string `json:"images"`
-	Model          string   `json:"model"`
-	Prompt         string   `json:"prompt"`
-	Seconds        int      `json:"seconds"`
-	ShotRevision   int      `json:"shotRevision"`
-	Videos         []string `json:"videos"`
+	AspectRatio       string      `json:"aspectRatio"`
+	Audios            []string    `json:"audios"` // 参考音频 URL
+	CameraFixed       *bool       `json:"cameraFixed,omitempty"`
+	GenerateAudio     *bool       `json:"generateAudio"`
+	ImageURL          string      `json:"imageUrl"` // 兼容旧字段：单张参考图地址
+	Images            []string    `json:"images"`   // 参考图片地址（上传到文件桶后的可公网访问 URL）
+	Videos            []string    `json:"videos"`   // 参考视频地址（上传到文件桶后的可公网访问 URL）
+	Model             string      `json:"model"`
+	Prompt            string      `json:"prompt"`
+	References        []Reference `json:"references"`
+	Resolution        string      `json:"resolution"`
+	Seed              *int        `json:"seed,omitempty"`
+	Seconds           int         `json:"seconds"`
+	TaskMode          string      `json:"taskMode"`
+	RequestKey        string      `json:"requestKey"`
+	ProjectID         string      `json:"projectId"`
+	ShotID            string      `json:"shotId"`
+	CapabilityVersion string      `json:"capabilityVersion"`
 }
 
 // 网关支持的视频时长（秒），默认 15s。
@@ -118,20 +113,15 @@ func formatTime(t time.Time) string {
 	return t.Format("2006/01/02 15:04:05")
 }
 
-// cleanURLs 去除空白、丢弃空串并按出现顺序去重，
-// 用于整理上传到文件桶后回传的参考图片/视频地址。
+// cleanURLs 去除空白并丢弃空串。重复项必须保留到统一引用规范化
+// 阶段，由 CanonicalizeReferences 返回明确错误，不能静默合并。
 func cleanURLs(urls []string) []string {
-	seen := make(map[string]struct{}, len(urls))
 	out := make([]string, 0, len(urls))
 	for _, u := range urls {
 		u = strings.TrimSpace(u)
 		if u == "" {
 			continue
 		}
-		if _, ok := seen[u]; ok {
-			continue
-		}
-		seen[u] = struct{}{}
 		out = append(out, u)
 	}
 	return out
@@ -146,45 +136,30 @@ func NewStore(database *sql.DB, uploads *uploadasset.Store, cfg config.VideoConf
 	if len(uploaders) > 0 {
 		uploader = uploaders[0]
 	}
-	mode := config.VideoGenerationModeDemo
-	if strings.TrimSpace(cfg.Mode) == config.VideoGenerationModePaid {
-		mode = config.VideoGenerationModePaid
+	contract := cfg.GatewayContract
+	if contract.Name == "" && contract.Version == "" && contract.References.Mode == "" {
+		contract = LegacyFlatContract()
+		cfg.GatewayContract = contract
 	}
 	return &Store{
-		client:         NewClient(cfg),
-		db:             database,
-		uploads:        uploads,
-		uploader:       uploader,
-		submissions:    NewSubmissionStore(database),
-		defaultModel:   model,
-		demoRenderer:   NewFFmpegDemoRenderer(""),
-		generationMode: mode,
+		client:          NewClient(cfg),
+		db:              database,
+		uploads:         uploads,
+		uploader:        uploader,
+		submissions:     NewSubmissionStore(database),
+		defaultModel:    model,
+		modelProfile:    strings.TrimSpace(cfg.ModelProfile),
+		gatewayContract: contract,
 	}
-}
-
-func (s *Store) GenerationMode() string {
-	if s == nil || s.generationMode != config.VideoGenerationModePaid {
-		return config.VideoGenerationModeDemo
-	}
-	return config.VideoGenerationModePaid
-}
-
-// RecoverInterruptedSubmissions makes locally interrupted demos retryable and
-// moves ambiguous provider requests into manual recovery without another POST.
-func (s *Store) RecoverInterruptedSubmissions(ctx context.Context, unknownReason, demoReason string) (int64, error) {
-	if s == nil || s.submissions == nil {
-		return 0, nil
-	}
-	return s.submissions.RecoverInterrupted(ctx, unknownReason, demoReason)
 }
 
 // Generate 创建一个视频生成任务：调用网关拿到 task_id 后落库 'queued' 行。
 // 不在此阻塞等待结果——前端按返回的 id 调 Refresh 轮询。
 func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, error) {
 	prompt := strings.TrimSpace(input.Prompt)
-	var err error
 
-	// 收集参考图片：兼容旧的单字段 ImageURL，并入 images 数组后去重去空。
+	// 收集参考图片：兼容旧的单字段 ImageURL，并入 images 数组后去空；
+	// 重复项留给统一引用规范化返回明确错误。
 	images := cleanURLs(append([]string{input.ImageURL}, input.Images...))
 	videos := cleanURLs(input.Videos)
 	audios := cleanURLs(input.Audios)
@@ -214,473 +189,19 @@ func (s *Store) Generate(ctx context.Context, input GenerateInput) (Generation, 
 	if !allowedAspectRatios[aspectRatio] {
 		return Generation{}, fmt.Errorf("视频画幅仅支持 16:9、9:16 或 1:1")
 	}
-
-	// image_url 列仅用于后台列表展示首帧，取第一张参考图。
-	var imageURL string
-	if len(images) > 0 {
-		imageURL = images[0]
-	}
-
-	var submission Submission
-	paidProjectCall := strings.TrimSpace(input.RequestKey) != "" || strings.TrimSpace(input.ShotID) != ""
-	if paidProjectCall {
-		if strings.TrimSpace(input.RequestKey) == "" || strings.TrimSpace(input.ShotID) == "" {
-			return Generation{}, ErrInvalidSubmissionRequest
-		}
-		snapshot, err := json.Marshal(generationRequestSnapshot{
-			AspectRatio:    aspectRatio,
-			Audios:         audios,
-			GenerationMode: s.GenerationMode(),
-			Images:         images,
-			Model:          model,
-			Prompt:         prompt,
-			Seconds:        seconds,
-			ShotRevision:   input.ShotRevision,
-			Videos:         videos,
-		})
-		if err != nil {
-			return Generation{}, err
-		}
-		submission, err = s.submissions.Prepare(ctx, PrepareSubmissionInput{
-			RequestKey:      input.RequestKey,
-			ShotID:          input.ShotID,
-			RequestSnapshot: snapshot,
-		})
-		if err != nil {
-			return Generation{}, err
-		}
-		if submission.GenerationID != "" {
-			item, err := s.Generation(ctx, submission.GenerationID)
-			if err != nil {
-				return Generation{}, err
-			}
-			return attachSubmission(item, submission, input.ShotRevision), nil
-		}
-		if submission.Status != SubmissionPrepared {
-			return attachSubmission(Generation{Status: string(submission.Status)}, submission, input.ShotRevision), nil
-		}
-		submission, err = s.submissions.Transition(
-			ctx,
-			submission.RequestKey,
-			SubmissionPrepared,
-			SubmissionSubmitting,
-		)
-		if err != nil {
-			current, getErr := s.submissions.GetByRequestKey(ctx, input.RequestKey)
-			if getErr == nil {
-				return attachSubmission(Generation{Status: string(current.Status)}, current, input.ShotRevision), nil
-			}
-			return Generation{}, err
-		}
-	}
-	if s.GenerationMode() == config.VideoGenerationModeDemo {
-		return s.generateDemo(ctx, input, submission, model, prompt, imageURL, seconds, aspectRatio, paidProjectCall)
-	}
-
-	var task TaskResult
-	if paidProjectCall {
-		task, err = s.client.CreateTaskOnce(ctx, model, prompt, images, videos, audios, seconds, aspectRatio)
-	} else {
-		task, err = s.client.CreateTask(ctx, model, prompt, images, videos, audios, seconds, aspectRatio)
-	}
-	if err != nil {
-		if paidProjectCall {
-			_, markErr := s.submissions.MarkUnknownOutcome(ctx, submission.RequestKey, "")
-			if markErr != nil {
-				return Generation{}, markErr
-			}
-			return Generation{}, &UnknownOutcomeError{RequestKey: submission.RequestKey, Cause: err}
-		}
-		var id string
-		_ = s.db.QueryRowContext(ctx,
-			`INSERT INTO video_generations (provider, model, prompt, image_url, seconds, aspect_ratio, status, error_message)
-				 VALUES ('newapi',$1,$2,$3,$4,$5,'failed',$6)
-				 RETURNING id::text`,
-			model, prompt, imageURL, seconds, aspectRatio, err.Error(),
-		).Scan(&id)
-		return Generation{}, err
-	}
-	if strings.TrimSpace(task.TaskID) == "" {
-		if paidProjectCall {
-			_, markErr := s.submissions.MarkUnknownOutcome(ctx, submission.RequestKey, "")
-			if markErr != nil {
-				return Generation{}, markErr
-			}
-			return Generation{}, &UnknownOutcomeError{RequestKey: submission.RequestKey}
-		}
-		return Generation{}, fmt.Errorf("视频网关创建成功但未返回 task_id，请检查上游响应")
-	}
-
-	status := normalizeStatus(task.Status)
-	var id string
-	var insertErr error
-	if paidProjectCall {
-		if _, ok := s.submissions.repo.(*sqlSubmissionRepository); ok {
-			id, submission, insertErr = s.persistAcceptedGenerationSQL(
-				ctx,
-				submission,
-				task.TaskID,
-				generationRequestSnapshot{
-					AspectRatio:  aspectRatio,
-					Audios:       audios,
-					Images:       images,
-					Model:        model,
-					Prompt:       prompt,
-					Seconds:      seconds,
-					ShotRevision: input.ShotRevision,
-					Videos:       videos,
-				},
-				status,
-			)
-		} else {
-			insertErr = s.db.QueryRowContext(ctx,
-				`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status, shot_id, shot_revision)
-				 VALUES ('newapi',$1,$2,$3,$4,$5,$6,$7,$8::bigint,$9)
-				 RETURNING id::text`,
-				model, prompt, imageURL, task.TaskID, seconds, aspectRatio, status, input.ShotID, input.ShotRevision,
-			).Scan(&id)
-			if insertErr == nil {
-				submission, insertErr = s.submissions.AttachAccepted(ctx, submission.RequestKey, task.TaskID, id)
-			}
-		}
-	} else {
-		insertErr = s.db.QueryRowContext(ctx,
-			`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status)
-			 VALUES ('newapi',$1,$2,$3,$4,$5,$6,$7)
-			 RETURNING id::text`,
-			model, prompt, imageURL, task.TaskID, seconds, aspectRatio, status,
-		).Scan(&id)
-	}
-	if insertErr != nil {
-		if paidProjectCall {
-			_, markErr := s.submissions.MarkUnknownOutcome(ctx, submission.RequestKey, task.TaskID)
-			if markErr != nil {
-				return Generation{}, markErr
-			}
-			return Generation{}, &UnknownOutcomeError{
-				RequestKey: submission.RequestKey,
-				TaskID:     task.TaskID,
-				Cause:      insertErr,
-			}
-		}
-		return Generation{}, insertErr
-	}
-	item, err := s.Generation(ctx, id)
+	existing, found, err := s.existingGenerateIntent(ctx, input, model, prompt, seconds, aspectRatio, images, videos, audios)
 	if err != nil {
 		return Generation{}, err
 	}
-	if paidProjectCall {
-		item = attachSubmission(item, submission, input.ShotRevision)
-	}
-	return item, nil
-}
-
-func (s *Store) generateDemo(
-	ctx context.Context,
-	input GenerateInput,
-	submission Submission,
-	model string,
-	prompt string,
-	imageURL string,
-	seconds int,
-	aspectRatio string,
-	projectCall bool,
-) (Generation, error) {
-	fail := func(err error) (Generation, error) {
-		if projectCall {
-			if _, cancelErr := s.submissions.CancelDemoFailure(ctx, submission.RequestKey, err); cancelErr != nil {
-				return Generation{}, cancelErr
-			}
-		}
-		return Generation{}, err
-	}
-	if s.demoRenderer == nil {
-		return fail(fmt.Errorf("demo video renderer is not configured"))
-	}
-	if s.uploader == nil {
-		return fail(fmt.Errorf("demo video uploader is not configured"))
+	if found && existing.Status != SubmissionPrepared {
+		return s.existingSubmissionGeneration(ctx, existing)
 	}
 
-	rendered, err := s.demoRenderer.Render(ctx, DemoRenderInput{AspectRatio: aspectRatio, Seconds: seconds})
-	if err != nil {
-		return fail(err)
-	}
-	defer os.Remove(rendered.Path)
-	data, err := os.ReadFile(rendered.Path)
-	if err != nil {
-		return fail(err)
-	}
-	uploaded, err := s.uploader.Upload(ctx, storage.UploadInput{
-		ContentType: "video/mp4",
-		Dir:         "video/generated",
-		Filename:    filepath.Base(rendered.Path),
-		Reader:      bytes.NewReader(data),
-		Size:        int64(len(data)),
-	})
-	if err != nil {
-		return fail(err)
-	}
-	videoURL := strings.TrimSpace(uploaded.URL)
-	if videoURL == "" {
-		videoURL = strings.TrimSpace(uploaded.ObjectURL)
-	}
-	if videoURL == "" {
-		return fail(fmt.Errorf("demo video upload did not return a URL"))
-	}
-	taskID := "demo-" + strings.TrimSpace(input.RequestKey)
-	if taskID == "demo-" {
-		taskID = fmt.Sprintf("demo-%d", time.Now().UnixNano())
-	}
-
-	var id string
-	err = s.db.QueryRowContext(ctx,
-		`INSERT INTO video_generations
-		    (provider, model, prompt, image_url, task_id, seconds, aspect_ratio,
-		     video_url, duration, fps, width, height, status, shot_id, shot_revision)
-		 VALUES ('demo',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'completed',NULLIF($12,'')::bigint,$13)
-		 RETURNING id::text`,
-		model, prompt, imageURL, taskID, seconds, aspectRatio, videoURL,
-		rendered.Duration, rendered.FPS, rendered.Width, rendered.Height,
-		strings.TrimSpace(input.ShotID), input.ShotRevision,
-	).Scan(&id)
-	if err != nil {
-		return fail(err)
-	}
-	if projectCall {
-		submission, err = s.submissions.AttachAccepted(ctx, submission.RequestKey, taskID, id)
-		if err != nil {
-			return fail(err)
-		}
-		submission, err = s.submissions.SynchronizeTerminal(ctx, id, "completed")
-		if err != nil {
-			return Generation{}, err
-		}
-	}
-	item, err := s.Generation(ctx, id)
+	prepared, err := s.prepareGenerationSubmission(input, model, prompt, seconds, aspectRatio, images, videos, audios)
 	if err != nil {
 		return Generation{}, err
 	}
-	if projectCall {
-		item = attachSubmission(item, submission, input.ShotRevision)
-	}
-	return item, nil
-}
-
-func (s *Store) persistAcceptedGenerationSQL(
-	ctx context.Context,
-	submission Submission,
-	taskID string,
-	snapshot generationRequestSnapshot,
-	status string,
-) (generationID string, updated Submission, err error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", Submission{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	imageURL := ""
-	if len(snapshot.Images) > 0 {
-		imageURL = snapshot.Images[0]
-	}
-	if err := tx.QueryRowContext(ctx,
-		`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status, shot_id, shot_revision)
-		 VALUES ('newapi',$1,$2,$3,$4,$5,$6,$7,$8::bigint,$9)
-		 RETURNING id::text`,
-		snapshot.Model,
-		snapshot.Prompt,
-		imageURL,
-		taskID,
-		snapshot.Seconds,
-		snapshot.AspectRatio,
-		status,
-		submission.ShotID,
-		snapshot.ShotRevision,
-	).Scan(&generationID); err != nil {
-		return "", Submission{}, err
-	}
-	updated, err = scanSubmission(tx.QueryRowContext(ctx, `
-		UPDATE video_generation_submissions
-		SET status='accepted', task_id=$2, generation_id=$3::bigint,
-		    error_message='', update_time=now()
-		WHERE request_key=$1::uuid AND status='submitting'
-		RETURNING `+submissionColumns,
-		submission.RequestKey,
-		taskID,
-		generationID,
-	))
-	if err != nil {
-		return "", Submission{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return "", Submission{}, err
-	}
-	return generationID, updated, nil
-}
-
-// ReconcileSubmission links an ambiguous paid request to a known upstream task.
-// It never calls the create-task endpoint.
-func (s *Store) ReconcileSubmission(ctx context.Context, requestKey, taskID string) (Generation, error) {
-	requestKey = strings.TrimSpace(requestKey)
-	taskID = strings.TrimSpace(taskID)
-	if requestKey == "" || taskID == "" {
-		return Generation{}, ErrInvalidSubmissionRequest
-	}
-	if _, ok := s.submissions.repo.(*sqlSubmissionRepository); ok {
-		return s.reconcileSubmissionSQL(ctx, requestKey, taskID)
-	}
-	submission, err := s.submissions.GetByRequestKey(ctx, requestKey)
-	if err != nil {
-		return Generation{}, err
-	}
-	if submission.TaskID != "" && submission.TaskID != taskID {
-		return Generation{}, &ReconciliationTaskConflictError{
-			RequestKey: requestKey,
-			Existing:   submission.TaskID,
-			Received:   taskID,
-		}
-	}
-	var snapshot generationRequestSnapshot
-	if err := json.Unmarshal(submission.RequestSnapshot, &snapshot); err != nil {
-		return Generation{}, fmt.Errorf("decode generation submission snapshot: %w", err)
-	}
-	if submission.GenerationID != "" {
-		item, err := s.Generation(ctx, submission.GenerationID)
-		if err != nil {
-			return Generation{}, err
-		}
-		return attachSubmission(item, submission, snapshot.ShotRevision), nil
-	}
-	if submission.Status != SubmissionUnknownOutcome {
-		return Generation{}, &InvalidSubmissionTransitionError{
-			RequestKey: requestKey,
-			From:       submission.Status,
-			To:         SubmissionReconciled,
-		}
-	}
-
-	imageURL := ""
-	if len(snapshot.Images) > 0 {
-		imageURL = snapshot.Images[0]
-	}
-	var generationID string
-	if err := s.db.QueryRowContext(ctx,
-		`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status, shot_id, shot_revision)
-		 VALUES ('newapi',$1,$2,$3,$4,$5,$6,'queued',$7::bigint,$8)
-		 RETURNING id::text`,
-		snapshot.Model,
-		snapshot.Prompt,
-		imageURL,
-		taskID,
-		snapshot.Seconds,
-		snapshot.AspectRatio,
-		submission.ShotID,
-		snapshot.ShotRevision,
-	).Scan(&generationID); err != nil {
-		return Generation{}, err
-	}
-	submission, err = s.submissions.Reconcile(ctx, requestKey, taskID, generationID)
-	if err != nil {
-		return Generation{}, err
-	}
-	item, err := s.Generation(ctx, generationID)
-	if err != nil {
-		return Generation{}, err
-	}
-	return attachSubmission(item, submission, snapshot.ShotRevision), nil
-}
-
-func (s *Store) reconcileSubmissionSQL(ctx context.Context, requestKey, taskID string) (Generation, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return Generation{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	submission, err := scanSubmission(tx.QueryRowContext(ctx, `
-		SELECT `+submissionColumns+`
-		FROM video_generation_submissions
-		WHERE request_key=$1::uuid
-		FOR UPDATE`, requestKey))
-	if err != nil {
-		return Generation{}, err
-	}
-	if submission.TaskID != "" && submission.TaskID != taskID {
-		return Generation{}, &ReconciliationTaskConflictError{
-			RequestKey: requestKey,
-			Existing:   submission.TaskID,
-			Received:   taskID,
-		}
-	}
-	var snapshot generationRequestSnapshot
-	if err := json.Unmarshal(submission.RequestSnapshot, &snapshot); err != nil {
-		return Generation{}, fmt.Errorf("decode generation submission snapshot: %w", err)
-	}
-	generationID := submission.GenerationID
-	if generationID == "" {
-		if submission.Status != SubmissionUnknownOutcome {
-			return Generation{}, &InvalidSubmissionTransitionError{
-				RequestKey: requestKey,
-				From:       submission.Status,
-				To:         SubmissionReconciled,
-			}
-		}
-		imageURL := ""
-		if len(snapshot.Images) > 0 {
-			imageURL = snapshot.Images[0]
-		}
-		if err := tx.QueryRowContext(ctx,
-			`INSERT INTO video_generations (provider, model, prompt, image_url, task_id, seconds, aspect_ratio, status, shot_id, shot_revision)
-			 VALUES ('newapi',$1,$2,$3,$4,$5,$6,'queued',$7::bigint,$8)
-			 RETURNING id::text`,
-			snapshot.Model,
-			snapshot.Prompt,
-			imageURL,
-			taskID,
-			snapshot.Seconds,
-			snapshot.AspectRatio,
-			submission.ShotID,
-			snapshot.ShotRevision,
-		).Scan(&generationID); err != nil {
-			return Generation{}, err
-		}
-		submission, err = scanSubmission(tx.QueryRowContext(ctx, `
-			UPDATE video_generation_submissions
-			SET status='reconciled', task_id=$2, generation_id=$3::bigint,
-			    error_message='', update_time=now()
-			WHERE request_key=$1::uuid AND status='unknown_outcome'
-			RETURNING `+submissionColumns,
-			requestKey,
-			taskID,
-			generationID,
-		))
-		if err != nil {
-			return Generation{}, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return Generation{}, err
-	}
-	item, err := s.Generation(ctx, generationID)
-	if err != nil {
-		return Generation{}, err
-	}
-	return attachSubmission(item, submission, snapshot.ShotRevision), nil
-}
-
-func attachSubmission(item Generation, submission Submission, shotRevision int) Generation {
-	item.SubmissionID = submission.ID
-	item.RequestKey = submission.RequestKey
-	item.ShotID = submission.ShotID
-	item.ShotRevision = shotRevision
-	return item
-}
-
-func (s *Store) SubmissionByID(ctx context.Context, id string) (Submission, error) {
-	return s.submissions.GetByID(ctx, id)
-}
-
-func (s *Store) SubmissionByRequestKey(ctx context.Context, requestKey string) (Submission, error) {
-	return s.submissions.GetByRequestKey(ctx, requestKey)
+	return s.submitPreparedGeneration(ctx, prepared)
 }
 
 // Refresh 轮询单条记录的网关状态。终态直接返回；进行中则查询网关，
@@ -691,12 +212,7 @@ func (s *Store) Refresh(ctx context.Context, id string) (Generation, error) {
 		return Generation{}, err
 	}
 	if shouldSkipRefresh(item) {
-		if terminalStatuses[item.Status] {
-			if err := s.syncSubmissionTerminal(ctx, id, item.Status); err != nil {
-				return Generation{}, err
-			}
-		}
-		return item, nil
+		return s.hydrateGenerationSubmission(ctx, item)
 	}
 
 	task, err := s.client.QueryTask(ctx, item.TaskID, item.Seconds)
@@ -715,7 +231,11 @@ func (s *Store) Refresh(ctx context.Context, id string) (Generation, error) {
 			data, contentType, err = s.client.Download(ctx, task.URL)
 			if err != nil {
 				_ = s.markFailed(ctx, id, "视频已生成但下载失败，请稍后重试")
-				return s.Generation(ctx, id)
+				item, loadErr := s.Generation(ctx, id)
+				if loadErr != nil {
+					return Generation{}, loadErr
+				}
+				return s.hydrateGenerationSubmission(ctx, item)
 			}
 		}
 		asset, err := s.createUploadAsset(ctx, data, contentType, "video/generated", fmt.Sprintf("video-%s.mp4", time.Now().Format("20060102150405")))
@@ -724,7 +244,11 @@ func (s *Store) Refresh(ctx context.Context, id string) (Generation, error) {
 		}
 		if !isPublicHTTPURL(asset.ObjectURL) {
 			_ = s.markFailed(ctx, id, "视频已生成，但没有文件桶公网地址，请配置 OSS_PUBLIC_URL/文件桶公网访问后重试")
-			return s.Generation(ctx, id)
+			item, loadErr := s.Generation(ctx, id)
+			if loadErr != nil {
+				return Generation{}, loadErr
+			}
+			return s.hydrateGenerationSubmission(ctx, item)
 		}
 		if _, err := s.db.ExecContext(ctx,
 			`UPDATE video_generations
@@ -733,9 +257,6 @@ func (s *Store) Refresh(ctx context.Context, id string) (Generation, error) {
 			  WHERE id=$7`,
 			asset.ID, asset.ObjectURL, task.Duration, task.FPS, task.Width, task.Height, id,
 		); err != nil {
-			return Generation{}, err
-		}
-		if err := s.syncSubmissionTerminal(ctx, id, "completed"); err != nil {
 			return Generation{}, err
 		}
 	case "failed":
@@ -748,7 +269,11 @@ func (s *Store) Refresh(ctx context.Context, id string) (Generation, error) {
 			)
 		}
 	}
-	return s.Generation(ctx, id)
+	item, err = s.Generation(ctx, id)
+	if err != nil {
+		return Generation{}, err
+	}
+	return s.hydrateGenerationSubmission(ctx, item)
 }
 
 func (s *Store) createUploadAsset(ctx context.Context, data []byte, contentType string, dir string, name string) (uploadasset.Asset, error) {
@@ -793,17 +318,6 @@ func (s *Store) markFailed(ctx context.Context, id string, message string) error
 		`UPDATE video_generations SET status='failed', error_message=$1, update_time=now() WHERE id=$2`,
 		message, id,
 	)
-	if err != nil {
-		return err
-	}
-	return s.syncSubmissionTerminal(ctx, id, "failed")
-}
-
-func (s *Store) syncSubmissionTerminal(ctx context.Context, generationID, status string) error {
-	_, err := s.submissions.SynchronizeTerminal(ctx, generationID, status)
-	if errors.Is(err, ErrSubmissionNotFound) {
-		return nil
-	}
 	return err
 }
 
@@ -875,24 +389,7 @@ func generationListCondition(query url.Values) (string, []any) {
 }
 
 func (s *Store) Generation(ctx context.Context, id string) (Generation, error) {
-	var item Generation
-	var createTime, updateTime time.Time
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id::text, provider, model, prompt, image_url, task_id, seconds, aspect_ratio,
-			        COALESCE(video_asset_id::text,''), video_url, duration, fps, width, height,
-		        status, error_message, create_time, update_time
-		   FROM video_generations
-		  WHERE id=$1`,
-		id,
-	).Scan(&item.ID, &item.Provider, &item.Model, &item.Prompt, &item.ImageURL, &item.TaskID, &item.Seconds, &item.AspectRatio,
-		&item.VideoAssetID, &item.VideoURL, &item.Duration, &item.FPS, &item.Width, &item.Height,
-		&item.Status, &item.ErrorMessage, &createTime, &updateTime)
-	if err != nil {
-		return Generation{}, err
-	}
-	item.CreateTime = formatTime(createTime)
-	item.UpdateTime = formatTime(updateTime)
-	return item, nil
+	return generationByID(ctx, s.db, id)
 }
 
 // StatusCounts 各状态的任务数。
@@ -1027,10 +524,11 @@ func pagination(query url.Values) (int, int) {
 
 // Client 是 New API / OpenAI 兼容视频网关的最小 HTTP 客户端。
 type Client struct {
-	apiBase    string
-	apiKey     string
-	client     *http.Client
-	urlAllowed func(string) bool
+	apiBase         string
+	apiKey          string
+	gatewayContract config.GatewayContractConfig
+	client          *http.Client
+	urlAllowed      func(string) bool
 }
 
 // TaskResult 归一化网关创建/查询任务返回的字段。
@@ -1045,14 +543,45 @@ type TaskResult struct {
 	ErrorMessage string
 }
 
+// AmbiguousTransportError means the create request may have reached the
+// intermediary, but the client could not confirm a task ID. The caller must
+// reconcile RequestKey instead of auto-retrying.
+type AmbiguousTransportError struct {
+	RequestKey string
+	Operation  string
+	StatusCode int
+	cause      error
+}
+
+func (e *AmbiguousTransportError) Error() string {
+	return "视频创建请求结果不确定，请勿自动重试。"
+}
+
+type CreateTaskError struct {
+	Code       string
+	StatusCode int
+	Message    string
+	cause      error
+}
+
+const maxCreateResponseBytes = 4 * 1024 * 1024
+
+func (e *CreateTaskError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+
 func NewClient(cfg config.VideoConfig) *Client {
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 120 * time.Second
 	}
 	client := &Client{
-		apiBase: strings.TrimRight(strings.TrimSpace(cfg.APIBase), "/"),
-		apiKey:  strings.TrimSpace(cfg.APIKey),
+		apiBase:         strings.TrimRight(strings.TrimSpace(cfg.APIBase), "/"),
+		apiKey:          strings.TrimSpace(cfg.APIKey),
+		gatewayContract: cfg.GatewayContract,
 		urlAllowed: func(raw string) bool {
 			return isPublicHTTPURL(raw)
 		},
@@ -1068,6 +597,284 @@ func NewClient(cfg config.VideoConfig) *Client {
 		Transport: netguard.NewGuardedTransport(),
 	}
 	return client
+}
+
+// CreateNormalizedTask submits one already-normalized request using the same
+// canonical references that were used to compile prompt ordinals.
+func (c *Client) CreateNormalizedTask(ctx context.Context, request GenerateRequest, references CanonicalReferences) (TaskResult, error) {
+	if err := c.ensureReady(); err != nil {
+		return TaskResult{}, err
+	}
+	contract, err := validatedGatewayContract(c.gatewayContract)
+	if err != nil {
+		return TaskResult{}, err
+	}
+	if err := validateCreateRequestKey(contract.Idempotency.Header, request.RequestKey); err != nil {
+		return TaskResult{}, err
+	}
+	body, err := MapGatewayPayload(request, references, contract)
+	if err != nil {
+		return TaskResult{}, err
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return TaskResult{}, err
+	}
+	reqURL, err := createTaskEndpoint(c.apiBase)
+	if err != nil {
+		return TaskResult{}, requestNotSubmittedError(err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL.String(), bytes.NewReader(raw))
+	if err != nil {
+		return TaskResult{}, requestNotSubmittedError(err)
+	}
+	writeTracker := &createRequestWriteTracker{}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteHeaders: writeTracker.mark,
+		WroteRequest: func(httptrace.WroteRequestInfo) {
+			writeTracker.mark()
+		},
+	}))
+	// A declared idempotency header makes net/http consider POST replayable.
+	// Removing GetBody prevents the transport from silently resending a create
+	// request; reconciliation owns any later retry decision.
+	req.GetBody = nil
+	req.Header.Set("Content-Type", "application/json")
+	if header := contract.Idempotency.Header; header != "" && request.RequestKey != "" {
+		req.Header.Set(header, request.RequestKey)
+	}
+	c.auth(req)
+
+	payload, statusCode, err := c.doCreateJSONOnce(req, request.RequestKey)
+	if err != nil {
+		var ambiguous *AmbiguousTransportError
+		var rejected *CreateTaskError
+		if errors.As(err, &ambiguous) || errors.As(err, &rejected) {
+			return TaskResult{}, err
+		}
+		if writeTracker.wrote() {
+			return TaskResult{}, ambiguousCreateTaskError(request.RequestKey, 0, err)
+		}
+		return TaskResult{}, requestNotSubmittedError(err)
+	}
+	task := parseTask(payload)
+	if strings.TrimSpace(task.TaskID) == "" {
+		return TaskResult{}, ambiguousCreateTaskError(request.RequestKey, statusCode, errors.New("upstream 2xx response did not confirm a task id"))
+	}
+	return task, nil
+}
+
+var errInvalidCreateAPIBase = errors.New("invalid video gateway API base")
+
+func createTaskEndpoint(apiBase string) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(apiBase))
+	if err != nil || parsed.Host == "" || parsed.Hostname() == "" {
+		return nil, errInvalidCreateAPIBase
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+	default:
+		return nil, errInvalidCreateAPIBase
+	}
+	if parsed.User != nil || parsed.Opaque != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return nil, errInvalidCreateAPIBase
+	}
+	if !isSafeCreateAPIBasePath(parsed.EscapedPath()) {
+		return nil, errInvalidCreateAPIBase
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/v1/videos"
+	parsed.RawPath = ""
+	return parsed, nil
+}
+
+func isSafeCreateAPIBasePath(escapedPath string) bool {
+	if strings.HasPrefix(escapedPath, "//") || strings.Contains(escapedPath, "\\") {
+		return false
+	}
+	for _, segment := range strings.Split(escapedPath, "/") {
+		decoded := segment
+		for range 3 {
+			next, err := url.PathUnescape(decoded)
+			if err != nil {
+				return false
+			}
+			if next == decoded {
+				break
+			}
+			decoded = next
+		}
+		if decoded == "." || decoded == ".." || strings.ContainsAny(decoded, "/\\") || containsURLControlCharacter(decoded) {
+			return false
+		}
+	}
+	return true
+}
+
+func containsURLControlCharacter(value string) bool {
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+func validateCreateRequestKey(header, requestKey string) error {
+	if header == "" {
+		return nil
+	}
+	if strings.TrimSpace(requestKey) == "" {
+		return validationError(
+			"request_key_required",
+			"requestKey",
+			"当前中转站幂等契约要求 requestKey。",
+			"为本次明确生成意图创建新的 UUID requestKey 后重试。",
+			nil,
+		)
+	}
+	if requestKey != strings.TrimSpace(requestKey) || !isNonZeroUUID(requestKey) {
+		return validationError(
+			"request_key_invalid",
+			"requestKey",
+			"requestKey 必须是非零 UUID。",
+			"重新创建 UUID requestKey，不要复用或手工拼接。",
+			nil,
+		)
+	}
+	return nil
+}
+
+func isNonZeroUUID(value string) bool {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+		return false
+	}
+	nonZero := false
+	for index := 0; index < len(value); index++ {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			continue
+		}
+		character := value[index]
+		if !((character >= '0' && character <= '9') ||
+			(character >= 'a' && character <= 'f') ||
+			(character >= 'A' && character <= 'F')) {
+			return false
+		}
+		if character != '0' {
+			nonZero = true
+		}
+	}
+	return nonZero
+}
+
+type createRequestWriteTracker struct {
+	started atomic.Bool
+}
+
+func (t *createRequestWriteTracker) mark() {
+	if t != nil {
+		t.started.Store(true)
+	}
+}
+
+func (t *createRequestWriteTracker) wrote() bool {
+	return t != nil && t.started.Load()
+}
+
+func requestNotSubmittedError(cause error) *CreateTaskError {
+	return &CreateTaskError{
+		Code:    "request_not_submitted",
+		Message: "视频创建请求尚未提交到中转站，请检查网络配置后重试。",
+		cause:   cause,
+	}
+}
+
+func ambiguousCreateTaskError(requestKey string, statusCode int, cause error) *AmbiguousTransportError {
+	return &AmbiguousTransportError{
+		RequestKey: requestKey,
+		Operation:  "create_video_task",
+		StatusCode: statusCode,
+		cause:      cause,
+	}
+}
+
+func (c *Client) doCreateJSONOnce(req *http.Request, requestKey string) (map[string]any, int, error) {
+	createClient := *c.client
+	createClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	resp, err := createClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	statusCode := resp.StatusCode
+	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
+		if isDefiniteCreateRejectionStatus(statusCode) {
+			return nil, statusCode, &CreateTaskError{
+				Code:       "gateway_request_rejected",
+				StatusCode: statusCode,
+				Message:    fmt.Sprintf("视频网关明确拒绝创建请求（HTTP %d），请检查参数或权限后重试。", statusCode),
+			}
+		}
+		return nil, statusCode, ambiguousCreateTaskError(
+			requestKey,
+			statusCode,
+			fmt.Errorf("upstream returned unconfirmed HTTP status %d", statusCode),
+		)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxCreateResponseBytes+1))
+	if err != nil {
+		return nil, statusCode, ambiguousCreateTaskError(requestKey, statusCode, err)
+	}
+	if len(raw) > maxCreateResponseBytes {
+		return nil, statusCode, ambiguousCreateTaskError(requestKey, statusCode, errors.New("upstream 2xx response exceeded safe read limit"))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, statusCode, ambiguousCreateTaskError(requestKey, statusCode, err)
+	}
+	return payload, statusCode, nil
+}
+
+func isDefiniteCreateRejectionStatus(statusCode int) bool {
+	switch statusCode {
+	case http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusForbidden,
+		http.StatusNotFound,
+		http.StatusMethodNotAllowed,
+		http.StatusNotAcceptable,
+		http.StatusGone,
+		http.StatusLengthRequired,
+		http.StatusPreconditionFailed,
+		http.StatusRequestEntityTooLarge,
+		http.StatusRequestURITooLong,
+		http.StatusUnsupportedMediaType,
+		http.StatusRequestedRangeNotSatisfiable,
+		http.StatusExpectationFailed,
+		http.StatusUnprocessableEntity:
+		return true
+	default:
+		return false
+	}
+}
+
+func validatedGatewayContract(raw config.GatewayContractConfig) (config.GatewayContractConfig, error) {
+	if err := config.ValidateGatewayContract(raw); err != nil {
+		field := "gatewayContract"
+		var contractErr *config.GatewayContractValidationError
+		if errors.As(err, &contractErr) && contractErr.Field != "" {
+			field += "." + contractErr.Field
+		}
+		return config.GatewayContractConfig{}, validationError(
+			"gateway_contract_invalid",
+			field,
+			"视频中转站契约无效，已阻止创建请求。",
+			"修正中转站契约配置并重新加载后再试。",
+			nil,
+		)
+	}
+	return config.TrimGatewayContract(raw), nil
 }
 
 func (c *Client) isURLAllowed(raw string) bool {
@@ -1098,19 +905,6 @@ func (c *Client) auth(req *http.Request) {
 // CreateTask 调用 POST /v1/videos 创建任务。
 // images/videos 为已上传到文件桶、可公网访问的参考素材地址。
 func (c *Client) CreateTask(ctx context.Context, model, prompt string, images, videos, audios []string, seconds int, aspectRatio string) (TaskResult, error) {
-	return c.createTask(ctx, model, prompt, images, videos, audios, seconds, aspectRatio, true)
-}
-
-// CreateTaskOnce is used for paid project submissions. Ambiguous responses must
-// be reconciled with the same request key instead of issuing another POST.
-func (c *Client) CreateTaskOnce(ctx context.Context, model, prompt string, images, videos, audios []string, seconds int, aspectRatio string) (TaskResult, error) {
-	return c.createTask(ctx, model, prompt, images, videos, audios, seconds, aspectRatio, false)
-}
-
-func (c *Client) createTask(ctx context.Context, model, prompt string, images, videos, audios []string, seconds int, aspectRatio string, retry bool) (TaskResult, error) {
-	if err := c.ensureReady(); err != nil {
-		return TaskResult{}, err
-	}
 	if seconds <= 0 {
 		seconds = defaultSeconds
 	}
@@ -1118,38 +912,37 @@ func (c *Client) createTask(ctx context.Context, model, prompt string, images, v
 	if aspectRatio == "" {
 		aspectRatio = defaultAspectRatio
 	}
-	body := map[string]any{"model": model, "prompt": prompt, "seconds": fmt.Sprint(seconds), "aspect_ratio": aspectRatio}
-	if len(images) > 0 {
-		body["images"] = images
-	}
-	if len(videos) > 0 {
-		body["videos"] = videos
-	}
-	if len(audios) > 0 {
-		body["audios"] = audios
-	}
-	raw, _ := json.Marshal(body)
-	reqURL, err := url.Parse(c.endpoint("/v1/videos"))
+	canonical, err := CanonicalizeReferences(legacyGatewayReferences(images, videos, audios))
 	if err != nil {
 		return TaskResult{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL.String(), bytes.NewReader(raw))
-	if err != nil {
-		return TaskResult{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	c.auth(req)
+	return c.CreateNormalizedTask(ctx, GenerateRequest{
+		Model:       model,
+		Prompt:      prompt,
+		Duration:    seconds,
+		AspectRatio: aspectRatio,
+		TaskMode:    "reference",
+	}, canonical)
+}
 
-	var payload map[string]any
-	if retry {
-		payload, err = c.doJSON(req)
-	} else {
-		payload, err = c.doJSONOnce(req)
+func legacyGatewayReferences(images, videos, audios []string) []Reference {
+	references := make([]Reference, 0, len(images)+len(videos)+len(audios))
+	add := func(kind, role string, urls []string) {
+		for _, rawURL := range urls {
+			index := len(references)
+			references = append(references, Reference{
+				ID:        strconv.Itoa(index + 1),
+				Kind:      kind,
+				Role:      role,
+				URL:       rawURL,
+				SortOrder: index,
+			})
+		}
 	}
-	if err != nil {
-		return TaskResult{}, err
-	}
-	return parseTask(payload), nil
+	add("image", "reference_image", images)
+	add("video", "reference_video", videos)
+	add("audio", "reference_audio", audios)
+	return references
 }
 
 // QueryTask 调用 GET /v1/videos/{task_id} 轮询任务。
@@ -1256,9 +1049,27 @@ func (c *Client) doJSONOnce(req *http.Request) (map[string]any, error) {
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, fmt.Errorf("解析网关响应失败: %w", err)
+		return nil, &gatewayResponseDecodeError{cause: err}
 	}
 	return payload, nil
+}
+
+type gatewayResponseDecodeError struct {
+	cause error
+}
+
+func (e *gatewayResponseDecodeError) Error() string {
+	if e == nil || e.cause == nil {
+		return "解析网关响应失败"
+	}
+	return fmt.Sprintf("解析网关响应失败: %v", e.cause)
+}
+
+func (e *gatewayResponseDecodeError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
 }
 
 func isRetryableNetworkError(err error) bool {

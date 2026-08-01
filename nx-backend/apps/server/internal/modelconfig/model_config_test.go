@@ -1,54 +1,447 @@
 package modelconfig
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"reflect"
 	"testing"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
 )
 
-func TestApplyChatDefaultsLegacyConfigToOpenAICompatible(t *testing.T) {
-	var cfg Config
-	if err := json.Unmarshal([]byte(`{"chat":{"apiBase":"https://coding-play.codes/","apiKey":"secret","groupId":"legacy-group","model":"gpt-5.6-sol"}}`), &cfg); err != nil {
+func testContentItemsGatewayContract() config.GatewayContractConfig {
+	return config.GatewayContractConfig{
+		Name:          "seedance2_configured_v1",
+		Version:       "3",
+		DeclaredModes: []string{"reference", "edit", "extend"},
+		Duration: config.FieldEncoding{
+			Name:      "duration",
+			ValueType: "int",
+			ValueMap:  map[string]string{"smart": "-1"},
+		},
+		AspectRatio: config.FieldEncoding{Name: "aspect_ratio", ValueType: "string"},
+		Resolution: config.FieldEncoding{
+			Name:      "resolution",
+			ValueType: "string",
+			ValueMap:  map[string]string{"1080P": "1080p", "4K": "4k"},
+		},
+		GenerateAudio: config.FieldEncoding{Name: "generate_audio", ValueType: "bool"},
+		TaskMode:      config.FieldEncoding{Name: "task_mode", ValueType: "string"},
+		References: config.ReferenceEncoding{
+			Mode:       "content_items",
+			ImageField: "image_url",
+			VideoField: "video_url",
+			AudioField: "audio_url",
+			RoleFields: map[string]string{
+				"reference_image": "reference_image",
+				"first_frame":     "first_frame",
+				"last_frame":      "last_frame",
+				"reference_video": "reference_video",
+				"reference_audio": "reference_audio",
+				"edit_target":     "edit_target",
+				"extend_target":   "extend_target",
+			},
+			SupportsRoles:       []string{"reference_image", "first_frame", "last_frame", "reference_video", "reference_audio", "edit_target", "extend_target"},
+			RequiresTargetFirst: true,
+		},
+		Limits: config.MediaLimits{
+			MaxImages:            9,
+			MaxVideos:            3,
+			MaxAudios:            3,
+			MaxVideoSecondsTotal: 15,
+			MaxAudioSecondsTotal: 15,
+		},
+		Idempotency: config.IdempotencyContract{Header: "X-Request-Key"},
+		Reconciliation: config.ReconciliationContract{
+			LookupByRequestKey: true,
+			Method:             "GET",
+			PathTemplate:       "/v1/videos/by-request/{requestKey}",
+			TaskIDPaths:        []string{"data.task_id", "task_id"},
+			StatusPaths:        []string{"data.status", "status"},
+		},
+	}
+}
+
+func TestVideoGatewayContractRoundTrip(t *testing.T) {
+	want := VideoConfig{
+		APIBase:         "https://gateway.example.com/v1",
+		APIKey:          "secret-key",
+		Model:           "video-ds-2.0",
+		ModelProfile:    "standard",
+		GatewayContract: testContentItemsGatewayContract(),
+	}
+
+	raw, err := json.Marshal(want)
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	got := cfg.ApplyChat(config.MiniMaxConfig{TimeoutSeconds: 41})
-
-	if got.Provider != ProviderOpenAICompatible {
-		t.Fatalf("legacy chat provider = %q, want %q", got.Provider, ProviderOpenAICompatible)
+	const exact = `{"apiBase":"https://gateway.example.com/v1","apiKey":"secret-key","model":"video-ds-2.0","modelProfile":"standard","gatewayContract":{"name":"seedance2_configured_v1","version":"3","declaredModes":["reference","edit","extend"],"duration":{"name":"duration","valueType":"int","valueMap":{"smart":"-1"}},"aspectRatio":{"name":"aspect_ratio","valueType":"string"},"resolution":{"name":"resolution","valueType":"string","valueMap":{"1080P":"1080p","4K":"4k"}},"generateAudio":{"name":"generate_audio","valueType":"bool"},"taskMode":{"name":"task_mode","valueType":"string"},"references":{"mode":"content_items","imageField":"image_url","videoField":"video_url","audioField":"audio_url","roleFields":{"edit_target":"edit_target","extend_target":"extend_target","first_frame":"first_frame","last_frame":"last_frame","reference_audio":"reference_audio","reference_image":"reference_image","reference_video":"reference_video"},"supportsRoles":["reference_image","first_frame","last_frame","reference_video","reference_audio","edit_target","extend_target"],"requiresTargetFirst":true},"limits":{"maxImages":9,"maxVideos":3,"maxAudios":3,"maxVideoSecondsTotal":15,"maxAudioSecondsTotal":15},"idempotency":{"header":"X-Request-Key"},"reconciliation":{"lookupByRequestKey":true,"method":"GET","pathTemplate":"/v1/videos/by-request/{requestKey}","taskIdPaths":["data.task_id","task_id"],"statusPaths":["data.status","status"]}}}`
+	if string(raw) != exact {
+		t.Fatalf("unexpected JSON:\n got: %s\nwant: %s", raw, exact)
 	}
-	if got.APIBase != "https://coding-play.codes" || got.Model != "gpt-5.6-sol" || got.APIKey != "secret" {
-		t.Fatalf("unexpected legacy chat config: %+v", got)
+
+	var got VideoConfig
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
 	}
-	if got.GroupID != "" {
-		t.Fatalf("chat group id must not propagate to compatible protocols: %+v", got)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("round trip mismatch:\n got: %#v\nwant: %#v", got, want)
 	}
 }
 
-func TestApplyChatKeepsAnthropicCompatibleProvider(t *testing.T) {
-	cfg := Config{Chat: ChatConfig{
-		Provider: ProviderAnthropicCompatible,
-		APIBase:  " https://coding-play.codes/ ",
-		APIKey:   " anthropic-key ",
-		Model:    " claude-sonnet-4-5 ",
+func TestMergeIncomingVideoContract(t *testing.T) {
+	storedContract := testContentItemsGatewayContract()
+	storedContract.Name = "stored_contract"
+	storedContract.Version = "1"
+	current := Config{Video: VideoConfig{
+		APIKey:          "stored-secret",
+		ModelProfile:    "fast",
+		GatewayContract: storedContract,
+	}}
+	incomingContract := testContentItemsGatewayContract()
+	incomingContract.Version = "4"
+	incoming := Config{Video: VideoConfig{
+		APIBase:         "https://new-gateway.example.com/v1",
+		Model:           "video-ds-2.0",
+		ModelProfile:    "standard",
+		GatewayContract: incomingContract,
 	}}
 
-	got := cfg.ApplyChat(config.MiniMaxConfig{})
+	got := current.MergeIncoming(incoming)
 
-	if got.Provider != ProviderAnthropicCompatible || got.APIBase != "https://coding-play.codes" || got.APIKey != "anthropic-key" || got.Model != "claude-sonnet-4-5" {
-		t.Fatalf("unexpected anthropic chat config: %+v", got)
+	if got.Video.APIKey != "stored-secret" {
+		t.Fatalf("expected empty incoming API key to preserve stored secret, got %q", got.Video.APIKey)
+	}
+	if got.Video.ModelProfile != "standard" {
+		t.Fatalf("expected incoming model profile to replace stored profile, got %q", got.Video.ModelProfile)
+	}
+	if !reflect.DeepEqual(got.Video.GatewayContract, incomingContract) {
+		t.Fatalf("expected incoming non-secret contract to replace stored contract:\n got: %#v\nwant: %#v", got.Video.GatewayContract, incomingContract)
 	}
 }
 
-func TestApplyChatDefaultsAPIBaseForNewConfig(t *testing.T) {
-	got := (Config{}).ApplyChat(config.MiniMaxConfig{})
-
-	if got.APIBase != "https://coding-play.codes" {
-		t.Fatalf("default chat api base = %q", got.APIBase)
+func TestApplyVideoUsesStoredProfileAndContract(t *testing.T) {
+	baseContract := testContentItemsGatewayContract()
+	baseContract.Name = "legacy_flat_v1"
+	baseContract.Version = "1"
+	base := config.VideoConfig{
+		ModelProfile:    "fast",
+		GatewayContract: baseContract,
 	}
-	if got.Provider != ProviderOpenAICompatible {
-		t.Fatalf("default chat provider = %q", got.Provider)
+	storedContract := testContentItemsGatewayContract()
+	storedContract.Version = "4"
+	cfg := Config{Video: VideoConfig{
+		ModelProfile:    " standard ",
+		GatewayContract: storedContract,
+	}}
+
+	got := cfg.ApplyVideo(base)
+
+	if got.ModelProfile != "standard" {
+		t.Fatalf("expected stored model profile override, got %q", got.ModelProfile)
+	}
+	if !reflect.DeepEqual(got.GatewayContract, storedContract) {
+		t.Fatalf("expected stored gateway contract override:\n got: %#v\nwant: %#v", got.GatewayContract, storedContract)
+	}
+}
+
+func TestTrimmedVideoGatewayContract(t *testing.T) {
+	raw := testContentItemsGatewayContract()
+	raw.Name = " seedance2_configured_v1 "
+	raw.Version = " 3 "
+	raw.DeclaredModes = []string{" reference ", " edit ", " extend "}
+	raw.Duration = config.FieldEncoding{
+		Name:      " duration ",
+		ValueType: " int ",
+		ValueMap:  map[string]string{" smart ": " -1 "},
+	}
+	raw.References.Mode = " content_items "
+	raw.References.ImageField = " image_url "
+	raw.References.VideoField = " video_url "
+	raw.References.AudioField = " audio_url "
+	raw.References.RoleFields = map[string]string{" edit_target ": " target_video "}
+	raw.References.SupportsRoles = []string{" reference_image ", " edit_target "}
+	raw.Idempotency.Header = " X-Request-Key "
+	raw.Reconciliation.Method = " GET "
+	raw.Reconciliation.PathTemplate = " /v1/videos/by-request/{requestKey} "
+	raw.Reconciliation.TaskIDPaths = []string{" data.task_id ", " task_id "}
+	raw.Reconciliation.StatusPaths = []string{" data.status ", " status "}
+
+	got := (Config{Video: VideoConfig{
+		ModelProfile:    " standard ",
+		GatewayContract: raw,
+	}}).trimmed().Video
+	want := raw
+	want.Name = "seedance2_configured_v1"
+	want.Version = "3"
+	want.DeclaredModes = []string{"reference", "edit", "extend"}
+	want.Duration = config.FieldEncoding{
+		Name:      "duration",
+		ValueType: "int",
+		ValueMap:  map[string]string{"smart": "-1"},
+	}
+	want.References.Mode = "content_items"
+	want.References.ImageField = "image_url"
+	want.References.VideoField = "video_url"
+	want.References.AudioField = "audio_url"
+	want.References.RoleFields = map[string]string{"edit_target": "target_video"}
+	want.References.SupportsRoles = []string{"reference_image", "edit_target"}
+	want.Idempotency.Header = "X-Request-Key"
+	want.Reconciliation.Method = "GET"
+	want.Reconciliation.PathTemplate = "/v1/videos/by-request/{requestKey}"
+	want.Reconciliation.TaskIDPaths = []string{"data.task_id", "task_id"}
+	want.Reconciliation.StatusPaths = []string{"data.status", "status"}
+
+	if got.ModelProfile != "standard" {
+		t.Fatalf("expected trimmed model profile, got %q", got.ModelProfile)
+	}
+	if !reflect.DeepEqual(got.GatewayContract, want) {
+		t.Fatalf("unexpected trimmed contract:\n got: %#v\nwant: %#v", got.GatewayContract, want)
+	}
+}
+
+func TestValidateVideoGatewayContractRejectsUnsafeConfig(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*config.GatewayContractConfig)
+		code   string
+	}{
+		{"unsafe field", func(c *config.GatewayContractConfig) { c.Duration.Name = "content[0]" }, "invalid_field_name"},
+		{"bad type", func(c *config.GatewayContractConfig) { c.Duration.ValueType = "object" }, "invalid_value_type"},
+		{"bad role", func(c *config.GatewayContractConfig) { c.References.SupportsRoles = []string{"magic_role"} }, "invalid_reference_role"},
+		{"authorization header", func(c *config.GatewayContractConfig) { c.Idempotency.Header = "Authorization" }, "reserved_header"},
+		{"newline header", func(c *config.GatewayContractConfig) { c.Idempotency.Header = "X-Key\nInjected" }, "invalid_header_name"},
+		{"paid reconcile method", func(c *config.GatewayContractConfig) { c.Reconciliation.Method = "POST" }, "invalid_reconciliation_method"},
+		{"unsafe reconcile path", func(c *config.GatewayContractConfig) {
+			c.Reconciliation.PathTemplate = "https://evil.example/{requestKey}"
+		}, "invalid_reconciliation_path"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			contract := testContentItemsGatewayContract()
+			tc.mutate(&contract)
+
+			err := ValidateVideoGatewayContract(contract)
+			if err == nil {
+				t.Fatalf("expected validation error %q", tc.code)
+			}
+			var validationErr *GatewayContractValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("expected GatewayContractValidationError, got %T: %v", err, err)
+			}
+			if validationErr.Code != tc.code {
+				t.Fatalf("expected code %q, got %q (%v)", tc.code, validationErr.Code, err)
+			}
+		})
+	}
+}
+
+func TestValidateVideoGatewayContractAcceptsContentItems(t *testing.T) {
+	if err := ValidateVideoGatewayContract(testContentItemsGatewayContract()); err != nil {
+		t.Fatalf("expected configured content-items contract to pass, got %v", err)
+	}
+}
+
+func TestValidateVideoGatewayContractRejectsDuplicateNormalizedMapKeys(t *testing.T) {
+	cases := []struct {
+		name   string
+		field  string
+		mutate func(*config.GatewayContractConfig)
+	}{
+		{
+			name:  "role fields",
+			field: "references.roleFields",
+			mutate: func(contract *config.GatewayContractConfig) {
+				contract.References.RoleFields = map[string]string{
+					" edit_target": "target_video",
+					"edit_target ": "other_target_video",
+				}
+			},
+		},
+		{
+			name:  "duration value map",
+			field: "duration.valueMap",
+			mutate: func(contract *config.GatewayContractConfig) {
+				contract.Duration.ValueMap = map[string]string{
+					" smart": "-1",
+					"smart ": "auto",
+				}
+			},
+		},
+		{
+			name:  "blank role fields",
+			field: "references.roleFields",
+			mutate: func(contract *config.GatewayContractConfig) {
+				contract.References.RoleFields = map[string]string{
+					" ":  "target_video",
+					"\t": "other_target_video",
+				}
+			},
+		},
+		{
+			name:  "blank duration value map",
+			field: "duration.valueMap",
+			mutate: func(contract *config.GatewayContractConfig) {
+				contract.Duration.ValueMap = map[string]string{
+					" ":  "-1",
+					"\t": "auto",
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for range 20 {
+				contract := testContentItemsGatewayContract()
+				tc.mutate(&contract)
+
+				err := ValidateVideoGatewayContract(contract)
+				var validationErr *GatewayContractValidationError
+				if !errors.As(err, &validationErr) {
+					t.Fatalf("expected typed duplicate-key error, got %T: %v", err, err)
+				}
+				if validationErr.Code != "duplicate_normalized_key" || validationErr.Field != tc.field {
+					t.Fatalf("expected duplicate_normalized_key at %q, got code=%q field=%q", tc.field, validationErr.Code, validationErr.Field)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateVideoGatewayContractRequiresCompleteIdentity(t *testing.T) {
+	cases := []struct {
+		name     string
+		contract config.GatewayContractConfig
+		code     string
+		field    string
+	}{
+		{
+			name: "body without name",
+			contract: config.GatewayContractConfig{
+				Duration: config.FieldEncoding{Name: "seconds", ValueType: "int"},
+			},
+			code:  "missing_contract_name",
+			field: "name",
+		},
+		{
+			name:     "name without version",
+			contract: config.GatewayContractConfig{Name: "configured_contract"},
+			code:     "missing_contract_version",
+			field:    "version",
+		},
+		{
+			name:     "version without name",
+			contract: config.GatewayContractConfig{Version: "2"},
+			code:     "missing_contract_name",
+			field:    "name",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateVideoGatewayContract(tc.contract)
+			var validationErr *GatewayContractValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("expected typed identity error, got %T: %v", err, err)
+			}
+			if validationErr.Code != tc.code || validationErr.Field != tc.field {
+				t.Fatalf("expected code=%q field=%q, got code=%q field=%q", tc.code, tc.field, validationErr.Code, validationErr.Field)
+			}
+		})
+	}
+
+	if err := ValidateVideoGatewayContract(config.GatewayContractConfig{}); err != nil {
+		t.Fatalf("expected the complete zero value to mean no override, got %v", err)
+	}
+}
+
+func TestValidateVideoGatewayContractRejectsReservedIdempotencyHeaders(t *testing.T) {
+	headers := []string{
+		"Authorization",
+		"Cookie",
+		"Proxy-Authorization",
+		"Proxy-Authenticate",
+		"Content-Type",
+		"Content-Length",
+		"Content-Encoding",
+		"Transfer-Encoding",
+		"Expect",
+		"Host",
+		"Connection",
+		"Upgrade",
+		"X-HTTP-Method-Override",
+	}
+
+	for _, header := range headers {
+		t.Run(header, func(t *testing.T) {
+			contract := testContentItemsGatewayContract()
+			contract.Idempotency.Header = header
+
+			err := ValidateVideoGatewayContract(contract)
+			var validationErr *GatewayContractValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("expected typed reserved-header error, got %T: %v", err, err)
+			}
+			if validationErr.Code != "reserved_header" || validationErr.Field != "idempotency.header" {
+				t.Fatalf("expected reserved_header at idempotency.header, got code=%q field=%q", validationErr.Code, validationErr.Field)
+			}
+		})
+	}
+}
+
+func TestUpsertStoreRejectsUnsafeVideoGatewayContractBeforeDatabase(t *testing.T) {
+	contract := testContentItemsGatewayContract()
+	contract.Duration.Name = "content[0]"
+
+	err := UpsertStore(context.Background(), nil, Config{Video: VideoConfig{GatewayContract: contract}})
+
+	var validationErr *GatewayContractValidationError
+	if !errors.As(err, &validationErr) || validationErr.Code != "invalid_field_name" {
+		t.Fatalf("expected invalid_field_name before any database write, got %T: %v", err, err)
+	}
+}
+
+func TestApplyVideoIgnoresUnsafeStoredContract(t *testing.T) {
+	baseContract := testContentItemsGatewayContract()
+	baseContract.Name = "legacy_flat_v1"
+	baseContract.Version = "1"
+	unsafeContract := testContentItemsGatewayContract()
+	unsafeContract.Duration.Name = "content[0]"
+
+	got := (Config{Video: VideoConfig{GatewayContract: unsafeContract}}).ApplyVideo(config.VideoConfig{GatewayContract: baseContract})
+
+	if !reflect.DeepEqual(got.GatewayContract, baseContract) {
+		t.Fatalf("expected unsafe stored contract to fail closed to the environment baseline:\n got: %#v\nwant: %#v", got.GatewayContract, baseContract)
+	}
+}
+
+func TestApplyVideoDeepCopiesBaseGatewayContractWithoutOverride(t *testing.T) {
+	base := config.VideoConfig{GatewayContract: testContentItemsGatewayContract()}
+
+	got := (Config{}).ApplyVideo(base)
+	got.GatewayContract.DeclaredModes[0] = "mutated_mode"
+	got.GatewayContract.Duration.ValueMap["smart"] = "mutated_value"
+	got.GatewayContract.References.RoleFields["edit_target"] = "mutated_field"
+	got.GatewayContract.References.SupportsRoles[0] = "mutated_role"
+	got.GatewayContract.Reconciliation.TaskIDPaths[0] = "mutated.path"
+
+	if base.GatewayContract.DeclaredModes[0] != "reference" {
+		t.Fatalf("base declared modes were aliased: %#v", base.GatewayContract.DeclaredModes)
+	}
+	if base.GatewayContract.Duration.ValueMap["smart"] != "-1" {
+		t.Fatalf("base value map was aliased: %#v", base.GatewayContract.Duration.ValueMap)
+	}
+	if base.GatewayContract.References.RoleFields["edit_target"] != "edit_target" {
+		t.Fatalf("base role fields were aliased: %#v", base.GatewayContract.References.RoleFields)
+	}
+	if base.GatewayContract.References.SupportsRoles[0] != "reference_image" {
+		t.Fatalf("base supported roles were aliased: %#v", base.GatewayContract.References.SupportsRoles)
+	}
+	if base.GatewayContract.Reconciliation.TaskIDPaths[0] != "data.task_id" {
+		t.Fatalf("base task ID paths were aliased: %#v", base.GatewayContract.Reconciliation.TaskIDPaths)
 	}
 }
 
@@ -64,6 +457,7 @@ func TestApplyAnalysisUsesVoiceMiniMaxCredentialsAndDefaultM3(t *testing.T) {
 		Chat: ChatConfig{
 			APIBase: "https://coding-play.codes",
 			APIKey:  "chat-key",
+			GroupID: "chat-group",
 			Model:   "gpt-5.5",
 		},
 		Analysis: AnalysisConfig{
@@ -83,20 +477,6 @@ func TestApplyAnalysisUsesVoiceMiniMaxCredentialsAndDefaultM3(t *testing.T) {
 	}
 	if got.TimeoutSeconds != DefaultAnalysisTimeoutSeconds {
 		t.Fatalf("expected analysis timeout %d, got %d", DefaultAnalysisTimeoutSeconds, got.TimeoutSeconds)
-	}
-}
-
-func TestApplyVideoPreservesServerGenerationMode(t *testing.T) {
-	base := config.VideoConfig{APIBase: "https://base.example", APIKey: "base-key", Mode: "demo", Model: "base-model"}
-	cfg := Config{Video: VideoConfig{APIBase: "https://stored.example", APIKey: "stored-key", Model: "stored-model"}}
-
-	got := cfg.ApplyVideo(base)
-
-	if got.Mode != "demo" {
-		t.Fatalf("stored model config changed generation mode to %q", got.Mode)
-	}
-	if got.APIBase != "https://stored.example" || got.APIKey != "stored-key" || got.Model != "stored-model" {
-		t.Fatalf("expected provider fields to remain configurable, got %+v", got)
 	}
 }
 
@@ -186,227 +566,5 @@ func TestMergeIncomingPreservesAdminAndDailyQuizAPIKeys(t *testing.T) {
 	}
 	if got.Admin.Model != "gpt-new" || got.DailyQuiz.Model != "claude-new" {
 		t.Fatalf("expected non-secret fields to update, got %+v", got)
-	}
-}
-
-func TestApplyXinzhiliVoiceNormalizesDefaultsAndConfiguration(t *testing.T) {
-	cfg := Config{XinzhiliVoice: XinzhiliVoiceConfig{
-		Enabled: true,
-		ASR: SpeechModelConfig{
-			APIBase: " https://speech.example.com/v1/ ",
-			APIKey:  " asr-secret ",
-			Model:   " whisper-1 ",
-		},
-		TTS: SpeechModelConfig{
-			APIBase: " https://speech.example.com/v1/ ",
-			APIKey:  " tts-secret ",
-			Model:   " tts-1 ",
-			Voice:   " alloy ",
-		},
-	}}
-
-	got := cfg.ApplyXinzhiliVoice()
-
-	if !got.Enabled || got.ASR.APIBase != "https://speech.example.com/v1" || got.TTS.APIBase != "https://speech.example.com/v1" {
-		t.Fatalf("unexpected normalized config: %+v", got)
-	}
-	if got.ASR.Language != "zh" || got.ASR.TimeoutSeconds != 30 {
-		t.Fatalf("unexpected ASR defaults: %+v", got.ASR)
-	}
-	if got.TTS.ResponseFormat != "mp3" || got.TTS.Speed != 1 || got.TTS.TimeoutSeconds != 45 {
-		t.Fatalf("unexpected TTS defaults: %+v", got.TTS)
-	}
-	if got.Interaction.EndSilenceMs != 700 || got.Interaction.MinSpeechMs != 300 || got.Interaction.MaxTurnSeconds != 60 || !got.Interaction.AutoRelisten || !got.Interaction.TapToInterrupt {
-		t.Fatalf("unexpected interaction defaults: %+v", got.Interaction)
-	}
-	if err := got.ValidateReady(); err != nil {
-		t.Fatalf("configured voice models should be ready: %v", err)
-	}
-}
-
-func TestApplyXinzhiliVoiceSiliconFlowFreePresetNormalizesAndValidates(t *testing.T) {
-	cfg := Config{XinzhiliVoice: XinzhiliVoiceConfig{
-		Enabled: true,
-		ASR: SpeechModelConfig{
-			Provider: " openai ",
-			APIBase:  " https://api.siliconflow.cn/v1/ ",
-			APIKey:   " siliconflow-key ",
-			Model:    " FunAudioLLM/SenseVoiceSmall ",
-			Language: " zh ",
-		},
-		TTS: SpeechModelConfig{
-			Provider:       ProviderOpenAICompatible,
-			APIBase:        " https://api.siliconflow.cn/v1/ ",
-			APIKey:         " siliconflow-key ",
-			Model:          " FunAudioLLM/CosyVoice2-0.5B ",
-			Voice:          " FunAudioLLM/CosyVoice2-0.5B:alex ",
-			ResponseFormat: " MP3 ",
-		},
-	}}
-
-	got := cfg.ApplyXinzhiliVoice()
-
-	if got.ASR.Provider != ProviderOpenAICompatible || got.TTS.Provider != ProviderOpenAICompatible {
-		t.Fatalf("SiliconFlow speech providers = %q/%q, want %q/%q", got.ASR.Provider, got.TTS.Provider, ProviderOpenAICompatible, ProviderOpenAICompatible)
-	}
-	if got.ASR.APIBase != "https://api.siliconflow.cn/v1" || got.TTS.APIBase != "https://api.siliconflow.cn/v1" {
-		t.Fatalf("SiliconFlow API base was not normalized: asr=%q tts=%q", got.ASR.APIBase, got.TTS.APIBase)
-	}
-	if got.ASR.Model != "FunAudioLLM/SenseVoiceSmall" || got.TTS.Model != "FunAudioLLM/CosyVoice2-0.5B" {
-		t.Fatalf("unexpected SiliconFlow models: asr=%q tts=%q", got.ASR.Model, got.TTS.Model)
-	}
-	if got.TTS.Voice != "FunAudioLLM/CosyVoice2-0.5B:alex" || got.TTS.ResponseFormat != "mp3" {
-		t.Fatalf("unexpected SiliconFlow TTS options: voice=%q format=%q", got.TTS.Voice, got.TTS.ResponseFormat)
-	}
-	if err := got.ValidateReady(); err != nil {
-		t.Fatalf("SiliconFlow free preset should be ready: %v", err)
-	}
-}
-
-func TestXinzhiliVoiceValidateReadyRequiresEnabledASRAndTTS(t *testing.T) {
-	cases := []XinzhiliVoiceConfig{
-		{},
-		{Enabled: true},
-		{Enabled: true, ASR: SpeechModelConfig{APIBase: "https://speech.example.com/v1", APIKey: "asr", Model: "whisper-1"}},
-	}
-	for _, cfg := range cases {
-		if err := cfg.ValidateReady(); err == nil {
-			t.Fatalf("ValidateReady(%+v) unexpectedly succeeded", cfg)
-		}
-	}
-}
-
-func TestMergeIncomingPreservesXinzhiliSpeechKeys(t *testing.T) {
-	current := Config{XinzhiliVoice: XinzhiliVoiceConfig{
-		ASR: SpeechModelConfig{APIKey: "asr-secret"},
-		TTS: SpeechModelConfig{APIKey: "tts-secret"},
-	}}
-	incoming := Config{XinzhiliVoice: XinzhiliVoiceConfig{
-		Enabled: true,
-		ASR:     SpeechModelConfig{APIBase: "https://new.example/v1", Model: "whisper-new"},
-		TTS:     SpeechModelConfig{APIBase: "https://new.example/v1", Model: "tts-new", Voice: "nova"},
-	}}
-
-	got := current.MergeIncoming(incoming)
-
-	if got.XinzhiliVoice.ASR.APIKey != "asr-secret" || got.XinzhiliVoice.TTS.APIKey != "tts-secret" {
-		t.Fatalf("expected xinzhili keys to be preserved: %+v", got.XinzhiliVoice)
-	}
-}
-
-func TestMergeIncomingPreservesSiliconFlowSpeechKeysOnPartialUpdate(t *testing.T) {
-	var stored Config
-	if err := json.Unmarshal([]byte(`{
-		"xinzhiliVoice": {
-			"enabled": true,
-			"asr": {
-				"provider": "openai-compatible",
-				"apiBase": "https://api.siliconflow.cn/v1",
-				"apiKey": "stored-siliconflow-key",
-				"model": "FunAudioLLM/SenseVoiceSmall",
-				"language": "zh"
-			},
-			"tts": {
-				"provider": "openai-compatible",
-				"apiBase": "https://api.siliconflow.cn/v1",
-				"apiKey": "stored-siliconflow-key",
-				"model": "FunAudioLLM/CosyVoice2-0.5B",
-				"voice": "FunAudioLLM/CosyVoice2-0.5B:alex",
-				"responseFormat": "mp3"
-			}
-		}
-	}`), &stored); err != nil {
-		t.Fatal(err)
-	}
-	var incoming Config
-	if err := json.Unmarshal([]byte(`{
-		"xinzhiliVoice": {
-			"enabled": true,
-			"asr": {"apiBase": "https://api.siliconflow.cn/v1", "model": "FunAudioLLM/SenseVoiceSmall"},
-			"tts": {"apiBase": "https://api.siliconflow.cn/v1", "model": "FunAudioLLM/CosyVoice2-0.5B", "voice": "FunAudioLLM/CosyVoice2-0.5B:alex"}
-		}
-	}`), &incoming); err != nil {
-		t.Fatal(err)
-	}
-
-	got := stored.MergeIncoming(incoming).ApplyXinzhiliVoice()
-
-	if got.ASR.APIKey != "stored-siliconflow-key" || got.TTS.APIKey != "stored-siliconflow-key" {
-		t.Fatalf("partial SiliconFlow update lost speech API keys: asr=%q tts=%q", got.ASR.APIKey, got.TTS.APIKey)
-	}
-	if err := got.ValidateReady(); err != nil {
-		t.Fatalf("partial SiliconFlow update should remain ready: %v", err)
-	}
-}
-
-func TestMergeIncomingPreservesTTSAPIKeyAndTrimsVoiceConfig(t *testing.T) {
-	current := Config{
-		TTS: TTSConfig{
-			APIKey: "tts-secret",
-			Voice:  "old-voice",
-		},
-	}
-	incoming := Config{
-		TTS: TTSConfig{
-			Provider: " MiniMax ",
-			Endpoint: " https://api.minimaxi.com/ ",
-			GroupID:  " group-1 ",
-			Model:    " speech-02-hd ",
-			Voice:    " cloned-voice-123 ",
-			Format:   " mp3 ",
-		},
-	}
-
-	got := current.MergeIncoming(incoming)
-
-	if got.TTS.APIKey != "tts-secret" {
-		t.Fatalf("expected empty incoming TTS key to preserve stored secret, got %q", got.TTS.APIKey)
-	}
-	if got.TTS.Provider != "minimax" || got.TTS.Endpoint != "https://api.minimaxi.com" || got.TTS.GroupID != "group-1" {
-		t.Fatalf("expected normalized TTS provider/endpoint/group, got %+v", got.TTS)
-	}
-	if got.TTS.Model != "speech-02-hd" || got.TTS.Voice != "cloned-voice-123" || got.TTS.Format != "mp3" {
-		t.Fatalf("expected trimmed TTS model/voice/format, got %+v", got.TTS)
-	}
-}
-
-func TestTTSConfigAcceptsOfficialAndCloneDerivedVoiceIDs(t *testing.T) {
-	for _, voiceID := range []string{"male-qn-qingse", "cloned-voice-123"} {
-		cfg := Config{TTS: TTSConfig{Provider: "minimax", Voice: " " + voiceID + " "}}
-
-		got := cfg.trimmed()
-
-		if got.TTS.Voice != voiceID {
-			t.Fatalf("expected TTS voice %q to be stored as final voice id, got %q", voiceID, got.TTS.Voice)
-		}
-	}
-}
-
-func TestApplyTTSKeepsBailianEnvironmentProvider(t *testing.T) {
-	got := (Config{}).ApplyTTS(config.MiniMaxConfig{
-		Provider: "bailian",
-		APIBase:  "https://dashscope.aliyuncs.com/api/v1",
-		APIKey:   "bailian-key",
-		Model:    "MiniMax/speech-2.8-turbo",
-	})
-	if got.Provider != "bailian" {
-		t.Fatalf("provider=%q", got.Provider)
-	}
-}
-
-func TestApplyTTSUsesProviderSpecificDefaultModel(t *testing.T) {
-	for _, tt := range []struct {
-		provider string
-		want     string
-	}{
-		{provider: "bailian", want: "MiniMax/speech-2.8-turbo"},
-		{provider: "minimax", want: "speech-02-hd"},
-	} {
-		t.Run(tt.provider, func(t *testing.T) {
-			got := (Config{}).ApplyTTS(config.MiniMaxConfig{Provider: tt.provider})
-			if got.Model != tt.want {
-				t.Fatalf("model = %q, want %q", got.Model, tt.want)
-			}
-		})
 	}
 }

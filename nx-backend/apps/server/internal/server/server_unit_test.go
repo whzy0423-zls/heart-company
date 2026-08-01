@@ -23,8 +23,35 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 	"nine-xing/nx-backend/apps/server/internal/videoanalysis"
+	"nine-xing/nx-backend/apps/server/internal/videoproject"
 	"nine-xing/nx-backend/apps/server/internal/wxpay"
 )
+
+func TestVideoShotGenerateInputPreservesRequestIdentity(t *testing.T) {
+	input := generateVideoShotInput{
+		RequestKey:        "11111111-1111-4111-8111-111111111111",
+		CapabilityVersion: "capability-v1",
+	}
+	got := input.projectInput()
+	if got.RequestKey != input.RequestKey || got.CapabilityVersion != input.CapabilityVersion {
+		t.Fatalf("project input = %+v", got)
+	}
+}
+
+func TestBatchGenerateInputPreservesPerShotRequestIdentity(t *testing.T) {
+	input := batchGenerateInput{
+		RequestKeys:        map[string]string{"9": "11111111-1111-4111-8111-111111111111"},
+		CapabilityVersions: map[string]string{"9": "capability-v1"},
+	}
+	got := input.options()
+	want := videoproject.BatchGenerateOptions{
+		RequestKeys:        input.RequestKeys,
+		CapabilityVersions: input.CapabilityVersions,
+	}
+	if got.RequestKeys["9"] != want.RequestKeys["9"] || got.CapabilityVersions["9"] != want.CapabilityVersions["9"] {
+		t.Fatalf("batch options = %+v", got)
+	}
+}
 
 func TestNewPanicsForUnknownSMSProvider(t *testing.T) {
 	defer func() {
@@ -758,6 +785,42 @@ func TestValidateModelConfigBasesRejectsLocalDailyQuizAddress(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected local daily quiz api base to be rejected")
+	}
+}
+
+func TestModelConfigPUTReturnsStructuredGatewayContractValidationError(t *testing.T) {
+	s := &Server{}
+	response := performRawUnit(http.HandlerFunc(s.modelConfig), http.MethodPut, "/api/model-config", `{
+		"video": {
+			"apiKey": "must-not-leak",
+			"gatewayContract": {
+				"name": "configured_contract",
+				"version": "2",
+				"duration": {"name": "content[0]", "valueType": "int"}
+			}
+		}
+	}`)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("expected HTTP 400, got %d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Code  int `json:"code"`
+		Error struct {
+			Code    string `json:"code"`
+			Field   string `json:"field"`
+			Message string `json:"message"`
+		} `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Code != -1 || body.Error.Code != "invalid_field_name" || body.Error.Field != "duration.name" || body.Error.Message == "" || body.Message == "" {
+		t.Fatalf("unexpected structured validation response: %+v", body)
+	}
+	if strings.Contains(response.Body.String(), "must-not-leak") {
+		t.Fatalf("response leaked submitted API key: %s", response.Body.String())
 	}
 }
 

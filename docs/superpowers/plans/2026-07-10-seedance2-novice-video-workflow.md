@@ -4,7 +4,7 @@
 
 **Goal:** Build a beginner-first seven-step video production workflow that keeps the existing intermediary API, accurately adapts to Seedance 2.0 capabilities, guides prompts, generates/selects shot versions, and composes a final video.
 
-**Architecture:** Add a versioned model-capability and gateway-contract layer in `internal/video`, then build a versioned project workflow domain in `internal/videoproject`. Keep the existing advanced workbench as a power-user route while making a new modular Vue wizard the default project workbench. All paid task submissions are persisted before POST and use an explicit request-key state machine.
+**Architecture:** Add a versioned model-capability and gateway-contract layer in `internal/video`, then build a versioned project workflow domain in `internal/videoproject`. Keep the existing advanced workbench as a power-user route while making a new modular Vue wizard the default project workbench. All quota-consuming video-generation submissions are persisted before POST and use an explicit request-key state machine.
 
 **Tech Stack:** Go 1.22, PostgreSQL schema migrations, `net/http`, existing MiniMax/OpenAI-compatible intermediary clients, Vue 3, TypeScript, Ant Design Vue/Vben, Vitest, FFmpeg, pnpm workspace.
 
@@ -83,7 +83,7 @@
 - Create: `nx-backend/apps/web-antd/src/views/video/projects/workflow/use-workflow-loader.ts`
 - Create: `nx-backend/apps/web-antd/src/views/video/projects/workflow/use-workflow-navigation.ts`
 - Create: `nx-backend/apps/web-antd/src/views/video/projects/workflow/use-workflow-autopilot.ts`
-- Create: `nx-backend/apps/web-antd/src/views/video/projects/workflow/use-paid-request-key.ts`
+- Create: `nx-backend/apps/web-antd/src/views/video/projects/workflow/use-generation-request-key.ts`
 - Create: `nx-backend/apps/web-antd/src/views/video/projects/workflow/use-workflow-polling.ts`
 - Create: `nx-backend/apps/web-antd/src/views/video/projects/workflow/WorkflowHeader.vue`
 - Create: `nx-backend/apps/web-antd/src/views/video/projects/workflow/WorkflowStepper.vue`
@@ -264,7 +264,7 @@ cases := []struct{ name string; mutate func(*GatewayContractConfig); code string
     {"bad role", func(c *GatewayContractConfig){ c.References.SupportsRoles = []string{"magic_role"} }, "invalid_reference_role"},
     {"authorization header", func(c *GatewayContractConfig){ c.Idempotency.Header = "Authorization" }, "reserved_header"},
     {"newline header", func(c *GatewayContractConfig){ c.Idempotency.Header = "X-Key\nInjected" }, "invalid_header_name"},
-    {"paid reconcile method", func(c *GatewayContractConfig){ c.Reconciliation.Method = "POST" }, "invalid_reconciliation_method"},
+    {"generation reconcile method", func(c *GatewayContractConfig){ c.Reconciliation.Method = "POST" }, "invalid_reconciliation_method"},
     {"unsafe reconcile path", func(c *GatewayContractConfig){ c.Reconciliation.PathTemplate = "https://evil.example/{requestKey}" }, "invalid_reconciliation_path"},
 }
 ```
@@ -525,7 +525,7 @@ git add nx-backend/apps/server/internal/video/references.go nx-backend/apps/serv
 git commit -m "feat(video): canonicalize Seedance references"
 ```
 
-### Task 3B: Map normalized requests and prevent paid POST retries
+### Task 3B: Map normalized requests and prevent create POST retries
 
 **Files:**
 - Create: `nx-backend/apps/server/internal/video/gateway_contract.go`
@@ -689,7 +689,7 @@ git add nx-backend/apps/server/internal/video/video.go nx-backend/apps/server/in
 git commit -m "refactor(video): share Seedance request validation"
 ```
 
-### Task 4A: Persist the paid submission state machine and database locks
+### Task 4A: Persist the generation submission state machine and database locks
 
 **Files:**
 - Modify: `nx-backend/apps/server/internal/db/schema.sql`
@@ -744,10 +744,10 @@ Expected: PASS.
 
 ```bash
 git add nx-backend/apps/server/internal/db/schema.sql nx-backend/apps/server/internal/video/submission*
-git commit -m "feat(video): persist paid submission states"
+git commit -m "feat(video): 持久化视频生成提交状态"
 ```
 
-### Task 4B: Integrate paid submission, ambiguous outcomes and reconciliation
+### Task 4B: Integrate generation submission, ambiguous outcomes and reconciliation
 
 **Files:**
 - Modify: `nx-backend/apps/server/internal/video/video.go`
@@ -839,7 +839,7 @@ Expected: PASS.
 
 ```bash
 git add nx-backend/apps/server/internal/video/video.go nx-backend/apps/server/internal/video/video_test.go nx-backend/apps/server/internal/video/submission*
-git commit -m "feat(video): reconcile paid generation outcomes"
+git commit -m "feat(video): 对账视频生成结果"
 ```
 
 ### Task 5A: Implement the pure Seedance prompt compiler and diagnostics
@@ -1862,7 +1862,7 @@ taskIdPaths = [data.task_id, task_id]
 statusPaths = [data.status, status]
 ```
 
-Assert `Client.LookupTaskByRequestKey(ctx, contract, requestKey)` URL-escapes the saved key, authenticates, sends no operator task ID/body, maps nested response fields, and never calls a paid POST. The project route verifies submission project/shot ownership. The standalone `/api/video/submissions/{requestKey}/reconcile` route handles submissions with no project/shot, requires `Video:Generate:Manage`, and cannot access a project-owned submission. Manual `taskId` reconciliation on either route additionally requires `System:Model:Config`, rejects conflicting IDs and is idempotent. Disabled/malformed lookup contract returns an explicit unsupported/config error.
+Assert `Client.LookupTaskByRequestKey(ctx, contract, requestKey)` URL-escapes the saved key, authenticates, sends no operator task ID/body, maps nested response fields, and never calls a video create POST. The project route verifies submission project/shot ownership. The standalone `/api/video/submissions/{requestKey}/reconcile` route handles submissions with no project/shot, requires `Video:Generate:Manage`, and cannot access a project-owned submission. Manual `taskId` reconciliation on either route additionally requires `System:Model:Config`, rejects conflicting IDs and is idempotent. Disabled/malformed lookup contract returns an explicit unsupported/config error.
 
 - [ ] **Step 8: Run reconciliation route tests and verify RED**
 
@@ -1979,11 +1979,11 @@ git add nx-backend/apps/web-antd/src/api/core/video-workflow* nx-backend/apps/we
 git commit -m "feat(video): add typed project workflow client"
 ```
 
-### Task 12B: Manage paid request keys independently of rendering
+### Task 12B: Manage generation request keys independently of rendering
 
 **Files:**
-- Create: `nx-backend/apps/web-antd/src/views/video/projects/workflow/use-paid-request-key.ts`
-- Create: `nx-backend/apps/web-antd/src/views/video/projects/workflow/use-paid-request-key.test.ts`
+- Create: `nx-backend/apps/web-antd/src/views/video/projects/workflow/use-generation-request-key.ts`
+- Create: `nx-backend/apps/web-antd/src/views/video/projects/workflow/use-generation-request-key.test.ts`
 
 - [ ] **Step 1: Write failing request-key lifecycle tests**
 
@@ -2003,7 +2003,7 @@ terminal + explicit “new version” → one newly generated key
 
 ```bash
 cd /Users/wohenzaiyi/Desktop/nine-xing/nx-backend
-pnpm exec vitest run apps/web-antd/src/views/video/projects/workflow/use-paid-request-key.test.ts
+pnpm exec vitest run apps/web-antd/src/views/video/projects/workflow/use-generation-request-key.test.ts
 ```
 
 - [ ] **Step 3: Implement the key manager/composable**
@@ -2017,8 +2017,8 @@ Run the Step 2 command. Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add nx-backend/apps/web-antd/src/views/video/projects/workflow/use-paid-request-key*
-git commit -m "feat(video): preserve paid generation request keys"
+git add nx-backend/apps/web-antd/src/views/video/projects/workflow/use-generation-request-key*
+git commit -m "feat(video): 保持视频生成请求键稳定"
 ```
 
 ### Task 13A: Mount the wizard shell and make it the default route
@@ -2125,7 +2125,7 @@ git add nx-backend/apps/web-antd/src/views/video/projects/workflow/use-workflow-
 git commit -m "feat(video): protect unsaved workflow edits"
 ```
 
-### Task 13C: Add optional automatic draft orchestration with a paid-generation stop
+### Task 13C: Add optional automatic draft orchestration with a generation confirmation gate
 
 **Files:**
 - Create: `nx-backend/apps/web-antd/src/views/video/projects/workflow/use-workflow-autopilot.ts`
@@ -2139,7 +2139,7 @@ git commit -m "feat(video): protect unsaved workflow edits"
 
 After confirmed script/style, assert the sequence creates breakdown draft, waits for/requests confirmation as configured, prepares asset drafts and creates storyboard draft. Persist `workflowMode='autopilot'` with settings revision. On any step failure, show the failed step, preserve completed outputs and offer resume/retry from that step.
 
-Critically, assert no video generate/batch endpoint is called. The final autopilot state shows shot count/estimated paid work and requires a separate user confirmation.
+Critically, assert no video generate/batch endpoint is called. The final autopilot state shows shot count/estimated quota consumption and requires a separate user confirmation.
 
 - [ ] **Step 2: Run tests and verify RED**
 
@@ -2150,7 +2150,7 @@ pnpm exec vitest run apps/web-antd/src/views/video/projects/workflow/use-workflo
 
 - [ ] **Step 3: Implement orchestration and visible mode control**
 
-The header mode control is labeled, keyboard operable and explains the paid-generation stop.
+The header mode control is labeled, keyboard operable and explains the quota-consumption confirmation gate.
 
 - [ ] **Step 4: Run tests and verify GREEN**
 
@@ -2411,7 +2411,7 @@ git add nx-backend/apps/web-antd/src/views/video/projects/workflow/PromptStep* n
 git commit -m "feat(video): explain exact Seedance prompts"
 ```
 
-### Task 16B: Implement paid generation, polling, recovery and explicit selection
+### Task 16B: Implement video generation, polling, recovery and explicit selection
 
 **Files:**
 - Create: `nx-backend/apps/web-antd/src/views/video/projects/workflow/GenerateStep.vue`
@@ -2439,7 +2439,7 @@ pnpm exec vitest run apps/web-antd/src/views/video/projects/workflow/use-workflo
 
 Exercise:
 
-- batch paid confirmation shows enabled shot count and one stable request key per shot;
+- batch generation confirmation shows enabled shot count, estimated quota consumption and one stable request key per shot;
 - rapid double click produces one API call and disabled/loading state;
 - transport retry reuses the same key;
 - `unknown_outcome` keeps that key, shows no normal retry and offers “安全查询中转站任务” only when `canLookupByRequestKey`;
@@ -2486,7 +2486,7 @@ git commit -m "feat(video): generate reconcile and select shot versions"
 
 - [ ] **Step 1: Write failing mounted compose tests**
 
-Exercise exact missing-shot blockers, stable selected order/version IDs, paid compose action, polling current/stale hash, stale successful video remaining downloadable, recombine action, secondary transition/music/subtitle controls, accessible non-autoplay video controls and download link.
+Exercise exact missing-shot blockers, stable selected order/version IDs, explicit compose action, polling current/stale hash, stale successful video remaining downloadable, recombine action, secondary transition/music/subtitle controls, accessible non-autoplay video controls and download link.
 
 - [ ] **Step 2: Run tests and verify RED**
 
@@ -2569,7 +2569,7 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement the drawer and model-contract controls**
 
-The drawer shows plain-language recommended settings first, then the technical upstream field mapping in a read-only details block. Changing model refreshes capabilities and requires re-confirmation before paid generation.
+The drawer shows plain-language recommended settings first, then the technical upstream field mapping in a read-only details block. Changing model refreshes capabilities and requires re-confirmation before video generation.
 
 - [ ] **Step 4: Run tests and verify GREEN**
 
@@ -2750,7 +2750,7 @@ Add `TestVideoProjectWorkflowEndToEndHappyPath`. The script includes two charact
 3. generate/select required asset candidates;
 4. create/edit/diff/confirm at least three shots;
 5. compile prompts whose numbering matches persisted references;
-6. submit one paid request per explicit key through the intermediary contract;
+6. submit one quota-consuming video-generation request per explicit key through the intermediary contract;
 7. produce two terminal versions for one shot and explicitly select one;
 8. select every shot and compose;
 9. return step 7 completed with the current ordered-selection compose hash;
@@ -2760,14 +2760,14 @@ Add `TestVideoProjectWorkflowEndToEndHappyPath`. The script includes two charact
 
 Add `TestVideoProjectWorkflowEndToEndUnknownOutcomeRecovery` with a saved reconciliation contract and one project shot. Use a fake gateway that records method/path/request key and performs this exact sequence:
 
-1. the only paid create `POST /v1/videos` accepts the request and then returns an ambiguous transport result;
+1. the only video create `POST /v1/videos` accepts the request and then returns an ambiguous transport result;
 2. the submission is persisted as `unknown_outcome` with the original `requestKey` and no task ID;
-3. repeating generation with the same key returns the existing submission, and a new key is rejected while it is active; the paid POST count remains exactly one;
+3. repeating generation with the same key returns the existing submission, and a new key is rejected while it is active; the create POST count remains exactly one;
 4. the authorized safe-reconcile route performs configured `GET /v1/videos/by-request/{requestKey}` with the same escaped key and no request body;
-5. reconciliation attaches the discovered task ID idempotently, persists `reconciled`, and never calls the paid POST;
+5. reconciliation attaches the discovered task ID idempotently, persists `reconciled`, and never calls the create POST;
 6. normal polling resumes with safe GET requests; the submission stays `reconciled` as the audit outcome while its linked generation reaches terminal `completed`;
 7. the recovered generation can be explicitly selected, composition succeeds, and the final overview reports a current compose hash;
-8. fake-gateway totals prove one paid POST across generate, duplicate click, reconciliation, polling, selection and compose.
+8. fake-gateway totals prove one create POST across generate, duplicate click, reconciliation, polling, selection and compose.
 
 Task 11B's route tests remain the authority for operator-supplied task-ID permissions: project ownership is required, standalone reconciliation requires `Video:Generate:Manage`, and manual task IDs additionally require `System:Model:Config`.
 
@@ -2895,12 +2895,12 @@ Create `docs/superpowers/evidence/2026-07-10-seedance2-novice-video-workflow.md`
 | R7 | Character/scene/prop/outfit/style candidates recover and require explicit selection | asset store/provider tests and AssetsStep mounted test |
 | R8 | Storyboards support draft edit, diff token, stale-dependency rejection and confirmation | storyboard domain/route tests and StoryboardStep mounted test |
 | R9 | Seven completion states use server revisions/hashes and invalidate downstream state correctly | workflow hash/status tests and shell/state tests |
-| R10 | Paid generation uses one persisted request key, one-shot POST and no ordinary network retry | submission/video tests and paid-key/GenerateStep tests |
-| R11 | `unknown_outcome` keeps the same key, reconciles by safe GET or permissioned manual task ID, resumes polling and never adds a paid POST | reconciliation route tests plus `TestVideoProjectWorkflowEndToEndUnknownOutcomeRecovery` |
+| R10 | Video generation uses one persisted request key, one-shot POST and no ordinary network retry | submission/video tests and generation-key/GenerateStep tests |
+| R11 | `unknown_outcome` keeps the same key, reconciles by safe GET or permissioned manual task ID, resumes polling and never adds a create POST | reconciliation route tests plus `TestVideoProjectWorkflowEndToEndUnknownOutcomeRecovery` |
 | R12 | Every shot requires an explicit successful selection, stale selections require acknowledgement, and composition uses the current ordered-selection hash | selection/compose route tests, GenerateStep/ComposeStep tests and happy-path E2E |
 | R13 | Old projects migrate idempotently with stable asset order, legacy role expansion, successful-only selection backfill and `skipped_existing` | Task 6B migration/dual-read tests |
 | R14 | Historical prompts stay `legacy_v1`; old shot/batch/progress/compose/status/version routes, single-generation page, advanced workbench and professional analysis/storyboard flow remain accessible | Task 18 server/menu/frontend compatibility tests and `generate.test.ts` |
-| R15 | Novice UI has one primary CTA, plain-language help, paid autopilot stop, keyboard/focus/reduced-motion/44px/responsive behavior | workflow mounted tests and Playwright |
+| R15 | Novice UI has one primary CTA, plain-language help, quota-consumption confirmation gate, keyboard/focus/reduced-motion/44px/responsive behavior | workflow mounted tests and Playwright |
 | R16 | Two-character/two-scene/prop/outfit script completes breakdown, assets, 3+ shots, generation, explicit selection and final composition | `TestVideoProjectWorkflowEndToEndHappyPath` |
 
 - [ ] **Step 7: Fix verified gaps in their owning task, then re-run the complete verification set**
@@ -2945,6 +2945,6 @@ Expected: the evidence commit is non-empty, the push succeeds, the remote hash e
 
 - Preserve the user's unrelated work and the untracked `artifacts/` directory.
 - Never print or commit real API keys, signed URLs or model-config secrets.
-- Every paid-create code path must be reviewed separately from safe GET polling retries.
+- Every quota-consuming create code path must be reviewed separately from safe GET polling retries.
 - Keep commits small and use the exact task-level commits above where practical.
 - If the intermediary contract cannot express a Seedance feature, complete the beginner workflow with that option visibly unavailable; do not invent an upstream field.

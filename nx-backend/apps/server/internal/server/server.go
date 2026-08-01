@@ -86,6 +86,7 @@ type Server struct {
 	bailianCredentials         bailianCredentialStore
 	bailianRuntime             bailianCredentialRuntimeState
 	videos                     *video.Store
+	videoConfig                config.VideoConfig
 	videoAnalysis              *videoanalysis.Store
 	videoAssets                *videoasset.Store
 	storyboards                *videostoryboard.Store
@@ -290,6 +291,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.setBailianCopyConfig = s.voices.ConfigureBailianCopy
 	s.bailianCredentials = databaseBailianCredentialStore{db: database}
 	s.videos = video.NewStore(database, s.uploads, env.Video, s.uploader)
+	s.videoConfig = cloneVideoConfig(env.Video)
 	s.videoSubmissionRecovery = func(ctx context.Context) (int64, error) {
 		return s.videoStore().RecoverInterruptedSubmissions(
 			ctx,
@@ -456,6 +458,7 @@ func (s *Server) applyStoredModelConfig() {
 	}
 	s.analysisGen = analysisGenerator
 	s.videos = videoStore
+	s.videoConfig = cloneVideoConfig(safeStoredVideoConfig(cfg, s.env.Video))
 	s.images = imageStore
 	s.modelMu.Unlock()
 	// The legacy model-config TTS section may still update the original
@@ -582,6 +585,21 @@ func (s *Server) videoStore() *video.Store {
 	return s.videos
 }
 
+func (s *Server) effectiveVideoConfig() config.VideoConfig {
+	s.modelMu.RLock()
+	defer s.modelMu.RUnlock()
+	effective := s.videoConfig
+	if effective.Model == "" && effective.ModelProfile == "" && effective.GatewayContract.Name == "" {
+		effective = s.env.Video
+	}
+	return cloneVideoConfig(effective)
+}
+
+func cloneVideoConfig(cfg config.VideoConfig) config.VideoConfig {
+	cfg.GatewayContract = config.TrimGatewayContract(cfg.GatewayContract)
+	return cfg
+}
+
 func (s *Server) ensureVideoSubmissionRecovery(ctx context.Context) error {
 	if s.videoSubmissionRecoveryReady.Load() {
 		return nil
@@ -663,6 +681,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin-branding", s.requirePermission("System:Branding", s.adminBranding))
 	// 模型配置：读取/保存兼容协议对话模型及视频、图片、分析模型配置，均需登录。
 	s.mux.HandleFunc("/api/model-config", s.requirePermission("System:Model:Config", s.modelConfig))
+	s.mux.HandleFunc("/api/video/capabilities", s.method(http.MethodGet, s.requirePermission("Video:Generate:Manage", s.videoCapabilities)))
 	s.mux.HandleFunc("/api/xinzhili-model-config", s.requirePermission("System:XinzhiliModel:Config", s.xinzhiliModelConfigHandler))
 	s.mux.HandleFunc("/api/theory-libraries", s.requirePermission("System:TheoryLibrary:Manage", s.theoryLibrariesHandler))
 	s.mux.HandleFunc("/api/theory-libraries/", s.requirePermission("System:TheoryLibrary:Manage", s.theoryLibraryActionHandler))

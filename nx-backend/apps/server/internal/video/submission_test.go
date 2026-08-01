@@ -2,287 +2,558 @@ package video
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
-	"fmt"
+	"io"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
-func TestSubmissionTransitions(t *testing.T) {
-	statuses := []SubmissionStatus{
-		SubmissionPrepared,
-		SubmissionSubmitting,
-		SubmissionAccepted,
-		SubmissionUnknownOutcome,
-		SubmissionReconciled,
-		SubmissionCompleted,
-		SubmissionFailed,
-		SubmissionCancelled,
-	}
-	allowed := map[SubmissionStatus]map[SubmissionStatus]bool{
-		SubmissionPrepared:       {SubmissionSubmitting: true, SubmissionCancelled: true},
-		SubmissionSubmitting:     {SubmissionAccepted: true, SubmissionUnknownOutcome: true},
-		SubmissionUnknownOutcome: {SubmissionReconciled: true},
-		SubmissionAccepted:       {SubmissionCompleted: true, SubmissionFailed: true},
-		SubmissionReconciled:     {SubmissionCompleted: true, SubmissionFailed: true},
+const (
+	submissionKeyOne = "11111111-1111-4111-8111-111111111111"
+	submissionKeyTwo = "22222222-2222-4222-8222-222222222222"
+)
+
+func TestSubmissionAllowsDeclaredTransitions(t *testing.T) {
+	cases := []struct {
+		from SubmissionStatus
+		to   SubmissionStatus
+	}{
+		{SubmissionPrepared, SubmissionSubmitting},
+		{SubmissionSubmitting, SubmissionAccepted},
+		{SubmissionAccepted, SubmissionCompleted},
+		{SubmissionAccepted, SubmissionFailed},
+		{SubmissionSubmitting, SubmissionUnknownOutcome},
+		{SubmissionUnknownOutcome, SubmissionReconciled},
+		{SubmissionUnknownOutcome, SubmissionCancelled},
+		{SubmissionPrepared, SubmissionCancelled},
+		{SubmissionSubmitting, SubmissionFailed},
+		{SubmissionSubmitting, SubmissionCancelled},
 	}
 
-	for _, from := range statuses {
-		for _, to := range statuses {
-			from, to := from, to
-			t.Run(string(from)+"_to_"+string(to), func(t *testing.T) {
-				got := canTransitionSubmission(from, to)
-				if got != allowed[from][to] {
-					t.Fatalf("transition %s -> %s allowed=%v, want %v", from, to, got, allowed[from][to])
-				}
-			})
-		}
+	for _, tc := range cases {
+		t.Run(string(tc.from)+"_to_"+string(tc.to), func(t *testing.T) {
+			if err := validateSubmissionTransition(tc.from, tc.to); err != nil {
+				t.Fatalf("expected transition to be allowed: %v", err)
+			}
+		})
 	}
 }
 
-func TestSubmissionSameRequestKeyIsIdempotent(t *testing.T) {
-	repo := newMemorySubmissionRepository()
-	store := newSubmissionStore(repo)
-	input := PrepareSubmissionInput{
-		RequestKey:      "11111111-1111-4111-8111-111111111111",
-		ShotID:          "42",
-		RequestSnapshot: []byte(`{"prompt":"first"}`),
+func TestSubmissionRejectsInvalidTransitions(t *testing.T) {
+	cases := []struct {
+		from SubmissionStatus
+		to   SubmissionStatus
+	}{
+		{SubmissionPrepared, SubmissionCompleted},
+		{SubmissionSubmitting, SubmissionPrepared},
+		{SubmissionAccepted, SubmissionSubmitting},
+		{SubmissionCompleted, SubmissionSubmitting},
+		{SubmissionCancelled, SubmissionPrepared},
 	}
 
-	first, err := store.Prepare(context.Background(), input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := store.Prepare(context.Background(), input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.ID != second.ID || first.RequestKey != second.RequestKey {
-		t.Fatalf("same request key created a second identity: first=%+v second=%+v", first, second)
-	}
-	if repo.insertCalls != 2 || len(repo.rows) != 1 {
-		t.Fatalf("expected one persisted row after duplicate insert, calls=%d rows=%d", repo.insertCalls, len(repo.rows))
+	for _, tc := range cases {
+		t.Run(string(tc.from)+"_to_"+string(tc.to), func(t *testing.T) {
+			err := validateSubmissionTransition(tc.from, tc.to)
+			var transitionErr *SubmissionTransitionError
+			if !errors.As(err, &transitionErr) {
+				t.Fatalf("error = %T, want *SubmissionTransitionError: %v", err, err)
+			}
+			if transitionErr.Code != "submission_transition_invalid" {
+				t.Fatalf("code = %q", transitionErr.Code)
+			}
+		})
 	}
 }
 
-func TestSubmissionConcurrentNewKeyRejectedUntilTerminal(t *testing.T) {
-	repo := newMemorySubmissionRepository()
-	store := newSubmissionStore(repo)
-	firstInput := PrepareSubmissionInput{RequestKey: "11111111-1111-4111-8111-111111111111", ShotID: "42"}
-	if _, err := store.Prepare(context.Background(), firstInput); err != nil {
-		t.Fatal(err)
-	}
+func TestSubmissionPrepareReusesRequestKeyAndLocksActiveShot(t *testing.T) {
+	database := openSubmissionTestDB(t)
+	store := NewSubmissionStore(database)
+	ctx := context.Background()
 
-	const attempts = 8
-	var wg sync.WaitGroup
-	errCh := make(chan error, attempts)
-	for i := 0; i < attempts; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, err := store.Prepare(context.Background(), PrepareSubmissionInput{
-				RequestKey: "22222222-2222-4222-8222-222222222222",
-				ShotID:     "42",
-			})
-			errCh <- err
-		}()
-	}
-	wg.Wait()
-	close(errCh)
-	for err := range errCh {
-		var active *ActiveSubmissionError
-		if !errors.As(err, &active) {
-			t.Fatalf("expected active submission error, got %v", err)
-		}
-	}
-
-	if _, err := store.Transition(context.Background(), firstInput.RequestKey, SubmissionPrepared, SubmissionCancelled); err != nil {
-		t.Fatal(err)
-	}
-	created, err := store.Prepare(context.Background(), PrepareSubmissionInput{
-		RequestKey: "33333333-3333-4333-8333-333333333333",
-		ShotID:     "42",
-	})
-	if err != nil {
-		t.Fatalf("terminal transition should release the active lock: %v", err)
-	}
-	if created.RequestKey != "33333333-3333-4333-8333-333333333333" {
-		t.Fatalf("unexpected new submission: %+v", created)
-	}
-}
-
-func TestSubmissionReconcileIsIdempotentAndRejectsConflictingTask(t *testing.T) {
-	repo := newMemorySubmissionRepository()
-	store := newSubmissionStore(repo)
-	requestKey := "11111111-1111-4111-8111-111111111111"
-	if _, err := store.Prepare(context.Background(), PrepareSubmissionInput{RequestKey: requestKey, ShotID: "42"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Transition(context.Background(), requestKey, SubmissionPrepared, SubmissionSubmitting); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Transition(context.Background(), requestKey, SubmissionSubmitting, SubmissionUnknownOutcome); err != nil {
-		t.Fatal(err)
-	}
-
-	first, err := store.Reconcile(context.Background(), requestKey, "task-7", "77")
+	first, created, err := store.Prepare(ctx, testPrepareSubmissionInput(submissionKeyOne, "9"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.Reconcile(context.Background(), requestKey, "task-7", "77")
+	if !created || first.ID == "" || first.Status != SubmissionPrepared {
+		t.Fatalf("unexpected first submission: created=%v submission=%+v", created, first)
+	}
+
+	replayed, created, err := store.Prepare(ctx, testPrepareSubmissionInput(submissionKeyOne, "9"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.ID != second.ID || second.Status != SubmissionReconciled || second.GenerationID != "77" {
-		t.Fatalf("unexpected idempotent reconcile result: first=%+v second=%+v", first, second)
+	if created {
+		t.Fatal("same request key must reuse the persisted submission")
+	}
+	if replayed.ID != first.ID {
+		t.Fatalf("replayed id = %q, want %q", replayed.ID, first.ID)
 	}
 
-	_, err = store.Reconcile(context.Background(), requestKey, "task-other", "88")
-	var conflict *ReconciliationTaskConflictError
-	if !errors.As(err, &conflict) {
-		t.Fatalf("expected task conflict, got %v", err)
-	}
-}
-
-func TestSubmissionStoreRestartRecoversActiveRequest(t *testing.T) {
-	repo := newMemorySubmissionRepository()
-	requestKey := "11111111-1111-4111-8111-111111111111"
-	firstStore := newSubmissionStore(repo)
-	if _, err := firstStore.Prepare(context.Background(), PrepareSubmissionInput{RequestKey: requestKey, ShotID: "42"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := firstStore.Transition(context.Background(), requestKey, SubmissionPrepared, SubmissionSubmitting); err != nil {
-		t.Fatal(err)
-	}
-
-	restarted := newSubmissionStore(repo)
-	active, err := restarted.FindActiveByShot(context.Background(), "42")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if active.RequestKey != requestKey || active.Status != SubmissionSubmitting {
-		t.Fatalf("restart lost active submission: %+v", active)
-	}
-	_, err = restarted.Prepare(context.Background(), PrepareSubmissionInput{
-		RequestKey: "22222222-2222-4222-8222-222222222222",
-		ShotID:     "42",
-	})
+	_, _, err = store.Prepare(ctx, testPrepareSubmissionInput(submissionKeyTwo, "9"))
 	var activeErr *ActiveSubmissionError
 	if !errors.As(err, &activeErr) {
-		t.Fatalf("restarted store should reject a new key, got %v", err)
+		t.Fatalf("error = %T, want *ActiveSubmissionError: %v", err, err)
 	}
-	if _, err := restarted.Transition(context.Background(), requestKey, SubmissionSubmitting, SubmissionUnknownOutcome); err != nil {
+	if activeErr.Code != "shot_submission_active" || activeErr.Existing.RequestKey != submissionKeyOne {
+		t.Fatalf("unexpected active error: %+v", activeErr)
+	}
+
+	active, err := store.FindActiveByShot(ctx, "9")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := restarted.Reconcile(context.Background(), requestKey, "task-7", "77"); err != nil {
+	if active.RequestKey != submissionKeyOne {
+		t.Fatalf("active request key = %q", active.RequestKey)
+	}
+}
+
+func TestSubmissionRejectsRequestKeyReusedForDifferentIntent(t *testing.T) {
+	database := openSubmissionTestDB(t)
+	store := NewSubmissionStore(database)
+	ctx := context.Background()
+
+	input := testPrepareSubmissionInput(submissionKeyOne, "9")
+	if _, _, err := store.Prepare(ctx, input); err != nil {
 		t.Fatal(err)
 	}
-}
-
-type memorySubmissionRepository struct {
-	mu          sync.Mutex
-	rows        map[string]Submission
-	nextID      int64
-	insertCalls int
-}
-
-func newMemorySubmissionRepository() *memorySubmissionRepository {
-	return &memorySubmissionRepository{rows: map[string]Submission{}, nextID: 1}
-}
-
-func (r *memorySubmissionRepository) Insert(_ context.Context, input PrepareSubmissionInput) (Submission, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.insertCalls++
-	if _, ok := r.rows[input.RequestKey]; ok {
-		return Submission{}, errSubmissionRequestKeyConstraint
+	input.RequestHash = "different-request-hash"
+	_, _, err := store.Prepare(ctx, input)
+	var conflict *RequestKeyConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("error = %T, want *RequestKeyConflictError: %v", err, err)
 	}
-	for _, row := range r.rows {
-		if row.ShotID == input.ShotID && row.Status.Active() {
-			return Submission{}, errSubmissionActiveShotConstraint
+	if conflict.Code != "request_key_payload_conflict" {
+		t.Fatalf("code = %q", conflict.Code)
+	}
+}
+
+func TestSubmissionTerminalStateReleasesShotForNewVersion(t *testing.T) {
+	database := openSubmissionTestDB(t)
+	store := NewSubmissionStore(database)
+	ctx := context.Background()
+
+	if _, _, err := store.Prepare(ctx, testPrepareSubmissionInput(submissionKeyOne, "9")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Transition(ctx, submissionKeyOne, SubmissionPrepared, SubmissionSubmitting, SubmissionTransition{}); err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := store.Transition(ctx, submissionKeyOne, SubmissionSubmitting, SubmissionAccepted, SubmissionTransition{
+		UpstreamTaskID: "task-42",
+		GenerationID:   "42",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accepted.UpstreamTaskID != "task-42" || accepted.GenerationID != "42" {
+		t.Fatalf("accepted linkage = %+v", accepted)
+	}
+	if _, err := store.Transition(ctx, submissionKeyOne, SubmissionAccepted, SubmissionCompleted, SubmissionTransition{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.FindActiveByShot(ctx, "9"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected terminal submission to release active lock, got %v", err)
+	}
+
+	second, created, err := store.Prepare(ctx, testPrepareSubmissionInput(submissionKeyTwo, "9"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || second.RequestKey != submissionKeyTwo {
+		t.Fatalf("expected a new version after terminal state, got created=%v submission=%+v", created, second)
+	}
+}
+
+func TestSubmissionTransitionUsesCompareAndSwap(t *testing.T) {
+	database := openSubmissionTestDB(t)
+	store := NewSubmissionStore(database)
+	ctx := context.Background()
+
+	if _, _, err := store.Prepare(ctx, testPrepareSubmissionInput(submissionKeyOne, "9")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Transition(ctx, submissionKeyOne, SubmissionPrepared, SubmissionSubmitting, SubmissionTransition{}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := store.Transition(ctx, submissionKeyOne, SubmissionPrepared, SubmissionCancelled, SubmissionTransition{})
+	var transitionErr *SubmissionTransitionError
+	if !errors.As(err, &transitionErr) {
+		t.Fatalf("error = %T, want *SubmissionTransitionError: %v", err, err)
+	}
+	if transitionErr.Code != "submission_state_conflict" || transitionErr.Current != SubmissionSubmitting {
+		t.Fatalf("unexpected transition conflict: %+v", transitionErr)
+	}
+}
+
+func TestSubmissionClaimSubmittingHasOneWinner(t *testing.T) {
+	database := openSubmissionTestDB(t)
+	store := NewSubmissionStore(database)
+	ctx := context.Background()
+
+	if _, _, err := store.Prepare(ctx, testPrepareSubmissionInput(submissionKeyOne, "9")); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	type claimResult struct {
+		claimed bool
+		err     error
+	}
+	results := make(chan claimResult, 2)
+	for range 2 {
+		go func() {
+			<-start
+			_, claimed, err := store.ClaimSubmitting(ctx, submissionKeyOne)
+			results <- claimResult{claimed: claimed, err: err}
+		}()
+	}
+	close(start)
+
+	winners := 0
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if result.claimed {
+			winners++
 		}
 	}
-	row := Submission{
-		ID:              r.nextID,
-		RequestKey:      input.RequestKey,
-		ShotID:          input.ShotID,
-		Status:          SubmissionPrepared,
-		RequestSnapshot: append([]byte(nil), input.RequestSnapshot...),
+	if winners != 1 {
+		t.Fatalf("claim winners = %d, want 1", winners)
 	}
-	r.nextID++
-	r.rows[input.RequestKey] = row
-	return row, nil
+	current, err := store.GetByRequestKey(ctx, submissionKeyOne)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != SubmissionSubmitting {
+		t.Fatalf("status = %q, want submitting", current.Status)
+	}
 }
 
-func (r *memorySubmissionRepository) GetByRequestKey(_ context.Context, requestKey string) (Submission, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	row, ok := r.rows[requestKey]
-	if !ok {
-		return Submission{}, ErrSubmissionNotFound
+func TestSubmissionReconcileIsIdempotentAndRejectsDifferentTask(t *testing.T) {
+	database := openSubmissionTestDB(t)
+	store := NewSubmissionStore(database)
+	ctx := context.Background()
+
+	if _, _, err := store.Prepare(ctx, testPrepareSubmissionInput(submissionKeyOne, "9")); err != nil {
+		t.Fatal(err)
 	}
-	return row, nil
+	if _, err := store.Transition(ctx, submissionKeyOne, SubmissionPrepared, SubmissionSubmitting, SubmissionTransition{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Transition(ctx, submissionKeyOne, SubmissionSubmitting, SubmissionUnknownOutcome, SubmissionTransition{}); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := store.Reconcile(ctx, submissionKeyOne, "task-42", "42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Reconcile(ctx, submissionKeyOne, "task-42", "42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID || second.Status != SubmissionReconciled {
+		t.Fatalf("reconciliation was not idempotent: first=%+v second=%+v", first, second)
+	}
+
+	_, err = store.Reconcile(ctx, submissionKeyOne, "task-other", "43")
+	var conflict *ReconciliationTaskConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("error = %T, want *ReconciliationTaskConflictError: %v", err, err)
+	}
+	if conflict.Code != "reconciliation_task_conflict" {
+		t.Fatalf("code = %q", conflict.Code)
+	}
 }
 
-func (r *memorySubmissionRepository) GetByID(_ context.Context, id string) (Submission, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, row := range r.rows {
-		if fmt.Sprint(row.ID) == id {
-			return row, nil
+func testPrepareSubmissionInput(requestKey, shotID string) PrepareSubmissionInput {
+	return PrepareSubmissionInput{
+		RequestKey:        requestKey,
+		ProjectID:         "3",
+		ShotID:            shotID,
+		RequestHash:       "request-hash",
+		PromptHash:        "prompt-hash",
+		CapabilityVersion: "capability-v1",
+		RequestSnapshot:   []byte(`{"model":"video-ds-2.0","prompt":"safe snapshot"}`),
+	}
+}
+
+func init() {
+	sql.Register("video-submission-test", submissionTestDriver{})
+}
+
+type submissionTestState struct {
+	mu                        sync.Mutex
+	nextID                    int64
+	byKey                     map[string]Submission
+	recordTaskFailures        int
+	acceptTransitionFailures  int
+	unknownTransitionFailures int
+	cancelTransitionFailures  int
+}
+
+type submissionTestDriver struct{}
+
+type submissionTestConnector struct {
+	state *submissionTestState
+}
+
+type submissionTestConn struct {
+	state *submissionTestState
+}
+
+type submissionTestRows struct {
+	columns []string
+	values  []driver.Value
+	read    bool
+}
+
+type submissionTestResult int64
+
+var (
+	submissionStatesMu sync.Mutex
+	submissionStates   = map[string]*submissionTestState{}
+)
+
+func openSubmissionTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	name := strings.ReplaceAll(t.Name(), "/", "_")
+	state := &submissionTestState{byKey: map[string]Submission{}}
+	submissionStatesMu.Lock()
+	submissionStates[name] = state
+	submissionStatesMu.Unlock()
+	t.Cleanup(func() {
+		submissionStatesMu.Lock()
+		delete(submissionStates, name)
+		submissionStatesMu.Unlock()
+	})
+	database, err := sql.Open("video-submission-test", name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	return database
+}
+
+func (submissionTestDriver) Open(name string) (driver.Conn, error) {
+	submissionStatesMu.Lock()
+	defer submissionStatesMu.Unlock()
+	state := submissionStates[name]
+	if state == nil {
+		return nil, errors.New("missing submission test state")
+	}
+	return &submissionTestConn{state: state}, nil
+}
+
+func (submissionTestDriver) OpenConnector(name string) (driver.Connector, error) {
+	submissionStatesMu.Lock()
+	defer submissionStatesMu.Unlock()
+	state := submissionStates[name]
+	if state == nil {
+		return nil, errors.New("missing submission test state")
+	}
+	return submissionTestConnector{state: state}, nil
+}
+
+func (c submissionTestConnector) Connect(context.Context) (driver.Conn, error) {
+	return &submissionTestConn{state: c.state}, nil
+}
+
+func (submissionTestConnector) Driver() driver.Driver {
+	return submissionTestDriver{}
+}
+
+func (c *submissionTestConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepared statements are not supported")
+}
+
+func (c *submissionTestConn) Close() error { return nil }
+
+func (c *submissionTestConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("transactions are not supported")
+}
+
+func (c *submissionTestConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	q := strings.Join(strings.Fields(query), " ")
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
+
+	switch {
+	case strings.HasPrefix(q, "INSERT INTO video_generation_submissions"):
+		requestKey := submissionNamedString(args, 1)
+		if _, exists := c.state.byKey[requestKey]; exists {
+			return nil, sql.ErrNoRows
+		}
+		shotID := submissionNamedString(args, 3)
+		for _, item := range c.state.byKey {
+			if shotID != "" && item.ShotID == shotID && isActiveSubmissionStatus(item.Status) {
+				return nil, &pgconn.PgError{
+					Code:           "23505",
+					ConstraintName: activeShotSubmissionConstraint,
+				}
+			}
+		}
+		c.state.nextID++
+		item := Submission{
+			ID:                strconv.FormatInt(c.state.nextID, 10),
+			RequestKey:        requestKey,
+			ProjectID:         submissionNamedString(args, 2),
+			ShotID:            shotID,
+			RequestHash:       submissionNamedString(args, 4),
+			PromptHash:        submissionNamedString(args, 5),
+			CapabilityVersion: submissionNamedString(args, 6),
+			RequestSnapshot:   append([]byte(nil), submissionNamedBytes(args, 7)...),
+			Status:            SubmissionPrepared,
+		}
+		c.state.byKey[requestKey] = item
+		return submissionRow(item), nil
+	case strings.Contains(q, "FROM video_generation_submissions WHERE request_key=$1"):
+		item, ok := c.state.byKey[submissionNamedString(args, 1)]
+		if !ok {
+			return nil, sql.ErrNoRows
+		}
+		return submissionRow(item), nil
+	case strings.Contains(q, "FROM video_generation_submissions WHERE generation_id=$1"):
+		generationID := submissionNamedString(args, 1)
+		for _, item := range c.state.byKey {
+			if item.GenerationID == generationID {
+				return submissionRow(item), nil
+			}
+		}
+		return nil, sql.ErrNoRows
+	case strings.Contains(q, "FROM video_generation_submissions WHERE shot_id=$1"):
+		shotID := submissionNamedString(args, 1)
+		for _, item := range c.state.byKey {
+			if item.ShotID == shotID && isActiveSubmissionStatus(item.Status) {
+				return submissionRow(item), nil
+			}
+		}
+		return nil, sql.ErrNoRows
+	case strings.HasPrefix(q, "UPDATE video_generation_submissions SET status=$3"):
+		if submissionNamedString(args, 3) == string(SubmissionAccepted) && c.state.acceptTransitionFailures > 0 {
+			c.state.acceptTransitionFailures--
+			return nil, errors.New("injected accepted linkage failure")
+		}
+		if submissionNamedString(args, 3) == string(SubmissionUnknownOutcome) && c.state.unknownTransitionFailures > 0 {
+			c.state.unknownTransitionFailures--
+			return nil, errors.New("injected unknown outcome persistence failure")
+		}
+		if submissionNamedString(args, 3) == string(SubmissionCancelled) && c.state.cancelTransitionFailures > 0 {
+			c.state.cancelTransitionFailures--
+			return nil, errors.New("injected cancelled state persistence failure")
+		}
+		requestKey := submissionNamedString(args, 1)
+		item, ok := c.state.byKey[requestKey]
+		if !ok || item.Status != SubmissionStatus(submissionNamedString(args, 2)) {
+			return nil, sql.ErrNoRows
+		}
+		item.Status = SubmissionStatus(submissionNamedString(args, 3))
+		if taskID := submissionNamedString(args, 4); taskID != "" {
+			item.UpstreamTaskID = taskID
+		}
+		if generationID := submissionNamedString(args, 5); generationID != "" {
+			item.GenerationID = generationID
+		}
+		item.ErrorMessage = submissionNamedString(args, 6)
+		c.state.byKey[requestKey] = item
+		return submissionRow(item), nil
+	case strings.HasPrefix(q, "UPDATE video_generation_submissions SET upstream_task_id=$2"):
+		if c.state.recordTaskFailures > 0 {
+			c.state.recordTaskFailures--
+			return nil, errors.New("injected upstream task linkage failure")
+		}
+		requestKey := submissionNamedString(args, 1)
+		item, ok := c.state.byKey[requestKey]
+		taskID := submissionNamedString(args, 2)
+		if !ok || item.Status != SubmissionSubmitting || (item.UpstreamTaskID != "" && item.UpstreamTaskID != taskID) {
+			return nil, sql.ErrNoRows
+		}
+		item.UpstreamTaskID = taskID
+		c.state.byKey[requestKey] = item
+		return submissionRow(item), nil
+	default:
+		return nil, errors.New("unexpected submission query: " + q)
+	}
+}
+
+func (c *submissionTestConn) ExecContext(context.Context, string, []driver.NamedValue) (driver.Result, error) {
+	return submissionTestResult(0), nil
+}
+
+func (r *submissionTestRows) Columns() []string { return r.columns }
+
+func (r *submissionTestRows) Close() error { return nil }
+
+func (r *submissionTestRows) Next(dest []driver.Value) error {
+	if r.read {
+		return io.EOF
+	}
+	copy(dest, r.values)
+	r.read = true
+	return nil
+}
+
+func (submissionTestResult) LastInsertId() (int64, error) { return 0, nil }
+
+func (r submissionTestResult) RowsAffected() (int64, error) { return int64(r), nil }
+
+func submissionRow(item Submission) driver.Rows {
+	now := time.Now()
+	return &submissionTestRows{
+		columns: []string{
+			"id", "request_key", "project_id", "shot_id", "request_hash", "prompt_hash",
+			"capability_version", "request_snapshot", "status", "upstream_task_id",
+			"generation_id", "error_message", "create_time", "update_time",
+		},
+		values: []driver.Value{
+			item.ID, item.RequestKey, item.ProjectID, item.ShotID, item.RequestHash, item.PromptHash,
+			item.CapabilityVersion, []byte(item.RequestSnapshot), string(item.Status), item.UpstreamTaskID,
+			item.GenerationID, item.ErrorMessage, now, now,
+		},
+	}
+}
+
+func submissionNamedString(args []driver.NamedValue, ordinal int) string {
+	for _, arg := range args {
+		if arg.Ordinal != ordinal || arg.Value == nil {
+			continue
+		}
+		switch value := arg.Value.(type) {
+		case string:
+			return value
+		case []byte:
+			return string(value)
+		case int64:
+			return strconv.FormatInt(value, 10)
 		}
 	}
-	return Submission{}, ErrSubmissionNotFound
+	return ""
 }
 
-func (r *memorySubmissionRepository) GetByGenerationID(_ context.Context, generationID string) (Submission, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, row := range r.rows {
-		if row.GenerationID == generationID {
-			return row, nil
+func submissionNamedBytes(args []driver.NamedValue, ordinal int) []byte {
+	for _, arg := range args {
+		if arg.Ordinal != ordinal || arg.Value == nil {
+			continue
+		}
+		switch value := arg.Value.(type) {
+		case []byte:
+			return value
+		case string:
+			return []byte(value)
 		}
 	}
-	return Submission{}, ErrSubmissionNotFound
-}
-
-func (r *memorySubmissionRepository) FindActiveByShot(_ context.Context, shotID string) (Submission, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, row := range r.rows {
-		if row.ShotID == shotID && row.Status.Active() {
-			return row, nil
-		}
-	}
-	return Submission{}, ErrSubmissionNotFound
-}
-
-func (r *memorySubmissionRepository) CompareAndSwap(
-	_ context.Context,
-	requestKey string,
-	from SubmissionStatus,
-	to SubmissionStatus,
-	patch SubmissionPatch,
-) (Submission, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	row, ok := r.rows[requestKey]
-	if !ok {
-		return Submission{}, ErrSubmissionNotFound
-	}
-	if row.Status != from {
-		return Submission{}, errSubmissionCompareAndSwap
-	}
-	row.Status = to
-	if patch.TaskID != nil {
-		row.TaskID = *patch.TaskID
-	}
-	if patch.GenerationID != nil {
-		row.GenerationID = *patch.GenerationID
-	}
-	if patch.ErrorMessage != nil {
-		row.ErrorMessage = *patch.ErrorMessage
-	}
-	r.rows[requestKey] = row
-	return row, nil
+	return nil
 }

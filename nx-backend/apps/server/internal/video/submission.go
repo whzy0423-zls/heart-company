@@ -1,17 +1,16 @@
 package video
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
-
-	"nine-xing/nx-backend/apps/server/internal/config"
 )
 
 type SubmissionStatus string
@@ -21,171 +20,389 @@ const (
 	SubmissionSubmitting     SubmissionStatus = "submitting"
 	SubmissionAccepted       SubmissionStatus = "accepted"
 	SubmissionUnknownOutcome SubmissionStatus = "unknown_outcome"
-	SubmissionReconciled     SubmissionStatus = "reconciled"
 	SubmissionCompleted      SubmissionStatus = "completed"
 	SubmissionFailed         SubmissionStatus = "failed"
 	SubmissionCancelled      SubmissionStatus = "cancelled"
+	SubmissionReconciled     SubmissionStatus = "reconciled"
+
+	requestKeySubmissionConstraint   = "uq_video_generation_submissions_request_key"
+	activeShotSubmissionConstraint   = "uq_video_generation_submissions_active_shot"
+	upstreamTaskSubmissionConstraint = "uq_video_generation_submissions_upstream_task"
 )
 
-var allowedSubmissionTransitions = map[SubmissionStatus]map[SubmissionStatus]bool{
-	SubmissionPrepared:       {SubmissionSubmitting: true, SubmissionCancelled: true},
-	SubmissionSubmitting:     {SubmissionAccepted: true, SubmissionUnknownOutcome: true},
-	SubmissionUnknownOutcome: {SubmissionReconciled: true},
-	SubmissionAccepted:       {SubmissionCompleted: true, SubmissionFailed: true},
-	SubmissionReconciled:     {SubmissionCompleted: true, SubmissionFailed: true},
+var submissionTransitions = map[SubmissionStatus]map[SubmissionStatus]bool{
+	SubmissionPrepared: {
+		SubmissionSubmitting: true,
+		SubmissionCancelled:  true,
+	},
+	SubmissionSubmitting: {
+		SubmissionAccepted:       true,
+		SubmissionUnknownOutcome: true,
+		SubmissionReconciled:     true,
+		SubmissionFailed:         true,
+		SubmissionCancelled:      true,
+	},
+	SubmissionAccepted: {
+		SubmissionCompleted: true,
+		SubmissionFailed:    true,
+	},
+	SubmissionUnknownOutcome: {
+		SubmissionReconciled: true,
+		SubmissionCancelled:  true,
+	},
 }
 
-func (s SubmissionStatus) Active() bool {
-	switch s {
-	case SubmissionPrepared, SubmissionSubmitting, SubmissionAccepted, SubmissionUnknownOutcome, SubmissionReconciled:
+type Submission struct {
+	ID                string           `json:"id"`
+	RequestKey        string           `json:"requestKey"`
+	ProjectID         string           `json:"projectId"`
+	ShotID            string           `json:"shotId"`
+	RequestHash       string           `json:"requestHash"`
+	PromptHash        string           `json:"promptHash"`
+	CapabilityVersion string           `json:"capabilityVersion"`
+	RequestSnapshot   json.RawMessage  `json:"requestSnapshot"`
+	Status            SubmissionStatus `json:"status"`
+	UpstreamTaskID    string           `json:"upstreamTaskId"`
+	GenerationID      string           `json:"generationId"`
+	ErrorMessage      string           `json:"errorMessage"`
+	CreateTime        string           `json:"createTime"`
+	UpdateTime        string           `json:"updateTime"`
+}
+
+type PrepareSubmissionInput struct {
+	RequestKey        string
+	ProjectID         string
+	ShotID            string
+	RequestHash       string
+	PromptHash        string
+	CapabilityVersion string
+	RequestSnapshot   json.RawMessage
+}
+
+type SubmissionTransition struct {
+	UpstreamTaskID string
+	GenerationID   string
+	ErrorMessage   string
+}
+
+type SubmissionStore struct {
+	db *sql.DB
+}
+
+type SubmissionValidationError struct {
+	Code    string
+	Field   string
+	Message string
+}
+
+func (e *SubmissionValidationError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+
+type SubmissionTransitionError struct {
+	Code       string
+	RequestKey string
+	From       SubmissionStatus
+	To         SubmissionStatus
+	Current    SubmissionStatus
+}
+
+func (e *SubmissionTransitionError) Error() string {
+	if e != nil && e.Code == "submission_state_conflict" {
+		return "视频生成提交状态已变化，请刷新后查看最新状态。"
+	}
+	return "不允许执行当前视频生成提交状态转换。"
+}
+
+type ActiveSubmissionError struct {
+	Code     string
+	ShotID   string
+	Existing Submission
+}
+
+func (e *ActiveSubmissionError) Error() string {
+	return "当前分镜已有生成任务，请先查看现有任务状态。"
+}
+
+type RequestKeyConflictError struct {
+	Code       string
+	RequestKey string
+	Existing   Submission
+}
+
+func (e *RequestKeyConflictError) Error() string {
+	return "同一请求键不能用于不同的视频生成内容。"
+}
+
+type ReconciliationTaskConflictError struct {
+	Code       string
+	RequestKey string
+	TaskID     string
+}
+
+func (e *ReconciliationTaskConflictError) Error() string {
+	return "对账任务与已保存的视频生成任务不一致。"
+}
+
+type SubmissionInProgressError struct {
+	RequestKey   string
+	SubmissionID string
+	Status       SubmissionStatus
+}
+
+func (e *SubmissionInProgressError) Error() string {
+	return "视频生成任务正在提交，请查看现有任务状态。"
+}
+
+type UnknownOutcomeError struct {
+	RequestKey   string
+	SubmissionID string
+	Persisted    bool
+}
+
+func (e *UnknownOutcomeError) Error() string {
+	return "视频生成请求结果不确定，请先对账，不能直接重新生成。"
+}
+
+type LocalLinkageError struct {
+	RequestKey   string
+	SubmissionID string
+	TaskID       string
+}
+
+func (e *LocalLinkageError) Error() string {
+	return "中转站已返回任务，但本地关联尚未完成，请使用原请求键对账。"
+}
+
+type SubmissionTerminalError struct {
+	RequestKey   string
+	SubmissionID string
+	Status       SubmissionStatus
+}
+
+func (e *SubmissionTerminalError) Error() string {
+	return "本次视频生成提交已经结束，请查看记录或创建新的生成版本。"
+}
+
+type SubmissionPersistenceError struct {
+	RequestKey     string
+	SubmissionID   string
+	IntendedStatus SubmissionStatus
+	OutcomeCode    string
+}
+
+func (e *SubmissionPersistenceError) Error() string {
+	return "视频生成结果已确认，但本地提交状态尚未保存，请使用原请求键恢复。"
+}
+
+func NewSubmissionStore(database *sql.DB) *SubmissionStore {
+	return &SubmissionStore{db: database}
+}
+
+func validateSubmissionTransition(from, to SubmissionStatus) error {
+	if submissionTransitions[from][to] {
+		return nil
+	}
+	return &SubmissionTransitionError{
+		Code: "submission_transition_invalid",
+		From: from,
+		To:   to,
+	}
+}
+
+func isActiveSubmissionStatus(status SubmissionStatus) bool {
+	switch status {
+	case SubmissionPrepared, SubmissionSubmitting, SubmissionAccepted, SubmissionUnknownOutcome:
 		return true
 	default:
 		return false
 	}
 }
 
-func canTransitionSubmission(from, to SubmissionStatus) bool {
-	return allowedSubmissionTransitions[from][to]
-}
-
-type Submission struct {
-	ID              int64            `json:"submissionId"`
-	RequestKey      string           `json:"requestKey"`
-	ShotID          string           `json:"shotId"`
-	GenerationID    string           `json:"generationId,omitempty"`
-	TaskID          string           `json:"taskId,omitempty"`
-	Status          SubmissionStatus `json:"status"`
-	RequestSnapshot json.RawMessage  `json:"-"`
-	ErrorMessage    string           `json:"error,omitempty"`
-}
-
-type PrepareSubmissionInput struct {
-	RequestKey      string
-	ShotID          string
-	RequestSnapshot json.RawMessage
-}
-
-type SubmissionPatch struct {
-	TaskID       *string
-	GenerationID *string
-	ErrorMessage *string
-}
-
-var (
-	ErrSubmissionNotFound             = errors.New("generation submission not found")
-	errSubmissionRequestKeyConstraint = errors.New("generation submission request key constraint")
-	errSubmissionActiveShotConstraint = errors.New("generation submission active shot constraint")
-	errSubmissionCompareAndSwap       = errors.New("generation submission compare-and-swap failed")
-	ErrInvalidSubmissionRequest       = errors.New("invalid generation submission request")
-)
-
-type ActiveSubmissionError struct {
-	ShotID     string
-	RequestKey string
-	Status     SubmissionStatus
-}
-
-func (e *ActiveSubmissionError) Error() string {
-	return fmt.Sprintf("shot %s already has active submission %s (%s)", e.ShotID, e.RequestKey, e.Status)
-}
-
-type InvalidSubmissionTransitionError struct {
-	RequestKey string
-	From       SubmissionStatus
-	To         SubmissionStatus
-}
-
-func (e *InvalidSubmissionTransitionError) Error() string {
-	return fmt.Sprintf("submission %s cannot transition from %s to %s", e.RequestKey, e.From, e.To)
-}
-
-type RequestKeyReuseError struct {
-	RequestKey string
-}
-
-func (e *RequestKeyReuseError) Error() string {
-	return fmt.Sprintf("submission request key %s was reused for different input", e.RequestKey)
-}
-
-type ReconciliationTaskConflictError struct {
-	RequestKey string
-	Existing   string
-	Received   string
-}
-
-func (e *ReconciliationTaskConflictError) Error() string {
-	return fmt.Sprintf("submission %s is linked to task %s, not %s", e.RequestKey, e.Existing, e.Received)
-}
-
-type UnknownOutcomeError struct {
-	RequestKey string
-	TaskID     string
-	Cause      error
-}
-
-func (e *UnknownOutcomeError) Error() string {
-	if e.TaskID != "" {
-		return fmt.Sprintf("generation outcome is unknown for request %s (task %s)", e.RequestKey, e.TaskID)
+func (s *SubmissionStore) Prepare(ctx context.Context, input PrepareSubmissionInput) (Submission, bool, error) {
+	if s == nil || s.db == nil {
+		return Submission{}, false, errors.New("video submission store is not configured")
 	}
-	return fmt.Sprintf("generation outcome is unknown for request %s", e.RequestKey)
-}
-
-func (e *UnknownOutcomeError) Unwrap() error { return e.Cause }
-
-type submissionRepository interface {
-	Insert(context.Context, PrepareSubmissionInput) (Submission, error)
-	GetByID(context.Context, string) (Submission, error)
-	GetByRequestKey(context.Context, string) (Submission, error)
-	GetByGenerationID(context.Context, string) (Submission, error)
-	FindActiveByShot(context.Context, string) (Submission, error)
-	CompareAndSwap(context.Context, string, SubmissionStatus, SubmissionStatus, SubmissionPatch) (Submission, error)
-}
-
-type SubmissionStore struct {
-	repo submissionRepository
-}
-
-func NewSubmissionStore(database *sql.DB) *SubmissionStore {
-	return newSubmissionStore(&sqlSubmissionRepository{db: database})
-}
-
-func newSubmissionStore(repo submissionRepository) *SubmissionStore {
-	return &SubmissionStore{repo: repo}
-}
-
-func (s *SubmissionStore) Prepare(ctx context.Context, input PrepareSubmissionInput) (Submission, error) {
-	input.RequestKey = strings.TrimSpace(input.RequestKey)
-	input.ShotID = strings.TrimSpace(input.ShotID)
-	if input.RequestKey == "" || input.ShotID == "" || !json.Valid(normalizeSnapshot(input.RequestSnapshot)) {
-		return Submission{}, ErrInvalidSubmissionRequest
+	normalized, projectID, shotID, err := normalizePrepareSubmissionInput(input)
+	if err != nil {
+		return Submission{}, false, err
 	}
-	input.RequestSnapshot = normalizeSnapshot(input.RequestSnapshot)
-	created, err := s.repo.Insert(ctx, input)
+
+	item, err := scanSubmission(s.db.QueryRowContext(ctx, `
+		INSERT INTO video_generation_submissions (
+			request_key, project_id, shot_id, request_hash, prompt_hash,
+			capability_version, request_snapshot, status
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,'prepared')
+		ON CONFLICT (request_key) DO NOTHING
+		RETURNING `+submissionSelectColumns,
+		normalized.RequestKey,
+		projectID,
+		shotID,
+		normalized.RequestHash,
+		normalized.PromptHash,
+		normalized.CapabilityVersion,
+		[]byte(normalized.RequestSnapshot),
+	))
 	if err == nil {
-		return created, nil
+		return item, true, nil
 	}
-	if errors.Is(err, errSubmissionRequestKeyConstraint) {
-		existing, getErr := s.repo.GetByRequestKey(ctx, input.RequestKey)
-		if getErr != nil {
-			return Submission{}, getErr
+	if errors.Is(err, sql.ErrNoRows) || isSubmissionConstraint(err, requestKeySubmissionConstraint) {
+		existing, lookupErr := s.GetByRequestKey(ctx, normalized.RequestKey)
+		if lookupErr != nil {
+			return Submission{}, false, lookupErr
 		}
-		if existing.ShotID != input.ShotID || !bytes.Equal(normalizeSnapshot(existing.RequestSnapshot), input.RequestSnapshot) {
-			return Submission{}, &RequestKeyReuseError{RequestKey: input.RequestKey}
+		if !sameSubmissionIntent(existing, normalized) {
+			return Submission{}, false, &RequestKeyConflictError{
+				Code:       "request_key_payload_conflict",
+				RequestKey: normalized.RequestKey,
+				Existing:   existing,
+			}
 		}
-		return existing, nil
+		return existing, false, nil
 	}
-	if errors.Is(err, errSubmissionActiveShotConstraint) {
-		active, getErr := s.repo.FindActiveByShot(ctx, input.ShotID)
-		if getErr != nil {
-			return Submission{}, err
+	if isSubmissionConstraint(err, activeShotSubmissionConstraint) && normalized.ShotID != "" {
+		existing, lookupErr := s.FindActiveByShot(ctx, normalized.ShotID)
+		if lookupErr != nil {
+			return Submission{}, false, err
 		}
-		return Submission{}, &ActiveSubmissionError{
-			ShotID:     active.ShotID,
-			RequestKey: active.RequestKey,
-			Status:     active.Status,
+		return Submission{}, false, &ActiveSubmissionError{
+			Code:     "shot_submission_active",
+			ShotID:   normalized.ShotID,
+			Existing: existing,
 		}
 	}
-	return Submission{}, err
+	return Submission{}, false, err
+}
+
+func (s *SubmissionStore) GetByRequestKey(ctx context.Context, requestKey string) (Submission, error) {
+	if s == nil || s.db == nil {
+		return Submission{}, errors.New("video submission store is not configured")
+	}
+	requestKey, err := normalizeSubmissionRequestKey(requestKey)
+	if err != nil {
+		return Submission{}, err
+	}
+	return scanSubmission(s.db.QueryRowContext(ctx, `
+		SELECT `+submissionSelectColumns+`
+		  FROM video_generation_submissions
+		 WHERE request_key=$1`, requestKey))
+}
+
+func (s *SubmissionStore) FindActiveByShot(ctx context.Context, shotID string) (Submission, error) {
+	if s == nil || s.db == nil {
+		return Submission{}, errors.New("video submission store is not configured")
+	}
+	parsedShotID, _, err := normalizeSubmissionID("shotId", shotID, false)
+	if err != nil {
+		return Submission{}, err
+	}
+	return scanSubmission(s.db.QueryRowContext(ctx, `
+		SELECT `+submissionSelectColumns+`
+		  FROM video_generation_submissions
+		 WHERE shot_id=$1
+		   AND status IN ('prepared','submitting','accepted','unknown_outcome')
+		 ORDER BY create_time DESC, id DESC
+		 LIMIT 1`, parsedShotID))
+}
+
+func (s *SubmissionStore) GetByGenerationID(ctx context.Context, generationID string) (Submission, error) {
+	if s == nil || s.db == nil {
+		return Submission{}, errors.New("video submission store is not configured")
+	}
+	parsedGenerationID, _, err := normalizeSubmissionID("generationId", generationID, false)
+	if err != nil {
+		return Submission{}, err
+	}
+	return scanSubmission(s.db.QueryRowContext(ctx, `
+		SELECT `+submissionSelectColumns+`
+		  FROM video_generation_submissions
+		 WHERE generation_id=$1
+		 ORDER BY id
+		 LIMIT 1`, parsedGenerationID))
+}
+
+// ClaimSubmitting atomically grants one caller permission to execute the
+// create-task POST. A false result means another caller already claimed or
+// advanced the same persisted submission.
+func (s *SubmissionStore) ClaimSubmitting(ctx context.Context, requestKey string) (Submission, bool, error) {
+	if s == nil || s.db == nil {
+		return Submission{}, false, errors.New("video submission store is not configured")
+	}
+	requestKey, err := normalizeSubmissionRequestKey(requestKey)
+	if err != nil {
+		return Submission{}, false, err
+	}
+	item, err := scanSubmission(s.db.QueryRowContext(ctx, `
+		UPDATE video_generation_submissions
+		   SET status=$3,
+		       upstream_task_id=CASE WHEN $4='' THEN upstream_task_id ELSE $4 END,
+		       generation_id=COALESCE($5,generation_id),
+		       error_message=$6,
+		       update_time=now()
+		 WHERE request_key=$1
+		   AND status=$2
+		RETURNING `+submissionSelectColumns,
+		requestKey,
+		string(SubmissionPrepared),
+		string(SubmissionSubmitting),
+		"",
+		nil,
+		"",
+	))
+	if err == nil {
+		return item, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return Submission{}, false, err
+	}
+	current, lookupErr := s.GetByRequestKey(ctx, requestKey)
+	if lookupErr != nil {
+		return Submission{}, false, lookupErr
+	}
+	return current, false, nil
+}
+
+func (s *SubmissionStore) RecordUpstreamTask(ctx context.Context, requestKey, taskID string) (Submission, error) {
+	if s == nil || s.db == nil {
+		return Submission{}, errors.New("video submission store is not configured")
+	}
+	requestKey, err := normalizeSubmissionRequestKey(requestKey)
+	if err != nil {
+		return Submission{}, err
+	}
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return Submission{}, submissionValidationError("upstream_task_id_required", "upstreamTaskId", "中转站任务 ID 不能为空。")
+	}
+	item, err := scanSubmission(s.db.QueryRowContext(ctx, `
+		UPDATE video_generation_submissions
+		   SET upstream_task_id=$2,
+		       update_time=now()
+		 WHERE request_key=$1
+		   AND status='submitting'
+		   AND (upstream_task_id='' OR upstream_task_id=$2)
+		RETURNING `+submissionSelectColumns, requestKey, taskID))
+	if err == nil {
+		return item, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return Submission{}, err
+	}
+	current, lookupErr := s.GetByRequestKey(ctx, requestKey)
+	if lookupErr != nil {
+		return Submission{}, lookupErr
+	}
+	if current.UpstreamTaskID != "" && current.UpstreamTaskID != taskID {
+		return Submission{}, &ReconciliationTaskConflictError{
+			Code:       "reconciliation_task_conflict",
+			RequestKey: requestKey,
+			TaskID:     taskID,
+		}
+	}
+	return current, nil
 }
 
 func (s *SubmissionStore) Transition(
@@ -193,343 +410,258 @@ func (s *SubmissionStore) Transition(
 	requestKey string,
 	from SubmissionStatus,
 	to SubmissionStatus,
+	change SubmissionTransition,
 ) (Submission, error) {
-	return s.transition(ctx, requestKey, from, to, SubmissionPatch{})
-}
-
-func (s *SubmissionStore) transition(
-	ctx context.Context,
-	requestKey string,
-	from SubmissionStatus,
-	to SubmissionStatus,
-	patch SubmissionPatch,
-) (Submission, error) {
-	if !canTransitionSubmission(from, to) {
-		return Submission{}, &InvalidSubmissionTransitionError{RequestKey: requestKey, From: from, To: to}
+	if s == nil || s.db == nil {
+		return Submission{}, errors.New("video submission store is not configured")
 	}
-	updated, err := s.repo.CompareAndSwap(ctx, requestKey, from, to, patch)
-	if err == nil {
-		return updated, nil
-	}
-	if !errors.Is(err, errSubmissionCompareAndSwap) {
+	requestKey, err := normalizeSubmissionRequestKey(requestKey)
+	if err != nil {
 		return Submission{}, err
 	}
-	current, getErr := s.repo.GetByRequestKey(ctx, requestKey)
-	if getErr != nil {
-		return Submission{}, getErr
+	if err := validateSubmissionTransition(from, to); err != nil {
+		return Submission{}, err
 	}
-	return Submission{}, &InvalidSubmissionTransitionError{RequestKey: requestKey, From: current.Status, To: to}
-}
-
-func (s *SubmissionStore) GetByRequestKey(ctx context.Context, requestKey string) (Submission, error) {
-	return s.repo.GetByRequestKey(ctx, strings.TrimSpace(requestKey))
-}
-
-func (s *SubmissionStore) GetByID(ctx context.Context, id string) (Submission, error) {
-	return s.repo.GetByID(ctx, strings.TrimSpace(id))
-}
-
-func (s *SubmissionStore) FindActiveByShot(ctx context.Context, shotID string) (Submission, error) {
-	return s.repo.FindActiveByShot(ctx, strings.TrimSpace(shotID))
-}
-
-func (s *SubmissionStore) RecoverInterrupted(ctx context.Context, unknownReason, demoReason string) (int64, error) {
-	repo, ok := s.repo.(*sqlSubmissionRepository)
-	if !ok {
-		return 0, nil
+	change, generationID, err := normalizeSubmissionTransition(to, change)
+	if err != nil {
+		return Submission{}, err
 	}
-	// Missing modes predate explicit mode snapshots and remain ambiguous, so the
-	// ELSE branch conservatively requires manual reconciliation.
-	result, err := repo.db.ExecContext(ctx, `
+
+	item, err := scanSubmission(s.db.QueryRowContext(ctx, `
 		UPDATE video_generation_submissions
-		SET status=CASE
-		        WHEN request_snapshot->>'generationMode'=$3 THEN 'cancelled'
-		        ELSE 'unknown_outcome'
-		    END,
-		    error_message=CASE
-		        WHEN request_snapshot->>'generationMode'=$3 THEN $2
-		        ELSE $1
-		    END,
-		    update_time=now()
-		WHERE status='submitting'`,
-		strings.TrimSpace(unknownReason),
-		strings.TrimSpace(demoReason),
-		config.VideoGenerationModeDemo,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-func (s *SubmissionStore) SynchronizeTerminal(
-	ctx context.Context,
-	generationID string,
-	generationStatus string,
-) (Submission, error) {
-	current, err := s.repo.GetByGenerationID(ctx, strings.TrimSpace(generationID))
-	if err != nil {
-		return Submission{}, err
-	}
-	var terminal SubmissionStatus
-	switch strings.TrimSpace(generationStatus) {
-	case "completed", "succeeded":
-		terminal = SubmissionCompleted
-	case "failed":
-		terminal = SubmissionFailed
-	default:
-		return current, nil
-	}
-	if current.Status == terminal {
-		return current, nil
-	}
-	if current.Status != SubmissionAccepted && current.Status != SubmissionReconciled {
-		return Submission{}, &InvalidSubmissionTransitionError{
-			RequestKey: current.RequestKey,
-			From:       current.Status,
-			To:         terminal,
-		}
-	}
-	return s.transition(ctx, current.RequestKey, current.Status, terminal, SubmissionPatch{})
-}
-
-func (s *SubmissionStore) AttachAccepted(
-	ctx context.Context,
-	requestKey string,
-	taskID string,
-	generationID string,
-) (Submission, error) {
-	taskID = strings.TrimSpace(taskID)
-	generationID = strings.TrimSpace(generationID)
-	if taskID == "" || generationID == "" {
-		return Submission{}, ErrInvalidSubmissionRequest
-	}
-	return s.transition(ctx, requestKey, SubmissionSubmitting, SubmissionAccepted, SubmissionPatch{
-		TaskID:       &taskID,
-		GenerationID: &generationID,
-	})
-}
-
-func (s *SubmissionStore) MarkUnknownOutcome(
-	ctx context.Context,
-	requestKey string,
-	taskID string,
-) (Submission, error) {
-	taskID = strings.TrimSpace(taskID)
-	message := "generation gateway outcome unknown"
-	patch := SubmissionPatch{ErrorMessage: &message}
-	if taskID != "" {
-		patch.TaskID = &taskID
-	}
-	return s.transition(
-		ctx,
+		   SET status=$3,
+		       upstream_task_id=CASE WHEN $4='' THEN upstream_task_id ELSE $4 END,
+		       generation_id=COALESCE($5,generation_id),
+		       error_message=$6,
+		       update_time=now()
+		 WHERE request_key=$1
+		   AND status=$2
+		RETURNING `+submissionSelectColumns,
 		requestKey,
-		SubmissionSubmitting,
-		SubmissionUnknownOutcome,
-		patch,
-	)
-}
-
-// CancelDemoFailure releases a submission only when demo generation failed
-// locally and no provider request could have been issued.
-func (s *SubmissionStore) CancelDemoFailure(
-	ctx context.Context,
-	requestKey string,
-	cause error,
-) (Submission, error) {
-	message := "local demo generation failed"
-	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
-		message = cause.Error()
+		string(from),
+		string(to),
+		change.UpstreamTaskID,
+		generationID,
+		change.ErrorMessage,
+	))
+	if err == nil {
+		return item, nil
 	}
-	updated, err := s.repo.CompareAndSwap(
-		ctx,
-		strings.TrimSpace(requestKey),
-		SubmissionSubmitting,
-		SubmissionCancelled,
-		SubmissionPatch{ErrorMessage: &message},
-	)
-	if errors.Is(err, errSubmissionCompareAndSwap) {
-		current, getErr := s.repo.GetByRequestKey(ctx, strings.TrimSpace(requestKey))
-		if getErr != nil {
-			return Submission{}, getErr
-		}
-		return Submission{}, &InvalidSubmissionTransitionError{
-			RequestKey: current.RequestKey,
-			From:       current.Status,
-			To:         SubmissionCancelled,
-		}
-	}
-	return updated, err
-}
-
-func (s *SubmissionStore) Reconcile(
-	ctx context.Context,
-	requestKey string,
-	taskID string,
-	generationID string,
-) (Submission, error) {
-	taskID = strings.TrimSpace(taskID)
-	generationID = strings.TrimSpace(generationID)
-	if taskID == "" || generationID == "" {
-		return Submission{}, ErrInvalidSubmissionRequest
-	}
-	current, err := s.repo.GetByRequestKey(ctx, requestKey)
-	if err != nil {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return Submission{}, err
 	}
-	if current.TaskID != "" && current.TaskID != taskID {
-		return Submission{}, &ReconciliationTaskConflictError{
-			RequestKey: requestKey,
-			Existing:   current.TaskID,
-			Received:   taskID,
-		}
+	current, lookupErr := s.GetByRequestKey(ctx, requestKey)
+	if lookupErr != nil {
+		return Submission{}, lookupErr
 	}
-	if current.Status == SubmissionReconciled {
-		if current.GenerationID != "" && current.GenerationID != generationID {
+	if current.Status == to {
+		if transitionLinkConflicts(current, change) {
 			return Submission{}, &ReconciliationTaskConflictError{
+				Code:       "reconciliation_task_conflict",
 				RequestKey: requestKey,
-				Existing:   current.GenerationID,
-				Received:   generationID,
+				TaskID:     change.UpstreamTaskID,
 			}
 		}
 		return current, nil
 	}
-	return s.transition(ctx, requestKey, SubmissionUnknownOutcome, SubmissionReconciled, SubmissionPatch{
-		TaskID:       &taskID,
-		GenerationID: &generationID,
+	return Submission{}, &SubmissionTransitionError{
+		Code:       "submission_state_conflict",
+		RequestKey: requestKey,
+		From:       from,
+		To:         to,
+		Current:    current.Status,
+	}
+}
+
+func (s *SubmissionStore) Reconcile(ctx context.Context, requestKey, taskID, generationID string) (Submission, error) {
+	requestKey, err := normalizeSubmissionRequestKey(requestKey)
+	if err != nil {
+		return Submission{}, err
+	}
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return Submission{}, submissionValidationError("upstream_task_id_required", "upstreamTaskId", "对账需要有效的中转站任务 ID。")
+	}
+	_, generationID, err = normalizeSubmissionID("generationId", generationID, false)
+	if err != nil {
+		return Submission{}, err
+	}
+
+	current, err := s.GetByRequestKey(ctx, requestKey)
+	if err != nil {
+		return Submission{}, err
+	}
+	if (current.UpstreamTaskID != "" && current.UpstreamTaskID != taskID) ||
+		(current.GenerationID != "" && current.GenerationID != generationID) {
+		return Submission{}, &ReconciliationTaskConflictError{
+			Code:       "reconciliation_task_conflict",
+			RequestKey: requestKey,
+			TaskID:     taskID,
+		}
+	}
+	if current.Status == SubmissionReconciled {
+		return current, nil
+	}
+	if current.Status != SubmissionSubmitting && current.Status != SubmissionUnknownOutcome {
+		return Submission{}, &SubmissionTransitionError{
+			Code:       "submission_transition_invalid",
+			RequestKey: requestKey,
+			From:       current.Status,
+			To:         SubmissionReconciled,
+			Current:    current.Status,
+		}
+	}
+	return s.Transition(ctx, requestKey, current.Status, SubmissionReconciled, SubmissionTransition{
+		UpstreamTaskID: taskID,
+		GenerationID:   generationID,
 	})
 }
 
-func normalizeSnapshot(raw json.RawMessage) json.RawMessage {
-	if len(bytes.TrimSpace(raw)) == 0 {
-		return json.RawMessage(`{}`)
-	}
-	return bytes.TrimSpace(raw)
-}
-
-type sqlSubmissionRepository struct {
-	db *sql.DB
-}
-
-const submissionColumns = `id, request_key::text, shot_id::text,
-       COALESCE(generation_id::text,''), task_id, status,
-       request_snapshot, error_message`
+const submissionSelectColumns = `
+	id::text,
+	request_key::text,
+	COALESCE(project_id::text,''),
+	COALESCE(shot_id::text,''),
+	request_hash,
+	prompt_hash,
+	capability_version,
+	request_snapshot,
+	status,
+	upstream_task_id,
+	COALESCE(generation_id::text,''),
+	error_message,
+	create_time,
+	update_time`
 
 type submissionScanner interface {
-	Scan(...any) error
+	Scan(dest ...any) error
 }
 
 func scanSubmission(scanner submissionScanner) (Submission, error) {
-	var row Submission
-	err := scanner.Scan(
-		&row.ID,
-		&row.RequestKey,
-		&row.ShotID,
-		&row.GenerationID,
-		&row.TaskID,
-		&row.Status,
-		&row.RequestSnapshot,
-		&row.ErrorMessage,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Submission{}, ErrSubmissionNotFound
+	var item Submission
+	var snapshot []byte
+	var status string
+	var createTime time.Time
+	var updateTime time.Time
+	if err := scanner.Scan(
+		&item.ID,
+		&item.RequestKey,
+		&item.ProjectID,
+		&item.ShotID,
+		&item.RequestHash,
+		&item.PromptHash,
+		&item.CapabilityVersion,
+		&snapshot,
+		&status,
+		&item.UpstreamTaskID,
+		&item.GenerationID,
+		&item.ErrorMessage,
+		&createTime,
+		&updateTime,
+	); err != nil {
+		return Submission{}, err
 	}
-	return row, err
+	item.RequestSnapshot = append(json.RawMessage(nil), snapshot...)
+	item.Status = SubmissionStatus(status)
+	item.CreateTime = formatTime(createTime)
+	item.UpdateTime = formatTime(updateTime)
+	return item, nil
 }
 
-func (r *sqlSubmissionRepository) Insert(ctx context.Context, input PrepareSubmissionInput) (Submission, error) {
-	row, err := scanSubmission(r.db.QueryRowContext(ctx, `
-		INSERT INTO video_generation_submissions (request_key, shot_id, request_snapshot)
-		VALUES ($1::uuid, $2::bigint, $3::jsonb)
-		RETURNING `+submissionColumns,
-		input.RequestKey,
-		input.ShotID,
-		[]byte(input.RequestSnapshot),
-	))
-	if err == nil {
-		return row, nil
+func normalizePrepareSubmissionInput(input PrepareSubmissionInput) (PrepareSubmissionInput, any, any, error) {
+	requestKey, err := normalizeSubmissionRequestKey(input.RequestKey)
+	if err != nil {
+		return PrepareSubmissionInput{}, nil, nil, err
 	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		switch pgErr.ConstraintName {
-		case "video_generation_submissions_request_key_key":
-			return Submission{}, errSubmissionRequestKeyConstraint
-		case "idx_video_generation_submissions_active_shot":
-			return Submission{}, errSubmissionActiveShotConstraint
+	projectID, normalizedProjectID, err := normalizeSubmissionID("projectId", input.ProjectID, true)
+	if err != nil {
+		return PrepareSubmissionInput{}, nil, nil, err
+	}
+	shotID, normalizedShotID, err := normalizeSubmissionID("shotId", input.ShotID, true)
+	if err != nil {
+		return PrepareSubmissionInput{}, nil, nil, err
+	}
+	input.RequestHash = strings.TrimSpace(input.RequestHash)
+	input.PromptHash = strings.TrimSpace(input.PromptHash)
+	input.CapabilityVersion = strings.TrimSpace(input.CapabilityVersion)
+	if input.RequestHash == "" {
+		return PrepareSubmissionInput{}, nil, nil, submissionValidationError("request_hash_required", "requestHash", "视频生成提交缺少请求摘要。")
+	}
+	if input.PromptHash == "" {
+		return PrepareSubmissionInput{}, nil, nil, submissionValidationError("prompt_hash_required", "promptHash", "视频生成提交缺少提示词摘要。")
+	}
+	if input.CapabilityVersion == "" {
+		return PrepareSubmissionInput{}, nil, nil, submissionValidationError("capability_version_required", "capabilityVersion", "视频生成提交缺少能力版本。")
+	}
+	snapshot := json.RawMessage(strings.TrimSpace(string(input.RequestSnapshot)))
+	if len(snapshot) == 0 || !json.Valid(snapshot) {
+		return PrepareSubmissionInput{}, nil, nil, submissionValidationError("request_snapshot_invalid", "requestSnapshot", "视频生成提交快照必须是有效 JSON。")
+	}
+	input.RequestKey = requestKey
+	input.ProjectID = normalizedProjectID
+	input.ShotID = normalizedShotID
+	input.RequestSnapshot = append(json.RawMessage(nil), snapshot...)
+	return input, projectID, shotID, nil
+}
+
+func normalizeSubmissionTransition(to SubmissionStatus, change SubmissionTransition) (SubmissionTransition, any, error) {
+	change.UpstreamTaskID = strings.TrimSpace(change.UpstreamTaskID)
+	change.GenerationID = strings.TrimSpace(change.GenerationID)
+	change.ErrorMessage = strings.TrimSpace(change.ErrorMessage)
+	if to == SubmissionAccepted || to == SubmissionReconciled {
+		if change.UpstreamTaskID == "" {
+			return SubmissionTransition{}, nil, submissionValidationError("upstream_task_id_required", "upstreamTaskId", "当前提交状态需要有效的中转站任务 ID。")
+		}
+		if change.GenerationID == "" {
+			return SubmissionTransition{}, nil, submissionValidationError("generation_id_required", "generationId", "当前提交状态需要关联本地视频记录。")
 		}
 	}
-	return Submission{}, err
-}
-
-func (r *sqlSubmissionRepository) GetByRequestKey(ctx context.Context, requestKey string) (Submission, error) {
-	return scanSubmission(r.db.QueryRowContext(ctx, `
-		SELECT `+submissionColumns+`
-		FROM video_generation_submissions
-		WHERE request_key=$1::uuid`, requestKey))
-}
-
-func (r *sqlSubmissionRepository) GetByID(ctx context.Context, id string) (Submission, error) {
-	return scanSubmission(r.db.QueryRowContext(ctx, `
-		SELECT `+submissionColumns+`
-		FROM video_generation_submissions
-		WHERE id=$1::bigint`, id))
-}
-
-func (r *sqlSubmissionRepository) GetByGenerationID(ctx context.Context, generationID string) (Submission, error) {
-	return scanSubmission(r.db.QueryRowContext(ctx, `
-		SELECT `+submissionColumns+`
-		FROM video_generation_submissions
-		WHERE generation_id=$1::bigint`, generationID))
-}
-
-func (r *sqlSubmissionRepository) FindActiveByShot(ctx context.Context, shotID string) (Submission, error) {
-	return scanSubmission(r.db.QueryRowContext(ctx, `
-		SELECT `+submissionColumns+`
-		FROM video_generation_submissions
-		WHERE shot_id=$1::bigint
-		  AND status IN ('prepared','submitting','accepted','unknown_outcome','reconciled')
-		ORDER BY id DESC
-		LIMIT 1`, shotID))
-}
-
-func (r *sqlSubmissionRepository) CompareAndSwap(
-	ctx context.Context,
-	requestKey string,
-	from SubmissionStatus,
-	to SubmissionStatus,
-	patch SubmissionPatch,
-) (Submission, error) {
-	taskID, setTaskID := patchValue(patch.TaskID)
-	generationID, setGenerationID := patchValue(patch.GenerationID)
-	errorMessage, setError := patchValue(patch.ErrorMessage)
-	row, err := scanSubmission(r.db.QueryRowContext(ctx, `
-		UPDATE video_generation_submissions
-		SET status=$3,
-		    task_id=CASE WHEN $5 THEN $4 ELSE task_id END,
-		    generation_id=CASE WHEN $7 THEN NULLIF($6,'')::bigint ELSE generation_id END,
-		    error_message=CASE WHEN $9 THEN $8 ELSE error_message END,
-		    update_time=now()
-		WHERE request_key=$1::uuid AND status=$2
-		RETURNING `+submissionColumns,
-		requestKey,
-		from,
-		to,
-		taskID,
-		setTaskID,
-		generationID,
-		setGenerationID,
-		errorMessage,
-		setError,
-	))
-	if errors.Is(err, ErrSubmissionNotFound) {
-		return Submission{}, errSubmissionCompareAndSwap
+	generationID, normalizedGenerationID, err := normalizeSubmissionID("generationId", change.GenerationID, true)
+	if err != nil {
+		return SubmissionTransition{}, nil, err
 	}
-	return row, err
+	change.GenerationID = normalizedGenerationID
+	return change, generationID, nil
 }
 
-func patchValue(value *string) (string, bool) {
-	if value == nil {
-		return "", false
+func normalizeSubmissionRequestKey(requestKey string) (string, error) {
+	trimmed := strings.TrimSpace(requestKey)
+	if requestKey != trimmed || !isNonZeroUUID(trimmed) {
+		return "", submissionValidationError("request_key_invalid", "requestKey", "视频生成请求键必须是非零 UUID。")
 	}
-	return *value, true
+	return trimmed, nil
+}
+
+func normalizeSubmissionID(field, raw string, optional bool) (any, string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" && optional {
+		return nil, "", nil
+	}
+	value, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil || value <= 0 {
+		return nil, "", submissionValidationError("submission_id_invalid", field, fmt.Sprintf("%s 必须是正整数。", field))
+	}
+	return value, strconv.FormatInt(value, 10), nil
+}
+
+func sameSubmissionIntent(existing Submission, input PrepareSubmissionInput) bool {
+	return existing.ProjectID == input.ProjectID &&
+		existing.ShotID == input.ShotID &&
+		existing.RequestHash == input.RequestHash &&
+		existing.PromptHash == input.PromptHash &&
+		existing.CapabilityVersion == input.CapabilityVersion
+}
+
+func transitionLinkConflicts(current Submission, change SubmissionTransition) bool {
+	return (change.UpstreamTaskID != "" && current.UpstreamTaskID != "" && current.UpstreamTaskID != change.UpstreamTaskID) ||
+		(change.GenerationID != "" && current.GenerationID != "" && current.GenerationID != change.GenerationID)
+}
+
+func isSubmissionConstraint(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == constraint
+}
+
+func submissionValidationError(code, field, message string) *SubmissionValidationError {
+	return &SubmissionValidationError{Code: code, Field: field, Message: message}
 }

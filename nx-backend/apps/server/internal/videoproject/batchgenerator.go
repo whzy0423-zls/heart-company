@@ -13,15 +13,32 @@ import (
 
 // BatchGenerator 批量生成器：按顺序生成项目的所有分镜
 type BatchGenerator struct {
-	generator shotGenerator
-	store     *Store
+	generator batchShotGenerator
+	store     batchShotStore
 }
 
-type shotGenerator interface {
-	GenerateShot(context.Context, string, ...string) (video.Generation, error)
+type batchShotGenerator interface {
+	GenerateShotWithInput(ctx context.Context, shotID string, input GenerateShotInput) (video.Generation, error)
 }
 
-func NewBatchGenerator(generator *Generator, store *Store) *BatchGenerator {
+type batchShotStore interface {
+	ListShots(ctx context.Context, projectID string) ([]Shot, error)
+	GetShot(ctx context.Context, shotID string) (Shot, error)
+}
+
+type BatchGenerateOptions struct {
+	RequestKeys        map[string]string `json:"requestKeys"`
+	CapabilityVersions map[string]string `json:"capabilityVersions"`
+}
+
+func (options BatchGenerateOptions) shotInput(shotID string) GenerateShotInput {
+	return GenerateShotInput{
+		RequestKey:        strings.TrimSpace(options.RequestKeys[shotID]),
+		CapabilityVersion: strings.TrimSpace(options.CapabilityVersions[shotID]),
+	}
+}
+
+func NewBatchGenerator(generator batchShotGenerator, store batchShotStore) *BatchGenerator {
 	return &BatchGenerator{
 		generator: generator,
 		store:     store,
@@ -45,98 +62,6 @@ type ShotGenerationResult struct {
 	Status       string `json:"status"` // success, failed, skipped
 	GenerationID string `json:"generationId"`
 	ErrorMessage string `json:"errorMessage"`
-}
-
-type SafeBatchGenerateItem struct {
-	RequestKey string `json:"requestKey"`
-	ShotID     string `json:"shotId"`
-}
-
-func (bg *BatchGenerator) GenerateSafe(
-	ctx context.Context,
-	projectID string,
-	items []SafeBatchGenerateItem,
-	parallel bool,
-) (BatchGenerateResult, error) {
-	workflow, err := bg.store.GetWorkflowStatus(ctx, projectID)
-	if err != nil {
-		return BatchGenerateResult{}, err
-	}
-	shots := make(map[string]Shot, len(workflow.Shots))
-	readiness := make(map[string]ShotReadiness, len(workflow.Shots))
-	for _, item := range workflow.Shots {
-		shots[item.Shot.ID] = item.Shot
-		readiness[item.Shot.ID] = item.Readiness
-	}
-	return executeSafeBatch(ctx, bg.generator, projectID, shots, readiness, items, parallel), nil
-}
-
-func executeSafeBatch(
-	ctx context.Context,
-	generator shotGenerator,
-	projectID string,
-	shots map[string]Shot,
-	readiness map[string]ShotReadiness,
-	items []SafeBatchGenerateItem,
-	parallel bool,
-) BatchGenerateResult {
-	requested := make([]string, 0, len(items))
-	keys := make(map[string]string, len(items))
-	for _, item := range items {
-		shotID := strings.TrimSpace(item.ShotID)
-		if _, exists := keys[shotID]; exists {
-			continue
-		}
-		requested = append(requested, shotID)
-		keys[shotID] = strings.TrimSpace(item.RequestKey)
-	}
-	eligibleIDs := FilterGeneratableShotIDs(readiness, requested)
-	result := BatchGenerateResult{
-		ProjectID:   projectID,
-		TotalShots:  len(eligibleIDs),
-		ShotResults: make([]ShotGenerationResult, len(eligibleIDs)),
-	}
-	generate := func(index int, shotID string) {
-		shot := shots[shotID]
-		item := ShotGenerationResult{ShotID: shot.ID, ShotName: shot.Name, OrderNum: shot.OrderNum}
-		if keys[shotID] == "" {
-			item.Status = "failed"
-			item.ErrorMessage = "缺少生成请求键"
-		} else {
-			generation, err := generator.GenerateShot(ctx, shotID, keys[shotID])
-			if err != nil {
-				item.Status = "failed"
-				item.ErrorMessage = err.Error()
-			} else {
-				item.Status = "success"
-				item.GenerationID = generation.ID
-			}
-		}
-		result.ShotResults[index] = item
-	}
-	if parallel {
-		var wg sync.WaitGroup
-		for index, shotID := range eligibleIDs {
-			wg.Add(1)
-			go func(index int, shotID string) {
-				defer wg.Done()
-				generate(index, shotID)
-			}(index, shotID)
-		}
-		wg.Wait()
-	} else {
-		for index, shotID := range eligibleIDs {
-			generate(index, shotID)
-		}
-	}
-	for _, item := range result.ShotResults {
-		if item.Status == "success" {
-			result.SuccessCount++
-		} else {
-			result.FailedCount++
-		}
-	}
-	return result
 }
 
 func filterShotsByIDs(shots []Shot, selectedShotIDs []string) []Shot {
@@ -164,6 +89,10 @@ func filterShotsByIDs(shots []Shot, selectedShotIDs []string) []Shot {
 
 // GenerateAllShots 批量生成项目的所有分镜（按顺序，等待上一个完成后再生成下一个）
 func (bg *BatchGenerator) GenerateAllShots(ctx context.Context, projectID string) (BatchGenerateResult, error) {
+	return bg.GenerateAllShotsWithOptions(ctx, projectID, BatchGenerateOptions{})
+}
+
+func (bg *BatchGenerator) GenerateAllShotsWithOptions(ctx context.Context, projectID string, options BatchGenerateOptions) (BatchGenerateResult, error) {
 	// 1. 获取项目的所有分镜
 	shots, err := bg.store.ListShots(ctx, projectID)
 	if err != nil {
@@ -197,7 +126,7 @@ func (bg *BatchGenerator) GenerateAllShots(ctx context.Context, projectID string
 		}
 
 		// 生成分镜
-		generation, err := bg.generator.GenerateShot(ctx, shot.ID)
+		generation, err := bg.generator.GenerateShotWithInput(ctx, shot.ID, options.shotInput(shot.ID))
 		if err != nil {
 			shotResult.Status = "failed"
 			shotResult.ErrorMessage = err.Error()
@@ -221,6 +150,10 @@ func (bg *BatchGenerator) GenerateAllShots(ctx context.Context, projectID string
 }
 
 func (bg *BatchGenerator) GenerateSelectedShots(ctx context.Context, projectID string, selectedShotIDs []string, parallel bool) (BatchGenerateResult, error) {
+	return bg.GenerateSelectedShotsWithOptions(ctx, projectID, selectedShotIDs, parallel, BatchGenerateOptions{})
+}
+
+func (bg *BatchGenerator) GenerateSelectedShotsWithOptions(ctx context.Context, projectID string, selectedShotIDs []string, parallel bool, options BatchGenerateOptions) (BatchGenerateResult, error) {
 	shots, err := bg.store.ListShots(ctx, projectID)
 	if err != nil {
 		return BatchGenerateResult{}, fmt.Errorf("获取分镜列表失败: %v", err)
@@ -262,7 +195,7 @@ func (bg *BatchGenerator) GenerateSelectedShots(ctx context.Context, projectID s
 					OrderNum: s.OrderNum,
 				}
 
-				generation, err := bg.generator.GenerateShot(ctx, s.ID)
+				generation, err := bg.generator.GenerateShotWithInput(ctx, s.ID, options.shotInput(s.ID))
 				if err != nil {
 					shotResult.Status = "failed"
 					shotResult.ErrorMessage = err.Error()
@@ -307,7 +240,7 @@ func (bg *BatchGenerator) GenerateSelectedShots(ctx context.Context, projectID s
 			continue
 		}
 
-		generation, err := bg.generator.GenerateShot(ctx, shot.ID)
+		generation, err := bg.generator.GenerateShotWithInput(ctx, shot.ID, options.shotInput(shot.ID))
 		if err != nil {
 			shotResult.Status = "failed"
 			shotResult.ErrorMessage = err.Error()
@@ -331,6 +264,10 @@ func (bg *BatchGenerator) GenerateSelectedShots(ctx context.Context, projectID s
 
 // GenerateAllShotsParallel 并行批量生成（不保证顺序，速度更快）
 func (bg *BatchGenerator) GenerateAllShotsParallel(ctx context.Context, projectID string) (BatchGenerateResult, error) {
+	return bg.GenerateAllShotsParallelWithOptions(ctx, projectID, BatchGenerateOptions{})
+}
+
+func (bg *BatchGenerator) GenerateAllShotsParallelWithOptions(ctx context.Context, projectID string, options BatchGenerateOptions) (BatchGenerateResult, error) {
 	shots, err := bg.store.ListShots(ctx, projectID)
 	if err != nil {
 		return BatchGenerateResult{}, fmt.Errorf("获取分镜列表失败: %v", err)
@@ -372,7 +309,7 @@ func (bg *BatchGenerator) GenerateAllShotsParallel(ctx context.Context, projectI
 				OrderNum: s.OrderNum,
 			}
 
-			generation, err := bg.generator.GenerateShot(ctx, s.ID)
+			generation, err := bg.generator.GenerateShotWithInput(ctx, s.ID, options.shotInput(s.ID))
 			if err != nil {
 				shotResult.Status = "failed"
 				shotResult.ErrorMessage = err.Error()

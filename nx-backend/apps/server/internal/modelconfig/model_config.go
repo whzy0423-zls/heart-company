@@ -72,9 +72,17 @@ func (c ChatConfig) Validate() error {
 
 // VideoConfig 视频模型（New API / OpenAI 兼容网关）可配置项。
 type VideoConfig struct {
-	APIBase string `json:"apiBase"`
-	APIKey  string `json:"apiKey"`
-	Model   string `json:"model"`
+	APIBase         string                       `json:"apiBase"`
+	APIKey          string                       `json:"apiKey"`
+	Model           string                       `json:"model"`
+	ModelProfile    string                       `json:"modelProfile"`
+	GatewayContract config.GatewayContractConfig `json:"gatewayContract"`
+}
+
+type GatewayContractValidationError = config.GatewayContractValidationError
+
+func ValidateVideoGatewayContract(contract config.GatewayContractConfig) error {
+	return config.ValidateGatewayContract(contract)
 }
 
 // ImageConfig 文生图模型（gpt-image-2，OpenAI 兼容 / 中转代理）可配置项。
@@ -297,6 +305,10 @@ func ReadStore(ctx context.Context, db *sql.DB) (Config, bool, error) {
 
 // UpsertStore 将覆盖配置写入 DB（key=model_config）。
 func UpsertStore(ctx context.Context, db *sql.DB, cfg Config) error {
+	cfg = cfg.trimmed()
+	if err := ValidateVideoGatewayContract(cfg.Video.GatewayContract); err != nil {
+		return err
+	}
 	if db == nil {
 		return errors.New("数据库未初始化，无法保存模型配置")
 	}
@@ -304,7 +316,7 @@ func UpsertStore(ctx context.Context, db *sql.DB, cfg Config) error {
 	c, cancel := context.WithTimeout(ctxOrBackground(ctx), 10*time.Second)
 	defer cancel()
 
-	body, err := json.Marshal(cfg.trimmed())
+	body, err := json.Marshal(cfg)
 	if err != nil {
 		return err
 	}
@@ -351,6 +363,7 @@ func (c Config) ApplyChat(base config.MiniMaxConfig) config.MiniMaxConfig {
 // ApplyVideo 把覆盖值叠加到环境变量基线上，空字段回退到 base。
 func (c Config) ApplyVideo(base config.VideoConfig) config.VideoConfig {
 	out := base
+	out.GatewayContract = config.TrimGatewayContract(base.GatewayContract)
 	if v := strings.TrimSpace(c.Video.APIBase); v != "" {
 		out.APIBase = v
 	}
@@ -359,6 +372,13 @@ func (c Config) ApplyVideo(base config.VideoConfig) config.VideoConfig {
 	}
 	if v := strings.TrimSpace(c.Video.Model); v != "" {
 		out.Model = v
+	}
+	if v := strings.TrimSpace(c.Video.ModelProfile); v != "" {
+		out.ModelProfile = v
+	}
+	contract := config.TrimGatewayContract(c.Video.GatewayContract)
+	if contract.Name != "" && ValidateVideoGatewayContract(contract) == nil {
+		out.GatewayContract = contract
 	}
 	return out
 }
@@ -602,9 +622,11 @@ func (c Config) trimmed() Config {
 			TimeoutSeconds: c.Chat.TimeoutSeconds,
 		},
 		Video: VideoConfig{
-			APIBase: strings.TrimSpace(c.Video.APIBase),
-			APIKey:  strings.TrimSpace(c.Video.APIKey),
-			Model:   strings.TrimSpace(c.Video.Model),
+			APIBase:         strings.TrimSpace(c.Video.APIBase),
+			APIKey:          strings.TrimSpace(c.Video.APIKey),
+			Model:           strings.TrimSpace(c.Video.Model),
+			ModelProfile:    strings.TrimSpace(c.Video.ModelProfile),
+			GatewayContract: config.TrimGatewayContract(c.Video.GatewayContract),
 		},
 		Image: ImageConfig{
 			APIBase: strings.TrimSpace(c.Image.APIBase),
