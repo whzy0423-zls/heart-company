@@ -187,6 +187,7 @@ type Server struct {
 	xinzhiliLeaseMu     sync.Mutex
 	xinzhiliLeases      map[int64]*xinzhiliRealtimeConn
 	xinzhiliModelConfig xinzhiliModelConfigStore
+	xinzhiliModeStore   xinzhiliModePreferenceStore
 	xinzhiliVoiceConfig xinzhiliVoiceConfigStore
 	theoryAdmin         theoryLibraryAdminService
 }
@@ -378,6 +379,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	)
 	s.xinzhiliLeases = make(map[int64]*xinzhiliRealtimeConn)
 	s.xinzhiliModelConfig = databaseXinzhiliModelConfigStore{db: database}
+	s.xinzhiliModeStore = xinzhili.NewStore(database)
 	var xinzhiliVoiceCodec *xinzhili.VoiceSecretCodec
 	if strings.TrimSpace(env.XinzhiliSecretKey) != "" {
 		if codec, codecErr := xinzhili.NewVoiceSecretCodec(env.XinzhiliSecretKey); codecErr == nil {
@@ -753,6 +755,7 @@ func (s *Server) routes() {
 	// 语音识别
 	s.mux.HandleFunc("/api/app/voice/recognize", s.method(http.MethodPost, s.requireAppAuth(s.appVoiceRecognize)))
 	s.mux.HandleFunc("/api/app/xinzhili/realtime/capabilities", s.method(http.MethodGet, s.requireAppAuth(s.appXinzhiliRealtimeCapabilities)))
+	s.mux.HandleFunc("/api/app/xinzhili/mode", s.method(http.MethodGet, s.requireAppAuth(s.appXinzhiliModeSnapshot)))
 	s.mux.HandleFunc("/api/app/xinzhili/realtime", s.requireAppAuth(s.xinzhiliRealtime))
 
 	// ===== 小程序（微信）=====
