@@ -2564,7 +2564,7 @@ CREATE TABLE IF NOT EXISTS request_rate_limits (
 );
 CREATE INDEX IF NOT EXISTS idx_request_rate_limits_expires ON request_rate_limits(expires_at);
 
--- ============ 老师课堂（系列、音视频课件、上传、权益与学习进度）============
+-- ============ 老师课堂（系列、音视频课件、上传、权益与学习进度）=====
 CREATE TABLE IF NOT EXISTS classroom_series (
   id BIGSERIAL PRIMARY KEY,
   title TEXT NOT NULL,
@@ -2751,3 +2751,628 @@ DROP INDEX IF EXISTS uq_classroom_entitlement_active_series;
 DROP INDEX IF EXISTS uq_classroom_entitlement_active_content;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_classroom_entitlements_order ON classroom_entitlements(order_id) WHERE order_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_classroom_progress_recent ON classroom_progress(wx_user_id, last_played_at DESC);
+=======
+-- ----- 企业培训推广：媒体、案例、方案、授权、线索和基础归因 -----
+CREATE TABLE IF NOT EXISTS promotion_media_assets (
+  id BIGSERIAL PRIMARY KEY,
+  asset_key TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL CHECK (kind IN ('image', 'video', 'audio', 'document')),
+  source_asset_id BIGINT REFERENCES promotion_media_assets(id) ON DELETE RESTRICT,
+  object_key TEXT NOT NULL UNIQUE CHECK (object_key LIKE 'promotion/%'),
+  sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+  byte_size BIGINT NOT NULL DEFAULT 0 CHECK (byte_size >= 0),
+  original_filename TEXT NOT NULL DEFAULT '',
+  content_type TEXT NOT NULL DEFAULT '',
+  probe_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  derived_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  state TEXT NOT NULL DEFAULT 'reserved' CONSTRAINT promotion_media_assets_state_check CHECK (state IN ('reserved','uploading','uploaded','probing','transcoding','validating','qa_pending','ready','quarantined','rejected','failed')),
+  version BIGINT NOT NULL DEFAULT 1 CHECK (version > 0),
+  ready_qa_review_id BIGINT,
+  ready_attempt_id BIGINT,
+  qa_result TEXT NOT NULL DEFAULT 'pending' CHECK (qa_result IN ('pending','passed','failed')),
+  qa_approved_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  qa_approved_at TIMESTAMPTZ,
+  qa_note TEXT NOT NULL DEFAULT '',
+  created_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  updated_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (source_asset_id IS NULL OR source_asset_id <> id),
+  CONSTRAINT promotion_media_assets_ready_snapshot_check CHECK (state <> 'ready' OR (qa_result = 'passed' AND ready_qa_review_id IS NOT NULL AND ready_attempt_id IS NOT NULL AND qa_approved_by IS NOT NULL AND qa_approved_at IS NOT NULL))
+);
+ALTER TABLE promotion_media_assets ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE promotion_media_assets ADD COLUMN IF NOT EXISTS ready_qa_review_id BIGINT;
+ALTER TABLE promotion_media_assets ADD COLUMN IF NOT EXISTS ready_attempt_id BIGINT;
+ALTER TABLE promotion_media_assets DROP CONSTRAINT IF EXISTS promotion_media_assets_state_check;
+ALTER TABLE promotion_media_assets ADD CONSTRAINT promotion_media_assets_state_check
+  CHECK (state IN ('reserved','uploading','uploaded','probing','transcoding','validating','qa_pending','ready','quarantined','rejected','failed'));
+ALTER TABLE promotion_media_assets DROP CONSTRAINT IF EXISTS promotion_media_assets_ready_snapshot_check;
+ALTER TABLE promotion_media_assets ADD CONSTRAINT promotion_media_assets_ready_snapshot_check
+  CHECK (state <> 'ready' OR (qa_result = 'passed' AND ready_qa_review_id IS NOT NULL AND ready_attempt_id IS NOT NULL AND qa_approved_by IS NOT NULL AND qa_approved_at IS NOT NULL));
+CREATE INDEX IF NOT EXISTS idx_promotion_media_assets_source ON promotion_media_assets(source_asset_id);
+CREATE INDEX IF NOT EXISTS idx_promotion_media_assets_state ON promotion_media_assets(state, id);
+
+CREATE TABLE IF NOT EXISTS promotion_media_upload_tasks (
+  id BIGSERIAL PRIMARY KEY,
+  upload_key TEXT NOT NULL UNIQUE,
+  asset_id BIGINT NOT NULL REFERENCES promotion_media_assets(id) ON DELETE RESTRICT,
+  object_key TEXT NOT NULL UNIQUE CHECK (object_key LIKE 'promotion/%'),
+  provider_upload_id TEXT NOT NULL DEFAULT '',
+  expected_sha256 TEXT NOT NULL CHECK (length(expected_sha256) = 64),
+  expected_size BIGINT NOT NULL CHECK (expected_size >= 0),
+  part_size BIGINT NOT NULL CHECK (part_size > 0),
+  state TEXT NOT NULL DEFAULT 'reserved' CHECK (state IN ('reserved','uploading','completing','completed','aborted','expired','failed')),
+  completed_parts JSONB NOT NULL DEFAULT '[]'::jsonb,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_promotion_media_upload_tasks_asset ON promotion_media_upload_tasks(asset_id, id DESC);
+
+CREATE TABLE IF NOT EXISTS promotion_media_processing_attempts (
+  id BIGSERIAL PRIMARY KEY,
+  asset_id BIGINT NOT NULL REFERENCES promotion_media_assets(id) ON DELETE RESTRICT,
+  attempt_number INT NOT NULL CHECK (attempt_number > 0),
+  state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued','probing','transcoding','validating','succeeded','quarantined','failed','cancelled')),
+  lease_owner TEXT NOT NULL DEFAULT '',
+  lease_expires_at TIMESTAMPTZ,
+  input_object_key TEXT NOT NULL DEFAULT '',
+  output_object_key TEXT NOT NULL DEFAULT '',
+  output_sha256 TEXT CHECK (output_sha256 IS NULL OR length(output_sha256) = 64),
+  probe_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  derived_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  error_code TEXT NOT NULL DEFAULT '',
+  error_detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  error_log_excerpt TEXT NOT NULL DEFAULT '',
+  retry_after TIMESTAMPTZ,
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(asset_id, attempt_number),
+  CHECK ((lease_owner = '' AND lease_expires_at IS NULL) OR (lease_owner <> '' AND lease_expires_at IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_promotion_media_attempts_lease ON promotion_media_processing_attempts(state, lease_expires_at, id);
+
+CREATE TABLE IF NOT EXISTS promotion_media_qa_reviews (
+  id BIGSERIAL PRIMARY KEY,
+  asset_id BIGINT NOT NULL REFERENCES promotion_media_assets(id) ON DELETE RESTRICT,
+  asset_version BIGINT NOT NULL CHECK (asset_version > 0),
+  attempt_id BIGINT NOT NULL REFERENCES promotion_media_processing_attempts(id) ON DELETE RESTRICT,
+  output_sha256 TEXT NOT NULL CHECK (length(output_sha256) = 64),
+  qa_result TEXT NOT NULL CHECK (qa_result IN ('passed','failed')),
+  approved_by BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  approved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  qa_note TEXT NOT NULL DEFAULT '',
+  approval_txid BIGINT NOT NULL DEFAULT txid_current()
+);
+ALTER TABLE promotion_media_qa_reviews ADD COLUMN IF NOT EXISTS asset_version BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE promotion_media_qa_reviews ADD COLUMN IF NOT EXISTS attempt_id BIGINT;
+ALTER TABLE promotion_media_qa_reviews ADD COLUMN IF NOT EXISTS output_sha256 TEXT;
+DROP TRIGGER IF EXISTS trg_promotion_media_qa_reviews_append_only ON promotion_media_qa_reviews;
+UPDATE promotion_media_qa_reviews review
+SET asset_version = asset.version,
+    output_sha256 = asset.sha256,
+    attempt_id = COALESCE(review.attempt_id, (
+      SELECT attempt.id FROM promotion_media_processing_attempts attempt
+      WHERE attempt.asset_id=review.asset_id
+      ORDER BY attempt.attempt_number DESC LIMIT 1
+    ))
+FROM promotion_media_assets asset
+WHERE asset.id=review.asset_id
+  AND (review.output_sha256 IS NULL OR review.attempt_id IS NULL);
+ALTER TABLE promotion_media_qa_reviews ALTER COLUMN asset_version SET NOT NULL;
+ALTER TABLE promotion_media_qa_reviews ALTER COLUMN attempt_id SET NOT NULL;
+ALTER TABLE promotion_media_qa_reviews ALTER COLUMN output_sha256 SET NOT NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_promotion_media_qa_attempt' AND conrelid='promotion_media_qa_reviews'::regclass) THEN
+    ALTER TABLE promotion_media_qa_reviews ADD CONSTRAINT fk_promotion_media_qa_attempt
+      FOREIGN KEY (attempt_id) REFERENCES promotion_media_processing_attempts(id) ON DELETE RESTRICT;
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_promotion_media_qa_reviews_asset ON promotion_media_qa_reviews(asset_id, id DESC);
+
+CREATE OR REPLACE FUNCTION promotion_media_attempt_identity_guard()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM promotion_media_qa_reviews review WHERE review.attempt_id=OLD.id) THEN
+    RAISE EXCEPTION 'QA-bound promotion media processing attempt identity is immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_promotion_media_attempt_identity_guard ON promotion_media_processing_attempts;
+CREATE TRIGGER trg_promotion_media_attempt_identity_guard
+BEFORE UPDATE OF asset_id, state, output_object_key, output_sha256, finished_at ON promotion_media_processing_attempts
+FOR EACH ROW EXECUTE FUNCTION promotion_media_attempt_identity_guard();
+
+CREATE OR REPLACE FUNCTION promotion_media_qa_reviews_stamp()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  SELECT asset.version, asset.sha256
+  INTO NEW.asset_version, NEW.output_sha256
+  FROM promotion_media_assets asset
+  WHERE asset.id = NEW.asset_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'QA review asset does not exist';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM promotion_media_processing_attempts attempt
+    WHERE attempt.id = NEW.attempt_id
+      AND attempt.asset_id = NEW.asset_id
+      AND attempt.state = 'succeeded'
+      AND attempt.finished_at IS NOT NULL
+      AND btrim(attempt.output_object_key) <> ''
+      AND attempt.output_sha256 IS NOT NULL
+      AND attempt.output_sha256 = NEW.output_sha256
+  ) THEN
+    RAISE EXCEPTION 'QA review attempt does not match the current asset content';
+  END IF;
+  NEW.approval_txid := txid_current();
+  NEW.approved_at := now();
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_promotion_media_qa_reviews_stamp ON promotion_media_qa_reviews;
+CREATE TRIGGER trg_promotion_media_qa_reviews_stamp
+BEFORE INSERT ON promotion_media_qa_reviews
+FOR EACH ROW EXECUTE FUNCTION promotion_media_qa_reviews_stamp();
+
+CREATE OR REPLACE FUNCTION promotion_media_qa_reviews_append_only()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'promotion media QA reviews are append-only';
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_promotion_media_qa_reviews_append_only ON promotion_media_qa_reviews;
+CREATE TRIGGER trg_promotion_media_qa_reviews_append_only
+BEFORE UPDATE OR DELETE ON promotion_media_qa_reviews
+FOR EACH ROW EXECUTE FUNCTION promotion_media_qa_reviews_append_only();
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_promotion_media_ready_review' AND conrelid='promotion_media_assets'::regclass) THEN
+    ALTER TABLE promotion_media_assets
+      ADD CONSTRAINT fk_promotion_media_ready_review FOREIGN KEY (ready_qa_review_id) REFERENCES promotion_media_qa_reviews(id) ON DELETE RESTRICT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_promotion_media_ready_attempt' AND conrelid='promotion_media_assets'::regclass) THEN
+    ALTER TABLE promotion_media_assets
+      ADD CONSTRAINT fk_promotion_media_ready_attempt FOREIGN KEY (ready_attempt_id) REFERENCES promotion_media_processing_attempts(id) ON DELETE RESTRICT;
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION promotion_media_asset_identity_guard()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+  identity_changed BOOLEAN;
+BEGIN
+  identity_changed := OLD.asset_key IS DISTINCT FROM NEW.asset_key
+    OR OLD.kind IS DISTINCT FROM NEW.kind
+    OR OLD.object_key IS DISTINCT FROM NEW.object_key
+    OR OLD.sha256 IS DISTINCT FROM NEW.sha256
+    OR OLD.byte_size IS DISTINCT FROM NEW.byte_size
+    OR OLD.source_asset_id IS DISTINCT FROM NEW.source_asset_id
+    OR OLD.original_filename IS DISTINCT FROM NEW.original_filename
+    OR OLD.content_type IS DISTINCT FROM NEW.content_type
+    OR OLD.probe_metadata IS DISTINCT FROM NEW.probe_metadata
+    OR OLD.derived_metadata IS DISTINCT FROM NEW.derived_metadata;
+  IF identity_changed THEN
+    IF OLD.state = 'ready' THEN
+      RAISE EXCEPTION 'ready promotion media identity is immutable';
+    END IF;
+    NEW.version := OLD.version + 1;
+    NEW.qa_result := 'pending';
+    NEW.ready_qa_review_id := NULL;
+    NEW.ready_attempt_id := NULL;
+    NEW.qa_approved_by := NULL;
+    NEW.qa_approved_at := NULL;
+    NEW.qa_note := '';
+    IF NEW.state IN ('qa_pending','ready') THEN
+      NEW.state := 'uploaded';
+    END IF;
+  ELSIF NEW.version IS DISTINCT FROM OLD.version THEN
+    RAISE EXCEPTION 'promotion media version is database managed';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_promotion_media_asset_identity_guard ON promotion_media_assets;
+CREATE TRIGGER trg_promotion_media_asset_identity_guard
+BEFORE UPDATE OF asset_key, kind, object_key, sha256, byte_size, source_asset_id, original_filename, content_type, probe_metadata, derived_metadata, version ON promotion_media_assets
+FOR EACH ROW EXECUTE FUNCTION promotion_media_asset_identity_guard();
+
+CREATE OR REPLACE FUNCTION promotion_media_ready_requires_current_qa()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.state = 'ready' THEN
+    IF TG_OP = 'INSERT' THEN
+      RAISE EXCEPTION 'promotion media must enter ready from qa_pending';
+    ELSIF OLD.state IS DISTINCT FROM 'ready' AND OLD.state IS DISTINCT FROM 'qa_pending' THEN
+      RAISE EXCEPTION 'promotion media must enter ready from qa_pending';
+    END IF;
+  END IF;
+  IF NEW.state = 'ready' AND (
+      TG_OP = 'INSERT'
+      OR OLD.state IS DISTINCT FROM NEW.state
+      OR OLD.qa_result IS DISTINCT FROM NEW.qa_result
+      OR OLD.qa_approved_by IS DISTINCT FROM NEW.qa_approved_by
+      OR OLD.qa_approved_at IS DISTINCT FROM NEW.qa_approved_at
+      OR OLD.qa_note IS DISTINCT FROM NEW.qa_note
+    ) THEN
+    IF NOT EXISTS (
+      SELECT 1
+      FROM promotion_media_qa_reviews review
+      JOIN promotion_media_processing_attempts attempt ON attempt.id=review.attempt_id
+      WHERE review.asset_id = NEW.id
+        AND review.id = NEW.ready_qa_review_id
+        AND review.asset_version = NEW.version
+        AND review.attempt_id = NEW.ready_attempt_id
+        AND review.output_sha256 = NEW.sha256
+        AND review.qa_result = 'passed'
+        AND review.approved_by = NEW.qa_approved_by
+        AND review.approved_at = NEW.qa_approved_at
+        AND review.qa_note = NEW.qa_note
+        AND review.approval_txid = txid_current()
+        AND attempt.asset_id = NEW.id
+        AND attempt.state = 'succeeded'
+        AND attempt.finished_at IS NOT NULL
+        AND btrim(attempt.output_object_key) <> ''
+        AND attempt.output_sha256 = NEW.sha256
+    ) THEN
+      RAISE EXCEPTION 'ready transition requires a passing QA review in the current transaction';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_promotion_media_ready_requires_current_qa ON promotion_media_assets;
+CREATE TRIGGER trg_promotion_media_ready_requires_current_qa
+BEFORE INSERT OR UPDATE OF state, ready_qa_review_id, ready_attempt_id, qa_result, qa_approved_by, qa_approved_at, qa_note ON promotion_media_assets
+FOR EACH ROW EXECUTE FUNCTION promotion_media_ready_requires_current_qa();
+
+CREATE TABLE IF NOT EXISTS enterprise_trainers (
+  id BIGSERIAL PRIMARY KEY,
+  key TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  avatar_asset_id BIGINT REFERENCES promotion_media_assets(id) ON DELETE RESTRICT,
+  short_bio TEXT NOT NULL DEFAULT '',
+  full_bio TEXT NOT NULL DEFAULT '',
+  specialties JSONB NOT NULL DEFAULT '[]'::jsonb,
+  credentials JSONB NOT NULL DEFAULT '[]'::jsonb,
+  service_industries JSONB NOT NULL DEFAULT '[]'::jsonb,
+  experience_summary TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','review','published','offline')),
+  sort_order INT NOT NULL DEFAULT 0,
+  version BIGINT NOT NULL DEFAULT 1 CHECK (version > 0),
+  created_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  updated_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS training_topics (
+  id BIGSERIAL PRIMARY KEY,
+  key TEXT NOT NULL UNIQUE CHECK (key IN ('team-communication', 'leadership', 'cohesion', 'culture', 'employee-growth')),
+  title TEXT NOT NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS training_cases (
+  id BIGSERIAL PRIMARY KEY,
+  slug TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  cover_asset_id BIGINT REFERENCES promotion_media_assets(id) ON DELETE RESTRICT,
+  company_display_name TEXT NOT NULL DEFAULT '',
+  company_internal_name_encrypted BYTEA,
+  industry TEXT NOT NULL DEFAULT '',
+  city TEXT NOT NULL DEFAULT '',
+  participant_range TEXT NOT NULL DEFAULT '',
+  training_date DATE,
+  duration_label TEXT NOT NULL DEFAULT '',
+  business_challenges JSONB NOT NULL DEFAULT '[]'::jsonb,
+  training_goals JSONB NOT NULL DEFAULT '[]'::jsonb,
+  training_modules JSONB NOT NULL DEFAULT '[]'::jsonb,
+  training_methods JSONB NOT NULL DEFAULT '[]'::jsonb,
+  trainer_id BIGINT NOT NULL REFERENCES enterprise_trainers(id) ON DELETE RESTRICT,
+  trainer_name_snapshot TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','review','published','offline')),
+  authorization_status TEXT NOT NULL DEFAULT 'pending' CHECK (authorization_status IN ('pending','approved','expired','revoked')),
+  featured BOOLEAN NOT NULL DEFAULT false,
+  sort_order INT NOT NULL DEFAULT 0,
+  version BIGINT NOT NULL DEFAULT 1 CHECK (version > 0),
+  published_at TIMESTAMPTZ,
+  created_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  updated_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_training_cases_public ON training_cases(status, featured DESC, sort_order, id DESC);
+
+CREATE TABLE IF NOT EXISTS enterprise_solutions (
+  id BIGSERIAL PRIMARY KEY,
+  slug TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  cover_asset_id BIGINT REFERENCES promotion_media_assets(id) ON DELETE RESTRICT,
+  audiences JSONB NOT NULL DEFAULT '[]'::jsonb,
+  problems JSONB NOT NULL DEFAULT '[]'::jsonb,
+  goals JSONB NOT NULL DEFAULT '[]'::jsonb,
+  modules JSONB NOT NULL DEFAULT '[]'::jsonb,
+  delivery_methods JSONB NOT NULL DEFAULT '[]'::jsonb,
+  recommended_participants TEXT NOT NULL DEFAULT '',
+  recommended_duration TEXT NOT NULL DEFAULT '',
+  customizable_items JSONB NOT NULL DEFAULT '[]'::jsonb,
+  trainer_id BIGINT NOT NULL REFERENCES enterprise_trainers(id) ON DELETE RESTRICT,
+  trainer_name_snapshot TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','review','published','offline')),
+  featured BOOLEAN NOT NULL DEFAULT false,
+  sort_order INT NOT NULL DEFAULT 0,
+  version BIGINT NOT NULL DEFAULT 1 CHECK (version > 0),
+  published_at TIMESTAMPTZ,
+  created_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  updated_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS publication_consents (
+  id BIGSERIAL PRIMARY KEY,
+  subject_type TEXT NOT NULL CHECK (subject_type IN ('company','person','media_asset','testimonial','document_screen')),
+  subject_reference TEXT NOT NULL,
+  display_alias TEXT NOT NULL DEFAULT '',
+  channels JSONB NOT NULL DEFAULT '[]'::jsonb,
+  usage_scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
+  evidence_asset_id BIGINT REFERENCES promotion_media_assets(id) ON DELETE RESTRICT,
+  contract_reference TEXT NOT NULL DEFAULT '',
+  effective_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','expired','revoked')),
+  reviewed_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  reviewed_at TIMESTAMPTZ,
+  revocation_reason TEXT NOT NULL DEFAULT '',
+  version BIGINT NOT NULL DEFAULT 1 CHECK (version > 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(subject_type, subject_reference, version),
+  CONSTRAINT uq_publication_consents_id_subject UNIQUE(id, subject_type),
+  CHECK (expires_at IS NULL OR effective_at IS NULL OR expires_at > effective_at)
+);
+
+CREATE TABLE IF NOT EXISTS training_case_media (
+  id BIGSERIAL PRIMARY KEY,
+  case_id BIGINT NOT NULL REFERENCES training_cases(id) ON DELETE RESTRICT,
+  media_asset_id BIGINT NOT NULL REFERENCES promotion_media_assets(id) ON DELETE RESTRICT,
+  role TEXT NOT NULL CHECK (role IN ('promo','highlight','topic_clip','gallery')),
+  position INT NOT NULL CHECK (position >= 0),
+  caption TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published','offline')),
+  UNIQUE(case_id, role, position),
+  UNIQUE(case_id, media_asset_id, role)
+);
+
+CREATE TABLE IF NOT EXISTS training_case_solutions (
+  case_id BIGINT NOT NULL REFERENCES training_cases(id) ON DELETE RESTRICT,
+  solution_id BIGINT NOT NULL REFERENCES enterprise_solutions(id) ON DELETE RESTRICT,
+  position INT NOT NULL CHECK (position >= 0),
+  PRIMARY KEY(case_id, solution_id),
+  UNIQUE(case_id, position)
+);
+
+CREATE TABLE IF NOT EXISTS training_case_topics (
+  case_id BIGINT NOT NULL REFERENCES training_cases(id) ON DELETE RESTRICT,
+  topic_id BIGINT NOT NULL REFERENCES training_topics(id) ON DELETE RESTRICT,
+  position INT NOT NULL CHECK (position >= 0),
+  PRIMARY KEY(case_id, topic_id),
+  UNIQUE(case_id, position)
+);
+
+CREATE TABLE IF NOT EXISTS training_case_testimonials (
+  id BIGSERIAL PRIMARY KEY,
+  case_id BIGINT NOT NULL REFERENCES training_cases(id) ON DELETE RESTRICT,
+  quote TEXT NOT NULL,
+  speaker_display TEXT NOT NULL DEFAULT '',
+  speaker_role TEXT NOT NULL DEFAULT '',
+  provenance TEXT NOT NULL,
+  consent_id BIGINT REFERENCES publication_consents(id) ON DELETE RESTRICT,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','review','approved','rejected','offline')),
+  position INT NOT NULL CHECK (position >= 0),
+  UNIQUE(case_id, position)
+);
+
+CREATE TABLE IF NOT EXISTS training_case_claims (
+  id BIGSERIAL PRIMARY KEY,
+  case_id BIGINT NOT NULL REFERENCES training_cases(id) ON DELETE RESTRICT,
+  claim_type TEXT NOT NULL CHECK (claim_type IN ('fact','client_quote','editorial_summary')),
+  statement TEXT NOT NULL,
+  source_reference TEXT NOT NULL,
+  reviewed_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  reviewed_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS training_case_consent_links (
+  id BIGSERIAL PRIMARY KEY,
+  case_id BIGINT REFERENCES training_cases(id) ON DELETE RESTRICT,
+  consent_id BIGINT NOT NULL REFERENCES publication_consents(id) ON DELETE RESTRICT,
+  media_asset_id BIGINT REFERENCES promotion_media_assets(id) ON DELETE RESTRICT,
+  testimonial_id BIGINT REFERENCES training_case_testimonials(id) ON DELETE RESTRICT,
+  subject_type TEXT NOT NULL CHECK (subject_type IN ('company','person','media_asset','testimonial','document_screen')),
+  subject_id BIGINT NOT NULL,
+  use_scope TEXT NOT NULL,
+  requirement_key TEXT NOT NULL,
+  required BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(consent_id, subject_type, subject_id, use_scope),
+  CONSTRAINT fk_training_case_consent_subject FOREIGN KEY (consent_id, subject_type) REFERENCES publication_consents(id, subject_type) ON DELETE RESTRICT,
+  CHECK (case_id IS NOT NULL OR media_asset_id IS NOT NULL OR testimonial_id IS NOT NULL),
+  CHECK (subject_type <> 'media_asset' OR media_asset_id = subject_id),
+  CONSTRAINT chk_training_case_consent_testimonial_subject CHECK (subject_type <> 'testimonial' OR testimonial_id = subject_id)
+);
+ALTER TABLE training_case_consent_links ALTER COLUMN case_id DROP NOT NULL;
+ALTER TABLE training_case_consent_links ADD COLUMN IF NOT EXISTS subject_type TEXT;
+ALTER TABLE training_case_consent_links ADD COLUMN IF NOT EXISTS subject_id BIGINT;
+ALTER TABLE training_case_consent_links ADD COLUMN IF NOT EXISTS use_scope TEXT;
+UPDATE training_case_consent_links link
+SET subject_type = consent.subject_type,
+    subject_id = CASE
+      WHEN consent.subject_type = 'media_asset' AND link.media_asset_id IS NOT NULL THEN link.media_asset_id
+      WHEN consent.subject_type = 'testimonial' AND link.testimonial_id IS NOT NULL THEN link.testimonial_id
+      ELSE link.consent_id
+    END,
+    use_scope = COALESCE(NULLIF(link.requirement_key, ''), 'publication')
+FROM publication_consents consent
+WHERE consent.id = link.consent_id
+  AND (link.subject_type IS NULL OR link.subject_id IS NULL OR link.use_scope IS NULL);
+ALTER TABLE training_case_consent_links ALTER COLUMN subject_type SET NOT NULL;
+ALTER TABLE training_case_consent_links ALTER COLUMN subject_id SET NOT NULL;
+ALTER TABLE training_case_consent_links ALTER COLUMN use_scope SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_training_case_consent_links_subject
+  ON training_case_consent_links(consent_id, subject_type, subject_id, use_scope);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_publication_consents_id_subject' AND conrelid='publication_consents'::regclass) THEN
+    ALTER TABLE publication_consents ADD CONSTRAINT uq_publication_consents_id_subject UNIQUE(id, subject_type);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_training_case_consent_subject' AND conrelid='training_case_consent_links'::regclass) THEN
+    ALTER TABLE training_case_consent_links ADD CONSTRAINT fk_training_case_consent_subject
+      FOREIGN KEY (consent_id, subject_type) REFERENCES publication_consents(id, subject_type) ON DELETE RESTRICT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_training_case_consent_testimonial_subject' AND conrelid='training_case_consent_links'::regclass) THEN
+    ALTER TABLE training_case_consent_links ADD CONSTRAINT chk_training_case_consent_testimonial_subject
+      CHECK (subject_type <> 'testimonial' OR testimonial_id = subject_id);
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS enterprise_promotion_settings (
+  key TEXT PRIMARY KEY,
+  draft_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  published_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  version BIGINT NOT NULL DEFAULT 1 CHECK (version > 0),
+  published_at TIMESTAMPTZ,
+  updated_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS promotion_share_tokens (
+  id BIGSERIAL PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  channel TEXT NOT NULL DEFAULT '',
+  target_page TEXT NOT NULL,
+  case_id BIGINT REFERENCES training_cases(id) ON DELETE RESTRICT,
+  solution_id BIGINT REFERENCES enterprise_solutions(id) ON DELETE RESTRICT,
+  created_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked','expired')),
+  expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS promotion_sessions (
+  id BIGSERIAL PRIMARY KEY,
+  session_key TEXT NOT NULL UNIQUE,
+  first_touch JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_touch JSONB NOT NULL DEFAULT '{}'::jsonb,
+  share_token_id BIGINT REFERENCES promotion_share_tokens(id) ON DELETE RESTRICT,
+  channel TEXT NOT NULL DEFAULT '',
+  first_visited_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_visited_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '90 days')
+);
+
+CREATE TABLE IF NOT EXISTS promotion_events (
+  id BIGSERIAL PRIMARY KEY,
+  session_id BIGINT NOT NULL REFERENCES promotion_sessions(id) ON DELETE RESTRICT,
+  event_type TEXT NOT NULL,
+  case_id BIGINT REFERENCES training_cases(id) ON DELETE RESTRICT,
+  solution_id BIGINT REFERENCES enterprise_solutions(id) ON DELETE RESTRICT,
+  media_asset_id BIGINT REFERENCES promotion_media_assets(id) ON DELETE RESTRICT,
+  page_path TEXT NOT NULL DEFAULT '',
+  event_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  idempotency_key TEXT NOT NULL,
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE promotion_events DROP CONSTRAINT IF EXISTS promotion_events_idempotency_key_key;
+ALTER TABLE promotion_events DROP CONSTRAINT IF EXISTS promotion_events_session_id_idempotency_key_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_promotion_events_idempotency_key
+  ON promotion_events(idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_promotion_events_session
+  ON promotion_events(session_id, occurred_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_promotion_events_funnel ON promotion_events(event_type, occurred_at DESC);
+
+CREATE TABLE IF NOT EXISTS enterprise_consultations (
+  id BIGSERIAL PRIMARY KEY,
+  consultation_reference_hash TEXT NOT NULL UNIQUE,
+  request_idempotency_hash TEXT NOT NULL UNIQUE,
+  company_name_encrypted BYTEA NOT NULL,
+  industry TEXT NOT NULL DEFAULT '',
+  city TEXT NOT NULL DEFAULT '',
+  participant_range TEXT NOT NULL DEFAULT '',
+  requirements_encrypted BYTEA,
+  preferred_training_time TEXT NOT NULL DEFAULT '',
+  contact_name_encrypted BYTEA NOT NULL,
+  phone_encrypted BYTEA NOT NULL,
+  phone_lookup_hash TEXT NOT NULL DEFAULT '',
+  wechat_encrypted BYTEA,
+  note_encrypted BYTEA,
+  source_page TEXT NOT NULL DEFAULT '',
+  case_id BIGINT REFERENCES training_cases(id) ON DELETE RESTRICT,
+  solution_id BIGINT REFERENCES enterprise_solutions(id) ON DELETE RESTRICT,
+  first_touch_session_id BIGINT REFERENCES promotion_sessions(id) ON DELETE RESTRICT,
+  last_touch_session_id BIGINT REFERENCES promotion_sessions(id) ON DELETE RESTRICT,
+  share_token_id BIGINT REFERENCES promotion_share_tokens(id) ON DELETE RESTRICT,
+  channel TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','contacted','qualified','proposal','won','lost','spam')),
+  assignee_id BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  version BIGINT NOT NULL DEFAULT 1 CHECK (version > 0),
+  privacy_notice_version TEXT NOT NULL,
+  consented_at TIMESTAMPTZ NOT NULL,
+  consent_source TEXT NOT NULL,
+  consent_ip_hash TEXT NOT NULL DEFAULT '',
+  consent_user_agent_hash TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_enterprise_consultations_queue ON enterprise_consultations(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS enterprise_consultation_notes (
+  id BIGSERIAL PRIMARY KEY,
+  consultation_id BIGINT NOT NULL REFERENCES enterprise_consultations(id) ON DELETE RESTRICT,
+  note_encrypted BYTEA NOT NULL,
+  created_by BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS consultation_privacy_requests (
+  id BIGSERIAL PRIMARY KEY,
+  consultation_id BIGINT NOT NULL REFERENCES enterprise_consultations(id) ON DELETE RESTRICT,
+  request_type TEXT NOT NULL CHECK (request_type IN ('access','correction','deletion')),
+  verified_phone_hash TEXT NOT NULL,
+  correction_payload_encrypted BYTEA,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','verified','approved','rejected','completed')),
+  verification_expires_at TIMESTAMPTZ,
+  reviewed_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  reviewed_at TIMESTAMPTZ,
+  completed_by BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  completed_at TIMESTAMPTZ,
+  decision_basis TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS enterprise_promotion_audit_logs (
+  id BIGSERIAL PRIMARY KEY,
+  entity_type TEXT NOT NULL,
+  entity_id BIGINT NOT NULL,
+  action TEXT NOT NULL,
+  actor_id BIGINT REFERENCES users(id) ON DELETE RESTRICT,
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_enterprise_promotion_audit_entity ON enterprise_promotion_audit_logs(entity_type, entity_id, created_at DESC);
