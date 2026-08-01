@@ -224,6 +224,62 @@ export interface ComposeStatusResponse {
   totalShots: number;
 }
 
+export type WorkflowStepKey = 'assets' | 'brief' | 'export' | 'generate' | 'storyboard';
+export type WorkflowStepState = 'blocked' | 'complete' | 'optional' | 'skipped_existing' | 'stale';
+export type ShotReadiness = 'completed' | 'failed' | 'generating' | 'incomplete' | 'ready' | 'recovery' | 'stale';
+
+export interface WorkflowActiveSubmission {
+  requestKey: string;
+  status: string;
+  submissionId: number;
+  taskId?: string;
+}
+
+export interface WorkflowShotStatus {
+  activeSubmission?: WorkflowActiveSubmission;
+  canGenerate: boolean;
+  readiness: ShotReadiness;
+  shot: Shot;
+}
+
+export interface ProjectWorkflow {
+  generationMode: 'demo' | 'paid';
+  project: Project;
+  recommendedStep: WorkflowStepKey;
+  shots: WorkflowShotStatus[];
+  steps: Record<WorkflowStepKey, WorkflowStepState>;
+}
+
+export interface GenerationSubmission {
+  error?: string;
+  generationId?: string;
+  requestKey: string;
+  shotId: string;
+  status: string;
+  submissionId: number;
+  taskId?: string;
+}
+
+export interface ScriptParagraph {
+  content: string;
+  index: number;
+}
+
+export interface ScriptImportItem {
+  error?: string;
+  index: number;
+  shotId?: string;
+  sourceKey: string;
+  status: 'created' | 'existing' | 'failed' | 'pending';
+}
+
+export interface ScriptImportResult {
+  created: ScriptImportItem[];
+  existing: ScriptImportItem[];
+  failed: ScriptImportItem[];
+  items: ScriptImportItem[];
+}
+
 // ============ 项目 API ============
 
 export function createProjectApi(data: Partial<Project>) {
@@ -458,6 +514,73 @@ export function composeProjectVideoApi(
 export function getComposeStatusApi(projectId: string | number) {
   return requestClient.get<ComposeStatusResponse>(
     `/video/projects-compose-status/${projectId}`,
+  );
+}
+
+export function getComposeJobApi(projectId: string | number, jobId: string | number) {
+  return requestClient.get<ComposeVideoResponse>(
+    `/video/projects-compose-safe-status/${projectId}/${jobId}`,
+  );
+}
+
+export function getProjectWorkflowApi(projectId: string | number) {
+  return requestClient.get<ProjectWorkflow>(`/video/projects-workflow/${projectId}`);
+}
+
+export function getGenerationSubmissionApi(submissionId: string | number) {
+  return requestClient.get<GenerationSubmission>(
+    `/video/generation-submissions/${submissionId}`,
+  );
+}
+
+export function createShotsFromScriptApi(
+  projectId: string | number,
+  input: { items: ScriptParagraph[]; scriptRevision: number },
+) {
+  return requestClient.post<ScriptImportResult>(
+    `/video/projects-shots/from-script/${projectId}`,
+    input,
+  );
+}
+
+export function generateShotSafeApi(
+  shotId: string | number,
+  input: { requestKey: string },
+) {
+  return requestClient.post<VideoGeneration>(
+    `/video/shots-generate-safe/${shotId}`,
+    input,
+  );
+}
+
+export function batchGenerateShotsSafeApi(
+  projectId: string | number,
+  input: { items: Array<{ requestKey: string; shotId: string }> },
+) {
+  return requestClient.post<BatchGenerateResponse>(
+    `/video/projects-batch-generate-safe/${projectId}`,
+    input,
+    { timeout: 180_000 },
+  );
+}
+
+export function reconcileGenerationSubmissionApi(
+  requestKey: string,
+  input: { taskId: string },
+) {
+  return requestClient.post<VideoGeneration>(
+    `/video/generation-submissions/reconcile/${requestKey}`,
+    input,
+  );
+}
+
+export function composeProjectSafeApi(
+  projectId: string | number,
+  input: ComposeProjectInput,
+) {
+  return requestClient.post<ComposeVideoResponse>(
+    `/video/projects-compose-safe/${projectId}`,
+    input,
   );
 }
 
