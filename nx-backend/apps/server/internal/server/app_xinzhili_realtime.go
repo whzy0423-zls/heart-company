@@ -108,7 +108,11 @@ func (s *Server) xinzhiliRealtime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws.SetReadLimit(xinzhiliMaxMessageBytes)
-	c := &xinzhiliRealtimeConn{server: s, ws: ws, userID: user.ID, turns: make(map[uint64]string), audioSeq: make(map[uint64]uint32), modeStore: xinzhili.NewStore(s.db)}
+	modeStore := s.xinzhiliModeStore
+	if modeStore == nil {
+		modeStore = xinzhili.NewStore(s.db)
+	}
+	c := &xinzhiliRealtimeConn{server: s, ws: ws, userID: user.ID, turns: make(map[uint64]string), audioSeq: make(map[uint64]uint32), modeStore: modeStore}
 	c.sink = &xinzhiliWSSink{conn: c}
 	s.replaceXinzhiliLease(c)
 	defer s.releaseXinzhiliLease(c)
