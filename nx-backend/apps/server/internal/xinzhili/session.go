@@ -1225,9 +1225,9 @@ func normalizeGeneratedContent(text string) string {
 }
 
 const (
-	firstTTSChunkMinRunes  = 10
-	firstTTSChunkMaxRunes  = 20
-	streamTTSChunkMaxRunes = 36
+	firstTTSChunkMinRunes  = 14
+	firstTTSChunkMaxRunes  = 28
+	streamTTSChunkMaxRunes = maxTTSSentenceRunes
 )
 
 type streamSentenceChunker struct {

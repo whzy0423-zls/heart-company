@@ -99,9 +99,15 @@ func TestStreamSentenceChunkerPrioritizesPlayableFirstChunk(t *testing.T) {
 		}
 	})
 
-	t.Run("weak punctuation cuts after ten runes", func(t *testing.T) {
+	t.Run("weak punctuation waits for fourteen runes to avoid tiny audio clips", func(t *testing.T) {
+		var shortChunker streamSentenceChunker
+		tooShort := strings.Repeat("甲", 9) + "，"
+		if got := shortChunker.Push(tooShort + "后续"); len(got) != 0 {
+			t.Fatalf("tiny chunk emitted=%q", got)
+		}
+
 		var chunker streamSentenceChunker
-		prefix := strings.Repeat("甲", 9) + "，"
+		prefix := strings.Repeat("甲", 13) + "，"
 		if got := chunker.Push(prefix + "后续"); !slices.Equal(got, []string{prefix}) {
 			t.Fatalf("chunks=%q", got)
 		}
@@ -110,23 +116,23 @@ func TestStreamSentenceChunkerPrioritizesPlayableFirstChunk(t *testing.T) {
 		}
 	})
 
-	t.Run("first chunk hard caps at twenty runes", func(t *testing.T) {
+	t.Run("first chunk hard caps at twenty eight runes", func(t *testing.T) {
 		var chunker streamSentenceChunker
-		first := strings.Repeat("甲", 20)
+		first := strings.Repeat("甲", 28)
 		if got := chunker.Push(first + "后续"); !slices.Equal(got, []string{first}) {
 			t.Fatalf("chunks=%q", got)
 		}
 	})
 
-	t.Run("later chunks hard cap at thirty six runes", func(t *testing.T) {
+	t.Run("later chunks keep forty two rune cap", func(t *testing.T) {
 		var chunker streamSentenceChunker
 		if got := chunker.Push("你好。"); !slices.Equal(got, []string{"你好。"}) {
 			t.Fatalf("first=%q", got)
 		}
-		if got := chunker.Push(strings.Repeat("乙", 35)); len(got) != 0 {
+		if got := chunker.Push(strings.Repeat("乙", 41)); len(got) != 0 {
 			t.Fatalf("early later chunk=%q", got)
 		}
-		later := strings.Repeat("乙", 36)
+		later := strings.Repeat("乙", 42)
 		if got := chunker.Push("乙"); !slices.Equal(got, []string{later}) {
 			t.Fatalf("later=%q", got)
 		}
