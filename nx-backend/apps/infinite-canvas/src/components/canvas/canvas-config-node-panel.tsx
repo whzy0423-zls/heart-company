@@ -3,13 +3,14 @@ import { Image as ImageIcon, LoaderCircle, MessageSquare, Music2, Play, Settings
 import { Button, Segmented } from "antd";
 
 import { ModelPicker } from "@/components/model-picker";
-import { defaultConfig, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
 import { CanvasAudioSettingsPopover, type CanvasAudioSettingKey } from "./canvas-audio-settings-popover";
 import { CanvasVideoSettingsPopover } from "./canvas-video-settings-popover";
 import { CanvasTextSettingsPopover } from "./canvas-text-settings-popover";
+import { buildGenerationConfig } from "@/lib/canvas/canvas-generation-helpers";
 import type { CanvasGenerationMode, CanvasNodeData, CanvasNodeMetadata } from "@/types/canvas";
 
 type CanvasConfigNodePanelProps = {
@@ -43,7 +44,7 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
                         size="small"
                         className="canvas-config-mode !rounded-md !p-0.5"
                         value={mode}
-                        onChange={(value) => onConfigChange(node.id, { generationMode: value as CanvasGenerationMode, model: undefined })}
+                        onChange={(value) => onConfigChange(node.id, configModePatch(node, value as CanvasGenerationMode))}
                         options={[
                             {
                                 value: "image",
@@ -102,7 +103,7 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
                 {mode === "video" ? (
                     <CanvasVideoSettingsPopover config={config} placement="topRight" buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2" onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value))} />
                 ) : mode === "image" ? (
-                    <CanvasImageSettingsPopover config={config} placement="topRight" autoAdjustOverflow={false} buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2" onConfigChange={(key, value) => onConfigChange(node.id, key === "count" ? { count: Number(value) || 1 } : { [key]: value })} />
+                    <CanvasImageSettingsPopover config={config} placement="topRight" autoAdjustOverflow={false} buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2" onConfigChange={(key, value) => onConfigChange(node.id, imageConfigPatch(key, value))} />
                 ) : mode === "audio" ? (
                     <CanvasAudioSettingsPopover config={config} placement="topRight" buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2" onConfigChange={(key, value) => onConfigChange(node.id, audioConfigPatch(key, value))} />
                 ) : (
@@ -147,38 +148,26 @@ function InputChip({ label, value, style }: { label: string; value: string; styl
 }
 
 function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: CanvasGenerationMode): AiConfig {
-    const imageSize = globalConfig.imageSize || globalConfig.size || defaultConfig.imageSize;
-    const imageCount = globalConfig.imageCount || globalConfig.canvasImageCount || globalConfig.count || defaultConfig.imageCount;
-    const videoSize = globalConfig.videoSize || globalConfig.size || defaultConfig.videoSize;
-    const defaultSize = mode === "video" ? videoSize : mode === "image" ? imageSize : globalConfig.size || defaultConfig.size;
-    const defaultCount = mode === "image" ? imageCount : globalConfig.count || defaultConfig.count;
-    const effectiveSize = node.metadata?.size || defaultSize;
-    const effectiveCount = String(node.metadata?.count || defaultCount);
-
-    return {
-        ...globalConfig,
-        model: resolveModelForCapability(globalConfig, node.metadata?.model, mode),
-        reasoningEffort: node.metadata?.reasoningEffort || globalConfig.reasoningEffort || defaultConfig.reasoningEffort,
-        quality: node.metadata?.quality || globalConfig.quality || defaultConfig.quality,
-        imageSize: mode === "image" ? effectiveSize : imageSize,
-        imageCount: mode === "image" ? effectiveCount : imageCount,
-        videoSize: mode === "video" ? effectiveSize : videoSize,
-        size: effectiveSize,
-        background: node.metadata?.background ?? globalConfig.background ?? defaultConfig.background,
-        videoSeconds: node.metadata?.seconds || globalConfig.videoSeconds || defaultConfig.videoSeconds,
-        vquality: node.metadata?.vquality || globalConfig.vquality || defaultConfig.vquality,
-        videoGenerateAudio: node.metadata?.generateAudio || globalConfig.videoGenerateAudio || defaultConfig.videoGenerateAudio,
-        videoWatermark: node.metadata?.watermark || globalConfig.videoWatermark || defaultConfig.videoWatermark,
-        audioVoice: node.metadata?.audioVoice || globalConfig.audioVoice || defaultConfig.audioVoice,
-        audioFormat: node.metadata?.audioFormat || globalConfig.audioFormat || defaultConfig.audioFormat,
-        audioSpeed: node.metadata?.audioSpeed || globalConfig.audioSpeed || defaultConfig.audioSpeed,
-        audioInstructions: node.metadata?.audioInstructions || globalConfig.audioInstructions || defaultConfig.audioInstructions,
-        count: effectiveCount,
-    };
+    return buildGenerationConfig(globalConfig, node, mode);
 }
 
-function videoConfigPatch(key: keyof AiConfig, value: string) {
-    if (key === "videoSize") return { size: value };
+function configModePatch(node: CanvasNodeData, mode: CanvasGenerationMode): Partial<CanvasNodeMetadata> {
+    const patch: Partial<CanvasNodeMetadata> = { generationMode: mode, model: undefined, size: undefined, count: undefined };
+    if (mode === "image") {
+        patch.imageSize = node.metadata?.imageSize || node.metadata?.size;
+        patch.imageCount = node.metadata?.imageCount || node.metadata?.count;
+    }
+    return patch;
+}
+
+function imageConfigPatch(key: keyof AiConfig, value: string): Partial<CanvasNodeMetadata> {
+    if (key === "size") return { imageSize: value };
+    if (key === "count") return { imageCount: Number(value) || 1 };
+    return { [key]: value };
+}
+
+function videoConfigPatch(key: keyof AiConfig, value: string): Partial<CanvasNodeMetadata> {
+    if (key === "videoSize") return { videoSize: value };
     if (key === "videoSeconds") return { seconds: value };
     if (key === "videoGenerateAudio") return { generateAudio: value };
     if (key === "videoWatermark") return { watermark: value };

@@ -116,14 +116,29 @@ export function getInputSummary(inputs: NodeGenerationInput[]) {
     };
 }
 
+export function buildConfigNodeMetadata(config: AiConfig, mode: CanvasNodeGenerationMode = "image"): CanvasNodeMetadata {
+    if (mode === "image") {
+        return {
+            imageSize: config.imageSize || config.size || defaultConfig.imageSize,
+            imageCount: getGenerationCount(config.imageCount || config.canvasImageCount || config.count || defaultConfig.imageCount),
+        };
+    }
+    if (mode === "video") return { generationMode: "video", videoSize: config.videoSize || config.size || defaultConfig.videoSize };
+    return { generationMode: mode };
+}
+
 export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefined, mode: CanvasNodeGenerationMode): AiConfig {
     const imageSize = config.imageSize || config.size || defaultConfig.imageSize;
     const imageCount = config.imageCount || config.canvasImageCount || config.count || defaultConfig.imageCount;
     const videoSize = config.videoSize || config.size || defaultConfig.videoSize;
+    const isConfigNode = node?.type === CanvasNodeType.Config;
+    const nodeImageSize = isConfigNode ? node?.metadata?.imageSize || node?.metadata?.size : node?.metadata?.size;
+    const nodeImageCount = isConfigNode ? node?.metadata?.imageCount || node?.metadata?.count : node?.metadata?.count;
+    const nodeVideoSize = isConfigNode ? node?.metadata?.videoSize : node?.metadata?.size;
     const defaultSize = mode === "video" ? videoSize : mode === "image" ? imageSize : config.size || defaultConfig.size;
     const defaultCount = mode === "image" ? imageCount : config.count || defaultConfig.count;
-    const effectiveSize = node?.metadata?.size || defaultSize;
-    const effectiveCount = String(node?.metadata?.count || defaultCount);
+    const effectiveSize = mode === "video" ? nodeVideoSize || defaultSize : mode === "image" ? nodeImageSize || defaultSize : defaultSize;
+    const effectiveCount = String(mode === "image" ? nodeImageCount || defaultCount : defaultCount);
 
     return {
         ...config,

@@ -8,7 +8,7 @@ import { requestEdit, requestGeneration, requestImageQuestion } from "./image";
 import { requestAudioGeneration } from "./audio";
 import { createVideoGenerationTask, getVideoTaskResourceCountsForTest, pollVideoGenerationTask, releaseVideoGenerationTask, requestVideoGeneration, resetVideoTaskResourcesForTest } from "./video";
 import { isSeedanceVideoConfig } from "@/lib/seedance-video";
-import { buildGenerationConfig, canvasGenerationCapabilityForRoute, dispatchCanvasGenerationRoute, generationCapabilityForNodeType, type CanvasGenerationRoute } from "@/lib/canvas/canvas-generation-helpers";
+import { buildConfigNodeMetadata, buildGenerationConfig, canvasGenerationCapabilityForRoute, dispatchCanvasGenerationRoute, generationCapabilityForNodeType, type CanvasGenerationRoute } from "@/lib/canvas/canvas-generation-helpers";
 import { CanvasNodeType } from "@/types/canvas";
 import { VideoSettingsPanel } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -143,6 +143,46 @@ describe("capability request isolation", () => {
         expect(buildGenerationConfig(config, undefined, "image")).toMatchObject({ size: "2048x1152", count: "4" });
         expect(buildGenerationConfig(config, undefined, "video")).toMatchObject({ size: "720x1280", count: "7" });
         expect(buildGenerationConfig(config, undefined, "text")).toMatchObject({ size: "legacy-text-size", count: "7" });
+    });
+
+    it("builds new config node metadata with image-scoped defaults", () => {
+        const metadata = buildConfigNodeMetadata({
+            ...isolatedConfig(),
+            size: "legacy-text-size",
+            count: "7",
+            canvasImageCount: "8",
+            imageSize: "16:9",
+            imageCount: "4",
+            videoSize: "720x1280",
+        });
+
+        expect(metadata).toMatchObject({ imageSize: "16:9", imageCount: 4 });
+        expect(metadata).not.toHaveProperty("size");
+        expect(metadata).not.toHaveProperty("count");
+    });
+
+    it("ignores image-scoped config node metadata when building video or text generation", () => {
+        const config = {
+            ...isolatedConfig(),
+            size: "legacy-text-size",
+            count: "7",
+            imageSize: "16:9",
+            imageCount: "4",
+            videoSize: "720x1280",
+        };
+        const configNode = {
+            id: "config-video",
+            type: CanvasNodeType.Config,
+            title: "配置",
+            position: { x: 0, y: 0 },
+            width: 400,
+            height: 260,
+            metadata: { generationMode: "video" as const, imageSize: "16:9", imageCount: 4 },
+        };
+
+        expect(buildGenerationConfig(config, configNode, "image")).toMatchObject({ size: "16:9", count: "4" });
+        expect(buildGenerationConfig(config, configNode, "video")).toMatchObject({ size: "720x1280", videoSize: "720x1280", count: "7" });
+        expect(buildGenerationConfig(config, configNode, "text")).toMatchObject({ size: "legacy-text-size", count: "7" });
     });
 
     it("uses only image credentials and script for generation and edit while decoding a legacy model override", async () => {

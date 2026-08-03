@@ -55,6 +55,7 @@ import {
     audioExtension,
     buildAngleLabel,
     buildAnglePrompt,
+    buildConfigNodeMetadata,
     buildGenerationConfig,
     generationCapabilityForNodeType,
     findRetrySourceNode,
@@ -495,7 +496,7 @@ function InfiniteCanvasPage() {
 
     const createConnectedNode = useCallback(
         (type: CanvasNodeType.Image | CanvasNodeType.Text | CanvasNodeType.Config | CanvasNodeType.Video | CanvasNodeType.Audio, pending: PendingConnectionCreate) => {
-            const metadata = type === CanvasNodeType.Config ? { size: effectiveConfig.imageSize || effectiveConfig.size, count: getGenerationCount(effectiveConfig.imageCount || effectiveConfig.canvasImageCount || effectiveConfig.count) } : undefined;
+            const metadata = type === CanvasNodeType.Config ? buildConfigNodeMetadata(effectiveConfig) : undefined;
             const newNode = createCanvasNode(type, pending.position, metadata);
             const connection = normalizeConnection(pending.connection.nodeId, newNode.id, [...nodesRef.current, newNode], pending.connection.handleType);
             if (!connection) {
@@ -644,13 +645,7 @@ function InfiniteCanvasPage() {
     const createNode = useCallback(
         (type: CanvasNodeTypeId, position?: Position) => {
             const targetPosition = position || getCanvasCenter();
-            const configMetadata =
-                type === CanvasNodeType.Config
-                    ? {
-                          size: effectiveConfig.imageSize || effectiveConfig.size,
-                          count: getGenerationCount(effectiveConfig.imageCount || effectiveConfig.canvasImageCount || effectiveConfig.count),
-                      }
-                    : undefined;
+            const configMetadata = type === CanvasNodeType.Config ? buildConfigNodeMetadata(effectiveConfig) : undefined;
             const newNode = createCanvasNode(type, targetPosition, configMetadata);
 
             setNodes((prev) => [...prev, newNode]);
@@ -2557,8 +2552,7 @@ function InfiniteCanvasPage() {
                 },
                 {
                     prompt: "",
-                    size: effectiveConfig.imageSize || effectiveConfig.size,
-                    count: getGenerationCount(effectiveConfig.imageCount || effectiveConfig.canvasImageCount || effectiveConfig.count),
+                    ...buildConfigNodeMetadata(effectiveConfig),
                 },
             );
             const connection = { id: nanoid(), fromNodeId: sourceNode.id, toNodeId: configNode.id };

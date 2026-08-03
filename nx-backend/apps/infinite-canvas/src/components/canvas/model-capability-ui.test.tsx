@@ -12,8 +12,15 @@ vi.mock("./canvas-prompt-library", () => ({ CanvasPromptLibrary: () => null }));
 vi.mock("./canvas-prompt-chip-input", () => ({
     CanvasPromptChipInput: (props: { value: string; onChange: (value: string) => void }) => <textarea data-testid="prompt-input" value={props.value} onChange={(event) => props.onChange(event.target.value)} />,
 }));
+const popoverState = vi.hoisted(() => ({ videoConfigs: [] as Array<{ size?: string; videoSize?: string; count?: string; imageCount?: string }> }));
+
 vi.mock("./canvas-image-settings-popover", () => ({ CanvasImageSettingsPopover: () => null }));
-vi.mock("./canvas-video-settings-popover", () => ({ CanvasVideoSettingsPopover: () => null }));
+vi.mock("./canvas-video-settings-popover", () => ({
+    CanvasVideoSettingsPopover: ({ config }: { config: { size?: string; videoSize?: string; count?: string; imageCount?: string } }) => {
+        popoverState.videoConfigs.push(config);
+        return <div data-testid="video-settings-config">{config.videoSize || config.size}</div>;
+    },
+}));
 vi.mock("./canvas-audio-settings-popover", () => ({ CanvasAudioSettingsPopover: () => null }));
 vi.mock("./canvas-text-settings-popover", () => ({ CanvasTextSettingsPopover: () => null }));
 
@@ -59,6 +66,7 @@ function cleanup({ container, root }: { container: HTMLDivElement; root: Root })
 
 describe("capability-specific node model UI", () => {
     beforeEach(() => {
+        popoverState.videoConfigs = [];
         useConfigStore.setState({ config: configFixture(), isConfigOpen: false, targetCapability: "image" });
     });
 
@@ -162,7 +170,56 @@ describe("capability-specific node model UI", () => {
         );
         const videoOption = Array.from(container.querySelectorAll(".ant-segmented-item")).find((item) => item.textContent?.includes("视频"))!;
         click(videoOption);
-        expect(onConfigChange).toHaveBeenCalledWith("config-image", { generationMode: "video", model: undefined });
+        expect(onConfigChange).toHaveBeenCalledWith("config-image", expect.objectContaining({ generationMode: "video", model: undefined }));
+        cleanup({ container, root });
+    });
+
+    it("uses videoSize after switching a config node from image to video", () => {
+        const config = { ...configFixture(), size: "legacy-text-size", count: "7", imageSize: "16:9", imageCount: "4", videoSize: "720x1280" };
+        useConfigStore.setState({ config });
+        const node: CanvasNodeData = {
+            id: "config-image",
+            type: CanvasNodeType.Config,
+            title: "图片配置",
+            position: { x: 0, y: 0 },
+            width: 400,
+            height: 300,
+            metadata: { generationMode: "image", model: "image-model", size: "16:9", count: 4, imageSize: "16:9", imageCount: 4 },
+        };
+        const onConfigChange = vi.fn();
+        const { container, root } = render(
+            <CanvasConfigNodePanel
+                node={node}
+                isRunning={false}
+                inputSummary={{ textCount: 0, imageCount: 0, videoCount: 0, audioCount: 0 }}
+                onConfigChange={onConfigChange}
+                onGenerate={() => undefined}
+                onStop={() => undefined}
+                onComposerToggle={() => undefined}
+            />,
+        );
+
+        const videoOption = Array.from(container.querySelectorAll(".ant-segmented-item")).find((item) => item.textContent?.includes("视频"))!;
+        click(videoOption);
+        const patch = onConfigChange.mock.calls[0][1];
+        const switchedNode = { ...node, metadata: { ...node.metadata, ...patch } };
+        popoverState.videoConfigs = [];
+        act(() =>
+            root.render(
+                <CanvasConfigNodePanel
+                    node={switchedNode}
+                    isRunning={false}
+                    inputSummary={{ textCount: 0, imageCount: 0, videoCount: 0, audioCount: 0 }}
+                    onConfigChange={onConfigChange}
+                    onGenerate={() => undefined}
+                    onStop={() => undefined}
+                    onComposerToggle={() => undefined}
+                />,
+            ),
+        );
+
+        expect(patch).toMatchObject({ generationMode: "video", model: undefined, size: undefined, count: undefined });
+        expect(popoverState.videoConfigs.at(-1)).toMatchObject({ videoSize: "720x1280", size: "720x1280", count: "7" });
         cleanup({ container, root });
     });
 
