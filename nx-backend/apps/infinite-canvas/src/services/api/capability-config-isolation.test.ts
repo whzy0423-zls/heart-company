@@ -8,7 +8,7 @@ import { requestEdit, requestGeneration, requestImageQuestion } from "./image";
 import { requestAudioGeneration } from "./audio";
 import { createVideoGenerationTask, getVideoTaskResourceCountsForTest, pollVideoGenerationTask, releaseVideoGenerationTask, requestVideoGeneration, resetVideoTaskResourcesForTest } from "./video";
 import { isSeedanceVideoConfig } from "@/lib/seedance-video";
-import { canvasGenerationCapabilityForRoute, dispatchCanvasGenerationRoute, generationCapabilityForNodeType, type CanvasGenerationRoute } from "@/lib/canvas/canvas-generation-helpers";
+import { buildGenerationConfig, canvasGenerationCapabilityForRoute, dispatchCanvasGenerationRoute, generationCapabilityForNodeType, type CanvasGenerationRoute } from "@/lib/canvas/canvas-generation-helpers";
 import { CanvasNodeType } from "@/types/canvas";
 import { VideoSettingsPanel } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -127,6 +127,22 @@ describe("capability request isolation", () => {
         expect(generationCapabilityForNodeType(CanvasNodeType.Video)).toBe("video");
         expect(generationCapabilityForNodeType(CanvasNodeType.Text)).toBe("text");
         expect(generationCapabilityForNodeType(CanvasNodeType.Audio)).toBe("audio");
+    });
+
+    it("builds generation configs from capability-specific size and count fields", () => {
+        const config = {
+            ...isolatedConfig(),
+            size: "legacy-text-size",
+            count: "7",
+            canvasImageCount: "8",
+            imageSize: "2048x1152",
+            imageCount: "4",
+            videoSize: "720x1280",
+        };
+
+        expect(buildGenerationConfig(config, undefined, "image")).toMatchObject({ size: "2048x1152", count: "4" });
+        expect(buildGenerationConfig(config, undefined, "video")).toMatchObject({ size: "720x1280", count: "7" });
+        expect(buildGenerationConfig(config, undefined, "text")).toMatchObject({ size: "legacy-text-size", count: "7" });
     });
 
     it("uses only image credentials and script for generation and edit while decoding a legacy model override", async () => {

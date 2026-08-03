@@ -186,8 +186,17 @@ function resolveRequestSize(quality: string | undefined, size: string) {
     throw new Error("图像尺寸格式不支持，请使用 auto、9:16 或 1024x1024");
 }
 
+
+function imageRequestSize(config: AiConfig) {
+    return config.imageSize || config.size;
+}
+
+function imageRequestCount(config: AiConfig) {
+    return config.imageCount || config.canvasImageCount || config.count;
+}
+
 function resolveGeminiImageConfig(config: AiConfig) {
-    const value = config.size.trim();
+    const value = imageRequestSize(config).trim();
     const dimensions = parseImageDimensions(value);
     const ratio = dimensions ? `${dimensions.width}:${dimensions.height}` : value;
     const aspectRatio = value && value.toLowerCase() !== "auto" ? closestGeminiAspectRatio(ratio) : undefined;
@@ -686,11 +695,11 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
 
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
     const requestConfig = resolveCapabilityRequestSnapshot(config, "image", config.model || config.imageModel);
-    const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
+    const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(imageRequestCount(config))) || 1)));
     const script = requestConfig.script;
     if (script) {
         const quality = normalizeQuality(config.quality);
-        const requestSize = resolveRequestSize(quality, config.size);
+        const requestSize = resolveRequestSize(quality, imageRequestSize(config));
         const background = normalizeBackground(config.background);
         try {
             const result = await runModelPlugin({
@@ -715,7 +724,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
         }
     }
     const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
+    const requestSize = resolveRequestSize(quality, imageRequestSize(config));
     const background = normalizeBackground(config.background);
     try {
         const response = await axios.post<ImageApiResponse>(
@@ -744,12 +753,12 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
 
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage, options?: RequestOptions) {
     const requestConfig = resolveCapabilityRequestSnapshot(config, "image", config.model || config.imageModel);
-    const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
+    const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(imageRequestCount(config))) || 1)));
     const requestPrompt = buildImageReferencePromptText(prompt, references);
     const script = requestConfig.script;
     if (script) {
         const quality = normalizeQuality(config.quality);
-        const requestSize = resolveRequestSize(quality, config.size);
+        const requestSize = resolveRequestSize(quality, imageRequestSize(config));
         const background = normalizeBackground(config.background);
         const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
         try {
@@ -779,7 +788,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (requestConfig.apiFormat === "ark") {
         if (mask) throw new Error("蒙版编辑暂不支持该模型，请使用其他渠道");
         const quality = normalizeQuality(config.quality);
-        const requestSize = resolveRequestSize(quality, config.size);
+        const requestSize = resolveRequestSize(quality, imageRequestSize(config));
         const background = normalizeBackground(config.background);
         const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
         try {
@@ -808,7 +817,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     }
 
     const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
+    const requestSize = resolveRequestSize(quality, imageRequestSize(config));
     const background = normalizeBackground(config.background);
     const formData = new FormData();
     formData.set("model", requestConfig.model);

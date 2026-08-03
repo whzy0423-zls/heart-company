@@ -117,12 +117,23 @@ export function getInputSummary(inputs: NodeGenerationInput[]) {
 }
 
 export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefined, mode: CanvasNodeGenerationMode): AiConfig {
+    const imageSize = config.imageSize || config.size || defaultConfig.imageSize;
+    const imageCount = config.imageCount || config.canvasImageCount || config.count || defaultConfig.imageCount;
+    const videoSize = config.videoSize || config.size || defaultConfig.videoSize;
+    const defaultSize = mode === "video" ? videoSize : mode === "image" ? imageSize : config.size || defaultConfig.size;
+    const defaultCount = mode === "image" ? imageCount : config.count || defaultConfig.count;
+    const effectiveSize = node?.metadata?.size || defaultSize;
+    const effectiveCount = String(node?.metadata?.count || defaultCount);
+
     return {
         ...config,
         model: resolveModelForCapability(config, node?.metadata?.model, canvasGenerationCapabilityForRoute(canvasGenerationRouteForMode(mode))),
         reasoningEffort: node?.metadata?.reasoningEffort || config.reasoningEffort || defaultConfig.reasoningEffort,
         quality: node?.metadata?.quality || config.quality || defaultConfig.quality,
-        size: node?.metadata?.size || config.size || defaultConfig.size,
+        imageSize: mode === "image" ? effectiveSize : imageSize,
+        imageCount: mode === "image" ? effectiveCount : imageCount,
+        videoSize: mode === "video" ? effectiveSize : videoSize,
+        size: effectiveSize,
         background: node?.metadata?.background ?? config.background ?? defaultConfig.background,
         videoSeconds: node?.metadata?.seconds || config.videoSeconds || defaultConfig.videoSeconds,
         vquality: node?.metadata?.vquality || config.vquality || defaultConfig.vquality,
@@ -132,7 +143,7 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
         audioFormat: node?.metadata?.audioFormat || config.audioFormat || defaultConfig.audioFormat,
         audioSpeed: node?.metadata?.audioSpeed || config.audioSpeed || defaultConfig.audioSpeed,
         audioInstructions: node?.metadata?.audioInstructions || config.audioInstructions || defaultConfig.audioInstructions,
-        count: String(node?.metadata?.count || (mode === "image" ? config.canvasImageCount || config.count : config.count) || defaultConfig.count),
+        count: effectiveCount,
     };
 }
 

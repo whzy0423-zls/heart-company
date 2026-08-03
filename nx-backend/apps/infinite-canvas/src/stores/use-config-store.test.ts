@@ -118,6 +118,31 @@ describe("capability model config store", () => {
         expect(migrated.config.capabilityConfigs.image.modelId).toBe("legacy-image");
     });
 
+    it("migrates legacy shared size and counts into capability-specific parameters", () => {
+        const migrated = migrateConfigState({
+            config: {
+                size: "1792x1024",
+                count: "6",
+                canvasImageCount: "4",
+            },
+        });
+
+        expect(migrated.config).toMatchObject({
+            imageSize: "1792x1024",
+            videoSize: "1792x1024",
+            imageCount: "4",
+            size: "1792x1024",
+            count: "6",
+            canvasImageCount: "4",
+        });
+    });
+
+    it("falls back to legacy count when canvasImageCount is missing during parameter migration", () => {
+        const migrated = migrateConfigState({ config: { size: "1024x1024", count: "6" } });
+
+        expect(migrated.config).toMatchObject({ imageSize: "1024x1024", videoSize: "1024x1024", imageCount: "6" });
+    });
+
     it("assigns a legacy flat model to its guessed capability without polluting other capabilities", () => {
         const migrated = migrateConfigState({
             config: {

@@ -132,6 +132,11 @@ export async function pollVideoGenerationTask(config: AiConfig, task: VideoGener
     }
 }
 
+
+function videoRequestSize(config: AiConfig) {
+    return config.videoSize || config.size;
+}
+
 async function createPluginVideoTask(config: AiConfig, model: string, script: string, prompt: string, references: ReferenceImage[], options?: RequestOptions): Promise<VideoGenerationTask> {
     if (!config.baseUrl.trim()) throw new Error("请先配置 Base URL");
     if (!config.apiKey.trim()) throw new Error("请先配置 API Key");
@@ -145,9 +150,9 @@ async function createPluginVideoTask(config: AiConfig, model: string, script: st
             images: refs,
             params: {
                 seconds: normalizeVideoSeconds(config.videoSeconds),
-                size: normalizeVideoSize(config.size),
+                size: normalizeVideoSize(videoRequestSize(config)),
                 resolution: normalizeVideoResolution(config.vquality),
-                ratio: config.size,
+                ratio: videoRequestSize(config),
                 generateAudio: boolConfig(config.videoGenerateAudio, true),
                 watermark: boolConfig(config.videoWatermark, false),
             },
@@ -188,7 +193,7 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
     body.append("model", modelOptionName(model));
     body.append("prompt", prompt);
     body.append("seconds", normalizeVideoSeconds(config.videoSeconds));
-    if (normalizeVideoSize(config.size)) body.append("size", normalizeVideoSize(config.size)!);
+    if (normalizeVideoSize(videoRequestSize(config))) body.append("size", normalizeVideoSize(videoRequestSize(config))!);
     body.append("resolution_name", normalizeVideoResolution(config.vquality));
     body.append("preset", "normal");
     const files = await Promise.all(references.slice(0, 7).map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
@@ -234,7 +239,7 @@ async function createSeedanceTask(config: AiConfig, model: string, prompt: strin
     const payload = {
         model: modelOptionName(model),
         content,
-        ratio: normalizeSeedanceRatio(config.size),
+        ratio: normalizeSeedanceRatio(videoRequestSize(config)),
         resolution: normalizeSeedanceResolution(config.vquality),
         duration: normalizeSeedanceDuration(config.videoSeconds),
         generate_audio: boolConfig(config.videoGenerateAudio, true),

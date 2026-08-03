@@ -16,8 +16,8 @@ const CAPABILITY_META: Record<ModelCapability, { label: string; description: str
 };
 
 type CapabilityParameterDrafts = {
-    image: Pick<AiConfig, "quality" | "size" | "background" | "count">;
-    video: Pick<AiConfig, "videoSeconds" | "vquality" | "videoGenerateAudio" | "videoWatermark">;
+    image: Pick<AiConfig, "quality" | "imageSize" | "background" | "imageCount">;
+    video: Pick<AiConfig, "videoSize" | "videoSeconds" | "vquality" | "videoGenerateAudio" | "videoWatermark">;
     text: Pick<AiConfig, "systemPrompt" | "reasoningEffort">;
     audio: Pick<AiConfig, "audioVoice" | "audioFormat" | "audioSpeed" | "audioInstructions">;
 };
@@ -45,8 +45,8 @@ function copyConfigs(configs: CapabilityConfigs): CapabilityConfigs {
 
 function copyParameterDrafts(config: AiConfig): CapabilityParameterDrafts {
     return {
-        image: { quality: config.quality, size: config.size, background: config.background, count: config.count },
-        video: { videoSeconds: config.videoSeconds, vquality: config.vquality, videoGenerateAudio: config.videoGenerateAudio, videoWatermark: config.videoWatermark },
+        image: { quality: config.quality, imageSize: config.imageSize || config.size, background: config.background, imageCount: config.imageCount || config.canvasImageCount || config.count },
+        video: { videoSize: config.videoSize || config.size, videoSeconds: config.videoSeconds, vquality: config.vquality, videoGenerateAudio: config.videoGenerateAudio, videoWatermark: config.videoWatermark },
         text: { systemPrompt: config.systemPrompt, reasoningEffort: config.reasoningEffort },
         audio: { audioVoice: config.audioVoice, audioFormat: config.audioFormat, audioSpeed: config.audioSpeed, audioInstructions: config.audioInstructions },
     };
@@ -140,11 +140,12 @@ export function CapabilityModelConfigDialog() {
         if (targetCapability === "image") {
             const values = parameterDrafts.image;
             updateConfig("quality", values.quality);
-            updateConfig("size", values.size);
+            updateConfig("imageSize", values.imageSize);
             updateConfig("background", values.background);
-            updateConfig("count", values.count);
+            updateConfig("imageCount", values.imageCount);
         } else if (targetCapability === "video") {
             const values = parameterDrafts.video;
+            updateConfig("videoSize", values.videoSize);
             updateConfig("videoSeconds", values.videoSeconds);
             updateConfig("vquality", values.vquality);
             updateConfig("videoGenerateAudio", values.videoGenerateAudio);
@@ -357,7 +358,7 @@ function CapabilityParameters({ capability, drafts, onChange }: { capability: Mo
                     </select>
                 </Field>
                 <Field label="图片尺寸">
-                    <input data-testid="image-size" value={drafts.image.size} onChange={(event) => onChange("image", { size: event.target.value })} className={INPUT_CLASS} placeholder="例如 1:1 或 1024x1024" />
+                    <input data-testid="image-size" value={drafts.image.imageSize} onChange={(event) => onChange("image", { imageSize: event.target.value })} className={INPUT_CLASS} placeholder="例如 1:1 或 1024x1024" />
                 </Field>
                 <Field label="背景">
                     <select data-testid="image-background" value={drafts.image.background} onChange={(event) => onChange("image", { background: event.target.value })} className={INPUT_CLASS}>
@@ -367,7 +368,7 @@ function CapabilityParameters({ capability, drafts, onChange }: { capability: Mo
                     </select>
                 </Field>
                 <Field label="生成数量">
-                    <input data-testid="image-count" type="number" min="1" max="10" value={drafts.image.count} onChange={(event) => onChange("image", { count: event.target.value })} className={INPUT_CLASS} />
+                    <input data-testid="image-count" type="number" min="1" max="10" value={drafts.image.imageCount} onChange={(event) => onChange("image", { imageCount: event.target.value })} className={INPUT_CLASS} />
                 </Field>
             </div>
         );
@@ -375,6 +376,9 @@ function CapabilityParameters({ capability, drafts, onChange }: { capability: Mo
     if (capability === "video") {
         return (
             <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="视频尺寸">
+                    <input data-testid="video-size" value={drafts.video.videoSize} onChange={(event) => onChange("video", { videoSize: event.target.value })} className={INPUT_CLASS} placeholder="例如 1280x720 或 16:9" />
+                </Field>
                 <Field label="视频时长（秒）">
                     <input data-testid="video-seconds" type="number" min="1" value={drafts.video.videoSeconds} onChange={(event) => onChange("video", { videoSeconds: event.target.value })} className={INPUT_CLASS} />
                 </Field>

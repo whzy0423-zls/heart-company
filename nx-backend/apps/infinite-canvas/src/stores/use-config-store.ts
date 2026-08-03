@@ -56,6 +56,9 @@ export type AiConfig = {
     reasoningEffort: ReasoningEffort;
     models: string[];
     quality: string;
+    imageSize: string;
+    imageCount: string;
+    videoSize: string;
     size: string;
     background: string;
     count: string;
@@ -76,7 +79,7 @@ const CHANNEL_MODEL_SEPARATOR = "::";
 const OPENAI_BASE_URL = "https://api.openai.com";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 const ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
-const CONFIG_STORE_VERSION = 2;
+const CONFIG_STORE_VERSION = 3;
 
 export function createDefaultCapabilityConfigs(): CapabilityConfigs {
     return {
@@ -125,6 +128,9 @@ export const defaultConfig: AiConfig = {
     reasoningEffort: "auto",
     models: ["default::gpt-image-2", "default::grok-imagine-video", "default::gpt-5.5", "default::gpt-4o-mini-tts"],
     quality: "auto",
+    imageSize: "1:1",
+    imageCount: "3",
+    videoSize: "1280x720",
     size: "1:1",
     background: "",
     count: "1",
@@ -315,6 +321,9 @@ export function createCapabilityRequestSnapshot(config: AiConfig, capability: Mo
         systemPrompt: config.systemPrompt,
         reasoningEffort: config.reasoningEffort,
         quality: config.quality,
+        imageSize: config.imageSize,
+        imageCount: config.imageCount,
+        videoSize: config.videoSize,
         size: config.size,
         background: config.background,
         count: config.count,
@@ -422,6 +431,9 @@ export function migrateConfigState(persisted: unknown): { config: AiConfig; webd
               ? emptyCapabilityConfig()
               : migrateLegacyCapability(rawConfig, capability);
     }
+    const hasRawImageSize = Object.prototype.hasOwnProperty.call(rawConfig, "imageSize");
+    const hasRawVideoSize = Object.prototype.hasOwnProperty.call(rawConfig, "videoSize");
+    const hasRawImageCount = Object.prototype.hasOwnProperty.call(rawConfig, "imageCount");
     const config = { ...defaultConfig, ...rawConfig, capabilityConfigs } as AiConfig;
     if (!Array.isArray(rawConfig.channels)) config.channels = [];
     const channels = normalizeChannels(config);
@@ -443,6 +455,9 @@ export function migrateConfigState(persisted: unknown): { config: AiConfig; webd
             audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
             audioInstructions: config.audioInstructions || "",
             reasoningEffort: config.reasoningEffort || "auto",
+            imageSize: hasRawImageSize ? stringValue(rawConfig.imageSize) || defaultConfig.imageSize : stringValue(rawConfig.size) || defaultConfig.imageSize,
+            imageCount: hasRawImageCount ? stringValue(rawConfig.imageCount) || defaultConfig.imageCount : stringValue(rawConfig.canvasImageCount) || stringValue(rawConfig.count) || defaultConfig.imageCount,
+            videoSize: hasRawVideoSize ? stringValue(rawConfig.videoSize) || defaultConfig.videoSize : stringValue(rawConfig.size) || defaultConfig.videoSize,
             videoSeconds: config.videoSeconds || "6",
             vquality: config.vquality || "720",
             videoGenerateAudio: config.videoGenerateAudio || "true",

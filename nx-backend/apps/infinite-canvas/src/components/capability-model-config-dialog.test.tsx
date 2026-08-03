@@ -60,7 +60,7 @@ describe("CapabilityModelConfigDialog", () => {
             };
         }
         useConfigStore.setState({
-            config: { ...defaultConfig, capabilityConfigs },
+            config: { ...defaultConfig, capabilityConfigs, size: "legacy-text-size", count: "7", canvasImageCount: "8", imageSize: "1:1", imageCount: "3", videoSize: "1280x720" },
             isConfigOpen: true,
             targetCapability: "video",
             shouldPromptContinue: false,
@@ -173,17 +173,18 @@ describe("CapabilityModelConfigDialog", () => {
                 ["image-background", "transparent"],
                 ["image-count", "4"],
             ],
-            expected: { quality: "high", size: "16:9", background: "transparent", count: "4" },
+            expected: { quality: "high", imageSize: "16:9", background: "transparent", imageCount: "4", videoSize: "1280x720", size: "legacy-text-size", count: "7" },
         },
         {
             capability: "video" as const,
             fields: [
+                ["video-size", "720x1280"],
                 ["video-seconds", "12"],
                 ["video-quality", "1080"],
                 ["video-generate-audio", "false"],
                 ["video-watermark", "true"],
             ],
-            expected: { videoSeconds: "12", vquality: "1080", videoGenerateAudio: "false", videoWatermark: "true" },
+            expected: { videoSize: "720x1280", videoSeconds: "12", vquality: "1080", videoGenerateAudio: "false", videoWatermark: "true", imageSize: "1:1", imageCount: "3", size: "legacy-text-size", count: "7" },
         },
         {
             capability: "text" as const,
@@ -220,6 +221,39 @@ describe("CapabilityModelConfigDialog", () => {
         for (const other of capabilities.filter((item) => item !== capability)) {
             expect(state.config.capabilityConfigs[other]).toBe(before[other]);
         }
+    });
+
+    it("saving image size and count leaves the video size isolated", () => {
+        useConfigStore.getState().openConfigDialog(false, "channels", "image");
+        act(() => root.render(<CapabilityModelConfigDialog />));
+
+        changeField(document.querySelector('[data-testid="image-size"]') as HTMLInputElement, "16:9");
+        changeField(document.querySelector('[data-testid="image-count"]') as HTMLInputElement, "5");
+        click(document.querySelector('[data-testid="save-capability-config"]')!);
+
+        expect(useConfigStore.getState().config).toMatchObject({
+            imageSize: "16:9",
+            imageCount: "5",
+            videoSize: "1280x720",
+            size: "legacy-text-size",
+            count: "7",
+        });
+    });
+
+    it("saving video size leaves image size and count isolated", () => {
+        useConfigStore.getState().openConfigDialog(false, "channels", "video");
+        act(() => root.render(<CapabilityModelConfigDialog />));
+
+        changeField(document.querySelector('[data-testid="video-size"]') as HTMLInputElement, "720x1280");
+        click(document.querySelector('[data-testid="save-capability-config"]')!);
+
+        expect(useConfigStore.getState().config).toMatchObject({
+            imageSize: "1:1",
+            imageCount: "3",
+            videoSize: "720x1280",
+            size: "legacy-text-size",
+            count: "7",
+        });
     });
 
     it("clears the continuation flag when the dialog is cancelled", () => {

@@ -147,12 +147,23 @@ function InputChip({ label, value, style }: { label: string; value: string; styl
 }
 
 function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: CanvasGenerationMode): AiConfig {
+    const imageSize = globalConfig.imageSize || globalConfig.size || defaultConfig.imageSize;
+    const imageCount = globalConfig.imageCount || globalConfig.canvasImageCount || globalConfig.count || defaultConfig.imageCount;
+    const videoSize = globalConfig.videoSize || globalConfig.size || defaultConfig.videoSize;
+    const defaultSize = mode === "video" ? videoSize : mode === "image" ? imageSize : globalConfig.size || defaultConfig.size;
+    const defaultCount = mode === "image" ? imageCount : globalConfig.count || defaultConfig.count;
+    const effectiveSize = node.metadata?.size || defaultSize;
+    const effectiveCount = String(node.metadata?.count || defaultCount);
+
     return {
         ...globalConfig,
         model: resolveModelForCapability(globalConfig, node.metadata?.model, mode),
         reasoningEffort: node.metadata?.reasoningEffort || globalConfig.reasoningEffort || defaultConfig.reasoningEffort,
         quality: node.metadata?.quality || globalConfig.quality || defaultConfig.quality,
-        size: node.metadata?.size || globalConfig.size || defaultConfig.size,
+        imageSize: mode === "image" ? effectiveSize : imageSize,
+        imageCount: mode === "image" ? effectiveCount : imageCount,
+        videoSize: mode === "video" ? effectiveSize : videoSize,
+        size: effectiveSize,
         background: node.metadata?.background ?? globalConfig.background ?? defaultConfig.background,
         videoSeconds: node.metadata?.seconds || globalConfig.videoSeconds || defaultConfig.videoSeconds,
         vquality: node.metadata?.vquality || globalConfig.vquality || defaultConfig.vquality,
@@ -162,11 +173,12 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
         audioFormat: node.metadata?.audioFormat || globalConfig.audioFormat || defaultConfig.audioFormat,
         audioSpeed: node.metadata?.audioSpeed || globalConfig.audioSpeed || defaultConfig.audioSpeed,
         audioInstructions: node.metadata?.audioInstructions || globalConfig.audioInstructions || defaultConfig.audioInstructions,
-        count: String(node.metadata?.count || (mode === "image" ? globalConfig.canvasImageCount || globalConfig.count : globalConfig.count) || defaultConfig.count),
+        count: effectiveCount,
     };
 }
 
 function videoConfigPatch(key: keyof AiConfig, value: string) {
+    if (key === "videoSize") return { size: value };
     if (key === "videoSeconds") return { seconds: value };
     if (key === "videoGenerateAudio") return { generateAudio: value };
     if (key === "videoWatermark") return { watermark: value };
