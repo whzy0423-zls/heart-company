@@ -8,7 +8,7 @@ import { isAiConfigReady, modelOptionLabel, modelOptionName, selectableModelsByC
 type ModelPickerProps = {
     config: AiConfig;
     value?: string;
-    onChange: (model: string) => void;
+    onChange: (model?: string) => void;
     capability?: ModelCapability;
     className?: string;
     fullWidth?: boolean;
@@ -16,17 +16,20 @@ type ModelPickerProps = {
     onMissingConfig?: () => void;
 };
 
+const CAPABILITY_DEFAULT_OPTION = "__capability_default__";
+
 export function ModelPicker({ config, value, onChange, capability, className, fullWidth = false, placeholder = "选择模型", onMissingConfig }: ModelPickerProps) {
     const pickerId = useId();
     const [open, setOpen] = useState(false);
+    const configuredModel = capability ? config.capabilityConfigs?.[capability]?.modelId?.trim() || "" : "";
     const options = useMemo(() => {
         if (capability) {
-            const configuredModel = config.capabilityConfigs?.[capability]?.modelId?.trim() || "";
-            return Array.from(new Set([configuredModel, value].filter((model): model is string => Boolean(model))));
+            return Array.from(new Set([...(configuredModel ? [CAPABILITY_DEFAULT_OPTION] : []), value].filter((model): model is string => Boolean(model))));
         }
         return Array.from(new Set([...(config.channelMode === "local" ? [value] : []), ...selectableModelsByCapability(config)].filter((model): model is string => Boolean(model))));
-    }, [capability, config, value]);
-    const current = value || (capability ? config.capabilityConfigs?.[capability]?.modelId || "" : "");
+    }, [capability, config, configuredModel, value]);
+    const current = value || configuredModel;
+    const selectedValue = capability ? value || CAPABILITY_DEFAULT_OPTION : current;
     const displayLabel = current ? (capability ? modelOptionName(current) : modelOptionLabel(config, current)) : placeholder;
 
     useEffect(() => {
@@ -40,13 +43,13 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
     return (
         <Select
             open={open}
-            value={current}
+            value={selectedValue}
             onOpenChange={(nextOpen) => {
                 if (nextOpen && (capability ? !isAiConfigReady(config, capability, current) : !options.length && config.channelMode === "local")) onMissingConfig?.();
                 if (nextOpen) window.dispatchEvent(new CustomEvent("model-picker-open", { detail: pickerId }));
                 setOpen(nextOpen);
             }}
-            onValueChange={onChange}
+            onValueChange={(model) => onChange(capability && model === CAPABILITY_DEFAULT_OPTION ? undefined : model)}
         >
             <SelectTrigger
                 className={cn(
@@ -73,11 +76,14 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
                 onMouseDown={(event) => event.stopPropagation()}
             >
                 {options.length ? (
-                    options.map((model) => (
-                        <SelectItem key={model} value={model} textValue={modelOptionLabel(config, model)}>
-                            <ModelLabel config={config} model={model} capability={capability} />
-                        </SelectItem>
-                    ))
+                    options.map((option) => {
+                        const model = option === CAPABILITY_DEFAULT_OPTION ? configuredModel : option;
+                        return (
+                            <SelectItem key={option} value={option} textValue={capability ? modelOptionName(model) : modelOptionLabel(config, model)}>
+                                <ModelLabel config={config} model={model} capability={capability} />
+                            </SelectItem>
+                        );
+                    })
                 ) : (
                     <SelectItem value="__empty__" disabled>
                         {emptyModelLabel(config, capability)}
@@ -110,8 +116,9 @@ function ModelIcon({ model }: { model: string }) {
 
 function resolveModelIcon(model: string) {
     const name = model.toLowerCase();
-    const icon = name.includes("claude") || name.includes("anthropic")
-        ? "claude"
+    const icon =
+        name.includes("claude") || name.includes("anthropic")
+            ? "claude"
             : name.includes("gemini") || name.includes("google")
               ? "gemini"
               : name.includes("gpt") || name.includes("openai")

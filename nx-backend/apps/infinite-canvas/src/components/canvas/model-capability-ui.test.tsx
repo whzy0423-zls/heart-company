@@ -104,7 +104,7 @@ describe("capability-specific node model UI", () => {
         const defaultOption = options.find((item) => item.textContent?.includes("image-model"))!;
         pointerDown(defaultOption);
         click(defaultOption);
-        expect(onChange).toHaveBeenCalledWith("image-model");
+        expect(onChange).toHaveBeenCalledWith(undefined);
         expect(document.body.textContent).not.toContain("video-model");
         expect(document.body.textContent).not.toContain("secret");
         cleanup({ container, root });
@@ -123,6 +123,44 @@ describe("capability-specific node model UI", () => {
         for (const other of ["image", "video", "text", "audio"].filter((item) => item !== model)) {
             expect(trigger.textContent).not.toContain(`${other}-model`);
         }
+        cleanup({ container, root });
+    });
+
+    it("ignores a model override from another capability", () => {
+        const node: CanvasNodeData = { id: "config-video", type: CanvasNodeType.Config, title: "视频", position: { x: 0, y: 0 }, width: 400, height: 300, metadata: { generationMode: "video", model: "image-model" } };
+        const { container, root } = render(
+            <CanvasConfigNodePanel
+                node={node}
+                isRunning={false}
+                inputSummary={{ textCount: 0, imageCount: 0, videoCount: 0, audioCount: 0 }}
+                onConfigChange={() => undefined}
+                onGenerate={() => undefined}
+                onStop={() => undefined}
+                onComposerToggle={() => undefined}
+            />,
+        );
+        expect(container.querySelector("[data-slot=select-trigger]")?.textContent).toContain("video-model");
+        expect(container.textContent).not.toContain("image-model");
+        cleanup({ container, root });
+    });
+
+    it("clears a config node model override when generation capability changes", () => {
+        const node: CanvasNodeData = { id: "config-image", type: CanvasNodeType.Config, title: "图片", position: { x: 0, y: 0 }, width: 400, height: 300, metadata: { generationMode: "image", model: "image-model" } };
+        const onConfigChange = vi.fn();
+        const { container, root } = render(
+            <CanvasConfigNodePanel
+                node={node}
+                isRunning={false}
+                inputSummary={{ textCount: 0, imageCount: 0, videoCount: 0, audioCount: 0 }}
+                onConfigChange={onConfigChange}
+                onGenerate={() => undefined}
+                onStop={() => undefined}
+                onComposerToggle={() => undefined}
+            />,
+        );
+        const videoOption = Array.from(container.querySelectorAll(".ant-segmented-item")).find((item) => item.textContent?.includes("视频"))!;
+        click(videoOption);
+        expect(onConfigChange).toHaveBeenCalledWith("config-image", { generationMode: "video", model: undefined });
         cleanup({ container, root });
     });
 

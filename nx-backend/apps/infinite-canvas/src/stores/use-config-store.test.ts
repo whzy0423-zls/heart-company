@@ -12,7 +12,7 @@ vi.hoisted(() => {
         },
     });
 });
-import { CONFIG_STORE_KEY, defaultConfig, isAiConfigReady, migrateConfigState, resolveCapabilityRequestConfig, updateCapabilityConfig, validateCapabilityConfig, useConfigStore, type AiConfig } from "./use-config-store";
+import { CONFIG_STORE_KEY, defaultConfig, isAiConfigReady, migrateConfigState, resolveCapabilityRequestConfig, resolveModelForCapability, updateCapabilityConfig, validateCapabilityConfig, useConfigStore, type AiConfig } from "./use-config-store";
 
 describe("capability model config store", () => {
     it("persists capability credentials and dedicated parameters, then rehydrates them from localStorage", async () => {
@@ -168,6 +168,19 @@ describe("capability model config store", () => {
         const imageRequest = resolveCapabilityRequestConfig(config, "image");
         expect(imageRequest).not.toHaveProperty("capabilityConfigs");
         expect(JSON.stringify(imageRequest)).not.toContain("video-key");
+    });
+
+    it("rejects an override from another capability and inherits the current capability model", () => {
+        const config: AiConfig = {
+            ...defaultConfig,
+            capabilityConfigs: {
+                ...defaultConfig.capabilityConfigs,
+                image: { ...defaultConfig.capabilityConfigs.image, modelId: "image-model" },
+                video: { ...defaultConfig.capabilityConfigs.video, modelId: "video-model" },
+            },
+        };
+        expect(resolveModelForCapability(config, "image-model", "video")).toBe("video-model");
+        expect(resolveModelForCapability(config, "legacy::video-custom", "video")).toBe("legacy::video-custom");
     });
 
     it("checks readiness against the explicit capability only", () => {
