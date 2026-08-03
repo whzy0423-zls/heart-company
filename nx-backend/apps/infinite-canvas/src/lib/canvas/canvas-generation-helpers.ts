@@ -1,4 +1,4 @@
-import { defaultConfig, resolveModelForCapability, type AiConfig } from "@/stores/use-config-store";
+import { defaultConfig, resolveModelForCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { imageMetadata, referenceUrl } from "@/lib/canvas/canvas-node-factory";
@@ -8,11 +8,27 @@ import type { CanvasImageAngleParams } from "@/components/canvas/canvas-node-ang
 import type { ReferenceImage } from "@/types/image";
 import { CanvasNodeType, type CanvasAssistantSession, type CanvasConnection, type CanvasNodeData, type CanvasNodeMetadata, type CanvasNodeTypeId } from "@/types/canvas";
 
+export type CanvasGenerationRoute = "image-batch" | "image-edit" | "image-question" | "text-stream" | "video-generate" | "video-retry" | "audio-generate";
+
+export function canvasGenerationCapabilityForRoute(route: CanvasGenerationRoute): ModelCapability {
+    if (route === "image-batch" || route === "image-edit") return "image";
+    if (route === "image-question" || route === "text-stream") return "text";
+    if (route === "video-generate" || route === "video-retry") return "video";
+    return "audio";
+}
+
+export function canvasGenerationRouteForMode(mode: CanvasNodeGenerationMode): CanvasGenerationRoute {
+    if (mode === "image") return "image-batch";
+    if (mode === "video") return "video-generate";
+    if (mode === "audio") return "audio-generate";
+    return "text-stream";
+}
+
 export function generationCapabilityForNodeType(type: CanvasNodeTypeId): CanvasNodeGenerationMode {
-    if (type === CanvasNodeType.Video) return "video";
-    if (type === CanvasNodeType.Text) return "text";
-    if (type === CanvasNodeType.Audio) return "audio";
-    return "image";
+    if (type === CanvasNodeType.Video) return canvasGenerationCapabilityForRoute("video-retry");
+    if (type === CanvasNodeType.Text) return canvasGenerationCapabilityForRoute("text-stream");
+    if (type === CanvasNodeType.Audio) return canvasGenerationCapabilityForRoute("audio-generate");
+    return canvasGenerationCapabilityForRoute("image-edit");
 }
 
 export function imageExtension(dataUrl: string) {
@@ -99,7 +115,7 @@ export function getInputSummary(inputs: NodeGenerationInput[]) {
 export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefined, mode: CanvasNodeGenerationMode): AiConfig {
     return {
         ...config,
-        model: resolveModelForCapability(config, node?.metadata?.model, mode),
+        model: resolveModelForCapability(config, node?.metadata?.model, canvasGenerationCapabilityForRoute(canvasGenerationRouteForMode(mode))),
         reasoningEffort: node?.metadata?.reasoningEffort || config.reasoningEffort || defaultConfig.reasoningEffort,
         quality: node?.metadata?.quality || config.quality || defaultConfig.quality,
         size: node?.metadata?.size || config.size || defaultConfig.size,

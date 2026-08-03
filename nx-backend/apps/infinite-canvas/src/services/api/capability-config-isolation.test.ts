@@ -1,18 +1,18 @@
-import { readFileSync } from "node:fs";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import axios from "axios";
 
-import { defaultConfig, type AiConfig } from "@/stores/use-config-store";
+import { createCapabilityRequestSnapshot, defaultConfig, type AiConfig } from "@/stores/use-config-store";
 import { requestEdit, requestGeneration, requestImageQuestion } from "./image";
 import { requestAudioGeneration } from "./audio";
-import { createVideoGenerationTask, pollVideoGenerationTask } from "./video";
+import { createVideoGenerationTask, getVideoTaskResourceCountsForTest, pollVideoGenerationTask, releaseVideoGenerationTask, requestVideoGeneration, resetVideoTaskResourcesForTest } from "./video";
 import { isSeedanceVideoConfig } from "@/lib/seedance-video";
-import { generationCapabilityForNodeType } from "@/lib/canvas/canvas-generation-helpers";
+import { canvasGenerationCapabilityForRoute, generationCapabilityForNodeType, type CanvasGenerationRoute } from "@/lib/canvas/canvas-generation-helpers";
 import { CanvasNodeType } from "@/types/canvas";
 import { VideoSettingsPanel } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { runModelPlugin } from "./model-plugin";
 
 vi.mock("axios", () => ({
     default: {
@@ -75,6 +75,8 @@ function isolatedConfig(): AiConfig {
 }
 
 beforeEach(() => {
+    vi.useRealTimers();
+    resetVideoTaskResourcesForTest();
     vi.clearAllMocks();
     vi.unstubAllGlobals();
 });
@@ -91,13 +93,24 @@ describe("capability request isolation", () => {
         container.remove();
     });
 
-    it("keeps project batch, text stream, and video retry call sites tied to explicit capabilities", () => {
-        const source = readFileSync("src/pages/canvas/project.tsx", "utf8");
-        expect(source).toContain("const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);");
-        expect(source).toMatch(/if \(mode === "image"\)[\s\S]*?targetIds\.map\([\s\S]*?request(?:Edit|Generation)\(\{ \.\.\.generationConfig/);
-        expect(source).toMatch(/requestImageQuestion\(\s*generationConfig,[\s\S]*?buildNodeResponseMessages/);
-        expect(source).toContain("const retryCapability = generationCapabilityForNodeType(node.type);");
-        expect(source).toMatch(/if \(node\.type === CanvasNodeType\.Video\)[\s\S]*?requestVideoGeneration\(generationConfig/);
+    it("builds isolated runtime snapshots for every canvas generation route", () => {
+        const config = isolatedConfig();
+        const routes: Array<[CanvasGenerationRoute, "image" | "video" | "text" | "audio", string]> = [
+            ["image-batch", "image", "IMAGE_SECRET"],
+            ["image-edit", "image", "IMAGE_SECRET"],
+            ["image-question", "text", "TEXT_SECRET"],
+            ["text-stream", "text", "TEXT_SECRET"],
+            ["video-generate", "video", "VIDEO_SECRET"],
+            ["video-retry", "video", "VIDEO_SECRET"],
+            ["audio-generate", "audio", "AUDIO_SECRET"],
+        ];
+        for (const [route, capability, key] of routes) {
+            const snapshot = createCapabilityRequestSnapshot(config, canvasGenerationCapabilityForRoute(route));
+            expect(canvasGenerationCapabilityForRoute(route)).toBe(capability);
+            expect(snapshot.capability).toBe(capability);
+            expect(snapshot.apiKey).toBe(key);
+            expect(JSON.stringify(snapshot)).not.toContain(capability === "image" ? "VIDEO_SECRET" : "IMAGE_SECRET");
+        }
     });
 
     it("maps every canvas generation output to one explicit capability", () => {
@@ -245,6 +258,80 @@ describe("capability request isolation", () => {
         const task = await createVideoGenerationTask(config, "move");
         const state = await pollVideoGenerationTask(config, task);
         expect(state).toEqual({ status: "failed", error: "echo [REDACTED]" });
+    });
+
+    it("releases abandoned, terminal plugin, and failed-poll video resources", async () => {
+        const abandonedConfig = isolatedConfig();
+        abandonedConfig.model = "video-abandoned";
+        mockedAxios.post.mockResolvedValueOnce({ data: { id: "abandoned", status: "queued" } });
+        const abandoned = await createVideoGenerationTask(abandonedConfig, "move");
+        expect(getVideoTaskResourceCountsForTest().snapshots).toBeGreaterThan(0);
+        releaseVideoGenerationTask(abandoned);
+        expect(getVideoTaskResourceCountsForTest().snapshots).toBe(0);
+
+        const pluginConfig = isolatedConfig();
+        pluginConfig.model = "video-plugin";
+        pluginConfig.capabilityConfigs.video.script = 'return "https://cdn.example/video.mp4"';
+        const pluginTask = await createVideoGenerationTask(pluginConfig, "move");
+        expect(getVideoTaskResourceCountsForTest().pluginResults).toBe(1);
+        expect((await pollVideoGenerationTask(pluginConfig, pluginTask)).status).toBe("completed");
+        expect(getVideoTaskResourceCountsForTest().pluginResults).toBe(0);
+
+        const failedConfig = isolatedConfig();
+        failedConfig.model = "video-failed";
+        mockedAxios.post.mockResolvedValueOnce({ data: { id: "failed", status: "queued" } });
+        mockedAxios.get.mockRejectedValueOnce(new Error("poll failed"));
+        const failedTask = await createVideoGenerationTask(failedConfig, "move");
+        await expect(pollVideoGenerationTask(failedConfig, failedTask)).rejects.toThrow("poll failed");
+        expect(getVideoTaskResourceCountsForTest().snapshots).toBe(0);
+    });
+
+    it("releases the request snapshot when one-shot video polling times out", async () => {
+        vi.useFakeTimers();
+        const config = isolatedConfig();
+        config.model = "video-timeout";
+        mockedAxios.post.mockResolvedValueOnce({ data: { id: "timeout-task", status: "queued" } });
+        mockedAxios.get.mockResolvedValue({ data: { id: "timeout-task", status: "running" } });
+        const assertion = expect(requestVideoGeneration(config, "move")).rejects.toThrow("视频生成超时");
+        await vi.runAllTimersAsync();
+        await assertion;
+        expect(getVideoTaskResourceCountsForTest().snapshots).toBe(0);
+        vi.useRealTimers();
+    });
+
+    it("expires abandoned video credentials and plugin blobs after the resource TTL", async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+        const config = isolatedConfig();
+        config.model = "video-expiring";
+        mockedAxios.post.mockResolvedValueOnce({ data: { id: "expiring", status: "queued" } });
+        await createVideoGenerationTask(config, "move");
+        const pluginConfig = isolatedConfig();
+        pluginConfig.model = "plugin-expiring";
+        pluginConfig.capabilityConfigs.video.script = 'return new Blob(["video"], { type: "video/mp4" })';
+        await createVideoGenerationTask(pluginConfig, "move");
+        expect(getVideoTaskResourceCountsForTest()).toEqual({ snapshots: 1, pluginResults: 1 });
+        vi.advanceTimersByTime(10 * 60 * 1000 + 1);
+        expect(getVideoTaskResourceCountsForTest()).toEqual({ snapshots: 0, pluginResults: 0 });
+        vi.useRealTimers();
+    });
+
+    it("sanitizes API keys from plugin AbortError and axios cancellation while preserving cancellation semantics", async () => {
+        const config = createCapabilityRequestSnapshot(isolatedConfig(), "text", "text-model");
+        await expect(runModelPlugin({ capability: "text", script: 'throw new DOMException("TEXT_SECRET", "AbortError")', config })).rejects.toMatchObject({ name: "AbortError", message: "请求已取消" });
+        mockedAxios.request.mockRejectedValueOnce(new Error("cancelled TEXT_SECRET"));
+        mockedAxios.isCancel.mockReturnValueOnce(true);
+        await expect(runModelPlugin({ capability: "text", script: 'return await http.get("/cancel")', config })).rejects.toMatchObject({ name: "AbortError", message: "请求已取消" });
+    });
+
+    it("sanitizes video AbortError and releases its request snapshot", async () => {
+        const config = isolatedConfig();
+        config.model = "video-abort";
+        mockedAxios.post.mockResolvedValueOnce({ data: { id: "abort-task", status: "queued" } });
+        mockedAxios.get.mockRejectedValueOnce(new DOMException("VIDEO_SECRET", "AbortError"));
+        const task = await createVideoGenerationTask(config, "move");
+        await expect(pollVideoGenerationTask(config, task)).rejects.toMatchObject({ name: "AbortError", message: "请求已取消" });
+        expect(getVideoTaskResourceCountsForTest().snapshots).toBe(0);
     });
 
     it("identifies Seedance without validating incomplete video credentials", () => {

@@ -152,8 +152,9 @@ export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<
             args.onDelta,
         );
     } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") throw error;
-        if (axios.isCancel(error)) throw error;
+        if ((error instanceof DOMException && error.name === "AbortError") || axios.isCancel(error)) {
+            throw new DOMException("请求已取消", "AbortError");
+        }
         const message = error instanceof Error ? error.message : String(error);
         const sanitized = config.apiKey ? message.split(config.apiKey).join("[REDACTED]") : message;
         throw new Error(`模型调用脚本执行失败：${sanitized}`);
