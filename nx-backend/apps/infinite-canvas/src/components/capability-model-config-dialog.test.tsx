@@ -78,6 +78,9 @@ describe("CapabilityModelConfigDialog", () => {
 
         expect(document.querySelector('[data-capability-tab="video"]')?.getAttribute("aria-selected")).toBe("true");
         expect(document.querySelectorAll("[data-capability-tab]")).toHaveLength(4);
+        click(document.querySelector('[data-capability-tab="image"]')!);
+        expect(document.body.textContent).not.toContain("图片理解");
+        click(document.querySelector('[data-capability-tab="video"]')!);
         expect((document.querySelector('[data-testid="video-api-base"]') as HTMLInputElement).value).toBe("https://video.example/v1");
         expect((document.querySelector('[data-testid="video-model-id"]') as HTMLInputElement).value).toBe("video-model");
 

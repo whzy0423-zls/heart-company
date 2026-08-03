@@ -9,7 +9,7 @@ const INPUT_CLASS =
     "box-border block min-h-10 w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm text-[var(--foreground)] shadow-sm outline-none transition placeholder:text-[var(--muted-foreground)] focus:border-[var(--primary)]";
 
 const CAPABILITY_META: Record<ModelCapability, { label: string; description: string; icon: typeof Image; protocols: ApiCallFormat[] }> = {
-    image: { label: "图片", description: "生图、图片编辑与图片理解", icon: Image, protocols: ["openai", "gemini", "ark"] },
+    image: { label: "图片", description: "生图与图片编辑", icon: Image, protocols: ["openai", "gemini", "ark"] },
     video: { label: "视频", description: "视频生成与任务查询", icon: Video, protocols: ["openai", "ark"] },
     text: { label: "文本", description: "文本生成与流式对话", icon: FileText, protocols: ["openai", "gemini", "ark"] },
     audio: { label: "音频", description: "语音与音频生成", icon: AudioLines, protocols: ["openai", "ark"] },

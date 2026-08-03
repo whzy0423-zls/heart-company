@@ -318,7 +318,7 @@ export function createCapabilityRequestSnapshot(config: AiConfig, capability: Mo
         videoModel: capability === "video" ? resolved.model : "",
         textModel: capability === "text" ? resolved.model : "",
         audioModel: capability === "audio" ? resolved.model : "",
-        systemPrompt: config.systemPrompt,
+        systemPrompt: capability === "text" ? config.systemPrompt : "",
         reasoningEffort: config.reasoningEffort,
         quality: config.quality,
         imageSize: config.imageSize,

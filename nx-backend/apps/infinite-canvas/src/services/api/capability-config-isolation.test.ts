@@ -96,6 +96,7 @@ describe("capability request isolation", () => {
 
     it("builds isolated runtime snapshots for every canvas generation route", () => {
         const config = isolatedConfig();
+        config.systemPrompt = "TEXT_ONLY";
         const routes: Array<[CanvasGenerationRoute, "image" | "video" | "text" | "audio", string]> = [
             ["image-batch", "image", "IMAGE_SECRET"],
             ["image-edit", "image", "IMAGE_SECRET"],
@@ -110,6 +111,7 @@ describe("capability request isolation", () => {
             expect(canvasGenerationCapabilityForRoute(route)).toBe(capability);
             expect(snapshot.capability).toBe(capability);
             expect(snapshot.apiKey).toBe(key);
+            expect(snapshot.systemPrompt).toBe(capability === "text" ? "TEXT_ONLY" : "");
             expect(JSON.stringify(snapshot)).not.toContain(capability === "image" ? "VIDEO_SECRET" : "IMAGE_SECRET");
         }
     });
@@ -228,11 +230,27 @@ describe("capability request isolation", () => {
         expect(JSON.stringify([generated, edited])).not.toContain("TEXT_SECRET");
     });
 
+    it("does not forward text system prompt to image generation or edit plugins", async () => {
+        const config = isolatedConfig();
+        config.systemPrompt = "TEXT_ONLY";
+        config.capabilityConfigs.image.script = "return [`https://plugin.example/${encodeURIComponent(`${systemPrompt}|${prompt}`)}`]";
+
+        const generated = await requestCanvasImageBatch(config, "draw");
+        const edited = await requestCanvasImageEdit(config, "edit", [{ id: "ref", name: "ref.png", type: "image/png", dataUrl: "data:image/png;base64,AA==" }]);
+        const prompts = [generated[0].dataUrl, edited[0].dataUrl].map((dataUrl) => decodeURIComponent(new URL(dataUrl).pathname.slice(1)));
+
+        expect(prompts[0]).toBe("|draw");
+        expect(prompts[1]).toContain("edit");
+        expect(JSON.stringify(prompts)).not.toContain("TEXT_ONLY");
+    });
+
     it("uses only text credentials and script for image questions", async () => {
         const config = isolatedConfig();
+        config.systemPrompt = "TEXT_ONLY";
         config.model = "legacy-text::node-text-model";
+        config.capabilityConfigs.text.script = "return `${systemPrompt}|${messages.map((message) => `${message.role}:${message.content}`).join('|')}|${baseUrl}|${apiKey}|${model}`";
         const answer = await requestCanvasImageQuestion(config, [{ role: "user", content: "what is this" }], vi.fn());
-        expect(answer).toBe("https://text.example|TEXT_SECRET|node-text-model");
+        expect(answer).toBe("TEXT_ONLY|system:TEXT_ONLY|user:what is this|https://text.example|TEXT_SECRET|node-text-model");
     });
 
     it("uses only audio credentials and script for audio generation", async () => {
@@ -261,8 +279,26 @@ describe("capability request isolation", () => {
         expect(editOptions).toEqual(expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer IMAGE_SECRET" }) }));
     });
 
+    it("does not send text system prompt to image generation or edit HTTP requests", async () => {
+        const config = isolatedConfig();
+        config.systemPrompt = "TEXT_ONLY";
+        config.capabilityConfigs.image.script = "";
+        mockedAxios.post.mockResolvedValueOnce({ data: { data: [{ b64_json: "AA==" }] } }).mockResolvedValueOnce({ data: { data: [{ b64_json: "AQ==" }] } });
+
+        await requestCanvasImageBatch(config, "draw");
+        await requestCanvasImageEdit(config, "edit", [{ id: "ref", name: "ref.png", type: "image/png", dataUrl: "data:image/png;base64,AA==" }]);
+
+        const generateBody = mockedAxios.post.mock.calls[0][1] as { prompt?: string };
+        expect(generateBody.prompt).toBe("draw");
+        expect(JSON.stringify(generateBody)).not.toContain("TEXT_ONLY");
+        const editBody = mockedAxios.post.mock.calls[1][1] as FormData;
+        expect(String(editBody.get("prompt"))).toContain("edit");
+        expect(String(editBody.get("prompt"))).not.toContain("TEXT_ONLY");
+    });
+
     it("routes real text streaming through text base, key, protocol, and model", async () => {
         const config = isolatedConfig();
+        config.systemPrompt = "TEXT_ONLY";
         config.model = "legacy-text::node-text-model";
         config.capabilityConfigs.text.script = "";
         const fetchMock = vi.fn().mockResolvedValue(
@@ -282,6 +318,7 @@ describe("capability request isolation", () => {
                 body: expect.stringContaining('"model":"node-text-model"'),
             }),
         );
+        expect(fetchMock.mock.calls[0][1]?.body).toContain("TEXT_ONLY");
     });
 
     it("routes real audio HTTP through audio base, key, protocol, and model", async () => {
