@@ -223,6 +223,38 @@ describe("capability-specific node model UI", () => {
         cleanup({ container, root });
     });
 
+    it("does not copy a legacy video size when switching a config node to image", () => {
+        const node: CanvasNodeData = {
+            id: "config-video",
+            type: CanvasNodeType.Config,
+            title: "视频配置",
+            position: { x: 0, y: 0 },
+            width: 400,
+            height: 300,
+            metadata: { generationMode: "video", size: "720x1280" },
+        };
+        const onConfigChange = vi.fn();
+        const { container, root } = render(
+            <CanvasConfigNodePanel
+                node={node}
+                isRunning={false}
+                inputSummary={{ textCount: 0, imageCount: 0, videoCount: 0, audioCount: 0 }}
+                onConfigChange={onConfigChange}
+                onGenerate={() => undefined}
+                onStop={() => undefined}
+                onComposerToggle={() => undefined}
+            />,
+        );
+
+        const imageOption = Array.from(container.querySelectorAll(".ant-segmented-item")).find((item) => item.textContent?.includes("生图"))!;
+        click(imageOption);
+        const patch = onConfigChange.mock.calls[0][1];
+
+        expect(patch).toMatchObject({ generationMode: "image", model: undefined, size: undefined, count: undefined });
+        expect(patch.imageSize).toBeUndefined();
+        cleanup({ container, root });
+    });
+
     it("defaults config node to its generation capability model", () => {
         const node: CanvasNodeData = { id: "config-video", type: CanvasNodeType.Config, title: "视频", position: { x: 0, y: 0 }, width: 400, height: 300, metadata: { generationMode: "video" } };
         const { container, root } = render(

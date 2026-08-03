@@ -185,6 +185,39 @@ describe("capability request isolation", () => {
         expect(buildGenerationConfig(config, configNode, "text")).toMatchObject({ size: "legacy-text-size", count: "7" });
     });
 
+    it("maps legacy config node size to the node generation mode", () => {
+        const config = {
+            ...isolatedConfig(),
+            size: "legacy-text-size",
+            count: "7",
+            imageSize: "global-image-size",
+            imageCount: "4",
+            videoSize: "global-video-size",
+        };
+        const legacyImageNode = {
+            id: "config-legacy-image",
+            type: CanvasNodeType.Config,
+            title: "配置",
+            position: { x: 0, y: 0 },
+            width: 400,
+            height: 260,
+            metadata: { size: "16:9", count: 3 },
+        };
+        const legacyVideoNode = {
+            id: "config-legacy-video",
+            type: CanvasNodeType.Config,
+            title: "配置",
+            position: { x: 0, y: 0 },
+            width: 400,
+            height: 260,
+            metadata: { generationMode: "video" as const, size: "720x1280" },
+        };
+
+        expect(buildGenerationConfig(config, legacyImageNode, "image")).toMatchObject({ imageSize: "16:9", size: "16:9", imageCount: "3", count: "3" });
+        expect(buildGenerationConfig(config, legacyVideoNode, "video")).toMatchObject({ videoSize: "720x1280", size: "720x1280" });
+        expect(buildGenerationConfig(config, legacyVideoNode, "image")).toMatchObject({ imageSize: "global-image-size", size: "global-image-size", imageCount: "4", count: "4" });
+    });
+
     it("uses only image credentials and script for generation and edit while decoding a legacy model override", async () => {
         const config = isolatedConfig();
         const generated = await requestCanvasImageBatch(config, "draw");

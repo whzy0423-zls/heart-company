@@ -154,8 +154,12 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
 function configModePatch(node: CanvasNodeData, mode: CanvasGenerationMode): Partial<CanvasNodeMetadata> {
     const patch: Partial<CanvasNodeMetadata> = { generationMode: mode, model: undefined, size: undefined, count: undefined };
     if (mode === "image") {
-        patch.imageSize = node.metadata?.imageSize || node.metadata?.size;
-        patch.imageCount = node.metadata?.imageCount || node.metadata?.count;
+        const previousMode = node.metadata?.generationMode;
+        const legacySizeIsImage = !previousMode || previousMode === "image";
+        const imageSize = node.metadata?.imageSize || (legacySizeIsImage ? node.metadata?.size : undefined);
+        const imageCount = node.metadata?.imageCount || (legacySizeIsImage ? node.metadata?.count : undefined);
+        if (imageSize !== undefined) patch.imageSize = imageSize;
+        if (imageCount !== undefined) patch.imageCount = imageCount;
     }
     return patch;
 }

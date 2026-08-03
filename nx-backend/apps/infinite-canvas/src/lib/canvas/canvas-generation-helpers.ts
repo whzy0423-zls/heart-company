@@ -132,9 +132,12 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
     const imageCount = config.imageCount || config.canvasImageCount || config.count || defaultConfig.imageCount;
     const videoSize = config.videoSize || config.size || defaultConfig.videoSize;
     const isConfigNode = node?.type === CanvasNodeType.Config;
-    const nodeImageSize = isConfigNode ? node?.metadata?.imageSize || node?.metadata?.size : node?.metadata?.size;
-    const nodeImageCount = isConfigNode ? node?.metadata?.imageCount || node?.metadata?.count : node?.metadata?.count;
-    const nodeVideoSize = isConfigNode ? node?.metadata?.videoSize : node?.metadata?.size;
+    const nodeMode = isConfigNode ? node?.metadata?.generationMode : undefined;
+    const legacySizeIsImage = !nodeMode || nodeMode === "image";
+    const legacySizeIsVideo = nodeMode === "video";
+    const nodeImageSize = isConfigNode ? node?.metadata?.imageSize || (legacySizeIsImage ? node?.metadata?.size : undefined) : node?.metadata?.size;
+    const nodeImageCount = isConfigNode ? node?.metadata?.imageCount || (legacySizeIsImage ? node?.metadata?.count : undefined) : node?.metadata?.count;
+    const nodeVideoSize = isConfigNode ? node?.metadata?.videoSize || (legacySizeIsVideo ? node?.metadata?.size : undefined) : node?.metadata?.size;
     const defaultSize = mode === "video" ? videoSize : mode === "image" ? imageSize : config.size || defaultConfig.size;
     const defaultCount = mode === "image" ? imageCount : config.count || defaultConfig.count;
     const effectiveSize = mode === "video" ? nodeVideoSize || defaultSize : mode === "image" ? nodeImageSize || defaultSize : defaultSize;
