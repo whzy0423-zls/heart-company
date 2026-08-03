@@ -1,0 +1,107 @@
+import { describe, expect, it } from "vitest";
+
+import { normalizeCanvasExportFile, sanitizeCanvasProjectForExport } from "./canvas-export";
+import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
+
+function fixtureProject(): CanvasProject {
+    return {
+        id: "project-1",
+        title: "Export boundary",
+        createdAt: "2026-08-03T00:00:00.000Z",
+        updatedAt: "2026-08-03T00:00:00.000Z",
+        nodes: [
+            {
+                id: "node-1",
+                type: "image",
+                title: "Image",
+                position: { x: 0, y: 0 },
+                width: 320,
+                height: 240,
+                metadata: {
+                    model: "legacy-channel::image-model",
+                    prompt: "keep this prompt",
+                    nested: {
+                        apiKey: "NODE_SECRET",
+                        apiBase: "https://node-secret.example/v1",
+                        capabilityConfigs: { image: { apiKey: "CAPABILITY_SECRET" } },
+                    },
+                },
+            },
+        ],
+        connections: [],
+        chatSessions: [
+            {
+                id: "chat-1",
+                title: "Chat",
+                createdAt: "2026-08-03T00:00:00.000Z",
+                updatedAt: "2026-08-03T00:00:00.000Z",
+                messages: [
+                    {
+                        id: "message-1",
+                        role: "assistant",
+                        text: "ok",
+                        detail: {
+                            config: {
+                                baseUrl: "https://chat-secret.example/v1",
+                                apiKey: "CHAT_SECRET",
+                                model: "private-model",
+                            },
+                        },
+                    },
+                ],
+            },
+        ],
+        activeChatId: "chat-1",
+        backgroundMode: "lines",
+        showImageInfo: false,
+        viewport: { x: 0, y: 0, k: 1 },
+    } as unknown as CanvasProject;
+}
+
+function collectKeysAndStrings(value: unknown, keys: string[] = [], strings: string[] = []) {
+    if (typeof value === "string") strings.push(value);
+    if (!value || typeof value !== "object") return { keys, strings };
+    if (Array.isArray(value)) {
+        value.forEach((item) => collectKeysAndStrings(item, keys, strings));
+        return { keys, strings };
+    }
+    Object.entries(value).forEach(([key, item]) => {
+        keys.push(key);
+        collectKeysAndStrings(item, keys, strings);
+    });
+    return { keys, strings };
+}
+
+describe("canvas project export boundary", () => {
+    it("keeps the raw node model override while recursively removing model credentials and config objects", () => {
+        const exported = sanitizeCanvasProjectForExport(fixtureProject());
+        const scanned = collectKeysAndStrings(exported);
+        const normalizedKeys = scanned.keys.map((key) => key.toLowerCase().replace(/[^a-z]/g, ""));
+
+        expect(exported.nodes[0]?.metadata?.model).toBe("image-model");
+        expect(exported.nodes[0]?.metadata?.prompt).toBe("keep this prompt");
+        expect(normalizedKeys).not.toContain("apikey");
+        expect(normalizedKeys).not.toContain("apibase");
+        expect(normalizedKeys).not.toContain("baseurl");
+        expect(normalizedKeys).not.toContain("capabilityconfigs");
+        expect(normalizedKeys).not.toContain("config");
+        expect(scanned.strings).not.toContain("NODE_SECRET");
+        expect(scanned.strings).not.toContain("CAPABILITY_SECRET");
+        expect(scanned.strings).not.toContain("CHAT_SECRET");
+        expect(scanned.strings).not.toContain("https://node-secret.example/v1");
+        expect(scanned.strings).not.toContain("https://chat-secret.example/v1");
+    });
+
+    it("normalizes legacy models at the projects.json boundary used by the import page", () => {
+        const imported = normalizeCanvasExportFile({
+            app: "infinite-canvas",
+            version: 3,
+            exportedAt: "2026-08-03T00:00:00.000Z",
+            projects: [{ project: fixtureProject(), files: [] }, null, { broken: true }],
+        });
+
+        expect(imported.projects).toHaveLength(1);
+        expect(imported.projects[0]?.project.nodes[0]?.metadata?.model).toBe("image-model");
+        expect(JSON.stringify(imported)).not.toContain("NODE_SECRET");
+    });
+});

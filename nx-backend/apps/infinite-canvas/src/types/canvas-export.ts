@@ -1,8 +1,10 @@
 import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
 
+export const CANVAS_EXPORT_VERSION = 3 as const;
+
 export type CanvasExportFile = {
     app: "infinite-canvas";
-    version: 3;
+    version: typeof CANVAS_EXPORT_VERSION;
     exportedAt: string;
     projects: CanvasProjectExportItem[];
 };
