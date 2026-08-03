@@ -144,12 +144,14 @@ type ConfigStore = {
     webdav: WebdavSyncConfig;
     isConfigOpen: boolean;
     configTab: ConfigTabKey;
+    targetCapability: ModelCapability;
     shouldPromptContinue: boolean;
     updateConfig: <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
     updateCapabilityConfig: (capability: ModelCapability, patch: Partial<CapabilityModelConfig>) => void;
     updateWebdavConfig: <K extends keyof WebdavSyncConfig>(key: K, value: WebdavSyncConfig[K]) => void;
     isAiConfigReady: (config: AiConfig, capability: ModelCapability, modelOverride?: string) => boolean;
-    openConfigDialog: (shouldPromptContinue?: boolean, tab?: ConfigTabKey) => void;
+    openConfigDialog: (shouldPromptContinue?: boolean, tab?: ConfigTabKey, targetCapability?: ModelCapability) => void;
+    setTargetCapability: (targetCapability: ModelCapability) => void;
     setConfigDialogOpen: (isOpen: boolean) => void;
     clearPromptContinue: () => void;
 };
@@ -397,6 +399,7 @@ export const useConfigStore = create<ConfigStore>()(
             webdav: defaultWebdavSyncConfig,
             isConfigOpen: false,
             configTab: "channels",
+            targetCapability: "image",
             shouldPromptContinue: false,
             updateConfig: (key, value) =>
                 set((state) => ({
@@ -415,7 +418,9 @@ export const useConfigStore = create<ConfigStore>()(
                     },
                 })),
             isAiConfigReady: (config, capability, modelOverride) => isAiConfigReady(config, capability, modelOverride),
-            openConfigDialog: (shouldPromptContinue = false, configTab = "channels") => set({ isConfigOpen: true, shouldPromptContinue, configTab }),
+            openConfigDialog: (shouldPromptContinue = false, configTab = "channels", targetCapability) =>
+                set((state) => ({ isConfigOpen: true, shouldPromptContinue, configTab, targetCapability: targetCapability ?? state.targetCapability })),
+            setTargetCapability: (targetCapability) => set({ targetCapability }),
             setConfigDialogOpen: (isConfigOpen) => set({ isConfigOpen }),
             clearPromptContinue: () => set({ shouldPromptContinue: false }),
         }),

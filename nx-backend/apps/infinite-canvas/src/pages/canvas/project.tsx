@@ -65,6 +65,7 @@ import { getNodeDefinition, isBuiltinNodeType as isBuiltinType, useNodeRegistryV
 import { registerBuiltinNodes } from "@/components/canvas/nodes/builtin-nodes";
 import { CanvasRefreshShell } from "@/components/canvas/canvas-refresh-shell";
 import { CanvasTopBar } from "@/components/canvas/canvas-top-bar";
+import { CapabilityModelConfigDialog } from "@/components/capability-model-config-dialog";
 import { ConnectionCreateMenu, NodeCreateMenu, type PendingConnectionCreate } from "@/components/canvas/canvas-create-menus";
 import {
     CanvasNodeType,
@@ -1663,7 +1664,7 @@ function InfiniteCanvasPage() {
             if (!node.metadata?.content) return;
             const generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1", size: node.metadata?.size || "auto" };
             if (!isAiConfigReady(generationConfig, "image", generationConfig.model)) {
-                openConfigDialog(true);
+                openConfigDialog(true, "channels", "image");
                 return;
             }
             const userPrompt = payload.prompt.trim();
@@ -1738,7 +1739,7 @@ function InfiniteCanvasPage() {
             if (!node.metadata?.content) return;
             const generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1" };
             if (!isAiConfigReady(generationConfig, "image", generationConfig.model)) {
-                openConfigDialog(true);
+                openConfigDialog(true, "channels", "image");
                 return;
             }
             const childId = nanoid();
@@ -1981,7 +1982,7 @@ function InfiniteCanvasPage() {
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
             if (!isAiConfigReady(generationConfig, mode, generationConfig.model)) {
-                openConfigDialog(true);
+                openConfigDialog(true, "channels", mode);
                 return;
             }
 
@@ -2418,7 +2419,7 @@ function InfiniteCanvasPage() {
                     : { ...buildGenerationConfig(effectiveConfig, sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image"), count: "1" };
             const retryCapability = node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image";
             if (!isAiConfigReady(generationConfig, retryCapability, generationConfig.model)) {
-                openConfigDialog(true);
+                openConfigDialog(true, "channels", retryCapability);
                 return;
             }
 
@@ -2729,6 +2730,7 @@ function InfiniteCanvasPage() {
                     onDeleteProject={deleteCurrentProject}
                     onExportProject={exportCurrentProject}
                     onImportImage={() => handleUploadRequest()}
+                    onModelConfig={() => openConfigDialog(false, "channels")}
                     onUndo={undoCanvas}
                     onRedo={redoCanvas}
                 />
@@ -2978,6 +2980,7 @@ function InfiniteCanvasPage() {
                 </Modal>
 
                 <AssetPickerModal open={assetPickerOpen} onInsert={handleAssetInsert} onClose={() => setAssetPickerOpen(false)} />
+                <CapabilityModelConfigDialog />
             </section>
         </main>
     );

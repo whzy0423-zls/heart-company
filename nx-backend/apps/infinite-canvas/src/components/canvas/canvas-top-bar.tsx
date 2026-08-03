@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Download, Images, Keyboard, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Trash2, Undo2, Upload } from "lucide-react";
+import { Download, Images, Keyboard, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Settings2, Trash2, Undo2, Upload } from "lucide-react";
 import { Button, Dropdown, Modal, Tooltip } from "antd";
 
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -21,6 +21,7 @@ export function CanvasTopBar({
     onDeleteProject,
     onExportProject,
     onImportImage,
+    onModelConfig,
     onUndo,
     onRedo,
 }: {
@@ -38,6 +39,7 @@ export function CanvasTopBar({
     onDeleteProject: () => void;
     onExportProject: () => void;
     onImportImage: () => void;
+    onModelConfig: () => void;
     onUndo: () => void;
     onRedo: () => void;
 }) {
@@ -84,6 +86,8 @@ export function CanvasTopBar({
                                 { key: "import", icon: <Upload className="size-4" />, label: "导入资产", onClick: onImportImage },
                                 { key: "export", icon: <Download className="size-4" />, label: "导出当前画布", onClick: onExportProject },
                                 { type: "divider" },
+                                { key: "model-config", icon: <Settings2 className="size-4" />, label: "模型配置", onClick: onModelConfig },
+                                { type: "divider" },
                                 { key: "undo", disabled: !canUndo, icon: <Undo2 className="size-4" />, label: <MenuLabel text="撤销" shortcut="⌘ Z" />, onClick: onUndo },
                                 { key: "redo", disabled: !canRedo, icon: <Redo2 className="size-4" />, label: <MenuLabel text="重做" shortcut="⌘ ⇧ Z / ⌘ Y" />, onClick: onRedo },
                             ],
@@ -121,7 +125,10 @@ export function CanvasTopBar({
                     </div>
                 </div>
 
-                <div className="pointer-events-auto flex items-center gap-1.5">
+                <div className="pointer-events-auto flex shrink-0 items-center gap-1.5">
+                    <Button type="text" className="!h-10 !rounded-xl !px-3 !font-medium" style={{ background: theme.toolbar.panel, color: theme.node.text }} icon={<Settings2 className="size-4" />} onClick={onModelConfig}>
+                        模型配置
+                    </Button>
                     <Button type="text" className="!h-10 !rounded-xl !px-3 !font-medium" style={{ background: theme.toolbar.panel, color: theme.node.text }} icon={<Keyboard className="size-4" />} onClick={() => setShortcutsOpen(true)}>
                         快捷键
                     </Button>

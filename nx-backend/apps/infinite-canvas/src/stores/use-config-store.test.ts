@@ -1,15 +1,30 @@
-import { describe, expect, it } from "vitest";
-import {
-    defaultConfig,
-    isAiConfigReady,
-    migrateConfigState,
-    resolveCapabilityRequestConfig,
-    updateCapabilityConfig,
-    validateCapabilityConfig,
-    type AiConfig,
-} from "./use-config-store";
+import { describe, expect, it, vi } from "vitest";
+
+vi.hoisted(() => {
+    const memory = new Map<string, string>();
+    Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        value: {
+            getItem: (key: string) => memory.get(key) ?? null,
+            setItem: (key: string, value: string) => memory.set(key, String(value)),
+            removeItem: (key: string) => memory.delete(key),
+            clear: () => memory.clear(),
+        },
+    });
+});
+import { defaultConfig, isAiConfigReady, migrateConfigState, resolveCapabilityRequestConfig, updateCapabilityConfig, validateCapabilityConfig, useConfigStore, type AiConfig } from "./use-config-store";
 
 describe("capability model config store", () => {
+    it("opens model settings at an explicit capability while keeping legacy arguments compatible", () => {
+        useConfigStore.setState({ isConfigOpen: false, targetCapability: "image", shouldPromptContinue: false });
+        useConfigStore.getState().openConfigDialog(true, "channels", "audio");
+        expect(useConfigStore.getState()).toMatchObject({ isConfigOpen: true, shouldPromptContinue: true, configTab: "channels", targetCapability: "audio" });
+
+        useConfigStore.getState().setConfigDialogOpen(false);
+        useConfigStore.getState().openConfigDialog();
+        expect(useConfigStore.getState().targetCapability).toBe("audio");
+    });
+
     it("updates one capability without changing the other capability configs", () => {
         const before = structuredClone(defaultConfig);
         const after = updateCapabilityConfig(before, "image", { apiKey: "IMG_KEY", modelId: "image-v2" });
