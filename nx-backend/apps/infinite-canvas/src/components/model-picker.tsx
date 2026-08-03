@@ -3,7 +3,7 @@ import { Cpu } from "lucide-react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { modelOptionLabel, modelOptionName, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { isAiConfigReady, modelOptionLabel, modelOptionName, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
 type ModelPickerProps = {
     config: AiConfig;
@@ -19,8 +19,15 @@ type ModelPickerProps = {
 export function ModelPicker({ config, value, onChange, capability, className, fullWidth = false, placeholder = "选择模型", onMissingConfig }: ModelPickerProps) {
     const pickerId = useId();
     const [open, setOpen] = useState(false);
-    const options = useMemo(() => Array.from(new Set([...(config.channelMode === "local" && !capability ? [value] : []), ...selectableModelsByCapability(config, capability)].filter((model): model is string => Boolean(model)))), [capability, config, value]);
-    const current = value || "";
+    const options = useMemo(() => {
+        if (capability) {
+            const configuredModel = config.capabilityConfigs?.[capability]?.modelId?.trim() || "";
+            return Array.from(new Set([configuredModel, value].filter((model): model is string => Boolean(model))));
+        }
+        return Array.from(new Set([...(config.channelMode === "local" ? [value] : []), ...selectableModelsByCapability(config)].filter((model): model is string => Boolean(model))));
+    }, [capability, config, value]);
+    const current = value || (capability ? config.capabilityConfigs?.[capability]?.modelId || "" : "");
+    const displayLabel = current ? (capability ? modelOptionName(current) : modelOptionLabel(config, current)) : placeholder;
 
     useEffect(() => {
         const closeOtherPicker = (event: Event) => {
@@ -35,7 +42,7 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
             open={open}
             value={current}
             onOpenChange={(nextOpen) => {
-                if (nextOpen && !options.length && config.channelMode === "local") onMissingConfig?.();
+                if (nextOpen && (capability ? !isAiConfigReady(config, capability, current) : !options.length && config.channelMode === "local")) onMissingConfig?.();
                 if (nextOpen) window.dispatchEvent(new CustomEvent("model-picker-open", { detail: pickerId }));
                 setOpen(nextOpen);
             }}
@@ -50,10 +57,10 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
                 )}
                 onMouseDown={(event) => event.stopPropagation()}
                 onPointerDown={(event) => event.stopPropagation()}
-                title={current ? modelOptionLabel(config, current) : placeholder}
+                title={displayLabel}
             >
                 <ModelIcon model={current} />
-                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current ? modelOptionLabel(config, current) : placeholder}</span>
+                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{displayLabel}</span>
             </SelectTrigger>
             <SelectContent
                 data-canvas-no-zoom
@@ -68,7 +75,7 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
                 {options.length ? (
                     options.map((model) => (
                         <SelectItem key={model} value={model} textValue={modelOptionLabel(config, model)}>
-                            <ModelLabel config={config} model={model} />
+                            <ModelLabel config={config} model={model} capability={capability} />
                         </SelectItem>
                     ))
                 ) : (
@@ -83,15 +90,15 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
 
 function emptyModelLabel(config: AiConfig, capability?: ModelCapability) {
     const label = capability === "image" ? "生图" : capability === "video" ? "视频" : capability === "text" ? "文本" : capability === "audio" ? "音频" : "";
-    if (capability && config.models.length) return `请先在渠道里为${label}指定模型`;
+    if (capability && config.capabilityConfigs?.[capability]?.modelId) return `暂无匹配的${label}模型`;
     return config.models.length ? `暂无匹配的${label}模型` : "请先到配置里添加渠道和模型";
 }
 
-function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
+function ModelLabel({ config, model, capability }: { config: AiConfig; model: string; capability?: ModelCapability }) {
     return (
         <span className="flex min-w-0 items-center gap-2">
             <ModelIcon model={model} />
-            <span className="truncate">{modelOptionLabel(config, model)}</span>
+            <span className="truncate">{capability ? modelOptionName(model) : modelOptionLabel(config, model)}</span>
         </span>
     );
 }
@@ -105,17 +112,17 @@ function resolveModelIcon(model: string) {
     const name = model.toLowerCase();
     const icon = name.includes("claude") || name.includes("anthropic")
         ? "claude"
-        : name.includes("gemini") || name.includes("google")
-          ? "gemini"
-          : name.includes("gpt") || name.includes("openai")
-            ? "openai"
-            : name.includes("grok")
-              ? "grok"
-              : name.includes("deepseek")
-                ? "deepseek"
-                : name.includes("glm")
-                  ? "glm"
-                  : "";
+            : name.includes("gemini") || name.includes("google")
+              ? "gemini"
+              : name.includes("gpt") || name.includes("openai")
+                ? "openai"
+                : name.includes("grok")
+                  ? "grok"
+                  : name.includes("deepseek")
+                    ? "deepseek"
+                    : name.includes("glm")
+                      ? "glm"
+                      : "";
     if (icon) return `${import.meta.env.BASE_URL}icons/${icon}.svg`;
     return "";
 }
