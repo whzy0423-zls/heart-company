@@ -12,9 +12,28 @@ vi.hoisted(() => {
         },
     });
 });
-import { defaultConfig, isAiConfigReady, migrateConfigState, resolveCapabilityRequestConfig, updateCapabilityConfig, validateCapabilityConfig, useConfigStore, type AiConfig } from "./use-config-store";
+import { CONFIG_STORE_KEY, defaultConfig, isAiConfigReady, migrateConfigState, resolveCapabilityRequestConfig, updateCapabilityConfig, validateCapabilityConfig, useConfigStore, type AiConfig } from "./use-config-store";
 
 describe("capability model config store", () => {
+    it("persists capability credentials and dedicated parameters, then rehydrates them from localStorage", async () => {
+        localStorage.clear();
+        useConfigStore.setState({ config: structuredClone(defaultConfig) });
+        useConfigStore.getState().updateCapabilityConfig("audio", { apiBase: "https://audio.persist/v1", apiKey: "persisted-audio-key", modelId: "audio-persisted" });
+        useConfigStore.getState().updateConfig("audioVoice", "nova");
+        useConfigStore.getState().updateConfig("audioFormat", "wav");
+
+        const persisted = localStorage.getItem(CONFIG_STORE_KEY);
+        expect(persisted).toContain("audio-persisted");
+        expect(persisted).toContain("nova");
+
+        useConfigStore.setState({ config: structuredClone(defaultConfig) });
+        localStorage.setItem(CONFIG_STORE_KEY, persisted!);
+        await useConfigStore.persist.rehydrate();
+
+        expect(useConfigStore.getState().config.capabilityConfigs.audio).toMatchObject({ apiBase: "https://audio.persist/v1", apiKey: "persisted-audio-key", modelId: "audio-persisted" });
+        expect(useConfigStore.getState().config).toMatchObject({ audioVoice: "nova", audioFormat: "wav" });
+    });
+
     it("opens model settings at an explicit capability while keeping legacy arguments compatible", () => {
         useConfigStore.setState({ isConfigOpen: false, targetCapability: "image", shouldPromptContinue: false });
         useConfigStore.getState().openConfigDialog(true, "channels", "audio");

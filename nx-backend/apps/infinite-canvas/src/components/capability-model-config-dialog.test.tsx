@@ -3,8 +3,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CapabilityModelConfigDialog } from "./capability-model-config-dialog";
+import { CanvasConfigNodePanel } from "./canvas/canvas-config-node-panel";
 import { CanvasTopBar } from "./canvas/canvas-top-bar";
 import { createDefaultCapabilityConfigs, defaultConfig, useConfigStore, type ModelCapability } from "@/stores/use-config-store";
+import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 
 vi.hoisted(() => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -33,6 +35,10 @@ function changeField(element: HTMLInputElement | HTMLTextAreaElement | HTMLSelec
 
 function click(element: Element) {
     act(() => element.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+}
+
+function pointerDown(element: Element) {
+    act(() => element.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 })));
 }
 
 describe("CapabilityModelConfigDialog", () => {
@@ -83,18 +89,32 @@ describe("CapabilityModelConfigDialog", () => {
         expect(useConfigStore.getState().targetCapability).toBe("audio");
     });
 
-    it("uses a password input, keeps the advanced script collapsed, and saves only the active capability", () => {
+    it("toggles API key visibility, keeps advanced script collapsed, validates required fields, and reports a successful continuation save", () => {
         const before = useConfigStore.getState().config.capabilityConfigs;
+        useConfigStore.setState({ shouldPromptContinue: true });
         act(() => root.render(<CapabilityModelConfigDialog />));
 
         const keyInput = document.querySelector('[data-testid="video-api-key"]') as HTMLInputElement;
         expect(keyInput.type).toBe("password");
         expect(document.body.textContent).not.toContain("video-secret-key");
+        click(document.querySelector('[data-testid="video-api-key-visibility"]')!);
+        expect(keyInput.type).toBe("text");
+        click(document.querySelector('[data-testid="video-api-key-visibility"]')!);
+        expect(keyInput.type).toBe("password");
 
         const advanced = document.querySelector('[data-testid="video-advanced"]') as HTMLDetailsElement;
         expect(advanced.open).toBe(false);
         click(advanced.querySelector("summary")!);
         expect(advanced.open).toBe(true);
+
+        changeField(document.querySelector('[data-testid="video-api-base"]') as HTMLInputElement, "");
+        changeField(keyInput, "");
+        changeField(document.querySelector('[data-testid="video-model-id"]') as HTMLInputElement, "");
+        click(document.querySelector('[data-testid="save-capability-config"]')!);
+        expect(useConfigStore.getState().isConfigOpen).toBe(true);
+        expect(document.querySelector('[role="alert"]')?.textContent).toContain("API Base");
+        expect(document.querySelector('[role="alert"]')?.textContent).toContain("API Key");
+        expect(document.querySelector('[role="alert"]')?.textContent).toContain("模型 ID");
 
         changeField(document.querySelector('[data-testid="video-api-base"]') as HTMLInputElement, "https://new-video.example/v1");
         changeField(keyInput, "new-video-secret");
@@ -115,7 +135,142 @@ describe("CapabilityModelConfigDialog", () => {
         expect(after.text).toBe(before.text);
         expect(after.audio).toBe(before.audio);
         expect(useConfigStore.getState().isConfigOpen).toBe(false);
+        expect(useConfigStore.getState().shouldPromptContinue).toBe(false);
+        expect(document.body.textContent).toContain("配置已保存，请重新执行刚才的生成操作");
         expect(document.body.textContent).not.toContain("new-video-secret");
+    });
+
+    it.each([
+        {
+            capability: "image" as const,
+            fields: [
+                ["image-quality", "high"],
+                ["image-size", "16:9"],
+                ["image-background", "transparent"],
+                ["image-count", "4"],
+            ],
+            expected: { quality: "high", size: "16:9", background: "transparent", count: "4" },
+        },
+        {
+            capability: "video" as const,
+            fields: [
+                ["video-seconds", "12"],
+                ["video-quality", "1080"],
+                ["video-generate-audio", "false"],
+                ["video-watermark", "true"],
+            ],
+            expected: { videoSeconds: "12", vquality: "1080", videoGenerateAudio: "false", videoWatermark: "true" },
+        },
+        {
+            capability: "text" as const,
+            fields: [
+                ["text-system-prompt", "You are concise."],
+                ["text-reasoning-effort", "high"],
+            ],
+            expected: { systemPrompt: "You are concise.", reasoningEffort: "high" },
+        },
+        {
+            capability: "audio" as const,
+            fields: [
+                ["audio-voice", "nova"],
+                ["audio-format", "wav"],
+                ["audio-speed", "1.25"],
+                ["audio-instructions", "Warm and calm"],
+            ],
+            expected: { audioVoice: "nova", audioFormat: "wav", audioSpeed: "1.25", audioInstructions: "Warm and calm" },
+        },
+    ])("edits and saves $capability-specific parameters without changing other capability objects", ({ capability, fields, expected }) => {
+        useConfigStore.getState().openConfigDialog(false, "channels", capability);
+        const before = useConfigStore.getState().config.capabilityConfigs;
+        act(() => root.render(<CapabilityModelConfigDialog />));
+
+        changeField(document.querySelector(`[data-testid="${capability}-model-id"]`) as HTMLInputElement, `${capability}-updated-model`);
+        for (const [testId, value] of fields) {
+            changeField(document.querySelector(`[data-testid="${testId}"]`) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement, value);
+        }
+        click(document.querySelector('[data-testid="save-capability-config"]')!);
+
+        const state = useConfigStore.getState();
+        expect(state.config).toMatchObject(expected);
+        expect(state.config.capabilityConfigs[capability].modelId).toBe(`${capability}-updated-model`);
+        for (const other of capabilities.filter((item) => item !== capability)) {
+            expect(state.config.capabilityConfigs[other]).toBe(before[other]);
+        }
+    });
+
+    it("clears the continuation flag when the dialog is cancelled", () => {
+        useConfigStore.setState({ shouldPromptContinue: true });
+        act(() => root.render(<CapabilityModelConfigDialog />));
+        click(document.querySelector('[data-testid="cancel-capability-config"]')!);
+        expect(useConfigStore.getState()).toMatchObject({ isConfigOpen: false, shouldPromptContinue: false });
+    });
+
+    it("rejects a persisted protocol that the target capability does not support", () => {
+        const config = useConfigStore.getState().config;
+        useConfigStore.setState({
+            config: {
+                ...config,
+                capabilityConfigs: {
+                    ...config.capabilityConfigs,
+                    video: { ...config.capabilityConfigs.video, apiFormat: "gemini" },
+                },
+            },
+        });
+        act(() => root.render(<CapabilityModelConfigDialog />));
+        click(document.querySelector('[data-testid="save-capability-config"]')!);
+        expect(useConfigStore.getState().isConfigOpen).toBe(true);
+        expect(document.querySelector('[role="alert"]')?.textContent).toContain("不支持 gemini 协议");
+    });
+});
+
+describe("real missing-config canvas entry", () => {
+    it("opens the dialog at the generation capability used by the config node", () => {
+        const container = document.createElement("div");
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        useConfigStore.setState({
+            config: {
+                ...defaultConfig,
+                channels: [],
+                models: [],
+                capabilityConfigs: {
+                    ...createDefaultCapabilityConfigs(),
+                    video: { apiBase: "", apiKey: "", apiFormat: "openai", modelId: "" },
+                },
+            },
+            isConfigOpen: false,
+            targetCapability: "image",
+        });
+        const node: CanvasNodeData = {
+            id: "config-video",
+            type: CanvasNodeType.Config,
+            title: "视频配置",
+            position: { x: 0, y: 0 },
+            width: 420,
+            height: 260,
+            metadata: { generationMode: "video", composerContent: "生成视频" },
+        };
+
+        act(() =>
+            root.render(
+                <CanvasConfigNodePanel
+                    node={node}
+                    isRunning={false}
+                    inputSummary={{ textCount: 1, imageCount: 0, videoCount: 0, audioCount: 0 }}
+                    onConfigChange={() => undefined}
+                    onGenerate={() => undefined}
+                    onStop={() => undefined}
+                    onComposerToggle={() => undefined}
+                />,
+            ),
+        );
+        const trigger = container.querySelector(".canvas-composer-model-picker")!;
+        pointerDown(trigger);
+        click(trigger);
+        expect(useConfigStore.getState()).toMatchObject({ isConfigOpen: true, targetCapability: "video", shouldPromptContinue: true });
+
+        act(() => root.unmount());
+        container.remove();
     });
 });
 
