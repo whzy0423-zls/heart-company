@@ -10,7 +10,6 @@ export function createCanvasNode(type: CanvasNodeTypeId, position: Position, met
     const spec = getNodeSpec(type);
     const id = `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const initialMetadata = { ...spec.metadata, ...metadata };
-    if (type === CanvasNodeType.Config) delete initialMetadata.model;
 
     return {
         id,

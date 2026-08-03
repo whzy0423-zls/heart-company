@@ -85,6 +85,8 @@ describe("capability-specific node model UI", () => {
         pointerDown(trigger);
         click(trigger);
         expect(onMissingConfig).toHaveBeenCalledTimes(1);
+        expect(document.querySelector("[data-slot=select-content]")).toBeNull();
+        expect(trigger.getAttribute("data-state")).toBe("closed");
         cleanup({ container, root });
     });
 
