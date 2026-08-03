@@ -306,7 +306,9 @@ function normalizeCapabilityConfig(value: unknown, fallback: CapabilityModelConf
 
 function migrateLegacyCapability(rawConfig: UnknownRecord, capability: ModelCapability): CapabilityModelConfig {
     const modelField = capability === "image" ? "imageModel" : capability === "video" ? "videoModel" : capability === "text" ? "textModel" : "audioModel";
-    const selectedValue = stringValue(rawConfig[modelField]) || (capability === "text" ? stringValue(rawConfig.model) : "");
+    const legacyDefaultModel = stringValue(rawConfig.model);
+    const guessedDefaultModel = legacyDefaultModel && guessCapability(modelOptionName(legacyDefaultModel)) === capability ? legacyDefaultModel : "";
+    const selectedValue = stringValue(rawConfig[modelField]) || guessedDefaultModel;
     const channels = Array.isArray(rawConfig.channels) ? rawConfig.channels.map(asRecord) : [];
     if (channels.length) {
         const decoded = decodeChannelModel(selectedValue);

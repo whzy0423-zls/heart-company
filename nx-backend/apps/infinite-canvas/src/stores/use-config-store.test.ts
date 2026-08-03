@@ -84,6 +84,21 @@ describe("capability model config store", () => {
         expect(migrated.config.capabilityConfigs.image.modelId).toBe("legacy-image");
     });
 
+    it("assigns a legacy flat model to its guessed capability without polluting other capabilities", () => {
+        const migrated = migrateConfigState({
+            config: {
+                baseUrl: "https://legacy.example",
+                apiKey: "legacy-key",
+                apiFormat: "openai",
+                model: "default::gpt-image-2",
+            },
+        });
+        expect(migrated.config.capabilityConfigs.image).toMatchObject({ apiBase: "https://legacy.example", apiKey: "legacy-key", modelId: "gpt-image-2" });
+        expect(migrated.config.capabilityConfigs.text.modelId).toBe("");
+        expect(migrated.config.capabilityConfigs.video.modelId).toBe("");
+        expect(migrated.config.capabilityConfigs.audio.modelId).toBe("");
+    });
+
     it("keeps a partially damaged new config isolated instead of borrowing defaults or credentials", () => {
         const migrated = migrateConfigState({ config: { capabilityConfigs: { image: { apiKey: "only-image-key" } } } });
         expect(migrated.config.capabilityConfigs.image).toMatchObject({ apiBase: "", apiKey: "only-image-key", modelId: "" });
