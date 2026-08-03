@@ -57,15 +57,30 @@ describe("canvas project model migration", () => {
         expect(imported).not.toHaveProperty("capabilityConfigs");
     });
 
+    it("falls back mismatched or unknown legacy channel overrides by node capability while preserving bare overrides", () => {
+        const normalized = normalizeCanvasProject({
+            ...legacyProject,
+            nodes: [
+                { id: "image", type: "image", title: "Image", position: { x: 0, y: 0 }, width: 100, height: 100, metadata: { model: "legacy::video-model" } },
+                { id: "video", type: "video", title: "Video", position: { x: 0, y: 0 }, width: 100, height: 100, metadata: { model: "legacy::mystery-model" } },
+                { id: "audio", type: "audio", title: "Audio", position: { x: 0, y: 0 }, width: 100, height: 100, metadata: { model: "legacy::" } },
+                { id: "text", type: "text", title: "Text", position: { x: 0, y: 0 }, width: 100, height: 100, metadata: { model: "bare-custom-model" } },
+                { id: "config", type: "config", title: "Config", position: { x: 0, y: 0 }, width: 100, height: 100, metadata: { generationMode: "image", model: "legacy::audio-model" } },
+            ],
+        });
+
+        expect(normalized.nodes.map((node) => node.metadata?.model)).toEqual(["gpt-image-2", "grok-imagine-video", "gpt-4o-mini-tts", "bare-custom-model", "gpt-image-2"]);
+    });
+
     it("handles damaged partial projects safely and is idempotent", () => {
         const normalized = normalizeCanvasProject({
             id: "partial",
-            nodes: [null, 1, { id: "usable", type: "text", title: "Usable", position: { x: 0, y: 0 }, width: 100, height: 100, metadata: { model: "a::b::raw-model" } }],
+            nodes: [null, 1, { id: "usable", type: "text", title: "Usable", position: { x: 0, y: 0 }, width: 100, height: 100, metadata: { model: "a::text-model" } }],
         });
         const migrated = migratePersistedCanvasState({ projects: [normalized, null] });
 
         expect(normalized.nodes).toHaveLength(1);
-        expect(normalized.nodes[0]?.metadata?.model).toBe("b::raw-model");
+        expect(normalized.nodes[0]?.metadata?.model).toBe("text-model");
         expect(migratePersistedCanvasState(migrated)).toEqual(migrated);
     });
 });

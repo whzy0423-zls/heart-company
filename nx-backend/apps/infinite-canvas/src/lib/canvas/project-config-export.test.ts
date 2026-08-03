@@ -24,6 +24,14 @@ function fixtureProject(): CanvasProject {
                         apiKey: "NODE_SECRET",
                         apiBase: "https://node-secret.example/v1",
                         capabilityConfigs: { image: { apiKey: "CAPABILITY_SECRET" } },
+                        imageApiKey: "IMAGE_SECRET",
+                        imageApiBase: "https://image-secret.example/v1",
+                        videoApiKey: "VIDEO_SECRET",
+                        videoApiBase: "https://video-secret.example/v1",
+                        textApiKey: "TEXT_SECRET",
+                        textApiBase: "https://text-secret.example/v1",
+                        audioApiKey: "AUDIO_SECRET",
+                        audioApiBase: "https://audio-secret.example/v1",
                     },
                 },
             },
@@ -88,8 +96,13 @@ describe("canvas project export boundary", () => {
         expect(scanned.strings).not.toContain("NODE_SECRET");
         expect(scanned.strings).not.toContain("CAPABILITY_SECRET");
         expect(scanned.strings).not.toContain("CHAT_SECRET");
+        expect(scanned.strings).not.toContain("IMAGE_SECRET");
+        expect(scanned.strings).not.toContain("VIDEO_SECRET");
+        expect(scanned.strings).not.toContain("TEXT_SECRET");
+        expect(scanned.strings).not.toContain("AUDIO_SECRET");
         expect(scanned.strings).not.toContain("https://node-secret.example/v1");
         expect(scanned.strings).not.toContain("https://chat-secret.example/v1");
+        expect(scanned.strings.filter((value) => value.includes("-secret.example/v1"))).toEqual([]);
     });
 
     it("normalizes legacy models at the projects.json boundary used by the import page", () => {

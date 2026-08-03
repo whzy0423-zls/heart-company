@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, ViewportTransform } from "@/types/canvas";
+import { createDefaultCapabilityConfigs, guessCapability, type CapabilityConfigs, type ModelCapability } from "@/stores/use-config-store";
 
 export type CanvasProject = {
     id: string;
@@ -40,6 +41,7 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let queuedPersistState: PersistedCanvasState | null = null;
 
 const SENSITIVE_PROJECT_KEYS = new Set(["apikey", "apibase", "baseurl", "capabilityconfigs", "config", "aiconfig", "modelconfig"]);
+const TEXT_MODEL_PATTERN = /(?:gpt|claude|deepseek|qwen|glm|gemini|llama|mistral|text|chat)/i;
 
 function isRecord(value: unknown): value is UnknownRecord {
     return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -50,19 +52,40 @@ function stripLegacyChannelId(model: string) {
     return separator < 0 ? model : model.slice(separator + 2);
 }
 
+function isSensitiveProjectKey(key: string) {
+    const normalized = key.toLowerCase().replace(/[^a-z]/g, "");
+    return SENSITIVE_PROJECT_KEYS.has(normalized) || normalized.endsWith("apikey") || normalized.endsWith("apibase") || normalized.endsWith("baseurl");
+}
+
+function nodeCapability(node: UnknownRecord): ModelCapability | undefined {
+    const metadata = isRecord(node.metadata) ? node.metadata : {};
+    const mode = metadata.generationMode;
+    if (mode === "image" || mode === "video" || mode === "text" || mode === "audio") return mode;
+    return node.type === "image" || node.type === "video" || node.type === "text" || node.type === "audio" ? node.type : undefined;
+}
+
+function recognizedLegacyModelCapability(model: string, defaults: CapabilityConfigs): ModelCapability | undefined {
+    for (const capability of Object.keys(defaults) as ModelCapability[]) {
+        if (model === defaults[capability].modelId) return capability;
+    }
+    const guessed = guessCapability(model);
+    if (guessed !== "text") return guessed;
+    return TEXT_MODEL_PATTERN.test(model) ? "text" : undefined;
+}
+
 /** Removes browser-only model configuration from arbitrary imported project data. */
 export function stripProjectSecrets(value: unknown): unknown {
     if (Array.isArray(value)) return value.map(stripProjectSecrets);
     if (!isRecord(value)) return value;
     return Object.fromEntries(
         Object.entries(value)
-            .filter(([key]) => !SENSITIVE_PROJECT_KEYS.has(key.toLowerCase().replace(/[^a-z]/g, "")))
+            .filter(([key]) => !isSensitiveProjectKey(key))
             .map(([key, item]) => [key, stripProjectSecrets(item)]),
     );
 }
 
 /** Normalizes node-level legacy overrides without consulting or copying the config store. */
-export function normalizeCanvasNodeModelOverrides(value: unknown): CanvasNodeData[] {
+export function normalizeCanvasNodeModelOverrides(value: unknown, capabilityDefaults: CapabilityConfigs = createDefaultCapabilityConfigs()): CanvasNodeData[] {
     if (!Array.isArray(value)) return [];
     return value.flatMap((candidate) => {
         if (
@@ -78,14 +101,20 @@ export function normalizeCanvasNodeModelOverrides(value: unknown): CanvasNodeDat
         )
             return [];
         const clean = stripProjectSecrets(candidate) as UnknownRecord;
-        if (isRecord(clean.metadata) && typeof clean.metadata.model === "string") {
-            clean.metadata = { ...clean.metadata, model: stripLegacyChannelId(clean.metadata.model) };
+        if (isRecord(clean.metadata) && typeof clean.metadata.model === "string" && clean.metadata.model.includes("::")) {
+            const capability = nodeCapability(clean);
+            const model = stripLegacyChannelId(clean.metadata.model);
+            const recognizedCapability = model ? recognizedLegacyModelCapability(model, capabilityDefaults) : undefined;
+            clean.metadata = {
+                ...clean.metadata,
+                model: capability && recognizedCapability !== capability ? capabilityDefaults[capability].modelId : model,
+            };
         }
         return [clean as CanvasNodeData];
     });
 }
 
-export function normalizeCanvasProject(value: unknown): CanvasProject {
+export function normalizeCanvasProject(value: unknown, capabilityDefaults: CapabilityConfigs = createDefaultCapabilityConfigs()): CanvasProject {
     const sanitized = stripProjectSecrets(value);
     const source = isRecord(sanitized) ? sanitized : {};
     const now = new Date().toISOString();
@@ -95,7 +124,7 @@ export function normalizeCanvasProject(value: unknown): CanvasProject {
         title: typeof source.title === "string" && source.title ? source.title : "导入画布",
         createdAt: typeof source.createdAt === "string" ? source.createdAt : now,
         updatedAt: typeof source.updatedAt === "string" ? source.updatedAt : now,
-        nodes: normalizeCanvasNodeModelOverrides(source.nodes),
+        nodes: normalizeCanvasNodeModelOverrides(source.nodes, capabilityDefaults),
         connections: Array.isArray(source.connections) ? (source.connections.filter(isRecord) as CanvasConnection[]) : [],
         chatSessions: Array.isArray(source.chatSessions) ? (source.chatSessions.filter(isRecord) as CanvasAssistantSession[]) : [],
         activeChatId: typeof source.activeChatId === "string" ? source.activeChatId : null,
@@ -107,7 +136,7 @@ export function normalizeCanvasProject(value: unknown): CanvasProject {
 
 export function migratePersistedCanvasState(value: unknown): PersistedCanvasState {
     const source = isRecord(value) ? value : {};
-    return { projects: Array.isArray(source.projects) ? source.projects.filter(isRecord).map(normalizeCanvasProject) : [] };
+    return { projects: Array.isArray(source.projects) ? source.projects.filter(isRecord).map((project) => normalizeCanvasProject(project)) : [] };
 }
 
 const canvasStorage: PersistStorage<CanvasStore> = {
