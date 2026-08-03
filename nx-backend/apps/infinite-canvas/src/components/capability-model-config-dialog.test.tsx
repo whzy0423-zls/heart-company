@@ -89,6 +89,25 @@ describe("CapabilityModelConfigDialog", () => {
         expect(useConfigStore.getState().targetCapability).toBe("audio");
     });
 
+    it("exposes keyboard-navigable tabs and an associated tabpanel", () => {
+        act(() => root.render(<CapabilityModelConfigDialog />));
+
+        const tablist = document.querySelector('[role="tablist"]');
+        expect(tablist).toBeTruthy();
+        const videoTab = document.querySelector('[role="tab"][data-capability-tab="video"]') as HTMLButtonElement;
+        expect(videoTab.id).toBe("capability-tab-video");
+        expect(videoTab.getAttribute("aria-controls")).toBe("capability-panel-video");
+        expect(videoTab.getAttribute("aria-selected")).toBe("true");
+        expect(document.querySelector('[role="tabpanel"]')?.getAttribute("aria-labelledby")).toBe("capability-tab-video");
+
+        act(() => videoTab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+        expect(useConfigStore.getState().targetCapability).toBe("text");
+        act(() => (document.querySelector('[role="tab"][data-capability-tab="text"]') as HTMLButtonElement).dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+        expect(useConfigStore.getState().targetCapability).toBe("audio");
+        act(() => (document.querySelector('[role="tab"][data-capability-tab="audio"]') as HTMLButtonElement).dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })));
+        expect(useConfigStore.getState().targetCapability).toBe("image");
+    });
+
     it("toggles API key visibility, keeps advanced script collapsed, validates required fields, and reports a successful continuation save", () => {
         const before = useConfigStore.getState().config.capabilityConfigs;
         useConfigStore.setState({ shouldPromptContinue: true });
@@ -115,6 +134,11 @@ describe("CapabilityModelConfigDialog", () => {
         expect(document.querySelector('[role="alert"]')?.textContent).toContain("API Base");
         expect(document.querySelector('[role="alert"]')?.textContent).toContain("API Key");
         expect(document.querySelector('[role="alert"]')?.textContent).toContain("模型 ID");
+        expect(document.querySelector('[role="alert"]')?.getAttribute("aria-live")).toBe("assertive");
+        const invalidApiBase = document.querySelector('[data-testid="video-api-base"]') as HTMLInputElement;
+        expect(invalidApiBase.getAttribute("aria-invalid")).toBe("true");
+        expect(invalidApiBase.getAttribute("aria-describedby")).toBe("video-api-base-error");
+        expect(document.activeElement).toBe(invalidApiBase);
 
         changeField(document.querySelector('[data-testid="video-api-base"]') as HTMLInputElement, "https://new-video.example/v1");
         changeField(keyInput, "new-video-secret");

@@ -22,6 +22,18 @@ type CapabilityParameterDrafts = {
     audio: Pick<AiConfig, "audioVoice" | "audioFormat" | "audioSpeed" | "audioInstructions">;
 };
 
+type ValidationIssue = {
+    code: "missing_api_base" | "missing_api_key" | "missing_model_id" | "unsupported_protocol";
+    message: string;
+};
+
+const ERROR_FIELD_BY_CODE: Record<ValidationIssue["code"], string> = {
+    missing_api_base: "api-base",
+    missing_api_key: "api-key",
+    missing_model_id: "model-id",
+    unsupported_protocol: "api-format",
+};
+
 function copyConfigs(configs: CapabilityConfigs): CapabilityConfigs {
     return {
         image: { ...configs.image },
@@ -55,7 +67,7 @@ export function CapabilityModelConfigDialog() {
     const [drafts, setDrafts] = useState<CapabilityConfigs>(() => copyConfigs(configs));
     const [parameterDrafts, setParameterDrafts] = useState<CapabilityParameterDrafts>(() => copyParameterDrafts(config));
     const [visibleApiKeys, setVisibleApiKeys] = useState<Record<ModelCapability, boolean>>({ image: false, video: false, text: false, audio: false });
-    const [validationErrors, setValidationErrors] = useState<string[]>([]);
+    const [validationErrors, setValidationErrors] = useState<ValidationIssue[]>([]);
 
     useEffect(() => {
         if (!open) return;
@@ -64,6 +76,13 @@ export function CapabilityModelConfigDialog() {
         setVisibleApiKeys({ image: false, video: false, text: false, audio: false });
         setValidationErrors([]);
     }, [open, config, configs]);
+
+    useEffect(() => {
+        const firstError = validationErrors[0];
+        if (!open || !firstError) return;
+        const field = document.querySelector(`[data-testid="${targetCapability}-${ERROR_FIELD_BY_CODE[firstError.code]}"]`);
+        if (field instanceof HTMLElement) field.focus();
+    }, [open, targetCapability, validationErrors]);
 
     const activeDraft = drafts[targetCapability];
     const meta = CAPABILITY_META[targetCapability];
@@ -78,6 +97,24 @@ export function CapabilityModelConfigDialog() {
 
     const updateParameters = <C extends ModelCapability>(capability: C, patch: Partial<CapabilityParameterDrafts[C]>) => {
         setParameterDrafts((current) => ({ ...current, [capability]: { ...current[capability], ...patch } }));
+    };
+
+    const selectCapability = (capability: ModelCapability) => {
+        setValidationErrors([]);
+        setTargetCapability(capability);
+    };
+
+    const handleCapabilityKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+        let nextIndex: number | undefined;
+        if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (index + 1) % CAPABILITIES.length;
+        if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (index - 1 + CAPABILITIES.length) % CAPABILITIES.length;
+        if (event.key === "Home") nextIndex = 0;
+        if (event.key === "End") nextIndex = CAPABILITIES.length - 1;
+        if (nextIndex === undefined) return;
+        event.preventDefault();
+        const nextCapability = CAPABILITIES[nextIndex];
+        selectCapability(nextCapability);
+        document.getElementById(`capability-tab-${nextCapability}`)?.focus();
     };
 
     const cancel = () => {
@@ -95,7 +132,7 @@ export function CapabilityModelConfigDialog() {
         };
         const errors = validateCapabilityConfig(targetCapability, nextCapabilityConfig);
         if (errors.length) {
-            setValidationErrors(errors.map((error) => error.message));
+            setValidationErrors(errors.map((error) => ({ code: error.code, message: error.message })));
             return;
         }
 
@@ -160,8 +197,8 @@ export function CapabilityModelConfigDialog() {
                 destroyOnHidden
             >
                 <div className="grid gap-5 border-t pt-5 md:grid-cols-[180px_minmax(0,1fr)]">
-                    <nav className="grid content-start gap-2" aria-label="模型能力">
-                        {CAPABILITIES.map((capability) => {
+                    <nav className="grid content-start gap-2" aria-label="模型能力" role="tablist">
+                        {CAPABILITIES.map((capability, index) => {
                             const item = CAPABILITY_META[capability];
                             const Icon = item.icon;
                             const active = capability === targetCapability;
@@ -169,12 +206,14 @@ export function CapabilityModelConfigDialog() {
                                 <button
                                     key={capability}
                                     type="button"
+                                    id={`capability-tab-${capability}`}
+                                    role="tab"
                                     data-capability-tab={capability}
                                     aria-selected={active}
-                                    onClick={() => {
-                                        setValidationErrors([]);
-                                        setTargetCapability(capability);
-                                    }}
+                                    aria-controls={`capability-panel-${capability}`}
+                                    tabIndex={active ? 0 : -1}
+                                    onClick={() => selectCapability(capability)}
+                                    onKeyDown={(event) => handleCapabilityKeyDown(event, index)}
                                     className={`flex items-center gap-3 rounded-xl border px-3 py-3 text-left transition ${active ? "border-[var(--primary)] bg-[var(--accent)]" : "border-transparent hover:bg-[var(--muted)]"}`}
                                 >
                                     <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--card)] shadow-sm">
@@ -189,7 +228,7 @@ export function CapabilityModelConfigDialog() {
                         })}
                     </nav>
 
-                    <section aria-label={`${meta.label}模型配置`} className="min-w-0 space-y-4">
+                    <section id={`capability-panel-${targetCapability}`} role="tabpanel" aria-labelledby={`capability-tab-${targetCapability}`} className="min-w-0 space-y-4">
                         <header>
                             <h3 className="m-0 text-base font-semibold">{meta.label}模型</h3>
                             <p className="mb-0 mt-1 text-sm opacity-55">{meta.description}</p>
@@ -199,11 +238,15 @@ export function CapabilityModelConfigDialog() {
                             <Alert
                                 type="error"
                                 showIcon
-                                message={`${meta.label}模型配置未保存`}
+                                role="alert"
+                                aria-live="assertive"
+                                title={`${meta.label}模型配置未保存`}
                                 description={
                                     <ul className="mb-0 mt-1 list-disc pl-5">
                                         {validationErrors.map((error) => (
-                                            <li key={error}>{error}</li>
+                                            <li key={error.code} id={`${targetCapability}-${ERROR_FIELD_BY_CODE[error.code]}-error`}>
+                                                {error.message}
+                                            </li>
                                         ))}
                                     </ul>
                                 }
@@ -218,6 +261,8 @@ export function CapabilityModelConfigDialog() {
                                 placeholder="https://api.example.com/v1"
                                 className={INPUT_CLASS}
                                 autoComplete="url"
+                                aria-invalid={validationErrors.some((error) => error.code === "missing_api_base") || undefined}
+                                aria-describedby={validationErrors.some((error) => error.code === "missing_api_base") ? `${targetCapability}-api-base-error` : undefined}
                             />
                         </Field>
 
@@ -231,6 +276,8 @@ export function CapabilityModelConfigDialog() {
                                     placeholder="输入当前能力专用的 API Key"
                                     className={`${INPUT_CLASS} pr-11`}
                                     autoComplete="new-password"
+                                    aria-invalid={validationErrors.some((error) => error.code === "missing_api_key") || undefined}
+                                    aria-describedby={validationErrors.some((error) => error.code === "missing_api_key") ? `${targetCapability}-api-key-error` : undefined}
                                 />
                                 <button
                                     type="button"
@@ -246,7 +293,14 @@ export function CapabilityModelConfigDialog() {
 
                         <div className="grid gap-4 sm:grid-cols-[160px_minmax(0,1fr)]">
                             <Field label="协议">
-                                <select data-testid={`${targetCapability}-api-format`} value={activeDraft.apiFormat} onChange={(event) => updateDraft({ apiFormat: event.target.value as ApiCallFormat })} className={INPUT_CLASS}>
+                                <select
+                                    data-testid={`${targetCapability}-api-format`}
+                                    value={activeDraft.apiFormat}
+                                    onChange={(event) => updateDraft({ apiFormat: event.target.value as ApiCallFormat })}
+                                    className={INPUT_CLASS}
+                                    aria-invalid={validationErrors.some((error) => error.code === "unsupported_protocol") || undefined}
+                                    aria-describedby={validationErrors.some((error) => error.code === "unsupported_protocol") ? `${targetCapability}-api-format-error` : undefined}
+                                >
                                     {!meta.protocols.includes(activeDraft.apiFormat) ? <option value={activeDraft.apiFormat}>不支持：{activeDraft.apiFormat}</option> : null}
                                     {meta.protocols.map((protocol) => (
                                         <option key={protocol} value={protocol}>
@@ -256,7 +310,16 @@ export function CapabilityModelConfigDialog() {
                                 </select>
                             </Field>
                             <Field label="模型 ID">
-                                <input data-testid={`${targetCapability}-model-id`} value={activeDraft.modelId} onChange={(event) => updateDraft({ modelId: event.target.value })} placeholder="例如 model-id" className={INPUT_CLASS} autoComplete="off" />
+                                <input
+                                    data-testid={`${targetCapability}-model-id`}
+                                    value={activeDraft.modelId}
+                                    onChange={(event) => updateDraft({ modelId: event.target.value })}
+                                    placeholder="例如 model-id"
+                                    className={INPUT_CLASS}
+                                    autoComplete="off"
+                                    aria-invalid={validationErrors.some((error) => error.code === "missing_model_id") || undefined}
+                                    aria-describedby={validationErrors.some((error) => error.code === "missing_model_id") ? `${targetCapability}-model-id-error` : undefined}
+                                />
                             </Field>
                         </div>
 
