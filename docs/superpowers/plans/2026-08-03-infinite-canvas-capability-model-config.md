@@ -107,7 +107,7 @@ git commit -m "feat: add capability-specific canvas model config"
 
 **Files:**
 - Create: `nx-backend/apps/infinite-canvas/src/components/capability-model-config-dialog.test.tsx`
-- Modify if missing: `nx-backend/apps/infinite-canvas/package.json` — UI 测试所需 happy-dom/testing library 依赖。
+- Test environment: 使用项目现有 Vitest `--dom` 环境和 ReactDOM 测试工具；若运行时确认缺少 DOM 环境，再在 `package.json` 中明确添加 `happy-dom`，不引入未使用的测试库。
 
 - [ ] **Step 1: 测试四个配置区域可独立填写**
 
@@ -239,7 +239,7 @@ Expected: PASS。
 - [ ] **Step 6: Commit**
 
 ```bash
-git add nx-backend/apps/infinite-canvas/src/services/api nx-backend/apps/infinite-canvas/src/lib/seedance-video.ts nx-backend/apps/infinite-canvas/src/pages/canvas/project.tsx nx-backend/apps/infinite-canvas/src/services/api/capability-config-isolation.test.ts
+git add nx-backend/apps/infinite-canvas/src/services/api nx-backend/apps/infinite-canvas/src/lib/seedance-video.ts nx-backend/apps/infinite-canvas/src/lib/canvas/canvas-generation-helpers.ts nx-backend/apps/infinite-canvas/src/lib/canvas/canvas-node-factory.ts nx-backend/apps/infinite-canvas/src/pages/canvas/project.tsx nx-backend/apps/infinite-canvas/src/services/api/capability-config-isolation.test.ts
 git commit -m "feat: route canvas generation by capability config"
 ```
 
