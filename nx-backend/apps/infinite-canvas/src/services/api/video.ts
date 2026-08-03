@@ -25,7 +25,7 @@ type ApiEnvelope<T> = T | { code?: number | string; data?: T | null; msg?: strin
 type RequestOptions = { signal?: AbortSignal };
 
 export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
-export type VideoGenerationTask = { id: string; provider: "openai" | "seedance" | "plugin"; model: string };
+export type VideoGenerationTask = { id: string; provider: "openai" | "seedance" | "plugin"; model: string; snapshotToken: string };
 export type VideoGenerationTaskState = { status: "pending" } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
 
 /** Results for scripted (plugin) video models, which run their own create+poll in one shot at task creation. */
@@ -77,12 +77,12 @@ export async function pollVideoGenerationTask(config: AiConfig, task: VideoGener
         const result = pluginVideoResults.get(task.id);
         return result ? { status: "completed", result } : { status: "failed", error: "插件视频任务已失效，请重新生成" };
     }
-    const requestConfig = videoTaskConfigs.get(task.id);
+    const requestConfig = videoTaskConfigs.get(task.snapshotToken);
     if (!requestConfig) return { status: "failed", error: "视频任务请求配置已失效，请重新生成" };
     assertVideoConfig(requestConfig, requestConfig.model);
     try {
         const state = task.provider === "seedance" ? await pollSeedanceTask(requestConfig, task, options) : await pollOpenAIVideoTask(requestConfig, task, options);
-        if (state.status !== "pending") videoTaskConfigs.delete(task.id);
+        if (state.status !== "pending") videoTaskConfigs.delete(task.snapshotToken);
         return state.status === "failed" ? { ...state, error: redactSecret(state.error, requestConfig.apiKey) } : state;
     } catch (error) {
         throw sanitizeCapabilityError(error, requestConfig.apiKey);
@@ -113,7 +113,7 @@ async function createPluginVideoTask(config: AiConfig, model: string, script: st
     );
     const id = nanoid();
     pluginVideoResults.set(id, result);
-    return { id, provider: "plugin", model };
+    return { id, provider: "plugin", model, snapshotToken: nanoid() };
 }
 
 function videoPluginResult(result: unknown): VideoGenerationResult {
@@ -153,8 +153,9 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
     try {
         const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, { headers: aiHeaders(config), signal: options?.signal })).data);
         if (!created.id) throw new Error("视频接口没有返回任务 ID");
-        videoTaskConfigs.set(created.id, config as CapabilityRequestSnapshot);
-        return { id: created.id, provider: "openai", model };
+        const snapshotToken = nanoid();
+        videoTaskConfigs.set(snapshotToken, config as CapabilityRequestSnapshot);
+        return { id: created.id, provider: "openai", model, snapshotToken };
     } catch (error) {
         throw new Error(readAxiosError(error, "视频任务创建失败", config.apiKey));
     }
@@ -198,8 +199,9 @@ async function createSeedanceTask(config: AiConfig, model: string, prompt: strin
     try {
         const created = unwrapSeedanceTask((await axios.post<ApiEnvelope<SeedanceTask>>(seedanceApiUrl(config), payload, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data);
         if (!created.id) throw new Error("Seedance 接口没有返回任务 ID");
-        videoTaskConfigs.set(created.id, config as CapabilityRequestSnapshot);
-        return { id: created.id, provider: "seedance", model };
+        const snapshotToken = nanoid();
+        videoTaskConfigs.set(snapshotToken, config as CapabilityRequestSnapshot);
+        return { id: created.id, provider: "seedance", model, snapshotToken };
     } catch (error) {
         throw new Error(readAxiosError(error, "Seedance 任务创建失败", config.apiKey));
     }
@@ -361,17 +363,8 @@ function readApiErrorMessage(value: unknown): string {
     if (typeof value !== "object") return "";
     const payload = value as { msg?: unknown; message?: unknown; error?: unknown; detail?: unknown };
     // error 可能是字符串或含 message 的对象
-    const errorMsg =
-        typeof payload.error === "string"
-            ? payload.error
-            : (payload.error as { message?: unknown })?.message;
-    return (
-        readApiErrorMessage(payload.msg) ||
-        readApiErrorMessage(payload.message) ||
-        readApiErrorMessage(errorMsg) ||
-        readApiErrorMessage(payload.detail) ||
-        ""
-    );
+    const errorMsg = typeof payload.error === "string" ? payload.error : (payload.error as { message?: unknown })?.message;
+    return readApiErrorMessage(payload.msg) || readApiErrorMessage(payload.message) || readApiErrorMessage(errorMsg) || readApiErrorMessage(payload.detail) || "";
 }
 
 function readAxiosErrorUnsafe(error: unknown, fallback: string) {
