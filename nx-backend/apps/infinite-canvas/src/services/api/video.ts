@@ -5,7 +5,7 @@ import { dataUrlToFile } from "@/lib/image-utils";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildSeedancePromptText, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
-import { buildApiUrl, createCapabilityRequestSnapshot, modelOptionName, type AiConfig, type CapabilityRequestSnapshot } from "@/stores/use-config-store";
+import { buildApiUrl, resolveCapabilityRequestSnapshot, modelOptionName, type AiConfig, type CapabilityRequestSnapshot } from "@/stores/use-config-store";
 import { runModelPlugin } from "./model-plugin";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
@@ -29,7 +29,7 @@ export type VideoGenerationTask = { id: string; provider: "openai" | "seedance" 
 export type VideoGenerationTaskState = { status: "pending" } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
 
 /** Results for scripted (plugin) video models, which run their own create+poll in one shot at task creation. */
-const VIDEO_TASK_RESOURCE_TTL_MS = 10 * 60 * 1000;
+const VIDEO_TASK_RESOURCE_TTL_MS = 30 * 60 * 1000;
 type TimedResource<T> = { value: T; expiresAt: number; cleanupTimer: ReturnType<typeof setTimeout> };
 const pluginVideoResults = new Map<string, TimedResource<VideoGenerationResult>>();
 const videoTaskConfigs = new Map<string, TimedResource<CapabilityRequestSnapshot>>();
@@ -97,7 +97,7 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
 export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = [], options?: RequestOptions): Promise<VideoGenerationTask> {
     sweepExpiredVideoTaskResources();
     const selectedModel = (config.model || config.videoModel).trim();
-    const requestConfig = createCapabilityRequestSnapshot(config, "video", selectedModel);
+    const requestConfig = resolveCapabilityRequestSnapshot(config, "video", selectedModel);
     const script = requestConfig.script;
     if (script) return createPluginVideoTask(requestConfig, requestConfig.model, script, prompt, references, options);
     assertVideoConfig(requestConfig, requestConfig.model);
@@ -123,10 +123,11 @@ export async function pollVideoGenerationTask(config: AiConfig, task: VideoGener
     assertVideoConfig(requestConfig, requestConfig.model);
     try {
         const state = task.provider === "seedance" ? await pollSeedanceTask(requestConfig, task, options) : await pollOpenAIVideoTask(requestConfig, task, options);
-        if (state.status !== "pending") deleteTimedResource(videoTaskConfigs, task.snapshotToken);
+        if (state.status === "pending") setTimedResource(videoTaskConfigs, task.snapshotToken, requestConfig);
+        else deleteTimedResource(videoTaskConfigs, task.snapshotToken);
         return state.status === "failed" ? { ...state, error: redactSecret(state.error, requestConfig.apiKey) } : state;
     } catch (error) {
-        deleteTimedResource(videoTaskConfigs, task.snapshotToken);
+        if (isCancellationError(error) || (error instanceof Error && error.message === "请求已取消")) deleteTimedResource(videoTaskConfigs, task.snapshotToken);
         throw sanitizeCapabilityError(error, requestConfig.apiKey);
     }
 }

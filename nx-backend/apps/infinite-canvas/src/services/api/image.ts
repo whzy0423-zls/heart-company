@@ -1,6 +1,6 @@
 import axios from "axios";
 
-import { buildApiUrl, createCapabilityRequestSnapshot, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { buildApiUrl, resolveCapabilityRequestSnapshot, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
@@ -20,10 +20,7 @@ type ResponseToolCall = {
     thoughtSignature?: string;
 };
 
-type ResponseInputMessage =
-    | AiTextMessage
-    | { type: "function_call"; call_id: string; name: string; arguments: string; thoughtSignature?: string }
-    | { role: "tool"; tool_call_id: string; content: string };
+type ResponseInputMessage = AiTextMessage | { type: "function_call"; call_id: string; name: string; arguments: string; thoughtSignature?: string } | { role: "tool"; tool_call_id: string; content: string };
 
 type ResponseFunctionTool = {
     type: "function";
@@ -43,10 +40,7 @@ type ToolResponseResult = {
 type ToolChoice = "auto" | "required" | { type: "function"; name: string };
 type ResponseMessageContent = AiTextMessage["content"] | string;
 type ResponseInputContent = { type: "input_text"; text: string } | { type: "input_image"; image_url: string };
-type ResponseInputItem =
-    | { role: "system" | "user" | "assistant"; content: string | ResponseInputContent[] }
-    | { type: "function_call"; call_id: string; name: string; arguments: string }
-    | { type: "function_call_output"; call_id: string; output: string };
+type ResponseInputItem = { role: "system" | "user" | "assistant"; content: string | ResponseInputContent[] } | { type: "function_call"; call_id: string; name: string; arguments: string } | { type: "function_call_output"; call_id: string; output: string };
 type ResponseApiToolDefinition = {
     type: "function";
     name: string;
@@ -54,9 +48,7 @@ type ResponseApiToolDefinition = {
     parameters: Record<string, unknown>;
     strict?: boolean;
 };
-type ResponseApiOutputItem =
-    | { type?: "message"; content?: Array<{ type?: string; text?: string }> }
-    | { type?: "function_call"; id?: string; call_id?: string; name?: string; arguments?: string };
+type ResponseApiOutputItem = { type?: "message"; content?: Array<{ type?: string; text?: string }> } | { type?: "function_call"; id?: string; call_id?: string; name?: string; arguments?: string };
 type ResponseApiPayload = {
     id?: string;
     output?: ResponseApiOutputItem[];
@@ -245,22 +237,16 @@ function parseImagePayload(payload: ImageApiResponse) {
         throw new Error(payload.msg || "请求失败");
     }
     // 支持 data / images / results 三种返回字段（兼容不同 API）
-    const imageList = payload.data
-        || (payload as Record<string, unknown>).images as Array<Record<string, unknown>> | undefined
-        || (payload as Record<string, unknown>).results as Array<Record<string, unknown>> | undefined
-        || [];
-    const images =
-        imageList
-            .map(resolveImageDataUrl)
-            .filter((value): value is string => Boolean(value))
-            .map((dataUrl) => ({ id: nanoid(), dataUrl }));
+    const imageList = payload.data || ((payload as Record<string, unknown>).images as Array<Record<string, unknown>> | undefined) || ((payload as Record<string, unknown>).results as Array<Record<string, unknown>> | undefined) || [];
+    const images = imageList
+        .map(resolveImageDataUrl)
+        .filter((value): value is string => Boolean(value))
+        .map((dataUrl) => ({ id: nanoid(), dataUrl }));
 
     if (images.length === 0) {
         // 尝试检查是否有返回了但格式不被识别的数据
         const rawKeys = Object.keys(payload).filter((k) => k !== "code" && k !== "msg" && k !== "error");
-        throw new Error(rawKeys.length > 0
-            ? `接口返回了未知格式的数据（字段：${rawKeys.join("、")}），请检查模型或接口兼容性`
-            : "接口没有返回图片，请检查提示词是否触发安全审核或模型是否支持该操作");
+        throw new Error(rawKeys.length > 0 ? `接口返回了未知格式的数据（字段：${rawKeys.join("、")}），请检查模型或接口兼容性` : "接口没有返回图片，请检查提示词是否触发安全审核或模型是否支持该操作");
     }
 
     return images;
@@ -285,17 +271,8 @@ function readApiErrorMessage(value: unknown): string {
     if (typeof value !== "object") return "";
     const payload = value as { msg?: unknown; message?: unknown; error?: unknown; detail?: unknown };
     // error 可能是字符串或含 message 的对象
-    const errorMsg =
-        typeof payload.error === "string"
-            ? payload.error
-            : (payload.error as { message?: unknown })?.message;
-    return (
-        readApiErrorMessage(payload.msg) ||
-        readApiErrorMessage(payload.message) ||
-        readApiErrorMessage(errorMsg) ||
-        readApiErrorMessage(payload.detail) ||
-        ""
-    );
+    const errorMsg = typeof payload.error === "string" ? payload.error : (payload.error as { message?: unknown })?.message;
+    return readApiErrorMessage(payload.msg) || readApiErrorMessage(payload.message) || readApiErrorMessage(errorMsg) || readApiErrorMessage(payload.detail) || "";
 }
 
 function readAxiosErrorUnsafe(error: unknown, fallback: string) {
@@ -525,12 +502,7 @@ async function requestStreamingResponse(config: AiConfig, body: Record<string, u
 }
 
 function toGeminiBody(config: AiConfig, messages: ResponseInputMessage[], extra?: Record<string, unknown>) {
-    const systemText = [
-        config.systemPrompt.trim(),
-        ...messages.flatMap((message) => (!("type" in message) && message.role === "system" ? [geminiTextContent(message.content)] : [])),
-    ]
-        .filter(Boolean)
-        .join("\n\n");
+    const systemText = [config.systemPrompt.trim(), ...messages.flatMap((message) => (!("type" in message) && message.role === "system" ? [geminiTextContent(message.content)] : []))].filter(Boolean).join("\n\n");
     const contents = toGeminiContents(messages.filter((message) => ("type" in message ? true : message.role !== "system")));
     return {
         contents,
@@ -590,10 +562,7 @@ function toGeminiToolOptions(tools: ResponseFunctionTool[], toolChoice: ToolChoi
         description: tool.function.description,
         parameters: tool.function.parameters,
     }));
-    const functionCallingConfig =
-        typeof toolChoice === "object"
-            ? { mode: "ANY", allowedFunctionNames: [toolChoice.name] }
-            : { mode: toolChoice === "required" ? "ANY" : "AUTO" };
+    const functionCallingConfig = typeof toolChoice === "object" ? { mode: "ANY", allowedFunctionNames: [toolChoice.name] } : { mode: toolChoice === "required" ? "ANY" : "AUTO" };
     return {
         tools: [{ functionDeclarations }],
         toolConfig: { functionCallingConfig },
@@ -716,7 +685,7 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
 }
 
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
-    const requestConfig = createCapabilityRequestSnapshot(config, "image", config.model || config.imageModel);
+    const requestConfig = resolveCapabilityRequestSnapshot(config, "image", config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const script = requestConfig.script;
     if (script) {
@@ -774,7 +743,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
 }
 
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage, options?: RequestOptions) {
-    const requestConfig = createCapabilityRequestSnapshot(config, "image", config.model || config.imageModel);
+    const requestConfig = resolveCapabilityRequestSnapshot(config, "image", config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const requestPrompt = buildImageReferencePromptText(prompt, references);
     const script = requestConfig.script;
@@ -870,7 +839,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
 }
 
 export async function requestImageQuestion(config: AiConfig, messages: AiTextMessage[], onDelta: (text: string) => void, options?: RequestOptions) {
-    const requestConfig = createCapabilityRequestSnapshot(config, "text", config.model || config.textModel);
+    const requestConfig = resolveCapabilityRequestSnapshot(config, "text", config.model || config.textModel);
     const script = requestConfig.script;
     if (script) {
         try {
@@ -895,11 +864,19 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
             if (answer === "没有返回内容") onDelta(answer);
             return answer;
         }
-        const answer = (await requestStreamingResponse(requestConfig, {
-            model: requestConfig.model,
-            input: toResponseInput(withSystemMessage(requestConfig, messages)),
-            ...(requestConfig.reasoningEffort === "auto" ? {} : { reasoning: { effort: requestConfig.reasoningEffort } }),
-        }, onDelta, options)).content || "没有返回内容";
+        const answer =
+            (
+                await requestStreamingResponse(
+                    requestConfig,
+                    {
+                        model: requestConfig.model,
+                        input: toResponseInput(withSystemMessage(requestConfig, messages)),
+                        ...(requestConfig.reasoningEffort === "auto" ? {} : { reasoning: { effort: requestConfig.reasoningEffort } }),
+                    },
+                    onDelta,
+                    options,
+                )
+            ).content || "没有返回内容";
         if (answer === "没有返回内容") onDelta(answer);
         return answer;
     } catch (error) {

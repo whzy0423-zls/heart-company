@@ -330,6 +330,15 @@ export function createCapabilityRequestSnapshot(config: AiConfig, capability: Mo
     });
 }
 
+export function resolveCapabilityRequestSnapshot(config: AiConfig, capability: ModelCapability, modelOverride?: string): CapabilityRequestSnapshot {
+    if ("capability" in config) {
+        const snapshot = config as CapabilityRequestSnapshot;
+        if (snapshot.capability !== capability) throw new CapabilityConfigError(capability, "unsupported_protocol", `请求能力 ${snapshot.capability} 与 ${capability} 不匹配`);
+        return snapshot;
+    }
+    return createCapabilityRequestSnapshot(config, capability, modelOverride);
+}
+
 type UnknownRecord = Record<string, unknown>;
 
 function asRecord(value: unknown): UnknownRecord {
@@ -459,8 +468,7 @@ export const useConfigStore = create<ConfigStore>()(
                         [key]: value,
                     },
                 })),
-            updateCapabilityConfig: (capability, patch) =>
-                set((state) => ({ config: updateCapabilityConfig(state.config, capability, patch) })),
+            updateCapabilityConfig: (capability, patch) => set((state) => ({ config: updateCapabilityConfig(state.config, capability, patch) })),
             updateWebdavConfig: (key, value) =>
                 set((state) => ({
                     webdav: {
@@ -469,8 +477,7 @@ export const useConfigStore = create<ConfigStore>()(
                     },
                 })),
             isAiConfigReady: (config, capability, modelOverride) => isAiConfigReady(config, capability, modelOverride),
-            openConfigDialog: (shouldPromptContinue = false, configTab = "channels", targetCapability) =>
-                set((state) => ({ isConfigOpen: true, shouldPromptContinue, configTab, targetCapability: targetCapability ?? state.targetCapability })),
+            openConfigDialog: (shouldPromptContinue = false, configTab = "channels", targetCapability) => set((state) => ({ isConfigOpen: true, shouldPromptContinue, configTab, targetCapability: targetCapability ?? state.targetCapability })),
             setTargetCapability: (targetCapability) => set({ targetCapability }),
             setConfigDialogOpen: (isConfigOpen) => set({ isConfigOpen }),
             clearPromptContinue: () => set({ shouldPromptContinue: false }),
@@ -562,7 +569,11 @@ export function resolveModelChannel(config: AiConfig, value: string) {
     const decoded = decodeChannelModel(value);
     const model = decoded?.model || value;
     const matched = decoded ? config.channels.find((channel) => channel.id === decoded.channelId) : config.channels.find((channel) => channel.models.some((item) => item.name === model));
-    return matched || config.channels[0] || createModelChannel({ id: "default", name: "默认渠道", baseUrl: config.baseUrl, apiKey: config.apiKey, apiFormat: config.apiFormat, models: config.models.map(modelOptionName).map((name) => ({ name, capability: guessCapability(name) })) });
+    return (
+        matched ||
+        config.channels[0] ||
+        createModelChannel({ id: "default", name: "默认渠道", baseUrl: config.baseUrl, apiKey: config.apiKey, apiFormat: config.apiFormat, models: config.models.map(modelOptionName).map((name) => ({ name, capability: guessCapability(name) })) })
+    );
 }
 
 export function resolveModelRequestConfig(config: AiConfig, value: string) {

@@ -1,4 +1,4 @@
-import { defaultConfig, resolveModelForCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { createCapabilityRequestSnapshot, defaultConfig, resolveModelForCapability, type AiConfig, type CapabilityRequestSnapshot, type ModelCapability } from "@/stores/use-config-store";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { imageMetadata, referenceUrl } from "@/lib/canvas/canvas-node-factory";
@@ -15,6 +15,10 @@ export function canvasGenerationCapabilityForRoute(route: CanvasGenerationRoute)
     if (route === "image-question" || route === "text-stream") return "text";
     if (route === "video-generate" || route === "video-retry") return "video";
     return "audio";
+}
+
+export function dispatchCanvasGenerationRoute<T>(route: CanvasGenerationRoute, config: AiConfig, handler: (snapshot: CapabilityRequestSnapshot) => T, modelOverride?: string): T {
+    return handler(createCapabilityRequestSnapshot(config, canvasGenerationCapabilityForRoute(route), modelOverride || config.model));
 }
 
 export function canvasGenerationRouteForMode(mode: CanvasNodeGenerationMode): CanvasGenerationRoute {

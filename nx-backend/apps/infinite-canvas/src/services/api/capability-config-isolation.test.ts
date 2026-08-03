@@ -8,10 +8,11 @@ import { requestEdit, requestGeneration, requestImageQuestion } from "./image";
 import { requestAudioGeneration } from "./audio";
 import { createVideoGenerationTask, getVideoTaskResourceCountsForTest, pollVideoGenerationTask, releaseVideoGenerationTask, requestVideoGeneration, resetVideoTaskResourcesForTest } from "./video";
 import { isSeedanceVideoConfig } from "@/lib/seedance-video";
-import { canvasGenerationCapabilityForRoute, generationCapabilityForNodeType, type CanvasGenerationRoute } from "@/lib/canvas/canvas-generation-helpers";
+import { canvasGenerationCapabilityForRoute, dispatchCanvasGenerationRoute, generationCapabilityForNodeType, type CanvasGenerationRoute } from "@/lib/canvas/canvas-generation-helpers";
 import { CanvasNodeType } from "@/types/canvas";
 import { VideoSettingsPanel } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { requestCanvasAudioGeneration, requestCanvasImageBatch, requestCanvasImageEdit, requestCanvasImageQuestion, requestCanvasTextStream, requestCanvasVideoGeneration, requestCanvasVideoRetry } from "@/lib/canvas/canvas-generation-dispatch";
 import { runModelPlugin } from "./model-plugin";
 
 vi.mock("axios", () => ({
@@ -77,7 +78,7 @@ function isolatedConfig(): AiConfig {
 beforeEach(() => {
     vi.useRealTimers();
     resetVideoTaskResourcesForTest();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.unstubAllGlobals();
 });
 
@@ -113,6 +114,14 @@ describe("capability request isolation", () => {
         }
     });
 
+    it("dispatches a real capability snapshot to the selected canvas route handler", async () => {
+        const handler = vi.fn(async (snapshot) => snapshot);
+        const result = await dispatchCanvasGenerationRoute("video-retry", isolatedConfig(), handler);
+        expect(handler).toHaveBeenCalledOnce();
+        expect(handler.mock.calls[0][0]).toMatchObject({ capability: "video", apiKey: "VIDEO_SECRET", baseUrl: "https://video.example" });
+        expect(result.capability).toBe("video");
+    });
+
     it("maps every canvas generation output to one explicit capability", () => {
         expect(generationCapabilityForNodeType(CanvasNodeType.Image)).toBe("image");
         expect(generationCapabilityForNodeType(CanvasNodeType.Video)).toBe("video");
@@ -122,8 +131,8 @@ describe("capability request isolation", () => {
 
     it("uses only image credentials and script for generation and edit while decoding a legacy model override", async () => {
         const config = isolatedConfig();
-        const generated = await requestGeneration(config, "draw");
-        const edited = await requestEdit(config, "edit", [{ id: "ref", name: "ref.png", type: "image/png", dataUrl: "data:image/png;base64,AA==" }]);
+        const generated = await requestCanvasImageBatch(config, "draw");
+        const edited = await requestCanvasImageEdit(config, "edit", [{ id: "ref", name: "ref.png", type: "image/png", dataUrl: "data:image/png;base64,AA==" }]);
 
         expect(atob(generated[0].dataUrl.split(",")[1])).toBe("https://image.example|IMAGE_SECRET|node-image-model");
         expect(atob(edited[0].dataUrl.split(",")[1])).toBe("https://image.example|IMAGE_SECRET|node-image-model");
@@ -133,14 +142,14 @@ describe("capability request isolation", () => {
     it("uses only text credentials and script for image questions", async () => {
         const config = isolatedConfig();
         config.model = "legacy-text::node-text-model";
-        const answer = await requestImageQuestion(config, [{ role: "user", content: "what is this" }], vi.fn());
+        const answer = await requestCanvasImageQuestion(config, [{ role: "user", content: "what is this" }], vi.fn());
         expect(answer).toBe("https://text.example|TEXT_SECRET|node-text-model");
     });
 
     it("uses only audio credentials and script for audio generation", async () => {
         const config = isolatedConfig();
         config.model = "legacy-audio::node-audio-model";
-        const audio = await requestAudioGeneration(config, "speak");
+        const audio = await requestCanvasAudioGeneration(config, "speak");
         expect(await audio.text()).toBe("https://audio.example|AUDIO_SECRET|node-audio-model");
     });
 
@@ -149,8 +158,8 @@ describe("capability request isolation", () => {
         config.capabilityConfigs.image.script = "";
         mockedAxios.post.mockResolvedValueOnce({ data: { data: [{ b64_json: "AA==" }] } }).mockResolvedValueOnce({ data: { data: [{ b64_json: "AQ==" }] } });
 
-        await requestGeneration(config, "draw");
-        await requestEdit(config, "edit", [{ id: "ref", name: "ref.png", type: "image/png", dataUrl: "data:image/png;base64,AA==" }]);
+        await requestCanvasImageBatch(config, "draw");
+        await requestCanvasImageEdit(config, "edit", [{ id: "ref", name: "ref.png", type: "image/png", dataUrl: "data:image/png;base64,AA==" }]);
 
         const [generateUrl, generateBody, generateOptions] = mockedAxios.post.mock.calls[0];
         expect(generateUrl).toBe("https://image.example/v1/images/generations");
@@ -175,7 +184,7 @@ describe("capability request isolation", () => {
         );
         vi.stubGlobal("fetch", fetchMock);
 
-        const answer = await requestImageQuestion(config, [{ role: "user", content: "say hi" }], vi.fn());
+        const answer = await requestCanvasTextStream(config, [{ role: "user", content: "say hi" }], vi.fn());
         expect(answer).toBe("hello");
         expect(fetchMock).toHaveBeenCalledWith(
             "https://text.example/v1/responses",
@@ -191,12 +200,20 @@ describe("capability request isolation", () => {
         config.model = "legacy-audio::node-audio-model";
         config.capabilityConfigs.audio.script = "";
         mockedAxios.post.mockResolvedValueOnce({ data: new Blob(["audio"], { type: "audio/mpeg" }) });
-        await requestAudioGeneration(config, "speak");
+        await requestCanvasAudioGeneration(config, "speak");
         expect(mockedAxios.post).toHaveBeenCalledWith(
             "https://audio.example/v1/audio/speech",
             expect.objectContaining({ model: "node-audio-model" }),
             expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer AUDIO_SECRET" }) }),
         );
+    });
+
+    it("routes project video generate and retry wrappers through video snapshots", async () => {
+        const config = isolatedConfig();
+        config.model = "project-video-model";
+        config.capabilityConfigs.video.script = 'if (apiKey !== "VIDEO_SECRET" || baseUrl !== "https://video.example") throw new Error("wrong capability"); return "https://cdn.example/video.mp4"';
+        expect(await requestCanvasVideoGeneration(config, "move")).toMatchObject({ url: "https://cdn.example/video.mp4" });
+        expect(await requestCanvasVideoRetry(config, "move again")).toMatchObject({ url: "https://cdn.example/video.mp4" });
     });
 
     it("keeps the video request-start snapshot for polling after config changes", async () => {
@@ -250,6 +267,38 @@ describe("capability request isolation", () => {
         expect(mockedAxios.get).toHaveBeenCalledWith("https://ark-video.example/v1/contents/generations/tasks/seedance-task", expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer ARK_VIDEO_SECRET" }) }));
     });
 
+    it("refreshes a pending video snapshot so it survives beyond its initial TTL", async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+        const config = isolatedConfig();
+        config.model = "long-seedance";
+        mockedAxios.post.mockResolvedValueOnce({ data: { id: "long-task", status: "queued" } });
+        const task = await createVideoGenerationTask(config, "move");
+        vi.advanceTimersByTime(29 * 60 * 1000);
+        mockedAxios.get.mockResolvedValueOnce({ data: { id: "long-task", status: "running" } });
+        expect((await pollVideoGenerationTask(config, task)).status).toBe("pending");
+        vi.advanceTimersByTime(11 * 60 * 1000);
+        mockedAxios.get.mockResolvedValueOnce({ data: { id: "long-task", status: "failed", error: { message: "finished" } } });
+        expect(await pollVideoGenerationTask(config, task)).toEqual({ status: "failed", error: "finished" });
+        expect(getVideoTaskResourceCountsForTest().snapshots).toBe(0);
+        vi.useRealTimers();
+    });
+
+    it("retains the same video snapshot after a transient poll error for retry", async () => {
+        const config = isolatedConfig();
+        config.model = "retry-video";
+        mockedAxios.post.mockResolvedValueOnce({ data: { id: "retry-task", status: "queued" } });
+        const task = await createVideoGenerationTask(config, "move");
+        mockedAxios.get.mockRejectedValueOnce(new Error("temporary network error"));
+        await expect(pollVideoGenerationTask(config, task)).rejects.toThrow("temporary network error");
+        expect(getVideoTaskResourceCountsForTest().snapshots).toBe(1);
+        config.capabilityConfigs.video = { apiBase: "https://changed.example", apiKey: "CHANGED_SECRET", apiFormat: "openai", modelId: "changed" };
+        mockedAxios.get.mockResolvedValueOnce({ data: { id: "retry-task", status: "failed", error: { message: "done" } } });
+        expect(await pollVideoGenerationTask(config, task)).toEqual({ status: "failed", error: "done" });
+        expect(mockedAxios.get.mock.calls[1][0]).toBe("https://video.example/v1/videos/retry-task");
+        expect(mockedAxios.get.mock.calls[1][1]).toEqual(expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer VIDEO_SECRET" }) }));
+    });
+
     it("redacts the video key from failed polling states", async () => {
         const config = isolatedConfig();
         config.model = "node-video-model";
@@ -283,6 +332,8 @@ describe("capability request isolation", () => {
         mockedAxios.get.mockRejectedValueOnce(new Error("poll failed"));
         const failedTask = await createVideoGenerationTask(failedConfig, "move");
         await expect(pollVideoGenerationTask(failedConfig, failedTask)).rejects.toThrow("poll failed");
+        expect(getVideoTaskResourceCountsForTest().snapshots).toBe(1);
+        releaseVideoGenerationTask(failedTask);
         expect(getVideoTaskResourceCountsForTest().snapshots).toBe(0);
     });
 
@@ -311,7 +362,7 @@ describe("capability request isolation", () => {
         pluginConfig.capabilityConfigs.video.script = 'return new Blob(["video"], { type: "video/mp4" })';
         await createVideoGenerationTask(pluginConfig, "move");
         expect(getVideoTaskResourceCountsForTest()).toEqual({ snapshots: 1, pluginResults: 1 });
-        vi.advanceTimersByTime(10 * 60 * 1000 + 1);
+        vi.advanceTimersByTime(30 * 60 * 1000 + 1);
         expect(getVideoTaskResourceCountsForTest()).toEqual({ snapshots: 0, pluginResults: 0 });
         vi.useRealTimers();
     });
