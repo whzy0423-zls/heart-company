@@ -202,6 +202,7 @@ function InfiniteCanvasPage() {
     const [connections, setConnections] = useState<CanvasConnection[]>([]);
     const [chatSessions, setChatSessions] = useState<CanvasAssistantSession[]>([]);
     const [activeChatId, setActiveChatId] = useState<string | null>(null);
+    const [agentLoading, setAgentLoading] = useState(false);
     const [viewport, setViewport] = useState<ViewportTransform>({ x: 0, y: 0, k: 1 });
     const [size, setSize] = useState({ width: 1200, height: 720 });
     const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
@@ -2609,6 +2610,118 @@ function InfiniteCanvasPage() {
         [screenToCanvas, size.height, size.width],
     );
 
+    const createAgentSession = useCallback(() => {
+        const now = new Date().toISOString();
+        const id = nanoid();
+        const session: CanvasAssistantSession = {
+            id,
+            title: "新 Agent 会话",
+            createdAt: now,
+            updatedAt: now,
+            messages: [],
+        };
+        setChatSessions((prev) => [session, ...prev]);
+        setActiveChatId(id);
+    }, []);
+
+    const selectAgentSession = useCallback((sessionId: string) => setActiveChatId(sessionId), []);
+
+    const deleteAgentSession = useCallback(
+        (sessionId: string) => {
+            setChatSessions((prev) => prev.filter((session) => session.id !== sessionId));
+            setActiveChatId((current) => {
+                if (current !== sessionId) return current;
+                const next = chatSessions.find((session) => session.id !== sessionId);
+                return next?.id || null;
+            });
+        },
+        [chatSessions],
+    );
+
+    const sendAgentMessage = useCallback(
+        async (prompt: string) => {
+            const content = prompt.trim();
+            if (!content || agentLoading) return;
+            if (!isAiConfigReady(effectiveConfig, "text")) {
+                openConfigDialog(true, "channels", "text");
+                return;
+            }
+
+            const now = new Date().toISOString();
+            const currentSession = (activeChatId && chatSessions.find((session) => session.id === activeChatId)) || null;
+            const sessionId = currentSession?.id || nanoid();
+            const title = currentSession?.title && currentSession.title !== "新 Agent 会话" ? currentSession.title : content.slice(0, 24) || "Agent 会话";
+            const userMessage = { id: nanoid(), role: "user" as const, text: content };
+            const assistantMessage = { id: nanoid(), role: "assistant" as const, text: "" };
+            const existingMessages = currentSession?.messages || [];
+            const requestMessages = [
+                ...existingMessages.flatMap((message) => {
+                    if (message.role !== "user" && message.role !== "assistant" && message.role !== "system") return [];
+                    return [{ role: message.role, content: message.text }];
+                }),
+                { role: "user" as const, content },
+            ];
+
+            setActiveChatId(sessionId);
+            setChatSessions((prev) => {
+                const exists = prev.some((session) => session.id === sessionId);
+                const nextSession: CanvasAssistantSession = {
+                    id: sessionId,
+                    title,
+                    createdAt: currentSession?.createdAt || now,
+                    updatedAt: now,
+                    messages: [...existingMessages, userMessage, assistantMessage],
+                };
+                return exists ? prev.map((session) => (session.id === sessionId ? nextSession : session)) : [nextSession, ...prev];
+            });
+
+            setAgentLoading(true);
+            try {
+                const finalText = await requestImageQuestion(effectiveConfig, requestMessages, (text) => {
+                    setChatSessions((prev) =>
+                        prev.map((session) =>
+                            session.id === sessionId
+                                ? {
+                                      ...session,
+                                      updatedAt: new Date().toISOString(),
+                                      messages: session.messages.map((message) => (message.id === assistantMessage.id ? { ...message, text } : message)),
+                                  }
+                                : session,
+                        ),
+                    );
+                });
+                setChatSessions((prev) =>
+                    prev.map((session) =>
+                        session.id === sessionId
+                            ? {
+                                  ...session,
+                                  updatedAt: new Date().toISOString(),
+                                  messages: session.messages.map((message) => (message.id === assistantMessage.id ? { ...message, text: finalText } : message)),
+                              }
+                            : session,
+                    ),
+                );
+            } catch (error) {
+                const errorText = error instanceof Error ? error.message : "Agent 请求失败";
+                message.error(errorText);
+                setChatSessions((prev) =>
+                    prev.map((session) =>
+                        session.id === sessionId
+                            ? {
+                                  ...session,
+                                  updatedAt: new Date().toISOString(),
+                                  messages: session.messages.map((item) => (item.id === assistantMessage.id ? { ...item, role: "error", text: errorText } : item)),
+                              }
+                            : session,
+                    ),
+                );
+            } finally {
+                setAgentLoading(false);
+            }
+        },
+        [activeChatId, agentLoading, chatSessions, effectiveConfig, isAiConfigReady, message, openConfigDialog],
+    );
+
     const handleAssetInsert = useCallback(
         (payload: InsertAssetPayload) => {
             if (payload.kind === "text") {
@@ -2708,7 +2821,21 @@ function InfiniteCanvasPage() {
 
     return (
         <main className="flex h-full min-h-0 overflow-hidden" style={{ background: theme.canvas.background, color: theme.node.text }}>
-            <CanvasSidePanel nodes={nodes} selectedNodeIds={selectedNodeIds} onFocusNode={focusNode} onPreviewNode={setPreviewNodeId} onInsertAsset={handleAssetInsert} />
+            <CanvasSidePanel
+                nodes={nodes}
+                selectedNodeIds={selectedNodeIds}
+                chatSessions={chatSessions}
+                activeChatId={activeChatId}
+                agentLoading={agentLoading}
+                onFocusNode={focusNode}
+                onPreviewNode={setPreviewNodeId}
+                onInsertAsset={handleAssetInsert}
+                onCreateAgentSession={createAgentSession}
+                onSelectAgentSession={selectAgentSession}
+                onDeleteAgentSession={deleteAgentSession}
+                onSendAgentMessage={sendAgentMessage}
+                onInsertAgentText={insertAssistantText}
+            />
             <section className="relative min-w-0 flex-1 overflow-hidden">
                 <CanvasTopBar
                     title={currentProject?.title || "未命名画布"}
