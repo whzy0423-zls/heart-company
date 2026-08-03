@@ -34,6 +34,7 @@ type CapabilityModelConfig = {
   apiKey: string;
   apiFormat: "openai" | "gemini" | "ark";
   modelId: string;
+  script?: string;
 };
 
 type CapabilityConfigs = {
@@ -53,10 +54,12 @@ type CapabilityConfigs = {
 迁移规则：
 
 1. 新格式存在时直接读取四类能力配置。
-2. 旧格式只有渠道配置时，根据旧的 `imageModel`、`videoModel`、`textModel`、`audioModel` 找到对应渠道。
-3. 将渠道的 API Base、API Key、协议和实际模型名分别复制到对应能力配置。
+2. 旧格式只有渠道配置时，根据旧的 `imageModel`、`videoModel`、`textModel`、`audioModel` 找到对应渠道和模型。
+3. 将渠道的 API Base、API Key、协议、实际模型名和模型脚本分别复制到对应能力配置。
 4. 某类旧模型无法解析时，仅为该类使用默认空配置，不影响其他三类。
-5. 保留原本地存储键，使用版本字段或结构检测完成原位迁移，避免用户配置整体丢失。
+5. 使用 Zustand persist 的 `version` 和 `migrate` 完成幂等迁移；对缺失字段、非法 JSON、未知能力和空渠道采用默认空配置，并保留 WebDAV 等非模型配置。
+
+画布项目和导入文件中的旧节点可能保存 `channelId::model` 格式。读取项目时将其解码为原始模型 ID；新写入的节点不再保存渠道凭据或渠道前缀。迁移必须覆盖本地项目、导入项目和旧配置三种入口。
 
 ## 配置界面
 
@@ -91,15 +94,20 @@ type CapabilityConfigs = {
   → 调用对应生成服务
 ```
 
+新增能力感知解析器，例如 `resolveCapabilityRequestConfig(config, capability, modelOverride?)`。图片、视频、文本、音频服务及其所有调用点必须显式传入能力，替换现有依赖 `channelId::model` 的 `resolveModelRequestConfig` 路径。自定义调用脚本从当前能力配置读取。
+
 节点不能读取其他能力的凭据。例如视频生成缺少 API Key 时，只提示配置视频模型，不回退到图片或文本密钥。
 
-模型选择器只展示当前能力可用的模型。第一阶段每种能力维护一套凭据和一个默认模型 ID；节点仍允许保存模型 ID 覆盖，但共享该能力的凭据。
+第一阶段每种能力维护一套凭据和一个默认模型 ID。节点默认继承该能力配置，不在节点上填写 API Key。为兼容已有画布，旧节点的模型覆盖值保留为“原始模型 ID”，但节点 UI 只提供“使用当前能力配置”或“使用旧覆盖值”两种明确状态，不再展示渠道列表。
+
+如果用户需要临时切换同一能力的模型，直接修改该能力配置的模型 ID；所有使用该能力默认配置的节点立即使用新模型。未知或空的旧覆盖值会回退到能力配置的默认模型 ID。
 
 ## 错误处理
 
 - 缺少 API Base：提示“请先配置图片/视频/文本/音频模型 API Base”。
 - 缺少 API Key：提示对应能力的 API Key，随后打开配置面板的对应区域。
 - 缺少模型 ID：提示对应能力的模型 ID。
+- 每次校验都必须显式传入能力类型；`isAiConfigReady`、模型请求解析器和配置弹窗打开动作均不得只接收裸模型字符串。
 - 请求鉴权失败：只指向当前能力配置。
 - 旧配置迁移失败：该能力回退为空配置，其余能力继续可用。
 
@@ -110,6 +118,23 @@ type CapabilityConfigs = {
 - 配置存储在浏览器 `localStorage`，清理站点数据会删除配置。
 - 浏览器本地配置适合当前“每个用户自行配置”的产品模式，但不提供跨设备同步。
 
+## 配置入口与组件
+
+无限画布应用根部挂载唯一的 `CapabilityModelConfigDialog`，入口放在画布顶部菜单的“模型配置”项；节点在缺少当前能力配置时打开同一弹窗并自动定位到对应标签。配置弹窗不由后台 Vue 页面提供，避免 iframe 与后台配置状态混用。
+
+现有 `openConfigDialog` 状态扩展为 `targetCapability?: ModelCapability`，保存后可按能力继续原来的生成操作。
+
+## 协议与服务兼容
+
+每个能力区域只展示其服务层支持的协议：
+
+- 图片：OpenAI-compatible、Gemini、Ark（按现有 image service 能力校验）。
+- 视频：OpenAI-compatible、Ark/Seedance 及现有插件协议；不展示 Gemini。
+- 文本：OpenAI-compatible、Gemini、Ark；自定义脚本继续通过 `script` 执行。
+- 音频：OpenAI-compatible、Ark；不展示 Gemini。
+
+原有 `fetchImageModels` 和渠道模型编辑器不再作为配置主入口。第一阶段以手动填写模型 ID 为准；可用模型探测只作为当前能力的可选“读取模型”动作，不跨能力共享结果。
+
 ## 测试
 
 1. Store 单元测试：四类配置独立更新，修改一类不改变其他三类。
@@ -118,7 +143,8 @@ type CapabilityConfigs = {
 4. 节点测试：图片、视频、文本、音频节点只使用对应配置。
 5. 错误测试：缺失字段时提示正确能力，不错误回退。
 6. UI 测试：四个配置区域可以独立填写和保存。
-7. 构建与类型检查：无限画布测试、TypeScript 和生产构建通过。
+7. 导入/导出测试：导出文件不含四类 API Key，旧节点模型覆盖值仍可恢复为原始模型 ID。
+8. 构建与类型检查：无限画布测试、TypeScript 和生产构建通过。
 
 ## 非目标
 
