@@ -7,6 +7,16 @@ export type ApiCallFormat = "openai" | "gemini" | "ark";
 export type ModelCapability = "image" | "video" | "text" | "audio";
 export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh";
 
+export type CapabilityModelConfig = {
+    apiBase: string;
+    apiKey: string;
+    apiFormat: ApiCallFormat;
+    modelId: string;
+    script?: string;
+};
+
+export type CapabilityConfigs = Record<ModelCapability, CapabilityModelConfig>;
+
 export type ChannelModel = {
     name: string;
     capability: ModelCapability;
@@ -23,6 +33,7 @@ export type ModelChannel = {
 };
 
 export type AiConfig = {
+    capabilityConfigs: CapabilityConfigs;
     channelMode: "remote" | "local";
     baseUrl: string;
     apiKey: string;
@@ -65,8 +76,19 @@ const CHANNEL_MODEL_SEPARATOR = "::";
 const OPENAI_BASE_URL = "https://api.openai.com";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 const ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
+const CONFIG_STORE_VERSION = 2;
+
+export function createDefaultCapabilityConfigs(): CapabilityConfigs {
+    return {
+        image: { apiBase: OPENAI_BASE_URL, apiKey: "", apiFormat: "openai", modelId: "gpt-image-2" },
+        video: { apiBase: OPENAI_BASE_URL, apiKey: "", apiFormat: "openai", modelId: "grok-imagine-video" },
+        text: { apiBase: OPENAI_BASE_URL, apiKey: "", apiFormat: "openai", modelId: "gpt-5.5" },
+        audio: { apiBase: OPENAI_BASE_URL, apiKey: "", apiFormat: "openai", modelId: "gpt-4o-mini-tts" },
+    };
+}
 
 export const defaultConfig: AiConfig = {
+    capabilityConfigs: createDefaultCapabilityConfigs(),
     channelMode: "local",
     baseUrl: OPENAI_BASE_URL,
     apiKey: "",
@@ -124,6 +146,7 @@ type ConfigStore = {
     configTab: ConfigTabKey;
     shouldPromptContinue: boolean;
     updateConfig: <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
+    updateCapabilityConfig: (capability: ModelCapability, patch: Partial<CapabilityModelConfig>) => void;
     updateWebdavConfig: <K extends keyof WebdavSyncConfig>(key: K, value: WebdavSyncConfig[K]) => void;
     isAiConfigReady: (config: AiConfig, model: string) => boolean;
     openConfigDialog: (shouldPromptContinue?: boolean, tab?: ConfigTabKey) => void;
@@ -184,6 +207,179 @@ function isAiConfigReady(config: AiConfig, model: string) {
     return Boolean(model.trim() && channel.baseUrl.trim() && channel.apiKey.trim());
 }
 
+export function updateCapabilityConfig(config: AiConfig, capability: ModelCapability, patch: Partial<CapabilityModelConfig>): AiConfig {
+    return {
+        ...config,
+        capabilityConfigs: {
+            ...config.capabilityConfigs,
+            [capability]: {
+                ...config.capabilityConfigs[capability],
+                ...patch,
+            },
+        },
+    };
+}
+
+export type CapabilityConfigErrorCode = "missing_api_base" | "missing_api_key" | "missing_model_id" | "unsupported_protocol";
+
+export class CapabilityConfigError extends Error {
+    constructor(
+        public readonly capability: ModelCapability,
+        public readonly code: CapabilityConfigErrorCode,
+        message: string,
+    ) {
+        super(message);
+        this.name = "CapabilityConfigError";
+    }
+}
+
+const CAPABILITY_LABELS: Record<ModelCapability, string> = {
+    image: "图片",
+    video: "视频",
+    text: "文本",
+    audio: "音频",
+};
+
+const SUPPORTED_PROTOCOLS: Record<ModelCapability, readonly ApiCallFormat[]> = {
+    image: ["openai", "gemini", "ark"],
+    video: ["openai", "ark"],
+    text: ["openai", "gemini", "ark"],
+    audio: ["openai", "ark"],
+};
+
+export function validateCapabilityConfig(capability: ModelCapability, config: CapabilityModelConfig): CapabilityConfigError[] {
+    const label = CAPABILITY_LABELS[capability];
+    const errors: CapabilityConfigError[] = [];
+    if (!config.apiBase.trim()) errors.push(new CapabilityConfigError(capability, "missing_api_base", `请先配置${label}模型 API Base`));
+    if (!config.apiKey.trim()) errors.push(new CapabilityConfigError(capability, "missing_api_key", `请先配置${label}模型 API Key`));
+    if (!config.modelId.trim()) errors.push(new CapabilityConfigError(capability, "missing_model_id", `请先配置${label}模型 ID`));
+    if (!SUPPORTED_PROTOCOLS[capability].includes(config.apiFormat)) {
+        errors.push(new CapabilityConfigError(capability, "unsupported_protocol", `${label}模型不支持 ${config.apiFormat} 协议`));
+    }
+    return errors;
+}
+
+export function resolveCapabilityRequestConfig(config: AiConfig, capability: ModelCapability, modelOverride?: string) {
+    const capabilityConfig = config.capabilityConfigs[capability];
+    const resolved = {
+        ...config,
+        capability,
+        apiBase: capabilityConfig.apiBase,
+        baseUrl: capabilityConfig.apiBase,
+        apiKey: capabilityConfig.apiKey,
+        apiFormat: capabilityConfig.apiFormat,
+        model: modelOptionName(modelOverride?.trim() || capabilityConfig.modelId),
+        script: capabilityConfig.script?.trim() || "",
+    };
+    const errors = validateCapabilityConfig(capability, { ...capabilityConfig, modelId: resolved.model });
+    if (errors.length) throw errors[0];
+    return resolved;
+}
+
+type UnknownRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): UnknownRecord {
+    return value && typeof value === "object" && !Array.isArray(value) ? (value as UnknownRecord) : {};
+}
+
+function stringValue(value: unknown) {
+    return typeof value === "string" ? value : "";
+}
+
+function emptyCapabilityConfig(): CapabilityModelConfig {
+    return { apiBase: "", apiKey: "", apiFormat: "openai", modelId: "" };
+}
+
+function normalizeCapabilityConfig(value: unknown, fallback: CapabilityModelConfig): CapabilityModelConfig {
+    const raw = asRecord(value);
+    const has = (key: string) => Object.prototype.hasOwnProperty.call(raw, key);
+    const script = has("script") ? stringValue(raw.script).trim() : fallback.script?.trim() || "";
+    return {
+        apiBase: has("apiBase") ? stringValue(raw.apiBase).trim() : fallback.apiBase,
+        apiKey: typeof raw.apiKey === "string" ? raw.apiKey : fallback.apiKey,
+        apiFormat: raw.apiFormat === "gemini" || raw.apiFormat === "ark" || raw.apiFormat === "openai" ? raw.apiFormat : fallback.apiFormat,
+        modelId: modelOptionName(has("modelId") ? stringValue(raw.modelId).trim() : fallback.modelId),
+        ...(script ? { script } : {}),
+    };
+}
+
+function migrateLegacyCapability(rawConfig: UnknownRecord, capability: ModelCapability): CapabilityModelConfig {
+    const modelField = capability === "image" ? "imageModel" : capability === "video" ? "videoModel" : capability === "text" ? "textModel" : "audioModel";
+    const selectedValue = stringValue(rawConfig[modelField]) || (capability === "text" ? stringValue(rawConfig.model) : "");
+    const channels = Array.isArray(rawConfig.channels) ? rawConfig.channels.map(asRecord) : [];
+    if (channels.length) {
+        const decoded = decodeChannelModel(selectedValue);
+        const modelId = decoded?.model || selectedValue;
+        const channel = decoded
+            ? channels.find((item) => stringValue(item.id) === decoded.channelId)
+            : channels.find((item) => {
+                  const models = Array.isArray(item.models) ? item.models : [];
+                  return models.some((entry) => stringValue(typeof entry === "string" ? entry : asRecord(entry).name) === modelId);
+              });
+        if (!channel) return emptyCapabilityConfig();
+        const modelEntry = (Array.isArray(channel.models) ? channel.models : []).find((entry) => stringValue(typeof entry === "string" ? entry : asRecord(entry).name) === modelId);
+        if (!modelId || !modelEntry) return emptyCapabilityConfig();
+        const model = asRecord(modelEntry);
+        return {
+            apiBase: stringValue(channel.baseUrl).trim(),
+            apiKey: stringValue(channel.apiKey),
+            apiFormat: normalizeApiFormat(channel.apiFormat),
+            modelId,
+            ...(stringValue(model.script).trim() ? { script: stringValue(model.script).trim() } : {}),
+        };
+    }
+    if (!selectedValue) return emptyCapabilityConfig();
+    return {
+        apiBase: stringValue(rawConfig.baseUrl).trim(),
+        apiKey: stringValue(rawConfig.apiKey),
+        apiFormat: normalizeApiFormat(rawConfig.apiFormat),
+        modelId: modelOptionName(selectedValue),
+    };
+}
+
+export function migrateConfigState(persisted: unknown): { config: AiConfig; webdav: WebdavSyncConfig } {
+    const state = asRecord(persisted);
+    const rawConfig = asRecord(state.config);
+    const rawCapabilities = asRecord(rawConfig.capabilityConfigs);
+    const hasNewCapabilities = Object.keys(rawCapabilities).length > 0;
+    const capabilityConfigs = {} as CapabilityConfigs;
+    for (const capability of ["image", "video", "text", "audio"] as const) {
+        capabilityConfigs[capability] = Object.prototype.hasOwnProperty.call(rawCapabilities, capability)
+            ? normalizeCapabilityConfig(rawCapabilities[capability], emptyCapabilityConfig())
+            : hasNewCapabilities
+              ? emptyCapabilityConfig()
+              : migrateLegacyCapability(rawConfig, capability);
+    }
+    const config = { ...defaultConfig, ...rawConfig, capabilityConfigs } as AiConfig;
+    if (!Array.isArray(rawConfig.channels)) config.channels = [];
+    const channels = normalizeChannels(config);
+    const models = modelOptionsFromChannels(channels);
+    return {
+        webdav: { ...defaultWebdavSyncConfig, ...asRecord(state.webdav) },
+        config: {
+            ...config,
+            channelMode: "local",
+            apiFormat: normalizeApiFormat(config.apiFormat),
+            channels,
+            models,
+            imageModel: normalizeModelOptionValue(config.imageModel || config.model, channels),
+            videoModel: normalizeModelOptionValue(config.videoModel, channels),
+            textModel: normalizeModelOptionValue(config.textModel || config.model, channels),
+            audioModel: normalizeModelOptionValue(config.audioModel || defaultConfig.audioModel, channels),
+            audioVoice: config.audioVoice || defaultConfig.audioVoice,
+            audioFormat: config.audioFormat || defaultConfig.audioFormat,
+            audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
+            audioInstructions: config.audioInstructions || "",
+            reasoningEffort: config.reasoningEffort || "auto",
+            videoSeconds: config.videoSeconds || "6",
+            vquality: config.vquality || "720",
+            videoGenerateAudio: config.videoGenerateAudio || "true",
+            videoWatermark: config.videoWatermark || "false",
+            canvasImageCount: config.canvasImageCount || "3",
+        },
+    };
+}
+
 export const useConfigStore = create<ConfigStore>()(
     persist(
         (set, get) => ({
@@ -199,6 +395,8 @@ export const useConfigStore = create<ConfigStore>()(
                         [key]: value,
                     },
                 })),
+            updateCapabilityConfig: (capability, patch) =>
+                set((state) => ({ config: updateCapabilityConfig(state.config, capability, patch) })),
             updateWebdavConfig: (key, value) =>
                 set((state) => ({
                     webdav: {
@@ -213,41 +411,10 @@ export const useConfigStore = create<ConfigStore>()(
         }),
         {
             name: CONFIG_STORE_KEY,
+            version: CONFIG_STORE_VERSION,
             partialize: (state) => ({ config: state.config, webdav: state.webdav }),
-            merge: (persisted, current) => {
-                const persistedState = (persisted || {}) as Partial<ConfigStore>;
-                const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;
-                const persistedWebdav = (persistedState.webdav || {}) as Partial<WebdavSyncConfig>;
-                const config = { ...defaultConfig, ...persistedConfig };
-                if (!Array.isArray(persistedConfig.channels)) config.channels = [];
-                const channels = normalizeChannels(config);
-                const models = modelOptionsFromChannels(channels);
-                return {
-                    ...current,
-                    webdav: { ...defaultWebdavSyncConfig, ...persistedWebdav },
-                    config: {
-                        ...config,
-                        channelMode: "local",
-                        apiFormat: normalizeApiFormat(config.apiFormat),
-                        channels,
-                        models,
-                        imageModel: normalizeModelOptionValue(config.imageModel || config.model, channels),
-                        videoModel: normalizeModelOptionValue(config.videoModel, channels),
-                        textModel: normalizeModelOptionValue(config.textModel || config.model, channels),
-                        audioModel: normalizeModelOptionValue(config.audioModel || defaultConfig.audioModel, channels),
-                        audioVoice: config.audioVoice || defaultConfig.audioVoice,
-                        audioFormat: config.audioFormat || defaultConfig.audioFormat,
-                        audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
-                        audioInstructions: config.audioInstructions || "",
-                        reasoningEffort: config.reasoningEffort || "auto",
-                        videoSeconds: config.videoSeconds || "6",
-                        vquality: config.vquality || "720",
-                        videoGenerateAudio: config.videoGenerateAudio || "true",
-                        videoWatermark: config.videoWatermark || "false",
-                        canvasImageCount: config.canvasImageCount || "3",
-                    },
-                };
-            },
+            migrate: (persisted) => migrateConfigState(persisted),
+            merge: (persisted, current) => ({ ...current, ...migrateConfigState(persisted) }),
         },
     ),
 );
