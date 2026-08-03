@@ -3,7 +3,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
-export type ApiCallFormat = "openai" | "gemini" | "ark";
+export type ApiCallFormat = "openai" | "gemini" | "ark" | "unknown";
 export type ModelCapability = "image" | "video" | "text" | "audio";
 export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh";
 
@@ -148,7 +148,7 @@ type ConfigStore = {
     updateConfig: <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
     updateCapabilityConfig: (capability: ModelCapability, patch: Partial<CapabilityModelConfig>) => void;
     updateWebdavConfig: <K extends keyof WebdavSyncConfig>(key: K, value: WebdavSyncConfig[K]) => void;
-    isAiConfigReady: (config: AiConfig, model: string) => boolean;
+    isAiConfigReady: (config: AiConfig, capability: ModelCapability, modelOverride?: string) => boolean;
     openConfigDialog: (shouldPromptContinue?: boolean, tab?: ConfigTabKey) => void;
     setConfigDialogOpen: (isOpen: boolean) => void;
     clearPromptContinue: () => void;
@@ -202,9 +202,11 @@ export function resolveModelScript(config: AiConfig, value: string) {
     return findChannelModel(config, value)?.model.script?.trim() || "";
 }
 
-function isAiConfigReady(config: AiConfig, model: string) {
-    const channel = resolveModelChannel(config, model);
-    return Boolean(model.trim() && channel.baseUrl.trim() && channel.apiKey.trim());
+export function isAiConfigReady(config: AiConfig, capability: ModelCapability, modelOverride?: string) {
+    const capabilityConfig = config.capabilityConfigs[capability];
+    if (!capabilityConfig) return false;
+    const modelId = modelOptionName(modelOverride?.trim() || capabilityConfig.modelId);
+    return validateCapabilityConfig(capability, { ...capabilityConfig, modelId }).length === 0;
 }
 
 export function updateCapabilityConfig(config: AiConfig, capability: ModelCapability, patch: Partial<CapabilityModelConfig>): AiConfig {
@@ -262,7 +264,6 @@ export function validateCapabilityConfig(capability: ModelCapability, config: Ca
 export function resolveCapabilityRequestConfig(config: AiConfig, capability: ModelCapability, modelOverride?: string) {
     const capabilityConfig = config.capabilityConfigs[capability];
     const resolved = {
-        ...config,
         capability,
         apiBase: capabilityConfig.apiBase,
         baseUrl: capabilityConfig.apiBase,
@@ -297,7 +298,7 @@ function normalizeCapabilityConfig(value: unknown, fallback: CapabilityModelConf
     return {
         apiBase: has("apiBase") ? stringValue(raw.apiBase).trim() : fallback.apiBase,
         apiKey: typeof raw.apiKey === "string" ? raw.apiKey : fallback.apiKey,
-        apiFormat: raw.apiFormat === "gemini" || raw.apiFormat === "ark" || raw.apiFormat === "openai" ? raw.apiFormat : fallback.apiFormat,
+        apiFormat: has("apiFormat") ? normalizeApiFormat(raw.apiFormat) : fallback.apiFormat,
         modelId: modelOptionName(has("modelId") ? stringValue(raw.modelId).trim() : fallback.modelId),
         ...(script ? { script } : {}),
     };
@@ -310,14 +311,21 @@ function migrateLegacyCapability(rawConfig: UnknownRecord, capability: ModelCapa
     if (channels.length) {
         const decoded = decodeChannelModel(selectedValue);
         const modelId = decoded?.model || selectedValue;
+        const matchesCapability = (entry: unknown) => {
+            if (typeof entry === "string") return guessCapability(entry) === capability;
+            const model = asRecord(entry);
+            const name = stringValue(model.name);
+            const modelCapability = model.capability === "image" || model.capability === "video" || model.capability === "text" || model.capability === "audio" ? model.capability : guessCapability(name);
+            return modelCapability === capability;
+        };
         const channel = decoded
             ? channels.find((item) => stringValue(item.id) === decoded.channelId)
             : channels.find((item) => {
                   const models = Array.isArray(item.models) ? item.models : [];
-                  return models.some((entry) => stringValue(typeof entry === "string" ? entry : asRecord(entry).name) === modelId);
+                  return models.some((entry) => stringValue(typeof entry === "string" ? entry : asRecord(entry).name) === modelId && matchesCapability(entry));
               });
         if (!channel) return emptyCapabilityConfig();
-        const modelEntry = (Array.isArray(channel.models) ? channel.models : []).find((entry) => stringValue(typeof entry === "string" ? entry : asRecord(entry).name) === modelId);
+        const modelEntry = (Array.isArray(channel.models) ? channel.models : []).find((entry) => stringValue(typeof entry === "string" ? entry : asRecord(entry).name) === modelId && matchesCapability(entry));
         if (!modelId || !modelEntry) return emptyCapabilityConfig();
         const model = asRecord(modelEntry);
         return {
@@ -341,7 +349,7 @@ export function migrateConfigState(persisted: unknown): { config: AiConfig; webd
     const state = asRecord(persisted);
     const rawConfig = asRecord(state.config);
     const rawCapabilities = asRecord(rawConfig.capabilityConfigs);
-    const hasNewCapabilities = Object.keys(rawCapabilities).length > 0;
+    const hasNewCapabilities = Object.prototype.hasOwnProperty.call(rawConfig, "capabilityConfigs");
     const capabilityConfigs = {} as CapabilityConfigs;
     for (const capability of ["image", "video", "text", "audio"] as const) {
         capabilityConfigs[capability] = Object.prototype.hasOwnProperty.call(rawCapabilities, capability)
@@ -404,7 +412,7 @@ export const useConfigStore = create<ConfigStore>()(
                         [key]: value,
                     },
                 })),
-            isAiConfigReady: (config, model) => isAiConfigReady(config, model),
+            isAiConfigReady: (config, capability, modelOverride) => isAiConfigReady(config, capability, modelOverride),
             openConfigDialog: (shouldPromptContinue = false, configTab = "channels") => set({ isConfigOpen: true, shouldPromptContinue, configTab }),
             setConfigDialogOpen: (isConfigOpen) => set({ isConfigOpen }),
             clearPromptContinue: () => set({ shouldPromptContinue: false }),
@@ -542,7 +550,9 @@ export function defaultBaseUrlForApiFormat(apiFormat: ApiCallFormat) {
 }
 
 function normalizeApiFormat(apiFormat: unknown): ApiCallFormat {
-    return apiFormat === "gemini" || apiFormat === "ark" ? apiFormat : "openai";
+    if (apiFormat === "gemini" || apiFormat === "ark" || apiFormat === "openai" || apiFormat === "unknown") return apiFormat;
+    if (typeof apiFormat === "string" && apiFormat.trim()) return "unknown";
+    return "openai";
 }
 
 function uniqueModelOptions(models: string[]) {

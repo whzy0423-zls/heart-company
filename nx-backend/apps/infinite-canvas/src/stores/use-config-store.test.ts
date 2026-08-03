@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
     defaultConfig,
+    isAiConfigReady,
     migrateConfigState,
     resolveCapabilityRequestConfig,
     updateCapabilityConfig,
@@ -54,6 +55,16 @@ describe("capability model config store", () => {
         expect(migrateConfigState(migrated)).toEqual(migrated);
     });
 
+    it("does not migrate a same-name channel model from the wrong capability", () => {
+        const migrated = migrateConfigState({
+            config: {
+                channels: [{ id: "shared", baseUrl: "https://wrong", apiKey: "wrong-key", apiFormat: "openai", models: [{ name: "shared-model", capability: "text" }] }],
+                imageModel: "shared::shared-model",
+            },
+        });
+        expect(migrated.config.capabilityConfigs.image).toMatchObject({ apiBase: "", apiKey: "", modelId: "" });
+    });
+
     it("migrates the legacy flat config when channels are absent", () => {
         const migrated = migrateConfigState({
             config: {
@@ -79,6 +90,21 @@ describe("capability model config store", () => {
         expect(migrated.config.capabilityConfigs.video).toMatchObject({ apiBase: "", apiKey: "", modelId: "" });
     });
 
+    it("treats an explicit empty capabilityConfigs object as new format", () => {
+        const migrated = migrateConfigState({
+            config: { capabilityConfigs: {}, baseUrl: "https://legacy", apiKey: "legacy-key", imageModel: "legacy-image" },
+        });
+        expect(migrated.config.capabilityConfigs.image).toMatchObject({ apiBase: "", apiKey: "", modelId: "" });
+    });
+
+    it("preserves an unknown persisted protocol so validation reports it", () => {
+        const migrated = migrateConfigState({
+            config: { capabilityConfigs: { video: { apiBase: "https://video", apiKey: "key", apiFormat: "future-protocol", modelId: "video-model" } } },
+        });
+        expect(migrated.config.capabilityConfigs.video.apiFormat).toBe("unknown");
+        expect(validateCapabilityConfig("video", migrated.config.capabilityConfigs.video).map((error) => error.code)).toContain("unsupported_protocol");
+    });
+
     it("resolves only the requested capability and applies a model override", () => {
         const config: AiConfig = {
             ...defaultConfig,
@@ -90,6 +116,22 @@ describe("capability model config store", () => {
         };
         expect(resolveCapabilityRequestConfig(config, "image")).toMatchObject({ apiBase: "https://image", apiKey: "image-key", model: "image-model" });
         expect(resolveCapabilityRequestConfig(config, "video", "video-override")).toMatchObject({ apiBase: "https://video", apiKey: "video-key", model: "video-override" });
+        const imageRequest = resolveCapabilityRequestConfig(config, "image");
+        expect(imageRequest).not.toHaveProperty("capabilityConfigs");
+        expect(JSON.stringify(imageRequest)).not.toContain("video-key");
+    });
+
+    it("checks readiness against the explicit capability only", () => {
+        const config: AiConfig = {
+            ...defaultConfig,
+            capabilityConfigs: {
+                ...defaultConfig.capabilityConfigs,
+                image: { ...defaultConfig.capabilityConfigs.image, apiBase: "", apiKey: "", modelId: "" },
+                video: { ...defaultConfig.capabilityConfigs.video, apiBase: "https://video", apiKey: "video-key", modelId: "video-model" },
+            },
+        };
+        expect(isAiConfigReady(config, "image", "video-model")).toBe(false);
+        expect(isAiConfigReady(config, "video")).toBe(true);
     });
 
     it("reports capability-specific missing fields and unsupported protocols", () => {
