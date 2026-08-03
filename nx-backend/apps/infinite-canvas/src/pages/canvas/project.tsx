@@ -48,6 +48,7 @@ import {
     buildAngleLabel,
     buildAnglePrompt,
     buildGenerationConfig,
+    generationCapabilityForNodeType,
     findRetrySourceNode,
     generationReferenceUrls,
     getGenerationCount,
@@ -2414,8 +2415,8 @@ function InfiniteCanvasPage() {
                           background: savedImageMetadata.background ?? effectiveConfig.background,
                           count: "1",
                       }
-                    : { ...buildGenerationConfig(effectiveConfig, sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image"), count: "1" };
-            const retryCapability = node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image";
+                    : { ...buildGenerationConfig(effectiveConfig, sourceNode, generationCapabilityForNodeType(node.type)), count: "1" };
+            const retryCapability = generationCapabilityForNodeType(node.type);
             if (!isAiConfigReady(generationConfig, retryCapability, generationConfig.model)) {
                 openConfigDialog(true, "channels", retryCapability);
                 return;

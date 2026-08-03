@@ -155,7 +155,8 @@ export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<
         if (error instanceof DOMException && error.name === "AbortError") throw error;
         if (axios.isCancel(error)) throw error;
         const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`模型调用脚本执行失败：${message}`);
+        const sanitized = config.apiKey ? message.split(config.apiKey).join("[REDACTED]") : message;
+        throw new Error(`模型调用脚本执行失败：${sanitized}`);
     }
 }
 

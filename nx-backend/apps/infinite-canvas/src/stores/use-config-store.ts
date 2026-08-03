@@ -281,6 +281,55 @@ export function resolveCapabilityRequestConfig(config: AiConfig, capability: Mod
     return resolved;
 }
 
+export type CapabilityRequestSnapshot = AiConfig & {
+    capability: ModelCapability;
+    script: string;
+};
+
+/**
+ * Immutable, request-scoped config containing only the selected capability credential
+ * plus non-secret generation parameters. It intentionally excludes channels and the
+ * browser capability config map so downstream retries cannot switch credentials.
+ */
+export function createCapabilityRequestSnapshot(config: AiConfig, capability: ModelCapability, modelOverride?: string): CapabilityRequestSnapshot {
+    const resolved = resolveCapabilityRequestConfig(config, capability, modelOverride);
+    const emptyCapabilities = createDefaultCapabilityConfigs();
+    for (const item of Object.keys(emptyCapabilities) as ModelCapability[]) {
+        emptyCapabilities[item] = { ...emptyCapabilities[item], apiKey: "", script: undefined };
+    }
+    return Object.freeze({
+        ...defaultConfig,
+        capability,
+        script: resolved.script,
+        capabilityConfigs: emptyCapabilities,
+        channels: [],
+        models: [resolved.model],
+        baseUrl: resolved.baseUrl,
+        apiKey: resolved.apiKey,
+        apiFormat: resolved.apiFormat,
+        model: resolved.model,
+        imageModel: capability === "image" ? resolved.model : "",
+        videoModel: capability === "video" ? resolved.model : "",
+        textModel: capability === "text" ? resolved.model : "",
+        audioModel: capability === "audio" ? resolved.model : "",
+        systemPrompt: config.systemPrompt,
+        reasoningEffort: config.reasoningEffort,
+        quality: config.quality,
+        size: config.size,
+        background: config.background,
+        count: config.count,
+        canvasImageCount: config.canvasImageCount,
+        audioVoice: config.audioVoice,
+        audioFormat: config.audioFormat,
+        audioSpeed: config.audioSpeed,
+        audioInstructions: config.audioInstructions,
+        videoSeconds: config.videoSeconds,
+        vquality: config.vquality,
+        videoGenerateAudio: config.videoGenerateAudio,
+        videoWatermark: config.videoWatermark,
+    });
+}
+
 type UnknownRecord = Record<string, unknown>;
 
 function asRecord(value: unknown): UnknownRecord {

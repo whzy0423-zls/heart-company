@@ -2,7 +2,7 @@ import axios from "axios";
 
 import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue } from "@/lib/audio-generation";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
-import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, createCapabilityRequestSnapshot, type AiConfig } from "@/stores/use-config-store";
 import { runModelPlugin } from "./model-plugin";
 
 type RequestOptions = { signal?: AbortSignal };
@@ -19,10 +19,10 @@ function aiHeaders(config: AiConfig) {
 }
 
 export async function requestAudioGeneration(config: AiConfig, prompt: string, options?: RequestOptions): Promise<Blob> {
-    const requestConfig = resolveModelRequestConfig(config, config.model || config.audioModel);
+    const requestConfig = createCapabilityRequestSnapshot(config, "audio", config.model || config.audioModel);
     const model = requestConfig.model.trim();
     const format = normalizeAudioFormatValue(config.audioFormat);
-    const script = resolveModelScript(config, config.model || config.audioModel);
+    const script = requestConfig.script;
     if (script) {
         if (!model) throw new Error("请先配置音频模型");
         if (!requestConfig.baseUrl.trim()) throw new Error("请先配置 Base URL");
@@ -38,7 +38,7 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, o
             });
             return await audioPluginBlob(result, format);
         } catch (error) {
-            throw new Error(readAxiosError(error, "音频生成失败"));
+            throw new Error(readAxiosError(error, "音频生成失败", requestConfig.apiKey));
         }
     }
     assertAudioConfig(requestConfig, model);
@@ -60,7 +60,7 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, o
         await assertAudioBlob(response.data);
         return response.data.type.startsWith("audio/") ? response.data : new Blob([response.data], { type: audioMimeType(format) });
     } catch (error) {
-        throw new Error(readAxiosError(error, "音频生成失败"));
+        throw new Error(readAxiosError(error, "音频生成失败", requestConfig.apiKey));
     }
 }
 
@@ -130,7 +130,7 @@ function readApiErrorMessage(value: unknown): string {
     );
 }
 
-function readAxiosError(error: unknown, fallback: string) {
+function readAxiosErrorUnsafe(error: unknown, fallback: string) {
     if (axios.isCancel(error)) return "请求已取消";
     if (axios.isAxiosError(error)) {
         const responseData = error.response?.data;
@@ -142,6 +142,11 @@ function readAxiosError(error: unknown, fallback: string) {
     }
     if (error instanceof DOMException && error.name === "AbortError") return "请求已取消";
     return error instanceof Error ? readApiErrorMessage(error.message) || error.message : fallback;
+}
+
+function readAxiosError(error: unknown, fallback: string, apiKey = "") {
+    const message = readAxiosErrorUnsafe(error, fallback);
+    return apiKey ? message.split(apiKey).join("[REDACTED]") : message;
 }
 
 function statusMessage(status: number | undefined, fallback: string) {

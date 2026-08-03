@@ -1,4 +1,4 @@
-import { resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
+import { createCapabilityRequestSnapshot, type AiConfig } from "@/stores/use-config-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
@@ -58,7 +58,7 @@ const seedancePixels = {
 } as const;
 
 export function isSeedanceVideoConfig(config: AiConfig | Pick<AiConfig, "model" | "videoModel" | "apiFormat">) {
-    const requestConfig = "channels" in config ? resolveModelRequestConfig(config, config.model || config.videoModel) : config;
+    const requestConfig = "capability" in config ? config : "capabilityConfigs" in config ? createCapabilityRequestSnapshot(config, "video", config.model || config.videoModel) : config;
     return requestConfig.apiFormat === "ark";
 }
 
