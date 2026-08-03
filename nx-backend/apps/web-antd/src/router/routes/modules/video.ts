@@ -8,57 +8,18 @@ const routes: RouteRecordRaw[] = [
     meta: {
       icon: 'lucide:video',
       order: 3,
-      title: '视频项目',
+      title: '视频生成',
     },
     name: 'VideoProjects',
     path: '/video',
     children: [
       {
-        name: 'VideoProduction',
-        path: 'production',
-        component: () => import('#/views/video/production/index.vue'),
+        name: 'InfiniteCanvas',
+        path: 'infinite-canvas',
+        component: () => import('#/views/video/infinite-canvas.vue'),
         meta: {
-          icon: 'lucide:clapperboard',
-          title: '制片工作台',
-        },
-      },
-      {
-        name: 'VideoProjectsList',
-        path: 'projects',
-        component: () => import('#/views/video/projects/index.vue'),
-        meta: {
-          icon: 'lucide:folder-video',
-          title: '项目列表',
-        },
-      },
-      {
-        name: 'VideoProjectWorkbenchAlias',
-        path: 'projects/:id',
-        redirect: (to) => `/video/projects/${to.params.id}/workbench`,
-        meta: {
-          hideInMenu: true,
-          title: '项目工作台',
-          activePath: '/video/projects',
-        },
-      },
-      {
-        name: 'VideoProjectWorkbench',
-        path: 'projects/:id/workbench',
-        component: () => import('#/views/video/projects/workflow.vue'),
-        meta: {
-          hideInMenu: true,
-          title: '项目工作台',
-          activePath: '/video/projects',
-        },
-      },
-      {
-        name: 'VideoProjectAdvancedWorkbench',
-        path: 'projects/:id/workbench/advanced',
-        component: () => import('#/views/video/projects/workbench.vue'),
-        meta: {
-          hideInMenu: true,
-          title: '高级项目工作台',
-          activePath: '/video/projects',
+          icon: 'lucide:workflow',
+          title: '无限画布',
         },
       },
     ],
