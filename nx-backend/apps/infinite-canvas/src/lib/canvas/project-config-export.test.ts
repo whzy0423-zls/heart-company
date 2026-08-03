@@ -1,6 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { normalizeCanvasExportFile, sanitizeCanvasProjectForExport } from "./canvas-export";
+const mocks = vi.hoisted(() => ({
+    createZip: vi.fn<(files: { name: string; data: BlobPart }[]) => Promise<Blob>>(async () => new Blob(["zip"])),
+    getImageBlob: vi.fn(),
+    getMediaBlob: vi.fn(),
+    saveAs: vi.fn(),
+}));
+
+vi.mock("@/lib/zip", () => ({ createZip: mocks.createZip }));
+vi.mock("@/services/image-storage", () => ({ getImageBlob: mocks.getImageBlob }));
+vi.mock("@/services/file-storage", () => ({ getMediaBlob: mocks.getMediaBlob }));
+vi.mock("file-saver", () => ({ saveAs: mocks.saveAs }));
+
+import { exportCanvasProjects, normalizeCanvasExportFile, sanitizeCanvasProjectForExport } from "./canvas-export";
 import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
 
 function fixtureProject(): CanvasProject {
@@ -81,6 +93,8 @@ function collectKeysAndStrings(value: unknown, keys: string[] = [], strings: str
 }
 
 describe("canvas project export boundary", () => {
+    beforeEach(() => vi.clearAllMocks());
+
     it("keeps the raw node model override while recursively removing model credentials and config objects", () => {
         const exported = sanitizeCanvasProjectForExport(fixtureProject());
         const scanned = collectKeysAndStrings(exported);
@@ -110,11 +124,33 @@ describe("canvas project export boundary", () => {
             app: "infinite-canvas",
             version: 3,
             exportedAt: "2026-08-03T00:00:00.000Z",
-            projects: [{ project: fixtureProject(), files: [] }, null, { broken: true }],
+            projects: [
+                { project: fixtureProject(), files: [{ storageKey: "image:safe", path: "safe.png", mimeType: "image/png", bytes: 3, apiKey: "ASSET_SECRET", extra: "drop" }] },
+                { project: null, files: [] },
+                { project: "bad", files: [] },
+                null,
+                { broken: true },
+            ],
         });
 
         expect(imported.projects).toHaveLength(1);
         expect(imported.projects[0]?.project.nodes[0]?.metadata?.model).toBe("image-model");
+        expect(imported.projects[0]?.files[0]).toEqual({ storageKey: "image:safe", path: "safe.png", mimeType: "image/png", bytes: 3 });
         expect(JSON.stringify(imported)).not.toContain("NODE_SECRET");
+        expect(JSON.stringify(imported)).not.toContain("ASSET_SECRET");
+    });
+
+    it("collects archive assets only after sensitive project subtrees are removed", async () => {
+        const project = fixtureProject() as CanvasProject & { config: unknown };
+        project.nodes[0]!.metadata!.storageKey = "image:safe";
+        project.config = { apiKey: "SECRET", storageKey: "image:orphan" };
+        mocks.getImageBlob.mockImplementation(async (key: string) => new Blob([key], { type: "image/png" }));
+
+        await exportCanvasProjects([project], "boundary");
+
+        expect(mocks.getImageBlob).toHaveBeenCalledWith("image:safe");
+        expect(mocks.getImageBlob).not.toHaveBeenCalledWith("image:orphan");
+        const zipFiles = mocks.createZip.mock.calls[0]![0] as { name: string; data: BlobPart }[];
+        expect(zipFiles.map((file) => file.name).join("\n")).not.toContain("orphan");
     });
 });

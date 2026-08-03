@@ -4,7 +4,7 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
-import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, ViewportTransform } from "@/types/canvas";
+import type { CanvasAssistantMessage, CanvasAssistantReference, CanvasAssistantSession, CanvasConnection, CanvasNodeData, ViewportTransform } from "@/types/canvas";
 import { createDefaultCapabilityConfigs, guessCapability, type CapabilityConfigs, type ModelCapability } from "@/stores/use-config-store";
 
 export type CanvasProject = {
@@ -73,6 +73,57 @@ function recognizedLegacyModelCapability(model: string, defaults: CapabilityConf
     return TEXT_MODEL_PATTERN.test(model) ? "text" : undefined;
 }
 
+function normalizeCanvasConnections(value: unknown): CanvasConnection[] {
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((connection) => {
+        if (!isRecord(connection) || typeof connection.id !== "string" || typeof connection.fromNodeId !== "string" || typeof connection.toNodeId !== "string") return [];
+        return [{ id: connection.id, fromNodeId: connection.fromNodeId, toNodeId: connection.toNodeId }];
+    });
+}
+
+function normalizeAssistantReference(value: unknown): CanvasAssistantReference | null {
+    if (!isRecord(value) || typeof value.id !== "string" || typeof value.type !== "string" || typeof value.title !== "string") return null;
+    return {
+        id: value.id,
+        type: value.type,
+        title: value.title,
+        ...(typeof value.dataUrl === "string" ? { dataUrl: value.dataUrl } : {}),
+        ...(typeof value.storageKey === "string" ? { storageKey: value.storageKey } : {}),
+        ...(typeof value.text === "string" ? { text: value.text } : {}),
+    };
+}
+
+function normalizeAssistantMessage(value: unknown): CanvasAssistantMessage | null {
+    if (!isRecord(value) || typeof value.id !== "string" || !["user", "assistant", "system", "tool", "error"].includes(String(value.role)) || typeof value.text !== "string") return null;
+    const references = Array.isArray(value.references) ? value.references.map(normalizeAssistantReference).filter((reference): reference is CanvasAssistantReference => Boolean(reference)) : [];
+    return {
+        id: value.id,
+        role: value.role as CanvasAssistantMessage["role"],
+        text: value.text,
+        ...(typeof value.title === "string" ? { title: value.title } : {}),
+        ...(typeof value.meta === "string" ? { meta: value.meta } : {}),
+        ...("detail" in value ? { detail: value.detail } : {}),
+        references,
+    };
+}
+
+function normalizeAssistantSessions(value: unknown, fallbackTimestamp: string): CanvasAssistantSession[] {
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((session) => {
+        if (!isRecord(session) || typeof session.id !== "string") return [];
+        const messages = Array.isArray(session.messages) ? session.messages.map(normalizeAssistantMessage).filter((message): message is CanvasAssistantMessage => Boolean(message)) : [];
+        return [
+            {
+                id: session.id,
+                title: typeof session.title === "string" ? session.title : "",
+                messages,
+                createdAt: typeof session.createdAt === "string" ? session.createdAt : fallbackTimestamp,
+                updatedAt: typeof session.updatedAt === "string" ? session.updatedAt : fallbackTimestamp,
+            },
+        ];
+    });
+}
+
 /** Removes browser-only model configuration from arbitrary imported project data. */
 export function stripProjectSecrets(value: unknown): unknown {
     if (Array.isArray(value)) return value.map(stripProjectSecrets);
@@ -119,15 +170,17 @@ export function normalizeCanvasProject(value: unknown, capabilityDefaults: Capab
     const source = isRecord(sanitized) ? sanitized : {};
     const now = new Date().toISOString();
     const viewport = isRecord(source.viewport) && typeof source.viewport.x === "number" && typeof source.viewport.y === "number" && typeof source.viewport.k === "number" ? (source.viewport as ViewportTransform) : initialViewport;
+    const chatSessions = normalizeAssistantSessions(source.chatSessions, now);
+    const activeChatId = typeof source.activeChatId === "string" && chatSessions.some((session) => session.id === source.activeChatId) ? source.activeChatId : null;
     return {
         id: typeof source.id === "string" && source.id ? source.id : nanoid(),
         title: typeof source.title === "string" && source.title ? source.title : "导入画布",
         createdAt: typeof source.createdAt === "string" ? source.createdAt : now,
         updatedAt: typeof source.updatedAt === "string" ? source.updatedAt : now,
         nodes: normalizeCanvasNodeModelOverrides(source.nodes, capabilityDefaults),
-        connections: Array.isArray(source.connections) ? (source.connections.filter(isRecord) as CanvasConnection[]) : [],
-        chatSessions: Array.isArray(source.chatSessions) ? (source.chatSessions.filter(isRecord) as CanvasAssistantSession[]) : [],
-        activeChatId: typeof source.activeChatId === "string" ? source.activeChatId : null,
+        connections: normalizeCanvasConnections(source.connections),
+        chatSessions,
+        activeChatId,
         backgroundMode: source.backgroundMode === "dots" || source.backgroundMode === "blank" ? source.backgroundMode : "lines",
         showImageInfo: source.showImageInfo === true,
         viewport,

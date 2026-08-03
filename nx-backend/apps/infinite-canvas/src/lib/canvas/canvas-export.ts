@@ -11,17 +11,18 @@ export async function exportCanvasProjects(projects: CanvasProject[], fileName =
     const zipFiles: { name: string; data: BlobPart }[] = [];
     const exportedProjects = await Promise.all(
         projects.map(async (project) => {
+            const sanitizedProject = sanitizeCanvasProjectForExport(project);
             const files: CanvasExportAsset[] = [];
             await Promise.all(
-                collectStorageKeys(project).map(async (storageKey) => {
+                collectStorageKeys(sanitizedProject).map(async (storageKey) => {
                     const blob = storageKey.startsWith("image:") ? await getImageBlob(storageKey) : await getMediaBlob(storageKey);
                     if (!blob) return;
-                    const path = `projects/${project.id}/files/${safeFileName(storageKey)}.${fileExtension(blob.type, storageKey)}`;
+                    const path = `projects/${sanitizedProject.id}/files/${safeFileName(storageKey)}.${fileExtension(blob.type, storageKey)}`;
                     files.push({ storageKey, path, mimeType: blob.type || "application/octet-stream", bytes: blob.size });
                     zipFiles.push({ name: path, data: blob });
                 }),
             );
-            return { project: sanitizeCanvasProjectForExport(project), files };
+            return { project: sanitizedProject, files };
         }),
     );
 
@@ -41,13 +42,13 @@ export function normalizeCanvasExportFile(value: unknown): CanvasExportFile {
     const projects = source.projects.flatMap((candidate) => {
         if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
         const item = candidate as Record<string, unknown>;
-        if (!("project" in item)) return [];
+        if (!item.project || typeof item.project !== "object" || Array.isArray(item.project)) return [];
         const files = Array.isArray(item.files)
             ? item.files.flatMap((file) => {
                   if (!file || typeof file !== "object" || Array.isArray(file)) return [];
                   const asset = file as Record<string, unknown>;
                   if (typeof asset.storageKey !== "string" || typeof asset.path !== "string" || typeof asset.mimeType !== "string" || typeof asset.bytes !== "number") return [];
-                  return [asset as CanvasExportAsset];
+                  return [{ storageKey: asset.storageKey, path: asset.path, mimeType: asset.mimeType, bytes: asset.bytes }];
               })
             : [];
         return [{ project: normalizeCanvasProject(item.project), files }];

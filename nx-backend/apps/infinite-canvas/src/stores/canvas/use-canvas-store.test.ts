@@ -11,6 +11,7 @@ vi.mock("@/lib/localforage-storage", () => ({
 }));
 
 import { migratePersistedCanvasState, normalizeCanvasProject, useCanvasStore } from "./use-canvas-store";
+import { hydrateAssistantImages } from "@/lib/canvas/canvas-generation-helpers";
 
 const legacyProject = {
     id: "legacy-project",
@@ -82,5 +83,40 @@ describe("canvas project model migration", () => {
         expect(normalized.nodes).toHaveLength(1);
         expect(normalized.nodes[0]?.metadata?.model).toBe("text-model");
         expect(migratePersistedCanvasState(migrated)).toEqual(migrated);
+    });
+
+    it("normalizes damaged assistant sessions, messages, and references before hydration", async () => {
+        const normalized = normalizeCanvasProject({
+            ...legacyProject,
+            chatSessions: [
+                null,
+                { id: "empty", title: "Empty", createdAt: "created", updatedAt: "updated", messages: null },
+                {
+                    id: "valid",
+                    title: "Valid",
+                    createdAt: "created",
+                    updatedAt: "updated",
+                    messages: [
+                        null,
+                        { id: "message-1", role: "assistant", text: "ok", references: "broken", extra: "drop" },
+                        {
+                            id: "message-2",
+                            role: "user",
+                            text: "ref",
+                            references: [null, { id: "ref-1", type: "image", title: "Reference", text: "keep", apiKey: "DROP_SECRET", extra: "drop" }],
+                        },
+                    ],
+                },
+                { title: "missing id", messages: [] },
+            ],
+        });
+
+        await expect(hydrateAssistantImages(normalized.chatSessions)).resolves.toHaveLength(2);
+        expect(normalized.chatSessions[0]?.messages).toEqual([]);
+        expect(normalized.chatSessions[1]?.messages).toHaveLength(2);
+        expect(normalized.chatSessions[1]?.messages[0]?.references).toEqual([]);
+        expect(normalized.chatSessions[1]?.messages[1]?.references).toEqual([{ id: "ref-1", type: "image", title: "Reference", text: "keep" }]);
+        expect(JSON.stringify(normalized.chatSessions)).not.toContain("DROP_SECRET");
+        expect(JSON.stringify(normalized.chatSessions)).not.toContain('"extra"');
     });
 });
