@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -368,6 +369,91 @@ func TestAppXinzhiliVoiceTurnBatchesTinySpeechFragmentsBeforeTTS(t *testing.T) {
 	}
 	if !strings.Contains(res.Body.String(), base64.StdEncoding.EncodeToString([]byte("audio:"+want[0]))) {
 		t.Fatalf("SSE body missing batched audio:\n%s", res.Body.String())
+	}
+}
+
+func TestAppXinzhiliVoiceTurnStrictChineseOutputRewritesEnglishDriftAndDigits(t *testing.T) {
+	var savedAnswer string
+	var synthesizedMu sync.Mutex
+	var synthesized []string
+	answer := "好的。OK，我们做1 2 3次。不要 worry。"
+	want := "好的。好，我们做一二三次。不要担心。"
+	s := newSuccessfulXinzhiliVoiceServer(t)
+	s.ragGen = xinzhiliStreamingGeneratorFunc(func(_ context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+		if err := emit(answer); err != nil {
+			return "", err
+		}
+		return answer, nil
+	})
+	s.xinzhiliSynthesize = func(_ context.Context, text string) ([]byte, string, error) {
+		synthesizedMu.Lock()
+		synthesized = append(synthesized, text)
+		synthesizedMu.Unlock()
+		assertNoXinzhiliVoiceASCII(t, text)
+		return []byte("audio:" + text), "audio/mpeg", nil
+	}
+	s.xinzhiliSavePair = func(_ context.Context, _ int64, _, answer string, _ json.RawMessage) (int64, error) {
+		savedAnswer = answer
+		return 101, nil
+	}
+
+	req := newXinzhiliMultipartRequest(t, []byte("wav"), 1300)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	res := httptest.NewRecorder()
+
+	s.appXinzhiliVoiceTurnStream(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("voice turn failed: %d %s", res.Code, res.Body.String())
+	}
+	if savedAnswer != want {
+		t.Fatalf("saved answer = %q, want %q", savedAnswer, want)
+	}
+	synthesizedMu.Lock()
+	synthesizedCount := len(synthesized)
+	synthesizedMu.Unlock()
+	if synthesizedCount == 0 {
+		t.Fatal("expected at least one synthesized chunk")
+	}
+	body := res.Body.String()
+	for _, forbidden := range []string{"OK", "worry"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("SSE body still contains English drift %q:\n%s", forbidden, body)
+		}
+	}
+	for _, required := range []string{`"content":"` + want + `"`, `"answer":"` + want + `"`} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("SSE body missing normalized %s:\n%s", required, body)
+		}
+	}
+}
+
+func assertNoXinzhiliVoiceASCII(t *testing.T, text string) {
+	t.Helper()
+	for _, r := range text {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			t.Fatalf("text still contains ASCII rune %q in %q", r, text)
+		}
+	}
+}
+
+func TestShouldNormalizeXinzhiliVoiceOutputToChinese(t *testing.T) {
+	tests := []struct {
+		name       string
+		transcript string
+		want       bool
+	}{
+		{name: "default Chinese with numeric tokens", transcript: "我们先做1 2 3次呼吸", want: true},
+		{name: "negative English mention still enforces Chinese", transcript: "不要英文，中文回答", want: true},
+		{name: "explicit English word request", transcript: "请用英文说 Apple 这个单词", want: false},
+		{name: "translation to English request", transcript: "把这句话翻译成英文", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldNormalizeXinzhiliVoiceOutputToChinese(tt.transcript); got != tt.want {
+				t.Fatalf("got %v want %v", got, tt.want)
+			}
+		})
 	}
 }
 

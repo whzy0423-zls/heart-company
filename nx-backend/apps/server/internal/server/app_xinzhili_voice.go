@@ -147,6 +147,7 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 	if err := writeAppChatSSE(w, flusher, "transcript", map[string]string{"text": transcript}); err != nil {
 		return
 	}
+	normalizeVoiceOutputToChinese := shouldNormalizeXinzhiliVoiceOutputToChinese(transcript)
 
 	session, err := s.xinzhiliVoiceSession(ctx, userInfo.ID)
 	if err != nil {
@@ -308,16 +309,23 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 	for resultCh != nil || audioCh != nil {
 		select {
 		case delta := <-deltaCh:
-			if err := writeAppChatSSE(w, flusher, "text_delta", map[string]string{"content": delta}); err != nil {
+			outputDelta := normalizeXinzhiliVoiceOutputDelta(delta, normalizeVoiceOutputToChinese)
+			if outputDelta == "" {
+				continue
+			}
+			if err := writeAppChatSSE(w, flusher, "text_delta", map[string]string{"content": outputDelta}); err != nil {
 				cancelGeneration()
 				return
 			}
-			if !queueChunks(chunker.Push(delta)) {
+			if !queueChunks(chunker.Push(outputDelta)) {
 				cancelGeneration()
 				return
 			}
 		case completed := <-resultCh:
 			answer, generationErr = completed.Answer, completed.Err
+			if normalizeVoiceOutputToChinese {
+				answer.Answer = voice.NormalizeStrictChineseTTSInput(answer.Answer)
+			}
 			resultCh = nil
 			deltaCh = nil
 			if !queueChunks(chunker.Flush()) {
@@ -355,6 +363,38 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 		return
 	}
 	_ = writeAppChatSSE(w, flusher, "done", map[string]any{"answer": answer.Answer, "sources": answer.Sources, "messageId": messageID})
+}
+
+func normalizeXinzhiliVoiceOutputDelta(delta string, normalizeToChinese bool) string {
+	if !normalizeToChinese {
+		return delta
+	}
+	return voice.NormalizeStrictChineseTTSInput(delta)
+}
+
+func shouldNormalizeXinzhiliVoiceOutputToChinese(transcript string) bool {
+	return !isExplicitXinzhiliEnglishRequest(transcript)
+}
+
+func isExplicitXinzhiliEnglishRequest(transcript string) bool {
+	text := strings.ToLower(strings.TrimSpace(transcript))
+	if text == "" {
+		return false
+	}
+	if strings.Contains(text, "不要英文") || strings.Contains(text, "别用英文") || strings.Contains(text, "不要英语") || strings.Contains(text, "别说英文") || strings.Contains(text, "中文回答") || strings.Contains(text, "用中文") {
+		return false
+	}
+	englishIntentPhrases := []string{
+		"用英文", "说英文", "英文说", "英文回答", "英语回答", "用英语", "说英语", "英语说",
+		"翻译成英文", "翻成英文", "译成英文", "翻译成英语", "英文单词", "英语单词",
+		"英文怎么说", "英语怎么说", "怎么用英文", "怎么用英语", "读英文", "读英语",
+	}
+	for _, phrase := range englishIntentPhrases {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseXinzhiliMultipartForm(r *http.Request, maxMemory int64) (func(), error) {
