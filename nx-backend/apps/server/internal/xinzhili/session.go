@@ -946,19 +946,13 @@ func (s *session) startSynthesisWorker(turn *activeTurn) {
 			inFlight++
 			go func() {
 				result := ttsStreamResult{job: job}
-				emitted := false
+				var emitted []AudioSegment
 				result.err = s.deps.Synthesizer.Synthesize(jobCtx, turn.input.TTSConfig, job.text, func(segment AudioSegment) error {
-					if emitted {
-						return errors.New("xinzhili: streamed TTS chunk produced multiple segments")
-					}
-					emitted = true
-					segment.Seq = job.seq
-					segment.deliveryText = job.text
-					result.segment = segment
+					emitted = append(emitted, segment)
 					return nil
 				})
-				if result.err == nil && !emitted {
-					result.err = errors.New("xinzhili: streamed TTS chunk produced no segment")
+				if result.err == nil {
+					result.segment, result.err = coalesceRealtimeTTSJobSegments(job, emitted)
 				}
 				select {
 				case results <- result:
@@ -1124,6 +1118,32 @@ func normalizeRealtimeGenerationText(turn *activeTurn, text string) string {
 		return voice.NormalizeStrictChineseTTSInput(text)
 	}
 	return text
+}
+
+func coalesceRealtimeTTSJobSegments(job ttsStreamJob, segments []AudioSegment) (AudioSegment, error) {
+	if len(segments) == 0 {
+		return AudioSegment{}, errors.New("xinzhili: streamed TTS chunk produced no segment")
+	}
+	combined := segments[0]
+	if len(segments) > 1 {
+		totalBytes := 0
+		for _, segment := range segments {
+			totalBytes += len(segment.Audio)
+		}
+		audio := make([]byte, 0, totalBytes)
+		for _, segment := range segments {
+			audio = append(audio, segment.Audio...)
+		}
+		combined.Audio = audio
+	}
+	combined.Seq = job.seq
+	combined.deliveryText = job.text
+	combined.ByteLength = len(combined.Audio)
+	combined.SHA256 = sha256.Sum256(combined.Audio)
+	if strings.TrimSpace(combined.MIME) == "" {
+		combined.MIME = "audio/mpeg"
+	}
+	return combined, nil
 }
 
 func (s *session) acceptAudioSegment(turn *activeTurn, segment AudioSegment) error {

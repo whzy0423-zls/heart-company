@@ -1064,6 +1064,44 @@ func TestSessionTTSRunsTwoChunksConcurrentlyAndEmitsInOrder(t *testing.T) {
 	}
 }
 
+func TestSessionTTSCoalescesProviderSentenceSplitsInsideOneRealtimeChunk(t *testing.T) {
+	synth := splittingSynthesizer{}
+	s := &session{
+		deps:   SessionDependencies{Synthesizer: synth},
+		events: make(chan sessionEvent, 16),
+		done:   make(chan struct{}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	turn := &activeTurn{
+		input:            StartTurnInput{TurnID: "turn-split-provider"},
+		ctx:              ctx,
+		cancel:           cancel,
+		responseStartSeq: 7,
+		ttsJobs:          make(chan ttsStreamJob, 1),
+	}
+
+	s.startSynthesisWorker(turn)
+	turn.ttsJobs <- ttsStreamJob{seq: 7, text: "好。后面继续补足一段自然长度。"}
+	close(turn.ttsJobs)
+
+	event := waitSessionEvent(t, s.events, eventTTSSegment)
+	if event.segment.Seq != 7 {
+		t.Fatalf("seq=%d want=7", event.segment.Seq)
+	}
+	if string(event.segment.Audio) != "mp3:好。mp3:后面继续补足一段自然长度。" {
+		t.Fatalf("audio=%q", event.segment.Audio)
+	}
+	if event.segment.DeliveryText() != "好。后面继续补足一段自然长度。" {
+		t.Fatalf("delivery=%q", event.segment.DeliveryText())
+	}
+	event.segmentAck <- nil
+	done := waitSessionEvent(t, s.events, eventTTSDone)
+	if done.err != nil {
+		t.Fatal(done.err)
+	}
+}
+
 func TestSessionTTSFailureDrainsQueuedGenerationAndStillCompletes(t *testing.T) {
 	fixture := newSessionFixture(t)
 	deltas := make([]string, 140)
@@ -1648,6 +1686,22 @@ func (s *fakeSynthesizer) Synthesize(ctx context.Context, _ TTSConfig, text stri
 	}
 	if err := emit(segment); err != nil {
 		return err
+	}
+	return nil
+}
+
+type splittingSynthesizer struct{}
+
+func (splittingSynthesizer) Synthesize(ctx context.Context, _ TTSConfig, text string, emit func(AudioSegment) error) error {
+	for _, sentence := range SplitSentences(text) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if err := emit(AudioSegment{Audio: []byte("mp3:" + sentence), MIME: "audio/mpeg", deliveryText: sentence}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
