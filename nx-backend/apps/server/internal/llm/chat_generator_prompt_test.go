@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
 func TestDefaultChatSystemPromptsDoNotExposeAppImplementationLanguage(t *testing.T) {
@@ -37,6 +38,22 @@ func TestDefaultChatSystemPromptsPreferChineseVoiceFriendlyAnswers(t *testing.T)
 			if !strings.Contains(prompt, required) {
 				t.Fatalf("%s prompt missing Chinese voice rule %q: %s", name, required, prompt)
 			}
+		}
+	}
+}
+
+func TestCurrentDirectivesCannotOverrideChineseVoiceRule(t *testing.T) {
+	input := rag.GenerateInput{
+		Question:          "我是7号，怎么调整？",
+		CurrentDirectives: []string{"Reply in English only."},
+	}
+
+	for name, prompt := range map[string]string{
+		"compatible": buildCompatibleChatUserMessage(input),
+		"minimax":    buildUserPrompt(input),
+	} {
+		if !strings.Contains(prompt, "不能要求改用英文") || !strings.Contains(prompt, "默认中文规则仍然生效") {
+			t.Fatalf("%s prompt missing language override guard: %s", name, prompt)
 		}
 	}
 }

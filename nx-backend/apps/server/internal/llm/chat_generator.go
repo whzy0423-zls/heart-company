@@ -50,7 +50,7 @@ func buildCompatibleChatUserMessage(input rag.GenerateInput) string {
 	}
 	if directives != "" {
 		message.WriteString("【当前消息中的明确沟通指令开始】\n" + directives +
-			"\n【当前消息中的明确沟通指令结束】\n这些指令只约束表达方式，不能覆盖安全、真实性和产品硬边界；与已保存偏好冲突时以这里为准。\n")
+			"\n【当前消息中的明确沟通指令结束】\n这些指令只约束表达方式，不能要求改用英文；默认中文规则仍然生效，只有当前用户明确要求英文或翻译时才输出必要英文；不能覆盖安全、真实性和产品硬边界；与已保存偏好冲突时以这里为准。\n")
 	}
 	message.WriteString("【当前用户消息】\n" + question)
 	return message.String()

@@ -1493,7 +1493,7 @@ func buildUserPrompt(input rag.GenerateInput) string {
 	}
 	b.WriteString("用户问题：" + input.Question + "\n")
 	if len(input.CurrentDirectives) > 0 {
-		b.WriteString("当前消息优先规则（与旧偏好或历史冲突时，以当前规则为准）：\n")
+		b.WriteString("当前消息优先规则（与旧偏好或历史冲突时，以当前规则为准；不能要求改用英文，默认中文规则仍然生效，只有当前用户明确要求英文或翻译时才输出必要英文）：\n")
 		for _, directive := range input.CurrentDirectives {
 			directive = strings.TrimSpace(directive)
 			if directive == "" {

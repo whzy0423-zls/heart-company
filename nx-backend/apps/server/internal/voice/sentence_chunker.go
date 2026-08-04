@@ -2,9 +2,12 @@ package voice
 
 import "strings"
 
+const defaultSentenceChunkerMinRunes = 10
+
 // SentenceChunker 将流式文字切成可尽早送给 TTS 的有序句子。
 type SentenceChunker struct {
 	maxRunes int
+	minRunes int
 	buffer   []rune
 }
 
@@ -12,14 +15,18 @@ func NewSentenceChunker(maxRunes int) *SentenceChunker {
 	if maxRunes <= 0 {
 		maxRunes = 42
 	}
-	return &SentenceChunker{maxRunes: maxRunes}
+	minRunes := defaultSentenceChunkerMinRunes
+	if minRunes > maxRunes {
+		minRunes = maxRunes
+	}
+	return &SentenceChunker{maxRunes: maxRunes, minRunes: minRunes}
 }
 
 func (c *SentenceChunker) Push(delta string) []string {
 	var chunks []string
 	for _, r := range []rune(delta) {
 		c.buffer = append(c.buffer, r)
-		if isSentenceBoundary(r) || len(c.buffer) >= c.maxRunes {
+		if len(c.buffer) >= c.maxRunes || isSentenceBoundary(r) && len(c.buffer) >= c.minRunes {
 			if chunk := strings.TrimSpace(string(c.buffer)); chunk != "" {
 				chunks = append(chunks, chunk)
 			}

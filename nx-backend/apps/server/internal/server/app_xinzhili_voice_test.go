@@ -337,6 +337,40 @@ func TestAppXinzhiliVoiceTurnStreamsTranscriptTextAudioAndPersists(t *testing.T)
 	}
 }
 
+func TestAppXinzhiliVoiceTurnBatchesTinySpeechFragmentsBeforeTTS(t *testing.T) {
+	var synthesized []string
+	s := newSuccessfulXinzhiliVoiceServer(t)
+	s.ragGen = xinzhiliStreamingGeneratorFunc(func(_ context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+		for _, delta := range []string{"嗯。", "好。", "我们先慢慢来。"} {
+			if err := emit(delta); err != nil {
+				return "", err
+			}
+		}
+		return "嗯。好。我们先慢慢来。", nil
+	})
+	s.xinzhiliSynthesize = func(_ context.Context, text string) ([]byte, string, error) {
+		synthesized = append(synthesized, text)
+		return []byte("audio:" + text), "audio/mpeg", nil
+	}
+
+	req := newXinzhiliMultipartRequest(t, []byte("wav"), 1300)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	res := httptest.NewRecorder()
+
+	s.appXinzhiliVoiceTurnStream(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("voice turn failed: %d %s", res.Code, res.Body.String())
+	}
+	want := []string{"嗯。好。我们先慢慢来。"}
+	if len(synthesized) != len(want) || synthesized[0] != want[0] {
+		t.Fatalf("synthesized chunks = %#v, want %#v", synthesized, want)
+	}
+	if !strings.Contains(res.Body.String(), base64.StdEncoding.EncodeToString([]byte("audio:"+want[0]))) {
+		t.Fatalf("SSE body missing batched audio:\n%s", res.Body.String())
+	}
+}
+
 func TestAppXinzhiliVoiceTurnDoesNotGeneratePsychologyForBlankTranscript(t *testing.T) {
 	generated := false
 	store := &xinzhiliEphemeralAudioStoreSpy{fakeAppChatStreamStore: newFakeAppChatStreamStore(), t: t}
