@@ -147,7 +147,7 @@ func (f TTSProviderFactory) New(cfg TTSConfig) (TTSProvider, error) {
 type miniMaxTTSAdapter struct{ client MiniMaxTextToAudio }
 
 func (p miniMaxTTSAdapter) Synthesize(ctx context.Context, cfg TTSConfig, text string) ([]byte, string, error) {
-	text = voice.NormalizeChineseTTSInput(text)
+	text = voice.NormalizeStrictChineseTTSInput(text)
 	audio, mimeType, err := p.client.TextToAudioLimited(ctx, cfg.Model, cfg.Voice, text, maxTTSSegmentBytes)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
@@ -174,7 +174,7 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 	if format == "" {
 		format = "mp3"
 	}
-	text = voice.NormalizeChineseTTSInput(text)
+	text = voice.NormalizeStrictChineseTTSInput(text)
 	input := map[string]any{"text": text}
 	if isBailianHostedMiniMaxTTSModel(cfg.Model) {
 		input["voice_setting"] = map[string]any{
@@ -360,7 +360,7 @@ type openAICompatibleTTS struct {
 }
 
 func (p *openAICompatibleTTS) Synthesize(ctx context.Context, cfg TTSConfig, text string) ([]byte, string, error) {
-	text = voice.NormalizeChineseTTSInput(text)
+	text = voice.NormalizeStrictChineseTTSInput(text)
 	payload, err := json.Marshal(map[string]string{
 		"model":           cfg.Model,
 		"voice":           cfg.Voice,

@@ -49,7 +49,7 @@ func (p *aliyunCosyVoiceTTS) Synthesize(ctx context.Context, cfg TTSConfig, text
 	if err := validateAliyunCosyVoiceRuntimeConfig(cfg); err != nil {
 		return nil, "", err
 	}
-	text = voice.NormalizeChineseTTSInput(text)
+	text = voice.NormalizeStrictChineseTTSInput(text)
 	if text == "" {
 		return nil, "", errors.New("阿里 CosyVoice TTS 文本不能为空")
 	}

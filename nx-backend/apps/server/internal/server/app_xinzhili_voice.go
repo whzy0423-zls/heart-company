@@ -27,6 +27,7 @@ const (
 	xinzhiliMaxRequestBytes = 11 << 20
 	xinzhiliMultipartMemory = 1 << 20
 	xinzhiliScene           = "xinzhili_voice"
+	xinzhiliTTSWorkerCount  = 2
 )
 
 type appXinzhiliSceneStore interface {
@@ -206,36 +207,44 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 	closeTTSJobs := func() {
 		closeTTSJobsOnce.Do(func() { close(ttsJobs) })
 	}
-	go func() {
-		defer close(ttsWorkerDone)
-		if hooks.onTTSWorkerStart != nil {
-			hooks.onTTSWorkerStart()
-		}
-		if hooks.onTTSWorkerExit != nil {
-			defer hooks.onTTSWorkerExit()
-		}
-		defer close(ttsResults)
-		for {
-			var job xinzhiliTTSJob
-			select {
-			case <-generationCtx.Done():
-				return
-			case received, open := <-ttsJobs:
-				if !open {
+	if hooks.onTTSWorkerStart != nil {
+		hooks.onTTSWorkerStart()
+	}
+	var ttsWorkerWG sync.WaitGroup
+	ttsWorkerWG.Add(xinzhiliTTSWorkerCount)
+	for i := 0; i < xinzhiliTTSWorkerCount; i++ {
+		go func() {
+			defer ttsWorkerWG.Done()
+			for {
+				var job xinzhiliTTSJob
+				select {
+				case <-generationCtx.Done():
+					return
+				case received, open := <-ttsJobs:
+					if !open {
+						return
+					}
+					job = received
+				}
+				audioBytes, contentType, synthErr := s.synthesizeXinzhili(generationCtx, cfg, job.Text)
+				select {
+				case ttsResults <- xinzhiliTTSResult{Job: job, Audio: audioBytes, ContentType: contentType, Err: synthErr}:
+				case <-generationCtx.Done():
 					return
 				}
-				job = received
+				if synthErr != nil {
+					return
+				}
 			}
-			audioBytes, contentType, synthErr := s.synthesizeXinzhili(generationCtx, cfg, job.Text)
-			select {
-			case ttsResults <- xinzhiliTTSResult{Job: job, Audio: audioBytes, ContentType: contentType, Err: synthErr}:
-			case <-generationCtx.Done():
-				return
-			}
-			if synthErr != nil {
-				return
-			}
+		}()
+	}
+	go func() {
+		ttsWorkerWG.Wait()
+		if hooks.onTTSWorkerExit != nil {
+			hooks.onTTSWorkerExit()
 		}
+		close(ttsResults)
+		close(ttsWorkerDone)
 	}()
 	defer func() {
 		cancelGeneration()
@@ -245,6 +254,8 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 
 	chunker := voice.NewSentenceChunker(64)
 	nextSegment := 0
+	nextAudioIndex := 0
+	pendingAudio := make(map[int]xinzhiliTTSResult)
 	speakingStateSent := false
 	var answer rag.Answer
 	var generationErr error
@@ -269,6 +280,29 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 			}
 		}
 		return true
+	}
+	emitOrderedAudio := func(result xinzhiliTTSResult) bool {
+		if result.Err != nil {
+			cancelGeneration()
+			_ = writeAppChatSSE(w, flusher, "error", map[string]string{"code": "tts_failed", "message": "语音回复生成失败，请重试"})
+			return false
+		}
+		pendingAudio[result.Job.Index] = result
+		for {
+			ready, ok := pendingAudio[nextAudioIndex]
+			if !ok {
+				return true
+			}
+			delete(pendingAudio, nextAudioIndex)
+			if err := writeAppChatSSE(w, flusher, "audio", map[string]any{
+				"index": ready.Job.Index, "text": ready.Job.Text, "contentType": ready.ContentType,
+				"audioBase64": base64.StdEncoding.EncodeToString(ready.Audio),
+			}); err != nil {
+				cancelGeneration()
+				return false
+			}
+			nextAudioIndex++
+		}
 	}
 
 	for resultCh != nil || audioCh != nil {
@@ -296,16 +330,7 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 				audioCh = nil
 				continue
 			}
-			if result.Err != nil {
-				cancelGeneration()
-				_ = writeAppChatSSE(w, flusher, "error", map[string]string{"code": "tts_failed", "message": "语音回复生成失败，请重试"})
-				return
-			}
-			if err := writeAppChatSSE(w, flusher, "audio", map[string]any{
-				"index": result.Job.Index, "text": result.Job.Text, "contentType": result.ContentType,
-				"audioBase64": base64.StdEncoding.EncodeToString(result.Audio),
-			}); err != nil {
-				cancelGeneration()
+			if !emitOrderedAudio(result) {
 				return
 			}
 		case <-ctx.Done():

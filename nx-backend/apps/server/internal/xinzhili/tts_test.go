@@ -67,7 +67,7 @@ func TestBailianHostedMiniMaxTTSRequestParsesHexAudio(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	audio, mime, err := provider.Synthesize(context.Background(), cfg, "我是7号，先做1次呼吸")
+	audio, mime, err := provider.Synthesize(context.Background(), cfg, "OK，我是7号，不需要 worry")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestBailianHostedMiniMaxTTSRequestParsesHexAudio(t *testing.T) {
 		t.Fatalf("model=%v", gotBody["model"])
 	}
 	input := gotBody["input"].(map[string]any)
-	if input["text"] != "我是七号，先做一次呼吸" {
+	if input["text"] != "好，我是七号，不需要担心" {
 		t.Fatalf("input text=%v", input["text"])
 	}
 	voiceSetting := input["voice_setting"].(map[string]any)
@@ -143,7 +143,7 @@ func TestBailianQwenTTSUsesClonedVoicePayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	audio, mime, err := provider.Synthesize(context.Background(), cfg, "我是7号，先做1次呼吸")
+	audio, mime, err := provider.Synthesize(context.Background(), cfg, "OK，我是7号，不需要 worry")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestBailianQwenTTSUsesClonedVoicePayload(t *testing.T) {
 		t.Fatalf("model=%v", gotBody["model"])
 	}
 	input := gotBody["input"].(map[string]any)
-	if input["text"] != "我是七号，先做一次呼吸" || input["voice"] != "qwen-cloned-voice" {
+	if input["text"] != "好，我是七号，不需要担心" || input["voice"] != "qwen-cloned-voice" {
 		t.Fatalf("input=%#v", input)
 	}
 	if _, exists := input["voice_setting"]; exists {
@@ -267,14 +267,14 @@ func TestOpenAICompatibleTTSRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	audio, mime, err := provider.Synthesize(context.Background(), cfg, "我是7号，先做1次呼吸")
+	audio, mime, err := provider.Synthesize(context.Background(), cfg, "OK，我是7号，不需要 worry")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if gotPath != "/proxy/v1/audio/speech" || gotAuth != "Bearer secret-key" {
 		t.Fatalf("path=%q auth=%q", gotPath, gotAuth)
 	}
-	want := map[string]any{"model": "tts-model", "voice": "warm", "input": "我是七号，先做一次呼吸", "response_format": "mp3"}
+	want := map[string]any{"model": "tts-model", "voice": "warm", "input": "好，我是七号，不需要担心", "response_format": "mp3"}
 	if !reflect.DeepEqual(gotBody, want) {
 		t.Fatalf("body=%#v want=%#v", gotBody, want)
 	}
@@ -405,11 +405,11 @@ func TestMiniMaxTTSAdapterUsesTextToAudioOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, mime, err := p.Synthesize(context.Background(), cfg, "我是7号，先做1次呼吸")
+	_, mime, err := p.Synthesize(context.Background(), cfg, "OK，我是7号，不需要 worry")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if client.model != "speech-02" || client.voice != "voice-1" || client.text != "我是七号，先做一次呼吸" || client.maxBytes != maxTTSSegmentBytes || mime != "audio/mpeg" {
+	if client.model != "speech-02" || client.voice != "voice-1" || client.text != "好，我是七号，不需要担心" || client.maxBytes != maxTTSSegmentBytes || mime != "audio/mpeg" {
 		t.Fatalf("client=%#v mime=%q", client, mime)
 	}
 }

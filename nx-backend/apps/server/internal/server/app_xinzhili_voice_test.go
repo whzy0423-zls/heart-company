@@ -371,6 +371,100 @@ func TestAppXinzhiliVoiceTurnBatchesTinySpeechFragmentsBeforeTTS(t *testing.T) {
 	}
 }
 
+func TestAppXinzhiliVoiceTurnSynthesizesParallelTTSAndStreamsAudioInOrder(t *testing.T) {
+	firstChunk := "第一段需要稳定输出。"
+	secondChunk := "第二段也要稳定输出。"
+	started := make(chan string, 2)
+	releaseFirst := make(chan struct{})
+	releaseFirstClosed := false
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer func() {
+		if !releaseFirstClosed {
+			close(releaseFirst)
+		}
+	}()
+
+	s := newSuccessfulXinzhiliVoiceServer(t)
+	s.ragGen = xinzhiliStreamingGeneratorFunc(func(_ context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+		for _, delta := range []string{firstChunk, secondChunk} {
+			if err := emit(delta); err != nil {
+				return "", err
+			}
+		}
+		return firstChunk + secondChunk, nil
+	})
+	s.xinzhiliSynthesize = func(ctx context.Context, text string) ([]byte, string, error) {
+		started <- text
+		if text == firstChunk {
+			select {
+			case <-releaseFirst:
+			case <-ctx.Done():
+				return nil, "", ctx.Err()
+			}
+		}
+		return []byte("audio:" + text), "audio/mpeg", nil
+	}
+
+	req := newXinzhiliMultipartRequest(t, []byte("wav"), 1300)
+	req = req.WithContext(contextWithAppUser(ctx, auth.UserInfo{ID: 7}))
+	res := httptest.NewRecorder()
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		s.appXinzhiliVoiceTurnStream(res, req)
+	}()
+
+	startedChunks := []string{
+		waitForXinzhiliTTSStart(t, started, time.Second),
+		waitForXinzhiliTTSStart(t, started, 250*time.Millisecond),
+	}
+	if !xinzhiliStartedChunk(startedChunks, firstChunk) || !xinzhiliStartedChunk(startedChunks, secondChunk) {
+		cancel()
+		t.Fatalf("TTS chunks did not both start while first chunk was still synthesizing: got %#v", startedChunks)
+	}
+	close(releaseFirst)
+	releaseFirstClosed = true
+
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("handler did not finish after parallel TTS was released")
+	}
+
+	body := res.Body.String()
+	firstAudio := base64.StdEncoding.EncodeToString([]byte("audio:" + firstChunk))
+	secondAudio := base64.StdEncoding.EncodeToString([]byte("audio:" + secondChunk))
+	firstPos := strings.Index(body, firstAudio)
+	secondPos := strings.Index(body, secondAudio)
+	if firstPos < 0 || secondPos < 0 {
+		t.Fatalf("SSE body missing audio chunks first=%d second=%d:\n%s", firstPos, secondPos, body)
+	}
+	if firstPos > secondPos {
+		t.Fatalf("audio streamed out of order: first at %d, second at %d\n%s", firstPos, secondPos, body)
+	}
+}
+
+func waitForXinzhiliTTSStart(t *testing.T, started <-chan string, timeout time.Duration) string {
+	t.Helper()
+	select {
+	case text := <-started:
+		return text
+	case <-time.After(timeout):
+		return ""
+	}
+}
+
+func xinzhiliStartedChunk(started []string, want string) bool {
+	for _, got := range started {
+		if got == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAppXinzhiliVoiceTurnDoesNotGeneratePsychologyForBlankTranscript(t *testing.T) {
 	generated := false
 	store := &xinzhiliEphemeralAudioStoreSpy{fakeAppChatStreamStore: newFakeAppChatStreamStore(), t: t}
