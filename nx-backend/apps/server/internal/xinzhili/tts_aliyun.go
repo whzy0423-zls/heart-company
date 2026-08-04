@@ -140,12 +140,27 @@ func aliyunCosyVoiceEndpoint(raw string) (string, error) {
 	return parsed.String(), nil
 }
 
+const aliyunTTSChineseInstruction = "标准普通话，吐字清晰，逐字准确朗读中文和古诗文，不要切换外语或方言。"
+
 func aliyunTTSRunTaskMessage(taskID string, cfg TTSConfig) any {
+	parameters := map[string]any{
+		"text_type":      "PlainText",
+		"voice":          strings.TrimSpace(cfg.Voice),
+		"format":         "mp3",
+		"sample_rate":    24000,
+		"volume":         65,
+		"rate":           0.92,
+		"pitch":          1.0,
+		"bit_rate":       64,
+		"enable_ssml":    false,
+		"language_hints": []string{"zh"},
+		"instruction":    aliyunTTSChineseInstruction,
+	}
 	return map[string]any{
 		"header": map[string]any{"action": "run-task", "task_id": taskID, "streaming": "duplex"},
 		"payload": map[string]any{
 			"task_group": "audio", "task": "tts", "function": "SpeechSynthesizer", "model": strings.TrimSpace(cfg.Model),
-			"parameters": map[string]any{"text_type": "PlainText", "voice": strings.TrimSpace(cfg.Voice), "format": "mp3"},
+			"parameters": parameters,
 			"input":      map[string]any{},
 		},
 	}

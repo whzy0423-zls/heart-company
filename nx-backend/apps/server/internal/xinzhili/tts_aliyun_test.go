@@ -32,7 +32,18 @@ func TestAliyunCosyVoiceTTSWebSocketProviderSendsTaskFlow(t *testing.T) {
 		if run.Payload.TaskGroup != "audio" || run.Payload.Task != "tts" || run.Payload.Function != "SpeechSynthesizer" || run.Payload.Model != "cosyvoice-v3.5-plus" {
 			t.Fatalf("run payload=%+v", run.Payload)
 		}
-		if run.Payload.Parameters.TextType != "PlainText" || run.Payload.Parameters.Voice != "voice-id-1" || run.Payload.Parameters.Format != "mp3" {
+		if run.Payload.Parameters.TextType != "PlainText" ||
+			run.Payload.Parameters.Voice != "voice-id-1" ||
+			run.Payload.Parameters.Format != "mp3" ||
+			run.Payload.Parameters.SampleRate != 24000 ||
+			run.Payload.Parameters.Volume != 65 ||
+			run.Payload.Parameters.Rate != 0.92 ||
+			run.Payload.Parameters.Pitch != 1 ||
+			run.Payload.Parameters.BitRate != 64 ||
+			run.Payload.Parameters.EnableSSML ||
+			len(run.Payload.Parameters.LanguageHints) != 1 ||
+			run.Payload.Parameters.LanguageHints[0] != "zh" ||
+			run.Payload.Parameters.Instruction == "" {
 			t.Fatalf("run params=%+v", run.Payload.Parameters)
 		}
 		if err := conn.WriteJSON(map[string]any{"header": map[string]any{"event": "task-started", "task_id": run.Header.TaskID}}); err != nil {
@@ -116,9 +127,17 @@ type aliyunTTSTestMessage struct {
 		Function   string `json:"function"`
 		Model      string `json:"model"`
 		Parameters struct {
-			TextType string `json:"text_type"`
-			Voice    string `json:"voice"`
-			Format   string `json:"format"`
+			TextType      string   `json:"text_type"`
+			Voice         string   `json:"voice"`
+			Format        string   `json:"format"`
+			SampleRate    int      `json:"sample_rate"`
+			Volume        int      `json:"volume"`
+			Rate          float64  `json:"rate"`
+			Pitch         float64  `json:"pitch"`
+			BitRate       int      `json:"bit_rate"`
+			EnableSSML    bool     `json:"enable_ssml"`
+			LanguageHints []string `json:"language_hints"`
+			Instruction   string   `json:"instruction"`
 		} `json:"parameters"`
 		Input struct {
 			Text string `json:"text"`
