@@ -830,12 +830,13 @@ func (s *Synthesizer) synthesizeOne(ctx context.Context, cfg TTSConfig, job synt
 	if len(audio) == 0 {
 		return synthesisResult{err: segmentError(job.seq, "返回空音频")}
 	}
-	if len(audio) > maxTTSSegmentBytes {
-		return synthesisResult{err: segmentError(job.seq, "单片音频超过 1MiB")}
-	}
 	mimeType, err := normalizeMP3MIME(contentType)
 	if err != nil {
 		return synthesisResult{err: segmentError(job.seq, "音频类型无效")}
+	}
+	audio = normalizeMP3ForStreaming(audio)
+	if len(audio) > maxTTSSegmentBytes {
+		return synthesisResult{err: segmentError(job.seq, "单片音频超过 1MiB")}
 	}
 	if !validMP3(audio) {
 		return synthesisResult{err: segmentError(job.seq, "MP3 数据无效")}
@@ -865,8 +866,7 @@ func shouldRetryTTSProviderError(ctx context.Context, err error) bool {
 		return false
 	}
 	return !errors.Is(err, context.Canceled) &&
-		!errors.Is(err, context.DeadlineExceeded) &&
-		!errors.Is(err, ErrTTSTimeout)
+		!errors.Is(err, context.DeadlineExceeded)
 }
 
 func segmentError(seq uint32, reason string) error {
@@ -913,6 +913,39 @@ func validMP3(audio []byte) bool {
 		frames++
 	}
 	return frames > 0 && offset == len(audio)
+}
+
+func normalizeMP3ForStreaming(audio []byte) []byte {
+	if len(audio) == 0 {
+		return audio
+	}
+	out := make([]byte, 0, len(audio))
+	offset := 0
+	for offset < len(audio) {
+		if len(audio)-offset >= 3 && bytes.Equal(audio[offset:offset+3], []byte("ID3")) {
+			end, ok := id3v2End(audio[offset:])
+			if !ok {
+				return audio
+			}
+			if offset == 0 {
+				out = append(out, audio[offset:offset+end]...)
+			}
+			offset += end
+			continue
+		}
+		if len(audio)-offset == 128 && bytes.Equal(audio[offset:offset+3], []byte("TAG")) {
+			out = append(out, audio[offset:]...)
+			offset = len(audio)
+			break
+		}
+		frameLength, ok := mpegLayerIIIFrameLength(audio[offset:])
+		if !ok || frameLength > len(audio)-offset {
+			return audio
+		}
+		out = append(out, audio[offset:offset+frameLength]...)
+		offset += frameLength
+	}
+	return out
 }
 
 func id3v2End(audio []byte) (int, bool) {

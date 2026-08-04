@@ -86,7 +86,8 @@ type pronunciationReplacement struct {
 
 var classicalChinesePronunciationReplacements = []pronunciationReplacement{
 	// 《蜀道难》高风险词：整词优先，避免 TTS 对生僻字、多音字切换到错误读法。
-	{"噫吁嚱", "衣虚希"},
+	{"噫吁嚱", "衣虚兮"},
+	{"危乎", "微乎"},
 	{"蚕丛及鱼凫", "蚕丛及鱼扶"},
 	// 这一小节在 qwen3-tts-vc 里连续朗读时容易漂成外语音素；先补普通话断句。
 	{"下有冲波逆折之回川", "下有冲波，逆折之回川"},

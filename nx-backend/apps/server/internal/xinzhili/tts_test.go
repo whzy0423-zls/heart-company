@@ -846,6 +846,30 @@ func TestSynthesizerRetriesTransientProviderFailureOnce(t *testing.T) {
 	}
 }
 
+func TestSynthesizerRetriesProviderReportedTTSTimeoutOnceWhenSegmentStillAlive(t *testing.T) {
+	var calls atomic.Int32
+	provider := ttsProviderFunc(func(ctx context.Context, _ TTSConfig, _ string) ([]byte, string, error) {
+		if ctx.Err() != nil {
+			return nil, "", ctx.Err()
+		}
+		if calls.Add(1) == 1 {
+			return nil, "", ErrTTSTimeout
+		}
+		return testMP3(), "audio/mpeg", nil
+	})
+	var emitted int
+	err := NewSynthesizer(provider, 1, WithTTSSegmentTimeout(time.Second)).Synthesize(context.Background(), TTSConfig{}, "青泥何盘盘。", func(AudioSegment) error {
+		emitted++
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 || emitted != 1 {
+		t.Fatalf("calls=%d emitted=%d, want one retry and one segment", calls.Load(), emitted)
+	}
+}
+
 type ttsProviderFunc func(context.Context, TTSConfig, string) ([]byte, string, error)
 
 func (f ttsProviderFunc) Synthesize(ctx context.Context, cfg TTSConfig, text string) ([]byte, string, error) {
@@ -918,6 +942,24 @@ func TestValidMP3RequiresACompleteMPEGLayerIIIFrame(t *testing.T) {
 				t.Fatalf("validMP3()=%v want %v (len=%d)", got, tt.want, len(tt.audio))
 			}
 		})
+	}
+}
+
+func TestNormalizeMP3ForStreamingDropsEmbeddedID3Tags(t *testing.T) {
+	fullFrame := testMP3()
+	emptyID3 := []byte{'I', 'D', '3', 4, 0, 0, 0, 0, 0, 0}
+	audio := append(append(append(append([]byte{}, emptyID3...), fullFrame...), emptyID3...), fullFrame...)
+
+	cleaned := normalizeMP3ForStreaming(audio)
+	if bytes.Count(cleaned, []byte("ID3")) != 1 {
+		t.Fatalf("cleaned should keep only leading ID3, got %d ID3 markers", bytes.Count(cleaned, []byte("ID3")))
+	}
+	if !validMP3(cleaned) {
+		t.Fatalf("cleaned audio should be a valid streaming mp3")
+	}
+	want := append(append(append([]byte{}, emptyID3...), fullFrame...), fullFrame...)
+	if !bytes.Equal(cleaned, want) {
+		t.Fatalf("cleaned length=%d want=%d", len(cleaned), len(want))
 	}
 }
 

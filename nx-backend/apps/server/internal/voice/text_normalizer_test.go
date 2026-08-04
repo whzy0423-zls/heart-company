@@ -45,7 +45,7 @@ func TestNormalizeMandarinPronunciationTTSInputKeepsDisplayTextRulesSeparate(t *
 	}
 
 	spoken := NormalizeMandarinPronunciationTTSInput("噫吁嚱，危乎高哉！")
-	if spoken != "衣虚希，危乎高哉！" {
+	if spoken != "衣虚兮，微乎高哉！" {
 		t.Fatalf("spoken got %q", spoken)
 	}
 }
