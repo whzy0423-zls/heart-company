@@ -1107,8 +1107,14 @@ func (s *session) queueTTSChunk(turn *activeTurn, chunk string) {
 	if chunk == "" {
 		return
 	}
-	turn.ttsJobs <- ttsStreamJob{seq: turn.nextTTSSeq, text: chunk}
-	turn.nextTTSSeq++
+	for _, sentence := range SplitSentences(chunk) {
+		sentence = strings.TrimSpace(sentence)
+		if sentence == "" {
+			continue
+		}
+		turn.ttsJobs <- ttsStreamJob{seq: turn.nextTTSSeq, text: sentence}
+		turn.nextTTSSeq++
+	}
 }
 
 func normalizeRealtimeGenerationText(turn *activeTurn, text string) string {
@@ -1126,18 +1132,10 @@ func coalesceRealtimeTTSJobSegments(job ttsStreamJob, segments []AudioSegment) (
 	if len(segments) == 0 {
 		return AudioSegment{}, errors.New("xinzhili: streamed TTS chunk produced no segment")
 	}
-	combined := segments[0]
 	if len(segments) > 1 {
-		totalBytes := 0
-		for _, segment := range segments {
-			totalBytes += len(segment.Audio)
-		}
-		audio := make([]byte, 0, totalBytes)
-		for _, segment := range segments {
-			audio = append(audio, segment.Audio...)
-		}
-		combined.Audio = audio
+		return AudioSegment{}, errors.New("xinzhili: streamed TTS chunk produced multiple MP3 segments")
 	}
+	combined := segments[0]
 	combined.Seq = job.seq
 	combined.deliveryText = job.text
 	combined.ByteLength = len(combined.Audio)

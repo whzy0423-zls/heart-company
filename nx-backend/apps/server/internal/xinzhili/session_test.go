@@ -1066,7 +1066,24 @@ func TestSessionTTSRunsTwoChunksConcurrentlyAndEmitsInOrder(t *testing.T) {
 	}
 }
 
-func TestSessionTTSCoalescesProviderSentenceSplitsInsideOneRealtimeChunk(t *testing.T) {
+func TestQueueTTSChunkSplitsMultiSentenceChunksBeforeSynthesis(t *testing.T) {
+	s := &session{}
+	turn := &activeTurn{ttsJobs: make(chan ttsStreamJob, 4)}
+
+	s.queueTTSChunk(turn, "好。后面继续补足一段自然长度。")
+	close(turn.ttsJobs)
+
+	var got []ttsStreamJob
+	for job := range turn.ttsJobs {
+		got = append(got, job)
+	}
+	want := []ttsStreamJob{{seq: 0, text: "好。"}, {seq: 1, text: "后面继续补足一段自然长度。"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("jobs=%+v want=%+v", got, want)
+	}
+}
+
+func TestSessionTTSRejectsProviderSentenceSplitsInsideOneRealtimeChunk(t *testing.T) {
 	synth := splittingSynthesizer{}
 	s := &session{
 		deps:   SessionDependencies{Synthesizer: synth},
@@ -1087,20 +1104,9 @@ func TestSessionTTSCoalescesProviderSentenceSplitsInsideOneRealtimeChunk(t *test
 	turn.ttsJobs <- ttsStreamJob{seq: 7, text: "好。后面继续补足一段自然长度。"}
 	close(turn.ttsJobs)
 
-	event := waitSessionEvent(t, s.events, eventTTSSegment)
-	if event.segment.Seq != 7 {
-		t.Fatalf("seq=%d want=7", event.segment.Seq)
-	}
-	if string(event.segment.Audio) != "mp3:好。mp3:后面继续补足一段自然长度。" {
-		t.Fatalf("audio=%q", event.segment.Audio)
-	}
-	if event.segment.DeliveryText() != "好。后面继续补足一段自然长度。" {
-		t.Fatalf("delivery=%q", event.segment.DeliveryText())
-	}
-	event.segmentAck <- nil
 	done := waitSessionEvent(t, s.events, eventTTSDone)
-	if done.err != nil {
-		t.Fatal(done.err)
+	if done.err == nil || !strings.Contains(done.err.Error(), "multiple MP3 segments") {
+		t.Fatalf("done err=%v, want multiple MP3 segment guard", done.err)
 	}
 }
 

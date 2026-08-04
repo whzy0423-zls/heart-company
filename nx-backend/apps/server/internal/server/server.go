@@ -3014,6 +3014,9 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 
 		// Candidate 已验证后才持久化；只有持久化成功才做无失败运行时交换。
 		if err := modelconfig.UpsertStore(r.Context(), s.db, merged); err != nil {
+			if failModelConfigGatewayContractValidation(w, err) {
+				return
+			}
 			httpx.Fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -3056,6 +3059,28 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 
 		httpx.OK(w, buildModelConfigView(chat, vid, img, analysis, admin, merged.DailyQuiz, merged))
 	}
+}
+
+func failModelConfigGatewayContractValidation(w http.ResponseWriter, err error) bool {
+	var validationErr *modelconfig.GatewayContractValidationError
+	if !errors.As(err, &validationErr) {
+		return false
+	}
+	message := validationErr.Error()
+	if strings.TrimSpace(message) == "" {
+		message = "网关契约配置无效"
+	}
+	httpx.JSON(w, http.StatusBadRequest, httpx.Response{
+		Code: -1,
+		Data: nil,
+		Error: map[string]string{
+			"code":    validationErr.Code,
+			"field":   validationErr.Field,
+			"message": message,
+		},
+		Message: message,
+	})
+	return true
 }
 
 // testChatModel 对对话模型中转站做一次连通性探活（POST，需登录）。

@@ -32,7 +32,7 @@ func (s *Server) newXinzhiliRealtimeDependencies(cfg xinzhili.Config, sink xinzh
 		Theory:        serverXinzhiliTheory{store: theorystore.NewStore(s.db)},
 		Generator:     generator,
 		ASRFactory:    xinzhili.NewAliyunASRFactory(xinzhili.AliyunASROptions{}),
-		Synthesizer:   xinzhili.NewSynthesizer(provider, 1),
+		Synthesizer:   xinzhili.NewSynthesizer(provider, 1, xinzhili.WithTTSSegmentTimeout(45*time.Second)),
 		EngineFactory: func(mode xinzhili.Mode, timing xinzhili.TimingConfig, clock xinzhili.Clock) xinzhili.StrategyEngine {
 			return xinzhili.NewEngine(mode, timing, clock)
 		},
