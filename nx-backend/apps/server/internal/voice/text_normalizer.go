@@ -64,6 +64,64 @@ func NormalizeStrictChineseTTSInput(text string) string {
 	return strings.Join(strings.Fields(normalized), "")
 }
 
+// NormalizeMandarinPronunciationTTSInput applies the strict Chinese playback
+// rules and then rewrites known classical-Chinese hard words to common
+// Mandarin homophones. This function is for speech synthesis input only: UI
+// and persisted assistant text should keep the original poem characters.
+func NormalizeMandarinPronunciationTTSInput(text string) string {
+	text = NormalizeStrictChineseTTSInput(text)
+	if text == "" {
+		return ""
+	}
+	for _, replacement := range classicalChinesePronunciationReplacements {
+		text = strings.ReplaceAll(text, replacement.from, replacement.to)
+	}
+	return text
+}
+
+type pronunciationReplacement struct {
+	from string
+	to   string
+}
+
+var classicalChinesePronunciationReplacements = []pronunciationReplacement{
+	// 《蜀道难》高风险词：整词优先，避免 TTS 对生僻字、多音字切换到错误读法。
+	{"噫吁嚱", "衣虚希"},
+	{"蚕丛及鱼凫", "蚕丛及鱼扶"},
+	// 这一小节在 qwen3-tts-vc 里连续朗读时容易漂成外语音素；先补普通话断句。
+	{"下有冲波逆折之回川", "下有冲波，逆折之回川"},
+	{"黄鹤之飞尚不得过", "黄鹤之飞，尚不得过"},
+	{"猿猱欲度愁攀援", "元挠欲度，愁攀援"},
+	{"猿猱", "元挠"},
+	{"扪参历井", "门申历井"},
+	{"胁息", "协息"},
+	{"抚膺", "抚英"},
+	{"巉岩", "馋岩"},
+	{"瀑流", "铺流"},
+	{"喧豗", "喧灰"},
+	{"砯崖", "乒崖"},
+	{"万壑", "万贺"},
+	{"峥嵘", "征荣"},
+	{"崔嵬", "崔围"},
+	{"吮血", "顺血"},
+	{"咨嗟", "资接"},
+	{"峨眉巅", "峨眉颠"},
+	{"秦塞", "秦赛"},
+	{"石栈", "石站"},
+	// 单字兜底：覆盖模型输出只包含单个生僻字的情况。
+	{"嚱", "希"},
+	{"凫", "扶"},
+	{"猱", "挠"},
+	{"膺", "英"},
+	{"巉", "馋"},
+	{"豗", "灰"},
+	{"砯", "乒"},
+	{"壑", "贺"},
+	{"嵘", "荣"},
+	{"嵬", "围"},
+	{"嗟", "接"},
+}
+
 func replaceASCIILetterTokensForChineseSpeech(text string) string {
 	runes := []rune(text)
 	var builder strings.Builder

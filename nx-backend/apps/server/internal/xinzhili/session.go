@@ -1107,14 +1107,8 @@ func (s *session) queueTTSChunk(turn *activeTurn, chunk string) {
 	if chunk == "" {
 		return
 	}
-	for _, sentence := range SplitSentences(chunk) {
-		sentence = strings.TrimSpace(sentence)
-		if sentence == "" {
-			continue
-		}
-		turn.ttsJobs <- ttsStreamJob{seq: turn.nextTTSSeq, text: sentence}
-		turn.nextTTSSeq++
-	}
+	turn.ttsJobs <- ttsStreamJob{seq: turn.nextTTSSeq, text: chunk}
+	turn.nextTTSSeq++
 }
 
 func normalizeRealtimeGenerationText(turn *activeTurn, text string) string {

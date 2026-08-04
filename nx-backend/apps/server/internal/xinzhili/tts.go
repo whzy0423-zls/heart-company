@@ -148,7 +148,7 @@ func (f TTSProviderFactory) New(cfg TTSConfig) (TTSProvider, error) {
 type miniMaxTTSAdapter struct{ client MiniMaxTextToAudio }
 
 func (p miniMaxTTSAdapter) Synthesize(ctx context.Context, cfg TTSConfig, text string) ([]byte, string, error) {
-	text = voice.NormalizeStrictChineseTTSInput(text)
+	text = voice.NormalizeMandarinPronunciationTTSInput(text)
 	audio, mimeType, err := p.client.TextToAudioLimited(ctx, cfg.Model, cfg.Voice, text, maxTTSSegmentBytes)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
@@ -175,7 +175,7 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 	if format == "" {
 		format = "mp3"
 	}
-	text = voice.NormalizeStrictChineseTTSInput(text)
+	text = voice.NormalizeMandarinPronunciationTTSInput(text)
 	input := map[string]any{"text": text}
 	if isBailianHostedMiniMaxTTSModel(cfg.Model) {
 		input["voice_setting"] = map[string]any{
@@ -361,7 +361,7 @@ type openAICompatibleTTS struct {
 }
 
 func (p *openAICompatibleTTS) Synthesize(ctx context.Context, cfg TTSConfig, text string) ([]byte, string, error) {
-	text = voice.NormalizeStrictChineseTTSInput(text)
+	text = voice.NormalizeMandarinPronunciationTTSInput(text)
 	payload, err := json.Marshal(map[string]string{
 		"model":           cfg.Model,
 		"voice":           cfg.Voice,
@@ -648,6 +648,7 @@ type Synthesizer struct {
 	provider       TTSProvider
 	concurrency    int
 	segmentTimeout time.Duration
+	splitInput     bool
 }
 
 type SynthesizerOption func(*Synthesizer)
@@ -657,6 +658,12 @@ func WithTTSSegmentTimeout(timeout time.Duration) SynthesizerOption {
 		if timeout > 0 {
 			s.segmentTimeout = timeout
 		}
+	}
+}
+
+func WithSingleSegmentTTSInput() SynthesizerOption {
+	return func(s *Synthesizer) {
+		s.splitInput = false
 	}
 }
 
@@ -670,6 +677,7 @@ func NewSynthesizer(provider TTSProvider, concurrency int, options ...Synthesize
 		provider:       provider,
 		concurrency:    concurrency,
 		segmentTimeout: defaultTTSTimeout,
+		splitInput:     true,
 	}
 	for _, option := range options {
 		if option != nil {
@@ -703,7 +711,14 @@ func (s *Synthesizer) Synthesize(ctx context.Context, cfg TTSConfig, text string
 	if emit == nil {
 		return errors.New("TTS 输出回调未配置")
 	}
-	sentences := SplitSentences(text)
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil
+	}
+	sentences := []string{trimmed}
+	if s.splitInput {
+		sentences = SplitSentences(text)
+	}
 	if len(sentences) == 0 {
 		return nil
 	}

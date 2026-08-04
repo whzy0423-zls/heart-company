@@ -1066,7 +1066,7 @@ func TestSessionTTSRunsTwoChunksConcurrentlyAndEmitsInOrder(t *testing.T) {
 	}
 }
 
-func TestQueueTTSChunkSplitsMultiSentenceChunksBeforeSynthesis(t *testing.T) {
+func TestQueueTTSChunkKeepsPlayableRealtimeChunkTogether(t *testing.T) {
 	s := &session{}
 	turn := &activeTurn{ttsJobs: make(chan ttsStreamJob, 4)}
 
@@ -1077,7 +1077,7 @@ func TestQueueTTSChunkSplitsMultiSentenceChunksBeforeSynthesis(t *testing.T) {
 	for job := range turn.ttsJobs {
 		got = append(got, job)
 	}
-	want := []ttsStreamJob{{seq: 0, text: "好。"}, {seq: 1, text: "后面继续补足一段自然长度。"}}
+	want := []ttsStreamJob{{seq: 0, text: "好。后面继续补足一段自然长度。"}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("jobs=%+v want=%+v", got, want)
 	}

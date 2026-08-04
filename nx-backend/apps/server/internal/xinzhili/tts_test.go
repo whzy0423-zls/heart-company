@@ -545,6 +545,31 @@ func TestSynthesizerOrderedAndStreamsFirstCompletedPrefix(t *testing.T) {
 	}
 }
 
+func TestSynthesizerSingleSegmentInputKeepsRealtimeChunkTogether(t *testing.T) {
+	var calls []string
+	provider := ttsProviderFunc(func(_ context.Context, _ TTSConfig, text string) ([]byte, string, error) {
+		calls = append(calls, text)
+		return testMP3(), "audio/mpeg", nil
+	})
+	var got []AudioSegment
+
+	err := NewSynthesizer(provider, 1, WithSingleSegmentTTSInput()).Synthesize(
+		context.Background(), TTSConfig{}, "好。后面继续补足一段自然长度。", func(s AudioSegment) error {
+			got = append(got, s)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"好。后面继续补足一段自然长度。"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("provider calls=%q want %q", calls, want)
+	}
+	if len(got) != 1 || got[0].DeliveryText() != "好。后面继续补足一段自然长度。" {
+		t.Fatalf("segments=%+v", got)
+	}
+}
+
 func TestSynthesizerCancellationStopsQueuedWorkAndLateOutput(t *testing.T) {
 	p := &delayedTTSProvider{delays: map[string]time.Duration{"一。": time.Second, "二。": time.Second, "三。": time.Second, "四。": time.Second}}
 	ctx, cancel := context.WithCancel(context.Background())

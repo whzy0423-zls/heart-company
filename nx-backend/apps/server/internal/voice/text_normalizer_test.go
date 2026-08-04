@@ -1,6 +1,9 @@
 package voice
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNormalizeChineseTTSInputReadsDigitsInChinese(t *testing.T) {
 	got := NormalizeChineseTTSInput(" 我是7号，先做1次呼吸 ")
@@ -33,6 +36,40 @@ func TestNormalizeStrictChineseTTSInputHidesLinksEmailsAndVersionTokens(t *testi
 		t.Fatalf("got %q want %q", got, want)
 	}
 	assertNoASCIILetters(t, got)
+}
+
+func TestNormalizeMandarinPronunciationTTSInputKeepsDisplayTextRulesSeparate(t *testing.T) {
+	visible := NormalizeStrictChineseTTSInput("噫吁嚱，危乎高哉！")
+	if visible != "噫吁嚱，危乎高哉！" {
+		t.Fatalf("strict visible text got %q", visible)
+	}
+
+	spoken := NormalizeMandarinPronunciationTTSInput("噫吁嚱，危乎高哉！")
+	if spoken != "衣虚希，危乎高哉！" {
+		t.Fatalf("spoken got %q", spoken)
+	}
+}
+
+func TestNormalizeMandarinPronunciationTTSInputNormalizesShuDaoNanHardWords(t *testing.T) {
+	got := NormalizeMandarinPronunciationTTSInput("蚕丛及鱼凫，猿猱欲度愁攀援。扪参历井仰胁息，以手抚膺坐长叹。巉岩不可攀。飞湍瀑流争喧豗，砯崖转石万壑雷。剑阁峥嵘而崔嵬。磨牙吮血，侧身西望长咨嗟。")
+	want := "蚕丛及鱼扶，元挠欲度，愁攀援。门申历井仰协息，以手抚英坐长叹。馋岩不可攀。飞湍铺流争喧灰，乒崖转石万贺雷。剑阁征荣而崔围。磨牙顺血，侧身西望长资接。"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	for _, hard := range []string{"嚱", "凫", "猱", "扪参", "胁", "膺", "巉", "豗", "砯", "壑", "嵘", "嵬", "吮", "嗟"} {
+		if strings.Contains(got, hard) {
+			t.Fatalf("spoken text still contains hard token %q in %q", hard, got)
+		}
+	}
+	assertNoASCIILetters(t, got)
+}
+
+func TestNormalizeMandarinPronunciationTTSInputAddsShuDaoNanProsodyBreaks(t *testing.T) {
+	got := NormalizeMandarinPronunciationTTSInput("下有冲波逆折之回川。黄鹤之飞尚不得过，猿猱欲度愁攀援。")
+	want := "下有冲波，逆折之回川。黄鹤之飞，尚不得过，元挠欲度，愁攀援。"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
 }
 
 func assertNoASCIILetters(t *testing.T, text string) {
