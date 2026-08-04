@@ -797,6 +797,30 @@ func TestSynthesizerLimits(t *testing.T) {
 	})
 }
 
+func TestSynthesizerRetriesTransientProviderFailureOnce(t *testing.T) {
+	var calls atomic.Int32
+	provider := ttsProviderFunc(func(context.Context, TTSConfig, string) ([]byte, string, error) {
+		if calls.Add(1) == 1 {
+			return nil, "", errors.New("temporary upstream failure")
+		}
+		return testMP3(), "audio/mpeg", nil
+	})
+	var emitted int
+	err := NewSynthesizer(provider, 1).Synthesize(context.Background(), TTSConfig{}, "你好。", func(AudioSegment) error {
+		emitted++
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("calls=%d want=2", got)
+	}
+	if emitted != 1 {
+		t.Fatalf("emitted=%d want=1", emitted)
+	}
+}
+
 type ttsProviderFunc func(context.Context, TTSConfig, string) ([]byte, string, error)
 
 func (f ttsProviderFunc) Synthesize(ctx context.Context, cfg TTSConfig, text string) ([]byte, string, error) {

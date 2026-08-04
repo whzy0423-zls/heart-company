@@ -515,6 +515,8 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 			s.confirmCompletedPlayback(current)
 		}
 		if event.err != nil && !errors.Is(event.err, context.Canceled) {
+			log.Printf("xinzhili tts failed user_id=%d turn_id=%q segment_count=%d audio_bytes=%d err=%v",
+				current.input.UserID, current.input.TurnID, len(current.segments), current.ttsAudioBytes, event.err)
 			s.sendError(current, "tts_failed", "语音回复生成失败，请重试", true)
 		}
 		if event.err == nil || !errors.Is(event.err, context.Canceled) {

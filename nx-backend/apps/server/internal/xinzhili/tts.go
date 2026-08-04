@@ -29,6 +29,7 @@ const (
 	maxTTSTurnBytes     = 10 << 20
 	defaultTTSWorkers   = 2
 	defaultTTSTimeout   = 15 * time.Second
+	ttsRetryDelay       = 120 * time.Millisecond
 	bailianTTSPath      = "/api/v1/services/aigc/multimodal-generation/generation"
 )
 
@@ -678,6 +679,13 @@ func NewSynthesizer(provider TTSProvider, concurrency int, options ...Synthesize
 	return synthesizer
 }
 
+func (s *Synthesizer) WorkerCount() int {
+	if s == nil {
+		return 0
+	}
+	return s.concurrency
+}
+
 type synthesisJob struct {
 	seq  uint32
 	text string
@@ -791,7 +799,7 @@ func (s *Synthesizer) Synthesize(ctx context.Context, cfg TTSConfig, text string
 }
 
 func (s *Synthesizer) synthesizeOne(ctx context.Context, cfg TTSConfig, job synthesisJob) synthesisResult {
-	audio, contentType, err := s.provider.Synthesize(ctx, cfg, job.text)
+	audio, contentType, err := s.synthesizeProviderWithRetry(ctx, cfg, job.text)
 	if err != nil {
 		if errors.Is(err, ErrTTSTimeout) || errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 			return synthesisResult{err: segmentCauseError(job.seq, ErrTTSTimeout)}
@@ -820,6 +828,30 @@ func (s *Synthesizer) synthesizeOne(ctx context.Context, cfg TTSConfig, job synt
 	return synthesisResult{segment: AudioSegment{
 		Seq: job.seq, Audio: audio, MIME: mimeType, SHA256: sha256.Sum256(audio), ByteLength: len(audio), deliveryText: job.text,
 	}}
+}
+
+func (s *Synthesizer) synthesizeProviderWithRetry(ctx context.Context, cfg TTSConfig, text string) ([]byte, string, error) {
+	audio, contentType, err := s.provider.Synthesize(ctx, cfg, text)
+	if err == nil || !shouldRetryTTSProviderError(ctx, err) {
+		return audio, contentType, err
+	}
+	timer := time.NewTimer(ttsRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+		return nil, "", ctx.Err()
+	}
+	return s.provider.Synthesize(ctx, cfg, text)
+}
+
+func shouldRetryTTSProviderError(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	return !errors.Is(err, context.Canceled) &&
+		!errors.Is(err, context.DeadlineExceeded) &&
+		!errors.Is(err, ErrTTSTimeout)
 }
 
 func segmentError(seq uint32, reason string) error {

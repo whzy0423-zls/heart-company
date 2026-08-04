@@ -15,6 +15,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"nine-xing/nx-backend/apps/server/internal/bailianconfig"
+	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
 
@@ -45,6 +46,21 @@ func TestXinzhiliProtocolFailureIsSanitized(t *testing.T) {
 	}
 	if xinzhiliProtocolUpdateMessage != "语音服务正在更新，请稍后重试" {
 		t.Fatalf("unexpected user message %q", xinzhiliProtocolUpdateMessage)
+	}
+}
+
+func TestXinzhiliRealtimeDependenciesUseSingleTTSProviderWorker(t *testing.T) {
+	s := &Server{appChat: &chat.Store{}}
+	deps, err := s.newXinzhiliRealtimeDependencies(xinzhili.Config{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	synth, ok := deps.Synthesizer.(*xinzhili.Synthesizer)
+	if !ok {
+		t.Fatalf("Synthesizer type=%T", deps.Synthesizer)
+	}
+	if got := synth.WorkerCount(); got != 1 {
+		t.Fatalf("worker count=%d want=1", got)
 	}
 }
 

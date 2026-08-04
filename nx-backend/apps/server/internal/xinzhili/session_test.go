@@ -1,11 +1,13 @@
 package xinzhili
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"slices"
 	"strings"
 	"sync"
@@ -1110,7 +1112,7 @@ func TestSessionTTSFailureDrainsQueuedGenerationAndStillCompletes(t *testing.T) 
 	}
 	fixture.generator.deltas = deltas
 	fixture.generator.answer = strings.Join(deltas, "")
-	fixture.synth.failText = deltas[1]
+	fixture.synth.failAt = 1
 
 	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-tts-drain")); err != nil {
 		t.Fatal(err)
@@ -1138,6 +1140,40 @@ func TestSessionTTSFailureDrainsQueuedGenerationAndStillCompletes(t *testing.T) 
 			}
 		default:
 			return
+		}
+	}
+}
+
+func TestSessionLogsTTSFailureWithoutUserContent(t *testing.T) {
+	originalWriter, originalFlags := log.Writer(), log.Flags()
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+	})
+
+	fixture := newSessionFixture(t)
+	fixture.generator.deltas = []string{"私密回答第一段。"}
+	fixture.generator.answer = "私密回答第一段。"
+	fixture.synth.failText = "私密回答第一段。"
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-tts-log")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "用户私密问题", Stable: true})
+
+	_ = fixture.sink.waitControl(t, EventError)
+	got := logs.String()
+	for _, required := range []string{"xinzhili tts failed", "user_id=11", "turn_id=\"turn-tts-log\"", "segment_count=0", "audio_bytes=0", "err=tts failed"} {
+		if !strings.Contains(got, required) {
+			t.Fatalf("log missing %q: %s", required, got)
+		}
+	}
+	for _, secret := range []string{"用户私密问题", "私密回答第一段"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("log leaked %q: %s", secret, got)
 		}
 	}
 }
@@ -1207,7 +1243,8 @@ func TestDeliveryCancellationBeforeFirstAudioDoesNotCreateAssistant(t *testing.T
 func TestDeliveryGenerationFailureKeepsPlayedPrefixAndExcludesDraft(t *testing.T) {
 	fixture := newSessionFixture(t)
 	fixture.generator.answer = ""
-	fixture.generator.deltas = []string{"我陪你呼吸。", "这段没有播放"}
+	played := "我陪你慢慢呼吸，把注意力放回当下，先一起稳定下来，不着急。"
+	fixture.generator.deltas = []string{played, "这段没有播放"}
 	fixture.generator.pauseAfter = 1
 	fixture.generator.paused = make(chan struct{})
 	fixture.generator.resume = make(chan struct{})
@@ -1223,7 +1260,7 @@ func TestDeliveryGenerationFailureKeepsPlayedPrefixAndExcludesDraft(t *testing.T
 		t.Fatal("generator did not pause after first sentence")
 	}
 	first := fixture.sink.waitAudio(t)
-	if first.DeliveryText() != "我陪你呼吸。" {
+	if first.DeliveryText() != played {
 		t.Fatalf("first delivery text=%q", first.DeliveryText())
 	}
 	if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-partial-fail", SegmentSeq: first.Seq}); err != nil {
@@ -1231,11 +1268,11 @@ func TestDeliveryGenerationFailureKeepsPlayedPrefixAndExcludesDraft(t *testing.T
 	}
 	close(fixture.generator.resume)
 	fixture.sink.waitControl(t, EventError)
-	fixture.store.waitDelivered(t, "我陪你呼吸。")
+	fixture.store.waitDelivered(t, played)
 	fixture.store.mu.Lock()
 	assistantDraft := fixture.store.assistants[0]
 	fixture.store.mu.Unlock()
-	if assistantDraft != "我陪你呼吸。" {
+	if assistantDraft != played {
 		t.Fatalf("assistant initial content=%q", assistantDraft)
 	}
 	time.Sleep(30 * time.Millisecond)
