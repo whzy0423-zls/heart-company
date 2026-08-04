@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	maxTTSSentenceRunes = 42
+	maxTTSSentenceRunes = 64
 	maxTTSSegmentBytes  = 1 << 20
 	maxTTSTurnBytes     = 10 << 20
 	defaultTTSWorkers   = 2
@@ -147,6 +147,7 @@ func (f TTSProviderFactory) New(cfg TTSConfig) (TTSProvider, error) {
 type miniMaxTTSAdapter struct{ client MiniMaxTextToAudio }
 
 func (p miniMaxTTSAdapter) Synthesize(ctx context.Context, cfg TTSConfig, text string) ([]byte, string, error) {
+	text = voice.NormalizeChineseTTSInput(text)
 	audio, mimeType, err := p.client.TextToAudioLimited(ctx, cfg.Model, cfg.Voice, text, maxTTSSegmentBytes)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
@@ -173,6 +174,7 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 	if format == "" {
 		format = "mp3"
 	}
+	text = voice.NormalizeChineseTTSInput(text)
 	input := map[string]any{"text": text}
 	if isBailianHostedMiniMaxTTSModel(cfg.Model) {
 		input["voice_setting"] = map[string]any{
@@ -358,6 +360,7 @@ type openAICompatibleTTS struct {
 }
 
 func (p *openAICompatibleTTS) Synthesize(ctx context.Context, cfg TTSConfig, text string) ([]byte, string, error) {
+	text = voice.NormalizeChineseTTSInput(text)
 	payload, err := json.Marshal(map[string]string{
 		"model":           cfg.Model,
 		"voice":           cfg.Voice,
@@ -513,7 +516,7 @@ func openAISpeechEndpoint(raw string) (string, error) {
 }
 
 // SplitSentences prefers sentence-ending punctuation. When a sentence exceeds
-// 42 Unicode code points, the last punctuation within the window is used;
+// maxTTSSentenceRunes Unicode code points, the last punctuation within the window is used;
 // otherwise it is hard-cut on a rune boundary.
 func SplitSentences(text string) []string {
 	runes := []rune(strings.TrimSpace(text))

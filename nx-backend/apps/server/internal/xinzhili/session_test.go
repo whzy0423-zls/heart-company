@@ -99,15 +99,15 @@ func TestStreamSentenceChunkerPrioritizesPlayableFirstChunk(t *testing.T) {
 		}
 	})
 
-	t.Run("weak punctuation waits for fourteen runes to avoid tiny audio clips", func(t *testing.T) {
+	t.Run("weak punctuation waits for longer phrase to avoid choppy audio clips", func(t *testing.T) {
 		var shortChunker streamSentenceChunker
-		tooShort := strings.Repeat("甲", 9) + "，"
+		tooShort := strings.Repeat("甲", firstTTSChunkMinRunes-2) + "，"
 		if got := shortChunker.Push(tooShort + "后续"); len(got) != 0 {
 			t.Fatalf("tiny chunk emitted=%q", got)
 		}
 
 		var chunker streamSentenceChunker
-		prefix := strings.Repeat("甲", 13) + "，"
+		prefix := strings.Repeat("甲", firstTTSChunkMinRunes-1) + "，"
 		if got := chunker.Push(prefix + "后续"); !slices.Equal(got, []string{prefix}) {
 			t.Fatalf("chunks=%q", got)
 		}
@@ -116,23 +116,31 @@ func TestStreamSentenceChunkerPrioritizesPlayableFirstChunk(t *testing.T) {
 		}
 	})
 
-	t.Run("first chunk hard caps at twenty eight runes", func(t *testing.T) {
+	t.Run("fourteen rune comma stays buffered because it sounds choppy as standalone audio", func(t *testing.T) {
 		var chunker streamSentenceChunker
-		first := strings.Repeat("甲", 28)
+		earlyComma := strings.Repeat("甲", 13) + "，"
+		if got := chunker.Push(earlyComma + "后续"); len(got) != 0 {
+			t.Fatalf("early comma emitted choppy chunk=%q", got)
+		}
+	})
+
+	t.Run("first chunk hard cap still avoids very short playback fragments", func(t *testing.T) {
+		var chunker streamSentenceChunker
+		first := strings.Repeat("甲", firstTTSChunkMaxRunes)
 		if got := chunker.Push(first + "后续"); !slices.Equal(got, []string{first}) {
 			t.Fatalf("chunks=%q", got)
 		}
 	})
 
-	t.Run("later chunks keep forty two rune cap", func(t *testing.T) {
+	t.Run("later chunks keep longer cap to reduce playback gaps", func(t *testing.T) {
 		var chunker streamSentenceChunker
 		if got := chunker.Push("你好。"); !slices.Equal(got, []string{"你好。"}) {
 			t.Fatalf("first=%q", got)
 		}
-		if got := chunker.Push(strings.Repeat("乙", 41)); len(got) != 0 {
+		if got := chunker.Push(strings.Repeat("乙", streamTTSChunkMaxRunes-1)); len(got) != 0 {
 			t.Fatalf("early later chunk=%q", got)
 		}
-		later := strings.Repeat("乙", 42)
+		later := strings.Repeat("乙", streamTTSChunkMaxRunes)
 		if got := chunker.Push("乙"); !slices.Equal(got, []string{later}) {
 			t.Fatalf("later=%q", got)
 		}

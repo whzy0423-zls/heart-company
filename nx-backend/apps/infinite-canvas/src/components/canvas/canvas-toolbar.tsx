@@ -1,19 +1,16 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
-import { Button, Segmented, Switch } from "antd";
-import { CircleDot, Eraser, Grid2x2, Group, Hand, Image as ImageIcon, Info, Moon, Music2, Palette, Puzzle, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
+import { Button } from "antd";
+import { Eraser, Group, Hand, Image as ImageIcon, Music2, Puzzle, Redo2, Settings2, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
 
-import { canvasThemes, type CanvasBackgroundMode, type CanvasColorTheme, type CanvasTheme } from "@/lib/canvas-theme";
+import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { getNodePluginId, listNodeDefinitions, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
 import { useThemeStore } from "@/stores/use-theme-store";
-import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
 
 export function CanvasToolbar({
     selectedCount,
     canUndo,
     canRedo,
-    backgroundMode,
-    showImageInfo,
     onAddImage,
     onAddVideo,
     onAddAudio,
@@ -27,14 +24,10 @@ export function CanvasToolbar({
     onDelete,
     onClear,
     onDeselect,
-    onBackgroundModeChange,
-    onShowImageInfoChange,
 }: {
     selectedCount: number;
     canUndo: boolean;
     canRedo: boolean;
-    backgroundMode: CanvasBackgroundMode;
-    showImageInfo: boolean;
     onAddImage: () => void;
     onAddVideo: () => void;
     onAddAudio: () => void;
@@ -48,18 +41,13 @@ export function CanvasToolbar({
     onDelete: () => void;
     onClear: () => void;
     onDeselect: () => void;
-    onBackgroundModeChange: (mode: CanvasBackgroundMode) => void;
-    onShowImageInfoChange: (show: boolean) => void;
 }) {
     const wrapRef = useRef<HTMLDivElement>(null);
     const rootRef = useRef<HTMLDivElement>(null);
     const colorTheme = useThemeStore((state) => state.theme);
-    const setTheme = useThemeStore((state) => state.setTheme);
     const theme = canvasThemes[colorTheme];
     const [hovered, setHovered] = useState<string | null>(null);
     const [tipX, setTipX] = useState(0);
-    const [appearanceOpen, setAppearanceOpen] = useState(false);
-    const [panelX, setPanelX] = useState(0);
     const [extensionsOpen, setExtensionsOpen] = useState(false);
     const [extPanelX, setExtPanelX] = useState(0);
     // 扩展(插件)节点,随注册表变化实时更新
@@ -70,18 +58,17 @@ export function CanvasToolbar({
     const activeStyle = { background: theme.toolbar.activeBg, color: theme.toolbar.activeText };
     const tip = hovered ? toolLabel(hovered) : "";
 
-    // 点击工具栏(含弹出面板)以外的地方,关闭弹出的扩展节点/画布外观面板
+    // 点击工具栏(含弹出面板)以外的地方,关闭弹出的扩展节点面板
     useEffect(() => {
-        if (!extensionsOpen && !appearanceOpen) return;
+        if (!extensionsOpen) return;
         const handlePointerDown = (event: PointerEvent) => {
             if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
                 setExtensionsOpen(false);
-                setAppearanceOpen(false);
             }
         };
         document.addEventListener("pointerdown", handlePointerDown, true);
         return () => document.removeEventListener("pointerdown", handlePointerDown, true);
-    }, [extensionsOpen, appearanceOpen]);
+    }, [extensionsOpen]);
 
     return (
         <div ref={rootRef} className="pointer-events-none absolute bottom-5 z-50 flex justify-center" style={{ left: 300, right: 16 }}>
@@ -128,7 +115,6 @@ export function CanvasToolbar({
                         onHover={setHovered}
                         onClick={(event) => {
                             setExtPanelX(getTipX(wrapRef.current, event.currentTarget));
-                            setAppearanceOpen(false);
                             setExtensionsOpen((value) => !value);
                         }}
                     >
@@ -137,25 +123,6 @@ export function CanvasToolbar({
                 ) : null}
                 <ToolbarButton id="tool-upload" label="上传资产" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onUpload}>
                     <Upload className="size-4.5" />
-                </ToolbarButton>
-                <Divider theme={theme} />
-                <ToolbarButton
-                    id="tool-style"
-                    label="画布外观"
-                    active={appearanceOpen}
-                    hovered={hovered}
-                    activeStyle={activeStyle}
-                    hoverStyle={hoverStyle}
-                    wrapRef={wrapRef}
-                    onTipX={setTipX}
-                    onHover={setHovered}
-                    onClick={(event) => {
-                        setPanelX(getTipX(wrapRef.current, event.currentTarget));
-                        setExtensionsOpen(false);
-                        setAppearanceOpen((value) => !value);
-                    }}
-                >
-                    <Palette className="size-4.5" />
                 </ToolbarButton>
                 {selectedCount ? (
                     <>
@@ -197,66 +164,6 @@ export function CanvasToolbar({
                                 <span className="min-w-0 flex-1 truncate">{def.title}</span>
                             </button>
                         ))}
-                    </div>
-                </div>
-            ) : null}
-
-            {appearanceOpen ? (
-                <div
-                    className="pointer-events-auto absolute bottom-[72px] z-30 w-[248px] -translate-x-1/2 rounded-xl border p-2.5 shadow-xl backdrop-blur"
-                    style={{ left: panelX || "50%", background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.item }}
-                >
-                    <div className="px-1 pb-2 text-sm font-medium opacity-65">画布外观</div>
-                    <div className="px-1 pb-1.5 text-[11px] font-medium opacity-50">主题模式</div>
-                    <div className="grid grid-cols-2 gap-1 rounded-lg p-1" style={{ background: theme.toolbar.itemHover }}>
-                        <CanvasThemeButton colorTheme={colorTheme} targetTheme="light" onThemeChange={setTheme}>
-                            <Sun className="size-4" />
-                            浅色
-                        </CanvasThemeButton>
-                        <CanvasThemeButton colorTheme={colorTheme} targetTheme="dark" onThemeChange={setTheme}>
-                            <Moon className="size-4" />
-                            深色
-                        </CanvasThemeButton>
-                    </div>
-                    <div className="mt-3 px-1 pb-1.5 text-[11px] font-medium opacity-50">网格样式</div>
-                    <Segmented
-                        className="w-full !p-1 [&_.ant-segmented-group]:!flex [&_.ant-segmented-item]:!min-h-8 [&_.ant-segmented-item]:!flex-1 [&_.ant-segmented-item-label]:!min-h-8 [&_.ant-segmented-item-label]:!leading-8"
-                        value={backgroundMode}
-                        onChange={(value) => onBackgroundModeChange(value as CanvasBackgroundMode)}
-                        options={[
-                            {
-                                value: "dots",
-                                label: (
-                                    <span className="inline-flex items-center gap-1.5">
-                                        <CircleDot className="size-4" />点
-                                    </span>
-                                ),
-                            },
-                            {
-                                value: "lines",
-                                label: (
-                                    <span className="inline-flex items-center gap-1.5">
-                                        <Grid2x2 className="size-4" />线
-                                    </span>
-                                ),
-                            },
-                            {
-                                value: "blank",
-                                label: (
-                                    <span className="inline-flex items-center gap-1.5">
-                                        <Square className="size-4" />
-                                        空白
-                                    </span>
-                                ),
-                            },
-                        ]}
-                    />
-                    <div className="mt-3 flex items-center justify-between gap-3 rounded-lg px-1.5 py-1">
-                        <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] font-medium opacity-65">
-                            <Info className="size-3.5" />
-                            图片信息
-                        </span>
-                        <Switch size="small" checked={showImageInfo} onChange={onShowImageInfoChange} />
                     </div>
                 </div>
             ) : null}
@@ -317,26 +224,6 @@ function Divider({ theme }: { theme: CanvasTheme }) {
     return <div className="mx-1 h-6 w-px" style={{ background: theme.toolbar.border }} />;
 }
 
-function CanvasThemeButton({ colorTheme, targetTheme, onThemeChange, children }: { colorTheme: CanvasColorTheme; targetTheme: CanvasColorTheme; onThemeChange: (theme: CanvasColorTheme) => void; children: ReactNode }) {
-    const theme = canvasThemes[colorTheme];
-    const active = colorTheme === targetTheme;
-    const activeStyle = colorTheme === "light" ? { background: "#111111", color: "#ffffff" } : { background: theme.toolbar.activeBg, color: theme.toolbar.activeText };
-
-    return (
-        <AnimatedThemeToggler
-            theme={colorTheme}
-            targetTheme={targetTheme}
-            onThemeChange={onThemeChange}
-            className="inline-flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-md px-2 text-sm transition"
-            style={active ? activeStyle : { color: theme.toolbar.item }}
-            aria-label={`切换到${targetTheme === "dark" ? "深色" : "浅色"}主题`}
-            title={`切换到${targetTheme === "dark" ? "深色" : "浅色"}主题`}
-        >
-            {children}
-        </AnimatedThemeToggler>
-    );
-}
-
 function DockTip({ label, x, theme }: { label: string; x: number; theme: CanvasTheme }) {
     return (
         <span className="absolute bottom-[calc(100%+8px)] -translate-x-1/2 rounded-md px-2 py-1 text-xs shadow-lg" style={{ left: x, background: theme.node.text, color: theme.node.panel }}>
@@ -357,7 +244,6 @@ function toolLabel(id: string) {
     if (id === "tool-group") return "组";
     if (id === "tool-extensions") return "扩展节点";
     if (id === "tool-upload") return "上传资产";
-    if (id === "tool-style") return "画布外观";
     if (id === "tool-delete") return "删除选中";
     if (id === "tool-clear") return "清空画布";
     return "";

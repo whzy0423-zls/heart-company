@@ -73,7 +73,7 @@ func (c *CompatibleSpeechClient) Synthesize(ctx context.Context, text string) ([
 	payload := map[string]any{
 		"model":           strings.TrimSpace(cfg.Model),
 		"voice":           strings.TrimSpace(cfg.Voice),
-		"input":           strings.TrimSpace(text),
+		"input":           NormalizeChineseTTSInput(text),
 		"response_format": defaultString(strings.ToLower(strings.TrimSpace(cfg.ResponseFormat)), "mp3"),
 		"speed":           defaultSpeed(cfg.Speed),
 	}

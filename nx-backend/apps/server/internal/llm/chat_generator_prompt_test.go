@@ -28,6 +28,19 @@ func TestDefaultChatSystemPromptsDoNotExposeAppImplementationLanguage(t *testing
 	}
 }
 
+func TestDefaultChatSystemPromptsPreferChineseVoiceFriendlyAnswers(t *testing.T) {
+	for name, prompt := range map[string]string{
+		"compatible": defaultCompatibleChatSystemPrompt,
+		"minimax":    defaultSystemPrompt,
+	} {
+		for _, required := range []string{"默认使用中文回答", "不要夹杂英文", "数字和九型编号用中文自然表达"} {
+			if !strings.Contains(prompt, required) {
+				t.Fatalf("%s prompt missing Chinese voice rule %q: %s", name, required, prompt)
+			}
+		}
+	}
+}
+
 func TestConfiguredChatSystemPromptsKeepFixedDirectAnswerRules(t *testing.T) {
 	const custom = "你是后台配置的温暖陪伴者。"
 

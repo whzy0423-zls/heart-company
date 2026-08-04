@@ -40,7 +40,7 @@ func TestAliyunCosyVoiceTTSWebSocketProviderSendsTaskFlow(t *testing.T) {
 		}
 
 		cont := readAliyunTTSTestMessage(t, conn)
-		if cont.Header.Action != "continue-task" || cont.Header.TaskID != run.Header.TaskID || cont.Payload.Input.Text != "你好，芯之力。" {
+		if cont.Header.Action != "continue-task" || cont.Header.TaskID != run.Header.TaskID || cont.Payload.Input.Text != "我是七号，先做一次呼吸" {
 			t.Fatalf("continue=%+v", cont)
 		}
 		finish := readAliyunTTSTestMessage(t, conn)
@@ -61,7 +61,7 @@ func TestAliyunCosyVoiceTTSWebSocketProviderSendsTaskFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new provider: %v", err)
 	}
-	audio, mime, err := provider.Synthesize(context.Background(), cfg, "你好，芯之力。")
+	audio, mime, err := provider.Synthesize(context.Background(), cfg, "我是7号，先做1次呼吸")
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)
 	}

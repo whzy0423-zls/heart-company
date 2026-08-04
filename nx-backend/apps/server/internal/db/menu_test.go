@@ -174,41 +174,19 @@ func TestDefaultMenusIncludeXinzhiliModelConfig(t *testing.T) {
 	}
 }
 
-func TestDefaultMenusIncludeVideoAnalysis(t *testing.T) {
-	var found bool
+func TestDefaultMenusExcludeLegacyVideoAnalysis(t *testing.T) {
 	for _, menu := range defaultMenus {
-		if menu.Name != "VideoAnalysis" {
-			continue
+		if menu.Name == "VideoAnalysis" || menu.Path == "/video/analysis" {
+			t.Fatalf("legacy video analysis menu remains: %+v", menu)
 		}
-		found = true
-		if menu.PID != 1000 || menu.Path != "/video/analysis" || menu.Component != "/video/analysis" {
-			t.Fatalf("unexpected video analysis route: %+v", menu)
-		}
-		if menu.AuthCode != "Video:Analysis:Manage" || menu.Title != "视频分析" {
-			t.Fatalf("unexpected video analysis metadata: %+v", menu)
-		}
-	}
-	if !found {
-		t.Fatal("expected default menu VideoAnalysis")
 	}
 }
 
-func TestDefaultMenusIncludeVideoStoryboard(t *testing.T) {
-	var found bool
+func TestDefaultMenusExcludeLegacyVideoStoryboard(t *testing.T) {
 	for _, menu := range defaultMenus {
-		if menu.Name != "VideoStoryboard" {
-			continue
+		if menu.Name == "VideoStoryboard" || menu.Path == "/video/storyboard" {
+			t.Fatalf("legacy video storyboard menu remains: %+v", menu)
 		}
-		found = true
-		if menu.PID != 1000 || menu.Path != "/video/storyboard" || menu.Component != "/video/storyboard" {
-			t.Fatalf("unexpected video storyboard route: %+v", menu)
-		}
-		if menu.AuthCode != "Video:Storyboard:Manage" || menu.Title != "分镜设计" {
-			t.Fatalf("unexpected video storyboard metadata: %+v", menu)
-		}
-	}
-	if !found {
-		t.Fatal("expected default menu VideoStoryboard")
 	}
 }
 

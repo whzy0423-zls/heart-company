@@ -75,3 +75,28 @@ func TestSchemaMigratesChatSessionScene(t *testing.T) {
 		}
 	}
 }
+
+func TestMigrateSchemaPreparesLegacyVideoColumnsBeforeFullSchema(t *testing.T) {
+	raw, err := os.ReadFile("db.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	compatibilityExec := strings.Index(source, "preSchemaCompatibilitySQL")
+	fullSchemaExec := strings.Index(source, "tx.ExecContext(ctx, schemaSQL)")
+	if compatibilityExec < 0 || fullSchemaExec < 0 || compatibilityExec > fullSchemaExec {
+		t.Fatal("legacy video compatibility SQL must run before the full embedded schema")
+	}
+	for _, table := range []string{
+		"ALTER TABLE IF EXISTS video_project_characters",
+		"ALTER TABLE IF EXISTS video_project_scenes",
+		"ALTER TABLE IF EXISTS video_project_assets",
+	} {
+		if !strings.Contains(source, table) {
+			t.Fatalf("missing pre-schema compatibility migration %q", table)
+		}
+	}
+	if strings.Count(source, "ADD COLUMN IF NOT EXISTS breakdown_item_key") < 3 {
+		t.Fatal("all legacy video project tables must add breakdown_item_key before the full schema")
+	}
+}

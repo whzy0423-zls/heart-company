@@ -67,7 +67,7 @@ func TestCompatibleSpeechClientSynthesizesOpenAICompatibleAudio(t *testing.T) {
 	client := NewCompatibleSpeechClient(modelconfig.XinzhiliVoiceConfig{TTS: modelconfig.SpeechModelConfig{
 		APIBase: server.URL + "/v1/", APIKey: "secret", Model: "tts-1", Voice: "nova", Speed: 1.1, ResponseFormat: "mp3", TimeoutSeconds: 3,
 	}})
-	audio, contentType, err := client.Synthesize(context.Background(), "慢慢来")
+	audio, contentType, err := client.Synthesize(context.Background(), "我是7号，先做1次呼吸")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestCompatibleSpeechClientSynthesizesOpenAICompatibleAudio(t *testing.T) {
 		t.Fatalf("audio=%q contentType=%q", audio, contentType)
 	}
 	encoded, _ := json.Marshal(request)
-	for _, want := range []string{`"model":"tts-1"`, `"voice":"nova"`, `"input":"慢慢来"`, `"response_format":"mp3"`} {
+	for _, want := range []string{`"model":"tts-1"`, `"voice":"nova"`, `"input":"我是七号，先做一次呼吸"`, `"response_format":"mp3"`} {
 		if !strings.Contains(string(encoded), want) {
 			t.Fatalf("request %s missing %s", encoded, want)
 		}

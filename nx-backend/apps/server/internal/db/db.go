@@ -17,6 +17,15 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
+const preSchemaCompatibilitySQL = `
+ALTER TABLE IF EXISTS video_project_characters
+  ADD COLUMN IF NOT EXISTS breakdown_item_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE IF EXISTS video_project_scenes
+  ADD COLUMN IF NOT EXISTS breakdown_item_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE IF EXISTS video_project_assets
+  ADD COLUMN IF NOT EXISTS breakdown_item_key TEXT NOT NULL DEFAULT '';
+`
+
 // Open 连接 PostgreSQL，执行迁移并播种初始数据。
 // dsn 形如：postgres://user:pass@host:5432/dbname?sslmode=disable
 // adminUser/adminPassword 用于首次播种超级管理员账号。
@@ -54,6 +63,9 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('nine-xing:schema-migration', 0))`); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, preSchemaCompatibilitySQL); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
 		return err
 	}
@@ -83,6 +95,9 @@ func waitReady(ctx context.Context, database *sql.DB) error {
 // seed 补齐初始数据，保证幂等、不覆盖用户后续修改。
 func seed(ctx context.Context, database *sql.DB, adminUser, adminPassword string) error {
 	if err := seedMenus(ctx, database); err != nil {
+		return err
+	}
+	if err := migrateLegacyVideoMenuBindings(ctx, database); err != nil {
 		return err
 	}
 	if err := removeDeprecatedMenus(ctx, database); err != nil {
@@ -178,15 +193,7 @@ var defaultMenus = []seedMenu{
 	{ID: 900, PID: 0, Name: "ReadingCenter", Path: "/reading", Type: "catalog", Sort: 19, Icon: "lucide:book-open-text", Title: "阅读管理"},
 	{ID: 901, PID: 900, Name: "ReadingArticles", Path: "/reading/articles", Component: "/reading/articles", AuthCode: "Reading:Article:Manage", Type: "menu", Sort: 1, Icon: "lucide:newspaper", Title: "文章管理"},
 	{ID: 1000, PID: 0, Name: "VideoCenter", Path: "/video", Type: "catalog", Sort: 19, Icon: "lucide:clapperboard", Title: "视频生成"},
-	{ID: 1001, PID: 1000, Name: "VideoGenerate", Path: "/video/generate", Component: "/video/generate", AuthCode: "Video:Generate:Manage", Type: "menu", Sort: 1, Icon: "lucide:film", Title: "视频生成"},
-	{ID: 1002, PID: 1000, Name: "VideoAssets", Path: "/video/assets", Component: "/video/assets", AuthCode: "Video:Asset:Manage", Type: "menu", Sort: 2, Icon: "lucide:boxes", Title: "资产库"},
-	{ID: 1003, PID: 1000, Name: "VideoAnalysis", Path: "/video/analysis", Component: "/video/analysis", AuthCode: "Video:Analysis:Manage", Type: "menu", Sort: 3, Icon: "lucide:scan-search", Title: "视频分析"},
-	{ID: 1004, PID: 1000, Name: "VideoStoryboard", Path: "/video/storyboard", Component: "/video/storyboard", AuthCode: "Video:Storyboard:Manage", Type: "menu", Sort: 4, Icon: "lucide:panels-top-left", Title: "分镜设计"},
-	{ID: 1005, PID: 1000, Name: "VideoOverview", Path: "/video/overview", Component: "/video/overview", AuthCode: "Video:Generation:Overview", Type: "menu", Sort: 5, Icon: "lucide:bar-chart-2", Title: "生成概览"},
-	{ID: 1008, PID: 1000, Name: "VideoProduction", Path: "/video/production", Component: "/video/production/index", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 6, Icon: "lucide:clapperboard", Title: "制片工作台"},
-	{ID: 1006, PID: 1000, Name: "VideoProjects", Path: "/video/projects", Component: "/video/projects", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 7, Icon: "lucide:folder-kanban", Title: "项目列表"},
-	{ID: 1007, PID: 1000, Name: "VideoProjectWorkbench", Path: "/video/projects/:id/workbench", Component: "/video/projects/workflow", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 8, Icon: "lucide:panel-top", Title: "项目工作台详情", HideInMenu: true, ActivePath: "/video/projects"},
-	{ID: 1010, PID: 1000, Name: "VideoProjectAdvancedWorkbench", Path: "/video/projects/:id/workbench/advanced", Component: "/video/projects/workbench", AuthCode: "Video:Project:Manage", Type: "menu", Sort: 9, Icon: "lucide:sliders-horizontal", Title: "高级项目工作台", HideInMenu: true, ActivePath: "/video/projects"},
+	{ID: 1001, PID: 1000, Name: "InfiniteCanvas", Path: "/video/infinite-canvas", Component: "/video/infinite-canvas", AuthCode: "Video:Generate:Manage", Type: "menu", Sort: 1, Icon: "lucide:workflow", Title: "无限画布"},
 	{ID: 1100, PID: 0, Name: "ModelSettings", Path: "/settings", Type: "catalog", Sort: 21, Icon: "lucide:cpu", Title: "模型配置"},
 	{ID: 1101, PID: 1100, Name: "ModelPairing", Path: "/settings/model", Component: "/settings/model", AuthCode: "System:Model:Config", Type: "menu", Sort: 1, Icon: "lucide:plug-zap", Title: "模型配对"},
 	{ID: 1102, PID: 1100, Name: "AdminModelConfig", Path: "/settings/admin-model", Component: "/settings/model", AuthCode: "System:Model:Config", Type: "menu", Sort: 2, Icon: "lucide:bot", Title: "管理端大模型配置"},
@@ -259,6 +266,7 @@ const deprecatedMenusSQL = `DELETE FROM menus
  WHERE id = 303
     OR id = 313
 	OR id = 1009
+	OR id IN (1002,1003,1004,1005,1006,1007,1008,1010)
     OR name = 'WebsiteNavigation'
     OR name = 'WebsiteSignupLeads'
     OR name = 'CustomerAppPrivateRule'
@@ -270,6 +278,16 @@ const deprecatedMenusSQL = `DELETE FROM menus
     OR component = '/site-config/navigation'
     OR component = '/customer/app-private-rules'
     OR component = '/theory/library'`
+
+func migrateLegacyVideoMenuBindings(ctx context.Context, database *sql.DB) error {
+	_, err := database.ExecContext(ctx,
+		`INSERT INTO role_menus (role_id, menu_id)
+		 SELECT DISTINCT role_id, 1001
+		   FROM role_menus
+		  WHERE menu_id IN (1001,1002,1003,1004,1005,1006,1007,1008,1010)
+		 ON CONFLICT (role_id, menu_id) DO NOTHING`)
+	return err
+}
 
 func removeDeprecatedMenus(ctx context.Context, database *sql.DB) error {
 	_, err := database.ExecContext(ctx, deprecatedMenusSQL)

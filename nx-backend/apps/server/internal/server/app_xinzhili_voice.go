@@ -243,7 +243,7 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 		<-ttsWorkerDone
 	}()
 
-	chunker := voice.NewSentenceChunker(42)
+	chunker := voice.NewSentenceChunker(64)
 	nextSegment := 0
 	speakingStateSent := false
 	var answer rag.Answer

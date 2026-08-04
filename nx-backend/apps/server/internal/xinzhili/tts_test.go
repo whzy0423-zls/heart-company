@@ -24,8 +24,9 @@ func TestSplitSentences(t *testing.T) {
 		want []string
 	}{
 		{"中英文标点", " 你好，世界。 How are you? 我很好！ ", []string{"你好，世界。", "How are you?", "我很好！"}},
-		{"无标点硬切且不拆UTF8", strings.Repeat("你", 43), []string{strings.Repeat("你", 42), "你"}},
-		{"超长优先弱标点", strings.Repeat("甲", 30) + "，" + strings.Repeat("乙", 20), []string{strings.Repeat("甲", 30) + "，", strings.Repeat("乙", 20)}},
+		{"无标点硬切且不拆UTF8", strings.Repeat("你", maxTTSSentenceRunes+1), []string{strings.Repeat("你", maxTTSSentenceRunes), "你"}},
+		{"长中文不在旧四十二字位置硬切", strings.Repeat("甲", 50) + "收束。", []string{strings.Repeat("甲", 50) + "收束。"}},
+		{"超长优先弱标点", strings.Repeat("甲", 50) + "，" + strings.Repeat("乙", 30), []string{strings.Repeat("甲", 50) + "，", strings.Repeat("乙", 30)}},
 		{"小数域名缩写不误切", "版本3.14发布。Visit example.com now. U.S.A. test.", []string{"版本3.14发布。", "Visit example.com now.", "U.S.A. test."}},
 		{"引号跟随句末标点", "他说：“你好。”她答：“嗯……”", []string{"他说：“你好。”", "她答：“嗯……”"}},
 		{"英文引号和省略号", `He said "Hi..." Then left.`, []string{`He said "Hi..."`, "Then left."}},
@@ -38,7 +39,7 @@ func TestSplitSentences(t *testing.T) {
 				t.Fatalf("got %#v want %#v", got, tt.want)
 			}
 			for _, segment := range got {
-				if n := len([]rune(segment)); n > 42 {
+				if n := len([]rune(segment)); n > maxTTSSentenceRunes {
 					t.Fatalf("%d runes in %q", n, segment)
 				}
 			}
@@ -66,7 +67,7 @@ func TestBailianHostedMiniMaxTTSRequestParsesHexAudio(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	audio, mime, err := provider.Synthesize(context.Background(), cfg, "你好")
+	audio, mime, err := provider.Synthesize(context.Background(), cfg, "我是7号，先做1次呼吸")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +79,7 @@ func TestBailianHostedMiniMaxTTSRequestParsesHexAudio(t *testing.T) {
 		t.Fatalf("model=%v", gotBody["model"])
 	}
 	input := gotBody["input"].(map[string]any)
-	if input["text"] != "你好" {
+	if input["text"] != "我是七号，先做一次呼吸" {
 		t.Fatalf("input text=%v", input["text"])
 	}
 	voiceSetting := input["voice_setting"].(map[string]any)
@@ -142,7 +143,7 @@ func TestBailianQwenTTSUsesClonedVoicePayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	audio, mime, err := provider.Synthesize(context.Background(), cfg, "你好")
+	audio, mime, err := provider.Synthesize(context.Background(), cfg, "我是7号，先做1次呼吸")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +151,7 @@ func TestBailianQwenTTSUsesClonedVoicePayload(t *testing.T) {
 		t.Fatalf("model=%v", gotBody["model"])
 	}
 	input := gotBody["input"].(map[string]any)
-	if input["text"] != "你好" || input["voice"] != "qwen-cloned-voice" {
+	if input["text"] != "我是七号，先做一次呼吸" || input["voice"] != "qwen-cloned-voice" {
 		t.Fatalf("input=%#v", input)
 	}
 	if _, exists := input["voice_setting"]; exists {
@@ -266,14 +267,14 @@ func TestOpenAICompatibleTTSRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	audio, mime, err := provider.Synthesize(context.Background(), cfg, "你好")
+	audio, mime, err := provider.Synthesize(context.Background(), cfg, "我是7号，先做1次呼吸")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if gotPath != "/proxy/v1/audio/speech" || gotAuth != "Bearer secret-key" {
 		t.Fatalf("path=%q auth=%q", gotPath, gotAuth)
 	}
-	want := map[string]any{"model": "tts-model", "voice": "warm", "input": "你好", "response_format": "mp3"}
+	want := map[string]any{"model": "tts-model", "voice": "warm", "input": "我是七号，先做一次呼吸", "response_format": "mp3"}
 	if !reflect.DeepEqual(gotBody, want) {
 		t.Fatalf("body=%#v want=%#v", gotBody, want)
 	}
@@ -404,11 +405,11 @@ func TestMiniMaxTTSAdapterUsesTextToAudioOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, mime, err := p.Synthesize(context.Background(), cfg, "短句")
+	_, mime, err := p.Synthesize(context.Background(), cfg, "我是7号，先做1次呼吸")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if client.model != "speech-02" || client.voice != "voice-1" || client.text != "短句" || client.maxBytes != maxTTSSegmentBytes || mime != "audio/mpeg" {
+	if client.model != "speech-02" || client.voice != "voice-1" || client.text != "我是七号，先做一次呼吸" || client.maxBytes != maxTTSSegmentBytes || mime != "audio/mpeg" {
 		t.Fatalf("client=%#v mime=%q", client, mime)
 	}
 }

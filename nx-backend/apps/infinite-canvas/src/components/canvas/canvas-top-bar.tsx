@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import { Download, Images, Keyboard, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Trash2, Undo2, Upload } from "lucide-react";
-import { Button, Dropdown, Modal, Tooltip } from "antd";
+import { useEffect, useRef } from "react";
+import { Download, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Trash2, Undo2, Upload } from "lucide-react";
+import { Dropdown, Tooltip } from "antd";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
@@ -44,7 +44,6 @@ export function CanvasTopBar({
     const colorTheme = useThemeStore((state) => state.theme);
     const theme = canvasThemes[colorTheme];
     const titleRef = useRef<HTMLDivElement>(null);
-    const [shortcutsOpen, setShortcutsOpen] = useState(false);
     const sidePanelOpen = useCanvasSidePanelStore((state) => state.panelOpen);
     const toggleSidePanel = useCanvasSidePanelStore((state) => state.togglePanel);
 
@@ -121,29 +120,8 @@ export function CanvasTopBar({
                     </div>
                 </div>
 
-                <div className="pointer-events-auto flex items-center gap-1.5">
-                    <Button type="text" className="!h-10 !rounded-xl !px-3 !font-medium" style={{ background: theme.toolbar.panel, color: theme.node.text }} icon={<Keyboard className="size-4" />} onClick={() => setShortcutsOpen(true)}>
-                        快捷键
-                    </Button>
-                </div>
+                <div />
             </div>
-            <Modal title="快捷键" open={shortcutsOpen} onCancel={() => setShortcutsOpen(false)} footer={null} centered>
-                <div className="space-y-2 border-t pt-4 text-sm" style={{ borderColor: theme.node.stroke }}>
-                    <Shortcut keys={["拖动画布"]} value="平移视图" />
-                    <Shortcut keys={["滚轮"]} value="缩放画布" />
-                    <Shortcut keys={["缩放滑杆"]} value="精确调整缩放" />
-                    <Shortcut keys={["Ctrl / Cmd", "拖动"]} value="框选多个节点" />
-                    <Shortcut keys={["Shift / Ctrl / Cmd", "点击"]} value="追加选择节点" />
-                    <Shortcut keys={["Ctrl / Cmd", "A"]} value="全选节点" />
-                    <Shortcut keys={["Ctrl / Cmd", "C / V"]} value="复制 / 粘贴节点，或粘贴剪切板文本/图片" />
-                    <Shortcut keys={["Ctrl / Cmd", "Z"]} value="撤销" />
-                    <Shortcut keys={["Ctrl / Cmd", "Shift", "Z"]} value="重做" />
-                    <Shortcut keys={["Ctrl / Cmd", "Y"]} value="重做" />
-                    <Shortcut keys={["Delete / Backspace"]} value="删除选中" />
-                    <Shortcut keys={["Esc"]} value="取消选择并关闭浮层" />
-                    <Shortcut keys={["拖入图片/视频/音频"]} value="上传到画布" />
-                </div>
-            </Modal>
         </>
     );
 }
@@ -154,26 +132,5 @@ function MenuLabel({ text, shortcut }: { text: string; shortcut: string }) {
             <span>{text}</span>
             <span className="text-xs opacity-45">{shortcut}</span>
         </span>
-    );
-}
-
-function Shortcut({ keys, value }: { keys: string[]; value: string }) {
-    return (
-        <div className="grid grid-cols-[minmax(0,1fr)_120px] items-center gap-6 rounded-lg px-1 py-1.5">
-            <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-                {keys.map((key, index) => (
-                    <span key={`${key}-${index}`} className="flex items-center gap-1.5">
-                        {index ? <span className="text-xs opacity-35">+</span> : null}
-                        <kbd
-                            className="min-w-9 rounded-md border px-2.5 py-1.5 text-center text-xs font-medium leading-none shadow-[inset_0_-1px_0_rgba(0,0,0,.08),0_1px_2px_rgba(0,0,0,.06)]"
-                            style={{ borderColor: "var(--border)", background: "linear-gradient(var(--card), var(--muted))", color: "var(--foreground)" }}
-                        >
-                            {key}
-                        </kbd>
-                    </span>
-                ))}
-            </span>
-            <span className="text-right text-sm opacity-55">{value}</span>
-        </div>
     );
 }
