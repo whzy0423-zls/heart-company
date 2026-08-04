@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"nine-xing/nx-backend/apps/server/internal/rag"
+	"nine-xing/nx-backend/apps/server/internal/voice"
 )
 
 const SceneXinzhiliVoice = "xinzhili_voice"
@@ -221,6 +222,7 @@ type activeTurn struct {
 	lastAck                  int64
 	completionDone           bool
 	generationErr            error
+	normalizeOutputToChinese bool
 	chunker                  streamSentenceChunker
 	ttsJobs                  chan ttsStreamJob
 	nextTTSSeq               uint32
@@ -494,10 +496,7 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 	case eventGenerationDone:
 		s.handleGenerationDone(current, event)
 	case eventGenerationDelta:
-		current.draft += event.answer
-		for _, chunk := range current.chunker.Push(event.answer) {
-			s.queueTTSChunk(current, chunk)
-		}
+		s.handleGenerationDelta(current, event.answer)
 	case eventTTSSegment:
 		err := s.acceptAudioSegment(current, event.segment)
 		if event.segmentAck != nil {
@@ -690,6 +689,7 @@ func (s *session) resetProactivePromptDelivery(turn *activeTurn) {
 	turn.lastAck = int64(turn.responseStartSeq) - 1
 	turn.completionDone = false
 	turn.generationErr = nil
+	turn.normalizeOutputToChinese = false
 	turn.chunker = streamSentenceChunker{}
 	turn.ttsJobs = nil
 	turn.doneSent = false
@@ -804,6 +804,7 @@ func (s *session) beginProcessing(turn *activeTurn, text string) {
 		return
 	}
 	turn.processing = true
+	turn.normalizeOutputToChinese = shouldNormalizeXinzhiliRealtimeOutputToChinese(text)
 	turn.ttsJobs = make(chan ttsStreamJob, 128)
 	s.startSynthesisWorker(turn)
 	s.startGeneration(turn, text)
@@ -1058,16 +1059,29 @@ func (s *session) startSynthesisWorker(turn *activeTurn) {
 	}()
 }
 
+func (s *session) handleGenerationDelta(turn *activeTurn, delta string) {
+	if turn == nil {
+		return
+	}
+	delta = normalizeRealtimeGenerationText(turn, delta)
+	if delta == "" {
+		return
+	}
+	turn.draft += delta
+	for _, chunk := range turn.chunker.Push(delta) {
+		s.queueTTSChunk(turn, chunk)
+	}
+}
+
 func (s *session) handleGenerationDone(turn *activeTurn, event sessionEvent) {
-	rawAnswer := strings.TrimSpace(event.answer)
-	if rawAnswer != "" && strings.HasPrefix(rawAnswer, turn.draft) && len(rawAnswer) > len(turn.draft) {
-		suffix := rawAnswer[len(turn.draft):]
+	answer := normalizeRealtimeGenerationText(turn, event.answer)
+	if answer != "" && strings.HasPrefix(answer, turn.draft) && len(answer) > len(turn.draft) {
+		suffix := answer[len(turn.draft):]
 		turn.draft += suffix
 		for _, chunk := range turn.chunker.Push(suffix) {
 			s.queueTTSChunk(turn, chunk)
 		}
 	}
-	answer := normalizeGeneratedContent(rawAnswer)
 	turn.answer = normalizeGeneratedContent(turn.draft)
 	if turn.answer == "" || strings.HasPrefix(answer, turn.answer) {
 		turn.answer = answer
@@ -1091,11 +1105,25 @@ func (s *session) handleGenerationDone(turn *activeTurn, event sessionEvent) {
 
 func (s *session) queueTTSChunk(turn *activeTurn, chunk string) {
 	chunk = strings.TrimSpace(chunk)
+	if turn != nil && turn.normalizeOutputToChinese {
+		chunk = voice.NormalizeStrictChineseTTSInput(chunk)
+	}
 	if chunk == "" {
 		return
 	}
 	turn.ttsJobs <- ttsStreamJob{seq: turn.nextTTSSeq, text: chunk}
 	turn.nextTTSSeq++
+}
+
+func normalizeRealtimeGenerationText(turn *activeTurn, text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	if turn != nil && turn.normalizeOutputToChinese {
+		return voice.NormalizeStrictChineseTTSInput(text)
+	}
+	return text
 }
 
 func (s *session) acceptAudioSegment(turn *activeTurn, segment AudioSegment) error {
@@ -1224,9 +1252,36 @@ func normalizeGeneratedContent(text string) string {
 	return strings.Join(SplitSentences(text), "")
 }
 
+func shouldNormalizeXinzhiliRealtimeOutputToChinese(transcript string) bool {
+	return !isExplicitXinzhiliRealtimeEnglishRequest(transcript)
+}
+
+func isExplicitXinzhiliRealtimeEnglishRequest(transcript string) bool {
+	text := strings.ToLower(strings.TrimSpace(transcript))
+	if text == "" {
+		return false
+	}
+	if strings.Contains(text, "不要英文") || strings.Contains(text, "别用英文") ||
+		strings.Contains(text, "不要英语") || strings.Contains(text, "别说英文") ||
+		strings.Contains(text, "中文回答") || strings.Contains(text, "用中文") {
+		return false
+	}
+	englishIntentPhrases := []string{
+		"用英文", "说英文", "英文说", "英文回答", "英语回答", "用英语", "说英语", "英语说",
+		"翻译成英文", "翻成英文", "译成英文", "翻译成英语", "英文单词", "英语单词",
+		"英文怎么说", "英语怎么说", "怎么用英文", "怎么用英语", "读英文", "读英语",
+	}
+	for _, phrase := range englishIntentPhrases {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
 const (
-	firstTTSChunkMinRunes  = 20
-	firstTTSChunkMaxRunes  = 36
+	firstTTSChunkMinRunes  = 28
+	firstTTSChunkMaxRunes  = 56
 	streamTTSChunkMaxRunes = maxTTSSentenceRunes
 )
 
@@ -1251,15 +1306,20 @@ func (c *streamSentenceChunker) take(flush bool) []string {
 			chunkLimit = firstTTSChunkMaxRunes
 		}
 		limit := min(len(c.buffer), chunkLimit)
+		minRunes := firstTTSChunkMinRunes
 		for index := 0; index < limit; index++ {
 			if isStrongSentenceEndAt(c.buffer, index) {
-				cut = index + 1
-				for cut < limit && isClosingQuote(c.buffer[cut]) {
-					cut++
+				candidate := index + 1
+				for candidate < limit && isClosingQuote(c.buffer[candidate]) {
+					candidate++
 				}
-				break
+				if candidate >= minRunes || flush {
+					cut = candidate
+					break
+				}
+				continue
 			}
-			if !c.emitted && index+1 >= firstTTSChunkMinRunes && isSoftSentencePause(c.buffer[index]) {
+			if index+1 >= minRunes && isSoftSentencePause(c.buffer[index]) {
 				cut = index + 1
 				break
 			}

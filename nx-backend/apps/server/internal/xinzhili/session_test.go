@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/rag"
+	"nine-xing/nx-backend/apps/server/internal/voice"
 )
 
 func TestModelIdentityRealtimeBypassesGeneratorAndCompletesVoiceDelivery(t *testing.T) {
@@ -99,6 +100,18 @@ func TestStreamSentenceChunkerPrioritizesPlayableFirstChunk(t *testing.T) {
 		}
 	})
 
+	t.Run("tiny strong first sentence waits for a playable phrase", func(t *testing.T) {
+		var chunker streamSentenceChunker
+		if got := chunker.Push("你好。"); len(got) != 0 {
+			t.Fatalf("tiny strong sentence emitted choppy chunk=%q", got)
+		}
+		next := "我还在认真听你说完，这样第一段声音不会太碎一点点，"
+		want := "你好。" + next
+		if got := chunker.Push(next); !slices.Equal(got, []string{want}) {
+			t.Fatalf("chunks=%q want %q", got, []string{want})
+		}
+	})
+
 	t.Run("weak punctuation waits for longer phrase to avoid choppy audio clips", func(t *testing.T) {
 		var shortChunker streamSentenceChunker
 		tooShort := strings.Repeat("甲", firstTTSChunkMinRunes-2) + "，"
@@ -134,7 +147,8 @@ func TestStreamSentenceChunkerPrioritizesPlayableFirstChunk(t *testing.T) {
 
 	t.Run("later chunks keep longer cap to reduce playback gaps", func(t *testing.T) {
 		var chunker streamSentenceChunker
-		if got := chunker.Push("你好。"); !slices.Equal(got, []string{"你好。"}) {
+		first := strings.Repeat("甲", firstTTSChunkMinRunes) + "。"
+		if got := chunker.Push(first); !slices.Equal(got, []string{first}) {
 			t.Fatalf("first=%q", got)
 		}
 		if got := chunker.Push(strings.Repeat("乙", streamTTSChunkMaxRunes-1)); len(got) != 0 {
@@ -145,6 +159,55 @@ func TestStreamSentenceChunkerPrioritizesPlayableFirstChunk(t *testing.T) {
 			t.Fatalf("later=%q", got)
 		}
 	})
+
+	t.Run("later tiny strong sentence also waits for a playable phrase", func(t *testing.T) {
+		var chunker streamSentenceChunker
+		first := strings.Repeat("甲", firstTTSChunkMinRunes) + "。"
+		if got := chunker.Push(first); !slices.Equal(got, []string{first}) {
+			t.Fatalf("first=%q", got)
+		}
+		if got := chunker.Push("好。"); len(got) != 0 {
+			t.Fatalf("later tiny strong emitted choppy chunk=%q", got)
+		}
+		next := "后面继续补足一段自然长度，让播放不要一顿一顿，保持连贯，"
+		want := "好。" + next
+		if got := chunker.Push(next); !slices.Equal(got, []string{want}) {
+			t.Fatalf("later=%q want %q", got, []string{want})
+		}
+	})
+}
+
+func TestSessionGenerationNormalizesRealtimeChineseBeforeTTSAndPersistence(t *testing.T) {
+	fixture := newSessionFixture(t)
+	raw := "OK，我陪你做 1 2 3 次呼吸，不用 worry。"
+	want := voice.NormalizeStrictChineseTTSInput(raw)
+	fixture.generator.deltas = []string{"OK，我陪你做 1 2 ", "3 次呼吸，不用 worry。"}
+	fixture.generator.answer = raw
+	fixture.knowledge.docs = []rag.Document{{ID: "knowledge:strict-chinese", Title: "来源", Content: "中文语音输出"}}
+	fixture.synth.segments = nil
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-strict-realtime")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "我们先做 1 2 3 次呼吸", Stable: true})
+	segment := fixture.sink.waitAudio(t)
+	if segment.DeliveryText() != want {
+		t.Fatalf("delivery text=%q want %q", segment.DeliveryText(), want)
+	}
+	assertNoASCIIText(t, segment.DeliveryText())
+	if got := fixture.synth.synthesizedTexts(); !slices.Equal(got, []string{want}) {
+		t.Fatalf("synthesized=%q want %q", got, []string{want})
+	}
+	if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-strict-realtime", SegmentSeq: segment.Seq}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.store.waitCompleted(t)
+	fixture.store.waitDelivered(t, want)
+	fixture.store.waitCompleteAck(t)
+	_, assistants, completed := fixture.store.contents()
+	if len(assistants) != 1 || assistants[0] != want || completed != want {
+		t.Fatalf("assistant=%q completed=%q want %q", assistants, completed, want)
+	}
 }
 
 func TestSpeechStartedEmitsASRActivity(t *testing.T) {
@@ -1650,6 +1713,16 @@ func waitSessionEvent(t *testing.T, events <-chan sessionEvent, kind sessionEven
 		return sessionEvent{}
 	}
 }
+
+func assertNoASCIIText(t *testing.T, text string) {
+	t.Helper()
+	for _, r := range text {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			t.Fatalf("text still contains ASCII rune %q in %q", r, text)
+		}
+	}
+}
+
 func (s *fakeSynthesizer) synthesizedTexts() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
