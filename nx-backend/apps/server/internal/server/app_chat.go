@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"nine-xing/nx-backend/apps/server/internal/answerhygiene"
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/quiz"
@@ -79,6 +80,13 @@ func buildAppChatConversationCard(card quiz.Card) rag.ConversationCard {
 	return rag.ConversationCard{CardType: card.CardType, Name: card.Name, Relation: card.Relation, MainType: card.MainType, WingType: card.WingType, Profile: profile}
 }
 
+func normalizeAppChatProfileForConversationCard(profile rag.UserProfile, card rag.ConversationCard) (rag.UserProfile, rag.ConversationCard) {
+	if card.MainType < 1 || card.MainType > 9 {
+		profile.MainType = 0
+	}
+	return profile, card
+}
+
 func appChatModelIdentityAnswer(question string) (rag.Answer, bool) {
 	question = strings.TrimSpace(question)
 	if question == "" || utf8.RuneCountInString(question) > 300 || !rag.IsModelIdentityQuestion(question) {
@@ -93,7 +101,8 @@ func appChatModelIdentityAnswer(question string) (rag.Answer, bool) {
 
 func (s *Server) appChatProfilesForCard(ctx context.Context, appUserID, cardID int64) (rag.UserProfile, rag.ConversationCard) {
 	if s.appChatProfilesForCardOverride != nil {
-		return s.appChatProfilesForCardOverride(ctx, appUserID, cardID)
+		profile, cardContext := s.appChatProfilesForCardOverride(ctx, appUserID, cardID)
+		return normalizeAppChatProfileForConversationCard(profile, cardContext)
 	}
 	profile := rag.UserProfile{}
 	if s.appUsers != nil {
@@ -110,7 +119,7 @@ func (s *Server) appChatProfilesForCard(ctx context.Context, appUserID, cardID i
 			cardContext = buildAppChatConversationCard(card)
 		}
 	}
-	return profile, cardContext
+	return normalizeAppChatProfileForConversationCard(profile, cardContext)
 }
 
 const (
@@ -124,6 +133,7 @@ type appChatStreamEventKind uint8
 
 const (
 	appChatStreamProviderStarted appChatStreamEventKind = iota + 1
+	appChatStreamProviderProgress
 	appChatStreamDelta
 	appChatStreamDone
 	appChatStreamError
@@ -388,6 +398,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		_, chatTimeout := s.chatRuntime()
 		ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 		defer cancel()
+		answer.Answer = answerhygiene.Clean(body.Question, answer.Answer)
 		sourcesJSON, _ := json.Marshal(answer.Sources)
 		messageID, saveErr := s.appChat.SavePair(ctx, sessionID, body.Question, answer.Answer, sourcesJSON)
 		if saveErr != nil {
@@ -418,18 +429,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	docs, _ := s.retrieveAppDocsForQuery(ctx, body.Question, 6)
-	profile := rag.UserProfile{}
-	if s.appUsers != nil {
-		if appUser, err := s.appUsers.FindByID(ctx, userInfo.ID); err == nil {
-			profile.Nickname = appUser.Nickname
-		}
-	}
-	// 注入用户主型，供检索加权与 AI 个性化作答（未测/无主卡时为 0，rag 仅在 >0 时使用）。
-	if s.quiz != nil {
-		if card, err := s.quiz.PrimaryCard(ctx, userInfo.ID); err == nil {
-			profile.MainType = card.MainType
-		}
-	}
+	profile, conversationCard := s.appChatProfilesForCard(ctx, userInfo.ID, sess.CardID)
 	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
 		profile.Memories = memories
 	}
@@ -440,6 +440,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		ConversationSummary: promptContext.Summary,
 		Question:            body.Question,
 		UserProfile:         profile,
+		ConversationCard:    conversationCard,
 		UserPreferences:     preferences,
 		CurrentDirectives:   directives,
 	})
@@ -447,6 +448,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
 		return
 	}
+	ans.Answer = answerhygiene.Clean(body.Question, ans.Answer)
 
 	sourcesJSON, _ := json.Marshal(ans.Sources)
 	messageID, saveErr := s.appChat.SavePair(ctx, sessionID, body.Question, ans.Answer, sourcesJSON)
@@ -593,17 +595,7 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 		}
 
 		docs, _ := s.retrieveAppDocsForQuery(ctx, input.question, 6)
-		profile := rag.UserProfile{}
-		if s.appUsers != nil {
-			if appUser, err := s.appUsers.FindByID(ctx, input.userID); err == nil {
-				profile.Nickname = appUser.Nickname
-			}
-		}
-		if s.quiz != nil {
-			if card, err := s.quiz.PrimaryCard(ctx, input.userID); err == nil {
-				profile.MainType = card.MainType
-			}
-		}
+		profile, conversationCard := s.appChatProfilesForCard(ctx, input.userID, input.cardID)
 		if memories, err := s.appChatMemoriesForPrompt(ctx, input.userID, input.cardID, 6); err == nil {
 			profile.Memories = memories
 		}
@@ -612,39 +604,84 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			return
 		}
 
+		var sentenceBuffer answerhygiene.SentenceBuffer
+		emittedAnswer := false
+		emitSafeSentences := func(sentences []string) error {
+			for _, sentence := range sentences {
+				cleaned := answerhygiene.Clean(input.question, sentence)
+				if cleaned == answerhygiene.NeutralDirectAnswerFallback {
+					continue
+				}
+				if emittedAnswer {
+					cleaned = "\n" + cleaned
+				}
+				writeResult := make(chan error, 1)
+				if !send(appChatStreamEvent{kind: appChatStreamDelta, delta: cleaned, writeResult: writeResult}) {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					return context.Canceled
+				}
+				select {
+				case err := <-writeResult:
+					if err != nil {
+						return err
+					}
+					emittedAnswer = true
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			return nil
+		}
+
 		ans, err = rag.NewService(docs, rag.WithGenerator(input.generator)).AskStream(ctx, rag.AskInput{
 			History:             promptContext.History,
 			ConversationSummary: promptContext.Summary,
 			Question:            input.question,
 			UserProfile:         profile,
+			ConversationCard:    conversationCard,
 			UserPreferences:     preferences,
 			CurrentDirectives:   directives,
 		}, func(delta string) error {
 			if delta == "" {
 				return nil
 			}
-			writeResult := make(chan error, 1)
-			if !send(appChatStreamEvent{kind: appChatStreamDelta, delta: delta, writeResult: writeResult}) {
+			if !send(appChatStreamEvent{kind: appChatStreamProviderProgress}) {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
 				return context.Canceled
 			}
-			select {
-			case err := <-writeResult:
-				return err
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+			return emitSafeSentences(sentenceBuffer.Push(delta))
 		})
 		if err != nil {
 			send(appChatStreamEvent{kind: appChatStreamError, publicError: "回答生成失败，请重试", errorPhase: "provider"})
 			return
 		}
+		if err := emitSafeSentences(sentenceBuffer.Flush()); err != nil {
+			return
+		}
+		ans.Answer = answerhygiene.Clean(input.question, ans.Answer)
+		if !emittedAnswer {
+			writeResult := make(chan error, 1)
+			if !send(appChatStreamEvent{kind: appChatStreamDelta, delta: ans.Answer, writeResult: writeResult}) {
+				return
+			}
+			select {
+			case err := <-writeResult:
+				if err != nil {
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
 	}
 	if ctx.Err() != nil {
 		return
 	}
+	ans.Answer = answerhygiene.Clean(input.question, ans.Answer)
 	if s.chatPersistHook != nil {
 		s.chatPersistHook()
 	}
@@ -758,6 +795,8 @@ func (s *Server) pumpAppChatStream(
 		}
 		switch event.kind {
 		case appChatStreamProviderStarted:
+			resetIdle()
+		case appChatStreamProviderProgress:
 			resetIdle()
 		case appChatStreamPersistenceStarted:
 			persistenceStarted = true

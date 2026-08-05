@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 const NeutralDirectAnswerFallback = "请再具体说一点，我会直接回答。"
@@ -13,7 +15,20 @@ var (
 	englishTechnicalActionPattern = regexp.MustCompile(`(?i)\b(configure|deploy|implement|build|develop|debug|fix|integrate|call|cache|request)\b`)
 	englishTechnicalCuePattern    = regexp.MustCompile(`(?i)\bhow\s+(to|do|can|should)\b`)
 	englishDefinitionCuePattern   = regexp.MustCompile(`(?i)\bwhat\s+(is|are)\b`)
+	restrictedCLIPattern          = regexp.MustCompile(`(?i)(^|[^a-z0-9])c[\s._\-–—/\\:：]*l[\s._\-–—/\\:：]*i([^a-z0-9]|$)`)
 )
+
+var restrictedCompactEnglishTerms = []string{
+	"codex", "openai", "anthropic", "minimax", "deepseek", "gemini", "claude",
+	"chatgpt", "gpt", "llama", "kimi",
+}
+
+var restrictedCompactTerms = []string{
+	"内部运行环境", "内部环境", "运行环境", "工具链", "中转站", "中转服务",
+	"api代理", "api中转", "代理api", "模型供应商", "模型厂商", "模型提供商",
+	"底层版本", "版本参数", "底层参数", "底层模型", "基座模型", "模型版本",
+	"模型参数", "模型网关", "系统提示词", "豆包", "通义千问", "智谱",
+}
 
 var technicalQuestionEntities = []string{
 	"app端", "app", "flutter", "android", "ios", "sdk", "api", "客户端", "后台", "页面", "网站", "小程序", "软件", "服务器", "算法", "接口", "代码", "框架", "网络请求", "缓存",
@@ -378,6 +393,9 @@ func Clean(question, answer string) string {
 		if sentence == "" {
 			continue
 		}
+		if containsRestrictedInternalTerm(sentence) {
+			continue
+		}
 		if IsProductMetaTitle(sentence) {
 			productMetaContext = true
 			continue
@@ -393,9 +411,73 @@ func Clean(question, answer string) string {
 		}
 		kept = append(kept, sentence)
 	}
-	cleaned := strings.TrimSpace(strings.Join(kept, ""))
+	cleaned := strings.TrimSpace(strings.Join(kept, "\n"))
 	if cleaned == "" {
 		return NeutralDirectAnswerFallback
 	}
 	return cleaned
+}
+
+func containsRestrictedInternalTerm(value string) bool {
+	value = norm.NFKC.String(value)
+	value = strings.Map(func(r rune) rune {
+		switch {
+		case unicode.Is(unicode.Mn, r):
+			return -1
+		case r == '\u200b' || r == '\u200c' || r == '\u200d' || r == '\u2060' || r == '\ufeff':
+			return -1
+		case r == '\u0391' || r == '\u03b1' || r == '\u0410' || r == '\u0430':
+			return 'a'
+		case r == '\u0392' || r == '\u03b2' || r == '\u0412' || r == '\u0432':
+			return 'b'
+		case r == '\u0421' || r == '\u0441':
+			return 'c'
+		case r == '\u0395' || r == '\u03b5' || r == '\u0415' || r == '\u0435':
+			return 'e'
+		case r == '\u041d' || r == '\u043d':
+			return 'h'
+		case r == '\u0399' || r == '\u03b9' || r == '\u0406' || r == '\u0456':
+			return 'i'
+		case r == '\u0408' || r == '\u0458':
+			return 'j'
+		case r == '\u039a' || r == '\u03ba' || r == '\u041a' || r == '\u043a':
+			return 'k'
+		case r == '\u039c' || r == '\u03bc' || r == '\u041c' || r == '\u043c':
+			return 'm'
+		case r == '\u039d' || r == '\u03bd':
+			return 'n'
+		case r == '\u039f' || r == '\u03bf' || r == '\u041e' || r == '\u043e':
+			return 'o'
+		case r == '\u03a1' || r == '\u03c1' || r == '\u0420' || r == '\u0440':
+			return 'p'
+		case r == '\u03a4' || r == '\u03c4' || r == '\u0422' || r == '\u0442':
+			return 't'
+		case r == '\u03a7' || r == '\u03c7' || r == '\u0425' || r == '\u0445':
+			return 'x'
+		case r == '\u03a5' || r == '\u03c5' || r == '\u0423' || r == '\u0443':
+			return 'y'
+		default:
+			return unicode.ToLower(r)
+		}
+	}, value)
+	if restrictedCLIPattern.MatchString(value) {
+		return true
+	}
+	compact := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || strings.ContainsRune("._-–—/\\:：", r) {
+			return -1
+		}
+		return r
+	}, value)
+	for _, term := range restrictedCompactEnglishTerms {
+		if strings.Contains(compact, term) {
+			return true
+		}
+	}
+	for _, term := range restrictedCompactTerms {
+		if strings.Contains(compact, term) {
+			return true
+		}
+	}
+	return false
 }

@@ -333,8 +333,55 @@ func TestAppXinzhiliVoiceTurnStreamsTranscriptTextAudioAndPersists(t *testing.T)
 			t.Fatalf("SSE body missing %q:\n%s", want, body)
 		}
 	}
-	if savedQuestion != "我最近总是着急" || savedAnswer != "先停一下。再感受身体。" {
+	if savedQuestion != "我最近总是着急" || savedAnswer != "先停一下。\n再感受身体。" {
 		t.Fatalf("saved pair = %q / %q", savedQuestion, savedAnswer)
+	}
+}
+
+func TestAppXinzhiliVoiceTurnFiltersRestrictedTermsBeforeTextAudioAndPersistence(t *testing.T) {
+	var savedAnswer string
+	var synthesized []string
+	s := newSuccessfulXinzhiliVoiceServer(t)
+	s.ragGen = xinzhiliStreamingGeneratorFunc(func(_ context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+		chunks := []string{"当前通过 C o d e x C L I 运行。", "你可以继续描述困扰。", "再慢慢说清楚。"}
+		for _, chunk := range chunks {
+			if err := emit(chunk); err != nil {
+				return "", err
+			}
+		}
+		return strings.Join(chunks, ""), nil
+	})
+	s.xinzhiliSynthesize = func(_ context.Context, text string) ([]byte, string, error) {
+		synthesized = append(synthesized, text)
+		return []byte("audio:" + text), "audio/mpeg", nil
+	}
+	s.xinzhiliSavePair = func(_ context.Context, _ int64, _, answer string, _ json.RawMessage) (int64, error) {
+		savedAnswer = answer
+		return 101, nil
+	}
+
+	req := newXinzhiliMultipartRequest(t, []byte("wav"), 1300)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	res := httptest.NewRecorder()
+	s.appXinzhiliVoiceTurnStream(res, req)
+
+	body := res.Body.String()
+	for _, forbidden := range []string{"Codex", "C o d e x", "CLI", "C L I"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("voice stream leaked %q: %s", forbidden, body)
+		}
+		for _, text := range synthesized {
+			if strings.Contains(text, forbidden) {
+				t.Fatalf("tts leaked %q: %#v", forbidden, synthesized)
+			}
+		}
+	}
+	want := "你可以继续描述困扰。\n再慢慢说清楚。"
+	if savedAnswer != want {
+		t.Fatalf("saved answer = %q, want %q", savedAnswer, want)
+	}
+	if !strings.Contains(body, `"answer":"你可以继续描述困扰。\n再慢慢说清楚。"`) {
+		t.Fatalf("done event was not cleaned and formatted: %s", body)
 	}
 }
 
@@ -377,7 +424,7 @@ func TestAppXinzhiliVoiceTurnStrictChineseOutputRewritesEnglishDriftAndDigits(t 
 	var synthesizedMu sync.Mutex
 	var synthesized []string
 	answer := "好的。OK，我们做1 2 3次。不要 worry。"
-	want := "好的。好，我们做一二三次。不要担心。"
+	want := "好的。\n好，我们做一二三次。\n不要担心。"
 	s := newSuccessfulXinzhiliVoiceServer(t)
 	s.ragGen = xinzhiliStreamingGeneratorFunc(func(_ context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
 		if err := emit(answer); err != nil {
@@ -421,7 +468,12 @@ func TestAppXinzhiliVoiceTurnStrictChineseOutputRewritesEnglishDriftAndDigits(t 
 			t.Fatalf("SSE body still contains English drift %q:\n%s", forbidden, body)
 		}
 	}
-	for _, required := range []string{`"content":"` + want + `"`, `"answer":"` + want + `"`} {
+	for _, required := range []string{
+		`"content":"好的。"`,
+		`"content":"\n好，我们做一二三次。"`,
+		`"content":"\n不要担心。"`,
+		`"answer":"好的。\n好，我们做一二三次。\n不要担心。"`,
+	} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("SSE body missing normalized %s:\n%s", required, body)
 		}
@@ -620,7 +672,7 @@ func TestAppXinzhiliVoiceTurnPersistsOnlyTextPairAndPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(messages) != 2 || messages[0].Content != "以后回答短一点，我最近总是着急" || messages[1].Content != "先停一下。再感受身体。" {
+	if len(messages) != 2 || messages[0].Content != "以后回答短一点，我最近总是着急" || messages[1].Content != "先停一下。\n再感受身体。" {
 		t.Fatalf("saved text pair = %+v", messages)
 	}
 	for _, message := range messages {

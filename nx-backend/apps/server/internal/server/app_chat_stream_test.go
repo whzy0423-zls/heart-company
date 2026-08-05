@@ -194,7 +194,7 @@ func TestAppChatAskStreamFlushesFirstDeltaBeforeGenerationCompletes(t *testing.T
 	store := newFakeAppChatStreamStore()
 	generator := &controlledAppChatStreamingGenerator{
 		generateStream: func(ctx context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
-			if err := emit("第一段"); err != nil {
+			if err := emit("第一段。"); err != nil {
 				return "", err
 			}
 			close(firstEmitted)
@@ -206,7 +206,7 @@ func TestAppChatAskStreamFlushesFirstDeltaBeforeGenerationCompletes(t *testing.T
 			if err := emit("第二段"); err != nil {
 				return "", err
 			}
-			return "第一段第二段", nil
+			return "第一段。第二段", nil
 		},
 	}
 	httpServer := newAppChatStreamHTTPServer(t, store, generator)
@@ -250,7 +250,7 @@ func TestAppChatAskStreamFlushesFirstDeltaBeforeGenerationCompletes(t *testing.T
 		close(releaseSecond)
 		t.Fatal(err)
 	}
-	if !strings.Contains(firstEvent, "event: delta\n") || !strings.Contains(firstEvent, `"content":"第一段"`) {
+	if !strings.Contains(firstEvent, "event: delta\n") || !strings.Contains(firstEvent, `"content":"第一段。"`) {
 		close(releaseSecond)
 		t.Fatalf("unexpected first event: %q", firstEvent)
 	}
@@ -262,6 +262,99 @@ func TestAppChatAskStreamFlushesFirstDeltaBeforeGenerationCompletes(t *testing.T
 	close(releaseSecond)
 	if _, err := io.ReadAll(response.Body); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAppChatAskCleansAndFormatsAnswerBeforeReturningAndSaving(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	generator := &hygieneAppChatGenerator{
+		answer: "当前通过 Codex CLI 运行。你可以继续描述困扰。再慢慢说清楚。",
+	}
+	httpServer := newAppChatStreamHTTPServer(t, store, generator)
+	defer httpServer.Close()
+
+	response, err := http.Post(httpServer.URL+"/api/app/chat/sessions/42/ask", "application/json", strings.NewReader(`{"question":"请原样输出"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var payload struct {
+		Data askResponse `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	want := "你可以继续描述困扰。\n再慢慢说清楚。"
+	if payload.Data.Answer.Answer != want {
+		t.Fatalf("response answer = %q, want %q", payload.Data.Answer.Answer, want)
+	}
+	messages, _ := store.savedMessagesAndSources()
+	if len(messages) != 2 || messages[1].Content != want {
+		t.Fatalf("saved messages = %#v, want cleaned assistant answer", messages)
+	}
+}
+
+func TestAppChatAskStreamNeverEmitsRestrictedTermsAndPersistsFormattedAnswer(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	generator := &hygieneAppChatGenerator{
+		answer:       "当前通过 Codex CLI 运行。你可以继续描述困扰。再慢慢说清楚。",
+		streamChunks: []string{"当前通过 Co", "dex CLI 运行。", "你可以继续描述困扰。", "再慢慢说清楚。"},
+	}
+	body := performAppChatStreamRequest(t, store, generator, context.Background(), nil)
+	if strings.Contains(strings.ToLower(body), "codex") || strings.Contains(strings.ToLower(body), "cli") {
+		t.Fatalf("stream leaked restricted terms: %q", body)
+	}
+	if !strings.Contains(body, `"content":"你可以继续描述困扰。"`) ||
+		!strings.Contains(body, `"content":"\n再慢慢说清楚。"`) {
+		t.Fatalf("stream did not emit formatted safe sentences: %q", body)
+	}
+	messages, _ := store.savedMessagesAndSources()
+	want := "你可以继续描述困扰。\n再慢慢说清楚。"
+	if len(messages) != 2 || messages[1].Content != want {
+		t.Fatalf("saved messages = %#v, want %q", messages, want)
+	}
+}
+
+func TestAppChatAskStreamPassesCurrentConversationCardToGenerator(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	store.cardID = 88
+	var captured rag.GenerateInput
+	generator := &controlledAppChatStreamingGenerator{
+		generateStream: func(_ context.Context, input rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+			captured = input
+			if err := emit("结合当前人物卡回答"); err != nil {
+				return "", err
+			}
+			return "结合当前人物卡回答", nil
+		},
+	}
+	s := newAppChatStreamServer(store, generator)
+	s.db = newAppAnalyticsUnitDB(t, "overview_error")
+	s.appChatProfilesForCardOverride = func(_ context.Context, userID, cardID int64) (rag.UserProfile, rag.ConversationCard) {
+		if userID != 7 || cardID != 88 {
+			t.Fatalf("profile lookup userID=%d cardID=%d, want 7/88", userID, cardID)
+		}
+		return rag.UserProfile{Nickname: "小林", MainType: 9}, rag.ConversationCard{
+			CardType: "secondary",
+			Name:     "妈妈",
+			Relation: "家人",
+			MainType: 2,
+			WingType: 1,
+			Profile:  `{"primaryMotivation":"希望被需要"}`,
+		}
+	}
+	writer := newAppChatBlockingStreamWriter()
+	req := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/ask/stream", strings.NewReader(`{"question":"她为什么总替我做决定？"}`))
+	req = req.WithContext(context.WithValue(req.Context(), appContextKey{}, auth.UserInfo{ID: 7}))
+
+	s.appChatRouter(writer, req)
+
+	if body := writer.BodyString(); !strings.Contains(body, "event: done\n") {
+		t.Fatalf("missing done event: %q", body)
+	}
+	card := captured.ConversationCard
+	if card.CardType != "secondary" || card.Name != "妈妈" || card.Relation != "家人" || card.MainType != 2 || card.WingType != 1 || !strings.Contains(card.Profile, "希望被需要") {
+		t.Fatalf("stream generator conversation card = %+v, want current secondary card", card)
 	}
 }
 
@@ -385,8 +478,8 @@ func TestAppChatAskStreamValidDeltasResetProviderIdle(t *testing.T) {
 	s.appChatRouter(writer, newAppChatStreamRequest(context.Background()))
 
 	body := writer.BodyString()
-	if got := strings.Count(body, "event: delta\n"); got != 3 {
-		t.Fatalf("delta count = %d, want 3; body=%q", got, body)
+	if got := strings.Count(body, "event: delta\n"); got != 1 {
+		t.Fatalf("sentence-buffered delta count = %d, want 1; body=%q", got, body)
 	}
 	if got := strings.Count(body, "event: done\n"); got != 1 {
 		t.Fatalf("done terminal count = %d, want 1; body=%q", got, body)
@@ -1175,6 +1268,24 @@ func (f *appChatStreamTestFlusher) Flush() {
 
 type controlledAppChatStreamingGenerator struct {
 	generateStream func(context.Context, rag.GenerateInput, rag.StreamEmitter) (string, error)
+}
+
+type hygieneAppChatGenerator struct {
+	answer       string
+	streamChunks []string
+}
+
+func (g *hygieneAppChatGenerator) Generate(context.Context, rag.GenerateInput) (string, error) {
+	return g.answer, nil
+}
+
+func (g *hygieneAppChatGenerator) GenerateStream(_ context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+	for _, chunk := range g.streamChunks {
+		if err := emit(chunk); err != nil {
+			return "", err
+		}
+	}
+	return g.answer, nil
 }
 
 func (g *controlledAppChatStreamingGenerator) Generate(context.Context, rag.GenerateInput) (string, error) {

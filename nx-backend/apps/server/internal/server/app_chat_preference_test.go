@@ -93,6 +93,75 @@ func TestAppChatAskPassesSavedPreferencesAndCurrentDirectives(t *testing.T) {
 	}
 }
 
+func TestAppChatAskPassesCurrentConversationCardToGenerator(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	store.cardID = 88
+	generator := &capturingNonStreamingAppChatGenerator{answer: "结合当前人物卡回答"}
+	s := newAppChatStreamServer(store, generator)
+	s.db = newAppAnalyticsUnitDB(t, "overview_error")
+	s.chatLimiter = newFixedWindowRateLimiter(100, time.Minute)
+	s.appChatProfilesForCardOverride = func(_ context.Context, userID, cardID int64) (rag.UserProfile, rag.ConversationCard) {
+		if userID != 7 || cardID != 88 {
+			t.Fatalf("profile lookup userID=%d cardID=%d, want 7/88", userID, cardID)
+		}
+		return rag.UserProfile{Nickname: "小林", MainType: 9}, rag.ConversationCard{
+			CardType: "secondary",
+			Name:     "妈妈",
+			Relation: "家人",
+			MainType: 2,
+			WingType: 1,
+			Profile:  `{"primaryMotivation":"希望被需要"}`,
+		}
+	}
+
+	writer := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/ask", strings.NewReader(`{"question":"她为什么总替我做决定？"}`))
+	req = req.WithContext(context.WithValue(req.Context(), appContextKey{}, auth.UserInfo{ID: 7}))
+	s.appChatRouter(writer, req)
+
+	if writer.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", writer.Code, writer.Body.String())
+	}
+	card := generator.input.ConversationCard
+	if card.CardType != "secondary" || card.Name != "妈妈" || card.Relation != "家人" || card.MainType != 2 || card.WingType != 1 || !strings.Contains(card.Profile, "希望被需要") {
+		t.Fatalf("generator conversation card = %+v, want current secondary card", card)
+	}
+}
+
+func TestAppChatAskClearsPrimaryTypeWhenCurrentConversationCardTypeIsUnavailableOrInvalid(t *testing.T) {
+	for _, currentType := range []int{0, 10} {
+		t.Run(fmt.Sprintf("current_type_%d", currentType), func(t *testing.T) {
+			store := newFakeAppChatStreamStore()
+			store.cardID = 88
+			generator := &capturingNonStreamingAppChatGenerator{answer: "不应该根据主卡猜测"}
+			s := newAppChatStreamServer(store, generator)
+			s.db = newAppAnalyticsUnitDB(t, "overview_error")
+			s.chatLimiter = newFixedWindowRateLimiter(100, time.Minute)
+			s.appChatProfilesForCardOverride = func(_ context.Context, userID, cardID int64) (rag.UserProfile, rag.ConversationCard) {
+				if userID != 7 || cardID != 88 {
+					t.Fatalf("profile lookup userID=%d cardID=%d, want 7/88", userID, cardID)
+				}
+				return rag.UserProfile{Nickname: "小林", MainType: 9}, rag.ConversationCard{MainType: currentType}
+			}
+
+			writer := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/ask", strings.NewReader(`{"question":"她为什么总替我做决定？"}`))
+			req = req.WithContext(context.WithValue(req.Context(), appContextKey{}, auth.UserInfo{ID: 7}))
+			s.appChatRouter(writer, req)
+
+			if writer.Code != http.StatusOK {
+				t.Fatalf("status = %d body=%s", writer.Code, writer.Body.String())
+			}
+			if got := generator.input.ConversationCard.MainType; got >= 1 && got <= 9 {
+				t.Fatalf("conversation card main type = %d, want no valid current type", got)
+			}
+			if generator.input.UserProfile.MainType != 0 {
+				t.Fatalf("user profile main type = %d, want 0 when current conversation card type is unavailable", generator.input.UserProfile.MainType)
+			}
+		})
+	}
+}
+
 func TestAppChatPreferenceWriteFailureDoesNotCallModel(t *testing.T) {
 	preferences := newFakeAppChatPreferenceStore()
 	preferences.applyErr = errors.New("database unavailable")

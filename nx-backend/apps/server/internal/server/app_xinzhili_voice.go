@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/answerhygiene"
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
@@ -305,29 +306,67 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 			nextAudioIndex++
 		}
 	}
+	var answerSentenceBuffer answerhygiene.SentenceBuffer
+	emittedText := false
+	emitCleanSentences := func(sentences []string) bool {
+		for _, sentence := range sentences {
+			outputDelta := answerhygiene.Clean(transcript, sentence)
+			if outputDelta == answerhygiene.NeutralDirectAnswerFallback {
+				continue
+			}
+			outputDelta = normalizeXinzhiliVoiceOutputDelta(outputDelta, normalizeVoiceOutputToChinese)
+			if outputDelta == "" {
+				continue
+			}
+			speechDelta := outputDelta
+			if emittedText {
+				outputDelta = "\n" + outputDelta
+			}
+			if err := writeAppChatSSE(w, flusher, "text_delta", map[string]string{"content": outputDelta}); err != nil {
+				cancelGeneration()
+				return false
+			}
+			if !queueChunks(chunker.Push(speechDelta)) {
+				cancelGeneration()
+				return false
+			}
+			emittedText = true
+		}
+		return true
+	}
 
 	for resultCh != nil || audioCh != nil {
 		select {
 		case delta := <-deltaCh:
-			outputDelta := normalizeXinzhiliVoiceOutputDelta(delta, normalizeVoiceOutputToChinese)
-			if outputDelta == "" {
+			if delta == "" {
 				continue
 			}
-			if err := writeAppChatSSE(w, flusher, "text_delta", map[string]string{"content": outputDelta}); err != nil {
-				cancelGeneration()
-				return
-			}
-			if !queueChunks(chunker.Push(outputDelta)) {
-				cancelGeneration()
+			if !emitCleanSentences(answerSentenceBuffer.Push(delta)) {
 				return
 			}
 		case completed := <-resultCh:
 			answer, generationErr = completed.Answer, completed.Err
+			answer.Answer = answerhygiene.Clean(transcript, answer.Answer)
 			if normalizeVoiceOutputToChinese {
 				answer.Answer = voice.NormalizeStrictChineseTTSInput(answer.Answer)
 			}
+			answer.Answer = answerhygiene.Clean(transcript, answer.Answer)
 			resultCh = nil
 			deltaCh = nil
+			if !emitCleanSentences(answerSentenceBuffer.Flush()) {
+				return
+			}
+			if !emittedText && strings.TrimSpace(answer.Answer) != "" {
+				if err := writeAppChatSSE(w, flusher, "text_delta", map[string]string{"content": answer.Answer}); err != nil {
+					cancelGeneration()
+					return
+				}
+				if !queueChunks(chunker.Push(answer.Answer)) {
+					cancelGeneration()
+					return
+				}
+				emittedText = true
+			}
 			if !queueChunks(chunker.Flush()) {
 				cancelGeneration()
 				return

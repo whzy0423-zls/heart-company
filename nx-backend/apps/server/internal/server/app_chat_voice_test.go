@@ -210,7 +210,7 @@ func TestVoiceChatModelIdentityPersistsFixedReplyWithoutGeneration(t *testing.T)
 	}
 }
 
-func TestVoiceChatPassesSecondaryCardContextToGenerator(t *testing.T) {
+func TestVoiceChatPassesCurrentConversationCardToGenerator(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"text": "她最近为什么总是迎合别人？"})
 	}))
@@ -224,14 +224,16 @@ func TestVoiceChatPassesSecondaryCardContextToGenerator(t *testing.T) {
 	t.Cleanup(func() { newASRHTTPClient = previousClientFactory })
 
 	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	store.cardID = 88
 	generator := &voiceChatGenerator{answer: "可以先确认她真正想要什么"}
 	s := newVoiceChatTestServer(store, generator)
+	s.db = newAppAnalyticsUnitDB(t, "overview_error")
 	s.env.ASR = config.ASRConfig{APIBase: upstream.URL, APIKey: "test-key", Model: "whisper-1", TimeoutSeconds: 3}
 	s.appChatProfilesForCardOverride = func(_ context.Context, userID, cardID int64) (rag.UserProfile, rag.ConversationCard) {
-		if userID != 7 || cardID != 0 {
-			t.Fatalf("unexpected profile lookup: user=%d card=%d", userID, cardID)
+		if userID != 7 || cardID != 88 {
+			t.Fatalf("profile lookup userID=%d cardID=%d, want 7/88", userID, cardID)
 		}
-		return rag.UserProfile{Nickname: "小王", MainType: 6}, rag.ConversationCard{
+		return rag.UserProfile{Nickname: "小王", MainType: 9}, rag.ConversationCard{
 			CardType: "secondary",
 			Name:     "妈妈",
 			Relation: "家人",

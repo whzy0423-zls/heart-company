@@ -109,6 +109,8 @@ func TestCompatibleChatDefaultResponseContract(t *testing.T) {
 	required := []string{
 		"普通问题用 1-3 句",
 		"复杂问题才用简短段落",
+		"完整分句分别换行",
+		"重点、建议、步骤等需要区分时使用简短中文标签",
 		"只有用户明确要求详细时才扩展",
 		"不要使用“亲爱的”等亲昵称呼",
 		"不要固定总结",
