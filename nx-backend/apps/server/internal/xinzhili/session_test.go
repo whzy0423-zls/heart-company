@@ -800,7 +800,34 @@ func TestConversationIsolationAndRelevanceUseIndependentRetrievers(t *testing.T)
 	}
 }
 
-func TestGenerationLoadsContextInParallel(t *testing.T) {
+func TestGenerationRetrievesKnowledgeBeforeTheory(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.session.Close()
+	order := newOrderedRetrievalProbe([]rag.Document{{ID: "knowledge:ordered", Title: "知识", Content: "知识内容"}}, []rag.Document{{ID: "theory:ordered", Title: "理论", Content: "理论内容"}})
+	fixture.deps.Knowledge = order.knowledge()
+	fixture.deps.Theory = order.theory()
+	fixture.session = NewSession(fixture.deps)
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-ordered-retrieval")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "什么是九型", Stable: true})
+
+	order.waitKnowledgeStarted(t)
+	if order.theoryStartedBeforeKnowledgeDone(150 * time.Millisecond) {
+		order.releaseKnowledge()
+		t.Fatal("theory retrieval started before knowledge retrieval completed")
+	}
+	order.releaseKnowledge()
+	fixture.generator.waitCalled(t)
+
+	input := fixture.generator.lastInput()
+	if len(input.Sources) != 2 || input.Sources[0].ID != "knowledge:ordered" || input.Sources[1].ID != "theory:ordered" {
+		t.Fatalf("sources=%+v", input.Sources)
+	}
+}
+
+func TestGenerationLoadsContextInParallelExceptOrderedRetrieval(t *testing.T) {
 	fixture := newSessionFixture(t)
 	fixture.session.Close()
 	barrier := newContextLoadBarrier()
@@ -818,17 +845,21 @@ func TestGenerationLoadsContextInParallel(t *testing.T) {
 	}
 	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "帮我分析一下", Stable: true})
 
-	started := make(map[string]bool, 5)
+	started := make(map[string]bool, 4)
 	deadline := time.NewTimer(300 * time.Millisecond)
 	defer deadline.Stop()
-	for len(started) < 5 {
+	for len(started) < 4 {
 		select {
 		case name := <-barrier.started:
 			started[name] = true
 		case <-deadline.C:
 			close(barrier.release)
-			t.Fatalf("context loads started=%v, want history/preferences/memories/knowledge/theory", started)
+			t.Fatalf("context loads started=%v, want history/preferences/memories/knowledge before ordered theory", started)
 		}
+	}
+	if started["theory"] {
+		close(barrier.release)
+		t.Fatalf("theory retrieval started before knowledge barrier released: %v", started)
 	}
 	close(barrier.release)
 	fixture.generator.waitCalled(t)
@@ -1596,6 +1627,90 @@ func (p barrierMemoryProvider) PromptMemories(ctx context.Context, _, _ int64) (
 		return nil, err
 	}
 	return []string{"并行记忆"}, nil
+}
+
+type orderedRetrievalProbe struct {
+	knowledgeDocs    []rag.Document
+	theoryDocs       []rag.Document
+	knowledgeStarted chan struct{}
+	knowledgeRelease chan struct{}
+	knowledgeDone    chan struct{}
+	theoryStarted    chan struct{}
+}
+
+func newOrderedRetrievalProbe(knowledgeDocs, theoryDocs []rag.Document) *orderedRetrievalProbe {
+	return &orderedRetrievalProbe{
+		knowledgeDocs:    knowledgeDocs,
+		theoryDocs:       theoryDocs,
+		knowledgeStarted: make(chan struct{}),
+		knowledgeRelease: make(chan struct{}),
+		knowledgeDone:    make(chan struct{}),
+		theoryStarted:    make(chan struct{}),
+	}
+}
+
+func (p *orderedRetrievalProbe) knowledge() KnowledgeRetriever {
+	return orderedKnowledgeRetriever{probe: p}
+}
+
+func (p *orderedRetrievalProbe) theory() TheoryRetriever {
+	return orderedTheoryRetriever{probe: p}
+}
+
+func (p *orderedRetrievalProbe) waitKnowledgeStarted(t *testing.T) {
+	t.Helper()
+	select {
+	case <-p.knowledgeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("knowledge retrieval did not start")
+	}
+}
+
+func (p *orderedRetrievalProbe) theoryStartedBeforeKnowledgeDone(timeout time.Duration) bool {
+	select {
+	case <-p.theoryStarted:
+		select {
+		case <-p.knowledgeDone:
+			return false
+		default:
+			return true
+		}
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+func (p *orderedRetrievalProbe) releaseKnowledge() {
+	select {
+	case <-p.knowledgeRelease:
+	default:
+		close(p.knowledgeRelease)
+	}
+}
+
+type orderedKnowledgeRetriever struct{ probe *orderedRetrievalProbe }
+
+func (r orderedKnowledgeRetriever) Search(ctx context.Context, _ string, _ int, _ float64) ([]rag.Document, error) {
+	close(r.probe.knowledgeStarted)
+	select {
+	case <-r.probe.knowledgeRelease:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	close(r.probe.knowledgeDone)
+	return append([]rag.Document(nil), r.probe.knowledgeDocs...), nil
+}
+
+type orderedTheoryRetriever struct{ probe *orderedRetrievalProbe }
+
+func (r orderedTheoryRetriever) Search(ctx context.Context, _ string, _ int, _ float64) ([]rag.Document, error) {
+	close(r.probe.theoryStarted)
+	select {
+	case <-r.probe.knowledgeDone:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return append([]rag.Document(nil), r.probe.theoryDocs...), nil
 }
 
 type barrierRetriever struct {

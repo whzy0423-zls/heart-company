@@ -865,7 +865,7 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 			theoryDocs    []rag.Document
 			contextLoads  sync.WaitGroup
 		)
-		contextLoads.Add(5)
+		contextLoads.Add(4)
 		go func() {
 			defer contextLoads.Done()
 			history, summary, _ = s.deps.Conversations.History(turn.ctx, turn.conversation, 20)
@@ -887,9 +887,6 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 			if s.deps.Knowledge != nil {
 				knowledgeDocs, _ = s.deps.Knowledge.Search(turn.ctx, question, turn.input.KnowledgeTopK, turn.input.KnowledgeMinScore)
 			}
-		}()
-		go func() {
-			defer contextLoads.Done()
 			if s.deps.Theory != nil {
 				theoryDocs, _ = s.deps.Theory.Search(turn.ctx, question, turn.input.TheoryTopK, turn.input.TheoryMinScore)
 			}
