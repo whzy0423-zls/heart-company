@@ -68,8 +68,8 @@ func TestOpenAIChatGenerateUsesVersionedEndpointAndNativeMessages(t *testing.T) 
 	if requestBody["model"] != "test-model" {
 		t.Fatalf("model = %#v", requestBody["model"])
 	}
-	if requestBody["max_tokens"] != float64(360) {
-		t.Fatalf("max_tokens = %#v, want 360", requestBody["max_tokens"])
+	if requestBody["max_tokens"] != float64(220) {
+		t.Fatalf("max_tokens = %#v, want 220", requestBody["max_tokens"])
 	}
 	if requestBody["temperature"] != 0.55 {
 		t.Fatalf("temperature = %#v, want 0.55", requestBody["temperature"])
@@ -137,6 +137,54 @@ func TestOpenAIChatGenerateUsesVersionedEndpointAndNativeMessages(t *testing.T) 
 	}
 	if strings.Count(finalUser, "【不可信参考数据结束】") != 1 {
 		t.Fatalf("reference data escaped its delimiter: %s", finalUser)
+	}
+}
+
+func TestOpenAIChatGenerateUsesDynamicTokenBudgetForAllTypesQuestion(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": "1到9号完整回答"}}},
+		})
+	}))
+	defer server.Close()
+
+	answer, err := newTestOpenAIChatGenerator(server).Generate(context.Background(), rag.GenerateInput{Question: "介绍1到9型号的分别解释"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	if answer != "1到9号完整回答" {
+		t.Fatalf("answer = %q", answer)
+	}
+	if requestBody["max_tokens"] != float64(1200) {
+		t.Fatalf("max_tokens = %#v, want 1200", requestBody["max_tokens"])
+	}
+}
+
+func TestOpenAIChatGenerateStreamUsesDynamicTokenBudgetForAllTypesQuestion(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"完整回答\"}}]}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	answer, err := newTestOpenAIChatGenerator(server).GenerateStream(context.Background(), rag.GenerateInput{Question: "介绍1到9型号的分别解释"}, nil)
+	if err != nil {
+		t.Fatalf("GenerateStream returned error: %v", err)
+	}
+	if answer != "完整回答" {
+		t.Fatalf("answer = %q", answer)
+	}
+	if requestBody["max_tokens"] != float64(1200) {
+		t.Fatalf("stream max_tokens = %#v, want 1200", requestBody["max_tokens"])
 	}
 }
 

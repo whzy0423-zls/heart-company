@@ -427,6 +427,7 @@ func relevantMainType(input AskInput) int {
 func (s *Service) search(question string, mainType int, limit int) []scoredDoc {
 	terms := tokenize(question)
 	scored := make([]scoredDoc, 0, len(s.docs))
+	broadEnneagramQuestion := isBroadEnneagramKnowledgeQuestion(question)
 	mainTypeToken := ""
 	if mainType > 0 {
 		mainTypeToken = string(rune('0' + mainType))
@@ -451,6 +452,9 @@ func (s *Service) search(question string, mainType int, limit int) []scoredDoc {
 			continue
 		}
 		score := questionScore
+		if broadEnneagramQuestion && isEnneagramKnowledgeDocument(doc) {
+			score += 3
+		}
 		if mainTypeToken != "" && (strings.Contains(doc.ID, "type-"+mainTypeToken) || strings.Contains(doc.Title, mainTypeToken+"号")) {
 			score += 2
 		}
@@ -468,6 +472,40 @@ func (s *Service) search(question string, mainType int, limit int) []scoredDoc {
 		scored = scored[:limit]
 	}
 	return scored
+}
+
+func isBroadEnneagramKnowledgeQuestion(question string) bool {
+	normalized := strings.Join(strings.Fields(strings.TrimSpace(question)), "")
+	if normalized == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"什么是九型", "九型是什么", "什么叫九型", "九型是什么意思",
+		"什么是九型人格", "九型人格是什么", "介绍九型", "解释九型", "讲讲九型",
+		"九型基础", "九型入门", "九型有哪些", "九型分别", "九型的分别",
+		"九种类型", "九个类型", "九种型号", "九个型号",
+	} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return strings.Contains(normalized, "九型") &&
+		containsAny(normalized, "是什么", "什么意思", "介绍", "解释", "讲讲", "分别", "有哪些", "类型", "型号")
+}
+
+func isEnneagramKnowledgeDocument(document Document) bool {
+	text := strings.ToLower(document.ID + " " + document.Title + " " + document.Content + " " + strings.Join(document.Tags, " "))
+	if containsAny(text, "九型", "主型", "翼型", "九种性格", "性格模式") {
+		return true
+	}
+	for _, aliases := range enneagramTypeAliases {
+		for _, alias := range aliases {
+			if strings.Contains(text, strings.ToLower(alias)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func tokenize(text string) []string {

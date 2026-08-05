@@ -128,6 +128,7 @@ type Server struct {
 	xinzhiliSynthesize         func(context.Context, string) ([]byte, string, error)
 	xinzhiliSession            func(context.Context, int64) (chat.Session, error)
 	xinzhiliRetrieveDocs       func(context.Context, string, int) ([]rag.Document, error)
+	xinzhiliRetrieveTheoryDocs func(context.Context, string, int, float64) ([]rag.Document, error)
 	xinzhiliSavePair           func(context.Context, int64, string, string, json.RawMessage) (int64, error)
 	classroomUploads           classroomUploadHandlerService
 	classroomAdmin             classroomAdminService
@@ -754,6 +755,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/push/unregister", s.method(http.MethodPost, s.requireAppAuth(s.appPushUnregister)))
 	// 语音识别
 	s.mux.HandleFunc("/api/app/voice/recognize", s.method(http.MethodPost, s.requireAppAuth(s.appVoiceRecognize)))
+	s.mux.HandleFunc("/api/app/xinzhili/turns/stream", s.method(http.MethodPost, s.requireAppAuth(s.appXinzhiliVoiceTurnStream)))
 	s.mux.HandleFunc("/api/app/xinzhili/realtime/capabilities", s.method(http.MethodGet, s.requireAppAuth(s.appXinzhiliRealtimeCapabilities)))
 	s.mux.HandleFunc("/api/app/xinzhili/mode", s.method(http.MethodGet, s.requireAppAuth(s.appXinzhiliModeSnapshot)))
 	s.mux.HandleFunc("/api/app/xinzhili/realtime", s.requireAppAuth(s.xinzhiliRealtime))

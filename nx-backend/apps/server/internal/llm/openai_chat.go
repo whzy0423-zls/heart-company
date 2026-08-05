@@ -90,7 +90,7 @@ func (g *OpenAIChatGenerator) Generate(ctx context.Context, input rag.GenerateIn
 		Model:       g.model,
 		Messages:    g.chatMessages(input),
 		Temperature: 0.55,
-		MaxTokens:   openAIChatMaxTokens,
+		MaxTokens:   chatTokenBudgetForTier(input.Question, input.Tier),
 	})
 }
 
@@ -102,7 +102,7 @@ func (g *OpenAIChatGenerator) GenerateStream(ctx context.Context, input rag.Gene
 		Model:       g.model,
 		Messages:    g.chatMessages(input),
 		Temperature: 0.55,
-		MaxTokens:   openAIChatMaxTokens,
+		MaxTokens:   chatTokenBudgetForTier(input.Question, input.Tier),
 		Stream:      true,
 	})
 	if err != nil {

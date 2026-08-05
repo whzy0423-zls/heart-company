@@ -20,6 +20,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
 	"nine-xing/nx-backend/apps/server/internal/rag"
+	"nine-xing/nx-backend/apps/server/internal/theorystore"
 	"nine-xing/nx-backend/apps/server/internal/voice"
 )
 
@@ -158,6 +159,8 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 	_ = writeAppChatSSE(w, flusher, "state", map[string]string{"state": "retrieving_knowledge"})
 	docs, _ := s.retrieveXinzhiliDocs(ctx, transcript, 8)
 	_ = writeAppChatSSE(w, flusher, "state", map[string]string{"state": "retrieving_theory"})
+	theoryDocs, _ := s.retrieveXinzhiliTheoryDocs(ctx, transcript, 6, 0.2)
+	docs = mergeXinzhiliRAGDocuments(docs, theoryDocs)
 
 	preferences, directives, extraction, err := s.prepareAppChatPreferencesLegacy(ctx, userInfo.ID, transcript)
 	if err != nil {
@@ -510,6 +513,42 @@ func (s *Server) retrieveXinzhiliDocs(ctx context.Context, question string, topK
 		return s.xinzhiliRetrieveDocs(ctx, question, topK)
 	}
 	return s.retrieveAppDocsForQuery(ctx, question, topK)
+}
+
+func (s *Server) retrieveXinzhiliTheoryDocs(ctx context.Context, question string, topK int, minScore float64) ([]rag.Document, error) {
+	if s.xinzhiliRetrieveTheoryDocs != nil {
+		return s.xinzhiliRetrieveTheoryDocs(ctx, question, topK, minScore)
+	}
+	if s.db == nil {
+		return nil, nil
+	}
+	return theorystore.NewStore(s.db).SearchActiveChunks(ctx, question, topK, minScore)
+}
+
+func mergeXinzhiliRAGDocuments(knowledgeDocs, theoryDocs []rag.Document) []rag.Document {
+	documents := make([]rag.Document, 0, len(knowledgeDocs)+len(theoryDocs))
+	seen := make(map[string]struct{}, len(knowledgeDocs)+len(theoryDocs))
+	appendDocument := func(document rag.Document) {
+		key := strings.TrimSpace(document.ID)
+		if key == "" {
+			key = strings.TrimSpace(document.Title) + "\x00" + strings.TrimSpace(document.Content)
+		}
+		if key == "" {
+			return
+		}
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		documents = append(documents, document)
+	}
+	for _, document := range knowledgeDocs {
+		appendDocument(document)
+	}
+	for _, document := range theoryDocs {
+		appendDocument(document)
+	}
+	return documents
 }
 
 func (s *Server) saveXinzhiliPair(ctx context.Context, sessionID int64, question, answer string, sources json.RawMessage) (int64, error) {

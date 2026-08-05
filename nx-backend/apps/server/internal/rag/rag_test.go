@@ -893,6 +893,40 @@ func containsSuggestionText(suggestions []string, text string) bool {
 	return false
 }
 
+func TestAskStreamKeepsBroadEnneagramSourcesForGeneralDefinition(t *testing.T) {
+	generator := &capturingStreamingGenerator{answer: "九型是一套观察性格模式的地图。"}
+	service := NewService([]Document{
+		{ID: "kb-nine-types", Title: "九型基础", Content: "九型人格用于理解九种性格模式与核心动机。", Tags: []string{"九型", "基础"}},
+		{ID: "theory:map", Title: "九型是观察地图", Content: "九型是观察地图，不是身份标签。", Tags: []string{"九型", "理论"}},
+	}, WithGenerator(generator))
+
+	answer, err := service.AskStream(context.Background(), AskInput{Question: "什么是九型"}, nil)
+	if err != nil {
+		t.Fatalf("AskStream returned error: %v", err)
+	}
+	if len(generator.input.Sources) < 2 {
+		t.Fatalf("generator sources = %+v, want broad knowledge and theory sources", generator.input.Sources)
+	}
+	if answer.Sources[0].ID != "kb-nine-types" || answer.Sources[1].ID != "theory:map" {
+		t.Fatalf("answer sources = %+v, want knowledge and theory in order", answer.Sources)
+	}
+}
+
+func TestAskStreamDoesNotAttachBroadEnneagramSourcesToUnrelatedQuestion(t *testing.T) {
+	generator := &capturingStreamingGenerator{answer: "可以先看天气预报。"}
+	service := NewService([]Document{
+		{ID: "kb-nine-types", Title: "九型基础", Content: "九型人格用于理解九种性格模式与核心动机。", Tags: []string{"九型", "基础"}},
+	}, WithGenerator(generator))
+
+	answer, err := service.AskStream(context.Background(), AskInput{Question: "明天上海天气怎么样"}, nil)
+	if err != nil {
+		t.Fatalf("AskStream returned error: %v", err)
+	}
+	if len(generator.input.Sources) != 0 || len(answer.Sources) != 0 {
+		t.Fatalf("unrelated question got sources: generator=%+v answer=%+v", generator.input.Sources, answer.Sources)
+	}
+}
+
 func TestAskRetrievesRelevantKnowledge(t *testing.T) {
 	service := NewService([]Document{
 		{ID: "type-1", Title: "1号 完美型", Content: "完美型重视原则、秩序和高标准，成长建议是允许不完美。", Tags: []string{"完美型", "原则"}},

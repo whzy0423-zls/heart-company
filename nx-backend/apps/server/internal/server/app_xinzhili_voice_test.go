@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -335,6 +336,79 @@ func TestAppXinzhiliVoiceTurnStreamsTranscriptTextAudioAndPersists(t *testing.T)
 	}
 	if savedQuestion != "我最近总是着急" || savedAnswer != "先停一下。\n再感受身体。" {
 		t.Fatalf("saved pair = %q / %q", savedQuestion, savedAnswer)
+	}
+}
+
+func TestServerRegistersAppXinzhiliLegacyTurnStreamRoute(t *testing.T) {
+	raw, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `s.mux.HandleFunc("/api/app/xinzhili/turns/stream"`) {
+		t.Fatal("app xinzhili legacy turn stream route is not registered")
+	}
+}
+
+func TestMergeXinzhiliRAGDocumentsKeepsKnowledgeBeforeTheoryAndDedupes(t *testing.T) {
+	docs := mergeXinzhiliRAGDocuments(
+		[]rag.Document{{ID: "kb-1", Title: "知识", Content: "知识内容"}, {ID: "shared", Title: "重复", Content: "知识版本"}},
+		[]rag.Document{{ID: "shared", Title: "重复", Content: "理论版本"}, {ID: "theory:1", Title: "理论", Content: "理论内容"}},
+	)
+	if len(docs) != 3 || docs[0].ID != "kb-1" || docs[1].ID != "shared" || docs[2].ID != "theory:1" {
+		t.Fatalf("merged docs = %+v", docs)
+	}
+}
+
+func TestAppXinzhiliVoiceTurnAddsTheoryDocumentsToModelInput(t *testing.T) {
+	var captured rag.GenerateInput
+	var savedSources json.RawMessage
+	s := newSuccessfulXinzhiliVoiceServer(t)
+	s.xinzhiliTranscribe = func(context.Context, []byte, string) (string, error) { return "什么是九型", nil }
+	s.xinzhiliRetrieveDocs = func(_ context.Context, question string, topK int) ([]rag.Document, error) {
+		if question != "什么是九型" || topK != 8 {
+			t.Fatalf("knowledge retrieval = %q/%d, want transcript/8", question, topK)
+		}
+		return []rag.Document{{ID: "kb-nine-types", Title: "知识库：九型基础", Content: "九型人格用于理解九种性格模式与核心动机。", Tags: []string{"九型", "基础"}}}, nil
+	}
+	s.xinzhiliRetrieveTheoryDocs = func(_ context.Context, question string, topK int, minScore float64) ([]rag.Document, error) {
+		if question != "什么是九型" || topK != 6 || minScore != 0.2 {
+			t.Fatalf("theory retrieval = %q/%d/%v, want transcript/6/0.2", question, topK, minScore)
+		}
+		return []rag.Document{{ID: "theory:11", Title: "理论库：九型是观察地图", Content: "九型是观察地图，不是身份标签。", Tags: []string{"九型", "理论"}}}, nil
+	}
+	s.ragGen = xinzhiliStreamingGeneratorFunc(func(_ context.Context, input rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+		captured = input
+		if err := emit("九型是理解性格模式的地图。"); err != nil {
+			return "", err
+		}
+		return "九型是理解性格模式的地图。", nil
+	})
+	s.xinzhiliSavePair = func(_ context.Context, _ int64, _, _ string, sources json.RawMessage) (int64, error) {
+		savedSources = append(json.RawMessage(nil), sources...)
+		return 101, nil
+	}
+
+	req := newXinzhiliMultipartRequest(t, []byte("wav"), 1300)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	res := httptest.NewRecorder()
+
+	s.appXinzhiliVoiceTurnStream(res, req)
+
+	body := res.Body.String()
+	if !strings.Contains(body, `event: done`) {
+		t.Fatalf("turn did not complete: status=%d body=%s", res.Code, body)
+	}
+	if len(captured.Sources) < 2 {
+		t.Fatalf("model sources = %+v, want knowledge plus theory", captured.Sources)
+	}
+	if captured.Sources[0].ID != "kb-nine-types" {
+		t.Fatalf("first source = %+v, want knowledge document first", captured.Sources)
+	}
+	if !containsRAGSourceID(captured.Sources, "theory:11") {
+		t.Fatalf("model sources missing theory document: %+v", captured.Sources)
+	}
+	if !strings.Contains(string(savedSources), "kb-nine-types") || !strings.Contains(string(savedSources), "theory:11") {
+		t.Fatalf("persisted sources = %s, want knowledge and theory", savedSources)
 	}
 }
 
@@ -742,6 +816,15 @@ func newSuccessfulXinzhiliVoiceServer(t *testing.T) *Server {
 		xinzhiliRetrieveDocs: func(context.Context, string, int) ([]rag.Document, error) { return nil, nil },
 		xinzhiliSavePair:     func(context.Context, int64, string, string, json.RawMessage) (int64, error) { return 101, nil },
 	}
+}
+
+func containsRAGSourceID(sources []rag.Source, id string) bool {
+	for _, source := range sources {
+		if source.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func newXinzhiliMultipartRequest(t *testing.T, audio []byte, durationMs int) *http.Request {

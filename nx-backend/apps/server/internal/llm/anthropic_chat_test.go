@@ -80,8 +80,8 @@ func TestAnthropicChatGenerateUsesVersionedEndpointAndNativeMessages(t *testing.
 	if requestBody["model"] != "test-model" {
 		t.Fatalf("model = %#v", requestBody["model"])
 	}
-	if requestBody["max_tokens"] != float64(360) {
-		t.Fatalf("max_tokens = %#v, want 360", requestBody["max_tokens"])
+	if requestBody["max_tokens"] != float64(220) {
+		t.Fatalf("max_tokens = %#v, want 220", requestBody["max_tokens"])
 	}
 	if requestBody["temperature"] != 0.55 {
 		t.Fatalf("temperature = %#v, want 0.55", requestBody["temperature"])
@@ -141,6 +141,56 @@ func TestAnthropicChatGenerateUsesVersionedEndpointAndNativeMessages(t *testing.
 	}
 }
 
+func TestAnthropicChatGenerateUsesDynamicTokenBudgetForAllTypesQuestion(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"type":    "message",
+			"content": []any{map[string]any{"type": "text", "text": "1到9号完整回答"}},
+		})
+	}))
+	defer server.Close()
+
+	answer, err := newTestAnthropicChatGenerator(server).Generate(context.Background(), rag.GenerateInput{Question: "介绍1到9型号的分别解释"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	if answer != "1到9号完整回答" {
+		t.Fatalf("answer = %q", answer)
+	}
+	if requestBody["max_tokens"] != float64(1200) {
+		t.Fatalf("max_tokens = %#v, want 1200", requestBody["max_tokens"])
+	}
+}
+
+func TestAnthropicChatGenerateStreamUsesDynamicTokenBudgetForAllTypesQuestion(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeAnthropicEvent(w, "message_start", `{"type":"message_start","message":{"type":"message"}}`)
+		writeAnthropicEvent(w, "content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"完整回答"}}`)
+		writeAnthropicEvent(w, "message_stop", `{"type":"message_stop"}`)
+	}))
+	defer server.Close()
+
+	answer, err := newTestAnthropicChatGenerator(server).GenerateStream(context.Background(), rag.GenerateInput{Question: "介绍1到9型号的分别解释"}, nil)
+	if err != nil {
+		t.Fatalf("GenerateStream returned error: %v", err)
+	}
+	if answer != "完整回答" {
+		t.Fatalf("answer = %q", answer)
+	}
+	if requestBody["max_tokens"] != float64(1200) {
+		t.Fatalf("stream max_tokens = %#v, want 1200", requestBody["max_tokens"])
+	}
+}
+
 func TestAnthropicChatGenerateRejectsMissingKeyAndInvalidResponses(t *testing.T) {
 	t.Run("missing key", func(t *testing.T) {
 		generator := newAnthropicChatGeneratorWithClient(ChatGeneratorConfig{})
@@ -188,8 +238,8 @@ func TestAnthropicChatGenerateStreamDeliversFirstDeltaBeforeMessageStop(t *testi
 		if body["stream"] != true {
 			t.Errorf("stream = %#v, want true", body["stream"])
 		}
-		if body["max_tokens"] != float64(360) {
-			t.Errorf("max_tokens = %#v, want 360", body["max_tokens"])
+		if body["max_tokens"] != float64(220) {
+			t.Errorf("max_tokens = %#v, want 220", body["max_tokens"])
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		writeAnthropicEvent(w, "message_start", `{"type":"message_start","message":{"type":"message"}}`)

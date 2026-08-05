@@ -95,7 +95,7 @@ func (g *AnthropicChatGenerator) Generate(ctx context.Context, input rag.Generat
 		Model:       g.model,
 		System:      resolveCompatibleChatSystemPrompt(g.systemPrompt),
 		Messages:    g.chatMessages(input),
-		MaxTokens:   anthropicChatMaxTokens,
+		MaxTokens:   chatTokenBudgetForTier(input.Question, input.Tier),
 		Temperature: 0.55,
 	})
 }
@@ -108,7 +108,7 @@ func (g *AnthropicChatGenerator) GenerateStream(ctx context.Context, input rag.G
 		Model:       g.model,
 		System:      resolveCompatibleChatSystemPrompt(g.systemPrompt),
 		Messages:    g.chatMessages(input),
-		MaxTokens:   anthropicChatMaxTokens,
+		MaxTokens:   chatTokenBudgetForTier(input.Question, input.Tier),
 		Temperature: 0.55,
 		Stream:      true,
 	})

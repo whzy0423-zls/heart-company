@@ -528,6 +528,7 @@ func TestChatTokenBudget(t *testing.T) {
 		{question: "请详细展开分析原因和步骤", want: 420},
 		{question: "请完整分析一下", want: 420},
 		{question: "1-9型号的孩子我们如何应用", want: 1200},
+		{question: "介绍1到9型号的分别解释", want: 1200},
 	}
 
 	for _, tt := range tests {
