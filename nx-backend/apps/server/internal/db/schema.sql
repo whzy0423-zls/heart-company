@@ -2378,6 +2378,8 @@ CREATE INDEX IF NOT EXISTS idx_mind_quotes_group ON mind_quotes(group_id, sort A
 CREATE TABLE IF NOT EXISTS app_users (
   id              BIGSERIAL PRIMARY KEY,
   phone           TEXT NOT NULL UNIQUE,
+  account         TEXT,
+  password_hash   TEXT,
   nickname        TEXT NOT NULL DEFAULT '',
   avatar          TEXT NOT NULL DEFAULT '',
   status          TEXT NOT NULL DEFAULT 'active',
@@ -2389,6 +2391,13 @@ CREATE TABLE IF NOT EXISTS app_users (
   create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS account TEXT;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS password_hash TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_account_unique
+  ON app_users (lower(account))
+  WHERE account IS NOT NULL AND btrim(account) <> '';
 
 CREATE TABLE IF NOT EXISTS app_user_preferences (
   id            BIGSERIAL PRIMARY KEY,
