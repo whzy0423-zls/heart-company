@@ -15,6 +15,27 @@ func TestAccountValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("preserves non ASCII account input", func(t *testing.T) {
+		const raw = "\u212aabc"
+		if got := NormalizeAccount(raw); got != raw {
+			t.Fatalf("NormalizeAccount(%q) = %q, want unchanged input", raw, got)
+		}
+	})
+
+	t.Run("lowercases ASCII bytes only", func(t *testing.T) {
+		const raw = "  \uff2bABC  "
+		if got, want := NormalizeAccount(raw), "\uff2babc"; got != want {
+			t.Fatalf("NormalizeAccount(%q) = %q, want %q", raw, got, want)
+		}
+	})
+
+	t.Run("normalized confusable remains invalid", func(t *testing.T) {
+		const raw = "\u212aabc"
+		if err := ValidateAccount(NormalizeAccount(raw)); !errors.Is(err, ErrInvalidAccount) {
+			t.Fatalf("ValidateAccount(NormalizeAccount(%q)) error = %v, want ErrInvalidAccount", raw, err)
+		}
+	})
+
 	tests := []struct {
 		name    string
 		raw     string

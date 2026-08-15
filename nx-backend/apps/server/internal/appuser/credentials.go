@@ -21,7 +21,13 @@ var (
 var accountPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{3,31}$`)
 
 func NormalizeAccount(raw string) string {
-	return strings.ToLower(strings.TrimSpace(raw))
+	normalized := []byte(strings.TrimSpace(raw))
+	for i, char := range normalized {
+		if char >= 'A' && char <= 'Z' {
+			normalized[i] = char + ('a' - 'A')
+		}
+	}
+	return string(normalized)
 }
 
 func ValidateAccount(raw string) error {
