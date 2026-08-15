@@ -169,6 +169,8 @@ type Server struct {
 	smsIPLimiter                   *strRateLimiter
 	smsVerifyPhoneLimiter          *strRateLimiter
 	smsVerifyIPLimiter             *strRateLimiter
+	appPasswordAccountLimiter      *strRateLimiter
+	appPasswordIPLimiter           *strRateLimiter
 	publicSignupIPLimiter          *strRateLimiter
 	publicAnalyticsIPLimiter       *strRateLimiter
 	publicGameIPLimiter            *strRateLimiter
@@ -397,6 +399,8 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.smsIPLimiter = newStrRateLimiter(10, time.Minute)
 	s.smsVerifyPhoneLimiter = newStrRateLimiter(5, time.Minute)
 	s.smsVerifyIPLimiter = newStrRateLimiter(20, time.Minute)
+	s.appPasswordAccountLimiter = newStrRateLimiter(5, time.Minute)
+	s.appPasswordIPLimiter = newStrRateLimiter(30, time.Minute)
 	s.publicSignupIPLimiter = newStrRateLimiter(5, time.Minute)
 	s.publicAnalyticsIPLimiter = newStrRateLimiter(120, time.Minute)
 	s.publicGameIPLimiter = newStrRateLimiter(30, time.Minute)
@@ -710,6 +714,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/auth/sms/send", s.method(http.MethodPost, s.appSendSMS))
 	s.mux.HandleFunc("/api/app/auth/verify-sms", s.method(http.MethodPost, s.appVerifySMS))
 	s.mux.HandleFunc("/api/app/auth/sms/login", s.method(http.MethodPost, s.appVerifySMS))
+	s.mux.HandleFunc("/api/app/auth/register", s.method(http.MethodPost, s.appRegisterWithPassword))
+	s.mux.HandleFunc("/api/app/auth/login", s.method(http.MethodPost, s.appLoginWithPassword))
 	s.mux.HandleFunc("/api/app/auth/refresh", s.method(http.MethodPost, s.appRefreshToken))
 	s.mux.HandleFunc("/api/app/auth/logout", s.method(http.MethodPost, s.appLogout))
 	s.mux.HandleFunc("/api/app/user/info", s.method(http.MethodGet, s.requireAppAuth(s.appUserInfo)))

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -258,6 +259,20 @@ func TestAppAuthCompatibilityAliasRoutes(t *testing.T) {
 			want:   http.StatusBadRequest,
 		},
 		{
+			name:   "password registration route reaches handler",
+			method: http.MethodPost,
+			path:   "/api/app/auth/register",
+			body:   `{`,
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "password login route reaches handler",
+			method: http.MethodPost,
+			path:   "/api/app/auth/login",
+			body:   `{`,
+			want:   http.StatusBadRequest,
+		},
+		{
 			name:   "me alias reaches app auth guard",
 			method: http.MethodGet,
 			path:   "/api/app/me",
@@ -277,6 +292,209 @@ func TestAppAuthCompatibilityAliasRoutes(t *testing.T) {
 				t.Fatalf("expected status %d, got %d body=%s", tt.want, rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestAppPasswordRegistrationValidationRejectsBeforeStore(t *testing.T) {
+	server := newRouteOnlyServer()
+	longPassword := strings.Repeat("a", 73)
+
+	tests := []struct {
+		name        string
+		payload     string
+		wantMessage string
+	}{
+		{
+			name:        "invalid account",
+			payload:     `{"nickname":"心之力用户","account":"1bad","password":"secret1","phone":"13800000000","code":"123456"}`,
+			wantMessage: "用户名格式不正确",
+		},
+		{
+			name:        "password shorter than six bytes",
+			payload:     `{"nickname":"心之力用户","account":"xinuser","password":"12345","phone":"13800000000","code":"123456"}`,
+			wantMessage: "密码格式不正确",
+		},
+		{
+			name:        "password longer than seventy two bytes",
+			payload:     `{"nickname":"心之力用户","account":"xinuser","password":"` + longPassword + `","phone":"13800000000","code":"123456"}`,
+			wantMessage: "密码格式不正确",
+		},
+		{
+			name:        "invalid nickname",
+			payload:     `{"nickname":"   ","account":"xinuser","password":"secret1","phone":"13800000000","code":"123456"}`,
+			wantMessage: "昵称格式不正确",
+		},
+		{
+			name:        "invalid mainland phone",
+			payload:     `{"nickname":"心之力用户","account":"xinuser","password":"secret1","phone":"12800000000","code":"123456"}`,
+			wantMessage: "手机号格式不正确",
+		},
+		{
+			name:        "code is not six digits",
+			payload:     `{"nickname":"心之力用户","account":"xinuser","password":"secret1","phone":"13800000000","code":"12345"}`,
+			wantMessage: "验证码格式不正确",
+		},
+		{
+			name:        "code contains non digits",
+			payload:     `{"nickname":"心之力用户","account":"xinuser","password":"secret1","phone":"13800000000","code":"12345a"}`,
+			wantMessage: "验证码格式不正确",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/app/auth/register", strings.NewReader(tt.payload))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			server.mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tt.wantMessage) {
+				t.Fatalf("expected message %q, got body=%s", tt.wantMessage, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestAppPasswordLoginValidationRejectsBeforeStore(t *testing.T) {
+	server := newRouteOnlyServer()
+
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name:    "empty identifier",
+			payload: `{"account":"   ","password":"secret1"}`,
+		},
+		{
+			name:    "empty password",
+			payload: `{"account":"xinuser","password":""}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/app/auth/login", strings.NewReader(tt.payload))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			server.mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "请输入账号和密码") {
+				t.Fatalf("expected missing credentials message, got body=%s", rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestAppPasswordRegistrationErrorResponses(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantStatus  int
+		wantMessage string
+	}{
+		{name: "invalid account", err: appuser.ErrInvalidAccount, wantStatus: http.StatusBadRequest, wantMessage: "用户名格式不正确"},
+		{name: "invalid password", err: appuser.ErrInvalidPassword, wantStatus: http.StatusBadRequest, wantMessage: "密码格式不正确"},
+		{name: "invalid nickname", err: appuser.ErrInvalidNickname, wantStatus: http.StatusBadRequest, wantMessage: "昵称格式不正确"},
+		{name: "invalid sms code", err: appuser.ErrInvalidSMSCode, wantStatus: http.StatusUnauthorized, wantMessage: "验证码错误或已过期"},
+		{name: "disabled user", err: appuser.ErrUserDisabled, wantStatus: http.StatusForbidden, wantMessage: "账号已被禁用"},
+		{name: "account taken", err: appuser.ErrAccountTaken, wantStatus: http.StatusConflict, wantMessage: "用户名已存在"},
+		{name: "phone registered", err: appuser.ErrPhoneAlreadyRegistered, wantStatus: http.StatusConflict, wantMessage: "该手机号已注册"},
+		{name: "wrapped account error", err: fmt.Errorf("register: %w", appuser.ErrAccountTaken), wantStatus: http.StatusConflict, wantMessage: "用户名已存在"},
+		{name: "internal error", err: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError, wantMessage: "注册失败"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, message := appPasswordRegistrationErrorResponse(tt.err)
+			if status != tt.wantStatus || message != tt.wantMessage {
+				t.Fatalf("expected (%d, %q), got (%d, %q)", tt.wantStatus, tt.wantMessage, status, message)
+			}
+		})
+	}
+}
+
+func TestAppPasswordLoginErrorResponses(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantStatus  int
+		wantMessage string
+	}{
+		{name: "invalid credentials", err: appuser.ErrInvalidCredentials, wantStatus: http.StatusUnauthorized, wantMessage: "账号或密码错误"},
+		{name: "wrapped invalid credentials", err: fmt.Errorf("login: %w", appuser.ErrInvalidCredentials), wantStatus: http.StatusUnauthorized, wantMessage: "账号或密码错误"},
+		{name: "disabled user", err: appuser.ErrUserDisabled, wantStatus: http.StatusForbidden, wantMessage: "账号已被禁用"},
+		{name: "internal error", err: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError, wantMessage: "登录失败"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, message := appPasswordLoginErrorResponse(tt.err)
+			if status != tt.wantStatus || message != tt.wantMessage {
+				t.Fatalf("expected (%d, %q), got (%d, %q)", tt.wantStatus, tt.wantMessage, status, message)
+			}
+		})
+	}
+}
+
+func TestAppPasswordLoginAttemptLimiterNormalizesKeysAndFailsOpenWhenNil(t *testing.T) {
+	now := time.Unix(200, 0)
+
+	if !(&Server{}).allowAppPasswordLoginAttempt(" XinUser ", " 127.0.0.1 ", now) {
+		t.Fatal("expected nil password login limiters to fail open")
+	}
+
+	accountLimited := &Server{
+		appPasswordAccountLimiter: newStrRateLimiter(1, time.Minute),
+		appPasswordIPLimiter:      newStrRateLimiter(10, time.Minute),
+	}
+	if !accountLimited.allowAppPasswordLoginAttempt(" XinUser ", "127.0.0.1", now) {
+		t.Fatal("expected first normalized account attempt to be allowed")
+	}
+	if accountLimited.allowAppPasswordLoginAttempt("xinuser", "127.0.0.2", now) {
+		t.Fatal("expected account limiter to use lowercase trimmed identifier")
+	}
+
+	ipLimited := &Server{
+		appPasswordAccountLimiter: newStrRateLimiter(10, time.Minute),
+		appPasswordIPLimiter:      newStrRateLimiter(1, time.Minute),
+	}
+	if !ipLimited.allowAppPasswordLoginAttempt("firstuser", " 127.0.0.1 ", now) {
+		t.Fatal("expected first normalized IP attempt to be allowed")
+	}
+	if ipLimited.allowAppPasswordLoginAttempt("seconduser", "127.0.0.1", now) {
+		t.Fatal("expected IP limiter to use trimmed IP")
+	}
+}
+
+func TestAppPasswordLoginRouteAppliesLimiterBeforeStore(t *testing.T) {
+	now := time.Now()
+	accountLimiter := newStrRateLimiter(1, time.Minute)
+	if !accountLimiter.Allow("xinuser", now) {
+		t.Fatal("expected limiter setup attempt to be allowed")
+	}
+	server := &Server{
+		mux:                       http.NewServeMux(),
+		appPasswordAccountLimiter: accountLimiter,
+	}
+	server.routes()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/app/auth/login", strings.NewReader(`{"account":" XinUser ","password":"secret1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	server.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 before store access, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

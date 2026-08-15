@@ -125,7 +125,10 @@ func (s *Server) appVerifySMS(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusForbidden, "账号已被禁用")
 		return
 	}
+	s.writeAppSession(w, r, user, body.DeviceInfo)
+}
 
+func (s *Server) writeAppSession(w http.ResponseWriter, r *http.Request, user appuser.User, deviceInfo string) {
 	accessToken, err := s.issueAppAccessToken(user)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "token error")
@@ -138,7 +141,7 @@ func (s *Server) appVerifySMS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	refreshHash := appuser.HashToken(refreshRaw)
-	if err := s.appUsers.CreateRefreshToken(r.Context(), user.ID, refreshHash, body.DeviceInfo, time.Now().Add(appRefreshTokenDuration)); err != nil {
+	if err := s.appUsers.CreateRefreshToken(r.Context(), user.ID, refreshHash, deviceInfo, time.Now().Add(appRefreshTokenDuration)); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "token error")
 		return
 	}
