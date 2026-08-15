@@ -121,18 +121,22 @@ func (s *Store) RegisterWithPassword(ctx context.Context, in RegisterWithPasswor
 		existingUserID       int64
 		existingAccount      sql.NullString
 		existingPasswordHash sql.NullString
+		existingStatus       string
 	)
 	existingUser := true
 	err = tx.QueryRowContext(ctx, `
-		SELECT id, account, password_hash
+		SELECT id, account, password_hash, status
 		FROM app_users
 		WHERE phone=$1
 		FOR UPDATE
-	`, in.Phone).Scan(&existingUserID, &existingAccount, &existingPasswordHash)
+	`, in.Phone).Scan(&existingUserID, &existingAccount, &existingPasswordHash, &existingStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		existingUser = false
 	} else if err != nil {
 		return User{}, fmt.Errorf("lock appuser phone: %w", err)
+	}
+	if existingUser && existingStatus != "active" {
+		return User{}, ErrUserDisabled
 	}
 	if existingUser && (strings.TrimSpace(existingAccount.String) != "" || strings.TrimSpace(existingPasswordHash.String) != "") {
 		return User{}, ErrPhoneAlreadyRegistered

@@ -223,6 +223,52 @@ func TestRegisterWithPasswordBindsLegacySMSUserInPlace(t *testing.T) {
 	}
 }
 
+func TestRegisterWithPasswordRejectsDisabledLegacySMSUser(t *testing.T) {
+	database := openRegisterWithPasswordFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	store := NewStore(database)
+
+	const (
+		phone    = "13800000103"
+		codeHash = "disabled-legacy-code-hash"
+	)
+	legacy, err := store.FindOrCreateByPhone(ctx, phone)
+	if err != nil {
+		t.Fatalf("FindOrCreateByPhone() error = %v", err)
+	}
+	if _, err := database.ExecContext(ctx, `UPDATE app_users SET status='disabled' WHERE id=$1`, legacy.ID); err != nil {
+		t.Fatalf("disable legacy SMS user: %v", err)
+	}
+	codeID := insertRegisterSMSCode(t, database, phone, codeHash, time.Now().Add(time.Hour), false, time.Now())
+
+	_, err = store.RegisterWithPassword(ctx, RegisterWithPasswordInput{
+		Account:     "disabled_legacy",
+		Password:    "secret123",
+		Nickname:    "Disabled User",
+		Phone:       phone,
+		SMSCodeHash: codeHash,
+	})
+	if !errors.Is(err, ErrUserDisabled) {
+		t.Fatalf("RegisterWithPassword() error = %v, want ErrUserDisabled", err)
+	}
+
+	var account, passwordHash sql.NullString
+	if err := database.QueryRowContext(ctx, `
+		SELECT account, password_hash
+		FROM app_users
+		WHERE id=$1
+	`, legacy.ID).Scan(&account, &passwordHash); err != nil {
+		t.Fatalf("read disabled legacy credentials: %v", err)
+	}
+	if account.Valid || passwordHash.Valid {
+		t.Fatalf("disabled legacy credentials changed: account=%v password_hash=%v", account, passwordHash)
+	}
+	if registerSMSCodeUsed(t, database, codeID) {
+		t.Fatal("disabled legacy user consumed the SMS code")
+	}
+}
+
 func TestRegisterWithPasswordRejectsCredentialedPhone(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -444,6 +490,20 @@ func TestRegisterWithPasswordConcurrentSMSCodeUseHasOneWinner(t *testing.T) {
 		codeHash = "concurrent-code-hash"
 	)
 	codeID := insertRegisterSMSCode(t, database, phone, codeHash, time.Now().Add(time.Hour), false, time.Now())
+	blocker, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin SMS code blocker: %v", err)
+	}
+	defer func() { _ = blocker.Rollback() }()
+	var lockedCodeID int64
+	if err := blocker.QueryRowContext(ctx, `
+		SELECT id
+		FROM app_sms_codes
+		WHERE id=$1
+		FOR UPDATE
+	`, codeID).Scan(&lockedCodeID); err != nil {
+		t.Fatalf("lock SMS code blocker row: %v", err)
+	}
 
 	type result struct {
 		user User
@@ -468,6 +528,23 @@ func TestRegisterWithPasswordConcurrentSMSCodeUseHasOneWinner(t *testing.T) {
 		}(account)
 	}
 	close(start)
+	if err := waitForBlockedSMSCodeRegistrations(ctx, database, 2, 3*time.Second); err != nil {
+		_ = blocker.Rollback()
+		group.Wait()
+		t.Fatal(err)
+	}
+	select {
+	case got := <-results:
+		_ = blocker.Rollback()
+		group.Wait()
+		t.Fatalf("registration returned while SMS code row was locked: user=%+v err=%v", got.user, got.err)
+	default:
+	}
+	if err := blocker.Commit(); err != nil {
+		_ = blocker.Rollback()
+		group.Wait()
+		t.Fatalf("release SMS code blocker: %v", err)
+	}
 	group.Wait()
 	close(results)
 
@@ -498,6 +575,113 @@ func TestRegisterWithPasswordConcurrentSMSCodeUseHasOneWinner(t *testing.T) {
 	}
 	if !registerSMSCodeUsed(t, database, codeID) {
 		t.Fatal("winning concurrent registration did not consume SMS code")
+	}
+}
+
+func TestRegisterWithPasswordConcurrentPhoneUseMapsUniqueConstraint(t *testing.T) {
+	database := openRegisterWithPasswordFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	const phone = "13800000141"
+	type attempt struct {
+		account  string
+		codeHash string
+		codeID   int64
+	}
+	attempts := []attempt{
+		{account: "phone_race_1", codeHash: "phone-race-code-1"},
+		{account: "phone_race_2", codeHash: "phone-race-code-2"},
+	}
+	for i := range attempts {
+		attempts[i].codeID = insertRegisterSMSCode(t, database, phone, attempts[i].codeHash, time.Now().Add(time.Hour), false, time.Now())
+	}
+
+	blocker, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin app_users blocker: %v", err)
+	}
+	defer func() { _ = blocker.Rollback() }()
+	if _, err := blocker.ExecContext(ctx, `LOCK TABLE app_users IN SHARE MODE`); err != nil {
+		t.Fatalf("lock app_users for concurrent insert barrier: %v", err)
+	}
+
+	type result struct {
+		codeID int64
+		user   User
+		err    error
+	}
+	start := make(chan struct{})
+	results := make(chan result, len(attempts))
+	var group sync.WaitGroup
+	for _, candidate := range attempts {
+		group.Add(1)
+		go func(attempt attempt) {
+			defer group.Done()
+			<-start
+			user, err := NewStore(database).RegisterWithPassword(ctx, RegisterWithPasswordInput{
+				Account:     attempt.account,
+				Password:    "secret123",
+				Nickname:    attempt.account,
+				Phone:       phone,
+				SMSCodeHash: attempt.codeHash,
+			})
+			results <- result{codeID: attempt.codeID, user: user, err: err}
+		}(candidate)
+	}
+	close(start)
+	if err := waitForBlockedAppUserInserts(ctx, database, len(attempts), 3*time.Second); err != nil {
+		_ = blocker.Rollback()
+		group.Wait()
+		t.Fatal(err)
+	}
+	select {
+	case got := <-results:
+		_ = blocker.Rollback()
+		group.Wait()
+		t.Fatalf("registration returned while app_users inserts were locked: user=%+v err=%v", got.user, got.err)
+	default:
+	}
+	if err := blocker.Commit(); err != nil {
+		_ = blocker.Rollback()
+		group.Wait()
+		t.Fatalf("release app_users blocker: %v", err)
+	}
+	group.Wait()
+	close(results)
+
+	successes := 0
+	phoneConflicts := 0
+	var successfulCodeID, failedCodeID int64
+	for got := range results {
+		switch {
+		case got.err == nil:
+			successes++
+			successfulCodeID = got.codeID
+			if got.user.ID == 0 || got.user.Phone != phone {
+				t.Fatalf("successful same-phone result = %+v", got.user)
+			}
+		case errors.Is(got.err, ErrPhoneAlreadyRegistered):
+			phoneConflicts++
+			failedCodeID = got.codeID
+		default:
+			t.Fatalf("unexpected same-phone registration error: %v", got.err)
+		}
+	}
+	if successes != 1 || phoneConflicts != 1 {
+		t.Fatalf("same-phone results: successes=%d phone_conflicts=%d, want 1 each", successes, phoneConflicts)
+	}
+	if !registerSMSCodeUsed(t, database, successfulCodeID) {
+		t.Fatal("successful same-phone registration did not consume its SMS code")
+	}
+	if registerSMSCodeUsed(t, database, failedCodeID) {
+		t.Fatal("phone unique-constraint failure consumed its SMS code")
+	}
+	var users int
+	if err := database.QueryRowContext(ctx, `SELECT count(*) FROM app_users WHERE phone=$1`, phone).Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if users != 1 {
+		t.Fatalf("same-phone registrations created %d users, want 1", users)
 	}
 }
 
@@ -555,6 +739,53 @@ func registerSMSCodeUsed(t *testing.T, database *sql.DB, id int64) bool {
 		t.Fatalf("read SMS code %d: %v", id, err)
 	}
 	return used
+}
+
+func waitForBlockedSMSCodeRegistrations(ctx context.Context, database *sql.DB, want int, timeout time.Duration) error {
+	return waitForPostgresLockCount(ctx, database, want, timeout, `
+		SELECT count(DISTINCT activity.pid)
+		FROM pg_stat_activity activity
+		JOIN pg_locks relation_lock ON relation_lock.pid=activity.pid
+		WHERE activity.wait_event_type='Lock'
+		  AND relation_lock.locktype='relation'
+		  AND relation_lock.relation=to_regclass('app_sms_codes')
+		  AND relation_lock.mode='RowShareLock'
+		  AND relation_lock.granted
+	`)
+}
+
+func waitForBlockedAppUserInserts(ctx context.Context, database *sql.DB, want int, timeout time.Duration) error {
+	return waitForPostgresLockCount(ctx, database, want, timeout, `
+		SELECT count(*)
+		FROM pg_locks
+		WHERE locktype='relation'
+		  AND relation=to_regclass('app_users')
+		  AND mode='RowExclusiveLock'
+		  AND granted=false
+	`)
+}
+
+func waitForPostgresLockCount(ctx context.Context, database *sql.DB, want int, timeout time.Duration, query string) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	lastCount := 0
+	for {
+		if err := database.QueryRowContext(ctx, query).Scan(&lastCount); err != nil {
+			return fmt.Errorf("inspect PostgreSQL lock waiters: %w", err)
+		}
+		if lastCount >= want {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("PostgreSQL lock waiters=%d, want at least %d", lastCount, want)
+		case <-ticker.C:
+		}
+	}
 }
 
 const registerWithPasswordFixtureSchema = `
