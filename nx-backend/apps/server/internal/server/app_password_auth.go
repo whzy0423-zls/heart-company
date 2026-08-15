@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -14,7 +15,6 @@ import (
 const appPasswordAuthBodyLimit = 8 * 1024
 
 func (s *Server) appRegisterWithPassword(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, appPasswordAuthBodyLimit)
 	var body struct {
 		Nickname   string `json:"nickname"`
 		Account    string `json:"account"`
@@ -23,7 +23,7 @@ func (s *Server) appRegisterWithPassword(w http.ResponseWriter, r *http.Request)
 		Code       string `json:"code"`
 		DeviceInfo string `json:"deviceInfo"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeAppPasswordJSON(w, r, &body); err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -81,13 +81,12 @@ func (s *Server) appRegisterWithPassword(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) appLoginWithPassword(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, appPasswordAuthBodyLimit)
 	var body struct {
 		Account    string `json:"account"`
 		Password   string `json:"password"`
 		DeviceInfo string `json:"deviceInfo"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeAppPasswordJSON(w, r, &body); err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -111,6 +110,22 @@ func (s *Server) appLoginWithPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeAppSession(w, r, user, deviceInfo)
+}
+
+func decodeAppPasswordJSON(w http.ResponseWriter, r *http.Request, destination any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, appPasswordAuthBodyLimit)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("trailing JSON value")
+		}
+		return err
+	}
+	return nil
 }
 
 func appPasswordRegistrationErrorResponse(err error) (int, string) {

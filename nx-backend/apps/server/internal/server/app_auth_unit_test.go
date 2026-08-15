@@ -1,12 +1,15 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -115,6 +118,50 @@ func TestAppSendSMSDoesNotUseDevCodeInProduction(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), "devCode") {
 		t.Fatalf("expected production response not to contain devCode, got %s", response.Body.String())
+	}
+}
+
+func TestAppSendSMSDevelopmentLogDoesNotContainDevCode(t *testing.T) {
+	s := newAppAuthPhoneValidationTestServer(t)
+	phone := "13912345678"
+
+	var logOutput bytes.Buffer
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	previousPrefix := log.Prefix()
+	log.SetOutput(&logOutput)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	defer func() {
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+		log.SetPrefix(previousPrefix)
+	}()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/app/auth/send-sms", strings.NewReader(`{"phone":"`+phone+`"}`))
+	response := httptest.NewRecorder()
+
+	s.appSendSMS(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Data struct {
+			DevCode string `json:"devCode"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Data.DevCode == "" {
+		t.Fatal("expected devCode response for local development")
+	}
+	if !strings.Contains(logOutput.String(), "[SMS-DEV]") {
+		t.Fatalf("expected development SMS log marker, got %q", logOutput.String())
+	}
+	if strings.Contains(logOutput.String(), payload.Data.DevCode) {
+		t.Fatalf("expected development log not to contain devCode, got %q", logOutput.String())
 	}
 }
 
@@ -357,6 +404,104 @@ func TestAppPasswordRegistrationValidationRejectsBeforeStore(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAppPasswordHandlersRejectTrailingJSON(t *testing.T) {
+	requests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "registration",
+			path: "/api/app/auth/register",
+			body: `{"nickname":"心之力用户","account":"xinuser","password":"secret1","phone":"13800000000","code":"123456"}`,
+		},
+		{
+			name: "login",
+			path: "/api/app/auth/login",
+			body: `{"account":"xinuser","password":"secret1"}`,
+		},
+	}
+	suffixes := []struct {
+		name  string
+		value string
+	}{
+		{name: "garbage", value: "garbage"},
+		{name: "second json object", value: ` {"extra":true}`},
+		{name: "body limit exceeded by trailing whitespace", value: strings.Repeat(" ", appPasswordAuthBodyLimit+1)},
+	}
+
+	for _, request := range requests {
+		for _, suffix := range suffixes {
+			t.Run(request.name+"/"+suffix.name, func(t *testing.T) {
+				server := newAppPasswordTrailingJSONTestServer(t)
+				req := httptest.NewRequest(http.MethodPost, request.path, strings.NewReader(request.body+suffix.value))
+				req.Header.Set("Content-Type", "application/json")
+				rec := httptest.NewRecorder()
+
+				server.mux.ServeHTTP(rec, req)
+
+				if rec.Code != http.StatusBadRequest {
+					t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestAppPasswordHandlersAllowTrailingWhitespace(t *testing.T) {
+	requests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "registration continues to sms limiter",
+			path: "/api/app/auth/register",
+			body: `{"nickname":"心之力用户","account":"xinuser","password":"secret1","phone":"13800000000","code":"123456"}`,
+		},
+		{
+			name: "login continues to password limiter",
+			path: "/api/app/auth/login",
+			body: `{"account":"xinuser","password":"secret1"}`,
+		},
+	}
+
+	for _, request := range requests {
+		t.Run(request.name, func(t *testing.T) {
+			server := newAppPasswordTrailingJSONTestServer(t)
+			req := httptest.NewRequest(http.MethodPost, request.path, strings.NewReader(request.body+" \n\t"))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			server.mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("expected trailing whitespace to reach limiter with 429, got %d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func newAppPasswordTrailingJSONTestServer(t *testing.T) *Server {
+	t.Helper()
+	now := time.Now()
+	smsLimiter := newStrRateLimiter(1, time.Minute)
+	if !smsLimiter.Allow("13800000000", now) {
+		t.Fatal("expected SMS limiter setup attempt to be allowed")
+	}
+	accountLimiter := newStrRateLimiter(1, time.Minute)
+	if !accountLimiter.Allow("xinuser", now) {
+		t.Fatal("expected password limiter setup attempt to be allowed")
+	}
+	server := &Server{
+		mux:                       http.NewServeMux(),
+		smsVerifyPhoneLimiter:     smsLimiter,
+		appPasswordAccountLimiter: accountLimiter,
+	}
+	server.routes()
+	return server
 }
 
 func TestAppPasswordLoginValidationRejectsBeforeStore(t *testing.T) {

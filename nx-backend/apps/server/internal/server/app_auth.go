@@ -69,7 +69,7 @@ func (s *Server) appSendSMS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.env.SMS.Provider == "" {
-		log.Printf("[SMS-DEV] phone=%s code=%s", phone, code)
+		log.Print("[SMS-DEV] local response issued")
 		httpx.OK(w, map[string]any{"devCode": code})
 		return
 	}
