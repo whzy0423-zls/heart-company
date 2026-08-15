@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"mime/multipart"
 	"net/http"
@@ -15,9 +17,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/db"
@@ -264,6 +268,67 @@ func TestAppPrivacyRoutesRequireAuth(t *testing.T) {
 		res := performAppAPI(s.mux, tt.method, tt.path, "", nil)
 		if res.Code != http.StatusUnauthorized {
 			t.Fatalf("%s %s expected 401, got %d body=%s", tt.method, tt.path, res.Code, res.Body.String())
+		}
+	}
+}
+
+func TestPrivacyExportIncludesAccountWithoutPasswordHash(t *testing.T) {
+	var user appuser.User
+	if err := json.Unmarshal([]byte(`{
+		"id": 42,
+		"phone": "13800000021",
+		"account": "privacy_user",
+		"password_hash": "secret-hash",
+		"passwordHash": "secret-hash"
+	}`), &user); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(appPrivacyExportResponse{User: user})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var export struct {
+		User map[string]any `json:"user"`
+	}
+	if err := json.Unmarshal(payload, &export); err != nil {
+		t.Fatal(err)
+	}
+	if export.User["account"] != "privacy_user" {
+		t.Fatalf("privacy export account = %v, want privacy_user; payload=%s", export.User["account"], payload)
+	}
+	for _, key := range []string{"password_hash", "passwordHash"} {
+		if _, ok := export.User[key]; ok {
+			t.Fatalf("privacy export exposed %q: %s", key, payload)
+		}
+	}
+}
+
+func TestPrivacyDeleteAccountClearsCredentials(t *testing.T) {
+	recorder := &appPrivacyDeleteRecorder{}
+	database := openAppPrivacyDeleteTestDB(t, recorder)
+	s := &Server{db: database}
+	req := httptest.NewRequest(http.MethodDelete, "/api/app/privacy/account", nil)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 42}))
+	res := httptest.NewRecorder()
+
+	s.appPrivacyDeleteAccount(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected account delete 200, got %d body=%s", res.Code, res.Body.String())
+	}
+	var anonymizeQuery string
+	for _, query := range recorder.execQueries {
+		if strings.Contains(query, "UPDATE app_users") {
+			anonymizeQuery = query
+			break
+		}
+	}
+	if anonymizeQuery == "" {
+		t.Fatalf("account deletion did not execute app_users anonymization: %#v", recorder.execQueries)
+	}
+	for _, assignment := range []string{"account = NULL", "password_hash = NULL"} {
+		if !strings.Contains(anonymizeQuery, assignment) {
+			t.Fatalf("account anonymization missing %q in same UPDATE: %s", assignment, anonymizeQuery)
 		}
 	}
 }
@@ -719,3 +784,78 @@ func countAppAPIRows(t *testing.T, database *sql.DB, query string, args ...any) 
 	}
 	return count
 }
+
+var appPrivacyDeleteDriverSeq atomic.Int64
+
+type appPrivacyDeleteRecorder struct {
+	execQueries []string
+}
+
+func openAppPrivacyDeleteTestDB(t *testing.T, recorder *appPrivacyDeleteRecorder) *sql.DB {
+	t.Helper()
+	driverName := fmt.Sprintf("app_privacy_delete_test_%d", appPrivacyDeleteDriverSeq.Add(1))
+	sql.Register(driverName, appPrivacyDeleteDriver{recorder: recorder})
+	database, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	return database
+}
+
+type appPrivacyDeleteDriver struct {
+	recorder *appPrivacyDeleteRecorder
+}
+
+func (d appPrivacyDeleteDriver) Open(string) (driver.Conn, error) {
+	return &appPrivacyDeleteConn{recorder: d.recorder}, nil
+}
+
+type appPrivacyDeleteConn struct {
+	recorder *appPrivacyDeleteRecorder
+}
+
+func (*appPrivacyDeleteConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
+func (*appPrivacyDeleteConn) Close() error                        { return nil }
+func (*appPrivacyDeleteConn) Begin() (driver.Tx, error)           { return appPrivacyDeleteTx{}, nil }
+
+func (*appPrivacyDeleteConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return appPrivacyDeleteTx{}, nil
+}
+
+func (*appPrivacyDeleteConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	if !strings.Contains(query, "SELECT id FROM app_users") {
+		return nil, fmt.Errorf("unexpected privacy delete query: %s", query)
+	}
+	return &appPrivacyDeleteRows{}, nil
+}
+
+func (c *appPrivacyDeleteConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+	c.recorder.execQueries = append(c.recorder.execQueries, query)
+	return driver.RowsAffected(1), nil
+}
+
+type appPrivacyDeleteTx struct{}
+
+func (appPrivacyDeleteTx) Commit() error   { return nil }
+func (appPrivacyDeleteTx) Rollback() error { return nil }
+
+type appPrivacyDeleteRows struct {
+	done bool
+}
+
+func (*appPrivacyDeleteRows) Columns() []string { return []string{"id"} }
+func (*appPrivacyDeleteRows) Close() error      { return nil }
+
+func (r *appPrivacyDeleteRows) Next(dest []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+	dest[0] = int64(42)
+	r.done = true
+	return nil
+}
+
+var _ driver.ConnBeginTx = (*appPrivacyDeleteConn)(nil)
+var _ driver.ExecerContext = (*appPrivacyDeleteConn)(nil)
+var _ driver.QueryerContext = (*appPrivacyDeleteConn)(nil)

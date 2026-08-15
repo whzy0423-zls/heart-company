@@ -183,6 +183,8 @@ func (s *Server) appPrivacyDeleteAccount(w http.ResponseWriter, r *http.Request)
 	res, err := tx.ExecContext(r.Context(),
 		`UPDATE app_users
 		    SET phone = 'deleted-' || id::text || '-' || floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint::text,
+		        account = NULL,
+		        password_hash = NULL,
 		        nickname = '',
 		        avatar = '',
 		        status = 'disabled',
