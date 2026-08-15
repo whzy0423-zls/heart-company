@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,147 @@ import (
 	"testing"
 	"time"
 )
+
+func TestAccountFieldJSONAndLegacyNullScan(t *testing.T) {
+	t.Run("public JSON includes account without password hash", func(t *testing.T) {
+		var user User
+		if err := json.Unmarshal([]byte(`{
+			"id": 42,
+			"phone": "13800000021",
+			"account": "legacy_user",
+			"password_hash": "secret-hash",
+			"passwordHash": "secret-hash"
+		}`), &user); err != nil {
+			t.Fatal(err)
+		}
+		payload, err := json.Marshal(user)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]any
+		if err := json.Unmarshal(payload, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if fields["account"] != "legacy_user" {
+			t.Fatalf("public user JSON account = %v, want legacy_user; payload=%s", fields["account"], payload)
+		}
+		for _, key := range []string{"password_hash", "passwordHash"} {
+			if _, ok := fields[key]; ok {
+				t.Fatalf("public user JSON exposed %q: %s", key, payload)
+			}
+		}
+	})
+
+	t.Run("legacy SQL NULL account scans as empty string", func(t *testing.T) {
+		var seenQuery string
+		database := openAppUserUpdateTestDB(t, func(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+			seenQuery = query
+			var account driver.Value
+			if strings.Contains(query, "COALESCE(account, '')") {
+				account = ""
+			}
+			return &appUserUpdateRows{
+				values: []driver.Value{
+					int64(42),
+					"13800000021",
+					account,
+					"测试客户",
+					"",
+					"active",
+					"free",
+					nil,
+					nil,
+					"app_sms",
+					nil,
+					time.Unix(100, 0),
+					time.Unix(200, 0),
+				},
+			}, nil
+		})
+
+		updated, err := NewStore(database).UpdateAdminFields(context.Background(), 42, UpdateAdminFieldsInput{Status: "active"})
+		if err != nil {
+			t.Fatalf("scan legacy account: %v", err)
+		}
+		if !strings.Contains(seenQuery, "COALESCE(account, '')") {
+			t.Fatalf("account projection must coalesce legacy NULL, query=%s", seenQuery)
+		}
+		payload, err := json.Marshal(updated)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes := string(payload); strings.Contains(bytes, `"account"`) {
+			t.Fatalf("empty legacy account should be omitted from JSON, got %s", bytes)
+		}
+	})
+}
+
+func TestPublicUserProjectionsCoalesceAccountInScanOrder(t *testing.T) {
+	const account = "projection_user"
+	assertProjection := func(t *testing.T, query string) {
+		t.Helper()
+		if !strings.Contains(query, "id, phone, COALESCE(account, ''), nickname") {
+			t.Fatalf("public account projection must coalesce after phone, query=%s", query)
+		}
+	}
+	assertUser := func(t *testing.T, user User, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if user.ID != 42 || user.Phone != "13800000021" || user.Account != account || user.Nickname != "测试客户" {
+			t.Fatalf("public user scan order mismatch: %+v", user)
+		}
+	}
+
+	t.Run("find or create by phone", func(t *testing.T) {
+		var seenQuery string
+		database := openAppUserUpdateTestDB(t, func(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+			seenQuery = query
+			return &appUserUpdateRows{values: appUserProjectionValues(account)}, nil
+		})
+
+		user, err := NewStore(database).FindOrCreateByPhone(context.Background(), "13800000021")
+		assertUser(t, user, err)
+		assertProjection(t, seenQuery)
+	})
+
+	t.Run("find by id", func(t *testing.T) {
+		var seenQuery string
+		database := openAppUserUpdateTestDB(t, func(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+			seenQuery = query
+			return &appUserUpdateRows{values: appUserProjectionValues(account)}, nil
+		})
+
+		user, err := NewStore(database).FindByID(context.Background(), 42)
+		assertUser(t, user, err)
+		assertProjection(t, seenQuery)
+	})
+
+	t.Run("list", func(t *testing.T) {
+		var seenQuery string
+		database := openAppUserUpdateTestDB(t, func(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+			if strings.Contains(query, "SELECT count(*)") {
+				return &appUserInsightsRows{
+					columns: []string{"count"},
+					values:  [][]driver.Value{{int64(1)}},
+				}, nil
+			}
+			seenQuery = query
+			return &appUserUpdateRows{values: appUserProjectionValues(account)}, nil
+		})
+
+		result, err := NewStore(database).List(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Total != 1 || len(result.Items) != 1 {
+			t.Fatalf("unexpected public user page: %+v", result)
+		}
+		assertUser(t, result.Items[0], nil)
+		assertProjection(t, seenQuery)
+	})
+}
 
 func TestUpdateAdminFieldsUpdatesStatusAndMemberLevel(t *testing.T) {
 	var seenQuery string
@@ -23,6 +165,7 @@ func TestUpdateAdminFieldsUpdatesStatusAndMemberLevel(t *testing.T) {
 			values: []driver.Value{
 				int64(42),
 				"13800000021",
+				"admin_user",
 				"测试客户",
 				"",
 				"disabled",
@@ -102,6 +245,7 @@ func TestUpdateAdminFieldsAllowsSingleFieldPatch(t *testing.T) {
 					values: []driver.Value{
 						int64(42),
 						"13800000021",
+						"admin_user",
 						"测试客户",
 						"",
 						tt.returnedStatus,
@@ -209,6 +353,10 @@ func (appUserUpdateConn) Begin() (driver.Tx, error) {
 	return nil, errors.New("transactions are not supported")
 }
 
+func (appUserUpdateConn) ExecContext(context.Context, string, []driver.NamedValue) (driver.Result, error) {
+	return driver.RowsAffected(1), nil
+}
+
 func (c appUserUpdateConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	return c.query(ctx, query, args)
 }
@@ -222,6 +370,7 @@ func (appUserUpdateRows) Columns() []string {
 	return []string{
 		"id",
 		"phone",
+		"account",
 		"nickname",
 		"avatar",
 		"status",
@@ -247,3 +396,23 @@ func (r *appUserUpdateRows) Next(dest []driver.Value) error {
 	r.done = true
 	return nil
 }
+
+func appUserProjectionValues(account string) []driver.Value {
+	return []driver.Value{
+		int64(42),
+		"13800000021",
+		account,
+		"测试客户",
+		"",
+		"active",
+		"free",
+		nil,
+		nil,
+		"app_sms",
+		nil,
+		time.Unix(100, 0),
+		time.Unix(200, 0),
+	}
+}
+
+var _ driver.ExecerContext = appUserUpdateConn{}

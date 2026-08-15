@@ -168,8 +168,8 @@ func (c *appQuizTestConn) QueryContext(_ context.Context, query string, _ []driv
 		return &appQuizTestRows{columns: []string{"id", "create_time"}}, nil
 	case strings.Contains(query, "FROM app_users WHERE id"):
 		return &appQuizTestRows{
-			columns: []string{"id", "phone", "nickname", "avatar", "status", "member_level", "member_started_at", "member_expires_at", "register_source", "last_login_at", "create_time", "update_time"},
-			values:  [][]driver.Value{{int64(7), "13800000000", "Test User", "", "active", "free", nil, nil, "sms", nil, now, now}},
+			columns: []string{"id", "phone", "account", "nickname", "avatar", "status", "member_level", "member_started_at", "member_expires_at", "register_source", "last_login_at", "create_time", "update_time"},
+			values:  [][]driver.Value{{int64(7), "13800000000", "", "Test User", "", "active", "free", nil, nil, "sms", nil, now, now}},
 		}, nil
 	case strings.Contains(query, "SELECT count(*) FROM app_user_cards"):
 		return &appQuizTestRows{
