@@ -8,6 +8,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// AuthFixtureAdvisoryLockKey serializes PostgreSQL tests that share auth fixtures and limiter scopes.
+const AuthFixtureAdvisoryLockKey int64 = 0x4e58504c494d4954
+
 // ValidateIsolatedPostgresDSN prevents integration tests from mutating a
 // database that is not explicitly named as a disposable test database.
 func ValidateIsolatedPostgresDSN(dsn string) error {

@@ -397,6 +397,26 @@ func TestAppPrivacyExportAndMemoryDeletionAreScopedToCurrentUser(t *testing.T) {
 	}
 }
 
+func TestAppPrivacyAccountDeletionServerHoldsAuthFixtureAdvisoryLock(t *testing.T) {
+	_, database := newAppAPITestServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	probeConn, err := database.Conn(ctx)
+	if err != nil {
+		t.Fatalf("get advisory lock probe connection: %v", err)
+	}
+	defer probeConn.Close()
+
+	var acquired bool
+	if err := probeConn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, testutil.AuthFixtureAdvisoryLockKey).Scan(&acquired); err != nil {
+		t.Fatalf("probe auth fixture advisory lock: %v", err)
+	}
+	if acquired {
+		_, _ = probeConn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, testutil.AuthFixtureAdvisoryLockKey)
+		t.Fatal("newAppAPITestServer did not hold the Task 7 auth fixture advisory lock")
+	}
+}
+
 func TestAppPrivacyAccountDeletionDisablesCurrentUserAndRevokesTokens(t *testing.T) {
 	handler, database := newAppAPITestServer(t)
 	const (
@@ -425,6 +445,19 @@ func TestAppPrivacyAccountDeletionDisablesCurrentUserAndRevokesTokens(t *testing
 	otherSession := appAPIPasswordRegister(t, handler, otherPhone, otherAccount, "Task 8 其他用户", otherDeviceInfo)
 	userID := currentSession.User.ID
 	otherUserID := otherSession.User.ID
+	var registrationTokenRevoked, rotatedTokenRevoked bool
+	if err := database.QueryRow(`SELECT revoked FROM app_refresh_tokens WHERE app_user_id=$1 AND token_hash=$2`, userID, appuser.HashToken(currentSession.RefreshToken)).Scan(&registrationTokenRevoked); err != nil {
+		t.Fatalf("read registration refresh token state before deletion: %v", err)
+	}
+	if err := database.QueryRow(`SELECT revoked FROM app_refresh_tokens WHERE app_user_id=$1 AND token_hash=$2`, userID, appuser.HashToken(currentRotatedSession.RefreshToken)).Scan(&rotatedTokenRevoked); err != nil {
+		t.Fatalf("read rotated refresh token state before deletion: %v", err)
+	}
+	if !registrationTokenRevoked || rotatedTokenRevoked {
+		t.Fatalf("unexpected refresh token state before deletion: registrationRevoked=%t rotatedRevoked=%t", registrationTokenRevoked, rotatedTokenRevoked)
+	}
+	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_refresh_tokens WHERE app_user_id=$1`, userID); got != 2 {
+		t.Fatalf("refresh token count before deletion=%d want=2", got)
+	}
 	cardID := insertAppAPICard(t, database, userID, "本人")
 	otherCardID := insertAppAPICard(t, database, otherUserID, "其他用户")
 	insertAppAPIMemory(t, database, userID, cardID, "current user memory")
@@ -483,7 +516,7 @@ func TestAppPrivacyAccountDeletionDisablesCurrentUserAndRevokesTokens(t *testing
 	`, userID).Scan(&totalRefreshTokens, &revokedRefreshTokens); err != nil {
 		t.Fatalf("read deleted user refresh token state: %v", err)
 	}
-	if totalRefreshTokens < 2 || revokedRefreshTokens != totalRefreshTokens {
+	if totalRefreshTokens != 2 || revokedRefreshTokens != 2 {
 		t.Fatalf("deleted user refresh tokens total=%d revoked=%d", totalRefreshTokens, revokedRefreshTokens)
 	}
 	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_memories WHERE app_user_id = $1`, userID); got != 0 {
@@ -660,7 +693,33 @@ func newAppAPITestServer(t *testing.T) (http.Handler, *sql.DB) {
 	if err != nil {
 		t.Fatalf("db open: %v", err)
 	}
-	t.Cleanup(func() { _ = database.Close() })
+	lockConn, err := database.Conn(ctx)
+	if err != nil {
+		_ = database.Close()
+		t.Fatalf("get auth fixture advisory lock connection: %v", err)
+	}
+	if _, err := lockConn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, testutil.AuthFixtureAdvisoryLockKey); err != nil {
+		_ = lockConn.Close()
+		_ = database.Close()
+		t.Fatalf("acquire auth fixture advisory lock: %v", err)
+	}
+	// Callers register fixture cleanup after this helper, so LIFO cleanup keeps the lock until fixtures are removed.
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		var unlocked bool
+		if err := lockConn.QueryRowContext(cleanupCtx, `SELECT pg_advisory_unlock($1)`, testutil.AuthFixtureAdvisoryLockKey).Scan(&unlocked); err != nil {
+			t.Errorf("release auth fixture advisory lock: %v", err)
+		} else if !unlocked {
+			t.Error("auth fixture advisory lock was not held during cleanup")
+		}
+		if err := lockConn.Close(); err != nil {
+			t.Errorf("close auth fixture advisory lock connection: %v", err)
+		}
+		if err := database.Close(); err != nil {
+			t.Errorf("close app API test database: %v", err)
+		}
+	})
 	env := config.Env{
 		AdminPassword: "123456",
 		AdminUsername: "admin",

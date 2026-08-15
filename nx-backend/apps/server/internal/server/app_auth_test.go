@@ -171,14 +171,14 @@ func TestAppPasswordRegistrationAndLogin(t *testing.T) {
 		"account":  account,
 		"password": "fixture-wrong-password",
 	})
-	assertAppPasswordInvalidCredentialsResponse(t, wrongPasswordResponse, "wrong password")
+	wrongPasswordEnvelope := assertAppPasswordInvalidCredentialsResponse(t, wrongPasswordResponse, "wrong password")
 	unknownAccountResponse := perform(handler, http.MethodPost, "/api/app/auth/login", "", map[string]string{
 		"account":  unknownAccount,
 		"password": password,
 	})
-	assertAppPasswordInvalidCredentialsResponse(t, unknownAccountResponse, "unknown account")
-	if wrongPasswordResponse.Body.String() != unknownAccountResponse.Body.String() {
-		t.Fatal("wrong password and unknown account responses must be identical")
+	unknownAccountEnvelope := assertAppPasswordInvalidCredentialsResponse(t, unknownAccountResponse, "unknown account")
+	if wrongPasswordEnvelope != unknownAccountEnvelope {
+		t.Fatalf("wrong password and unknown account envelopes differ: wrong=%+v unknown=%+v", wrongPasswordEnvelope, unknownAccountEnvelope)
 	}
 
 	refreshResponse := perform(handler, http.MethodPost, "/api/app/auth/refresh", "", map[string]string{
@@ -209,6 +209,21 @@ func TestAppPasswordRegistrationAndLogin(t *testing.T) {
 	})
 	if oldRefreshResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("rotated refresh token returned status %d, want 401", oldRefreshResponse.Code)
+	}
+}
+
+func TestAppPasswordInvalidCredentialsEnvelopeComparisonIgnoresFormattingAndExtraFields(t *testing.T) {
+	wrongPasswordResponse := httptest.NewRecorder()
+	wrongPasswordResponse.Code = http.StatusUnauthorized
+	wrongPasswordResponse.Body.WriteString(`{"code":-1,"data":null,"error":"账号或密码错误","message":"账号或密码错误","traceId":"fixture-a"}`)
+	unknownAccountResponse := httptest.NewRecorder()
+	unknownAccountResponse.Code = http.StatusUnauthorized
+	unknownAccountResponse.Body.WriteString("{\n  \"message\": \"账号或密码错误\",\n  \"error\": \"账号或密码错误\",\n  \"data\": null,\n  \"code\": -1,\n  \"metadata\": {\"fixture\": true}\n}\n")
+
+	wrongPasswordEnvelope := assertAppPasswordInvalidCredentialsResponse(t, wrongPasswordResponse, "wrong password fixture")
+	unknownAccountEnvelope := assertAppPasswordInvalidCredentialsResponse(t, unknownAccountResponse, "unknown account fixture")
+	if wrongPasswordEnvelope != unknownAccountEnvelope {
+		t.Fatalf("stable invalid-credentials envelopes differ: wrong=%+v unknown=%+v", wrongPasswordEnvelope, unknownAccountEnvelope)
 	}
 }
 
@@ -802,7 +817,15 @@ func decodeAppPasswordSessionResponse(t *testing.T, response *httptest.ResponseR
 	return body
 }
 
-func assertAppPasswordInvalidCredentialsResponse(t *testing.T, response *httptest.ResponseRecorder, operation string) {
+type appPasswordInvalidCredentialsEnvelope struct {
+	HTTPStatus int
+	Code       int
+	Message    string
+	Error      string
+	DataIsNil  bool
+}
+
+func assertAppPasswordInvalidCredentialsResponse(t *testing.T, response *httptest.ResponseRecorder, operation string) appPasswordInvalidCredentialsEnvelope {
 	t.Helper()
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("%s returned status %d, want 401", operation, response.Code)
@@ -818,6 +841,13 @@ func assertAppPasswordInvalidCredentialsResponse(t *testing.T, response *httptes
 	}
 	if body.Code != -1 || body.Data != nil || body.Error != "账号或密码错误" || body.Message != "账号或密码错误" {
 		t.Fatalf("%s did not return the generic invalid-credentials response", operation)
+	}
+	return appPasswordInvalidCredentialsEnvelope{
+		HTTPStatus: response.Code,
+		Code:       body.Code,
+		Message:    body.Message,
+		Error:      body.Error,
+		DataIsNil:  body.Data == nil,
 	}
 }
 

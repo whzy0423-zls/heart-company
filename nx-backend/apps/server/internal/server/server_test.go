@@ -567,8 +567,6 @@ func (r *cancelOnFlushRecorder) Flush() {
 	r.cancel()
 }
 
-const loginRateLimitTestAdvisoryLockKey int64 = 0x4e58504c494d4954
-
 const clearLoginRateLimitTestScopesSQL = `
 	DELETE FROM request_rate_limits
 	WHERE scope IN ('admin_login', 'app_password_account', 'app_password_ip')
@@ -630,7 +628,7 @@ func holdLoginRateLimitTestLock(t *testing.T, database *sql.DB, ctx context.Cont
 		_ = database.Close()
 		t.Fatalf("get login rate limit lock connection: %v", err)
 	}
-	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, loginRateLimitTestAdvisoryLockKey); err != nil {
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, testutil.AuthFixtureAdvisoryLockKey); err != nil {
 		_ = conn.Close()
 		_ = database.Close()
 		t.Fatalf("acquire login rate limit advisory lock: %v", err)
@@ -646,7 +644,7 @@ func holdLoginRateLimitTestLock(t *testing.T, database *sql.DB, ctx context.Cont
 		cleanupCancel()
 		unlockCtx, unlockCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		var unlocked bool
-		if err := state.conn.QueryRowContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, loginRateLimitTestAdvisoryLockKey).Scan(&unlocked); err != nil {
+		if err := state.conn.QueryRowContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, testutil.AuthFixtureAdvisoryLockKey).Scan(&unlocked); err != nil {
 			t.Errorf("release login rate limit advisory lock: %v", err)
 		} else if !unlocked {
 			t.Error("login rate limit advisory lock was not held during cleanup")
