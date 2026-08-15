@@ -63,6 +63,10 @@ func (s *Server) appRegisterWithPassword(w http.ResponseWriter, r *http.Request)
 		httpx.Fail(w, http.StatusTooManyRequests, "验证码验证过于频繁，请稍后再试")
 		return
 	}
+	if s.appUsers == nil || s.db == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "认证服务不可用")
+		return
+	}
 
 	user, err := s.appUsers.RegisterWithPassword(r.Context(), appuser.RegisterWithPasswordInput{
 		Nickname:    nickname,
@@ -77,7 +81,10 @@ func (s *Server) appRegisterWithPassword(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	s.writeAppSession(w, r, user, deviceInfo)
+	if err := s.writeAppSession(w, r, user, deviceInfo); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "注册已成功，请使用账号密码登录")
+		return
+	}
 }
 
 func (s *Server) appLoginWithPassword(w http.ResponseWriter, r *http.Request) {
@@ -101,6 +108,10 @@ func (s *Server) appLoginWithPassword(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusTooManyRequests, "登录尝试过于频繁，请稍后再试")
 		return
 	}
+	if s.appUsers == nil || s.db == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "认证服务不可用")
+		return
+	}
 
 	user, err := s.appUsers.AuthenticateWithPassword(r.Context(), identifier, body.Password)
 	if err != nil {
@@ -109,7 +120,10 @@ func (s *Server) appLoginWithPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeAppSession(w, r, user, deviceInfo)
+	if err := s.writeAppSession(w, r, user, deviceInfo); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "token error")
+		return
+	}
 }
 
 func decodeAppPasswordJSON(w http.ResponseWriter, r *http.Request, destination any) error {
@@ -173,12 +187,12 @@ func isSixDigitCode(code string) bool {
 }
 
 func (s *Server) allowAppPasswordLoginAttempt(identifier, ip string, now time.Time) bool {
-	accountKey := strings.ToLower(strings.TrimSpace(identifier))
-	if s.appPasswordAccountLimiter != nil && !s.appPasswordAccountLimiter.Allow(accountKey, now) {
-		return false
-	}
 	ipKey := strings.TrimSpace(ip)
 	if s.appPasswordIPLimiter != nil && !s.appPasswordIPLimiter.Allow(ipKey, now) {
+		return false
+	}
+	accountKey := strings.ToLower(strings.TrimSpace(identifier))
+	if s.appPasswordAccountLimiter != nil && !s.appPasswordAccountLimiter.Allow(accountKey, now) {
 		return false
 	}
 	return true

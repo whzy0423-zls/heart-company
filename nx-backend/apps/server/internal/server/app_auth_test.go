@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -112,6 +113,78 @@ func TestAppAuthVerifySMS(t *testing.T) {
 			t.Fatalf("expected 401 on reuse, got %d", r.Code)
 		}
 	})
+}
+
+func TestAppPasswordSessionPersistenceFailureResponses(t *testing.T) {
+	handler, _ := newTestServer(t)
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	const (
+		deviceInfo        = "task6-refresh-token-failure"
+		registrationPhone = "13900000601"
+		smsLoginPhone     = "13900000602"
+		account           = "task6sessionuser"
+		password          = "secret1"
+	)
+	cleanupAppPasswordSessionFailureFixtures(t, database, registrationPhone, smsLoginPhone, account)
+	t.Cleanup(func() {
+		cleanupAppPasswordSessionFailureFixtures(t, database, registrationPhone, smsLoginPhone, account)
+	})
+	installAppRefreshTokenFailureTrigger(t, database, deviceInfo)
+
+	registrationCode := requestAppDevCode(t, handler, registrationPhone)
+	registration := perform(handler, http.MethodPost, "/api/app/auth/register", "", map[string]string{
+		"nickname":   "心之力用户",
+		"account":    account,
+		"password":   password,
+		"phone":      registrationPhone,
+		"code":       registrationCode,
+		"deviceInfo": deviceInfo,
+	})
+	if registration.Code != http.StatusInternalServerError {
+		t.Fatalf("expected committed registration with refresh-token failure to return 500, got %d body=%s", registration.Code, registration.Body.String())
+	}
+	if !strings.Contains(registration.Body.String(), "注册已成功，请使用账号密码登录") {
+		t.Fatalf("expected committed registration recovery message, got body=%s", registration.Body.String())
+	}
+
+	var (
+		storedAccount      string
+		storedPasswordHash string
+	)
+	if err := database.QueryRow(`SELECT account, password_hash FROM app_users WHERE phone=$1`, registrationPhone).Scan(&storedAccount, &storedPasswordHash); err != nil {
+		t.Fatalf("expected registration transaction to remain committed: %v", err)
+	}
+	if storedAccount != account || storedPasswordHash == "" {
+		t.Fatalf("expected committed account credentials, got account=%q hashEmpty=%t", storedAccount, storedPasswordHash == "")
+	}
+
+	passwordLogin := perform(handler, http.MethodPost, "/api/app/auth/login", "", map[string]string{
+		"account":    account,
+		"password":   password,
+		"deviceInfo": deviceInfo,
+	})
+	if passwordLogin.Code != http.StatusInternalServerError || !strings.Contains(passwordLogin.Body.String(), "token error") {
+		t.Fatalf("expected password login refresh-token failure to remain token error, got %d body=%s", passwordLogin.Code, passwordLogin.Body.String())
+	}
+
+	smsCode := requestAppDevCode(t, handler, smsLoginPhone)
+	smsLogin := perform(handler, http.MethodPost, "/api/app/auth/verify-sms", "", map[string]string{
+		"phone":      smsLoginPhone,
+		"code":       smsCode,
+		"deviceInfo": deviceInfo,
+	})
+	if smsLogin.Code != http.StatusInternalServerError || !strings.Contains(smsLogin.Body.String(), "token error") {
+		t.Fatalf("expected SMS login refresh-token failure to remain token error, got %d body=%s", smsLogin.Code, smsLogin.Body.String())
+	}
 }
 
 func TestAppAuthRefreshToken(t *testing.T) {
@@ -337,6 +410,82 @@ func waitForPushSendSentCount(t *testing.T, handler http.Handler, adminToken str
 	}
 	t.Fatalf("timed out waiting for push record %d to finish", sendBody.Data.RecordID)
 	return 0
+}
+
+func requestAppDevCode(t *testing.T, handler http.Handler, phone string) string {
+	t.Helper()
+	response := perform(handler, http.MethodPost, "/api/app/auth/send-sms", "", map[string]string{"phone": phone})
+	if response.Code != http.StatusOK {
+		t.Fatalf("send-sms failed for %s: %d %s", phone, response.Code, response.Body.String())
+	}
+	var body struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	code, _ := body.Data["devCode"].(string)
+	if code == "" {
+		t.Fatal("expected devCode in test mode")
+	}
+	return code
+}
+
+func cleanupAppPasswordSessionFailureFixtures(t *testing.T, database *sql.DB, registrationPhone, smsLoginPhone, account string) {
+	t.Helper()
+	if _, err := database.Exec(`
+		DELETE FROM app_refresh_tokens
+		WHERE app_user_id IN (
+			SELECT id FROM app_users WHERE phone IN ($1, $2) OR lower(account)=lower($3)
+		)
+	`, registrationPhone, smsLoginPhone, account); err != nil {
+		t.Fatalf("clear task 6 refresh tokens: %v", err)
+	}
+	if _, err := database.Exec(`DELETE FROM app_sms_codes WHERE phone IN ($1, $2)`, registrationPhone, smsLoginPhone); err != nil {
+		t.Fatalf("clear task 6 SMS codes: %v", err)
+	}
+	if _, err := database.Exec(`DELETE FROM app_users WHERE phone IN ($1, $2) OR lower(account)=lower($3)`, registrationPhone, smsLoginPhone, account); err != nil {
+		t.Fatalf("clear task 6 app users: %v", err)
+	}
+}
+
+func installAppRefreshTokenFailureTrigger(t *testing.T, database *sql.DB, deviceInfo string) {
+	t.Helper()
+	const (
+		triggerName  = "task6_fail_app_refresh_token_insert"
+		functionName = "task6_fail_app_refresh_token_insert_fn"
+	)
+	if _, err := database.Exec(`DROP TRIGGER IF EXISTS ` + triggerName + ` ON app_refresh_tokens`); err != nil {
+		t.Fatalf("drop stale task 6 trigger: %v", err)
+	}
+	if _, err := database.Exec(`DROP FUNCTION IF EXISTS ` + functionName + `()`); err != nil {
+		t.Fatalf("drop stale task 6 function: %v", err)
+	}
+	quotedDeviceInfo := strings.ReplaceAll(deviceInfo, "'", "''")
+	createFunction := fmt.Sprintf(`
+		CREATE FUNCTION %s() RETURNS trigger AS $$
+		BEGIN
+			IF NEW.device_info = '%s' THEN
+				RAISE EXCEPTION 'forced refresh token persistence failure';
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql
+	`, functionName, quotedDeviceInfo)
+	if _, err := database.Exec(createFunction); err != nil {
+		t.Fatalf("create task 6 trigger function: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := database.Exec(`DROP TRIGGER IF EXISTS ` + triggerName + ` ON app_refresh_tokens`); err != nil {
+			t.Errorf("drop task 6 trigger: %v", err)
+		}
+		if _, err := database.Exec(`DROP FUNCTION IF EXISTS ` + functionName + `()`); err != nil {
+			t.Errorf("drop task 6 function: %v", err)
+		}
+	})
+	if _, err := database.Exec(`CREATE TRIGGER ` + triggerName + ` BEFORE INSERT ON app_refresh_tokens FOR EACH ROW EXECUTE FUNCTION ` + functionName + `()`); err != nil {
+		t.Fatalf("create task 6 trigger: %v", err)
+	}
 }
 
 func clearAppDeviceTokens(t *testing.T) {

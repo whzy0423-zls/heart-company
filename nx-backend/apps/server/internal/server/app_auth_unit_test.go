@@ -61,6 +61,77 @@ func TestSMSVerifyAttemptLimiterBlocksRepeatedAttempts(t *testing.T) {
 	}
 }
 
+func TestSMSVerifyIPLimiterRunsBeforePhoneLimiter(t *testing.T) {
+	now := time.Unix(150, 0)
+	ip := "203.0.113.9"
+	existingPhone := "13800000007"
+	newPhone := "13800000008"
+	phoneLimiter := newStrRateLimiter(5, time.Minute)
+	ipLimiter := newStrRateLimiter(1, time.Minute)
+	if !phoneLimiter.Allow(existingPhone, now) {
+		t.Fatal("expected existing phone setup attempt to be allowed")
+	}
+	if !ipLimiter.Allow(ip, now) {
+		t.Fatal("expected IP setup attempt to be allowed")
+	}
+	s := &Server{
+		smsVerifyPhoneLimiter: phoneLimiter,
+		smsVerifyIPLimiter:    ipLimiter,
+	}
+
+	if s.allowSMSVerifyAttempt(existingPhone, ip, now) {
+		t.Fatal("expected exhausted IP limiter to reject existing phone")
+	}
+	if s.allowSMSVerifyAttempt(newPhone, ip, now) {
+		t.Fatal("expected exhausted IP limiter to reject new phone")
+	}
+
+	if got, ok := rateLimiterCount(phoneLimiter, existingPhone); !ok || got != 1 {
+		t.Fatalf("expected existing phone limiter count to remain 1, got count=%d exists=%t", got, ok)
+	}
+	if _, ok := rateLimiterCount(phoneLimiter, newPhone); ok {
+		t.Fatal("expected rejected IP not to create a new phone limiter key")
+	}
+}
+
+func TestAppSendSMSIPLimiterRunsBeforePhoneLimiter(t *testing.T) {
+	now := time.Now()
+	ip := "203.0.113.10"
+	existingPhone := "13800000009"
+	newPhone := "13800000010"
+	phoneLimiter := newStrRateLimiter(5, time.Minute)
+	ipLimiter := newStrRateLimiter(1, time.Minute)
+	if !phoneLimiter.Allow(existingPhone, now) {
+		t.Fatal("expected existing phone setup attempt to be allowed")
+	}
+	if !ipLimiter.Allow(ip, now) {
+		t.Fatal("expected IP setup attempt to be allowed")
+	}
+	s := &Server{
+		smsPhoneLimiter: phoneLimiter,
+		smsIPLimiter:    ipLimiter,
+	}
+
+	for _, phone := range []string{existingPhone, newPhone} {
+		request := httptest.NewRequest(http.MethodPost, "/api/app/auth/send-sms", strings.NewReader(`{"phone":"`+phone+`"}`))
+		request.RemoteAddr = ip + ":1234"
+		response := httptest.NewRecorder()
+
+		s.appSendSMS(response, request)
+
+		if response.Code != http.StatusTooManyRequests {
+			t.Fatalf("expected exhausted IP limiter to return 429 for %s, got %d body=%s", phone, response.Code, response.Body.String())
+		}
+	}
+
+	if got, ok := rateLimiterCount(phoneLimiter, existingPhone); !ok || got != 1 {
+		t.Fatalf("expected existing phone limiter count to remain 1, got count=%d exists=%t", got, ok)
+	}
+	if _, ok := rateLimiterCount(phoneLimiter, newPhone); ok {
+		t.Fatal("expected rejected IP not to create a new phone limiter key")
+	}
+}
+
 func TestAppAuthRejectsInvalidMainlandPhoneFormats(t *testing.T) {
 	s := newAppAuthPhoneValidationTestServer(t)
 
@@ -105,24 +176,43 @@ func TestAppAuthRejectsInvalidMainlandPhoneFormats(t *testing.T) {
 	}
 }
 
-func TestAppSendSMSDoesNotUseDevCodeInProduction(t *testing.T) {
-	s := newAppAuthPhoneValidationTestServer(t)
-	s.env = config.Env{AppEnv: "production"}
-	request := httptest.NewRequest(http.MethodPost, "/api/app/auth/sms", strings.NewReader(`{"phone":"13800000000"}`))
-	response := httptest.NewRecorder()
+func TestAppSendSMSDoesNotUseDevCodeOutsideDevOrTest(t *testing.T) {
+	registerAppAuthUnitTestDriver()
 
-	s.appSendSMS(response, request)
+	for _, appEnv := range []string{" staging ", " production "} {
+		t.Run(strings.TrimSpace(appEnv), func(t *testing.T) {
+			db, err := sql.Open(appAuthUnitTestDriverName, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
 
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected production without SMS provider to fail closed, got %d body=%s", response.Code, response.Body.String())
-	}
-	if strings.Contains(response.Body.String(), "devCode") {
-		t.Fatalf("expected production response not to contain devCode, got %s", response.Body.String())
+			s := &Server{
+				env:             config.Env{AppEnv: appEnv},
+				appUsers:        appuser.NewStore(db),
+				smsPhoneLimiter: newStrRateLimiter(100, time.Minute),
+				smsIPLimiter:    newStrRateLimiter(100, time.Minute),
+			}
+			request := httptest.NewRequest(http.MethodPost, "/api/app/auth/sms", strings.NewReader(`{"phone":"13800000000"}`))
+			response := httptest.NewRecorder()
+
+			s.appSendSMS(response, request)
+
+			if response.Code != http.StatusServiceUnavailable {
+				t.Fatalf("expected %s without SMS provider to fail closed before storage, got %d body=%s", strings.TrimSpace(appEnv), response.Code, response.Body.String())
+			}
+			if strings.Contains(response.Body.String(), "devCode") {
+				t.Fatalf("expected %s response not to contain devCode, got %s", strings.TrimSpace(appEnv), response.Body.String())
+			}
+		})
 	}
 }
 
 func TestAppSendSMSDevelopmentLogDoesNotContainDevCode(t *testing.T) {
 	s := newAppAuthPhoneValidationTestServer(t)
+	s.env = config.Env{AppEnv: "development"}
 	phone := "13912345678"
 
 	var logOutput bytes.Buffer
@@ -162,6 +252,32 @@ func TestAppSendSMSDevelopmentLogDoesNotContainDevCode(t *testing.T) {
 	}
 	if strings.Contains(logOutput.String(), payload.Data.DevCode) {
 		t.Fatalf("expected development log not to contain devCode, got %q", logOutput.String())
+	}
+}
+
+func TestWriteAppSessionDoesNotWriteWhenRefreshTokenPersistenceFails(t *testing.T) {
+	registerAppAuthUnitTestDriver()
+	db, err := sql.Open(appAuthUnitTestDriverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{
+		env:      config.Env{JWTSecret: "task-6-test-secret"},
+		appUsers: appuser.NewStore(db),
+	}
+	response := &writeTrackingResponseWriter{header: make(http.Header)}
+	request := httptest.NewRequest(http.MethodPost, "/api/app/auth/login", nil)
+
+	err = s.writeAppSession(response, request, appuser.User{ID: 42, Phone: "13800000011", Status: "active"}, "test-device")
+
+	if err == nil {
+		t.Fatal("expected refresh token persistence error")
+	}
+	if response.wrote {
+		t.Fatalf("expected session writer to return the persistence error without writing a response, got status=%d body=%s", response.status, response.body.String())
 	}
 }
 
@@ -484,6 +600,40 @@ func TestAppPasswordHandlersAllowTrailingWhitespace(t *testing.T) {
 	}
 }
 
+func TestAppPasswordHandlersAllowUnknownFieldsInFirstJSONValue(t *testing.T) {
+	requests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "registration continues to sms limiter",
+			path: "/api/app/auth/register",
+			body: `{"nickname":"心之力用户","account":"xinuser","password":"secret1","phone":"13800000000","code":"123456","futureField":{"enabled":true}}`,
+		},
+		{
+			name: "login continues to password limiter",
+			path: "/api/app/auth/login",
+			body: `{"account":"xinuser","password":"secret1","futureField":{"enabled":true}}`,
+		},
+	}
+
+	for _, request := range requests {
+		t.Run(request.name, func(t *testing.T) {
+			server := newAppPasswordTrailingJSONTestServer(t)
+			req := httptest.NewRequest(http.MethodPost, request.path, strings.NewReader(request.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			server.mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("expected unknown field to be accepted and reach limiter with 429, got %d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func newAppPasswordTrailingJSONTestServer(t *testing.T) *Server {
 	t.Helper()
 	now := time.Now()
@@ -536,6 +686,70 @@ func TestAppPasswordLoginValidationRejectsBeforeStore(t *testing.T) {
 				t.Fatalf("expected missing credentials message, got body=%s", rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestAppPasswordHandlersRejectUnavailableAuthDependencies(t *testing.T) {
+	registerAppAuthUnitTestDriver()
+	db, err := sql.Open(appAuthUnitTestDriverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	handlers := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "registration",
+			path: "/api/app/auth/register",
+			body: `{"nickname":"心之力用户","account":"xinuser","password":"secret1","phone":"13800000000","code":"123456"}`,
+		},
+		{
+			name: "login",
+			path: "/api/app/auth/login",
+			body: `{"account":"xinuser","password":"secret1"}`,
+		},
+	}
+	dependencies := []struct {
+		name      string
+		configure func(*Server)
+	}{
+		{
+			name: "missing app user store",
+			configure: func(server *Server) {
+				server.db = db
+			},
+		},
+		{
+			name: "missing database",
+			configure: func(server *Server) {
+				server.appUsers = appuser.NewStore(db)
+			},
+		},
+	}
+
+	for _, handler := range handlers {
+		for _, dependency := range dependencies {
+			t.Run(handler.name+"/"+dependency.name, func(t *testing.T) {
+				server := &Server{mux: http.NewServeMux()}
+				dependency.configure(server)
+				server.routes()
+
+				rec, recovered := serveAppAuthRequest(server, handler.path, handler.body)
+				if recovered != nil {
+					t.Fatalf("expected unavailable dependency to return 503 instead of panicking: %v", recovered)
+				}
+				if rec.Code != http.StatusServiceUnavailable {
+					t.Fatalf("expected unavailable dependency to return 503, got %d body=%s", rec.Code, rec.Body.String())
+				}
+				if !strings.Contains(rec.Body.String(), "认证服务不可用") {
+					t.Fatalf("expected unavailable auth service message, got body=%s", rec.Body.String())
+				}
+			})
+		}
 	}
 }
 
@@ -620,6 +834,39 @@ func TestAppPasswordLoginAttemptLimiterNormalizesKeysAndFailsOpenWhenNil(t *test
 	}
 }
 
+func TestAppPasswordLoginIPLimiterRunsBeforeAccountLimiter(t *testing.T) {
+	now := time.Unix(250, 0)
+	ip := "203.0.113.11"
+	existingAccount := "existinguser"
+	newAccount := "newuser"
+	accountLimiter := newStrRateLimiter(5, time.Minute)
+	ipLimiter := newStrRateLimiter(1, time.Minute)
+	if !accountLimiter.Allow(existingAccount, now) {
+		t.Fatal("expected existing account setup attempt to be allowed")
+	}
+	if !ipLimiter.Allow(ip, now) {
+		t.Fatal("expected IP setup attempt to be allowed")
+	}
+	s := &Server{
+		appPasswordAccountLimiter: accountLimiter,
+		appPasswordIPLimiter:      ipLimiter,
+	}
+
+	if s.allowAppPasswordLoginAttempt(existingAccount, ip, now) {
+		t.Fatal("expected exhausted IP limiter to reject existing account")
+	}
+	if s.allowAppPasswordLoginAttempt(newAccount, ip, now) {
+		t.Fatal("expected exhausted IP limiter to reject new account")
+	}
+
+	if got, ok := rateLimiterCount(accountLimiter, existingAccount); !ok || got != 1 {
+		t.Fatalf("expected existing account limiter count to remain 1, got count=%d exists=%t", got, ok)
+	}
+	if _, ok := rateLimiterCount(accountLimiter, newAccount); ok {
+		t.Fatal("expected rejected IP not to create a new account limiter key")
+	}
+}
+
 func TestAppPasswordLoginRouteAppliesLimiterBeforeStore(t *testing.T) {
 	now := time.Now()
 	accountLimiter := newStrRateLimiter(1, time.Minute)
@@ -659,6 +906,45 @@ func TestAppUsersAdminUpdateRouteAllowsWriteMethodsThroughAuth(t *testing.T) {
 			}
 		})
 	}
+}
+
+type writeTrackingResponseWriter struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+	wrote  bool
+}
+
+func (w *writeTrackingResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *writeTrackingResponseWriter) WriteHeader(status int) {
+	w.status = status
+	w.wrote = true
+}
+
+func (w *writeTrackingResponseWriter) Write(body []byte) (int, error) {
+	w.wrote = true
+	return w.body.Write(body)
+}
+
+func rateLimiterCount(limiter *strRateLimiter, key string) (int, bool) {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	window, ok := limiter.keys[key]
+	return window.count, ok
+}
+
+func serveAppAuthRequest(server *Server, path, body string) (rec *httptest.ResponseRecorder, recovered any) {
+	rec = httptest.NewRecorder()
+	defer func() {
+		recovered = recover()
+	}()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	server.mux.ServeHTTP(rec, req)
+	return rec, nil
 }
 
 func newRouteOnlyServer() *Server {
