@@ -2,6 +2,7 @@ package appuser
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -28,6 +29,8 @@ func TestAccountValidation(t *testing.T) {
 		{name: "embedded space", raw: "ab cd", wantErr: true},
 		{name: "punctuation", raw: "abcd-", wantErr: true},
 		{name: "non ASCII", raw: "\u7528\u6237name", wantErr: true},
+		{name: "Kelvin sign case fold", raw: "\u212aabc", wantErr: true},
+		{name: "full width letter", raw: "\uff2babc", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -78,6 +81,13 @@ func TestPasswordValidation(t *testing.T) {
 }
 
 func TestNicknameValidation(t *testing.T) {
+	t.Run("normalizes nickname", func(t *testing.T) {
+		const raw = " \tAlice\n"
+		if got, want := NormalizeNickname(raw), "Alice"; got != want {
+			t.Fatalf("NormalizeNickname(%q) = %q, want %q", raw, got, want)
+		}
+	})
+
 	tests := []struct {
 		name    string
 		raw     string
@@ -90,6 +100,7 @@ func TestNicknameValidation(t *testing.T) {
 		{name: "empty", raw: "", wantErr: true},
 		{name: "whitespace only", raw: " \t\n ", wantErr: true},
 		{name: "too many Unicode runes", raw: strings.Repeat("\u754c", 33), wantErr: true},
+		{name: "invalid UTF-8", raw: string([]byte{0xff}), wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -112,16 +123,15 @@ func TestCredentialDomainErrors(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
-		want string
 	}{
-		{name: "invalid account", err: ErrInvalidAccount, want: "invalid account"},
-		{name: "invalid password", err: ErrInvalidPassword, want: "invalid password"},
-		{name: "invalid nickname", err: ErrInvalidNickname, want: "invalid nickname"},
-		{name: "invalid SMS code", err: ErrInvalidSMSCode, want: "invalid sms code"},
-		{name: "account taken", err: ErrAccountTaken, want: "account already exists"},
-		{name: "phone registered", err: ErrPhoneAlreadyRegistered, want: "phone already registered"},
-		{name: "invalid credentials", err: ErrInvalidCredentials, want: "invalid credentials"},
-		{name: "user disabled", err: ErrUserDisabled, want: "user disabled"},
+		{name: "invalid account", err: ErrInvalidAccount},
+		{name: "invalid password", err: ErrInvalidPassword},
+		{name: "invalid nickname", err: ErrInvalidNickname},
+		{name: "invalid SMS code", err: ErrInvalidSMSCode},
+		{name: "account taken", err: ErrAccountTaken},
+		{name: "phone registered", err: ErrPhoneAlreadyRegistered},
+		{name: "invalid credentials", err: ErrInvalidCredentials},
+		{name: "user disabled", err: ErrUserDisabled},
 	}
 
 	seen := make(map[error]string, len(tests))
@@ -130,8 +140,8 @@ func TestCredentialDomainErrors(t *testing.T) {
 			if tt.err == nil {
 				t.Fatal("sentinel error is nil")
 			}
-			if got := tt.err.Error(); got != tt.want {
-				t.Fatalf("error text = %q, want %q", got, tt.want)
+			if wrapped := fmt.Errorf("wrapped: %w", tt.err); !errors.Is(wrapped, tt.err) {
+				t.Fatalf("errors.Is() did not match wrapped sentinel %v", tt.err)
 			}
 			if previous, ok := seen[tt.err]; ok {
 				t.Fatalf("sentinel error is shared with %s", previous)

@@ -25,7 +25,7 @@ func NormalizeAccount(raw string) string {
 }
 
 func ValidateAccount(raw string) error {
-	if !accountPattern.MatchString(NormalizeAccount(raw)) {
+	if !accountPattern.MatchString(strings.TrimSpace(raw)) {
 		return ErrInvalidAccount
 	}
 	return nil
@@ -38,8 +38,15 @@ func ValidatePassword(raw string) error {
 	return nil
 }
 
+func NormalizeNickname(raw string) string {
+	return strings.TrimSpace(raw)
+}
+
 func ValidateNickname(raw string) error {
-	length := utf8.RuneCountInString(strings.TrimSpace(raw))
+	if !utf8.ValidString(raw) {
+		return ErrInvalidNickname
+	}
+	length := utf8.RuneCountInString(NormalizeNickname(raw))
 	if length < 1 || length > 32 {
 		return ErrInvalidNickname
 	}
