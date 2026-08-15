@@ -966,7 +966,7 @@ func openAppPasswordLoginLimiterTestDatabase(t *testing.T) *sql.DB {
 		_ = database.Close()
 		t.Fatalf("get app password limiter advisory lock connection: %v", err)
 	}
-	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, appPasswordLoginLimiterTestAdvisoryLockKey); err != nil {
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, testutil.AuthFixtureAdvisoryLockKey); err != nil {
 		_ = conn.Close()
 		_ = database.Close()
 		t.Fatalf("acquire app password limiter advisory lock: %v", err)
@@ -979,7 +979,7 @@ func openAppPasswordLoginLimiterTestDatabase(t *testing.T) *sql.DB {
 		cleanupCancel()
 		unlockCtx, unlockCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		var unlocked bool
-		if err := conn.QueryRowContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, appPasswordLoginLimiterTestAdvisoryLockKey).Scan(&unlocked); err != nil {
+		if err := conn.QueryRowContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, testutil.AuthFixtureAdvisoryLockKey).Scan(&unlocked); err != nil {
 			t.Errorf("release app password limiter advisory lock: %v", err)
 		} else if !unlocked {
 			t.Error("app password limiter advisory lock was not held during cleanup")
@@ -1163,16 +1163,14 @@ func TestAppPasswordLoginAttemptLimiterDatabaseHelperHoldsAdvisoryLock(t *testin
 	}
 	t.Cleanup(func() { _ = probe.Close() })
 	var acquired bool
-	if err := probe.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, appPasswordLoginLimiterTestAdvisoryLockKey).Scan(&acquired); err != nil {
+	if err := probe.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, testutil.AuthFixtureAdvisoryLockKey).Scan(&acquired); err != nil {
 		t.Fatalf("probe app password limiter advisory lock: %v", err)
 	}
 	if acquired {
-		_, _ = probe.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, appPasswordLoginLimiterTestAdvisoryLockKey)
+		_, _ = probe.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, testutil.AuthFixtureAdvisoryLockKey)
 		t.Fatal("expected DB limiter helper to hold the shared advisory lock")
 	}
 }
-
-const appPasswordLoginLimiterTestAdvisoryLockKey int64 = 0x4e58504c494d4954
 
 type contextBlockingRateLimiterConnector struct {
 	contexts    chan context.Context
