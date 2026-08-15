@@ -27,6 +27,10 @@ var (
 
 var accountPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{3,31}$`)
 
+var phoneIdentifierPattern = regexp.MustCompile(`^1[3-9][0-9]{9}$`)
+
+const passwordAuthenticationDummyHash = "$2b$10$sQ/LjuVpMbqmFYb/Ukb0.ebUav7SmTzniaVsy0sNW/ZmwD5HU.hPq"
+
 type RegisterWithPasswordInput struct {
 	Nickname    string
 	Account     string
@@ -72,6 +76,92 @@ func ValidateNickname(raw string) error {
 		return ErrInvalidNickname
 	}
 	return nil
+}
+
+func isPhoneIdentifier(identifier string) bool {
+	return phoneIdentifierPattern.MatchString(identifier)
+}
+
+func (s *Store) AuthenticateWithPassword(ctx context.Context, identifier, password string) (User, error) {
+	identifier = strings.TrimSpace(identifier)
+
+	var (
+		userID       int64
+		passwordHash sql.NullString
+	)
+	var err error
+	if isPhoneIdentifier(identifier) {
+		err = s.db.QueryRowContext(ctx, `
+			SELECT id, password_hash
+			FROM app_users
+			WHERE phone=$1
+		`, identifier).Scan(&userID, &passwordHash)
+	} else {
+		err = s.db.QueryRowContext(ctx, `
+			SELECT id, password_hash
+			FROM app_users
+			WHERE account IS NOT NULL
+			  AND btrim(account) <> ''
+			  AND lower(account)=lower($1)
+		`, identifier).Scan(&userID, &passwordHash)
+	}
+
+	found := true
+	if errors.Is(err, sql.ErrNoRows) {
+		found = false
+	} else if err != nil {
+		return User{}, fmt.Errorf("find appuser credentials: %w", err)
+	}
+
+	hasPassword := found && passwordHash.Valid && strings.TrimSpace(passwordHash.String) != ""
+	hash := passwordAuthenticationDummyHash
+	if hasPassword {
+		hash = passwordHash.String
+	}
+	passwordMatches := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
+	if !found || !hasPassword || !passwordMatches {
+		return User{}, ErrInvalidCredentials
+	}
+
+	var user User
+	var lastLogin, memberStartedAt, memberExpiresAt sql.NullTime
+	var createTime, updateTime time.Time
+	err = s.db.QueryRowContext(ctx, `
+		UPDATE app_users
+		SET last_login_at=now(), update_time=now()
+		WHERE id=$1 AND status='active'
+		RETURNING id, phone, COALESCE(account, ''), nickname, avatar, status, member_level,
+		          member_started_at, member_expires_at, register_source, last_login_at,
+		          create_time, update_time
+	`, userID).Scan(
+		&user.ID,
+		&user.Phone,
+		&user.Account,
+		&user.Nickname,
+		&user.Avatar,
+		&user.Status,
+		&user.MemberLevel,
+		&memberStartedAt,
+		&memberExpiresAt,
+		&user.RegisterSource,
+		&lastLogin,
+		&createTime,
+		&updateTime,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, ErrUserDisabled
+	}
+	if err != nil {
+		return User{}, fmt.Errorf("update appuser password login: %w", err)
+	}
+
+	if lastLogin.Valid {
+		user.LastLoginAt = formatTime(lastLogin.Time)
+	}
+	user.CreateTime = formatTime(createTime)
+	user.UpdateTime = formatTime(updateTime)
+	applyMembershipTimes(&user, memberStartedAt, memberExpiresAt)
+	return user, nil
 }
 
 func (s *Store) RegisterWithPassword(ctx context.Context, in RegisterWithPasswordInput) (User, error) {

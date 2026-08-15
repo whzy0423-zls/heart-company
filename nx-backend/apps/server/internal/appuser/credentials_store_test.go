@@ -685,6 +685,221 @@ func TestRegisterWithPasswordConcurrentPhoneUseMapsUniqueConstraint(t *testing.T
 	}
 }
 
+func TestAuthenticateWithPasswordIdentifierRules(t *testing.T) {
+	tests := []struct {
+		name       string
+		identifier string
+		want       bool
+	}{
+		{name: "lowest valid prefix", identifier: "13000000000", want: true},
+		{name: "highest valid prefix", identifier: "19999999999", want: true},
+		{name: "prefix too low", identifier: "12000000000"},
+		{name: "too short", identifier: "1380000000"},
+		{name: "too long", identifier: "138000000000"},
+		{name: "contains non digit", identifier: "1380000000a"},
+		{name: "outer whitespace is not part of phone syntax", identifier: " 13800000000 "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isPhoneIdentifier(tt.identifier); got != tt.want {
+				t.Fatalf("isPhoneIdentifier(%q) = %v, want %v", tt.identifier, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAuthenticateWithPasswordDummyHashIsFixedDefaultCost(t *testing.T) {
+	cost, err := bcrypt.Cost([]byte(passwordAuthenticationDummyHash))
+	if err != nil {
+		t.Fatalf("passwordAuthenticationDummyHash is invalid: %v", err)
+	}
+	if cost != bcrypt.DefaultCost {
+		t.Fatalf("passwordAuthenticationDummyHash cost = %d, want %d", cost, bcrypt.DefaultCost)
+	}
+}
+
+func TestAuthenticateWithPasswordSucceedsByAccountOrPhone(t *testing.T) {
+	database := openRegisterWithPasswordFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("hash fixture password: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		phone      string
+		account    string
+		identifier string
+	}{
+		{
+			name:       "lowercase account with outer whitespace",
+			phone:      "13800000201",
+			account:    "alice_01",
+			identifier: "  alice_01  ",
+		},
+		{
+			name:       "account with different casing",
+			phone:      "13800000202",
+			account:    "Case_User",
+			identifier: "cAsE_uSeR",
+		},
+		{
+			name:       "exact phone",
+			phone:      "13800000203",
+			account:    "phone_user",
+			identifier: "13800000203",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var userID int64
+			if err := database.QueryRowContext(ctx, `
+				INSERT INTO app_users (phone, account, password_hash, nickname, register_source)
+				VALUES ($1, $2, $3, $4, 'account_sms')
+				RETURNING id
+			`, tt.phone, tt.account, string(passwordHash), tt.name).Scan(&userID); err != nil {
+				t.Fatalf("insert password user: %v", err)
+			}
+
+			user, err := NewStore(database).AuthenticateWithPassword(ctx, tt.identifier, "secret123")
+			if err != nil {
+				t.Fatalf("AuthenticateWithPassword() error = %v", err)
+			}
+			if user.ID != userID || user.Phone != tt.phone || user.Account != tt.account {
+				t.Fatalf("AuthenticateWithPassword() user = %+v", user)
+			}
+			if user.LastLoginAt == "" {
+				t.Fatalf("AuthenticateWithPassword() did not return last login time: %+v", user)
+			}
+
+			var lastLogin sql.NullTime
+			if err := database.QueryRowContext(ctx, `SELECT last_login_at FROM app_users WHERE id=$1`, userID).Scan(&lastLogin); err != nil {
+				t.Fatalf("read last login time: %v", err)
+			}
+			if !lastLogin.Valid {
+				t.Fatal("AuthenticateWithPassword() did not persist last_login_at")
+			}
+
+			payload, err := json.Marshal(user)
+			if err != nil {
+				t.Fatalf("marshal authenticated user: %v", err)
+			}
+			if strings.Contains(strings.ToLower(string(payload)), "password") {
+				t.Fatalf("authenticated user JSON leaked password material: %s", payload)
+			}
+		})
+	}
+}
+
+func TestAuthenticateWithPasswordRejectsInvalidCredentialsBeforeStatus(t *testing.T) {
+	database := openRegisterWithPasswordFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("hash fixture password: %v", err)
+	}
+
+	var activeUserID, disabledUserID, smsOnlyUserID int64
+	if err := database.QueryRowContext(ctx, `
+		INSERT INTO app_users (phone, account, password_hash, nickname)
+		VALUES ('13800000211', 'active_user', $1, 'Active')
+		RETURNING id
+	`, string(passwordHash)).Scan(&activeUserID); err != nil {
+		t.Fatalf("insert active password user: %v", err)
+	}
+	if err := database.QueryRowContext(ctx, `
+		INSERT INTO app_users (phone, account, password_hash, nickname, status)
+		VALUES ('13800000212', 'disabled_user', $1, 'Disabled', 'disabled')
+		RETURNING id
+	`, string(passwordHash)).Scan(&disabledUserID); err != nil {
+		t.Fatalf("insert disabled password user: %v", err)
+	}
+	if err := database.QueryRowContext(ctx, `
+		INSERT INTO app_users (phone, nickname, register_source)
+		VALUES ('13800000213', 'SMS only', 'sms')
+		RETURNING id
+	`).Scan(&smsOnlyUserID); err != nil {
+		t.Fatalf("insert SMS-only user: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		identifier string
+		password   string
+		want       error
+		userID     int64
+	}{
+		{
+			name:       "wrong password",
+			identifier: "active_user",
+			password:   "wrong-password",
+			want:       ErrInvalidCredentials,
+			userID:     activeUserID,
+		},
+		{
+			name:       "password is never trimmed",
+			identifier: "active_user",
+			password:   " secret123 ",
+			want:       ErrInvalidCredentials,
+			userID:     activeUserID,
+		},
+		{
+			name:       "unknown identifier",
+			identifier: "missing_user",
+			password:   "secret123",
+			want:       ErrInvalidCredentials,
+		},
+		{
+			name:       "SMS-only user has no password",
+			identifier: "13800000213",
+			password:   "secret123",
+			want:       ErrInvalidCredentials,
+			userID:     smsOnlyUserID,
+		},
+		{
+			name:       "disabled user with wrong password hides status",
+			identifier: "disabled_user",
+			password:   "wrong-password",
+			want:       ErrInvalidCredentials,
+			userID:     disabledUserID,
+		},
+		{
+			name:       "disabled user with correct password returns disabled",
+			identifier: "disabled_user",
+			password:   "secret123",
+			want:       ErrUserDisabled,
+			userID:     disabledUserID,
+		},
+	}
+
+	store := NewStore(database)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := store.AuthenticateWithPassword(ctx, tt.identifier, tt.password)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("AuthenticateWithPassword() error = %v, want %v", err, tt.want)
+			}
+			if tt.userID == 0 {
+				return
+			}
+			var lastLogin sql.NullTime
+			if err := database.QueryRowContext(ctx, `SELECT last_login_at FROM app_users WHERE id=$1`, tt.userID).Scan(&lastLogin); err != nil {
+				t.Fatalf("read failed-login time: %v", err)
+			}
+			if lastLogin.Valid {
+				t.Fatalf("failed authentication updated last_login_at to %v", lastLogin.Time)
+			}
+		})
+	}
+}
+
 func TestRegisterWithPasswordMapsPostgresUniqueErrors(t *testing.T) {
 	tests := []struct {
 		name       string
