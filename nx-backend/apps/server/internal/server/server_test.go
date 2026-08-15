@@ -3,6 +3,7 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -565,6 +567,102 @@ func (r *cancelOnFlushRecorder) Flush() {
 	r.cancel()
 }
 
+const loginRateLimitTestAdvisoryLockKey int64 = 0x4e58504c494d4954
+
+const clearLoginRateLimitTestScopesSQL = `
+	DELETE FROM request_rate_limits
+	WHERE scope IN ('admin_login', 'app_password_account', 'app_password_ip')
+`
+
+var loginRateLimitTestLocksMu sync.Mutex
+var loginRateLimitTestLocks sync.Map
+
+type loginRateLimitTestLockState struct {
+	conn      *sql.Conn
+	mu        sync.Mutex
+	databases []*sql.DB
+}
+
+func (s *loginRateLimitTestLockState) addDatabase(database *sql.DB) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.databases = append(s.databases, database)
+}
+
+func (s *loginRateLimitTestLockState) closeDatabases(t *testing.T) {
+	t.Helper()
+	s.mu.Lock()
+	databases := append([]*sql.DB(nil), s.databases...)
+	s.databases = nil
+	s.mu.Unlock()
+	for _, database := range databases {
+		if err := database.Close(); err != nil {
+			t.Errorf("close test database: %v", err)
+		}
+	}
+}
+
+func holdLoginRateLimitTestLock(t *testing.T, database *sql.DB, ctx context.Context) {
+	t.Helper()
+	if existing, ok := loginRateLimitTestLocks.Load(t); ok {
+		state := existing.(*loginRateLimitTestLockState)
+		state.addDatabase(database)
+		if _, err := state.conn.ExecContext(ctx, clearLoginRateLimitTestScopesSQL); err != nil {
+			t.Fatalf("reset login rate limits: %v", err)
+		}
+		return
+	}
+
+	loginRateLimitTestLocksMu.Lock()
+	defer loginRateLimitTestLocksMu.Unlock()
+
+	if existing, ok := loginRateLimitTestLocks.Load(t); ok {
+		state := existing.(*loginRateLimitTestLockState)
+		state.addDatabase(database)
+		if _, err := state.conn.ExecContext(ctx, clearLoginRateLimitTestScopesSQL); err != nil {
+			t.Fatalf("reset login rate limits: %v", err)
+		}
+		return
+	}
+
+	conn, err := database.Conn(ctx)
+	if err != nil {
+		_ = database.Close()
+		t.Fatalf("get login rate limit lock connection: %v", err)
+	}
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, loginRateLimitTestAdvisoryLockKey); err != nil {
+		_ = conn.Close()
+		_ = database.Close()
+		t.Fatalf("acquire login rate limit advisory lock: %v", err)
+	}
+	state := &loginRateLimitTestLockState{conn: conn}
+	state.addDatabase(database)
+	loginRateLimitTestLocks.Store(t, state)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if _, err := state.conn.ExecContext(cleanupCtx, clearLoginRateLimitTestScopesSQL); err != nil {
+			t.Errorf("clean login rate limit scopes: %v", err)
+		}
+		cleanupCancel()
+		unlockCtx, unlockCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		var unlocked bool
+		if err := state.conn.QueryRowContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, loginRateLimitTestAdvisoryLockKey).Scan(&unlocked); err != nil {
+			t.Errorf("release login rate limit advisory lock: %v", err)
+		} else if !unlocked {
+			t.Error("login rate limit advisory lock was not held during cleanup")
+		}
+		unlockCancel()
+		if err := state.conn.Close(); err != nil {
+			t.Errorf("close login rate limit lock connection: %v", err)
+		}
+		state.closeDatabases(t)
+		loginRateLimitTestLocks.Delete(t)
+	})
+	if _, err := state.conn.ExecContext(ctx, clearLoginRateLimitTestScopesSQL); err != nil {
+		t.Fatalf("reset login rate limits: %v", err)
+	}
+}
+
 func newTestServer(t *testing.T) (http.Handler, string) {
 	t.Helper()
 
@@ -591,10 +689,7 @@ func newTestServer(t *testing.T) (http.Handler, string) {
 	if err != nil {
 		t.Fatalf("db open: %v", err)
 	}
-	t.Cleanup(func() { _ = database.Close() })
-	if _, err := database.ExecContext(ctx, `DELETE FROM request_rate_limits WHERE scope IN ('admin_login', 'app_password_account', 'app_password_ip')`); err != nil {
-		t.Fatalf("reset login rate limits: %v", err)
-	}
+	holdLoginRateLimitTestLock(t, database, ctx)
 
 	env := config.Env{
 		AdminPassword: "123456",

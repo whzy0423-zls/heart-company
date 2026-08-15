@@ -13,7 +13,10 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 )
 
-const appPasswordAuthBodyLimit = 8 * 1024
+const (
+	appPasswordAuthBodyLimit         = 8 * 1024
+	appPasswordLoginDBLimiterTimeout = 500 * time.Millisecond
+)
 
 func (s *Server) appRegisterWithPassword(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -105,7 +108,7 @@ func (s *Server) appLoginWithPassword(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "请输入账号和密码")
 		return
 	}
-	if !s.allowAppPasswordLoginAttempt(identifier, s.clientIP(r), time.Now()) {
+	if !s.allowAppPasswordLoginAttempt(r.Context(), identifier, s.clientIP(r), time.Now()) {
 		httpx.Fail(w, http.StatusTooManyRequests, "登录尝试过于频繁，请稍后再试")
 		return
 	}
@@ -187,21 +190,30 @@ func isSixDigitCode(code string) bool {
 	return true
 }
 
-func (s *Server) allowAppPasswordLoginAttempt(identifier, ip string, now time.Time) bool {
+func (s *Server) allowAppPasswordLoginAttempt(ctx context.Context, identifier, ip string, now time.Time) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	ipKey := strings.TrimSpace(ip)
-	if !allowAppPasswordLoginDimension(s.appPasswordIPDBLimiter, s.appPasswordIPLimiter, "ip:"+ipKey, ipKey, now) {
+	if !allowAppPasswordLoginDimension(ctx, s.appPasswordIPDBLimiter, s.appPasswordIPLimiter, "ip:"+ipKey, ipKey, now) {
 		return false
 	}
 	accountKey := strings.ToLower(strings.TrimSpace(identifier))
-	if !allowAppPasswordLoginDimension(s.appPasswordAccountDBLimiter, s.appPasswordAccountLimiter, "account:"+accountKey, accountKey, now) {
+	if !allowAppPasswordLoginDimension(ctx, s.appPasswordAccountDBLimiter, s.appPasswordAccountLimiter, "account:"+accountKey, accountKey, now) {
 		return false
 	}
 	return true
 }
 
-func allowAppPasswordLoginDimension(dbLimiter *dbRateLimiter, memoryLimiter *strRateLimiter, dbKey, memoryKey string, now time.Time) bool {
+func allowAppPasswordLoginDimension(ctx context.Context, dbLimiter *dbRateLimiter, memoryLimiter *strRateLimiter, dbKey, memoryKey string, now time.Time) bool {
+	if memoryKey == "" {
+		return true
+	}
 	if dbLimiter != nil && dbLimiter.db != nil {
-		if allowed, err := dbLimiter.allow(context.Background(), dbKey, now); err == nil {
+		dbCtx, cancel := context.WithTimeout(ctx, appPasswordLoginDBLimiterTimeout)
+		allowed, err := dbLimiter.allow(dbCtx, dbKey, now)
+		cancel()
+		if err == nil {
 			return allowed
 		}
 	}

@@ -810,7 +810,7 @@ func TestAppPasswordLoginErrorResponses(t *testing.T) {
 func TestAppPasswordLoginAttemptLimiterNormalizesKeysAndFailsOpenWhenNil(t *testing.T) {
 	now := time.Unix(200, 0)
 
-	if !(&Server{}).allowAppPasswordLoginAttempt(" XinUser ", " 127.0.0.1 ", now) {
+	if !(&Server{}).allowAppPasswordLoginAttempt(context.Background(), " XinUser ", " 127.0.0.1 ", now) {
 		t.Fatal("expected nil password login limiters to fail open")
 	}
 
@@ -818,10 +818,10 @@ func TestAppPasswordLoginAttemptLimiterNormalizesKeysAndFailsOpenWhenNil(t *test
 		appPasswordAccountLimiter: newStrRateLimiter(1, time.Minute),
 		appPasswordIPLimiter:      newStrRateLimiter(10, time.Minute),
 	}
-	if !accountLimited.allowAppPasswordLoginAttempt(" XinUser ", "127.0.0.1", now) {
+	if !accountLimited.allowAppPasswordLoginAttempt(context.Background(), " XinUser ", "127.0.0.1", now) {
 		t.Fatal("expected first normalized account attempt to be allowed")
 	}
-	if accountLimited.allowAppPasswordLoginAttempt("xinuser", "127.0.0.2", now) {
+	if accountLimited.allowAppPasswordLoginAttempt(context.Background(), "xinuser", "127.0.0.2", now) {
 		t.Fatal("expected account limiter to use lowercase trimmed identifier")
 	}
 
@@ -829,10 +829,10 @@ func TestAppPasswordLoginAttemptLimiterNormalizesKeysAndFailsOpenWhenNil(t *test
 		appPasswordAccountLimiter: newStrRateLimiter(10, time.Minute),
 		appPasswordIPLimiter:      newStrRateLimiter(1, time.Minute),
 	}
-	if !ipLimited.allowAppPasswordLoginAttempt("firstuser", " 127.0.0.1 ", now) {
+	if !ipLimited.allowAppPasswordLoginAttempt(context.Background(), "firstuser", " 127.0.0.1 ", now) {
 		t.Fatal("expected first normalized IP attempt to be allowed")
 	}
-	if ipLimited.allowAppPasswordLoginAttempt("seconduser", "127.0.0.1", now) {
+	if ipLimited.allowAppPasswordLoginAttempt(context.Background(), "seconduser", "127.0.0.1", now) {
 		t.Fatal("expected IP limiter to use trimmed IP")
 	}
 }
@@ -855,10 +855,10 @@ func TestAppPasswordLoginIPLimiterRunsBeforeAccountLimiter(t *testing.T) {
 		appPasswordIPLimiter:      ipLimiter,
 	}
 
-	if s.allowAppPasswordLoginAttempt(existingAccount, ip, now) {
+	if s.allowAppPasswordLoginAttempt(context.Background(), existingAccount, ip, now) {
 		t.Fatal("expected exhausted IP limiter to reject existing account")
 	}
-	if s.allowAppPasswordLoginAttempt(newAccount, ip, now) {
+	if s.allowAppPasswordLoginAttempt(context.Background(), newAccount, ip, now) {
 		t.Fatal("expected exhausted IP limiter to reject new account")
 	}
 
@@ -892,7 +892,7 @@ func TestAppPasswordLoginAttemptLimiterUsesDatabaseWithoutTouchingMemory(t *test
 		appPasswordIPDBLimiter:      newDBRateLimiter(database, "app_password_ip", 30, time.Minute),
 	}
 
-	if !s.allowAppPasswordLoginAttempt(account, ip, now) {
+	if !s.allowAppPasswordLoginAttempt(context.Background(), account, ip, now) {
 		t.Fatal("expected healthy database limiters to bypass exhausted memory limiters")
 	}
 	if got, ok := rateLimiterCount(accountLimiter, accountKey); !ok || got != 1 {
@@ -917,10 +917,10 @@ func TestAppPasswordLoginAttemptLimiterFallsBackToMemoryWhenDatabaseFails(t *tes
 			appPasswordAccountDBLimiter: newDBRateLimiter(database, "app_password_account", 5, time.Minute),
 		}
 
-		if !s.allowAppPasswordLoginAttempt(" XinUser ", "203.0.113.21", now) {
+		if !s.allowAppPasswordLoginAttempt(context.Background(), " XinUser ", "203.0.113.21", now) {
 			t.Fatal("expected first account attempt to fall back to memory and be allowed")
 		}
-		if s.allowAppPasswordLoginAttempt("xinuser", "203.0.113.22", now.Add(time.Second)) {
+		if s.allowAppPasswordLoginAttempt(context.Background(), "xinuser", "203.0.113.22", now.Add(time.Second)) {
 			t.Fatal("expected account memory fallback to reject the second attempt")
 		}
 	})
@@ -934,10 +934,10 @@ func TestAppPasswordLoginAttemptLimiterFallsBackToMemoryWhenDatabaseFails(t *tes
 			appPasswordIPDBLimiter:    newDBRateLimiter(database, "app_password_ip", 30, time.Minute),
 		}
 
-		if !s.allowAppPasswordLoginAttempt("firstuser", " 203.0.113.23 ", now) {
+		if !s.allowAppPasswordLoginAttempt(context.Background(), "firstuser", " 203.0.113.23 ", now) {
 			t.Fatal("expected first IP attempt to fall back to memory and be allowed")
 		}
-		if s.allowAppPasswordLoginAttempt("seconduser", "203.0.113.23", now.Add(time.Second)) {
+		if s.allowAppPasswordLoginAttempt(context.Background(), "seconduser", "203.0.113.23", now.Add(time.Second)) {
 			t.Fatal("expected IP memory fallback to reject the second attempt")
 		}
 		if _, ok := rateLimiterCount(accountLimiter, "seconduser"); ok {
@@ -961,9 +961,40 @@ func openAppPasswordLoginLimiterTestDatabase(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open app password limiter database: %v", err)
 	}
-	t.Cleanup(func() { _ = database.Close() })
-	clearAppPasswordLoginLimiterScopes(t, database)
-	t.Cleanup(func() { clearAppPasswordLoginLimiterScopes(t, database) })
+	conn, err := database.Conn(ctx)
+	if err != nil {
+		_ = database.Close()
+		t.Fatalf("get app password limiter advisory lock connection: %v", err)
+	}
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, appPasswordLoginLimiterTestAdvisoryLockKey); err != nil {
+		_ = conn.Close()
+		_ = database.Close()
+		t.Fatalf("acquire app password limiter advisory lock: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := clearAppPasswordLoginLimiterScopes(cleanupCtx, conn); err != nil {
+			t.Errorf("clear app password login limiter scopes: %v", err)
+		}
+		cleanupCancel()
+		unlockCtx, unlockCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		var unlocked bool
+		if err := conn.QueryRowContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, appPasswordLoginLimiterTestAdvisoryLockKey).Scan(&unlocked); err != nil {
+			t.Errorf("release app password limiter advisory lock: %v", err)
+		} else if !unlocked {
+			t.Error("app password limiter advisory lock was not held during cleanup")
+		}
+		unlockCancel()
+		if err := conn.Close(); err != nil {
+			t.Errorf("close app password limiter advisory lock connection: %v", err)
+		}
+		if err := database.Close(); err != nil {
+			t.Errorf("close app password limiter database: %v", err)
+		}
+	})
+	if err := clearAppPasswordLoginLimiterScopes(ctx, conn); err != nil {
+		t.Fatalf("clear app password login limiter scopes: %v", err)
+	}
 	return database
 }
 
@@ -981,11 +1012,281 @@ func openFailingAppPasswordLoginLimiterDatabase(t *testing.T) *sql.DB {
 	return database
 }
 
-func clearAppPasswordLoginLimiterScopes(t *testing.T, database *sql.DB) {
-	t.Helper()
-	if _, err := database.Exec(`DELETE FROM request_rate_limits WHERE scope IN ('app_password_account', 'app_password_ip')`); err != nil {
-		t.Fatalf("clear app password login limiter scopes: %v", err)
+func clearAppPasswordLoginLimiterScopes(ctx context.Context, conn *sql.Conn) error {
+	_, err := conn.ExecContext(ctx, `DELETE FROM request_rate_limits WHERE scope IN ('app_password_account', 'app_password_ip')`)
+	return err
+}
+
+func TestAppPasswordLoginAttemptLimiterTimesOutDatabaseAndFallsBackToMemory(t *testing.T) {
+	connector := newContextBlockingRateLimiterConnector()
+	database := sql.OpenDB(connector)
+	t.Cleanup(func() {
+		connector.releaseQuery()
+		_ = database.Close()
+	})
+	ipLimiter := newStrRateLimiter(1, time.Minute)
+	s := &Server{
+		appPasswordIPLimiter:   ipLimiter,
+		appPasswordIPDBLimiter: newDBRateLimiter(database, "app_password_ip", 30, time.Minute),
 	}
+
+	result := make(chan bool, 1)
+	started := time.Now()
+	go func() {
+		result <- s.allowAppPasswordLoginAttempt(context.Background(), "xinuser", "203.0.113.40", time.Now())
+	}()
+
+	select {
+	case allowed := <-result:
+		if !allowed {
+			t.Fatal("expected DB timeout to fall back to the IP memory limiter")
+		}
+		if elapsed := time.Since(started); elapsed > 1500*time.Millisecond {
+			t.Fatalf("expected bounded DB fallback, took %s", elapsed)
+		}
+	case <-time.After(1500 * time.Millisecond):
+		connector.releaseQuery()
+		<-result
+		t.Fatal("password login limiter did not bound the blocking DB query")
+	}
+
+	select {
+	case observed := <-connector.contexts:
+		deadline, ok := observed.Deadline()
+		if !ok {
+			t.Fatal("expected DB limiter context to have a deadline")
+		}
+		if remaining := time.Until(deadline); remaining > 750*time.Millisecond {
+			t.Fatalf("expected a short DB limiter deadline, remaining=%s", remaining)
+		}
+	default:
+		t.Fatal("expected blocking DB driver to observe a query context")
+	}
+	if got, ok := rateLimiterCount(ipLimiter, "203.0.113.40"); !ok || got != 1 {
+		t.Fatalf("expected IP memory fallback count 1, got count=%d exists=%t", got, ok)
+	}
+}
+
+func TestAppPasswordLoginAttemptLimiterRouteUsesCanceledRequestContext(t *testing.T) {
+	connector := newContextBlockingRateLimiterConnector()
+	database := sql.OpenDB(connector)
+	t.Cleanup(func() {
+		connector.releaseQuery()
+		_ = database.Close()
+	})
+	server := &Server{
+		mux:                       http.NewServeMux(),
+		db:                        database,
+		appPasswordIPLimiter:      newStrRateLimiter(1, time.Minute),
+		appPasswordAccountLimiter: newStrRateLimiter(1, time.Minute),
+		appPasswordIPDBLimiter:    newDBRateLimiter(database, "app_password_ip", 30, time.Minute),
+	}
+	server.routes()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/app/auth/login", strings.NewReader(`{"account":"xinuser","password":"secret1"}`))
+	request.Header.Set("Content-Type", "application/json")
+	ctx, cancel := context.WithCancel(request.Context())
+	cancel()
+	request = request.WithContext(ctx)
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		server.mux.ServeHTTP(response, request)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected canceled request to fall back then reach dependency guard, got %d body=%s", response.Code, response.Body.String())
+		}
+	case <-time.After(250 * time.Millisecond):
+		connector.releaseQuery()
+		<-done
+		t.Fatal("password login route did not propagate the canceled request context")
+	}
+}
+
+func TestAppPasswordLoginAttemptLimiterEmptyKeysFailOpenWithoutTouchingLimiters(t *testing.T) {
+	now := time.Unix(350, 0)
+
+	t.Run("ip", func(t *testing.T) {
+		connector := newRecordingRateLimiterConnector()
+		database := sql.OpenDB(connector)
+		t.Cleanup(func() { _ = database.Close() })
+		memoryLimiter := newStrRateLimiter(1, time.Minute)
+		s := &Server{
+			appPasswordIPLimiter:   memoryLimiter,
+			appPasswordIPDBLimiter: newDBRateLimiter(database, "app_password_ip", 30, time.Minute),
+		}
+
+		if !s.allowAppPasswordLoginAttempt(context.Background(), "xinuser", "   ", now) {
+			t.Fatal("expected empty normalized IP to fail open")
+		}
+		if len(connector.queries) != 0 {
+			t.Fatalf("expected empty IP not to query DB, got %d queries", len(connector.queries))
+		}
+		if got := rateLimiterKeyCount(memoryLimiter); got != 0 {
+			t.Fatalf("expected empty IP not to consume memory limiter, got %d keys", got)
+		}
+	})
+
+	t.Run("account", func(t *testing.T) {
+		connector := newRecordingRateLimiterConnector()
+		database := sql.OpenDB(connector)
+		t.Cleanup(func() { _ = database.Close() })
+		memoryLimiter := newStrRateLimiter(1, time.Minute)
+		s := &Server{
+			appPasswordAccountLimiter:   memoryLimiter,
+			appPasswordAccountDBLimiter: newDBRateLimiter(database, "app_password_account", 5, time.Minute),
+		}
+
+		if !s.allowAppPasswordLoginAttempt(context.Background(), "   ", "203.0.113.41", now) {
+			t.Fatal("expected empty normalized account to fail open")
+		}
+		if len(connector.queries) != 0 {
+			t.Fatalf("expected empty account not to query DB, got %d queries", len(connector.queries))
+		}
+		if got := rateLimiterKeyCount(memoryLimiter); got != 0 {
+			t.Fatalf("expected empty account not to consume memory limiter, got %d keys", got)
+		}
+	})
+}
+
+func TestAppPasswordLoginAttemptLimiterDatabaseHelperHoldsAdvisoryLock(t *testing.T) {
+	database := openAppPasswordLoginLimiterTestDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	probe, err := database.Conn(ctx)
+	if err != nil {
+		t.Fatalf("open advisory lock probe connection: %v", err)
+	}
+	t.Cleanup(func() { _ = probe.Close() })
+	var acquired bool
+	if err := probe.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, appPasswordLoginLimiterTestAdvisoryLockKey).Scan(&acquired); err != nil {
+		t.Fatalf("probe app password limiter advisory lock: %v", err)
+	}
+	if acquired {
+		_, _ = probe.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, appPasswordLoginLimiterTestAdvisoryLockKey)
+		t.Fatal("expected DB limiter helper to hold the shared advisory lock")
+	}
+}
+
+const appPasswordLoginLimiterTestAdvisoryLockKey int64 = 0x4e58504c494d4954
+
+type contextBlockingRateLimiterConnector struct {
+	contexts    chan context.Context
+	release     chan struct{}
+	releaseOnce sync.Once
+}
+
+func newContextBlockingRateLimiterConnector() *contextBlockingRateLimiterConnector {
+	return &contextBlockingRateLimiterConnector{
+		contexts: make(chan context.Context, 1),
+		release:  make(chan struct{}),
+	}
+}
+
+func (c *contextBlockingRateLimiterConnector) Connect(context.Context) (driver.Conn, error) {
+	return &contextBlockingRateLimiterConn{connector: c}, nil
+}
+
+func (*contextBlockingRateLimiterConnector) Driver() driver.Driver {
+	return contextBlockingRateLimiterDriver{}
+}
+
+func (c *contextBlockingRateLimiterConnector) releaseQuery() {
+	c.releaseOnce.Do(func() { close(c.release) })
+}
+
+type contextBlockingRateLimiterDriver struct{}
+
+func (contextBlockingRateLimiterDriver) Open(string) (driver.Conn, error) {
+	return nil, errors.New("use connector")
+}
+
+type contextBlockingRateLimiterConn struct {
+	connector *contextBlockingRateLimiterConnector
+}
+
+func (*contextBlockingRateLimiterConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare unsupported")
+}
+
+func (*contextBlockingRateLimiterConn) Close() error { return nil }
+
+func (*contextBlockingRateLimiterConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("transactions unsupported")
+}
+
+func (c *contextBlockingRateLimiterConn) QueryContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Rows, error) {
+	select {
+	case c.connector.contexts <- ctx:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-c.connector.release:
+		return nil, errors.New("query released")
+	}
+}
+
+type recordingRateLimiterConnector struct {
+	queries chan struct{}
+}
+
+func newRecordingRateLimiterConnector() *recordingRateLimiterConnector {
+	return &recordingRateLimiterConnector{queries: make(chan struct{}, 4)}
+}
+
+func (c *recordingRateLimiterConnector) Connect(context.Context) (driver.Conn, error) {
+	return &recordingRateLimiterConn{connector: c}, nil
+}
+
+func (*recordingRateLimiterConnector) Driver() driver.Driver {
+	return recordingRateLimiterDriver{}
+}
+
+type recordingRateLimiterDriver struct{}
+
+func (recordingRateLimiterDriver) Open(string) (driver.Conn, error) {
+	return nil, errors.New("use connector")
+}
+
+type recordingRateLimiterConn struct {
+	connector *recordingRateLimiterConnector
+}
+
+func (*recordingRateLimiterConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare unsupported")
+}
+
+func (*recordingRateLimiterConn) Close() error { return nil }
+
+func (*recordingRateLimiterConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("transactions unsupported")
+}
+
+func (c *recordingRateLimiterConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+	c.connector.queries <- struct{}{}
+	return &singleRateLimiterCountRows{}, nil
+}
+
+type singleRateLimiterCountRows struct {
+	done bool
+}
+
+func (*singleRateLimiterCountRows) Columns() []string { return []string{"count"} }
+func (*singleRateLimiterCountRows) Close() error      { return nil }
+
+func (r *singleRateLimiterCountRows) Next(destination []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+	r.done = true
+	destination[0] = int64(1)
+	return nil
 }
 
 func assertDBRateLimiterCount(t *testing.T, database *sql.DB, scope, key string, want int) {
@@ -1066,6 +1367,12 @@ func rateLimiterCount(limiter *strRateLimiter, key string) (int, bool) {
 	defer limiter.mu.Unlock()
 	window, ok := limiter.keys[key]
 	return window.count, ok
+}
+
+func rateLimiterKeyCount(limiter *strRateLimiter) int {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	return len(limiter.keys)
 }
 
 func serveAppAuthRequest(server *Server, path, body string) (rec *httptest.ResponseRecorder, recovered any) {
