@@ -399,8 +399,32 @@ func TestAppPrivacyExportAndMemoryDeletionAreScopedToCurrentUser(t *testing.T) {
 
 func TestAppPrivacyAccountDeletionDisablesCurrentUserAndRevokesTokens(t *testing.T) {
 	handler, database := newAppAPITestServer(t)
-	accessToken, refreshToken, userID := appAPILogin(t, handler, "13800009003")
-	_, _, otherUserID := appAPILogin(t, handler, "13800009004")
+	const (
+		currentPhone      = "13900000805"
+		currentAccount    = "task8privacycurrent"
+		currentDeviceInfo = "task8-privacy-current"
+		otherPhone        = "13900000806"
+		otherAccount      = "task8privacyother"
+		otherDeviceInfo   = "task8-privacy-other"
+	)
+	cleanupAppPrivacyAuthFixtures(t, database,
+		[]string{currentPhone, otherPhone},
+		[]string{currentAccount, otherAccount},
+		[]string{currentDeviceInfo, otherDeviceInfo},
+	)
+	t.Cleanup(func() {
+		cleanupAppPrivacyAuthFixtures(t, database,
+			[]string{currentPhone, otherPhone},
+			[]string{currentAccount, otherAccount},
+			[]string{currentDeviceInfo, otherDeviceInfo},
+		)
+	})
+
+	currentSession := appAPIPasswordRegister(t, handler, currentPhone, currentAccount, "Task 8 注销用户", currentDeviceInfo)
+	currentRotatedSession := appAPIRefreshPasswordSession(t, handler, currentSession.RefreshToken, "current user refresh rotation")
+	otherSession := appAPIPasswordRegister(t, handler, otherPhone, otherAccount, "Task 8 其他用户", otherDeviceInfo)
+	userID := currentSession.User.ID
+	otherUserID := otherSession.User.ID
 	cardID := insertAppAPICard(t, database, userID, "本人")
 	otherCardID := insertAppAPICard(t, database, otherUserID, "其他用户")
 	insertAppAPIMemory(t, database, userID, cardID, "current user memory")
@@ -408,23 +432,59 @@ func TestAppPrivacyAccountDeletionDisablesCurrentUserAndRevokesTokens(t *testing
 	insertAppAPIPreference(t, database, userID, "length", "length.detail_level", "回答简短，避免长篇大论")
 	insertAppAPIPreference(t, database, otherUserID, "tone", "tone.direct", "表达直接，少说教")
 
-	res := performAppAPI(handler, http.MethodDelete, "/api/app/privacy/account", accessToken, nil)
+	res := performAppAPI(handler, http.MethodDelete, "/api/app/privacy/account", currentRotatedSession.AccessToken, nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("expected account delete 200, got %d body=%s", res.Code, res.Body.String())
 	}
 
-	info := performAppAPI(handler, http.MethodGet, "/api/app/user/info", accessToken, nil)
-	if info.Code != http.StatusUnauthorized {
-		t.Fatalf("expected old access token to be rejected, got %d body=%s", info.Code, info.Body.String())
+	for label, accessToken := range map[string]string{
+		"registration access token": currentSession.AccessToken,
+		"rotated access token":      currentRotatedSession.AccessToken,
+	} {
+		info := performAppAPI(handler, http.MethodGet, "/api/app/user/info", accessToken, nil)
+		if info.Code != http.StatusUnauthorized {
+			t.Fatalf("expected %s to be rejected, got %d", label, info.Code)
+		}
 	}
-	refresh := performAppAPI(handler, http.MethodPost, "/api/app/auth/refresh", "", map[string]string{
-		"refreshToken": refreshToken,
-	})
-	if refresh.Code != http.StatusUnauthorized {
-		t.Fatalf("expected refresh token to be revoked, got %d body=%s", refresh.Code, refresh.Body.String())
+	for label, refreshToken := range map[string]string{
+		"registration refresh token": currentSession.RefreshToken,
+		"rotated refresh token":      currentRotatedSession.RefreshToken,
+	} {
+		refresh := performAppAPI(handler, http.MethodPost, "/api/app/auth/refresh", "", map[string]string{
+			"refreshToken": refreshToken,
+		})
+		if refresh.Code != http.StatusUnauthorized {
+			t.Fatalf("expected %s to be rejected, got %d", label, refresh.Code)
+		}
 	}
-	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_users WHERE id = $1 AND status = 'disabled' AND phone LIKE 'deleted-%'`, userID); got != 1 {
-		t.Fatalf("expected current user to be anonymized and disabled, got %d", got)
+
+	var (
+		storedPhone        string
+		storedAccount      sql.NullString
+		storedPasswordHash sql.NullString
+		storedStatus       string
+	)
+	if err := database.QueryRow(`SELECT phone, account, password_hash, status FROM app_users WHERE id=$1`, userID).Scan(
+		&storedPhone,
+		&storedAccount,
+		&storedPasswordHash,
+		&storedStatus,
+	); err != nil {
+		t.Fatalf("read deleted password user: %v", err)
+	}
+	if storedStatus != "disabled" || storedAccount.Valid || storedPasswordHash.Valid || !strings.HasPrefix(storedPhone, fmt.Sprintf("deleted-%d-", userID)) {
+		t.Fatalf("deleted password user retained credentials or identity: status=%q accountValid=%t passwordHashValid=%t phoneAnonymized=%t", storedStatus, storedAccount.Valid, storedPasswordHash.Valid, strings.HasPrefix(storedPhone, "deleted-"))
+	}
+	var totalRefreshTokens, revokedRefreshTokens int
+	if err := database.QueryRow(`
+		SELECT count(*), count(*) FILTER (WHERE revoked)
+		FROM app_refresh_tokens
+		WHERE app_user_id=$1
+	`, userID).Scan(&totalRefreshTokens, &revokedRefreshTokens); err != nil {
+		t.Fatalf("read deleted user refresh token state: %v", err)
+	}
+	if totalRefreshTokens < 2 || revokedRefreshTokens != totalRefreshTokens {
+		t.Fatalf("deleted user refresh tokens total=%d revoked=%d", totalRefreshTokens, revokedRefreshTokens)
 	}
 	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_memories WHERE app_user_id = $1`, userID); got != 0 {
 		t.Fatalf("expected current user's memories to be removed, got %d", got)
@@ -435,8 +495,27 @@ func TestAppPrivacyAccountDeletionDisablesCurrentUserAndRevokesTokens(t *testing
 	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_user_preferences WHERE app_user_id = $1`, otherUserID); got != 1 {
 		t.Fatalf("expected other user's communication preferences to remain, got %d", got)
 	}
-	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_users WHERE id = $1 AND status = 'active'`, otherUserID); got != 1 {
-		t.Fatalf("expected other user to remain active, got %d", got)
+	otherInfo := performAppAPI(handler, http.MethodGet, "/api/app/user/info", otherSession.AccessToken, nil)
+	if otherInfo.Code != http.StatusOK {
+		t.Fatalf("other user's access token returned status %d", otherInfo.Code)
+	}
+	_ = appAPIRefreshPasswordSession(t, handler, otherSession.RefreshToken, "other user refresh after account deletion")
+	var (
+		otherStoredPhone        string
+		otherStoredAccount      sql.NullString
+		otherStoredPasswordHash sql.NullString
+		otherStoredStatus       string
+	)
+	if err := database.QueryRow(`SELECT phone, account, password_hash, status FROM app_users WHERE id=$1`, otherUserID).Scan(
+		&otherStoredPhone,
+		&otherStoredAccount,
+		&otherStoredPasswordHash,
+		&otherStoredStatus,
+	); err != nil {
+		t.Fatalf("read other password user: %v", err)
+	}
+	if otherStoredPhone != otherPhone || !otherStoredAccount.Valid || otherStoredAccount.String != otherAccount || !otherStoredPasswordHash.Valid || otherStoredPasswordHash.String == "" || otherStoredStatus != "active" {
+		t.Fatalf("other password user changed during deletion: status=%q accountValid=%t passwordHashPresent=%t", otherStoredStatus, otherStoredAccount.Valid, otherStoredPasswordHash.Valid && otherStoredPasswordHash.String != "")
 	}
 }
 
@@ -474,7 +553,12 @@ func TestAppPrivacyMemoryDeletionRollsBackWhenEitherDeleteFails(t *testing.T) {
 
 func TestAppPrivacyAccountDeletionRollsBackWhenPreferenceCleanupFails(t *testing.T) {
 	handler, database := newAppAPITestServer(t)
-	token, _, userID := appAPILogin(t, handler, "13800009007")
+	const phone = "13800009007"
+	cleanupAppPrivacyAuthFixtures(t, database, []string{phone}, nil, nil)
+	t.Cleanup(func() {
+		cleanupAppPrivacyAuthFixtures(t, database, []string{phone}, nil, nil)
+	})
+	token, _, userID := appAPILogin(t, handler, phone)
 	cardID := insertAppAPICard(t, database, userID, "本人")
 	insertAppAPIMemory(t, database, userID, cardID, "must survive rollback")
 	insertAppAPIPreference(t, database, userID, "tone", "tone.direct", "直接一点", "直接说")
@@ -585,6 +669,127 @@ func newAppAPITestServer(t *testing.T) (http.Handler, *sql.DB) {
 		DatabaseURL:   dsn,
 	}
 	return New(env, database), database
+}
+
+type appAPIPasswordSession struct {
+	AccessToken  string
+	RefreshToken string
+	User         appuser.User
+}
+
+func appAPIPasswordRegister(t *testing.T, handler http.Handler, phone, account, nickname, deviceInfo string) appAPIPasswordSession {
+	t.Helper()
+	const fixturePassword = "fixture-secret-8"
+	sendResponse := performAppAPI(handler, http.MethodPost, "/api/app/auth/send-sms", "", map[string]string{"phone": phone})
+	if sendResponse.Code != http.StatusOK {
+		t.Fatalf("password registration SMS returned status %d", sendResponse.Code)
+	}
+	var sendBody struct {
+		Code int `json:"code"`
+		Data struct {
+			DevCode string `json:"devCode"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(sendResponse.Body.Bytes(), &sendBody); err != nil {
+		t.Fatalf("decode password registration SMS response: %v", err)
+	}
+	if sendBody.Code != 0 || sendBody.Data.DevCode == "" {
+		t.Fatal("password registration SMS response did not include a test code")
+	}
+
+	registrationResponse := performAppAPI(handler, http.MethodPost, "/api/app/auth/register", "", map[string]string{
+		"nickname":   nickname,
+		"account":    account,
+		"password":   fixturePassword,
+		"phone":      phone,
+		"code":       sendBody.Data.DevCode,
+		"deviceInfo": deviceInfo,
+	})
+	if registrationResponse.Code != http.StatusOK {
+		t.Fatalf("password registration returned status %d", registrationResponse.Code)
+	}
+	var registrationBody struct {
+		Code int `json:"code"`
+		Data struct {
+			AccessToken  string       `json:"accessToken"`
+			RefreshToken string       `json:"refreshToken"`
+			User         appuser.User `json:"user"`
+		} `json:"data"`
+		Error   any    `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(registrationResponse.Body.Bytes(), &registrationBody); err != nil {
+		t.Fatalf("decode password registration response: %v", err)
+	}
+	if registrationBody.Code != 0 || registrationBody.Message != "ok" || registrationBody.Error != nil || registrationBody.Data.AccessToken == "" || registrationBody.Data.RefreshToken == "" || registrationBody.Data.User.ID <= 0 {
+		t.Fatal("password registration response does not match the Flutter session shape")
+	}
+	if registrationBody.Data.User.Phone != phone || registrationBody.Data.User.Account != account || registrationBody.Data.User.Nickname != nickname {
+		t.Fatalf("password registration returned unexpected user identity: id=%d account=%q nickname=%q", registrationBody.Data.User.ID, registrationBody.Data.User.Account, registrationBody.Data.User.Nickname)
+	}
+	return appAPIPasswordSession{
+		AccessToken:  registrationBody.Data.AccessToken,
+		RefreshToken: registrationBody.Data.RefreshToken,
+		User:         registrationBody.Data.User,
+	}
+}
+
+func appAPIRefreshPasswordSession(t *testing.T, handler http.Handler, refreshToken, operation string) appAPIPasswordSession {
+	t.Helper()
+	response := performAppAPI(handler, http.MethodPost, "/api/app/auth/refresh", "", map[string]string{
+		"refreshToken": refreshToken,
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("%s returned status %d", operation, response.Code)
+	}
+	var body struct {
+		Code int `json:"code"`
+		Data struct {
+			AccessToken  string `json:"accessToken"`
+			RefreshToken string `json:"refreshToken"`
+		} `json:"data"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %s response: %v", operation, err)
+	}
+	if body.Code != 0 || body.Message != "ok" || body.Data.AccessToken == "" || body.Data.RefreshToken == "" {
+		t.Fatalf("%s does not match the Flutter token shape", operation)
+	}
+	if body.Data.RefreshToken == refreshToken {
+		t.Fatalf("%s did not rotate the refresh token", operation)
+	}
+	return appAPIPasswordSession{
+		AccessToken:  body.Data.AccessToken,
+		RefreshToken: body.Data.RefreshToken,
+	}
+}
+
+func cleanupAppPrivacyAuthFixtures(t *testing.T, database *sql.DB, phones, accounts, deviceInfos []string) {
+	t.Helper()
+	for _, deviceInfo := range deviceInfos {
+		if _, err := database.Exec(`
+			DELETE FROM app_users
+			WHERE id IN (
+				SELECT app_user_id FROM app_refresh_tokens WHERE device_info=$1
+			)
+		`, deviceInfo); err != nil {
+			t.Fatalf("clear privacy password fixture user by device: %v", err)
+		}
+	}
+	for _, account := range accounts {
+		if _, err := database.Exec(`DELETE FROM app_users WHERE lower(account)=lower($1)`, account); err != nil {
+			t.Fatalf("clear privacy password fixture user by account: %v", err)
+		}
+	}
+	for _, phone := range phones {
+		if _, err := database.Exec(`DELETE FROM app_sms_codes WHERE phone=$1`, phone); err != nil {
+			t.Fatalf("clear privacy password fixture SMS codes: %v", err)
+		}
+		if _, err := database.Exec(`DELETE FROM app_users WHERE phone=$1`, phone); err != nil {
+			t.Fatalf("clear privacy password fixture user by phone: %v", err)
+		}
+	}
 }
 
 func appAPILogin(t *testing.T, handler http.Handler, phone string) (string, string, int64) {

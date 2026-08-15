@@ -115,6 +115,221 @@ func TestAppAuthVerifySMS(t *testing.T) {
 	})
 }
 
+func TestAppPasswordRegistrationAndLogin(t *testing.T) {
+	handler, _ := newTestServer(t)
+	database := openAppAuthContractDatabase(t)
+	const (
+		phone          = "13900000801"
+		account        = "task8primary"
+		unknownAccount = "task8unknown"
+		nickname       = "Task 8 用户"
+		password       = "fixture-secret-8"
+	)
+	cleanupAppAuthContractFixtures(t, database, []string{phone}, []string{account, unknownAccount})
+	t.Cleanup(func() {
+		cleanupAppAuthContractFixtures(t, database, []string{phone}, []string{account, unknownAccount})
+	})
+
+	registrationCode := requestAppDevCode(t, handler, phone)
+	registrationResponse := perform(handler, http.MethodPost, "/api/app/auth/register", "", map[string]string{
+		"nickname":   nickname,
+		"account":    account,
+		"password":   password,
+		"phone":      phone,
+		"code":       registrationCode,
+		"deviceInfo": "task8-registration",
+	})
+	registration := decodeAppPasswordSessionResponse(t, registrationResponse, "password registration")
+	if registration.Data.User.ID <= 0 {
+		t.Fatal("password registration returned an invalid user ID")
+	}
+	if registration.Data.User.Phone != phone || registration.Data.User.Account != account || registration.Data.User.Nickname != nickname {
+		t.Fatalf("password registration returned unexpected user identity: id=%d account=%q nickname=%q", registration.Data.User.ID, registration.Data.User.Account, registration.Data.User.Nickname)
+	}
+
+	accountLoginResponse := perform(handler, http.MethodPost, "/api/app/auth/login", "", map[string]string{
+		"account":    strings.ToUpper(account),
+		"password":   password,
+		"deviceInfo": "task8-account-login",
+	})
+	accountLogin := decodeAppPasswordSessionResponse(t, accountLoginResponse, "case-insensitive account login")
+	if accountLogin.Data.User.ID != registration.Data.User.ID {
+		t.Fatalf("account login user ID=%d want=%d", accountLogin.Data.User.ID, registration.Data.User.ID)
+	}
+
+	phoneLoginResponse := perform(handler, http.MethodPost, "/api/app/auth/login", "", map[string]string{
+		"account":    phone,
+		"password":   password,
+		"deviceInfo": "task8-phone-login",
+	})
+	phoneLogin := decodeAppPasswordSessionResponse(t, phoneLoginResponse, "phone password login")
+	if phoneLogin.Data.User.ID != registration.Data.User.ID {
+		t.Fatalf("phone login user ID=%d want=%d", phoneLogin.Data.User.ID, registration.Data.User.ID)
+	}
+
+	wrongPasswordResponse := perform(handler, http.MethodPost, "/api/app/auth/login", "", map[string]string{
+		"account":  account,
+		"password": "fixture-wrong-password",
+	})
+	assertAppPasswordInvalidCredentialsResponse(t, wrongPasswordResponse, "wrong password")
+	unknownAccountResponse := perform(handler, http.MethodPost, "/api/app/auth/login", "", map[string]string{
+		"account":  unknownAccount,
+		"password": password,
+	})
+	assertAppPasswordInvalidCredentialsResponse(t, unknownAccountResponse, "unknown account")
+	if wrongPasswordResponse.Body.String() != unknownAccountResponse.Body.String() {
+		t.Fatal("wrong password and unknown account responses must be identical")
+	}
+
+	refreshResponse := perform(handler, http.MethodPost, "/api/app/auth/refresh", "", map[string]string{
+		"refreshToken": accountLogin.Data.RefreshToken,
+	})
+	if refreshResponse.Code != http.StatusOK {
+		t.Fatalf("password login refresh returned status %d", refreshResponse.Code)
+	}
+	var refreshBody struct {
+		Code int `json:"code"`
+		Data struct {
+			AccessToken  string `json:"accessToken"`
+			RefreshToken string `json:"refreshToken"`
+		} `json:"data"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(refreshResponse.Body.Bytes(), &refreshBody); err != nil {
+		t.Fatalf("decode password login refresh response: %v", err)
+	}
+	if refreshBody.Code != 0 || refreshBody.Message != "ok" || refreshBody.Data.AccessToken == "" || refreshBody.Data.RefreshToken == "" {
+		t.Fatal("password login refresh response does not match the Flutter token shape")
+	}
+	if refreshBody.Data.RefreshToken == accountLogin.Data.RefreshToken {
+		t.Fatal("password login refresh token was not rotated")
+	}
+	oldRefreshResponse := perform(handler, http.MethodPost, "/api/app/auth/refresh", "", map[string]string{
+		"refreshToken": accountLogin.Data.RefreshToken,
+	})
+	if oldRefreshResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("rotated refresh token returned status %d, want 401", oldRefreshResponse.Code)
+	}
+}
+
+func TestAppPasswordRegistrationBindsLegacySMSUser(t *testing.T) {
+	legacyHandler, _ := newTestServer(t)
+	database := openAppAuthContractDatabase(t)
+	const (
+		phone    = "13900000802"
+		account  = "task8legacy"
+		nickname = "Task 8 旧用户"
+		password = "fixture-secret-8"
+	)
+	cleanupAppAuthContractFixtures(t, database, []string{phone}, []string{account})
+	t.Cleanup(func() {
+		cleanupAppAuthContractFixtures(t, database, []string{phone}, []string{account})
+	})
+
+	legacyCode := requestAppDevCode(t, legacyHandler, phone)
+	legacyLoginResponse := perform(legacyHandler, http.MethodPost, "/api/app/auth/verify-sms", "", map[string]string{
+		"phone":      phone,
+		"code":       legacyCode,
+		"deviceInfo": "task8-legacy-sms-login",
+	})
+	legacyLogin := decodeAppPasswordSessionResponse(t, legacyLoginResponse, "legacy SMS login")
+	if legacyLogin.Data.User.ID <= 0 {
+		t.Fatal("legacy SMS login returned an invalid user ID")
+	}
+
+	registrationHandler, _ := newTestServer(t)
+	registrationCode := requestAppDevCode(t, registrationHandler, phone)
+	registrationResponse := perform(registrationHandler, http.MethodPost, "/api/app/auth/register", "", map[string]string{
+		"nickname":   nickname,
+		"account":    account,
+		"password":   password,
+		"phone":      phone,
+		"code":       registrationCode,
+		"deviceInfo": "task8-legacy-password-bind",
+	})
+	registration := decodeAppPasswordSessionResponse(t, registrationResponse, "legacy user password binding")
+	if registration.Data.User.ID != legacyLogin.Data.User.ID {
+		t.Fatalf("legacy user ID changed from %d to %d", legacyLogin.Data.User.ID, registration.Data.User.ID)
+	}
+	if registration.Data.User.Account != account || registration.Data.User.Phone != phone || registration.Data.User.Nickname != nickname {
+		t.Fatalf("legacy user binding returned unexpected identity: id=%d account=%q nickname=%q", registration.Data.User.ID, registration.Data.User.Account, registration.Data.User.Nickname)
+	}
+	if got := countAppAuthContractRows(t, database, `SELECT count(*) FROM app_users WHERE id=$1 AND phone=$2 AND account=$3 AND password_hash IS NOT NULL`, legacyLogin.Data.User.ID, phone, account); got != 1 {
+		t.Fatalf("legacy user credentials were not bound in place, matching rows=%d", got)
+	}
+}
+
+func TestAppPasswordRegistrationDuplicateAccountRollsBackSMSCode(t *testing.T) {
+	handler, _ := newTestServer(t)
+	database := openAppAuthContractDatabase(t)
+	const (
+		ownerPhone       = "13900000803"
+		candidatePhone   = "13900000804"
+		occupiedAccount  = "task8duplicate"
+		availableAccount = "task8available"
+		password         = "fixture-secret-8"
+	)
+	cleanupAppAuthContractFixtures(t, database, []string{ownerPhone, candidatePhone}, []string{occupiedAccount, availableAccount})
+	t.Cleanup(func() {
+		cleanupAppAuthContractFixtures(t, database, []string{ownerPhone, candidatePhone}, []string{occupiedAccount, availableAccount})
+	})
+
+	ownerCode := requestAppDevCode(t, handler, ownerPhone)
+	ownerResponse := perform(handler, http.MethodPost, "/api/app/auth/register", "", map[string]string{
+		"nickname": "Task 8 占用账号",
+		"account":  occupiedAccount,
+		"password": password,
+		"phone":    ownerPhone,
+		"code":     ownerCode,
+	})
+	_ = decodeAppPasswordSessionResponse(t, ownerResponse, "duplicate account owner registration")
+
+	candidateCode := requestAppDevCode(t, handler, candidatePhone)
+	duplicateResponse := perform(handler, http.MethodPost, "/api/app/auth/register", "", map[string]string{
+		"nickname": "Task 8 候选用户",
+		"account":  occupiedAccount,
+		"password": password,
+		"phone":    candidatePhone,
+		"code":     candidateCode,
+	})
+	if duplicateResponse.Code != http.StatusConflict {
+		t.Fatalf("duplicate account registration returned status %d, want 409", duplicateResponse.Code)
+	}
+	var duplicateBody struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Error   string `json:"error"`
+	}
+	if err := json.Unmarshal(duplicateResponse.Body.Bytes(), &duplicateBody); err != nil {
+		t.Fatalf("decode duplicate account response: %v", err)
+	}
+	if duplicateBody.Code != -1 || duplicateBody.Message != "用户名已存在" || duplicateBody.Error != "用户名已存在" {
+		t.Fatal("duplicate account response did not use the expected conflict message")
+	}
+	if got := countAppAuthContractRows(t, database, `SELECT count(*) FROM app_users WHERE phone=$1`, candidatePhone); got != 0 {
+		t.Fatalf("duplicate account attempt partially created %d user rows", got)
+	}
+	var codeUsed bool
+	if err := database.QueryRow(`SELECT used FROM app_sms_codes WHERE phone=$1 ORDER BY create_time DESC, id DESC LIMIT 1`, candidatePhone).Scan(&codeUsed); err != nil {
+		t.Fatalf("read candidate SMS code state: %v", err)
+	}
+	if codeUsed {
+		t.Fatal("duplicate account attempt consumed the SMS code")
+	}
+
+	retryResponse := perform(handler, http.MethodPost, "/api/app/auth/register", "", map[string]string{
+		"nickname": "Task 8 候选用户",
+		"account":  availableAccount,
+		"password": password,
+		"phone":    candidatePhone,
+		"code":     candidateCode,
+	})
+	retry := decodeAppPasswordSessionResponse(t, retryResponse, "duplicate account retry")
+	if retry.Data.User.Phone != candidatePhone || retry.Data.User.Account != availableAccount {
+		t.Fatalf("duplicate account retry returned unexpected identity: id=%d account=%q", retry.Data.User.ID, retry.Data.User.Account)
+	}
+}
+
 func TestAppPasswordSessionPersistenceFailureResponses(t *testing.T) {
 	handler, _ := newTestServer(t)
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -556,6 +771,97 @@ func waitForPushSendSentCount(t *testing.T, handler http.Handler, adminToken str
 	}
 	t.Fatalf("timed out waiting for push record %d to finish", sendBody.Data.RecordID)
 	return 0
+}
+
+type appPasswordSessionResponse struct {
+	Code int `json:"code"`
+	Data struct {
+		AccessToken  string       `json:"accessToken"`
+		RefreshToken string       `json:"refreshToken"`
+		User         appuser.User `json:"user"`
+	} `json:"data"`
+	Error   any    `json:"error"`
+	Message string `json:"message"`
+}
+
+func decodeAppPasswordSessionResponse(t *testing.T, response *httptest.ResponseRecorder, operation string) appPasswordSessionResponse {
+	t.Helper()
+	if response.Code != http.StatusOK {
+		t.Fatalf("%s returned status %d", operation, response.Code)
+	}
+	var body appPasswordSessionResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %s response: %v", operation, err)
+	}
+	if body.Code != 0 || body.Message != "ok" || body.Error != nil {
+		t.Fatalf("%s returned an invalid response envelope", operation)
+	}
+	if body.Data.AccessToken == "" || body.Data.RefreshToken == "" || body.Data.User.ID <= 0 {
+		t.Fatalf("%s does not match the Flutter session response shape", operation)
+	}
+	return body
+}
+
+func assertAppPasswordInvalidCredentialsResponse(t *testing.T, response *httptest.ResponseRecorder, operation string) {
+	t.Helper()
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("%s returned status %d, want 401", operation, response.Code)
+	}
+	var body struct {
+		Code    int    `json:"code"`
+		Data    any    `json:"data"`
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %s response: %v", operation, err)
+	}
+	if body.Code != -1 || body.Data != nil || body.Error != "账号或密码错误" || body.Message != "账号或密码错误" {
+		t.Fatalf("%s did not return the generic invalid-credentials response", operation)
+	}
+}
+
+func openAppAuthContractDatabase(t *testing.T) *sql.DB {
+	t.Helper()
+	dsn := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("set TEST_DATABASE_URL to run app auth contract tests")
+	}
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open app auth contract database: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	return database
+}
+
+func cleanupAppAuthContractFixtures(t *testing.T, database *sql.DB, phones, accounts []string) {
+	t.Helper()
+	for _, account := range accounts {
+		if _, err := database.Exec(`DELETE FROM app_users WHERE lower(account)=lower($1)`, account); err != nil {
+			t.Fatalf("clear app auth fixture user by account: %v", err)
+		}
+	}
+	for _, phone := range phones {
+		if _, err := database.Exec(`DELETE FROM app_sms_codes WHERE phone=$1`, phone); err != nil {
+			t.Fatalf("clear app auth fixture SMS codes: %v", err)
+		}
+		if _, err := database.Exec(`DELETE FROM app_users WHERE phone=$1`, phone); err != nil {
+			t.Fatalf("clear app auth fixture user by phone: %v", err)
+		}
+	}
+}
+
+func countAppAuthContractRows(t *testing.T, database *sql.DB, query string, args ...any) int {
+	t.Helper()
+	var count int
+	if err := database.QueryRow(query, args...).Scan(&count); err != nil {
+		t.Fatalf("count app auth contract rows: %v", err)
+	}
+	return count
 }
 
 func requestAppDevCode(t *testing.T, handler http.Handler, phone string) string {
