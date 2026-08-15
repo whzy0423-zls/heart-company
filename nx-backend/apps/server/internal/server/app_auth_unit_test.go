@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -19,7 +20,9 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/config"
+	serverdb "nine-xing/nx-backend/apps/server/internal/db"
 	"nine-xing/nx-backend/apps/server/internal/realip"
+	"nine-xing/nx-backend/apps/server/internal/testutil"
 )
 
 type failingRandReader struct{}
@@ -864,6 +867,135 @@ func TestAppPasswordLoginIPLimiterRunsBeforeAccountLimiter(t *testing.T) {
 	}
 	if _, ok := rateLimiterCount(accountLimiter, newAccount); ok {
 		t.Fatal("expected rejected IP not to create a new account limiter key")
+	}
+}
+
+func TestAppPasswordLoginAttemptLimiterUsesDatabaseWithoutTouchingMemory(t *testing.T) {
+	database := openAppPasswordLoginLimiterTestDatabase(t)
+	now := time.Now()
+	account := " XinUser "
+	accountKey := "xinuser"
+	ip := " 203.0.113.20 "
+	ipKey := "203.0.113.20"
+	accountLimiter := newStrRateLimiter(1, time.Minute)
+	ipLimiter := newStrRateLimiter(1, time.Minute)
+	if !accountLimiter.Allow(accountKey, now) {
+		t.Fatal("expected account memory limiter setup attempt to be allowed")
+	}
+	if !ipLimiter.Allow(ipKey, now) {
+		t.Fatal("expected IP memory limiter setup attempt to be allowed")
+	}
+	s := &Server{
+		appPasswordAccountLimiter:   accountLimiter,
+		appPasswordIPLimiter:        ipLimiter,
+		appPasswordAccountDBLimiter: newDBRateLimiter(database, "app_password_account", 5, time.Minute),
+		appPasswordIPDBLimiter:      newDBRateLimiter(database, "app_password_ip", 30, time.Minute),
+	}
+
+	if !s.allowAppPasswordLoginAttempt(account, ip, now) {
+		t.Fatal("expected healthy database limiters to bypass exhausted memory limiters")
+	}
+	if got, ok := rateLimiterCount(accountLimiter, accountKey); !ok || got != 1 {
+		t.Fatalf("expected account memory limiter count to remain 1, got count=%d exists=%t", got, ok)
+	}
+	if got, ok := rateLimiterCount(ipLimiter, ipKey); !ok || got != 1 {
+		t.Fatalf("expected IP memory limiter count to remain 1, got count=%d exists=%t", got, ok)
+	}
+	assertDBRateLimiterCount(t, database, "app_password_account", "account:xinuser", 1)
+	assertDBRateLimiterCount(t, database, "app_password_ip", "ip:203.0.113.20", 1)
+}
+
+func TestAppPasswordLoginAttemptLimiterFallsBackToMemoryWhenDatabaseFails(t *testing.T) {
+	database := openFailingAppPasswordLoginLimiterDatabase(t)
+	now := time.Unix(300, 0)
+
+	t.Run("account", func(t *testing.T) {
+		accountLimiter := newStrRateLimiter(1, time.Minute)
+		s := &Server{
+			appPasswordAccountLimiter:   accountLimiter,
+			appPasswordIPLimiter:        newStrRateLimiter(10, time.Minute),
+			appPasswordAccountDBLimiter: newDBRateLimiter(database, "app_password_account", 5, time.Minute),
+		}
+
+		if !s.allowAppPasswordLoginAttempt(" XinUser ", "203.0.113.21", now) {
+			t.Fatal("expected first account attempt to fall back to memory and be allowed")
+		}
+		if s.allowAppPasswordLoginAttempt("xinuser", "203.0.113.22", now.Add(time.Second)) {
+			t.Fatal("expected account memory fallback to reject the second attempt")
+		}
+	})
+
+	t.Run("ip", func(t *testing.T) {
+		accountLimiter := newStrRateLimiter(10, time.Minute)
+		ipLimiter := newStrRateLimiter(1, time.Minute)
+		s := &Server{
+			appPasswordAccountLimiter: accountLimiter,
+			appPasswordIPLimiter:      ipLimiter,
+			appPasswordIPDBLimiter:    newDBRateLimiter(database, "app_password_ip", 30, time.Minute),
+		}
+
+		if !s.allowAppPasswordLoginAttempt("firstuser", " 203.0.113.23 ", now) {
+			t.Fatal("expected first IP attempt to fall back to memory and be allowed")
+		}
+		if s.allowAppPasswordLoginAttempt("seconduser", "203.0.113.23", now.Add(time.Second)) {
+			t.Fatal("expected IP memory fallback to reject the second attempt")
+		}
+		if _, ok := rateLimiterCount(accountLimiter, "seconduser"); ok {
+			t.Fatal("expected rejected IP fallback not to create an account memory key")
+		}
+	})
+}
+
+func openAppPasswordLoginLimiterTestDatabase(t *testing.T) *sql.DB {
+	t.Helper()
+	dsn := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("set TEST_DATABASE_URL to run app password limiter integration tests")
+	}
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	database, err := serverdb.Open(ctx, dsn, "admin", "123456")
+	if err != nil {
+		t.Fatalf("open app password limiter database: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	clearAppPasswordLoginLimiterScopes(t, database)
+	t.Cleanup(func() { clearAppPasswordLoginLimiterScopes(t, database) })
+	return database
+}
+
+func openFailingAppPasswordLoginLimiterDatabase(t *testing.T) *sql.DB {
+	t.Helper()
+	const driverName = "nine_xing_failing_limiter"
+	failingQueryDriverRegisterOnce.Do(func() {
+		sql.Register(driverName, failingQueryDriver{})
+	})
+	database, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	return database
+}
+
+func clearAppPasswordLoginLimiterScopes(t *testing.T, database *sql.DB) {
+	t.Helper()
+	if _, err := database.Exec(`DELETE FROM request_rate_limits WHERE scope IN ('app_password_account', 'app_password_ip')`); err != nil {
+		t.Fatalf("clear app password login limiter scopes: %v", err)
+	}
+}
+
+func assertDBRateLimiterCount(t *testing.T, database *sql.DB, scope, key string, want int) {
+	t.Helper()
+	var got int
+	if err := database.QueryRow(`SELECT count FROM request_rate_limits WHERE scope=$1 AND key=$2`, scope, key).Scan(&got); err != nil {
+		t.Fatalf("read rate limiter %s/%s: %v", scope, key, err)
+	}
+	if got != want {
+		t.Fatalf("rate limiter %s/%s count=%d want=%d", scope, key, got, want)
 	}
 }
 

@@ -187,6 +187,137 @@ func TestAppPasswordSessionPersistenceFailureResponses(t *testing.T) {
 	}
 }
 
+func TestAppPasswordLoginAttemptLimiterEnforcesDatabaseAccountLimit(t *testing.T) {
+	handler, _ := newTestServer(t)
+	database := openAppPasswordLoginLimiterAssertionDatabase(t)
+	const (
+		account = " Task7Account "
+		ip      = "203.0.113.31"
+	)
+
+	for attempt := 1; attempt <= 5; attempt++ {
+		response := performAppPasswordLoginFromIP(handler, account, ip)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("account attempt %d: expected 401, got %d body=%s", attempt, response.Code, response.Body.String())
+		}
+	}
+	response := performAppPasswordLoginFromIP(handler, account, ip)
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("account attempt 6: expected 429, got %d body=%s", response.Code, response.Body.String())
+	}
+
+	assertRequestRateLimitRow(t, database, "app_password_account", "account:task7account", 6)
+	assertRequestRateLimitRow(t, database, "app_password_ip", "ip:"+ip, 6)
+	assertRequestRateLimitScopeRows(t, database, "admin_login", 0)
+}
+
+func TestAppPasswordLoginAttemptLimiterEnforcesDatabaseIPLimitBeforeAccount(t *testing.T) {
+	handler, _ := newTestServer(t)
+	database := openAppPasswordLoginLimiterAssertionDatabase(t)
+	const ip = "203.0.113.32"
+
+	for attempt := 1; attempt <= 30; attempt++ {
+		account := fmt.Sprintf("task7ipuser%02d", attempt)
+		response := performAppPasswordLoginFromIP(handler, account, ip)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("IP attempt %d: expected 401, got %d body=%s", attempt, response.Code, response.Body.String())
+		}
+	}
+	rejectedAccount := "task7ipuser31"
+	response := performAppPasswordLoginFromIP(handler, rejectedAccount, ip)
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("IP attempt 31: expected 429, got %d body=%s", response.Code, response.Body.String())
+	}
+
+	assertRequestRateLimitRow(t, database, "app_password_ip", "ip:"+ip, 31)
+	var rejectedAccountRows int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM request_rate_limits WHERE scope='app_password_account' AND key=$1`, "account:"+rejectedAccount).Scan(&rejectedAccountRows); err != nil {
+		t.Fatalf("count rejected account limiter row: %v", err)
+	}
+	if rejectedAccountRows != 0 {
+		t.Fatalf("expected rejected IP not to create account DB key, got %d rows", rejectedAccountRows)
+	}
+	assertRequestRateLimitScopeRows(t, database, "admin_login", 0)
+}
+
+func TestAppPasswordLoginAttemptLimiterNewTestServerClearsOnlyOwnedScopes(t *testing.T) {
+	_, _ = newTestServer(t)
+	database := openAppPasswordLoginLimiterAssertionDatabase(t)
+	preservedScope := fmt.Sprintf("task7_preserved_%d", time.Now().UnixNano())
+	for _, scope := range []string{"app_password_account", "app_password_ip", preservedScope} {
+		if _, err := database.Exec(`
+			INSERT INTO request_rate_limits(scope, key, count, expires_at)
+			VALUES($1, 'task7-fixture', 1, now() + interval '1 minute')
+			ON CONFLICT(scope, key) DO UPDATE SET count=EXCLUDED.count, expires_at=EXCLUDED.expires_at
+		`, scope); err != nil {
+			t.Fatalf("insert rate limiter fixture for %s: %v", scope, err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = database.Exec(`DELETE FROM request_rate_limits WHERE scope=$1`, preservedScope)
+	})
+
+	_, _ = newTestServer(t)
+	assertRequestRateLimitScopeRows(t, database, "app_password_account", 0)
+	assertRequestRateLimitScopeRows(t, database, "app_password_ip", 0)
+	assertRequestRateLimitScopeRows(t, database, preservedScope, 1)
+}
+
+func performAppPasswordLoginFromIP(handler http.Handler, account, ip string) *httptest.ResponseRecorder {
+	body, _ := json.Marshal(map[string]string{
+		"account":  account,
+		"password": "secret1",
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/app/auth/login", strings.NewReader(string(body)))
+	request.Header.Set("Content-Type", "application/json")
+	request.RemoteAddr = ip + ":43210"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func openAppPasswordLoginLimiterAssertionDatabase(t *testing.T) *sql.DB {
+	t.Helper()
+	dsn := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("set TEST_DATABASE_URL to run app password limiter integration tests")
+	}
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open app password limiter assertion database: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	t.Cleanup(func() {
+		_, _ = database.Exec(`DELETE FROM request_rate_limits WHERE scope IN ('app_password_account', 'app_password_ip')`)
+	})
+	return database
+}
+
+func assertRequestRateLimitRow(t *testing.T, database *sql.DB, scope, key string, want int) {
+	t.Helper()
+	var got int
+	if err := database.QueryRow(`SELECT count FROM request_rate_limits WHERE scope=$1 AND key=$2`, scope, key).Scan(&got); err != nil {
+		t.Fatalf("read request rate limit %s/%s: %v", scope, key, err)
+	}
+	if got != want {
+		t.Fatalf("request rate limit %s/%s count=%d want=%d", scope, key, got, want)
+	}
+}
+
+func assertRequestRateLimitScopeRows(t *testing.T, database *sql.DB, scope string, want int) {
+	t.Helper()
+	var got int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM request_rate_limits WHERE scope=$1`, scope).Scan(&got); err != nil {
+		t.Fatalf("count request rate limit scope %s: %v", scope, err)
+	}
+	if got != want {
+		t.Fatalf("request rate limit scope %s rows=%d want=%d", scope, got, want)
+	}
+}
+
 func TestAppAuthRefreshToken(t *testing.T) {
 	handler, _ := newTestServer(t)
 

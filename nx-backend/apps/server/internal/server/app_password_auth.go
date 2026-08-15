@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -188,12 +189,24 @@ func isSixDigitCode(code string) bool {
 
 func (s *Server) allowAppPasswordLoginAttempt(identifier, ip string, now time.Time) bool {
 	ipKey := strings.TrimSpace(ip)
-	if s.appPasswordIPLimiter != nil && !s.appPasswordIPLimiter.Allow(ipKey, now) {
+	if !allowAppPasswordLoginDimension(s.appPasswordIPDBLimiter, s.appPasswordIPLimiter, "ip:"+ipKey, ipKey, now) {
 		return false
 	}
 	accountKey := strings.ToLower(strings.TrimSpace(identifier))
-	if s.appPasswordAccountLimiter != nil && !s.appPasswordAccountLimiter.Allow(accountKey, now) {
+	if !allowAppPasswordLoginDimension(s.appPasswordAccountDBLimiter, s.appPasswordAccountLimiter, "account:"+accountKey, accountKey, now) {
 		return false
+	}
+	return true
+}
+
+func allowAppPasswordLoginDimension(dbLimiter *dbRateLimiter, memoryLimiter *strRateLimiter, dbKey, memoryKey string, now time.Time) bool {
+	if dbLimiter != nil && dbLimiter.db != nil {
+		if allowed, err := dbLimiter.allow(context.Background(), dbKey, now); err == nil {
+			return allowed
+		}
+	}
+	if memoryLimiter != nil {
+		return memoryLimiter.Allow(memoryKey, now)
 	}
 	return true
 }

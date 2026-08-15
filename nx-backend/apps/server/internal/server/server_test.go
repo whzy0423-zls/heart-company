@@ -592,8 +592,8 @@ func newTestServer(t *testing.T) (http.Handler, string) {
 		t.Fatalf("db open: %v", err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	if _, err := database.ExecContext(ctx, `DELETE FROM request_rate_limits WHERE scope='admin_login'`); err != nil {
-		t.Fatalf("reset admin login rate limits: %v", err)
+	if _, err := database.ExecContext(ctx, `DELETE FROM request_rate_limits WHERE scope IN ('admin_login', 'app_password_account', 'app_password_ip')`); err != nil {
+		t.Fatalf("reset login rate limits: %v", err)
 	}
 
 	env := config.Env{

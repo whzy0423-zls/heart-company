@@ -171,6 +171,8 @@ type Server struct {
 	smsVerifyIPLimiter             *strRateLimiter
 	appPasswordAccountLimiter      *strRateLimiter
 	appPasswordIPLimiter           *strRateLimiter
+	appPasswordAccountDBLimiter    *dbRateLimiter
+	appPasswordIPDBLimiter         *dbRateLimiter
 	publicSignupIPLimiter          *strRateLimiter
 	publicAnalyticsIPLimiter       *strRateLimiter
 	publicGameIPLimiter            *strRateLimiter
@@ -401,6 +403,8 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.smsVerifyIPLimiter = newStrRateLimiter(20, time.Minute)
 	s.appPasswordAccountLimiter = newStrRateLimiter(5, time.Minute)
 	s.appPasswordIPLimiter = newStrRateLimiter(30, time.Minute)
+	s.appPasswordAccountDBLimiter = newDBRateLimiter(database, "app_password_account", 5, time.Minute)
+	s.appPasswordIPDBLimiter = newDBRateLimiter(database, "app_password_ip", 30, time.Minute)
 	s.publicSignupIPLimiter = newStrRateLimiter(5, time.Minute)
 	s.publicAnalyticsIPLimiter = newStrRateLimiter(120, time.Minute)
 	s.publicGameIPLimiter = newStrRateLimiter(30, time.Minute)
