@@ -82,6 +82,17 @@ func isPhoneIdentifier(identifier string) bool {
 	return phoneIdentifierPattern.MatchString(identifier)
 }
 
+func passwordHashForAuthentication(stored sql.NullString) (string, bool) {
+	if !stored.Valid || stored.String == "" {
+		return passwordAuthenticationDummyHash, false
+	}
+	cost, err := bcrypt.Cost([]byte(stored.String))
+	if err != nil || cost != bcrypt.DefaultCost {
+		return passwordAuthenticationDummyHash, false
+	}
+	return stored.String, true
+}
+
 func (s *Store) AuthenticateWithPassword(ctx context.Context, identifier, password string) (User, error) {
 	identifier = strings.TrimSpace(identifier)
 
@@ -113,11 +124,7 @@ func (s *Store) AuthenticateWithPassword(ctx context.Context, identifier, passwo
 		return User{}, fmt.Errorf("find appuser credentials: %w", err)
 	}
 
-	hasPassword := found && passwordHash.Valid && strings.TrimSpace(passwordHash.String) != ""
-	hash := passwordAuthenticationDummyHash
-	if hasPassword {
-		hash = passwordHash.String
-	}
+	hash, hasPassword := passwordHashForAuthentication(passwordHash)
 	passwordMatches := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 	if !found || !hasPassword || !passwordMatches {
 		return User{}, ErrInvalidCredentials

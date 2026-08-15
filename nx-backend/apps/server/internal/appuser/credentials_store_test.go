@@ -719,6 +719,50 @@ func TestAuthenticateWithPasswordDummyHashIsFixedDefaultCost(t *testing.T) {
 	}
 }
 
+func TestAuthenticateWithPasswordSelectsOnlyUsableStoredHash(t *testing.T) {
+	defaultCostHash, err := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("generate DefaultCost hash: %v", err)
+	}
+	minCostHash, err := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("generate MinCost hash: %v", err)
+	}
+	highCostHash := string(defaultCostHash[:4]) + "31" + string(defaultCostHash[6:])
+	if cost, err := bcrypt.Cost([]byte(highCostHash)); err != nil || cost != 31 {
+		t.Fatalf("mechanical high-cost hash cost = %d, error = %v", cost, err)
+	}
+
+	tests := []struct {
+		name       string
+		stored     sql.NullString
+		wantUsable bool
+	}{
+		{name: "SQL NULL"},
+		{name: "empty", stored: sql.NullString{String: "", Valid: true}},
+		{name: "damaged", stored: sql.NullString{String: "not-a-bcrypt-hash", Valid: true}},
+		{name: "MinCost", stored: sql.NullString{String: string(minCostHash), Valid: true}},
+		{name: "cost 31", stored: sql.NullString{String: highCostHash, Valid: true}},
+		{name: "DefaultCost", stored: sql.NullString{String: string(defaultCostHash), Valid: true}, wantUsable: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotHash, gotUsable := passwordHashForAuthentication(tt.stored)
+			if gotUsable != tt.wantUsable {
+				t.Fatalf("passwordHashForAuthentication() usable = %v, want %v", gotUsable, tt.wantUsable)
+			}
+			wantHash := passwordAuthenticationDummyHash
+			if tt.wantUsable {
+				wantHash = tt.stored.String
+			}
+			if gotHash != wantHash {
+				t.Fatalf("passwordHashForAuthentication() hash = %q, want %q", gotHash, wantHash)
+			}
+		})
+	}
+}
+
 func TestAuthenticateWithPasswordSucceedsByAccountOrPhone(t *testing.T) {
 	database := openRegisterWithPasswordFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -805,8 +849,12 @@ func TestAuthenticateWithPasswordRejectsInvalidCredentialsBeforeStatus(t *testin
 	if err != nil {
 		t.Fatalf("hash fixture password: %v", err)
 	}
+	minCostHash, err := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash MinCost fixture password: %v", err)
+	}
 
-	var activeUserID, disabledUserID, smsOnlyUserID int64
+	var activeUserID, disabledUserID, smsOnlyUserID, damagedHashUserID, minCostUserID int64
 	if err := database.QueryRowContext(ctx, `
 		INSERT INTO app_users (phone, account, password_hash, nickname)
 		VALUES ('13800000211', 'active_user', $1, 'Active')
@@ -827,6 +875,20 @@ func TestAuthenticateWithPasswordRejectsInvalidCredentialsBeforeStatus(t *testin
 		RETURNING id
 	`).Scan(&smsOnlyUserID); err != nil {
 		t.Fatalf("insert SMS-only user: %v", err)
+	}
+	if err := database.QueryRowContext(ctx, `
+		INSERT INTO app_users (phone, account, password_hash, nickname)
+		VALUES ('13800000214', 'damaged_hash_user', 'not-a-bcrypt-hash', 'Damaged hash')
+		RETURNING id
+	`).Scan(&damagedHashUserID); err != nil {
+		t.Fatalf("insert damaged-hash user: %v", err)
+	}
+	if err := database.QueryRowContext(ctx, `
+		INSERT INTO app_users (phone, account, password_hash, nickname)
+		VALUES ('13800000215', 'min_cost_user', $1, 'MinCost hash')
+		RETURNING id
+	`, string(minCostHash)).Scan(&minCostUserID); err != nil {
+		t.Fatalf("insert MinCost-hash user: %v", err)
 	}
 
 	tests := []struct {
@@ -864,6 +926,20 @@ func TestAuthenticateWithPasswordRejectsInvalidCredentialsBeforeStatus(t *testin
 			userID:     smsOnlyUserID,
 		},
 		{
+			name:       "damaged stored hash",
+			identifier: "damaged_hash_user",
+			password:   "secret123",
+			want:       ErrInvalidCredentials,
+			userID:     damagedHashUserID,
+		},
+		{
+			name:       "MinCost stored hash with correct password",
+			identifier: "min_cost_user",
+			password:   "secret123",
+			want:       ErrInvalidCredentials,
+			userID:     minCostUserID,
+		},
+		{
 			name:       "disabled user with wrong password hides status",
 			identifier: "disabled_user",
 			password:   "wrong-password",
@@ -897,6 +973,53 @@ func TestAuthenticateWithPasswordRejectsInvalidCredentialsBeforeStatus(t *testin
 				t.Fatalf("failed authentication updated last_login_at to %v", lastLogin.Time)
 			}
 		})
+	}
+}
+
+func TestAuthenticateWithPasswordRejectsHighCostHashWithoutComparingIt(t *testing.T) {
+	database := openRegisterWithPasswordFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	defaultCostHash, err := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("hash fixture password: %v", err)
+	}
+	highCostHash := string(defaultCostHash[:4]) + "31" + string(defaultCostHash[6:])
+	if cost, err := bcrypt.Cost([]byte(highCostHash)); err != nil || cost != 31 {
+		t.Fatalf("mechanical high-cost hash cost = %d, error = %v", cost, err)
+	}
+
+	var userID int64
+	if err := database.QueryRowContext(ctx, `
+		INSERT INTO app_users (phone, account, password_hash, nickname)
+		VALUES ('13800000216', 'high_cost_user', $1, 'High cost hash')
+		RETURNING id
+	`, highCostHash).Scan(&userID); err != nil {
+		t.Fatalf("insert high-cost-hash user: %v", err)
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := NewStore(database).AuthenticateWithPassword(ctx, "high_cost_user", "secret123")
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrInvalidCredentials) {
+			t.Fatalf("AuthenticateWithPassword() error = %v, want ErrInvalidCredentials", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("AuthenticateWithPassword() appears to be comparing the cost-31 stored hash")
+	}
+
+	var lastLogin sql.NullTime
+	if err := database.QueryRowContext(ctx, `SELECT last_login_at FROM app_users WHERE id=$1`, userID).Scan(&lastLogin); err != nil {
+		t.Fatalf("read high-cost failed-login time: %v", err)
+	}
+	if lastLogin.Valid {
+		t.Fatalf("high-cost hash authentication updated last_login_at to %v", lastLogin.Time)
 	}
 }
 
