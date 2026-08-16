@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/analytics"
+	"nine-xing/nx-backend/apps/server/internal/appnotification"
 	"nine-xing/nx-backend/apps/server/internal/apprelease"
 	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/articlestore"
@@ -159,6 +160,7 @@ type Server struct {
 	preferenceTurns                map[int64]*appChatPreferenceTurnState
 	chatPersistHook                func()
 	pushStore                      *push.Store
+	appNotifications               appNotificationService
 	pushSendTimeout                time.Duration
 	pushRecoveryInterval           time.Duration
 	pushSendSlots                  chan struct{}
@@ -412,6 +414,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.videoStoryboardSlots = make(chan struct{}, 3)
 	s.smsSender = mustSMSSender(env.SMS)
 	s.pushStore = push.NewStore(database, push.NewPusher(env.AppEnv, env.JPush.AppKey, env.JPush.MasterSecret))
+	s.appNotifications = appnotification.NewStore(database)
 	s.pushSendSlots = make(chan struct{}, 2)
 	// 启动时应用 DB 中保存的模型配置覆盖（若存在），重建对话/视频客户端。
 	s.applyStoredModelConfig()
@@ -764,6 +767,11 @@ func (s *Server) routes() {
 	// 推送设备令牌注册/注销
 	s.mux.HandleFunc("/api/app/push/register", s.method(http.MethodPost, s.requireAppAuth(s.appPushRegister)))
 	s.mux.HandleFunc("/api/app/push/unregister", s.method(http.MethodPost, s.requireAppAuth(s.appPushUnregister)))
+	// App 内通知收件箱
+	s.mux.HandleFunc("/api/app/notifications", s.method(http.MethodGet, s.requireAppAuth(s.appNotificationList)))
+	s.mux.HandleFunc("/api/app/notifications/unread-count", s.method(http.MethodGet, s.requireAppAuth(s.appNotificationUnreadCount)))
+	s.mux.HandleFunc("/api/app/notifications/read-all", s.method(http.MethodPost, s.requireAppAuth(s.appNotificationMarkAllRead)))
+	s.mux.HandleFunc("/api/app/notifications/", s.method(http.MethodPost, s.requireAppAuth(s.appNotificationAction)))
 	// 语音识别
 	s.mux.HandleFunc("/api/app/voice/recognize", s.method(http.MethodPost, s.requireAppAuth(s.appVoiceRecognize)))
 	s.mux.HandleFunc("/api/app/xinzhili/turns/stream", s.method(http.MethodPost, s.requireAppAuth(s.appXinzhiliVoiceTurnStream)))
