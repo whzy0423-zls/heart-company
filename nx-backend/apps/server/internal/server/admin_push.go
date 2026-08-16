@@ -102,6 +102,11 @@ func (s *Server) adminPushSend(w http.ResponseWriter, r *http.Request) {
 			userAgent:    r.UserAgent(),
 		},
 	}
+	if err := s.persistAdminPushInbox(r.Context(), task); err != nil {
+		_ = s.pushStore.UpdatePushStatus(r.Context(), recordID, "failed", 0, "通知中心写入失败")
+		httpx.Fail(w, http.StatusInternalServerError, "通知中心写入失败")
+		return
+	}
 	s.recordAdminPushSendAudit(r.Context(), task, 0, "pending", "", "创建 App 推送任务")
 	go s.runAdminPushSendTask(task)
 
@@ -110,6 +115,23 @@ func (s *Server) adminPushSend(w http.ResponseWriter, r *http.Request) {
 		"status":   "pending",
 		"message":  "推送任务已创建，后台发送中",
 	})
+}
+
+func (s *Server) persistAdminPushInbox(ctx context.Context, task adminPushSendTask) error {
+	if s == nil || s.appNotifications == nil {
+		return nil
+	}
+	_, err := s.appNotifications.CreateForAudience(
+		ctx,
+		task.targetType,
+		task.targetValue,
+		"system",
+		task.title,
+		task.content,
+		task.deepLink,
+		fmt.Sprintf("admin-push:%d", task.recordID),
+	)
+	return err
 }
 
 type adminPushAuditMeta struct {

@@ -25,7 +25,8 @@ func TestSendDailyQuizRemindersCreatesBatchSendsDeepLinkAndMarksPushSent(t *test
 		dailyBatch:      profilecalibration.Batch{ID: 88, CardID: 123},
 	}
 	pusher := &recordingAppCalibrationPusher{}
-	s := &Server{appDailyQuizReminders: service, pushStore: push.NewStore(database, pusher)}
+	inbox := &fakeAppNotificationService{}
+	s := &Server{appDailyQuizReminders: service, pushStore: push.NewStore(database, pusher), appNotifications: inbox}
 
 	result, err := s.sendDailyQuizReminders(context.Background(), time.Date(2026, 7, 9, 9, 0, 0, 0, time.FixedZone("CST", 8*3600)))
 	if err != nil {
@@ -47,6 +48,9 @@ func TestSendDailyQuizRemindersCreatesBatchSendsDeepLinkAndMarksPushSent(t *test
 	if len(pusher.messages) != 1 || pusher.messages[0].DeepLink != "/daily-quiz" {
 		t.Fatalf("expected one /daily-quiz push, messages=%+v", pusher.messages)
 	}
+	if len(inbox.createdUsers) != 1 || inbox.createdUsers[0].source != "daily-quiz:88" || inbox.createdUsers[0].userID != 7 {
+		t.Fatalf("expected one idempotent daily inbox item, items=%+v", inbox.createdUsers)
+	}
 }
 
 func TestSendGeneratedReassessmentRemindersSendsReportDeepLinkAndMarksPushSent(t *testing.T) {
@@ -60,7 +64,8 @@ func TestSendGeneratedReassessmentRemindersSendsReportDeepLinkAndMarksPushSent(t
 		reassessmentCandidates: []profilecalibration.ReassessmentPushCandidate{{ID: 66, AppUserID: 7, CardID: 123}},
 	}
 	pusher := &recordingAppCalibrationPusher{}
-	s := &Server{appDailyQuizReminders: service, pushStore: push.NewStore(database, pusher)}
+	inbox := &fakeAppNotificationService{}
+	s := &Server{appDailyQuizReminders: service, pushStore: push.NewStore(database, pusher), appNotifications: inbox}
 
 	result, err := s.sendGeneratedReassessmentReminders(context.Background())
 	if err != nil {
@@ -75,6 +80,9 @@ func TestSendGeneratedReassessmentRemindersSendsReportDeepLinkAndMarksPushSent(t
 	}
 	if len(pusher.messages) != 1 || pusher.messages[0].DeepLink != "/reassessment/66" {
 		t.Fatalf("expected one report push, messages=%+v", pusher.messages)
+	}
+	if len(inbox.createdUsers) != 1 || inbox.createdUsers[0].source != "reassessment:66" || inbox.createdUsers[0].userID != 7 {
+		t.Fatalf("expected one idempotent reassessment inbox item, items=%+v", inbox.createdUsers)
 	}
 }
 

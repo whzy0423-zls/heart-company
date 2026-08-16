@@ -17,13 +17,27 @@ type fakeAppNotificationService struct {
 	markUserID, markID                 int64
 	markAllUserID                      int64
 	found                              bool
+	createdUsers                       []createdUserNotification
+	createdAudiences                   []createdAudienceNotification
 }
 
-func (f *fakeAppNotificationService) CreateForUser(context.Context, int64, string, string, string, string, string) (int64, error) {
+type createdUserNotification struct {
+	userID                             int64
+	kind, title, content, link, source string
+}
+
+type createdAudienceNotification struct {
+	targetType, targetValue            string
+	kind, title, content, link, source string
+}
+
+func (f *fakeAppNotificationService) CreateForUser(_ context.Context, userID int64, kind, title, content, link, source string) (int64, error) {
+	f.createdUsers = append(f.createdUsers, createdUserNotification{userID, kind, title, content, link, source})
 	return 1, nil
 }
 
-func (f *fakeAppNotificationService) CreateForAudience(context.Context, string, string, string, string, string, string, string) (int64, error) {
+func (f *fakeAppNotificationService) CreateForAudience(_ context.Context, targetType, targetValue, kind, title, content, link, source string) (int64, error) {
+	f.createdAudiences = append(f.createdAudiences, createdAudienceNotification{targetType, targetValue, kind, title, content, link, source})
 	return 1, nil
 }
 
@@ -99,5 +113,25 @@ func TestAppNotificationMarkAllRead(t *testing.T) {
 
 	if rec.Code != http.StatusOK || service.markAllUserID != 12 {
 		t.Fatalf("status=%d user=%d body=%s", rec.Code, service.markAllUserID, rec.Body.String())
+	}
+}
+
+func TestAdminPushPersistsAudienceInbox(t *testing.T) {
+	service := &fakeAppNotificationService{}
+	s := &Server{appNotifications: service}
+	task := adminPushSendTask{
+		recordID: 42, title: "系统公告", content: "新的成长内容已上线",
+		targetType: "level", targetValue: "pro", deepLink: "/tasks",
+	}
+
+	if err := s.persistAdminPushInbox(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	if len(service.createdAudiences) != 1 {
+		t.Fatalf("created audiences=%d", len(service.createdAudiences))
+	}
+	created := service.createdAudiences[0]
+	if created.targetType != "level" || created.targetValue != "pro" || created.source != "admin-push:42" || created.link != "/tasks" {
+		t.Fatalf("unexpected notification %+v", created)
 	}
 }
