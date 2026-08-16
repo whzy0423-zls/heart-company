@@ -2941,6 +2941,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_app_device_tokens_registration_id
 CREATE INDEX IF NOT EXISTS idx_app_device_tokens_user
   ON app_device_tokens(app_user_id);
 
+-- ----- App 通知收件箱：每个用户独立保存通知及已读状态 -----
+CREATE TABLE IF NOT EXISTS app_notifications (
+  id            BIGSERIAL PRIMARY KEY,
+  app_user_id   BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  kind          TEXT NOT NULL DEFAULT 'system',
+  title         TEXT NOT NULL DEFAULT '',
+  content       TEXT NOT NULL DEFAULT '',
+  deep_link     TEXT NOT NULL DEFAULT '',
+  source_key    TEXT NOT NULL DEFAULT '',
+  read_time     TIMESTAMPTZ,
+  create_time   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_notifications_user_timeline
+  ON app_notifications(app_user_id, create_time DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_app_notifications_user_unread
+  ON app_notifications(app_user_id, create_time DESC, id DESC)
+  WHERE read_time IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_notifications_user_source
+  ON app_notifications(app_user_id, source_key)
+  WHERE source_key <> '';
+
 -- ----- 推送通知记录：后台发送的推送历史 -----
 CREATE TABLE IF NOT EXISTS push_notifications (
   id            BIGSERIAL PRIMARY KEY,
