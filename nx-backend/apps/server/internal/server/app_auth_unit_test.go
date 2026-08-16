@@ -439,6 +439,13 @@ func TestAppAuthCompatibilityAliasRoutes(t *testing.T) {
 			want:   http.StatusBadRequest,
 		},
 		{
+			name:   "password reset route reaches handler",
+			method: http.MethodPost,
+			path:   "/api/app/auth/reset-password",
+			body:   `{`,
+			want:   http.StatusBadRequest,
+		},
+		{
 			name:   "me alias reaches app auth guard",
 			method: http.MethodGet,
 			path:   "/api/app/me",
@@ -541,6 +548,11 @@ func TestAppPasswordHandlersRejectTrailingJSON(t *testing.T) {
 			path: "/api/app/auth/login",
 			body: `{"account":"xinuser","password":"secret1"}`,
 		},
+		{
+			name: "password reset",
+			path: "/api/app/auth/reset-password",
+			body: `{"phone":"13800000000","code":"123456","password":"secret1"}`,
+		},
 	}
 	suffixes := []struct {
 		name  string
@@ -566,6 +578,31 @@ func TestAppPasswordHandlersRejectTrailingJSON(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAppResetPasswordValidationRejectsBeforeStore(t *testing.T) {
+	server := newRouteOnlyServer()
+	tests := []struct {
+		name        string
+		payload     string
+		wantMessage string
+	}{
+		{name: "phone", payload: `{"phone":"12800000000","code":"123456","password":"secret1"}`, wantMessage: "手机号格式不正确"},
+		{name: "code length", payload: `{"phone":"13800000000","code":"12345","password":"secret1"}`, wantMessage: "验证码格式不正确"},
+		{name: "code digits", payload: `{"phone":"13800000000","code":"12345a","password":"secret1"}`, wantMessage: "验证码格式不正确"},
+		{name: "short password", payload: `{"phone":"13800000000","code":"123456","password":"short"}`, wantMessage: "密码格式不正确"},
+		{name: "long password", payload: `{"phone":"13800000000","code":"123456","password":"` + strings.Repeat("a", 73) + `"}`, wantMessage: "密码格式不正确"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/app/auth/reset-password", strings.NewReader(tt.payload))
+			rec := httptest.NewRecorder()
+			server.mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), tt.wantMessage) {
+				t.Fatalf("status=%d body=%s want 400 containing %q", rec.Code, rec.Body.String(), tt.wantMessage)
+			}
+		})
 	}
 }
 
@@ -901,8 +938,8 @@ func TestAppPasswordLoginAttemptLimiterUsesDatabaseWithoutTouchingMemory(t *test
 	if got, ok := rateLimiterCount(ipLimiter, ipKey); !ok || got != 1 {
 		t.Fatalf("expected IP memory limiter count to remain 1, got count=%d exists=%t", got, ok)
 	}
-	assertDBRateLimiterCount(t, database, "app_password_account", "account:xinuser", 1)
-	assertDBRateLimiterCount(t, database, "app_password_ip", "ip:203.0.113.20", 1)
+	assertDBRateLimiterCount(t, database, "app_password_account", appPasswordLoginPersistentKey("", "account", accountKey), 1)
+	assertDBRateLimiterCount(t, database, "app_password_ip", appPasswordLoginPersistentKey("", "ip", ipKey), 1)
 }
 
 func TestAppPasswordLoginAttemptLimiterFallsBackToMemoryWhenDatabaseFails(t *testing.T) {
@@ -1169,6 +1206,41 @@ func TestAppPasswordLoginAttemptLimiterDatabaseHelperHoldsAdvisoryLock(t *testin
 	if acquired {
 		_, _ = probe.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, testutil.AuthFixtureAdvisoryLockKey)
 		t.Fatal("expected DB limiter helper to hold the shared advisory lock")
+	}
+}
+
+func TestDBRateLimiterPrunesExpiredRowsBeforeRecordingAttempt(t *testing.T) {
+	database := openAppPasswordLoginLimiterTestDatabase(t)
+	now := time.Now().UTC()
+	const (
+		scope      = "app_password_account"
+		expiredKey = "expired-rate-limit-key"
+		currentKey = "current-rate-limit-key"
+	)
+	if _, err := database.Exec(`
+		INSERT INTO request_rate_limits(scope, key, count, expires_at, update_time)
+		VALUES($1, $2, 4, $3, $3)
+	`, scope, expiredKey, now.Add(-time.Minute)); err != nil {
+		t.Fatalf("insert expired limiter row: %v", err)
+	}
+
+	limiter := newDBRateLimiter(database, scope, 5, time.Minute)
+	allowed, err := limiter.allow(context.Background(), currentKey, now)
+	if err != nil {
+		t.Fatalf("record current limiter attempt: %v", err)
+	}
+	if !allowed {
+		t.Fatal("expected first current limiter attempt to be allowed")
+	}
+
+	var expiredRows int
+	if err := database.QueryRow(`
+		SELECT count(*) FROM request_rate_limits WHERE scope=$1 AND key=$2
+	`, scope, expiredKey).Scan(&expiredRows); err != nil {
+		t.Fatalf("count expired limiter rows: %v", err)
+	}
+	if expiredRows != 0 {
+		t.Fatalf("expired limiter rows=%d want=0", expiredRows)
 	}
 }
 

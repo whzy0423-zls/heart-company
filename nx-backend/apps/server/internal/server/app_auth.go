@@ -28,13 +28,15 @@ const (
 func (s *Server) appSendSMS(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
 	var body struct {
-		Phone string `json:"phone"`
+		Phone   string `json:"phone"`
+		Purpose string `json:"purpose"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	phone := strings.TrimSpace(body.Phone)
+	purpose := strings.TrimSpace(body.Purpose)
 	if !isMainlandPhone(phone) {
 		httpx.Fail(w, http.StatusBadRequest, "invalid phone number")
 		return
@@ -65,9 +67,25 @@ func (s *Server) appSendSMS(w http.ResponseWriter, r *http.Request) {
 	}
 	codeHash := appuser.HashToken(code)
 
-	if err := s.appUsers.StoreSMSCode(r.Context(), phone, codeHash, ip, now.Add(smsCodeExpiry)); err != nil {
-		httpx.Fail(w, http.StatusInternalServerError, "failed to store code")
-		return
+	if purpose == "password_reset" {
+		eligible, err := s.appUsers.StorePasswordResetCodeIfEligible(r.Context(), phone, codeHash, ip, now.Add(smsCodeExpiry))
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "failed to store code")
+			return
+		}
+		if !eligible {
+			httpx.OK(w, nil)
+			return
+		}
+	} else {
+		if purpose != "" && purpose != "register" {
+			httpx.Fail(w, http.StatusBadRequest, "invalid SMS purpose")
+			return
+		}
+		if err := s.appUsers.StoreSMSCode(r.Context(), phone, codeHash, ip, now.Add(smsCodeExpiry)); err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "failed to store code")
+			return
+		}
 	}
 
 	if provider == "" {

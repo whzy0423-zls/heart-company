@@ -65,6 +65,29 @@ func TestSchemaDefinesAppPasswordCredentials(t *testing.T) {
 	}
 }
 
+func TestSchemaDefinesAppPasswordResetCodes(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized := strings.Join(strings.Fields(string(raw)), " ")
+	for _, fragment := range []string{
+		"CREATE TABLE IF NOT EXISTS app_password_reset_codes",
+		"phone TEXT NOT NULL",
+		"code_hash TEXT NOT NULL",
+		"expires_at TIMESTAMPTZ NOT NULL",
+		"used BOOLEAN NOT NULL DEFAULT false",
+		"send_ip TEXT NOT NULL DEFAULT ''",
+		"create_time TIMESTAMPTZ NOT NULL DEFAULT now()",
+		"CREATE INDEX IF NOT EXISTS idx_app_password_reset_codes_phone",
+		"ON app_password_reset_codes(phone, used, expires_at DESC)",
+	} {
+		if !strings.Contains(normalized, fragment) {
+			t.Fatalf("schema is missing app password reset fragment %q", fragment)
+		}
+	}
+}
+
 func TestSchemaAppPasswordCredentialsPostgres(t *testing.T) {
 	t.Run("fresh schema", func(t *testing.T) {
 		database, _ := testdb.OpenEnvIsolatedSchema(t, "app_password_fresh")

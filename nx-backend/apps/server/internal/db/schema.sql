@@ -2428,6 +2428,20 @@ CREATE TABLE IF NOT EXISTS app_sms_codes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_app_sms_codes_phone ON app_sms_codes(phone, used, expires_at DESC);
+
+CREATE TABLE IF NOT EXISTS app_password_reset_codes (
+  id          BIGSERIAL PRIMARY KEY,
+  phone       TEXT NOT NULL,
+  code_hash   TEXT NOT NULL,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  used        BOOLEAN NOT NULL DEFAULT false,
+  send_ip     TEXT NOT NULL DEFAULT '',
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_password_reset_codes_phone
+  ON app_password_reset_codes(phone, used, expires_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_app_users_insights_order
   ON app_users(create_time DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_app_users_status_member_order

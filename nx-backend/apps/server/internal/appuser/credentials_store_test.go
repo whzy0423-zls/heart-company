@@ -1158,6 +1158,26 @@ CREATE TABLE app_sms_codes (
   create_time TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE app_password_reset_codes (
+  id          BIGSERIAL PRIMARY KEY,
+  phone       TEXT NOT NULL,
+  code_hash   TEXT NOT NULL,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  used        BOOLEAN NOT NULL DEFAULT false,
+  send_ip     TEXT NOT NULL DEFAULT '',
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE app_refresh_tokens (
+  id          BIGSERIAL PRIMARY KEY,
+  app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  token_hash  TEXT NOT NULL UNIQUE,
+  device_info TEXT NOT NULL DEFAULT '',
+  expires_at  TIMESTAMPTZ NOT NULL,
+  revoked     BOOLEAN NOT NULL DEFAULT false,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE app_user_markers (
   app_user_id BIGINT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
   marker      TEXT NOT NULL

@@ -1,7 +1,10 @@
 package server_test
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -209,6 +212,99 @@ func TestAppPasswordRegistrationAndLogin(t *testing.T) {
 	})
 	if oldRefreshResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("rotated refresh token returned status %d, want 401", oldRefreshResponse.Code)
+	}
+}
+
+func TestAppPasswordRecovery(t *testing.T) {
+	handler, _ := newTestServer(t)
+	database := openAppAuthContractDatabase(t)
+	const (
+		phone        = "13900000831"
+		unknownPhone = "13900000832"
+		smsOnlyPhone = "13900000833"
+		account      = "task8recovery"
+		oldPassword  = "old-recovery-secret"
+		newPassword  = "new-recovery-secret"
+	)
+	phones := []string{phone, unknownPhone, smsOnlyPhone}
+	cleanupAppAuthContractFixtures(t, database, phones, []string{account})
+	t.Cleanup(func() { cleanupAppAuthContractFixtures(t, database, phones, []string{account}) })
+
+	registrationCode := "831246"
+	if _, err := database.Exec(`
+		INSERT INTO app_sms_codes (phone, code_hash, expires_at)
+		VALUES ($1, $2, now() + interval '10 minutes')
+	`, phone, appuser.HashToken(registrationCode)); err != nil {
+		t.Fatalf("seed recovery registration code: %v", err)
+	}
+	registration := decodeAppPasswordSessionResponse(t, perform(handler, http.MethodPost, "/api/app/auth/register", "", map[string]string{
+		"nickname": "Recovery User", "account": account, "password": oldPassword, "phone": phone, "code": registrationCode,
+	}), "recovery fixture registration")
+	if _, err := database.Exec(`INSERT INTO app_users (phone) VALUES ($1)`, smsOnlyPhone); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, candidate := range []string{unknownPhone, smsOnlyPhone} {
+		response := perform(handler, http.MethodPost, "/api/app/auth/send-sms", "", map[string]string{
+			"phone": candidate, "purpose": "password_reset",
+		})
+		if response.Code != http.StatusOK {
+			t.Fatalf("password reset request for %s returned %d body=%s", candidate, response.Code, response.Body.String())
+		}
+		var body struct {
+			Code    int            `json:"code"`
+			Data    map[string]any `json:"data"`
+			Message string         `json:"message"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Code != 0 || body.Message != "ok" || len(body.Data) != 0 {
+			t.Fatalf("ineligible reset response exposed state: %s", response.Body.String())
+		}
+		if rows := countAppAuthContractRows(t, database, `SELECT count(*) FROM app_password_reset_codes WHERE phone=$1`, candidate); rows != 0 {
+			t.Fatalf("ineligible phone %s stored %d reset codes", candidate, rows)
+		}
+	}
+
+	resetSend := perform(handler, http.MethodPost, "/api/app/auth/send-sms", "", map[string]string{
+		"phone": phone, "purpose": "password_reset",
+	})
+	if resetSend.Code != http.StatusOK {
+		t.Fatalf("eligible reset request returned %d body=%s", resetSend.Code, resetSend.Body.String())
+	}
+	var resetSendBody struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(resetSend.Body.Bytes(), &resetSendBody); err != nil {
+		t.Fatal(err)
+	}
+	resetCode, _ := resetSendBody.Data["devCode"].(string)
+	if resetCode == "" {
+		t.Fatal("eligible development reset did not return devCode")
+	}
+
+	resetResponse := perform(handler, http.MethodPost, "/api/app/auth/reset-password", "", map[string]string{
+		"phone": phone, "code": resetCode, "password": newPassword,
+	})
+	if resetResponse.Code != http.StatusOK {
+		t.Fatalf("reset password returned %d body=%s", resetResponse.Code, resetResponse.Body.String())
+	}
+	if refresh := perform(handler, http.MethodPost, "/api/app/auth/refresh", "", map[string]string{
+		"refreshToken": registration.Data.RefreshToken,
+	}); refresh.Code != http.StatusUnauthorized {
+		t.Fatalf("pre-reset refresh token returned %d want 401", refresh.Code)
+	}
+	assertAppPasswordInvalidCredentialsResponse(t, perform(handler, http.MethodPost, "/api/app/auth/login", "", map[string]string{
+		"account": account, "password": oldPassword,
+	}), "old password after reset")
+	decodeAppPasswordSessionResponse(t, perform(handler, http.MethodPost, "/api/app/auth/login", "", map[string]string{
+		"account": account, "password": newPassword,
+	}), "new password after reset")
+	if reuse := perform(handler, http.MethodPost, "/api/app/auth/reset-password", "", map[string]string{
+		"phone": phone, "code": resetCode, "password": "another-secret",
+	}); reuse.Code != http.StatusUnauthorized {
+		t.Fatalf("reused reset code returned %d want 401", reuse.Code)
 	}
 }
 
@@ -436,8 +532,8 @@ func TestAppPasswordLoginAttemptLimiterEnforcesDatabaseAccountLimit(t *testing.T
 		t.Fatalf("account attempt 6: expected 429, got %d body=%s", response.Code, response.Body.String())
 	}
 
-	assertRequestRateLimitRow(t, database, "app_password_account", "account:task7account", 6)
-	assertRequestRateLimitRow(t, database, "app_password_ip", "ip:"+ip, 6)
+	assertRequestRateLimitRow(t, database, "app_password_account", appPasswordLoginLimiterTestKey("account", account), 6)
+	assertRequestRateLimitRow(t, database, "app_password_ip", appPasswordLoginLimiterTestKey("ip", ip), 6)
 	assertRequestRateLimitScopeRows(t, database, "admin_login", 0)
 }
 
@@ -459,15 +555,42 @@ func TestAppPasswordLoginAttemptLimiterEnforcesDatabaseIPLimitBeforeAccount(t *t
 		t.Fatalf("IP attempt 31: expected 429, got %d body=%s", response.Code, response.Body.String())
 	}
 
-	assertRequestRateLimitRow(t, database, "app_password_ip", "ip:"+ip, 31)
+	assertRequestRateLimitRow(t, database, "app_password_ip", appPasswordLoginLimiterTestKey("ip", ip), 31)
 	var rejectedAccountRows int
-	if err := database.QueryRow(`SELECT COUNT(*) FROM request_rate_limits WHERE scope='app_password_account' AND key=$1`, "account:"+rejectedAccount).Scan(&rejectedAccountRows); err != nil {
+	if err := database.QueryRow(`SELECT COUNT(*) FROM request_rate_limits WHERE scope='app_password_account' AND key=$1`, appPasswordLoginLimiterTestKey("account", rejectedAccount)).Scan(&rejectedAccountRows); err != nil {
 		t.Fatalf("count rejected account limiter row: %v", err)
 	}
 	if rejectedAccountRows != 0 {
 		t.Fatalf("expected rejected IP not to create account DB key, got %d rows", rejectedAccountRows)
 	}
 	assertRequestRateLimitScopeRows(t, database, "admin_login", 0)
+}
+
+func TestAppPasswordLoginAttemptLimiterStoresPseudonymousDatabaseKeys(t *testing.T) {
+	handler, _ := newTestServer(t)
+	database := openAppPasswordLoginLimiterAssertionDatabase(t)
+	const (
+		account = "ReviewUser0816"
+		ip      = "203.0.113.81"
+	)
+
+	response := performAppPasswordLoginFromIP(handler, account, ip)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", response.Code, response.Body.String())
+	}
+
+	for _, scope := range []string{"app_password_account", "app_password_ip"} {
+		var key string
+		if err := database.QueryRow(`SELECT key FROM request_rate_limits WHERE scope=$1`, scope).Scan(&key); err != nil {
+			t.Fatalf("read %s limiter key: %v", scope, err)
+		}
+		if strings.Contains(strings.ToLower(key), strings.ToLower(account)) || strings.Contains(key, ip) {
+			t.Fatalf("%s limiter persisted a direct identifier: %q", scope, key)
+		}
+		if !strings.HasPrefix(key, "v1:") || len(key) != len("v1:")+64 {
+			t.Fatalf("%s limiter key=%q, want versioned SHA-256 digest", scope, key)
+		}
+	}
 }
 
 func TestAppPasswordLoginAttemptLimiterNewTestServerClearsOnlyOwnedScopes(t *testing.T) {
@@ -511,6 +634,13 @@ func performAppPasswordLoginFromIP(handler http.Handler, account, ip string) *ht
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response
+}
+
+func appPasswordLoginLimiterTestKey(dimension, value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	mac := hmac.New(sha256.New, []byte("test-secret"))
+	_, _ = mac.Write([]byte("app-password-login:" + dimension + ":" + normalized))
+	return "v1:" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func openAppPasswordLoginLimiterAssertionDatabase(t *testing.T) *sql.DB {
@@ -876,6 +1006,9 @@ func cleanupAppAuthContractFixtures(t *testing.T, database *sql.DB, phones, acco
 		}
 	}
 	for _, phone := range phones {
+		if _, err := database.Exec(`DELETE FROM app_password_reset_codes WHERE phone=$1`, phone); err != nil {
+			t.Fatalf("clear app auth fixture password reset codes: %v", err)
+		}
 		if _, err := database.Exec(`DELETE FROM app_sms_codes WHERE phone=$1`, phone); err != nil {
 			t.Fatalf("clear app auth fixture SMS codes: %v", err)
 		}

@@ -39,6 +39,12 @@ type RegisterWithPasswordInput struct {
 	SMSCodeHash string
 }
 
+type ResetPasswordInput struct {
+	Phone    string
+	CodeHash string
+	Password string
+}
+
 func NormalizeAccount(raw string) string {
 	normalized := []byte(strings.TrimSpace(raw))
 	for i, char := range normalized {
@@ -169,6 +175,120 @@ func (s *Store) AuthenticateWithPassword(ctx context.Context, identifier, passwo
 	user.UpdateTime = formatTime(updateTime)
 	applyMembershipTimes(&user, memberStartedAt, memberExpiresAt)
 	return user, nil
+}
+
+func (s *Store) StorePasswordResetCodeIfEligible(ctx context.Context, phone, codeHash, sendIP string, expiresAt time.Time) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, errors.New("appuser store unavailable")
+	}
+	var codeID int64
+	err := s.db.QueryRowContext(ctx, `
+		WITH invalidated AS (
+			UPDATE app_password_reset_codes
+			SET used = true
+			WHERE phone = $1 AND used = false
+		)
+		INSERT INTO app_password_reset_codes (phone, code_hash, expires_at, send_ip)
+		SELECT $1, $2, $3, $4
+		FROM app_users
+		WHERE phone = $1
+		  AND status = 'active'
+		  AND password_hash IS NOT NULL
+		  AND btrim(password_hash) <> ''
+		RETURNING id
+	`, phone, codeHash, expiresAt, sendIP).Scan(&codeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("store appuser password reset code: %w", err)
+	}
+	return true, nil
+}
+
+func (s *Store) ResetPassword(ctx context.Context, in ResetPasswordInput) error {
+	if s == nil || s.db == nil {
+		return errors.New("appuser store unavailable")
+	}
+	if err := ValidatePassword(in.Password); err != nil {
+		return err
+	}
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hash appuser reset password: %w", err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin appuser password reset: %w", err)
+	}
+	defer tx.Rollback()
+
+	var userID int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id
+		FROM app_users
+		WHERE phone = $1
+		  AND status = 'active'
+		  AND password_hash IS NOT NULL
+		  AND btrim(password_hash) <> ''
+		FOR UPDATE
+	`, in.Phone).Scan(&userID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrInvalidCredentials
+		}
+		return fmt.Errorf("lock appuser for password reset: %w", err)
+	}
+
+	var codeID int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id
+		FROM app_password_reset_codes
+		WHERE phone = $1
+		  AND code_hash = $2
+		  AND used = false
+		  AND expires_at > now()
+		ORDER BY create_time DESC, id DESC
+		LIMIT 1
+		FOR UPDATE
+	`, in.Phone, in.CodeHash).Scan(&codeID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrInvalidCredentials
+		}
+		return fmt.Errorf("lock appuser password reset code: %w", err)
+	}
+
+	result, err := tx.ExecContext(ctx, `
+		UPDATE app_password_reset_codes
+		SET used = true
+		WHERE id = $1 AND used = false
+	`, codeID)
+	if err != nil {
+		return fmt.Errorf("consume appuser password reset code: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("read appuser password reset code result: %w", err)
+	} else if affected != 1 {
+		return ErrInvalidCredentials
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE app_users
+		SET password_hash = $2, update_time = now()
+		WHERE id = $1
+	`, userID, string(passwordHash)); err != nil {
+		return fmt.Errorf("update appuser reset password: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE app_refresh_tokens
+		SET revoked = true
+		WHERE app_user_id = $1 AND revoked = false
+	`, userID); err != nil {
+		return fmt.Errorf("revoke appuser sessions after password reset: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit appuser password reset: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) RegisterWithPassword(ctx context.Context, in RegisterWithPasswordInput) (User, error) {

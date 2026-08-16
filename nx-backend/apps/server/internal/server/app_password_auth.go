@@ -2,6 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -130,6 +133,55 @@ func (s *Server) appLoginWithPassword(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) appResetPassword(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Phone    string `json:"phone"`
+		Code     string `json:"code"`
+		Password string `json:"password"`
+	}
+	if err := decodeAppPasswordJSON(w, r, &body); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	phone := strings.TrimSpace(body.Phone)
+	code := strings.TrimSpace(body.Code)
+	if !isMainlandPhone(phone) {
+		httpx.Fail(w, http.StatusBadRequest, "手机号格式不正确")
+		return
+	}
+	if !isSixDigitCode(code) {
+		httpx.Fail(w, http.StatusBadRequest, "验证码格式不正确")
+		return
+	}
+	if err := appuser.ValidatePassword(body.Password); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "密码格式不正确")
+		return
+	}
+	if !s.allowSMSVerifyAttempt(phone, s.clientIP(r), time.Now()) {
+		httpx.Fail(w, http.StatusTooManyRequests, "验证码验证过于频繁，请稍后再试")
+		return
+	}
+	if s.appUsers == nil || s.db == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "认证服务不可用")
+		return
+	}
+
+	if err := s.appUsers.ResetPassword(r.Context(), appuser.ResetPasswordInput{
+		Phone:    phone,
+		CodeHash: appuser.HashToken(code),
+		Password: body.Password,
+	}); err != nil {
+		if errors.Is(err, appuser.ErrInvalidCredentials) {
+			httpx.Fail(w, http.StatusUnauthorized, "验证码错误或已过期")
+			return
+		}
+		httpx.Fail(w, http.StatusInternalServerError, "重置密码失败")
+		return
+	}
+	httpx.OK(w, nil)
+}
+
 func decodeAppPasswordJSON(w http.ResponseWriter, r *http.Request, destination any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, appPasswordAuthBodyLimit)
 	decoder := json.NewDecoder(r.Body)
@@ -195,14 +247,26 @@ func (s *Server) allowAppPasswordLoginAttempt(ctx context.Context, identifier, i
 		ctx = context.Background()
 	}
 	ipKey := strings.TrimSpace(ip)
-	if !allowAppPasswordLoginDimension(ctx, s.appPasswordIPDBLimiter, s.appPasswordIPLimiter, "ip:"+ipKey, ipKey, now) {
+	ipDBKey := appPasswordLoginPersistentKey(s.env.JWTSecret, "ip", ipKey)
+	if !allowAppPasswordLoginDimension(ctx, s.appPasswordIPDBLimiter, s.appPasswordIPLimiter, ipDBKey, ipKey, now) {
 		return false
 	}
 	accountKey := strings.ToLower(strings.TrimSpace(identifier))
-	if !allowAppPasswordLoginDimension(ctx, s.appPasswordAccountDBLimiter, s.appPasswordAccountLimiter, "account:"+accountKey, accountKey, now) {
+	accountDBKey := appPasswordLoginPersistentKey(s.env.JWTSecret, "account", accountKey)
+	if !allowAppPasswordLoginDimension(ctx, s.appPasswordAccountDBLimiter, s.appPasswordAccountLimiter, accountDBKey, accountKey, now) {
 		return false
 	}
 	return true
+}
+
+func appPasswordLoginPersistentKey(secret, dimension, value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte("app-password-login:" + dimension + ":" + normalized))
+	return "v1:" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func allowAppPasswordLoginDimension(ctx context.Context, dbLimiter *dbRateLimiter, memoryLimiter *strRateLimiter, dbKey, memoryKey string, now time.Time) bool {

@@ -552,6 +552,74 @@ func TestAppPrivacyAccountDeletionDisablesCurrentUserAndRevokesTokens(t *testing
 	}
 }
 
+func TestAppPrivacyAccountDeletionClearsPasswordLoginLimiterIdentifiers(t *testing.T) {
+	handler, database := newAppAPITestServer(t)
+	const (
+		phone      = "13900000816"
+		account    = "task8privacylimiter"
+		deviceInfo = "task8-privacy-limiter"
+	)
+	cleanupAppPrivacyAuthFixtures(t, database, []string{phone}, []string{account}, []string{deviceInfo})
+	if _, err := database.Exec(`DELETE FROM request_rate_limits WHERE scope='app_password_account'`); err != nil {
+		t.Fatalf("clear password limiter fixtures: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupAppPrivacyAuthFixtures(t, database, []string{phone}, []string{account}, []string{deviceInfo})
+		_, _ = database.Exec(`DELETE FROM request_rate_limits WHERE scope='app_password_account'`)
+	})
+
+	session := appAPIPasswordRegister(t, handler, phone, account, "Task 8 限流清理用户", deviceInfo)
+	for _, identifier := range []string{account, phone} {
+		response := performAppAPI(handler, http.MethodPost, "/api/app/auth/login", "", map[string]string{
+			"account":  identifier,
+			"password": "wrong-password",
+		})
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("create limiter row for %q: status=%d body=%s", identifier, response.Code, response.Body.String())
+		}
+	}
+
+	rows, err := database.Query(`
+		SELECT key FROM request_rate_limits
+		WHERE scope='app_password_account'
+		ORDER BY key
+	`)
+	if err != nil {
+		t.Fatalf("list password limiter keys: %v", err)
+	}
+	var limiterKeys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			rows.Close()
+			t.Fatalf("scan password limiter key: %v", err)
+		}
+		limiterKeys = append(limiterKeys, key)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close password limiter rows: %v", err)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate password limiter keys: %v", err)
+	}
+	if len(limiterKeys) != 2 {
+		t.Fatalf("password limiter keys=%v want two account/phone keys", limiterKeys)
+	}
+
+	response := performAppAPI(handler, http.MethodDelete, "/api/app/privacy/account", session.AccessToken, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete account: status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, key := range limiterKeys {
+		if got := countAppAPIRows(t, database, `
+			SELECT count(*) FROM request_rate_limits
+			WHERE scope='app_password_account' AND key=$1
+		`, key); got != 0 {
+			t.Fatalf("deleted user limiter key %q rows=%d want=0", key, got)
+		}
+	}
+}
+
 func TestAppPrivacyMemoryDeletionRollsBackWhenEitherDeleteFails(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -1088,7 +1156,7 @@ func (*appPrivacyDeleteConn) BeginTx(context.Context, driver.TxOptions) (driver.
 }
 
 func (*appPrivacyDeleteConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
-	if !strings.Contains(query, "SELECT id FROM app_users") {
+	if !strings.Contains(query, "SELECT id, phone, COALESCE(account, '') FROM app_users") {
 		return nil, fmt.Errorf("unexpected privacy delete query: %s", query)
 	}
 	return &appPrivacyDeleteRows{}, nil
@@ -1108,7 +1176,7 @@ type appPrivacyDeleteRows struct {
 	done bool
 }
 
-func (*appPrivacyDeleteRows) Columns() []string { return []string{"id"} }
+func (*appPrivacyDeleteRows) Columns() []string { return []string{"id", "phone", "account"} }
 func (*appPrivacyDeleteRows) Close() error      { return nil }
 
 func (r *appPrivacyDeleteRows) Next(dest []driver.Value) error {
@@ -1116,6 +1184,8 @@ func (r *appPrivacyDeleteRows) Next(dest []driver.Value) error {
 		return io.EOF
 	}
 	dest[0] = int64(42)
+	dest[1] = "13800000042"
+	dest[2] = "privacyuser42"
 	r.done = true
 	return nil
 }

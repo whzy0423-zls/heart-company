@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/appuser"
@@ -155,10 +156,14 @@ func (s *Server) appPrivacyDeleteAccount(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer tx.Rollback()
-	var lockedUserID int64
+	var (
+		lockedUserID  int64
+		lockedPhone   string
+		lockedAccount string
+	)
 	if err := tx.QueryRowContext(r.Context(),
-		`SELECT id FROM app_users WHERE id = $1 FOR UPDATE`, userInfo.ID,
-	).Scan(&lockedUserID); err != nil {
+		`SELECT id, phone, COALESCE(account, '') FROM app_users WHERE id = $1 FOR UPDATE`, userInfo.ID,
+	).Scan(&lockedUserID, &lockedPhone, &lockedAccount); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
@@ -176,6 +181,19 @@ func (s *Server) appPrivacyDeleteAccount(w http.ResponseWriter, r *http.Request)
 	}
 	for _, query := range steps {
 		if _, err := tx.ExecContext(r.Context(), query, userInfo.ID); err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "server error")
+			return
+		}
+	}
+	for _, identifier := range []string{lockedAccount, lockedPhone} {
+		identifier = strings.ToLower(strings.TrimSpace(identifier))
+		if identifier == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(r.Context(), `
+			DELETE FROM request_rate_limits
+			WHERE scope='app_password_account' AND key IN ($1, $2)
+		`, appPasswordLoginPersistentKey(s.env.JWTSecret, "account", identifier), "account:"+identifier); err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, "server error")
 			return
 		}

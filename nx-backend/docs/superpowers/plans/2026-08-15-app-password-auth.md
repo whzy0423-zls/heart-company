@@ -466,6 +466,8 @@ Add tests proving:
 - Thirty attempts per IP across changing identifiers are allowed and the next is denied.
 - Nil limiters in route-only tests fail open, matching existing test conventions.
 - App password scopes do not consume the `admin_login` limit.
+- Database keys do not expose normalized accounts, phone numbers, or IP addresses.
+- Recording a new attempt removes expired rows in the same scope.
 
 - [ ] **Step 2: Run limit tests to verify RED**
 
@@ -479,9 +481,11 @@ Expected: FAIL because App password limiters do not exist.
 
 - [ ] **Step 3: Add dedicated in-memory and DB-backed limiters**
 
-Add Server fields for account and IP in-memory limiters and separate DB limiters. Initialize them with distinct scopes such as `app_password_account` and `app_password_ip`. Normalize identifier keys to lowercase and prefix DB keys so account and IP namespaces cannot collide.
+Add Server fields for account and IP in-memory limiters and separate DB limiters. Initialize them with distinct scopes such as `app_password_account` and `app_password_ip`. Keep normalized values only in memory; derive versioned HMAC-SHA256 database keys from `JWT_SECRET`, the limiter dimension, and the normalized value. Before each upsert, delete expired rows in that scope while preserving the current-key reset path.
 
 Update `newTestServer` cleanup to delete only these test scopes in addition to `admin_login`.
+
+Extend account deletion so its existing transaction removes both current digest keys and legacy plaintext account/phone limiter keys before anonymizing the user.
 
 - [ ] **Step 4: Run limit tests to verify GREEN**
 
@@ -594,3 +598,41 @@ git log --oneline --decorate -10
 ```
 
 Expected: clean `codex/app-password-auth` branch with all planned commits and no unrelated changes.
+
+### Task 10: Add phone password recovery
+
+**Files:**
+- Modify: `apps/server/internal/db/schema.sql`
+- Modify: `apps/server/internal/db/schema_app_password_auth_test.go`
+- Modify: `apps/server/internal/appuser/credentials.go`
+- Create: `apps/server/internal/appuser/password_reset_store_test.go`
+- Modify: `apps/server/internal/server/app_auth.go`
+- Modify: `apps/server/internal/server/app_password_auth.go`
+- Modify: `apps/server/internal/server/server.go`
+- Modify: `apps/server/internal/server/app_auth_unit_test.go`
+- Modify: `apps/server/internal/server/app_auth_test.go`
+
+- [ ] **Step 1: Verify RED for schema and Store contracts**
+
+Require a dedicated reset-code table and missing `StorePasswordResetCodeIfEligible` / `ResetPassword` methods.
+
+- [ ] **Step 2: Implement transactional reset storage**
+
+Store codes only for active password users. Consume the latest valid reset code, update the bcrypt hash, and revoke all refresh tokens in one transaction.
+
+- [ ] **Step 3: Verify RED for HTTP route and validation**
+
+Require `purpose=password_reset` handling and `POST /api/app/auth/reset-password`.
+
+- [ ] **Step 4: Implement non-enumerating delivery and reset handlers**
+
+Unknown or ineligible phones receive the same successful send response without a code. Reset failures use one generic authentication error.
+
+- [ ] **Step 5: Run PostgreSQL recovery contract**
+
+```bash
+TEST_DATABASE_URL="$TEST_DATABASE_URL" go test ./internal/appuser -run 'PasswordReset|ResetPassword' -count=1
+TEST_DATABASE_URL="$TEST_DATABASE_URL" go test ./internal/server -run '^TestAppPasswordRecovery$' -count=1
+```
+
+Expected: both suites PASS; old password and refresh tokens stop working, new password works, and the reset code cannot be reused.
