@@ -638,7 +638,7 @@ func TestConfigureMiniMaxIsSafeDuringSynthesis(t *testing.T) {
 }
 
 func TestDefaultSynthesisModelFollowsVoiceProvider(t *testing.T) {
-	if got := defaultSynthesisModel(ProviderBailian); got != "qwen3-tts-vc-2026-01-22" {
+	if got := defaultSynthesisModel(ProviderBailian); got != "qwen-audio-3.0-tts-flash" {
 		t.Fatalf("bailian model=%q", got)
 	}
 	if got := defaultSynthesisModel(ProviderMiniMax); got != "speech-02-hd" {

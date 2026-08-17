@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/chat"
+	"nine-xing/nx-backend/apps/server/internal/observability"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 	"nine-xing/nx-backend/apps/server/internal/theorystore"
 	"nine-xing/nx-backend/apps/server/internal/xinzhili"
@@ -18,10 +19,10 @@ func (s *Server) newXinzhiliRealtimeDependencies(cfg xinzhili.Config, sink xinzh
 	if !ok || chatStore == nil {
 		return xinzhili.SessionDependencies{}, errors.New("xinzhili chat store unavailable")
 	}
-	provider := (xinzhili.TTSProviderFactory{}).Dynamic()
+	provider := (xinzhili.TTSProviderFactory{Slots: s.globalTTSSlots(), Metrics: s.metrics}).Dynamic()
 	var generator xinzhili.ChatGenerator
 	if current := s.generator(); current != nil {
-		generator = serverXinzhiliGenerator{generator: current}
+		generator = serverXinzhiliGenerator{generator: current, metrics: s.metrics}
 	}
 	return xinzhili.SessionDependencies{
 		Cards:         serverXinzhiliCards{server: s},
@@ -39,6 +40,13 @@ func (s *Server) newXinzhiliRealtimeDependencies(cfg xinzhili.Config, sink xinzh
 		Sink:  sink,
 		Clock: serverXinzhiliClock{},
 	}, nil
+}
+
+func (s *Server) globalTTSSlots() chan struct{} {
+	if s == nil {
+		return nil
+	}
+	return s.ttsSlots
 }
 
 type serverXinzhiliClock struct{}
@@ -154,15 +162,29 @@ func (a serverXinzhiliTheory) Search(ctx context.Context, query string, topK int
 	return a.store.SearchActiveChunks(ctx, query, topK, minScore)
 }
 
-type serverXinzhiliGenerator struct{ generator rag.Generator }
+type serverXinzhiliGenerator struct {
+	generator rag.Generator
+	metrics   *observability.Metrics
+}
 
 func (a serverXinzhiliGenerator) GenerateStream(ctx context.Context, input rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+	started := time.Now()
+	var resultErr error
+	defer func() {
+		if a.metrics != nil {
+			a.metrics.LLMExit(time.Since(started), resultErr)
+		}
+	}()
 	if streaming, ok := a.generator.(rag.StreamingGenerator); ok {
-		return streaming.GenerateStream(ctx, input, emit)
+		answer, err := streaming.GenerateStream(ctx, input, emit)
+		resultErr = err
+		return answer, err
 	}
 	answer, err := a.generator.Generate(ctx, input)
+	resultErr = err
 	if err == nil && emit != nil && answer != "" {
 		if emitErr := emit(answer); emitErr != nil {
+			resultErr = emitErr
 			return "", emitErr
 		}
 	}

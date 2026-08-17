@@ -1167,3 +1167,27 @@ func TestXinzhiliTurnCancelReleasesTurnSequenceState(t *testing.T) {
 }
 
 func stringPtr(value string) *string { return &value }
+
+func TestXinzhiliRealtimeCapacityAllowsReplacementButRejectsNewUser(t *testing.T) {
+	s := &Server{xinzhiliLeases: map[int64]*xinzhiliRealtimeConn{1: {}}, xinzhiliMaxConnections: 1}
+	if !s.reserveXinzhiliRealtime(1) {
+		t.Fatal("existing user replacement must remain available")
+	}
+	if s.reserveXinzhiliRealtime(2) {
+		t.Fatal("new user must be rejected at capacity")
+	}
+}
+
+func TestXinzhiliRealtimeCapacityCountsPendingHandshakes(t *testing.T) {
+	s := &Server{xinzhiliLeases: map[int64]*xinzhiliRealtimeConn{}, xinzhiliMaxConnections: 1}
+	if !s.reserveXinzhiliRealtime(1) {
+		t.Fatal("first reservation rejected")
+	}
+	if s.reserveXinzhiliRealtime(2) {
+		t.Fatal("second reservation exceeded capacity")
+	}
+	s.releaseXinzhiliRealtimeReservation()
+	if !s.reserveXinzhiliRealtime(2) {
+		t.Fatal("released capacity was not reusable")
+	}
+}

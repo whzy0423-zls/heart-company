@@ -30,12 +30,22 @@ ALTER TABLE IF EXISTS video_project_assets
 // dsn 形如：postgres://user:pass@host:5432/dbname?sslmode=disable
 // adminUser/adminPassword 用于首次播种超级管理员账号。
 func Open(ctx context.Context, dsn, adminUser, adminPassword string) (*sql.DB, error) {
+	return OpenWithPoolConfig(ctx, dsn, adminUser, adminPassword, 20, 5)
+}
+
+func OpenWithPoolConfig(ctx context.Context, dsn, adminUser, adminPassword string, maxOpen, maxIdle int) (*sql.DB, error) {
 	database, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
-	database.SetMaxOpenConns(20)
-	database.SetMaxIdleConns(5)
+	if maxOpen <= 0 {
+		maxOpen = 20
+	}
+	if maxIdle < 0 || maxIdle > maxOpen {
+		maxIdle = min(maxOpen, 5)
+	}
+	database.SetMaxOpenConns(maxOpen)
+	database.SetMaxIdleConns(maxIdle)
 	database.SetConnMaxLifetime(time.Hour)
 
 	// 等待数据库就绪（容器编排下 server 可能比 postgres 先起）

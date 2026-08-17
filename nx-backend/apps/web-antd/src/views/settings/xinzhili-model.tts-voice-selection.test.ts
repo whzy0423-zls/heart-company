@@ -401,7 +401,7 @@ describe('xinzhili Bailian TTS voice selection', () => {
     expect(inputByTestId('tts-endpoint').value).toBe(
       'https://dashscope.aliyuncs.com/api/v1',
     );
-    expect(inputByTestId('tts-model').value).toBe('qwen3-tts-vc-2026-01-22');
+    expect(inputByTestId('tts-model').value).toBe('qwen-audio-3.0-tts-flash');
     expect(inputByTestId('tts-voice').value).toBe('');
     expect(inputByTestId('private-tts-api-key')).toBeNull();
     wrapper.unmount();
@@ -505,7 +505,7 @@ describe('xinzhili Bailian TTS voice selection', () => {
         tts: {
           ...config('bailian').tts,
           endpoint,
-          model: 'qwen3-tts-vc-2026-01-22',
+          model: 'qwen-audio-3.0-tts-flash',
         },
       });
       const wrapper = await mountSettings();

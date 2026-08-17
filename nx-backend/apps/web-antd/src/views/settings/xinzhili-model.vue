@@ -69,8 +69,10 @@ const ttsProviderOptions = [
 ];
 const aliyunBailianTtsPreset = {
   endpoint: 'https://dashscope.aliyuncs.com/api/v1',
-  model: 'qwen3-tts-vc-2026-01-22',
+  model: 'qwen-audio-3.0-tts-flash',
 };
+const defaultEmotionInstruction =
+  '像真实的陪伴者一样自然、亲切地说话，根据语义自动调整情绪、轻重和停顿，避免播音腔；除非原文明确要求，不要切换成外语。';
 const legacyAliyunBailianTtsPreset = {
   endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   model: 'qwen-audio-tts-latest',
@@ -198,6 +200,7 @@ function createEmptyForm(): XinzhiliModelConfigPayload {
       endpoint: '',
       format: 'mp3',
       groupId: '',
+      instruction: defaultEmotionInstruction,
       model: '',
       provider: 'openai-compatible',
       voice: '',
@@ -274,6 +277,8 @@ function applyView(data: XinzhiliModelConfigView) {
       endpoint: normalized.tts.endpoint,
       format: 'mp3',
       groupId: normalized.tts.groupId ?? '',
+      instruction:
+        normalized.tts.instruction ?? defaultEmotionInstruction,
       model: normalized.tts.model,
       provider,
       voice: normalized.tts.voice,
@@ -736,6 +741,17 @@ async function save() {
                   ? '阿里百炼复刻音色 ID'
                   : '也可以手动填写平台音色 ID'
               "
+            />
+          </Form.Item>
+          <Form.Item
+            v-if="form.tts.provider === 'bailian'"
+            label="情绪与表达指令"
+          >
+            <Textarea
+              v-model:value="form.tts.instruction"
+              :auto-size="{ minRows: 3, maxRows: 6 }"
+              data-testid="tts-instruction"
+              placeholder="描述语气、情绪变化、停顿和表达风格"
             />
           </Form.Item>
           <Form.Item v-if="!usesSharedBailianTts" label="API Key">

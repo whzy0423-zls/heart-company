@@ -61,7 +61,19 @@ func NormalizeStrictChineseTTSInput(text string) string {
 		return ""
 	}
 	normalized := NormalizeChineseTTSInput(replaceASCIILetterTokensForChineseSpeech(text))
-	return strings.Join(strings.Fields(normalized), "")
+	return normalizeChineseSpeechWhitespace(normalized)
+}
+
+func normalizeChineseSpeechWhitespace(text string) string {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	result := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.Join(strings.Fields(line), "")
+		if line != "" {
+			result = append(result, line)
+		}
+	}
+	return strings.Join(result, "\n")
 }
 
 // NormalizeMandarinPronunciationTTSInput applies the strict Chinese playback

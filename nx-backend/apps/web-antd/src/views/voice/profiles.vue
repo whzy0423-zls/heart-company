@@ -417,7 +417,7 @@ onMounted(load);
               type="info"
               show-icon
               message="阿里百炼 Qwen 声音复刻"
-              description="固定使用 qwen3-tts-vc-2026-01-22；保存公共 Key → 上传样本 → 克隆 → 芯之力选择"
+              description="固定使用 qwen-audio-3.0-tts-flash；保存公共 Key → 上传 10～20 秒干声样本 → 克隆 → 芯之力选择"
             />
             <Alert
               v-if="!canCloneVoice"

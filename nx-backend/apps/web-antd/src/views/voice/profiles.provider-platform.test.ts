@@ -482,9 +482,9 @@ describe('voice profile clone provider platform', () => {
     expect(source).not.toContain('v-model:value="form.provider"');
     expect(source).toContain('provider: form.provider');
     expect(source).toContain('阿里百炼 Qwen 声音复刻');
-    expect(source).toContain('qwen3-tts-vc-2026-01-22');
+    expect(source).toContain('qwen-audio-3.0-tts-flash');
     expect(source).not.toContain('请先在芯之力模型配置中保存百炼 API Key');
-    expect(source).toContain('保存公共 Key → 上传样本 → 克隆 → 芯之力选择');
+    expect(source).toContain('保存公共 Key → 上传 10～20 秒干声样本 → 克隆 → 芯之力选择');
   });
 
   it('shows the clone platform in the profile list', () => {
@@ -504,7 +504,7 @@ describe('voice profile clone provider platform', () => {
   it('switches synthesis models when a Bailian Qwen voice is selected', () => {
     for (const pageSource of [testPageSource, contentPageSource]) {
       expect(pageSource).toContain("provider === 'bailian'");
-      expect(pageSource).toContain('qwen3-tts-vc-2026-01-22');
+      expect(pageSource).toContain('qwen-audio-3.0-tts-flash');
       expect(pageSource).toContain("'speech-02-hd'");
       expect(pageSource).toContain('watch(');
     }

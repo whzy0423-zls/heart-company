@@ -47,12 +47,13 @@ type xinzhiliASRConfigView struct {
 }
 
 type xinzhiliTTSConfigView struct {
-	Provider string `json:"provider"`
-	Endpoint string `json:"endpoint"`
-	GroupID  string `json:"groupId,omitempty"`
-	Model    string `json:"model"`
-	Voice    string `json:"voice"`
-	Format   string `json:"format"`
+	Provider    string `json:"provider"`
+	Endpoint    string `json:"endpoint"`
+	GroupID     string `json:"groupId,omitempty"`
+	Model       string `json:"model"`
+	Voice       string `json:"voice"`
+	Format      string `json:"format"`
+	Instruction string `json:"instruction,omitempty"`
 	xinzhiliSecretView
 }
 
@@ -213,7 +214,7 @@ func buildXinzhiliModelConfigView(cfg xinzhili.Config) xinzhiliModelConfigView {
 		},
 		TTS: xinzhiliTTSConfigView{
 			Provider: cfg.TTS.Provider, Endpoint: cfg.TTS.Endpoint, GroupID: cfg.TTS.GroupID,
-			Model: cfg.TTS.Model, Voice: cfg.TTS.Voice, Format: cfg.TTS.Format,
+			Model: cfg.TTS.Model, Voice: cfg.TTS.Voice, Format: cfg.TTS.Format, Instruction: cfg.TTS.Instruction,
 			xinzhiliSecretView: secretView(cfg.TTS.APIKey),
 		},
 		EnabledModes: cfg.EnabledModes, Timing: cfg.Timing,

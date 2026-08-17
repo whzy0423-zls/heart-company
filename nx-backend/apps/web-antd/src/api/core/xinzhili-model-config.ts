@@ -41,6 +41,7 @@ export interface XinzhiliModelConfigView {
     endpoint: string;
     format: 'mp3';
     groupId?: string;
+    instruction?: string;
     model: string;
     provider: 'bailian' | 'minimax' | 'openai-compatible';
     voice: string;
@@ -67,6 +68,7 @@ export interface XinzhiliModelConfigPayload {
     endpoint: string;
     format: 'mp3';
     groupId?: string;
+    instruction?: string;
     model: string;
     provider: 'bailian' | 'minimax' | 'openai-compatible';
     voice: string;

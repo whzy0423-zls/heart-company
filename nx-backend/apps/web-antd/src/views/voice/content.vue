@@ -71,6 +71,10 @@ const miniMaxModelOptions = [
 
 const bailianModelOptions = [
   {
+    label: '百炼 Qwen Audio 3.0（情绪指令）',
+    value: 'qwen-audio-3.0-tts-flash',
+  },
+  {
     label: '百炼 Qwen3 TTS VC',
     value: 'qwen3-tts-vc-2026-01-22',
   },
@@ -115,7 +119,7 @@ watch(
   () => {
     form.model =
       selectedVoice.value?.provider === 'bailian'
-        ? selectedVoice.value.model || 'qwen3-tts-vc-2026-01-22'
+        ? selectedVoice.value.model || 'qwen-audio-3.0-tts-flash'
         : 'speech-02-hd';
   },
 );

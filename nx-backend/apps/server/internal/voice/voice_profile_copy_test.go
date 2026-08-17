@@ -64,7 +64,7 @@ func TestCopyProfileToBailianPlanCopiesBailianFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Name != "韩老师（百炼 Qwen）" || plan.Model != "qwen3-tts-vc-2026-01-22" || plan.Provider != ProviderBailian || plan.SampleAssetID != 42 || plan.SampleName != "teacher.mp3" || plan.SampleURL != "/api/upload-assets/42" || plan.Remark != "原始备注" {
+	if plan.Name != "韩老师（百炼 Qwen）" || plan.Model != "qwen-audio-3.0-tts-flash" || plan.Provider != ProviderBailian || plan.SampleAssetID != 42 || plan.SampleName != "teacher.mp3" || plan.SampleURL != "/api/upload-assets/42" || plan.Remark != "原始备注" {
 		t.Fatalf("unexpected copy plan: %+v", plan)
 	}
 }

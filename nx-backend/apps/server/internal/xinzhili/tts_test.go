@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -159,6 +160,45 @@ func TestBailianQwenTTSUsesClonedVoicePayload(t *testing.T) {
 	}
 	if string(audio) != string(testMP3()) || mime != "audio/mpeg" {
 		t.Fatalf("audio/mime mismatch")
+	}
+}
+
+func TestBailianQwenAudioTTSIncludesEmotionInstruction(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": map[string]any{"audio": hex.EncodeToString(testMP3())},
+		})
+	}))
+	defer server.Close()
+
+	cfg := TTSConfig{
+		Provider:    TTSProviderBailian,
+		Endpoint:    server.URL + "/api/v1",
+		APIKey:      "dashscope-key",
+		Model:       "qwen-audio-3.0-tts-flash",
+		Voice:       "qwen-cloned-voice",
+		Format:      "mp3",
+		Instruction: "自然、亲切地表达，并根据语义调整情绪。",
+	}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := provider.Synthesize(context.Background(), cfg, "我听见你现在有些难过。\n我们慢慢说。"); err != nil {
+		t.Fatal(err)
+	}
+
+	input := gotBody["input"].(map[string]any)
+	if input["voice"] != cfg.Voice || input["instruction"] != cfg.Instruction {
+		t.Fatalf("input=%#v", input)
+	}
+	if input["text"] != "我听见你现在有些难过。\n我们慢慢说。" {
+		t.Fatalf("text=%q", input["text"])
 	}
 }
 
@@ -459,6 +499,41 @@ func TestDynamicTTSProviderResolvesProviderFromEachTurnConfig(t *testing.T) {
 	if string(audio) != string(testMP3()) || mimeType != "audio/mpeg" {
 		t.Fatalf("audio=%x mime=%q", audio, mimeType)
 	}
+}
+
+func TestDynamicTTSProviderHonorsGlobalConcurrency(t *testing.T) {
+	var active, peak atomic.Int32
+	release := make(chan struct{})
+	provider := &dynamicTTSProvider{
+		factory: TTSProviderFactory{Slots: make(chan struct{}, 1)},
+		provider: ttsProviderFunc(func(ctx context.Context, _ TTSConfig, _ string) ([]byte, string, error) {
+			current := active.Add(1)
+			defer active.Add(-1)
+			for {
+				old := peak.Load()
+				if current <= old || peak.CompareAndSwap(old, current) {
+					break
+				}
+			}
+			select {
+			case <-release:
+				return testMP3(), "audio/mpeg", nil
+			case <-ctx.Done():
+				return nil, "", ctx.Err()
+			}
+		}),
+	}
+	var done sync.WaitGroup
+	done.Add(2)
+	for i := 0; i < 2; i++ {
+		go func() { defer done.Done(); _, _, _ = provider.Synthesize(context.Background(), TTSConfig{}, "短句") }()
+	}
+	time.Sleep(30 * time.Millisecond)
+	if peak.Load() != 1 {
+		t.Fatalf("peak=%d want=1", peak.Load())
+	}
+	close(release)
+	done.Wait()
 }
 
 func TestMiniMaxTTSAdapterRejectsOversizedAudioAtProviderBoundary(t *testing.T) {

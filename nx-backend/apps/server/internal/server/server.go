@@ -43,6 +43,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/miniapp"
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
 	"nine-xing/nx-backend/apps/server/internal/netguard"
+	"nine-xing/nx-backend/apps/server/internal/observability"
 	"nine-xing/nx-backend/apps/server/internal/profilecalibration"
 	"nine-xing/nx-backend/apps/server/internal/push"
 	"nine-xing/nx-backend/apps/server/internal/quiz"
@@ -183,14 +184,25 @@ type Server struct {
 	signupSubscribers map[chan signup.Lead]struct{}
 
 	// modelMu 保护可在运行时被"模型配置"页面重建的 ragGen / analysisGen / videos。
-	modelMu             sync.RWMutex
-	modelConfigUpdateMu sync.Mutex
-	xinzhiliLeaseMu     sync.Mutex
-	xinzhiliLeases      map[int64]*xinzhiliRealtimeConn
-	xinzhiliModelConfig xinzhiliModelConfigStore
-	xinzhiliModeStore   xinzhiliModePreferenceStore
-	xinzhiliVoiceConfig xinzhiliVoiceConfigStore
-	theoryAdmin         theoryLibraryAdminService
+	modelMu                    sync.RWMutex
+	modelConfigUpdateMu        sync.Mutex
+	xinzhiliLeaseMu            sync.Mutex
+	xinzhiliLeases             map[int64]*xinzhiliRealtimeConn
+	xinzhiliMaxConnections     int
+	xinzhiliPendingConnections int
+	metrics                    *observability.Metrics
+	ttsSlots                   chan struct{}
+	xinzhiliModelConfig        xinzhiliModelConfigStore
+	xinzhiliModeStore          xinzhiliModePreferenceStore
+	xinzhiliVoiceConfig        xinzhiliVoiceConfigStore
+	theoryAdmin                theoryLibraryAdminService
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 type websiteSignupCreator interface {
@@ -250,8 +262,11 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		uploader:          env.ObjectUploader,
 		trustedProxyCIDRs: trustedProxyCIDRs,
 
-		signupSubscribers: map[chan signup.Lead]struct{}{},
-		xinzhiliLeases:    map[int64]*xinzhiliRealtimeConn{},
+		signupSubscribers:      map[chan signup.Lead]struct{}{},
+		xinzhiliLeases:         map[int64]*xinzhiliRealtimeConn{},
+		xinzhiliMaxConnections: env.XinzhiliMaxConnections,
+		metrics:                observability.New(),
+		ttsSlots:               make(chan struct{}, maxInt(env.TTSMaxConcurrent, 1)),
 	}
 	if database != nil {
 		s.classroomPlaybackLimiter = newStrRateLimiter(30, time.Minute)

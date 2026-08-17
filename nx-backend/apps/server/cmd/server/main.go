@@ -19,7 +19,7 @@ func main() {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	database, err := db.Open(ctx, env.DatabaseURL, env.AdminUsername, env.AdminPassword)
+	database, err := db.OpenWithPoolConfig(ctx, env.DatabaseURL, env.AdminUsername, env.AdminPassword, env.DBMaxOpenConns, env.DBMaxIdleConns)
 	cancel()
 	if err != nil {
 		log.Fatalf("database init failed: %v", err)

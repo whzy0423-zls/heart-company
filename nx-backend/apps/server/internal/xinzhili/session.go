@@ -924,7 +924,7 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 }
 
 func (s *session) startSynthesisWorker(turn *activeTurn) {
-	const concurrency = 2
+	const concurrency = 1
 	go func() {
 		ctx, cancel := context.WithCancel(turn.ctx)
 		defer cancel()
@@ -1336,7 +1336,7 @@ func (c *streamSentenceChunker) take(flush bool) []string {
 			}
 		}
 		if cut == 0 && len(c.buffer) >= chunkLimit {
-			cut = limit
+			cut = safeTTSHardCut(c.buffer, limit)
 		}
 		if cut == 0 && flush {
 			cut = len(c.buffer)
@@ -1351,6 +1351,32 @@ func (c *streamSentenceChunker) take(flush bool) []string {
 		c.buffer = trimLeftSpaceRunes(c.buffer[cut:])
 	}
 	return chunks
+}
+
+func safeTTSHardCut(value []rune, limit int) int {
+	if limit >= len(value) {
+		return limit
+	}
+	for cut := limit; cut > 0; cut-- {
+		if isSafeTTSBoundary(value, cut) {
+			return cut
+		}
+	}
+	return limit
+}
+
+func isSafeTTSBoundary(value []rune, cut int) bool {
+	if cut <= 0 || cut >= len(value) {
+		return true
+	}
+	left, right := value[cut-1], value[cut]
+	if isASCIIAlphaNumeric(left) && isASCIIAlphaNumeric(right) {
+		return false
+	}
+	if unicode.IsDigit(left) && unicode.IsDigit(right) {
+		return false
+	}
+	return unicode.IsSpace(left) || unicode.IsSpace(right) || isStrongSentenceEndAt(value, cut-1) || isSoftSentencePause(left)
 }
 
 func isSoftSentencePause(r rune) bool {

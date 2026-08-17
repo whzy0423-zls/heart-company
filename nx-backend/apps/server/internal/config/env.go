@@ -51,17 +51,28 @@ type Env struct {
 	// 外部视频网关可拉取的绝对地址；外部网关链路不会从请求 Host/X-Forwarded-Host 推断。
 	PublicBaseURL string
 	// TrustedProxyCIDRs 显式可信反向代理网段；只有命中这些网段时才信任 X-Forwarded-For/X-Real-IP。
-	TrustedProxyCIDRs []string
-	MiniMax           MiniMaxConfig
-	MiniappChat       MiniappChatConfig
-	WeChat            WeChatConfig
-	WxPay             WxPayConfig
-	Embedding         EmbeddingConfig
-	SMS               SMSConfig
-	Video             VideoConfig
-	Image             ImageConfig
-	ASR               ASRConfig
-	JPush             JPushConfig
+	TrustedProxyCIDRs      []string
+	MiniMax                MiniMaxConfig
+	MiniappChat            MiniappChatConfig
+	WeChat                 WeChatConfig
+	WxPay                  WxPayConfig
+	Embedding              EmbeddingConfig
+	SMS                    SMSConfig
+	Video                  VideoConfig
+	Image                  ImageConfig
+	ASR                    ASRConfig
+	JPush                  JPushConfig
+	DBMaxOpenConns         int
+	DBMaxIdleConns         int
+	TTSMaxConcurrent       int
+	XinzhiliMaxConnections int
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // ClassroomMediaConfig controls private multipart uploads for teacher classroom media.
@@ -295,6 +306,22 @@ func Load() Env {
 	if err != nil || miniappChatTimeout <= 0 {
 		miniappChatTimeout = 28
 	}
+	dbMaxOpen, _ := strconv.Atoi(getenv("DB_MAX_OPEN_CONNS", "20"))
+	if dbMaxOpen <= 0 {
+		dbMaxOpen = 20
+	}
+	dbMaxIdle, _ := strconv.Atoi(getenv("DB_MAX_IDLE_CONNS", "5"))
+	if dbMaxIdle < 0 || dbMaxIdle > dbMaxOpen {
+		dbMaxIdle = minInt(5, dbMaxOpen)
+	}
+	ttsMaxConcurrent, _ := strconv.Atoi(getenv("XINZHILI_TTS_MAX_CONCURRENT", "8"))
+	if ttsMaxConcurrent <= 0 {
+		ttsMaxConcurrent = 8
+	}
+	maxRealtime, _ := strconv.Atoi(getenv("XINZHILI_MAX_CONNECTIONS", "50"))
+	if maxRealtime <= 0 {
+		maxRealtime = 50
+	}
 
 	ossPublicURL := getenv("OSS_PUBLIC_URL", "")
 	uploadDir, err := filepath.Abs(getenv("UPLOAD_DIR", "../../../website-react/public/assets/uploads"))
@@ -405,6 +432,7 @@ func Load() Env {
 			RateLimitPerMinute: miniappChatLimit,
 			TimeoutSeconds:     miniappChatTimeout,
 		},
+		DBMaxOpenConns: dbMaxOpen, DBMaxIdleConns: dbMaxIdle, TTSMaxConcurrent: ttsMaxConcurrent, XinzhiliMaxConnections: maxRealtime,
 		WeChat: WeChatConfig{
 			AppID:    getenv("WECHAT_APPID", ""),
 			Secret:   getenv("WECHAT_SECRET", ""),

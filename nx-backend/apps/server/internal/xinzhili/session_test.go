@@ -177,6 +177,14 @@ func TestStreamSentenceChunkerPrioritizesPlayableFirstChunk(t *testing.T) {
 			t.Fatalf("later=%q want %q", got, []string{want})
 		}
 	})
+
+	t.Run("hard limit does not split an English token", func(t *testing.T) {
+		var chunker streamSentenceChunker
+		prefix := strings.Repeat("甲", firstTTSChunkMaxRunes-10)
+		if got := chunker.Push(prefix + " emotional-support 后续"); !slices.Equal(got, []string{prefix}) {
+			t.Fatalf("chunks=%q want prefix boundary", got)
+		}
+	})
 }
 
 func TestSessionGenerationNormalizesRealtimeChineseBeforeTTSAndPersistence(t *testing.T) {
@@ -1023,7 +1031,7 @@ func TestDeliveryOrdersMultipleAudioSegmentsBeforeAssistantDone(t *testing.T) {
 	}
 }
 
-func TestSessionTTSRunsTwoChunksConcurrentlyAndEmitsInOrder(t *testing.T) {
+func TestSessionTTSSynthesizesChunksSequentially(t *testing.T) {
 	synth := newControlledSynthesizer("第一段", "第二段", "第三段")
 	s := &session{
 		deps:   SessionDependencies{Synthesizer: synth},
@@ -1046,44 +1054,34 @@ func TestSessionTTSRunsTwoChunksConcurrentlyAndEmitsInOrder(t *testing.T) {
 	close(turn.ttsJobs)
 
 	started := map[string]bool{}
-	for len(started) < 2 {
-		select {
-		case text := <-synth.started:
-			started[text] = true
-		case <-time.After(time.Second):
-			t.Fatalf("initial starts=%v", started)
-		}
-	}
-	if !started["第一段"] || !started["第二段"] {
-		t.Fatalf("initial starts=%v want first two chunks", started)
-	}
-	if synth.maximumConcurrency() != 2 {
-		t.Fatalf("maximum concurrency=%d want=2", synth.maximumConcurrency())
-	}
-	synth.release("第二段")
 	select {
 	case text := <-synth.started:
-		t.Fatalf("chunk %q dispatched before the first window advanced", text)
-	case <-time.After(30 * time.Millisecond):
+		started[text] = true
+	case <-time.After(time.Second):
+		t.Fatal("first chunk did not start")
+	}
+	if !started["第一段"] {
+		t.Fatalf("initial starts=%v want first chunk only", started)
 	}
 	select {
-	case event := <-s.events:
-		t.Fatalf("out-of-order event before first chunk completed: %+v", event)
+	case text := <-synth.started:
+		t.Fatalf("chunk %q dispatched before first chunk completed", text)
 	case <-time.After(30 * time.Millisecond):
 	}
 
 	synth.release("第一段")
 	for wantSeq := uint32(0); wantSeq < 3; wantSeq++ {
-		if wantSeq == 2 {
+		if wantSeq > 0 {
 			select {
 			case text := <-synth.started:
-				if text != "第三段" {
-					t.Fatalf("third start=%q", text)
+				wantText := []string{"第一段", "第二段", "第三段"}[wantSeq]
+				if text != wantText {
+					t.Fatalf("start=%q want=%q", text, wantText)
 				}
 			case <-time.After(time.Second):
-				t.Fatal("third chunk was not dispatched")
+				t.Fatalf("chunk %d was not dispatched", wantSeq)
 			}
-			synth.release("第三段")
+			synth.release([]string{"第一段", "第二段", "第三段"}[wantSeq])
 		}
 		event := waitSessionEvent(t, s.events, eventTTSSegment)
 		if event.segment.Seq != wantSeq {
@@ -1094,6 +1092,9 @@ func TestSessionTTSRunsTwoChunksConcurrentlyAndEmitsInOrder(t *testing.T) {
 	done := waitSessionEvent(t, s.events, eventTTSDone)
 	if done.err != nil {
 		t.Fatal(done.err)
+	}
+	if synth.maximumConcurrency() != 1 {
+		t.Fatalf("maximum concurrency=%d want=1", synth.maximumConcurrency())
 	}
 }
 

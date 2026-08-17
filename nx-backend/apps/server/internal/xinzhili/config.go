@@ -51,13 +51,14 @@ type RealtimeASRConfig struct {
 }
 
 type TTSConfig struct {
-	Provider string `json:"provider"`
-	Endpoint string `json:"endpoint"`
-	APIKey   string `json:"apiKey"`
-	GroupID  string `json:"groupId,omitempty"`
-	Model    string `json:"model"`
-	Voice    string `json:"voice"`
-	Format   string `json:"format"`
+	Provider    string `json:"provider"`
+	Endpoint    string `json:"endpoint"`
+	APIKey      string `json:"apiKey"`
+	GroupID     string `json:"groupId,omitempty"`
+	Model       string `json:"model"`
+	Voice       string `json:"voice"`
+	Format      string `json:"format"`
+	Instruction string `json:"instruction,omitempty"`
 }
 
 type TimingConfig struct {
@@ -127,6 +128,7 @@ func (c Config) WithDefaults() (Config, error) {
 	c.TTS.Model = strings.TrimSpace(c.TTS.Model)
 	c.TTS.Voice = strings.TrimSpace(c.TTS.Voice)
 	c.TTS.Format = strings.TrimSpace(c.TTS.Format)
+	c.TTS.Instruction = strings.TrimSpace(c.TTS.Instruction)
 	c.CommonPrompt = strings.TrimSpace(c.CommonPrompt)
 
 	if c.ClearASRKey {
@@ -356,6 +358,7 @@ func validateLengths(c Config) error {
 		{"TTS model", c.TTS.Model, maxShortRunes},
 		{"TTS voice", c.TTS.Voice, maxShortRunes},
 		{"TTS format", c.TTS.Format, maxShortRunes},
+		{"TTS instruction", c.TTS.Instruction, maxPromptRunes},
 	}
 	for _, value := range values {
 		if utf8.RuneCountInString(value.value) > value.max {

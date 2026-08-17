@@ -98,6 +98,16 @@ func (s *Server) xinzhiliRealtime(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tls_required", http.StatusUpgradeRequired)
 		return
 	}
+	if !s.reserveXinzhiliRealtime(user.ID) {
+		http.Error(w, "realtime_capacity_exceeded", http.StatusServiceUnavailable)
+		return
+	}
+	reserved := true
+	defer func() {
+		if reserved {
+			s.releaseXinzhiliRealtimeReservation()
+		}
+	}()
 	upgrader := xinzhiliUpgrader
 	upgrader.CheckOrigin = func(req *http.Request) bool {
 		o := req.Header.Get("Origin")
@@ -115,9 +125,34 @@ func (s *Server) xinzhiliRealtime(w http.ResponseWriter, r *http.Request) {
 	c := &xinzhiliRealtimeConn{server: s, ws: ws, userID: user.ID, turns: make(map[uint64]string), audioSeq: make(map[uint64]uint32), modeStore: modeStore}
 	c.sink = &xinzhiliWSSink{conn: c}
 	s.replaceXinzhiliLease(c)
+	s.releaseXinzhiliRealtimeReservation()
+	reserved = false
+	if s.metrics != nil {
+		s.metrics.RealtimeOpened()
+		defer s.metrics.RealtimeClosed()
+	}
 	defer s.releaseXinzhiliLease(c)
 	defer c.close(websocket.CloseNormalClosure, "")
 	c.readLoop(r.Context())
+}
+
+func (s *Server) reserveXinzhiliRealtime(userID int64) bool {
+	s.xinzhiliLeaseMu.Lock()
+	defer s.xinzhiliLeaseMu.Unlock()
+	_, alreadyConnected := s.xinzhiliLeases[userID]
+	if s.xinzhiliMaxConnections > 0 && len(s.xinzhiliLeases)+s.xinzhiliPendingConnections >= s.xinzhiliMaxConnections && !alreadyConnected {
+		return false
+	}
+	s.xinzhiliPendingConnections++
+	return true
+}
+
+func (s *Server) releaseXinzhiliRealtimeReservation() {
+	s.xinzhiliLeaseMu.Lock()
+	if s.xinzhiliPendingConnections > 0 {
+		s.xinzhiliPendingConnections--
+	}
+	s.xinzhiliLeaseMu.Unlock()
 }
 
 func (s *Server) replaceXinzhiliLease(c *xinzhiliRealtimeConn) {

@@ -20,6 +20,7 @@ import (
 
 	appconfig "nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/netguard"
+	"nine-xing/nx-backend/apps/server/internal/observability"
 	"nine-xing/nx-backend/apps/server/internal/voice"
 )
 
@@ -72,6 +73,8 @@ type MiniMaxTextToAudio interface {
 type TTSProviderFactory struct {
 	HTTPClient *http.Client
 	MiniMax    MiniMaxTextToAudio
+	Slots      chan struct{}
+	Metrics    *observability.Metrics
 }
 
 type dynamicTTSProvider struct {
@@ -89,12 +92,32 @@ func (f TTSProviderFactory) Dynamic() TTSProvider {
 }
 
 func (p *dynamicTTSProvider) Synthesize(ctx context.Context, cfg TTSConfig, text string) ([]byte, string, error) {
+	var waited time.Duration
+	if p.factory.Slots != nil {
+		waitStart := time.Now()
+		select {
+		case p.factory.Slots <- struct{}{}:
+			waited = time.Since(waitStart)
+		case <-ctx.Done():
+			return nil, "", ctx.Err()
+		}
+		defer func() { <-p.factory.Slots }()
+	}
+	if p.factory.Metrics != nil {
+		p.factory.Metrics.TTSEnter(waited)
+	}
+	started := time.Now()
+	var resultErr error
+	if p.factory.Metrics != nil {
+		defer func() { p.factory.Metrics.TTSExit(time.Since(started), resultErr) }()
+	}
 	p.mu.Lock()
 	provider := p.provider
 	if provider == nil || p.config != cfg {
 		var err error
 		provider, err = p.factory.New(cfg)
 		if err != nil {
+			resultErr = err
 			p.mu.Unlock()
 			return nil, "", err
 		}
@@ -102,7 +125,9 @@ func (p *dynamicTTSProvider) Synthesize(ctx context.Context, cfg TTSConfig, text
 		p.provider = provider
 	}
 	p.mu.Unlock()
-	return provider.Synthesize(ctx, cfg, text)
+	audio, mime, err := provider.Synthesize(ctx, cfg, text)
+	resultErr = err
+	return audio, mime, err
 }
 
 func (f TTSProviderFactory) New(cfg TTSConfig) (TTSProvider, error) {
@@ -192,6 +217,11 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 		}
 	} else if isBailianQwenVoiceCloneTTSModel(cfg.Model) {
 		input["voice"] = cfg.Voice
+	} else if isBailianQwenAudioTTSModel(cfg.Model) {
+		input["voice"] = cfg.Voice
+		if instruction := strings.TrimSpace(cfg.Instruction); instruction != "" {
+			input["instruction"] = instruction
+		}
 	} else {
 		return nil, "", errors.New("阿里百炼 TTS 模型不支持")
 	}
@@ -274,6 +304,10 @@ func isBailianHostedMiniMaxTTSModel(model string) bool {
 
 func isBailianQwenVoiceCloneTTSModel(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "qwen3-tts-vc-")
+}
+
+func isBailianQwenAudioTTSModel(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "qwen-audio-3.0-tts-")
 }
 
 func (p *bailianHostedMiniMaxTTS) decodeOrFetchAudio(ctx context.Context, raw string) ([]byte, error) {

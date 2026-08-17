@@ -94,6 +94,15 @@ docker compose logs -f server
 
 > 也可把上面的环境变量写进仓库根的 `.env` 文件（compose 会自动读取），避免每次 export。
 
+稳定性参数建议从以下初始值开始，并根据 `/api/app/health` 中的 TTS 等待时间和数据库 `waitCount` 调整：
+
+```bash
+DB_MAX_OPEN_CONNS=20
+DB_MAX_IDLE_CONNS=5
+XINZHILI_TTS_MAX_CONCURRENT=8
+XINZHILI_MAX_CONNECTIONS=50
+```
+
 ## 二、更新发布
 
 ### 后端 `server`：芯之力会话锁升级约束

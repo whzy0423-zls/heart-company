@@ -38,6 +38,14 @@ func TestNormalizeStrictChineseTTSInputHidesLinksEmailsAndVersionTokens(t *testi
 	assertNoASCIILetters(t, got)
 }
 
+func TestNormalizeStrictChineseTTSInputPreservesParagraphPauses(t *testing.T) {
+	got := NormalizeStrictChineseTTSInput("第一段说完。\n\n第二段慢慢说。")
+	want := "第一段说完。\n第二段慢慢说。"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
 func TestNormalizeMandarinPronunciationTTSInputKeepsDisplayTextRulesSeparate(t *testing.T) {
 	visible := NormalizeStrictChineseTTSInput("噫吁嚱，危乎高哉！")
 	if visible != "噫吁嚱，危乎高哉！" {

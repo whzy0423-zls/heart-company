@@ -27,7 +27,7 @@ const (
 
 	defaultBailianAPIBase     = "https://dashscope.aliyuncs.com"
 	defaultBailianEnrollModel = "qwen-voice-enrollment"
-	defaultBailianTargetModel = "qwen3-tts-vc-2026-01-22"
+	defaultBailianTargetModel = "qwen-audio-3.0-tts-flash"
 	bailianCustomizationPath  = "/api/v1/services/audio/tts/customization"
 	bailianGenerationPath     = "/api/v1/services/aigc/multimodal-generation/generation"
 )
@@ -182,7 +182,7 @@ func (c *BailianClient) TextToAudio(ctx context.Context, model string, voiceID s
 			"format":      "mp3",
 			"channel":     1,
 		}
-	} else if isBailianQwenVoiceCloneModel(model) {
+	} else if isBailianQwenVoiceCloneModel(model) || isBailianQwenAudioTTSModel(model) {
 		input["voice"] = strings.TrimSpace(voiceID)
 	} else {
 		return nil, "", fmt.Errorf("当前百炼声音测试不支持模型 %s", model)
@@ -414,6 +414,10 @@ func isBailianHostedMiniMaxModel(model string) bool {
 
 func isBailianQwenVoiceCloneModel(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "qwen3-tts-vc-")
+}
+
+func isBailianQwenAudioTTSModel(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "qwen-audio-3.0-tts-")
 }
 
 func appendCloneVoiceOptions(options []VoiceOption, profiles []Profile) []VoiceOption {

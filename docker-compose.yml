@@ -40,6 +40,8 @@ services:
       SITE_CONFIG_PATH: /data/site-config.json
       ADMIN_CONFIG_PATH: /data/admin-config.json
       DATABASE_URL: postgres://${POSTGRES_USER:-nx}:${POSTGRES_PASSWORD:-nx}@db:5432/${POSTGRES_DB:-nx_admin}?sslmode=disable
+      DB_MAX_OPEN_CONNS: ${DB_MAX_OPEN_CONNS:-20}
+      DB_MAX_IDLE_CONNS: ${DB_MAX_IDLE_CONNS:-5}
       # 生产务必改成强随机串与你自己的账号密码（首次启动播种管理员）
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
@@ -59,6 +61,8 @@ services:
       APP_RELEASE_PACKAGE_NAME: ${APP_RELEASE_PACKAGE_NAME:-com.xinzhili.nine_xing_app}
       APP_RELEASE_CERT_SHA256: ${APP_RELEASE_CERT_SHA256:-}
       XINZHILI_SECRET_KEY: ${XINZHILI_SECRET_KEY:-}
+      XINZHILI_TTS_MAX_CONCURRENT: ${XINZHILI_TTS_MAX_CONCURRENT:-8}
+      XINZHILI_MAX_CONNECTIONS: ${XINZHILI_MAX_CONNECTIONS:-50}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
       MINIMAX_GROUP_ID: ${MINIMAX_GROUP_ID:-}

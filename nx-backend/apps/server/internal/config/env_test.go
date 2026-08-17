@@ -895,6 +895,17 @@ func TestLoadMiniappChatOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadRuntimeCapacityOverrides(t *testing.T) {
+	t.Setenv("DB_MAX_OPEN_CONNS", "32")
+	t.Setenv("DB_MAX_IDLE_CONNS", "8")
+	t.Setenv("XINZHILI_TTS_MAX_CONCURRENT", "6")
+	t.Setenv("XINZHILI_MAX_CONNECTIONS", "40")
+	env := Load()
+	if env.DBMaxOpenConns != 32 || env.DBMaxIdleConns != 8 || env.TTSMaxConcurrent != 6 || env.XinzhiliMaxConnections != 40 {
+		t.Fatalf("capacity env=%+v", env)
+	}
+}
+
 func TestLoadReadsSpugSMSConfig(t *testing.T) {
 	t.Setenv("SMS_PROVIDER", "spug")
 	t.Setenv("SPUG_PUSH_API_BASE", "https://push.spug.cc")
