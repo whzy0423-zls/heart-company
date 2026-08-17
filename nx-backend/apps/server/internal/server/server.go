@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/analytics"
+	"nine-xing/nx-backend/apps/server/internal/appnotification"
 	"nine-xing/nx-backend/apps/server/internal/apprelease"
 	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/articlestore"
@@ -160,6 +161,7 @@ type Server struct {
 	preferenceTurns                map[int64]*appChatPreferenceTurnState
 	chatPersistHook                func()
 	pushStore                      *push.Store
+	appNotifications               appNotificationService
 	pushSendTimeout                time.Duration
 	pushRecoveryInterval           time.Duration
 	pushSendSlots                  chan struct{}
@@ -170,6 +172,10 @@ type Server struct {
 	smsIPLimiter                   *strRateLimiter
 	smsVerifyPhoneLimiter          *strRateLimiter
 	smsVerifyIPLimiter             *strRateLimiter
+	appPasswordAccountLimiter      *strRateLimiter
+	appPasswordIPLimiter           *strRateLimiter
+	appPasswordAccountDBLimiter    *dbRateLimiter
+	appPasswordIPDBLimiter         *dbRateLimiter
 	publicSignupIPLimiter          *strRateLimiter
 	publicAnalyticsIPLimiter       *strRateLimiter
 	publicGameIPLimiter            *strRateLimiter
@@ -412,6 +418,10 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.smsIPLimiter = newStrRateLimiter(10, time.Minute)
 	s.smsVerifyPhoneLimiter = newStrRateLimiter(5, time.Minute)
 	s.smsVerifyIPLimiter = newStrRateLimiter(20, time.Minute)
+	s.appPasswordAccountLimiter = newStrRateLimiter(5, time.Minute)
+	s.appPasswordIPLimiter = newStrRateLimiter(30, time.Minute)
+	s.appPasswordAccountDBLimiter = newDBRateLimiter(database, "app_password_account", 5, time.Minute)
+	s.appPasswordIPDBLimiter = newDBRateLimiter(database, "app_password_ip", 30, time.Minute)
 	s.publicSignupIPLimiter = newStrRateLimiter(5, time.Minute)
 	s.publicAnalyticsIPLimiter = newStrRateLimiter(120, time.Minute)
 	s.publicGameIPLimiter = newStrRateLimiter(30, time.Minute)
@@ -419,6 +429,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.videoStoryboardSlots = make(chan struct{}, 3)
 	s.smsSender = mustSMSSender(env.SMS)
 	s.pushStore = push.NewStore(database, push.NewPusher(env.AppEnv, env.JPush.AppKey, env.JPush.MasterSecret))
+	s.appNotifications = appnotification.NewStore(database)
 	s.pushSendSlots = make(chan struct{}, 2)
 	// 启动时应用 DB 中保存的模型配置覆盖（若存在），重建对话/视频客户端。
 	s.applyStoredModelConfig()
@@ -725,6 +736,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/auth/sms/send", s.method(http.MethodPost, s.appSendSMS))
 	s.mux.HandleFunc("/api/app/auth/verify-sms", s.method(http.MethodPost, s.appVerifySMS))
 	s.mux.HandleFunc("/api/app/auth/sms/login", s.method(http.MethodPost, s.appVerifySMS))
+	s.mux.HandleFunc("/api/app/auth/register", s.method(http.MethodPost, s.appRegisterWithPassword))
+	s.mux.HandleFunc("/api/app/auth/login", s.method(http.MethodPost, s.appLoginWithPassword))
+	s.mux.HandleFunc("/api/app/auth/reset-password", s.method(http.MethodPost, s.appResetPassword))
 	s.mux.HandleFunc("/api/app/auth/refresh", s.method(http.MethodPost, s.appRefreshToken))
 	s.mux.HandleFunc("/api/app/auth/logout", s.method(http.MethodPost, s.appLogout))
 	s.mux.HandleFunc("/api/app/user/info", s.method(http.MethodGet, s.requireAppAuth(s.appUserInfo)))
@@ -768,6 +782,11 @@ func (s *Server) routes() {
 	// 推送设备令牌注册/注销
 	s.mux.HandleFunc("/api/app/push/register", s.method(http.MethodPost, s.requireAppAuth(s.appPushRegister)))
 	s.mux.HandleFunc("/api/app/push/unregister", s.method(http.MethodPost, s.requireAppAuth(s.appPushUnregister)))
+	// App 内通知收件箱
+	s.mux.HandleFunc("/api/app/notifications", s.method(http.MethodGet, s.requireAppAuth(s.appNotificationList)))
+	s.mux.HandleFunc("/api/app/notifications/unread-count", s.method(http.MethodGet, s.requireAppAuth(s.appNotificationUnreadCount)))
+	s.mux.HandleFunc("/api/app/notifications/read-all", s.method(http.MethodPost, s.requireAppAuth(s.appNotificationMarkAllRead)))
+	s.mux.HandleFunc("/api/app/notifications/", s.method(http.MethodPost, s.requireAppAuth(s.appNotificationAction)))
 	// 语音识别
 	s.mux.HandleFunc("/api/app/voice/recognize", s.method(http.MethodPost, s.requireAppAuth(s.appVoiceRecognize)))
 	s.mux.HandleFunc("/api/app/xinzhili/turns/stream", s.method(http.MethodPost, s.requireAppAuth(s.appXinzhiliVoiceTurnStream)))

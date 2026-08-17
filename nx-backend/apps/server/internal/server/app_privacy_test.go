@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"mime/multipart"
 	"net/http"
@@ -15,9 +17,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/db"
@@ -268,6 +272,67 @@ func TestAppPrivacyRoutesRequireAuth(t *testing.T) {
 	}
 }
 
+func TestPrivacyExportIncludesAccountWithoutPasswordHash(t *testing.T) {
+	var user appuser.User
+	if err := json.Unmarshal([]byte(`{
+		"id": 42,
+		"phone": "13800000021",
+		"account": "privacy_user",
+		"password_hash": "secret-hash",
+		"passwordHash": "secret-hash"
+	}`), &user); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(appPrivacyExportResponse{User: user})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var export struct {
+		User map[string]any `json:"user"`
+	}
+	if err := json.Unmarshal(payload, &export); err != nil {
+		t.Fatal(err)
+	}
+	if export.User["account"] != "privacy_user" {
+		t.Fatalf("privacy export account = %v, want privacy_user; payload=%s", export.User["account"], payload)
+	}
+	for _, key := range []string{"password_hash", "passwordHash"} {
+		if _, ok := export.User[key]; ok {
+			t.Fatalf("privacy export exposed %q: %s", key, payload)
+		}
+	}
+}
+
+func TestPrivacyDeleteAccountClearsCredentials(t *testing.T) {
+	recorder := &appPrivacyDeleteRecorder{}
+	database := openAppPrivacyDeleteTestDB(t, recorder)
+	s := &Server{db: database}
+	req := httptest.NewRequest(http.MethodDelete, "/api/app/privacy/account", nil)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 42}))
+	res := httptest.NewRecorder()
+
+	s.appPrivacyDeleteAccount(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected account delete 200, got %d body=%s", res.Code, res.Body.String())
+	}
+	var anonymizeQuery string
+	for _, query := range recorder.execQueries {
+		if strings.Contains(query, "UPDATE app_users") {
+			anonymizeQuery = query
+			break
+		}
+	}
+	if anonymizeQuery == "" {
+		t.Fatalf("account deletion did not execute app_users anonymization: %#v", recorder.execQueries)
+	}
+	for _, assignment := range []string{"account = NULL", "password_hash = NULL"} {
+		if !strings.Contains(anonymizeQuery, assignment) {
+			t.Fatalf("account anonymization missing %q in same UPDATE: %s", assignment, anonymizeQuery)
+		}
+	}
+}
+
 func TestAppPrivacyExportAndMemoryDeletionAreScopedToCurrentUser(t *testing.T) {
 	handler, database := newAppAPITestServer(t)
 	token, _, userID := appAPILogin(t, handler, "13800009001")
@@ -332,10 +397,67 @@ func TestAppPrivacyExportAndMemoryDeletionAreScopedToCurrentUser(t *testing.T) {
 	}
 }
 
+func TestAppPrivacyAccountDeletionServerHoldsAuthFixtureAdvisoryLock(t *testing.T) {
+	_, database := newAppAPITestServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	probeConn, err := database.Conn(ctx)
+	if err != nil {
+		t.Fatalf("get advisory lock probe connection: %v", err)
+	}
+	defer probeConn.Close()
+
+	var acquired bool
+	if err := probeConn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, testutil.AuthFixtureAdvisoryLockKey).Scan(&acquired); err != nil {
+		t.Fatalf("probe auth fixture advisory lock: %v", err)
+	}
+	if acquired {
+		_, _ = probeConn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, testutil.AuthFixtureAdvisoryLockKey)
+		t.Fatal("newAppAPITestServer did not hold the Task 7 auth fixture advisory lock")
+	}
+}
+
 func TestAppPrivacyAccountDeletionDisablesCurrentUserAndRevokesTokens(t *testing.T) {
 	handler, database := newAppAPITestServer(t)
-	accessToken, refreshToken, userID := appAPILogin(t, handler, "13800009003")
-	_, _, otherUserID := appAPILogin(t, handler, "13800009004")
+	const (
+		currentPhone      = "13900000805"
+		currentAccount    = "task8privacycurrent"
+		currentDeviceInfo = "task8-privacy-current"
+		otherPhone        = "13900000806"
+		otherAccount      = "task8privacyother"
+		otherDeviceInfo   = "task8-privacy-other"
+	)
+	cleanupAppPrivacyAuthFixtures(t, database,
+		[]string{currentPhone, otherPhone},
+		[]string{currentAccount, otherAccount},
+		[]string{currentDeviceInfo, otherDeviceInfo},
+	)
+	t.Cleanup(func() {
+		cleanupAppPrivacyAuthFixtures(t, database,
+			[]string{currentPhone, otherPhone},
+			[]string{currentAccount, otherAccount},
+			[]string{currentDeviceInfo, otherDeviceInfo},
+		)
+	})
+
+	currentSession := appAPIPasswordRegister(t, handler, currentPhone, currentAccount, "Task 8 注销用户", currentDeviceInfo)
+	currentRotatedSession := appAPIRefreshPasswordSession(t, handler, currentSession.RefreshToken, "current user refresh rotation")
+	otherSession := appAPIPasswordRegister(t, handler, otherPhone, otherAccount, "Task 8 其他用户", otherDeviceInfo)
+	userID := currentSession.User.ID
+	otherUserID := otherSession.User.ID
+	var registrationTokenRevoked, rotatedTokenRevoked bool
+	if err := database.QueryRow(`SELECT revoked FROM app_refresh_tokens WHERE app_user_id=$1 AND token_hash=$2`, userID, appuser.HashToken(currentSession.RefreshToken)).Scan(&registrationTokenRevoked); err != nil {
+		t.Fatalf("read registration refresh token state before deletion: %v", err)
+	}
+	if err := database.QueryRow(`SELECT revoked FROM app_refresh_tokens WHERE app_user_id=$1 AND token_hash=$2`, userID, appuser.HashToken(currentRotatedSession.RefreshToken)).Scan(&rotatedTokenRevoked); err != nil {
+		t.Fatalf("read rotated refresh token state before deletion: %v", err)
+	}
+	if !registrationTokenRevoked || rotatedTokenRevoked {
+		t.Fatalf("unexpected refresh token state before deletion: registrationRevoked=%t rotatedRevoked=%t", registrationTokenRevoked, rotatedTokenRevoked)
+	}
+	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_refresh_tokens WHERE app_user_id=$1`, userID); got != 2 {
+		t.Fatalf("refresh token count before deletion=%d want=2", got)
+	}
 	cardID := insertAppAPICard(t, database, userID, "本人")
 	otherCardID := insertAppAPICard(t, database, otherUserID, "其他用户")
 	insertAppAPIMemory(t, database, userID, cardID, "current user memory")
@@ -343,23 +465,59 @@ func TestAppPrivacyAccountDeletionDisablesCurrentUserAndRevokesTokens(t *testing
 	insertAppAPIPreference(t, database, userID, "length", "length.detail_level", "回答简短，避免长篇大论")
 	insertAppAPIPreference(t, database, otherUserID, "tone", "tone.direct", "表达直接，少说教")
 
-	res := performAppAPI(handler, http.MethodDelete, "/api/app/privacy/account", accessToken, nil)
+	res := performAppAPI(handler, http.MethodDelete, "/api/app/privacy/account", currentRotatedSession.AccessToken, nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("expected account delete 200, got %d body=%s", res.Code, res.Body.String())
 	}
 
-	info := performAppAPI(handler, http.MethodGet, "/api/app/user/info", accessToken, nil)
-	if info.Code != http.StatusUnauthorized {
-		t.Fatalf("expected old access token to be rejected, got %d body=%s", info.Code, info.Body.String())
+	for label, accessToken := range map[string]string{
+		"registration access token": currentSession.AccessToken,
+		"rotated access token":      currentRotatedSession.AccessToken,
+	} {
+		info := performAppAPI(handler, http.MethodGet, "/api/app/user/info", accessToken, nil)
+		if info.Code != http.StatusUnauthorized {
+			t.Fatalf("expected %s to be rejected, got %d", label, info.Code)
+		}
 	}
-	refresh := performAppAPI(handler, http.MethodPost, "/api/app/auth/refresh", "", map[string]string{
-		"refreshToken": refreshToken,
-	})
-	if refresh.Code != http.StatusUnauthorized {
-		t.Fatalf("expected refresh token to be revoked, got %d body=%s", refresh.Code, refresh.Body.String())
+	for label, refreshToken := range map[string]string{
+		"registration refresh token": currentSession.RefreshToken,
+		"rotated refresh token":      currentRotatedSession.RefreshToken,
+	} {
+		refresh := performAppAPI(handler, http.MethodPost, "/api/app/auth/refresh", "", map[string]string{
+			"refreshToken": refreshToken,
+		})
+		if refresh.Code != http.StatusUnauthorized {
+			t.Fatalf("expected %s to be rejected, got %d", label, refresh.Code)
+		}
 	}
-	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_users WHERE id = $1 AND status = 'disabled' AND phone LIKE 'deleted-%'`, userID); got != 1 {
-		t.Fatalf("expected current user to be anonymized and disabled, got %d", got)
+
+	var (
+		storedPhone        string
+		storedAccount      sql.NullString
+		storedPasswordHash sql.NullString
+		storedStatus       string
+	)
+	if err := database.QueryRow(`SELECT phone, account, password_hash, status FROM app_users WHERE id=$1`, userID).Scan(
+		&storedPhone,
+		&storedAccount,
+		&storedPasswordHash,
+		&storedStatus,
+	); err != nil {
+		t.Fatalf("read deleted password user: %v", err)
+	}
+	if storedStatus != "disabled" || storedAccount.Valid || storedPasswordHash.Valid || !strings.HasPrefix(storedPhone, fmt.Sprintf("deleted-%d-", userID)) {
+		t.Fatalf("deleted password user retained credentials or identity: status=%q accountValid=%t passwordHashValid=%t phoneAnonymized=%t", storedStatus, storedAccount.Valid, storedPasswordHash.Valid, strings.HasPrefix(storedPhone, "deleted-"))
+	}
+	var totalRefreshTokens, revokedRefreshTokens int
+	if err := database.QueryRow(`
+		SELECT count(*), count(*) FILTER (WHERE revoked)
+		FROM app_refresh_tokens
+		WHERE app_user_id=$1
+	`, userID).Scan(&totalRefreshTokens, &revokedRefreshTokens); err != nil {
+		t.Fatalf("read deleted user refresh token state: %v", err)
+	}
+	if totalRefreshTokens != 2 || revokedRefreshTokens != 2 {
+		t.Fatalf("deleted user refresh tokens total=%d revoked=%d", totalRefreshTokens, revokedRefreshTokens)
 	}
 	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_memories WHERE app_user_id = $1`, userID); got != 0 {
 		t.Fatalf("expected current user's memories to be removed, got %d", got)
@@ -370,8 +528,95 @@ func TestAppPrivacyAccountDeletionDisablesCurrentUserAndRevokesTokens(t *testing
 	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_user_preferences WHERE app_user_id = $1`, otherUserID); got != 1 {
 		t.Fatalf("expected other user's communication preferences to remain, got %d", got)
 	}
-	if got := countAppAPIRows(t, database, `SELECT count(*) FROM app_users WHERE id = $1 AND status = 'active'`, otherUserID); got != 1 {
-		t.Fatalf("expected other user to remain active, got %d", got)
+	otherInfo := performAppAPI(handler, http.MethodGet, "/api/app/user/info", otherSession.AccessToken, nil)
+	if otherInfo.Code != http.StatusOK {
+		t.Fatalf("other user's access token returned status %d", otherInfo.Code)
+	}
+	_ = appAPIRefreshPasswordSession(t, handler, otherSession.RefreshToken, "other user refresh after account deletion")
+	var (
+		otherStoredPhone        string
+		otherStoredAccount      sql.NullString
+		otherStoredPasswordHash sql.NullString
+		otherStoredStatus       string
+	)
+	if err := database.QueryRow(`SELECT phone, account, password_hash, status FROM app_users WHERE id=$1`, otherUserID).Scan(
+		&otherStoredPhone,
+		&otherStoredAccount,
+		&otherStoredPasswordHash,
+		&otherStoredStatus,
+	); err != nil {
+		t.Fatalf("read other password user: %v", err)
+	}
+	if otherStoredPhone != otherPhone || !otherStoredAccount.Valid || otherStoredAccount.String != otherAccount || !otherStoredPasswordHash.Valid || otherStoredPasswordHash.String == "" || otherStoredStatus != "active" {
+		t.Fatalf("other password user changed during deletion: status=%q accountValid=%t passwordHashPresent=%t", otherStoredStatus, otherStoredAccount.Valid, otherStoredPasswordHash.Valid && otherStoredPasswordHash.String != "")
+	}
+}
+
+func TestAppPrivacyAccountDeletionClearsPasswordLoginLimiterIdentifiers(t *testing.T) {
+	handler, database := newAppAPITestServer(t)
+	const (
+		phone      = "13900000816"
+		account    = "task8privacylimiter"
+		deviceInfo = "task8-privacy-limiter"
+	)
+	cleanupAppPrivacyAuthFixtures(t, database, []string{phone}, []string{account}, []string{deviceInfo})
+	if _, err := database.Exec(`DELETE FROM request_rate_limits WHERE scope='app_password_account'`); err != nil {
+		t.Fatalf("clear password limiter fixtures: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupAppPrivacyAuthFixtures(t, database, []string{phone}, []string{account}, []string{deviceInfo})
+		_, _ = database.Exec(`DELETE FROM request_rate_limits WHERE scope='app_password_account'`)
+	})
+
+	session := appAPIPasswordRegister(t, handler, phone, account, "Task 8 限流清理用户", deviceInfo)
+	for _, identifier := range []string{account, phone} {
+		response := performAppAPI(handler, http.MethodPost, "/api/app/auth/login", "", map[string]string{
+			"account":  identifier,
+			"password": "wrong-password",
+		})
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("create limiter row for %q: status=%d body=%s", identifier, response.Code, response.Body.String())
+		}
+	}
+
+	rows, err := database.Query(`
+		SELECT key FROM request_rate_limits
+		WHERE scope='app_password_account'
+		ORDER BY key
+	`)
+	if err != nil {
+		t.Fatalf("list password limiter keys: %v", err)
+	}
+	var limiterKeys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			rows.Close()
+			t.Fatalf("scan password limiter key: %v", err)
+		}
+		limiterKeys = append(limiterKeys, key)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close password limiter rows: %v", err)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate password limiter keys: %v", err)
+	}
+	if len(limiterKeys) != 2 {
+		t.Fatalf("password limiter keys=%v want two account/phone keys", limiterKeys)
+	}
+
+	response := performAppAPI(handler, http.MethodDelete, "/api/app/privacy/account", session.AccessToken, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete account: status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, key := range limiterKeys {
+		if got := countAppAPIRows(t, database, `
+			SELECT count(*) FROM request_rate_limits
+			WHERE scope='app_password_account' AND key=$1
+		`, key); got != 0 {
+			t.Fatalf("deleted user limiter key %q rows=%d want=0", key, got)
+		}
 	}
 }
 
@@ -409,7 +654,12 @@ func TestAppPrivacyMemoryDeletionRollsBackWhenEitherDeleteFails(t *testing.T) {
 
 func TestAppPrivacyAccountDeletionRollsBackWhenPreferenceCleanupFails(t *testing.T) {
 	handler, database := newAppAPITestServer(t)
-	token, _, userID := appAPILogin(t, handler, "13800009007")
+	const phone = "13800009007"
+	cleanupAppPrivacyAuthFixtures(t, database, []string{phone}, nil, nil)
+	t.Cleanup(func() {
+		cleanupAppPrivacyAuthFixtures(t, database, []string{phone}, nil, nil)
+	})
+	token, _, userID := appAPILogin(t, handler, phone)
 	cardID := insertAppAPICard(t, database, userID, "本人")
 	insertAppAPIMemory(t, database, userID, cardID, "must survive rollback")
 	insertAppAPIPreference(t, database, userID, "tone", "tone.direct", "直接一点", "直接说")
@@ -511,7 +761,33 @@ func newAppAPITestServer(t *testing.T) (http.Handler, *sql.DB) {
 	if err != nil {
 		t.Fatalf("db open: %v", err)
 	}
-	t.Cleanup(func() { _ = database.Close() })
+	lockConn, err := database.Conn(ctx)
+	if err != nil {
+		_ = database.Close()
+		t.Fatalf("get auth fixture advisory lock connection: %v", err)
+	}
+	if _, err := lockConn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, testutil.AuthFixtureAdvisoryLockKey); err != nil {
+		_ = lockConn.Close()
+		_ = database.Close()
+		t.Fatalf("acquire auth fixture advisory lock: %v", err)
+	}
+	// Callers register fixture cleanup after this helper, so LIFO cleanup keeps the lock until fixtures are removed.
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		var unlocked bool
+		if err := lockConn.QueryRowContext(cleanupCtx, `SELECT pg_advisory_unlock($1)`, testutil.AuthFixtureAdvisoryLockKey).Scan(&unlocked); err != nil {
+			t.Errorf("release auth fixture advisory lock: %v", err)
+		} else if !unlocked {
+			t.Error("auth fixture advisory lock was not held during cleanup")
+		}
+		if err := lockConn.Close(); err != nil {
+			t.Errorf("close auth fixture advisory lock connection: %v", err)
+		}
+		if err := database.Close(); err != nil {
+			t.Errorf("close app API test database: %v", err)
+		}
+	})
 	env := config.Env{
 		AdminPassword: "123456",
 		AdminUsername: "admin",
@@ -520,6 +796,127 @@ func newAppAPITestServer(t *testing.T) (http.Handler, *sql.DB) {
 		DatabaseURL:   dsn,
 	}
 	return New(env, database), database
+}
+
+type appAPIPasswordSession struct {
+	AccessToken  string
+	RefreshToken string
+	User         appuser.User
+}
+
+func appAPIPasswordRegister(t *testing.T, handler http.Handler, phone, account, nickname, deviceInfo string) appAPIPasswordSession {
+	t.Helper()
+	const fixturePassword = "fixture-secret-8"
+	sendResponse := performAppAPI(handler, http.MethodPost, "/api/app/auth/send-sms", "", map[string]string{"phone": phone})
+	if sendResponse.Code != http.StatusOK {
+		t.Fatalf("password registration SMS returned status %d", sendResponse.Code)
+	}
+	var sendBody struct {
+		Code int `json:"code"`
+		Data struct {
+			DevCode string `json:"devCode"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(sendResponse.Body.Bytes(), &sendBody); err != nil {
+		t.Fatalf("decode password registration SMS response: %v", err)
+	}
+	if sendBody.Code != 0 || sendBody.Data.DevCode == "" {
+		t.Fatal("password registration SMS response did not include a test code")
+	}
+
+	registrationResponse := performAppAPI(handler, http.MethodPost, "/api/app/auth/register", "", map[string]string{
+		"nickname":   nickname,
+		"account":    account,
+		"password":   fixturePassword,
+		"phone":      phone,
+		"code":       sendBody.Data.DevCode,
+		"deviceInfo": deviceInfo,
+	})
+	if registrationResponse.Code != http.StatusOK {
+		t.Fatalf("password registration returned status %d", registrationResponse.Code)
+	}
+	var registrationBody struct {
+		Code int `json:"code"`
+		Data struct {
+			AccessToken  string       `json:"accessToken"`
+			RefreshToken string       `json:"refreshToken"`
+			User         appuser.User `json:"user"`
+		} `json:"data"`
+		Error   any    `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(registrationResponse.Body.Bytes(), &registrationBody); err != nil {
+		t.Fatalf("decode password registration response: %v", err)
+	}
+	if registrationBody.Code != 0 || registrationBody.Message != "ok" || registrationBody.Error != nil || registrationBody.Data.AccessToken == "" || registrationBody.Data.RefreshToken == "" || registrationBody.Data.User.ID <= 0 {
+		t.Fatal("password registration response does not match the Flutter session shape")
+	}
+	if registrationBody.Data.User.Phone != phone || registrationBody.Data.User.Account != account || registrationBody.Data.User.Nickname != nickname {
+		t.Fatalf("password registration returned unexpected user identity: id=%d account=%q nickname=%q", registrationBody.Data.User.ID, registrationBody.Data.User.Account, registrationBody.Data.User.Nickname)
+	}
+	return appAPIPasswordSession{
+		AccessToken:  registrationBody.Data.AccessToken,
+		RefreshToken: registrationBody.Data.RefreshToken,
+		User:         registrationBody.Data.User,
+	}
+}
+
+func appAPIRefreshPasswordSession(t *testing.T, handler http.Handler, refreshToken, operation string) appAPIPasswordSession {
+	t.Helper()
+	response := performAppAPI(handler, http.MethodPost, "/api/app/auth/refresh", "", map[string]string{
+		"refreshToken": refreshToken,
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("%s returned status %d", operation, response.Code)
+	}
+	var body struct {
+		Code int `json:"code"`
+		Data struct {
+			AccessToken  string `json:"accessToken"`
+			RefreshToken string `json:"refreshToken"`
+		} `json:"data"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %s response: %v", operation, err)
+	}
+	if body.Code != 0 || body.Message != "ok" || body.Data.AccessToken == "" || body.Data.RefreshToken == "" {
+		t.Fatalf("%s does not match the Flutter token shape", operation)
+	}
+	if body.Data.RefreshToken == refreshToken {
+		t.Fatalf("%s did not rotate the refresh token", operation)
+	}
+	return appAPIPasswordSession{
+		AccessToken:  body.Data.AccessToken,
+		RefreshToken: body.Data.RefreshToken,
+	}
+}
+
+func cleanupAppPrivacyAuthFixtures(t *testing.T, database *sql.DB, phones, accounts, deviceInfos []string) {
+	t.Helper()
+	for _, deviceInfo := range deviceInfos {
+		if _, err := database.Exec(`
+			DELETE FROM app_users
+			WHERE id IN (
+				SELECT app_user_id FROM app_refresh_tokens WHERE device_info=$1
+			)
+		`, deviceInfo); err != nil {
+			t.Fatalf("clear privacy password fixture user by device: %v", err)
+		}
+	}
+	for _, account := range accounts {
+		if _, err := database.Exec(`DELETE FROM app_users WHERE lower(account)=lower($1)`, account); err != nil {
+			t.Fatalf("clear privacy password fixture user by account: %v", err)
+		}
+	}
+	for _, phone := range phones {
+		if _, err := database.Exec(`DELETE FROM app_sms_codes WHERE phone=$1`, phone); err != nil {
+			t.Fatalf("clear privacy password fixture SMS codes: %v", err)
+		}
+		if _, err := database.Exec(`DELETE FROM app_users WHERE phone=$1`, phone); err != nil {
+			t.Fatalf("clear privacy password fixture user by phone: %v", err)
+		}
+	}
 }
 
 func appAPILogin(t *testing.T, handler http.Handler, phone string) (string, string, int64) {
@@ -719,3 +1116,80 @@ func countAppAPIRows(t *testing.T, database *sql.DB, query string, args ...any) 
 	}
 	return count
 }
+
+var appPrivacyDeleteDriverSeq atomic.Int64
+
+type appPrivacyDeleteRecorder struct {
+	execQueries []string
+}
+
+func openAppPrivacyDeleteTestDB(t *testing.T, recorder *appPrivacyDeleteRecorder) *sql.DB {
+	t.Helper()
+	driverName := fmt.Sprintf("app_privacy_delete_test_%d", appPrivacyDeleteDriverSeq.Add(1))
+	sql.Register(driverName, appPrivacyDeleteDriver{recorder: recorder})
+	database, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	return database
+}
+
+type appPrivacyDeleteDriver struct {
+	recorder *appPrivacyDeleteRecorder
+}
+
+func (d appPrivacyDeleteDriver) Open(string) (driver.Conn, error) {
+	return &appPrivacyDeleteConn{recorder: d.recorder}, nil
+}
+
+type appPrivacyDeleteConn struct {
+	recorder *appPrivacyDeleteRecorder
+}
+
+func (*appPrivacyDeleteConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
+func (*appPrivacyDeleteConn) Close() error                        { return nil }
+func (*appPrivacyDeleteConn) Begin() (driver.Tx, error)           { return appPrivacyDeleteTx{}, nil }
+
+func (*appPrivacyDeleteConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return appPrivacyDeleteTx{}, nil
+}
+
+func (*appPrivacyDeleteConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	if !strings.Contains(query, "SELECT id, phone, COALESCE(account, '') FROM app_users") {
+		return nil, fmt.Errorf("unexpected privacy delete query: %s", query)
+	}
+	return &appPrivacyDeleteRows{}, nil
+}
+
+func (c *appPrivacyDeleteConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+	c.recorder.execQueries = append(c.recorder.execQueries, query)
+	return driver.RowsAffected(1), nil
+}
+
+type appPrivacyDeleteTx struct{}
+
+func (appPrivacyDeleteTx) Commit() error   { return nil }
+func (appPrivacyDeleteTx) Rollback() error { return nil }
+
+type appPrivacyDeleteRows struct {
+	done bool
+}
+
+func (*appPrivacyDeleteRows) Columns() []string { return []string{"id", "phone", "account"} }
+func (*appPrivacyDeleteRows) Close() error      { return nil }
+
+func (r *appPrivacyDeleteRows) Next(dest []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+	dest[0] = int64(42)
+	dest[1] = "13800000042"
+	dest[2] = "privacyuser42"
+	r.done = true
+	return nil
+}
+
+var _ driver.ConnBeginTx = (*appPrivacyDeleteConn)(nil)
+var _ driver.ExecerContext = (*appPrivacyDeleteConn)(nil)
+var _ driver.QueryerContext = (*appPrivacyDeleteConn)(nil)

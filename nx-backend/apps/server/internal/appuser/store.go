@@ -15,6 +15,7 @@ import (
 type User struct {
 	ID              int64  `json:"id"`
 	Phone           string `json:"phone"`
+	Account         string `json:"account,omitempty"`
 	Nickname        string `json:"nickname"`
 	Avatar          string `json:"avatar"`
 	Status          string `json:"status"`
@@ -76,8 +77,8 @@ func (s *Store) FindOrCreateByPhone(ctx context.Context, phone string) (User, er
 	err = s.db.QueryRowContext(ctx,
 		`UPDATE app_users SET last_login_at = now(), update_time = now()
 		 WHERE phone = $1
-		 RETURNING id, phone, nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time`,
-		phone).Scan(&u.ID, &u.Phone, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
+		 RETURNING id, phone, COALESCE(account, ''), nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time`,
+		phone).Scan(&u.ID, &u.Phone, &u.Account, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
 	if err != nil {
 		return User{}, fmt.Errorf("appuser find: %w", err)
 	}
@@ -95,9 +96,9 @@ func (s *Store) FindByID(ctx context.Context, id int64) (User, error) {
 	var lastLogin, memberStartedAt, memberExpiresAt sql.NullTime
 	var createTime, updateTime time.Time
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, phone, nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time
+		`SELECT id, phone, COALESCE(account, ''), nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time
 		 FROM app_users WHERE id = $1`, id).
-		Scan(&u.ID, &u.Phone, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
+		Scan(&u.ID, &u.Phone, &u.Account, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
 	if err != nil {
 		return User{}, err
 	}
@@ -143,9 +144,9 @@ func (s *Store) UpdateAdminFields(ctx context.Context, id int64, input UpdateAdm
 		        member_level = COALESCE($2::text, member_level),
 		        update_time = now()
 		  WHERE id = $3
-		  RETURNING id, phone, nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time`,
+		  RETURNING id, phone, COALESCE(account, ''), nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time`,
 		statusArg, memberLevelArg, id).
-		Scan(&u.ID, &u.Phone, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
+		Scan(&u.ID, &u.Phone, &u.Account, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
 	if err != nil {
 		return User{}, err
 	}
@@ -176,6 +177,7 @@ type PageResult[T any] struct {
 type UserInsight struct {
 	ID                         int64           `json:"id"`
 	Phone                      string          `json:"phone"`
+	Account                    string          `json:"account,omitempty"`
 	Nickname                   string          `json:"nickname"`
 	Avatar                     string          `json:"avatar"`
 	Status                     string          `json:"status"`
@@ -239,7 +241,7 @@ func appUserWhere(query map[string]string, alias string) (string, []any, error) 
 	if kw := strings.TrimSpace(query["keyword"]); kw != "" {
 		args = append(args, "%"+kw+"%")
 		p := "$" + strconv.Itoa(len(args))
-		where = append(where, "(lower("+col("phone")+") LIKE lower("+p+") OR lower("+col("nickname")+") LIKE lower("+p+"))")
+		where = append(where, "(lower("+col("account")+") LIKE lower("+p+") OR lower("+col("phone")+") LIKE lower("+p+") OR lower("+col("nickname")+") LIKE lower("+p+"))")
 	}
 	if st := strings.TrimSpace(query["status"]); st != "" {
 		args = append(args, st)
@@ -252,7 +254,7 @@ func appUserWhere(query map[string]string, alias string) (string, []any, error) 
 	return strings.Join(where, " AND "), args, nil
 }
 
-// List 分页查询 App 客户，支持按手机号/昵称模糊搜索及状态、会员等级过滤。
+// List 分页查询 App 客户，支持按账号/手机号/昵称模糊搜索及状态、会员等级过滤。
 func (s *Store) List(ctx context.Context, query map[string]string) (PageResult[User], error) {
 	cond, args, err := appUserWhere(query, "")
 	if err != nil {
@@ -269,7 +271,7 @@ func (s *Store) List(ctx context.Context, query map[string]string) (PageResult[U
 	offset := (page - 1) * pageSize
 	args = append(args, pageSize, offset)
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, phone, nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time"+
+		"SELECT id, phone, COALESCE(account, ''), nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time"+
 			" FROM app_users WHERE "+cond+
 			" ORDER BY create_time DESC, id DESC"+
 			" LIMIT $"+strconv.Itoa(len(args)-1)+" OFFSET $"+strconv.Itoa(len(args)), args...)
@@ -283,7 +285,7 @@ func (s *Store) List(ctx context.Context, query map[string]string) (PageResult[U
 		var u User
 		var lastLogin, memberStartedAt, memberExpiresAt sql.NullTime
 		var createTime, updateTime time.Time
-		if err := rows.Scan(&u.ID, &u.Phone, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime); err != nil {
+		if err := rows.Scan(&u.ID, &u.Phone, &u.Account, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime); err != nil {
 			return PageResult[User]{}, fmt.Errorf("appuser scan: %w", err)
 		}
 		if lastLogin.Valid {
@@ -330,7 +332,7 @@ func (s *Store) ListInsights(ctx context.Context, query map[string]string) (Page
 	args = append(args, pageSize, offset)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
-		  u.id, u.phone, u.nickname, u.avatar, u.status, u.member_level, u.register_source,
+		  u.id, u.phone, COALESCE(u.account, ''), u.nickname, u.avatar, u.status, u.member_level, u.register_source,
 		  u.last_login_at, u.create_time, u.update_time,
 		  COALESCE(sub.primary_type, 0), COALESCE(sub.second_type, 0), COALESCE(sub.wing_type, 0),
 		  COALESCE(sub.gender, ''), sub.create_time,
@@ -409,7 +411,7 @@ func (s *Store) ListInsights(ctx context.Context, query map[string]string) (Page
 		var createTime, updateTime time.Time
 		var profileRaw, scoreRaw, centersRaw []byte
 		if err := rows.Scan(
-			&item.ID, &item.Phone, &item.Nickname, &item.Avatar, &item.Status, &item.MemberLevel, &item.RegisterSource,
+			&item.ID, &item.Phone, &item.Account, &item.Nickname, &item.Avatar, &item.Status, &item.MemberLevel, &item.RegisterSource,
 			&lastLogin, &createTime, &updateTime,
 			&item.PrimaryType, &item.SecondType, &item.WingType,
 			&item.Gender, &latestQuiz,

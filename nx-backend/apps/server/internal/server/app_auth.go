@@ -28,13 +28,15 @@ const (
 func (s *Server) appSendSMS(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
 	var body struct {
-		Phone string `json:"phone"`
+		Phone   string `json:"phone"`
+		Purpose string `json:"purpose"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	phone := strings.TrimSpace(body.Phone)
+	purpose := strings.TrimSpace(body.Purpose)
 	if !isMainlandPhone(phone) {
 		httpx.Fail(w, http.StatusBadRequest, "invalid phone number")
 		return
@@ -43,15 +45,17 @@ func (s *Server) appSendSMS(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	ip := s.clientIP(r)
 
-	if !s.smsPhoneLimiter.Allow(phone, now) {
-		httpx.Fail(w, http.StatusTooManyRequests, "发送过于频繁，请稍后再试")
-		return
-	}
 	if !s.smsIPLimiter.Allow(ip, now) {
 		httpx.Fail(w, http.StatusTooManyRequests, "发送过于频繁，请稍后再试")
 		return
 	}
-	if config.IsProduction(s.env.AppEnv) && strings.TrimSpace(s.env.SMS.Provider) == "" {
+	if !s.smsPhoneLimiter.Allow(phone, now) {
+		httpx.Fail(w, http.StatusTooManyRequests, "发送过于频繁，请稍后再试")
+		return
+	}
+	provider := strings.TrimSpace(s.env.SMS.Provider)
+	appEnv := config.NormalizeAppEnv(s.env.AppEnv)
+	if provider == "" && appEnv != "dev" && appEnv != "test" {
 		httpx.Fail(w, http.StatusServiceUnavailable, "SMS provider is not configured")
 		return
 	}
@@ -63,13 +67,29 @@ func (s *Server) appSendSMS(w http.ResponseWriter, r *http.Request) {
 	}
 	codeHash := appuser.HashToken(code)
 
-	if err := s.appUsers.StoreSMSCode(r.Context(), phone, codeHash, ip, now.Add(smsCodeExpiry)); err != nil {
-		httpx.Fail(w, http.StatusInternalServerError, "failed to store code")
-		return
+	if purpose == "password_reset" {
+		eligible, err := s.appUsers.StorePasswordResetCodeIfEligible(r.Context(), phone, codeHash, ip, now.Add(smsCodeExpiry))
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "failed to store code")
+			return
+		}
+		if !eligible {
+			httpx.OK(w, nil)
+			return
+		}
+	} else {
+		if purpose != "" && purpose != "register" {
+			httpx.Fail(w, http.StatusBadRequest, "invalid SMS purpose")
+			return
+		}
+		if err := s.appUsers.StoreSMSCode(r.Context(), phone, codeHash, ip, now.Add(smsCodeExpiry)); err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "failed to store code")
+			return
+		}
 	}
 
-	if s.env.SMS.Provider == "" {
-		log.Printf("[SMS-DEV] phone=%s code=%s", phone, code)
+	if provider == "" {
+		log.Print("[SMS-DEV] local response issued")
 		httpx.OK(w, map[string]any{"devCode": code})
 		return
 	}
@@ -125,22 +145,28 @@ func (s *Server) appVerifySMS(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusForbidden, "账号已被禁用")
 		return
 	}
-
-	accessToken, err := s.issueAppAccessToken(user)
-	if err != nil {
+	if err := s.writeAppSession(w, r, user, body.DeviceInfo); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "token error")
 		return
+	}
+}
+
+func (s *Server) writeAppSession(w http.ResponseWriter, r *http.Request, user appuser.User, deviceInfo string) error {
+	if s == nil || s.appUsers == nil {
+		return fmt.Errorf("app user store unavailable")
+	}
+	accessToken, err := s.issueAppAccessToken(user)
+	if err != nil {
+		return fmt.Errorf("issue app access token: %w", err)
 	}
 
 	refreshRaw, err := generateRefreshToken()
 	if err != nil {
-		httpx.Fail(w, http.StatusInternalServerError, "token error")
-		return
+		return fmt.Errorf("generate app refresh token: %w", err)
 	}
 	refreshHash := appuser.HashToken(refreshRaw)
-	if err := s.appUsers.CreateRefreshToken(r.Context(), user.ID, refreshHash, body.DeviceInfo, time.Now().Add(appRefreshTokenDuration)); err != nil {
-		httpx.Fail(w, http.StatusInternalServerError, "token error")
-		return
+	if err := s.appUsers.CreateRefreshToken(r.Context(), user.ID, refreshHash, deviceInfo, time.Now().Add(appRefreshTokenDuration)); err != nil {
+		return fmt.Errorf("persist app refresh token: %w", err)
 	}
 
 	httpx.OK(w, map[string]any{
@@ -148,6 +174,7 @@ func (s *Server) appVerifySMS(w http.ResponseWriter, r *http.Request) {
 		"refreshToken": refreshRaw,
 		"user":         user,
 	})
+	return nil
 }
 
 func (s *Server) appRefreshToken(w http.ResponseWriter, r *http.Request) {
@@ -289,10 +316,10 @@ func (s *Server) clientIP(r *http.Request) string {
 }
 
 func (s *Server) allowSMSVerifyAttempt(phone, ip string, now time.Time) bool {
-	if s.smsVerifyPhoneLimiter != nil && !s.smsVerifyPhoneLimiter.Allow(phone, now) {
+	if s.smsVerifyIPLimiter != nil && !s.smsVerifyIPLimiter.Allow(ip, now) {
 		return false
 	}
-	if s.smsVerifyIPLimiter != nil && !s.smsVerifyIPLimiter.Allow(ip, now) {
+	if s.smsVerifyPhoneLimiter != nil && !s.smsVerifyPhoneLimiter.Allow(phone, now) {
 		return false
 	}
 	return true

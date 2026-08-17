@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -11,6 +12,21 @@ import (
 	"testing"
 	"time"
 )
+
+func TestAccountSearchIncludesAccountPhoneAndNickname(t *testing.T) {
+	where, args, err := appUserWhere(map[string]string{"keyword": "alice"}, "u.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range []string{"u.account", "u.phone", "u.nickname"} {
+		if !strings.Contains(where, "lower("+column+") LIKE lower($1)") {
+			t.Fatalf("keyword predicate missing %s: %s", column, where)
+		}
+	}
+	if len(args) != 1 || args[0] != "%alice%" {
+		t.Fatalf("keyword args = %#v, want one wildcard argument", args)
+	}
+}
 
 func TestListInsightsReturnsAggregatedUserData(t *testing.T) {
 	var seenQueries []string
@@ -28,6 +44,7 @@ func TestListInsightsReturnsAggregatedUserData(t *testing.T) {
 			columns: []string{
 				"id",
 				"phone",
+				"account",
 				"nickname",
 				"avatar",
 				"status",
@@ -56,6 +73,7 @@ func TestListInsightsReturnsAggregatedUserData(t *testing.T) {
 			values: [][]driver.Value{{
 				int64(42),
 				"13800000021",
+				"insight_user",
 				"测试客户",
 				"",
 				"active",
@@ -102,6 +120,17 @@ func TestListInsightsReturnsAggregatedUserData(t *testing.T) {
 	if item.ID != 42 || item.Phone != "13800000021" || item.PrimaryType != 5 || item.SecondType != 6 || item.WingType != 4 {
 		t.Fatalf("unexpected insight item: %+v", item)
 	}
+	itemJSON, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var itemFields map[string]any
+	if err := json.Unmarshal(itemJSON, &itemFields); err != nil {
+		t.Fatal(err)
+	}
+	if itemFields["account"] != "insight_user" {
+		t.Fatalf("insight JSON account = %v, want insight_user; payload=%s", itemFields["account"], itemJSON)
+	}
 	if string(item.Profile) != `{"summary":"理性且敏锐","traits":["观察"]}` {
 		t.Fatalf("unexpected profile json: %s", item.Profile)
 	}
@@ -120,6 +149,9 @@ func TestListInsightsReturnsAggregatedUserData(t *testing.T) {
 		!strings.Contains(seenQueries[1], "app_chat_messages") ||
 		!strings.Contains(seenQueries[1], "app_compatibility_reports") {
 		t.Fatalf("expected insights query to aggregate extracted app data, got %s", seenQueries[1])
+	}
+	if !strings.Contains(seenQueries[1], "COALESCE(u.account, '')") {
+		t.Fatalf("insights account projection must coalesce legacy NULL, got %s", seenQueries[1])
 	}
 	if strings.Contains(seenQueries[1], "array_agg") {
 		t.Fatalf("latest memory/compatibility summaries should use ORDER BY ... LIMIT 1 instead of array_agg over all rows, got %s", seenQueries[1])
@@ -145,6 +177,7 @@ func TestListInsightsFiltersByUserIDForDirect360Open(t *testing.T) {
 			columns: []string{
 				"id",
 				"phone",
+				"account",
 				"nickname",
 				"avatar",
 				"status",
@@ -173,6 +206,7 @@ func TestListInsightsFiltersByUserIDForDirect360Open(t *testing.T) {
 			values: [][]driver.Value{{
 				int64(42),
 				"13800000042",
+				"direct_user",
 				"直达客户",
 				"",
 				"active",

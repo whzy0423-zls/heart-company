@@ -1,13 +1,18 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -15,7 +20,9 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/config"
+	serverdb "nine-xing/nx-backend/apps/server/internal/db"
 	"nine-xing/nx-backend/apps/server/internal/realip"
+	"nine-xing/nx-backend/apps/server/internal/testutil"
 )
 
 type failingRandReader struct{}
@@ -54,6 +61,77 @@ func TestSMSVerifyAttemptLimiterBlocksRepeatedAttempts(t *testing.T) {
 	}
 	if s.allowSMSVerifyAttempt("13800000007", "127.0.0.1", now) {
 		t.Fatal("expected repeated verify attempts for one phone to be rate limited")
+	}
+}
+
+func TestSMSVerifyIPLimiterRunsBeforePhoneLimiter(t *testing.T) {
+	now := time.Unix(150, 0)
+	ip := "203.0.113.9"
+	existingPhone := "13800000007"
+	newPhone := "13800000008"
+	phoneLimiter := newStrRateLimiter(5, time.Minute)
+	ipLimiter := newStrRateLimiter(1, time.Minute)
+	if !phoneLimiter.Allow(existingPhone, now) {
+		t.Fatal("expected existing phone setup attempt to be allowed")
+	}
+	if !ipLimiter.Allow(ip, now) {
+		t.Fatal("expected IP setup attempt to be allowed")
+	}
+	s := &Server{
+		smsVerifyPhoneLimiter: phoneLimiter,
+		smsVerifyIPLimiter:    ipLimiter,
+	}
+
+	if s.allowSMSVerifyAttempt(existingPhone, ip, now) {
+		t.Fatal("expected exhausted IP limiter to reject existing phone")
+	}
+	if s.allowSMSVerifyAttempt(newPhone, ip, now) {
+		t.Fatal("expected exhausted IP limiter to reject new phone")
+	}
+
+	if got, ok := rateLimiterCount(phoneLimiter, existingPhone); !ok || got != 1 {
+		t.Fatalf("expected existing phone limiter count to remain 1, got count=%d exists=%t", got, ok)
+	}
+	if _, ok := rateLimiterCount(phoneLimiter, newPhone); ok {
+		t.Fatal("expected rejected IP not to create a new phone limiter key")
+	}
+}
+
+func TestAppSendSMSIPLimiterRunsBeforePhoneLimiter(t *testing.T) {
+	now := time.Now()
+	ip := "203.0.113.10"
+	existingPhone := "13800000009"
+	newPhone := "13800000010"
+	phoneLimiter := newStrRateLimiter(5, time.Minute)
+	ipLimiter := newStrRateLimiter(1, time.Minute)
+	if !phoneLimiter.Allow(existingPhone, now) {
+		t.Fatal("expected existing phone setup attempt to be allowed")
+	}
+	if !ipLimiter.Allow(ip, now) {
+		t.Fatal("expected IP setup attempt to be allowed")
+	}
+	s := &Server{
+		smsPhoneLimiter: phoneLimiter,
+		smsIPLimiter:    ipLimiter,
+	}
+
+	for _, phone := range []string{existingPhone, newPhone} {
+		request := httptest.NewRequest(http.MethodPost, "/api/app/auth/send-sms", strings.NewReader(`{"phone":"`+phone+`"}`))
+		request.RemoteAddr = ip + ":1234"
+		response := httptest.NewRecorder()
+
+		s.appSendSMS(response, request)
+
+		if response.Code != http.StatusTooManyRequests {
+			t.Fatalf("expected exhausted IP limiter to return 429 for %s, got %d body=%s", phone, response.Code, response.Body.String())
+		}
+	}
+
+	if got, ok := rateLimiterCount(phoneLimiter, existingPhone); !ok || got != 1 {
+		t.Fatalf("expected existing phone limiter count to remain 1, got count=%d exists=%t", got, ok)
+	}
+	if _, ok := rateLimiterCount(phoneLimiter, newPhone); ok {
+		t.Fatal("expected rejected IP not to create a new phone limiter key")
 	}
 }
 
@@ -101,19 +179,108 @@ func TestAppAuthRejectsInvalidMainlandPhoneFormats(t *testing.T) {
 	}
 }
 
-func TestAppSendSMSDoesNotUseDevCodeInProduction(t *testing.T) {
+func TestAppSendSMSDoesNotUseDevCodeOutsideDevOrTest(t *testing.T) {
+	registerAppAuthUnitTestDriver()
+
+	for _, appEnv := range []string{" staging ", " production "} {
+		t.Run(strings.TrimSpace(appEnv), func(t *testing.T) {
+			db, err := sql.Open(appAuthUnitTestDriverName, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			s := &Server{
+				env:             config.Env{AppEnv: appEnv},
+				appUsers:        appuser.NewStore(db),
+				smsPhoneLimiter: newStrRateLimiter(100, time.Minute),
+				smsIPLimiter:    newStrRateLimiter(100, time.Minute),
+			}
+			request := httptest.NewRequest(http.MethodPost, "/api/app/auth/sms", strings.NewReader(`{"phone":"13800000000"}`))
+			response := httptest.NewRecorder()
+
+			s.appSendSMS(response, request)
+
+			if response.Code != http.StatusServiceUnavailable {
+				t.Fatalf("expected %s without SMS provider to fail closed before storage, got %d body=%s", strings.TrimSpace(appEnv), response.Code, response.Body.String())
+			}
+			if strings.Contains(response.Body.String(), "devCode") {
+				t.Fatalf("expected %s response not to contain devCode, got %s", strings.TrimSpace(appEnv), response.Body.String())
+			}
+		})
+	}
+}
+
+func TestAppSendSMSDevelopmentLogDoesNotContainDevCode(t *testing.T) {
 	s := newAppAuthPhoneValidationTestServer(t)
-	s.env = config.Env{AppEnv: "production"}
-	request := httptest.NewRequest(http.MethodPost, "/api/app/auth/sms", strings.NewReader(`{"phone":"13800000000"}`))
+	s.env = config.Env{AppEnv: "development"}
+	phone := "13912345678"
+
+	var logOutput bytes.Buffer
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	previousPrefix := log.Prefix()
+	log.SetOutput(&logOutput)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	defer func() {
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+		log.SetPrefix(previousPrefix)
+	}()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/app/auth/send-sms", strings.NewReader(`{"phone":"`+phone+`"}`))
 	response := httptest.NewRecorder()
 
 	s.appSendSMS(response, request)
 
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected production without SMS provider to fail closed, got %d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", response.Code, response.Body.String())
 	}
-	if strings.Contains(response.Body.String(), "devCode") {
-		t.Fatalf("expected production response not to contain devCode, got %s", response.Body.String())
+	var payload struct {
+		Data struct {
+			DevCode string `json:"devCode"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Data.DevCode == "" {
+		t.Fatal("expected devCode response for local development")
+	}
+	if !strings.Contains(logOutput.String(), "[SMS-DEV]") {
+		t.Fatalf("expected development SMS log marker, got %q", logOutput.String())
+	}
+	if strings.Contains(logOutput.String(), payload.Data.DevCode) {
+		t.Fatalf("expected development log not to contain devCode, got %q", logOutput.String())
+	}
+}
+
+func TestWriteAppSessionDoesNotWriteWhenRefreshTokenPersistenceFails(t *testing.T) {
+	registerAppAuthUnitTestDriver()
+	db, err := sql.Open(appAuthUnitTestDriverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{
+		env:      config.Env{JWTSecret: "task-6-test-secret"},
+		appUsers: appuser.NewStore(db),
+	}
+	response := &writeTrackingResponseWriter{header: make(http.Header)}
+	request := httptest.NewRequest(http.MethodPost, "/api/app/auth/login", nil)
+
+	err = s.writeAppSession(response, request, appuser.User{ID: 42, Phone: "13800000011", Status: "active"}, "test-device")
+
+	if err == nil {
+		t.Fatal("expected refresh token persistence error")
+	}
+	if response.wrote {
+		t.Fatalf("expected session writer to return the persistence error without writing a response, got status=%d body=%s", response.status, response.body.String())
 	}
 }
 
@@ -258,6 +425,27 @@ func TestAppAuthCompatibilityAliasRoutes(t *testing.T) {
 			want:   http.StatusBadRequest,
 		},
 		{
+			name:   "password registration route reaches handler",
+			method: http.MethodPost,
+			path:   "/api/app/auth/register",
+			body:   `{`,
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "password login route reaches handler",
+			method: http.MethodPost,
+			path:   "/api/app/auth/login",
+			body:   `{`,
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "password reset route reaches handler",
+			method: http.MethodPost,
+			path:   "/api/app/auth/reset-password",
+			body:   `{`,
+			want:   http.StatusBadRequest,
+		},
+		{
 			name:   "me alias reaches app auth guard",
 			method: http.MethodGet,
 			path:   "/api/app/me",
@@ -280,6 +468,931 @@ func TestAppAuthCompatibilityAliasRoutes(t *testing.T) {
 	}
 }
 
+func TestAppPasswordRegistrationValidationRejectsBeforeStore(t *testing.T) {
+	server := newRouteOnlyServer()
+	longPassword := strings.Repeat("a", 73)
+
+	tests := []struct {
+		name        string
+		payload     string
+		wantMessage string
+	}{
+		{
+			name:        "invalid account",
+			payload:     `{"nickname":"心之力用户","account":"1bad","password":"secret1","phone":"13800000000","code":"123456"}`,
+			wantMessage: "用户名格式不正确",
+		},
+		{
+			name:        "password shorter than six bytes",
+			payload:     `{"nickname":"心之力用户","account":"xinuser","password":"12345","phone":"13800000000","code":"123456"}`,
+			wantMessage: "密码格式不正确",
+		},
+		{
+			name:        "password longer than seventy two bytes",
+			payload:     `{"nickname":"心之力用户","account":"xinuser","password":"` + longPassword + `","phone":"13800000000","code":"123456"}`,
+			wantMessage: "密码格式不正确",
+		},
+		{
+			name:        "invalid nickname",
+			payload:     `{"nickname":"   ","account":"xinuser","password":"secret1","phone":"13800000000","code":"123456"}`,
+			wantMessage: "昵称格式不正确",
+		},
+		{
+			name:        "invalid mainland phone",
+			payload:     `{"nickname":"心之力用户","account":"xinuser","password":"secret1","phone":"12800000000","code":"123456"}`,
+			wantMessage: "手机号格式不正确",
+		},
+		{
+			name:        "code is not six digits",
+			payload:     `{"nickname":"心之力用户","account":"xinuser","password":"secret1","phone":"13800000000","code":"12345"}`,
+			wantMessage: "验证码格式不正确",
+		},
+		{
+			name:        "code contains non digits",
+			payload:     `{"nickname":"心之力用户","account":"xinuser","password":"secret1","phone":"13800000000","code":"12345a"}`,
+			wantMessage: "验证码格式不正确",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/app/auth/register", strings.NewReader(tt.payload))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			server.mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tt.wantMessage) {
+				t.Fatalf("expected message %q, got body=%s", tt.wantMessage, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestAppPasswordHandlersRejectTrailingJSON(t *testing.T) {
+	requests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "registration",
+			path: "/api/app/auth/register",
+			body: `{"nickname":"心之力用户","account":"xinuser","password":"secret1","phone":"13800000000","code":"123456"}`,
+		},
+		{
+			name: "login",
+			path: "/api/app/auth/login",
+			body: `{"account":"xinuser","password":"secret1"}`,
+		},
+		{
+			name: "password reset",
+			path: "/api/app/auth/reset-password",
+			body: `{"phone":"13800000000","code":"123456","password":"secret1"}`,
+		},
+	}
+	suffixes := []struct {
+		name  string
+		value string
+	}{
+		{name: "garbage", value: "garbage"},
+		{name: "second json object", value: ` {"extra":true}`},
+		{name: "body limit exceeded by trailing whitespace", value: strings.Repeat(" ", appPasswordAuthBodyLimit+1)},
+	}
+
+	for _, request := range requests {
+		for _, suffix := range suffixes {
+			t.Run(request.name+"/"+suffix.name, func(t *testing.T) {
+				server := newAppPasswordTrailingJSONTestServer(t)
+				req := httptest.NewRequest(http.MethodPost, request.path, strings.NewReader(request.body+suffix.value))
+				req.Header.Set("Content-Type", "application/json")
+				rec := httptest.NewRecorder()
+
+				server.mux.ServeHTTP(rec, req)
+
+				if rec.Code != http.StatusBadRequest {
+					t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestAppResetPasswordValidationRejectsBeforeStore(t *testing.T) {
+	server := newRouteOnlyServer()
+	tests := []struct {
+		name        string
+		payload     string
+		wantMessage string
+	}{
+		{name: "phone", payload: `{"phone":"12800000000","code":"123456","password":"secret1"}`, wantMessage: "手机号格式不正确"},
+		{name: "code length", payload: `{"phone":"13800000000","code":"12345","password":"secret1"}`, wantMessage: "验证码格式不正确"},
+		{name: "code digits", payload: `{"phone":"13800000000","code":"12345a","password":"secret1"}`, wantMessage: "验证码格式不正确"},
+		{name: "short password", payload: `{"phone":"13800000000","code":"123456","password":"short"}`, wantMessage: "密码格式不正确"},
+		{name: "long password", payload: `{"phone":"13800000000","code":"123456","password":"` + strings.Repeat("a", 73) + `"}`, wantMessage: "密码格式不正确"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/app/auth/reset-password", strings.NewReader(tt.payload))
+			rec := httptest.NewRecorder()
+			server.mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), tt.wantMessage) {
+				t.Fatalf("status=%d body=%s want 400 containing %q", rec.Code, rec.Body.String(), tt.wantMessage)
+			}
+		})
+	}
+}
+
+func TestAppPasswordHandlersAllowTrailingWhitespace(t *testing.T) {
+	requests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "registration continues to sms limiter",
+			path: "/api/app/auth/register",
+			body: `{"nickname":"心之力用户","account":"xinuser","password":"secret1","phone":"13800000000","code":"123456"}`,
+		},
+		{
+			name: "login continues to password limiter",
+			path: "/api/app/auth/login",
+			body: `{"account":"xinuser","password":"secret1"}`,
+		},
+	}
+
+	for _, request := range requests {
+		t.Run(request.name, func(t *testing.T) {
+			server := newAppPasswordTrailingJSONTestServer(t)
+			req := httptest.NewRequest(http.MethodPost, request.path, strings.NewReader(request.body+" \n\t"))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			server.mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("expected trailing whitespace to reach limiter with 429, got %d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestAppPasswordHandlersAllowUnknownFieldsInFirstJSONValue(t *testing.T) {
+	requests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "registration continues to sms limiter",
+			path: "/api/app/auth/register",
+			body: `{"nickname":"心之力用户","account":"xinuser","password":"secret1","phone":"13800000000","code":"123456","futureField":{"enabled":true}}`,
+		},
+		{
+			name: "login continues to password limiter",
+			path: "/api/app/auth/login",
+			body: `{"account":"xinuser","password":"secret1","futureField":{"enabled":true}}`,
+		},
+	}
+
+	for _, request := range requests {
+		t.Run(request.name, func(t *testing.T) {
+			server := newAppPasswordTrailingJSONTestServer(t)
+			req := httptest.NewRequest(http.MethodPost, request.path, strings.NewReader(request.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			server.mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("expected unknown field to be accepted and reach limiter with 429, got %d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func newAppPasswordTrailingJSONTestServer(t *testing.T) *Server {
+	t.Helper()
+	now := time.Now()
+	smsLimiter := newStrRateLimiter(1, time.Minute)
+	if !smsLimiter.Allow("13800000000", now) {
+		t.Fatal("expected SMS limiter setup attempt to be allowed")
+	}
+	accountLimiter := newStrRateLimiter(1, time.Minute)
+	if !accountLimiter.Allow("xinuser", now) {
+		t.Fatal("expected password limiter setup attempt to be allowed")
+	}
+	server := &Server{
+		mux:                       http.NewServeMux(),
+		smsVerifyPhoneLimiter:     smsLimiter,
+		appPasswordAccountLimiter: accountLimiter,
+	}
+	server.routes()
+	return server
+}
+
+func TestAppPasswordLoginValidationRejectsBeforeStore(t *testing.T) {
+	server := newRouteOnlyServer()
+
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name:    "empty identifier",
+			payload: `{"account":"   ","password":"secret1"}`,
+		},
+		{
+			name:    "empty password",
+			payload: `{"account":"xinuser","password":""}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/app/auth/login", strings.NewReader(tt.payload))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			server.mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "请输入账号和密码") {
+				t.Fatalf("expected missing credentials message, got body=%s", rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestAppPasswordHandlersRejectUnavailableAuthDependencies(t *testing.T) {
+	registerAppAuthUnitTestDriver()
+	db, err := sql.Open(appAuthUnitTestDriverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	handlers := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "registration",
+			path: "/api/app/auth/register",
+			body: `{"nickname":"心之力用户","account":"xinuser","password":"secret1","phone":"13800000000","code":"123456"}`,
+		},
+		{
+			name: "login",
+			path: "/api/app/auth/login",
+			body: `{"account":"xinuser","password":"secret1"}`,
+		},
+	}
+	dependencies := []struct {
+		name      string
+		configure func(*Server)
+	}{
+		{
+			name: "missing app user store",
+			configure: func(server *Server) {
+				server.db = db
+			},
+		},
+		{
+			name: "missing database",
+			configure: func(server *Server) {
+				server.appUsers = appuser.NewStore(db)
+			},
+		},
+	}
+
+	for _, handler := range handlers {
+		for _, dependency := range dependencies {
+			t.Run(handler.name+"/"+dependency.name, func(t *testing.T) {
+				server := &Server{mux: http.NewServeMux()}
+				dependency.configure(server)
+				server.routes()
+
+				rec, recovered := serveAppAuthRequest(server, handler.path, handler.body)
+				if recovered != nil {
+					t.Fatalf("expected unavailable dependency to return 503 instead of panicking: %v", recovered)
+				}
+				if rec.Code != http.StatusServiceUnavailable {
+					t.Fatalf("expected unavailable dependency to return 503, got %d body=%s", rec.Code, rec.Body.String())
+				}
+				if !strings.Contains(rec.Body.String(), "认证服务不可用") {
+					t.Fatalf("expected unavailable auth service message, got body=%s", rec.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestAppPasswordRegistrationErrorResponses(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantStatus  int
+		wantMessage string
+	}{
+		{name: "invalid account", err: appuser.ErrInvalidAccount, wantStatus: http.StatusBadRequest, wantMessage: "用户名格式不正确"},
+		{name: "invalid password", err: appuser.ErrInvalidPassword, wantStatus: http.StatusBadRequest, wantMessage: "密码格式不正确"},
+		{name: "invalid nickname", err: appuser.ErrInvalidNickname, wantStatus: http.StatusBadRequest, wantMessage: "昵称格式不正确"},
+		{name: "invalid sms code", err: appuser.ErrInvalidSMSCode, wantStatus: http.StatusUnauthorized, wantMessage: "验证码错误或已过期"},
+		{name: "disabled user", err: appuser.ErrUserDisabled, wantStatus: http.StatusForbidden, wantMessage: "账号已被禁用"},
+		{name: "account taken", err: appuser.ErrAccountTaken, wantStatus: http.StatusConflict, wantMessage: "用户名已存在"},
+		{name: "phone registered", err: appuser.ErrPhoneAlreadyRegistered, wantStatus: http.StatusConflict, wantMessage: "该手机号已注册"},
+		{name: "wrapped account error", err: fmt.Errorf("register: %w", appuser.ErrAccountTaken), wantStatus: http.StatusConflict, wantMessage: "用户名已存在"},
+		{name: "internal error", err: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError, wantMessage: "注册失败"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, message := appPasswordRegistrationErrorResponse(tt.err)
+			if status != tt.wantStatus || message != tt.wantMessage {
+				t.Fatalf("expected (%d, %q), got (%d, %q)", tt.wantStatus, tt.wantMessage, status, message)
+			}
+		})
+	}
+}
+
+func TestAppPasswordLoginErrorResponses(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantStatus  int
+		wantMessage string
+	}{
+		{name: "invalid credentials", err: appuser.ErrInvalidCredentials, wantStatus: http.StatusUnauthorized, wantMessage: "账号或密码错误"},
+		{name: "wrapped invalid credentials", err: fmt.Errorf("login: %w", appuser.ErrInvalidCredentials), wantStatus: http.StatusUnauthorized, wantMessage: "账号或密码错误"},
+		{name: "disabled user", err: appuser.ErrUserDisabled, wantStatus: http.StatusForbidden, wantMessage: "账号已被禁用"},
+		{name: "internal error", err: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError, wantMessage: "登录失败"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, message := appPasswordLoginErrorResponse(tt.err)
+			if status != tt.wantStatus || message != tt.wantMessage {
+				t.Fatalf("expected (%d, %q), got (%d, %q)", tt.wantStatus, tt.wantMessage, status, message)
+			}
+		})
+	}
+}
+
+func TestAppPasswordLoginAttemptLimiterNormalizesKeysAndFailsOpenWhenNil(t *testing.T) {
+	now := time.Unix(200, 0)
+
+	if !(&Server{}).allowAppPasswordLoginAttempt(context.Background(), " XinUser ", " 127.0.0.1 ", now) {
+		t.Fatal("expected nil password login limiters to fail open")
+	}
+
+	accountLimited := &Server{
+		appPasswordAccountLimiter: newStrRateLimiter(1, time.Minute),
+		appPasswordIPLimiter:      newStrRateLimiter(10, time.Minute),
+	}
+	if !accountLimited.allowAppPasswordLoginAttempt(context.Background(), " XinUser ", "127.0.0.1", now) {
+		t.Fatal("expected first normalized account attempt to be allowed")
+	}
+	if accountLimited.allowAppPasswordLoginAttempt(context.Background(), "xinuser", "127.0.0.2", now) {
+		t.Fatal("expected account limiter to use lowercase trimmed identifier")
+	}
+
+	ipLimited := &Server{
+		appPasswordAccountLimiter: newStrRateLimiter(10, time.Minute),
+		appPasswordIPLimiter:      newStrRateLimiter(1, time.Minute),
+	}
+	if !ipLimited.allowAppPasswordLoginAttempt(context.Background(), "firstuser", " 127.0.0.1 ", now) {
+		t.Fatal("expected first normalized IP attempt to be allowed")
+	}
+	if ipLimited.allowAppPasswordLoginAttempt(context.Background(), "seconduser", "127.0.0.1", now) {
+		t.Fatal("expected IP limiter to use trimmed IP")
+	}
+}
+
+func TestAppPasswordLoginIPLimiterRunsBeforeAccountLimiter(t *testing.T) {
+	now := time.Unix(250, 0)
+	ip := "203.0.113.11"
+	existingAccount := "existinguser"
+	newAccount := "newuser"
+	accountLimiter := newStrRateLimiter(5, time.Minute)
+	ipLimiter := newStrRateLimiter(1, time.Minute)
+	if !accountLimiter.Allow(existingAccount, now) {
+		t.Fatal("expected existing account setup attempt to be allowed")
+	}
+	if !ipLimiter.Allow(ip, now) {
+		t.Fatal("expected IP setup attempt to be allowed")
+	}
+	s := &Server{
+		appPasswordAccountLimiter: accountLimiter,
+		appPasswordIPLimiter:      ipLimiter,
+	}
+
+	if s.allowAppPasswordLoginAttempt(context.Background(), existingAccount, ip, now) {
+		t.Fatal("expected exhausted IP limiter to reject existing account")
+	}
+	if s.allowAppPasswordLoginAttempt(context.Background(), newAccount, ip, now) {
+		t.Fatal("expected exhausted IP limiter to reject new account")
+	}
+
+	if got, ok := rateLimiterCount(accountLimiter, existingAccount); !ok || got != 1 {
+		t.Fatalf("expected existing account limiter count to remain 1, got count=%d exists=%t", got, ok)
+	}
+	if _, ok := rateLimiterCount(accountLimiter, newAccount); ok {
+		t.Fatal("expected rejected IP not to create a new account limiter key")
+	}
+}
+
+func TestAppPasswordLoginAttemptLimiterUsesDatabaseWithoutTouchingMemory(t *testing.T) {
+	database := openAppPasswordLoginLimiterTestDatabase(t)
+	now := time.Now()
+	account := " XinUser "
+	accountKey := "xinuser"
+	ip := " 203.0.113.20 "
+	ipKey := "203.0.113.20"
+	accountLimiter := newStrRateLimiter(1, time.Minute)
+	ipLimiter := newStrRateLimiter(1, time.Minute)
+	if !accountLimiter.Allow(accountKey, now) {
+		t.Fatal("expected account memory limiter setup attempt to be allowed")
+	}
+	if !ipLimiter.Allow(ipKey, now) {
+		t.Fatal("expected IP memory limiter setup attempt to be allowed")
+	}
+	s := &Server{
+		appPasswordAccountLimiter:   accountLimiter,
+		appPasswordIPLimiter:        ipLimiter,
+		appPasswordAccountDBLimiter: newDBRateLimiter(database, "app_password_account", 5, time.Minute),
+		appPasswordIPDBLimiter:      newDBRateLimiter(database, "app_password_ip", 30, time.Minute),
+	}
+
+	if !s.allowAppPasswordLoginAttempt(context.Background(), account, ip, now) {
+		t.Fatal("expected healthy database limiters to bypass exhausted memory limiters")
+	}
+	if got, ok := rateLimiterCount(accountLimiter, accountKey); !ok || got != 1 {
+		t.Fatalf("expected account memory limiter count to remain 1, got count=%d exists=%t", got, ok)
+	}
+	if got, ok := rateLimiterCount(ipLimiter, ipKey); !ok || got != 1 {
+		t.Fatalf("expected IP memory limiter count to remain 1, got count=%d exists=%t", got, ok)
+	}
+	assertDBRateLimiterCount(t, database, "app_password_account", appPasswordLoginPersistentKey("", "account", accountKey), 1)
+	assertDBRateLimiterCount(t, database, "app_password_ip", appPasswordLoginPersistentKey("", "ip", ipKey), 1)
+}
+
+func TestAppPasswordLoginAttemptLimiterFallsBackToMemoryWhenDatabaseFails(t *testing.T) {
+	database := openFailingAppPasswordLoginLimiterDatabase(t)
+	now := time.Unix(300, 0)
+
+	t.Run("account", func(t *testing.T) {
+		accountLimiter := newStrRateLimiter(1, time.Minute)
+		s := &Server{
+			appPasswordAccountLimiter:   accountLimiter,
+			appPasswordIPLimiter:        newStrRateLimiter(10, time.Minute),
+			appPasswordAccountDBLimiter: newDBRateLimiter(database, "app_password_account", 5, time.Minute),
+		}
+
+		if !s.allowAppPasswordLoginAttempt(context.Background(), " XinUser ", "203.0.113.21", now) {
+			t.Fatal("expected first account attempt to fall back to memory and be allowed")
+		}
+		if s.allowAppPasswordLoginAttempt(context.Background(), "xinuser", "203.0.113.22", now.Add(time.Second)) {
+			t.Fatal("expected account memory fallback to reject the second attempt")
+		}
+	})
+
+	t.Run("ip", func(t *testing.T) {
+		accountLimiter := newStrRateLimiter(10, time.Minute)
+		ipLimiter := newStrRateLimiter(1, time.Minute)
+		s := &Server{
+			appPasswordAccountLimiter: accountLimiter,
+			appPasswordIPLimiter:      ipLimiter,
+			appPasswordIPDBLimiter:    newDBRateLimiter(database, "app_password_ip", 30, time.Minute),
+		}
+
+		if !s.allowAppPasswordLoginAttempt(context.Background(), "firstuser", " 203.0.113.23 ", now) {
+			t.Fatal("expected first IP attempt to fall back to memory and be allowed")
+		}
+		if s.allowAppPasswordLoginAttempt(context.Background(), "seconduser", "203.0.113.23", now.Add(time.Second)) {
+			t.Fatal("expected IP memory fallback to reject the second attempt")
+		}
+		if _, ok := rateLimiterCount(accountLimiter, "seconduser"); ok {
+			t.Fatal("expected rejected IP fallback not to create an account memory key")
+		}
+	})
+}
+
+func openAppPasswordLoginLimiterTestDatabase(t *testing.T) *sql.DB {
+	t.Helper()
+	dsn := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("set TEST_DATABASE_URL to run app password limiter integration tests")
+	}
+	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	database, err := serverdb.Open(ctx, dsn, "admin", "123456")
+	if err != nil {
+		t.Fatalf("open app password limiter database: %v", err)
+	}
+	conn, err := database.Conn(ctx)
+	if err != nil {
+		_ = database.Close()
+		t.Fatalf("get app password limiter advisory lock connection: %v", err)
+	}
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, testutil.AuthFixtureAdvisoryLockKey); err != nil {
+		_ = conn.Close()
+		_ = database.Close()
+		t.Fatalf("acquire app password limiter advisory lock: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := clearAppPasswordLoginLimiterScopes(cleanupCtx, conn); err != nil {
+			t.Errorf("clear app password login limiter scopes: %v", err)
+		}
+		cleanupCancel()
+		unlockCtx, unlockCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		var unlocked bool
+		if err := conn.QueryRowContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, testutil.AuthFixtureAdvisoryLockKey).Scan(&unlocked); err != nil {
+			t.Errorf("release app password limiter advisory lock: %v", err)
+		} else if !unlocked {
+			t.Error("app password limiter advisory lock was not held during cleanup")
+		}
+		unlockCancel()
+		if err := conn.Close(); err != nil {
+			t.Errorf("close app password limiter advisory lock connection: %v", err)
+		}
+		if err := database.Close(); err != nil {
+			t.Errorf("close app password limiter database: %v", err)
+		}
+	})
+	if err := clearAppPasswordLoginLimiterScopes(ctx, conn); err != nil {
+		t.Fatalf("clear app password login limiter scopes: %v", err)
+	}
+	return database
+}
+
+func openFailingAppPasswordLoginLimiterDatabase(t *testing.T) *sql.DB {
+	t.Helper()
+	const driverName = "nine_xing_failing_limiter"
+	failingQueryDriverRegisterOnce.Do(func() {
+		sql.Register(driverName, failingQueryDriver{})
+	})
+	database, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	return database
+}
+
+func clearAppPasswordLoginLimiterScopes(ctx context.Context, conn *sql.Conn) error {
+	_, err := conn.ExecContext(ctx, `DELETE FROM request_rate_limits WHERE scope IN ('app_password_account', 'app_password_ip')`)
+	return err
+}
+
+func TestAppPasswordLoginAttemptLimiterTimesOutDatabaseAndFallsBackToMemory(t *testing.T) {
+	connector := newContextBlockingRateLimiterConnector()
+	database := sql.OpenDB(connector)
+	t.Cleanup(func() {
+		connector.releaseQuery()
+		_ = database.Close()
+	})
+	ipLimiter := newStrRateLimiter(1, time.Minute)
+	s := &Server{
+		appPasswordIPLimiter:   ipLimiter,
+		appPasswordIPDBLimiter: newDBRateLimiter(database, "app_password_ip", 30, time.Minute),
+	}
+
+	result := make(chan bool, 1)
+	started := time.Now()
+	go func() {
+		result <- s.allowAppPasswordLoginAttempt(context.Background(), "xinuser", "203.0.113.40", time.Now())
+	}()
+
+	select {
+	case allowed := <-result:
+		if !allowed {
+			t.Fatal("expected DB timeout to fall back to the IP memory limiter")
+		}
+		if elapsed := time.Since(started); elapsed > 1500*time.Millisecond {
+			t.Fatalf("expected bounded DB fallback, took %s", elapsed)
+		}
+	case <-time.After(1500 * time.Millisecond):
+		connector.releaseQuery()
+		<-result
+		t.Fatal("password login limiter did not bound the blocking DB query")
+	}
+
+	select {
+	case observed := <-connector.contexts:
+		deadline, ok := observed.Deadline()
+		if !ok {
+			t.Fatal("expected DB limiter context to have a deadline")
+		}
+		if remaining := time.Until(deadline); remaining > 750*time.Millisecond {
+			t.Fatalf("expected a short DB limiter deadline, remaining=%s", remaining)
+		}
+	default:
+		t.Fatal("expected blocking DB driver to observe a query context")
+	}
+	if got, ok := rateLimiterCount(ipLimiter, "203.0.113.40"); !ok || got != 1 {
+		t.Fatalf("expected IP memory fallback count 1, got count=%d exists=%t", got, ok)
+	}
+}
+
+func TestAppPasswordLoginAttemptLimiterRouteUsesCanceledRequestContext(t *testing.T) {
+	connector := newContextBlockingRateLimiterConnector()
+	database := sql.OpenDB(connector)
+	t.Cleanup(func() {
+		connector.releaseQuery()
+		_ = database.Close()
+	})
+	server := &Server{
+		mux:                       http.NewServeMux(),
+		db:                        database,
+		appPasswordIPLimiter:      newStrRateLimiter(1, time.Minute),
+		appPasswordAccountLimiter: newStrRateLimiter(1, time.Minute),
+		appPasswordIPDBLimiter:    newDBRateLimiter(database, "app_password_ip", 30, time.Minute),
+	}
+	server.routes()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/app/auth/login", strings.NewReader(`{"account":"xinuser","password":"secret1"}`))
+	request.Header.Set("Content-Type", "application/json")
+	ctx, cancel := context.WithCancel(request.Context())
+	cancel()
+	request = request.WithContext(ctx)
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		server.mux.ServeHTTP(response, request)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected canceled request to fall back then reach dependency guard, got %d body=%s", response.Code, response.Body.String())
+		}
+	case <-time.After(250 * time.Millisecond):
+		connector.releaseQuery()
+		<-done
+		t.Fatal("password login route did not propagate the canceled request context")
+	}
+}
+
+func TestAppPasswordLoginAttemptLimiterEmptyKeysFailOpenWithoutTouchingLimiters(t *testing.T) {
+	now := time.Unix(350, 0)
+
+	t.Run("ip", func(t *testing.T) {
+		connector := newRecordingRateLimiterConnector()
+		database := sql.OpenDB(connector)
+		t.Cleanup(func() { _ = database.Close() })
+		memoryLimiter := newStrRateLimiter(1, time.Minute)
+		s := &Server{
+			appPasswordIPLimiter:   memoryLimiter,
+			appPasswordIPDBLimiter: newDBRateLimiter(database, "app_password_ip", 30, time.Minute),
+		}
+
+		if !s.allowAppPasswordLoginAttempt(context.Background(), "xinuser", "   ", now) {
+			t.Fatal("expected empty normalized IP to fail open")
+		}
+		if len(connector.queries) != 0 {
+			t.Fatalf("expected empty IP not to query DB, got %d queries", len(connector.queries))
+		}
+		if got := rateLimiterKeyCount(memoryLimiter); got != 0 {
+			t.Fatalf("expected empty IP not to consume memory limiter, got %d keys", got)
+		}
+	})
+
+	t.Run("account", func(t *testing.T) {
+		connector := newRecordingRateLimiterConnector()
+		database := sql.OpenDB(connector)
+		t.Cleanup(func() { _ = database.Close() })
+		memoryLimiter := newStrRateLimiter(1, time.Minute)
+		s := &Server{
+			appPasswordAccountLimiter:   memoryLimiter,
+			appPasswordAccountDBLimiter: newDBRateLimiter(database, "app_password_account", 5, time.Minute),
+		}
+
+		if !s.allowAppPasswordLoginAttempt(context.Background(), "   ", "203.0.113.41", now) {
+			t.Fatal("expected empty normalized account to fail open")
+		}
+		if len(connector.queries) != 0 {
+			t.Fatalf("expected empty account not to query DB, got %d queries", len(connector.queries))
+		}
+		if got := rateLimiterKeyCount(memoryLimiter); got != 0 {
+			t.Fatalf("expected empty account not to consume memory limiter, got %d keys", got)
+		}
+	})
+}
+
+func TestAppPasswordLoginAttemptLimiterDatabaseHelperHoldsAdvisoryLock(t *testing.T) {
+	database := openAppPasswordLoginLimiterTestDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	probe, err := database.Conn(ctx)
+	if err != nil {
+		t.Fatalf("open advisory lock probe connection: %v", err)
+	}
+	t.Cleanup(func() { _ = probe.Close() })
+	var acquired bool
+	if err := probe.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, testutil.AuthFixtureAdvisoryLockKey).Scan(&acquired); err != nil {
+		t.Fatalf("probe app password limiter advisory lock: %v", err)
+	}
+	if acquired {
+		_, _ = probe.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, testutil.AuthFixtureAdvisoryLockKey)
+		t.Fatal("expected DB limiter helper to hold the shared advisory lock")
+	}
+}
+
+func TestDBRateLimiterPrunesExpiredRowsBeforeRecordingAttempt(t *testing.T) {
+	database := openAppPasswordLoginLimiterTestDatabase(t)
+	now := time.Now().UTC()
+	const (
+		scope      = "app_password_account"
+		expiredKey = "expired-rate-limit-key"
+		currentKey = "current-rate-limit-key"
+	)
+	if _, err := database.Exec(`
+		INSERT INTO request_rate_limits(scope, key, count, expires_at, update_time)
+		VALUES($1, $2, 4, $3, $3)
+	`, scope, expiredKey, now.Add(-time.Minute)); err != nil {
+		t.Fatalf("insert expired limiter row: %v", err)
+	}
+
+	limiter := newDBRateLimiter(database, scope, 5, time.Minute)
+	allowed, err := limiter.allow(context.Background(), currentKey, now)
+	if err != nil {
+		t.Fatalf("record current limiter attempt: %v", err)
+	}
+	if !allowed {
+		t.Fatal("expected first current limiter attempt to be allowed")
+	}
+
+	var expiredRows int
+	if err := database.QueryRow(`
+		SELECT count(*) FROM request_rate_limits WHERE scope=$1 AND key=$2
+	`, scope, expiredKey).Scan(&expiredRows); err != nil {
+		t.Fatalf("count expired limiter rows: %v", err)
+	}
+	if expiredRows != 0 {
+		t.Fatalf("expired limiter rows=%d want=0", expiredRows)
+	}
+}
+
+type contextBlockingRateLimiterConnector struct {
+	contexts    chan context.Context
+	release     chan struct{}
+	releaseOnce sync.Once
+}
+
+func newContextBlockingRateLimiterConnector() *contextBlockingRateLimiterConnector {
+	return &contextBlockingRateLimiterConnector{
+		contexts: make(chan context.Context, 1),
+		release:  make(chan struct{}),
+	}
+}
+
+func (c *contextBlockingRateLimiterConnector) Connect(context.Context) (driver.Conn, error) {
+	return &contextBlockingRateLimiterConn{connector: c}, nil
+}
+
+func (*contextBlockingRateLimiterConnector) Driver() driver.Driver {
+	return contextBlockingRateLimiterDriver{}
+}
+
+func (c *contextBlockingRateLimiterConnector) releaseQuery() {
+	c.releaseOnce.Do(func() { close(c.release) })
+}
+
+type contextBlockingRateLimiterDriver struct{}
+
+func (contextBlockingRateLimiterDriver) Open(string) (driver.Conn, error) {
+	return nil, errors.New("use connector")
+}
+
+type contextBlockingRateLimiterConn struct {
+	connector *contextBlockingRateLimiterConnector
+}
+
+func (*contextBlockingRateLimiterConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare unsupported")
+}
+
+func (*contextBlockingRateLimiterConn) Close() error { return nil }
+
+func (*contextBlockingRateLimiterConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("transactions unsupported")
+}
+
+func (c *contextBlockingRateLimiterConn) QueryContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Rows, error) {
+	select {
+	case c.connector.contexts <- ctx:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-c.connector.release:
+		return nil, errors.New("query released")
+	}
+}
+
+type recordingRateLimiterConnector struct {
+	queries chan struct{}
+}
+
+func newRecordingRateLimiterConnector() *recordingRateLimiterConnector {
+	return &recordingRateLimiterConnector{queries: make(chan struct{}, 4)}
+}
+
+func (c *recordingRateLimiterConnector) Connect(context.Context) (driver.Conn, error) {
+	return &recordingRateLimiterConn{connector: c}, nil
+}
+
+func (*recordingRateLimiterConnector) Driver() driver.Driver {
+	return recordingRateLimiterDriver{}
+}
+
+type recordingRateLimiterDriver struct{}
+
+func (recordingRateLimiterDriver) Open(string) (driver.Conn, error) {
+	return nil, errors.New("use connector")
+}
+
+type recordingRateLimiterConn struct {
+	connector *recordingRateLimiterConnector
+}
+
+func (*recordingRateLimiterConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare unsupported")
+}
+
+func (*recordingRateLimiterConn) Close() error { return nil }
+
+func (*recordingRateLimiterConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("transactions unsupported")
+}
+
+func (c *recordingRateLimiterConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+	c.connector.queries <- struct{}{}
+	return &singleRateLimiterCountRows{}, nil
+}
+
+type singleRateLimiterCountRows struct {
+	done bool
+}
+
+func (*singleRateLimiterCountRows) Columns() []string { return []string{"count"} }
+func (*singleRateLimiterCountRows) Close() error      { return nil }
+
+func (r *singleRateLimiterCountRows) Next(destination []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+	r.done = true
+	destination[0] = int64(1)
+	return nil
+}
+
+func assertDBRateLimiterCount(t *testing.T, database *sql.DB, scope, key string, want int) {
+	t.Helper()
+	var got int
+	if err := database.QueryRow(`SELECT count FROM request_rate_limits WHERE scope=$1 AND key=$2`, scope, key).Scan(&got); err != nil {
+		t.Fatalf("read rate limiter %s/%s: %v", scope, key, err)
+	}
+	if got != want {
+		t.Fatalf("rate limiter %s/%s count=%d want=%d", scope, key, got, want)
+	}
+}
+
+func TestAppPasswordLoginRouteAppliesLimiterBeforeStore(t *testing.T) {
+	now := time.Now()
+	accountLimiter := newStrRateLimiter(1, time.Minute)
+	if !accountLimiter.Allow("xinuser", now) {
+		t.Fatal("expected limiter setup attempt to be allowed")
+	}
+	server := &Server{
+		mux:                       http.NewServeMux(),
+		appPasswordAccountLimiter: accountLimiter,
+	}
+	server.routes()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/app/auth/login", strings.NewReader(`{"account":" XinUser ","password":"secret1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	server.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 before store access, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAppUsersAdminUpdateRouteAllowsWriteMethodsThroughAuth(t *testing.T) {
 	server := newRouteOnlyServer()
 
@@ -296,6 +1409,51 @@ func TestAppUsersAdminUpdateRouteAllowsWriteMethodsThroughAuth(t *testing.T) {
 			}
 		})
 	}
+}
+
+type writeTrackingResponseWriter struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+	wrote  bool
+}
+
+func (w *writeTrackingResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *writeTrackingResponseWriter) WriteHeader(status int) {
+	w.status = status
+	w.wrote = true
+}
+
+func (w *writeTrackingResponseWriter) Write(body []byte) (int, error) {
+	w.wrote = true
+	return w.body.Write(body)
+}
+
+func rateLimiterCount(limiter *strRateLimiter, key string) (int, bool) {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	window, ok := limiter.keys[key]
+	return window.count, ok
+}
+
+func rateLimiterKeyCount(limiter *strRateLimiter) int {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	return len(limiter.keys)
+}
+
+func serveAppAuthRequest(server *Server, path, body string) (rec *httptest.ResponseRecorder, recovered any) {
+	rec = httptest.NewRecorder()
+	defer func() {
+		recovered = recover()
+	}()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	server.mux.ServeHTTP(rec, req)
+	return rec, nil
 }
 
 func newRouteOnlyServer() *Server {

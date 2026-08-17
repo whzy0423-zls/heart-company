@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -92,7 +93,7 @@ func (s *Server) markDailyQuizSetPushed(ctx context.Context, date string) error 
 
 func (s *Server) sendDailyQuizReminders(ctx context.Context, now time.Time) (appCalibrationPushResult, error) {
 	var result appCalibrationPushResult
-	if s == nil || s.appDailyQuizReminders == nil || s.pushStore == nil || s.pushStore.Pusher() == nil {
+	if s == nil || s.appDailyQuizReminders == nil {
 		return result, nil
 	}
 	date := appCalibrationBusinessDate(now)
@@ -113,6 +114,18 @@ func (s *Server) sendDailyQuizReminders(ctx context.Context, now time.Time) (app
 		if !claimed {
 			continue
 		}
+		message := push.DailyQuizReminder()
+		if s.appNotifications != nil {
+			if _, err := s.appNotifications.CreateForUser(
+				ctx, candidate.AppUserID, "growth", message.Title, message.Content,
+				message.DeepLink, fmt.Sprintf("daily-quiz:%d", batch.ID),
+			); err != nil {
+				return result, err
+			}
+		}
+		if s.pushStore == nil || s.pushStore.Pusher() == nil {
+			continue
+		}
 		registrationIDs, err := s.pushStore.GetRegistrationIDsByUserIDs(ctx, []int64{candidate.AppUserID})
 		if err != nil {
 			return result, err
@@ -120,7 +133,7 @@ func (s *Server) sendDailyQuizReminders(ctx context.Context, now time.Time) (app
 		if len(registrationIDs) == 0 {
 			continue
 		}
-		pushResult, err := s.pushStore.Pusher().Push(ctx, registrationIDs, push.DailyQuizReminder())
+		pushResult, err := s.pushStore.Pusher().Push(ctx, registrationIDs, message)
 		if err != nil {
 			return result, err
 		}
@@ -138,7 +151,7 @@ func (s *Server) sendDailyQuizReminders(ctx context.Context, now time.Time) (app
 
 func (s *Server) sendGeneratedReassessmentReminders(ctx context.Context) (appCalibrationPushResult, error) {
 	var result appCalibrationPushResult
-	if s == nil || s.appDailyQuizReminders == nil || s.pushStore == nil || s.pushStore.Pusher() == nil {
+	if s == nil || s.appDailyQuizReminders == nil {
 		return result, nil
 	}
 	candidates, err := s.appDailyQuizReminders.ListGeneratedReassessmentPushCandidates(ctx, 1000)
@@ -154,6 +167,18 @@ func (s *Server) sendGeneratedReassessmentReminders(ctx context.Context) (appCal
 		if !claimed {
 			continue
 		}
+		message := push.ReassessmentReady(candidate.ID)
+		if s.appNotifications != nil {
+			if _, err := s.appNotifications.CreateForUser(
+				ctx, candidate.AppUserID, "growth", message.Title, message.Content,
+				message.DeepLink, fmt.Sprintf("reassessment:%d", candidate.ID),
+			); err != nil {
+				return result, err
+			}
+		}
+		if s.pushStore == nil || s.pushStore.Pusher() == nil {
+			continue
+		}
 		registrationIDs, err := s.pushStore.GetRegistrationIDsByUserIDs(ctx, []int64{candidate.AppUserID})
 		if err != nil {
 			return result, err
@@ -161,7 +186,7 @@ func (s *Server) sendGeneratedReassessmentReminders(ctx context.Context) (appCal
 		if len(registrationIDs) == 0 {
 			continue
 		}
-		pushResult, err := s.pushStore.Pusher().Push(ctx, registrationIDs, push.ReassessmentReady(candidate.ID))
+		pushResult, err := s.pushStore.Pusher().Push(ctx, registrationIDs, message)
 		if err != nil {
 			return result, err
 		}

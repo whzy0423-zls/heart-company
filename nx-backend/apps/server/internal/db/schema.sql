@@ -2378,6 +2378,8 @@ CREATE INDEX IF NOT EXISTS idx_mind_quotes_group ON mind_quotes(group_id, sort A
 CREATE TABLE IF NOT EXISTS app_users (
   id              BIGSERIAL PRIMARY KEY,
   phone           TEXT NOT NULL UNIQUE,
+  account         TEXT,
+  password_hash   TEXT,
   nickname        TEXT NOT NULL DEFAULT '',
   avatar          TEXT NOT NULL DEFAULT '',
   status          TEXT NOT NULL DEFAULT 'active',
@@ -2389,6 +2391,13 @@ CREATE TABLE IF NOT EXISTS app_users (
   create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS account TEXT;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS password_hash TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_account_unique
+  ON app_users (lower(account))
+  WHERE account IS NOT NULL AND btrim(account) <> '';
 
 CREATE TABLE IF NOT EXISTS app_user_preferences (
   id            BIGSERIAL PRIMARY KEY,
@@ -2419,6 +2428,20 @@ CREATE TABLE IF NOT EXISTS app_sms_codes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_app_sms_codes_phone ON app_sms_codes(phone, used, expires_at DESC);
+
+CREATE TABLE IF NOT EXISTS app_password_reset_codes (
+  id          BIGSERIAL PRIMARY KEY,
+  phone       TEXT NOT NULL,
+  code_hash   TEXT NOT NULL,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  used        BOOLEAN NOT NULL DEFAULT false,
+  send_ip     TEXT NOT NULL DEFAULT '',
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_password_reset_codes_phone
+  ON app_password_reset_codes(phone, used, expires_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_app_users_insights_order
   ON app_users(create_time DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_app_users_status_member_order
@@ -2917,6 +2940,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_app_device_tokens_registration_id
   ON app_device_tokens(registration_id);
 CREATE INDEX IF NOT EXISTS idx_app_device_tokens_user
   ON app_device_tokens(app_user_id);
+
+-- ----- App 通知收件箱：每个用户独立保存通知及已读状态 -----
+CREATE TABLE IF NOT EXISTS app_notifications (
+  id            BIGSERIAL PRIMARY KEY,
+  app_user_id   BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  kind          TEXT NOT NULL DEFAULT 'system',
+  title         TEXT NOT NULL DEFAULT '',
+  content       TEXT NOT NULL DEFAULT '',
+  deep_link     TEXT NOT NULL DEFAULT '',
+  source_key    TEXT NOT NULL DEFAULT '',
+  read_time     TIMESTAMPTZ,
+  create_time   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_notifications_user_timeline
+  ON app_notifications(app_user_id, create_time DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_app_notifications_user_unread
+  ON app_notifications(app_user_id, create_time DESC, id DESC)
+  WHERE read_time IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_notifications_user_source
+  ON app_notifications(app_user_id, source_key)
+  WHERE source_key <> '';
 
 -- ----- 推送通知记录：后台发送的推送历史 -----
 CREATE TABLE IF NOT EXISTS push_notifications (
