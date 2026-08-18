@@ -912,6 +912,10 @@ func TestLoadReadsSpugSMSConfig(t *testing.T) {
 	t.Setenv("SPUG_PUSH_TEMPLATE_CODE", "tmpl123")
 	t.Setenv("SPUG_PUSH_TEMPLATE_NAME", "芯之力")
 	t.Setenv("SPUG_PUSH_TIMEOUT_SECONDS", "7")
+	t.Setenv("SPUG_PUSH_REPORT_TOKEN", "report-token")
+	t.Setenv("SPUG_PUSH_REPORT_PATH", "/xsend")
+	t.Setenv("SPUG_PUSH_REPORT_CHANNEL", "webhook")
+	t.Setenv("SPUG_PUSH_REPORT_TIMEOUT_SECONDS", "6")
 
 	env := Load()
 
@@ -929,6 +933,9 @@ func TestLoadReadsSpugSMSConfig(t *testing.T) {
 	}
 	if env.SMS.SpugTimeoutSeconds != 7 {
 		t.Fatalf("expected spug timeout 7, got %d", env.SMS.SpugTimeoutSeconds)
+	}
+	if env.SMS.SpugReportToken != "report-token" || env.SMS.SpugReportPath != "/xsend" || env.SMS.SpugReportChannel != "webhook" || env.SMS.SpugReportTimeoutSeconds != 6 {
+		t.Fatalf("unexpected spug report config: %+v", env.SMS)
 	}
 }
 

@@ -166,6 +166,7 @@ type Server struct {
 	pushRecoveryInterval           time.Duration
 	pushSendSlots                  chan struct{}
 	smsSender                      sms.Sender
+	smsReporter                    sms.Reporter
 	loginLimiter                   *strRateLimiter
 	loginDBLimiter                 *dbRateLimiter
 	smsPhoneLimiter                *strRateLimiter
@@ -428,6 +429,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.videoAnalysisSlots = make(chan struct{}, 3)
 	s.videoStoryboardSlots = make(chan struct{}, 3)
 	s.smsSender = mustSMSSender(env.SMS)
+	s.smsReporter = mustSMSReporter(env.SMS)
 	s.pushStore = push.NewStore(database, push.NewPusher(env.AppEnv, env.JPush.AppKey, env.JPush.MasterSecret))
 	s.appNotifications = appnotification.NewStore(database)
 	s.pushSendSlots = make(chan struct{}, 2)
@@ -3351,6 +3353,23 @@ func mustSMSSender(cfg config.SMSConfig) sms.Sender {
 	default:
 		panic("sms init: unsupported provider " + cfg.Provider)
 	}
+}
+
+func mustSMSReporter(cfg config.SMSConfig) sms.Reporter {
+	if strings.TrimSpace(cfg.SpugReportToken) == "" {
+		return nil
+	}
+	reporter, err := sms.NewSpugReporter(sms.SpugReporterOptions{
+		APIBase: cfg.SpugAPIBase,
+		Token:   cfg.SpugReportToken,
+		Path:    cfg.SpugReportPath,
+		Channel: cfg.SpugReportChannel,
+		Timeout: time.Duration(cfg.SpugReportTimeoutSeconds) * time.Second,
+	})
+	if err != nil {
+		panic("sms report init: " + err.Error())
+	}
+	return reporter
 }
 
 func (s *Server) method(method string, handler http.HandlerFunc) http.HandlerFunc {

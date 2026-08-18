@@ -100,7 +100,35 @@ func (s *Server) appSendSMS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("[SMS] sent to %s", phone)
+	if s.smsReporter != nil {
+		// The report is best-effort and runs outside the request context so a
+		// client disconnect cannot cancel the audit notification.
+		go s.reportSMSDelivery(phone, purpose)
+	}
 	httpx.OK(w, nil)
+}
+
+func (s *Server) reportSMSDelivery(phone, purpose string) {
+	label := "注册"
+	if purpose == "password_reset" {
+		label = "找回密码"
+	}
+	content := fmt.Sprintf("验证码短信已提交：手机号 %s，用途 %s", maskSMSPhone(phone), label)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	if err := s.smsReporter.Report(ctx, "芯之力验证码已发送", content, "text", ""); err != nil {
+		log.Printf("[SMS-REPORT] send error phone=%s: %v", maskSMSPhone(phone), err)
+		return
+	}
+	log.Printf("[SMS-REPORT] sent phone=%s", maskSMSPhone(phone))
+}
+
+func maskSMSPhone(phone string) string {
+	phone = strings.TrimSpace(phone)
+	if len(phone) <= 7 {
+		return "***"
+	}
+	return phone[:3] + "****" + phone[len(phone)-4:]
 }
 
 func (s *Server) appVerifySMS(w http.ResponseWriter, r *http.Request) {

@@ -85,6 +85,21 @@ func TestMustSMSSenderSupportsSpugProvider(t *testing.T) {
 	}
 }
 
+func TestMustSMSReporterIsOptionalAndSupportsSpug(t *testing.T) {
+	if reporter := mustSMSReporter(config.SMSConfig{}); reporter != nil {
+		t.Fatal("expected empty report token to disable reporter")
+	}
+	reporter := mustSMSReporter(config.SMSConfig{
+		SpugAPIBase:              "https://push.spug.cc",
+		SpugReportToken:          "report-token",
+		SpugReportPath:           "/send",
+		SpugReportTimeoutSeconds: 5,
+	})
+	if reporter == nil {
+		t.Fatal("expected configured reporter")
+	}
+}
+
 func TestProductionWxPayIncompleteConfigDisablesPaymentWithoutPanic(t *testing.T) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
