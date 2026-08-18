@@ -244,8 +244,25 @@ func scriptContentChanged(before, after string) bool {
 }
 
 func shotGenerationInputChanged(before, after ShotInput) bool {
-	b, _ := json.Marshal(before)
-	a, _ := json.Marshal(after)
+	canonical := func(input ShotInput) ShotInput {
+		input.ActionDescription = strings.TrimSpace(input.ActionDescription)
+		input.DynamicDescription = strings.TrimSpace(input.DynamicDescription)
+		input.GridStoryboardPrompt = strings.TrimSpace(input.GridStoryboardPrompt)
+		input.ScriptOriginalContent = normalizeRevisionText(input.ScriptOriginalContent)
+		input.SoundAndPictureTogether = strings.TrimSpace(input.SoundAndPictureTogether)
+		input.StoryboardURL = strings.TrimSpace(input.StoryboardURL)
+		input.VideoModel = strings.TrimSpace(input.VideoModel)
+		input.VideoResolution = strings.TrimSpace(input.VideoResolution)
+		input.VideoReferenceMode = strings.TrimSpace(input.VideoReferenceMode)
+		input.CameraMovement = strings.TrimSpace(input.CameraMovement)
+		input.SceneID = strings.TrimSpace(input.SceneID)
+		input.CharacterIDs = normalizedStringSet(input.CharacterIDs)
+		input.ImageReferenceModes = normalizedStringSet(input.ImageReferenceModes)
+		input.Name = ""
+		return input
+	}
+	b, _ := json.Marshal(canonical(before))
+	a, _ := json.Marshal(canonical(after))
 	return string(b) != string(a)
 }
 
