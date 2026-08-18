@@ -3080,6 +3080,7 @@ func (s *Server) modelConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if videoChanged {
 			s.videos = video.NewStore(s.db, s.uploads, vid, s.uploader)
+			s.videoConfig = cloneVideoConfig(vid)
 		}
 		if imageChanged {
 			s.images = image.NewStore(s.uploads, img, s.uploader)

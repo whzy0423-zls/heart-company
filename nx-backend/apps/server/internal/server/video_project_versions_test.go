@@ -138,15 +138,19 @@ func TestVideoProjectBatchGenerateRouteCanLimitToSelectedShots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read batchgenerator.go: %v", err)
 	}
+	safeBatchGenerator, err := os.ReadFile("../videoproject/compat_safe_batch.go")
+	if err != nil {
+		t.Fatalf("read compat_safe_batch.go: %v", err)
+	}
 	handlerSource := string(handlers)
-	batchSource := string(batchGenerator)
+	batchSource := string(batchGenerator) + "\n" + string(safeBatchGenerator)
 
 	for _, want := range []string{
 		"batchGenerateInput",
-		"ShotIDs",
-		`json:"shotIds"`,
+		"Items",
+		`json:"items"`,
 		"json.NewDecoder(r.Body).Decode",
-		"GenerateSelectedShots",
+		"GenerateSafe",
 	} {
 		if !strings.Contains(handlerSource, want) {
 			t.Fatalf("expected batch generate handler to include %q", want)
@@ -154,9 +158,9 @@ func TestVideoProjectBatchGenerateRouteCanLimitToSelectedShots(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"func (bg *BatchGenerator) GenerateSelectedShots",
-		"filterShotsByIDs",
-		"selectedShotIDs",
+		"func (bg *BatchGenerator) GenerateSafe",
+		"FilterGeneratableShotIDs",
+		"requested",
 	} {
 		if !strings.Contains(batchSource, want) {
 			t.Fatalf("expected batch generator to include %q", want)
