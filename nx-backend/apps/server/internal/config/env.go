@@ -90,15 +90,19 @@ type ClassroomMediaConfig struct {
 
 // SMSConfig 短信发送配置。Provider 为空时非生产环境为 dev 模式；生产环境会 fail closed。
 type SMSConfig struct {
-	Provider           string // aliyun | spug | "" (dev)
-	APIKey             string
-	APISecret          string
-	SignName           string
-	TemplateID         string
-	SpugAPIBase        string
-	SpugTemplateCode   string
-	SpugTemplateName   string
-	SpugTimeoutSeconds int
+	Provider                 string // aliyun | spug | "" (dev)
+	APIKey                   string
+	APISecret                string
+	SignName                 string
+	TemplateID               string
+	SpugAPIBase              string
+	SpugTemplateCode         string
+	SpugTemplateName         string
+	SpugTimeoutSeconds       int
+	SpugReportToken          string
+	SpugReportPath           string
+	SpugReportChannel        string
+	SpugReportTimeoutSeconds int
 }
 
 type MiniappChatConfig struct {
@@ -375,6 +379,10 @@ func Load() Env {
 	if err != nil || spugTimeout <= 0 {
 		spugTimeout = 10
 	}
+	spugReportTimeout, err := strconv.Atoi(getenv("SPUG_PUSH_REPORT_TIMEOUT_SECONDS", "5"))
+	if err != nil || spugReportTimeout <= 0 {
+		spugReportTimeout = 5
+	}
 
 	appEnv := NormalizeAppEnv(getenv("APP_ENV", ""))
 
@@ -441,15 +449,19 @@ func Load() Env {
 		WxPay:     wxpay,
 		Embedding: embedding,
 		SMS: SMSConfig{
-			Provider:           getenv("SMS_PROVIDER", ""),
-			APIKey:             getenv("SMS_API_KEY", ""),
-			APISecret:          getenv("SMS_API_SECRET", ""),
-			SignName:           getenv("SMS_SIGN_NAME", ""),
-			TemplateID:         getenv("SMS_TEMPLATE_ID", ""),
-			SpugAPIBase:        getenv("SPUG_PUSH_API_BASE", "https://push.spug.cc"),
-			SpugTemplateCode:   getenv("SPUG_PUSH_TEMPLATE_CODE", ""),
-			SpugTemplateName:   getenv("SPUG_PUSH_TEMPLATE_NAME", "芯之力"),
-			SpugTimeoutSeconds: spugTimeout,
+			Provider:                 getenv("SMS_PROVIDER", ""),
+			APIKey:                   getenv("SMS_API_KEY", ""),
+			APISecret:                getenv("SMS_API_SECRET", ""),
+			SignName:                 getenv("SMS_SIGN_NAME", ""),
+			TemplateID:               getenv("SMS_TEMPLATE_ID", ""),
+			SpugAPIBase:              getenv("SPUG_PUSH_API_BASE", "https://push.spug.cc"),
+			SpugTemplateCode:         getenv("SPUG_PUSH_TEMPLATE_CODE", ""),
+			SpugTemplateName:         getenv("SPUG_PUSH_TEMPLATE_NAME", "芯之力"),
+			SpugTimeoutSeconds:       spugTimeout,
+			SpugReportToken:          getenv("SPUG_PUSH_REPORT_TOKEN", ""),
+			SpugReportPath:           getenv("SPUG_PUSH_REPORT_PATH", "/send"),
+			SpugReportChannel:        getenv("SPUG_PUSH_REPORT_CHANNEL", ""),
+			SpugReportTimeoutSeconds: spugReportTimeout,
 		},
 		Video: VideoConfig{
 			APIBase:         getenv("VIDEO_API_BASE", ""),

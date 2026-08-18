@@ -70,6 +70,8 @@ docker compose down
 - `JPUSH_APP_KEY` / `JPUSH_MASTER_SECRET`：启用 JPush 推送时配置。
 - `SMS_PROVIDER`：App 短信验证码通道，留空时仅非生产返回调试验证码；生产可选 `aliyun` 或 `spug`。
 - `SPUG_PUSH_TEMPLATE_CODE`：`SMS_PROVIDER=spug` 时配置 Spug 短信模板编号，后端用它调用 `https://push.spug.cc/sms/{模板编号}?to=手机号&code=验证码&number=10`。它不是 `https://push.spug.cc/send/{token}` 的推送 Token，不要放进 App。
+- `SPUG_PUSH_REPORT_TOKEN`：可选的 Spug 推送助手 Token。短信发送成功后，后端会额外 POST 到 `SPUG_PUSH_REPORT_PATH`（默认 `/send`），把脱敏手机号和用途写入推送助手消息记录；上报失败不会影响短信接口结果。当前 Spug 推荐接口可将路径设为 `/xsend`。
+- `SPUG_PUSH_REPORT_CHANNEL` / `SPUG_PUSH_REPORT_TIMEOUT_SECONDS`：上报通道（可选）与超时（默认 5 秒）。
 
 注意：`.env` 包含真实密钥，已经在 `.gitignore` 中忽略，不能提交到仓库。
 

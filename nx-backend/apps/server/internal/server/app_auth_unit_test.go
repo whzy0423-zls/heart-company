@@ -27,6 +27,34 @@ import (
 
 type failingRandReader struct{}
 
+type captureSMSReporter struct {
+	mu      sync.Mutex
+	title   string
+	content string
+}
+
+func (r *captureSMSReporter) Report(_ context.Context, title, content, _, _ string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.title, r.content = title, content
+	return nil
+}
+
+func TestReportSMSDeliveryMasksPhoneAndOmitsCode(t *testing.T) {
+	reporter := &captureSMSReporter{}
+	s := &Server{smsReporter: reporter}
+	s.reportSMSDelivery("19262680423", "register")
+	reporter.mu.Lock()
+	title, content := reporter.title, reporter.content
+	reporter.mu.Unlock()
+	if title != "芯之力验证码已发送" {
+		t.Fatalf("unexpected report title %q", title)
+	}
+	if !strings.Contains(content, "192****0423") || strings.Contains(content, "123456") {
+		t.Fatalf("report content was not masked: %q", content)
+	}
+}
+
 func (f failingRandReader) Read([]byte) (int, error) {
 	return 0, errors.New("rand failed")
 }
