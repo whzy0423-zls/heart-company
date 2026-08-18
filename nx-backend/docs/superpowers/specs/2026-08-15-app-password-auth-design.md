@@ -142,7 +142,7 @@
 
 ## 手机号找回密码
 
-`POST /api/app/auth/send-sms` 接受 `purpose=password_reset`。只有状态正常且已设置密码的手机号会写入独立的 `app_password_reset_codes` 并发送短信；未知手机号、短信-only 用户和禁用用户返回 `400` 和“该手机号尚未注册，请先注册账号”，且不发送验证码。
+`POST /api/app/auth/send-sms` 接受 `purpose=password_reset`。只有状态正常且已设置密码的手机号会写入独立的 `app_password_reset_codes` 并发送短信；未知手机号、短信-only 用户和禁用用户返回 `400` 和“当前手机号未注册，请注册账号”，且不发送验证码。
 
 `POST /api/app/auth/reset-password` 接受手机号、六位验证码和新密码。Store 在单个事务内锁定用户与最新有效重置码、一次性消费验证码、写入新的 bcrypt 哈希，并撤销该用户所有 Refresh Token。未知手机号、无密码用户、禁用用户、错误/过期/已使用验证码统一返回相同的 `401`。
 

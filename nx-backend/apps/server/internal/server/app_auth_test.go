@@ -259,7 +259,7 @@ func TestAppPasswordRecovery(t *testing.T) {
 		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Code != -1 || body.Message != "该手机号尚未注册，请先注册账号" || body.Data != nil {
+		if body.Code != -1 || body.Message != "当前手机号未注册，请注册账号" || body.Data != nil {
 			t.Fatalf("ineligible reset response did not explain registration requirement: %s", response.Body.String())
 		}
 		if rows := countAppAuthContractRows(t, database, `SELECT count(*) FROM app_password_reset_codes WHERE phone=$1`, candidate); rows != 0 {

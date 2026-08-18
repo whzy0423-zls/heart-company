@@ -74,7 +74,7 @@ func (s *Server) appSendSMS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !eligible {
-			httpx.Fail(w, http.StatusBadRequest, "该手机号尚未注册，请先注册账号")
+			httpx.Fail(w, http.StatusBadRequest, "当前手机号未注册，请注册账号")
 			return
 		}
 	} else {
