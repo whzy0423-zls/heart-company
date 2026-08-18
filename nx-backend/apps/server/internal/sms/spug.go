@@ -2,6 +2,7 @@ package sms
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -78,6 +79,8 @@ func (s *SpugSender) Send(ctx context.Context, phone, code string) error {
 		defer cancel()
 	}
 
+	// The /send/{token} webhook is Spug's push endpoint. Verification SMS must
+	// use the /sms/{templateCode} endpoint with the recipient and code query.
 	endpoint, err := url.Parse(s.apiBase + "/sms/" + url.PathEscape(s.templateCode))
 	if err != nil {
 		return fmt.Errorf("sms: create spug url: %w", err)
@@ -106,6 +109,26 @@ func (s *SpugSender) Send(ctx context.Context, phone, code string) error {
 			msg = resp.Status
 		}
 		return fmt.Errorf("sms: spug provider rejected: status=%d body=%s", resp.StatusCode, msg)
+	}
+
+	body := readProviderBody(resp.Body)
+	var result struct {
+		Code    int    `json:"code"`
+		Msg     string `json:"msg"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		return fmt.Errorf("sms: invalid spug response: %w", err)
+	}
+	if result.Code != http.StatusOK {
+		msg := strings.TrimSpace(result.Msg)
+		if msg == "" {
+			msg = strings.TrimSpace(result.Message)
+		}
+		if msg == "" {
+			msg = "unknown error"
+		}
+		return fmt.Errorf("sms: spug provider rejected: code=%d msg=%s", result.Code, msg)
 	}
 	return nil
 }
