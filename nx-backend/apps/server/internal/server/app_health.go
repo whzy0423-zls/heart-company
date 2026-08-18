@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -8,11 +9,19 @@ import (
 )
 
 func (s *Server) appHealth(w http.ResponseWriter, r *http.Request) {
-	database := map[string]any{}
-	if s.db != nil {
-		stats := s.db.Stats()
-		database = map[string]any{"maxOpen": stats.MaxOpenConnections, "open": stats.OpenConnections, "inUse": stats.InUse, "idle": stats.Idle, "waitCount": stats.WaitCount}
+	if s.db == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "database unavailable")
+		return
 	}
+	pingContext, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
+	defer cancel()
+	if err := s.db.PingContext(pingContext); err != nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	database := map[string]any{}
+	stats := s.db.Stats()
+	database = map[string]any{"maxOpen": stats.MaxOpenConnections, "open": stats.OpenConnections, "inUse": stats.InUse, "idle": stats.Idle, "waitCount": stats.WaitCount}
 	httpx.OK(w, map[string]any{
 		"service":     "nine-xing-app",
 		"status":      "ok",
