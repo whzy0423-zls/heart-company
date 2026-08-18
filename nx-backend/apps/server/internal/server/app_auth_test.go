@@ -248,19 +248,19 @@ func TestAppPasswordRecovery(t *testing.T) {
 		response := perform(handler, http.MethodPost, "/api/app/auth/send-sms", "", map[string]string{
 			"phone": candidate, "purpose": "password_reset",
 		})
-		if response.Code != http.StatusOK {
+		if response.Code != http.StatusBadRequest {
 			t.Fatalf("password reset request for %s returned %d body=%s", candidate, response.Code, response.Body.String())
 		}
 		var body struct {
-			Code    int            `json:"code"`
-			Data    map[string]any `json:"data"`
-			Message string         `json:"message"`
+			Code    int    `json:"code"`
+			Data    any    `json:"data"`
+			Message string `json:"message"`
 		}
 		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Code != 0 || body.Message != "ok" || len(body.Data) != 0 {
-			t.Fatalf("ineligible reset response exposed state: %s", response.Body.String())
+		if body.Code != -1 || body.Message != "该手机号尚未注册，请先注册账号" || body.Data != nil {
+			t.Fatalf("ineligible reset response did not explain registration requirement: %s", response.Body.String())
 		}
 		if rows := countAppAuthContractRows(t, database, `SELECT count(*) FROM app_password_reset_codes WHERE phone=$1`, candidate); rows != 0 {
 			t.Fatalf("ineligible phone %s stored %d reset codes", candidate, rows)
