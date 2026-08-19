@@ -26,6 +26,8 @@
 
 - `GET /api/app/skills/{skillId}/sessions`
 - `GET /api/app/skills/{skillId}/sessions/latest`
+- `GET /api/app/skill-sessions/recent?limit=2`
+  - 跨技能返回最近会话，每个技能最多一条；用于目录页最近使用，避免逐技能查询
 - `POST /api/app/skills/{skillId}/sessions`
   - 请求：`{"title":"可选标题"}`
   - 服务端只接受 `skillId`，并把该技能当前发布版本固定到 `skillVersionId`

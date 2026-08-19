@@ -80,6 +80,49 @@ func (s *Store) ListSessions(ctx context.Context, appUserID, skillID int64) ([]S
 	return out, rows.Err()
 }
 
+// ListRecentSessions returns at most one latest session per skill. This keeps
+// the catalog's recent section independent from the number of published skills.
+func (s *Store) ListRecentSessions(ctx context.Context, appUserID int64, limit int) ([]Session, error) {
+	if err := s.available(); err != nil {
+		return nil, err
+	}
+	if appUserID <= 0 {
+		return nil, ErrInvalidInput
+	}
+	if limit <= 0 {
+		limit = 2
+	}
+	if limit > 20 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, sessionSelect+`
+		WHERE session.app_user_id = $1 AND session.scene = 'skill_chat'
+		  AND library.status = 'enabled' AND category.status = 'enabled' AND skill.status = 'enabled'
+		  AND version.status IN ('published','retired')
+		  AND session.id IN (
+		    SELECT DISTINCT ON (version2.skill_id) session2.id
+		    FROM app_chat_sessions session2
+		    JOIN app_skill_versions version2 ON version2.id=session2.skill_version_id
+		    WHERE session2.app_user_id=$1 AND session2.scene='skill_chat'
+		    ORDER BY version2.skill_id,session2.updated_at DESC,session2.id DESC
+		  )
+		ORDER BY session.updated_at DESC,session.id DESC
+		LIMIT $2`, appUserID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list recent skill sessions: %w", err)
+	}
+	defer rows.Close()
+	out := make([]Session, 0, limit)
+	for rows.Next() {
+		item, err := scanSession(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list recent skill sessions: scan: %w", err)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) LatestSession(ctx context.Context, appUserID, skillID int64) (Session, error) {
 	if err := s.available(); err != nil {
 		return Session{}, err
