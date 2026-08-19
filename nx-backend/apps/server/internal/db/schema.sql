@@ -1368,6 +1368,165 @@ CREATE TABLE IF NOT EXISTS theory_library_releases (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_theory_active_release
   ON theory_library_releases(library_id) WHERE status = 'active';
 
+-- ============ App 技能库（目录、分类、技能与不可变发布版本）============
+CREATE TABLE IF NOT EXISTS app_skill_libraries (
+  id BIGSERIAL PRIMARY KEY,
+  key TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  icon_key TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','enabled','disabled')),
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS app_skill_categories (
+  id BIGSERIAL PRIMARY KEY,
+  library_id BIGINT NOT NULL REFERENCES app_skill_libraries(id) ON DELETE RESTRICT,
+  key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  icon_key TEXT NOT NULL DEFAULT '',
+  color_token TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','enabled','disabled')),
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (library_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS app_skills (
+  id BIGSERIAL PRIMARY KEY,
+  category_id BIGINT NOT NULL REFERENCES app_skill_categories(id) ON DELETE RESTRICT,
+  key TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  icon_key TEXT NOT NULL DEFAULT '',
+  color_token TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','review','enabled','disabled','archived')),
+  latest_published_version_id BIGINT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS app_skill_versions (
+  id BIGSERIAL PRIMARY KEY,
+  skill_id BIGINT NOT NULL REFERENCES app_skills(id) ON DELETE RESTRICT,
+  version TEXT NOT NULL,
+  runtime_version INTEGER NOT NULL DEFAULT 1 CHECK (runtime_version > 0),
+  instructions TEXT NOT NULL,
+  opening_prompts JSONB NOT NULL DEFAULT '[]'::jsonb CONSTRAINT ck_app_skill_versions_opening_prompts_array CHECK (jsonb_typeof(opening_prompts) = 'array'),
+  theory_release_id BIGINT NOT NULL REFERENCES theory_library_releases(id) ON DELETE RESTRICT,
+  safety_profile TEXT NOT NULL DEFAULT 'general-v1',
+  content_hash TEXT NOT NULL,
+  min_app_version TEXT NOT NULL DEFAULT '',
+  source_metadata JSONB NOT NULL DEFAULT '{}'::jsonb CONSTRAINT ck_app_skill_versions_source_metadata_object CHECK (jsonb_typeof(source_metadata) = 'object'),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','building','ready','published','retired','failed')),
+  published_at TIMESTAMPTZ,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (skill_id, version)
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'fk_app_skills_latest_published_version'
+  ) THEN
+    ALTER TABLE app_skills
+      ADD CONSTRAINT fk_app_skills_latest_published_version
+      FOREIGN KEY (latest_published_version_id) REFERENCES app_skill_versions(id) ON DELETE RESTRICT;
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_app_skill_categories_library
+  ON app_skill_categories(library_id, sort_order, id);
+CREATE INDEX IF NOT EXISTS idx_app_skills_category
+  ON app_skills(category_id, sort_order, id);
+CREATE INDEX IF NOT EXISTS idx_app_skill_versions_skill_status
+  ON app_skill_versions(skill_id, status, id DESC);
+
+CREATE OR REPLACE FUNCTION validate_app_skill_version_release()
+RETURNS trigger AS $$
+DECLARE release_status TEXT;
+BEGIN
+  SELECT status INTO release_status FROM theory_library_releases WHERE id = NEW.theory_release_id;
+  IF release_status IS NULL OR NOT (
+    release_status IN ('ready','active')
+    OR (NEW.status = 'retired' AND release_status = 'retired')
+  ) THEN
+    RAISE EXCEPTION 'skill version theory release status is incompatible';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_validate_app_skill_version_release ON app_skill_versions;
+CREATE TRIGGER trg_validate_app_skill_version_release
+  BEFORE INSERT OR UPDATE OF theory_release_id, status ON app_skill_versions
+  FOR EACH ROW WHEN (NEW.status IN ('ready','published','retired'))
+  EXECUTE FUNCTION validate_app_skill_version_release();
+
+CREATE OR REPLACE FUNCTION protect_published_app_skill_version()
+RETURNS trigger AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF OLD.status IN ('published','retired') THEN
+      RAISE EXCEPTION 'published skill version is immutable';
+    END IF;
+    RETURN OLD;
+  END IF;
+  IF OLD.status IN ('published','retired') THEN
+    IF ROW(NEW.skill_id,NEW.version,NEW.runtime_version,NEW.instructions,NEW.opening_prompts,
+           NEW.theory_release_id,NEW.safety_profile,NEW.content_hash,NEW.min_app_version,
+           NEW.source_metadata,NEW.published_at)
+       IS DISTINCT FROM
+       ROW(OLD.skill_id,OLD.version,OLD.runtime_version,OLD.instructions,OLD.opening_prompts,
+           OLD.theory_release_id,OLD.safety_profile,OLD.content_hash,OLD.min_app_version,
+           OLD.source_metadata,OLD.published_at) THEN
+      RAISE EXCEPTION 'published skill version is immutable';
+    END IF;
+    IF OLD.status = 'retired' AND NEW.status <> 'retired' THEN
+      RAISE EXCEPTION 'published skill version is immutable';
+    END IF;
+    IF OLD.status = 'published' AND NEW.status NOT IN ('published','retired') THEN
+      RAISE EXCEPTION 'published skill version is immutable';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_app_skill_versions_immutable ON app_skill_versions;
+CREATE TRIGGER trg_app_skill_versions_immutable
+  BEFORE UPDATE OR DELETE ON app_skill_versions
+  FOR EACH ROW EXECUTE FUNCTION protect_published_app_skill_version();
+
+CREATE OR REPLACE FUNCTION validate_app_skill_latest_version()
+RETURNS trigger AS $$
+DECLARE version_skill_id BIGINT;
+DECLARE version_status TEXT;
+BEGIN
+  IF NEW.latest_published_version_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+  SELECT skill_id, status INTO version_skill_id, version_status
+    FROM app_skill_versions WHERE id = NEW.latest_published_version_id;
+  IF version_skill_id IS DISTINCT FROM NEW.id OR version_status <> 'published' THEN
+    RAISE EXCEPTION 'latest published version must be a published version of this skill';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_validate_app_skill_latest_version ON app_skills;
+CREATE CONSTRAINT TRIGGER trg_validate_app_skill_latest_version
+  AFTER INSERT OR UPDATE OF latest_published_version_id ON app_skills
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+  EXECUTE FUNCTION validate_app_skill_latest_version();
+
 CREATE TABLE IF NOT EXISTS theory_source_works (
   id BIGSERIAL PRIMARY KEY,
   library_id BIGINT NOT NULL REFERENCES theory_libraries(id) ON DELETE CASCADE,
@@ -2171,6 +2330,62 @@ CREATE CONSTRAINT TRIGGER theory_release_cards_ownership
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION validate_theory_library_ownership();
 
+-- Skill releases become immutable once a published or retired skill version
+-- references them. Draft and ordinary theory releases keep their edit flow.
+CREATE OR REPLACE FUNCTION protect_published_skill_release_mapping()
+RETURNS trigger AS $$
+DECLARE release_ids BIGINT[];
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    release_ids := ARRAY[NEW.release_id];
+  ELSIF TG_OP = 'UPDATE' THEN
+    release_ids := ARRAY[OLD.release_id, NEW.release_id];
+  ELSE
+    release_ids := ARRAY[OLD.release_id];
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM app_skill_versions version
+    WHERE version.theory_release_id = ANY(release_ids)
+      AND version.status IN ('published','retired')
+  ) THEN
+    RAISE EXCEPTION 'published skill release mapping is immutable';
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_protect_published_skill_release_mapping ON theory_release_cards;
+CREATE TRIGGER trg_protect_published_skill_release_mapping
+  BEFORE INSERT OR UPDATE OR DELETE ON theory_release_cards
+  FOR EACH ROW EXECUTE FUNCTION protect_published_skill_release_mapping();
+
+CREATE OR REPLACE FUNCTION protect_published_skill_release_chunk()
+RETURNS trigger AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM theory_release_cards mapping
+    JOIN app_skill_versions version ON version.theory_release_id = mapping.release_id
+    WHERE mapping.chunk_id = OLD.id
+      AND version.status IN ('published','retired')
+  ) THEN
+    RAISE EXCEPTION 'published skill release chunk is immutable';
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_protect_published_skill_release_chunk ON theory_chunks;
+CREATE TRIGGER trg_protect_published_skill_release_chunk
+  BEFORE UPDATE OR DELETE ON theory_chunks
+  FOR EACH ROW EXECUTE FUNCTION protect_published_skill_release_chunk();
+
 -- Existing installations created before the array contracts need explicit, idempotent upgrades.
 DO $$
 BEGIN
@@ -2567,6 +2782,26 @@ CREATE TABLE IF NOT EXISTS app_chat_sessions (
 ALTER TABLE app_chat_sessions ADD COLUMN IF NOT EXISTS context_summary TEXT NOT NULL DEFAULT '';
 ALTER TABLE app_chat_sessions ADD COLUMN IF NOT EXISTS context_summary_through_message_id BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE app_chat_sessions ADD COLUMN IF NOT EXISTS scene TEXT NOT NULL DEFAULT 'chat';
+ALTER TABLE app_chat_sessions ALTER COLUMN card_id DROP NOT NULL;
+ALTER TABLE app_chat_sessions ADD COLUMN IF NOT EXISTS skill_version_id BIGINT REFERENCES app_skill_versions(id) ON DELETE RESTRICT;
+ALTER TABLE app_chat_sessions ADD COLUMN IF NOT EXISTS generation_revision BIGINT NOT NULL DEFAULT 0;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'app_chat_sessions'::regclass
+      AND conname = 'ck_app_chat_sessions_context_shape'
+  ) THEN
+    ALTER TABLE app_chat_sessions DROP CONSTRAINT ck_app_chat_sessions_context_shape;
+  END IF;
+  ALTER TABLE app_chat_sessions ADD CONSTRAINT ck_app_chat_sessions_context_shape CHECK (
+    (scene = 'chat' AND card_id IS NOT NULL AND skill_version_id IS NULL)
+    OR (scene = 'skill_chat' AND card_id IS NULL AND skill_version_id IS NOT NULL)
+    OR (scene NOT IN ('chat','skill_chat') AND skill_version_id IS NULL)
+  ) NOT VALID;
+END $$;
+ALTER TABLE app_chat_sessions VALIDATE CONSTRAINT ck_app_chat_sessions_context_shape;
 
 CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_user ON app_chat_sessions(app_user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_card ON app_chat_sessions(card_id, updated_at DESC);
@@ -2574,6 +2809,12 @@ CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_user_card_scene
   ON app_chat_sessions(app_user_id, card_id, scene, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_scene
   ON app_chat_sessions(app_user_id, card_id, scene, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_user_scene_updated
+  ON app_chat_sessions(app_user_id, scene, updated_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_user_skill_updated
+  ON app_chat_sessions(app_user_id, skill_version_id, updated_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_app_chat_sessions_skill_updated
+  ON app_chat_sessions(skill_version_id, updated_at DESC, id DESC);
 
 
 -- ----- 芯之力独立音色配置：加密、草稿/启用、版本历史 -----
@@ -2668,6 +2909,20 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS idx_app_chat_messages_session ON app_chat_messages(session_id, create_time);
 CREATE INDEX IF NOT EXISTS idx_app_chat_messages_favorite ON app_chat_messages(favorite) WHERE favorite = true;
+
+CREATE TABLE IF NOT EXISTS app_skill_chat_traces (
+  id BIGSERIAL PRIMARY KEY,
+  session_id BIGINT NOT NULL REFERENCES app_chat_sessions(id) ON DELETE CASCADE,
+  assistant_message_id BIGINT NOT NULL UNIQUE REFERENCES app_chat_messages(id) ON DELETE CASCADE,
+  generation_revision BIGINT NOT NULL CHECK (generation_revision >= 0),
+  skill_version_id BIGINT NOT NULL REFERENCES app_skill_versions(id) ON DELETE RESTRICT,
+  theory_release_id BIGINT NOT NULL REFERENCES theory_library_releases(id) ON DELETE RESTRICT,
+  chunk_ids BIGINT[] NOT NULL DEFAULT '{}'::bigint[],
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_skill_chat_traces_session
+  ON app_skill_chat_traces(session_id, create_time DESC, id DESC);
 
 -- ----- App 专属记忆：用户可见、可删除/停用的卡片记忆 -----
 CREATE TABLE IF NOT EXISTS app_memories (

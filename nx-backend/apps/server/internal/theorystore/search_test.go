@@ -36,9 +36,22 @@ func TestTheoryRelevanceDoesNotInjectEnneagramIntoRecipeQuestion(t *testing.T) {
 	}
 }
 
+func TestSearchReleaseChunksConstrainsReleaseInSQLAndNeverFallsBack(t *testing.T) {
+	database := openTheoryReleaseSearchTestDB(t)
+	docs, err := NewStore(database).SearchReleaseChunks(context.Background(), 71, "冲突时如何表达需要", 4, 0.20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 1 || docs[0].ID != "theory:711" {
+		t.Fatalf("release-scoped docs=%+v", docs)
+	}
+}
+
 const theorySearchDriverName = "theory_active_search_test"
 
 var registerTheorySearchDriver sync.Once
+
+var registerTheoryReleaseSearchDriver sync.Once
 
 func openTheorySearchTestDB(t *testing.T) *sql.DB {
 	t.Helper()
@@ -50,6 +63,54 @@ func openTheorySearchTestDB(t *testing.T) *sql.DB {
 	t.Cleanup(func() { _ = database.Close() })
 	return database
 }
+
+func openTheoryReleaseSearchTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	registerTheoryReleaseSearchDriver.Do(func() { sql.Register("theory_release_search_test", theoryReleaseSearchDriver{}) })
+	database, err := sql.Open("theory_release_search_test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	return database
+}
+
+type theoryReleaseSearchDriver struct{}
+
+func (theoryReleaseSearchDriver) Open(string) (driver.Conn, error) {
+	return theoryReleaseSearchConn{}, nil
+}
+
+type theoryReleaseSearchConn struct{}
+
+func (theoryReleaseSearchConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
+func (theoryReleaseSearchConn) Close() error                        { return nil }
+func (theoryReleaseSearchConn) Begin() (driver.Tx, error)           { return nil, driver.ErrSkip }
+func (theoryReleaseSearchConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	required := []string{
+		"FROM theory_release_cards mapping",
+		"mapping.release_id = $1",
+		"JOIN theory_library_releases release ON release.id = mapping.release_id",
+		"release.status IN ('ready','active','retired')",
+		"chunk.status = 'enabled'",
+	}
+	for _, fragment := range required {
+		if !strings.Contains(query, fragment) {
+			return nil, errors.New("release query missing: " + fragment)
+		}
+	}
+	if strings.Contains(query, "LIMIT") {
+		return nil, errors.New("release query must score the complete immutable release")
+	}
+	if len(args) != 1 || args[0].Value != int64(71) {
+		return nil, errors.New("release id must be the only SQL argument")
+	}
+	return &theorySearchRows{values: [][]driver.Value{
+		{int64(711), "表达需要", "描述事实和感受，再提出清晰、可执行的请求。", []byte(`["冲突","表达","需要"]`), []byte(`["relationship"]`)},
+	}}, nil
+}
+
+var _ driver.QueryerContext = theoryReleaseSearchConn{}
 
 type theorySearchDriver struct{}
 

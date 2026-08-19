@@ -53,9 +53,12 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/realip"
 	"nine-xing/nx-backend/apps/server/internal/signup"
 	"nine-xing/nx-backend/apps/server/internal/siteconfig"
+	"nine-xing/nx-backend/apps/server/internal/skillcatalog"
+	"nine-xing/nx-backend/apps/server/internal/skillchat"
 	"nine-xing/nx-backend/apps/server/internal/sms"
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/system"
+	"nine-xing/nx-backend/apps/server/internal/theorystore"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 	"nine-xing/nx-backend/apps/server/internal/userpreference"
 	"nine-xing/nx-backend/apps/server/internal/video"
@@ -152,6 +155,9 @@ type Server struct {
 
 	appUsers                       *appuser.Store
 	appChat                        appChatStore
+	skillCatalog                   *skillcatalog.Store
+	skillChat                      *skillchat.Store
+	skillChatRuntime               *skillchat.Runtime
 	appChatProfilesForCardOverride func(context.Context, int64, int64) (rag.UserProfile, rag.ConversationCard)
 	userPreferences                appChatPreferenceStore
 	preferenceExtractor            appChatPreferenceExtractor
@@ -392,6 +398,9 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		s.appDailyQuizBankAdmin = profileStore
 	}
 	s.appChat = chat.NewStore(database)
+	s.skillCatalog = skillcatalog.NewStore(database)
+	s.skillChat = skillchat.NewStore(database)
+	s.skillChatRuntime = skillchat.NewRuntime(s.skillChat, theorystore.NewStore(database), skillChatRuntimeGenerator{server: s})
 	s.userPreferences = userpreference.NewStore(database)
 	s.preferenceAsyncSlots = make(chan struct{}, 2)
 	s.preferenceAsyncTimeout = 2 * time.Second
@@ -765,6 +774,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/chat/messages/", s.requireAppAuth(s.appChatMessageRouter))
 	s.mux.HandleFunc("/api/app/chat/favorites", s.method(http.MethodGet, s.requireAppAuth(s.appChatFavorites)))
 	s.mux.HandleFunc("/api/app/chat/search", s.method(http.MethodGet, s.requireAppAuth(s.appChatSearch)))
+	s.mux.HandleFunc("/api/app/skill-libraries", s.requireAppAuth(s.appSkillLibrariesRouter))
+	s.mux.HandleFunc("/api/app/skill-libraries/", s.requireAppAuth(s.appSkillLibrariesRouter))
+	s.mux.HandleFunc("/api/app/skills/", s.requireAppAuth(s.appSkillsRouter))
+	s.mux.HandleFunc("/api/app/skill-sessions/", s.requireAppAuth(s.appSkillSessionsRouter))
+	s.mux.HandleFunc("/api/app/skill-messages/", s.requireAppAuth(s.appSkillMessagesRouter))
 	s.mux.HandleFunc("/api/app/billing/entitlements", s.method(http.MethodGet, s.requireAppAuth(s.appBillingEntitlements)))
 	s.mux.HandleFunc("/api/app/billing/products", s.method(http.MethodGet, s.requireAppAuth(s.appBillingProducts)))
 	s.mux.HandleFunc("/api/app/billing/orders", s.method(http.MethodPost, s.requireAppAuth(s.appBillingCreateOrder)))

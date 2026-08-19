@@ -352,7 +352,7 @@ func (g *OpenAIChatGenerator) requireAPIKey() error {
 }
 
 func (g *OpenAIChatGenerator) chatMessages(input rag.GenerateInput) []openAIChatMessage {
-	messages := []openAIChatMessage{{Role: "system", Content: g.resolveSystemPrompt()}}
+	messages := []openAIChatMessage{{Role: "system", Content: resolveRuntimeSystemPrompt(g.resolveSystemPrompt(), input)}}
 	if preferences := buildCompatibleChatPreferenceMessage(input.UserPreferences); preferences != "" {
 		messages = append(messages, openAIChatMessage{Role: "user", Content: preferences})
 	}

@@ -19,13 +19,39 @@ type appPrivacyPolicyResponse struct {
 }
 
 type appPrivacyExportResponse struct {
-	GeneratedAt  string                 `json:"generatedAt"`
-	User         appuser.User           `json:"user"`
-	Cards        []appPrivacyCard       `json:"cards"`
-	Memories     []appMemoryItem        `json:"memories"`
-	Preferences  []appPrivacyPreference `json:"preferences"`
-	SessionCount int                    `json:"sessionCount"`
-	MessageCount int                    `json:"messageCount"`
+	GeneratedAt   string                   `json:"generatedAt"`
+	User          appuser.User             `json:"user"`
+	Cards         []appPrivacyCard         `json:"cards"`
+	Memories      []appMemoryItem          `json:"memories"`
+	Preferences   []appPrivacyPreference   `json:"preferences"`
+	SkillSessions []appPrivacySkillSession `json:"skillSessions"`
+	SkillMessages []appPrivacySkillMessage `json:"skillMessages"`
+	SessionCount  int                      `json:"sessionCount"`
+	MessageCount  int                      `json:"messageCount"`
+}
+
+type appPrivacySkillSession struct {
+	ID             int64  `json:"id"`
+	SkillID        int64  `json:"skillId"`
+	SkillKey       string `json:"skillKey"`
+	SkillName      string `json:"skillName"`
+	Version        string `json:"version"`
+	Title          string `json:"title"`
+	ContextSummary string `json:"contextSummary"`
+	CreateTime     string `json:"createTime"`
+	UpdatedAt      string `json:"updatedAt"`
+}
+
+type appPrivacySkillMessage struct {
+	ID              int64           `json:"id"`
+	SessionID       int64           `json:"sessionId"`
+	Role            string          `json:"role"`
+	Content         string          `json:"content"`
+	Sources         json.RawMessage `json:"sources"`
+	MessageType     string          `json:"messageType"`
+	AudioDurationMs int             `json:"audioDurationMs,omitempty"`
+	Transcript      string          `json:"transcript,omitempty"`
+	CreateTime      string          `json:"createTime"`
 }
 
 type appPrivacyCard struct {
@@ -60,6 +86,8 @@ func (s *Server) appPrivacyPolicy(w http.ResponseWriter, _ *http.Request) {
 		Content: `我们仅为账号登录、九型测评、成长卡片、对话服务、学习到的沟通偏好、消息推送和服务改进处理必要信息。
 
 使用芯之力语音对话时，服务会临时处理你提交的音频，用于语音识别（ASR）、生成回答和语音合成（TTS）。我们的自有后台不持久化保存原始录音。即使页面不展示文字，成功完成并保存的芯之力对话仍会将转写文字、AI 回答和回答来源保存为隐藏对话历史。服务可能保存你明确表达的沟通偏好，并在回答时使用已有对话历史和已有专属记忆（如适用），以保持上下文并提供更贴合你的后续回答。
+
+技能会话语音会保存用户主动发送的录音和转写，直到用户清空或删除该技能会话、注销账号或依法到达保留期限。技能会话只使用当前会话的消息、摘要和固定技能版本，不读取人物卡、普通聊天记忆或其他技能会话；普通聊天中的沟通偏好也不会进入技能会话。
 
 根据后台配置，完成语音识别（ASR）、语音合成（TTS）或回答生成所必需的音频、文字及上下文可能会发送给相应的第三方模型服务提供方处理。第三方的处理范围和保留规则受我们与其约定及其适用政策约束；我们不会将“页面不展示文字”等同于“不处理或不保存文字”。
 
@@ -98,6 +126,11 @@ func (s *Server) appPrivacyExport(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
+	skillSessions, skillMessages, err := s.appPrivacySkillChats(r, userInfo.ID)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
 	sessionCount, messageCount, err := s.appPrivacyChatCounts(r, userInfo.ID)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
@@ -105,13 +138,15 @@ func (s *Server) appPrivacyExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpx.OK(w, appPrivacyExportResponse{
-		GeneratedAt:  appMemoryTime(time.Now()),
-		User:         user,
-		Cards:        cards,
-		Memories:     memories,
-		Preferences:  preferences,
-		SessionCount: sessionCount,
-		MessageCount: messageCount,
+		GeneratedAt:   appMemoryTime(time.Now()),
+		User:          user,
+		Cards:         cards,
+		Memories:      memories,
+		Preferences:   preferences,
+		SkillSessions: skillSessions,
+		SkillMessages: skillMessages,
+		SessionCount:  sessionCount,
+		MessageCount:  messageCount,
 	})
 }
 
@@ -171,6 +206,8 @@ func (s *Server) appPrivacyDeleteAccount(w http.ResponseWriter, r *http.Request)
 	steps := []string{
 		`DELETE FROM app_memories WHERE app_user_id = $1`,
 		`DELETE FROM app_user_preferences WHERE app_user_id = $1`,
+		`DELETE FROM upload_assets asset USING app_chat_messages message, app_chat_sessions session
+		  WHERE asset.id=message.audio_asset_id AND message.session_id=session.id AND session.app_user_id=$1`,
 		`DELETE FROM app_chat_sessions WHERE app_user_id = $1`,
 		`DELETE FROM app_compatibility_reports WHERE app_user_id = $1`,
 		`DELETE FROM app_daily_checkins WHERE app_user_id = $1`,
@@ -324,4 +361,59 @@ func (s *Server) appPrivacyChatCounts(r *http.Request, appUserID int64) (int, in
 		  WHERE s.app_user_id = $1`,
 		appUserID).Scan(&sessionCount, &messageCount)
 	return sessionCount, messageCount, err
+}
+
+func (s *Server) appPrivacySkillChats(r *http.Request, appUserID int64) ([]appPrivacySkillSession, []appPrivacySkillMessage, error) {
+	rows, err := s.db.QueryContext(r.Context(), `
+		SELECT session.id,skill.id,skill.key,skill.name,version.version,session.title,
+		       session.context_summary,session.create_time,session.updated_at
+		FROM app_chat_sessions session
+		JOIN app_skill_versions version ON version.id=session.skill_version_id
+		JOIN app_skills skill ON skill.id=version.skill_id
+		WHERE session.app_user_id=$1 AND session.scene='skill_chat'
+		ORDER BY session.create_time,session.id`, appUserID)
+	if err != nil {
+		return nil, nil, err
+	}
+	sessions := make([]appPrivacySkillSession, 0)
+	for rows.Next() {
+		var item appPrivacySkillSession
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&item.ID, &item.SkillID, &item.SkillKey, &item.SkillName, &item.Version,
+			&item.Title, &item.ContextSummary, &createdAt, &updatedAt); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		item.CreateTime, item.UpdatedAt = appMemoryTime(createdAt), appMemoryTime(updatedAt)
+		sessions = append(sessions, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, nil, err
+	}
+	rows.Close()
+
+	messageRows, err := s.db.QueryContext(r.Context(), `
+		SELECT message.id,message.session_id,message.role,message.content,message.sources,
+		       message.message_type,message.audio_duration_ms,message.transcript,message.create_time
+		FROM app_chat_messages message
+		JOIN app_chat_sessions session ON session.id=message.session_id
+		WHERE session.app_user_id=$1 AND session.scene='skill_chat'
+		ORDER BY message.create_time,message.id`, appUserID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer messageRows.Close()
+	messages := make([]appPrivacySkillMessage, 0)
+	for messageRows.Next() {
+		var item appPrivacySkillMessage
+		var createdAt time.Time
+		if err := messageRows.Scan(&item.ID, &item.SessionID, &item.Role, &item.Content, &item.Sources,
+			&item.MessageType, &item.AudioDurationMs, &item.Transcript, &createdAt); err != nil {
+			return nil, nil, err
+		}
+		item.CreateTime = appMemoryTime(createdAt)
+		messages = append(messages, item)
+	}
+	return sessions, messages, messageRows.Err()
 }
