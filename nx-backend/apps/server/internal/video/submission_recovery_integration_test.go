@@ -2,6 +2,7 @@ package video
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -41,9 +42,16 @@ func TestRecoverInterruptedSubmissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	var generationIDs []string
+	requestKeys := []string{
+		"99999999-9999-4999-8999-999999999999",
+		"88888888-8888-4888-8888-888888888888",
+	}
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
+		for _, requestKey := range requestKeys {
+			_, _ = database.ExecContext(cleanupCtx, `DELETE FROM video_generation_submissions WHERE request_key=$1::uuid`, requestKey)
+		}
 		_, _ = database.ExecContext(cleanupCtx, `DELETE FROM video_projects WHERE id=$1`, projectID)
 		for _, generationID := range generationIDs {
 			_, _ = database.ExecContext(cleanupCtx, `DELETE FROM video_generations WHERE id=$1::bigint`, generationID)
@@ -84,6 +92,7 @@ func TestRecoverInterruptedSubmissions(t *testing.T) {
 			t.Fatal(err)
 		}
 		requestKey := fmt.Sprintf("%08d-1111-4111-8111-%012d", index+1, index+1)
+		requestKeys = append(requestKeys, requestKey)
 		taskID := fmt.Sprintf("task-%d", index+1)
 		if testCase.status == SubmissionSubmitting && index == 1 {
 			taskID = ""
@@ -95,7 +104,7 @@ func TestRecoverInterruptedSubmissions(t *testing.T) {
 		errorMessage := "original error"
 		if _, err := database.ExecContext(ctx, `
 			INSERT INTO video_generation_submissions
-			    (request_key, shot_id, status, task_id, request_snapshot, error_message)
+			    (request_key, shot_id, status, upstream_task_id, request_snapshot, error_message)
 			VALUES ($1::uuid,$2::bigint,$3,$4,$5::jsonb,$6)`,
 			requestKey, shotID, testCase.status, taskID, snapshot,
 			errorMessage,
@@ -120,7 +129,7 @@ func TestRecoverInterruptedSubmissions(t *testing.T) {
 		var status SubmissionStatus
 		var taskID, errorMessage, model string
 		if err := database.QueryRowContext(ctx, `
-			SELECT status, task_id, error_message, request_snapshot->>'model'
+			SELECT status, upstream_task_id, error_message, request_snapshot->>'model'
 			FROM video_generation_submissions WHERE request_key=$1::uuid`, item.requestKey,
 		).Scan(&status, &taskID, &errorMessage, &model); err != nil {
 			t.Fatal(err)
@@ -147,8 +156,12 @@ func TestRecoverInterruptedSubmissions(t *testing.T) {
 
 	interrupted := seeded[1]
 	_, _, err = store.submissions.Prepare(ctx, PrepareSubmissionInput{
-		RequestKey: "99999999-9999-4999-8999-999999999999",
-		ShotID:     interrupted.shotID,
+		RequestKey:        "99999999-9999-4999-8999-999999999999",
+		ShotID:            interrupted.shotID,
+		RequestHash:       "retry-request-hash",
+		PromptHash:        "retry-prompt-hash",
+		CapabilityVersion: "retry-capability-v1",
+		RequestSnapshot:   json.RawMessage(`{"model":"paid-model","prompt":"retry"}`),
 	})
 	var active *ActiveSubmissionError
 	if !errors.As(err, &active) || active.Existing.Status != SubmissionUnknownOutcome {

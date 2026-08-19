@@ -378,10 +378,10 @@ func (s *Store) GetWorkflowStatus(ctx context.Context, projectID string) (Workfl
 		return WorkflowStatus{}, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT shot_id::text, id, request_key::text, status, task_id
+		SELECT shot_id::text, id, request_key::text, status, upstream_task_id
 		FROM video_generation_submissions
 		WHERE shot_id IN (SELECT id FROM video_shots WHERE project_id=$1)
-		  AND status IN ('prepared','submitting','accepted','unknown_outcome','reconciled')`, pid)
+		  AND status IN ('prepared','submitting','accepted','unknown_outcome')`, pid)
 	if err != nil && err != sql.ErrNoRows {
 		return WorkflowStatus{}, err
 	}

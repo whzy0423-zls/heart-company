@@ -9,12 +9,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+
+	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 )
 
 type generationSubmissionSnapshot struct {
+	GenerationMode    string               `json:"generationMode"`
 	Model             string               `json:"model"`
 	Prompt            string               `json:"prompt"`
 	Seconds           int                  `json:"seconds"`
@@ -162,6 +169,7 @@ func (s *Store) prepareNormalizedGenerationSubmission(request GenerateRequest, s
 	}
 	images, videos, audios := canonicalReferenceURLs(references)
 	snapshot, err := json.Marshal(generationSubmissionSnapshot{
+		GenerationMode:    s.GenerationMode(),
 		Model:             request.Model,
 		Prompt:            request.Prompt,
 		Seconds:           request.Duration,
@@ -252,6 +260,7 @@ func (s *Store) existingNormalizedIntent(ctx context.Context, request GenerateRe
 		return Submission{}, false, err
 	}
 	if snapshot.Model != request.Model ||
+		snapshotGenerationMode(snapshot.GenerationMode) != s.GenerationMode() ||
 		snapshot.Prompt != request.Prompt ||
 		snapshot.Seconds != request.Duration ||
 		snapshot.AspectRatio != request.AspectRatio ||
@@ -363,6 +372,9 @@ func (s *Store) submitPreparedGeneration(ctx context.Context, prepared preparedG
 	if !claimed {
 		return s.existingSubmissionGeneration(ctx, submission)
 	}
+	if s.GenerationMode() == config.VideoGenerationModeDemo {
+		return s.submitDemoGeneration(ctx, prepared, submission)
+	}
 
 	task, err := s.client.CreateNormalizedTask(ctx, prepared.request, prepared.references)
 	persistenceCtx, cancelPersistence := submissionPersistenceContext(ctx)
@@ -437,6 +449,146 @@ func (s *Store) submitPreparedGeneration(ctx context.Context, prepared preparedG
 	return attachSubmission(generation, submission), nil
 }
 
+func (s *Store) submitDemoGeneration(ctx context.Context, prepared preparedGenerationSubmission, submission Submission) (Generation, error) {
+	persistenceCtx, cancelPersistence := submissionPersistenceContext(ctx)
+	defer cancelPersistence()
+	fail := func(cause error) (Generation, error) {
+		_, transitionErr := s.submissions.Transition(
+			persistenceCtx,
+			submission.RequestKey,
+			SubmissionSubmitting,
+			SubmissionCancelled,
+			SubmissionTransition{ErrorMessage: cause.Error()},
+		)
+		if transitionErr != nil {
+			return Generation{}, &SubmissionPersistenceError{
+				RequestKey:     submission.RequestKey,
+				SubmissionID:   submission.ID,
+				IntendedStatus: SubmissionCancelled,
+				OutcomeCode:    "demo_generation_failed",
+			}
+		}
+		return Generation{}, cause
+	}
+	if s.demoRenderer == nil {
+		return fail(errors.New("demo video renderer is not configured"))
+	}
+
+	rendered, err := s.demoRenderer.Render(ctx, DemoRenderInput{
+		AspectRatio: prepared.request.AspectRatio,
+		Seconds:     prepared.request.Duration,
+	})
+	if strings.TrimSpace(rendered.Path) != "" {
+		defer os.Remove(rendered.Path)
+	}
+	if err != nil {
+		return fail(err)
+	}
+	data, err := os.ReadFile(rendered.Path)
+	if err != nil {
+		return fail(err)
+	}
+	asset, err := s.createUploadAsset(
+		ctx,
+		data,
+		"video/mp4",
+		"video/generated",
+		filepath.Base(rendered.Path),
+	)
+	if err != nil {
+		return fail(err)
+	}
+	videoURL := strings.TrimSpace(asset.ObjectURL)
+	if videoURL == "" && asset.ID > 0 {
+		videoURL = "/api/upload-assets/" + strconv.FormatInt(asset.ID, 10)
+	}
+	if videoURL == "" {
+		return fail(errors.New("demo video upload did not return a usable URL"))
+	}
+	taskID := "demo-" + submission.RequestKey
+	id, err := insertDemoGenerationRecord(persistenceCtx, s.db, prepared, taskID, asset, videoURL, rendered)
+	if err != nil {
+		return fail(err)
+	}
+	completed, err := s.submissions.Transition(
+		persistenceCtx,
+		submission.RequestKey,
+		SubmissionSubmitting,
+		SubmissionCompleted,
+		SubmissionTransition{UpstreamTaskID: taskID, GenerationID: id},
+	)
+	if err != nil {
+		return fail(err)
+	}
+	generation, err := s.Generation(persistenceCtx, id)
+	if err != nil {
+		return Generation{}, &LocalLinkageError{
+			RequestKey:   submission.RequestKey,
+			SubmissionID: submission.ID,
+			TaskID:       taskID,
+		}
+	}
+	return attachSubmission(generation, completed), nil
+}
+
+func insertDemoGenerationRecord(
+	ctx context.Context,
+	queryer generationQueryer,
+	prepared preparedGenerationSubmission,
+	taskID string,
+	asset uploadasset.Asset,
+	videoURL string,
+	rendered DemoVideo,
+) (string, error) {
+	projectID, _, err := normalizeSubmissionID("projectId", prepared.projectID, true)
+	if err != nil {
+		return "", err
+	}
+	shotID, _, err := normalizeSubmissionID("shotId", prepared.shotID, true)
+	if err != nil {
+		return "", err
+	}
+	images, err := json.Marshal(prepared.images)
+	if err != nil {
+		return "", err
+	}
+	videos, err := json.Marshal(prepared.videos)
+	if err != nil {
+		return "", err
+	}
+	audios, err := json.Marshal(prepared.audios)
+	if err != nil {
+		return "", err
+	}
+	var id string
+	err = queryer.QueryRowContext(ctx, `
+		INSERT INTO video_generations (
+			provider, model, prompt, image_url, used_images, used_videos, used_audios,
+			task_id, seconds, aspect_ratio, video_asset_id, video_url,
+			duration, fps, width, height, status, project_id, shot_id
+		) VALUES ('demo',$1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,'completed',$16,$17)
+		RETURNING id::text`,
+		prepared.request.Model,
+		prepared.request.Prompt,
+		prepared.imageURL,
+		string(images),
+		string(videos),
+		string(audios),
+		taskID,
+		prepared.request.Duration,
+		prepared.request.AspectRatio,
+		asset.ID,
+		videoURL,
+		rendered.Duration,
+		rendered.FPS,
+		rendered.Width,
+		rendered.Height,
+		projectID,
+		shotID,
+	).Scan(&id)
+	return id, err
+}
+
 func (s *Store) existingGenerateIntent(
 	ctx context.Context,
 	input GenerateInput,
@@ -505,6 +657,7 @@ func (s *Store) existingGenerateIntent(
 			!slices.Equal(snapshot.Audios, canonicalAudios)
 	}
 	if modelChanged ||
+		snapshotGenerationMode(snapshot.GenerationMode) != s.GenerationMode() ||
 		snapshot.Prompt != prompt ||
 		secondsChanged ||
 		aspectRatioChanged ||
@@ -537,6 +690,13 @@ func (s *Store) existingGenerateIntent(
 		}
 	}
 	return submission, true, nil
+}
+
+func snapshotGenerationMode(raw string) string {
+	if strings.TrimSpace(raw) == config.VideoGenerationModeDemo {
+		return config.VideoGenerationModeDemo
+	}
+	return config.VideoGenerationModePaid
 }
 
 func (s *Store) existingSubmissionGeneration(ctx context.Context, submission Submission) (Generation, error) {

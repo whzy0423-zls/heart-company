@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+
+	"nine-xing/nx-backend/apps/server/internal/config"
 )
 
 var (
@@ -14,10 +16,10 @@ var (
 type InvalidSubmissionTransitionError = SubmissionTransitionError
 
 func (s *Store) GenerationMode() string {
-	if s == nil {
-		return "demo"
+	if s == nil || s.generationMode != config.VideoGenerationModePaid {
+		return config.VideoGenerationModeDemo
 	}
-	return s.generationMode
+	return config.VideoGenerationModePaid
 }
 func (s *Store) SubmissionByRequestKey(ctx context.Context, key string) (Submission, error) {
 	if s == nil || s.submissions == nil {
