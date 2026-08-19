@@ -93,7 +93,7 @@ func newAnthropicChatGenerator(cfg ChatGeneratorConfig, client *http.Client) *An
 func (g *AnthropicChatGenerator) Generate(ctx context.Context, input rag.GenerateInput) (string, error) {
 	return g.complete(ctx, anthropicChatRequest{
 		Model:       g.model,
-		System:      resolveCompatibleChatSystemPrompt(g.systemPrompt),
+		System:      resolveRuntimeSystemPrompt(resolveCompatibleChatSystemPrompt(g.systemPrompt), input),
 		Messages:    g.chatMessages(input),
 		MaxTokens:   chatTokenBudgetForTier(input.Question, input.Tier),
 		Temperature: 0.55,
@@ -106,7 +106,7 @@ func (g *AnthropicChatGenerator) GenerateStream(ctx context.Context, input rag.G
 	}
 	payload, err := json.Marshal(anthropicChatRequest{
 		Model:       g.model,
-		System:      resolveCompatibleChatSystemPrompt(g.systemPrompt),
+		System:      resolveRuntimeSystemPrompt(resolveCompatibleChatSystemPrompt(g.systemPrompt), input),
 		Messages:    g.chatMessages(input),
 		MaxTokens:   chatTokenBudgetForTier(input.Question, input.Tier),
 		Temperature: 0.55,

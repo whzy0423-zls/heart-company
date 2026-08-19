@@ -156,7 +156,7 @@ func formatNullableTime(value sql.NullTime) string {
 func (s *Server) adminAppChatMessages(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	page, pageSize := appOrderPagination(q)
-	where := []string{"1=1"}
+	where := []string{"cs.scene = 'chat'"}
 	args := []any{}
 	add := func(clause string, value any) {
 		args = append(args, value)

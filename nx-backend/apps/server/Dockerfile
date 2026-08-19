@@ -12,6 +12,7 @@ COPY nx-backend/apps/server/ ./
 RUN go mod download
 RUN CGO_ENABLED=0 GOOS=linux go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
 RUN CGO_ENABLED=0 GOOS=linux go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/theorysync ./cmd/theorysync
+RUN CGO_ENABLED=0 GOOS=linux go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/skillsync ./cmd/skillsync
 
 # ---- runtime stage ----
 FROM alpine:3.20 AS production
@@ -22,6 +23,8 @@ RUN apk add --no-cache ca-certificates tzdata ffmpeg && \
 WORKDIR /app
 COPY --from=builder /out/server /app/server
 COPY --from=builder /out/theorysync /app/theorysync
+COPY --from=builder /out/skillsync /app/skillsync
+COPY nx-backend/apps/server/config/skill-review-manifest.json /app/config/skill-review-manifest.json
 
 # 站点配置持久化在挂载卷里；容器首启时若卷为空，由 entrypoint 用内置默认值播种
 COPY shared/site-config.json /app/default-site-config.json

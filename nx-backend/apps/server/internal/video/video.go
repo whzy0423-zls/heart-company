@@ -40,6 +40,7 @@ var terminalStatuses = map[string]bool{
 type Store struct {
 	client          *Client
 	db              *sql.DB
+	demoRenderer    DemoRenderer
 	uploads         *uploadasset.Store
 	uploader        storage.ObjectUploader
 	submissions     *SubmissionStore
@@ -137,18 +138,27 @@ func NewStore(database *sql.DB, uploads *uploadasset.Store, cfg config.VideoConf
 	if len(uploaders) > 0 {
 		uploader = uploaders[0]
 	}
+	if uploads == nil && database != nil {
+		uploads = uploadasset.NewStore(database)
+	}
 	contract := cfg.GatewayContract
 	if contract.Name == "" && contract.Version == "" && contract.References.Mode == "" {
 		contract = LegacyFlatContract()
 		cfg.GatewayContract = contract
 	}
+	mode := config.VideoGenerationModeDemo
+	if strings.TrimSpace(cfg.Mode) == config.VideoGenerationModePaid {
+		mode = config.VideoGenerationModePaid
+	}
 	return &Store{
 		client:          NewClient(cfg),
 		db:              database,
+		demoRenderer:    NewFFmpegDemoRenderer(""),
 		uploads:         uploads,
 		uploader:        uploader,
 		submissions:     NewSubmissionStore(database),
 		defaultModel:    model,
+		generationMode:  mode,
 		modelProfile:    strings.TrimSpace(cfg.ModelProfile),
 		gatewayContract: contract,
 	}

@@ -138,7 +138,7 @@ func (g *MiniMaxGenerator) Generate(ctx context.Context, input rag.GenerateInput
 		"temperature":        0.55,
 		"tokens_to_generate": chatTokenBudgetForTier(input.Question, input.Tier),
 		"messages": []map[string]string{
-			{"role": "system", "content": g.resolveSystemPrompt()},
+			{"role": "system", "content": resolveRuntimeSystemPrompt(g.resolveSystemPrompt(), input)},
 			{"role": "user", "content": buildUserPrompt(input)},
 		},
 	}
@@ -193,7 +193,7 @@ func (g *MiniMaxGenerator) GenerateStream(ctx context.Context, input rag.Generat
 		"tokens_to_generate": chatTokenBudgetForTier(input.Question, input.Tier),
 		"stream":             true,
 		"messages": []map[string]string{
-			{"role": "system", "content": g.resolveSystemPrompt()},
+			{"role": "system", "content": resolveRuntimeSystemPrompt(g.resolveSystemPrompt(), input)},
 			{"role": "user", "content": buildUserPrompt(input)},
 		},
 	}
