@@ -65,6 +65,18 @@ func TestSkillChatPostgresIsolationAndDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var secondSkillID int64
+	if err := database.QueryRowContext(ctx, `SELECT id FROM app_skills WHERE key='systems-thinking'`).Scan(&secondSkillID); err != nil {
+		t.Fatal(err)
+	}
+	secondSkillSession, err := store.CreateSession(ctx, userOne, secondSkillID, "另一技能")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recentSessions, err := store.ListRecentSessions(ctx, userOne, 2)
+	if err != nil || len(recentSessions) != 2 || recentSessions[0].ID != secondSkillSession.ID || recentSessions[1].ID != sessionTwo.ID {
+		t.Fatalf("recent sessions=%+v err=%v", recentSessions, err)
+	}
 	otherSession, err := store.CreateSession(ctx, userTwo, publishedSkillID, "他人会话")
 	if err != nil {
 		t.Fatal(err)
@@ -198,6 +210,8 @@ func TestSkillChatPostgresIsolationAndDeletion(t *testing.T) {
 	if err != nil || newSession.Version != "1.0.1" {
 		t.Fatalf("new session did not use published version: %+v err=%v", newSession, err)
 	}
+	foreignSkillID, foreignVersionID := insertForeignPublishedSkillVersion(t, ctx, database, "1.0.0")
+	newerVersionID := insertPublishedSiblingSkillVersion(t, ctx, database, publishedSkillID, "1.0.2")
 	fixedOldSession, err := store.GetSession(ctx, userOne, sessionOne.ID)
 	if err != nil || fixedOldSession.Version != "1.0.0" || fixedOldSession.MinAppVersion != "1.0.1" {
 		t.Fatalf("old session version changed: %+v err=%v", fixedOldSession, err)
@@ -209,8 +223,24 @@ func TestSkillChatPostgresIsolationAndDeletion(t *testing.T) {
 	if err != nil || rollbackSession.Version != "1.0.0" {
 		t.Fatalf("rollback did not restore latest pointer: %+v err=%v", rollbackSession, err)
 	}
+	assertSkillLatestVersion(t, ctx, database, foreignSkillID, foreignVersionID)
 	if _, err := skillcatalog.NewStore(database).ApplyLearningGrowthCatalog(ctx, skillcatalog.CatalogCommand{Action: "retire", Version: "1.0.1"}); err != nil {
 		t.Fatalf("retire catalog version: %v", err)
+	}
+	assertSkillLatestVersion(t, ctx, database, publishedSkillID, sessionOne.SkillVersionID)
+	var foreignStatus string
+	if err := database.QueryRowContext(ctx, `SELECT status FROM app_skill_versions WHERE id=$1`, foreignVersionID).Scan(&foreignStatus); err != nil {
+		t.Fatal(err)
+	}
+	if foreignStatus != "published" {
+		t.Fatalf("retiring the learning-growth catalog changed a foreign version to %q", foreignStatus)
+	}
+	var newerStatus string
+	if err := database.QueryRowContext(ctx, `SELECT status FROM app_skill_versions WHERE id=$1`, newerVersionID).Scan(&newerStatus); err != nil {
+		t.Fatal(err)
+	}
+	if newerStatus != "published" {
+		t.Fatalf("retiring a non-current version changed the sibling version to %q", newerStatus)
 	}
 	var retiredVersionStatus, retiredReleaseStatus string
 	if err := database.QueryRowContext(ctx, `SELECT version.status,release.status FROM app_skill_versions version JOIN theory_library_releases release ON release.id=version.theory_release_id WHERE version.skill_id=$1 AND version.version='1.0.1'`, publishedSkillID).Scan(&retiredVersionStatus, &retiredReleaseStatus); err != nil {
@@ -218,6 +248,79 @@ func TestSkillChatPostgresIsolationAndDeletion(t *testing.T) {
 	}
 	if retiredVersionStatus != "retired" || retiredReleaseStatus != "retired" {
 		t.Fatalf("retire statuses version=%s release=%s", retiredVersionStatus, retiredReleaseStatus)
+	}
+}
+
+func insertForeignPublishedSkillVersion(t *testing.T, ctx context.Context, database *sql.DB, version string) (int64, int64) {
+	t.Helper()
+	var libraryID, categoryID, skillID, theoryLibraryID, releaseID, versionID int64
+	key := fmt.Sprintf("foreign-skill-%d", time.Now().UnixNano())
+	if err := database.QueryRowContext(ctx, `INSERT INTO app_skill_libraries(key,name,status) VALUES($1,$1,'enabled') RETURNING id`, key).Scan(&libraryID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `INSERT INTO app_skill_categories(library_id,key,name,status) VALUES($1,$2,$2,'enabled') RETURNING id`, libraryID, key).Scan(&categoryID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `INSERT INTO app_skills(category_id,key,name,status) VALUES($1,$2,$2,'enabled') RETURNING id`, categoryID, key).Scan(&skillID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `INSERT INTO theory_libraries(key,name,status,current_version) VALUES($1,$1,'enabled',1) RETURNING id`, key).Scan(&theoryLibraryID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `INSERT INTO theory_library_releases(library_id,version,status) VALUES($1,1,'active') RETURNING id`, theoryLibraryID).Scan(&releaseID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `
+		INSERT INTO app_skill_versions(skill_id,version,instructions,theory_release_id,content_hash,status,published_at)
+		VALUES($1,$2,'foreign',$3,$4,'published',now()) RETURNING id`, skillID, version, releaseID, key).Scan(&versionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `UPDATE app_skills SET latest_published_version_id=$2 WHERE id=$1`, skillID, versionID); err != nil {
+		t.Fatal(err)
+	}
+	return skillID, versionID
+}
+
+func insertPublishedSiblingSkillVersion(t *testing.T, ctx context.Context, database *sql.DB, skillID int64, version string) int64 {
+	t.Helper()
+	var theoryLibraryID int64
+	if err := database.QueryRowContext(ctx, `
+		SELECT release.library_id FROM app_skills skill
+		JOIN app_skill_versions current_version ON current_version.id=skill.latest_published_version_id
+		JOIN theory_library_releases release ON release.id=current_version.theory_release_id
+		WHERE skill.id=$1`, skillID).Scan(&theoryLibraryID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `UPDATE theory_library_releases SET status='retired' WHERE library_id=$1 AND status='active'`, theoryLibraryID); err != nil {
+		t.Fatal(err)
+	}
+	var releaseID int64
+	if err := database.QueryRowContext(ctx, `
+		INSERT INTO theory_library_releases(library_id,version,status)
+		VALUES($1,(SELECT COALESCE(max(version),0)+1 FROM theory_library_releases WHERE library_id=$1),'active')
+		RETURNING id`, theoryLibraryID).Scan(&releaseID); err != nil {
+		t.Fatal(err)
+	}
+	var versionID int64
+	if err := database.QueryRowContext(ctx, `
+		INSERT INTO app_skill_versions(skill_id,version,instructions,theory_release_id,content_hash,status,published_at)
+		VALUES($1,$2,'newer sibling',$3,$2,'published',now()+interval '1 minute') RETURNING id`, skillID, version, releaseID).Scan(&versionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `UPDATE app_skills SET latest_published_version_id=$2 WHERE id=$1`, skillID, versionID); err != nil {
+		t.Fatal(err)
+	}
+	return versionID
+}
+
+func assertSkillLatestVersion(t *testing.T, ctx context.Context, database *sql.DB, skillID, wantVersionID int64) {
+	t.Helper()
+	var got int64
+	if err := database.QueryRowContext(ctx, `SELECT latest_published_version_id FROM app_skills WHERE id=$1`, skillID).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != wantVersionID {
+		t.Fatalf("skill %d latest version=%d, want %d", skillID, got, wantVersionID)
 	}
 }
 

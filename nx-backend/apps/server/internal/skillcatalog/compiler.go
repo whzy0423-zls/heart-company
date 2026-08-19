@@ -240,14 +240,21 @@ func transitionCompiledVersion(ctx context.Context, tx *sql.Tx, action string, p
 }
 
 func (s *Store) applyCatalogVersionState(ctx context.Context, catalog BuiltinCatalog, command CatalogCommand) (ImportResult, error) {
-	result := ImportResult{LibraryKey: catalog.Key, CategoryCount: len(catalog.Categories), SkillCount: 35, PublishedCount: 32}
+	skillCount, publishedCount := catalogSkillCounts(catalog)
+	result := ImportResult{LibraryKey: catalog.Key, CategoryCount: len(catalog.Categories), SkillCount: skillCount, PublishedCount: publishedCount}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ImportResult{}, err
 	}
 	defer tx.Rollback()
 	if command.Action == "rollback" {
-		rows, err := tx.QueryContext(ctx, `SELECT skill.id,version.id FROM app_skills skill JOIN app_skill_versions version ON version.skill_id=skill.id WHERE version.version=$1 AND version.status='published'`, command.Version)
+		rows, err := tx.QueryContext(ctx, `
+			SELECT skill.id,version.id
+			FROM app_skill_libraries library
+			JOIN app_skill_categories category ON category.library_id=library.id
+			JOIN app_skills skill ON skill.category_id=category.id
+			JOIN app_skill_versions version ON version.skill_id=skill.id
+			WHERE library.key=$1 AND version.version=$2 AND version.status='published'`, catalog.Key, command.Version)
 		if err != nil {
 			return ImportResult{}, err
 		}
@@ -261,8 +268,8 @@ func (s *Store) applyCatalogVersionState(ctx context.Context, catalog BuiltinCat
 			pairs = append(pairs, pair)
 		}
 		rows.Close()
-		if len(pairs) != 32 {
-			return ImportResult{}, fmt.Errorf("skill catalog: rollback target must contain 32 published skills, got %d", len(pairs))
+		if len(pairs) != publishedCount {
+			return ImportResult{}, fmt.Errorf("skill catalog: rollback target must contain %d published skills, got %d", publishedCount, len(pairs))
 		}
 		for _, pair := range pairs {
 			if _, err := tx.ExecContext(ctx, `UPDATE theory_library_releases SET status='retired',update_time=now() WHERE library_id=(SELECT release.library_id FROM app_skill_versions version JOIN theory_library_releases release ON release.id=version.theory_release_id WHERE version.id=$1) AND status='active' AND id<>(SELECT theory_release_id FROM app_skill_versions WHERE id=$1)`, pair[1]); err != nil {
@@ -271,12 +278,21 @@ func (s *Store) applyCatalogVersionState(ctx context.Context, catalog BuiltinCat
 			if _, err := tx.ExecContext(ctx, `UPDATE theory_library_releases SET status='active',update_time=now() WHERE id=(SELECT theory_release_id FROM app_skill_versions WHERE id=$1)`, pair[1]); err != nil {
 				return ImportResult{}, err
 			}
+			if _, err := tx.ExecContext(ctx, `UPDATE theory_libraries SET current_version=release.version,status='enabled',update_time=now() FROM theory_library_releases release JOIN app_skill_versions version ON version.theory_release_id=release.id WHERE version.id=$1 AND theory_libraries.id=release.library_id`, pair[1]); err != nil {
+				return ImportResult{}, err
+			}
 			if _, err := tx.ExecContext(ctx, `UPDATE app_skills SET latest_published_version_id=$2,status='enabled',update_time=now() WHERE id=$1`, pair[0], pair[1]); err != nil {
 				return ImportResult{}, err
 			}
 		}
 	} else {
-		rows, err := tx.QueryContext(ctx, `SELECT skill.id,version.id FROM app_skills skill JOIN app_skill_versions version ON version.skill_id=skill.id WHERE version.version=$1 AND version.status='published'`, command.Version)
+		rows, err := tx.QueryContext(ctx, `
+			SELECT skill.id,version.id
+			FROM app_skill_libraries library
+			JOIN app_skill_categories category ON category.library_id=library.id
+			JOIN app_skills skill ON skill.category_id=category.id
+			JOIN app_skill_versions version ON version.skill_id=skill.id
+			WHERE library.key=$1 AND version.version=$2 AND version.status='published'`, catalog.Key, command.Version)
 		if err != nil {
 			return ImportResult{}, err
 		}
@@ -294,19 +310,35 @@ func (s *Store) applyCatalogVersionState(ctx context.Context, catalog BuiltinCat
 			return ImportResult{}, fmt.Errorf("skill catalog: published version %s not found", command.Version)
 		}
 		for _, pair := range pairs {
-			var replacement sql.NullInt64
-			_ = tx.QueryRowContext(ctx, `SELECT id FROM app_skill_versions WHERE skill_id=$1 AND status='published' AND id<>$2 ORDER BY published_at DESC NULLS LAST,id DESC LIMIT 1`, pair[0], pair[1]).Scan(&replacement)
-			if replacement.Valid {
-				if _, err := tx.ExecContext(ctx, `UPDATE app_skills SET latest_published_version_id=$2,status='enabled',update_time=now() WHERE id=$1`, pair[0], replacement.Int64); err != nil {
-					return ImportResult{}, err
-				}
-			} else if _, err := tx.ExecContext(ctx, `UPDATE app_skills SET latest_published_version_id=NULL,status='disabled',update_time=now() WHERE id=$1`, pair[0]); err != nil {
+			var currentVersionID sql.NullInt64
+			if err := tx.QueryRowContext(ctx, `SELECT latest_published_version_id FROM app_skills WHERE id=$1 FOR UPDATE`, pair[0]).Scan(&currentVersionID); err != nil {
 				return ImportResult{}, err
+			}
+			isCurrent := currentVersionID.Valid && currentVersionID.Int64 == pair[1]
+			var replacement sql.NullInt64
+			if isCurrent {
+				_ = tx.QueryRowContext(ctx, `SELECT id FROM app_skill_versions WHERE skill_id=$1 AND status='published' AND id<>$2 ORDER BY published_at DESC NULLS LAST,id DESC LIMIT 1`, pair[0], pair[1]).Scan(&replacement)
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE theory_library_releases SET status='retired',update_time=now() WHERE id=(SELECT theory_release_id FROM app_skill_versions WHERE id=$1)`, pair[1]); err != nil {
 				return ImportResult{}, err
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE app_skill_versions SET status='retired',update_time=now() WHERE id=$1`, pair[1]); err != nil {
+				return ImportResult{}, err
+			}
+			if !isCurrent {
+				continue
+			}
+			if replacement.Valid {
+				if _, err := tx.ExecContext(ctx, `UPDATE theory_library_releases SET status='active',activated_at=COALESCE(activated_at,now()),update_time=now() WHERE id=(SELECT theory_release_id FROM app_skill_versions WHERE id=$1)`, replacement.Int64); err != nil {
+					return ImportResult{}, err
+				}
+				if _, err := tx.ExecContext(ctx, `UPDATE theory_libraries SET current_version=release.version,status='enabled',update_time=now() FROM theory_library_releases release JOIN app_skill_versions version ON version.theory_release_id=release.id WHERE version.id=$1 AND theory_libraries.id=release.library_id`, replacement.Int64); err != nil {
+					return ImportResult{}, err
+				}
+				if _, err := tx.ExecContext(ctx, `UPDATE app_skills SET latest_published_version_id=$2,status='enabled',update_time=now() WHERE id=$1`, pair[0], replacement.Int64); err != nil {
+					return ImportResult{}, err
+				}
+			} else if _, err := tx.ExecContext(ctx, `UPDATE app_skills SET latest_published_version_id=NULL,status='disabled',update_time=now() WHERE id=$1`, pair[0]); err != nil {
 				return ImportResult{}, err
 			}
 		}
@@ -315,6 +347,18 @@ func (s *Store) applyCatalogVersionState(ctx context.Context, catalog BuiltinCat
 		return ImportResult{}, err
 	}
 	return result, nil
+}
+
+func catalogSkillCounts(catalog BuiltinCatalog) (total, published int) {
+	for _, category := range catalog.Categories {
+		for _, skill := range category.Skills {
+			total++
+			if !skill.SourceNeeded {
+				published++
+			}
+		}
+	}
+	return total, published
 }
 
 func skillOpeningPrompts(skill BuiltinSkill, category BuiltinCategory) []string {

@@ -215,6 +215,14 @@ func (s *Server) appSkillSessionsRouter(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	switch {
+	case path == "/api/app/skill-sessions/recent" && r.Method == http.MethodGet:
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		items, err := s.skillChat.ListRecentSessions(r.Context(), user.ID, limit)
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "最近技能会话读取失败")
+			return
+		}
+		httpx.OK(w, items)
 	case strings.HasSuffix(path, "/messages") && r.Method == http.MethodGet:
 		sessionID, valid := appPathID(path, "/api/app/skill-sessions/", "/messages")
 		if !valid {
