@@ -26,6 +26,7 @@ type Session struct {
 	Scene              string                `json:"scene"`
 	Version            string                `json:"version"`
 	Instructions       string                `json:"-"`
+	OpeningPrompts     []string              `json:"openingPrompts"`
 	TheoryReleaseID    int64                 `json:"-"`
 	SafetyProfile      string                `json:"safetyProfile"`
 	MinAppVersion      string                `json:"minAppVersion"`

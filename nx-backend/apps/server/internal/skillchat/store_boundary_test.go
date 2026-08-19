@@ -31,6 +31,15 @@ func TestGetSessionEnforcesUserSceneAndVersionJoinsInSQL(t *testing.T) {
 		t.Fatalf("fixed version metadata=%+v", session)
 	}
 	raw, _ := json.Marshal(session)
+	var dto struct {
+		OpeningPrompts []string `json:"openingPrompts"`
+	}
+	if err := json.Unmarshal(raw, &dto); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(dto.OpeningPrompts, "|"); got != "先复盘最近一次练习|帮我拆一个最小行动" {
+		t.Fatalf("fixed version openingPrompts=%q, raw=%s", got, raw)
+	}
 	for _, forbidden := range []string{"/private/source/SKILL.md", "manifest-secret-hash", "sourceContentHash"} {
 		if strings.Contains(string(raw), forbidden) {
 			t.Fatalf("session DTO leaked internal metadata %q: %s", forbidden, raw)
@@ -55,11 +64,12 @@ func (skillSessionBoundaryConn) QueryContext(_ context.Context, query string, ar
 	for _, fragment := range []string{
 		"JOIN app_skill_versions version ON version.id = session.skill_version_id",
 		"JOIN app_skills skill ON skill.id = version.skill_id",
-		"JOIN app_skill_categories category ON category.id = skill.category_id",
-		"JOIN app_skill_libraries library ON library.id = category.library_id",
-		"session.id = $1",
-		"session.app_user_id = $2",
-		"session.scene = 'skill_chat'",
+			"JOIN app_skill_categories category ON category.id = skill.category_id",
+			"JOIN app_skill_libraries library ON library.id = category.library_id",
+			"version.opening_prompts",
+			"session.id = $1",
+			"session.app_user_id = $2",
+			"session.scene = 'skill_chat'",
 	} {
 		if !strings.Contains(query, fragment) {
 			return nil, errors.New("session query missing boundary: " + fragment)
@@ -71,7 +81,7 @@ func (skillSessionBoundaryConn) QueryContext(_ context.Context, query string, ar
 	now := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
 	return &skillSessionRows{values: [][]driver.Value{{
 		int64(41), int64(7), int64(9), int64(91), "art-of-learning", "学习之道", "school",
-		"练习", "skill_chat", "1.1.0", "规则", int64(71), "general-learning-v1",
+		"练习", "skill_chat", "1.1.0", "规则", []byte(`["先复盘最近一次练习","帮我拆一个最小行动"]`), int64(71), "general-learning-v1",
 		"1.0.1", []byte(`{"reviewPolicy":"product-baseline-v1","reviewDecisionRef":"baseline","riskNotices":["缺页提示"],"source":"/private/source/SKILL.md","reviewManifestHash":"manifest-secret-hash","sourceContentHash":"secret"}`),
 		"published", "enabled", "enabled", "enabled", int64(4), now, now,
 	}}}, nil
@@ -83,7 +93,7 @@ type skillSessionRows struct {
 }
 
 func (r *skillSessionRows) Columns() []string {
-	return []string{"id", "app_user_id", "skill_id", "skill_version_id", "skill_key", "skill_name", "skill_icon_key", "title", "scene", "version", "instructions", "theory_release_id", "safety_profile", "min_app_version", "source_metadata", "version_status", "library_status", "category_status", "skill_status", "generation_revision", "updated_at", "create_time"}
+	return []string{"id", "app_user_id", "skill_id", "skill_version_id", "skill_key", "skill_name", "skill_icon_key", "title", "scene", "version", "instructions", "opening_prompts", "theory_release_id", "safety_profile", "min_app_version", "source_metadata", "version_status", "library_status", "category_status", "skill_status", "generation_revision", "updated_at", "create_time"}
 }
 func (r *skillSessionRows) Close() error { return nil }
 func (r *skillSessionRows) Next(dest []driver.Value) error {
