@@ -72,6 +72,20 @@ func TestNewReturnsShutdownCapableHandler(t *testing.T) {
 	shutdowner.Shutdown()
 }
 
+func TestSkillLibraryRouteIsRegistered(t *testing.T) {
+	handler := New(config.Env{JWTSecret: "test-secret"}, nil)
+	shutdowner := handler.(interface{ Shutdown() })
+	defer shutdowner.Shutdown()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/app/skill-libraries", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected registered skill library route to require auth with 401, got %d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestMustSMSSenderSupportsSpugProvider(t *testing.T) {
 	sender := mustSMSSender(config.SMSConfig{
 		Provider:           "spug",
