@@ -38,6 +38,7 @@ var submissionTransitions = map[SubmissionStatus]map[SubmissionStatus]bool{
 	SubmissionSubmitting: {
 		SubmissionAccepted:       true,
 		SubmissionUnknownOutcome: true,
+		SubmissionCompleted:      true,
 		SubmissionReconciled:     true,
 		SubmissionFailed:         true,
 		SubmissionCancelled:      true,
@@ -439,6 +440,10 @@ func (s *SubmissionStore) Transition(
 	}
 	if err := validateSubmissionTransition(from, to); err != nil {
 		return Submission{}, err
+	}
+	if from == SubmissionSubmitting && to == SubmissionCompleted &&
+		(strings.TrimSpace(change.UpstreamTaskID) == "" || strings.TrimSpace(change.GenerationID) == "") {
+		return Submission{}, submissionValidationError("generation_link_required", "generationId", "本地视频生成完成时必须关联任务和生成记录。")
 	}
 	change, generationID, err := normalizeSubmissionTransition(to, change)
 	if err != nil {

@@ -626,18 +626,168 @@ func nonNilStoryboardShots(shots []StoryboardShot) []StoryboardShot {
 }
 
 func buildStoryboardMaterializationPlan(draft StoryboardVersion, diffContext StoryboardDiffContext, input ConfirmStoryboardInput) (StoryboardMaterializationPlan, error) {
-	if input.ExpectedRevision != draft.Revision {
-		return StoryboardMaterializationPlan{}, &WorkflowConflictError{Code: "workflow_revision_conflict", Message: "分镜草稿版本已变化", CurrentRevision: draft.Revision}
-	}
-	if err := validateStoryboardDiffDependencies(draft, diffContext); err != nil {
-		return StoryboardMaterializationPlan{}, err
-	}
 	diff, err := previewStoryboardDiff(draft, diffContext)
 	if err != nil {
 		return StoryboardMaterializationPlan{}, err
 	}
-	if strings.TrimSpace(input.DiffToken) == "" || input.DiffToken != diff.DiffToken {
+	if strings.TrimSpace(input.DiffToken) == "" || !constantTimeTextEqual(strings.TrimSpace(input.DiffToken), diff.DiffToken) {
 		return StoryboardMaterializationPlan{}, &WorkflowConflictError{Code: "workflow_diff_conflict", Message: "分镜差异已变化", CurrentRevision: draft.Revision}
 	}
-	return StoryboardMaterializationPlan{}, nil
+	if input.ExpectedRevision != draft.Revision {
+		return StoryboardMaterializationPlan{}, &WorkflowConflictError{Code: "workflow_revision_conflict", Message: "分镜草稿版本已变化", CurrentRevision: draft.Revision}
+	}
+
+	shots, err := normalizeStoryboardDraftShots(draft.Shots)
+	if err != nil {
+		return StoryboardMaterializationPlan{}, err
+	}
+	liveByKey := make(map[string]MaterializedStoryboardShot, len(diffContext.LiveShots))
+	for _, live := range diffContext.LiveShots {
+		liveByKey[strings.TrimSpace(live.Shot.SourceKey)] = live
+	}
+	assetsByKey := make(map[string]StoryboardResolvedAsset, len(diffContext.Assets))
+	for _, asset := range diffContext.Assets {
+		key := strings.TrimSpace(asset.Key)
+		if key != "" {
+			assetsByKey[key] = asset
+		}
+	}
+
+	plan := StoryboardMaterializationPlan{
+		Creates: []StoryboardShotMaterialization{}, Updates: []StoryboardShotMaterialization{},
+		Unchanged: []StoryboardShotMaterialization{}, Archives: []StoryboardShotMaterialization{},
+	}
+	seen := make(map[string]bool, len(shots))
+	for index, shot := range shots {
+		seen[shot.SourceKey] = true
+		materialized, err := materializeStoryboardShot(index, shot, diffContext, assetsByKey)
+		if err != nil {
+			return StoryboardMaterializationPlan{}, err
+		}
+		live, exists := liveByKey[shot.SourceKey]
+		if !exists {
+			plan.Creates = append(plan.Creates, materialized)
+			continue
+		}
+		materialized.ID = live.ID
+		materialized.SelectedGenerationID = live.SelectedGenerationID
+		materialized.SelectedGenerationAckHash = live.SelectedGenerationAckHash
+		materialized.GenerationCount = live.GenerationCount
+		normalizedLive, normalizeErr := normalizeSingleStoryboardShot(live.Shot)
+		if normalizeErr != nil {
+			return StoryboardMaterializationPlan{}, normalizeErr
+		}
+		if reflect.DeepEqual(normalizedLive, shot) {
+			plan.Unchanged = append(plan.Unchanged, materialized)
+		} else {
+			plan.Updates = append(plan.Updates, materialized)
+		}
+	}
+	for _, live := range diffContext.LiveShots {
+		if seen[strings.TrimSpace(live.Shot.SourceKey)] {
+			continue
+		}
+		plan.Archives = append(plan.Archives, StoryboardShotMaterialization{
+			ID: live.ID, Shot: live.Shot, StoryboardShot: live.Shot,
+			SelectedGenerationID:      live.SelectedGenerationID,
+			SelectedGenerationAckHash: live.SelectedGenerationAckHash,
+			GenerationCount:           live.GenerationCount,
+		})
+	}
+	return plan, nil
+}
+
+func materializeStoryboardShot(index int, shot StoryboardShot, diffContext StoryboardDiffContext, assetsByKey map[string]StoryboardResolvedAsset) (StoryboardShotMaterialization, error) {
+	if len(diffContext.Capabilities.SupportedDurations) > 0 && !storyboardContainsInt(diffContext.Capabilities.SupportedDurations, shot.Duration) {
+		return StoryboardShotMaterialization{}, storyboardValidation(index, "duration", "storyboard_duration_unsupported", "当前模型不支持该分镜时长")
+	}
+	if len(diffContext.Capabilities.TaskModes) > 0 && !storyboardContainsString(diffContext.Capabilities.TaskModes, shot.TaskMode) {
+		return StoryboardShotMaterialization{}, storyboardValidation(index, "taskMode", "storyboard_task_mode_unsupported", "当前模型不支持该分镜任务模式")
+	}
+	if len(diffContext.Capabilities.AspectRatios) > 0 && !storyboardContainsString(diffContext.Capabilities.AspectRatios, diffContext.Defaults.AspectRatio) {
+		return StoryboardShotMaterialization{}, storyboardValidation(index, "aspectRatio", "storyboard_aspect_ratio_unsupported", "当前模型不支持项目默认画幅")
+	}
+
+	materialized := StoryboardShotMaterialization{
+		Shot: shot, StoryboardShot: shot, CharacterIDs: []string{}, References: []MaterializedStoryboardReference{},
+		VideoModel: strings.TrimSpace(diffContext.Defaults.VideoModel), AspectRatio: strings.TrimSpace(diffContext.Defaults.AspectRatio),
+		VideoResolution: strings.TrimSpace(diffContext.Defaults.VideoResolution), AudioMode: strings.TrimSpace(diffContext.Defaults.AudioMode),
+	}
+	if shot.SceneKey != "" {
+		asset, ok := assetsByKey[shot.SceneKey]
+		if !ok || strings.TrimSpace(asset.Kind) != "scene" || strings.TrimSpace(asset.ID) == "" {
+			return StoryboardShotMaterialization{}, storyboardValidation(index, "sceneKey", "storyboard_asset_unresolved", "分镜引用的场景已经不存在")
+		}
+		materialized.SceneID = strings.TrimSpace(asset.ID)
+	}
+	for characterIndex, key := range shot.CharacterKeys {
+		asset, ok := assetsByKey[key]
+		if !ok || strings.TrimSpace(asset.Kind) != "character" || strings.TrimSpace(asset.ID) == "" {
+			return StoryboardShotMaterialization{}, storyboardIndexedValidation(index, "characterKeys", characterIndex, "storyboard_asset_unresolved", "分镜引用的角色已经不存在")
+		}
+		materialized.CharacterIDs = append(materialized.CharacterIDs, strings.TrimSpace(asset.ID))
+	}
+	for assetIndex, key := range shot.AssetKeys {
+		if _, ok := assetsByKey[key]; !ok {
+			return StoryboardShotMaterialization{}, storyboardIndexedValidation(index, "assetKeys", assetIndex, "storyboard_asset_unresolved", "分镜引用的资产已经不存在")
+		}
+	}
+	for referenceIndex, reference := range shot.References {
+		asset, ok := assetsByKey[reference.AssetKey]
+		if !ok {
+			return StoryboardShotMaterialization{}, storyboardIndexedValidation(index, "references", referenceIndex, "storyboard_asset_unresolved", "分镜引用的素材已经不存在")
+		}
+		if len(diffContext.Capabilities.ReferenceRoles) > 0 && !storyboardContainsString(diffContext.Capabilities.ReferenceRoles, reference.Role) {
+			return StoryboardShotMaterialization{}, storyboardIndexedValidation(index, "references", referenceIndex, "storyboard_reference_role_unsupported", "当前模型不支持该参考素材用途")
+		}
+		objectURL := strings.TrimSpace(asset.ObjectURL)
+		assetType := strings.ToLower(strings.TrimSpace(asset.Kind))
+		if objectURL == "" {
+			objectURL = strings.TrimSpace(asset.ImageURL)
+		}
+		switch assetType {
+		case "video", "audio", "image":
+		default:
+			assetType = "image"
+		}
+		if objectURL == "" {
+			return StoryboardShotMaterialization{}, storyboardIndexedValidation(index, "references", referenceIndex, "storyboard_asset_unresolved", "分镜引用的素材没有可用文件")
+		}
+		materialized.References = append(materialized.References, MaterializedStoryboardReference{
+			AssetKey: reference.AssetKey, AssetType: assetType, ObjectURL: objectURL,
+			Role: reference.Role, SortOrder: reference.SortOrder, UsageNote: reference.UsageNote,
+			SourceID: strings.TrimSpace(asset.ID), SourceType: strings.ToLower(strings.TrimSpace(asset.Kind)),
+		})
+	}
+	sort.SliceStable(materialized.References, func(left, right int) bool {
+		return materialized.References[left].SortOrder < materialized.References[right].SortOrder
+	})
+	return materialized, nil
+}
+
+func storyboardValidation(shotIndex int, field, code, message string) *WorkflowValidationError {
+	return &WorkflowValidationError{Code: code, Field: fmt.Sprintf("shots[%d].%s", shotIndex, field), Message: message, Fix: "请刷新资产和模型能力后重新预览分镜。"}
+}
+
+func storyboardIndexedValidation(shotIndex int, field string, itemIndex int, code, message string) *WorkflowValidationError {
+	return &WorkflowValidationError{Code: code, Field: fmt.Sprintf("shots[%d].%s[%d]", shotIndex, field, itemIndex), Message: message, Fix: "请刷新资产和模型能力后重新预览分镜。"}
+}
+
+func storyboardContainsString(values []string, target string) bool {
+	target = strings.TrimSpace(target)
+	for _, value := range values {
+		if strings.TrimSpace(value) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func storyboardContainsInt(values []int, target int) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

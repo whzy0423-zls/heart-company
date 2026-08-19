@@ -748,8 +748,35 @@ ALTER TABLE video_generation_submissions
   ADD COLUMN IF NOT EXISTS capability_version TEXT NOT NULL DEFAULT '',
   ADD COLUMN IF NOT EXISTS upstream_task_id TEXT NOT NULL DEFAULT '';
 
+-- 旧版工作流曾把中转站任务编号保存在 task_id；统一迁移到 upstream_task_id。
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+      FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = 'video_generation_submissions'
+       AND column_name = 'task_id'
+  ) THEN
+    EXECUTE $migration$
+      UPDATE video_generation_submissions
+         SET upstream_task_id = task_id
+       WHERE upstream_task_id = '' AND task_id <> ''
+    $migration$;
+  END IF;
+END $$;
+
+-- 旧表曾要求分镜不能为空并在删除分镜时级联删除提交记录；保留提交审计记录，统一为 SET NULL。
+ALTER TABLE video_generation_submissions
+  ALTER COLUMN shot_id DROP NOT NULL,
+  DROP CONSTRAINT IF EXISTS video_generation_submissions_shot_id_fkey;
+ALTER TABLE video_generation_submissions
+  ADD CONSTRAINT video_generation_submissions_shot_id_fkey
+  FOREIGN KEY (shot_id) REFERENCES video_shots(id) ON DELETE SET NULL;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_video_generation_submissions_request_key
   ON video_generation_submissions(request_key);
+DROP INDEX IF EXISTS idx_video_generation_submissions_active_shot;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_video_generation_submissions_active_shot
   ON video_generation_submissions(shot_id)
   WHERE shot_id IS NOT NULL AND status IN ('prepared','submitting','accepted','unknown_outcome');
@@ -787,24 +814,6 @@ CREATE TABLE IF NOT EXISTS video_compose_jobs (
 ALTER TABLE video_compose_jobs ADD COLUMN IF NOT EXISTS compose_input_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE video_compose_jobs ADD COLUMN IF NOT EXISTS compose_input_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE video_compose_jobs ADD COLUMN IF NOT EXISTS progress INT NOT NULL DEFAULT 0;
-
-CREATE TABLE IF NOT EXISTS video_generation_submissions (
-  id BIGSERIAL PRIMARY KEY,
-  request_key UUID NOT NULL UNIQUE,
-  shot_id BIGINT NOT NULL REFERENCES video_shots(id) ON DELETE CASCADE,
-  generation_id BIGINT REFERENCES video_generations(id) ON DELETE SET NULL,
-  task_id TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'prepared',
-  request_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
-  error_message TEXT NOT NULL DEFAULT '',
-  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
-  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK (status IN ('prepared','submitting','accepted','unknown_outcome','reconciled','completed','failed','cancelled'))
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_video_generation_submissions_active_shot
-ON video_generation_submissions(shot_id)
-WHERE status IN ('prepared','submitting','accepted','unknown_outcome','reconciled');
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_video_compose_jobs_active_project
 ON video_compose_jobs(project_id) WHERE status IN ('queued','processing');

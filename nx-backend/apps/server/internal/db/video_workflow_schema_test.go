@@ -27,9 +27,9 @@ func TestVideoWorkflowSchema(t *testing.T) {
 		"compose_input_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
 		"progress INT NOT NULL DEFAULT 0",
 		"CREATE TABLE IF NOT EXISTS video_generation_submissions",
-		"CREATE UNIQUE INDEX IF NOT EXISTS idx_video_generation_submissions_active_shot",
+		"CREATE UNIQUE INDEX IF NOT EXISTS uq_video_generation_submissions_active_shot",
 		"ON video_generation_submissions(shot_id)",
-		"WHERE status IN ('prepared','submitting','accepted','unknown_outcome','reconciled')",
+		"WHERE shot_id IS NOT NULL AND status IN ('prepared','submitting','accepted','unknown_outcome')",
 		"CREATE UNIQUE INDEX IF NOT EXISTS idx_video_compose_jobs_active_project",
 		"ON video_compose_jobs(project_id) WHERE status IN ('queued','processing')",
 		"ON video_shots(project_id, source_key) WHERE source_key <> ''",
@@ -42,19 +42,35 @@ func TestVideoWorkflowSchema(t *testing.T) {
 
 	submissionTable := schemaStatement(t, schema, "CREATE TABLE IF NOT EXISTS video_generation_submissions")
 	for _, fragment := range []string{
-		"request_key UUID NOT NULL UNIQUE",
-		"shot_id BIGINT NOT NULL REFERENCES video_shots(id) ON DELETE CASCADE",
-		"generation_id BIGINT REFERENCES video_generations(id) ON DELETE SET NULL",
-		"task_id TEXT NOT NULL DEFAULT ''",
-		"status TEXT NOT NULL DEFAULT 'prepared'",
-		"request_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
-		"error_message TEXT NOT NULL DEFAULT ''",
-		"create_time TIMESTAMPTZ NOT NULL DEFAULT now()",
-		"update_time TIMESTAMPTZ NOT NULL DEFAULT now()",
-		"CHECK (status IN ('prepared','submitting','accepted','unknown_outcome','reconciled','completed','failed','cancelled'))",
+		"request_key        UUID NOT NULL",
+		"project_id         BIGINT REFERENCES video_projects(id) ON DELETE SET NULL",
+		"shot_id            BIGINT REFERENCES video_shots(id) ON DELETE SET NULL",
+		"generation_id      BIGINT REFERENCES video_generations(id) ON DELETE SET NULL",
+		"upstream_task_id   TEXT NOT NULL DEFAULT ''",
+		"status             TEXT NOT NULL DEFAULT 'prepared'",
+		"request_snapshot   JSONB NOT NULL DEFAULT '{}'::jsonb",
+		"error_message      TEXT NOT NULL DEFAULT ''",
+		"create_time        TIMESTAMPTZ NOT NULL DEFAULT now()",
+		"update_time        TIMESTAMPTZ NOT NULL DEFAULT now()",
+		"CHECK (status IN ('prepared','submitting','accepted','unknown_outcome','completed','failed','cancelled','reconciled'))",
 	} {
 		if !strings.Contains(submissionTable, fragment) {
 			t.Errorf("submission table missing contract %q", fragment)
+		}
+	}
+	if count := strings.Count(schema, "CREATE TABLE IF NOT EXISTS video_generation_submissions"); count != 1 {
+		t.Errorf("video generation submissions must have one canonical table definition, got %d", count)
+	}
+	for _, fragment := range []string{
+		"column_name = 'task_id'",
+		"SET upstream_task_id = task_id",
+		"ALTER COLUMN shot_id DROP NOT NULL",
+		"DROP CONSTRAINT IF EXISTS video_generation_submissions_shot_id_fkey",
+		"FOREIGN KEY (shot_id) REFERENCES video_shots(id) ON DELETE SET NULL",
+		"DROP INDEX IF EXISTS idx_video_generation_submissions_active_shot",
+	} {
+		if !strings.Contains(schema, fragment) {
+			t.Errorf("schema missing legacy submission compatibility %q", fragment)
 		}
 	}
 
