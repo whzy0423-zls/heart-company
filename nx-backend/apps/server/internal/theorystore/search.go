@@ -102,6 +102,80 @@ func (s *Store) SearchActiveChunks(parent context.Context, query string, topK in
 	return documents, nil
 }
 
+// SearchReleaseChunks searches only the immutable chunk mapping of one
+// explicit release. It deliberately has no active-library fallback so callers
+// cannot cross a skill version's knowledge boundary.
+func (s *Store) SearchReleaseChunks(parent context.Context, releaseID int64, query string, topK int, minScore float64) ([]rag.Document, error) {
+	if err := s.available(); err != nil {
+		return nil, err
+	}
+	query = normalizeSearchText(query)
+	if releaseID <= 0 || query == "" || topK <= 0 {
+		return nil, nil
+	}
+	if topK > 20 {
+		topK = 20
+	}
+	if minScore < 0 {
+		minScore = 0
+	}
+	if minScore > 1 {
+		minScore = 1
+	}
+	ctx, cancel := storeContext(parent)
+	defer cancel()
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT chunk.id, chunk.title, chunk.content, chunk.keywords, chunk.tags
+		FROM theory_release_cards mapping
+		JOIN theory_library_releases release ON release.id = mapping.release_id
+		JOIN theory_chunks chunk ON chunk.id = mapping.chunk_id
+		WHERE mapping.release_id = $1
+		  AND release.status IN ('ready','active','retired')
+		  AND chunk.status = 'enabled'
+		ORDER BY chunk.id`, releaseID)
+	if err != nil {
+		return nil, fmt.Errorf("search theory release chunks: %w", err)
+	}
+	defer rows.Close()
+
+	matches := make([]scoredTheoryDocument, 0, topK)
+	for rows.Next() {
+		var id int64
+		var title, content string
+		var keywordsRaw, tagsRaw []byte
+		if err := rows.Scan(&id, &title, &content, &keywordsRaw, &tagsRaw); err != nil {
+			return nil, fmt.Errorf("search theory release chunks: scan: %w", err)
+		}
+		keywords := decodeStringList(keywordsRaw)
+		score := theoryLexicalScore(query, title, content, keywords)
+		if score < minScore {
+			continue
+		}
+		matches = append(matches, scoredTheoryDocument{document: rag.Document{
+			ID: fmt.Sprintf("theory:%d", id), Title: strings.TrimSpace(title),
+			Content: strings.TrimSpace(content), Tags: decodeStringList(tagsRaw),
+		}, score: score})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("search theory release chunks: rows: %w", err)
+	}
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].score == matches[j].score {
+			return matches[i].document.ID < matches[j].document.ID
+		}
+		return matches[i].score > matches[j].score
+	})
+	if len(matches) > topK {
+		matches = matches[:topK]
+	}
+	documents := make([]rag.Document, len(matches))
+	for i := range matches {
+		documents[i] = matches[i].document
+	}
+	return documents, nil
+}
+
 func theoryLexicalScore(query, title, content string, keywords []string) float64 {
 	query = normalizeSearchText(query)
 	if query == "" {

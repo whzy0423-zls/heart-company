@@ -2,6 +2,8 @@
 
 适配 Vben Admin 5.7.0 的最小 Go 服务端。
 
+技能库后端的目录、独立会话、SSE、语音和编译导入契约见 [docs/skill-library-backend.md](docs/skill-library-backend.md)。
+
 ## 接口
 
 - `POST /api/auth/login`

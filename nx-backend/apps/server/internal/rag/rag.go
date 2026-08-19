@@ -78,6 +78,7 @@ type AskInput struct {
 	UserPreferences     []string         `json:"userPreferences,omitempty"`
 	CurrentDirectives   []string         `json:"currentDirectives,omitempty"`
 	Tier                string           `json:"tier,omitempty"`
+	RuntimeInstructions string           `json:"-"`
 }
 
 type Answer struct {
@@ -115,6 +116,7 @@ type GenerateInput struct {
 	UserPreferences     []string         `json:"userPreferences,omitempty"`
 	CurrentDirectives   []string         `json:"currentDirectives,omitempty"`
 	Tier                string           `json:"tier,omitempty"`
+	RuntimeInstructions string           `json:"-"`
 }
 
 type Option func(*Service)
@@ -175,6 +177,7 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 				UserPreferences:     input.UserPreferences,
 				CurrentDirectives:   input.CurrentDirectives,
 				Tier:                input.Tier,
+				RuntimeInstructions: input.RuntimeInstructions,
 			})
 			if err == nil && strings.TrimSpace(generated) != "" {
 				return Answer{
@@ -228,6 +231,7 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 			UserPreferences:     input.UserPreferences,
 			CurrentDirectives:   input.CurrentDirectives,
 			Tier:                input.Tier,
+			RuntimeInstructions: input.RuntimeInstructions,
 		})
 		if err == nil && strings.TrimSpace(generated) != "" {
 			return Answer{Answer: strings.TrimSpace(generated), Sources: sources, Suggestions: suggestions}, nil
@@ -279,6 +283,7 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 				UserPreferences:     input.UserPreferences,
 				CurrentDirectives:   input.CurrentDirectives,
 				Tier:                input.Tier,
+				RuntimeInstructions: input.RuntimeInstructions,
 			}, trackedEmit)
 			if err != nil && streamStarted {
 				return Answer{}, err
@@ -338,6 +343,7 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 			UserPreferences:     input.UserPreferences,
 			CurrentDirectives:   input.CurrentDirectives,
 			Tier:                input.Tier,
+			RuntimeInstructions: input.RuntimeInstructions,
 		}, trackedEmit)
 		if err != nil && streamStarted {
 			return Answer{}, err

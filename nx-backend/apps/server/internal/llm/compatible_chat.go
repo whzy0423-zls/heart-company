@@ -65,14 +65,14 @@ func normalizeChatProvider(provider string) string {
 }
 
 func (g *CompatibleChatGenerator) Generate(ctx context.Context, input rag.GenerateInput) (string, error) {
-	return g.generateText(ctx, g.resolveSystemPrompt(), buildUserPrompt(input), chatTokenBudgetForTier(input.Question, input.Tier), 0.55)
+	return g.generateText(ctx, resolveRuntimeSystemPrompt(g.resolveSystemPrompt(), input), buildUserPrompt(input), chatTokenBudgetForTier(input.Question, input.Tier), 0.55)
 }
 
 func (g *CompatibleChatGenerator) GenerateStream(ctx context.Context, input rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
 	if err := g.validate(); err != nil {
 		return "", err
 	}
-	body := g.requestBody(g.resolveSystemPrompt(), buildUserPrompt(input), chatTokenBudgetForTier(input.Question, input.Tier), 0.55, true)
+	body := g.requestBody(resolveRuntimeSystemPrompt(g.resolveSystemPrompt(), input), buildUserPrompt(input), chatTokenBudgetForTier(input.Question, input.Tier), 0.55, true)
 	req, err := g.newRequest(ctx, body, true)
 	if err != nil {
 		return "", err
