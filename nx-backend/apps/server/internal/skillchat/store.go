@@ -15,7 +15,7 @@ import (
 const sessionSelect = `
 	SELECT session.id, session.app_user_id, skill.id, version.id, skill.key, skill.name,
 	       skill.icon_key, session.title, session.scene, version.version, version.instructions,
-	       version.theory_release_id, version.safety_profile, version.min_app_version, version.source_metadata, version.status,
+	       version.opening_prompts, version.theory_release_id, version.safety_profile, version.min_app_version, version.source_metadata, version.status,
 	       library.status, category.status, skill.status, session.generation_revision,
 	       session.updated_at, session.create_time
 	FROM app_chat_sessions session
@@ -39,16 +39,26 @@ type rowScanner interface{ Scan(...any) error }
 
 func scanSession(row rowScanner) (Session, error) {
 	var item Session
+	var openingPrompts []byte
 	var sourceMetadata []byte
 	var updatedAt, createTime time.Time
 	err := row.Scan(
 		&item.ID, &item.AppUserID, &item.SkillID, &item.SkillVersionID, &item.SkillKey, &item.SkillName,
 		&item.SkillIconKey, &item.Title, &item.Scene, &item.Version, &item.Instructions,
+		&openingPrompts,
 		&item.TheoryReleaseID, &item.SafetyProfile, &item.MinAppVersion, &sourceMetadata, &item.VersionStatus,
 		&item.LibraryStatus, &item.CategoryStatus, &item.SkillStatus, &item.GenerationRevision,
 		&updatedAt, &createTime,
 	)
 	item.UpdatedAt, item.CreateTime = formatTime(updatedAt), formatTime(createTime)
+	if len(openingPrompts) == 0 {
+		item.OpeningPrompts = []string{}
+	} else if err := json.Unmarshal(openingPrompts, &item.OpeningPrompts); err != nil {
+		return item, fmt.Errorf("scan skill session opening prompts: %w", err)
+	}
+	if item.OpeningPrompts == nil {
+		item.OpeningPrompts = []string{}
+	}
 	item.SourceMetadata = sanitizeSessionSourceMetadata(sourceMetadata)
 	return item, err
 }
