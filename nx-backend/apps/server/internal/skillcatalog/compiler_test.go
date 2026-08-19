@@ -1,10 +1,14 @@
 package skillcatalog
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -203,6 +207,110 @@ func TestSkillOpeningPromptsAreSkillSpecific(t *testing.T) {
 		}
 	}
 }
+
+func TestStagedPublishEnablesTheoryLibraryAndSelectsRelease(t *testing.T) {
+	database, recorder := openCatalogPublishTransitionDB(t)
+	tx, err := database.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := transitionCompiledVersion(context.Background(), tx, "publish", true, 11, 22, 33, "ready")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("ready version was not published")
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if !recorder.contains("UPDATE theory_libraries SET current_version=release.version,status='enabled'") {
+		t.Fatalf("staged publish did not restore theory library visibility: %v", recorder.snapshot())
+	}
+}
+
+const catalogPublishTransitionDriverName = "skill_catalog_publish_transition_test"
+
+var (
+	registerCatalogPublishTransitionDriver sync.Once
+	catalogPublishTransitionRecorder       = &catalogPublishRecorder{}
+)
+
+type catalogPublishRecorder struct {
+	mu      sync.Mutex
+	queries []string
+}
+
+func (r *catalogPublishRecorder) reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.queries = nil
+}
+
+func (r *catalogPublishRecorder) add(query string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.queries = append(r.queries, strings.Join(strings.Fields(query), " "))
+}
+
+func (r *catalogPublishRecorder) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.queries...)
+}
+
+func (r *catalogPublishRecorder) contains(fragment string) bool {
+	fragment = strings.Join(strings.Fields(fragment), " ")
+	for _, query := range r.snapshot() {
+		if strings.Contains(query, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+func openCatalogPublishTransitionDB(t *testing.T) (*sql.DB, *catalogPublishRecorder) {
+	t.Helper()
+	registerCatalogPublishTransitionDriver.Do(func() {
+		sql.Register(catalogPublishTransitionDriverName, catalogPublishTransitionDriver{})
+	})
+	catalogPublishTransitionRecorder.reset()
+	database, err := sql.Open(catalogPublishTransitionDriverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	return database, catalogPublishTransitionRecorder
+}
+
+type catalogPublishTransitionDriver struct{}
+
+func (catalogPublishTransitionDriver) Open(string) (driver.Conn, error) {
+	return catalogPublishTransitionConn{}, nil
+}
+
+type catalogPublishTransitionConn struct{}
+
+func (catalogPublishTransitionConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
+func (catalogPublishTransitionConn) Close() error                        { return nil }
+func (catalogPublishTransitionConn) Begin() (driver.Tx, error) {
+	return catalogPublishTransitionTx{}, nil
+}
+func (catalogPublishTransitionConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return catalogPublishTransitionTx{}, nil
+}
+func (catalogPublishTransitionConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+	catalogPublishTransitionRecorder.add(query)
+	return driver.RowsAffected(1), nil
+}
+
+type catalogPublishTransitionTx struct{}
+
+func (catalogPublishTransitionTx) Commit() error   { return nil }
+func (catalogPublishTransitionTx) Rollback() error { return nil }
+
+var _ driver.ConnBeginTx = catalogPublishTransitionConn{}
+var _ driver.ExecerContext = catalogPublishTransitionConn{}
 
 func writeSkillTestFile(t *testing.T, root, relative, content string) {
 	t.Helper()

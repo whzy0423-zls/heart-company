@@ -228,6 +228,9 @@ func transitionCompiledVersion(ctx context.Context, tx *sql.Tx, action string, p
 		if _, err := tx.ExecContext(ctx, `UPDATE theory_library_releases SET status='active',activated_at=COALESCE(activated_at,now()),update_time=now() WHERE id=$1`, releaseID); err != nil {
 			return false, err
 		}
+		if _, err := tx.ExecContext(ctx, `UPDATE theory_libraries SET current_version=release.version,status='enabled',update_time=now() FROM theory_library_releases release WHERE release.id=$1 AND theory_libraries.id=release.library_id`, releaseID); err != nil {
+			return false, err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE app_skill_versions SET status=$2,published_at=CASE WHEN $2='published' THEN COALESCE(published_at,now()) ELSE published_at END,update_time=now() WHERE id=$1`, versionID, target); err != nil {
 		return false, err
