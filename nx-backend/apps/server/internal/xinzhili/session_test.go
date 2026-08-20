@@ -147,6 +147,26 @@ func TestStreamSentenceChunkerPrioritizesPlayableFirstChunk(t *testing.T) {
 		}
 	})
 
+	t.Run("first chunk hard cap ignores a tiny early pause", func(t *testing.T) {
+		var chunker streamSentenceChunker
+		value := "好，" + strings.Repeat("甲", firstTTSChunkMaxRunes)
+		first := string([]rune(value)[:firstTTSChunkMaxRunes])
+		if got := chunker.Push(value); !slices.Equal(got, []string{first}) {
+			t.Fatalf("chunks=%q want one full playable chunk", got)
+		}
+		if got := chunker.Flush(); !slices.Equal(got, []string{"甲甲"}) {
+			t.Fatalf("flush=%q want remaining text", got)
+		}
+	})
+
+	t.Run("first chunk hard cap falls back to a natural playable pause", func(t *testing.T) {
+		var chunker streamSentenceChunker
+		prefix := strings.Repeat("甲", firstTTSChunkMinRunes-1) + "，"
+		if got := chunker.Push(prefix + strings.Repeat("乙", firstTTSChunkMaxRunes)); !slices.Equal(got, []string{prefix}) {
+			t.Fatalf("chunks=%q want natural pause %q", got, prefix)
+		}
+	})
+
 	t.Run("later chunks keep longer cap to reduce playback gaps", func(t *testing.T) {
 		var chunker streamSentenceChunker
 		first := strings.Repeat("甲", firstTTSChunkMinRunes) + "。"
@@ -217,6 +237,29 @@ func TestSessionGenerationNormalizesRealtimeChineseBeforeTTSAndPersistence(t *te
 	_, assistants, completed := fixture.store.contents()
 	if len(assistants) != 1 || assistants[0] != want || completed != want {
 		t.Fatalf("assistant=%q completed=%q want %q", assistants, completed, want)
+	}
+}
+
+func TestSessionGenerationAddsNaturalVoiceResponseDirective(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.generator.answer = "我在听，我们慢慢说。"
+	fixture.generator.deltas = []string{fixture.generator.answer}
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-natural-voice-directive")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "我最近有点累", Stable: true})
+	segment := fixture.sink.waitAudio(t)
+	if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-natural-voice-directive", SegmentSeq: segment.Seq}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.store.waitCompleted(t)
+
+	fixture.generator.mu.Lock()
+	directives := append([]string(nil), fixture.generator.input.CurrentDirectives...)
+	fixture.generator.mu.Unlock()
+	if !slices.Contains(directives, DefaultVoiceResponseDirective) {
+		t.Fatalf("current directives=%q want natural voice directive", directives)
 	}
 }
 

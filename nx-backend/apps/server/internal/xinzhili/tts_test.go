@@ -27,7 +27,9 @@ func TestSplitSentences(t *testing.T) {
 		{"中英文标点", " 你好，世界。 How are you? 我很好！ ", []string{"你好，世界。", "How are you?", "我很好！"}},
 		{"无标点硬切且不拆UTF8", strings.Repeat("你", maxTTSSentenceRunes+1), []string{strings.Repeat("你", maxTTSSentenceRunes), "你"}},
 		{"长中文不在旧四十二字位置硬切", strings.Repeat("甲", 50) + "收束。", []string{strings.Repeat("甲", 50) + "收束。"}},
-		{"超长优先弱标点", strings.Repeat("甲", 50) + "，" + strings.Repeat("乙", 30), []string{strings.Repeat("甲", 50) + "，", strings.Repeat("乙", 30)}},
+		{"完整语义段不在六十四字截断", strings.Repeat("甲", 50) + "，" + strings.Repeat("乙", 30), []string{strings.Repeat("甲", 50) + "，" + strings.Repeat("乙", 30)}},
+		{"超长优先弱标点", strings.Repeat("甲", 70) + "，" + strings.Repeat("乙", 40), []string{strings.Repeat("甲", 70) + "，", strings.Repeat("乙", 40)}},
+		{"超长不回退到过短停顿", "好，" + strings.Repeat("甲", maxTTSSentenceRunes), []string{"好，" + strings.Repeat("甲", maxTTSSentenceRunes-2), "甲甲"}},
 		{"小数域名缩写不误切", "版本3.14发布。Visit example.com now. U.S.A. test.", []string{"版本3.14发布。", "Visit example.com now.", "U.S.A. test."}},
 		{"引号跟随句末标点", "他说：“你好。”她答：“嗯……”", []string{"他说：“你好。”", "她答：“嗯……”"}},
 		{"英文引号和省略号", `He said "Hi..." Then left.`, []string{`He said "Hi..."`, "Then left."}},
@@ -133,12 +135,13 @@ func TestBailianQwenTTSUsesClonedVoicePayload(t *testing.T) {
 	defer server.Close()
 
 	cfg := TTSConfig{
-		Provider: TTSProviderBailian,
-		Endpoint: server.URL + "/api/v1",
-		APIKey:   "dashscope-key",
-		Model:    "qwen3-tts-vc-2026-01-22",
-		Voice:    "qwen-cloned-voice",
-		Format:   "mp3",
+		Provider:    TTSProviderBailian,
+		Endpoint:    server.URL + "/api/v1",
+		APIKey:      "dashscope-key",
+		Model:       "qwen3-tts-vc-2026-01-22",
+		Voice:       "qwen-cloned-voice",
+		Format:      "mp3",
+		Instruction: "这个字段不应发送给克隆音色模型",
 	}
 	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
 	if err != nil {
@@ -158,8 +161,97 @@ func TestBailianQwenTTSUsesClonedVoicePayload(t *testing.T) {
 	if _, exists := input["voice_setting"]; exists {
 		t.Fatalf("Qwen payload must not contain MiniMax voice_setting: %#v", input)
 	}
+	if _, exists := input["instructions"]; exists {
+		t.Fatalf("Qwen voice clone does not support instructions: %#v", input)
+	}
+	if _, exists := input["optimize_instructions"]; exists {
+		t.Fatalf("Qwen voice clone does not support optimize_instructions: %#v", input)
+	}
+	if _, exists := gotBody["parameters"]; exists {
+		t.Fatalf("Qwen voice clone does not support instruction parameters: %#v", gotBody)
+	}
 	if string(audio) != string(testMP3()) || mime != "audio/mpeg" {
 		t.Fatalf("audio/mime mismatch")
+	}
+}
+
+func TestBailianQwenInstructTTSUsesNaturalCompanionInstructions(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": map[string]any{"audio": hex.EncodeToString(testMP3())},
+		})
+	}))
+	defer server.Close()
+
+	cfg := TTSConfig{
+		Provider: TTSProviderBailian,
+		Endpoint: server.URL + "/api/v1",
+		APIKey:   "dashscope-key",
+		Model:    "qwen3-tts-instruct-flash",
+		Voice:    "Cherry",
+		Format:   "mp3",
+	}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := provider.Synthesize(context.Background(), cfg, "我们先慢慢说。"); err != nil {
+		t.Fatal(err)
+	}
+
+	input := gotBody["input"].(map[string]any)
+	if input["voice"] != cfg.Voice || input["language_type"] != "Chinese" {
+		t.Fatalf("input=%#v", input)
+	}
+	if input["instructions"] != DefaultCompanionTTSInstruction || input["optimize_instructions"] != true {
+		t.Fatalf("input=%#v", input)
+	}
+	if _, exists := input["instruction"]; exists {
+		t.Fatalf("Qwen instruct payload must use plural instructions: %#v", input)
+	}
+	if _, exists := gotBody["parameters"]; exists {
+		t.Fatalf("Qwen instruct payload fields belong in input: %#v", gotBody)
+	}
+}
+
+func TestBailianQwenInstructTTSPreservesExplicitInstructions(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": map[string]any{"audio": hex.EncodeToString(testMP3())},
+		})
+	}))
+	defer server.Close()
+
+	cfg := TTSConfig{
+		Provider:    TTSProviderBailian,
+		Endpoint:    server.URL + "/api/v1",
+		APIKey:      "dashscope-key",
+		Model:       "qwen3-tts-instruct-flash-2026-08-01",
+		Voice:       "Cherry",
+		Format:      "mp3",
+		Instruction: "用轻柔、放松的语气自然表达。",
+	}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := provider.Synthesize(context.Background(), cfg, "别着急，我们慢慢来。"); err != nil {
+		t.Fatal(err)
+	}
+
+	input := gotBody["input"].(map[string]any)
+	if input["instructions"] != cfg.Instruction || input["optimize_instructions"] != true {
+		t.Fatalf("input=%#v", input)
 	}
 }
 
@@ -199,6 +291,41 @@ func TestBailianQwenAudioTTSIncludesEmotionInstruction(t *testing.T) {
 	}
 	if input["text"] != "我听见你现在有些难过。\n我们慢慢说。" {
 		t.Fatalf("text=%q", input["text"])
+	}
+}
+
+func TestBailianQwenAudioTTSUsesDefaultCompanionInstruction(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": map[string]any{"audio": hex.EncodeToString(testMP3())},
+		})
+	}))
+	defer server.Close()
+
+	cfg := TTSConfig{
+		Provider: TTSProviderBailian,
+		Endpoint: server.URL + "/api/v1",
+		APIKey:   "dashscope-key",
+		Model:    "qwen-audio-3.0-tts-flash",
+		Voice:    "qwen-cloned-voice",
+		Format:   "mp3",
+	}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := provider.Synthesize(context.Background(), cfg, "我们先慢慢说。"); err != nil {
+		t.Fatal(err)
+	}
+
+	input := gotBody["input"].(map[string]any)
+	if input["instruction"] != DefaultCompanionTTSInstruction {
+		t.Fatalf("instruction=%q want=%q", input["instruction"], DefaultCompanionTTSInstruction)
 	}
 }
 

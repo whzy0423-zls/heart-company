@@ -25,7 +25,8 @@ import (
 )
 
 const (
-	maxTTSSentenceRunes = 64
+	maxTTSSentenceRunes = 96
+	minTTSPauseRunes    = 10
 	maxTTSSegmentBytes  = 1 << 20
 	maxTTSTurnBytes     = 10 << 20
 	defaultTTSWorkers   = 2
@@ -33,6 +34,8 @@ const (
 	ttsRetryDelay       = 120 * time.Millisecond
 	bailianTTSPath      = "/api/v1/services/aigc/multimodal-generation/generation"
 )
+
+const DefaultCompanionTTSInstruction = "像真实的陪伴者一样自然、亲切地说话，根据语义自动调整情绪、轻重和停顿，避免播音腔；除非原文明确要求，不要切换成外语。"
 
 var (
 	ErrTTSTimeout      = errors.New("TTS 短句合成超时")
@@ -217,11 +220,22 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 		}
 	} else if isBailianQwenVoiceCloneTTSModel(cfg.Model) {
 		input["voice"] = cfg.Voice
+	} else if isBailianQwenInstructTTSModel(cfg.Model) {
+		instruction := strings.TrimSpace(cfg.Instruction)
+		if instruction == "" {
+			instruction = DefaultCompanionTTSInstruction
+		}
+		input["voice"] = cfg.Voice
+		input["language_type"] = "Chinese"
+		input["instructions"] = instruction
+		input["optimize_instructions"] = true
 	} else if isBailianQwenAudioTTSModel(cfg.Model) {
 		input["voice"] = cfg.Voice
-		if instruction := strings.TrimSpace(cfg.Instruction); instruction != "" {
-			input["instruction"] = instruction
+		instruction := strings.TrimSpace(cfg.Instruction)
+		if instruction == "" {
+			instruction = DefaultCompanionTTSInstruction
 		}
+		input["instruction"] = instruction
 	} else {
 		return nil, "", errors.New("阿里百炼 TTS 模型不支持")
 	}
@@ -304,6 +318,10 @@ func isBailianHostedMiniMaxTTSModel(model string) bool {
 
 func isBailianQwenVoiceCloneTTSModel(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "qwen3-tts-vc-")
+}
+
+func isBailianQwenInstructTTSModel(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "qwen3-tts-instruct-")
 }
 
 func isBailianQwenAudioTTSModel(model string) bool {
@@ -572,7 +590,7 @@ func SplitSentences(text string) []string {
 			}
 		}
 		if cut == 0 && len(runes) > maxTTSSentenceRunes {
-			for i := limit - 1; i >= 0; i-- {
+			for i := limit - 1; i >= minTTSPauseRunes-1; i-- {
 				if isWeakSentenceEndAt(runes, i) {
 					cut = i + 1
 					break
