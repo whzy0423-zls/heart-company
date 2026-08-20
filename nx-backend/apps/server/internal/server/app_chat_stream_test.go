@@ -127,6 +127,79 @@ func TestAppChatStreamingProxyConfig(t *testing.T) {
 	}
 }
 
+func TestSkillChatStreamingProxyConfig(t *testing.T) {
+	repoRoot := appChatStreamTestRepoRoot(t)
+	configPaths := []string{
+		"website-react/nginx.conf",
+		"nx-backend/scripts/deploy/nginx.conf",
+	}
+	requiredDirectives := []string{
+		"proxy_pass http://backend;",
+		"proxy_http_version 1.1;",
+		`proxy_set_header Connection "";`,
+		"proxy_buffering off;",
+		"proxy_cache off;",
+		"gzip off;",
+		"proxy_connect_timeout 30s;",
+		"proxy_read_timeout 180s;",
+		"proxy_send_timeout 180s;",
+	}
+
+	for _, relativePath := range configPaths {
+		t.Run(relativePath, func(t *testing.T) {
+			body, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(relativePath)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			config := string(body)
+			focusedStart := strings.Index(config, "location ~ ^/api/app/skill-sessions/")
+			if focusedStart < 0 {
+				t.Fatalf("%s missing focused skill streaming location", relativePath)
+			}
+			genericStart := strings.Index(config, "location /api/")
+			if genericStart < 0 || focusedStart > genericStart {
+				t.Fatalf("%s skill streaming location must appear before generic /api/ location", relativePath)
+			}
+
+			block := appChatNginxLocationBlock(t, config[focusedStart:])
+			normalized := strings.Join(strings.Fields(block), " ")
+			for _, directive := range requiredDirectives {
+				if !strings.Contains(normalized, strings.Join(strings.Fields(directive), " ")) {
+					t.Errorf("%s skill location missing %q; block=%q", relativePath, directive, block)
+				}
+			}
+		})
+	}
+}
+
+func TestOuterStreamingProxyDeploymentTemplate(t *testing.T) {
+	repoRoot := appChatStreamTestRepoRoot(t)
+	body, err := os.ReadFile(filepath.Join(repoRoot, "DEPLOY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := string(body)
+	for _, path := range []string{
+		"/api/app/chat/",
+		"/api/app/skill-sessions/[^/]+/ask/stream",
+	} {
+		if !strings.Contains(config, path) {
+			t.Errorf("DEPLOY.md missing outer streaming route %q", path)
+		}
+	}
+	for _, directive := range []string{
+		"proxy_buffering off;",
+		"proxy_cache off;",
+		"gzip off;",
+		"proxy_read_timeout 180s;",
+		"proxy_send_timeout 180s;",
+	} {
+		if !strings.Contains(config, directive) {
+			t.Errorf("DEPLOY.md missing outer streaming directive %q", directive)
+		}
+	}
+}
+
 func appChatStreamTestRepoRoot(t *testing.T) string {
 	t.Helper()
 	_, filename, _, ok := runtime.Caller(0)

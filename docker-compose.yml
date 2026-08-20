@@ -31,6 +31,7 @@ services:
       context: .
       dockerfile: nx-backend/apps/server/Dockerfile
     restart: unless-stopped
+    stop_grace_period: 330s
     depends_on:
       db:
         condition: service_healthy
