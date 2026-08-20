@@ -747,6 +747,52 @@ func TestAppChatAskStreamFlushesConnectedBeforeSlowSummary(t *testing.T) {
 	}
 }
 
+func TestAppChatAskStreamOutlivesServerWriteTimeout(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	generator := &controlledAppChatStreamingGenerator{
+		generateStream: func(ctx context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+			select {
+			case <-time.After(80 * time.Millisecond):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			const answer = "延迟回答。"
+			if err := emit(answer); err != nil {
+				return "", err
+			}
+			return answer, nil
+		},
+	}
+	s := newAppChatStreamServer(store, generator)
+	s.chatTimeout = 300 * time.Millisecond
+	s.chatHeartbeatInterval = 200 * time.Millisecond
+	s.chatProviderIdleTimeout = 250 * time.Millisecond
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/app/chat/sessions/", func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), appContextKey{}, auth.UserInfo{ID: 7})
+		s.appChatRouter(w, r.WithContext(ctx))
+	})
+	httpServer := httptest.NewUnstartedServer(mux)
+	httpServer.Config.WriteTimeout = 30 * time.Millisecond
+	httpServer.Start()
+	defer httpServer.Close()
+
+	client := &http.Client{Timeout: time.Second}
+	response, err := client.Post(httpServer.URL+"/api/app/chat/sessions/42/ask/stream", "application/json", strings.NewReader(`{"question":"怎么做？"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(body), "event: done\n"); got != 1 {
+		t.Fatalf("done terminal count = %d, want 1; body=%q", got, body)
+	}
+}
+
 func TestAppChatAskStreamFlushesConnectedBeforePreferenceRead(t *testing.T) {
 	preferenceReadStarted := make(chan struct{})
 	releasePreferenceRead := make(chan struct{})
