@@ -1,6 +1,9 @@
 package voice
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSentenceChunkerFlushesNaturalPhrasesAndPreservesOrder(t *testing.T) {
 	c := NewSentenceChunker(20)
@@ -30,6 +33,26 @@ func TestSentenceChunkerUsesSafeLengthForLongUnpunctuatedText(t *testing.T) {
 		t.Fatalf("rest = %#v", rest)
 	}
 }
+
+func TestSentenceChunkerUsesRecentNaturalPauseAtLengthLimit(t *testing.T) {
+	c := NewSentenceChunker(24)
+	got := c.Push("我们先听你慢慢说完，再一起找到真正的问题和合适的做法")
+	if len(got) != 1 || got[0] != "我们先听你慢慢说完，" {
+		t.Fatalf("chunks = %#v", got)
+	}
+	if rest := c.Flush(); len(rest) != 1 || rest[0] != "再一起找到真正的问题和合适的做法" {
+		t.Fatalf("rest = %#v", rest)
+	}
+}
+
+func TestSentenceChunkerDoesNotCreateTinyChunkFromEarlyPause(t *testing.T) {
+	c := NewSentenceChunker(24)
+	got := c.Push("好，" + strings.Repeat("慢", 22))
+	if len(got) != 1 || got[0] != "好，"+strings.Repeat("慢", 22) {
+		t.Fatalf("chunks = %#v", got)
+	}
+}
+
 func TestSentenceChunkerBatchesTinySpeechFragmentsForSmootherTTS(t *testing.T) {
 	c := NewSentenceChunker(64)
 	if got := c.Push("嗯。"); len(got) != 0 {

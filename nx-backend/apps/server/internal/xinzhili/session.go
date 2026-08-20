@@ -897,7 +897,8 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 		documents = appendUniqueDocuments(documents, knowledgeDocs)
 		documents = appendUniqueDocuments(documents, theoryDocs)
 		sources := documentsToSources(documents)
-		directives := make([]string, 0, 2)
+		directives := make([]string, 0, 3)
+		directives = append(directives, DefaultVoiceResponseDirective)
 		if value := strings.TrimSpace(turn.input.CommonPrompt); value != "" {
 			directives = append(directives, value)
 		}
@@ -1292,9 +1293,11 @@ func isExplicitXinzhiliRealtimeEnglishRequest(transcript string) bool {
 
 const (
 	firstTTSChunkMinRunes  = 28
-	firstTTSChunkMaxRunes  = 56
+	firstTTSChunkMaxRunes  = 72
 	streamTTSChunkMaxRunes = maxTTSSentenceRunes
 )
+
+const DefaultVoiceResponseDirective = "这是语音对话：请使用自然、温柔、亲切的口语短句，根据完整语义使用中文标点安排轻重和停顿；避免播音腔、书面腔、编号罗列和过长句子，情绪表达要真实、克制。"
 
 type streamSentenceChunker struct {
 	buffer  []rune
@@ -1336,7 +1339,7 @@ func (c *streamSentenceChunker) take(flush bool) []string {
 			}
 		}
 		if cut == 0 && len(c.buffer) >= chunkLimit {
-			cut = safeTTSHardCut(c.buffer, limit)
+			cut = safeTTSHardCut(c.buffer, limit, minRunes)
 		}
 		if cut == 0 && flush {
 			cut = len(c.buffer)
@@ -1353,11 +1356,9 @@ func (c *streamSentenceChunker) take(flush bool) []string {
 	return chunks
 }
 
-func safeTTSHardCut(value []rune, limit int) int {
-	if limit >= len(value) {
-		return limit
-	}
-	for cut := limit; cut > 0; cut-- {
+func safeTTSHardCut(value []rune, limit, minimum int) int {
+	lastInternalCut := min(limit-1, len(value)-1)
+	for cut := lastInternalCut; cut >= minimum; cut-- {
 		if isSafeTTSBoundary(value, cut) {
 			return cut
 		}

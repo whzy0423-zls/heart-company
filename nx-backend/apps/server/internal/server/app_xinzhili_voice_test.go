@@ -24,6 +24,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
+	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
 
 func TestAppXinzhiliVoiceTurnRejectsOversizedRequestWithoutMultipartResidue(t *testing.T) {
@@ -336,6 +337,37 @@ func TestAppXinzhiliVoiceTurnStreamsTranscriptTextAudioAndPersists(t *testing.T)
 	}
 	if savedQuestion != "我最近总是着急" || savedAnswer != "先停一下。\n再感受身体。" {
 		t.Fatalf("saved pair = %q / %q", savedQuestion, savedAnswer)
+	}
+}
+
+func TestAppXinzhiliVoiceTurnAddsNaturalVoiceResponseDirective(t *testing.T) {
+	var captured rag.GenerateInput
+	s := newSuccessfulXinzhiliVoiceServer(t)
+	s.ragGen = xinzhiliStreamingGeneratorFunc(func(_ context.Context, input rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+		captured = input
+		if err := emit("我在听，我们慢慢说。"); err != nil {
+			return "", err
+		}
+		return "我在听，我们慢慢说。", nil
+	})
+
+	req := newXinzhiliMultipartRequest(t, []byte("wav"), 1300)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	res := httptest.NewRecorder()
+	s.appXinzhiliVoiceTurnStream(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("voice turn failed: %d %s", res.Code, res.Body.String())
+	}
+	found := false
+	for _, directive := range captured.CurrentDirectives {
+		if directive == xinzhili.DefaultVoiceResponseDirective {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("current directives=%q want natural voice directive", captured.CurrentDirectives)
 	}
 }
 

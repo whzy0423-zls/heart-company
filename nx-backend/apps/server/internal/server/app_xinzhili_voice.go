@@ -22,6 +22,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/rag"
 	"nine-xing/nx-backend/apps/server/internal/theorystore"
 	"nine-xing/nx-backend/apps/server/internal/voice"
+	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
 
 const (
@@ -167,6 +168,7 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"code": "context_failed", "message": "上下文读取失败，请重试"})
 		return
 	}
+	directives = append([]string{xinzhili.DefaultVoiceResponseDirective}, directives...)
 	if prompt := strings.TrimSpace(cfg.SystemPrompt); prompt != "" {
 		directives = append([]string{prompt}, directives...)
 	}
@@ -257,7 +259,7 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 		<-ttsWorkerDone
 	}()
 
-	chunker := voice.NewSentenceChunker(64)
+	chunker := voice.NewSentenceChunker(96)
 	nextSegment := 0
 	nextAudioIndex := 0
 	pendingAudio := make(map[int]xinzhiliTTSResult)
