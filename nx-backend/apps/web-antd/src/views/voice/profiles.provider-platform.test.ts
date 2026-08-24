@@ -482,7 +482,7 @@ describe('voice profile clone provider platform', () => {
     expect(source).not.toContain('v-model:value="form.provider"');
     expect(source).toContain('provider: form.provider');
     expect(source).toContain('阿里百炼 Qwen 声音复刻');
-    expect(source).toContain('qwen-audio-3.0-tts-flash');
+    expect(source).toContain('qwen3-tts-vc-2026-01-22');
     expect(source).not.toContain('请先在芯之力模型配置中保存百炼 API Key');
     expect(source).toContain('保存公共 Key → 上传 10～20 秒干声样本 → 克隆 → 芯之力选择');
   });

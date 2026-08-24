@@ -20,7 +20,7 @@ import (
 
 const (
 	defaultSharedBailianAPIBase    = "https://dashscope.aliyuncs.com"
-	defaultSharedBailianCloneModel = "qwen-audio-3.0-tts-flash"
+	defaultSharedBailianCloneModel = "qwen3-tts-vc-2026-01-22"
 
 	bailianCredentialSourceShared    = "shared"
 	bailianCredentialSourceLegacyTTS = "legacy-tts"
