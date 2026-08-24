@@ -345,7 +345,7 @@ func TestBailianCredentialsPUTSavesAndClearsSharedKeyWithCAS(t *testing.T) {
 	if err != nil || !found || stored != (bailianconfig.Config{Version: 1, APIKey: "sk-created-EFGH"}) {
 		t.Fatalf("stored=%#v found=%v err=%v", stored, found, err)
 	}
-	if configured.APIBase != defaultSharedBailianAPIBase || configured.APIKey != stored.APIKey || configured.TargetModel != defaultSharedBailianCloneModel {
+	if configured.APIBase != defaultSharedBailianAPIBase || configured.APIKey != stored.APIKey || configured.TargetModel != "qwen3-tts-vc-2026-01-22" {
 		t.Fatalf("configured=%#v", configured)
 	}
 

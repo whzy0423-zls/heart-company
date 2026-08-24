@@ -27,7 +27,7 @@ const (
 
 	defaultBailianAPIBase     = "https://dashscope.aliyuncs.com"
 	defaultBailianEnrollModel = "qwen-voice-enrollment"
-	defaultBailianTargetModel = "qwen-audio-3.0-tts-flash"
+	defaultBailianTargetModel = "qwen3-tts-vc-2026-01-22"
 	bailianCustomizationPath  = "/api/v1/services/audio/tts/customization"
 	bailianGenerationPath     = "/api/v1/services/aigc/multimodal-generation/generation"
 )
