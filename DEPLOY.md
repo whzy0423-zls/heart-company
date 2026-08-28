@@ -74,6 +74,9 @@ export MINIMAX_API_BASE="https://api.minimaxi.com"
 # 将证书放到宿主机 ./certs/wxpay/，compose 会只读挂载到 /run/secrets/wxpay/
 # export WXPAY_PRIVATE_KEY_PATH="/run/secrets/wxpay/apiclient_key.pem"
 # export WXPAY_PLATFORM_CERT_PATH="/run/secrets/wxpay/wechatpay_platform.pem"
+# 新版公钥模式可改用以下两项（配置后优先于平台证书）：
+# export WXPAY_PUBLIC_KEY_PATH="/run/secrets/wxpay/pub_key.pem"
+# export WXPAY_PUBLIC_KEY_ID="PUB_KEY_ID_..."
 # export WXPAY_NOTIFY_URL="https://api.example.com/api/pay/notify"
 # export JPUSH_APP_KEY="..."
 # export JPUSH_MASTER_SECRET="..."

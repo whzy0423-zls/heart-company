@@ -124,6 +124,8 @@ type WxPayConfig struct {
 	SerialNo         string // 商户证书序列号
 	PrivateKeyPath   string // 商户私钥 apiclient_key.pem 路径
 	PlatformCertPath string // 微信支付平台证书 PEM 路径（回调验签用）
+	PublicKeyPath    string // 微信支付公钥 PEM 路径（新版公钥模式回调验签用）
+	PublicKeyID      string // 微信支付公钥 ID（Wechatpay-Serial）
 	NotifyURL        string // 支付回调地址（公网 HTTPS）
 	ReportPriceCents int    // 深度报告单价（分）
 	Dev              bool   // true 时走模拟支付；生产环境禁止开启
@@ -344,6 +346,8 @@ func Load() Env {
 		SerialNo:         getenv("WXPAY_SERIAL_NO", ""),
 		PrivateKeyPath:   getenv("WXPAY_PRIVATE_KEY_PATH", ""),
 		PlatformCertPath: getenv("WXPAY_PLATFORM_CERT_PATH", ""),
+		PublicKeyPath:    getenv("WXPAY_PUBLIC_KEY_PATH", ""),
+		PublicKeyID:      getenv("WXPAY_PUBLIC_KEY_ID", ""),
 		NotifyURL:        getenv("WXPAY_NOTIFY_URL", ""),
 		ReportPriceCents: reportPrice,
 	}

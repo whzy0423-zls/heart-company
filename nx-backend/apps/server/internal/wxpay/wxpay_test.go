@@ -2,14 +2,86 @@ package wxpay
 
 import (
 	"context"
+	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestNewClientSupportsWechatPayPublicKeyVerification(t *testing.T) {
+	merchantKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wechatPayKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	privateKeyPath := filepath.Join(dir, "apiclient_key.pem")
+	publicKeyPath := filepath.Join(dir, "pub_key.pem")
+	privateDER, err := x509.MarshalPKCS8PrivateKey(merchantKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestPEM(t, privateKeyPath, "PRIVATE KEY", privateDER)
+	publicDER, err := x509.MarshalPKIXPublicKey(&wechatPayKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestPEM(t, publicKeyPath, "PUBLIC KEY", publicDER)
+
+	client, err := NewClient(Config{
+		MchID: "merchant", AppID: "wx-app", APIv3Key: strings.Repeat("k", 32), SerialNo: "merchant-serial",
+		PrivateKeyPath: privateKeyPath, PublicKeyPath: publicKeyPath, PublicKeyID: "PUB_KEY_ID_123", NotifyURL: "https://example.com/notify",
+	})
+	if err != nil {
+		t.Fatalf("expected public-key mode to initialize: %v", err)
+	}
+
+	now := time.Now().Truncate(time.Second)
+	body := []byte(`{"id":"notification"}`)
+	timestamp := strconv.FormatInt(now.Unix(), 10)
+	nonce := "nonce"
+	digest := sha256.Sum256([]byte(fmt.Sprintf("%s\n%s\n%s\n", timestamp, nonce, body)))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, wechatPayKey, crypto.SHA256, digest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := http.Header{
+		"Wechatpay-Timestamp": []string{timestamp},
+		"Wechatpay-Nonce":     []string{nonce},
+		"Wechatpay-Signature": []string{base64.StdEncoding.EncodeToString(signature)},
+		"Wechatpay-Serial":    []string{"PUB_KEY_ID_123"},
+	}
+	if err := client.verifyCallbackSignature(headers, body, now); err != nil {
+		t.Fatalf("expected valid public-key signature: %v", err)
+	}
+	headers.Set("Wechatpay-Serial", "PUB_KEY_ID_OTHER")
+	if err := client.verifyCallbackSignature(headers, body, now); err == nil {
+		t.Fatal("expected mismatched Wechatpay-Serial to be rejected")
+	}
+}
+
+func writeTestPEM(t *testing.T, path, blockType string, der []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: blockType, Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestCloseOrderDevModeValidatesMerchantOrderNumber(t *testing.T) {
 	client, err := NewClient(Config{Dev: true})

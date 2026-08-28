@@ -36,6 +36,8 @@ func mustWxPayClient(env config.Env) *wxpay.Client {
 		SerialNo:         env.WxPay.SerialNo,
 		PrivateKeyPath:   env.WxPay.PrivateKeyPath,
 		PlatformCertPath: env.WxPay.PlatformCertPath,
+		PublicKeyPath:    env.WxPay.PublicKeyPath,
+		PublicKeyID:      env.WxPay.PublicKeyID,
 		NotifyURL:        env.WxPay.NotifyURL,
 		Dev:              wxpayDev,
 	})
@@ -51,8 +53,13 @@ func wxPayConfigComplete(cfg config.WxPayConfig) bool {
 		strings.TrimSpace(cfg.APIv3Key) != "" &&
 		strings.TrimSpace(cfg.SerialNo) != "" &&
 		strings.TrimSpace(cfg.PrivateKeyPath) != "" &&
-		strings.TrimSpace(cfg.PlatformCertPath) != "" &&
+		wxPayVerificationConfigComplete(cfg) &&
 		strings.TrimSpace(cfg.NotifyURL) != ""
+}
+
+func wxPayVerificationConfigComplete(cfg config.WxPayConfig) bool {
+	return strings.TrimSpace(cfg.PlatformCertPath) != "" ||
+		(strings.TrimSpace(cfg.PublicKeyPath) != "" && strings.TrimSpace(cfg.PublicKeyID) != "")
 }
 
 type paymentOrderSnapshot struct {

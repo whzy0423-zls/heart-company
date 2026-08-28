@@ -23,17 +23,20 @@ type Config struct {
 	SerialNo         string
 	PrivateKeyPath   string
 	PlatformCertPath string
+	PublicKeyPath    string
+	PublicKeyID      string
 	NotifyURL        string
 	Dev              bool
 }
 
 type Client struct {
-	cfg          Config
-	privateKey   *rsa.PrivateKey
-	platformCert *x509.Certificate
-	http         *http.Client
-	devMode      bool
-	baseURL      string
+	cfg           Config
+	privateKey    *rsa.PrivateKey
+	callbackKey   *rsa.PublicKey
+	callbackKeyID string
+	http          *http.Client
+	devMode       bool
+	baseURL       string
 }
 
 // PrepayResult 下单结果 + 小程序 wx.requestPayment 所需参数。
@@ -69,19 +72,29 @@ func NewClient(cfg Config) (*Client, error) {
 	if devMode {
 		return c, nil
 	}
-	if cfg.MchID == "" || cfg.AppID == "" || cfg.APIv3Key == "" || cfg.PrivateKeyPath == "" || cfg.PlatformCertPath == "" || cfg.SerialNo == "" || cfg.NotifyURL == "" {
+	publicKeyConfigured := cfg.PublicKeyPath != "" && cfg.PublicKeyID != ""
+	if cfg.MchID == "" || cfg.AppID == "" || cfg.APIv3Key == "" || cfg.PrivateKeyPath == "" || (!publicKeyConfigured && cfg.PlatformCertPath == "") || cfg.SerialNo == "" || cfg.NotifyURL == "" {
 		return nil, errors.New("wxpay production config is incomplete")
 	}
 	key, err := loadPrivateKey(cfg.PrivateKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("load wxpay private key: %w", err)
 	}
-	cert, err := loadCertificate(cfg.PlatformCertPath)
-	if err != nil {
-		return nil, fmt.Errorf("load wxpay platform cert: %w", err)
+	if publicKeyConfigured {
+		publicKey, err := loadPublicKey(cfg.PublicKeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("load wxpay public key: %w", err)
+		}
+		c.callbackKey = publicKey
+		c.callbackKeyID = cfg.PublicKeyID
+	} else {
+		cert, err := loadCertificate(cfg.PlatformCertPath)
+		if err != nil {
+			return nil, fmt.Errorf("load wxpay platform cert: %w", err)
+		}
+		c.callbackKey, _ = cert.PublicKey.(*rsa.PublicKey)
 	}
 	c.privateKey = key
-	c.platformCert = cert
 	return c, nil
 }
 
@@ -129,4 +142,24 @@ func loadCertificate(path string) (*x509.Certificate, error) {
 		return nil, errors.New("platform cert public key is not RSA")
 	}
 	return cert, nil
+}
+
+func loadPublicKey(path string) (*rsa.PublicKey, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		return nil, errors.New("invalid PEM in public key file")
+	}
+	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	publicKey, ok := parsed.(*rsa.PublicKey)
+	if !ok {
+		return nil, errors.New("wxpay public key is not RSA")
+	}
+	return publicKey, nil
 }
