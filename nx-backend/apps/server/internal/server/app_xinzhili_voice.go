@@ -32,6 +32,39 @@ const (
 	xinzhiliTTSWorkerCount  = 2
 )
 
+// normalizeXinzhiliVoiceTranscript keeps common ASR variants of "九型" stable
+// before the transcript is displayed, searched, sent to the model, or stored.
+func normalizeXinzhiliVoiceTranscript(transcript string) string {
+	transcript = strings.TrimSpace(transcript)
+	for _, replacement := range []struct {
+		from string
+		to   string
+	}{
+		{from: "九形", to: "九型"},
+		{from: "九星", to: "九型"},
+		{from: "九行", to: "九型"},
+		{from: "九刑", to: "九型"},
+		{from: "久行", to: "九型"},
+		{from: "酒行", to: "九型"},
+	} {
+		transcript = strings.ReplaceAll(transcript, replacement.from, replacement.to)
+	}
+
+	// "就行" is a common phrase, so only normalize it when the surrounding
+	// words indicate a 九型 request.
+	for _, contextWord := range []string{"人格", "测试", "性格", "课程", "老师", "中心", "芯之力"} {
+		if strings.Contains(transcript, "就行"+contextWord) {
+			transcript = strings.ReplaceAll(transcript, "就行"+contextWord, "九型"+contextWord)
+		}
+	}
+	for _, questionPattern := range []string{
+		"什么是就行", "就行是什么", "了解就行", "关于就行", "学习就行", "讲讲就行", "问问就行",
+	} {
+		transcript = strings.ReplaceAll(transcript, questionPattern, strings.ReplaceAll(questionPattern, "就行", "九型"))
+	}
+	return transcript
+}
+
 type appXinzhiliSceneStore interface {
 	GetOrCreateSceneSession(ctx context.Context, appUserID, cardID int64, scene string) (chat.Session, error)
 }
@@ -140,7 +173,7 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"code": "asr_failed", "message": "语音识别失败，请再试一次"})
 		return
 	}
-	transcript = strings.TrimSpace(transcript)
+	transcript = normalizeXinzhiliVoiceTranscript(transcript)
 	if !hasVoiceTranscriptContent(transcript) {
 		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"code": "speech_not_understood", "message": "我没有听清你说了什么，请靠近手机再说一次。"})
 		return
