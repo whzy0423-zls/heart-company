@@ -615,6 +615,26 @@ func TestShouldNormalizeXinzhiliVoiceOutputToChinese(t *testing.T) {
 	}
 }
 
+func TestNormalizeXinzhiliVoiceTranscriptLocksNineTypeHomophones(t *testing.T) {
+	tests := []struct {
+		transcript string
+		want       string
+	}{
+		{transcript: "什么是九型人格", want: "什么是九型人格"},
+		{transcript: "什么是九形人格", want: "什么是九型人格"},
+		{transcript: "什么是九星人格", want: "什么是九型人格"},
+		{transcript: "我想了解就行人格", want: "我想了解九型人格"},
+		{transcript: "什么是就行", want: "什么是九型"},
+		{transcript: "九行测试怎么做", want: "九型测试怎么做"},
+		{transcript: "这样就行了", want: "这样就行了"},
+	}
+	for _, tt := range tests {
+		if got := normalizeXinzhiliVoiceTranscript(tt.transcript); got != tt.want {
+			t.Fatalf("normalizeXinzhiliVoiceTranscript(%q) = %q, want %q", tt.transcript, got, tt.want)
+		}
+	}
+}
+
 func TestAppXinzhiliVoiceTurnSynthesizesParallelTTSAndStreamsAudioInOrder(t *testing.T) {
 	firstChunk := "第一段需要稳定输出。"
 	secondChunk := "第二段也要稳定输出。"
