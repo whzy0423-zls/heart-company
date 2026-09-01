@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Page } from '@vben/common-ui';
 import { Alert, Button, Card, Descriptions, Form, Input, Select, Tag, message } from 'ant-design-vue';
-import { reactive, ref } from 'vue';
+import { onMounted, reactive, ref } from 'vue';
 
 import { requestClient } from '#/api/request';
 
@@ -15,6 +15,39 @@ const channels = [
 const form = reactive({ outTradeNo: `XZN${Date.now()}`, totalAmount: '0.01', subject: '星之柠测试订单', paytypeCode: 'wxpay' });
 const result = ref('');
 const loading = ref(false);
+const configLoading = ref(false);
+const configured = ref(false);
+const paymentConfig = reactive({
+  baseURL: apiBase,
+  channelID: '',
+  notifyURL: '',
+  pid: '',
+  returnURL: '',
+  secret: '',
+  signType: 'MD5',
+});
+
+async function loadConfig() {
+  const data = await requestClient.get<Record<string, any>>('/admin/xzn-pay/config');
+  Object.assign(paymentConfig, data, { secret: '' });
+  configured.value = Boolean(data.configured);
+}
+
+async function saveConfig() {
+  configLoading.value = true;
+  try {
+    await requestClient.put('/admin/xzn-pay/config', paymentConfig);
+    configured.value = true;
+    paymentConfig.secret = '';
+    message.success('商户配置已保存');
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '保存失败');
+  } finally {
+    configLoading.value = false;
+  }
+}
+
+onMounted(loadConfig);
 async function createOrder() {
   loading.value = true;
   try {
@@ -32,7 +65,20 @@ async function createOrder() {
 <template>
   <Page description="统一管理星之柠聚合支付的接入准备信息" title="星之柠支付">
     <div class="page-content">
-      <Alert message="当前仅完成接入工作台，真实商户密钥需由后端安全配置接口保存。" show-icon type="info" />
+      <Alert :message="configured ? '星之柠商户配置已保存，可以发起测试订单。' : '请先填写并保存星之柠商户配置，再发起测试订单。'" show-icon :type="configured ? 'success' : 'warning'" />
+      <Card :bordered="false" class="section-card" title="商户配置">
+        <Form class="config-form" layout="vertical">
+          <div class="config-grid">
+            <Form.Item label="商户号 PID" required><Input v-model:value="paymentConfig.pid" placeholder="2088 开头的商户号" /></Form.Item>
+            <Form.Item label="商户密钥" required><Input.Password v-model:value="paymentConfig.secret" :placeholder="configured ? '已配置，留空表示不修改' : '请输入商户密钥'" /></Form.Item>
+            <Form.Item label="签名方式"><Select v-model:value="paymentConfig.signType" :options="[{label:'MD5',value:'MD5'},{label:'RSA',value:'RSA'}]" /></Form.Item>
+            <Form.Item label="网关 ID"><Input v-model:value="paymentConfig.channelID" placeholder="可选，星之柠后台查看" /></Form.Item>
+            <Form.Item label="异步回调地址"><Input v-model:value="paymentConfig.notifyURL" placeholder="https://.../api/xzn-pay/notify" /></Form.Item>
+            <Form.Item label="同步返回地址"><Input v-model:value="paymentConfig.returnURL" placeholder="https://.../payment/result" /></Form.Item>
+          </div>
+          <Button type="primary" :loading="configLoading" @click="saveConfig">保存商户配置</Button>
+        </Form>
+      </Card>
       <Card :bordered="false" class="section-card" title="通道状态">
         <div class="channel-grid">
           <Card v-for="channel in channels" :key="channel.name" size="small">
@@ -77,9 +123,12 @@ async function createOrder() {
 .channel-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .channel-detail { color: #667085; font-size: 13px; margin-top: 8px; }
 .form-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+.config-form :deep(.ant-form-item) { margin-bottom: 16px; }
 .order-form :deep(.ant-form-item) { margin-bottom: 16px; }
 .tool-description { margin: 0 0 12px; }
 .result { background: #f6f8fa; padding: 12px; margin-top: 16px; white-space: pre-wrap; }
 @media (max-width: 900px) { .channel-grid { grid-template-columns: 1fr; } }
 @media (max-width: 900px) { .form-grid { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .config-grid { grid-template-columns: 1fr; } }
 </style>
