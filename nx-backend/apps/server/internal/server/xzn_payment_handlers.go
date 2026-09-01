@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -60,6 +61,11 @@ func (s *Server) xznPayConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if input.PID == "" || input.Secret == "" {
 			httpx.Fail(w, http.StatusBadRequest, "商户号和商户密钥不能为空")
+			return
+		}
+		notifyURL, err := url.ParseRequestURI(strings.TrimSpace(input.NotifyURL))
+		if err != nil || notifyURL.Scheme != "https" || notifyURL.Host == "" {
+			httpx.Fail(w, http.StatusBadRequest, "异步回调地址必须是公网 HTTPS 地址")
 			return
 		}
 		encrypted, err := encryptXZNSecret(input.Secret, s.env.JWTSecret)
@@ -115,6 +121,26 @@ func (s *Server) xznPayCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.OK(w, out)
+}
+
+func (s *Server) xznPayNotify(w http.ResponseWriter, r *http.Request) {
+	cfg, err := s.loadXZNConfig(r.Context())
+	if err != nil || cfg.Secret == "" {
+		http.Error(w, "fail", http.StatusServiceUnavailable)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "fail", http.StatusBadRequest)
+		return
+	}
+	if !strings.EqualFold(r.Form.Get("sign_type"), "MD5") || !xznpay.VerifyMD5(r.Form, cfg.Secret, r.Form.Get("sign")) {
+		http.Error(w, "fail", http.StatusUnauthorized)
+		return
+	}
+	log.Printf("[XZNPAY] callback trade_no=%s out_trade_no=%s status=%s", r.Form.Get("trade_no"), r.Form.Get("out_trade_no"), r.Form.Get("trade_status"))
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("success"))
 }
 
 func (s *Server) loadXZNConfig(ctx context.Context) (xznPaymentConfig, error) {
