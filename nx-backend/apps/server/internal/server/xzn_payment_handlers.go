@@ -54,6 +54,10 @@ func (s *Server) xznPayConfig(w http.ResponseWriter, r *http.Request) {
 		if input.SignType == "" {
 			input.SignType = "MD5"
 		}
+		if input.SignType != "MD5" && input.SignType != "RSA" && input.SignType != "MD5+RSA" {
+			httpx.Fail(w, http.StatusBadRequest, "签名方式必须是 MD5、RSA 或 MD5+RSA")
+			return
+		}
 		if input.PID == "" || input.Secret == "" {
 			httpx.Fail(w, http.StatusBadRequest, "商户号和商户密钥不能为空")
 			return
@@ -123,7 +127,12 @@ func (s *Server) newXZNClient(ctx context.Context) (*xznpay.Client, xznPaymentCo
 	if err != nil || cfg.PID == "" || cfg.Secret == "" {
 		return nil, cfg, errors.New("not configured")
 	}
-	return xznpay.New(xznpay.Config{BaseURL: cfg.BaseURL, PID: cfg.PID, Key: cfg.Secret, SignType: cfg.SignType}), cfg, nil
+	requestSignType := cfg.SignType
+	if requestSignType == "MD5+RSA" {
+		// MD5+RSA 是商户后台的允许策略，API 单次请求仍须选择其中一种。
+		requestSignType = "MD5"
+	}
+	return xznpay.New(xznpay.Config{BaseURL: cfg.BaseURL, PID: cfg.PID, Key: cfg.Secret, SignType: requestSignType}), cfg, nil
 }
 
 func encryptXZNSecret(value, key string) (string, error) {

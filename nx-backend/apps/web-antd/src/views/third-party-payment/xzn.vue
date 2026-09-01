@@ -71,7 +71,7 @@ async function createOrder() {
           <div class="config-grid">
             <Form.Item label="商户号 PID" required><Input v-model:value="paymentConfig.pid" placeholder="2088 开头的商户号" /></Form.Item>
             <Form.Item label="商户密钥" required><Input.Password v-model:value="paymentConfig.secret" :placeholder="configured ? '已配置，留空表示不修改' : '请输入商户密钥'" /></Form.Item>
-            <Form.Item label="签名方式"><Select v-model:value="paymentConfig.signType" :options="[{label:'MD5',value:'MD5'},{label:'RSA',value:'RSA'}]" /></Form.Item>
+            <Form.Item label="商户签名模式" extra="选择 MD5+RSA 时，测试请求默认使用 MD5 签名。"><Select v-model:value="paymentConfig.signType" :options="[{label:'MD5',value:'MD5'},{label:'RSA',value:'RSA'},{label:'MD5+RSA（推荐）',value:'MD5+RSA'}]" /></Form.Item>
             <Form.Item label="网关 ID"><Input v-model:value="paymentConfig.channelID" placeholder="可选，星之柠后台查看" /></Form.Item>
             <Form.Item label="异步回调地址"><Input v-model:value="paymentConfig.notifyURL" placeholder="https://.../api/xzn-pay/notify" /></Form.Item>
             <Form.Item label="同步返回地址"><Input v-model:value="paymentConfig.returnURL" placeholder="https://.../payment/result" /></Form.Item>
