@@ -208,6 +208,8 @@ var defaultMenus = []seedMenu{
 	{ID: 1101, PID: 1100, Name: "ModelPairing", Path: "/settings/model", Component: "/settings/model", AuthCode: "System:Model:Config", Type: "menu", Sort: 1, Icon: "lucide:plug-zap", Title: "模型配对"},
 	{ID: 1102, PID: 1100, Name: "AdminModelConfig", Path: "/settings/admin-model", Component: "/settings/model", AuthCode: "System:Model:Config", Type: "menu", Sort: 2, Icon: "lucide:bot", Title: "管理端大模型配置"},
 	{ID: 1103, PID: 1100, Name: "XinzhiliModelConfig", Path: "/settings/xinzhili-model", Component: "/settings/xinzhili-model", AuthCode: "System:XinzhiliModel:Config", Type: "menu", Sort: 3, Icon: "lucide:audio-waveform", Title: "芯之力模型配置"},
+	{ID: 1500, PID: 0, Name: "ThirdPartyPayment", Path: "/third-party-payment", Type: "catalog", Sort: 22, Icon: "lucide:wallet-cards", Title: "第三方支付"},
+	{ID: 1501, PID: 1500, Name: "XznPayment", Path: "/third-party-payment/xzn", Component: "/third-party-payment/xzn", AuthCode: "System:Payment:Config", Type: "menu", Sort: 1, Icon: "lucide:credit-card", Title: "星之柠"},
 	{ID: 400, PID: 0, Name: "SystemManage", Path: "/system", Type: "catalog", Sort: 20, Icon: "lucide:shield-check", Title: "系统管理"},
 	{ID: 401, PID: 400, Name: "SystemUser", Path: "/system/user", Component: "/system/user/list", AuthCode: "System:User:List", Type: "menu", Sort: 1, Icon: "lucide:users", Title: "用户管理"},
 	{ID: 402, PID: 400, Name: "SystemRole", Path: "/system/role", Component: "/system/role/list", AuthCode: "System:Role:List", Type: "menu", Sort: 2, Icon: "lucide:user-cog", Title: "角色管理"},
