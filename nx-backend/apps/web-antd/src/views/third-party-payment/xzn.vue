@@ -7,6 +7,7 @@ import { requestClient } from '#/api/request';
 
 const docsUrl = 'https://pay.xzncraft.cn/docs#sdk-debug';
 const apiBase = 'https://pay.xzncraft.cn/openapi';
+const defaultNotifyURL = 'https://九型芯之力.com/api/xzn-pay/notify';
 const channels = [
   { name: 'H5 支付', detail: '网页端跳转支付，需配置回跳地址' },
   { name: 'App 支付', detail: 'App 内发起统一下单并拉起支付' },
@@ -20,7 +21,7 @@ const configured = ref(false);
 const paymentConfig = reactive({
   baseURL: apiBase,
   channelID: '',
-  notifyURL: '',
+  notifyURL: defaultNotifyURL,
   pid: '',
   returnURL: '',
   secret: '',
@@ -30,6 +31,7 @@ const paymentConfig = reactive({
 async function loadConfig() {
   const data = await requestClient.get<Record<string, any>>('/admin/xzn-pay/config');
   Object.assign(paymentConfig, data, { secret: '' });
+  paymentConfig.notifyURL ||= defaultNotifyURL;
   configured.value = Boolean(data.configured);
 }
 
@@ -73,7 +75,7 @@ async function createOrder() {
             <Form.Item label="商户密钥" required><Input.Password v-model:value="paymentConfig.secret" :placeholder="configured ? '已配置，留空表示不修改' : '请输入商户密钥'" /></Form.Item>
             <Form.Item label="商户签名模式" extra="选择 MD5+RSA 时，测试请求默认使用 MD5 签名。"><Select v-model:value="paymentConfig.signType" :options="[{label:'MD5',value:'MD5'},{label:'RSA',value:'RSA'},{label:'MD5+RSA（推荐）',value:'MD5+RSA'}]" /></Form.Item>
             <Form.Item label="网关 ID"><Input v-model:value="paymentConfig.channelID" placeholder="可选，星之柠后台查看" /></Form.Item>
-            <Form.Item label="异步回调地址"><Input v-model:value="paymentConfig.notifyURL" placeholder="https://.../api/xzn-pay/notify" /></Form.Item>
+            <Form.Item label="异步回调地址" required><Input v-model:value="paymentConfig.notifyURL" placeholder="https://.../api/xzn-pay/notify" /></Form.Item>
             <Form.Item label="同步返回地址"><Input v-model:value="paymentConfig.returnURL" placeholder="https://.../payment/result" /></Form.Item>
           </div>
           <Button type="primary" :loading="configLoading" @click="saveConfig">保存商户配置</Button>

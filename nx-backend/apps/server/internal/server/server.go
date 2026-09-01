@@ -885,6 +885,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/pay/notify", s.method(http.MethodPost, s.payNotify))
 	s.mux.HandleFunc("/api/admin/xzn-pay/config", s.requirePermission("System:Payment:Config", s.xznPayConfig))
 	s.mux.HandleFunc("/api/admin/xzn-pay/create", s.method(http.MethodPost, s.requirePermission("System:Payment:Config", s.xznPayCreate)))
+	s.mux.HandleFunc("/api/xzn-pay/notify", s.method(http.MethodPost, s.xznPayNotify))
 	s.mux.HandleFunc("/api/analytics/overview", s.method(http.MethodGet, s.requirePermission("Analytics:Overview", s.analyticsOverview)))
 	s.mux.HandleFunc("/api/analytics/platform-overview", s.method(http.MethodGet, s.requirePermission("Analytics:Overview", s.platformAnalyticsOverview)))
 	s.mux.HandleFunc("/api/app-analytics/overview", s.method(http.MethodGet, s.requirePermission("Analytics:App:Overview", s.appAnalyticsOverview)))

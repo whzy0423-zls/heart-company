@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -32,6 +33,26 @@ type Client struct {
 }
 
 func New(cfg Config) *Client { return &Client{cfg: cfg, http: &http.Client{Timeout: 20 * time.Second}} }
+
+func VerifyMD5(values url.Values, key, signature string) bool {
+	keys := make([]string, 0, len(values))
+	for name := range values {
+		if name != "sign" && name != "sign_type" {
+			keys = append(keys, name)
+		}
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, name := range keys {
+		if value := values.Get(name); value != "" {
+			parts = append(parts, name+"="+value)
+		}
+	}
+	digest := md5.Sum([]byte(strings.Join(parts, "&") + "&key=" + key))
+	expected := strings.ToUpper(hex.EncodeToString(digest[:]))
+	actual := strings.ToUpper(strings.TrimSpace(signature))
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(actual)) == 1
+}
 func ParsePrivateKey(raw string) (*rsa.PrivateKey, error) {
 	b, _ := pem.Decode([]byte(raw))
 	if b == nil {
