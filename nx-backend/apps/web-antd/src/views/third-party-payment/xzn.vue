@@ -9,9 +9,9 @@ const docsUrl = 'https://pay.xzncraft.cn/docs#sdk-debug';
 const apiBase = 'https://pay.xzncraft.cn/openapi';
 const defaultNotifyURL = 'https://九型芯之力.com/api/xzn-pay/notify';
 const channels = [
-  { name: 'H5 支付', detail: '网页端跳转支付，需配置回跳地址' },
-  { name: 'App 支付', detail: 'App 内发起统一下单并拉起支付' },
-  { name: '抖音支付', detail: '抖音端使用 douyinpay 支付方式' },
+  { name: 'H5 支付', detail: '支付宝手机 H5（网关 34）', status: '可测试', color: 'green' },
+  { name: 'App 支付', detail: '当前通道列表中没有 App 专用网关', status: '尚未开通', color: 'orange' },
+  { name: '抖音支付', detail: '抖音官方支付（网关 38）', status: '可测试', color: 'green' },
 ];
 const gatewayOptions = [
   { label: '支付宝手机 H5（网关 34）', paytypeCode: 'alipay', value: '34' },
@@ -104,7 +104,7 @@ async function createOrder() {
       <Card :bordered="false" class="section-card" title="通道状态">
         <div class="channel-grid">
           <Card v-for="channel in channels" :key="channel.name" size="small">
-            <div class="channel-title"><strong>{{ channel.name }}</strong><Tag color="orange">待配置</Tag></div>
+            <div class="channel-title"><strong>{{ channel.name }}</strong><Tag :color="channel.color">{{ channel.status }}</Tag></div>
             <div class="channel-detail">{{ channel.detail }}</div>
           </Card>
         </div>
