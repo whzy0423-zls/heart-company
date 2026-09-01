@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -93,5 +94,9 @@ func (c *Client) Post(path string, fields url.Values) (map[string]any, error) {
 	if resp.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("xzn http %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
-	return map[string]any{"raw": string(b)}, nil
+	var result map[string]any
+	if err := json.Unmarshal(b, &result); err != nil {
+		return nil, fmt.Errorf("xzn returned invalid JSON")
+	}
+	return result, nil
 }

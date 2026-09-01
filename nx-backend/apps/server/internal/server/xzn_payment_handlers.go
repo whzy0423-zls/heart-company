@@ -82,7 +82,7 @@ func (s *Server) xznPayConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) xznPayCreate(w http.ResponseWriter, r *http.Request) {
-	var in struct{ OutTradeNo, TotalAmount, Subject, PaytypeCode, ChannelID, Attach, ClientIP string }
+	var in struct{ OutTradeNo, TotalAmount, Subject, PaytypeCode, ChannelID, Attach string }
 	if json.NewDecoder(r.Body).Decode(&in) != nil || in.TotalAmount == "" || in.PaytypeCode == "" {
 		httpx.Fail(w, 400, "totalAmount and paytypeCode are required")
 		return
@@ -96,10 +96,22 @@ func (s *Server) xznPayCreate(w http.ResponseWriter, r *http.Request) {
 	if channelID == "" {
 		channelID = cfg.ChannelID
 	}
-	v := url.Values{"out_trade_no": {in.OutTradeNo}, "total_amount": {in.TotalAmount}, "subject": {in.Subject}, "paytype_code": {in.PaytypeCode}, "channel_id": {channelID}, "attach": {in.Attach}, "client_ip": {in.ClientIP}, "notify_url": {cfg.NotifyURL}, "return_url": {cfg.ReturnURL}}
+	clientIP := strings.TrimSpace(s.clientIP(r))
+	if clientIP == "" {
+		clientIP = "127.0.0.1"
+	}
+	v := url.Values{"out_trade_no": {in.OutTradeNo}, "total_amount": {in.TotalAmount}, "subject": {in.Subject}, "paytype_code": {in.PaytypeCode}, "channel_id": {channelID}, "attach": {in.Attach}, "client_ip": {clientIP}, "notify_url": {cfg.NotifyURL}, "return_url": {cfg.ReturnURL}}
 	out, err := c.Post("/pay/create", v)
 	if err != nil {
 		httpx.Fail(w, 502, err.Error())
+		return
+	}
+	if code, ok := out["code"].(float64); ok && code <= 0 {
+		message, _ := out["msg"].(string)
+		if strings.TrimSpace(message) == "" {
+			message = "星之柠下单失败"
+		}
+		httpx.Fail(w, http.StatusBadGateway, message)
 		return
 	}
 	httpx.OK(w, out)
