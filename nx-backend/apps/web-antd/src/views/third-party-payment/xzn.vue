@@ -13,7 +13,20 @@ const channels = [
   { name: 'App 支付', detail: 'App 内发起统一下单并拉起支付' },
   { name: '抖音支付', detail: '抖音端使用 douyinpay 支付方式' },
 ];
-const form = reactive({ outTradeNo: `XZN${Date.now()}`, totalAmount: '0.01', subject: '星之柠测试订单', paytypeCode: 'wxpay' });
+const gatewayOptions = [
+  { label: '支付宝手机 H5（网关 34）', paytypeCode: 'alipay', value: '34' },
+  { label: '支付宝 PC（网关 36）', paytypeCode: 'alipay', value: '36' },
+  { label: '微信 PC 扫码（网关 3）', paytypeCode: 'wxpay', value: '3' },
+  { label: '微信 JSAPI（网关 31）', paytypeCode: 'wxpay', value: '31' },
+  { label: '抖音支付（网关 38）', paytypeCode: 'douyinpay', value: '38' },
+];
+const form = reactive({
+  channelID: '34',
+  outTradeNo: `XZN${Date.now()}`,
+  paytypeCode: 'alipay',
+  subject: '星之柠测试订单',
+  totalAmount: '0.01',
+});
 const result = ref('');
 const loading = ref(false);
 const configLoading = ref(false);
@@ -50,6 +63,13 @@ async function saveConfig() {
 }
 
 onMounted(loadConfig);
+
+function selectGateway(channelID: unknown) {
+  if (typeof channelID !== 'string') return;
+  const gateway = gatewayOptions.find((item) => item.value === channelID);
+  if (gateway) form.paytypeCode = gateway.paytypeCode;
+}
+
 async function createOrder() {
   loading.value = true;
   try {
@@ -74,7 +94,7 @@ async function createOrder() {
             <Form.Item label="商户号 PID" required><Input v-model:value="paymentConfig.pid" placeholder="2088 开头的商户号" /></Form.Item>
             <Form.Item label="商户密钥" required><Input.Password v-model:value="paymentConfig.secret" :placeholder="configured ? '已配置，留空表示不修改' : '请输入商户密钥'" /></Form.Item>
             <Form.Item label="商户签名模式" extra="选择 MD5+RSA 时，测试请求默认使用 MD5 签名。"><Select v-model:value="paymentConfig.signType" :options="[{label:'MD5',value:'MD5'},{label:'RSA',value:'RSA'},{label:'MD5+RSA（推荐）',value:'MD5+RSA'}]" /></Form.Item>
-            <Form.Item label="网关 ID"><Input v-model:value="paymentConfig.channelID" placeholder="可选，星之柠后台查看" /></Form.Item>
+            <Form.Item label="默认网关 ID"><Input v-model:value="paymentConfig.channelID" placeholder="可选，测试下单时可单独选择" /></Form.Item>
             <Form.Item label="异步回调地址" required><Input v-model:value="paymentConfig.notifyURL" placeholder="https://.../api/xzn-pay/notify" /></Form.Item>
             <Form.Item label="同步返回地址"><Input v-model:value="paymentConfig.returnURL" placeholder="https://.../payment/result" /></Form.Item>
           </div>
@@ -103,7 +123,7 @@ async function createOrder() {
         <Form class="order-form" layout="vertical"><div class="form-grid">
           <Form.Item label="商户订单号"><Input v-model:value="form.outTradeNo" /></Form.Item>
           <Form.Item label="金额（元）"><Input v-model:value="form.totalAmount" /></Form.Item>
-          <Form.Item label="支付方式"><Select v-model:value="form.paytypeCode" :options="[{label:'微信',value:'wxpay'},{label:'支付宝',value:'alipay'},{label:'抖音',value:'douyinpay'}]" /></Form.Item>
+          <Form.Item label="支付通道"><Select v-model:value="form.channelID" :options="gatewayOptions" @change="selectGateway" /></Form.Item>
           <Form.Item label="订单标题"><Input v-model:value="form.subject" /></Form.Item>
         </div><Button type="primary" :loading="loading" @click="createOrder">发起测试下单</Button></Form>
         <pre v-if="result" class="result">{{ result }}</pre>
