@@ -103,8 +103,8 @@ func (c *Client) ParseDevCallback(rawBody []byte) (CallbackResult, error) {
 }
 
 func (c *Client) verifyCallbackSignature(headers http.Header, rawBody []byte, now time.Time) error {
-	if c.platformCert == nil {
-		return errors.New("wxpay platform cert is not configured")
+	if c.callbackKey == nil {
+		return errors.New("wxpay callback verification key is not configured")
 	}
 	if headers == nil {
 		return errors.New("missing wxpay callback headers")
@@ -114,6 +114,9 @@ func (c *Client) verifyCallbackSignature(headers http.Header, rawBody []byte, no
 	signature := headers.Get("Wechatpay-Signature")
 	if timestamp == "" || nonce == "" || signature == "" {
 		return errors.New("missing wxpay callback signature headers")
+	}
+	if c.callbackKeyID != "" && headers.Get("Wechatpay-Serial") != c.callbackKeyID {
+		return errors.New("wxpay callback public key ID does not match Wechatpay-Serial")
 	}
 	ts, err := strconv.ParseInt(timestamp, 10, 64)
 	if err != nil {
@@ -129,11 +132,7 @@ func (c *Client) verifyCallbackSignature(headers http.Header, rawBody []byte, no
 	}
 	message := fmt.Sprintf("%s\n%s\n%s\n", timestamp, nonce, string(rawBody))
 	digest := sha256.Sum256([]byte(message))
-	publicKey, ok := c.platformCert.PublicKey.(*rsa.PublicKey)
-	if !ok {
-		return errors.New("wxpay platform public key is not RSA")
-	}
-	if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, digest[:], sig); err != nil {
+	if err := rsa.VerifyPKCS1v15(c.callbackKey, crypto.SHA256, digest[:], sig); err != nil {
 		return errors.New("invalid wxpay callback signature")
 	}
 	return nil

@@ -130,6 +130,19 @@ func TestProductionWxPayIncompleteConfigDisablesPaymentWithoutPanic(t *testing.T
 	}
 }
 
+func TestWxPayConfigCompleteAcceptsPublicKeyMode(t *testing.T) {
+	cfg := config.WxPayConfig{
+		MchID: "merchant", AppID: "wx-app", APIv3Key: strings.Repeat("k", 32), SerialNo: "merchant-serial",
+		PrivateKeyPath: "/run/secrets/wxpay/apiclient_key.pem",
+		PublicKeyPath:  "/run/secrets/wxpay/pub_key.pem",
+		PublicKeyID:    "PUB_KEY_ID_123",
+		NotifyURL:      "https://example.com/notify",
+	}
+	if !wxPayConfigComplete(cfg) {
+		t.Fatal("expected complete wxpay public-key config")
+	}
+}
+
 func TestNewAllowsExplicitDevWxPay(t *testing.T) {
 	client := mustWxPayClient(config.Env{WxPay: config.WxPayConfig{Dev: true}})
 	if !client.DevMode() {

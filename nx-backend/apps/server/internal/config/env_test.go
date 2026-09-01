@@ -29,6 +29,17 @@ func TestLoadDefaultsVideoGatewayContract(t *testing.T) {
 	}
 }
 
+func TestLoadWxPayPublicKeyConfig(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("WXPAY_PUBLIC_KEY_PATH", "/run/secrets/wxpay/pub_key.pem")
+	t.Setenv("WXPAY_PUBLIC_KEY_ID", "PUB_KEY_ID_123")
+
+	env := Load()
+	if env.WxPay.PublicKeyPath != "/run/secrets/wxpay/pub_key.pem" || env.WxPay.PublicKeyID != "PUB_KEY_ID_123" {
+		t.Fatalf("wxpay public-key config was not loaded: %+v", env.WxPay)
+	}
+}
+
 func TestLegacyVideoGatewayContractReturnsIndependentCopies(t *testing.T) {
 	first := LegacyVideoGatewayContract()
 	second := LegacyVideoGatewayContract()
