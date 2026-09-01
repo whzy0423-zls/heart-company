@@ -39,7 +39,9 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/engagement"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/image"
+	"nine-xing/nx-backend/apps/server/internal/lifestory"
 	"nine-xing/nx-backend/apps/server/internal/llm"
+	"nine-xing/nx-backend/apps/server/internal/location"
 	"nine-xing/nx-backend/apps/server/internal/mindquote"
 	"nine-xing/nx-backend/apps/server/internal/miniapp"
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
@@ -168,6 +170,17 @@ type Server struct {
 	chatPersistHook                func()
 	pushStore                      *push.Store
 	appNotifications               appNotificationService
+	lifeStories                    *lifestory.Store
+	lifeStoryWorker                *lifestory.Worker
+	lifeStoryWorkerCancel          context.CancelFunc
+	lifeStoryOutboxCancel          context.CancelFunc
+	lifeStoryMaterialLimiter       *fixedWindowRateLimiter
+	locationService                location.Service
+	locationSearchLimiter          *fixedWindowRateLimiter
+	locationSearchIPLimiter        *strRateLimiter
+	locationReverseLimiter         *fixedWindowRateLimiter
+	locationReverseIPLimiter       *strRateLimiter
+	asrSlots                       chan struct{}
 	pushSendTimeout                time.Duration
 	pushRecoveryInterval           time.Duration
 	pushSendSlots                  chan struct{}
@@ -280,6 +293,16 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		xinzhiliMaxConnections: env.XinzhiliMaxConnections,
 		metrics:                observability.New(),
 		ttsSlots:               make(chan struct{}, maxInt(env.TTSMaxConcurrent, 1)),
+	}
+	// Location lookups are short-lived and intentionally have no persistence
+	// dependency. Keep the provider injectable for tests and disable it when
+	// the environment explicitly turns the feature off.
+	s.locationSearchLimiter = newFixedWindowRateLimiter(locationSearchUserLimit, locationRateLimitWindow)
+	s.locationSearchIPLimiter = newBoundedStrRateLimiter(locationSearchIPLimit, locationRateLimitWindow, locationRateLimiterMaxKey)
+	s.locationReverseLimiter = newFixedWindowRateLimiter(locationReverseUserLimit, locationRateLimitWindow)
+	s.locationReverseIPLimiter = newBoundedStrRateLimiter(locationReverseIPLimit, locationRateLimitWindow, locationRateLimiterMaxKey)
+	if env.AMap.Enabled {
+		s.locationService = location.NewAMapClient(location.Config{APIKey: env.AMap.WebServiceKey})
 	}
 	if database != nil {
 		s.classroomPlaybackLimiter = newStrRateLimiter(30, time.Minute)
@@ -441,9 +464,33 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.smsReporter = mustSMSReporter(env.SMS)
 	s.pushStore = push.NewStore(database, push.NewPusher(env.AppEnv, env.JPush.AppKey, env.JPush.MasterSecret))
 	s.appNotifications = appnotification.NewStore(database)
+	// Derive the reversible story-token encryption key from the application
+	// secret so persisted snapshots remain protected at rest.
+	s.lifeStories = lifestory.NewStoreWithTokenKey(database, env.JWTSecret)
+	s.lifeStoryMaterialLimiter = newFixedWindowRateLimiter(10, time.Minute)
+	s.asrSlots = make(chan struct{}, 2)
 	s.pushSendSlots = make(chan struct{}, 2)
 	// 启动时应用 DB 中保存的模型配置覆盖（若存在），重建对话/视频客户端。
 	s.applyStoredModelConfig()
+	// Life-story generation is an isolated background workflow. It reuses only
+	// the configured JSON completion capability; ordinary chat sessions and SSE
+	// state are never passed into the story worker.
+	if database != nil {
+		storyGenerator := lifestory.NewGenerator(lifestory.GeneratorConfig{
+			Completer: lifeStoryRuntimeCompleter{server: s},
+		})
+		s.lifeStoryWorker = lifestory.NewWorker(lifestory.WorkerConfig{
+			Store: s.lifeStories, Generator: storyGenerator,
+			Lease: 2 * time.Minute, GenerationTimeout: 90 * time.Second,
+			PollInterval: 5 * time.Second, MaxAttempts: 3, Concurrency: 2,
+		})
+		workerCtx, workerCancel := context.WithCancel(context.Background())
+		s.lifeStoryWorkerCancel = workerCancel
+		s.lifeStoryWorker.Start(workerCtx)
+		outboxCtx, outboxCancel := context.WithCancel(context.Background())
+		s.lifeStoryOutboxCancel = outboxCancel
+		go s.runLifeStoryOutboxLoop(outboxCtx)
+	}
 	if _, err := s.refreshBailianCopyCredentials(context.Background()); err != nil {
 		log.Printf("Bailian shared credential startup refresh failed: %v", err)
 	}
@@ -803,6 +850,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/notifications/unread-count", s.method(http.MethodGet, s.requireAppAuth(s.appNotificationUnreadCount)))
 	s.mux.HandleFunc("/api/app/notifications/read-all", s.method(http.MethodPost, s.requireAppAuth(s.appNotificationMarkAllRead)))
 	s.mux.HandleFunc("/api/app/notifications/", s.method(http.MethodPost, s.requireAppAuth(s.appNotificationAction)))
+	// 私人故事：素材采集、事实/提纲确认、持久化生成任务与阅读进度。
+	s.mux.HandleFunc("/api/app/life-stories", s.requireLifeStoryAuth(s.appLifeStoryRouter))
+	s.mux.HandleFunc("/api/app/life-stories/", s.requireLifeStoryAuth(s.appLifeStoryRouter))
+	// 地点搜索和逆地址解析：请求体与响应均禁止缓存，鉴权失败也保持
+	// no-store，避免搜索词或临时坐标被代理缓存。
+	s.mux.HandleFunc("/api/app/locations/search", s.appLocationPathHandler(http.MethodPost, s.appLocationSearch))
+	s.mux.HandleFunc("/api/app/locations/reverse", s.appLocationPathHandler(http.MethodPost, s.appLocationReverse))
 	// 语音识别
 	s.mux.HandleFunc("/api/app/voice/recognize", s.method(http.MethodPost, s.requireAppAuth(s.appVoiceRecognize)))
 	s.mux.HandleFunc("/api/app/xinzhili/turns/stream", s.method(http.MethodPost, s.requireAppAuth(s.appXinzhiliVoiceTurnStream)))
@@ -829,6 +883,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/miniapp/report/status", s.method(http.MethodGet, s.requireMiniapp(s.reportStatus)))
 	s.mux.HandleFunc("/api/miniapp/report/content", s.method(http.MethodGet, s.requireMiniapp(s.reportContent)))
 	s.mux.HandleFunc("/api/pay/notify", s.method(http.MethodPost, s.payNotify))
+	s.mux.HandleFunc("/api/admin/xzn-pay/config", s.method(http.MethodGet, s.requirePermission("System:Payment:Config", s.xznPayConfig)))
+	s.mux.HandleFunc("/api/admin/xzn-pay/create", s.method(http.MethodPost, s.requirePermission("System:Payment:Config", s.xznPayCreate)))
 	s.mux.HandleFunc("/api/analytics/overview", s.method(http.MethodGet, s.requirePermission("Analytics:Overview", s.analyticsOverview)))
 	s.mux.HandleFunc("/api/analytics/platform-overview", s.method(http.MethodGet, s.requirePermission("Analytics:Overview", s.platformAnalyticsOverview)))
 	s.mux.HandleFunc("/api/app-analytics/overview", s.method(http.MethodGet, s.requirePermission("Analytics:App:Overview", s.appAnalyticsOverview)))
@@ -968,6 +1024,15 @@ func (s *Server) routes() {
 }
 
 func (s *Server) Shutdown() {
+	if s.lifeStoryWorkerCancel != nil {
+		s.lifeStoryWorkerCancel()
+	}
+	if s.lifeStoryOutboxCancel != nil {
+		s.lifeStoryOutboxCancel()
+	}
+	if s.lifeStoryWorker != nil {
+		s.lifeStoryWorker.Stop()
+	}
 	if s.maintenanceCancel != nil {
 		s.maintenanceCancel()
 	}
