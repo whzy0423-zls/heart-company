@@ -3,6 +3,7 @@ package server
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -44,6 +45,18 @@ type adminAppMemory struct {
 	UpdateTime string `json:"updateTime"`
 }
 
+func (s *Server) adminAppOrderAction(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimRight(r.URL.Path, "/")
+	switch {
+	case strings.HasSuffix(path, "/grant"):
+		s.adminAppOrderGrant(w, r)
+	case strings.HasSuffix(path, "/reconcile"):
+		s.adminAppOrderReconcile(w, r)
+	default:
+		httpx.Fail(w, http.StatusNotFound, "订单操作不存在")
+	}
+}
+
 func (s *Server) adminAppOrderGrant(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseTrailingIntID(w, r, "/api/app-orders/", "/grant")
 	if !ok {
@@ -70,12 +83,19 @@ func (s *Server) adminAppOrderGrant(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 	var before adminAppOrder
 	if err := tx.QueryRowContext(r.Context(), `
-		SELECT id, out_trade_no, app_user_id, product_id, title, amount, status, transaction_id
+		SELECT id, out_trade_no, app_user_id, product_id, title, amount, status, transaction_id,
+		       COALESCE(payment_provider,'manual')
 		FROM app_orders WHERE id=$1 FOR UPDATE`, id).Scan(
 		&before.ID, &before.OutTradeNo, &before.AppUserID, &before.ProductID,
-		&before.Title, &before.Amount, &before.Status, &before.TransactionID,
+		&before.Title, &before.Amount, &before.Status, &before.TransactionID, &before.PaymentProvider,
 	); err != nil {
 		httpx.Fail(w, http.StatusNotFound, "order not found")
+		return
+	}
+	// Online orders are settled only after provider verification. Manual grant
+	// remains available for legacy customer-service orders.
+	if before.PaymentProvider != "" && before.PaymentProvider != "manual" && before.PaymentProvider != "customer_service" {
+		httpx.Fail(w, http.StatusConflict, "在线支付订单必须先主动查单，不能人工开通")
 		return
 	}
 	if before.Status == "paid" {
@@ -136,6 +156,36 @@ func (s *Server) adminAppOrderGrant(w http.ResponseWriter, r *http.Request) {
 	after := adminMembershipGrantResp{OrderID: id, PlanCode: before.ProductID, StartedAt: startedAt.Format(time.RFC3339), ExpiresAt: period.Expires.Format(time.RFC3339)}
 	s.recordAdminAudit(r, auditlog.Entry{Action: "app_order.grant", TargetType: "app_order", TargetID: strconv.FormatInt(id, 10), Before: before, After: after, Summary: "确认收款并开通 App 会员"})
 	httpx.OK(w, after)
+}
+
+// adminAppOrderReconcile refreshes an online order from XZN and uses the same
+// settlement transaction as asynchronous callbacks. It never trusts client
+// supplied amount, channel, or membership data.
+func (s *Server) adminAppOrderReconcile(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseTrailingIntID(w, r, "/api/app-orders/", "/reconcile")
+	if !ok {
+		return
+	}
+	var outTradeNo, provider string
+	if err := s.db.QueryRowContext(r.Context(), `SELECT out_trade_no, COALESCE(payment_provider,'manual') FROM app_orders WHERE id=$1`, id).Scan(&outTradeNo, &provider); err != nil {
+		httpx.Fail(w, http.StatusNotFound, "订单不存在")
+		return
+	}
+	if provider != appPaymentProviderXZN {
+		httpx.Fail(w, http.StatusConflict, "该订单不是在线支付订单")
+		return
+	}
+	order, err := s.reconcileXZNAppOrder(r.Context(), outTradeNo)
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, errXZNCallbackNotFound) {
+			status = http.StatusNotFound
+		}
+		httpx.Fail(w, status, err.Error())
+		return
+	}
+	s.recordAdminAudit(r, auditlog.Entry{Action: "app_order.reconcile", TargetType: "app_order", TargetID: strconv.FormatInt(id, 10), After: order, Summary: "主动查询 App 在线支付订单"})
+	httpx.OK(w, order)
 }
 
 type adminMembershipGrantResp struct {

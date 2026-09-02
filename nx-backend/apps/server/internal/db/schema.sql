@@ -3375,6 +3375,14 @@ CREATE TABLE IF NOT EXISTS app_orders (
   amount          INT NOT NULL DEFAULT 0,
   status          TEXT NOT NULL DEFAULT 'pending',
   transaction_id  TEXT NOT NULL DEFAULT '',
+  payment_provider TEXT NOT NULL DEFAULT 'manual',
+  pay_channel      TEXT,
+  gateway_id       TEXT,
+  provider_trade_no TEXT,
+  provider_status  TEXT,
+  pay_url          TEXT,
+  last_query_at    TIMESTAMPTZ,
+  payment_error    TEXT,
   create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
   paid_at         TIMESTAMPTZ,
@@ -3386,9 +3394,24 @@ ALTER TABLE app_users ADD COLUMN IF NOT EXISTS member_started_at TIMESTAMPTZ;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS member_expires_at TIMESTAMPTZ;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS activation_at TIMESTAMPTZ;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS membership_expires_at TIMESTAMPTZ;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS payment_provider TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS pay_channel TEXT;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS gateway_id TEXT;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS provider_trade_no TEXT;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS provider_status TEXT;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS pay_url TEXT;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS last_query_at TIMESTAMPTZ;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS payment_error TEXT;
+UPDATE app_orders SET payment_provider='manual' WHERE payment_provider IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_app_orders_user ON app_orders(app_user_id, create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_app_orders_status ON app_orders(status, create_time DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_orders_provider_trade_no
+  ON app_orders(provider_trade_no)
+  WHERE provider_trade_no IS NOT NULL AND provider_trade_no <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_orders_one_active_online_per_user
+  ON app_orders(app_user_id)
+  WHERE payment_provider = 'xzn' AND status IN ('pending', 'paying');
 
 -- ----- App 每日成长打卡：记录用户每天完成的成长练习 -----
 CREATE TABLE IF NOT EXISTS app_daily_checkins (

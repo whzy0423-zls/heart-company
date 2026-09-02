@@ -153,37 +153,21 @@ func TestAppBillingEntitlementsTreatsExpiredMembershipAsFree(t *testing.T) {
 	}
 }
 
-func TestAppBillingCreateOrderReturnsPendingCustomerConfirmation(t *testing.T) {
+func TestAppBillingCreateOrderReturnsUnavailableWhenXZNIsNotConfigured(t *testing.T) {
 	s := newAppBillingTestServer(t)
 
 	response := performAppBillingRequest(t, s.appBillingCreateOrder, http.MethodPost, "/api/app/billing/orders", map[string]any{
 		"productId": "vip_month",
 	})
 
-	if response.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", response.Code, response.Body.String())
 	}
-	body := decodeAppBillingResponse(t, response)
-	if body.Data.PayStatus != "pending_confirmation" {
-		t.Fatalf("expected payStatus pending_confirmation, got %+v", body.Data)
+	if !strings.Contains(response.Body.String(), "在线支付暂不可用") {
+		t.Fatalf("expected Chinese unavailable message, got %q", response.Body.String())
 	}
-	if body.Data.Status != "pending_confirmation" {
-		t.Fatalf("expected order status pending_confirmation, got %+v", body.Data)
-	}
-	if body.Data.PayEnabled {
-		t.Fatalf("expected SDK payment to stay disabled, got %+v", body.Data)
-	}
-	if body.Data.PurchaseMode != "customer_service" {
-		t.Fatalf("expected customer service purchase mode, got %+v", body.Data)
-	}
-	if body.Data.CustomerServiceQRURL != "/api/public/customer-service-qr" {
-		t.Fatalf("expected public customer QR endpoint, got %+v", body.Data)
-	}
-	if !strings.Contains(body.Data.Message, "客服") {
-		t.Fatalf("expected customer confirmation message, got %q", body.Data.Message)
-	}
-	if body.Data.DurationDays != 30 || body.Data.EstimatedExpiresAt == "" {
-		t.Fatalf("expected renewal preview metadata, got %+v", body.Data)
+	if got := appBillingInsertCount.Load(); got != 0 {
+		t.Fatalf("unconfigured payment must not create a manual order, got %d inserts", got)
 	}
 }
 

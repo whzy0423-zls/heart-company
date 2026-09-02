@@ -1054,7 +1054,7 @@ func (s *Server) routes() {
 	}, s.system.HandleUserByID))
 	s.mux.HandleFunc("/api/app-users/list", s.method(http.MethodGet, s.requirePermission("Customer:App:List", s.appUsers.HandleAppUsers)))
 	s.mux.HandleFunc("/api/app-orders/list", s.method(http.MethodGet, s.requirePermission("Customer:AppOrders:List", s.adminAppOrders)))
-	s.mux.HandleFunc("/api/app-orders/", s.method(http.MethodPost, s.requirePermission("Customer:AppOrders:Write", s.adminAppOrderGrant)))
+	s.mux.HandleFunc("/api/app-orders/", s.method(http.MethodPost, s.requirePermission("Customer:AppOrders:Write", s.adminAppOrderAction)))
 	s.mux.HandleFunc("/api/app-chat/messages/list", s.method(http.MethodGet, s.requirePermission("Customer:AppChat:List", s.adminAppChatMessages)))
 	s.mux.HandleFunc("/api/app-memories/list", s.method(http.MethodGet, s.requirePermission("Customer:AppMemory:List", s.adminAppMemories)))
 	s.mux.HandleFunc("/api/app-memories/", s.method(http.MethodPut, s.requirePermission("Customer:AppMemory:Write", s.adminAppMemoryStatus)))

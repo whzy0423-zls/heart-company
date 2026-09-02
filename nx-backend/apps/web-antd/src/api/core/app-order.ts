@@ -14,6 +14,14 @@ export interface AppOrder {
   nickname: string;
   outTradeNo: string;
   paidAt: string;
+  paymentError?: string;
+  paymentProvider?: string;
+  payChannel?: string;
+  gatewayId?: string;
+  providerStatus?: string;
+  providerTradeNo?: string;
+  lastQueryAt?: string;
+  payUrl?: string;
   phone: string;
   productId: string;
   remainingDays?: number;
@@ -32,4 +40,8 @@ export function getAppOrderListApi(params?: Record<string, any>) {
   return requestClient.get<AppOrderPageResult<AppOrder>>('/app-orders/list', {
     params,
   });
+}
+
+export function reconcileAppOrderApi(id: number | string) {
+  return requestClient.post<AppOrder>(`/app-orders/${id}/reconcile`);
 }

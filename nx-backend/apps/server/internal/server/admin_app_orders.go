@@ -21,6 +21,14 @@ type adminAppOrder struct {
 	Amount              int    `json:"amount"`
 	Status              string `json:"status"`
 	TransactionID       string `json:"transactionId"`
+	PaymentProvider     string `json:"paymentProvider"`
+	PayChannel          string `json:"payChannel"`
+	GatewayID           string `json:"gatewayId"`
+	ProviderTradeNo     string `json:"providerTradeNo"`
+	ProviderStatus      string `json:"providerStatus"`
+	PayURL              string `json:"payUrl"`
+	LastQueryAt         string `json:"lastQueryAt"`
+	PaymentError        string `json:"paymentError"`
 	CreateTime          string `json:"createTime"`
 	DurationDays        int    `json:"durationDays"`
 	UpdateTime          string `json:"updateTime"`
@@ -64,7 +72,11 @@ func (s *Server) adminAppOrders(w http.ResponseWriter, r *http.Request) {
 	listArgs = append(listArgs, pageSize, (page-1)*pageSize)
 	rows, err := s.db.QueryContext(r.Context(), `
 		SELECT o.id, o.out_trade_no, o.app_user_id, COALESCE(u.phone,''), COALESCE(u.nickname,''), COALESCE(u.member_level,''),
-		       o.product_id, o.title, o.amount, o.status, o.transaction_id,
+		       o.product_id, o.title, o.amount, o.status, COALESCE(o.transaction_id,''),
+		       COALESCE(o.payment_provider,'manual'), COALESCE(o.pay_channel,''), COALESCE(o.gateway_id,''),
+		       COALESCE(o.provider_trade_no,''), COALESCE(o.provider_status,''), COALESCE(o.pay_url,''),
+		       COALESCE(to_char(o.last_query_at AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'), ''),
+		       COALESCE(o.payment_error,''),
 		       to_char(o.create_time AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'),
 		       to_char(o.update_time AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'),
 		       o.paid_at,
@@ -87,7 +99,9 @@ func (s *Server) adminAppOrders(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var item adminAppOrder
 		var paidAt sql.NullTime
-		if err := rows.Scan(&item.ID, &item.OutTradeNo, &item.AppUserID, &item.Phone, &item.Nickname, &item.MemberLevel, &item.ProductID, &item.Title, &item.Amount, &item.Status, &item.TransactionID, &item.CreateTime, &item.UpdateTime, &paidAt, &item.MemberStartedAt, &item.MemberExpiresAt, &item.RemainingDays, &item.ActivationAt, &item.MembershipExpiresAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.OutTradeNo, &item.AppUserID, &item.Phone, &item.Nickname, &item.MemberLevel, &item.ProductID, &item.Title, &item.Amount, &item.Status, &item.TransactionID,
+			&item.PaymentProvider, &item.PayChannel, &item.GatewayID, &item.ProviderTradeNo, &item.ProviderStatus, &item.PayURL, &item.LastQueryAt, &item.PaymentError,
+			&item.CreateTime, &item.UpdateTime, &paidAt, &item.MemberStartedAt, &item.MemberExpiresAt, &item.RemainingDays, &item.ActivationAt, &item.MembershipExpiresAt); err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
