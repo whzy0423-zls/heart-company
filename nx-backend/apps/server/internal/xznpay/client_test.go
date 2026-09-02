@@ -85,6 +85,17 @@ func TestQueryBuildsTypedRequestAndConvertsAmount(t *testing.T) {
 	}
 }
 
+func TestQueryNormalizesProviderStatus(t *testing.T) {
+	client := clientReturningJSON(t, `{"code":1,"data":{"trade_no":"xzn-2","out_trade_no":"order-2","total_amount":"0.01","trade_status":"  trade_success "}}`)
+	result, err := client.Query(context.Background(), QueryRequest{OutTradeNo: "order-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TradeStatus != "TRADE_SUCCESS" {
+		t.Fatalf("TradeStatus = %q, want TRADE_SUCCESS", result.TradeStatus)
+	}
+}
+
 func TestCreateRejectsMismatchedOutTradeNo(t *testing.T) {
 	client := clientReturningJSON(t, `{"code":1,"data":{"trade_no":"xzn-1","out_trade_no":"another-order","pay_url":"https://cashier.example/pay"}}`)
 	_, err := client.Create(context.Background(), validCreateRequest())

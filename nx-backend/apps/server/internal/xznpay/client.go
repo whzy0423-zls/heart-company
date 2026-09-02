@@ -233,7 +233,11 @@ func (c *Client) Query(ctx context.Context, request QueryRequest) (QueryResult, 
 		TradeNo:     responseString(data, "trade_no"),
 		OutTradeNo:  responseString(data, "out_trade_no"),
 		TotalAmount: responseString(data, "total_amount"),
-		TradeStatus: responseString(data, "trade_status"),
+		// XZN documents uppercase status values, but some gateways return
+		// lowercase or padded values. Normalize at the protocol boundary so
+		// settlement callers cannot observe a false success without granting
+		// the membership transaction.
+		TradeStatus: strings.ToUpper(strings.TrimSpace(responseString(data, "trade_status"))),
 	}
 	if queried.TradeNo == "" || queried.OutTradeNo == "" || queried.TotalAmount == "" || queried.TradeStatus == "" {
 		return QueryResult{}, errors.New("xzn query response is missing required data")
