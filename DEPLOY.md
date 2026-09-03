@@ -78,10 +78,14 @@ export MINIMAX_API_BASE="https://api.minimaxi.com"
 # export JPUSH_APP_KEY="..."
 # export JPUSH_MASTER_SECRET="..."
 
-# 7) 构建并启动
+# 7) 地点搜索/逆地址代理（仅将 Web 服务 Key 注入 server，不下发到 App）
+# AMAP_WEB_SERVICE_KEY
+# AMAP_LOCATION_ENABLED
+
+# 8) 构建并启动
 docker compose up -d --build
 
-# 8) 查看状态/日志
+# 9) 查看状态/日志
 docker compose ps
 docker compose logs -f server
 ```
@@ -108,6 +112,14 @@ XINZHILI_MAX_CONNECTIONS=50
 ### 后端 `server`：芯之力会话锁升级约束
 
 当前版本使用 PostgreSQL transaction advisory lock 保证同一用户、卡片的 `xinzhili_voice` 场景只创建一个会话。这个锁是所有新版 `server` 实例共同遵守的应用协议，旧版实例不会获取该锁。因此发布本版本时，**禁止旧版和新版 `server` 实例混跑**，不能直接对 `server` 执行常规零停机滚动更新。
+
+Go 服务收到 `SIGTERM` 后会停止接收新请求，并为正在进行的 SSE 请求保留最长 330 秒的收尾窗口。仓库的 Compose 配置已在 `server` 服务中设置：
+
+```yaml
+stop_grace_period: 330s
+```
+
+因此应使用 `docker compose stop server` 或 `docker compose down` 触发正常停止，不要用 `docker kill` 跳过宽限期。若后端不是由 Compose 托管，而是作为宿主机 systemd 服务直接运行，服务单元必须配置 `TimeoutStopSec=330s` 或更高，并在修改后执行 `systemctl daemon-reload`。Docker 或 systemd 的停止宽限期不得短于应用层 330 秒，否则进程会在 SSE 收尾前被强制终止。
 
 后端发布按下面顺序执行；多主机或编排平台需在所有节点完成同一步骤后再进入下一步：
 
@@ -175,6 +187,44 @@ www.example.com    → 127.0.0.1:8000
 - CDN/WAF 必须确认支持流式请求体和 SSE；该路径绕过缓存后，再用实际音频验证上传与应用层解析完成后的首个 SSE 事件能及时到达。
 - 发布后检查最终生效配置，而不只检查面板表单；nginx 可用 `nginx -T` 确认精确路由及其指令实际存在，并位于约定的审计位置。
 
+### 主会话与技能会话 SSE 的外层代理检查清单
+
+主会话、合盘卡片会话和技能独立会话都必须绕过宿主机 nginx/宝塔/CDN 的响应缓冲、缓存和压缩。否则 Go 服务已经发送的 delta 会被外层代理聚合，客户端看起来仍是一次性返回。将下面两条规则放在通用 `/api/` 规则之前，并将 `<port>` 替换为对应容器入口端口：
+
+```nginx
+location ^~ /api/app/chat/ {
+    proxy_pass http://127.0.0.1:<port>;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    proxy_connect_timeout 30s;
+    proxy_read_timeout 180s;
+    proxy_send_timeout 180s;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location ~ ^/api/app/skill-sessions/[^/]+/ask/stream$ {
+    proxy_pass http://127.0.0.1:<port>;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    proxy_connect_timeout 30s;
+    proxy_read_timeout 180s;
+    proxy_send_timeout 180s;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
 宿主机 nginx 或宝塔可按下面模板配置；将 `<port>` 替换成该域名对应的容器入口端口（后台 `8080`，官网 `8000`）：
 
 ```nginx
@@ -198,6 +248,46 @@ location = /api/app/xinzhili/turns/stream {
 ```
 
 这里的 `proxy_pass` 必须只有 `http://127.0.0.1:<port>`，不能附加 URI，也不能在端口后写尾随 `/`；否则 nginx 会把 exact location 的原始请求路径替换成 `/`，导致第二层 nginx 或 Go 无法匹配 `/api/app/xinzhili/turns/stream`。
+
+### 地点搜索和逆地址解析的外层代理检查清单
+
+地点接口使用 POST body 传递搜索词和临时坐标。容器内 nginx 已为下面两个精确路径设置 `client_max_body_size 4k`，并关闭访问日志、缓存、请求缓冲和响应缓冲；宿主机 nginx、宝塔或 CDN 等外层代理也应保持同样的边界：
+
+```nginx
+location = /api/app/locations/search {
+    client_max_body_size 4k;
+    proxy_pass http://127.0.0.1:<port>;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_request_buffering off;
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    access_log off;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location = /api/app/locations/reverse {
+    client_max_body_size 4k;
+    proxy_pass http://127.0.0.1:<port>;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_request_buffering off;
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    access_log off;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+上述规则应放在通用 `/api/` 规则之前；`proxy_pass` 只保留上游地址，不附加 URI。地点请求不应写入宿主机代理访问日志、缓存或 APM body 采集；外层代理只记录匿名请求标识、接口类型、耗时和状态类别。
 
 关闭代理请求缓冲只消除当前代理层的整包缓冲，不代表全链路不使用临时文件，也不代表客户端上传过程中就会收到 SSE。Go handler 仍通过 `ParseMultipartForm` 解析请求，超过内存阈值的 multipart 内容可能写入系统临时目录，并在 handler 结束时调用 `MultipartForm.RemoveAll` 清理；首个 SSE 事件应在上传和应用层解析完成后验证。
 

@@ -23,6 +23,19 @@ type Store struct {
 	db *sql.DB
 }
 
+const createForUserSQL = `
+	WITH active_user AS (
+		SELECT id FROM app_users
+		WHERE id = $1 AND status = 'active'
+		FOR UPDATE
+	)
+	INSERT INTO app_notifications (app_user_id, kind, title, content, deep_link, source_key)
+	SELECT id, $2, $3, $4, $5, $6 FROM active_user
+	ON CONFLICT (app_user_id, source_key) WHERE source_key <> ''
+	DO UPDATE SET source_key = EXCLUDED.source_key
+	RETURNING id
+`
+
 func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
@@ -33,13 +46,7 @@ func (s *Store) CreateForUser(ctx context.Context, userID int64, kind, title, co
 	}
 	kind, title, content, deepLink, sourceKey = normalizePayload(kind, title, content, deepLink, sourceKey)
 	var id int64
-	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO app_notifications (app_user_id, kind, title, content, deep_link, source_key)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (app_user_id, source_key) WHERE source_key <> ''
-		DO UPDATE SET source_key = EXCLUDED.source_key
-		RETURNING id
-	`, userID, kind, title, content, deepLink, sourceKey).Scan(&id)
+	err := s.db.QueryRowContext(ctx, createForUserSQL, userID, kind, title, content, deepLink, sourceKey).Scan(&id)
 	return id, err
 }
 

@@ -361,19 +361,25 @@ func appUserFromContext(r *http.Request) (auth.UserInfo, bool) {
 }
 
 func (s *Server) requireAppAuth(next http.HandlerFunc) http.HandlerFunc {
+	return s.requireAppAuthWithFailure(next, func(w http.ResponseWriter) {
+		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
+	})
+}
+
+func (s *Server) requireAppAuthWithFailure(next http.HandlerFunc, writeUnauthorized func(http.ResponseWriter)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tokenUser, err := auth.BearerUserWithKind(r.Header.Get("Authorization"), s.env.JWTSecret, auth.TokenKindApp)
 		if err != nil {
-			httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
+			writeUnauthorized(w)
 			return
 		}
 		if s.db == nil {
-			httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
+			writeUnauthorized(w)
 			return
 		}
 		appUser, err := s.appUsers.FindByID(r.Context(), tokenUser.ID)
 		if err != nil || appUser.Status != "active" {
-			httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
+			writeUnauthorized(w)
 			return
 		}
 		user := auth.UserInfo{

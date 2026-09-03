@@ -9,6 +9,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/lifestory"
 )
 
 type appPrivacyPolicyResponse struct {
@@ -26,6 +27,7 @@ type appPrivacyExportResponse struct {
 	Preferences   []appPrivacyPreference   `json:"preferences"`
 	SkillSessions []appPrivacySkillSession `json:"skillSessions"`
 	SkillMessages []appPrivacySkillMessage `json:"skillMessages"`
+	LifeStories   []lifestory.Story        `json:"lifeStories"`
 	SessionCount  int                      `json:"sessionCount"`
 	MessageCount  int                      `json:"messageCount"`
 }
@@ -91,6 +93,10 @@ func (s *Server) appPrivacyPolicy(w http.ResponseWriter, _ *http.Request) {
 
 根据后台配置，完成语音识别（ASR）、语音合成（TTS）或回答生成所必需的音频、文字及上下文可能会发送给相应的第三方模型服务提供方处理。第三方的处理范围和保留规则受我们与其约定及其适用政策约束；我们不会将“页面不展示文字”等同于“不处理或不保存文字”。
 
+“我的故事”会处理你主动提交的文字和分段语音转写，用于整理事实卡、提纲和真实经历故事。默认使用化名并模糊地点、学校、单位和地址；生成故事所需的输入和输出可能发送给配置的第三方大模型或语音识别服务。你可以在生成前修改或删除事实卡，生成失败、取消或安全拦截不会扣除故事权益。
+
+地点服务仅在你主动打开地点选择或搜索时使用。当前位置、临时坐标和搜索词会交由第三方地图服务（高德）处理，用于地图展示、地点搜索和逆地址解析。九型问答后台不会持久化保存坐标或搜索记录；确认地点后，事实卡只保存你选择的城市/区县与地点名称。高德对必要信息的处理和可能保留范围以其适用隐私政策为准，详见 App 内第三方服务清单。
+
 你可以在 App 内导出个人数据、清空记忆或注销账号。清空记忆会删除当前账号的专属记忆和沟通偏好，但不会删除隐藏对话历史。
 
 注销后，主业务库中的聊天会话及消息、专属记忆、沟通偏好、兼容报告、签到记录和设备令牌会被删除；成长卡片仅标记删除，相关数据行可能为保持关联一致性而保留，但不再正常展示或使用。刷新令牌会被撤销，账号会停用并匿名化登录标识，分析记录会与账号解除关联。
@@ -100,6 +106,7 @@ func (s *Server) appPrivacyPolicy(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) appPrivacyExport(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
 	userInfo, ok := appUserFromContext(r)
 	if !ok {
 		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
@@ -131,6 +138,23 @@ func (s *Server) appPrivacyExport(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
+	var lifeStories []lifestory.Story
+	if s.lifeStories != nil {
+		lifeStories, err = s.lifeStories.List(r.Context(), userInfo.ID)
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "server error")
+			return
+		}
+		for i := range lifeStories {
+			// Export includes the complete user-owned story, including source
+			// materials and the current structured version.
+			lifeStories[i], err = s.lifeStories.Get(r.Context(), userInfo.ID, lifeStories[i].ID)
+			if err != nil {
+				httpx.Fail(w, http.StatusInternalServerError, "server error")
+				return
+			}
+		}
+	}
 	sessionCount, messageCount, err := s.appPrivacyChatCounts(r, userInfo.ID)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
@@ -145,12 +169,14 @@ func (s *Server) appPrivacyExport(w http.ResponseWriter, r *http.Request) {
 		Preferences:   preferences,
 		SkillSessions: skillSessions,
 		SkillMessages: skillMessages,
+		LifeStories:   lifeStories,
 		SessionCount:  sessionCount,
 		MessageCount:  messageCount,
 	})
 }
 
 func (s *Server) appPrivacyDeleteMemories(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
 	userInfo, ok := appUserFromContext(r)
 	if !ok {
 		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
@@ -162,6 +188,11 @@ func (s *Server) appPrivacyDeleteMemories(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer tx.Rollback()
+	var lockedUserID int64
+	if err := tx.QueryRowContext(r.Context(), `SELECT id FROM app_users WHERE id = $1 FOR UPDATE`, userInfo.ID).Scan(&lockedUserID); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
 	res, err := tx.ExecContext(r.Context(), `DELETE FROM app_memories WHERE app_user_id = $1`, userInfo.ID)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
@@ -180,6 +211,7 @@ func (s *Server) appPrivacyDeleteMemories(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) appPrivacyDeleteAccount(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
 	userInfo, ok := appUserFromContext(r)
 	if !ok {
 		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
@@ -204,6 +236,16 @@ func (s *Server) appPrivacyDeleteAccount(w http.ResponseWriter, r *http.Request)
 	}
 
 	steps := []string{
+		// Lock/cancel story jobs before deleting their rows. A worker's final
+		// transaction takes the same user row lock and therefore cannot write
+		// after this account is anonymized.
+		`UPDATE app_life_story_jobs SET status = 'cancelled', claim_token = '', lease_until = NULL, finished_at = now(), updated_at = now() WHERE app_user_id = $1 AND status IN ('queued','running')`,
+		`DELETE FROM app_life_story_outbox WHERE app_user_id = $1`,
+		`DELETE FROM app_life_story_progress WHERE app_user_id = $1`,
+		`DELETE FROM app_story_quota_ledger WHERE app_user_id = $1`,
+		`DELETE FROM app_story_quota_periods WHERE app_user_id = $1`,
+		`DELETE FROM app_life_stories WHERE app_user_id = $1`,
+		`DELETE FROM app_notifications WHERE app_user_id = $1`,
 		`DELETE FROM app_memories WHERE app_user_id = $1`,
 		`DELETE FROM app_user_preferences WHERE app_user_id = $1`,
 		`DELETE FROM upload_assets asset USING app_chat_messages message, app_chat_sessions session

@@ -105,6 +105,14 @@ func (s *Server) recognizeSpeech(ctx context.Context, audioData []byte, filename
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if s != nil && s.asrSlots != nil {
+		select {
+		case s.asrSlots <- struct{}{}:
+			defer func() { <-s.asrSlots }()
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)

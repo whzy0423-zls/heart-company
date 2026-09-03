@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -1049,6 +1050,49 @@ func TestValidateProductionAllowsMissingOptionalIntegrations(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("expected production core config to pass without optional integrations, got %v", err)
+	}
+}
+
+func TestLoadReadsAMapLocationConfigurationWithoutExposingKey(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("AMAP_WEB_SERVICE_KEY", "TOKEN")
+	t.Setenv("AMAP_LOCATION_ENABLED", "true")
+
+	env := Load()
+	if env.AMap.WebServiceKey != "TOKEN" || !env.AMap.Enabled {
+		t.Fatalf("unexpected AMap config: %+v", env.AMap)
+	}
+	encoded, err := json.Marshal(env.AMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "TOKEN") || strings.Contains(string(encoded), "WebServiceKey") {
+		t.Fatalf("AMap config leaked its key: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"apiKeySet":true`) {
+		t.Fatalf("AMap config should report only key presence: %s", encoded)
+	}
+}
+
+func TestValidateProductionRequiresAMapKeyOnlyWhenLocationEnabled(t *testing.T) {
+	base := Env{
+		AdminPassword: "a-strong-admin-password",
+		AppEnv:        "production",
+		DatabaseURL:   "postgres://nx_app:a-strong-database-password@db:5432/nx_admin?sslmode=disable",
+		JWTSecret:     "12345678901234567890123456789012",
+	}
+	if err := ValidateProduction(base); err != nil {
+		t.Fatalf("missing optional AMap config should remain allowed: %v", err)
+	}
+	base.AMap.Enabled = true
+	if err := ValidateProduction(base); err == nil || !strings.Contains(err.Error(), "AMAP_WEB_SERVICE_KEY") {
+		t.Fatalf("expected missing AMap key validation, got %v", err)
+	} else if strings.Contains(err.Error(), "TOKEN") {
+		t.Fatalf("validation error leaked key: %v", err)
+	}
+	base.AMap.WebServiceKey = "TOKEN"
+	if err := ValidateProduction(base); err != nil {
+		t.Fatalf("configured AMap should pass core validation: %v", err)
 	}
 }
 

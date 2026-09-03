@@ -238,6 +238,9 @@ func TestNewChatGeneratorAlwaysUsesGuardedProductionClient(t *testing.T) {
 	if !ok || transport.DialContext == nil || transport.TLSHandshakeTimeout <= 0 || transport.ResponseHeaderTimeout <= 0 {
 		t.Fatalf("expected guarded production transport, got %#v", openAI.client.Transport)
 	}
+	if transport.ResponseHeaderTimeout != 12*time.Second {
+		t.Fatalf("response header timeout = %s, want configured model timeout", transport.ResponseHeaderTimeout)
+	}
 	if openAI.client.CheckRedirect == nil {
 		t.Fatal("expected guarded redirect policy")
 	}

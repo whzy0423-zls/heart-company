@@ -50,6 +50,7 @@ type openAIChatResponse struct {
 		Message struct {
 			Content string `json:"content"`
 		} `json:"message"`
+		FinishReason string `json:"finish_reason,omitempty"`
 	} `json:"choices"`
 	Error *openAIError `json:"error,omitempty"`
 }
@@ -327,6 +328,11 @@ func (g *OpenAIChatGenerator) complete(ctx context.Context, body openAIChatReque
 		return "", openAIResponseError(result.Error)
 	}
 	for _, choice := range result.Choices {
+		if isContentFilterCode(choice.FinishReason) {
+			return "", newContentFilterError("openai", choice.FinishReason)
+		}
+	}
+	for _, choice := range result.Choices {
 		if content := strings.TrimSpace(choice.Message.Content); content != "" {
 			return content, nil
 		}
@@ -381,18 +387,41 @@ func openAIStatusError(resp *http.Response) error {
 		return fmt.Errorf("OpenAI 请求失败(%d): %v", resp.StatusCode, readErr)
 	}
 	var payload openAIChatResponse
-	if json.Unmarshal(raw, &payload) == nil && payload.Error != nil && strings.TrimSpace(payload.Error.Message) != "" {
-		return fmt.Errorf("OpenAI 请求失败(%d): %s", resp.StatusCode, strings.TrimSpace(payload.Error.Message))
+	if json.Unmarshal(raw, &payload) == nil && payload.Error != nil {
+		if isContentFilterCode(payload.Error.Type) || isContentFilterCode(payload.Error.Code) {
+			return newContentFilterError("openai", firstContentFilterCode(payload.Error.Type, payload.Error.Code))
+		}
+		if message := strings.TrimSpace(payload.Error.Message); message != "" {
+			return fmt.Errorf("OpenAI 请求失败(%d): %s", resp.StatusCode, message)
+		}
 	}
 	return fmt.Errorf("OpenAI 请求失败(%d): %s", resp.StatusCode, compact(raw))
 }
 
 func openAIResponseError(payload *openAIError) error {
-	message := strings.TrimSpace(payload.Message)
+	if payload != nil && (isContentFilterCode(payload.Type) || isContentFilterCode(payload.Code)) {
+		return newContentFilterError("openai", firstContentFilterCode(payload.Type, payload.Code))
+	}
+	message := ""
+	if payload != nil {
+		message = strings.TrimSpace(payload.Message)
+	}
 	if message == "" {
 		message = "未知错误"
 	}
 	return fmt.Errorf("OpenAI 返回错误: %s", message)
+}
+
+func firstContentFilterCode(values ...any) string {
+	for _, value := range values {
+		if !isContentFilterCode(value) {
+			continue
+		}
+		if code, ok := value.(string); ok {
+			return code
+		}
+	}
+	return "content_filtered"
 }
 
 var _ ChatGenerator = (*OpenAIChatGenerator)(nil)

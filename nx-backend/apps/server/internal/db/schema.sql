@@ -3227,6 +3227,253 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_app_notifications_user_source
   ON app_notifications(app_user_id, source_key)
   WHERE source_key <> '';
 
+-- ----- App 私人故事：素材、事实卡、提纲、版本与持久化生成任务 -----
+-- 故事正文只保存结构化章节，不复用普通聊天会话；所有业务行均按 App 用户隔离。
+CREATE TABLE IF NOT EXISTS app_life_stories (
+  id                 BIGSERIAL PRIMARY KEY,
+  app_user_id        BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  title              TEXT NOT NULL DEFAULT '我的故事',
+  summary            TEXT NOT NULL DEFAULT '',
+  stage              TEXT NOT NULL DEFAULT 'capture'
+                     CHECK (stage IN ('draft','capture','questions','facts','outline','outline_ready','queued','generation','generating','completed','failed','cancelled','reading','safety_blocked')),
+  status             TEXT NOT NULL DEFAULT 'draft'
+                     CHECK (status IN ('draft', 'outline_ready', 'queued', 'generating', 'completed', 'failed', 'cancelled', 'safety_blocked')),
+  fact_card          JSONB NOT NULL DEFAULT '{}'::jsonb,
+  outline            JSONB NOT NULL DEFAULT '{}'::jsonb,
+  current_version_id BIGINT,
+  draft_version      BIGINT NOT NULL DEFAULT 1 CHECK (draft_version > 0),
+  revision           BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
+  is_favorite        BOOLEAN NOT NULL DEFAULT false,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at         TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_life_stories_user_updated
+  ON app_life_stories(app_user_id, updated_at DESC, id DESC)
+  WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_app_life_stories_user_status
+  ON app_life_stories(app_user_id, status, updated_at DESC, id DESC)
+  WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS app_life_story_materials (
+  id               BIGSERIAL PRIMARY KEY,
+  story_id         BIGINT NOT NULL REFERENCES app_life_stories(id) ON DELETE CASCADE,
+  app_user_id      BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  source_type      TEXT NOT NULL CHECK (source_type IN ('text', 'voice')),
+  sequence         INTEGER NOT NULL CHECK (sequence > 0),
+  text             TEXT NOT NULL DEFAULT '',
+  transcript       TEXT NOT NULL DEFAULT '',
+  asr_status       TEXT NOT NULL DEFAULT 'not_applicable'
+                   CHECK (asr_status IN ('not_applicable','pending','queued','processing','ready','completed','failed')),
+  duration_seconds INTEGER NOT NULL DEFAULT 0 CHECK (duration_seconds >= 0 AND duration_seconds <= 60),
+  duration_ms      INTEGER NOT NULL DEFAULT 0 CHECK (duration_ms >= 0 AND duration_ms <= 60000),
+  byte_length      INTEGER NOT NULL DEFAULT 0 CHECK (byte_length >= 0 AND byte_length <= 10485760),
+  error_category   TEXT NOT NULL DEFAULT '',
+  input_hash       TEXT NOT NULL DEFAULT '',
+  metadata         JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (story_id, sequence),
+  CHECK (source_type = 'voice' OR duration_seconds = 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_life_story_materials_user_story
+  ON app_life_story_materials(app_user_id, story_id, sequence, id);
+
+CREATE TABLE IF NOT EXISTS app_life_story_versions (
+  id                BIGSERIAL PRIMARY KEY,
+  story_id          BIGINT NOT NULL REFERENCES app_life_stories(id) ON DELETE CASCADE,
+  app_user_id       BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  version_no        INTEGER NOT NULL CHECK (version_no > 0),
+  status            TEXT NOT NULL DEFAULT 'published'
+                    CHECK (status IN ('draft','published','superseded','blocked')),
+  perspective       TEXT NOT NULL DEFAULT 'first_person'
+                    CHECK (perspective IN ('first_person','third_person')),
+  tone              TEXT NOT NULL DEFAULT 'warm'
+                    CHECK (tone IN ('warm','plain','healing')),
+  story_style       TEXT NOT NULL DEFAULT 'realistic'
+                    CHECK (story_style IN ('realistic','novel','fairy_tale','myth')),
+  chapters         JSONB NOT NULL DEFAULT '[]'::jsonb,
+  reflection       TEXT NOT NULL DEFAULT '',
+  character_count  INTEGER NOT NULL DEFAULT 0 CHECK (character_count >= 0),
+  word_count       INTEGER NOT NULL DEFAULT 0 CHECK (word_count >= 0),
+  model            TEXT NOT NULL DEFAULT '',
+  generation_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (story_id, version_no)
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_life_story_versions_user_story
+  ON app_life_story_versions(app_user_id, story_id, version_no DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS app_life_story_jobs (
+  id                BIGSERIAL PRIMARY KEY,
+  story_id          BIGINT NOT NULL REFERENCES app_life_stories(id) ON DELETE CASCADE,
+  app_user_id       BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  request_key       TEXT NOT NULL,
+  input_snapshot    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  payload_hash      TEXT NOT NULL DEFAULT '',
+  snapshot_hash     TEXT NOT NULL DEFAULT '',
+  source_version_id BIGINT,
+  status            TEXT NOT NULL DEFAULT 'queued'
+                    CHECK (status IN ('queued','running','succeeded','failed','cancelled','safety_blocked')),
+  attempt           INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+  max_attempts      INTEGER NOT NULL DEFAULT 3 CHECK (max_attempts > 0),
+  progress          INTEGER NOT NULL DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
+  error_category    TEXT NOT NULL DEFAULT '',
+  error_message     TEXT NOT NULL DEFAULT '',
+  claim_token       TEXT NOT NULL DEFAULT '',
+  worker_id         TEXT NOT NULL DEFAULT '',
+  claimed_at        TIMESTAMPTZ,
+  lease_until       TIMESTAMPTZ,
+  started_at        TIMESTAMPTZ,
+  finished_at       TIMESTAMPTZ,
+  retry_after       TIMESTAMPTZ,
+  version_id        BIGINT REFERENCES app_life_story_versions(id) ON DELETE SET NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (app_user_id, request_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_life_story_jobs_claimable
+  ON app_life_story_jobs(status, lease_until, created_at, id)
+  WHERE status IN ('queued','running');
+CREATE INDEX IF NOT EXISTS idx_app_life_story_jobs_user_story
+  ON app_life_story_jobs(app_user_id, story_id, created_at DESC, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_life_story_jobs_one_active_per_user
+  ON app_life_story_jobs(app_user_id)
+  WHERE status IN ('queued','running');
+
+-- Reversible PII token mappings are encrypted application data and expire with
+-- the source snapshot. They are never returned from a public story endpoint.
+CREATE TABLE IF NOT EXISTS app_life_story_token_maps (
+  id           BIGSERIAL PRIMARY KEY,
+  app_user_id  BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  story_id     BIGINT NOT NULL REFERENCES app_life_stories(id) ON DELETE CASCADE,
+  job_id       BIGINT NOT NULL REFERENCES app_life_story_jobs(id) ON DELETE CASCADE,
+  ciphertext   BYTEA NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at   TIMESTAMPTZ NOT NULL,
+  UNIQUE (job_id)
+);
+CREATE INDEX IF NOT EXISTS idx_app_life_story_token_maps_user_story
+  ON app_life_story_token_maps(app_user_id, story_id, expires_at);
+
+-- 配额按自然月保存；reservation/commit/release 均通过账本唯一键幂等化。
+CREATE TABLE IF NOT EXISTS app_story_quota_periods (
+  id             BIGSERIAL PRIMARY KEY,
+  app_user_id    BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  period_key     TEXT NOT NULL,
+  quota_limit    INTEGER NOT NULL DEFAULT 0 CHECK (quota_limit >= 0),
+  reserved       INTEGER NOT NULL DEFAULT 0 CHECK (reserved >= 0),
+  consumed       INTEGER NOT NULL DEFAULT 0 CHECK (consumed >= 0),
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (app_user_id, period_key),
+  CHECK (reserved + consumed <= quota_limit)
+);
+
+CREATE TABLE IF NOT EXISTS app_story_quota_ledger (
+  id             BIGSERIAL PRIMARY KEY,
+  app_user_id    BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  period_id      BIGINT NOT NULL REFERENCES app_story_quota_periods(id) ON DELETE CASCADE,
+  job_id         BIGINT REFERENCES app_life_story_jobs(id) ON DELETE SET NULL,
+  version_id     BIGINT REFERENCES app_life_story_versions(id) ON DELETE SET NULL,
+  entry_type     TEXT NOT NULL CHECK (entry_type IN ('reserve','commit','release','grant')),
+  amount         INTEGER NOT NULL CHECK (amount > 0),
+  idempotency_key TEXT NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (job_id, entry_type),
+  UNIQUE (app_user_id, idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_story_quota_ledger_user_period
+  ON app_story_quota_ledger(app_user_id, period_id, created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS app_life_story_outbox (
+  id             BIGSERIAL PRIMARY KEY,
+  app_user_id    BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  story_id       BIGINT NOT NULL REFERENCES app_life_stories(id) ON DELETE CASCADE,
+  job_id         BIGINT NOT NULL REFERENCES app_life_story_jobs(id) ON DELETE CASCADE,
+  version_id     BIGINT NOT NULL REFERENCES app_life_story_versions(id) ON DELETE CASCADE,
+  event_type     TEXT NOT NULL DEFAULT 'completed',
+  source_key     TEXT NOT NULL DEFAULT '',
+  payload        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  published_at   TIMESTAMPTZ,
+  attempts       INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  last_error     TEXT NOT NULL DEFAULT '',
+  claim_token    TEXT NOT NULL DEFAULT '',
+  lease_until    TIMESTAMPTZ,
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (job_id, event_type)
+);
+
+CREATE TABLE IF NOT EXISTS app_life_story_progress (
+  id               BIGSERIAL PRIMARY KEY,
+  app_user_id      BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  story_id         BIGINT NOT NULL REFERENCES app_life_stories(id) ON DELETE CASCADE,
+  version_id       BIGINT NOT NULL REFERENCES app_life_story_versions(id) ON DELETE CASCADE,
+  chapter_order    INTEGER NOT NULL DEFAULT 0 CHECK (chapter_order >= 0),
+  character_offset INTEGER NOT NULL DEFAULT 0 CHECK (character_offset >= 0),
+  completed        BOOLEAN NOT NULL DEFAULT false,
+  client_updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (app_user_id, story_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_life_story_progress_user
+  ON app_life_story_progress(app_user_id, updated_at DESC);
+
+-- Incremental migrations for installations that created the original story
+-- tables before the complete workflow contract was introduced.
+ALTER TABLE app_life_stories ADD COLUMN IF NOT EXISTS draft_version BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE app_life_story_materials ADD COLUMN IF NOT EXISTS duration_ms INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE app_life_story_materials ADD COLUMN IF NOT EXISTS byte_length INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE app_life_story_materials ADD COLUMN IF NOT EXISTS error_category TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_life_story_jobs ADD COLUMN IF NOT EXISTS payload_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_life_story_jobs ADD COLUMN IF NOT EXISTS snapshot_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_life_story_jobs ADD COLUMN IF NOT EXISTS source_version_id BIGINT;
+ALTER TABLE app_life_story_jobs ADD COLUMN IF NOT EXISTS worker_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_life_story_jobs ADD COLUMN IF NOT EXISTS retry_after TIMESTAMPTZ;
+ALTER TABLE app_life_story_versions ADD COLUMN IF NOT EXISTS story_style TEXT NOT NULL DEFAULT 'realistic';
+ALTER TABLE app_life_story_outbox ADD COLUMN IF NOT EXISTS claim_token TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_life_story_outbox ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ;
+ALTER TABLE app_life_story_outbox ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE app_life_story_outbox ADD COLUMN IF NOT EXISTS source_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_life_story_progress ADD COLUMN IF NOT EXISTS client_updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE app_life_story_progress DROP CONSTRAINT IF EXISTS app_life_story_progress_chapter_order_check;
+ALTER TABLE app_life_story_progress ADD CONSTRAINT app_life_story_progress_chapter_order_check CHECK (chapter_order >= 0);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_life_story_outbox_source_key
+  ON app_life_story_outbox(app_user_id, source_key)
+  WHERE source_key <> '';
+
+-- Existing CHECK constraints are replaced idempotently so upgrades accept the
+-- lifecycle values used by newer clients.
+DO $$
+BEGIN
+  IF to_regclass('app_life_stories') IS NOT NULL THEN
+    ALTER TABLE app_life_stories DROP CONSTRAINT IF EXISTS app_life_stories_stage_check;
+    ALTER TABLE app_life_stories ADD CONSTRAINT app_life_stories_stage_check CHECK (stage IN ('draft','capture','questions','facts','outline','outline_ready','queued','generation','generating','completed','failed','cancelled','reading','safety_blocked'));
+    ALTER TABLE app_life_stories DROP CONSTRAINT IF EXISTS app_life_stories_status_check;
+    ALTER TABLE app_life_stories ADD CONSTRAINT app_life_stories_status_check CHECK (status IN ('draft','outline_ready','queued','generating','completed','failed','cancelled','safety_blocked'));
+  END IF;
+  IF to_regclass('app_life_story_materials') IS NOT NULL THEN
+    ALTER TABLE app_life_story_materials DROP CONSTRAINT IF EXISTS app_life_story_materials_asr_status_check;
+    ALTER TABLE app_life_story_materials ADD CONSTRAINT app_life_story_materials_asr_status_check CHECK (asr_status IN ('not_applicable','pending','queued','processing','ready','completed','failed'));
+  END IF;
+  IF to_regclass('app_life_story_versions') IS NOT NULL THEN
+    ALTER TABLE app_life_story_versions DROP CONSTRAINT IF EXISTS app_life_story_versions_status_check;
+    ALTER TABLE app_life_story_versions ADD CONSTRAINT app_life_story_versions_status_check CHECK (status IN ('draft','published','superseded','blocked'));
+    ALTER TABLE app_life_story_versions DROP CONSTRAINT IF EXISTS app_life_story_versions_story_style_check;
+    ALTER TABLE app_life_story_versions ADD CONSTRAINT app_life_story_versions_story_style_check CHECK (story_style IN ('realistic','novel','fairy_tale','myth'));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_app_life_story_jobs_payload_hash
+  ON app_life_story_jobs(app_user_id, request_key, payload_hash);
+
 -- ----- 推送通知记录：后台发送的推送历史 -----
 CREATE TABLE IF NOT EXISTS push_notifications (
   id            BIGSERIAL PRIMARY KEY,

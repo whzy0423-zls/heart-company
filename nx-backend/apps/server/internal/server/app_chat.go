@@ -515,6 +515,10 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
 	streamStartedAt := time.Now()
+	if err := clearAppChatStreamWriteDeadline(w); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "streaming unavailable")
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -540,6 +544,14 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 		isModelIdentity:      isModelIdentity,
 	})
 	s.pumpAppChatStream(ctx, cancel, r.Context(), w, flusher, events, lifecycle, userInfo.ID, sessionID, streamStartedAt, chatTimeout)
+}
+
+func clearAppChatStreamWriteDeadline(w http.ResponseWriter) error {
+	err := http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	if errors.Is(err, http.ErrNotSupported) {
+		return nil
+	}
+	return err
 }
 
 type appChatStreamPipelineInput struct {

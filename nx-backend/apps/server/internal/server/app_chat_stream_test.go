@@ -127,6 +127,79 @@ func TestAppChatStreamingProxyConfig(t *testing.T) {
 	}
 }
 
+func TestSkillChatStreamingProxyConfig(t *testing.T) {
+	repoRoot := appChatStreamTestRepoRoot(t)
+	configPaths := []string{
+		"website-react/nginx.conf",
+		"nx-backend/scripts/deploy/nginx.conf",
+	}
+	requiredDirectives := []string{
+		"proxy_pass http://backend;",
+		"proxy_http_version 1.1;",
+		`proxy_set_header Connection "";`,
+		"proxy_buffering off;",
+		"proxy_cache off;",
+		"gzip off;",
+		"proxy_connect_timeout 30s;",
+		"proxy_read_timeout 180s;",
+		"proxy_send_timeout 180s;",
+	}
+
+	for _, relativePath := range configPaths {
+		t.Run(relativePath, func(t *testing.T) {
+			body, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(relativePath)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			config := string(body)
+			focusedStart := strings.Index(config, "location ~ ^/api/app/skill-sessions/")
+			if focusedStart < 0 {
+				t.Fatalf("%s missing focused skill streaming location", relativePath)
+			}
+			genericStart := strings.Index(config, "location /api/")
+			if genericStart < 0 || focusedStart > genericStart {
+				t.Fatalf("%s skill streaming location must appear before generic /api/ location", relativePath)
+			}
+
+			block := appChatNginxLocationBlock(t, config[focusedStart:])
+			normalized := strings.Join(strings.Fields(block), " ")
+			for _, directive := range requiredDirectives {
+				if !strings.Contains(normalized, strings.Join(strings.Fields(directive), " ")) {
+					t.Errorf("%s skill location missing %q; block=%q", relativePath, directive, block)
+				}
+			}
+		})
+	}
+}
+
+func TestOuterStreamingProxyDeploymentTemplate(t *testing.T) {
+	repoRoot := appChatStreamTestRepoRoot(t)
+	body, err := os.ReadFile(filepath.Join(repoRoot, "DEPLOY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := string(body)
+	for _, path := range []string{
+		"/api/app/chat/",
+		"/api/app/skill-sessions/[^/]+/ask/stream",
+	} {
+		if !strings.Contains(config, path) {
+			t.Errorf("DEPLOY.md missing outer streaming route %q", path)
+		}
+	}
+	for _, directive := range []string{
+		"proxy_buffering off;",
+		"proxy_cache off;",
+		"gzip off;",
+		"proxy_read_timeout 180s;",
+		"proxy_send_timeout 180s;",
+	} {
+		if !strings.Contains(config, directive) {
+			t.Errorf("DEPLOY.md missing outer streaming directive %q", directive)
+		}
+	}
+}
+
 func appChatStreamTestRepoRoot(t *testing.T) string {
 	t.Helper()
 	_, filename, _, ok := runtime.Caller(0)
@@ -744,6 +817,52 @@ func TestAppChatAskStreamFlushesConnectedBeforeSlowSummary(t *testing.T) {
 	close(releaseSummary)
 	if _, err := io.ReadAll(response.Body); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAppChatAskStreamOutlivesServerWriteTimeout(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	generator := &controlledAppChatStreamingGenerator{
+		generateStream: func(ctx context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+			select {
+			case <-time.After(80 * time.Millisecond):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			const answer = "延迟回答。"
+			if err := emit(answer); err != nil {
+				return "", err
+			}
+			return answer, nil
+		},
+	}
+	s := newAppChatStreamServer(store, generator)
+	s.chatTimeout = 300 * time.Millisecond
+	s.chatHeartbeatInterval = 200 * time.Millisecond
+	s.chatProviderIdleTimeout = 250 * time.Millisecond
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/app/chat/sessions/", func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), appContextKey{}, auth.UserInfo{ID: 7})
+		s.appChatRouter(w, r.WithContext(ctx))
+	})
+	httpServer := httptest.NewUnstartedServer(mux)
+	httpServer.Config.WriteTimeout = 30 * time.Millisecond
+	httpServer.Start()
+	defer httpServer.Close()
+
+	client := &http.Client{Timeout: time.Second}
+	response, err := client.Post(httpServer.URL+"/api/app/chat/sessions/42/ask/stream", "application/json", strings.NewReader(`{"question":"怎么做？"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(body), "event: done\n"); got != 1 {
+		t.Fatalf("done terminal count = %d, want 1; body=%q", got, body)
 	}
 }
 
