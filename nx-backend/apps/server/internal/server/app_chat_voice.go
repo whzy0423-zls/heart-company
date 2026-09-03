@@ -33,6 +33,10 @@ type appChatVoiceStore interface {
 	GetVoiceTranscript(ctx context.Context, appUserID, messageID int64) (string, error)
 }
 
+type appChatVoiceKnowledgeStore interface {
+	SaveVoicePairWithKnowledgeTrace(ctx context.Context, sessionID, audioAssetID int64, durationMs int, transcript, answer string, sources json.RawMessage, trace chat.KnowledgeTrace) (int64, int64, error)
+}
+
 type voiceChatResponse struct {
 	UserMessage chat.Message `json:"userMessage"`
 	Answer      rag.Answer   `json:"answer"`
@@ -150,6 +154,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	answer, isModelIdentity := appChatModelIdentityAnswer(transcript)
+	var knowledgeTrace *chat.KnowledgeTrace
 	extraction := userpreference.Extraction{}
 	if !isModelIdentity {
 		preferences, directives, preparedExtraction, err := s.prepareAppChatPreferencesLegacy(ctx, userInfo.ID, transcript)
@@ -158,7 +163,8 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		extraction = preparedExtraction
-		docs, _ := s.retrieveAppDocsForQuery(ctx, transcript, 6)
+		docs, trace := s.retrieveAppChatKnowledge(ctx, userInfo.ID, sessionID, sess.CardID, transcript)
+		knowledgeTrace = trace
 		profile, conversationCard := s.appChatProfilesForCard(ctx, userInfo.ID, sess.CardID)
 		if memories, memoryErr := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); memoryErr == nil {
 			profile.Memories = memories
@@ -203,7 +209,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sourcesJSON, _ := json.Marshal(answer.Sources)
-	userMessageID, assistantMessageID, err := voiceStore.SaveVoicePair(ctx, sessionID, asset.ID, durationMs, transcript, answer.Answer, sourcesJSON)
+	userMessageID, assistantMessageID, err := saveAppChatVoicePair(ctx, voiceStore, sessionID, asset.ID, durationMs, transcript, answer.Answer, sourcesJSON, knowledgeTrace)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "回答保存失败，请重试")
 		return
@@ -233,6 +239,17 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		Answer:    answer,
 		MessageID: assistantMessageID,
 	})
+}
+
+func saveAppChatVoicePair(ctx context.Context, store appChatVoiceStore, sessionID, audioAssetID int64, durationMs int, transcript, answer string, sources json.RawMessage, trace *chat.KnowledgeTrace) (int64, int64, error) {
+	if trace == nil {
+		return store.SaveVoicePair(ctx, sessionID, audioAssetID, durationMs, transcript, answer, sources)
+	}
+	knowledgeStore, ok := store.(appChatVoiceKnowledgeStore)
+	if !ok {
+		return 0, 0, errors.New("voice knowledge trace store unavailable")
+	}
+	return knowledgeStore.SaveVoicePairWithKnowledgeTrace(ctx, sessionID, audioAssetID, durationMs, transcript, answer, sources, *trace)
 }
 
 func hasVoiceTranscriptContent(transcript string) bool {

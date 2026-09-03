@@ -62,6 +62,9 @@ func TestXinzhiliRealtimeDependenciesUseSingleTTSProviderWorker(t *testing.T) {
 	if got := synth.WorkerCount(); got != 1 {
 		t.Fatalf("worker count=%d want=1", got)
 	}
+	if deps.LayeredKnowledge == nil || deps.Knowledge != nil || deps.Theory != nil {
+		t.Fatalf("realtime retrieval dependencies layered=%T knowledge=%T theory=%T", deps.LayeredKnowledge, deps.Knowledge, deps.Theory)
+	}
 }
 
 type fakeXinzhiliModeStore struct {

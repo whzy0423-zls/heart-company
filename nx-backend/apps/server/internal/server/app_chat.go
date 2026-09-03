@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"nine-xing/nx-backend/apps/server/internal/answerhygiene"
+	"nine-xing/nx-backend/apps/server/internal/appknowledge"
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/quiz"
@@ -192,10 +193,41 @@ type appChatStore interface {
 	GetSession(ctx context.Context, appUserID, sessionID int64) (chat.Session, error)
 	ListMessages(ctx context.Context, sessionID int64) ([]chat.Message, error)
 	SavePair(ctx context.Context, sessionID int64, question, answer string, sources json.RawMessage) (int64, error)
+	SavePairWithKnowledgeTrace(ctx context.Context, sessionID int64, question, answer string, sources json.RawMessage, trace chat.KnowledgeTrace) (int64, error)
 	SetFeedback(ctx context.Context, appUserID, messageID int64, feedback string) error
 	ToggleFavorite(ctx context.Context, appUserID, messageID int64) (bool, error)
 	ListFavorites(ctx context.Context, appUserID, cardID int64) ([]chat.FavoriteItem, error)
 	SearchMessages(ctx context.Context, appUserID, cardID int64, keyword string) ([]chat.SearchResult, error)
+}
+
+func (s *Server) retrieveAppChatKnowledge(ctx context.Context, userID, sessionID, cardID int64, query string) ([]rag.Document, *chat.KnowledgeTrace) {
+	if s.appKnowledge == nil {
+		documents, _ := s.retrieveAppDocsForQuery(ctx, query, 6)
+		return documents, nil
+	}
+	result, err := s.appKnowledge.Retrieve(ctx, appknowledge.Input{
+		UserID: userID, SessionID: sessionID, CardID: cardID, Query: query,
+	})
+	if err != nil {
+		return nil, nil
+	}
+	layerHits, err := json.Marshal(result.Trace.LayerHits)
+	if err != nil {
+		return result.Documents, nil
+	}
+	return result.Documents, &chat.KnowledgeTrace{
+		CardID:        result.Trace.CardID,
+		EnneagramType: result.Trace.EnneagramType,
+		CardRevision:  result.Trace.CardRevision,
+		LayerHits:     layerHits,
+	}
+}
+
+func (s *Server) saveAppChatPair(ctx context.Context, sessionID int64, question, answer string, sources json.RawMessage, trace *chat.KnowledgeTrace) (int64, error) {
+	if trace == nil {
+		return s.appChat.SavePair(ctx, sessionID, question, answer, sources)
+	}
+	return s.appChat.SavePairWithKnowledgeTrace(ctx, sessionID, question, answer, sources, *trace)
 }
 
 type appChatPreferenceStore interface {
@@ -428,7 +460,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	docs, _ := s.retrieveAppDocsForQuery(ctx, body.Question, 6)
+	docs, knowledgeTrace := s.retrieveAppChatKnowledge(ctx, userInfo.ID, sessionID, sess.CardID, body.Question)
 	profile, conversationCard := s.appChatProfilesForCard(ctx, userInfo.ID, sess.CardID)
 	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
 		profile.Memories = memories
@@ -451,7 +483,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	ans.Answer = answerhygiene.Clean(body.Question, ans.Answer)
 
 	sourcesJSON, _ := json.Marshal(ans.Sources)
-	messageID, saveErr := s.appChat.SavePair(ctx, sessionID, body.Question, ans.Answer, sourcesJSON)
+	messageID, saveErr := s.saveAppChatPair(ctx, sessionID, body.Question, ans.Answer, sourcesJSON, knowledgeTrace)
 	if saveErr == nil {
 		s.scheduleAppChatPreferenceFallback(preferenceTurn, body.Question)
 	}
@@ -515,6 +547,10 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
 	streamStartedAt := time.Now()
+	if err := clearAppChatStreamWriteDeadline(w); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "streaming unavailable")
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -540,6 +576,14 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 		isModelIdentity:      isModelIdentity,
 	})
 	s.pumpAppChatStream(ctx, cancel, r.Context(), w, flusher, events, lifecycle, userInfo.ID, sessionID, streamStartedAt, chatTimeout)
+}
+
+func clearAppChatStreamWriteDeadline(w http.ResponseWriter) error {
+	err := http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	if errors.Is(err, http.ErrNotSupported) {
+		return nil
+	}
+	return err
 }
 
 type appChatStreamPipelineInput struct {
@@ -570,6 +614,7 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 	}
 
 	var ans rag.Answer
+	var knowledgeTrace *chat.KnowledgeTrace
 	if input.isModelIdentity {
 		if !send(appChatStreamEvent{kind: appChatStreamProviderStarted}) {
 			return
@@ -594,7 +639,8 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			return
 		}
 
-		docs, _ := s.retrieveAppDocsForQuery(ctx, input.question, 6)
+		docs, trace := s.retrieveAppChatKnowledge(ctx, input.userID, input.sessionID, input.cardID, input.question)
+		knowledgeTrace = trace
 		profile, conversationCard := s.appChatProfilesForCard(ctx, input.userID, input.cardID)
 		if memories, err := s.appChatMemoriesForPrompt(ctx, input.userID, input.cardID, 6); err == nil {
 			profile.Memories = memories
@@ -697,7 +743,7 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 		return
 	}
 	events <- appChatStreamEvent{kind: appChatStreamPersistenceStarted}
-	messageID, saveErr := s.appChat.SavePair(ctx, input.sessionID, input.question, ans.Answer, sourcesJSON)
+	messageID, saveErr := s.saveAppChatPair(ctx, input.sessionID, input.question, ans.Answer, sourcesJSON, knowledgeTrace)
 	if saveErr != nil {
 		fallback.release()
 		events <- appChatStreamEvent{kind: appChatStreamError, publicError: "回答保存失败，请重试", errorPhase: "save"}

@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -55,6 +56,7 @@ type Env struct {
 	MiniMax                MiniMaxConfig
 	MiniappChat            MiniappChatConfig
 	WeChat                 WeChatConfig
+	AMap                   AMapConfig
 	WxPay                  WxPayConfig
 	Embedding              EmbeddingConfig
 	SMS                    SMSConfig
@@ -114,6 +116,37 @@ type WeChatConfig struct {
 	AppID    string
 	Secret   string
 	LoginDev bool // true 或未配置 AppID/Secret 时启用本地登录回退
+}
+
+// AMapConfig controls the server-side AMap Web Service proxy used by the App
+// location picker. The Web Service key is kept server-side and is never part
+// of an API response or client configuration payload.
+type AMapConfig struct {
+	WebServiceKey string `json:"-"`
+	Enabled       bool   `json:"enabled"`
+}
+
+// LocationConfig is retained as a provider-neutral alias for integrations
+// that refer to this feature as the location service.
+type LocationConfig = AMapConfig
+
+// APIKeySet is the only key status suitable for diagnostics or a public
+// configuration view. It deliberately never returns the key itself.
+func (c AMapConfig) APIKeySet() bool {
+	return strings.TrimSpace(c.WebServiceKey) != ""
+}
+
+// MarshalJSON exposes only non-secret diagnostics. The server key remains
+// available to the provider constructor through the Go value but is omitted
+// from every accidental JSON serialization.
+func (c AMapConfig) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Enabled   bool `json:"enabled"`
+		APIKeySet bool `json:"apiKeySet"`
+	}{
+		Enabled:   c.Enabled,
+		APIKeySet: c.APIKeySet(),
+	})
 }
 
 // WxPayConfig 微信支付 v3（JSAPI）配置。只有显式 Dev=true 时启用模拟支付。
@@ -385,6 +418,17 @@ func Load() Env {
 	}
 
 	appEnv := NormalizeAppEnv(getenv("APP_ENV", ""))
+	amapKey := strings.TrimSpace(getenv("AMAP_WEB_SERVICE_KEY", ""))
+	// Production enables the proxy by default so a missing key is surfaced by
+	// production validation. In development, a supplied key opts in without
+	// requiring another flag; AMAP_LOCATION_ENABLED=false always disables it.
+	amapEnabled := appEnv == "production" || amapKey != ""
+	if rawEnabled := strings.TrimSpace(os.Getenv("AMAP_LOCATION_ENABLED")); rawEnabled != "" {
+		if parsed, parseErr := strconv.ParseBool(rawEnabled); parseErr == nil {
+			amapEnabled = parsed
+		}
+	}
+	amap := AMapConfig{WebServiceKey: amapKey, Enabled: amapEnabled}
 
 	classroomPartMB := positiveIntEnv("CLASSROOM_MEDIA_PART_SIZE_MB", 8)
 	classroomMaxParts := positiveIntEnv("CLASSROOM_MEDIA_MAX_PARTS", 10000)
@@ -446,6 +490,7 @@ func Load() Env {
 			Secret:   getenv("WECHAT_SECRET", ""),
 			LoginDev: getenv("WECHAT_LOGIN_DEV", "") == "true",
 		},
+		AMap:      amap,
 		WxPay:     wxpay,
 		Embedding: embedding,
 		SMS: SMSConfig{
@@ -513,6 +558,9 @@ func ValidateProduction(env Env) error {
 	}
 	if env.WxPay.Dev {
 		return fmt.Errorf("production WXPAY_DEV must be false")
+	}
+	if env.AMap.Enabled && strings.TrimSpace(env.AMap.WebServiceKey) == "" {
+		return fmt.Errorf("production AMAP_WEB_SERVICE_KEY must be set when AMAP_LOCATION_ENABLED is enabled")
 	}
 	if strings.TrimSpace(env.Video.APIKey) != "" {
 		publicBaseURL := strings.TrimSpace(env.PublicBaseURL)

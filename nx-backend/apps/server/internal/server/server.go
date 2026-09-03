@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/analytics"
+	"nine-xing/nx-backend/apps/server/internal/appknowledge"
 	"nine-xing/nx-backend/apps/server/internal/appnotification"
 	"nine-xing/nx-backend/apps/server/internal/apprelease"
 	"nine-xing/nx-backend/apps/server/internal/appuser"
@@ -157,6 +158,7 @@ type Server struct {
 
 	appUsers                       *appuser.Store
 	appChat                        appChatStore
+	appKnowledge                   *appknowledge.Coordinator
 	skillCatalog                   *skillcatalog.Store
 	skillChat                      *skillchat.Store
 	skillChatRuntime               *skillchat.Runtime
@@ -222,6 +224,20 @@ type Server struct {
 	xinzhiliModeStore          xinzhiliModePreferenceStore
 	xinzhiliVoiceConfig        xinzhiliVoiceConfigStore
 	theoryAdmin                theoryLibraryAdminService
+	enneagramAdmin             enneagramLibraryAdminService
+}
+
+type appKnowledgePublicSearcher struct{ server *Server }
+
+func (searcher appKnowledgePublicSearcher) SearchPublic(ctx context.Context, query string, topK int) ([]rag.Document, error) {
+	if searcher.server == nil {
+		return nil, errors.New("app public knowledge unavailable")
+	}
+	candidates, err := searcher.server.retrieveAppDocsForQuery(ctx, query, topK)
+	if err != nil {
+		return nil, err
+	}
+	return rag.SelectDocuments(candidates, query, 0, topK), nil
 }
 
 func maxInt(a, b int) int {
@@ -421,6 +437,11 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		s.appDailyQuizBankAdmin = profileStore
 	}
 	s.appChat = chat.NewStore(database)
+	s.appKnowledge = appknowledge.NewCoordinator(
+		appknowledge.NewResolver(database),
+		appKnowledgePublicSearcher{server: s},
+		theorystore.NewStore(database),
+	)
 	s.skillCatalog = skillcatalog.NewStore(database)
 	s.skillChat = skillchat.NewStore(database)
 	s.skillChatRuntime = skillchat.NewRuntime(s.skillChat, theorystore.NewStore(database), skillChatRuntimeGenerator{server: s})
@@ -445,6 +466,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	}
 	s.xinzhiliVoiceConfig = xinzhili.NewVoiceConfigStore(database, xinzhiliVoiceCodec)
 	s.theoryAdmin = theoryLibraryAdminStore{db: database}
+	s.enneagramAdmin = newEnneagramLibraryAdminStore(database)
 	s.loginLimiter = newStrRateLimiter(10, time.Minute)
 	s.loginDBLimiter = newDBRateLimiter(database, "admin_login", 10, time.Minute)
 	s.smsPhoneLimiter = newStrRateLimiter(1, time.Minute)
@@ -785,6 +807,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/xinzhili-voice-config", s.requirePermission("System:XinzhiliModel:Config", s.xinzhiliVoiceConfigHandler))
 	s.mux.HandleFunc("/api/theory-libraries", s.requirePermission("System:TheoryLibrary:Manage", s.theoryLibrariesHandler))
 	s.mux.HandleFunc("/api/theory-libraries/", s.requirePermission("System:TheoryLibrary:Manage", s.theoryLibraryActionHandler))
+	registerEnneagramLibraryAdminRoutes(s.mux, s.requirePermission, s)
+	registerStorySkillAdminRoutes(s.mux, s.requirePermission, s)
 	// 对话模型连通性测试：对 MiniMax 网关做一次轻量探活，需登录。
 	s.mux.HandleFunc("/api/model-config/test-chat", s.requirePermission("System:Model:Config", s.method(http.MethodPost, s.testChatModel)))
 	// ===== App API =====

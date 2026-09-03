@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -250,5 +251,68 @@ func TestRecognizeSpeechPostsOpenAICompatibleTranscription(t *testing.T) {
 	}
 	if !sawRequest {
 		t.Fatal("expected upstream request")
+	}
+}
+
+func TestRecognizeSpeechLimitsConcurrentASRRequests(t *testing.T) {
+	var mu sync.Mutex
+	active, maxActive := 0, 0
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		mu.Unlock()
+		entered <- struct{}{}
+		<-release
+		mu.Lock()
+		active--
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"text": "ok"})
+	}))
+	defer upstream.Close()
+	previousClientFactory := newASRHTTPClient
+	newASRHTTPClient = func(timeout time.Duration) *http.Client {
+		return &http.Client{Transport: upstream.Client().Transport, Timeout: timeout}
+	}
+	t.Cleanup(func() { newASRHTTPClient = previousClientFactory })
+	s := &Server{
+		env:      config.Env{ASR: config.ASRConfig{APIBase: upstream.URL, APIKey: "test-key", Model: "whisper-1", TimeoutSeconds: 5}},
+		asrSlots: make(chan struct{}, 2),
+	}
+
+	errCh := make(chan error, 4)
+	for i := 0; i < 4; i++ {
+		go func() {
+			_, err := s.recognizeSpeech(context.Background(), []byte("audio"), "voice.wav")
+			errCh <- err
+		}()
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-entered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for the first ASR requests")
+		}
+	}
+	select {
+	case <-entered:
+		t.Fatal("more than two ASR requests reached the provider concurrently")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	for i := 0; i < 4; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	gotMax := maxActive
+	mu.Unlock()
+	if gotMax != 2 {
+		t.Fatalf("max concurrent ASR requests=%d want=2", gotMax)
 	}
 }

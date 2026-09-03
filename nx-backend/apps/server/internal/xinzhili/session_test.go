@@ -808,6 +808,42 @@ func TestConversationIsolationAndRelevanceUseIndependentRetrievers(t *testing.T)
 	}
 }
 
+func TestRealtimeGenerationUsesCurrentCardLayeredKnowledgeAndPersistsTrace(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.session.Close()
+	layered := &fakeLayeredKnowledgeRetriever{
+		documents: []rag.Document{{ID: "type-6", Title: "6号型号库", Content: "先区分现实风险和想象风险"}},
+		trace:     KnowledgeTrace{CardID: 22, EnneagramType: intPointer(6), CardRevision: 9, LayerHits: json.RawMessage(`{"enneagram_type":{"chunk_ids":["type-6"]}}`)},
+	}
+	fixture.deps.LayeredKnowledge = layered
+	fixture.session = NewSession(fixture.deps)
+
+	input := fixture.input("turn-layered-knowledge")
+	if err := fixture.session.StartTurn(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "担心风险时怎么办", Stable: true})
+	fixture.sink.waitAudio(t)
+	fixture.store.waitCompleted(t)
+
+	if layered.calls != 1 || layered.userID != 11 || layered.conversationID != 33 || layered.cardID != 22 || layered.query != "担心风险时怎么办" {
+		t.Fatalf("layered retrieval calls=%d input=%d/%d/%d %q", layered.calls, layered.userID, layered.conversationID, layered.cardID, layered.query)
+	}
+	if fixture.knowledge.calls != 0 || fixture.theory.calls != 0 {
+		t.Fatalf("legacy retrievers called knowledge=%d theory=%d", fixture.knowledge.calls, fixture.theory.calls)
+	}
+	trace := fixture.store.completedKnowledgeTrace()
+	if trace == nil || trace.CardID != 22 || trace.CardRevision != 9 || trace.EnneagramType == nil || *trace.EnneagramType != 6 {
+		t.Fatalf("completed knowledge trace = %+v", trace)
+	}
+	if !strings.Contains(string(trace.LayerHits), "type-6") {
+		t.Fatalf("completed layer hits = %s", trace.LayerHits)
+	}
+	if sources := fixture.generator.lastInput().Sources; len(sources) != 1 || sources[0].ID != "type-6" {
+		t.Fatalf("layered generator sources = %+v", sources)
+	}
+}
+
 func TestGenerationRetrievesKnowledgeBeforeTheory(t *testing.T) {
 	fixture := newSessionFixture(t)
 	fixture.session.Close()
@@ -1442,6 +1478,7 @@ type fakeConversationStore struct {
 	completeAcks     []bool
 	sources          json.RawMessage
 	completedContent string
+	knowledgeTrace   *KnowledgeTrace
 }
 
 func (s *fakeConversationStore) Resolve(_ context.Context, userID, cardID int64, scene string, conversationID int64) (Conversation, error) {
@@ -1496,6 +1533,28 @@ func (s *fakeConversationStore) CompleteAssistant(_ context.Context, _ int64, co
 	s.completedContent = content
 	s.sources = append(json.RawMessage(nil), sources...)
 	return nil
+}
+
+func (s *fakeConversationStore) CompleteAssistantWithKnowledgeTrace(_ context.Context, _ int64, content string, sources json.RawMessage, trace KnowledgeTrace) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.completedContent = content
+	s.sources = append(json.RawMessage(nil), sources...)
+	copyTrace := trace
+	copyTrace.LayerHits = append(json.RawMessage(nil), trace.LayerHits...)
+	s.knowledgeTrace = &copyTrace
+	return nil
+}
+
+func (s *fakeConversationStore) completedKnowledgeTrace() *KnowledgeTrace {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.knowledgeTrace == nil {
+		return nil
+	}
+	copyTrace := *s.knowledgeTrace
+	copyTrace.LayerHits = append(json.RawMessage(nil), s.knowledgeTrace.LayerHits...)
+	return &copyTrace
 }
 func (s *fakeConversationStore) userCount() int {
 	s.mu.Lock()
@@ -1733,6 +1792,24 @@ type fakeRetriever struct {
 	topK     int
 	minScore float64
 }
+
+type fakeLayeredKnowledgeRetriever struct {
+	calls          int
+	userID         int64
+	conversationID int64
+	cardID         int64
+	query          string
+	documents      []rag.Document
+	trace          KnowledgeTrace
+}
+
+func (r *fakeLayeredKnowledgeRetriever) Retrieve(_ context.Context, userID, conversationID, cardID int64, query string) (LayeredKnowledgeResult, error) {
+	r.calls++
+	r.userID, r.conversationID, r.cardID, r.query = userID, conversationID, cardID, query
+	return LayeredKnowledgeResult{Documents: append([]rag.Document(nil), r.documents...), Trace: &r.trace}, nil
+}
+
+func intPointer(value int) *int { return &value }
 
 func (r *fakeRetriever) Search(_ context.Context, _ string, topK int, minScore float64) ([]rag.Document, error) {
 	r.calls++

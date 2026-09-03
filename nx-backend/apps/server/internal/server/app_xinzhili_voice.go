@@ -190,10 +190,18 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 		return
 	}
 	_ = writeAppChatSSE(w, flusher, "state", map[string]string{"state": "retrieving_knowledge"})
-	docs, _ := s.retrieveXinzhiliDocs(ctx, transcript, 8)
+	var docs []rag.Document
+	var knowledgeTrace *chat.KnowledgeTrace
+	if s.appKnowledge != nil {
+		docs, knowledgeTrace = s.retrieveAppChatKnowledge(ctx, userInfo.ID, session.ID, session.CardID, transcript)
+	} else {
+		docs, _ = s.retrieveXinzhiliDocs(ctx, transcript, 8)
+	}
 	_ = writeAppChatSSE(w, flusher, "state", map[string]string{"state": "retrieving_theory"})
-	theoryDocs, _ := s.retrieveXinzhiliTheoryDocs(ctx, transcript, 6, 0.2)
-	docs = mergeXinzhiliRAGDocuments(docs, theoryDocs)
+	if s.appKnowledge == nil {
+		theoryDocs, _ := s.retrieveXinzhiliTheoryDocs(ctx, transcript, 6, 0.2)
+		docs = mergeXinzhiliRAGDocuments(docs, theoryDocs)
+	}
 
 	preferences, directives, extraction, err := s.prepareAppChatPreferencesLegacy(ctx, userInfo.ID, transcript)
 	if err != nil {
@@ -428,7 +436,7 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 	}
 
 	sourcesJSON, _ := json.Marshal(answer.Sources)
-	messageID, err := s.saveXinzhiliPair(ctx, session.ID, transcript, answer.Answer, sourcesJSON)
+	messageID, err := s.saveXinzhiliPair(ctx, session.ID, transcript, answer.Answer, sourcesJSON, knowledgeTrace)
 	if err != nil {
 		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"code": "save_failed", "message": "回答保存失败，请重试"})
 		return
@@ -584,12 +592,12 @@ func mergeXinzhiliRAGDocuments(knowledgeDocs, theoryDocs []rag.Document) []rag.D
 	return documents
 }
 
-func (s *Server) saveXinzhiliPair(ctx context.Context, sessionID int64, question, answer string, sources json.RawMessage) (int64, error) {
+func (s *Server) saveXinzhiliPair(ctx context.Context, sessionID int64, question, answer string, sources json.RawMessage, trace *chat.KnowledgeTrace) (int64, error) {
 	if s.xinzhiliSavePair != nil {
 		return s.xinzhiliSavePair(ctx, sessionID, question, answer, sources)
 	}
 	if s.appChat == nil {
 		return 0, fmt.Errorf("chat store unavailable")
 	}
-	return s.appChat.SavePair(ctx, sessionID, question, answer, sources)
+	return s.saveAppChatPair(ctx, sessionID, question, answer, sources, trace)
 }

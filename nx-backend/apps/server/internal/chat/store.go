@@ -49,6 +49,13 @@ type ConversationState struct {
 	SummaryThroughMessageID int64
 }
 
+type KnowledgeTrace struct {
+	CardID        int64
+	EnneagramType *int
+	CardRevision  int64
+	LayerHits     json.RawMessage
+}
+
 type Store struct{ db *sql.DB }
 
 func NewStore(db *sql.DB) *Store { return &Store{db: db} }
@@ -309,6 +316,17 @@ func (s *Store) AcknowledgeSceneAssistant(ctx context.Context, messageID int64, 
 }
 
 func (s *Store) CompleteSceneAssistant(ctx context.Context, messageID int64, content string, sources json.RawMessage) error {
+	return s.completeSceneAssistant(ctx, messageID, content, sources, nil)
+}
+
+func (s *Store) CompleteSceneAssistantWithKnowledgeTrace(ctx context.Context, messageID int64, content string, sources json.RawMessage, trace KnowledgeTrace) error {
+	if err := validateKnowledgeTrace(trace); err != nil {
+		return err
+	}
+	return s.completeSceneAssistant(ctx, messageID, content, sources, &trace)
+}
+
+func (s *Store) completeSceneAssistant(ctx context.Context, messageID int64, content string, sources json.RawMessage, trace *KnowledgeTrace) error {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return errors.New("chat: assistant content is required")
@@ -316,23 +334,29 @@ func (s *Store) CompleteSceneAssistant(ctx context.Context, messageID int64, con
 	if sources == nil {
 		sources = json.RawMessage("[]")
 	}
-	result, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var sessionID int64
+	err = tx.QueryRowContext(ctx,
 		`UPDATE app_chat_messages m SET content=$2, sources=$3
 		 FROM app_chat_sessions s
-		 WHERE m.id=$1 AND m.session_id=s.id AND m.role='assistant' AND s.scene='xinzhili_voice'`,
+		 WHERE m.id=$1 AND m.session_id=s.id AND m.role='assistant' AND s.scene='xinzhili_voice'
+		 RETURNING m.session_id`,
 		messageID, content, sources,
-	)
-	if err != nil {
-		return err
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
+	).Scan(&sessionID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	if err := insertKnowledgeTrace(ctx, tx, sessionID, messageID, trace); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // GetSession 按 id+用户 返回会话，防越权。
@@ -462,6 +486,47 @@ func (s *Store) UpdateConversationSummary(ctx context.Context, sessionID, expect
 // SavePair 在事务中保存用户消息 + AI回答，并刷新 session.updated_at。
 // 返回 AI 回答的消息 id，供反馈 / 收藏定位。
 func (s *Store) SavePair(ctx context.Context, sessionID int64, question, answer string, sources json.RawMessage) (int64, error) {
+	return s.savePair(ctx, sessionID, question, answer, sources, nil)
+}
+
+// SavePairWithKnowledgeTrace keeps internal retrieval provenance in the same
+// transaction as the assistant message. LayerHits is never copied to the
+// client-visible message sources field.
+func (s *Store) SavePairWithKnowledgeTrace(ctx context.Context, sessionID int64, question, answer string, sources json.RawMessage, trace KnowledgeTrace) (int64, error) {
+	if err := validateKnowledgeTrace(trace); err != nil {
+		return 0, err
+	}
+	return s.savePair(ctx, sessionID, question, answer, sources, &trace)
+}
+
+func validateKnowledgeTrace(trace KnowledgeTrace) error {
+	if trace.CardID <= 0 || trace.CardRevision <= 0 {
+		return errors.New("chat: invalid knowledge trace identity")
+	}
+	if trace.EnneagramType != nil && (*trace.EnneagramType < 1 || *trace.EnneagramType > 9) {
+		return errors.New("chat: invalid knowledge trace enneagram type")
+	}
+	var layerHits map[string]json.RawMessage
+	if len(trace.LayerHits) == 0 || json.Unmarshal(trace.LayerHits, &layerHits) != nil || layerHits == nil {
+		return errors.New("chat: invalid knowledge trace layer hits")
+	}
+	return nil
+}
+
+func insertKnowledgeTrace(ctx context.Context, tx *sql.Tx, sessionID, assistantID int64, trace *KnowledgeTrace) error {
+	if trace == nil {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx,
+		`INSERT INTO app_chat_knowledge_traces
+		 (session_id,assistant_message_id,card_id,enneagram_type,card_revision,layer_hits)
+		 VALUES ($1,$2,$3,$4,$5,$6)`,
+		sessionID, assistantID, trace.CardID, trace.EnneagramType, trace.CardRevision, trace.LayerHits,
+	)
+	return err
+}
+
+func (s *Store) savePair(ctx context.Context, sessionID int64, question, answer string, sources json.RawMessage, trace *KnowledgeTrace) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -486,6 +551,9 @@ func (s *Store) SavePair(ctx context.Context, sessionID int64, question, answer 
 	if err != nil {
 		return 0, err
 	}
+	if err = insertKnowledgeTrace(ctx, tx, sessionID, assistantID, trace); err != nil {
+		return 0, err
+	}
 	_, err = tx.ExecContext(ctx,
 		`UPDATE app_chat_sessions SET updated_at=now() WHERE id=$1`, sessionID)
 	if err != nil {
@@ -500,6 +568,17 @@ func (s *Store) SavePair(ctx context.Context, sessionID int64, question, answer 
 // SaveVoicePair atomically stores a playable user voice message and the AI text answer.
 // The transcript is server-only context and is never exposed through Message JSON.
 func (s *Store) SaveVoicePair(ctx context.Context, sessionID, audioAssetID int64, durationMs int, transcript, answer string, sources json.RawMessage) (int64, int64, error) {
+	return s.saveVoicePair(ctx, sessionID, audioAssetID, durationMs, transcript, answer, sources, nil)
+}
+
+func (s *Store) SaveVoicePairWithKnowledgeTrace(ctx context.Context, sessionID, audioAssetID int64, durationMs int, transcript, answer string, sources json.RawMessage, trace KnowledgeTrace) (int64, int64, error) {
+	if err := validateKnowledgeTrace(trace); err != nil {
+		return 0, 0, err
+	}
+	return s.saveVoicePair(ctx, sessionID, audioAssetID, durationMs, transcript, answer, sources, &trace)
+}
+
+func (s *Store) saveVoicePair(ctx context.Context, sessionID, audioAssetID int64, durationMs int, transcript, answer string, sources json.RawMessage, trace *KnowledgeTrace) (int64, int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, 0, err
@@ -529,6 +608,9 @@ func (s *Store) SaveVoicePair(ctx context.Context, sessionID, audioAssetID int64
 		sessionID, answer, sources,
 	).Scan(&assistantID)
 	if err != nil {
+		return 0, 0, err
+	}
+	if err = insertKnowledgeTrace(ctx, tx, sessionID, assistantID, trace); err != nil {
 		return 0, 0, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE app_chat_sessions SET updated_at=now() WHERE id=$1`, sessionID); err != nil {

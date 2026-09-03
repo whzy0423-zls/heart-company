@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -82,6 +83,32 @@ func appPathID(path, prefix, suffix string) (int64, bool) {
 func (s *Server) appSkillLibrariesRouter(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	switch {
+	case path == "/api/app/skill-libraries/story-skills" && r.Method == http.MethodGet:
+		style := strings.TrimSpace(r.URL.Query().Get("storyStyle"))
+		if style != "" && !validStorySkillCategory(style) {
+			httpx.OK(w, []any{})
+			return
+		}
+		libraryID, err := s.storySkillLibraryID(r.Context())
+		if err != nil {
+			httpx.OK(w, []any{})
+			return
+		}
+		categoryID, categoryErr := s.storySkillCategoryID(r.Context(), style)
+		if errors.Is(categoryErr, sql.ErrNoRows) {
+			httpx.OK(w, []any{})
+			return
+		}
+		if categoryErr != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "故事技能读取失败")
+			return
+		}
+		page, err := s.skillCatalog.ListSkills(r.Context(), skillcatalog.SkillFilter{LibraryID: libraryID, CategoryID: categoryID, Limit: 50})
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "故事技能读取失败")
+			return
+		}
+		httpx.OK(w, page.Items)
 	case path == "/api/app/skill-libraries" && r.Method == http.MethodGet:
 		items, err := s.skillCatalog.ListLibraries(r.Context())
 		if err != nil {
@@ -126,6 +153,21 @@ func (s *Server) appSkillLibrariesRouter(w http.ResponseWriter, r *http.Request)
 	default:
 		httpx.Fail(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+func (s *Server) storySkillLibraryID(ctx context.Context) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM app_skill_libraries WHERE key='story-skills' AND status='enabled'`).Scan(&id)
+	return id, err
+}
+
+func (s *Server) storySkillCategoryID(ctx context.Context, style string) (int64, error) {
+	if style == "" {
+		return 0, nil
+	}
+	var id int64
+	err := s.db.QueryRowContext(ctx, `SELECT category.id FROM app_skill_categories category JOIN app_skill_libraries library ON library.id=category.library_id WHERE library.key='story-skills' AND category.key=$1 AND category.status='enabled'`, style).Scan(&id)
+	return id, err
 }
 
 func (s *Server) appSkillsRouter(w http.ResponseWriter, r *http.Request) {

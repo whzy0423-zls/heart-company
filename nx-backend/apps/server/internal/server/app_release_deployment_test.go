@@ -40,3 +40,34 @@ func TestClassroomProductionImageIncludesMediaProbeTools(t *testing.T) {
 		t.Fatal("production server image must install the ffmpeg package for ffmpeg and ffprobe")
 	}
 }
+
+func TestServerDeploymentAllowsGracefulShutdownWindow(t *testing.T) {
+	composeRaw, err := os.ReadFile("../../../../../docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(composeRaw)
+	serverStart := strings.Index(compose, "  server:\n")
+	adminStart := strings.Index(compose, "  admin:\n")
+	if serverStart < 0 || adminStart <= serverStart {
+		t.Fatal("docker-compose.yml must contain server followed by admin service")
+	}
+	serverService := compose[serverStart:adminStart]
+	if !strings.Contains(serverService, "stop_grace_period: 330s") {
+		t.Fatal("server service must allow the 330s application shutdown window")
+	}
+
+	deployRaw, err := os.ReadFile("../../../../../DEPLOY.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deploy := string(deployRaw)
+	for _, required := range []string{
+		"stop_grace_period: 330s",
+		"TimeoutStopSec=330s",
+	} {
+		if !strings.Contains(deploy, required) {
+			t.Fatalf("DEPLOY.md must document %q", required)
+		}
+	}
+}

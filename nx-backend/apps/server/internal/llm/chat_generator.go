@@ -256,7 +256,9 @@ func NewChatGenerator(cfg ChatGeneratorConfig) (ChatGenerator, error) {
 	if !netguard.IsPublicHTTPURL(cfg.APIBase) {
 		return nil, fmt.Errorf("chat api base must not point to a private or local address")
 	}
-	client := netguard.NewGuardedClient(cfg.Timeout)
+	client := netguard.NewGuardedClientWithOptions(cfg.Timeout, netguard.TransportOptions{
+		ResponseHeaderTimeout: cfg.Timeout,
+	})
 
 	switch cfg.Provider {
 	case modelconfig.ProviderOpenAICompatible:

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 300" width="360" height="300">
+  <defs>
+    <radialGradient id="sky" cx="50%" cy="45%" r="75%">
+      <stop offset="0%" stop-color="#3a2f4a"/><stop offset="100%" stop-color="#1a1622"/>
+    </radialGradient>
+    <radialGradient id="sun" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffe9b8"/><stop offset="60%" stop-color="#f0a33c"/><stop offset="100%" stop-color="#c86a1f"/>
+    </radialGradient>
+  </defs>
+  <rect width="360" height="300" fill="url(#sky)"/>
+  <circle cx="180" cy="150" r="118" fill="none" stroke="#6b5a8a" stroke-width="1.5"/>
+  <!-- six-point star -->
+  <polygon points="180,40 269,205 91,205" fill="none" stroke="#d94a4a" stroke-width="2"/>
+  <polygon points="180,260 91,95 269,95" fill="none" stroke="#4a7fd9" stroke-width="2"/>
+  <!-- colored triangles -->
+  <polygon points="180,46 196,78 164,78" fill="#f6c948"/>
+  <polygon points="262,150 230,166 230,134" fill="#e86a4a" opacity=".9"/>
+  <polygon points="98,150 130,134 130,166" fill="#e84a6a" opacity=".9"/>
+  <polygon points="150,236 134,204 166,204" fill="#4ad0c0" opacity=".9"/>
+  <polygon points="232,210 248,178 264,210" fill="#6a9cf0" opacity=".85"/>
+  <polygon points="96,210 112,178 128,210" fill="#9a6af0" opacity=".85"/>
+  <circle cx="180" cy="150" r="46" fill="url(#sun)"/>
+</svg>

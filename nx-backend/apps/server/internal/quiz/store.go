@@ -338,7 +338,8 @@ func (s *Store) upsertPrimaryCard(ctx context.Context, tx *sql.Tx, appUserID, su
 		 VALUES ($1,'primary','本人','self',$2,$3,$4,'active',$5)
 		 ON CONFLICT (app_user_id) WHERE card_type='primary' AND status='active'
 		 DO UPDATE SET enneagram=EXCLUDED.enneagram, wing=EXCLUDED.wing,
-		   profile=EXCLUDED.profile, submission_id=EXCLUDED.submission_id, update_time=now()
+		   profile=EXCLUDED.profile, submission_id=EXCLUDED.submission_id,
+		   revision=app_user_cards.revision+1, update_time=now()
 		 RETURNING id, app_user_id, card_type, name, relation, enneagram, wing, profile, status, create_time, update_time`,
 		appUserID, mainType, wingType, profile, submissionID,
 	).Scan(&c.ID, &c.AppUserID, &c.CardType, &c.Name, &c.Relation, &c.MainType, &c.WingType, &c.Profile, &c.Status, &createTime, &updateTime)
@@ -483,7 +484,8 @@ func (s *Store) UpdateCard(ctx context.Context, appUserID, cardID int64, in Card
 	profileJSON, _ := json.Marshal(persona)
 	c, err := scanCard(s.db.QueryRowContext(ctx,
 		`UPDATE app_user_cards
-		 SET name=$1, relation=$2, enneagram=$3, wing=$4, profile=$5, update_time=now()
+		 SET name=$1, relation=$2, enneagram=$3, wing=$4, profile=$5,
+		     revision=revision+1, update_time=now()
 		 WHERE id=$6 AND app_user_id=$7 AND card_type='secondary' AND status='active'
 		 RETURNING `+cardCols,
 		in.Name, in.Relation, in.MainType, in.WingType, profileJSON, cardID, appUserID))

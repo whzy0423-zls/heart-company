@@ -213,6 +213,134 @@ func TestDeliveryOrdinaryChatWritesKeepMetadataNull(t *testing.T) {
 	}
 }
 
+func TestSavePairWithKnowledgeTraceIsAtomic(t *testing.T) {
+	database, userID, cardID, cleanup := openChatSceneFixture(t)
+	defer cleanup()
+	store := NewStore(database)
+	session, err := store.GetOrCreateSession(context.Background(), userID, cardID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainType := 3
+	layerHits := json.RawMessage(`{"public":{"chunk_ids":["kb-1"]},"theory":{"library_id":10,"release_id":100,"chunk_ids":["theory:1"]},"enneagram_type":{"library_id":13,"release_id":103,"chunk_ids":["theory:3"]}}`)
+	assistantID, err := store.SavePairWithKnowledgeTrace(context.Background(), session.ID, "问题", "回答", json.RawMessage(`[{"id":"kb-1"}]`), KnowledgeTrace{
+		CardID: cardID, EnneagramType: &mainType, CardRevision: 2, LayerHits: layerHits,
+	})
+	if err != nil {
+		t.Fatalf("SavePairWithKnowledgeTrace: %v", err)
+	}
+	var gotSessionID, gotAssistantID, gotCardID, gotRevision int64
+	var gotType int
+	var gotHits json.RawMessage
+	if err := database.QueryRow(`
+		SELECT session_id,assistant_message_id,card_id,enneagram_type,card_revision,layer_hits
+		FROM app_chat_knowledge_traces WHERE assistant_message_id=$1`, assistantID,
+	).Scan(&gotSessionID, &gotAssistantID, &gotCardID, &gotType, &gotRevision, &gotHits); err != nil {
+		t.Fatal(err)
+	}
+	if gotSessionID != session.ID || gotAssistantID != assistantID || gotCardID != cardID || gotType != mainType || gotRevision != 2 {
+		t.Fatalf("trace identity = session:%d assistant:%d card:%d type:%d revision:%d", gotSessionID, gotAssistantID, gotCardID, gotType, gotRevision)
+	}
+	var actual, expected any
+	if json.Unmarshal(gotHits, &actual) != nil || json.Unmarshal(layerHits, &expected) != nil || !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("layer hits = %s, want %s", gotHits, layerHits)
+	}
+
+	var before int
+	if err := database.QueryRow(`SELECT count(*) FROM app_chat_messages WHERE session_id=$1`, session.ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.SavePairWithKnowledgeTrace(context.Background(), session.ID, "回滚问题", "回滚回答", nil, KnowledgeTrace{
+		CardID: cardID + 999999, EnneagramType: &mainType, CardRevision: 2, LayerHits: layerHits,
+	})
+	if err == nil {
+		t.Fatal("invalid trace card should fail")
+	}
+	var after int
+	if err := database.QueryRow(`SELECT count(*) FROM app_chat_messages WHERE session_id=$1`, session.ID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("messages after failed trace = %d, want %d", after, before)
+	}
+}
+
+func TestSaveVoicePairWithKnowledgeTraceIsAtomic(t *testing.T) {
+	database, userID, cardID, cleanup := openChatSceneFixture(t)
+	defer cleanup()
+	store := NewStore(database)
+	session, err := store.GetOrCreateSession(context.Background(), userID, cardID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainType := 1
+	layerHits := json.RawMessage(`{"public":{"chunk_ids":["kb-1"]},"theory":{"chunk_ids":["theory:1"]},"enneagram_type":{"chunk_ids":["type-1"]}}`)
+	userMessageID, assistantMessageID, err := store.SaveVoicePairWithKnowledgeTrace(
+		context.Background(), session.ID, 99, 1600, "语音问题", "语音回答", json.RawMessage(`[{"id":"type-1"}]`),
+		KnowledgeTrace{CardID: cardID, EnneagramType: &mainType, CardRevision: 3, LayerHits: layerHits},
+	)
+	if err != nil {
+		t.Fatalf("SaveVoicePairWithKnowledgeTrace: %v", err)
+	}
+	if userMessageID == 0 || assistantMessageID == 0 {
+		t.Fatalf("voice pair ids = %d/%d", userMessageID, assistantMessageID)
+	}
+	var gotSessionID, gotAssistantID, gotCardID, gotRevision int64
+	var gotType int
+	var gotHits json.RawMessage
+	if err := database.QueryRow(`
+		SELECT session_id,assistant_message_id,card_id,enneagram_type,card_revision,layer_hits
+		FROM app_chat_knowledge_traces WHERE assistant_message_id=$1`, assistantMessageID,
+	).Scan(&gotSessionID, &gotAssistantID, &gotCardID, &gotType, &gotRevision, &gotHits); err != nil {
+		t.Fatal(err)
+	}
+	if gotSessionID != session.ID || gotAssistantID != assistantMessageID || gotCardID != cardID || gotType != mainType || gotRevision != 3 {
+		t.Fatalf("voice trace identity = session:%d assistant:%d card:%d type:%d revision:%d", gotSessionID, gotAssistantID, gotCardID, gotType, gotRevision)
+	}
+	var actual, expected any
+	if json.Unmarshal(gotHits, &actual) != nil || json.Unmarshal(layerHits, &expected) != nil || !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("voice layer hits = %s, want %s", gotHits, layerHits)
+	}
+}
+
+func TestCompleteSceneAssistantWithKnowledgeTraceIsAtomic(t *testing.T) {
+	database, userID, cardID, cleanup := openChatSceneFixture(t)
+	defer cleanup()
+	store := NewStore(database)
+	session, err := store.GetOrCreateSceneSession(context.Background(), userID, cardID, "xinzhili_voice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assistantID, err := store.CreateSceneAssistant(context.Background(), session.ID, "生成中", "normal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainType := 6
+	trace := KnowledgeTrace{
+		CardID: cardID, EnneagramType: &mainType, CardRevision: 4,
+		LayerHits: json.RawMessage(`{"public":{"chunk_ids":[]},"theory":{"chunk_ids":["theory:1"]},"enneagram_type":{"chunk_ids":["type-6"]}}`),
+	}
+	if err := store.CompleteSceneAssistantWithKnowledgeTrace(context.Background(), assistantID, "完整回答", json.RawMessage(`[{"id":"type-6"}]`), trace); err != nil {
+		t.Fatalf("CompleteSceneAssistantWithKnowledgeTrace: %v", err)
+	}
+	var content string
+	var sources json.RawMessage
+	if err := database.QueryRow(`SELECT content,sources FROM app_chat_messages WHERE id=$1`, assistantID).Scan(&content, &sources); err != nil {
+		t.Fatal(err)
+	}
+	if content != "完整回答" || !strings.Contains(string(sources), "type-6") {
+		t.Fatalf("completed assistant content=%q sources=%s", content, sources)
+	}
+	var gotSessionID, gotCardID, gotRevision int64
+	var gotType int
+	if err := database.QueryRow(`SELECT session_id,card_id,enneagram_type,card_revision FROM app_chat_knowledge_traces WHERE assistant_message_id=$1`, assistantID).Scan(&gotSessionID, &gotCardID, &gotType, &gotRevision); err != nil {
+		t.Fatal(err)
+	}
+	if gotSessionID != session.ID || gotCardID != cardID || gotType != 6 || gotRevision != 4 {
+		t.Fatalf("completed trace=%d/%d/%d/%d", gotSessionID, gotCardID, gotType, gotRevision)
+	}
+}
+
 func TestSceneHiddenMessagesAreRejectedByOrdinaryChatFeatures(t *testing.T) {
 	database, userID, cardID, cleanup := openChatSceneFixture(t)
 	defer cleanup()
@@ -430,7 +558,8 @@ CREATE TABLE app_user_cards(
   app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
   card_type TEXT NOT NULL DEFAULT 'primary', name TEXT NOT NULL DEFAULT '',
   relation TEXT NOT NULL DEFAULT '', enneagram INT NOT NULL DEFAULT 0,
-  wing INT NOT NULL DEFAULT 0, profile JSONB NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'active'
+  wing INT NOT NULL DEFAULT 0, profile JSONB NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'active',
+  revision BIGINT NOT NULL DEFAULT 1
 );
 CREATE TABLE app_chat_sessions(
   id BIGSERIAL PRIMARY KEY,
@@ -448,6 +577,16 @@ CREATE TABLE app_chat_messages(
   message_type TEXT NOT NULL DEFAULT 'text', audio_asset_id BIGINT,
   audio_duration_ms INTEGER NOT NULL DEFAULT 0, transcript TEXT NOT NULL DEFAULT '',
   delivery_status TEXT, delivered_text TEXT, xinzhili_mode TEXT,
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE app_chat_knowledge_traces(
+  id BIGSERIAL PRIMARY KEY,
+  session_id BIGINT NOT NULL REFERENCES app_chat_sessions(id) ON DELETE CASCADE,
+  assistant_message_id BIGINT NOT NULL UNIQUE REFERENCES app_chat_messages(id) ON DELETE CASCADE,
+  card_id BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE RESTRICT,
+  enneagram_type SMALLINT,
+  card_revision BIGINT NOT NULL,
+  layer_hits JSONB NOT NULL DEFAULT '{}',
   create_time TIMESTAMPTZ NOT NULL DEFAULT now()
 );`
 

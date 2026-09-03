@@ -423,6 +423,18 @@ type scoredDoc struct {
 	score int
 }
 
+// SelectDocuments applies the same deterministic relevance ranking used by
+// Service without generating an answer. Layered App knowledge retrieval uses
+// it to bound public candidates before merging formal release results.
+func SelectDocuments(documents []Document, question string, mainType, limit int) []Document {
+	matches := NewService(documents).search(question, mainType, limit)
+	selected := make([]Document, len(matches))
+	for index := range matches {
+		selected[index] = matches[index].doc
+	}
+	return selected
+}
+
 func relevantMainType(input AskInput) int {
 	if input.ConversationCard.MainType > 0 {
 		return input.ConversationCard.MainType

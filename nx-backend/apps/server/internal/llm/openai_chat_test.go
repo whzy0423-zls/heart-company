@@ -251,6 +251,37 @@ func TestOpenAIChatGenerateRejectsMissingKeyAndInvalidResponses(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatContentFilterSignalsAreStructured(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		statusCode int
+		body       string
+	}{
+		{
+			name:       "finish reason",
+			statusCode: http.StatusOK,
+			body:       `{"choices":[{"message":{"content":""},"finish_reason":"content_filter"}]}`,
+		},
+		{
+			name:       "error code",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"message":"","type":"invalid_request_error","code":"content_policy_violation"}}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			defer server.Close()
+			_, err := newTestOpenAIChatGenerator(server).CompleteJSON(context.Background(), "system", "user", 100)
+			if !errors.Is(err, ErrContentFiltered) {
+				t.Fatalf("err=%v, want ErrContentFiltered", err)
+			}
+		})
+	}
+}
+
 func TestOpenAIChatGenerateStreamDeliversFirstDeltaBeforeSecond(t *testing.T) {
 	firstFlushed := make(chan struct{})
 	releaseSecond := make(chan struct{})

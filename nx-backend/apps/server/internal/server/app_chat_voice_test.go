@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/appknowledge"
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/config"
@@ -265,6 +267,55 @@ func TestVoiceChatPassesCurrentConversationCardToGenerator(t *testing.T) {
 	}
 }
 
+func TestVoiceChatUsesLayeredKnowledgeForCurrentConversationCard(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"text": layeredKnowledgeQuestion})
+	}))
+	defer upstream.Close()
+	previousClientFactory := newASRHTTPClient
+	newASRHTTPClient = func(timeout time.Duration) *http.Client {
+		client := upstream.Client()
+		client.Timeout = timeout
+		return client
+	}
+	t.Cleanup(func() { newASRHTTPClient = previousClientFactory })
+
+	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	store.cardID = 88
+	resolver := &layeredKnowledgeResolver{mainType: 2, revision: 5}
+	searcher := newLayeredKnowledgeSearcher()
+	generator := &layeredKnowledgeGenerator{}
+	s := newVoiceChatTestServer(store, generator)
+	s.db = newAppAnalyticsUnitDB(t, "overview_error")
+	s.appKnowledge = appknowledge.NewCoordinator(resolver, searcher, searcher)
+	s.env.ASR = config.ASRConfig{APIBase: upstream.URL, APIKey: "test-key", Model: "whisper-1", TimeoutSeconds: 3}
+	s.appChatProfilesForCardOverride = func(_ context.Context, _, cardID int64) (rag.UserProfile, rag.ConversationCard) {
+		return rag.UserProfile{MainType: 9}, rag.ConversationCard{MainType: 2, Name: fmt.Sprintf("card-%d", cardID)}
+	}
+	s.voiceAssetCreate = func(_ context.Context, _ uploadasset.CreateInput) (uploadasset.Asset, error) {
+		return uploadasset.Asset{ID: 99}, nil
+	}
+	body, contentType := voiceChatMultipartBody(t, "voice.aac", "audio/aac", "audio", "2200")
+	request := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/voice", body)
+	request.Header.Set("Content-Type", contentType)
+	request = request.WithContext(contextWithAppUser(request.Context(), auth.UserInfo{ID: 7}))
+	response := httptest.NewRecorder()
+
+	s.appChatRouter(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("voice status=%d body=%s", response.Code, response.Body.String())
+	}
+	if resolver.calls != 1 || resolver.lastCardID != 88 || resolver.lastSessionID != 42 {
+		t.Fatalf("voice resolution calls=%d session/card=%d/%d", resolver.calls, resolver.lastSessionID, resolver.lastCardID)
+	}
+	if store.knowledgeTrace == nil || store.knowledgeTrace.EnneagramType == nil || *store.knowledgeTrace.EnneagramType != 2 {
+		t.Fatalf("voice knowledge trace = %+v", store.knowledgeTrace)
+	}
+	assertLayeredTrace(t, store.knowledgeTrace.LayerHits, "type-2")
+	assertSourceIDs(t, generator.lastSources(), "public", "theory", "type-2")
+}
+
 func TestVoiceChatPersistsPunctuationOnlySilentAudioWithoutAI(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"text": "."})
@@ -461,6 +512,7 @@ type fakeVoiceChatStore struct {
 	silentVoiceSaves          int
 	assistantAnswer           string
 	assistantSources          json.RawMessage
+	knowledgeTrace            *chat.KnowledgeTrace
 }
 
 func (s *fakeVoiceChatStore) SaveVoicePair(_ context.Context, _ int64, audioAssetID int64, _ int, transcript, answer string, sources json.RawMessage) (int64, int64, error) {
@@ -469,6 +521,12 @@ func (s *fakeVoiceChatStore) SaveVoicePair(_ context.Context, _ int64, audioAsse
 	s.assistantAnswer = answer
 	s.assistantSources = append(json.RawMessage(nil), sources...)
 	return 11, 12, nil
+}
+
+func (s *fakeVoiceChatStore) SaveVoicePairWithKnowledgeTrace(ctx context.Context, sessionID, audioAssetID int64, durationMs int, transcript, answer string, sources json.RawMessage, trace chat.KnowledgeTrace) (int64, int64, error) {
+	copyTrace := trace
+	s.knowledgeTrace = &copyTrace
+	return s.SaveVoicePair(ctx, sessionID, audioAssetID, durationMs, transcript, answer, sources)
 }
 
 func (s *fakeVoiceChatStore) SaveVoiceMessage(_ context.Context, _ int64, audioAssetID int64, _ int, transcript string) (int64, error) {

@@ -46,7 +46,7 @@ func TestDefaultMenusIncludeAppReleaseManagement(t *testing.T) {
 		switch menu.ID {
 		case 315:
 			foundList = true
-			if menu.PID != 300 || menu.Name != "WebsiteAppReleases" {
+			if menu.PID != 1600 || menu.Name != "WebsiteAppReleases" {
 				t.Fatalf("unexpected App release menu identity: %+v", menu)
 			}
 			if menu.Path != "/website/app-releases" || menu.Component != "/site-config/app-releases" {
@@ -225,7 +225,7 @@ func TestDefaultMenusIncludeCustomerUserInsights(t *testing.T) {
 			continue
 		}
 		found = true
-		if menu.PID != 500 || menu.Path != "/customer/user-insights" || menu.Component != "/customer/user-insights" {
+		if menu.PID != 1600 || menu.Path != "/customer/user-insights" || menu.Component != "/customer/user-insights" {
 			t.Fatalf("unexpected user insights route: %+v", menu)
 		}
 		if menu.AuthCode != "Customer:UserInsights:List" || menu.Title != "用户提炼数据" {
@@ -266,7 +266,7 @@ func TestDefaultMenusIncludeAppAnalyticsDashboard(t *testing.T) {
 			continue
 		}
 		found = true
-		if menu.PID != 0 || menu.Path != "/dashboard/app" || menu.Component != "/dashboard/app" {
+		if menu.PID != 1600 || menu.Path != "/dashboard/app" || menu.Component != "/dashboard/app" {
 			t.Fatalf("unexpected App analytics dashboard route: %+v", menu)
 		}
 		if menu.AuthCode != "Analytics:App:Overview" || menu.Title != "App 数据看板" {
@@ -275,6 +275,35 @@ func TestDefaultMenusIncludeAppAnalyticsDashboard(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected default menu DashboardAppAnalytics")
+	}
+}
+
+func TestDefaultAppMenusBelongToAppManagement(t *testing.T) {
+	wantSort := map[string]int{
+		"DashboardAppAnalytics": 1,
+		"CustomerAppUsers":      2,
+		"CustomerUserInsights":  3,
+		"CustomerAppOrders":     4,
+		"WebsiteAppReleases":    6,
+		"CustomerAppChat":       7,
+		"CustomerAppMemory":     8,
+		"CustomerQuizQuestions": 9,
+	}
+	found := make(map[string]bool, len(wantSort))
+	for _, menu := range defaultMenus {
+		sort, ok := wantSort[menu.Name]
+		if !ok {
+			continue
+		}
+		found[menu.Name] = true
+		if menu.PID != 1600 || menu.Sort != sort {
+			t.Fatalf("expected %s under App 管理 with sort %d, got %+v", menu.Name, sort, menu)
+		}
+	}
+	for name := range wantSort {
+		if !found[name] {
+			t.Fatalf("expected default App menu %s", name)
+		}
 	}
 }
 

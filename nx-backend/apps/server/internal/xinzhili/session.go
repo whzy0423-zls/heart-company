@@ -52,6 +52,10 @@ type ConversationStore interface {
 	CompleteAssistant(ctx context.Context, messageID int64, content string, sources json.RawMessage) error
 }
 
+type ConversationKnowledgeTraceStore interface {
+	CompleteAssistantWithKnowledgeTrace(ctx context.Context, messageID int64, content string, sources json.RawMessage, trace KnowledgeTrace) error
+}
+
 type PreferenceProvider interface {
 	PromptPreferences(ctx context.Context, userID int64) ([]string, error)
 }
@@ -66,6 +70,22 @@ type KnowledgeRetriever interface {
 
 type TheoryRetriever interface {
 	Search(ctx context.Context, query string, topK int, minScore float64) ([]rag.Document, error)
+}
+
+type KnowledgeTrace struct {
+	CardID        int64
+	EnneagramType *int
+	CardRevision  int64
+	LayerHits     json.RawMessage
+}
+
+type LayeredKnowledgeResult struct {
+	Documents []rag.Document
+	Trace     *KnowledgeTrace
+}
+
+type LayeredKnowledgeRetriever interface {
+	Retrieve(ctx context.Context, userID, conversationID, cardID int64, query string) (LayeredKnowledgeResult, error)
 }
 
 type ChatGenerator interface {
@@ -89,18 +109,19 @@ type StrategyEngine interface {
 type EngineFactory func(mode Mode, timing TimingConfig, clock Clock) StrategyEngine
 
 type SessionDependencies struct {
-	Cards         CardProvider
-	Conversations ConversationStore
-	Preferences   PreferenceProvider
-	Memories      MemoryProvider
-	Knowledge     KnowledgeRetriever
-	Theory        TheoryRetriever
-	Generator     ChatGenerator
-	ASRFactory    ASRFactory
-	Synthesizer   SpeechSynthesizer
-	EngineFactory EngineFactory
-	Sink          SessionSink
-	Clock         Clock
+	Cards            CardProvider
+	Conversations    ConversationStore
+	Preferences      PreferenceProvider
+	Memories         MemoryProvider
+	LayeredKnowledge LayeredKnowledgeRetriever
+	Knowledge        KnowledgeRetriever
+	Theory           TheoryRetriever
+	Generator        ChatGenerator
+	ASRFactory       ASRFactory
+	Synthesizer      SpeechSynthesizer
+	EngineFactory    EngineFactory
+	Sink             SessionSink
+	Clock            Clock
 }
 
 type StartTurnInput struct {
@@ -170,14 +191,15 @@ const (
 )
 
 type sessionEvent struct {
-	kind       sessionEventKind
-	turnID     string
-	asr        ASREvent
-	err        error
-	answer     string
-	sources    []rag.Source
-	segment    AudioSegment
-	segmentAck chan error
+	kind           sessionEventKind
+	turnID         string
+	asr            ASREvent
+	err            error
+	answer         string
+	sources        []rag.Source
+	knowledgeTrace *KnowledgeTrace
+	segment        AudioSegment
+	segmentAck     chan error
 }
 
 type sessionEventKind uint8
@@ -217,6 +239,7 @@ type activeTurn struct {
 	draft                    string
 	answer                   string
 	sources                  []rag.Source
+	knowledgeTrace           *KnowledgeTrace
 	assistantID              int64
 	segments                 map[uint32]string
 	lastAck                  int64
@@ -511,7 +534,15 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 		}
 		if current.assistantID > 0 && current.generationErr == nil && current.answer != "" {
 			sources, _ := json.Marshal(current.sources)
-			_ = s.deps.Conversations.CompleteAssistant(current.ctx, current.assistantID, current.answer, sources)
+			if current.knowledgeTrace != nil {
+				if store, ok := s.deps.Conversations.(ConversationKnowledgeTraceStore); ok {
+					_ = store.CompleteAssistantWithKnowledgeTrace(current.ctx, current.assistantID, current.answer, sources, *current.knowledgeTrace)
+				} else {
+					_ = s.deps.Conversations.CompleteAssistant(current.ctx, current.assistantID, current.answer, sources)
+				}
+			} else {
+				_ = s.deps.Conversations.CompleteAssistant(current.ctx, current.assistantID, current.answer, sources)
+			}
 			s.confirmCompletedPlayback(current)
 		}
 		if event.err != nil && !errors.Is(event.err, context.Canceled) {
@@ -685,6 +716,7 @@ func (s *session) resetProactivePromptDelivery(turn *activeTurn) {
 	turn.draft = ""
 	turn.answer = ""
 	turn.sources = nil
+	turn.knowledgeTrace = nil
 	turn.assistantID = 0
 	turn.segments = make(map[uint32]string)
 	turn.responseStartSeq = turn.nextTTSSeq
@@ -857,13 +889,14 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 			return
 		}
 		var (
-			history       []rag.Message
-			summary       string
-			preferences   []string
-			memories      []string
-			knowledgeDocs []rag.Document
-			theoryDocs    []rag.Document
-			contextLoads  sync.WaitGroup
+			history        []rag.Message
+			summary        string
+			preferences    []string
+			memories       []string
+			knowledgeDocs  []rag.Document
+			theoryDocs     []rag.Document
+			knowledgeTrace *KnowledgeTrace
+			contextLoads   sync.WaitGroup
 		)
 		contextLoads.Add(4)
 		go func() {
@@ -884,6 +917,12 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 		}()
 		go func() {
 			defer contextLoads.Done()
+			if s.deps.LayeredKnowledge != nil {
+				result, _ := s.deps.LayeredKnowledge.Retrieve(turn.ctx, turn.input.UserID, turn.conversation.ID, turn.input.CardID, question)
+				knowledgeDocs = result.Documents
+				knowledgeTrace = result.Trace
+				return
+			}
 			if s.deps.Knowledge != nil {
 				knowledgeDocs, _ = s.deps.Knowledge.Search(turn.ctx, question, turn.input.KnowledgeTopK, turn.input.KnowledgeMinScore)
 			}
@@ -919,7 +958,7 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 			}
 			return nil
 		})
-		s.postEvent(sessionEvent{kind: eventGenerationDone, turnID: turn.input.TurnID, answer: answer, sources: sources, err: err})
+		s.postEvent(sessionEvent{kind: eventGenerationDone, turnID: turn.input.TurnID, answer: answer, sources: sources, knowledgeTrace: knowledgeTrace, err: err})
 	}()
 }
 
@@ -1080,6 +1119,7 @@ func (s *session) handleGenerationDone(turn *activeTurn, event sessionEvent) {
 		turn.answer = answer
 	}
 	turn.sources = event.sources
+	turn.knowledgeTrace = event.knowledgeTrace
 	turn.generationErr = event.err
 	if event.err == nil {
 		for _, chunk := range turn.chunker.Flush() {

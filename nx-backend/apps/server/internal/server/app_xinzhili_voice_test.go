@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/appknowledge"
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
@@ -410,6 +411,40 @@ func TestAppXinzhiliVoiceTurnAddsTheoryDocumentsToModelInput(t *testing.T) {
 	if !strings.Contains(string(savedSources), "kb-nine-types") || !strings.Contains(string(savedSources), "theory:11") {
 		t.Fatalf("persisted sources = %s, want knowledge and theory", savedSources)
 	}
+}
+
+func TestAppXinzhiliVoiceTurnUsesLayeredKnowledgeForPrimaryCard(t *testing.T) {
+	store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	resolver := &layeredKnowledgeResolver{mainType: 5, revision: 7}
+	searcher := newLayeredKnowledgeSearcher()
+	generator := &layeredKnowledgeGenerator{}
+	s := newSuccessfulXinzhiliVoiceServer(t)
+	s.appChat = store
+	s.xinzhiliSavePair = nil
+	s.xinzhiliTranscribe = func(context.Context, []byte, string) (string, error) { return layeredKnowledgeQuestion, nil }
+	s.appKnowledge = appknowledge.NewCoordinator(resolver, searcher, searcher)
+	s.ragGen = generator
+	s.appChatProfilesForCardOverride = func(_ context.Context, _, cardID int64) (rag.UserProfile, rag.ConversationCard) {
+		return rag.UserProfile{MainType: 9}, rag.ConversationCard{MainType: 5, Name: fmt.Sprintf("primary-%d", cardID)}
+	}
+
+	request := newXinzhiliMultipartRequest(t, []byte("wav"), 1300)
+	request = request.WithContext(contextWithAppUser(request.Context(), auth.UserInfo{ID: 7}))
+	response := httptest.NewRecorder()
+	s.appXinzhiliVoiceTurnStream(response, request)
+
+	if !strings.Contains(response.Body.String(), "event: done") || strings.Contains(response.Body.String(), `"code":"save_failed"`) {
+		t.Fatalf("xinzhili layered turn failed: %s", response.Body.String())
+	}
+	if resolver.calls != 1 || resolver.lastSessionID != 91 || resolver.lastCardID != 5 {
+		t.Fatalf("xinzhili resolution calls=%d session/card=%d/%d", resolver.calls, resolver.lastSessionID, resolver.lastCardID)
+	}
+	trace := store.singleTrace(t)
+	if trace.EnneagramType == nil || *trace.EnneagramType != 5 || trace.CardRevision != 7 {
+		t.Fatalf("xinzhili trace = %+v", trace)
+	}
+	assertLayeredTrace(t, trace.LayerHits, "type-5")
+	assertSourceIDs(t, generator.lastSources(), "public", "theory", "type-5")
 }
 
 func TestAppXinzhiliVoiceTurnFiltersRestrictedTermsBeforeTextAudioAndPersistence(t *testing.T) {

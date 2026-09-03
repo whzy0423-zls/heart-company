@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <radialGradient id="dialBg" cx="50%" cy="36%" r="72%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#eceae4"/>
+    </radialGradient>
+    <filter id="dialShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#1c2846" flood-opacity="0.25"/>
+    </filter>
+    <clipPath id="dialClip"><circle cx="100" cy="100" r="80"/></clipPath>
+  </defs>
+
+  <!-- 外圈托盘 -->
+  <circle cx="100" cy="100" r="96" fill="url(#dialBg)" stroke="#d7d3ca" stroke-width="2.5" filter="url(#dialShadow)"/>
+  <circle cx="100" cy="100" r="82" fill="#fdfdfb"/>
+
+  <!-- 弧形分块（裁剪成圆形，呈拱顶/球面观感） -->
+  <g clip-path="url(#dialClip)" font-family="PingFang SC, 'Noto Sans SC', sans-serif" font-weight="800" font-size="40" text-anchor="middle">
+    <!-- 顶部绿 1 5 6 -->
+    <rect x="24" y="22" width="48" height="50" rx="11" fill="#2f9e44"/>
+    <rect x="76" y="22" width="48" height="50" rx="11" fill="#2f9e44"/>
+    <rect x="128" y="22" width="48" height="50" rx="11" fill="#2f9e44"/>
+    <!-- 中部蓝 2 4 9 -->
+    <rect x="24" y="76" width="48" height="48" rx="11" fill="#1971c2"/>
+    <rect x="76" y="76" width="48" height="48" rx="11" fill="#1971c2"/>
+    <rect x="128" y="76" width="48" height="48" rx="11" fill="#1971c2"/>
+    <!-- 底部红 3 7 8 -->
+    <rect x="24" y="128" width="48" height="50" rx="11" fill="#c92a2a"/>
+    <rect x="76" y="128" width="48" height="50" rx="11" fill="#c92a2a"/>
+    <rect x="128" y="128" width="48" height="50" rx="11" fill="#c92a2a"/>
+
+    <text x="48" y="62" fill="#fff">1</text><text x="100" y="62" fill="#fff">5</text><text x="152" y="62" fill="#fff">6</text>
+    <text x="48" y="115" fill="#fff">2</text><text x="100" y="115" fill="#fff">4</text><text x="152" y="115" fill="#fff">9</text>
+    <text x="48" y="168" fill="#fff">3</text><text x="100" y="168" fill="#fff">7</text><text x="152" y="168" fill="#fff">8</text>
+  </g>
+</svg>
