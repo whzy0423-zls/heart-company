@@ -26,7 +26,7 @@ func GenerationPayloadHash(input GenerationInput) (string, error) {
 	if input.FactsVersion < 0 || input.OutlineVersion < 0 || input.SourceVersionID < 0 {
 		return "", fmt.Errorf("generation versions must be non-negative")
 	}
-	if len([]rune(input.Instruction)) > 500 {
+	if len([]rune(input.Instruction)) > 6000 {
 		return "", fmt.Errorf("generation instruction is too long")
 	}
 	raw, err := json.Marshal(struct {

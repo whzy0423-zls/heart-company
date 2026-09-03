@@ -935,7 +935,7 @@ func (s *Store) CreateGenerationJobWithInput(ctx context.Context, appUserID, sto
 		return Job{}, false, fmt.Errorf("request key is required")
 	}
 	input.Instruction = strings.TrimSpace(input.Instruction)
-	if len([]rune(input.Instruction)) > 500 {
+	if len([]rune(input.Instruction)) > 6000 {
 		return Job{}, false, fmt.Errorf("generation instruction is too long")
 	}
 	if s == nil || s.db == nil {

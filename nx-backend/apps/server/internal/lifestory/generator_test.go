@@ -37,7 +37,7 @@ func confirmedSnapshot() StorySnapshot {
 }
 
 func generatedJSON() string {
-	body := strings.Repeat("中", 650)
+	body := strings.Repeat("中", 400)
 	return `{"perspective":"first_person","tone":"warm","chapters":[` +
 		`{"order":1,"title":"一","body":"` + body + `"},` +
 		`{"order":2,"title":"二","body":"` + body + `"},` +
@@ -51,15 +51,15 @@ func TestGeneratorProducesValidatedStructuredVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version.CharacterCount != 2602 || len(version.Chapters) != 4 || version.Status != VersionPublished {
+	if version.CharacterCount != 1602 || len(version.Chapters) != 4 || version.Status != VersionPublished {
 		t.Fatalf("unexpected version: %+v", version)
 	}
 	if !strings.Contains(completer.system, "严格 JSON") || strings.Contains(completer.user, "历史聊天") {
 		t.Fatal("generator prompt violated source boundary")
 	}
-	if !strings.Contains(completer.system, "所有 body 合计写到 3000-3800") ||
-		!strings.Contains(completer.system, "不少于 2500 字的硬性校验") ||
-		!strings.Contains(completer.user, "全部 body 合计不少于 2500") {
+	if !strings.Contains(completer.system, "所有 body 合计写到 1400-1800") ||
+		!strings.Contains(completer.system, "语言凝练") ||
+		!strings.Contains(completer.user, "全部 body 合计为 1400-1800") {
 		t.Fatal("generator prompt did not make the validated body-length contract explicit")
 	}
 }
@@ -74,6 +74,7 @@ func TestGeneratorAppliesStoryStyleInstructionsAndServerOwnedStamp(t *testing.T)
 		{style: StoryStyleNovel, instruction: "小说叙事"},
 		{style: StoryStyleFairyTale, instruction: "童话寓言", symbolic: true},
 		{style: StoryStyleMyth, instruction: "神话叙事", symbolic: true},
+		{style: StoryStyleFolk, instruction: "民间故事"},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.style), func(t *testing.T) {

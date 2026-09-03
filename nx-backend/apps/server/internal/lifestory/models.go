@@ -130,11 +130,12 @@ const (
 	StoryStyleNovel     StoryStyle = "novel"
 	StoryStyleFairyTale StoryStyle = "fairy_tale"
 	StoryStyleMyth      StoryStyle = "myth"
+	StoryStyleFolk      StoryStyle = "folk"
 )
 
 func (s StoryStyle) Valid() bool {
 	switch s {
-	case StoryStyleRealistic, StoryStyleNovel, StoryStyleFairyTale, StoryStyleMyth:
+	case StoryStyleRealistic, StoryStyleNovel, StoryStyleFairyTale, StoryStyleMyth, StoryStyleFolk:
 		return true
 	default:
 		return false
@@ -507,8 +508,8 @@ func ValidateVersion(v Version) error {
 	for _, chapter := range v.Chapters {
 		count += utf8.RuneCountInString(chapter.Body)
 	}
-	if count < 2500 || count > 3500 {
-		return fmt.Errorf("story character count %d outside 2500-3500", count)
+	if count < 1200 || count > 2000 {
+		return fmt.Errorf("story character count %d outside 1200-2000", count)
 	}
 	return nil
 }

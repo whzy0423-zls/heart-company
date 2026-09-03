@@ -1,7 +1,9 @@
 import { defineConfig } from '@vben/vite-config';
 
 export default defineConfig(async () => {
-  return {
+	const apiTarget =
+		process.env.VITE_DEV_API_TARGET || 'http://localhost:5320/api';
+	return {
     application: {},
     vite: {
       plugins: [
@@ -30,7 +32,7 @@ export default defineConfig(async () => {
             changeOrigin: true,
             rewrite: (path) => path.replace(/^\/api/, ''),
             // mock代理目标地址
-            target: 'http://localhost:5320/api',
+			target: apiTarget,
             ws: true,
           },
         },

@@ -81,13 +81,13 @@ func (g *Generator) generateTokenized(ctx context.Context, safeSnapshot StorySna
 	if err != nil {
 		return Version{}, err
 	}
-	system := `你是“我的故事”真实经历写作引擎。只根据用户已确认的事实卡和提纲写作，不新增未确认的关键人物、地点、时间、关系或结局。提纲中的 perspective、tone 和 storyStyle 是唯一文体约束。输出严格 JSON，不要 Markdown。正文分成 4-6 章。请把 chapters 数组中所有 body 合计写到 3000-3800 个中文字符；这是为了确保最终正文通过不少于 2500 字的硬性校验，title、summary 和 reflection 都不计入正文字符数。reflection 另写 200-400 字。不能模仿具体作者。对创伤、自伤或暴力经历保持不诊断、不美化、不鼓励，不提供伤害方法或实施步骤；如故事涉及当下风险，使用温和的求助提示。成长回望必须独立放在 reflection 字段，不得把九型人格判断写进正文。JSON 结构：{"perspective":"first_person|third_person","tone":"warm|plain|healing","chapters":[{"order":1,"title":"","summary":"","body":""}],"reflection":""}` + "\n【本次文体要求】\n" + styleInstruction
+	system := `你是“我的故事”真实经历写作引擎。只根据用户已确认的事实卡和提纲写作，不新增未确认的关键人物、地点、时间、关系或结局。提纲中的 perspective、tone 和 storyStyle 是唯一文体约束。输出严格 JSON，不要 Markdown。正文分成 4-5 章，chapters 数组中所有 body 合计写到 1400-1800 个中文字符，title、summary 和 reflection 不计入正文字符数。reflection 另写 100-200 字。语言凝练，减少重复铺陈，每章只保留关键事件、转折与感受。不能模仿具体作者。对创伤、自伤或暴力经历保持不诊断、不美化、不鼓励，不提供伤害方法或实施步骤；如故事涉及当下风险，使用温和的求助提示。成长回望必须独立放在 reflection 字段，不得把九型人格判断写进正文。JSON 结构：{"perspective":"first_person|third_person","tone":"warm|plain|healing","chapters":[{"order":1,"title":"","summary":"","body":""}],"reflection":""}` + "\n【本次文体要求】\n" + styleInstruction
 	userRaw, _ := json.Marshal(safeSnapshot)
 	user := "【已确认故事资料】\n" + string(userRaw)
 	if instruction := strings.TrimSpace(safeSnapshot.RevisionInstruction); instruction != "" {
 		user += "\n【用户本次定向修改】\n" + instruction + "\n【定向修改结束】"
 	}
-	user += "\n只输出上述结构的 JSON。提交前请自行核对 chapters 中全部 body 合计不少于 2500 个中文字符。"
+	user += "\n只输出上述结构的 JSON。提交前请自行核对 chapters 中全部 body 合计为 1400-1800 个中文字符。"
 	raw, err := g.completer.CompleteJSON(ctx, system, user, g.maxTokens)
 	if err != nil {
 		if errors.Is(err, llm.ErrContentFiltered) {
@@ -134,6 +134,8 @@ func storyStylePrompt(value StoryStyle) (StoryStyle, string, error) {
 		return style, "采用童话寓言文体，用温柔的象征角色、场景和意象重述经历。人物关系、事件顺序、核心冲突、情绪转折和真实结局必须保持不变；象征内容不得冒充现实事实。", nil
 	case StoryStyleMyth:
 		return style, "采用神话叙事文体，用旅程、考验和神话意象重述经历，不套用或模仿具体作品。人物关系、事件顺序、核心冲突、情绪转折和真实结局必须保持不变；象征内容不得冒充现实事实。", nil
+	case StoryStyleFolk:
+		return style, "采用民间故事文体，以口耳相传般简洁自然的语言、地方生活意象和朴素因果重述经历，不套用具体传说。人物关系、事件顺序、核心冲突和真实结局必须保持不变。", nil
 	default:
 		return "", "", fmt.Errorf("story style is invalid")
 	}

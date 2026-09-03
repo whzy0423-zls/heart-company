@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/analytics"
+	"nine-xing/nx-backend/apps/server/internal/appknowledge"
 	"nine-xing/nx-backend/apps/server/internal/appnotification"
 	"nine-xing/nx-backend/apps/server/internal/apprelease"
 	"nine-xing/nx-backend/apps/server/internal/appuser"
@@ -39,7 +40,9 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/engagement"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/image"
+	"nine-xing/nx-backend/apps/server/internal/lifestory"
 	"nine-xing/nx-backend/apps/server/internal/llm"
+	"nine-xing/nx-backend/apps/server/internal/location"
 	"nine-xing/nx-backend/apps/server/internal/mindquote"
 	"nine-xing/nx-backend/apps/server/internal/miniapp"
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
@@ -155,6 +158,7 @@ type Server struct {
 
 	appUsers                       *appuser.Store
 	appChat                        appChatStore
+	appKnowledge                   *appknowledge.Coordinator
 	skillCatalog                   *skillcatalog.Store
 	skillChat                      *skillchat.Store
 	skillChatRuntime               *skillchat.Runtime
@@ -168,6 +172,17 @@ type Server struct {
 	chatPersistHook                func()
 	pushStore                      *push.Store
 	appNotifications               appNotificationService
+	lifeStories                    *lifestory.Store
+	lifeStoryWorker                *lifestory.Worker
+	lifeStoryWorkerCancel          context.CancelFunc
+	lifeStoryOutboxCancel          context.CancelFunc
+	lifeStoryMaterialLimiter       *fixedWindowRateLimiter
+	locationService                location.Service
+	locationSearchLimiter          *fixedWindowRateLimiter
+	locationSearchIPLimiter        *strRateLimiter
+	locationReverseLimiter         *fixedWindowRateLimiter
+	locationReverseIPLimiter       *strRateLimiter
+	asrSlots                       chan struct{}
 	pushSendTimeout                time.Duration
 	pushRecoveryInterval           time.Duration
 	pushSendSlots                  chan struct{}
@@ -209,6 +224,20 @@ type Server struct {
 	xinzhiliModeStore          xinzhiliModePreferenceStore
 	xinzhiliVoiceConfig        xinzhiliVoiceConfigStore
 	theoryAdmin                theoryLibraryAdminService
+	enneagramAdmin             enneagramLibraryAdminService
+}
+
+type appKnowledgePublicSearcher struct{ server *Server }
+
+func (searcher appKnowledgePublicSearcher) SearchPublic(ctx context.Context, query string, topK int) ([]rag.Document, error) {
+	if searcher.server == nil {
+		return nil, errors.New("app public knowledge unavailable")
+	}
+	candidates, err := searcher.server.retrieveAppDocsForQuery(ctx, query, topK)
+	if err != nil {
+		return nil, err
+	}
+	return rag.SelectDocuments(candidates, query, 0, topK), nil
 }
 
 func maxInt(a, b int) int {
@@ -280,6 +309,13 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		xinzhiliMaxConnections: env.XinzhiliMaxConnections,
 		metrics:                observability.New(),
 		ttsSlots:               make(chan struct{}, maxInt(env.TTSMaxConcurrent, 1)),
+	}
+	s.locationSearchLimiter = newFixedWindowRateLimiter(locationSearchUserLimit, locationRateLimitWindow)
+	s.locationSearchIPLimiter = newBoundedStrRateLimiter(locationSearchIPLimit, locationRateLimitWindow, locationRateLimiterMaxKey)
+	s.locationReverseLimiter = newFixedWindowRateLimiter(locationReverseUserLimit, locationRateLimitWindow)
+	s.locationReverseIPLimiter = newBoundedStrRateLimiter(locationReverseIPLimit, locationRateLimitWindow, locationRateLimiterMaxKey)
+	if env.AMap.Enabled {
+		s.locationService = location.NewAMapClient(location.Config{APIKey: env.AMap.WebServiceKey})
 	}
 	if database != nil {
 		s.classroomPlaybackLimiter = newStrRateLimiter(30, time.Minute)
@@ -398,6 +434,11 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		s.appDailyQuizBankAdmin = profileStore
 	}
 	s.appChat = chat.NewStore(database)
+	s.appKnowledge = appknowledge.NewCoordinator(
+		appknowledge.NewResolver(database),
+		appKnowledgePublicSearcher{server: s},
+		theorystore.NewStore(database),
+	)
 	s.skillCatalog = skillcatalog.NewStore(database)
 	s.skillChat = skillchat.NewStore(database)
 	s.skillChatRuntime = skillchat.NewRuntime(s.skillChat, theorystore.NewStore(database), skillChatRuntimeGenerator{server: s})
@@ -422,6 +463,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	}
 	s.xinzhiliVoiceConfig = xinzhili.NewVoiceConfigStore(database, xinzhiliVoiceCodec)
 	s.theoryAdmin = theoryLibraryAdminStore{db: database}
+	s.enneagramAdmin = newEnneagramLibraryAdminStore(database)
 	s.loginLimiter = newStrRateLimiter(10, time.Minute)
 	s.loginDBLimiter = newDBRateLimiter(database, "admin_login", 10, time.Minute)
 	s.smsPhoneLimiter = newStrRateLimiter(1, time.Minute)
@@ -441,9 +483,26 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.smsReporter = mustSMSReporter(env.SMS)
 	s.pushStore = push.NewStore(database, push.NewPusher(env.AppEnv, env.JPush.AppKey, env.JPush.MasterSecret))
 	s.appNotifications = appnotification.NewStore(database)
+	s.lifeStories = lifestory.NewStoreWithTokenKey(database, env.JWTSecret)
+	s.lifeStoryMaterialLimiter = newFixedWindowRateLimiter(10, time.Minute)
+	s.asrSlots = make(chan struct{}, 2)
 	s.pushSendSlots = make(chan struct{}, 2)
 	// 启动时应用 DB 中保存的模型配置覆盖（若存在），重建对话/视频客户端。
 	s.applyStoredModelConfig()
+	if database != nil {
+		storyGenerator := lifestory.NewGenerator(lifestory.GeneratorConfig{Completer: lifeStoryRuntimeCompleter{server: s}})
+		s.lifeStoryWorker = lifestory.NewWorker(lifestory.WorkerConfig{
+			Store: s.lifeStories, Generator: storyGenerator,
+			Lease: 2 * time.Minute, GenerationTimeout: 90 * time.Second,
+			PollInterval: 5 * time.Second, MaxAttempts: 3, Concurrency: 2,
+		})
+		workerCtx, workerCancel := context.WithCancel(context.Background())
+		s.lifeStoryWorkerCancel = workerCancel
+		s.lifeStoryWorker.Start(workerCtx)
+		outboxCtx, outboxCancel := context.WithCancel(context.Background())
+		s.lifeStoryOutboxCancel = outboxCancel
+		go s.runLifeStoryOutboxLoop(outboxCtx)
+	}
 	if _, err := s.refreshBailianCopyCredentials(context.Background()); err != nil {
 		log.Printf("Bailian shared credential startup refresh failed: %v", err)
 	}
@@ -738,6 +797,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/xinzhili-voice-config", s.requirePermission("System:XinzhiliModel:Config", s.xinzhiliVoiceConfigHandler))
 	s.mux.HandleFunc("/api/theory-libraries", s.requirePermission("System:TheoryLibrary:Manage", s.theoryLibrariesHandler))
 	s.mux.HandleFunc("/api/theory-libraries/", s.requirePermission("System:TheoryLibrary:Manage", s.theoryLibraryActionHandler))
+	registerEnneagramLibraryAdminRoutes(s.mux, s.requirePermission, s)
+	registerStorySkillAdminRoutes(s.mux, s.requirePermission, s)
 	// 对话模型连通性测试：对 MiniMax 网关做一次轻量探活，需登录。
 	s.mux.HandleFunc("/api/model-config/test-chat", s.requirePermission("System:Model:Config", s.method(http.MethodPost, s.testChatModel)))
 	// ===== App API =====
@@ -803,6 +864,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/notifications/unread-count", s.method(http.MethodGet, s.requireAppAuth(s.appNotificationUnreadCount)))
 	s.mux.HandleFunc("/api/app/notifications/read-all", s.method(http.MethodPost, s.requireAppAuth(s.appNotificationMarkAllRead)))
 	s.mux.HandleFunc("/api/app/notifications/", s.method(http.MethodPost, s.requireAppAuth(s.appNotificationAction)))
+	s.mux.HandleFunc("/api/app/life-stories", s.requireLifeStoryAuth(s.appLifeStoryRouter))
+	s.mux.HandleFunc("/api/app/life-stories/", s.requireLifeStoryAuth(s.appLifeStoryRouter))
+	s.mux.HandleFunc("/api/app/locations/search", s.appLocationPathHandler(http.MethodPost, s.appLocationSearch))
+	s.mux.HandleFunc("/api/app/locations/reverse", s.appLocationPathHandler(http.MethodPost, s.appLocationReverse))
 	// 语音识别
 	s.mux.HandleFunc("/api/app/voice/recognize", s.method(http.MethodPost, s.requireAppAuth(s.appVoiceRecognize)))
 	s.mux.HandleFunc("/api/app/xinzhili/turns/stream", s.method(http.MethodPost, s.requireAppAuth(s.appXinzhiliVoiceTurnStream)))
@@ -971,6 +1036,15 @@ func (s *Server) routes() {
 }
 
 func (s *Server) Shutdown() {
+	if s.lifeStoryWorkerCancel != nil {
+		s.lifeStoryWorkerCancel()
+	}
+	if s.lifeStoryOutboxCancel != nil {
+		s.lifeStoryOutboxCancel()
+	}
+	if s.lifeStoryWorker != nil {
+		s.lifeStoryWorker.Stop()
+	}
 	if s.maintenanceCancel != nil {
 		s.maintenanceCancel()
 	}

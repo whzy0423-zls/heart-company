@@ -114,6 +114,7 @@ type lifeStoryOutlineRequest struct {
 type lifeStoryGenerationRequest struct {
 	RequestKey        string `json:"requestKey"`
 	Instruction       string `json:"instruction,omitempty"`
+	SkillID           int64  `json:"skillId,omitempty"`
 	FactsVersion      int64  `json:"factsVersion"`
 	FactsVersionAlt   int64  `json:"facts_version"`
 	OutlineVersion    int64  `json:"outlineVersion"`
@@ -520,9 +521,14 @@ func (s *Server) appLifeStorySubroute(w http.ResponseWriter, r *http.Request, us
 		factsVersion := firstPositiveInt64(input.FactsVersion, input.FactsVersionAlt)
 		outlineVersion := firstPositiveInt64(input.OutlineVersion, input.OutlineVersionAlt)
 		sourceVersion := firstPositiveInt64(input.SourceVersionID, input.SourceVersion)
+		instruction, skillErr := s.lifeStorySkillInstruction(r.Context(), userID, storyID, input.SkillID, input.Instruction)
+		if skillErr != nil {
+			lifeStoryFail(w, http.StatusBadRequest, lifeStoryErrorValidationFailed)
+			return
+		}
 		job, _, err := s.lifeStories.CreateGenerationJobWithInput(r.Context(), userID, storyID, lifestory.GenerationInput{
 			RequestKey: requestKey, FactsVersion: factsVersion, OutlineVersion: outlineVersion,
-			SourceVersionID: sourceVersion, Instruction: input.Instruction,
+			SourceVersionID: sourceVersion, Instruction: instruction,
 		})
 		if err != nil {
 			lifeStoryWriteError(w, err)
@@ -599,9 +605,14 @@ func (s *Server) appLifeStorySubroute(w http.ResponseWriter, r *http.Request, us
 		factsVersion := firstPositiveInt64(input.FactsVersion, input.FactsVersionAlt)
 		outlineVersion := firstPositiveInt64(input.OutlineVersion, input.OutlineVersionAlt)
 		sourceVersion := firstPositiveInt64(input.SourceVersionID, input.SourceVersion)
+		instruction, skillErr := s.lifeStorySkillInstruction(r.Context(), userID, storyID, input.SkillID, input.Instruction)
+		if skillErr != nil {
+			lifeStoryFail(w, http.StatusBadRequest, lifeStoryErrorValidationFailed)
+			return
+		}
 		job, _, err := s.lifeStories.CreateGenerationJobWithInput(r.Context(), userID, storyID, lifestory.GenerationInput{
 			RequestKey: requestKey, FactsVersion: factsVersion, OutlineVersion: outlineVersion,
-			SourceVersionID: sourceVersion, Instruction: input.Instruction,
+			SourceVersionID: sourceVersion, Instruction: instruction,
 		})
 		if err != nil {
 			lifeStoryWriteError(w, err)
@@ -647,6 +658,44 @@ func (s *Server) appLifeStorySubroute(w http.ResponseWriter, r *http.Request, us
 	default:
 		lifeStoryFail(w, http.StatusNotFound, lifeStoryErrorNotFound)
 	}
+}
+
+func (s *Server) lifeStorySkillInstruction(ctx context.Context, userID, storyID, skillID int64, userInstruction string) (string, error) {
+	userInstruction = strings.TrimSpace(userInstruction)
+	if skillID <= 0 {
+		return userInstruction, nil
+	}
+	story, err := s.lifeStories.Get(ctx, userID, storyID)
+	if err != nil {
+		return "", err
+	}
+	style, err := lifestory.NormalizeStoryStyle(story.Outline.StoryStyle)
+	if err != nil {
+		return "", err
+	}
+	var category, instructions string
+	err = s.db.QueryRowContext(ctx, `
+		SELECT category.key,version.instructions
+		FROM app_skills skill
+		JOIN app_skill_categories category ON category.id=skill.category_id AND category.status='enabled'
+		JOIN app_skill_libraries library ON library.id=category.library_id AND library.key='story-skills' AND library.status='enabled'
+		JOIN app_skill_versions version ON version.id=skill.latest_published_version_id AND version.status='published'
+		WHERE skill.id=$1 AND skill.status='enabled'`, skillID).Scan(&category, &instructions)
+	if err != nil {
+		return "", errors.New("故事技能不存在或尚未发布")
+	}
+	if category != string(style) {
+		return "", errors.New("故事技能与当前故事类型不匹配")
+	}
+	combined := "【已发布故事技能规则】\n" + strings.TrimSpace(instructions)
+	if userInstruction != "" {
+		combined += "\n【用户补充要求】\n" + userInstruction
+	}
+	runes := []rune(combined)
+	if len(runes) > 6000 {
+		combined = string(runes[:6000])
+	}
+	return combined, nil
 }
 
 func (s *Server) appLifeStoryPrepare(w http.ResponseWriter, r *http.Request, userID, storyID int64) {

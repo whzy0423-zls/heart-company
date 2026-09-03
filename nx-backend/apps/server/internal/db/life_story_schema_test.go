@@ -30,7 +30,7 @@ func TestLifeStorySchemaContract(t *testing.T) {
 		"worker_id TEXT NOT NULL",
 		"retry_after TIMESTAMPTZ",
 		"story_style TEXT NOT NULL DEFAULT 'realistic'",
-		"CHECK (story_style IN ('realistic','novel','fairy_tale','myth'))",
+		"CHECK (story_style IN ('realistic','novel','fairy_tale','myth','folk'))",
 		"ALTER TABLE app_life_story_versions ADD COLUMN IF NOT EXISTS story_style TEXT NOT NULL DEFAULT 'realistic'",
 		"DROP CONSTRAINT IF EXISTS app_life_story_versions_story_style_check",
 		"CHECK (status IN ('draft', 'outline_ready', 'queued', 'generating', 'completed', 'failed', 'cancelled', 'safety_blocked'))",

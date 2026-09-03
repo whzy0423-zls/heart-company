@@ -222,14 +222,14 @@ func TestLifeStoryFactOrganizationsRoundTrip(t *testing.T) {
 func TestLifeStoryValidationUsesUnicodeCodePointsAndBounds(t *testing.T) {
 	chapters := make([]Chapter, 4)
 	for i := range chapters {
-		chapters[i] = Chapter{Order: i + 1, Title: "章", Body: strings.Repeat("中", 650)}
+		chapters[i] = Chapter{Order: i + 1, Title: "章", Body: strings.Repeat("中", 400)}
 	}
 	version := Version{Chapters: chapters, Reflection: "回望"}
 	if err := ValidateVersion(version); err != nil {
 		t.Fatalf("expected valid version: %v", err)
 	}
-	if got := version.CharacterCountValue(); got != 2602 {
-		t.Fatalf("code point count=%d, want 2602", got)
+	if got := version.CharacterCountValue(); got != 1602 {
+		t.Fatalf("code point count=%d, want 1602", got)
 	}
 	chapters[0].Body = ""
 	if err := ValidateVersion(Version{Chapters: chapters, Reflection: "回望"}); err == nil {
@@ -283,7 +283,7 @@ func TestChapterValidationRequiresStrictOneBasedOrder(t *testing.T) {
 
 	chapters := make([]Chapter, 4)
 	for i := range chapters {
-		chapters[i] = Chapter{Order: i + 1, Title: "章", Body: strings.Repeat("中", 650)}
+		chapters[i] = Chapter{Order: i + 1, Title: "章", Body: strings.Repeat("中", 400)}
 	}
 	chapters[1].Order, chapters[2].Order = 3, 2
 	if err := ValidateVersion(Version{Chapters: chapters, Reflection: "回望"}); err == nil {

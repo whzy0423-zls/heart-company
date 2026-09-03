@@ -25,15 +25,14 @@ func (s *Server) newXinzhiliRealtimeDependencies(cfg xinzhili.Config, sink xinzh
 		generator = serverXinzhiliGenerator{generator: current, metrics: s.metrics}
 	}
 	return xinzhili.SessionDependencies{
-		Cards:         serverXinzhiliCards{server: s},
-		Conversations: serverXinzhiliConversations{store: chatStore},
-		Preferences:   serverXinzhiliPreferences{server: s},
-		Memories:      serverXinzhiliMemories{server: s},
-		Knowledge:     serverXinzhiliKnowledge{server: s},
-		Theory:        serverXinzhiliTheory{store: theorystore.NewStore(s.db)},
-		Generator:     generator,
-		ASRFactory:    xinzhili.NewAliyunASRFactory(xinzhili.AliyunASROptions{}),
-		Synthesizer:   xinzhili.NewSynthesizer(provider, 1, xinzhili.WithTTSSegmentTimeout(45*time.Second), xinzhili.WithSingleSegmentTTSInput()),
+		Cards:            serverXinzhiliCards{server: s},
+		Conversations:    serverXinzhiliConversations{store: chatStore},
+		Preferences:      serverXinzhiliPreferences{server: s},
+		Memories:         serverXinzhiliMemories{server: s},
+		LayeredKnowledge: serverXinzhiliLayeredKnowledge{server: s},
+		Generator:        generator,
+		ASRFactory:       xinzhili.NewAliyunASRFactory(xinzhili.AliyunASROptions{}),
+		Synthesizer:      xinzhili.NewSynthesizer(provider, 1, xinzhili.WithTTSSegmentTimeout(45*time.Second), xinzhili.WithSingleSegmentTTSInput()),
 		EngineFactory: func(mode xinzhili.Mode, timing xinzhili.TimingConfig, clock xinzhili.Clock) xinzhili.StrategyEngine {
 			return xinzhili.NewEngine(mode, timing, clock)
 		},
@@ -115,6 +114,12 @@ func (a serverXinzhiliConversations) CompleteAssistant(ctx context.Context, mess
 	return a.store.CompleteSceneAssistant(ctx, messageID, content, sources)
 }
 
+func (a serverXinzhiliConversations) CompleteAssistantWithKnowledgeTrace(ctx context.Context, messageID int64, content string, sources json.RawMessage, trace xinzhili.KnowledgeTrace) error {
+	return a.store.CompleteSceneAssistantWithKnowledgeTrace(ctx, messageID, content, sources, chat.KnowledgeTrace{
+		CardID: trace.CardID, EnneagramType: trace.EnneagramType, CardRevision: trace.CardRevision, LayerHits: trace.LayerHits,
+	})
+}
+
 type serverXinzhiliPreferences struct{ server *Server }
 
 func (a serverXinzhiliPreferences) PromptPreferences(ctx context.Context, userID int64) ([]string, error) {
@@ -141,6 +146,22 @@ func (a serverXinzhiliMemories) PromptMemories(ctx context.Context, userID, card
 		return nil, nil
 	}
 	return a.server.appChatMemoriesForPrompt(ctx, userID, cardID, 6)
+}
+
+type serverXinzhiliLayeredKnowledge struct{ server *Server }
+
+func (a serverXinzhiliLayeredKnowledge) Retrieve(ctx context.Context, userID, conversationID, cardID int64, query string) (xinzhili.LayeredKnowledgeResult, error) {
+	if a.server == nil {
+		return xinzhili.LayeredKnowledgeResult{}, errors.New("layered knowledge unavailable")
+	}
+	documents, trace := a.server.retrieveAppChatKnowledge(ctx, userID, conversationID, cardID, query)
+	result := xinzhili.LayeredKnowledgeResult{Documents: documents}
+	if trace != nil {
+		result.Trace = &xinzhili.KnowledgeTrace{
+			CardID: trace.CardID, EnneagramType: trace.EnneagramType, CardRevision: trace.CardRevision, LayerHits: trace.LayerHits,
+		}
+	}
+	return result, nil
 }
 
 type serverXinzhiliKnowledge struct{ server *Server }
