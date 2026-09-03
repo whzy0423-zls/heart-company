@@ -226,6 +226,37 @@ func TestAnthropicChatGenerateRejectsMissingKeyAndInvalidResponses(t *testing.T)
 	}
 }
 
+func TestAnthropicChatContentFilterSignalsAreStructured(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		statusCode int
+		body       string
+	}{
+		{
+			name:       "refusal stop reason",
+			statusCode: http.StatusOK,
+			body:       `{"type":"message","stop_reason":"refusal","content":[]}`,
+		},
+		{
+			name:       "policy error type",
+			statusCode: http.StatusBadRequest,
+			body:       `{"type":"error","error":{"type":"content_policy_violation","message":""}}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			defer server.Close()
+			_, err := newTestAnthropicChatGenerator(server).CompleteJSON(context.Background(), "system", "user", 100)
+			if !errors.Is(err, ErrContentFiltered) {
+				t.Fatalf("err=%v, want ErrContentFiltered", err)
+			}
+		})
+	}
+}
+
 func TestAnthropicChatGenerateStreamDeliversFirstDeltaBeforeMessageStop(t *testing.T) {
 	firstFlushed := make(chan struct{})
 	releaseSecond := make(chan struct{})

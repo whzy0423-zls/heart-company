@@ -111,6 +111,45 @@ func TestAppPrivacyPolicyDisclosesXinzhiliVoiceDataHandling(t *testing.T) {
 	}
 }
 
+func TestAppPrivacyPolicyDisclosesLocationProviderHandling(t *testing.T) {
+	s := &Server{}
+	res := httptest.NewRecorder()
+	s.appPrivacyPolicy(res, httptest.NewRequest(http.MethodGet, "/api/app/privacy/policy", nil))
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", res.Code, res.Body.String())
+	}
+	var body struct {
+		Data struct {
+			Content string `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	content := normalizePrivacyPolicy(body.Data.Content)
+	for _, required := range []string{
+		"地点服务仅在你主动打开地点选择或搜索时使用",
+		"当前位置、临时坐标和搜索词会交由第三方地图服务（高德）处理",
+		"九型问答后台不会持久化保存坐标或搜索记录",
+		"事实卡只保存你选择的城市/区县与地点名称",
+		"高德对必要信息的处理和可能保留范围以其适用隐私政策为准",
+		"详见App内第三方服务清单",
+	} {
+		if !strings.Contains(content, normalizePrivacyPolicy(required)) {
+			t.Errorf("privacy policy missing location disclosure %q; content=%q", required, body.Data.Content)
+		}
+	}
+	for _, prohibited := range []string{
+		"不会向第三方共享您的隐私数据",
+		"高德不会处理当前位置",
+		"永久保存搜索记录",
+	} {
+		if strings.Contains(content, normalizePrivacyPolicy(prohibited)) {
+			t.Errorf("privacy policy contains location overclaim %q", prohibited)
+		}
+	}
+}
+
 func normalizePrivacyPolicy(value string) string {
 	return strings.Join(strings.Fields(value), "")
 }
@@ -272,6 +311,29 @@ func TestAppPrivacyRoutesRequireAuth(t *testing.T) {
 	}
 }
 
+func TestAppPrivacyDataHandlersUsePrivateNoStoreCachePolicy(t *testing.T) {
+	s := &Server{}
+	tests := []struct {
+		name    string
+		method  string
+		path    string
+		handler func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "export", method: http.MethodPost, path: "/api/app/privacy/export", handler: s.appPrivacyExport},
+		{name: "memories", method: http.MethodDelete, path: "/api/app/privacy/memories", handler: s.appPrivacyDeleteMemories},
+		{name: "account", method: http.MethodDelete, path: "/api/app/privacy/account", handler: s.appPrivacyDeleteAccount},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := httptest.NewRecorder()
+			tt.handler(res, httptest.NewRequest(tt.method, tt.path, nil))
+			if got := res.Header().Get("Cache-Control"); got != "private, no-store" {
+				t.Fatalf("Cache-Control=%q want private, no-store", got)
+			}
+		})
+	}
+}
+
 func TestPrivacyExportIncludesAccountWithoutPasswordHash(t *testing.T) {
 	var user appuser.User
 	if err := json.Unmarshal([]byte(`{
@@ -330,6 +392,34 @@ func TestPrivacyDeleteAccountClearsCredentials(t *testing.T) {
 		if !strings.Contains(anonymizeQuery, assignment) {
 			t.Fatalf("account anonymization missing %q in same UPDATE: %s", assignment, anonymizeQuery)
 		}
+	}
+	var notificationDelete string
+	for _, query := range recorder.execQueries {
+		if strings.Contains(query, "DELETE FROM app_notifications") {
+			notificationDelete = query
+			break
+		}
+	}
+	if notificationDelete == "" || strings.Contains(notificationDelete, "deep_link") {
+		t.Fatalf("account deletion must remove all user notifications: %q", notificationDelete)
+	}
+}
+
+func TestPrivacyDeleteMemoriesLocksUserBeforeDeleting(t *testing.T) {
+	recorder := &appPrivacyDeleteRecorder{}
+	database := openAppPrivacyDeleteTestDB(t, recorder)
+	s := &Server{db: database}
+	req := httptest.NewRequest(http.MethodDelete, "/api/app/privacy/memories", nil)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 42}))
+	res := httptest.NewRecorder()
+
+	s.appPrivacyDeleteMemories(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected memory delete 200, got %d body=%s", res.Code, res.Body.String())
+	}
+	if len(recorder.queryQueries) == 0 || !strings.Contains(recorder.queryQueries[0], "SELECT id FROM app_users WHERE id = $1 FOR UPDATE") {
+		t.Fatalf("memory deletion did not lock the user first: queries=%#v", recorder.queryQueries)
 	}
 }
 
@@ -1120,7 +1210,8 @@ func countAppAPIRows(t *testing.T, database *sql.DB, query string, args ...any) 
 var appPrivacyDeleteDriverSeq atomic.Int64
 
 type appPrivacyDeleteRecorder struct {
-	execQueries []string
+	execQueries  []string
+	queryQueries []string
 }
 
 func openAppPrivacyDeleteTestDB(t *testing.T, recorder *appPrivacyDeleteRecorder) *sql.DB {
@@ -1155,11 +1246,15 @@ func (*appPrivacyDeleteConn) BeginTx(context.Context, driver.TxOptions) (driver.
 	return appPrivacyDeleteTx{}, nil
 }
 
-func (*appPrivacyDeleteConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
-	if !strings.Contains(query, "SELECT id, phone, COALESCE(account, '') FROM app_users") {
-		return nil, fmt.Errorf("unexpected privacy delete query: %s", query)
+func (c *appPrivacyDeleteConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	c.recorder.queryQueries = append(c.recorder.queryQueries, query)
+	if strings.Contains(query, "SELECT id, phone, COALESCE(account, '') FROM app_users") {
+		return &appPrivacyDeleteRows{columns: []string{"id", "phone", "account"}, values: []driver.Value{int64(42), "13800000042", "privacyuser42"}}, nil
 	}
-	return &appPrivacyDeleteRows{}, nil
+	if strings.Contains(query, "SELECT id FROM app_users WHERE id = $1 FOR UPDATE") {
+		return &appPrivacyDeleteRows{columns: []string{"id"}, values: []driver.Value{int64(42)}}, nil
+	}
+	return nil, fmt.Errorf("unexpected privacy delete query: %s", query)
 }
 
 func (c *appPrivacyDeleteConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
@@ -1173,19 +1268,19 @@ func (appPrivacyDeleteTx) Commit() error   { return nil }
 func (appPrivacyDeleteTx) Rollback() error { return nil }
 
 type appPrivacyDeleteRows struct {
-	done bool
+	columns []string
+	values  []driver.Value
+	done    bool
 }
 
-func (*appPrivacyDeleteRows) Columns() []string { return []string{"id", "phone", "account"} }
-func (*appPrivacyDeleteRows) Close() error      { return nil }
+func (r *appPrivacyDeleteRows) Columns() []string { return r.columns }
+func (*appPrivacyDeleteRows) Close() error        { return nil }
 
 func (r *appPrivacyDeleteRows) Next(dest []driver.Value) error {
 	if r.done {
 		return io.EOF
 	}
-	dest[0] = int64(42)
-	dest[1] = "13800000042"
-	dest[2] = "privacyuser42"
+	copy(dest, r.values)
 	r.done = true
 	return nil
 }

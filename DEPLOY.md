@@ -81,10 +81,14 @@ export MINIMAX_API_BASE="https://api.minimaxi.com"
 # export JPUSH_APP_KEY="..."
 # export JPUSH_MASTER_SECRET="..."
 
-# 7) 构建并启动
+# 7) 地点搜索/逆地址代理（仅将 Web 服务 Key 注入 server，不下发到 App）
+# AMAP_WEB_SERVICE_KEY
+# AMAP_LOCATION_ENABLED
+
+# 8) 构建并启动
 docker compose up -d --build
 
-# 8) 查看状态/日志
+# 9) 查看状态/日志
 docker compose ps
 docker compose logs -f server
 ```
@@ -247,6 +251,46 @@ location = /api/app/xinzhili/turns/stream {
 ```
 
 这里的 `proxy_pass` 必须只有 `http://127.0.0.1:<port>`，不能附加 URI，也不能在端口后写尾随 `/`；否则 nginx 会把 exact location 的原始请求路径替换成 `/`，导致第二层 nginx 或 Go 无法匹配 `/api/app/xinzhili/turns/stream`。
+
+### 地点搜索和逆地址解析的外层代理检查清单
+
+地点接口使用 POST body 传递搜索词和临时坐标。容器内 nginx 已为下面两个精确路径设置 `client_max_body_size 4k`，并关闭访问日志、缓存、请求缓冲和响应缓冲；宿主机 nginx、宝塔或 CDN 等外层代理也应保持同样的边界：
+
+```nginx
+location = /api/app/locations/search {
+    client_max_body_size 4k;
+    proxy_pass http://127.0.0.1:<port>;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_request_buffering off;
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    access_log off;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location = /api/app/locations/reverse {
+    client_max_body_size 4k;
+    proxy_pass http://127.0.0.1:<port>;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_request_buffering off;
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    access_log off;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+上述规则应放在通用 `/api/` 规则之前；`proxy_pass` 只保留上游地址，不附加 URI。地点请求不应写入宿主机代理访问日志、缓存或 APM body 采集；外层代理只记录匿名请求标识、接口类型、耗时和状态类别。
 
 关闭代理请求缓冲只消除当前代理层的整包缓冲，不代表全链路不使用临时文件，也不代表客户端上传过程中就会收到 SSE。Go handler 仍通过 `ParseMultipartForm` 解析请求，超过内存阈值的 multipart 内容可能写入系统临时目录，并在 handler 结束时调用 `MultipartForm.RemoveAll` 清理；首个 SSE 事件应在上传和应用层解析完成后验证。
 

@@ -60,9 +60,10 @@ type anthropicError struct {
 }
 
 type anthropicChatResponse struct {
-	Type    string                  `json:"type"`
-	Content []anthropicContentBlock `json:"content"`
-	Error   *anthropicError         `json:"error,omitempty"`
+	Type       string                  `json:"type"`
+	Content    []anthropicContentBlock `json:"content"`
+	StopReason string                  `json:"stop_reason,omitempty"`
+	Error      *anthropicError         `json:"error,omitempty"`
 }
 
 func newAnthropicChatGenerator(cfg ChatGeneratorConfig, client *http.Client) *AnthropicChatGenerator {
@@ -330,8 +331,14 @@ func (g *AnthropicChatGenerator) complete(ctx context.Context, body anthropicCha
 	if result.Type == "error" || result.Error != nil {
 		return "", anthropicResponseError(result.Error)
 	}
+	if isContentFilterCode(result.StopReason) {
+		return "", newContentFilterError("anthropic", result.StopReason)
+	}
 	var answer strings.Builder
 	for _, block := range result.Content {
+		if isContentFilterCode(block.Type) {
+			return "", newContentFilterError("anthropic", block.Type)
+		}
 		if block.Type == "text" {
 			answer.WriteString(block.Text)
 		}
@@ -394,13 +401,21 @@ func anthropicStatusError(resp *http.Response) error {
 		return fmt.Errorf("Anthropic 请求失败(%d): %v", resp.StatusCode, readErr)
 	}
 	var payload anthropicChatResponse
-	if json.Unmarshal(raw, &payload) == nil && payload.Error != nil && strings.TrimSpace(payload.Error.Message) != "" {
-		return fmt.Errorf("Anthropic 请求失败(%d): %s", resp.StatusCode, strings.TrimSpace(payload.Error.Message))
+	if json.Unmarshal(raw, &payload) == nil && payload.Error != nil {
+		if isContentFilterCode(payload.Error.Type) {
+			return newContentFilterError("anthropic", payload.Error.Type)
+		}
+		if message := strings.TrimSpace(payload.Error.Message); message != "" {
+			return fmt.Errorf("Anthropic 请求失败(%d): %s", resp.StatusCode, message)
+		}
 	}
 	return fmt.Errorf("Anthropic 请求失败(%d): %s", resp.StatusCode, compact(raw))
 }
 
 func anthropicResponseError(payload *anthropicError) error {
+	if payload != nil && isContentFilterCode(payload.Type) {
+		return newContentFilterError("anthropic", payload.Type)
+	}
 	message := "未知错误"
 	if payload != nil && strings.TrimSpace(payload.Message) != "" {
 		message = strings.TrimSpace(payload.Message)
