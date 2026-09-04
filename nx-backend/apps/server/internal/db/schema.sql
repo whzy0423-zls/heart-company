@@ -2907,6 +2907,18 @@ CREATE INDEX IF NOT EXISTS idx_direct_conversations_user_low
 CREATE INDEX IF NOT EXISTS idx_direct_conversations_user_high
   ON direct_conversations(user_high_id, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS direct_message_media (
+  id              BIGSERIAL PRIMARY KEY,
+  conversation_id BIGINT NOT NULL REFERENCES direct_conversations(id) ON DELETE CASCADE,
+  uploader_id     BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  asset_id        BIGINT NOT NULL REFERENCES upload_assets(id) ON DELETE CASCADE,
+  media_type      TEXT NOT NULL CHECK (media_type IN ('image', 'voice')),
+  duration_ms     INT NOT NULL DEFAULT 0 CHECK (duration_ms >= 0 AND duration_ms <= 60000),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_direct_message_media_conversation
+  ON direct_message_media(conversation_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS direct_messages (
   id                BIGSERIAL PRIMARY KEY,
   conversation_id   BIGINT NOT NULL REFERENCES direct_conversations(id) ON DELETE CASCADE,
@@ -2915,7 +2927,7 @@ CREATE TABLE IF NOT EXISTS direct_messages (
   payload_hash      TEXT NOT NULL,
   message_type      TEXT NOT NULL DEFAULT 'text' CHECK (message_type IN ('text', 'image', 'voice', 'sticker')),
   body              TEXT NOT NULL DEFAULT '',
-  media_id          BIGINT,
+  media_id          BIGINT CONSTRAINT fk_direct_messages_media REFERENCES direct_message_media(id) ON DELETE RESTRICT,
   sequence_no       BIGINT NOT NULL,
   recalled_at       TIMESTAMPTZ,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -2927,6 +2939,14 @@ CREATE INDEX IF NOT EXISTS idx_direct_messages_sequence
   ON direct_messages(conversation_id, sequence_no DESC);
 CREATE INDEX IF NOT EXISTS idx_direct_messages_sender
   ON direct_messages(sender_id, created_at DESC);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_direct_messages_media') THEN
+    ALTER TABLE direct_messages
+      ADD CONSTRAINT fk_direct_messages_media
+      FOREIGN KEY (media_id) REFERENCES direct_message_media(id) ON DELETE RESTRICT;
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS direct_message_read_cursors (
   conversation_id    BIGINT NOT NULL REFERENCES direct_conversations(id) ON DELETE CASCADE,

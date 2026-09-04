@@ -19,6 +19,8 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/app/direct/")
 	switch {
+	case strings.HasPrefix(path, "conversations/") && strings.HasSuffix(path, "/media"):
+		s.appDirectMedia(w, r)
 	case strings.HasPrefix(path, "conversations/") && strings.HasSuffix(path, "/appearance"):
 		s.appChatAppearanceRouter(w, r)
 	case path == "conversations" && r.Method == http.MethodGet:
@@ -76,6 +78,12 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 		if json.NewDecoder(r.Body).Decode(&body) != nil {
 			httpx.Fail(w, http.StatusBadRequest, "direct_message.invalid_conversation")
 			return
+		}
+		if body.MessageType == "image" || body.MessageType == "voice" {
+			if body.MediaID == nil || s.directMedia == nil || s.directMedia.ValidateForMessage(r.Context(), user.ID, id, *body.MediaID, body.MessageType) != nil {
+				httpx.Fail(w, http.StatusForbidden, "direct_media.not_participant")
+				return
+			}
 		}
 		item, err := s.directMessages.Send(r.Context(), directmessage.SendInput{ConversationID: id, SenderID: user.ID, ClientMessageID: body.ClientMessageID, MessageType: body.MessageType, Body: body.Body, MediaID: body.MediaID})
 		if err != nil {

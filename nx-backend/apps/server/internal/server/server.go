@@ -37,6 +37,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/classroom"
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/dbtx"
+	"nine-xing/nx-backend/apps/server/internal/directmedia"
 	"nine-xing/nx-backend/apps/server/internal/directmessage"
 	"nine-xing/nx-backend/apps/server/internal/embedding"
 	"nine-xing/nx-backend/apps/server/internal/engagement"
@@ -163,6 +164,7 @@ type Server struct {
 	appUsers                       *appuser.Store
 	friends                        *friends.Store
 	directMessages                 *directmessage.Store
+	directMedia                    *directmedia.Store
 	chatAppearance                 *chatappearance.Store
 	realtimeTickets                *realtime.TicketStore
 	directRealtimeHub              *realtime.DirectHub
@@ -434,6 +436,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.appUsers = appuser.NewStore(database)
 	s.friends = friends.NewStore(database)
 	s.directMessages = directmessage.NewStore(database)
+	s.directMedia = directmedia.NewStore(database, s.uploads)
 	s.chatAppearance = chatappearance.NewStore(database)
 	s.realtimeTickets = realtime.NewTicketStore(database, 60*time.Second)
 	s.directRealtimeHub = realtime.NewDirectHub()
@@ -842,6 +845,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/direct/conversations", s.requireAppAuth(s.appDirectMessageRouter))
 	s.mux.HandleFunc("/api/app/direct/conversations/", s.requireAppAuth(s.appDirectMessageRouter))
 	s.mux.HandleFunc("/api/app/direct/messages/", s.requireAppAuth(s.appDirectMessageRouter))
+	s.mux.HandleFunc("/api/app/direct/media/", s.requireAppAuth(s.appDirectMedia))
 	s.mux.HandleFunc("/api/app/direct-realtime/ticket", s.method(http.MethodPost, s.requireAppAuth(s.appDirectRealtimeTicket)))
 	if s.realtimeTickets != nil {
 		authorizeDirect := func(ctx context.Context, userID, conversationID int64) error {
