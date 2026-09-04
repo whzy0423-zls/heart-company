@@ -2939,6 +2939,18 @@ CREATE TABLE IF NOT EXISTS direct_message_read_cursors (
 CREATE INDEX IF NOT EXISTS idx_direct_message_cursors_user
   ON direct_message_read_cursors(user_id, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS direct_realtime_tickets (
+  id           BIGSERIAL PRIMARY KEY,
+  user_id      BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  token_hash   TEXT NOT NULL UNIQUE,
+  expires_at   TIMESTAMPTZ NOT NULL,
+  consumed_at  TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_direct_realtime_tickets_active
+  ON direct_realtime_tickets(token_hash, expires_at)
+  WHERE consumed_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS app_user_preferences (
   id            BIGSERIAL PRIMARY KEY,
   app_user_id   BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
