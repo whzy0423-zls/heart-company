@@ -82,6 +82,7 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 			mapDirectMessageError(w, err)
 			return
 		}
+		s.directRealtimeHub.Publish(id, map[string]any{"type": "message", "data": item})
 		httpx.JSON(w, http.StatusCreated, map[string]any{"code": 0, "data": item, "error": nil, "message": "ok"})
 	case strings.HasPrefix(path, "messages/") && strings.HasSuffix(path, "/read") && r.Method == http.MethodPost:
 		id, ok := parseDirectPathID(path, "messages/", "/read")
@@ -116,6 +117,7 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 			mapDirectMessageError(w, err)
 			return
 		}
+		s.directRealtimeHub.Publish(item.ConversationID, map[string]any{"type": "message", "data": item})
 		httpx.OK(w, item)
 	default:
 		httpx.Fail(w, http.StatusNotFound, "direct_message.not_found")

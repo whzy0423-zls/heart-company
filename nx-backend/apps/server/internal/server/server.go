@@ -165,6 +165,7 @@ type Server struct {
 	directMessages                 *directmessage.Store
 	chatAppearance                 *chatappearance.Store
 	realtimeTickets                *realtime.TicketStore
+	directRealtimeHub              *realtime.DirectHub
 	appChat                        appChatStore
 	appKnowledge                   *appknowledge.Coordinator
 	skillCatalog                   *skillcatalog.Store
@@ -435,6 +436,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.directMessages = directmessage.NewStore(database)
 	s.chatAppearance = chatappearance.NewStore(database)
 	s.realtimeTickets = realtime.NewTicketStore(database, 60*time.Second)
+	s.directRealtimeHub = realtime.NewDirectHub()
 	s.quiz = quiz.NewStore(database)
 	if database != nil {
 		profileStore := profilecalibration.NewStore(database)
@@ -842,7 +844,17 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/direct/messages/", s.requireAppAuth(s.appDirectMessageRouter))
 	s.mux.HandleFunc("/api/app/direct-realtime/ticket", s.method(http.MethodPost, s.requireAppAuth(s.appDirectRealtimeTicket)))
 	if s.realtimeTickets != nil {
-		s.mux.Handle("/api/app/direct-realtime/ws", realtime.NewDirectGateway(s.realtimeTickets))
+		authorizeDirect := func(ctx context.Context, userID, conversationID int64) error {
+			ok, err := s.directMessages.IsParticipant(ctx, userID, conversationID)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return directmessage.ErrNotParticipant
+			}
+			return nil
+		}
+		s.mux.Handle("/api/app/direct-realtime/ws", realtime.NewDirectGateway(s.realtimeTickets, s.directRealtimeHub, authorizeDirect))
 	}
 	// 测评问卷 + 命运卡片
 	s.mux.HandleFunc("/api/app/quiz/questions", s.method(http.MethodGet, s.appQuizQuestions))

@@ -236,12 +236,20 @@ func (s *Store) Recall(ctx context.Context, userID, messageID int64) (Message, e
 }
 
 func (s *Store) participant(ctx context.Context, userID, conversationID int64) bool {
-	var ok bool
-	if s == nil || s.db == nil {
-		return false
-	}
-	_ = s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM direct_conversations WHERE id=$1 AND status='active' AND (user_low_id=$2 OR user_high_id=$2))`, conversationID, userID).Scan(&ok)
+	ok, _ := s.IsParticipant(ctx, userID, conversationID)
 	return ok
+}
+
+func (s *Store) IsParticipant(ctx context.Context, userID, conversationID int64) (bool, error) {
+	if err := s.requireDB(); err != nil {
+		return false, err
+	}
+	if userID <= 0 || conversationID <= 0 {
+		return false, nil
+	}
+	var ok bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM direct_conversations WHERE id=$1 AND status='active' AND (user_low_id=$2 OR user_high_id=$2))`, conversationID, userID).Scan(&ok)
+	return ok, err
 }
 func normalizePair(a, b int64) (int64, int64, error) {
 	if a <= 0 || b <= 0 || a == b {
