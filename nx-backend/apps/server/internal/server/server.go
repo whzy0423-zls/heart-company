@@ -838,6 +838,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/direct/conversations/", s.requireAppAuth(s.appDirectMessageRouter))
 	s.mux.HandleFunc("/api/app/direct/messages/", s.requireAppAuth(s.appDirectMessageRouter))
 	s.mux.HandleFunc("/api/app/direct-realtime/ticket", s.method(http.MethodPost, s.requireAppAuth(s.appDirectRealtimeTicket)))
+	if s.realtimeTickets != nil {
+		s.mux.Handle("/api/app/direct-realtime/ws", realtime.NewDirectGateway(s.realtimeTickets))
+	}
 	// 测评问卷 + 命运卡片
 	s.mux.HandleFunc("/api/app/quiz/questions", s.method(http.MethodGet, s.appQuizQuestions))
 	s.mux.HandleFunc("/api/app/quiz/submit", s.method(http.MethodPost, s.requireAppAuth(s.appQuizSubmit)))
