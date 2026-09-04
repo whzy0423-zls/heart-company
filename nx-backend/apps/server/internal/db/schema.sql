@@ -2793,10 +2793,98 @@ CREATE TABLE IF NOT EXISTS app_users (
 
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS account TEXT;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS password_hash TEXT;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS user_code TEXT;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS invite_code TEXT;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS personality_visibility TEXT NOT NULL DEFAULT 'friends'
+  CHECK (personality_visibility IN ('private', 'friends'));
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS personality_visibility_version BIGINT NOT NULL DEFAULT 1;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_account_unique
   ON app_users (lower(account))
   WHERE account IS NOT NULL AND btrim(account) <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_user_code_unique
+  ON app_users (lower(user_code))
+  WHERE user_code IS NOT NULL AND btrim(user_code) <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_invite_code_unique
+  ON app_users (lower(invite_code))
+  WHERE invite_code IS NOT NULL AND btrim(invite_code) <> '';
+
+-- ===== App 好友关系 =====
+
+CREATE TABLE IF NOT EXISTS friend_requests (
+  id            BIGSERIAL PRIMARY KEY,
+  requester_id  BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  addressee_id  BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  status        TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'rejected', 'cancelled')),
+  message       TEXT NOT NULL DEFAULT '',
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (requester_id <> addressee_id),
+  UNIQUE (requester_id, addressee_id, status)
+);
+
+CREATE INDEX IF NOT EXISTS idx_friend_requests_incoming
+  ON friend_requests(addressee_id, status, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_friend_requests_outgoing
+  ON friend_requests(requester_id, status, created_at DESC, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_friend_requests_pending_pair
+  ON friend_requests(LEAST(requester_id, addressee_id), GREATEST(requester_id, addressee_id))
+  WHERE status = 'pending';
+
+CREATE TABLE IF NOT EXISTS friendships (
+  id            BIGSERIAL PRIMARY KEY,
+  user_low_id   BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  user_high_id  BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  status        TEXT NOT NULL CHECK (status IN ('active', 'deleted')),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at    TIMESTAMPTZ,
+  CHECK (user_low_id < user_high_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_friendships_active_pair
+  ON friendships(user_low_id, user_high_id)
+  WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_friendships_user_low
+  ON friendships(user_low_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_friendships_user_high
+  ON friendships(user_high_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS user_blocks (
+  id            BIGSERIAL PRIMARY KEY,
+  blocker_id    BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  blocked_id    BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  status        TEXT NOT NULL CHECK (status IN ('active', 'removed')),
+  reason        TEXT NOT NULL DEFAULT '',
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  removed_at    TIMESTAMPTZ,
+  CHECK (blocker_id <> blocked_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_blocks_active_pair
+  ON user_blocks(blocker_id, blocked_id)
+  WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_user_blocks_lookup
+  ON user_blocks(blocker_id, blocked_id, status);
+CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked_lookup
+  ON user_blocks(blocked_id, blocker_id, status);
+
+CREATE TABLE IF NOT EXISTS user_reports (
+  id            BIGSERIAL PRIMARY KEY,
+  reporter_id   BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  reported_id   BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  reason        TEXT NOT NULL DEFAULT '',
+  details       TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'reviewing', 'resolved', 'dismissed')),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (reporter_id <> reported_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_reports_reported
+  ON user_reports(reported_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_reports_reporter
+  ON user_reports(reporter_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS app_user_preferences (
   id            BIGSERIAL PRIMARY KEY,
