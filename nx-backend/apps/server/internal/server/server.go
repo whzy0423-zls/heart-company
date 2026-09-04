@@ -38,6 +38,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/dbtx"
 	"nine-xing/nx-backend/apps/server/internal/embedding"
 	"nine-xing/nx-backend/apps/server/internal/engagement"
+	"nine-xing/nx-backend/apps/server/internal/friends"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/image"
 	"nine-xing/nx-backend/apps/server/internal/lifestory"
@@ -157,6 +158,7 @@ type Server struct {
 	maintenanceCancel          context.CancelFunc
 
 	appUsers                       *appuser.Store
+	friends                        *friends.Store
 	appChat                        appChatStore
 	appKnowledge                   *appknowledge.Coordinator
 	skillCatalog                   *skillcatalog.Store
@@ -423,6 +425,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	}
 	s.chatHeartbeatInterval = 12 * time.Second
 	s.appUsers = appuser.NewStore(database)
+	s.friends = friends.NewStore(database)
 	s.quiz = quiz.NewStore(database)
 	if database != nil {
 		profileStore := profilecalibration.NewStore(database)
@@ -815,6 +818,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/auth/logout", s.method(http.MethodPost, s.appLogout))
 	s.mux.HandleFunc("/api/app/user/info", s.method(http.MethodGet, s.requireAppAuth(s.appUserInfo)))
 	s.mux.HandleFunc("/api/app/me", s.method(http.MethodGet, s.requireAppAuth(s.appUserInfo)))
+	s.mux.HandleFunc("/api/app/social", s.requireAppAuth(s.appSocialRouter))
+	s.mux.HandleFunc("/api/app/social/", s.requireAppAuth(s.appSocialRouter))
+	s.mux.HandleFunc("/api/app/social/invite/rotate", s.requireAppAuth(s.appSocialRouter))
+	s.mux.HandleFunc("/api/app/friends", s.requireAppAuth(s.appSocialRouter))
+	s.mux.HandleFunc("/api/app/friends/", s.requireAppAuth(s.appSocialRouter))
+	s.mux.HandleFunc("/api/app/friend-requests", s.requireAppAuth(s.appSocialRouter))
+	s.mux.HandleFunc("/api/app/friend-requests/", s.requireAppAuth(s.appSocialRouter))
+	s.mux.HandleFunc("/api/app/blocks", s.requireAppAuth(s.appSocialRouter))
+	s.mux.HandleFunc("/api/app/blocks/", s.requireAppAuth(s.appSocialRouter))
+	s.mux.HandleFunc("/api/app/social/reports", s.requireAppAuth(s.appSocialRouter))
 	// 测评问卷 + 命运卡片
 	s.mux.HandleFunc("/api/app/quiz/questions", s.method(http.MethodGet, s.appQuizQuestions))
 	s.mux.HandleFunc("/api/app/quiz/submit", s.method(http.MethodPost, s.requireAppAuth(s.appQuizSubmit)))
