@@ -2886,6 +2886,59 @@ CREATE INDEX IF NOT EXISTS idx_user_reports_reported
 CREATE INDEX IF NOT EXISTS idx_user_reports_reporter
   ON user_reports(reporter_id, created_at DESC);
 
+-- ===== App 一对一私聊 =====
+
+CREATE TABLE IF NOT EXISTS direct_conversations (
+  id             BIGSERIAL PRIMARY KEY,
+  user_low_id    BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  user_high_id   BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  status         TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed')),
+  event_sequence BIGINT NOT NULL DEFAULT 0 CHECK (event_sequence >= 0),
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (user_low_id < user_high_id),
+  UNIQUE (user_low_id, user_high_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_direct_conversations_pair
+  ON direct_conversations(user_low_id, user_high_id, status);
+CREATE INDEX IF NOT EXISTS idx_direct_conversations_user_low
+  ON direct_conversations(user_low_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_direct_conversations_user_high
+  ON direct_conversations(user_high_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS direct_messages (
+  id                BIGSERIAL PRIMARY KEY,
+  conversation_id   BIGINT NOT NULL REFERENCES direct_conversations(id) ON DELETE CASCADE,
+  sender_id         BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  client_message_id TEXT NOT NULL,
+  payload_hash      TEXT NOT NULL,
+  message_type      TEXT NOT NULL DEFAULT 'text' CHECK (message_type IN ('text', 'image', 'voice', 'sticker')),
+  body              TEXT NOT NULL DEFAULT '',
+  media_id          BIGINT,
+  sequence_no       BIGINT NOT NULL,
+  recalled_at       TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (conversation_id, client_message_id),
+  UNIQUE (conversation_id, sequence_no)
+);
+
+CREATE INDEX IF NOT EXISTS idx_direct_messages_sequence
+  ON direct_messages(conversation_id, sequence_no DESC);
+CREATE INDEX IF NOT EXISTS idx_direct_messages_sender
+  ON direct_messages(sender_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS direct_message_read_cursors (
+  conversation_id    BIGINT NOT NULL REFERENCES direct_conversations(id) ON DELETE CASCADE,
+  user_id            BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  last_read_sequence BIGINT NOT NULL DEFAULT 0 CHECK (last_read_sequence >= 0),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (conversation_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_direct_message_cursors_user
+  ON direct_message_read_cursors(user_id, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS app_user_preferences (
   id            BIGSERIAL PRIMARY KEY,
   app_user_id   BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,

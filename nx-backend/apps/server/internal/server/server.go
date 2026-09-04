@@ -36,6 +36,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/classroom"
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/dbtx"
+	"nine-xing/nx-backend/apps/server/internal/directmessage"
 	"nine-xing/nx-backend/apps/server/internal/embedding"
 	"nine-xing/nx-backend/apps/server/internal/engagement"
 	"nine-xing/nx-backend/apps/server/internal/friends"
@@ -159,6 +160,7 @@ type Server struct {
 
 	appUsers                       *appuser.Store
 	friends                        *friends.Store
+	directMessages                 *directmessage.Store
 	appChat                        appChatStore
 	appKnowledge                   *appknowledge.Coordinator
 	skillCatalog                   *skillcatalog.Store
@@ -426,6 +428,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.chatHeartbeatInterval = 12 * time.Second
 	s.appUsers = appuser.NewStore(database)
 	s.friends = friends.NewStore(database)
+	s.directMessages = directmessage.NewStore(database)
 	s.quiz = quiz.NewStore(database)
 	if database != nil {
 		profileStore := profilecalibration.NewStore(database)
@@ -828,6 +831,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/blocks", s.requireAppAuth(s.appSocialRouter))
 	s.mux.HandleFunc("/api/app/blocks/", s.requireAppAuth(s.appSocialRouter))
 	s.mux.HandleFunc("/api/app/social/reports", s.requireAppAuth(s.appSocialRouter))
+	s.mux.HandleFunc("/api/app/direct/conversations", s.requireAppAuth(s.appDirectMessageRouter))
+	s.mux.HandleFunc("/api/app/direct/conversations/", s.requireAppAuth(s.appDirectMessageRouter))
+	s.mux.HandleFunc("/api/app/direct/messages/", s.requireAppAuth(s.appDirectMessageRouter))
 	// 测评问卷 + 命运卡片
 	s.mux.HandleFunc("/api/app/quiz/questions", s.method(http.MethodGet, s.appQuizQuestions))
 	s.mux.HandleFunc("/api/app/quiz/submit", s.method(http.MethodPost, s.requireAppAuth(s.appQuizSubmit)))
