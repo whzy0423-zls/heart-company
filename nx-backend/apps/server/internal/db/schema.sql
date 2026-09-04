@@ -2951,6 +2951,17 @@ CREATE INDEX IF NOT EXISTS idx_direct_realtime_tickets_active
   ON direct_realtime_tickets(token_hash, expires_at)
   WHERE consumed_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS direct_chat_appearances (
+  conversation_id BIGINT NOT NULL REFERENCES direct_conversations(id) ON DELETE CASCADE,
+  user_id         BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  background_type TEXT NOT NULL DEFAULT 'preset' CHECK (background_type IN ('preset', 'color', 'image')),
+  background_value TEXT NOT NULL DEFAULT 'default',
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (conversation_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_direct_chat_appearances_user
+  ON direct_chat_appearances(user_id, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS app_user_preferences (
   id            BIGSERIAL PRIMARY KEY,
   app_user_id   BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,

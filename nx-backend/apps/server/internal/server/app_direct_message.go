@@ -19,6 +19,8 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/app/direct/")
 	switch {
+	case strings.HasPrefix(path, "conversations/") && strings.HasSuffix(path, "/appearance"):
+		s.appChatAppearanceRouter(w, r)
 	case path == "conversations" && r.Method == http.MethodGet:
 		items, err := s.directMessages.ListConversations(r.Context(), user.ID)
 		if err != nil {

@@ -33,6 +33,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/branding"
 	"nine-xing/nx-backend/apps/server/internal/businessmessage"
 	"nine-xing/nx-backend/apps/server/internal/chat"
+	"nine-xing/nx-backend/apps/server/internal/chatappearance"
 	"nine-xing/nx-backend/apps/server/internal/classroom"
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/dbtx"
@@ -162,6 +163,7 @@ type Server struct {
 	appUsers                       *appuser.Store
 	friends                        *friends.Store
 	directMessages                 *directmessage.Store
+	chatAppearance                 *chatappearance.Store
 	realtimeTickets                *realtime.TicketStore
 	appChat                        appChatStore
 	appKnowledge                   *appknowledge.Coordinator
@@ -431,6 +433,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.appUsers = appuser.NewStore(database)
 	s.friends = friends.NewStore(database)
 	s.directMessages = directmessage.NewStore(database)
+	s.chatAppearance = chatappearance.NewStore(database)
 	s.realtimeTickets = realtime.NewTicketStore(database, 60*time.Second)
 	s.quiz = quiz.NewStore(database)
 	if database != nil {
