@@ -115,7 +115,7 @@ func TestVisiblePersonalityRequiresFriendsVisibility(t *testing.T) {
 				}
 				return insightRows([]string{"personality_visibility", "enneagram"}, test.visibility, int64(5)), nil
 			})
-			personality, reference, err := NewService(database).visiblePersonality(context.Background(), 2)
+			personality, reference, err := NewService(database).visiblePersonality(context.Background(), 1, 2)
 			if err != nil {
 				t.Fatal(err)
 			}

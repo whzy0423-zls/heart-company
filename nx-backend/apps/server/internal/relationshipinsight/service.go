@@ -85,7 +85,7 @@ func (s *Service) Generate(ctx context.Context, initiatorID, conversationID int6
 		return Report{}, ErrNoMessages
 	}
 	report := analyze(initiatorID, peerID, conversationID, messages)
-	report.PersonalityTypeSnapshot, report.PersonalityReference, err = s.visiblePersonality(ctx, peerID)
+	report.PersonalityTypeSnapshot, report.PersonalityReference, err = s.visiblePersonality(ctx, initiatorID, peerID)
 	if err != nil {
 		return Report{}, err
 	}
@@ -95,8 +95,15 @@ func (s *Service) Generate(ctx context.Context, initiatorID, conversationID int6
 	if report.PersonalityReference == nil {
 		reference = nil
 	}
-	err = s.db.QueryRowContext(ctx, `INSERT INTO relationship_insights(initiator_id,peer_id,conversation_id,from_sequence,to_sequence,message_count,status,observation_level,personality_type_snapshot,metrics,summary,personality_reference,suggestions) VALUES($1,$2,$3,$4,$5,$6,'completed',$7,$8,$9,$10,$11,$12) ON CONFLICT(initiator_id,conversation_id,to_sequence) DO UPDATE SET updated_at=now() RETURNING id,created_at`, initiatorID, peerID, conversationID, report.FromSequence, report.ToSequence, report.MessageCount, report.ObservationLevel, report.PersonalityTypeSnapshot, metrics, report.Summary, reference, suggestions).Scan(&report.ID, &report.CreatedAt)
+	err = s.db.QueryRowContext(ctx, `INSERT INTO relationship_insights(initiator_id,peer_id,conversation_id,from_sequence,to_sequence,message_count,status,observation_level,personality_type_snapshot,metrics,summary,personality_reference,suggestions) VALUES($1,$2,$3,$4,$5,$6,'completed',$7,$8,$9::jsonb,$10,$11::jsonb,$12::jsonb) ON CONFLICT(initiator_id,conversation_id,to_sequence) DO UPDATE SET from_sequence=EXCLUDED.from_sequence,message_count=EXCLUDED.message_count,status=EXCLUDED.status,observation_level=EXCLUDED.observation_level,personality_type_snapshot=EXCLUDED.personality_type_snapshot,metrics=EXCLUDED.metrics,summary=EXCLUDED.summary,personality_reference=EXCLUDED.personality_reference,suggestions=EXCLUDED.suggestions,updated_at=now() RETURNING id,created_at`, initiatorID, peerID, conversationID, report.FromSequence, report.ToSequence, report.MessageCount, report.ObservationLevel, report.PersonalityTypeSnapshot, string(metrics), report.Summary, nullableJSON(reference), string(suggestions)).Scan(&report.ID, &report.CreatedAt)
 	return report, err
+}
+
+func nullableJSON(value []byte) any {
+	if len(value) == 0 {
+		return nil
+	}
+	return string(value)
 }
 
 func (s *Service) List(ctx context.Context, initiatorID, conversationID int64) ([]Report, error) {
@@ -122,7 +129,7 @@ func (s *Service) List(ctx context.Context, initiatorID, conversationID int64) (
 	if len(items) == 0 {
 		return items, nil
 	}
-	visible, _, err := s.visiblePersonality(ctx, items[0].PeerID)
+	visible, _, err := s.visiblePersonality(ctx, initiatorID, items[0].PeerID)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +149,7 @@ func (s *Service) Get(ctx context.Context, initiatorID, id int64) (Report, error
 	if err != nil {
 		return Report{}, err
 	}
-	visible, _, err := s.visiblePersonality(ctx, item.PeerID)
+	visible, _, err := s.visiblePersonality(ctx, initiatorID, item.PeerID)
 	if err != nil {
 		return Report{}, err
 	}
@@ -209,10 +216,21 @@ func (s *Service) loadMessages(ctx context.Context, conversationID int64) ([]mes
 	return items, rows.Err()
 }
 
-func (s *Service) visiblePersonality(ctx context.Context, peerID int64) (*int, map[string]string, error) {
+func (s *Service) visiblePersonality(ctx context.Context, viewerID, peerID int64) (*int, map[string]string, error) {
 	var visibility string
 	var personality sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT u.personality_visibility,c.enneagram FROM app_users u LEFT JOIN LATERAL (SELECT enneagram FROM app_user_cards WHERE app_user_id=u.id AND card_type='primary' AND status='active' ORDER BY update_time DESC,id DESC LIMIT 1) c ON true WHERE u.id=$1`, peerID).Scan(&visibility, &personality)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT CASE WHEN EXISTS (
+			SELECT 1 FROM friendships f
+			WHERE f.user_low_id=LEAST(u.id,$2) AND f.user_high_id=GREATEST(u.id,$2) AND f.status='active'
+		) THEN u.personality_visibility ELSE 'private' END,c.enneagram
+		FROM app_users u
+		LEFT JOIN LATERAL (
+			SELECT enneagram FROM app_user_cards
+			WHERE app_user_id=u.id AND card_type='primary' AND status='active'
+			ORDER BY update_time DESC,id DESC LIMIT 1
+		) c ON true
+		WHERE u.id=$1`, peerID, viewerID).Scan(&visibility, &personality)
 	if err != nil || visibility != "friends" || !personality.Valid {
 		return nil, nil, err
 	}
