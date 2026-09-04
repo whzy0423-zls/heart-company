@@ -59,6 +59,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/ragstore"
 	"nine-xing/nx-backend/apps/server/internal/realip"
 	"nine-xing/nx-backend/apps/server/internal/realtime"
+	"nine-xing/nx-backend/apps/server/internal/relationshipinsight"
 	"nine-xing/nx-backend/apps/server/internal/signup"
 	"nine-xing/nx-backend/apps/server/internal/siteconfig"
 	"nine-xing/nx-backend/apps/server/internal/skillcatalog"
@@ -168,6 +169,7 @@ type Server struct {
 	chatAppearance                 *chatappearance.Store
 	realtimeTickets                *realtime.TicketStore
 	directRealtimeHub              *realtime.DirectHub
+	relationshipInsights           *relationshipinsight.Service
 	appChat                        appChatStore
 	appKnowledge                   *appknowledge.Coordinator
 	skillCatalog                   *skillcatalog.Store
@@ -440,6 +442,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.chatAppearance = chatappearance.NewStore(database)
 	s.realtimeTickets = realtime.NewTicketStore(database, 60*time.Second)
 	s.directRealtimeHub = realtime.NewDirectHub()
+	s.relationshipInsights = relationshipinsight.NewService(database)
 	s.quiz = quiz.NewStore(database)
 	if database != nil {
 		profileStore := profilecalibration.NewStore(database)
@@ -846,6 +849,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/direct/conversations/", s.requireAppAuth(s.appDirectMessageRouter))
 	s.mux.HandleFunc("/api/app/direct/messages/", s.requireAppAuth(s.appDirectMessageRouter))
 	s.mux.HandleFunc("/api/app/direct/media/", s.requireAppAuth(s.appDirectMedia))
+	s.mux.HandleFunc("/api/app/relationship-insights/", s.method(http.MethodGet, s.requireAppAuth(s.appRelationshipInsightByID)))
 	s.mux.HandleFunc("/api/app/direct-realtime/ticket", s.method(http.MethodPost, s.requireAppAuth(s.appDirectRealtimeTicket)))
 	if s.realtimeTickets != nil {
 		authorizeDirect := func(ctx context.Context, userID, conversationID int64) error {

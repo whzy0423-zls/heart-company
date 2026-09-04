@@ -12,7 +12,7 @@ func TestSchemaIncludesDirectMessageTables(t *testing.T) {
 		t.Fatal(err)
 	}
 	schema := strings.Join(strings.Fields(string(raw)), " ")
-	for _, table := range []string{"direct_conversations", "direct_message_media", "direct_messages", "direct_message_read_cursors", "direct_chat_appearances"} {
+	for _, table := range []string{"direct_conversations", "direct_message_media", "direct_messages", "direct_message_read_cursors", "direct_chat_appearances", "relationship_insights"} {
 		if !strings.Contains(schema, "CREATE TABLE IF NOT EXISTS "+table) {
 			t.Fatalf("schema missing %s", table)
 		}
@@ -39,6 +39,8 @@ func TestSchemaIncludesDirectMessageTables(t *testing.T) {
 		"background_type TEXT NOT NULL DEFAULT 'preset' CHECK (background_type IN ('preset', 'color', 'image'))",
 		"PRIMARY KEY (conversation_id, user_id)",
 		"idx_direct_chat_appearances_user",
+		"UNIQUE (initiator_id, conversation_id, to_sequence)",
+		"idx_relationship_insights_owner",
 	} {
 		if !strings.Contains(schema, fragment) {
 			t.Fatalf("schema missing direct message contract %q", fragment)

@@ -2982,6 +2982,29 @@ CREATE TABLE IF NOT EXISTS direct_chat_appearances (
 CREATE INDEX IF NOT EXISTS idx_direct_chat_appearances_user
   ON direct_chat_appearances(user_id, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS relationship_insights (
+  id                        BIGSERIAL PRIMARY KEY,
+  initiator_id              BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  peer_id                   BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  conversation_id           BIGINT NOT NULL REFERENCES direct_conversations(id) ON DELETE CASCADE,
+  from_sequence             BIGINT NOT NULL DEFAULT 0,
+  to_sequence               BIGINT NOT NULL DEFAULT 0,
+  message_count             INT NOT NULL DEFAULT 0,
+  status                    TEXT NOT NULL DEFAULT 'completed' CHECK (status IN ('pending', 'generating', 'completed', 'failed')),
+  observation_level         TEXT NOT NULL DEFAULT 'preliminary' CHECK (observation_level IN ('preliminary', 'stable')),
+  personality_type_snapshot SMALLINT CHECK (personality_type_snapshot IS NULL OR personality_type_snapshot BETWEEN 1 AND 9),
+  metrics                   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  summary                   TEXT NOT NULL DEFAULT '',
+  personality_reference     JSONB,
+  suggestions               JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (initiator_id <> peer_id),
+  UNIQUE (initiator_id, conversation_id, to_sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_relationship_insights_owner
+  ON relationship_insights(initiator_id, conversation_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS app_user_preferences (
   id            BIGSERIAL PRIMARY KEY,
   app_user_id   BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,

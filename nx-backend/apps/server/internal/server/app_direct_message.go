@@ -9,6 +9,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/directmessage"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/relationshipinsight"
 )
 
 func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) {
@@ -23,6 +24,30 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 		s.appDirectMedia(w, r)
 	case strings.HasPrefix(path, "conversations/") && strings.HasSuffix(path, "/appearance"):
 		s.appChatAppearanceRouter(w, r)
+	case strings.HasPrefix(path, "conversations/") && strings.HasSuffix(path, "/insights"):
+		id, valid := parseDirectPathID(path, "conversations/", "/insights")
+		if !valid {
+			httpx.Fail(w, http.StatusBadRequest, "insight.invalid_conversation")
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			items, err := s.relationshipInsights.List(r.Context(), user.ID, id)
+			if err != nil {
+				mapRelationshipInsightError(w, err)
+				return
+			}
+			httpx.OK(w, map[string]any{"items": items})
+		case http.MethodPost:
+			item, err := s.relationshipInsights.Generate(r.Context(), user.ID, id)
+			if err != nil {
+				mapRelationshipInsightError(w, err)
+				return
+			}
+			httpx.JSON(w, http.StatusCreated, map[string]any{"code": 0, "data": item, "error": nil, "message": "ok"})
+		default:
+			httpx.Fail(w, http.StatusMethodNotAllowed, "method_not_allowed")
+		}
 	case path == "conversations" && r.Method == http.MethodGet:
 		items, err := s.directMessages.ListConversations(r.Context(), user.ID)
 		if err != nil {
@@ -130,6 +155,39 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 	default:
 		httpx.Fail(w, http.StatusNotFound, "direct_message.not_found")
 	}
+}
+
+func (s *Server) appRelationshipInsightByID(w http.ResponseWriter, r *http.Request) {
+	user, ok := appUserFromContext(r)
+	if !ok {
+		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	rawID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/app/relationship-insights/"), "/")
+	id, err := strconv.ParseInt(rawID, 10, 64)
+	if err != nil || id <= 0 || strings.Contains(rawID, "/") {
+		httpx.Fail(w, http.StatusBadRequest, "insight.invalid_id")
+		return
+	}
+	item, err := s.relationshipInsights.Get(r.Context(), user.ID, id)
+	if err != nil {
+		mapRelationshipInsightError(w, err)
+		return
+	}
+	httpx.OK(w, item)
+}
+
+func mapRelationshipInsightError(w http.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, relationshipinsight.ErrVIPRequired), errors.Is(err, relationshipinsight.ErrNotParticipant):
+		status = http.StatusForbidden
+	case errors.Is(err, relationshipinsight.ErrNoMessages):
+		status = http.StatusUnprocessableEntity
+	case errors.Is(err, relationshipinsight.ErrNotFound):
+		status = http.StatusNotFound
+	}
+	httpx.Fail(w, status, err.Error())
 }
 
 func parseDirectPathID(path, prefix, suffix string) (int64, bool) {
