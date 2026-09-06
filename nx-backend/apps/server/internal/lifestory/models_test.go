@@ -28,6 +28,29 @@ func TestLifeStoryModelsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestFactEventCoordinatesRoundTripAndLegacyJSON(t *testing.T) {
+	lat, lng := 31.2304, 121.4737
+	input := FactEvent{ID: "event-1", Location: "外滩", Latitude: &lat, Longitude: &lng, CoordinateSystem: "gcj02", Description: "散步"}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got FactEvent
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Latitude == nil || got.Longitude == nil || *got.Latitude != lat || *got.Longitude != lng || got.CoordinateSystem != "gcj02" {
+		t.Fatalf("coordinates not preserved: %+v", got)
+	}
+	var legacy FactEvent
+	if err := json.Unmarshal([]byte(`{"location":"旧地点","description":"旧事件"}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Latitude != nil || legacy.Longitude != nil {
+		t.Fatalf("legacy event unexpectedly gained coordinates: %+v", legacy)
+	}
+}
+
 func TestStoryStyleNormalizationDefaultsMissingAndRejectsUnknown(t *testing.T) {
 	tests := []struct {
 		name  string

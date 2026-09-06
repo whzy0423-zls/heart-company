@@ -34,6 +34,12 @@ type UpdateAdminFieldsInput struct {
 	MemberLevel string `json:"memberLevel"`
 }
 
+// UpdateSelfProfileInput is limited to the two fields an app user may edit.
+type UpdateSelfProfileInput struct {
+	Nickname *string `json:"nickname"`
+	Avatar   *string `json:"avatar"`
+}
+
 type RefreshToken struct {
 	ID         int64     `json:"id"`
 	AppUserID  int64     `json:"appUserId"`
@@ -98,6 +104,55 @@ func (s *Store) FindByID(ctx context.Context, id int64) (User, error) {
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, phone, COALESCE(account, ''), nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time
 		 FROM app_users WHERE id = $1`, id).
+		Scan(&u.ID, &u.Phone, &u.Account, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
+	if err != nil {
+		return User{}, err
+	}
+	if lastLogin.Valid {
+		u.LastLoginAt = formatTime(lastLogin.Time)
+	}
+	u.CreateTime = formatTime(createTime)
+	u.UpdateTime = formatTime(updateTime)
+	applyMembershipTimes(&u, memberStartedAt, memberExpiresAt)
+	return u, nil
+}
+
+// UpdateSelfProfile updates only the authenticated user's public identity.
+func (s *Store) UpdateSelfProfile(ctx context.Context, id int64, input UpdateSelfProfileInput) (User, error) {
+	if id <= 0 {
+		return User{}, fmt.Errorf("id is required")
+	}
+	if input.Nickname == nil && input.Avatar == nil {
+		return User{}, fmt.Errorf("nickname or avatar is required")
+	}
+	var nickname any
+	if input.Nickname != nil {
+		value := NormalizeNickname(*input.Nickname)
+		if err := ValidateNickname(value); err != nil {
+			return User{}, err
+		}
+		nickname = value
+	}
+	var avatar any
+	if input.Avatar != nil {
+		value := strings.TrimSpace(*input.Avatar)
+		if len(value) > 2048 || strings.ContainsAny(value, "\r\n") {
+			return User{}, fmt.Errorf("invalid avatar")
+		}
+		avatar = value
+	}
+
+	var u User
+	var lastLogin, memberStartedAt, memberExpiresAt sql.NullTime
+	var createTime, updateTime time.Time
+	err := s.db.QueryRowContext(ctx,
+		`UPDATE app_users
+		    SET nickname = COALESCE($1::text, nickname),
+		        avatar = COALESCE($2::text, avatar),
+		        update_time = now()
+		  WHERE id = $3 AND status = 'active'
+		  RETURNING id, phone, COALESCE(account, ''), nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time`,
+		nickname, avatar, id).
 		Scan(&u.ID, &u.Phone, &u.Account, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
 	if err != nil {
 		return User{}, err

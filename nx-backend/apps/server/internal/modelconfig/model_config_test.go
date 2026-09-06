@@ -549,6 +549,47 @@ func TestApplyDailyQuizInheritsAdminCompatibleModelConfig(t *testing.T) {
 	}
 }
 
+func TestMergeIncomingStoryGenerationKeepsStoredSecretAndSupportsPartialUpdate(t *testing.T) {
+	stored := Config{StoryGeneration: StoryGenerationConfig{
+		Enabled: true, Provider: ProviderOpenAICompatible, APIBase: "https://story.example.com/v1",
+		APIKey: "stored-secret", Model: "story-old", Temperature: 0.3, MaxTokens: 3200, TimeoutSeconds: 80,
+	}}
+	var incoming Config
+	if err := json.Unmarshal([]byte(`{"storyGeneration":{"model":"story-new","apiKey":""}}`), &incoming); err != nil {
+		t.Fatal(err)
+	}
+	merged := stored.MergeIncoming(incoming).ApplyStoryGeneration()
+	if merged.APIKey != "stored-secret" || merged.Model != "story-new" || merged.APIBase != "https://story.example.com/v1" {
+		t.Fatalf("unexpected merged story config: %+v", merged)
+	}
+	if !merged.Enabled || merged.MaxTokens != 3200 || merged.TimeoutSeconds != 80 {
+		t.Fatalf("partial update lost settings: %+v", merged)
+	}
+}
+
+func TestStoryGenerationConfigValidation(t *testing.T) {
+	valid := StoryGenerationConfig{Enabled: true, Provider: ProviderAnthropicCompatible, APIBase: "https://api.example.com/v1", APIKey: "secret", Model: "story-model", Temperature: 0.4, MaxTokens: 4000, TimeoutSeconds: 90}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid config rejected: %v", err)
+	}
+	invalid := valid
+	invalid.MaxTokens = 20000
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("expected invalid maxTokens to be rejected")
+	}
+}
+
+func TestMergeIncomingStoryGenerationDoesNotReuseSecretAcrossProviders(t *testing.T) {
+	stored := Config{StoryGeneration: StoryGenerationConfig{Enabled: true, Provider: ProviderOpenAICompatible, APIKey: "openai-secret"}}
+	var incoming Config
+	if err := json.Unmarshal([]byte(`{"storyGeneration":{"provider":"anthropic-compatible","apiKey":""}}`), &incoming); err != nil {
+		t.Fatal(err)
+	}
+	if got := stored.MergeIncoming(incoming).StoryGeneration.APIKey; got != "" {
+		t.Fatalf("cross-provider secret was reused: %q", got)
+	}
+}
+
 func TestMergeIncomingPreservesAdminAndDailyQuizAPIKeys(t *testing.T) {
 	current := Config{
 		Admin:     CompatibleModelConfig{APIKey: "admin-secret", Model: "gpt-old"},

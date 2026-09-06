@@ -153,21 +153,23 @@ func TestAppBillingEntitlementsTreatsExpiredMembershipAsFree(t *testing.T) {
 	}
 }
 
-func TestAppBillingCreateOrderReturnsUnavailableWhenXZNIsNotConfigured(t *testing.T) {
+func TestAppBillingCreateOrderUsesDefaultCustomerServiceMode(t *testing.T) {
+	appBillingInsertCount.Store(0)
 	s := newAppBillingTestServer(t)
 
 	response := performAppBillingRequest(t, s.appBillingCreateOrder, http.MethodPost, "/api/app/billing/orders", map[string]any{
 		"productId": "vip_month",
 	})
 
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503, got %d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), "在线支付暂不可用") {
-		t.Fatalf("expected Chinese unavailable message, got %q", response.Body.String())
+	body := decodeAppBillingResponse(t, response)
+	if body.Data.PurchaseMode != appPurchaseModeCustomerService || body.Data.Status != appOrderPendingConfirmation {
+		t.Fatalf("expected customer-service order, got %+v", body.Data)
 	}
-	if got := appBillingInsertCount.Load(); got != 0 {
-		t.Fatalf("unconfigured payment must not create a manual order, got %d inserts", got)
+	if got := appBillingInsertCount.Load(); got != 1 {
+		t.Fatalf("customer-service mode must create one manual order, got %d inserts", got)
 	}
 }
 
@@ -354,6 +356,9 @@ func (c *appBillingTestConn) ExecContext(_ context.Context, query string, _ []dr
 }
 
 func (c *appBillingTestConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if strings.Contains(query, "FROM site_configs") {
+		return &appBillingTestRows{columns: []string{"config"}}, nil
+	}
 	if strings.Contains(query, "SELECT member_expires_at FROM app_users") {
 		level := strings.TrimPrefix(c.memberLevel, "pending|")
 		var expiresAt driver.Value

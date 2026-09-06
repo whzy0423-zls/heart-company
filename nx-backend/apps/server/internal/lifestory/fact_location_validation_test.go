@@ -72,3 +72,20 @@ func TestValidateFactCardLocationsRejectsLongValueWhenEventIDDoesNotMatch(t *tes
 		t.Fatalf("unmatched event ID error=%v, want ErrValidation", err)
 	}
 }
+
+func TestValidateFactCardLocationsCoordinates(t *testing.T) {
+	lat, lng := 31.2304, 121.4737
+	valid := FactCard{Events: []FactEvent{{Latitude: &lat, Longitude: &lng, CoordinateSystem: "gcj02"}}}
+	if err := validateFactCardLocations(valid, FactCard{}); err != nil {
+		t.Fatalf("valid coordinates rejected: %v", err)
+	}
+	badLatitude := 91.0
+	invalid := FactCard{Events: []FactEvent{{Latitude: &badLatitude, Longitude: &lng}}}
+	if err := validateFactCardLocations(invalid, FactCard{}); err == nil {
+		t.Fatal("out-of-range latitude accepted")
+	}
+	partial := FactCard{Events: []FactEvent{{Latitude: &lat}}}
+	if err := validateFactCardLocations(partial, FactCard{}); err == nil {
+		t.Fatal("partial coordinates accepted")
+	}
+}

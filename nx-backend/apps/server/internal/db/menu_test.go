@@ -39,6 +39,22 @@ func TestDefaultMenusIncludeMiniappHomeManagement(t *testing.T) {
 	}
 }
 
+func TestDefaultMenusIncludeAppPaymentMode(t *testing.T) {
+	for _, menu := range defaultMenus {
+		if menu.Name != "AppPaymentMode" {
+			continue
+		}
+		if menu.PID != 1500 || menu.Path != "/third-party-payment/mode" || menu.Component != "/third-party-payment/mode" {
+			t.Fatalf("unexpected payment mode route: %+v", menu)
+		}
+		if menu.AuthCode != "System:Payment:Config" || menu.Title != "支付模式" || menu.Type != "menu" {
+			t.Fatalf("unexpected payment mode metadata: %+v", menu)
+		}
+		return
+	}
+	t.Fatal("expected default menu AppPaymentMode")
+}
+
 func TestDefaultMenusIncludeAppReleaseManagement(t *testing.T) {
 	var foundList bool
 	var foundWrite bool

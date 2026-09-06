@@ -15,6 +15,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/lifestory"
+	"nine-xing/nx-backend/apps/server/internal/modelconfig"
 )
 
 type lifeStoryErrorPayload struct {
@@ -371,6 +372,22 @@ func TestLifeStoryRuntimeCompleterReadsCurrentGenerator(t *testing.T) {
 	}
 	if got != `{"ok":true}` {
 		t.Fatalf("completion=%q", got)
+	}
+}
+
+func TestLifeStoryRuntimeCompleterPrefersDedicatedStoryGenerator(t *testing.T) {
+	server := &Server{
+		ragGen:      &preferenceJSONGenerator{name: "chat"},
+		storyGen:    &preferenceJSONGenerator{name: "story"},
+		storyConfig: modelconfig.StoryGenerationConfig{Enabled: true, MaxTokens: 800},
+	}
+	completer := lifeStoryRuntimeCompleter{server: server}
+	got, err := completer.CompleteJSON(context.Background(), "system", "user", 1200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "story" {
+		t.Fatalf("expected dedicated story generator, got %q", got)
 	}
 }
 

@@ -116,6 +116,8 @@ type Server struct {
 	pay                        *wxpay.Client
 	payNotifyParser            func(http.Header, []byte) (wxpay.CallbackResult, error)
 	ragGen                     rag.Generator
+	storyGen                   llm.JSONCompleter
+	storyConfig                modelconfig.StoryGenerationConfig
 	analysisGen                *llm.MiniMaxGenerator
 	ragDocs                    ragDocumentStore
 	ragVec                     *ragstore.Store
@@ -578,12 +580,27 @@ func (s *Server) applyStoredModelConfig() {
 			log.Printf("stored chat model remains unconfigured: %v", err)
 		}
 	}
+	var storyGenerator llm.ChatGenerator
+	storyCfg := cfg.ApplyStoryGeneration()
+	if storyCfg.Enabled {
+		storyGenerator, err = s.buildStoryGenerator(cfg)
+		if err != nil {
+			log.Printf("stored story generation model remains unconfigured: %v", err)
+		}
+	}
 	analysisGenerator := llm.NewMiniMaxGenerator(safeStoredAnalysisConfig(cfg, s.env.MiniMax))
 	videoStore := video.NewStore(s.db, s.uploads, safeStoredVideoConfig(cfg, s.env.Video), s.uploader)
 	imageStore := image.NewStore(s.uploads, safeStoredImageConfig(cfg, s.env.Image), s.uploader)
 
 	s.modelMu.Lock()
 	s.ragGen = chatGenerator
+	if storyGenerator != nil {
+		s.storyGen = storyGenerator
+		s.storyConfig = storyCfg
+	} else {
+		s.storyGen = nil
+		s.storyConfig = modelconfig.StoryGenerationConfig{}
+	}
 	if chatGenerator != nil {
 		s.chatTimeout = time.Duration(cfg.EffectiveChat().TimeoutSeconds) * time.Second
 	}
@@ -640,6 +657,32 @@ func (s *Server) completePreferenceJSON(ctx context.Context, systemPrompt, userM
 	return completer.CompleteJSON(ctx, systemPrompt, userMessage, maxTokens)
 }
 
+func (s *Server) completeStoryJSON(ctx context.Context, systemPrompt, userMessage string, maxTokens int) (string, error) {
+	s.modelMu.RLock()
+	completer := s.storyGen
+	cfg := s.storyConfig
+	fallback := s.ragGen
+	s.modelMu.RUnlock()
+	if completer == nil {
+		completer, _ = fallback.(llm.JSONCompleter)
+	}
+	if completer == nil {
+		return "", errors.New("story generation model is unavailable")
+	}
+	if cfg.MaxTokens > 0 && (maxTokens <= 0 || maxTokens > cfg.MaxTokens) {
+		maxTokens = cfg.MaxTokens
+	}
+	if strings.TrimSpace(cfg.SystemPrompt) != "" {
+		systemPrompt = strings.TrimSpace(cfg.SystemPrompt) + "\n\n" + systemPrompt
+	}
+	if configurable, ok := completer.(interface {
+		CompleteJSONWithOptions(context.Context, string, string, int, float64) (string, error)
+	}); ok {
+		return configurable.CompleteJSONWithOptions(ctx, systemPrompt, userMessage, maxTokens, cfg.Temperature)
+	}
+	return completer.CompleteJSON(ctx, systemPrompt, userMessage, maxTokens)
+}
+
 func (s *Server) chatRequestTimeout() time.Duration {
 	_, timeout := s.chatRuntime()
 	return timeout
@@ -661,6 +704,25 @@ func (s *Server) buildChatGenerator(cfg modelconfig.Config) (llm.ChatGenerator, 
 		Model:        chat.Model,
 		SystemPrompt: cfg.Assist.SystemPrompt,
 		Timeout:      time.Duration(chat.TimeoutSeconds) * time.Second,
+	})
+}
+
+func (s *Server) buildStoryGenerator(cfg modelconfig.Config) (llm.ChatGenerator, error) {
+	story := cfg.ApplyStoryGeneration()
+	if err := story.Validate(); err != nil {
+		return nil, err
+	}
+	if err := validateExternalAPIBase("storyGeneration.apiBase", story.APIBase); err != nil {
+		return nil, err
+	}
+	factory := s.newChatGenerator
+	if factory == nil {
+		factory = llm.NewChatGenerator
+	}
+	return factory(llm.ChatGeneratorConfig{
+		Provider: story.Provider, APIBase: story.APIBase, APIKey: story.APIKey,
+		Model: story.Model, SystemPrompt: story.SystemPrompt,
+		Timeout: time.Duration(story.TimeoutSeconds) * time.Second,
 	})
 }
 
@@ -819,6 +881,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/theory-libraries/", s.requirePermission("System:TheoryLibrary:Manage", s.theoryLibraryActionHandler))
 	registerEnneagramLibraryAdminRoutes(s.mux, s.requirePermission, s)
 	registerStorySkillAdminRoutes(s.mux, s.requirePermission, s)
+	s.mux.HandleFunc("/api/story-generation-config", func(w http.ResponseWriter, r *http.Request) {
+		permission := "App:StoryManagement:View"
+		if r.Method == http.MethodPut {
+			permission = "App:StoryManagement:Edit"
+		}
+		s.requirePermission(permission, s.storyGenerationConfig)(w, r)
+	})
+	s.mux.HandleFunc("/api/story-generation-config/test", s.requirePermission("App:StoryManagement:Edit", s.testStoryGenerationConfig))
 	// 对话模型连通性测试：对 MiniMax 网关做一次轻量探活，需登录。
 	s.mux.HandleFunc("/api/model-config/test-chat", s.requirePermission("System:Model:Config", s.method(http.MethodPost, s.testChatModel)))
 	// ===== App API =====
@@ -835,6 +905,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/auth/logout", s.method(http.MethodPost, s.appLogout))
 	s.mux.HandleFunc("/api/app/user/info", s.method(http.MethodGet, s.requireAppAuth(s.appUserInfo)))
 	s.mux.HandleFunc("/api/app/me", s.method(http.MethodGet, s.requireAppAuth(s.appUserInfo)))
+	s.mux.HandleFunc("/api/app/profile", s.requireAppAuth(s.appProfileUpdate))
+	s.mux.HandleFunc("/api/app/profile/avatar", s.method(http.MethodPost, s.requireAppAuth(s.appProfileAvatarUpload)))
+	// Avatar URLs are rendered by Image.network on both Web and Android, so
+	// the binary itself is a public, read-only resource. Upload remains App-authenticated.
+	s.mux.HandleFunc("/api/app/profile/avatar/", s.method(http.MethodGet, s.appProfileAvatarDownload))
 	s.mux.HandleFunc("/api/app/social", s.requireAppAuth(s.appSocialRouter))
 	s.mux.HandleFunc("/api/app/social/", s.requireAppAuth(s.appSocialRouter))
 	s.mux.HandleFunc("/api/app/social/invite/rotate", s.requireAppAuth(s.appSocialRouter))
@@ -944,6 +1019,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/miniapp/report/content", s.method(http.MethodGet, s.requireMiniapp(s.reportContent)))
 	s.mux.HandleFunc("/api/pay/notify", s.method(http.MethodPost, s.payNotify))
 	s.mux.HandleFunc("/api/admin/xzn-pay/config", s.requirePermission("System:Payment:Config", s.xznPayConfig))
+	s.mux.HandleFunc("/api/admin/app-payment-mode", s.requirePermission("System:Payment:Config", s.appPaymentMode))
 	s.mux.HandleFunc("/api/admin/xzn-pay/create", s.method(http.MethodPost, s.requirePermission("System:Payment:Config", s.xznPayCreate)))
 	s.mux.HandleFunc("/api/xzn-pay/notify", s.method(http.MethodPost, s.xznPayNotify))
 	s.mux.HandleFunc("/api/analytics/overview", s.method(http.MethodGet, s.requirePermission("Analytics:Overview", s.analyticsOverview)))
@@ -2996,6 +3072,16 @@ func modelConfigAuditSnapshot(cfg modelconfig.Config) map[string]any {
 			"groupId":        cfg.DailyQuiz.GroupID,
 			"model":          cfg.DailyQuiz.Model,
 			"timeoutSeconds": cfg.DailyQuiz.TimeoutSeconds,
+		},
+		"storyGeneration": map[string]any{
+			"enabled":        cfg.StoryGeneration.Enabled,
+			"provider":       cfg.StoryGeneration.Provider,
+			"apiBase":        cfg.StoryGeneration.APIBase,
+			"apiKeySet":      cfg.StoryGeneration.APIKey != "",
+			"model":          cfg.StoryGeneration.Model,
+			"temperature":    cfg.StoryGeneration.Temperature,
+			"maxTokens":      cfg.StoryGeneration.MaxTokens,
+			"timeoutSeconds": cfg.StoryGeneration.TimeoutSeconds,
 		},
 		"xinzhiliVoice": map[string]any{
 			"enabled": cfg.XinzhiliVoice.Enabled,

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -45,6 +46,9 @@ func validateFactCardLocations(incoming, current FactCard) error {
 
 func validateFactEventLocations(name string, incoming, current []FactEvent) error {
 	for index, event := range incoming {
+		if err := validateFactEventCoordinates(name, index, event); err != nil {
+			return err
+		}
 		if len([]rune(event.Location)) <= maxFactLocationCodePoints {
 			continue
 		}
@@ -52,6 +56,28 @@ func validateFactEventLocations(name string, incoming, current []FactEvent) erro
 		if !found || oldLocation != event.Location {
 			return fmt.Errorf("%w: %s location exceeds %d Unicode code points", ErrValidation, name, maxFactLocationCodePoints)
 		}
+	}
+	return nil
+}
+
+func validateFactEventCoordinates(name string, index int, event FactEvent) error {
+	latitudeSet := event.Latitude != nil
+	longitudeSet := event.Longitude != nil
+	if latitudeSet != longitudeSet {
+		return fmt.Errorf("%w: %s event %d must include both latitude and longitude", ErrValidation, name, index)
+	}
+	if !latitudeSet {
+		return nil
+	}
+	latitude, longitude := *event.Latitude, *event.Longitude
+	if math.IsNaN(latitude) || math.IsInf(latitude, 0) || latitude < -90 || latitude > 90 {
+		return fmt.Errorf("%w: %s event %d latitude is out of range", ErrValidation, name, index)
+	}
+	if math.IsNaN(longitude) || math.IsInf(longitude, 0) || longitude < -180 || longitude > 180 {
+		return fmt.Errorf("%w: %s event %d longitude is out of range", ErrValidation, name, index)
+	}
+	if system := strings.TrimSpace(event.CoordinateSystem); system != "" && system != "gcj02" {
+		return fmt.Errorf("%w: %s event %d coordinate system is unsupported", ErrValidation, name, index)
 	}
 	return nil
 }

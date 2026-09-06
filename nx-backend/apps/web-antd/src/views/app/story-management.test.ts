@@ -43,4 +43,17 @@ describe('story skill management CRUD contract', () => {
     expect(source).toContain('deleteStorySkillApi');
     expect(source).toContain('requestClient.delete');
   });
+
+  it('exposes an isolated story-generation model configuration', () => {
+    const source = readFileSync(resolve(here, 'story-management.vue'), 'utf8');
+    for (const expected of [
+      '故事生成模型',
+      'getStoryGenerationConfigApi',
+      'updateStoryGenerationConfigApi',
+      'testStoryGenerationConfigApi',
+      '仅用于“我的故事”生成',
+    ]) {
+      expect(source).toContain(expected);
+    }
+  });
 });

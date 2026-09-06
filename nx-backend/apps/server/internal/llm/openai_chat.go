@@ -255,8 +255,15 @@ func (g *OpenAIChatGenerator) PolishPrompt(ctx context.Context, draft, kind stri
 }
 
 func (g *OpenAIChatGenerator) CompleteJSON(ctx context.Context, system, user string, maxTokens int) (string, error) {
+	return g.CompleteJSONWithOptions(ctx, system, user, maxTokens, 0.2)
+}
+
+func (g *OpenAIChatGenerator) CompleteJSONWithOptions(ctx context.Context, system, user string, maxTokens int, temperature float64) (string, error) {
 	if maxTokens <= 0 {
 		maxTokens = 1200
+	}
+	if temperature < 0 || temperature > 2 {
+		temperature = 0.2
 	}
 	return g.complete(ctx, openAIChatRequest{
 		Model: g.model,
@@ -264,7 +271,7 @@ func (g *OpenAIChatGenerator) CompleteJSON(ctx context.Context, system, user str
 			{Role: "system", Content: system},
 			{Role: "user", Content: user},
 		},
-		Temperature:    0.2,
+		Temperature:    temperature,
 		MaxTokens:      maxTokens,
 		ResponseFormat: map[string]string{"type": "json_object"},
 	})

@@ -137,6 +137,61 @@ type AssistConfig struct {
 	SystemPrompt string `json:"systemPrompt"`
 }
 
+// StoryGenerationConfig controls the model used exclusively by life-story generation.
+// Empty/disabled configurations intentionally fall back to the chat model for compatibility.
+type StoryGenerationConfig struct {
+	Enabled        bool    `json:"enabled"`
+	Provider       string  `json:"provider"`
+	APIBase        string  `json:"apiBase"`
+	APIKey         string  `json:"apiKey"`
+	Model          string  `json:"model"`
+	Temperature    float64 `json:"temperature"`
+	MaxTokens      int     `json:"maxTokens"`
+	TimeoutSeconds int     `json:"timeoutSeconds"`
+	SystemPrompt   string  `json:"systemPrompt"`
+}
+
+func (c StoryGenerationConfig) Normalized() StoryGenerationConfig {
+	c.Provider = normalizeProvider(c.Provider)
+	c.APIBase = strings.TrimRight(strings.TrimSpace(c.APIBase), "/")
+	c.APIKey = strings.TrimSpace(c.APIKey)
+	c.Model = strings.TrimSpace(c.Model)
+	c.SystemPrompt = strings.TrimSpace(c.SystemPrompt)
+	if c.Temperature < 0.1 {
+		c.Temperature = 0.2
+	}
+	if c.MaxTokens <= 0 {
+		c.MaxTokens = 5600
+	}
+	if c.TimeoutSeconds <= 0 {
+		c.TimeoutSeconds = 90
+	}
+	return c
+}
+
+func (c StoryGenerationConfig) Validate() error {
+	c = c.Normalized()
+	if !c.Enabled {
+		return nil
+	}
+	if c.Provider != ProviderOpenAICompatible && c.Provider != ProviderAnthropicCompatible {
+		return errors.New("storyGeneration.provider must be openai-compatible or anthropic-compatible")
+	}
+	if c.APIBase == "" || c.APIKey == "" || c.Model == "" {
+		return errors.New("storyGeneration model configuration is incomplete")
+	}
+	if c.TimeoutSeconds <= 0 || c.TimeoutSeconds > 90 {
+		return errors.New("storyGeneration.timeoutSeconds must be between 1 and 90")
+	}
+	if c.MaxTokens < 1000 || c.MaxTokens > 16000 {
+		return errors.New("storyGeneration.maxTokens must be between 1000 and 16000")
+	}
+	if c.Temperature < 0.1 || c.Temperature > 2 {
+		return errors.New("storyGeneration.temperature must be between 0.1 and 2")
+	}
+	return nil
+}
+
 // SpeechModelConfig 是芯之力使用的 OpenAI-compatible 语音模型配置。
 // ASR 使用 /audio/transcriptions，TTS 使用 /audio/speech。
 type SpeechModelConfig struct {
@@ -185,16 +240,17 @@ func (c XinzhiliVoiceConfig) ValidateReady() error {
 
 // Config 模型配置覆盖值集合，整体作为一条 JSON 落库。
 type Config struct {
-	Chat          ChatConfig          `json:"chat"`
-	Video         VideoConfig         `json:"video"`
-	Image         ImageConfig         `json:"image"`
-	Analysis      AnalysisConfig      `json:"analysis"`
-	Admin         AdminModelConfig    `json:"admin"`
-	DailyQuiz     AdminModelConfig    `json:"dailyQuiz"`
-	TTS           TTSConfig           `json:"tts"`
-	Assist        AssistConfig        `json:"assist"`
-	XinzhiliVoice XinzhiliVoiceConfig `json:"xinzhiliVoice"`
-	presence      map[string]bool
+	Chat            ChatConfig            `json:"chat"`
+	Video           VideoConfig           `json:"video"`
+	Image           ImageConfig           `json:"image"`
+	Analysis        AnalysisConfig        `json:"analysis"`
+	Admin           AdminModelConfig      `json:"admin"`
+	DailyQuiz       AdminModelConfig      `json:"dailyQuiz"`
+	TTS             TTSConfig             `json:"tts"`
+	Assist          AssistConfig          `json:"assist"`
+	StoryGeneration StoryGenerationConfig `json:"storyGeneration"`
+	XinzhiliVoice   XinzhiliVoiceConfig   `json:"xinzhiliVoice"`
+	presence        map[string]bool
 }
 
 func (c Config) ApplyXinzhiliVoice() XinzhiliVoiceConfig {
@@ -250,6 +306,8 @@ func (c Config) SectionPresent(section string) bool {
 		return c.TTS != (TTSConfig{})
 	case "assist":
 		return c.Assist.Enabled != nil || strings.TrimSpace(c.Assist.SystemPrompt) != ""
+	case "storyGeneration":
+		return !reflect.DeepEqual(c.StoryGeneration, StoryGenerationConfig{})
 	case "xinzhiliVoice":
 		return c.XinzhiliVoice.Enabled || strings.TrimSpace(c.XinzhiliVoice.ASR.APIBase) != "" || strings.TrimSpace(c.XinzhiliVoice.TTS.APIBase) != ""
 	default:
@@ -277,6 +335,8 @@ func (c Config) AssistEnabled() bool {
 func (c Config) EffectiveChat() ChatConfig {
 	return c.Chat.Normalized()
 }
+
+func (c Config) ApplyStoryGeneration() StoryGenerationConfig { return c.StoryGeneration.Normalized() }
 
 // ReadStore 从 DB 读取覆盖配置。第二个返回值表示是否已存在记录；
 // 当 db 为空或无记录时返回零值 Config 且 found=false。
@@ -575,6 +635,35 @@ func (c Config) MergeIncoming(in Config) Config {
 	if !in.fieldPresent("assist.systemPrompt", out.Assist.SystemPrompt != "") {
 		out.Assist.SystemPrompt = stored.Assist.SystemPrompt
 	}
+	if !in.fieldPresent("storyGeneration.enabled", out.StoryGeneration.Enabled) {
+		out.StoryGeneration.Enabled = stored.StoryGeneration.Enabled
+	}
+	storyProviderPresent := in.fieldPresent("storyGeneration.provider", out.StoryGeneration.Provider != "")
+	storyProviderChanged := storyProviderPresent && out.StoryGeneration.Provider != stored.StoryGeneration.Provider
+	if !storyProviderPresent {
+		out.StoryGeneration.Provider = stored.StoryGeneration.Provider
+	}
+	if !in.fieldPresent("storyGeneration.apiBase", out.StoryGeneration.APIBase != "") {
+		out.StoryGeneration.APIBase = stored.StoryGeneration.APIBase
+	}
+	if out.StoryGeneration.APIKey == "" && !storyProviderChanged {
+		out.StoryGeneration.APIKey = stored.StoryGeneration.APIKey
+	}
+	if !in.fieldPresent("storyGeneration.model", out.StoryGeneration.Model != "") {
+		out.StoryGeneration.Model = stored.StoryGeneration.Model
+	}
+	if !in.fieldPresent("storyGeneration.temperature", out.StoryGeneration.Temperature != 0) {
+		out.StoryGeneration.Temperature = stored.StoryGeneration.Temperature
+	}
+	if !in.fieldPresent("storyGeneration.maxTokens", out.StoryGeneration.MaxTokens != 0) {
+		out.StoryGeneration.MaxTokens = stored.StoryGeneration.MaxTokens
+	}
+	if !in.fieldPresent("storyGeneration.timeoutSeconds", out.StoryGeneration.TimeoutSeconds != 0) {
+		out.StoryGeneration.TimeoutSeconds = stored.StoryGeneration.TimeoutSeconds
+	}
+	if !in.fieldPresent("storyGeneration.systemPrompt", out.StoryGeneration.SystemPrompt != "") {
+		out.StoryGeneration.SystemPrompt = stored.StoryGeneration.SystemPrompt
+	}
 	if out.XinzhiliVoice.ASR.APIKey == "" {
 		out.XinzhiliVoice.ASR.APIKey = stored.XinzhiliVoice.ASR.APIKey
 	}
@@ -662,7 +751,8 @@ func (c Config) trimmed() Config {
 			Enabled:      c.Assist.Enabled,
 			SystemPrompt: strings.TrimSpace(c.Assist.SystemPrompt),
 		},
-		XinzhiliVoice: c.XinzhiliVoice.normalized(),
+		StoryGeneration: c.StoryGeneration.Normalized(),
+		XinzhiliVoice:   c.XinzhiliVoice.normalized(),
 	}
 	out.presence = c.presence
 	return out

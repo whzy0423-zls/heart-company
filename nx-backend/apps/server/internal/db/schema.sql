@@ -3375,6 +3375,7 @@ CREATE TABLE IF NOT EXISTS app_orders (
   amount          INT NOT NULL DEFAULT 0,
   status          TEXT NOT NULL DEFAULT 'pending',
   transaction_id  TEXT NOT NULL DEFAULT '',
+  purchase_mode   TEXT NOT NULL DEFAULT 'customer_service',
   payment_provider TEXT NOT NULL DEFAULT 'manual',
   pay_channel      TEXT,
   gateway_id       TEXT,
@@ -3394,6 +3395,7 @@ ALTER TABLE app_users ADD COLUMN IF NOT EXISTS member_started_at TIMESTAMPTZ;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS member_expires_at TIMESTAMPTZ;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS activation_at TIMESTAMPTZ;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS membership_expires_at TIMESTAMPTZ;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS purchase_mode TEXT NOT NULL DEFAULT 'customer_service';
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS payment_provider TEXT NOT NULL DEFAULT 'manual';
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS pay_channel TEXT;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS gateway_id TEXT;
@@ -3403,6 +3405,7 @@ ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS pay_url TEXT;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS last_query_at TIMESTAMPTZ;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS payment_error TEXT;
 UPDATE app_orders SET payment_provider='manual' WHERE payment_provider IS NULL;
+UPDATE app_orders SET purchase_mode='xzn' WHERE payment_provider='xzn' AND purchase_mode<>'xzn';
 
 CREATE INDEX IF NOT EXISTS idx_app_orders_user ON app_orders(app_user_id, create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_app_orders_status ON app_orders(status, create_time DESC);

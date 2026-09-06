@@ -30,6 +30,20 @@ func TestSocialRoutesAreRegistered(t *testing.T) {
 	}
 }
 
+func TestInviteReadRouteIsHandledSeparatelyFromRotate(t *testing.T) {
+	raw, err := os.ReadFile("app_social.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	if !strings.Contains(source, `path == "social/invite" && r.Method == http.MethodGet`) {
+		t.Fatal("expected stable invite GET route")
+	}
+	if !strings.Contains(source, `GetOrCreateInviteCode`) {
+		t.Fatal("expected GET route to preserve an existing invite code")
+	}
+}
+
 func TestAppSocialRouterRequiresAuthenticationContext(t *testing.T) {
 	server := &Server{}
 	req := httptest.NewRequest(http.MethodGet, "/api/app/friends", nil)

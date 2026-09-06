@@ -45,3 +45,19 @@ func TestSchemaContainsTimeBoundMiniappMembershipColumns(t *testing.T) {
 		}
 	}
 }
+
+func TestAppOrdersPersistPurchaseMode(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	for _, expected := range []string{
+		"ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS purchase_mode",
+		"ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS pay_channel",
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("missing schema fragment %q", expected)
+		}
+	}
+}

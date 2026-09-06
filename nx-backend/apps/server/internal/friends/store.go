@@ -174,6 +174,27 @@ func (s *Store) RotateInviteCode(ctx context.Context, userID int64) (string, err
 	return saved, err
 }
 
+func (s *Store) GetOrCreateInviteCode(ctx context.Context, userID int64) (string, error) {
+	if err := s.requireDB(); err != nil {
+		return "", err
+	}
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	candidate := strings.TrimRight(base32.StdEncoding.EncodeToString(buf), "=")
+	var code string
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE app_users
+		SET invite_code=COALESCE(NULLIF(btrim(invite_code),''), $1), update_time=now()
+		WHERE id=$2
+		RETURNING invite_code`, candidate, userID).Scan(&code)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return code, err
+}
+
 func (s *Store) Search(ctx context.Context, viewerID int64, raw string) (SearchResult, error) {
 	if err := s.requireDB(); err != nil {
 		return SearchResult{}, err
@@ -197,7 +218,7 @@ func (s *Store) Search(ctx context.Context, viewerID int64, raw string) (SearchR
 		FROM app_users u
 		LEFT JOIN LATERAL (SELECT enneagram FROM app_user_cards WHERE app_user_id=u.id AND card_type='primary' AND status='active' ORDER BY update_time DESC, id DESC LIMIT 1) c ON TRUE
 		LEFT JOIN friendships f ON f.user_low_id=LEAST(u.id,$1) AND f.user_high_id=GREATEST(u.id,$1) AND f.status='active'
-		WHERE u.status='active' AND u.id <> $1
+		WHERE u.status='active'
 		  AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE b.status='active' AND ((b.blocker_id=$1 AND b.blocked_id=u.id) OR (b.blocker_id=u.id AND b.blocked_id=$1)))
 		  AND (lower(COALESCE(u.user_code,''))=lower($2) OR lower(COALESCE(u.invite_code,''))=lower($2) OR ($3 > 0 AND u.id=$3))
 		LIMIT 1`, viewerID, query, targetID).
@@ -207,6 +228,9 @@ func (s *Store) Search(ctx context.Context, viewerID int64, raw string) (SearchR
 	}
 	if err != nil {
 		return SearchResult{}, err
+	}
+	if item.ID == viewerID {
+		return SearchResult{}, ErrSelfRelation
 	}
 	item.PersonalityVisibility = visibility
 	item.PersonalityVisibilityVersion = visibilityVersion

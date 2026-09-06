@@ -1,5 +1,10 @@
 <script setup lang="ts">
-import type { StorySkillAdminItem, StorySkillCategory } from '#/api';
+import type {
+  StoryGenerationConfigPayload,
+  StoryGenerationPingResult,
+  StorySkillAdminItem,
+  StorySkillCategory,
+} from '#/api';
 
 import { computed, onMounted, reactive, ref } from 'vue';
 
@@ -9,14 +14,17 @@ import { useAccessStore } from '@vben/stores';
 import {
   Alert,
   Button,
+  Card,
   Descriptions,
   Empty,
   Form,
   Input,
+  InputNumber,
   Modal,
   Segmented,
   Select,
   Spin,
+  Switch,
   Table,
   Tag,
   Tooltip,
@@ -29,8 +37,11 @@ import {
   getAccessCodesApi,
   getStorySkillApi,
   getStorySkillsApi,
+  getStoryGenerationConfigApi,
   publishStorySkillApi,
   updateStorySkillApi,
+  updateStoryGenerationConfigApi,
+  testStoryGenerationConfigApi,
   uploadStorySkillApi,
 } from '#/api';
 
@@ -66,6 +77,21 @@ const detailOpen = ref(false);
 const detailLoading = ref(false);
 const activeItem = ref<StorySkillAdminItem>();
 const actionLoadingId = ref<number>();
+const modelLoading = ref(false);
+const modelSaving = ref(false);
+const modelTesting = ref(false);
+const modelKeySet = ref(false);
+const modelForm = reactive<StoryGenerationConfigPayload>({
+  enabled: false,
+  provider: 'openai-compatible',
+  apiBase: '',
+  apiKey: '',
+  model: '',
+  temperature: 0.2,
+  maxTokens: 5600,
+  timeoutSeconds: 90,
+  systemPrompt: '',
+});
 const selectedFile = ref<File>();
 const form = reactive({
   category: 'myth' as StorySkillCategory,
@@ -87,6 +113,44 @@ async function load() {
   try { items.value = await getStorySkillsApi(); }
   catch { error.value = '故事技能加载失败，请重试。'; }
   finally { loading.value = false; }
+}
+async function loadModelConfig() {
+  modelLoading.value = true;
+  try {
+    const data = await getStoryGenerationConfigApi();
+    Object.assign(modelForm, {
+      enabled: data?.enabled ?? false,
+      provider: data?.provider ?? 'openai-compatible',
+      apiBase: data?.apiBase ?? '',
+      apiKey: '',
+      model: data?.model ?? '',
+      temperature: data?.temperature ?? 0.2,
+      maxTokens: data?.maxTokens ?? 5600,
+      timeoutSeconds: data?.timeoutSeconds ?? 90,
+      systemPrompt: data?.systemPrompt ?? '',
+    });
+    modelKeySet.value = Boolean(data?.apiKeySet);
+  } catch { message.error('故事生成模型配置加载失败'); }
+  finally { modelLoading.value = false; }
+}
+async function saveModelConfig() {
+  modelSaving.value = true;
+  try {
+    const data = await updateStoryGenerationConfigApi(modelForm);
+    Object.assign(modelForm, { ...data, apiKey: '' });
+    modelKeySet.value = Boolean(data.apiKeySet);
+    message.success('故事生成模型配置已保存');
+  } catch { message.error('保存失败，请检查地址、密钥和模型名'); }
+  finally { modelSaving.value = false; }
+}
+async function testModelConfig() {
+  modelTesting.value = true;
+  try {
+    const result: StoryGenerationPingResult = await testStoryGenerationConfigApi(modelForm);
+    if (result?.ok) message.success(result.message || '连接正常');
+    else message.error(result?.message || '连接测试失败');
+  } catch { message.error('连接测试失败，请检查配置'); }
+  finally { modelTesting.value = false; }
 }
 function openUpload() {
   Object.assign(form, { category: 'myth', instructions: '', key: '', name: '', summary: '', version: '1.0.0' });
@@ -189,13 +253,34 @@ function remove(item: StorySkillAdminItem) {
 onMounted(async () => {
   try { access.setAccessCodes(await getAccessCodesApi()); }
   catch {}
-  finally { await load(); }
+  finally { await Promise.all([load(), loadModelConfig()]); }
 });
 </script>
 
 <template>
   <Page title="我的故事管理">
     <Alert v-if="error" :message="error" closable type="error" @close="error = ''" />
+    <Card class="story-model-card" title="故事生成模型" :loading="modelLoading">
+      <template #extra><Tag :color="modelKeySet ? 'green' : 'default'">{{ modelKeySet ? '密钥已配置' : '未配置密钥' }}</Tag></template>
+      <Alert class="model-hint" type="info" show-icon message="仅用于“我的故事”生成，不会改变聊天、语音或其他模型。未启用时沿用聊天模型。" />
+      <Form layout="vertical">
+        <div class="form-grid model-grid">
+          <Form.Item label="启用故事专用模型"><Switch v-model:checked="modelForm.enabled" /></Form.Item>
+          <Form.Item label="协议"><Select v-model:value="modelForm.provider" :options="[{ label: 'OpenAI 兼容', value: 'openai-compatible' }, { label: 'Anthropic 兼容', value: 'anthropic-compatible' }]" /></Form.Item>
+          <Form.Item label="API Base"><Input v-model:value="modelForm.apiBase" placeholder="https://api.example.com/v1" /></Form.Item>
+          <Form.Item label="模型名称"><Input v-model:value="modelForm.model" placeholder="例如 gpt-4o-mini" /></Form.Item>
+          <Form.Item label="API Key"><Input.Password v-model:value="modelForm.apiKey" :placeholder="modelKeySet ? '留空沿用已配置密钥' : '请输入 API Key'" /></Form.Item>
+          <Form.Item label="Temperature"><InputNumber v-model:value="modelForm.temperature" :max="2" :min="0.1" :step="0.1" style="width: 100%" /></Form.Item>
+          <Form.Item label="最大输出 Token"><InputNumber v-model:value="modelForm.maxTokens" :max="16000" :min="1000" style="width: 100%" /></Form.Item>
+          <Form.Item label="超时（秒）"><InputNumber v-model:value="modelForm.timeoutSeconds" :max="90" :min="1" style="width: 100%" /></Form.Item>
+        </div>
+        <Form.Item label="系统提示词"><Input.TextArea v-model:value="modelForm.systemPrompt" :auto-size="{ minRows: 3, maxRows: 8 }" placeholder="可选：补充故事生成规则" /></Form.Item>
+        <div class="model-actions">
+          <Button v-if="canEdit" :loading="modelTesting" @click="testModelConfig">测试连接</Button>
+          <Button v-if="canEdit" type="primary" :loading="modelSaving" @click="saveModelConfig">保存配置</Button>
+        </div>
+      </Form>
+    </Card>
     <div class="story-toolbar">
       <Segmented v-model:value="selectedCategory" :options="categories" />
       <Button v-if="canEdit" type="primary" @click="openUpload">
@@ -285,6 +370,10 @@ onMounted(async () => {
 
 <style scoped>
 .story-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.story-model-card { margin-bottom: 18px; }
+.model-hint { margin-bottom: 16px; }
+.model-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.model-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .skill-name { font-weight: 600; }
 .skill-key { color: var(--vben-color-text-secondary); font-size: 12px; }
@@ -298,6 +387,7 @@ onMounted(async () => {
   .story-toolbar { align-items: stretch; flex-direction: column; }
   .story-toolbar :deep(.ant-segmented) { overflow-x: auto; }
   .form-grid { grid-template-columns: 1fr; gap: 0; }
+  .model-grid { grid-template-columns: 1fr; }
   .desktop-skill-table { display: none; }
   .mobile-skill-list { display: grid; gap: 10px; }
   .mobile-skill-item { border: 1px solid rgb(128 128 128 / 22%); border-radius: 6px; padding: 14px; }

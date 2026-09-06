@@ -59,7 +59,7 @@ type appPaymentChannel struct {
 
 const (
 	appPurchaseModeCustomerService = "customer_service"
-	appPurchaseModeOnline          = "online"
+	appPurchaseModeXZN             = "xzn"
 	appOrderPendingConfirmation    = "pending_confirmation"
 	appCustomerServiceQRURL        = "/api/public/customer-service-qr"
 	appPaymentProviderXZN          = "xzn"
@@ -158,9 +158,14 @@ func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) appBillingProducts(w http.ResponseWriter, r *http.Request) {
+	mode, err := s.loadAppPaymentMode(r.Context())
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "读取支付模式失败")
+		return
+	}
 	cfg, _ := s.loadXZNConfig(r.Context())
 	httpx.OK(w, []appProductResp{
-		appProductForConfig(cfg, appProductResp{
+		appProductForPaymentMode(mode, cfg, appProductResp{
 			ID:        "vip_month",
 			Title:     "月卡会员",
 			Subtitle:  "适合轻度陪伴与日常问答",
@@ -169,7 +174,7 @@ func (s *Server) appBillingProducts(w http.ResponseWriter, r *http.Request) {
 			Features:  []string{"更多问答额度", "最多 5 张人物卡", "成长练习完整记录"},
 			Enabled:   true,
 		}),
-		appProductForConfig(cfg, appProductResp{
+		appProductForPaymentMode(mode, cfg, appProductResp{
 			ID:        "vip_quarter",
 			Title:     "季卡会员",
 			Subtitle:  "适合持续成长陪伴",
@@ -177,7 +182,7 @@ func (s *Server) appBillingProducts(w http.ResponseWriter, r *http.Request) {
 			Features:  []string{"月卡全部权益", "更长会员有效期", "后续周报优先体验"},
 			Enabled:   true,
 		}),
-		appProductForConfig(cfg, appProductResp{
+		appProductForPaymentMode(mode, cfg, appProductResp{
 			ID:        "vip_year",
 			Title:     "年卡会员",
 			Subtitle:  "适合长期自我探索",
@@ -189,8 +194,11 @@ func (s *Server) appBillingProducts(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func appProductForConfig(cfg xznPaymentConfig, product appProductResp) appProductResp {
+func appProductForPaymentMode(mode string, cfg xznPaymentConfig, product appProductResp) appProductResp {
 	product.DurationDays, _ = membershipDurationDays(product.ID)
+	if mode != appPurchaseModeXZN {
+		return appCustomerServiceProduct(product)
+	}
 	channels := appPaymentChannelsForConfig(cfg)
 	product.PaymentChannels = channels
 	product.PayChannels = make([]string, 0, len(channels))
@@ -200,16 +208,16 @@ func appProductForConfig(cfg xznPaymentConfig, product appProductResp) appProduc
 		}
 	}
 	if !xznCredentialsConfigured(cfg) {
-		return appCustomerServiceProductWithStatus(product, "payment_not_configured", "在线支付尚未配置，请稍后重试")
+		return appXZNProductWithStatus(product, "payment_not_configured", "在线支付尚未配置，请稍后重试")
 	}
 	if !cfg.Enabled {
-		return appCustomerServiceProductWithStatus(product, "payment_disabled", "在线支付暂未开放")
+		return appXZNProductWithStatus(product, "payment_disabled", "在线支付暂未开放")
 	}
 	if len(xznAvailableAppChannels(cfg)) == 0 {
-		return appCustomerServiceProductWithStatus(product, "payment_channel_unavailable", "当前没有可用的支付渠道")
+		return appXZNProductWithStatus(product, "payment_channel_unavailable", "当前没有可用的支付渠道")
 	}
 	product.PayEnabled = true
-	product.PurchaseMode = appPurchaseModeOnline
+	product.PurchaseMode = appPurchaseModeXZN
 	product.ConfigurationStatus = "configured"
 	product.DisabledReason = ""
 	return product
@@ -222,8 +230,9 @@ func appCustomerServiceProduct(product appProductResp) appProductResp {
 	return product
 }
 
-func appCustomerServiceProductWithStatus(product appProductResp, status, reason string) appProductResp {
-	product = appCustomerServiceProduct(product)
+func appXZNProductWithStatus(product appProductResp, status, reason string) appProductResp {
+	product.PayEnabled = false
+	product.PurchaseMode = appPurchaseModeXZN
 	product.ConfigurationStatus = status
 	product.DisabledReason = reason
 	return product
@@ -411,6 +420,15 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 		httpx.OK(w, enriched)
 		return
 	}
+	mode, err := s.loadAppPaymentMode(r.Context())
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "读取支付模式失败")
+		return
+	}
+	if mode == appPurchaseModeCustomerService {
+		s.createCustomerServiceAppOrder(w, r, userInfo.ID, productID, title, amount)
+		return
+	}
 	cfg, _ := s.loadXZNConfig(r.Context())
 	if strings.TrimSpace(body.PayChannel) == "" && cfg.Enabled && xznCredentialsConfigured(cfg) {
 		httpx.Fail(w, http.StatusBadRequest, "请选择支付渠道")
@@ -436,8 +454,8 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 	outTradeNo := fmt.Sprintf("app%d-%s-%d", userInfo.ID, productID, time.Now().UnixNano())
 	if online {
 		if _, err := s.db.ExecContext(r.Context(), `
-			INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, status, payment_provider, pay_channel, gateway_id)
-			VALUES ($1, $2, $3, $4, $5, 'pending', 'xzn', $6, $7)`,
+			INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, status, purchase_mode, payment_provider, pay_channel, gateway_id)
+			VALUES ($1, $2, $3, $4, $5, 'pending', 'xzn', 'xzn', $6, $7)`,
 			outTradeNo, userInfo.ID, productID, title, amount, payChannel, gatewayID); err != nil {
 			if existing, found, findErr := s.findPendingAppOrder(r.Context(), userInfo.ID); findErr == nil && found {
 				if enriched, enrichErr := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, existing); enrichErr == nil {
@@ -497,14 +515,19 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 		httpx.OK(w, order)
 		return
 	}
+	httpx.Fail(w, http.StatusServiceUnavailable, "支付暂不可用")
+}
+
+func (s *Server) createCustomerServiceAppOrder(w http.ResponseWriter, r *http.Request, appUserID int64, productID, title string, amount int) {
+	outTradeNo := fmt.Sprintf("app%d-%s-%d", appUserID, productID, time.Now().UnixNano())
 	if _, err := s.db.ExecContext(r.Context(),
-		`INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, status)
-		 VALUES ($1, $2, $3, $4, $5, 'pending_confirmation')`,
-		outTradeNo, userInfo.ID, productID, title, amount); err != nil {
+		`INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, status, purchase_mode, payment_provider)
+		 VALUES ($1, $2, $3, $4, $5, 'pending_confirmation', 'customer_service', 'manual')`,
+		outTradeNo, appUserID, productID, title, amount); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	order, err := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, appOrderResp{
+	order, err := s.enrichCustomerServiceOrder(r.Context(), appUserID, appOrderResp{
 		OutTradeNo: outTradeNo,
 		ProductID:  productID,
 		Title:      title,
@@ -516,6 +539,16 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.OK(w, order)
+}
+
+func resolveAppOrderPurchaseMode(storedMode, provider string) string {
+	if mode, err := normalizeAppPaymentMode(storedMode); err == nil && strings.TrimSpace(storedMode) != "" {
+		return mode
+	}
+	if strings.EqualFold(strings.TrimSpace(provider), appPaymentProviderXZN) {
+		return appPurchaseModeXZN
+	}
+	return appPurchaseModeCustomerService
 }
 
 func (s *Server) appBillingOrderStatus(w http.ResponseWriter, r *http.Request) {
@@ -581,7 +614,7 @@ func (s *Server) findPendingAppOrder(ctx context.Context, appUserID int64) (appO
 
 func (s *Server) enrichCustomerServiceOrder(ctx context.Context, appUserID int64, resp appOrderResp) (appOrderResp, error) {
 	s.loadAppOrderPaymentMeta(ctx, appUserID, resp.OutTradeNo, &resp)
-	if resp.PaymentProvider == appPaymentProviderXZN {
+	if resp.PurchaseMode == appPurchaseModeXZN || resp.PaymentProvider == appPaymentProviderXZN {
 		return s.enrichOnlineOrder(ctx, appUserID, resp)
 	}
 	resp = appCustomerServiceOrder(resp)
@@ -613,7 +646,7 @@ func (s *Server) enrichOnlineOrder(ctx context.Context, appUserID int64, resp ap
 	if resp.PayStatus == "" {
 		resp.PayStatus = resp.Status
 	}
-	resp.PurchaseMode = appPurchaseModeOnline
+	resp.PurchaseMode = appPurchaseModeXZN
 	resp.CustomerServiceQRURL = ""
 	resp.PayEnabled = resp.PayURL != "" && (resp.Status == "pending" || resp.Status == "paying")
 	resp.ConfigurationStatus = "configured"
@@ -674,17 +707,18 @@ func (s *Server) loadAppOrderPaymentMeta(ctx context.Context, appUserID int64, o
 	if s == nil || s.db == nil || strings.TrimSpace(outTradeNo) == "" || resp == nil {
 		return
 	}
-	var provider, channel, gateway, tradeNo, providerStatus, payURL, paymentError string
+	var purchaseMode, provider, channel, gateway, tradeNo, providerStatus, payURL, paymentError string
 	var lastQueryAt sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(payment_provider,''), COALESCE(pay_channel,''), COALESCE(gateway_id,''),
+		SELECT COALESCE(purchase_mode,''), COALESCE(payment_provider,''), COALESCE(pay_channel,''), COALESCE(gateway_id,''),
 		       COALESCE(provider_trade_no,''), COALESCE(provider_status,''), COALESCE(pay_url,''),
 		       COALESCE(payment_error,''), last_query_at
 		FROM app_orders WHERE app_user_id=$1 AND out_trade_no=$2`, appUserID, outTradeNo).Scan(
-		&provider, &channel, &gateway, &tradeNo, &providerStatus, &payURL, &paymentError, &lastQueryAt)
+		&purchaseMode, &provider, &channel, &gateway, &tradeNo, &providerStatus, &payURL, &paymentError, &lastQueryAt)
 	if err != nil {
 		return
 	}
+	resp.PurchaseMode = resolveAppOrderPurchaseMode(purchaseMode, provider)
 	resp.PaymentProvider, resp.PayChannel, resp.GatewayID = provider, displayAppPayChannel(channel), gateway
 	resp.ProviderTradeNo, resp.ProviderStatus, resp.PayURL, resp.PaymentError = tradeNo, providerStatus, payURL, paymentError
 	if lastQueryAt.Valid {

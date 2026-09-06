@@ -260,8 +260,15 @@ func (g *AnthropicChatGenerator) PolishPrompt(ctx context.Context, draft, kind s
 }
 
 func (g *AnthropicChatGenerator) CompleteJSON(ctx context.Context, system, user string, maxTokens int) (string, error) {
+	return g.CompleteJSONWithOptions(ctx, system, user, maxTokens, 0.2)
+}
+
+func (g *AnthropicChatGenerator) CompleteJSONWithOptions(ctx context.Context, system, user string, maxTokens int, temperature float64) (string, error) {
 	if maxTokens <= 0 {
 		maxTokens = 1200
+	}
+	if temperature < 0 || temperature > 2 {
+		temperature = 0.2
 	}
 	return g.complete(ctx, anthropicChatRequest{
 		Model:  g.model,
@@ -270,7 +277,7 @@ func (g *AnthropicChatGenerator) CompleteJSON(ctx context.Context, system, user 
 			{Role: "user", Content: user},
 		},
 		MaxTokens:   maxTokens,
-		Temperature: 0.2,
+		Temperature: temperature,
 	})
 }
 

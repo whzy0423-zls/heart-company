@@ -1,14 +1,18 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"nine-xing/nx-backend/apps/server/internal/friends"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/push"
 )
 
 func (s *Server) appSocialRouter(w http.ResponseWriter, r *http.Request) {
@@ -19,6 +23,13 @@ func (s *Server) appSocialRouter(w http.ResponseWriter, r *http.Request) {
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/app/")
 	switch {
+	case path == "social/invite" && r.Method == http.MethodGet:
+		code, err := s.friends.GetOrCreateInviteCode(r.Context(), user.ID)
+		if err != nil {
+			mapFriendError(w, err)
+			return
+		}
+		httpx.OK(w, map[string]any{"inviteCode": code})
 	case path == "social/invite/rotate" && r.Method == http.MethodPost:
 		code, err := s.friends.RotateInviteCode(r.Context(), user.ID)
 		if err != nil {
@@ -62,6 +73,11 @@ func (s *Server) appSocialRouter(w http.ResponseWriter, r *http.Request) {
 			mapFriendError(w, err)
 			return
 		}
+		requesterName := strings.TrimSpace(user.RealName)
+		if requesterName == "" {
+			requesterName = strings.TrimSpace(user.Username)
+		}
+		s.notifyFriendRequest(r.Context(), item, requesterName)
 		httpx.JSON(w, http.StatusCreated, map[string]any{"code": 0, "data": item, "error": nil, "message": "ok"})
 	case strings.HasPrefix(path, "friend-requests/") && r.Method == http.MethodPost:
 		rest := strings.TrimPrefix(path, "friend-requests/")
@@ -154,6 +170,49 @@ func (s *Server) appSocialRouter(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusCreated, map[string]any{"id": id})
 	default:
 		httpx.Fail(w, http.StatusNotFound, "friend.not_found")
+	}
+}
+
+// notifyFriendRequest fans out the durable in-app notification and the
+// best-effort device push after the friend request transaction commits.
+// Delivery failures must not turn a successfully-created request into an API
+// error or make the requester retry and create duplicate state.
+func (s *Server) notifyFriendRequest(ctx context.Context, request friends.FriendRequest, requesterNickname string) {
+	title := "收到新的好友申请"
+	content := fmt.Sprintf("%s 请求添加你为好友", strings.TrimSpace(requesterNickname))
+	if strings.TrimSpace(requesterNickname) == "" {
+		content = "有人请求添加你为好友"
+	}
+	const deepLink = "/friends/requests"
+	source := fmt.Sprintf("friend-request:%d", request.ID)
+	if s != nil && s.appNotifications != nil {
+		if _, err := s.appNotifications.CreateForUser(
+			ctx,
+			request.AddresseeID,
+			"friend_request",
+			title,
+			content,
+			deepLink,
+			source,
+		); err != nil {
+			log.Printf("friend request notification failed request=%d: %v", request.ID, err)
+		}
+	}
+	if s == nil || s.pushStore == nil || s.pushStore.Pusher() == nil {
+		return
+	}
+	registrationIDs, err := s.pushStore.GetRegistrationIDsByUserIDs(ctx, []int64{request.AddresseeID})
+	if err != nil {
+		log.Printf("friend request device lookup failed request=%d: %v", request.ID, err)
+		return
+	}
+	if len(registrationIDs) == 0 {
+		return
+	}
+	if _, err := s.pushStore.Pusher().Push(ctx, registrationIDs, push.Message{
+		Title: title, Content: content, DeepLink: deepLink,
+	}); err != nil {
+		log.Printf("friend request push failed request=%d: %v", request.ID, err)
 	}
 }
 

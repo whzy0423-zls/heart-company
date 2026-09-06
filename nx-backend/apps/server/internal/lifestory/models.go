@@ -228,15 +228,18 @@ type FactCharacter struct {
 }
 
 type FactEvent struct {
-	ID            string   `json:"id,omitempty"`
-	Time          string   `json:"time,omitempty"`
-	Location      string   `json:"location,omitempty"`
-	Description   string   `json:"description"`
-	TurningPoint  string   `json:"turningPoint,omitempty"`
-	Outcome       string   `json:"outcome,omitempty"`
-	People        []string `json:"people,omitempty"`
-	Confirmed     bool     `json:"confirmed"`
-	RedactionMode string   `json:"redactionMode,omitempty"`
+	ID               string   `json:"id,omitempty"`
+	Time             string   `json:"time,omitempty"`
+	Location         string   `json:"location,omitempty"`
+	Latitude         *float64 `json:"latitude,omitempty"`
+	Longitude        *float64 `json:"longitude,omitempty"`
+	CoordinateSystem string   `json:"coordinateSystem,omitempty"`
+	Description      string   `json:"description"`
+	TurningPoint     string   `json:"turningPoint,omitempty"`
+	Outcome          string   `json:"outcome,omitempty"`
+	People           []string `json:"people,omitempty"`
+	Confirmed        bool     `json:"confirmed"`
+	RedactionMode    string   `json:"redactionMode,omitempty"`
 }
 
 type FactOrganization struct {

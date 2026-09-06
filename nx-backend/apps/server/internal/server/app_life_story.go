@@ -153,7 +153,7 @@ func (c lifeStoryRuntimeCompleter) CompleteJSON(ctx context.Context, system, use
 	if c.server == nil {
 		return "", errors.New("life story model is unavailable")
 	}
-	return c.server.completePreferenceJSON(ctx, system, user, maxTokens)
+	return c.server.completeStoryJSON(ctx, system, user, maxTokens)
 }
 
 func (s *Server) requireLifeStoryAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -351,6 +351,9 @@ func lifeStoryFactsEnvelope(story lifestory.Story) map[string]any {
 		"facts":        story.FactCard,
 		"factCard":     story.FactCard,
 		"factsVersion": story.FactCard.Version,
+		// Keep the canonical event collection explicit for lightweight clients
+		// and import tooling that only needs map coordinates.
+		"events": story.FactCard.Events,
 	}
 }
 
