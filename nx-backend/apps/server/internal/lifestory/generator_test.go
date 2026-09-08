@@ -64,6 +64,50 @@ func TestGeneratorProducesValidatedStructuredVersion(t *testing.T) {
 	}
 }
 
+func TestGeneratorNormalizesThreeCompleteChaptersWithoutLosingBodyText(t *testing.T) {
+	body := strings.Repeat("中", 360)
+	raw := `{"perspective":"first_person","tone":"warm","chapters":[` +
+		`{"order":1,"title":"一","body":"` + body + `"},` +
+		`{"order":2,"title":"二","body":"` + body + `"},` +
+		`{"order":3,"title":"三","body":"` + body + `"}],"reflection":"回望"}`
+
+	version, err := NewGenerator(GeneratorConfig{Completer: &fakeCompleter{raw: raw}}).Generate(context.Background(), confirmedSnapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(version.Chapters) != 4 {
+		t.Fatalf("normalized chapter count=%d, want 4", len(version.Chapters))
+	}
+	var combined strings.Builder
+	for index, chapter := range version.Chapters {
+		if chapter.Order != index+1 || strings.TrimSpace(chapter.Title) == "" {
+			t.Fatalf("invalid normalized chapter %d: %+v", index, chapter)
+		}
+		combined.WriteString(chapter.Body)
+	}
+	if combined.String() != strings.Repeat(body, 3) {
+		t.Fatal("chapter normalization changed generated story body text")
+	}
+}
+
+func TestGeneratorDropsEmptyTrailingChapter(t *testing.T) {
+	body := strings.Repeat("中", 273)
+	raw := `{"perspective":"first_person","tone":"warm","chapters":[` +
+		`{"order":1,"title":"一","body":"` + body + `"},` +
+		`{"order":2,"title":"二","body":"` + body + `"},` +
+		`{"order":3,"title":"三","body":"` + body + `"},` +
+		`{"order":4,"title":"四","body":"` + body + `"},` +
+		`{"order":5,"title":"五","body":""}],"reflection":"回望"}`
+
+	version, err := NewGenerator(GeneratorConfig{Completer: &fakeCompleter{raw: raw}}).Generate(context.Background(), confirmedSnapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(version.Chapters) != 4 {
+		t.Fatalf("normalized chapter count=%d, want 4", len(version.Chapters))
+	}
+}
+
 func TestGeneratorAppliesStoryStyleInstructionsAndServerOwnedStamp(t *testing.T) {
 	tests := []struct {
 		style       StoryStyle

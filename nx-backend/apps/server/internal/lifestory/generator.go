@@ -122,6 +122,7 @@ func (g *Generator) generateTokenized(ctx context.Context, safeSnapshot StorySna
 	if err != nil {
 		return Version{}, newGeneratedOutputError("format", err)
 	}
+	version = normalizeGeneratedVersion(version, safeSnapshot.Outline)
 	version.Status = VersionPublished
 	version.Model = g.model
 	version.StoryStyle = storyStyle
@@ -141,6 +142,68 @@ func (g *Generator) generateTokenized(ctx context.Context, safeSnapshot StorySna
 	version.CharacterCount = version.CharacterCountValue()
 	version.WordCount = version.WordCountValue()
 	return version, nil
+}
+
+func normalizeGeneratedVersion(version Version, outline Outline) Version {
+	chapters := make([]Chapter, 0, len(version.Chapters))
+	for _, chapter := range version.Chapters {
+		if strings.TrimSpace(chapter.Body) == "" {
+			continue
+		}
+		chapters = append(chapters, chapter)
+	}
+
+	for len(chapters) > 6 {
+		last := len(chapters) - 1
+		chapters[last-1].Body += chapters[last].Body
+		chapters = chapters[:last]
+	}
+	for len(chapters) > 0 && len(chapters) < 4 {
+		longest := 0
+		for index := 1; index < len(chapters); index++ {
+			if utf8.RuneCountInString(chapters[index].Body) > utf8.RuneCountInString(chapters[longest].Body) {
+				longest = index
+			}
+		}
+		runes := []rune(chapters[longest].Body)
+		if len(runes) < 2 {
+			break
+		}
+		split := storyChapterSplitIndex(runes)
+		second := Chapter{Body: string(runes[split:])}
+		chapters[longest].Body = string(runes[:split])
+		chapters = append(chapters, Chapter{})
+		copy(chapters[longest+2:], chapters[longest+1:])
+		chapters[longest+1] = second
+	}
+	for index := range chapters {
+		chapters[index].Order = index + 1
+		if strings.TrimSpace(chapters[index].Title) == "" {
+			if index < len(outline.Chapters) && strings.TrimSpace(outline.Chapters[index].Title) != "" {
+				chapters[index].Title = outline.Chapters[index].Title
+			} else {
+				chapters[index].Title = fmt.Sprintf("第%d章", index+1)
+			}
+		}
+	}
+	version.Chapters = chapters
+	return version
+}
+
+func storyChapterSplitIndex(body []rune) int {
+	middle := len(body) / 2
+	for distance := 0; distance <= 80; distance++ {
+		for _, index := range []int{middle + distance, middle - distance} {
+			if index <= 0 || index >= len(body)-1 {
+				continue
+			}
+			switch body[index] {
+			case '。', '！', '？', '；':
+				return index + 1
+			}
+		}
+	}
+	return middle
 }
 
 func storyStylePrompt(value StoryStyle) (StoryStyle, string, error) {
