@@ -88,7 +88,7 @@ func (s *Store) Send(ctx context.Context, input SendInput) (Message, error) {
 	if input.MessageType == "" {
 		input.MessageType = "text"
 	}
-	if input.MessageType != "text" && input.MessageType != "image" && input.MessageType != "voice" && input.MessageType != "sticker" {
+	if input.MessageType != "text" && input.MessageType != "image" && input.MessageType != "video" && input.MessageType != "voice" && input.MessageType != "sticker" {
 		return Message{}, ErrInvalidConversation
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -202,11 +202,31 @@ func (s *Store) MarkRead(ctx context.Context, userID, conversationID, sequence i
 	if sequence < 0 {
 		return ErrCursorConflict
 	}
-	if !s.participant(ctx, userID, conversationID) {
+	var eventSequence int64
+	err := s.db.QueryRowContext(ctx, `SELECT event_sequence FROM direct_conversations WHERE id=$1 AND status='active' AND (user_low_id=$2 OR user_high_id=$2)`, conversationID, userID).Scan(&eventSequence)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotParticipant
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO direct_message_read_cursors(conversation_id,user_id,last_read_sequence) VALUES($1,$2,$3) ON CONFLICT(conversation_id,user_id) DO UPDATE SET last_read_sequence=GREATEST(direct_message_read_cursors.last_read_sequence,EXCLUDED.last_read_sequence),updated_at=now()`, conversationID, userID, sequence)
+	if err != nil {
+		return err
+	}
+	if sequence > eventSequence {
+		return ErrCursorConflict
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO direct_message_read_cursors(conversation_id,user_id,last_read_sequence) VALUES($1,$2,$3) ON CONFLICT(conversation_id,user_id) DO UPDATE SET last_read_sequence=GREATEST(direct_message_read_cursors.last_read_sequence,EXCLUDED.last_read_sequence),updated_at=now()`, conversationID, userID, sequence)
 	return err
+}
+
+func (s *Store) PeerReadSequence(ctx context.Context, userID, conversationID int64) (int64, error) {
+	if err := s.requireDB(); err != nil {
+		return 0, err
+	}
+	var sequence int64
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(cursor.last_read_sequence,0) FROM direct_conversations conversation LEFT JOIN direct_message_read_cursors cursor ON cursor.conversation_id=conversation.id AND cursor.user_id=CASE WHEN conversation.user_low_id=$2 THEN conversation.user_high_id ELSE conversation.user_low_id END WHERE conversation.id=$1 AND conversation.status='active' AND (conversation.user_low_id=$2 OR conversation.user_high_id=$2)`, conversationID, userID).Scan(&sequence)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotParticipant
+	}
+	return sequence, err
 }
 
 func (s *Store) Recall(ctx context.Context, userID, messageID int64) (Message, error) {

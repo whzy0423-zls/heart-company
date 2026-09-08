@@ -46,7 +46,7 @@ func (s *Store) CreateRequest(ctx context.Context, requesterID, addresseeID int6
 		return FriendRequest{}, ErrBlocked
 	}
 	var active bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM friendships WHERE user_low_id=LEAST($1,$2) AND user_high_id=GREATEST($1,$2) AND status='active')`, requesterID, addresseeID).Scan(&active); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM friendships WHERE user_low_id=LEAST($1::bigint,$2::bigint) AND user_high_id=GREATEST($1::bigint,$2::bigint) AND status='active')`, requesterID, addresseeID).Scan(&active); err != nil {
 		return FriendRequest{}, err
 	}
 	if active {
@@ -108,7 +108,7 @@ func (s *Store) RespondRequest(ctx context.Context, userID, requestID int64, acc
 		return FriendRequest{}, err
 	}
 	if accept {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO friendships(user_low_id,user_high_id,status) VALUES (LEAST($1,$2),GREATEST($1,$2),'active') ON CONFLICT DO NOTHING`, req.RequesterID, req.AddresseeID); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO friendships(user_low_id,user_high_id,status) VALUES (LEAST($1::bigint,$2::bigint),GREATEST($1::bigint,$2::bigint),'active') ON CONFLICT DO NOTHING`, req.RequesterID, req.AddresseeID); err != nil {
 			return FriendRequest{}, err
 		}
 	}
@@ -206,6 +206,10 @@ func (s *Store) Search(ctx context.Context, viewerID int64, raw string) (SearchR
 	var targetID int64
 	if _, err := fmt.Sscan(query, &targetID); err != nil {
 		targetID = 0
+	} else if targetID <= 0 || targetID > int64(^uint32(0)>>1) {
+		// app_users.id is an integer in PostgreSQL. Keep phone-like values
+		// out of the int4 parameter slot so a search cannot overflow it.
+		targetID = 0
 	}
 	var item SearchResult
 	var visibility string
@@ -220,7 +224,7 @@ func (s *Store) Search(ctx context.Context, viewerID int64, raw string) (SearchR
 		LEFT JOIN friendships f ON f.user_low_id=LEAST(u.id,$1) AND f.user_high_id=GREATEST(u.id,$1) AND f.status='active'
 		WHERE u.status='active'
 		  AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE b.status='active' AND ((b.blocker_id=$1 AND b.blocked_id=u.id) OR (b.blocker_id=u.id AND b.blocked_id=$1)))
-		  AND (lower(COALESCE(u.user_code,''))=lower($2) OR lower(COALESCE(u.invite_code,''))=lower($2) OR ($3 > 0 AND u.id=$3))
+		  AND (lower(COALESCE(u.user_code,''))=lower($2) OR lower(COALESCE(u.invite_code,''))=lower($2) OR lower(COALESCE(u.phone,''))=lower($2) OR ($3 > 0 AND u.id=$3))
 		LIMIT 1`, viewerID, query, targetID).
 		Scan(&item.ID, &item.UserCode, &item.Nickname, &item.Avatar, &visibility, &visibilityVersion, &enneagram, &item.Relation)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -340,7 +344,7 @@ func lockPairUsers(ctx context.Context, tx *sql.Tx, a, b int64) error {
 	if err != nil {
 		return err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM app_users WHERE id IN ($1,$2) ORDER BY id FOR UPDATE`, pair.LowID, pair.HighID)
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM app_users WHERE id IN ($1::bigint,$2::bigint) ORDER BY id FOR UPDATE`, pair.LowID, pair.HighID)
 	if err != nil {
 		return err
 	}
@@ -360,7 +364,7 @@ func lockPairUsers(ctx context.Context, tx *sql.Tx, a, b int64) error {
 
 func blockedEither(ctx context.Context, tx *sql.Tx, a, b int64) (bool, error) {
 	var blocked bool
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM user_blocks WHERE status='active' AND ((blocker_id=$1 AND blocked_id=$2) OR (blocker_id=$2 AND blocked_id=$1)))`, a, b).Scan(&blocked)
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM user_blocks WHERE status='active' AND ((blocker_id=$1::bigint AND blocked_id=$2::bigint) OR (blocker_id=$2::bigint AND blocked_id=$1::bigint)))`, a, b).Scan(&blocked)
 	return blocked, err
 }
 

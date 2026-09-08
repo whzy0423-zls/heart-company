@@ -40,7 +40,7 @@ func (s *Store) Create(ctx context.Context, userID, conversationID int64, mediaT
 	if !ok {
 		return Media{}, ErrNotParticipant
 	}
-	if (mediaType != "image" && mediaType != "voice") || durationMs < 0 || durationMs > 60000 {
+	if (mediaType != "image" && mediaType != "video" && mediaType != "voice") || durationMs < 0 || durationMs > 60000 {
 		return Media{}, errors.New("direct_media.invalid")
 	}
 	asset, err := s.uploads.Create(ctx, input)

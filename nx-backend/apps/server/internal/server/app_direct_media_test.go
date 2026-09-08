@@ -16,6 +16,10 @@ func TestValidDirectMediaAcceptsExpectedTypes(t *testing.T) {
 		t.Fatal("expected voice upload to be accepted")
 	}
 	if validDirectMedia("video", imageHeader, []byte("image")) {
-		t.Fatal("unexpected media type should be rejected")
+		t.Fatal("video with an image payload should be rejected")
+	}
+	videoHeader := &multipart.FileHeader{Filename: "clip.mp4", Header: textproto.MIMEHeader{"Content-Type": []string{"video/mp4"}}}
+	if !validDirectMedia("video", videoHeader, []byte("video")) {
+		t.Fatal("expected video upload to be accepted")
 	}
 }

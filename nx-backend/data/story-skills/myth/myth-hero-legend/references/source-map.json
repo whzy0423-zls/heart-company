@@ -1,0 +1,17 @@
+{
+  "skillKey": "myth-hero-legend",
+  "category": "myth",
+  "sourceClaims": [
+    "希腊神话与英雄传说",
+    "古希腊神话资料",
+    "世界各地神话中的英雄叙事"
+  ],
+  "corpusStatus": {
+    "totalFiles": 920,
+    "textRead": 126,
+    "ocrNeeded": 500,
+    "lowTextOrOcrNeeded": 50,
+    "nonTextAsset": 244
+  },
+  "sourcePolicy": "目录/文件名匹配不等于正文已核验；OCR 完成后只更新知识包与来源状态，不改变故事类型 key。"
+}

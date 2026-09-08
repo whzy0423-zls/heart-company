@@ -1,0 +1,287 @@
+{
+  "libraryKey": "story-skills",
+  "version": "1.0.0",
+  "uploadMode": "story-skill-admin",
+  "items": [
+    {
+      "category": "realistic",
+      "key": "realistic-experience",
+      "name": "真实经历整理",
+      "summary": "只依据已确认事实整理真实经历，保持时间、人物和结果可靠",
+      "file": "nx-backend/data/story-skills/realistic/realistic-experience/SKILL.md"
+    },
+    {
+      "category": "realistic",
+      "key": "realistic-memory-timeline",
+      "name": "真实记忆时间线",
+      "summary": "按时间、地点和事件顺序整理记忆，明确缺口与不确定性",
+      "file": "nx-backend/data/story-skills/realistic/realistic-memory-timeline/SKILL.md"
+    },
+    {
+      "category": "realistic",
+      "key": "realistic-family-memory",
+      "name": "家庭记忆",
+      "summary": "克制呈现家庭关系、代际影响与未说出口的感受",
+      "file": "nx-backend/data/story-skills/realistic/realistic-family-memory/SKILL.md"
+    },
+    {
+      "category": "realistic",
+      "key": "realistic-turning-point",
+      "name": "人生转折",
+      "summary": "围绕一次关键选择呈现前因、犹疑、行动与后果",
+      "file": "nx-backend/data/story-skills/realistic/realistic-turning-point/SKILL.md"
+    },
+    {
+      "category": "realistic",
+      "key": "realistic-healing",
+      "name": "真实疗愈",
+      "summary": "在不美化伤害的前提下记录恢复、求助和重新建立安全感",
+      "file": "nx-backend/data/story-skills/realistic/realistic-healing/SKILL.md"
+    },
+    {
+      "category": "realistic",
+      "key": "realistic-work-life",
+      "name": "工作生活实录",
+      "summary": "记录工作、学习和生活压力中的具体任务与个人选择",
+      "file": "nx-backend/data/story-skills/realistic/realistic-work-life/SKILL.md"
+    },
+    {
+      "category": "realistic",
+      "key": "realistic-travel-memory",
+      "name": "旅行见闻",
+      "summary": "按地点、行动和观察记录旅行中的真实见闻与关系变化",
+      "file": "nx-backend/data/story-skills/realistic/realistic-travel-memory/SKILL.md"
+    },
+    {
+      "category": "realistic",
+      "key": "realistic-reflection",
+      "name": "现实反思",
+      "summary": "从真实事件提炼有限、可核对的个人理解和下一步",
+      "file": "nx-backend/data/story-skills/realistic/realistic-reflection/SKILL.md"
+    },
+    {
+      "category": "novel",
+      "key": "novel-character-growth",
+      "name": "小说人物成长",
+      "summary": "保留真实经历核心，用人物弧线和选择变化增强叙事",
+      "file": "nx-backend/data/story-skills/novel/novel-character-growth/SKILL.md"
+    },
+    {
+      "category": "novel",
+      "key": "novel-plot-structure",
+      "name": "小说情节结构",
+      "summary": "把真实经历整理为有起伏的情节线，同时保留事实边界",
+      "file": "nx-backend/data/story-skills/novel/novel-plot-structure/SKILL.md"
+    },
+    {
+      "category": "novel",
+      "key": "novel-scene-dialogue",
+      "name": "小说场景对白",
+      "summary": "用可视化场景和克制对白提升故事画面感",
+      "file": "nx-backend/data/story-skills/novel/novel-scene-dialogue/SKILL.md"
+    },
+    {
+      "category": "novel",
+      "key": "novel-first-person",
+      "name": "第一人称小说化",
+      "summary": "用贴近内心的第一人称重组真实经历的感受和行动",
+      "file": "nx-backend/data/story-skills/novel/novel-first-person/SKILL.md"
+    },
+    {
+      "category": "novel",
+      "key": "novel-third-person",
+      "name": "第三人称小说化",
+      "summary": "用克制的第三人称拉开距离，呈现人物关系和选择",
+      "file": "nx-backend/data/story-skills/novel/novel-third-person/SKILL.md"
+    },
+    {
+      "category": "novel",
+      "key": "novel-mystery-tension",
+      "name": "悬念与伏笔",
+      "summary": "用信息节奏和有限伏笔增强阅读推动力而不制造虚假事实",
+      "file": "nx-backend/data/story-skills/novel/novel-mystery-tension/SKILL.md"
+    },
+    {
+      "category": "novel",
+      "key": "novel-romance-relationship",
+      "name": "关系与情感小说",
+      "summary": "用克制的情感张力呈现关系靠近、错位、边界和选择",
+      "file": "nx-backend/data/story-skills/novel/novel-romance-relationship/SKILL.md"
+    },
+    {
+      "category": "novel",
+      "key": "novel-ending-aftereffect",
+      "name": "小说结局与余波",
+      "summary": "让故事在主要事件之后留下可信的变化、代价和未完问题",
+      "file": "nx-backend/data/story-skills/novel/novel-ending-aftereffect/SKILL.md"
+    },
+    {
+      "category": "fairy_tale",
+      "key": "fairy-classic",
+      "name": "经典童话",
+      "summary": "用清晰愿望、试炼和回归结构讲述温暖的童话故事",
+      "file": "nx-backend/data/story-skills/fairy_tale/fairy-classic/SKILL.md"
+    },
+    {
+      "category": "fairy_tale",
+      "key": "fairy-picture-book",
+      "name": "儿童绘本",
+      "summary": "用低龄可理解的语言和单一情绪线讲述生活故事",
+      "file": "nx-backend/data/story-skills/fairy_tale/fairy-picture-book/SKILL.md"
+    },
+    {
+      "category": "fairy_tale",
+      "key": "fairy-fable-moral",
+      "name": "寓言训诫",
+      "summary": "通过动物、物件或拟人冲突表达一个可讨论的生活道理",
+      "file": "nx-backend/data/story-skills/fairy_tale/fairy-fable-moral/SKILL.md"
+    },
+    {
+      "category": "fairy_tale",
+      "key": "fairy-fantasy-adventure",
+      "name": "奇幻冒险",
+      "summary": "用地图、任务和奇异世界增强经历的探索感",
+      "file": "nx-backend/data/story-skills/fairy_tale/fairy-fantasy-adventure/SKILL.md"
+    },
+    {
+      "category": "fairy_tale",
+      "key": "fairy-warm-growth",
+      "name": "温暖成长",
+      "summary": "把困难转写为温和、可恢复的成长寓言",
+      "file": "nx-backend/data/story-skills/fairy_tale/fairy-warm-growth/SKILL.md"
+    },
+    {
+      "category": "fairy_tale",
+      "key": "fairy-animal-friendship",
+      "name": "动物伙伴",
+      "summary": "用动物伙伴和互助行动表达陪伴、信任与边界",
+      "file": "nx-backend/data/story-skills/fairy_tale/fairy-animal-friendship/SKILL.md"
+    },
+    {
+      "category": "fairy_tale",
+      "key": "fairy-bedtime",
+      "name": "睡前故事",
+      "summary": "用舒缓节奏、重复意象和安全结尾讲述一天的经历",
+      "file": "nx-backend/data/story-skills/fairy_tale/fairy-bedtime/SKILL.md"
+    },
+    {
+      "category": "fairy_tale",
+      "key": "fairy-quest-choice",
+      "name": "选择寓言",
+      "summary": "用两个或三个象征性选择呈现犹疑、取舍与承担后果",
+      "file": "nx-backend/data/story-skills/fairy_tale/fairy-quest-choice/SKILL.md"
+    },
+    {
+      "category": "myth",
+      "key": "myth-chinese",
+      "name": "中国神话",
+      "summary": "用中国神话的天地、祖源和秩序意象改写真实经历",
+      "file": "nx-backend/data/story-skills/myth/myth-chinese/SKILL.md"
+    },
+    {
+      "category": "myth",
+      "key": "myth-world",
+      "name": "世界神话",
+      "summary": "综合世界神话的创世、试炼和归返母题扩大叙事尺度",
+      "file": "nx-backend/data/story-skills/myth/myth-world/SKILL.md"
+    },
+    {
+      "category": "myth",
+      "key": "myth-hero-legend",
+      "name": "英雄传说",
+      "summary": "用召唤、试炼、援助和归来的结构表现关键人生选择",
+      "file": "nx-backend/data/story-skills/myth/myth-hero-legend/SKILL.md"
+    },
+    {
+      "category": "myth",
+      "key": "myth-symbolism",
+      "name": "神话象征",
+      "summary": "将复杂情绪和关系转化为可理解的神话象征系统",
+      "file": "nx-backend/data/story-skills/myth/myth-symbolism/SKILL.md"
+    },
+    {
+      "category": "myth",
+      "key": "myth-creation-renewal",
+      "name": "创世与重建",
+      "summary": "用创世、崩塌和重建意象表达生活阶段的变化",
+      "file": "nx-backend/data/story-skills/myth/myth-creation-renewal/SKILL.md"
+    },
+    {
+      "category": "myth",
+      "key": "myth-underworld-return",
+      "name": "下行与归返",
+      "summary": "用进入黑暗、获得线索和带着理解归返的结构讲述低谷经历",
+      "file": "nx-backend/data/story-skills/myth/myth-underworld-return/SKILL.md"
+    },
+    {
+      "category": "myth",
+      "key": "myth-nature-ritual",
+      "name": "自然与仪式",
+      "summary": "用季节、星辰和仪式性动作表达记忆、承诺与告别",
+      "file": "nx-backend/data/story-skills/myth/myth-nature-ritual/SKILL.md"
+    },
+    {
+      "category": "myth",
+      "key": "myth-gods-mortals",
+      "name": "神人与凡人",
+      "summary": "通过神人与凡人的距离表现能力、限制、责任和选择",
+      "file": "nx-backend/data/story-skills/myth/myth-gods-mortals/SKILL.md"
+    },
+    {
+      "category": "folk",
+      "key": "folk-chinese-story",
+      "name": "中国民间故事",
+      "summary": "用口耳相传的节奏、地方人物和朴素冲突讲述经历",
+      "file": "nx-backend/data/story-skills/folk/folk-chinese-story/SKILL.md"
+    },
+    {
+      "category": "folk",
+      "key": "folk-ethnic-legend",
+      "name": "少数民族传说",
+      "summary": "借助地域、自然和群体记忆表达经历中的归属感",
+      "file": "nx-backend/data/story-skills/folk/folk-ethnic-legend/SKILL.md"
+    },
+    {
+      "category": "folk",
+      "key": "folk-folklore-zhiguai",
+      "name": "民俗志怪",
+      "summary": "用民俗细节和克制志怪元素表现生活中的未知与敬畏",
+      "file": "nx-backend/data/story-skills/folk/folk-folklore-zhiguai/SKILL.md"
+    },
+    {
+      "category": "folk",
+      "key": "folk-local-life",
+      "name": "地方生活故事",
+      "summary": "用集市、邻里、手艺和日常物件讲述普通人的经历",
+      "file": "nx-backend/data/story-skills/folk/folk-local-life/SKILL.md"
+    },
+    {
+      "category": "folk",
+      "key": "folk-trickster",
+      "name": "机智人物",
+      "summary": "用民间机智人物的幽默和变通表现解决问题的过程",
+      "file": "nx-backend/data/story-skills/folk/folk-trickster/SKILL.md"
+    },
+    {
+      "category": "folk",
+      "key": "folk-family-oral",
+      "name": "家庭口述故事",
+      "summary": "用长辈讲述般的口吻保存家庭记忆、家风和生活智慧",
+      "file": "nx-backend/data/story-skills/folk/folk-family-oral/SKILL.md"
+    },
+    {
+      "category": "folk",
+      "key": "folk-seasonal-customs",
+      "name": "节令民俗",
+      "summary": "借助节气、节日和季节性活动承载记忆与关系变化",
+      "file": "nx-backend/data/story-skills/folk/folk-seasonal-customs/SKILL.md"
+    },
+    {
+      "category": "folk",
+      "key": "folk-justice-and-repair",
+      "name": "民间公道与修复",
+      "summary": "通过约定、见证和补偿表现民间语境中的公平与修复",
+      "file": "nx-backend/data/story-skills/folk/folk-justice-and-repair/SKILL.md"
+    }
+  ]
+}

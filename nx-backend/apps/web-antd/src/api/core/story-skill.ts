@@ -6,6 +6,7 @@ export interface StorySkillAdminItem {
   category: StorySkillCategory;
   categoryId: number;
   categoryName: string;
+  coverUrl?: string;
   hasDraft: boolean;
   id: number;
   instructions?: string;

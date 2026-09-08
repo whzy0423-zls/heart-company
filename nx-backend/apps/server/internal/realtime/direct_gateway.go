@@ -66,6 +66,7 @@ func (g *DirectGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var unsubscribe func()
+	var subscribedConversationID int64
 	defer func() {
 		if unsubscribe != nil {
 			unsubscribe()
@@ -90,6 +91,7 @@ func (g *DirectGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			messages, stop := g.Hub.Subscribe(conversationID)
 			unsubscribe = stop
+			subscribedConversationID = conversationID
 			go func(subscription <-chan any) {
 				for {
 					select {
@@ -103,8 +105,32 @@ func (g *DirectGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			}(messages)
 			send(map[string]any{"type": "subscribed", "conversationId": conversationID})
+			continue
+		}
+		if code := g.handleClientEvent(ctx, userID, subscribedConversationID, envelope); code != "" {
+			send(map[string]any{"type": "error", "code": code})
 		}
 	}
+}
+
+func (g *DirectGateway) handleClientEvent(_ context.Context, userID, subscribedConversationID int64, envelope map[string]any) string {
+	if envelope["type"] != "typing" {
+		return ""
+	}
+	conversationID, _ := strconv.ParseInt(toString(envelope["conversationId"]), 10, 64)
+	isTyping, ok := envelope["isTyping"].(bool)
+	if !ok || conversationID <= 0 || conversationID != subscribedConversationID || g.Hub == nil {
+		return "direct_message.not_participant"
+	}
+	g.Hub.Publish(conversationID, map[string]any{
+		"type": "typing",
+		"data": map[string]any{
+			"conversationId": conversationID,
+			"userId":         userID,
+			"isTyping":       isTyping,
+		},
+	})
+	return ""
 }
 
 func toString(value any) string {

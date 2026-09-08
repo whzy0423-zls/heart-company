@@ -1,0 +1,16 @@
+{
+  "skillKey": "novel-plot-structure",
+  "category": "novel",
+  "sourceClaims": [
+    "中国神话鬼怪合集/[中国古代小说的原型与母题].吴光正.扫描版.pdf",
+    "中国神话鬼怪合集/[中国的神话传说与古小说].小南一武著孙昌武译.扫描版.pdf"
+  ],
+  "corpusStatus": {
+    "totalFiles": 920,
+    "textRead": 126,
+    "ocrNeeded": 500,
+    "lowTextOrOcrNeeded": 50,
+    "nonTextAsset": 244
+  },
+  "sourcePolicy": "目录/文件名匹配不等于正文已核验；OCR 完成后只更新知识包与来源状态，不改变故事类型 key。"
+}

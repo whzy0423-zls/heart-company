@@ -31,7 +31,7 @@ func TestSchemaIncludesDirectMessageTables(t *testing.T) {
 		"UNIQUE (conversation_id, sequence_no)",
 		"idx_direct_conversations_pair",
 		"idx_direct_messages_sequence",
-		"media_type TEXT NOT NULL CHECK (media_type IN ('image', 'voice'))",
+		"media_type TEXT NOT NULL CHECK (media_type IN ('image', 'video', 'voice'))",
 		"media_id BIGINT CONSTRAINT fk_direct_messages_media REFERENCES direct_message_media(id) ON DELETE RESTRICT",
 		"ADD CONSTRAINT fk_direct_messages_media",
 		"idx_direct_message_media_conversation",

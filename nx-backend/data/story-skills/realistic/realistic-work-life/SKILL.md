@@ -1,0 +1,42 @@
+---
+name: realistic-work-life
+description: Use when generating a user's “我的故事” in the 日常实录 style under the realistic story type.
+---
+
+# 工作生活实录
+
+## Purpose
+
+This is a writing behavior skill for the `我的故事` flow. It changes narrative form, not the user's facts. The source collection is a reference for motifs and structure, never a license to copy a book or invent events.
+
+## Source boundary
+
+- Candidate sources: 后端事实卡、用户确认的工作或学习经历
+- The corpus contains duplicate files, scanned files and OCR-incomplete files. Treat any source not explicitly marked as readable as a candidate for motif discovery only.
+- Do not quote long passages or imitate a named author. Keep the user's confirmed facts as the evidence boundary.
+
+## Required workflow
+
+1. Extract the confirmed people, places, time order, actions, feelings and outcome from the fact cards and outline.
+2. Separate facts, user interpretation and the selected symbolic device before drafting.
+3. Apply the rules below to the narrative surface while preserving the fact sequence and result.
+4. Draft 4-5 chapters. Each chapter contains a short title, a summary and a focused body with concrete actions and emotional movement.
+5. Put interpretation, growth and uncertainty in `reflection`; never disguise inference as an event.
+
+## Style rules
+
+    - 用任务、时间、协作和结果呈现日常，不把工作头衔当作人物全部。
+- 区分事实责任、个人感受和组织因素，避免单因解释复杂结果。
+- 对同事、学校和单位使用必要的匿名化处理。
+- reflection 给出经验和边界，不转成普遍职业处方。
+
+## Output contract
+
+Return the existing `我的故事` JSON shape only: `perspective`, `tone`, `chapters` and `reflection`. Do not return Markdown, source notes or a second story. Keep the requested perspective and tone. Do not add characters, locations, dates, diagnoses, legal conclusions or guaranteed outcomes.
+
+## Final checks
+
+- Every major event is traceable to a confirmed material or is clearly framed as metaphor.
+- The selected story type is visible in the language and structure without becoming a copy of a known work.
+- Symbolic rewriting is clearly separated from reality, especially for `myth`, `folk` and `fairy_tale`.
+- Sensitive experiences are handled without glamorizing harm or providing harmful instructions.

@@ -1,0 +1,16 @@
+{
+  "skillKey": "folk-ethnic-legend",
+  "category": "folk",
+  "sourceClaims": [
+    "中国神话鬼怪合集/少数民族神话/PDF中国少数民族风物传说选",
+    "满族民间故事选"
+  ],
+  "corpusStatus": {
+    "totalFiles": 920,
+    "textRead": 126,
+    "ocrNeeded": 500,
+    "lowTextOrOcrNeeded": 50,
+    "nonTextAsset": 244
+  },
+  "sourcePolicy": "目录/文件名匹配不等于正文已核验；OCR 完成后只更新知识包与来源状态，不改变故事类型 key。"
+}

@@ -1,0 +1,15 @@
+{
+  "skillKey": "realistic-experience",
+  "category": "realistic",
+  "sourceClaims": [
+    "后端已有真实叙事规则；当前资料库没有可用个人回忆录、日记或口述史"
+  ],
+  "corpusStatus": {
+    "totalFiles": 920,
+    "textRead": 126,
+    "ocrNeeded": 500,
+    "lowTextOrOcrNeeded": 50,
+    "nonTextAsset": 244
+  },
+  "sourcePolicy": "目录/文件名匹配不等于正文已核验；OCR 完成后只更新知识包与来源状态，不改变故事类型 key。"
+}

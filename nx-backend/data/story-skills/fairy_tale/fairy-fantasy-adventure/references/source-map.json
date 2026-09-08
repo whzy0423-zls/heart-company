@@ -1,0 +1,16 @@
+{
+  "skillKey": "fairy-fantasy-adventure",
+  "category": "fairy_tale",
+  "sourceClaims": [
+    "01-童话故事类-321本/世界童话精选",
+    "冰雪奇缘、乐高系列及其他幻想故事资料"
+  ],
+  "corpusStatus": {
+    "totalFiles": 920,
+    "textRead": 126,
+    "ocrNeeded": 500,
+    "lowTextOrOcrNeeded": 50,
+    "nonTextAsset": 244
+  },
+  "sourcePolicy": "目录/文件名匹配不等于正文已核验；OCR 完成后只更新知识包与来源状态，不改变故事类型 key。"
+}

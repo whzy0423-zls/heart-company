@@ -129,6 +129,7 @@ func (s *Store) ListSkills(ctx context.Context, filter SkillFilter) (SkillPage, 
 			&item.VersionID, &item.Version, &item.SortOrder); err != nil {
 			return SkillPage{}, fmt.Errorf("list skills: scan: %w", err)
 		}
+		item.CoverURL = "/api/public/story-skill-covers/" + item.Key + ".svg"
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -175,6 +176,7 @@ func (s *Store) GetSkill(ctx context.Context, skillID int64) (SkillDetail, error
 	if err != nil {
 		return SkillDetail{}, fmt.Errorf("get skill: %w", err)
 	}
+	item.CoverURL = "/api/public/story-skill-covers/" + item.Key + ".svg"
 	if err := json.Unmarshal(opening, &item.Version.OpeningPrompts); err != nil {
 		return SkillDetail{}, fmt.Errorf("get skill: opening prompts: %w", err)
 	}

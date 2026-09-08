@@ -5,6 +5,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -13,7 +14,9 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 )
 
-const directMediaMaxBytes = 10 << 20
+// Keep image/voice uploads lightweight while allowing short phone videos to
+// complete without being truncated by the multipart reader.
+const directMediaMaxBytes = 50 << 20
 
 func (s *Server) appDirectMedia(w http.ResponseWriter, r *http.Request) {
 	user, ok := appUserFromContext(r)
@@ -103,6 +106,28 @@ func validDirectMedia(mediaType string, header *multipart.FileHeader, content []
 		return isImageUpload(header.Header.Get("Content-Type"), content)
 	case "voice":
 		return isAllowedASRAudioUpload(header)
+	case "video":
+		return isAllowedDirectVideoUpload(header, content)
+	default:
+		return false
+	}
+}
+
+func isAllowedDirectVideoUpload(header *multipart.FileHeader, content []byte) bool {
+	if header == nil {
+		return false
+	}
+	contentType := strings.ToLower(strings.TrimSpace(header.Header.Get("Content-Type")))
+	if strings.HasPrefix(contentType, "video/") {
+		return true
+	}
+	detected := strings.ToLower(http.DetectContentType(content))
+	if strings.HasPrefix(detected, "video/") {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(header.Filename)) {
+	case ".mp4", ".mov", ".m4v", ".webm", ".3gp", ".mkv":
+		return contentType == "" || contentType == "application/octet-stream" || contentType == "binary/octet-stream"
 	default:
 		return false
 	}

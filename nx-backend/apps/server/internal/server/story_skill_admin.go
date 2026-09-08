@@ -38,6 +38,7 @@ type storySkillAdminItem struct {
 	Key              string     `json:"key"`
 	Name             string     `json:"name"`
 	Summary          string     `json:"summary"`
+	CoverURL         string     `json:"coverUrl"`
 	Version          string     `json:"version"`
 	Status           string     `json:"status"`
 	Instructions     string     `json:"instructions,omitempty"`
@@ -155,6 +156,7 @@ func (s *Server) listStorySkills(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusInternalServerError, "故事技能读取失败")
 			return
 		}
+		item.CoverURL = "/api/public/story-skill-covers/" + item.Key + ".svg"
 		items = append(items, item)
 	}
 	httpx.OK(w, items)
@@ -238,6 +240,7 @@ func (s *Server) getStorySkill(w http.ResponseWriter, r *http.Request, skillID i
 		httpx.Fail(w, http.StatusInternalServerError, "故事技能读取失败")
 		return
 	}
+	item.CoverURL = "/api/public/story-skill-covers/" + item.Key + ".svg"
 	httpx.OK(w, item)
 }
 

@@ -24,6 +24,14 @@ ALTER TABLE IF EXISTS video_project_scenes
   ADD COLUMN IF NOT EXISTS breakdown_item_key TEXT NOT NULL DEFAULT '';
 ALTER TABLE IF EXISTS video_project_assets
   ADD COLUMN IF NOT EXISTS breakdown_item_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE IF EXISTS direct_message_media
+  DROP CONSTRAINT IF EXISTS direct_message_media_media_type_check;
+ALTER TABLE IF EXISTS direct_message_media
+  ADD CONSTRAINT direct_message_media_media_type_check CHECK (media_type IN ('image', 'video', 'voice'));
+ALTER TABLE IF EXISTS direct_messages
+  DROP CONSTRAINT IF EXISTS direct_messages_message_type_check;
+ALTER TABLE IF EXISTS direct_messages
+  ADD CONSTRAINT direct_messages_message_type_check CHECK (message_type IN ('text', 'image', 'video', 'voice', 'sticker'));
 `
 
 // Open 连接 PostgreSQL，执行迁移并播种初始数据。

@@ -1,0 +1,42 @@
+---
+name: myth-underworld-return
+description: Use when generating a user's “我的故事” in the 下行归返 style under the myth story type.
+---
+
+# 下行与归返
+
+## Purpose
+
+This is a writing behavior skill for the `我的故事` flow. It changes narrative form, not the user's facts. The source collection is a reference for motifs and structure, never a license to copy a book or invent events.
+
+## Source boundary
+
+- Candidate sources: 世界神话中的下行、寻找和归返母题
+- The corpus contains duplicate files, scanned files and OCR-incomplete files. Treat any source not explicitly marked as readable as a candidate for motif discovery only.
+- Do not quote long passages or imitate a named author. Keep the user's confirmed facts as the evidence boundary.
+
+## Required workflow
+
+1. Extract the confirmed people, places, time order, actions, feelings and outcome from the fact cards and outline.
+2. Separate facts, user interpretation and the selected symbolic device before drafting.
+3. Apply the rules below to the narrative surface while preserving the fact sequence and result.
+4. Draft 4-5 chapters. Each chapter contains a short title, a summary and a focused body with concrete actions and emotional movement.
+5. Put interpretation, growth and uncertainty in `reflection`; never disguise inference as an event.
+
+## Style rules
+
+    - 黑暗、深谷或地下只作为象征，不描写可模仿的危险行为。
+- 归返依靠真实支持、行动或理解，不依靠神迹抹去经历后果。
+- 保留失去、犹疑和未解决部分，不把低谷定义为个人失败。
+- reflection 说明神话结构与现实经历的区别。
+
+## Output contract
+
+Return the existing `我的故事` JSON shape only: `perspective`, `tone`, `chapters` and `reflection`. Do not return Markdown, source notes or a second story. Keep the requested perspective and tone. Do not add characters, locations, dates, diagnoses, legal conclusions or guaranteed outcomes.
+
+## Final checks
+
+- Every major event is traceable to a confirmed material or is clearly framed as metaphor.
+- The selected story type is visible in the language and structure without becoming a copy of a known work.
+- Symbolic rewriting is clearly separated from reality, especially for `myth`, `folk` and `fairy_tale`.
+- Sensitive experiences are handled without glamorizing harm or providing harmful instructions.

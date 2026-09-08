@@ -88,6 +88,18 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		httpx.OK(w, map[string]any{"items": items, "beforeSequence": before, "afterSequence": after})
+	case strings.HasPrefix(path, "conversations/") && strings.HasSuffix(path, "/read-state") && r.Method == http.MethodGet:
+		id, ok := parseDirectPathID(path, "conversations/", "/read-state")
+		if !ok {
+			httpx.Fail(w, http.StatusBadRequest, "direct_message.invalid_conversation")
+			return
+		}
+		sequence, err := s.directMessages.PeerReadSequence(r.Context(), user.ID, id)
+		if err != nil {
+			mapDirectMessageError(w, err)
+			return
+		}
+		httpx.OK(w, map[string]any{"peerReadSequence": sequence})
 	case strings.HasPrefix(path, "conversations/") && strings.HasSuffix(path, "/messages") && r.Method == http.MethodPost:
 		id, ok := parseDirectPathID(path, "conversations/", "/messages")
 		if !ok {
@@ -104,7 +116,7 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 			httpx.Fail(w, http.StatusBadRequest, "direct_message.invalid_conversation")
 			return
 		}
-		if body.MessageType == "image" || body.MessageType == "voice" {
+		if body.MessageType == "image" || body.MessageType == "video" || body.MessageType == "voice" {
 			if body.MediaID == nil || s.directMedia == nil || s.directMedia.ValidateForMessage(r.Context(), user.ID, id, *body.MediaID, body.MessageType) != nil {
 				httpx.Fail(w, http.StatusForbidden, "direct_media.not_participant")
 				return
@@ -138,6 +150,7 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 			mapDirectMessageError(w, err)
 			return
 		}
+		s.directRealtimeHub.Publish(body.ConversationID, directReadEvent(body.ConversationID, user.ID, body.Sequence))
 		httpx.OK(w, nil)
 	case strings.HasPrefix(path, "messages/") && strings.HasSuffix(path, "/recall") && r.Method == http.MethodPost:
 		id, ok := parseDirectPathID(path, "messages/", "/recall")
@@ -154,6 +167,17 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 		httpx.OK(w, item)
 	default:
 		httpx.Fail(w, http.StatusNotFound, "direct_message.not_found")
+	}
+}
+
+func directReadEvent(conversationID, userID, sequence int64) map[string]any {
+	return map[string]any{
+		"type": "read",
+		"data": map[string]any{
+			"conversationId": conversationID,
+			"userId":         userID,
+			"sequence":       sequence,
+		},
 	}
 }
 

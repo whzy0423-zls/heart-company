@@ -1,0 +1,17 @@
+{
+  "skillKey": "folk-folklore-zhiguai",
+  "category": "folk",
+  "sourceClaims": [
+    "2 中国社会民俗史丛书（全30册）",
+    "8 宗教与民俗典（全10册）",
+    "中国神话鬼怪合集/志怪小说/《猫苑》.pdf"
+  ],
+  "corpusStatus": {
+    "totalFiles": 920,
+    "textRead": 126,
+    "ocrNeeded": 500,
+    "lowTextOrOcrNeeded": 50,
+    "nonTextAsset": 244
+  },
+  "sourcePolicy": "目录/文件名匹配不等于正文已核验；OCR 完成后只更新知识包与来源状态，不改变故事类型 key。"
+}

@@ -354,6 +354,7 @@ onMounted(async () => {
       <div class="detail-loading"><Spin v-if="detailLoading" /></div>
       <template v-if="activeItem && !detailLoading">
         <Descriptions bordered :column="1" size="small">
+          <Descriptions.Item label="封面"><img v-if="activeItem.coverUrl" :src="activeItem.coverUrl" alt="故事技能封面" class="skill-cover" /></Descriptions.Item>
           <Descriptions.Item label="技能名称">{{ activeItem.name }}</Descriptions.Item>
           <Descriptions.Item label="技能标识">{{ activeItem.key }}</Descriptions.Item>
           <Descriptions.Item label="故事类型">{{ activeItem.categoryName }}</Descriptions.Item>
@@ -382,6 +383,7 @@ onMounted(async () => {
 .detail-loading { display: flex; justify-content: center; min-height: 24px; }
 .detail-rules-title { font-size: 14px; font-weight: 600; margin: 18px 0 8px; }
 .detail-rules { background: var(--vben-bg-color-deep); border: 1px solid rgb(128 128 128 / 18%); border-radius: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.6; margin: 0; max-height: 420px; overflow: auto; padding: 14px; white-space: pre-wrap; word-break: break-word; }
+.skill-cover { display: block; width: 240px; height: 135px; object-fit: cover; border-radius: 8px; }
 .mobile-skill-list { display: none; }
 @media (max-width: 720px) {
   .story-toolbar { align-items: stretch; flex-direction: column; }

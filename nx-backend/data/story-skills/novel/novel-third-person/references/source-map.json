@@ -1,0 +1,15 @@
+{
+  "skillKey": "novel-third-person",
+  "category": "novel",
+  "sourceClaims": [
+    "古代小说研究资料及可读志怪文本"
+  ],
+  "corpusStatus": {
+    "totalFiles": 920,
+    "textRead": 126,
+    "ocrNeeded": 500,
+    "lowTextOrOcrNeeded": 50,
+    "nonTextAsset": 244
+  },
+  "sourcePolicy": "目录/文件名匹配不等于正文已核验；OCR 完成后只更新知识包与来源状态，不改变故事类型 key。"
+}

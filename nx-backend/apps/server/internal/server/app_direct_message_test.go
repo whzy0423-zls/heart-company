@@ -46,3 +46,14 @@ func TestMapDirectMessageErrorUsesStableStatuses(t *testing.T) {
 		}
 	}
 }
+
+func TestDirectReadEventIncludesReaderAndSequence(t *testing.T) {
+	event := directReadEvent(12, 7, 31)
+	if event["type"] != "read" {
+		t.Fatalf("unexpected event type %#v", event)
+	}
+	data, _ := event["data"].(map[string]any)
+	if data["conversationId"] != int64(12) || data["userId"] != int64(7) || data["sequence"] != int64(31) {
+		t.Fatalf("unexpected read data %#v", data)
+	}
+}

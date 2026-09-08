@@ -31,6 +31,7 @@ type SkillSummary struct {
 	Summary      string `json:"summary"`
 	IconKey      string `json:"iconKey"`
 	ColorToken   string `json:"colorToken"`
+	CoverURL     string `json:"coverUrl"`
 	VersionID    int64  `json:"versionId"`
 	Version      string `json:"version"`
 	SortOrder    int    `json:"-"`
@@ -60,6 +61,7 @@ type SkillDetail struct {
 	Description  string           `json:"description"`
 	IconKey      string           `json:"iconKey"`
 	ColorToken   string           `json:"colorToken"`
+	CoverURL     string           `json:"coverUrl"`
 	CategoryName string           `json:"categoryName"`
 	Version      PublishedVersion `json:"publishedVersion"`
 }
