@@ -260,6 +260,21 @@ func TestLifeStoryValidationUsesUnicodeCodePointsAndBounds(t *testing.T) {
 	}
 }
 
+func TestLifeStoryValidationAcceptsCompleteCompactModelOutput(t *testing.T) {
+	chapters := make([]Chapter, 4)
+	for i := range chapters {
+		chapters[i] = Chapter{
+			Order: i + 1,
+			Title: "章",
+			Body:  strings.Repeat("中", 273),
+		}
+	}
+
+	if err := ValidateVersion(Version{Chapters: chapters, Reflection: "回望"}); err != nil {
+		t.Fatalf("complete 1092-character model output should be accepted: %v", err)
+	}
+}
+
 func TestValidateOutlineRequiresConfirmableChapterFields(t *testing.T) {
 	outline := Outline{
 		Perspective: PerspectiveFirst,

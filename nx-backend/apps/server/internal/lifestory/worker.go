@@ -206,6 +206,7 @@ func (w *Worker) processClaimed(ctx context.Context, job Job) error {
 			return err
 		}
 		retry := job.Attempt < minInt(job.MaxAttempts, w.maxAttempts)
+		log.Printf("life story generation failed: job_id=%d story_id=%d app_user_id=%d attempt=%d error=%v", job.ID, job.StoryID, job.AppUserID, job.Attempt, err)
 		_, failErr := w.store.FailJob(ctx, job.ID, job.ClaimToken, "generation_failed", publicGenerationError(err), retry)
 		if failErr != nil {
 			return failErr
@@ -305,6 +306,10 @@ func publicGenerationError(err error) string {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "故事生成超时，请稍后重试"
+	}
+	var outputErr *GeneratedOutputError
+	if errors.As(err, &outputErr) {
+		return "故事模型返回的内容不完整，请重试；若持续失败请检查后台故事模型配置"
 	}
 	return "故事生成失败，请稍后重试"
 }

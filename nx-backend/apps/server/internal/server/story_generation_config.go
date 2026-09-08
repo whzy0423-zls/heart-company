@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/auditlog"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/llm"
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
 )
 
@@ -33,6 +35,33 @@ func buildStoryGenerationConfigView(cfg modelconfig.StoryGenerationConfig) story
 		Temperature: cfg.Temperature, MaxTokens: cfg.MaxTokens, TimeoutSeconds: cfg.TimeoutSeconds,
 		SystemPrompt: cfg.SystemPrompt, APIKeySet: strings.TrimSpace(cfg.APIKey) != "",
 	}
+}
+
+func probeStoryGenerationModel(ctx context.Context, completer llm.JSONCompleter, apiBase, model string) llm.PingResult {
+	result := llm.PingResult{APIBase: strings.TrimSpace(apiBase), Model: strings.TrimSpace(model)}
+	if completer == nil {
+		result.Message = "故事模型不支持结构化输出"
+		return result
+	}
+	started := time.Now()
+	raw, err := completer.CompleteJSON(ctx, "只输出一个 JSON 对象，不要 Markdown。", `返回 {"ok":true}。`, 64)
+	result.LatencyMs = time.Since(started).Milliseconds()
+	if err != nil {
+		result.Message = "结构化输出测试失败：" + err.Error()
+		return result
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &payload); err != nil {
+		result.Message = "结构化输出测试失败：模型没有返回有效 JSON"
+		return result
+	}
+	if ok, _ := payload["ok"].(bool); !ok {
+		result.Message = "结构化输出测试失败：模型返回的 JSON 内容不符合要求"
+		return result
+	}
+	result.OK = true
+	result.Message = fmt.Sprintf("连通正常，故事模型 %s 已通过结构化输出校验", result.Model)
+	return result
 }
 
 func (s *Server) storyGenerationConfig(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +108,7 @@ func (s *Server) storyGenerationConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		probeCtx, cancel := context.WithTimeout(r.Context(), s.modelConfigProbeDeadline(time.Duration(story.TimeoutSeconds)*time.Second))
-		result := generator.Ping(probeCtx)
+		result := probeStoryGenerationModel(probeCtx, generator, story.APIBase, story.Model)
 		cancel()
 		if !result.OK {
 			httpx.Fail(w, http.StatusBadRequest, result.Message)
@@ -147,7 +176,7 @@ func (s *Server) testStoryGenerationConfig(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	probeCtx, cancel := context.WithTimeout(r.Context(), s.modelConfigProbeDeadline(time.Duration(story.TimeoutSeconds)*time.Second))
-	result := generator.Ping(probeCtx)
+	result := probeStoryGenerationModel(probeCtx, generator, story.APIBase, story.Model)
 	cancel()
 	httpx.OK(w, result)
 }

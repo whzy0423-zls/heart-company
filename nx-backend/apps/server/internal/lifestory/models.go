@@ -16,6 +16,11 @@ import (
 type StoryStatus string
 
 const (
+	minGeneratedStoryCharacters = 1000
+	maxGeneratedStoryCharacters = 2000
+)
+
+const (
 	StatusDraft         StoryStatus = "draft"
 	StatusOutlineReady  StoryStatus = "outline_ready"
 	StatusQueued        StoryStatus = "queued"
@@ -511,8 +516,8 @@ func ValidateVersion(v Version) error {
 	for _, chapter := range v.Chapters {
 		count += utf8.RuneCountInString(chapter.Body)
 	}
-	if count < 1200 || count > 2000 {
-		return fmt.Errorf("story character count %d outside 1200-2000", count)
+	if count < minGeneratedStoryCharacters || count > maxGeneratedStoryCharacters {
+		return fmt.Errorf("story character count %d outside %d-%d", count, minGeneratedStoryCharacters, maxGeneratedStoryCharacters)
 	}
 	return nil
 }

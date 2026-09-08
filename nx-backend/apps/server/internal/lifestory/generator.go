@@ -13,6 +13,29 @@ import (
 
 var ErrSafetyBlocked = errors.New("life story generation was blocked by safety review")
 
+type GeneratedOutputError struct {
+	Kind string
+	Err  error
+}
+
+func (e *GeneratedOutputError) Error() string {
+	if e == nil || e.Err == nil {
+		return "generated story output is invalid"
+	}
+	return fmt.Sprintf("generated story output is invalid (%s): %v", e.Kind, e.Err)
+}
+
+func (e *GeneratedOutputError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func newGeneratedOutputError(kind string, err error) error {
+	return &GeneratedOutputError{Kind: strings.TrimSpace(kind), Err: err}
+}
+
 type SafetyError struct {
 	Phase string
 	Code  string
@@ -97,7 +120,7 @@ func (g *Generator) generateTokenized(ctx context.Context, safeSnapshot StorySna
 	}
 	version, err := ParseGeneratedVersion(raw)
 	if err != nil {
-		return Version{}, err
+		return Version{}, newGeneratedOutputError("format", err)
 	}
 	version.Status = VersionPublished
 	version.Model = g.model
@@ -107,10 +130,10 @@ func (g *Generator) generateTokenized(ctx context.Context, safeSnapshot StorySna
 		return Version{}, err
 	}
 	if err := ValidateVersion(version); err != nil {
-		return Version{}, err
+		return Version{}, newGeneratedOutputError("structure", err)
 	}
 	if err := ValidateVersionAgainstFacts(version, safeSnapshot.FactCard); err != nil {
-		return Version{}, err
+		return Version{}, newGeneratedOutputError("facts", err)
 	}
 	if ContainsSensitiveToken(version, safeSnapshot, tokenMap) {
 		return Version{}, newSafetyError("output", "privacy_leak")
