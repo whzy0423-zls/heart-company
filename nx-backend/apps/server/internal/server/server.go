@@ -881,6 +881,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/theory-libraries", s.requirePermission("System:TheoryLibrary:Manage", s.theoryLibrariesHandler))
 	s.mux.HandleFunc("/api/theory-libraries/", s.requirePermission("System:TheoryLibrary:Manage", s.theoryLibraryActionHandler))
 	registerEnneagramLibraryAdminRoutes(s.mux, s.requirePermission, s)
+	registerSkillLibraryAdminRoutes(s.mux, s.requirePermission, s)
 	registerStorySkillAdminRoutes(s.mux, s.requirePermission, s)
 	s.mux.HandleFunc("/api/story-generation-config", func(w http.ResponseWriter, r *http.Request) {
 		permission := "App:StoryManagement:View"

@@ -21,6 +21,7 @@ export * from './quiz';
 export * from './rag';
 export * from './signup';
 export * from './site-config';
+export * from './skill-library-management';
 export * from './system';
 export * from './upload';
 export * from './user';

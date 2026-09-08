@@ -6,7 +6,7 @@ const routes: RouteRecordRaw[] = [
   {
     component: BasicLayout,
     meta: {
-      authority: ['App:EnneagramLibrary:View', 'App:StoryManagement:View'],
+      authority: ['App:EnneagramLibrary:View', 'App:SkillLibrary:View', 'App:StoryManagement:View'],
       icon: 'lucide:smartphone',
       order: 11,
       title: 'App 管理',
@@ -23,6 +23,16 @@ const routes: RouteRecordRaw[] = [
         },
         name: 'AppEnneagramLibrary',
         path: 'enneagram-library',
+      },
+      {
+        component: () => import('#/views/app/skill-library-management.vue'),
+        meta: {
+          authority: ['App:SkillLibrary:View'],
+          icon: 'lucide:library-big',
+          title: '成长技能库',
+        },
+        name: 'AppSkillLibrary',
+        path: 'skill-library',
       },
       {
         component: () => import('#/views/app/story-management.vue'),

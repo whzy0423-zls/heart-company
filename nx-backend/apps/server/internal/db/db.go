@@ -130,6 +130,9 @@ func seed(ctx context.Context, database *sql.DB, adminUser, adminPassword string
 	if err := organizeAppManagementMenus(ctx, database); err != nil {
 		return err
 	}
+	if err := seedSkillLibraryManagementMenu(ctx, database); err != nil {
+		return err
+	}
 	if err := seedStoryManagementMenu(ctx, database); err != nil {
 		return err
 	}
