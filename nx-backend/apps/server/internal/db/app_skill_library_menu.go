@@ -9,6 +9,7 @@ import (
 
 const (
 	skillLibraryManagementPath           = "/app/skill-library"
+	skillLibraryManagementComponent      = "/app/skill-library-management"
 	skillLibraryManagementViewPermission = "App:SkillLibrary:View"
 	skillLibraryManagementEditPermission = "App:SkillLibrary:Edit"
 )
@@ -28,11 +29,11 @@ func seedSkillLibraryManagementMenu(ctx context.Context, database *sql.DB) error
 	var pageID int64
 	err = tx.QueryRowContext(ctx, "SELECT id FROM menus WHERE path=$1 ORDER BY id LIMIT 1", skillLibraryManagementPath).Scan(&pageID)
 	if err == sql.ErrNoRows {
-		query := "INSERT INTO menus(pid,name,path,component,auth_code,type,status,sort,meta) VALUES($1,'AppSkillLibrary',$2,$2,$3,'menu',1,10,$4::jsonb) RETURNING id"
-		err = tx.QueryRowContext(ctx, query, parentID, skillLibraryManagementPath, skillLibraryManagementViewPermission, meta).Scan(&pageID)
+		query := "INSERT INTO menus(pid,name,path,component,auth_code,type,status,sort,meta) VALUES($1,'AppSkillLibrary',$2,$3,$4,'menu',1,10,$5::jsonb) RETURNING id"
+		err = tx.QueryRowContext(ctx, query, parentID, skillLibraryManagementPath, skillLibraryManagementComponent, skillLibraryManagementViewPermission, meta).Scan(&pageID)
 	} else if err == nil {
 		query := "UPDATE menus SET pid=$2,name='AppSkillLibrary',component=$3,auth_code=$4,type='menu',status=1,sort=10,meta=$5::jsonb WHERE id=$1"
-		_, err = tx.ExecContext(ctx, query, pageID, parentID, skillLibraryManagementPath, skillLibraryManagementViewPermission, meta)
+		_, err = tx.ExecContext(ctx, query, pageID, parentID, skillLibraryManagementComponent, skillLibraryManagementViewPermission, meta)
 	}
 	if err != nil {
 		return err
