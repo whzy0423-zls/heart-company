@@ -42,6 +42,25 @@ func TestDefaultChatSystemPromptsPreferChineseVoiceFriendlyAnswers(t *testing.T)
 	}
 }
 
+func TestConversationSystemPromptsHideReferenceMetadata(t *testing.T) {
+	prompts := map[string]string{
+		"compatible": defaultCompatibleChatSystemPrompt,
+		"minimax":    defaultSystemPrompt,
+		"skill":      skillRuntimePlatformSystemPrompt,
+	}
+	for name, prompt := range prompts {
+		for _, required := range []string{
+			"不要输出参考资料",
+			"不要展示来源标题",
+			"不要附带来源列表",
+		} {
+			if !strings.Contains(prompt, required) {
+				t.Fatalf("%s prompt missing source-display rule %q: %s", name, required, prompt)
+			}
+		}
+	}
+}
+
 func TestCurrentDirectivesCannotOverrideChineseVoiceRule(t *testing.T) {
 	input := rag.GenerateInput{
 		Question:          "我是7号，怎么调整？",

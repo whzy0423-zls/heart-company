@@ -203,7 +203,7 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 			Title:   match.doc.Title,
 			Snippet: snippet,
 		})
-		parts = append(parts, "【"+match.doc.Title+"】"+snippet)
+		parts = append(parts, snippet)
 	}
 
 	suggestions := buildSuggestions(input)
@@ -212,13 +212,13 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 	if name == "" {
 		name = "你"
 	}
-	answer := name + "，我先按你问到的重点检索了九型资料："
+	answer := name + "，"
 	if input.ConversationCard.MainType > 0 {
 		answer += "结合当前关注对象的主型，"
 	} else if input.UserProfile.MainType > 0 {
 		answer += "结合你最近的主型结果，"
 	}
-	answer += strings.Join(parts, "；") + "。你可以继续追问具体关系、职场、亲密关系或成长练习，我会沿着这些资料继续细化。"
+	answer += strings.Join(parts, "；") + "。你可以继续追问具体关系、职场、亲密关系或成长练习，我会结合你的具体场景继续细化。"
 
 	if s.generator != nil {
 		generated, err := s.generator.Generate(ctx, GenerateInput{
@@ -316,7 +316,7 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 			Title:   match.doc.Title,
 			Snippet: snippet,
 		})
-		parts = append(parts, "【"+match.doc.Title+"】"+snippet)
+		parts = append(parts, snippet)
 	}
 	suggestions := buildSuggestions(input)
 
@@ -324,13 +324,13 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 	if name == "" {
 		name = "你"
 	}
-	answer := name + "，我先按你问到的重点检索了九型资料："
+	answer := name + "，"
 	if input.ConversationCard.MainType > 0 {
 		answer += "结合当前关注对象的主型，"
 	} else if input.UserProfile.MainType > 0 {
 		answer += "结合你最近的主型结果，"
 	}
-	answer += strings.Join(parts, "；") + "。你可以继续追问具体关系、职场、亲密关系或成长练习，我会沿着这些资料继续细化。"
+	answer += strings.Join(parts, "；") + "。你可以继续追问具体关系、职场、亲密关系或成长练习，我会结合你的具体场景继续细化。"
 
 	if s.generator != nil {
 		generated, err := s.generateStreaming(ctx, GenerateInput{

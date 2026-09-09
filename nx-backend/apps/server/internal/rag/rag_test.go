@@ -1097,8 +1097,13 @@ func TestAskFallsBackWhenGeneratorFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ask returned error: %v", err)
 	}
-	if !strings.Contains(result.Answer, "我先按你问到的重点检索了九型资料") {
-		t.Fatalf("expected fallback retrieval answer, got %q", result.Answer)
+	if !strings.Contains(result.Answer, "完美型重视原则") {
+		t.Fatalf("expected fallback to retain useful answer content, got %q", result.Answer)
+	}
+	for _, forbidden := range []string{"参考", "来源", "检索", "资料", "【", "】"} {
+		if strings.Contains(result.Answer, forbidden) {
+			t.Fatalf("fallback answer must hide source metadata %q: %q", forbidden, result.Answer)
+		}
 	}
 }
 
