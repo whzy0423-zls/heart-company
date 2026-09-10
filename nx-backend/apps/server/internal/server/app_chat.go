@@ -476,12 +476,10 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	docs, knowledgeTrace := s.retrieveAppChatKnowledge(ctx, userInfo.ID, sessionID, sess.CardID, body.Question)
-	profile, conversationCard := s.appChatProfilesForCard(ctx, userInfo.ID, sess.CardID)
-	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
-		profile.Memories = memories
-	}
-	promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
+	inputs := s.loadAppChatPromptInputs(ctx, userInfo.ID, sessionID, sess.CardID, body.Question, generator)
+	docs, knowledgeTrace := inputs.docs, inputs.trace
+	profile, conversationCard := inputs.profile, inputs.card
+	promptContext := inputs.prompt
 
 	ans, err := rag.NewService(docs, rag.WithGenerator(generator)).Ask(ctx, rag.AskInput{
 		History:             promptContext.History,
@@ -656,22 +654,27 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			return
 		}
 
-		docs, trace := s.retrieveAppChatKnowledge(ctx, input.userID, input.sessionID, input.cardID, input.question)
-		knowledgeTrace = trace
-		profile, conversationCard := s.appChatProfilesForCard(ctx, input.userID, input.cardID)
-		if memories, err := s.appChatMemoriesForPrompt(ctx, input.userID, input.cardID, 6); err == nil {
-			profile.Memories = memories
-		}
-		promptContext := s.appChatContextForPrompt(ctx, input.sessionID, input.generator)
+		inputs := s.loadAppChatPromptInputs(ctx, input.userID, input.sessionID, input.cardID, input.question, input.generator)
+		docs := inputs.docs
+		knowledgeTrace = inputs.trace
+		profile, conversationCard := inputs.profile, inputs.card
+		promptContext := inputs.prompt
 		if !send(appChatStreamEvent{kind: appChatStreamProviderStarted}) {
 			return
 		}
 
 		var sentenceBuffer answerhygiene.SentenceBuffer
 		emittedAnswer := false
+		var immediatePrefix string
 		emitSafeSentences := func(sentences []string) error {
 			for _, sentence := range sentences {
 				cleaned := answerhygiene.Clean(input.question, sentence)
+				if immediatePrefix != "" {
+					cleaned = strings.TrimPrefix(cleaned, immediatePrefix)
+				}
+				if cleaned == "" {
+					continue
+				}
 				if cleaned == answerhygiene.NeutralDirectAnswerFallback {
 					continue
 				}
@@ -710,6 +713,30 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 		}, func(delta string) error {
 			if delta == "" {
 				return nil
+			}
+			// Push the first non-empty model increment immediately. Waiting for a
+			// complete sentence makes a healthy stream look stalled on mobile.
+			if !emittedAnswer {
+				first := answerhygiene.Clean(input.question, delta)
+				if first == delta && utf8.RuneCountInString(delta) >= 2 && !strings.ContainsAny(delta, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") && first != answerhygiene.NeutralDirectAnswerFallback {
+					immediatePrefix = first
+					writeResult := make(chan error, 1)
+					if !send(appChatStreamEvent{kind: appChatStreamDelta, delta: first, writeResult: writeResult}) {
+						if err := ctx.Err(); err != nil {
+							return err
+						}
+						return context.Canceled
+					}
+					select {
+					case err := <-writeResult:
+						if err != nil {
+							return err
+						}
+						emittedAnswer = true
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
 			}
 			if !send(appChatStreamEvent{kind: appChatStreamProviderProgress}) {
 				if err := ctx.Err(); err != nil {
@@ -1296,7 +1323,68 @@ func (s *Server) appChatContextForPrompt(ctx context.Context, sessionID int64, g
 	if typed, ok := generator.(rag.ConversationSummarizer); ok {
 		summarizer = typed
 	}
-	return buildAppChatPromptContext(ctx, sessionID, s.appChat, summarizer)
+	return buildAppChatPromptContextFast(ctx, sessionID, s.appChat, summarizer)
+}
+
+// buildAppChatPromptContextFast never blocks the current answer on an LLM
+// summary. It uses the existing summary plus a bounded recent window, then
+// refreshes the summary asynchronously for the next turn.
+func buildAppChatPromptContextFast(ctx context.Context, sessionID int64, store appChatContextStore, summarizer rag.ConversationSummarizer) appChatPromptContext {
+	state, err := store.GetConversationState(ctx, sessionID)
+	if err != nil {
+		return fallbackAppChatPromptContext(ctx, sessionID, store, "")
+	}
+	messages, err := store.ListMessagesAfter(ctx, sessionID, state.SummaryThroughMessageID)
+	if err != nil {
+		return fallbackAppChatPromptContext(ctx, sessionID, store, state.Summary)
+	}
+	prompt := compactAppChatContext(ctx, state.Summary, messages, nil)
+	if summarizer != nil && len(validAppChatMessages(messages)) > appChatFallbackHistoryLimit {
+		copyMessages := append([]chat.Message(nil), messages...)
+		go refreshAppChatSummaryAsync(sessionID, state, copyMessages, store, summarizer)
+	}
+	return prompt
+}
+
+func refreshAppChatSummaryAsync(sessionID int64, state chat.ConversationState, messages []chat.Message, store appChatContextStore, summarizer rag.ConversationSummarizer) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	valid := validAppChatMessages(messages)
+	oldCount := len(valid) - appChatHistoryLimit
+	if oldCount <= 0 || oldCount > len(valid) {
+		return
+	}
+	updated, err := summarizer.SummarizeConversation(ctx, strings.TrimSpace(state.Summary), appChatHistoryFromMessages(valid[:oldCount]))
+	updated = strings.TrimSpace(updated)
+	if err != nil || updated == "" || ctx.Err() != nil {
+		return
+	}
+	_, _ = store.UpdateConversationSummary(ctx, sessionID, state.SummaryThroughMessageID, updated, valid[oldCount-1].ID)
+}
+
+type appChatPromptInputs struct {
+	docs     []rag.Document
+	trace    *chat.KnowledgeTrace
+	profile  rag.UserProfile
+	card     rag.ConversationCard
+	memories []string
+	prompt   appChatPromptContext
+}
+
+func (s *Server) loadAppChatPromptInputs(ctx context.Context, userID, sessionID, cardID int64, question string, generator rag.Generator) appChatPromptInputs {
+	var out appChatPromptInputs
+	var wg sync.WaitGroup
+	wg.Add(4)
+	go func() {
+		defer wg.Done()
+		out.docs, out.trace = s.retrieveAppChatKnowledge(ctx, userID, sessionID, cardID, question)
+	}()
+	go func() { defer wg.Done(); out.profile, out.card = s.appChatProfilesForCard(ctx, userID, cardID) }()
+	go func() { defer wg.Done(); out.memories, _ = s.appChatMemoriesForPrompt(ctx, userID, cardID, 6) }()
+	go func() { defer wg.Done(); out.prompt = s.appChatContextForPrompt(ctx, sessionID, generator) }()
+	wg.Wait()
+	out.profile.Memories = out.memories
+	return out
 }
 
 func appChatHistoryFromMessages(messages []chat.Message) []rag.Message {
