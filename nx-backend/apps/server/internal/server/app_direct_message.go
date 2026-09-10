@@ -1,14 +1,19 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/directmessage"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/push"
 	"nine-xing/nx-backend/apps/server/internal/relationshipinsight"
 )
 
@@ -128,6 +133,13 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		s.directRealtimeHub.Publish(id, map[string]any{"type": "message", "data": item})
+		if shouldNotifyDirectMessage(item) {
+			senderName := strings.TrimSpace(user.RealName)
+			if senderName == "" {
+				senderName = strings.TrimSpace(user.Username)
+			}
+			s.enqueueDirectMessageNotification(item, senderName)
+		}
 		httpx.JSON(w, http.StatusCreated, map[string]any{"code": 0, "data": item, "error": nil, "message": "ok"})
 	case strings.HasPrefix(path, "messages/") && strings.HasSuffix(path, "/read") && r.Method == http.MethodPost:
 		id, ok := parseDirectPathID(path, "messages/", "/read")
@@ -167,6 +179,86 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 		httpx.OK(w, item)
 	default:
 		httpx.Fail(w, http.StatusNotFound, "direct_message.not_found")
+	}
+}
+
+func shouldNotifyDirectMessage(message directmessage.Message) bool {
+	return message.WasCreated && message.ID > 0 && message.RecipientID > 0
+}
+
+func directMessageNotificationPayload(message directmessage.Message, senderName string) (title, content, deepLink, source string) {
+	title = strings.TrimSpace(senderName)
+	if title == "" {
+		title = "好友"
+	}
+	switch message.MessageType {
+	case "image":
+		content = "[图片]"
+	case "video":
+		content = "[视频]"
+	case "voice":
+		content = "[语音]"
+	case "sticker":
+		content = strings.TrimSpace(message.Body)
+		if content == "" {
+			content = "[表情]"
+		}
+	default:
+		content = strings.TrimSpace(message.Body)
+		if content == "" {
+			content = "发来一条消息"
+		}
+	}
+	runes := []rune(content)
+	if len(runes) > 80 {
+		content = string(runes[:80]) + "…"
+	}
+	deepLink = fmt.Sprintf("/direct/%d", message.ConversationID)
+	source = fmt.Sprintf("direct-message:%d", message.ID)
+	return
+}
+
+func (s *Server) enqueueDirectMessageNotification(message directmessage.Message, senderName string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		s.notifyDirectMessage(ctx, message, senderName)
+	}()
+}
+
+func (s *Server) notifyDirectMessage(ctx context.Context, message directmessage.Message, senderName string) {
+	if s == nil || !shouldNotifyDirectMessage(message) {
+		return
+	}
+	title, content, deepLink, source := directMessageNotificationPayload(message, senderName)
+	if s.appNotifications != nil {
+		if _, err := s.appNotifications.CreateForUser(
+			ctx,
+			message.RecipientID,
+			"direct_message",
+			title,
+			content,
+			deepLink,
+			source,
+		); err != nil {
+			log.Printf("direct message notification failed message=%d: %v", message.ID, err)
+		}
+	}
+	if s.pushStore == nil || s.pushStore.Pusher() == nil {
+		return
+	}
+	registrationIDs, err := s.pushStore.GetRegistrationIDsByUserIDs(ctx, []int64{message.RecipientID})
+	if err != nil {
+		log.Printf("direct message device lookup failed message=%d: %v", message.ID, err)
+		return
+	}
+	if len(registrationIDs) == 0 {
+		return
+	}
+	if _, err := s.pushStore.Pusher().Push(ctx, registrationIDs, push.Message{
+		Title: title, Content: content, DeepLink: deepLink,
+	}); err != nil {
+		log.Printf("direct message push failed message=%d: %v", message.ID, err)
 	}
 }
 

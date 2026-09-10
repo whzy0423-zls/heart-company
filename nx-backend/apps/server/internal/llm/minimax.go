@@ -1365,10 +1365,15 @@ const companionReplyInstruction = "专业陪伴模式：先回应用户的情绪
 
 const allTypesReplyInstruction = "请完整回答当前问题，按1号到9号的顺序逐一回答，不能遗漏或只围绕用户自己的主型。每个型号都要紧扣用户当前主题给出特点和具体应用；如果问题涉及孩子，每个型号必须包含：孩子的典型特点、家长如何理解和沟通、一个具体应用方法。检索资料只作参考，不能因为检索资料不完整而遗漏任何型号；缺少的部分可基于稳妥的九型人格通用常识补充。使用清晰、适合手机阅读的编号列表，不使用“亲爱的”等亲昵称呼。"
 
+const enneagramOverviewReplyInstruction = "九型人格基础总览：这是知识型总览问题，即使处于基础问答模式，也不要压缩成 1～3 句话。请先建立整体框架，再用清晰分段完整讲解：一、定义与关注点；二、核心结构（三大智慧中心与九种类型）；三、动力机制（核心欲望、核心恐惧与防御模式）；四、动态变化（翼型、本能副型、健康层级及压力与成长方向）；五、识别误区；六、应用边界。不要只罗列九种性格形容词，也不要根据用户档案缩成某一个型号；说明它适合用于自我观察和沟通参考，不是临床诊断工具，并如实说明其科学证据边界。内容要有解释和简短例子，清晰、具体、适合手机阅读，不使用“亲爱的”等亲昵称呼。"
+
 func chatTokenBudget(question string) int {
 	question = strings.TrimSpace(question)
 	if requestsAllEnneagramTypes(question) {
 		return 1200
+	}
+	if requestsEnneagramOverview(question) {
+		return 700
 	}
 	for _, marker := range []string{"详细", "展开", "完整分析", "深入分析", "逐步说明"} {
 		if strings.Contains(question, marker) {
@@ -1382,6 +1387,9 @@ func chatTokenBudgetForTier(question, tier string) int {
 	if requestsAllEnneagramTypes(question) {
 		return 1200
 	}
+	if requestsEnneagramOverview(question) {
+		return 700
+	}
 	switch strings.ToLower(strings.TrimSpace(tier)) {
 	case "basic":
 		return 220
@@ -1392,6 +1400,49 @@ func chatTokenBudgetForTier(question, tier string) int {
 	default:
 		return chatTokenBudget(question)
 	}
+}
+
+func requestsEnneagramOverview(question string) bool {
+	normalized := strings.ToLower(strings.NewReplacer(
+		" ", "",
+		"\t", "",
+		"\n", "",
+		"？", "",
+		"?", "",
+		"。", "",
+		"！", "",
+		"!", "",
+		"，", "",
+		",", "",
+	).Replace(strings.TrimSpace(question)))
+	if !strings.Contains(normalized, "九型") && !strings.Contains(normalized, "enneagram") {
+		return false
+	}
+
+	for _, marker := range []string{
+		"1号", "2号", "3号", "4号", "5号", "6号", "7号", "8号", "9号",
+		"一号", "二号", "三号", "四号", "五号", "六号", "七号", "八号", "九号",
+		"我是几号", "我是哪型", "我属于", "测试", "测一测",
+		"伴侣", "关系", "沟通", "孩子", "职场", "怎么成长", "如何成长",
+	} {
+		if strings.Contains(normalized, marker) {
+			return false
+		}
+	}
+
+	for _, marker := range []string{
+		"什么是九型", "九型是什么", "九型人格是什么", "什么叫九型",
+		"介绍一下九型", "介绍九型", "讲讲九型", "了解九型",
+		"九型人格简介", "九型人格概述", "九型人格入门",
+		"九型人格基础", "九型人格核心原理", "九型人格的核心原理",
+		"九型人格基本原理", "九型人格的基本原理", "九型人格理论框架",
+		"enneagram是什么", "whatisenneagram", "introduceenneagram",
+	} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func requestsAllEnneagramTypes(question string) bool {
@@ -1512,6 +1563,8 @@ func buildUserPrompt(input rag.GenerateInput) string {
 	}
 	if requestsAllEnneagramTypes(input.Question) {
 		b.WriteString(allTypesReplyInstruction)
+	} else if requestsEnneagramOverview(input.Question) {
+		b.WriteString(enneagramOverviewReplyInstruction)
 	} else {
 		switch strings.ToLower(strings.TrimSpace(input.Tier)) {
 		case "deep":

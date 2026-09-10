@@ -44,6 +44,8 @@ type Message struct {
 	SequenceNo      int64      `json:"sequenceNo"`
 	RecalledAt      *time.Time `json:"recalledAt,omitempty"`
 	CreatedAt       time.Time  `json:"createdAt"`
+	RecipientID     int64      `json:"-"`
+	WasCreated      bool       `json:"-"`
 }
 
 type SendInput struct {

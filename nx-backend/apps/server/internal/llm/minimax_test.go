@@ -559,6 +559,43 @@ func TestChatTokenBudgetUsesConversationTier(t *testing.T) {
 	}
 }
 
+func TestRequestsEnneagramOverview(t *testing.T) {
+	tests := []struct {
+		question string
+		want     bool
+	}{
+		{question: "什么是九型？", want: true},
+		{question: "九型人格是什么", want: true},
+		{question: "介绍一下九型人格", want: true},
+		{question: "九型人格的核心原理是什么", want: true},
+		{question: "我是九型人格中的几号？", want: false},
+		{question: "九型人格怎么分析伴侣关系？", want: false},
+		{question: "什么是九型人格里的五号？", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.question, func(t *testing.T) {
+			if got := requestsEnneagramOverview(tt.question); got != tt.want {
+				t.Fatalf("requestsEnneagramOverview(%q) = %t, want %t", tt.question, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnneagramOverviewUsesExpandedTokenBudget(t *testing.T) {
+	for _, question := range []string{"什么是九型？", "九型人格是什么", "介绍一下九型人格"} {
+		t.Run(question, func(t *testing.T) {
+			if got := chatTokenBudgetForTier(question, "basic"); got != 700 {
+				t.Fatalf("chatTokenBudgetForTier(%q, basic) = %d, want 700", question, got)
+			}
+		})
+	}
+
+	if got := chatTokenBudgetForTier("我该怎么办？", "basic"); got != 220 {
+		t.Fatalf("ordinary basic question budget = %d, want 220", got)
+	}
+}
+
 func TestBuildUserPromptUsesConversationTierInstruction(t *testing.T) {
 	tests := []struct {
 		tier string
@@ -576,6 +613,46 @@ func TestBuildUserPromptUsesConversationTierInstruction(t *testing.T) {
 				t.Fatalf("tier %q prompt missing %q: %s", tt.tier, tt.want, prompt)
 			}
 		})
+	}
+}
+
+func TestBuildUserPromptUsesEnneagramOverviewInstruction(t *testing.T) {
+	prompt := buildUserPrompt(rag.GenerateInput{
+		Question: "什么是九型？",
+		Tier:     "basic",
+		Sources: []rag.Source{{
+			Title:   "九型人格基础",
+			Snippet: "九型人格关注行为背后的核心动机。",
+		}},
+	})
+
+	for _, want := range []string{
+		"核心结构",
+		"动力机制",
+		"动态变化",
+		"识别误区",
+		"应用边界",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("overview prompt missing %q: %s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, fixedConciseReplyInstruction) {
+		t.Fatalf("overview prompt must not force the fixed concise instruction: %s", prompt)
+	}
+}
+
+func TestPersonalizedDeepQuestionKeepsDeepInstruction(t *testing.T) {
+	prompt := buildUserPrompt(rag.GenerateInput{
+		Question: "结合我的情况深入分析我为什么总是害怕冲突",
+		Tier:     "deep",
+	})
+
+	if !strings.Contains(prompt, deepReplyInstruction) {
+		t.Fatalf("personalized deep prompt missing deep instruction: %s", prompt)
+	}
+	if strings.Contains(prompt, enneagramOverviewReplyInstruction) {
+		t.Fatalf("personalized deep prompt must not use overview instruction: %s", prompt)
 	}
 }
 

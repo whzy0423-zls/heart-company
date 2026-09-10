@@ -106,6 +106,10 @@ func (s *Store) Send(ctx context.Context, input SendInput) (Message, error) {
 	if input.SenderID != low && input.SenderID != high {
 		return Message{}, ErrNotParticipant
 	}
+	recipientID := low
+	if input.SenderID == low {
+		recipientID = high
+	}
 	if blocked, err := blockedEither(ctx, tx, low, high); err != nil {
 		return Message{}, err
 	} else if blocked {
@@ -127,6 +131,7 @@ func (s *Store) Send(ctx context.Context, input SendInput) (Message, error) {
 		if existingMedia.Valid {
 			existing.MediaID = &existingMedia.Int64
 		}
+		existing.RecipientID = recipientID
 		return existing, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -143,6 +148,8 @@ func (s *Store) Send(ctx context.Context, input SendInput) (Message, error) {
 	if existingMedia.Valid {
 		item.MediaID = &existingMedia.Int64
 	}
+	item.RecipientID = recipientID
+	item.WasCreated = true
 	if err := tx.Commit(); err != nil {
 		return Message{}, err
 	}

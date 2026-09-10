@@ -1,7 +1,9 @@
 package directmessage
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -35,5 +37,15 @@ func TestRecallWindow(t *testing.T) {
 	}
 	if CanRecall(2 * time.Minute) {
 		t.Fatal("message at recall boundary should be rejected")
+	}
+}
+
+func TestMessageDeliveryMetadataIsNotSerialized(t *testing.T) {
+	encoded, err := json.Marshal(Message{ID: 1, RecipientID: 2, WasCreated: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "RecipientID") || strings.Contains(string(encoded), "WasCreated") || strings.Contains(string(encoded), "recipient") || strings.Contains(string(encoded), "wasCreated") {
+		t.Fatalf("internal delivery metadata leaked into API JSON: %s", encoded)
 	}
 }
