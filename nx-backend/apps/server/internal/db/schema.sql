@@ -2787,6 +2787,14 @@ CREATE TABLE IF NOT EXISTS app_users (
   member_expires_at TIMESTAMPTZ,
   register_source TEXT NOT NULL DEFAULT 'sms',
   last_login_at   TIMESTAMPTZ,
+  care_level      SMALLINT CHECK (care_level IS NULL OR care_level BETWEEN 1 AND 10),
+  care_label      TEXT NOT NULL DEFAULT '',
+  care_summary    TEXT NOT NULL DEFAULT '',
+  care_trend      TEXT NOT NULL DEFAULT 'stable',
+  care_data_status TEXT NOT NULL DEFAULT 'insufficient',
+  care_evaluated_at TIMESTAMPTZ,
+  care_knowledge_version TEXT NOT NULL DEFAULT '',
+  care_evaluation_version TEXT NOT NULL DEFAULT '',
   create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -2798,6 +2806,57 @@ ALTER TABLE app_users ADD COLUMN IF NOT EXISTS invite_code TEXT;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS personality_visibility TEXT NOT NULL DEFAULT 'friends'
   CHECK (personality_visibility IN ('private', 'friends'));
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS personality_visibility_version BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS care_level SMALLINT;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS care_label TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS care_summary TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS care_trend TEXT NOT NULL DEFAULT 'stable';
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS care_data_status TEXT NOT NULL DEFAULT 'insufficient';
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS care_evaluated_at TIMESTAMPTZ;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS care_knowledge_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS care_evaluation_version TEXT NOT NULL DEFAULT '';
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'app_users_care_level_check') THEN
+    ALTER TABLE app_users ADD CONSTRAINT app_users_care_level_check CHECK (care_level IS NULL OR care_level BETWEEN 1 AND 10);
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_app_users_care_level
+  ON app_users(care_level DESC NULLS LAST, care_evaluated_at DESC NULLS LAST, id DESC);
+
+CREATE TABLE IF NOT EXISTS care_evaluations (
+  id BIGSERIAL PRIMARY KEY,
+  app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  care_level SMALLINT CHECK (care_level IS NULL OR care_level BETWEEN 1 AND 10),
+  care_label TEXT NOT NULL DEFAULT '',
+  care_summary TEXT NOT NULL DEFAULT '',
+  care_trend TEXT NOT NULL DEFAULT 'stable',
+  data_status TEXT NOT NULL DEFAULT 'ready',
+  signals JSONB NOT NULL DEFAULT '{}'::jsonb,
+  source_window_start TIMESTAMPTZ,
+  source_window_end TIMESTAMPTZ,
+  knowledge_version TEXT NOT NULL DEFAULT '',
+  evaluation_version TEXT NOT NULL DEFAULT '',
+  error_message TEXT NOT NULL DEFAULT '',
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (jsonb_typeof(signals) = 'object')
+);
+CREATE INDEX IF NOT EXISTS idx_care_evaluations_user_time
+  ON care_evaluations(app_user_id, create_time DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS care_evaluation_queue (
+  id BIGSERIAL PRIMARY KEY,
+  app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'done', 'failed')),
+  attempts INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_error TEXT NOT NULL DEFAULT '',
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_care_evaluation_queue_pending_user
+  ON care_evaluation_queue(app_user_id) WHERE status IN ('pending', 'processing');
+CREATE INDEX IF NOT EXISTS idx_care_evaluation_queue_status
+  ON care_evaluation_queue(status, next_attempt_at, id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_account_unique
   ON app_users (lower(account))

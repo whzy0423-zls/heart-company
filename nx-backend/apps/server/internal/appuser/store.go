@@ -13,20 +13,28 @@ import (
 )
 
 type User struct {
-	ID              int64  `json:"id"`
-	Phone           string `json:"phone"`
-	Account         string `json:"account,omitempty"`
-	Nickname        string `json:"nickname"`
-	Avatar          string `json:"avatar"`
-	Status          string `json:"status"`
-	MemberLevel     string `json:"memberLevel"`
-	MemberStartedAt string `json:"memberStartedAt"`
-	MemberExpiresAt string `json:"memberExpiresAt"`
-	RemainingDays   int    `json:"remainingDays"`
-	RegisterSource  string `json:"registerSource"`
-	LastLoginAt     string `json:"lastLoginAt"`
-	CreateTime      string `json:"createTime"`
-	UpdateTime      string `json:"updateTime"`
+	ID                    int64  `json:"id"`
+	Phone                 string `json:"phone"`
+	Account               string `json:"account,omitempty"`
+	Nickname              string `json:"nickname"`
+	Avatar                string `json:"avatar"`
+	Status                string `json:"status"`
+	MemberLevel           string `json:"memberLevel"`
+	MemberStartedAt       string `json:"memberStartedAt"`
+	MemberExpiresAt       string `json:"memberExpiresAt"`
+	RemainingDays         int    `json:"remainingDays"`
+	RegisterSource        string `json:"registerSource"`
+	LastLoginAt           string `json:"lastLoginAt"`
+	CreateTime            string `json:"createTime"`
+	UpdateTime            string `json:"updateTime"`
+	CareLevel             *int   `json:"careLevel,omitempty"`
+	CareLabel             string `json:"careLabel,omitempty"`
+	CareSummary           string `json:"careSummary,omitempty"`
+	CareTrend             string `json:"careTrend,omitempty"`
+	CareDataStatus        string `json:"careDataStatus,omitempty"`
+	CareEvaluatedAt       string `json:"careEvaluatedAt,omitempty"`
+	CareKnowledgeVersion  string `json:"careKnowledgeVersion,omitempty"`
+	CareEvaluationVersion string `json:"careEvaluationVersion,omitempty"`
 }
 
 type UpdateAdminFieldsInput struct {
@@ -151,7 +159,7 @@ func (s *Store) UpdateSelfProfile(ctx context.Context, id int64, input UpdateSel
 		        avatar = COALESCE($2::text, avatar),
 		        update_time = now()
 		  WHERE id = $3 AND status = 'active'
-		  RETURNING id, phone, COALESCE(account, ''), nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time`,
+		    RETURNING id, phone, COALESCE(account, ''), nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time`,
 		nickname, avatar, id).
 		Scan(&u.ID, &u.Phone, &u.Account, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
 	if err != nil {
@@ -199,7 +207,7 @@ func (s *Store) UpdateAdminFields(ctx context.Context, id int64, input UpdateAdm
 		        member_level = COALESCE($2::text, member_level),
 		        update_time = now()
 		  WHERE id = $3
-		  RETURNING id, phone, COALESCE(account, ''), nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time`,
+		    RETURNING id, phone, COALESCE(account, ''), nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time`,
 		statusArg, memberLevelArg, id).
 		Scan(&u.ID, &u.Phone, &u.Account, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
 	if err != nil {
@@ -257,6 +265,57 @@ type UserInsight struct {
 	LatestChatTime             string          `json:"latestChatTime"`
 	CompatibilityCount         int             `json:"compatibilityCount"`
 	LatestCompatibilitySummary string          `json:"latestCompatibilitySummary"`
+	CareLevel                  *int            `json:"careLevel,omitempty"`
+	CareLabel                  string          `json:"careLabel,omitempty"`
+	CareSummary                string          `json:"careSummary,omitempty"`
+	CareTrend                  string          `json:"careTrend,omitempty"`
+	CareDataStatus             string          `json:"careDataStatus,omitempty"`
+	CareEvaluatedAt            string          `json:"careEvaluatedAt,omitempty"`
+}
+
+func (s *Store) populateCare(ctx context.Context, user *User) {
+	if user == nil {
+		return
+	}
+	var level sql.NullInt64
+	var evaluated sql.NullTime
+	if err := s.db.QueryRowContext(ctx, `SELECT care_level, care_label, care_summary, care_trend, care_data_status, care_evaluated_at FROM app_users WHERE id=$1`, user.ID).
+		Scan(&level, &user.CareLabel, &user.CareSummary, &user.CareTrend, &user.CareDataStatus, &evaluated); err != nil {
+		return
+	}
+	if level.Valid {
+		value := int(level.Int64)
+		user.CareLevel = &value
+	}
+	if evaluated.Valid {
+		user.CareEvaluatedAt = formatTime(evaluated.Time)
+	}
+}
+
+func (s *Store) populateInsightCare(ctx context.Context, userID int64, item *UserInsight) {
+	var u User
+	u.ID = userID
+	s.populateCare(ctx, &u)
+	item.CareLevel, item.CareLabel, item.CareSummary, item.CareTrend, item.CareDataStatus, item.CareEvaluatedAt = u.CareLevel, u.CareLabel, u.CareSummary, u.CareTrend, u.CareDataStatus, u.CareEvaluatedAt
+}
+
+func (s *Store) CareSnapshot(ctx context.Context, userID int64) (User, error) {
+	var u User
+	u.ID = userID
+	var level sql.NullInt64
+	var evaluated sql.NullTime
+	if err := s.db.QueryRowContext(ctx, `SELECT care_level, care_label, care_summary, care_trend, care_data_status, care_evaluated_at, care_knowledge_version, care_evaluation_version FROM app_users WHERE id=$1`, userID).
+		Scan(&level, &u.CareLabel, &u.CareSummary, &u.CareTrend, &u.CareDataStatus, &evaluated, &u.CareKnowledgeVersion, &u.CareEvaluationVersion); err != nil {
+		return User{}, err
+	}
+	if level.Valid {
+		value := int(level.Int64)
+		u.CareLevel = &value
+	}
+	if evaluated.Valid {
+		u.CareEvaluatedAt = formatTime(evaluated.Time)
+	}
+	return u, nil
 }
 
 // pageParams 从查询参数解析分页，默认 page=1, pageSize=20（上限 100）。
@@ -306,6 +365,14 @@ func appUserWhere(query map[string]string, alias string) (string, []any, error) 
 		args = append(args, ml)
 		where = append(where, col("member_level")+" = $"+strconv.Itoa(len(args)))
 	}
+	if rawCare := strings.TrimSpace(query["careLevel"]); rawCare != "" {
+		level, err := strconv.Atoi(rawCare)
+		if err != nil || level < 1 || level > 10 {
+			return "", nil, fmt.Errorf("invalid careLevel")
+		}
+		args = append(args, level)
+		where = append(where, col("care_level")+" = $"+strconv.Itoa(len(args)))
+	}
 	return strings.Join(where, " AND "), args, nil
 }
 
@@ -328,7 +395,7 @@ func (s *Store) List(ctx context.Context, query map[string]string) (PageResult[U
 	rows, err := s.db.QueryContext(ctx,
 		"SELECT id, phone, COALESCE(account, ''), nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time"+
 			" FROM app_users WHERE "+cond+
-			" ORDER BY create_time DESC, id DESC"+
+			" ORDER BY care_level DESC NULLS LAST, care_evaluated_at DESC NULLS LAST, create_time DESC, id DESC"+
 			" LIMIT $"+strconv.Itoa(len(args)-1)+" OFFSET $"+strconv.Itoa(len(args)), args...)
 	if err != nil {
 		return PageResult[User]{}, fmt.Errorf("appuser list: %w", err)

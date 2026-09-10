@@ -87,6 +87,7 @@ const canOpenUserInsights = computed(() =>
   canViewUserInsights(accessStore.accessCodes),
 );
 const query = reactive({
+  careLevel: undefined as number | undefined,
   keyword: '',
   memberLevel: '',
   page: 1,
@@ -100,6 +101,7 @@ const columns = [
   { dataIndex: 'phone', fixed: 'left' as const, title: '手机号', width: 160 },
   { dataIndex: 'nickname', title: '昵称', width: 160 },
   { dataIndex: 'memberLevel', title: '会员等级', width: 130 },
+  { dataIndex: 'careLevel', title: '关怀等级', width: 130 },
   { dataIndex: 'memberExpiresAt', title: '会员到期', width: 180 },
   { dataIndex: 'remainingDays', title: '剩余天数', width: 100 },
   { dataIndex: 'status', title: '状态', width: 100 },
@@ -137,6 +139,7 @@ async function load(options: { rethrow?: boolean } = {}) {
       page: query.page,
       pageSize: query.pageSize,
       status: query.status || undefined,
+      careLevel: query.careLevel,
     });
     if (currentRequestId !== requestId) return;
     customers.value = result.items;
@@ -293,6 +296,13 @@ onMounted(() => {
             :options="statusOptions"
             placeholder="状态"
           />
+          <Select
+            v-model:value="query.careLevel"
+            allow-clear
+            class="filter-select"
+            :options="Array.from({ length: 10 }, (_, i) => ({ label: `关怀 ${i + 1} 级`, value: i + 1 }))"
+            placeholder="关怀等级"
+          />
           <Space class="filter-actions">
             <Button type="primary" @click="search">查询</Button>
           </Space>
@@ -321,6 +331,12 @@ onMounted(() => {
             </template>
             <template v-if="column.dataIndex === 'memberLevel'">
               <Tag>{{ memberLevelLabel(record.memberLevel) }}</Tag>
+            </template>
+            <template v-if="column.dataIndex === 'careLevel'">
+              <Tag v-if="record.careLevel" :color="record.careLevel >= 8 ? 'error' : record.careLevel >= 4 ? 'warning' : 'success'">
+                {{ record.careLevel }} 级{{ record.careLabel ? ` · ${record.careLabel}` : '' }}
+              </Tag>
+              <span v-else>-</span>
             </template>
             <template v-if="column.dataIndex === 'status'">
               <Tag :color="statusMeta(customerRecord(record).status).color">
@@ -424,6 +440,18 @@ onMounted(() => {
           <Descriptions.Item label="更新时间">
             {{ detail.updateTime }}
           </Descriptions.Item>
+          <Descriptions.Item label="关怀等级">
+            <Tag v-if="detail.careLevel" :color="detail.careLevel >= 8 ? 'error' : detail.careLevel >= 4 ? 'warning' : 'success'">
+              {{ detail.careLevel }} 级 · {{ detail.careLabel || '阶段性标注' }}
+            </Tag>
+            <span v-else>数据积累中</span>
+          </Descriptions.Item>
+          <Descriptions.Item label="关怀摘要">
+            {{ detail.careSummary || '暂未形成足够数据' }}
+          </Descriptions.Item>
+          <Descriptions.Item label="趋势 / 更新时间">
+            {{ detail.careTrend || '-' }} / {{ detail.careEvaluatedAt || '-' }}
+          </Descriptions.Item>
         </Descriptions>
       </div>
     </Drawer>
@@ -468,7 +496,7 @@ onMounted(() => {
 
 .filter-bar {
   display: grid;
-  grid-template-columns: minmax(220px, 360px) 160px 140px auto;
+  grid-template-columns: minmax(220px, 360px) 160px 140px 160px auto;
   gap: 10px;
   justify-content: start;
 }

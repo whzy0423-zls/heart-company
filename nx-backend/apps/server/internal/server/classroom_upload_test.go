@@ -16,14 +16,14 @@ import (
 )
 
 type fakeClassroomUploadHandlerService struct {
-	initiated   classroom.InitiateUploadResult
-	signed      storage.SignPartResult
-	completed   classroom.CompleteUploadResult
-	completeErr error
-	aborted     classroom.UploadTask
-	calls       []string
-	progress    classroom.UploadTask
-	completeCtx context.Context
+	initiated      classroom.InitiateUploadResult
+	signed         storage.SignPartResult
+	completed      classroom.CompleteUploadResult
+	completeErr    error
+	aborted        classroom.UploadTask
+	calls          []string
+	progress       classroom.UploadTask
+	completeCtx    context.Context
 	completeCtxErr error
 }
 

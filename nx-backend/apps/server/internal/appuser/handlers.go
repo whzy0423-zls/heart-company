@@ -26,12 +26,22 @@ func queryMap(r *http.Request) map[string]string {
 func (s *Store) HandleAppUsers(w http.ResponseWriter, r *http.Request) {
 	result, err := s.List(r.Context(), queryMap(r))
 	if err != nil {
-		if strings.Contains(err.Error(), "invalid userId") {
+		if strings.Contains(err.Error(), "invalid userId") || strings.Contains(err.Error(), "invalid careLevel") {
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	for index := range result.Items {
+		if care, careErr := s.CareSnapshot(r.Context(), result.Items[index].ID); careErr == nil {
+			result.Items[index].CareLevel = care.CareLevel
+			result.Items[index].CareLabel = care.CareLabel
+			result.Items[index].CareSummary = care.CareSummary
+			result.Items[index].CareTrend = care.CareTrend
+			result.Items[index].CareDataStatus = care.CareDataStatus
+			result.Items[index].CareEvaluatedAt = care.CareEvaluatedAt
+		}
 	}
 	httpx.OK(w, result)
 }
@@ -40,12 +50,15 @@ func (s *Store) HandleAppUsers(w http.ResponseWriter, r *http.Request) {
 func (s *Store) HandleAppUserInsights(w http.ResponseWriter, r *http.Request) {
 	result, err := s.ListInsights(r.Context(), queryMap(r))
 	if err != nil {
-		if strings.Contains(err.Error(), "invalid userId") {
+		if strings.Contains(err.Error(), "invalid userId") || strings.Contains(err.Error(), "invalid careLevel") {
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	for index := range result.Items {
+		s.populateInsightCare(r.Context(), result.Items[index].ID, &result.Items[index])
 	}
 	httpx.OK(w, result)
 }
@@ -83,6 +96,9 @@ func (s *Store) handleAppUserDetail(w http.ResponseWriter, r *http.Request, id i
 		}
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if care, careErr := s.CareSnapshot(r.Context(), id); careErr == nil {
+		user.CareLevel, user.CareLabel, user.CareSummary, user.CareTrend, user.CareDataStatus, user.CareEvaluatedAt = care.CareLevel, care.CareLabel, care.CareSummary, care.CareTrend, care.CareDataStatus, care.CareEvaluatedAt
 	}
 	httpx.OK(w, user)
 }

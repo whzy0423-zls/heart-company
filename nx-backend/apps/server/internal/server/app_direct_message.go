@@ -132,6 +132,10 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 			mapDirectMessageError(w, err)
 			return
 		}
+		if item.WasCreated {
+			s.enqueueCareEvaluation(item.RecipientID)
+			s.enqueueCareEvaluation(user.ID)
+		}
 		s.directRealtimeHub.Publish(id, map[string]any{"type": "message", "data": item})
 		if shouldNotifyDirectMessage(item) {
 			senderName := strings.TrimSpace(user.RealName)

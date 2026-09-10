@@ -224,10 +224,19 @@ func (s *Server) retrieveAppChatKnowledge(ctx context.Context, userID, sessionID
 }
 
 func (s *Server) saveAppChatPair(ctx context.Context, sessionID int64, question, answer string, sources json.RawMessage, trace *chat.KnowledgeTrace) (int64, error) {
+	var messageID int64
+	var err error
 	if trace == nil {
-		return s.appChat.SavePair(ctx, sessionID, question, answer, sources)
+		messageID, err = s.appChat.SavePair(ctx, sessionID, question, answer, sources)
+	} else {
+		messageID, err = s.appChat.SavePairWithKnowledgeTrace(ctx, sessionID, question, answer, sources, *trace)
 	}
-	return s.appChat.SavePairWithKnowledgeTrace(ctx, sessionID, question, answer, sources, *trace)
+	if err == nil && messageID > 0 {
+		if s.careEvaluator != nil {
+			s.careEvaluator.EnqueueSession(ctx, sessionID)
+		}
+	}
+	return messageID, err
 }
 
 type appChatPreferenceStore interface {
@@ -432,7 +441,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		answer.Answer = answerhygiene.Clean(body.Question, answer.Answer)
 		sourcesJSON, _ := json.Marshal(answer.Sources)
-		messageID, saveErr := s.appChat.SavePair(ctx, sessionID, body.Question, answer.Answer, sourcesJSON)
+		messageID, saveErr := s.saveAppChatPair(ctx, sessionID, body.Question, answer.Answer, sourcesJSON, nil)
 		if saveErr != nil {
 			httpx.Fail(w, http.StatusInternalServerError, "回答保存失败，请重试")
 			return
