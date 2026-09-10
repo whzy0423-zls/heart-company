@@ -492,6 +492,15 @@ func (s *Store) finalizePublish(ctx context.Context, prepared preparedImport, pa
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
 		return err
 	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE theory_libraries SET status='enabled',update_time=now() WHERE id=$1
+	`, prepared.LibraryID)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		return fmt.Errorf("enneagram library state changed concurrently")
+	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE app_chat_knowledge_bindings SET status='disabled',update_time=now()
 		WHERE layer_kind=$1 AND enneagram_type IS NOT DISTINCT FROM $2 AND status='enabled'
@@ -515,7 +524,7 @@ func (s *Store) finalizePublish(ctx context.Context, prepared preparedImport, pa
 	if err != nil {
 		return err
 	}
-	result, err := tx.ExecContext(ctx, `
+	result, err = tx.ExecContext(ctx, `
 		UPDATE enneagram_catalog_imports SET status='published',published_release_id=$2,published_at=now(),update_time=now()
 		WHERE id=$1 AND status='approved'
 	`, prepared.ImportID, releaseID)

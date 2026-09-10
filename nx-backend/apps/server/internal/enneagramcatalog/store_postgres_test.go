@@ -58,6 +58,16 @@ func TestCatalogImportPublishIsolationAndForwardRollbackPostgres(t *testing.T) {
 			t.Fatalf("publish %s: %v", first[index].LibraryKey, err)
 		}
 	}
+	var enabledLibraries int
+	if err := database.QueryRow(`
+		SELECT count(*) FROM theory_libraries
+		WHERE key IN ('enneagram-core','enneagram-type-02','enneagram-type-03') AND status='enabled'
+	`).Scan(&enabledLibraries); err != nil {
+		t.Fatal(err)
+	}
+	if enabledLibraries != 3 {
+		t.Fatalf("published catalogs must enable their libraries, got %d enabled", enabledLibraries)
+	}
 
 	changed := validCatalog(t)
 	changed.Packages[3].Dimensions[RequiredDimensions[0]][0].Text = "changed type three content"
