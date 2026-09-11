@@ -68,3 +68,15 @@ export function deleteStorySkillApi(id: number) {
 export function publishStorySkillApi(id: number) {
   return requestClient.post<{ id: number; status: string }>(`/story-skills/${id}/publish`, {});
 }
+
+export interface AppFeatureConfig {
+  lifeStoryEnabled: boolean;
+}
+
+export function getAppFeatureConfigApi() {
+  return requestClient.get<AppFeatureConfig>('/app-feature-config');
+}
+
+export function updateAppFeatureConfigApi(data: AppFeatureConfig) {
+  return requestClient.put<AppFeatureConfig>('/app-feature-config', data);
+}

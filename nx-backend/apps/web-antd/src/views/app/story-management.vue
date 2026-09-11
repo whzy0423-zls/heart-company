@@ -38,9 +38,11 @@ import {
   getStorySkillApi,
   getStorySkillsApi,
   getStoryGenerationConfigApi,
+  getAppFeatureConfigApi,
   publishStorySkillApi,
   updateStorySkillApi,
   updateStoryGenerationConfigApi,
+  updateAppFeatureConfigApi,
   testStoryGenerationConfigApi,
   uploadStorySkillApi,
 } from '#/api';
@@ -80,6 +82,9 @@ const actionLoadingId = ref<number>();
 const modelLoading = ref(false);
 const modelSaving = ref(false);
 const modelTesting = ref(false);
+const featureLoading = ref(false);
+const featureSaving = ref(false);
+const lifeStoryEnabled = ref(true);
 const modelKeySet = ref(false);
 const modelForm = reactive<StoryGenerationConfigPayload>({
   enabled: false,
@@ -151,6 +156,23 @@ async function testModelConfig() {
     else message.error(result?.message || '连接测试失败');
   } catch { message.error('连接测试失败，请检查配置'); }
   finally { modelTesting.value = false; }
+}
+async function loadFeatureConfig() {
+  featureLoading.value = true;
+  try {
+    const data = await getAppFeatureConfigApi();
+    lifeStoryEnabled.value = data?.lifeStoryEnabled ?? true;
+  } catch { message.error('App 功能开关加载失败'); }
+  finally { featureLoading.value = false; }
+}
+async function saveFeatureConfig() {
+  featureSaving.value = true;
+  try {
+    const data = await updateAppFeatureConfigApi({ lifeStoryEnabled: lifeStoryEnabled.value });
+    lifeStoryEnabled.value = data.lifeStoryEnabled;
+    message.success('App 功能开关已保存，新用户下次打开 App 生效');
+  } catch { message.error('App 功能开关保存失败'); }
+  finally { featureSaving.value = false; }
 }
 function openUpload() {
   Object.assign(form, { category: 'myth', instructions: '', key: '', name: '', summary: '', version: '1.0.0' });
@@ -253,13 +275,25 @@ function remove(item: StorySkillAdminItem) {
 onMounted(async () => {
   try { access.setAccessCodes(await getAccessCodesApi()); }
   catch {}
-  finally { await Promise.all([load(), loadModelConfig()]); }
+  finally { await Promise.all([load(), loadModelConfig(), loadFeatureConfig()]); }
 });
 </script>
 
 <template>
   <Page title="我的故事管理">
     <Alert v-if="error" :message="error" closable type="error" @close="error = ''" />
+    <Card class="story-feature-card" title="App 功能开关" :loading="featureLoading">
+      <div class="feature-row">
+        <div>
+          <div class="feature-title">我的故事</div>
+          <div class="feature-description">控制 App 首页和侧边栏是否显示“我的故事”入口。关闭后不会删除已有故事、草稿或地图数据。</div>
+        </div>
+        <div class="feature-control">
+          <Switch v-model:checked="lifeStoryEnabled" checked-children="显示" un-checked-children="隐藏" />
+          <Button v-if="canEdit" type="primary" :loading="featureSaving" @click="saveFeatureConfig">保存</Button>
+        </div>
+      </div>
+    </Card>
     <Card class="story-model-card" title="故事生成模型" :loading="modelLoading">
       <template #extra><Tag :color="modelKeySet ? 'green' : 'default'">{{ modelKeySet ? '密钥已配置' : '未配置密钥' }}</Tag></template>
       <Alert class="model-hint" type="info" show-icon message="仅用于“我的故事”生成，不会改变聊天、语音或其他模型。未启用时沿用聊天模型。" />
@@ -372,6 +406,11 @@ onMounted(async () => {
 <style scoped>
 .story-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .story-model-card { margin-bottom: 18px; }
+.story-feature-card { margin-bottom: 18px; }
+.feature-row { align-items: center; display: flex; gap: 24px; justify-content: space-between; }
+.feature-title { font-size: 16px; font-weight: 600; }
+.feature-description { color: var(--vben-color-text-secondary); margin-top: 6px; }
+.feature-control { align-items: center; display: flex; flex-shrink: 0; gap: 12px; }
 .model-hint { margin-bottom: 16px; }
 .model-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .model-actions { display: flex; justify-content: flex-end; gap: 10px; }
@@ -390,6 +429,8 @@ onMounted(async () => {
   .story-toolbar :deep(.ant-segmented) { overflow-x: auto; }
   .form-grid { grid-template-columns: 1fr; gap: 0; }
   .model-grid { grid-template-columns: 1fr; }
+  .feature-row { align-items: stretch; flex-direction: column; }
+  .feature-control { justify-content: flex-end; }
   .desktop-skill-table { display: none; }
   .mobile-skill-list { display: grid; gap: 10px; }
   .mobile-skill-item { border: 1px solid rgb(128 128 128 / 22%); border-radius: 6px; padding: 14px; }
