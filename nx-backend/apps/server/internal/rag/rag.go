@@ -7,15 +7,21 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 )
 
-const recentHistoryLimit = 20
-
-const minRAGRelevanceScore = 6
+const (
+	recentHistoryLimit        = 20
+	minRAGRelevanceScore      = 6
+	defaultSourceLimit        = 4
+	maxSourceLimit            = 14
+	defaultSourceSnippetRunes = 92
+	maxSourceSnippetRunes     = 360
+)
 
 var (
 	arabicEnneagramTypePattern    = regexp.MustCompile(`(?i)(^|[^a-z0-9])([1-9])(?:号)?型`)
@@ -79,6 +85,10 @@ type AskInput struct {
 	CurrentDirectives   []string         `json:"currentDirectives,omitempty"`
 	Tier                string           `json:"tier,omitempty"`
 	RuntimeInstructions string           `json:"-"`
+	MaxOutputTokens     int              `json:"-"`
+	CompletionTimeout   time.Duration    `json:"-"`
+	SourceLimit         int              `json:"-"`
+	SourceSnippetRunes  int              `json:"-"`
 }
 
 type Answer struct {
@@ -117,6 +127,10 @@ type GenerateInput struct {
 	CurrentDirectives   []string         `json:"currentDirectives,omitempty"`
 	Tier                string           `json:"tier,omitempty"`
 	RuntimeInstructions string           `json:"-"`
+	MaxOutputTokens     int              `json:"-"`
+	CompletionTimeout   time.Duration    `json:"-"`
+	SourceLimit         int              `json:"-"`
+	SourceSnippetRunes  int              `json:"-"`
 }
 
 type Option func(*Service)
@@ -162,7 +176,9 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 		}, nil
 	}
 
-	matches := s.search(question, relevantMainType(input), 4)
+	sourceLimit := boundedSourceOverride(input.SourceLimit, maxSourceLimit)
+	sourceSnippetRunes := boundedSourceOverride(input.SourceSnippetRunes, maxSourceSnippetRunes)
+	matches := s.search(question, relevantMainType(input), sourceValueOrDefault(sourceLimit, defaultSourceLimit))
 	if len(matches) == 0 {
 		// 检索未命中：仍尝试让 AI 结合九型常识作答（Sources 为空）；
 		// 只有 AI 不可用或返回空时，才回退到固定兜底文案。
@@ -178,6 +194,10 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 				CurrentDirectives:   input.CurrentDirectives,
 				Tier:                input.Tier,
 				RuntimeInstructions: input.RuntimeInstructions,
+				MaxOutputTokens:     input.MaxOutputTokens,
+				CompletionTimeout:   input.CompletionTimeout,
+				SourceLimit:         sourceLimit,
+				SourceSnippetRunes:  sourceSnippetRunes,
 			})
 			if err == nil && strings.TrimSpace(generated) != "" {
 				return Answer{
@@ -197,7 +217,7 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 	sources := make([]Source, 0, len(matches))
 	parts := make([]string, 0, len(matches))
 	for _, match := range matches {
-		snippet := trimRunes(match.doc.Content, 92)
+		snippet := trimRunes(match.doc.Content, sourceValueOrDefault(sourceSnippetRunes, defaultSourceSnippetRunes))
 		sources = append(sources, Source{
 			ID:      match.doc.ID,
 			Title:   match.doc.Title,
@@ -232,6 +252,10 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 			CurrentDirectives:   input.CurrentDirectives,
 			Tier:                input.Tier,
 			RuntimeInstructions: input.RuntimeInstructions,
+			MaxOutputTokens:     input.MaxOutputTokens,
+			CompletionTimeout:   input.CompletionTimeout,
+			SourceLimit:         sourceLimit,
+			SourceSnippetRunes:  sourceSnippetRunes,
 		})
 		if err == nil && strings.TrimSpace(generated) != "" {
 			return Answer{Answer: strings.TrimSpace(generated), Sources: sources, Suggestions: suggestions}, nil
@@ -270,7 +294,9 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 		return emit(delta)
 	}
 
-	matches := s.search(question, relevantMainType(input), 4)
+	sourceLimit := boundedSourceOverride(input.SourceLimit, maxSourceLimit)
+	sourceSnippetRunes := boundedSourceOverride(input.SourceSnippetRunes, maxSourceSnippetRunes)
+	matches := s.search(question, relevantMainType(input), sourceValueOrDefault(sourceLimit, defaultSourceLimit))
 	if len(matches) == 0 {
 		if s.generator != nil {
 			generated, err := s.generateStreaming(ctx, GenerateInput{
@@ -284,6 +310,10 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 				CurrentDirectives:   input.CurrentDirectives,
 				Tier:                input.Tier,
 				RuntimeInstructions: input.RuntimeInstructions,
+				MaxOutputTokens:     input.MaxOutputTokens,
+				CompletionTimeout:   input.CompletionTimeout,
+				SourceLimit:         sourceLimit,
+				SourceSnippetRunes:  sourceSnippetRunes,
 			}, trackedEmit)
 			if err != nil && streamStarted {
 				return Answer{}, err
@@ -310,7 +340,7 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 	sources := make([]Source, 0, len(matches))
 	parts := make([]string, 0, len(matches))
 	for _, match := range matches {
-		snippet := trimRunes(match.doc.Content, 92)
+		snippet := trimRunes(match.doc.Content, sourceValueOrDefault(sourceSnippetRunes, defaultSourceSnippetRunes))
 		sources = append(sources, Source{
 			ID:      match.doc.ID,
 			Title:   match.doc.Title,
@@ -344,6 +374,10 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 			CurrentDirectives:   input.CurrentDirectives,
 			Tier:                input.Tier,
 			RuntimeInstructions: input.RuntimeInstructions,
+			MaxOutputTokens:     input.MaxOutputTokens,
+			CompletionTimeout:   input.CompletionTimeout,
+			SourceLimit:         sourceLimit,
+			SourceSnippetRunes:  sourceSnippetRunes,
 		}, trackedEmit)
 		if err != nil && streamStarted {
 			return Answer{}, err
@@ -440,6 +474,23 @@ func relevantMainType(input AskInput) int {
 		return input.ConversationCard.MainType
 	}
 	return input.UserProfile.MainType
+}
+
+func boundedSourceOverride(value, maximum int) int {
+	if value <= 0 {
+		return 0
+	}
+	if value > maximum {
+		return maximum
+	}
+	return value
+}
+
+func sourceValueOrDefault(value, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
 }
 
 func (s *Service) search(question string, mainType int, limit int) []scoredDoc {

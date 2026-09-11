@@ -7,10 +7,144 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 )
+
+func TestExplicitGenerationControlsPropagateToEveryGeneratorPath(t *testing.T) {
+	documents := make([]Document, 8)
+	for index := range documents {
+		documents[index] = Document{
+			ID:      fmt.Sprintf("type-1-%02d", index),
+			Title:   "1号 完美型成长原则",
+			Content: strings.Repeat("完美型成长原则", 30),
+			Tags:    []string{"完美型", "成长"},
+		}
+	}
+
+	for _, test := range []struct {
+		name      string
+		question  string
+		stream    bool
+		wantMatch bool
+	}{
+		{name: "sync no match", question: "番茄炒蛋怎么做", stream: false, wantMatch: false},
+		{name: "sync matched documents", question: "完美型成长原则", stream: false, wantMatch: true},
+		{name: "stream no match", question: "番茄炒蛋怎么做", stream: true, wantMatch: false},
+		{name: "stream matched documents", question: "完美型成长原则", stream: true, wantMatch: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			generator := &capturingStreamingGenerator{answer: "模型回答"}
+			service := NewService(documents, WithGenerator(generator))
+			input := AskInput{
+				Question:           test.question,
+				MaxOutputTokens:    1880,
+				CompletionTimeout:  70 * time.Second,
+				SourceLimit:        6,
+				SourceSnippetRunes: 137,
+			}
+
+			var err error
+			if test.stream {
+				_, err = service.AskStream(context.Background(), input, func(string) error { return nil })
+			} else {
+				_, err = service.Ask(context.Background(), input)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if generator.input.MaxOutputTokens != input.MaxOutputTokens {
+				t.Errorf("MaxOutputTokens = %d, want %d", generator.input.MaxOutputTokens, input.MaxOutputTokens)
+			}
+			if generator.input.CompletionTimeout != input.CompletionTimeout {
+				t.Errorf("CompletionTimeout = %v, want %v", generator.input.CompletionTimeout, input.CompletionTimeout)
+			}
+			if generator.input.SourceLimit != input.SourceLimit {
+				t.Errorf("SourceLimit = %d, want %d", generator.input.SourceLimit, input.SourceLimit)
+			}
+			if generator.input.SourceSnippetRunes != input.SourceSnippetRunes {
+				t.Errorf("SourceSnippetRunes = %d, want %d", generator.input.SourceSnippetRunes, input.SourceSnippetRunes)
+			}
+			if test.wantMatch {
+				if len(generator.input.Sources) != input.SourceLimit {
+					t.Fatalf("len(Sources) = %d, want explicit limit %d", len(generator.input.Sources), input.SourceLimit)
+				}
+				for _, source := range generator.input.Sources {
+					if got := utf8.RuneCountInString(source.Snippet); got != input.SourceSnippetRunes+3 {
+						t.Errorf("snippet runes = %d, want %d content runes plus ellipsis", got, input.SourceSnippetRunes)
+					}
+				}
+			} else if len(generator.input.Sources) != 0 {
+				t.Fatalf("no-match Sources = %+v, want empty", generator.input.Sources)
+			}
+		})
+	}
+}
+
+func TestExplicitGenerationControlsKeepLegacySourceDefaultsAtZero(t *testing.T) {
+	documents := make([]Document, 6)
+	for index := range documents {
+		documents[index] = Document{
+			ID:      fmt.Sprintf("type-1-%02d", index),
+			Title:   "1号 完美型成长原则",
+			Content: strings.Repeat("完美型成长原则", 30),
+			Tags:    []string{"完美型", "成长"},
+		}
+	}
+	generator := &fakeGenerator{answer: "模型回答"}
+	service := NewService(documents, WithGenerator(generator))
+
+	if _, err := service.Ask(context.Background(), AskInput{Question: "完美型成长原则"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(generator.input.Sources) != 4 {
+		t.Fatalf("len(Sources) = %d, want legacy default 4", len(generator.input.Sources))
+	}
+	for _, source := range generator.input.Sources {
+		if got := utf8.RuneCountInString(source.Snippet); got != 95 {
+			t.Errorf("snippet runes = %d, want legacy 92 content runes plus ellipsis", got)
+		}
+	}
+	if generator.input.MaxOutputTokens != 0 || generator.input.CompletionTimeout != 0 || generator.input.SourceLimit != 0 || generator.input.SourceSnippetRunes != 0 {
+		t.Fatalf("zero generation controls changed during propagation: %+v", generator.input)
+	}
+}
+
+func TestExplicitGenerationControlsClampSourceBounds(t *testing.T) {
+	documents := make([]Document, 16)
+	for index := range documents {
+		documents[index] = Document{
+			ID:      fmt.Sprintf("type-1-%02d", index),
+			Title:   "1号 完美型成长原则",
+			Content: strings.Repeat("完美型成长原则", 100),
+			Tags:    []string{"完美型", "成长"},
+		}
+	}
+	generator := &fakeGenerator{answer: "模型回答"}
+	service := NewService(documents, WithGenerator(generator))
+
+	if _, err := service.Ask(context.Background(), AskInput{
+		Question:           "完美型成长原则",
+		SourceLimit:        100,
+		SourceSnippetRunes: 10000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if generator.input.SourceLimit != 14 || len(generator.input.Sources) != 14 {
+		t.Fatalf("SourceLimit = %d and len(Sources) = %d, want conservative maximum 14", generator.input.SourceLimit, len(generator.input.Sources))
+	}
+	if generator.input.SourceSnippetRunes != 360 {
+		t.Fatalf("SourceSnippetRunes = %d, want conservative maximum 360", generator.input.SourceSnippetRunes)
+	}
+	for _, source := range generator.input.Sources {
+		if got := utf8.RuneCountInString(source.Snippet); got != 363 {
+			t.Errorf("snippet runes = %d, want 360 content runes plus ellipsis", got)
+		}
+	}
+}
 
 func TestAskPrioritizesConversationCardMainType(t *testing.T) {
 	service := NewService([]Document{
