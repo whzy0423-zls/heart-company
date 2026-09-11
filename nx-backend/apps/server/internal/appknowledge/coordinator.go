@@ -148,7 +148,7 @@ func (c *Coordinator) Retrieve(ctx context.Context, input Input) (Result, error)
 	typeLayers := []string{LayerEnneagramType}
 	if explicitTypes {
 		typeLayers = make([]string, 0, len(requestedTypes))
-		for layer, documents := range c.searchRequestedTypes(ctx, requestedTypes, resolved.RequestedTypeBindings, &trace) {
+		for layer, documents := range c.searchRequestedTypes(ctx, input.Query, requestedTypes, resolved.RequestedTypeBindings, &trace) {
 			documentsByLayer[layer] = documents
 		}
 		for _, typeNumber := range requestedTypes {
@@ -235,7 +235,7 @@ type requestedTypeSearchResult struct {
 	diagnostics []Diagnostic
 }
 
-func (c *Coordinator) searchRequestedTypes(ctx context.Context, requestedTypes []int, bindings []*Binding, trace *Trace) map[string][]rag.Document {
+func (c *Coordinator) searchRequestedTypes(ctx context.Context, query string, requestedTypes []int, bindings []*Binding, trace *Trace) map[string][]rag.Document {
 	bindingsByType := make(map[int]*Binding, len(bindings))
 	for _, binding := range bindings {
 		if binding == nil || binding.EnneagramType == nil {
@@ -269,8 +269,8 @@ func (c *Coordinator) searchRequestedTypes(ctx context.Context, requestedTypes [
 				results[index] = result
 				return
 			}
-			typeQuery := requestedTypeSearchQuery(typeNumber)
-			documents, err := c.releases.SearchReleaseChunks(ctx, binding.ReleaseID, typeQuery, searchCandidateLimit(1), 0.2)
+			typeQuery := requestedTypeSearchQuery(query, typeNumber)
+			documents, err := c.releases.SearchReleaseChunks(ctx, binding.ReleaseID, typeQuery, searchCandidateLimit(1), 0)
 			if err != nil {
 				result.diagnostics = append(result.diagnostics, Diagnostic{Layer: layer, Code: "search_failed"})
 				results[index] = result
@@ -306,12 +306,13 @@ func (c *Coordinator) searchRequestedTypes(ctx context.Context, requestedTypes [
 	return documentsByLayer
 }
 
-func requestedTypeSearchQuery(typeNumber int) string {
+func requestedTypeSearchQuery(query string, typeNumber int) string {
 	if typeNumber < 1 || typeNumber >= len(enneagramTypeCanonicalNames) {
 		return ""
 	}
 	return fmt.Sprintf(
-		"九型人格 %d号%s 核心欲望 核心恐惧 防御机制 压力表现 关系模式 成长方向",
+		"%s\n九型人格检索锚点：%d号%s；核心欲望、核心恐惧、防御机制、压力表现、关系模式、成长方向",
+		strings.TrimSpace(query),
 		typeNumber,
 		enneagramTypeCanonicalNames[typeNumber],
 	)

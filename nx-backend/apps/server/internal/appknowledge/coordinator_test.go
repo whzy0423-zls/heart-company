@@ -45,17 +45,22 @@ type releaseSearchStub struct {
 	errors        map[int64]error
 	releaseIDs    []int64
 	topKs         map[int64][]int
+	minScores     map[int64][]float64
 	mu            sync.Mutex
 }
 
-func (s *releaseSearchStub) SearchReleaseChunks(_ context.Context, releaseID int64, _ string, topK int, _ float64) ([]rag.Document, error) {
+func (s *releaseSearchStub) SearchReleaseChunks(_ context.Context, releaseID int64, _ string, topK int, minScore float64) ([]rag.Document, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.releaseIDs = append(s.releaseIDs, releaseID)
 	if s.topKs == nil {
 		s.topKs = make(map[int64][]int)
 	}
+	if s.minScores == nil {
+		s.minScores = make(map[int64][]float64)
+	}
 	s.topKs[releaseID] = append(s.topKs[releaseID], topK)
+	s.minScores[releaseID] = append(s.minScores[releaseID], minScore)
 	return append([]rag.Document(nil), s.docsByRelease[releaseID]...), s.errors[releaseID]
 }
 
@@ -168,6 +173,12 @@ func TestCoordinatorRequestedTypesSearchesOnlyExplicitBindingsInStableOrder(t *t
 		if !reflect.DeepEqual(releases.topKs[releaseID], []int{3}) {
 			t.Fatalf("type release %d topKs = %v, want [3]", releaseID, releases.topKs[releaseID])
 		}
+		if !reflect.DeepEqual(releases.minScores[releaseID], []float64{0}) {
+			t.Fatalf("type release %d minScores = %v, want [0]", releaseID, releases.minScores[releaseID])
+		}
+	}
+	if !reflect.DeepEqual(releases.minScores[100], []float64{0.2}) {
+		t.Fatalf("explicit theory minScores = %v, want [0.2]", releases.minScores[100])
 	}
 	if runeLength(result.Documents) > 5000 {
 		t.Fatalf("combined reference = %d runes, want <= 5000", runeLength(result.Documents))
@@ -197,6 +208,9 @@ func TestCoordinatorEmptyRequestedTypesPreservesLegacyLimitsAndCurrentCard(t *te
 	}
 	if !reflect.DeepEqual(public.topKs, []int{12}) || !reflect.DeepEqual(releases.topKs[100], []int{9}) || !reflect.DeepEqual(releases.topKs[106], []int{9}) {
 		t.Fatalf("legacy candidate limits public=%v theory=%v type=%v", public.topKs, releases.topKs[100], releases.topKs[106])
+	}
+	if !reflect.DeepEqual(releases.minScores[100], []float64{0.2}) || !reflect.DeepEqual(releases.minScores[106], []float64{0.2}) {
+		t.Fatalf("legacy minScores theory=%v type=%v, want [0.2]/[0.2]", releases.minScores[100], releases.minScores[106])
 	}
 }
 
@@ -272,43 +286,42 @@ func TestCoordinatorRequestedTypeSearchesRunConcurrentlyAndCollectInNumericOrder
 }
 
 type lexicalRequestedTypeSearcher struct {
-	mu      sync.Mutex
-	queries map[int]string
+	mu    sync.Mutex
+	calls map[int]requestedTypeSearchCall
 }
 
-func (s *lexicalRequestedTypeSearcher) SearchReleaseChunks(_ context.Context, releaseID int64, query string, _ int, _ float64) ([]rag.Document, error) {
+type requestedTypeSearchCall struct {
+	query    string
+	minScore float64
+}
+
+func (s *lexicalRequestedTypeSearcher) SearchReleaseChunks(_ context.Context, releaseID int64, query string, _ int, minScore float64) ([]rag.Document, error) {
 	if releaseID == 100 {
 		return []rag.Document{{ID: "theory", Title: "理论", Content: "正式理论"}}, nil
 	}
 	typeNumber := int(releaseID - 100)
-	names := []string{"", "完美型", "助人型", "成就型", "自我型", "思考型", "忠诚型", "活跃型", "领袖型", "和平型"}
 	s.mu.Lock()
-	if s.queries == nil {
-		s.queries = make(map[int]string)
+	if s.calls == nil {
+		s.calls = make(map[int]requestedTypeSearchCall)
 	}
-	s.queries[typeNumber] = query
+	s.calls[typeNumber] = requestedTypeSearchCall{query: query, minScore: minScore}
 	s.mu.Unlock()
-	wantAnchor := fmt.Sprintf("%d号%s", typeNumber, names[typeNumber])
-	if !strings.Contains(query, "九型人格") || !strings.Contains(query, wantAnchor) {
+	// Mirrors theorystore's score gate for a valid release chunk whose weak
+	// metadata has zero lexical overlap with this particular user wording.
+	if minScore > 0 {
 		return nil, nil
 	}
-	for otherType := 1; otherType <= 9; otherType++ {
-		if otherType != typeNumber && (strings.Contains(query, fmt.Sprintf("%d号", otherType)) || strings.Contains(query, names[otherType])) {
-			return nil, fmt.Errorf("type %d query contains type %d anchor", typeNumber, otherType)
-		}
-	}
 	return []rag.Document{{
-		ID: fmt.Sprintf("type-%d", typeNumber), Title: wantAnchor, Content: wantAnchor + "知识",
+		ID: fmt.Sprintf("type-%d", typeNumber), Title: "观察记录", Content: "行为线索" + string(rune('A'+typeNumber)),
 		Tags: []string{fmt.Sprintf("type-%02d", typeNumber)},
 	}}, nil
 }
 
-func TestCoordinatorRequestedTypeQueriesCarryOnlyCurrentCanonicalLexicalAnchor(t *testing.T) {
-	bindings := make([]*Binding, 0, 9)
-	requestedTypes := make([]int, 0, 9)
-	for typeNumber := 1; typeNumber <= 9; typeNumber++ {
+func TestCoordinatorRequestedTypeQueriesPreserveQuestionUseOnlyCurrentAnchorAndAllowWeakFallback(t *testing.T) {
+	bindings := make([]*Binding, 0, 4)
+	requestedTypes := []int{1, 2, 3, 4}
+	for _, typeNumber := range requestedTypes {
 		typeValue := typeNumber
-		requestedTypes = append(requestedTypes, typeNumber)
 		bindings = append(bindings, &Binding{
 			Layer: LayerEnneagramType, EnneagramType: &typeValue,
 			LibraryKey: fmt.Sprintf("enneagram-type-%02d", typeNumber), ReleaseID: int64(100 + typeNumber),
@@ -321,22 +334,39 @@ func TestCoordinatorRequestedTypeQueriesCarryOnlyCurrentCanonicalLexicalAnchor(t
 		},
 	}}
 	searcher := &lexicalRequestedTypeSearcher{}
+	question := "1 2 3 4 这些型号在关系压力下有什么不同表现"
 
 	result, err := NewCoordinator(resolver, &publicSearchStub{}, searcher).Retrieve(context.Background(), Input{
 		UserID: 7, SessionID: 8, CardID: 9,
-		Query:          "比较1号完美型、2号助人型、3号成就型、4号自我型、5号思考型、6号忠诚型、7号活跃型、8号领袖型和9号和平型",
+		Query:          question,
 		RequestedTypes: requestedTypes,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := documentIDs(result.Documents); len(got) != 10 {
-		t.Fatalf("documents = %v, want theory plus all nine lexically matched type documents", got)
+	if got := documentIDs(result.Documents); len(got) != 5 {
+		t.Fatalf("documents = %v, want theory plus all four weak-metadata type fallbacks", got)
 	}
-	for typeNumber := 1; typeNumber <= 9; typeNumber++ {
-		query := searcher.queries[typeNumber]
-		if query == "" {
+	names := []string{"", "完美型", "助人型", "成就型", "自我型", "思考型", "忠诚型", "活跃型", "领袖型", "和平型"}
+	for _, typeNumber := range requestedTypes {
+		call, ok := searcher.calls[typeNumber]
+		if !ok {
 			t.Fatalf("type %d query was not captured", typeNumber)
+		}
+		if call.minScore != 0 {
+			t.Fatalf("type %d minScore = %v, want deterministic fallback threshold 0", typeNumber, call.minScore)
+		}
+		if !strings.Contains(call.query, question) || !strings.Contains(call.query, "九型人格") {
+			t.Fatalf("type %d query = %q, want original question and stable enneagram anchor", typeNumber, call.query)
+		}
+		wantAnchor := fmt.Sprintf("%d号%s", typeNumber, names[typeNumber])
+		if !strings.Contains(call.query, wantAnchor) {
+			t.Fatalf("type %d query = %q, missing %q", typeNumber, call.query, wantAnchor)
+		}
+		for _, otherType := range requestedTypes {
+			if otherType != typeNumber && strings.Contains(call.query, fmt.Sprintf("%d号%s", otherType, names[otherType])) {
+				t.Fatalf("type %d query contains unrelated type %d anchor: %q", typeNumber, otherType, call.query)
+			}
 		}
 	}
 }
