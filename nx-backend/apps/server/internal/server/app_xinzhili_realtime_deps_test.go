@@ -37,6 +37,9 @@ func TestServerXinzhiliLayeredKnowledgeUsesCurrentConversationCard(t *testing.T)
 	if resolver.calls != 1 || resolver.lastUserID != 7 || resolver.lastSessionID != 91 || resolver.lastCardID != 55 {
 		t.Fatalf("resolution calls=%d input=%d/%d/%d", resolver.calls, resolver.lastUserID, resolver.lastSessionID, resolver.lastCardID)
 	}
+	if len(resolver.requestedTypes) != 0 {
+		t.Fatalf("realtime must keep legacy current-card retrieval, requested types = %v", resolver.requestedTypes)
+	}
 	if result.Trace == nil || result.Trace.CardID != 55 || result.Trace.EnneagramType == nil || *result.Trace.EnneagramType != 4 || result.Trace.CardRevision != 12 {
 		t.Fatalf("realtime trace = %+v", result.Trace)
 	}

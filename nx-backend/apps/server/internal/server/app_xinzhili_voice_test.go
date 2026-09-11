@@ -471,6 +471,9 @@ func TestAppXinzhiliVoiceTurnUsesLayeredKnowledgeForPrimaryCard(t *testing.T) {
 	if resolver.calls != 1 || resolver.lastSessionID != 91 || resolver.lastCardID != 5 {
 		t.Fatalf("xinzhili resolution calls=%d session/card=%d/%d", resolver.calls, resolver.lastSessionID, resolver.lastCardID)
 	}
+	if len(resolver.requestedTypes) != 0 {
+		t.Fatalf("voice must keep legacy current-card retrieval, requested types = %v", resolver.requestedTypes)
+	}
 	trace := store.singleTrace(t)
 	if trace.EnneagramType == nil || *trace.EnneagramType != 5 || trace.CardRevision != 7 {
 		t.Fatalf("xinzhili trace = %+v", trace)

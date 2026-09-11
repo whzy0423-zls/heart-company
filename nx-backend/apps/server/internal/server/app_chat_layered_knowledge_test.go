@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -129,25 +131,90 @@ func TestAppChatModelIdentitySkipsLayeredKnowledge(t *testing.T) {
 	}
 }
 
-type layeredKnowledgeResolver struct {
-	mainType      int
-	revision      int64
-	calls         int
-	lastUserID    int64
-	lastSessionID int64
-	lastCardID    int64
+func TestAppChatLayeredKnowledgeRequestedTypeLimitsAndLegacyBoundary(t *testing.T) {
+	explicitResolver := &layeredKnowledgeResolver{mainType: 6, revision: 1}
+	explicitSearcher := newLayeredKnowledgeSearcher()
+	explicitCoordinator := appknowledge.NewCoordinator(explicitResolver, explicitSearcher, explicitSearcher)
+	result, err := explicitCoordinator.Retrieve(context.Background(), appknowledge.Input{
+		UserID: 7, SessionID: 42, CardID: 77, Query: "1 2 3 4号分别是什么", RequestedTypes: []int{4, 1, 2, 3, 4, 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(explicitResolver.requestedTypes, []int{1, 2, 3, 4}) {
+		t.Fatalf("requested types = %v, want [1 2 3 4]", explicitResolver.requestedTypes)
+	}
+	publicTopKs, releaseIDs, releaseTopKs := explicitSearcher.capturedCalls()
+	sort.Slice(releaseIDs, func(i, j int) bool { return releaseIDs[i] < releaseIDs[j] })
+	if !reflect.DeepEqual(publicTopKs, []int{6}) || !reflect.DeepEqual(releaseIDs, []int64{100, 201, 202, 203, 204}) {
+		t.Fatalf("explicit calls public=%v releases=%v", publicTopKs, releaseIDs)
+	}
+	if !reflect.DeepEqual(releaseTopKs[100], []int{9}) {
+		t.Fatalf("explicit theory topK = %v, want [9]", releaseTopKs[100])
+	}
+	for _, releaseID := range []int64{201, 202, 203, 204} {
+		if !reflect.DeepEqual(releaseTopKs[releaseID], []int{3}) {
+			t.Fatalf("explicit type release %d topK = %v, want [3]", releaseID, releaseTopKs[releaseID])
+		}
+	}
+	for _, key := range []string{"enneagram_type_01", "enneagram_type_02", "enneagram_type_03", "enneagram_type_04"} {
+		if _, ok := result.Trace.LayerHits[key]; !ok {
+			t.Fatalf("explicit trace missing %s: %+v", key, result.Trace.LayerHits)
+		}
+	}
+	if _, leaked := result.Trace.LayerHits["enneagram_type_06"]; leaked {
+		t.Fatalf("current-card type leaked into explicit trace: %+v", result.Trace.LayerHits)
+	}
+
+	legacyResolver := &layeredKnowledgeResolver{mainType: 6, revision: 1}
+	legacySearcher := newLayeredKnowledgeSearcher()
+	legacyCoordinator := appknowledge.NewCoordinator(legacyResolver, legacySearcher, legacySearcher)
+	_, err = legacyCoordinator.Retrieve(context.Background(), appknowledge.Input{
+		UserID: 7, SessionID: 42, CardID: 77, Query: "最近关系压力很大", RequestedTypes: []int{0, 10},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicTopKs, releaseIDs, releaseTopKs = legacySearcher.capturedCalls()
+	sort.Slice(releaseIDs, func(i, j int) bool { return releaseIDs[i] < releaseIDs[j] })
+	if len(legacyResolver.requestedTypes) != 0 || !reflect.DeepEqual(publicTopKs, []int{12}) || !reflect.DeepEqual(releaseIDs, []int64{100, 206}) {
+		t.Fatalf("legacy boundary requested=%v public=%v releases=%v", legacyResolver.requestedTypes, publicTopKs, releaseIDs)
+	}
+	if !reflect.DeepEqual(releaseTopKs[100], []int{9}) || !reflect.DeepEqual(releaseTopKs[206], []int{9}) {
+		t.Fatalf("legacy release topKs theory=%v type=%v", releaseTopKs[100], releaseTopKs[206])
+	}
 }
 
-func (r *layeredKnowledgeResolver) ResolveConversation(_ context.Context, userID, sessionID, cardID int64) (appknowledge.ConversationResolution, error) {
+type layeredKnowledgeResolver struct {
+	mainType       int
+	revision       int64
+	calls          int
+	lastUserID     int64
+	lastSessionID  int64
+	lastCardID     int64
+	requestedTypes []int
+}
+
+func (r *layeredKnowledgeResolver) ResolveConversation(_ context.Context, userID, sessionID, cardID int64, requestedTypes []int) (appknowledge.ConversationResolution, error) {
 	r.calls++
 	r.lastUserID, r.lastSessionID, r.lastCardID = userID, sessionID, cardID
+	r.requestedTypes = append([]int(nil), requestedTypes...)
 	resolution := appknowledge.ConversationResolution{
 		CardID: cardID, CardRevision: r.revision, MainType: r.mainType,
 		Resolution: appknowledge.Resolution{Theory: &appknowledge.Binding{
 			Layer: appknowledge.LayerTheory, LibraryID: 10, LibraryKey: "enneagram-core", ReleaseID: 100,
 		}},
 	}
-	if r.mainType >= 1 && r.mainType <= 9 {
+	if len(requestedTypes) > 0 {
+		for _, requestedType := range requestedTypes {
+			typeValue := requestedType
+			resolution.RequestedTypeBindings = append(resolution.RequestedTypeBindings, &appknowledge.Binding{
+				Layer: appknowledge.LayerEnneagramType, EnneagramType: &typeValue,
+				LibraryID: int64(10 + requestedType), LibraryKey: fmt.Sprintf("enneagram-type-%02d", requestedType),
+				ReleaseID: int64(200 + requestedType),
+			})
+		}
+	} else if r.mainType >= 1 && r.mainType <= 9 {
 		typeValue := r.mainType
 		resolution.EnneagramType = &appknowledge.Binding{
 			Layer: appknowledge.LayerEnneagramType, EnneagramType: &typeValue,
@@ -158,23 +225,49 @@ func (r *layeredKnowledgeResolver) ResolveConversation(_ context.Context, userID
 	return resolution, nil
 }
 
-type layeredKnowledgeSearcher struct{}
+type layeredKnowledgeSearcher struct {
+	mu           sync.Mutex
+	publicTopKs  []int
+	releaseTopKs map[int64][]int
+	releaseIDs   []int64
+}
 
-func newLayeredKnowledgeSearcher() *layeredKnowledgeSearcher { return &layeredKnowledgeSearcher{} }
+func newLayeredKnowledgeSearcher() *layeredKnowledgeSearcher {
+	return &layeredKnowledgeSearcher{releaseTopKs: make(map[int64][]int)}
+}
 
-func (*layeredKnowledgeSearcher) SearchPublic(context.Context, string, int) ([]rag.Document, error) {
+func (s *layeredKnowledgeSearcher) SearchPublic(_ context.Context, _ string, topK int) ([]rag.Document, error) {
+	s.mu.Lock()
+	s.publicTopKs = append(s.publicTopKs, topK)
+	s.mu.Unlock()
 	return []rag.Document{{ID: "public", Title: "公共支持", Content: layeredKnowledgeQuestion + " 先确认现实压力来源。"}}, nil
 }
 
-func (*layeredKnowledgeSearcher) SearchReleaseChunks(_ context.Context, releaseID int64, _ string, _ int, _ float64) ([]rag.Document, error) {
+func (s *layeredKnowledgeSearcher) SearchReleaseChunks(_ context.Context, releaseID int64, _ string, topK int, _ float64) ([]rag.Document, error) {
+	s.mu.Lock()
+	s.releaseIDs = append(s.releaseIDs, releaseID)
+	s.releaseTopKs[releaseID] = append(s.releaseTopKs[releaseID], topK)
+	s.mu.Unlock()
 	if releaseID == 100 {
 		return []rag.Document{{ID: "theory", Title: "正式理论", Content: layeredKnowledgeQuestion + " 先区分动机、行为和防御模式。"}}, nil
 	}
 	typeValue := int(releaseID - 200)
 	return []rag.Document{{
 		ID: fmt.Sprintf("type-%d", typeValue), Title: fmt.Sprintf("%d号型号库", typeValue),
-		Content: layeredKnowledgeQuestion + " 使用当前型号特有的观察和成长建议。", Tags: []string{fmt.Sprintf("type-%02d", typeValue)},
+		Content: fmt.Sprintf("%s %d号使用当前型号特有的观察和成长建议。", layeredKnowledgeQuestion, typeValue), Tags: []string{fmt.Sprintf("type-%02d", typeValue)},
 	}}, nil
+}
+
+func (s *layeredKnowledgeSearcher) capturedCalls() ([]int, []int64, map[int64][]int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	publicTopKs := append([]int(nil), s.publicTopKs...)
+	releaseIDs := append([]int64(nil), s.releaseIDs...)
+	releaseTopKs := make(map[int64][]int, len(s.releaseTopKs))
+	for releaseID, topKs := range s.releaseTopKs {
+		releaseTopKs[releaseID] = append([]int(nil), topKs...)
+	}
+	return publicTopKs, releaseIDs, releaseTopKs
 }
 
 type layeredKnowledgeGenerator struct {
