@@ -6,7 +6,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -260,13 +262,22 @@ func TestCompatibleChatExplicitCompletionTimeoutAppliesToSyncAndStream(t *testin
 
 func TestChatRequestClientExplicitCompletionTimeoutClonesAndPreservesConfiguration(t *testing.T) {
 	transport := http.DefaultTransport
-	redirectCalled := false
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookieURL, err := url.Parse("https://example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jar.SetCookies(cookieURL, []*http.Cookie{{Name: "session", Value: "kept"}})
+	redirectErr := errors.New("redirect blocked")
 	configured := &http.Client{
 		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
-			redirectCalled = true
-			return nil
+			return redirectErr
 		},
+		Jar:     jar,
 		Timeout: 9 * time.Second,
 	}
 
@@ -277,34 +288,33 @@ func TestChatRequestClientExplicitCompletionTimeoutClonesAndPreservesConfigurati
 	if streamClient == configured || streamClient.Timeout != 0 {
 		t.Fatalf("zero-timeout stream client = %#v, want a clone with no total timeout", streamClient)
 	}
-	assertClonedChatClientConfiguration(t, configured, streamClient)
+	assertClonedChatClientConfiguration(t, configured, streamClient, cookieURL, redirectErr)
 
 	for _, stream := range []bool{false, true} {
 		client := chatRequestClient(configured, 70*time.Second, stream)
 		if client == configured || client.Timeout != 70*time.Second {
 			t.Fatalf("explicit client(stream=%v) = %#v, want clone with 70s timeout", stream, client)
 		}
-		assertClonedChatClientConfiguration(t, configured, client)
+		assertClonedChatClientConfiguration(t, configured, client, cookieURL, redirectErr)
 	}
 	if configured.Timeout != 9*time.Second {
 		t.Fatalf("configured client timeout mutated to %v", configured.Timeout)
 	}
-	_ = configured.CheckRedirect(nil, nil)
-	if !redirectCalled {
-		t.Fatal("configured redirect policy was not preserved")
-	}
 }
 
-func assertClonedChatClientConfiguration(t *testing.T, configured, clone *http.Client) {
+func assertClonedChatClientConfiguration(t *testing.T, configured, clone *http.Client, cookieURL *url.URL, redirectErr error) {
 	t.Helper()
 	if clone.Transport != configured.Transport {
 		t.Fatal("request client clone did not preserve transport")
 	}
-	if clone.CheckRedirect == nil {
-		t.Fatal("request client clone did not preserve redirect policy")
+	if clone.CheckRedirect == nil || !errors.Is(clone.CheckRedirect(&http.Request{}, nil), redirectErr) {
+		t.Fatal("request client clone did not preserve redirect behavior")
 	}
-	if clone.Jar != configured.Jar {
+	if configured.Jar == nil || clone.Jar != configured.Jar {
 		t.Fatal("request client clone did not preserve cookie jar")
+	}
+	if cookies := clone.Jar.Cookies(cookieURL); len(cookies) != 1 || cookies[0].Name != "session" || cookies[0].Value != "kept" {
+		t.Fatalf("request client clone cookie state = %#v", cookies)
 	}
 }
 
