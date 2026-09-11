@@ -166,6 +166,10 @@ func queryBindings(ctx context.Context, queryer bindingQueryer, mainType int, re
 		row.ReleaseStatus = releaseStatus.String
 		bindingRows = append(bindingRows, row)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return Resolution{}, fmt.Errorf("resolve app knowledge: iterate bindings: %w", err)
+	}
 	if err := rows.Close(); err != nil {
 		return Resolution{}, fmt.Errorf("resolve app knowledge: close rows: %w", err)
 	}

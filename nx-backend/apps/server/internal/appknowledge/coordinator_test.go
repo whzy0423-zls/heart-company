@@ -3,6 +3,7 @@ package appknowledge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -267,6 +268,110 @@ func TestCoordinatorRequestedTypeSearchesRunConcurrentlyAndCollectInNumericOrder
 	result := <-resultChannel
 	if got := documentIDs(result.Documents); !reflect.DeepEqual(got, []string{"theory", "type-1", "type-2"}) {
 		t.Fatalf("stable documents = %v", got)
+	}
+}
+
+type lexicalRequestedTypeSearcher struct {
+	mu      sync.Mutex
+	queries map[int]string
+}
+
+func (s *lexicalRequestedTypeSearcher) SearchReleaseChunks(_ context.Context, releaseID int64, query string, _ int, _ float64) ([]rag.Document, error) {
+	if releaseID == 100 {
+		return []rag.Document{{ID: "theory", Title: "理论", Content: "正式理论"}}, nil
+	}
+	typeNumber := int(releaseID - 100)
+	names := []string{"", "完美型", "助人型", "成就型", "自我型", "思考型", "忠诚型", "活跃型", "领袖型", "和平型"}
+	s.mu.Lock()
+	if s.queries == nil {
+		s.queries = make(map[int]string)
+	}
+	s.queries[typeNumber] = query
+	s.mu.Unlock()
+	wantAnchor := fmt.Sprintf("%d号%s", typeNumber, names[typeNumber])
+	if !strings.Contains(query, "九型人格") || !strings.Contains(query, wantAnchor) {
+		return nil, nil
+	}
+	for otherType := 1; otherType <= 9; otherType++ {
+		if otherType != typeNumber && (strings.Contains(query, fmt.Sprintf("%d号", otherType)) || strings.Contains(query, names[otherType])) {
+			return nil, fmt.Errorf("type %d query contains type %d anchor", typeNumber, otherType)
+		}
+	}
+	return []rag.Document{{
+		ID: fmt.Sprintf("type-%d", typeNumber), Title: wantAnchor, Content: wantAnchor + "知识",
+		Tags: []string{fmt.Sprintf("type-%02d", typeNumber)},
+	}}, nil
+}
+
+func TestCoordinatorRequestedTypeQueriesCarryOnlyCurrentCanonicalLexicalAnchor(t *testing.T) {
+	bindings := make([]*Binding, 0, 9)
+	requestedTypes := make([]int, 0, 9)
+	for typeNumber := 1; typeNumber <= 9; typeNumber++ {
+		typeValue := typeNumber
+		requestedTypes = append(requestedTypes, typeNumber)
+		bindings = append(bindings, &Binding{
+			Layer: LayerEnneagramType, EnneagramType: &typeValue,
+			LibraryKey: fmt.Sprintf("enneagram-type-%02d", typeNumber), ReleaseID: int64(100 + typeNumber),
+		})
+	}
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{
+		CardID: 9, CardRevision: 1, MainType: 6,
+		Resolution: Resolution{
+			Theory: &Binding{Layer: LayerTheory, ReleaseID: 100}, RequestedTypeBindings: bindings,
+		},
+	}}
+	searcher := &lexicalRequestedTypeSearcher{}
+
+	result, err := NewCoordinator(resolver, &publicSearchStub{}, searcher).Retrieve(context.Background(), Input{
+		UserID: 7, SessionID: 8, CardID: 9,
+		Query:          "比较1号完美型、2号助人型、3号成就型、4号自我型、5号思考型、6号忠诚型、7号活跃型、8号领袖型和9号和平型",
+		RequestedTypes: requestedTypes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := documentIDs(result.Documents); len(got) != 10 {
+		t.Fatalf("documents = %v, want theory plus all nine lexically matched type documents", got)
+	}
+	for typeNumber := 1; typeNumber <= 9; typeNumber++ {
+		query := searcher.queries[typeNumber]
+		if query == "" {
+			t.Fatalf("type %d query was not captured", typeNumber)
+		}
+	}
+}
+
+func TestSelectRequestedTypeDocumentsEnforcesExactCombinedRuneBoundaryAndPriority(t *testing.T) {
+	document := func(id string, marker rune, runes int) rag.Document {
+		return rag.Document{ID: id, Title: id, Content: string(marker) + strings.Repeat("文", runes-1)}
+	}
+	byLayer := map[string][]rag.Document{
+		LayerTheory: {
+			document("theory-1", 'A', 1000), document("theory-2", 'B', 1000), document("theory-3", 'C', 1000),
+		},
+		typeTraceKey(1): {document("type-1", 'D', 360)},
+		typeTraceKey(2): {document("type-2", 'E', 360)},
+		LayerPublic: {
+			document("public-exact", 'F', 1280), document("public-over-budget", 'G', 1),
+		},
+	}
+
+	selected := selectDocuments(byLayer, []string{typeTraceKey(1), typeTraceKey(2)}, requestedTypeLimits, true)
+	selectedDocuments := append([]rag.Document{}, selected[LayerTheory]...)
+	selectedDocuments = append(selectedDocuments, selected[typeTraceKey(1)]...)
+	selectedDocuments = append(selectedDocuments, selected[typeTraceKey(2)]...)
+	selectedDocuments = append(selectedDocuments, selected[LayerPublic]...)
+	if got := runeLength(selectedDocuments); got != 5000 {
+		t.Fatalf("selected runes = %d, want exact 5000 boundary", got)
+	}
+	if got := documentIDs(selected[LayerPublic]); !reflect.DeepEqual(got, []string{"public-exact"}) {
+		t.Fatalf("public selection = %v; lower-priority over-budget chunk must be excluded", got)
+	}
+	if got := documentIDs(selected[LayerTheory]); !reflect.DeepEqual(got, []string{"theory-1", "theory-2", "theory-3"}) {
+		t.Fatalf("higher-priority theory selection = %v", got)
+	}
+	if len(selected[typeTraceKey(1)]) != 1 || len(selected[typeTraceKey(2)]) != 1 {
+		t.Fatalf("requested type selections = %+v", selected)
 	}
 }
 

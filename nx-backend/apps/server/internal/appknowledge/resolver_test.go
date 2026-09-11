@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -141,16 +142,40 @@ func TestResolveConversationRequestedTypesUsesSingleRepeatableReadSnapshot(t *te
 	}
 }
 
+func TestResolveConversationRequestedTypeRowsErrorRollsBackWithoutPartialBindings(t *testing.T) {
+	rowsErr := errors.New("binding stream interrupted")
+	state := &resolverDBState{bindingRowsErr: rowsErr}
+	driverName := fmt.Sprintf("appknowledge_resolver_%d", atomic.AddUint64(&resolverDriverSequence, 1))
+	sql.Register(driverName, resolverTestDriver{state: state})
+	database, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	resolved, err := NewResolver(database).ResolveConversation(context.Background(), 7, 8, 55, []int{1, 2, 4})
+	if !errors.Is(err, rowsErr) {
+		t.Fatalf("ResolveConversation error = %v, want rows error", err)
+	}
+	if resolved.Theory != nil || len(resolved.RequestedTypeBindings) != 0 {
+		t.Fatalf("partial bindings escaped after rows error: %+v", resolved)
+	}
+	if state.beginCount != 1 || state.commitCount != 0 || state.rollbackCount != 1 {
+		t.Fatalf("snapshot begin/commit/rollback = %d/%d/%d, want 1/0/1", state.beginCount, state.commitCount, state.rollbackCount)
+	}
+}
+
 var resolverDriverSequence uint64
 
 type resolverDBState struct {
-	beginCount    int
-	commitCount   int
-	rollbackCount int
-	queryCount    int
-	beginOptions  driver.TxOptions
-	bindingQuery  string
-	bindingArgs   []int64
+	beginCount     int
+	commitCount    int
+	rollbackCount  int
+	queryCount     int
+	beginOptions   driver.TxOptions
+	bindingQuery   string
+	bindingArgs    []int64
+	bindingRowsErr error
 }
 
 type resolverTestDriver struct{ state *resolverDBState }
@@ -195,6 +220,7 @@ func (c *resolverTestConn) QueryContext(_ context.Context, query string, args []
 			{"enneagram_type", int64(1), int64(11), "enneagram-type-01", "enabled", int64(101), "active"},
 			{"enneagram_type", int64(2), int64(12), "enneagram-type-02", "enabled", int64(102), "active"},
 		},
+		terminalErr: c.state.bindingRowsErr,
 	}, nil
 }
 
@@ -204,15 +230,21 @@ func (tx resolverTestTx) Commit() error   { tx.state.commitCount++; return nil }
 func (tx resolverTestTx) Rollback() error { tx.state.rollbackCount++; return nil }
 
 type resolverTestRows struct {
-	columns []string
-	values  [][]driver.Value
-	index   int
+	columns     []string
+	values      [][]driver.Value
+	index       int
+	terminalErr error
+	errReturned bool
 }
 
 func (r *resolverTestRows) Columns() []string { return r.columns }
 func (r *resolverTestRows) Close() error      { return nil }
 func (r *resolverTestRows) Next(destination []driver.Value) error {
 	if r.index >= len(r.values) {
+		if r.terminalErr != nil && !r.errReturned {
+			r.errReturned = true
+			return r.terminalErr
+		}
 		return io.EOF
 	}
 	copy(destination, r.values[r.index])
