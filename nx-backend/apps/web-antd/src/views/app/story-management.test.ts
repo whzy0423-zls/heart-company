@@ -56,4 +56,18 @@ describe('story skill management CRUD contract', () => {
       expect(source).toContain(expected);
     }
   });
+
+  it('exposes the App menu visibility switch for 我的故事', () => {
+    const source = readFileSync(resolve(here, 'story-management.vue'), 'utf8');
+    for (const expected of [
+      'App 功能开关',
+      '我的故事',
+      'lifeStoryEnabled',
+      'getAppFeatureConfigApi',
+      'updateAppFeatureConfigApi',
+      '不会删除已有故事',
+    ]) {
+      expect(source).toContain(expected);
+    }
+  });
 });

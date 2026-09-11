@@ -891,10 +891,18 @@ func (s *Server) routes() {
 		s.requirePermission(permission, s.storyGenerationConfig)(w, r)
 	})
 	s.mux.HandleFunc("/api/story-generation-config/test", s.requirePermission("App:StoryManagement:Edit", s.testStoryGenerationConfig))
+	s.mux.HandleFunc("/api/app-feature-config", func(w http.ResponseWriter, r *http.Request) {
+		permission := "App:StoryManagement:View"
+		if r.Method == http.MethodPut {
+			permission = "App:StoryManagement:Edit"
+		}
+		s.requirePermission(permission, s.appFeatureConfig)(w, r)
+	})
 	// 对话模型连通性测试：对 MiniMax 网关做一次轻量探活，需登录。
 	s.mux.HandleFunc("/api/model-config/test-chat", s.requirePermission("System:Model:Config", s.method(http.MethodPost, s.testChatModel)))
 	// ===== App API =====
 	s.mux.HandleFunc("/api/app/health", s.method(http.MethodGet, s.appHealth))
+	s.mux.HandleFunc("/api/app/features", s.method(http.MethodGet, s.requireAppAuth(s.appFeatures)))
 	s.mux.HandleFunc("/api/app/auth/send-sms", s.method(http.MethodPost, s.appSendSMS))
 	s.mux.HandleFunc("/api/app/auth/sms", s.method(http.MethodPost, s.appSendSMS))
 	s.mux.HandleFunc("/api/app/auth/sms/send", s.method(http.MethodPost, s.appSendSMS))
