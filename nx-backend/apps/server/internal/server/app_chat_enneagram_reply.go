@@ -52,13 +52,15 @@ var appChatEnneagramDimensionContracts = []appChatEnneagramDimensionContract{
 }
 
 var (
-	appChatEnneagramRangePattern     = regexp.MustCompile(`([1-9一二三四五六七八九])\s*(?:到|至|-|—|~)\s*([1-9一二三四五六七八九])`)
-	appChatEnneagramNumberPattern    = regexp.MustCompile(`([1-9一二三四五六七八九])\s*号`)
-	appChatEnneagramShorthandPattern = regexp.MustCompile(`^\s*([1-9一二三四五六七八九](?:[\s,，、和与及]+[1-9一二三四五六七八九])+)[\s,，、]*这些(?:型|型号|类型)`)
-	appChatEnneagramNumericAnchor    = regexp.MustCompile(`[1-9一二三四五六七八九]\s*号\s*(?:人格|性格)|(?:人格|性格)\s*[1-9一二三四五六七八九]\s*号`)
-	appChatEnneagramOrdinaryDomain   = regexp.MustCompile(`手机|产品|文件|题|房间|楼|日期`)
-	appChatEnneagramShorthandNumbers = regexp.MustCompile(`[1-9一二三四五六七八九]`)
-	appChatEnneagramAnchoredNumber   = regexp.MustCompile(`[1-9一二三四五六七八九]`)
+	appChatEnneagramRangePattern         = regexp.MustCompile(`(?:^|[^0-9])([1-9一二三四五六七八九])\s*(?:到|至|-|—|~)\s*([1-9一二三四五六七八九])\s*号`)
+	appChatEnneagramNumberPattern        = regexp.MustCompile(`(?:^|[^0-9])([1-9一二三四五六七八九])\s*号`)
+	appChatEnneagramShorthandPattern     = regexp.MustCompile(`^\s*([1-9一二三四五六七八九](?:[\s,，、和与及]+[1-9一二三四五六七八九])+)[\s,，、]*这些(?:型|型号|类型)`)
+	appChatEnneagramAnchoredListPattern  = regexp.MustCompile(`(?:^|[^0-9一二三四五六七八九])([1-9一二三四五六七八九](?:\s*号)?(?:[\s,，、和与及]+[1-9一二三四五六七八九](?:\s*号)?)+)`)
+	appChatEnneagramCanonicalListPattern = regexp.MustCompile(`^\s*(?:完美型|助人型|成就型|自我型|思考型|忠诚型|活跃型|领袖型|和平型)(?:\s*(?:和|与|及|以及|、|,|，)\s*(?:完美型|助人型|成就型|自我型|思考型|忠诚型|活跃型|领袖型|和平型))+\s*[？?。！!]*\s*$`)
+	appChatEnneagramNumericAnchor        = regexp.MustCompile(`(?:^|[^0-9])[1-9一二三四五六七八九]\s*号\s*(?:人格|性格)|(?:人格|性格)\s*[1-9一二三四五六七八九]\s*号`)
+	appChatEnneagramInvalidNumber        = regexp.MustCompile(`(?:^|[^0-9])(?:0|[0-9]{2,})\s*号`)
+	appChatEnneagramOrdinaryDomain       = regexp.MustCompile(`手机|产品|文件|题|房间|楼|日期`)
+	appChatEnneagramShorthandNumbers     = regexp.MustCompile(`[1-9一二三四五六七八九]`)
 )
 
 var appChatEnneagramTypeAliases = []struct {
@@ -83,16 +85,20 @@ func buildAppChatEnneagramReplyPlan(question string) appChatEnneagramReplyPlan {
 	}
 
 	canonicalTypes := appChatEnneagramTypesFromCanonicalNames(question)
+	hasCanonicalShortList := len(canonicalTypes) >= 2 && appChatEnneagramCanonicalListPattern.MatchString(question)
 	shorthandTypes, hasShorthand := appChatEnneagramTypesFromShorthand(question)
 	numericTypes := normalizeAppChatEnneagramTypes(appChatEnneagramTypesFromNumericReferences(question))
 	hasNineTypesAnchor := strings.Contains(question, "九型")
+	if hasNineTypesAnchor && appChatEnneagramInvalidNumber.MatchString(question) {
+		return appChatEnneagramReplyPlan{}
+	}
 	hasNumericAnchor := appChatEnneagramNumericAnchor.MatchString(question)
 	hasKnowledgeIntent := appChatEnneagramHasKnowledgeIntent(question)
 	hasNumericKnowledgeForm := len(numericTypes) == 1 && appChatEnneagramNumberPattern.MatchString(question) && hasKnowledgeIntent
 	if !hasNineTypesAnchor && len(canonicalTypes) == 0 && !hasNumericAnchor && !hasNumericKnowledgeForm && !hasShorthand {
 		return appChatEnneagramReplyPlan{}
 	}
-	if !hasKnowledgeIntent && len(canonicalTypes) < 2 && !hasShorthand {
+	if !hasKnowledgeIntent && !hasCanonicalShortList && !hasShorthand {
 		return appChatEnneagramReplyPlan{}
 	}
 
@@ -105,9 +111,7 @@ func buildAppChatEnneagramReplyPlan(question string) appChatEnneagramReplyPlan {
 	requestedTypes = append(requestedTypes, numericTypes...)
 	if hasNineTypesAnchor {
 		anchorEnd := strings.Index(question, "九型") + len("九型")
-		for _, token := range appChatEnneagramAnchoredNumber.FindAllString(question[anchorEnd:], -1) {
-			requestedTypes = append(requestedTypes, appChatEnneagramDigit(token))
-		}
+		requestedTypes = append(requestedTypes, appChatEnneagramTypesFromAnchoredLists(question[anchorEnd:])...)
 	}
 	requestedTypes = normalizeAppChatEnneagramTypes(requestedTypes)
 	if hasNineTypesAnchor && (len(requestedTypes) == 0 || appChatEnneagramRequestsOverview(question)) {
@@ -117,6 +121,21 @@ func buildAppChatEnneagramReplyPlan(question string) appChatEnneagramReplyPlan {
 		return appChatEnneagramReplyPlan{}
 	}
 	return newAppChatEnneagramReplyPlan(requestedTypes)
+}
+
+func appChatEnneagramTypesFromAnchoredLists(questionSuffix string) []int {
+	var types []int
+	for _, match := range appChatEnneagramAnchoredListPattern.FindAllStringSubmatch(questionSuffix, -1) {
+		if len(match) != 2 {
+			continue
+		}
+		for _, token := range appChatEnneagramShorthandNumbers.FindAllString(match[1], -1) {
+			if number := appChatEnneagramDigit(token); number != 0 {
+				types = append(types, number)
+			}
+		}
+	}
+	return types
 }
 
 func newAppChatEnneagramReplyPlan(requestedTypes []int) appChatEnneagramReplyPlan {
