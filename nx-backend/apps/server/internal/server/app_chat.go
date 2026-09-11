@@ -100,13 +100,6 @@ func appChatModelIdentityAnswer(question string) (rag.Answer, bool) {
 	}, true
 }
 
-func appChatRuntimeInstructions(question string) string {
-	if !strings.Contains(strings.ReplaceAll(strings.TrimSpace(question), " ", ""), "九型") {
-		return ""
-	}
-	return "回答九型人格问题时请提供可读的深层解释，不要只给一句标签或抽象形容词。先用一句话说明概念，再按编号列出九种类型（编号、常用名称、核心动机、核心恐惧、典型表现、压力下的反应、成长方向），最后说明类型不是固定诊断，并给出一个具体生活例子。用户问‘什么是九型’时必须覆盖九种类型，而不是只介绍当前用户主型。使用清晰的小标题和项目符号，避免‘被注重’等脱离语境的短语。"
-}
-
 func (s *Server) appChatProfilesForCard(ctx context.Context, appUserID, cardID int64) (rag.UserProfile, rag.ConversationCard) {
 	if s.appChatProfilesForCardOverride != nil {
 		profile, cardContext := s.appChatProfilesForCardOverride(ctx, appUserID, cardID)
@@ -489,7 +482,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		ConversationCard:    conversationCard,
 		UserPreferences:     preferences,
 		CurrentDirectives:   directives,
-		RuntimeInstructions: appChatRuntimeInstructions(body.Question),
+		RuntimeInstructions: buildAppChatEnneagramReplyPlan(body.Question).RuntimeInstructions,
 	})
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
@@ -709,7 +702,7 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			ConversationCard:    conversationCard,
 			UserPreferences:     preferences,
 			CurrentDirectives:   directives,
-			RuntimeInstructions: appChatRuntimeInstructions(input.question),
+			RuntimeInstructions: buildAppChatEnneagramReplyPlan(input.question).RuntimeInstructions,
 		}, func(delta string) error {
 			if delta == "" {
 				return nil
