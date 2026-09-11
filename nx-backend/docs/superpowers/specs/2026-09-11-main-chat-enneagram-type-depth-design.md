@@ -10,6 +10,8 @@ Make enneagram knowledge answers in the App main conversation immediately unders
 
 This behavior applies only to enneagram knowledge questions in the App main conversation. It does not change friend messages, skill conversations, ordinary general-knowledge questions, or personalized emotional-support questions that do not ask for enneagram type knowledge.
 
+The classification and response plan are created in the App main-chat handlers, not inferred inside the shared LLM adapters. The handlers pass explicit runtime instructions, requested knowledge types, output-token budget, and completion timeout through `rag.AskInput` / `rag.GenerateInput`. Other callers receive no explicit plan and keep their current behavior.
+
 ## Canonical Type Names
 
 The response contract uses these exact labels:
@@ -43,24 +45,51 @@ The server classifies three enneagram knowledge shapes without an extra LLM call
 
 Questions that merely mention a relationship, emotion, or current situation continue through the existing fast or companion path unless they explicitly request type knowledge.
 
+Classification is deterministic and requires enneagram context (`九型`, `型号`, `类型`, a canonical type name, or a number followed by `号`) plus a knowledge intent such as `是什么`, `解释`, `特点`, `核心`, `欲望`, `恐惧`, `防御`, `压力`, `关系`, `成长`, `区别`, `对比`, `为什么`, or `反馈`. Overview phrases such as `什么是九型` select all nine directly.
+
+Accepted type references include Arabic digits, Chinese digits, `号`, whitespace, commas, Chinese list punctuation, ranges, and canonical names. Required positive examples include `1 2 3 4 这些型号`, `1、2、3、4号`, `完美型和助人型`, and `1号为什么害怕犯错`. Required negative examples include `第1到9题`, `所有类型的文件`, and `我是1号，今天很难受`. If a message has both emotional-support and explicit type-knowledge intent, the explicit current request wins; otherwise companion behavior wins.
+
 ## Generation Contract
 
-The App main-chat runtime instruction supplies the canonical name map and the six required dimensions. Retrieved public knowledge, the formal enneagram theory library, and the current card's type library remain reference data; when the question is about the user, the current portrait may personalize examples but must not replace the requested type coverage.
+The App main-chat runtime instruction supplies the canonical name map and the six required dimensions. Retrieved public knowledge, the formal enneagram theory library, and the explicitly requested type libraries remain reference data; when the question is about the user, the current portrait may personalize examples but must not replace the requested type coverage.
 
 The contract forbids bare labels such as `一号：重原则` and requires concrete, contextual sentences. The answer remains mobile-readable by using one heading per type and short labeled paragraphs or bullets below it.
 
+Each dimension receives one concrete sentence of roughly 20-60 Chinese characters. An overview may add a short shared introduction and boundary note, but it must not duplicate a generic paragraph under every type.
+
+## Requested-Type Knowledge Retrieval
+
+The main-chat response plan passes an ordered, deduplicated list of requested type numbers to the App knowledge coordinator. The coordinator validates the authenticated conversation and card first, then resolves the formal theory binding and every requested type binding in one repeatable-read snapshot.
+
+- Explicit type questions query only the requested type libraries; the current card type is not silently injected when it was not requested.
+- Questions without an explicit type plan retain the existing current-card type behavior.
+- Requested type searches run concurrently with a maximum of one selected chunk per type, then return in numeric type order.
+- Public knowledge contributes at most two chunks, formal theory at most three chunks, and requested type libraries at most nine total chunks.
+- Each selected type snippet is capped at 360 runes and the combined generation reference is capped at 5,000 runes.
+- Trace keys distinguish requested libraries as `enneagram_type_01` through `enneagram_type_09`; a failed type library records its own diagnostic and does not substitute another type.
+
+The RAG call receives an explicit main-chat source limit sufficient for the formal theory plus requested types. Other RAG callers keep the existing source count and snippet limits.
+
 ## Response Budgets
 
-The current 700-token overview budget is too small for nine types with six dimensions and can truncate or compress the answer. The server will use a larger dedicated budget for all-nine overviews and a smaller dedicated deep budget for one or several requested types. Ordinary questions keep the existing low-latency budget.
+The current 700-token overview budget is too small for nine types with six dimensions and can truncate or compress the answer. The explicit main-chat type-depth budget is:
+
+```text
+min(3600, 600 + 320 * requested_type_count)
+```
+
+This yields 920 tokens for one type, 1,880 for four types, and 3,480 for all nine. The value is carried on `GenerateInput` and overrides provider defaults only when it is non-zero. MiniMax, OpenAI-compatible, and Anthropic sync/stream transports all use the same explicit value. Ordinary questions and non-main-chat callers keep their existing budgets.
+
+For type-depth requests, sync and stream handlers use `max(configured_chat_timeout, 70 seconds)`. Existing 15-second SSE heartbeats and immediate first-increment forwarding remain unchanged. No additional classifier model call or generation pass is added.
 
 ## Data Flow
 
 ```text
 main-chat question
-  -> deterministic enneagram knowledge classifier
-  -> public/theory/current-type knowledge retrieval
+  -> deterministic main-chat response plan
+  -> public/theory/requested-type knowledge retrieval
   -> canonical type + six-dimension runtime contract
-  -> question-shape response budget
+  -> explicit type-count response budget and timeout
   -> existing streaming model generation
   -> unchanged Flutter rendering
 ```
@@ -78,11 +107,21 @@ No JSON post-processing or second model pass is added, so the first streamed inc
 
 Automated tests will prove that:
 
-- all nine canonical labels and all six dimensions are present in the all-types contract;
-- overview questions receive the expanded all-types budget;
-- single and partial type questions receive the type-depth contract and an appropriate budget;
+- every requested type is mapped to its canonical label and its own six required dimensions in the generation contract;
+- overview questions receive all nine requested types and the 3,480-token budget;
+- single and partial type questions receive only their requested types, preserve numeric order, and receive 920 / formula-derived budgets;
 - partial type questions do not require unrelated types;
-- ordinary questions retain the concise path and budget;
+- syntax variants, ranges, canonical names, ambiguous numbers, and emotional-support negative examples classify correctly;
+- ordinary questions retain the concise path, source limit, timeout, and budget;
 - sync and streaming App main-chat handlers pass the same runtime instruction.
+- MiniMax, OpenAI-compatible, and Anthropic sync/stream requests honor explicit budgets, while non-main-chat inputs do not receive the new budget;
+- requested type retrieval queries the correct release bindings concurrently, excludes an unrequested current-card type, preserves stable numeric order, enforces snippet/total limits, and isolates diagnostics;
+- non-main-chat text, voice, realtime, direct-message, and skill paths do not receive the main-chat response plan.
 
-Focused Go tests, the full affected-package tests, and the repository quality checks must pass before deployment.
+Focused Go tests, the full affected-package tests, and the repository quality checks must pass before deployment. A fixed smoke set covering overview, four-type, and each single type must have 100% requested-type/dimension completion and zero truncation. On the test network, main-chat streaming TTFT p95 must stay below 2.5 seconds and no more than 300 ms above the pre-change baseline; all-nine completion p95 must stay below 45 seconds.
+
+## Deployment And Rollback
+
+Deploy the backend through the repository's existing test/release workflow, restart the server, and verify health before directing traffic. Smoke-test both sync and streaming main-chat endpoints, then verify the all-nine and four-type answers in the Android App. Record TTFT, completion time, finish reason, output tokens, and timeout/truncation failures in the existing chat timing logs.
+
+Rollback re-deploys the previous backend commit; the Flutter contract and database schema remain compatible. No App reinstall or data migration is required for this server-side behavior change.
