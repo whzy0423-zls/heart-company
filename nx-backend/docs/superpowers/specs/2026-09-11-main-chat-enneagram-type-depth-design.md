@@ -45,9 +45,16 @@ The server classifies three enneagram knowledge shapes without an extra LLM call
 
 Questions that merely mention a relationship, emotion, or current situation continue through the existing fast or companion path unless they explicitly request type knowledge.
 
-Classification is deterministic and requires enneagram context (`九型`, `型号`, `类型`, a canonical type name, or a number followed by `号`) plus a knowledge intent such as `是什么`, `解释`, `特点`, `核心`, `欲望`, `恐惧`, `防御`, `压力`, `关系`, `成长`, `区别`, `对比`, `为什么`, or `反馈`. Overview phrases such as `什么是九型` select all nine directly.
+Classification is deterministic. A normal knowledge request requires a strong enneagram anchor plus a knowledge intent:
 
-Accepted type references include Arabic digits, Chinese digits, `号`, whitespace, commas, Chinese list punctuation, ranges, and canonical names. Required positive examples include `1 2 3 4 这些型号`, `1、2、3、4号`, `完美型和助人型`, and `1号为什么害怕犯错`. Required negative examples include `第1到9题`, `所有类型的文件`, and `我是1号，今天很难受`. If a message has both emotional-support and explicit type-knowledge intent, the explicit current request wins; otherwise companion behavior wins.
+- Strong anchors: `九型`, `九型人格`, one of the nine canonical Chinese type names, or a `1号` through `9号` reference next to `人格` / `性格`.
+- Knowledge intents: an interrogative mechanism phrase such as `是什么`, `为什么`, `如何`, `怎么`, `有什么区别`, `如何表现`, or an explicit knowledge noun such as `核心欲望`, `核心恐惧`, `防御机制`, `压力表现`, `关系模式`, `成长方向`, `特点`, `解释`, `对比`, or `反馈`.
+- `类型`, `型号`, `关系`, `压力`, and `成长` alone are weak words and never establish the classification.
+- Overview phrases such as `什么是九型` select all nine directly.
+
+There is one implicit-knowledge special case for a bare enneagram list: two or more canonical type names, or a short utterance consisting only of valid type numbers, list punctuation / conjunctions, optional `号`, and optional suffixes such as `这些型号` or `分别`. This accepts a user's shorthand list without making generic numbers a personality query.
+
+Accepted type references include Arabic digits, Chinese digits, `号`, whitespace, commas, Chinese list punctuation, ranges, and canonical names. Required positive examples include `1 2 3 4 这些型号`, `1、2、3、4号`, `完美型和助人型`, and `1号性格为什么害怕犯错`. Required negative examples include `第1到9题`, `所有类型的文件`, `这个文件类型是什么`, `1号和2号手机型号有什么区别`, and `我是1号，最近关系压力很大`. If a message has both emotional-support and an explicit mechanism question such as `我是1号，为什么压力下总挑错`, the explicit current request wins; otherwise companion behavior wins.
 
 ## Generation Contract
 
@@ -80,7 +87,9 @@ min(3600, 600 + 320 * requested_type_count)
 
 This yields 920 tokens for one type, 1,880 for four types, and 3,480 for all nine. The value is carried on `GenerateInput` and overrides provider defaults only when it is non-zero. MiniMax, OpenAI-compatible, and Anthropic sync/stream transports all use the same explicit value. Ordinary questions and non-main-chat callers keep their existing budgets.
 
-For type-depth requests, sync and stream handlers use `max(configured_chat_timeout, 70 seconds)`. Existing 15-second SSE heartbeats and immediate first-increment forwarding remain unchanged. No additional classifier model call or generation pass is added.
+For type-depth requests, the explicit response plan carries `CompletionTimeout = max(configured_chat_timeout, 70 seconds)` through `AskInput` and `GenerateInput`. The sync/stream handlers use it as their request context deadline. Each provider adapter clones its HTTP client for that request and raises only the cloned client's total timeout to the same value; connection, TLS handshake, and response-header timeouts remain bounded by the existing transport. Ordinary requests keep the configured handler and client total timeout. Existing 15-second SSE heartbeats and immediate first-increment forwarding remain unchanged. No additional classifier model call or generation pass is added.
+
+Provider tests inject small ordinary and extended thresholds to prove that a type-depth response may continue past the ordinary client timeout but is still stopped by its explicit extended deadline. The same tests prove ordinary requests retain the old timeout.
 
 ## Data Flow
 
@@ -111,7 +120,7 @@ Automated tests will prove that:
 - overview questions receive all nine requested types and the 3,480-token budget;
 - single and partial type questions receive only their requested types, preserve numeric order, and receive 920 / formula-derived budgets;
 - partial type questions do not require unrelated types;
-- syntax variants, ranges, canonical names, ambiguous numbers, and emotional-support negative examples classify correctly;
+- syntax variants, ranges, canonical names, bare-list shorthand, ambiguous numbers, unrelated file/phone terminology, and emotional-support negative examples classify correctly;
 - ordinary questions retain the concise path, source limit, timeout, and budget;
 - sync and streaming App main-chat handlers pass the same runtime instruction.
 - MiniMax, OpenAI-compatible, and Anthropic sync/stream requests honor explicit budgets, while non-main-chat inputs do not receive the new budget;
@@ -122,6 +131,6 @@ Focused Go tests, the full affected-package tests, and the repository quality ch
 
 ## Deployment And Rollback
 
-Deploy the backend through the repository's existing test/release workflow, restart the server, and verify health before directing traffic. Smoke-test both sync and streaming main-chat endpoints, then verify the all-nine and four-type answers in the Android App. Record TTFT, completion time, finish reason, output tokens, and timeout/truncation failures in the existing chat timing logs.
+Deploy the backend through the repository's existing test/release workflow, restart the server, and verify health before directing traffic. Smoke-test both sync and streaming main-chat endpoints, then verify the all-nine and four-type answers in the Android App. Record TTFT, completion time, generated response rune count, completion/error phase, and timeout/truncation failures in the existing chat timing logs. Provider token usage and finish reason are not added to the generator contract in this change; response runes are the explicitly labeled local size metric.
 
 Rollback re-deploys the previous backend commit; the Flutter contract and database schema remain compatible. No App reinstall or data migration is required for this server-side behavior change.
