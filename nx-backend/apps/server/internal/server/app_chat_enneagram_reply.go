@@ -55,7 +55,7 @@ var (
 	appChatEnneagramRangePattern         = regexp.MustCompile(`(?:^|[^0-9零〇一二三四五六七八九十百千两])([1-9一二三四五六七八九])\s*(?:到|至|-|—|~)\s*([1-9一二三四五六七八九])\s*号`)
 	appChatEnneagramNumberPattern        = regexp.MustCompile(`(?:^|[^0-9零〇一二三四五六七八九十百千两])([1-9一二三四五六七八九])\s*号`)
 	appChatEnneagramShorthandPattern     = regexp.MustCompile(`^\s*([1-9一二三四五六七八九](?:[\s,，、和与及]+[1-9一二三四五六七八九])+)[\s,，、]*这些(?:型|型号|类型)`)
-	appChatEnneagramAnchoredListPattern  = regexp.MustCompile(`(?:^|[^0-9零〇一二三四五六七八九十百千两])([1-9一二三四五六七八九](?:\s*号)?(?:[\s,，、和与及]+[1-9一二三四五六七八九](?:\s*号)?)+)`)
+	appChatEnneagramAnchoredListPattern  = regexp.MustCompile(`(?:^|[^0-9零〇一二三四五六七八九十百千两])([1-9一二三四五六七八九](?:\s*[号型])?(?:[\s,，、和与及]+[1-9一二三四五六七八九](?:\s*[号型])?)+)\s*(这些(?:型|型号|类型))?`)
 	appChatEnneagramCanonicalListPattern = regexp.MustCompile(`^\s*(?:完美型|助人型|成就型|自我型|思考型|忠诚型|活跃型|领袖型|和平型)(?:\s*(?:和|与|及|以及|、|,|，)\s*(?:完美型|助人型|成就型|自我型|思考型|忠诚型|活跃型|领袖型|和平型))+\s*[？?。！!]*\s*$`)
 	appChatEnneagramNumericAnchor        = regexp.MustCompile(`(?:^|[^0-9零〇一二三四五六七八九十百千两])[1-9一二三四五六七八九]\s*号\s*(?:人格|性格)|(?:人格|性格)\s*[1-9一二三四五六七八九]\s*号`)
 	appChatEnneagramInvalidNumber        = regexp.MustCompile(`(?:^|[^0-9零〇一二三四五六七八九十百千两])(?:(?:0|[0-9]{2,})|[零〇一二三四五六七八九十百千两]*(?:零|〇|十|百|千|两)[零〇一二三四五六七八九十百千两]*)\s*(?:号|到|至|-|—|~)`)
@@ -92,13 +92,14 @@ func buildAppChatEnneagramReplyPlan(question string) appChatEnneagramReplyPlan {
 	if hasNineTypesAnchor && appChatEnneagramInvalidNumber.MatchString(question) {
 		return appChatEnneagramReplyPlan{}
 	}
+	isOverview := hasNineTypesAnchor && appChatEnneagramRequestsOverview(question)
 	hasNumericAnchor := appChatEnneagramNumericAnchor.MatchString(question)
 	hasKnowledgeIntent := appChatEnneagramHasKnowledgeIntent(question)
 	hasNumericKnowledgeForm := len(numericTypes) == 1 && appChatEnneagramNumberPattern.MatchString(question) && hasKnowledgeIntent
 	if !hasNineTypesAnchor && len(canonicalTypes) == 0 && !hasNumericAnchor && !hasNumericKnowledgeForm && !hasShorthand {
 		return appChatEnneagramReplyPlan{}
 	}
-	if !hasKnowledgeIntent && !hasCanonicalShortList && !hasShorthand {
+	if !hasKnowledgeIntent && !isOverview && !hasCanonicalShortList && !hasShorthand {
 		return appChatEnneagramReplyPlan{}
 	}
 
@@ -114,7 +115,7 @@ func buildAppChatEnneagramReplyPlan(question string) appChatEnneagramReplyPlan {
 		requestedTypes = append(requestedTypes, appChatEnneagramTypesFromAnchoredLists(question[anchorEnd:])...)
 	}
 	requestedTypes = normalizeAppChatEnneagramTypes(requestedTypes)
-	if hasNineTypesAnchor && (len(requestedTypes) == 0 || appChatEnneagramRequestsOverview(question)) {
+	if isOverview {
 		requestedTypes = []int{1, 2, 3, 4, 5, 6, 7, 8, 9}
 	}
 	if len(requestedTypes) == 0 {
@@ -126,7 +127,7 @@ func buildAppChatEnneagramReplyPlan(question string) appChatEnneagramReplyPlan {
 func appChatEnneagramTypesFromAnchoredLists(questionSuffix string) []int {
 	var types []int
 	for _, match := range appChatEnneagramAnchoredListPattern.FindAllStringSubmatch(questionSuffix, -1) {
-		if len(match) != 2 {
+		if len(match) != 3 || (!strings.ContainsAny(match[1], "号型") && match[2] == "") {
 			continue
 		}
 		for _, token := range appChatEnneagramShorthandNumbers.FindAllString(match[1], -1) {
@@ -201,7 +202,10 @@ func appChatEnneagramHasKnowledgeIntent(question string) bool {
 
 func appChatEnneagramRequestsOverview(question string) bool {
 	compact := strings.ReplaceAll(question, " ", "")
-	for _, phrase := range []string{"什么是九型", "九型是什么", "所有类型", "全部类型", "九种类型", "九个类型"} {
+	for _, phrase := range []string{
+		"什么是九型", "九型是什么", "介绍一下九型", "介绍九型", "讲讲九型", "九型人格概述", "九型概述",
+		"九型人格有哪些类型", "九型有哪些类型", "九型人格有哪几种", "所有类型", "全部类型", "九种类型", "九个类型",
+	} {
 		if strings.Contains(compact, phrase) {
 			return true
 		}
