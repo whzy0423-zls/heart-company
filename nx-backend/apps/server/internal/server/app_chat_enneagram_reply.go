@@ -52,13 +52,13 @@ var appChatEnneagramDimensionContracts = []appChatEnneagramDimensionContract{
 }
 
 var (
-	appChatEnneagramRangePattern         = regexp.MustCompile(`(?:^|[^0-9])([1-9一二三四五六七八九])\s*(?:到|至|-|—|~)\s*([1-9一二三四五六七八九])\s*号`)
-	appChatEnneagramNumberPattern        = regexp.MustCompile(`(?:^|[^0-9])([1-9一二三四五六七八九])\s*号`)
+	appChatEnneagramRangePattern         = regexp.MustCompile(`(?:^|[^0-9零〇一二三四五六七八九十百千两])([1-9一二三四五六七八九])\s*(?:到|至|-|—|~)\s*([1-9一二三四五六七八九])\s*号`)
+	appChatEnneagramNumberPattern        = regexp.MustCompile(`(?:^|[^0-9零〇一二三四五六七八九十百千两])([1-9一二三四五六七八九])\s*号`)
 	appChatEnneagramShorthandPattern     = regexp.MustCompile(`^\s*([1-9一二三四五六七八九](?:[\s,，、和与及]+[1-9一二三四五六七八九])+)[\s,，、]*这些(?:型|型号|类型)`)
-	appChatEnneagramAnchoredListPattern  = regexp.MustCompile(`(?:^|[^0-9一二三四五六七八九])([1-9一二三四五六七八九](?:\s*号)?(?:[\s,，、和与及]+[1-9一二三四五六七八九](?:\s*号)?)+)`)
+	appChatEnneagramAnchoredListPattern  = regexp.MustCompile(`(?:^|[^0-9零〇一二三四五六七八九十百千两])([1-9一二三四五六七八九](?:\s*号)?(?:[\s,，、和与及]+[1-9一二三四五六七八九](?:\s*号)?)+)`)
 	appChatEnneagramCanonicalListPattern = regexp.MustCompile(`^\s*(?:完美型|助人型|成就型|自我型|思考型|忠诚型|活跃型|领袖型|和平型)(?:\s*(?:和|与|及|以及|、|,|，)\s*(?:完美型|助人型|成就型|自我型|思考型|忠诚型|活跃型|领袖型|和平型))+\s*[？?。！!]*\s*$`)
-	appChatEnneagramNumericAnchor        = regexp.MustCompile(`(?:^|[^0-9])[1-9一二三四五六七八九]\s*号\s*(?:人格|性格)|(?:人格|性格)\s*[1-9一二三四五六七八九]\s*号`)
-	appChatEnneagramInvalidNumber        = regexp.MustCompile(`(?:^|[^0-9])(?:0|[0-9]{2,})\s*号`)
+	appChatEnneagramNumericAnchor        = regexp.MustCompile(`(?:^|[^0-9零〇一二三四五六七八九十百千两])[1-9一二三四五六七八九]\s*号\s*(?:人格|性格)|(?:人格|性格)\s*[1-9一二三四五六七八九]\s*号`)
+	appChatEnneagramInvalidNumber        = regexp.MustCompile(`(?:^|[^0-9零〇一二三四五六七八九十百千两])(?:(?:0|[0-9]{2,})|[零〇一二三四五六七八九十百千两]*(?:零|〇|十|百|千|两)[零〇一二三四五六七八九十百千两]*)\s*(?:号|到|至|-|—|~)`)
 	appChatEnneagramOrdinaryDomain       = regexp.MustCompile(`手机|产品|文件|题|房间|楼|日期`)
 	appChatEnneagramShorthandNumbers     = regexp.MustCompile(`[1-9一二三四五六七八九]`)
 )
