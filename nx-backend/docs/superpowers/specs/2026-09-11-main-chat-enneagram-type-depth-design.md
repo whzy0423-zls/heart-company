@@ -47,14 +47,16 @@ Questions that merely mention a relationship, emotion, or current situation cont
 
 Classification is deterministic. A normal knowledge request requires a strong enneagram anchor plus a knowledge intent:
 
-- Strong anchors: `九型`, `九型人格`, one of the nine canonical Chinese type names, or a `1号` through `9号` reference next to `人格` / `性格`.
+- Strong anchors: `九型`, `九型人格`, one of the nine canonical Chinese type names, a `1号` through `9号` reference next to `人格` / `性格`, or multiple valid type numbers followed by `这些型号` / `这些类型`.
 - Knowledge intents: an interrogative mechanism phrase such as `是什么`, `为什么`, `如何`, `怎么`, `有什么区别`, `如何表现`, or an explicit knowledge noun such as `核心欲望`, `核心恐惧`, `防御机制`, `压力表现`, `关系模式`, `成长方向`, `特点`, `解释`, `对比`, or `反馈`.
 - `类型`, `型号`, `关系`, `压力`, and `成长` alone are weak words and never establish the classification.
 - Overview phrases such as `什么是九型` select all nine directly.
 
-There is one implicit-knowledge special case for a bare enneagram list: two or more canonical type names, or a short utterance consisting only of valid type numbers, list punctuation / conjunctions, optional `号`, and optional suffixes such as `这些型号` or `分别`. This accepts a user's shorthand list without making generic numbers a personality query.
+There are two numeric knowledge sentence forms: a single `1号` through `9号` followed by an explicit question / knowledge phrase such as `是什么样的`, `为什么`, `特点`, or `反馈`; and multiple valid type numbers followed by `这些型号` / `这些类型`, with an optional suffix such as `的反馈`, `解释`, `区别`, or `分别`. Ordinary-domain markers such as `手机`, `产品`, `文件`, `题`, `房间`, `楼`, and `日期` exclude these numeric forms.
 
-Accepted type references include Arabic digits, Chinese digits, `号`, whitespace, commas, Chinese list punctuation, ranges, and canonical names. Required positive examples include `1 2 3 4 这些型号`, `1、2、3、4号`, `完美型和助人型`, and `1号性格为什么害怕犯错`. Required negative examples include `第1到9题`, `所有类型的文件`, `这个文件类型是什么`, `1号和2号手机型号有什么区别`, and `我是1号，最近关系压力很大`. If a message has both emotional-support and an explicit mechanism question such as `我是1号，为什么压力下总挑错`, the explicit current request wins; otherwise companion behavior wins.
+A pure numeric list such as `1、2、3、4号` has no sufficient enneagram context and remains unclassified in this version. This deliberately avoids silently treating ambiguous numbers as personality types.
+
+Accepted type references include Arabic digits, Chinese digits, `号`, whitespace, commas, Chinese list punctuation, ranges, and canonical names. Required positive examples include the complete target sentence `1 2 3 4 这些型号的反馈`, `1号是什么样的`, `完美型和助人型`, and `1号性格为什么害怕犯错`. Required negative examples include a context-free `1、2、3、4号`, `第1到9题`, `所有类型的文件`, `这个文件类型是什么`, `1号和2号手机型号有什么区别`, and `我是1号，最近关系压力很大`. If a message has both emotional-support and an explicit mechanism question such as `我是1号，为什么压力下总挑错`, the explicit current request wins; otherwise companion behavior wins.
 
 ## Generation Contract
 
