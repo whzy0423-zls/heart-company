@@ -95,6 +95,9 @@ func buildAppChatEnneagramReplyPlan(question string) appChatEnneagramReplyPlan {
 	isOverview := hasNineTypesAnchor && appChatEnneagramRequestsOverview(question)
 	hasNumericAnchor := appChatEnneagramNumericAnchor.MatchString(question)
 	hasKnowledgeIntent := appChatEnneagramHasKnowledgeIntent(question)
+	if appChatEnneagramHasIntroTypeIntent(question) && (len(canonicalTypes) > 0 || len(numericTypes) > 0) {
+		hasKnowledgeIntent = true
+	}
 	hasNumericKnowledgeForm := len(numericTypes) == 1 && appChatEnneagramNumberPattern.MatchString(question) && hasKnowledgeIntent
 	if !hasNineTypesAnchor && len(canonicalTypes) == 0 && !hasNumericAnchor && !hasNumericKnowledgeForm && !hasShorthand {
 		return appChatEnneagramReplyPlan{}
@@ -115,7 +118,7 @@ func buildAppChatEnneagramReplyPlan(question string) appChatEnneagramReplyPlan {
 		requestedTypes = append(requestedTypes, appChatEnneagramTypesFromAnchoredLists(question[anchorEnd:])...)
 	}
 	requestedTypes = normalizeAppChatEnneagramTypes(requestedTypes)
-	if isOverview {
+	if isOverview && len(requestedTypes) == 0 {
 		requestedTypes = []int{1, 2, 3, 4, 5, 6, 7, 8, 9}
 	}
 	if len(requestedTypes) == 0 {
@@ -201,9 +204,17 @@ func appChatEnneagramHasKnowledgeIntent(question string) bool {
 }
 
 func appChatEnneagramRequestsOverview(question string) bool {
-	compact := strings.ReplaceAll(question, " ", "")
+	compact := strings.Trim(strings.ReplaceAll(question, " ", ""), "？?。！!，,")
 	for _, phrase := range []string{
-		"什么是九型", "九型是什么", "介绍一下九型", "介绍九型", "讲讲九型", "九型人格概述", "九型概述",
+		"什么是九型", "什么是九型人格", "九型是什么", "九型人格是什么",
+		"介绍一下九型", "介绍一下九型人格", "介绍九型", "介绍九型人格",
+		"讲讲九型", "讲讲九型人格", "九型人格概述", "九型概述",
+	} {
+		if compact == phrase {
+			return true
+		}
+	}
+	for _, phrase := range []string{
 		"九型人格有哪些类型", "九型有哪些类型", "九型人格有哪几种", "所有类型", "全部类型", "九种类型", "九个类型",
 	} {
 		if strings.Contains(compact, phrase) {
@@ -211,6 +222,13 @@ func appChatEnneagramRequestsOverview(question string) bool {
 		}
 	}
 	return false
+}
+
+func appChatEnneagramHasIntroTypeIntent(question string) bool {
+	compact := strings.ReplaceAll(strings.TrimSpace(question), " ", "")
+	return strings.HasPrefix(compact, "介绍一下九型") ||
+		strings.HasPrefix(compact, "介绍九型") ||
+		strings.HasPrefix(compact, "讲讲九型")
 }
 
 func appChatEnneagramTypesFromCanonicalNames(question string) []int {
