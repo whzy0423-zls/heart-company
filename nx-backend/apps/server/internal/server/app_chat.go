@@ -201,12 +201,16 @@ type appChatStore interface {
 }
 
 func (s *Server) retrieveAppChatKnowledge(ctx context.Context, userID, sessionID, cardID int64, query string) ([]rag.Document, *chat.KnowledgeTrace) {
+	return s.retrieveAppChatKnowledgeForTypes(ctx, userID, sessionID, cardID, query, nil)
+}
+
+func (s *Server) retrieveAppChatKnowledgeForTypes(ctx context.Context, userID, sessionID, cardID int64, query string, requestedTypes []int) ([]rag.Document, *chat.KnowledgeTrace) {
 	if s.appKnowledge == nil {
 		documents, _ := s.retrieveAppDocsForQuery(ctx, query, 6)
 		return documents, nil
 	}
 	result, err := s.appKnowledge.Retrieve(ctx, appknowledge.Input{
-		UserID: userID, SessionID: sessionID, CardID: cardID, Query: query,
+		UserID: userID, SessionID: sessionID, CardID: cardID, Query: query, RequestedTypes: requestedTypes,
 	})
 	if err != nil {
 		return nil, nil
@@ -435,6 +439,8 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "question required")
 		return
 	}
+	replyPlan := buildAppChatEnneagramReplyPlan(body.Question)
+	requestStartedAt := time.Now()
 	if answer, ok := appChatModelIdentityAnswer(body.Question); ok {
 		_, chatTimeout := s.chatRuntime()
 		ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
@@ -443,6 +449,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		sourcesJSON, _ := json.Marshal(answer.Sources)
 		messageID, saveErr := s.saveAppChatPair(ctx, sessionID, body.Question, answer.Answer, sourcesJSON, nil)
 		if saveErr != nil {
+			logAppChatTerminalTiming("sync", "error", userInfo.ID, sessionID, requestStartedAt, "save", utf8.RuneCountInString(answer.Answer))
 			httpx.Fail(w, http.StatusInternalServerError, "回答保存失败，请重试")
 			return
 		}
@@ -450,6 +457,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		if messageID > 0 {
 			s.recordAppProfileEvidenceAsync(userInfo.ID, sess.CardID, "chat", messageID, body.Question)
 		}
+		logAppChatTerminalTiming("sync", "completed", userInfo.ID, sessionID, requestStartedAt, "complete", utf8.RuneCountInString(answer.Answer))
 		httpx.OK(w, askResponse{Answer: answer, MessageID: messageID})
 		return
 	}
@@ -460,16 +468,18 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.finishAppChatPreferenceTurn(preferenceTurn)
 
-	generator, chatTimeout := s.chatRuntime()
+	generator, configuredChatTimeout := s.chatRuntime()
+	chatTimeout := appChatRequestTimeout(configuredChatTimeout, replyPlan.CompletionTimeout)
 	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
 	preferences, directives, err := s.prepareAppChatPreferences(ctx, preferenceTurn, preferenceExtraction)
 	if err != nil {
+		logAppChatTerminalTiming("sync", "error", userInfo.ID, sessionID, requestStartedAt, appChatFailurePhase(ctx, "preferences"), 0)
 		httpx.Fail(w, http.StatusInternalServerError, appChatPreferencePublicError(err))
 		return
 	}
 
-	inputs := s.loadAppChatPromptInputs(ctx, userInfo.ID, sessionID, sess.CardID, body.Question, generator)
+	inputs := s.loadAppChatPromptInputs(ctx, userInfo.ID, sessionID, sess.CardID, body.Question, replyPlan.RequestedTypes, generator)
 	docs, knowledgeTrace := inputs.docs, inputs.trace
 	profile, conversationCard := inputs.profile, inputs.card
 	promptContext := inputs.prompt
@@ -482,9 +492,14 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		ConversationCard:    conversationCard,
 		UserPreferences:     preferences,
 		CurrentDirectives:   directives,
-		RuntimeInstructions: buildAppChatEnneagramReplyPlan(body.Question).RuntimeInstructions,
+		RuntimeInstructions: replyPlan.RuntimeInstructions,
+		MaxOutputTokens:     replyPlan.MaxOutputTokens,
+		CompletionTimeout:   replyPlan.CompletionTimeout,
+		SourceLimit:         replyPlan.SourceLimit,
+		SourceSnippetRunes:  replyPlan.SourceSnippetRunes,
 	})
 	if err != nil {
+		logAppChatTerminalTiming("sync", "error", userInfo.ID, sessionID, requestStartedAt, appChatFailurePhase(ctx, "provider"), 0)
 		httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
 		return
 	}
@@ -494,12 +509,17 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	messageID, saveErr := s.saveAppChatPair(ctx, sessionID, body.Question, ans.Answer, sourcesJSON, knowledgeTrace)
 	if saveErr == nil {
 		s.scheduleAppChatPreferenceFallback(preferenceTurn, body.Question)
+	} else {
+		logAppChatTerminalTiming("sync", "error", userInfo.ID, sessionID, requestStartedAt, appChatFailurePhase(ctx, "save"), utf8.RuneCountInString(ans.Answer))
 	}
 	s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, body.Question, ans.Answer)
 	if messageID > 0 {
 		s.recordAppProfileEvidenceAsync(userInfo.ID, sess.CardID, "chat", messageID, body.Question)
 	}
 
+	if saveErr == nil {
+		logAppChatTerminalTiming("sync", "completed", userInfo.ID, sessionID, requestStartedAt, "complete", utf8.RuneCountInString(ans.Answer))
+	}
 	httpx.OK(w, askResponse{Answer: ans, MessageID: messageID})
 }
 
@@ -540,6 +560,7 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "question required")
 		return
 	}
+	replyPlan := buildAppChatEnneagramReplyPlan(body.Question)
 	fixedAnswer, isModelIdentity := appChatModelIdentityAnswer(body.Question)
 	preferenceExtraction := userpreference.Extraction{}
 	preferenceTurn := appChatPreferenceTurn{userID: userInfo.ID}
@@ -551,7 +572,8 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.finishAppChatPreferenceTurn(preferenceTurn)
 
-	generator, chatTimeout := s.chatRuntime()
+	generator, configuredChatTimeout := s.chatRuntime()
+	chatTimeout := appChatRequestTimeout(configuredChatTimeout, replyPlan.CompletionTimeout)
 	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
 	defer cancel()
 	streamStartedAt := time.Now()
@@ -564,7 +586,7 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 	if err := writeAppChatSSEComment(w, flusher, "connected"); err != nil {
-		logAppChatStreamTiming("error", userInfo.ID, sessionID, streamStartedAt, "connected_write")
+		logAppChatTerminalTiming("stream", "error", userInfo.ID, sessionID, streamStartedAt, "connected_write", 0)
 		return
 	}
 	logAppChatStreamTiming("connected", userInfo.ID, sessionID, streamStartedAt, "")
@@ -582,6 +604,7 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 		lifecycle:            lifecycle,
 		fixedAnswer:          fixedAnswer,
 		isModelIdentity:      isModelIdentity,
+		replyPlan:            replyPlan,
 	})
 	s.pumpAppChatStream(ctx, cancel, r.Context(), w, flusher, events, lifecycle, userInfo.ID, sessionID, streamStartedAt, chatTimeout)
 }
@@ -605,6 +628,7 @@ type appChatStreamPipelineInput struct {
 	lifecycle            *appChatStreamLifecycle
 	fixedAnswer          rag.Answer
 	isModelIdentity      bool
+	replyPlan            appChatEnneagramReplyPlan
 }
 
 func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- appChatStreamEvent, input appChatStreamPipelineInput) {
@@ -647,7 +671,7 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			return
 		}
 
-		inputs := s.loadAppChatPromptInputs(ctx, input.userID, input.sessionID, input.cardID, input.question, input.generator)
+		inputs := s.loadAppChatPromptInputs(ctx, input.userID, input.sessionID, input.cardID, input.question, input.replyPlan.RequestedTypes, input.generator)
 		docs := inputs.docs
 		knowledgeTrace = inputs.trace
 		profile, conversationCard := inputs.profile, inputs.card
@@ -702,7 +726,11 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			ConversationCard:    conversationCard,
 			UserPreferences:     preferences,
 			CurrentDirectives:   directives,
-			RuntimeInstructions: buildAppChatEnneagramReplyPlan(input.question).RuntimeInstructions,
+			RuntimeInstructions: input.replyPlan.RuntimeInstructions,
+			MaxOutputTokens:     input.replyPlan.MaxOutputTokens,
+			CompletionTimeout:   input.replyPlan.CompletionTimeout,
+			SourceLimit:         input.replyPlan.SourceLimit,
+			SourceSnippetRunes:  input.replyPlan.SourceSnippetRunes,
 		}, func(delta string) error {
 			if delta == "" {
 				return nil
@@ -859,22 +887,23 @@ func (s *Server) pumpAppChatStream(
 
 	firstDelta := true
 	persistenceStarted := false
+	responseRunes := 0
 	handleEvent := func(event appChatStreamEvent, ok bool) bool {
 		if requestCtx.Err() != nil {
 			stopBeforePersistenceAndCancel()
-			logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
+			logAppChatTerminalTiming("stream", "canceled", userID, sessionID, startedAt, "client", responseRunes)
 			return true
 		}
 		if !ok {
 			if ctx.Err() != nil {
 				_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成超时，请重试"})
-				logAppChatStreamTiming("error", userID, sessionID, startedAt, "total_timeout")
+				logAppChatTerminalTiming("stream", "error", userID, sessionID, startedAt, "total_timeout", responseRunes)
 				return true
 			}
 			if writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成失败，请重试"}) != nil {
 				stopBeforePersistenceAndCancel()
 			}
-			logAppChatStreamTiming("error", userID, sessionID, startedAt, "worker_closed")
+			logAppChatTerminalTiming("stream", "error", userID, sessionID, startedAt, "worker_closed", responseRunes)
 			return true
 		}
 		switch event.kind {
@@ -897,12 +926,13 @@ func (s *Server) pumpAppChatStream(
 				if event.writeResult != nil {
 					event.writeResult <- err
 				}
-				logAppChatStreamTiming("error", userID, sessionID, startedAt, "delta_write")
+				logAppChatTerminalTiming("stream", "error", userID, sessionID, startedAt, "delta_write", responseRunes)
 				return true
 			}
 			if event.writeResult != nil {
 				event.writeResult <- nil
 			}
+			responseRunes += utf8.RuneCountInString(event.delta)
 			resetIdle()
 			if firstDelta {
 				firstDelta = false
@@ -911,16 +941,16 @@ func (s *Server) pumpAppChatStream(
 		case appChatStreamDone:
 			if err := writeAppChatSSE(w, flusher, "done", event.response); err != nil {
 				stopBeforePersistenceAndCancel()
-				logAppChatStreamTiming("error", userID, sessionID, startedAt, "done_write")
+				logAppChatTerminalTiming("stream", "error", userID, sessionID, startedAt, "done_write", responseRunes)
 				return true
 			}
-			logAppChatStreamTiming("completed", userID, sessionID, startedAt, "")
+			logAppChatTerminalTiming("stream", "completed", userID, sessionID, startedAt, "complete", utf8.RuneCountInString(event.response.Answer.Answer))
 			return true
 		case appChatStreamError:
 			if err := writeAppChatSSE(w, flusher, "error", map[string]string{"message": event.publicError}); err != nil {
 				stopBeforePersistenceAndCancel()
 			}
-			logAppChatStreamTiming("error", userID, sessionID, startedAt, event.errorPhase)
+			logAppChatTerminalTiming("stream", "error", userID, sessionID, startedAt, event.errorPhase, responseRunes)
 			return true
 		}
 		return false
@@ -943,7 +973,7 @@ func (s *Server) pumpAppChatStream(
 	for {
 		if requestCtx.Err() != nil {
 			stopBeforePersistenceAndCancel()
-			logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
+			logAppChatTerminalTiming("stream", "canceled", userID, sessionID, startedAt, "client", responseRunes)
 			return
 		}
 		if drainEvents() {
@@ -957,7 +987,7 @@ func (s *Server) pumpAppChatStream(
 		case <-heartbeat.C:
 			if err := writeAppChatSSEComment(w, flusher, "ping"); err != nil {
 				stopBeforePersistenceAndCancel()
-				logAppChatStreamTiming("error", userID, sessionID, startedAt, "heartbeat_write")
+				logAppChatTerminalTiming("stream", "error", userID, sessionID, startedAt, "heartbeat_write", responseRunes)
 				return
 			}
 		case <-idle:
@@ -974,18 +1004,18 @@ func (s *Server) pumpAppChatStream(
 			}
 			cancel()
 			_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成超时，请重试"})
-			logAppChatStreamTiming("idle", userID, sessionID, startedAt, "provider")
+			logAppChatTerminalTiming("stream", "error", userID, sessionID, startedAt, "provider_timeout", responseRunes)
 			return
 		case <-requestDone:
 			stopBeforePersistenceAndCancel()
-			logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
+			logAppChatTerminalTiming("stream", "canceled", userID, sessionID, startedAt, "client", responseRunes)
 			return
 		case <-totalDone:
 			if drainEvents() {
 				return
 			}
 			if requestCtx.Err() != nil {
-				logAppChatStreamTiming("canceled", userID, sessionID, startedAt, "client")
+				logAppChatTerminalTiming("stream", "canceled", userID, sessionID, startedAt, "client", responseRunes)
 				return
 			}
 			if persistenceStarted || lifecycle.persistenceStarted() {
@@ -999,7 +1029,7 @@ func (s *Server) pumpAppChatStream(
 				continue
 			}
 			_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成超时，请重试"})
-			logAppChatStreamTiming("error", userID, sessionID, startedAt, "total_timeout")
+			logAppChatTerminalTiming("stream", "error", userID, sessionID, startedAt, "total_timeout", responseRunes)
 			return
 		}
 	}
@@ -1042,6 +1072,24 @@ func logAppChatStreamTiming(stage string, userID, sessionID int64, startedAt tim
 		return
 	}
 	log.Printf("app_chat_stream stage=%s phase=%s user_id=%d session_id=%d elapsed_ms=%d", stage, phase, userID, sessionID, time.Since(startedAt).Milliseconds())
+}
+
+func logAppChatTerminalTiming(mode, stage string, userID, sessionID int64, startedAt time.Time, phase string, responseRunes int) {
+	log.Printf("app_chat_%s stage=%s phase=%s response_runes=%d user_id=%d session_id=%d elapsed_ms=%d", mode, stage, phase, responseRunes, userID, sessionID, time.Since(startedAt).Milliseconds())
+}
+
+func appChatRequestTimeout(configured, completion time.Duration) time.Duration {
+	if completion > configured {
+		return completion
+	}
+	return configured
+}
+
+func appChatFailurePhase(ctx context.Context, fallback string) string {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "total_timeout"
+	}
+	return fallback
 }
 
 func (s *Server) beginAppChatPreferenceTurn(userID int64) appChatPreferenceTurn {
@@ -1364,13 +1412,13 @@ type appChatPromptInputs struct {
 	prompt   appChatPromptContext
 }
 
-func (s *Server) loadAppChatPromptInputs(ctx context.Context, userID, sessionID, cardID int64, question string, generator rag.Generator) appChatPromptInputs {
+func (s *Server) loadAppChatPromptInputs(ctx context.Context, userID, sessionID, cardID int64, question string, requestedTypes []int, generator rag.Generator) appChatPromptInputs {
 	var out appChatPromptInputs
 	var wg sync.WaitGroup
 	wg.Add(4)
 	go func() {
 		defer wg.Done()
-		out.docs, out.trace = s.retrieveAppChatKnowledge(ctx, userID, sessionID, cardID, question)
+		out.docs, out.trace = s.retrieveAppChatKnowledgeForTypes(ctx, userID, sessionID, cardID, question, requestedTypes)
 	}()
 	go func() { defer wg.Done(); out.profile, out.card = s.appChatProfilesForCard(ctx, userID, cardID) }()
 	go func() { defer wg.Done(); out.memories, _ = s.appChatMemoriesForPrompt(ctx, userID, cardID, 6) }()

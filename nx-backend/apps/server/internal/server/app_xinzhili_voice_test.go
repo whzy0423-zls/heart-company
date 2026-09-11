@@ -453,7 +453,7 @@ func TestAppXinzhiliVoiceTurnUsesLayeredKnowledgeForPrimaryCard(t *testing.T) {
 	s := newSuccessfulXinzhiliVoiceServer(t)
 	s.appChat = store
 	s.xinzhiliSavePair = nil
-	s.xinzhiliTranscribe = func(context.Context, []byte, string) (string, error) { return layeredKnowledgeQuestion, nil }
+	s.xinzhiliTranscribe = func(context.Context, []byte, string) (string, error) { return "1 2 3 4 这些型号的反馈", nil }
 	s.appKnowledge = appknowledge.NewCoordinator(resolver, searcher, searcher)
 	s.ragGen = generator
 	s.appChatProfilesForCardOverride = func(_ context.Context, _, cardID int64) (rag.UserProfile, rag.ConversationCard) {
@@ -473,6 +473,10 @@ func TestAppXinzhiliVoiceTurnUsesLayeredKnowledgeForPrimaryCard(t *testing.T) {
 	}
 	if len(resolver.requestedTypes) != 0 {
 		t.Fatalf("voice must keep legacy current-card retrieval, requested types = %v", resolver.requestedTypes)
+	}
+	input := generator.lastInput()
+	if input.RuntimeInstructions != "" || input.MaxOutputTokens != 0 || input.CompletionTimeout != 0 || input.SourceLimit != 0 || input.SourceSnippetRunes != 0 {
+		t.Fatalf("voice received main-chat enneagram controls: %+v", input)
 	}
 	trace := store.singleTrace(t)
 	if trace.EnneagramType == nil || *trace.EnneagramType != 5 || trace.CardRevision != 7 {

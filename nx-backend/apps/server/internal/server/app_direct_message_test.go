@@ -25,6 +25,25 @@ func TestDirectMessageRoutesAreRegistered(t *testing.T) {
 	}
 }
 
+func TestDirectMessagesDoNotApplyMainChatEnneagramControls(t *testing.T) {
+	raw, err := os.ReadFile("app_direct_message.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mainChatControl := range []string{
+		"buildAppChatEnneagramReplyPlan", "RequestedTypes", "RuntimeInstructions", "MaxOutputTokens", "CompletionTimeout", "SourceLimit", "SourceSnippetRunes",
+	} {
+		if strings.Contains(string(raw), mainChatControl) {
+			t.Fatalf("direct-message handler references main-chat control %q", mainChatControl)
+		}
+	}
+	message := directmessage.Message{ID: 99, ConversationID: 12, MessageType: "text", Body: "1 2 3 4 这些型号的反馈"}
+	_, content, _, _ := directMessageNotificationPayload(message, "好友")
+	if content != message.Body {
+		t.Fatalf("direct message content = %q, want verbatim peer message", content)
+	}
+}
+
 func TestAppDirectMessageRouterRequiresAuthentication(t *testing.T) {
 	server := &Server{}
 	response := httptest.NewRecorder()

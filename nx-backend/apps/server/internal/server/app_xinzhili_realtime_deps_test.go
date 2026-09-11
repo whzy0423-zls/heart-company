@@ -30,7 +30,7 @@ func TestServerXinzhiliLayeredKnowledgeUsesCurrentConversationCard(t *testing.T)
 	searcher := newLayeredKnowledgeSearcher()
 	server := &Server{appKnowledge: appknowledge.NewCoordinator(resolver, searcher, searcher)}
 
-	result, err := (serverXinzhiliLayeredKnowledge{server: server}).Retrieve(context.Background(), 7, 91, 55, layeredKnowledgeQuestion)
+	result, err := (serverXinzhiliLayeredKnowledge{server: server}).Retrieve(context.Background(), 7, 91, 55, "1 2 3 4 这些型号的反馈")
 	if err != nil {
 		t.Fatal(err)
 	}

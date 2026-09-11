@@ -73,6 +73,74 @@ func TestAppChatAskStreamUsesLayeredKnowledgeAndPersistsInternalTrace(t *testing
 	assertSourceIDs(t, generator.lastSources(), "public", "theory", "type-6")
 }
 
+func TestAppChatHandlersApplyEnneagramReplyPlan(t *testing.T) {
+	tests := []struct {
+		name         string
+		path         string
+		question     string
+		wantTypes    []int
+		wantDeepPlan bool
+	}{
+		{name: "sync deep", path: "/api/app/chat/sessions/42/ask", question: "1 2 3 4 这些型号的反馈", wantTypes: []int{1, 2, 3, 4}, wantDeepPlan: true},
+		{name: "stream deep", path: "/api/app/chat/sessions/42/ask/stream", question: "1 2 3 4 这些型号的反馈", wantTypes: []int{1, 2, 3, 4}, wantDeepPlan: true},
+		{name: "sync ordinary", path: "/api/app/chat/sessions/42/ask", question: "今天适合散步吗？"},
+		{name: "stream ordinary", path: "/api/app/chat/sessions/42/ask/stream", question: "今天适合散步吗？"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+			store.cardID = 77
+			resolver := &layeredKnowledgeResolver{mainType: 6, revision: 8}
+			generator := &replyPlanCapturingGenerator{}
+			server := newLayeredKnowledgeServer(t, store, resolver, newLayeredKnowledgeSearcher(), generator)
+			server.chatTimeout = 5 * time.Second
+
+			if strings.HasSuffix(tt.path, "/stream") {
+				writer := newAppChatBlockingStreamWriter()
+				server.appChatRouter(writer, layeredKnowledgeRequest(t, tt.path, tt.question))
+				if body := writer.BodyString(); !strings.Contains(body, "event: done\n") || strings.Contains(body, "event: error\n") {
+					t.Fatalf("stream body = %q", body)
+				}
+			} else {
+				response := httptest.NewRecorder()
+				server.appChatRouter(response, layeredKnowledgeRequest(t, tt.path, tt.question))
+				if response.Code != http.StatusOK {
+					t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+				}
+			}
+
+			if !reflect.DeepEqual(resolver.requestedTypes, tt.wantTypes) {
+				t.Fatalf("knowledge RequestedTypes = %v, want %v", resolver.requestedTypes, tt.wantTypes)
+			}
+			input, remaining := generator.capturedInput()
+			if tt.wantDeepPlan {
+				plan := buildAppChatEnneagramReplyPlan(tt.question)
+				if input.MaxOutputTokens != 1880 || input.CompletionTimeout < 70*time.Second {
+					t.Fatalf("generation controls tokens=%d timeout=%s", input.MaxOutputTokens, input.CompletionTimeout)
+				}
+				if input.SourceLimit != plan.SourceLimit || input.SourceSnippetRunes != plan.SourceSnippetRunes {
+					t.Fatalf("source controls = %d/%d, want %d/%d", input.SourceLimit, input.SourceSnippetRunes, plan.SourceLimit, plan.SourceSnippetRunes)
+				}
+				if input.RuntimeInstructions != plan.RuntimeInstructions {
+					t.Fatal("generator RuntimeInstructions differ from the single response plan")
+				}
+				if remaining < 69*time.Second {
+					t.Fatalf("handler deadline remaining = %s, want at least 69s", remaining)
+				}
+				return
+			}
+
+			if input.MaxOutputTokens != 0 || input.CompletionTimeout != 0 || input.SourceLimit != 0 || input.SourceSnippetRunes != 0 || input.RuntimeInstructions != "" {
+				t.Fatalf("ordinary question received explicit controls: %+v", input)
+			}
+			if remaining <= 0 || remaining > 5*time.Second || remaining < 4*time.Second {
+				t.Fatalf("ordinary handler deadline remaining = %s, want configured 5s", remaining)
+			}
+		})
+	}
+}
+
 func TestAppChatLayeredKnowledgeUsesLatestCardTypeAndDegradesWithoutValidType(t *testing.T) {
 	store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
 	store.cardID = 77
@@ -236,25 +304,25 @@ func newLayeredKnowledgeSearcher() *layeredKnowledgeSearcher {
 	return &layeredKnowledgeSearcher{releaseTopKs: make(map[int64][]int)}
 }
 
-func (s *layeredKnowledgeSearcher) SearchPublic(_ context.Context, _ string, topK int) ([]rag.Document, error) {
+func (s *layeredKnowledgeSearcher) SearchPublic(_ context.Context, query string, topK int) ([]rag.Document, error) {
 	s.mu.Lock()
 	s.publicTopKs = append(s.publicTopKs, topK)
 	s.mu.Unlock()
-	return []rag.Document{{ID: "public", Title: "公共支持", Content: layeredKnowledgeQuestion + " 先确认现实压力来源。"}}, nil
+	return []rag.Document{{ID: "public", Title: "公共支持", Content: query + " 先确认现实压力来源。"}}, nil
 }
 
-func (s *layeredKnowledgeSearcher) SearchReleaseChunks(_ context.Context, releaseID int64, _ string, topK int, _ float64) ([]rag.Document, error) {
+func (s *layeredKnowledgeSearcher) SearchReleaseChunks(_ context.Context, releaseID int64, query string, topK int, _ float64) ([]rag.Document, error) {
 	s.mu.Lock()
 	s.releaseIDs = append(s.releaseIDs, releaseID)
 	s.releaseTopKs[releaseID] = append(s.releaseTopKs[releaseID], topK)
 	s.mu.Unlock()
 	if releaseID == 100 {
-		return []rag.Document{{ID: "theory", Title: "正式理论", Content: layeredKnowledgeQuestion + " 先区分动机、行为和防御模式。"}}, nil
+		return []rag.Document{{ID: "theory", Title: "正式理论", Content: query + " 先区分动机、行为和防御模式。"}}, nil
 	}
 	typeValue := int(releaseID - 200)
 	return []rag.Document{{
 		ID: fmt.Sprintf("type-%d", typeValue), Title: fmt.Sprintf("%d号型号库", typeValue),
-		Content: fmt.Sprintf("%s %d号使用当前型号特有的观察和成长建议。", layeredKnowledgeQuestion, typeValue), Tags: []string{fmt.Sprintf("type-%02d", typeValue)},
+		Content: fmt.Sprintf("%s %d号使用当前型号特有的观察和成长建议。", query, typeValue), Tags: []string{fmt.Sprintf("type-%02d", typeValue)},
 	}}, nil
 }
 
@@ -273,15 +341,50 @@ func (s *layeredKnowledgeSearcher) capturedCalls() ([]int, []int64, map[int64][]
 type layeredKnowledgeGenerator struct {
 	mu      sync.Mutex
 	sources []rag.Source
+	input   rag.GenerateInput
+}
+
+type replyPlanCapturingGenerator struct {
+	mu        sync.Mutex
+	input     rag.GenerateInput
+	remaining time.Duration
+}
+
+func (g *replyPlanCapturingGenerator) capture(ctx context.Context, input rag.GenerateInput) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.input = input
+	if deadline, ok := ctx.Deadline(); ok {
+		g.remaining = time.Until(deadline)
+	}
+}
+
+func (g *replyPlanCapturingGenerator) Generate(ctx context.Context, input rag.GenerateInput) (string, error) {
+	g.capture(ctx, input)
+	return "已按要求回答。", nil
+}
+
+func (g *replyPlanCapturingGenerator) GenerateStream(ctx context.Context, input rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+	g.capture(ctx, input)
+	if err := emit("已按要求回答。"); err != nil {
+		return "", err
+	}
+	return "已按要求回答。", nil
+}
+
+func (g *replyPlanCapturingGenerator) capturedInput() (rag.GenerateInput, time.Duration) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.input, g.remaining
 }
 
 func (g *layeredKnowledgeGenerator) Generate(_ context.Context, input rag.GenerateInput) (string, error) {
-	g.capture(input.Sources)
+	g.captureInput(input)
 	return "已结合三层知识回答。", nil
 }
 
 func (g *layeredKnowledgeGenerator) GenerateStream(_ context.Context, input rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
-	g.capture(input.Sources)
+	g.captureInput(input)
 	answer := "已结合三层知识回答。"
 	if err := emit(answer); err != nil {
 		return "", err
@@ -289,16 +392,23 @@ func (g *layeredKnowledgeGenerator) GenerateStream(_ context.Context, input rag.
 	return answer, nil
 }
 
-func (g *layeredKnowledgeGenerator) capture(sources []rag.Source) {
+func (g *layeredKnowledgeGenerator) captureInput(input rag.GenerateInput) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.sources = append([]rag.Source(nil), sources...)
+	g.input = input
+	g.sources = append([]rag.Source(nil), input.Sources...)
 }
 
 func (g *layeredKnowledgeGenerator) lastSources() []rag.Source {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return append([]rag.Source(nil), g.sources...)
+}
+
+func (g *layeredKnowledgeGenerator) lastInput() rag.GenerateInput {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.input
 }
 
 type layeredKnowledgeChatStore struct {
