@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -185,6 +186,98 @@ func TestOpenAIChatGenerateStreamUsesDynamicTokenBudgetForAllTypesQuestion(t *te
 	}
 	if requestBody["max_tokens"] != float64(1200) {
 		t.Fatalf("stream max_tokens = %#v, want 1200", requestBody["max_tokens"])
+	}
+}
+
+func TestOpenAIChatExplicitOutputBudgetUsesProviderPayloadForSyncAndStream(t *testing.T) {
+	var budgets []float64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		budget, _ := body["max_tokens"].(float64)
+		budgets = append(budgets, budget)
+		if body["stream"] == true {
+			_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+			return
+		}
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	}))
+	defer server.Close()
+
+	generator := newTestOpenAIChatGenerator(server)
+	explicit := rag.GenerateInput{Question: "1 2 3 4 这些型号的反馈", MaxOutputTokens: 1880}
+	ordinary := rag.GenerateInput{Question: "你好", Tier: "basic"}
+	allTypes := rag.GenerateInput{Question: "介绍1到9型号的分别解释"}
+	if _, err := generator.Generate(context.Background(), explicit); err != nil {
+		t.Fatalf("explicit sync: %v", err)
+	}
+	if _, err := generator.GenerateStream(context.Background(), explicit, nil); err != nil {
+		t.Fatalf("explicit stream: %v", err)
+	}
+	if _, err := generator.Generate(context.Background(), ordinary); err != nil {
+		t.Fatalf("ordinary sync: %v", err)
+	}
+	if _, err := generator.GenerateStream(context.Background(), allTypes, nil); err != nil {
+		t.Fatalf("adaptive stream: %v", err)
+	}
+	if want := []float64{1880, 1880, 220, 1200}; !slices.Equal(budgets, want) {
+		t.Fatalf("provider budgets = %v, want %v", budgets, want)
+	}
+}
+
+func TestOpenAIChatExplicitCompletionTimeoutAppliesToSyncAndStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		time.Sleep(120 * time.Millisecond)
+		if body["stream"] == true {
+			_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"late\"}}]}\n\ndata: [DONE]\n\n")
+			return
+		}
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"late"}}]}`)
+	}))
+	defer server.Close()
+
+	generator := newTestOpenAIChatGenerator(server)
+	input := rag.GenerateInput{Question: "test", CompletionTimeout: 20 * time.Millisecond}
+	assertExplicitCompletionTimeout(t, "sync", func() error {
+		_, err := generator.Generate(context.Background(), input)
+		return err
+	})
+	assertExplicitCompletionTimeout(t, "stream", func() error {
+		_, err := generator.GenerateStream(context.Background(), input, nil)
+		return err
+	})
+
+	ordinaryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["stream"] == true {
+			_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"first\"}}]}\n\n")
+			w.(http.Flusher).Flush()
+			time.Sleep(60 * time.Millisecond)
+			_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"last\"}}]}\n\ndata: [DONE]\n\n")
+			return
+		}
+		time.Sleep(60 * time.Millisecond)
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"late"}}]}`)
+	}))
+	defer ordinaryServer.Close()
+	ordinaryGenerator := newTestOpenAIChatGenerator(ordinaryServer)
+	ordinaryGenerator.client.Timeout = 20 * time.Millisecond
+	assertConfiguredCompletionTimeout(t, "sync", func() error {
+		_, err := ordinaryGenerator.Generate(context.Background(), rag.GenerateInput{Question: "test"})
+		return err
+	})
+	answer, err := ordinaryGenerator.GenerateStream(context.Background(), rag.GenerateInput{Question: "test"}, nil)
+	if err != nil || answer != "firstlast" {
+		t.Fatalf("zero-timeout stream answer/error = %q/%v", answer, err)
+	}
+	if ordinaryGenerator.client.Timeout != 20*time.Millisecond {
+		t.Fatalf("configured client timeout mutated to %v", ordinaryGenerator.client.Timeout)
 	}
 }
 

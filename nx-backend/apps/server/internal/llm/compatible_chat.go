@@ -65,21 +65,19 @@ func normalizeChatProvider(provider string) string {
 }
 
 func (g *CompatibleChatGenerator) Generate(ctx context.Context, input rag.GenerateInput) (string, error) {
-	return g.generateText(ctx, resolveRuntimeSystemPrompt(g.resolveSystemPrompt(), input), buildUserPrompt(input), chatTokenBudgetForTier(input.Question, input.Tier), 0.55)
+	return g.generateText(ctx, resolveRuntimeSystemPrompt(g.resolveSystemPrompt(), input), buildUserPrompt(input), chatOutputTokenBudget(input), 0.55, input.CompletionTimeout)
 }
 
 func (g *CompatibleChatGenerator) GenerateStream(ctx context.Context, input rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
 	if err := g.validate(); err != nil {
 		return "", err
 	}
-	body := g.requestBody(resolveRuntimeSystemPrompt(g.resolveSystemPrompt(), input), buildUserPrompt(input), chatTokenBudgetForTier(input.Question, input.Tier), 0.55, true)
+	body := g.requestBody(resolveRuntimeSystemPrompt(g.resolveSystemPrompt(), input), buildUserPrompt(input), chatOutputTokenBudget(input), 0.55, true)
 	req, err := g.newRequest(ctx, body, true)
 	if err != nil {
 		return "", err
 	}
-	streamClient := *g.client
-	streamClient.Timeout = 0
-	resp, err := streamClient.Do(req)
+	resp, err := chatRequestClient(g.client, input.CompletionTimeout, true).Do(req)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
@@ -125,7 +123,7 @@ func (g *CompatibleChatGenerator) SummarizeConversation(ctx context.Context, pre
 	prompt.WriteString("请输出合并后的会话摘要，只输出摘要正文。")
 	summary, err := g.generateText(ctx,
 		"你负责压缩会话摘要。必须保留参与人物及关系、已确认事实和事件、用户诉求与边界、关键建议与反馈、尚未解决的问题；删除寒暄、重复表达和无关细节。摘要应准确、简洁，不得添加对话中不存在的信息。",
-		prompt.String(), 700, 0.2,
+		prompt.String(), 700, 0.2, 0,
 	)
 	if err != nil {
 		return "", err
@@ -140,7 +138,7 @@ func (g *CompatibleChatGenerator) Ping(ctx context.Context) PingResult {
 		return result
 	}
 	start := time.Now()
-	_, err := g.generateText(ctx, "", "ping", 1, 0.01)
+	_, err := g.generateText(ctx, "", "ping", 1, 0.01, 0)
 	result.LatencyMs = time.Since(start).Milliseconds()
 	if err != nil {
 		result.Message = err.Error()
@@ -151,7 +149,7 @@ func (g *CompatibleChatGenerator) Ping(ctx context.Context) PingResult {
 	return result
 }
 
-func (g *CompatibleChatGenerator) generateText(ctx context.Context, systemPrompt, userPrompt string, maxTokens int, temperature float64) (string, error) {
+func (g *CompatibleChatGenerator) generateText(ctx context.Context, systemPrompt, userPrompt string, maxTokens int, temperature float64, completionTimeout time.Duration) (string, error) {
 	if err := g.validate(); err != nil {
 		return "", err
 	}
@@ -160,7 +158,7 @@ func (g *CompatibleChatGenerator) generateText(ctx context.Context, systemPrompt
 	if err != nil {
 		return "", err
 	}
-	resp, err := g.client.Do(req)
+	resp, err := chatRequestClient(g.client, completionTimeout, false).Do(req)
 	if err != nil {
 		return "", err
 	}

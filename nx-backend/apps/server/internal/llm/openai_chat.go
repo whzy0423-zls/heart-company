@@ -87,12 +87,12 @@ func newOpenAIChatGenerator(cfg ChatGeneratorConfig, client *http.Client) *OpenA
 }
 
 func (g *OpenAIChatGenerator) Generate(ctx context.Context, input rag.GenerateInput) (string, error) {
-	return g.complete(ctx, openAIChatRequest{
+	return g.completeWithTimeout(ctx, openAIChatRequest{
 		Model:       g.model,
 		Messages:    g.chatMessages(input),
 		Temperature: 0.55,
-		MaxTokens:   chatTokenBudgetForTier(input.Question, input.Tier),
-	})
+		MaxTokens:   chatOutputTokenBudget(input),
+	}, input.CompletionTimeout)
 }
 
 func (g *OpenAIChatGenerator) GenerateStream(ctx context.Context, input rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
@@ -103,7 +103,7 @@ func (g *OpenAIChatGenerator) GenerateStream(ctx context.Context, input rag.Gene
 		Model:       g.model,
 		Messages:    g.chatMessages(input),
 		Temperature: 0.55,
-		MaxTokens:   chatTokenBudgetForTier(input.Question, input.Tier),
+		MaxTokens:   chatOutputTokenBudget(input),
 		Stream:      true,
 	})
 	if err != nil {
@@ -115,9 +115,7 @@ func (g *OpenAIChatGenerator) GenerateStream(ctx context.Context, input rag.Gene
 	}
 	req.Header.Set("Accept", "text/event-stream")
 
-	streamClient := *g.client
-	streamClient.Timeout = 0
-	resp, err := streamClient.Do(req)
+	resp, err := chatRequestClient(g.client, input.CompletionTimeout, true).Do(req)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
@@ -301,6 +299,10 @@ func (g *OpenAIChatGenerator) Ping(ctx context.Context) PingResult {
 }
 
 func (g *OpenAIChatGenerator) complete(ctx context.Context, body openAIChatRequest) (string, error) {
+	return g.completeWithTimeout(ctx, body, 0)
+}
+
+func (g *OpenAIChatGenerator) completeWithTimeout(ctx context.Context, body openAIChatRequest, completionTimeout time.Duration) (string, error) {
 	if err := g.requireAPIKey(); err != nil {
 		return "", err
 	}
@@ -312,7 +314,7 @@ func (g *OpenAIChatGenerator) complete(ctx context.Context, body openAIChatReque
 	if err != nil {
 		return "", err
 	}
-	resp, err := g.client.Do(req)
+	resp, err := chatRequestClient(g.client, completionTimeout, false).Do(req)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr

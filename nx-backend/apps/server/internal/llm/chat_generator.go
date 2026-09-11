@@ -228,6 +228,29 @@ type ChatGenerator interface {
 	PolishPrompt(ctx context.Context, draft, kind string) (string, error)
 }
 
+func chatOutputTokenBudget(input rag.GenerateInput) int {
+	if input.MaxOutputTokens > 0 {
+		return input.MaxOutputTokens
+	}
+	return chatTokenBudgetForTier(input.Question, input.Tier)
+}
+
+func chatRequestClient(configured *http.Client, completionTimeout time.Duration, stream bool) *http.Client {
+	if configured == nil {
+		configured = http.DefaultClient
+	}
+	if completionTimeout <= 0 && !stream {
+		return configured
+	}
+	requestClient := *configured
+	if completionTimeout > 0 {
+		requestClient.Timeout = completionTimeout
+	} else {
+		requestClient.Timeout = 0
+	}
+	return &requestClient
+}
+
 // NewChatGenerator is the single construction path for interactive chat.
 // Supplying Client is an explicit test seam; production construction always
 // uses the guarded transport and rejects local/private API bases.

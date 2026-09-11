@@ -136,7 +136,7 @@ func (g *MiniMaxGenerator) Generate(ctx context.Context, input rag.GenerateInput
 	body := map[string]any{
 		"model":              g.model,
 		"temperature":        0.55,
-		"tokens_to_generate": chatTokenBudgetForTier(input.Question, input.Tier),
+		"tokens_to_generate": chatOutputTokenBudget(input),
 		"messages": []map[string]string{
 			{"role": "system", "content": resolveRuntimeSystemPrompt(g.resolveSystemPrompt(), input)},
 			{"role": "user", "content": buildUserPrompt(input)},
@@ -150,7 +150,7 @@ func (g *MiniMaxGenerator) Generate(ctx context.Context, input rag.GenerateInput
 	req.Header.Set("Authorization", "Bearer "+g.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := g.client.Do(req)
+	resp, err := chatRequestClient(g.client, input.CompletionTimeout, false).Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -190,7 +190,7 @@ func (g *MiniMaxGenerator) GenerateStream(ctx context.Context, input rag.Generat
 	body := map[string]any{
 		"model":              g.model,
 		"temperature":        0.55,
-		"tokens_to_generate": chatTokenBudgetForTier(input.Question, input.Tier),
+		"tokens_to_generate": chatOutputTokenBudget(input),
 		"stream":             true,
 		"messages": []map[string]string{
 			{"role": "system", "content": resolveRuntimeSystemPrompt(g.resolveSystemPrompt(), input)},
@@ -206,9 +206,7 @@ func (g *MiniMaxGenerator) GenerateStream(ctx context.Context, input rag.Generat
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 
-	streamClient := *g.client
-	streamClient.Timeout = 0
-	resp, err := streamClient.Do(req)
+	resp, err := chatRequestClient(g.client, input.CompletionTimeout, true).Do(req)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
