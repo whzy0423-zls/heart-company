@@ -16,6 +16,7 @@ const contentSource = readSource('../data/appDownloadPage.js')
 const componentSource = readSource('../components/AppDownloadSection.jsx')
 const layoutSource = readSource('../components/Layout.jsx')
 const configModuleSource = readSource('../data/siteConfig.js')
+const stylesheetSource = readSource('../index.css')
 const siteConfig = JSON.parse(readSource('../../../shared/site-config.json'))
 
 test('registers a lazy /app route and points every primary App entry to it', () => {
@@ -80,6 +81,11 @@ test('uses a real App screenshot and page-specific search metadata', () => {
   assert.match(pageSource, /meta\[name="description"\]/)
   assert.match(pageSource, /meta\[property="og:title"\]/)
   assert.match(pageSource, /meta\[property="og:description"\]/)
+})
+
+test('shows the complete App screenshot without cropping its top or bottom', () => {
+  assert.match(stylesheetSource, /\.app-page__device\s*\{[^}]*aspect-ratio:\s*448\s*\/\s*960;/)
+  assert.match(stylesheetSource, /\.app-page__device-screen img\s*\{[^}]*object-fit:\s*contain;/)
 })
 
 test('bundles the supplied installation video with an accessible poster and captions', () => {
