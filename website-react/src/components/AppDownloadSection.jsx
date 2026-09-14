@@ -198,6 +198,11 @@ export default function AppDownloadSection({
                   {viewModel.retryText}
                 </button>
               )}
+
+              <p className="app-download__ios-status">
+                <strong>iOS</strong>
+                <span>当前 iOS 版本暂不支持，敬请期待</span>
+              </p>
             </div>
 
             <div

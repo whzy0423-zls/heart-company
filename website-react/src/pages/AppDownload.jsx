@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import AppConversationPreview from '../components/AppConversationPreview'
 import AppDownloadSection from '../components/AppDownloadSection'
 import Reveal from '../components/Reveal'
 import siteConfig from '../data/siteConfig'
@@ -74,15 +75,9 @@ export default function AppDownload() {
             <a href="#release-notes">更新记录</a>
           </nav>
         </div>
-        <figure className="app-page__device">
+        <figure className="app-page__device" aria-label="芯之力 App 匿名示例对话预览">
           <div className="app-page__device-screen">
-            <img
-              src={APP_HERO_PREVIEW.src}
-              alt={APP_HERO_PREVIEW.alt}
-              width="448"
-              height="960"
-              fetchPriority="high"
-            />
+            <AppConversationPreview />
           </div>
         </figure>
       </section>
