@@ -38,6 +38,8 @@ type adminAppOrder struct {
 	RemainingDays       int    `json:"remainingDays"`
 	ActivationAt        string `json:"activationAt"`
 	MembershipExpiresAt string `json:"membershipExpiresAt"`
+	RefundedAt          string `json:"refundedAt"`
+	RefundReason        string `json:"refundReason"`
 }
 
 func (s *Server) adminAppOrders(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +74,7 @@ func (s *Server) adminAppOrders(w http.ResponseWriter, r *http.Request) {
 	listArgs = append(listArgs, pageSize, (page-1)*pageSize)
 	rows, err := s.db.QueryContext(r.Context(), `
 		SELECT o.id, o.out_trade_no, o.app_user_id, COALESCE(u.phone,''), COALESCE(u.nickname,''), COALESCE(u.member_level,''),
-		       o.product_id, o.title, o.amount, o.status, COALESCE(o.transaction_id,''),
+		       o.product_id, o.title, o.amount, o.duration_days, o.status, COALESCE(o.transaction_id,''),
 		       COALESCE(o.payment_provider,'manual'), COALESCE(o.pay_channel,''), COALESCE(o.gateway_id,''),
 		       COALESCE(o.provider_trade_no,''), COALESCE(o.provider_status,''), COALESCE(o.pay_url,''),
 		       COALESCE(to_char(o.last_query_at AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'), ''),
@@ -84,7 +86,9 @@ func (s *Server) adminAppOrders(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(to_char(u.member_expires_at AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'), ''),
 		       CASE WHEN u.member_expires_at > now() THEN CEIL(EXTRACT(EPOCH FROM (u.member_expires_at-now()))/86400)::int ELSE 0 END,
 		       COALESCE(to_char(o.activation_at AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'), ''),
-		       COALESCE(to_char(o.membership_expires_at AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'), '')
+		       COALESCE(to_char(o.membership_expires_at AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'), ''),
+		       COALESCE(to_char(o.refunded_at AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'), ''),
+		       COALESCE(o.refund_reason,'')
 		FROM app_orders o
 		LEFT JOIN app_users u ON u.id=o.app_user_id
 		WHERE `+whereSQL+`
@@ -99,16 +103,19 @@ func (s *Server) adminAppOrders(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var item adminAppOrder
 		var paidAt sql.NullTime
-		if err := rows.Scan(&item.ID, &item.OutTradeNo, &item.AppUserID, &item.Phone, &item.Nickname, &item.MemberLevel, &item.ProductID, &item.Title, &item.Amount, &item.Status, &item.TransactionID,
+		if err := rows.Scan(&item.ID, &item.OutTradeNo, &item.AppUserID, &item.Phone, &item.Nickname, &item.MemberLevel, &item.ProductID, &item.Title, &item.Amount, &item.DurationDays, &item.Status, &item.TransactionID,
 			&item.PaymentProvider, &item.PayChannel, &item.GatewayID, &item.ProviderTradeNo, &item.ProviderStatus, &item.PayURL, &item.LastQueryAt, &item.PaymentError,
-			&item.CreateTime, &item.UpdateTime, &paidAt, &item.MemberStartedAt, &item.MemberExpiresAt, &item.RemainingDays, &item.ActivationAt, &item.MembershipExpiresAt); err != nil {
+			&item.CreateTime, &item.UpdateTime, &paidAt, &item.MemberStartedAt, &item.MemberExpiresAt, &item.RemainingDays, &item.ActivationAt, &item.MembershipExpiresAt,
+			&item.RefundedAt, &item.RefundReason); err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if paidAt.Valid {
 			item.PaidAt = paidAt.Time.Format("2006/01/02 15:04:05")
 		}
-		item.DurationDays, _ = membershipDurationDays(item.ProductID)
+		if item.DurationDays <= 0 {
+			item.DurationDays, _ = membershipDurationDays(item.ProductID)
+		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {

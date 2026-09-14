@@ -18,7 +18,10 @@ describe('App orders permission guards', () => {
     expect(source).toContain('主动查单');
     expect(source).toContain('确认开通');
     expect(source).toContain('reconcileAppOrderApi');
-    expect(source).not.toMatch(/refundAppOrder|refundOrder|退款操作|退款按钮/);
+    expect(source).toContain('refundAppOrderApi');
+    expect(source).toContain('canRefundOrder');
+    expect(source).toContain('确认退款');
+    expect(source).toContain('退款原因');
   });
 
   it('shows every provider observation field', () => {

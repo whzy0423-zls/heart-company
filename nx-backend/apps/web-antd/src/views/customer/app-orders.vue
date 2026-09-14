@@ -26,6 +26,7 @@ import {
   getAppOrderListApi,
   grantAppOrderApi,
   reconcileAppOrderApi,
+  refundAppOrderApi,
 } from '#/api';
 import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 import {
@@ -50,6 +51,10 @@ const grantOpen = ref(false);
 const grantSaving = ref(false);
 const grantRecord = ref<AppOrder>();
 const reconcilingOrderId = ref<number>();
+const refundOpen = ref(false);
+const refundSaving = ref(false);
+const refundRecord = ref<AppOrder>();
+const refundReason = ref('');
 const activationAt = ref<Dayjs>(dayjs());
 const estimatedExpiry = computed(() => {
   const record = grantRecord.value;
@@ -77,6 +82,7 @@ const statusOptions = [
   { label: '已开通', value: 'paid' },
   { label: '支付失败', value: 'failed' },
   { label: '已关闭', value: 'closed' },
+  { label: '已退款', value: 'refunded' },
 ];
 
 const productOptions = [
@@ -112,6 +118,7 @@ function statusLabel(status?: string) {
     failed: '支付失败',
     paying: '支付处理中',
     pending: '待支付',
+    refunded: '已退款',
   };
   return labels[status || ''] || membershipStatusLabel(status);
 }
@@ -126,7 +133,12 @@ function statusColor(status?: string) {
     return 'success';
   if (status === 'not_configured') return 'warning';
   if (normalized === 'failed') return 'error';
-  if (normalized === 'closed' || normalized === 'cancelled') return 'default';
+  if (
+    normalized === 'closed' ||
+    normalized === 'cancelled' ||
+    normalized === 'refunded'
+  )
+    return 'default';
   return 'processing';
 }
 
@@ -190,9 +202,15 @@ function isOnlineOrder(record: AppOrder) {
 
 function canReconcileOrder(record: AppOrder) {
   return (
+    canGrantOrder.value && isOnlineOrder(record) && record.status !== 'refunded'
+  );
+}
+
+function canRefundOrder(record: AppOrder) {
+  return (
     canGrantOrder.value &&
-    isOnlineOrder(record) &&
-    record.status !== 'paid'
+    isLegacyManualOrder(record) &&
+    record.status === 'paid'
   );
 }
 
@@ -274,6 +292,35 @@ async function reconcileOrder(record: AppOrder) {
     );
   } finally {
     reconcilingOrderId.value = undefined;
+  }
+}
+
+function openRefund(record: AppOrder) {
+  refundRecord.value = record;
+  refundReason.value = '';
+  refundOpen.value = true;
+}
+
+async function confirmRefund() {
+  const record = refundRecord.value;
+  const reason = refundReason.value.trim();
+  if (!record) return;
+  if (reason.length < 2) {
+    message.warning('请填写至少 2 个字符的退款原因');
+    return;
+  }
+  refundSaving.value = true;
+  try {
+    const result = await refundAppOrderApi(record.id, { reason });
+    message.success(
+      result.alreadyRefunded
+        ? '该订单已退款'
+        : '退款已确认，会员权益已同步回退',
+    );
+    refundOpen.value = false;
+    await load();
+  } finally {
+    refundSaving.value = false;
   }
 }
 
@@ -390,6 +437,15 @@ onMounted(() => {
               >
                 确认开通
               </Button>
+              <Button
+                v-if="canRefundOrder(orderRecord(record))"
+                danger
+                size="small"
+                type="link"
+                @click="openRefund(orderRecord(record))"
+              >
+                确认退款
+              </Button>
             </Space>
           </template>
         </template>
@@ -460,6 +516,12 @@ onMounted(() => {
         <Descriptions.Item label="当前会员到期">{{
           current.memberExpiresAt || '-'
         }}</Descriptions.Item>
+        <Descriptions.Item label="退款时间">{{
+          current.refundedAt || '-'
+        }}</Descriptions.Item>
+        <Descriptions.Item label="退款原因">{{
+          current.refundReason || '-'
+        }}</Descriptions.Item>
       </Descriptions>
     </Drawer>
 
@@ -501,6 +563,40 @@ onMounted(() => {
         />
         <div class="activation-help">
           仍在有效期内的会员会从原到期时间继续顺延。
+        </div>
+      </div>
+    </Modal>
+
+    <Modal
+      v-model:open="refundOpen"
+      :confirm-loading="refundSaving"
+      ok-text="确认退款"
+      ok-type="danger"
+      title="确认人工订单退款"
+      @ok="confirmRefund"
+    >
+      <Descriptions v-if="refundRecord" bordered :column="1" size="small">
+        <Descriptions.Item label="订单号">{{
+          refundRecord.outTradeNo
+        }}</Descriptions.Item>
+        <Descriptions.Item label="套餐">{{
+          refundRecord.title
+        }}</Descriptions.Item>
+        <Descriptions.Item label="退款金额">{{
+          amountText(refundRecord.amount)
+        }}</Descriptions.Item>
+      </Descriptions>
+      <div class="activation-field">
+        <div class="activation-label">退款原因</div>
+        <Input.TextArea
+          v-model:value="refundReason"
+          :maxlength="200"
+          :rows="4"
+          show-count
+          placeholder="填写退款原因，操作将写入审计日志"
+        />
+        <div class="activation-help">
+          此操作会将订单标记为已退款，并同步回退本单会员时长。
         </div>
       </div>
     </Modal>

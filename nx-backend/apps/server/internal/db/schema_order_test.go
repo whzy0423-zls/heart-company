@@ -127,7 +127,9 @@ func TestSchemaDefinesOnlinePaymentOrderColumns(t *testing.T) {
 	for _, fragment := range []string{
 		"payment_provider TEXT NOT NULL DEFAULT 'manual'",
 		"pay_channel", "gateway_id", "provider_trade_no", "provider_status",
-		"pay_url", "last_query_at", "payment_error",
+		"pay_url", "last_query_at", "payment_error", "duration_days",
+		"member_level_before", "member_started_at_before", "member_expires_at_before",
+		"refunded_at", "refund_reason",
 	} {
 		if !strings.Contains(create, fragment) {
 			t.Errorf("app_orders CREATE TABLE is missing %q", fragment)
@@ -143,7 +145,9 @@ func TestSchemaMigratesOnlinePaymentOrderColumns(t *testing.T) {
 	sql := string(raw)
 	for _, column := range []string{
 		"payment_provider", "pay_channel", "gateway_id", "provider_trade_no",
-		"provider_status", "pay_url", "last_query_at", "payment_error",
+		"provider_status", "pay_url", "last_query_at", "payment_error", "duration_days",
+		"member_level_before", "member_started_at_before", "member_expires_at_before",
+		"refunded_at", "refund_reason",
 	} {
 		statement := "ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS " + column
 		if !strings.Contains(sql, statement) {
