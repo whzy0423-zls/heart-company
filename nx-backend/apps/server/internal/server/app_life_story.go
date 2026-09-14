@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -529,6 +530,7 @@ func (s *Server) appLifeStorySubroute(w http.ResponseWriter, r *http.Request, us
 			lifeStoryFail(w, http.StatusBadRequest, lifeStoryErrorValidationFailed)
 			return
 		}
+		s.ensureLifeStoryMembershipQuota(r.Context(), userID)
 		job, _, err := s.lifeStories.CreateGenerationJobWithInput(r.Context(), userID, storyID, lifestory.GenerationInput{
 			RequestKey: requestKey, FactsVersion: factsVersion, OutlineVersion: outlineVersion,
 			SourceVersionID: sourceVersion, Instruction: instruction,
@@ -613,6 +615,7 @@ func (s *Server) appLifeStorySubroute(w http.ResponseWriter, r *http.Request, us
 			lifeStoryFail(w, http.StatusBadRequest, lifeStoryErrorValidationFailed)
 			return
 		}
+		s.ensureLifeStoryMembershipQuota(r.Context(), userID)
 		job, _, err := s.lifeStories.CreateGenerationJobWithInput(r.Context(), userID, storyID, lifestory.GenerationInput{
 			RequestKey: requestKey, FactsVersion: factsVersion, OutlineVersion: outlineVersion,
 			SourceVersionID: sourceVersion, Instruction: instruction,
@@ -965,9 +968,37 @@ func (s *Server) lifeStoryQuotaStore() *lifestory.QuotaStore {
 }
 
 func (s *Server) lifeStoryQuota(ctx context.Context, userID int64) lifestory.QuotaSnapshot {
+	planCode := "free"
+	if s != nil && s.db != nil {
+		var memberLevel string
+		var expiresAt sql.NullTime
+		if err := s.db.QueryRowContext(ctx, `SELECT member_level,member_expires_at FROM app_users WHERE id=$1 AND status='active'`, userID).Scan(&memberLevel, &expiresAt); err == nil {
+			var membershipExpiry *time.Time
+			if expiresAt.Valid {
+				membershipExpiry = &expiresAt.Time
+			}
+			planCode = appEffectivePlanCode(memberLevel, membershipExpiry, time.Now())
+		}
+	}
+	return s.lifeStoryQuotaForPlan(ctx, userID, planCode)
+}
+
+func (s *Server) ensureLifeStoryMembershipQuota(ctx context.Context, userID int64) {
+	_ = s.lifeStoryQuota(ctx, userID)
+}
+
+func (s *Server) lifeStoryQuotaForPlan(ctx context.Context, userID int64, planCode string) lifestory.QuotaSnapshot {
 	store := s.lifeStoryQuotaStore()
 	if store == nil {
 		return lifestory.QuotaSnapshot{PeriodKey: lifestory.DefaultQuotaPeriod}
+	}
+	benefits := s.appPlan(ctx, planCode)
+	if planCode != "free" {
+		period := time.Now().UTC().Format("2006-01")
+		key := fmt.Sprintf("membership:%s:%s:minimum:%d", planCode, period, benefits.StoryMonthlyLimit)
+		if quota, err := store.EnsureMinimum(ctx, userID, benefits.StoryMonthlyLimit, period, key); err == nil {
+			return quota
+		}
 	}
 	quota, err := store.Snapshot(ctx, userID, "")
 	if err != nil {

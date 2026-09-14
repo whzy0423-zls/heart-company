@@ -207,6 +207,70 @@ func (s *QuotaStore) Snapshot(ctx context.Context, appUserID int64, period strin
 	return q, nil
 }
 
+// EnsureMinimum raises the current period to at least minimum without
+// duplicating grants when entitlement reads or generation requests race.
+func (s *QuotaStore) EnsureMinimum(ctx context.Context, appUserID int64, minimum int, period, key string) (QuotaSnapshot, error) {
+	if err := s.ensureDB(); err != nil {
+		return QuotaSnapshot{}, err
+	}
+	if appUserID <= 0 || minimum <= 0 {
+		return QuotaSnapshot{}, fmt.Errorf("invalid minimum quota")
+	}
+	period = quotaPeriod(period)
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return QuotaSnapshot{}, fmt.Errorf("minimum quota key is required")
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return QuotaSnapshot{}, err
+	}
+	defer tx.Rollback()
+
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM app_users WHERE id=$1 FOR UPDATE`, appUserID).Scan(&status); errors.Is(err, sql.ErrNoRows) {
+		return QuotaSnapshot{}, ErrNotFound
+	} else if err != nil {
+		return QuotaSnapshot{}, err
+	}
+	if strings.TrimSpace(status) != "active" {
+		return QuotaSnapshot{}, ErrInactiveUser
+	}
+	periodID, err := ensureQuotaPeriod(ctx, tx, appUserID, period)
+	if err != nil {
+		return QuotaSnapshot{}, err
+	}
+	if err := ensureFirstGenerationGrantTx(ctx, tx, appUserID, periodID); err != nil {
+		return QuotaSnapshot{}, err
+	}
+	q, err := quotaSnapshotByID(ctx, tx, appUserID, periodID)
+	if err != nil {
+		return QuotaSnapshot{}, err
+	}
+	if q.Limit < minimum {
+		amount := minimum - q.Limit
+		result, insertErr := tx.ExecContext(ctx, `INSERT INTO app_story_quota_ledger
+ (app_user_id,period_id,entry_type,amount,idempotency_key)
+ VALUES($1,$2,'grant',$3,$4) ON CONFLICT(app_user_id,idempotency_key) DO NOTHING`, appUserID, periodID, amount, key)
+		if insertErr != nil {
+			return QuotaSnapshot{}, insertErr
+		}
+		if inserted, _ := result.RowsAffected(); inserted == 1 {
+			if _, err := tx.ExecContext(ctx, `UPDATE app_story_quota_periods SET quota_limit=quota_limit+$1,updated_at=now() WHERE id=$2`, amount, periodID); err != nil {
+				return QuotaSnapshot{}, err
+			}
+		}
+		q, err = quotaSnapshotByID(ctx, tx, appUserID, periodID)
+		if err != nil {
+			return QuotaSnapshot{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return QuotaSnapshot{}, err
+	}
+	return q, nil
+}
+
 func (s *QuotaStore) Reserve(ctx context.Context, appUserID, jobID int64, period string) (QuotaSnapshot, error) {
 	if err := s.ensureDB(); err != nil {
 		return QuotaSnapshot{}, err

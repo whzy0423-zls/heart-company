@@ -44,4 +44,67 @@ func TestCalculateMembershipPeriod(t *testing.T) {
 	}
 }
 
+func TestAppMembershipBenefitsByPlan(t *testing.T) {
+	tests := []struct {
+		plan           string
+		wantName       string
+		wantCards      int
+		wantStoryLimit int
+	}{
+		{plan: "free", wantName: "免费版", wantCards: 1, wantStoryLimit: 1},
+		{plan: "vip_month", wantName: "月卡会员", wantCards: 5, wantStoryLimit: 3},
+		{plan: "vip_quarter", wantName: "季卡会员", wantCards: 8, wantStoryLimit: 5},
+		{plan: "vip_year", wantName: "年卡会员", wantCards: 20, wantStoryLimit: 12},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.plan, func(t *testing.T) {
+			benefits := appMembershipBenefits(tc.plan)
+			if benefits.PlanName != tc.wantName || benefits.CardLimit != tc.wantCards || benefits.StoryMonthlyLimit != tc.wantStoryLimit {
+				t.Fatalf("appMembershipBenefits(%q) = %+v", tc.plan, benefits)
+			}
+		})
+	}
+}
+
+func TestAppMembershipBenefitsUseSafeDefaultsForUnknownMemberPlan(t *testing.T) {
+	benefits := appMembershipBenefits("legacy_partner")
+	if benefits.PlanName != "会员版" || benefits.CardLimit != 5 || benefits.StoryMonthlyLimit != 3 {
+		t.Fatalf("unexpected compatibility benefits: %+v", benefits)
+	}
+}
+
+func TestAppEffectivePlanCodeHonorsMembershipExpiry(t *testing.T) {
+	now := time.Date(2026, 9, 14, 8, 0, 0, 0, time.UTC)
+	future := now.Add(time.Hour)
+	past := now.Add(-time.Hour)
+	tests := []struct {
+		name   string
+		level  string
+		expiry *time.Time
+		want   string
+	}{
+		{name: "free", level: "free", want: "free"},
+		{name: "legacy vip without expiry", level: "vip", want: "vip_month"},
+		{name: "dated plan active", level: "vip_quarter", expiry: &future, want: "vip_quarter"},
+		{name: "dated plan expired", level: "vip_year", expiry: &past, want: "free"},
+		{name: "dated plan missing expiry", level: "vip_month", want: "free"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := appEffectivePlanCode(tc.level, tc.expiry, now); got != tc.want {
+				t.Fatalf("appEffectivePlanCode(%q) = %q, want %q", tc.level, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseAppMembershipExpiryAcceptsStoredTimestamp(t *testing.T) {
+	expiry := parseAppMembershipExpiry("2026/09/14 16:30:00")
+	if expiry == nil || expiry.Year() != 2026 || expiry.Month() != time.September || expiry.Day() != 14 {
+		t.Fatalf("unexpected parsed expiry: %v", expiry)
+	}
+}
+
 func timePtr(value time.Time) *time.Time { return &value }

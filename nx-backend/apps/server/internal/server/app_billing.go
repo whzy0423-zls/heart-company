@@ -17,25 +17,31 @@ import (
 )
 
 type appEntitlementResp struct {
-	PlanName            string        `json:"planName"`
-	PlanCode            string        `json:"planCode"`
-	IsMember            bool          `json:"isMember"`
-	ChatRemaining       int           `json:"chatRemaining"`
-	DeepReportRemaining int           `json:"deepReportRemaining"`
-	CardLimit           int           `json:"cardLimit"`
-	CardUsed            int           `json:"cardUsed"`
-	StartedAt           string        `json:"startedAt,omitempty"`
-	ExpiresAt           string        `json:"expiresAt,omitempty"`
-	PendingOrder        *appOrderResp `json:"pendingOrder,omitempty"`
+	PlanName                  string        `json:"planName"`
+	PlanCode                  string        `json:"planCode"`
+	IsMember                  bool          `json:"isMember"`
+	ChatLimit                 int           `json:"chatLimit"`
+	ChatRemaining             int           `json:"chatRemaining"`
+	TrialChatRemaining        int           `json:"trialChatRemaining"`
+	TrialChatNearestExpiresAt string        `json:"trialChatNearestExpiresAt,omitempty"`
+	DeepReportRemaining       int           `json:"deepReportRemaining"`
+	StoryLimit                int           `json:"storyLimit"`
+	StoryRemaining            int           `json:"storyRemaining"`
+	CardLimit                 int           `json:"cardLimit"`
+	CardUsed                  int           `json:"cardUsed"`
+	StartedAt                 string        `json:"startedAt,omitempty"`
+	ExpiresAt                 string        `json:"expiresAt,omitempty"`
+	PendingOrder              *appOrderResp `json:"pendingOrder,omitempty"`
 }
 
 type appProductResp struct {
-	ID        string   `json:"id"`
-	Title     string   `json:"title"`
-	Subtitle  string   `json:"subtitle"`
-	PriceText string   `json:"priceText"`
-	Badge     string   `json:"badge,omitempty"`
-	Features  []string `json:"features"`
+	ID                string   `json:"id"`
+	Title             string   `json:"title"`
+	Subtitle          string   `json:"subtitle"`
+	PriceText         string   `json:"priceText"`
+	OriginalPriceText string   `json:"originalPriceText,omitempty"`
+	Badge             string   `json:"badge,omitempty"`
+	Features          []string `json:"features"`
 	// PaymentChannels is the stable App contract. The provider-specific
 	// channel code is deliberately hidden from clients; XZN's wxpay is exposed
 	// as the product-level "wechat" option.
@@ -66,10 +72,7 @@ const (
 )
 
 func appCardLimit(memberLevel string) int {
-	if memberLevel == "" || memberLevel == "free" {
-		return 1
-	}
-	return 5
+	return appMembershipBenefits(memberLevel).CardLimit
 }
 
 func appPlanCode(memberLevel string) string {
@@ -86,18 +89,7 @@ func appPlanCode(memberLevel string) string {
 }
 
 func appPlanName(planCode string) string {
-	switch planCode {
-	case "free":
-		return "免费版"
-	case "vip_month":
-		return "VIP 会员"
-	case "vip_quarter":
-		return "VIP 会员"
-	case "vip_year":
-		return "VIP 会员"
-	default:
-		return "会员版"
-	}
+	return appMembershipBenefits(planCode).PlanName
 }
 
 func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) {
@@ -122,12 +114,12 @@ func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) 
 		`SELECT count(*) FROM app_user_cards
 		 WHERE app_user_id = $1 AND card_type='secondary' AND status='active'`,
 		userInfo.ID).Scan(&cardUsed)
-	planCode := appPlanCode(memberLevel)
-	legacyWithoutExpiry := (memberLevel == "vip" || memberLevel == "svip") && !memberExpiresAt.Valid
-	isMember := planCode != "free" && (legacyWithoutExpiry || (memberExpiresAt.Valid && memberExpiresAt.Time.After(time.Now())))
-	if !isMember {
-		planCode = "free"
+	var membershipExpiry *time.Time
+	if memberExpiresAt.Valid {
+		membershipExpiry = &memberExpiresAt.Time
 	}
+	planCode := appEffectivePlanCode(memberLevel, membershipExpiry, time.Now())
+	isMember := planCode != "free"
 	startedAt := ""
 	expiresAt := ""
 	if isMember && memberStartedAt.Valid {
@@ -135,6 +127,14 @@ func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) 
 	}
 	if isMember && memberExpiresAt.Valid {
 		expiresAt = memberExpiresAt.Time.Format(time.RFC3339)
+	}
+	plan := s.appPlan(r.Context(), planCode)
+	storyQuota := s.lifeStoryQuotaForPlan(r.Context(), userInfo.ID, planCode)
+	chatQuota := newAppChatQuotaSnapshot(plan.DailyChatLimit, 0, 0)
+	if s.appChatQuota != nil {
+		if snapshot, err := s.appChatQuota.Snapshot(r.Context(), userInfo.ID, plan.DailyChatLimit, time.Now()); err == nil {
+			chatQuota = snapshot
+		}
 	}
 	var pendingOrder *appOrderResp
 	if order, found, err := s.findPendingAppOrder(r.Context(), userInfo.ID); err == nil && found {
@@ -144,16 +144,21 @@ func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	httpx.OK(w, appEntitlementResp{
-		PlanName:            appPlanName(planCode),
-		PlanCode:            planCode,
-		IsMember:            isMember,
-		ChatRemaining:       0,
-		DeepReportRemaining: 0,
-		CardLimit:           appCardLimit(planCode),
-		CardUsed:            cardUsed,
-		StartedAt:           startedAt,
-		ExpiresAt:           expiresAt,
-		PendingOrder:        pendingOrder,
+		PlanName:                  plan.Name,
+		PlanCode:                  planCode,
+		IsMember:                  isMember,
+		ChatLimit:                 chatQuota.Limit,
+		ChatRemaining:             chatQuota.Remaining,
+		TrialChatRemaining:        chatQuota.TrialRemaining,
+		TrialChatNearestExpiresAt: chatQuota.TrialNearestExpiresAt,
+		DeepReportRemaining:       0,
+		StoryLimit:                storyQuota.Limit,
+		StoryRemaining:            storyQuota.Remaining,
+		CardLimit:                 plan.CardLimit,
+		CardUsed:                  cardUsed,
+		StartedAt:                 startedAt,
+		ExpiresAt:                 expiresAt,
+		PendingOrder:              pendingOrder,
 	})
 }
 
@@ -164,38 +169,38 @@ func (s *Server) appBillingProducts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg, _ := s.loadXZNConfig(r.Context())
-	httpx.OK(w, []appProductResp{
-		appProductForPaymentMode(mode, cfg, appProductResp{
-			ID:        "vip_month",
-			Title:     "月卡会员",
-			Subtitle:  "适合轻度陪伴与日常问答",
-			PriceText: "¥29",
-			Badge:     "推荐",
-			Features:  []string{"更多问答额度", "最多 5 张人物卡", "成长练习完整记录"},
-			Enabled:   true,
-		}),
-		appProductForPaymentMode(mode, cfg, appProductResp{
-			ID:        "vip_quarter",
-			Title:     "季卡会员",
-			Subtitle:  "适合持续成长陪伴",
-			PriceText: "¥79",
-			Features:  []string{"月卡全部权益", "更长会员有效期", "后续周报优先体验"},
-			Enabled:   true,
-		}),
-		appProductForPaymentMode(mode, cfg, appProductResp{
-			ID:        "vip_year",
-			Title:     "年卡会员",
-			Subtitle:  "适合长期自我探索",
-			PriceText: "¥199",
-			Badge:     "省心",
-			Features:  []string{"全年会员权益", "长期成长画像", "会员专属海报模板"},
-			Enabled:   true,
-		}),
-	})
+	plans, err := s.loadAppPlans(r.Context())
+	if err != nil {
+		plans = defaultAppPlans()
+	}
+	products := make([]appProductResp, 0, 3)
+	for _, plan := range plans {
+		if plan.Code == "free" {
+			continue
+		}
+		products = append(products, appProductForPaymentMode(mode, cfg, appProductFromPlan(plan)))
+	}
+	httpx.OK(w, products)
+}
+
+func appProductFromPlan(plan appPlanConfig) appProductResp {
+	return appProductResp{ID: plan.Code, Title: plan.Name, Subtitle: plan.Subtitle, PriceText: formatAppPlanPrice(plan.PriceCents), OriginalPriceText: formatAppPlanPrice(plan.OriginalPriceCents), Badge: plan.Badge, Features: append([]string(nil), plan.Features...), Enabled: plan.Enabled, DurationDays: plan.DurationDays}
+}
+
+func formatAppPlanPrice(cents int) string {
+	if cents <= 0 {
+		return ""
+	}
+	if cents%100 == 0 {
+		return fmt.Sprintf("¥%d", cents/100)
+	}
+	return fmt.Sprintf("¥%d.%02d", cents/100, cents%100)
 }
 
 func appProductForPaymentMode(mode string, cfg xznPaymentConfig, product appProductResp) appProductResp {
-	product.DurationDays, _ = membershipDurationDays(product.ID)
+	if !product.Enabled {
+		return appXZNProductWithStatus(product, "plan_disabled", "套餐已下架")
+	}
 	if mode != appPurchaseModeXZN {
 		return appCustomerServiceProduct(product)
 	}
@@ -226,7 +231,6 @@ func appProductForPaymentMode(mode string, cfg xznPaymentConfig, product appProd
 func appCustomerServiceProduct(product appProductResp) appProductResp {
 	product.PayEnabled = false
 	product.PurchaseMode = appPurchaseModeCustomerService
-	product.DurationDays, _ = membershipDurationDays(product.ID)
 	return product
 }
 
@@ -402,9 +406,9 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	productID := strings.TrimSpace(body.ProductID)
-	title := appProductTitle(productID)
-	amount := appProductAmount(productID)
-	if title == "" || amount <= 0 {
+	plan := s.appPlan(r.Context(), productID)
+	title, amount, durationDays := plan.Name, plan.PriceCents, plan.DurationDays
+	if productID == "free" || plan.Code != productID || !plan.Enabled || title == "" || amount <= 0 || durationDays <= 0 {
 		httpx.Fail(w, http.StatusBadRequest, "invalid product")
 		return
 	}
@@ -426,7 +430,7 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if mode == appPurchaseModeCustomerService {
-		s.createCustomerServiceAppOrder(w, r, userInfo.ID, productID, title, amount)
+		s.createCustomerServiceAppOrder(w, r, userInfo.ID, productID, title, amount, durationDays)
 		return
 	}
 	cfg, _ := s.loadXZNConfig(r.Context())
@@ -454,9 +458,9 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 	outTradeNo := fmt.Sprintf("app%d-%s-%d", userInfo.ID, productID, time.Now().UnixNano())
 	if online {
 		if _, err := s.db.ExecContext(r.Context(), `
-			INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, status, purchase_mode, payment_provider, pay_channel, gateway_id)
-			VALUES ($1, $2, $3, $4, $5, 'pending', 'xzn', 'xzn', $6, $7)`,
-			outTradeNo, userInfo.ID, productID, title, amount, payChannel, gatewayID); err != nil {
+				INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, duration_days, status, purchase_mode, payment_provider, pay_channel, gateway_id)
+				VALUES ($1, $2, $3, $4, $5, $6, 'pending', 'xzn', 'xzn', $7, $8)`,
+			outTradeNo, userInfo.ID, productID, title, amount, durationDays, payChannel, gatewayID); err != nil {
 			if existing, found, findErr := s.findPendingAppOrder(r.Context(), userInfo.ID); findErr == nil && found {
 				if enriched, enrichErr := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, existing); enrichErr == nil {
 					httpx.OK(w, enriched)
@@ -500,6 +504,7 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 			ProductID:       productID,
 			Title:           title,
 			Amount:          amount,
+			DurationDays:    durationDays,
 			Status:          "pending",
 			PaymentProvider: appPaymentProviderXZN,
 			PayChannel:      payChannel,
@@ -518,21 +523,22 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 	httpx.Fail(w, http.StatusServiceUnavailable, "支付暂不可用")
 }
 
-func (s *Server) createCustomerServiceAppOrder(w http.ResponseWriter, r *http.Request, appUserID int64, productID, title string, amount int) {
+func (s *Server) createCustomerServiceAppOrder(w http.ResponseWriter, r *http.Request, appUserID int64, productID, title string, amount, durationDays int) {
 	outTradeNo := fmt.Sprintf("app%d-%s-%d", appUserID, productID, time.Now().UnixNano())
 	if _, err := s.db.ExecContext(r.Context(),
-		`INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, status, purchase_mode, payment_provider)
-		 VALUES ($1, $2, $3, $4, $5, 'pending_confirmation', 'customer_service', 'manual')`,
-		outTradeNo, appUserID, productID, title, amount); err != nil {
+		`INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, duration_days, status, purchase_mode, payment_provider)
+			 VALUES ($1, $2, $3, $4, $5, $6, 'pending_confirmation', 'customer_service', 'manual')`,
+		outTradeNo, appUserID, productID, title, amount, durationDays); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
 	order, err := s.enrichCustomerServiceOrder(r.Context(), appUserID, appOrderResp{
-		OutTradeNo: outTradeNo,
-		ProductID:  productID,
-		Title:      title,
-		Amount:     amount,
-		Status:     appOrderPendingConfirmation,
+		OutTradeNo:   outTradeNo,
+		ProductID:    productID,
+		Title:        title,
+		Amount:       amount,
+		DurationDays: durationDays,
+		Status:       appOrderPendingConfirmation,
 	})
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
@@ -618,7 +624,9 @@ func (s *Server) enrichCustomerServiceOrder(ctx context.Context, appUserID int64
 		return s.enrichOnlineOrder(ctx, appUserID, resp)
 	}
 	resp = appCustomerServiceOrder(resp)
-	resp.DurationDays, _ = membershipDurationDays(resp.ProductID)
+	if resp.DurationDays <= 0 {
+		resp.DurationDays, _ = membershipDurationDays(resp.ProductID)
+	}
 	var currentExpiresAt sql.NullTime
 	if err := s.db.QueryRowContext(ctx, `SELECT member_expires_at FROM app_users WHERE id=$1`, appUserID).Scan(&currentExpiresAt); err != nil {
 		return appOrderResp{}, err
@@ -630,7 +638,7 @@ func (s *Server) enrichCustomerServiceOrder(ctx context.Context, appUserID int64
 	if currentExpiresAt.Valid {
 		currentExpiry = &currentExpiresAt.Time
 	}
-	period, err := calculateMembershipPeriod(resp.ProductID, time.Now(), currentExpiry)
+	period, err := calculateMembershipPeriodDays(resp.DurationDays, time.Now(), currentExpiry)
 	if err != nil {
 		return appOrderResp{}, err
 	}
@@ -641,7 +649,9 @@ func (s *Server) enrichCustomerServiceOrder(ctx context.Context, appUserID int64
 func (s *Server) enrichOnlineOrder(ctx context.Context, appUserID int64, resp appOrderResp) (appOrderResp, error) {
 	cfg, _ := s.loadXZNConfig(ctx)
 	resp.PayChannel = displayAppPayChannel(resp.PayChannel)
-	resp.DurationDays, _ = membershipDurationDays(resp.ProductID)
+	if resp.DurationDays <= 0 {
+		resp.DurationDays, _ = membershipDurationDays(resp.ProductID)
+	}
 	resp.PayStatus = resp.ProviderStatus
 	if resp.PayStatus == "" {
 		resp.PayStatus = resp.Status
@@ -695,7 +705,7 @@ func (s *Server) enrichOrderDates(ctx context.Context, appUserID int64, resp app
 	if currentExpiresAt.Valid {
 		currentExpiry = &currentExpiresAt.Time
 	}
-	period, err := calculateMembershipPeriod(resp.ProductID, time.Now(), currentExpiry)
+	period, err := calculateMembershipPeriodDays(resp.DurationDays, time.Now(), currentExpiry)
 	if err != nil {
 		return appOrderResp{}, err
 	}
@@ -723,6 +733,10 @@ func (s *Server) loadAppOrderPaymentMeta(ctx context.Context, appUserID int64, o
 	resp.ProviderTradeNo, resp.ProviderStatus, resp.PayURL, resp.PaymentError = tradeNo, providerStatus, payURL, paymentError
 	if lastQueryAt.Valid {
 		resp.LastQueryAt = lastQueryAt.Time.Format(time.RFC3339)
+	}
+	var durationDays int
+	if err := s.db.QueryRowContext(ctx, `SELECT duration_days FROM app_orders WHERE app_user_id=$1 AND out_trade_no=$2`, appUserID, outTradeNo).Scan(&durationDays); err == nil && durationDays > 0 {
+		resp.DurationDays = durationDays
 	}
 }
 

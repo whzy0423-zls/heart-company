@@ -173,6 +173,8 @@ type Server struct {
 	directRealtimeHub              *realtime.DirectHub
 	relationshipInsights           *relationshipinsight.Service
 	appChat                        appChatStore
+	appChatQuota                   appChatQuotaManager
+	appChatPlanLoader              func(context.Context, int64) (appPlanConfig, error)
 	appKnowledge                   *appknowledge.Coordinator
 	skillCatalog                   *skillcatalog.Store
 	skillChat                      *skillchat.Store
@@ -456,6 +458,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		s.appDailyQuizBankAdmin = profileStore
 	}
 	s.appChat = chat.NewStore(database)
+	s.appChatQuota = newDatabaseAppChatQuotaManager(database)
 	s.appKnowledge = appknowledge.NewCoordinator(
 		appknowledge.NewResolver(database),
 		appKnowledgePublicSearcher{server: s},
@@ -1030,6 +1033,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/pay/notify", s.method(http.MethodPost, s.payNotify))
 	s.mux.HandleFunc("/api/admin/xzn-pay/config", s.requirePermission("System:Payment:Config", s.xznPayConfig))
 	s.mux.HandleFunc("/api/admin/app-payment-mode", s.requirePermission("System:Payment:Config", s.appPaymentMode))
+	s.mux.HandleFunc("/api/admin/app-plans", s.method(http.MethodGet, s.requirePermission("App:PlanManagement:View", s.adminAppPlans)))
+	s.mux.HandleFunc("/api/admin/app-plans/", s.method(http.MethodPut, s.requirePermission("App:PlanManagement:Write", s.adminAppPlanUpdate)))
 	s.mux.HandleFunc("/api/admin/xzn-pay/create", s.method(http.MethodPost, s.requirePermission("System:Payment:Config", s.xznPayCreate)))
 	s.mux.HandleFunc("/api/xzn-pay/notify", s.method(http.MethodPost, s.xznPayNotify))
 	s.mux.HandleFunc("/api/analytics/overview", s.method(http.MethodGet, s.requirePermission("Analytics:Overview", s.analyticsOverview)))
