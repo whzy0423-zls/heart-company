@@ -41,14 +41,20 @@ vi.mock('../system/components/page-shell.vue', () => ({
 vi.mock('#/api', () => ({
   getAppCustomerDetailApi: vi.fn(),
   getAppCustomerListApi: vi.fn(),
+  getAppTrialCreditsApi: vi.fn(),
   getAppUserInsightsApi: vi.fn(),
+  grantAppTrialCreditsApi: vi.fn(),
+  revokeAppTrialCreditsApi: vi.fn(),
   updateAppCustomerApi: vi.fn(),
 }));
 
 import {
   getAppCustomerDetailApi,
   getAppCustomerListApi,
+  getAppTrialCreditsApi,
   getAppUserInsightsApi,
+  grantAppTrialCreditsApi,
+  revokeAppTrialCreditsApi,
   updateAppCustomerApi,
 } from '#/api';
 
@@ -123,11 +129,18 @@ describe('App customer list P2 behavior', () => {
     mocks.routerPush.mockReset();
     vi.mocked(getAppCustomerDetailApi).mockReset();
     vi.mocked(getAppCustomerListApi).mockReset();
+    vi.mocked(getAppTrialCreditsApi).mockReset();
     vi.mocked(getAppUserInsightsApi).mockReset();
+    vi.mocked(grantAppTrialCreditsApi).mockReset();
+    vi.mocked(revokeAppTrialCreditsApi).mockReset();
     vi.mocked(updateAppCustomerApi).mockReset();
     vi.mocked(getAppCustomerListApi).mockResolvedValue({
       items: [customer()],
       total: 1,
+    });
+    vi.mocked(getAppTrialCreditsApi).mockResolvedValue({
+      items: [],
+      trialChatRemaining: 0,
     });
   });
 
@@ -140,6 +153,53 @@ describe('App customer list P2 behavior', () => {
     expect(wrapper.text()).not.toContain('360');
     expect(wrapper.text()).toContain('查看详情');
     expect(wrapper.text()).toContain('编辑');
+    wrapper.unmount();
+  });
+
+  it('shows the trial credit action only with grant permission', async () => {
+    mocks.accessCodes = ['Customer:AppTrialCredit:Grant'];
+    const wrapper = mountVueComponent(AppUsers);
+    await flushVuePromises();
+    expect(wrapper.text()).toContain('赠送额度');
+    wrapper.unmount();
+
+    mocks.accessCodes = [];
+    const hiddenWrapper = mountVueComponent(AppUsers);
+    await flushVuePromises();
+    expect(hiddenWrapper.text()).not.toContain('赠送额度');
+    hiddenWrapper.unmount();
+  });
+
+  it('loads and renders trial balance and grant history in customer detail', async () => {
+    vi.mocked(getAppCustomerDetailApi).mockResolvedValue(customer());
+    vi.mocked(getAppTrialCreditsApi).mockResolvedValue({
+      items: [
+        {
+          amount: 20,
+          appUserId: 1,
+          createTime: '2026-09-14T10:00:00+08:00',
+          expiresAt: '2026-09-17T10:00:00+08:00',
+          id: 7,
+          reason: '分享活动奖励',
+          remaining: 12,
+          reserved: 0,
+          status: 'active',
+          updateTime: '2026-09-14T10:00:00+08:00',
+        },
+      ],
+      trialChatNearestExpiresAt: '2026-09-17T10:00:00+08:00',
+      trialChatRemaining: 12,
+    });
+
+    const wrapper = mountVueComponent(AppUsers);
+    await flushVuePromises();
+    wrapper.button('查看详情')?.click();
+    await flushVuePromises();
+
+    expect(getAppTrialCreditsApi).toHaveBeenCalledWith(1);
+    expect(wrapper.text()).toContain('推广试用对话');
+    expect(wrapper.text()).toContain('12 次');
+    expect(wrapper.text()).toContain('分享活动奖励');
     wrapper.unmount();
   });
 
