@@ -23,6 +23,7 @@ const release = {
   fileSize: 15.25 * 1024 * 1024,
   releaseNotes: '新增课程离线阅读。',
   sha256: '0123456789abcdef'.repeat(4),
+  downloadUrl: '/api/public/app-releases/42/download',
 }
 
 function build(overrides = {}) {
@@ -107,7 +108,7 @@ test('gives Android devices a direct latest-download link without QR', () => {
 
   assert.equal(model.device, 'android')
   assert.equal(model.actionLabel, config.androidButtonText)
-  assert.equal(model.actionHref, '/api/public/app-release/download?platform=android')
+  assert.equal(model.actionHref, '/api/public/app-releases/42/download')
   assert.equal(model.actionDisabled, false)
   assert.equal(model.showDownloadAction, true)
   assert.equal(model.showQRCode, false)
@@ -126,9 +127,9 @@ test('gives iOS devices a real disabled coming-soon action', () => {
 test('gives desktop devices the Android action and an on-site QR payload', () => {
   const model = build({ device: 'desktop' })
 
-  assert.equal(model.actionHref, '/api/public/app-release/download?platform=android')
+  assert.equal(model.actionHref, '/api/public/app-releases/42/download')
   assert.equal(model.showQRCode, true)
-  assert.equal(model.qrPayload, 'https://www.xinzhili.example/#download-app')
+  assert.equal(model.qrPayload, 'https://www.xinzhili.example/app')
   assert.doesNotMatch(model.qrPayload, /qrserver|google|third-party/i)
 })
 
@@ -138,4 +139,10 @@ test('treats unknown devices as desktop', () => {
   assert.equal(model.device, 'desktop')
   assert.equal(model.showQRCode, true)
   assert.equal(model.actionDisabled, false)
+})
+
+test('rejects unsafe version download URLs and falls back to the same-origin latest endpoint', () => {
+  const model = build({ release: { ...release, downloadUrl: 'https://evil.example/app.apk' } })
+
+  assert.equal(model.actionHref, '/api/public/app-release/download?platform=android')
 })

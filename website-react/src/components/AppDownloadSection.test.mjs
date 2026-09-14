@@ -20,6 +20,7 @@ test('loads metadata with abort-safe lifecycle handling and builder-only downloa
   assert.match(componentSource, /getLatestAppRelease/)
   assert.match(componentSource, /buildLatestAppReleaseDownloadURL/)
   assert.match(componentSource, /createAppDownloadViewModel/)
+  assert.match(viewModelSource, /release\?\.downloadUrl/)
   assert.match(componentSource, /new AbortController\(\)/)
   assert.match(componentSource, /signal:\s*controller\.signal/)
   assert.match(componentSource, /controller\.abort\(\)/)
@@ -66,9 +67,12 @@ test('renders accessible device actions, 503 feedback, and retry controls', () =
   assert.match(componentSource, /aria-live="polite"/)
   assert.match(componentSource, /viewModel\.actionDisabled[\s\S]*<button[\s\S]*disabled/)
   assert.match(componentSource, /viewModel\.showQRCode/)
+  assert.match(componentSource, /className=\{qrSpaceClassName\}[\s\S]*role="status"[\s\S]*aria-live="polite"/)
   assert.match(componentSource, /viewModel\.canRetry/)
   assert.match(componentSource, /viewModel\.retryText/)
   assert.match(viewModelSource, /安装包暂时不可用/)
+  assert.match(componentSource, /showInstallSummary = true/)
+  assert.match(componentSource, /showInstallSummary && \([\s\S]*className="app-download__install"/)
 })
 
 test('reserves a responsive no-overflow footprint with accessible interactions', () => {
@@ -107,15 +111,16 @@ test('disables native smooth scrolling for reduced-motion users', () => {
   )
 })
 
-test('reserves the published QR footprint across mobile loading and error states', () => {
+test('reserves QR space only when desktop QR content is present', () => {
   assert.match(
+    cssSource,
+    /\.app-download__qr-space--reserved\s*\{[^}]*min-height:\s*26\dpx;/s,
+  )
+  assert.doesNotMatch(
     cssSource,
     /\.app-download__qr-space\s*\{[^}]*min-height:\s*26\dpx;/s,
   )
-  assert.match(
-    cssSource,
-    /@media\s*\(max-width:\s*(?:760|768)px\)[\s\S]*\.app-download__qr-space\s*\{[^}]*min-height:\s*26\dpx;/s,
-  )
+  assert.match(componentSource, /viewModel\.showQRCode\s*\?\s*'app-download__qr-space app-download__qr-space--reserved'/)
 })
 
 test('keeps the QR image contained inside its frame', () => {

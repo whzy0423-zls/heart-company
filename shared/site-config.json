@@ -108,8 +108,8 @@
         },
         {
           "label": "下载 App",
-          "to": "#download-app",
-          "type": "anchor",
+          "to": "/app",
+          "type": "route",
           "variant": "ghost"
         }
       ],
@@ -301,8 +301,8 @@
       },
       {
         "label": "下载 App",
-        "to": "/#download-app",
-        "type": "hash"
+        "to": "/app",
+        "type": "route"
       },
       {
         "label": "企业",
@@ -363,8 +363,8 @@
       },
       {
         "label": "下载 App",
-        "to": "/#download-app",
-        "type": "hash"
+        "to": "/app",
+        "type": "route"
       },
       {
         "label": "企业",

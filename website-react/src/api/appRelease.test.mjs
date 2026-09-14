@@ -27,6 +27,7 @@ test('loads the latest Android release through the public response envelope', as
     fileSize: 15728640,
     sha256: 'a'.repeat(64),
     releaseNotes: '新增课程离线阅读。',
+    downloadUrl: '/api/public/app-releases/42/download',
   }
   let request
 
@@ -43,6 +44,7 @@ test('loads the latest Android release through the public response envelope', as
   assert.equal(request.url, '/api/public/app-release/latest?platform=android')
   assert.equal(request.options.headers.Accept, 'application/json')
   assert.equal(request.options.signal, signal)
+  assert.equal(result.downloadUrl, '/api/public/app-releases/42/download')
 })
 
 test('returns the public unavailable state without converting it to an error', async () => {

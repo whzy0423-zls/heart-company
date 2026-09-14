@@ -39,7 +39,7 @@ export default function Home() {
         </div>
       </section>
 
-      <AppDownloadSection />
+      <AppDownloadSection showDetailsLink />
 
       {/* 老师简介 teaser */}
       <section className="wrap block" id="teacher">

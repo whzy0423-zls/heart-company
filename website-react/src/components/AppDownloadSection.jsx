@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
+import { Link } from 'react-router-dom'
 import {
   buildLatestAppReleaseDownloadURL,
   getLatestAppRelease,
@@ -8,7 +9,10 @@ import siteConfig from '../data/siteConfig'
 import { detectAppDownloadDevice } from '../utils/appDownloadDevice'
 import { createAppDownloadViewModel } from '../utils/appDownloadViewModel'
 
-export default function AppDownloadSection() {
+export default function AppDownloadSection({
+  showDetailsLink = false,
+  showInstallSummary = true,
+}) {
   const [device] = useState(() => detectAppDownloadDevice())
   const [release, setRelease] = useState(null)
   const [requestError, setRequestError] = useState(null)
@@ -82,12 +86,16 @@ export default function AppDownloadSection() {
   }, [viewModel.qrPayload, viewModel.showQRCode])
 
   const retry = () => setRequestRevision((revision) => revision + 1)
+  const qrSpaceClassName = viewModel.showQRCode
+    ? 'app-download__qr-space app-download__qr-space--reserved'
+    : 'app-download__qr-space'
 
   return (
     <section
       className={`app-download app-download--${viewModel.state}`}
       id="download-app"
       aria-labelledby="app-download-title"
+      tabIndex="-1"
     >
       <div className="wrap app-download__inner">
         <header className="app-download__heading">
@@ -116,6 +124,13 @@ export default function AppDownloadSection() {
             <ul className="app-download__features">
               {viewModel.features.map((feature) => <li key={feature}>{feature}</li>)}
             </ul>
+
+            {showDetailsLink && (
+              <Link className="app-download__details-link" to="/app">
+                查看功能、安装视频与更新记录
+                <span aria-hidden="true">→</span>
+              </Link>
+            )}
 
             <div
               className={`app-download__status app-download__status--${viewModel.state}`}
@@ -185,7 +200,12 @@ export default function AppDownloadSection() {
               )}
             </div>
 
-            <div className="app-download__qr-space">
+            <div
+              className={qrSpaceClassName}
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
               {viewModel.showQRCode ? (
                 <>
                   <div className="app-download__qr-frame">
@@ -217,12 +237,14 @@ export default function AppDownloadSection() {
               )}
             </div>
 
-            <div className="app-download__install">
-              <h3>安装步骤</h3>
-              <ol>
-                {viewModel.installSteps.map((step) => <li key={step}>{step}</li>)}
-              </ol>
-            </div>
+            {showInstallSummary && (
+              <div className="app-download__install">
+                <h3>安装步骤</h3>
+                <ol>
+                  {viewModel.installSteps.map((step) => <li key={step}>{step}</li>)}
+                </ol>
+              </div>
+            )}
           </aside>
         </div>
       </div>
