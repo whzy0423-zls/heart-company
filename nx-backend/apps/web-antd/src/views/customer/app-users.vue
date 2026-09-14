@@ -1,5 +1,9 @@
 <script setup lang="ts">
-import type { AppCustomer } from '#/api';
+import type {
+  AppCustomer,
+  AppTrialCreditGrant,
+  AppTrialCreditList,
+} from '#/api';
 
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
@@ -20,11 +24,15 @@ import {
   Space,
   Table,
   Tag,
+  Textarea,
 } from 'ant-design-vue';
 
 import {
+  grantAppTrialCreditsApi,
   getAppCustomerDetailApi,
   getAppCustomerListApi,
+  getAppTrialCreditsApi,
+  revokeAppTrialCreditsApi,
   updateAppCustomerApi,
 } from '#/api';
 
@@ -36,6 +44,13 @@ import {
   createAppCustomerEditForm,
 } from './app-user-edit';
 import { memberPlanLabel } from './app-membership';
+import {
+  appTrialCreditStatusLabel,
+  buildAppTrialCreditPayload,
+  createAppTrialCreditForm,
+  createAppTrialCreditIdempotencyKey,
+  validateAppTrialCreditForm,
+} from './app-trial-credit';
 
 const statusOptions = [
   { color: 'success', label: '正常', value: 'active' },
@@ -83,6 +98,9 @@ const editSaving = ref(false);
 const editingCustomer = ref<AppCustomer>();
 const editForm = reactive(createAppCustomerEditForm());
 const canEdit = computed(() => canEditAppCustomer(accessStore.accessCodes));
+const canGrantTrialCredit = computed(() =>
+  accessStore.accessCodes.includes('Customer:AppTrialCredit:Grant'),
+);
 const canOpenUserInsights = computed(() =>
   canViewUserInsights(accessStore.accessCodes),
 );
@@ -95,6 +113,15 @@ const query = reactive({
 });
 let requestId = 0;
 let detailRequestId = 0;
+const trialCredits = ref<AppTrialCreditList>({
+  items: [],
+  trialChatRemaining: 0,
+});
+const grantOpen = ref(false);
+const grantSaving = ref(false);
+const grantingCustomer = ref<AppCustomer>();
+const grantForm = reactive(createAppTrialCreditForm());
+let grantIdempotencyKey = '';
 
 const columns = [
   { dataIndex: 'phone', fixed: 'left' as const, title: '手机号', width: 160 },
@@ -106,7 +133,16 @@ const columns = [
   { dataIndex: 'registerSource', title: '注册来源', width: 130 },
   { dataIndex: 'lastLoginAt', title: '最后登录', width: 180 },
   { dataIndex: 'createTime', title: '注册时间', width: 180 },
-  { fixed: 'right' as const, key: 'action', title: '操作', width: 220 },
+  { fixed: 'right' as const, key: 'action', title: '操作', width: 300 },
+];
+
+const trialCreditColumns = [
+  { dataIndex: 'amount', title: '赠送', width: 72 },
+  { dataIndex: 'remaining', title: '剩余', width: 72 },
+  { dataIndex: 'expiresAt', title: '到期时间', width: 168 },
+  { dataIndex: 'reason', title: '原因', width: 180 },
+  { dataIndex: 'status', title: '状态', width: 80 },
+  { key: 'action', title: '操作', width: 72 },
 ];
 
 function statusMeta(status?: string): StatusMeta {
@@ -163,9 +199,13 @@ async function openDetail(record: AppCustomer) {
   detailOpen.value = true;
   detailLoading.value = true;
   try {
-    const result = await getAppCustomerDetailApi(record.id);
+    const [result, credits] = await Promise.all([
+      getAppCustomerDetailApi(record.id),
+      getAppTrialCreditsApi(record.id),
+    ]);
     if (currentDetailRequestId !== detailRequestId) return;
     detail.value = result;
+    trialCredits.value = credits;
   } catch {
     if (currentDetailRequestId === detailRequestId) {
       detailOpen.value = false;
@@ -176,6 +216,79 @@ async function openDetail(record: AppCustomer) {
       detailLoading.value = false;
     }
   }
+}
+
+function openGrant(record: AppCustomer) {
+  grantingCustomer.value = record;
+  Object.assign(grantForm, createAppTrialCreditForm());
+  grantIdempotencyKey = createAppTrialCreditIdempotencyKey(record.id);
+  grantOpen.value = true;
+}
+
+async function reloadTrialCredits(userId: number) {
+  const credits = await getAppTrialCreditsApi(userId);
+  if (detail.value?.id === userId) {
+    trialCredits.value = credits;
+  }
+}
+
+async function saveTrialCredit() {
+  if (!grantingCustomer.value) return;
+  const validation = validateAppTrialCreditForm(grantForm);
+  if (validation) {
+    message.error(validation);
+    return;
+  }
+  grantSaving.value = true;
+  try {
+    await grantAppTrialCreditsApi(
+      grantingCustomer.value.id,
+      buildAppTrialCreditPayload(grantForm, grantIdempotencyKey),
+    );
+    await reloadTrialCredits(grantingCustomer.value.id);
+    grantOpen.value = false;
+    message.success('试用额度已赠送');
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '赠送试用额度失败');
+  } finally {
+    grantSaving.value = false;
+  }
+}
+
+function canRevokeTrialCredit(item: AppTrialCreditGrant) {
+  return (
+    canGrantTrialCredit.value &&
+    item.status === 'active' &&
+    item.remaining > item.reserved &&
+    new Date(item.expiresAt).getTime() > Date.now()
+  );
+}
+
+function revokeTrialCredit(item: AppTrialCreditGrant) {
+  if (!detail.value || !canRevokeTrialCredit(item)) return;
+  const userId = detail.value.id;
+  Modal.confirm({
+    content: `将撤销该笔尚未使用的 ${item.remaining - item.reserved} 次额度，已使用记录会保留。`,
+    okText: '确认撤销',
+    title: '撤销试用额度',
+    async onOk() {
+      try {
+        await revokeAppTrialCreditsApi(userId, item.id);
+        await reloadTrialCredits(userId);
+        message.success('剩余试用额度已撤销');
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : '撤销试用额度失败');
+        throw error;
+      }
+    },
+  });
+}
+
+function formatTrialCreditTime(value?: string) {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString('zh-CN', { hour12: false });
 }
 
 function mergeCustomer(updated: AppCustomer) {
@@ -230,6 +343,10 @@ async function saveEdit() {
 
 function customerRecord(record: Record<string, any>): AppCustomer {
   return record as AppCustomer;
+}
+
+function trialCreditRecord(record: Record<string, any>): AppTrialCreditGrant {
+  return record as AppTrialCreditGrant;
 }
 
 function handleTableChange(pagination: {
@@ -358,6 +475,14 @@ onMounted(() => {
                 >
                   编辑
                 </Button>
+                <Button
+                  v-if="canGrantTrialCredit"
+                  size="small"
+                  type="link"
+                  @click="openGrant(customerRecord(record))"
+                >
+                  赠送额度
+                </Button>
               </Space>
             </template>
           </template>
@@ -425,6 +550,62 @@ onMounted(() => {
             {{ detail.updateTime }}
           </Descriptions.Item>
         </Descriptions>
+
+        <section class="trial-credit-section">
+          <div class="section-heading">
+            <div>
+              <h4>推广试用对话</h4>
+              <div class="section-subtitle">
+                当前可用 {{ trialCredits.trialChatRemaining }} 次
+                <template v-if="trialCredits.trialChatNearestExpiresAt">
+                  · 最近到期 {{ formatTrialCreditTime(trialCredits.trialChatNearestExpiresAt) }}
+                </template>
+              </div>
+            </div>
+            <Button
+              v-if="canGrantTrialCredit"
+              size="small"
+              type="primary"
+              @click="openGrant(detail)"
+            >
+              赠送额度
+            </Button>
+          </div>
+          <Table
+            :columns="trialCreditColumns"
+            :data-source="trialCredits.items"
+            :pagination="false"
+            :scroll="{ x: 640 }"
+            row-key="id"
+            size="small"
+          >
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.dataIndex === 'amount'">
+                {{ record.amount }} 次
+              </template>
+              <template v-if="column.dataIndex === 'remaining'">
+                {{ Math.max(record.remaining - record.reserved, 0) }} 次
+              </template>
+              <template v-if="column.dataIndex === 'expiresAt'">
+                {{ formatTrialCreditTime(record.expiresAt) }}
+              </template>
+              <template v-if="column.dataIndex === 'status'">
+                <Tag>{{ appTrialCreditStatusLabel(record.status) }}</Tag>
+              </template>
+              <template v-if="column.key === 'action'">
+                <Button
+                  v-if="canRevokeTrialCredit(trialCreditRecord(record))"
+                  danger
+                  size="small"
+                  type="link"
+                  @click="revokeTrialCredit(trialCreditRecord(record))"
+                >
+                  撤销
+                </Button>
+              </template>
+            </template>
+          </Table>
+        </section>
       </div>
     </Drawer>
 
@@ -448,6 +629,49 @@ onMounted(() => {
         </Form.Item>
         <Form.Item label="状态" name="status" required>
           <Select v-model:value="editForm.status" :options="statusOptions"  placeholder="请选择状态"/>
+        </Form.Item>
+      </Form>
+    </Modal>
+
+    <Modal
+      v-model:open="grantOpen"
+      :confirm-loading="grantSaving"
+      ok-text="确认赠送"
+      title="赠送试用额度"
+      width="min(520px, calc(100vw - 32px))"
+      @ok="saveTrialCredit"
+    >
+      <Form :model="grantForm" layout="vertical">
+        <Form.Item label="用户">
+          <Input
+            :value="grantingCustomer ? `${grantingCustomer.nickname || '-'} / ${grantingCustomer.phone}` : '-'"
+            disabled
+          />
+        </Form.Item>
+        <Form.Item label="赠送次数" name="amount" required>
+          <Input
+            v-model:value.number="grantForm.amount"
+            max="1000"
+            min="1"
+            placeholder="请输入赠送次数"
+            type="number"
+          />
+        </Form.Item>
+        <Form.Item label="到期时间" name="expiresAt" required>
+          <Input
+            v-model:value="grantForm.expiresAt"
+            placeholder="请选择到期时间"
+            type="datetime-local"
+          />
+        </Form.Item>
+        <Form.Item label="赠送原因" name="reason" required>
+          <Textarea
+            v-model:value="grantForm.reason"
+            :maxlength="200"
+            :rows="3"
+            placeholder="例如：分享活动奖励"
+            show-count
+          />
         </Form.Item>
       </Form>
     </Modal>
@@ -540,6 +764,31 @@ onMounted(() => {
 
 .profile-meta {
   margin-top: 4px;
+  color: hsl(var(--muted-foreground));
+}
+
+.trial-credit-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.section-heading {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.section-heading h4 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 22px;
+}
+
+.section-subtitle {
+  margin-top: 2px;
+  font-size: 13px;
   color: hsl(var(--muted-foreground));
 }
 </style>
