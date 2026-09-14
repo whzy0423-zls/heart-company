@@ -71,6 +71,7 @@ test('renders accessible device actions, 503 feedback, and retry controls', () =
   assert.match(componentSource, /viewModel\.canRetry/)
   assert.match(componentSource, /viewModel\.retryText/)
   assert.match(viewModelSource, /安装包暂时不可用/)
+  assert.match(componentSource, /当前 iOS 版本暂不支持，敬请期待/)
   assert.match(componentSource, /showInstallSummary = true/)
   assert.match(componentSource, /showInstallSummary && \([\s\S]*className="app-download__install"/)
 })

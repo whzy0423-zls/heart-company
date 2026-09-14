@@ -1709,6 +1709,8 @@ img[data-zoom] { cursor: zoom-in; }
 .app-download__action:focus-visible { outline: 3px solid rgba(43,127,255,.42); outline-offset: 3px; }
 .app-download__action:disabled { cursor: not-allowed; opacity: .5; }
 .app-download__retry { color: var(--blue); background: rgba(43,127,255,.08); }
+.app-download__ios-status { min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 9px 12px; border: 1px solid rgba(18,21,27,.09); border-radius: 8px; color: var(--muted); background: rgba(255,255,255,.56); font-size: 13px; text-align: center; }
+.app-download__ios-status strong { min-width: 34px; padding: 2px 6px; border-radius: 5px; color: #fff; background: var(--ink); font-size: 11px; line-height: 1.6; }
 .app-download__action-placeholder { min-height: 44px; display: grid; place-items: center; padding: 10px; color: var(--muted); text-align: center; }
 .app-download__qr-space { text-align: center; color: var(--muted); font-size: 13px; }
 .app-download__qr-space--reserved { min-height: 260px; }
@@ -1775,9 +1777,48 @@ img[data-zoom] { cursor: zoom-in; }
   height: 100%;
   border-radius: 34px;
   overflow: hidden;
-  background: #f7f8fb;
+  background: #f4f3ef;
 }
-.app-page__device-screen img { width: 100%; height: 100%; object-fit: contain; }
+.app-conversation { position: relative; height: 100%; display: flex; flex-direction: column; overflow: hidden; color: #151922; background: #f4f3ef; font-family: var(--font); transform: translateZ(0); }
+.app-conversation::after { content: ""; position: absolute; inset: 0; pointer-events: none; border: 1px solid rgba(255,255,255,.76); border-radius: 33px; }
+.app-conversation__header { min-height: 76px; display: grid; grid-template-columns: 22px 34px minmax(0,1fr) auto; gap: 9px; align-items: center; padding: 22px 15px 10px; border-bottom: 1px solid rgba(21,25,34,.08); background: rgba(255,255,255,.74); }
+.app-conversation__header > img { width: 34px; height: 34px; border-radius: 50%; box-shadow: 0 5px 15px -8px rgba(21,25,34,.5); }
+.app-conversation__back { color: #454b56; font: 400 28px/1 var(--font); transform: translateY(-1px); }
+.app-conversation__identity { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.app-conversation__identity strong { font-size: 13px; }
+.app-conversation__identity span { display: flex; align-items: center; gap: 5px; margin-top: 3px; color: #69717e; font-size: 9px; }
+.app-conversation__identity i { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(22,128,71,.11); animation: app-conversation-pulse 2.4s ease-in-out infinite; }
+.app-conversation__sample { padding: 4px 6px; border: 1px solid rgba(18,103,196,.15); border-radius: 5px; color: #155fac; background: rgba(18,103,196,.07); font-size: 8px; font-weight: 750; white-space: nowrap; }
+.app-conversation__body { min-height: 0; flex: 1; display: flex; flex-direction: column; padding: 14px 14px 10px; }
+.app-conversation__date { align-self: center; margin-bottom: 10px; color: #858b94; font-size: 8px; }
+.app-conversation__topic { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 16px; padding: 10px 11px; border-left: 3px solid var(--blue); border-radius: 5px; background: rgba(255,255,255,.86); box-shadow: 0 8px 24px -20px rgba(21,25,34,.55); }
+.app-conversation__topic span { color: #3e6fa9; font-size: 8px; font-weight: 750; }
+.app-conversation__topic strong { font-size: 9px; }
+.app-conversation__message { display: flex; align-items: flex-end; gap: 7px; animation: app-conversation-enter .55s cubic-bezier(.2,.75,.25,1) forwards; }
+.app-conversation__message time { display: block; margin-top: 4px; color: #8a9099; font-size: 7px; }
+.app-conversation__message--user { max-width: 84%; align-self: flex-end; justify-content: flex-end; animation-delay: .12s; }
+.app-conversation__message--user > div { display: flex; flex-direction: column; align-items: flex-end; }
+.app-conversation__message--user .app-conversation__bubble { padding: 11px 12px; border-radius: 13px 13px 4px 13px; color: #fff; background: #173154; box-shadow: 0 12px 22px -16px rgba(23,49,84,.75); font-size: 10px; line-height: 1.62; }
+.app-conversation__message--assistant { align-items: flex-start; margin-top: 14px; animation-delay: .42s; }
+.app-conversation__message--assistant > img { width: 30px; height: 30px; flex: 0 0 30px; border: 2px solid #fff; border-radius: 50%; background: #fff; box-shadow: 0 6px 16px -9px rgba(21,25,34,.6); }
+.app-conversation__message--assistant > div { min-width: 0; max-width: calc(100% - 37px); }
+.app-conversation__message--assistant .app-conversation__bubble { padding: 11px 12px; border: 1px solid rgba(21,25,34,.08); border-radius: 5px 13px 13px; background: #fff; box-shadow: 0 12px 28px -24px rgba(21,25,34,.7); font-size: 9.5px; line-height: 1.68; }
+.app-conversation__message--assistant .app-conversation__bubble strong { display: block; margin-top: 6px; color: #155fac; font-weight: 800; }
+.app-conversation__practice { margin-top: 8px; padding: 10px 11px; border: 1px solid rgba(22,128,71,.16); border-radius: 8px; background: #edf7f0; }
+.app-conversation__practice span { color: #16703f; font-size: 8px; font-weight: 800; }
+.app-conversation__practice p { margin-top: 3px; color: #253b30; font-size: 9px; font-weight: 650; line-height: 1.55; }
+.app-conversation__message--question { margin-top: 12px; animation-delay: .72s; }
+.app-conversation__message--answer { margin-top: 10px; animation-delay: 1.02s; }
+.app-conversation__message--answer .app-conversation__bubble { padding-block: 9px; }
+.app-conversation__follow-up { display: grid; grid-template-columns: 8px minmax(0,1fr); gap: 7px; align-items: start; margin: auto 0 0 37px; padding-top: 9px; color: #68717e; font-size: 8.5px; line-height: 1.55; animation: app-conversation-enter .55s 1.3s cubic-bezier(.2,.75,.25,1) forwards; }
+.app-conversation__follow-up > span { width: 7px; height: 7px; margin-top: 3px; border: 2px solid #e7a02b; border-radius: 50%; }
+.app-conversation__composer { min-height: 64px; display: grid; grid-template-columns: 28px minmax(0,1fr) 29px; gap: 8px; align-items: center; margin: 0 10px 11px; padding: 8px 9px; border: 1px solid rgba(21,25,34,.09); border-radius: 14px; background: rgba(255,255,255,.92); box-shadow: 0 14px 34px -25px rgba(21,25,34,.72); }
+.app-conversation__voice, .app-conversation__send { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; }
+.app-conversation__voice { color: #68717e; background: #f0f1f3; }
+.app-conversation__send { color: #fff; background: var(--blue); box-shadow: 0 7px 14px -8px rgba(18,103,196,.8); }
+.app-conversation__placeholder { overflow: hidden; color: #8a9099; font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
+@keyframes app-conversation-enter { from { transform: translateY(7px); } to { transform: none; } }
+@keyframes app-conversation-pulse { 0%, 100% { opacity: .65; transform: scale(.88); } 50% { opacity: 1; transform: scale(1.08); } }
 .app-page > .app-download { padding-top: clamp(54px, 7vw, 84px); background: rgba(255,255,255,.35); border-block: 1px solid var(--line); }
 .app-page > .app-download .app-download__heading { max-width: 790px; }
 .app-page__section-head { max-width: 760px; }
@@ -1831,6 +1872,7 @@ img[data-zoom] { cursor: zoom-in; }
 
 @media (max-width: 900px) {
   .app-page__hero { grid-template-columns: 1fr minmax(230px, .55fr); }
+  .app-page__device { min-width: 300px; }
   .app-page__feature-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .app-page__feature:nth-child(3n+2) .app-page__feature-icon,
   .app-page__feature:nth-child(3n) .app-page__feature-icon { color: var(--blue); border-color: rgba(43,127,255,.18); background: rgba(43,127,255,.08); }
@@ -1840,7 +1882,7 @@ img[data-zoom] { cursor: zoom-in; }
 @media (max-width: 700px) {
   .app-page__hero { min-height: auto; grid-template-columns: 1fr; padding-block: 46px 58px; }
   .app-page__hero .display { font-size: 43px; }
-  .app-page__device { display: none; }
+  .app-page__device { min-width: 0; display: none; }
   .app-page__quick-links { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); }
   .app-page__quick-links a { justify-content: center; }
   .app-page__feature-grid { grid-template-columns: 1fr; }
@@ -1861,4 +1903,5 @@ img[data-zoom] { cursor: zoom-in; }
 @media (prefers-reduced-motion: reduce) {
   .app-page__quick-links a, .app-download__details-link span { transition: none; }
   .app-page__device { transform: none; }
+  .app-conversation__message, .app-conversation__follow-up, .app-conversation__identity i { opacity: 1; animation: none; transform: none; }
 }

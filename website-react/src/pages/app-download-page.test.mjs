@@ -14,6 +14,7 @@ const appSource = readSource('../App.jsx')
 const pageSource = readSource('./AppDownload.jsx')
 const contentSource = readSource('../data/appDownloadPage.js')
 const componentSource = readSource('../components/AppDownloadSection.jsx')
+const conversationPreviewSource = readSource('../components/AppConversationPreview.jsx')
 const layoutSource = readSource('../components/Layout.jsx')
 const configModuleSource = readSource('../data/siteConfig.js')
 const stylesheetSource = readSource('../index.css')
@@ -68,24 +69,28 @@ test('builds the dedicated page around download, features, install guidance, and
   )
 })
 
-test('uses a real App screenshot and page-specific search metadata', () => {
-  const preview = resolve(__dirname, '../../public/assets/app/app-home-preview.webp')
-
-  assert.ok(existsSync(preview), '首屏需要使用真实 App 界面截图')
-  assert.ok(statSync(preview).size > 10 * 1024, 'App 界面截图文件大小异常')
-  assert.match(contentSource, /APP_HERO_PREVIEW/)
-  assert.match(pageSource, /src=\{APP_HERO_PREVIEW\.src\}/)
-  assert.match(pageSource, /alt=\{APP_HERO_PREVIEW\.alt\}/)
-  assert.doesNotMatch(pageSource, /app-page__device-lines/)
+test('uses a realistic anonymous conversation and page-specific search metadata', () => {
+  assert.match(pageSource, /import AppConversationPreview from/)
+  assert.match(pageSource, /<AppConversationPreview\s*\/>/)
+  assert.doesNotMatch(pageSource, /src=\{APP_HERO_PREVIEW\.src\}/)
+  assert.match(conversationPreviewSource, /匿名示例对话/)
+  assert.match(conversationPreviewSource, /我明明很累，却总怕拒绝别人会让关系变差/)
+  assert.match(conversationPreviewSource, /我现在精力有限，这件事明天下午再回复你，可以吗/)
+  assert.match(conversationPreviewSource, /如果对方不高兴呢/)
+  assert.match(conversationPreviewSource, /对方失望，不代表你做错了/)
+  assert.match(conversationPreviewSource, /app-conversation__composer/)
   assert.match(pageSource, /document\.title\s*=\s*APP_PAGE_META\.title/)
   assert.match(pageSource, /meta\[name="description"\]/)
   assert.match(pageSource, /meta\[property="og:title"\]/)
   assert.match(pageSource, /meta\[property="og:description"\]/)
 })
 
-test('shows the complete App screenshot without cropping its top or bottom', () => {
+test('shows the complete App conversation without cropping its top or bottom', () => {
   assert.match(stylesheetSource, /\.app-page__device\s*\{[^}]*aspect-ratio:\s*448\s*\/\s*960;/)
-  assert.match(stylesheetSource, /\.app-page__device-screen img\s*\{[^}]*object-fit:\s*contain;/)
+  assert.match(stylesheetSource, /@media\s*\(max-width:\s*900px\)[\s\S]*\.app-page__device\s*\{[^}]*min-width:\s*300px;/)
+  assert.match(stylesheetSource, /\.app-conversation\s*\{[^}]*height:\s*100%;/)
+  assert.match(stylesheetSource, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.app-conversation/)
+  assert.doesNotMatch(stylesheetSource, /\.app-conversation__(?:message|follow-up)[^{]*\{[^}]*opacity:\s*0;/)
 })
 
 test('bundles the supplied installation video with an accessible poster and captions', () => {
