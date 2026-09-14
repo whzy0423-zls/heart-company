@@ -32,6 +32,13 @@ function FeatureIcon({ name }) {
 }
 
 export default function AppDownload() {
+  const releaseNoteCount = APP_RELEASE_HISTORY.reduce(
+    (total, release) => total + release.notes.length,
+    0,
+  )
+  const releaseTimeline = [...APP_RELEASE_HISTORY].slice(0, 3).reverse()
+  const latestHistoricalRelease = APP_RELEASE_HISTORY[0]
+
   useEffect(() => {
     const previousTitle = document.title
     const metadata = [
@@ -201,20 +208,68 @@ export default function AppDownload() {
           <h2 className="section-title" id="release-notes-title">每次更新，都让陪伴更稳一点</h2>
           <p className="lead">{APP_RELEASE_DISCLAIMER}</p>
         </Reveal>
-        <div className="app-page__release-list">
-          {APP_RELEASE_HISTORY.map((release) => (
-            <Reveal className="app-page__release-item" key={release.version}>
-              <div className="app-page__release-mark" aria-hidden="true"><span /></div>
-              <div className="app-page__release-version">
-                <strong>v{release.version}</strong>
-                <time dateTime={release.date}>{release.date}</time>
+        <div className="app-page__release-layout">
+          <div className="app-page__release-list">
+            {APP_RELEASE_HISTORY.map((release) => (
+              <Reveal className="app-page__release-item" key={release.version}>
+                <div className="app-page__release-mark" aria-hidden="true"><span /></div>
+                <div className="app-page__release-version">
+                  <strong>v{release.version}</strong>
+                  <time dateTime={release.date}>{release.date}</time>
+                </div>
+                <div className="app-page__release-copy">
+                  <h3>{release.title}</h3>
+                  <ul>{release.notes.map((note) => <li key={note}>{note}</li>)}</ul>
+                </div>
+              </Reveal>
+            ))}
+          </div>
+
+          <Reveal className="app-page__release-progress">
+            <div className="app-page__release-progress-head">
+              <div>
+                <p>成长脉络</p>
+                <h3>每一步，都在靠近真实的你</h3>
               </div>
-              <div className="app-page__release-copy">
-                <h3>{release.title}</h3>
-                <ul>{release.notes.map((note) => <li key={note}>{note}</li>)}</ul>
+              <span><i aria-hidden="true" />持续迭代</span>
+            </div>
+
+            <dl className="app-page__release-metrics">
+              <div>
+                <dt>历史版本</dt>
+                <dd>{APP_RELEASE_HISTORY.length}</dd>
               </div>
-            </Reveal>
-          ))}
+              <div>
+                <dt>能力更新</dt>
+                <dd>{releaseNoteCount}</dd>
+              </div>
+              <div>
+                <dt>最近记录</dt>
+                <dd><time dateTime={latestHistoricalRelease.date}>{latestHistoricalRelease.date.slice(5).replace('-', '.')}</time></dd>
+              </div>
+            </dl>
+
+            <div className="app-page__release-track" aria-label="历史版本演进轨迹">
+              <span className="app-page__release-progress-scan" aria-hidden="true" />
+              {releaseTimeline.map((release, index) => (
+                <div className="app-page__release-node" key={release.version} style={{ '--release-step': index }}>
+                  <span aria-hidden="true" />
+                  <strong>v{release.version}</strong>
+                  <time dateTime={release.date}>{release.date}</time>
+                </div>
+              ))}
+            </div>
+
+            <div className="app-page__release-focus">
+              <p>持续关注</p>
+              <ul>
+                <li>智能对话</li>
+                <li>关系洞察</li>
+                <li>成长记录</li>
+                <li>个性表达</li>
+              </ul>
+            </div>
+          </Reveal>
         </div>
       </section>
 
