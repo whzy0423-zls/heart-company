@@ -192,7 +192,11 @@ onMounted(load);
             <Input v-model:value="form.code" disabled />
           </Form.Item>
           <Form.Item label="套餐名称" required>
-            <Input v-model:value="form.name" :maxlength="40" />
+            <Input
+              v-model:value="form.name"
+              :maxlength="40"
+              placeholder="请输入套餐名称"
+            />
           </Form.Item>
           <Form.Item label="套餐价格（元）">
             <InputNumber
@@ -201,6 +205,7 @@ onMounted(load);
               :min="0"
               :precision="2"
               class="full-width"
+              placeholder="请输入套餐价格"
             />
           </Form.Item>
           <Form.Item label="划线价格（元）">
@@ -210,6 +215,7 @@ onMounted(load);
               :min="0"
               :precision="2"
               class="full-width"
+              placeholder="请输入划线价格"
             />
           </Form.Item>
           <Form.Item label="有效天数">
@@ -219,6 +225,7 @@ onMounted(load);
               :min="0"
               :max="3660"
               class="full-width"
+              placeholder="请输入有效天数"
             />
           </Form.Item>
           <Form.Item label="排序">
@@ -226,6 +233,7 @@ onMounted(load);
               v-model:value="form.sortOrder"
               :min="0"
               class="full-width"
+              placeholder="请输入排序值"
             />
           </Form.Item>
           <Form.Item label="每日聊天额度（-1 为不限）">
@@ -233,6 +241,7 @@ onMounted(load);
               v-model:value="form.dailyChatLimit"
               :min="-1"
               class="full-width"
+              placeholder="请输入每日聊天额度"
             />
           </Form.Item>
           <Form.Item label="每月故事额度">
@@ -240,6 +249,7 @@ onMounted(load);
               v-model:value="form.storyMonthlyLimit"
               :min="0"
               class="full-width"
+              placeholder="请输入每月故事额度"
             />
           </Form.Item>
           <Form.Item label="人物卡上限">
@@ -247,6 +257,7 @@ onMounted(load);
               v-model:value="form.cardLimit"
               :min="0"
               class="full-width"
+              placeholder="请输入人物卡上限"
             />
           </Form.Item>
           <Form.Item label="上架状态">
@@ -254,15 +265,24 @@ onMounted(load);
           </Form.Item>
         </div>
         <Form.Item label="副标题">
-          <Input v-model:value="form.subtitle" :maxlength="100" />
+          <Input
+            v-model:value="form.subtitle"
+            :maxlength="100"
+            placeholder="请输入套餐副标题"
+          />
         </Form.Item>
         <Form.Item label="角标">
-          <Input v-model:value="form.badge" :maxlength="20" />
+          <Input
+            v-model:value="form.badge"
+            :maxlength="20"
+            placeholder="例如：推荐、限时"
+          />
         </Form.Item>
         <Form.Item label="权益文案（每行一项）">
           <Input.TextArea
             v-model:value="form.featuresText"
             :auto-size="{ minRows: 4, maxRows: 8 }"
+            placeholder="每行填写一项会员权益"
           />
         </Form.Item>
         <Space size="large" wrap>
