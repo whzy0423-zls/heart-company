@@ -33,4 +33,10 @@ assert.match(
   '缺失的静态媒体必须返回 404，不能回退成 index.html',
 )
 
+assert.match(
+  nginxSource,
+  /text\/vtt\s+vtt;/,
+  '安装字幕必须声明 text/vtt MIME，避免浏览器拒绝 application/octet-stream 字幕',
+)
+
 console.log('website asset deployment tests passed')
