@@ -116,3 +116,33 @@ test('keeps version history factual and tells visitors that live metadata wins',
   assert.doesNotMatch(contentSource, /version:\s*'1\.1\.12'/)
   assert.doesNotMatch(contentSource, /最近更新/)
 })
+
+test('fills the install guide opening with useful preparation content', () => {
+  assert.match(pageSource, /className="app-page__install-readiness"/)
+  assert.match(pageSource, /官网/)
+  assert.match(pageSource, /APK 安装包/)
+  assert.match(pageSource, /Android 手机/)
+  assert.match(pageSource, /预留充足空间/)
+  assert.match(pageSource, /保持网络稳定/)
+  assert.ok(
+    pageSource.indexOf('className="app-page__install-readiness"')
+      < pageSource.indexOf('className="app-page__steps"'),
+    '安装准备区需要位于详细步骤之前，以填补步骤栏顶部空白',
+  )
+  assert.match(
+    stylesheetSource,
+    /\.app-page__install-grid\s*\{[^}]*align-items:\s*start;/s,
+  )
+})
+
+test('animates the install transfer path and step sequence with reduced-motion support', () => {
+  assert.match(pageSource, /className="app-page__install-transfer"/)
+  assert.match(pageSource, /style=\{\{ '--install-step': index \}\}/)
+  assert.match(stylesheetSource, /@keyframes\s+app-install-transfer/)
+  assert.match(stylesheetSource, /@keyframes\s+app-install-node-pulse/)
+  assert.match(stylesheetSource, /@keyframes\s+app-install-step-highlight/)
+  assert.match(
+    stylesheetSource,
+    /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.app-page__install-transfer i[\s\S]*\.app-page__steps > li > span[\s\S]*\{[^}]*animation:\s*none;/s,
+  )
+})

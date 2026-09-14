@@ -109,27 +109,56 @@ export default function AppDownload() {
             <p className="lead">先按步骤操作；需要对照手机界面时，再查看右侧的完整实机演示。</p>
           </Reveal>
           <div className="app-page__install-grid">
-          <Reveal className="app-page__steps-column">
-            <p className="eyebrow">安装步骤</p>
-            <ol className="app-page__steps">
-              {APP_INSTALL_STEPS.map((step) => (
-                <li key={step.number}>
-                  <span>{step.number}</span>
+            <Reveal className="app-page__steps-column">
+              <div className="app-page__install-readiness">
+                <div className="app-page__install-readiness-head">
                   <div>
-                    <h3>{step.title}</h3>
-                    <p>{step.description}</p>
+                    <p>安装前准备</p>
+                    <h3>从官网到手机，安全抵达</h3>
                   </div>
-                </li>
-              ))}
-            </ol>
-            <div className="app-page__security-note">
-              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
-                   strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 3 5 6v5c0 4.6 2.8 8.1 7 10 4.2-1.9 7-5.4 7-10V6l-7-3ZM9 12l2 2 4-5" />
-              </svg>
-              <p><strong>请认准官网安装包。</strong> 安装时 Android 可能提示“未知来源”，这是浏览器下载 APK 的系统提示。</p>
-            </div>
-          </Reveal>
+                  <span><i aria-hidden="true" />安全通道</span>
+                </div>
+
+                <div className="app-page__install-transfer" aria-label="安装包传输路径">
+                  <strong>官网</strong>
+                  <span aria-hidden="true"><i /></span>
+                  <strong>APK 安装包</strong>
+                  <span aria-hidden="true"><i /></span>
+                  <strong>Android 手机</strong>
+                </div>
+
+                <ul className="app-page__install-checks">
+                  <li>
+                    <strong>预留充足空间</strong>
+                    <span>安装和解压需要临时存储</span>
+                  </li>
+                  <li>
+                    <strong>保持网络稳定</strong>
+                    <span>下载完成后再打开安装文件</span>
+                  </li>
+                </ul>
+              </div>
+
+              <p className="eyebrow">安装步骤</p>
+              <ol className="app-page__steps">
+                {APP_INSTALL_STEPS.map((step, index) => (
+                  <li key={step.number} style={{ '--install-step': index }}>
+                    <span>{step.number}</span>
+                    <div>
+                      <h3>{step.title}</h3>
+                      <p>{step.description}</p>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+              <div className="app-page__security-note">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+                     strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 3 5 6v5c0 4.6 2.8 8.1 7 10 4.2-1.9 7-5.4 7-10V6l-7-3ZM9 12l2 2 4-5" />
+                </svg>
+                <p><strong>请认准官网安装包。</strong> 安装时 Android 可能提示“未知来源”，这是浏览器下载 APK 的系统提示。</p>
+              </div>
+            </Reveal>
 
             <Reveal className="app-page__video-column">
               <p className="eyebrow">安装视频</p>
