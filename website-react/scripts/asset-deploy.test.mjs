@@ -7,6 +7,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const pruneSource = readFileSync(resolve(__dirname, 'prune-dist-uploads.mjs'), 'utf8')
 const dockerignoreSource = readFileSync(resolve(__dirname, '../../.dockerignore'), 'utf8')
 const packageSource = readFileSync(resolve(__dirname, '../package.json'), 'utf8')
+const nginxSource = readFileSync(resolve(__dirname, '../nginx.conf'), 'utf8')
 
 assert.doesNotMatch(
   pruneSource,
@@ -24,6 +25,12 @@ assert.match(
   packageSource,
   /"test"\s*:\s*"find src scripts -name '\*\.test\.mjs' -print0 \| xargs -0 node --test"/,
   'website-react 需要 npm test 覆盖 src 和 scripts 下的 Node 回归测试',
+)
+
+assert.match(
+  nginxSource,
+  /location\s+\^~\s+\/assets\/\s*\{[^}]*try_files\s+\$uri\s+=404;/s,
+  '缺失的静态媒体必须返回 404，不能回退成 index.html',
 )
 
 console.log('website asset deployment tests passed')
