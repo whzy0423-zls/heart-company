@@ -1912,7 +1912,8 @@ img[data-zoom] { cursor: zoom-in; }
 @keyframes app-install-node-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(117,217,161,.28); } 50% { box-shadow: 0 0 0 8px rgba(117,217,161,0); } }
 @keyframes app-install-step-highlight { 0%, 16%, 100% { border-color: rgba(142,184,255,.28); color: #8eb8ff; background: rgba(142,184,255,.06); transform: scale(1); } 26%, 52% { border-color: #75d9a1; color: #102033; background: #75d9a1; transform: scale(1.08); box-shadow: 0 0 0 6px rgba(117,217,161,.08); } }
 .app-page__features, .app-page__releases { scroll-margin-top: 90px; }
-.app-page__release-list { max-width: 980px; }
+.app-page__release-layout { display: grid; grid-template-columns: minmax(0, 1.22fr) minmax(340px, .78fr); gap: clamp(52px, 7vw, 100px); align-items: start; }
+.app-page__release-list { min-width: 0; }
 .app-page__release-item { display: grid; grid-template-columns: 24px 150px minmax(0,1fr); gap: 24px; min-height: 160px; }
 .app-page__release-mark { position: relative; display: flex; justify-content: center; }
 .app-page__release-mark::before { content: ""; position: absolute; top: 22px; bottom: -22px; width: 1px; background: var(--line); }
@@ -1924,6 +1925,32 @@ img[data-zoom] { cursor: zoom-in; }
 .app-page__release-copy { padding-bottom: 34px; }
 .app-page__release-copy h3 { font-size: 19px; }
 .app-page__release-copy ul { display: grid; gap: 6px; margin: 10px 0 0 18px; color: var(--ink-2); font-size: 14.5px; }
+.app-page__release-progress { position: sticky; top: 104px; min-width: 0; padding: 28px 30px 30px; overflow: hidden; border-block: 1px solid var(--line); background: rgba(255,255,255,.48); }
+.app-page__release-progress-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+.app-page__release-progress-head p, .app-page__release-focus > p { color: var(--blue); font-size: 12px; font-weight: 800; }
+.app-page__release-progress-head h3 { max-width: 300px; margin-top: 5px; font-family: var(--font-display); font-size: 23px; line-height: 1.35; }
+.app-page__release-progress-head > span { display: inline-flex; align-items: center; gap: 7px; padding-top: 3px; color: #168548; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.app-page__release-progress-head > span i { width: 7px; height: 7px; border-radius: 50%; background: #25b365; box-shadow: 0 0 0 0 rgba(37,179,101,.24); animation: app-release-status 2s ease-out infinite; }
+.app-page__release-metrics { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); margin-top: 30px; padding-block: 19px; border-block: 1px solid var(--line); }
+.app-page__release-metrics > div { min-width: 0; padding-inline: 16px; border-right: 1px solid var(--line); }
+.app-page__release-metrics > div:first-child { padding-left: 0; }
+.app-page__release-metrics > div:last-child { padding-right: 0; border-right: 0; }
+.app-page__release-metrics dt { color: var(--muted); font-size: 11px; }
+.app-page__release-metrics dd { margin-top: 4px; color: var(--ink); font-family: var(--font-display); font-size: 29px; font-weight: 800; line-height: 1; }
+.app-page__release-track { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 0; margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--line); }
+.app-page__release-track::before { content: ""; position: absolute; top: -1px; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, var(--green), var(--blue)); opacity: .42; }
+.app-page__release-progress-scan { position: absolute; top: -2px; left: 0; width: 24%; height: 3px; border-radius: 2px; background: linear-gradient(90deg, transparent, var(--blue), transparent); box-shadow: 0 0 13px rgba(43,127,255,.38); transform: translateX(-110%); animation: app-release-scan 4.6s ease-in-out infinite; }
+.app-page__release-node { position: relative; min-width: 0; padding-top: 14px; }
+.app-page__release-node > span { position: absolute; top: -22px; left: 0; width: 9px; height: 9px; border: 2px solid #f7f8fb; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 1px rgba(43,127,255,.55); animation: app-release-node 4.6s ease-in-out infinite; animation-delay: calc(var(--release-step) * .42s); }
+.app-page__release-node strong, .app-page__release-node time { display: block; }
+.app-page__release-node strong { font-size: 13px; }
+.app-page__release-node time { margin-top: 4px; color: var(--muted); font-size: 11px; }
+.app-page__release-focus { margin-top: 30px; }
+.app-page__release-focus ul { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; list-style: none; }
+.app-page__release-focus li { padding: 7px 10px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink-2); background: rgba(255,255,255,.62); font-size: 12px; }
+@keyframes app-release-scan { 0%, 12% { transform: translateX(-110%); opacity: 0; } 25%, 78% { opacity: 1; } 90%, 100% { transform: translateX(420%); opacity: 0; } }
+@keyframes app-release-status { 0%, 100% { box-shadow: 0 0 0 0 rgba(37,179,101,.24); } 50% { box-shadow: 0 0 0 8px rgba(37,179,101,0); } }
+@keyframes app-release-node { 0%, 18%, 100% { transform: scale(1); background: var(--blue); } 28%, 48% { transform: scale(1.35); background: var(--green); } }
 .app-page__closing { display: grid; grid-template-columns: 56px minmax(0,1fr) auto; gap: 20px; align-items: center; margin-bottom: 72px; padding: 28px 32px; border-block: 1px solid var(--line); }
 .app-page__closing img { border-radius: 14px; }
 .app-page__closing h2 { font-family: var(--font-display); font-size: 25px; }
@@ -1936,6 +1963,8 @@ img[data-zoom] { cursor: zoom-in; }
   .app-page__feature:nth-child(3n+2) .app-page__feature-icon,
   .app-page__feature:nth-child(3n) .app-page__feature-icon { color: var(--blue); border-color: rgba(43,127,255,.18); background: rgba(43,127,255,.08); }
   .app-page__feature:nth-child(even) .app-page__feature-icon { color: var(--green); border-color: rgba(37,179,101,.18); background: rgba(37,179,101,.08); }
+  .app-page__release-layout { grid-template-columns: 1fr; gap: 44px; }
+  .app-page__release-progress { position: static; order: -1; }
 }
 
 @media (max-width: 700px) {
@@ -1956,6 +1985,11 @@ img[data-zoom] { cursor: zoom-in; }
   .app-page__release-version { margin-bottom: 10px; }
   .app-page__release-copy { padding-bottom: 34px; }
   .app-page__release-mark { grid-row: 1 / span 2; }
+  .app-page__release-progress { padding-inline: 0; background: transparent; }
+  .app-page__release-progress-head { gap: 14px; }
+  .app-page__release-progress-head h3 { font-size: 21px; }
+  .app-page__release-metrics > div { padding-inline: 10px; }
+  .app-page__release-metrics dd { font-size: 25px; }
   .app-page__closing { grid-template-columns: 48px minmax(0,1fr); margin-bottom: 44px; padding-inline: 0; }
   .app-page__closing img { width: 48px; height: 48px; }
   .app-page__closing .btn { grid-column: 1 / -1; justify-content: center; }
@@ -1967,5 +2001,8 @@ img[data-zoom] { cursor: zoom-in; }
   .app-conversation__message, .app-conversation__follow-up, .app-conversation__identity i { opacity: 1; animation: none; transform: none; }
   .app-page__install-transfer i,
   .app-page__install-readiness-head > span i,
-  .app-page__steps > li > span { animation: none; }
+  .app-page__steps > li > span,
+  .app-page__release-progress-scan,
+  .app-page__release-progress-head > span i,
+  .app-page__release-node > span { animation: none; }
 }

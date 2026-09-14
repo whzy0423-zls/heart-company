@@ -146,3 +146,23 @@ test('animates the install transfer path and step sequence with reduced-motion s
     /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.app-page__install-transfer i[\s\S]*\.app-page__steps > li > span[\s\S]*\{[^}]*animation:\s*none;/s,
   )
 })
+
+test('fills the release history side with a responsive animated progress summary', () => {
+  assert.match(pageSource, /className="app-page__release-layout"/)
+  assert.match(pageSource, /className="app-page__release-progress"/)
+  assert.match(pageSource, /成长脉络/)
+  assert.match(pageSource, /历史版本/)
+  assert.match(pageSource, /能力更新/)
+  assert.match(pageSource, /APP_RELEASE_HISTORY\.reduce/)
+  assert.match(pageSource, /\[\.\.\.APP_RELEASE_HISTORY\]\.slice\(0, 3\)\.reverse\(\)/)
+  assert.match(stylesheetSource, /\.app-page__release-progress\s*\{[^}]*position:\s*sticky;/s)
+  assert.match(stylesheetSource, /@keyframes\s+app-release-scan/)
+  assert.match(
+    stylesheetSource,
+    /@media\s*\(max-width:\s*900px\)[\s\S]*\.app-page__release-layout\s*\{[^}]*grid-template-columns:\s*1fr;/s,
+  )
+  assert.match(
+    stylesheetSource,
+    /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.app-page__release-progress[^}]*animation:\s*none;/s,
+  )
+})
