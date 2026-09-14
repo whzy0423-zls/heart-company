@@ -3366,6 +3366,37 @@ CREATE INDEX IF NOT EXISTS idx_app_analytics_events_event_time
   ON app_analytics_events(event, create_time DESC);
 
 -- ----- App 权益订单：App 用户独立订单，真实支付回调接入后发放权益 -----
+CREATE TABLE IF NOT EXISTS app_plans (
+  code                 TEXT PRIMARY KEY,
+  name                 TEXT NOT NULL,
+  subtitle             TEXT NOT NULL DEFAULT '',
+  price_cents          INT NOT NULL DEFAULT 0 CHECK (price_cents >= 0),
+  original_price_cents INT NOT NULL DEFAULT 0 CHECK (original_price_cents >= 0),
+  badge                TEXT NOT NULL DEFAULT '',
+  features             JSONB NOT NULL DEFAULT '[]'::jsonb,
+  enabled              BOOLEAN NOT NULL DEFAULT true,
+  sort_order           INT NOT NULL DEFAULT 0,
+  duration_days        INT NOT NULL DEFAULT 0 CHECK (duration_days >= 0),
+  daily_chat_limit     INT NOT NULL DEFAULT 5 CHECK (daily_chat_limit >= -1),
+  story_monthly_limit  INT NOT NULL DEFAULT 1 CHECK (story_monthly_limit >= 0),
+  card_limit           INT NOT NULL DEFAULT 1 CHECK (card_limit >= 0),
+  deep_chat_enabled    BOOLEAN NOT NULL DEFAULT false,
+  companion_enabled    BOOLEAN NOT NULL DEFAULT false,
+  member_poster_enabled BOOLEAN NOT NULL DEFAULT false,
+  create_time          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (code IN ('free','vip_month','vip_quarter','vip_year'))
+);
+
+INSERT INTO app_plans
+  (code,name,subtitle,price_cents,original_price_cents,badge,features,enabled,sort_order,duration_days,daily_chat_limit,story_monthly_limit,card_limit,deep_chat_enabled,companion_enabled,member_poster_enabled)
+VALUES
+  ('free','免费版','每日基础陪伴','0','0','', '["每日 5 轮基础对话","首次 1 篇人生故事","最多 1 张人物卡","经典海报"]'::jsonb,true,0,0,5,1,1,false,false,false),
+  ('vip_month','月卡会员','灵活体验完整成长陪伴',2900,0,'灵活','["深度对话与专业陪伴","每月 3 篇人生故事","最多 5 张人物卡","2 款会员海报"]'::jsonb,true,10,30,-1,3,5,true,true,true),
+  ('vip_quarter','季卡会员','约 ¥26.3/月，适合持续成长',7900,8700,'推荐','["深度对话与专业陪伴","每月 5 篇人生故事","最多 8 张人物卡","2 款会员海报"]'::jsonb,true,20,90,-1,5,8,true,true,true),
+  ('vip_year','年卡会员','约 ¥16.6/月，适合长期自我探索',19900,34800,'最划算','["深度对话与专业陪伴","每月 12 篇人生故事","最多 20 张人物卡","2 款会员海报"]'::jsonb,true,30,365,-1,12,20,true,true,true)
+ON CONFLICT (code) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS app_orders (
   id              BIGSERIAL PRIMARY KEY,
   out_trade_no    TEXT NOT NULL UNIQUE,
@@ -3384,6 +3415,7 @@ CREATE TABLE IF NOT EXISTS app_orders (
   pay_url          TEXT,
   last_query_at    TIMESTAMPTZ,
   payment_error    TEXT,
+  duration_days    INT NOT NULL DEFAULT 0,
   create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
   paid_at         TIMESTAMPTZ,
@@ -3404,6 +3436,10 @@ ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS provider_status TEXT;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS pay_url TEXT;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS last_query_at TIMESTAMPTZ;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS payment_error TEXT;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS duration_days INT NOT NULL DEFAULT 0;
+UPDATE app_orders SET duration_days=CASE product_id
+  WHEN 'vip_month' THEN 30 WHEN 'vip_quarter' THEN 90 WHEN 'vip_year' THEN 365 ELSE 0 END
+WHERE duration_days=0;
 UPDATE app_orders SET payment_provider='manual' WHERE payment_provider IS NULL;
 UPDATE app_orders SET purchase_mode='xzn' WHERE payment_provider='xzn' AND purchase_mode<>'xzn';
 
@@ -3415,6 +3451,64 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_app_orders_provider_trade_no
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_orders_one_active_online_per_user
   ON app_orders(app_user_id)
   WHERE payment_provider = 'xzn' AND status IN ('pending', 'paying');
+
+-- 免费聊天按北京时间自然日预占、确认或释放，避免并发请求突破额度。
+CREATE TABLE IF NOT EXISTS app_chat_daily_quotas (
+  app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  quota_date DATE NOT NULL,
+  quota_limit INT NOT NULL CHECK (quota_limit >= 0),
+  reserved INT NOT NULL DEFAULT 0 CHECK (reserved >= 0),
+  consumed INT NOT NULL DEFAULT 0 CHECK (consumed >= 0),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (app_user_id, quota_date),
+  CHECK (reserved + consumed <= quota_limit)
+);
+
+-- 推广活动人工赠送的限时聊天额度。remaining 包含当前已预占额度，
+-- 实际可用数为 remaining-reserved。
+CREATE TABLE IF NOT EXISTS app_chat_trial_credit_grants (
+  id              BIGSERIAL PRIMARY KEY,
+  app_user_id     BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  amount          INT NOT NULL CHECK (amount BETWEEN 1 AND 1000),
+  remaining       INT NOT NULL CHECK (remaining >= 0),
+  reserved        INT NOT NULL DEFAULT 0 CHECK (reserved >= 0),
+  reason          TEXT NOT NULL CHECK (char_length(reason) BETWEEN 1 AND 200),
+  expires_at      TIMESTAMPTZ NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'active'
+                  CHECK (status IN ('active','revoked','exhausted','expired')),
+  operator_id     BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  revoked_by      BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  revoked_at      TIMESTAMPTZ,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (reserved <= remaining AND remaining <= amount)
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_chat_trial_credit_grants_available
+  ON app_chat_trial_credit_grants(app_user_id,expires_at,id)
+  WHERE status='active' AND remaining > 0;
+CREATE INDEX IF NOT EXISTS idx_app_chat_trial_credit_grants_user_history
+  ON app_chat_trial_credit_grants(app_user_id,create_time DESC,id DESC);
+
+CREATE TABLE IF NOT EXISTS app_chat_quota_reservations (
+  reservation_key TEXT PRIMARY KEY,
+  app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  quota_date DATE NOT NULL,
+  source TEXT NOT NULL DEFAULT 'daily' CHECK (source IN ('daily','trial')),
+  trial_grant_id BIGINT REFERENCES app_chat_trial_credit_grants(id) ON DELETE RESTRICT,
+  status TEXT NOT NULL CHECK (status IN ('reserved','consumed','released')),
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  FOREIGN KEY (app_user_id,quota_date) REFERENCES app_chat_daily_quotas(app_user_id,quota_date) ON DELETE CASCADE,
+  CHECK ((source='daily' AND trial_grant_id IS NULL) OR (source='trial' AND trial_grant_id IS NOT NULL))
+);
+
+ALTER TABLE app_chat_quota_reservations ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'daily';
+ALTER TABLE app_chat_quota_reservations ADD COLUMN IF NOT EXISTS trial_grant_id BIGINT REFERENCES app_chat_trial_credit_grants(id) ON DELETE RESTRICT;
+
+CREATE INDEX IF NOT EXISTS idx_app_chat_quota_reservations_user_date
+  ON app_chat_quota_reservations(app_user_id,quota_date,create_time DESC);
 
 -- ----- App 每日成长打卡：记录用户每天完成的成长练习 -----
 CREATE TABLE IF NOT EXISTS app_daily_checkins (

@@ -295,6 +295,19 @@ func TestDefaultMenusIncludeAppAnalyticsDashboard(t *testing.T) {
 }
 
 func TestDefaultAppMenusBelongToAppManagement(t *testing.T) {
+	var foundParent bool
+	for _, menu := range defaultMenus {
+		if menu.Name == "AppManage" {
+			foundParent = true
+			if menu.ID != 1600 || menu.PID != 0 || menu.Path != "/app" || menu.Type != "catalog" || menu.Title != "App 管理" {
+				t.Fatalf("unexpected App management parent: %+v", menu)
+			}
+		}
+	}
+	if !foundParent {
+		t.Fatal("expected default AppManage parent menu")
+	}
+
 	wantSort := map[string]int{
 		"DashboardAppAnalytics": 1,
 		"CustomerAppUsers":      2,
