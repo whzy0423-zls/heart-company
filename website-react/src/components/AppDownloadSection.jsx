@@ -242,6 +242,35 @@ export default function AppDownloadSection({
               )}
             </div>
 
+            <div className="app-download__journey" aria-label="Android 安装流程">
+              <div className="app-download__journey-heading">
+                <h3>3 步开始体验</h3>
+                <span>约 1 分钟</span>
+              </div>
+              <ol className="app-download__journey-track">
+                {[
+                  ['01', '扫码或点击'],
+                  ['02', '下载安装包'],
+                  ['03', '完成安装'],
+                ].map(([number, label], index) => (
+                  <li key={number} style={{ '--step-index': index }}>
+                    <span className="app-download__journey-step-marker" aria-hidden="true">
+                      {number}
+                    </span>
+                    <strong>{label}</strong>
+                  </li>
+                ))}
+              </ol>
+            </div>
+
+            <div className="app-download__verification" aria-label="安装包安全信息">
+              <p><span aria-hidden="true" />官方安装包</p>
+              <ul>
+                <li>HTTPS 安全下载</li>
+                <li>SHA-256 可校验</li>
+              </ul>
+            </div>
+
             {showInstallSummary && (
               <div className="app-download__install">
                 <h3>安装步骤</h3>
