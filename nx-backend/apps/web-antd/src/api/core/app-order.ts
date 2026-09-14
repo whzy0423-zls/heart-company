@@ -20,6 +20,8 @@ export interface AppOrder {
   gatewayId?: string;
   providerStatus?: string;
   providerTradeNo?: string;
+  refundedAt?: string;
+  refundReason?: string;
   lastQueryAt?: string;
   payUrl?: string;
   phone: string;
@@ -44,4 +46,21 @@ export function getAppOrderListApi(params?: Record<string, any>) {
 
 export function reconcileAppOrderApi(id: number | string) {
   return requestClient.post<AppOrder>(`/app-orders/${id}/reconcile`);
+}
+
+export interface AppOrderRefundResult {
+  alreadyRefunded: boolean;
+  entitlementReverted: boolean;
+  orderId: number;
+  status: 'refunded';
+}
+
+export function refundAppOrderApi(
+  id: number | string,
+  data: { reason: string },
+) {
+  return requestClient.post<AppOrderRefundResult>(
+    `/app-orders/${id}/refund`,
+    data,
+  );
 }

@@ -3420,7 +3420,12 @@ CREATE TABLE IF NOT EXISTS app_orders (
   update_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
   paid_at         TIMESTAMPTZ,
   activation_at TIMESTAMPTZ,
-  membership_expires_at TIMESTAMPTZ
+  membership_expires_at TIMESTAMPTZ,
+  member_level_before TEXT,
+  member_started_at_before TIMESTAMPTZ,
+  member_expires_at_before TIMESTAMPTZ,
+  refunded_at TIMESTAMPTZ,
+  refund_reason TEXT NOT NULL DEFAULT ''
 );
 
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS member_started_at TIMESTAMPTZ;
@@ -3437,6 +3442,11 @@ ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS pay_url TEXT;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS last_query_at TIMESTAMPTZ;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS payment_error TEXT;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS duration_days INT NOT NULL DEFAULT 0;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS member_level_before TEXT;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS member_started_at_before TIMESTAMPTZ;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS member_expires_at_before TIMESTAMPTZ;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS refund_reason TEXT NOT NULL DEFAULT '';
 UPDATE app_orders SET duration_days=CASE product_id
   WHEN 'vip_month' THEN 30 WHEN 'vip_quarter' THEN 90 WHEN 'vip_year' THEN 365 ELSE 0 END
 WHERE duration_days=0;

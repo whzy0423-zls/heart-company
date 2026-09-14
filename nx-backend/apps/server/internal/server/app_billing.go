@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -594,6 +595,69 @@ func (s *Server) appBillingOrderStatus(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, enriched)
 }
 
+func (s *Server) appBillingCancelOrder(w http.ResponseWriter, r *http.Request) {
+	userInfo, ok := appUserFromContext(r)
+	if !ok {
+		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	var body struct {
+		OutTradeNo string `json:"outTradeNo"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&body); err != nil || strings.TrimSpace(body.OutTradeNo) == "" {
+		httpx.Fail(w, http.StatusBadRequest, "outTradeNo required")
+		return
+	}
+	body.OutTradeNo = strings.TrimSpace(body.OutTradeNo)
+
+	tx, err := s.db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	defer tx.Rollback()
+	var orderID int64
+	var status, provider string
+	if err := tx.QueryRowContext(r.Context(), `SELECT id,status,COALESCE(payment_provider,'manual')
+		FROM app_orders WHERE app_user_id=$1 AND out_trade_no=$2 FOR UPDATE`, userInfo.ID, body.OutTradeNo).Scan(&orderID, &status, &provider); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			httpx.Fail(w, http.StatusNotFound, "order not found")
+			return
+		}
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	if provider != appPaymentProviderXZN {
+		httpx.Fail(w, http.StatusConflict, "只有在线待支付订单可以取消")
+		return
+	}
+	if status != "closed" {
+		if status != "pending" && status != "paying" {
+			httpx.Fail(w, http.StatusConflict, "当前订单状态不能取消")
+			return
+		}
+		if _, err := tx.ExecContext(r.Context(), `UPDATE app_orders SET status='closed',update_time=now() WHERE id=$1`, orderID); err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "server error")
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	order, err := s.loadAppOrderByOutTradeNo(r.Context(), userInfo.ID, body.OutTradeNo)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	enriched, err := s.enrichOnlineOrder(r.Context(), userInfo.ID, order)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	httpx.OK(w, enriched)
+}
+
 func (s *Server) findPendingAppOrder(ctx context.Context, appUserID int64) (appOrderResp, bool, error) {
 	var resp appOrderResp
 	err := s.db.QueryRowContext(ctx, `
@@ -676,16 +740,22 @@ func (s *Server) enrichOnlineOrder(ctx context.Context, appUserID int64, resp ap
 			"returnUrl":  xznOrderReturnURL(cfg.ReturnURL, resp.OutTradeNo),
 		}
 	}
-	switch strings.ToUpper(resp.ProviderStatus) {
-	case "TRADE_SUCCESS":
+	switch {
+	case resp.Status == "refunded":
+		resp.Message = "订单已退款，会员权益已同步回退"
+	case resp.Status == "closed":
+		resp.Message = "订单已取消，可以重新选择支付方式"
+	case strings.EqualFold(resp.ProviderStatus, "TRADE_SUCCESS"):
 		resp.Message = "支付成功，会员已开通"
-	case "TRADE_CLOSED", "TRADE_REFUND":
+	case strings.EqualFold(resp.ProviderStatus, "TRADE_CLOSED"):
 		resp.Message = "订单已关闭，未开通会员"
-	case "TRADE_FREEZE":
+	case strings.EqualFold(resp.ProviderStatus, "TRADE_REFUND"):
+		resp.Message = "订单已退款，会员权益已同步回退"
+	case strings.EqualFold(resp.ProviderStatus, "TRADE_FREEZE"):
 		resp.Message = "订单正在风控审核，请稍后查询"
-	case "TRADE_UNFREEZE":
+	case strings.EqualFold(resp.ProviderStatus, "TRADE_UNFREEZE"):
 		resp.Message = "订单已解除风控，请继续支付"
-	case "WAIT_BUYER_PAY", "":
+	case strings.EqualFold(resp.ProviderStatus, "WAIT_BUYER_PAY") || resp.ProviderStatus == "":
 		resp.Message = "请在支付页面完成付款"
 	default:
 		resp.Message = "支付未完成，请稍后重试"
@@ -758,6 +828,8 @@ func appCustomerServiceOrder(resp appOrderResp) appOrderResp {
 	resp.CustomerServiceQRURL = appCustomerServiceQRURL
 	if resp.Status == "paid" {
 		resp.Message = "会员已由客服确认开通"
+	} else if resp.Status == "refunded" {
+		resp.Message = "订单已退款，会员权益已同步回退"
 	} else {
 		resp.Message = "请添加客服微信并提供手机号和订单号，转账后由客服确认开通"
 	}

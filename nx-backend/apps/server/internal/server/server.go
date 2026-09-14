@@ -980,6 +980,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/billing/entitlements", s.method(http.MethodGet, s.requireAppAuth(s.appBillingEntitlements)))
 	s.mux.HandleFunc("/api/app/billing/products", s.method(http.MethodGet, s.requireAppAuth(s.appBillingProducts)))
 	s.mux.HandleFunc("/api/app/billing/orders", s.method(http.MethodPost, s.requireAppAuth(s.appBillingCreateOrder)))
+	s.mux.HandleFunc("/api/app/billing/orders/cancel", s.method(http.MethodPost, s.requireAppAuth(s.appBillingCancelOrder)))
 	s.mux.HandleFunc("/api/app/billing/orders/status", s.method(http.MethodGet, s.requireAppAuth(s.appBillingOrderStatus)))
 	s.mux.HandleFunc("/api/app/memories/", s.requireAppAuth(s.appMemoryRouter))
 	s.mux.HandleFunc("/api/app/privacy/export", s.method(http.MethodPost, s.requireAppAuth(s.appPrivacyExport)))
