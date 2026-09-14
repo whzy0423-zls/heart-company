@@ -134,3 +134,33 @@ test('keeps the QR image contained inside its frame', () => {
     /\.app-download__qr-frame\s+img\s*\{[^}]*max-width:\s*100%[^}]*max-height:\s*100%[^}]*object-fit:\s*contain;/s,
   )
 })
+
+test('fills the download aside with a clear Android installation journey and package trust details', () => {
+  assert.match(componentSource, /className="app-download__journey"/)
+  assert.match(componentSource, /扫码或点击/)
+  assert.match(componentSource, /下载安装包/)
+  assert.match(componentSource, /完成安装/)
+  assert.match(componentSource, /className="app-download__verification"/)
+  assert.match(componentSource, /官方安装包/)
+  assert.match(componentSource, /HTTPS 安全下载/)
+  assert.match(componentSource, /SHA-256 可校验/)
+})
+
+test('animates the download journey without compromising reduced-motion preferences', () => {
+  for (const keyframe of [
+    'app-download-sheen',
+    'app-download-status-pulse',
+    'app-download-step-progress',
+    'app-download-step-pulse',
+    'app-download-qr-breathe',
+  ]) {
+    assert.match(cssSource, new RegExp(`@keyframes\\s+${keyframe}`))
+  }
+
+  assert.match(cssSource, /\.app-download__action::after\s*\{[^}]*animation:\s*app-download-sheen/s)
+  assert.match(cssSource, /\.app-download__journey-track::after\s*\{[^}]*animation:\s*app-download-step-progress/s)
+  assert.match(
+    cssSource,
+    /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.app-download__qr-frame[\s\S]*\.app-download__journey-track::after[\s\S]*\{[^}]*animation:\s*none;/s,
+  )
+})
