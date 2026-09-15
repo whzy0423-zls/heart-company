@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -434,4 +435,12 @@ func (s *Server) publicDistributionInvite(w http.ResponseWriter, r *http.Request
 	}
 	_, _ = s.db.ExecContext(r.Context(), `INSERT INTO distribution_invite_events(agent_id,agent_code,event_type) VALUES($1,$2,'click')`, id, code)
 	httpx.OK(w, map[string]any{"valid": status == "active", "agentCode": code})
+}
+
+func bindDistributionAgent(ctx context.Context, db *sql.DB, userID int64, code string) {
+	code = strings.TrimSpace(code)
+	if db == nil || userID <= 0 || code == "" {
+		return
+	}
+	_, _ = db.ExecContext(ctx, `INSERT INTO distribution_user_relations(app_user_id,direct_agent_id) SELECT $1,id FROM distribution_agents WHERE lower(agent_code)=lower($2) AND status='active' ON CONFLICT(app_user_id) DO NOTHING`, userID, code)
 }
