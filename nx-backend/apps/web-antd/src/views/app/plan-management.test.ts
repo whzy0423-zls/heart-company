@@ -43,4 +43,24 @@ describe('App plan management contract', () => {
       expect(source).toContain(expected);
     }
   });
+
+  it('refreshes current permissions before exposing write actions', () => {
+    const source = readFileSync(resolve(here, 'plan-management.vue'), 'utf8');
+    expect(source).toContain('getAccessCodesApi');
+    expect(source).toContain('access.setAccessCodes');
+    expect(source).toContain('只读模式');
+  });
+
+  it('provides explicit edit and availability actions with confirmation', () => {
+    const source = readFileSync(resolve(here, 'plan-management.vue'), 'utf8');
+    for (const expected of [
+      'toggleAvailability',
+      'Modal.confirm',
+      'actionLoadingCode',
+      "recordOf(record).enabled ? '下架' : '上架'",
+      '>编辑<',
+    ]) {
+      expect(source).toContain(expected);
+    }
+  });
 });

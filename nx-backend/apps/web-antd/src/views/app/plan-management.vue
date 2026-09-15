@@ -7,11 +7,13 @@ import { Page } from '@vben/common-ui';
 import { IconifyIcon } from '@vben/icons';
 import { useAccessStore } from '@vben/stores';
 import {
+  Alert,
   Button,
   Drawer,
   Form,
   Input,
   InputNumber,
+  Modal,
   Space,
   Switch,
   Table,
@@ -19,7 +21,11 @@ import {
   message,
 } from 'ant-design-vue';
 
-import { getAppPlansApi, updateAppPlanApi } from '#/api';
+import {
+  getAccessCodesApi,
+  getAppPlansApi,
+  updateAppPlanApi,
+} from '#/api';
 
 const access = useAccessStore();
 const canWrite = computed(() =>
@@ -27,6 +33,8 @@ const canWrite = computed(() =>
 );
 const loading = ref(false);
 const saving = ref(false);
+const permissionsReady = ref(false);
+const actionLoadingCode = ref('');
 const drawerOpen = ref(false);
 const plans = ref<AppPlan[]>([]);
 const form = reactive({
@@ -48,7 +56,7 @@ const form = reactive({
   subtitle: '',
 });
 
-const columns = [
+const baseColumns = [
   { dataIndex: 'name', fixed: 'left' as const, title: '套餐', width: 140 },
   { dataIndex: 'priceCents', title: '套餐价格', width: 120 },
   { dataIndex: 'durationDays', title: '有效期', width: 100 },
@@ -57,8 +65,13 @@ const columns = [
   { dataIndex: 'cardLimit', title: '人物卡', width: 90 },
   { dataIndex: 'enabled', title: '上架状态', width: 100 },
   { dataIndex: 'sortOrder', title: '排序', width: 80 },
-  { fixed: 'right' as const, key: 'action', title: '操作', width: 90 },
 ];
+const columns = computed(() => [
+  ...baseColumns,
+  ...(canWrite.value
+    ? [{ fixed: 'right' as const, key: 'action', title: '操作', width: 180 }]
+    : []),
+]);
 
 function recordOf(record: Record<string, any>) {
   return record as AppPlan;
@@ -124,11 +137,55 @@ async function save() {
   }
 }
 
-onMounted(load);
+function toggleAvailability(plan: AppPlan) {
+  const nextEnabled = !plan.enabled;
+  Modal.confirm({
+    cancelText: '取消',
+    content: nextEnabled
+      ? '上架后，用户可以在 App 中看到并选择该套餐。'
+      : '下架后，新用户将无法在 App 中选择该套餐，已有会员权益不受影响。',
+    okButtonProps: { danger: !nextEnabled },
+    okText: nextEnabled ? '确认上架' : '确认下架',
+    title: `${nextEnabled ? '上架' : '下架'}“${plan.name}”？`,
+    async onOk() {
+      actionLoadingCode.value = plan.code;
+      try {
+        await updateAppPlanApi(plan.code, {
+          ...plan,
+          enabled: nextEnabled,
+        });
+        message.success(`套餐已${nextEnabled ? '上架' : '下架'}`);
+        await load();
+      } catch {
+        message.error(`${nextEnabled ? '上架' : '下架'}套餐失败`);
+      } finally {
+        actionLoadingCode.value = '';
+      }
+    },
+  });
+}
+
+onMounted(async () => {
+  try {
+    access.setAccessCodes(await getAccessCodesApi());
+  } catch {
+    // Keep the cached permissions when the refresh endpoint is temporarily unavailable.
+  } finally {
+    permissionsReady.value = true;
+    await load();
+  }
+});
 </script>
 
 <template>
   <Page title="套餐管理">
+    <Alert
+      v-if="permissionsReady && !canWrite"
+      class="read-only-alert"
+      message="当前为只读模式，如需编辑或上下架套餐，请联系管理员开通套餐写入权限。"
+      show-icon
+      type="info"
+    />
     <Table
       :columns="columns"
       :data-source="plans"
@@ -168,14 +225,23 @@ onMounted(load);
           </Tag>
         </template>
         <template v-else-if="column.key === 'action'">
-          <Button
-            v-if="canWrite"
-            type="link"
-            title="编辑套餐"
-            @click="edit(recordOf(record))"
-          >
-            <IconifyIcon icon="lucide:pencil" />
-          </Button>
+          <Space v-if="canWrite" :size="4">
+            <Button type="link" title="编辑套餐" @click="edit(recordOf(record))">
+              <IconifyIcon icon="lucide:pencil" />
+              <span>编辑</span>
+            </Button>
+            <Button
+              :danger="recordOf(record).enabled"
+              :loading="actionLoadingCode === recordOf(record).code"
+              type="link"
+              @click="toggleAvailability(recordOf(record))"
+            >
+              <IconifyIcon
+                :icon="recordOf(record).enabled ? 'lucide:archive' : 'lucide:upload'"
+              />
+              {{ recordOf(record).enabled ? '下架' : '上架' }}
+            </Button>
+          </Space>
         </template>
       </template>
     </Table>
@@ -323,6 +389,9 @@ onMounted(load);
 }
 .full-width {
   width: 100%;
+}
+.read-only-alert {
+  margin-bottom: 16px;
 }
 @media (max-width: 640px) {
   .form-grid {
