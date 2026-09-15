@@ -49,6 +49,7 @@ const routes: RouteRecordRaw[] = [
         name: 'AppStoryManagement',
         path: 'story-management',
       },
+      { component: () => import('#/views/app/distribution-commissions.vue'), meta: { authority: ['Customer:App:List'], icon: 'lucide:coins', title: '佣金明细' }, name: 'AppDistributionCommissions', path: 'distribution-commissions' },
       { component: () => import('#/views/app/distribution-rules.vue'), meta: { authority: ['Customer:App:List'], icon: 'lucide:percent', title: '佣金规则' }, name: 'AppDistributionRules', path: 'distribution-rules' },
       { component: () => import('#/views/app/distribution-settlements.vue'), meta: { authority: ['Customer:App:List'], icon: 'lucide:wallet-cards', title: '分销结算' }, name: 'AppDistributionSettlements', path: 'distribution-settlements' },
       {
