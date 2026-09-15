@@ -4943,7 +4943,7 @@ CREATE TABLE IF NOT EXISTS distribution_settlements (
   period_start    DATE NOT NULL,
   period_end      DATE NOT NULL,
   amount          BIGINT NOT NULL CHECK (amount >= 0),
-  status          TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','pending','paid','cancelled')),
+  status          TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','approved','pending','paid','rejected','cancelled')),
   paid_at         TIMESTAMPTZ,
   created_by      BIGINT REFERENCES users(id) ON DELETE SET NULL,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),

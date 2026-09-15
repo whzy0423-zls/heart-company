@@ -8,7 +8,9 @@ import (
 
 func TestSchemaContainsDistributionModelAndIdempotencyGuards(t *testing.T) {
 	b, err := os.ReadFile("schema.sql")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := string(b)
 	for _, fragment := range []string{
 		"CREATE TABLE IF NOT EXISTS distribution_agents",
@@ -18,6 +20,21 @@ func TestSchemaContainsDistributionModelAndIdempotencyGuards(t *testing.T) {
 		"UNIQUE (order_id, agent_id)",
 		"idx_distribution_user_relations_direct_agent",
 	} {
-		if !strings.Contains(s, fragment) { t.Errorf("schema missing %q", fragment) }
+		if !strings.Contains(s, fragment) {
+			t.Errorf("schema missing %q", fragment)
+		}
+	}
+}
+
+func TestSchemaSupportsSettlementApprovalStates(t *testing.T) {
+	b, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, state := range []string{"approved", "rejected", "cancelled"} {
+		if !strings.Contains(s, state) {
+			t.Errorf("schema missing settlement state %q", state)
+		}
 	}
 }
