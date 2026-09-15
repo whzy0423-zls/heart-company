@@ -574,3 +574,77 @@ func (s *Server) appDistributionOrders(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.OK(w, map[string]any{"items": out, "total": len(out)})
 }
+
+func (s *Server) adminDistributionRuleCreate(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name  string        `json:"name"`
+		Rates map[int]int64 `json:"rates"`
+	}
+	if json.NewDecoder(r.Body).Decode(&in) != nil || strings.TrimSpace(in.Name) == "" {
+		httpx.Fail(w, 400, "name is required")
+		return
+	}
+	if len(in.Rates) == 0 {
+		httpx.Fail(w, 400, "rates are required")
+		return
+	}
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	var ruleID, version int64
+	if err = tx.QueryRowContext(r.Context(), `INSERT INTO distribution_commission_rules(version,status) SELECT COALESCE(max(version),0)+1,'draft' FROM distribution_commission_rules RETURNING id,version`).Scan(&ruleID, &version); err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	for level, rate := range in.Rates {
+		if level < 1 || level > 3 || rate < 0 || rate > 10000 {
+			httpx.Fail(w, 400, "invalid rate")
+			return
+		}
+		if _, err = tx.ExecContext(r.Context(), `INSERT INTO distribution_commission_rule_items(rule_id,agent_level,rate_bps) VALUES($1,$2,$3)`, ruleID, level, rate); err != nil {
+			httpx.Fail(w, 500, err.Error())
+			return
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	httpx.OK(w, map[string]any{"id": ruleID, "version": version, "name": in.Name, "status": "draft"})
+}
+
+func (s *Server) adminDistributionRuleActivate(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/api/admin/distribution/rules/"), 10, 64)
+	if err != nil || id <= 0 {
+		httpx.Fail(w, 400, "invalid id")
+		return
+	}
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(r.Context(), `UPDATE distribution_commission_rules SET status='archived' WHERE status='active'`); err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	res, err := tx.ExecContext(r.Context(), `UPDATE distribution_commission_rules SET status='active',activated_at=now() WHERE id=$1 AND status='draft'`, id)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		httpx.Fail(w, 409, "rule not found or not draft")
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	httpx.OK(w, map[string]any{"activated": true, "id": id})
+}
