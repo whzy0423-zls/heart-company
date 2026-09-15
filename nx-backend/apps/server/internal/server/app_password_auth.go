@@ -102,6 +102,7 @@ func (s *Server) appLoginWithPassword(w http.ResponseWriter, r *http.Request) {
 		Account    string `json:"account"`
 		Password   string `json:"password"`
 		DeviceInfo string `json:"deviceInfo"`
+		AgentCode  string `json:"agentCode"`
 	}
 	if err := decodeAppPasswordJSON(w, r, &body); err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "invalid request body")
@@ -129,6 +130,8 @@ func (s *Server) appLoginWithPassword(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, status, message)
 		return
 	}
+
+	bindDistributionAgent(r.Context(), s.db, user.ID, body.AgentCode)
 
 	if err := s.writeAppSession(w, r, user, deviceInfo); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "token error")
