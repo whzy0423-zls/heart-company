@@ -372,3 +372,45 @@ func (s *Server) adminDistributionSettlementCreate(w http.ResponseWriter, r *htt
 	}
 	httpx.OK(w, map[string]any{"settlementId": id, "amount": amount, "count": count})
 }
+
+func (s *Server) adminDistributionSettlementAction(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/distribution/settlements/"), "/"), "/")
+	if len(parts) != 2 {
+		httpx.Fail(w, 400, "invalid settlement path")
+		return
+	}
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id <= 0 {
+		httpx.Fail(w, 400, "invalid id")
+		return
+	}
+	action := parts[1]
+	next := map[string]string{"approve": "approved", "paid": "paid", "reject": "rejected", "cancel": "canceled"}[action]
+	if next == "" {
+		httpx.Fail(w, 400, "invalid action")
+		return
+	}
+	var clause string
+	switch next {
+	case "approved":
+		clause = "status='draft'"
+	case "paid":
+		clause = "status='approved'"
+	case "rejected":
+		clause = "status='draft'"
+	case "canceled":
+		clause = "status IN ('draft','approved')"
+	}
+	q := `UPDATE distribution_settlements SET status=$1,paid_at=CASE WHEN $1='paid' THEN COALESCE(paid_at,now()) ELSE paid_at END WHERE id=$2 AND ` + clause
+	res, err := s.db.ExecContext(r.Context(), q, next, id)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		httpx.Fail(w, 409, "invalid settlement state or not found")
+		return
+	}
+	httpx.OK(w, map[string]any{"updated": true, "status": next})
+}
