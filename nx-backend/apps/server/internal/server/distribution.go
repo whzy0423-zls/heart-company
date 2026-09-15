@@ -542,3 +542,35 @@ func (s *Server) appDistributionAgents(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.OK(w, map[string]any{"items": out, "total": len(out)})
 }
+
+func (s *Server) appDistributionOrders(w http.ResponseWriter, r *http.Request) {
+	u, ok := appUserFromContext(r)
+	if !ok {
+		httpx.Fail(w, 401, "unauthorized")
+		return
+	}
+	rows, err := s.db.QueryContext(r.Context(), `SELECT o.id,o.out_trade_no,o.app_user_id,o.amount,o.status,o.paid_at FROM app_orders o JOIN distribution_user_relations rel ON rel.app_user_id=o.app_user_id JOIN distribution_agents direct ON direct.id=rel.direct_agent_id JOIN distribution_agents me ON direct.agent_path LIKE me.agent_path||'%' WHERE me.app_user_id=$1 ORDER BY o.id DESC LIMIT 200`, u.ID)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	type item struct {
+		ID, AppUserID, Amount      int64
+		OutTradeNo, Status, PaidAt string
+	}
+	out := []item{}
+	for rows.Next() {
+		var x item
+		var tm sql.NullTime
+		if err := rows.Scan(&x.ID, &x.OutTradeNo, &x.AppUserID, &x.Amount, &x.Status, &tm); err != nil {
+			httpx.Fail(w, 500, err.Error())
+			return
+		}
+		if tm.Valid {
+			x.PaidAt = tm.Time.Format(time.RFC3339)
+		}
+		out = append(out, x)
+	}
+	httpx.OK(w, map[string]any{"items": out, "total": len(out)})
+}

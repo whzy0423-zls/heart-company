@@ -913,6 +913,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/distribution/commissions", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionCommissions)))
 	s.mux.HandleFunc("/api/app/distribution/users", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionUsers)))
 	s.mux.HandleFunc("/api/app/distribution/agents", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionAgents)))
+	s.mux.HandleFunc("/api/app/distribution/orders", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionOrders)))
 	s.mux.HandleFunc("/api/app/auth/send-sms", s.method(http.MethodPost, s.appSendSMS))
 	s.mux.HandleFunc("/api/app/auth/sms", s.method(http.MethodPost, s.appSendSMS))
 	s.mux.HandleFunc("/api/app/auth/sms/send", s.method(http.MethodPost, s.appSendSMS))
