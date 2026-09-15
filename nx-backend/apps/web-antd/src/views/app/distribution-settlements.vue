@@ -2,10 +2,9 @@
 import { onMounted, ref } from 'vue';
 import { Page } from '@vben/common-ui';
 import { Table, Tag, message } from 'ant-design-vue';
-import { requestClient } from '#/api/request';
-import { settleDistributionActionApi } from '#/api/core/distribution';
+import { getDistributionSettlementsApi, settleDistributionActionApi } from '#/api/core/distribution';
 type Settlement={id:number;agentId:number;periodStart:string;periodEnd:string;amount:number;status:string;createdAt:string};const items=ref<Settlement[]>([]);const loading=ref(false);
-async function load(){loading.value=true;try{items.value=(await requestClient.get<{items:Settlement[]}>('/admin/distribution/settlements')).items;}catch{message.error('结算列表加载失败')}finally{loading.value=false}}function settlementOf(record: Record<string, any>) { return record as Settlement; }
+async function load(){loading.value=true;try{items.value=(await getDistributionSettlementsApi()).items;}catch{message.error('结算列表加载失败')}finally{loading.value=false}}function settlementOf(record: Record<string, any>) { return record as Settlement; }
 async function action(record: Settlement, actionName: string) { try { await settleDistributionActionApi(record.id, actionName); message.success('操作成功'); await load(); } catch { message.error('操作失败，请检查结算状态'); } }
 onMounted(load);
 </script>
