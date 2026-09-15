@@ -648,3 +648,37 @@ func (s *Server) adminDistributionRuleActivate(w http.ResponseWriter, r *http.Re
 	}
 	httpx.OK(w, map[string]any{"activated": true, "id": id})
 }
+
+func (s *Server) adminDistributionRules(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.QueryContext(r.Context(), `SELECT id,version,status,created_at,COALESCE(activated_at,created_at) FROM distribution_commission_rules ORDER BY version DESC`)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	type item struct {
+		ID, Version                    int64
+		Status, CreatedAt, ActivatedAt string
+	}
+	out := []item{}
+	for rows.Next() {
+		var x item
+		var a, b time.Time
+		if err := rows.Scan(&x.ID, &x.Version, &x.Status, &a, &b); err != nil {
+			httpx.Fail(w, 500, err.Error())
+			return
+		}
+		x.CreatedAt = a.Format(time.RFC3339)
+		x.ActivatedAt = b.Format(time.RFC3339)
+		out = append(out, x)
+	}
+	httpx.OK(w, map[string]any{"items": out, "total": len(out)})
+}
+
+func (s *Server) adminDistributionRulesRouter(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		s.adminDistributionRuleCreate(w, r)
+		return
+	}
+	s.adminDistributionRules(w, r)
+}
