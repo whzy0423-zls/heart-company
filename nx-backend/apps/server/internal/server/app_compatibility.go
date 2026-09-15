@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/compatibility"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/quiz"
+	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
 type appCompatibilityRequest struct {
@@ -68,6 +70,14 @@ type appCompatibilityReport struct {
 // GET /api/app/compatibility/:id.
 func (s *Server) appCompatibilityRouter(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimRight(r.URL.Path, "/")
+	if strings.HasSuffix(path, "/ask") {
+		if r.Method != http.MethodPost {
+			httpx.Fail(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.appCompatibilityAsk(w, r, strings.TrimSuffix(path, "/ask"))
+		return
+	}
 	if path == "/api/app/compatibility" {
 		switch r.Method {
 		case http.MethodGet:
@@ -86,6 +96,86 @@ func (s *Server) appCompatibilityRouter(w http.ResponseWriter, r *http.Request) 
 	}
 	idText := strings.Trim(strings.TrimPrefix(path, "/api/app/compatibility/"), "/")
 	s.appCompatibilityDetail(w, r, idText)
+}
+
+func (s *Server) appCompatibilityAsk(w http.ResponseWriter, r *http.Request, reportPath string) {
+	userInfo, ok := appUserFromContext(r)
+	if !ok {
+		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	idText := strings.Trim(strings.TrimPrefix(reportPath, "/api/app/compatibility/"), "/")
+	id, err := strconv.ParseInt(idText, 10, 64)
+	if err != nil || id <= 0 {
+		httpx.Fail(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var body struct {
+		Question string        `json:"question"`
+		History  []rag.Message `json:"history"`
+		Tier     string        `json:"tier"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Question) == "" {
+		httpx.Fail(w, http.StatusBadRequest, "question required")
+		return
+	}
+	report, err := scanAppCompatibilityReport(s.db.QueryRowContext(r.Context(), `
+		SELECT id, app_user_id, card_a_id, card_b_id, card_a_name, card_b_name, card_a_type, card_b_type,
+		       summary, highlights, conflict_points, suggestions, is_full,
+		       algorithm_version, relation_level, scores, explain_tags, evidence,
+		       create_time, update_time
+		FROM app_compatibility_reports WHERE id = $1 AND app_user_id = $2
+	`, id, userInfo.ID))
+	if errors.Is(err, sql.ErrNoRows) {
+		httpx.Fail(w, http.StatusNotFound, "not found")
+		return
+	}
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	tier, err := s.appChatTierForUser(r.Context(), userInfo.ID, body.Tier)
+	if err != nil {
+		failAppChatTier(w, err)
+		return
+	}
+	quotaKey, _, err := s.reserveAppChatQuota(r.Context(), userInfo.ID)
+	if err != nil {
+		failAppChatQuota(w, err)
+		return
+	}
+	defer s.releaseAppChatQuota(quotaKey)
+	generator, timeout := s.chatRuntime()
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+	docs := []rag.Document{{
+		ID:    "compatibility-report",
+		Title: report.CardAName + " × " + report.CardBName + " 关系合盘",
+		Content: strings.Join([]string{
+			"关系层级：" + report.RelationLevel,
+			"关系总结：" + report.Summary,
+			"关系优势：" + strings.Join(report.Highlights, "；"),
+			"潜在冲突：" + strings.Join(report.ConflictPoints, "；"),
+			"相处建议：" + strings.Join(report.Suggestions, "；"),
+		}, "\n"),
+	}}
+	answer, err := rag.NewService(docs, rag.WithGenerator(generator), rag.WithStrictGeneratorErrors()).Ask(ctx, rag.AskInput{
+		History:  body.History,
+		Question: strings.TrimSpace(body.Question),
+		Tier:     tier,
+		ConversationCard: rag.ConversationCard{
+			Name:     report.CardBName,
+			Relation: "关系合盘",
+			MainType: report.CardBType,
+			Profile:  report.Summary,
+		},
+	})
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
+		return
+	}
+	s.commitAppChatQuota(quotaKey)
+	httpx.OK(w, askResponse{Answer: answer})
 }
 
 func (s *Server) appCompatibilityCreate(w http.ResponseWriter, r *http.Request) {
