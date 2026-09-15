@@ -414,3 +414,24 @@ func (s *Server) adminDistributionSettlementAction(w http.ResponseWriter, r *htt
 	}
 	httpx.OK(w, map[string]any{"updated": true, "status": next})
 }
+
+func (s *Server) publicDistributionInvite(w http.ResponseWriter, r *http.Request) {
+	code := strings.TrimSpace(r.URL.Query().Get("agent"))
+	if code == "" {
+		httpx.Fail(w, 400, "agent is required")
+		return
+	}
+	var id int64
+	var status string
+	err := s.db.QueryRowContext(r.Context(), `SELECT id,status FROM distribution_agents WHERE lower(agent_code)=lower($1)`, code).Scan(&id, &status)
+	if err == sql.ErrNoRows {
+		httpx.Fail(w, 404, "agent not found")
+		return
+	}
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	_, _ = s.db.ExecContext(r.Context(), `INSERT INTO distribution_invite_events(agent_id,agent_code,event_type) VALUES($1,$2,'click')`, id, code)
+	httpx.OK(w, map[string]any{"valid": status == "active", "agentCode": code})
+}

@@ -904,6 +904,7 @@ func (s *Server) routes() {
 	// 对话模型连通性测试：对 MiniMax 网关做一次轻量探活，需登录。
 	s.mux.HandleFunc("/api/model-config/test-chat", s.requirePermission("System:Model:Config", s.method(http.MethodPost, s.testChatModel)))
 	// ===== App API =====
+	s.mux.HandleFunc("/api/public/distribution/invite", s.method(http.MethodGet, s.publicDistributionInvite))
 	s.mux.HandleFunc("/api/app/health", s.method(http.MethodGet, s.appHealth))
 	s.mux.HandleFunc("/api/app/features", s.method(http.MethodGet, s.requireAppAuth(s.appFeatures)))
 	s.mux.HandleFunc("/api/app/distribution/overview", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionOverview)))
