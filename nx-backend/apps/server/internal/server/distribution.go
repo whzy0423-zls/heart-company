@@ -309,3 +309,66 @@ func (s *Server) adminDistributionCommissionReverse(w http.ResponseWriter, r *ht
 	}
 	httpx.OK(w, map[string]any{"reversed": true, "reason": in.Reason})
 }
+
+func (s *Server) adminDistributionSettlementPreview(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		AgentID int64  `json:"agentId"`
+		Start   string `json:"start"`
+		End     string `json:"end"`
+	}
+	if json.NewDecoder(r.Body).Decode(&in) != nil || in.AgentID <= 0 || strings.TrimSpace(in.Start) == "" || strings.TrimSpace(in.End) == "" {
+		httpx.Fail(w, 400, "agentId, start and end are required")
+		return
+	}
+	var amount int64
+	var count int
+	err := s.db.QueryRowContext(r.Context(), `SELECT COALESCE(sum(commission_amount),0),count(*) FROM distribution_commission_records WHERE agent_id=$1 AND status='pending' AND created_at >= $2::date AND created_at < ($3::date + INTERVAL '1 day')`, in.AgentID, in.Start, in.End).Scan(&amount, &count)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	httpx.OK(w, map[string]any{"agentId": in.AgentID, "amount": amount, "count": count, "start": in.Start, "end": in.End})
+}
+
+func (s *Server) adminDistributionSettlementCreate(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		AgentID int64  `json:"agentId"`
+		Start   string `json:"start"`
+		End     string `json:"end"`
+	}
+	if json.NewDecoder(r.Body).Decode(&in) != nil || in.AgentID <= 0 || strings.TrimSpace(in.Start) == "" || strings.TrimSpace(in.End) == "" {
+		httpx.Fail(w, 400, "agentId, start and end are required")
+		return
+	}
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	var id, amount int64
+	var count int
+	err = tx.QueryRowContext(r.Context(), `WITH picked AS (SELECT COALESCE(sum(commission_amount),0) amount,count(*) count FROM distribution_commission_records WHERE agent_id=$1 AND status='pending' AND created_at >= $2::date AND created_at < ($3::date + INTERVAL '1 day')) INSERT INTO distribution_settlements(agent_id,period_start,period_end,amount,status) SELECT $1,$2::date,$3::date,amount,'draft' FROM picked WHERE count>0 RETURNING id,amount,(SELECT count FROM picked)`, in.AgentID, in.Start, in.End).Scan(&id, &amount, &count)
+	if err == sql.ErrNoRows {
+		httpx.Fail(w, 409, "no settleable commissions")
+		return
+	}
+	if err != nil {
+		httpx.Fail(w, 409, err.Error())
+		return
+	}
+	_, err = tx.ExecContext(r.Context(), `INSERT INTO distribution_settlement_items(settlement_id,commission_id,amount) SELECT $1,id,commission_amount FROM distribution_commission_records WHERE agent_id=$2 AND status='pending' AND created_at >= $3::date AND created_at < ($4::date + INTERVAL '1 day')`, id, in.AgentID, in.Start, in.End)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	if _, err = tx.ExecContext(r.Context(), `UPDATE distribution_commission_records SET status='settled',updated_at=now() WHERE agent_id=$1 AND status='pending' AND created_at >= $2::date AND created_at < ($3::date + INTERVAL '1 day')`, in.AgentID, in.Start, in.End); err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	httpx.OK(w, map[string]any{"settlementId": id, "amount": amount, "count": count})
+}
