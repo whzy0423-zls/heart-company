@@ -6,7 +6,12 @@ const routes: RouteRecordRaw[] = [
   {
     component: BasicLayout,
     meta: {
-      authority: ['App:EnneagramLibrary:View', 'App:SkillLibrary:View', 'App:StoryManagement:View'],
+      authority: [
+        'App:EnneagramLibrary:View',
+        'App:SkillLibrary:View',
+        'App:StoryManagement:View',
+        'App:PlanManagement:View',
+      ],
       icon: 'lucide:smartphone',
       order: 11,
       title: 'App 管理',
@@ -43,6 +48,22 @@ const routes: RouteRecordRaw[] = [
         },
         name: 'AppStoryManagement',
         path: 'story-management',
+      },
+      {
+        component: () => import('#/views/app/distribution-management.vue'),
+        meta: { authority: ['Customer:App:List'], icon: 'lucide:share-2', title: '分销代理' },
+        name: 'AppDistributionManagement',
+        path: 'distribution',
+      },
+      {
+        component: () => import('#/views/app/plan-management.vue'),
+        meta: {
+          authority: ['App:PlanManagement:View'],
+          icon: 'lucide:badge-dollar-sign',
+          title: '套餐管理',
+        },
+        name: 'AppPlanManagement',
+        path: 'plan-management',
       },
     ],
   },
