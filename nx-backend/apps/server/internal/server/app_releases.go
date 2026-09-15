@@ -229,11 +229,17 @@ func (s *Server) appReleaseMutation(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, release)
 }
 
+type appReleasePolicyRequest struct {
+	MinSupportedVersionCode *int64 `json:"minSupportedVersionCode"`
+	ForceUpdate             *bool  `json:"forceUpdate"`
+	RolloutPercentage       *int   `json:"rolloutPercentage"`
+}
+
 func decodeAppReleasePolicy(w http.ResponseWriter, r *http.Request) (apprelease.AppReleasePolicy, bool) {
-	var policy apprelease.AppReleasePolicy
+	var input appReleasePolicyRequest
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&policy); err != nil {
+	if err := decoder.Decode(&input); err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "Invalid policy request")
 		return apprelease.AppReleasePolicy{}, false
 	}
@@ -242,7 +248,15 @@ func decodeAppReleasePolicy(w http.ResponseWriter, r *http.Request) (apprelease.
 		httpx.Fail(w, http.StatusBadRequest, "Invalid policy request")
 		return apprelease.AppReleasePolicy{}, false
 	}
-	return policy, true
+	if input.MinSupportedVersionCode == nil || input.ForceUpdate == nil || input.RolloutPercentage == nil {
+		httpx.Fail(w, http.StatusBadRequest, "Invalid policy request")
+		return apprelease.AppReleasePolicy{}, false
+	}
+	return apprelease.AppReleasePolicy{
+		MinSupportedVersionCode: *input.MinSupportedVersionCode,
+		ForceUpdate:             *input.ForceUpdate,
+		RolloutPercentage:       *input.RolloutPercentage,
+	}, true
 }
 
 func (s *Server) publicAppReleaseLatest(w http.ResponseWriter, r *http.Request) {

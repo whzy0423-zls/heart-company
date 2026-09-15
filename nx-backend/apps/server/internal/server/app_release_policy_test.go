@@ -100,13 +100,22 @@ func TestAppReleasePolicyMutationStrictlyDecodesSmallJSONBody(t *testing.T) {
 	}{
 		{name: "empty", body: ""},
 		{name: "malformed", body: `{"minSupportedVersionCode":`},
+		{name: "missing minimum", body: `{"forceUpdate":false,"rolloutPercentage":100}`},
+		{name: "missing force update", body: `{"minSupportedVersionCode":0,"rolloutPercentage":100}`},
+		{name: "missing rollout", body: `{"minSupportedVersionCode":0,"forceUpdate":false}`},
 		{name: "unknown field", body: `{"minSupportedVersionCode":0,"forceUpdate":false,"rolloutPercentage":100,"extra":true}`},
 		{name: "trailing object", body: `{"minSupportedVersionCode":0,"forceUpdate":false,"rolloutPercentage":100}{}`},
 		{name: "oversized", body: `{"minSupportedVersionCode":0,"forceUpdate":false,"rolloutPercentage":100,"extra":"` + strings.Repeat("x", 5<<10) + `"}`},
 	}
+	original := apprelease.Release{
+		ID:                      7,
+		MinSupportedVersionCode: 50,
+		ForceUpdate:             true,
+		RolloutPercentage:       25,
+	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			service := &stubAppReleaseService{}
+			service := &stubAppReleaseService{updatePolicyRelease: original}
 			server := &Server{appReleases: service}
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPatch, "/api/app-releases/7/policy", strings.NewReader(test.body))
@@ -118,6 +127,9 @@ func TestAppReleasePolicyMutationStrictlyDecodesSmallJSONBody(t *testing.T) {
 			}
 			if service.updatePolicyCalls != 0 {
 				t.Fatalf("UpdatePolicy calls = %d, want 0", service.updatePolicyCalls)
+			}
+			if service.updatePolicyRelease != original {
+				t.Fatalf("stored release = %+v, want unchanged %+v", service.updatePolicyRelease, original)
 			}
 		})
 	}
