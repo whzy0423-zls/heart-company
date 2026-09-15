@@ -242,40 +242,32 @@ func generateDistributionCommissionsTx(ctx context.Context, tx *sql.Tx, orderID,
 	if amount <= 0 {
 		return nil
 	}
-	rows, err := tx.QueryContext(ctx, `
-		WITH RECURSIVE chain AS (
-			SELECT a.id, a.app_user_id, a.level, a.parent_agent_id, a.root_agent_id,
-			       ('/'||a.id||'/')::text AS path
-			FROM distribution_user_relations r JOIN distribution_agents a ON a.id=r.direct_agent_id
-			WHERE r.app_user_id=$1
-			UNION ALL
-			SELECT p.id, p.app_user_id, p.level, p.parent_agent_id, p.root_agent_id,
-			       ('/'||p.id||'/'||trim(c.path,'/')||'/')::text
-			FROM chain c JOIN distribution_agents p ON p.id=c.parent_agent_id
-		), active_rule AS (
-			SELECT id, version FROM distribution_commission_rules WHERE status='active' ORDER BY version DESC LIMIT 1
-		)
-		SELECT c.id,c.app_user_id,c.level,c.root_agent_id,c.path,
-		       COALESCE(i.rate_bps,0),COALESCE(ar.id,0),COALESCE(ar.version,0)
-		FROM chain c CROSS JOIN active_rule ar
-		LEFT JOIN distribution_commission_rule_items i ON i.rule_id=ar.id AND i.agent_level=c.level
-		ORDER BY c.level`, paidUserID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var agentID, agentUserID, rootID, ruleID, version int64
-		var level int
-		var path string
-		var rate int64
-		if err := rows.Scan(&agentID, &agentUserID, &level, &rootID, &path, &rate, &ruleID, &version); err != nil {
-			return err
-		}
-		commission := amount * rate / 10000
-		if _, err := tx.ExecContext(ctx, `INSERT INTO distribution_commission_records(order_id,agent_id,app_user_id,agent_level,order_amount,rate_bps,commission_amount,rule_version,chain_snapshot) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(order_id,agent_id) DO NOTHING`, orderID, agentID, paidUserID, level, amount, rate, commission, version, path); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
+	// One INSERT SELECT avoids issuing a second command while PostgreSQL rows
+	// are still streaming on the transaction connection. Every beneficiary keeps
+	// the same complete referral snapshot, not a progressively truncated path.
+	_, err := tx.ExecContext(ctx, `
+ WITH RECURSIVE chain AS (
+   SELECT a.id,a.level,a.parent_agent_id,a.status,a.agent_path AS path,
+          ARRAY[a.id] AS visited,1 AS depth
+   FROM distribution_user_relations r
+   JOIN distribution_agents a ON a.id=r.direct_agent_id
+   WHERE r.app_user_id=$2
+   UNION ALL
+   SELECT p.id,p.level,p.parent_agent_id,p.status,c.path,
+          c.visited||p.id,c.depth+1
+   FROM chain c JOIN distribution_agents p ON p.id=c.parent_agent_id
+   WHERE c.depth<3 AND NOT p.id=ANY(c.visited)
+ ), active_rule AS (
+   SELECT id,version FROM distribution_commission_rules
+   WHERE status='active' ORDER BY version DESC LIMIT 1
+ )
+ INSERT INTO distribution_commission_records
+ (order_id,agent_id,app_user_id,agent_level,order_amount,rate_bps,commission_amount,rule_version,chain_snapshot)
+ SELECT $1,c.id,$2,c.level,$3,i.rate_bps,
+        floor(($3::bigint)::numeric*i.rate_bps/10000)::bigint,ar.version,c.path
+ FROM chain c CROSS JOIN active_rule ar
+ JOIN distribution_commission_rule_items i ON i.rule_id=ar.id AND i.agent_level=c.level
+ WHERE c.status='active'
+ ON CONFLICT(order_id,agent_id) DO NOTHING`, orderID, paidUserID, amount)
+	return err
 }

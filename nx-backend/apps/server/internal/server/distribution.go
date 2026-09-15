@@ -163,7 +163,7 @@ func (s *Server) appDistributionCreateChild(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var out distributionAgentResponse
-	err = s.db.QueryRowContext(r.Context(), `INSERT INTO distribution_agents(id,app_user_id,agent_code,level,parent_agent_id,root_agent_id,agent_path,status) VALUES(nextval('distribution_agents_id_seq'),$1,'A'||$1||'-'||currval('distribution_agents_id_seq'),$2,$3,$4,$5||currval('distribution_agents_id_seq')||'/','active') RETURNING id,app_user_id,agent_code,level,COALESCE(parent_agent_id,0),root_agent_id,agent_path,status`, in.AppUserID, parent.Level+1, parent.ID, parent.RootAgentID, parent.Path).Scan(&out.ID, &out.AppUserID, &out.AgentCode, &out.Level, &out.ParentAgentID, &out.RootAgentID, &out.Path)
+	err = s.db.QueryRowContext(r.Context(), `INSERT INTO distribution_agents(id,app_user_id,agent_code,level,parent_agent_id,root_agent_id,agent_path,status) VALUES(nextval('distribution_agents_id_seq'),$1::bigint,'A'||$1::text||'-'||currval('distribution_agents_id_seq'),$2,$3,$4,$5||currval('distribution_agents_id_seq')||'/','active') RETURNING id,app_user_id,agent_code,level,COALESCE(parent_agent_id,0),root_agent_id,agent_path,status`, in.AppUserID, parent.Level+1, parent.ID, parent.RootAgentID, parent.Path).Scan(&out.ID, &out.AppUserID, &out.AgentCode, &out.Level, &out.ParentAgentID, &out.RootAgentID, &out.Path, &out.Status)
 	if err != nil {
 		httpx.Fail(w, http.StatusConflict, err.Error())
 		return
@@ -460,8 +460,13 @@ func (s *Server) adminDistributionSettlements(w http.ResponseWriter, r *http.Req
 	}
 	defer rows.Close()
 	type item struct {
-		ID, AgentID, Amount                       int64
-		PeriodStart, PeriodEnd, Status, CreatedAt string
+		ID          int64  `json:"id"`
+		AgentID     int64  `json:"agentId"`
+		Amount      int64  `json:"amount"`
+		PeriodStart string `json:"periodStart"`
+		PeriodEnd   string `json:"periodEnd"`
+		Status      string `json:"status"`
+		CreatedAt   string `json:"createdAt"`
 	}
 	out := []item{}
 	for rows.Next() {
@@ -618,17 +623,27 @@ func (s *Server) adminDistributionRuleCreate(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) adminDistributionRuleActivate(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/api/admin/distribution/rules/"), 10, 64)
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/admin/distribution/rules/"), "/")
+	if len(parts) != 2 || parts[1] != "activate" {
+		httpx.Fail(w, 404, "rule action not found")
+		return
+	}
+	id, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil || id <= 0 {
 		httpx.Fail(w, 400, "invalid id")
 		return
 	}
+
 	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		httpx.Fail(w, 500, err.Error())
 		return
 	}
 	defer tx.Rollback()
+	if _, err = tx.ExecContext(r.Context(), `LOCK TABLE distribution_commission_rules IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
 	if _, err = tx.ExecContext(r.Context(), `UPDATE distribution_commission_rules SET status='archived' WHERE status='active'`); err != nil {
 		httpx.Fail(w, 500, err.Error())
 		return
@@ -658,8 +673,11 @@ func (s *Server) adminDistributionRules(w http.ResponseWriter, r *http.Request) 
 	}
 	defer rows.Close()
 	type item struct {
-		ID, Version                    int64
-		Status, CreatedAt, ActivatedAt string
+		ID          int64  `json:"id"`
+		Version     int64  `json:"version"`
+		Status      string `json:"status"`
+		CreatedAt   string `json:"createdAt"`
+		ActivatedAt string `json:"activatedAt"`
 	}
 	out := []item{}
 	for rows.Next() {
