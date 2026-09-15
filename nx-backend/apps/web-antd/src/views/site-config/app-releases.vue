@@ -451,7 +451,7 @@ onMounted(load);
           <div class="policy-rollout-control">
             <Slider
               v-model:value="policyForm.rolloutPercentage"
-              aria-label="灰度发布比例滑块"
+              aria-label-for-handle="灰度发布比例滑块"
               :disabled="policySaving"
               :min="1"
               :max="100"

@@ -92,6 +92,26 @@ vi.mock('ant-design-vue', async () => {
         });
     },
   });
+  const Slider = defineComponent({
+    name: 'SliderStub',
+    inheritAttrs: false,
+    props: {
+      ariaLabelForHandle: { default: undefined, type: String },
+      value: { default: undefined, type: Number },
+    },
+    emits: ['update:value'],
+    setup(props, { attrs, emit }) {
+      return () =>
+        h('div', attrs, [
+          h('span', {
+            'aria-label': props.ariaLabelForHandle,
+            'aria-valuenow': props.value,
+            role: 'slider',
+            onKeydown: () => emit('update:value', props.value),
+          }),
+        ]);
+    },
+  });
   const Modal = Object.assign(
     defineComponent({
       name: 'ModalStub',
@@ -160,7 +180,7 @@ vi.mock('ant-design-vue', async () => {
     },
     Modal,
     Progress: passthrough('Progress'),
-    Slider: modelInput('Slider', 'range'),
+    Slider,
     Switch,
     Table,
     Upload: Object.assign(passthrough('Upload'), {
@@ -371,7 +391,7 @@ describe('App release metadata page', () => {
         ?.getAttribute('max'),
     ).toBe('210');
     expect(
-      dialog?.querySelector('[aria-label="灰度发布比例滑块"]'),
+      dialog?.querySelector('[role="slider"][aria-label="灰度发布比例滑块"]'),
     ).not.toBeNull();
     expect(
       dialog?.querySelector<HTMLInputElement>('[aria-label="灰度发布比例"]')
