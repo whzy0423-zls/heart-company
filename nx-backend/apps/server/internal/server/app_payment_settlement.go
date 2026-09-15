@@ -44,11 +44,12 @@ func settleAppOrderTx(ctx context.Context, tx *sql.Tx, input appOrderSettlementI
 	}
 	var orderID, appUserID int64
 	var productID, status string
+	var orderAmount int64
 	var currentActivation, currentMembershipExpiry sql.NullTime
 	err := tx.QueryRowContext(ctx, `
-		SELECT id, app_user_id, product_id, status, activation_at, membership_expires_at
+		SELECT id, app_user_id, product_id, status, activation_at, membership_expires_at, amount
 		FROM app_orders WHERE id=$1 FOR UPDATE`, input.OrderID).Scan(
-		&orderID, &appUserID, &productID, &status, &currentActivation, &currentMembershipExpiry)
+		&orderID, &appUserID, &productID, &status, &currentActivation, &currentMembershipExpiry, &orderAmount)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return appOrderSettlementResult{}, errXZNCallbackNotFound
@@ -68,14 +69,19 @@ func settleAppOrderTx(ctx context.Context, tx *sql.Tx, input appOrderSettlementI
 		expires := nullableTimeValue(currentExpiresAt, currentMembershipExpiry)
 		return appOrderSettlementResult{OrderID: orderID, PlanCode: firstNonEmpty(productID, memberLevel), StartedAt: started, ExpiresAt: expires, AlreadyGranted: true}, nil
 	}
-	if _, err := membershipDurationDays(productID); err != nil {
-		return appOrderSettlementResult{}, fmt.Errorf("settlement plan: %w", err)
+	durationDays := 0
+	_ = tx.QueryRowContext(ctx, `SELECT duration_days FROM app_orders WHERE id=$1`, orderID).Scan(&durationDays)
+	if durationDays <= 0 {
+		durationDays, err = membershipDurationDays(productID)
+		if err != nil {
+			return appOrderSettlementResult{}, fmt.Errorf("settlement plan: %w", err)
+		}
 	}
 	var currentExpiry *time.Time
 	if currentExpiresAt.Valid {
 		currentExpiry = &currentExpiresAt.Time
 	}
-	period, err := calculateMembershipPeriod(productID, activationAt, currentExpiry)
+	period, err := calculateMembershipPeriodDays(durationDays, activationAt, currentExpiry)
 	if err != nil {
 		return appOrderSettlementResult{}, err
 	}
@@ -99,6 +105,9 @@ func settleAppOrderTx(ctx context.Context, tx *sql.Tx, input appOrderSettlementI
 		    payment_error='', update_time=now()
 		WHERE id=$1`, orderID, activationAt, period.Expires, input.ProviderTrade, input.ProviderStatus, input.TransactionID); err != nil {
 		return appOrderSettlementResult{}, fmt.Errorf("settlement order update: %w", err)
+	}
+	if err := generateDistributionCommissionsTx(ctx, tx, orderID, appUserID, orderAmount); err != nil {
+		return appOrderSettlementResult{}, fmt.Errorf("distribution commission: %w", err)
 	}
 	return appOrderSettlementResult{OrderID: orderID, PlanCode: productID, StartedAt: startedAt, ExpiresAt: period.Expires}, nil
 }
@@ -225,4 +234,48 @@ func truncatePaymentError(value string) string {
 		return value[:500]
 	}
 	return value
+}
+
+// generateDistributionCommissionsTx snapshots the active rule and current
+// agent chain while the paid order transaction is still locked.
+func generateDistributionCommissionsTx(ctx context.Context, tx *sql.Tx, orderID, paidUserID int64, amount int64) error {
+	if amount <= 0 {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `
+		WITH RECURSIVE chain AS (
+			SELECT a.id, a.app_user_id, a.level, a.parent_agent_id, a.root_agent_id,
+			       ('/'||a.id||'/')::text AS path
+			FROM distribution_user_relations r JOIN distribution_agents a ON a.id=r.direct_agent_id
+			WHERE r.app_user_id=$1
+			UNION ALL
+			SELECT p.id, p.app_user_id, p.level, p.parent_agent_id, p.root_agent_id,
+			       ('/'||p.id||'/'||c.path)::text
+			FROM chain c JOIN distribution_agents p ON p.id=c.parent_agent_id
+		), active_rule AS (
+			SELECT id, version FROM distribution_commission_rules WHERE status='active' ORDER BY version DESC LIMIT 1
+		)
+		SELECT c.id,c.app_user_id,c.level,c.root_agent_id,c.path,
+		       COALESCE(i.rate_bps,0),COALESCE(ar.id,0),COALESCE(ar.version,0)
+		FROM chain c CROSS JOIN active_rule ar
+		LEFT JOIN distribution_commission_rule_items i ON i.rule_id=ar.id AND i.agent_level=c.level
+		ORDER BY c.level`, paidUserID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var agentID, agentUserID, rootID, ruleID, version int64
+		var level int
+		var path string
+		var rate int64
+		if err := rows.Scan(&agentID, &agentUserID, &level, &rootID, &path, &rate, &ruleID, &version); err != nil {
+			return err
+		}
+		commission := amount * rate / 10000
+		if _, err := tx.ExecContext(ctx, `INSERT INTO distribution_commission_records(order_id,agent_id,app_user_id,agent_level,order_amount,rate_bps,commission_amount,rule_version,chain_snapshot) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(order_id,agent_id) DO NOTHING`, orderID, agentID, paidUserID, level, amount, rate, commission, version, path); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
